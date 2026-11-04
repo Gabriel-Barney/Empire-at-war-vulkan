@@ -1645,8 +1645,35 @@ static void test_starbase_force_split() {
     CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 0.0);
     sim.reset_relations();
     CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 2600.0);
+    // q6 (AI_GALACTIC_TOKENS §9.4, 0x4b8000): the planet's persisted tactical built objects add their types' own power to
+    // the ground total and to every ground row their category meets; no owner test (an Empire record at the Rebel planet
+    // counts too), nothing in space; the ownership gate still applies.
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, kAllCategories) == 0.0);
+    if (std::vector<gal::PersistedBuiltObject>* recs = sim.built_objects(7)) {
+        recs->push_back({tFrigate, 10.0f, 20.0f, 0.1f, 0, 1});
+        recs->push_back({tCorvette, 30.0f, 20.0f, 0.1f, 1, 0});
+        recs->push_back({gal::kNoIndex, 50.0f, 20.0f, 0.1f, 0, 1});  // an unknown type: skipped
+    }
+    CHECK(sim.built_objects(999) == nullptr);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, kAllCategories) == 1500.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, 0) == 1500.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, frig) == 1000.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, cap) == 0.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 2600.0);  // space: unchanged
+    const std::vector<GalacticContrastEntry> glist = galactic_ai_contrast_list(sim, ti, 7, 0, rows, 2.0);
+    CHECK(glist.size() == 6 && glist[0].target == 1500.0 && glist[2].target == 0.0 && glist[3].target == 2000.0);
+    sim.set_relation(0, 1, gal::Relation::Ally);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, kAllCategories) == 0.0);
+    sim.reset_relations();
+    // Owner filter 0x4b7d90: only the kept owner's records stay, in order.
+    sim.keep_built_objects(7, 1);
+    CHECK(sim.planets()[7].built_objects.size() == 2 && sim.planets()[7].built_objects[0].type == tFrigate &&
+          sim.planets()[7].built_objects[1].type == gal::kNoIndex);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, kAllCategories) == 1000.0);
+    sim.keep_built_objects(7, 0);
+    CHECK(sim.planets()[7].built_objects.empty());
     std::printf("starbase force split: leaf 2000 (members), helper 0x5f2430 untyped 2600 (+ own 600), Capital row 600, "
-                "Frigate row 1000; neutral owner 600, ally 0\n");
+                "Frigate row 1000; neutral owner 600, ally 0; persisted ground objects 1500 (Frigate row 1000)\n");
 }
 
 // A2 t03: per-tech members of the other objects the force totals walk (AI_GALACTIC_TOKENS 2 / 3): every unit of an orbiting

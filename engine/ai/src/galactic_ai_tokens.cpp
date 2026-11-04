@@ -143,12 +143,18 @@ double galactic_ai_enemy_strength(const gal::GalacticSim& sim, std::span<const G
         if (t != gal::kNoIndex && matches(t)) s += power(t);
     } else {
         // 6. Every ground structure (D+0x158, list order) whose type meets the mask: + its own power. Then 0x4b8000(D, mask):
-        // the planet data +0x10 type-id list [port: not modelled, the port's planet has no such list; adds 0].
+        // the persisted tactical built objects (planet data +0x10, §9.4) in list order, the float AI_Combat_Power of each
+        // record whose type's category mask +0x1648 meets the mask (no owner or alive test: the records are types), summed
+        // in float and added widened.
         for (const ObjectHandle u : ps.structures) {
             if (!st.alive(u)) continue;
             const auto t = static_cast<uint32_t>(st.type(u));
             if (matches(t)) s += power(t);
         }
+        float persisted = 0.0f;
+        for (const gal::PersistedBuiltObject& r : ps.built_objects)
+            if (r.type < gt.size() && matches(r.type)) persisted += gt[r.type].ai_combat_power;
+        s += static_cast<double>(persisted);
     }
     return s;
 }

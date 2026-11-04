@@ -109,6 +109,26 @@ uint32_t skirmish_hyperspace_leader(const galactic::GalacticRules& rules, const 
 std::vector<std::string> data_fallback_forces(const galactic::GalacticRules& rules, const objects::GameObjectTypes& types,
                                               const std::string& faction, bool land);
 
+// q6: the buy-units list of IDD_SKIRMISH_BUY_UNITS_DIALOG (SKIRMISH_SETUP §2.7, candidate list 0xf0600 + rows 0xef9f0), as
+// type indices of `rules` in display order. Every type in type-manager order (type index 0..N-1) that has
+//   1. Build_Cost_Credits > 0,
+//   2. `faction` in its Affiliation (an empty list never matches),
+//   3. Available_In_Skirmish, OR the map kind's build tab (Build_Tab_Land_Units on land, Build_Tab_Space_Units in space),
+//   4. no Cinematic_Object_Only,
+// and, for the rows, no Is_Named_Hero unless `heroes` (the setup's heroes option bit). Nothing else is tested (tech level,
+// locks, prerequisites, build limits, unit cap, population, behaviours, class). No cap. Order: Build_Cost_Credits
+// descending (the listbox comparator 0xf0e80); the original's ties are in no defined order: [port] type index ascending.
+// `multiplayer_list_only`: [port interim rule] (SKIRMISH_SETUP §2.7 port notes) also require that the type is named in
+// some type's Tactical_Buildable_Objects_Multiplayer list, which drops the option / cheat / layer / ground-war marker
+// types a mod lists (Thrawn's Revenge Empire space 407 -> 106 rows, land 63 -> 38). alamo_game turns it on only when a mod
+// layer is loaded (Gabriel 2026-11-04: mod-only port rules keep the vanilla behaviour).
+struct SkirmishBuyOptions {
+    bool heroes = false;
+    bool multiplayer_list_only = false;
+};
+std::vector<uint32_t> skirmish_buy_list(const galactic::GalacticRules& rules, const objects::GameObjectTypes& types, uint32_t faction,
+                                        bool land, const SkirmishBuyOptions& options = {});
+
 // [port] (no RE rule) the planet type a skirmish map stands for: the name after "_MP_SPACE_" / "_MP_LAND_" (path and
 // extension dropped, case ignored) when it names a PLANET type, e.g. _MP_LAND_TATOOINE -> "Tatooine"; "" otherwise.
 std::string skirmish_map_planet_type(const galactic::GalacticRules& rules, std::string_view map);

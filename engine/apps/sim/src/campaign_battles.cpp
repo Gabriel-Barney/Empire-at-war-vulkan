@@ -156,17 +156,23 @@ bool CampaignBattles::attach(std::vector<std::string>* diag) {
         reg.add("battle.state", [this](StateHasher& h) {
             h.boolean(battle_ != nullptr);
             if (battle_) battle_->hash(h);
-            for (const auto& [pl, v] : pad_records_) {  // REMAINING_GAPS §6.5: only planets with records (none: no bytes)
-                if (v.empty()) continue;
-                h.u32(static_cast<uint32_t>(pl));
-                h.u32(static_cast<uint32_t>(v.size()));
-                for (const TacticalBattle::PadRecord& r : v) {
-                    h.u32(r.type);
-                    h.f32(r.x);
-                    h.f32(r.y);
-                    h.f32(r.z);
-                    h.i32(r.level);
-                    h.i32(r.value);
+            // AI_GALACTIC_TOKENS §9.4: the planets' persisted tactical built objects, planet order, only planets with
+            // records (none: no bytes).
+            if (const GalacticMode* gm = host_->galactic_mode(); gm && gm->sim()) {
+                const std::span<const galactic::PlanetState> planets = gm->sim()->planets();
+                for (size_t pl = 0; pl < planets.size(); ++pl) {
+                    const std::vector<galactic::PersistedBuiltObject>& v = planets[pl].built_objects;
+                    if (v.empty()) continue;
+                    h.u32(static_cast<uint32_t>(pl));
+                    h.u32(static_cast<uint32_t>(v.size()));
+                    for (const galactic::PersistedBuiltObject& r : v) {
+                        h.u32(r.type);
+                        h.f32(r.x);
+                        h.f32(r.y);
+                        h.f32(r.z);
+                        h.i32(r.base_level);
+                        h.i32(r.owner);
+                    }
                 }
             }
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
@@ -257,7 +263,8 @@ bool CampaignBattles::attach(std::vector<std::string>* diag) {
 
 // --- N1 save / load (owner: n1-host; stage 2 n2-host; campaign_battles.hpp) ---
 namespace {
-constexpr uint32_t kBattlesSaveVersion = 3;  // 2: + the battle in flight (stage 2); 3: + the linked-battle state (story t07)
+constexpr uint32_t kBattlesSaveVersion = 4;  // 2: + the battle in flight (stage 2); 3: + the linked-battle state (story t07);
+                                             // 4: the pad records moved to the planets (galactic save v2, q6)
 constexpr uint32_t kBattleLevelVersion = 1;
 constexpr uint32_t kMaxBattlesCount = 1u << 24;
 
@@ -297,11 +304,6 @@ void CampaignBattles::write_state(ByteWriter& w) const {
     w.u8(static_cast<uint8_t>(last_corruption_));
     w.u32(static_cast<uint32_t>(log_.size()));
     for (const std::string& l : log_) w.str(l);
-    w.u32(static_cast<uint32_t>(pad_records_.size()));
-    for (const auto& [planet, recs] : pad_records_) {
-        w.u32(static_cast<uint32_t>(planet)).u32(static_cast<uint32_t>(recs.size()));
-        for (const TacticalBattle::PadRecord& p : recs) w.u32(p.type).f32(p.x).f32(p.y).f32(p.z).i32(p.level).i32(p.value);
-    }
     w.u32(static_cast<uint32_t>(corruption_queued_.size()));
     for (const CorruptionMission& m : corruption_queued_) write_mission(m);
     write_mission(corruption_active_);
@@ -322,7 +324,8 @@ void CampaignBattles::write_state(ByteWriter& w) const {
     if (flight != 0) {
         save_io::Out o(w);
         request_io(o, pending_req_);
-        o(pending_req_.linked);  // v3
+        o(pending_req_.linked);   // v3
+        o(pending_req_.sandbox);  // v4
     }
     write_linked(w);  // v3
 }
@@ -346,17 +349,19 @@ bool CampaignBattles::read_state(ByteReader& r) {
     if (last > static_cast<uint8_t>(CorruptionStart::MissionQueued)) r.fail();
     std::vector<std::string> log(read_count(r));
     for (std::string& l : log) l = r.str();
-    std::vector<std::pair<PlanetIndex, std::vector<TacticalBattle::PadRecord>>> pads(read_count(r));
+    // v1-3: the per-planet pad records lived here {u32 planet, u32 n, n x {u32 type, f32 x, y, z, i32 level, i32 value}};
+    // they move to the planets' built_objects below (v4 keeps them in the galactic save).
+    std::vector<std::pair<PlanetIndex, std::vector<galactic::PersistedBuiltObject>>> pads(version < 4 ? read_count(r) : 0u);
     for (auto& [planet, recs] : pads) {
         planet = static_cast<PlanetIndex>(r.u32());
         recs.resize(read_count(r));
-        for (TacticalBattle::PadRecord& p : recs) {
+        for (galactic::PersistedBuiltObject& p : recs) {
             p.type = r.u32();
             p.x = r.f32();
             p.y = r.f32();
             p.z = r.f32();
-            p.level = r.i32();
-            p.value = r.i32();
+            p.base_level = r.i32();
+            p.owner = r.i32();
         }
     }
     std::vector<CorruptionMission> queued(read_count(r));
@@ -378,6 +383,7 @@ bool CampaignBattles::read_state(ByteReader& r) {
         save_io::In in(r);
         request_io(in, req);
         if (version >= 3) in(req.linked);
+        if (version >= 4) in(req.sandbox);
     }
     LinkedState linked_state;  // v3 (older saves: the defaults, no record)
     if (version >= 3) read_linked(r, linked_state);
@@ -397,7 +403,10 @@ bool CampaignBattles::read_state(ByteReader& r) {
     direct_ = direct;
     last_corruption_ = static_cast<CorruptionStart>(last);
     log_ = std::move(log);
-    pad_records_ = std::move(pads);
+    if (!pads.empty())
+        if (GalacticMode* gm = host_->galactic_mode(); gm && gm->sim())
+            for (auto& [planet, recs] : pads)
+                if (std::vector<galactic::PersistedBuiltObject>* dst = gm->sim()->built_objects(planet)) *dst = std::move(recs);
     corruption_queued_ = std::move(queued);
     corruption_active_ = std::move(active);
     lk_ = std::move(linked_state);
@@ -415,12 +424,10 @@ bool CampaignBattles::read_state(ByteReader& r) {
     }
     if (!battle_) pending_ = flight == 1;
     if (battle_ && pending_req_.info.planet != kInvalidPlanet) {
-        // Pass 2: pad_records_ was replaced; the battle's pad persistence list is relinked (as push_battle links it).
-        std::vector<TacticalBattle::PadRecord>* recs = nullptr;
-        for (auto& [pl, v] : pad_records_)
-            if (pl == pending_req_.info.planet) recs = &v;
-        if (!recs) recs = &pad_records_.emplace_back(pending_req_.info.planet, std::vector<TacticalBattle::PadRecord>{}).second;
-        battle_->set_pad_persistence(recs);
+        // Pass 2: the galactic read replaced the planet rows; the battle's pad persistence list is relinked (as push_battle
+        // links it; no recreate: the battle was set up already).
+        GalacticMode* gm = host_->galactic_mode();
+        battle_->set_pad_persistence(gm && gm->sim() ? gm->sim()->built_objects(pending_req_.info.planet) : nullptr, false);
     }
     return true;
 }
@@ -437,7 +444,9 @@ std::string CampaignBattles::rebuild() {
     if (!load_battle_map(loader_, req, map)) return "map " + req.map + " did not load as the saved battle's map";
     pending_req_ = std::move(req);
     pending_map_ = std::move(map);
+    rebuilding_ = true;  // §9.4: a loaded battle keeps its saved objects (no recreate at its setup)
     push_battle(*host_);
+    rebuilding_ = false;
     return battle_ ? std::string() : std::string("the battle did not start");
 }
 
@@ -693,13 +702,10 @@ void CampaignBattles::push_battle(SimHost& host) {
     battle_->set_l1_constants(opt_.l1_constants);  // L1 systems
     battle_->set_weather_data(opt_.weather);       // L1 systems
     battle_->set_l1_factions(opt_.l1_factions);    // L1 systems
-    if (pending_req_.info.planet != kInvalidPlanet) {  // REMAINING_GAPS §6.5: the battle planet's pad persistence list
-        std::vector<TacticalBattle::PadRecord>* recs = nullptr;
-        for (auto& [pl, v] : pad_records_)
-            if (pl == pending_req_.info.planet) recs = &v;
-        if (!recs) recs = &pad_records_.emplace_back(pending_req_.info.planet, std::vector<TacticalBattle::PadRecord>{}).second;
-        battle_->set_pad_persistence(recs);
-    }
+    // AI_GALACTIC_TOKENS §9.4: the battle planet's persisted built objects (the battle applies the gate: not in a skirmish,
+    // not the sandbox battle). A battle rebuilt by a save load does not recreate them (the save has the battle's objects).
+    if (pending_req_.info.planet != kInvalidPlanet)
+        battle_->set_pad_persistence(g->sim()->built_objects(pending_req_.info.planet), !rebuilding_);
     {  // battle host: TacticalBuild charges / TacticalSell refunds spend the galactic account ([port] no AI notify)
         galactic::GalacticSim* gsim = g->sim();
         battle_->set_credit_hooks(

@@ -157,6 +157,9 @@ void TacticalBattle::bt_add_pad_types(const terrain::MapData& map) {
             const objects::TypeIndex ft = types.resolve_name(types.get_string(uc, "Tactical_Buildable_Constructed"));
             if (ft != objects::kNone && ft < types.size()) use(ft);
         }
+    if (pad_records_ && pad_restore_ && !cfg_.skirmish && !pads.empty())  // §9.4: the finished types bt_pad_restore may create
+        for (const PadRecord& r : *pad_records_)
+            if (r.type < types.size()) use(r.type);
     if (types_used_.size() != before) tables_extend();
 }
 
@@ -310,7 +313,7 @@ cmd::RejectReason TacticalBattle::tactical_sell(TacticalMode& mode, uint8_t play
     s->built_type = objects::kNone;
     s->locked = false;
     if (st.alive(ph)) {
-        pad_persist(st, ph, bt, -1, false);  // §6.5: the sale removes the persistent record
+        pad_persist(st, ph, bt, st.position(h), false);  // §9.4: the sale removes the persistent record (the object's x, y)
         s4_capture_reset(mode, s->pad);      // §6.5: the child went away -> the pad's capture point back to neutral
     }
     if (Unit* u = unit_by_id(object); u && u->alive) {
@@ -793,6 +796,16 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
             if (live && mode.primary().has_behavior(h, objects::beh::LandObstacle)) land_obstacle_attach(mode, h);
         }
     };
+    // AI_GALACTIC_TOKENS §9.4: a pad's base level byte +0x39C (mini 0x0B) for the persistence add (non-zero ones only).
+    auto note_pad = [&](const terrain::ObjectPlacement& p, objects::ObjectHandle h) {
+        const int32_t level = placement_base_level(p);
+        if (level == 0 || !mode.primary().alive(h) || pad_behavior() == objects::kNoBehavior || !mode.primary().has_behavior(h, pad_behavior()))
+            return;
+        const objects::ObjectId id = mode.primary().id(h);
+        const auto it = std::lower_bound(pad_levels_.begin(), pad_levels_.end(), id,
+                                         [](const std::pair<objects::ObjectId, int32_t>& e, objects::ObjectId v) { return e.first < v; });
+        if (it == pad_levels_.end() || it->first != id) pad_levels_.insert(it, {id, level});
+    };
     for (const terrain::ObjectPlacement& pl : map_.objects) {
         objects::TypeIndex t = index.find(pl.type_crc);
         int32_t owner = static_cast<int32_t>(pl.owner);
@@ -857,6 +870,7 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
         objects::ObjectHandle placed{};
         if (!mobile && s4_placement(mode, t, sp, pl.health_fraction, &placed)) {  // S4: capture points / garrison structures
             own_obstacles(pl, t, placed);
+            note_pad(pl, placed);
             // a1f t07: a SELECTABLE one (Secondary_Abandoned_Sensor: Tactical_Health 700, Structure, Neutral at start) is a
             // combat object too, so Destroy_Structure / attack orders can kill it; whatever its map owner (the Is_Neutral
             // player's objects are skipped by the target scan, TACTICAL_COMBAT §2.2). [port] a third party: never decides
@@ -874,11 +888,13 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
             }
             const objects::ObjectHandle h = mode.spawn(sp, pl.health_fraction);
             own_obstacles(pl, t, h);
+            note_pad(pl, h);
             if (!bt_owner_neutral(owner)) bt_adopt_built(mode, h, owner, pl.health_fraction, &rng, true);
             continue;
         }
         const objects::ObjectHandle h = mode.spawn(sp, pl.health_fraction);
         own_obstacles(pl, t, h);
+        note_pad(pl, h);
         if (kMarker != objects::kNoBehavior && types.has_behavior(t, objects::BehaviorSet::Union, kMarker) && owner >= 0) {
             MapMarker m;
             m.id = mode.primary().exists(h) ? mode.primary().id(h) : objects::kNoObjectId;
@@ -1137,10 +1153,15 @@ void TacticalBattle::bt_kill_silently(TacticalMode& mode, objects::ObjectHandle 
 }
 
 void TacticalBattle::bt_pad_restore(TacticalMode& mode) {
-    // §6.5 restore 0x4b7c00: every pad whose x and y equal a record's exactly gets its persistent child back (the last
-    // matching record wins), at the attachment point + 0.1 z, for the record's builder when it is a battle player [port],
-    // else the pad owner.
-    if (!pad_records_ || pad_records_->empty() || !combat_) return;
+    // AI_GALACTIC_TOKENS §9.4 recreate 0x42d8b0 (from the pad's setup vf13 0x42df80): campaign only (not a skirmish), not
+    // while a save is loaded (pad_restore_ false), with the battle planet's list; the sandbox gate (state 9) does NOT apply
+    // and Tactically_Built_Child_Object_Persists is not tested. Per pad (store order): the LAST record whose x and y equal
+    // the pad's own x and y exactly (0x4b7c00) gives the finished type and the owner; that type is created at once for the
+    // record's owner at the pad's build point (0x42e280) with the pad's facing, at full health (no UC phase, no cost), and
+    // takes the pad's child slot. No match, an unknown type or owner -1: nothing (the record stays).
+    // [port] an owner that is not a player of this battle's galaxy, or a type the battle tables cannot hold: nothing. The
+    // pad's capture-point controller is not re-derived here (0x501050(-1, -1) [M]); the pad's +0x3CB byte is not copied.
+    if (!pad_records_ || pad_records_->empty() || !pad_restore_ || cfg_.skirmish || !combat_) return;
     static const objects::BehaviorTypeId kPad = objects::behavior_type_id("TACTICAL_BUILD_OBJECTS");
     if (kPad == objects::kNoBehavior) return;
     objects::ObjectStore& st = mode.primary();
@@ -1148,29 +1169,27 @@ void TacticalBattle::bt_pad_restore(TacticalMode& mode) {
     for (const objects::ObjectHandle h : st.all_objects())
         if (st.active(h) && st.has_behavior(h, kPad)) pads.push_back(h);
     for (const objects::ObjectHandle ph : pads) {
+        if (pad_contents(st.id(ph)) != objects::kNoObjectId) continue;  // [port] already holds a child
         const Vec3 pp = st.position(ph);
         const PadRecord* rec = nullptr;
         for (const PadRecord& r : *pad_records_)
             if (r.x == pp.x && r.y == pp.y) rec = &r;
-        if (!rec || rec->type >= catalog_->types().size()) continue;
+        if (!rec || rec->type >= catalog_->types().size() || rec->owner < 0 || !bt_owner_valid(rec->owner)) continue;
         if (std::find(types_used_.begin(), types_used_.end(), rec->type) == types_used_.end()) continue;  // not in the tables
-        const int32_t owner = (rec->value == req_.info.defender || rec->value == req_.info.attacker) && bt_owner_valid(rec->value) ? rec->value
-                                                                                                                          : st.owner(ph);
-        if (owner < 0) continue;
         objects::SpawnParams sp;
         sp.type = static_cast<objects::TypeIndex>(rec->type);
-        sp.owner = owner;
+        sp.owner = rec->owner;
         sp.position = bt_pad_attach_point(mode, ph);
-        sp.position.z += 0.1f;
         sp.facing = st.facing(ph);
         const objects::ObjectHandle bh = mode.spawn(sp);
         if (!st.alive(bh)) continue;
-        bt_adopt_built(mode, bh, owner, 1.0f, bt_rng_);
+        bt_adopt_built(mode, bh, rec->owner, 1.0f, bt_rng_);
         PadState* s = pad_state(st.id(ph), true);
         pads_mode_ = &mode;
         s->built = st.id(bh);
         s->built_type = sp.type;
         bt_used_ = true;
+        ++stats_.pad_restored;
     }
 }
 

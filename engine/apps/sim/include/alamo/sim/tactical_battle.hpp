@@ -62,6 +62,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "alamo/commands/command.hpp"
@@ -160,6 +161,7 @@ struct BattleStats {
     uint32_t death_clones_removed = 0;  // refixf t04: clone objects removed by their death plan (at once included)
     // t50 (land skirmish): pads of the two slots, pads that started built, structures started on a pad during the battle.
     uint32_t skirmish_pads = 0, skirmish_prebuilt = 0, pad_builds = 0;
+    uint32_t pad_restored = 0;  // §9.4 persisted pad children recreated at setup
 };
 
 // A render-side attachment reported by the sim (Damaged_Smoke_Asset_Name at 75 % / 50 %).
@@ -840,18 +842,25 @@ public:
     // t50: Land_Skirmish_Unit_Cap_By_Player_Count of the player's faction at the battle's player count [M: linear
     // interpolation between the curve's keys, clamped to its ends]; -1 = no curve.
     float skirmish_land_unit_cap(int32_t player) const;
-    // §6.5 galactic persistence (0x42f160 / 0x4b6c70 / 0x4bb3a0 / 0x4b7c00): records of the battle planet's persistent
-    // pad children {type, pad x / y / z, small int <= 5 [M: level], int [port: the builder]}. [port] The planet data
-    // vector (D +0x10) has no galactic-side storage yet: CampaignBattles keeps one list per planet and passes it here
-    // before setup (null = off: skirmish, no planet). Pad types with Tactically_Built_Child_Object_Persists add a record
-    // when their child completes (refused when the position is already present), the child's death / sale removes it
-    // (position and type match), and setup restores every pad whose x and y equal a record's exactly (last match wins).
-    struct PadRecord {
-        uint32_t type = 0;
-        float x = 0.0f, y = 0.0f, z = 0.0f;
-        int32_t level = 0, value = -1;
-    };
-    void set_pad_persistence(std::vector<PadRecord>* records) { pad_records_ = records; }
+    // Galactic persistence (AI_GALACTIC_TOKENS §9.4, REMAINING_GAPS §6.5: gate 0x42f160, add 0x4b6c70, remove 0x4bb3a0,
+    // lookup 0x4b7c00, recreate 0x42d8b0): `records` = the battle planet's GalacticSim::built_objects list, set by the host
+    // before setup (null = off: no planet). Not in a skirmish (cfg.skirmish) at all.
+    //   gate (add / remove)  campaign battle with a planet list, not the sandbox story battle (BattleRequest::sandbox, the
+    //                        original's conflict state 9), the pad type's Tactically_Built_Child_Object_Persists (default yes).
+    //   add                  at construction completion: {finished type, the finished object's position (build point +
+    //                        0.1 z), the pad's base level (map mini 0x0B; refused outside 0..5), the pad's owner};
+    //                        refused when a record has the same x and y (exact; z not compared).
+    //   remove               the pad's finished child dies or is sold: the record at its x and y with the same type.
+    //   recreate (`restore`) at setup, also in a sandbox battle, not while a save is loaded (restore = false: the saved
+    //                        battle keeps its saved objects): each pad's own x and y, last match wins; the finished type
+    //                        for the record's owner at the pad's build point with the pad's facing, full health, in the
+    //                        pad's child slot (so a pre-placed type is not spawned). No match / unknown type / owner -1:
+    //                        nothing, the record stays. [port] an owner that is not a battle player: nothing either.
+    using PadRecord = galactic::PersistedBuiltObject;
+    void set_pad_persistence(std::vector<PadRecord>* records, bool restore = true) {
+        pad_records_ = records;
+        pad_restore_ = restore;
+    }
     // Credits of the galactic player (campaign battles spend the galactic account). Unset: every player has 0 credits
     // and refunds are dropped. CampaignBattles installs GalacticSim::credits / add_credits.
     void set_credit_hooks(std::function<float(int32_t)> get, std::function<void(int32_t, float)> add) {
@@ -1532,8 +1541,13 @@ private:
         bool locked = false;
         objects::TypeIndex built_type = objects::kNone;  // §6.5: the built child's type (persistence removal)
     };
-    // §6.5 galactic persistence add (0x4b6c70) / remove (0x4bb3a0) for a pad type with Tactically_Built_Child_Object_Persists.
-    void pad_persist(const objects::ObjectStore& st, objects::ObjectHandle pad, objects::TypeIndex type, int32_t value, bool add);
+    // §9.4 galactic persistence add (0x4b6c70, `pos` = the finished object's position) / remove (0x4bb3a0, `pos` = the
+    // child's position) behind the gate 0x42f160 (set_pad_persistence).
+    void pad_persist(const objects::ObjectStore& st, objects::ObjectHandle pad, objects::TypeIndex type, const Vec3& pos, bool add);
+    // §9.4: the pad's base level byte (+0x39C, map mini 0x0B) of map-placed pads with a non-zero level, ascending pad id
+    // (bt_map_load; derived from the map, so not saved: a load's setup rebuilds it). Other pads: 0.
+    std::vector<std::pair<objects::ObjectId, int32_t>> pad_levels_;
+    int32_t pad_base_level(objects::ObjectId pad) const;
     std::vector<PadState> pads_;  // ascending pad id
     bool pads_used_ = false;
     TacticalMode* pads_mode_ = nullptr;
@@ -1593,7 +1607,8 @@ private:
     void bt_kill_silently(TacticalMode& mode, objects::ObjectHandle h);  // 0x391310 flag 1 (no death events)
     void s4_capture_reset(TacticalMode& mode, objects::ObjectId pad);   // §6.5: the pad's capture point -> neutral
     Vec3 bt_pad_attach_point(const TacticalMode& mode, objects::ObjectHandle pad) const;  // §6.5 UC attachment bone
-    std::vector<PadRecord>* pad_records_ = nullptr;  // §6.5 galactic persistence (host-owned, per planet)
+    std::vector<PadRecord>* pad_records_ = nullptr;  // §9.4 galactic persistence (GalacticSim::built_objects of the planet)
+    bool pad_restore_ = true;                         // §9.4 recreate at setup (false while a save is loaded)
     void bt_pad_restore(TacticalMode& mode);          // setup: persistent pad children back on their pads
     void bt_skirmish_base(TacticalMode& mode);        // t50 setup: the land skirmish's pre-built base (command center, barracks)
     void bt_skirmish_anchors();                       // t50 setup: land skirmish start positions from the slot's map markers
