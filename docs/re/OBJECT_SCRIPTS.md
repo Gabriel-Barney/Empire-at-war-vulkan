@@ -783,13 +783,205 @@ Port choices (`[port]`, each also commented in the code):
 | Saves | `save_allowed` refuses while any object script is live (§2.6: no script state is saved yet) |
 | Not done | `Execute_Script_On_Type` (§1.5), pooling (§1.4), hot-reload re-attach, script state in saves (§2.6), the garrison step of `Teleport`, hangar / fighter types of late-added types (their hangar tables are built at battle start) |
 
-Open RE questions (q6 t12; not in docs/re, so the port keeps the binding-state behaviour):
+RE questions raised by q6 t12, **all answered in §10** (q6 RE, 2026-11-04):
 
-1. `Prevent_AI_Usage(true)` on a battle unit: which engine flag it sets (object +offset), and which AI systems skip
-   such an object (tactical AI perception / goal targets, the threat grid, auto-targeting). The port only records it
-   in `ScriptObjectState`; TR dummies stay AI-visible (`DUMMY` behaviour objects are not `UNIT_AI` in the port).
-2. `Make_Invulnerable(true)`: the combat flag it sets and which damage kinds it blocks (all but kind 0?). The port
-   only stores it in `ScriptObjectState`; battle combat does not read it yet.
-3. `Hide(true)`: whether a hidden object is skipped by targeting, fog reveal and selection, or only by the renderer.
-4. Tactical placement of a script-spawned company's members (`Spawn_Unit` → company create in land): formation
-   offsets and the TEAM container position, versus the reinforcement drop layout the port uses.
+1. ~~`Prevent_AI_Usage(true)`: flag and AI systems that skip the object~~ → §10.1 (no object flag: it takes the
+   object out of its owner's AI free store; nothing else changes).
+2. ~~`Make_Invulnerable(true)`: flag and blocked damage kinds~~ → §10.2 (the INVULNERABLE behaviour 0x4B; blocks
+   every kind but 0 and 13; nothing else reads it).
+3. ~~`Hide(true)`: draw only, or targeting / fog / selection too~~ → §10.3 (model hide + obj +0x3A2 bit 0;
+   presentation only, plus the human right-click and mouse pick).
+4. ~~Tactical placement of a script-spawned company~~ → §10.4 (every member at the given point through
+   `Find_Free_Placement`, facing the map origin; TEAM at the members' centroid).
+
+---
+
+## 10. Object flags set by scripts, and script company placement (q6 RE, 2026-11-04)
+
+Source: the same Ghidra decompile, checked against the disassembly of StarWarsG.exe for the branch directions
+(0x57edbc) and the vtables (free stores, InvulnerableBehaviorClass 0x8B05A0). Behaviour ids are the OBJECT_RUNTIME §8
+table; the per-object behaviour slot of id *n* is the byte at obj +0x332 + *n* (0xFF = absent), so +0x348 = TEAM
+(0x16), +0x37D = INVULNERABLE (0x4B), +0x333 = locomotor (id 1). Lua "error" = 0x248190 (the script is ended after
+its pass), "warning" = 0x248620 (logged, script continues), LUA_API §"conventions".
+
+### 10.1 `Prevent_AI_Usage(bool)` (0x57EC40) [H]
+
+**What it does.** No object flag is set for `true`. The binding finds the free store of the object owner's AI for the
+**current mode** (player +0x360 → 0x4B03B0(ai, current mode) → +0x50 → +0x38; the same chain as `Lock_Current_Orders`,
+A1_READINGS §28) and:
+
+| Argument | Effect |
+|---|---|
+| `true` | free store vf +0xA0 (remove): land and galactic 0x4D5000, space 0x6907D0 (same, plus unsubscribing signal 0x16). The object's free-store node is erased, the per-type count drops, signals 0x10 / 0x1A are unsubscribed. Nothing happens if the object was not on the store (e.g. it is in a task force) |
+| `false` | obj +0x3C8 := 1, then free store vf +0x98 (admit): land 0x690A10, space 0x6904B0, galactic 0x68ECE0, each ending in the base 0x4D2C90. The full admission rules of AI_TACTICAL §5.1 apply, so a dummy, a transport, a `Create_Team` member etc. is still refused |
+
+- obj +0x3C8 is a byte that both constructors (0x388720, 0x388B60) set to 1 and that **nothing in the exe ever
+  clears** (a scan of every byte / dword store to +0x3C8 finds only the constructors, this binding and two whole-object
+  copies). Admission (0x4D2C90) requires it. So `true` is not sticky: any later admission of the object puts it back
+  on the store. Admission paths: the GOM add hook 0x2B3670 (object added to the store), a task force releasing the unit
+  (0x6C27D0 → vf +0x98), the reinforce-unloaded path 0x6BF3D0, `Prevent_AI_Usage(false)`.
+- Only the owner's store, only the current mode. Allied AI stores that admitted a `Is_Community_Property` object
+  (0x2B3670 loop) keep it.
+- Errors and warnings, in order: not a bool → error "Expected bool parameter."; owner player has no AI (player +0x360
+  null, e.g. a human) → **warning** "No AI Player active on the owner of this object." (no effect); no AI presence in
+  this mode → error "Owner has no AI presence in this mode…"; AI not initialised (+0x50 null) → error "Owner AI is not
+  yet initialized.  Wait a frame…"; no free store (+0x38 null) → warning "No freestore exists for this AI Player.".
+
+**What it does not touch** [H for the absence of a flag; M for "no other effect"]: since the only state change is the
+free-store membership, everything that walks objects rather than the free store is unchanged: AI perception counts and
+the threat grid (AI_TACTICAL_PERCEPTION), enemy target selection, auto-targeting, plan target lists, `Find_Nearest`,
+victory counting, the galactic AI's other lists, auto-resolve. What the owner's AI loses: `On_Unit_Service` /
+`FreeStoreService` for that unit (AI_TACTICAL §5.3), and the unit as a candidate for plans and build tasks (FreeStore
+Setup A, FREESTORE_ALLOC). A unit already in a task force stays there.
+
+**Port notes**
+- Implement as "remove from the owner's AI free store of the current mode" / "set the admit byte and run the normal
+  admission"; no `prevent_ai` flag that other systems read.
+- Keep the admit byte (default 1, never cleared) so re-admission after `true` behaves as in the original.
+- Human-owned objects (TR company dummies owned by the player): warning only, no effect. Do not end the script.
+- An AI owner without presence in the mode, or a not-yet-initialised AI: script error (the script ends after its pass).
+
+### 10.2 `Make_Invulnerable(bool)` (0x57D550) [H]
+
+**What it does.**
+- Tactical modes only: current mode vf +0xF0 false → error "this function may only be used in tactical modes.".
+  Exactly one bool argument, else errors.
+- The flag is the **INVULNERABLE behaviour (0x4B, `InvulnerableBehaviorClass`)**, present when obj +0x37D ≠ 0xFF.
+  - `true`: if absent, attach it by name `"INVULNERABLE"` (0x4C3520 → 0x38C570(obj, behaviour, 0)). Already present →
+    nothing.
+  - `false`: if present, detach it (0x3A54C0).
+- **A TEAM container** (obj +0x348 ≠ 0xFF): the same is done for **each member** (TEAM behaviour member list
+  0x405300 / 0x4052D0), not for the container itself.
+- The behaviour is serviced every 30 frames (OBJECT_RUNTIME §9.1). Its service (vf6 0x630E30) counts the duration in
+  its data pack (obj +0x1F8, +8, frames) down by the interval and detaches itself when it reaches 0 from above
+  (log "No longer invulnerable - removing behavior"). A script attach leaves the duration at 0, so it is permanent. But
+  the **Invulnerability ability** (projectile detonation 0x4CC010, TACTICAL_GAPS §1.10 "Invulnerability") attaches the same
+  behaviour if missing and **adds** its frames (0x630D60): when that ability hits a script-invulnerable unit and then
+  expires, the behaviour is removed and the script's invulnerability ends with it. `Make_Invulnerable(false)` likewise
+  ends an ability invulnerability.
+
+**Which damage it blocks.** The only readers of the behaviour are `Take_Damage` (0x3A9E30) and the ability itself
+(every byte access to +0x37D and every behaviour lookup of id 0x4B were checked). In `Take_Damage`, after the team
+redirect / share step and before every multiplier (TACTICAL_COMBAT §3.6 step 3): damage of kind ≠ 0 and ≠ 13 to an
+object with the behaviour is dropped. `tDamageType` (enum 0x5E1AC0, full list):
+
+| kind | name | kind | name | kind | name |
+|---|---|---|---|---|---|
+| 0 | Damage_Debug_Chear | 8 | Damage_Cable_Attack | 15 | Damage_Eat |
+| 1 | Damage_Normal | 9 | Damage_Explosion | 16 | Damage_Redirected |
+| 2 | Damage_Force_Whirlwind | 10 | Damage_Asteroid | 18 | Damage_Wampa |
+| 3 | Damage_Force_Telekinesis | 11 | Damage_Cable_Attack_Deployed | 20 | Damage_Infection |
+| 4 | Damage_Force_Lightning | 12 | Damage_Normal_Deployed | 21 | Damage_Remote_Bomb |
+| 5 | Damage_Force_Corruption | 13 | Damage_Vehicle_Thief | 22 | Damage_Drain_Life |
+| 6 | Damage_Hard_Point_Self_Destruct | 14 | Damage_Crush | 17, 19 | no name (17 is `Apply_Hull_Damage` of the decay / convert paths, TACTICAL_GAPS §1.6) |
+| 7 | Damage_Fire | | | | |
+
+- So an invulnerable object takes **no** weapon fire (1, 12), area / explosion (9), ability damage (2–5, 8, 11, 14, 15,
+  18, 20–22), redirected team damage (16), crush (14) or asteroid damage (10). It still takes kind 0 (Lua
+  `Take_Damage`, §6.1 step 4, and debug) and kind 13 (vehicle thief).
+- Earlier `Take_Damage` gates that block even kind 0: `Immune_To_Damage` (type +0xA3) and obj +0x3A7 (set while the
+  object is garrisoned or landing, L1_S4_REMAINING §3.5, A1_READINGS §35) [H code; the TACTICAL_COMBAT §3.6 text calls
+  the +0x3A7 test a global damage switch: it is a per-object byte].
+- Deaths that are not damage are not blocked: Lua `Kill` / `Despawn`, the hull / hardpoint coupling of a station
+  (TACTICAL_COMBAT §5.1), retreat / hyperspace removal, mode end. A death clone is a new object without the behaviour.
+- **Targeting is unchanged:** auto-targeting, the enemy AI's target lists and threat, human attack orders and
+  projectiles do not test the behaviour, so enemies keep shooting an invulnerable unit (the damage is dropped at the
+  victim) [H: no other reader].
+
+**Port notes**
+- Model it as the INVULNERABLE behaviour on the object (or a per-object flag with the same lifetime rules): set /
+  cleared by the binding, set with a duration by the Invulnerability ability, which adds to the remaining duration and
+  clears the flag when it runs out.
+- TEAM container argument → apply to the members only.
+- `CombatSystem::take_damage`: drop kinds other than 0 and 13 when the flag is set, after the team redirect and before
+  the multipliers. Do not filter targets on it.
+- Error (script ends) outside tactical modes.
+
+### 10.3 `Hide(bool)` (0x57A5B0) [H]
+
+**What it does.** With a model (obj +0x2A0): model hide switch 0x264C80(model, b) (render-object flag byte +0x30 bit 0
+and the model's scene node) and obj +0x3A2 bit 0 := b. Without a model: error "object %s has no model." (the script
+ends after its pass). A TEAM container usually has no model of its own [M], so `Hide` on a container is an error, not a
+member loop. Missing / non-bool argument: errors.
+
+**Readers.** Every reader of obj +0x3A2 bit 0 and of the model-hidden query 0x264CB0 was checked:
+
+| Reader | Effect of a hidden object | Kind |
+|---|---|---|
+| 0x2D4B00 (3D sound factor) | object-attached sounds muted (AUDIO §1.6) | presentation |
+| 0x35B4D0 (radar blip filter) | no radar blip unless the type has `Visible_On_Radar_When_Fogged` | presentation |
+| 0x2AD280 (human order / cursor resolver) | a hidden **enemy** object (like a dying, model-less or stealthed one) is not an attack target: no attack cursor | local UI, before a command is issued |
+| 0x266D10 / 0x267680 (model scene queries: point / box pick) | skipped by mouse picking | local UI |
+| 0x4EB020 (FoggedModelManager) | no last-seen ghost | presentation |
+| 0x5EFE50 (surface FX type) | surface type 0x11 (no footprints / dust) | presentation |
+| 0x3A6B80 (`GameObject::Update`) | types with `Model_Visible_To_Enemy` = No (type +0xA2): the model is hidden **every frame** when the local player is an enemy of the owner, shown otherwise — so this overrides `Hide` on such types | presentation |
+| `HideWhenFoggedBehaviorClass` 0x53DDC0 | sets the model state only when its fog alpha **crosses** 0.025; a Lua hide holds until the object next goes fogged and visible again, which re-shows it | presentation |
+
+- **Not affected** [H: no reader]: auto-targeting and AI target selection (they use fog and ownership, not the model),
+  projectiles and area damage, fog **reveal** by the hidden object (FOG_OF_WAR: stealth and models never change the
+  grid), movement and collision / footprints (passability stamping uses the type), victory counting (§10.5,
+  SKIRMISH_SETUP §4), perception, the free store. Select / SelectAll do not test it (COMMANDS §2.4.1): a hidden own
+  unit is still selected by Select All; only the mouse cannot pick it.
+- Garrison entry and landing transports use the same pair (model hide + bit 0) for their own hiding; their other
+  effects come from +0x2B0 / +0x3A7, not from the hide.
+
+**Port notes**
+- Store "hidden" per object; the renderer and audio skip it; the mouse pick, the right-click resolver and the radar
+  skip it. The sim does not read it.
+- "Has a model" must not depend on loaded art (headless runs): decide it from the type's model name for the mode, so the
+  error / no-error outcome is the same in every build.
+- `Model_Visible_To_Enemy` = No and HIDE_WHEN_FOGGED overriding the Lua state is presentation-only; it may be copied for
+  look but must not feed the sim.
+
+### 10.4 `Spawn_Unit` placement in a battle (0x6A1F90 → 0x29E960) [H unless tagged]
+
+`Spawn_Unit(type, position, player)` in a tactical mode (non-tactical: 0x6A2520, galactic):
+1. Arguments: fewer than 3 → error; type and player wrappers checked; a position that resolves to (1e18, 1e18, 1e18)
+   → error "Invalid position parameter.".
+2. **Facing** (0x20ACD0(pos → map origin)): yaw = atan2(0 − y, 0 − x) in degrees (+360 when negative), 0 when the
+   point is the origin in x / y; pitch = atan2(z, horizontal distance) when z ≠ 0; roll 0. **Every spawned unit faces the
+   map centre**, not the spawner's facing.
+3. Space mode and a type with DUMMY_GROUND_COMPANY (0x5D): one object through 0x2BFDD0 [L: not read further]. Every
+   other case: **0x29E960(GOM, type, pos, facing, owner, 0, out, 1, 0, 0)**, the function that also places skirmish
+   start forces (SKIRMISH_SETUP §2.2).
+4. 0x29E960: members = the type's `Company_Units` (land; +0x958 / +0x960) or `Squadron_Units` (space; +0x978 / +0x980),
+   in list order. No members → the type itself is created as one object.
+5. **Each member** (0x2B3BE0(GOM, member type, no parent, facing, pos, owner)): the mode variant of the type
+   (0x3729F0); `Find_Free_Placement` 0x2A9670(GOM, pos, out, type, **radius 2500**, **start angle yaw − 45°**, no
+   exclusion) — the ring search of A1_READINGS §35.4 item 4 (rings r = 0, step, 2·step… < 2500, step = 1.2 × the larger
+   x / y span of the type's model box; 22.5° steps from the start angle through start + 360° inclusive). In **land**
+   each candidate also needs a grid cell inside the passability grid that is **pure Clear** (0x38E390 with no object:
+   cell bits & 1 == cell bits; an out-of-grid point is skipped), and the result's z := terrain height. No free spot →
+   (0, 0, 0) replaced by the given point. Then Create_Object 0x29F810(GOM, type, owner, spot, facing). All members get
+   the **same facing** (step 2). Members are created one at a time, so each later member avoids the earlier ones.
+6. Per member (argument 8 = 1): 0x29BCD0 records the member's share of the company's population value (0x373500) in the
+   owner's per-player population list (GOM +0x548) [M: population accounting].
+7. **TEAM containers:** if the **first member's** type has `Create_Team` (+0x67): the team helper 0x2A5A60(GOM, members,
+   company type, formation flag 0, out, 0) (REMAINING_GAPS §3.4): chunks of `Max_Squad_Size`, one `Create_Team_Type`
+   container per chunk at the chunk's **centroid** (land: snapped passable), owner and facing of the first member;
+   members **keep their free-placement spots** (formation flag 0, also in space); no +0x3A2 |= 2. Otherwise no
+   container.
+8. Signal 0x1D on the GOM with the spawned list (as for start forces).
+9. Return: a Lua table of the `out` list — the TEAM containers when a team was made, else every member (or the single
+   object). So `Spawn_Unit(...)[1]` is the first container, else the first member.
+
+- No hide, fade, landing transport or hyperspace-in on this path: the objects exist at once at their spots [M: no such
+  call in 0x29E960 / 0x2B3BE0 / 0x29F810's arguments].
+- Object scripts of the spawned types attach in Create_Object (§1.2); each member gets its own script.
+
+**Port notes**
+- Replace the reinforcement drop layout in `TacticalBattle::script_spawn_company` by: per member, the
+  `find_free_placement` ring search (already in the port for space reserves) at the given point, radius 2500, start
+  angle yaw − 45°, plus the land pure-Clear cell test and terrain z; members in `Company_Units` order.
+- Facing: toward the map origin for every member and for a single-object spawn.
+- TEAM container at the members' centroid (land snap), members not moved; container only when the first member's type
+  has `Create_Team`.
+- The model box needs the type's model bounds; in headless runs without art use the catalog bounds, never "no model"
+  (which would put every member on the point).
+
+### 10.5 Victory counting of script-flagged objects
+
+See SKIRMISH_SETUP §4.1 (land skirmish) and BATTLE_TRANSITIONS §3.1a (campaign). In short: the victory tests read only
+the type's `*_Victory_Relevant` flags, ownership / enemy relation and the dying / removed bits, so an invulnerable,
+hidden or `Prevent_AI_Usage` object counts like any other [H]. An invulnerable victory-relevant object can therefore
+keep a side alive until something kills it with kind 0 / 13 damage, `Kill` or a despawn.

@@ -194,6 +194,44 @@ Evaluator 0x344710 (E wins when no blocker is left) [H unless marked]:
   only when no remaining starbase is allied (0x39a2c0) with a human player.
 - So "base components" = objects with behaviour DUMMY_LAND_BASE_LEVEL_COMPONENT that are Victory_Relevant.
 
+### 4.1 What else counts, and what does not (q6 RE, 2026-11-04) [H unless tagged]
+
+Re-read of 0x344710 cases 0x12–0x14 and of the readers in OBJECT_SCRIPTS §10. Additions to the list above:
+- **Candidate list:** 0x12 walks the tactical GOM's full object list (gom +0x38) skipping objects owned by E
+  (0x2A9FF0 with exclude-owner = E); 0x13 / 0x14 walk the same list filtered by behaviour 0x62 / 0x5F. Ownership
+  is the object's own owner (+0x58); a TEAM container and its members are separate objects, each counted by its
+  own type (containers' `Team` types are not Victory_Relevant in FoC data, so the members count).
+- **The 0x12 owner filter:** in skirmish (0x28AFB0) or game type 3 (0x28B060), an enemy object counts only when its
+  owner player is human (player +0x62 [M: name]) or has an AI (0x2814D0), or the owner id resolves to no player.
+  Outside those two session types any enemy owner counts.
+- **Not tested by any of 0x12 / 0x13 / 0x14:** INVULNERABLE (`Make_Invulnerable`), `Hide` (model / obj +0x3A2 bit 0),
+  `Prevent_AI_Usage` (free-store membership only), `Set_Selectable`, garrisoned / transported state, stealth, fog,
+  locomotor / UNIT_AI / SELECTABLE behaviours. Such objects count exactly like visible ones. An invulnerable
+  Victory_Relevant object therefore keeps its side alive until it dies through damage kind 0 or 13, `Kill`, or a
+  despawn (OBJECT_SCRIPTS §10.2).
+- **Structures under construction:** the object on the pad is the separate UC type (`UC_*`, L1_S4_REMAINING §3.6),
+  replaced by the final type at completion. It counts only by the UC type's own flags. Shipped FoC UC types set
+  `Victory_Relevant No` or nothing (default false) and none has DUMMY_LAND_BASE_LEVEL_COMPONENT, so a structure under
+  construction never blocks 0x12 or 0x13. The finished structure counts by its final type (e.g. the command centres:
+  DUMMY_LAND_BASE_LEVEL_COMPONENT + DUMMY_GROUND_STRUCTURE, `HQ_Win_Condition_Relevant yes` for 0x14).
+- **Dying objects** (+0x3A0 bit 0x40 or 0x02) never count, so the test run from the death of the last blocker
+  already sees the side as empty.
+- **When:** only from 0x2C0340, i.e. when a Victory_Relevant object leaves its owner (removal from the GOM or owner
+  change). Gaining objects (a script `Spawn_Unit`, a reinforcement landing, a capture) never triggers a test, and a side
+  that never had a Victory_Relevant object is never tested (BATTLE_TRANSITIONS §3.1a item 2). The declared result then
+  waits the record's 210-frame countdown (and any hold) before the battle ends.
+- Reinforcement pool / reserve units are not tactical objects and never count (A1_READINGS §34.1); a landing transport
+  counts by its own type only [M].
+
+**Port notes**
+- The land-skirmish check must ignore every script flag (invulnerable, hidden, AI usage, selectable); count by type
+  flags, ownership (with the skirmish human-or-AI owner filter for 0x12), and not dying.
+- UC objects count by their UC type (all non-relevant in FoC data); do not map them to the final type.
+- Run the check only when a Victory_Relevant object leaves a player (death / removal / owner change), not on spawns,
+  and apply the 210-frame declaration countdown.
+- The win condition that is registered is the lobby option's (§2 step 4): 0x12 alone, or 0x13 / 0x14 when the base /
+  HQ option is chosen; 0x12 is still evaluated first on every trigger.
+
 ## 5. Income streams (item 4)
 
 - The tactical income manager (mode+0x298) exists only in skirmish: created in 0x35e560 / 0x35f970 when
