@@ -1297,3 +1297,28 @@ throughout:
   - attacker ground = own surface units + the ground power of its own orbit objects;
   - defender space = own orbit units + the starbase type for the planet's level.
 - Both readers take D+0x158 as it is. The mask test of 0x5f2430 (§9.2, §9.7) must not be applied to them.
+
+### 9c port status (q6 t18, 2026-11-04)
+
+- §9.9 done in `GalacticSimTokenResolver` (`engine/ai/src/galactic_ai_tokens.cpp`): one ordered map, node = (leaf
+  path, evaluator instance, the system's AI player), entry = the sorted parameter set; `Parameter_Category` of a force
+  leaf (`PF:`) is keyed as its mask, so `{Parameter_Category = "Frigate"}` and 0x5f2430's mask share an entry. Hit rule,
+  success-only store, no pruning as above. `galactic_ai_enemy_strength` / `galactic_ai_contrast_list` read the leaf
+  part through `enemy_force` (mask 0 = no parameter); the structure terms stay live.
+- Signal 0xE: `visibility_event` with one visible-flag word per (AI player, planet) (every fogged mask is one bit:
+  0x200, 0x80, 0x20, 0x10, 0x8). Raised by `refresh()` for every AI player at the first refresh (galaxy setup) and on a
+  planet owner change, and for the owner of a unit new on a planet's surface [port: a surface spawn counts as a
+  landing]; by `observe_conflicts` for the attacker of a space conflict reaching state 4 (0x70) and of a land conflict
+  (0x180). Recompute binds Self and Target only [port: Enemy unbound, no fogged leaf reads it]. Not raised: spies,
+  story visibility rewards, expired visibility entries (no campaign the port runs uses them for the AI). A load is a
+  restore (cache, stamps and flags saved, resolver version 3), not a refresh [port].
+- L = 0 leaves (`StarbaseTotalUnnormalized`, `GroundbaseTotalUnnormalized`) are not stored [port: no reader can see
+  the difference; they are not fogged nodes].
+- §9.10 done for galactic (`engine/ai/src/galactic_pp.cpp`): flags reset at Contrast Setup A, escort flag 1 after Setup
+  C and every commit recompute (not for `IgnoreTarget`), first-pass placement skip by `galactic_place_skip`, gate and
+  "still allowed" checks as in the port notes. Open: the tactical commit rule (escort list when the slot is an escort
+  slot or the main contrast is already met) belongs to the AI tactical solver (`engine/ai/tactical`), not done here.
+- §9.12 done: `GroundbaseTotalUnnormalized` as above; overrun strength = `ConflictManager::overrun_strength`
+  (`engine/galactic/src/conflicts.cpp`), used by the Decide state only when `Overrun_Auto_Resolve_Multiple` ≠ 0; the
+  named-hero test reads the same unit lists [port: alive objects only].
+- Open: the S2 `GalacticPerception` model (Node_Weight inputs) still keeps its own values, not this cache.

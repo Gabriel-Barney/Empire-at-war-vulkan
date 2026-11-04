@@ -3,9 +3,13 @@
 //
 // Every leaf follows the recovered rule of its evaluator (planet 0x65f7b0, planet force 0x6dcb70, galactic
 // player 0x66b9f0 / player 0x6e09c0, galactic game 0x66e380 / game 0x6e2170 / game force 0x6e3d40):
-//   * Leaf caches [H]: each leaf has its lifetime in seconds (-1 forever, 0 none); an entry is keyed by the
-//     leaf, its evaluator instance, the bindings (Self / Target / Enemy / Human / Location) and the exact
-//     parameters; hit iff stamp != 0 and (forever or NOW <= stamp + L x 30); stored after every success.
+//   * Leaf caches [H] (AI_GALACTIC_TOKENS §9.9, q6 t18): one cache per token node = (AI player's perception system,
+//     evaluator instance = target planet / player / game, token path); an entry is keyed by the parameter set only
+//     (compared by value, order-free; Parameter_Category of the force leaves as its mask); Self is the system's player,
+//     Target / Enemy / Human are NOT in the key, so the contrast helper 0x5f2430, the equations, the normalisers and the
+//     Game.<side> sums share entries. Hit iff stamp != 0 and (forever or NOW <= stamp + L x 30); stored after every
+//     success, never pruned. Fogged leaves are also recomputed and re-stamped by the visibility signal 0xE
+//     (visibility_event: presence fold on owner changes, galaxy setup, landings; the two conflict starts).
 //   * Fog [H]: AIUsesFogOfWarGalactic is False in the shipped GameConstants, so every fogged leaf is live,
 //     *.TimeLastSeen* = 0 and AverageAgeOf*Intelligence = 0 (that token fails for a non-Self root).
 //   * Unbound roots fail [H]: Variable_Human when no human exists, Variable_Enemy without an opponent.
@@ -133,9 +137,13 @@ double galactic_ai_planet_force(const galactic::GalacticSim& sim, std::span<cons
 // ground = each ground structure (D+0x158). So a typed row gets it too (every shipped starbase is Capital: the Capital row).
 // Ground also adds 0x4b8000: the AI_Combat_Power of every persisted tactical built object of the planet
 // (PlanetState::built_objects, §9.4) whose type's category mask meets the effective mask, summed in float.
+// q6 t18 (§9.6 / §9.9): with `leaves` set, the leaf part is read through that resolver's leaf cache
+// (GalacticSimTokenResolver::enemy_force: the same entries the equations use, up to 15 s old); null = computed live.
+class GalacticSimTokenResolver;
 double galactic_ai_enemy_strength(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
                                   PlanetIndex planet, int32_t self, bool space, uint64_t mask,
-                                  const objects::EnumConverter* categories = nullptr);
+                                  const objects::EnumConverter* categories = nullptr,
+                                  const GalacticSimTokenResolver* leaves = nullptr);
 // One entry of the PotentialPlan Contrast requirement list (0x5f1990): `row` = the EnemyContrastTypes row, -1 for a layer
 // total; `space` = layer byte 0 (space) / false = layer byte 1 (ground); `target` = the required strength.
 struct GalacticContrastEntry {
@@ -148,7 +156,8 @@ struct GalacticContrastEntry {
 // space, each = galactic_ai_enemy_strength(row mask) x `scale`, or 0 when its layer total is <= 0. The totals are unscaled.
 std::vector<GalacticContrastEntry> galactic_ai_contrast_list(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
                                                              PlanetIndex planet, int32_t self, std::span<const uint64_t> row_masks,
-                                                             double scale, const objects::EnumConverter* categories = nullptr);
+                                                             double scale, const objects::EnumConverter* categories = nullptr,
+                                                             const GalacticSimTokenResolver* leaves = nullptr);
 // The contrast marshaller's arithmetic (AI_GALACTIC_TOKENS §9.8, AI_GALACTIC_2 Contrast) [H]:
 // - 0x5f1990 typed-row scale: ((double)MaxContrastScale + (double)(float)(f x PerFailureContrastAdjust)) x (double)multiplier
 //   (`failure_adjust` = the float product f x PFCA).
@@ -166,6 +175,16 @@ bool galactic_contrast_total_open(std::span<const GalacticContrastEntry> entries
 //   otherwise v <= 0 is a veto.
 constexpr bool galactic_contrast_gate(bool main_met, bool escort_met, bool non_escort, bool escort) {
     return (main_met && non_escort) || (escort_met && escort);
+}
+// - The escort flag 0x140b3a529 (§9.10 [H]): galactic Setup A empties the escort target list and clears 0x140b3a525, so
+//   Setup C and every commit recompute (0x6bff00 / 0x6c4b20) find an empty escort remaining list, which always passes:
+//   the flag is 1 from Setup C to the end of every non-IgnoreTarget solve, whatever the main contrast. IgnoreTarget plans
+//   skip Setup C and the commit recompute returns early, so both flags stay 0.
+constexpr bool galactic_escort_met(bool ignore_target) { return !ignore_target; }
+// - Place 0x729830, first pass (§9.10, AI_GALACTIC_2 §1.4 corrected): a non-escort slot is skipped when 0x528 && !0x529,
+//   an escort slot when 0x529 && !0x528. The second pass ignores the flags.
+constexpr bool galactic_place_skip(bool main_met, bool escort_met, bool escort_slot) {
+    return escort_slot ? (escort_met && !main_met) : (main_met && !escort_met);
 }
 
 // The galactic AI's planning-side buildability: GalacticSim::buildable (cost, queue kind, GalacticSim::build_check =
@@ -245,9 +264,27 @@ public:
     // [port] Active kind while not InBattle: the space head unless a space entry was logged in this pass or the space queue
     // is empty (the service runs the space head first); a cancelled-by-transfer drop (on_service_tail) is not told apart
     // from a validation drop and stamps too.
+    //   q6 t18 (§9.9): the same pass raises the conflict visibility signals 0xE: space conflict state 4 -> mask 0x70, land
+    //   conflict state -1 -> mask 0x180, for the record's attacker when it has an AI system (visibility_event).
     void observe_conflicts(const galactic::ConflictManager& conflicts, int32_t now);
     // Frame stamps of `player` (-1 = never): 0 space defender, 1 space attacker, 2 ground defender, 3 ground attacker.
     int32_t player_stamp(int which, int32_t player) const;
+
+    // q6 t18 (AI_GALACTIC_TOKENS §9.9 [H]): visibility signal 0xE of `planet` for `player` (an AI player's perception
+    // system) carrying `mask`. Every fogged leaf node of that planet's evaluators (the planet's own, then FriendlyForce, then
+    // EnemyForce, each in token-table order [M]) with leaf mask M: if (mask & M) == M -> recompute every entry and set
+    // visible; else if visible -> recompute and clear visible; else nothing. A node with more than 100 entries is not
+    // recomputed. Recompute = the leaf's computation with Self = `player` and the entry's own parameters; a success
+    // overwrites the value and re-stamps it with NOW (a failure leaves the entry). refresh() raises it for the presence
+    // fold (GalacticSim visibility presence level) of every AI player at the first refresh (galaxy setup), on every planet
+    // owner change, and for the owner of every unit new on a planet's surface (a landing [M: also a surface spawn]).
+    void visibility_event(PlanetIndex planet, int32_t player, uint32_t mask);
+    // The perception leaf Target.EnemyForce.<Space|Ground>TotalUnnormalized of `planet` for AI player `self` through the leaf
+    // cache, as 0x5f2430 binds it (§9.6): mask 0 = no parameter, else Parameter_Category = mask. False when it fails.
+    bool enemy_force(int32_t self, PlanetIndex planet, bool space, uint64_t mask, double& out) const;
+    // Entries currently cached (tests / diagnostics) and the visible flags (bits = the fogged leaf masks M) of a node set.
+    size_t cache_size() const;
+    uint32_t visible_flags(PlanetIndex planet, int32_t player) const;
 
     bool resolve(const EvalContext& ctx, const TokenRef& token, double& out) const override;
     bool implements(Root root, std::span<const TokenId> path, const TokenTable& tokens) const override;
@@ -261,16 +298,22 @@ public:
 
     // N1 save / load: frame, the per-planet event stamps and last-seen values, the leaf cache (key order) and the hit
     // counter; version 2 (q6 t03) adds the logic frame, the per-player conflict stamps and the conflict observer (log
-    // position, active record). A version-1 image loads with no player stamps (-1) and the observer re-synchronised at its
-    // next pass (no stamp for log entries written before). The neighbour lists are rebuilt from the sim (static map
-    // data). read() fails (unchanged) unless the saved planet count is 0 (never refreshed) or the sim's.
+    // position, active record). Version 3 (q6 t18): the cache key is (leaf, instance, system player, parameter key) and
+    // every entry keeps its parameters (for the 0xE recompute); then the visible flags and the last seen surface units.
+    // A version-1 / 2 image loads with an empty leaf cache (its keys carried Target / Enemy / Human), no visible flags and
+    // the surface units taken from the sim. A version-1 image loads with no player stamps (-1) and the observer
+    // re-synchronised at its next pass (no stamp for log entries written before). The neighbour lists are rebuilt from the
+    // sim (static map data). read() fails (unchanged) unless the saved planet count is 0 (never refreshed) or the sim's.
+    // A load is a restore: it raises no visibility signal (the original refreshes every object at a load) [port].
     void write(ByteWriter& w) const;
     bool read(ByteReader& r);
 
+    // One token node's cache entry key (§9.9): the node = (leaf, inst, self), the entry = the parameter set.
     struct CacheKey {
         std::string leaf;  // root kind + leaf path
-        int32_t inst = -1, self = -1, target = -1, enemy = -1, human = -1;
-        std::string params;
+        int32_t inst = -1;  // evaluator instance: planet index (Target / Location roots), player id, -1 = Game
+        int32_t self = -1;  // the perception system's AI player (Self)
+        std::string params;  // canonical parameter set (sorted; see param key rules in the .cpp)
         friend auto operator<=>(const CacheKey&, const CacheKey&) = default;
         friend bool operator==(const CacheKey&, const CacheKey&) = default;
     };
@@ -308,9 +351,17 @@ private:
     std::vector<int8_t> last_corruption_;
     std::vector<uint8_t> last_battle_;
     std::vector<std::vector<uint32_t>> neighbours_;  // planet evaluator list (self excluded), planet order
+    // q6 t18 visibility signal 0xE state: per player, per planet, the visible flags of the fogged leaf nodes (bit M set =
+    // the nodes with leaf mask M are visible; every fogged mask is one bit, and nodes with the same mask hear the same
+    // events, so one word holds them all); and per planet the ObjectIds of the surface units seen at the last refresh
+    // (sorted), from which landings are found.
+    std::vector<std::vector<uint32_t>> visible_;
+    std::vector<std::vector<int32_t>> last_surface_;
+    void raise_presence(PlanetIndex planet, int32_t player);  // 0xE with the presence fold's level
     struct Entry {
         double value = 0.0;
         int32_t stamp = 0;
+        std::vector<Param> params;  // the bindings copy (0x64c840): what the 0xE recompute evaluates with
     };
     mutable std::mutex mu_;
     mutable std::map<CacheKey, Entry> cache_;
