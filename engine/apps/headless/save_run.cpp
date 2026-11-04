@@ -644,6 +644,7 @@ public:
             *s->gs, host.galactic_mode()->primary(), &types_, files_.get(), host.random(), defs_, eqs_, tinfo_,
             [hp](uint8_t p, const commands::EventData& ev) { return hp->execute_direct(p, commands::CommandSource::AI, ev); }, wcfg);
         ai::GalacticAiWorld& world = *s->world;
+        world.set_conflicts(&s->battles->conflicts());  // q6 t03: TimeSince*Defender/Attacker stamps
         std::vector<std::string> wd;
         if (!world.load_plans(plan_files_, &wd) || !world.start(&wd)) {
             err = "galactic: AI start failed: " + join(wd, "; ");
