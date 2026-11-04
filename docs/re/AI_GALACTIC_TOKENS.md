@@ -286,9 +286,11 @@ registered on planets.)
    share entries) is [M] (AI_TACTICAL_PERCEPTION §1.2).
 7. (q6) §8: whether any land path other than the auto-resolve start raises signal 0x13 on a planet through a
    dispatcher other than 0x220ed0. (~~whether the tactical budget map is empty~~: it is not, §9.3 [H].)
-8. (q6 §9b) Not traced: the meaning of the 0..5 int at +0x10 of a persisted tactical built record, and the battle
-   record field +0x618 = 9 that blocks persistence (§9.4); the exact trigger of the two 0x4b7d90 sites in 0x2b76a0;
-   the third template apply site 0x6bc0e0 (§9.5).
+8. ~~(q6 §9b) the 0..5 int of a persisted record, the +0x618 = 9 block, the two 0x4b7d90 sites in 0x2b76a0, the third
+   template apply site 0x6bc0e0~~: traced 2026-11-04 (§9.4: pad base level; galactic conflict state 9 = sandbox story
+   battle; site A invasion without a battle, site B attacker-won land auto-resolve; §9.5: 0x6bc0e0 is the save-game
+   load). Still open in §9.4: the x / y offsets of FoC's `ATTACH_POINT_00` pad bones (do their records ever match the
+   pad on recreate) [M], and the exact work of 0x4338d0 / 0x391310 in site A [M].
 9. (q6 §9.8) Contrast Score 0x72b940 decompiles as `void`. The return values (v, 0 or veto) of each exit, in particular
    the MinimumCost + AdditionalCost > gross branch, come from AI_GALACTIC_2's disassembly reading and were not
    re-checked here.
@@ -634,73 +636,146 @@ functions named below, FoC data (`extracted/foc_data_text.zip`) and Thrawn's Rev
 
 ### 9.4 Planet data +0x10: the persisted tactical built objects (0x4b8000) [H unless tagged]
 
+Complete spec (q6 RE pass 2, 2026-11-04: the open items of the first pass are traced below). Functions: gate 0x42f160,
+add 0x4b6c70, find by position 0x4b7ab0, remove 0x4bb3a0, owner filter 0x4b7d90, lookup 0x4b7c00, recreate 0x42d8b0
+(from the pad's vf13 0x42df80), power 0x4b8000, save 0x4bbef0, load 0x4b8c70 / 0x4b92e0.
+
 **Container.** The planet data D (planet object +0xB8) is a `PlanetaryDataPackClass`.
 - D+0x08 is a `DynamicVectorClass<PersistentTacticalBuiltObjectStruct>`: data +0x10, count +0x18, capacity +0x1C.
-  0x4b8000 reads this list.
-- D+0x20 is a second vector, `PersistentUpgradeObjectStruct` (data +0x28, count +0x30, added by 0x4b7090). 0x4b8000
-  does not read it.
+- D+0x20 is a second vector, `PersistentUpgradeObjectStruct` (data +0x28, count +0x30, added by 0x4b7090). None of the
+  functions here read it.
 
 **Record** (0x18 bytes):
 
 | offset | content |
 |---|---|
-| +0x00 | type id (type +0x11C) of the **finished** object (the pad's `Tactical_Buildable_Constructed` type, not the UC type) |
-| +0x04 / +0x08 / +0x0C | position x, y, z of the built object |
-| +0x10 | an int in 0..5; the add is refused when it is > 5 [L: meaning not traced] |
-| +0x14 | owner player id |
+| +0x00 | name CRC (type +0x11C, the type-manager map key) of the **finished** object: the type created at construction completion (the pad's `Tactical_Buildable_Constructed` result), not the UC type |
+| +0x04 / +0x08 / +0x0C | position x, y, z of the finished object when it was created (the pad's build point + 0.1 z, REMAINING_GAPS §6.5) |
+| +0x10 | the **pad's base level**: the pad object's byte +0x39C (map mini-chunk 0x0B, REMAINING_GAPS §3.1 item 2), sign-extended. The add is refused when it is not in 0..5 (unsigned compare, so a negative byte is refused too). Written, saved and loaded, but no code reads it back [M: no reader found] |
+| +0x14 | owner player id = the **pad's** owner (+0x58) at completion, not the builder id the completion uses for the new object (pad data +0x20). Both are normally the same player |
 
-**Filled** only by the tactical build pad (TacticalBuildObjects behaviour, L1_S4_REMAINING "Construction"):
-- Construction completes (0x42e890). If the pad type's `Tactically_Built_Child_Object_Persists` (+0xCC) is true,
-  0x42f160(…, add) calls 0x4b6c70, which appends a record.
-- 0x42f160 only acts in a land battle of a campaign: a parent galactic mode exists, the game is not a skirmish
-  (0x28afb0), the battle record names a planet (id ≠ 0x3fffff), the record's +0x618 ≠ 9 [L], and the battle planet is
-  a PLANET object with planet data.
-- The add is refused when a record already exists at the same (x, y) (0x4b7ab0, exact float compare).
-- The tag defaults to **true** (OBJECT_TYPES default-true list). In FoC only one type sets it to No (in
-  `MOBILE_DEFENSE_UNITS.XML`); Thrawn's Revenge never sets it. So every turret, bunker, mortar, bacta tank and so on
-  that a player builds on a pad in a fought campaign land battle is recorded.
+**Gate 0x42f160(behaviour, pad, object, add).** All must hold, else nothing happens (add and remove alike):
+1. a current mode that is tactical (vf 0xF0) with a parent mode (0x28aa00) whose vf 0xF8 is true (the galactic
+   campaign parent), and the game is not a skirmish (0x28afb0);
+2. the current battle's record (0x28a7a0) names a planet (id ≠ 0x3fffff);
+3. the parent's GOM (parent [3]) exists and its conflict state **GOM+0x618 ≠ 9**. GOM+0x618 is the galactic conflict
+   state machine (BATTLE_TRANSITIONS §1.5), not a battle-record field; 9 is set only by 0x28f590 for a story-linked
+   **sandbox** battle (LINK_TACTICAL with P8 = sandbox, BATTLE_TRANSITIONS §2.9.3 steps 5–6). So nothing built in a
+   sandbox story battle is recorded, and nothing destroyed or sold there is removed;
+4. the planet object (looked up by id in the parent GOM, 0x2aca60) has the PLANET behaviour (3) with its slot
+   (+0x335) set, and planet data D.
 
-**Removed** [H]:
-- The built object dies (0x42e6d0) or is sold (0x42ecd0): 0x42f160(…, remove) → 0x4bb3a0 removes the record at the
-  object's (x, y) when its type id matches.
-- 0x4b7d90(D, player) removes every record whose owner (+0x14) is not `player`. Callers:
-  - the planet write-back 0x2bff60(winner), land branch, always (BATTLE_TRANSITIONS §3.2);
-  - the land auto-resolve resolution 0x60b930;
-  - two sites in the land-conflict service 0x2b76a0, right after the loser's surface objects are removed [M for the
-    exact trigger].
-- No other caller. A change of owner by script, corruption or revolt leaves the old owner's records in place.
+**Add** (construction complete, 0x42e890): after the finished object is created, linked to the pad and given the pad's
++0x3CB byte, and only when the pad type's `Tactically_Built_Child_Object_Persists` (+0xCC) is true: 0x42f160(…, add) →
+0x4b6c70(D, finished type, finished object's position, pad base level, pad owner). Refused when the base level is > 5
+(unsigned) or a record already has the same **x and y** (0x4b7ab0: exact float compare of x and y only, z ignored; the
+last matching index wins). Otherwise appended at the end; log "%s: Successfully added to persistent tracking".
+The tag defaults to **true** (OBJECT_TYPES default-true list). FoC sets it to No on one type (in
+`MOBILE_DEFENSE_UNITS.XML`); Thrawn's Revenge never sets it.
 
-**Recreated.** At the start of a later campaign land battle on that planet, each build pad (vf13 0x42df80 → 0x42d8b0)
-looks for a record at its own (x, y) (0x4b7c00). When one exists, it creates the stored type for the stored owner
-there at once (log "Creating a persisted tactical built object").
+**Remove** (object level):
+- the pad's finished child dies (0x42e6d0) or is sold (0x42ecd0), the pad type has +0xCC: 0x42f160(…, remove) →
+  0x4bb3a0(D, the object's type, the object's position): the record at the same x and y is removed only when its name
+  CRC equals the object's type; log "...Successfully removed from persistent tracking". The pad data's child slot
+  (+0x10) is cleared before the call, in both paths.
+- A recreated object (below) sits in the same pad slot, so its death or sale removes its record the same way.
 
-**Saved.** The planet-data load 0x4b8c70 reads the records (chunk 0x0D; micro-chunks 0x37 type, 0x38 position, 0x39
-the +0x10 int, 0x3A owner) [H for load, M for the matching save].
+**Owner filter 0x4b7d90(D, keep)**: walks the list from the last record to the first and erases every record whose
+owner (+0x14) ≠ `keep` (order of the rest unchanged). The four callers and their triggers:
 
-**Power.** 0x4b8000(D, mask) = Σ over the records in list order of the type's `AI_Combat_Power` (0x370e60, float) when
-the type exists and its category mask (+0x1648) shares a bit with `mask`.
-- There is no owner test and no alive test: the records are types, not objects.
-- Readers:
-  - 0x5f2430 (ground flag, the effective mask, §9.2 step 6);
-  - `GroundbaseTotalUnnormalized` 0x6d9470 (all bits);
-  - the land overrun side strength 0x2ab880 (all bits; BATTLE_TRANSITIONS §1).
+| caller | when | keep |
+|---|---|---|
+| 0x2bff60 planet write-back, land branch (BATTLE_TRANSITIONS §3.2) | every end of a fought land battle | the battle winner |
+| 0x60b930 auto-resolve resolution | a land auto-resolve (AutoResolve +0x3D = 0) | the auto-resolve winner |
+| 0x2b76a0 site A (first branch of the land-conflict service) | **invasion without a battle**: the land-queue head fails validation 0x2becb0 (no ground base, i.e. D+0x130 = 0, and no combat-capable non-attacker object in the planet's ground list D+0xE0; or the attacker has no combat-capable unit), at least one of the head's invading units still exists and is not dying (+0x3A0 bit 0x40 clear), and attacker ≠ defender. In order: GOM state := −1; the live objects of D+0xE0 that pass 0x3a9760 or 0x39ae40 are put into an orbiting fleet of their owner (0x29e740, 0x430d90, orbit entry 0x4338d0 with −2) [M: tests and effect not named]; every surface object (0x397120) whose owner is not the record's defender (+0x08) is removed silently (0x391310, flag 1) [M: as read]; the planet's owner is re-derived (planet behaviour 0x3fe750(…, 0, 0), 0x3f7440, 0x3f7430); **then the filter**; then the invading units land (0x4f3bd0), the head is removed and an InvasionResult (success) signal 0xF is sent to the planet | the attacker (+0x04) |
+| 0x2b76a0 site B (state 7) | a land auto-resolve has finished with a result (codes 0x670001 / 0x670002; 0x670002 first retreats the loser, 0x2ba850) and the **attacker** is the winner: every surface object not owned by the attacker is destroyed (0x3a9e30), the owner is re-derived as in site A, then the filter. With 0x60b930 above this runs the filter twice on an attacker win (same result) | the attacker |
+
+No other caller. Owner changes that are not a land result (Lua / story `Change_Owner`, planetary revolt, corruption,
+the political-control ramp of GALACTIC_ECONOMY §4.2, a space battle) leave every record in place, including the old
+owner's.
+
+**Recreate 0x42d8b0** (from the pad's vf13 0x42df80, the pad's start-of-battle setup, SKIRMISH_SETUP §2.6):
+- vf13 does nothing while 0x140b15490 is set, and calls 0x42d8b0 only outside skirmish and while 0x140a7bed5 is clear.
+  0x140a7bed5 (setter 0x1fece0) is raised for the duration of the save-game load 0x52d10 and of a map-file load in
+  0x22f10 [M: so a saved tactical battle that is loaded keeps its saved objects and does not recreate a second copy].
+- 0x42d8b0 applies conditions 1, 2 and 4 of the gate but **not** condition 3: records are recreated in a sandbox story
+  battle too.
+- It does **not** test `Tactically_Built_Child_Object_Persists` and does not look at the pad's current contents.
+- Lookup 0x4b7c00(D, **pad** position): the last record whose x and y equal the pad's own x and y exactly gives the
+  type (0x407db0 by name CRC) and the owner. No match, or an unknown CRC, or owner −1: nothing happens.
+- The type is created at once (0x29f810) for the **record's owner**, at the pad's build point (0x42e280: the pad
+  model's `Tactical_Build_Attachment_Bone_Name` bone, else the pad position), with the pad's orientation (+0x84). It is
+  the finished type directly (no UC phase, no build time, no cost) and starts at full health; nothing about health is
+  stored. Log "Tactical object %s: Creating a persisted tactical built object '%s' at the same location".
+- Then: 0x394510 (the new object's behaviour attach and the type's +0x2120 player-tech refresh, as at construction
+  completion); the pad data's child slot (+0x10) := the object; sell setup (behaviour 0x2B, 0x524b30); the object is
+  linked to the pad (+0x2B0); if the pad has CAPTURE_POINT (slot +0x36F), 0x501050(capture, −1, −1) re-derives the
+  pad's controller (0x500a00) and gives the pad that owner if it differs [M: the controller is the new child's owner].
+  Unlike the construction and pre-build paths, the pad's +0x3CB byte is **not** copied.
+- Back in vf13: the map's pre-placed type (pad data +0x18, §2.6) is spawned only while the child slot is empty, so a
+  recreated object takes the pad and the pre-placed object is not created.
+- Edge cases:
+  - **Position match.** The record holds the finished object's x and y, the lookup uses the pad's. They match only when
+    the pad's build bone has the same x and y as the pad (or there is no bone). TR sets no bone, so TR pads always
+    match. FoC uses `ATTACH_POINT_00` on 5 pad types: a record from such a pad is recreated only if that bone sits at
+    the pad's x and y [M: bone offsets not measured]. A non-matching record is never recreated but stays in the list
+    and keeps counting in 0x4b8000.
+  - **Pad gone.** A pad not present in the next battle (a different map, or the pad's base level above the planet's
+    ground-base level, which destroys it at map load, REMAINING_GAPS §3.1 item 3) recreates nothing; the record stays.
+  - **Owner changed since.** The object is created for the stored owner whoever owns the planet or the pad now. After a
+    land result only the winner's records exist, so normally that is the defender. After a non-battle owner change the
+    old owner's turrets appear for the old owner, on the new owner's pads, even when the old owner is the attacker or
+    not in the battle at all [M: derived from the code, not observed].
+  - **Several records at one pad** cannot be created by the add (x, y duplicate refused); if a load brings two, the
+    last one wins.
+
+**Power 0x4b8000(D, mask)** = Σ over the records in list order of the type's `AI_Combat_Power` (0x370e60, float) when
+the CRC resolves to a type and its category mask (+0x1648) shares a bit with `mask`.
+- No owner test and no alive test: the records are types, not objects.
+- Readers: 0x5f2430 (ground flag, the effective mask, §9.2 step 6); `GroundbaseTotalUnnormalized` 0x6d9470 (all
+  bits); the land overrun side strength 0x2ab880 (all bits; BATTLE_TRANSITIONS §1.6).
 - Shipped FoC values of the finished types: anti-infantry / anti-vehicle / anti-air turrets 100 / 150 / 125
   (`Structure | AntiInfantry` and so on), bunkers 100, mortars 125. Bacta tanks, repair facilities and sensor nodes
   have no power (0).
 
+**Save format** (planet data save 0x4bbef0; load 0x4b8c70 with chunk 1 in 0x4b92e0) [H]:
+- In the planet data's chunk 1 (the general field block), micro-chunk **0x3B** = record count (int32). On load the
+  vector is re-sized to that count and pre-filled with {CRC 0, position 0, base level 0, owner −1} (count 0 clears it).
+- Then, after chunk 0x0C, one chunk **0x0D** per record in list order, each with micro-chunks **0x37** name CRC
+  (4 bytes), **0x38** x, y, z (three 4-byte floats in one micro-chunk), **0x39** base level (int32), **0x3A** owner id
+  (int32).
+- Load fills the records in chunk order. A 0x0D chunk beyond the saved count fails the planet-data load. Unknown
+  micro-chunks inside 0x0D are skipped.
+- The port has its own save format (N1), so only the content matters: per planet, the ordered list of {type, x, y, z,
+  base level, owner}.
+
 **Over a game.**
 - The list is empty at the start. Pre-placed pad objects (pad +0x18) are spawned without a record.
-- It grows only when players build on pads during campaign land battles that are fought, not auto-resolved.
-- After each land result only the winner's records remain.
-- So in an AI-only game, where every battle is auto-resolved, the list stays empty [M: assumes no tactical play].
+- It grows only when players finish pad structures during fought, non-sandbox campaign land battles.
+- After each land result (fought, auto-resolved or uncontested) only the winner's records remain.
+- In an AI-only game, where every battle is auto-resolved and nothing is built on pads, the list stays empty.
 
 **Port notes**
-- With only auto-resolved battles the original's term is 0 too. So the port's missing term (§9.2 port status) is exact
-  for headless galactic runs. It starts to matter once the port fights campaign land battles.
-- Planet state to model then: a per-planet list of (finished type, position, the 0..5 int, owner) in insertion order.
-  Apply the add / remove / winner-filter / recreate rules above, and save the list with the planet.
-- 0x4b8000 sums float powers in list order and the caller adds the sum, widened, to its double total. It does not test
-  the record owner.
+- With only auto-resolved battles the original's term is 0 too, so the port's missing 0x4b8000 term (§9.2 port status)
+  is exact for headless galactic runs. It matters once the port fights campaign land battles.
+- Store per planet, on the galactic side, an ordered list of {finished type, x, y, z, pad base level, pad owner}, and
+  save it with the planet. Use the type name or index in the port's own save; the CRC is only the original's key.
+- Add: at construction completion when the pad type's `Tactically_Built_Child_Object_Persists` (default true) holds and
+  the gate passes (campaign land battle, battle planet with planet data, galactic conflict state ≠ 9). Key = the
+  **finished object's** position. Refuse when a record has the same x and y (z not compared) or the base level is not
+  0..5.
+- Remove: at the death or sale of the pad's child, same gate, the record at the object's x and y with the same type.
+- Owner filter: keep only the winner's records at the end of every land result: fought battle (winner), land
+  auto-resolve (winner), invasion without a battle (attacker). Not on other owner changes.
+- Recreate at pad setup, campaign only, also in sandbox battles, not when restoring a saved battle: look up the pad's
+  own x and y (exact, last match), create the finished type for the record's owner at the pad's build point with the
+  pad's orientation, full health, put it in the pad's child slot so the pre-placed type is skipped, re-derive a capture
+  pad's owner, and do not copy the pad's +0x3CB byte.
+- Current port code (`engine/apps/sim/src/tactical_battle_pads.cpp`, `TacticalBattle::pad_persist`) differs from this:
+  it keys add and remove on the **pad** position and compares x, y and z; it stores base level 0 and the builder as
+  the owner; it does not model the state-9 gate. With TR (no build bones) the pad and object x, y agree, so only the z
+  compare, the base level and the owner source differ there.
+- 0x4b8000 sums float powers in list order and the caller adds the sum, widened, to its double total. No owner test.
 
 ### 9.5 Galactic budget membership: only the templates' categories [H unless tagged]
 
@@ -738,7 +813,11 @@ categories that it also budgets (table below).
 
 **When templates apply.** Template init 0x6bbed0 (the base template, then every triggering one). Template service
 0x6bc5c0: a new activation is applied on top of the current state; a removal causes 0x612ac0 and a re-apply of every
-remaining active template. There is a third apply site, 0x6bc0e0 [L: not traced].
+remaining active template. The third site, 0x6bc0e0 (via 0x6bc090, chunk 0x60000), is the **save-game load** of the
+budget's template state: micro-chunks 0 / 1 → two ints (+0x48 / +0x4C), 2 → a template name looked up in the template
+registry 0x140b31010 → +0x50 (the base template), 3 → each further template name, applied with 0x670ed0(template,
+owner +0x28) and appended to the active list (+0x38) in saved order (q6 RE pass 2, 2026-11-04) [M: field names]. So a
+loaded game re-applies the saved active templates in their saved order; there is no other apply site.
 
 **Shipped galactic budgets:**
 
