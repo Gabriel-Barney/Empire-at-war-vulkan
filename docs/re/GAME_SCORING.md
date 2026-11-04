@@ -238,7 +238,8 @@ Can wait / skip: Get_CRC (MP only), the debug file-watcher reload, the `from sav
 - Done (port notes 1-3): `SimHost::set_scoring_script(files, name)` (`engine/apps/sim/include/alamo/sim/sim_host.hpp`);
   `start_game` on an empty stack re-creates the VM after the GlobalValue clear and before `start_galactic` sets the
   players up, so before `start_story`; top level, `Base_Definitions()` (skipped when missing), `main` thread created.
-  The VM is dropped when the stack empties [port]. `GameSession` always enables it; `alamo_headless` with `--scoring`.
+  The VM is dropped when the stack empties [port]. `GameSession` always enables it; `alamo_headless` only with `--scoring` (opt-in kept by Gabriel 2026-11-04: vanilla's
+  `Allow_AI_Controlled_Fog_Reveal = 1` enters the frame CRC, so a default-on run would move the checked-in headless goldens).
   The session GlobalValue table is the store (saved with the game; a load restores it after the re-creation, as §4).
 - Done (q6 t09, port notes 4-5; comment block at `SimHost::set_scoring_script`):
   - §2 Service at `GameModeManager::update`'s "gmm.scoring" step (`ModeTickContext::scoring`), before the mode tick:
