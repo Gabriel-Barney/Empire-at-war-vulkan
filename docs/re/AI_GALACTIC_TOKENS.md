@@ -244,14 +244,13 @@ registered on planets.)
   index (+0x30) ≠ −1 (0x5f55c0).
 - An unbound root: 0x4dd1d0 looks the first token up in the context, then the system's root map, then the global root
   map; not found → the path returns **false** (no default value).
-- Consequences at the call sites (exe side [H]; propagation of a leaf failure through `PerceptionFunctionClass::Evaluate`
-  in PerceptionFunctionG.dll is [M], consistent with the S2 decision "failing leaves fail the whole equation"):
+- Consequences at the call sites (exe side [H]; a leaf failure fails the whole equation and leaves the output
+  untouched, read from PerceptionFunctionG.dll in §9.1 [H, q6 2026-11-04]):
   - proposal 0x6cb120: `Evaluate` false → candidate skipped (no desire, not proposed);
   - template trigger 0x670be0: result pre-set to 0.0 and the bool ignored → trigger "> 0" is false (template not
-    activated) unless the DLL writes a partial value [L];
+    activated); the DLL writes no partial value (§9.1);
   - budget 0x614590: the result is pre-loaded with the **previous normalised weight** and the bool ignored → a failing
-    category keeps its old weight (then negatives → 0, renormalised) [H exe side; L whether the DLL leaves the
-    output untouched on failure].
+    category keeps its old weight (then negatives → 0, renormalised) [H, both sides].
 - Shipped equations that need Human: `Underworld_Offensive_Budget_Allocation`, `Num_Enemy_Space/Land_Territories`,
   `Enemy_Planets_Controlled`, `Needs_More_Space_Force_Globally`, `Am_I_In_Winning_Position`,
   `Space/Ground_Force_Limit_For_Unrestricted_Grab`, `Should_Shutdown_Offense_For_Story_Campaign`.
@@ -272,8 +271,10 @@ registered on planets.)
   evaluation **consumes synced RNG** [M: draw count per call]. Script globals persist between calls.
 
 ## 7. Open items
-1. PerceptionFunctionG.dll: does `Evaluate` write the output on failure, and do any operators (e.g. `*` by 0, clamp)
-   swallow a failing operand? (decides template/budget behaviour without a human). Needs the DLL decompile or a probe.
+1. ~~PerceptionFunctionG.dll: does `Evaluate` write the output on failure, and do any operators (e.g. `*` by 0, clamp)
+   swallow a failing operand?~~ No and no: §9.1 [H, q6 2026-11-04]. Not read: the Division, comparison, Clamp
+   (vt 0xc7be0), Unary (vt 0xc7bb0) and Random (vt 0xc7b98) node bodies; they cannot swallow a failure either, because
+   the failing node stops the run before any later operator is reached.
 2. Island analysis cadence (0x4e4850 called from 0x4e2060 and 0x4e4670) and when flags +0x204..0x206 are reset (0x278404 /
    0x1104999 sites).
 3. Bodies not read: GrossIncome sum tail (0x667fb0), NetIncome (0x66a420), 0x66a730, Maintenance (0x669110/0x669420),
@@ -284,7 +285,7 @@ registered on planets.)
 6. Cache key: 0x5f3e60 hashes the binding set; whether the hash includes Self (so Human-rooted and Self-rooted leaves
    share entries) is [M] (AI_TACTICAL_PERCEPTION §1.2).
 7. (q6) §8: whether any land path other than the auto-resolve start raises signal 0x13 on a planet through a
-   dispatcher other than 0x220ed0; and whether the tactical budget map is empty (§8.3 "Tactical").
+   dispatcher other than 0x220ed0. (~~whether the tactical budget map is empty~~: it is not, §9.3 [H].)
 
 ## 8. Player-rooted tokens used by Thrawn's Revenge (q6, 2026-11-03)
 
@@ -402,8 +403,9 @@ conflict in which the AI is the defender starts (or is dropped), and 0.0 before 
   leaf cache. During a reweight, 0x614590 writes each category's raw value to +0x3C as it goes and normalises in a
   second loop. An equation that reads `BudgetAllocation` from inside a budget weight equation can therefore see a raw
   value for categories already evaluated in that pass, unless its cached value is still fresh [M].
-- **Tactical.** The same leaf is on the tactical player roots. The budget is galactic-only (AI_GALACTIC_2 §3), so in
-  tactical the map is expected to be empty and the value 0.0 [L: not traced].
+- **Tactical.** The same leaf is on the tactical player roots, and the tactical budget is **not** empty: it holds the
+  categories of the mode template's `<Budget>` block, so the value is that category's normalised weight there (§9.3
+  [H], corrects the earlier [L] reading "empty, 0.0").
 
 ### 8.4 Port notes
 
@@ -413,10 +415,186 @@ conflict in which the AI is the defender starts (or is dropped), and 0.0 before 
 - `BudgetAllocation`: Self-only, keyed by the AIGoalCategoryType value, returns the category's current normalised
   weight, 0.0 for an unknown category.
 - Port status (q6 t10, 2026-11-04): galactic leaf done (q6 t03). Tactical player roots (`engine/ai/tactical`
-  tactical_perception.cpp): Self-only as above, value 0.0 for every key (no tactical budget, [L] as stated); before t10
+  tactical_perception.cpp): Self-only as above, value 0.0 for every key (no tactical budget; §9.3 since shows the battle budget is filled from the template, open for the port); before t10
   the tactical leaf also returned 0.0 on Enemy / Human / Owner roots instead of failing.
 - Port status (q6 t10): with no human player (headless `--galactic-ai` without `--human`), TR's
   `Allow_Blind_Space_Production` (via `Needs_More_Space_Force_Globally`: `Variable_Human.SpaceTotalUnnormalized`) and
   `Should_Conquer_Opponent_Planet` (via `Player_Danger_Score`: `Variable_Human.PlanetsControlled`) fail on every
   evaluation, as AI_GALACTIC_2 §4.3 requires; with `--human Empire` both evaluate. The headless `proposals` summary now
   names the first failing site (`~ eval FAIL <eq> at <token path | Function_X | Script_X | error>`).
+
+## 9. Coordinator questions (q6, 2026-11-04)
+
+Three questions from the q6 integration: what a failing operand does to an equation, what the contrast totals of
+helper 0x5f2430 contain, and what `BudgetAllocation` reads in battle.
+
+### 9.1 A failing operand fails the whole equation (PerceptionFunctionG.dll) [H unless tagged]
+
+DLL RVAs (PerceptionFunctionG.dll, FoC x64):
+
+- **`PerceptionFunctionClass::Evaluate`** (export 0x17650) runs the equation's node list in order on a stack of
+  doubles (the parsed equation is postfix).
+  - The first node that returns false ends the run: `Evaluate` returns false and the **output is not written**.
+  - Success needs exactly one value left on the stack at the end; that value is the output.
+- **Operator nodes** run only when both operands are already on the stack.
+  - Multiply (0x17560) and Add (0x17070): fewer than 2 values on the stack → false; otherwise pop two, push the result.
+  - There is no short-circuit. `* 0` cannot swallow a failure: the failing operand stops the run before the multiply
+    node is reached.
+- **Lookup node** (`PerceptualLookupNode`, vt 0xc7bf8, slot 1 = 0x17770): pops its parameters and calls the exe's path
+  evaluator through the import at 0xfb440. If that fails, the node returns false and pushes nothing.
+- **Function references**: `PerceptionFunctionCallClass::Evaluate` (0x20980):
+  - no function → false;
+  - otherwise it binds the call's parameters (import 0xfb438) and tail-calls `Evaluate` of the referenced function,
+    returning its result.
+  - So a `Function_X.Evaluate` operand fails when any leaf of `Function_X` fails [H for 0x20980; M for which node class
+    an embedded `Function_X.Evaluate` operand goes through].
+- **Not read:** the Division, comparison, Clamp (vt 0xc7be0), Unary (vt 0xc7bb0) and Random (vt 0xc7b98) bodies. They
+  cannot change the outcome either: a failure stops the run first.
+
+**The two TR cases** (no human player, so `Variable_Human` is unbound and every leaf under it fails, §6(a)):
+
+- `Allow_Blind_Space_Production` = `0.01 + (Maxed_Shipyards > 0.5) * (1 + … + Function_Needs_More_Space_Force_Globally
+  .Evaluate)`. The inner function reads `Variable_Human.SpaceTotalUnnormalized`, so it fails, and the whole equation
+  fails. This happens even when `Maxed_Shipyards > 0.5` is 0 and even though the constant 0.01 is on the stack.
+- `Should_Conquer_Opponent_Planet` via `Function_Player_Danger_Score` (reads `Variable_Human.PlanetsControlled`): the
+  same. The whole equation fails.
+- What the failure does depends on the caller (§6(a)):
+  - proposal: the candidate is skipped;
+  - template trigger: 0.0;
+  - budget weight: the category keeps its previous weight.
+
+**Port notes**
+- The port's current rule (a failing leaf fails the whole equation, including through `Function_` references) is the
+  original's. Keep it.
+- On failure, leave the caller's output variable untouched. The callers already pre-load it: 0.0 for the template
+  trigger, the previous weight for the budget.
+- No operator short-circuits, `*` by 0 included.
+
+### 9.2 Contrast totals of 0x5f2430: perception leaf plus the structures' own power [H unless tagged]
+
+`0x5f2430(AI context, target context, category mask, ground flag)` returns a double:
+
+1. **No AI context** → 0.0.
+2. **Leaf.** Evaluate the path `Target.EnemyForce.SpaceTotalUnnormalized` (ground flag 0) or
+   `Target.EnemyForce.GroundTotalUnnormalized` (ground flag 1). If the mask is non-zero, it is bound as
+   `Parameter_Category`. The result variable starts at 0.0 and the success flag is ignored, so a failing leaf counts
+   as 0.0. Per §2 the leaf sums the enemy units at the planet, including a starbase's **spawned member units**, but not
+   the starbase's own power.
+3. **Ownership gate.** The planet's owner is tested with 0x4ad9f0 against the AI player (context +0x28). If the owner
+   is the AI or one of its allies, nothing more is added. Every other owner passes the gate, including pirates and the
+   neutral player, so for a pirate planet the following steps always run.
+4. **Effective mask** = the given mask, or all bits when the mask is 0.
+5. **Space (flag 0).** Take the planet's starbase **type** (planet data +0xB8 → +0x140, via 0x3f8b40). If it is set and
+   its category mask (+0x1648) shares a bit with the effective mask, add its `AI_Combat_Power` (0x370e60, float).
+6. **Ground (flag 1).** For each structure object in planet data +0x158 (count +0x160) whose type (object +0x298)
+   shares a category bit with the effective mask, add that type's `AI_Combat_Power`. Then add 0x4b8000(planet data,
+   mask): the sum of `AI_Combat_Power` over the type ids in the list at planet data +0x10 (count +0x18, 0x18-byte
+   records, ids resolved in type table 0x140b2f020) whose category matches the mask. GALACTIC_ECONOMY §6.2 calls these
+   "garrison types" [M for the meaning of that list].
+7. **Precision.** The leaf is a double. Each structure power is a float widened to double and added in list order.
+
+**Answer.** Yes. For a pirate (or any non-allied) planet, the untyped totals (mask 0 = all categories) add each
+structure's own `AI_Combat_Power` on top of the leaf, which already holds the spawned members:
+- space: the starbase type's power;
+- ground: every ground structure's power, plus the 0x4b8000 list.
+
+**The typed rows call the same helper.** In the contrast list builder 0x5f1990, each per-type row is
+0x5f2430(…, row category mask, flag) × scale, so the own-power additions also land in **typed rows whose category
+matches**:
+- every shipped starbase is `<CategoryMask> Capital </CategoryMask>` (`STARBASES.XML`, 23 types), so the starbase's
+  own power is in the Capital row;
+- ground structures are in the rows that match their category.
+
+This contradicts the "spec reading" used for the `CO_SBUNTYPED` experiment in A2_CONQUER_OPPONENT_DIAG (own power
+only in entries 0/1). That experiment gave better attack behaviour, so its gain must come from something else that
+still differs [L: not traced].
+
+**Layer order (correction to AI_GALACTIC_2 "Contrast", Setup A).** Flag 1 selects `GroundTotalUnnormalized` and the
+ground structures, so the list 0x5f1990 builds is:
+
+| position | content | layer byte |
+|---|---|---|
+| entry 0 | the **ground** total | 1 |
+| entry 1 | the **space** total | 0 |
+| next rows | one typed row per `EnemyContrastTypes` key, **ground** (flag 1) | 1 |
+| last rows | one typed row per key again, **space** (flag 0) | 0 |
+
+- Each typed loop is zeroed when its own layer total is ≤ 0.
+- AI_GALACTIC_2 names entry 0 "space". The consumers only compare the layer byte (the satisfied test 0x72ac70 sums the
+  entries whose byte equals the asked layer), so the naming matters only where the list **order** matters, for example
+  the order in which Setup C builds the candidate pairs [M].
+
+**Port notes**
+- `galactic_ai_enemy_strength` (`engine/ai/src/galactic_ai_tokens.cpp`) adds the own power only when the mask is
+  "all". The original adds it whenever the structure's category matches the row's mask:
+  - the starbase in the Capital row;
+  - ground structures in their categories' rows.
+- The port has no 0x4b8000 list term ("[port: none]").
+- The port's ownership gate is "owner is hostile to Self". The original's is "owner is neither the AI nor an ally",
+  which also lets a neutral or unowned-but-held planet's structures count. For pirate planets the two gates agree.
+- `ContrastM::setup_a` (`engine/ai/src/galactic_pp.cpp`) pushes the space total first. The original pushes ground
+  first, then the typed ground rows, then the typed space rows. Match the order if candidate-pair order matters there.
+- A failing leaf counts as 0.0 here, not as a failure of the plan.
+
+### 9.3 BudgetAllocation in battle: the tactical budget is filled from the mode template [H unless tagged]
+
+- **Leaf.** 0x6e0560 is registered by the base Player evaluator 0x6e09c0, so it is on the tactical player roots too.
+  The §8.3 rules are unchanged:
+  - Self only (any other root fails);
+  - `Parameter_Category`, default −1;
+  - value read through context goal system (+0x40) → budget (+0x190) → 0x612ee0.
+- **Every mode has a budget.** Each goal system builds an AIBudgetClass (0x6109c0, called from 0x6c7970). It is reached
+  from the goal-system constructors 0x6b8480 / 0x6b86e0 / 0x6b88d0 and from 0x5f5230.
+- **Filled at the first service.** In battle, 0x5f5ab0 (AI_TACTICAL §1.2) → template init 0x6bbed0 picks the mode's
+  template list (0x60f780(player type, mode)) and applies its first template through 0x670ed0:
+  - `<Budget>` entries (template list +0x80) are added by 0x615420 as (category id, weight equation). An entry from a
+    template of higher or equal priority replaces the category's equation.
+  - `Tactical_Budget_Allowance` entries (list +0xC0) are added by 0x615550 as a category with **no** equation and the
+    allowance at +0x5C.
+- **Weights.** Init 0x6137b0 evaluates each weight equation in the tactical perception context. Self is bound, Enemy
+  and Human are bound only when they exist. Then:
+  - negatives → 0;
+  - normalise to sum 1;
+  - all zero → 1/count;
+  - a category without an equation counts as 0 but is part of the count.
+- **Reweight.** 0x614590 runs from the goal service 0x6cacd0 (AIGoalSystem vtable slot 2) at the end of each proposal
+  pass (+0x184), as in galactic. Only its **money** part is galactic-only (mode +0x34 == 0 test), so AI_GALACTIC_2 §3
+  "galactic only" applies to money, not to the weights. Confirmed on the galactic and land goal systems
+  (PRIOR_PATCH.md); the space one is [M].
+- **Cleared** at battle end by goal slot 7 (0x6cafb0, AI_TACTICAL §1.4).
+- **Shipped data.** The FoC `Test_Land` / `Test_Space` `<Budget>` blocks:
+  - Hero ReallyBig;
+  - High_Priority High;
+  - Map_Control Medium_High;
+  - Med_Priority Medium;
+  - Tactical_Targeted / Defensive / Tactical_Untargeted with `Generic*` allocations;
+  - NoBudget ReallyBig (space only);
+  - StoryArc ReallyBig.
+- **AIGoalCategoryType values** (the key):
+
+  | value | category | value | category |
+  |---|---|---|---|
+  | 0 | Offensive | 11 | MajorItem |
+  | 1 | Defensive | 12 | StoryArc |
+  | 2 | Information | 13 | StoryArcHuman |
+  | 3 | Infrastructure | 14 | Interventions |
+  | 5 | Tactical_Targeted | 15 | High_Priority |
+  | 6 | Tactical_Untargeted | 16 | Sandbox_Events |
+  | 7 | NoBudget | 17 | Med_Priority |
+  | 8 | Hero | 18 | Map_Control |
+  | 9 | Always | | |
+  | 10 | Macro_Goal | | |
+
+**Answer.** The tactical budget map is not empty. `Variable_Self.BudgetAllocation{Parameter_Category = X}` in battle
+is X's normalised weight in the active tactical template's `<Budget>` block; it is 0.0 only when X is not in that
+block.
+- No shipped FoC or TR tactical equation reads `BudgetAllocation`. TR's only use is `Flush_MajorItem_Budget`
+  (galactic), so the difference is not visible with current data.
+
+**Port notes**
+- Give every tactical AI player a budget built from its mode template's `<Budget>` (and `Tactical_Budget_Allowance`)
+  entries at the first AI service.
+- Weight it with the §8.3 normalisation and reweight it at each proposal-pass end, without the money step.
+- Clear it at battle end.
+- `BudgetAllocation` on a tactical Self root then returns that weight. Returning a fixed 0.0 in battle is wrong but
+  harmless for current data.
