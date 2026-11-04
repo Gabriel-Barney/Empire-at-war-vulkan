@@ -73,6 +73,7 @@ struct SimInstanceStats {
     uint32_t bone_hidden_meshes = 0;  // R3: meshes hidden by the clip's per-bone visibility
     uint32_t hardpoint_events = 0;  // R5: hardpoint destructions applied from the frame's events
     uint32_t contained = 0;         // R3: kSnapContained objects (not drawn)
+    uint32_t script_hidden = 0;     // q6 t19: Lua Hide(true) objects (SnapshotObject::script_hidden: not drawn, no ghost)
     uint32_t ghosts = 0;            // R5: last-seen ghosts drawn this frame
     uint32_t muzzle_meshes = 0;     // R3: sub-objects shown by muzzle state
     uint32_t attachment_posed = 0;  // R3 T6: Model_To_Attach instances posed by the scene-model source

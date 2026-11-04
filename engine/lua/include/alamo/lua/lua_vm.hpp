@@ -151,6 +151,22 @@ public:
     // Drops cached wrappers of dead objects (call at a deterministic point, e.g. after a flush).
     void sweep_dead_wrappers();
 
+    // ---- q6 script pool (docs/re/OBJECT_SCRIPTS.md §1.3, §1.4, §2.3; the host is engine/apps/sim object_scripts) ----
+    // Release steps 1-3 of 0x2488e0: the exit flag set, every thread killed and removed (thread ids restart at 0, as the
+    // original's thread vector is emptied), the ThreadValue table and the GetEvent queue cleared. Globals are untouched:
+    // the caller runs Flush_G() / Base_Definitions() next.
+    void pool_kill_threads();
+    // Release steps 5.3 / 5.5: the Lua stack reset, then one full collection (finalizers included).
+    void collect_garbage();
+    // Handout of a pooled instance (0x244170): the exit flag (+0x121) cleared, no current thread (+0x60 = -1).
+    void pool_handout();
+    // §1.3 step 3 (0x2567b0 / 0x546c70 at every attach): the engine globals of the binding table registered again,
+    // replacing whatever a script stored under those names (`Script`, a constructor global, is left alone).
+    void reinstall_engine_globals();
+    // A new LuaHost for a pooled instance handed to another object. When the store changes, the game-object wrapper
+    // caches are emptied (their handles belong to the old store).
+    void rebind_host(const LuaHost& host);
+
     // ---- diagnostics ----
     const std::vector<std::string>& messages() const;  // _ScriptMessage / _OuputDebug / print lines
     const std::vector<std::string>& errors() const;    // thread errors

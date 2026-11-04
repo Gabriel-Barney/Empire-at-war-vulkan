@@ -977,6 +977,14 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
                           st.attached, st.load_failures, st.pumps, st.first_draws, st.released_exit, st.released_dead,
                           st.released_mode, st.thread_errors, os->live(), os->error_total());
             out.text += buf;
+            {  // q6 t19: the §1.4 pools (name size/in use) and the reuse counts
+                std::string pl = "  object script pools:";
+                for (const sim::ObjectScriptHost::PoolInfo& p : os->pools())
+                    pl += " " + p.name + " " + std::to_string(p.size) + "/" + std::to_string(p.in_use);
+                pl += "; loaded " + std::to_string(st.loaded) + ", reused " + std::to_string(st.reused) + ", pooled releases " +
+                      std::to_string(st.pooled_releases) + ", type instances " + std::to_string(os->type_instances()) + "\n";
+                out.text += pl;
+            }
             for (const auto& [text, n] : os->error_counts()) out.text += "  object script error x" + std::to_string(n) + ": " + text + "\n";
             if (!opt.quiet) {
                 size_t shown_m = 0;

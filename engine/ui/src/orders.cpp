@@ -101,13 +101,16 @@ void OrderTranslator::tactical(const InputState& in, const OrderContext& ctx) {
     const tactical::SpatialTree& all = ctx.trees->all();
     const ButtonState& lb = in.button(Button::Left);
     const ButtonState& rb = in.button(Button::Right);
+    // q6 t19 (OBJECT_SCRIPTS §10.3): the box pick 0x267680 skips hidden models as the point pick does, so the pick
+    // tests' skip (garrisoned / Lua-hidden objects) applies to box and double-click selection too.
+    const auto box_skipped = [&ctx](uint32_t id) { return ctx.pick_tests && ctx.pick_tests->skip && ctx.pick_tests->skip(id); };
 
     if (lb.drag_ended) {
         std::vector<uint32_t> ids;
         if (ctx.local_player >= 0 && static_cast<uint32_t>(ctx.local_player) < ctx.trees->player_count()) {
             const auto& tree = ctx.trees->player(static_cast<uint32_t>(ctx.local_player));
             for (uint32_t id : box_select(tree, ctx.view, lb.drag, ctx.pick_filter, qctx_))
-                if (is_selectable(ctx, id)) ids.push_back(id);
+                if (!box_skipped(id) && is_selectable(ctx, id)) ids.push_back(id);
         }
         if (in.shift()) ids.insert(ids.end(), sel_.begin(), sel_.end());
         if (!ids.empty() || !sel_.empty()) emit_select(std::move(ids));
@@ -120,7 +123,7 @@ void OrderTranslator::tactical(const InputState& in, const OrderContext& ctx) {
                 std::vector<uint32_t> ids;
                 const auto& tree = ctx.trees->player(static_cast<uint32_t>(ctx.local_player));
                 for (uint32_t id : box_select(tree, ctx.view, screen, ctx.pick_filter, qctx_))
-                    if (is_selectable(ctx, id) && ctx.type_of(id) == type) ids.push_back(id);
+                    if (!box_skipped(id) && is_selectable(ctx, id) && ctx.type_of(id) == type) ids.push_back(id);
                 if (in.shift()) ids.insert(ids.end(), sel_.begin(), sel_.end());
                 emit_select(std::move(ids));
             } else if (in.shift()) {

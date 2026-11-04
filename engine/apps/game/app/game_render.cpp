@@ -639,6 +639,8 @@ void BattleView::capture(const GameSession& session) {
         append_lob_chargeups(*b, *snap);                            // S8 t31: lobbing charge-up particles
         // Int-final: garrisoned objects (the battle's garrison host) are not drawn (R3 kSnapContained).
         render::apply_contained(*snap, [b](const render::SnapshotObject& o) { return b->contained_by(o.id) != objects::kNoObjectId; });
+        // q6 t19 (OBJECT_SCRIPTS §10.3): Lua Hide(true) - no model, particles, ghost or surface FX (presentation only).
+        render::apply_script_hidden(*snap, [&session](const render::SnapshotObject& o) { return session.script_hidden(o.id); });
 #ifdef ALAMO_SIM_HAVE_FOG
         // R5: the local player's FOW grid + HideWhenFogged marks. The attract demo draws the sim's fog once the map's
         // DEMO_CONTROLLER revealed it (GameSession::attract_demo_script). A demo map without one (the shipped

@@ -163,7 +163,9 @@ void SimInstanceBuilder::build(const InterpolatedFrame& frame, SimModelSource& m
         const SnapshotTypeInfo* tinfo = table_->valid(o.type) ? &(*table_)[o.type] : nullptr;
         const bool ghost_type = fog && tinfo && (tinfo->ghost_last_state || tinfo->ghost_initial_state);
         bool ghosted = false;
-        if (ghost_type) {
+        if (o.script_hidden) {
+            ghosts_.erase(o.id);  // q6 t19 (OBJECT_SCRIPTS §10.3): a Lua-hidden model leaves no last-seen ghost (0x4eb020)
+        } else if (ghost_type) {
             if (!fog_hidden) {
                 if (ghosts_.erase(o.id)) {  // the ghost stood at full alpha: no fade-in pop
                     s.fog_alpha = 1.0f;
@@ -208,6 +210,10 @@ void SimInstanceBuilder::build(const InterpolatedFrame& frame, SimModelSource& m
         s.use_combined = false;
         if (o.flags & kSnapContained) {
             ++st.contained;
+            continue;
+        }
+        if (o.script_hidden) {  // q6 t19: the model hide switch (0x264c80)
+            ++st.script_hidden;
             continue;
         }
         if (!(o.fade > 0.0f)) {

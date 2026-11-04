@@ -235,6 +235,11 @@ struct SnapshotObject {
     // sets kStealthBreakFade (0.3 s, the firing / stun break) when the ability is still active but no longer applied.
     // Presentation only, not in digest().
     float stealth_time = 0.0f;
+    // q6 t19 (OBJECT_SCRIPTS §10.3, Lua Hide(true): the model hide switch 0x264c80 + obj +0x3a2 bit 0): set between ticks by
+    // apply_script_hidden. The model and its particles are not drawn, no last-seen ghost is made (FoggedModelManager
+    // 0x4eb020), no surface FX / foot plants play (surface type 0x11); the host also drops its radar blip, mutes its sounds
+    // and skips it in the mouse pick. Presentation only, not in digest().
+    bool script_hidden = false;
 };
 // R5 stealth (ABILITIES_HARDPOINTS §3.7, TACTICAL_GAPS §2.3 Force_Cloak): while applied, meshes named BASEMESH are hidden
 // and STEALTH meshes shown. Set by apply_battle_state (AbilitySystem::is_stealthed or an active STEALTH (48) /
@@ -445,6 +450,8 @@ void set_snapshot_hardpoint_events(SimSnapshot& snap, std::span<const SnapshotHa
 void apply_fog_hidden(SimSnapshot& snap, const std::function<bool(const SnapshotObject&)>& hidden);
 // R3: marks garrisoned / transported objects (kSnapContained) with a host predicate (null clears every mark).
 void apply_contained(SimSnapshot& snap, const std::function<bool(const SnapshotObject&)>& contained);
+// q6 t19: marks Lua-hidden objects (SnapshotObject::script_hidden) with a host predicate (null clears every mark).
+void apply_script_hidden(SimSnapshot& snap, const std::function<bool(const SnapshotObject&)>& hidden);
 // R3: this tick's muzzle state (entries of objects not in the snapshot or with an empty bone dropped; sorted by id,
 // input order kept per id).
 void set_snapshot_muzzles(SimSnapshot& snap, std::span<const SnapshotMuzzle> muzzles);

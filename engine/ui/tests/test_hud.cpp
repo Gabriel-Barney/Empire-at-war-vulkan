@@ -1126,6 +1126,16 @@ void test_tactical_hud() {
         hud.build(fr, units, types);
         CHECK(hud.draw_list().digest() == d1);
         if (w == 1024) digest = d1;
+        // q6 t19 (OBJECT_SCRIPTS §10.3): a Lua-hidden unit has no radar blip unless its type is
+        // Visible_On_Radar_When_Fogged (own units too).
+        units[3].script_hidden = true;
+        hud.build(fr, units, types);
+        CHECK(hud.stats().radar_blips == 3);
+        types[0].visible_on_radar_when_fogged = true;
+        hud.build(fr, units, types);
+        CHECK(hud.stats().radar_blips == 4);
+        types[0].visible_on_radar_when_fogged = false;
+        units[3].script_hidden = false;
     }
     CHECK(digest != 0);
 }

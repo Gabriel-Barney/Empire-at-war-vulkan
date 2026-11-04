@@ -19,7 +19,9 @@ SimAttachStats sync_sim_frame(ProxyAttachments& attach, const InterpolatedFrame&
         bool culled = false;
     };
     auto gate = [&](const SnapshotObject& o, Gate& g, bool count) {
-        if (o.flags & kSnapContained) {  // R3: inside a garrison / transport
+        // R3: inside a garrison / transport; q6 t19: Lua Hide(true) hides the model's scene node, its particles with it
+        // (OBJECT_SCRIPTS §10.3) [port M: the spec names the model switch, the attached systems follow the model].
+        if ((o.flags & kSnapContained) || o.script_hidden) {
             if (count) ++st.contained;
             return false;
         }

@@ -90,7 +90,8 @@ void SimDecorations::update(const InterpolatedFrame& frame) {
         const SnapshotTypeInfo& ti = (*table_)[o.type];
         const std::string_view surface = surface_type_name(terrain_surface_type(t, o.position.x, o.position.y));
         // ---- SurfaceFX particles (wakes / splashes) while the object moves fast enough on the surface
-        if (!ti.surface_fx.empty() && !(o.flags & (kSnapDying | kSnapContained))) {
+        // q6 t19 (OBJECT_SCRIPTS §10.3, 0x5efe50): a Lua-hidden object stands on surface type 0x11: no wakes, no dust.
+        if (!ti.surface_fx.empty() && !(o.flags & (kSnapDying | kSnapContained)) && !o.script_hidden) {
             float speed = 0.0f;
             const auto pit = std::lower_bound(prev_ids_.begin(), prev_ids_.end(), o.id);
             if (pit != prev_ids_.end() && *pit == o.id && dt > 0.0f) {
@@ -201,6 +202,7 @@ void SimDecorations::update(const InterpolatedFrame& frame) {
             ++stats_.foot_unmatched;
             continue;
         }
+        if (it->script_hidden) continue;  // q6 t19: surface type 0x11 for a Lua-hidden object (no footprints)
         const std::string_view surface = surface_type_name(terrain_surface_type(t, f.position.x, f.position.y));
         const SurfaceSettings* ss = foot_settings((*table_)[it->type], f, surface);
         if (!ss) {
