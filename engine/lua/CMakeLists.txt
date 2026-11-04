@@ -257,6 +257,9 @@ endif()
 #     and declarations are third-party code). Test exe alamo_lua_save_tests (family loop below). ---
 target_sources(alamo_lua PRIVATE src/vm_persist.cpp)
 target_include_directories(alamo_lua SYSTEM PRIVATE "${_lua_out}")
+# q6 t19 (docs/re/LUA_SAVE.md): the per-owner script block (include/alamo/lua/script_save.hpp) on top of LuaVm::write /
+# read, shared by the story, GameScoring and object-script saves. Test exe alamo_lua_script_save_tests (family loop).
+target_sources(alamo_lua PRIVATE src/script_save.cpp)
 # --- end N1 save / load ---
 # --- L1 stage 2, family OBJECTS (owner: objects agent) -------------------------------------------
 # src/bind_objects.cpp + include/alamo/lua/object_bridge.hpp: Lua orders are EventData run through
@@ -294,7 +297,7 @@ set_tests_properties(alamo_lua_tests PROPERTIES TIMEOUT 120)
 
 # One test exe per binding family (L1 stage 2), so families are developed in parallel without
 # touching each other's files. A family's test file is created by the agent that owns that family.
-foreach(_fam objects players story presentation tactical script_gaps fog script_remaining save gc)
+foreach(_fam objects players story presentation tactical script_gaps fog script_remaining save gc script_save)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_lua_${_fam}.cpp)
     add_executable(alamo_lua_${_fam}_tests tests/test_lua_${_fam}.cpp)
     target_link_libraries(alamo_lua_${_fam}_tests PRIVATE alamo_lua alamo_lua_vm Threads::Threads)

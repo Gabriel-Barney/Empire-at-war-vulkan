@@ -207,6 +207,7 @@ struct LuaVm::Impl {
     // GameObjectWrapper Ud::reserved holds the store tag of its object.
     int32_t store_tag = 0;
     std::string save_error;  // N1: why the last LuaVm::write could not save ("" = it saved)
+    bool touched = false;    // q6 t19: LuaVm::fresh() is !touched
 
     void message(std::string line);
     void kill_thread(int32_t id);  // marks; removal happens in reap()

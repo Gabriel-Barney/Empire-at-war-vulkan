@@ -327,6 +327,7 @@ bool LuaVm::compile(std::string_view chunk, std::string_view chunk_name, std::st
 bool LuaVm::run(std::string_view chunk, std::string_view chunk_name, std::string* err) {
     check_owner();
     const detail::ExecZone zone;
+    impl_->touched = true;
     lua_State* L = impl_->L;
     std::string_view data = chunk;
     const std::string name = "@" + std::string(chunk_name);
@@ -343,6 +344,7 @@ bool LuaVm::run(std::string_view chunk, std::string_view chunk_name, std::string
 bool LuaVm::require(std::string_view name, std::string* err) {
     check_owner();
     const detail::ExecZone zone;
+    impl_->touched = true;
     lua_State* L = impl_->L;
     lua_pushstring(L, "require");
     lua_rawget(L, LUA_GLOBALSINDEX);
@@ -358,6 +360,7 @@ bool LuaVm::require(std::string_view name, std::string* err) {
 bool LuaVm::call(std::string_view global_function, std::string* err) {
     check_owner();
     const detail::ExecZone zone;
+    impl_->touched = true;
     lua_State* L = impl_->L;
     lua_pushlstring(L, global_function.data(), global_function.size());
     lua_rawget(L, LUA_GLOBALSINDEX);
@@ -405,6 +408,7 @@ void LuaVm::set_number(std::string_view name, double value) {
 
 int32_t LuaVm::create_thread(std::string_view global_function) {
     check_owner();
+    impl_->touched = true;
     lua_State* L = impl_->L;
     lua_pushlstring(L, global_function.data(), global_function.size());
     lua_rawget(L, LUA_GLOBALSINDEX);
@@ -418,6 +422,7 @@ size_t LuaVm::service_threads() {
     check_owner();
     const detail::ExecZone zone;
     Impl& vm = *impl_;
+    vm.touched = true;
     std::vector<int32_t> ids;
     ids.reserve(vm.threads.size());
     for (const auto& [id, t] : vm.threads)
@@ -469,6 +474,29 @@ bool LuaVm::thread_active(int32_t id) const {
 bool LuaVm::exit_requested() const {
     check_owner();
     return impl_->exit_requested;
+}
+
+std::vector<LuaVm::ThreadInfo> LuaVm::thread_list() const {
+    check_owner();
+    std::vector<ThreadInfo> out;
+    out.reserve(impl_->threads.size());
+    for (const auto& [id, t] : impl_->threads) out.push_back(ThreadInfo{id, t.function, t.started, t.killed});  // id order
+    return out;
+}
+
+int32_t LuaVm::next_thread_id() const {
+    check_owner();
+    return impl_->next_thread;
+}
+
+const LuaVmOptions& LuaVm::options() const {
+    check_owner();
+    return impl_->options;
+}
+
+bool LuaVm::fresh() const {
+    check_owner();
+    return !impl_->touched;
 }
 
 void LuaVm::pool_kill_threads() {
@@ -653,6 +681,7 @@ bool read_vm_body(LuaVm::Impl& vm, ByteReader& r) {
     vm.current_thread = -1;
     vm.store_tag = 0;
     vm.save_error.clear();
+    vm.touched = true;
     lua_close(old);
     return true;
 }

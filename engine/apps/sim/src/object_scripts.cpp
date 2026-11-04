@@ -2,6 +2,7 @@
 #include "alamo/sim/object_scripts.hpp"
 
 #include <cmath>
+#include <span>
 
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/sim/game_modes.hpp"
@@ -9,6 +10,7 @@
 #include "alamo/lua/lua_vm.hpp"
 #include "alamo/lua/object_bridge.hpp"
 #include "alamo/lua/script_remaining.hpp"
+#include "alamo/lua/script_save.hpp"
 #if defined(ALAMO_LUA_PLAYERS)
 #include "alamo/lua/players.hpp"
 #endif
@@ -530,6 +532,299 @@ void ObjectScriptHost::service(GameMode& mode) {
 #else
     (void)mode;
 #endif
+}
+
+// ------------------------------------------------------------------ q6 t19: save / load (§2.6, header "SAVES")
+//
+// Layout (kSaveVersion 1): u8 types loaded; the 11 Stats counters (u64, declaration order); u32 pool count, per pool
+// (ascending name) str name, u32 instance count, per instance (list order) an INSTANCE record; u32 store count, per
+// store (push order) u8 mode kind, u32 script count, per live script (attach order) i32 object id, u64 handle, str name,
+// i32 pool slot (-1: an unpooled instance, its INSTANCE record follows); u32 type instance count, per type instance
+// (ascending type) u32 type, i32 pool slot (-1: INSTANCE record follows).
+// INSTANCE: u8 in use, u8 fresh, u8 poolable, i32 store its LuaHost points to (stores index, -1 none on the stack),
+// u32 length + the lua::write_script_block bytes.
+namespace {
+[[maybe_unused]] constexpr uint32_t kMaxSavedCount = 1u << 20;
+#ifdef ALAMO_SIM_HAVE_STORY
+struct SavedInstance {
+    bool in_use = false, fresh = false, poolable = false;
+    int32_t store = -1;
+    std::span<const uint8_t> block;
+    int32_t holder = -1;  // reader: the store index of the live script holding it, -2 a type instance, -1 nobody
+};
+#endif
+}  // namespace
+
+bool ObjectScriptHost::write(ByteWriter& w, std::string* err) const {
+    std::string first_error;
+    auto store_index = [this](const objects::ObjectStore* st) -> int32_t {
+        for (size_t i = 0; i < stores_.size(); ++i)
+            if (stores_[i]->store == st) return static_cast<int32_t>(i);
+        return -1;
+    };
+    auto put = [&](const Instance& in) {
+#ifdef ALAMO_SIM_HAVE_STORY
+        w.boolean(in.in_use).boolean(in.fresh).boolean(in.poolable).i32(store_index(in.vm->host().store));
+        ByteWriter block;
+        lua::write_script_block(block, *in.vm);
+        if (first_error.empty() && !in.vm->save_error().empty())
+            first_error = "object script " + in.name + ": " + in.vm->save_error();
+        w.u32(static_cast<uint32_t>(block.size())).raw(block.bytes());
+#else
+        (void)in;
+        (void)store_index;
+#endif
+    };
+    auto pool_slot = [this](const std::string& name, const Instance* p) -> int32_t {
+        const auto it = pools_.find(name);
+        if (it != pools_.end())
+            for (size_t k = 0; k < it->second.size(); ++k)
+                if (it->second[k].get() == p) return static_cast<int32_t>(k);
+        return -1;
+    };
+    w.u32(kSaveVersion);
+    w.boolean(types_loaded_);
+    const Stats& s = stats_;
+    for (const uint64_t v : {s.attached, s.load_failures, s.loaded, s.reused, s.pooled_releases, s.pumps, s.first_draws,
+                             s.released_exit, s.released_dead, s.released_mode, s.thread_errors})
+        w.u64(v);
+    w.u32(static_cast<uint32_t>(pools_.size()));
+    for (const auto& [name, list] : pools_) {  // std::map: ascending name (rule 3)
+        w.str(name).u32(static_cast<uint32_t>(list.size()));
+        for (const std::unique_ptr<Instance>& in : list) put(*in);
+    }
+    w.u32(static_cast<uint32_t>(stores_.size()));
+    for (const std::unique_ptr<StoreScripts>& ss : stores_) {
+        w.u8(static_cast<uint8_t>(ss->mode->kind()));
+        uint32_t n = 0;
+        for (const std::unique_ptr<Script>& sc : ss->scripts) n += sc->live() ? 1u : 0u;
+        w.u32(n);
+        for (const std::unique_ptr<Script>& sc : ss->scripts) {
+            if (!sc->live()) continue;
+            w.i32(sc->id).u64(sc->h.value).str(sc->name);
+            const int32_t slot = sc->own ? -1 : pool_slot(sc->name, sc->inst);
+            w.i32(slot);
+            if (slot < 0) put(*sc->inst);
+        }
+    }
+    w.u32(static_cast<uint32_t>(type_scripts_.size()));
+    for (const std::unique_ptr<TypeScript>& ts : type_scripts_) {
+        w.u32(static_cast<uint32_t>(ts->type));
+        const int32_t slot = ts->own ? -1 : pool_slot(ts->inst->name, ts->inst);
+        w.i32(slot);
+        if (slot < 0) put(*ts->inst);
+    }
+    if (!first_error.empty()) {
+        if (err) *err = first_error;
+        return false;
+    }
+    return true;
+}
+
+bool ObjectScriptHost::read(ByteReader& r, std::string* err) {
+    auto fail = [err](std::string m) {
+        if (err) *err = std::move(m);
+        return false;
+    };
+    if (r.u32() != kSaveVersion || !r.ok()) return fail("unknown object script save version");
+    const bool types_loaded = r.boolean();
+    Stats st;
+    for (uint64_t* v : {&st.attached, &st.load_failures, &st.loaded, &st.reused, &st.pooled_releases, &st.pumps,
+                        &st.first_draws, &st.released_exit, &st.released_dead, &st.released_mode, &st.thread_errors})
+        *v = r.u64();
+#ifdef ALAMO_SIM_HAVE_STORY
+    auto get = [&](SavedInstance& s) {
+        s.in_use = r.boolean();
+        s.fresh = r.boolean();
+        s.poolable = r.boolean();
+        s.store = r.i32();
+        const uint32_t n = r.u32();
+        if (!r.ok() || n > r.remaining() || s.store < -1 || s.store >= static_cast<int32_t>(stores_.size())) return false;
+        s.block = r.raw(n);
+        return r.ok();
+    };
+    struct PoolRec {
+        std::string name;
+        std::vector<SavedInstance> list;
+    };
+    std::vector<PoolRec> pools;
+    const uint32_t np = r.u32();
+    if (!r.ok() || np > kMaxSavedCount) return fail("bad pool count");
+    for (uint32_t i = 0; i < np; ++i) {
+        PoolRec p;
+        p.name = r.str();
+        const uint32_t n = r.u32();
+        if (!r.ok() || n == 0 || n > kMaxSavedCount || (!pools.empty() && !(pools.back().name < p.name)))
+            return fail("bad pool record");
+        p.list.resize(n);
+        for (SavedInstance& s : p.list)
+            if (!get(s) || !s.poolable) return fail("bad pooled instance of " + p.name);
+        pools.push_back(std::move(p));
+    }
+    auto find_pool = [&pools](const std::string& name) -> PoolRec* {
+        for (PoolRec& p : pools)
+            if (p.name == name) return &p;
+        return nullptr;
+    };
+    // A pool slot taken by a live script (holder >= 0) or a type instance (-2): in use, held once.
+    auto take = [&](const std::string& name, int32_t slot, int32_t holder) {
+        PoolRec* p = find_pool(name);
+        if (!p || slot < 0 || static_cast<size_t>(slot) >= p->list.size()) return false;
+        SavedInstance& s = p->list[static_cast<size_t>(slot)];
+        if (!s.in_use || s.holder != -1) return false;
+        s.holder = holder;
+        return true;
+    };
+    struct ScriptRec {
+        objects::ObjectId id = objects::kNoObjectId;
+        objects::ObjectHandle h;
+        std::string name;
+        int32_t slot = -1;
+        SavedInstance own;
+    };
+    const uint32_t ns = r.u32();
+    if (!r.ok() || ns != stores_.size())
+        return fail("the save has " + std::to_string(ns) + " script stores, the session " + std::to_string(stores_.size()));
+    std::vector<std::vector<ScriptRec>> scripts(ns);
+    for (uint32_t i = 0; i < ns; ++i) {
+        if (r.u8() != static_cast<uint8_t>(stores_[i]->mode->kind())) return fail("script store " + std::to_string(i) + ": another mode");
+        const uint32_t n = r.u32();
+        if (!r.ok() || n > kMaxSavedCount) return fail("bad script count");
+        scripts[i].resize(n);
+        for (ScriptRec& sc : scripts[i]) {
+            sc.id = r.i32();
+            sc.h.value = r.u64();
+            sc.name = r.str();
+            sc.slot = r.i32();
+            if (!r.ok()) return fail("truncated script record");
+            if (sc.slot < 0) {
+                if (sc.slot != -1 || !get(sc.own) || sc.own.poolable || !sc.own.in_use) return fail("bad unpooled instance of " + sc.name);
+                sc.own.holder = static_cast<int32_t>(i);
+            } else if (!take(sc.name, sc.slot, static_cast<int32_t>(i))) {
+                return fail("script of object " + std::to_string(sc.id) + ": bad pool slot");
+            }
+        }
+    }
+    struct TypeRec {
+        objects::TypeIndex type = objects::kNone;
+        std::string name;
+        int32_t slot = -1;
+        SavedInstance own;
+    };
+    const uint32_t nt = r.u32();
+    if (!r.ok() || nt > kMaxSavedCount) return fail("bad type instance count");
+    std::vector<TypeRec> types(nt);
+    for (TypeRec& tr : types) {
+        tr.type = static_cast<objects::TypeIndex>(r.u32());
+        tr.slot = r.i32();
+        if (!r.ok() || stores_.empty() || tr.type >= stores_.front()->mode->types().size()) return fail("bad type instance record");
+        tr.name = trimmed_script_name(stores_.front()->mode->types().get_string(tr.type, "Lua_Script"));
+        if (tr.slot < 0) {
+            if (tr.slot != -1 || !get(tr.own) || tr.own.poolable) return fail("bad unpooled type instance");
+            tr.own.holder = -2;
+        } else if (!take(tr.name, tr.slot, -2)) {
+            return fail("type instance " + std::to_string(tr.type) + ": bad pool slot");
+        }
+    }
+    if (!r.ok() || !r.done()) return fail("trailing or missing bytes");
+    for (const PoolRec& p : pools)
+        for (const SavedInstance& s : p.list)
+            if (s.in_use != (s.holder != -1)) return fail("pool " + p.name + ": an in-use flag does not match its holder");
+    if ((np != 0 || nt != 0) && stores_.empty()) return fail("script instances but no store");
+
+    // The from-save attach (§1.3): a new VM by name, the host attachments, the block. Nothing of the file runs.
+    auto make = [&](const std::string& name, const SavedInstance& s, std::unique_ptr<Instance>& out, std::string& why) {
+        StoreScripts& home = *stores_[static_cast<size_t>(s.store >= 0 ? s.store : 0)];
+        lua::LuaHost host;
+        host.store = s.store >= 0 ? home.store : nullptr;  // none: the next handout rebinds (and empties the caches)
+        host.types = &home.mode->types();
+        host.rng = random_;
+        host.files = files_;
+        host.campaign = campaign_;
+        lua::LuaVmOptions opt;
+        opt.script_name = name;
+        opt.upper_type_names = true;
+        auto in = std::make_unique<Instance>();
+        in->name = name;
+        in->in_use = s.in_use;
+        in->fresh = s.fresh;
+        in->poolable = s.poolable;
+        in->vm = std::make_unique<lua::LuaVm>(host, opt);
+        lua::attach_global_values(*in->vm, globals_);
+        if (s.holder >= 0) {  // held by a live script: its store's bridges (free / type instances run detached)
+            const StoreScripts& ss = *stores_[static_cast<size_t>(s.holder)];
+#if defined(ALAMO_LUA_PLAYERS)
+            lua::attach_player_world(*in->vm, ss.world);
+#endif
+            lua::attach_object_bridge(*in->vm, ss.bridge);
+        }
+        ByteReader br(s.block);
+        std::string e;
+        if (!lua::read_script_block(br, *in->vm, lua::ScriptLoad::FromSave, &e)) {
+            why = "object script " + name + ": " + e;
+            return false;
+        }
+        in->seen_messages = in->vm->messages().size();
+        in->seen_errors = in->vm->errors().size();
+        out = std::move(in);
+        return true;
+    };
+    std::string why;
+    std::map<std::string, std::vector<std::unique_ptr<Instance>>> new_pools;
+    for (const PoolRec& p : pools) {
+        std::vector<std::unique_ptr<Instance>>& list = new_pools[p.name];
+        for (const SavedInstance& s : p.list) {
+            std::unique_ptr<Instance> in;
+            if (!make(p.name, s, in, why)) return fail(why);
+            list.push_back(std::move(in));
+        }
+    }
+    std::vector<std::vector<std::unique_ptr<Script>>> new_scripts(ns);
+    for (uint32_t i = 0; i < ns; ++i)
+        for (const ScriptRec& sr : scripts[i]) {
+            auto sc = std::make_unique<Script>();
+            sc->id = sr.id;
+            sc->h = sr.h;
+            sc->name = sr.name;
+            if (sr.slot >= 0) {
+                sc->inst = new_pools[sr.name][static_cast<size_t>(sr.slot)].get();
+            } else {
+                if (!make(sr.name, sr.own, sc->own, why)) return fail(why);
+                sc->inst = sc->own.get();
+            }
+            new_scripts[i].push_back(std::move(sc));
+        }
+    std::vector<std::unique_ptr<TypeScript>> new_types;
+    for (const TypeRec& tr : types) {
+        auto ts = std::make_unique<TypeScript>();
+        ts->type = tr.type;
+        if (tr.slot >= 0) {
+            ts->inst = new_pools[tr.name][static_cast<size_t>(tr.slot)].get();
+        } else {
+            if (!make(tr.name, tr.own, ts->own, why)) return fail(why);
+            ts->inst = ts->own.get();
+        }
+        new_types.push_back(std::move(ts));
+    }
+    // Commit: the rebuilt session's scripts, pools and type instances are replaced whole (scripts first: they point
+    // into the pools).
+    for (uint32_t i = 0; i < ns; ++i) stores_[i]->scripts = std::move(new_scripts[i]);
+    type_scripts_ = std::move(new_types);
+    pools_ = std::move(new_pools);
+#else
+    // Without engine/lua nothing ever attaches: the chunk holds no instance.
+    const uint32_t np = r.u32();
+    const uint32_t ns = r.u32();
+    if (!r.ok() || np != 0 || ns != stores_.size()) return fail("script instances in a build without engine/lua");
+    for (uint32_t i = 0; i < ns; ++i) {
+        (void)r.u8();
+        if (r.u32() != 0) return fail("script instances in a build without engine/lua");
+    }
+    if (r.u32() != 0 || !r.ok() || !r.done()) return fail("script instances in a build without engine/lua");
+#endif
+    types_loaded_ = types_loaded;
+    stats_ = st;
+    return true;
 }
 
 }  // namespace alamo::sim

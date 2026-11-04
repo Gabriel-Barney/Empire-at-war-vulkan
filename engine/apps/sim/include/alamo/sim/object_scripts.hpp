@@ -45,9 +45,20 @@
 // Everything runs on the sim thread in that fixed order, so worker counts never change it (rule 3). The pool adds no
 // RNG draw: which instance an object gets (list order) and when the top levels / release-time Base_Definitions run are
 // fixed points of that order.
-// [port] Saves: no script state is saved yet (§2.6): save_allowed refuses while an object script is live. Free pooled
-// instances and type instances are not saved either; a loaded session starts with empty pools and reloads the type
-// instances.
+// SAVES (q6 t19, §2.6, LUA_SAVE.md; SimHost chunk "object_scripts", write / read below). Saved: every live script
+// (object id + handle, its pool name = the script name, which instance it holds) and its instance's script block
+// (lua::write_script_block: the whole Lua heap - globals incl. LastService, threads at their saved pc, GetEvent queue,
+// wrappers - plus the thread records); every pool in name order with each instance's flags (in use, fresh) and block;
+// the type instances (type index -> instance); the stats. The load is the from-save attach of §1.3: a new VM per
+// instance by its saved name, GlobalValue (and, for an instance a live script holds, its store's player world and object
+// bridge) attached, then the block - no file top level, no Base_Definitions, no `main`, no `Object`: the saved state
+// supplies them, so OnEnter-style code is not re-run (TR's company spawner does not spawn again) and no new first-pump
+// draw happens. Everything the rebuilt session attached before the load is replaced whole. [port] Free pooled
+// instances and the type instances are saved too (retail saves only the objects' instances and rebuilds the type
+// instances at type setup, §1.5): pools keep their size, order and Flush_G'd globals, and the type instance's globals
+// survive like in a running session. A load taken during a battle restores the scripts in pass 2 only (every store is
+// on the stack then).
+// [port] Diagnostics (messages(), error_counts()) are not saved.
 //
 // Diagnostics: per-object messages ("<mode frame> <script> (id N): <text>") and a count per distinct error text.
 #pragma once
@@ -57,6 +68,7 @@
 #include <string>
 #include <vector>
 
+#include "alamo/core/bytes.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/objects/object_store.hpp"
 
@@ -107,7 +119,14 @@ public:
     // §3: after the mode's primary store update (the caller skips paused modes).
     void service(GameMode& mode);
 
-    // Live scripts in every store (save_allowed refuses while > 0).
+    // q6 t19: N1 save / load (SAVES above), between ticks. write: false (+ *err) when an instance's Lua state cannot be
+    // saved (LuaVm::save_error; the bytes are then not loadable). read: the rebuilt session's stores must be the saved
+    // ones (same count and mode kinds, push order); false (+ *err) on damaged data or a refused block, nothing changed.
+    static constexpr uint32_t kSaveVersion = 1;
+    bool write(ByteWriter& w, std::string* err = nullptr) const;
+    bool read(ByteReader& r, std::string* err = nullptr);
+
+    // Live scripts in every store.
     size_t live() const;
     size_t live(const objects::ObjectStore& store) const;
     bool has_script(const objects::ObjectStore& store, objects::ObjectHandle h) const;

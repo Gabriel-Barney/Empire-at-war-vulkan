@@ -8,6 +8,7 @@
 #include <map>
 
 #include "alamo/commands/pipeline.hpp"  // a1h t04: INVADE_PLANET
+#include "alamo/core/log.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/core/dmath.hpp"
@@ -19,6 +20,7 @@
 #include "alamo/lua/object_bridge.hpp"
 #include "alamo/lua/presentation.hpp"
 #include "alamo/lua/script_remaining.hpp"  // Int-final: attach_global_values
+#include "alamo/lua/script_save.hpp"       // q6 t19: story.lua v4 script blocks
 #include "alamo/lua/story_model.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/sim/save_session.hpp"  // N1: write_section / write_if_saveable
@@ -1941,6 +1943,9 @@ namespace {
 // 2 (stage 2): + the attached tactical story; 3 (q6 t14): + the holocron list (GALACTIC_DIALOGS §2.8). 1 and 2 still load
 // (with an empty holocron).
 constexpr uint32_t kStorySaveVersion = 3;
+// "story.lua" (write_scripts): 1 galactic sets, 2 + the tactical set, 3 = 2 (it followed kStorySaveVersion), 4 (q6 t19):
+// each script's Lua state is a script block (alamo/lua/script_save.hpp, LUA_SAVE.md §2) instead of a bare LuaVm image.
+constexpr uint32_t kStoryScriptsVersion = 4;
 constexpr uint32_t kMaxSaveCount = 1u << 24;
 
 uint32_t read_count(ByteReader& r) {
@@ -2331,10 +2336,10 @@ void StorySession::write_scripts(ByteWriter& w) const {
         for (const Script& sc : s.scripts) {
             w.u32(sc.plot).str(sc.name).f64(sc.rate).f64(sc.last_service).boolean(sc.serviced);
             w.u64(static_cast<uint64_t>(sc.errors_seen));
-            write_section(w, [&sc](ByteWriter& sub) { sc.vm->write(sub); });
+            write_section(w, [&sc](ByteWriter& sub) { lua::write_script_block(sub, *sc.vm); });  // v4
         }
     };
-    w.u32(kStorySaveVersion);
+    w.u32(kStoryScriptsVersion);
     w.u32(static_cast<uint32_t>(sets_.size()));
     for (const auto& sp : sets_) write_set(*sp);
     const Set* tac = tactical_ ? tactical_->set.get() : nullptr;  // v2: the tactical set's scripts
@@ -2371,7 +2376,7 @@ bool StorySession::read_scripts(ByteReader& r) {
         return true;
     };
     const uint32_t version = r.u32();
-    if (version < 1 || version > kStorySaveVersion) return false;
+    if (version < 1 || version > kStoryScriptsVersion) return false;
     const uint32_t nsets = read_count(r);
     if (!r.ok() || nsets != sets_.size()) return false;
     std::vector<Set*> targets;
@@ -2392,10 +2397,19 @@ bool StorySession::read_scripts(ByteReader& r) {
     }
     if (!r.ok() || !r.done()) return false;
     if (tactical_ && tactical_->set && !has_tac) return false;  // a tactical story the save does not have
-    for (size_t i = 0; i < in.size(); ++i)  // each LuaVm::read is all-or-nothing (see read() for a later refusal)
+    // Each read is all-or-nothing (see read() for a later refusal). v4: the script block (LUA_SAVE.md §2 / §4): it names
+    // the script and its thread records; the session's rebuilt VM (Base_Definitions and main already ran at start())
+    // is replaced whole, keeping only its host attachments (ScriptLoad::Any). Earlier versions hold the bare image.
+    for (size_t i = 0; i < in.size(); ++i)
         for (size_t k = 0; k < in[i].size(); ++k) {
             ByteReader vr(in[i][k].vm);
-            if (!targets[i]->scripts[k].vm->read(vr) || !vr.ok() || !vr.done()) return false;
+            lua::LuaVm& vm = *targets[i]->scripts[k].vm;
+            std::string err;
+            const bool ok = version >= 4 ? lua::read_script_block(vr, vm, lua::ScriptLoad::Any, &err) : vm.read(vr);
+            if (!ok || !vr.ok() || !vr.done()) {
+                if (!err.empty()) log::write(log::Level::Warn, "story", "cannot load script '" + in[i][k].name + "': " + err);
+                return false;
+            }
         }
     for (size_t i = 0; i < in.size(); ++i)
         for (size_t k = 0; k < in[i].size(); ++k) {
