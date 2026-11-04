@@ -614,6 +614,9 @@ Data pack fields: control +0x68 (float), owner +0x6c, target control +0x70, targ
   - applies with control 1.0.
 - **Planetary revolt** (0x3f98a0): forces every foreign player's units off the planet and hands it to the
   revolting player. [H]
+- None of these, nor the control ramp above, touches the planet's persisted pad structures (D +0x10): only a land
+  result (fought, auto-resolved, or an invasion without a battle) drops the losers' records (AI_GALACTIC_TOKENS §9.4).
+  [H]
 
 **What transfers** (structures destroyed or converted) is decided by the tactical battle and by 0x4b7670 /
 0x4b7860, not traced. [L] Q2: capture a planet with a ground base and a starbase through Lua `Change_Owner` and

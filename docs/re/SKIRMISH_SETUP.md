@@ -49,8 +49,9 @@ Order, all three alike [H]:
    is registered via 0x28a4a0.
 5. Mode vf 0x20, 0x2b3e00, 0xcac70.
 
-0xeed80 also copies GC Skirmish_Buy_Credits (GC+0x1184c, 2000) to 0x140a62214 / 0x140a62218: the budget
-of the pre-game buy-units dialog (IDD_SKIRMISH_BUY_UNITS_DIALOG, list built by 0xf0600) [M]. Faction
+Correction (q6 RE, 2026-11-04): 0xeed80 does not touch the buy-units budget. GC Skirmish_Buy_Credits (GC+0x1184c =
+0x140b2704c, 2000) is copied to 0x140a62214 / 0x140a62218 by the dialog's open function 0xeddd0, and only when no game
+mode exists yet. The dialog, its list and where the bought list goes are in §2.7. [H] Faction
 Land_ / Space_Skirmish_Unit_Buy_Credits (+0x28c4 / +0x28c8, 50000 / 100000) have no code reader [M].
 
 ### 2.1 Owner remap 0x294fa0 [H]
@@ -106,6 +107,110 @@ empty, and either not skirmish or (option flag 0x8 and the pad type's Respects_S
 +0xe5), the type is created for the pad owner (+0x58) at the build bone (0x42e280) with the pad
 orientation; an under-construction type is replaced by its Tactical_Buildable_Constructed (+0x9f0).
 Then sell/garrison setup, +0x3cb copied, revealed to all players, +0x18 cleared. Otherwise pad anim 0x75.
+
+### 2.7 The buy-units dialog IDD_SKIRMISH_BUY_UNITS_DIALOG (q6 RE, 2026-11-04) [H unless tagged]
+
+Functions: open 0xeddd0(faction, is_space, game type), list build 0xf0600, list fill 0xef9f0, buy 0xf0920, sell one
+0xf0c30 (also inline in the handler), clear 0xf0de0, message handler 0xee400, budget text 0xf03f0, close 0xee3c0.
+State: list of candidate types 0x140a11d98 (count 0x140a11da0), bought list 0x140a11db0 (count 0x140a11db8), budget
+0x140a62218, start budget 0x140a62214, faction 0x140a62220, is-space flag 0x140a62211, open flag 0x140a62210.
+
+**Who opens it.**
+- In this build the only openers are 0x36250 and 0x37760 (a command-bar callback, registered by 0x30ae50 from
+  `CommandBarComponentFiles`; which button or key uses it is [L]). Both run only during a tactical battle that is a
+  skirmish (0x28afb0), with the dialog closed and a local player present. Arguments: the local player's faction
+  (player +0x68), is_space = (mode vf 0xe0 == 2), game type = GMM+0x18.
+- No opener runs before a game mode exists. The "no mode" branches below (Skirmish_Buy_Credits budget, Sell / Sell All /
+  Next) are therefore unreachable from the single-player skirmish setup in this build [M]. In the multiplayer lobby the
+  bought list is copied into the local player's start-force list (§2 step 4, player +0x2a8) by 0xc9190 (sets player
+  +0x183) and sent to the peers as type name CRCs (+0x11c) by 0xc8d80. Multiplayer is out of scope for the port.
+- So the single-player skirmish has no pre-battle purchase in the original. The start force is the faction's
+  Space_ / Land_Skirmish_AI_Default_Forces when option flag 0x2 is set (§2 step 4), and nothing otherwise.
+
+**Two modes.**
+
+| | no game mode (pre-game branch) | in a tactical skirmish (the reachable one) |
+|---|---|---|
+| budget | GC Skirmish_Buy_Credits (2000), also kept as the start budget | the local player's credits (player +0x70, float truncated to int), re-read on message 0xc |
+| buttons | Buy, Sell (`IDC_SELL_BUTTON`), Sell All, Next, Back | Sell, Sell All and Next are hidden; Buy is relabelled `TEXT_BUTTON_REINFORCE` |
+| Buy (0xf0920) | cost ≤ budget; budget −= cost; the type is appended to the bought list (duplicates allowed) | cost ≤ budget; then 0x33d50(input controller 0x140a60df0, type +0xec) starts a reinforcement placement for that type and the dialog closes. The dialog itself charges nothing [M: whether the placement charges] |
+| Sell (0xf0c30) | the selected type must be in the bought list; refund its cost; remove one entry (0x474a0) | — |
+| Sell All (0xf0de0) | clear the bought list; budget := start budget | — |
+| Next | only when game type == 3: 0xef700 starts the map (0x8d930) and the dialog closes | — |
+| Back / close | close; with no mode, back to the setup screen 0xf1230 | close |
+
+A refused action plays the GUI error sound (0x2d5290). Every change refreshes the list (0xef9f0) and the budget text
+(`TEXT_SKIRMISH_BUY_UNITS_CREDITS_BALANCE` + the formatted budget, in `IDC_SKIRMISH_BUY_UNITS_CREDITS_TEXT`).
+
+**Candidate list 0xf0600** (rebuilt on every open). All object types in type-manager order (0x140b2f020, index
+0..N−1) that pass all of:
+1. `Build_Cost_Credits` (+0x86c) > 0 (0x3711c0 with no planet returns this field).
+2. affiliated with the dialog faction (0x3751a0: the faction is in the type's `Affiliation` list +0xef0; an empty list
+   never matches);
+3. `Available_In_Skirmish` (+0x77) **or** the build tab of the map kind: `Build_Tab_Space_Units` (+0x4d) on a space
+   map, `Build_Tab_Land_Units` (+0x4c) on a land map;
+4. not `Cinematic_Object_Only` (+0x21).
+
+Nothing else is tested: no tech level, `Build_Initially_Locked`, prerequisites, `Build_Limit_*`, unit cap or
+population, `Is_Dummy`, behaviours (DUMMY_*), XML class, the faction's `Skirmish_*` lists or any pad
+`Tactical_Buildable_Objects_*` list. Note the OR in step 3: a type with `Available_In_Skirmish` is listed on both map
+kinds (FoC: `Darth_Team_Executor`, a named hero, is a candidate in the Empire land list too).
+
+**Rows 0xef9f0.** For each candidate in list order, the same tests 1–3 again, and a type with `Is_Named_Hero` (+0x13)
+is hidden unless the heroes option bit (0x140b154bc & 1) is set. The row key is the candidate's index, so the
+selection still maps to the candidate list.
+- Columns: the localized `Text_ID` (+0x120); when the type is in the bought list n > 0 times, a column "x n"; the
+  cost (0x22f780, formatted integer). There is **no population or unit-cap column**.
+- Colours (GUI palette 0x140a7bca0): bought rows palette 5; not bought and cost > budget palette 9; else palette 1 /
+  4 [M: which is normal and which is highlight].
+- **Order:** after the fill the listbox is sorted (0x1c4a10 → 0x1d1c90) with comparator 0xf0e80, which returns
+  `b.data − a.data` (code bytes `8b 42 04 2b 41 04 c3`). The row data is the cost passed to the row insert (0x1c3dd0),
+  so the list shows the **most expensive first** [M: that row field +4 is the cost]. The sort is an introsort, not
+  stable: equal costs come in no defined order.
+- No cap and no paging: every candidate gets a row; the listbox scrolls.
+
+**Buy limits 0xf0920.** cost ≤ budget. `Can_Be_Only_One` (+0x78): in the pre-game branch a type already in the bought
+list is refused; in a battle a type of which the local player already owns an object (0x2a87d0, owner +0x58) is
+refused, where for a DUMMY_GROUND_COMPANY (0x5D) with `Company_Units` the type looked up is the company's second
+member (+0x958 entry 1) [M].
+
+**What the filter gives on shipped data** (evaluated with the XML, 2026-11-04; `Variant_Of_Existing_Type` resolved).
+- FoC: Empire space 23 rows (20 without named heroes), land 16; Rebel 17 / 9; Underworld 20 / 23. They include story
+  and campaign types that happen to carry a build tab and a cost: `Executor_Super_Star_Destroyer` and its
+  `_No_Tractor_Beam` copy, `Eclipse_Super_Star_Destroyer` (all three factions), `UM12_SUPER_STAR_DESTROYER`,
+  `Keldalbe_Prototype`, `UM06_Prisoner_*`, `Tartan_Patrol_Cruiser_Easy`, `Star_Destroyer_E3`. Only 9–14 of each list
+  are named in some type's `Tactical_Buildable_Objects_Multiplayer`.
+- Thrawn's Revenge (workshop 1125571106): Empire space 407 rows (138 of class DummyStructure), land 63; Rebel space 484
+  (183 DummyStructure), land 45; Pentastar space 354, land 51. The original **would list** these marker types:
+  - `Template_Option`, `Option_Cruel_On/Off`, `Option_Factional_Fighters`, `Option_Canon_Units`, `Option_FS_Units`,
+    `Template_Cheat`, `Cheat_Disable_AI`, `Cheat_Give_Credits`, `Cheat_Give_Unit`, `Cheat_Give_Vision`, `Cheat_Government`,
+    `Cheat_Influence`, `Cheat_Infra_And_Discount`, `Cheat_Kill_All`, `Cheat_Turn_Off_Crews`, `Cheat_Victory`
+    (Options.xml / Options_TR.xml: cost 1, `Build_Tab_Space_Units` yes, DUMMY_STARSHIP, every playable TR faction):
+    space lists of all those factions;
+  - `ZLayer_Medium`, `ZLayer_High1..4`, `ZLayer_Low1..4` (LayerDummies.xml: cost 1250, Rebel only, space tab,
+    DUMMY_STARSHIP + POWERED): the Rebel space list;
+  - `Dummy_Treaty_Victory` (cost 1, Empire and Rebel, space tab): those two space lists;
+  - `Cheat_Space_Unit` (cost 1, Rebel / Empire / Underworld / Hutt_Cartels): their space lists;
+  - the galactic ground-war formations `GW_*` / `UNIT_GW_*` (cost 1, space tab): the space lists;
+  - shipyard / Golan / mining-facility orbital structures with a cost and the space tab.
+- TR marker types the original would **not** list: `Victory_Point` (no cost), `Cheat_Dummy_Vision`,
+  `Options_Category_Dummy`, `Cheat_Dummy_Infra_And_Discount`, `Template_Cheat_Dummy_Infra_And_Discount` (cost 0),
+  `Cheat_Team`, `Cheat_Ground_Unit`, `Dark_Empire_Cheat_Choice_*` (no `Affiliation`), `NR_Canon_Option` (no cost).
+
+**Port notes**
+- The port's pre-battle buy screen (`engine/apps/game/app/app_screens.cpp`, `open_buy_units`) is a [port] feature: the
+  original single-player skirmish has none. Its budget, its use of the bought list as the start force and the screen
+  itself stay port decisions.
+- To match the original's list, replace the port's filter (unit kind from `galactic_unit_kind`, first 24 by type index,
+  ascending cost) with steps 1–4 above plus the named-hero rule; no cap; order by cost descending. The original's tie
+  order is undefined; use type index ascending for equal costs [port].
+- An empty `Affiliation` must not match (the port's "empty = every faction" is wrong for this list).
+- Steps 1–4 alone fill a TR list with hundreds of option, cheat, ZLayer and ground-war marker rows, exactly as the
+  original would. A [port] extra rule that removes all of them and keeps real units: list a type only if it is named in
+  some type's `Tactical_Buildable_Objects_Multiplayer` (TR: Empire 106 of 407 space and 38 of 63 land rows remain, every
+  Option_* / Cheat_* / ZLayer_* / Dummy_Treaty_Victory row is gone; FoC: 9–14 rows per list, the story props are gone).
+  Say [port] where it is applied.
+- Cost column = `Build_Cost_Credits` (not the tactical cost); no population column.
 
 ## 3. Tactical production (item 1)
 
@@ -287,7 +392,9 @@ present goes through neutral first (2 x 5 s). When the pad's child dies the pad 
 ## 9. Not settled
 
 - Reader and use of Skirmish_Reinforcement_Delay_Frames (GC+0x117e8). [L]
-- The pre-game buy-units dialog: what it buys and how the 2000 budget is spent. [M]
+- ~~The pre-game buy-units dialog: what it buys and how the 2000 budget is spent.~~ §2.7 (q6, 2026-11-04). Still open:
+  which command-bar button / key opens it in battle (0x37760 / 0x36250) [L], and whether the reinforcement placement it
+  starts charges credits [M].
 - Body of victory type 0x15 (control point domination). [L]
 - Meaning of player+0x180, global 0x140b15490 and predicate 0x35f790. [L]
 - Sort key slot+0xa0 for slots when GMM+0x20 != 1. [M]

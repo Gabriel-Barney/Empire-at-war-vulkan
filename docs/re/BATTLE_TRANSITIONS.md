@@ -137,7 +137,7 @@ object services earlier in the same service pass, so in practice it can start in
 | 7 | auto-resolve running; timer at GOM+0x30 (space) / +0x28 (land) |
 | 2 | tactical battle chosen, pre-battle cinematic playing |
 | 3 | start the tactical battle (0x28fda0) |
-| 9 | sandbox linked battle set up from the queued record (§2.9); no branch handles it (idle until the battle end resets −1) |
+| 9 | sandbox linked battle set up from the queued record (§2.9); no branch handles it (idle until the battle end resets −1). While 9, the battle's pad structures are not added to or removed from the planet's persisted list (AI_GALACTIC_TOKENS §9.4) |
 
 **Validation** (space 0x2befe0, land 0x2becb0) runs first on every pass. The head is dropped when
 attacker == defender, or when one side has no alive unit that `Can_Participate_In_Space_Battle`
@@ -684,7 +684,8 @@ On the parent GOM, for the head record:
 - **Land**, if the winner is the attacker: 0x4b7350(planet data, planet) [L: transfer surface
   ownership]; if a starbase exists (+0x148 > 0) owned by someone else, it is removed (0x4b7450) and the
   starbase level set to 0 (0x3fe750); for planets with a production behaviour, both build queues are
-  re-checked (0x403490 ×2). Always 0x4b7d90(planet data, winner).
+  re-checked (0x403490 ×2). Always 0x4b7d90(planet data, winner): only the winner's persisted pad structures stay
+  (AI_GALACTIC_TOKENS §9.4, which also lists the auto-resolve and invasion-without-battle sites in 0x60b930 / 0x2b76a0).
 - **Space**: the surviving station is found among the GOM's objects (behaviour slot +0x38e); its
   level (0x397540) is capped by the planet's maximum starbase level (0x3f8b30), then the type chain is
   walked down (`+0x8b0` next lower type) while level < `Base_Level` (+0x8a0), and the starbase is set
