@@ -200,7 +200,7 @@ member (+0x958 entry 1) [M].
 **Port notes**
 - The port's pre-battle buy screen (`engine/apps/game/app/app_screens.cpp`, `open_buy_units`) is a [port] feature: the
   original single-player skirmish has none. Its budget, its use of the bought list as the start force and the screen
-  itself stay port decisions.
+  itself stay port decisions (kept by Gabriel 2026-11-04; PHASE4 Decisions).
 - To match the original's list, replace the port's filter (unit kind from `galactic_unit_kind`, first 24 by type index,
   ascending cost) with steps 1–4 above plus the named-hero rule; no cap; order by cost descending. The original's tie
   order is undefined; use type index ascending for equal costs [port].
