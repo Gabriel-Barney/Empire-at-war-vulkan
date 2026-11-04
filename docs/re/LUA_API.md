@@ -1377,6 +1377,8 @@ Open (RE, q6 t03): `StoryEventWrapper.Add_Dialog_Text` (0x73df60) argument count
 port requires exactly 2, but Thrawn's Revenge `intervention-missions/missions/Recon.lua:117` calls it with one text id
 (`event.Add_Dialog_Text("TEXT_INTERVENTION_RECON_OBJECTIVE_MAIN_FACTION")`), so the port's story run stops there at
 frame 2402. Read whether 0x73df60 accepts 1 or 2 arguments (and what a 1-argument call appends) before changing it.
+**Answered (q6 RE, 2026-11-03):** 1 to 3 arguments; the "Expected 2" text is stale. See "StoryEventWrapper dialog and
+parameter setters" at the end of this file.
 
 ## EvaluatePerception(name, player [, target]) — 0x699430: nil versus 0 [H]
 
@@ -1421,3 +1423,102 @@ equation itself as a source of nil:
   thread.
 - A nil would come only from the warning row (AI context of the current mode missing or not initialised, e.g. during
   galactic start-up) [L: not observed].
+
+## StoryEventWrapper dialog and parameter setters (q6 RE, 2026-11-03)
+
+Read from 0x73df60, 0x73e4f0, 0x73e9a0, 0x73eaa0, 0x73eca0, 0x73eef0, the shared value converter 0x73e610, the text
+table lookups 0x1fa1a0 / 0x1fa680, and Fire 0x455db0 / holocron add 0x47dc70 (STORY.md §1.5). Conventions as above:
+"error" = 0x248190 (the binding returns nothing, and the calling script is ended at the end of its service pass),
+"warning" = 0x248620. Lua class ids as above, plus GameObjectTypeWrapper 0x140a44270 (type at +0x28, getter 0x6021a0).
+The wrapper's event is at wrapper +0x38. **Every method here returns silently when the wrapper's event is null**,
+before any argument check, and none returns a value [H].
+
+### Add_Dialog_Text(text_id [, a [, b]]) — 0x73df60 [H unless tagged]
+
+Argument count: **1, 2 or 3** (the test is count < 4). The message "invalid number of parameters. Expected 2." is
+printed only for 4 or more arguments and is stale. A count of 0 is not guarded: argument 1 is read from an empty list
+[M: undefined; no FoC or TR call does it]. So TR's `Recon.lua:117` one-argument call is valid in the original.
+
+| step | behaviour |
+|---|---|
+| 1 | Argument 1 must be a Lua string, else error "invalid type for parameter 1. Expected string." and nothing is added |
+| 2 | Each further argument (at most two) fills substitution slot 1 or 2, a wide string that starts empty. Classes are tested in this order: GameObjectWrapper, GameObjectTypeWrapper, string, number |
+| 2a | GameObjectWrapper: the object (0x5791e0), then its **representative type** (0x3973b0: company / transport / team container type, else its own type), then the type's **localized display name** (type +0x140, from `Text_ID`, OBJECT_TYPES §5.1). A dead wrapper (object null) **aborts the whole call silently**: no error, nothing added |
+| 2b | GameObjectTypeWrapper: the type's display name (+0x140). A null type aborts the call silently, as in 2a |
+| 2c | string: looked up as a **text id** in the game text table (0x140a7bc58, 0x1fa1a0 with "add if missing" = 1). A missing id is added to the table with the id itself (widened) as its text, so an unknown string shows verbatim. If the table is not loaded (its first byte is 0) the slot stays empty [M: what that byte means] |
+| 2d | number: `(int)(n + 0.5)` (C truncation, so −1.7 → −1) formatted with `L"%d"` (0x7ffa20, read from the exe) |
+| 2e | anything else (nil, boolean, table, player, position, AI target, task force, ...): error "invalid type for parameter %d." where %d is the slot number (1 for Lua argument 2, 2 for argument 3). The loop **carries on**, the slot stays empty, and the line **is still added** (the error still ends the script at the end of its pass) |
+| 3 | Format text = argument 1 looked up in the text table (0x1fa680, add-if-missing: a missing id formats as the id itself; table not loaded → `[MISSING]`) |
+| 4 | Line = wide printf of the format text with **both** slots as the two variadic arguments (0x200c00, a `vswprintf` into a wide string). With the MSVC wide printf, `%s` takes a wide string, so the first two `%s` in the text receive slot 1 and slot 2; with fewer arguments the missing slots are empty strings [M: placeholders other than `%s` were not checked; a `%d` in the text would print the string pointer] |
+| 5 | The line is **appended** to the event's dialog text list (event +0x2c0, a vector of wide strings) |
+
+What the list is for [H for the call, M for the display]: when the event fires and has a `Story_Dialog` (Fire 0x455db0
+step 6, STORY.md §1.5), the holocron entry built by 0x47dc70 (dialog, chapter, tag) stores a **pointer** to this list,
+not a copy. It is the "event's extra text" that the story script keyword `EXTRA_TEXT` appends (GALACTIC_DIALOGS §2.6).
+Because the entry keeps the pointer, later Add / Clear calls change what an existing holocron entry shows [M: the
+summary executor 0x1089e0 reading it through that pointer was not re-read]. Fire, Lua `Reset`, RESET_EVENT,
+RESET_BRANCH and the Perpetual re-arm never clear the list (Fire does not touch +0x2c0; vf4 0x45e480 / 0x45e550 do
+not) [H], so lines pile up until `Clear_Dialog_Text`. TR's deepcore holocron log sink and `AbstractResourceManager`
+call `Clear_Dialog_Text()` and then one `Add_Dialog_Text` per line for this reason.
+
+TR usage (29 files): one argument (`"TEXT_NONE"` as a blank line, headers), and two arguments with a number
+(`self.TimerStart`, `self.RewardCount`), a type (`Find_Object_Type(self.Reward)`), a string (`self.RewardError`) or a
+planet / object (`RewardLocation`). No TR or FoC call passes three.
+
+### Clear_Dialog_Text() — 0x73e4f0 [H]
+
+Ignores its arguments (no count or type check). Destroys every line in the event's +0x2c0 list and empties it. No
+error path.
+
+### Set_Dialog(name) — 0x73e9a0 [H]
+
+Exactly 1 argument, a string; otherwise error ("Expected 1, got %d.": the count is not passed to the format, so the
+number printed is garbage; or "invalid type for parameter 1. Expected string."). Copies the string into the event's
+`Story_Dialog` (+0x230) and calls the story dialog script loader 0x47d9c0(name, 0) (`Data\Scripts\Story\<name>.txt`,
+cached by name, GALACTIC_DIALOGS §2.6). It does not change the chapter, the tag or the text list.
+
+### Set_Event_Parameter(i, value [, value ...]) — 0x73eaa0 [H]
+
+**2 or more** arguments (the test is count < 2; "Expected 2" is the minimum). Argument 1 must be a number, else error.
+Arguments 2..n go through the shared converter 0x73e610 into one string list (a static vector, cleared on each call),
+which is passed with index `(int)(i + 0.5)` to the event's vf2 (+0x10, STORY.md §0.2). So one call can set a whole
+name list (`Set_Event_Parameter(0, "A", "B")`). The binding does not range-check the index; vf2 decides (for example
+ELAPSED 0x465340 acts only on index 0: threshold = atof of the first string). A value the converter cannot use is
+dropped silently, so vf2 may receive an empty list.
+
+### Set_Reward_Parameter(i, value) — 0x73eca0 [H]
+
+**Exactly 2** arguments, else error. Argument 1 a number, else error. Argument 2 goes through 0x73e610; the result
+must be **exactly one** string, else error "must set exactly one parameter per parameter index." (nil, a boolean, a
+table, a player, a dead object or a null type give this, since the converter drops them). The string is copied into
+event +0x50 + `(int)(i + 0.5)` × 0x20. +0x50 is Reward_Param1 and +0x70 Param2 (the TRIGGER_EVENT and set-spawn cases
+of 0x456970 read them there), so **i is 0-based**. The index is **not range-checked**: a negative or large i writes
+outside the reward parameter strings [H for the missing check; the array length was not read].
+
+### Set_Reward_Type(name) — 0x73eef0 [H]
+
+Exactly 1 string argument, else error. Reward type = the story name→int table 0x45c3f0 (unknown name → 0, no reward),
+stored at event +0x3c.
+
+### Shared value converter 0x73e610 (Set_Event_Parameter, Set_Reward_Parameter) [H]
+
+Per Lua value, in this class order:
+
+| value | string produced |
+|---|---|
+| GameObjectWrapper | the representative type's (0x3973b0) **name** (type +0xf8, the upper-cased XML name, not the display name); a dead wrapper produces nothing |
+| GameObjectTypeWrapper | the type's name (+0xf8); a null type produces nothing |
+| string | the string as is (no text table lookup) |
+| number | `(int)(n + 0.5)` formatted with `"%d"` (0x802468, read from the exe): **fractions are lost**, so `Set_Event_Parameter(0, 2.5)` gives "3" |
+| anything else | nothing, **no error** |
+
+**Not shared with Add_Dialog_Text.** Add_Dialog_Text tests the same four classes inline but produces different text:
+the display name (+0x140) instead of the type name (+0xf8), a text table lookup for strings, a wide `L"%d"`, an error
+for other classes, and a silent abort of the whole call for a dead object. Set_Dialog and Set_Reward_Type read a plain
+string inline. No other StoryEventWrapper method calls 0x73e610.
+
+Port check list (from the above; the port code was not read here): Add_Dialog_Text accepts 1 to 3 arguments; a
+1-argument call appends the looked-up text with empty substitutions; string arguments are text ids with a verbatim
+fallback; a dead object or null type skips the whole line without an error; Set_Event_Parameter accepts several values;
+numbers become rounded integers in both converters; Set_Reward_Parameter has no index range check in the original (the
+port's 0..63 check is stricter, which shipped and TR data never hit).
