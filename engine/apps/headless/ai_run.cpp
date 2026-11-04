@@ -29,6 +29,7 @@
 #include "alamo/objects/object_types.hpp"
 #include "alamo/sim/campaign_battles.hpp"
 #ifdef ALAMO_SIM_HAVE_STORY
+#include "alamo/lua/story_model.hpp"  // q6 t14: the holocron list
 #include "alamo/sim/story_session.hpp"
 #if defined(ALAMO_LUA_PLAYERS)
 #include "alamo/lua/players.hpp"  // q6: the story player world's perception source
@@ -526,6 +527,17 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
             std::printf("galactic-ai: story: %zu events fired, %zu Lua notes\n", st.log().size(), st.lua_messages().size());
             if (aopt.verbose)
                 for (const auto& m : st.lua_messages()) std::printf("  story lua: %s\n", m.c_str());
+            if (const lua::StoryHolocron* h = st.holocron()) {  // q6 t14 (GALACTIC_DIALOGS §2.8)
+                size_t done = 0;
+                for (const lua::StoryHolocronEntry& e : h->entries()) done += e.completed ? 1u : 0u;
+                std::printf("galactic-ai: story: holocron %zu records (%zu completed), %zu adds\n", h->size(), done, h->log().size());
+                if (aopt.verbose)
+                    for (const lua::StoryHolocronEntry& e : h->entries()) {
+                        std::printf("  holocron: %s chapter %d tag %s%s, %zu lines\n", e.dialog.c_str(), e.chapter, e.tag.c_str(),
+                                    e.completed ? " (completed)" : "", h->lines(e).size());
+                        for (const std::string& l : h->lines(e)) std::printf("    line: %s\n", l.c_str());
+                    }
+            }
         }
 #endif
         if (print && aopt.verbose) {

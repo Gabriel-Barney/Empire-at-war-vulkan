@@ -21,11 +21,13 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <span>
 #include <string>
 #include <vector>
 
+#include "alamo/core/file_provider.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/game/attract_mode.hpp"
 #include "alamo/game/game_controls.hpp"
@@ -830,6 +832,54 @@ void story_script_test() {
     CHECK(!game::parse_story_script("[CHAPTER 0]\n; note\nTEXT T\n", 0, sc));
     CHECK(!game::parse_story_script("[CHAPTER 0]\n// note\nTEXT T\n", 0, sc));
     std::printf("story script: chapters 0 / 1 parsed, chapter 2 missing, token stream / keyword rules ok\n");
+}
+
+// q6 t14 (GALACTIC_DIALOGS §2.8): the dialog script cache (exact names, rejected files not cached) and the summary fill
+// (rows = the tab's records, label = the chapter's first TEXT, colour / dim, selection, EXTRA_TEXT lines as stored).
+void holocron_summary_test() {
+    struct Files final : FileProvider {
+        std::map<std::string, std::string> f;
+        bool read(std::string_view path, std::vector<uint8_t>& out) const override {
+            out.clear();
+            const auto it = f.find(normalize_path(path));
+            if (it == f.end()) return false;
+            out.assign(it->second.begin(), it->second.end());
+            return true;
+        }
+        bool exists(std::string_view path) const override { return f.count(normalize_path(path)) != 0; }
+        std::string origin(std::string_view path) const override { return exists(path) ? "mem" : ""; }
+    } files;
+    files.f[normalize_path("Data\\Scripts\\Story\\Dlg.txt")] =
+        "[CHAPTER 0]\nTITLE TEXT_T0\nTEXTCOLOR 200 100 50 176\nTEXT TEXT_FIRST\nTEXT TEXT_SECOND\nNEWLINE 1\nEXTRA_TEXT\n"
+        "[CHAPTER 1]\nTITLE TEXT_T1\nTEXT TEXT_C1\n[CHAPTER 2]\nNEWLINE 1\n";
+    files.f[normalize_path("Data\\Scripts\\Story\\Bad.txt")] = "[CHAPTER 0]\nTEXT T\nBOGUS 1\n";
+    game::StoryDialogCache cache;
+    CHECK(cache.load(files, "Dlg") && !cache.load(files, "Dlg") && cache.cached("Dlg"));  // cached by name: loaded once
+    CHECK(cache.load(files, "DLG") && cache.size() == 2);   // the key is the exact name (the file system is not)
+    CHECK(!cache.load(files, "Bad") && !cache.cached("Bad") && !cache.load(files, "Missing") && cache.size() == 2);
+    CHECK(!game::story_script_valid("[CHAPTER 0]\nTEXT T\nBOGUS 1\n") && game::story_script_valid("[CHAPTER 0] TEXT T"));
+    std::vector<game::HolocronRecord> recs(4);
+    recs[0] = {4, "Dlg", "", "Dlg_1", 1, false, false, {}};
+    recs[1] = {3, "Dlg", "Kuat", "Dlg_0", 0, false, true, {"Extra A", "Extra B"}};
+    recs[2] = {2, "Dlg", "", "Done", 0, true, false, {}};
+    recs[3] = {1, "Missing", "", "Lost_Tag", 0, false, false, {}};
+    game::HolocronSummaryFill f = game::fill_holocron_summary(cache, recs, false, 3);
+    CHECK(f.rows.size() == 3 && f.has_completed && f.selected == 1);  // the Active tab: records 0, 1, 3 (newest first)
+    CHECK(f.rows[0].text_id == "TEXT_C1" && f.rows[0].rgba[0] == 128 && f.rows[0].rgba[2] == 255);  // no TEXTCOLOR: default
+    CHECK(f.rows[1].text_id == "TEXT_FIRST" && f.rows[1].rgba[0] == 132 && f.rows[1].rgba[1] == 66 && f.rows[1].rgba[2] == 33 &&
+          f.rows[1].rgba[3] == 176);  // read: x 0.66
+    CHECK(f.rows[2].text_id.empty() && f.rows[2].record == 3);  // the script is not loaded: no label
+    CHECK(f.title_id == "TEXT_T0" && f.recap.size() == 5 && f.recap[0].text == "TEXT_FIRST" && f.recap[1].text == "TEXT_SECOND" &&
+          f.recap[2].kind == game::StoryScriptLine::Kind::Blank && f.recap[3].kind == game::StoryScriptLine::Kind::Extra &&
+          f.recap[3].text == "Extra A" && f.recap[4].text == "Extra B" && f.recap[4].rgba[0] == 200);
+    f = game::fill_holocron_summary(cache, recs, true, 99);  // the Completed tab, unknown id: row 0
+    CHECK(f.rows.size() == 1 && f.rows[0].record == 2 && f.selected == 0 && f.rows[0].rgba[0] == 132 && f.recap.size() == 3 &&
+          f.recap[2].kind == game::StoryScriptLine::Kind::Blank);  // no Add_Dialog_Text lines: EXTRA_TEXT adds nothing
+    recs[2].completed = false;
+    CHECK(!game::fill_holocron_summary(cache, recs, false, 0).has_completed && game::fill_holocron_summary(cache, {}, false, 0).selected == -1);
+    CHECK(game::story_var_printf(U"Go to %s now, 100%% (%s, %d)", U"Kuat") == U"Go to Kuat now, 100% (, %d)");
+    CHECK(game::story_var_printf(U"%ls!", U"X") == U"X!" && game::story_var_printf(U"no args", U"X") == U"no args");
+    std::printf("holocron summary: cache by exact name, rows / colours / recap ok\n");
 }
 
 // GALACTIC_DIALOGS §2.6 on real data (ALAMO_FOC_DATA, else skipped): every shipped Data\Scripts\Story\*.txt parses
@@ -1925,6 +1975,7 @@ int main() {
 #endif
     story_ui_test();
     story_script_test();
+    holocron_summary_test();  // q6 t14
     story_scripts_real_test();
     game::GameData data;
     std::string err;

@@ -147,17 +147,6 @@ uint32_t rd32(const uint8_t* p) {
            (static_cast<uint32_t>(p[3]) << 24);
 }
 
-bool ascii_iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        char x = a[i], y = b[i];
-        if (x >= 'a' && x <= 'z') x = static_cast<char>(x - 'a' + 'A');
-        if (y >= 'a' && y <= 'z') y = static_cast<char>(y - 'a' + 'A');
-        if (x != y) return false;
-    }
-    return true;
-}
-
 }  // namespace
 
 const char* component_type_name(ComponentType t) {
@@ -300,6 +289,8 @@ bool TextDatabase::parse(std::span<const uint8_t> bytes, std::string* error) {
     crcs_.clear();
     keys_.clear();
     values_.clear();
+    added_.clear();
+    loaded_ = false;
     auto fail = [&](const char* m) {
         if (error) *error = m;
         crcs_.clear();
@@ -337,6 +328,8 @@ bool TextDatabase::parse(std::span<const uint8_t> bytes, std::string* error) {
         values_.push_back(std::move(v));
     }
     sort();
+    added_.clear();
+    loaded_ = true;  // byte +0, the "loaded" flag (GALACTIC_DIALOGS §2.7)
     return true;
 }
 
@@ -364,6 +357,7 @@ void TextDatabase::add(std::string key, std::u16string value) {
     keys_.push_back(std::move(key));
     values_.push_back(std::move(value));
     sort();
+    loaded_ = true;
 }
 
 const std::u16string* TextDatabase::find(std::string_view key) const {
@@ -373,15 +367,29 @@ const std::u16string* TextDatabase::find(std::string_view key) const {
         const auto i = static_cast<size_t>(it - crcs_.begin());
         if (keys_[i] == key) return &values_[i];
     }
-    for (size_t i = 0; i < keys_.size(); ++i)
-        if (ascii_iequal(keys_[i], key)) return &values_[i];
-    return nullptr;
+    return nullptr;  // case-sensitive: no case-folded second search (GALACTIC_DIALOGS §2.7)
 }
 
-std::u16string TextDatabase::text(std::string_view key) const {
+std::u16string TextDatabase::text(std::string_view key) const { return text(key, true); }
+
+std::u16string TextDatabase::text(std::string_view key, bool add) const {
+    if (key.data() == nullptr || !loaded_) return std::u16string(kMissing);
+    const uint32_t c = crc32(key.data(), key.size());
+    // The runtime additions first, then the file's table.
+    if (const auto it = added_.find({c, std::string(key)}); it != added_.end()) return it->second;
     if (const std::u16string* v = find(key)) return *v;
+    if (!add) return std::u16string(kMissing);
+    // Missing: the key itself (UTF-8 -> UTF-16, MultiByteToWideChar code page 65001), remembered under its CRC.
     std::u16string out;
-    for (char ch : key) out.push_back(static_cast<char16_t>(static_cast<unsigned char>(ch)));
+    for (const char32_t cp : utf8_to_utf32(key)) {
+        if (cp >= 0x10000) {
+            out.push_back(static_cast<char16_t>(0xD800 + ((cp - 0x10000) >> 10)));
+            out.push_back(static_cast<char16_t>(0xDC00 + ((cp - 0x10000) & 0x3FF)));
+        } else {
+            out.push_back(static_cast<char16_t>(cp));
+        }
+    }
+    added_.emplace(std::pair<uint32_t, std::string>{c, std::string(key)}, out);
     return out;
 }
 

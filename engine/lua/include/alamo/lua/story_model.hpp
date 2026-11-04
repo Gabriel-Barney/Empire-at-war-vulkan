@@ -118,23 +118,90 @@ struct StoryEventDef {
     double timeout = 0.0;          // <Timeout> seconds (SPEECH_DONE defaults to 60), 0 = none
     double inactive_delay = 0.0;   // <Inactive_Delay> seconds, 0 = none
     bool in_table = true;          // false: a duplicate name (never visited)
-    std::vector<std::string> dialog;  // Add_Dialog_Text / Set_Dialog lines (Lua)
-    // Story dialog / chapter fields (STORY.md 1.5 step 6; the only ones shipped FoC/EaW events use:
-    // Story_Dialog, Story_Chapter, Story_Tag, Story_Dialog_Popup). Recorded in dialog_log() at Fire.
-    std::string story_dialog, story_tag;
+    std::vector<std::string> dialog;  // the Add_Dialog_Text line list (event +0x2C0, LUA_API; Clear_Dialog_Text empties it)
+    // Story dialog / chapter fields (STORY.md §1.6 field map): Story_Dialog (+0x230, a Lua Set_Dialog replaces it),
+    // Story_Chapter (+0x250), Story_Var (+0x258), Story_Tag (+0x278), Story_Dialog_Popup (+0x2B8), Story_Dialog_SFX (+0x2B9).
+    // Story_Incoming (+0x298) is not read by Fire step 6 and not kept. Fire step 6 uses them (StoryHolocron).
+    std::string story_dialog, story_tag, story_var;
     int32_t story_chapter = -1;  // -1 = absent
     bool story_dialog_popup = false;
+    bool story_dialog_sfx = false;
 };
 
-// One Fire step 6 record (an event with Story_Dialog / Story_Tag fired): what the campaign "holocron" /
-// dialog UI shows. [port] the original's handling at step 6 is not traced (STORY.md 7.7): recorded only.
+// One Fire step 6 presentation record (an event with a Story_Dialog fired), in firing order: what the UI shows for it
+// (STORY.md §1.6 step 3: Popup false -> holocron flash, transmission text, SFX only when `sfx`; Popup true -> the summary
+// at this chapter). Not hashed, not saved (presentation).
 struct StoryDialogEntry {
     uint32_t frame = 0;
     uint32_t plot = 0;
     uint32_t event = 0;
-    std::string dialog, tag;
+    std::string dialog, tag;  // tag = the holocron record's tag (Story_Tag, else "<dialog>_<chapter>")
     int32_t chapter = -1;
     bool popup = false;
+    bool sfx = false;          // Story_Dialog_SFX
+    uint64_t holocron_id = 0;  // StoryHolocronEntry::id of the record this fire added
+    std::string plot_name;
+};
+
+class StoryModel;
+
+// GALACTIC_DIALOGS §2.8 / STORY.md §1.6: the holocron list (0x140a2a4c8). ONE list for the whole game: every plot set of
+// every mode adds to it (StoryModel::share_holocron). Records are inserted at index 0 (newest first), with no
+// de-duplication. A record keeps a REFERENCE to its event's Add_Dialog_Text list (not a copy), so later Add / Clear calls
+// show up in it; lines() reads through that reference. REMOVE_STORY_GOAL removes and STORY_GOAL_COMPLETED completes the
+// first (newest) record with a tag.
+//
+// [port] Not part of the per-tick CRC: no sim rule reads the list (only the summary dialog does; the two rewards only write
+// it), and its contents are a pure function of the Fire order, which the CRC covers. Saved with the story session
+// (StorySession::write). The `read` flag is set by the summary dialog (mark_read), as in the original (0x1089e0).
+struct StoryHolocronEntry {
+    uint64_t id = 0;  // [port] unique per add (1, 2, ...), lets the UI find a record after later inserts
+    std::string dialog, var, tag;
+    int32_t chapter = -1;
+    bool completed = false;
+    bool read = false;
+    bool auto_tag = false;  // the tag was generated ("<dialog>_<chapter>")
+    uint32_t frame = 0;     // host frame of the add ([port] the original's "last summary" frame global)
+    // The event whose Add_Dialog_Text list the record shows (by reference). model == nullptr: detached (the plot set is
+    // gone, e.g. a tactical story after its battle; [port: the list was copied into `detached_lines` then]) or not yet
+    // re-linked after a load (`ref_set` names the saved set).
+    const StoryModel* model = nullptr;
+    uint32_t plot = 0, event = 0;
+    int32_t ref_set = -1;  // the session's set number of `model` (save / load), -1 = none
+    std::vector<std::string> detached_lines;
+};
+
+class StoryHolocron {
+public:
+    const std::vector<StoryHolocronEntry>& entries() const { return entries_; }
+    size_t size() const { return entries_.size(); }
+    // 0x47dc70: inserts at index 0. Returns the new record's id.
+    uint64_t add(StoryHolocronEntry e);
+    // 0x47eea0 / 0x47f5b0: the first (newest) record whose tag equals `tag` (exact compare); false when none.
+    bool remove_tag(std::string_view tag);
+    bool complete_tag(std::string_view tag);
+    // The summary executor ran on a record (0x1089e0 sets read = 1).
+    void mark_read(size_t index);
+    size_t index_of(uint64_t id) const;  // SIZE_MAX when absent
+    // The record's Add_Dialog_Text lines, read through its reference (empty when the event is gone).
+    const std::vector<std::string>& lines(const StoryHolocronEntry& e) const;
+    // A plot set is going away: its records keep a copy of their lines and drop the reference.
+    void detach(const StoryModel* model);
+    // Presentation records of every add, firing order (the UI drains it with a cursor; not saved).
+    const std::vector<StoryDialogEntry>& log() const { return log_; }
+    void push_log(StoryDialogEntry e) { log_.push_back(std::move(e)); }
+    void clear();
+
+    // Save / load. set_of(model) = the session's set number of a referencing model (-1: none, the reference is dropped and
+    // the lines copied). After read(), relink(set, model) re-attaches the references to each loaded set's model.
+    void write(ByteWriter& w, const std::function<int32_t(const StoryModel*)>& set_of) const;
+    bool read(ByteReader& r);
+    void relink(int32_t set, const StoryModel* model);
+
+private:
+    std::vector<StoryHolocronEntry> entries_;
+    std::vector<StoryDialogEntry> log_;
+    uint64_t next_id_ = 1;
 };
 
 struct StoryEventState {
@@ -315,6 +382,19 @@ public:
     // model; read() replaces its contents (so every sharing model sees the loaded flags).
     void share_flags(const StoryModel& with) { flags_ = with.flags_; }
     bool shares_flags(const StoryModel& with) const { return flags_ == with.flags_; }
+    // The holocron list is one global list too (GALACTIC_DIALOGS §2.8): a model starts with its own, a host with several
+    // plot sets makes them share one (like the flags). Not hashed; the host saves it (StoryHolocron::write).
+    void share_holocron(const StoryModel& with) { holocron_ = with.holocron_; }
+    StoryHolocron& holocron() { return *holocron_; }
+    const StoryHolocron& holocron() const { return *holocron_; }
+    // Story dialog script loads (GALACTIC_DIALOGS §2.8, 0x47d9c0): every event's Story_Dialog when its plot loads (event
+    // order), then each Lua Set_Dialog name at the call, and the Lua-set names again after a read(). Names as given (the
+    // original's cache is keyed by the CRC of the exact name); the presentation host loads them in order (it owns the
+    // script parser). Not hashed, not saved.
+    const std::vector<std::string>& dialog_loads() const { return dialog_loads_; }
+    void request_dialog_load(std::string_view name) {
+        if (!name.empty()) dialog_loads_.emplace_back(name);
+    }
     const std::vector<StoryObjective>& objectives() const { return objectives_; }
     void add_objective(std::string_view text, bool from_lua);
     const std::vector<StoryBlip>& blips() const { return blips_; }
@@ -383,6 +463,8 @@ private:
     std::map<std::string, uint32_t> ai_flags_;  // "player|NAME|location" -> raised count
     std::vector<StoryFired> fired_;
     std::vector<StoryDialogEntry> dialog_log_;
+    std::shared_ptr<StoryHolocron> holocron_ = std::make_shared<StoryHolocron>();
+    std::vector<std::string> dialog_loads_;
     std::vector<std::string> warnings_;
     int32_t player_ = -1;
     uint32_t frame_ = 0;
