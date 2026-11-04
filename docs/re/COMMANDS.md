@@ -189,8 +189,83 @@ type (0x407db0), depending on a GMM flag (0x28afb0) [M].
 | id | class | S/N | payload | effect | conf |
 |---|---|---|---|---|---|
 | 5 | Select | S | list7 ids, max 127 (0x3acb30) | clear the issuer's selection, then add each id that is allowed. Ignored in galactic mode with a battle pending | H |
-| 37 | SelectAll | S | none | select every eligible unit of the issuer (category query 2, filters on several state bytes) | H |
+| 37 | SelectAll | S | none | replace the issuer's selection with every owned SELECTABLE object that is not a base structure, star base, orbital structure or mine, has no parent and is not retreating (§2.4.1) | H |
 | 30 | ControlGroup | S | 4-bit group 0..9, 1-bit assign, [1-bit add, only when assign = 1] (0x436160) | recall: select the group (a camera jump on a double recall within 1 s is local-player only). Assign: store Sel in the group | H |
+
+#### 2.4.1 SelectAll in detail (q6 RE, 2026-11-04) [H unless tagged]
+
+**Execute (SelectAllEventClass vf4 0x437FA0; vtable 0x86B020, factory id 37, no payload).**
+1. Clear the issuer's selection (0x2A6370: the per-player selection list GOM +0x1C0 + player × 0x48; each entry is
+   told it was deselected and released). SelectAll always **replaces**; there is no add form.
+2. Query 0x2A9FF0(GOM, behaviour 2, owner = issuer, no excluded owner, no radius, no cap). The "2" is the behaviour id
+   **SELECTABLE**, not a category: because an owner is given, the walk is the **issuer's per-owner object list**
+   (GOM +0xC8 + owner × 0x48; the SELECTABLE list GOM +0x2A0 is used only when no owner is given), keeping objects whose
+   SELECTABLE slot (obj +0x334) is present. No CategoryMask is read.
+3. Per object, in that list's order, skip it when any holds:
+   - a retreat is running and the object is in the retreat coordinator's list (mode +0x30, 0x3400C0; tested twice);
+   - it has DUMMY_GROUND_STRUCTURE (0x5F, slot +0x391), DUMMY_STAR_BASE (0x5C, +0x38E) or DUMMY_ORBITAL_STRUCTURE (0x60,
+     +0x392);
+   - it has a parent object (obj +0x2B0 ≠ 0): a TEAM member, a garrisoned unit (garrison entry sets +0x2B0 := host,
+     L1_S4_REMAINING §3.5), a transported unit [M for transports];
+   - it has PROXIMITY_MINE (0x55, slot +0x387).
+4. Each survivor → 0x2BD2F0(GOM, id, issuer) → insert 0x2BD360, the same insert as `Select`:
+   - already selected → nothing;
+   - a TEAM member is replaced by its container (obj +0x2B0 with TEAM), an attached object by its parent record
+     (obj +0x150: +0x10, else +8) [M: name];
+   - the object enters the issuer's selection only if its SelectionDataPack flag is set (obj +0xB0 → +0x38, 0x39B070):
+     default 1 (pack ctor 0x55BE30), cleared by `Set_Selectable(false)` (0x580530, which also deselects the object and
+     its TEAM members) and while a landing transport carries it (0x644330 / 0x6438A0);
+   - a TEAM container also inserts every member that passes the same flag test;
+   - then a per-mode selection notification 0x32F1B0 (on a sub-object of the current mode) [M: purpose].
+5. If the issuer is the local player: the HUD refresh (mode vf +0x238 → 0x5392D0) and the selection-changed
+   singleton 0x599070 (presentation).
+
+**Not tested by the execute:** `Not_Really_Selectable` (type +0xE7; read only by the UI pick helper 0x29C040 and the
+cursor resolver 0x2AD280; FoC sets it only on `Proximity_Mine`, excluded anyway, and on `Eclipse_Super_Star_Destroyer`,
+which Select All therefore **does** select when the player owns it), hidden (`Hide`, obj +0x3A2 bit 0, model hidden), dying (+0x3A0), under construction,
+locomotor, hero / structure / CategoryMask, land vs space mode, fog, stealth, cap. The list has no 127 cap (that is the
+`Select` wire format); insertion order = the issuer's per-owner list order (object add order [M]).
+
+**What that means for FoC data** (checked against `Data\XML`, mode-merged `Behavior` + `Land/SpaceBehavior`):
+- **Excluded:** every base structure with DUMMY_GROUND_STRUCTURE (barracks, factories, command centres, power
+  generators, base shields, turbolaser towers, mining facilities, the Hypervelocity Gun / Ion Cannon …), every star
+  base and asteroid base (DUMMY_STAR_BASE), defense satellites and orbital structures (DUMMY_ORBITAL_STRUCTURE),
+  proximity mines and remote bombs. Same rule in land and space.
+- **Included:** every owned object with SELECTABLE and no parent, **heroes included**; TEAM containers (then expanded to
+  their members); space fighter squadron containers; and **build-pad structures without a dummy behaviour**: the
+  buildable turrets (`*_ANTI_INFANTRY_TURRET`, `*_ANTI_VEHICLE_TURRET`, `*_ANTI_AIRCRAFT_TURRET`, mass driver /
+  torpedo / rapid-fire turrets, grenade mortars, EM field generators), bacta tanks, repair facilities, sensor nodes,
+  the mineral processors and the selectable `UC_*` under-construction objects (`UC_*_Mineral_Processor`, space
+  `UC_*_Defense_Satellite_*` [they also carry no orbital dummy]) [H for the code path; M for how it looks in game:
+  not probed].
+- **Never:** hardpoints (not GOM objects), units still in the reinforcement pool, fighters still in a hangar (not
+  spawned yet [M]).
+
+**UI path (Ctrl+A, key slot 10, UI.md §key bindings; handler 0x3AAD0).**
+- The handler builds a local list from the same query and filters **plus** the selection flag (0x39B070) **and a
+  locomotor** (slot +0x333 = behaviour id 1); objects with a parent are skipped as in the execute (its container
+  redirect is dead code there); retreating objects are skipped again. No screen / visibility / fog filter, no modifier key test.
+- If that list is empty nothing is sent. Otherwise it queues one SelectAll event (no payload) and plays the selection
+  acknowledgement of a unit from its local list (0x44280 → 0x38290 pick, 0x3739A0 type SFX, 0x2D5320). So 0x44280
+  is only the sound; the selection itself is the execute's broader set (so turrets are selected together with the
+  mobile units, but Ctrl+A with only turrets owned does nothing).
+
+**`Select` (id 5, vf4 0x3ACBF0) for comparison:** galactic mode with a battle pending and a human issuer → ignored;
+clear the issuer's selection; insert each payload id (0x2BD2F0) unless it is retreating. No owner test in the execute:
+ownership and `Not_Really_Selectable` are checked by the UI before it sends (0x29C040: selection flag, not
+`Not_Really_Selectable`, owner = player or skirmish `Is_Community_Property` allied).
+
+**Port notes** (`sim_host.cpp` SelectAll):
+1. Query = the issuer's own objects with the SELECTABLE behaviour (not a category mask).
+2. Exclude DUMMY_GROUND_STRUCTURE / DUMMY_STAR_BASE / DUMMY_ORBITAL_STRUCTURE / PROXIMITY_MINE holders, objects with a
+   parent (TEAM members, garrisoned, transported), and objects in the running retreat. Do not exclude by
+   `Not_Really_Selectable`, hidden, dying, hero, or the structure category: build-pad turrets, bacta tanks, repair facilities,
+   sensor nodes and mineral processors stay in.
+3. Insert like Select: skip already selected, TEAM member → container + its members, only objects whose selectable
+   flag (`Set_Selectable`) is set.
+4. Replace the selection, no cap, issuer's object-list order.
+5. The UI sends the event only if at least one owned object passes the same filters and has a locomotor; Shift does
+   not matter.
 
 ### 2.5 Session, chat, control
 
