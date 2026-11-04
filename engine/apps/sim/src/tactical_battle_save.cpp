@@ -14,7 +14,7 @@ namespace alamo::sim {
 
 namespace {
 
-constexpr uint32_t kBattleStateVersion = 6;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields)
+constexpr uint32_t kBattleStateVersion = 7;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: q6 attacks on TEAM containers
 constexpr uint32_t kBattlePartVersion = 1;
 
 // One module system in a part: presence flag + a section with its own write (nothing when it has no write / read).
@@ -100,6 +100,7 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
         x(q.has_current, q.current);
     });
     a(b.queue_group_, b.queue_used_);
+    a.seq(b.team_attacks_, [](auto& x, auto& r) { x(r.attacker, r.container, r.member, r.goal); });  // q6 (state version 7)
 #ifdef ALAMO_SIM_HAVE_GARRISON
     a(b.s4_used_);
 #endif

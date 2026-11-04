@@ -1781,6 +1781,17 @@ gets garrisoned, enters a transport, dies (also via signal 0x10), starts a hero 
   (`hero_clash` kept, always false; "in a transport" = garrisoned, the port has no carried units) and the object
   block's end test reads it; the combat goal promotion reads the type part (`UnitDesc::target_test_type`,
   `battle_catalog.cpp`).
+- Attack ordered on a TEAM container (q6, 2026-11-04): the AI host's Attack (`BattleAi::execute_order`) and the human
+  order (`TacticalBattle::order_attack`, also queued) accept a live hostile TEAM container (test 1). The original keeps
+  the container as the attacker's target (`Set_Target` replaces a member by its container, TACTICAL_COMBAT §2.8 B step 5;
+  team target 0x406370, FIGHTER_FLYING §4.10 B) and each shot takes the member nearest the launch point (0x404fc0,
+  LOB_SOLVER §5.1). The port's combat has no container units, so `TacticalBattle::TeamAttack` keeps the container order
+  per attacker and gives combat the member the next shot would take: the live member nearest the attacker [port: XY
+  distance, ties by the lower id; the range test uses that member, not the container's box], a squadron (combat share
+  group) taking its first attacker's pick. After every combat tick the pick is redone (nearest changed, member dead);
+  a pick after a death re-runs the order's approach move [port: the original's attacker follows the container's object
+  block]. The order ends when the container is gone (its last member died or left: signal 0x28 clears the team target),
+  when combat dropped or replaced the attacker's target, or on a newer order. Saved in the battle state (version 7).
 
 #### 33.2.2 Result and arrival for Move_To / Attack_Move on an object (q6 t19 RE, 2026-11-04) [H unless tagged]
 

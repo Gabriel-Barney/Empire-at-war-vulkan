@@ -4422,6 +4422,151 @@ void test_battle_ai_find_team() {
     CHECK(checked);
 }
 
+// q6: an attack ordered on a TEAM container (A1_READINGS §33.2.1 row 1: a TEAM container is a valid target on its own;
+// TACTICAL_COMBAT §2.8 B step 5, LOB_SOLVER §5.1: each shot takes the container's member nearest the shooter). Land battle
+// with team data: player 1's troopers attack one of player 0's squad containers. The AI host's Attack (BattleAi) and the
+// human order (TacticalBattle::order_attack) are accepted (both were InvalidTarget); each attacker's combat target is the
+// container's live member nearest it; when a member dies the attackers take the next one; the order ends when the
+// container has no member left (no ordered target afterwards).
+void test_battle_attack_team() {
+    auto d = make_data(false, false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, make_setup(*d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    opt.battle.order_interval = 0;  // no stand-in orders: only the test orders units
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup ts;
+    ts.defs = &defs;
+    ts.equations = &eqs;
+    ts.files = d->files.get();
+    ts.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };  // no AI player: orders only
+    using R = commands::RejectReason;
+    const objects::TypeIndex team = d->types.resolve_name("Team");
+    CHECK(team != objects::kNone);
+    bool invaded = false, ordered = false, ended = false;
+    objects::ObjectId target = objects::kNoObjectId;
+    objects::ObjectHandle target_h;
+    std::vector<objects::ObjectId> attackers, first_picks;
+    size_t retargets = 0, wrong = 0, gone_frames = 0;
+    uint32_t end_frame = 0;
+    for (uint64_t t = 0; t < 8000 && !ended; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) {
+            if (ordered) break;  // the battle ended
+            continue;
+        }
+        if (b->frame() < 3) continue;
+        objects::ObjectStore& st = tm->primary();
+        auto members_of = [&](objects::ObjectId c) {
+            std::vector<objects::ObjectId> m;
+            b->select_all_entry(c, -1, m);
+            return m;
+        };
+        auto nearest = [&](objects::ObjectId a, const std::vector<objects::ObjectId>& ms) {
+            objects::ObjectId best = objects::kNoObjectId;
+            float bd = 0.0f;
+            const Vec3 p = st.position(st.find(a));
+            for (const objects::ObjectId m : ms) {
+                const Vec3 q = st.position(st.find(m));
+                const float dd = (p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y);
+                if (best == objects::kNoObjectId || dd < bd || (dd == bd && m < best)) {
+                    best = m;
+                    bd = dd;
+                }
+            }
+            return best;
+        };
+        if (!ordered) {
+            for (const objects::ObjectHandle h : st.all_objects()) {
+                if (!st.alive(h)) continue;
+                if (st.type(h) == team && st.owner(h) == 0 && target == objects::kNoObjectId && members_of(st.id(h)).size() >= 2) {
+                    target = st.id(h);
+                    target_h = h;
+                }
+                if (st.owner(h) == 1 && b->combat().has_unit(st.id(h)) && b->movement().has_unit(st.id(h))) attackers.push_back(st.id(h));
+            }
+            std::sort(attackers.begin(), attackers.end());
+            std::printf("  team attack: frame %u, target container %d (%zu members), %zu attackers\n", b->frame(), target,
+                        members_of(target).size(), attackers.size());
+            CHECK(target != objects::kNoObjectId && !attackers.empty());
+            if (target == objects::kNoObjectId || attackers.empty()) break;
+            std::vector<uint32_t> wire;
+            for (const objects::ObjectId a : attackers) wire.push_back(static_cast<uint32_t>(a));
+            const std::vector<objects::ObjectId> ms = members_of(target);
+            // AI host: accepted, every attacker on a member (its nearest)
+            BattleAi ai(*b, *tm, host, ts);
+            CHECK(ai.execute(1, commands::ev::attack(static_cast<uint32_t>(target), wire)) == R::None);
+            for (const objects::ObjectId a : attackers) {
+                CHECK(b->combat().ordered_target(a) == nearest(a, ms));
+                CHECK(b->combat().attack_goal(a) == b->combat().ordered_target(a));
+            }
+            // the human order (replaces the AI's): accepted the same way
+            CHECK(b->order_attack(*tm, 1, attackers, target, host.random().synced()) == R::None);
+            for (const objects::ObjectId a : attackers) {
+                CHECK(b->combat().ordered_target(a) == nearest(a, ms));
+                first_picks.push_back(b->combat().ordered_target(a));
+            }
+            CHECK(b->order_attack(*tm, 1, attackers, attackers.front(), host.random().synced()) == R::InvalidTarget);  // own unit
+            ordered = true;
+            continue;
+        }
+        const std::vector<objects::ObjectId> ms = members_of(target);
+        const bool container_live = st.alive(target_h) && !ms.empty();
+        // the frame the last member died the attackers still name it; combat drops the dead target in the next decide
+        if (!container_live && ++gone_frames < 2) continue;
+        for (size_t k = 0; k < attackers.size(); ++k) {
+            const objects::ObjectId a = attackers[k];
+            if (!st.alive(st.find(a)) || !b->combat().has_unit(a) || !b->combat().alive(a)) continue;
+            const objects::ObjectId o = b->combat().ordered_target(a);
+            if (container_live) {
+                if (o != nearest(a, ms)) ++wrong;  // after the service the target is the nearest live member
+                if (o != first_picks[k]) {
+                    ++retargets;
+                    first_picks[k] = o;
+                }
+            } else if (o != objects::kNoObjectId) {
+                ++wrong;  // the order ended with the container
+            }
+        }
+        if (!container_live && gone_frames > 3) {
+            ended = true;
+            end_frame = b->frame();
+        }
+    }
+    std::printf("  team attack: container gone %d (frame %u), %zu target changes, %zu frames off the rule\n", ended ? 1 : 0, end_frame,
+                retargets, wrong);
+    CHECK(ordered && ended && retargets > 0 && wrong == 0);
+}
+
 // a1g t04 follow-up: BattleAi::land_drop_ok (TACTICAL_GAPS §4.2): the land Reinforce drop validity of a reserve entry. A spot
 // is refused when a slot is impassable (an Obstacle strip on the map), fogged for the player (force 1), or its footprint is
 // taken (a live unit stands there); an unknown entry is refused; otherwise accepted.
@@ -5908,6 +6053,8 @@ int main(int argc, char** argv) {
     test_battle_ai_land_mode(true);
     std::printf("refixf t03: Find_All_Objects_Of_Type('S10_Squad') finds the TEAM containers (representative type hook)\n");
     test_battle_ai_find_team();
+    std::printf("q6: an attack ordered on a TEAM container (AI host and human order; nearest member, order ends with the container)\n");
+    test_battle_attack_team();
     std::printf("a1g t04 follow-up: BattleAi::land_drop_ok (impassable / fogged / movers / enabling radius)\n");
     test_battle_ai_land_drop(*d);
 #endif

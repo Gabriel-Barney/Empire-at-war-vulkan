@@ -1314,6 +1314,7 @@ void TacticalBattle::exec_move(TacticalMode& mode, std::span<const objects::Obje
                                float facing_deg, bool attack_move, uint8_t flags, bool switch_locomotor,
                                objects::ObjectId goal_object) {
     s4_cancel(ids);  // S4: a move replaces a pending garrison enter
+    team_attack_drop(ids);  // q6: an ordered move clears the team target (FIGHTER_FLYING §4.10 B writer 3)
     const tactical::Aabb& bb = mode.bounds();
     mv::MoveOrder o;
     o.units.assign(ids.begin(), ids.end());
@@ -1341,30 +1342,145 @@ uint32_t TacticalBattle::exec_attack(TacticalMode& mode, std::span<const objects
                                      SimRng& rng) {
     const objects::ObjectStore& st = mode.primary();
     const Unit* t = unit_by_id(target);
-    if (!t) return 0;
-    const tactical::Aabb& bb = mode.bounds();
-    const Vec3 tp = st.position(t->h);
+    const Container* ct = t ? nullptr : team_target(target);  // q6: a TEAM container (TeamAttack, tactical_battle.hpp)
+    if (!t && !ct) return 0;
+    std::vector<TeamPick> picks;
     uint32_t n = 0;
     for (const objects::ObjectId id : ids) {
         const Unit* u = unit_by_id(id);
-        if (!u || u->id == t->id || !combat_->has_unit(u->id)) continue;
-        combat_->order_attack(u->id, t->id, hp);
-        if (!movement_locked(u->id))  // S7 t22: an object block (flags 0); a locked unit keeps its formation (as Move_To)
-            fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp, t->id);
-        ++n;
-        if (!u->movable || movement_locked(u->id)) continue;  // a locked unit fires from where it stands (§28.9 [M])
-        const Vec3 up = st.position(u->h);
-        const float dx = tp.x - up.x, dy = tp.y - up.y, d = dmath::sqrt(dx * dx + dy * dy);
-        const float range = std::max(u->range, 100.0f);
-        if (d > 0.8f * range) {
-            const float k = (d - 0.7f * range) / d;
-            mv::MoveOrder o;
-            o.units = {u->id};
-            o.destination = {std::clamp(up.x + dx * k, bb.min.x, bb.max.x), std::clamp(up.y + dy * k, bb.min.y, bb.max.y)};
-            movement_->move(o, rng, frame_);
+        if (!u || u->id == target || !combat_->has_unit(u->id)) continue;
+        const Unit* tu = t;
+        if (ct) {
+            const objects::ObjectId m = team_pick(mode, *ct, st.position(u->h), combat_->share_group(u->id), picks);
+            tu = m != objects::kNoObjectId ? unit_by_id(m) : nullptr;
+            if (!tu) continue;
         }
+        const Vec3 tp = st.position(tu->h);
+        combat_->order_attack(u->id, tu->id, ct ? -1 : hp);
+        if (ct) team_attack_set(u->id, ct->id, tu->id, false);
+        if (!movement_locked(u->id))  // S7 t22: an object block (flags 0); a locked unit keeps its formation (as Move_To)
+            fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp,
+                          ct && movement_->fighter_squad(ct->id) ? ct->id : tu->id);
+        ++n;
+        attack_approach(mode, *u, tp, rng);
     }
     return n;
+}
+
+void TacticalBattle::attack_approach(TacticalMode& mode, const Unit& u, Vec3 tp, SimRng& rng) {
+    if (!u.movable || movement_locked(u.id)) return;  // a locked unit fires from where it stands (§28.9 [M])
+    const tactical::Aabb& bb = mode.bounds();
+    const Vec3 up = mode.primary().position(u.h);
+    const float dx = tp.x - up.x, dy = tp.y - up.y, d = dmath::sqrt(dx * dx + dy * dy);
+    const float range = std::max(u.range, 100.0f);
+    if (d > 0.8f * range) {
+        const float k = (d - 0.7f * range) / d;
+        mv::MoveOrder o;
+        o.units = {u.id};
+        o.destination = {std::clamp(up.x + dx * k, bb.min.x, bb.max.x), std::clamp(up.y + dy * k, bb.min.y, bb.max.y)};
+        movement_->move(o, rng, frame_);
+    }
+}
+
+// ---- q6: attack on a TEAM container (tactical_battle.hpp TeamAttack) -------------------------------------------------
+
+const TacticalBattle::Container* TacticalBattle::team_target(objects::ObjectId id) const {
+    if (id == objects::kNoObjectId) return nullptr;
+    for (const Container& c : containers_)
+        if (c.id == id) return c.team && !c.removed && c.alive > 0 ? &c : nullptr;
+    return nullptr;
+}
+
+objects::ObjectId TacticalBattle::team_pick(const TacticalMode& mode, const Container& c, Vec3 from, objects::ObjectId group,
+                                            std::vector<TeamPick>& picks) const {
+    if (group != objects::kNoObjectId)
+        for (const TeamPick& p : picks)
+            if (p.group == group && p.container == c.id) return p.member;
+    const objects::ObjectStore& st = mode.primary();
+    const auto ci = static_cast<uint32_t>(&c - containers_.data());
+    objects::ObjectId best = objects::kNoObjectId;
+    float bd = 0.0f;
+    for (const Unit& m : units_) {  // ascending id: the first strict minimum keeps the lower id on a tie [port]
+        if (m.container != ci || !m.alive || m.retreated || !combat_->has_unit(m.id) || !combat_->alive(m.id)) continue;
+        if (combat_->flags(m.id) & (tc::kUnitGarrisoned | tc::kUnitSkipTargeting)) continue;  // 0x5680b0 test 2 / untargetable
+        const Vec3 p = st.position(m.h);
+        const float dx = p.x - from.x, dy = p.y - from.y, d = dx * dx + dy * dy;
+        if (best == objects::kNoObjectId || d < bd) {
+            best = m.id;
+            bd = d;
+        }
+    }
+    if (group != objects::kNoObjectId && best != objects::kNoObjectId) picks.push_back({group, c.id, best});
+    return best;
+}
+
+void TacticalBattle::team_attack_set(objects::ObjectId attacker, objects::ObjectId container, objects::ObjectId member, bool goal) {
+    auto it = std::lower_bound(team_attacks_.begin(), team_attacks_.end(), attacker,
+                               [](const TeamAttack& r, objects::ObjectId v) { return r.attacker < v; });
+    if (it == team_attacks_.end() || it->attacker != attacker) it = team_attacks_.insert(it, TeamAttack{});
+    *it = TeamAttack{attacker, container, member, goal};
+}
+
+void TacticalBattle::team_attack_drop(std::span<const objects::ObjectId> ids) {
+    if (team_attacks_.empty()) return;
+    for (const objects::ObjectId id : ids) {
+        const auto it = std::lower_bound(team_attacks_.begin(), team_attacks_.end(), id,
+                                         [](const TeamAttack& r, objects::ObjectId v) { return r.attacker < v; });
+        if (it != team_attacks_.end() && it->attacker == id) team_attacks_.erase(it);
+    }
+}
+
+// Serial, after this tick's combat events (deaths, container removals) and before the order queues advance. Per record in
+// attacker order: the order ends when the container is gone or no longer hostile, or when combat no longer holds a member of
+// it (the order was dropped: fog, stealth, an owner change; or replaced). Otherwise the attacker's combat target becomes the
+// current pick; a pick after the old member died also re-runs the order's approach move (and the squadron goal when the
+// goal was the member) [port: the original's attacker follows the container object block; the port moves once per pick].
+void TacticalBattle::team_attack_service(TacticalMode& mode, SimRng& rng) {
+    if (team_attacks_.empty() || !combat_) return;
+    const objects::ObjectStore& st = mode.primary();
+    std::vector<TeamPick> picks;
+    const auto live_unit = [this](const Unit* x) { return x && x->alive && !x->retreated && combat_->has_unit(x->id) && combat_->alive(x->id); };
+    const auto keep = [&](TeamAttack& r) {
+        const Unit* u = unit_by_id(r.attacker);
+        if (!live_unit(u)) return false;
+        const Container* ct = team_target(r.container);
+        if (!ct || !combat_->is_enemy(st.owner(u->h), st.owner(ct->h))) return false;  // the container left with its last member
+        const auto ci = static_cast<uint32_t>(ct - containers_.data());
+        const Unit* mu = unit_by_id(r.member);
+        const bool member_live = live_unit(mu);
+        const objects::ObjectId cur = combat_->ordered_target(u->id);
+        bool lost = !member_live;
+        if (cur != r.member) {
+            const Unit* cu = cur != tc::kNoObject ? unit_by_id(cur) : nullptr;
+            if (cu && cu->container == ci) {
+                r.member = cur;  // a squadmate's order (combat share group) named another member
+                lost = !live_unit(cu);
+            } else if (cur != tc::kNoObject || member_live) {
+                return false;  // dropped or replaced
+            }
+        }
+        const objects::ObjectId m = team_pick(mode, *ct, st.position(u->h), combat_->share_group(u->id), picks);
+        if (m == objects::kNoObjectId) {  // no member can be attacked (all garrisoned): the order ends, the target goes
+            combat_->clear_order(u->id);
+            if (r.goal) combat_->set_attack_goal(u->id, tc::kNoObject);
+            return false;
+        }
+        if (m == cur) return true;
+        combat_->order_attack(u->id, m, -1);
+        if (r.goal) combat_->set_attack_goal(u->id, m, -1);
+        r.member = m;
+        if (lost) {
+            const Vec3 tp = st.position(unit_by_id(m)->h);
+            if (!movement_locked(u->id) && !movement_->fighter_squad(ct->id))
+                fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp, m);
+            attack_approach(mode, *u, tp, rng);
+        }
+        return true;
+    };
+    size_t w = 0;
+    for (size_t i = 0; i < team_attacks_.size(); ++i)
+        if (keep(team_attacks_[i])) team_attacks_[w++] = team_attacks_[i];
+    team_attacks_.resize(w);
 }
 
 cmd::RejectReason TacticalBattle::order_move(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units, float x,
@@ -1434,28 +1550,33 @@ cmd::RejectReason TacticalBattle::order_attack(TacticalMode& mode, uint8_t playe
     if (finished_ || !combat_) return R::NotAllowed;
     const objects::ObjectStore& st = mode.primary();
     const Unit* t = unit_by_id(target);
-    if (!t || !t->alive || t->retreated || !combat_->is_enemy(player, st.owner(t->h))) return R::InvalidTarget;
-    const int32_t hp = (hardpoint >= 0 && static_cast<uint32_t>(hardpoint) < combat_->hardpoint_count(t->id)) ? hardpoint : -1;
+    // q6: a TEAM container is a valid target on its own (A1_READINGS §33.2.1 row 1; TeamAttack in tactical_battle.hpp)
+    const Container* ct = t ? nullptr : team_target(target);
+    if (ct ? !combat_->is_enemy(player, st.owner(ct->h)) : (!t || !t->alive || t->retreated || !combat_->is_enemy(player, st.owner(t->h))))
+        return R::InvalidTarget;
+    const int32_t hp = (t && hardpoint >= 0 && static_cast<uint32_t>(hardpoint) < combat_->hardpoint_count(t->id)) ? hardpoint : -1;
     std::vector<objects::ObjectId> ids;
     for (const Unit* u : owned_units<Unit>(st, player, units, [this](objects::ObjectId id) { return unit_by_id(id); }, false))
-        if (u->id != t->id && combat_->has_unit(u->id)) ids.push_back(u->id);
+        if (u->id != target && combat_->has_unit(u->id)) ids.push_back(u->id);
     if (ids.empty()) return R::InvalidUnit;
     if (abilities_)  // OI abilities: order cancel 0x38f5d0
         for (const objects::ObjectId id : ids) abilities_->order_cancel(id, frame_);
     if (!queued) {
         clear_queues(ids);
         raise_order_replaced(ids);  // S7 t31: signal 0xb
-        exec_attack(mode, ids, t->id, hp, rng);
+        team_attack_drop(ids);  // q6
+        exec_attack(mode, ids, target, hp, rng);
         return R::None;
     }
     QueuedOrder q;
     q.kind = QueuedOrder::Kind::Attack;
     q.player = player;
-    q.target = t->id;
+    q.target = target;
     q.hardpoint = hp;
     const std::vector<objects::ObjectId> now = enqueue(ids, q);
     raise_order_replaced(now);  // S7 t31
-    if (!now.empty()) exec_attack(mode, now, t->id, hp, rng);
+    team_attack_drop(now);  // q6
+    if (!now.empty()) exec_attack(mode, now, target, hp, rng);
     return R::None;
 }
 
@@ -1504,6 +1625,7 @@ cmd::RejectReason TacticalBattle::order_stop(TacticalMode& mode, uint8_t player,
         }
     }
     clear_queues(all);  // [port: Gabriel] Stop clears the queue
+    team_attack_drop(all);  // q6
     fighter_order_clear(all);  // S7 t22: Stop leaves the formation [M]
     if (!movers.empty()) movement_->stop(movers);
     return R::None;
@@ -2386,6 +2508,8 @@ void TacticalBattle::advance_queues(TacticalMode& mode, SimRng& rng) {
             case QueuedOrder::Kind::MoveToObject: return st.alive(st.find(o.target));
             case QueuedOrder::Kind::Attack: {
                 const Unit* t = unit_by_id(o.target);
+                if (!t)  // q6: a TEAM container target
+                    if (const Container* ct = team_target(o.target)) return combat_->is_enemy(o.player, st.owner(ct->h));
                 if (!t || !t->alive || t->retreated || !combat_->is_enemy(o.player, st.owner(t->h))) return false;
                 return o.hardpoint < 0 || !combat_->hardpoint_destroyed(t->id, static_cast<uint32_t>(o.hardpoint));
             }
@@ -2427,6 +2551,10 @@ void TacticalBattle::advance_queues(TacticalMode& mode, SimRng& rng) {
                 }
                 case QueuedOrder::Kind::Attack: {
                     const Unit* t = unit_by_id(o.target);
+                    if (const Container* ct = t ? nullptr : team_target(o.target)) {  // q6: a TEAM container target
+                        if (combat_->is_enemy(o.player, st.owner(ct->h))) exec_attack(mode, s.ids, o.target, -1, rng);
+                        break;
+                    }
                     if (!t || !t->alive || t->retreated || !combat_->is_enemy(o.player, st.owner(t->h))) break;
                     if (o.hardpoint >= 0 && combat_->hardpoint_destroyed(t->id, static_cast<uint32_t>(o.hardpoint))) break;
                     exec_attack(mode, s.ids, t->id, o.hardpoint, rng);
@@ -3737,6 +3865,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     fog_service(mode);  // fog of war: REVEAL sources, attacker flashes (owner: fog agent)
     fog_setup_tick();   // FOWF t05: setup phase end (all humans ready / countdown)
     profile::lap("tac.fog");
+    team_attack_service(mode, rng);  // q6: attacks on TEAM containers (re-pick, end), before the queues read the orders
     advance_queues(mode, rng);  // [port: Gabriel] 5b. queueable unit actions: completed orders start the next entry
     late_swap_back_signals();   // S7 t27: a jetpack swap back after the combat_pre loop raises signal 0x29 in this tick
     stats_.shots = combat_->stats().shots;

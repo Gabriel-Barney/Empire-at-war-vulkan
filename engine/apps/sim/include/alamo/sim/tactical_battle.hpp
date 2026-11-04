@@ -1328,6 +1328,34 @@ private:
                    bool attack_move, uint8_t flags = 0, bool switch_locomotor = false,
                    objects::ObjectId goal_object = kNoObjectId);  // S7 t37: an object goal (mv::MoveOrder::goal_object)
     uint32_t exec_attack(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, int32_t hp, SimRng& rng);
+    // --- q6: an attack ordered on a TEAM container (A1_READINGS §33.2.1 row 1: a TEAM container passes 0x5680b0 on its
+    // own; TACTICAL_COMBAT §2.8 B step 5 / FIGHTER_FLYING §4.10 B: the attacker's target is the container itself). The
+    // container is not a combat unit in the port, so the host keeps the container order per attacker and gives combat the
+    // member the next shot would take: the live member nearest the attacker (LOB_SOLVER §5.1, 0x404fc0; XY distance, ties
+    // by the lower id [port]); a squadron (combat share group) shares its first attacker's pick (0x406370). The member is
+    // re-picked after every combat tick (nearest changed, member dead); the order ends when the container is gone (its last
+    // member died or left), the attacker's combat order was dropped or replaced, or a newer order (signal 0xb) arrives.
+    struct TeamAttack {
+        objects::ObjectId attacker = objects::kNoObjectId;   // ascending
+        objects::ObjectId container = objects::kNoObjectId;  // the ordered target
+        objects::ObjectId member = objects::kNoObjectId;     // combat's ordered target (the current pick)
+        bool goal = false;  // the order also set the formation attack goal (AI host: Attack_Target block, §2.8)
+    };
+    std::vector<TeamAttack> team_attacks_;
+    struct TeamPick {  // one pass's squadron pick (0x406370: the squadron shares its first attacker's pick)
+        objects::ObjectId group = objects::kNoObjectId, container = objects::kNoObjectId, member = objects::kNoObjectId;
+    };
+    // A live TEAM container (not removed, at least one member alive), nullptr otherwise (also for a unit id).
+    const Container* team_target(objects::ObjectId id) const;
+    // The member of `c` an attacker at `from` aims at (see above; `group` = the attacker's combat share group, `picks` the
+    // squadron picks already made in this pass); kNoObjectId when no member is alive.
+    objects::ObjectId team_pick(const TacticalMode& mode, const Container& c, Vec3 from, objects::ObjectId group,
+                                std::vector<TeamPick>& picks) const;
+    void team_attack_set(objects::ObjectId attacker, objects::ObjectId container, objects::ObjectId member, bool goal);
+    void team_attack_drop(std::span<const objects::ObjectId> ids);
+    void team_attack_service(TacticalMode& mode, SimRng& rng);  // after the combat tick's events
+    // exec_attack's approach: a movable, unlocked unit farther than 80 % of max(range, 100) from `tp` moves to 70 %.
+    void attack_approach(TacticalMode& mode, const Unit& u, Vec3 tp, SimRng& rng);
     commands::RejectReason handle_ability(TacticalMode& mode, uint8_t player, const commands::EventData& ev, SimRng& rng);
     void hash_queues(StateHasher& h) const;
     // --- end queueable unit actions ---

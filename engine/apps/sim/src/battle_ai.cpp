@@ -815,6 +815,7 @@ bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_th
 // ---- a1h t02: object-goal follow (A1_READINGS §33.4, rule §33.5.2) ----------------------------------------------------
 
 void BattleAi::follow_drop(const std::vector<objects::ObjectId>& units) {
+    b_->team_attack_drop(units);  // q6: a newer order ends an attack on a TEAM container (signal 0xb)
     for (ObjectFollow& f : follows_)
         f.units.erase(std::remove_if(f.units.begin(), f.units.end(),
                                      [&units](objects::ObjectId id) { return std::find(units.begin(), units.end(), id) != units.end(); }),
@@ -984,26 +985,39 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
         case T::Attack: {
             const uint32_t tw = ev.u("target");
             const TacticalBattle::Unit* t = tw <= 0x7FFFFFFFu ? b_->unit_by_id(static_cast<objects::ObjectId>(tw)) : nullptr;
-            if (!t || !t->alive || t->retreated || !hostile_owner(player, st.owner(t->h))) return R::InvalidTarget;
+            // q6: a TEAM container is a valid target on its own (A1_READINGS §33.2.1 row 1, 0x5680b0); each attacker attacks
+            // the container's live member nearest it, re-picked until the container is gone (TacticalBattle::TeamAttack).
+            const TacticalBattle::Container* ct = t || tw > 0x7FFFFFFFu ? nullptr : b_->team_target(static_cast<objects::ObjectId>(tw));
+            if (ct ? !hostile_owner(player, st.owner(ct->h)) : (!t || !t->alive || t->retreated || !hostile_owner(player, st.owner(t->h))))
+                return R::InvalidTarget;
             int32_t hp = -1;
-            if (const uint32_t ref2 = ev.u("ref2"); ref2 > 0)
+            if (const uint32_t ref2 = ev.u("ref2"); t && ref2 > 0)
                 for (uint32_t k = 0; k < b_->combat_->hardpoint_count(t->id) && hp < 0; ++k)
                     if (static_cast<uint32_t>(b_->combat_->hardpoint_kind(t->id, k)) == ref2 - 1 && b_->combat_->hardpoint_targetable(t->id, k))
                         hp = static_cast<int32_t>(k);
             uint32_t n = 0;
-            const Vec3 tp = st.position(t->h);
             std::vector<objects::ObjectId> attackers;  // battle host: TEAM containers -> their members
             for (const uint32_t id : ev.ids("attackers"))
                 for (const objects::ObjectId mid : team_units(player, id))
                     if (std::find(attackers.begin(), attackers.end(), mid) == attackers.end()) attackers.push_back(mid);
             follow_drop(attackers);  // a1h t02: a newer order (signal 0xb, A1_READINGS §33.3)
+            std::vector<TacticalBattle::TeamPick> picks;
             for (const objects::ObjectId aid : attackers) {
                 const TacticalBattle::Unit* u = b_->unit_by_id(aid);
                 if (!u) continue;
-                b_->combat_->order_attack(u->id, t->id, hp);
-                b_->combat_->set_attack_goal(u->id, t->id, hp);  // refixf t06: Attack_Target block (kind 3, hard point, §2.8)
+                const TacticalBattle::Unit* tu = t;
+                if (ct) {
+                    const objects::ObjectId m = b_->team_pick(*mode_, *ct, st.position(u->h), b_->combat_->share_group(u->id), picks);
+                    tu = m != objects::kNoObjectId ? b_->unit_by_id(m) : nullptr;
+                    if (!tu) continue;
+                }
+                const Vec3 tp = st.position(tu->h);
+                b_->combat_->order_attack(u->id, tu->id, hp);
+                b_->combat_->set_attack_goal(u->id, tu->id, hp);  // refixf t06: Attack_Target block (kind 3, hard point, §2.8)
+                if (ct && b_->combat_->has_unit(u->id)) b_->team_attack_set(u->id, ct->id, tu->id, true);
                 if (!b_->movement_locked(u->id))  // S7 t22: an object block; a locked unit keeps its formation (as Move_To)
-                    b_->fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp, t->id);
+                    b_->fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp,
+                                      ct && b_->movement_->fighter_squad(ct->id) ? ct->id : tu->id);
                 ++n;
                 if (!u->movable) continue;
                 const Vec3 up = st.position(u->h);
