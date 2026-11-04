@@ -457,7 +457,10 @@ only dialog / chapter tags shipped events use are `Story_Dialog`, `Story_Chapter
 > **Status 2026-10-30:** The XML fields `Story_Dialog`, `Story_Tag`, `Story_Chapter` and `Story_Dialog_Popup` are now parsed (`engine/lua/src/story_model.cpp:367-374`) and a fired event with a dialog or tag is recorded for the UI (`story_model.cpp:628-630`). Not covered by this note: the +0x230..+0x2b9 layout and the Lua dialog setters.
 
 8. Save/load: ELAPSED saves LastTime, accumulated and initialised (`0x463580`). Plot-level save traced (0x52fe20:
-   active flag, owner, every event's own save, plot script state): STRATEGIC_GAPS §4 [H].
+   active flag, owner, every event's own save, plot script state): STRATEGIC_GAPS §4 [H]. The plot script state
+   (chunk 0x1E) is the shared LuaScriptClass block; its load (0x52f0a0) makes a fresh unpooled instance by name,
+   registers the base globals and commands, runs no `Base_Definitions` and starts no thread, then restores the saved
+   threads and globals into it. Format and value rules: LUA_SAVE.md (q6 t19) [H].
 
 ## 8. Port readings (roadmap STORY groups `story` t01–t03, `l1s3` t01–t03; 2026-11-02)
 

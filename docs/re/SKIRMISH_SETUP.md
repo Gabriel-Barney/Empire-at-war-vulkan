@@ -271,6 +271,58 @@ prerequisites and build time constrain it.
 Not traced [L]: GC Skirmish_Reinforcement_Delay_Frames (GC+0x117e8, default 90) is read near
 0x1211656 and 0x894995, in what looks like an ability / countdown context.
 
+### 3.1 What a finished land company becomes: pool, landing, members, AI use (q6 t19 RE, 2026-11-04) [H unless tagged]
+
+Question: how the original creates the members of a land skirmish company that has no team (one member without
+`Create_Team`, e.g. `Boba_Fett_Team_Land_MP`: `Variant_Of_Existing_Type` `Boba_Fett_Team`, a HeroCompany with
+`DUMMY_GROUND_COMPANY`, `Company_Units` = `Boba_Fett`, `Company_Transport_Unit` = `Slave_I`, whose
+`Landing_Transport_Variant` is `Slave_I_Landing`). Sources: 0x27fad0, 0x4d31a0, 0x6ee010, 0x2b5fe0, 0x644330,
+0x6438a0, 0x690a10, A1_READINGS §35, AI_GALACTIC_3 §1.3.
+
+1. **Production never spawns a land unit.** Completion of a non-`DUMMY_UPGRADE` type calls 0x27fad0(player, type):
+   the type is appended to the player's reinforcement table (player +0x2c8, count +0x2d0); when the player has an AI
+   for the current mode, 0x4d31a0 appends one empty reservation slot to the AI free store's vector +0x88 (same index
+   as the pool entry); the local player gets message 0xe7. There is no code path that places a built land company
+   at or in front of its builder. Company or single unit, team or no team, makes no difference here.
+2. **It reaches the map only by a reinforcement drop.** Human: `ReinforceEvent` at a valid drop point. AI: a plan's
+   `TF.Reinforce` (skirmish 0x6ee010, AI_TACTICAL §7.4) for a pool entry that the Reinforcement marshaller assigned to
+   the plan (AI_GALACTIC_3 §1.3: pool entries count as candidates of every AllowFreeStoreUnits plan; free store
+   +0x88[i] non-null = already reserved). The build plan that bought it (`TacticalMultiplayerBuildLandUnitsGeneric`,
+   `ReserveForce`, AllowFreeStoreUnits false) only calls `Produce_Force` and exits; it never drops the units.
+3. **Landing object** (0x2b5fe0, skirmish branch, A1_READINGS §35.1): the pool type T must be in the pool; the landing
+   type L = T's `Company_Transport_Unit[0]` (+0x938 → +8), replaced by its `Landing_Transport_Variant` (+0x1e68) when
+   set (here `Slave_I` → `Slave_I_Landing`). **T without a `Company_Transport_Unit` spawns nothing** (0x2b5fe0
+   returns null; the TF entry is not added). L gets TRANSPORT_LANDING and carries T (TransportDataPack +0x48).
+4. **Members** (0x644330, one step every 2 s × (1 + deploy modifier)): for a member type **without `Create_Team`**
+   (the "no team" case) the vehicle branch runs: **one object of the member type** (with `Unique_Ground_Unit`, the
+   substitute first and the member riding it) is created at the landing position, owned by the landing's owner,
+   registered with the player (pack +0xbc, 0x2b5f70). It gets no TEAM container; obj +0x2b0 stays null. If it has a
+   locomotor for the mode (and type byte +0xd4 [M]), it is sent on a coordinator move to its unload offset with the
+   forced-move flag and **movement-locked**; otherwise it is placed at the offset at once.
+5. **Mobility.** The unload finish (0x6438a0, 2 s after the last step) unlocks every unloaded unit, clears the
+   forced-move flag, sets its locomotor pack +0x38 := 1 and raises signal 0x19 (arrival). From then on the member is
+   an ordinary mobile unit with its own locomotor; nothing in the company type keeps it in place. (Boba Fett has
+   `WALK_LOCOMOTOR` plus a `JETPACK_LOCOMOTOR` secondary.)
+6. **AI admission.** An AI drop's units join the requesting task force on signal 0x19 (AI_TACTICAL §7.4). When that
+   plan ends (`QuickReinforce` → `WaitForAllReinforcements` → `ScriptExit`, or any later release), they go to the free
+   store through the land admission 0x690a10 (A1_READINGS §6.2). A single no-team member passes it: not `Create_Team`,
+   no TRANSPORT, it has the implicit `STARSHIP_COMBATANT` behaviour (OBJECT_TYPES §9) and a locomotor, it is not
+   `Is_Dummy` (the company type is, the member is not), no container (+0x2b0 null). So it is a normal free-store unit
+   [H]. Whether the GOM add hook offers it to the free store already while it is still locked inside the unload, before
+   0x19 moves it to the task force, was not traced [M].
+
+**Port notes**
+- Do not create a finished land company at its builder. Append the type to the player's reinforcement pool (and an
+  empty AI reservation slot) and let the human / AI `Reinforce` drop it through the landing object (A1_READINGS
+  §35.3). The "Port status" row "a finished land company appears 120 units in front of its builder" is a [port]
+  deviation; its stand-in fix that makes no-team members movable (tactical_battle_hangar.cpp, q6 land end chain) is
+  only needed while that deviation exists.
+- A company member without `Create_Team` must become a single movable unit without a TEAM container, locked during
+  its exit move and unlocked at the unload finish; then it is admitted to the AI free store like any unit.
+- A pool type without `Company_Transport_Unit` cannot be dropped in skirmish (no landing object, no members).
+- The AI uses bought pool entries only through the Reinforcement marshaller of a later plan; the buying plan does not
+  drop them.
+
 ## 4. Land skirmish victory, types 0x12..0x16 (item 2)
 
 Names (0x341ff0): 0x12 SKIRMISH_ALL_ENEMY_UNITS_DESTROYED, 0x13 ALL_ENEMY_BASE_COMPONENTS_DESTROYED,
@@ -387,7 +439,9 @@ Re-read of 0x344710 cases 0x12–0x14 and of the readers in OBJECT_SCRIPTS §10.
 Already specified in `L1_S4_REMAINING.md` §4.2. Summary: no start delay in skirmish; a neutral pad goes to
 the owner of the first in-radius candidate unless contested; progress 1 / (5 s x 30) per frame, owner
 changes at completion (150 frames). A pad with contents keeps its owner. An empty owned pad with an enemy
-present goes through neutral first (2 x 5 s). When the pad's child dies the pad resets to neutral.
+present goes through neutral first (2 x 5 s). When the pad's child dies the pad resets to neutral at once (no
+transition); a sold child leaves the pad with its owner. Nobody can build on a Neutral-owned pad (the builder must be
+allied with the pad owner), and the structure belongs to its builder, not to the pad: AI_TACTICAL §7.5.1 (q6 t19).
 
 ## 9. Not settled
 
@@ -429,13 +483,13 @@ Port status (headless `--skirmish-ai skirmish` / `foc-land`, `tactical_battle_sk
 | §2.2 starting forces | the factions' Space_ / Land_Skirmish_AI_Default_Forces as the battle's start participants at the slot's start anchor (Player_k / Team_tt spawn markers, bt_skirmish_anchors); no garrison re-delivery (§2.4) [port]. |
 | §2.3 space special weapons | not placed [port, open]. |
 | §2.5 / §2.6 pre-built pads | t50 rule kept: the Team_NN Command Center and Barracks pads of both slots start built, from MultiplayerStructureMarker data. §2.5 says retail reads that data only in campaign and pre-builds from the map's pre-placed pad type (+0x18), which the port's map reader does not decode [M, open]. |
-| §3 production | land and space skirmish; a finished land company appears 120 units in front of its builder instead of joining the reinforcement pool [port]. |
+| §3 production | land and space skirmish; a finished land company appears 120 units in front of its builder instead of joining the reinforcement pool [port]. Retail never does this (§3.1, q6 t19). |
 | §4 victory | 0x13 (land) and 0x16 (space) polled each frame, declared at once, reported as 0x0e / 0x0f [port]. |
 | §5 income | per-frame float add of (base × multiplier + additive) / interval / 30 for the object's own stream; a mod on the object's own stream (the supply dock) counts while the object lives; mods on other streams are not applied [M]. |
 | §6 unit cap | ConflictFactionInfo::unit_cap_for_players: sorted keys, linear, 0 outside, integer part (2 players: 9); N = the two slots. |
 | L1_S4 §4.2 capture start gate | 0 in skirmish map battles. |
 | Time limit | none for the skirmish host (the port's 8-minute campaign battle limit is off; the run ends at `--ticks`). |
-| L1_S4 §3.6 pad rule 0x42e400 | a Neutral-faction owner (map props) does not block a pad (BATTLE_TRANSITIONS: "a Neutral player is simply not an enemy"); with `Influences_Capture_Point` defaulting to true, every prop near a pad blocked it before [M]. The Lua `pad_rule` copy (`engine/lua`) still uses the battle's `is_enemy` [open]. |
+| L1_S4 §3.6 pad rule 0x42e400 | a Neutral-faction owner (map props) does not block a pad (BATTLE_TRANSITIONS: "a Neutral player is simply not an enemy"); with `Influences_Capture_Point` defaulting to true, every prop near a pad blocked it before [M]. The Lua `pad_rule` copy (`engine/lua`) still uses the battle's `is_enemy` [open]. Correction (q6 t19, AI_TACTICAL §7.5.1) [H]: 0x42e400 has no Neutral exemption; every alive `Influences_Capture_Point` object not allied (relation ≠ 0) with the pad owner blocks, Neutral-owned ones included, unless it has BASE_SHIELD or DUMMY_GROUND_STRUCTURE. Which shipped props near pads have `Influences_Capture_Point` (default true) decides the effect [open]. |
 | AI_TACTICAL §7.5 Build / Build_All | a task force with no reservations takes its pad picks from its plan's PotentialPlan first (BuildEconStructure.lua calls Build_All without Produce_Force) [M: retail's TF holds them from plan start]. |
 | AI_TACTICAL_PERCEPTION TacticalBuiltStructureCount | counts the player's finished structures on build pads (pre-built base included) [M]. Before, nothing was counted, so `Num_Refineries` stayed 0 and `Tactical_Multiplayer_Should_Build_Units_Generic_Land` (gated by `Is_Initial_Skirmish_State_Established`) never fired. |
 | AI_GALACTIC_3 §1.11 produced unit | a task force with a unit still in production is not empty (No_Units_Remaining waits for it); before, the Produce_Force plan ended 3 frames after its order. Since S7 t20 (main) this is the `units_lost` check, raised from the removal signals; the skai poll was dropped on the merge. |

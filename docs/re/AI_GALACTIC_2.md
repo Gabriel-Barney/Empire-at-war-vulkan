@@ -185,7 +185,7 @@ Every marshaller call runs over the list in this order. This includes commit, so
 *Setup A* 0x72a3b0 [H]:
 - Build one slot per (TF in order × team in order): {TFDef, TeamDef, assigned indices, costSum (+0x28) = 0, category mask (+0x30) = 0, heroAttach (+0x38), specialWeapon (+0x39), stage (+0x40), TF unit count (+0x48), TF force (+0x4C)}.
 - Clear every record's team list (+0x20).
-- Globals: 0x140b3a526 = any TF allows hero attach; 0x140b3a527 = any TF allows special-weapon attach; 0x140b3a525 = any TF is EscortForce.
+- Globals: 0x140b3a526 = any TF allows hero attach; 0x140b3a527 = any TF allows special-weapon attach; 0x140b3a525 = any TF is EscortForce. Contrast's Setup A (0x6c5de0, later in the order) overwrites 0x140b3a525: 0 in galactic and for no target / IgnoreTarget, the same test again in tactical (AI_GALACTIC_TOKENS §9.10).
 
 *Setup B* 0x729550 [H]. For each slot s, for each type T of its team:
 - If T is affiliated with the player's faction (0x3751a0), or T has behaviour 0x5C/0x5B, or the free store holds a unit of T (0x4d3570): add s to rec(T).teams, creating the candidate (§1.2).
@@ -208,7 +208,7 @@ Every marshaller call runs over the list in this order. This includes commit, so
 *Commit* 0x72a720 → 0x729830 [H]:
 - OR the type's category mask into 0x140b3a538.
 - Place the unit: starting from startTeam, round-robin over the candidate's teams, choose the first slot whose team lists this type and that is percent-based or below max.
-  - First pass: skip EscortForce slots whose escort contrast is already met (0x140b3a529), and non-escort slots whose main contrast is met (0x140b3a528).
+  - First pass: skip an EscortForce slot when the escort contrast is met and the main one is not (0x140b3a529 ∧ ¬0x140b3a528), and a non-escort slot when the main contrast is met and the escort one is not (0x140b3a528 ∧ ¬0x140b3a529). Corrected q6 t18 (AI_GALACTIC_TOKENS §9.10): in galactic 0x140b3a529 is always 1, so escort slots wait for the main contrast and non-escort slots are never skipped.
   - Second pass: ignore the met flags.
 - Placing adds:
   - the selection index to the slot;
