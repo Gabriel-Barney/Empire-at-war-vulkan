@@ -240,6 +240,12 @@ void test_nearest_hit_order() {
         // ignore: the next hit.
         hit = ui::pick_world(all, v, ray_y(0.0f, 175.0f), tactical::kSkipDead, qc, &tests, near_id);
         CHECK(hit && hit->id == far_id && near(hit->t, 0.625f, 1e-4f));
+        // q6 t19 (OBJECT_SCRIPTS §10.3): a Lua-hidden object is skipped (no pick, no attack cursor): the next hit.
+        const ui::WorldPickTests hid = game::tactical_pick_tests(
+            *b->mode, nullptr, w->radii, [near_id](objects::ObjectId id) { return static_cast<uint32_t>(id) == near_id; });
+        CHECK(hid.skip && hid.skip(near_id) && !hid.skip(far_id) && !tests.skip);
+        hit = ui::pick_world(all, v, ray_y(0.0f, 175.0f), tactical::kSkipDead, qc, &hid);
+        CHECK(hit && hit->id == far_id);
     }
     {
         // The ray crosses the nearer station's bound in its mesh gap and the farther one's strip: the farther station

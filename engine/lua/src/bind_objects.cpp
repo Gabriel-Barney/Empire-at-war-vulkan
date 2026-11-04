@@ -1852,8 +1852,15 @@ int m_teleport(Call& c) {
     return 0;
 }
 
-// Teleport_And_Face(object): the target's position and facing.
+// Teleport_And_Face(object) (L1_S4_REMAINING §3.4, 0x581ac0): Teleport's move to the target's position, then the
+// facing and orientation := the target's (+0x84, +0x90). A host with the tactical teleport takes the move with the
+// target's facing (TacticalScriptHooks::teleport: store, movement, combat, trees); otherwise the store position and
+// facing. [port] The skip of the facing copy while the object has +0x3a0 bit 0x10 (L1_S4_REMAINING §3.4; ABILITIES_HARDPOINTS
+// reads that bit as "weapons disabled / stunned") is not modelled: the port has no such object flag. Like Teleport, the
+// garrison eject step of 0x5819e0 is not done.
 int m_teleport_and_face(Call& c) {
+    if (c.nargs != 1)
+        return c.script_error_stop("GameObjectWrapper::Teleport_And_Face -- invalid number of parameters.  Expected 1, got %d.", c.nargs);
     if (c.userdata(1, cls_position()))
         return c.script_error_stop("GameObjectWrapper:: Teleport_And_Face -- Expected game object for parameter 1, got position instead.");
     const Ud* t = c.userdata(1, detail::cls_game_object());
@@ -1861,9 +1868,16 @@ int m_teleport_and_face(Call& c) {
     if (!detail::object_alive(*c.vm, *t))
         return c.script_error_stop("GameObjectWrapper::Teleport_And_Face -- Invalid game object given for parameter 1.");
     objects::ObjectStore* st = store(c);
+    const ObjectHandle self = self_object(c);
     const ObjectHandle th = detail::object_handle(*t);
-    st->set_position(self_object(c), st->position(th));
-    st->set_facing(self_object(c), st->facing(th));
+    const Vec3 to = st->position(th);
+    const Vec3 face = st->facing(th);
+    if (const ObjectBridge* b = bridge(c); b && b->tactical && b->tactical->teleport) {
+        b->tactical->teleport(self, to, face);
+        return 0;
+    }
+    st->set_position(self, to);
+    st->set_facing(self, face);
     return 0;
 }
 

@@ -349,7 +349,10 @@ uint32_t member_view_type(const LuaVm::Impl& vm, const Ud& ud);
 
 void install_metatable(lua_State* L, LuaVm::Impl& vm);  // also sets global LuaWrapperMetaTable
 void push_engine_userdata(lua_State* L, const Ud& ud);   // new userdata with the shared metatable
-void install_globals(lua_State* L, LuaVm::Impl& vm);
+// with_script = false: only the binding-table globals (LuaVm::reinstall_engine_globals), not the `Script` object.
+void install_globals(lua_State* L, LuaVm::Impl& vm, bool with_script = true);
+// bind_engine.cpp: drops the GetEvent queue and the last event's parameters (LuaVm::pool_kill_threads).
+void reset_event_queue(lua_State* L);
 void install_math_library(lua_State* L, LuaVm::Impl& vm);  // math_lib.cpp
 
 // ---- N1 save / load (vm_persist.cpp) ----

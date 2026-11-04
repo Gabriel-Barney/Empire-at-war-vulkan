@@ -531,6 +531,14 @@ void detail::queue_event(lua_State* L, int fn_index, int params_index) {
     lua_pop(L, 1);
 }
 
+void detail::reset_event_queue(lua_State* L) {
+    for (const char* key : {kEventQueueKey, kEventParamsKey}) {
+        lua_pushstring(L, key);
+        lua_pushnil(L);
+        lua_rawset(L, LUA_REGISTRYINDEX);
+    }
+}
+
 std::span<const detail::ImplEntry> detail::impl_core() { return kImpl; }
 
 }  // namespace alamo::lua

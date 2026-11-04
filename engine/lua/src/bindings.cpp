@@ -614,7 +614,7 @@ void push_engine_userdata(lua_State* L, const Ud& ud) {
     lua_setmetatable(L, -2);
 }
 
-void install_globals(lua_State* L, LuaVm::Impl& /*vm*/) {
+void install_globals(lua_State* L, LuaVm::Impl& /*vm*/, bool with_script) {
     const auto table = binding_table();
     for (uint32_t row = 0; row < table.size(); ++row) {
         const BindingInfo& b = table[row];
@@ -628,6 +628,7 @@ void install_globals(lua_State* L, LuaVm::Impl& /*vm*/) {
         push_engine_userdata(L, ud);
         lua_rawset(L, LUA_GLOBALSINDEX);
     }
+    if (!with_script) return;
     Ud script;
     script.cls = cls_script();
     lua_pushstring(L, "Script");
@@ -785,6 +786,25 @@ void LuaVm::sweep_dead_wrappers() {
             }
         }
         lua_pop(L, 1);
+    }
+}
+
+void LuaVm::reinstall_engine_globals() {
+    check_owner();
+    detail::install_globals(impl_->L, *impl_, false);
+    lua_settop(impl_->L, 0);
+}
+
+void LuaVm::rebind_host(const LuaHost& host_in) {
+    check_owner();
+    const bool moved = impl_->host.store != host_in.store;
+    impl_->host = host_in;
+    if (!moved) return;
+    lua_State* L = impl_->L;
+    for (const char* key : {detail::kObjCacheKey, detail::kObjCacheParentKey}) {
+        lua_pushstring(L, key);
+        lua_newtable(L);
+        lua_rawset(L, LUA_REGISTRYINDEX);
     }
 }
 

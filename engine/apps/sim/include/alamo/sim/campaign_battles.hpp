@@ -138,6 +138,10 @@ public:
     const galactic::ConflictManager& conflicts() const { return *cm_; }
     const TacticalBattle* battle() const { return battle_.get(); }
     TacticalBattle* battle() { return battle_.get(); }
+    // q6 t19 (OBJECT_SCRIPTS §10.3): Lua Hide(true) on an object of the running battle (the battle's script bridge, shared
+    // by the story and the object scripts: ScriptObjectState::hidden). A const read for the presentation side (model,
+    // sound, radar, fog ghost, surface FX, mouse pick); no sim system reads it. False without a battle or a bridge.
+    bool script_hidden(objects::ObjectId id) const;
     const std::vector<std::string>& log() const { return log_; }  // one summary per tactical battle / refusal
     // Playtest QA D1 / V1: TacticalBattle::unit_losses() of the last tactical battle that ended (presentation, not saved).
     std::span<const TacticalBattle::RemovalRecord> last_battle_losses() const { return last_losses_; }

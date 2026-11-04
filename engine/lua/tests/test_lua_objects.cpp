@@ -648,6 +648,15 @@ static void test_spawn_and_state(const Db& db) {
         CHECK(run(vm, "t2.Teleport(Create_Position(1, 2, 3))") == "");
         CHECK(moved == s.trooper2 && to.x == 1.0f && to.y == 2.0f && to.z == 3.0f && face.x == f2.x && face.y == f2.y);
         CHECK(s.store.position(s.trooper2).x == 7.0f);  // the host moved it (here: nothing did)
+        // q6 t19: Teleport_And_Face goes through the same hook, with the target's position and facing.
+        moved = {};
+        s.store.set_facing(s.trooper1, {0.0f, -1.0f, 0.0f});
+        const Vec3 p1 = s.store.position(s.trooper1);
+        CHECK(run(vm, "t2.Teleport_And_Face(t1)") == "");
+        CHECK(moved == s.trooper2 && to.x == p1.x && to.y == p1.y && to.z == p1.z && face.x == 0.0f && face.y == -1.0f);
+        CHECK(s.store.facing(s.trooper2).x == f2.x && s.store.facing(s.trooper2).y == f2.y);  // only the hook moves it
+        CHECK(contains(run_stop(vm, "t2.Teleport_And_Face(t1, t1)"),
+                       "GameObjectWrapper::Teleport_And_Face -- invalid number of parameters.  Expected 1, got 2."));
         s.bridge.tactical = nullptr;
     }
     CHECK(contains(run_stop(vm, "t1.Face_Immediate()"), "Face_Immediate -- Missing required position or gameobject parameter."));

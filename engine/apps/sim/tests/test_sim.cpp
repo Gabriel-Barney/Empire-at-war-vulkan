@@ -1369,12 +1369,15 @@ static std::unique_ptr<OsWorld> make_os_world() {
     write_file(w->root / "Data/XML/GameObjectFiles.xml", "<GameObjectFiles><File>Os.xml</File></GameObjectFiles>\n");
     std::string xml = "<Os>\n";
     for (const char* n : {"Os_Attach", "Os_Gate", "Os_NoRate", "Os_Exit", "Os_ExitDefs", "Os_BindErr", "Os_ThreadErr", "Os_Death",
-                          "Os_Prox", "Os_Spawner", "Os_Missing"})
+                          "Os_Prox", "Os_Spawner", "Os_Missing", "Os_Pool", "Os_Pool3", "Os_Pool0"})
         xml += std::string(" <GroundInfantry Name=\"") + n + "\"><Tactical_Health>10</Tactical_Health><Lua_Script>" + n +
                (std::string(n) == "Os_Gate" ? ".lua" : "") + "</Lua_Script></GroundInfantry>\n";
     xml += " <GroundInfantry Name=\"Os_Attach_Variant\"><Variant_Of_Existing_Type>Os_Attach</Variant_Of_Existing_Type></GroundInfantry>\n"
            " <GroundInfantry Name=\"Os_Plain\"><Tactical_Health>10</Tactical_Health></GroundInfantry>\n"
            " <GroundInfantry Name=\"Os_Unit\"><Tactical_Health>10</Tactical_Health></GroundInfantry>\n"
+           // q6 t19 (§1.5): a type instance from the Os_Pool4 pool (ScriptPoolCount 4).
+           " <GroundInfantry Name=\"Os_TypeScript\"><Tactical_Health>10</Tactical_Health><Lua_Script>Os_Pool4</Lua_Script>"
+           "<Execute_Script_On_Type>Yes</Execute_Script_On_Type></GroundInfantry>\n"
            "</Os>\n";
     write_file(w->root / "Data/XML/Os.xml", xml);
     const fs::path& r = w->root;
@@ -1431,6 +1434,21 @@ static std::unique_ptr<OsWorld> make_os_world() {
            "    coroutine.yield(true)\n"
            "  end\n"
            "end\n");
+    // q6 t19 pool (§1.4, §2.3): no ScriptPoolCount (pool of 1, grows), 3 (preloaded), 0 (no pool), 4 (the type instance's).
+    // TopRuns counts this VM's top-level runs; Kept (a number) survives Flush_G; Flush_G / Base_Definitions count in
+    // GlobalValue (absent at the top level: the engine globals are attached after it, §1.3).
+    const std::string pool_body =
+        "TopRuns = (TopRuns or 0) + 1\n"
+        "Kept = 0\n"
+        "function Flush_G() GlobalValue.Set(Tag .. 'Flush', (GlobalValue.Get(Tag .. 'Flush') or 0) + 1) Tab = nil end\n"
+        "function Base_Definitions() ServiceRate = 0 LastService = nil Tab = {} "
+        "GlobalValue.Set(Tag .. 'BD', (GlobalValue.Get(Tag .. 'BD') or 0) + 1) GlobalValue.Set(Tag .. 'Obj', tostring(Object)) end\n"
+        "function main() Kept = Kept + 1 GlobalValue.Set(Tag .. 'Main', (GlobalValue.Get(Tag .. 'Main') or '') .. GetThreadID() .. '/' "
+        ".. Kept .. '/' .. TopRuns .. '/' .. Object.Get_Object_ID() .. ';') while true do coroutine.yield(true) end end\n";
+    script(r, "Os_Pool", "Tag = 'P'\n" + pool_body);
+    script(r, "Os_Pool3", "Tag = 'P3'\nScriptPoolCount = 3\n" + pool_body);
+    script(r, "Os_Pool0", "Tag = 'P0'\nScriptPoolCount = 0\n" + pool_body);
+    script(r, "Os_Pool4", "Tag = 'P4'\nScriptPoolCount = 4\n" + pool_body);
     w->files = std::make_unique<DirectoryProvider>(path_to_utf8(w->root));
     CHECK(w->db.load(*w->files));
     CHECK(w->types.build(w->db));
@@ -1611,14 +1629,103 @@ static void test_worker_counts(const OsWorld& w) {
         for (int i = 0; i < 4; ++i) spawn(host, w, "Os_Spawner", i % 2, {static_cast<float>(100 * i), 0, 0});
         spawn(host, w, "Os_Gate", 0, {0, 0, 0});
         spawn(host, w, "Os_Prox", 1, {150, 0, 0});
-        host.run_fast(120);
+        // q6 t19: a pooled instance released and handed out again mid-run (each new holder draws on its first pump).
+        const ObjectHandle p1 = spawn(host, w, "Os_Pool", 0, {20, 0, 0});
+        spawn(host, w, "Os_Pool", 1, {30, 0, 0});
+        host.run_fast(30);
+        host.tactical()->destroy(p1);
+        host.run_fast(10);
+        spawn(host, w, "Os_Pool", 0, {40, 0, 0});
+        host.run_fast(80);
         if (workers == 0) {
             first = host.crc_log();
-            CHECK(host.object_scripts()->stats().first_draws == 6);
+            CHECK(host.object_scripts()->stats().first_draws == 9 && host.object_scripts()->stats().reused == 1);
         } else {
             CHECK(!first_divergence(first, host.crc_log()).diverged);
         }
     }
+}
+
+// q6 t19: the script pool (§1.4, §2.3) and the type instance (§1.5).
+static const ObjectScriptHost::PoolInfo* pool_of(const std::vector<ObjectScriptHost::PoolInfo>& pools, const char* name) {
+    for (const ObjectScriptHost::PoolInfo& p : pools)
+        if (p.name == name) return &p;
+    return nullptr;
+}
+
+static void test_pool(const OsWorld& w) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimHost host(w.types, js, os_config(true));
+    host.set_object_script_files(w.files.get());
+    host.start_game(ModeKind::Land);
+    ObjectScriptHost& os = *host.object_scripts();
+    const objects::ObjectStore& st = host.tactical()->primary();
+    auto id_of = [&](ObjectHandle h) { return std::to_string(st.id(h)); };
+    // Type setup (§1.5): the Os_TypeScript type instance made the Os_Pool4 pool (4 loaded: 1 held by the type, 3 free);
+    // Base_Definitions once, Object nil, never serviced.
+    const auto type_t = static_cast<objects::TypeIndex>(w.db.find("Os_TypeScript"));
+    CHECK(os.type_instances() == 1 && os.type_vm(type_t) != nullptr && os.stats().loaded == 4);
+    std::vector<ObjectScriptHost::PoolInfo> pools = os.pools();
+    const ObjectScriptHost::PoolInfo* p4 = pool_of(pools, "Os_Pool4");
+    CHECK(p4 && p4->size == 4 && p4->in_use == 1);
+    CHECK(gv_num(host, "P4BD") == 1.0 && gv_text(host, "P4Obj") == "nil");
+    host.run_fast(3);
+    CHECK(host.global_values()->get("P4Main").kind == lua::AiGlobalValue::Nil && os.stats().pumps == 0);
+    // An object of that type takes a free preloaded instance: still fresh, so Base_Definitions runs at its attach.
+    const ObjectHandle ts = spawn(host, w, "Os_TypeScript", 0, {0, 0, 0});
+    CHECK(os.stats().loaded == 4 && os.stats().reused == 1 && gv_num(host, "P4BD") == 2.0);
+    host.run_fast(1);
+    CHECK(gv_text(host, "P4Main") == "0/1/1/" + id_of(ts) + ";");
+    const uint64_t loaded0 = os.stats().loaded, reused0 = os.stats().reused;
+    // No ScriptPoolCount: a pool of 1 that grows to the peak live count. A released instance runs Flush_G and
+    // Base_Definitions at once; its reuse runs neither the top level nor Base_Definitions; thread ids restart at 0;
+    // numbers survive Flush_G.
+    const ObjectHandle a = spawn(host, w, "Os_Pool", 0, {0, 0, 0});
+    pools = os.pools();
+    const ObjectScriptHost::PoolInfo* p = pool_of(pools, "Os_Pool");
+    CHECK(os.stats().loaded == loaded0 + 1 && gv_num(host, "PBD") == 1.0 && p && p->size == 1 && p->in_use == 1);
+    host.run_fast(1);
+    const std::string a_id = id_of(a);  // before the destroy (the handle goes stale)
+    host.tactical()->destroy(a);
+    host.run_fast(1);
+    pools = os.pools();
+    p = pool_of(pools, "Os_Pool");
+    CHECK(p && p->size == 1 && p->in_use == 0 && gv_num(host, "PFlush") == 1.0 && gv_num(host, "PBD") == 2.0 &&
+          os.stats().pooled_releases == 1 && os.stats().released_dead == 1);
+    const ObjectHandle b = spawn(host, w, "Os_Pool", 0, {0, 0, 0});
+    CHECK(os.stats().loaded == loaded0 + 1 && os.stats().reused == reused0 + 1 && gv_num(host, "PBD") == 2.0);
+    host.run_fast(1);
+    CHECK(gv_text(host, "PMain") == "0/1/1/" + a_id + ";0/2/1/" + id_of(b) + ";");
+    spawn(host, w, "Os_Pool", 0, {0, 0, 0});  // none free: one more
+    pools = os.pools();
+    p = pool_of(pools, "Os_Pool");
+    CHECK(p && p->size == 2 && p->in_use == 2 && os.stats().loaded == loaded0 + 2 && gv_num(host, "PBD") == 3.0);
+    // ScriptPoolCount 3: three loaded at the first attach, the next two attaches reuse, the fourth loads one more.
+    const uint64_t loaded1 = os.stats().loaded;
+    for (int i = 0; i < 3; ++i) spawn(host, w, "Os_Pool3", 0, {0, 0, 0});
+    CHECK(os.stats().loaded == loaded1 + 3);
+    spawn(host, w, "Os_Pool3", 0, {0, 0, 0});
+    pools = os.pools();
+    const ObjectScriptHost::PoolInfo* p3 = pool_of(pools, "Os_Pool3");
+    CHECK(os.stats().loaded == loaded1 + 4 && p3 && p3->size == 4 && p3->in_use == 4);
+    // ScriptPoolCount 0: no pool; every attach loads, a release closes the VM (no Flush_G).
+    const uint64_t loaded2 = os.stats().loaded;
+    const ObjectHandle z = spawn(host, w, "Os_Pool0", 0, {0, 0, 0});
+    host.run_fast(1);
+    host.tactical()->destroy(z);
+    host.run_fast(1);
+    spawn(host, w, "Os_Pool0", 0, {0, 0, 0});
+    pools = os.pools();
+    CHECK(os.stats().loaded == loaded2 + 2 && pool_of(pools, "Os_Pool0") == nullptr &&
+          host.global_values()->get("P0Flush").kind == lua::AiGlobalValue::Nil);
+    // Mode end: every pooled instance goes back to its pool (Flush_G + Base_Definitions); the type instance stays.
+    const double flushes = gv_num(host, "PFlush");
+    CHECK(host.end_game_mode());
+    CHECK(gv_num(host, "PFlush") == flushes + 2.0 && os.live() == 0);
+    for (const ObjectScriptHost::PoolInfo& q : os.pools()) CHECK(q.in_use == (q.name == "Os_Pool4" ? 1u : 0u));
+    std::printf("object scripts pool: loaded %llu, reused %llu, pooled releases %llu\n",
+                static_cast<unsigned long long>(os.stats().loaded), static_cast<unsigned long long>(os.stats().reused),
+                static_cast<unsigned long long>(os.stats().pooled_releases));
 }
 
 static void test_object_scripts() {
@@ -1626,6 +1733,7 @@ static void test_object_scripts() {
     test_attach_and_gate(*w);
     test_release(*w);
     test_proximity_and_spawner(*w);
+    test_pool(*w);
     test_worker_counts(*w);
     std::error_code ec;
     remove_all_long(w->root, ec);

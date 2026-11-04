@@ -22,7 +22,7 @@ std::vector<float> mouse_sphere_radii(const objects::GameObjectTypes& types) {
 }
 
 ui::WorldPickTests tactical_pick_tests(const sim::TacticalMode& mode, const sim::TacticalBattle* battle,
-                                       std::span<const float> radii) {
+                                       std::span<const float> radii, std::function<bool(objects::ObjectId)> script_hidden) {
     ui::WorldPickTests t;
     const sim::TacticalMode* tm = &mode;
     t.precise = [tm](uint32_t id, const tactical::Ray& ray, float& out) {
@@ -49,9 +49,11 @@ ui::WorldPickTests tactical_pick_tests(const sim::TacticalMode& mode, const sim:
         centre = {p.x, p.y, p.z};
         return radii[ty];
     };
-    if (battle) {
-        t.skip = [battle](uint32_t id) {
-            return battle->contained_by(static_cast<objects::ObjectId>(id)) != objects::kNoObjectId;
+    if (battle || script_hidden) {
+        t.skip = [battle, hidden = std::move(script_hidden)](uint32_t id) {
+            const auto oid = static_cast<objects::ObjectId>(id);
+            if (battle && battle->contained_by(oid) != objects::kNoObjectId) return true;
+            return hidden && hidden(oid);  // q6 t19: Lua Hide(true)
         };
     }
     return t;

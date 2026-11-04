@@ -178,6 +178,10 @@ public:
     const sim::CampaignBattles* battles() const { return battles_.get(); }
     const sim::TacticalBattle* battle() const { return battles_ ? battles_->battle() : nullptr; }
     bool in_battle() const { return battle() != nullptr && host_->modes().top_tactical() != nullptr; }
+    // q6 t19 (OBJECT_SCRIPTS §10.3): Lua Hide(true) on an object of the running battle (CampaignBattles::script_hidden).
+    // Presentation only: the model, its particles, surface FX and fog ghost, the object's sounds, its radar blip and the
+    // mouse pick skip it; nothing here feeds the sim.
+    bool script_hidden(objects::ObjectId id) const { return battles_ && battles_->script_hidden(id); }
     int32_t local_player() const { return local_player_; }
     // Attract demo: the map's Demo_Attract_Controller ran (game_session.cpp attract_demo_script): at least one
     // DEMO_CONTROLLER object revealed the map, so the view draws the sim's fog. False before the battle runs and on maps
