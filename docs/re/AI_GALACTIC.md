@@ -354,6 +354,9 @@ InstantiatedGoal fields: +0x48 {type, function}, +0x50 desire, +0x54 priority, +
 - plan switches (0x6bb710, 0x6bb670, 0x6bb570).
 
 Deactivate writes −1 everywhere it touched; the re-apply then restores what the other active templates assert. [M]
+Budget categories are the exception (q6 2026-11-04, AI_GALACTIC_TOKENS §9.5 [H]): 0x612ac0 sets every category's
+equation to none and its priority to **1**, and the category stays in the budget. Every apply and the reset also
+set the budget's reset flag (+0x74).
 
 Goals and plans with no template entry stay at −1, i.e. off. In particular, **a goal category not turned on by any active template is never proposed**, and a plan is only a candidate when its availability value is > 0 (§1.9.2). [M]
 
@@ -425,7 +428,7 @@ Goals and plans with no template entry stay at −1, i.e. off. In particular, **
 | `AllowFreeStoreUnits` | default true |
 | `AllowEngagedUnits` | default true |
 | `PerFailureContrastAdjust` | float |
-| `MinContrastScale`, `MaxContrastScale` | library defaults 1.1 / 1.5 |
+| `MinContrastScale`, `MaxContrastScale` | library defaults (FoC `PGAICommands.lua` Base_Definitions) 1.1 / 1.5, PerFailureContrastAdjust 0.1; Thrawn's Revenge library 1.0 / 1.2 / 0.1 |
 | `EnemyContrastTypes[i]` ↔ `FriendlyContrastTypes[i]` | WeightedTypeList map, paired by index |
 
 **TaskForce entry syntax** (0x66fcc0). The first string is the TF name: the Lua global, the `<Name>_Thread` function and the event-handler prefix. Later strings are `lhs = rhs`, where rhs is `a,b` (min, max), `N%` (percent-based TF) or `N`. Keywords [H]:
@@ -481,7 +484,7 @@ The per-mode marshaller order (data at 0x140a449a0) and each marshaller's score 
 - No target, or `IgnoreTarget` → no contrast.
 - Otherwise `adj = recentPlanFailures(plan, target) × PerFailureContrastAdjust` (Learning 0x588980) and `tolerance = 1 − (adj + Min)/(adj + Max)`.
 - The enemy force is computed by 0x5f1990 (galactic) or 0x5f1d00 (tactical; a second pass for EscortForce).
-- The difficulty contrast multiplier is applied there: `(MinContrastScale + fails × PerFailureContrastAdjust) × multiplier` scales the enemy strength that becomes the desired force. [H per helper; M exact composition]
+- The difficulty contrast multiplier is applied there: `(MaxContrastScale + fails × PerFailureContrastAdjust) × multiplier` scales the enemy strength of the typed rows (the two totals are not scaled). [H] (q6 2026-11-04 correction: it is **Max**, plan definition +0xA4, not Min; AI_GALACTIC_TOKENS §9.8.)
 
 **Production queue at commit** (0x6c0be0, from Commit step 4) [H]: once per PP, for each selected unit with a production slot, enqueue it on the build queue (0x53bee0).
 
