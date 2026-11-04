@@ -163,7 +163,8 @@ Single-player rules (space; land 0x2b76a0 is the same with ground strengths):
 1. If the local player is attacker or defender, a story "battle pending at planet" notification is
    posted (0x449f10) and the battle is *human-involved*.
 2. Overrun check, only when the multiple ≠ 0 and the battle is not story-locked:
-   - defender strength = 0x2ab880 (orbit units of the defender + starbase power);
+   - defender strength = 0x2ab880 (orbit units of the defender + starbase power; land: surface units + every
+     D+0x158 structure + the persisted-record sum, AI_GALACTIC_TOKENS §9.12);
    - attacker strength = Σ over attacker units of 0x395d10 (unit/fleet combat power, §4.1);
    - if max > min × multiple, the weaker side is the overrun loser (GOM+0x638) **unless that side has a
      named hero** (`Is_Named_Hero`, 0x38fa20, recursive through fleets/transports; land logs

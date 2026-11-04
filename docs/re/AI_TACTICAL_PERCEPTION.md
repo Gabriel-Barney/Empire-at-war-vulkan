@@ -25,7 +25,7 @@ Leaf signature: `bool f(evaluator, bindings, double* out)`; false = evaluation f
 Token ids are the 225 globals filled by 0x5b43d0 (names and order are already in `token_registry.inc`).
 
 ### 1.2 Leaf cache (0x64d740 lookup, 0x64d990 store) [H]
-- Each leaf keeps a sorted map keyed by a hash of the full binding set (0x5f3e60) with an equality test (0x5f3990) [M: the hash covers Self/Enemy/Human/Target and the token parameters]. An entry stores the value and the frame `stamp` it was computed.
+- Each leaf keeps a sorted map keyed by a hash of the binding set (0x5f3e60) with an equality test (0x5f3990). Corrected q6 t18 (AI_GALACTIC_TOKENS §9.9 [H]): the key covers the **parameter bindings only**; Self / Enemy / Human / Target are context variables and are not in it. Each leaf node exists once per (perception system, target evaluator), so the cache is per AI player, per mode and per target object. An entry stores the value and the frame `stamp` it was computed.
 - **Lookup** only when the lifetime `L` (+0x98) ≠ 0: hit if `stamp ≠ 0` and (`L = −1` or `NOW ≤ stamp + L × 30`). `L` is in **seconds**; −1 means "forever". A value computed on frame 0 is never a hit (stamp 0).
 - **Store** always happens on a successful computation (also for `L = 0`); entries are never pruned during the battle.
 - Consequence for parity: a token cached for L seconds keeps returning the old value even if the world changed. The port must cache the same way (same key, same lifetime, same frame) — this is part of the deterministic behaviour, not an optimisation.

@@ -189,7 +189,9 @@ Normal path (`from_save` = 0) [H]:
 
 `from_save` ≠ 0 path: plain new instance by name (0x2440f0, not pooled), base globals + commands, then the serviced
 list. There is **no** `Base_Definitions`, no `main` and no `Object`; the saved state supplies them. Ghidra drops the
-third argument at the load call site, so which path the load uses is [L].
+third argument at the load call site, but the load must use this path: the normal path creates a `main` record and
+the state reader appends one record per saved thread name, which would give two `main` threads. The story plot and AI
+plan loads do the same steps inline [H]. So the load uses the from-save path [M] (LUA_SAVE §4.1).
 
 ### 1.4 One per object; the pool
 
@@ -376,18 +378,24 @@ and are rebuilt by `Base_Definitions`. [H data]
   [H]
 - **Load** (0x39c3a0), gated by the flag 0x140b2c37b being 0 [L: meaning]:
   1. 0x4B6 reads the name;
-  2. 0x4B5 re-attaches by name (0x38cf30, §1.3);
+  2. 0x4B5 re-attaches by name (0x38cf30, §1.3, from-save path [M]);
   3. then LuaScriptClass load 0x246310 restores the instance:
-     - the thread list is rebuilt from the saved thread function names (0x244740 per name);
-     - each thread's coroutine image and the main state are **unpersisted** (0x7b9e60, a Lua-state persistence
-       reader);
-     - the pending-resume values are restored;
+     - the thread list is rebuilt from the saved thread function names, in saved order (0x244740 per name; a
+       finished thread comes back as an empty record);
+     - each live thread's Lua image (or the main state's, when no thread was live) is **unpersisted** (0x7b9e60)
+       into the fresh state: saved globals overwrite the fresh ones, stacks and call frames resume at the saved pc;
+     - the script's `GetEvent` object (+0xD8, chunk 2) is restored (the earlier "pending-resume values" reading
+       was wrong);
      - the global `ScriptShouldCRC` is read into +0x125.
 
-  [H for the chunk flow; M for the persistence reading]
+  [H for the chunk flow and the image format: LUA_SAVE §2, §3]
+- Not saved: Lua upvalue values, closure environments and the engine command objects (class id 0: `GlobalValue`,
+  `GameRandom`, …); the fresh instance supplies the commands. Persisted engine wrappers (`Object` and other
+  `GameObjectWrapper`s, players, types, positions, blocking-status objects) come back through the pointer fix-up.
+  Full format, value types and identity rules: **LUA_SAVE.md**. [H]
 - **Port:** the port uses its own save format (N1). The behaviour to keep is "after a load, each object's script
   continues where it was": same globals, same thread positions, and `LastService` kept so that no new RNG draw
-  happens.
+  happens. LUA_SAVE §3.4 / §4.2 "Port notes" list what the port's persistence must hold.
 
 ---
 
@@ -723,7 +731,7 @@ Every function in the table is registered in the port's bind files (§5).
 | item | why it can wait |
 |---|---|
 | Pooling (`ScriptPoolCount`, reuse, `Flush_G` at release) | see item 3 |
-| Save / load of script state | needs Lua-state persistence in the port's own format. Until then, a load could re-attach fresh scripts, but that re-runs `OnEnter` (TR would spawn the company again), so mark saves with live object scripts unsupported rather than silently wrong |
+| Save / load of script state | needs Lua-state persistence in the port's own format (what to save and how the load attaches: LUA_SAVE.md, q6 t19). Until then, a load could re-attach fresh scripts, but that re-runs `OnEnter` (TR would spawn the company again), so mark saves with live object scripts unsupported rather than silently wrong |
 | `Execute_Script_On_Type` outside the AI | no other reader |
 | Type hot-reload re-attach (0x39fc90) | debug only |
 | `LuaScriptWrapper` cross-script calls | no shipped object-script use |
@@ -736,7 +744,7 @@ Every function in the table is registered in the port's bind files (§5).
 1. **Upper bound of the first-pump RNG draw** (§3.2 step 7). The decompile shows lo = 0, but hi is in xmm2 at the
    call. Probably `ServiceRate`. Needs the disassembly of 0x3a6b80 around the `LastService` creation. [L]
 2. **Flag used by the load re-attach** (0x39c3a0 → 0x38cf30: normal vs from-save path). The third argument is dropped
-   by Ghidra. Only matters for retail save compatibility, which is out of scope. [L]
+   by Ghidra. Resolved by structure (q6 t19): the from-save path, see §1.3 and LUA_SAVE §4.1. [M]
 3. **Meaning of 0x140b2c37b** (gates the model creation in object init and the script chunk on load; set and cleared
    by 0x27c9c0). [L]
 4. **Spatial tree used by `Service_Wrapper`** (0x2ab640 on the store: global or per-player tree) and its hit order.

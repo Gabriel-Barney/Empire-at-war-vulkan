@@ -133,7 +133,7 @@ list (0x373f40 count / 0x373e30 type / 0x373d30 count, tech = owner player +0x84
 | HasGroundForce | 0x6d9930 | 7 | 0x80 | same on D+0xD8 | no planet / list |
 | HasNearbyGroundForce / Space | 0x6d9f60 / 0x6d9f70 → 0x6d9bd0 | 11 | vis | 1.0 if any force neighbour n (incl. self) has `Target(n).<side>.Has…Force{params}` > 0 | a nested failure before a hit |
 | StarbaseTotalUnnormalized | 0x6dc1c0 | 0 | 2 | if the planet passes the side filter and D+0x140 ≠ 0: power(starbase type) | no D |
-| GroundbaseTotalUnnormalized | 0x6d9470 | 0 | 4 | if the planet passes the side filter: Σ power(type) of D+0x158 structures + the persisted tactical built objects 0x4b8000(D, all) (§9.4) | [M] no D |
+| GroundbaseTotalUnnormalized | 0x6d9470 | 0 | 4 | if the planet passes the side filter: Σ power(type) of D+0x158 structures + the persisted tactical built objects 0x4b8000(D, all) (§9.4); planet fails the side filter → 0.0 (success). No mask, owner or alive test (§9.12) | no planet; no D (after the side filter passed) |
 | HasSpaceUnitsBitfield / HasGroundUnitsBitfield | 0x6da230 / 0x6da7d0 | 13 | 0x10/0x80 | bit i set if a side unit (orbit, resp. surface) has the i-th `Parameter_Type` type; value = bitmask as double [M] | — |
 | AntiStealthEffectiveness | 0x6d9180 | 13 | 0x80 | Σ per-unit value 0x395830 over side units in orbit and on the surface [M] | — |
 | Maintenance(…Unnormalized) | 0x6dabc0 / 0x6daf20 | 15 | 0x40 | not read | — |
@@ -282,8 +282,10 @@ registered on planets.)
    sub-evaluators.
 4. Meaning of the planet-type list +0x20C8 added to enemy ground totals, and of 0x3a9760 in HasSpaceForce.
 5. 0x6136b0 (AI CreditsUnnormalized) — total of budget pools vs player credits.
-6. Cache key: 0x5f3e60 hashes the binding set; whether the hash includes Self (so Human-rooted and Self-rooted leaves
-   share entries) is [M] (AI_TACTICAL_PERCEPTION §1.2).
+6. ~~Cache key: 0x5f3e60 hashes the binding set; whether the hash includes Self (so Human-rooted and Self-rooted leaves
+   share entries) is [M] (AI_TACTICAL_PERCEPTION §1.2).~~ Resolved (q6 t18, 2026-11-04): the key is the parameter
+   bindings only; Self / Target / Enemy / Human are context variables and are not in it. The cache lives in each leaf
+   node, and leaf nodes exist once per (perception system, target evaluator), §9.9 [H].
 7. (q6) §8: whether any land path other than the auto-resolve start raises signal 0x13 on a planet through a
    dispatcher other than 0x220ed0. (~~whether the tactical budget map is empty~~: it is not, §9.3 [H].)
 8. ~~(q6 §9b) the 0..5 int of a persisted record, the +0x618 = 9 block, the two 0x4b7d90 sites in 0x2b76a0, the third
@@ -710,8 +712,11 @@ owner's.
 - Then: 0x394510 (the new object's behaviour attach and the type's +0x2120 player-tech refresh, as at construction
   completion); the pad data's child slot (+0x10) := the object; sell setup (behaviour 0x2B, 0x524b30); the object is
   linked to the pad (+0x2B0); if the pad has CAPTURE_POINT (slot +0x36F), 0x501050(capture, −1, −1) re-derives the
-  pad's controller (0x500a00) and gives the pad that owner if it differs [M: the controller is the new child's owner].
-  Unlike the construction and pre-build paths, the pad's +0x3CB byte is **not** copied.
+  pad's controller (0x500a00). Because the child slot is already filled, that returns the pad's **current** owner, so
+  the pad's owner never changes here; only the capture state and the pad's owner visuals are refreshed (§9.11 [H],
+  correcting the earlier "[M: the controller is the new child's owner]").
+  Unlike the construction and pre-build paths, the pad's +0x3CB byte is **not** copied, and the pad is not registered
+  as a listener of the new object's signal 0x28 (§9.11).
 - Back in vf13: the map's pre-placed type (pad data +0x18, §2.6) is spawned only while the child slot is empty, so a
   recreated object takes the pad and the pre-placed object is not created.
 - Edge cases:
@@ -864,9 +869,11 @@ switch.
 - **Leaf kind.** `Target.EnemyForce.{Space,Ground}TotalUnnormalized` is a fogged PlanetForce leaf (§0). Its IsVisible
   is true when the visible flag is set **or** the mode's fog option is off. `AIUsesFogOfWarGalactic` is False in both
   the FoC and the TR GameConstants, so the value is the **live** one, not a remembered one.
-- **Cache.** The normal leaf cache applies: lifetime 15 s (§2 table), keyed by the binding set [M: key composition,
-  open item 6]. Because Enemy and Human are unbound here, these entries are likely separate from the ones that
-  equations create [M]. A total can therefore be up to 15 s old, which is about 3 proposal passes.
+- **Cache.** The normal leaf cache applies: lifetime 15 s (§2 table). Corrected by §9.9 [H]: the key is the
+  parameter set only (here: nothing, or `Parameter_Category` = mask). Self / Enemy / Human are not in the key, so these
+  entries are **shared** with every equation or normaliser that reads the same leaf of the same planet with the same
+  parameters (the earlier "likely separate [M]" was wrong). A total can be up to 15 s old (about 3 proposal passes),
+  unless a visibility signal 0xE refreshed it in between (§9.9).
 - **With fog on** (mods only): when the planet is not visible to the AI, the leaf returns the last cached value for
   this binding set regardless of age, or computes it live if it was never cached.
 - **Structure terms.** The starbase type (D+0x140 via 0x3f8b40), the ground structures (D+0x158) and 0x4b8000 (D+0x10)
@@ -880,10 +887,8 @@ switch.
   rule (AI_TACTICAL_PERCEPTION §1.2), and add the structure terms live.
 - No remembered (fogged) values are needed with shipped data.
 - Port status (q6 contrast/budget, 2026-11-04): not implemented; `galactic_ai_enemy_strength` still computes the leaf
-  live. The cache key is [M] (open item 6: what the binding-set hash 0x5f3e60 covers, and whether these Self + Target +
-  `Parameter_Category` entries are separate from the equations' entries, which the port's resolver cache keys with
-  Enemy / Human too), and the fogged leaf's signal-0xE recompute of all cached entries fires on visibility events whose
-  galactic cadence is not traced. Implement once both are [H].
+  live. Both blockers (cache key, signal-0xE cadence) are traced in §9.9 (q6 t18): the cache must be the **same**
+  cache the equations use, keyed without Enemy / Human.
 
 ### 9.7 A structure or starbase type with category mask 0 adds nothing to the contrast totals [H]
 
@@ -931,8 +936,9 @@ Read again: 0x6c5de0 (requirement), 0x5f1990 (list), 0x72ac70 / 0x6bff00 (satisf
    - A space-only candidate while the (active) ground layer is short: the original vetoes, the port goes on to the
      checks.
    - A candidate on an inactive layer that has unmet rows: the port vetoes, the original does not.
-   - In galactic the escort list is empty (0x140b3a525 = 0), so 0x140b3a529 is set whenever the space and ground
-     tests pass on empty lists [M]. That lets an escort-team candidate pass the gate.
+   - In galactic the escort list is empty (0x140b3a525 = 0), so 0x140b3a529 is set at Setup C and after every
+     commit, whatever the main state (§9.10 [H]). That lets an escort-team candidate pass the gate; no shipped galactic
+     plan (FoC, EaW, TR) has an `EscortForce`, so this never happens with shipped data.
 3. **Scale and tolerance [H].**
    - Tolerance T = 1 − (f·PFCA + Min)/(f·PFCA + Max), in float (0x6c5de0, plan definition +0xA0 Min, +0xA4 Max, +0xD4
      PFCA).
@@ -996,8 +1002,298 @@ Read again: 0x6c5de0 (requirement), 0x5f1990 (list), 0x72ac70 / 0x6bff00 (satisf
 - After the item 1 fix, re-measure TR AI-only (Thrawn_Empire, 4000 ticks) before tuning anything else.
 - Port status (q6 contrast/budget, 2026-11-04): items 1-4 done (`galactic_contrast_total_open`, `galactic_contrast_gate`,
   `galactic_contrast_scale`, `galactic_contrast_layer_satisfied` in `galactic_ai_tokens.hpp`; `PpRec` / PP layer
-  comments corrected). `escort_met` stays `main_met` (the port has one requirement list; whether 0x140b3a529 is always
-  set in galactic is [M]). TR Thrawn_Empire 4000 ticks, AI-only: decisions / orders / conflicts / owner changes 269 /
+  comments corrected). `escort_met` stays `main_met` (the port has one requirement list; the original's 0x140b3a529 is
+  in fact always set in galactic, §9.10 [H]; with shipped data the two agree because no galactic plan has an escort
+  team). TR Thrawn_Empire 4000 ticks, AI-only: decisions / orders / conflicts / owner changes 269 /
   113 / 33 / 2 before, 413 / 237 / 66 / 3 after (item 1 alone 602 / 407 / 158 / 3, item 2 alone 332 / 105 / 25 / 2,
   item 3-4 rounding alone and the §9.5 budget alone: no change); `fail Contrast` proposals 166 -> 80. With
   `--human Empire`: 225 / 72 / 30 / 0 -> 586 / 403 / 85 / 0, `fail Contrast` 12 -> 2.
+
+## 9c. Galactic AI follow-up (q6 roadmap t18, 2026-11-04)
+
+Four questions from Q6 t18: the leaf cache read by 0x5f2430 (§9.9), the escort "satisfied" flag 0x140b3a529
+(§9.10), capture pads when a persisted object is recreated (§9.11), and the two other readers of D+0x158 / D+0x10
+(§9.12). Sources: the decompiled functions named below; plan scripts in `extracted/*.zip` and Thrawn's Revenge
+(workshop 1125571106).
+
+### 9.9 The perception leaf cache: owner, key, refresh [H unless tagged]
+
+Functions: lookup 0x64d740, store 0x64d990, visible-leaf evaluate 0x65abc0, fogged-leaf evaluate 0x65aa20 (planet) and
+0x65a980, cached lookup with a lifetime 0x65a780, key hash 0x5f3e60, key equality 0x5f3990 / value compare 0x5f36c0,
+binding copy 0x64c840, recompute 0x65ac40 (planet) / 0x6d8f80 (PlanetForce), visibility listeners 0x661a50 / 0x6dde60,
+forwarders 0x661b00 / 0x6ddf10.
+
+**Where the cache lives.**
+- Each token node (a "leaf": `VisiblePerceptualEvaluatorClass<…>` 0xB0 bytes, `FoggedPerceptual(Unit)EvaluatorClass<…>`
+  0xE0 bytes) owns its cache: a sorted map at node +0xA0 (count +0xA8), lifetime L at node +0x98 (seconds; −1 forever;
+  0 = never a hit).
+- Nodes are allocated **per evaluator instance** when the evaluator registers its tokens (vf+0x40). The planet
+  evaluator 0x65f7b0 allocates every planet leaf and creates its own FriendlyForce (+0xA8, 0x6d8ef0) and EnemyForce
+  (+0xB0, 0x6d8e60 → token registration 0x6dcb70) child evaluators, each with its own leaves.
+- Evaluator instances belong to one perception system. The galactic system builds one planet evaluator per planet
+  object (0x4e1910 → 0x65a900) and stores its index in D+0x354; `Target = planet` resolves to that instance (0x5b41c0
+  with D+0x354; the target location's 0x665670 → 0x4dd350).
+- The perception system is per AI player and per mode: 0x5f2430 takes it from the AI context (player at +0x28)
+  through 0x4b06d0 (the context's subsystem for the current mode), +0x38.
+- So one cache = one (AI player, mode, target object, token path), for example (Empire AI, galactic, Kuat,
+  `EnemyForce.SpaceTotalUnnormalized`). Two AI players never share an entry; two planets never share an entry.
+
+**The key.**
+- The query object is the `PerceptionParameterBindingsClass` passed down the path: a hash map of parameter bindings
+  (token id → typed value; list +0x10, count +0x18, buckets +0x20, mask +0x38), the value slot (+0x48, double), the
+  stamp slot (+0x50), the **context** pointer (+0x58), the path cursor (+0x60 / +0x68) and the current evaluator
+  (+0x70).
+- The variables (Self at context +0x50, Target, Enemy, Human) live in the **context**, not in the bindings. The path
+  entry 0x4dd1d0 resolves the first token through the context (0x5b4300). The side filters read Self from context
+  +0x50 (for example 0x6d9470 passes it to vf+0x58).
+- An entry stores a copy of the bindings (0x64c840: the parameter map only; context, path and current evaluator are
+  not copied) plus value and stamp.
+- Hash 0x5f3e60 = Σ over the bindings of (token id + a value term). The value term is: a list's length, a double's
+  integer part, a string's length, a 64-bit value's low 32 bits.
+- Equality 0x5f3990: the same number of bindings, and every stored binding has a binding with the same token id whose
+  value compares equal in type and value. 0x5f36c0 compares lists element by element, doubles exactly, strings byte by
+  byte, bools, pointer-size values, and class-9 values through their own compare.
+- **Key = the parameter set only.** Self, Target, Enemy and Human are not part of it; Target and Self are implied by
+  the node instance (above).
+- `Parameter_Category` is a 64-bit mask value (type 10, `LuaValue<void*,10>`). 0x5f3aa0 stores it that way and the
+  leaves read only that type (0x5f4780), so an equation's `{Parameter_Category = …}` and 0x5f2430's mask are the same
+  key when the masks are equal [H for the reader; M that the DLL binder builds the same type].
+- Consequence: 0x5f2430 with mask 0 binds nothing. That is the same key as an equation that reads
+  `Variable_Target.EnemyForce.SpaceTotalUnnormalized` with no parameters, and as the fresh-bindings numerator of
+  `Game.<side>.X` (§0). They read and refresh **one** entry.
+
+**Lookup and store.**
+- Lookup (L ≠ 0): an entry with the same hash and equal bindings is a hit when its stamp ≠ 0 and (L = −1 or
+  NOW ≤ stamp + L × FPS). An expired match is not used. NOW = global frame 0x140b0a320, FPS 0x140b0a340 (30).
+- Miss or L = 0: compute through the node's member function, then store.
+  - A store happens only when the computation succeeded, the current evaluator (+0x70) is set and the path cursor is
+    at its end (no further token, or the end marker −1).
+  - An existing equal entry is overwritten (value, stamp = NOW); otherwise a new entry is inserted.
+  - Failures are never cached. Entries are never removed.
+- Every token node of the exe evaluators uses this (visible leaves through 0x65abc0, fogged leaves through 0x65aa20 /
+  0x65a980). L = 0 tokens (`StarbaseTotalUnnormalized`, `GroundbaseTotalUnnormalized`, §2) store but never hit, so they
+  are always live. Non-leaf dispatchers (Target, EnemyForce) only forward. The lifetime of each token is in §1-§4.
+
+**Refresh by signal 0xE (fogged leaves only).**
+- Each fogged leaf listens to signal 0xE (`VisibilitySignalDataClass`: +0x08 visibility mask, +0x10 player) from its
+  evaluator. The planet evaluator passes 0xE on from the planet object only when the event's player is the system's
+  own player (0x661b00 / 0x6ddf10).
+- Listener (0x661a50 / 0x6dde60):
+  - if (event mask & leaf mask M) == M → recompute every entry and set visible = 1;
+  - else, if visible was 1 → recompute every entry, visible = 0, last-seen = NOW;
+  - else nothing.
+- The fog option does not gate this. With `AIUsesFogOfWarGalactic` False, the visible flag only decides whether a
+  lost-coverage event recomputes. The flag starts at 0 (ctor 0x6d83c0).
+- Recompute (0x65ac40 / 0x6d8f80) runs only when the node holds ≤ 100 entries (+0xA8 < 0x65).
+  - A fresh context binds Self := the event's player and Enemy := the system owner's opponent (0x5f55c0). The parent
+    evaluator binds Target (vf+0x20).
+  - Each entry is recomputed with its stored parameters. On success, value := result and stamp := NOW; on failure the
+    entry is left as it was.
+  - So a refresh both updates the value and restarts its 15 s life.
+- Masks: SpaceTotal* M = 0x20, GroundTotal* M = 0x80 (§2; other fogged leaves have their own).
+- **Who raises 0xE on a planet in galactic** (always for one player at a time):
+  1. The presence fold 0x3fd080, inside the per-(object, player) refresh 0x3a51e0 → planet vf+0xA8 0x3fd930. It runs
+     only for players that have an AI system (0x2814d0) (GALACTIC_REVEAL_CORRUPTION §2.3-2.4).
+     - Mask = −1 (all) when the player owns the planet.
+     - Otherwise the faction default (Empire 0, Rebel / Underworld 0x11), OR 0x71 when one of the player's objects is
+       in orbit, OR 0x191 when one is on the surface.
+     - So an AI's space leaves are refreshed when it owns the planet or has a fleet there, its ground leaves when it
+       owns the planet or has ground units there.
+     - A null orbit slot aborts 0x3fd080 before the signal (quirk).
+  2. Space conflict service 0x2b92e0, state 4: mask 0x70 for the record's player +0x470 → +4 (the attacker), when that
+     player has an AI system.
+  3. Land conflict service 0x2b76a0, state −1: mask 0x180 for the record's attacker, same condition.
+- Planet refreshes 0x3a51e0(planet, P) that reach item 1. [H for each site; M for completeness: there are about 45
+  callers, and most of them pass fleets, units or pads instead of a planet.]
+  - planet owner change / first owner set 0x3fb040 (every player; called from 0x3f7280, 0x3f8060, 0x3f98a0 and the
+    planet service 0x3fe1b0);
+  - 0x295cf0 → 0x2b5a30 (every galactic object, every player; galactic setup / load);
+  - units landing on the planet, 0x4f3430 / 0x4f40c0 (from 0x4f3bd0; the unit's owner);
+  - system spies 0x70f510 / 0x70fb90, story visibility rewards, and the planet service 0x3fe1b0 for players whose
+    visibility entries expired;
+  - the two conflict services (their own refresh loops, besides the direct signals).
+  - Fleet arrival and departure (0x4338d0, 0x4352f0, 0x4358c0, …) refresh the **fleet** object, not the planet, so they
+    raise no planet 0xE by themselves [M: as read at 0x4338d0].
+
+**Port notes**
+- Keep one cache per (AI player, mode, target object, token path), keyed by the exact parameter set. Do not put
+  Self / Enemy / Human / Target into the key.
+- 0x5f2430 (the contrast totals), the equations, the normalisers and the `Game.<side>` sums must all go through this
+  one cache. A contrast total can then return a value an equation stored up to 15 s earlier, and the reverse.
+- Hit rule: stamp ≠ 0 and NOW ≤ stamp + L × 30 (L = −1 forever). Store only successes; overwrite the equal entry.
+- Refresh: on the presence fold of (planet, AI player) and on the two conflict signals, recompute every entry of each
+  fogged leaf of that planet's evaluators whose mask is covered (or has just lost coverage), when the leaf has ≤ 100
+  entries, and re-stamp it. With shipped data (fog off), this is the only effect visibility has on the AI.
+- Minimum wiring for headless galactic parity: planet owner changes (every AI player), galaxy setup / load, units
+  landing (their owner), conflict starts. Spies and story visibility only matter for campaigns that use them.
+- `galactic_ai_enemy_strength` then reads the leaf part through this cache. The structure terms stay live (§9.6).
+
+### 9.10 The escort "satisfied" flag 0x140b3a529 [H unless tagged]
+
+Functions: solver 0x6c3da0, reset 0x6c3080, requirement 0x6c5de0 (Contrast Setup A 0x72bee0), Plan Setup A 0x72a3b0,
+Setup C 0x72aad0 → 0x6bff00, Score 0x72b940, place 0x729830 (from commit 0x72a720), recompute 0x6c4b20 (Contrast
+commit 0x72bf80, and the PP re-check 0x6c47c0), satisfied test 0x72ac70.
+
+**Globals.**
+- 0x140b3a525 = "this solve has an escort list".
+- 0x140b3a528 = main contrast satisfied.
+- 0x140b3a529 = escort contrast satisfied.
+- Lists: main target / remaining 0x140b3a600 / 0x140b3a618; escort target / remaining 0x140b3a630 / 0x140b3a648.
+
+**Life of the flags in one solve.**
+1. 0x6c3080 (start of 0x6c3da0): 0x528 := 0, 0x529 := 0, PP+0x1A0/0x1A1 := 0.
+2. Setup A, in marshaller order. Plan's 0x72a3b0 sets 0x525 := any task-force definition with `EscortForce` (+0x4A).
+   Contrast's 0x72bee0 → 0x6c5de0 runs later (galactic order 3 then 7; land and space 1-2 then 5) and decides:
+   - no target, or plan +0xAA (`IgnoreTarget`): both target lists empty, 0x525 := 0, T := 0;
+   - galactic (PP+0x198 = 0): main list from 0x5f1990, escort target list **emptied**, 0x525 := 0, whatever the plan's
+     task forces say;
+   - tactical: 0x525 := any `EscortForce` task force; main list 0x5f1d00(flag 0); escort list 0x5f1d00(flag 1) only
+     when 0x525 is set (AI_TACTICAL §7.7.1).
+
+   Then remaining := a copy of target, for both lists.
+3. Setup C 0x72aad0 (not `IgnoreTarget`): 0x528 := 0x6bff00(main), 0x529 := 0x6bff00(escort).
+   - 0x6bff00 runs 0x72ac70 for each active layer (PP+0x1A0 space, +0x1A1 ground). It is true when every active layer
+     passes.
+   - An empty remaining list has residual 0, so it always passes.
+4. Each commit: 0x6c4b20 sets both flags to 0 and recomputes the remaining lists from scratch, re-testing a flag each
+   time a unit lands in its list. At the end it sets 0x528 := test(main) and 0x529 := test(escort target, escort
+   remaining).
+   - When the escort target list is empty, it is first refilled as a copy of the main target list with every target 0.
+   - When 0x525 = 0, the escort remaining list is emptied.
+- `IgnoreTarget` plans skip Setup C, and 0x6c4b20 returns early when both target lists are empty, so their flags stay 0.
+  They score by a random draw before any flag is read.
+
+**Answer for galactic.**
+- 0x525 = 0 and the escort remaining list is always empty, so **0x529 = 1** from Setup C to the end of every
+  non-`IgnoreTarget` solve, whether or not the main contrast is met.
+- The port's `escort_met == main_met` is therefore not the original rule. The difference cannot be reached with
+  shipped data: no galactic plan of FoC, EaW or TR defines an `EscortForce`. The 13 FoC and 15 TR plans that do are all
+  land or space mode, so no galactic candidate has an escort team (rec+0xB1 = 0).
+
+**Escort-team candidates in galactic (mods only).** rec+0xB0 = has a non-escort team; rec+0xB1 = has an escort team.
+- Score 0x72b940:
+  - the main list is scored only when rec+0xB0, the escort list only when 0x525 is set (never in galactic). An
+    escort-only candidate therefore gets v = 0 plus its contained units' contributions;
+  - with v ≤ 0 the gate (0x528 ∧ B0) ∨ (0x529 ∧ B1) is open, because 0x529 = 1;
+  - but the untyped-total check needs 0x528 ∧ B0 and the escort-list check needs 0x525. So the candidate is "still
+    allowed" only through `RequiredCategories`, or through one of its own teams below its minimum /
+    `MinimumTotalForce` / `MinimumTotalSize`; otherwise it is vetoed;
+  - a candidate with both kinds of team enters the "still allowed" checks even while the main contrast is unmet.
+- Place 0x729830, first pass: a non-escort slot is skipped when 0x528 ∧ ¬0x529, an escort slot when 0x529 ∧ ¬0x528
+  (AI_GALACTIC_2 §1.4 corrected).
+  - In galactic, escort slots are skipped while the main contrast is unmet, and non-escort slots are never skipped.
+  - The second pass ignores the flags.
+- Commit 0x6c4b20: with 0x525 = 0, every unit subtracts from the main list, whatever its team.
+
+**Tactical (0x525 = 1).** Here 0x529 is the real escort test.
+- Commit 0x6c4b20 walks the task-force slots in order. It subtracts each selected unit from the **escort** list when its
+  slot is an escort slot **or the main contrast is already met at that point of the walk** (0x528 is re-tested after
+  each main-list unit). Otherwise the unit subtracts from the main list.
+- Unplaced selections and PP+0x88 extras always subtract from the main list.
+- So once MainForce has met the main contrast, further MainForce units do reduce the escort residual (AI_TACTICAL
+  §7.7.2 corrected).
+
+**Port notes**
+- Galactic: `escort_met = true` for every solve with a target and without `IgnoreTarget`. Keeping
+  `escort_met = main_met` is fine only while escort teams stay unsupported in galactic (equivalent for FoC, EaW and TR
+  data).
+- Gate: `(main_met && r.non_escort) || (escort_met && r.escort)`. The untyped-total check runs only for
+  `main_met && r.non_escort`, and the escort-list check only when the solve has an escort list.
+- Placement, first pass: skip a non-escort slot when `main_met && !escort_met`, and an escort slot when
+  `escort_met && !main_met`.
+- Tactical commit: list = escort if (the slot is an escort slot) or (main already met during this walk), else main.
+- Reset both flags at solver start; recompute them at Setup C and after every commit.
+
+### 9.11 Capture pads at the recreate of a persisted object (§9.4) [H unless tagged]
+
+Functions: recreate 0x42d8b0, capture re-derive 0x501050 → controller 0x500a00, pad vf13 0x42df80, construction
+completion 0x42e890, child death 0x39bdb0 → 0x42e6d0.
+
+**0x500a00(capture behaviour)** decides the pad's controller. The first rule that applies wins:
+1. The pad has the `TacticalBuildObjectsBehaviorClass` slot (+0x35B) and its pad data (+0x150) has an
+   under-construction object (+0x08) or a child (+0x10) → the pad's **current owner** (+0x58). (No pad data → the
+   constant 0x650000.)
+2. The pad holds a garrison (slot +0x382, list +0xF8 → +0x20 non-empty) → the first garrisoned object's owner.
+3. Otherwise, scan the objects within the pad type's capture radius (+0x1FC0). An object counts when:
+   - its type has +0xE0 set (or it has the given owner);
+   - it is not the pad and has an owning player;
+   - it is not flagged +0x3A0 & 0x42 and not hidden (+0x3A7);
+   - and the pad type passes 0x3751a0.
+
+   A neutral pad goes to the first such object's owner, or stays neutral when two of them are not allied. An owned pad
+   stays with its owner, unless an object not allied with that owner is present, which makes it neutral ("contested").
+4. Nothing found → neutral if the pad has no slot +0x37B and type +0x95 is clear; otherwise the current owner.
+
+**0x501050(capture, −1)**: owner := 0x500a00. When it differs from the pad's owner, the pad's owner is changed
+(0x38e5a0). Then, when the pad has a capture state (+0x1E0):
+- state +0x08 := owner;
+- the owner-dependent model / visual of the pad type for the owner's faction is refreshed (0x371070 → 0x3a92f0);
+- so are the team colour (0x5013b0), the minimap entry (0x266040) and 0x5021f0.
+
+**At recreate**, 0x42d8b0 fills the child slot (+0x10) **before** it calls 0x501050. Rule 1 applies, and the controller
+is the pad's current owner: **the pad's owner never changes at recreate**.
+- The recreated object is created for the record's owner (§9.4).
+- The pad keeps the owner it had before the call, normally its map owner [M: where a campaign map's pad owners come
+  from was not traced]. The pre-placed child of vf13 is created for that pad owner (+0x58) [H].
+- Only the capture state and the visuals are refreshed.
+- Result in a campaign battle: the defender's turret can stand on a pad whose owner is someone else (usually Neutral).
+  - While the child lives, the pad cannot be captured (rule 1).
+  - When the child dies, the normal child-death path runs: 0x39bdb0 reaches the pad through the object's +0x2B0 link,
+    which 0x3a8f80 sets in both paths. The child slot is cleared, the record is removed (§9.4), and the pad goes Neutral
+    or is destroyed (SKIRMISH_SETUP §8).
+- Construction completion (0x42e890) and the pre-placed spawn (vf13) register the pad behaviour as a listener of the
+  new object's signal 0x28; the recreate does not [H]. What the pad does on 0x28 is not traced [L: probably clearing
+  its UC / child pointer when the object is removed; the death path does that anyway].
+
+**Port notes**
+- Recreate: create the object for the record's owner and put it in the pad's child slot. Then re-derive the capture
+  with the "occupied pad keeps its owner" rule: the pad owner stays unchanged and only its capture state is refreshed.
+- Do not give the pad the recreated object's owner. `TacticalBattle::pad_persist` should not change pad ownership on
+  recreate.
+
+### 9.12 `GroundbaseTotalUnnormalized` and the overrun strength: how they read D [H unless tagged]
+
+**`GroundbaseTotalUnnormalized` 0x6d9470** (PlanetForce leaf, lifetime 0, so always live):
+1. No planet on the evaluator (+0x98) → fail.
+2. Result := 0.0. Does the planet pass the side filter (vf+0x58 with Self from the context)? Enemy is 0x39a4e0 (the
+   planet's owner is hostile to Self); Friendly is 0x39a2c0 (Self or an ally). If not → **success with 0.0**.
+3. No D → fail.
+4. For each entry of D+0x158 (count D+0x160), in order and skipping null slots: result += (double)(float)power(the
+   object's type +0x298). **No category-mask test, no owner test, no alive test**: every listed structure counts.
+5. result += (double) 0x4b8000(D, all bits).
+   - 0x4b8000 sums, in list order and in float, power(type) over the D+0x10 records whose name CRC resolves to a type
+     (0x407db0 in table 0x140b2f020) and whose type mask (+0x1648) is non-zero (any bit against all bits).
+   - No owner and no alive test: a record is a type, and the list holds only the last land winner's records (§9.4).
+6. `Parameter_Category` and `Parameter_Attenuator` are not read.
+
+**Overrun side strength 0x2ab880(GOM, battle record {planet id, attacker, defender}, defender?, space?)**, float
+throughout:
+1. Planet by id (0x2aca60); none → 0.
+2. List = the orbit list (0x395900) when space, else the surface list (0x397120). Player = the record's defender (+8)
+   or attacker (+4).
+3. Σ 0x395d10(object, space) over the list objects owned by that player (+0x58 equal; no alive test here).
+4. Attacker, ground: also Σ 0x395d10(object, 0) over the orbit-list objects owned by the attacker (the ground power
+   carried by its fleets [M: meaning of 0x395d10 with flag 0 on a fleet]).
+5. Defender, with D:
+   - ground: + Σ (float)power(type) over every D+0x158 entry (no mask, owner or alive test), then + 0x4b8000(D, all
+     bits);
+   - space: when D+0x148 (the starbase level) ≠ 0, + the power of the starbase type for that level and the defender's
+     faction (0x407b60(type table, level, faction, 0x5C)). This type is looked up by level, not read from D+0x140.
+- Callers: space conflict 0x2b92e0 → (defender, space); land conflict 0x2b76a0 → (defender, ground) and (attacker,
+  ground). The attacker's space strength is summed inline in 0x2b92e0 (Σ 0x395d10(object, 1) over the attacker's orbit
+  objects).
+- All of this runs only when `Overrun_Auto_Resolve_Multiple` (0x140b16d88) ≠ 0. FoC and TR leave it commented out, so
+  with shipped data the overrun test never runs (BATTLE_TRANSITIONS §1.6 step 2).
+
+**Port notes**
+- `GroundbaseTotalUnnormalized`:
+  - apply the side filter to the planet; failing the filter gives 0.0, not a failure;
+  - then add Σ power over D+0x158 without any mask, plus the persisted-record sum with the "type resolves and
+    mask ≠ 0" test;
+  - do not cache it (lifetime 0);
+  - accumulate the structures in double, the records in float, then widen.
+- Overrun (only needed for mods that set `Overrun_Auto_Resolve_Multiple`):
+  - defender ground = own surface units + every D+0x158 structure + the record sum (float);
+  - attacker ground = own surface units + the ground power of its own orbit objects;
+  - defender space = own orbit units + the starbase type for the planet's level.
+- Both readers take D+0x158 as it is. The mask test of 0x5f2430 (§9.2, §9.7) must not be applied to them.
