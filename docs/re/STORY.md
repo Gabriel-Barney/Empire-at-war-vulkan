@@ -112,8 +112,8 @@ owned by that player.
 A STORY_TRIGGER event with no Prereq is **active from load but never fires on its own**. It fires only when
 something calls Fire on it explicitly:
 
-- the **TRIGGER_EVENT** reward (`0x32e960`): looks the name up in **every plot of the story manager, active or
-  suspended**, and fires each match;
+- the **TRIGGER_EVENT** reward (`0x32e960`): looks the name up in **every plot of the current mode's story manager,
+  active or suspended, whoever owns it**, and fires each match (§2.4);
 - **RESET_BRANCH** with Reward_Param2 (fires that event in the rewarding plot after the reset);
 - debug/cheat paths that fire by name (the same `0x530770` helper).
 
@@ -153,14 +153,30 @@ Children of `<Story_Mode_Plots>` are read in order:
   plot. The pending script is cleared after each plot entry, so a script pairs with the next plot only
   (Empire Act II has no script).
 - The plot is stored under the CRC of the text **as written** (case kept). Lookups by name (`0x328370`, used by
-  Get_Story_Plot and STORY_ELEMENT) hash without upper-casing, so the case must match [M: the CRC
-  routine `0x215a30` is assumed to be case-sensitive; the port matches case-insensitively, §8 item 7].
+  Get_Story_Plot and STORY_ELEMENT) hash without upper-casing, so the text must match byte for byte, path and case
+  included. The CRC routine `0x215a30` is a plain table CRC32 over the raw bytes with no case folding, so it **is**
+  case-sensitive [H, q6 2026-11-03]; the port matches case-insensitively (§8 item 7).
+- **One plot table per story manager for every player** [H, q6 2026-11-03]. `TheStoryMode::Load_Plots` (caller of
+  `0x329aa0`) clears the current mode's manager (mode `+0xa0`, `0x32acc0`) and loads, into that same manager, each
+  player's Story_Plots file in this order: the campaign's `Rebel_Story_Name` (+0x48), `Empire_Story_Name` (+0x68) and
+  `Underworld_Story_Name` (+0x88), each only when that faction's player exists (player byte +0x180), then the
+  `Story_Name` list ("Load_Plots( %s, %s )", faction / file pairs, in list order; Thrawn's Revenge uses only this list).
+  Each plot records its player (`+0x638`) and manager (`+0x630`). The manager also keeps a list of {player id, file}
+  for the save (+0x48). Thrawn's Revenge campaigns checked use only the `Story_Name` list.
+- The table is a **unique** map (`0x325750` returns the existing node for a key already present), and the loader then
+  stores the new plot into that node. So when two Story_Plots files of one game list the **same plot file name**, the
+  later-loaded plot **replaces** the earlier one in the table: the earlier plot object (and its script, which was
+  already loaded) is no longer reached by any dispatch, T9 service or name lookup [H for the map; M for "no longer
+  reached": nothing else was seen holding it]. Shipped FoC and the Thrawn's Revenge campaigns checked
+  (Operation Shadow Hand) list each plot file once per game.
 
 `<Suspended_Plot />` with no text creates nothing.
 
 ### 2.2 Activation [H]
 
-- **STORY_ELEMENT reward** (`0x4624e0`): `Reward_Param1 + ".xml"` → find the plot → active = 1. This is how
+- **STORY_ELEMENT reward** (`0x4624e0` → `0x326430`): `Reward_Param1 + ".xml"` → find the plot by name in the
+  **current mode's** story manager (any player's plot, §2.4) → active = 1. A name that is not found does nothing and
+  logs nothing beyond the "STORY REWARD - STORY ELEMENTS %s" line [H]. This is how
   Empire Act II/III/IV are opened (`Empire_ActI_Open_Act_I_01`: STORY_TRIGGER, Prereq
   `Empire_ActI_Holocron_Geonosis_Entry_Completed`, reward `STORY_ELEMENT Story_Campaign_Empire_Act_II`).
 - **Lua `StoryPlotWrapper.Activate`** (`0x7243a0`, 19 bytes, not decompiled): plot `+0x660 = 1` [M from size].
@@ -179,9 +195,27 @@ Activation only sets the flag. No event is re-evaluated, armed or reset at that 
 ### 2.3 Lua Reset (`0x7246e0` → `0x52fc10`) [H]
 
 For every event of the plot: triggered = 0, then vf4 twice. Events **with** prereqs become inactive (and wait
-for a prereq to fire again). Prereq-less events stay active. Disabled flags are not touched. The ELAPSED
-accumulator and its "initialised" flag are not cleared by vf4 (no ELAPSED override) [M]. A reset ELAPSED event
-whose accumulated time already reached its threshold therefore fires on its next evaluation.
+for a prereq to fire again). Prereq-less events stay active. Disabled flags are not touched. ELAPSED and
+OBJECTIVE_TIMEOUT **do** override vf4 (`0x45e550`, vtables 0x86d900 / 0x86de40 read from the exe): the base reset plus
+accumulator `+0x364` = 0 and "initialised" `+0x36c` = 0 [H, q6 2026-11-03; this line said the opposite before]. A reset
+prereq-less ELAPSED therefore starts counting again from its next evaluation (§4.7).
+
+### 2.4 Lookups across players' plots (q6 RE, 2026-11-03) [H]
+
+The original has no per-player plot sets: every player's plots of a mode sit in one table (§2.1). "Current mode" is
+the global mode pointer `0x140b15418`, so a lookup made while a tactical battle runs sees only the tactical plots.
+
+| Lookup | Searches | Order and matches | Not found |
+|---|---|---|---|
+| Lua `Get_Story_Plot(name)` (`0x6a2d90` → `0x328370`) | the current mode's table, **all players**, active or suspended | one hash lookup by CRC of the name as passed (no upper-casing, no ".xml" added): at most one plot can match, since the table is unique (§2.1), so there is no search order | **warning** "Get_Story_Plot -- plot %s not found.", returns nothing |
+| STORY_ELEMENT reward (`0x4624e0` → `0x326430` → `0x328370`) | the current mode's table, all players, active or suspended | same single lookup of `Reward_Param1 + ".xml"`; that plot's active flag := 1 | silent |
+| TRIGGER_EVENT reward (`0x32e960` → `0x530770`) | the current mode's table, **every plot**, all players, active or suspended | walks the table's node list (the §4.2 order) and, in **each** plot, looks the event up by its upper-cased name (`0x52ef90`) and fires it. **Every** plot that has such an event fires it; the first match does not stop the walk | silent |
+| Lua `Story_Event(name [, object])` (`0x69e040` → dispatch `0x32e5f0`, type STORY_AI_NOTIFICATION, player argument 0) | the current mode's table, every **active** plot, all players (the player filter of `0x5306b0` is off) | §4.2 plot order, then the plot's AI_NOTIFICATION bucket order; every matching armed event fires (vf3), no first-match stop. A dead object argument (wrapper object null) is sent as "no object" | nothing fires, no message |
+| Lua `StoryPlotWrapper.Get_Event(name)` (`0x724480` → `0x52ef90`) | **only the wrapper's plot** | one lookup by CRC of the upper-cased name | **error** "StoryPlotWrapper::Get_Event -- cannot find event %s in plot %s." (ends the calling script at the end of its pass, LUA_API "What an error does"), returns nothing |
+
+Also within the rewarding plot only: RESET_EVENT, RESET_BRANCH, DISABLE_BRANCH, and DISABLE_STORY_EVENT without
+Param3 (§6.2). Prereq names resolve within the plot only (§3). The dispatches raised by game systems may pass a player,
+which limits them to that player's plots (`0x5306b0`: plot `+0x638` must equal it); `Story_Event` does not.
 
 ## 3. Prereq semantics (question 3) [H]
 
@@ -282,9 +316,22 @@ only on explicit triggers.
   (seconds per frame), so both are mode time [M].
 - Time while the plot is suspended does not accumulate, except that a prereq-armed timer in a suspended
   plot adds the gap at its first evaluation after activation [M].
-- The accumulator is never cleared by Reset or Perpetual, so a Perpetual ELAPSED fires every T9 after its
-  first fire [M]. No shipped FoC event is Perpetual + ELAPSED.
-- OBJECTIVE_TIMEOUT uses the same timer code.
+- **Reset clears the timer** (corrected q6 RE 2026-11-03; this said "never cleared" [M] before). ELAPSED's vf4
+  `0x45e550` (vtable 0x86d900 slot 4, read from the exe) runs the base reset and then sets accumulated (`+0x364`) = 0
+  and initialised (`+0x36c`) = 0 [H]. The evaluator `0x454980` itself never clears anything; it only fires when
+  accumulated ≥ Param1 (`+0x368`, default −1.0 from the constructor when no Param1 is given).
+- **Perpetual re-arm** [H]: Fire step 8 (§1.5) sets triggered = 0, calls vf4 (so the timer is cleared as above), then
+  active = 1 with a new activation time. vf7 (`0x4511f0`) is **not** called, so the event is armed but uninitialised.
+  The fire happens inside the T9 ELAPSED dispatch and that loop does not revisit the event, so its next evaluation is
+  the next T9, which only records LastTime and adds nothing. Accumulation restarts from that T9. A Perpetual
+  `STORY_ELAPSED T` therefore fires about every **T + one story service** (T seconds of unpaused story time counted
+  from the service after the fire) [H for the logic; M for the exact frame count, which depends on the float sums of
+  frame × seconds-per-frame]. The same holds with or without prereqs (with prereqs the base reset clears active and
+  Fire sets it again). Thrawn's Revenge's `Galactic_Cycle_Increment` / `Galactic_Cycle_Finished` (Player_Agnostic_Plot,
+  `STORY_ELAPSED 40`, Perpetual) therefore fire once per ~40 s of unpaused galactic time: one `WEEKS` increment per
+  period, as the mod intends. No shipped FoC event is Perpetual + ELAPSED.
+- RESET_EVENT, RESET_BRANCH and Lua `Reset` call the same vf4, so they also restart the timer (§2.3).
+- OBJECTIVE_TIMEOUT uses the same timer code and the same vf4 (`0x45e550`, vtable 0x86de40 slot 4).
 
 ## 5. Parameter matching for game-side triggers (question 5)
 
@@ -321,12 +368,12 @@ the Perpetual re-arm. Reward_ParamN are single strings. Reward_Param_List is a l
 
 | Reward | Params | Behaviour | Conf |
 |---|---|---|---|
-| TRIGGER_EVENT | P1 event | Fire every event named P1 in **all plots** of the story manager (active or not), in plot order. No armed, triggered or prereq check | H (`0x32e960`, `0x530770`) |
+| TRIGGER_EVENT | P1 event | Fire every event named P1 in **all plots** of the current mode's story manager (every player's, active or not), in plot order (§2.4). No armed, triggered or prereq check | H (`0x32e960`, `0x530770`) |
 | RESET_EVENT | P1 event, plus each name in Reward_Param_List | In the **rewarding plot**: triggered = 0, vf4 (counters reset; unarmed if it has prereqs). No re-check | H (`0x52fdf0`) |
 | RESET_BRANCH | P1 branch, P2 optional event | In the rewarding plot, every event whose Branch equals P1 (**exact, case-sensitive byte compare**): triggered = 0, vf4. Then re-check prereqs of every branch event (§1.2: arms; TRIGGER fires). Then, if P2 is given, Fire event P2 of that plot. Depth limit 3. Disabled flags untouched | H (`0x52fc70`) |
 | DISABLE_BRANCH | P1 branch, **P2 required** | rewarding plot only: disabled = (atoi(P2) ≠ 0) for all events of the branch; missing P1/P2 → logged and ignored | H (`0x52ee40`) |
 | DISABLE_STORY_EVENT | P1 event, **P2 required**, P3 optional | disabled = (atoi(P2) ≠ 0); rewarding plot only unless atoi(P3) ≠ 0 (then every plot with that name) | H |
-| STORY_ELEMENT | P1 plot name without ".xml" | activate plot `P1.xml` | H (`0x4624e0`) |
+| STORY_ELEMENT | P1 plot name without ".xml" | activate plot `P1.xml`, any player's, in the current mode's manager; silent when not found (§2.4) | H (`0x4624e0`) |
 | SET_FLAG | P1 name, **P2 required** | flag = atoi(P2) (global table) | H (`0x32b960`) |
 | INCREMENT_FLAG | P1 name, **P2 required** | flag += atoi(P2) **only if the flag already exists**; otherwise "Attempting to increment undefined flag" and nothing happens | H (`0x3285a0`) |
 | RANDOM_STORY | – | builds a random plot (`0x4bfdc0`); this is where the "Event %s, Type STORY_TRIGGER" / "Prereq %s" strings come from (`0x4be210`, `0x4be420`, `0x4bdfa0`) | H |
@@ -353,9 +400,12 @@ only dialog / chapter tags shipped events use are `Story_Dialog`, `Story_Chapter
    0x140b1540c > 0 (STRATEGIC_GAPS §4) [H].
 4. Meaning of `0x140b153f8` values (Multiplayer gate), and of Enter-family Param5/Param7.
 5. CONQUER_COUNT: whether the conquest dispatch is raised for every faction or only the human player.
-6. Whether `0x215a30` (CRC) is case-sensitive. This affects plot-name lookups from Get_Story_Plot and
-   STORY_ELEMENT.
-7. Story dialog / chapter fields (`+0x230..+0x2b9`) and the Lua dialog setters were not traced.
+6. ~~Whether `0x215a30` (CRC) is case-sensitive~~: it is (raw-byte CRC32, no case folding), so Get_Story_Plot and
+   STORY_ELEMENT names must match the Story_Plots text byte for byte (§2.1) [H, q6 2026-11-03].
+7. Story dialog / chapter fields (`+0x230..+0x2b9`) and the Lua dialog setters were not traced. (q6 2026-11-03: the
+   Lua setters are now in LUA_API "StoryEventWrapper dialog and parameter setters": `+0x230` Story_Dialog, `+0x250`
+   chapter, `+0x278` tag, `+0x2b8` popup flag, `+0x2c0` the Add_Dialog_Text list passed by pointer to the holocron
+   [H for the Fire call 0x455db0; the remaining fields of the range still untraced].)
 
 > **Status 2026-10-30:** The XML fields `Story_Dialog`, `Story_Tag`, `Story_Chapter` and `Story_Dialog_Popup` are now parsed (`engine/lua/src/story_model.cpp:367-374`) and a fired event with a dialog or tag is recorded for the UI (`story_model.cpp:628-630`). Not covered by this note: the +0x230..+0x2b9 layout and the Lua dialog setters.
 
@@ -372,7 +422,8 @@ rules above where they leave a choice. Tests: `engine/lua/tests/test_lua_story.c
    names inside a tag AND, whitespace or commas; edge-triggered. A prereq-armed ELAPSED counts from its activation time;
    a prereq-less one from its first T9 while its plot is active. Perpetual has no once-per-frame limit: a notified type
    fires once per matching notification (two in one frame fire twice), and a Perpetual ELAPSED fires at every T9 after
-   its first fire (the accumulator is never cleared) [M]. The timer mechanism also means that any **initialised** timer
+   its first fire (the accumulator is never cleared). **This last point is wrong** (q6 RE 2026-11-03, §4.7 [H]): vf4
+   clears the timer, so the original re-fires every T + one service; see item 11. The timer mechanism also means that any **initialised** timer
    (not only a prereq-armed one, §4.7 last bullet) adds the whole suspension gap at its first T9 after its plot is
    activated again, since LastTime is only refreshed by an evaluation [M].
 2. **Parameter matching** (§5): the generic rule (types without a modelled evaluator, e.g. RETREAT, SELECT_PLANET, the
@@ -411,6 +462,14 @@ rules above where they leave a choice. Tests: `engine/lua/tests/test_lua_story.c
    the calling script's own set first, then the sets in load order. Thrawn's Revenge needs it: GCPlayerAgnostic (in the
    Independent_Forces set) asks for `Conquests\Factions\Story_Generic_<FACTION>.xml`, which only that faction's set lists.
    STORY_ELEMENT, TRIGGER_EVENT and `Story_Event` still act on the own set only (open).
+   **Original (q6 RE 2026-11-03, §2.4 [H]):** there is one table per mode for all players, so `Get_Story_Plot`,
+   STORY_ELEMENT, TRIGGER_EVENT and `Story_Event` all reach **every** player's plots of the current mode
+   (`Story_Event` only active plots; TRIGGER_EVENT also suspended ones and fires the event in every plot that has it;
+   Get_Story_Plot and STORY_ELEMENT find at most one plot). Only `Get_Event` (own plot, error when missing), the
+   rewarding-plot rewards and prereqs stay inside one plot. There is no "own set first" in the original: a plot file
+   name is unique per manager, and when two sets list the same file, the **later-loaded** plot replaces the earlier
+   one (§2.1). The port's own-set-first order gives the same answer whenever names are unique, which holds for the
+   data checked. The name must also match case-sensitively (§2.1, §7 item 6), unlike the port.
 8. **Story flags** (§0) [H]: one table for the whole session - every galactic plot set and the tactical story's plot
    set use the same flags (`StoryModel::share_flags`). Before 2026-11-02 each plot set had its own table, so a mission's
    `SET_FLAG <Faction>_A0xM0y_WIN` (20 such flags in FoC, e.g. `EMPIRE_A01M03_WIN`, set in the tactical plots) never
@@ -433,11 +492,16 @@ rules above where they leave a choice. Tests: `engine/lua/tests/test_lua_story.c
     --story` also gives the story player world the galactic AI's equations and resolver as its perception source, so
     plot scripts' `EvaluatePerception` answers (TR's VictoryHandler / StoryUtil / RandomSpawnManager need it);
     `GameSession` does not yet (open).
-11. **Perpetual STORY_ELAPSED, open**: the port keeps §4.7 (accumulator never cleared: fires at every T9 after the
-    first fire; `test_q6_story_chain` checks it at session level). Thrawn's Revenge's `Galactic_Cycle_Increment` /
-    `Galactic_Cycle_Finished` (Player_Agnostic_Plot, `STORY_ELAPSED 40`, Perpetual, no prereq) drive a week counter,
-    which reads as if retail re-arms the 40 s period. Needs a retail probe (fire count of a Perpetual ELAPSED over
-    120 s) before changing §4.7.
+11. **Perpetual STORY_ELAPSED** (settled by RE, q6 2026-11-03, §4.7 [H]): the port kept the old §4.7 reading
+    (accumulator never cleared: fires at every T9 after the first fire; `test_q6_story_chain` checks it at session
+    level). The decompile says otherwise: Fire's Perpetual step calls vf4, and ELAPSED's vf4 `0x45e550` clears the
+    accumulator and the initialised flag; vf7 is not called, so the next T9 re-initialises LastTime and counting
+    restarts there. Period = T of unpaused story time + one story service [M for the exact frame count]. Thrawn's
+    Revenge's `Galactic_Cycle_Increment` / `Galactic_Cycle_Finished` (Player_Agnostic_Plot, `STORY_ELAPSED 40`,
+    Perpetual, no prereq) therefore fire once per ~40 s, as the week counter expects. The same vf4 runs on Lua `Reset`,
+    RESET_EVENT and RESET_BRANCH, so those restart an ELAPSED timer too (§2.3). Port: open (change the model and the
+    `test_q6_story_chain` expectation). A retail probe is no longer needed for the rule; one would only pin the frame
+    count.
 12. **Planet `Get_Owner`** [port, q6]: a galactic planet object's `GameObjectWrapper.Get_Owner` returns the galactic
     planet owner (`PlanetState::owner`). The port creates planet objects without a store owner, so before q6 every
     planet reported player -1 to Lua (mod scripts that sort planets by `Get_Owner().Get_Faction_Name()`, e.g. TR's
