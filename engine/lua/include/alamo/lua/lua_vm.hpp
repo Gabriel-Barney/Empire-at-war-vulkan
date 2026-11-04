@@ -124,6 +124,22 @@ public:
     size_t thread_count() const;
     bool thread_active(int32_t id) const;
     bool exit_requested() const;
+    // q6 t19 (docs/re/LUA_SAVE.md §2.1, the thread records): every thread record in id order (= service order), killed
+    // ones that the next service will reap included, and the id the next Create_Thread gets.
+    struct ThreadInfo {
+        int32_t id = 0;
+        std::string function;  // the start function's global name
+        bool started = false;  // resumed at least once
+        bool killed = false;   // ended; removed at the end of the next service
+        bool operator==(const ThreadInfo&) const = default;
+    };
+    std::vector<ThreadInfo> thread_list() const;
+    int32_t next_thread_id() const;
+    const LuaVmOptions& options() const;
+    // q6 t19 (LUA_SAVE.md §4.1, the from-save instance): true while none of run / require / call / create_thread /
+    // service_threads / read has been called on this VM - only the constructor's libraries, globals and commands exist
+    // (bridges and host values may be attached). Bindings that run code through state() directly are not tracked.
+    bool fresh() const;
 
     // ---- host inputs ----
     void set_time(double seconds);  // GetCurrentTime()
