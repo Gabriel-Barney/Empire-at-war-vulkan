@@ -59,10 +59,19 @@ namespace fs = std::filesystem;
 
 namespace {
 
+// q6 t11 (docs/re/LUA_API.md "Binding error model across all bindings"): a binding error does not unwind; it logs
+// "SCRIPT ERROR: ..." and sets the script's stop flag. run() reports those lines as its result (a Lua error as before)
+// and clears the flag, so the next snippet runs on a live script.
 std::string run(LuaVm& vm, const std::string& code) {
     std::string err;
+    const size_t m0 = vm.messages().size();
     if (!vm.run(code, "test", &err)) return err.empty() ? "error" : err;
-    return {};
+    if (!vm.exit_requested()) return {};
+    std::string out;
+    for (size_t i = m0; i < vm.messages().size(); ++i)
+        if (vm.messages()[i].rfind("SCRIPT ERROR: ", 0) == 0) out += vm.messages()[i] + "\n";
+    reset_script_threads(vm);
+    return out.empty() ? std::string("stop") : out;
 }
 std::string gstr(LuaVm& vm, const char* name) {
     lua_State* L = vm.state();
@@ -294,10 +303,34 @@ void test_players() {
     g.world.set_local_player(0);
 
     CHECK(run(vm, "emp = Find_Player('empire'); und = Find_Player('Underworld'); neu = Find_Player('NEUTRAL'); "
-                  "loc = Find_Player('local'); none = Find_Player('Imperial'); "
+                  "loc = Find_Player('local'); "
                   "e_id = emp.Get_ID(); u_id = und.Get_ID(); same = (loc == emp); diff = (emp ~= und)") == "");
-    CHECK(gnum(vm, "e_id") == 0.0 && gnum(vm, "u_id") == 1.0 && gnil(vm, "none") && gtrue(vm, "same") &&
-          gtrue(vm, "diff"));
+    CHECK(gnum(vm, "e_id") == 0.0 && gnum(vm, "u_id") == 1.0 && gtrue(vm, "same") && gtrue(vm, "diff"));
+    // q6 t11 (LUA_API.md "Lookups"): a name that is no faction is a script error (no unwind: the code runs on, the
+    // script stops at the end of its pass); a known faction without a player is nil, silently.
+    {
+        const size_t m0 = vm.messages().size();
+        CHECK(vm.run("ok = pcall(function() none = Find_Player('Imperial') end) after = 1", "test") && gnil(vm, "none") &&
+              gtrue(vm, "ok") && gnum(vm, "after") == 1.0 && vm.exit_requested());
+        CHECK(vm.messages().size() == m0 + 1 && vm.messages().back() == "SCRIPT ERROR: Find_Player -- unknown faction Imperial.");
+        reset_script_threads(vm);
+    }
+    {
+        Galaxy g2({}, [](galactic::GalacticRules& r, const objects::ObjectTypeDatabase&) {
+            galactic::FactionRules reb;
+            reb.name = "Rebel";  // a faction of the data that no player plays
+            r.factions.push_back(reb);
+        });
+        LuaVm vm2(g2.host());
+        attach_player_world(vm2, &g2.world);
+        const std::string e2 = run(vm2, "reb = Find_Player('Rebel') nreb = (function(...) return arg.n end)(Find_Player('REBEL')) und = Find_Player('Underworld')");
+        if (!e2.empty()) std::printf("  g2: %s\n", e2.c_str());
+        CHECK(e2.empty());
+        CHECK(gnil(vm2, "reb") && gnum(vm2, "nreb") == 1.0 && !gnil(vm2, "und") && !vm2.exit_requested() &&
+              vm2.messages().empty());
+        // TR Prop_Alignment: Find_Player of factions the mod lacks -> nil, the comparisons are false, then the stop.
+        CHECK(vm2.run("same = Find_Player('Trade_Federation') == und", "test") && !gtrue(vm2, "same") && vm2.exit_requested());
+    }
     // Wrapper identity: one userdata per player and VM (tables keyed by players hit).
     CHECK(run(vm, "pk = {} pk[emp] = 'e' pk[und] = 'u' i1 = pk[Find_Player('EMPIRE')] i2 = pk[emp.Get_Enemy()] "
                   "i3 = rawequal(loc, emp) and 'same' or 'different'") == "");
@@ -659,7 +692,7 @@ uint64_t session_digest() {
                                 "  out = out .. d.Sample() .. string.format('%.9g;', EvaluatePerception('Rand', und, Target)) "
                                 "  if i == 7 then emp.Make_Ally(und) end "
                                 "end "
-                                "GiveDesireBonus(und, 'G', Target, 2.5) Purge_Goals(emp) "
+                                "GiveDesireBonus(und, 'G', Target, 2.5, 10) Purge_Goals(emp) "
                                 "out = out .. string.format('%.9g %.9g', emp.Get_Credits(), und.Get_Credits())");
     CHECK(err == "");
     StateHasher h;

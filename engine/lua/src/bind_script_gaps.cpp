@@ -61,6 +61,7 @@ int script_error(Call& c, const char* fmt, ...) {
     va_start(ap, fmt);
     vlog(c, "SCRIPT ERROR: ", fmt, ap);
     va_end(ap);
+    c.vm->exit_requested = true;  // q6 t11: the original's error helper sets the stop flag (LUA_API.md "Binding error model")
     return 0;
 }
 int script_warning(Call& c, const char* fmt, ...) {

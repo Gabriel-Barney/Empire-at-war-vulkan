@@ -141,11 +141,11 @@ int push_block(Call& c, uint32_t id) {
 // One required float: "<Cls> -- Expected float parameter 1" / "<Cls> -- Invalid parameter 1, expected a float".
 bool need_float1(Call& c, const char* cls) {
     if (!c.has(1)) {
-        c.fail("%s -- Expected float parameter 1", cls);
+        c.script_error_stop("%s -- Expected float parameter 1", cls);
         return false;
     }
     if (!c.is_number(1)) {
-        c.fail("%s -- Invalid parameter 1, expected a float", cls);
+        c.script_error_stop("%s -- Invalid parameter 1, expected a float", cls);
         return false;
     }
     return true;
@@ -153,12 +153,12 @@ bool need_float1(Call& c, const char* cls) {
 
 bool need_float2(Call& c, const char* cls) {
     if (c.nargs < 2) {
-        c.fail("%s -- Expected float parameter 1, float parameter 2", cls);
+        c.script_error_stop("%s -- Expected float parameter 1, float parameter 2", cls);
         return false;
     }
     for (int i = 1; i <= 2; ++i)
         if (!c.is_number(i)) {
-            c.fail("%s -- Invalid parameter %d, expected a float", cls, i);
+            c.script_error_stop("%s -- Invalid parameter %d, expected a float", cls, i);
             return false;
         }
     return true;
@@ -167,11 +167,11 @@ bool need_float2(Call& c, const char* cls) {
 // One required bool, the Lua* family form.
 bool need_bool1(Call& c, const char* cls) {
     if (!c.has(1)) {
-        c.fail("%s -- Expected bool parameter 1", cls);
+        c.script_error_stop("%s -- Expected bool parameter 1", cls);
         return false;
     }
     if (!is_bool(c, 1)) {
-        c.fail("%s -- invalid type for parameter 1. Expected bool.", cls);
+        c.script_error_stop("%s -- invalid type for parameter 1. Expected bool.", cls);
         return false;
     }
     return true;
@@ -180,7 +180,7 @@ bool need_bool1(Call& c, const char* cls) {
 // The *Class family form: exact count, then per-parameter types.
 bool need_count(Call& c, const char* name, int n) {
     if (c.nargs != n) {
-        c.fail("%s -- invalid number of parameters. Expected %d, got %d.", name, n, c.nargs);
+        c.script_error_stop("%s -- invalid number of parameters. Expected %d, got %d.", name, n, c.nargs);
         return false;
     }
     return true;
@@ -188,7 +188,7 @@ bool need_count(Call& c, const char* name, int n) {
 
 bool need_string(Call& c, const char* name, int i, const char* what = "string") {
     if (!c.is_string(i)) {
-        c.fail("%s -- invalid type for parameter %d. Expected %s.", name, i, what);
+        c.script_error_stop("%s -- invalid type for parameter %d. Expected %s.", name, i, what);
         return false;
     }
     return true;
@@ -198,7 +198,7 @@ bool need_string(Call& c, const char* name, int i, const char* what = "string") 
 
 int g_start_cinematic_camera(Call& c) {
     if (c.has(1) && !lua_isnil(c.L, c.idx(1)) && !is_bool(c, 1))
-        return c.fail("LuaStartCinematicCamera -- invalid type for parameter 1. Expected bool.");
+        return c.script_error_stop("LuaStartCinematicCamera -- invalid type for parameter 1. Expected bool.");
     record(c, PresentationOp::StartCinematicCamera);
     PresentationState& s = state(c);
     s.camera = CameraMode::Cinematic;
@@ -231,11 +231,14 @@ int g_end_cinematic_mode(Call& c) {
 
 // Set_Cinematic_*_Key(position, x|dist, y|pitch, z|yaw, euler, attach_object|0, use_object_rotation,
 // animation): a cut. Transition_Cinematic_*_Key: same with the time (seconds) as parameter 2.
+// q6 t11 (LUA_API.md): Set_Cinematic_Target_Key takes 8 or more arguments (FoC Underworld Act I M03 passes 9; the
+// message says 8); an invalid position is a warning and the binding returns (the complete warning list).
 int set_key(Call& c, const char* cls, PresentationOp op, bool camera, bool transition) {
     const int expected = transition ? 9 : 8;
-    if (c.nargs != expected) return c.fail("%s -- Expected %d parameters", cls, expected);
-    if (!is_position(c, 1)) return c.fail("%s -- Invalid parameter 1, expected a position.", cls);
-    if (!c.is_number(2)) return c.fail("%s -- Invalid parameter 2, expected a float", cls);
+    const bool at_least = !camera && !transition;
+    if (at_least ? c.nargs < expected : c.nargs != expected) return c.script_error_stop("%s -- Expected %d parameters", cls, expected);
+    if (!is_position(c, 1)) return c.script_warning("%s -- Invalid parameter 1, expected a position.", cls);
+    if (!c.is_number(2)) return c.script_error_stop("%s -- Invalid parameter 2, expected a float", cls);
     record(c, op);
     PresentationState& s = state(c);
     CameraKey& k = camera ? s.camera_key : s.target_key;
@@ -265,7 +268,7 @@ int g_transition_target_key(Call& c) {
 // in cinematic mode until End_Cinematic_Camera (shipped scripts: Transition_To_Tactical_Camera(t)
 // Sleep(t) ... End_Cinematic_Camera()).
 int g_transition_to_tactical(Call& c) {
-    if (!need_float1(c, "LuaTransitionToTacticalCamera")) return -1;
+    if (!need_float1(c, "LuaTransitionToTacticalCamera")) return 0;
     record(c, PresentationOp::TransitionToTacticalCamera);
     Ramp& r = state(c).tactical_blend;
     r.set(0.0, frame_of(c));
@@ -274,7 +277,7 @@ int g_transition_to_tactical(Call& c) {
 }
 
 int focus(Call& c, const char* msg, PresentationOp op) {
-    if (!is_position(c, 1)) return c.fail("%s", msg);
+    if (!is_position(c, 1)) return c.script_warning("%s", msg);  // q6 t11: a warning (LUA_API.md, the warning list)
     record(c, op);
     PresentationState& s = state(c);
     s.camera_focus = to_arg(c, 1);
@@ -299,31 +302,31 @@ int g_camera_to_follow(Call& c) {
 }
 
 int g_rotate_camera_by(Call& c) {
-    if (!need_float2(c, "LuaRotateCameraBy")) return -1;
+    if (!need_float2(c, "LuaRotateCameraBy")) return 0;
     record(c, PresentationOp::RotateCameraBy);
     return 0;
 }
 int g_rotate_camera_to(Call& c) {
-    if (!need_float2(c, "LuaRotateCameraTo")) return -1;
+    if (!need_float2(c, "LuaRotateCameraTo")) return 0;
     record(c, PresentationOp::RotateCameraTo);
     return 0;
 }
 int g_zoom_camera(Call& c) {
-    if (!need_float2(c, "LuaZoomCamera")) return -1;
+    if (!need_float2(c, "LuaZoomCamera")) return 0;
     record(c, PresentationOp::ZoomCamera);
     return 0;
 }
 
 int g_cinematic_zoom(Call& c) {
-    if (c.nargs < 2) return c.fail("LuaCinematicZoom -- Expected float param 1 time, float param 2 delta");
-    if (!c.is_number(1)) return c.fail("LuaCinematicZoom -- Invalid parameter 1, expected a float");
-    if (!c.is_number(2)) return c.fail("LuaCinematicZoom -- Invalid parameter 2, expected a float");
+    if (c.nargs < 2) return c.script_error_stop("LuaCinematicZoom -- Expected float param 1 time, float param 2 delta");
+    if (!c.is_number(1)) return c.script_error_stop("LuaCinematicZoom -- Invalid parameter 1, expected a float");
+    if (!c.is_number(2)) return c.script_error_stop("LuaCinematicZoom -- Invalid parameter 2, expected a float");
     record(c, PresentationOp::CinematicZoom);
     return 0;
 }
 
 int g_set_cinematic_environment(Call& c) {
-    if (!need_bool1(c, "LuaSetCinematicEnvironment")) return -1;
+    if (!need_bool1(c, "LuaSetCinematicEnvironment")) return 0;
     record(c, PresentationOp::SetCinematicEnvironment);
     state(c).cinematic_environment = boolean(c, 1);
     return 0;
@@ -336,8 +339,8 @@ int g_set_new_environment(Call& c) {
 }
 
 int g_promote_to_space_cinematic_layer(Call& c) {
-    if (!c.has(1)) return c.fail("LuaPromoteToSpaceCinematicLayer -- Expected gameobject parameter 1");
-    if (!is_object(c, 1)) return c.fail("LuaPromoteToSpaceCinematicLayer -- Invalid parameter 1, expected a game object");
+    if (!c.has(1)) return c.script_error_stop("LuaPromoteToSpaceCinematicLayer -- Expected gameobject parameter 1");
+    if (!is_object(c, 1)) return c.script_error_stop("LuaPromoteToSpaceCinematicLayer -- Invalid parameter 1, expected a game object");
     record(c, PresentationOp::PromoteToSpaceCinematicLayer);
     return 0;
 }
@@ -352,7 +355,7 @@ int g_do_end_cinematic_cleanup(Call& c) {
 
 // Fades / letterbox ramp from the current level at the call frame. [inferred] linear.
 int ramp_to(Call& c, const char* cls, PresentationOp op, Ramp PresentationState::*ramp, double target) {
-    if (!need_float1(c, cls)) return -1;
+    if (!need_float1(c, cls)) return 0;
     record(c, op);
     (state(c).*ramp).go(target, frame_of(c), seconds_to_frames(c.number(1)));
     return 0;
@@ -395,7 +398,7 @@ int g_letter_box_off(Call& c) {
 
 // Lock_Controls(1) / Lock_Controls(0). [inferred] any non-zero value locks.
 int g_lock_controls(Call& c) {
-    if (!need_float1(c, "LuaLockControls")) return -1;
+    if (!need_float1(c, "LuaLockControls")) return 0;
     record(c, PresentationOp::LockControls);
     state(c).controls_locked = c.number(1) != 0.0;
     return 0;
@@ -408,15 +411,15 @@ int g_cancel_fast_forward(Call& c) {
 }
 
 int g_enable_fog(Call& c) {
-    if (!need_bool1(c, "LuaEnableFog")) return -1;
+    if (!need_bool1(c, "LuaEnableFog")) return 0;
     record(c, PresentationOp::EnableFog);
     state(c).fog_enabled = boolean(c, 1);
     return 0;
 }
 
 int g_enable_distance_fog(Call& c) {
-    if (!need_count(c, "Enable_Distance_Fog", 1)) return -1;
-    if (!is_bool(c, 1)) return c.fail("Enable_Distance_Fog -- invalid type for parameter 1. Expected boolean.");
+    if (!need_count(c, "Enable_Distance_Fog", 1)) return 0;
+    if (!is_bool(c, 1)) return c.script_error_stop("Enable_Distance_Fog -- invalid type for parameter 1. Expected boolean.");
     record(c, PresentationOp::EnableDistanceFog);
     state(c).distance_fog_enabled = boolean(c, 1);
     return 0;
@@ -425,14 +428,14 @@ int g_enable_distance_fog(Call& c) {
 // ---------------------------------------------------------------- audio
 
 int g_allow_localized_sfx(Call& c) {
-    if (!need_bool1(c, "LuaAllowLocalizedSFX")) return -1;
+    if (!need_bool1(c, "LuaAllowLocalizedSFX")) return 0;
     record(c, PresentationOp::AllowLocalizedSfx);
     state(c).localized_sfx = boolean(c, 1);
     return 0;
 }
 
 int g_weather_audio_pause(Call& c) {
-    if (!need_bool1(c, "LuaWeatherAudioPause")) return -1;
+    if (!need_bool1(c, "LuaWeatherAudioPause")) return 0;
     record(c, PresentationOp::WeatherAudioPause);
     state(c).weather_audio_paused = boolean(c, 1);
     return 0;
@@ -440,7 +443,7 @@ int g_weather_audio_pause(Call& c) {
 
 // [inferred] Play_Music overrides the mode-based music until Resume_Mode_Based_Music.
 int g_play_music(Call& c) {
-    if (!need_count(c, "Play_Music", 1) || !need_string(c, "Play_Music", 1)) return -1;
+    if (!need_count(c, "Play_Music", 1) || !need_string(c, "Play_Music", 1)) return 0;
     record(c, PresentationOp::PlayMusic);
     PresentationState& s = state(c);
     s.music = std::string(c.string(1));
@@ -474,7 +477,7 @@ int g_master_volume_restore(Call& c) {
 
 // SFXManager.Allow_*(bool): no contract strings in the docs. [inferred] message form.
 int sfx_flag(Call& c, const char* name, PresentationOp op, bool PresentationState::*flag) {
-    if (!is_bool(c, 1)) return c.fail("LuaSFXCommandsClassClass::%s -- Expected bool parameter 1", name);
+    if (!is_bool(c, 1)) return c.script_error_stop("LuaSFXCommandsClassClass::%s -- Expected bool parameter 1", name);
     record(c, op);
     state(c).*flag = boolean(c, 1);
     return 0;
@@ -500,10 +503,10 @@ int m_allow_unit_response_vo(Call& c) {
 
 int object_sfx(Call& c, const char* method, PresentationOp op) {
     if (c.nargs < 1 || c.nargs > 2)
-        return c.fail("GameObjectWrapper::%s -- invalid number of parameters. Expected 1 or 2, got %d.", method, c.nargs);
-    if (!c.is_string(1)) return c.fail("GameObjectWrapper::%s -- invalid type for parameter 1. Expected string.", method);
+        return c.script_error_stop("GameObjectWrapper::%s -- invalid number of parameters. Expected 1 or 2, got %d.", method, c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("GameObjectWrapper::%s -- invalid type for parameter 1. Expected string.", method);
     if (c.nargs == 2 && !c.is_number(2))
-        return c.fail("GameObjectWrapper::%s -- invalid type for parameter 2. Expected number.", method);
+        return c.script_error_stop("GameObjectWrapper::%s -- invalid type for parameter 2. Expected number.", method);
     record(c, op, true);
     return 0;
 }
@@ -523,10 +526,10 @@ std::string upper_copy(std::string_view s) {
 
 int g_hide_sub_object(Call& c) {
     if (c.nargs != 3)
-        return c.fail("LuaHideSubObject -- Expected gameobject pointer parameter 1, float parameter 2, string parameter 3");
-    if (!is_object(c, 1)) return c.fail("LuaHideSubObject -- Invalid parameter 1, expected a game object");
-    if (!c.is_number(2)) return c.fail("LuaHideSubObject -- Invalid parameter 2, expected a float");
-    if (!c.is_string(3)) return c.fail("LuaHideSubObject -- invalid type for parameter 3. Expected string.");
+        return c.script_error_stop("LuaHideSubObject -- Expected gameobject pointer parameter 1, float parameter 2, string parameter 3");
+    if (!is_object(c, 1)) return c.script_error_stop("LuaHideSubObject -- Invalid parameter 1, expected a game object");
+    if (!c.is_number(2)) return c.script_error_stop("LuaHideSubObject -- Invalid parameter 2, expected a float");
+    if (!c.is_string(3)) return c.script_error_stop("LuaHideSubObject -- invalid type for parameter 3. Expected string.");
     record(c, PresentationOp::HideSubObject);
     const int32_t id = engine_ud(c, 1)->id;
     state(c).hidden_sub_objects[std::to_string(id) + "|" + upper_copy(c.string(3))] = c.number(2) != 0.0;
@@ -535,13 +538,13 @@ int g_hide_sub_object(Call& c) {
 
 int m_attach_particle_effect(Call& c) {
     if (c.nargs < 1 || c.nargs > 2)
-        return c.fail("GameObjectWrapper::Attach_Particle_Effect -- Invalid number of parameters. Expected 1 or 2, got %d.",
+        return c.script_error_stop("GameObjectWrapper::Attach_Particle_Effect -- Invalid number of parameters. Expected 1 or 2, got %d.",
                       c.nargs);
     const detail::Ud* t = engine_ud(c, 1);
     if (!c.is_string(1) && !(t && t->cls == detail::cls_type()))
-        return c.fail("GameObjectWrapper::Attach_Particle_Effect -- Invalid type for parameter 1. Expected type or type name.");
+        return c.script_error_stop("GameObjectWrapper::Attach_Particle_Effect -- Invalid type for parameter 1. Expected type or type name.");
     if (c.nargs == 2 && !c.is_string(2))
-        return c.fail("GameObjectWrapper::Attach_Particle_Effect -- Invalid type for parameter 2. Expected string.");
+        return c.script_error_stop("GameObjectWrapper::Attach_Particle_Effect -- Invalid type for parameter 2. Expected string.");
     const PresentationEvent& e = record(c, PresentationOp::ObjectAttachParticleEffect, true);
     // OI lua: the resolved request for the render host (presentation.hpp ParticleEffectRequest).
     ParticleEffectRequest r;
@@ -571,15 +574,15 @@ int m_attach_particle_effect(Call& c) {
 
 int m_cinematic_hyperspace_in(Call& c) {
     if (c.nargs < 1)
-        return c.fail("GameObjectWrapper::Cinematic_Hyperspace_In -- invalid number of parameters. Expected interger value for "
+        return c.script_error_stop("GameObjectWrapper::Cinematic_Hyperspace_In -- invalid number of parameters. Expected interger value for "
                       "delay frames");
-    if (!c.is_number(1)) return c.fail("GameObjectWrapper::Cinematic_Hyperspace_In -- invalid type for parameter 1. Expected number.");
+    if (!c.is_number(1)) return c.script_error_stop("GameObjectWrapper::Cinematic_Hyperspace_In -- invalid type for parameter 1. Expected number.");
     record(c, PresentationOp::ObjectCinematicHyperspaceIn, true);
     return 0;
 }
 
 int m_in_end_cinematic(Call& c) {
-    if (!is_bool(c, 1)) return c.fail("GameObjectWrapper::Lua_Is_In_End_Cinematic -- Missing required boolean parameter.");
+    if (!is_bool(c, 1)) return c.script_error_stop("GameObjectWrapper::Lua_Is_In_End_Cinematic -- Missing required boolean parameter.");
     record(c, PresentationOp::ObjectInEndCinematic, true);
     state(c).in_end_cinematic[c.self->id] = boolean(c, 1);
     return 0;
@@ -592,9 +595,9 @@ int g_resume_hyperspace_in(Call& c) {
 
 int m_show_emitter(Call& c) {
     if (c.nargs != 2)
-        return c.fail("GameObjectWrapper::Show_Emitter -- invalid number of parameters. Expected 2, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("GameObjectWrapper::Show_Emitter -- invalid type for parameter 1. Expected string.");
-    if (!is_bool(c, 2)) return c.fail("GameObjectWrapper::Show_Emitter -- invalid type for parameter 2. Expected boolean.");
+        return c.script_error_stop("GameObjectWrapper::Show_Emitter -- invalid number of parameters. Expected 2, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("GameObjectWrapper::Show_Emitter -- invalid type for parameter 1. Expected string.");
+    if (!is_bool(c, 2)) return c.script_error_stop("GameObjectWrapper::Show_Emitter -- invalid type for parameter 2. Expected boolean.");
     record(c, PresentationOp::ObjectShowEmitter, true);
     state(c).emitters[std::to_string(c.self->id) + "|" + upper_copy(c.string(1))] = boolean(c, 2);
     return 0;
@@ -608,8 +611,8 @@ int m_play_cinematic_engine_flyby(Call& c) {  // no contract string: arguments r
 // ---------------------------------------------------------------- movies / effects (blocking)
 
 int g_play_bink_movie(Call& c) {
-    if (!c.has(1)) return c.fail("LuaPlayBinkMovie -- Expected type name for parameter 1");
-    if (!c.is_string(1)) return c.fail("LuaPlayBinkMovie -- Expected type string for parameter 1");
+    if (!c.has(1)) return c.script_error_stop("LuaPlayBinkMovie -- Expected type name for parameter 1");
+    if (!c.is_string(1)) return c.script_error_stop("LuaPlayBinkMovie -- Expected type string for parameter 1");
     PresentationLog& log = log_of(c);
     PresentationEvent& e = record(c, PresentationOp::PlayBinkMovie);
     PresentationState& s = log.mutable_state();
@@ -632,9 +635,9 @@ int g_stop_bink_movie(Call& c) {
 
 int g_play_lightning_effect(Call& c) {
     const char* n = "Play_Lightning_Effect";
-    if (!need_count(c, n, 3) || !need_string(c, n, 1)) return -1;
+    if (!need_count(c, n, 3) || !need_string(c, n, 1)) return 0;
     for (int i = 2; i <= 3; ++i)
-        if (!engine_ud(c, i)) return c.fail("%s -- invalid type for parameter %d. Expected position of some sort.", n, i);
+        if (!engine_ud(c, i)) return c.script_error_stop("%s -- invalid type for parameter %d. Expected position of some sort.", n, i);
     PresentationLog& log = log_of(c);
     PresentationEvent& e = record(c, PresentationOp::PlayLightningEffect);
     const PresentationConfig& cfg = log.config();
@@ -646,7 +649,7 @@ int g_play_lightning_effect(Call& c) {
 // ---------------------------------------------------------------- UI
 
 int g_game_message(Call& c) {
-    if (!need_count(c, "Game_Message", 1) || !need_string(c, "Game_Message", 1)) return -1;
+    if (!need_count(c, "Game_Message", 1) || !need_string(c, "Game_Message", 1)) return 0;
     record(c, PresentationOp::GameMessage);
     return 0;
 }
@@ -678,10 +681,10 @@ struct GuiSpec {
 };
 
 int gui(Call& c, const GuiSpec& g) {
-    if (!need_count(c, g.name, g.count) || !need_string(c, g.name, 1)) return -1;
+    if (!need_count(c, g.name, g.count) || !need_string(c, g.name, 1)) return 0;
     if (g.typed) {
         const bool ok = g.type == 'b' ? is_bool(c, g.typed) : g.type == 'f' ? c.is_number(g.typed) : c.is_string(g.typed);
-        if (!ok) return c.fail("%s -- invalid type for parameter %d. Expected %s.", g.name, g.typed, g.what);
+        if (!ok) return c.script_error_stop("%s -- invalid type for parameter %d. Expected %s.", g.name, g.typed, g.what);
     }
     record(c, g.op);
     return 0;

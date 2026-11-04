@@ -1738,3 +1738,24 @@ Both are object scripts, which are mod-only (PHASE4 decision 2026-11-04).
 - Take accepted argument counts from the code table above, not from the messages.
 - `Find_Player` with an unknown faction is an error (script stop), but a known faction without a player is silent nil.
   TR's `Prop_Alignment` relies on the nil result and then stops.
+
+### Port status (q6 t11, 2026-11-04)
+
+- Every binding family except `bind_story.cpp` reports errors through `Call::script_error_stop` (the family helpers
+  `script_error` of bind_objects / bind_fog / bind_script_gaps / bind_script_remaining / bind_ai_tactical call it or set
+  the flag the same way; `script_error_nil` is gone). Warnings go through `Call::script_warning` or the family
+  `script_warning`, which set no flag. `Call::fail` (unwinds) is left only in `bind_story.cpp` (23 sites, open item).
+- The dispatcher (bindings.cpp `invoke`) tests the mode gate first (the globals and methods of "Mode gates"; the store of
+  the VM, or the parent store for a parent-mode wrapper; no store = no gate), then the dead-wrapper rule of a
+  GameObjectWrapper method (default silent; the "already dead" errors; the "this object is dead!" warnings; `Is_Valid`,
+  the unit orders and the proximity events test it themselves). The planet / fleet gates stay in their bindings.
+- Still raised as Lua errors (the port's own failures, not binding diagnostics): an unbound binding ("unbound: X") and a
+  C++ exception inside a binding.
+- `Find_Player`: the faction list is the attached GalacticSim's FactionFiles list; a player world without a GalacticSim
+  has no list, so an unknown name is nil there [port].
+- `Evaluate_In_Galactic_Context` outside a galactic mode without a parent galaxy: the warning, nothing returned. In a
+  galactic mode the port still evaluates the galactic perception [port].
+- A PlayerWrapper without a player (no player world, or an id the world lacks) returns nothing silently.
+- Hosts: AI plans (galactic and tactical: the plan ends), GameScoring (released), object scripts (released) and story
+  plot scripts (service_threads kills the threads; the plot's VM stays attached) honour the flag after the pass.
+  Open: `StoryModel::call_script` / `deliver_script_triggers` still call `Story_Event_Trigger` in a stopped plot script.

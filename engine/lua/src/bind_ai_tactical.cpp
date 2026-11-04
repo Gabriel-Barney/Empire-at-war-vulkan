@@ -130,7 +130,7 @@ int tf_order(Call& c, AiTacticalOrder order, const char* name) {
     AiArg a;
     AiPoint p;
     arg_of(c, 1, a, p);
-    if (!a.present && !p.present) return c.fail("%s::%s -- invalid target parameter.", tf_class_name(c), name);
+    if (!a.present && !p.present) return c.script_error_stop("%s::%s -- invalid target parameter.", tf_class_name(c), name);
     const double number = c.is_number(2) ? c.number(2) : -1.0;
     bool flag = false;
     for (int i = 2; i <= c.nargs; ++i)
@@ -139,15 +139,14 @@ int tf_order(Call& c, AiTacticalOrder order, const char* name) {
     if (!h) return push_nil(c);
     return push_status(c, h->tf_tactical_order(c.self->id, order, a, p, number, flag));
 }
-// The original's script error (logged, no unwind): the binding answers nil.
-int script_error_nil(Call& c, const char* fmt, ...) {
+// The original's script error 0x248190 (Call::script_error_stop: logged, the stop flag, no value, no unwind).
+int script_error(Call& c, const char* fmt, ...) {
     char buf[512];
     va_list ap;
     va_start(ap, fmt);
     std::vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
-    c.vm->message(std::string("SCRIPT ERROR: ") + buf);
-    return push_nil(c);
+    return c.script_error_stop("%s", buf);  // q6 t11: the stop flag, no value (LUA_API.md "Binding error model")
 }
 // A GameObjectWrapper of a dead object at argument i (arg_of leaves it absent).
 bool dead_object_arg(Call& c, int i) {
@@ -164,13 +163,13 @@ std::string tf_display_name(Call& c) {
 // is not a valid destination for TaskForce %s"; both logged as script errors (no unwind), nil. A dead object -> nil with no
 // message (an AI target without a location: the host answers nil).
 int m_move_to(Call& c) {
-    if (c.nargs < 1) return script_error_nil(c, "No destination set for TaskForce %s", tf_display_name(c).c_str());
+    if (c.nargs < 1) return script_error(c, "No destination set for TaskForce %s", tf_display_name(c).c_str());
     if (dead_object_arg(c, 1)) return push_nil(c);
     AiArg a;
     AiPoint p;
     arg_of(c, 1, a, p);
     if ((!a.present && !p.present) || a.player >= 0)
-        return script_error_nil(c, "Parameter 1 is not a valid destination for TaskForce %s", tf_display_name(c).c_str());
+        return script_error(c, "Parameter 1 is not a valid destination for TaskForce %s", tf_display_name(c).c_str());
     return tf_order(c, AiTacticalOrder::MoveTo, "Move_To");
 }
 int m_attack_move(Call& c) { return tf_order(c, AiTacticalOrder::AttackMove, "Attack_Move"); }
@@ -183,13 +182,13 @@ int m_explore_area(Call& c) { return tf_order(c, AiTacticalOrder::ExploreArea, "
 int m_prepare_ambush(Call& c) {
     static const uint32_t land = cls("LandTaskForceClass");
     const bool is_land = c.self->cls == land;
-    if (is_land ? (c.nargs != 4 && c.nargs != 5) : c.nargs != 4) return script_error_nil(c, "Invalid number of parameters");
-    if (dead_object_arg(c, 1)) return script_error_nil(c, "Target object is already dead");
+    if (is_land ? (c.nargs != 4 && c.nargs != 5) : c.nargs != 4) return script_error(c, "Invalid number of parameters");
+    if (dead_object_arg(c, 1)) return script_error(c, "Target object is already dead");
     AiArg a;
     AiPoint p;
     arg_of(c, 1, a, p);
-    if (!a.object && a.target < 0) return script_error_nil(c, "Parameter 1 is not a game object or an AI target");
-    if (!c.is_string(2)) return script_error_nil(c, "Parameter 2 is not a direction string");
+    if (!a.object && a.target < 0) return script_error(c, "Parameter 1 is not a game object or an AI target");
+    if (!c.is_string(2)) return script_error(c, "Parameter 2 is not a direction string");
     const std::string_view text = c.string(2);
     auto same = [&text](const char* w) {
         size_t i = 0;
@@ -202,17 +201,17 @@ int m_prepare_ambush(Call& c) {
         return i == text.size();
     };
     const int direction = same("front") ? 0 : same("left") ? 1 : same("right") ? 2 : same("back") ? 3 : -1;
-    if (direction < 0) return script_error_nil(c, "Unrecognized direction %s", std::string(text).c_str());
-    if (!c.is_number(3) || !(c.number(3) > 0.0)) return script_error_nil(c, "Parameter 3 is not a positive number");
-    if (!c.is_number(4)) return script_error_nil(c, "Parameter 4 is not a number");
+    if (direction < 0) return script_error(c, "Unrecognized direction %s", std::string(text).c_str());
+    if (!c.is_number(3) || !(c.number(3) > 0.0)) return script_error(c, "Parameter 3 is not a positive number");
+    if (!c.is_number(4)) return script_error(c, "Parameter 4 is not a number");
     const bool zone_path = is_land && c.nargs == 5 && is_bool(c, 5) && lua_toboolean(c.L, c.idx(5)) != 0;
     AiTacticalScriptHost* h = host_of(c.L);
     if (!h) return push_nil(c);
     std::string name;
     const int32_t st = h->tf_prepare_ambush(c.self->id, a, direction, c.number(3), c.number(4), zone_path, &name);
-    if (st == AiTacticalScriptHost::kAmbushTargetDead) return script_error_nil(c, "Target object is already dead");
+    if (st == AiTacticalScriptHost::kAmbushTargetDead) return script_error(c, "Target object is already dead");
     if (st == AiTacticalScriptHost::kAmbushTargetRegion)
-        return script_error_nil(c, "Target %s is invalid: AI targets must represent game objects", name.c_str());
+        return script_error(c, "Target %s is invalid: AI targets must represent game objects", name.c_str());
     return push_status(c, st);
 }
 // Fire_Special_Weapon(type_name, target): SCRIPT_GAPS §1.4 / §1.5 on the task force's units (unit-list order),
@@ -229,7 +228,7 @@ int m_attack_target(Call& c) {
     AiPoint p;
     arg_of(c, 1, a, p);
     if (!a.present || (!a.object && a.target < 0))
-        return c.fail("%s::Attack_Target -- only unit targets may be attacked; use Move_To instead.", tf_class_name(c));
+        return c.script_error_stop("%s::Attack_Target -- only unit targets may be attacked; use Move_To instead.", tf_class_name(c));
     std::string hp;
     if (c.is_string(2)) hp = std::string(c.string(2));
     AiTacticalScriptHost* h = host_of(c.L);
@@ -241,7 +240,7 @@ int m_reinforce(Call& c) {
     AiArg a;
     AiPoint p;
     arg_of(c, 1, a, p);
-    if (!a.present && !p.present) return c.fail("%s::Reinforce -- invalid target parameter.", tf_class_name(c));
+    if (!a.present && !p.present) return c.script_error_stop("%s::Reinforce -- invalid target parameter.", tf_class_name(c));
     const double wait = c.is_number(2) ? c.number(2) : -1.0;
     AiTacticalScriptHost* h = host_of(c.L);
     if (!h) return push_nil(c);
@@ -259,7 +258,7 @@ int m_build_all(Call& c) {
 }
 
 int m_build(Call& c) {
-    if (!c.is_string(1)) return c.fail("%s::Build -- invalid type for parameter 1. Expected string.", tf_class_name(c));
+    if (!c.is_string(1)) return c.script_error_stop("%s::Build -- invalid type for parameter 1. Expected string.", tf_class_name(c));
     AiArg pad;
     AiPoint p;
     arg_of(c, 2, pad, p);
@@ -300,7 +299,7 @@ int m_distance(Call& c) {
     AiArg a;
     AiPoint p;
     arg_of(c, 1, a, p);
-    if (!a.present && !p.present) return c.fail("%s::Get_Distance -- invalid parameter 1.", tf_class_name(c));
+    if (!a.present && !p.present) return c.script_error_stop("%s::Get_Distance -- invalid parameter 1.", tf_class_name(c));
     AiTacticalScriptHost* h = host_of(c.L);
     const double d = h ? h->tf_distance(c.self->id, a, p) : -1.0;
     return d < 0.0 ? push_nil(c) : push_num(c, d);
@@ -310,9 +309,9 @@ int m_distance(Call& c) {
 // detail::task_force_set_targeting_priorities); the host keeps its record of the set.
 int m_set_targeting_priorities(Call& c) {
     if (c.nargs != 1 && c.nargs != 2)
-        return c.fail("Set_Targeting_Priorities - invalid number of parameters. Expected 1 or 2, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("Set_Targeting_Priorities - invalid type for parameter 1. Expected string.");
-    if (c.nargs == 2 && !c.is_string(2)) return c.fail("Set_Targeting_Priorities -- invalid type for parameter 2. Expected string.");
+        return c.script_error_stop("Set_Targeting_Priorities - invalid number of parameters. Expected 1 or 2, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("Set_Targeting_Priorities - invalid type for parameter 1. Expected string.");
+    if (c.nargs == 2 && !c.is_string(2)) return c.script_error_stop("Set_Targeting_Priorities -- invalid type for parameter 2. Expected string.");
     AiScriptHost* ai = c.vm && c.vm->owner ? ai_host(*c.vm->owner) : nullptr;
     if (ai) detail::task_force_set_targeting_priorities(c, ai->tf_units(c.self->id));
     if (AiTacticalScriptHost* h = host_of(c.L)) h->tf_set_targeting_priorities(c.self->id, c.string(1));
@@ -325,20 +324,20 @@ int m_noop(Call&) { return 0; }
 // FindDeadlyEnemy(object | unit AI target | task force) or FindDeadlyEnemy(AI target, radius, player) (§6.3).
 int g_find_deadly_enemy(Call& c) {
     if (c.nargs != 1 && c.nargs != 3)
-        return c.fail("FindDeadlyEnemy -- invalid number of parameters. Expected 1 or 3, got %d.", c.nargs);
+        return c.script_error_stop("FindDeadlyEnemy -- invalid number of parameters. Expected 1 or 3, got %d.", c.nargs);
     AiArg a;
     AiPoint p;
     arg_of(c, 1, a, p);
-    if (!a.present) return c.fail("FindDeadlyEnemy -- invalid type for parameter 1.");
+    if (!a.present) return c.script_error_stop("FindDeadlyEnemy -- invalid type for parameter 1.");
     double radius = 0.0;
     int32_t player = -1;
     if (c.nargs == 3) {
-        if (!c.is_number(2)) return c.fail("FindDeadlyEnemy -- invalid type for parameter 2. Expected number.");
+        if (!c.is_number(2)) return c.script_error_stop("FindDeadlyEnemy -- invalid type for parameter 2. Expected number.");
         radius = c.number(2);
         AiArg pa;
         AiPoint pp;
         arg_of(c, 3, pa, pp);
-        if (pa.player < 0) return c.fail("FindDeadlyEnemy -- invalid type for parameter 3. Expected player.");
+        if (pa.player < 0) return c.script_error_stop("FindDeadlyEnemy -- invalid type for parameter 3. Expected player.");
         player = pa.player;
     }
     AiTacticalScriptHost* h = host_of(c.L);
@@ -347,15 +346,15 @@ int g_find_deadly_enemy(Call& c) {
 
 // Get_Most_Defended_Position(source, player) (§6.4): exactly 2 arguments; no result -> the 1e18 position.
 int g_most_defended_position(Call& c) {
-    if (c.nargs != 2) return c.fail("Get_Most_Defended_Position -- invalid number of parameters. Expected 2, got %d.", c.nargs);
+    if (c.nargs != 2) return c.script_error_stop("Get_Most_Defended_Position -- invalid number of parameters. Expected 2, got %d.", c.nargs);
     AiArg a;
     AiPoint p;
     arg_of(c, 1, a, p);
-    if (!a.present && !p.present) return c.fail("Get_Most_Defended_Position -- invalid type for parameter 1.");
+    if (!a.present && !p.present) return c.script_error_stop("Get_Most_Defended_Position -- invalid type for parameter 1.");
     AiArg pa;
     AiPoint pp;
     arg_of(c, 2, pa, pp);
-    if (pa.player < 0) return c.fail("Get_Most_Defended_Position -- invalid type for parameter 2. Expected player.");
+    if (pa.player < 0) return c.script_error_stop("Get_Most_Defended_Position -- invalid type for parameter 2. Expected player.");
     AiTacticalScriptHost* h = host_of(c.L);
     AiPoint out;
     if (!h || !h->most_defended_position(script_of(c.L), a, p, pa.player, out)) {
@@ -369,13 +368,13 @@ int g_most_defended_position(Call& c) {
 
 // Project_By_Unit_Range(unit, position source) (AI_TACTICAL_PERCEPTION.md §5).
 int g_project_by_unit_range(Call& c) {
-    if (c.nargs != 2) return c.fail("Project_By_Unit_Range -- invalid number of parameters. Expected 2, got %d.", c.nargs);
+    if (c.nargs != 2) return c.script_error_stop("Project_By_Unit_Range -- invalid number of parameters. Expected 2, got %d.", c.nargs);
     AiArg u, a;
     AiPoint up, p;
     arg_of(c, 1, u, up);
     arg_of(c, 2, a, p);
-    if (!u.object) return c.fail("Project_By_Unit_Range -- invalid type for parameter 1. Expected a game object.");
-    if (!a.present && !p.present) return c.fail("Project_By_Unit_Range -- invalid type for parameter 2.");
+    if (!u.object) return c.script_error_stop("Project_By_Unit_Range -- invalid type for parameter 1. Expected a game object.");
+    if (!a.present && !p.present) return c.script_error_stop("Project_By_Unit_Range -- invalid type for parameter 2.");
     AiTacticalScriptHost* h = host_of(c.L);
     AiPoint out;
     if (!h || !h->project_by_unit_range(u.object, a, p, out)) return push_nil(c);
@@ -384,19 +383,19 @@ int g_project_by_unit_range(Call& c) {
 }
 
 int m_is_good_against(Call& c) {
-    if (c.nargs != 1) return c.fail("GameObjectWrapper::Is_Good_Against -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (c.nargs != 1) return c.script_error_stop("GameObjectWrapper::Is_Good_Against -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     AiArg a;
     AiPoint p;
     arg_of(c, 1, a, p);
-    if (!a.object) return c.fail("GameObjectWrapper::Is_Good_Against -- invalid type for parameter 1. Expected a game object.");
-    if (!detail::object_alive(*c.vm, *c.self)) return c.fail("GameObjectWrapper::Is_Good_Against -- this object is dead!");
+    if (!a.object) return c.script_error_stop("GameObjectWrapper::Is_Good_Against -- invalid type for parameter 1. Expected a game object.");
+    if (!detail::object_alive(*c.vm, *c.self)) return c.script_error_stop("GameObjectWrapper::Is_Good_Against -- this object is dead!");
     AiTacticalScriptHost* h = host_of(c.L);
     return push_bool(c, h && h->is_good_against(detail::object_handle(*c.self), a.object) == 1);
 }
 
 // unit.Should_Switch_Weapons(target): body not traced (AI_TACTICAL.md open item 6) -> false [port].
 int m_should_switch_weapons(Call& c) {
-    if (!detail::object_alive(*c.vm, *c.self)) return c.fail("GameObjectWrapper::Should_Switch_Weapons -- this object is dead!");
+    if (!detail::object_alive(*c.vm, *c.self)) return c.script_error_stop("GameObjectWrapper::Should_Switch_Weapons -- this object is dead!");
     return push_bool(c, false);
 }
 

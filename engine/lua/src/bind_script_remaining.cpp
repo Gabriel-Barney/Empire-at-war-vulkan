@@ -80,6 +80,7 @@ int script_error(Call& c, const char* fmt, ...) {
     va_start(ap, fmt);
     vlog(c, "SCRIPT ERROR: ", fmt, ap);
     va_end(ap);
+    c.vm->exit_requested = true;  // q6 t11: the original's error helper sets the stop flag (LUA_API.md "Binding error model")
     return 0;
 }
 int script_warning(Call& c, const char* fmt, ...) {
@@ -1278,7 +1279,7 @@ int m_give_random_sliceable_tech(Call& c) {
 
 int m_tf_add_force(Call& c) {
     const Ud* o = c.userdata(1, detail::cls_game_object());
-    if (!o || !detail::object_alive(*c.vm, *o)) return c.fail("TaskForceClass::Add_Force -- Invalid Parameter 1, expected a GameObjectClass");
+    if (!o || !detail::object_alive(*c.vm, *o)) return c.script_error_stop("TaskForceClass::Add_Force -- Invalid Parameter 1, expected a GameObjectClass");
     if (AiScriptHost* h = ai(c)) h->tf_add_unit(c.self->id, detail::object_handle(*o));
     return 0;  // returns nothing (§2.12)
 }
@@ -1376,7 +1377,7 @@ int m_tf_get_ai_power_vs_unit(Call& c) {
 // Get_Type_Of_Unit(i) (§2.12): element int(i) (0-based) of the TF's type vector [M: the definition's unit types; port:
 // the types of the TF's units in list order]; nothing out of range.
 int m_tf_get_type_of_unit(Call& c) {
-    if (!c.is_number(1)) return c.fail("TaskForceClass::Get_Type_Of_Unit -- Invalid Parameter 1, expected an integer index");
+    if (!c.is_number(1)) return c.script_error_stop("TaskForceClass::Get_Type_Of_Unit -- Invalid Parameter 1, expected an integer index");
     const int32_t i = detail::to_int(c.number(1));
     const std::vector<ObjectHandle> units = tf_units(c, c.self->id);
     if (i < 0 || static_cast<size_t>(i) >= units.size()) return 0;

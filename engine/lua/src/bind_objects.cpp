@@ -10,7 +10,7 @@
 // its insertion list, ties keep the first candidate in that order, distances use alamo::dmath, and the
 // per-object script state is an ordered map. Nothing iterates a pointer-keyed or hashed container.
 //
-// Error discipline (vm_internal.hpp): implementations never raise Lua errors; they return c.fail().
+// Error discipline (vm_internal.hpp): implementations never raise Lua errors; errors are c.script_error_stop() (q6 t11).
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -260,8 +260,7 @@ int script_error(Call& c, const char* fmt, ...) {
     va_start(ap, fmt);
     std::vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
-    c.vm->message(std::string("SCRIPT ERROR: ") + buf);
-    return 0;
+    return c.script_error_stop("%s", buf);  // q6 t11: sets the stop flag (LUA_API.md "Binding error model")
 }
 
 // The filters of Find_All_Objects_Of_Type / Find_Nearest; all set filters must pass (AND).
@@ -605,10 +604,13 @@ ObjectHandle spawn(Call& c, TypeIndex type, int32_t owner, Vec3 pos, ObjectHandl
 // Find_Hint(type or type name, hint): the first object (newest first) of that type whose map hint
 // matches (case-insensitive [inferred]); nil if none.
 int g_find_hint(Call& c) {
-    if (c.nargs != 2) return c.fail("LuaFindMarkerCommandClass -- Invalid number of parameters.");
+    if (c.nargs != 2) return c.script_error_stop("LuaFindMarkerCommandClass -- Invalid number of parameters.");
     const TypeArg t = type_arg(c, 1);
-    if (!t.given) return c.fail("LuaFindMarkerCommandClass -- Expected type or name for parameter 1");
-    if (!c.is_string(2)) return c.fail("LuaFindMarkerCommandClass -- Expected a hint name for parameter 2");  // [inferred]
+    if (!t.given) return c.script_error_stop("LuaFindMarkerCommandClass -- Expected type or name for parameter 1");
+    if (!c.is_string(2)) return c.script_error_stop("LuaFindMarkerCommandClass -- Expected a hint name for parameter 2");  // [inferred]
+    // q6 t11 (LUA_API.md "Lookups"): a type name the data does not have is a script error.
+    if (t.index == objects::kNone && types(c))
+        return c.script_error_stop("LuaFindMarkerCommandClass -- Unable to resolve type name %s", std::string(t.name).c_str());
     const std::string_view hint = c.string(2);
     const objects::ObjectStore* st = store(c);
     const ObjectBridge* b = bridge(c);
@@ -627,8 +629,8 @@ int g_find_hint(Call& c) {
 // Find_All_Objects_With_Hint(hint): every live object with that hint, newest first.
 int g_find_all_with_hint(Call& c) {
     if (c.nargs != 1)
-        return c.fail("Find_All_Objects_With_Hint -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("Find_All_Objects_With_Hint -- invalid type for parameter 1. Expected string.");
+        return c.script_error_stop("Find_All_Objects_With_Hint -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("Find_All_Objects_With_Hint -- invalid type for parameter 1. Expected string.");
     const std::string_view hint = c.string(1);
     lua_newtable(c.L);
     const objects::ObjectStore* st = store(c);
@@ -840,15 +842,15 @@ int g_find_nearest(Call& c) {
 // Spawn_Unit(type, location, player): a table with the spawned unit (a company: its container). At a planet in a
 // galactic script: GalacticSim::spawn_unit (detail::galactic_spawn_unit), so Assemble_Fleet / Move_To / saves see it.
 int g_spawn_unit(Call& c) {
-    if (c.nargs != 3) return c.fail("LuaSpawnUnitCommandClass -- Invalid number of parameters.");
+    if (c.nargs != 3) return c.script_error_stop("LuaSpawnUnitCommandClass -- Invalid number of parameters.");
     const Ud* t = c.userdata(1, detail::cls_type());
-    if (!t) return c.fail("LuaSpawnUnitCommandClass -- Invalid parameter for type.");
+    if (!t) return c.script_error_stop("LuaSpawnUnitCommandClass -- Invalid parameter for type.");
     const Ud* p = player_arg(c, 3);
-    if (!p) return c.fail("LuaSpawnUnitCommandClass -- Invalid parameter for player.");
+    if (!p) return c.script_error_stop("LuaSpawnUnitCommandClass -- Invalid parameter for player.");
     Vec3 pos{};
     ObjectHandle loc{};
     if (position_arg(c, 2, pos, &loc) != PosArg::Ok)
-        return c.fail("LuaSpawnUnitCommandClass -- Invalid parameter for location.");  // [inferred]
+        return c.script_error_stop("LuaSpawnUnitCommandClass -- Invalid parameter for location.");  // [inferred]
     lua_newtable(c.L);
     if (!store(c)) return 1;
     // a1g t06: at a planet of the galactic sim the unit is placed by the sim (fleet / surface / planet, one company
@@ -864,15 +866,15 @@ int g_spawn_unit(Call& c) {
 // [inferred]; nil for an unknown type name [inferred].
 int g_create_generic_object(Call& c) {
     if (c.nargs != 3)
-        return c.fail("Create_Generic_Object -- Invalid number of parameters. Expected 3, got %d.", c.nargs);
+        return c.script_error_stop("Create_Generic_Object -- Invalid number of parameters. Expected 3, got %d.", c.nargs);
     const TypeArg t = type_arg(c, 1);
-    if (!t.given) return c.fail("Create_Generic_Object -- Invalid type for parameter 1. Expected type or type name.");  // [inferred]
+    if (!t.given) return c.script_error_stop("Create_Generic_Object -- Invalid type for parameter 1. Expected type or type name.");  // [inferred]
     Vec3 pos{};
     ObjectHandle loc{};
     if (position_arg(c, 2, pos, &loc) != PosArg::Ok)
-        return c.fail("Create_Generic_Object -- Could not deduce a creation position from parameter 2.");
+        return c.script_error_stop("Create_Generic_Object -- Could not deduce a creation position from parameter 2.");
     const Ud* p = player_arg(c, 3);
-    if (!p) return c.fail("Create_Generic_Object -- Invalid type for parameter 3. Expected player.");
+    if (!p) return c.script_error_stop("Create_Generic_Object -- Invalid type for parameter 3. Expected player.");
     if (!store(c) || t.index == objects::kNone || !types(c) || t.index >= types(c)->raw().type_count())
         return push_nil(c);
     detail::push_object(c.L, *c.vm, spawn(c, t.index, p->id, pos, loc, false));
@@ -881,18 +883,18 @@ int g_create_generic_object(Call& c) {
 
 // Hide_Object(object, number): non-zero hides [inferred], like GameObjectWrapper.Hide.
 int g_hide_object(Call& c) {
-    if (c.nargs != 2) return c.fail("LuaHideObject -- Expected gameobject pointer parameter 1, float parameter 2");
+    if (c.nargs != 2) return c.script_error_stop("LuaHideObject -- Expected gameobject pointer parameter 1, float parameter 2");
     const Ud* o = c.userdata(1, detail::cls_game_object());
-    if (!o || !detail::object_alive(*c.vm, *o)) return c.fail("LuaHideObject -- Invalid parameter 1, expected a game object");
-    if (!c.is_number(2)) return c.fail("LuaHideObject -- Invalid parameter 2, expected a float");
+    if (!o || !detail::object_alive(*c.vm, *o)) return c.script_error_stop("LuaHideObject -- Invalid parameter 1, expected a game object");
+    if (!c.is_number(2)) return c.script_error_stop("LuaHideObject -- Invalid parameter 2, expected a float");
     if (ScriptObjectState* s = edit_state(c, o->id)) s->hidden = c.number(2) != 0.0;
     return 0;
 }
 
 int g_create_position(Call& c) {
-    if (c.nargs != 3) return c.fail("LuaCreatePosition -- Expected 3 float parameters");
+    if (c.nargs != 3) return c.script_error_stop("LuaCreatePosition -- Expected 3 float parameters");
     if (!c.is_number(1) || !c.is_number(2) || !c.is_number(3))
-        return c.fail("LuaCreatePosition -- Invalid parameter, expected 3 floats");
+        return c.script_error_stop("LuaCreatePosition -- Invalid parameter, expected 3 floats");
     push_position(c.L, {static_cast<float>(c.number(1)), static_cast<float>(c.number(2)), static_cast<float>(c.number(3))});
     return 1;
 }
@@ -969,10 +971,10 @@ int m_get_position(Call& c) {
 
 int m_get_distance(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Get_Distance -- invalid number of parameters. Expceted 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectWrapper::Get_Distance -- invalid number of parameters. Expceted 1, got %d.", c.nargs);
     Vec3 p{};
     if (position_arg(c, 1, p) != PosArg::Ok)
-        return c.fail("GameObjectWrapper::Get_Distance -- could not extract a position from parameter 1.");
+        return c.script_error_stop("GameObjectWrapper::Get_Distance -- could not extract a position from parameter 1.");
     return push_num(c, distance(store(c)->position(self_object(c)), p));
 }
 
@@ -1011,8 +1013,8 @@ int m_get_shield(Call& c) {
 
 int m_is_category(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Is_Category -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("GameObjectWrapper::Is_Category -- parameter 1 is not a valid string.");
+        return c.script_error_stop("GameObjectWrapper::Is_Category -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("GameObjectWrapper::Is_Category -- parameter 1 is not a valid string.");
     const objects::GameObjectTypes* ty = types(c);
     if (!ty) return push_bool(c, false);
     const auto m = ty->enums().get(objects::EnumId::GameObjectCategory).convert(c.string(1));
@@ -1022,8 +1024,8 @@ int m_is_category(Call& c) {
 
 int m_has_property(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Has_Property -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("GameObjectWrapper::Has_Property -- invalid type for parameter 1. Expected string.");
+        return c.script_error_stop("GameObjectWrapper::Has_Property -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("GameObjectWrapper::Has_Property -- invalid type for parameter 1. Expected string.");
     const objects::GameObjectTypes* ty = types(c);
     if (!ty) return push_bool(c, false);
     const auto m = ty->enums().get(objects::EnumId::GameObjectProperties).convert(c.string(1));
@@ -1101,9 +1103,9 @@ int m_get_contained_object_count(Call& c) {
 
 int m_contains_object_type(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Contains_Object_Type -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectWrapper::Contains_Object_Type -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     const Ud* t = c.userdata(1, detail::cls_type());
-    if (!t) return c.fail("GameObjectWrapper::Contains_Object_Type -- invalid type for parameter 1. Expected game object type.");
+    if (!t) return c.script_error_stop("GameObjectWrapper::Contains_Object_Type -- invalid type for parameter 1. Expected game object type.");
     const std::string_view name = type_name(c, static_cast<TypeIndex>(t->value));
     for (const ObjectHandle h : contents_of(c, self_object(c)))
         if (type_matches(c, h, name)) return push_bool(c, true);
@@ -1141,8 +1143,8 @@ uint8_t ability_param(Call& c, int i) { return c.is_string(i) ? ability_id(c.str
 
 int m_has_ability(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Has_Ability -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("GameObjectWrapper::Has_Ability -- invalid type for ability 1. Expected string.");
+        return c.script_error_stop("GameObjectWrapper::Has_Ability -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("GameObjectWrapper::Has_Ability -- invalid type for ability 1. Expected string.");
     const uint8_t id = ability_param(c, 1);
 #if ALAMO_LUA_HAVE_ABILITIES
     if (ab::AbilitySystem* a = ability_system(c, c.self->id)) return push_bool(c, id != 0 && a->has_ability(c.self->id, id));
@@ -1160,8 +1162,8 @@ const AbilityState* ability_state(Call& c, uint8_t id) {
 // ability system: the type has it and it is not running [inferred].
 int m_is_ability_ready(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Is_Ability_Ready -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("GameObjectWrapper::Is_Ability_Ready -- invalid type for ability 1. Expected string.");
+        return c.script_error_stop("GameObjectWrapper::Is_Ability_Ready -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("GameObjectWrapper::Is_Ability_Ready -- invalid type for ability 1. Expected string.");
     const uint8_t id = ability_param(c, 1);
 #if ALAMO_LUA_HAVE_ABILITIES
     if (ab::AbilitySystem* a = ability_system(c, c.self->id))
@@ -1175,8 +1177,8 @@ int m_is_ability_ready(Call& c) {
 
 int m_is_ability_active(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Is_Ability_Active -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("GameObjectWrapper::Is_Ability_Active -- invalid type for parameter 1. Expected string.");
+        return c.script_error_stop("GameObjectWrapper::Is_Ability_Active -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("GameObjectWrapper::Is_Ability_Active -- invalid type for parameter 1. Expected string.");
 #if ALAMO_LUA_HAVE_ABILITIES
     if (ab::AbilitySystem* a = ability_system(c, c.self->id)) {
         const uint8_t id = ability_param(c, 1);
@@ -1189,9 +1191,9 @@ int m_is_ability_active(Call& c) {
 
 int m_is_ability_autofire(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Is_Ability_Autofire -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectWrapper::Is_Ability_Autofire -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     if (!c.is_string(1))
-        return c.fail("GameObjectWrapper::Set_Single_Ability_Autofire -- invalid type for parameter 1. Expected string.");
+        return c.script_error_stop("GameObjectWrapper::Set_Single_Ability_Autofire -- invalid type for parameter 1. Expected string.");
 #if ALAMO_LUA_HAVE_ABILITIES
     if (ab::AbilitySystem* a = ability_system(c, c.self->id)) {
         const uint8_t id = ability_param(c, 1);
@@ -1218,11 +1220,11 @@ void set_autofire(Call& c, uint8_t id, bool on) {
 
 int m_set_single_ability_autofire(Call& c) {
     if (c.nargs != 2)
-        return c.fail("GameObjectWrapper::Set_Single_Ability_Autofire -- invalid number of parameters. Expected 2, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectWrapper::Set_Single_Ability_Autofire -- invalid number of parameters. Expected 2, got %d.", c.nargs);
     if (!c.is_string(1))
-        return c.fail("GameObjectWrapper::Set_Single_Ability_Autofire -- invalid type for ability 1. Expected string.");
+        return c.script_error_stop("GameObjectWrapper::Set_Single_Ability_Autofire -- invalid type for ability 1. Expected string.");
     if (!is_bool(c, 2))
-        return c.fail("GameObjectWrapper::Set_Single_Ability_Autofire -- invalid type for parameter 2. Expected bool.");
+        return c.script_error_stop("GameObjectWrapper::Set_Single_Ability_Autofire -- invalid type for parameter 2. Expected bool.");
     const uint8_t id = ability_param(c, 1);
     if (id == 0) return 0;
     set_autofire(c, id, to_bool(c, 2));
@@ -1317,7 +1319,7 @@ int activate_ability(Call& c, bool* activated) {
         const std::vector<uint8_t> list = type_abilities(c, store(c)->type(self));
         if (!list.empty()) id = list.front();
     } else {
-        return c.fail("GameObjectWrapper::Activate_Ability -- invalid type for parameter 1. Expected string.");  // [inferred]
+        return c.script_error_stop("GameObjectWrapper::Activate_Ability -- invalid type for parameter 1. Expected string.");  // [inferred]
     }
     bool on = true;
     ObjectId target = objects::kNoObjectId;
@@ -1434,10 +1436,10 @@ int m_activate_ability(Call& c) { return activate_ability(c, nullptr); }
 // counter = maximum = int(FPS x s), phase unchanged (§5). No ability system: nothing to recharge.
 int m_force_ability_recharge(Call& c) {
     if (c.nargs < 1 || c.nargs > 2)
-        return c.fail("GameObjectWrapper::Force_Ability_Recharge -- invalid number of parameters. Expected 1 or 2, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("GameObjectWrapper::Force_Ability_Recharge -- invalid type for parameter 1. Expected string.");
+        return c.script_error_stop("GameObjectWrapper::Force_Ability_Recharge -- invalid number of parameters. Expected 1 or 2, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("GameObjectWrapper::Force_Ability_Recharge -- invalid type for parameter 1. Expected string.");
     if (c.nargs == 2 && !c.is_number(2))
-        return c.fail("GameObjectWrapper::Force_Ability_Recharge -- invalid type for parameter 2. Expected number.");
+        return c.script_error_stop("GameObjectWrapper::Force_Ability_Recharge -- invalid type for parameter 2. Expected number.");
 #if ALAMO_LUA_HAVE_ABILITIES
     if (ab::AbilitySystem* a = ability_system(c, c.self->id)) {
         const uint8_t id = ability_param(c, 1);
@@ -1451,8 +1453,8 @@ int m_force_ability_recharge(Call& c) {
 // Reset_Ability_Counter(name): counter = maximum = 1 frame when the counter is zero [M] (§5).
 int m_reset_ability_counter(Call& c) {
     if (c.nargs != 1)  // [inferred] message format (the doc lists none)
-        return c.fail("GameObjectWrapper::Reset_Ability_Counter -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("GameObjectWrapper::Reset_Ability_Counter -- invalid type for parameter 1. Expected string.");
+        return c.script_error_stop("GameObjectWrapper::Reset_Ability_Counter -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("GameObjectWrapper::Reset_Ability_Counter -- invalid type for parameter 1. Expected string.");
 #if ALAMO_LUA_HAVE_ABILITIES
     if (ab::AbilitySystem* a = ability_system(c, c.self->id)) {
         const uint8_t id = ability_param(c, 1);
@@ -1469,9 +1471,9 @@ int m_reset_ability_counter(Call& c) {
 constexpr uint8_t kTractorBeamId = 30, kIonCannonShotId = 41;
 int m_is_under_effects_of_ability(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Is_Under_Effects_Of_Ability -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectWrapper::Is_Under_Effects_Of_Ability -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     if (!c.is_string(1))
-        return c.fail("GameObjectWrapper::Is_Under_Effects_Of_Ability -- invalid type for parameter 1. Expected string.");
+        return c.script_error_stop("GameObjectWrapper::Is_Under_Effects_Of_Ability -- invalid type for parameter 1. Expected string.");
     const uint8_t id = ability_param(c, 1);
     if (id == 0) {
         c.vm->message("SCRIPT ERROR: GameObjectWrapper::Is_Under_Effects_Of_Ability -- unknown ability type " + std::string(c.string(1)));
@@ -1578,13 +1580,14 @@ int issue_each(Call& c, const std::vector<ObjectHandle>& units, const std::funct
     return push_block(c, first, first_serial);
 }
 
-// Galactic Move_To (0x57d8c0 in the original, not part of this spec): the stage-2 path unchanged, dead caller included.
+// Galactic Move_To (0x57d8c0 in the original, not part of this spec): the stage-2 path. q6 t11: a dead caller is the
+// default dead-wrapper case (LUA_API.md "Dead or null wrappers": nothing, silently).
 int galactic_move_to(Call& c) {
-    if (!detail::object_alive(*c.vm, *c.self)) return c.fail("GameObjectWrapper::Move_To -- this object is dead!");
+    if (!detail::object_alive(*c.vm, *c.self)) return 0;
     Vec3 p{};
     ObjectHandle target{};
     if (position_arg(c, 1, p, &target) != PosArg::Ok)
-        return c.fail("GameObjectWrapper::Move_To -- could not extract a position from parameter 1.");  // [inferred]
+        return c.script_error_stop("GameObjectWrapper::Move_To -- could not extract a position from parameter 1.");  // [inferred]
     if (detail::movement_locked(c, c.self->id)) return locked_orders_warning(c);
     if (c.is_number(2)) {
         const ObjectId tid = target ? store(c)->id(target) : objects::kNoObjectId;
@@ -1722,22 +1725,22 @@ int m_stop(Call& c) {
 
 int m_turn_to_face(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Turn_To_Face -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectWrapper::Turn_To_Face -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     Vec3 p{};
     if (position_arg(c, 1, p) != PosArg::Ok)
-        return c.fail("GameObjectWrapper::Turn_To_Face -- could not extract a position from parameter 1.");  // [inferred]
+        return c.script_error_stop("GameObjectWrapper::Turn_To_Face -- could not extract a position from parameter 1.");  // [inferred]
     return issue_and_block(c, ev_facing(c.self->id, heading_deg(store(c)->position(self_object(c)), p)));
 }
 
 int m_hyperspace_away(Call& c) {
     if (c.nargs > 1)
-        return c.fail("GameObjectWrapper::Hyperspace_Away -- invalid number of parameters. Expected 0 or 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectWrapper::Hyperspace_Away -- invalid number of parameters. Expected 0 or 1, got %d.", c.nargs);
     // L1 final (L1_S4_REMAINING §3.4): with the host's locomotor call, Hyperspace_Away([bool = true]) = +0x2a8(bool, 0)
     // at once (space only, a locomotor required); returns nothing.
     if (const ObjectBridge* b = bridge(c); b && b->tactical && b->tactical->hyperspace_out_link) {
-        if (store(c)->mode() != objects::ModeKind::Space) return c.fail("GameObjectWrapper::Hyperspace_Away -- only valid in space mode");
+        if (store(c)->mode() != objects::ModeKind::Space) return c.script_error_stop("GameObjectWrapper::Hyperspace_Away -- only valid in space mode");
         if (!store(c)->has_behavior(self_object(c), objects::beh::Locomotor))
-            return c.fail("GameObjectWrapper::Hyperspace_Away -- object has no locomotor");
+            return c.script_error_stop("GameObjectWrapper::Hyperspace_Away -- object has no locomotor");
         b->tactical->hyperspace_out_link(self_object(c), 0, c.nargs == 1 ? lua_toboolean(c.L, c.idx(1)) != 0 : true);
         return 0;
     }
@@ -1754,10 +1757,10 @@ int m_cancel_hyperspace(Call& c) {
 
 int m_garrison(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Garrison -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectWrapper::Garrison -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     const Ud* t = c.userdata(1, detail::cls_game_object());
     if (!t || !detail::object_alive(*c.vm, *t))
-        return c.fail("GameObjectWrapper::Garrison -- invalid type for parameter 1. Expected game object or AI target.");
+        return c.script_error_stop("GameObjectWrapper::Garrison -- invalid type for parameter 1. Expected game object or AI target.");
     return issue_and_block(c, ev_garrison(c.self->id, t->id));
 }
 
@@ -1790,10 +1793,10 @@ int m_despawn(Call& c) {
 // Cannot_Be_Killed: health stops at min(current, 1); <= 0 destroys.
 int m_take_damage(Call& c) {
     if (c.nargs < 1 || c.nargs > 2)
-        return c.fail("GameObjectWrapper::Take_Damage -- invalid number of parameters. Expected 1 or 2, got %d.", c.nargs);
-    if (!c.is_number(1)) return c.fail("GameObjectWrapper::Take_Damage -- invalid type for parameter 1. Expected number.");
+        return c.script_error_stop("GameObjectWrapper::Take_Damage -- invalid number of parameters. Expected 1 or 2, got %d.", c.nargs);
+    if (!c.is_number(1)) return c.script_error_stop("GameObjectWrapper::Take_Damage -- invalid type for parameter 1. Expected number.");
     if (c.nargs == 2 && !c.is_string(2))
-        return c.fail("GameObjectWrapper::Take_Damage -- invalid type for parameter 2. Expected string.");
+        return c.script_error_stop("GameObjectWrapper::Take_Damage -- invalid type for parameter 2. Expected string.");
     objects::ObjectStore* st = store(c);
     ObjectHandle target = self_object(c);
     if (c.nargs == 2) {
@@ -1831,10 +1834,10 @@ int m_take_damage(Call& c) {
 }
 
 int m_teleport(Call& c) {
-    if (c.nargs != 1) return c.fail("GameObjectWrapper::Teleport -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (c.nargs != 1) return c.script_error_stop("GameObjectWrapper::Teleport -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     Vec3 p{};
     if (position_arg(c, 1, p) != PosArg::Ok)
-        return c.fail("GameObjectWrapper:: Teleport -- unable to deduce a position from parameter 1.");
+        return c.script_error_stop("GameObjectWrapper:: Teleport -- unable to deduce a position from parameter 1.");
     // q6 t12 (L1_S4_REMAINING §3.4 "Teleport", 0x5819e0 -> 0x3abb80): the unit's locomotor / transform move, not only the
     // store position. A host with the tactical teleport (TacticalScriptHooks::teleport: store + movement + combat +
     // trees) takes it, the facing kept; otherwise the store position alone.
@@ -1851,11 +1854,11 @@ int m_teleport(Call& c) {
 // Teleport_And_Face(object): the target's position and facing.
 int m_teleport_and_face(Call& c) {
     if (c.userdata(1, cls_position()))
-        return c.fail("GameObjectWrapper:: Teleport_And_Face -- Expected game object for parameter 1, got position instead.");
+        return c.script_error_stop("GameObjectWrapper:: Teleport_And_Face -- Expected game object for parameter 1, got position instead.");
     const Ud* t = c.userdata(1, detail::cls_game_object());
-    if (!t) return c.fail("GameObjectWrapper:: Teleport_And_Face -- Expected game object for parameter 1.");
+    if (!t) return c.script_error_stop("GameObjectWrapper:: Teleport_And_Face -- Expected game object for parameter 1.");
     if (!detail::object_alive(*c.vm, *t))
-        return c.fail("GameObjectWrapper::Teleport_And_Face -- Invalid game object given for parameter 1.");
+        return c.script_error_stop("GameObjectWrapper::Teleport_And_Face -- Invalid game object given for parameter 1.");
     objects::ObjectStore* st = store(c);
     const ObjectHandle th = detail::object_handle(*t);
     st->set_position(self_object(c), st->position(th));
@@ -1865,10 +1868,10 @@ int m_teleport_and_face(Call& c) {
 
 // Face_Immediate(target): facing set at once to the unit XY direction towards the target [inferred].
 int m_face_immediate(Call& c) {
-    if (c.nargs < 1) return c.fail("GameObjectWrapper::Face_Immediate -- Missing required position or gameobject parameter.");
+    if (c.nargs < 1) return c.script_error_stop("GameObjectWrapper::Face_Immediate -- Missing required position or gameobject parameter.");
     Vec3 p{};
     if (position_arg(c, 1, p) != PosArg::Ok)
-        return c.fail("GameObjectWrapper::Face_Immediate -- could not extract a position from parameter 1.");
+        return c.script_error_stop("GameObjectWrapper::Face_Immediate -- could not extract a position from parameter 1.");
     objects::ObjectStore* st = store(c);
     const Vec3 from = st->position(self_object(c));
     const float dx = p.x - from.x, dy = p.y - from.y;
@@ -1879,9 +1882,9 @@ int m_face_immediate(Call& c) {
 
 int m_change_owner(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Change_Owner -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectWrapper::Change_Owner -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     const Ud* p = player_arg(c, 1);
-    if (!p) return c.fail("GameObjectWrapper::Change_Owner -- invalid type for parameter 1. Expected PlayerWrapper.");
+    if (!p) return c.script_error_stop("GameObjectWrapper::Change_Owner -- invalid type for parameter 1. Expected PlayerWrapper.");
     const ObjectBridge* b = bridge(c);
     if (b && b->change_owner)
         b->change_owner(self_object(c), p->id);
@@ -1899,8 +1902,8 @@ int m_mark_parent_mode_object_for_death(Call& c) {
 // Boolean setters: fn(Call&, ScriptObjectState&, bool). `count_msg` = wrong count, `type_msg` = not a bool.
 using BoolField = bool ScriptObjectState::*;
 int set_bool(Call& c, BoolField field, const char* count_msg, const char* type_msg) {
-    if (c.nargs != 1) return c.fail(count_msg, c.nargs);
-    if (!is_bool(c, 1)) return c.fail("%s", type_msg);
+    if (c.nargs != 1) return c.script_error_stop(count_msg, c.nargs);
+    if (!is_bool(c, 1)) return c.script_error_stop("%s", type_msg);
     if (ScriptObjectState* s = edit_self(c)) s->*field = to_bool(c, 1);
     return 0;
 }
@@ -1927,7 +1930,7 @@ int m_set_garrison_spawn(Call& c) {
     const int r = set_bool(c, &ScriptObjectState::garrison_spawn,
                            "GameObjectWrapper::Set_Garrison_Spawn -- invalid number of parameters. Expected 1, got %d.",
                            "GameObjectWrapper::Set_Garrison_Spawn -- invalid type for parameter 1. Expected boolean.");
-    if (r != 0) return r;  // wrong count / type: nothing stored, the host is not told
+    if (c.nargs != 1 || !is_bool(c, 1)) return r;  // wrong count / type (a script error): nothing stored, the host is not told
     if (const ObjectBridge* b = bridge(c); b && b->garrison_spawn_changed)
         b->garrison_spawn_changed(self_object(c), to_bool(c, 1));
     return r;
@@ -1935,31 +1938,31 @@ int m_set_garrison_spawn(Call& c) {
 
 int m_set_selectable(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Set_Selectable -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!is_bool(c, 1)) return c.fail("GameObjectWrapper::Set_Selectable -- invalid type for parameter 1. Expected boolean.");
+        return c.script_error_stop("GameObjectWrapper::Set_Selectable -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!is_bool(c, 1)) return c.script_error_stop("GameObjectWrapper::Set_Selectable -- invalid type for parameter 1. Expected boolean.");
     if (ScriptObjectState* s = edit_self(c)) s->selectable = to_bool(c, 1) ? 1 : 0;
     return 0;
 }
 
 int m_hide(Call& c) {
-    if (c.nargs < 1) return c.fail("GameObjectWrapper::Hide -- Missing required boolean parameter.");
-    if (!is_bool(c, 1)) return c.fail("GameObjectWrapper::Hide -- Expected bool parameter.");
+    if (c.nargs < 1) return c.script_error_stop("GameObjectWrapper::Hide -- Missing required boolean parameter.");
+    if (!is_bool(c, 1)) return c.script_error_stop("GameObjectWrapper::Hide -- Expected bool parameter.");
     if (ScriptObjectState* s = edit_self(c)) s->hidden = to_bool(c, 1);
     return 0;
 }
 
 int m_prevent_ai_usage(Call& c) {
-    if (!is_bool(c, 1)) return c.fail("GameObjectWrapper::Prevent_AI_Usage -- Expected bool parameter.");
+    if (!is_bool(c, 1)) return c.script_error_stop("GameObjectWrapper::Prevent_AI_Usage -- Expected bool parameter.");
     if (ScriptObjectState* s = edit_self(c)) s->prevent_ai_usage = to_bool(c, 1);
     return 0;
 }
 
 int highlight(Call& c, const char* method, bool small) {
     if (c.nargs < 1 || c.nargs > 2)
-        return c.fail("GameObjectWrapper::%s -- invalid number of parameters. Expected 1 or 2.", method);
-    if (!is_bool(c, 1)) return c.fail("GameObjectWrapper::%s -- invalid type for parameter 1. Expected boolean.", method);
+        return c.script_error_stop("GameObjectWrapper::%s -- invalid number of parameters. Expected 1 or 2.", method);
+    if (!is_bool(c, 1)) return c.script_error_stop("GameObjectWrapper::%s -- invalid type for parameter 1. Expected boolean.", method);
     if (c.nargs == 2 && !c.is_number(2))
-        return c.fail("GameObjectWrapper::%s -- invalid type for parameter 2. Expected number.", method);
+        return c.script_error_stop("GameObjectWrapper::%s -- invalid type for parameter 2. Expected number.", method);
     if (ScriptObjectState* s = edit_self(c)) {
         (small ? s->highlighted_small : s->highlighted) = to_bool(c, 1);
         if (c.nargs == 2) s->highlight_offset = static_cast<float>(c.number(2));
@@ -1972,24 +1975,24 @@ int m_highlight_small(Call& c) { return highlight(c, "Highlight_Small", true); }
 // Override_Max_Speed(number | false): a speed override, false (or true) clears it [inferred].
 int m_override_max_speed(Call& c) {
     if (!c.is_number(1) && !is_bool(c, 1))
-        return c.fail("GameObjectWrapper::Override_Max_Speed -- Expected a number or boolean parameter.");
+        return c.script_error_stop("GameObjectWrapper::Override_Max_Speed -- Expected a number or boolean parameter.");
     if (ScriptObjectState* s = edit_self(c)) s->max_speed_override = c.is_number(1) ? static_cast<float>(c.number(1)) : -1.0f;
     return 0;
 }
 
 int m_set_importance(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Set_Importance -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_number(1)) return c.fail("GameObjectWrapper::Set_Importance -- invalid type for parameter 1. Expected number.");
+        return c.script_error_stop("GameObjectWrapper::Set_Importance -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_number(1)) return c.script_error_stop("GameObjectWrapper::Set_Importance -- invalid type for parameter 1. Expected number.");
     if (ScriptObjectState* s = edit_self(c)) s->importance = detail::to_int(c.number(1));
     return 0;
 }
 
 int m_set_targeting_priorities(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Set_Targeting_Priorities - invalid number of parameters. Expected 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectWrapper::Set_Targeting_Priorities - invalid number of parameters. Expected 1, got %d.", c.nargs);
     if (!c.is_string(1))
-        return c.fail("GameObjectWrapper::Set_Targeting_Priorities - invalid type for parameter 1. Expected string.");
+        return c.script_error_stop("GameObjectWrapper::Set_Targeting_Priorities - invalid type for parameter 1. Expected string.");
 #if ALAMO_LUA_HAVE_ABILITIES
     // OI lua: a combat unit of the battle gets the S8 per-unit override (TACTICAL_COMBAT 2.4, data pack +0x160: it wins
     // over the type's Targeting_Priority_Set). An unknown set name clears the override (the type's set again)
@@ -2157,9 +2160,9 @@ anim::Mat34 default_object_to_world(Call& c, ObjectHandle h) {
 // (the variant is explicit). Finished BlockingStatus.
 int m_play_animation(Call& c) {
     if (c.nargs < 2 || c.nargs > 3)
-        return c.fail("GameObjectWrapper::Play_Animation -- invalid number of parameters. Expected 2 or 3, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("GameObjectWrapper::Play_Animation -- invalid type for parameter 1. Expected string.");
-    if (!is_bool(c, 2)) return c.fail("GameObjectWrapper::Play_Animation -- invalid type for parameter 2. Expected boolean.");
+        return c.script_error_stop("GameObjectWrapper::Play_Animation -- invalid number of parameters. Expected 2 or 3, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("GameObjectWrapper::Play_Animation -- invalid type for parameter 1. Expected string.");
+    if (!is_bool(c, 2)) return c.script_error_stop("GameObjectWrapper::Play_Animation -- invalid type for parameter 2. Expected boolean.");
     const int32_t index = (c.nargs == 3 && c.is_number(3)) ? detail::to_int(c.number(3)) : -1;
     if (ScriptObjectState* s = edit_self(c)) {
         s->animation = std::string(c.string(1));
@@ -2189,8 +2192,8 @@ int m_play_animation(Call& c) {
 // or no animation data].
 int m_get_bone_position(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Get_Bone_Position -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("GameObjectWrapper::Get_Bone_Position -- invalid type for parameter 1. Expected string.");
+        return c.script_error_stop("GameObjectWrapper::Get_Bone_Position -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("GameObjectWrapper::Get_Bone_Position -- invalid type for parameter 1. Expected string.");
     const ObjectHandle self = self_object(c);
     const ObjectBridge* b = bridge(c);
     Vec3 out{};
@@ -2222,8 +2225,8 @@ int m_get_bone_position(Call& c) {
 // count check; its meaning is not documented (ignored).
 int m_cancel_ability(Call& c) {
     if (c.nargs != 2)
-        return c.fail("GameObjectWrapper::Cancel_Ability -- invalid number of parameters. Expected 2, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("GameObjectWrapper::Cancel_Ability -- invalid type for ability 1. Expected string.");
+        return c.script_error_stop("GameObjectWrapper::Cancel_Ability -- invalid number of parameters. Expected 2, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("GameObjectWrapper::Cancel_Ability -- invalid type for ability 1. Expected string.");
     const uint8_t id = ability_param(c, 1);
 #if ALAMO_LUA_HAVE_ABILITIES
     if (ab::AbilitySystem* a = ability_system(c, c.self->id)) {
@@ -2241,9 +2244,9 @@ int m_cancel_ability(Call& c) {
 // Set_All_Abilities_Autofire(bool): every unit ability of the type, list order.
 int m_set_all_abilities_autofire(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Set_All_Abilities_Autofire -- invalid number of parameters. Expected 1, got %d.",
+        return c.script_error_stop("GameObjectWrapper::Set_All_Abilities_Autofire -- invalid number of parameters. Expected 1, got %d.",
                       c.nargs);
-    if (!is_bool(c, 1)) return c.fail("GameObjectWrapper::Set_All_Abilities_Autofire -- invalid type for parameter 1. Expected bool.");
+    if (!is_bool(c, 1)) return c.script_error_stop("GameObjectWrapper::Set_All_Abilities_Autofire -- invalid type for parameter 1. Expected bool.");
     const bool on = to_bool(c, 1);
     for (const uint8_t id : type_abilities(c, store(c)->type(self_object(c)))) set_autofire(c, id, on);
     return 0;
@@ -2512,7 +2515,7 @@ int m_service_wrapper(Call& c) {
         if (!h || !st->alive(h)) remove_prox(L, t, i);
     }
     lua_settop(L, t - 1);
-    if (!failure.empty()) return c.fail("GameObjectWrapper::Service_Wrapper -- %s", failure.c_str());
+    if (!failure.empty()) return c.script_error_stop("GameObjectWrapper::Service_Wrapper -- %s", failure.c_str());
     return 0;
 }
 
@@ -2527,15 +2530,15 @@ int reinforce_location(Call& c, int i, Vec3& pos, ObjectHandle& loc) {
 // Reinforce_Unit(type, location | false, player [, ignore_rules [, obey_zones]]) -> BlockingStatus whose
 // Result() is the table of new units (PGSpawnUnits' Process_Reinforcements, SandCrawler.lua).
 int g_reinforce_unit(Call& c) {
-    if (c.nargs < 3 || c.nargs > 5) return c.fail("LuaReinforceCommandClass::Reinforce -- Invalid number of parameters.");
+    if (c.nargs < 3 || c.nargs > 5) return c.script_error_stop("LuaReinforceCommandClass::Reinforce -- Invalid number of parameters.");
     const TypeArg t = type_arg(c, 1);
-    if (!t.given || t.index == objects::kNone) return c.fail("LuaReinforceCommandClass::Reinforce -- Invalid parameter for type.");
+    if (!t.given || t.index == objects::kNone) return c.script_error_stop("LuaReinforceCommandClass::Reinforce -- Invalid parameter for type.");
     const Ud* p = player_arg(c, 3);
-    if (!p) return c.fail("LuaReinforceCommandClass::Reinforce -- Invalid parameter for player.");
+    if (!p) return c.script_error_stop("LuaReinforceCommandClass::Reinforce -- Invalid parameter for player.");
     Vec3 pos{};
     ObjectHandle loc{};
     const int where = reinforce_location(c, 2, pos, loc);
-    if (where < 0) return c.fail("LuaReinforceCommandClass::Reinforce -- Invalid position parameter.");
+    if (where < 0) return c.script_error_stop("LuaReinforceCommandClass::Reinforce -- Invalid position parameter.");
     ObjectBridge* b = bridge(c);
     Ud u;
     u.cls = cls_blocking();
@@ -2569,14 +2572,14 @@ int g_reinforce_unit(Call& c) {
 // Spawn_From_Reinforcement_Pool(type, position, player) -> table of the spawned units.
 int g_spawn_from_reinforcement_pool(Call& c) {
     if (c.nargs != 3)
-        return c.fail("Spawn_From_Reinforcement_Pool -- Invalid number of parameters. Expected 3, got %d", c.nargs);
+        return c.script_error_stop("Spawn_From_Reinforcement_Pool -- Invalid number of parameters. Expected 3, got %d", c.nargs);
     const TypeArg t = type_arg(c, 1);
-    if (!t.given || t.index == objects::kNone) return c.fail("Spawn_From_Reinforcement_Pool -- Invalid parameter for type.");
+    if (!t.given || t.index == objects::kNone) return c.script_error_stop("Spawn_From_Reinforcement_Pool -- Invalid parameter for type.");
     const Ud* p = player_arg(c, 3);
-    if (!p) return c.fail("Spawn_From_Reinforcement_Pool -- Invalid parameter for player.");
+    if (!p) return c.script_error_stop("Spawn_From_Reinforcement_Pool -- Invalid parameter for player.");
     Vec3 pos{};
     ObjectHandle loc{};
-    if (position_arg(c, 2, pos, &loc) != PosArg::Ok) return c.fail("Spawn_From_Reinforcement_Pool -- Invalid position parameter.");
+    if (position_arg(c, 2, pos, &loc) != PosArg::Ok) return c.script_error_stop("Spawn_From_Reinforcement_Pool -- Invalid position parameter.");
     lua_newtable(c.L);
     if (!store(c)) return 1;
     const ObjectBridge* b = bridge(c);
@@ -2723,9 +2726,9 @@ int m_get_garrisoned_units(Call& c) {
 // object's CategoryMask, and it is this object's owner's or empty. No capacity test (no garrison system).
 int m_can_garrison(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Can_Garrison -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectWrapper::Can_Garrison -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     const Ud* t = c.userdata(1, detail::cls_game_object());
-    if (!t) return c.fail("GameObjectWrapper::Can_Garrison -- invalid type for parameter 1. Expected game object or AI target.");
+    if (!t) return c.script_error_stop("GameObjectWrapper::Can_Garrison -- invalid type for parameter 1. Expected game object or AI target.");
     if (!detail::object_alive(*c.vm, *t)) return push_bool(c, false);
     const ObjectHandle target = detail::object_handle(*t), self = self_object(c);
     const objects::ObjectStore* st = store(c);
@@ -2757,9 +2760,9 @@ int m_get_contained_heroes(Call& c) {  // walk order: contents, depth first [inf
 // order, all of them at fraction >= 1 [inferred] (FleetEvents.lua passes 1.0).
 int m_destroy_contained_objects(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Destroy_Contained_Objects -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectWrapper::Destroy_Contained_Objects -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     if (!c.is_number(1))
-        return c.fail("GameObjectWrapper::Destroy_Contained_Objects -- invalid type for parameter 1. Expected number.");
+        return c.script_error_stop("GameObjectWrapper::Destroy_Contained_Objects -- invalid type for parameter 1. Expected number.");
     const std::vector<ObjectHandle> v = contents_of(c, self_object(c));
     const double f = c.number(1);
     size_t n = v.size();
