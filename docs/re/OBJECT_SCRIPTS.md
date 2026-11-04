@@ -747,7 +747,7 @@ Every function in the table is registered in the port's bind files (§5).
 
 ---
 
-## 9. Port status (q6 t03, 2026-11-03)
+## 9. Port status (q6 t03, 2026-11-03; q6 t12, 2026-11-04)
 
 Implemented in `engine/apps/sim` (`object_scripts.hpp` / `.cpp`, `ObjectScriptHost`, owned by `SimHost`), with hooks in
 `engine/objects` (`ObjectStore::on_created`) and `engine/lua` (proximity events, `ObjectBridge::spawn_unit`,
@@ -775,6 +775,21 @@ Port choices (`[port]`, each also commented in the code):
 | Lua runtime error (§8 item 5) | Kills only that thread, the script stays |
 | Proximity (§4.3, §8 item 4) | Synchronous callbacks inside `Service_Wrapper`; candidates in ascending object id; a callback that registers or cancels restarts the scan |
 | `Get_Name` | Upper-case on object-script VMs only (`upper_type_names`); story / AI VMs keep the raw name until their goldens are regenerated |
-| `Spawn_Unit` in a battle | Through `TacticalBattle::script_spawn` (battle bookkeeping); types outside the battle tables become props |
+| `Spawn_Unit` in a battle (q6 t12) | Through `TacticalBattle::script_spawn`: a type outside the battle tables is added to them first (`script_add_types`: `types_used` + `BattleCatalog::extend_battle` + the ability types), so it is a real battle unit (movement, combat, AI, the owner's lists), not a prop. A battle save stores the extended list; the load accepts it when the rebuilt list is its prefix |
+| Company spawns (q6 t12) | A type with `Company_Units` goes to `ObjectBridge::spawn_company` → `TacticalBattle::script_spawn_company`: a built participant of the owner, members by `spawn_types` (`ConflictRules` groups) through `deploy()`, the REMAINING_GAPS §3.4 TEAM containers (Create_Team / Create_Team_Type / Max_Squad_Size). Returns the first TEAM container, else the first member. **[port]** member placement: the reinforcement drop layout (`land_drop_layout`) around the given point, each slot snapped passable; tactical spawn placement of a company is not in docs/re |
+| `Take_Damage(amount)` (q6 t12) | Damage kind 0 (§6.1 step 4, TACTICAL_COMBAT §3.6 step 3): passes `Make_Invulnerable` on every host. In a battle (`ObjectBridge::take_damage` → `TacticalBattle::script_damage`) it is a `CombatSystem::take_damage` request; `Set_Cannot_Be_Killed` sets `kUnitCannotDie` for that call; the deaths it causes are processed at once (`process_death`: store removal, death clone, team, victory monitor), since the combat death list is cleared at the next combat tick. The hard-point form (`Take_Damage(n, name)`) and non-battle hosts keep the store path |
+| `Teleport` (q6 t12) | L1_S4_REMAINING §3.4: through `TacticalScriptHooks::teleport` (`TacticalBattle::teleport`: store, movement, combat, trees), the facing kept. `Teleport_And_Face` still moves the store only; the garrison eject step of 0x3abb80 is not done |
+| Dead wrapper (q6 t12) | `Event_Object_In_Range`, `Cancel_Event_Object_In_Range` and `Service_Wrapper` on a dead object are silent no-ops, not the generic "this object is dead!" thread error: the exe has no dead-object string for them (§4.3), and TR's spawner pumps once more after its dummy's `Take_Damage` kill |
 | Saves | `save_allowed` refuses while any object script is live (§2.6: no script state is saved yet) |
-| Not done | `Execute_Script_On_Type` (§1.5), pooling, hot-reload re-attach, script state in saves |
+| Not done | `Execute_Script_On_Type` (§1.5), pooling (§1.4), hot-reload re-attach, script state in saves (§2.6), the garrison step of `Teleport`, hangar / fighter types of late-added types (their hangar tables are built at battle start) |
+
+Open RE questions (q6 t12; not in docs/re, so the port keeps the binding-state behaviour):
+
+1. `Prevent_AI_Usage(true)` on a battle unit: which engine flag it sets (object +offset), and which AI systems skip
+   such an object (tactical AI perception / goal targets, the threat grid, auto-targeting). The port only records it
+   in `ScriptObjectState`; TR dummies stay AI-visible (`DUMMY` behaviour objects are not `UNIT_AI` in the port).
+2. `Make_Invulnerable(true)`: the combat flag it sets and which damage kinds it blocks (all but kind 0?). The port
+   only stores it in `ScriptObjectState`; battle combat does not read it yet.
+3. `Hide(true)`: whether a hidden object is skipped by targeting, fog reveal and selection, or only by the renderer.
+4. Tactical placement of a script-spawned company's members (`Spawn_Unit` → company create in land): formation
+   offsets and the TEAM container position, versus the reinforcement drop layout the port uses.

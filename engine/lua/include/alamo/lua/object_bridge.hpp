@@ -100,7 +100,7 @@ struct ScriptObjectState {
     bool prevent_ai_usage = false;
     bool prevent_all_fire = false;
     bool prevent_opportunity_fire = false;
-    bool invulnerable = false;        // Make_Invulnerable: Take_Damage does nothing
+    bool invulnerable = false;        // Make_Invulnerable (Take_Damage is kind 0 and passes it, q6 t12)
     bool cannot_be_killed = false;    // Set_Cannot_Be_Killed: Take_Damage cannot reach 0
     bool locomotor_suspended = false;
     bool highlighted = false, highlighted_small = false;
@@ -191,6 +191,15 @@ public:
     // its systems (a tactical battle: trees, and combat / movement when the type is in the battle tables). Returns the
     // new object, or a null handle to fall back to ObjectStore::create. Unset (default): ObjectStore::create.
     std::function<objects::ObjectHandle(const objects::SpawnParams& p)> spawn_unit;
+    // q6 t12: Spawn_Unit of a company type (one with Company_Units) when the host lays out companies itself (a tactical
+    // battle: its members as battle units plus their TEAM containers, TacticalBattle::script_spawn_company). Returns the
+    // object Spawn_Unit hands to Lua; null = not handled (the binding creates the company and its members itself, each
+    // through spawn_unit). Unset (default): the binding's own layout.
+    std::function<objects::ObjectHandle(const objects::SpawnParams& p)> spawn_company;
+    // q6 t12: Take_Damage(amount) without a hardpoint name through the host's damage system (a tactical battle: the
+    // combat Take_Damage with kind 0, TacticalBattle::script_damage); `cannot_die` = the object's Set_Cannot_Be_Killed.
+    // True = applied by the host (the death, if any, processed there); false or unset: the store-only health change.
+    std::function<bool(objects::ObjectHandle unit, float amount, bool cannot_die)> take_damage;
     // refixf t03: the representative type 0x3973b0 (docs/re/LUA_API.md "Find_All_Objects_Of_Type and the sibling
     // finders"; A1_READINGS §29) that Find_All_Objects_Of_Type and Find_Nearest match on: a team container -> the
     // company's Create_Team_Type, else the company type; a transport -> its company type; a squadron fleet -> its

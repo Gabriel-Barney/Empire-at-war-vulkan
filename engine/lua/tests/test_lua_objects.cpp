@@ -317,6 +317,11 @@ static void test_stage3(const Db& db) {
     CHECK(run(vm, "hits = '' t1.Event_Object_In_Range(Prox, 20) t1.Service_Wrapper() t1.Cancel_Event_Object_In_Range(Prox)") == "");
     CHECK(gstr(vm, "hits") == "1>3,");
     s.bridge.objects_in_range = nullptr;
+    // q6 t12: the proximity bindings on a dead wrapper (an object script's own unit killed under it) are silent no-ops,
+    // not the generic "this object is dead!" thread error (§4.3: the exe has no dead-object string for these).
+    CHECK(run(vm, "hits = '' dead = Create_Generic_Object('Trooper', Create_Position(50, 0, 0), p2) dead.Despawn() "
+                  "dead.Event_Object_In_Range(Prox, 5) dead.Service_Wrapper() dead.Cancel_Event_Object_In_Range(Prox)") == "");
+    CHECK(gstr(vm, "hits") == "" && !vm.exit_requested());
     // GetEvent keeps posted named events FIFO; Params nil for them.
     vm.post_event("Named");
     CHECK(run(vm, "named = 0 function Named() named = named + 1 end ev = GetEvent() pn = tostring(GetEvent.Params()) ev()") == "");
@@ -523,6 +528,25 @@ static void test_spawn_and_state(const Db& db) {
     CHECK(run(vm, "team.Despawn() alive = team.Is_Valid() and 1 or 0 m1 = members[1].Is_Valid() and 1 or 0 "
                   "m2 = members[2].Is_Valid() and 1 or 0 cnt2 = team.Get_Contained_Object_Count()") == "");
     CHECK(gnum(vm, "alive") == 1.0 && gnum(vm, "m1") == 0.0 && gnum(vm, "m2") == 0.0 && gnum(vm, "cnt2") == 0.0);
+    {  // q6 t12: a host that lays out companies (ObjectBridge::spawn_company) takes a company; a plain type is not
+       // offered; a null answer falls back to the store container + members.
+        int calls = 0;
+        objects::TypeIndex asked = objects::kNone;
+        objects::ObjectHandle give = s.trooper1;
+        s.bridge.spawn_company = [&](const objects::SpawnParams& p) {
+            ++calls;
+            asked = p.type;
+            return give;
+        };
+        CHECK(run(vm, "hc = Spawn_Unit(Find_Object_Type('Trooper_Team'), mk, p1)[1].Get_Object_ID() "
+                      "Spawn_Unit(Find_Object_Type('Tank'), mk, p1)[1].Despawn()") == "");
+        CHECK(calls == 1 && asked == db.t("Trooper_Team") && gnum(vm, "hc") == static_cast<double>(s.store.id(s.trooper1)));
+        give = {};
+        CHECK(run(vm, "fb = Spawn_Unit(Find_Object_Type('Trooper_Team'), mk, p1)[1] fbn = fb.Get_Contained_Object_Count() "
+                      "fb.Despawn()") == "");
+        CHECK(calls == 2 && gnum(vm, "fbn") == 2.0);
+        s.bridge.spawn_company = nullptr;
+    }
     // Create_Generic_Object: name or type, one object.
     CHECK(run(vm, "g = Create_Generic_Object('Tank', Create_Position(1, 2, 3), p1) gx, gy, gz = g.Get_Position().Get_XYZ() "
                   "go = g.Get_Owner().Get_ID() gnil = tostring(Create_Generic_Object('Nope', t1, p1)) "
@@ -537,10 +561,32 @@ static void test_spawn_and_state(const Db& db) {
                   "h2 = tank.Get_Hull() tank.Make_Invulnerable(false) tank.Set_Cannot_Be_Killed(true) tank.Take_Damage(10000) "
                   "h3 = tank.Get_Health() v3 = tank.Is_Valid() and 1 or 0 tank.Take_Damage(15, 'HP_Gun') "
                   "gun = Find_First_Object('HP_Gun') gh = gun.Get_Hull() tank.Take_Damage(-100000) hmax = tank.Get_Hull()") == "");
-    CHECK(gnum(vm, "h0") == 1.0 && gnum(vm, "h1") == 0.75 && gnum(vm, "h2") == 0.75 && gnum(vm, "h3") == 1.0 / 400.0);
+    // q6 t12: Take_Damage is damage kind 0, which passes invulnerability (OBJECT_SCRIPTS §6.1 step 4): h2 drops too.
+    CHECK(gnum(vm, "h0") == 1.0 && gnum(vm, "h1") == 0.75 && gnum(vm, "h2") == 0.5 && gnum(vm, "h3") == 1.0 / 400.0);
     CHECK(gnum(vm, "v3") == 1.0 && gnum(vm, "gh") == 0.5 && gnum(vm, "hmax") == 1.0);
     CHECK(run(vm, "tank.Set_Cannot_Be_Killed(false) tank.Take_Damage(1000) v4 = tank.Is_Valid() and 1 or 0") == "");
     CHECK(gnum(vm, "v4") == 0.0);
+    {  // q6 t12: a host damage system takes Take_Damage(amount) (not the hardpoint form); refused -> the store path
+        objects::ObjectHandle hit{};
+        float amount = 0.0f;
+        bool cannot = false, accept = true;
+        int calls = 0;
+        s.bridge.take_damage = [&](objects::ObjectHandle h, float a, bool cd) {
+            ++calls;
+            hit = h;
+            amount = a;
+            cannot = cd;
+            return accept;
+        };
+        const float before = s.store.health(s.trooper2);
+        CHECK(run(vm, "t2.Set_Cannot_Be_Killed(true) t2.Take_Damage(25)") == "");
+        CHECK(calls == 1 && hit == s.trooper2 && amount == 25.0f && cannot && s.store.health(s.trooper2) == before);
+        accept = false;
+        CHECK(run(vm, "t2.Set_Cannot_Be_Killed(false) t2.Take_Damage(1)") == "");
+        CHECK(calls == 2 && !cannot && s.store.health(s.trooper2) == before - 1.0f);
+        s.store.set_health(s.trooper2, before);
+        s.bridge.take_damage = nullptr;
+    }
     CHECK(contains(run(vm, "t1.Take_Damage('a')"), "Take_Damage -- invalid type for parameter 1. Expected number."));
     CHECK(contains(run(vm, "t1.Make_Invulnerable(1)"), "Make_Invulnerable -- invalid type for parameter 1. Expected boolean."));
     CHECK(contains(run(vm, "t1.Make_Invulnerable()"), "Make_Invulnerable -- invalid number of parameters. Expected 1, got 0."));
@@ -574,6 +620,22 @@ static void test_spawn_and_state(const Db& db) {
     CHECK(s.store.facing(s.trooper1).x == 0.0f && s.store.facing(s.trooper1).y == 1.0f);
     CHECK(contains(run(vm, "t1.Teleport_And_Face(Create_Position(1, 1, 1))"), "Expected game object for parameter 1, got position instead."));
     CHECK(contains(run(vm, "t1.Teleport()"), "GameObjectWrapper::Teleport -- invalid number of parameters. Expected 1, got 0."));
+    {  // q6 t12 (L1_S4_REMAINING §3.4): with the tactical teleport hook, Teleport moves the unit there (facing kept)
+        TacticalScriptHooks hk;
+        objects::ObjectHandle moved{};
+        Vec3 to{}, face{};
+        hk.teleport = [&](objects::ObjectHandle h, Vec3 p, Vec3 f) {
+            moved = h;
+            to = p;
+            face = f;
+        };
+        s.bridge.tactical = &hk;
+        const Vec3 f2 = s.store.facing(s.trooper2);
+        CHECK(run(vm, "t2.Teleport(Create_Position(1, 2, 3))") == "");
+        CHECK(moved == s.trooper2 && to.x == 1.0f && to.y == 2.0f && to.z == 3.0f && face.x == f2.x && face.y == f2.y);
+        CHECK(s.store.position(s.trooper2).x == 7.0f);  // the host moved it (here: nothing did)
+        s.bridge.tactical = nullptr;
+    }
     CHECK(contains(run(vm, "t1.Face_Immediate()"), "Face_Immediate -- Missing required position or gameobject parameter."));
     // Change_Owner goes through the host hook.
     int32_t new_owner = -5;

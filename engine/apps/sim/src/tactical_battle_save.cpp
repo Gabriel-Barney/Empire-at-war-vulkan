@@ -1,4 +1,5 @@
 // N1 stage 2 save / load of a running battle (owner: n2-host): tactical_battle.hpp "N1 stage 2 save / load".
+#include <algorithm>
 #include <utility>
 
 #include "alamo/sim/save_session.hpp"
@@ -217,9 +218,21 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
             const std::vector<uint32_t> types_used = types_used_, descs = descs_;
             save_io::In in(r);
             state_io(in, *this);
-            bool ok = r.ok() && r.done() && types_used_ == types_used && descs_ == descs;
+            // q6 t12: types a game-object script added mid-battle (script_add_types) follow the rebuilt setup's list; they
+            // are built onto the rebuilt tables again (same append order -> the same descriptor indices).
+            const bool same = types_used_ == types_used && descs_ == descs;
+            const bool extended = !same && types_used_.size() > types_used.size() && descs_.size() == types_used_.size() &&
+                                  std::equal(types_used.begin(), types_used.end(), types_used_.begin()) &&
+                                  std::equal(descs.begin(), descs.end(), descs_.begin());
+            bool ok = r.ok() && r.done() && (same || extended);
             for (const Unit& u : units_)
                 if (u.participant >= parts_.size() || (u.container != 0xFFFFFFFFu && u.container >= containers_.size())) ok = false;
+            if (ok && extended) {
+                const std::vector<uint32_t> saved_descs = descs_;
+                descs_ = descs;
+                tables_extend();
+                ok = descs_ == saved_descs;
+            }
             if (!ok) {
                 ByteReader br(backup.bytes());
                 save_io::In restore(br);

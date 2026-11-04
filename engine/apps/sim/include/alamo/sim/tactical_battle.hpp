@@ -662,10 +662,25 @@ public:
     // A script-spawned object joins the L1 systems (special-weapon / TSW packs). Call after TacticalMode::spawn.
     void adopt_object(TacticalMode& mode, objects::ObjectHandle h);
     // q6 object scripts: Spawn_Unit of a game-object script (ObjectBridge::spawn_unit). TacticalMode::spawn (trees), then
-    // like an ability spawn (oi_spawn_unit): a combat / ability / movement unit when the type is in the battle tables, a
-    // prop otherwise [port: the tables are fixed after setup, so types first used by a script stay props], then the L1
-    // systems (adopt_object). An object with a container / attach parent (a company member) is only TacticalMode::spawn'd.
+    // like an ability spawn (oi_spawn_unit): a combat / ability / movement unit, then the L1 systems (adopt_object). q6
+    // t12: a type outside the battle tables joins them first (script_add_types), so every script-spawned unit is a real
+    // battle unit (movement, combat, AI control, the owner's unit lists). An object with a container / attach parent is
+    // only TacticalMode::spawn'd.
     objects::ObjectHandle script_spawn(TacticalMode& mode, const objects::SpawnParams& p);
+    // q6 t12: Spawn_Unit of a COMPANY type (ObjectBridge::spawn_company): the company comes down like a reinforcement the
+    // battle knows (deploy(): its spawn_types members as battle units, then the REMAINING_GAPS §3.4 TEAM containers), as a
+    // built participant (no galactic object) of p.owner. Members at the reinforcement drop layout around p.position
+    // (land_drop_layout with the side's drop yaw, each slot snapped to a passable cell of its member) [port: Spawn_Unit's
+    // tactical member placement is not in docs/re]. Returns the first TEAM container, else the first member (null when the
+    // type is not a company or nothing spawned). The types join the tables first (script_add_types).
+    objects::ObjectHandle script_spawn_company(TacticalMode& mode, const objects::SpawnParams& p);
+    // q6 t12: Lua Take_Damage(amount) on a battle combat unit (ObjectBridge::take_damage): CombatSystem::take_damage with
+    // damage kind 0 (Debug: passes invulnerability, TACTICAL_COMBAT §3.6 step 3; OBJECT_SCRIPTS §6.1 step 4), no source,
+    // at the battle frame; `cannot_die` (the script's Set_Cannot_Be_Killed) sets kUnitCannotDie for that hit. A kill is
+    // processed at once like a combat death (process_death: store removal, death clone, team container, victory monitor
+    // order) [port: outside the battle tick; the original's Die runs inside Take_Damage]. False when `id` is not a live
+    // combat unit of this battle (the caller keeps its store-only path).
+    bool script_damage(TacticalMode& mode, objects::ObjectId id, float amount, bool cannot_die);
     const tactical::abilities::SpecialWeaponSystem& special_weapons() const { return l1_sw_; }
     const tactical::movement::HyperspaceDepartures& hyperspace() const { return l1_jumps_; }
     const tactical::movement::EngineControl& engines() const { return l1_engines_; }
@@ -1236,6 +1251,8 @@ private:
     std::vector<uint8_t> fchase_have_;
     void drive_animation(SimRng& rng, uint64_t global_frame);
     void consume_events(TacticalMode& mode, SimRng& rng);
+    // consume_events step d for one combat death (also script_damage's out-of-tick kills): a dead or unknown unit is skipped.
+    void process_death(TacticalMode& mode, const tactical::combat::DeathEvent& d, SimRng& rng);
     void spawn_particle(TacticalMode& mode, int32_t type, Vec3 pos, int32_t owner);
     objects::ObjectHandle spawn_prop(TacticalMode& mode, int32_t type, Vec3 pos, Vec3 facing, int32_t owner);
     // refix t01 / t03: Die step 8's clone object (flags 0xc0), and the infantry corpse-path test (S9 §1.6).
@@ -1282,7 +1299,7 @@ private:
     std::unique_ptr<BattleTables> tables_;
     std::vector<uint32_t> types_used_;  // every type spawned in this battle, first-use order
     std::vector<uint32_t> descs_;       // CombatData::units index per types_used_ entry
-    std::unique_ptr<BattleCatalog::BattleBuild> tables_build_;  // OPT3 t09: constructor / setup's table build (null after setup)
+    std::unique_ptr<BattleCatalog::BattleBuild> tables_build_;  // OPT3 t09: constructor / setup's table build (q6 t12: kept for script_add_types)
     void tables_extend();  // tables_ / descs_ := the build of types_used_ (only the appended types are built)
     std::unique_ptr<tactical::movement::MovementSystem> movement_;
     std::vector<tactical::movement::ClearanceInfo> clr_types_;  // §6.3.1: per type (derived from type / model data)
@@ -1599,6 +1616,10 @@ private:
     // Called after the movement tick (clip ends, before the combat flags are read) and after oi_events (requests).
     void oi_deploy_sync();
     objects::ObjectId oi_spawn_unit(TacticalMode& mode, int32_t type, Vec3 pos, Vec3 facing, int32_t owner);
+    // q6 t12: script-spawned types (and, for a company, its members and TEAM types) join the battle tables mid-battle:
+    // appended to types_used_ and built onto the live tables (tables_extend on the kept setup build), then the ability /
+    // survivor types they name (oi_add_ability_types). [port] Their hangar descriptors (hg_add_types) are not added.
+    void script_add_types(std::span<const uint32_t> types);
     void oi_hash(StateHasher& h) const;
     bool oi_company_members(int32_t type, std::vector<int32_t>& members) const;  // §5.2 Company_Units / Squadron_Units
     struct OiRespawn {
