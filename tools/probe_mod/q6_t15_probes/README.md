@@ -11,7 +11,7 @@ are built from your install at run time.
 | 2 | **Object-script first pump**: is the first-pump draw bound `ServiceRate`? Do vanilla objects with `Lua_Script` run their scripts at all? | OBJECT_SCRIPTS §3.2 step 7, §8 item 1, §9 | First pump at the first service after the attach, then `LastService = -(synced range_float(0, ServiceRate))`. Object scripts are on only when a mod is loaded (`[port interim rule]`) | vanilla (land + space skirmish) |
 | 3 | **Perpetual STORY_ELAPSED period** | STORY §4.7, §8 item 11 | T seconds + one story service. With T = 2 it fires at frames 61 and 122 (period 61) | vanilla (campaign) |
 | 4 | **Load-time story resume**: are a plot's threads resumed once at load, before the frame-1 STORY_ELAPSED dispatch? | STORY §8 item 9 | Yes (`StorySession::start_threads_at_load`): `main` runs before the frame-1 events, so a `STORY_ELAPSED 0` start event enters its state | vanilla (same campaign as 3) |
-| 5 | **TR land end time**: how long does the last Rebel command centre survive once the rest of the base is gone (Blood Gulch)? | AI_TACTICAL §7.7.6, §12 item 12 | `alamo_headless`, TR Blood Gulch, Empire AI vs Rebel AI, object scripts on: the Empire wins at frame 45,143 (25 min 05 s). The last CC repairs itself under fire | TR |
+| 5 | **TR land end time**: how long does the last Rebel command centre survive once the rest of the base is gone (Blood Gulch)? | AI_TACTICAL §7.7.6, §12 item 12 | `alamo_headless`, TR Blood Gulch, Empire AI vs Rebel AI, object scripts on: the Rebels win at frame 18,731 (10 min 24 s; 59,083 without object scripts) since the 2026-11-04 land rules and company-target fix (was: Empire at 45,143) | TR |
 | 6 | **Select All look**: what does Ctrl+A select with turrets, base structures, heroes, a starbase and docked fighters present? | COMMANDS §2.4.1 | Every owned SELECTABLE object without a parent: heroes, build-pad turrets and the Eclipse (`Not_Really_Selectable`) are selected. Base structures, star bases, defense satellites / orbital structures, proximity mines, TEAM members and docked / garrisoned units are not. TEAM containers expand to their members | vanilla (same skirmishes as 2) |
 
 ## What Gabriel does
@@ -280,8 +280,8 @@ from TR's own calls only (`On_Unit_Service` every 2 s per idle unit, `FreeStoreS
 **The report:** `base gone at f=..., last CC gone at f=...: the CC survived N frames (m:ss)`, plus the CC's hull and
 the number of nearby AI units every 30 s after the base is gone.
 
-**Port:** the Empire wins at frame 45,143 (25:05), and the last CC repairs itself (TR's AI reaches only idle units
-within 600 of it, AI_TACTICAL §7.7.6).
+**Port:** since the 2026-11-04 land rules and company-target fix the Rebels win at frame 18,731 (10:24) with object scripts
+(59,083 without; was: the Empire at 45,143, with the last CC repairing itself, AI_TACTICAL §7.7.6).
 
 ### 6. Select All (`q6_tactical_hook.lua`, both skirmishes)
 

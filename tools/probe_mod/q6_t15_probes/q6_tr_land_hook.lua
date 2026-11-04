@@ -11,8 +11,8 @@
 --   GONE when an enemy structure disappears (type, id, frame), BASEGONE when the enemy has no structure left but a
 --   command centre, CCGONE when the last command centre is gone.
 -- Question (AI_TACTICAL sec. 7.7.6 / sec. 12 item 12): how long does the last Rebel command centre survive once the base
--- is gone? Port (alamo_headless, TR Blood Gulch, Empire AI vs Rebel AI, object scripts on): Empire wins at frame
--- 45,143; the last CC self-repairs.
+-- is gone? Port (alamo_headless, TR Blood Gulch, Empire AI vs Rebel AI, object scripts on): Rebels win at frame
+-- 18,731 (59,083 without object scripts; was Empire at 45,143 before the 2026-11-04 land rules).
 -- Records "Q6P|<KIND>|p=trland|sid=..|n=..|f=..|...|END" in Q6L_LOG (heap scan). Lua 5.0.
 Q6L_FACTIONS = { @@FACTIONS@@ }
 Q6L_LOG = {}
