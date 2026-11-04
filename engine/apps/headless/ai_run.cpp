@@ -354,6 +354,7 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
             wcfg);
         ai::GalacticAiWorld& world = *world_holder;
         world_ptr = &world;
+        world.set_conflicts(&battles.conflicts());  // q6 t03: TimeSince*Defender/Attacker stamps
         std::vector<std::string> wd;
         if (!world.load_plans(plan_files, &wd) || !world.start(&wd)) {
             for (const auto& d : wd) std::fprintf(stderr, "  %s\n", d.c_str());

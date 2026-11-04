@@ -51,6 +51,7 @@ class StateHasher;
 namespace alamo::galactic {
 class GalacticSim;
 class ContrastTable;
+class ConflictManager;
 }
 namespace alamo::lua {
 class LuaPlayerWorld;
@@ -152,6 +153,11 @@ public:
     // Int-final: the session-wide GlobalValue table (L1_S4_REMAINING §1.5) for every AI VM's GlobalValue.Get / Set;
     // null (default) = the world's own map (its CRC section). Hosts attach SimHost::global_values().
     void set_global_values(lua::GlobalValueStore* store);
+    // q6 t03: the session's conflict manager, read (never written) once per frame for the player tokens
+    // TimeSince{Space,Ground}{Defender,Attacker} (AI_GALACTIC_TOKENS §8.2; GalacticSimTokenResolver::observe_conflicts).
+    // Null (default) = the manager installed as the sim's conflict hooks when it is one (no story gate in front), else no
+    // conflict is seen (the tokens stay at 1e18). It must outlive this object (or be detached first).
+    void set_conflicts(const galactic::ConflictManager* conflicts);
 
     // The player's galactic budget categories as the S10 / A1 land-battle credit transfer reads them
     // (template Tactical_Budget_Allowance, available, pool; category list order). Empty for non-AI players.

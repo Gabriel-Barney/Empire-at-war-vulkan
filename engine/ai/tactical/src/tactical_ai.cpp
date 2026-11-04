@@ -231,6 +231,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     const EquationSet& eqs;
     TacticalAiHost& host;
     TacticalAiConfig cfg;
+    uint64_t space_categories = tactical_space_categories(types);  // q6 t03: PotentialPlan space layer (loaded enum)
 
     // perception
     PerceptionWorld w;
@@ -1683,6 +1684,7 @@ void TacticalAiWorld::Impl::pp_input(PlayerAi& p, uint32_t plan, const Goal& g, 
     }
     in.types = &w.types;
     in.category_mask = perc.config().category_mask;
+    in.space_categories = space_categories;  // q6 t03
     // FreeStore Setup A stages (A1_READINGS §25.3), land with a target: per TF the flood slot 6 pick around the goal
     // target's zone at the goal type's Reachability (link mask: TF +0x94 is not parsed [port: -1]; RequireUniqueStage
     // excludes / RequireMatchingStage restricts to the stages so far), else the goal target itself.
@@ -3331,6 +3333,23 @@ std::function<uint64_t(std::string_view)> tactical_category_resolver(const objec
         const auto v = types->enums().get(objects::EnumId::GameObjectCategory).lookup(name);
         return v ? static_cast<uint64_t>(*v) : 0u;
     };
+}
+
+uint64_t tactical_space_categories(const objects::EnumConverter& categories) {
+    if (!categories.valid) return 0;
+    const auto infantry = categories.lookup("INFANTRY");
+    if (!infantry || *infantry <= 0) return 0;
+    uint64_t m = 0;
+    for (const objects::EnumConverter::Entry& e : categories.entries) {
+        const auto v = static_cast<uint64_t>(e.value);
+        if (e.value <= 0 || !std::has_single_bit(v)) continue;
+        if (e.name == "SPACEHERO" || (e.value < *infantry && e.name != "TRANSPORT")) m |= v;
+    }
+    return m;
+}
+
+uint64_t tactical_space_categories(const objects::GameObjectTypes* types) {
+    return types ? tactical_space_categories(types->enums().get(objects::EnumId::GameObjectCategory)) : 0u;
 }
 
 TacticalAiWorld::TacticalAiWorld(objects::ObjectStore& store, const objects::GameObjectTypes* types, const FileProvider* files,

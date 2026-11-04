@@ -29,10 +29,12 @@ GalacticAiWorld::Impl::Impl(gal::GalacticSim& s, objects::ObjectStore& st, const
                             std::vector<GalacticAiTypeInfo> ti, AiOrderSink snk, GalacticAiConfig c)
     : sim(s), store(st), types(ty), files(fp), rng(r), defs(d), eqs(e), tinfo(std::move(ti)), sink(std::move(snk)),
       cfg(std::move(c)), res(s, tinfo, nullptr, {}) {
+    if (types) cat_enum = &types->enums().get(objects::EnumId::GameObjectCategory);  // q6 t03: the loaded enum
+    res.set_category_enum(cat_enum);
     for (GalacticAiTypeInfo& t : tinfo)
         if (t.category_mask == 0) {
             uint64_t m = 0;
-            for (const std::string& n : t.categories) m |= ai_category_bit(n);
+            for (const std::string& n : t.categories) m |= category_bit(n);
             t.category_mask = m;
         }
     type_mask.assign(sim.rules().types.size(), 0u);
@@ -77,6 +79,24 @@ GalacticSimTokenResolver::Hooks GalacticAiWorld::Impl::make_hooks() {
     h.difficulty = [this](int32_t p) {
         const PlayerAi* pa = player_ai(p);
         return pa ? pa->difficulty : -1;
+    };
+    // q6 t03 BudgetAllocation (AI_GALACTIC_TOKENS §8.3): 0x612ee0 looks the key up among the budget's categories (map key
+    // = the AIGoalCategoryType value; AiBudget holds them in list order, AiDefinitions::category_value) and returns that
+    // category's normalised weight +0x3C; a key no category has -> 0.0. No AI (goal system) -> fails.
+    h.budget_weight = [this](int32_t p, int32_t key, double& out) {
+        const PlayerAi* pa = player_ai(p);
+        if (!pa) return false;
+        out = 0.0;
+        for (size_t c = 0; c < defs.category_value.size() && c < pa->ctx.budget.size(); ++c)
+            if (defs.category_value[c] == key) {
+                out = static_cast<double>(pa->ctx.budget.weight(static_cast<int32_t>(c)));
+                break;
+            }
+        return true;
+    };
+    h.goal_category = [this](std::string_view name) {
+        const int32_t c = defs.find_category(name);
+        return c >= 0 && static_cast<size_t>(c) < defs.category_value.size() ? defs.category_value[static_cast<size_t>(c)] : -1;
     };
     h.script = [this](const EvalContext& c, std::string_view name, std::span<const Param> params, double& out) {
         return script_evaluate(c, name, params, out);
@@ -2028,7 +2048,10 @@ void GalacticAiWorld::update_player(int32_t player, int64_t now, bool galactic_o
         }
         {
             ALAMO_PROFILE_SCOPE("ai.gal.refresh");  // OPT2 t11
-            w.res.refresh(w.sim.frame());
+            w.res.refresh(w.sim.frame(), now);
+            // q6 t03: the player conflict stamps (signals 0x11 / 0x13) from the conflict manager's state after T5.
+            const gal::ConflictManager* cm = w.conflicts ? w.conflicts : dynamic_cast<const gal::ConflictManager*>(w.sim.conflict_hooks());
+            if (cm) w.res.observe_conflicts(*cm, static_cast<int32_t>(now));
         }
         // Story requests and Suspend_AI from the story session's world (and the AI's own).
         bool suspended = w.world.ai_suspended();
@@ -2088,6 +2111,7 @@ void GalacticAiWorld::attach_story_world(lua::LuaPlayerWorld* world) {
     }
 }
 void GalacticAiWorld::set_global_values(lua::GlobalValueStore* store) { impl_->gv_store = store; }  // Int-final
+void GalacticAiWorld::set_conflicts(const galactic::ConflictManager* conflicts) { impl_->conflicts = conflicts; }  // q6 t03
 const PlanLibrary& GalacticAiWorld::plans() const { return impl_->library; }
 bool GalacticAiWorld::is_ai_player(int32_t player) const { return impl_->player_ai(player) != nullptr; }
 const AiContext* GalacticAiWorld::context(int32_t player) const {
@@ -2428,7 +2452,7 @@ std::vector<GalacticAiTypeInfo> make_galactic_ai_type_info(const objects::GameOb
             }
         }
     }
-    fill_category_masks(out);
+    fill_category_masks(out, &types.enums().get(objects::EnumId::GameObjectCategory));  // q6 t03: the loaded enum
     return out;
 }
 

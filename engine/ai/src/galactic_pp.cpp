@@ -242,7 +242,7 @@ struct GalPp {
     double enemy_strength(bool space, uint64_t mask) const {
         // 0x5f2430 (galactic_ai_enemy_strength): the members-only leaf Target.EnemyForce.<layer>TotalUnnormalized, plus the
         // structures' own AI_Combat_Power in the untyped totals only; a typed row is the leaf with the row's mask [M].
-        return galactic_ai_enemy_strength(w.sim, w.tinfo, static_cast<PlanetIndex>(target), player, space, mask);
+        return galactic_ai_enemy_strength(w.sim, w.tinfo, static_cast<PlanetIndex>(target), player, space, mask, w.cat_enum);
     }
     float weight(uint32_t t, int32_t row) const {  // 0x5f1f90 x the terrain factor 0x5f22c0 when PP+0x19C != -1 (§6.3)
         if (!w.cfg.contrast || row < 0) return 0.0f;
@@ -283,7 +283,7 @@ struct GalPp {
         std::vector<uint64_t> out;
         for (const std::string& r : def.required_categories) {
             uint64_t m = 0;
-            for (const std::string& n : ai_split(r, "|")) m |= ai_category_bit(n);
+            for (const std::string& n : ai_split(r, "|")) m |= w.category_bit(n);
             out.push_back(m);
         }
         return out;
@@ -909,12 +909,12 @@ const std::vector<uint32_t>& GalacticAiWorld::Impl::team_type_list(uint32_t plan
     uint64_t mask = 0;
     bool is_mask = !t.names.empty();
     for (const std::string& n : t.names) {
-        const uint64_t b = ai_category_bit(n);
+        const uint64_t b = category_bit(n);
         if (b == 0 && !ai_iequal(n, "None")) is_mask = false;
         mask |= b;
     }
     uint64_t filter = 0;
-    for (const std::string& n : d.masks) filter |= ai_category_bit(n);
+    for (const std::string& n : d.masks) filter |= category_bit(n);
     if (is_mask) {
         for (size_t ty = 0; ty < rules.types.size(); ++ty) {
             const gal::TypeInfo& x = rules.types[ty];

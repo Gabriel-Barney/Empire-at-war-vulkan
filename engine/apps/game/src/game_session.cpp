@@ -289,6 +289,7 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
         } else {
             galactic_ai_->register_crc(host_->crc_registry());
             galactic_ai_->set_global_values(host_->global_values());  // Int-final: session-wide GlobalValue table
+            galactic_ai_->set_conflicts(&battles_->conflicts());  // q6 t03: TimeSince*Defender/Attacker stamps
             ai::GalacticAiWorld* w = galactic_ai_.get();
             sim::CampaignBattles* b = battles_.get();
             // q6: every player but the human and the neutral player gets the T7 controller, because the story reward

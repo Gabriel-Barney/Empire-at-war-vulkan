@@ -46,7 +46,7 @@ using save::put_vec;
 
 namespace {
 constexpr uint32_t kWorldVersion = 3;  // 2: pristine pooled VMs by reference; 3: AI player types (q6 t07)
-constexpr uint32_t kResolverVersion = 1;
+constexpr uint32_t kResolverVersion = 2;  // 2: logic frame, player conflict stamps, conflict observer (q6 t03)
 constexpr int kMaxValueDepth = 32;
 
 // ---- objects ----
@@ -305,10 +305,25 @@ void GalacticSimTokenResolver::write(ByteWriter& w) const {
         w.i32(e.stamp);
     }
     w.u64(hits_);
+    // version 2 (q6 t03)
+    w.i32(logic_frame_);
+    for (const std::vector<int32_t>& s : player_stamps_) {
+        w.u32(static_cast<uint32_t>(s.size()));
+        for (const int32_t x : s) w.i32(x);
+    }
+    w.u32(conflict_log_seen_);
+    w.boolean(active_.valid);
+    w.u8(active_.kind);
+    w.u32(active_.planet);
+    w.i32(active_.attacker);
+    w.i32(active_.defender);
+    w.u8(static_cast<uint8_t>((active_.linked ? 1u : 0u) | (active_.space_stamped ? 2u : 0u) | (active_.ground_stamped ? 4u : 0u) |
+                              (active_.in_battle ? 8u : 0u)));
 }
 
 bool GalacticSimTokenResolver::read(ByteReader& r) {
-    if (r.u32() != kResolverVersion || !r.ok()) return false;
+    const uint32_t version = r.u32();
+    if (!r.ok() || version < 1 || version > kResolverVersion) return false;
     const int32_t frame = r.i32();
     const uint32_t n = save::count(r, 22);
     if (!r.ok() || (n != 0 && n != sim_->planets().size())) return false;
@@ -342,8 +357,39 @@ bool GalacticSimTokenResolver::read(ByteReader& r) {
         cache.emplace_hint(cache.end(), std::move(k), e);
     }
     const uint64_t hits = r.u64();
+    // version 2 (q6 t03); a version-1 image: no stamps, the observer re-synchronises at its next pass
+    int32_t logic_frame = frame;
+    std::array<std::vector<int32_t>, 4> stamps;
+    uint32_t log_seen = kLogUnseen;
+    ObservedConflict active;
+    if (version >= 2) {
+        logic_frame = r.i32();
+        for (std::vector<int32_t>& s : stamps) {
+            s.resize(save::count(r, 4));
+            for (int32_t& x : s) {
+                x = r.i32();
+                if (x < -1) r.fail();
+            }
+        }
+        log_seen = r.u32();
+        active.valid = r.boolean();
+        active.kind = r.u8();
+        active.planet = r.u32();
+        active.attacker = r.i32();
+        active.defender = r.i32();
+        const uint8_t flags = r.u8();
+        if (flags > 15) r.fail();
+        active.linked = (flags & 1u) != 0;
+        active.space_stamped = (flags & 2u) != 0;
+        active.ground_stamped = (flags & 4u) != 0;
+        active.in_battle = (flags & 8u) != 0;
+    }
     if (!r.ok() || !r.done()) return false;
     frame_ = frame;
+    logic_frame_ = logic_frame;
+    player_stamps_ = std::move(stamps);
+    conflict_log_seen_ = log_seen;
+    active_ = active;
     stamp_space_ = std::move(v[0]);
     stamp_ground_ = std::move(v[1]);
     stamp_conversion_ = std::move(v[2]);
