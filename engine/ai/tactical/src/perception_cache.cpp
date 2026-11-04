@@ -7,10 +7,13 @@ namespace alamo::ai::tactical {
 
 namespace {
 thread_local bool t_uncounted = false;  // LeafCacheUncounted
+thread_local bool t_readonly = false;   // LeafCacheReadOnly
 }  // namespace
 
 LeafCacheUncounted::LeafCacheUncounted() : prev_(t_uncounted) { t_uncounted = true; }
 LeafCacheUncounted::~LeafCacheUncounted() { t_uncounted = prev_; }
+LeafCacheReadOnly::LeafCacheReadOnly() : prev_(t_readonly) { t_readonly = true; }
+LeafCacheReadOnly::~LeafCacheReadOnly() { t_readonly = prev_; }
 
 bool leaf_cache_hit(int32_t lifetime_s, uint32_t stamp, uint32_t now) {
     if (lifetime_s == kCacheNone || stamp == 0) return false;
@@ -32,7 +35,7 @@ bool LeafCache::lookup(const LeafCacheKey& key, int32_t lifetime_s, uint32_t now
 }
 
 void LeafCache::store(const LeafCacheKey& key, int32_t lifetime_s, uint32_t now, double value) {
-    if (lifetime_s == kCacheNone) return;
+    if (lifetime_s == kCacheNone || t_readonly) return;
     std::lock_guard<std::mutex> lock(mu_);
     Entry& e = map_[key];
     e.value = value;

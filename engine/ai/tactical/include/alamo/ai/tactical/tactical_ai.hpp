@@ -425,6 +425,14 @@ public:
     // Threat-grid point danger for `player` at (x, y) (0x653ff0; REMAINING_GAPS §4.2 movement threat mode). Const;
     // safe between AI ticks (the battle's movement planning).
     float point_danger(int32_t player, float x, float y) const;
+    // q6 land end (diagnostics only, never hashed): the value of perception equation `equation` for AI player `player`
+    // with Variable_Target = that player's live unit target of object `target_object` (-1: no target), on the last
+    // update's PerceptionWorld. The leaf cache is read, never written (LeafCacheReadOnly); no RNG (an equation that
+    // reaches a Script_ evaluator fails). False when the equation is unknown or fails, or the target has no live slot.
+    bool diagnostic_value(int32_t player, std::string_view equation, int32_t target_object, double& out) const;
+    // q6 land end (diagnostics only): who holds `player`'s mobile units - the free store (reserved ones counted), each
+    // running plan's task forces (plan name, target, units), and the mobile units held by neither (by type).
+    std::string diagnostic_holdings(int32_t player) const;
 
     void hash(StateHasher& h) const;
     void register_crc(CrcRegistry& registry, const std::string& name = "ai.tactical") const;

@@ -1380,7 +1380,12 @@ at::PadCheck BattleAi::pad_check(int32_t player, int32_t pad, const std::vector<
     if (!st.alive(ph) || !st.has_behavior(ph, kBuildObjects)) return at::PadCheck::NotFriendlyOrVisible;
     const int32_t owner = st.owner(ph);
     const tc::CombatSystem& c = *b_->combat_;
-    if (owner < 0 || (owner != player && c.is_enemy(player, owner))) return at::PadCheck::NotFriendlyOrVisible;
+    // q6 land end chain: 0x39a2c0 is "friendly" = the owner is the player or an ally (relation 0, A1_READINGS §31 /
+    // AI_GALACTIC_TOKENS: Friendly = relation 0); a neutral-relation owner (an Is_Neutral player's uncaptured pad, relation 2)
+    // is not friendly. Before, "not an enemy" passed, so the AI built on uncaptured neutral pads and the structure went to
+    // the pad owner (SKIRMISH_SETUP §2.6 / pad_build), i.e. neutral-owned mineral processors that paid nobody.
+    if (owner < 0 || (owner != player && (c.is_enemy(player, owner) || b_->bt_relation(player, owner) != 0)))
+        return at::PadCheck::NotFriendlyOrVisible;
 #ifdef ALAMO_SIM_HAVE_FOG
     if (b_->fog() && b_->fog_object_hidden(player, static_cast<objects::ObjectId>(pad), true)) return at::PadCheck::NotFriendlyOrVisible;
 #endif

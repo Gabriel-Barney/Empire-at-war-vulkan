@@ -699,6 +699,41 @@ std::string battle_state_text(uint64_t tick, sim::SimHost& host, const galactic:
     return out + "\n";
 }
 
+// q6 land end (--ai-log only, nothing hashed): per AI slot player the free-store size, running plans and the values of
+// the equations that gate the base attack (AI_TACTICAL §7.7.5): Is_Initial_Skirmish_State_Established and its inputs,
+// Allowed_As_Defender_Land, and Should_Destroy_Structure against each enemy land-victory blocker.
+std::string ai_state_text(sim::SimHost& host, const ai::tactical::TacticalAiWorld& w) {
+    sim::TacticalMode* tm = host.tactical();
+    if (!tm) return {};
+    const objects::ObjectStore& st = tm->primary();
+    static const objects::BehaviorTypeId kLandBaseBeh = objects::behavior_type_id("DUMMY_LAND_BASE_LEVEL_COMPONENT");
+    static const char* const kEquations[] = {"Is_Initial_Skirmish_State_Established", "Number_Resource_Structures_Land",
+                                             "Non_Structure_Force_Unnormalized", "Allowed_As_Defender_Land"};
+    std::string out;
+    char buf[160];
+    for (int32_t p = 0; p < 2; ++p) {
+        if (!w.is_ai_player(p)) continue;
+        out += "  ai p" + std::to_string(p) + " holdings: " + w.diagnostic_holdings(p) + "\n";
+        std::snprintf(buf, sizeof buf, "  ai p%d: free store %zu, plans %zu;", p, w.free_store_size(p), w.running_plans());
+        out += buf;
+        for (const char* e : kEquations) {
+            double v = 0.0;
+            out += std::string(" ") + e + (w.diagnostic_value(p, e, -1, v) ? "=" + std::to_string(v) : std::string("=n/a"));
+        }
+        out += "\n    Should_Destroy_Structure:";
+        if (kLandBaseBeh != objects::kNoBehavior)
+            for (const objects::ObjectHandle h : st.all_objects()) {
+                if (!st.active(h) || !st.has_behavior(h, kLandBaseBeh) || st.owner(h) < 0 || st.owner(h) > 1 || st.owner(h) == p) continue;
+                double v = 0.0;
+                const bool ok = w.diagnostic_value(p, "Should_Destroy_Structure", st.id(h), v);
+                std::snprintf(buf, sizeof buf, " %u=%s", static_cast<unsigned>(st.id(h)), ok ? std::to_string(v).c_str() : "n/a");
+                out += buf;
+            }
+        out += "\n";
+    }
+    return out;
+}
+
 // a1j t07 (A1_READINGS §38): the battle AI's parent galaxy (Evaluate_In_Galactic_Context, Release_Credits_For_Tactical).
 // These hosts run no galactic AI, so the resolver is a GalacticSimTokenResolver over the galaxy, refreshed at each battle
 // start, with no hooks (an AI player's CreditsUnnormalized reads its credits, not a galactic budget) [port]; the galactic
@@ -901,6 +936,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
                     }
                 if (!ai_log.empty() && (bs.frames == 1 || bs.frames % 600 == 0)) {
                     state_text += battle_state_text(t + 1, host, *gs, *tb);
+                    if (const sim::BattleAi* a = battles.tactical_ai()) state_text += ai_state_text(host, a->world());
                     if (!base_damage.empty()) {
                         state_text += "  base damage:";
                         for (const auto& [k, v] : base_damage)
@@ -1002,14 +1038,16 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         good = false;
     }
     if (opt.expect_battle_end) {  // S10 land outcome: a real result before the frame limit
-        const bool ended_ok = first.ended && first.battle_frames < kBattleFrames && first.winner != "-";
-        std::printf("battle outcome: %s, winner %s, victory %s, %lu of %u frames\n", ended_ok ? "ended" : "NOT ENDED",
-                    first.winner.c_str(), first.victory.c_str(), first.battle_frames, kBattleFrames);
+        // q6 land end chain: a skirmish has no battle time limit (max_frames 0), so its limit is the run's tick count.
+        const unsigned long limit = s.map_host ? static_cast<unsigned long>(max_ticks) : static_cast<unsigned long>(kBattleFrames);
+        const bool ended_ok = first.ended && first.battle_frames < limit && first.winner != "-";
+        std::printf("battle outcome: %s, winner %s, victory %s, %lu of %lu frames\n", ended_ok ? "ended" : "NOT ENDED",
+                    first.winner.c_str(), first.victory.c_str(), first.battle_frames, limit);
         if (!ended_ok) good = false;
         // t41: the shipped Want_To_Retreat_From_Space keeps a defender holding a station in the fight, however outnumbered.
         // t48: once the station is dead BaseLevel is 0 and the survivors may leave.
         if (kind == "foc-station" && first.victory == "all-retreated" && !first.starbase_lost) good = false;
-        if (s.land) {  // Script_ evaluators (AI_GALACTIC_2 §4.4): the goals gated by Script_TargetHasProperty /
+        if (s.land && !s.map_host) {  // [q6: the campaign-rules land battle only; a skirmish never proposes PreDefend] Script_ evaluators (AI_GALACTIC_2 §4.4): the goals gated by Script_TargetHasProperty /
                        // Script_GetDistanceToNearestWithProperty must be proposed in the land battle
             for (const char* fn : {"Need_To_Secure_Contestable_Land", "Need_To_Secure_Contestable_Escorted_Land",
                                    "Need_To_PreDefend_Structure"}) {
