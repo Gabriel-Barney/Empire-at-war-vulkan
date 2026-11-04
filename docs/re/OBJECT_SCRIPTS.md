@@ -756,7 +756,7 @@ Implemented in `engine/apps/sim` (`object_scripts.hpp` / `.cpp`, `ObjectScriptHo
 
 **Opt-in, off by default.** `SimConfig::object_scripts` (false), `alamo_headless --object-scripts`. With the switch off
 nothing attaches and no RNG is drawn, so every existing golden and CRC stream is unchanged.
-**[port interim rule]** `alamo_game` (`GameSession`) turns the switch on only when a mod layer is loaded (`MODPATH`,
+**[port interim rule, kept by Gabriel 2026-11-04]** `alamo_game` (`GameSession`) turns the switch on only when a mod layer is loaded (`MODPATH`,
 the VFS has mod directories). Vanilla FoC runs keep the old streams until the object-script service is checked
 against the original by an in-game probe; then the rule goes and the switch is always on.
 

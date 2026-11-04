@@ -184,7 +184,7 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
     sim::SimConfig cfg;
     cfg.seed = spec_.seed;
     cfg.players = sim::session_players(setup_.players.size());
-    // q6 (docs/re/OBJECT_SCRIPTS.md "Port status"): game-object Lua scripts. [port interim rule] On only when a mod layer
+    // q6 (docs/re/OBJECT_SCRIPTS.md "Port status"): game-object Lua scripts. [port interim rule, Gabriel 2026-11-04] On only when a mod layer
     // (MODPATH=) is loaded - mods such as Thrawn's Revenge need them (its company spawners) - so stock FoC sessions keep
     // their behaviour and replays until the object scripts are checked against the shipped FoC scripts.
     cfg.object_scripts = d.vfs && !d.vfs->mod_dirs().empty();
