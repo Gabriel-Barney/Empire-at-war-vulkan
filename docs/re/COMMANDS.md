@@ -202,7 +202,8 @@ type (0x407db0), depending on a GMM flag (0x28afb0) [M].
    (GOM +0xC8 + owner × 0x48; the SELECTABLE list GOM +0x2A0 is used only when no owner is given), keeping objects whose
    SELECTABLE slot (obj +0x334) is present. No CategoryMask is read.
 3. Per object, in that list's order, skip it when any holds:
-   - a retreat is running and the object is in the retreat coordinator's list (mode +0x30, 0x3400C0; tested twice);
+   - a retreat is running and the object is in the retreat coordinator's list (mode +0x30, 0x3400C0; tested twice;
+     which objects are in that list: §2.4.2);
    - it has DUMMY_GROUND_STRUCTURE (0x5F, slot +0x391), DUMMY_STAR_BASE (0x5C, +0x38E) or DUMMY_ORBITAL_STRUCTURE (0x60,
      +0x392);
    - it has a parent object (obj +0x2B0 ≠ 0): a TEAM member, a garrisoned unit (garrison entry sets +0x2B0 := host,
@@ -266,6 +267,39 @@ ownership and `Not_Really_Selectable` are checked by the UI before it sends (0x2
 4. Replace the selection, no cap, issuer's object-list order.
 5. The UI sends the event only if at least one owned object passes the same filters and has a locomotor; Shift does
    not matter.
+
+#### 2.4.2 The retreat coordinator's list (q6 land follow-through, 2026-11-04) [H unless tagged]
+
+The "retreating" skip of SelectAll, Select and the UI path is **0x3400C0(coordinator, object)**: true when the
+coordinator's retreat state (coord +0x1C) is not −1 (a retreat is running) **and** the object id (obj +0x50) is in the
+coordinator's id list (coord +0x38, count +0x40). The coordinator is the current mode's (mode +0x30), one per mode, so
+there is one list at a time, for the **retreating player** only.
+
+**Who is in the list.** It is rebuilt when the retreat starts (the coordinator's builder, vf8):
+- **Land (0x534D90):** the list is cleared, then every object of the retreating player is queried (behaviour filter −1
+  = any, owner = that player). An object is added when it is not dying (obj +0x3A0 bit 0x40) and either has a
+  locomotor (behaviour slot +0x333 ≠ 0xFF, "mobile") or its type sets `Stay_In_Transport_During_Ground_Battle`
+  (type +0x2D, "safe unit"). Structures without a locomotor stay out.
+- **Space (0x532C80) [M for the exact tests]:** the query is locomotor holders of the player (behaviour 1). A unit is
+  added when it can still leave: the type flag +0x24, not engines-permanently-destroyed (0x38CCF0), the
+  hyperspace-capable counts (0x397B00 / 0x397C10) and the locomotor's vf +0x210 pass; fighter squadrons are judged by
+  their leader's type (0x404C20).
+- **Pruning:** while the retreat is in state 1 (countdown) entries are dropped when their object dies or loses its
+  locomotor (BATTLE_TRANSITIONS §3.4). When the retreat is cancelled or completes the state goes back to −1, so the
+  test is false again whatever the list holds.
+
+**Effect on selection.**
+- Only the retreating player's own units are ever in the list, so SelectAll of any other player is unaffected.
+- During its own land retreat, SelectAll of the retreating player skips every non-dying mobile unit and every
+  `Stay_In_Transport_During_Ground_Battle` object it owns; what remains are the non-dummy, locomotor-less selectables
+  (build-pad turrets, bacta tanks …, §2.4.1). The UI path needs a locomotor, so Ctrl+A sends nothing then.
+- Skirmish AI players never retreat from land (AI_TACTICAL §5.6), so in AI-vs-AI skirmish the list is empty.
+
+**Port notes**
+- Keep one retreat list per mode, filled once when the retreat starts with the land / space rules above, pruned on
+  death / locomotor loss during the countdown, and ignored (test false) unless a retreat is running.
+- SelectAll / Select / the Ctrl+A path ask "is a retreat running and is this object id in its list", not "is this unit
+  moving away" or "is its owner retreating".
 
 ### 2.5 Session, chat, control
 
