@@ -81,6 +81,8 @@ struct TacticalPpInput {
     // Types (PerceptionWorld order) + category names.
     const std::vector<PerceptionType>* types = nullptr;
     std::function<uint64_t(std::string_view)> category_mask;
+    // q6 t03: the space-layer category bits (tactical_space_categories); 0 = the stock names through category_mask.
+    uint64_t space_categories = 0;
     // Sources.
     std::vector<PpFreeUnit> free_units;
     std::vector<PpPoolEntry> pool;

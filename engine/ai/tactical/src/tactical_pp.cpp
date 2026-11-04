@@ -101,7 +101,9 @@ struct TacPp {
             if (iequal(f, in.faction)) return true;
         return false;
     }
-    bool is_space_type(int32_t t) const { return space_category(mask_of(t), in.category_mask); }
+    bool is_space_type(int32_t t) const {
+        return in.space_categories ? (mask_of(t) & in.space_categories) != 0 : space_category(mask_of(t), in.category_mask);
+    }
     const TaskForceDef& tf_def(uint32_t tf) const { return def.task_forces[tf]; }
     const TeamDef& team_def(const PpSlot& s) const { return def.task_forces[s.tf].teams[s.team]; }
 

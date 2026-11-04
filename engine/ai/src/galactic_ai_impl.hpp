@@ -22,6 +22,7 @@
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/galactic/conflicts.hpp"  // q6 t03: the player conflict stamps
 #include "alamo/galactic/fleet_path.hpp"
 #include "alamo/lua/ai_bridge.hpp"
 #include "alamo/lua/players.hpp"
@@ -205,6 +206,10 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     std::vector<GalacticAiTypeInfo> tinfo;
     AiOrderSink sink;
     GalacticAiConfig cfg;
+    // q6 t03: the loaded GameObjectCategoryType enum (null = the vanilla table) and the host's conflict manager.
+    const objects::EnumConverter* cat_enum = nullptr;
+    const gal::ConflictManager* conflicts = nullptr;
+    uint64_t category_bit(std::string_view name) const { return ai_category_bit(name, cat_enum); }
 
     // perception
     GalacticSnapshot snap;

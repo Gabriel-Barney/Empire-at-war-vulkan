@@ -44,6 +44,10 @@ class ByteWriter;
 }  // namespace alamo
 namespace alamo::galactic {
 class GalacticSim;
+class ConflictManager;
+}  // namespace alamo::galactic
+namespace alamo::objects {
+class EnumConverter;
 }
 
 namespace alamo::ai {
@@ -90,10 +94,12 @@ struct GalacticAiTypeInfo {
     bool has_category(std::string_view c) const;
 };
 
-// GameObjectCategoryType name -> bits (vanilla FoC table, objects::EnumRegistry fallback); 0 if unknown.
-uint64_t ai_category_bit(std::string_view name);
-// Fills category_mask of every entry from its category names.
-void fill_category_masks(std::vector<GalacticAiTypeInfo>& types);
+// GameObjectCategoryType name -> bits; 0 if unknown. `categories` = the loaded enum (GameObjectTypes::enums(), so a mod's
+// renumbered / renamed categories resolve as the game resolves them); null or a discarded converter = the vanilla FoC
+// table (objects::EnumRegistry fallback). Vanilla data loads an enum equal to that table.
+uint64_t ai_category_bit(std::string_view name, const objects::EnumConverter* categories = nullptr);
+// Fills category_mask of every entry from its category names (same enum rule).
+void fill_category_masks(std::vector<GalacticAiTypeInfo>& types, const objects::EnumConverter* categories = nullptr);
 
 inline constexpr uint64_t kAllCategories = ~uint64_t{0};
 
@@ -116,15 +122,18 @@ double galactic_ai_member_force(const galactic::GalacticSim& sim, std::span<cons
 //   * ground: per surface unit of that side, its type's power if its mask meets `mask`; if the planet's owner is on
 //     that side: the per-tech members of every ground structure (NOT their own power) [port: the Enemy planet-type
 //     list +0x20C8 not modelled].
+// `categories`: the enum that resolves the Capital default (ai_category_bit).
 double galactic_ai_planet_force(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
-                                PlanetIndex planet, int32_t self, bool enemy, bool space, uint64_t mask);
+                                PlanetIndex planet, int32_t self, bool enemy, bool space, uint64_t mask,
+                                const objects::EnumConverter* categories = nullptr);
 // The enemy strength at `planet` for AI player `self` (the perception helper 0x5f2430, GALACTIC_ECONOMY §6.2 [H]): the
 // Enemy leaf above (members only) plus, for the untyped total (`mask` == kAllCategories: the Contrast entries 0 / 1),
 // the own AI_Combat_Power of the planet's starbase (space) or of its ground structures (ground) when the planet's owner
 // is hostile to `self` [port: the 0x4ad9f0 "not held by the AI or an ally" test read as hostile; no garrison types
 // 0x4b8000]. A typed row (any other mask: the PotentialPlan Contrast rows [M]) never holds a structure's own power.
 double galactic_ai_enemy_strength(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
-                                  PlanetIndex planet, int32_t self, bool space, uint64_t mask);
+                                  PlanetIndex planet, int32_t self, bool space, uint64_t mask,
+                                  const objects::EnumConverter* categories = nullptr);
 
 // The galactic AI's planning-side buildability: GalacticSim::buildable (cost, queue kind, GalacticSim::build_check =
 // 0x2804d0 in the STRATEGIC_GAPS §1.3 order, no credits).
@@ -169,15 +178,43 @@ public:
         std::function<bool(const EvalContext&, std::string_view name, std::span<const Param>, double&)> script;
         // Variable_Self.StoryTrigger{Parameter_Name} (story flag); null = 0.
         std::function<bool(int32_t player, std::string_view name)> story_flag;
+        // q6 t03 BudgetAllocation (AI_GALACTIC_TOKENS §8.3): the normalised weight (+0x3C) of `player`'s budget category
+        // `key` (an AIGoalCategoryType value), 0.0 for a key the budget does not hold; false = no goal system (fails).
+        std::function<bool(int32_t player, int32_t key, double& out)> budget_weight;
+        // AIGoalCategoryType name -> value (the Parameter_Category enum of BudgetAllocation); -1 = unknown.
+        std::function<int32_t(std::string_view name)> goal_category;
     };
     GalacticSimTokenResolver(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
                              const TokenResolver* s2, Hooks hooks);
 
     // Once per frame before evaluating: event stamps (signals 0x12 / 0x14 / 0x1A, corruption), neighbour lists.
-    void refresh(int32_t frame);
+    // `logic_frame` = the global logic frame (FrameSynchronizer +0, the host frame; it keeps counting while a battle
+    // runs), the clock of the player TimeSince*er tokens; < 0 = `frame`. q6 t03: the player conflict stamps (signals 0x11 /
+    // 0x13 of AI_GALACTIC_TOKENS §8.2) are taken after it by observe_conflicts.
+    void refresh(int32_t frame, int64_t logic_frame = -1);
     void set_s2(const TokenResolver* s2) { s2_ = s2; }
     void set_hooks(Hooks hooks) { hooks_ = std::move(hooks); }
+    // The loaded GameObjectCategoryType enum for Parameter_Category masks and the Capital default (null = vanilla table).
+    void set_category_enum(const objects::EnumConverter* categories) { categories_ = categories; }
     void clear_cache();
+
+    // q6 t03 (AI_GALACTIC_TOKENS §8.2): one pass of the 0x11 / 0x13 listener 0x66d490 over the conflict manager's state
+    // since the last pass, stamping `now` (the global logic frame). The port has no planet signal, so it reads the
+    // manager after its service (T5, before the AI's T7):
+    //   * 0x11 (space conflict head started or dropped): a space record that became the active conflict through the state
+    //     machine (Idle -> Decide; a story-linked battle bypasses it and is not stamped), and every space log entry that
+    //     was not such an observed start: a drop (how 0, validation failure: the original sends 0x11 before the head goes)
+    //     or a conflict that started and ended inside one service (AI vs AI auto-resolve, a refused battle start).
+    //   * 0x13 (land auto-resolve began, AutoResolveClass vf3): an active land record in AutoRunning, and a land
+    //     auto-resolve log entry (how 1) of a record not seen in that state or in a tactical battle (the tactical HUD's
+    //     auto-resolve, BT §4.5, does not run vf3) [M].
+    // Per stamped record: a player whose id is the defender gets the defender stamp, else the attacker the attacker stamp.
+    // [port] Active kind while not InBattle: the space head unless a space entry was logged in this pass or the space queue
+    // is empty (the service runs the space head first); a cancelled-by-transfer drop (on_service_tail) is not told apart
+    // from a validation drop and stamps too.
+    void observe_conflicts(const galactic::ConflictManager& conflicts, int32_t now);
+    // Frame stamps of `player` (-1 = never): 0 space defender, 1 space attacker, 2 ground defender, 3 ground attacker.
+    int32_t player_stamp(int which, int32_t player) const;
 
     bool resolve(const EvalContext& ctx, const TokenRef& token, double& out) const override;
     bool implements(Root root, std::span<const TokenId> path, const TokenTable& tokens) const override;
@@ -190,8 +227,10 @@ public:
     uint64_t cache_hits() const;
 
     // N1 save / load: frame, the per-planet event stamps and last-seen values, the leaf cache (key order) and the hit
-    // counter. The neighbour lists are rebuilt from the sim (static map data). read() fails (unchanged) unless the
-    // saved planet count is 0 (never refreshed) or the sim's.
+    // counter; version 2 (q6 t03) adds the logic frame, the per-player conflict stamps and the conflict observer (log
+    // position, active record). A version-1 image loads with no player stamps (-1) and the observer re-synchronised at its
+    // next pass (no stamp for log entries written before). The neighbour lists are rebuilt from the sim (static map
+    // data). read() fails (unchanged) unless the saved planet count is 0 (never refreshed) or the sim's.
     void write(ByteWriter& w) const;
     bool read(ByteReader& r);
 
@@ -212,7 +251,24 @@ private:
     std::span<const GalacticAiTypeInfo> types_;
     const TokenResolver* s2_;
     Hooks hooks_;
+    const objects::EnumConverter* categories_ = nullptr;
     int32_t frame_ = 0;
+    int32_t logic_frame_ = 0;  // global logic frame of the last refresh (TimeSince*er clock)
+    // q6 t03 per player conflict stamps (GalacticPlayer evaluator +0xA8 / +0xB0 / +0xAC / +0xB4; -1 = never): index 0 space
+    // defender, 1 space attacker, 2 ground defender, 3 ground attacker. One set for every AI player's evaluators (they all
+    // hear the same planet signals, §8.2 "Scope") [M: an evaluator created later has missed earlier events; not modelled].
+    std::array<std::vector<int32_t>, 4> player_stamps_;
+    struct ObservedConflict {  // the conflict observer's view of the active conflict
+        bool valid = false;
+        uint8_t kind = 0;  // galactic::ConflictKind
+        uint32_t planet = 0xFFFFFFFFu;
+        int32_t attacker = -1, defender = -1;
+        bool linked = false, space_stamped = false, ground_stamped = false, in_battle = false;
+    };
+    ObservedConflict active_;
+    static constexpr uint32_t kLogUnseen = 0xFFFFFFFFu;  // no pass yet since a version-1 load: re-synchronise
+    uint32_t conflict_log_seen_ = 0;                     // conflict log entries already observed
+    void stamp_players(bool space, int32_t attacker, int32_t defender, int32_t now);
     // per planet event stamps (frames, -1 = never): space conflict, ground conflict, conversion, corruption change
     std::vector<int32_t> stamp_space_, stamp_ground_, stamp_conversion_, stamp_corruption_;
     std::vector<int32_t> last_owner_;

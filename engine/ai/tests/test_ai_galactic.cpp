@@ -3241,6 +3241,185 @@ static void test_planet_type_is_type() {
     CHECK(token("Variable_Target.Type.IsType", 0, ok) == 0.0 && ok);                                   // no names listed
 }
 
+// q6 t03 (AI_GALACTIC_TOKENS §8.2): the player tokens TimeSince{Space,Ground}{Defender,Attacker}. Per player stamps
+// (-1 = never: the float 1e18 widened), (logic frame - stamp) / 30 s; roots Self / Enemy / Human / Target.Owner, never a
+// planet root. Stamped from the ConflictManager: a space record that starts or is dropped (0x11), a land record whose
+// auto-resolve begins (0x13); a player that is the defender gets the defender stamp, else the attacker the attacker one.
+static void test_player_conflict_tokens() {
+    const double never = static_cast<double>(1.0e18f);
+    struct Rig {
+        ParityWorld pw;
+        gal::ConflictRules crules;
+        gal::ConflictManager cm;
+        int32_t frame = 0;
+        explicit Rig(const std::function<void(gal::GalacticSetup&)>& tweak = {})
+            : pw(false, {"HeroAttach"}, tweak), cm(*pw.sim, crules, pw.rng->synced()) {
+            cm.attach();
+            pw.world->set_conflicts(&cm);
+        }
+        void step(int32_t n) {
+            for (int32_t i = 0; i < n; ++i) {
+                ++frame;
+                pw.sim->update();
+                pw.world->update_player(0, frame, true, cm.state() == gal::ConflictState::AutoRunning);
+            }
+        }
+        double token(const char* text, int32_t target, bool& ok) const {
+            EquationSet e;
+            e.add("T", text);
+            e.link();
+            EvalContext c;
+            c.self = 0;
+            c.enemy = 1;
+            c.human = 1;
+            c.target = target;
+            const EvalResult r = evaluate(e, e.find("T"), c, pw.world->resolver());
+            ok = r.ok;
+            return r.value;
+        }
+        int32_t stamp(int which, int32_t player) const { return pw.world->resolver().player_stamp(which, player); }
+    };
+    bool ok = false;
+    {
+        // A space record the service drops (the attacker has no ship at P0): 0x11 before the head goes.
+        Rig g;
+        g.step(30);
+        for (const char* t : {"Variable_Self.TimeSinceSpaceDefender", "Variable_Self.TimeSinceSpaceAttacker",
+                              "Variable_Self.TimeSinceGroundDefender", "Variable_Self.TimeSinceGroundAttacker",
+                              "Variable_Enemy.TimeSinceSpaceAttacker"})
+            CHECK(g.token(t, 0, ok) == never && ok);
+        CHECK(g.cm.initiate_space_conflict(0, 1, 0));
+        g.step(1);
+        CHECK(!g.cm.log().empty() && g.cm.log().back().how == 0 && g.cm.log().back().kind == gal::ConflictKind::Space);
+        CHECK(g.stamp(0, 0) == 31 && g.stamp(1, 0) == -1);  // P0's owner: the defender stamp only
+        CHECK(g.stamp(1, 1) == 31 && g.stamp(0, 1) == -1);  // the attacker
+        CHECK(g.stamp(2, 0) == -1 && g.stamp(3, 1) == -1);  // no ground stamp
+        g.step(59);                                         // logic frame 90
+        const double t = static_cast<double>(90 - 31) / 30.0;
+        CHECK(g.token("Variable_Self.TimeSinceSpaceDefender", 0, ok) == t && ok);
+        CHECK(g.token("Variable_Self.TimeSinceSpaceAttacker", 0, ok) == never && ok);
+        CHECK(g.token("Variable_Enemy.TimeSinceSpaceAttacker", 0, ok) == t && ok);
+        CHECK(g.token("Variable_Human.TimeSinceSpaceAttacker", 0, ok) == t && ok);
+        CHECK(g.token("Variable_Enemy.TimeSinceSpaceDefender", 0, ok) == never && ok);
+        CHECK(g.token("Variable_Target.Owner.TimeSinceSpaceDefender", 0, ok) == t && ok);  // P0's owner = Self
+        g.token("Variable_Target.TimeSinceSpaceDefender", 0, ok);
+        CHECK(!ok);  // not a planet token
+        // The N1 image carries the stamps and the logic frame.
+        ByteWriter w;
+        g.pw.world->resolver().write(w);
+        GalacticSimTokenResolver copy(*g.pw.sim, {}, nullptr, {});
+        ByteReader rd(w.bytes());
+        CHECK(copy.read(rd) && rd.ok());
+        for (int which = 0; which < 4; ++which)
+            for (int32_t p = 0; p < 3; ++p) CHECK(copy.player_stamp(which, p) == g.stamp(which, p));
+        ByteWriter w2;
+        copy.write(w2);
+        CHECK(w2.bytes().size() == w.bytes().size() &&
+              std::equal(w2.bytes().begin(), w2.bytes().end(), w.bytes().begin()));
+        std::printf("player conflict tokens: space drop stamps defender %d / attacker %d, %.4f s later\n", g.stamp(0, 0),
+                    g.stamp(1, 1), t);
+    }
+    {
+        // A land invasion of P1 (the Empire's infantry on the surface) by the Rebel infantry carried in orbit: AI vs AI,
+        // auto-resolved -> 0x13 for both players.
+        Rig g([](gal::GalacticSetup& s) {
+            s.forces.push_back({1, 1, tFrigate});
+            s.forces.push_back({1, 1, tInfantry});
+        });
+        g.step(30);
+        const int32_t sd0 = g.stamp(0, 0), sa1 = g.stamp(1, 1);
+        CHECK(g.stamp(2, 0) == -1 && g.stamp(3, 1) == -1);
+        std::vector<objects::ObjectHandle> invaders;
+        for (const uint32_t f : g.pw.sim->fleets_at(1, 1))
+            for (const objects::ObjectHandle h : g.pw.sim->fleets()[f].contents)
+                if (g.pw.rules.types[g.pw.store->type(h)].kind == gal::UnitKind::GroundUnit) invaders.push_back(h);
+        if (invaders.empty()) {
+            std::vector<objects::ObjectHandle> mine;
+            for (const objects::ObjectHandle h : g.pw.sim->planets()[1].surface)
+                if (g.pw.store->owner(h) == 1) mine.push_back(h);
+            CHECK(g.pw.sim->launch_units(1, 1, mine) == commands::RejectReason::None);
+            invaders = mine;
+        }
+        CHECK(!invaders.empty() && g.pw.sim->invade(1, 1, invaders) == commands::RejectReason::None);
+        g.step(1);
+        bool land_auto = false;
+        for (const gal::ConflictLogEntry& e : g.cm.log()) land_auto = land_auto || (e.kind == gal::ConflictKind::Land && e.how == 1);
+        CHECK(land_auto || g.cm.state() == gal::ConflictState::AutoRunning);
+        CHECK(g.stamp(2, 0) == 31 && g.stamp(3, 0) == -1);  // the defender
+        CHECK(g.stamp(3, 1) == 31 && g.stamp(2, 1) == -1);  // the attacker
+        g.step(29);  // logic frame 60
+        CHECK(g.stamp(2, 0) == 31);  // the end of the auto-resolve does not stamp again
+        CHECK(g.token("Variable_Self.TimeSinceGroundDefender", 0, ok) == static_cast<double>(60 - 31) / 30.0 && ok);
+        CHECK(g.token("Variable_Enemy.TimeSinceGroundAttacker", 0, ok) == static_cast<double>(60 - 31) / 30.0 && ok);
+        CHECK(g.token("Variable_Self.TimeSinceGroundAttacker", 0, ok) == never && ok);
+        std::printf("player conflict tokens: land auto-resolve stamps defender %d / attacker %d (space stamps %d / %d)\n",
+                    g.stamp(2, 0), g.stamp(3, 1), sd0, sa1);
+    }
+}
+
+// q6 t03 (AI_GALACTIC_TOKENS §8.3): Variable_Self.BudgetAllocation{Parameter_Category}: the normalised weight of the
+// category key (AIGoalCategoryType value, low 32 bits) in Self's budget; 0.0 for a key the budget does not hold or no
+// parameter (-1); fails on any root but Self.
+static void test_budget_allocation_token() {
+    ParityWorld pw(false, {"HeroAttach"});
+    pw.run(2);  // first service: templates, budget
+    auto token = [&pw](const char* text, bool& ok) {
+        EquationSet e;
+        e.add("T", text);
+        e.link();
+        EvalContext c;
+        c.self = 0;
+        c.enemy = 1;
+        c.human = 1;
+        const EvalResult r = evaluate(e, e.find("T"), c, pw.world->resolver());
+        ok = r.ok;
+        return r.value;
+    };
+    bool ok = false;
+    // Offensive_Budget = 5 + 10 x planets, Infra_Budget = 3, no other category has an equation.
+    const double off = token("Variable_Self.BudgetAllocation {Parameter_Category = AIGoalCategoryType[Offensive]}", ok);
+    CHECK(ok);
+    const double inf = token("Variable_Self.BudgetAllocation {Parameter_Category = AIGoalCategoryType[Infrastructure]}", ok);
+    CHECK(ok);
+    std::printf("budget allocation: offensive %.6f infrastructure %.6f\n", off, inf);
+    CHECK(off > inf && inf > 0.0 && std::fabs(off + inf - 1.0) < 1e-6);
+    CHECK(token("Variable_Self.BudgetAllocation {Parameter_Category = AIGoalCategoryType[Defensive]}", ok) == 0.0 && ok);
+    CHECK(token("Variable_Self.BudgetAllocation {Parameter_Category = 3}", ok) == inf && ok);    // the XML value of Infrastructure
+    CHECK(token("Variable_Self.BudgetAllocation {Parameter_Category = 99}", ok) == 0.0 && ok);   // no such category
+    CHECK(token("Variable_Self.BudgetAllocation", ok) == 0.0 && ok);                             // key -1
+    CHECK(token("Variable_Self.BudgetAllocation {Parameter_Category = AIGoalCategoryType[NoSuchGoal]}", ok) == 0.0 && ok);
+    token("Variable_Enemy.BudgetAllocation {Parameter_Category = AIGoalCategoryType[Offensive]}", ok);
+    CHECK(!ok);
+    token("Variable_Human.BudgetAllocation {Parameter_Category = AIGoalCategoryType[Offensive]}", ok);
+    CHECK(!ok);
+}
+
+// q6 t03: the AI's GameObjectCategoryType name -> bit lookup reads the loaded enum (Thrawn's Revenge inserts Gunship at 0x8
+// and moves Corvette..SpaceHero up); null or a discarded converter = the vanilla table.
+static void test_loaded_category_enum() {
+    objects::EnumConverter tr;
+    tr.enum_name = "GameObjectCategoryType";
+    tr.bitfield = tr.valid = true;
+    const std::pair<const char*, int64_t> rows[] = {{"Fighter", 0x1},       {"Bomber", 0x2},          {"Transport", 0x4},
+                                                    {"Gunship", 0x8},       {"Corvette", 0x10},       {"Frigate", 0x20},
+                                                    {"Capital", 0x40},      {"SuperCapital", 0x80},   {"Infantry", 0x100},
+                                                    {"SpaceHero", 0x20000000}};
+    for (const auto& [n, v] : rows) CHECK(tr.add(n, v));
+    CHECK(ai_category_bit("Corvette", &tr) == 0x10 && ai_category_bit("Corvette") == 0x8);
+    CHECK(ai_category_bit("gunship", &tr) == 0x8 && ai_category_bit("Gunship") == 0);
+    CHECK(ai_category_bit("Capital", &tr) == 0x40 && ai_category_bit("Super", &tr) == 0 && ai_category_bit("Super") == 0x40);
+    objects::EnumConverter bad = tr;
+    bad.valid = false;
+    CHECK(ai_category_bit("Corvette", &bad) == 0x8);  // discarded: the vanilla table
+    std::vector<GalacticAiTypeInfo> ti(2);
+    ti[0].categories = {"CORVETTE"};
+    ti[1].categories = {"GUNSHIP", "INFANTRY"};
+    fill_category_masks(ti, &tr);
+    CHECK(ti[0].category_mask == 0x10 && ti[1].category_mask == 0x108);
+    fill_category_masks(ti);
+    CHECK(ti[0].category_mask == 0x8 && ti[1].category_mask == 0x80);
+}
+
 // q6 t07: GalacticAiWorld::set_ai_type (the SWITCH_CONTROL story reward, AI_GALACTIC §1.2). A player with no AI gets
 // one mid-game and plays; an unknown type is refused and logged; "Human" removes the AI; the N1 save carries the AI
 // player types, so a loader's world rebuilt from the starting configuration takes the switched players back.
@@ -3622,6 +3801,9 @@ int main(int argc, char** argv) {
     test_underworld_special();
     test_save_synthetic();
     test_planet_type_is_type();
+    test_player_conflict_tokens();   // q6 t03
+    test_budget_allocation_token();  // q6 t03
+    test_loaded_category_enum();     // q6 t03
     test_ai_type_switch();
 #ifdef ALAMO_AI_HAVE_VFS
     test_foc_data();

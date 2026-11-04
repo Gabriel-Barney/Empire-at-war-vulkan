@@ -1546,6 +1546,55 @@ void test_mod_category_enum() {
     std::printf("mod category enum: OK\n");
 }
 
+// q6 t03: the PotentialPlan space layer (rec +0x90 / +0x91) from the loaded converter: the single-bit entries below
+// INFANTRY except TRANSPORT, plus SPACEHERO. Vanilla = the stock names; Thrawn's Revenge adds Gunship and SuperCapital
+// (before, both were ground records, so TR space plans read the land Contrast rows).
+void test_space_layer_categories() {
+    const TacticalPerception stock;
+    const auto& cm = stock.config().category_mask;
+    const uint64_t stock_space = cm("Fighter") | cm("Bomber") | cm("Corvette") | cm("Frigate") | cm("Capital") | cm("Super") | cm("SpaceHero");
+    const objects::GameObjectTypes vanilla;  // built-in converters (the vanilla table)
+    CHECK(tactical_space_categories(&vanilla) == stock_space && stock_space == 0x200007Bu);
+    CHECK(tactical_space_categories(nullptr) == 0);
+    objects::EnumConverter tr;
+    tr.enum_name = "GameObjectCategoryType";
+    tr.bitfield = tr.valid = true;
+    const std::pair<const char*, int64_t> rows[] = {
+        {"Fighter", 0x1},      {"Bomber", 0x2},       {"Transport", 0x4},  {"Gunship", 0x8},      {"Corvette", 0x10},
+        {"Frigate", 0x20},     {"Capital", 0x40},     {"SuperCapital", 0x80}, {"Infantry", 0x100}, {"Vehicle", 0x200},
+        {"Structure", 0x1000}, {"SpaceHero", 0x20000000}, {"All", -1},     {"None", 0}};
+    for (const auto& [n, v] : rows) CHECK(tr.add(n, v));
+    CHECK(tactical_space_categories(tr) == 0x200000FBu);
+    objects::EnumConverter bad = tr;
+    bad.valid = false;
+    CHECK(tactical_space_categories(bad) == 0);
+    // The solve: a Gunship (TR 0x8, a ground name in the stock table) is a space record with the loaded set.
+    std::vector<PerceptionType> pts(1);
+    pts[0].name = "TR_Gunship";
+    pts[0].category = 0x8;
+    pts[0].combat_power = 100.0f;
+    TaskForceDef d;
+    CHECK(parse_task_force({"MainForce", "TR_Gunship = 1"}, d) && d.teams.size() == 1);
+    PlanDefinition def;
+    def.name = "TR_SPACE";
+    def.task_forces.push_back(d);
+    SimRng rng{5u};
+    TacticalPpInput in;
+    in.mode = TacticalMode::Space;
+    in.def = &def;
+    in.player = 0;
+    in.faction = "Empire";
+    in.types = &pts;
+    in.category_mask = cm;
+    in.space_categories = tactical_space_categories(tr);
+    in.rng = &rng;
+    in.free_units = {{31, 0, {}, 1.0f, false}};
+    TacticalPpResult r;
+    CHECK(solve_tactical_pp(in, r) && r.picks.size() == 1 && r.picks[0].ref == 31);
+    std::printf("space layer categories: vanilla %llx, TR %llx\n", static_cast<unsigned long long>(stock_space),
+                static_cast<unsigned long long>(in.space_categories));
+}
+
 void test_potential_plan() {
     // 1. Reinforcement (AI_GALACTIC_3 §1.4): a pool unit scores 2.0 and replaces a free unit of its type that is not at
     //    the stage (key >= 300); the 50 % rule; a used entry no longer matches; then the remaining free unit.
@@ -2781,6 +2830,7 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--write-golden") == 0) g_write_golden = true;
     test_potential_plan();
     test_mod_category_enum();  // q6 t03
+    test_space_layer_categories();  // q6 t03
     test_skirmish();
     test_opportunity_and_hijack();
     test_group_orders();

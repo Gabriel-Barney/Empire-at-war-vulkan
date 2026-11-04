@@ -94,6 +94,7 @@ class ByteWriter;
 class ByteReader;
 }  // namespace alamo
 namespace alamo::objects {
+class EnumConverter;
 class GameObjectTypes;
 }
 namespace alamo::galactic {
@@ -343,6 +344,13 @@ struct TacticalAiDecision {
 // such as Thrawn's Revenge redefine; the objects' CategoryMask bits come from the same converter); no types -> the
 // objects module's built-in vanilla table. 0 for an unknown name.
 std::function<uint64_t(std::string_view)> tactical_category_resolver(const objects::GameObjectTypes* types);
+// q6 t03: the space-layer categories of the PotentialPlan records (rec+0x90 space / +0x91 ground) over the loaded
+// converter [port: the specs leave the rule open]: every single-bit entry below INFANTRY's value except TRANSPORT
+// (the converter's ship-class block: FIGHTER..SUPER in vanilla, FIGHTER..SUPERCAPITAL with GUNSHIP in Thrawn's
+// Revenge), plus SPACEHERO. Vanilla gives the stock set (Fighter|Bomber|Corvette|Frigate|Capital|Super|SpaceHero).
+// 0 (= the stock names through TacticalPpInput::category_mask) without types, an invalid converter or no INFANTRY.
+uint64_t tactical_space_categories(const objects::GameObjectTypes* types);
+uint64_t tactical_space_categories(const objects::EnumConverter& categories);
 
 class TacticalAiWorld {
 public:
