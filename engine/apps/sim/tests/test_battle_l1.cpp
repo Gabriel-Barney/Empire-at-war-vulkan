@@ -1242,6 +1242,140 @@ void test_pads(const Data& d) {
 }
 // --- end Int-final ---
 
+// ---- q6: persisted tactical built objects (AI_GALACTIC_TOKENS §9.4) ----
+// P1 (Empire, player 0) is invaded by the Underworld (player 1). Before the battle two records are put on P1: R1 for the map
+// pad at (-1500, -1500) (a turret of player 0) and R2 at a spot without a pad (player 1). At setup R1's turret is recreated
+// on the pad for its owner; R2 creates nothing and stays. A second pad (spawned at frame 1, owned by player 1) builds a
+// turret: its completion appends a record {finished type, the object's position, base level 0, pad owner}. Selling R1's
+// turret removes R1. After the battle only the winner's records remain (0x2bff60). A land skirmish does none of it.
+struct PersistRun {
+    bool fought = false, restored = false, restored_ok = false, built = false, added_ok = false, sold = false, sold_ok = false;
+    size_t after = 99, expect_after = 0;
+    bool filtered_ok = false;
+    CrcLog crc;
+};
+
+PersistRun run_persist(const Data& d, int32_t workers, bool skirmish) {
+    PersistRun out;
+    jobs::JobSystem js(jobs::JobSystemConfig{workers});
+    SimConfig cfg;
+    cfg.seed = 11;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSetup s = make_setup(d);
+    const uint32_t sq = type_of(d, "S10_Squad"), fr = type_of(d, "S10_Frigate");
+    s.forces = {{0, 1, sq}, {1, 2, fr}, {1, 2, sq}};
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(s));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    const uint32_t turret = type_of(d, "L1_Turret");
+    std::vector<galactic::PersistedBuiltObject>* recs = gs->built_objects(1);
+    CHECK(recs != nullptr);
+    if (!recs) return out;
+    recs->push_back({turret, -1500.0f, -1500.0f, 0.1f, 0, 0});  // R1: on the map pad
+    recs->push_back({turret, 777.0f, 888.0f, 0.1f, 3, 1});      // R2: no pad there
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 900;
+    opt.battle.order_interval = 0;
+    opt.battle.skirmish = skirmish;
+    load_tactical_systems(*d.files, d.rules, &d.db.constants(), opt);
+    const uint32_t empire_faction = d.rules.find_faction("Empire");
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [empire_faction](const std::string& name, terrain::MapData& m) {
+                                if (name != "L1_Land_B") return false;
+                                m = land_map();
+                                terrain::ObjectPlacement p;
+                                p.type_crc = name_crc("L1_Build_Pad");
+                                p.owner = empire_faction;  // the faction index -> player 0
+                                p.position[0] = -1500.0f;
+                                p.position[1] = -1500.0f;
+                                m.objects.push_back(p);
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    bool invaded = false;
+    objects::ObjectId map_pad = objects::kNoObjectId, pad2 = objects::kNoObjectId;
+    const auto uc_t = static_cast<objects::TypeIndex>(type_of(d, skirmish ? "L1_UC_Turret_MP" : "L1_UC_Turret"));
+    for (uint64_t t = 0; t < 4000; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) {
+            if (out.fought) break;
+            continue;
+        }
+        out.fought = true;
+        objects::ObjectStore& st = tm->primary();
+        const uint32_t f = b->frame();
+        if (f == 1) {
+            for (const objects::ObjectHandle h : st.all_objects())
+                if (st.active(h) && st.type(h) == static_cast<objects::TypeIndex>(type_of(d, "L1_Build_Pad"))) map_pad = st.id(h);
+            const objects::ObjectId c = b->pad_contents(map_pad);
+            const objects::ObjectHandle ch = st.find(c);
+            out.restored = c != objects::kNoObjectId && st.alive(ch);
+            out.restored_ok = out.restored && st.type(ch) == static_cast<objects::TypeIndex>(turret) && st.owner(ch) == 0 &&
+                              st.position(ch).x == -1500.0f && st.position(ch).y == -1500.0f && recs->size() == 2;
+            objects::SpawnParams sp;
+            sp.type = static_cast<objects::TypeIndex>(type_of(d, "L1_Build_Pad"));
+            sp.owner = 1;
+            sp.position = {-1400.0f, -1600.0f, 0.0f};
+            pad2 = st.id(tm->spawn(sp));
+            CHECK(b->pad_build(*tm, pad2, uc_t, true) == 1);
+        }
+        const objects::ObjectId c2 = b->pad_contents(pad2);
+        if (!out.built && c2 != objects::kNoObjectId && st.alive(st.find(c2)) && st.type(st.find(c2)) == static_cast<objects::TypeIndex>(turret)) {
+            out.built = true;
+            const Vec3 p = st.position(st.find(c2));
+            const size_t want = skirmish ? 2u : 3u;
+            out.added_ok = recs->size() == want;
+            if (!skirmish && recs->size() == 3) {
+                const galactic::PersistedBuiltObject& r = recs->back();
+                out.added_ok = r.type == turret && r.x == p.x && r.y == p.y && r.z == p.z && r.base_level == 0 && r.owner == 1;
+            }
+            // Selling R1's turret removes R1 (the record at its x, y with its type).
+            const objects::ObjectId c1 = b->pad_contents(map_pad);
+            if (!skirmish && c1 != objects::kNoObjectId) {
+                out.sold = b->tactical_sell(*tm, 0, c1) == commands::RejectReason::None;
+                out.sold_ok = recs->size() == 2 && (*recs)[0].x == 777.0f && (*recs)[1].owner == 1;
+            }
+        }
+    }
+    const std::vector<galactic::ConflictLogEntry>& log = battles.conflicts().log();
+    const int32_t w = log.empty() ? -2 : log.back().winner;
+    out.after = recs->size();
+    out.filtered_ok = !log.empty() && std::all_of(recs->begin(), recs->end(), [w](const galactic::PersistedBuiltObject& r) { return r.owner == w; });
+    out.expect_after = skirmish ? (w == 0 ? 1u : w == 1 ? 1u : 0u) : (w == 1 ? 2u : 0u);
+    std::printf("  persist%s: winner %d, %zu record(s) after the battle\n", skirmish ? " (skirmish)" : "", w, out.after);
+    out.crc = host.crc_log();
+    return out;
+}
+
+void test_persist(const Data& d) {
+    const PersistRun a = run_persist(d, 0, false);
+    std::printf("  persist: fought %d restored %d (ok %d) built %d added %d sold %d (ok %d) filtered %d\n", a.fought, a.restored, a.restored_ok,
+                a.built, a.added_ok, a.sold, a.sold_ok, a.filtered_ok);
+    CHECK(a.fought && a.restored && a.restored_ok && a.built && a.added_ok && a.sold && a.sold_ok);
+    CHECK(a.filtered_ok && a.after == a.expect_after);
+    const PersistRun w = run_persist(d, 4, false);
+    CHECK(!first_divergence(a.crc, w.crc).diverged);
+    // A land skirmish: no recreate, no add (the seeded records only meet the winner filter of the conflict).
+    const PersistRun k = run_persist(d, 0, true);
+    std::printf("  persist (land skirmish): fought %d restored %d built %d added %d\n", k.fought, k.restored, k.built, k.added_ok);
+    CHECK(k.fought && !k.restored && k.built && k.added_ok && k.filtered_ok && k.after == k.expect_after);
+}
+
 std::string env_or_empty(const char* name) {
 #ifdef _MSC_VER
     char* v = nullptr;
@@ -1316,6 +1450,7 @@ int main(int argc, char** argv) {
     test_tsw_lost(*d);
     test_land(*d);
     test_pads(*d);  // Int-final
+    test_persist(*d);  // q6: persisted tactical built objects
     test_jet(*d);   // S7 t10 / t14
     test_deploy(*d);  // S7 t26
     test_script_spawn(*d);  // q6 t12

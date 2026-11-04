@@ -563,6 +563,13 @@ void ConflictManager::run(ConflictKind kind) {
     std::vector<ConflictInfo>& q = queue(kind);
     if (q.empty()) return;
     if (state_ != ConflictState::AutoRunning && state_ != ConflictState::InBattle && !validate(q.front())) {
+        // AI_GALACTIC_TOKENS §9.4, 0x2b76a0 site A (invasion without a battle): a land head that fails validation while one
+        // of its invading units still exists and attacker != defender keeps only the attacker's persisted built objects
+        // [port: the rest of site A, the units' landing and the InvasionResult, is the port's existing path].
+        const ConflictInfo& h = q.front();
+        if (kind == ConflictKind::Land && h.attacker != h.defender &&
+            std::any_of(h.units.begin(), h.units.end(), [this](ObjectHandle u) { return sim_->store().alive(u); }))
+            sim_->keep_built_objects(h.planet, h.attacker);
         drop_head(kind, true);
         return;
     }
@@ -784,6 +791,9 @@ void ConflictManager::auto_finish(const ConflictInfo& head) {
             (ar_in_.cargo[i].owner == head.attacker ? e.attacker_losses : e.defender_losses)++;
             sim_->destroy_object(ar_cargo_[i]);
         }
+    // AI_GALACTIC_TOKENS §9.4: a land auto-resolve keeps only the winner's persisted built objects (0x60b930; on an attacker
+    // win 0x2b76a0 site B filters again by the attacker, the same result). [port] no winner: the records stay.
+    if (!space && r.valid && r.winner != kNoPlayer) sim_->keep_built_objects(planet, r.winner);
     if (r.valid && r.winner != kNoPlayer && r.loser != kNoPlayer) {
         if (r.retreating != kNoPlayer) {
             if (!space && r.retreating == head.defender) retreat_ground(r.retreating, planet);
@@ -1030,6 +1040,7 @@ bool ConflictManager::begin_battle(const ConflictInfo& head, Linked linked, uint
     BattleRequest req;
     req.info = head;
     req.linked = linked != Linked::No;
+    req.sandbox = linked == Linked::Sandbox;  // q6: the GOM+0x618 == 9 battle (§9.4 gate)
     const bool space = head.kind == ConflictKind::Space;
     const PlanetState& p = sim_->planets()[head.planet];
     const auto& store = sim_->store();
@@ -1156,6 +1167,7 @@ void ConflictManager::finish_battle(const BattleResult& result, LinkedResolution
         sim_->reevaluate_queue(planet, kGroundQueue, sim_->ground_base_level(planet));
         sim_->reevaluate_queue(planet, kSpaceQueue, sim_->planets()[planet].starbase_level);
     }
+    if (!space) sim_->keep_built_objects(planet, W);  // always (land): only the winner's persisted built objects stay (§9.4)
     if (W == A) sim_->clear_queue(planet, space ? kSpaceQueue : kGroundQueue);
     // §3.3 fleets / ground.
     if (!space) {

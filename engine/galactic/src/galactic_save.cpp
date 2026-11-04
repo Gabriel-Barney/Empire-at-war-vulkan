@@ -10,7 +10,8 @@
 //   u32 relation count (0 or P x P) + u8 each
 //   planets (row order): bool is_planet + u32 type (checked against the session), then every other PlanetState field
 //         except the definition-derived position and links (visibility lists, income breakdown, both build queues,
-//         starbase / structures / surface handles, influence ids, orbit fleet indices, respawn list)
+//         starbase / structures / surface handles, influence ids, orbit fleet indices, respawn list; v2: the persisted
+//         tactical built objects {u32 type, f32 x, y, z, i32 base level, i32 owner}, list order)
 //   u32 fleet count + every FleetState (dead ones too: fleet indices are stable references) incl. path and slots
 //   u32 + i32 stealthed ids; u32 + victory claims; u32 + pending S4 events (GalacticEvent, emission order)
 // Object references: a handle whose object exists (live or dead-not-flushed) is written as its ObjectId and resolved
@@ -40,8 +41,8 @@ namespace alamo::galactic {
 
 namespace {
 
-constexpr uint32_t kGalacticSaveVersion = 1;
-constexpr uint32_t kConflictSaveVersion = 2;  // v2: BattleRequest::linked (story t10)
+constexpr uint32_t kGalacticSaveVersion = 2;  // v2: PlanetState::built_objects (AI_GALACTIC_TOKENS §9.4); v1 loads with none
+constexpr uint32_t kConflictSaveVersion = 3;  // v2: BattleRequest::linked (story t10); v3: BattleRequest::sandbox (q6)
 
 // Element count, bounded by the bytes left (each element takes at least `min_bytes`), so corrupt counts never
 // allocate.
@@ -194,6 +195,8 @@ void GalacticSim::write(ByteWriter& w) const {
         w.i32(p.sabotage_count);
         w.u32(static_cast<uint32_t>(p.respawns.size()));
         for (const RespawnEntry& e : p.respawns) w.i32(e.due).u32(e.type).i32(e.owner).u8(e.flag);
+        w.u32(static_cast<uint32_t>(p.built_objects.size()));  // v2
+        for (const PersistedBuiltObject& b : p.built_objects) w.u32(b.type).f32(b.x).f32(b.y).f32(b.z).i32(b.base_level).i32(b.owner);
     }
 
     w.u32(static_cast<uint32_t>(fleets_.size()));
@@ -228,7 +231,8 @@ void GalacticSim::write(ByteWriter& w) const {
 
 bool GalacticSim::read(ByteReader& r) {
     const objects::ObjectStore& st = *store_;
-    if (r.u32() != kGalacticSaveVersion || !r.ok()) return false;
+    const uint32_t version = r.u32();
+    if (version < 1 || version > kGalacticSaveVersion || !r.ok()) return false;
     const uint32_t rows = r.u32(), routes = r.u32(), types = r.u32(), np = r.u32();
     if (!r.ok() || rows != planets_.size() || routes != map_.routes.size() || types != rules_->types.size() ||
         np != players_.size())
@@ -400,6 +404,21 @@ bool GalacticSim::read(ByteReader& r) {
             e.owner = r.i32();
             e.flag = r.u8();
             if (!r.ok() || e.type >= types || !player_ok(e.owner)) return false;
+        }
+        p.built_objects.clear();  // v1: none
+        if (version >= 2) {
+            uint32_t nb = 0;
+            if (!get_count(r, nb, 24)) return false;
+            p.built_objects.resize(nb);
+            for (PersistedBuiltObject& b : p.built_objects) {
+                b.type = r.u32();
+                b.x = r.f32();
+                b.y = r.f32();
+                b.z = r.f32();
+                b.base_level = r.i32();
+                b.owner = r.i32();
+                if (!r.ok() || b.type >= types || !player_ok(b.owner)) return false;
+            }
         }
         if (!r.ok()) return false;
     }
@@ -634,6 +653,7 @@ void ConflictManager::write(ByteWriter& w) const {
     put_handles(w, st, request_.structures);
     w.boolean(request_.land_base_destruction_forces_retreat).boolean(request_.space_station_destruction_forces_retreat);
     w.boolean(request_.linked);
+    w.boolean(request_.sandbox);  // v3
 
     w.u32(static_cast<uint32_t>(planet_map_.size()));
     for (const std::string& m : planet_map_) w.str(m);
@@ -762,6 +782,7 @@ bool ConflictManager::read(ByteReader& r) {
     req.land_base_destruction_forces_retreat = r.boolean();
     req.space_station_destruction_forces_retreat = r.boolean();
     if (version >= 2) req.linked = r.boolean();
+    if (version >= 3) req.sandbox = r.boolean();
 
     uint32_t nmaps = 0;
     if (!r.ok() || !get_count(r, nmaps, 4)) return false;

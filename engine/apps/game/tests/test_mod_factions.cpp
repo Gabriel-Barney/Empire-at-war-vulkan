@@ -1,5 +1,6 @@
 // alamo_game_mod_faction_tests (q6 t08): AI player types and default skirmish forces for factions the port does not
-// hard-code (game_data.hpp resolve_ai_type / default_skirmish_fleet / default_skirmish_ground / data_fallback_forces).
+// hard-code (game_data.hpp resolve_ai_type / default_skirmish_fleet / default_skirmish_ground / data_fallback_forces);
+// q6: the skirmish buy-units list (skirmish_rules.hpp skirmish_buy_list) on synthetic, shipped and Thrawn's Revenge data.
 //   * synthetic data in its own temp folder: a stock Empire (Basic_AI BasicEmpire), a Rebel a mod redefined (GenericAI),
 //     mod factions with and without Space_ / Land_Skirmish_AI_Default_Forces, a campaign's AI_Player_Control pairs;
 //   * with ALAMO_FOC_DATA: the shipped factions resolve exactly as the hard-coded port tables (vanilla unchanged).
@@ -65,6 +66,25 @@ std::string make_types() {
     s += ship("Y_Chiss_Ship", "Chiss", 20);
     s += company("Y_G1", "Yevetha", 200);
     s += company("Y_G2", "Yevetha", 100);
+    // q6 buy list (SKIRMISH_SETUP §2.7): Hapan types, in this order (type index = type-manager order).
+    auto unit = [&s](const char* tag, const char* name, const char* faction, int cost, const std::string& extra) {
+        s += std::string(" <") + tag + " Name=\"" + name + "\">" + (faction ? std::string("<Affiliation>") + faction + "</Affiliation>" : std::string()) +
+             "<Build_Cost_Credits>" + std::to_string(cost) + "</Build_Cost_Credits>" + extra + "</" + tag + ">\n";
+    };
+    const std::string space_tab = "<Build_Tab_Space_Units>Yes</Build_Tab_Space_Units>";
+    unit("SpaceUnit", "H_Cheap", "Hapan", 100, space_tab);
+    unit("SpaceUnit", "H_Big", "Hapan", 900, "<Available_In_Skirmish>Yes</Available_In_Skirmish>");  // both map kinds
+    unit("SpaceUnit", "H_Mid_A", "Hapan", 500, space_tab);
+    unit("SpaceUnit", "H_Mid_B", "Hapan, Empire", 500, space_tab);  // same cost: type order
+    unit("GroundCompany", "H_Land", "Hapan", 200, "<Build_Tab_Land_Units>Yes</Build_Tab_Land_Units>");
+    unit("SpaceUnit", "H_Hero", "Hapan", 300, space_tab + "<Is_Named_Hero>Yes</Is_Named_Hero>");
+    unit("SpaceUnit", "H_Cine", "Hapan", 300, space_tab + "<Cinematic_Object_Only>Yes</Cinematic_Object_Only>");
+    unit("SpaceUnit", "H_Free", "Hapan", 0, space_tab);
+    unit("SpaceUnit", "H_No_Tab", "Hapan", 300, "<Build_Tab_Land_Units>Yes</Build_Tab_Land_Units>");  // land tab: land only
+    unit("SpaceUnit", "H_Other", "Chiss", 300, space_tab);
+    unit("SpaceUnit", "H_No_Affiliation", nullptr, 300, space_tab);
+    s += " <SpecialStructure Name=\"H_Pad\"><Tactical_Buildable_Objects_Multiplayer>Hapan, H_Mid_B, H_Land, Chiss, H_Other"
+         "</Tactical_Buildable_Objects_Multiplayer></SpecialStructure>\n";
     return s + "</MF>\n";
 }
 
@@ -82,6 +102,7 @@ const char* kFactions = R"(<Factions>
   <Space_Skirmish_AI_Default_Forces> Factions_Thing_To_Replace </Space_Skirmish_AI_Default_Forces>
   <Land_Skirmish_AI_Default_Forces> Y_A </Land_Skirmish_AI_Default_Forces></Faction>
  <Faction Name="Pirates"><Can_Control_Planets>Yes</Can_Control_Planets></Faction>
+ <Faction Name="Hapan"><Is_Playable>Yes</Is_Playable><Can_Control_Planets>Yes</Can_Control_Planets></Faction>
 </Factions>
 )";
 const char* kFactions2 = R"(<Factions>
@@ -233,6 +254,91 @@ void test_synthetic() {
     fs::remove_all(root, ec);
 }
 
+// q6: the skirmish buy-units list (SKIRMISH_SETUP §2.7, game::skirmish_buy_list).
+Names buy_names(const game::GameData& d, const char* faction, bool land, bool heroes = false, bool mp_only = false) {
+    game::SkirmishBuyOptions o;
+    o.heroes = heroes;
+    o.multiplayer_list_only = mp_only;
+    Names out;
+    for (const uint32_t t : game::skirmish_buy_list(d.rules, d.types, d.rules.find_faction(faction), land, o)) out.push_back(d.rules.types[t].name);
+    return out;
+}
+
+void test_buy_list_synthetic() {
+    const fs::path root = make_data();
+    game::GameData d;
+    std::string err;
+    CHECK(game::load_game_data_dir(root.string(), d, &err));
+    // Cost > 0, Affiliation (an empty one never matches), Available_In_Skirmish or the map kind's tab, not cinematic-only,
+    // no named hero; most expensive first, equal costs in type order.
+    CHECK((buy_names(d, "Hapan", false) == Names{"H_Big", "H_Mid_A", "H_Mid_B", "H_Cheap"}));
+    CHECK((buy_names(d, "Hapan", false, true) == Names{"H_Big", "H_Mid_A", "H_Mid_B", "H_Hero", "H_Cheap"}));  // heroes option
+    CHECK((buy_names(d, "Hapan", true) == Names{"H_Big", "H_No_Tab", "H_Land"}));
+    CHECK((buy_names(d, "Empire", false) == Names{"H_Mid_B"}));
+    CHECK((buy_names(d, "Chiss", false) == Names{"H_Other"}));  // the Chiss ships carry no tab
+    // [port interim rule] only types named in some Tactical_Buildable_Objects_Multiplayer list (any faction row).
+    CHECK((buy_names(d, "Hapan", false, false, true) == Names{"H_Mid_B"}));
+    CHECK((buy_names(d, "Hapan", true, false, true) == Names{"H_Land"}));
+    CHECK((buy_names(d, "Chiss", false, false, true) == Names{"H_Other"}));
+    CHECK(game::skirmish_buy_list(d.rules, d.types, galactic::kNoIndex, false).empty());
+    std::error_code ec;
+    fs::remove_all(root, ec);
+}
+
+// The buy list on the shipped data (SKIRMISH_SETUP §2.7 "What the filter gives on shipped data") and, when the mod is
+// installed next to the Steam FoC (or ALAMO_TR_DATA), on Thrawn's Revenge with and without the [port interim rule].
+void test_buy_list_shipped() {
+    const char* foc = std::getenv("ALAMO_FOC_DATA");
+    if (!foc || !fs::exists(fs::path(foc) / "Data")) {
+        std::printf("buy list (shipped data): skipped (ALAMO_FOC_DATA not set)\n");
+        return;
+    }
+    game::GameData d;
+    std::string err;
+    CHECK(game::load_game_data(foc, {}, d, &err));
+    auto count = [&](const game::GameData& g, const char* f, bool land, bool heroes, bool mp) { return buy_names(g, f, land, heroes, mp).size(); };
+    for (const char* f : {"Empire", "Rebel", "Underworld"}) {
+        const Names sp = buy_names(d, f, false), ld = buy_names(d, f, true);
+        std::printf("buy list FoC %s: space %zu (heroes on %zu, MP-listed %zu), land %zu (heroes on %zu, MP-listed %zu); first: %s / %s\n", f,
+                    sp.size(), count(d, f, false, true, false), count(d, f, false, false, true), ld.size(), count(d, f, true, true, false),
+                    count(d, f, true, false, true), sp.empty() ? "-" : sp[0].c_str(), ld.empty() ? "-" : ld[0].c_str());
+    }
+    // §2.7: Empire space 23 rows, 20 without named heroes.
+    CHECK(count(d, "Empire", false, true, false) == 23 && count(d, "Empire", false, false, false) == 20);
+    const Names e = buy_names(d, "Empire", false);
+    CHECK(std::find(e.begin(), e.end(), "Executor_Super_Star_Destroyer") != e.end());  // a story type with a tab and a cost
+    std::string tr;
+    if (const char* v = std::getenv("ALAMO_TR_DATA")) tr = v;
+    const std::string fs_foc(foc);
+    const size_t at = fs_foc.find("\\steamapps\\common\\");
+    if (tr.empty() && at != std::string::npos) tr = fs_foc.substr(0, at) + "\\steamapps\\workshop\\content\\32470\\1125571106";
+    std::error_code ec;
+    if (tr.empty() || !fs::is_directory(fs::path(tr) / "Data" / "XML", ec)) {
+        std::printf("buy list (Thrawn's Revenge): skipped (mod not found)\n");
+        return;
+    }
+    game::GameData m;
+    err.clear();
+    CHECK(game::load_game_data(foc, {"MODPATH=" + tr}, m, &err));
+    if (!err.empty()) std::printf("TR load: %s\n", err.c_str());
+    for (const char* f : {"Empire", "Rebel"}) {
+        const Names sp = buy_names(m, f, false, false, true), ld = buy_names(m, f, true, false, true);
+        std::printf("buy list TR %s: space %zu -> %zu, land %zu -> %zu (heroes on, rules 1-4 only: %zu / %zu); first: %s / %s\n", f,
+                    count(m, f, false, false, false), sp.size(), count(m, f, true, false, false), ld.size(), count(m, f, false, true, false),
+                    count(m, f, true, true, false), sp.empty() ? "-" : sp[0].c_str(), ld.empty() ? "-" : ld[0].c_str());
+        for (const std::string& n : sp)
+            if (n.rfind("Option_", 0) == 0 || n.rfind("Cheat_", 0) == 0 || n.rfind("ZLayer_", 0) == 0 || n == "Dummy_Treaty_Victory") {
+                std::printf("FAIL TR %s space list keeps marker %s\n", f, n.c_str());
+                ++g_fail;
+            }
+    }
+    // §2.7: rules 1-4 list the TR option / cheat markers (Empire space 407 rows with heroes); the interim rule keeps 106 / 38.
+    const Names all = buy_names(m, "Empire", false, true, false);
+    CHECK(std::find(all.begin(), all.end(), "Cheat_Give_Credits") != all.end());
+    CHECK(count(m, "Empire", false, true, false) == 407 && count(m, "Empire", true, true, false) == 63);
+    CHECK(count(m, "Empire", false, true, true) == 106 && count(m, "Empire", true, true, true) == 38);
+}
+
 // The shipped factions resolve as the hard-coded port tables: vanilla sessions are unchanged.
 void test_shipped_data() {
     const char* foc = std::getenv("ALAMO_FOC_DATA");
@@ -267,6 +373,8 @@ void test_shipped_data() {
 int main() {
     test_synthetic();
     test_shipped_data();
+    test_buy_list_synthetic();  // q6
+    test_buy_list_shipped();    // q6
     std::printf(g_fail ? "alamo_game_mod_faction_tests: %d FAILED\n" : "alamo_game_mod_faction_tests: OK\n", g_fail);
     return g_fail ? 1 : 0;
 }

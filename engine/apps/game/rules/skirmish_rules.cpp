@@ -237,6 +237,36 @@ uint32_t skirmish_hyperspace_leader(const galactic::GalacticRules& rules, const 
     return carriers.empty() ? galactic::kNoIndex : carriers.front();
 }
 
+std::vector<uint32_t> skirmish_buy_list(const galactic::GalacticRules& rules, const objects::GameObjectTypes& types, uint32_t faction,
+                                        bool land, const SkirmishBuyOptions& options) {
+    // SKIRMISH_SETUP §2.7: 0xf0600 (steps 1-4) then the row fill 0xef9f0 (the named-hero rule) and the cost sort 0xf0e80.
+    const size_t n = std::min(rules.types.size(), types.size());
+    std::vector<uint8_t> in_mp_list;
+    if (options.multiplayer_list_only) {  // [port interim rule] named in some type's Tactical_Buildable_Objects_Multiplayer
+        in_mp_list.assign(n, 0);
+        for (uint32_t t = 0; t < n; ++t)
+            for (const std::string_view tok : types.get_list(t, "Tactical_Buildable_Objects_Multiplayer")) {
+                const objects::TypeIndex x = types.resolve_name(trim(tok));  // faction row headers resolve to no type
+                if (x != objects::kNone && x < n) in_mp_list[x] = 1;
+            }
+    }
+    std::vector<uint32_t> out;
+    for (uint32_t t = 0; t < n; ++t) {
+        const galactic::TypeInfo& ti = rules.types[t];
+        if (ti.build_cost <= 0) continue;                                                                     // 1.
+        if (std::find(ti.affiliation.begin(), ti.affiliation.end(), faction) == ti.affiliation.end()) continue;  // 2.
+        if (!types.get_bool(t, "Available_In_Skirmish") && !types.get_bool(t, land ? "Build_Tab_Land_Units" : "Build_Tab_Space_Units"))
+            continue;                                                                                         // 3.
+        if (ti.cinematic_only) continue;                                                                      // 4.
+        if (ti.named_hero && !options.heroes) continue;                                                       // rows: heroes option
+        if (options.multiplayer_list_only && !in_mp_list[t]) continue;
+        out.push_back(t);
+    }
+    // Most expensive first; [port] equal costs by type index ascending (stable over the index-ordered list).
+    std::stable_sort(out.begin(), out.end(), [&](uint32_t a, uint32_t b) { return rules.types[a].build_cost > rules.types[b].build_cost; });
+    return out;
+}
+
 std::string skirmish_map_planet_type(const galactic::GalacticRules& rules, std::string_view map) {
     std::string stem(map);
     if (const size_t s = stem.find_last_of("\\/"); s != std::string::npos) stem = stem.substr(s + 1);

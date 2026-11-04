@@ -32,26 +32,42 @@ std::string_view trim_ws(std::string_view a) {
 
 }  // namespace
 
-void TacticalBattle::pad_persist(const objects::ObjectStore& st, objects::ObjectHandle pad, objects::TypeIndex type, int32_t value, bool add) {
-    // §6.5 0x42f160 gate: tactical mode with a galactic-campaign parent, a battle planet [port: the host passes the list
-    // only then; the GOM state +0x618 != 9 test is not modelled]; the pad type's Tactically_Built_Child_Object_Persists.
-    if (!pad_records_ || !st.alive(pad) || type == objects::kNone) return;
+void TacticalBattle::pad_persist(const objects::ObjectStore& st, objects::ObjectHandle pad, objects::TypeIndex type, const Vec3& pos, bool add) {
+    // AI_GALACTIC_TOKENS §9.4 gate 0x42f160: a campaign battle (not a skirmish) with a battle planet whose list the host
+    // passed, not the sandbox story battle (conflict state 9); the pad type's Tactically_Built_Child_Object_Persists.
+    if (!pad_records_ || cfg_.skirmish || req_.sandbox || !st.alive(pad) || type == objects::kNone) return;
     const objects::GameObjectTypes& types = catalog_->types();
     const objects::TypeIndex pt = st.type(pad);
     if (pt >= types.size() || !types.get_bool(pt, "Tactically_Built_Child_Object_Persists")) return;
-    const Vec3 p = st.position(pad);
     std::vector<PadRecord>& v = *pad_records_;
-    if (add) {  // 0x4b6c70: refused when the position is already present (or the small int > 5)
+    if (add) {
+        // 0x4b6c70: refused when the pad's base level is outside 0..5 (unsigned compare) or a record has the same x and y
+        // (0x4b7ab0, exact, z ignored); else appended {finished type, position, pad base level, pad owner}.
+        const int32_t level = pad_base_level(st.id(pad));
+        if (static_cast<uint32_t>(level) > 5u) return;
         for (const PadRecord& r : v)
-            if (r.x == p.x && r.y == p.y && r.z == p.z) return;
-        v.push_back({static_cast<uint32_t>(type), p.x, p.y, p.z, 0, value});
+            if (r.x == pos.x && r.y == pos.y) return;
+        PadRecord r;
+        r.type = static_cast<uint32_t>(type);
+        r.x = pos.x;
+        r.y = pos.y;
+        r.z = pos.z;
+        r.base_level = level;
+        r.owner = st.owner(pad);
+        v.push_back(r);
         return;
     }
-    for (size_t i = 0; i < v.size(); ++i)  // 0x4bb3a0: position and type must both match
-        if (v[i].x == p.x && v[i].y == p.y && v[i].z == p.z && v[i].type == static_cast<uint32_t>(type)) {
-            v.erase(v.begin() + static_cast<std::ptrdiff_t>(i));
-            return;
-        }
+    // 0x4bb3a0: the record at the object's x and y (the last match, 0x4b7ab0) is removed only when its type is the object's.
+    size_t at = v.size();
+    for (size_t i = 0; i < v.size(); ++i)
+        if (v[i].x == pos.x && v[i].y == pos.y) at = i;
+    if (at < v.size() && v[at].type == static_cast<uint32_t>(type)) v.erase(v.begin() + static_cast<std::ptrdiff_t>(at));
+}
+
+int32_t TacticalBattle::pad_base_level(objects::ObjectId pad) const {
+    const auto it = std::lower_bound(pad_levels_.begin(), pad_levels_.end(), pad,
+                                     [](const std::pair<objects::ObjectId, int32_t>& e, objects::ObjectId id) { return e.first < id; });
+    return it != pad_levels_.end() && it->first == pad ? it->second : 0;
 }
 
 TacticalBattle::PadState* TacticalBattle::pad_state(objects::ObjectId pad, bool create) {
@@ -173,7 +189,11 @@ void TacticalBattle::pads_tick(TacticalMode& mode) {
         auto child_gone = [&](bool was_built, objects::TypeIndex child_type) {  // 0x42e6d0
             if (was_built) s.locked = false;
             const objects::TypeIndex pt = pad_alive ? st.type(ph) : objects::kNone;
-            if (pad_alive && child_type != objects::kNone) pad_persist(st, ph, child_type, -1, false);  // §6.5 remove
+            if (pad_alive && child_type != objects::kNone) {  // §9.4 remove: the child stood at the build point + 0.1 z
+                Vec3 at = bt_pad_attach_point(mode, ph);
+                at.z += 0.1f;
+                pad_persist(st, ph, child_type, at, false);
+            }
             if (pt < types.size() && types.get_bool(pt, "Destroy_When_Child_Dies")) {
                 mode.destroy(ph);
                 return;
@@ -220,7 +240,6 @@ void TacticalBattle::pads_tick(TacticalMode& mode) {
                     if (st.alive(bh)) bt_adopt_built(mode, bh, sp.owner, frac, bt_rng_);
                 }
                 mode.destroy(uh);
-                const int32_t builder = s.builder;
                 s.uc = objects::kNoObjectId;
                 s.builder = -1;
                 if (st.alive(bh)) {
@@ -242,7 +261,7 @@ void TacticalBattle::pads_tick(TacticalMode& mode) {
                         }
                         for (const objects::ObjectHandle h : victims) bt_kill_silently(mode, h);
                     }
-                    if (pad_alive) pad_persist(st, ph, ft, builder, true);  // §6.5 add
+                    if (pad_alive) pad_persist(st, ph, ft, st.position(bh), true);  // §9.4 add: the finished object's position
                 } else {
                     child_gone(false, objects::kNone);
                 }

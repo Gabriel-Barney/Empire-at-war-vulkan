@@ -16,7 +16,7 @@
 // PORT STAND-INS (marked [port] next to the code): the per-tech member lists (0x373e30) of fleet units, starbases and
 // structures are the types' Starting_Spawned_Units_Tech_N lists (galactic_ai_member_force); the force leaves hold
 // members only (galactic_ai_planet_force), the helper 0x5f2430 adds the matching structures' own AI_Combat_Power to every
-// contrast row (galactic_ai_enemy_strength; its 0x4b8000 list is not modelled); the structure mask +0x1658 is the Capital default (no galactic structure
+// contrast row (galactic_ai_enemy_strength, with the 0x4b8000 persisted built objects); the structure mask +0x1658 is the Capital default (no galactic structure
 // sets it); orbital structures D+0x170 and the planet-type garrison list +0x20C8 are not modelled; Timeline = 0; black
 // market = GalacticSim's item table (P4 ai); Hints = the Galactic_Hints defaults (no Markup_Filename file is read);
 // island paths are hop-count shortest paths.
@@ -131,7 +131,8 @@ double galactic_ai_planet_force(const galactic::GalacticSim& sim, std::span<cons
 // `self` or an ally (0x4ad9f0: owner set, relation Self / Ally, control > 0; pirates, neutral and unowned planets pass), the
 // own AI_Combat_Power of every structure whose category mask meets the effective mask: space = the planet's starbase type,
 // ground = each ground structure (D+0x158). So a typed row gets it too (every shipped starbase is Capital: the Capital row).
-// [port: the 0x4b8000 type-id list of planet data +0x10 is not modelled (adds 0).]
+// Ground also adds 0x4b8000: the AI_Combat_Power of every persisted tactical built object of the planet
+// (PlanetState::built_objects, §9.4) whose type's category mask meets the effective mask, summed in float.
 double galactic_ai_enemy_strength(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
                                   PlanetIndex planet, int32_t self, bool space, uint64_t mask,
                                   const objects::EnumConverter* categories = nullptr);

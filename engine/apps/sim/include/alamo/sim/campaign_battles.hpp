@@ -244,7 +244,8 @@ public:
     // --- N1 save / load (owner: n1-host, stage 2 n2-host): attach() registers two SimHost save participants, removed by
     // the destructor:
     //   "galactic.conflicts"  the ConflictManager (ConflictManager::write / read)
-    //   "battles"             this object's between-battle state: battles fought, log, pad persistence records, the
+    //   "battles"             this object's between-battle state: battles fought, log (v1-3 also held the pad persistence
+    //                         records, now in the galactic save; a v1-3 save's records move to the planets on load), the
     //                         carried fog flags, corruption missions, LINK_TACTICAL records consumed, tactical AI log;
     //                         v2 adds the battle in flight: u8 0 none / 1 pending (accepted, pushed at the next hook:
     //                         the map is loaded again through the MapLoader on read) / 2 running, + its BattleRequest.
@@ -300,9 +301,9 @@ private:
     std::vector<std::string> log_;
     std::vector<TacticalBattle::RemovalRecord> last_losses_;
     uint32_t fought_ = 0;
-    // REMAINING_GAPS §6.5 [port]: the per-planet pad persistence vectors (planet data D +0x10 has no galactic-side storage
-    // yet), planet order of first use; passed to each campaign battle at its planet. Hashed in "battle.state" once used.
-    std::vector<std::pair<PlanetIndex, std::vector<TacticalBattle::PadRecord>>> pad_records_;
+    // AI_GALACTIC_TOKENS §9.4: the pad persistence records live on the planets (GalacticSim::built_objects, galactic save);
+    // each campaign battle gets its planet's list. Hashed in "battle.state" (planets with records only).
+    bool rebuilding_ = false;  // rebuild(): the battle a save load pushes (no recreate of persisted objects)
     // Fog of war (owner: fog agent): the original's global FOW-active flag / render option (static initial 1;
     // land battles set 1, space battles keep the previous value: FOG_OF_WAR §8 item 2).
     bool fog_active_ = true, fog_render_ = true;

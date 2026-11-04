@@ -80,8 +80,10 @@ void InfoScreens::close_all() {
 void InfoScreens::fill_buy(GuiDialog& d) {
     std::vector<std::u32string> rows;
     for (const BuyUnitEntry& u : buy_.units) {
-        std::u32string r = u.name + U"  " + num32(u.cost);
+        // SKIRMISH_SETUP §2.7 row columns: the name, "x n" when bought n > 0 times, the cost (no population column).
+        std::u32string r = u.name;
         if (u.owned > 0) r += U"  x" + num32(u.owned);
+        r += U"  " + num32(u.cost);
         rows.push_back(std::move(r));
     }
     const GuiControl* l = d.get("IDC_SKIRMISH_BUY_FORCES_LISTBOX");

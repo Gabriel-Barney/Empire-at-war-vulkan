@@ -152,6 +152,10 @@ struct BattleRequest {
     // story t10 (REMAINING_GAPS §3.1 item 4, [M] global 0x140b155d8): a linked battle (LINK_TACTICAL / corruption
     // mission record): the branched-map discard also keeps attacker-owned objects (Kessel UM01's jailed UMP_TYBER_ZANN).
     bool linked = false;
+    // q6 (AI_GALACTIC_TOKENS §9.4 gate condition 3): a sandbox story-linked battle (start_linked with Reward_Param8), the
+    // one battle in which the original's conflict state GOM+0x618 is 9 (set by 0x28f590): nothing built there is
+    // persisted, nothing destroyed or sold there is removed from the planet's records.
+    bool sandbox = false;
 };
 struct BattleResult {
     int32_t winner = kNoPlayer;

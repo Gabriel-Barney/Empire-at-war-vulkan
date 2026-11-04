@@ -1622,6 +1622,14 @@ void GalacticSim::set_in_battle(PlanetIndex planet, bool on) {
     if (valid_planet(planet)) planets_[planet].in_battle = on;
 }
 
+void GalacticSim::keep_built_objects(PlanetIndex planet, int32_t keep) {
+    // AI_GALACTIC_TOKENS §9.4 owner filter 0x4b7d90: last to first, every record owned by another player is erased.
+    if (planet >= planets_.size()) return;
+    std::vector<PersistedBuiltObject>& v = planets_[planet].built_objects;
+    for (size_t i = v.size(); i-- > 0;)
+        if (v[i].owner != keep) v.erase(v.begin() + static_cast<std::ptrdiff_t>(i));
+}
+
 bool GalacticSim::replace_starbase(PlanetIndex planet, uint32_t type) {
     if (!valid_planet(planet)) return false;
     PlanetState& p = planets_[planet];
