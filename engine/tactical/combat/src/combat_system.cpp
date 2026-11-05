@@ -177,6 +177,7 @@ bool CombatSystem::add_unit(const UnitSpawn& s, uint32_t frame, SimRng& rng) {
     u.owner = s.owner;
     u.team = s.team;
     u.team_leader = s.team_leader ? 1 : 0;
+    u.damage_team = s.team != 0 ? s.team : s.damage_team;  // s78g t06
     u.damage_parent = s.damage_parent;
     u.flags = s.flags & ~(kUnitDead | kUnitRemoved);
     if (u.flags & kUnitInfected) u.infect_attached = 1;  // refix t02: spawned infected = the behaviour, no parameters
@@ -794,6 +795,44 @@ const CombatSystem::Unit* CombatSystem::team_head(const Unit& u) const {
     return (live(l) && l != &u) ? l : nullptr;
 }
 
+void CombatSystem::hand_over_team(const Unit& d) {
+    // s78f t07 / s78g t06: a dead team_leader hands the role to its team's first live member (ascending id), so the team
+    // keeps its head (TeamTargeting copy, Mod_Multiplier squad rule, team scoring) while any member lives. [port] The
+    // original's head is the container, which outlives its members (TACTICAL_COMBAT §3.1.1 "Team targeting copies":
+    // TeamTargeting runs on the container; A1_READINGS §29.6: a team counts until the container dies). So the hand-over
+    // happens at the death itself (no headless rest of the tick), and the heir takes the container's targeting record
+    // (target TD +8 / +0x10, ordered target and lock, state TD +0x18, scan timer, attack goal), which a member's death
+    // does not touch in the original.
+    if (d.team == 0 || !d.team_leader || !(d.flags & kUnitDead)) return;
+    Unit* heir = nullptr;
+    for (Unit& m : units_) {
+        if ((m.flags & kUnitDead) || m.team != d.team) continue;
+        if (m.team_leader) return;  // led already
+        if (!heir) heir = &m;
+    }
+    if (!heir) return;
+    heir->team_leader = 1;
+    heir->auto_target = d.auto_target;
+    heir->auto_hp = d.auto_hp;
+    heir->target_score = d.target_score;
+    heir->ordered_target = d.ordered_target;
+    heir->ordered_hp = d.ordered_hp;
+    heir->locked = d.locked;
+    heir->goal_target = d.goal_target;
+    heir->goal_hp = d.goal_hp;
+    heir->tstate = d.tstate;
+    heir->ttarget = d.ttarget;
+    heir->next_scan = d.next_scan;
+    if (frame_ < heir->next_scan) heir->needs_scan = heir->scan_due = 0;  // phase C ran for the member's own timer
+    // team_head() sees the heir at once (the rest of this tick and host reads between ticks); phase A rebuilds the lists.
+    const auto it = std::lower_bound(team_heads_.begin(), team_heads_.end(), std::make_pair(d.team, ObjectId{-1}));
+    if (it != team_heads_.end() && it->first == d.team) it->second = heir->id;
+    if (cfg_.mode == GameMode::Land && std::binary_search(land_heads_.begin(), land_heads_.end(), d.id)) {
+        const auto at = std::lower_bound(land_heads_.begin(), land_heads_.end(), heir->id);
+        if (at == land_heads_.end() || *at != heir->id) land_heads_.insert(at, heir->id);
+    }
+}
+
 void CombatSystem::track_damage(Unit& v, float amount, uint32_t frame) {
     const uint32_t sec = frame / cfg_.fps;
     const uint32_t b = sec % 5u;
@@ -1140,35 +1179,41 @@ void CombatSystem::decide_target(Unit& u, std::vector<Candidate>& cands, uint32_
     const int32_t start = rng.range_int(0, n - 1);  // synced draw 2: random start player
     const float thr = cfg_.low_health_threshold;
     const bool has_hp = u.hp_count != 0;
+    // s78g t04 (TACTICAL_COMBAT §2.4 correction, §2.10 item 4) [H]: Scan_Player 0x5662b0 starts each visited player with no
+    // local best and takes that player's first passing candidate unconditionally; later candidates of the same player use
+    // the replacement rule. 0x568a00 replaces its result with every non-null per-player return, so the pick is the local
+    // best of the LAST player (cyclic order from the start player) that has a candidate. The early exit (current target
+    // scoring exactly 1.0) fires only once that candidate has been accepted as the local best; the scan stops there.
     const Candidate* best = nullptr;
     for (int32_t k = 0; k < n; ++k) {
         const int32_t p = (start + k) % n;
+        const Candidate* local = nullptr;
         for (const Candidate& c : cands) {
             if (c.player != p) continue;
             if (c.aim_points > 0) rng.range_int(0, static_cast<int32_t>(c.aim_points) - 1);  // HP_Choose_Aim_Point
-            if (c.id == u.auto_target && c.score == 1.0f) {  // early exit
-                best = &c;
+            bool replace = true;
+            if (local) {
+                // Replacement rule [H]. Step 2 has NO equality guard (disassembly 0x5668f5): an equal or
+                // WORSE score falls through to the aim and XY-distance tie-breaks.
+                const bool cl = c.fraction <= thr, bl = local->fraction <= thr;
+                if (cl != bl) {
+                    replace = cl;
+                } else if (c.score < local->score) {
+                    replace = true;
+                } else if (has_hp && c.aimable != local->aimable) {
+                    replace = c.aimable != 0;
+                } else {
+                    replace = c.dist2 < local->dist2;
+                }
+            }
+            if (!replace) continue;
+            local = &c;
+            if (c.id == u.auto_target && c.score == 1.0f) {  // early exit, after the acceptance
+                best = local;
                 goto done;
             }
-            if (!best) {
-                best = &c;
-                continue;
-            }
-            // Replacement rule [H]. Step 2 has NO equality guard (disassembly 0x5668f5): an equal or
-            // WORSE score falls through to the aim and XY-distance tie-breaks.
-            const bool cl = c.fraction <= thr, bl = best->fraction <= thr;
-            bool replace;
-            if (cl != bl) {
-                replace = cl;
-            } else if (c.score < best->score) {
-                replace = true;
-            } else if (has_hp && c.aimable != best->aimable) {
-                replace = c.aimable != 0;
-            } else {
-                replace = c.dist2 < best->dist2;
-            }
-            if (replace) best = &c;
         }
+        if (local) best = local;
     }
 done:
     if (best) {
@@ -2793,6 +2838,7 @@ void CombatSystem::kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame, 
     v.flags |= kUnitDead;
     v.killer = killer;
     v.health = 0.0f;
+    hand_over_team(v);  // s78g t06: the team keeps a head from this moment on
     // 2. missile-shield / jammer emitter removal: 0x4d07e0 removes ONE entry (TACTICAL_GAPS §1.7)
     v.emitter_radius = 0.0f;
     if (v.emitter_entries > 0) --v.emitter_entries;
@@ -3003,16 +3049,18 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
             return take_damage_inner(r2, frame, depth + 1);
         }
     }
-    // 2. teams [H]
-    if (!r.no_team && v.team != 0 && (vd.redirect_damage_to_teammates || vd.share_damage_with_teammates) && depth < 4) {
+    // 2. teams [H]. s78g t06: no mode gate in §3.6, so space squadrons count too (vanilla Luke_XWing / TIE_Prototype carry
+    // Redirect_Damage_To_Teammates): damage_team = team, or a space squadron member's squadron.
+    const uint32_t dteam = v.damage_team;
+    if (!r.no_team && dteam != 0 && (vd.redirect_damage_to_teammates || vd.share_damage_with_teammates) && depth < 4) {
         uint32_t count = 0;
         for (const Unit& m : units_)
-            if (m.team == v.team && !(m.flags & kUnitDead)) ++count;
+            if (m.damage_team == dteam && !(m.flags & kUnitDead)) ++count;
         if (vd.redirect_damage_to_teammates && count > 1) {
             const float each = r.amount / static_cast<float>(count - 1);
             for (size_t i = 0; i < units_.size(); ++i) {
                 const Unit& m = units_[i];
-                if (m.team != v.team || (m.flags & kUnitDead) || m.id == v.id) continue;
+                if (m.damage_team != dteam || (m.flags & kUnitDead) || m.id == v.id) continue;
                 DamageRequest r2 = r;
                 r2.victim = m.id;
                 r2.amount = each;
@@ -3028,7 +3076,7 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
             if (self_max > 0.0f) {
                 for (size_t i = 0; i < units_.size(); ++i) {
                     const Unit& m = units_[i];
-                    if (m.team != v.team || (m.flags & kUnitDead)) continue;
+                    if (m.damage_team != dteam || (m.flags & kUnitDead)) continue;
                     DamageRequest r2 = r;
                     r2.victim = m.id;
                     r2.amount = unit_max_hull(m) * r.amount / self_max;
@@ -3977,27 +4025,10 @@ void CombatSystem::flush() {
             break;
         }
     if (any_dead) {
-        // s78f t07: a dead team_leader hands the role to its team's first live member (ascending id), so the team keeps
-        // its head (TeamTargeting copy, Mod_Multiplier squad rule) while any member lives. [port] The original's head is
-        // the container, which outlives its members; here a member stands in for it (team_head).
-        for (const Unit& d : units_) {
-            if (!(d.flags & kUnitDead) || d.team == 0 || !d.team_leader) continue;
-            Unit* heir = nullptr;
-            bool led = false;
-            for (Unit& m : units_) {
-                if ((m.flags & kUnitDead) || m.team != d.team) continue;
-                if (m.team_leader) {
-                    led = true;
-                    break;
-                }
-                if (!heir) heir = &m;
-            }
-            if (led || !heir) continue;
-            heir->team_leader = 1;
-            // team_head() between ticks (host reads of current_target) sees the heir at once; phase A rebuilds the list.
-            const auto it = std::lower_bound(team_heads_.begin(), team_heads_.end(), std::make_pair(d.team, ObjectId{-1}));
-            if (it != team_heads_.end() && it->first == d.team) it->second = heir->id;
-        }
+        // s78f t07: a dead team_leader hands the role over (kill() already did it for deaths through Die; this covers
+        // remove_unit and saves taken between the two).
+        for (const Unit& d : units_)
+            if (d.flags & kUnitDead) hand_over_team(d);
         flush_hps_.clear();
         size_t w = 0;
         for (size_t i = 0; i < units_.size(); ++i) {

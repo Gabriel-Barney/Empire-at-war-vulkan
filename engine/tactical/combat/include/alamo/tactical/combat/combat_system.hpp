@@ -776,6 +776,9 @@ struct UnitSpawn {
     Vec3 facing{1.0f, 0.0f, 0.0f};
     uint32_t team = 0;              // squad / team container (0 = none)
     bool team_leader = false;       // Mod_Multiplier squad-minimum rule
+    // s78g t06 (TACTICAL_COMBAT §3.6 step 2): the team the Take_Damage redirect / share rules count when `team` is 0 (a
+    // space squadron member: its team takes no other combat team rule in this port). 0 = `team`.
+    uint32_t damage_team = 0;
     ObjectId damage_parent = kNoObject;  // parent container that takes this unit's damage [M]
     float health_fraction = 1.0f;
     uint32_t flags = 0;
@@ -1380,6 +1383,7 @@ private:
         int32_t owner = -1;
         uint32_t team = 0;
         uint8_t team_leader = 0;
+        uint32_t damage_team = 0;  // s78g t06: Take_Damage step 2's team (= team, or UnitSpawn::damage_team); not hashed
         ObjectId damage_parent = kNoObject;
         uint32_t flags = 0;
         Vec3 pos, last_pos, facing;
@@ -1607,6 +1611,9 @@ private:
     // OI tactical (team targeting, TACTICAL_COMBAT 2.3 / 2.4): the unit's squad "container" - the unit whose id is
     // its team id when that is a combat unit, else the team's team_leader member; nullptr when none / itself.
     const Unit* team_head(const Unit& u) const;
+    // s78g t06: a dying team_leader hands the head role (and the team's targeting record) to its team's first live
+    // member at once, so the team is never without a head while a member lives (the original's head is the container).
+    void hand_over_team(const Unit& dead);
     float target_extent(const Unit& t, Vec3 from) const;  // OI tactical: TACTICAL_GAPS 3.1 footprint half-extent E
     // TACTICAL_GAPS 3.1 slot 43 range geometry: XY distance from `from` to the aim point and the slack E.
     void range_geometry(const Unit& t, Vec3 from, float& d, float& E) const;

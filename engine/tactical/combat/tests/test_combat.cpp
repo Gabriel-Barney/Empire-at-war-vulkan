@@ -3034,7 +3034,7 @@ void test_save_rejects() {
     bad = saved;
     put_u32_at(bad, 0, 99);
     CHECK(rejected(bad));
-    for (const uint32_t v : {9u, 11u}) {  // s78f: the version before (t03 / t04 took 10) and after the current one
+    for (const uint32_t v : {10u, 12u}) {  // s78g t06: the version before (s78f took 10; damage_team = 11) and after
         bad = saved;
         put_u32_at(bad, 0, v);
         CHECK(rejected(bad));
@@ -5296,6 +5296,146 @@ void test_targeting_t08() {
     }
 }
 
+void test_scan_player_order() {
+    // s78g t04 (TACTICAL_COMBAT §2.4 correction, §2.10 item 4): Scan_Player restarts the local best at each visited
+    // player, so the pick is the best of the LAST visited player (cyclic from the random start) with a candidate. Player 1
+    // has a capital (priority 1, closer), player 2 a fighter (priority 3, farther): one shared best would always take the
+    // capital; per player, the fighter wins whenever player 2 is visited after player 1 (start 0 or 1 of 3).
+    uint32_t capital = 0, fighter = 0, same = 0;
+    for (uint32_t seed = 1; seed <= 24; ++seed) {
+        for (const bool split : {true, false}) {
+            World w(3);
+            w.rng = SimRng(seed);
+            PrioritySet ps;
+            ps.attack.push_back({PriorityEntry::Kind::Category, -1, kCatCapital, 1.0f});
+            ps.attack.push_back({PriorityEntry::Kind::Category, -1, kCatFighter, 3.0f});
+            w.data.priority_sets.push_back(ps);
+            w.data.projectiles.push_back(ProjectileDesc{});
+            UnitDesc a;
+            a.tactical_health = 100.0f;
+            a.max_attack_distance = 1000.0f;
+            a.weapon_projectile = 0;
+            a.weapon_recharge = 100.0f;
+            a.priority_set = 0;
+            const uint32_t ad = push_unit(w.data, a);
+            UnitDesc c;
+            c.tactical_health = 100.0f;
+            c.radius = 10.0f;
+            c.category_mask = kCatCapital;
+            const uint32_t cd = push_unit(w.data, c);
+            c.category_mask = kCatFighter;
+            const uint32_t fd = push_unit(w.data, c);
+            w.make({}, {PlayerInfo{}, PlayerInfo{}, PlayerInfo{}});
+            w.add(1, ad, 0, Vec3{0, 0, 0});
+            w.add(2, cd, 1, Vec3{100, 0, 0});
+            w.add(3, fd, split ? 2 : 1, Vec3{500, 0, 0});
+            w.tick();
+            const ObjectId t = w.sys->auto_target(1);
+            CHECK(t == 2 || t == 3);
+            if (!split) {
+                same += t == 2 ? 1u : 0u;  // one player: the ordinary rule (lower score) picks the capital
+            } else {
+                (t == 2 ? capital : fighter) += 1;
+            }
+        }
+    }
+    CHECK(same == 24);
+    CHECK(capital > 0 && fighter > 0 && fighter > capital);
+    std::printf("scan player order: capital %u, fighter %u of 24 split scans\n", capital, fighter);
+}
+
+void test_team_handover_and_damage() {
+    // s78g t06 (TACTICAL_COMBAT §3.1.1 "Team targeting copies", A1_READINGS §29.6): the original's team head is the
+    // container, which a member's death does not touch. The port's stand-in team_leader hands over at the death itself:
+    // the next member (ascending id) leads at once and keeps the team's target and state (no headless rest of the tick).
+    {
+        World w;
+        ProjectileDesc p;
+        p.max_speed = 20.0f;
+        w.data.projectiles.push_back(p);
+        UnitDesc s;
+        s.tactical_health = 100.0f;
+        s.max_attack_distance = 300.0f;
+        s.weapon_projectile = 0;
+        s.weapon_recharge = 0.2f;
+        s.turn_rate = 10.0f;
+        push_unit(w.data, s);
+        UnitDesc t;
+        t.tactical_health = 1.0e7f;
+        t.radius = 5.0f;
+        push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        w.add(2, 1, 1, Vec3{200, 5, 0});
+        for (const ObjectId id : {ObjectId{10}, ObjectId{11}, ObjectId{12}}) {
+            UnitSpawn sp;
+            sp.id = id;
+            sp.desc = 0;
+            sp.owner = 0;
+            sp.position = Vec3{0, static_cast<float>(id - 10) * 10.0f, 0};
+            sp.team = 7;
+            sp.team_leader = id == 10;
+            CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+            TreeMembership m;
+            m.owner = 0;
+            CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(sp.position, 1.0f), 1u, m));
+        }
+        w.tick();
+        CHECK(w.sys->auto_target(10) == 2 && w.sys->current_target(12) == 2 && w.sys->targeting_state(10) == 4);
+        const uint32_t due = w.sys->next_scan(10);
+        w.sys->kill_unit(10, kNoObject, kKindNormal, w.frame);  // between ticks, not flushed yet
+        // At once: 11 leads with the team's target, state and scan timer; 12 reads 11's target.
+        CHECK(w.sys->auto_target(11) == 2 && w.sys->current_target(11) == 2 && w.sys->current_target(12) == 2);
+        CHECK(w.sys->targeting_state(11) == 4 && w.sys->next_scan(11) == due);
+        w.tick();
+        CHECK(!w.sys->alive(10) && w.sys->current_target(11) == 2 && w.sys->current_target(12) == 2);
+        CHECK(w.sys->auto_target(12) == kNoObject && w.sys->targeting_state(12) == 4);
+    }
+    // §3.6 step 2 has no mode gate: a space squadron member (team 0, damage_team = its squadron) with
+    // Redirect_Damage_To_Teammates passes amount / (n - 1) to each other live member and takes none itself.
+    {
+        World w;
+        UnitDesc v;
+        v.tactical_health = 1000.0f;
+        const uint32_t plain = push_unit(w.data, v);
+        v.redirect_damage_to_teammates = true;
+        const uint32_t redirect = push_unit(w.data, v);
+        w.make();
+        auto add = [&](ObjectId id, uint32_t desc, uint32_t damage_team) {
+            UnitSpawn sp;
+            sp.id = id;
+            sp.desc = desc;
+            sp.owner = 0;
+            sp.position = Vec3{static_cast<float>(id) * 50.0f, 0, 0};
+            sp.damage_team = damage_team;
+            CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+        };
+        add(10, redirect, 9);
+        add(11, plain, 9);
+        add(12, plain, 9);
+        add(13, plain, 0);   // control: no team, takes 50 itself
+        add(14, redirect, 0);  // no team: the rule does not apply
+        const float h0 = w.sys->health(10);
+        auto hit = [&](ObjectId id, float amount) {
+            DamageRequest r;
+            r.victim = id;
+            r.amount = amount;
+            w.sys->take_damage(r, 100);
+        };
+        hit(13, 50.0f);
+        const float loss = h0 - w.sys->health(13);
+        CHECK(loss > 0.0f);
+        hit(10, 100.0f);
+        CHECK_F(w.sys->health(10), h0);
+        CHECK_F(w.sys->health(11), h0 - loss);
+        CHECK_F(w.sys->health(12), h0 - loss);
+        hit(14, 50.0f);
+        CHECK_F(w.sys->health(14), h0 - loss);
+    }
+}
+
 void test_team_targeting_copy() {
     // s78f t03 (§3.1.1 "Team targeting copies"), land: the members of a ground team have no TARGETING. The head (here the
     // team_leader member standing in for the container) scans; the members read its target, get its state raw, any
@@ -5547,6 +5687,8 @@ int main(int argc, char** argv) {
     test_targeting_states();         // s78f t03
     test_targeting_t08();            // s78f t08
     test_team_targeting_copy();      // s78f t03
+    test_team_handover_and_damage();  // s78g t06
+    test_scan_player_order();         // s78g t04
     test_charge_up_slew();           // s78f t04
     test_hardpoint_aim_target_bones();  // S8 t27
     test_scan_range_query();

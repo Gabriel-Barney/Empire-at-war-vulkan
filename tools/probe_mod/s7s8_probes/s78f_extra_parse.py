@@ -91,24 +91,31 @@ def window(per, a, b):
     return tot, b - a, tot / float(b - a)
 
 
-def ts_hist(st, ids, a, b):
+def frame_hist(st, ids, a, b, key):
+    """Frames per value of key(sample) in [a, b), summed over ids. The reader writes an ST line only when something
+    changes, so a value holds from its sample until the next one (also from a sample before a). Counting samples
+    instead (the s78f version) undercounted long steady states, e.g. state 3 / 4 of held attackers (s78g t03)."""
     h = collections.Counter()
     for i in ids:
+        cur, cf = None, None
         for d in st.get(i, []):
             f = int(d['frame'])
-            if a <= f < b:
-                h[d.get('ts', '-')] += 1
+            if f >= b:
+                break
+            if cur is not None and f > a:
+                h[key(cur)] += f - max(cf, a)
+            cur, cf = d, f
+        if cur is not None and b > max(cf, a):
+            h[key(cur)] += b - max(cf, a)
     return dict(h)
+
+
+def ts_hist(st, ids, a, b):
+    return frame_hist(st, ids, a, b, lambda d: d.get('ts', '-'))
 
 
 def anim_hist(st, ids, a, b):
-    h = collections.Counter()
-    for i in ids:
-        for d in st.get(i, []):
-            f = int(d['frame'])
-            if a <= f < b:
-                h[d.get('anim', '-').split(':')[0]] += 1
-    return dict(h)
+    return frame_hist(st, ids, a, b, lambda d: d.get('anim', '-').split(':')[0])
 
 
 def report(modes, out):

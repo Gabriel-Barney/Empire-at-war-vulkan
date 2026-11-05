@@ -807,6 +807,7 @@ function S78_ScnEscort()
 			{ at = 60, when = function(s) return s.marks.moved and S78_Frame() >= s.marks.moved + 600 end,
 				run = function(s)
 					local x, y = S78_XYZ(s.objs.carrier)
+					s.dx, s.dy = x, y
 					S78_Kill("carrier")
 					if S78_Valid(s.objs.carrier) then
 						S78_Despawn("carrier")
@@ -814,19 +815,27 @@ function S78_ScnEscort()
 					S78_Mark("carrier_dead", "x=" .. S78_Num(x) .. "|y=" .. S78_Num(y) .. "|escorts=" ..
 						S78_Count(S78_Escorts()))
 				end },
+			-- s78g t05: the intruder goes 700 from the death point (the guarded position), not from the escorts'
+			-- centroid (in the s78f t12 run the escorts had flown 4000 away, so the intruder tested nothing)
 			{ at = 90, when = function(s) return s.marks.carrier_dead and S78_Frame() >= s.marks.carrier_dead + 1200 end,
 				run = function(s)
 					local cx, cy = S78_Centroid(S78_Escorts())
+					local bx, by = s.dx, s.dy
+					local how = "death_point"
+					if type(bx) ~= "number" then
+						bx, by, how = cx, cy, "centroid"
+					end
 					local pos = nil
-					if cx then
+					if type(bx) == "number" then
 						pos = S78_Try("Create_Position", function()
 							local p = S78_Pts().pts.esc
 							local ux, uy = (p and p.ux) or 1.0, (p and p.uy) or 0.0
-							return Create_Position(cx + 700 * ux, cy + 700 * uy, 0)
+							return Create_Position(bx + 700 * ux, by + 700 * uy, 0)
 						end)
 					end
-					S78_Rec("MARK", "scn=" .. s.name .. "|mark=guard_point|x=" .. S78_Num(cx) .. "|y=" .. S78_Num(cy))
-					S78_Victim("intruder", S78_Spawn("intruder", "Tartan_Patrol_Cruiser", pos, cx and "centroid" or "none",
+					S78_Rec("MARK", "scn=" .. s.name .. "|mark=guard_point|x=" .. S78_Num(cx) .. "|y=" .. S78_Num(cy) ..
+						"|dx=" .. S78_Num(s.dx) .. "|dy=" .. S78_Num(s.dy))
+					S78_Victim("intruder", S78_Spawn("intruder", "Tartan_Patrol_Cruiser", pos, pos and how or "none",
 						S78_VICTIM_PLAYER), false)
 					S78_Mark("intruder")
 				end },
@@ -836,6 +845,35 @@ function S78_ScnEscort()
 					S78_Mark("intruder_gone")
 				end },
 		},
+		-- s78g t05: the launched escorts belong to the AI player; keep its plans off them (Prevent_AI_Usage on every
+		-- new escort, checked every 15 frames) and log their centroid every 90 frames (Lua-side fallback for the
+		-- parser). In the s78f t12 run they flew 4000 away toward the AI's own start after the carrier died.
+		tick = function(s, rel)
+			if rel < (s.esc_next or 0) then
+				return
+			end
+			s.esc_next = rel + 15
+			s.esc_seen = s.esc_seen or {}
+			local list = S78_Escorts()
+			local newn = 0
+			for i, o in ipairs(list) do
+				local id = S78_ObjId(o)
+				if not s.esc_seen[id] then
+					s.esc_seen[id] = true
+					newn = newn + 1
+					pcall(function() o.Prevent_AI_Usage(true) end)
+				end
+			end
+			if newn > 0 then
+				S78_Rec("COUNT", "scn=" .. s.name .. "|what=escorts_held|new=" .. newn .. "|total=" .. S78_Count(list))
+			end
+			if rel >= (s.esc_cnext or 0) then
+				s.esc_cnext = rel + 90
+				local cx, cy = S78_Centroid(S78_Escorts(4, 6))
+				S78_Rec("COUNT", "scn=" .. s.name .. "|what=escort_centroid|n=" .. S78_Count(S78_Escorts(4, 6)) ..
+					"|x=" .. S78_Num(cx) .. "|y=" .. S78_Num(cy))
+			end
+		end,
 	}
 end
 
@@ -1184,7 +1222,8 @@ end
 -- ATTACKIDLE), V (victims only, no attackers: the victims' own draws). The parser compares the on / off steps.
 S78_IDLE47V_CYCLES = 5
 
-function S78_Idle47VPhase(steps, name, tname, t0)
+-- noauto (s78g): abilities whose autofire is switched off on each attacker (Dark_Trooper_PhaseII: JET_PACK)
+function S78_Idle47VPhase(steps, name, tname, t0, noauto)
 	table.insert(steps, { at = t0, run = function(s)
 		for k = 1, 6 do
 			S78_Despawn("i" .. k)
@@ -1199,6 +1238,9 @@ function S78_Idle47VPhase(steps, name, tname, t0)
 					local f = S78_At("site", (k - 1) * 90, 600)
 					S78_Order("i" .. k, "face", function() u.Face_Immediate(f) end)
 					pcall(function() u.Suspend_Locomotor(true) end)
+					for j, ab in ipairs(noauto or {}) do
+						S78_Setup("i" .. k, u, { { "Set_Single_Ability_Autofire", ab, false } })
+					end
 				end
 			end
 		end
@@ -1273,12 +1315,247 @@ function S78_ScnGuardMove()
 	}
 end
 
+-- ---- s78g scenarios (2026-11-05) -----------------------------------------------------------------------------------
+
+-- s78g t01: SPMAT range edge, again (LOB_SOLVER sec. 9). SPMAT_EDGE suspended the deployed walker's locomotor: the
+-- first Attack_Target sent it to 0x1a (undeploying) and it stuck there, so nothing fired. Here every window has a
+-- fresh SPMAT_Walker, no Suspend_Locomotor: faced down the strip, ordered to attack a held T4B at 275 (the s78f t01
+-- set-up that fired) and deployed; at +150 the 275 tank is despawned and a held T4B at d on the same line (in front
+-- of the walker) gets an explicit Attack_Target. 450 frames per window.
+S78_EDGE2_D = { 500, 530, 540, 544, 546, 548, 550, 553, 560 }
+S78_EDGE2_WIN = 450
+
+function S78_Edge2Window(steps, i)
+	local t0 = (i - 1) * S78_EDGE2_WIN
+	local sp, aim, ev = "sp" .. i, "aim" .. i, "ev" .. i
+	table.insert(steps, { at = t0, run = function(s)
+		if i > 1 then
+			S78_Despawn("sp" .. (i - 1))
+			S78_Despawn("aim" .. (i - 1))
+			S78_Despawn("ev" .. (i - 1))
+		end
+		local w, how = S78_At("site", 0, 0)
+		local u = S78_Spawn(sp, "SPMAT_Walker", w, how, PlayerObject)
+		S78_Attacker(sp, u)
+		if u then
+			local f = S78_At("site", 300, 0)
+			if not S78_Order(sp, "face_immediate", function() u.Face_Immediate(f) end) then
+				S78_Order(sp, "turn_to_face", function() u.Turn_To_Face(f) end)
+			end
+		end
+	end })
+	table.insert(steps, { at = t0 + 6, run = function(s)
+		local w, how = S78_At("site", 275, 0)
+		local v = S78_Spawn(aim, "T4B_Tank", w, how, S78_VICTIM_PLAYER)
+		S78_Victim(aim, v, false)
+		if v and s.objs[sp] then
+			S78_Order(sp, "attack_aim", function() s.objs[sp].Attack_Target(v) end)
+		end
+		S78_Mark("aim" .. i)
+	end })
+	table.insert(steps, { at = t0 + 21, run = function(s) S78_Act(sp, "deploy" .. i, "DEPLOY", "bool", true) end })
+	table.insert(steps, { at = t0 + 150, run = function(s)
+		S78_Despawn(aim)
+		local d = S78_EDGE2_D[i]
+		local w, how = S78_At("site", d, 0)
+		local v = S78_Spawn(ev, "T4B_Tank", w, how, S78_VICTIM_PLAYER)
+		S78_Victim(ev, v, false)
+		if v and s.objs[sp] then
+			S78_Order(sp, "attack_ev", function() s.objs[sp].Attack_Target(v) end)
+		end
+		S78_Mark("win" .. i, "d=" .. d)
+	end })
+end
+
+function S78_ScnSpmatEdge2()
+	local steps = {}
+	for i = 1, table.getn(S78_EDGE2_D) do
+		S78_Edge2Window(steps, i)
+	end
+	return { name = "SPMAT_EDGE2", dur = table.getn(S78_EDGE2_D) * S78_EDGE2_WIN, steps = steps }
+end
+
+-- s78g t04 control (coordinator 2026-11-05): an undeployed SPMAT, no DEPLOY call, ordered to attack a held T4B at
+-- 275; window H with a Hostile-owned tank, window E with one of the human's faction, same frame offsets (600 each,
+-- fresh walker per window). Answers "does the owner of the victim matter" without the deploy transition.
+function S78_SpmatCtrlWindow(steps, k, fac, t0)
+	local sp, v = "csp" .. k, "cv" .. k
+	table.insert(steps, { at = t0, run = function(s)
+		if k > 1 then
+			S78_Despawn("csp" .. (k - 1))
+			S78_Despawn("cv" .. (k - 1))
+		end
+		local w, how = S78_At("site", 0, 0)
+		local u = S78_Spawn(sp, "SPMAT_Walker", w, how, PlayerObject)
+		S78_Attacker(sp, u)
+		if u then
+			local f = S78_At("site", 300, 0)
+			if not S78_Order(sp, "face_immediate", function() u.Face_Immediate(f) end) then
+				S78_Order(sp, "turn_to_face", function() u.Turn_To_Face(f) end)
+			end
+		end
+	end })
+	table.insert(steps, { at = t0 + 30, run = function(s)
+		local p = S78_Try("Find_Player:" .. fac, function() return Find_Player(fac) end)
+		local w, how = S78_At("site", 275, 0)
+		local t = S78_Spawn(v, "T4B_Tank", w, how, p)
+		S78_Victim(v, t, false)
+		if t and s.objs[sp] then
+			S78_Order(sp, "attack_" .. string.lower(fac), function() s.objs[sp].Attack_Target(t) end)
+		end
+		S78_Mark("ctrl" .. k, "fac=" .. fac .. "|player=" .. (p and "1" or "0"))
+	end })
+end
+
+function S78_ScnSpmatCtrl()
+	local steps = {}
+	S78_SpmatCtrlWindow(steps, 1, "Hostile", 0)
+	S78_SpmatCtrlWindow(steps, 2, S78_CFG.human_faction or "Empire", 600)
+	return { name = "SPMAT_CTRL", dur = 1200, steps = steps }
+end
+
+-- s78g t03: slot 47 with-clip control. Dark_Trooper_PhaseII (single GroundVehicle, own TARGETING + WEAPON, no TURRET,
+-- no Deploys, range 180; model EI_DARKTROOPER_TWO has ATTACKIDLE_00 / _01 and ATTACK clips) replaces the
+-- Rebel_Infiltrator. Same toggle as IDLE47V: phases P (Pod_Walker, no ATTACKIDLE), D (Dark_Trooper_PhaseII, JET_PACK
+-- autofire off), V (victims only).
+function S78_ScnIdle47W()
+	local steps = {}
+	local len = (S78_IDLE47V_CYCLES + 1) * 300
+	S78_Idle47VPhase(steps, "P", "Pod_Walker", 0)
+	S78_Idle47VPhase(steps, "D", "Dark_Trooper_PhaseII", len, { "JET_PACK" })
+	S78_Idle47VPhase(steps, "V", nil, 2 * len)
+	return { name = "IDLE47W", dur = 3 * len, steps = steps }
+end
+
+-- s78g t05: first shot after a late spawn, irregular spawn gaps. The s78f t12 REINF run gave delays 18 / 29 / 41 / 52
+-- with first shots 161 / 162 / 161 frames apart (spawns 150 apart): a shared ~161-frame clock, not a per-unit random
+-- delay? Six MZ8s at gaps 200 / 170 / 250 / 140 / 290 (not multiples of 161), each attacking the held victim at once.
+S78_REINF2_AT = { 30, 230, 400, 650, 790, 1080 }
+
+function S78_ScnReinf2()
+	local steps = { { at = 0, run = function(s)
+		local w, how = S78_At("site", 200, 0)
+		S78_Victim("victim", S78_Spawn("victim", "T4B_Tank", w, how, S78_VICTIM_PLAYER), false)
+	end } }
+	for k = 1, table.getn(S78_REINF2_AT) do
+		local kk = k
+		table.insert(steps, { at = S78_REINF2_AT[kk], run = function(s)
+			local tag = "mz8_" .. kk
+			local w, how = S78_At("site", 0, (kk - 3.5) * 70)
+			local u = S78_Spawn(tag, "MZ8_Pulse_Cannon_Tank", w, how, PlayerObject)
+			S78_Attacker(tag, u)
+			if u then
+				S78_Order(tag, "attack_victim", function() u.Attack_Target(s.objs.victim) end)
+			end
+		end })
+	end
+	return { name = "REINF2", dur = 1380, steps = steps }
+end
+
+-- s78g t02 (space, orders by hand): guard ordered while G moves, then a shift waypoint while it still moves
+-- (FIGHTER_FLYING sec. 4.10 B 3 / E). At the map centre ('muz', one click on the minimap centre, far from both fleets
+-- and from the map edge): a human-owned Broadside_Class_Cruiser G (no hangar; max speed 1.8 x 1.2 = 2.16 / frame)
+-- shuttles along the line through the centre perpendicular to the start line (side +1500 <-> -1500, about 1400 frames
+-- a leg; the next leg is ordered 250 before the end of the current one, so G never stops) and a human-owned
+-- TIE_Fighter_Squadron waits at the centre. Game_Messages say when to right-click G (guard) and when to shift-right-
+-- click a waypoint, twice; G stops at +3900. A COUNT gh record every 30 frames has G's and the squadron's Lua position.
+S78_GH_LEG = 1500
+
+function S78_SiteXY(site, along, side)
+	local m = S78_Pts()
+	local p = m.pts[site]
+	if not (m.points_ok and p) then
+		return nil
+	end
+	local ux, uy = p.ux or 1.0, p.uy or 0.0
+	return p.x + along * ux - side * uy, p.y + along * uy + side * ux
+end
+
+function S78_GhNextLeg(s, rel)
+	s.gh_leg = (s.gh_leg or 0) + 1
+	local side = S78_GH_LEG
+	if math.mod(s.gh_leg, 2) == 0 then
+		side = -S78_GH_LEG
+	end
+	local w = S78_At("muz", 0, side)
+	s.gh_tx, s.gh_ty = S78_SiteXY("muz", 0, side)
+	s.gh_t0 = rel
+	S78_Order("g", "leg" .. s.gh_leg, function() s.objs.g.Move_To(w) end)
+end
+
+function S78_GhMsg(s, id, mark)
+	S78_Msg(id)
+	S78_Mark(mark)
+end
+
+function S78_ScnGuardHand()
+	return {
+		name = "GUARD_HAND",
+		dur = 4500,
+		steps = {
+			{ at = 0, run = function(s)
+				local hp = S78_Try("Find_Player:human", function() return Find_Player(S78_CFG.human_faction) end)
+				local wg, hg = S78_At("muz", 0, -300)
+				local g = S78_Spawn("g", "Broadside_Class_Cruiser", wg, hg, hp)
+				if g then
+					pcall(function() g.Make_Invulnerable(true) end)
+				end
+				local ws, hs = S78_At("muz", -300, 0)
+				local sq = S78_Spawn("squad", "TIE_Fighter_Squadron", ws, hs, hp)
+				if sq then
+					pcall(function() sq.Make_Invulnerable(true) end)
+					pcall(function() Point_Camera_At(sq) end)
+				end
+				S78_GhMsg(s, "TEXT_S78_GUARD_FIND", "find")
+			end },
+			{ at = 30, run = function(s)
+				S78_GhNextLeg(s, 30)
+				S78_Mark("g_move")
+			end },
+			{ at = 450, run = function(s) S78_GhMsg(s, "TEXT_S78_GUARD_GO", "guard_go") end },
+			{ at = 1350, run = function(s) S78_GhMsg(s, "TEXT_S78_SHIFT_GO", "shift_go") end },
+			{ at = 2250, run = function(s) S78_GhMsg(s, "TEXT_S78_GUARD_GO2", "guard_go2") end },
+			{ at = 3000, run = function(s) S78_GhMsg(s, "TEXT_S78_SHIFT_GO2", "shift_go2") end },
+			{ at = 3900, run = function(s)
+				s.gh_stopped = true
+				local g = s.objs.g
+				if not S78_Order("g", "stop", function() g.Stop() end) then
+					local x, y, z = S78_XYZ(g)
+					S78_Order("g", "stop_move_here", function() g.Move_To(Create_Position(x, y, z or 0)) end)
+				end
+				S78_GhMsg(s, "TEXT_S78_G_STOP", "g_stop")
+			end },
+		},
+		tick = function(s, rel)
+			local g = s.objs.g
+			if not S78_Valid(g) then
+				return
+			end
+			local gx, gy = S78_XYZ(g)
+			if not s.gh_stopped and s.gh_leg and type(gx) == "number" and type(s.gh_tx) == "number" then
+				local d = math.sqrt((gx - s.gh_tx) * (gx - s.gh_tx) + (gy - s.gh_ty) * (gy - s.gh_ty))
+				if d < 250 or rel - s.gh_t0 > 1800 then
+					S78_GhNextLeg(s, rel)
+				end
+			end
+			if rel >= (s.gh_next or 0) then
+				s.gh_next = rel + 30
+				local sx, sy = S78_XYZ(s.objs.squad)
+				S78_Rec("COUNT", "scn=" .. s.name .. "|what=gh|gx=" .. S78_Num(gx) .. "|gy=" .. S78_Num(gy) .. "|sx=" ..
+					S78_Num(sx) .. "|sy=" .. S78_Num(sy) .. "|leg=" .. tostring(s.gh_leg))
+			end
+		end,
+	}
+end
+
 S78_SCN_BY_NAME = {
 	SPMAT = S78_ScnSpmat, ATAT = S78_ScnAtat, MDU = S78_ScnMdu, STICKY = S78_ScnSticky, DT3 = S78_ScnDt3,
 	REINF = S78_ScnReinf, MUZZLE_LAND = S78_ScnMuzzleLand, MAGNEPULSE = S78_ScnMagnepulse, BUNKER = S78_ScnBunker,
 	IDLE47 = S78_ScnIdle47, MUZZLE_SPACE = S78_ScnMuzzleSpace, SQUAD = S78_ScnSquad, ESCORT = S78_ScnEscort,
 	GUARD_SHIFT = S78_ScnGuardShift, BUNKER2 = S78_ScnBunker2, IDLE47T = S78_ScnIdle47T,
 	SPMAT_EDGE = S78_ScnSpmatEdge, IDLE47V = S78_ScnIdle47V, GUARD_MOVE = S78_ScnGuardMove,
+	SPMAT_EDGE2 = S78_ScnSpmatEdge2, SPMAT_CTRL = S78_ScnSpmatCtrl, IDLE47W = S78_ScnIdle47W, REINF2 = S78_ScnReinf2,
+	GUARD_HAND = S78_ScnGuardHand,
 }
 
 function S78_Scenarios()
@@ -1505,8 +1782,9 @@ function S78_Tick(src)
 end
 
 function S78_FindVictimPlayer()
-	-- the human's faction first (s78f 2026-11-05: AI units never targeted "Hostile"-owned victims, even after an
-	-- explicit Attack_Target; the human is the AI's real enemy)
+	-- the human's faction first. Either faction works: the s78f "AI never targets Hostile-owned victims" note was
+	-- wrong (s78g t04, TACTICAL_COMBAT sec. 2.10: Pod_Walkers did target Hostile T4Bs; the IDLE47 parser missed the
+	-- sparse state samples and the SPMAT's DEPLOY call changed its state). Kept as is for continuity with t12.
 	local names = { S78_CFG.human_faction or "Empire", "Hostile", "Underworld", "Pirates" }
 	for i, n in ipairs(names) do
 		if string.upper(n) ~= S78_CFG.faction then
