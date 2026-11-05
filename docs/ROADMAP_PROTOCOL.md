@@ -105,6 +105,20 @@ A preset is the recommended model and effort level for a group: `xhigh` Opus 5.5
 `roadmap-store/` is its own git repository, and `write` pushes to its remote when one is set. Another account clones it and
 updates the same way (`roadmap-store/README.md`). Until a remote is set, updates stay on this machine.
 
+### Both copies on every update (Gabriel, 2026-11-04)
+
+Every roadmap update, by any agent or account, updates **both** copies of the roadmap:
+
+1. **The GitHub copy**: `python roadmap-store/roadmap_store.py write <file>` writes `roadmap-store/data/` and pushes the store repository
+   (`Empire-Vulkan-Brenach`). Check with `sync` (prints `in sync with origin/main`).
+2. **The local copy**: the same `write` regenerates `ROADMAP.html` in the project root and `docs/ROADMAP.html` (data block). Both are
+   tracked in the engine repository, so they show as modified after the write: **commit them in the same branch / PR as the work**.
+   Never `git checkout` them away to get a clean tree, and never leave them out of the PR: the local page is the main roadmap on this
+   device, and a stale one shows work as open that is already done. In a worktree, run `render` once before committing if the
+   pages look older than the store.
+
+An update that reached only one of the two copies is unfinished.
+
 ### Keeping the local page current (Gabriel, 2026-10-30)
 
 When `ROADMAP.html` changes in the GitHub store repository (another account or machine wrote to the roadmap), the local
