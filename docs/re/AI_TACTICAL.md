@@ -642,6 +642,24 @@ Its block rule `ability_block_rule` already matches. What to change:
 Nothing else in the dispatch is unclear. The open item is who removes the dummy of ids 50 / 67 / 71 / 73 / 74
 [L]. The port's `dummy_lifetime` 900 frames is a [port] stand-in.
 
+**In-game probe of the DEPLOY block (s78f t01, 2026-11-05)** [H for what was seen]. Source:
+`tools/probe_mod/s7s8_probes/out/20261105-051443` and `-055142` (SPMAT). An AI-owned `SPMAT_Walker` on Geonosis was
+driven from the free-store script:
+- `Activate_Ability("DEPLOY", true)` on an undeployed walker returned a block, which finished **45 frames** later.
+- In memory the locomotor went 0x18 at once (clip 25 = Deploy, at rate 2.0) and 0x19 45 frames later, the frame
+  the block finished.
+- `("DEPLOY", false)` from deployed returned a block that finished after **240 frames**. In the first run the
+  locomotor stayed at 0x19 for most of that time.
+- `("DEPLOY", true)` again right after (state already wanted) returned **nil** (no block), as the "equal → nil" row
+  above says.
+- `("DEPLOY", false)` 12 frames later returned a block that finished in **12 frames**.
+- An `Attack_Target` on a deployable SPMAT (`Auto_Deploys`) started the Deploy clip 3 frames after the order. It
+  reached 0x19 and targeting state 3 at +48, state 4 and the first grenade at +66 (LOB_SOLVER §9).
+
+The free-store script stopped producing records at the AT-AT scenario's first DEPLOY in both land runs (`ret=nil`,
+then silence for the rest of the battle). [M] Something in that scenario blocks the free-store thread for good,
+not an error: the event handlers run in pcall and recorded nothing. Run the AT-AT scenario last.
+
 ### 7.3.4 `LandTaskForce.Fire_Special_Weapon(type_name, target)` with a position target (s78f t04, 2026-11-03)
 
 Body 0x6eb7f0 [H unless tagged]. It extends SCRIPT_GAPS §1.4. It returns no block status.

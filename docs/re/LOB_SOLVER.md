@@ -373,6 +373,21 @@ a remote bomb sticks to an own unit only when that unit is the target.
   TARGETING behaviour, so [M] it probably holds its aim until the next order, and the next order's slew starts from
   there.
 
+  **In-game probe (s78f t09, 2026-11-05; `tools/probe_mod/s7s8_probes/out/20261105-051443`, MAGNEPULSE)** [H for
+  what was seen]. `Ground_Magnepulse_Cannon` on Geonosis, ordered by Lua `Fire_Special_Weapon` each time
+  `Is_Ability_Ready` turned true (30 s recharge), at a T4B 800 east (va), then 800 west (vb), then vb again. Memory
+  frames from the order to the `Magnepulse_Chargeup_Particles` object / to the `Magnepulse_Blob`:
+
+  | order | to charge-up | to blob | slew implied |
+  |---|---|---|---|
+  | va, turret at rest | 33 | 124 | ≈ 128° (32 × 4°) |
+  | vb, 180° away | 46 | 137 | 180° = 45 services |
+  | vb again | 2 | 94 | none |
+
+  So the delay is slew services + 1, then the charge-up of 90–92 frames; the turret **held its aim** for the 900
+  frames between the last two orders (the [M] above is now seen). The port's "aimed at once" starts the charge-up 45
+  frames early on a 180° swap, as said.
+
   *Port:* `CombatSystem::lobbing_service` treats the turret as aimed as soon as a solution exists ("[port] the turret
   angles are not modelled"). That starts the charge-up up to 45 frames early. Keep per-object turret angles
   (pitch, yaw), step them by `Turret_Rotate_Speed` per service toward (−θ or the geometric pitch, yaw relative to
@@ -827,8 +842,22 @@ Further differences found 2026-11-02 (input for S8 t06; port state as of 96c474e
 - Answered (s78f, 2026-11-03): the garrison pick inputs (animated world pose, x-axis yaw, ALT from 0x3ac290; §5.1);
   the order of the garrison pick, the solve and the draws, and whether the WEAPON service tests the arc (§5.2 "Order
   and draws"): the port's order matches retail.
-- [M] Where a garrisoned team container's obj +0x78 sits (the from point of its slot-44 solve), and whether a
-  garrisoned host's own services touch the members' targeting state (§5.2).
+- ~~[M] Where a garrisoned team container's obj +0x78 sits (the from point of its slot-44 solve)~~ — probed
+  (s78f t09, 2026-11-05, `out/20261105-060346`, BUNKER2) [M: inferred from the edge]. Three `Underworld_Merc_Squad`
+  teams garrisoned in `Garrison_Bunker_Rebel` at (3480, 4640) on flat ground, one mortal Empire T4B at a time at
+  distance d (150 frames each):
+
+  | d from the bunker centre | 120 | 150 | 165 | 170 | 175 | 180 … 280 |
+  |---|---|---|---|---|---|---|
+  | grenades thrown | 19 | 17 | 12 | 22 | 0 | 0 |
+
+  The edge lies between 170 and 175, around the merc's flat-ground reach of 172.5 (§4), **measured from the bunker
+  centre**. The grenades spawn at the bunker's four fire points ((3449.7, 4652.1), (3452.7, 4623.5),
+  (3464.0, 4668.3), (3470.0, 4610.0)), which are all nearer to the target, so the solve's from point is the
+  container / bunker position and only the launch uses the fire bones. No throws from 180 to 240 confirms that
+  `Targeting_Max_Attack_Distance` (240) does not apply (§4). An earlier pass at 300–440 (`out/20261105-051443`)
+  threw nothing, as expected. Still open: whether a garrisoned host's own services touch the members' targeting
+  state; the reader loses the members once they garrison.
 - Null-spawn bookkeeping of the other spawner users (Cluster_Bomb, lobbing superweapons, AttackAction) [M].
 - Answered 2026-11-02:
   - the MARKER removal path (§3.5, "MARKER removal");
@@ -841,13 +870,23 @@ Further differences found 2026-11-02 (input for S8 t06; port state as of 96c474e
   - If a `w_smallbomb` marker stays visible at the spot, the GUI does use command 57, and the marker persists
     after an interrupted toss.
   - If no marker ever appears, ground targeting is not offered.
+  - Probe, s78f t01 (2026-11-05, `out/20261105-045131`): on the Saboteur, pressing the Remote Bomb button and then
+    left-clicking bare ground only deselected the unit; no marker and no toss. That points to the last case (the
+    GUI offers no ground target) [M: one map, one unit]. The Saboteur did throw a bomb by itself at an enemy
+    (F 11958).
 - Whether the in-flight position can drift from Q in float (the closed form is evaluated in single precision; the
   hit is decided by the sweep, so a miss by a fraction of a unit only matters at the target's collision edge).
-- **probe** (optional): SPMAT firing at a target ~275 away on flat ground should show a ~64° arc landing in about
-  0.9 s; a target between 544 and 550 away should be scanned but not fired at.
-- **probe** (optional, s78f): order the Magnepulse cannon to fire behind itself (turret at rest). The charge-up
-  sound should start about 1.5 s after the order (45 frames of slew at 4°/frame), then the shot 3 s later. The next
-  order at the same spot (once recharged) should start its charge-up sound at once, if the turret held its aim.
+- ~~**probe**: SPMAT at ~275~~ — done (s78f t01, 2026-11-05, `out/20261105-055142`, SPMAT) [H for the arc]. The
+  SPMAT at (3480, 4640) was ordered to attack an Empire T4B at (3205, 4640). Six grenades came in pairs 9 frames
+  apart, about every 167 frames. Each one launched from the fire bone at (3458.2, 4640, z 55.8), 90 above the
+  ground. Per frame, dz falls by exactly 1.636 (G). Launch speed 19.23 = 0.64 × 30 (two 0.8 slow-down steps);
+  angle 56.4°; 24 frames to the ground. The solver from that bone to the target point (z −28.4, 253.2 away) gives:
+  30 → 77.3°, 24 → 70.0°, 19.2 → **56.5° / 23.9 frames**, 15.36 → no solution. So retail takes the slowest speed
+  that reaches and the high root, as in §2. The 64.3° / 26.4-frame table value assumed shooter and target at the
+  same height; the real launch bone is higher. Range edge, not settled: a T4B 547 away (from the walker centre)
+  was never acquired (targeting state 0 for 600 frames, no explicit order). The "530" control actually spawned 560
+  away. A scan-but-reject between 544 and 550 was not seen; [M] the deployed SPMAT may not auto-acquire there at all.
+- ~~**probe**: Magnepulse slew~~ — done (s78f t09, 2026-11-05): §3.6 "In-game probe".
 
 ## Address table
 | RVA | Name |

@@ -226,6 +226,9 @@ def extras(read, ob, known, team_how):
 
 # ---- recorder ------------------------------------------------------------------------------------------------------
 
+RVA_SYNC_RNG = 0xA13E24  # synced LCG state (image RVA of 0x140a13e24)
+
+
 class Log:
     def __init__(self, path):
         self.f = open(path, 'a', encoding='ascii', errors='replace')
@@ -258,6 +261,7 @@ class Recorder:
         self.mode_type = None
         self.frame = None
         self.gframe = None
+        self.last_rng = None
         self.records = set()
         self.scans = 0
         self.scan_thread = None
@@ -503,6 +507,12 @@ class Recorder:
             self.next_model_try = now + 1.0
             self.find_model()
         self.poll_watched()
+        # synced RNG state (TACTICAL_COMBAT sec. 0.2, LCG at 0x140a13e24): one line per change; the parser counts
+        # the LCG steps between samples (s78f t09 / t11 draw counts)
+        rs = self.p.u32(self.p.base + RVA_SYNC_RNG)
+        if rs is not None and rs != self.last_rng:
+            self.last_rng = rs
+            self.log('RNG ' + kv(n=self.n, frame=self.frame, s='%08x' % rs))
         if (self.frame or 0) >= 150 and now >= self.next_scan:
             self.next_scan = now + self.a.scan_sec
             self.start_scan('periodic')

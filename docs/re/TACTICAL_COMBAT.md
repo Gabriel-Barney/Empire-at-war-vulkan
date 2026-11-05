@@ -740,6 +740,15 @@ value 0 (0x2823c0 / 0x2823e0), "enemy" = value 1 (0x2824d0 / 0x2824f0, Lua `Play
   every pair: P's faction `Is_Neutral` → 2 towards everyone (**its own entry too**); else self → 0; Q's faction
   `Is_Neutral` → 2; same faction → 0; otherwise 1. The XML lists are ignored, so Hostile is an enemy of every
   non-neutral faction both ways.
+  - **In-game, seen against this (s78f probe, 2026-11-05)** [M: cause not traced]. In a Geonosis skirmish
+    (Empire human vs Rebel AI), T4Bs spawned by Lua for `Find_Player("Hostile")` (player 4) were never targeted by
+    the AI's units: targeting state 0 throughout. That held for the SPMAT, six `Pod_Walker`s and a garrisoned Merc
+    squad, both on auto and after an explicit Lua `Attack_Target` (which returned without error)
+    (`out/20261105-045131`, `-051443`). The same T4Bs with the same setup (`Prevent_All_Fire`, `Prevent_AI_Usage`,
+    `Suspend_Locomotor`), spawned for the human's Empire player, were acquired within frames (`out/20261105-055142`,
+    `-060346`). So, for targeting, either the skirmish Hostile player is not set up by 0x297300 like the slot
+    players, or something before the relation test drops it. Check that before relying on "Hostile is an enemy" in
+    skirmish.
 - **Skirmish with the map / game record byte +0xb5 set** (0x295cf0 → 0x297470) [M: a team-game setting]: same, but
   allies are self or the same team id (player +0x54 ≠ −1); faction is not used.
 - **At run time:** Lua `PlayerWrapper.Make_Ally` (0x6046a0) writes 0, `Make_Enemy` (0x604780) writes 1 (one
@@ -984,6 +993,16 @@ half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor;
     first entry. An empty list or an out-of-range index returns nothing.
   - A team container (slot byte +0x348 ≠ −1) is first replaced by its first member (0x4ec820 on team +0x110: list
     +0x10, count +0x18). An empty team returns nothing.
+- **In-game probe (s78f t01, 2026-11-05; `tools/probe_mod/s7s8_probes/out/20261105-045131`, `-051443`, `-055142`).**
+  - *Deploy window* [H for what was seen]: an ordered `SPMAT_Walker` threw nothing in 0x18 (45 frames). Targeting
+    state went 1 → 3 at the 0x19 frame and 4 eighteen frames later, with the first grenade on that same frame.
+  - *Muzzle types in space* [H for what was seen]: `Underworld_Infantry_Droid_Shuttle`, `UM07_CloudCity_Refinery`,
+    `UM07_Cloud_City_Flyover`, `Moldy_Crow`, `Moldy_Crow_Landing` and `Luke_Jedi_Xwing_Landing` fired.
+    `Tyber_Zann_Boarding_Shuttle_Prologue` and `Underworld_Infantry_Droid_Shuttle_Landing` stayed silent, but their
+    targeting state never reached 4 (0, or 0 / 2), so that is not a muzzle failure. The land control ran only against
+    the Hostile-owned victims that nothing targets (relation item above), so it proves nothing.
+  - *First shot after a late spawn*: one `MZ8_Pulse_Cannon_Tank` reached state 4 and fired 40 frames after spawning.
+    Its second did not spawn, so a surviving random delay is not ruled out (one sample, needs at least four).
 
 **Targeting states, slots 47 / 48 and team copies (s78f, 2026-11-03)** [H unless tagged]. TD = obj +0xf0; the TD
 pack is shared by TARGETING, WEAPON (TD +0x80 = the WeaponBehavior, stored by its attach 0x54ceb0) and TURRET
@@ -1215,8 +1234,21 @@ gives R = 3.588° and a slot-48 tolerance of 1.794° in land.
   means never.
 - The pending ability comes only from slot 38 (`Order_Attack` with a CRC, or the autofire driver); while it names the
   current target, the state cannot rise to 4.
-- [M] Open: whether slot 47's play of clip 6 on a model without an Attack Idle clip leaves the current clip unchanged
-  (then every service in state 3 / 4 would draw `Get_Float(0.2, 0.75)` again); not traced.
+- Slot 47 on a model without an Attack Idle clip (s78f t11, in-game probe 2026-11-05) [M]: the current clip **stays
+  unchanged**, so every slot-47 service in state 3 / 4 draws `Get_Float(0.2, 0.75)` again. Setup: six AI-owned
+  `Pod_Walker`s (`EV_PODWALKER`, no `ATTACKIDLE` clip, no TURRET) with the locomotor suspended, ordered to attack
+  held Empire T4Bs.
+  - Clip: through hundreds of frames in state 3 and 4, the walkers' current clip stays 0 (Idle, index 0) and its
+    frame keeps counting up (`out/20261105-055142`, IDLE47). Clip 6 is never current, so the "not 5 and not 6" gate
+    passes on every service.
+  - Draws: when the six walkers (and their held victims) despawn, the steady floor of synced draws per frame falls
+    by exactly 6. That is 46 / 48 → 40 / 42 on a quiet background (`out/20261105-060346`, IDLE47T, F 3750), and
+    448 → 442 in the earlier run (F 2251): one draw per walker per frame.
+  - [M] because the despawn also removed the victims, and the planned on/off toggle failed: `Stop()` did not clear
+    the walkers' targeting, which stayed at 4.
+  - Control: the `Rebel_Infiltrator` phase never took a target (state 0), so there is no with-clip comparison yet.
+  - *Port:* when clip 6 is missing, leave the current clip as it is and draw the blend each service in state 3 / 4,
+    as retail does.
 
 *For the implementer:*
 - Gate the own weapon on targeting state 4 (in range and outside min range), not on an XY distance.
