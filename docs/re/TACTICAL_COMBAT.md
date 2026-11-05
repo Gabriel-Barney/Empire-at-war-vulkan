@@ -1154,21 +1154,50 @@ half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor;
         with the orientation 0x20acd0((0, 0, 0), O_j): **facing outward from the landing centre along the team's
         offset**. Step **j = 0 is overridden** with the landing's own orientation ψ (roll / pitch / yaw copied from
         obj +0x84…+0x8c), whatever O_0 is. Every member of the step gets the same triple. Then (not instant) one group
-        move 0x2a7b80 to landing position + O_j; its move block carries no final-facing value (block +0x40…+0x47 are 0;
-        [M] whether the formation then keeps the travel heading or applies something else on arrival). The walk from
-        the centre to O_j points along the created facing anyway, except for team 0.
+        move 0x2a7b80 to landing position + O_j, flags 0x20, block +0x44 = 0 and **+0x5c = 0** (no final facing).
+        So the team **keeps its travel heading on arrival** [H, s78k t01: with +0x5c clear the last waypoint's facing
+        vector stays (0, 0, 0), and the Walk locomotor's arrival check keeps the current orientation; MOVEMENT §3.5.1].
+        The walk from the centre to O_j points along the created facing anyway, except for team 0.
       - **Vehicle (no `Create_Team`).** Created at the landing's position with 0x20acd0((0, 0, 0), O_j) (outward
         along its offset; **no** j = 0 override; a `Unique_Ground_Unit` substitute and its rider get the same triple).
         Then, not instant:
         - with a locomotor of the current mode and type byte +0xd4 set: coordinator move 0x4f8200 to landing position +
-          O_j (snapped for the movement class +0x1688), move block +0x44 = **ψ's yaw** (landing +0x8c), forced-move
-          byte +0x5c = 1 [M: that +0x44 is the arrival facing the formation turns to; it is the only facing written];
+          O_j (snapped for the movement class +0x1688), move block flags +0x48 = 0x20, +0x44 = **ψ's yaw** (landing
+          +0x8c, degrees), +0x5c = 1 (final facing set). **On arrival the vehicle turns to ψ** [H, s78k t01; the
+          chain and the turn rule are MOVEMENT §3.5.1]:
+          - flag 0x20 makes the formation path a straight 2-point path (start → destination, no pathfinding) whose
+            waypoint list skips passability (list +0x44 → path +0x5c, the "forced-move" path flag that the unload
+            finish 0x6438a0 clears with 0x3ac210); block +0x5c = 1 writes (cos ψ, sin ψ, 0) into the facing of that
+            path's last waypoint (0x417520 → 0x550bd0); the unit's own path is a copy of it (0x42c680 → 0x5c46a0);
+          - the walk itself faces the travel direction, which is the created facing yaw(O_j), so there is no start
+            turn;
+          - in End Move → state 0x15 (0x61fc30) the unit, now on the last waypoint, compares its yaw with the
+            waypoint facing (0x61d570 → 0x61d890, through `Movement_Directions_Count`, default 1 = that facing
+            exactly). Difference > **10°** → turn state (0xf → 0x10): an optional pre-turn clip (`Has_Pre_Turn_Anim`,
+            clip 0xc / 0xe by side), then a **rate-limited turn-to** at `Stopped_Rate_Of_Turn` (when > 0, else
+            `Max_Rate_Of_Turn` × the mode multiplier) that lands **exactly on ψ** (0x61e730 clamps the last step);
+            difference ≤ 10° → no turn, the path is popped and the unit keeps its arrival yaw (within 10° of ψ);
+          - so it is a turn-to, never a hard set. With the default layout O_j is not straight ahead of ψ, so the
+            vehicle normally ends exactly on ψ after a visible turn in place;
+          - **interrupted**: the unit and its container are locked (0x3a8e50) from the exit move until the unload
+            finish, so player / AI move orders that include it are refused meanwhile and it keeps executing the exit
+            move. The finish (0x6438a0) unlocks it and clears only the path's skip-passability byte, not the waypoint
+            facing, so a vehicle that arrives after the finish still turns. A move given after the unlock replaces the
+            path; an ordinary order's block has +0x5c = 0, so the new arrival keeps its travel heading (no turn to ψ). A
+            stop (0x4261f0) drops the path: no turn [M for the stop path, MOVEMENT §6.2]. A move with its own facing
+            (MoveToPositionFacing) turns to that facing instead;
         - otherwise: placed at landing position + O_j at once (0x3abb80) and its orientation **set to ψ** (0x3a8710 with
           landing +0x84).
       - **Instant-unload mode** (0x35e4c0 +0x30 set, [M] which mode): no move, no placement; every unit stays at the
         landing's position with its created orientation.
       - So after the unload: teams face outward along their offset (team 0: the entry facing), vehicles end on the entry
-        facing ψ (placed: exactly; moved: [M] via the block facing).
+        facing ψ (placed: exactly; moved: turned to exactly ψ on arrival when more than 10° off, else within 10°).
+      - **Port (s78k t01):** `TacticalBattle::landing_service` (`engine/apps/sim/src/tactical_battle.cpp`) sends
+        the exit move with no flags and no facing, and the land movement (`MovementSystem::tick_land`,
+        `engine/tactical/movement/src/movement_system.cpp`) ignores `Unit::facing` on arrival (only space turns). To
+        match: give both exit moves `kMoveFlagSkipValidation` (0x20; straight path, no passability), give the vehicle's
+        move `facing_deg = yaw(ψ)` (not the team's), and add the land arrival turn of MOVEMENT §3.5.1 for any land move
+        with a facing.
     - **Summary for the port:**
 
       | Spawn | Facing |
@@ -1528,10 +1557,55 @@ gives R = 3.588° and a slot-48 tolerance of 1.794° in land.
         object service runs a behaviour only while that count is 0 (MOVEMENT §3.3), and 0x569540 also returns when it
         is > 0 (0x4c36f0). So from the flag on, the Dark Troopers' targeting service, and slot 47 with it, did not run:
         the "state 4 / clip ATTACKIDLE" the kit read was the value left from before the flag. The ~0.85 synced draws per
-        attacker per frame come from somewhere else [L: source not found; not targeting, not WEAPON]. The static gate
+        attacker per frame come from somewhere else (found in s78k t02, below: the IDLE behaviour). The static gate
         above is unambiguous: **retail spends no draw and does not restart the clip while the clip is 5 / 6**. The
         s78i t01 port change (draw on every service) is therefore wrong; return before the draw when the clip is 5 / 6,
         as the original s78f t03 version did.
+      - **s78k t02 (RE, 2026-11-05): the source is the IDLE behaviour's "has a target" branch** [H]. Candidates
+        checked against the IDLE47N set-up (locomotor suspended, TARGETING / WEAPON suspended, JET_PACK autofire off,
+        not moving, TD +8 still holding the victim from the 6 frames before the flag):
+
+        | Rank | Candidate | Per-frame synced draw for such a unit? |
+        |---|---|---|
+        | 1 | **IdleBehavior service 0x62e570** (vtable 0x8afc58, interval 1; Dark_Trooper_PhaseII and Pod_Walker both list IDLE) | **yes, exactly one** `Get_Int(0, FPS)` per service while the unit's TARGETING (or, for a team member without one, its container's) has a target. Not suspended by `Prevent_All_Fire` [H] |
+        | 2 | slot 47 / TeamTargeting | no: TARGETING suspended (above); Dark_Trooper_PhaseII is not a team member [H] |
+        | 3 | Walk locomotor (formation jiggle 0x42c270, start delay 0x41c1a0) | no: locomotor suspended, not moving [H] |
+        | 4 | play-clip variant draws (0x3a92f0 / 0x3a8ed0 with index 0xFFFF; idle fidgets, flinches) | no per-frame draw: fidgets are 210–450 frames apart, the victims do not fire, Attack Idle is played with index 0 [H] |
+        | 5 | UNIT_AI (0x4f6070), ability autofire | not shown to draw per frame: the service 0x4f6070 has no direct synced draw, its pack ctor 0x550ed0 draws only at creation (A1_READINGS) [M: its callees were not all read] |
+
+        IdleBehavior service 0x62e570 (obj = the unit, I = its idle pack obj +0xd8):
+        1. Return (no draw) when the unit has a locomotor, `Allow_Idle_When_Moving` (+0x85) is clear and the
+           locomotor reports moving (vf +0x110); also (no draw) when it is a deploying unit (0x39a370) that is
+           deploying / undeploying / deployed (0x39a400, 0x39b2a0, 0x39a390).
+        2. Flinch bookkeeping on I +0x5c / +0x58 / +0x50 (`Idle_` / `Attack_Flinch_Interval_Seconds`, `Max_Flinch_*`;
+           ANIM_PARTICLES §A.7). It may set "flinch in progress".
+        3. T = the unit's TARGETING behaviour (9); when it has none and the locomotor says it is a team member
+           (vf +0x228), the container's. T is fetched whether or not it is suspended.
+        4. **T has a target** (T vf +0xe0 = 0x567080: TD +8 ≠ null):
+           - I +0xc := `Get_Int(0, FPS)` + 90 (**one synced draw every service**), and the idle record list I +0x10
+             is cleared;
+           - when the current clip is 5, 6 or attack-like (0x27b4f0: 5, 25, 26, 31, 33–35, 37–40, 45–47, 63, 64), its
+             play state (anim +0xc8) is 2 (finished) and the model has clip 6: play clip 6, index 0, one-shot, blend
+             0, speed 1 (no draw). Otherwise nothing more.
+        5. No target: the idle records age; I +0xc −= 1 while > 0 (a frame countdown); return when a flinch is in
+           progress or the current clip is still playing (unless the idle type changed class). Then: from an
+           attack-like / 5 / 6 clip (only when T exists) with I +0xc > 0, Attack Idle again with blend `Get_Float(0.2, 0.75)`; with I +0xc
+           ≤ 0, the default idle (blend global 0x140b39930); from any other clip, the idle with a fidget when
+           frame ≥ I +8 (variant `Get_Int(1, n − 1)` when n > 1, next I +8 = frame + `Get_Int(210, 450)`), else
+           index 0.
+
+        That gives one draw per attacker per frame in IDLE47N phase E for as long as the victim is the target (93% of
+        the attacker-frames in state 4 = a target held; measured 0.85, the windows include the frames around the
+        edges), and none in phases D and P, where the flag came before the order and TD +8 never got set (measured
+        −0.01 / 0.01). It also accounts for the ~1 draw per attacker per frame of IDLE47Q (both models held targets
+        while firing). It runs whatever the clip, so it does not bear on the slot-47 clip gate.
+        **Port:** `AnimBehaviors::service_idle` (`engine/anim/src/anim_behaviors.cpp`, called from
+        `SimAnimation::service_idle`, `engine/apps/sim/src/sim_anim.cpp`) runs only when the current clip has finished
+        and draws the [0, 30] only on a fresh engagement, using a frame stamp. Retail: run the IDLE service every frame
+        for every unit with IDLE (after the moving / deploying early returns), and while the unit's target (TD +8, or
+        the team container's for a member without TARGETING) is set, draw `Get_Int(0, 30)` each frame into a
+        countdown (= r + 90), decremented once per no-target service; restart Attack Idle (index 0, one-shot, blend 0)
+        only when an attack-like / 5 / 6 clip has finished. The target must count even while TARGETING is suspended.
   - *Port:* when clip 6 is missing, leave the current clip as it is and draw the blend each service in state 3 / 4,
     as retail does.
 

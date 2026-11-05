@@ -982,6 +982,14 @@ public:
     // flyers (and the bike lean); other movers 0 / 0. False (both 0) when `id` is not a mover. Const read only.
     bool unit_attitude(objects::ObjectId id, float& roll_rad, float& pitch_rad) const;
     const tactical::combat::CombatSystem& combat() const { return *combat_; }
+    // s78k t04: a TEAM container's record owner (Container::owner: loss records, replenish spawns); -1 when `id` is no
+    // container of this battle.
+    int32_t container_owner(objects::ObjectId id) const;
+    // s78k t05 test seams (ALAMO_SIM_HAVE_ANIM; without it both return false): the combat hook of slot 47 (the attack-idle
+    // pose, CombatHooks::attack_idle) on `id` with the caller's generator, and a clip play on the battle's animation world
+    // (index 0, looping, hard cut). False when the battle has no animation world or `id` has no row in it.
+    bool test_attack_idle(objects::ObjectId id, bool arg, SimRng& rng);
+    bool test_play_clip(objects::ObjectId id, int32_t clip_type);
     const tactical::abilities::AbilitySystem& abilities() const { return *abilities_; }
     tactical::abilities::AbilitySystem& abilities() { return *abilities_; }
     const BattleTables& tables() const { return *tables_; }

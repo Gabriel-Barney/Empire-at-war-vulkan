@@ -117,6 +117,7 @@ public:
         kind_ = kind;
     }
     anim::AnimWorld* world() const { return world_; }
+    uint64_t global_frame() const { return gframe_; }  // s78k t05: test_play_clip
     // --- R3 anim: behaviour hand-offs (SimAnimation: flinch on hits, death clip / corpse, death clones) ---
     void set_anim_mode(const GameMode* mode) { mode_ = mode; }
     void anim_hit(const tc::HitEvent& e) {
@@ -2212,12 +2213,11 @@ void TacticalBattle::landing_service(TacticalMode& mode, SimRng& rng) {
         // landing centre facing along the step's offset O_j (0x20acd0((0, 0, 0), O_j)); a team's step 0 takes the
         // landing's own facing instead (vehicles have no step-0 override). O_j = the unload layout's step offset before the
         // passable-cell snap, rebuilt here from the landing position and the side's drop yaw (as order_reinforce built it).
-        // [M, not modelled] a vehicle's final facing after its exit move.
+        const Vec3 psi = store.facing(l.h);
+        const bool team = cnt > 1 || (members[i] < types.size() && types.get_bool(members[i], "Create_Team"));
         {
-            const Vec3 psi = store.facing(l.h);
             const LandDropLayout lay = land_drop_layout(land_drop_shape(P.type), at.x, at.y, drop_yaw(P.side), 3.0f);
             const uint32_t j = l.next_offset;
-            const bool team = cnt > 1 || (members[i] < types.size() && types.get_bool(members[i], "Create_Team"));
             Vec3 f = psi;
             if (lay.ok && j < lay.group_x.size() && !(team && j == 0)) f = offset_facing(lay.group_x[j] - at.x, lay.group_y[j] - at.y);
             drop_face_.assign(n, f);
@@ -2235,6 +2235,12 @@ void TacticalBattle::landing_service(TacticalMode& mode, SimRng& rng) {
         }
         if (!o.units.empty() && lr.next_offset < lr.targets.size()) {
             o.destination = {lr.targets[lr.next_offset].x, lr.targets[lr.next_offset].y};
+            // s78k t01 (TACTICAL_COMBAT §3.1.1 "Units leaving a land landing object", MOVEMENT §6.1 / §3.5.1) [H]: the exit
+            // move has flags 0x20 (a straight 2-point path without passability checks); a vehicle's block carries the
+            // landing's yaw as its final facing (+0x5c = 1), so it turns to psi on arrival when more than 10 degrees off;
+            // a team's block has none (+0x5c = 0) and keeps its travel heading.
+            o.flags = mv::kMoveFlagSkipValidation;
+            if (!team) o.final_facing_deg = yaw_of(psi);
             movement_->move(o, rng, frame_);
             ++stats_.orders;
         }
@@ -2774,16 +2780,17 @@ bool TacticalBattle::victory_relevant(uint32_t type) {
 void TacticalBattle::apply_speed_factors() {
     // MOVEMENT 3.4 items 4, 5, 7 (product order: Mod_Multiplier, engines, list 5) [port: one factor].
     const float engines = catalog_->engines_disabled_speed_modifier();
-    // s78j t03 (TACTICAL_COMBAT §4.4 "Who the squad leader is", MOVEMENT §3.4 item 4 / §3.7): a land team walks on its
-    // container's locomotor, whose SPEED Mod_Multiplier is the squad value 0x398010 returns for the container
-    // (team_mod_multiplier: its own product when != 1, else the minimum over all live members). [port] The container has
-    // no locomotor here (the members move one by one, in one formation at the slowest member's speed), so every live
-    // member of a land team takes that team value for item 4 in place of its own product. Computed once per team per tick
-    // (sorted (team, value) pairs, probed only).
+    // s78k t03 (TACTICAL_COMBAT §4.4 "Who the squad leader is", MOVEMENT §3.4 / §3.7, FIGHTER_FLYING §4.11 item 4): a TEAM
+    // container's locomotor runs at the container's effective max speed - the minimum member Max_Speed (0x4049e0) x the
+    // container's factors, whose SPEED Mod_Multiplier is the squad value 0x398010 returns for the container
+    // (team_mod_multiplier, keyed by the container id: land teams and space squadrons alike, no mode gate). [port] The
+    // container has no mover, so the movement layer applies it (set_team): a land member walks at most at that speed, a
+    // squadron's formation speed is that speed. Every member keeps its own product for item 4 (a member never takes the
+    // squad value; this replaces s78j t03's stand-in that gave members the team value). The container's engines / list 5
+    // are not modelled (the port's containers take neither), so its factor is the Mod_Multiplier alone. One value per
+    // team per tick (sorted (team, value) pairs, probed only).
     std::vector<std::pair<uint32_t, float>> team_speed;
-    const auto speed_mult = [&](const Unit& u) {
-        const uint32_t team = space_ ? 0u : combat_->team(u.id);
-        if (team == 0) return combat_->mod_multiplier(u.id, tc::ModKind::Speed);
+    const auto team_mult = [&](uint32_t team) {
         auto it = std::lower_bound(team_speed.begin(), team_speed.end(), team,
                                    [](const std::pair<uint32_t, float>& e, uint32_t t) { return e.first < t; });
         if (it == team_speed.end() || it->first != team)
@@ -2792,7 +2799,7 @@ void TacticalBattle::apply_speed_factors() {
     };
     for (const Unit& u : units_) {
         if (!u.alive || u.retreated || !u.movable) continue;
-        float f = speed_mult(u);
+        float f = combat_->mod_multiplier(u.id, tc::ModKind::Speed);
         if (u.engines_offline || l1_engines_off(u.id)) f = f * engines;  // L1 systems: + timed engine disables
         f = f * (1.0f + combat_->modifier(u.id, tc::ModList::MaxSpeed));
         // OI follow-up t03 (A1_READINGS §28.9): the movement lock does not slow the unit (no speed-0 freeze); its users
@@ -2800,6 +2807,9 @@ void TacticalBattle::apply_speed_factors() {
         if (combat_->stunned(u.id, frame_)) f = 0.0f;  // OI abilities: land stun suspends the locomotor (0x647290)
         movement_->set_speed_factor(u.id, f);
         movement_->set_speed_override(u.id, abilities_->speed_override(u.id));  // OI host: Berserker_Speed (-1 = none)
+        const bool in_team = u.container < containers_.size() && containers_[u.container].team && !containers_[u.container].removed;
+        const auto team = in_team ? static_cast<uint32_t>(containers_[u.container].id) : 0u;
+        movement_->set_team(u.id, in_team ? containers_[u.container].id : mv::ObjectId{-1}, in_team ? team_mult(team) : 1.0f);
     }
 }
 
@@ -3498,6 +3508,12 @@ void TacticalBattle::drive_animation(SimRng& rng, uint64_t gframe) {
             in.max_speed = v.max_speed;
             in.yaw_deg = v.yaw;
         }
+        // s78k t02 (TACTICAL_COMBAT slot 47 "s78k t02", IdleBehavior 0x62e570) [H]: the IDLE service reads the TARGETING
+        // behaviour's target (a land team member: its head's) whether or not it is suspended (Prevent_All_Fire), and
+        // draws Get_Int(0, FPS) every service while one is held. current_target keeps the target while suspended.
+        in.target = !combat_->has_unit(u.id) ? anim::IdleTarget::None
+                    : combat_->current_target(u.id) != tc::kNoObject ? anim::IdleTarget::Target
+                                                                       : anim::IdleTarget::NoTarget;
         stats_.anim_plays += anim_->service_locomotor(*gm, u.id, in, cfg_.walk_speed_ratio, cfg_.min_move_anim_ratio, rng, gframe);
     }
 #else
@@ -4298,6 +4314,37 @@ void TacticalBattle::team_change_owner(TacticalMode& mode, objects::ObjectId id,
         if (m.container != ci || m.id == id || !m.alive || m.retreated || !store.alive(m.h) || store.owner(m.h) == owner) continue;
         owner_change_one(mode, m.h, owner);
     }
+}
+
+int32_t TacticalBattle::container_owner(objects::ObjectId id) const {
+    for (const Container& c : containers_)
+        if (c.id == id) return c.owner;
+    return -1;
+}
+
+bool TacticalBattle::test_attack_idle(objects::ObjectId id, bool arg, SimRng& rng) {
+#ifdef ALAMO_SIM_HAVE_ANIM
+    if (!hooks_ || !hooks_->world() || !hooks_->world()->contains(id)) return false;
+    hooks_->attack_idle(id, arg, frame_, rng);
+    return true;
+#else
+    (void)id, (void)arg, (void)rng;
+    return false;
+#endif
+}
+
+bool TacticalBattle::test_play_clip(objects::ObjectId id, int32_t clip_type) {
+#ifdef ALAMO_SIM_HAVE_ANIM
+    if (!hooks_ || !hooks_->world() || !hooks_->world()->contains(id)) return false;
+    anim::PlayRequest r;
+    r.type = clip_type;
+    r.index = 0;
+    r.loop = true;
+    return hooks_->world()->play(id, r, nullptr, hooks_->global_frame()) == anim::PlayResult::Played;
+#else
+    (void)id, (void)clip_type;
+    return false;
+#endif
 }
 
 // ---- reporting / CRC ----------------------------------------------------------------------------------------------

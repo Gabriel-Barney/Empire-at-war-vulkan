@@ -668,7 +668,7 @@ std::unique_ptr<AnimModel> behaviour_model(bool flinch_clips = true) {
 
 // MSVC 19.51; clang 20 / gcc 14 must match. Was 4357bd5e704ab19c before the locomotor state (last yaw / crouch)
 // and the corpse spin-away / damage-kind fields joined AnimBehaviors::hash.
-constexpr uint64_t kBehaviourGolden = 0xd0671711f6a07913ull;
+constexpr uint64_t kBehaviourGolden = 0x53d7bba7979bbe88ull;  // s78k t02: idle service every call, target draws
 
 uint64_t behaviours_hash(const AnimWorld& w, const AnimBehaviors& b) {
     alamo::StateHasher h;
@@ -751,8 +751,10 @@ void test_behaviors() {
         CHECK(!b.on_hit(w, 4, fp, ip, 1, 0, -1, 0, rng, 1) && rng.state() == st);
     }
     {
-        // Idle while engaged: Attack finished -> Attack Idle + combat timer 90 + [0, 30]; replays while engaged,
-        // then the plain idle behaviour.
+        // s78k t02 idle while engaged (IdleBehavior 0x62e570): with a target EVERY service draws one int [0, 30] into the
+        // countdown (r + 90), whatever the clip; Attack Idle (index 0, blend 0, no further draw) only once an attack clip
+        // finished. Without a target the countdown drops by 1 per service; a finished Attack Idle replays with a
+        // [0.2, 0.75] blend draw while it is > 0, then the default idle (index 0, idle blend, no draw).
         AnimWorld w;
         AnimBehaviors b;
         w.create(5, m.get(), {}, nullptr, 0);
@@ -761,24 +763,105 @@ void test_behaviors() {
         atk.type = kAnimAttack;
         w.play(5, atk, &rng, 0);
         uint64_t f = 1;
-        for (; w.current_mode(5) != SlotMode::Finished; ++f) w.advance(f);
-        CHECK(b.service_idle(w, 5, ip, rng, f));
-        const uint64_t timer = f + 90 + static_cast<uint64_t>(replay.range_int(0, 30));
-        CHECK(w.current_type(5) == kAnimAttackIdle && b.combat_timer(5) == timer && rng.state() == replay.state());
-        uint32_t attack_idles = 1, idles = 0;
-        for (++f; f < timer + 60; ++f) {
+        uint32_t draws = 0;
+        for (; w.current_mode(5) != SlotMode::Finished; ++f) {
+            CHECK(!b.service_idle(w, 5, ip, IdleTarget::Target, rng, f));  // attack still playing: draw, no play
+            const uint64_t want = 90 + static_cast<uint64_t>(replay.range_int(0, 30));
+            CHECK(b.idle_countdown(5) == want && rng.state() == replay.state() && w.current_type(5) == kAnimAttack);
+            ++draws;
             w.advance(f);
-            if (b.service_idle(w, 5, ip, rng, f)) {
-                if (w.current_type(5) == kAnimAttackIdle) {
-                    ++attack_idles;
-                    CHECK(f < timer);
-                } else {
-                    ++idles;
-                    CHECK(f >= timer && w.current_type(5) == kAnimIdle);
-                }
+        }
+        CHECK(draws >= 5);
+        CHECK(b.service_idle(w, 5, ip, IdleTarget::Target, rng, f));  // finished: Attack Idle, the draw only
+        CHECK(b.idle_countdown(5) == 90 + static_cast<uint64_t>(replay.range_int(0, 30)) && rng.state() == replay.state());
+        CHECK(w.current_type(5) == kAnimAttackIdle && w.slot(5).variant == 0 && w.current_mode(5) != SlotMode::Loop && !w.crossfading(5));
+        // Target lost: one decrement per service (no draw while the clip plays).
+        uint64_t cd = b.idle_countdown(5);
+        uint32_t attack_idles = 0, idles = 0;
+        for (++f; f < 400; ++f) {
+            w.advance(f);
+            const bool finished = w.current_mode(5) == SlotMode::Finished;
+            const bool was_attack_idle = w.current_type(5) == kAnimAttackIdle;
+            const bool played = b.service_idle(w, 5, ip, IdleTarget::NoTarget, rng, f);
+            if (cd > 0) --cd;
+            CHECK(b.idle_countdown(5) == cd);
+            if (!finished) {
+                CHECK(!played && rng.state() == replay.state());
+                continue;
+            }
+            CHECK(played);
+            if (was_attack_idle && cd > 0) {
+                const float blend = replay.range_float(0.2f, 0.75f);
+                CHECK(w.current_type(5) == kAnimAttackIdle && w.slot(5, kPrevious).type == kAnimAttackIdle && rng.state() == replay.state());
+                (void)blend;
+                ++attack_idles;
+            } else if (was_attack_idle) {
+                CHECK(w.current_type(5) == kAnimIdle && w.slot(5).variant == 0 && rng.state() == replay.state());
+                ++idles;
+            } else {
+                // From the idle: the plain idle behaviour (fidget timer draws).
+                replay = rng;
             }
         }
-        CHECK(attack_idles >= 4 && idles >= 1);
+        CHECK(attack_idles >= 3 && idles == 1 && cd == 0);
+        // Target again while idling: the draw, but no Attack Idle (the clip is not an attack clip).
+        const uint32_t st = rng.state();
+        const int32_t before = w.current_type(5);
+        b.service_idle(w, 5, ip, IdleTarget::Target, rng, f);
+        SimRng one(st);
+        CHECK(b.idle_countdown(5) == 90 + static_cast<uint64_t>(one.range_int(0, 30)) && rng.state() == one.state());
+        CHECK(w.current_type(5) == before);
+    }
+    {
+        // s78k t02: no TARGETING (None) after an attack -> the plain idle behaviour, no countdown; a model without
+        // Attack Idle still draws the blend while the countdown runs (the play fails, the clip stays); the locomotor
+        // runs the idle service only while not moving (Allow_Idle_When_Moving: also while moving), every call.
+        AnimWorld w;
+        AnimBehaviors b;
+        const auto plain = behaviour_model(false);  // no Attack Idle
+        w.create(1, m.get(), {}, nullptr, 0);
+        w.create(2, plain.get(), {}, nullptr, 0);
+        SimRng rng(44);
+        PlayRequest atk;
+        atk.type = kAnimAttack;
+        w.play(1, atk, &rng, 0);
+        w.play(2, atk, &rng, 0);
+        uint64_t f = 1;
+        for (; w.current_mode(1) != SlotMode::Finished || w.current_mode(2) != SlotMode::Finished; ++f) w.advance(f);
+        CHECK(b.service_idle(w, 1, ip, IdleTarget::None, rng, f) && w.current_type(1) == kAnimIdle && b.idle_countdown(1) == 0);
+        CHECK(!b.service_idle(w, 2, ip, IdleTarget::Target, rng, f) && w.current_type(2) == kAnimAttack);
+        const uint64_t cd = b.idle_countdown(2);
+        SimRng replay = rng;
+        CHECK(!b.service_idle(w, 2, ip, IdleTarget::NoTarget, rng, f + 1) && w.current_type(2) == kAnimAttack);
+        replay.range_float(0.2f, 0.75f);
+        CHECK(b.idle_countdown(2) == cd - 1 && rng.state() == replay.state());
+
+        AnimWorld lw;
+        AnimBehaviors lb;
+        lw.create(3, m.get(), {}, nullptr, 0);
+        LocomotorParams lp;
+        lp.idle = ip;
+        LocomotorInput in;
+        in.speed = 1.0f;
+        in.max_speed = 1.0f;
+        in.target = IdleTarget::Target;
+        CHECK(lb.service_locomotor(lw, 3, lp, in, rng, 1) == 1 && lw.current_type(3) == kAnimMove);
+        uint32_t st = rng.state();
+        CHECK(lb.service_locomotor(lw, 3, lp, in, rng, 2) == 0 && rng.state() == st && lb.idle_countdown(3) == 0);  // moving: none
+        in.allow_idle_when_moving = true;
+        CHECK(lb.service_locomotor(lw, 3, lp, in, rng, 3) == 0 && rng.state() != st && lb.idle_countdown(3) >= 90);
+        in.allow_idle_when_moving = false;
+        in.speed = 0.0f;  // stopped: back to the idle, then the idle service (one draw with the target)
+        st = rng.state();
+        CHECK(lb.service_locomotor(lw, 3, lp, in, rng, 4) == 1 && lw.current_type(3) == kAnimIdle);
+        SimRng chk(st);
+        CHECK(lb.idle_countdown(3) == 90 + static_cast<uint64_t>(chk.range_int(0, 30)) && rng.state() == chk.state());
+        st = rng.state();
+        CHECK(lb.service_locomotor(lw, 3, lp, in, rng, 5) == 0 && rng.state() != st);  // idle playing: still one draw
+        in.target = IdleTarget::NoTarget;
+        const uint64_t c5 = lb.idle_countdown(3);
+        st = rng.state();
+        CHECK(lb.service_locomotor(lw, 3, lp, in, rng, 6) == 0 && rng.state() == st && lb.idle_countdown(3) == c5 - 1);
     }
     {
         // Death clip (random variant, blend 0.5, locked), corpse countdown after the clip, fade, removal.
@@ -799,7 +882,7 @@ void test_behaviors() {
         CHECK(w.current_type(6) == kAnimDie && w.locked(6) && w.crossfading(6) && !b.flinching(6));
         PlayRequest idle;
         CHECK(w.play(6, idle, &rng, 3) == PlayResult::Locked);
-        CHECK(!b.on_hit(w, 6, fp, ip, 1, 0, 1, 0, rng, 100) && !b.service_idle(w, 6, ip, rng, 4));
+        CHECK(!b.on_hit(w, 6, fp, ip, 1, 0, 1, 0, rng, 100) && !b.service_idle(w, 6, ip, IdleTarget::NoTarget, rng, 4));
         std::vector<ObjectId> removed;
         uint64_t f = 4, clip_end = 0, fade_start = 0;
         for (; f < 400 && removed.empty(); ++f) {
@@ -880,7 +963,7 @@ void test_behaviors() {
                         a.index = kRandomVariant;
                         a.blend_seconds = 0.1f;
                         w.play(id, a, &rng, f);
-                    } else b.service_idle(w, id, ip, rng, f);
+                    } else b.service_idle(w, id, ip, (id + static_cast<ObjectId>(f)) % 3 == 0 ? IdleTarget::Target : IdleTarget::NoTarget, rng, f);
                 }
                 b.service(w, f, removed);
                 w.advance(f, pf, 64);
@@ -1156,7 +1239,7 @@ void save_step(AnimWorld& w, AnimBehaviors& b, SimRng& rng, uint64_t f, const Sa
             req.timed_seconds = 0.4f;
             w.play(id, req, &rng, f);
         } else {
-            b.service_idle(w, id, ip, rng, f);
+            b.service_idle(w, id, ip, roll % 2 == 0 ? IdleTarget::Target : IdleTarget::NoTarget, rng, f);
         }
     }
 }
@@ -1205,7 +1288,15 @@ void test_save() {
         CHECK(ok && r.ok() && r.done());
     }
     CHECK(world_hash(w2) == world_hash(w) && behaviours_hash(w2, b2) == behaviours_hash(w, b) && rng2 == rng);
-    CHECK(!w2.contains(500) && w2.contains(13) && w2.model(13) == nullptr && w2.model(3) == mb_owner.get());
+    CHECK(!w2.contains(500) && w2.contains(13) && w2.model(13) == nullptr);
+    {
+        size_t other = 0;  // rows of the second model come back with it (model_of)
+        for (const ObjectId id : w.ids()) {
+            CHECK(w2.contains(id) && w2.model(id) == w.model(id));
+            if (w.model(id) == mb_owner.get()) ++other;
+        }
+        CHECK(other > 0);
+    }
     // write -> read -> write: identical bytes; the documented record sizes.
     CHECK(world_bytes(w2) == world_bytes(w) && behaviour_bytes(b2) == behaviour_bytes(b));
     CHECK(world_bytes(w).size() == 8 + w.size() * kAnimSaveRowBytes);

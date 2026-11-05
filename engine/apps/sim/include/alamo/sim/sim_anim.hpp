@@ -23,7 +23,9 @@
 // deploy(), set_berserker(), begin_death(kind) (rules in anim_behaviors.hpp, anim_state.hpp).
 // R3 behaviours (anim::AnimBehaviors, one per mode next to the world; anim_behaviors.hpp has the rules):
 //   * hit()          flinch on a projectile hit (the battle's HitEvents, event order);
-//   * service_idle() the idle behaviour incl. idle while engaged (the battle's locomotor step);
+//   * service_idle() the idle behaviour incl. idle while engaged (the battle's locomotor step: service_locomotor runs it
+//                    every frame the unit is not moving, s78k t02); its TARGETING lookup comes from the target hook
+//                    (set_target_hook) or LocomotorInput::target, and is IdleTarget::None for an object without IDLE;
 //   * begin_death()  Die + DeathBehavior: death clip, or removal at once (Remove_Upon_Death without a clip). Called
 //                    by the battle BEFORE it destroys the unit; the unit's row then lives on as a CORPSE row
 //                    ([port]: the battle removes the store object at death, so the corpse is a detached row +
@@ -118,7 +120,8 @@ public:
     const anim::AnimBehaviors* find_behaviors(const GameMode& mode) const;
     // Flinch of `victim` hit by a shot travelling along `travel` (2-D; victim facing `facing`). True if it played.
     bool hit(const GameMode& mode, ObjectId victim, Vec3 facing, Vec3 travel, SimRng& rng, uint64_t frame);
-    // Idle behaviour (incl. idle while engaged) of a battle unit whose clip is finished / absent.
+    // One IDLE service (incl. idle while engaged; s78k t02 rules in anim_behaviors.hpp) of a battle unit; the TARGETING
+    // lookup through the target hook (unset: IdleTarget::NoTarget; no IDLE behaviour: None).
     bool service_idle(const GameMode& mode, ObjectId id, SimRng& rng, uint64_t frame);
     // Death of a live store object (call before destroying it). RemoveNow: no corpse (the caller removes it).
     // `damage_kind` = the killing hit's DamageType (death type by kind, anim_behaviors.hpp).
@@ -142,7 +145,10 @@ public:
     std::span<const anim::Corpse> corpses(const GameMode& mode) const;
 
     // Locomotor clip selection of a unit (AnimBehaviors::service_locomotor with the type's parameters; the
-    // default idle goes through the idle-type hook). `walk_ratio` / `min_ratio`: the battle's tunables.
+    // default idle goes through the idle-type hook) and then its IDLE service (s78k t02): in.target is replaced by the
+    // target hook's answer when the hook is set, and by IdleTarget::None when the object has no IDLE behaviour;
+    // in.allow_idle_when_moving comes from the type (Allow_Idle_When_Moving). `walk_ratio` / `min_ratio`: the battle's
+    // tunables.
     uint32_t service_locomotor(const GameMode& mode, ObjectId id, anim::LocomotorInput in, float walk_ratio, float min_ratio, SimRng& rng,
                                uint64_t frame);
     // Deploy / undeploy clip (Deployment_Anim_Rate). True if a clip started.
@@ -155,6 +161,13 @@ public:
     // anim::kNoAnimType. Unset = no garrison mapping. The S4 garrison system plugs in here.
     using IdleTypeHook = std::function<int32_t(const GameMode&, ObjectId)>;
     void set_idle_type_hook(IdleTypeHook hook) { idle_hook_ = std::move(hook); }
+    // s78k t02: the IDLE service's TARGETING lookup (0x62e570 step 3 / 4) for a unit: None when it has no TARGETING
+    // (neither its own nor, for a team member, its container's), Target while that TARGETING holds a target (TD +8),
+    // WHETHER OR NOT it is suspended (Prevent_All_Fire, stun), else NoTarget. Called once per idle service, in the
+    // caller's service order; must be a pure read (no RNG). Unset: the caller's LocomotorInput::target (default
+    // NoTarget). The battle installs it.
+    using TargetHook = std::function<anim::IdleTarget(const GameMode&, ObjectId)>;
+    void set_target_hook(TargetHook hook) { target_hook_ = std::move(hook); }
 
     // Muzzle flash (§A.7 attack row: muzzle sub-objects shown, re-hidden after 4 ticks [M]). hardpoint = index into
     // the unit's HardPoints list of the shooting hardpoint (-1 = the unit's own weapon); bone = that fire bone
@@ -244,6 +257,7 @@ private:
     std::vector<ObjectId> scratch_ids_, scratch_remove_, scratch_destroy_;
     SimAnimStats stats_;
     IdleTypeHook idle_hook_;
+    TargetHook target_hook_;
     anim::AnimEventMap events_map_;
     bool events_loaded_ = false;
     std::map<const anim::AnimModel*, bool> model_events_;                                // lookup only

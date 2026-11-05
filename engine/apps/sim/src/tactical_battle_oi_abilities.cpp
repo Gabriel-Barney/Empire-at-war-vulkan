@@ -266,6 +266,13 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
             case ta::AbilityEventKind::OwnerChanged: {  // Hack / Tactical_Bribe / convert: store, trees, movement, fog
                 const objects::ObjectHandle h = store.find(e.id);
                 if (store.alive(h) && store.owner(h) != e.value) change_owner(mode, h, e.value);
+                // s78k t04 (TACTICAL_COMBAT §3.5 "Convert and its team rule" steps 4-5, 0x38e5a0): Change_Owner spreads
+                // through the team, so the TEAM container follows its member - the store owner (not a combat unit, so
+                // CombatSystem's convert spread raises no event for it) and Container::owner (loss records, replenish) -
+                // and every other live member not changed yet ([port] container, then ascending id: the notification
+                // order). Convert raises one event per member (each finds the team done); Hack / Bribe raise the object
+                // and its container. A non-team object has no container: nothing more.
+                if (store.alive(h) && store.owner(h) == e.value) team_change_owner(mode, e.id, e.value);
                 break;
             }
             default: break;

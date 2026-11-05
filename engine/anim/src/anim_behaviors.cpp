@@ -126,45 +126,48 @@ uint64_t AnimBehaviors::next_flinch_frame(ObjectId id) const {
 
 // ---- idle --------------------------------------------------------------------------------------------
 
-bool AnimBehaviors::service_idle(AnimWorld& w, ObjectId id, const IdleParams& idle, SimRng& rng, uint64_t frame, bool crouch_changed) {
+bool AnimBehaviors::service_idle(AnimWorld& w, ObjectId id, const IdleParams& idle, IdleTarget target, SimRng& rng, uint64_t frame,
+                                 bool crouch_changed) {
+    // IdleBehavior service 0x62e570 from step 3 (s78k t02; the moving / deploying early returns are the caller's).
     if (is_corpse(id) || !w.contains(id)) return false;
     const SlotView cur = w.slot(id);
-    if (crouch_changed) return w.service_idle(id, idle.idle_type, true, rng, frame);
-    if (cur.clip && cur.mode != SlotMode::Finished) return false;
     const AnimModel* m = w.model(id);
-    if (m && m->variant_count(kAnimAttackIdle) > 0) {
-        const bool from_attack = cur.clip && (is_attack_like(cur.type) || cur.type == kAnimAttackIdle);
-        if (from_attack) {
-            Entry& e = entry(id);
-            if (cur.type != kAnimAttackIdle) e.combat_timer = frame + kEngagedBaseFrames + static_cast<uint64_t>(rng.range_int(0, kEngagedRandomFrames));
-            if (cur.type != kAnimAttackIdle || frame < e.combat_timer) {
-                PlayRequest r;
-                r.type = kAnimAttackIdle;
-                r.index = 0;
-                r.loop = false;
-                r.blend_seconds = 0.0f;
-                r.speed = 1.0f;
-                return w.play(id, r, &rng, frame) == PlayResult::Played;
-            }
-        } else if (cur.clip && is_idle_like(cur.type)) {
-            const Entry* e = find(id);
-            if (e && frame < e->combat_timer) {
-                PlayRequest r;  // back from an idle while still engaged
-                r.type = kAnimAttackIdle;
-                r.index = 0;
-                r.loop = false;
-                r.blend_seconds = rng.range_float(0.2f, 0.75f);
-                r.speed = 1.0f;
-                return w.play(id, r, &rng, frame) == PlayResult::Played;
-            }
-        }
+    const bool from_attack = cur.clip && (is_attack_like(cur.type) || cur.type == kAnimAttack || cur.type == kAnimAttackIdle);
+    const bool finished = cur.clip && cur.mode == SlotMode::Finished;
+    PlayRequest r;
+    r.type = kAnimAttackIdle;
+    r.index = 0;
+    r.loop = false;
+    r.blend_seconds = 0.0f;
+    r.speed = 1.0f;
+    if (target == IdleTarget::Target) {
+        // Step 4: one synced draw on every service, countdown = r + 90; Attack Idle again only after a finished
+        // attack-like / Attack / Attack Idle clip (no draw for that play). Nothing else.
+        Entry& e = entry(id);
+        e.idle_countdown = kEngagedBaseFrames + static_cast<uint64_t>(rng.range_int(0, kEngagedRandomFrames));
+        if (from_attack && finished && m && m->variant_count(kAnimAttackIdle) > 0) return w.play(id, r, nullptr, frame) == PlayResult::Played;
+        return false;
     }
-    return w.service_idle(id, idle.idle_type, false, rng, frame);
+    // Step 5: no target. The countdown ages; nothing more during a flinch or while the clip plays.
+    Entry* e = find(id);
+    if (e && e->idle_countdown > 0) --e->idle_countdown;
+    if (flinching(id)) return false;
+    if (cur.clip && !finished && !crouch_changed) return false;
+    if (from_attack && target != IdleTarget::None) {
+        if (e && e->idle_countdown > 0) {
+            r.blend_seconds = rng.range_float(0.2f, 0.75f);  // drawn even without the clip [M]
+            return w.play(id, r, nullptr, frame) == PlayResult::Played;
+        }
+        r.type = idle.idle_type;  // the default idle, idle blend
+        r.blend_seconds = w.tunables().idle_blend_seconds;
+        return w.play(id, r, nullptr, frame) == PlayResult::Played;
+    }
+    return w.service_idle(id, idle.idle_type, crouch_changed, rng, frame);
 }
 
-uint64_t AnimBehaviors::combat_timer(ObjectId id) const {
+uint64_t AnimBehaviors::idle_countdown(ObjectId id) const {
     const Entry* e = find(id);
-    return e ? e->combat_timer : 0;
+    return e ? e->idle_countdown : 0;
 }
 
 // ---- locomotor / deploy ------------------------------------------------------------------------------
@@ -215,6 +218,15 @@ uint32_t AnimBehaviors::service_locomotor(AnimWorld& w, ObjectId id, const Locom
     const float move_blend = w.tunables().move_blend_seconds, idle_blend = w.tunables().idle_blend_seconds;
     const int32_t cur = w.current_type(id);
     const bool moving = in.movable && in.speed > 0.0f;
+    IdleParams ip = p.idle;
+    ip.idle_type = default_idle_type(m, in, p.idle);
+    // s78k t02: the IDLE service (0x62e570) after the locomotor's play, every call while not moving (step 1: a moving unit
+    // is skipped unless Allow_Idle_When_Moving). Plays started: the locomotor's + the idle's. A crouch change forces the
+    // idle clip only when the locomotor started none this call ([port]: its stop / turn clip already follows the state).
+    const auto then_idle = [&](uint32_t plays) -> uint32_t {
+        if (moving && !in.allow_idle_when_moving) return plays;
+        return plays + (service_idle(w, id, ip, in.target, rng, frame, crouch_changed && plays == 0) ? 1u : 0u);
+    };
     if (moving) {
         const float ratio = in.max_speed > 0.0f ? in.speed / in.max_speed : 1.0f;
         int32_t want = kAnimMove;
@@ -223,16 +235,16 @@ uint32_t AnimBehaviors::service_locomotor(AnimWorld& w, ObjectId id, const Locom
         else if (in.burning) want = kAnimFireMove;
         else if (m->variant_count(kAnimWalkMove) > 0 && ratio < p.walk_speed_ratio) want = kAnimWalkMove;
         if (m->variant_count(want) == 0) want = kAnimMove;
-        if (m->variant_count(want) == 0) return 0;
+        if (m->variant_count(want) == 0) return then_idle(0);
         const float base = want == kAnimDeployedWalk ? p.deployed_walk_anim_speed : p.movement_anim_speed;
         const float speed = base * std::max(ratio, p.min_move_ratio);
         if (cur == want) {
             w.set_speed(id, speed);
-            return 0;
+            return then_idle(0);
         }
         if (is_move_family(cur)) {
             w.switch_preserving_phase(id, want, 0, true, move_blend, speed, frame);
-            return 1;
+            return then_idle(1);
         }
         PlayRequest r;
         r.type = want;
@@ -244,9 +256,8 @@ uint32_t AnimBehaviors::service_locomotor(AnimWorld& w, ObjectId id, const Locom
         const uint32_t count = c && c->clip ? c->clip->frame_count : 0u;
         if (count > 0) r.start_frame = static_cast<float>(rng.range_int(0, static_cast<int32_t>(count) - 1));  // synced
         w.play(id, r, &rng, frame);
-        return 1;
+        return then_idle(1);
     }
-    const int32_t idle_type = default_idle_type(m, in, p.idle);
     if (in.movable && (dyaw > 0.01f || dyaw < -0.01f)) {
         // Turning in place: TURNL for a counter-clockwise (positive) yaw change [port sign].
         const int32_t turn = dyaw > 0.0f ? (in.crouched ? kAnimTurnLeftCrouch : kAnimTurnLeft) : (in.crouched ? kAnimTurnRightCrouch : kAnimTurnRight);
@@ -258,24 +269,19 @@ uint32_t AnimBehaviors::service_locomotor(AnimWorld& w, ObjectId id, const Locom
             r.loop = false;
             r.blend_seconds = move_blend;
             r.speed = 1.0f;
-            return w.play(id, r, &rng, frame) == PlayResult::Played ? 1u : 0u;
+            return then_idle(w.play(id, r, &rng, frame) == PlayResult::Played ? 1u : 0u);
         }
     }
     if (is_move_family(cur)) {
         PlayRequest r;  // stopped: back to the idle (then the idle behaviour)
-        r.type = idle_type;
+        r.type = ip.idle_type;
         r.loop = p.idle.loop_idle;
         r.blend_seconds = idle_blend;
         r.speed = p.idle.idle_rate;
         w.play(id, r, &rng, frame);
-        return 1;
+        return then_idle(1);
     }
-    if (crouch_changed || w.current_mode(id) == SlotMode::Finished || cur == kNoAnimType) {
-        IdleParams ip = p.idle;
-        ip.idle_type = idle_type;
-        return service_idle(w, id, ip, rng, frame, crouch_changed) ? 1u : 0u;
-    }
-    return 0;
+    return then_idle(0);
 }
 
 bool AnimBehaviors::deploy(AnimWorld& w, ObjectId id, bool undeploy, float rate, SimRng& rng, uint64_t frame) {
@@ -452,7 +458,7 @@ void AnimBehaviors::hash(StateHasher& h) const {
         h.i32(e.ret_type);
         h.boolean(e.ret_loop);
         h.f32(e.ret_speed);
-        h.u64(e.combat_timer);
+        h.u64(e.idle_countdown);
         h.f32(e.last_yaw);
         h.boolean(e.have_yaw);
         h.boolean(e.last_crouch);

@@ -108,10 +108,18 @@ bool MovementSystem::fform_hidden(ObjectId key, ObjectId object) {
 
 // 0x41b2a0: the slowest member's speed [port: a squadron container's 0x370f00(company type) is read as its slowest
 // fighter's max speed]. A top with flag 0x10 (SpaceIdleMovementSpeed) is never built [port].
+// s78k t03 (FIGHTER_FLYING §4.11 item 4, MOVEMENT §3.4, TACTICAL_COMBAT §4.4 "No mode gate"): the squadron member is the
+// container, so its value is the container's effective max speed 0x370f00: the minimum raw Max_Speed of its fighters
+// (0x4049e0) x the space multiplier x the container's factor (set_team: its SPEED Mod_Multiplier, the squad value), not
+// the fighters' own factors. A lone fighter keeps its own effective max speed.
 float MovementSystem::fform_unit_speed(ObjectId key) {
     float s = -1.0f;
+    const bool squad = squad_ptr(key) != nullptr;
     for (const ObjectId m : fform_members(key))
-        if (const Unit* u = unit_ptr(m)) s = s < 0.0f ? u->lp.max_speed : std::min(s, u->lp.max_speed);
+        if (const Unit* u = unit_ptr(m)) {
+            const float v = squad ? team_base_speed(*u) * u->team_factor : u->lp.max_speed;
+            s = s < 0.0f ? v : std::min(s, v);
+        }
     return s;
 }
 

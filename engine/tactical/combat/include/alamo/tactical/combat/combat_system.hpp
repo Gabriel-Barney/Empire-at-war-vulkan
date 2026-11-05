@@ -1346,9 +1346,9 @@ public:
     // that is != 1 (only when the container is a combat unit; the port's containers have no abilities, so 1.0), else
     // the minimum over ALL live members' own products (the team_leader stand-in and 1.0-valued members included), 1.0
     // when the team has no live member. Only container-level readers use it (a team locomotor's SPEED [M]); every
-    // per-unit reader (mod_multiplier, weapons, shields, damage) reads the unit's own product. Caller (s78j t03): the
-    // host's speed factors give every live land team member this SPEED value (the port has no container locomotor; the
-    // members stand in for it). Pure function of the current state.
+    // per-unit reader (mod_multiplier, weapons, shields, damage) reads the unit's own product. Caller (s78k t03): the
+    // host's speed factors pass this SPEED value as the container's factor of the movement layer's team locomotor cap
+    // (land teams and space squadrons; MovementSystem::set_team). Pure function of the current state.
     float team_mod_multiplier(uint32_t team, ModKind kind) const;
     float attack_range(ObjectId id);  // Get_Max_Attack_Range
     void set_health(ObjectId id, float h);

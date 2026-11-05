@@ -169,6 +169,7 @@ UnitView MovementSystem::view(ObjectId id) const {
     v.space_fallback = u.fallback;
     v.start_frame = u.start_frame;  // OI tactical
     v.formation_speed = u.formation_speed;
+    v.team_speed = u.team_cap;  // s78k t03
     v.large_hover_index = u.large_hover_index;
     v.jiggle = u.jiggle;
     v.locomotor = u.d.locomotor;  // §4.3-4.7
@@ -365,6 +366,11 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
                 u.arrived = false;
                 u.failed = false;
                 u.facing = order.facing_deg;
+                // s78k t01 (MOVEMENT §6.1, §3.5.1): the final facing and the flag-0x20 straight path of this move; a new
+                // order drops a running arrival turn.
+                u.final_facing = order.final_facing_deg;
+                u.forced = (order.flags & kMoveFlagSkipValidation) != 0;
+                u.turning = false;
                 u.start_frame = queued ? frame + delays[s.member] : fstart;
                 u.formation_speed = f.size() > 1 ? fspeed : kInf;
                 u.in_formation = f.size() > 1;  // OI tactical
@@ -663,6 +669,7 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
                 plan_space_path(air_, air_k, q, ssc, air_out[r]);
                 continue;
             }
+            if (u.forced) continue;  // s78k t01: the straight path is built below
             LandPathRequest q;
             q.start = u.m.pos;
             q.goal = u.goal;
@@ -686,6 +693,16 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
             }
             u.wps = std::move(air_out[r].wps);
             on_air_path(u, frame);
+            continue;
+        }
+        if (u.forced) {
+            // s78k t01 (MOVEMENT §6.1 "Flag 0x20 path (land)" [H]): no route - the path is start -> destination, and its
+            // skip-passability flag (path +0x5c) holds for the whole path (escape_until past the last waypoint).
+            // [port] The 0x50e180 destination check / 0x440f90 placement is not modelled: the destination is used as is.
+            u.m.path = {u.m.pos, u.goal};
+            u.m.next = 1;
+            u.m.escape_until = 2u;
+            u.blocked_frames = 0;
             continue;
         }
         if (out[r].ok) {
@@ -1170,6 +1187,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
     plan_land(frame, pf);
     detect_collisions(frame);  // S7: checks create collision objects
     drive_collisions(frame);   // S7: cancel / priority sort / resolve (TACTICAL_GAPS §6.7)
+    team_caps();  // s78k t03: serial, before the parallel walk reads Unit::team_cap
     // OI tactical: formation jiggle (0x42c270, §3.5 step 6) - serial, ascending id, before the parallel walk.
     for (Unit& u : units_) {
         if (!u.in_formation || !u.has_goal || u.need_path || frame < u.start_frame || is_air(u)) continue;
@@ -1200,12 +1218,25 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                 if (bike) bike_frame(u, yaw0, true);
                 continue;
             }
+            // s78k t01 (MOVEMENT §3.5.1 state 0x10): the arrival turn steps the yaw toward the final facing by at most
+            // the stopped turn rate (0x61e730: the covering step lands exactly on it), then the unit is idle (0x16).
+            if (u.turning && !u.has_goal && u.d.locomotor == LocomotorKind::Default) {
+                const float rate = u.d.stopped_turn_rate > 0.0f ? u.d.stopped_turn_rate : u.lp.turn_rate;
+                u.m.yaw = turn_toward(u.m.yaw, u.turn_to, rate);
+                u.m.state = LocoState::WalkTurning;
+                if (u.m.yaw == wrap_deg(u.turn_to)) {
+                    u.turning = false;
+                    u.m.state = LocoState::WalkStopped;
+                }
+                continue;
+            }
             // S8 t11: a Walk in a deploy state does not move (MovementSystem::deploy).
             if (!u.has_goal || u.need_path || frame < u.start_frame || u.deploy != LocoState::None) {
                 if (bike) bike_frame(u, yaw0, false);
                 continue;
             }
-            float cap = std::min(u.formation_speed, u.speed_cap);
+            // s78k t03: the team locomotor cap (team_caps) applies to every move of a team member, in a formation or not.
+            float cap = std::min(std::min(u.formation_speed, u.speed_cap), u.team_cap);
             if (frame < u.hold_until) cap = 0.0f;
             WalkExtras x;  // OI tactical: formation members (jiggle, side-error steering)
             x.jiggle = u.jiggle;
@@ -1237,6 +1268,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             if (r.arrived) {
                 u.has_goal = false;
                 u.arrived = true;
+                land_arrival_turn(u);  // s78k t01: state 0x15
             }
             if (r.blocked) {
                 ++stats_.blocked_steps;
@@ -1469,6 +1501,81 @@ bool MovementSystem::set_speed_factor(ObjectId id, float factor) {
     u.speed_factor = factor;
     configure(u);
     return true;
+}
+
+// ---------------------------------------------------------------- s78k t01: land arrival turn
+// MOVEMENT §3.5.1 (0x61d890 -> 0x61ca90): the wanted orientation on the last waypoint = its facing (the move's final
+// facing), through Movement_Directions_Count: 1 -> that yaw; <= 0 -> the current yaw; N -> of the N yaws spaced 360 / N
+// from the wanted one, the closest to the current yaw (first on ties).
+float MovementSystem::land_wanted_yaw(const Unit& u) const {
+    const int32_t n = u.d.movement_directions;
+    if (n <= 0) return u.m.yaw;
+    const float want = wrap_deg(u.final_facing);
+    if (n == 1) return want;
+    float best = want, best_d = 1.0e30f;
+    for (int32_t k = 0; k < n; ++k) {
+        const float y = wrap_deg(want + 360.0f * static_cast<float>(k) / static_cast<float>(n));
+        const float dlt = std::fabs(wrap_deg(y - u.m.yaw));
+        if (dlt < best_d) {
+            best_d = dlt;
+            best = y;
+        }
+    }
+    return best;
+}
+
+// State 0x15 on the last waypoint: a move with a final facing turns when the yaw is more than 10 degrees off (state
+// 0xf / 0x10), else it keeps its arrival yaw. [port] Walk locomotor (LocomotorKind::Default) only; the [M] variant
+// threshold (the turn rate when <= 10 on path kind 3 / a zero-speed waypoint) and the Has_Pre_Turn_Anim clip wait are
+// not modelled. A move without a final facing ends on the arrival heading.
+void MovementSystem::land_arrival_turn(Unit& u) const {
+    u.turning = false;
+    if (u.final_facing == kNoFacing || u.d.locomotor != LocomotorKind::Default || is_air(u)) return;
+    const float want = land_wanted_yaw(u);
+    if (std::fabs(wrap_deg(want - u.m.yaw)) <= 10.0f) return;
+    u.turning = true;
+    u.turn_to = want;
+}
+
+// ---------------------------------------------------------------- s78k t03: team locomotor
+bool MovementSystem::set_team(ObjectId id, ObjectId team, float container_factor) {
+    const int32_t i = find(id);
+    if (i < 0) return false;
+    Unit& u = units_[static_cast<size_t>(i)];
+    if (!(container_factor >= 0.0f)) container_factor = 0.0f;  // NaN / negative -> stopped
+    u.team = team < 0 ? -1 : team;
+    u.team_factor = u.team < 0 ? 1.0f : container_factor;
+    return true;
+}
+
+float MovementSystem::team_base_speed(const Unit& u) const {
+    // 0x4049e0: the members' raw Max_Speed (+0x37c), not their own speed overrides or factors; x the mode multiplier as
+    // configure() applies it, so a team of one type with factor-1 members gets exactly their lp.max_speed.
+    const MovementConstants& k = cfg_.constants;
+    const float mult = cfg_.mode == MoveMode::Land ? k.land_speed_multiplier : k.space_speed_multiplier;
+    return std::max(u.d.max_speed, 0.0f) * mult;
+}
+
+void MovementSystem::team_caps() {
+    // MOVEMENT §3.4 (0x370f00 / 0x376990): a team container's effective max speed = min over its members of Max_Speed
+    // (0x4049e0), x the container's own factors (here: set_team's container factor). Sorted (team, minimum) pairs built
+    // serially in units_ order (no hashed container); a min is order-independent anyway.
+    std::vector<std::pair<ObjectId, float>> mins;
+    for (const Unit& u : units_) {
+        if (u.team < 0) continue;
+        const float b = team_base_speed(u);
+        auto it = std::lower_bound(mins.begin(), mins.end(), u.team,
+                                   [](const std::pair<ObjectId, float>& e, ObjectId t) { return e.first < t; });
+        if (it == mins.end() || it->first != u.team) mins.insert(it, {u.team, b});
+        else it->second = std::min(it->second, b);
+    }
+    for (Unit& u : units_) {
+        u.team_cap = kInf;
+        if (u.team < 0 || jet_alternates(u)) continue;  // 0x371060: the airborne jetpack chain has no team cap
+        const auto it = std::lower_bound(mins.begin(), mins.end(), u.team,
+                                         [](const std::pair<ObjectId, float>& e, ObjectId t) { return e.first < t; });
+        if (it != mins.end() && it->first == u.team) u.team_cap = it->second * u.team_factor;
+    }
 }
 
 float MovementSystem::speed_factor(ObjectId id) const {

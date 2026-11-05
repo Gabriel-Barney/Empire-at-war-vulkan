@@ -10,10 +10,19 @@
 //             79-82 while the current clip is attack-like or Attack Idle; random variant (synced), loop, blend
 //             Max_Flinch_Blend_Seconds, speed 1. Held Max_Flinch_Hold_Seconds, then no new flinch for
 //             Idle_ / Attack_Flinch_Interval_Seconds. No clip of the type = nothing (no draw).
-//   engaged   [H] the idle behaviour, current clip attack-like / Attack Idle and finished: Attack Idle (index 0,
-//             one-shot, blend 0, speed 1); a fresh engagement (coming from an attack) sets the combat timer =
-//             frame + 90 + synced int [0, 30]; a finished idle-like clip while engaged -> Attack Idle with blend =
-//             synced float [0.2, 0.75]. Otherwise the plain idle behaviour (AnimWorld::service_idle).
+//   idle      [H] (s78k t02, TACTICAL_COMBAT §3.1.1 slot 47 "s78k t02"; IdleBehavior 0x62e570) serviced EVERY frame
+//             (not only when the clip finished; not suspended by Prevent_All_Fire); no service while the unit moves
+//             (unless Allow_Idle_When_Moving) or is in a Walk deploy state (the host skips it). The host gives the
+//             TARGETING lookup (IdleTarget: the unit's TARGETING, a team member without one its container's, read
+//             whether suspended or not):
+//             * target held (TD +8): EVERY service draws one synced int [0, 30] and sets the idle countdown to it + 90
+//               (frames); when the current clip is attack-like / Attack / Attack Idle and finished and the model has
+//               Attack Idle: Attack Idle (index 0, one-shot, blend 0, speed 1, no further draw). Nothing else;
+//             * no target: the countdown drops by 1 (while > 0); nothing more while a flinch is held or the current
+//               clip is still playing (crouch change excepted). Then, from a finished attack-like / Attack / Attack
+//               Idle clip when the unit has TARGETING: countdown > 0 -> Attack Idle (index 0, one-shot, blend = synced
+//               float [0.2, 0.75], speed 1), else the default idle (index 0, one-shot, idle blend, speed 1); from any
+//               other clip the plain idle behaviour (AnimWorld::service_idle: fidget timer).
 //   death     [H] Die resets the animation state (overlay cleared, flinch dropped), then Specific_Death_Anim_Type /
 //             _Index (default Die, 0xFFFF = synced random variant), one-shot, blend 0.5, speed 1. No clip and
 //             Remove_Upon_Death -> removed at once.
@@ -23,6 +32,11 @@
 //
 // PORT CHOICES ([port], listed in docs/PHASE4.md R3):
 //   * seconds -> frames by truncation int(30 * s) (ABILITIES_HARDPOINTS §6.3), negative -> 0;
+//   * idle (s78k t02): the "Attack Idle with a blend draw" is drawn even when the model has no Attack Idle clip (the
+//     play then fails and the clip stays; [M] retail evaluates the argument before the play); the default idle from an
+//     attack clip is index 0, one-shot, speed 1 [M]; turning in place counts as not moving (the idle service runs after
+//     the turn / stop play in the same call) [M]; the idle record list I +0x10 and the flinch bookkeeping of step 2 are
+//     not modelled here (flinch: on_hit / service);
 //   * flinch only from no clip / idle-like / attack-like / Attack Idle (not while moving, turning or dying); the
 //     hold end plays the return clip (Attack Idle when the flinch was an attack flinch and the clip exists, else
 //     the default idle with Loop_Idle_Anim_00 / Idle_Anim_00_Rate_Mod) with the flinch blend; both flinch plays
@@ -74,6 +88,11 @@ struct DeathParams {
 };
 
 // Locomotor clip selection (WalkLocomotor 0x61f840, turn 0x620190; §A.7 walk / move and turn rows).
+// s78k t02: what the IDLE service's TARGETING lookup (0x62e570 step 3 / 4) finds for a unit: no TARGETING behaviour at
+// all (neither its own nor, for a team member, its container's), a TARGETING without a target, or one holding a target
+// (TD +8 != null; suspension ignored).
+enum class IdleTarget : uint8_t { None = 0, NoTarget = 1, Target = 2 };
+
 struct LocomotorParams {
     float movement_anim_speed = 1.0f;       // Movement_Animation_Speed (+0x370)
     float deployed_walk_anim_speed = 1.0f;  // Deployed_Walk_Anim_Speed
@@ -90,6 +109,8 @@ struct LocomotorInput {
     bool burning = false;                  // object +0x3a1 & 2 [M]
     bool deployed = false;                 // deployed walker
     int32_t idle_type = kNoAnimType;       // garrison container mapping (caller); kNoAnimType = default rule
+    IdleTarget target = IdleTarget::NoTarget;  // s78k t02: the idle service's TARGETING lookup (host)
+    bool allow_idle_when_moving = false;       // Allow_Idle_When_Moving (type +0x85): idle service also while moving
 };
 
 // Locomotor / default-idle rules, exposed for tests.
@@ -132,7 +153,7 @@ inline constexpr uint64_t kNeverFrames = ~uint64_t{0};
 uint64_t one_shot_frames(uint32_t frame_count, float fps, float speed);
 
 inline constexpr float kDeathBlendSeconds = 0.5f;
-inline constexpr uint32_t kEngagedBaseFrames = 90;   // combat timer = frame + 90 + int [0, 30]
+inline constexpr uint32_t kEngagedBaseFrames = 90;   // idle countdown = 90 + int [0, 30] (every service with a target)
 inline constexpr int32_t kEngagedRandomFrames = 30;
 
 // int(30 * seconds), 0 for negative / NaN.
@@ -179,10 +200,12 @@ public:
     bool flinching(ObjectId id) const;
     uint64_t next_flinch_frame(ObjectId id) const;  // 0 when none recorded
 
-    // ---- idle behaviour (incl. idle while engaged) ----
-    // Runs only when the current clip is finished or absent (or the crouch state changed). True if it played.
-    bool service_idle(AnimWorld& w, ObjectId id, const IdleParams& idle, SimRng& rng, uint64_t frame, bool crouch_changed = false);
-    uint64_t combat_timer(ObjectId id) const;  // 0 when none recorded
+    // ---- idle behaviour (incl. idle while engaged; s78k t02 flow above) ----
+    // One service of 0x62e570 (call every frame the unit is not moving; draws with a target whatever the clip). True if
+    // it played a clip.
+    bool service_idle(AnimWorld& w, ObjectId id, const IdleParams& idle, IdleTarget target, SimRng& rng, uint64_t frame,
+                      bool crouch_changed = false);
+    uint64_t idle_countdown(ObjectId id) const;  // I +0xc, frames; 0 when none recorded
 
     // ---- locomotor (one call per unit per tick, the battle's locomotor step) ----
     // moving: Move family by state (Deployed_Walk 115 > CROUCHMOVE 67 > FIRE_MOVE 61 > WALKMOVE 66 when slow >
@@ -191,7 +214,9 @@ public:
     // phase is kept (switch_preserving_phase), from outside a synced random start frame. Stopped: a Move-family
     // clip goes back to the default idle (loop Loop_Idle_Anim_00, idle blend); a stationary yaw change plays
     // TURNL / TURNR (CROUCHTURNL / R when crouched; one-shot, index 0, move blend, speed 1 [port]) while turning;
-    // otherwise the idle behaviour (crouch change forces it). Returns the number of plays started (0 / 1).
+    // then (s78k t02) the idle service on every call while not moving (in.target; also while moving with
+    // in.allow_idle_when_moving), after the locomotor's own play (crouch change forces the idle clip). Returns the
+    // number of plays started (0 - 2).
     uint32_t service_locomotor(AnimWorld& w, ObjectId id, const LocomotorParams& p, const LocomotorInput& in, SimRng& rng, uint64_t frame);
 
     // ---- deploy / undeploy (0x61e930: 25 / 26, synced random variant, one-shot, blend 0.0333, speed
@@ -226,8 +251,8 @@ public:
     size_t state_count() const { return entries_.size(); }
 
     // ---- N1 save / load (contract: alamo/core/save_file.hpp; src/anim_save.cpp) ----
-    // Layout: u32 version (1); u32 count + every behaviour entry in ascending id (i32 id, i32 flinch type, u64 flinch
-    // end, u64 next flinch, f32 flinch blend, i32 return type, bool return loop, f32 return speed, u64 combat timer,
+    // Layout: u32 version (2; 1 is accepted, its combat-timer frame stamp read as countdown 0); u32 count + every behaviour entry in ascending id (i32 id, i32 flinch type, u64 flinch
+    // end, u64 next flinch, f32 flinch blend, i32 return type, bool return loop, f32 return speed, u64 idle countdown,
     // f32 last yaw, bool have yaw, bool last crouch); u32 count + every corpse in ascending id (i32 id, u8 phase, i32
     // death type, bool forever, bool spin-away, u8 damage kind, bool detached, u64 death frame, u64 phase end, u64
     // persist frames, u64 fade frames, CorpseInfo: u32 object type, i32 owner, f32 position[3], f32 facing[3]).
@@ -245,7 +270,7 @@ private:
         int32_t ret_type = kAnimIdle;
         bool ret_loop = false;
         float ret_speed = 1.0f;
-        uint64_t combat_timer = 0;
+        uint64_t idle_countdown = 0;  // I +0xc (frames)
         float last_yaw = 0.0f;  // locomotor
         bool have_yaw = false, last_crouch = false;
     };
