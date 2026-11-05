@@ -659,6 +659,13 @@ driven from the free-store script:
 The free-store script stopped producing records at the AT-AT scenario's first DEPLOY in both land runs (`ret=nil`,
 then silence for the rest of the battle). [M] Something in that scenario blocks the free-store thread for good,
 not an error: the event handlers run in pcall and recorded nothing. Run the AT-AT scenario last.
+Third run (s78f t12, 2026-11-05, `out/20261105-062322`, AT-AT last) [M]. `("DEPLOY", true)` on the AT-AT returned
+nil (ready 0 → 0, not active). The script then falls through to the `DEPLOY_TROOPERS` fallback, and the thread went
+silent for good while the game ran on for about 9600 frames. No later record arrived, not even the ACTC record
+written between `Is_Ability_Ready("DEPLOY_TROOPERS")` and the no-argument `Activate_Ability("DEPLOY_TROOPERS")`. So
+the block is in one of those two calls on an AT-AT that has not deployed. The reader also missed the ACTC of the
+first DEPLOY call in this run, so a lost record cannot be ruled out. Either way, the original's free-store thread
+never resumes after that call.
 
 ### 7.3.4 `LandTaskForce.Fire_Special_Weapon(type_name, target)` with a position target (s78f t04, 2026-11-03)
 

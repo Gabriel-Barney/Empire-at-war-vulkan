@@ -1404,6 +1404,30 @@ void test_team_targeting() {
         while (t.w.frame <= due) t.w.tick();
         CHECK(t.w.sys->auto_target(11) == (in_team ? 2 : kNoObject));
     }
+    // s78f t07: a dead team_leader hands the role to the team's first live member (ascending id). Leader 10 has no set;
+    // after it is removed, member 11 (capital first) leads, so member 12 (no set of its own) scores with 11's set and
+    // takes the farther capital. Without the hand-over 12 would have no head and take the closer fighter (all 1.0).
+    for (const bool remove_leader : {true, false}) {
+        TargetWorld t;
+        UnitDesc noset = t.w.data.units[t.attacker];
+        noset.priority_set = -1;
+        const uint32_t md = push_unit(t.w.data, noset);
+        t.w.make();
+        add_team_unit(t, 10, md, 0, Vec3{0, 300, 0}, 7, true);
+        add_team_unit(t, 11, t.attacker, 0, Vec3{0, -300, 0}, 7, false);
+        add_team_unit(t, 12, md, 0, Vec3{0, 0, 0}, 7, false);
+        t.w.tick();
+        if (remove_leader) {
+            CHECK(t.w.sys->remove_unit(10));
+            t.w.trees.remove(10);
+        }
+        t.w.tick();
+        add_team_unit(t, 20, t.fighter, 1, Vec3{200, 0, 0}, 0, false);
+        add_team_unit(t, 21, t.capital, 1, Vec3{500, 0, 0}, 0, false);
+        const uint32_t due = t.w.sys->next_scan(12);
+        while (t.w.frame <= due) t.w.tick();
+        CHECK(t.w.sys->auto_target(12) == (remove_leader ? 21 : 20));
+    }
     // Squad head = the container object when it is a combat unit (team id = its object id): the member scores with
     // the container's set (capital first) although its own type has none.
     {

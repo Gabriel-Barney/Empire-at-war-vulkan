@@ -191,8 +191,10 @@ uint32_t TacticalBattle::bt_adopt_built(TacticalMode& mode, objects::ObjectHandl
     u.side = p.side;
     const bool member = container < containers_.size();  // OI host: a wingman joining a team
     u.movable = (map || member) && mode.movable(h);  // pad objects are structures [port: never given to MovementSystem]
+    bool leader = false;  // s78f t07: the first member of an empty team leads it (bt_spawn_company's rule)
     if (member) {
         u.container = container;
+        leader = containers_[container].alive == 0;
         ++containers_[container].alive;
     }
     u.power = p.power;
@@ -214,6 +216,10 @@ uint32_t TacticalBattle::bt_adopt_built(TacticalMode& mode, objects::ObjectHandl
     cs.position = tactical::Vec3{st.position(h).x, st.position(h).y, st.position(h).z};
     cs.facing = tactical::Vec3{st.facing(h).x, st.facing(h).y, st.facing(h).z};
     cs.health_fraction = std::clamp(health_fraction, 0.0f, 1.0f);
+    if (member && !space_) {  // s78f t07: land team members join combat with their team (see bt_spawn_company)
+        cs.team = static_cast<uint32_t>(containers_[container].id);
+        cs.team_leader = leader;
+    }
     abilities_->add_unit(cs, cs.desc, frame_, *rng, member ? containers_[container].id : tc::kNoObject);
     u.range = combat_->attack_range(u.id);
     const auto it = std::lower_bound(units_.begin(), units_.end(), u.id, [](const Unit& a, objects::ObjectId v) { return a.id < v; });

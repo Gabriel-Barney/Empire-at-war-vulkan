@@ -886,6 +886,13 @@ Further differences found 2026-11-02 (input for S8 t06; port state as of 96c474e
   same height; the real launch bone is higher. Range edge, not settled: a T4B 547 away (from the walker centre)
   was never acquired (targeting state 0 for 600 frames, no explicit order). The "530" control actually spawned 560
   away. A scan-but-reject between 544 and 550 was not seen; [M] the deployed SPMAT may not auto-acquire there at all.
+  Follow-up with explicit orders (s78f t12, 2026-11-05, `out/20261105-062322`, SPMAT_EDGE) [M: edge still open]:
+  the SPMAT was deployed (block finished at +45), its locomotor suspended, and one held Empire T4B was spawned per
+  240-frame window at d = 500, 530, 540, 544, 546, 548, 550, 553, 560, 575 from its centre (behind its facing),
+  each with a Lua `Attack_Target` (returned ok). **No grenade in any window, d = 500 included**, where the
+  undeployed SPMAT fires. The reader lost the walker's state after its first sample, so the targeting state is not
+  known. So this setup (deployed + `Suspend_Locomotor` + target behind) stops the SPMAT firing by itself; the 544–550
+  edge needs another run without `Suspend_Locomotor` and with the target in front.
 - ~~**probe**: Magnepulse slew~~ — done (s78f t09, 2026-11-05): §3.6 "In-game probe".
 
 ## Address table

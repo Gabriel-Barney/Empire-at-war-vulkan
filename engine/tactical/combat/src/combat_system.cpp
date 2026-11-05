@@ -3977,6 +3977,27 @@ void CombatSystem::flush() {
             break;
         }
     if (any_dead) {
+        // s78f t07: a dead team_leader hands the role to its team's first live member (ascending id), so the team keeps
+        // its head (TeamTargeting copy, Mod_Multiplier squad rule) while any member lives. [port] The original's head is
+        // the container, which outlives its members; here a member stands in for it (team_head).
+        for (const Unit& d : units_) {
+            if (!(d.flags & kUnitDead) || d.team == 0 || !d.team_leader) continue;
+            Unit* heir = nullptr;
+            bool led = false;
+            for (Unit& m : units_) {
+                if ((m.flags & kUnitDead) || m.team != d.team) continue;
+                if (m.team_leader) {
+                    led = true;
+                    break;
+                }
+                if (!heir) heir = &m;
+            }
+            if (led || !heir) continue;
+            heir->team_leader = 1;
+            // team_head() between ticks (host reads of current_target) sees the heir at once; phase A rebuilds the list.
+            const auto it = std::lower_bound(team_heads_.begin(), team_heads_.end(), std::make_pair(d.team, ObjectId{-1}));
+            if (it != team_heads_.end() && it->first == d.team) it->second = heir->id;
+        }
         flush_hps_.clear();
         size_t w = 0;
         for (size_t i = 0; i < units_.size(); ++i) {
