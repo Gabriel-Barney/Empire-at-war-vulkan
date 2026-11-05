@@ -5916,6 +5916,123 @@ void test_escort_attack_in_range() {
     CHECK(squad != objects::kNoObjectId && two && in_range && attack_stack && attack_record);
 }
 
+// s78f t10: the AI order paths give the movement layer the same block as the host record. A Lua Guard_Target of the
+// carrier by the squadron (BattleAi, as the tactical AI's group order): the movement stack holds one guard object block
+// (flags 0x02, the carrier) and the record matches; the carrier then moves and the squadron's formation keeps that block
+// (the follow service no longer re-issues a flags-0 position move to fighters with an object block). Then an AI Attack on
+// an enemy already in range replaces the stack by the object block (as the human exec_attack does).
+void test_ai_fighter_blocks() {
+    namespace mv = tactical::movement;
+    using R = commands::RejectReason;
+    FighterBattle fb;
+    if (!start_fighter_battle(fb, false, true)) return;
+    const uint32_t carrier_type = type_of(*fb.d, "S10_Carrier");
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup setup;
+    setup.defs = &defs;
+    setup.equations = &eqs;
+    setup.files = fb.d->files.get();
+    setup.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };  // no AI player: orders only
+    objects::ObjectId carrier = objects::kNoObjectId, squad = objects::kNoObjectId, enemy = objects::kNoObjectId;
+    std::vector<objects::ObjectId> members;
+    std::unique_ptr<BattleAi> ai;
+    bool guard_stack = false, guard_record = false, kept = true, carrier_moved = false, attack_stack = false, attack_record = false;
+    uint32_t guard_frame = 0, kept_frames = 0;
+    Vec3 c0{};
+    for (uint64_t t = 0; t < 6000; ++t) {
+        fb.host->tick_once();
+        TacticalBattle* b = fb.battles->battle();
+        TacticalMode* tm = fb.host->tactical();
+        if (!b || !tm) {
+            if (carrier != objects::kNoObjectId) break;
+            continue;
+        }
+        const objects::ObjectStore& st = tm->primary();
+        if (carrier == objects::kNoObjectId) {
+            for (const objects::ObjectHandle h : st.owned_by(0))
+                if (st.alive(h) && st.type(h) == carrier_type) carrier = st.id(h);
+            if (carrier == objects::kNoObjectId) continue;
+        }
+        if (!st.alive(st.find(carrier))) break;
+        if (squad == objects::kNoObjectId) {
+            for (const mv::FighterSquad& s : b->movement().fighter_squads())
+                if (!s.members.empty() && b->fighter_formation(s.id)) {
+                    squad = s.id;
+                    members = s.members;
+                }
+            if (squad == objects::kNoObjectId) {
+                if (b->frame() > 300) break;
+                continue;
+            }
+            ai = std::make_unique<BattleAi>(*b, *tm, *fb.host, setup);
+            const Vec3 cp = st.position(st.find(carrier));
+            c0 = cp;
+            std::vector<uint8_t> pay;
+            auto put = [&pay](uint32_t v) {
+                for (int i = 0; i < 4; ++i) pay.push_back(static_cast<uint8_t>(v >> (8 * i)));
+            };
+            put(static_cast<uint32_t>(members.front()));
+            put(static_cast<uint32_t>(carrier));
+            put(std::bit_cast<uint32_t>(cp.x));
+            put(std::bit_cast<uint32_t>(cp.y));
+            put(std::bit_cast<uint32_t>(cp.z));
+            put(0u);
+            for (size_t i = 1; i < members.size(); ++i) put(static_cast<uint32_t>(members[i]));
+            const auto sub = static_cast<uint16_t>(lua::kLuaOrderSubtype + static_cast<uint16_t>(lua::LuaOrder::Guard));
+            CHECK(ai->execute(0, commands::ev::port_extension(sub, pay)) == R::None);
+            const mv::FighterFormation* ff = b->movement().fighter_formation(squad);
+            guard_stack = ff && ff->blocks.size() == 1 && ff->blocks[0].kind == mv::kFighterBlockObject && ff->blocks[0].object == carrier &&
+                          ff->blocks[0].flags == mv::kMoveFlagGuardMove;
+            const FighterFormationRecord* r = b->fighter_formation(squad);
+            guard_record = r && r->flags == mv::kMoveFlagGuardMove && r->goal_object == carrier;
+            guard_frame = b->frame();
+            const objects::ObjectId cid[1] = {carrier};
+            CHECK(b->order_move(*tm, 0, cid, cp.x, cp.y + (cp.y > 0.0f ? -1500.0f : 1500.0f), fb.host->random().synced()) == R::None);
+            continue;
+        }
+        // The follow service (a1h t02) runs in update(); the stand-in frames (every 60th, BattleAi::standin_orders: plain moves
+        // of the uncontrolled players' units) are skipped so only the follow re-issues moves.
+        if ((b->frame() - 1u) % 60u != 0u) ai->update();
+        if (b->frame() < guard_frame + 600u) {
+            const mv::FighterFormation* ff = b->movement().fighter_formation(squad);
+            const bool g = ff && !ff->blocks.empty() && ff->blocks[0].kind == mv::kFighterBlockObject && ff->blocks[0].object == carrier &&
+                           (ff->blocks[0].flags & mv::kMoveFlagGuardMove) != 0;
+            kept = kept && g;
+            ++kept_frames;
+            continue;
+        }
+        const Vec3 cp = st.position(st.find(carrier));
+        carrier_moved = std::abs(cp.y - c0.y) > 300.0f;
+        for (const objects::ObjectHandle h : st.owned_by(1))
+            if (st.alive(h) && b->movement().has_unit(st.id(h)) && b->combat().has_unit(st.id(h)) &&
+                b->movement().view(st.id(h)).locomotor != mv::LocomotorKind::Fighter) {
+                enemy = st.id(h);
+                break;
+            }
+        CHECK(enemy != objects::kNoObjectId);
+        if (enemy == objects::kNoObjectId) break;
+        const Vec3 ep = st.position(st.find(enemy));
+        for (size_t k = 0; k < members.size(); ++k)
+            CHECK(b->teleport(*tm, members[k], Vec3{ep.x + 15.0f * static_cast<float>(k + 1), ep.y + 20.0f, ep.z}, Vec3{1, 0, 0}));
+        std::vector<uint32_t> wire;
+        for (const objects::ObjectId m : members) wire.push_back(static_cast<uint32_t>(m));
+        CHECK(ai->execute(0, commands::ev::attack(static_cast<uint32_t>(enemy), wire)) == R::None);
+        const mv::FighterFormation* af = b->movement().fighter_formation(squad);
+        attack_stack = af && af->blocks.size() == 1 && af->blocks[0].kind == mv::kFighterBlockObject && af->blocks[0].object == enemy &&
+                       af->blocks[0].flags == 0;
+        const FighterFormationRecord* ar = b->fighter_formation(squad);
+        attack_record = ar && ar->flags == 0 && ar->goal_object == enemy;
+        break;
+    }
+    std::printf("  AI orders: squadron %d, Lua guard of the carrier: stack %d record %d, kept while the carrier moves %d "
+                "(%u frames, moved %d); AI attack in range on %d: stack %d record %d\n",
+                squad, guard_stack ? 1 : 0, guard_record ? 1 : 0, kept ? 1 : 0, kept_frames, carrier_moved ? 1 : 0, enemy,
+                attack_stack ? 1 : 0, attack_record ? 1 : 0);
+    CHECK(squad != objects::kNoObjectId && guard_stack && guard_record && kept && kept_frames > 0 && carrier_moved);
+    CHECK(attack_stack && attack_record);
+}
+
 // s78f review (FIGHTER_FLYING §4.11 B 1, §4.10 E): an auto block on a station (a non-mover: no movement unit) is dropped
 // when the station dies - the death reaches MovementSystem::object_removed, and the position hook reads only live objects.
 // The player-0 star base is handed to player 1 so player 0's TIE squadron, ordered next to it, auto-attacks it; player 0's
@@ -6168,6 +6285,7 @@ int main(int argc, char** argv) {
     std::printf("s78f review: host record vs the movement stack (shift waypoint, attack order, a dying station)\n");
     test_escort_waypoint();
     test_escort_attack_in_range();
+    test_ai_fighter_blocks();  // s78f t10
     test_fighter_station_dies();
 #ifdef ALAMO_SIM_HAVE_FOG
     std::printf("S7 t22: a fogged formation goal toggles Idle <-> Directed_Combat\n");

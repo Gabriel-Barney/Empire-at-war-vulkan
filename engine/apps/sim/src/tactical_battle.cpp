@@ -1335,7 +1335,9 @@ void TacticalBattle::exec_move(TacticalMode& mode, std::span<const objects::Obje
     const tactical::Aabb& bb = mode.bounds();
     mv::MoveOrder o;
     o.units.assign(ids.begin(), ids.end());
-    o.flags = flags;  // P1_DOUBLE_CLICK_MOVE.md §3.2: the event flags, unchanged
+    // P1_DOUBLE_CLICK_MOVE.md §3.2: the event flags, unchanged; s78f t10: plus the attack-move bit, as the queued path and
+    // the host's formation record (fighter_order below) carry it, so the fighter leash reads the same block.
+    o.flags = static_cast<uint8_t>(flags | (attack_move ? mv::kMoveFlagAttackMove : 0));
     o.switch_locomotor = switch_locomotor;  // S7 t10: MoveToPosition's 1-bit (MOVEMENT §6.2)
     o.destination = {std::clamp(x, bb.min.x, bb.max.x), std::clamp(y, bb.min.y, bb.max.y)};
     if (std::isfinite(facing_deg)) o.facing_deg = facing_deg;

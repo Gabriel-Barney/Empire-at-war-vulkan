@@ -199,7 +199,12 @@ private:
     void follow_add(const std::vector<objects::ObjectId>& units, objects::ObjectId target, float x, float y, float threat);
     void follow_service();
     commands::RejectReason execute_order(uint8_t player, const commands::EventData& ev);
-    bool move_unit(objects::ObjectId id, float x, float y, float threat_threshold = ::alamo::tactical::movement::kThreatOff);
+    // s78f t10: `flags` / `goal_object` = the order's movement block (mv::MoveOrder::flags / goal_object), the same values the
+    // host's fighter formation record gets (TacticalBattle::fighter_order), so the movement layer's fighter leash and the
+    // host's chase tests read one block.
+    bool move_unit(objects::ObjectId id, float x, float y, float threat_threshold = ::alamo::tactical::movement::kThreatOff,
+                   uint8_t flags = 0, objects::ObjectId goal_object = objects::kNoObjectId);
+    bool is_fighter(objects::ObjectId id) const;  // s78f t10: a space unit on the fighter locomotor
 
     TacticalBattle* b_;
     TacticalMode* mode_;
