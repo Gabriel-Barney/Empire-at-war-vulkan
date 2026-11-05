@@ -570,25 +570,33 @@ int issue_and_block(Call& c, const Event& e) {
 
 // ---------------------------------------------------------------- spawning
 
+// Spawn facing (TACTICAL_COMBAT §3.1.1: s78h t05 for Spawn_Unit, s78i t02 for the other spawns). [port] no pitch.
+enum class SpawnFacing : uint8_t {
+    Location,  // the location object's facing, else +X (galactic Spawn_Unit and the stand-ins without a rule)
+    Origin,    // the XY unit vector from the spawn position toward the world origin, +X at x = y = 0
+    Given,     // `facing` as passed (Reinforce_Unit stand-in: the owner's entry-facing record)
+};
+
 // Creates `type` (and, for a company, its Company_Units as contained members, list order) at `pos`.
 // [inferred] creation is direct (no reinforcement / landing sequence); in galactic mode an object
-// location becomes the container (fleet / planet). Facing: the location object's, else +X; with
-// `face_origin` in a tactical store (Spawn_Unit, TACTICAL_COMBAT §3.1.1 s78h t05) the XY unit vector from the
-// spawn position toward the world origin, +X at x = y = 0 (an object location lends only its position; [port]
-// no pitch). Company members share the container's facing.
+// location becomes the container (fleet / planet). Facing: see SpawnFacing (an object location lends only its
+// position unless `how` is Location). Company members share the container's facing.
 ObjectHandle spawn(Call& c, TypeIndex type, int32_t owner, Vec3 pos, ObjectHandle location, bool company,
-                   bool face_origin = false) {
+                   SpawnFacing how = SpawnFacing::Location, Vec3 facing = Vec3{1.0f, 0.0f, 0.0f}) {
     objects::ObjectStore* st = store(c);
     objects::SpawnParams sp;
     sp.type = type;
     sp.owner = owner;
     sp.position = pos;
-    if (face_origin && st->mode() != objects::ModeKind::Galactic) {
-        const float dx = -pos.x, dy = -pos.y;
-        const float len = dmath::sqrt(dx * dx + dy * dy);
-        sp.facing = len > 0.0f ? Vec3{dx / len, dy / len, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
-    } else {
-        sp.facing = location ? st->facing(location) : Vec3{1.0f, 0.0f, 0.0f};
+    switch (how) {
+        case SpawnFacing::Origin: {
+            const float dx = -pos.x, dy = -pos.y;
+            const float len = dmath::sqrt(dx * dx + dy * dy);
+            sp.facing = len > 0.0f ? Vec3{dx / len, dy / len, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
+            break;
+        }
+        case SpawnFacing::Given: sp.facing = facing; break;
+        case SpawnFacing::Location: sp.facing = location ? st->facing(location) : Vec3{1.0f, 0.0f, 0.0f}; break;
     }
     if (location && st->mode() == objects::ModeKind::Galactic) sp.container = location;
     const ObjectHandle h = st->create(sp);
@@ -858,14 +866,19 @@ int g_spawn_unit(Call& c) {
     // a1g t06: at a planet of the galactic sim the unit is placed by the sim (fleet / surface / planet, one company
     // object); anywhere else it is created directly with its company members.
     ObjectHandle h = loc ? detail::galactic_spawn_unit(c, static_cast<uint32_t>(t->value), p->id, loc) : ObjectHandle{};
-    if (!h) h = spawn(c, static_cast<TypeIndex>(t->value), p->id, pos, loc, true, /*face_origin=*/true);
+    if (!h) {
+        // Tactical: toward the world origin (s78h t05); the galactic branch is a different path (location facing).
+        const SpawnFacing how = store(c)->mode() != objects::ModeKind::Galactic ? SpawnFacing::Origin : SpawnFacing::Location;
+        h = spawn(c, static_cast<TypeIndex>(t->value), p->id, pos, loc, true, how);
+    }
     detail::push_object(c.L, *c.vm, h);
     lua_rawseti(c.L, -2, 1);
     return 1;
 }
 
 // Create_Generic_Object(type or type name, position, player): one object, no company expansion
-// [inferred]; nil for an unknown type name [inferred].
+// [inferred]; nil for an unknown type name [inferred]. Facing +X (yaw 0) in every mode, also when parameter 2 is an
+// object (it lends only its position; TACTICAL_COMBAT §3.1.1 "other spawns", s78i t02).
 int g_create_generic_object(Call& c) {
     if (c.nargs != 3)
         return c.fail("Create_Generic_Object -- Invalid number of parameters. Expected 3, got %d.", c.nargs);
@@ -879,7 +892,7 @@ int g_create_generic_object(Call& c) {
     if (!p) return c.fail("Create_Generic_Object -- Invalid type for parameter 3. Expected player.");
     if (!store(c) || t.index == objects::kNone || !types(c) || t.index >= types(c)->raw().type_count())
         return push_nil(c);
-    detail::push_object(c.L, *c.vm, spawn(c, t.index, p->id, pos, loc, false));
+    detail::push_object(c.L, *c.vm, spawn(c, t.index, p->id, pos, loc, false, SpawnFacing::Given, Vec3{1.0f, 0.0f, 0.0f}));
     return 1;
 }
 
@@ -2322,8 +2335,12 @@ int g_reinforce_unit(Call& c) {
     if (b->reinforce) {
         if (!b->reinforce(r)) b->finish_reinforcement(r.id, {});
     } else {
+        // s78i t02 (TACTICAL_COMBAT §3.1.1 "other spawns"): the reinforcement creators face the owner's entry-facing
+        // record (mode +0x288), +X without a host hook.
+        const Vec3 face = b->reinforce_facing ? b->reinforce_facing(r.player) : Vec3{1.0f, 0.0f, 0.0f};
         std::vector<ObjectId> units;
-        if (r.has_location) units.push_back(store(c)->id(spawn(c, r.type, r.player, pos, loc, true)));
+        if (r.has_location)
+            units.push_back(store(c)->id(spawn(c, r.type, r.player, pos, loc, true, SpawnFacing::Given, face)));
         b->finish_reinforcement(r.id, std::move(units));
     }
     detail::push_engine_userdata(c.L, u);
@@ -2348,7 +2365,7 @@ int g_spawn_from_reinforcement_pool(Call& c) {
     if (b && b->spawn_from_pool)
         made = b->spawn_from_pool(t.index, p->id, pos);
     else
-        made.push_back(spawn(c, t.index, p->id, pos, loc, true));
+        made.push_back(spawn(c, t.index, p->id, pos, loc, true, SpawnFacing::Origin));  // as Spawn_Unit, any mode (s78i t02)
     int n = 0;
     for (const ObjectHandle h : made) {
         if (!h || !store(c)->alive(h)) continue;

@@ -1204,9 +1204,10 @@ def mean_se(v):
     return m, math.sqrt(var / len(v))
 
 
-def an_idle47w(s):
+def an_idle47w(s, verdict=True):
     """s78g t03: slot 47 with and without an Attack Idle clip; draws per frame at the on / off edges, frame-weighted
-    targeting state and clip of the attackers while their victims exist."""
+    targeting state and clip of the attackers while their victims exist. verdict=False (IDLE47N): no P / D / V verdict
+    line (the caller writes its own)."""
     import statistics
     import s78f_extra_parse as X
     r = {'name': s.name, 'phases': {}}
@@ -1305,7 +1306,8 @@ def an_idle47w(s):
     else:
         v = 'UNCLEAR (%s; 3-sigma separation needed)' % nums
     r['verdict'] = v
-    s.L.append('%s -> %s' % (s.name, v))
+    if verdict:
+        s.L.append('%s -> %s' % (s.name, v))
     return r
 
 
@@ -1490,6 +1492,164 @@ def an_edge4(s):
 def an_idle47q(s):
     """s78h t02: IDLE47X on a quiet background. Background draws / frame before the sweep (bg_pre .. sweep) and after
     it (bg_post .. phase P), the sweep counts, then the IDLE47X statistic (an_idle47w)."""
+    pre, post = quiet_background(s)
+    r = an_idle47w(s)
+    r['bg_pre'], r['bg_post'] = pre, post
+    if pre is not None and post is not None:
+        r['verdict'] += ' [background %s -> %s draws/frame]' % (fmt(pre, 0), fmt(post, 0))
+    return r
+
+
+# s78i IDLE47N: draws per attacker per frame (on minus off, V subtracted; median of the edge steps)
+N_DRAWS, N_SILENT = 0.6, 0.3
+N_SHOT_RADIUS = 100.0
+N_SHOT_FROM = 10  # frames after the on mark from which a shot counts against "fire blocked"
+
+
+def idle47_attackers(s, P0):
+    att = [s.b['objs'].get(_int(d.get('id'))) for d in s.spawns if d.get('ok') == '1' and
+           re.match(r'i\d+$', d.get('tag', '')) and P0 <= (d['F'] or -1) < P0 + 10]
+    return [o for o in att if o]
+
+
+def an_idle47n(s):
+    """s78i t01: IDLE47Q with the attackers' fire blocked by Prevent_All_Fire (P / D set when placed, E set 2 frames
+    after each attack order) and a short firing reference F. Per phase: targeting state and clip while the victims
+    exist (an_idle47w), shots (PROJ_ objects first seen within N_SHOT_RADIUS of an attacker, from on+N_SHOT_FROM to
+    off+5; earlier ones are listed apart, as E's flag is set at on+6) in the on windows, and the
+    draws per attacker per frame with V subtracted:
+      k_med  = ((on step - off step) / 2 of the phase - the same for V) / attackers  (median edge steps: robust to the
+               periodic background bursts that pulled IDLE47Q's P mean down)
+      k_mean = (per-cycle on-minus-off mean of the phase - V's) / attackers, with its stderr.
+    A fire-blocked Dark Trooper phase counts when it held targeting state 4 in >= 50% of the attacker-frames, ATTACK /
+    ATTACKIDLE (clip 5 / 6) in >= 50%, and its attackers fired at most one shot per 100 attacker-cycles (at least 1);
+    its DRAWS / SILENT / UNCLEAR class is idle47n_class, the verdict idle47n_verdict."""
+    pre, post = quiet_background(s)
+    r = an_idle47w(s, verdict=False)
+    r['bg_pre'], r['bg_post'] = pre, post
+    phases = sorted((m['F'], k[6:]) for k, m in s.marks.items() if k.startswith('phase_'))
+    setups = [d for k, d in s.sc_recs if k == 'SETUP' and re.match(r'i\d+$', d.get('tag') or '') and
+              (d.get('Prevent_All_Fire') or '').startswith('1')]
+    for i, (P0, ph) in enumerate(phases):
+        P1 = phases[i + 1][0] if i + 1 < len(phases) else s.end
+        info = r['phases'].get(ph)
+        if info is None:
+            continue
+        att = idle47_attackers(s, P0)
+        shooters = dict(enumerate(att))
+        shots, early, types, cyc = 0, 0, set(), 0
+        c = 1
+        while s.marks.get('%s_on%d' % (ph, c)) and s.marks.get('%s_off%d' % (ph, c)):
+            fo, ff = s.marks['%s_on%d' % (ph, c)]['F'], s.marks['%s_off%d' % (ph, c)]['F']
+            for p in projectiles(s.b, fo, ff + 5):
+                if nearest(p, shooters, N_SHOT_RADIUS) is not None:
+                    # before on+N_SHOT_FROM: E's flag is not set yet (on+6); the draw windows start at on+20
+                    if p['frame'] < fo + N_SHOT_FROM:
+                        early += 1
+                    else:
+                        shots += 1
+                    types.add(p['type'])
+            cyc += 1
+            c += 1
+        nf_on = [d for d in s.orders if d.get('order') == 'nofire_on' and (d.get('tag') or '').startswith(ph + '_c')]
+        info.update({'shots': shots, 'early_shots': early, 'shot_types': sorted(types), 'cycles': cyc,
+                     'nofire_set': len([d for d in setups if P0 <= (d['F'] or -1) < P0 + 10]),
+                     'nofire_orders': (sum(_int(d.get('ok'), 0) or 0 for d in nf_on), len(nf_on))})
+        s.L.append('%s fire check: shots near the attackers from on+%d to off+5: %d, before on+%d: %d (%s) over %d '
+                   'cycles; Prevent_All_Fire set when placed on %d attackers; per-cycle Prevent_All_Fire(true) calls '
+                   'ok %d in %d cycles' % (ph, N_SHOT_FROM, shots, N_SHOT_FROM, early, ', '.join(sorted(types)) or '-',
+                                           cyc, info['nofire_set'], info['nofire_orders'][0], info['nofire_orders'][1]))
+    V = r['phases'].get('V') or {}
+    for ph, info in sorted(r['phases'].items()):
+        if ph == 'V':
+            continue
+        n = info.get('attackers') or 0
+        info['k_med'] = info['k_mean'] = info['k_se'] = None
+        if n and info.get('on') is not None and info.get('off') is not None:
+            vstep = ((V['on'] - V['off']) / 2.0) if V.get('on') is not None and V.get('off') is not None else 0.0
+            info['k_med'] = ((info['on'] - info['off']) / 2.0 - vstep) / n
+        if n and info.get('dmean') is not None:
+            info['k_mean'] = (info['dmean'] - (V.get('dmean') or 0.0)) / n
+            if info.get('dse') is not None:
+                info['k_se'] = math.hypot(info['dse'], V.get('dse') or 0.0) / n
+        info['status'] = idle47n_class(info)
+        s.L.append('%s: %d attackers, while the victims exist ts 4 %.0f%%, clip ATTACK %.0f%% ATTACKIDLE %.0f%%; draws '
+                   'per attacker per frame (V subtracted): median steps %s, per-cycle mean %s +- %s -> %s' % (
+                       ph, n, 100 * info.get('ts4', 0), 100 * info.get('clip5', 0), 100 * info.get('clip6', 0),
+                       fmt(info['k_med'], 2), fmt(info['k_mean'], 2), fmt(info['k_se'], 2), info['status']))
+    r['verdict'] = idle47n_verdict(r)
+    if pre is not None and post is not None:
+        r['verdict'] += ' [background %s -> %s draws/frame]' % (fmt(pre, 0), fmt(post, 0))
+    s.L.append('k = draws per attacker per frame; ~1 = the slot-47 draw runs in ATTACK / ATTACKIDLE too (drop the clip '
+               '5 / 6 condition from tactical_battle.cpp attack_idle), ~0 = it does not (keep it)')
+    s.L.append('%s -> %s' % (s.name, r['verdict']))
+    return r
+
+
+def idle47n_class(info):
+    """One phase: FIRED / NO_TARGETING / NOT_IN_ATTACK_CLIP (blocked-fire checks, Dark Trooper phases only use the
+    clip check), then DRAWS (k_med >= N_DRAWS and k_mean - 2 se > N_SILENT), SILENT (k_med <= N_SILENT and
+    k_mean + 2 se < N_DRAWS) or UNCLEAR; NO_DATA when nothing was measured."""
+    n, cyc = info.get('attackers') or 0, info.get('cycles') or 0
+    if not n or info.get('k_med') is None:
+        return 'NO_DATA'
+    if info.get('shots', 0) > max(1, n * cyc // 100):
+        return 'FIRED'
+    if info.get('ts4', 0) < 0.5:
+        return 'NO_TARGETING'
+    km, kx, se = info['k_med'], info.get('k_mean'), info.get('k_se') or 0.0
+    if km >= N_DRAWS and (kx is None or kx - 2 * se > N_SILENT):
+        return 'DRAWS'
+    if km <= N_SILENT and (kx is None or kx + 2 * se < N_DRAWS):
+        return 'SILENT'
+    return 'UNCLEAR'
+
+
+def idle47n_verdict(r):
+    ph = r['phases']
+
+    def desc(k):
+        i = ph.get(k) or {}
+        return '%s %s/attacker/frame (mean %s +- %s), ts4 %.0f%%, ATTACK+ATTACKIDLE %.0f%%, shots %s' % (
+            k, fmt(i.get('k_med'), 2), fmt(i.get('k_mean'), 2), fmt(i.get('k_se'), 2), 100 * i.get('ts4', 0),
+            100 * (i.get('clip5', 0) + i.get('clip6', 0)), i.get('shots', '?'))
+
+    use = []
+    for k in ('D', 'E'):
+        i = ph.get(k)
+        if not i:
+            continue
+        st = i.get('status')
+        if st in ('DRAWS', 'SILENT', 'UNCLEAR') and i.get('clip5', 0) + i.get('clip6', 0) < 0.5:
+            st = i['status'] = 'NOT_IN_ATTACK_CLIP'
+        if st in ('DRAWS', 'SILENT', 'UNCLEAR'):
+            use.append((k, st))
+    notes = []
+    F = ph.get('F')
+    if F is not None and not F.get('shots'):
+        notes.append('FIRE_CHECK_BLIND: the firing reference F shows no shots either, so "shots 0" proves nothing')
+    P = ph.get('P')
+    if P is not None:
+        notes.append('P control (Pod_Walker, no clip, fire blocked) %s: %s' % (P.get('status'), fmt(P.get('k_med'), 2)))
+        if P.get('status') == 'SILENT':
+            notes.append('P_CONTROL_SILENT: even the no-clip walkers stop drawing without fire, so the IDLE47Q draws '
+                         'were shots, not slot 47')
+    tail = ('; ' + '; '.join(notes)) if notes else ''
+    if not use:
+        return 'FIRE_BLOCK_FAILED (%s)%s' % ('; '.join('%s %s' % (k, (ph.get(k) or {}).get('status', 'NO_DATA'))
+                                                       for k in ('D', 'E')), tail)
+    sts = {st for _k, st in use}
+    body = '; '.join(desc(k) for k, _st in use)
+    if sts == {'DRAWS'}:
+        return 'DROP_CLIP_CONDITION (%s)%s' % (body, tail)
+    if sts == {'SILENT'}:
+        return 'KEEP_CLIP_CONDITION (%s)%s' % (body, tail)
+    return 'UNCLEAR (%s)%s' % (body, tail)
+
+
+def quiet_background(s):
+    """IDLE47Q / IDLE47N: background draws / frame before the sweep (bg_pre .. sweep) and after it (bg_post .. phase
+    P), plus the sweep count lines."""
     import s78f_extra_parse as X
     rng = [x for x in s.b.get('rng', []) if s.start - 200 <= x[0] <= s.end + 10]
     per, _unknown = X.draws_per_frame(rng)
@@ -1513,14 +1673,10 @@ def an_idle47q(s):
                    'sweeps: %d' % (who, d['F'], d.get('objects'), d.get('mobile'), d.get('despawned'), d.get('kept'),
                                    d.get('other'), len([x for x in sweeps if x.get('who') == who]), tot[who]))
     s.L.append('background draws/frame: before the sweep %s, after it %s' % (fmt(pre, 2), fmt(post, 2)))
-    r = an_idle47w(s)
-    r['bg_pre'], r['bg_post'] = pre, post
-    if pre is not None and post is not None:
-        r['verdict'] += ' [background %s -> %s draws/frame]' % (fmt(pre, 0), fmt(post, 0))
-    return r
+    return pre, post
 
 
-ANALYSERS = {'SPMAT_EDGE4': an_edge4, 'IDLE47Q': an_idle47q, 'SPMAT_EDGE2': an_edge2, 'SPMAT_EDGE3': an_edge2, 'SPMAT_CTRL': an_spmat_ctrl, 'IDLE47W': an_idle47w,
+ANALYSERS = {'IDLE47N': an_idle47n, 'SPMAT_EDGE4': an_edge4, 'IDLE47Q': an_idle47q,'SPMAT_EDGE2': an_edge2, 'SPMAT_EDGE3': an_edge2, 'SPMAT_CTRL': an_spmat_ctrl, 'IDLE47W': an_idle47w,
              'IDLE47V': an_idle47w, 'IDLE47X': an_idle47w,
              'REINF2': an_reinf,
              'GUARD_HAND': an_guard_hand, 'SPMAT': an_spmat, 'ATAT': an_atat, 'MDU': an_mdu, 'STICKY': an_sticky, 'DT3': an_dt3,
@@ -1730,6 +1886,9 @@ def parse(path):
             ans['1_edge4'] = by['SPMAT_EDGE4'].get('verdict')
         if 'IDLE47Q' in by:
             ans['t03_slot47_clip_q'] = by['IDLE47Q'].get('verdict')
+        # s78i (2026-11-05)
+        if 'IDLE47N' in by:
+            ans['t01_slot47_nofire'] = by['IDLE47N'].get('verdict')
         if 'GUARD_HAND' in by:
             for p, v in sorted((by['GUARD_HAND'].get('pairs') or {}).items()):
                 ans['t02_guard_shift_%d' % p] = v

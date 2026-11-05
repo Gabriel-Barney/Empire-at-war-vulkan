@@ -1672,6 +1672,10 @@ private:
     ObjectId container_or_self(ObjectId id) const;                 // s78f t08: a team member -> its container
     const Unit* land_team_head(const Unit& u) const;  // s78f t03: the head of a land team member (no TARGETING of its own)
     Unit* team_head_of(uint32_t team);  // s78h t06: a team's current live head (container unit, else team_leader), or null
+    // s78i t03: the head of u's land team, u itself when u is that head (the container unit, or the team_leader stand-in,
+    // members or not); null outside a land team. A team keeps TeamTargeting while its head lives, even with no member left.
+    const Unit* land_team_lead(const Unit& u) const;
+    uint32_t convert_container(const Unit& v) const;  // s78i t04: v's 0x39b1a0 team container id (v's own when it is one), else 0
     bool targeting_idle(const Unit& u, uint32_t frame) const;  // phase D: stunned, unpowered or targeting suspended
     void drop_target(Unit& u);                        // slot 27: the order and scan targets are dropped
     bool lob_turret_aim(Unit& u);                     // s78f t04: 0x631fe0 toward the lobbing order's point (one slew step)

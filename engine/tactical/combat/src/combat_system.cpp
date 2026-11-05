@@ -1649,6 +1649,29 @@ const CombatSystem::Unit* CombatSystem::land_team_head(const Unit& u) const {
     return team_head(u);
 }
 
+uint32_t CombatSystem::convert_container(const Unit& v) const {
+    // s78i t04 (TACTICAL_COMBAT §3.5 "Convert and its team rule" step 3, 0x39b1a0): a member's container is its damage_team
+    // (team on land, the squadron in space). A container that is itself a combat unit carries damage_team 0 (or its own
+    // id); it is its own team when any live unit names it as damage_team. Else no team.
+    if (v.damage_team != 0) return v.damage_team;
+    const auto id = static_cast<uint32_t>(v.id);
+    for (const Unit& m : units_)
+        if (m.damage_team == id && &m != &v && !(m.flags & kUnitDead)) return id;
+    return 0;
+}
+
+const CombatSystem::Unit* CombatSystem::land_team_lead(const Unit& u) const {
+    // s78i t03 (TACTICAL_COMBAT §3.1.1 "Team targeting copies"): TeamTargeting is a behaviour of the container and runs
+    // while the container lives, whatever its member count. [port] The container lives while its head does (the container
+    // unit, else the team_leader stand-in, handed over by hand_over_team), so a head left with no live member keeps the
+    // team service instead of falling back to its own TARGETING.
+    if (const Unit* h = land_team_head(u)) return h;
+    if (cfg_.mode != GameMode::Land || u.team == 0 || (u.flags & kUnitDead)) return nullptr;
+    if (static_cast<uint32_t>(u.id) == u.team) return &u;  // the container unit itself
+    const auto it = std::lower_bound(team_heads_.begin(), team_heads_.end(), std::make_pair(u.team, ObjectId{-1}));
+    return (it != team_heads_.end() && it->first == u.team && it->second == u.id) ? &u : nullptr;
+}
+
 void CombatSystem::targeting_service(Unit& u, uint32_t frame, SimRng& rng) {
     // Service_Land 0x634810 / Service_Space 0x633ae0 after the scan (TACTICAL_COMBAT §3.1.1 "Targeting states, slots 47 /
     // 48 and team copies") [H unless tagged]. The state belongs to the current target (TD +8).
@@ -2708,12 +2731,19 @@ void CombatSystem::detonation_effects(const Projectile& p, Vec3 center, ObjectId
         for (Unit* v : vs) {
             if (!effect_match(*v, pd.convert_mask, nullptr) || !live(v)) continue;
             if (v->owner == p.owner) continue;
-            const uint32_t team = v->damage_team;
+            // s78i t04 (§3.5 steps 3-5): Change_Owner covers the container and every member. Order = the notification
+            // order: the victim, then the container when it is a combat unit (a member victim's container; a container
+            // victim is the victim), then the other members ([port] list order = ascending id).
+            const uint32_t team = convert_container(*v);
             const ObjectId vid = v->id;
             convert_unit(vid, p.owner);
-            if (team != 0)
+            if (team != 0) {
+                if (team <= static_cast<uint32_t>(kNoObject) && static_cast<ObjectId>(team) != vid)
+                    convert_unit(static_cast<ObjectId>(team), p.owner);  // no-op unless the container is a live combat unit
                 for (Unit& m : units_)
-                    if (m.damage_team == team && m.id != vid && live(&m)) convert_unit(m.id, p.owner);
+                    if (m.damage_team == team && m.id != vid && static_cast<uint32_t>(m.id) != team && live(&m))
+                        convert_unit(m.id, p.owner);
+            }
         }
     }
     // Invulnerability: the projectile's target first, then owner + allies in radius, up to Max_Targets (0x4cc010).
@@ -3859,10 +3889,10 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
     if (cfg_.mode == GameMode::Land)
         for (uint32_t i = 0; i < n; ++i)
             if (!(units_[i].flags & kUnitDead))
-                if (const Unit* h = land_team_head(units_[i])) {
+                if (const Unit* h = land_team_lead(units_[i])) {  // s78i t03: a head with no member left too
                     land_heads_.push_back(h->id);
                     Unit& m = units_[i];
-                    if (m.auto_target != kNoObject) {
+                    if (h != &m && m.auto_target != kNoObject) {
                         m.auto_target = kNoObject;
                         m.auto_hp = -1;
                         m.target_score = 0.0f;
@@ -3877,7 +3907,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         for (uint32_t i = 0; i < n; ++i) {
             const Unit& m = units_[i];
             if (m.flags & kUnitDead) continue;
-            const Unit* h = land_team_head(m);
+            const Unit* h = land_team_lead(m);  // s78i t03
             if (!h) continue;
             const auto hi = static_cast<uint32_t>(h - units_.data());
             const uint32_t top = hi > i ? hi : i;

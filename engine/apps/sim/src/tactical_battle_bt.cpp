@@ -1024,12 +1024,15 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
     //    [M: the 0x2a9ff0 filter], else the nearest to the first Defending Forces marker. Space: the attacker looks at the
     //    last Defending Forces marker. [port] Formation placement 0x2a00b0 = rows of 6 behind the anchor along the facing;
     //    Space_Escort_Unit_Types and the planet-specific upgrades (step 5) are not spawned.
-    if (skirmish_land() || skirmish_map()) bt_skirmish_anchors();  // t50; skai: space skirmish map battles too
+    const bool skirmish_records = skirmish_land() || skirmish_map();
+    if (skirmish_records) bt_skirmish_anchors();  // t50; skai: space skirmish map battles too
     const std::vector<size_t> dm = of_kind(kMkDefend), am = of_kind(kMkAttack);
     if (!dm.empty()) {
         anchor_[0] = flat(bt_markers_[dm.front()].pos);
         facing_[0] = bt_markers_[dm.front()].facing;
-        drop_facing_[0] = facing_[0];  // a1h t06: mode +0x288 record of the defender (TACTICAL_GAPS §4.2.2 item 1)
+        // a1h t06: mode +0x288 record of the defender (TACTICAL_GAPS §4.2.2 item 1). s78i t02: a skirmish writes its
+        // records from the spawn-point markers instead (bt_skirmish_anchors; TACTICAL_COMBAT §3.1.1 "other spawns").
+        if (!skirmish_records) drop_facing_[0] = facing_[0];
     }
     if (!am.empty()) {
         static const objects::BehaviorTypeId kDummy = objects::behavior_type_id("DUMMY_GROUND_STRUCTURE");
@@ -1058,7 +1061,8 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
         anchor_[1] = flat(bt_markers_[best].pos);
         facing_[1] = bt_markers_[best].facing;
         // a1h t06: the attacker's +0x288 record is written only when its start list is non-empty (record +0x28).
-        if (std::any_of(parts_.begin(), parts_.end(), [](const Participant& q) { return q.side == 1 && !q.reserve && !q.third; }))
+        if (!skirmish_records &&
+            std::any_of(parts_.begin(), parts_.end(), [](const Participant& q) { return q.side == 1 && !q.reserve && !q.third; }))
             drop_facing_[1] = facing_[1];
         if (space_ && !dm.empty()) {
             const Vec3 to{bt_markers_[dm.back()].pos.x - anchor_[1].x, bt_markers_[dm.back()].pos.y - anchor_[1].y, 0.0f};
@@ -1296,7 +1300,12 @@ void TacticalBattle::bt_skirmish_anchors() {
             }
             if (pick) break;
         }
-        if (pick) anchor_[side] = Vec3{pick->pos.x, pick->pos.y, 0.0f};
+        if (pick) {
+            anchor_[side] = Vec3{pick->pos.x, pick->pos.y, 0.0f};
+            // s78i t02 (TACTICAL_COMBAT §3.1.1 "other spawns", Creating_Starting_Forces_For_Skirmish): the side's mode
+            // +0x288 record = that spawn marker's facing; no marker -> the record stays zero (yaw 0).
+            drop_facing_[side] = pick->facing;
+        }
     }
 }
 

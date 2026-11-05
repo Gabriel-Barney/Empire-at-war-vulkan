@@ -1106,7 +1106,51 @@ half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor;
       `sp.facing` to the unit vector (−x, −y, 0) / |(−x, −y)| from the spawn position, with (1, 0, 0) when x = y = 0.
       This applies to an object location too, using its position. Keep the company members on that same facing.
       [port] The 0.3° pitch is dropped, because land units stay level. Not checked: `Create_Generic_Object`,
-      `Reinforce_Unit` and the AI / story spawn paths, which use their own callers.
+      `Reinforce_Unit` and the AI / story spawn paths, which use their own callers (answered by the next item).
+  - *Spawn facing of the other Lua and reinforcement spawns* (s78i t02, 2026-11-05). The orientation is the
+    3-float angle triple an object keeps at obj +0x84 (+0x8c = yaw in degrees, yaw 0 = +X, yaw = atan2(y, x) of
+    the facing; +0x88 = pitch). The object constructor 0x388b60 copies it as given. Its "param 7 = 1" adds type
+    +0xdfc to the **position z** only, never to the angles.
+    - **`Create_Generic_Object`** (`LuaCreateGenericObjectClass` 0x6a1d20) [H]. 0x4990b0 reduces parameter 2 to
+      a position; an object given there lends **only its position**. 0x29f810(type, owner, position,
+      orientation (0, 0, 0), 1, 0) then creates **one** object (no company members, no container), so it faces
+      **yaw 0 = +X**, level. There is **no mode check**: the same holds in galactic, land and space.
+    - **`Spawn_From_Reinforcement_Pool`** (0x6aa200) [H].
+      After it removes one entry of that type from the player's pool, it builds the orientation exactly as
+      `Spawn_Unit` does: 0x20acd0(position, (0, 0, 0)) = **facing the world origin** (+X at x = y = 0), then
+      0x29e960 creates the company with it. No mode check, no reinforcement drop, no transport.
+    - **`Reinforce_Unit`** (`LuaReinforceCommandClass` 0x6a0400, tactical only) [H for the creator and the
+      orientation source]. It does not use the Lua position as a facing target. It queues a real
+      reinforcement:
+      - land (mode 1): a free drop point near the position (0x69fc40, radius 1000), then 0x2b5fe0, the same
+        creator the player's reinforcement drop uses;
+      - space (mode 2): a reinforcement block (0x7235c0 / 0x722e80), which later calls 0x2bf2d0, the same
+        creator the player's space reinforcement uses.
+    - **Player reinforcement drop** (event handler 0x403cb0: land → 0x2b5fe0, space → 0x2bf2d0) [H]. Both
+      creators read the orientation from a **per-player table** in the tactical mode object (mode +0x288,
+      12 bytes per player, indexed by player +0x48) and pass that one triple to every object they create:
+      - land 0x2b5fe0: the landing object (the type's +0x1e68 landing type when set, else the unit type), at the
+        drop point raised by a height offset (z only);
+      - space 0x2bf2d0: the unit, or each company member at its own spread position (0x2a9670).
+      The land drop-zone check 0x4d6fd0 lays out the footprint with the same table yaw.
+    - **Where the per-player table comes from** [H for the writes, M for which marker wins].
+      - Skirmish (`Creating_Starting_Forces_For_Skirmish`, 0x2a4fc0): the orientation (+0x84) of the first
+        `PLAYER_<n>_SPAWN_POINT_MARKER` matched for that player (the marker the starting forces use).
+      - Battles from the campaign (0x2a1eb0): the defender gets the first "DEFENDING FORCES POSITION" marker's
+        orientation. The attacker gets the chosen "ATTACKER ENTRY POSITION" marker's orientation, picked by its
+        distance to the defending-forces markers.
+      - A player with no such marker keeps the table's initial value [L: not traced; presumably zeros, which is
+        yaw 0 = +X].
+    - [L] Not traced: the facing of infantry or vehicles when they leave a land landing object. The landing object
+      itself gets the table facing.
+    - **Summary for the port:**
+
+      | Spawn | Facing |
+      |---|---|
+      | `Spawn_Unit` (tactical) | toward the world origin (item above) |
+      | `Spawn_From_Reinforcement_Pool` | toward the world origin |
+      | `Create_Generic_Object` | +X (yaw 0), any mode, even when given an object |
+      | `Reinforce_Unit`, player reinforcement drop | the owner's start-marker facing (per-player table) |
 
 **Targeting states, slots 47 / 48 and team copies (s78f, 2026-11-03)** [H unless tagged]. TD = obj +0xf0; the TD
 pack is shared by TARGETING, WEAPON (TD +0x80 = the WeaponBehavior, stored by its attach 0x54ceb0) and TURRET
@@ -1251,6 +1295,12 @@ Overrides:
     re-gather is still needed only for the copied scan flags. This moves team draws (scan, slot-47 blends) earlier
     in the tick, so the land team goldens and CRCs change. A smaller fix that closes only gap 2: at the dead former
     leader's own slot, if its team has not been serviced this tick, service the current head there.
+
+  - **Port (s78i t03, 2026-11-05).** A land team keeps TeamTargeting while its head lives, whatever its member count:
+    a stand-in `team_leader` left with no live member, or a team of one, is still serviced at its container slot by
+    `decide` + `team_targeting_service`, never by its own Service_Land. This matches retail, where the container's
+    TeamTargeting runs while the container lives. `CombatSystem::land_team_lead` returns the head for any team unit,
+    the head included. A team whose head dies with no member left has no heir and ends.
 
 *For the implementer:* keep one state per object (0–4) and gate the own weapon on 4. Land: turret units use "turret
 aimed"; weapon units use "facing within half a frame of turn" (snap when within, turn request when not); moving
@@ -1422,6 +1472,21 @@ gives R = 3.588° and a slot-48 tolerance of 1.794° in land.
       shots may draw too, so part of D's draws may be fire, not slot 47. Leave the port unchanged until the next run.
       Next run: the same setup with the attackers' fire blocked but targeting kept (follow-up group s78i). If D
       still adds ~1 draw per attacker per frame there, drop the clip 5 / 6 condition from the draw.
+    - IDLE47N (s78i t01, `out/20261105-125642`, Claude drove the game): IDLE47Q's quiet background (557 → 3.2 draws
+      per frame after the sweep), 12 attackers, 15 cycles. Fire blocked with Lua `Prevent_All_Fire(true)`.
+      - Set at placement, before any attack order (Pod_Walker phase P, Dark_Trooper phase D): the attackers **never
+        target** (state 0, clip 0 Idle throughout), so this way of blocking fire also blocks targeting.
+      - Set 6 frames after each cycle's `Attack_Target` (phase E, Dark_Trooper_PhaseII): state 4 for 93% of the
+        attacker-frames, clip ATTACKIDLE 82% / ATTACK 3%, **0 shots** from on + 10 to off + 5 (115 shots in the first
+        10 frames, before the flag). On / off steps were +8…+13 / −7…−13 (13 of 15 edges each; two ±90 steps are
+        background bursts): median **+10.5 / −10.5**, V subtracted **0.85 draws per attacker per frame**. Firing
+        reference F: 236 shots, median +23 / −13.5.
+      - The kit printed `UNCLEAR` only because the two background bursts widen the per-cycle mean
+        (−0.53 ± 1.22); the step medians are clean.
+      [M] A Dark Trooper in ATTACK / ATTACKIDLE that does not fire still draws about once per frame, so the slot-47
+      draw does not skip clips 5 / 6. **Port (2026-11-05):** `tactical_battle.cpp` `attack_idle` spends the draw on
+      every service (not moving, no animation priority, not in a flinch); it only skips the clip restart while the
+      current clip is 5 / 6. Whether retail also restarts the clip then is not measured.
   - *Port:* when clip 6 is missing, leave the current clip as it is and draw the blend each service in state 3 / 4,
     as retail does.
 
@@ -1751,15 +1816,12 @@ order, not nearest along the segment. The port should sort by segment fraction, 
 6. **Last:** the victim's slot 0x50 / 0x4f / 0x56 (the first that exists, checked in that order) gets 0x444ab0
    [L meaning].
 
-> **Port gap (2026-11-05):** `CombatSystem::detonation_effects` (`engine/tactical/combat/src/combat_system.cpp`,
-> "Convert" block) spreads the conversion over `v->team`. The host sets `team` for land team members only
-> (`apps/sim/src/tactical_battle.cpp` deploy, "not registered" note for space), so a converted space squadron
-> member converts alone and its squadron mates stay with the old owner. **Fix:** spread over the container id. A
-> space squadron member carries it in `damage_team`, and spawn sets `damage_team` to `team` when `team` ≠ 0, so
-> `damage_team` is the 0x39b1a0 container id in both modes. Compare `m.damage_team == v->damage_team` (when
-> non-zero) in place of `team`. Also skip a victim whose `owner` already equals `p.owner` (step 3), so a team
-> listed several times in `vs` converts and raises `UnitEffect::Converted` once per object, not once per listed
-> member.
+> **Port (s78h t04 / s78i t04, 2026-11-05).** The team is the 0x39b1a0 container: `damage_team` for a member (team
+> on land, the squadron in space), or the victim's own id when it is a combat-unit container (its `damage_team` is 0
+> and live units carry its id). A victim already owned by the new owner is skipped. Change_Owner covers the container
+> and every live member, in notification order (step 5): the victim, then the container when it is a combat unit,
+> then the other members in ascending id. Each object raises one `UnitEffect::Converted`. `CombatSystem::set_owner`
+> (Lua / story) does not spread through the team; the host applies owner changes per event.
 
 **Area damage** (0x4c7f70):
 1. Players are visited in index order. R = `Projectile_Blast_Area_Range` × the shooter's `SCATTER_RADIUS`
@@ -2027,6 +2089,9 @@ and ascending-category summation are kept.
       none).
     - Only container-level readers use the per-team value (a team locomotor's SPEED, when the host models one).
       Drop `squad_seen`, and change `squad_multiplier` (`modifiers.cpp`) so the caller passes every member.
+    - (s78i t04, 2026-11-05) `CombatSystem::team_mod_multiplier` still has no caller: the port has no team
+      locomotor (movement models fighter squadron formations only; `TEAM_LOCOMOTOR` is just a behaviour name in
+      objects), so no container-level SPEED read exists to wire it to.
 - **Flag** (0x397f60) = AND across the active slots, default true.
 - **Where the kinds apply:**
 

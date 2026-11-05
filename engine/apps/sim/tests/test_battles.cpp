@@ -4619,6 +4619,11 @@ void test_battle_ai_land_drop(const Data& d) {
         }
         std::printf("  land drop: %zu / %zu spots fogged-valid / valid, %zu refused only by fog (fog %s), %zu next to enemy units\n",
                     fog_ok.size(), clear_ok.size(), newly, fog ? "on" : "off", next_to_enemy);
+        // s78i t02 (TACTICAL_COMBAT §3.1.1 "other spawns"): the reinforcement facing of a side = its entry-facing record
+        // (+X when unset or for a player without a side); test_landing_drop checks a landing object against it.
+        const Vec3 df = b->player_drop_facing(1);
+        CHECK(df.z == 0.0f && std::fabs(df.x * df.x + df.y * df.y - 1.0f) < 1e-5f);
+        CHECK(b->player_drop_facing(7).x == 1.0f && b->player_drop_facing(7).y == 0.0f && b->player_drop_facing(7).z == 0.0f);
     }
     CHECK(checked);
 }
@@ -5383,6 +5388,9 @@ void test_landing_drop(bool timed, uint32_t destroy_at = 0) {
                     CHECK(st.parent_mode_id(lh) == key && st.owner(lh) == 1 && !st.landing_persist(lh));
                     const Vec3 lp = st.position(lh);
                     CHECK(lp.x == c.x && lp.y == c.y && std::fabs(lp.z - 10.0f) < 1e-4f);  // flat map + Hover_Offset 10
+                    // s78i t02 (TACTICAL_COMBAT §3.1.1 "other spawns"): the landing object faces the owner's entry-facing record.
+                    const Vec3 lf = st.facing(lh), df = b->player_drop_facing(1);
+                    CHECK(lf.x == df.x && lf.y == df.y && std::fabs(df.x * df.x + df.y * df.y - 1.0f) < 1e-5f);
                 }
             if (!dropped) std::printf("  landing drop: no drop (%zu valid spots, %zu refused orders)\n", valid, refused);
             CHECK(dropped);

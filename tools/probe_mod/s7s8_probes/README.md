@@ -418,6 +418,113 @@ The sweep keeps one AI unit and your Saboteur so that neither side is left witho
 early (a victory or defeat screen after the sweep), the IDLE47Q block shows how far it got. Rerun with
 `set ALAMO_S78_QUIET_HUMAN=0`, which leaves your army alone.
 
+## s78i run (2026-11-05: roadmap group s78i, t01)
+
+What the s78h run `out/20261105-104750` left open: on the quiet background (4.5 draws / frame), Pod_Walker and
+Dark_Trooper_PhaseII both added about one synced draw per attacker per frame, but the attackers fired at their
+victims, and a land shot draws 2 (own-weapon inaccuracy, TACTICAL_COMBAT §3.1.2). So part of D's draws may be shots.
+**IDLE47N** is IDLE47Q with the attackers' fire blocked and their targeting kept.
+
+**How fire is blocked.** Lua `Prevent_All_Fire(true)` on the attackers (the call the kit already uses on its
+victims). Other routes do not keep the pose:
+- a target out of weapon range sends the unit to state 2, not 4 (TACTICAL_COMBAT §3.1.1, `Service_Land`);
+- an invulnerable target is still shot at.
+
+What the retail flag does to targeting is not mapped in docs/re, so the scenario sets it two ways and checks
+targeting, clip and shots for each:
+
+| Phase | Attackers (12, held, facing away) | Fire |
+|---|---|---|
+| P | Pod_Walker (no ATTACKIDLE clip): the no-clip control, which should still draw ~1 | `Prevent_All_Fire(true)` when placed |
+| D | Dark_Trooper_PhaseII, JET_PACK autofire off | `Prevent_All_Fire(true)` when placed, before any attack order |
+| E | Dark_Trooper_PhaseII, JET_PACK autofire off | `Prevent_All_Fire(true)` 6 frames after each cycle's `Attack_Target`, `(false)` after the victims go (ORDER `nofire_on` / `nofire_off`) |
+| F | Dark_Trooper_PhaseII, firing, 3 cycles only | none: shows that its shots appear as `PROJ_` objects, so "shots 0" in D / E means blocked |
+| V | victims only | none |
+
+Each phase has 15 cycles of 200 frames (F has 3): 12 held, invulnerable, non-firing T4Bs for 100 frames, then none.
+Before the phases the IDLE47Q quiet stages run: `bg_pre` for 300 frames, then the sweep of both armies' mobile units,
+repeated every 300 frames, then `bg_post`. `ALAMO_S78_QUIET_HUMAN=0` keeps your army, as before.
+
+**Answer `t01_slot47_nofire`.** Per phase, the parser computes k, the synced draws per attacker per frame, with V
+subtracted:
+- `k_med` comes from the median on / off edge steps. It is robust to the periodic −86 bursts that pulled IDLE47Q's P
+  mean down.
+- `k_mean ± se` comes from the per-cycle on-minus-off means.
+
+A D or E phase counts only when, while its victims exist, the attackers are in targeting state 4 for at least 50%
+of the attacker-frames and on clip 5 / 6 (ATTACK / ATTACKIDLE) for at least 50%. It must also have at most one shot
+from on+10 to off+5. Shots before on+10 are listed apart, because E's flag is set at on+6.
+
+The verdict:
+- **`DROP_CLIP_CONDITION (...)`**: every counted D / E phase has k_med ≥ 0.6 and k_mean − 2 se > 0.3. Dark Troopers
+  in ATTACK / ATTACKIDLE still add ~1 draw per attacker per frame without firing, so the slot-47 draw is not gated by
+  the clip. Drop the clip 5 / 6 condition from `tactical_battle.cpp` `attack_idle` (TACTICAL_COMBAT slot 47).
+- **`KEEP_CLIP_CONDITION (...)`**: every counted phase has k_med ≤ 0.3 and k_mean + 2 se < 0.6. The IDLE47Q draws were
+  shots, so keep the port's gate.
+- **`UNCLEAR (...)`**: the counted phases disagree, or k lies between the limits.
+- **`FIRE_BLOCK_FAILED (D <status>; E <status>)`**: no phase counted. The status says why:
+  - `FIRED`: shots were seen;
+  - `NO_TARGETING`: the flag kept the troopers out of state 4;
+  - `NOT_IN_ATTACK_CLIP`: state 4, but not on clip 5 / 6;
+  - `NO_DATA`.
+
+  The next step is then another blocking route.
+
+Notes appended to the verdict:
+- `P control ... DRAWS / SILENT: k`. **`P_CONTROL_SILENT`** means even the no-clip walkers stop drawing once they
+  cannot fire. Then the IDLE47Q draws were shots for both models, and the per-service draw itself needs a rethink.
+- **`FIRE_CHECK_BLIND`**: F shows no shots either, so the reader does not see this weapon's shots, and "shots 0"
+  proves nothing.
+
+The verdict ends with `[background a -> b draws/frame]`.
+
+The `-- IDLE47N` block has:
+- the sweep counts and the background;
+- per phase, the on / off steps and per-cycle means, and ts / clip while the victims exist (as IDLE47Q);
+- a `fire check` line per phase: shots near the attackers, their projectile types, how many attackers got the flag
+  when placed, and the per-cycle flag calls;
+- a k line per phase with its class (`DRAWS` / `SILENT` / `UNCLEAR` / `FIRED` / `NO_TARGETING` / `NO_DATA`).
+
+**Kit command.** One land battle. Run it from PowerShell in the main checkout (or a worktree with `toolchain` and game
+data junctioned). Run it in the background: it waits for the game to exit.
+
+```
+$env:ALAMO_S78_LAND = 'IDLE47N'; Remove-Item Env:ALAMO_S78_QUIET_HUMAN -ErrorAction SilentlyContinue
+& tools\probe_mod\s7s8_probes\run_s7s8.cmd --no-launch --non-interactive
+```
+
+From cmd: `set ALAMO_S78_LAND=IDLE47N`, then `run_s7s8.cmd --no-launch --non-interactive`. No space battle is needed.
+
+**In-game steps (computer use).**
+1. Wait until `out\<run>\reader.log` exists. Start `StarWarsG.exe WINDOWED MODPATH=Mods\S7S8Probe` in
+   `F:\SteamLibrary\steamapps\common\Star Wars Empire at War\corruption` (Steam running). Check that reader.log shows
+   `GAME ... identity=ok`.
+2. Double-click the title bar to maximise the window. The menu coordinates below are for the 1456x819 frame.
+3. **Single Player > Skirmish > LAND**, map **GEONOSIS**. Slot 1 (you): **EMPIRE**, team 1. Slot 2: **AI** (any
+   difficulty), **REBEL**, team 2. Every other slot: **closed**. Credits, tech and settings: defaults.
+4. Click **Start Game** (about (1193, 587)), then **Begin** (about (970, 726)).
+5. Give **no orders at all**. At about **0:25** (F 750) your starting army disappears: that is the IDLE47N sweep, not
+   a defeat. Your base structures and the Saboteur stay.
+6. Timeline (battle time = frame / 30): IDLE47N runs F 450–14952 (0:15–8:18):
+
+   | Stage | Frames | Battle time |
+   |---|---|---|
+   | sweep | F 750 | 0:25 |
+   | P | F 1350 | 0:45 |
+   | D | F 4551 | 2:32 |
+   | E | F 7752 | 4:18 |
+   | F | F 10950 | 6:05 |
+   | V | F 11751 | 6:32 |
+7. *"land scenarios done"* appears at about **8 min 20 s** (F 14955). Then press **Esc > Quit** (about (728, 485)),
+   **Yes** (about (610, 440)) and **Exit** (about (1047, 694)).
+8. The kit writes `out\<run>\report.txt` and removes the mod. The run folder is in `out\latest.txt`. Read:
+   - the ANSWERS key **`t01_slot47_nofire`**;
+   - in the `-- IDLE47N` block, the `background draws/frame` line, the five `fire check` lines and the four
+     `<phase>: 12 attackers, ... -> <class>` lines.
+
+If the battle ends early (a victory or defeat screen after the sweep), the block shows how far it got. Rerun with
+`set ALAMO_S78_QUIET_HUMAN=0`.
+
 ## Feeding results back
 
 Edit only `docs/re` (RE/doc task). Quote the run folder and the report line. Then:
@@ -442,7 +549,7 @@ Then tick the matching roadmap tasks (S7 / S8 follow-ups) with `roadmap_store.py
 | `s7s8_hook.lua` | The scenarios (Lua 5.0, everything pcall'd) |
 | `s7s8_reader.py` | Read-only memory recorder (`--selftest`) |
 | `s7s8_parse.py` | Report and answers (`parse <log>`, `--selftest` on a synthetic log built from the expected model) |
-| `selftest/s7s8_selftest.py` | Runs the hooked script under stock Lua 5.0.2 against a stub engine (land, space, other faction; the s78g and s78h lists), parses those records, parses synthetic memory traces for the s78h GUARD_HAND departure and SPMAT_EDGE4 per-distance verdicts, runs both `--selftest`s. `selftest/build_lua50.cmd` builds `out\tools\lua50.exe` |
+| `selftest/s7s8_selftest.py` | Runs the hooked script under stock Lua 5.0.2 against a stub engine (land, space, other faction; the s78g, s78h and s78i lists), parses those records, parses synthetic memory traces for the s78h GUARD_HAND departure and SPMAT_EDGE4 per-distance verdicts and the s78i IDLE47N verdicts (drop / keep), runs both `--selftest`s. `selftest/build_lua50.cmd` builds `out\tools\lua50.exe` |
 
 Run the selftest: `toolchain\venv\Scripts\python.exe -I tools\probe_mod\s7s8_probes\selftest\s7s8_selftest.py`.
 It ends with `S7S8 SELFTEST OK`.
