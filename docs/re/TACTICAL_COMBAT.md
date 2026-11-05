@@ -1009,7 +1009,9 @@ pack is shared by TARGETING, WEAPON (TD +0x80 = the WeaponBehavior, stored by it
      or the target is not the formation's attack target (0x41a2e0), or the target type's
      `Should_Cause_Limited_Turrets_To_Turn` (+0x80) is clear: the target is dropped (slot 27) and the service ends;
      else the body turns: unless the unit is moving, locomotor vf +0x218 gets the vector to the target (a team
-     target: its member, 0x566aa0) [M: the turn request]; state **3**.
+     target: its member, 0x566aa0) (a turn-in-place request: Walk 0x61e4b0 pushes a one-waypoint path at the
+     unit's own position facing that vector, kind 5, +0x6d set; the locomotor turns in its later frames; s78f t08
+     [H]); state **3**.
 2. **No TURRET, WEAPON present (TD +0x80):**
    - **moving** (0x39ade0 = locomotor vf +0x1c0(0)): state **4** when the model has **no** Attack (type 5) clip
      (0x397ae0(obj, 5) = the clip count), else **2**. So infantry with attack animations do not fire while they
@@ -1018,11 +1020,13 @@ pack is shared by TARGETING, WEAPON (TD +0x80 = the WeaponBehavior, stored by it
      (0x391260). Then:
      - t true and (`Deploys` clear, or `Must_Face_Target_To_Attack_When_Deployed` (+0xa6), or
        `Fire_Weapon_When_Undeployed` (+0xaf)): slot 47(1), state **3**; then the locomotor's vf +0x2e8(target) (turn
-       request [M: name]) and slot 48 again: still off → stays 3; now facing → **4**;
+       request: an **immediate** yaw step of at most the turn rate, s78f t08 [H]) and slot 48 again: still off →
+       stays 3; now facing → **4**;
      - otherwise: when `Deploys` is clear the facing is **snapped** to the target (0x394440: yaw and pitch from
        obj +0x78 to the target position (a team target: its member); pitch 0 when
-       `Targeting_Land_Model_Stay_Horiz_Flat` (+0xad); with the flag clear, locomotor vf +0x2f8 is then called
-       [M]); state **4**. A deployer that need not face (no +0xa6, no +0xaf) gets 4 without the snap.
+       `Targeting_Land_Model_Stay_Horiz_Flat` (+0xad); with the flag clear, locomotor vf +0x2f8 is then called:
+       the terrain conform 0x42d6a0, which re-derives pitch / roll from the ground and keeps the yaw, s78f t08
+       [H]); state **4**. A deployer that need not face (no +0xa6, no +0xaf) gets 4 without the snap.
 3. **Neither TURRET nor WEAPON:** state **4**.
 
 After that, in every case: state 4 → slot 47(1). Out of range (slot 44 false or slot 45 true): the turret aim is
@@ -1035,8 +1039,8 @@ the target. **Hold fire:** last, state 4 with target == the pending-ability targ
 → drop the target. Slot 48 is not used in space; there is no facing state.
 
 *Slot 48* (0x568230, "needs to turn"; read-only, no state of its own). True when |wrap(yaw(obj +0x78 → target
-+0x78) − obj yaw (+0x8c))| > tol, tol = 0x372560(type) / 2 = `Max_Rate_Of_Turn` (+0x38c, degrees; per frame [M],
-from the turn-time formula in MOVEMENT) × the
++0x78) − obj yaw (+0x8c))| > tol, tol = 0x372560(type) / 2 = `Max_Rate_Of_Turn` (+0x38c, degrees **per frame**
+(per turn call); no frame-time factor anywhere, s78f t08 [H]) × the
 mode multiplier (land `Object_Max_Speed_Multiplier_Land` 1.56; factor 1 when type flag (+0x790) byte 1 bit 0) / 2,
 **except tol ≥ 90 → 0.01°** (0x20af60). Yaw from 0x20acd0 (degrees, [0, 360)); the difference is wrapped to
 (−180, 180]. Target redirect: a team-container target with a shooter whose slot byte +0x33b ≠ −1 is replaced by
@@ -1046,7 +1050,8 @@ through its override). No other caller (WEAPON, the gate, Lua and space never re
 
 *Slot 31* (0x568c80, set state s):
 - s = 4: the first time (current ≠ 4) signal **0x1E** is raised on the object; for a member of a team with a
-  member list, only the team's first member (0x4ec820) raises it, on the container. Then the pending-ability pack
+  member list, only the team's first member (0x4ec820) raises it, on the container. (Its only listener is the
+  AI task force: Lua `Target_In_Range`, s78f t08 below.) Then the pending-ability pack
   (obj +0x100) is told the target (0x37c9a0).
 - s = 4 is **not written** (the old state stays) when the pending-ability target and the current target (each
   replaced by its container when it has one) are the same object and a pending ability is set (TD +0x150 ≠ 0), or
@@ -1091,6 +1096,127 @@ aimed"; weapon units use "facing within half a frame of turn" (snap when within,
 units fire only without Attack clips. Team containers compute the state and push it raw to the members; members use
 the container's target. Draw `Get_Float(0.2, 0.75)` each time a unit (or each team member) enters Attack Idle
 through slot 47.
+
+**s78f t08 answers (2026-11-04)** [H unless tagged]. R below = the turn rate 0x372560(type) =
+`Max_Rate_Of_Turn` (+0x38c) × M × D, where M = the mode multiplier (`Object_Max_Speed_Multiplier_Land` 1.56 in land,
+galactic 5.0, space 1.2, 1.0 for any other mode) and D = the debug game-speed factor 0x140a28568 (1.0); M and D are
+both skipped (factor 1) when type flag (+0x790) byte 1 bit 0 is set. The vanilla default `Max_Rate_Of_Turn` 2.3
+gives R = 3.588° and a slot-48 tolerance of 1.794° in land.
+
+1. **Turn request vf +0x2e8 is immediate.** Walk (vtable 0x8ad798) and LandTeamInfantry (0x8af8d0) share 0x42d7b0:
+   with an owner and a target, the target is replaced by its member (0x566aa0) when it is a team container and the
+   shooter's slot byte +0x33b ≠ −1; the facing toward it is computed (0x20acd0, obj +0x78 → target +0x78) and
+   handed to vf +0x2f0, which turns **in the same call**:
+   - Walk 0x620710: e = wrap(target yaw − obj yaw +0x8c) to (−180, 180]; yaw += clamp(e, −R, +R) (no step when
+     e = 0); roll and pitch are not stepped (the target pitch is ignored). The new orientation is written at once to
+     both copies, obj +0x84… and +0x90… (0x3a8710; skipped while obj +0x3a0 bit 0x10 is set), then vf +0x2f8 = the
+     terrain conform 0x42d6a0 re-derives pitch / roll from the ground with the new yaw and sets the height.
+   - LandTeamInfantry 0x62d400: the same, with R × GC `Fleeing_Infantry_Speed_Bonus` (+0x150c) while the member's
+     (or its team's) current path is kind 7 (0x39a5b0).
+   - LandTeamContainer (0x8a3630) vf +0x2e8 = 0x5adec0: resolves a team target to its member once, then calls each
+     member's own locomotor vf +0x2e8 in team-list order (0x405300 / 0x4052d0), so every member steps by its own R.
+
+   So the second slot-48 check in the same service sees the stepped yaw. A unit e degrees off (e > R/2) reaches
+   state 4 in the same service when e ≤ 1.5 R; in general after ceil((e − R/2) / R) services, one step per service.
+   The leftover error (≤ R/2) is removed by the snap 0x394440 on the next service (slot 48 false → snap branch).
+   No goal is stored for later frames [M: an idle Walk vf6 that re-faces the unit on its own was not looked for].
+   The other turn call, vf +0x218 in the TURRET "limited turret" path, differs: it is a turn-in-place path that the
+   locomotor executes over later frames.
+2. **Unit of the tolerance.** Degrees per call of the turn function, i.e. per targeting service; the targeting
+   service runs on every behaviour service call (§2.1), so per sim frame (30 fps). There is no division by the
+   frame rate or multiplication by a frame time in 0x372560, 0x620710, 0x62d400 or 0x20af60. Exact rule: needs to
+   turn ⇔ |wrap(yaw(obj → target) − obj +0x8c)| > tol, tol = R / 2, except tol := 0.01° when R / 2 ≥ 90.
+3. **No locomotor (structures with WEAPON and no TURRET).** Slot 48 does not use the locomotor (only the owner's
+   +0x78, +0x8c and type), so it works as for any unit. In `Service_Land`, 0x39ade0 ("moving") is false when the
+   locomotor slot byte obj +0x333 is −1, so the not-moving branch runs; `Deploys` is clear, so the auto-deploy check
+   returns false (and 0x391260 would do nothing). Then:
+   - target within R/2 of the current facing → the snap 0x394440 turns the structure to face the target exactly
+     (yaw and pitch; the conform is skipped without a locomotor) and state **4**;
+   - otherwise slot 47(1) (the Attack Idle pose, with its synced draw) and state **3**; the turn call is skipped
+     (vf +0x10(obj, 1) returns null) and the service ends in state 3. Nothing turns the structure, so it stays in
+     **3 as long as the target stays outside the ±R/2 cone**, and fires once a target is inside it.
+
+   FoC example (scan of the FoC XML): `Empire_Offensive_Sensor_Node` (GroundStructure; LandBehavior TARGETING,
+   WEAPON, no TURRET; no `Max_Rate_Of_Turn`, so 2.3 and a cone of ±1.794°) [M: the in-game effect was not observed].
+4. **Signal 0x1E listeners.** The image has one subscription to 0x1E (every 0x220e90 / 0x2406c0 call site was
+   checked, including the register-valued ones: 0x6afe00 is called with 0x12, 0x72bfe0 uses 5 / 8, 0x2215b0 only
+   re-subscribes existing listeners after a load): `TaskForceClass::Add_Force` 0x5f9a90 subscribes the AI task force
+   to signals 0x1A, 0x10, 0x1E, 0x1F, 0x20, 0x21, 0x2B, 0x2C, 0x29 and 0x2D of each unit it takes (unsubscribed on
+   0x10 / 0x1A). Its handler 0x5fe5d0, case 0x1E: target = 0x397a40(unit) (the formation's attack target 0x41a2e0,
+   else the TD +8 target); none → nothing; else it raises task-force plan event **12 `Target_In_Range`** (0x6006b0,
+   not queued, so `<TF>_Target_In_Range` / `Default_Target_In_Range` runs synchronously) with (unit, target).
+   Dispatch (0x240940) calls only the listeners of that id; there is no catch-all listener. So no animation, sound or
+   other engine code reacts to 0x1E: it matters only for units in an AI task force, through the AI's Lua micro
+   (AI_TACTICAL §8). For a team member it is raised on the container (first member only), so the event names the
+   container.
+5. **Auto-deploy check 0x568e60** (this = TARGETING, owner = obj): false when TD is null, `Deploys` (+0xd1) or
+   `Auto_Deploys` (+0xd0) is clear, `Fire_Weapon_When_Undeployed` (+0xaf) is set, or the unit is deployed (0x39a390)
+   or deploying (0x39a400 = locomotor vf +0x130, Walk 0x61df60). Otherwise **true** when any of:
+   - the target is ordered (slot 33 0x566b40, TD +0xf4);
+   - the owner player (player list 0x140a16fd0, index obj +0x58) has an AI (player +0x360 ≠ 0) and is not human
+     (player +0x62 = 0): an AI's auto-deployers deploy for any target in range;
+   - the current target (TD +8) is the formation's attack target (0x41a2e0 on locomotor pack +0x1f0; no formation →
+     false) and either `Max_Dist_Walk_While_Deployed` (+0x23b0) > 0, or the formation has a current block
+     (0x41afb0 count > 0, 0x41a580) whose flags have attack-move (0x01) or guard (0x02).
+
+   Else false: a human player's auto-acquired target outside such an order does not deploy the unit. `Service_Land`
+   then calls 0x391260 = the deploy request: needs `Deploys`, a locomotor slot and locomotor pack +0x2b3 clear; then
+   locomotor vf +0x118(1) (Walk 0x61d300, which starts the Deploy transition unless already in 0x18 / 0x19). The
+   check runs in the TURRET branch only while not moving, and in the WEAPON branch after slot 48. **Slot 47
+   confirmed:** with `Auto_Deploys` + `Deploys` set and `Fire_Weapon_When_Undeployed` clear, 0x569540 / 0x569400 call
+   0x391260 when TD +0xf4 (ordered) is set and the current clip (0x3956a0) is not 25 (Deploy); no pose is played.
+   0x569540 (not the per-member 0x569400) first returns when the behaviour's counter +0x3c > 0 (0x4c36f0)
+   [M: the counter's name; probably the behaviour-disable count].
+6. **TURRET units without `Deploys`: no shortcut.** The deploy tests in the TURRET branch only decide whether the aim
+   runs; the helpers read deploy state only to choose the deployed extents / rest angles, which 0x39a390 gives only
+   to `Deploys` units. 0x631cc0(turret, target) = can aim (0x631a00 on the aim point 0x398440 = target position +
+   type z +0x4dc): false with no TD, no turret bone (TD +0x40 = −1; set at attach 0x632120 from `Turret_Bone_Name`)
+   or no type; false when a lobbed (category 3) current projectile has no lob solution from the weapon's next fire
+   bone; false when |yaw relative to the body (obj +0x90…)| > `Turret_Rotate_Extent_Degrees` (+0x5a0) or, unless
+   `Turret_XY_Only` (+0xb3), |pitch| > `Turret_Elevate_Extent_Degrees` (+0x5a4); else true. 0x632050(turret, target)
+   = aim: false with no TD or no turret bone; else aim point → TD +0x60, "aim requested" TD +0xf6 := 1, one slew step
+   0x631210 (target angles TD +0x54 := (0, pitch, yaw); current TD +0x48 moved by at most `Turret_Rotate_Speed`
+   (+0x5a8) degrees per call per axis, no overshoot); a 0 from the step (out of extent, no lob solution) →
+   +0xf6 := 0, false; else true **only when current = target within 0.0001° per axis** after that step
+   (LOB_SOLVER §3.6). So "aimed" needs the turret to reach the angles; that can happen in the first service when the
+   remaining error ≤ `Turret_Rotate_Speed`. The turret's own service 0x632270 does not slew while +0xf6 = 1, so there
+   is exactly one slew step per targeting service. A TURRET unit whose model lacks the turret bone never aims: its
+   target is dropped (or the limited-turret body turn applies) every service.
+7. **Pending ability (TD +0x148 target, +0x150 ability name CRC, +0x154 type).** Only slot 38 (0x5688f0) sets them:
+   when no target is pending or the new one is non-null, it stores (target, CRC, type), TD +0x10 := the hardpoint,
+   and subscribes to the target's signals 0x28 and 1; when one is pending and null is passed, it raises 0x29 on the
+   owner and clears the target (CRC / type take the passed values). Callers:
+   - `Order_Attack` 0x38d730 with an ability CRC ≠ 0: command 40 / 57 `TacticalSpecialAbility` and Lua
+     `Activate_Ability` with a target (ABILITIES_HARDPOINTS §2.9) → (target, hardpoint, CRC, type);
+   - `Order_Attack` without a CRC (auto acquisition and attack orders) first runs the autofire driver 0x37d280 (owner
+     pack obj +0x100): when it picks an ability (one synced `Get_Int` when several qualify) it stores
+     (target, 0, CRC, −1); when it picks none and the order is ordered (player / script), slot 38(0, 0, 0, −1) clears
+     the pending ability.
+
+   Cleared to (null, 0, −1) by: 0x565de0 when the ability fires (first step of every targeting service); slot 27
+   0x565f90 with its flag set (`Service_Land` passes "target == pending target" when it drops a target); 0x5661f0
+   (vf +0x80) when the pending target is the released object (raises 0x29). So TD +0x148 is non-null exactly while a
+   targeted ability (ordered, or chosen by the autofire driver) waits for range, and +0x150 is then non-zero.
+   Effect of the slot-31 rule: while the pending target (or its team) is the current target (or its team), state 4
+   is never written and the old state stays. A unit that was not yet attacking holds fire (2 / 3) until the ability
+   fires; a unit already in 4 keeps firing, unless the target type has `Should_Attacker_Hold_Fire_For_Special_Ability`
+   (+0x9e), which the end of the land / space / team services turns into **2**.
+
+*For the implementer:*
+- Make the facing turn immediate: one clamp step of R per targeting service, then re-test slot 48 in the same
+  service (state 4 at once when e ≤ 1.5 R). Teams: one step per member, then re-test "any member off".
+- R is degrees per frame: `Max_Rate_Of_Turn` × mode multiplier (× 1.0), no frame-time scaling; tol = R / 2, 0.01°
+  when R / 2 ≥ 90.
+- Units without a locomotor never turn: state 3 until the target is within ±R/2, then snap and 4.
+- Send "entered state 4" only to AI task forces (`Target_In_Range(unit, target)`, synchronous); nothing else listens.
+- Auto-deploy when: ordered target, or AI player, or formation attack target with walk-while-deployed or an
+  attack-move / guard block.
+- A turret is aimed only when the slewed angles equal the target angles; no deploy-flag shortcut; no turret bone
+  means never.
+- The pending ability comes only from slot 38 (`Order_Attack` with a CRC, or the autofire driver); while it names the
+  current target, the state cannot rise to 4.
+- [M] Open: whether slot 47's play of clip 6 on a model without an Attack Idle clip leaves the current clip unchanged
+  (then every service in state 3 / 4 would draw `Get_Float(0.2, 0.75)` again); not traced.
 
 *For the implementer:*
 - Gate the own weapon on targeting state 4 (in range and outside min range), not on an XY distance.

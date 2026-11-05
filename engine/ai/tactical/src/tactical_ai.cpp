@@ -546,6 +546,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     bool ambush_point(const StatusRec& s, int32_t player, Vec3f& out, bool* no_walk = nullptr) const;
     void ambush_plan(StatusRec& s, bool first);
     void opportunity_events(const std::vector<OpportunityTargetEvent>& events);  // STRATEGIC_GAPS §5.3
+    void target_in_range_events(const std::vector<AttackStateSignal>& events);   // s78f t08: signal 0x1E
     void service_statuses(int32_t player);
     bool step_status(StatusRec& s);
     void space_reinforce_poll(StatusRec& s);  // refixf t06: SpaceReinforceBlockStatus IsFinished (AI_TACTICAL §7.4)
@@ -2136,6 +2137,33 @@ void TacticalAiWorld::Impl::opportunity_events(const std::vector<OpportunityTarg
     }
 }
 
+// s78f t08 (TACTICAL_COMBAT §3.1.1 "s78f t08 answers" 4 [H]): the task-force handler 0x5fe5d0 case 0x1E takes the unit's
+// formation attack target, or its TD +8 target (the host's AttackStateSignal::target), and when there is one raises plan
+// event 12 Target_In_Range (unit wrapper, target wrapper) synchronously (0x6006b0). The unit is matched as a TF unit
+// (the signal of a team member is raised on its container, which the TF holds).
+void TacticalAiWorld::Impl::target_in_range_events(const std::vector<AttackStateSignal>& events) {
+    for (const AttackStateSignal& e : events) {
+        const ObjectHandle unit = store.find(e.unit);
+        const ObjectHandle target = store.find(e.target);
+        if (!store.alive(unit) || !store.alive(target)) continue;
+        int32_t hit = -1;
+        for (const auto& [id, t] : tfs) {  // ascending TF id; a unit is held by at most one TF
+            for (const ObjectHandle u : t.units)
+                if (u == unit) hit = id;
+            if (hit >= 0) break;
+        }
+        const TfRec* t = hit >= 0 ? tf_rec(hit) : nullptr;
+        if (!t) continue;
+        lua::AiEventArg a, b;
+        a.kind = b.kind = lua::AiEventArg::Object;
+        a.object = unit;
+        b.object = target;
+        decide(t->player, "event Target_In_Range (tf " + t->name + ")");
+        const TfRec copy = *t;
+        tf_event(copy, "Target_In_Range", {a, b});
+    }
+}
+
 void TacticalAiWorld::Impl::drain_world_requests(int32_t player, int32_t plan) {
     for (const lua::DesireBonusRequest& r : world.desire_bonuses) {
         PlayerAi* t = player_ai(r.player);
@@ -3515,6 +3543,7 @@ void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
         ALAMO_PROFILE_SCOPE("tac.ai.perception");  // OPT2 t08: snapshot, threat grid, signals
         w.refresh();
         w.opportunity_events(w.host.opportunity_targets());  // STRATEGIC_GAPS §5.3
+        w.target_in_range_events(w.host.attack_state_signals());  // s78f t08: signal 0x1E
         w.ability_signals(w.host.ability_finished());       // S7 t15 A1: signal 0x29
         w.reinforcements_unloaded(w.host.reinforcements_unloaded());  // a1j t01: signal 0x19 (land landings)
         w.status_signals();                                  // S7 t21 / S7 t15 A1: ambush / ability status signals

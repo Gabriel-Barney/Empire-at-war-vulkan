@@ -793,7 +793,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
 
 // ---- order execution ----------------------------------------------------------------------------------------------
 
-bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_threshold) {
+bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_threshold, uint8_t flags, objects::ObjectId goal_object) {
     const TacticalBattle::Unit* u = b_->unit_by_id(id);
     if (!u || !u->alive || u->retreated || !u->movable) return false;
     if (b_->movement_locked(id)) return true;  // OI follow-up t03: the locked unit keeps its order (A1_READINGS §28.9)
@@ -802,8 +802,14 @@ bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_th
     o.units = {id};
     o.destination = {std::clamp(x, bb.min.x, bb.max.x), std::clamp(y, bb.min.y, bb.max.y)};
     o.threat_threshold = threat_threshold;
+    o.flags = flags;  // s78f t10: the order's block flags (0x01 attack-move / 0x02 guard)
+    o.goal_object = goal_object == objects::kNoObjectId ? -1 : goal_object;  // s78f t10: the object block (movement: -1 = none)
     b_->movement_->move(o, host_->random().synced(), b_->frame_);
     return true;
+}
+
+bool BattleAi::is_fighter(objects::ObjectId id) const {
+    return b_->space_ && b_->movement_->has_unit(id) && b_->movement_->view(id).locomotor == mv::LocomotorKind::Fighter;
 }
 
 // ---- a1h t02: object-goal follow (A1_READINGS §33.4, rule §33.5.2) ----------------------------------------------------
@@ -1002,9 +1008,19 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 const Vec3 up = st.position(u->h);
                 const float dx = tp.x - up.x, dy = tp.y - up.y, d = dmath::sqrt(dx * dx + dy * dy);
                 const float range = std::max(u->range, 100.0f);
+                // s78f t10: as the human path (TacticalBattle::exec_attack, FIGHTER_FLYING §4.11 B 1 / B 3): a fighter's move
+                // names the target as its object block; in range nobody moves and the formation is still replaced.
+                const objects::ObjectId fobj = is_fighter(u->id) ? t->id : objects::kNoObjectId;
                 if (d > 0.8f * range) {
                     const float k = (d - 0.7f * range) / d;
-                    move_unit(u->id, up.x + dx * k, up.y + dy * k);
+                    move_unit(u->id, up.x + dx * k, up.y + dy * k, mv::kThreatOff, 0, fobj);
+                } else if (fobj != objects::kNoObjectId && !b_->movement_locked(u->id)) {
+                    mv::MoveOrder o;
+                    o.units = {u->id};
+                    const tactical::Aabb& gb = mode_->bounds();
+                    o.destination = {std::clamp(tp.x, gb.min.x, gb.max.x), std::clamp(tp.y, gb.min.y, gb.max.y)};
+                    o.goal_object = fobj;
+                    b_->movement_->fighter_new_order(o, b_->frame_);
                 }
             }
             return n ? R::None : R::InvalidUnit;
@@ -1118,7 +1134,13 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             const float tt = order == lua::LuaOrder::MoveTo && targ != 0u ? std::bit_cast<float>(targ) : mv::kThreatOff;
             if (tw != cmd::kNoObject && !point_goal) {  // a1h t02: an object goal (kind 3) is followed by the movement layer (§33.4)
                 const Vec3 tp = st.position(st.find(static_cast<objects::ObjectId>(tw)));
-                follow_add(group.units, static_cast<objects::ObjectId>(tw), tp.x, tp.y, tt);
+                // s78f t10: fighters given an object block follow it in their own formation (0x4192b0 steps 3 / 4,
+                // FIGHTER_FLYING §4.11); the follow's re-issued plain move would replace that block with a flags-0 position
+                // block (and drop its pushed auto blocks), so they stay out of the follow.
+                std::vector<objects::ObjectId> fu;
+                for (const objects::ObjectId id : group.units)
+                    if (fobj == objects::kNoObjectId || !is_fighter(id)) fu.push_back(id);
+                follow_add(fu, static_cast<objects::ObjectId>(tw), tp.x, tp.y, tt);
             }
             // refixf t02 / t06 (MOVEMENT §6.3 [H]): Lua Attack_Move / Move_To on a task force build one parameter block and ONE
             // coordinator for all its units, so the formation slots and the destination reservations (§2.4 step 4) give each
@@ -1127,9 +1149,11 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             if (group.units.size() == 1) {  // a single unit: unchanged path
                 if (order != lua::LuaOrder::AttackMove) b_->combat_->clear_order(u->id);
                 if (!b_->movement_locked(u->id)) b_->fighter_order(group.units, fflags, Vec3{x, y, 0.0f}, fobj);
-                return move_unit(u->id, x, y, tt) ? R::None : R::InvalidUnit;
+                return move_unit(u->id, x, y, tt, fflags, fobj) ? R::None : R::InvalidUnit;  // s78f t10: the same block
             }
             group.threat_threshold = tt;
+            group.flags = fflags;  // s78f t10: the movement block = the host record's (flags, object)
+            group.goal_object = fobj == objects::kNoObjectId ? -1 : fobj;
             const tactical::Aabb& gb = mode_->bounds();
             group.destination = {std::clamp(x, gb.min.x, gb.max.x), std::clamp(y, gb.min.y, gb.max.y)};
             b_->drop_locked(group.units);  // OI follow-up t03: locked members keep their order [M: group-move reading]
@@ -1517,6 +1541,12 @@ std::vector<at::OpportunityTargetEvent> BattleAi::opportunity_targets() {
         }
     }
     opp_prev_ = std::move(now);  // ascending (units ascending id, hard points ascending)
+    return out;
+}
+
+std::vector<at::AttackStateSignal> BattleAi::attack_state_signals() {
+    std::vector<at::AttackStateSignal> out;
+    for (const tc::AttackStateEvent& e : b_->combat_->attack_state_events()) out.push_back({e.unit, e.target});
     return out;
 }
 

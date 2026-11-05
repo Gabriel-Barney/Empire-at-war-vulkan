@@ -201,8 +201,8 @@ struct UnitView {
     // S8 t24: the TURRET's current elevation / yaw (degrees, relative to the body; UnitDesc::turret units only).
     float turret_elevation = 0.0f, turret_yaw = 0.0f;
     // s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states"): the TURRET's aim toward the host's aim point - 1 the current
-    // angles equal the target angles (0x386170), 0 still slewing, -1 no turret model, not aiming, or the aim yaw is beyond
-    // the (deployed) rotate extent (the can-aim test fails). Derived from the turret state.
+    // angles equal the target angles (0x386170), 0 still slewing, -2 the aim yaw is beyond the (deployed) rotate extent
+    // (the can-aim test 0x631cc0 fails; s78f t08), -1 no turret model or not aiming. Derived from the turret state.
     int8_t turret_aim = -1;
 };
 

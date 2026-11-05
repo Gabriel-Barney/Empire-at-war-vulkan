@@ -139,6 +139,7 @@ void CombatSystem::reserve(uint32_t units, uint32_t projectiles, uint32_t candid
     shot_events_.reserve(projectiles);  // OI fog
     effect_scratch_.reserve(units);     // OI abilities
     survivor_events_.reserve(16);
+    attack_events_.reserve(units);  // s78f t08: at most one signal 0x1E per unit and tick
     leaders_.reserve(units);
     team_heads_.reserve(units);  // OI tactical
     serial_ctx_.reserve(std::max<uint32_t>(candidates_per_unit, units));
@@ -1421,11 +1422,12 @@ bool CombatSystem::needs_turn_to(const Unit& u, const Unit& t) const {
     // Slot 48 0x568230 (TACTICAL_COMBAT §3.1.1 "Slot 48") [H]: |wrap(yaw(obj -> target) - obj yaw)| > tol, tol = 0x372560 / 2
     // and 0.01 degrees when that half is >= 90 (0x20af60). Yaws from 0x20acd0 in [0, 360); the difference wrapped to
     // (-180, 180]. A team-container target is replaced by its member nearest the shooter (0x404fc0) [port: the
-    // pending-ability member first is not modelled]. [port] No turn rate or no locomotor: never true (nothing could turn
-    // it; retail would hold state 3).
-    const UnitDesc& ud = desc_of(u);
+    // pending-ability member first is not modelled]. s78f t08 [H]: the locomotor is never read, so a unit without one
+    // (a weapon structure) is tested too: within the cone it is snapped to the target, outside it holds state 3 (nothing
+    // turns it). [port] A turn rate <= 0 (an explicit Max_Rate_Of_Turn 0; the type default is 2.3) never needs to turn
+    // (retail: tolerance 0 and no turn step, so only an exact facing would fire).
     const float rate = turn_step(u);
-    if (!(rate > 0.0f) || !ud.has_locomotor) return false;
+    if (!(rate > 0.0f)) return false;
     float tol = rate * 0.5f;
     if (tol >= 90.0f) tol = 0.01f;
     const Unit& m = lob_member(t, u.pos);
@@ -1437,10 +1439,12 @@ bool CombatSystem::needs_turn_to(const Unit& u, const Unit& t) const {
 
 void CombatSystem::face_toward(Unit& u, Vec3 p, float max_step) {
     // max_step < 0: the facing snap 0x394440 (yaw to the target; [port] no pitch: port units stay level, so
-    // Targeting_Land_Model_Stay_Horiz_Flat changes nothing). Else the [port] turn request: the locomotor's vf +0x2e8 [M]
-    // modelled as one turn step of at most `max_step` degrees toward the target (the rate slot 48 measures against).
-    // [port] An object without a locomotor (a structure) keeps its facing: no snap, no turn.
-    if (!desc_of(u).has_locomotor) return;
+    // Targeting_Land_Model_Stay_Horiz_Flat changes nothing). Else the turn request, locomotor vf +0x2e8 (s78f t08 [H]:
+    // Walk / LandTeamInfantry 0x42d7b0 -> vf +0x2f0 0x620710 / 0x62d400): the yaw moves by clamp(wrapped error, +-R) at
+    // once, R = `max_step` (the rate slot 48 measures against) [port: the Fleeing_Infantry_Speed_Bonus factor of 0x62d400
+    // is not modelled]. An object without a locomotor gets the snap (0x394440 writes the object) but no turn request
+    // (there is no locomotor to call).
+    if (max_step >= 0.0f && !desc_of(u).has_locomotor) return;
     const float dx = p.x - u.pos.x, dy = p.y - u.pos.y;
     const float to = (dx == 0.0f && dy == 0.0f) ? 0.0f : dmath::atan2(dy, dx) * kRadToDeg;
     float yaw = to;
@@ -1455,25 +1459,77 @@ void CombatSystem::face_toward(Unit& u, Vec3 p, float max_step) {
     if (hooks_) hooks_->facing_set(u.id, f);
 }
 
-void CombatSystem::attack_idle(Unit& u, bool arg, uint32_t frame, SimRng& rng) {
-    // Slot 47 0x569540 (TACTICAL_COMBAT §3.1.1 "Slot 47"): the pose itself is the host's (animation). [port] The
-    // Auto_Deploys + Deploys branch (a deploy request while the ordered flag TD +0xf4 is set) is not modelled.
+void CombatSystem::attack_idle(Unit& u, bool arg, uint32_t frame, SimRng& rng, bool ordered) {
+    // Slot 47 0x569540 (TACTICAL_COMBAT §3.1.1 "Slot 47"): the pose itself is the host's (animation). s78f t08 [H]: an
+    // Auto_Deploys + Deploys unit without Fire_Weapon_When_Undeployed plays no pose; with the ordered flag (TD +0xf4,
+    // `ordered`) set and the current clip not Deploy it requests the deploy (0x391260) [port: "not the Deploy clip" read
+    // as neither deployed nor in a deploy transition]. [M, not modelled] the behaviour counter +0x3c gate (0x4c36f0).
     const UnitDesc& ud = desc_of(u);
-    if (ud.auto_deploys && ud.deploys && !ud.fire_weapon_when_undeployed) return;
+    if (ud.auto_deploys && ud.deploys && !ud.fire_weapon_when_undeployed) {
+        if (ordered && !deployed_or_deploying(u) && !deploy_transition(u) && hooks_) hooks_->request_deploy(u.id, frame);
+        return;
+    }
     if (hooks_) hooks_->attack_idle(u.id, arg, frame, rng);
+}
+
+ObjectId CombatSystem::container_or_self(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u && u->team != 0 && u->team <= static_cast<uint32_t>(kNoObject) ? static_cast<ObjectId>(u->team) : id;
+}
+
+bool CombatSystem::auto_deploy_check(const Unit& u, ObjectId target) const {
+    // 0x568e60 (s78f t08 [H]): false without Deploys or Auto_Deploys, with Fire_Weapon_When_Undeployed, or when already
+    // deployed / deploying; else true when the target is ordered (TD +0xf4), the owner is an AI player that is not human
+    // (player +0x360 / +0x62; [port] PlayerInfo::ai of an active player), or the target is the formation's attack target
+    // and Max_Dist_Walk_While_Deployed > 0 [port: the "current formation block has the attack-move / guard flag" term is
+    // not modelled - land formation blocks carry no flags in the movement layer].
+    const UnitDesc& ud = desc_of(u);
+    if (!ud.deploys || !ud.auto_deploys || ud.fire_weapon_when_undeployed || deployed_or_deploying(u) || deploy_transition(u))
+        return false;
+    if (u.ordered_target != kNoObject && u.ordered_target == target) return true;
+    const PlayerInfo& pi = player(u.owner);
+    if (pi.ai && pi.active) return true;
+    return u.goal_target == target && ud.max_dist_walk_while_deployed > 0.0f;
+}
+
+void CombatSystem::hold_fire(Unit& u, ObjectId target) {
+    // s78f t08 [H] (TACTICAL_COMBAT §3.1.1, last rule of the land, space and team services): state 4 with the target ==
+    // the pending-ability target (TD +0x148, slot 38) and the target type's Should_Attacker_Hold_Fire_For_Special_Ability
+    // -> state 2.
+    if (u.tstate != 4 || !hooks_ || hooks_->pending_ability_target(u.id) != target) return;
+    const Unit* t = unit(target);
+    if (t && desc_of(*t).hold_fire_for_special_ability) u.tstate = 2;
 }
 
 void CombatSystem::set_tstate(Unit& u, uint8_t s, ObjectId target) {
     // Slot 31 0x568c80 [H]: s = 4 is not written (the old state stays) while the type has Is_Stationary_When_Attacking and
-    // the locomotor is moving. [port] Signal 0x1E on the first entry to 4 and the pending-ability rules (TD +0x148 /
-    // +0x150) are not modelled.
-    if (s == 4 && desc_of(u).stationary_when_attacking && (u.flags & kUnitMoving)) {
+    // the locomotor is moving, or (s78f t08 [H]) while a pending ability (TD +0x148 / +0x150, slot 38) targets the
+    // current target (each replaced by its container): a unit not attacking yet holds fire until the ability fires.
+    // s78f t08: the first entry to 4 raises signal 0x1E (AttackStateEvent) - for a member of a team, only the team's
+    // first member, on the container [port: the first live combat member in ascending id; a land team head standing in
+    // for its container counts as the member].
+    bool hold = s == 4 && desc_of(u).stationary_when_attacking && (u.flags & kUnitMoving) != 0;
+    if (s == 4 && !hold && hooks_) {
+        const ObjectId pt = hooks_->pending_ability_target(u.id);
+        hold = pt != kNoObject && container_or_self(pt) == container_or_self(target);
+    }
+    if (hold) {
         if (u.ttarget != target) u.tstate = 1;  // the old state of a new target: Set_Target's 1
         u.ttarget = target;
         return;
     }
+    const bool enter = s == 4 && !(u.tstate == 4 && u.ttarget == target);
     u.tstate = s;
     u.ttarget = target;
+    if (!enter) return;
+    ObjectId on = u.id;
+    if (u.team != 0) {
+        for (const Unit& m : units_)  // ascending id
+            if (!(m.flags & kUnitDead) && m.team == u.team && m.id < u.id && m.id != static_cast<ObjectId>(u.team)) return;
+        if (u.team <= static_cast<uint32_t>(kNoObject)) on = static_cast<ObjectId>(u.team);
+    }
+    const Unit* g = unit(u.goal_target);
+    attack_events_.push_back({on, live(g) ? u.goal_target : target});
 }
 
 void CombatSystem::drop_target(Unit& u) {
@@ -1511,9 +1567,20 @@ void CombatSystem::targeting_service(Unit& u, uint32_t frame, SimRng& rng) {
     if (cfg_.mode != GameMode::Land) {
         // Space: no TURRET -> 4; TURRET: aimed 4 / not yet 3 ([port] the host's aim state; cannot aim: not modelled).
         // Slot 48 is not used. Out of range: 2.
+        // s78f t08: the host's -2 (cannot aim) drops the target, as in 0x633ae0. Last, the hold-fire rule.
         uint8_t s = 2;
-        if (in_range) s = (ud.turret && hooks_ && hooks_->turret_aim_state(u.id) == 0) ? uint8_t{3} : uint8_t{4};
+        if (in_range && ud.turret && hooks_) {
+            const int8_t a = hooks_->turret_aim_state(u.id);
+            if (a == -2) {
+                drop_target(u);
+                return;
+            }
+            s = a == 0 ? uint8_t{3} : uint8_t{4};
+        } else if (in_range) {
+            s = 4;
+        }
         set_tstate(u, s, tid);
+        hold_fire(u, tid);
         return;
     }
     if (!in_range) {
@@ -1527,34 +1594,54 @@ void CombatSystem::targeting_service(Unit& u, uint32_t frame, SimRng& rng) {
         return;
     }
     const bool moving = (u.flags & kUnitMoving) != 0;
+    const bool ordered = u.ordered_target != kNoObject && u.ordered_target == tid;  // TD +0xf4
     uint8_t s = 4;
     if (ud.turret) {
         // 1. TURRET: nothing in a Walk deploy transition, nor for an undeployed Auto_Deploys + Deploys unit without
-        //    Fire_Weapon_When_Undeployed (the state is left as it was). Else aimed -> 4, still slewing -> 3. [port] The
-        //    can-aim test 0x631cc0 (the extents, the lob arc) and its drop / body-turn branch are the host's turret model.
+        //    Fire_Weapon_When_Undeployed (the state is left as it was). Else the host's aim (s78f t08 [H]: one
+        //    Turret_Rotate_Speed slew step per service, no shortcut for non-deployers): aimed -> 4, still slewing -> 3.
+        //    Cannot aim (-2: beyond the rotate extent) -> deployed, or the target is not the formation's attack target, or
+        //    its type lacks Should_Cause_Limited_Turrets_To_Turn: the target is dropped (slot 27) and the service ends;
+        //    else the body turns (unless moving: vf +0x218, a turn-in-place path [port: one turn step]) and state 3.
+        //    [port] The lob-arc and turret-bone terms of 0x631cc0 are not modelled.
         if (deploy_transition(u) || (ud.auto_deploys && ud.deploys && !deployed_or_deploying(u) && !ud.fire_weapon_when_undeployed))
             return;
-        s = (hooks_ && hooks_->turret_aim_state(u.id) == 0) ? uint8_t{3} : uint8_t{4};
+        const int8_t a = hooks_ ? hooks_->turret_aim_state(u.id) : int8_t{-1};
+        if (a == -2) {
+            if (deployed_or_deploying(u) || u.goal_target != tid || !desc_of(*t).limited_turrets_turn) {
+                drop_target(u);
+                return;
+            }
+            if (!moving) face_toward(u, lob_member(*t, u.pos).pos, turn_step(u));
+            s = 3;
+        } else {
+            s = a == 0 ? uint8_t{3} : uint8_t{4};
+        }
     } else if (ud.weapon_projectile >= 0) {
         // 2. WEAPON, no TURRET. Moving: 4 only when the model has no Attack clip (infantry with attack animations do not
-        //    fire on the move). Not moving: slot 48; facing off and (no Deploys, or Must_Face_Target_To_Attack_When_Deployed,
-        //    or Fire_Weapon_When_Undeployed): slot 47(1), state 3, the turn request, slot 48 again (now facing -> 4);
-        //    otherwise a non-deployer's facing is snapped to the target, state 4. [port] The auto-deploy check 0x568e60 is
-        //    not modelled.
+        //    fire on the move). Not moving: slot 48, then the auto-deploy check 0x568e60 (true -> the deploy request
+        //    0x391260; s78f t08 [H]); facing off and (no Deploys, or Must_Face_Target_To_Attack_When_Deployed, or
+        //    Fire_Weapon_When_Undeployed): slot 47(1), state 3, the turn request, slot 48 again (now facing -> 4);
+        //    otherwise a non-deployer's facing is snapped to the target, state 4.
         if (moving) {
             s = (u.flags & kUnitAttackClip) ? uint8_t{2} : uint8_t{4};
-        } else if (needs_turn_to(u, *t) && (!ud.deploys || ud.must_face_target_when_deployed || ud.fire_weapon_when_undeployed)) {
-            attack_idle(u, true, frame, rng);
-            set_tstate(u, 3, tid);
-            face_toward(u, lob_member(*t, u.pos).pos, turn_step(u));
-            s = needs_turn_to(u, *t) ? uint8_t{3} : uint8_t{4};
         } else {
-            if (!ud.deploys) face_toward(u, lob_member(*t, u.pos).pos, -1.0f);
-            s = 4;
+            const bool turn = needs_turn_to(u, *t);
+            if (auto_deploy_check(u, tid) && hooks_) hooks_->request_deploy(u.id, frame);
+            if (turn && (!ud.deploys || ud.must_face_target_when_deployed || ud.fire_weapon_when_undeployed)) {
+                attack_idle(u, true, frame, rng, ordered);
+                set_tstate(u, 3, tid);
+                face_toward(u, lob_member(*t, u.pos).pos, turn_step(u));
+                s = needs_turn_to(u, *t) ? uint8_t{3} : uint8_t{4};
+            } else {
+                if (!ud.deploys) face_toward(u, lob_member(*t, u.pos).pos, -1.0f);
+                s = 4;
+            }
         }
     }
     set_tstate(u, s, tid);
-    if (u.tstate == 4) attack_idle(u, true, frame, rng);
+    if (u.tstate == 4) attack_idle(u, true, frame, rng, ordered);
+    hold_fire(u, tid);
 }
 
 void CombatSystem::team_targeting_service(Unit& head, uint32_t frame, SimRng& rng) {
@@ -1569,6 +1656,7 @@ void CombatSystem::team_targeting_service(Unit& head, uint32_t frame, SimRng& rn
     for (Unit& m : units_)
         if (&m != &head && !(m.flags & kUnitDead) && land_team_head(m) == &head) members.push_back(&m);
     const ObjectId tid = current_target(head.id);
+    const bool ordered = head.ordered_target != kNoObject && head.ordered_target == tid;  // TD +0xf4 (slot 32 copies it to the members)
     const Unit* t = unit(tid);
     uint8_t s = 0;
     if (live(t)) {
@@ -1597,10 +1685,12 @@ void CombatSystem::team_targeting_service(Unit& head, uint32_t frame, SimRng& rn
                     for (Unit* m : members) face_toward(*m, lob_member(*t, m->pos).pos, -1.0f);
                     s = 4;
                 } else {
-                    for (Unit* m : members) attack_idle(*m, false, frame, rng);
+                    // s78f t08 [H]: the container's vf +0x2e8 (LandTeamContainer 0x5adec0) calls every member's turn
+                    // request in team order, so each member steps by clamp(error, +-R) - one already within the cone
+                    // lands exactly on the target. [port] A head that is a member standing in turns only when it needs to.
+                    for (Unit* m : members) attack_idle(*m, false, frame, rng, ordered);
                     if (needs_turn_to(head, *t)) face_toward(head, lob_member(*t, head.pos).pos, turn_step(head));
-                    for (Unit* m : members)
-                        if (needs_turn_to(*m, *t)) face_toward(*m, lob_member(*t, m->pos).pos, turn_step(*m));
+                    for (Unit* m : members) face_toward(*m, lob_member(*t, m->pos).pos, turn_step(*m));
                     s = any_turn() ? uint8_t{3} : uint8_t{4};
                 }
             }
@@ -1617,8 +1707,14 @@ void CombatSystem::team_targeting_service(Unit& head, uint32_t frame, SimRng& rn
         m->ttarget = s == 0 ? kNoObject : tid;
     }
     if (s == 4) {
-        if (desc_of(head).weapon_projectile >= 0) attack_idle(head, true, frame, rng);  // [port] a member standing in
-        for (Unit* m : members) attack_idle(*m, true, frame, rng);
+        if (desc_of(head).weapon_projectile >= 0) attack_idle(head, true, frame, rng, ordered);  // [port] a member standing in
+        for (Unit* m : members) attack_idle(*m, true, frame, rng, ordered);
+    }
+    // s78f t08: the hold-fire rule last (slot 31(2) through the override: the members get the raw 2 as well).
+    if (s == 4 && live(t)) {
+        hold_fire(head, tid);
+        if (head.tstate == 2)
+            for (Unit* m : members) m->tstate = 2;
     }
 }
 
@@ -3621,6 +3717,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
     hit_events_.clear();  // S10-int
     shot_events_.clear();  // OI fog
     lob_events_.clear();   // S8 t30
+    attack_events_.clear();  // s78f t08 (signal 0x1E)
     survivor_events_.clear();  // OI abilities
     const auto n = static_cast<uint32_t>(units_.size());
 

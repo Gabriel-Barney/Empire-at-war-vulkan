@@ -188,7 +188,7 @@ UnitView MovementSystem::view(ObjectId id) const {
         const auto w = [](float a) { return a < 0.0f ? a + 360.0f : a; };
         bool eq = true;
         for (size_t k = 0; k < 3; ++k) eq = eq && std::fabs(w(u.tcur[k]) - w(u.ttgt[k])) <= 0.0001f;
-        v.turret_aim = std::fabs(u.ttgt[2]) > ext ? int8_t{-1} : eq ? int8_t{1} : int8_t{0};
+        v.turret_aim = std::fabs(u.ttgt[2]) > ext ? int8_t{-2} : eq ? int8_t{1} : int8_t{0};  // s78f t08: -2 cannot aim
     }
     return v;
 }
