@@ -1047,6 +1047,17 @@ No in-game probe is needed for these rules. An optional probe was run (s78f t09,
   moving (it stopped at F 7110). With no follow in progress this does not test B 3's "keep following while G moves".
 - Still untested: guard ordered **while** G moves, then a shift waypoint while it still moves. B 3 predicts the
   waypoint waits until G stops. The scenario ran out before that sequence.
+- **Guard ordered while G moves, again** (s78f t12, 2026-11-05, `out/20261105-062322/reader_space2.log`,
+  GUARD_MOVE, two battles, Lua orders only) [M]. The fighters chase and reach G (distance 70–420 after 250–400
+  frames), then **stop following**. They hold near the point where they caught up while G keeps moving: the
+  distance grows to 3000 (F 1110–1950, second battle) and again on the way back (F 2550–3150). In the first battle
+  they drifted back toward G about 250 frames after it stopped. So the follow seen at F 3540 in t09 is not a steady
+  follow. It looks like a move to G's position that is re-issued only now and then, not B 3's state-1 follow.
+- Still untested: the shift waypoint while G moves. In the windowed game the squadron sat at the map edge under the
+  HUD and could not be box-selected in time, so no waypoint was given.
+- **Squadron team target** (s78f t12, same run, SQUAD; victims owned by the human's Empire player): the five members
+  were on one target for 1605 of 1759 frames. When target t3 was despawned (F 4953), all five cleared at +2 and took
+  t2 at +3, in the same frame (ALL_AT_ONCE). ESCORT: no escort spawned, so it was not measured.
 
 ---
 

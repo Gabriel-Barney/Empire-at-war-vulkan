@@ -120,7 +120,7 @@ def report(modes, out):
         for d in recs:
             if d['kind'] == 'SCN' and d.get('scn') and d['F'] is not None:
                 scns.setdefault(d['scn'], {})[d.get('ev')] = d['F']
-        mine = [s for s in ('IDLE47', 'MAGNEPULSE', 'BUNKER', 'GUARD_SHIFT') if s in scns]
+        mine = [s for s in ('IDLE47', 'MAGNEPULSE', 'BUNKER', 'GUARD_SHIFT', 'GUARD_MOVE') if s in scns]
         if not mine:
             continue
         per, unknown = draws_per_frame(m['rng'])
@@ -198,17 +198,19 @@ def report(modes, out):
                 w('   d=%-4s F=%d..%d grenades %2d  draws %.2f / frame  merc ts %s\n' % (
                     d.get('d'), a, b, g, r[2] if r else float('nan'), ts_hist(m['st'], near, a + 30, b)))
 
-        if 'GUARD_SHIFT' in scns:
-            e = scns['GUARD_SHIFT']
-            w('\n-- GUARD_SHIFT (t09, by hand): F=%s..%s\n' % (e.get('start'), e.get('end')))
-            g = [d for d in spawns if d.get('scn') == 'GUARD_SHIFT' and d.get('tag') == 'g' and d.get('id') in m['st']]
+        for gname in ('GUARD_SHIFT', 'GUARD_MOVE'):
+            if gname not in scns:
+                continue
+            e = scns[gname]
+            w('\n-- %s (t09 / t12, by hand): F=%s..%s\n' % (gname, e.get('start'), e.get('end')))
+            g = [d for d in spawns if d.get('scn') == gname and d.get('tag') == 'g' and d.get('id') in m['st']]
             gid = g[0]['id'] if g else None
-            sq = [d for d in spawns if d.get('scn') == 'GUARD_SHIFT' and d.get('tag') == 'squad' and any(l and l[0].get('cont') == d.get('id') for l in m['st'].values())]
+            sq = [d for d in spawns if d.get('scn') == gname and d.get('tag') == 'squad' and any(l and l[0].get('cont') == d.get('id') for l in m['st'].values())]
             sqid = sq[0]['id'] if sq else None
             # only the probe squadron's members (their container is the spawned squadron), not the player's own TIEs
             fighters = [i for i, l in m['st'].items() if sqid and l and l[0].get('cont') == sqid]
             for d in recs:
-                if d['kind'] in ('MARK', 'ORDER') and d.get('scn') == 'GUARD_SHIFT':
+                if d['kind'] in ('MARK', 'ORDER') and d.get('scn') == gname:
                     w('   %s F=%s %s\n' % (d['kind'], d['F'], d.get('mark') or '%s %s ok=%s' % (
                         d.get('tag'), d.get('order'), d.get('ok'))))
             f0 = e.get('start') or 0

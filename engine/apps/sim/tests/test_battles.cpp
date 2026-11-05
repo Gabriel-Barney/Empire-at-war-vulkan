@@ -4412,6 +4412,85 @@ void test_battle_ai_find_team() {
     CHECK(checked);
 }
 
+// s78f t07 (TACTICAL_COMBAT §3.1.1 "Team targeting copies"): land team members join combat with their team (the TEAM
+// container's object id), so the TeamTargeting copy runs in a real battle: a member keeps no target of its own and reads
+// its team head's (the lowest-id live member standing in for the container), and every non-head member holds the same
+// copied targeting state.
+void test_land_team_targeting() {
+    auto d = make_data(false, false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, make_setup(*d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    const objects::TypeIndex team = d->types.resolve_name("Team"), trooper = d->types.resolve_name("S10_Trooper");
+    CHECK(team != objects::kNone && trooper != objects::kNone);
+    bool invaded = false, registered = false;
+    uint32_t copies = 0;  // ticks on which a team of >= 3 live members attacked through the copy
+    for (uint64_t t = 0; t < 6000 && copies < 5; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->frame() < 3) continue;
+        objects::ObjectStore& st = tm->primary();
+        const tactical::combat::CombatSystem& cs = b->combat();
+        std::vector<objects::ObjectId> teams;
+        for (const objects::ObjectHandle h : st.all_objects())
+            if (st.alive(h) && st.type(h) == team) teams.push_back(st.id(h));
+        std::sort(teams.begin(), teams.end());
+        std::vector<std::vector<objects::ObjectId>> members(teams.size());  // per team, ascending id (combat order)
+        for (size_t i = 0; i < cs.unit_count(); ++i) {
+            const auto id = cs.unit_id_at(i);
+            const uint32_t tid = cs.team(id);
+            if (tid == 0) continue;
+            const auto oid = static_cast<objects::ObjectId>(tid);
+            const auto it = std::lower_bound(teams.begin(), teams.end(), oid);
+            CHECK(it != teams.end() && *it == oid);  // the team id is a live TEAM container
+            if (it == teams.end() || *it != oid) continue;
+            const objects::ObjectHandle mh = st.find(id);
+            CHECK(st.alive(mh) && st.type(mh) == trooper);
+            if (cs.alive(id)) members[static_cast<size_t>(it - teams.begin())].push_back(id);
+        }
+        for (const auto& m : members) {
+            if (m.empty()) continue;
+            registered = true;
+            const auto head = cs.current_target(m.front());
+            for (size_t k = 1; k < m.size(); ++k) {
+                CHECK(cs.current_target(m[k]) == head);  // the head's target, none of its own
+                CHECK(cs.targeting_state(m[k]) == cs.targeting_state(m[1]));  // the raw state copy
+            }
+            if (m.size() >= 3 && head != tactical::combat::kNoObject && cs.targeting_state(m[1]) == 4) ++copies;
+        }
+    }
+    std::printf("  land team targeting: registered %d, attacking copy ticks %u\n", registered ? 1 : 0, copies);
+    CHECK(registered);
+    CHECK(copies >= 5);
+}
+
 // a1g t04 follow-up: BattleAi::land_drop_ok (TACTICAL_GAPS §4.2): the land Reinforce drop validity of a reserve entry. A spot
 // is refused when a slot is impassable (an Obstacle strip on the map), fogged for the player (force 1), or its footprint is
 // taken (a live unit stands there); an unknown entry is refused; otherwise accepted.
@@ -6266,6 +6345,8 @@ int main(int argc, char** argv) {
 #endif
     std::printf("a1g t04 follow-up: land company drop layout, oriented boxes, reinforcement radii\n");
     test_land_drop_rules();
+    std::printf("s78f t07: land team members registered with combat (TeamTargeting copy in a battle)\n");
+    test_land_team_targeting();
     std::printf("a1i t04 / t05: land Reinforce from a landing object (spawn, carried type, unload offsets, take-off)\n");
     test_landing_drop(false);
     test_landing_drop(true);

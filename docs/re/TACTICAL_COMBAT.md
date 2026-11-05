@@ -749,6 +749,10 @@ value 0 (0x2823c0 / 0x2823e0), "enemy" = value 1 (0x2824d0 / 0x2824f0, Lua `Play
     `-060346`). So, for targeting, either the skirmish Hostile player is not set up by 0x297300 like the slot
     players, or something before the relation test drops it. Check that before relying on "Hostile is an enemy" in
     skirmish.
+    Relation check (s78f t12, 2026-11-05, `out/20261105-062322`, REL records): Lua `Is_Enemy` between the Rebel AI
+    and Hostile (player 4) is **true both ways**, in land and in space (Empire: true; Neutral and Rebel: false). So
+    the relation Lua sees is "enemy", and the drop happens elsewhere [M: the candidate scan skips the Hostile
+    player's objects, or they are not in the per-player lists the scan reads].
 - **Skirmish with the map / game record byte +0xb5 set** (0x295cf0 → 0x297470) [M: a team-game setting]: same, but
   allies are self or the same team id (player +0x54 ≠ −1); faction is not used.
 - **At run time:** Lua `PlayerWrapper.Make_Ally` (0x6046a0) writes 0, `Make_Enemy` (0x604780) writes 1 (one
@@ -1247,6 +1251,15 @@ gives R = 3.588° and a slot-48 tolerance of 1.794° in land.
   - [M] because the despawn also removed the victims, and the planned on/off toggle failed: `Stop()` did not clear
     the walkers' targeting, which stayed at 4.
   - Control: the `Rebel_Infiltrator` phase never took a target (state 0), so there is no with-clip comparison yet.
+  - With-clip control and victim toggle (s78f t12, 2026-11-05, `out/20261105-062322`, IDLE47V) [M]. Six attackers
+    held in place; each 300-frame cycle spawns six held victims and orders the attacks ("on"), and despawns the
+    victims 150 frames later ("off"); five cycles per phase. Median step of the synced draws per frame across the
+    edges: `Pod_Walker` (no ATTACKIDLE) on **+7** / off **−6.5**; `Rebel_Infiltrator` (has ATTACKIDLE) on +5 / off
+    −1; victims only, no attackers: on −2 / off +89 (bursts of about 100 steps in the background make single edges
+    noisy). At on + 60 the walkers were in state 4 on clip 0; the infiltrators were mostly in state 0 (one in state 4
+    on clip 6). So the about-6 step comes with six no-clip walkers in state 4, as a per-service slot-47 redraw
+    predicts, and the victims alone do not produce it. The with-clip side is still not clean, because the
+    infiltrators mostly did not take their targets.
   - *Port:* when clip 6 is missing, leave the current clip as it is and draw the blend each service in state 3 / 4,
     as retail does.
 

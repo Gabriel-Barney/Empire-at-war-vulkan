@@ -1088,6 +1088,15 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32
         cs.owner = P.owner;
         cs.position = tv(mode.primary().position(u.h));
         cs.facing = tv(mode.primary().facing(u.h));
+        // s78f t07 (TACTICAL_COMBAT §3.1.1 "Team targeting copies"): a land team member joins combat with its team (the
+        // container's object id); the chunk's first member (list order, the lowest id, as slot 31's 0x4ec820) is the
+        // team_leader standing in for the container, which is no combat unit here. This runs the TeamTargeting copy,
+        // team scoring and the Take_Damage redirect / share and convert team rules. [port] Space squadrons keep their
+        // FIGHTER_FLYING §4.10 B shared target and are not registered (no space team targeting service).
+        if (!space_ && u.container != kNoContainer) {
+            cs.team = static_cast<uint32_t>(containers_[u.container].id);
+            cs.team_leader = i == first || units_[i - 1].container != u.container;
+        }
         abilities_->add_unit(cs, cs.desc, frame_, rng, u.container != kNoContainer ? containers_[u.container].id : tc::kNoObject);
         hg_adopt(u, rng);  // hangars: engine mode enter, SPAWN_SQUADRON add_carrier (attach order)
         u.range = combat_->attack_range(u.id);
