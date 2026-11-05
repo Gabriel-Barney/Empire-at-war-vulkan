@@ -1,10 +1,12 @@
 // alamo_game_display_tests: the video options host helpers (app/game_display.hpp) - the resolution list's mode text
 // (the original's "%d x %d (%dHz)"), the list selection by size and refresh rate, the video options file round trip, and
 // the advanced detail options' mapping onto the renderer's frame options. Nothing here changes the display.
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -136,7 +138,7 @@ void profile_round_trip() {
     p.hardware_mouse = true;
     p.detail = 40;
     p.gamma = 70;
-    p.advanced.anti_aliasing = ui::AntiAliasing::Taa;
+    p.anti_alias = 63;
     p.advanced.ambient_occlusion = true;
     p.advanced.anisotropy = 8;
     p.advanced.mesh = 25;
@@ -146,7 +148,7 @@ void profile_round_trip() {
     CHECK(game::load_video_profile(path, q));
     CHECK(q.mode == p.mode);
     CHECK(!q.vsync && q.vsync_mode == ui::VsyncMode::Mailbox && q.frame_cap == ui::kFrameCapDisplay && q.hardware_mouse);
-    CHECK(q.detail == 40 && q.gamma == 70 && q.anti_alias == 0);
+    CHECK(q.detail == 40 && q.gamma == 70 && q.anti_alias == 63);
     CHECK(q.advanced == p.advanced);
     // A partial file (hand-written) keeps the other values.
     {
@@ -155,7 +157,7 @@ void profile_round_trip() {
     }
     game::VideoProfile r;
     CHECK(game::load_video_profile(path, r));
-    CHECK(r.advanced.anti_aliasing == ui::AntiAliasing::Taa && r.advanced.anisotropy == 16);
+    CHECK(r.anti_alias == ui::kAntiAliasDefaultSlider && r.advanced.anisotropy == 16);
     CHECK(r.mode.width == 0 && r.vsync && !r.advanced.ambient_occlusion && r.advanced.bloom);
     CHECK(!game::load_video_profile((dir / "missing.txt").string(), r));
     std::error_code ec;
@@ -190,6 +192,23 @@ void detail_options() {
     CHECK(!space.shadows && !space.soft_shadows);
 }
 
+// A list of named levels (ui::LevelChoice) tells the truth when each level's value has a different effect in the renderer's own
+// mapping `f` from its neighbours', the level starts exactly where that effect starts, and every stored value 0..100 has the
+// effect of the level it falls in.
+template <size_t N, class F>
+void effect(const ui::LevelChoice (&levels)[N], F f) {
+    const std::span<const ui::LevelChoice> list(levels);
+    for (size_t i = 0; i < N; ++i) {
+        CHECK(f(levels[i].value) == f(levels[i].from));
+        if (i > 0) CHECK(f(levels[i].from) != f(levels[i - 1].value) && f(levels[i].from - 1) == f(levels[i - 1].value));
+    }
+    for (int32_t v = 0; v <= 100; ++v) {
+        const size_t k = ui::level_index(list, v);
+        if (f(v) != f(levels[k].value)) std::printf("value %d: effect %d, but its level %zu (value %d) gives %d\n", v, f(v), k, levels[k].value, f(levels[k].value));
+        CHECK(f(v) == f(levels[k].value));
+    }
+}
+
 void detail_mappings() {
     // t11: the remaining sliders bind to real renderer parameters; 100 / default = today's look.
     CHECK(game::shader_level(100) == 3 && game::shader_level(0) == 0 && game::shader_level(50) == 2 && game::shader_level(17) == 1);
@@ -198,47 +217,76 @@ void detail_mappings() {
     CHECK(game::particle_detail(100) == 1.0f && game::particle_detail(0) == 0.0f && game::particle_detail(250) == 1.0f);
     CHECK(game::environment_fade_scale(100) == 1.0f && std::fabs(game::environment_fade_scale(0) - 0.6f) < 1e-6f);
     CHECK(game::gamma_value(50) == 1.0f && game::gamma_value(100) == 2.0f && game::gamma_value(0) == 0.5f);
-    ui::AdvancedVideoSettings adv;
-    CHECK(!game::taa_active(adv, 0) && game::taa_active(adv, 1));  // the slider alone switches the resolve on
-    adv.anti_aliasing = ui::AntiAliasing::Taa;
-    CHECK(game::taa_active(adv, 0));
+    CHECK(!game::taa_active(0) && game::taa_active(1));  // any strength above 0 switches the resolve on
     render::RecordOptions o;
-    game::apply_aa_options(o, adv, 0);
-    CHECK(o.taa && o.taa_weight < 0.0f);  // the tuned default
-    game::apply_aa_options(o, adv, 100);
+    game::apply_aa_options(o, 100);
     CHECK(o.taa && std::fabs(o.taa_weight - 0.04f) < 1e-6f);
-    adv.anti_aliasing = ui::AntiAliasing::Off;
-    game::apply_aa_options(o, adv, 0);
-    CHECK(!o.taa);
-    // t19 / D9: the slider and the combo are one setting in the profile, including one written before they were.
+    game::apply_aa_options(o, ui::kAntiAliasDefaultSlider);
+    CHECK(o.taa && std::fabs(o.taa_weight - 0.1f) < 0.002f);  // Medium = the tuned default weight
+    game::apply_aa_options(o, 0);
+    CHECK(!o.taa && o.taa_weight < 0.0f);
+    // Anti-aliasing is one value in the profile: the Video dialog's list sets it, and a profile written when the Advanced dialog
+    // had its own box ("anti_aliasing=taa") still turns it on.
     {
         game::VideoProfile aa;
         ui::VideoSettings vs;
         vs.anti_alias = 40;
-        CHECK(game::update_video_profile(aa, vs, {}) && aa.advanced.anti_aliasing == ui::AntiAliasing::Taa);
+        CHECK(game::update_video_profile(aa, vs, {}) && aa.anti_alias == 40 && game::taa_active(aa.anti_alias));
         vs.anti_alias = 0;
-        CHECK(game::update_video_profile(aa, vs, {}) && aa.advanced.anti_aliasing == ui::AntiAliasing::Off);
-        game::sync_anti_alias(aa);
-        CHECK(aa.anti_alias == 0 && aa.advanced.anti_aliasing == ui::AntiAliasing::Off);
-        aa.advanced.anti_aliasing = ui::AntiAliasing::Taa;  // old file: combo on, slider 0
-        game::sync_anti_alias(aa);
-        CHECK(aa.anti_alias == ui::kAntiAliasDefaultSlider && aa.advanced.anti_aliasing == ui::AntiAliasing::Taa);
-        aa.anti_alias = 30;  // old file: combo off, slider above 0
-        aa.advanced.anti_aliasing = ui::AntiAliasing::Off;
-        game::sync_anti_alias(aa);
-        CHECK(aa.anti_alias == 30 && aa.advanced.anti_aliasing == ui::AntiAliasing::Taa);
+        CHECK(game::update_video_profile(aa, vs, {}) && aa.anti_alias == 0 && !game::taa_active(aa.anti_alias));
+        const std::filesystem::path dir = std::filesystem::temp_directory_path() / "alamo_game_display_aa";
+        std::filesystem::create_directories(dir);
+        const std::string path = (dir / "video_options.txt").string();
+        const auto load = [&](const char* text) {
+            {
+                std::ofstream f(path, std::ios::trunc);
+                f << text;
+            }
+            game::VideoProfile r;
+            CHECK(game::load_video_profile(path, r));
+            return r.anti_alias;
+        };
+        CHECK(load("anti_aliasing=taa\nanti_alias=0\n") == ui::kAntiAliasDefaultSlider);  // old file: box on, slider 0
+        CHECK(load("anti_aliasing=off\nanti_alias=30\n") == 30);                           // old file: box off, slider above 0
+        CHECK(load("anti_aliasing=taa\nanti_alias=20\n") == 20);                           // strength kept
+        CHECK(load("anti_alias=0\n") == 0);
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
     }
-    // The overall Detail slider as a preset: the seven sliders follow, the checks / AA / anisotropy stay.
+    // The named levels of the dialogs tell the truth: every level a list offers does something different from its neighbours in the
+    // renderer's own mapping, and a stored value falls in the level the renderer treats it as (all 101 values, every option).
+    {
+        effect(ui::kLevels4, [](int32_t v) { return game::shader_level(v); });
+        effect(ui::kLevels3, [](int32_t v) { return game::water_level(v); });
+        effect(ui::kTextureChoices, [](int32_t v) { return static_cast<int32_t>(game::texture_reduction(v)); });
+        effect(ui::kShadowChoices, [](int32_t v) {
+            ui::AdvancedVideoSettings s;
+            s.shadow = v;
+            render::RecordOptions r;
+            game::apply_detail_options(r, s);
+            return r.shadows ? 1 : 0;
+        });
+        for (const ui::LevelChoice& c : ui::kAntiAliasChoices) CHECK(game::taa_active(c.value) == (c.value > 0));
+        // The four quality levels are four different looks.
+        std::array<int, 4> shader{}, tex{};
+        for (size_t i = 0; i < 4; ++i) {
+            shader[i] = game::shader_level(ui::kQualityPresets[i]);
+            tex[i] = static_cast<int>(game::texture_reduction(ui::kQualityPresets[i]));
+        }
+        CHECK(shader == (std::array<int, 4>{0, 1, 2, 3}) && tex == (std::array<int, 4>{2, 1, 0, 0}));
+    }
+    // The overall quality level as a preset: the seven options follow, the checks / anisotropy stay.
     ui::AdvancedVideoSettings custom;
     custom.bloom = false;
     custom.anisotropy = 8;
-    custom.anti_aliasing = ui::AntiAliasing::Taa;
     custom.mesh = 10;
     const ui::AdvancedVideoSettings low = game::detail_preset(custom, 30);
     CHECK(low.particle == 30 && low.mesh == 30 && low.texture == 30 && low.water == 30 && low.shader == 30 && low.shadow == 30 &&
           low.environment == 30);
-    CHECK(!low.bloom && low.anisotropy == 8 && low.anti_aliasing == ui::AntiAliasing::Taa && low.soft_shadows == custom.soft_shadows);
+    CHECK(!low.bloom && low.anisotropy == 8 && low.soft_shadows == custom.soft_shadows);
     CHECK(game::detail_preset(custom, 400).mesh == 100);
+    for (size_t i = 0; i < ui::kQualityCount; ++i) CHECK(ui::quality_level(game::detail_preset(custom, ui::kQualityPresets[i])) == i);
+    CHECK(ui::quality_level(custom) == ui::kQualityCustom);  // mesh 10 (Low) amid Ultra
     // t43: and the seven give the Detail slider its level, a preset exactly.
     game::VideoProfile dp;
     dp.detail = 100;

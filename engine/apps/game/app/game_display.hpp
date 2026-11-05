@@ -51,18 +51,17 @@ struct VideoProfile {
     bool vsync = true, hardware_mouse = false;
     ui::VsyncMode vsync_mode = ui::VsyncMode::Fifo;
     int32_t frame_cap = 0;
-    int32_t detail = 100, anti_alias = 0, gamma = 50;  // IDD_VIDEO_OPTIONS_DIALOG sliders (kept for the dialog)
+    int32_t detail = 100, anti_alias = 0, gamma = 50;  // IDD_VIDEO_OPTIONS_DIALOG values 0..100 (anti_alias: TAA strength, 0 = off)
     ui::AdvancedVideoSettings advanced;
 };
 // Copies an applied ApplyVideo's settings into the stored profile; false (profile untouched) while `v.unconfirmed` - a
 // resolution change waiting on the "keep these settings?" dialog (ui::VideoSettings::unconfirmed): the Yes answer, or the
 // revert to the previous mode on No / timeout, comes as a later ApplyVideo with unconfirmed false and stores then. `modes`
 // is the list the resolution index refers to.
-// The Anti-aliasing slider also sets p.advanced.anti_aliasing (t19 / D9, ui::anti_aliasing_from_slider).
+// Anti-aliasing is the one value p.anti_alias (the Video dialog's list); a profile file from before it was also an Advanced
+// dialog box (key "anti_aliasing=taa") loads as Medium strength when its own strength was 0.
 bool update_video_profile(VideoProfile& p, const ui::VideoSettings& v, const std::vector<DisplayMode>& modes);
-// t19 / D9: a profile from before the slider and the AA combo were one setting: either one on means TAA, and both then say so.
-void sync_anti_alias(VideoProfile& p);
-// t43: the stored Detail slider is the level of the seven advanced sliders (ui::advanced_detail_level); applied with them and
+// t43: the stored Detail value is the level of the seven advanced options (ui::advanced_detail_level); applied with them and
 // to a profile saved before the two agreed.
 void sync_detail(VideoProfile& p);
 std::string default_video_profile_path();  // "" when %LOCALAPPDATA% is unset
@@ -84,20 +83,21 @@ void apply_detail_options(render::RecordOptions& o, const ui::AdvancedVideoSetti
 //   particle_detail(slider)     ParticleWorld::set_detail: slider / 100 (ANIM_PARTICLES B.4: the option is 0..1)
 //   environment_fade_scale(slider)  Object_Fade_Begin / End scale for the battle camera: 0.6 + 0.4 * slider / 100
 //   gamma_value(slider)         Options > Video > Gamma, default 50 = 1.0 (identity), 2^((slider - 50) / 50): 0.5 .. 2; > 1 brightens
-//   taa_active(adv, aa_slider)  the AA combo says TAA, or the Anti-aliasing slider is above 0
-//   apply_aa_options(o, adv, aa_slider)  RecordOptions::taa / taa_weight: slider 0 with TAA picked keeps the tuned default (0.1);
-//                                        slider 1..100 lerps the current-frame weight 0.2 -> 0.04 (smoother, more history)
+//   taa_active(strength)        the Anti-aliasing strength is above 0 (the list's Low / Medium / High: 30 / 63 / 100)
+//   apply_aa_options(o, strength)  RecordOptions::taa / taa_weight: strength 1..100 lerps the current-frame weight 0.2 -> 0.04
+//                                  (smoother, more history; Medium = 0.1, the tuned default); off leaves the weight unset
 int shader_level(int32_t slider);
 int water_level(int32_t slider);
 uint32_t texture_reduction(int32_t slider);
 float particle_detail(int32_t slider);
 float environment_fade_scale(int32_t slider);
 float gamma_value(int32_t slider);
-bool taa_active(const ui::AdvancedVideoSettings& s, int32_t aa_slider);
-void apply_aa_options(render::RecordOptions& o, const ui::AdvancedVideoSettings& s, int32_t aa_slider);
-// The overall Detail slider (IDD_VIDEO_OPTIONS_DIALOG) as a preset [M]: a changed Detail slider sets the seven advanced
-// detail sliders (particle, mesh, texture, water, shader, shadow, environment) to its value; the checks (soft shadows, heat,
-// bloom), the AA mode and anisotropy are left as they are.
+bool taa_active(int32_t strength);
+void apply_aa_options(render::RecordOptions& o, int32_t strength);
+// The overall Detail Level (IDD_VIDEO_OPTIONS_DIALOG: Low / Medium / High / Ultra, ui::kQualityPresets) as a preset [M]: a
+// quality level picked there (VideoSettings::detail_picked) sets the seven advanced detail options (particle, mesh, texture,
+// water, shader, shadow, environment) to its value; the checks (soft shadows, heat, bloom), anti-aliasing and anisotropy are
+// left as they are.
 ui::AdvancedVideoSettings detail_preset(const ui::AdvancedVideoSettings& s, int32_t detail);
 // Per-monitor DPI awareness (v2) for the process, so window sizes, the client area and the display modes are all physical
 // pixels; without it a scaled display (150 %) stretches the window and a mode the size of the display no longer fits.
