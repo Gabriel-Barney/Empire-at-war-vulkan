@@ -453,11 +453,18 @@ struct UnitDesc {
     std::vector<std::pair<float, int32_t>> damage_alternates;
     // ---- s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states, slots 47 / 48 and team copies") ----
     // Max_Rate_Of_Turn (type +0x38c, degrees per frame): slot 48's tolerance = this x Object_Max_Speed_Multiplier_Land / 2
-    // (0.01 when that is >= 90) and the [port] turn step. <= 0: [port] slot 48 is never true.
+    // (0.01 when that is >= 90) and the turn request's step (vf +0x2e8 -> Walk 0x620710: one clamp(error, +-R) yaw step
+    // per service, applied at once; s78f t08 [H]). Per service, no frame-time scaling. <= 0: [port] slot 48 is never true
+    // (retail: tolerance 0, so only an exact facing counts; the type default is 2.3).
     float turn_rate = 0.0f;
     bool auto_deploys = false;                    // Auto_Deploys (+0xd0)
     bool must_face_target_when_deployed = false;  // Must_Face_Target_To_Attack_When_Deployed (+0xa6)
     bool stationary_when_attacking = false;       // Is_Stationary_When_Attacking (+0x26): no state 4 while moving
+    // s78f t08: Should_Attacker_Hold_Fire_For_Special_Ability (+0x9e) - an attacker whose pending ability targets this
+    // type drops from state 4 to 2 (the services' hold-fire rule). Should_Cause_Limited_Turrets_To_Turn (+0x80) - a
+    // TURRET unit that cannot aim at this type (beyond its rotate extent) turns its body instead of dropping it.
+    bool hold_fire_for_special_ability = false;
+    bool limited_turrets_turn = false;
     float max_dist_walk_while_deployed = 0.0f;    // Max_Dist_Walk_While_Deployed (+0x23b0): > 0 keeps an out-of-range target
     // ---- s78f t04 (LOB_SOLVER §3.6 "Charge-up aim"): the TURRET of a LOBBING_SUPERWEAPON unit (combat-side slew) ----
     // Turret_Rotate_Speed (+0x5a8, degrees per service; <= 0: [port] the aim is reached at once), the undeployed
@@ -675,9 +682,27 @@ public:
     // vector) for the host's locomotor (serial phase D). Default: nothing.
     virtual void facing_set(ObjectId /*id*/, Vec3 /*facing*/) {}
     // The unit's TURRET aim toward its current target (0x631cc0 / 0x632050) as the host models it: 1 the angles are
-    // reached, 0 still slewing, -1 not modelled (or the target is outside the extents) - [port] treated as reached.
-    // Serial phase D. Default: -1.
+    // reached, 0 still slewing, -2 cannot aim (the aim yaw is beyond the rotate extent: 0x631cc0 false), -1 not modelled
+    // or not aiming - [port] treated as reached. Serial phase D. Default: -1.
     virtual int8_t turret_aim_state(ObjectId /*id*/) const { return -1; }
+    // ---- s78f t08 (TACTICAL_COMBAT §3.1.1 "s78f t08 answers") ----
+    // The unit's pending targeted ability (TD +0x148, written only by slot 38 0x5688f0: an Order_Attack with an ability
+    // CRC, or the autofire driver's pick): its target while one waits for range, else kNoObject. Read-only (serial
+    // phase D). Default: none.
+    virtual ObjectId pending_ability_target(ObjectId /*id*/) const { return kNoObject; }
+    // The deploy request 0x391260 (Walk vf +0x118(1): the Deploy transition) from the targeting service's auto-deploy
+    // check 0x568e60 or slot 47's Auto_Deploys branch. The host refuses it without Deploys, a Walk locomotor or while a
+    // deploy is pending. Serial phase D. Default: nothing.
+    virtual void request_deploy(ObjectId /*id*/, uint32_t /*frame*/) {}
+};
+
+// s78f t08: signal 0x1E (slot 31 entering targeting state 4 the first time) - its only listener is the AI task force
+// (TaskForceClass::Add_Force 0x5f9a90 -> 0x5fe5d0 case 0x1E: task-force Lua event 12 Target_In_Range(unit, target),
+// raised synchronously). `unit` = the object the signal is raised on (a team member's: its container), `target` = the
+// formation attack target when it has one, else the current target.
+struct AttackStateEvent {
+    ObjectId unit = kNoObject;
+    ObjectId target = kNoObject;
 };
 
 // Unit flags (subset of the original's +0x3a0..+0x3b4 bytes).
@@ -1054,6 +1079,8 @@ public:
     // True for a live LOBBING_SUPERWEAPON unit with an own weapon (the units order_fire_at_position accepts).
     bool fires_at_position(ObjectId id) const;
     std::span<const LobEvent> lob_events() const { return lob_events_; }  // S8 t30: this tick's (cleared at tick start)
+    // s78f t08: this tick's signal 0x1E raises (AttackStateEvent), in service order (cleared at tick start).
+    std::span<const AttackStateEvent> attack_state_events() const { return attack_events_; }
     // ---- L1 systems ----
     // A host-launched projectile (ProjectileLaunch). Max travel = the 3-D distance to the aim point (+ the target's
     // radius for a unit target), so a point shot detonates at the point (expiry: area damage / ion stun). It is
@@ -1619,7 +1646,10 @@ private:
     bool needs_turn_to(const Unit& u, const Unit& t) const;  // slot 48 0x568230
     float turn_step(const Unit& u) const;                    // 0x372560: Max_Rate_Of_Turn x the land multiplier
     void face_toward(Unit& u, Vec3 p, float max_step);      // snap (max_step < 0) or [port] turn step; facing_set hook
-    void attack_idle(Unit& u, bool arg, uint32_t frame, SimRng& rng);  // slot 47
+    void attack_idle(Unit& u, bool arg, uint32_t frame, SimRng& rng, bool ordered);  // slot 47 (ordered: TD +0xf4)
+    bool auto_deploy_check(const Unit& u, ObjectId target) const;  // s78f t08: 0x568e60
+    void hold_fire(Unit& u, ObjectId target);                      // s78f t08: the services' last rule
+    ObjectId container_or_self(ObjectId id) const;                 // s78f t08: a team member -> its container
     const Unit* land_team_head(const Unit& u) const;  // s78f t03: the head of a land team member (no TARGETING of its own)
     void drop_target(Unit& u);                        // slot 27: the order and scan targets are dropped
     bool lob_turret_aim(Unit& u);                     // s78f t04: 0x631fe0 toward the lobbing order's point (one slew step)
@@ -1721,6 +1751,7 @@ private:
     std::vector<HitEvent> hit_events_;  // S10-int
     std::vector<ShotEvent> shot_events_;  // OI fog
     std::vector<LobEvent> lob_events_;    // S8 t30
+    std::vector<AttackStateEvent> attack_events_;  // s78f t08 (signal 0x1E)
     // ---- OI abilities ----
     std::vector<SurvivorEvent> survivor_events_;
     std::vector<std::pair<int32_t, ObjectId>> base_power_;  // (player, source), insertion order

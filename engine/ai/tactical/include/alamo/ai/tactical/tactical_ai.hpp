@@ -161,6 +161,14 @@ struct OpportunityTargetEvent {
     int32_t hardpoint_type = -1;  // HardPointType of the hard point (5..10 for weapons)
 };
 
+// s78f t08 - signal 0x1E (TACTICAL_COMBAT §3.1.1 "s78f t08 answers" 4): a unit's targeting state entered 4 (attacking)
+// for the first time. `unit` = the object the signal is raised on (a team member's: its container), `target` = its
+// formation attack target, else its current target. Object ids.
+struct AttackStateSignal {
+    int32_t unit = -1;
+    int32_t target = -1;
+};
+
 // a1j t01 - signal 0x19 "reinforcements unloaded" (ReinforcementsUnloadedDataClass, A1_READINGS §32.1 / §36): a land
 // landing object finished its unload (0x6438a0) or was removed while unloading (detach vf15 0x6442d0). `key` = the
 // Reinforce event's unit field (the pool entry); `units` = the unloaded object ids in spawn order.
@@ -212,6 +220,10 @@ public:
     // force holding the owner (or its team container) raises plan event 17 Hardpoint_Opportunity_Target_Acquired
     // (unit, target) when it subscribed that HardPointType. Default: none (the combat side does not report them).
     virtual std::vector<OpportunityTargetEvent> opportunity_targets() { return {}; }
+    // s78f t08: the signal 0x1E raises since the last AI frame, in the order they happened. A task force holding the unit
+    // (TaskForceClass::Add_Force 0x5f9a90 subscribes every unit it takes; handler 0x5fe5d0 case 0x1E) raises plan event 12
+    // Target_In_Range (unit, target) when the target is live. Default: none.
+    virtual std::vector<AttackStateSignal> attack_state_signals() { return {}; }
     // MagicPlan HIJACK_UNIT, tactical with a parent galactic mode (AI_GALACTIC_3 §4.3 steps 1-5): spawn `type`
     // (PerceptionWorld type index) for `player` at the battle planet in the galactic store (steal = MagicPlanStealing or a
     // named hero: the player's first galactic object of the type elsewhere is killed silently; pending respawns of the

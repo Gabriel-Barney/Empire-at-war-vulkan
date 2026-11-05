@@ -1544,6 +1544,12 @@ std::vector<at::OpportunityTargetEvent> BattleAi::opportunity_targets() {
     return out;
 }
 
+std::vector<at::AttackStateSignal> BattleAi::attack_state_signals() {
+    std::vector<at::AttackStateSignal> out;
+    for (const tc::AttackStateEvent& e : b_->combat_->attack_state_events()) out.push_back({e.unit, e.target});
+    return out;
+}
+
 at::TacticalReinforcement BattleAi::hijack_unit(int32_t player, int32_t type, bool steal) {
     at::TacticalReinforcement fail;
     GalacticMode* gm = host_->galactic_mode();

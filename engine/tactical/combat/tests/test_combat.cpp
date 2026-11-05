@@ -5064,6 +5064,10 @@ struct StateHooks final : CombatHooks {
     }
     void facing_set(ObjectId id, Vec3) override { faced.push_back(id); }
     int8_t turret_aim_state(ObjectId) const override { return aim; }
+    ObjectId pending = kNoObject;  // s78f t08: pending_ability_target answer
+    uint32_t deploy_requests = 0;  // s78f t08: request_deploy calls
+    ObjectId pending_ability_target(ObjectId) const override { return pending; }
+    void request_deploy(ObjectId, uint32_t) override { ++deploy_requests; }
 };
 
 float yaw_of(Vec3 f) { return std::atan2(f.y, f.x) * 57.29578f; }
@@ -5107,15 +5111,19 @@ void test_targeting_states() {
         CHECK(o.w.sys->targeting_state(1) == 4);
         CHECK(std::fabs(yaw_of(o.w.sys->facing(1)) - std::atan2(1.75f, 100.0f) * 57.29578f) < 1e-3f);
     }
-    {  // no locomotor: [port] slot 48 never true (a structure keeps its facing and fires)
+    {  // no locomotor (s78f t08 [H]): slot 48 is still tested - off the cone the structure holds state 3 (nothing turns
+       // it, no shot); within the cone it is snapped onto the target and attacks
         OwnOpt opt = turner(10.0f);
         opt.edit = [](CombatData& d) {
             d.units[0].turn_rate = 10.0f;
             d.units[0].has_locomotor = false;
         };
         OwnWorld o(opt, Vec3{0, 100, 0});
-        o.w.tick();
-        CHECK(o.w.sys->targeting_state(1) == 4 && std::fabs(yaw_of(o.w.sys->facing(1))) < 1e-3f);
+        CHECK(o.run(30) == 0 && o.w.sys->targeting_state(1) == 3 && std::fabs(yaw_of(o.w.sys->facing(1))) < 1e-3f);
+        OwnWorld c(opt, Vec3{100, 4, 0});
+        c.w.tick();
+        CHECK(c.w.sys->targeting_state(1) == 4);
+        CHECK(std::fabs(yaw_of(c.w.sys->facing(1)) - std::atan2(4.0f, 100.0f) * 57.29578f) < 1e-3f);
     }
     {  // moving: state 4 without an Attack clip (fires on the move), 2 with one (no fire)
         OwnWorld a(turner(10.0f), Vec3{0, 100, 0}), b(turner(10.0f), Vec3{0, 100, 0});
@@ -5183,6 +5191,84 @@ void test_targeting_states() {
         o.w.add(3, 1, 1, Vec3{120, 0, 0});
         o.w.sys->order_attack(1, 3);
         CHECK(o.w.sys->targeting_state(1) == 1 && !o.w.sys->attacking(1));
+    }
+}
+
+void test_targeting_t08() {
+    // s78f t08 (TACTICAL_COMBAT §3.1.1 "s78f t08 answers").
+    {  // signal 0x1E: one AttackStateEvent on the first entry to 4 (cleared each tick, not raised again while it stays 4)
+        OwnWorld o(OwnOpt{}, Vec3{100, 0, 0});
+        o.w.tick();
+        const auto ev = o.w.sys->attack_state_events();
+        CHECK(ev.size() == 1 && ev[0].unit == 1 && ev[0].target == 2);
+        o.w.tick();
+        CHECK(o.w.sys->targeting_state(1) == 4 && o.w.sys->attack_state_events().empty());
+    }
+    {  // pending ability on the current target: state 4 is not written (Set_Target's 1 stays, no shot, no 0x1E) until the
+       // ability is gone
+        OwnWorld o(OwnOpt{}, Vec3{100, 0, 0});
+        StateHooks h;
+        h.pending = 2;
+        o.w.sys->set_hooks(&h);
+        CHECK(o.run(30) == 0 && o.w.sys->targeting_state(1) == 1 && o.w.sys->attack_state_events().empty());
+        h.pending = kNoObject;
+        CHECK(o.run(30) > 0 && o.w.sys->targeting_state(1) == 4);
+    }
+    {  // hold fire: a unit already attacking keeps 4 through the pending rule, but a target type with
+       // Should_Attacker_Hold_Fire_For_Special_Ability turns it into 2 (no shots)
+        for (const bool flag : {false, true}) {
+            OwnOpt opt;
+            opt.edit = [flag](CombatData& d) { d.units[1].hold_fire_for_special_ability = flag; };
+            OwnWorld o(opt, Vec3{100, 0, 0});
+            StateHooks h;
+            o.w.sys->set_hooks(&h);
+            o.w.tick();
+            CHECK(o.w.sys->targeting_state(1) == 4);
+            h.pending = 2;
+            const uint64_t shots = o.run(30);
+            if (flag) CHECK(shots == 0 && o.w.sys->targeting_state(1) == 2);
+            else CHECK(shots > 0 && o.w.sys->targeting_state(1) == 4);
+        }
+    }
+    {  // the auto-deploy check 0x568e60 + slot 47's deploy branch: an undeployed Auto_Deploys + Deploys unit with an ordered
+       // target requests the deploy; Fire_Weapon_When_Undeployed (or no Auto_Deploys) never does
+        for (int k = 0; k < 3; ++k) {
+            OwnOpt opt;
+            opt.edit = [k](CombatData& d) {
+                d.units[0].deploys = true;
+                d.units[0].auto_deploys = k != 2;
+                d.units[0].fire_weapon_when_undeployed = k == 1;
+            };
+            OwnWorld o(opt, Vec3{100, 0, 0});
+            StateHooks h;
+            o.w.sys->set_hooks(&h);
+            o.w.tick();
+            if (k == 0) CHECK(h.deploy_requests > 0);
+            else CHECK(h.deploy_requests == 0);
+        }
+    }
+    {  // TURRET cannot aim (-2: beyond the rotate extent): the target is dropped; with the target the formation's attack
+       // target and Should_Cause_Limited_Turrets_To_Turn the body turns instead (state 3, one turn step)
+        for (const bool turn : {false, true}) {
+            OwnOpt opt;
+            opt.edit = [turn](CombatData& d) {
+                d.units[0].turret = true;
+                d.units[0].turn_rate = 10.0f;
+                d.units[1].limited_turrets_turn = turn;
+            };
+            OwnWorld o(opt, Vec3{0, 100, 0});
+            StateHooks h;
+            h.aim = -2;
+            o.w.sys->set_hooks(&h);
+            o.w.sys->set_attack_goal(1, 2);
+            o.w.tick();
+            if (turn) {
+                CHECK(o.w.sys->targeting_state(1) == 3 && o.w.sys->current_target(1) == 2);
+                CHECK(std::fabs(yaw_of(o.w.sys->facing(1)) - 10.0f) < 1e-3f);
+            } else {
+                CHECK(o.w.sys->targeting_state(1) == 0 && o.w.sys->ordered_target(1) == kNoObject);
+            }
+        }
     }
 }
 
@@ -5435,6 +5521,7 @@ int main(int argc, char** argv) {
     test_own_weapon_target_bones();  // S8 t27
     test_fire_at_position();         // S8 t26
     test_targeting_states();         // s78f t03
+    test_targeting_t08();            // s78f t08
     test_team_targeting_copy();      // s78f t03
     test_charge_up_slew();           // s78f t04
     test_hardpoint_aim_target_bones();  // S8 t27

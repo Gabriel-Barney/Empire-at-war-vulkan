@@ -197,11 +197,19 @@ public:
     void facing_set(tc::ObjectId id, tactical::Vec3 f) override {
         if (b_->movement_ && b_->movement_->has_unit(id)) b_->movement_->snap_yaw(id, dmath::atan2(f.y, f.x) * (180.0f / dmath::kPiF));
     }
-    // s78f t03: the TURRET aim of a Deploys turret unit (MovementSystem S8 t24 model, one frame behind the combat target);
-    // other turrets are not modelled (-1: treated as aimed).
+    // s78f t03 / t08: the TURRET aim of a land turret unit (MovementSystem S8 t24 model, one frame behind the combat
+    // target; -2 beyond the rotate extent); units without the model (no movement unit, space) answer -1 (treated as aimed).
     int8_t turret_aim_state(tc::ObjectId id) const override {
         if (!b_->movement_ || !b_->movement_->has_unit(id)) return -1;
         return b_->movement_->view(id).turret_aim;
+    }
+    // s78f t08: the pending targeted ability (TD +0x148: AbilitySystem's pending order) and the deploy request 0x391260
+    // (the Walk locomotor's Deploy(true), as the DEPLOY ability's; the change reaches the abilities through oi_deploy_sync).
+    tc::ObjectId pending_ability_target(tc::ObjectId id) const override {
+        return b_->abilities_ ? b_->abilities_->pending_target(id) : tc::kNoObject;
+    }
+    void request_deploy(tc::ObjectId id, uint32_t frame) override {
+        if (b_->movement_ && b_->movement_->has_unit(id)) (void)b_->movement_->deploy(id, true, frame);
     }
     bool shot_allowed(tc::ObjectId shooter, tc::ObjectId target, int32_t target_hp, int32_t& projectile) override {
 #ifdef ALAMO_SIM_HAVE_ANIM
