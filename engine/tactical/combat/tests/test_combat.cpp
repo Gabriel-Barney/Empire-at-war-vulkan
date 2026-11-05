@@ -5433,6 +5433,109 @@ void test_team_handover_and_damage() {
         CHECK_F(w.sys->health(12), h0 - loss);
         hit(14, 50.0f);
         CHECK_F(w.sys->health(14), h0 - loss);
+        // Save round trip (combat save v11): damage_team survives a load; the same redirect hit then gives the same
+        // result in the saved and the loaded system.
+        World b;
+        b.data = w.data;
+        b.make();
+        const std::vector<uint8_t> saved = combat_bytes(*w.sys);
+        ByteReader rd(saved);
+        CHECK(b.sys->read(rd));
+        CHECK(combat_bytes(*b.sys) == saved);
+        DamageRequest r;
+        r.victim = 10;
+        r.amount = 60.0f;
+        w.sys->take_damage(r, 200);
+        b.sys->take_damage(r, 200);
+        CHECK_F(w.sys->health(10), h0);
+        CHECK_F(b.sys->health(10), h0);
+        CHECK(w.sys->health(11) < h0 - loss);
+        for (const ObjectId id : {ObjectId{10}, ObjectId{11}, ObjectId{12}}) CHECK_F(b.sys->health(id), w.sys->health(id));
+        CHECK(combat_bytes(*b.sys) == combat_bytes(*w.sys));
+    }
+    // Review (s78g t06): a phase-D death. Leader 10's due scan would keep its target 2 (scored 1.0); a closer fighter 40
+    // (0.5, better) appeared since. Ally 30 (higher index, serviced first) kills 10 in its unit_begin in the tick the
+    // team's scan is due. The heir 11 is re-gathered on the copied record, so it runs the keep test and keeps 2, as the
+    // container would; the member's own gather (always due, no target to keep) would have rescanned and taken 40.
+    {
+        struct KillHooks final : CombatHooks {
+            CombatSystem* sys = nullptr;
+            bool armed = false;
+            void unit_begin(ObjectId id, uint32_t frame, SimRng&) override {
+                if (armed && id == 30) {
+                    armed = false;
+                    sys->kill_unit(10, kNoObject, kKindNormal, frame);
+                }
+            }
+        };
+        // The same tick's synced draws with and without the hand-over: equal (one reschedule draw, no rescan's
+        // start-player draw).
+        auto run = [](bool kill) -> uint64_t {
+            World w;
+            KillHooks hk;
+            ProjectileDesc p;
+            p.max_speed = 20.0f;
+            w.data.projectiles.push_back(p);
+            PrioritySet ps;
+            ps.attack.push_back({PriorityEntry::Kind::Category, -1, kCatCapital, 1.0f});
+            ps.attack.push_back({PriorityEntry::Kind::Category, -1, kCatFighter, 0.5f});
+            w.data.priority_sets.push_back(ps);
+            UnitDesc s;
+            s.tactical_health = 100.0f;
+            s.max_attack_distance = 300.0f;
+            s.weapon_projectile = 0;
+            s.weapon_recharge = 100.0f;  // never fires during the test
+            s.turn_rate = 10.0f;
+            s.priority_set = 0;
+            const uint32_t sd = push_unit(w.data, s);
+            UnitDesc t;
+            t.tactical_health = 1.0e7f;
+            t.radius = 5.0f;
+            t.category_mask = kCatCapital;
+            const uint32_t cd = push_unit(w.data, t);
+            t.category_mask = kCatFighter;
+            const uint32_t fd = push_unit(w.data, t);
+            UnitDesc ally;
+            ally.tactical_health = 100.0f;
+            const uint32_t ad = push_unit(w.data, ally);
+            CombatConfig cfg;
+            cfg.mode = GameMode::Land;
+            cfg.inaccuracy_enabled = false;
+            w.make(cfg);
+            hk.sys = w.sys.get();
+            w.sys->set_hooks(&hk);
+            w.add(2, cd, 1, Vec3{250, 5, 0});
+            for (const ObjectId id : {ObjectId{10}, ObjectId{11}}) {
+                UnitSpawn sp;
+                sp.id = id;
+                sp.desc = sd;
+                sp.owner = 0;
+                sp.position = Vec3{0, static_cast<float>(id - 10) * 10.0f, 0};
+                sp.team = 7;
+                sp.team_leader = id == 10;
+                CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+                TreeMembership m;
+                m.owner = 0;
+                CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(sp.position, 1.0f), 1u, m));
+            }
+            w.add(30, ad, 0, Vec3{0, -50, 0});
+            w.tick();
+            CHECK(w.sys->auto_target(10) == 2);  // scored 1.0 (capital), so the due scan keeps it
+            const uint32_t due = w.sys->next_scan(10);
+            CHECK(due > w.frame);
+            w.add(40, fd, 1, Vec3{100, 0, 0});
+            while (w.frame < due) w.tick();
+            CHECK(w.sys->auto_target(10) == 2);  // no scan of the leader before its due frame
+            hk.armed = kill;
+            const uint64_t d0 = w.rng.draws();
+            w.tick();  // frame == due: phase C keeps 2 for 10; 30 kills 10 in phase D before 11 is serviced
+            const ObjectId head = kill ? 11 : 10;
+            CHECK(w.sys->alive(10) == !kill);
+            CHECK(w.sys->auto_target(head) == 2 && w.sys->current_target(11) == 2);
+            CHECK(w.sys->next_scan(head) > due);  // the team's scan ran (keep test), its timer redrawn
+            return w.rng.draws() - d0;
+        };
+        CHECK(run(true) == run(false));
     }
 }
 

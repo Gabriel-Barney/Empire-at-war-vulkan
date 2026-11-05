@@ -823,7 +823,21 @@ void CombatSystem::hand_over_team(const Unit& d) {
     heir->tstate = d.tstate;
     heir->ttarget = d.ttarget;
     heir->next_scan = d.next_scan;
-    if (frame_ < heir->next_scan) heir->needs_scan = heir->scan_due = 0;  // phase C ran for the member's own timer
+    // The heir's phase-C flags and candidates were computed for its member record (a member never advances next_scan, so it
+    // always read as due with no target to keep). Inside a tick, re-run its gather on the copied record, so a phase-D
+    // hand-over services the heir as the container would: the keep test on the team's target, the team's scan timer, and
+    // the candidates when a scan is due. [port] Re-gathering (not just clearing the flags) also keeps a due team scan from
+    // slipping a tick when the member's own gather returned early. Between ticks phase C recomputes them anyway.
+    if (trees_) {
+        const int32_t hi = find(heir->id);
+        if (hi >= 0) {
+            QueryContext* c = acquire_ctx();
+            gather(static_cast<uint32_t>(hi), *c);
+            release_ctx(c);
+        }
+    } else {
+        heir->needs_scan = heir->scan_due = 0;
+    }
     // team_head() sees the heir at once (the rest of this tick and host reads between ticks); phase A rebuilds the lists.
     const auto it = std::lower_bound(team_heads_.begin(), team_heads_.end(), std::make_pair(d.team, ObjectId{-1}));
     if (it != team_heads_.end() && it->first == d.team) it->second = heir->id;
