@@ -1409,6 +1409,19 @@ gives R = 3.588° and a slot-48 tolerance of 1.794° in land.
     Neither run separates the phases at 3 sigma, so whether a model with an ATTACKIDLE clip skips the per-service
     draw is still open. The draw-count method needs a quiet background (no AI army) or a per-object read of the
     slot-47 call to settle it.
+    - IDLE47Q (s78h t02, `out/20261105-104750`, Claude drove the game): the same three phases after a Lua sweep that
+      despawns both sides' mobile units, every 300 frames. The background fell from 210 to **4.5 draws per frame**.
+      Per on/off step (12 attackers), the medians were **P (Pod_Walker, no clip, clip 0 throughout) +13 / −13**,
+      **D (Dark_Trooper_PhaseII, in ATTACK 5 or ATTACKIDLE 6 throughout) +11.5 / −12**, and V (victims only) 0 / +0.5.
+      The per-cycle means were P −1.8 ± 6.5 and D +17.5 ± 3.5. P is pulled down by two periodic −86 steps, which do
+      not come from the attackers. Kit verdict `WITH_CLIP_ALSO_DRAWS`.
+      [M] Both models add about one synced draw per attacker per frame, so the with-clip model does not go silent.
+      That is one draw per service in state 4. It does not fit the port's gate, which skips the draw while the current
+      clip is ATTACK / ATTACKIDLE (`tactical_battle.cpp` `attack_idle`).
+      This is not settled. The attackers fire at the invulnerable victims (`Attack_Target`), and the Dark Troopers'
+      shots may draw too, so part of D's draws may be fire, not slot 47. Leave the port unchanged until the next run.
+      Next run: the same setup with the attackers' fire blocked but targeting kept (follow-up group s78i). If D
+      still adds ~1 draw per attacker per frame there, drop the clip 5 / 6 condition from the draw.
   - *Port:* when clip 6 is missing, leave the current clip as it is and draw the blend each service in state 3 / 4,
     as retail does.
 

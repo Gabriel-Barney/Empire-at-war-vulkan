@@ -904,6 +904,13 @@ Further differences found 2026-11-02 (input for S8 t06; port state as of 96c474e
     state 0 for 300 frames. [M] The likely cause is that the human-owned victim was outside the AI player's
     vision; an explicit order ignores fog. So auto-acquire at the edge needs a spotter (an AI-owned unit next to the
     target, or a reveal) before 544–550 can be read.
+  - **s78h t01 (2026-11-05, `out/20261105-104750`, SPMAT_EDGE4, Claude drove the game) [H: edge settled].** Same as
+    EDGE3, but with an AI-owned `Rebel_Infiltrator` spotter 100 beside the edge tank and `FogOfWar.Reveal` on the tank
+    (spotter and reveal confirmed in 12 of 12 windows). No order. Two passes over d = 450, 540, 544, 547, 550, 556 from
+    the walker centre: **450 and 540 fired (4 grenades each, both passes); 544, 547, 550 and 556 were never targeted**
+    (targeting state 0, no grenade). So vision was the limit in EDGE3. Auto-acquire stops between 540 and 544, which
+    fits the slot 44 solver reach (v/G)·√(v² − 12G) = 544.0 (§4), not the 550 scan range: between 544 and 550 the SPMAT
+    neither targets nor fires. The port already accepts by the solver with `Ranged_Target_Z_Adjust` (§4), so no change.
 - ~~**probe**: Magnepulse slew~~ — done (s78f t09, 2026-11-05): §3.6 "In-game probe".
 
 ## Address table
