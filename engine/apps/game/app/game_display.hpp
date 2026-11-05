@@ -99,6 +99,25 @@ void apply_aa_options(render::RecordOptions& o, int32_t strength);
 // water, shader, shadow, environment) to its value; the checks (soft shadows, heat, bloom), anti-aliasing and anisotropy are
 // left as they are.
 ui::AdvancedVideoSettings detail_preset(const ui::AdvancedVideoSettings& s, int32_t detail);
+// Auto Detect (the Video and Advanced dialogs' Auto Detect button, ui::MenuAction::Kind::AutoDetectVideo) [port: the original's
+// detection is not recovered; the choice below is a documented guess from the GPU class and its video memory]. Discrete GPUs
+// get Medium under 3 GiB, High under 6 GiB and Ultra from there; an integrated GPU Medium with 2 GiB or more of memory it can
+// use, else Low; anything else (software or virtual) Low. Resolution, v-sync, frame cap and gamma are left alone.
+enum class GpuKind : uint8_t { Other, Integrated, Discrete };
+struct GpuClass {
+    GpuKind kind = GpuKind::Other;
+    uint64_t memory_bytes = 0;      // largest device-local heap
+    bool sampler_anisotropy = false;
+    float max_anisotropy = 1.0f;    // the device's limit; the recommended filtering never exceeds it
+};
+struct AutoVideoChoice {
+    size_t quality = 0;             // index into ui::kQualityPresets
+    int32_t anti_alias = 0;         // strength, one of ui::kAntiAliasChoices
+    ui::AdvancedVideoSettings advanced;  // the seven options at the quality level, plus the checks, AO and anisotropy
+};
+AutoVideoChoice recommend_video(const GpuClass& gpu);
+// Stores the choice in the profile: the advanced options, the Anti-aliasing strength and the Detail value (sync_detail).
+void apply_auto_video(VideoProfile& p, const AutoVideoChoice& c);
 // Per-monitor DPI awareness (v2) for the process, so window sizes, the client area and the display modes are all physical
 // pixels; without it a scaled display (150 %) stretches the window and a mode the size of the display no longer fits.
 // Call before the first window. No-op off Windows or when the call is refused.

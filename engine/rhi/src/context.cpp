@@ -341,6 +341,7 @@ bool Context::pick_device(const ContextDesc& desc) {
             caps_.api_version = props.apiVersion;
             caps_.driver_version = props.driverVersion;
             caps_.type = props.deviceType;
+            caps_.device_local_bytes = local;
             caps_.max_anisotropy = props.limits.maxSamplerAnisotropy;
             caps_.max_sampler_lod_bias = props.limits.maxSamplerLodBias;
             caps_.min_uniform_buffer_offset_alignment = props.limits.minUniformBufferOffsetAlignment;

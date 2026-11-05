@@ -316,6 +316,10 @@ public:
     void show_pause_menu();       // in-game menu (IDD_GAME_OPTIONS_DIALOG) over the HUD
     void close_pause_menu();
     bool pause_menu_open() const;
+    // [port] After the host answered MenuAction::Kind::AutoDetectVideo by changing its video options: the open Video dialog's
+    // Anti-Aliasing and Detail Level lists and the open Advanced dialog's lists, checks and anisotropy show the provider's
+    // values again. Everything else in those dialogs (resolution, v-sync, gamma, ...) keeps what the player has set.
+    void refresh_video_dialogs();
     bool in_game() const { return in_game_; }
     void set_in_game(bool g) { in_game_ = g; }
     const CampaignMenu& campaigns() const { return menu_; }
