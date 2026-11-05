@@ -94,6 +94,10 @@
 #include "alamo/tactical/garrison/garrison.hpp"
 #endif
 
+namespace alamo::anim {
+struct IdleRecord;  // s78l t03 (alamo/anim/anim_behaviors.hpp)
+}  // namespace alamo::anim
+
 namespace alamo::sim {
 
 class SimAnimation;
@@ -117,6 +121,9 @@ struct BattleConfig {
     uint32_t dummy_lifetime = 900;            // [port] a Dummy_Barrage_Target is removed after this many frames at most
     float walk_speed_ratio = 0.5f;            // [port M] WALKMOVE below this x max speed (global 0x140b16d04 unknown)
     float min_move_anim_ratio = 0.1f;         // [port] move-clip speed floor (current / max speed)
+    // s78l t03 (TACTICAL_GAPS 6.2): GameConstants Unit_Presence_Relaxation_Time (GC +0x117a8), seconds an IMPOSING_PRESENCE
+    // idle record lasts (int(FPS x value) frames). [port] 3.0: the shipped XML does not set it and the default was not read.
+    float presence_relaxation_seconds = 3.0f;
     // Fog of war (docs/re/FOG_OF_WAR.md; owner: fog agent). Not in the frame CRC, never draws RNG.
     bool fog = true;
     // OI fog: overrun reveal (FOG_OF_WAR §3.3) inputs: game type (mode +0xc; only the multiplayer types 1, 2, 4
@@ -1263,7 +1270,26 @@ private:
     std::vector<std::array<float, 4>> fchase_cache_;  // per type: Guard / Idle_Chase_Range, Attack_Move_Response_Range,
                                                       // Autonomous_Move_Extension_Vs_Attacker (derived)
     std::vector<uint8_t> fchase_have_;
-    void drive_animation(SimRng& rng, uint64_t global_frame);
+    void drive_animation(objects::ObjectStore& store, SimRng& rng, uint64_t global_frame);
+    // s78l t03 (TACTICAL_COMBAT slot 47 "s78l t03", TACTICAL_GAPS 6.2): IMPOSING_PRESENCE (0x624ab0, interval 30 on the
+    // store's behaviour schedule) - idle records for the IDLE units around each presence object. `gated` = per units_
+    // index, the IDLE moving gate of this frame (drive_animation).
+    void imposing_presence(objects::ObjectStore& store, const std::vector<uint8_t>& gated);
+    // Presence_Induced_Animations (anim type + type list per entry, list order) and Presence_Range of a type; cached per
+    // type (a pure function of the type data, not saved).
+    struct PresenceTypeInfo {
+        bool parsed = false;
+        float range = 0.0f;
+        std::vector<std::pair<int32_t, std::vector<uint32_t>>> anims;
+    };
+    const PresenceTypeInfo& presence_info(uint32_t type);
+    // s78l t03: the default idle type's presence step for `unit` over its idle records (anim::IdleRecord, ascending
+    // presence id): the anim type or -1 (none).
+    int32_t presence_pick(const objects::ObjectStore& st, int32_t unit, const anim::IdleRecord* records, size_t count);
+    // s78l t02: drains MovementSystem::take_turn_clip_events after the movement tick and plays them (synced draws).
+    void play_turn_clip_events(SimRng& rng, uint64_t global_frame);
+    std::vector<PresenceTypeInfo> presence_cache_;
+    std::vector<uint8_t> idle_gate_;  // drive_animation scratch (per units_ index)
     void consume_events(TacticalMode& mode, SimRng& rng);
     void spawn_particle(TacticalMode& mode, int32_t type, Vec3 pos, int32_t owner);
     objects::ObjectHandle spawn_prop(TacticalMode& mode, int32_t type, Vec3 pos, Vec3 facing, int32_t owner);

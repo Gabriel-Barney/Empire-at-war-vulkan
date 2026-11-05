@@ -2809,7 +2809,14 @@ void TacticalBattle::apply_speed_factors() {
         movement_->set_speed_override(u.id, abilities_->speed_override(u.id));  // OI host: Berserker_Speed (-1 = none)
         const bool in_team = u.container < containers_.size() && containers_[u.container].team && !containers_[u.container].removed;
         const auto team = in_team ? static_cast<uint32_t>(containers_[u.container].id) : 0u;
-        movement_->set_team(u.id, in_team ? containers_[u.container].id : mv::ObjectId{-1}, in_team ? team_mult(team) : 1.0f);
+        // s78l t01 (MOVEMENT §3.4 "Team cap, exact"): the container type's raw Max_Speed is in the team minimum (-1: no
+        // tag / not in a team). [port] the container's further chain factors (fleeing, ...) have no host state here.
+        float cmax = -1.0f;
+        if (in_team && containers_[u.container].type < catalog_->types().size()) {
+            const auto ct = static_cast<objects::TypeIndex>(containers_[u.container].type);
+            if (!catalog_->types().get_string(ct, "Max_Speed").empty()) cmax = catalog_->types().get_float(ct, "Max_Speed");
+        }
+        movement_->set_team(u.id, in_team ? containers_[u.container].id : mv::ObjectId{-1}, in_team ? team_mult(team) : 1.0f, cmax);
     }
 }
 
@@ -3473,24 +3480,216 @@ void TacticalBattle::forward_fighter_events() {
     }
 }
 
-void TacticalBattle::drive_animation(SimRng& rng, uint64_t gframe) {
+const TacticalBattle::PresenceTypeInfo& TacticalBattle::presence_info(uint32_t type) {
+    // s78l t03: Presence_Induced_Animations entries ("<anim type>, <type>, <type>, ..."). [port] repeated tags reach the
+    // port as one flat token list, so a token naming a ModelAnimType starts the next entry.
+    if (presence_cache_.size() < catalog_->types().size()) presence_cache_.resize(catalog_->types().size());
+    static const PresenceTypeInfo kNone{};
+    if (type >= presence_cache_.size()) return kNone;
+    PresenceTypeInfo& info = presence_cache_[type];
+    if (info.parsed) return info;
+    info.parsed = true;
+#ifdef ALAMO_SIM_HAVE_ANIM
+    const objects::GameObjectTypes& ty = catalog_->types();
+    const auto t = static_cast<objects::TypeIndex>(type);
+    info.range = ty.get_float(t, "Presence_Range");
+    for (std::string_view tok : ty.get_list(t, "Presence_Induced_Animations")) {
+        while (!tok.empty() && std::isspace(static_cast<unsigned char>(tok.front()))) tok.remove_prefix(1);
+        while (!tok.empty() && std::isspace(static_cast<unsigned char>(tok.back()))) tok.remove_suffix(1);
+        if (tok.empty()) continue;
+        const int32_t a = anim::find_anim_type(tok);
+        if (a >= 0) {
+            info.anims.push_back({a, {}});
+        } else if (!info.anims.empty()) {
+            const objects::TypeIndex r = ty.resolve_name(tok);
+            if (r != objects::kNone) info.anims.back().second.push_back(static_cast<uint32_t>(r));
+        }
+    }
+#endif
+    return info;
+}
+
+void TacticalBattle::imposing_presence(objects::ObjectStore& store, const std::vector<uint8_t>& gated) {
+#ifdef ALAMO_SIM_HAVE_ANIM
+    // s78l t03 (TACTICAL_COMBAT slot 47 "s78l t03" (c), TACTICAL_GAPS 6.2): IMPOSING_PRESENCE 0x624ab0 on its interval-30
+    // schedule (the store's: first due frame drawn at the attach, TACTICAL_GAPS 6.4). Each due presence object P (alive,
+    // the behaviour enabled; death clones keep it) refreshes, for every battle unit R with IDLE inside the box of half size
+    // P's Presence_Range around P, not dying, whose type lists P's type in Presence_Induced_Animations, R's record of P to
+    // int(FPS x Unit_Presence_Relaxation_Time). Skipped for an R with a target (TARGETING, a team member: its container's;
+    // suspended or not) or that the moving gate stops. No draws; the order of the writes does not change the result.
+    const GameMode* gm = hooks_ ? hooks_->anim_mode() : nullptr;
+    if (!anim_ || !gm || &gm->primary() != &store) return;
+    const float fr = static_cast<float>(anim::kSimTicksPerSecond) * cfg_.presence_relaxation_seconds;
+    const int32_t frames = fr >= 1.0f ? (fr < 1.0e9f ? static_cast<int32_t>(fr) : 1000000000) : 0;
+    if (frames < 1) return;
+    anim::AnimBehaviors& beh = anim_->behaviors(*gm);
+    const uint32_t mf = store.mode_frame();
+    const objects::BehaviorTypeId kImposingPresence = 0x40;
+    for (const objects::ObjectHandle p : store.all_objects()) {
+        if (!store.alive(p)) continue;
+        const uint32_t bi = store.behavior_index(p, kImposingPresence);
+        if (bi == objects::kNone || !store.behavior_enabled(p, bi) || store.behavior_next_service(p, bi) > mf) continue;
+        store.set_behavior_next_service(p, bi, mf + std::max<uint32_t>(1u, store.behavior_interval(p, bi)));
+        const uint32_t pt = store.type(p);
+        const float range = presence_info(pt).range;
+        const Vec3 pp = store.position(p);
+        const objects::ObjectId pid = store.id(p);
+        for (size_t i = 0; i < units_.size(); ++i) {
+            const Unit& u = units_[i];
+            if (!u.alive || u.retreated || !store.active(u.h) || !store.has_behavior(u.h, objects::beh::Idle)) continue;
+            if (i < gated.size() && gated[i]) continue;
+            if (combat_->has_unit(u.id) && combat_->current_target(u.id) != tc::kNoObject) continue;
+            const Vec3 q = store.position(u.h);
+            if (std::fabs(q.x - pp.x) > range || std::fabs(q.y - pp.y) > range || std::fabs(q.z - pp.z) > range) continue;
+            bool listed = false;
+            for (const auto& e : presence_info(store.type(u.h)).anims)
+                listed = listed || std::find(e.second.begin(), e.second.end(), pt) != e.second.end();
+            if (listed) beh.presence_refresh(u.id, pid, frames);
+        }
+    }
+#else
+    (void)store, (void)gated;
+#endif
+}
+
+int32_t TacticalBattle::presence_pick(const objects::ObjectStore& st, int32_t unit, const anim::IdleRecord* records, size_t count) {
+#ifdef ALAMO_SIM_HAVE_ANIM
+    // The default idle type's presence step (0x395920 step 2): among the records whose object still exists the largest
+    // value wins; on <= an allied record (0x2823e0) replaces a non-allied best (ascending presence id); the idle = the
+    // first Presence_Induced_Animations entry of the unit's type listing the winner's type, else none (the plain idle).
+    const objects::ObjectHandle uh = st.find(unit);
+    if (!st.exists(uh)) return anim::kNoAnimType;
+    const int32_t uo = st.owner(uh);
+    bool have = false, best_allied = false;
+    int32_t best_frames = 0;
+    objects::TypeIndex best_type = objects::kNone;
+    for (const anim::IdleRecord& r : std::span<const anim::IdleRecord>(records, count)) {
+        const objects::ObjectHandle ph = st.find(r.presence);
+        if (!st.exists(ph)) continue;
+        const int32_t po = st.owner(ph);
+        // 0x2823e0: relation == 0 (self or Ally); a neutral (not an enemy) presence owner is not allied.
+        const bool allied = po == uo || (galaxy_ && galaxy_->allied(po, uo));
+        if (!have || r.frames > best_frames || (allied && !best_allied)) {
+            have = true;
+            best_frames = r.frames;
+            best_allied = allied;
+            best_type = st.type(ph);
+        }
+    }
+    if (!have) return anim::kNoAnimType;
+    for (const auto& e : presence_info(st.type(uh)).anims)
+        if (std::find(e.second.begin(), e.second.end(), static_cast<uint32_t>(best_type)) != e.second.end()) return e.first;
+    return anim::kNoAnimType;
+#else
+    (void)st, (void)unit, (void)records, (void)count;
+    return -1;
+#endif
+}
+
+void TacticalBattle::play_turn_clip_events(SimRng& rng, uint64_t gframe) {
+    std::vector<mv::MovementSystem::TurnClipEvent> ev = movement_->take_turn_clip_events();
+#ifdef ALAMO_SIM_HAVE_ANIM
+    // s78l t02 (MOVEMENT §3.5.1 "Arrival turn, details"), in the movement's order (ascending id): a clip event plays
+    // `anim` with index 0xFFFF (synced variant draw only when the clip has >= 2 variants), loop 0, at ev.speed, blend
+    // ev.blend when >= 0 (the locomotor caps it with its [port] constant for GC 0x140b16d28), else the clip's global ([port] the move blend tunable: the
+    // globals 0x140b398fc / 0x140b39900 are unread); an idle event plays the default idle type (slot 47: index 0,
+    // Loop_Idle_Anim_00, [port] the idle blend for 0x140b39908, speed 1) unless the unit burns.
+    anim::AnimWorld* w = hooks_ ? hooks_->world() : nullptr;
+    const GameMode* gm = hooks_ ? hooks_->anim_mode() : nullptr;
+    if (!anim_ || !w || !gm) return;
+
+    const objects::ObjectStore& st = gm->primary();
+    const anim::PresenceIdleFn presence = [this, &st](anim::ObjectId unit, std::span<const anim::IdleRecord> recs) {
+        return presence_pick(st, unit, recs.data(), recs.size());
+    };
+    for (const mv::MovementSystem::TurnClipEvent& e : ev) {
+        if (!w->contains(e.id)) continue;
+        if (e.idle) {
+            if (combat_->has_unit(e.id) && combat_->burning(e.id)) continue;
+            if (anim_->play_default_idle(*gm, e.id, gframe, &presence)) ++stats_.anim_plays;
+            continue;
+        }
+        if (e.anim < 0) continue;
+        anim::PlayRequest r;
+        r.type = e.anim;
+        r.index = anim::kRandomVariant;
+        r.loop = false;
+        r.speed = e.speed;
+        r.blend_seconds = e.blend >= 0.0f ? e.blend : w->tunables().move_blend_seconds;
+        const anim::AnimModel* m = w->model(e.id);
+        if (m && m->variant_count(e.anim) < 2) r.index = 0;  // one variant: no draw (0x1ffb40 returns at once)
+        if (w->play(e.id, r, &rng, gframe) == anim::PlayResult::Played) ++stats_.anim_plays;
+    }
+#else
+    (void)rng, (void)gframe;
+#endif
+}
+
+void TacticalBattle::drive_animation(objects::ObjectStore& store, SimRng& rng, uint64_t gframe) {
 #ifdef ALAMO_SIM_HAVE_ANIM
     // R3 anim: WalkLocomotor (0x61f840, A.7 walk / move / turn rows) and the idle behaviour (0x62e570) for battle
     // units, through SimAnimation::service_locomotor (rules in anim_behaviors.hpp); Berserker state first.
     anim::AnimWorld* w = hooks_ ? hooks_->world() : nullptr;
     const GameMode* gm = hooks_ ? hooks_->anim_mode() : nullptr;
     if (!anim_ || !w || !gm) return;
-    for (const Unit& u : units_) {
+    const objects::ObjectStore& st = gm->primary();
+    const bool land = gm->kind() == objects::ModeKind::Land;
+    // s78l t03 (a) (TACTICAL_COMBAT slot 47 "s78l t03"): the IDLE moving gate = the locomotor's vf +0x110. Walk / Bike /
+    // Fighter / SimpleSpace: a path on the stack, whatever the speed ([port] has_goal, a pushed walk, or the Walk arrival
+    // turn - UnitView::arrival_turn - which retail runs with the path still stacked: MOVEMENT 3.5.1); JetPack: state != Walk Stopped; Flying / LandBomber: [port] the goal (formation tests not
+    // modelled); a land team member on the Default locomotor (LandTeamInfantry): its container's, [port] the container
+    // follows its first live member, so that member's. No locomotor (not movable): never gated.
+    const auto own_moving = [&](const Unit&, const mv::UnitView& v) {
+        if (v.locomotor == mv::LocomotorKind::Jetpack) return v.loco_state != mv::LocoState::WalkStopped;
+        return v.has_goal || v.pushed || v.arrival_turn;  // s78l t02: the arrival turn keeps the path stacked
+    };
+    const auto team_of = [&](const Unit& u) -> uint32_t {
+        return land && u.container < containers_.size() && containers_[u.container].team && !containers_[u.container].removed
+                   ? u.container
+                   : 0xFFFFFFFFu;
+    };
+    std::vector<int8_t> head_moving(containers_.size(), -1);  // per team container: its first live member's gate
+    idle_gate_.assign(units_.size(), 0);
+    for (size_t i = 0; i < units_.size(); ++i) {
+        const Unit& u = units_[i];
+        if (!u.alive || u.retreated || !u.movable || !movement_->has_unit(u.id)) continue;
+        const mv::UnitView v = movement_->view(u.id);
+        const bool own = own_moving(u, v);
+        const uint32_t c = team_of(u);
+        if (c != 0xFFFFFFFFu && head_moving[c] < 0) head_moving[c] = own ? 1 : 0;
+        const bool moving = (c != 0xFFFFFFFFu && v.locomotor == mv::LocomotorKind::Default) ? head_moving[c] > 0 : own;
+        // Allow_Idle_When_Moving (+0x85) exempts the unit from the gate (the IDLE service and the presence writer alike).
+        idle_gate_[i] = static_cast<uint8_t>(moving && !anim_->params_for(store.type(u.h), gm->kind()).allow_idle_when_moving);
+    }
+    imposing_presence(store, idle_gate_);
+    // The default idle type's presence step (0x395920 step 2): among the records whose object still exists the largest
+    // value wins; on <= an allied record (0x2823e0) replaces a non-allied best (ascending presence id); the idle = the
+    // first Presence_Induced_Animations entry of the unit's type listing the winner's type, else none (the plain idle).
+    const anim::PresenceIdleFn presence = [this, &st](anim::ObjectId unit, std::span<const anim::IdleRecord> recs) {
+        return presence_pick(st, unit, recs.data(), recs.size());
+    };
+    for (size_t i = 0; i < units_.size(); ++i) {
+        const Unit& u = units_[i];
         if (!u.alive || u.retreated || !w->contains(u.id)) continue;
         anim_->set_berserker(*gm, u.id, abilities_->is_active(u.id, ta::kBerserker));
+        // s78k t02 (TACTICAL_COMBAT slot 47 "s78k t02", IdleBehavior 0x62e570) [H]: the IDLE service reads the TARGETING
+        // behaviour's target (a land team member: its head's) whether or not it is suspended (Prevent_All_Fire), and
+        // draws Get_Int(0, FPS) every service while one is held. current_target keeps the target while suspended.
+        const anim::IdleTarget target = !combat_->has_unit(u.id)                         ? anim::IdleTarget::None
+                                        : combat_->current_target(u.id) != tc::kNoObject ? anim::IdleTarget::Target
+                                                                                         : anim::IdleTarget::NoTarget;
+        const bool gated = idle_gate_[i] != 0;
         anim::LocomotorInput in;
         in.movable = u.movable;
+        in.on_path = gated;
+        in.target = target;
         if (u.movable) {
             const mv::UnitView v = movement_->view(u.id);
             if (v.deploy_state != mv::LocoState::None) {
                 // S8 t11 follow-up (MOVEMENT §3.2, 0x61e930): the Walk deploy states own the animation - the Deploy /
                 // Undeploy clip (synced random variant at Deployment_Anim_Rate) starts when the locomotor starts timing
                 // it; Deployed keeps the finished clip. [port] a reversed clip is drawn from its first frame.
+                // s78l t03: the IDLE deploy gate (deploying / undeploying / deployed) returns with nothing changed.
                 if (v.deploy_state != mv::LocoState::WalkDeployed && v.deploy_clip >= 0 && w->current_type(u.id) != v.deploy_clip &&
                     anim_->deploy(*gm, u.id, v.deploy_clip == static_cast<int32_t>(anim::kAnimUndeploy), rng, gframe))
                     ++stats_.anim_plays;
@@ -3502,22 +3701,22 @@ void TacticalBattle::drive_animation(SimRng& rng, uint64_t gframe) {
                     req.type = v.anim;  // variant 0, no draw; one-shot [port: the locomotor re-requests looping states]
                     if (w->play(u.id, req, nullptr, gframe) == anim::PlayResult::Played) ++stats_.anim_plays;
                 }
+                // s78l t03 (a): then the IDLE service under the same moving gate as every other locomotor.
+                if (anim_->service_idle(*gm, u.id, gated, target, rng, gframe, &presence)) ++stats_.anim_plays;
                 continue;
             }
             in.speed = v.speed;
             in.max_speed = v.max_speed;
             in.yaw_deg = v.yaw;
+            // s78l t02: the arrival turn plays its own clips (play_turn_clip_events), also on the frame it ends. The IDLE gate
+            // does not count that frame as moving: the path pops inside the locomotor (behaviour 1) before the IDLE service
+            // (behaviour 7) of the same frame (MOVEMENT 3.5.1 step 6).
+            in.host_turn = v.arrival_turn || v.arrival_turn_ended;
         }
-        // s78k t02 (TACTICAL_COMBAT slot 47 "s78k t02", IdleBehavior 0x62e570) [H]: the IDLE service reads the TARGETING
-        // behaviour's target (a land team member: its head's) whether or not it is suspended (Prevent_All_Fire), and
-        // draws Get_Int(0, FPS) every service while one is held. current_target keeps the target while suspended.
-        in.target = !combat_->has_unit(u.id) ? anim::IdleTarget::None
-                    : combat_->current_target(u.id) != tc::kNoObject ? anim::IdleTarget::Target
-                                                                       : anim::IdleTarget::NoTarget;
-        stats_.anim_plays += anim_->service_locomotor(*gm, u.id, in, cfg_.walk_speed_ratio, cfg_.min_move_anim_ratio, rng, gframe);
+        stats_.anim_plays += anim_->service_locomotor(*gm, u.id, in, cfg_.walk_speed_ratio, cfg_.min_move_anim_ratio, rng, gframe, &presence);
     }
 #else
-    (void)rng, (void)gframe;
+    (void)store, (void)rng, (void)gframe;
 #endif
 }
 
@@ -3918,6 +4117,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     profile::lap("tac.pre_move");
     movement_->tick(frame_, rng, pf);
     movement_->commit(store);
+    play_turn_clip_events(rng, global_frame);  // s78l t02: the arrival turn's clip plays (synced variant draws), ascending id
     oi_deploy_sync();  // S8 t11: deploy clip ends (Is_Active, deploy flags, signal 0x29) before the combat tick
     profile::lap("tac.movement");
     fighter_enter_idle();  // S7 t22 / t25: enter_idle drops the squadrons' team targets (§4.7 step 4, §4.10 D)
@@ -3935,7 +4135,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
             mode.trees().update(static_cast<tactical::EntityHandle>(u.id), mode.bounds_of(u.h));
     mode.trees().maintain(sim_time, pf);
     profile::lap("tac.trees");
-    drive_animation(rng, global_frame);
+    drive_animation(store, rng, global_frame);
     profile::lap("tac.anim");
     // 5. combat (abilities run inside its serial phases), events.
     for (const Unit& u : units_) {

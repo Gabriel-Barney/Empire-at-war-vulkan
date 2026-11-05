@@ -126,7 +126,40 @@ uint64_t AnimBehaviors::next_flinch_frame(ObjectId id) const {
 
 // ---- idle --------------------------------------------------------------------------------------------
 
-bool AnimBehaviors::service_idle(AnimWorld& w, ObjectId id, const IdleParams& idle, IdleTarget target, SimRng& rng, uint64_t frame,
+int32_t presence_idle_type(const AnimModel* m, ObjectId id, const IdleParams& idle, std::span<const IdleRecord> records) {
+    if (!idle.presence || !*idle.presence || records.empty()) return idle.idle_type;
+    const int32_t t = (*idle.presence)(id, records);
+    if (t == kNoAnimType || (m && m->variant_count(t) == 0)) return idle.idle_type;  // [port] no clip: the plain idle
+    return t;
+}
+
+std::span<const IdleRecord> AnimBehaviors::idle_records(ObjectId id) const {
+    const Entry* e = find(id);
+    return e ? std::span<const IdleRecord>(e->records) : std::span<const IdleRecord>{};
+}
+
+void AnimBehaviors::presence_refresh(ObjectId id, ObjectId presence, int32_t frames) {
+    if (is_corpse(id)) return;
+    std::vector<IdleRecord>& v = entry(id).records;
+    const auto it = std::lower_bound(v.begin(), v.end(), presence, [](const IdleRecord& r, ObjectId p) { return r.presence < p; });
+    if (it != v.end() && it->presence == presence) it->frames = frames;
+    else v.insert(it, IdleRecord{presence, frames});
+}
+
+void AnimBehaviors::idle_gated(ObjectId id) {
+    if (Entry* e = find(id)) e->records.clear();
+}
+
+bool AnimBehaviors::yaw_changed(ObjectId id, float yaw_deg) const {
+    const Entry* e = find(id);
+    if (!e || !e->have_yaw) return false;
+    float d = yaw_deg - e->last_yaw;
+    while (d > 180.0f) d -= 360.0f;
+    while (d <= -180.0f) d += 360.0f;
+    return d > 0.01f || d < -0.01f;
+}
+
+bool AnimBehaviors::service_idle(AnimWorld& w, ObjectId id, const IdleParams& idle_in, IdleTarget target, SimRng& rng, uint64_t frame,
                                  bool crouch_changed) {
     // IdleBehavior service 0x62e570 from step 3 (s78k t02; the moving / deploying early returns are the caller's).
     if (is_corpse(id) || !w.contains(id)) return false;
@@ -145,12 +178,23 @@ bool AnimBehaviors::service_idle(AnimWorld& w, ObjectId id, const IdleParams& id
         // attack-like / Attack / Attack Idle clip (no draw for that play). Nothing else.
         Entry& e = entry(id);
         e.idle_countdown = kEngagedBaseFrames + static_cast<uint64_t>(rng.range_int(0, kEngagedRandomFrames));
+        e.records.clear();  // s78l t03: the record list goes with a target
         if (from_attack && finished && m && m->variant_count(kAnimAttackIdle) > 0) return w.play(id, r, nullptr, frame) == PlayResult::Played;
         return false;
     }
-    // Step 5: no target. The countdown ages; nothing more during a flinch or while the clip plays.
+    // Step 5: no target. The records and the countdown age; nothing more during a flinch or while the clip plays.
     Entry* e = find(id);
+    if (e) {
+        size_t keep = 0;  // s78l t03: every value - 1, a record below 1 erased (order kept)
+        for (IdleRecord& rec : e->records) {
+            if (--rec.frames >= 1) e->records[keep++] = rec;
+        }
+        e->records.resize(keep);
+    }
     if (e && e->idle_countdown > 0) --e->idle_countdown;
+    // The default idle type (0x395920) is read after the aging.
+    IdleParams idle = idle_in;
+    idle.idle_type = presence_idle_type(m, id, idle_in, e ? std::span<const IdleRecord>(e->records) : std::span<const IdleRecord>{});
     if (flinching(id)) return false;
     if (cur.clip && !finished && !crouch_changed) return false;
     if (from_attack && target != IdleTarget::None) {
@@ -220,11 +264,18 @@ uint32_t AnimBehaviors::service_locomotor(AnimWorld& w, ObjectId id, const Locom
     const bool moving = in.movable && in.speed > 0.0f;
     IdleParams ip = p.idle;
     ip.idle_type = default_idle_type(m, in, p.idle);
-    // s78k t02: the IDLE service (0x62e570) after the locomotor's play, every call while not moving (step 1: a moving unit
-    // is skipped unless Allow_Idle_When_Moving). Plays started: the locomotor's + the idle's. A crouch change forces the
-    // idle clip only when the locomotor started none this call ([port]: its stop / turn clip already follows the state).
+    // s78l t03: the presence step comes after the crouch test and the garrison override (0x395920).
+    if (in.crouched || in.idle_type != kNoAnimType) ip.presence = nullptr;
+    // s78k t02 / s78l t03: the IDLE service (0x62e570) after the locomotor's play, every call for an object with IDLE
+    // unless the moving gate stops it (step 1: the locomotor has a path - in.on_path - and no Allow_Idle_When_Moving;
+    // then the records are cleared). Plays started: the locomotor's + the idle's. A crouch change forces the idle clip only
+    // when the locomotor started none this call ([port]: its stop / turn clip already follows the state).
     const auto then_idle = [&](uint32_t plays) -> uint32_t {
-        if (moving && !in.allow_idle_when_moving) return plays;
+        if (!in.has_idle) return plays;
+        if (in.movable && in.on_path && !in.allow_idle_when_moving) {
+            idle_gated(id);
+            return plays;
+        }
         return plays + (service_idle(w, id, ip, in.target, rng, frame, crouch_changed && plays == 0) ? 1u : 0u);
     };
     if (moving) {
@@ -258,7 +309,7 @@ uint32_t AnimBehaviors::service_locomotor(AnimWorld& w, ObjectId id, const Locom
         w.play(id, r, &rng, frame);
         return then_idle(1);
     }
-    if (in.movable && (dyaw > 0.01f || dyaw < -0.01f)) {
+    if (in.movable && !in.host_turn && (dyaw > 0.01f || dyaw < -0.01f)) {
         // Turning in place: TURNL for a counter-clockwise (positive) yaw change [port sign].
         const int32_t turn = dyaw > 0.0f ? (in.crouched ? kAnimTurnLeftCrouch : kAnimTurnLeft) : (in.crouched ? kAnimTurnRightCrouch : kAnimTurnRight);
         const bool interruptible = cur == kNoAnimType || is_idle_like(cur) || is_turn(cur) || w.current_mode(id) == SlotMode::Finished;
@@ -273,8 +324,8 @@ uint32_t AnimBehaviors::service_locomotor(AnimWorld& w, ObjectId id, const Locom
         }
     }
     if (is_move_family(cur)) {
-        PlayRequest r;  // stopped: back to the idle (then the idle behaviour)
-        r.type = ip.idle_type;
+        PlayRequest r;  // stopped: back to the idle (then the idle behaviour); the records before this frame's aging
+        r.type = presence_idle_type(m, id, ip, e.records);
         r.loop = p.idle.loop_idle;
         r.blend_seconds = idle_blend;
         r.speed = p.idle.idle_rate;
@@ -462,6 +513,13 @@ void AnimBehaviors::hash(StateHasher& h) const {
         h.f32(e.last_yaw);
         h.boolean(e.have_yaw);
         h.boolean(e.last_crouch);
+        if (!e.records.empty()) {  // s78l t03 (only when present: the digest of a state without records is unchanged)
+            h.u32(static_cast<uint32_t>(e.records.size()));
+            for (const IdleRecord& r : e.records) {
+                h.i32(r.presence);
+                h.i32(r.frames);
+            }
+        }
     }
     h.u32(static_cast<uint32_t>(corpses_.size()));
     for (const Corpse& c : corpses_) {

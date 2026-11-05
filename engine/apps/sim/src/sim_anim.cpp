@@ -353,18 +353,30 @@ bool SimAnimation::hit(const GameMode& mode, ObjectId victim, Vec3 facing, Vec3 
 }
 
 bool SimAnimation::service_idle(const GameMode& mode, ObjectId id, SimRng& rng, uint64_t frame) {
+    return service_idle(mode, id, false, anim::IdleTarget::NoTarget, rng, frame);
+}
+
+bool SimAnimation::service_idle(const GameMode& mode, ObjectId id, bool gated, anim::IdleTarget target, SimRng& rng, uint64_t frame,
+                                const anim::PresenceIdleFn* presence) {
     ModeWorld& mw = mode_world(mode);
     if (!mw.world->contains(id)) return false;
     const objects::ObjectStore& store = mode.primary();
     const ObjectHandle h = store.find(id);
     if (!store.exists(h)) return false;
-    anim::IdleTarget target = target_hook_ ? target_hook_(mode, id) : anim::IdleTarget::NoTarget;
-    if (!store.has_behavior(h, objects::beh::Idle)) target = anim::IdleTarget::None;  // [port] no IDLE: no lookup / draw
-    return mw.behaviors->service_idle(*mw.world, id, idle_params(mode, id, store.type(h), mw.world->model(id)), target, rng, frame);
+    // s78l t03 (b): only objects with IDLE are serviced (the service is the IDLE instance's vf6).
+    if (!store.has_behavior(h, objects::beh::Idle)) return false;
+    if (gated) {  // (a): the moving gate - records cleared, nothing else
+        mw.behaviors->idle_gated(id);
+        return false;
+    }
+    if (target_hook_) target = target_hook_(mode, id);
+    anim::IdleParams ip = idle_params(mode, id, store.type(h), mw.world->model(id));
+    if (!(idle_hook_ && idle_hook_(mode, id) != anim::kNoAnimType)) ip.presence = presence;  // after a garrison override
+    return mw.behaviors->service_idle(*mw.world, id, ip, target, rng, frame);
 }
 
 uint32_t SimAnimation::service_locomotor(const GameMode& mode, ObjectId id, anim::LocomotorInput in, float walk_ratio, float min_ratio, SimRng& rng,
-                                         uint64_t frame) {
+                                         uint64_t frame, const anim::PresenceIdleFn* presence) {
     ModeWorld& mw = mode_world(mode);
     if (!mw.world->contains(id)) return 0;
     const objects::ObjectStore& store = mode.primary();
@@ -378,14 +390,34 @@ uint32_t SimAnimation::service_locomotor(const GameMode& mode, ObjectId id, anim
     lp.walk_speed_ratio = walk_ratio;
     lp.min_move_ratio = min_ratio;
     lp.idle = idle_params(mode, id, t, mw.world->model(id));
+    lp.idle.presence = presence;  // s78l t03 (service_locomotor drops it while crouched / with a garrison override)
     if (idle_hook_ && in.idle_type == anim::kNoAnimType) in.idle_type = idle_hook_(mode, id);
     // s78k t02: the IDLE service's TARGETING lookup (suspension ignored) and Allow_Idle_When_Moving.
     if (target_hook_) in.target = target_hook_(mode, id);
-    if (!store.has_behavior(h, objects::beh::Idle)) in.target = anim::IdleTarget::None;  // [port] no IDLE: no lookup / draw
+    in.has_idle = store.has_behavior(h, objects::beh::Idle);  // s78l t03 (b): no IDLE, no idle service
     in.allow_idle_when_moving = tp.allow_idle_when_moving;
     const uint32_t n = mw.behaviors->service_locomotor(*mw.world, id, lp, in, rng, frame);
     if (n > 0 && anim::is_turn(mw.world->current_type(id))) ++stats_.turns;
     return n;
+}
+
+bool SimAnimation::play_default_idle(const GameMode& mode, ObjectId id, uint64_t frame, const anim::PresenceIdleFn* presence) {
+    ModeWorld& mw = mode_world(mode);
+    const objects::ObjectStore& store = mode.primary();
+    const ObjectHandle h = store.find(id);
+    if (!mw.world->contains(id) || !store.exists(h) || mw.behaviors->is_corpse(id)) return false;
+    if (anim::is_idle_like(mw.world->current_type(id))) return false;
+    const anim::AnimModel* m = mw.world->model(id);
+    anim::IdleParams ip = idle_params(mode, id, store.type(h), m);
+    const int32_t g = idle_hook_ ? idle_hook_(mode, id) : anim::kNoAnimType;
+    if (g == anim::kNoAnimType) ip.presence = presence;
+    anim::PlayRequest r;
+    r.type = anim::presence_idle_type(m, id, ip, mw.behaviors->idle_records(id));
+    r.index = 0;
+    r.loop = ip.loop_idle;
+    r.blend_seconds = tunables_.idle_blend_seconds;
+    r.speed = 1.0f;
+    return mw.world->play(id, r, nullptr, frame) == anim::PlayResult::Played;
 }
 
 bool SimAnimation::deploy(const GameMode& mode, ObjectId id, bool undeploy, SimRng& rng, uint64_t frame) {
@@ -638,6 +670,9 @@ void SimAnimation::sync(const GameMode& mode, SimRng& rng, uint64_t frame) {
         cp.loop_idle = ip.loop_idle;
         cp.idle_rate = ip.idle_rate;
         w.create(id, m, cp, &rng, frame);
+        // s78l t03 (b): the IDLE attach (vf7 0x62dd40) draws the first fidget frame, now + Get_Int(210, 450) (synced).
+        // [port] at the row creation (after the start-frame draw), as the model creation itself.
+        if (store.has_behavior(h, objects::beh::Idle)) w.set_idle_timer(id, frame + static_cast<uint64_t>(rng.range_int(210, 450)));
         ++stats_.created;
         if (model_has_events(m)) mw.event_rows.push_back(id);  // ascending: ids above every earlier one
     }

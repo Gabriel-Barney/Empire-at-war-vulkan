@@ -24,8 +24,9 @@
 // R3 behaviours (anim::AnimBehaviors, one per mode next to the world; anim_behaviors.hpp has the rules):
 //   * hit()          flinch on a projectile hit (the battle's HitEvents, event order);
 //   * service_idle() the idle behaviour incl. idle while engaged (the battle's locomotor step: service_locomotor runs it
-//                    every frame the unit is not moving, s78k t02); its TARGETING lookup comes from the target hook
-//                    (set_target_hook) or LocomotorInput::target, and is IdleTarget::None for an object without IDLE;
+//                    every frame the moving gate lets it, s78k t02 / s78l t03); its TARGETING lookup comes from the target
+//                    hook (set_target_hook) or LocomotorInput::target; objects without IDLE get none (s78l t03). The IDLE
+//                    attach draw (first fidget frame, synced Get_Int(210, 450)) is made at the row creation;
 //   * begin_death()  Die + DeathBehavior: death clip, or removal at once (Remove_Upon_Death without a clip). Called
 //                    by the battle BEFORE it destroys the unit; the unit's row then lives on as a CORPSE row
 //                    ([port]: the battle removes the store object at death, so the corpse is a detached row +
@@ -121,8 +122,13 @@ public:
     // Flinch of `victim` hit by a shot travelling along `travel` (2-D; victim facing `facing`). True if it played.
     bool hit(const GameMode& mode, ObjectId victim, Vec3 facing, Vec3 travel, SimRng& rng, uint64_t frame);
     // One IDLE service (incl. idle while engaged; s78k t02 rules in anim_behaviors.hpp) of a battle unit; the TARGETING
-    // lookup through the target hook (unset: IdleTarget::NoTarget; no IDLE behaviour: None).
+    // lookup through the target hook (unset: IdleTarget::NoTarget). s78l t03 (b): nothing for an object without IDLE.
     bool service_idle(const GameMode& mode, ObjectId id, SimRng& rng, uint64_t frame);
+    // s78l t03: the same with the host's gate inputs - `gated`: the moving gate (TACTICAL_COMBAT slot 47 "s78l t03" (a))
+    // stops the service (the idle records are cleared, no draw); `target`: the TARGETING lookup (the target hook replaces
+    // it when set); `presence`: the default idle type's presence step (null: none; ignored under a garrison override).
+    bool service_idle(const GameMode& mode, ObjectId id, bool gated, anim::IdleTarget target, SimRng& rng, uint64_t frame,
+                      const anim::PresenceIdleFn* presence = nullptr);
     // Death of a live store object (call before destroying it). RemoveNow: no corpse (the caller removes it).
     // `damage_kind` = the killing hit's DamageType (death type by kind, anim_behaviors.hpp).
     anim::DeathResult begin_death(const GameMode& mode, ObjectId id, SimRng& rng, uint64_t frame, uint8_t damage_kind = 1);
@@ -146,11 +152,15 @@ public:
 
     // Locomotor clip selection of a unit (AnimBehaviors::service_locomotor with the type's parameters; the
     // default idle goes through the idle-type hook) and then its IDLE service (s78k t02): in.target is replaced by the
-    // target hook's answer when the hook is set, and by IdleTarget::None when the object has no IDLE behaviour;
-    // in.allow_idle_when_moving comes from the type (Allow_Idle_When_Moving). `walk_ratio` / `min_ratio`: the battle's
-    // tunables.
+    // target hook's answer when the hook is set; s78l t03: in.has_idle = the object has IDLE (no idle service without),
+    // in.on_path is the caller's moving gate; in.allow_idle_when_moving comes from the type (Allow_Idle_When_Moving);
+    // `presence` = the default idle type's presence step (null: none). `walk_ratio` / `min_ratio`: the battle's tunables.
     uint32_t service_locomotor(const GameMode& mode, ObjectId id, anim::LocomotorInput in, float walk_ratio, float min_ratio, SimRng& rng,
-                               uint64_t frame);
+                               uint64_t frame, const anim::PresenceIdleFn* presence = nullptr);
+    // s78l t02: the Walk arrival turn popped its path (MOVEMENT 3.5.1 step 6): the default idle type (with `presence`, the
+    // records as they are), index 0, loop Loop_Idle_Anim_00, idle blend, speed 1 - unless the current clip is idle-class
+    // (0x27b5e0). No draw. True if it played.
+    bool play_default_idle(const GameMode& mode, ObjectId id, uint64_t frame, const anim::PresenceIdleFn* presence = nullptr);
     // Deploy / undeploy clip (Deployment_Anim_Rate). True if a clip started.
     bool deploy(const GameMode& mode, ObjectId id, bool undeploy, SimRng& rng, uint64_t frame);
     // Berserker ability state (AnimWorld::set_berserker).

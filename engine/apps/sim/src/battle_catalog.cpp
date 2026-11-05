@@ -722,6 +722,16 @@ ta::AbilityObjectDesc BattleCatalog::ability_desc(uint32_t t, BuildState& s) con
     d.hero = ty.get_bool(t, "Is_Named_Hero") || ty.get_bool(t, "Is_Generic_Hero");
     d.passive_missile_shield_radius = ty.get_float(t, "Passive_Missile_Shield_Radius");
     d.destroy_when_stunned_over_water = ty.get_bool(t, "Destroy_When_Stunned_Over_Water");  // OI t02 [port]
+    // s78l t05 (TACTICAL_COMBAT §5.4.1): Tactical_Bribe acceptance / cost. [port] every desc (a TEAM container too) reads
+    // its own type: the FoC containers carry their own Tactical_Bribe_Cost (Stormtrooper_Team 25, its member 10), and
+    // the container type does not name a member type here.
+    d.named_hero = ty.get_bool(t, "Is_Named_Hero");
+    d.tactical_bribe_cost = ty.get_int(t, "Tactical_Bribe_Cost");  // 0 when the tag is missing
+    const auto float_or = [&ty, t](std::string_view tag, float def) { return ty.get_string(t, tag).empty() ? def : ty.get_float(t, tag); };
+    d.bribe_modifier_corrupted = float_or("Bribe_Modifier_On_Corrupted_Planets", 1.0f);
+    d.bribe_modifier_uncorrupted = float_or("Bribe_Modifier_On_Uncorrupted_Planets", 1.0f);
+    d.friendly_damage_amount = ty.get_float(t, "Friendly_Damage_Amount");
+    d.proximity_mine = ty.has_behavior(t, objects::BehaviorSet::Union, objects::behavior_type_id("PROXIMITY_MINE"));
     // 0x3979d0 [port: the mode's FOW reveal range column; land for land battles is not distinguished here]
     if (ty.get_bool(t, "Target_Stealth_Units")) d.stealth_detection_range = ty.columns().space_fow_reveal_range[t];
     ta::AbilityResolvers r;

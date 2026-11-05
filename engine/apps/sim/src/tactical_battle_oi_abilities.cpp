@@ -189,6 +189,19 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
     h.snap_yaw = [this](tc::ObjectId id, float yaw_deg) {
         if (movement_) movement_->snap_yaw(id, yaw_deg);
     };
+    // s78l t05 (TACTICAL_COMBAT §5.4.1): Tactical_Bribe pays from the player's credits (the battle's credit hooks: the
+    // galactic account in campaign battles; unset hooks = 0 credits, so a bribe with a cost fails) and reads the battle
+    // planet's corruption (GalacticSim::corrupted of the request's planet; no planet = uncorrupted).
+    h.pay_credits = [this](int32_t player, float cost) {
+        const float have = credits_get_ ? credits_get_(player) : 0.0f;
+        if (have < cost) return false;
+        if (cost > 0.0f && credits_add_) credits_add_(player, -cost);
+        return true;
+    };
+    h.battle_planet_corrupted = [this]() {
+        const auto p = req_.info.planet;
+        return galaxy_ && p != kInvalidPlanet && static_cast<size_t>(p) < galaxy_->planets().size() && galaxy_->corrupted(p);
+    };
     hg_ability_host(h);  // hangars: DEPLOY_SQUAD gate / handler (HangarSystem::deploy_ready / deploy_squad)
     abilities_->set_host(std::move(h));
 }

@@ -117,7 +117,13 @@ float MovementSystem::fform_unit_speed(ObjectId key) {
     const bool squad = squad_ptr(key) != nullptr;
     for (const ObjectId m : fform_members(key))
         if (const Unit* u = unit_ptr(m)) {
-            const float v = squad ? team_base_speed(*u) * u->team_factor : u->lp.max_speed;
+            float v = u->lp.max_speed;
+            if (squad) {  // s78l t01: the container's own Max_Speed is in the minimum too (set_team)
+                const float mult = cfg_.mode == MoveMode::Land ? cfg_.constants.land_speed_multiplier : cfg_.constants.space_speed_multiplier;
+                float b = team_base_speed(*u);
+                if (u->team_max >= 0.0f) b = std::min(b, u->team_max * mult);
+                v = b * u->team_factor;
+            }
             s = s < 0.0f ? v : std::min(s, v);
         }
     return s;
