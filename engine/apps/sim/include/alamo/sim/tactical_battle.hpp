@@ -1153,6 +1153,7 @@ private:
     Vec3 snap_passable(Vec3 p, uint32_t passability_mask, bool always) const;  // slot_position's box clamp + cell search
     std::vector<Vec3> drop_pos_;  // a1g t04 follow-up: order_reinforce's land layout slots for deploy (transient)
     bool deploy_unload_ = false;  // s78i t02: deploy places a landing object's company (keeps the side facing; transient)
+    std::vector<Vec3> drop_face_;  // s78j t01: per member (deploy's member index), the landing unload facing (transient)
     // a1i t04 (A1_READINGS §35.2): one landing object (TransportDataPack fields in brackets).
     struct Landing {
         objects::ObjectId id = objects::kNoObjectId;
@@ -1338,6 +1339,10 @@ private:
     std::vector<StoryGarrisonEvent> story_garrisoned_;
     std::vector<StoryCaptureEvent> story_captured_;
     void s4_owner_changed(TacticalMode& mode, objects::ObjectId id, int32_t old_owner, int32_t owner);  // change_owner()
+    // s78j t04: one object's script owner change (change_owner(), else store + trees + fog / garrison hooks), and the
+    // team spread of script_change_owner (TACTICAL_COMBAT §3.5 step 4): the container, then the other live members.
+    bool owner_change_one(TacticalMode& mode, objects::ObjectHandle h, int32_t owner);
+    void team_change_owner(TacticalMode& mode, objects::ObjectId id, int32_t owner);
     void s4_init();  // relations / neutral player of the garrison and capture systems (first registration)
     // setup; `spawned` (optional) receives the placed object (null when the spawn failed)
     bool s4_placement(TacticalMode& mode, objects::TypeIndex t, const objects::SpawnParams& sp, float health,

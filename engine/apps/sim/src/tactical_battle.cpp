@@ -47,6 +47,10 @@ Vec3 facing_of_yaw(float yaw_deg) {
 
 float yaw_of(Vec3 f) { return dmath::atan2(f.y, f.x) * (180.0f / dmath::kPiF); }
 
+// s78j t01 (TACTICAL_COMBAT §3.1.1 "Units leaving a land landing object"): 0x20acd0((0, 0, 0), O) - the level facing
+// along the unload offset O (yaw atan2(O.y, O.x); yaw 0 when O's xy are zero).
+Vec3 offset_facing(float ox, float oy) { return facing_of_yaw(ox == 0.0f && oy == 0.0f ? 0.0f : yaw_of(Vec3{ox, oy, 0.0f})); }
+
 tactical::Vec3 tv(Vec3 v) { return tactical::Vec3{v.x, v.y, v.z}; }
 Vec3 sv(tactical::Vec3 v) { return Vec3{v.x, v.y, v.z}; }
 
@@ -164,10 +168,11 @@ public:
     void unit_after_targeting(tc::ObjectId id, uint32_t frame, SimRng& rng) override { a_->unit_after_targeting(id, frame, rng); }
     // s78f t03 (TACTICAL_COMBAT §3.1.1 "Slot 47"): the attack-idle pose 0x569400 - clip 6 Attack Idle, index 0, looping,
     // speed 1, blend = one synced Get_Float(0.2, 0.75), when (arg 0 or Locomotor_Has_Animation_Priority clear), the
-    // locomotor is not moving and the current clip is not a flinch (79-86); the clip is not restarted while it is Attack
-    // (5) or Attack Idle (6), but the draw is still spent (s78i t01). The draw is
-    // spent whether or not the model has the clip (the blend is the call's argument). [M] The animation gate 0x397040 is
-    // read as false. Without an animation world nothing is played or drawn [port].
+    // locomotor is not moving, the current clip is not a flinch (79-86) and not Attack (5) / Attack Idle (6) - one
+    // short-circuit conjunction, so while clip 5 / 6 plays nothing is drawn or restarted (s78j t02 [H], reverting s78i
+    // t01). The draw is spent whether or not the model has the clip (the blend is the call's argument; a model without
+    // clip 6 keeps its old clip and draws every service). [M] The animation gate 0x397040 is read as false. Without an
+    // animation world nothing is played or drawn [port].
     void attack_idle(tc::ObjectId id, bool arg, uint32_t frame, SimRng& rng) override {
         (void)frame;
 #ifdef ALAMO_SIM_HAVE_ANIM
@@ -182,11 +187,10 @@ public:
         }
         const int32_t cur = world_->current_type(id);
         if (anim::is_flinch(cur)) return;
-        // s78i t01 (in-game probe IDLE47N, out/20261105-125642) [M]: Dark_Trooper_PhaseII held in ATTACK / ATTACKIDLE with
-        // fire blocked still adds about one synced draw per attacker per frame, so the draw is spent on every service,
-        // the current clip being Attack (5) or Attack Idle (6) included; only the clip restart is skipped then.
-        const float blend = rng.range_float(0.2f, 0.75f);
+        // s78j t02 (TACTICAL_COMBAT §3.1.1 "Order of the tests" [H]): the clip test comes before the draw. (The s78i t01
+        // probe IDLE47N never ran slot 47: Prevent_All_Fire suspends TARGETING / WEAPON.)
         if (cur == anim::kAnimAttack || cur == anim::kAnimAttackIdle) return;
+        const float blend = rng.range_float(0.2f, 0.75f);
         anim::PlayRequest r;
         r.type = anim::kAnimAttackIdle;
         r.index = 0;
@@ -981,12 +985,13 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32
         Vec3 pos;
         Vec3 face = facing_[side];
         // s78i t02 (TACTICAL_COMBAT §3.1.1 "other spawns"): a reserve drop (0x2b5fe0 land / 0x2bf2d0 space) gives every
-        // object it creates the owner's entry-facing record (mode +0x288; yaw 0 when unset). [port] A landing object's
-        // company keeps the side facing (the unload facing is not traced).
+        // object it creates the owner's entry-facing record (mode +0x288; yaw 0 when unset). A landing object's company
+        // takes the per-member unload facing of drop_face_ (s78j t01).
         if (P.reserve && !range && !deploy_unload_) {
             const Vec3 df = side < 2 ? drop_facing_[side] : Vec3{};  // as spawn_landing: the participant's side record
             face = df.x == 0.0f && df.y == 0.0f ? facing_of_yaw(0.0f) : df;
         }
+        if (mk < drop_face_.size()) face = drop_face_[mk];
         const bool lead_sw = space_ && bt_have_ds_ && !P.reserve && bt_lead_ == objects::kNoObjectId && bt_is_super_weapon(t);
         if (spot < P.spots.size()) {  // §3.2: the marker chosen for the starbase / structure / step-3 type
             pos = P.spots[spot].first;
@@ -1717,7 +1722,20 @@ cmd::RejectReason TacticalBattle::order_reinforce(TacticalMode& mode, uint8_t pl
                             snap_passable(Vec3{lay.group_x[g], lay.group_y[g], 0.0f}, movement_->classes().mask(md.movement_class), false));
                         m += shape.create_team ? std::min<size_t>(std::max<uint32_t>(shape.squad, 1u), lay.slots.size()) : 1u;
                     }
+                    // s78j t01 (TACTICAL_COMBAT §3.1.1 "Units leaving a land landing object") [H], the untimed unload
+                    // placing everything at once: team step j faces along its offset O_j (the layout's, before the
+                    // passable-cell snap) from the landing centre, step 0 the landing's facing; a vehicle placed at its
+                    // slot ends on the landing's facing (0x3a8710).
+                    const Vec3 psi = mode.primary().facing(landing.h);
+                    drop_face_.assign(lay.slots.size(), psi);
+                    if (shape.create_team) {
+                        const size_t k = std::min<size_t>(std::max<uint32_t>(shape.squad, 1u), lay.slots.size());
+                        for (size_t g = 1, m = k; g < lay.group_x.size() && m < lay.slots.size(); ++g, m += k)
+                            for (size_t q = m; q < std::min(m + k, lay.slots.size()); ++q)
+                                drop_face_[q] = offset_facing(lay.group_x[g] - x, lay.group_y[g] - y);
+                    }
                     if (cfg_.landing_unload_timed) {
+                        drop_face_.clear();  // landing_service picks the facings step by step
                         // §35.2: the company stays inside; landing_service runs the state machine. The reserve leaves the
                         // pool now (deployed), its members spawn step by step.
                         landing.timed = true;
@@ -1735,6 +1753,7 @@ cmd::RejectReason TacticalBattle::order_reinforce(TacticalMode& mode, uint8_t pl
                 deploy(mode, i, rng);
                 deploy_unload_ = false;
                 drop_pos_.clear();
+                drop_face_.clear();
                 if (landing.id != objects::kNoObjectId) {
                     // [port] Every unload step runs at the order (the tactical AI takes the units at once, §35.3): the
                     // signal 0x19 record is posted now; the landing object stays for the steps' timers, then leaves.
@@ -2189,10 +2208,25 @@ void TacticalBattle::landing_service(TacticalMode& mode, SimRng& rng) {
         const uint32_t cnt = members[i] < types.size() && types.get_bool(members[i], "Create_Team") ? std::min(k, n - i) : 1u;
         const Vec3 at = store.position(l.h);
         drop_pos_.assign(n, Vec3{at.x, at.y, 0.0f});
+        // s78j t01 (TACTICAL_COMBAT §3.1.1 "Units leaving a land landing object") [H]: step j's units are created at the
+        // landing centre facing along the step's offset O_j (0x20acd0((0, 0, 0), O_j)); a team's step 0 takes the
+        // landing's own facing instead (vehicles have no step-0 override). O_j = the unload layout's step offset before the
+        // passable-cell snap, rebuilt here from the landing position and the side's drop yaw (as order_reinforce built it).
+        // [M, not modelled] a vehicle's final facing after its exit move.
+        {
+            const Vec3 psi = store.facing(l.h);
+            const LandDropLayout lay = land_drop_layout(land_drop_shape(P.type), at.x, at.y, drop_yaw(P.side), 3.0f);
+            const uint32_t j = l.next_offset;
+            const bool team = cnt > 1 || (members[i] < types.size() && types.get_bool(members[i], "Create_Team"));
+            Vec3 f = psi;
+            if (lay.ok && j < lay.group_x.size() && !(team && j == 0)) f = offset_facing(lay.group_x[j] - at.x, lay.group_y[j] - at.y);
+            drop_face_.assign(n, f);
+        }
         const size_t first = units_.size();
         const uint32_t pi = l.participant;  // deploy may grow parts_-held state; keep the index
         deploy(mode, pi, rng, i, cnt);
         drop_pos_.clear();
+        drop_face_.clear();
         Landing& lr = landings_[li];
         mv::MoveOrder o;
         for (size_t u = first; u < units_.size(); ++u) {
@@ -2740,9 +2774,25 @@ bool TacticalBattle::victory_relevant(uint32_t type) {
 void TacticalBattle::apply_speed_factors() {
     // MOVEMENT 3.4 items 4, 5, 7 (product order: Mod_Multiplier, engines, list 5) [port: one factor].
     const float engines = catalog_->engines_disabled_speed_modifier();
+    // s78j t03 (TACTICAL_COMBAT §4.4 "Who the squad leader is", MOVEMENT §3.4 item 4 / §3.7): a land team walks on its
+    // container's locomotor, whose SPEED Mod_Multiplier is the squad value 0x398010 returns for the container
+    // (team_mod_multiplier: its own product when != 1, else the minimum over all live members). [port] The container has
+    // no locomotor here (the members move one by one, in one formation at the slowest member's speed), so every live
+    // member of a land team takes that team value for item 4 in place of its own product. Computed once per team per tick
+    // (sorted (team, value) pairs, probed only).
+    std::vector<std::pair<uint32_t, float>> team_speed;
+    const auto speed_mult = [&](const Unit& u) {
+        const uint32_t team = space_ ? 0u : combat_->team(u.id);
+        if (team == 0) return combat_->mod_multiplier(u.id, tc::ModKind::Speed);
+        auto it = std::lower_bound(team_speed.begin(), team_speed.end(), team,
+                                   [](const std::pair<uint32_t, float>& e, uint32_t t) { return e.first < t; });
+        if (it == team_speed.end() || it->first != team)
+            it = team_speed.insert(it, {team, combat_->team_mod_multiplier(team, tc::ModKind::Speed)});
+        return it->second;
+    };
     for (const Unit& u : units_) {
         if (!u.alive || u.retreated || !u.movable) continue;
-        float f = combat_->mod_multiplier(u.id, tc::ModKind::Speed);
+        float f = speed_mult(u);
         if (u.engines_offline || l1_engines_off(u.id)) f = f * engines;  // L1 systems: + timed engine disables
         f = f * (1.0f + combat_->modifier(u.id, tc::ModList::MaxSpeed));
         // OI follow-up t03 (A1_READINGS §28.9): the movement lock does not slow the unit (no speed-0 freeze); its users
@@ -4207,6 +4257,13 @@ bool TacticalBattle::change_owner(TacticalMode& mode, objects::ObjectHandle h, i
 bool TacticalBattle::script_change_owner(TacticalMode& mode, objects::ObjectHandle h, int32_t owner) {
     objects::ObjectStore& store = mode.primary();
     if (!store.alive(h) || owner < 0) return false;
+    if (!owner_change_one(mode, h, owner)) return false;
+    team_change_owner(mode, store.id(h), owner);
+    return true;
+}
+
+bool TacticalBattle::owner_change_one(TacticalMode& mode, objects::ObjectHandle h, int32_t owner) {
+    objects::ObjectStore& store = mode.primary();
     if (change_owner(mode, h, owner)) return true;
     const objects::ObjectId id = store.id(h);
     const int32_t old_owner = store.owner(h);
@@ -4215,6 +4272,32 @@ bool TacticalBattle::script_change_owner(TacticalMode& mode, objects::ObjectHand
     fog_owner_changed(mode, h, old_owner);
     s4_owner_changed(mode, id, old_owner, owner);
     return true;
+}
+
+// s78j t04 (TACTICAL_COMBAT §3.5 "Convert and its team rule" step 4, 0x38e5a0): Change_Owner spreads through a team by
+// itself - a member calls it on its TEAM container, a container on each member in list order, and an object that already
+// has the new owner returns at once. So after `id` (a member or the container) changed, the container follows, then
+// every other live member ([port] list order = ascending id, as convert_container's spread in CombatSystem). The
+// container's record (Container::owner: loss records, replenish spawns) follows too. CombatSystem::set_owner does not
+// spread, so the host does it here for the Lua / story / AI Change_Owner paths.
+void TacticalBattle::team_change_owner(TacticalMode& mode, objects::ObjectId id, int32_t owner) {
+    objects::ObjectStore& store = mode.primary();
+    uint32_t ci = kNoContainer;
+    if (const Unit* u = unit_by_id(id)) {
+        ci = u->container;
+    } else {
+        for (size_t c = 0; c < containers_.size(); ++c)
+            if (containers_[c].id == id && !containers_[c].removed) ci = static_cast<uint32_t>(c);
+    }
+    if (ci >= containers_.size()) return;
+    Container& ct = containers_[ci];
+    ct.owner = owner;
+    if (ct.id != id && !ct.removed && store.alive(ct.h) && store.owner(ct.h) != owner) owner_change_one(mode, ct.h, owner);
+    for (size_t i = 0; i < units_.size(); ++i) {  // owner_change_one does not add or remove units
+        const Unit& m = units_[i];
+        if (m.container != ci || m.id == id || !m.alive || m.retreated || !store.alive(m.h) || store.owner(m.h) == owner) continue;
+        owner_change_one(mode, m.h, owner);
+    }
 }
 
 // ---- reporting / CRC ----------------------------------------------------------------------------------------------

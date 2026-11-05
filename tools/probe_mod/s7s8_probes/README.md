@@ -449,7 +449,8 @@ repeated every 300 frames, then `bg_post`. `ALAMO_S78_QUIET_HUMAN=0` keeps your 
 subtracted:
 - `k_med` comes from the median on / off edge steps. It is robust to the periodic −86 bursts that pulled IDLE47Q's P
   mean down.
-- `k_mean ± se` comes from the per-cycle on-minus-off means.
+- `k_mean ± se` is the median of the per-cycle on-minus-off values (V's median subtracted) with a MAD-based stderr (s78j t05: the plain mean, still printed, was pushed to UNCLEAR by two background bursts per phase in out/20261105-125642; the median gives E 0.93 ± 0.30 -> DRAWS).
+- **Caveat (s78j t02, RE [H]):** `Prevent_All_Fire` suspends TARGETING and WEAPON, and slot 47 returns while suspended, so IDLE47N never runs slot 47; its DRAWS verdict measures some other draw and does not decide the clip 5 / 6 condition (retail checks the clip before the draw; docs/re/TACTICAL_COMBAT.md, Slot 47).
 
 A D or E phase counts only when, while its victims exist, the attackers are in targeting state 4 for at least 50%
 of the attacker-frames and on clip 5 / 6 (ATTACK / ATTACKIDLE) for at least 50%. It must also have at most one shot

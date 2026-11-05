@@ -1139,10 +1139,36 @@ half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor;
       - Battles from the campaign (0x2a1eb0): the defender gets the first "DEFENDING FORCES POSITION" marker's
         orientation. The attacker gets the chosen "ATTACKER ENTRY POSITION" marker's orientation, picked by its
         distance to the defending-forces markers.
-      - A player with no such marker keeps the table's initial value [L: not traced; presumably zeros, which is
-        yaw 0 = +X].
-    - [L] Not traced: the facing of infantry or vehicles when they leave a land landing object. The landing object
-      itself gets the table facing.
+      - A player with no such marker keeps the table's initial value, **(0, 0, 0) = yaw 0 = +X, level** [H, s78j t01].
+        `GameModeClass` ctor 0x35a5e0 builds the `DynamicVectorClass<Vector3>` (mode +0x280, data +0x288, count
+        +0x290) with one entry per player (count 0x140a16fb0) and zeroes every entry. The writers only overwrite an
+        entry when a marker matched (TACTICAL_GAPS §4.2.2 item 1), so a skirmish player with no matching spawn marker,
+        a campaign attacker with no start units or no entry marker, and every third player (neutral, hostile,
+        pirates) drop at yaw 0.
+    - **Units leaving a land landing object** (s78j t01, 2026-11-05; TransportLanding unload step 0x644330, offsets
+      0x643130, A1_READINGS §35.2) [H unless tagged]. Let ψ = the landing object's orientation (obj +0x84, i.e. the
+      per-player table entry it was created with) and O_j = the unload offset of step j (pack +0x90 = j, one per team or
+      vehicle; already rotated by ψ's yaw in 0x643130). 0x20acd0(from, to) gives yaw = atan2(to.y − from.y,
+      to.x − from.x) in [0, 360) (0 when the xy are equal) and pitch = −atan2(dz, horizontal distance).
+      - **Infantry team (member has `Create_Team`).** The n members of step j are created at the landing's position
+        with the orientation 0x20acd0((0, 0, 0), O_j): **facing outward from the landing centre along the team's
+        offset**. Step **j = 0 is overridden** with the landing's own orientation ψ (roll / pitch / yaw copied from
+        obj +0x84…+0x8c), whatever O_0 is. Every member of the step gets the same triple. Then (not instant) one group
+        move 0x2a7b80 to landing position + O_j; its move block carries no final-facing value (block +0x40…+0x47 are 0;
+        [M] whether the formation then keeps the travel heading or applies something else on arrival). The walk from
+        the centre to O_j points along the created facing anyway, except for team 0.
+      - **Vehicle (no `Create_Team`).** Created at the landing's position with 0x20acd0((0, 0, 0), O_j) (outward
+        along its offset; **no** j = 0 override; a `Unique_Ground_Unit` substitute and its rider get the same triple).
+        Then, not instant:
+        - with a locomotor of the current mode and type byte +0xd4 set: coordinator move 0x4f8200 to landing position +
+          O_j (snapped for the movement class +0x1688), move block +0x44 = **ψ's yaw** (landing +0x8c), forced-move
+          byte +0x5c = 1 [M: that +0x44 is the arrival facing the formation turns to; it is the only facing written];
+        - otherwise: placed at landing position + O_j at once (0x3abb80) and its orientation **set to ψ** (0x3a8710 with
+          landing +0x84).
+      - **Instant-unload mode** (0x35e4c0 +0x30 set, [M] which mode): no move, no placement; every unit stays at the
+        landing's position with its created orientation.
+      - So after the unload: teams face outward along their offset (team 0: the entry facing), vehicles end on the entry
+        facing ψ (placed: exactly; moved: [M] via the block facing).
     - **Summary for the port:**
 
       | Spawn | Facing |
@@ -1150,7 +1176,8 @@ half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor;
       | `Spawn_Unit` (tactical) | toward the world origin (item above) |
       | `Spawn_From_Reinforcement_Pool` | toward the world origin |
       | `Create_Generic_Object` | +X (yaw 0), any mode, even when given an object |
-      | `Reinforce_Unit`, player reinforcement drop | the owner's start-marker facing (per-player table) |
+      | `Reinforce_Unit`, player reinforcement drop | the landing object and a drop without one: the owner's start-marker facing (per-player table; yaw 0 when no marker) |
+      | units leaving the landing object | team step j: yaw of O_j (j = 0: the landing's facing); vehicle: created at yaw of O_j, ends on the landing's facing |
 
 **Targeting states, slots 47 / 48 and team copies (s78f, 2026-11-03)** [H unless tagged]. TD = obj +0xf0; the TD
 pack is shared by TARGETING, WEAPON (TD +0x80 = the WeaponBehavior, stored by its attach 0x54ceb0) and TURRET
@@ -1234,6 +1261,14 @@ through its override). No other caller (WEAPON, the gate, Lua and space never re
   animation gate 0x397040 is false: play clip 6 Attack Idle, index 0, looping, **blend = one synced
   `Get_Float(0.2, 0.75)`** (0x1401ffbb0 on 0x140a13e24), speed 1.0. So entering the pose costs one synced draw;
   while clip 5 or 6 plays, nothing is drawn.
+  - **Order of the tests (s78j t02, re-read 2026-11-05)** [H]. 0x569540 and the per-member 0x569400 have the same body:
+    the current clip is read first (0x3956a0: obj +0x2a0 → +0xc4 when +0xb8 is set, else −1). The draw and the play
+    sit **inside one conjunction**, evaluated left to right with short-circuit: (arg 0 or animation priority clear) →
+    not moving → not a flinch (0x27b590: 79–86) → **clip − 5 > 1 (unsigned), i.e. not 5 and not 6** → 0x397040 (obj
+    +0x2a0 → byte +0x108) false → `Get_Float(0.2, 0.75)` → 0x3a92f0(obj, 6, 0, loop 1, blend, 1.0). There is no else
+    branch for the animation case. So while the current clip is ATTACK (5) or ATTACKIDLE (6) retail **neither draws
+    nor restarts the clip**; the same holds when 0x397040 is true (no draw). A model without clip 6 stays on its old
+    clip and so draws every service (the t11 result below).
 
 *Team targeting copies* (`TeamTargetingBehaviorClass`, vtable 0x8afd90, on ground team containers only: its service
 0x62ee00 runs 0x62eeb0 when the container's locomotor kind is 1 and (obj +0x3a1 & 2 clear or
@@ -1487,6 +1522,16 @@ gives R = 3.588° and a slot-48 tolerance of 1.794° in land.
       draw does not skip clips 5 / 6. **Port (2026-11-05):** `tactical_battle.cpp` `attack_idle` spends the draw on
       every service (not moving, no animation priority, not in a flinch); it only skips the clip restart while the
       current clip is 5 / 6. Whether retail also restarts the clip then is not measured.
+      - **s78j t02 (RE, 2026-11-05): IDLE47N phase E did not measure slot 47** [H]. Lua `Prevent_All_Fire(true)`
+        (0x57ee20) suspends behaviours **9 TARGETING and 10 WEAPON** (vf +0xc0, suspend count +0x3c + 1) on the object
+        (and on each member of its behaviour-0x16 list when it has one), plus 0x392570 on its attached hardpoints. The
+        object service runs a behaviour only while that count is 0 (MOVEMENT §3.3), and 0x569540 also returns when it
+        is > 0 (0x4c36f0). So from the flag on, the Dark Troopers' targeting service, and slot 47 with it, did not run:
+        the "state 4 / clip ATTACKIDLE" the kit read was the value left from before the flag. The ~0.85 synced draws per
+        attacker per frame come from somewhere else [L: source not found; not targeting, not WEAPON]. The static gate
+        above is unambiguous: **retail spends no draw and does not restart the clip while the clip is 5 / 6**. The
+        s78i t01 port change (draw on every service) is therefore wrong; return before the draw when the clip is 5 / 6,
+        as the original s78f t03 version did.
   - *Port:* when clip 6 is missing, leave the current clip as it is and draw the blend each service in state 3 / 4,
     as retail does.
 

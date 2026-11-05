@@ -34,6 +34,7 @@
 #include "alamo/objects/object_types.hpp"
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/sim/campaign_battles.hpp"
+#include "alamo/tactical/abilities/ability_types.hpp"  // s78j t03: SPRINT
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
 #include "alamo/ai/ai_definitions.hpp"        // OI host: BattleAi order test
 #include "alamo/ai/perception_equations.hpp"
@@ -253,6 +254,18 @@ std::string landing_types() {
     return t;
 }
 
+// s78j t03 / t04: the team data plus a SPRINT unit ability (SPEED Mod_Multiplier 1.5, long expiry) on S10_Trooper, so a
+// test can activate it on single team members.
+std::string sprint_types() {
+    std::string t = team_types();
+    const std::string at = "<GroundInfantry Name=\"S10_Trooper\">";
+    if (const size_t p = t.find(at); p != std::string::npos)
+        t.insert(p + at.size(), "<Unit_Abilities_Data SubObjectList=\"Yes\"><Unit_Ability><Type>SPRINT</Type><Expiration_Seconds>600</Expiration_Seconds>"
+                                "<Recharge_Seconds>1</Recharge_Seconds><Mod_Multiplier>SPEED_MULTIPLIER, 1.5</Mod_Multiplier></Unit_Ability>"
+                                "</Unit_Abilities_Data>");
+    return t;
+}
+
 // --- S4 (owner: S4 agent): garrison / capture / corruption test data: troopers are GARRISON_UNIT (Infantry); a
 // community bunker (GARRISON_STRUCTURE, GarrisonCanFire) and a capture post (CAPTURE_POINT, 1 s transition) are
 // placed on the land map; planet S10_B offers a Kidnapping corruption mission (land, S10_Land_B, mission plots) and a
@@ -453,9 +466,10 @@ std::string bomb_types() {
 
 std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = false, bool bm = false, bool prod = false,
                                 bool obstacle = false, bool team = false, bool fog_bm = false, bool fighters = false,
-                                bool fog_setup = false, bool bomb = false, bool landing = false) {
+                                bool fog_setup = false, bool bomb = false, bool landing = false, bool sprint = false) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / (landing     ? "alamo_sim_battle_tests_landing"  // a1i t04
+    d->root = fs::temp_directory_path() / (sprint      ? "alamo_sim_battle_tests_team_sprint"  // s78j t03 / t04
+                                           : landing     ? "alamo_sim_battle_tests_landing"  // a1i t04
                                            : bomb ? "alamo_sim_battle_tests_bomb"  // S8 t10 follow-up
                                            : fighters && fog ? "alamo_sim_battle_tests_fighters_fog"  // S7 t22
                                            : fighters    ? "alamo_sim_battle_tests_fighters"  // S7 t12
@@ -473,7 +487,8 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", landing ? landing_types()  // a1i t04
+    write_file(x / "S10Types.xml", sprint ? sprint_types()  // s78j t03 / t04
+                                   : landing ? landing_types()  // a1i t04
                                    : bomb ? bomb_types()  // S8 t10 follow-up
                                    : fighters ? fighter_types(fog)  // S7 t12 / t22
                                     : fog_setup ? fog_types()
@@ -522,7 +537,7 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
                " <Damage_To_Armor_Mod>Damage_Laser, Armor_Ship, 0.8</Damage_To_Armor_Mod>\n"
                " <AutoResolveLoserAttrition>0.80</AutoResolveLoserAttrition>\n"
                " <Space_Retreat_Allowed_Countdown_Seconds>5.0</Space_Retreat_Allowed_Countdown_Seconds>\n" +
-                   std::string(landing ? " <Use_Reinforcement_Points>No</Use_Reinforcement_Points>\n" : "") +  // a1i t04: no points on the map
+                   std::string(landing || sprint ? " <Use_Reinforcement_Points>No</Use_Reinforcement_Points>\n" : "") +  // a1i t04: no points on the map
                    std::string(fog_setup ? " <SetupPhaseEnabled>True</SetupPhaseEnabled>\n"  // FOWF t05: a mod's land setup phase
                                            " <SetupPhaseCountdownSeconds>3</SetupPhaseCountdownSeconds>\n"
                                          : "") +
@@ -4491,6 +4506,258 @@ void test_land_team_targeting() {
     CHECK(copies >= 5);
 }
 
+// s78j t03 / t04: a land team's SPEED and Change_Owner in a battle (sprint_types: TEAM containers whose troopers carry
+// SPRINT, SPEED x 1.5).
+//  * t03 (TACTICAL_COMBAT §4.4, MOVEMENT §3.4 item 4): every live member walks with the container's SPEED value
+//    (CombatSystem::team_mod_multiplier), not its own: one sprinting member leaves the team at 1.0 (the others cap the
+//    minimum), every member sprinting moves the whole team at 1.5.
+//  * t04 (TACTICAL_COMBAT §3.5 step 4): the story / Lua Change_Owner of one member (CampaignBattles::change_owner ->
+//    TacticalBattle::script_change_owner) moves the container and every other live member too (store and combat owner);
+//    another team is untouched. With the tactical AI build, the AI VMs' bridge (BattleAi) spreads the same way.
+void test_team_speed_and_owner() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, make_setup(*d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    const objects::TypeIndex team_t = d->types.resolve_name("Team");
+    const uint8_t sprint = tactical::abilities::ability_type_from_name("SPRINT");
+    CHECK(team_t != objects::kNone);
+    namespace tc = alamo::tactical::combat;
+    bool invaded = false, done = false;
+    int stage = 0;
+    uint32_t stage_frame = 0;
+    objects::ObjectId team_id = objects::kNoObjectId;
+    std::vector<objects::ObjectId> members;
+    // The live members (ascending id) of every team in combat, by team id.
+    auto teams_now = [](const tc::CombatSystem& cs) {
+        std::map<uint32_t, std::vector<objects::ObjectId>> out;
+        for (size_t i = 0; i < cs.unit_count(); ++i) {
+            const auto id = cs.unit_id_at(i);
+            if (cs.team(id) != 0 && cs.alive(id)) out[cs.team(id)].push_back(id);
+        }
+        return out;
+    };
+    for (uint64_t t = 0; t < 6000 && !done; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->frame() < 3) continue;
+        objects::ObjectStore& st = tm->primary();
+        const tc::CombatSystem& cs = b->combat();
+        const auto& ms = b->movement();
+        if (stage == 0) {  // pick a team of >= 2 live members; SPRINT on its lowest-id member only
+            for (const auto& [tid, m] : teams_now(cs))
+                if (m.size() >= 2 && team_id == objects::kNoObjectId) {
+                    team_id = static_cast<objects::ObjectId>(tid);
+                    members = m;
+                }
+            CHECK(team_id != objects::kNoObjectId);
+            if (team_id == objects::kNoObjectId) break;
+            CHECK(st.alive(st.find(team_id)) && st.type(st.find(team_id)) == team_t);
+            CHECK(b->abilities().set_unit_ability_active(members[0], sprint, true, b->frame()));
+            stage = 1;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (b->frame() < stage_frame + 2) continue;  // the speed factors read last tick's Mod_Multiplier (phase A)
+        const float tm_speed = cs.team_mod_multiplier(static_cast<uint32_t>(team_id), tc::ModKind::Speed);
+        bool all_alive = true;
+        for (const auto id : members) all_alive = all_alive && cs.alive(id);
+        if (!all_alive) {
+            std::printf("  team speed: a member died before stage %d, skipped\n", stage);
+            break;
+        }
+        if (stage == 1) {
+            CHECK(b->abilities().is_active(members[0], sprint) && !b->abilities().is_active(members[1], sprint));
+            CHECK(tm_speed == 1.0f);  // the non-sprinting members cap the team
+            for (const auto id : members) CHECK(ms.speed_factor(id) == 1.0f);  // the sprinter too: the team value
+            for (size_t k = 1; k < members.size(); ++k) CHECK(b->abilities().set_unit_ability_active(members[k], sprint, true, b->frame()));
+            stage = 2;
+            stage_frame = b->frame();
+            continue;
+        }
+        CHECK(tm_speed == 1.5f);
+        for (const auto id : members) CHECK(ms.speed_factor(id) == 1.5f);
+        std::printf("  team speed: team %d of %zu members: one sprinting 1.0, all sprinting %.2f\n", static_cast<int>(team_id),
+                    members.size(), static_cast<double>(ms.speed_factor(members[0])));
+        // t04: Change_Owner of the team's last member through the story bridge.
+        const int32_t old_owner = st.owner(st.find(team_id));
+        const int32_t new_owner = old_owner == 0 ? 1 : 0;
+        std::vector<std::pair<objects::ObjectId, int32_t>> others;  // every other team's members and their owners
+        for (const auto& [tid, m] : teams_now(cs))
+            if (static_cast<objects::ObjectId>(tid) != team_id)
+                for (const auto id : m) others.emplace_back(id, st.owner(st.find(id)));
+        CHECK(!others.empty());
+        CHECK(battles.change_owner(st.find(members.back()), new_owner));
+        CHECK(st.owner(st.find(team_id)) == new_owner);  // the container
+        for (const auto id : members) CHECK(st.owner(st.find(id)) == new_owner && cs.owner(id) == new_owner);
+        for (const auto& [id, o] : others) CHECK(st.owner(st.find(id)) == o && cs.owner(id) == o);
+        // A Change_Owner of the container itself moves every member back.
+        CHECK(battles.change_owner(st.find(team_id), old_owner));
+        CHECK(st.owner(st.find(team_id)) == old_owner);
+        for (const auto id : members) CHECK(st.owner(st.find(id)) == old_owner && cs.owner(id) == old_owner);
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+        // The AI VMs' Change_Owner (BattleAi object bridge) on another team's lowest-id member.
+        if (!others.empty()) {
+            ai::AiDefinitions defs;
+            ai::EquationSet eqs;
+            TacticalAiSetup ts;
+            ts.defs = &defs;
+            ts.equations = &eqs;
+            ts.files = d->files.get();
+            ts.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };
+            BattleAi ai(*b, *tm, host, ts);
+            lua::ObjectBridge& br = ai.world().object_bridge();
+            CHECK(static_cast<bool>(br.change_owner));
+            if (br.change_owner) {
+                const objects::ObjectId victim = others.front().first;
+                const auto oteam = static_cast<objects::ObjectId>(cs.team(victim));
+                const int32_t to = others.front().second == 0 ? 1 : 0;
+                CHECK(br.change_owner(st.find(victim), to));
+                CHECK(st.owner(st.find(oteam)) == to);
+                for (const auto& [id, o] : others) {
+                    const bool same = static_cast<objects::ObjectId>(cs.team(id)) == oteam;
+                    CHECK(st.owner(st.find(id)) == (same ? to : o) && cs.owner(id) == (same ? to : o));
+                }
+                for (const auto id : members) CHECK(st.owner(st.find(id)) == old_owner);
+            }
+        }
+#endif
+        done = true;
+    }
+    CHECK(done);
+}
+
+// s78j t04 (TACTICAL_COMBAT §3.1.1 "other spawns"): a land reserve drop without a landing object (S10_Squad has no
+// Company_Transport_Unit here) spawns its members - and their TEAM containers - with the owner's entry-facing record
+// (TacticalBattle::player_drop_facing, the reinforce_facing hook of the Lua bridges), not the side's start facing.
+void test_reserve_drop_facing() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, make_setup(*d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 600;
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                // Entry markers (yaw 180 = facing +y): the attacker has start units, so its entry-facing
+                                // record is the marker's (TACTICAL_GAPS §4.2.2 item 1), not the yaw-0 default.
+                                auto place = [&m](const char* type, float x, float y, float yaw) {
+                                    terrain::ObjectPlacement p;
+                                    p.type_crc = name_crc(type);
+                                    p.owner = 2;
+                                    p.position[0] = x;
+                                    p.position[1] = y;
+                                    p.rotation_deg[2] = yaw;
+                                    m.objects.push_back(p);
+                                };
+                                place("Defending Forces Position", 900.0f, 900.0f, 0.0f);
+                                place("Attacker Entry Position", 300.0f, 300.0f, 180.0f);
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    namespace mv = alamo::tactical::movement;
+    const objects::TypeIndex trooper = d->types.resolve_name("S10_Trooper"), team_t = d->types.resolve_name("Team");
+    bool invaded = false, dropped = false, ran = false;
+    for (uint64_t t = 0; t < 1500 && !ran; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->frame() != 1) continue;
+        ran = true;
+        objects::ObjectStore& st = tm->primary();
+        const auto reserves = b->reserves(1);
+        CHECK(reserves.size() == 1);
+        if (reserves.empty()) break;
+        const objects::ObjectId key = reserves[0].galactic_id;
+#ifdef ALAMO_SIM_HAVE_FOG
+        if (b->fog()) b->fog()->reveal_all(1);  // the drop test needs unfogged cells
+#endif
+        // The side's start facing (player 1's troopers already on the map), printed for reference.
+        std::vector<objects::ObjectId> before;
+        Vec3 start_face{};
+        for (const objects::ObjectHandle h : st.all_objects())
+            if (st.alive(h)) {
+                before.push_back(st.id(h));
+                if (st.owner(h) == 1 && st.type(h) == trooper) start_face = st.facing(h);
+            }
+        std::sort(before.begin(), before.end());
+        const uint32_t spawned_before = b->stats().spawned;
+        for (int32_t cy = 6; cy < 58 && !dropped; cy += 2)
+            for (int32_t cx = 6; cx < 58 && !dropped; cx += 2) {
+                const mv::V2 c = mv::cell_center(cx, cy);
+                if (!b->land_drop_valid(*tm, 1, key, c.x, c.y, false, false)) continue;
+                if (b->order_reinforce(*tm, 1, key, c.x, c.y, host.random().synced()) != commands::RejectReason::None) continue;
+                dropped = true;
+            }
+        CHECK(dropped);
+        if (!dropped) break;
+        CHECK(b->landings_unloaded().empty() && b->landings_in_flight(1) == 0);  // no landing object
+        CHECK(b->stats().spawned > spawned_before);
+        const Vec3 df = b->player_drop_facing(1);
+        size_t new_troopers = 0, new_teams = 0;
+        for (const objects::ObjectHandle h : st.all_objects()) {
+            if (!st.alive(h) || std::binary_search(before.begin(), before.end(), st.id(h))) continue;
+            if (st.type(h) != trooper && st.type(h) != team_t) continue;
+            const Vec3 f = st.facing(h);
+            CHECK(f.x == df.x && f.y == df.y && f.z == df.z);
+            if (st.type(h) == trooper) ++new_troopers;
+            else ++new_teams;
+        }
+        std::printf("  reserve drop facing: %zu troopers, %zu teams at (%.3f, %.3f); side start facing (%.3f, %.3f)\n", new_troopers,
+                    new_teams, static_cast<double>(df.x), static_cast<double>(df.y), static_cast<double>(start_face.x),
+                    static_cast<double>(start_face.y));
+        CHECK(new_troopers == reserves[0].units && new_teams > 0);
+        CHECK(std::fabs(df.x) < 1e-5f && std::fabs(df.y - 1.0f) < 1e-5f);  // the marker's facing, not the yaw-0 default
+    }
+    CHECK(dropped);
+}
+
 // a1g t04 follow-up: BattleAi::land_drop_ok (TACTICAL_GAPS §4.2): the land Reinforce drop validity of a reserve entry. A spot
 // is refused when a slot is impassable (an Obstacle strip on the map), fogged for the player (force 1), or its footprint is
 // taken (a live unit stands there); an unknown entry is refused; otherwise accepted.
@@ -5381,6 +5648,19 @@ void test_landing_drop(bool timed, uint32_t destroy_at = 0) {
                             const Vec3 mp = st.position(st.find(recs[0].units[k]));
                             CHECK(std::fabs(mp.x - lay.slots[k].x) < 1e-3f && std::fabs(mp.y - lay.slots[k].y) < 1e-3f);
                         }
+                        // s78j t01 (TACTICAL_COMBAT §3.1.1 "Units leaving a land landing object"): team 0 (units 0, 1)
+                        // faces the landing's facing; team 1 (units 2, 3) faces along its offset from the landing centre.
+                        const Vec3 psi = b->player_drop_facing(1);
+                        const double oy = static_cast<double>(lay.group_y[1] - c.y), ox = static_cast<double>(lay.group_x[1] - c.x);
+                        const double a1 = std::atan2(oy, ox);
+                        for (size_t k = 0; lay.ok && k < recs[0].units.size(); ++k) {
+                            const Vec3 f = st.facing(st.find(recs[0].units[k]));
+                            const double ex = k < 2 ? static_cast<double>(psi.x) : std::cos(a1);
+                            const double ey = k < 2 ? static_cast<double>(psi.y) : std::sin(a1);
+                            CHECK(std::fabs(static_cast<double>(f.x) - ex) < 1e-4 && std::fabs(static_cast<double>(f.y) - ey) < 1e-4);
+                        }
+                        std::printf("  landing drop: team 0 facing (%.3f, %.3f), team 1 offset yaw %.1f deg\n", static_cast<double>(psi.x),
+                                    static_cast<double>(psi.y), a1 * 57.29577951308232);
                     }
                     CHECK(st.alive(lh));
                     CHECK(st.type(lh) == landing_t);  // the Landing_Transport_Variant
@@ -6355,6 +6635,9 @@ int main(int argc, char** argv) {
     test_land_drop_rules();
     std::printf("s78f t07: land team members registered with combat (TeamTargeting copy in a battle)\n");
     test_land_team_targeting();
+    std::printf("s78j t03 / t04: land team SPEED = the container's value; Change_Owner spreads through the team; reserve drop facing\n");
+    test_team_speed_and_owner();
+    test_reserve_drop_facing();
     std::printf("a1i t04 / t05: land Reinforce from a landing object (spawn, carried type, unload offsets, take-off)\n");
     test_landing_drop(false);
     test_landing_drop(true);
