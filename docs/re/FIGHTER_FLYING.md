@@ -1027,9 +1027,26 @@ A1_READINGS §33.4.1 run **only while the formation is moving (state 1)**. The o
     guard pops when the lead leaves `Guard_Chase_Range` of the guarded object; a solo fighter guarding a moving carrier
     flies at ≤ 2 × the carrier's max speed; a hidden auto target over a guard is dropped.
 
-No in-game probe is needed for these rules. An optional probe (tools/probe_mod/): order a squadron to guard a moving
-frigate, shift-click a waypoint, and log the squadron formation's block count and state (F +0xf8..+0x100, +0x1d0)
-when the frigate stops, to confirm B 3.
+No in-game probe is needed for these rules. An optional probe was run (s78f t09, 2026-11-05).
+- **Setup.** Kuat skirmish. A human-owned `Tartan_Patrol_Cruiser` G (speed 4.2 / frame) and a `TIE_Fighter_Squadron`
+  (7 fighters) were spawned by the S7/S8 kit (scenario GUARD_SHIFT). Guards came from Lua `Guard_Target` and from
+  right-clicks; shift waypoints were given by hand. Positions come from memory every frame, so the formation's block
+  stack was not read. Source: `tools/probe_mod/s7s8_probes/out/20261105-055142/reader_space2.log`, parsed by
+  `s78f_extra_parse.py`.
+- **Guard given on a stationary G, then G moves** (Lua at F 510, and by hand later): the fighters close in to about
+  50 and orbit. When G starts moving they **do not follow**: they keep circling the old spot while G pulls 3000 away
+  (F 1050–1830) [M: B 3 says a formation in state 1 follows a moving G; these had arrived (state 3), and 0x410a60
+  evidently does not restart the follow].
+- **Guard given while G moves** (Lua at F 3540, G already 4.2 / frame): the fighters chase at about 5.3 / frame
+  (≤ 2 × G's speed, as item 10 says), sit about 17 from G for the rest of its move, and fan back out to a 150–450
+  orbit when it stops. So a moving guard is followed when the guard is ordered after G started.
+- **Shift waypoint, G stationary** (G2 control, by hand at about F 5250): the squadron leaves G within one 30-frame
+  sample and flies to the waypoint. The pop matches B 3 ("on a stationary G it ends within one 30-frame check").
+- **Shift waypoint while G moves, after a guard given at rest** (by hand: G moved from F 6690, waypoint about
+  120 frames later): the fighters had not followed G. They left for the waypoint at about F 6870, while G was still
+  moving (it stopped at F 7110). With no follow in progress this does not test B 3's "keep following while G moves".
+- Still untested: guard ordered **while** G moves, then a shift waypoint while it still moves. B 3 predicts the
+  waypoint waits until G stops. The scenario ran out before that sequence.
 
 ---
 

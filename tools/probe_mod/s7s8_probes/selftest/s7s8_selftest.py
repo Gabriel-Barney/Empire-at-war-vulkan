@@ -23,6 +23,9 @@ Output: out\\selftest\\ (harness, Lua output, reader-style log, report). Ends wi
 """
 import argparse
 import os
+# the selftest checks the original S7/S8 scenario set and order (the s78f additions run only in game)
+os.environ.setdefault("ALAMO_S78_LAND", "SPMAT,ATAT,MDU,STICKY,DT3,REINF,MUZZLE_LAND")
+os.environ.setdefault("ALAMO_S78_SPACE", "MUZZLE_SPACE,SQUAD,ESCORT")
 import re
 import subprocess
 import sys

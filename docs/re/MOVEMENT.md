@@ -984,6 +984,12 @@ Values 9–0xB are unused. SimpleSpace reuses 0x13 (following a path) and 0x16 (
 
 **Deploy states (S8 t11, 2026-11-02)** [H unless tagged]. These are used by the weapon gates (TACTICAL_COMBAT §3.1.1
 "Gate details").
+
+*Seen in game (s78f t01, 2026-11-05, `tools/probe_mod/s7s8_probes/out/20261105-055142`):*
+- An `SPMAT_Walker` given an attack order went 0x16 → 0x18 three frames later, playing clip 25 (Deploy) at rate 2.0.
+- It reached 0x19 after 45 frames.
+- At the end of the scenario it showed 0x1A (Undeploying) before it was despawned.
+- The Lua DEPLOY block timings are in AI_TACTICAL §7.3.3 "In-game probe of the DEPLOY block".
 - Only Walk implements the deploy vfuncs:
   - vf +0x118 = `Deploy(bool)` (`0x61d300`);
   - vf +0x120 = state == 0x19 (`0x61df40`);
