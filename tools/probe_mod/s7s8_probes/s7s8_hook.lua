@@ -20,7 +20,8 @@
 -- f = GetCurrentTime() * 30 rounded (mode frame). Game_Message lines (TEXT_S78_*) only when S78_CFG.text is true.
 -- Kinds: LOAD, ARM / SKIP, TICK, HB, VICTIMS, HUMAN, SCN (start / end), SPAWN, SETUP, ACT (ability call, with the
 -- returned block), BLK (block finished), ORDER, MARK, COUNT, P (3-frame poll, on change), APIERR, ERR, DONE.
--- Lua 5.0: no '#', table.getn, math.mod.
+-- Lua 5.0: no '#', table.getn. The retail free-store Lua has NO math library (s78g 2026-11-05: "attempt to index
+-- global `math`"): arithmetic only; the selftest stub removes `math` to catch any use.
 
 S78_LOG = {}
 S78_SID = "?"
@@ -926,7 +927,12 @@ function S78_ScnMagnepulse()
 				S78_Rec("COUNT", "scn=" .. s.name .. "|what=mag_ready|ready=" .. ready)
 			end
 			-- fire when ready; with an unreadable flag, once every 30 frames (only a ready call fires)
-			if rel >= s.mag_next and (ready == "1" or (ready == "?" and math.mod(rel, 30) < 3)) then
+			-- (retail free-store Lua has no math library: s78g 2026-11-05, so no math.mod)
+			local slot = ready == "?" and rel >= (s.mag_try or 0)
+			if slot then
+				s.mag_try = rel + 30
+			end
+			if rel >= s.mag_next and (ready == "1" or slot) then
 				local tag = s.mag_plan[s.mag_i + 1]
 				S78_MagFire(s, tag)
 				if ready == "1" then
@@ -1223,19 +1229,28 @@ end
 S78_IDLE47V_CYCLES = 5
 
 -- noauto (s78g): abilities whose autofire is switched off on each attacker (Dark_Trooper_PhaseII: JET_PACK)
-function S78_Idle47VPhase(steps, name, tname, t0, noauto)
+-- opt (s78g IDLE47X): { n = attackers (max 12), gap = spacing along the strip, along0 = first position,
+-- cycles = on / off cycles, period = cycle length (victims for the first half) }; defaults are the IDLE47V / W set-up
+-- (6 attackers 90 apart from 0, 5 cycles of 300)
+function S78_Idle47VPhase(steps, name, tname, t0, noauto, opt)
+	opt = opt or {}
+	local n, gap, a0 = opt.n or 6, opt.gap or 90, opt.along0 or 0
+	local cycles = opt.cycles or S78_IDLE47V_CYCLES
+	local per = opt.period or 300
 	table.insert(steps, { at = t0, run = function(s)
-		for k = 1, 6 do
+		for k = 1, 12 do
 			S78_Despawn("i" .. k)
 			S78_Despawn("iv" .. k)
 			s.objs["i" .. k] = nil
 			s.objs["iv" .. k] = nil
+		end
+		for k = 1, n do
 			if tname then
-				local w, how = S78_At("site", (k - 1) * 90, 0)
+				local w, how = S78_At("site", a0 + (k - 1) * gap, 0)
 				local u = S78_Spawn("i" .. k, tname, w, how, PlayerObject)
 				S78_Attacker("i" .. k, u)
 				if u then
-					local f = S78_At("site", (k - 1) * 90, 600)
+					local f = S78_At("site", a0 + (k - 1) * gap, 600)
 					S78_Order("i" .. k, "face", function() u.Face_Immediate(f) end)
 					pcall(function() u.Suspend_Locomotor(true) end)
 					for j, ab in ipairs(noauto or {}) do
@@ -1246,11 +1261,11 @@ function S78_Idle47VPhase(steps, name, tname, t0, noauto)
 		end
 		S78_Mark("phase_" .. name)
 	end })
-	for c = 1, S78_IDLE47V_CYCLES do
+	for c = 1, cycles do
 		local cc = c
-		table.insert(steps, { at = t0 + cc * 300, run = function(s)
-			for k = 1, 6 do
-				local wv, hv = S78_At("site", (k - 1) * 90, -160)
+		table.insert(steps, { at = t0 + cc * per, run = function(s)
+			for k = 1, n do
+				local wv, hv = S78_At("site", a0 + (k - 1) * gap, -160)
 				local v = S78_Spawn("iv" .. k, "T4B_Tank", wv, hv, S78_VICTIM_PLAYER)
 				S78_Victim("iv" .. k, v, false)
 				local u = s.objs["i" .. k]
@@ -1260,8 +1275,8 @@ function S78_Idle47VPhase(steps, name, tname, t0, noauto)
 			end
 			S78_Mark(name .. "_on" .. cc)
 		end })
-		table.insert(steps, { at = t0 + cc * 300 + 150, run = function(s)
-			for k = 1, 6 do
+		table.insert(steps, { at = t0 + cc * per + per / 2, run = function(s)
+			for k = 1, n do
 				S78_Despawn("iv" .. k)
 				s.objs["iv" .. k] = nil
 			end
@@ -1325,7 +1340,9 @@ end
 S78_EDGE2_D = { 500, 530, 540, 544, 546, 548, 550, 553, 560 }
 S78_EDGE2_WIN = 450
 
-function S78_Edge2Window(steps, i)
+-- auto (s78g EDGE3): no order at +150, the edge tank is left to the walker's own target scan; dlist = the distances
+function S78_Edge2Window(steps, i, auto, dlist)
+	dlist = dlist or S78_EDGE2_D
 	local t0 = (i - 1) * S78_EDGE2_WIN
 	local sp, aim, ev = "sp" .. i, "aim" .. i, "ev" .. i
 	table.insert(steps, { at = t0, run = function(s)
@@ -1356,11 +1373,11 @@ function S78_Edge2Window(steps, i)
 	table.insert(steps, { at = t0 + 21, run = function(s) S78_Act(sp, "deploy" .. i, "DEPLOY", "bool", true) end })
 	table.insert(steps, { at = t0 + 150, run = function(s)
 		S78_Despawn(aim)
-		local d = S78_EDGE2_D[i]
+		local d = dlist[i]
 		local w, how = S78_At("site", d, 0)
 		local v = S78_Spawn(ev, "T4B_Tank", w, how, S78_VICTIM_PLAYER)
 		S78_Victim(ev, v, false)
-		if v and s.objs[sp] then
+		if v and s.objs[sp] and not auto then
 			S78_Order(sp, "attack_ev", function() s.objs[sp].Attack_Target(v) end)
 		end
 		S78_Mark("win" .. i, "d=" .. d)
@@ -1373,6 +1390,20 @@ function S78_ScnSpmatEdge2()
 		S78_Edge2Window(steps, i)
 	end
 	return { name = "SPMAT_EDGE2", dur = table.getn(S78_EDGE2_D) * S78_EDGE2_WIN, steps = steps }
+end
+
+-- s78g t01 rerun: in SPMAT_EDGE2 the explicit Attack_Target on the edge tank made the deployed walker undeploy and
+-- drive about 209 units towards it, so the range edge was never measured. SPMAT_EDGE3 deploys the same way (attack the
+-- 275 tank, DEPLOY), then at +150 swaps the 275 tank for one at d with NO order: the deployed walker has to acquire it
+-- by itself. 450 is an in-range control. The parser checks loco 0x19 is held and the walker did not move.
+S78_EDGE3_D = { 450, 500, 530, 540, 544, 546, 548, 550, 553, 560 }
+
+function S78_ScnSpmatEdge3()
+	local steps = {}
+	for i = 1, table.getn(S78_EDGE3_D) do
+		S78_Edge2Window(steps, i, true, S78_EDGE3_D)
+	end
+	return { name = "SPMAT_EDGE3", dur = table.getn(S78_EDGE3_D) * S78_EDGE2_WIN, steps = steps }
 end
 
 -- s78g t04 control (coordinator 2026-11-05): an undeployed SPMAT, no DEPLOY call, ordered to attack a held T4B at
@@ -1427,6 +1458,22 @@ function S78_ScnIdle47W()
 	return { name = "IDLE47W", dur = 3 * len, steps = steps }
 end
 
+-- s78g t03 rerun: IDLE47W was noise-bound (on / off steps scattered +-100..180 against an effect of about 20; the
+-- land background is ~440 draws / frame and drifts). IDLE47X doubles the attackers (12, 75 apart from -200) and uses
+-- 15 shorter cycles per phase (200 frames: 100 with victims, 100 without; the W attackers reached targeting state 4
+-- within 20 frames). The parser reports the per-cycle on-minus-off draws / frame as mean +- stderr per phase and
+-- says UNCLEAR when P, D and V cannot be told apart at 3 sigma.
+S78_IDLE47X_OPT = { n = 12, gap = 75, along0 = -200, cycles = 15, period = 200 }
+
+function S78_ScnIdle47X()
+	local steps = {}
+	local len = (S78_IDLE47X_OPT.cycles + 1) * S78_IDLE47X_OPT.period
+	S78_Idle47VPhase(steps, "P", "Pod_Walker", 0, nil, S78_IDLE47X_OPT)
+	S78_Idle47VPhase(steps, "D", "Dark_Trooper_PhaseII", len, { "JET_PACK" }, S78_IDLE47X_OPT)
+	S78_Idle47VPhase(steps, "V", nil, 2 * len, nil, S78_IDLE47X_OPT)
+	return { name = "IDLE47X", dur = 3 * len, steps = steps }
+end
+
 -- s78g t05: first shot after a late spawn, irregular spawn gaps. The s78f t12 REINF run gave delays 18 / 29 / 41 / 52
 -- with first shots 161 / 162 / 161 frames apart (spawns 150 apart): a shared ~161-frame clock, not a per-unit random
 -- delay? Six MZ8s at gaps 200 / 170 / 250 / 140 / 290 (not multiples of 161), each attacking the held victim at once.
@@ -1473,10 +1520,9 @@ end
 
 function S78_GhNextLeg(s, rel)
 	s.gh_leg = (s.gh_leg or 0) + 1
-	local side = S78_GH_LEG
-	if math.mod(s.gh_leg, 2) == 0 then
-		side = -S78_GH_LEG
-	end
+	-- odd legs to +1500, even legs to -1500 (no math library in the retail free-store Lua)
+	s.gh_side = -(s.gh_side or -S78_GH_LEG)
+	local side = s.gh_side
 	local w = S78_At("muz", 0, side)
 	s.gh_tx, s.gh_ty = S78_SiteXY("muz", 0, side)
 	s.gh_t0 = rel
@@ -1533,8 +1579,8 @@ function S78_ScnGuardHand()
 			end
 			local gx, gy = S78_XYZ(g)
 			if not s.gh_stopped and s.gh_leg and type(gx) == "number" and type(s.gh_tx) == "number" then
-				local d = math.sqrt((gx - s.gh_tx) * (gx - s.gh_tx) + (gy - s.gh_ty) * (gy - s.gh_ty))
-				if d < 250 or rel - s.gh_t0 > 1800 then
+				local d2 = (gx - s.gh_tx) * (gx - s.gh_tx) + (gy - s.gh_ty) * (gy - s.gh_ty)
+				if d2 < 250 * 250 or rel - s.gh_t0 > 1800 then
 					S78_GhNextLeg(s, rel)
 				end
 			end
@@ -1555,7 +1601,7 @@ S78_SCN_BY_NAME = {
 	GUARD_SHIFT = S78_ScnGuardShift, BUNKER2 = S78_ScnBunker2, IDLE47T = S78_ScnIdle47T,
 	SPMAT_EDGE = S78_ScnSpmatEdge, IDLE47V = S78_ScnIdle47V, GUARD_MOVE = S78_ScnGuardMove,
 	SPMAT_EDGE2 = S78_ScnSpmatEdge2, SPMAT_CTRL = S78_ScnSpmatCtrl, IDLE47W = S78_ScnIdle47W, REINF2 = S78_ScnReinf2,
-	GUARD_HAND = S78_ScnGuardHand,
+	GUARD_HAND = S78_ScnGuardHand, SPMAT_EDGE3 = S78_ScnSpmatEdge3, IDLE47X = S78_ScnIdle47X,
 }
 
 function S78_Scenarios()

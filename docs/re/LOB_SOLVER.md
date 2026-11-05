@@ -893,6 +893,17 @@ Further differences found 2026-11-02 (input for S8 t06; port state as of 96c474e
   undeployed SPMAT fires. The reader lost the walker's state after its first sample, so the targeting state is not
   known. So this setup (deployed + `Suspend_Locomotor` + target behind) stops the SPMAT firing by itself; the 544–550
   edge needs another run without `Suspend_Locomotor` and with the target in front.
+  s78g t01 (2026-11-05, two runs, Claude drove the game) [M: edge still open]:
+  - `out/20261105-073814`, SPMAT_EDGE2: one fresh SPMAT per window, deployed by an attack on a tank at 275, with no
+    `Suspend_Locomotor`. At +150 the aim tank was replaced by a held T4B in front at d = 500…560 with a Lua
+    `Attack_Target`. In every window the walker **undeployed and walked about 209 toward the target** (locomotor
+    0x13 for most of the window, target cleared), and threw nothing. So an explicit order on a target beyond its
+    reach makes a deployed SPMAT undeploy and close in, not scan and reject.
+  - `out/20261105-092438`, SPMAT_EDGE3: the same, but the edge tank got **no order**. The walker stayed deployed
+    (locomotor 0x19, moved 0) in every window but **never took a target, even at d = 450** (in range), targeting
+    state 0 for 300 frames. [M] The likely cause is that the human-owned victim was outside the AI player's
+    vision; an explicit order ignores fog. So auto-acquire at the edge needs a spotter (an AI-owned unit next to the
+    target, or a reveal) before 544–550 can be read.
 - ~~**probe**: Magnepulse slew~~ — done (s78f t09, 2026-11-05): §3.6 "In-game probe".
 
 ## Address table

@@ -1065,6 +1065,14 @@ half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor;
     Hostile-owned victims are targeted. The land control failed for other reasons.)
   - *First shot after a late spawn*: one `MZ8_Pulse_Cannon_Tank` reached state 4 and fired 40 frames after spawning.
     Its second did not spawn, so a surviving random delay is not ruled out (one sample, needs at least four).
+  - *First shot after a late spawn, measured* (s78g t05, 2026-11-05, `out/20261105-073814`) [M]. REINF (re-parsed
+    t12 run and this run): four `MZ8_Pulse_Cannon_Tank`s spawned 150 frames apart, each ordered at once to attack a
+    held tank at 200. First-shot delays after spawn were 18 / 29 / 41 / 52. REINF2: six spawned at irregular gaps
+    (200 / 172 / 249 / 141 / 288): delays 9 / 11 / 29 / 41 / 52 / 61. So the delay grows by about **11.3 frames
+    per unit spawned earlier** (least-squares slope; residual 5.9), whatever the gap. It is a per-unit stagger, not
+    a random initial delay (a random one would spread up to 159). The REINF run's first shots also sit on a
+    161-frame clock, but REINF2 does not, so that clock was a coincidence of the equal gaps. Not yet explained:
+    what the stagger counts (alive attackers of one player, or services queued behind them).
 
 **Targeting states, slots 47 / 48 and team copies (s78f, 2026-11-03)** [H unless tagged]. TD = obj +0xf0; the TD
 pack is shared by TARGETING, WEAPON (TD +0x80 = the WeaponBehavior, stored by its attach 0x54ceb0) and TURRET
@@ -1318,6 +1326,17 @@ gives R = 3.588° and a slot-48 tolerance of 1.794° in land.
     on clip 6). So the about-6 step comes with six no-clip walkers in state 4, as a per-service slot-47 redraw
     predicts, and the victims alone do not produce it. The with-clip side is still not clean, because the
     infiltrators mostly did not take their targets.
+  - With-clip control again (s78g t03, 2026-11-05) [M: not separated]. The with-clip attacker was
+    `Dark_Trooper_PhaseII`; clip ids 5 / 6 are ATTACK / ATTACKIDLE. The troopers took their targets (state 4,
+    2730 of 3750 attacker-frames in ATTACK, 1020 in ATTACKIDLE). The Pod_Walkers stayed on clip 0. The background is
+    about 440 synced draws per frame and drifts ±100 over 150 frames, which swamps a 6–12 draw effect.
+    - IDLE47W (`out/20261105-073814`, 6 attackers): per-cycle on-minus-off was P +1.9 ± 31.8, D +13.5 ± 25.6,
+      V −48.6 ± 39.9.
+    - IDLE47X (`out/20261105-092438`, 12 attackers, 15 cycles per phase, drift-cancelled): P−V −42.3 ± 24.4,
+      D−V +27.7 ± 17.4, P−D −70.0 ± 25.4.
+    Neither run separates the phases at 3 sigma, so whether a model with an ATTACKIDLE clip skips the per-service
+    draw is still open. The draw-count method needs a quiet background (no AI army) or a per-object read of the
+    slot-47 call to settle it.
   - *Port:* when clip 6 is missing, leave the current clip as it is and draw the blend each service in state 3 / 4,
     as retail does.
 

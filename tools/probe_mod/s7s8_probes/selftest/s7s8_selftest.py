@@ -46,6 +46,7 @@ SPACE = ['MUZZLE_SPACE', 'SQUAD', 'ESCORT']
 # s78g run (README "s78g run")
 LAND_G = ['SPMAT_EDGE2', 'SPMAT_CTRL', 'REINF', 'REINF2', 'IDLE47W']
 SPACE_G = ['GUARD_HAND', 'ESCORT']
+LAND_R = ['SPMAT_EDGE3', 'IDLE47X']  # s78g rerun (2026-11-05); space rerun = GUARD_HAND alone
 
 STUBS = r'''
 H = { F = 0, fss = 0, ous = 0, next_id = 100, objs = {}, blocks = {}, mode = "Land", msgs = 0, moves = 0 }
@@ -196,6 +197,9 @@ end
 '''
 
 DRIVER = r'''
+-- the retail free-store Lua has no math library (s78g 2026-11-05): hide it from the hooked script
+local mmod = math.mod
+math = nil
 dofile(H_SCRIPT)
 PlayerObject = make_player(2, H_FACTION)
 H.mode = H_MODE
@@ -209,13 +213,13 @@ local resumes = 0
 for F = 0, H_FRAMES do
 	H.F = F
 	H.frame()
-	if math.mod(F, 3) == 0 and (F / 30 - last) > ServiceRate then
+	if mmod(F, 3) == 0 and (F / 30 - last) > ServiceRate then
 		last = F / 30
 		resumes = resumes + 1
 		local ok, err = coroutine.resume(co)
 		if not ok then print("RESUME_ERROR " .. tostring(err)) end
 	end
-	if math.mod(F, 60) == 1 then
+	if mmod(F, 60) == 1 then
 		On_Unit_Service(unit)
 	end
 end
@@ -415,6 +419,33 @@ def main():
     check(held and field(held[0], 'new') == '2' and field(gp, 'how') == 'death_point' and 'intruder_gone' in em,
           'run E: escorts held (%s), intruder at the death point (%s)' % (held[:1], field(gp, 'how')), fails)
 
+    # run F: the s78g land rerun list
+    saved = {k: os.environ.get(k) for k in ('ALAMO_S78_LAND', 'ALAMO_S78_SPACE')}
+    os.environ['ALAMO_S78_LAND'] = ','.join(LAND_R)
+    os.environ['ALAMO_S78_SPACE'] = 'GUARD_HAND'
+    try:
+        data_r, _src = build_s7s8_mod.freestore_text(a.game, cfg, a.source_zip)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    script_r = os.path.join(OUT, 'BusyTacticalFreeStore_s78g_rerun.lua')
+    with open(script_r, 'wb') as f:
+        f.write(data_r)
+    rc6, recs6, state6, text6 = run_lua(script_r.replace('\\', '/'), 'REBEL', 'Land', 15000, 'land_s78g_rerun')
+    common_checks('F (land s78g rerun)', rc6, recs6, state6, text6, LAND_R, fails)
+    m6 = [field(r, 'mark') for r in recs6 if kind(r) == 'MARK' and field(r, 'scn') == 'SPMAT_EDGE3']
+    o6 = [field(r, 'order') for r in recs6 if kind(r) == 'ORDER' and field(r, 'scn') == 'SPMAT_EDGE3']
+    check(len([x for x in m6 if x.startswith('win')]) == 10 and o6.count('attack_aim') == 10 and
+          'attack_ev' not in o6, 'run F: SPMAT_EDGE3 10 windows, aim orders only (%s)' % sorted(set(o6)), fails)
+    sx = [field(r, 'tag') for r in recs6 if kind(r) == 'SPAWN' and field(r, 'scn') == 'IDLE47X']
+    mx = [field(r, 'mark') for r in recs6 if kind(r) == 'MARK' and field(r, 'scn') == 'IDLE47X']
+    check(sx.count('i12') == 2 and sx.count('iv12') == 45 and 'D_on15' in mx and 'V_off15' in mx,
+          'run F: IDLE47X 12 attackers in P and D, 15 cycles per phase (i12 %d, iv12 %d)' % (
+              sx.count('i12'), sx.count('iv12')), fails)
+
     print('2. Lua records -> s7s8_parse.py (no memory data)')
     log = os.path.join(OUT, 'reader_lua_only.log')
     with open(log, 'w') as f:
@@ -439,7 +470,7 @@ def main():
     log_g = os.path.join(OUT, 'reader_lua_only_s78g.log')
     with open(log_g, 'w') as f:
         f.write('S78READER 1 selftest\nGAME pid=0 base=0x0 identity=selftest\n')
-        for n, typ, rr in ((1, 1, recs4), (2, 2, recs5)):
+        for n, typ, rr in ((1, 1, recs4), (2, 2, recs5), (3, 1, recs6)):
             f.write('MODE n=%d ptr=0x%d type=%d game_type=3 stack=1 frame=0 gframe=0\n' % (n, n, typ))
             for i, r in enumerate(reversed(rr)):  # address order is not time order
                 f.write('LUA n=%d frame=99999 addr=0x%x rec=%s\n' % (n, 0x1000 + i, r))
@@ -450,8 +481,8 @@ def main():
                                                        json=None))
         gotg = [[r['name'] for r in run['scenarios']] for run in resg['runs']]
         ag = resg['answers']
-        check(gotg == [LAND_G + ['HUMAN'], SPACE_G] and 't02_guard_shift_1' in ag and '1_edge2' in ag and
-              't03_slot47_clip' in ag, 's78g records (reversed) -> parser: %s; answers %s' % (gotg, sorted(ag)), fails)
+        check(gotg == [LAND_G + ['HUMAN'], SPACE_G, LAND_R + ['HUMAN']] and 't02_guard_shift_1' in ag and
+              '1_edge2' in ag and '1_edge3' in ag and 't03_slot47_clip' in ag and 't03_slot47_clip_x' in ag, 's78g records (reversed) -> parser: %s; answers %s' % (gotg, sorted(ag)), fails)
     except Exception as e:  # noqa: BLE001
         check(False, 's78g records -> parser: %r' % e, fails)
 

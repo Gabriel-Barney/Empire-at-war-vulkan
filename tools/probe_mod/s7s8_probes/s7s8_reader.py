@@ -281,6 +281,7 @@ class Recorder:
         self.next_model_try = 0.0
         self.team_how = None
         self.team_logged = False
+        self.tgt_logged = set()
 
     # ---- heap scan (thread) ----
     def _scan(self, n, frame, why):
@@ -451,6 +452,24 @@ class Recorder:
             return 'none'
         return '%d:%d:%.3f:%.3f' % (typ, mode, fr, sp)
 
+    def log_target(self, tid):
+        """s78g: one TGT line per target id a watched unit takes: type, owner, position, also for objects that are not
+        watched (pre-existing units: in the s78g ESCORT run every escort took obj 67593, which the log never named)."""
+        self.tgt_logged.add(tid)
+        for addr, (oid, tname) in list(self.known.items()):
+            if str(oid) != tid:
+                continue
+            ob = self.p.read(addr + a1mem.OBJ_BASE, a1mem.OBJ_END - a1mem.OBJ_BASE)
+            if not ob:
+                break
+            owner, = struct.unpack_from('<i', ob, a1mem.OBJ_OWNER - a1mem.OBJ_BASE)
+            x, y, z = struct.unpack_from('<fff', ob, a1mem.OBJ_POS - a1mem.OBJ_BASE)
+            self.log('TGT ' + kv(n=self.n, frame=self.frame, obj=oid, type=tname, owner=owner, x='%.1f' % x,
+                                 y='%.1f' % y, z='%.1f' % z, watched=int(addr in self.watched),
+                                 initial=int(self.initial is not None and addr in self.initial)))
+            return
+        self.log('TGT ' + kv(n=self.n, frame=self.frame, obj=tid, type='?'))
+
     def poll_watched(self):
         for addr, w in list(self.watched.items()):
             ob = self.p.read(addr + a1mem.OBJ_BASE, a1mem.OBJ_END - a1mem.OBJ_BASE)
@@ -469,6 +488,8 @@ class Recorder:
                     self.team_how = how
                     self.log('TEAMDATA ' + kv(n=self.n, frame=self.frame, how=how))
                 an = self.anim(addr)
+                if ex['tgt'] not in ('-', 'none', 'x') and ex['tgt'] not in self.tgt_logged:
+                    self.log_target(ex['tgt'])
             key = (owner, flags, '%.2f' % hp, an, ex['loco'], ex['tgt'], ex['ts'], ex['cont'], ex['tt'])
             pos = ('%.1f' % x, '%.1f' % y, '%.1f' % z)
             last = w['last']
@@ -521,6 +542,7 @@ class Recorder:
 def wait_for_game(a, log):
     t0 = time.time()
     ignored = set()
+    open_fails = {}
     while time.time() - t0 < a.wait_process_sec:
         for pid in a1mem.find_pids():
             if pid in ignored:
@@ -528,8 +550,14 @@ def wait_for_game(a, log):
             try:
                 p = a1mem.Proc(pid)
             except OSError as e:
-                log('OPEN_FAILED ' + kv(pid=pid, error=str(e).replace(' ', '_')))
-                ignored.add(pid)
+                # s78g 2026-11-05: a process caught while still starting fails EnumProcessModulesEx (error 299,
+                # partial copy); retry instead of ignoring it for good, give up after 60 failures.
+                n = open_fails.get(pid, 0) + 1
+                open_fails[pid] = n
+                if n == 1 or n == 60:
+                    log('OPEN_FAILED ' + kv(pid=pid, n=n, error=str(e).replace(' ', '_')))
+                if n >= 60:
+                    ignored.add(pid)
                 continue
             if p.pe_identity() or a.allow_unknown_exe:
                 return p

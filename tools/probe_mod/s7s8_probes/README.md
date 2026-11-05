@@ -268,6 +268,57 @@ Parser fixes in this pass:
   3060 of 3060 attacker-frames.
 - `IDLE47V` logs now also go through the IDLE47W analyser.
 
+### s78g rerun (after `out/20261105-073814`)
+
+```
+set ALAMO_S78_LAND=SPMAT_EDGE3,IDLE47X
+set ALAMO_S78_SPACE=GUARD_HAND
+run_s7s8.cmd --no-launch --non-interactive
+```
+
+What the 073814 run showed, and what changed:
+- **GUARD_HAND hit an ERR**: "attempt to index global `math`". The retail free-store Lua has **no math library**, so
+  G never moved and the shift waypoint was never taken. The hook now uses arithmetic only: the math calls in
+  MAGNEPULSE's ability retry, GUARD_HAND's leg side and its arrival-distance check are gone. The selftest driver sets `math = nil` before loading the
+  script, so any new math call fails the selftest. The timing is unchanged.
+- **SPMAT_EDGE2 is invalid.** The explicit `Attack_Target` on the edge tank made the deployed walker undeploy and
+  drive about 209 units in. The analyser now calls such windows `FIRED_AFTER_MOVING` / `UNDEPLOYED_OR_MOVED` and keeps
+  them out of the edge, so 073814 parses as `INVALID`. **SPMAT_EDGE3** deploys the same way (attack the 275 tank, DEPLOY at +21). At +150 it
+  swaps that tank for one at d **with no order**, so the walker has to acquire it by itself. Ten windows of 450,
+  d = 450 (in-range control), 500, 530, 540, 544, 546, 548, 550, 553, 560. Answer `1_edge3`: same verdicts as
+  `1_edge2`, only from windows where the walker held 0x19 and moved ≤ 15. The block lists which d fired and which held
+  deploy without firing.
+- **IDLE47W was noise-bound.** The land background is about 440 synced draws per frame and drifts by ±100 over 150
+  frames, which is larger than the expected effect. **IDLE47X** uses 12 attackers (75 apart from along −200, victims
+  160 to the side) and 15 cycles of 200 frames per phase: 100 with victims, 100 without. The W attackers reached state
+  4 within 20 frames. The parser's statistic is per cycle: the mean draws per frame with victims, minus the mean of the
+  victim-free windows on either side, which cancels a linear drift. Each phase gets mean ± stderr. A verdict needs
+  3-sigma separation of P−V, D−V and P−D; otherwise it is `UNCLEAR (P-V a +- s, D-V …, P-D …)`. Answer
+  `t03_slot47_clip_x`. Re-parsed with this statistic, 073814 IDLE47W gives P +1.9 ± 31.8, D +13.5 ± 25.6, V −48.6 ±
+  39.9, so `UNCLEAR`. Clips are printed by name (docs/re/ANIM_PARTICLES.md): 5 = ATTACK, 6 = ATTACKIDLE. In 073814
+  the Dark Troopers spent 2730 of 3750 attacker-frames in ATTACK (firing) and 1020 in ATTACKIDLE.
+  The Pod_Walkers were in 0 IDLE throughout.
+- **REINF verdict.** New `PER_UNIT_STAGGER (slope S frames per earlier unit, delays a..b, max residual r)` when the
+  first-shot delays do not decrease with spawn index, the least-squares slope is above 5 and no delay is more than
+  12 from the line. 073814 REINF2 gives slope 11.3, delays 9..61, residual 5.9. REINF (re-parsed) gives slope 11.4,
+  residual 0.3; its first shots also fit the 161 clock, which the verdict notes.
+- **ESCORT target.** All 18 escorts targeted obj 67593 after the carrier died. 67593 has no OBJ line in the space
+  battle: it existed before the probe started (a starting-fleet unit or map object), and the reader only described new
+  objects. The reader now writes one `TGT n= frame= obj= type= owner= x= y= z= watched= initial=` line the first time
+  a watched unit takes a target id. The escort target summary uses it, e.g. `obj67593=<type>/owner<n> (pre-existing)`.
+
+**Land, about 8 minutes**, no orders:
+
+| Scenario | Frames | Task |
+|---|---|---|
+| SPMAT_EDGE3 | 450–4950 | t01 |
+| IDLE47X | 4953–14553 (P 4953, D 8153, V 11353) | t03 |
+
+*"land scenarios done"* appears at about 8 min 5 s (F 14556).
+
+**Space, about 2 min 45 s.** GUARD_HAND only, with the same hand orders and messages as above: F 450 / 900 / 1800 /
+2700 / 3450 / 4350 (0:15 / 0:30 / 1:00 / 1:30 / 1:55 / 2:25). It ends at F 4950.
+
 ## Feeding results back
 
 Edit only `docs/re` (RE/doc task). Quote the run folder and the report line. Then:

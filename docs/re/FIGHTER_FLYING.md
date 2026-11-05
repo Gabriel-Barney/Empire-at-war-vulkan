@@ -1058,6 +1058,24 @@ No in-game probe is needed for these rules. An optional probe was run (s78f t09,
 - **Squadron team target** (s78f t12, same run, SQUAD; victims owned by the human's Empire player): the five members
   were on one target for 1605 of 1759 frames. When target t3 was despawned (F 4953), all five cleared at +2 and took
   t2 at +3, in the same frame (ALL_AT_ONCE). ESCORT: no escort spawned, so it was not measured.
+- **s78g t02, shift waypoint while G moves after a guard ordered while G moves** (2026-11-05, Claude drove the game,
+  `out/20261105-092438`, GUARD_HAND, human-owned Broadside G at about 2.2 / frame and a human TIE squadron; the
+  orders were given with the game paused) [M]. Guard on the moving G at about F 2780: the squadron reacted
+  (F 2850) but did **not** follow. It held at about 0.2–0.3 / frame near (270, −660) while G's route took G to 264
+  of it (F 3150) and away again (836 at F 3450). Shift waypoint at about F 3450: the squadron left at 5.1–5.4 /
+  frame between F 3510 and F 3600 and stopped at the waypoint (F 3900), **while G was still moving** (G stopped at
+  F 4350). So the waypoint did not wait for G to stop, against B 3's prediction. B 3's "follow while G moves" was
+  not observed at all, though: a guard given to a moving G becomes a hold, as in the t12 run. Pair 1 of that run
+  is void (the clicks missed G and became move orders). The kit's t02 verdicts say `NO_DEPARTURE` for both pairs;
+  the trace above is the reading. In the first s78g run (`out/20261105-073814`) G never moved (the probe's Lua
+  used `math`, which the retail free-store Lua lacks): with G stationary, guard plus a queued shift waypoint
+  kept the squadron within 40–120 of G for the whole 4500 frames. The waypoint was never taken, unlike the
+  t09 G2 control, where the waypoint was given with no guard pending.
+- **s78g t05, escorts after the carrier dies** (`out/20261105-073814`, ESCORT, 18 escorts given
+  `Prevent_AI_Usage`) [M]. At the carrier's death (F 5706) all 18 escorts took one pre-existing object (obj
+  67593; the reader did not describe it) and flew about 1700 from the death point. About 600 frames later they
+  came back and stayed 630–700 from it to the end. They never engaged the intruder spawned 700 from the death
+  point (closest escort 1214). So they returned toward the guarded point (E / F) but kept a wide hold.
 
 ---
 
