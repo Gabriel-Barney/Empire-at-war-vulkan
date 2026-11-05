@@ -548,6 +548,9 @@ public:
     bool land_drop_valid(TacticalMode& mode, int32_t player, objects::ObjectId key, float x, float y, bool human,
                          bool use_reinforcement_points) const;
     float player_drop_yaw(int32_t player) const { return drop_yaw(side_player(1) == player ? uint8_t{1} : uint8_t{0}); }
+    // s78i t02 (TACTICAL_COMBAT §3.1.1 "other spawns"): the facing the reinforcement creators give `player`'s new objects:
+    // its side's entry-facing record (mode +0x288), +X when the record is zero or the player has no side.
+    Vec3 player_drop_facing(int32_t player) const;
     // --- end P host ---
 
     // --- [port: Gabriel] queueable unit actions: the per-unit order queue (docs/PHASE4.md "Camera and controls") ---
@@ -1149,6 +1152,7 @@ private:
     Vec3 slot_position(uint8_t side, uint32_t passability_mask);
     Vec3 snap_passable(Vec3 p, uint32_t passability_mask, bool always) const;  // slot_position's box clamp + cell search
     std::vector<Vec3> drop_pos_;  // a1g t04 follow-up: order_reinforce's land layout slots for deploy (transient)
+    bool deploy_unload_ = false;  // s78i t02: deploy places a landing object's company (keeps the side facing; transient)
     // a1i t04 (A1_READINGS §35.2): one landing object (TransportDataPack fields in brackets).
     struct Landing {
         objects::ObjectId id = objects::kNoObjectId;

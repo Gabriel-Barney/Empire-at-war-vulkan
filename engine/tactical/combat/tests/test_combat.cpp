@@ -5916,6 +5916,154 @@ void test_team_container_slot() {
     }
 }
 
+void test_team_head_alone() {
+    // s78i t03 (TACTICAL_COMBAT §3.1.1 "Team targeting copies"): TeamTargeting belongs to the container and runs while it
+    // lives, whatever its member count. A land team whose stand-in head is its last live unit (or a team of one) keeps the
+    // team service. Observable: the team service has no TURRET branch, so a turret head whose turret is still slewing
+    // (host aim 0) is in state 4 there, where its own TARGETING (Service_Land) gives 3.
+    struct TurretTeam {
+        World w;
+        StateHooks h;
+        explicit TurretTeam(bool with_member) {
+            ProjectileDesc p;
+            p.max_speed = 20.0f;
+            w.data.projectiles.push_back(p);
+            UnitDesc s;
+            s.tactical_health = 100.0f;
+            s.max_attack_distance = 300.0f;
+            s.weapon_projectile = 0;
+            s.weapon_recharge = 100.0f;
+            s.turn_rate = 10.0f;
+            s.turret = true;
+            push_unit(w.data, s);
+            UnitDesc t;
+            t.tactical_health = 1.0e7f;
+            t.radius = 5.0f;
+            push_unit(w.data, t);
+            CombatConfig cfg;
+            cfg.mode = GameMode::Land;
+            cfg.inaccuracy_enabled = false;
+            w.make(cfg);
+            h.aim = 0;  // the turret is still slewing
+            w.sys->set_hooks(&h);
+            w.add(2, 1, 1, Vec3{200, 5, 0});
+            const auto add = [&](ObjectId id, uint32_t team, bool leader) {
+                UnitSpawn sp;
+                sp.id = id;
+                sp.desc = 0;
+                sp.owner = 0;
+                sp.position = Vec3{0, static_cast<float>(id - 10) * 10.0f, 0};
+                sp.facing = Vec3{1, 0, 0};
+                sp.team = team;
+                sp.team_leader = leader;
+                CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+                TreeMembership m;
+                m.owner = 0;
+                CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(sp.position, 1.0f), 1u, m));
+            };
+            add(10, 7, true);
+            if (with_member) add(11, 7, false);
+            add(20, 0, false);  // control: no team, its own TARGETING
+        }
+    };
+    {  // the member dies: the head alone keeps the team service (state 4 against the control's 3), tick after tick
+        TurretTeam t(true);
+        t.w.tick();
+        CHECK(t.w.sys->targeting_state(10) == 4 && t.w.sys->targeting_state(11) == 4);
+        CHECK(t.w.sys->targeting_state(20) == 3);
+        t.w.sys->kill_unit(11, kNoObject, kKindNormal, t.w.frame);
+        for (int i = 0; i < 5; ++i) {
+            t.w.tick();
+            CHECK(!t.w.sys->alive(11));
+            CHECK(t.w.sys->auto_target(10) == 2 && t.w.sys->targeting_state(10) == 4);
+            CHECK(t.w.sys->targeting_state(20) == 3);
+        }
+    }
+    {  // a team of one from the start: the same
+        TurretTeam t(false);
+        for (int i = 0; i < 3; ++i) {
+            t.w.tick();
+            CHECK(t.w.sys->auto_target(10) == 2 && t.w.sys->targeting_state(10) == 4);
+            CHECK(t.w.sys->targeting_state(20) == 3);
+        }
+    }
+    {  // the member is the last one alive after the head dies: the hand-over gives it the head and the team service
+        TurretTeam t(true);
+        t.w.tick();
+        t.w.sys->kill_unit(10, kNoObject, kKindNormal, t.w.frame);
+        for (int i = 0; i < 3; ++i) {
+            t.w.tick();
+            CHECK(t.w.sys->auto_target(11) == 2 && t.w.sys->targeting_state(11) == 4);
+        }
+    }
+}
+
+void test_convert_container_unit() {
+    // s78i t04 (TACTICAL_COMBAT §3.5 "Convert and its team rule" steps 3-5): a team container that is itself a combat unit
+    // (damage_team 0; members carry its id) converts with its members: Change_Owner covers the container and every
+    // member. Events: the victim, then the container, then the other members (ascending id); each object once.
+    struct ConvertHooks final : CombatHooks {
+        std::vector<ObjectId> converted;
+        void unit_effect(ObjectId id, UnitEffect e, int32_t, Vec3, uint32_t) override {
+            if (e == UnitEffect::Converted) converted.push_back(id);
+        }
+    };
+    for (const GameMode mode : {GameMode::Land, GameMode::Space}) {
+        for (const bool hit_container : {false, true}) {
+            World w;
+            ConvertHooks hk;
+            ProjectileDesc cv;
+            cv.name = "Proj_Convert";
+            cv.max_speed = 10.0f;
+            cv.convert = true;
+            cv.convert_radius = 100.0f;
+            w.data.projectiles.push_back(cv);
+            UnitDesc d;
+            d.tactical_health = 100.0f;
+            const uint32_t ud = push_unit(w.data, d);
+            CombatConfig cfg;
+            cfg.mode = mode;
+            w.make(cfg);
+            w.sys->set_hooks(&hk);
+            auto add = [&](ObjectId id, Vec3 at, uint32_t team) {
+                UnitSpawn sp;
+                sp.id = id;
+                sp.desc = ud;
+                sp.owner = 1;
+                sp.position = at;
+                if (mode == GameMode::Land) {
+                    sp.team = team;
+                } else {
+                    sp.damage_team = team;
+                }
+                CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+                TreeMembership m;
+                m.owner = 1;
+                CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(at, 1.0f), 1u, m));
+            };
+            const Vec3 near{10, 0, 0}, far{900, 0, 0};
+            add(10, hit_container ? far : near, 50);  // members of container 50
+            add(11, Vec3{950, 0, 0}, 50);
+            add(50, hit_container ? near : Vec3{920, 0, 0}, 0);  // the container: a combat unit, damage_team 0
+            add(60, Vec3{930, 0, 0}, 0);                         // unrelated, out of the radius
+            ProjectileLaunch l;
+            l.owner = 0;
+            l.projectile = 0;
+            l.from = Vec3{0, 0, 0};
+            l.point = l.from;
+            l.fuse_seconds = 0.0f;
+            CHECK(w.sys->launch_projectile(l, w.frame));
+            w.tick();
+            w.tick();
+            for (const ObjectId id : {ObjectId{10}, ObjectId{11}, ObjectId{50}})
+                CHECK(w.sys->owner(id) == 0 && (w.sys->flags(id) & kUnitConverted));
+            CHECK(w.sys->owner(60) == 1 && !(w.sys->flags(60) & kUnitConverted));
+            const std::vector<ObjectId> want = hit_container ? std::vector<ObjectId>{50, 10, 11} : std::vector<ObjectId>{10, 50, 11};
+            CHECK(hk.converted == want);
+        }
+    }
+}
+
 void test_charge_up_slew() {
     // s78f t04 (LOB_SOLVER §3.6 "Charge-up aim"): the lobbing TURRET slews Turret_Rotate_Speed degrees per service from
     // Turret_Rest_Angle; the charge-up starts on the service where the angles are reached; the turret then holds its aim.
@@ -6044,6 +6192,8 @@ int main(int argc, char** argv) {
     test_squad_value();               // s78h t03
     test_convert_team();              // s78h t04
     test_team_container_slot();       // s78h t06
+    test_team_head_alone();           // s78i t03
+    test_convert_container_unit();    // s78i t04
     test_scan_player_order();         // s78g t04
     test_charge_up_slew();           // s78f t04
     test_hardpoint_aim_target_bones();  // S8 t27

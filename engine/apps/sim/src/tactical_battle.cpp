@@ -164,7 +164,8 @@ public:
     void unit_after_targeting(tc::ObjectId id, uint32_t frame, SimRng& rng) override { a_->unit_after_targeting(id, frame, rng); }
     // s78f t03 (TACTICAL_COMBAT §3.1.1 "Slot 47"): the attack-idle pose 0x569400 - clip 6 Attack Idle, index 0, looping,
     // speed 1, blend = one synced Get_Float(0.2, 0.75), when (arg 0 or Locomotor_Has_Animation_Priority clear), the
-    // locomotor is not moving and the current clip is not a flinch (79-86), Attack (5) or Attack Idle (6). The draw is
+    // locomotor is not moving and the current clip is not a flinch (79-86); the clip is not restarted while it is Attack
+    // (5) or Attack Idle (6), but the draw is still spent (s78i t01). The draw is
     // spent whether or not the model has the clip (the blend is the call's argument). [M] The animation gate 0x397040 is
     // read as false. Without an animation world nothing is played or drawn [port].
     void attack_idle(tc::ObjectId id, bool arg, uint32_t frame, SimRng& rng) override {
@@ -180,12 +181,17 @@ public:
                 return;
         }
         const int32_t cur = world_->current_type(id);
-        if (anim::is_flinch(cur) || cur == anim::kAnimAttack || cur == anim::kAnimAttackIdle) return;
+        if (anim::is_flinch(cur)) return;
+        // s78i t01 (in-game probe IDLE47N, out/20261105-125642) [M]: Dark_Trooper_PhaseII held in ATTACK / ATTACKIDLE with
+        // fire blocked still adds about one synced draw per attacker per frame, so the draw is spent on every service,
+        // the current clip being Attack (5) or Attack Idle (6) included; only the clip restart is skipped then.
+        const float blend = rng.range_float(0.2f, 0.75f);
+        if (cur == anim::kAnimAttack || cur == anim::kAnimAttackIdle) return;
         anim::PlayRequest r;
         r.type = anim::kAnimAttackIdle;
         r.index = 0;
         r.loop = true;
-        r.blend_seconds = rng.range_float(0.2f, 0.75f);
+        r.blend_seconds = blend;
         r.speed = 1.0f;
         world_->play(id, r, &rng, gframe_);
 #else
@@ -974,6 +980,13 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32
         md.locomotor = mv::locomotor_kind_from_type(types, t, space_ ? mv::MoveMode::Space : mv::MoveMode::Land);  // REMAINING_GAPS §4.3-4.7
         Vec3 pos;
         Vec3 face = facing_[side];
+        // s78i t02 (TACTICAL_COMBAT §3.1.1 "other spawns"): a reserve drop (0x2b5fe0 land / 0x2bf2d0 space) gives every
+        // object it creates the owner's entry-facing record (mode +0x288; yaw 0 when unset). [port] A landing object's
+        // company keeps the side facing (the unload facing is not traced).
+        if (P.reserve && !range && !deploy_unload_) {
+            const Vec3 df = side < 2 ? drop_facing_[side] : Vec3{};  // as spawn_landing: the participant's side record
+            face = df.x == 0.0f && df.y == 0.0f ? facing_of_yaw(0.0f) : df;
+        }
         const bool lead_sw = space_ && bt_have_ds_ && !P.reserve && bt_lead_ == objects::kNoObjectId && bt_is_super_weapon(t);
         if (spot < P.spots.size()) {  // §3.2: the marker chosen for the starbase / structure / step-3 type
             pos = P.spots[spot].first;
@@ -1718,7 +1731,9 @@ cmd::RejectReason TacticalBattle::order_reinforce(TacticalMode& mode, uint8_t pl
                     for (const LandDropSlot& s : lay.slots) drop_pos_.push_back(Vec3{s.x, s.y, 0.0f});
                 }
                 const size_t first = units_.size();
+                deploy_unload_ = landing.id != objects::kNoObjectId;
                 deploy(mode, i, rng);
+                deploy_unload_ = false;
                 drop_pos_.clear();
                 if (landing.id != objects::kNoObjectId) {
                     // [port] Every unload step runs at the order (the tactical AI takes the units at once, §35.3): the
@@ -2027,6 +2042,15 @@ float TacticalBattle::drop_yaw(uint8_t side) const {
     if (side >= 2) return 0.0f;  // third players: no record written
     const Vec3 f = drop_facing_[side];
     return f.x == 0.0f && f.y == 0.0f ? 0.0f : yaw_of(f);
+}
+
+Vec3 TacticalBattle::player_drop_facing(int32_t player) const {
+    for (uint8_t side = 0; side < 2; ++side) {
+        if (side_player(side) != player) continue;
+        const Vec3 f = drop_facing_[side];
+        return f.x == 0.0f && f.y == 0.0f ? facing_of_yaw(0.0f) : f;
+    }
+    return facing_of_yaw(0.0f);  // a third player: no record written (yaw 0)
 }
 
 // a1i t04 (A1_READINGS §35.1 / §35.3): the landing object of a land reserve drop. L = the company's

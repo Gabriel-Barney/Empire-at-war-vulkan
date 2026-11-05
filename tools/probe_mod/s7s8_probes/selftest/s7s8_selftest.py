@@ -49,6 +49,10 @@ LAND_G = ['SPMAT_EDGE2', 'SPMAT_CTRL', 'REINF', 'REINF2', 'IDLE47W']
 SPACE_G = ['GUARD_HAND', 'ESCORT']
 LAND_R = ['SPMAT_EDGE3', 'IDLE47X']  # s78g rerun (2026-11-05); space rerun = GUARD_HAND alone
 LAND_H = ['SPMAT_EDGE4', 'IDLE47Q']  # s78h t01 / t02 (README "s78h run")
+LAND_I = ['IDLE47N']  # s78i t01 (README "s78i run")
+# IDLE47N phases: (name, first frame relative to the scenario start, cycles); 900 frames of quiet background first
+IDLE47N_PH = [('P', 900, 15), ('D', 4100, 15), ('E', 7300, 15), ('F', 10500, 3), ('V', 11300, 15)]
+IDLE47N_DUR = 14500
 
 STUBS = r'''
 H = { F = 0, fss = 0, ous = 0, next_id = 100, objs = {}, blocks = {}, mode = "Land", msgs = 0, moves = 0 }
@@ -370,7 +374,98 @@ def synth_edge4(S):
     S.scn_end(450 + 450 * len(ds), 'SPMAT_EDGE4')
 
 
+def synth_idle47n(S, run, k, shots_in):
+    """IDLE47N trace on the port model: 12 attackers per phase, victims for the first 100 frames of each 200-frame
+    cycle; from on+15 to off+3 the attackers are in targeting state 4 (Dark Troopers on clip 5 ATTACK, Pod_Walkers on
+    clip 0) and add k[phase] synced draws each per frame. shots_in = phases whose attackers fire (one PROJ_ per
+    attacker per cycle at its muzzle, 2 draws each). The background is 2..8 draws per frame. One RNG line per frame
+    (the LCG stepped by that frame's draws), as the reader logs it."""
+    S.mode(1, run)
+    S.rec('ARM', 0, 'pid=2|fac=REBEL|mode=Land|map=_MP_LAND_GEONOSIS|points_ok=true|service_rate=20->0.05')
+    T0, X, Y = 450, 3480.0, 4640.0
+    S.scn(T0, 'IDLE47N', 1, IDLE47N_DUR)
+    for m, f in (('bg_pre', 0), ('sweep', 300), ('bg_post', 450)):
+        S.rec('MARK', T0 + f, 'scn=IDLE47N|mark=%s|' % m)
+    for f in range(300, IDLE47N_DUR, 300):
+        S.rec('COUNT', T0 + f, 'scn=IDLE47N|what=quiet|who=ai|objects=9|mobile=%d|despawned=%d|kept=77|other=4' % (
+            6 if f == 300 else 1, 5 if f == 300 else 0))
+    extra = {}
+    for ph, rel, cyc in IDLE47N_PH:
+        P0 = T0 + rel
+        S.rec('MARK', P0, 'scn=IDLE47N|mark=phase_%s|' % ph)
+        att = []
+        if ph != 'V':
+            typ = 'Pod_Walker' if ph == 'P' else 'Dark_Trooper_PhaseII'
+            for i in range(12):
+                ax = X - 200 + 75 * i
+                oid = S.spawn(P0, 'IDLE47N', 'i%d' % (i + 1), typ, 'attacker', ax, Y, owner=2)
+                att.append((oid, ax))
+                S.st(P0 + 1, oid, ax, Y, owner=2, anim='0:0:0.0:1.0', ts=0)
+                if ph in ('P', 'D'):
+                    S.rec('SETUP', P0, 'scn=IDLE47N|tag=i%d|Prevent_All_Fire=1,' % (i + 1))
+        for c in range(1, cyc + 1):
+            fo, ff = P0 + 200 * c, P0 + 200 * c + 100
+            S.rec('MARK', fo, 'scn=IDLE47N|mark=%s_on%d|' % (ph, c))
+            vids = [S.spawn(fo, 'IDLE47N', 'iv%d' % (i + 1), 'T4B_Tank', 'victim', X - 200 + 75 * i, Y - 160)
+                    for i in range(12)]
+            if ph == 'E':
+                S.rec('ORDER', fo + 6, 'scn=IDLE47N|tag=E_c%d|order=nofire_on|ok=12|n=12' % c)
+                S.rec('ORDER', ff, 'scn=IDLE47N|tag=E_c%d|order=nofire_off|ok=12|n=12' % c)
+            S.rec('MARK', ff, 'scn=IDLE47N|mark=%s_off%d|' % (ph, c))
+            for v in vids:
+                S.gone(ff, v)
+            for oid, ax in att:
+                S.st(fo + 15, oid, ax, Y, owner=2, anim=('0' if ph == 'P' else '5') + ':0:0.0:1.0', ts=4)
+                S.st(ff + 3, oid, ax, Y, owner=2, anim='0:0:0.0:1.0', ts=0)
+            for f in range(fo + 15, ff + 3):
+                extra[f] = extra.get(f, 0) + int(round(k.get(ph, 0.0) * len(att)))
+            if ph in shots_in:
+                for j, (oid, ax) in enumerate(att):
+                    S.proj(fo + 30 + 3 * j, 'PROJ_GROUND_LASER_DT2_TEST', ax - 5, Y - 10)
+                    extra[fo + 30 + 3 * j] = extra.get(fo + 30 + 3 * j, 0) + 2
+        for oid, ax in att:
+            S.gone(P0 + (cyc + 1) * 200, oid)
+    S.scn_end(T0 + IDLE47N_DUR, 'IDLE47N')
+    s = 0x1234567
+    for f in range(T0 - 200, T0 + IDLE47N_DUR + 10):
+        for _ in range(5 + (f * 13) % 7 - 3 + extra.get(f, 0)):
+            s = (s * 0x41C64E6D + 0xBDF) & 0xFFFFFFFF
+        S.lines.append('RNG n=%d frame=%d s=0x%x' % (S.n, f, s))
+
+
+def idle47n_checks(fails):
+    """s78i t01: IDLE47N verdicts on two synthetic traces: (1) every fire-blocked phase draws ~1 per attacker per
+    frame -> DROP_CLIP_CONDITION; (2) D silent, E fires -> E is set aside (FIRED), D alone gives KEEP_CLIP_CONDITION."""
+    cases = (('drop', {'P': 1.0, 'D': 1.0, 'E': 1.0, 'F': 1.0}, ('F',)),
+             ('keep', {'P': 1.0, 'D': 0.0, 'E': 0.0, 'F': 1.0}, ('E', 'F')))
+    out = {}
+    for run, (tag, k, shots) in enumerate(cases, 1):
+        S = s7s8_parse.Synth()
+        synth_idle47n(S, run, k, shots)
+        log = os.path.join(OUT, 'reader_synth_idle47n_%s.log' % tag)
+        with open(log, 'w') as f:
+            f.write(S.text())
+        res = s7s8_parse.cmd_parse(argparse.Namespace(log=log, out=os.path.join(OUT, 'report_synth_idle47n_%s.txt' %
+                                                                                   tag), json=None))
+        sc = next((r for rr in res['runs'] for r in rr['scenarios'] if r['name'] == 'IDLE47N'), {})
+        out[tag] = (res['answers'].get('t01_slot47_nofire') or '', sc.get('phases') or {})
+    v, ph = out['drop']
+    km = {p: (ph.get(p) or {}).get('k_med') for p in 'PDEF'}
+    check(v.startswith('DROP_CLIP_CONDITION') and all(ph.get(p, {}).get('status') == 'DRAWS' for p in 'PDE') and
+          ph.get('F', {}).get('status') == 'FIRED' and ph.get('F', {}).get('shots') == 36 and
+          all(abs(km[p] - 1.0) < 0.15 for p in 'PDE') and ph.get('D', {}).get('nofire_set') == 12 and
+          ph.get('E', {}).get('nofire_orders') == (180, 15) and 'FIRE_CHECK_BLIND' not in v and
+          '[background' in v,
+          't01 IDLE47N, attackers draw with fire blocked: %s (k %s)' % (v, km), fails)
+    v, ph = out['keep']
+    st = {p: (ph.get(p) or {}).get('status') for p in 'PDEF'}
+    check(v.startswith('KEEP_CLIP_CONDITION (D ') and not re.search(r'\bE -?\d', v) and st['D'] == 'SILENT' and  # no E figures in the verdict
+          st['E'] == 'FIRED' and st['P'] == 'DRAWS' and abs(ph['D']['k_med']) < 0.15,
+          't01 IDLE47N, Dark Troopers silent with fire blocked, E fired: %s (status %s)' % (v, st), fails)
+
+
 def synth_checks(fails):
+    idle47n_checks(fails)
     S = s7s8_parse.Synth()
     truth = synth_guard_hand(S)
     synth_edge4(S)
@@ -605,6 +700,50 @@ def main():
           'run G: IDLE47Q keeps the IDLE47X phases (i12 %d, iv12 %d)' % (spawned_q.count('i12'),
                                                                         spawned_q.count('iv12')), fails)
 
+    # run H: the s78i land list (README "s78i run")
+    saved = {k: os.environ.get(k) for k in ('ALAMO_S78_LAND', 'ALAMO_S78_SPACE')}
+    os.environ['ALAMO_S78_LAND'] = ','.join(LAND_I)
+    os.environ['ALAMO_S78_SPACE'] = 'GUARD_HAND'
+    try:
+        data_i, _src = build_s7s8_mod.freestore_text(a.game, cfg, a.source_zip)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    script_i = os.path.join(OUT, 'BusyTacticalFreeStore_s78i.lua')
+    with open(script_i, 'wb') as f:
+        f.write(data_i)
+    rc8, recs8, state8, text8 = run_lua(script_i.replace('\\', '/'), 'REBEL', 'Land', 15200, 'land_s78i')
+    common_checks('H (land s78i)', rc8, recs8, state8, text8, LAND_I, fails)
+    n8 = [r for r in recs8 if field(r, 'scn') == 'IDLE47N']
+    m8 = {field(r, 'mark'): int(field(r, 'f')) for r in n8 if kind(r) == 'MARK'}
+    t8 = next((int(field(r, 'f')) for r in recs8 if kind(r) == 'SCN' and field(r, 'ev') == 'start'), 0)
+    dur8 = next((field(r, 'dur') for r in recs8 if kind(r) == 'SCN' and field(r, 'ev') == 'start'), None)
+    ph_ok = all(0 <= m8.get('phase_%s' % p, -99) - t8 - rel <= 3 and '%s_off%d' % (p, c) in m8 and '%s_on%d' % (p, c + 1) not in m8
+                for p, rel, c in IDLE47N_PH)
+    sp8 = [field(r, 'tag') for r in n8 if kind(r) == 'SPAWN' and field(r, 'ok') == '1']
+    su8 = [r for r in n8 if kind(r) == 'SETUP' and (field(r, 'tag') or '').startswith('i') and
+           not (field(r, 'tag') or '').startswith('iv') and 'Prevent_All_Fire=1' in r]
+    su8_at = sorted({int(field(r, 'f')) - t8 for r in su8})
+    nf = [(field(r, 'order'), field(r, 'ok')) for r in n8 if kind(r) == 'ORDER' and
+          (field(r, 'order') or '').startswith('nofire')]
+    nf_on = [r for r in n8 if kind(r) == 'ORDER' and field(r, 'order') == 'nofire_on']
+    nf_lag = sorted({int(field(r, 'f')) - m8.get('E_on' + field(r, 'tag').split('_c')[1], -99) for r in nf_on})
+    q8 = [r for r in n8 if kind(r) == 'COUNT' and field(r, 'what') == 'quiet' and field(r, 'who') == 'ai']
+    check(ph_ok and dur8 == str(IDLE47N_DUR) and [m for m in ('bg_pre', 'sweep', 'bg_post') if m in m8] ==
+          ['bg_pre', 'sweep', 'bg_post'] and len(q8) >= 45,
+          'run H: IDLE47N quiet stages, %d sweeps, phases %s, dur %s' % (
+              len(q8), [(p, m8.get('phase_' + p, 0) - t8) for p, _r, _c in IDLE47N_PH], dur8), fails)
+    check(sp8.count('i12') == 4 and sp8.count('iv12') == sum(c for _p, _r, c in IDLE47N_PH) and len(su8) == 24 and
+          len(su8_at) == 2 and 0 <= su8_at[0] - 900 <= 3 and 0 <= su8_at[1] - 4100 <= 3 and nf.count(('nofire_on', '12')) == 15 and nf.count(('nofire_off', '12')) == 15 and
+          len(nf) == 30 and nf_lag and min(nf_lag) >= 3 and max(nf_lag) <= 9,
+          'run H: IDLE47N Prevent_All_Fire on placing (P, D: %d at rel %s), per cycle in E (%d on / %d off, %s frames '
+          'after the attack orders), none in F; i12 %d iv12 %d' % (
+              len(su8), su8_at, nf.count(('nofire_on', '12')), nf.count(('nofire_off', '12')), nf_lag,
+              sp8.count('i12'), sp8.count('iv12')), fails)
+
     print('2. Lua records -> s7s8_parse.py (no memory data)')
     log = os.path.join(OUT, 'reader_lua_only.log')
     with open(log, 'w') as f:
@@ -663,7 +802,24 @@ def main():
     except Exception as e:  # noqa: BLE001
         check(False, 's78h records -> parser: %r' % e, fails)
 
-    print('3. synthetic memory traces -> s7s8_parse.py (s78h t07 departure, t01 edge by auto-acquire)')
+    log_i = os.path.join(OUT, 'reader_lua_only_s78i.log')
+    with open(log_i, 'w') as f:
+        f.write('S78READER 1 selftest\nGAME pid=0 base=0x0 identity=selftest\n')
+        f.write('MODE n=1 ptr=0x1 type=1 game_type=3 stack=1 frame=0 gframe=0\n')
+        for i, r in enumerate(reversed(recs8)):
+            f.write('LUA n=1 frame=99999 addr=0x%x rec=%s\n' % (0x1000 + i, r))
+        f.write('MODE_END n=1 last_frame=15500\nEXIT reason=game_exited modes=1\n')
+    try:
+        resi = s7s8_parse.cmd_parse(argparse.Namespace(log=log_i, out=os.path.join(OUT, 'report_lua_only_s78i.txt'),
+                                                       json=None))
+        gi = [[r['name'] for r in run['scenarios']] for run in resi['runs']]
+        vi = resi['answers'].get('t01_slot47_nofire') or ''
+        check(gi == [LAND_I + ['HUMAN']] and vi.startswith('FIRE_BLOCK_FAILED'),
+              's78i records (reversed) -> parser: %s; t01_slot47_nofire %s' % (gi, vi), fails)
+    except Exception as e:  # noqa: BLE001
+        check(False, 's78i records -> parser: %r' % e, fails)
+
+    print('3. synthetic memory traces -> s7s8_parse.py (s78h t07 departure, t01 edge by auto-acquire; s78i t01 IDLE47N)')
     synth_checks(fails)
 
     print('4. reader and parser selftests')

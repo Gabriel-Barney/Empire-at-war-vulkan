@@ -1232,6 +1232,21 @@ S78_IDLE47V_CYCLES = 5
 -- opt (s78g IDLE47X): { n = attackers (max 12), gap = spacing along the strip, along0 = first position,
 -- cycles = on / off cycles, period = cycle length (victims for the first half) }; defaults are the IDLE47V / W set-up
 -- (6 attackers 90 apart from 0, 5 cycles of 300)
+-- opt.nofire (s78i IDLE47N): "spawn" = Prevent_All_Fire(true) on each attacker when it is placed, before any attack
+-- order; "order" = Prevent_All_Fire(true) on every attacker opt.nofire_at (default 6) frames after each cycle's attack
+-- orders, and (false) when the victims go. nil = attackers fire (the IDLE47V / W / X / Q set-up).
+function S78_Idle47NoFire(s, name, n, on, cc)
+	local ok = 0
+	for k = 1, n do
+		local u = s.objs["i" .. k]
+		if S78_Valid(u) and pcall(function() u.Prevent_All_Fire(on) end) then
+			ok = ok + 1
+		end
+	end
+	S78_Rec("ORDER", "scn=" .. s.name .. "|tag=" .. name .. "_c" .. cc .. "|order=" ..
+		(on and "nofire_on" or "nofire_off") .. "|ok=" .. ok .. "|n=" .. n)
+end
+
 function S78_Idle47VPhase(steps, name, tname, t0, noauto, opt)
 	opt = opt or {}
 	local n, gap, a0 = opt.n or 6, opt.gap or 90, opt.along0 or 0
@@ -1256,6 +1271,9 @@ function S78_Idle47VPhase(steps, name, tname, t0, noauto, opt)
 					for j, ab in ipairs(noauto or {}) do
 						S78_Setup("i" .. k, u, { { "Set_Single_Ability_Autofire", ab, false } })
 					end
+					if opt.nofire == "spawn" then
+						S78_Setup("i" .. k, u, { { "Prevent_All_Fire", true } })
+					end
 				end
 			end
 		end
@@ -1275,10 +1293,19 @@ function S78_Idle47VPhase(steps, name, tname, t0, noauto, opt)
 			end
 			S78_Mark(name .. "_on" .. cc)
 		end })
+		if opt.nofire == "order" then
+			table.insert(steps, { at = t0 + cc * per + (opt.nofire_at or 6), run = function(s)
+				S78_Idle47NoFire(s, name, n, true, cc)
+			end })
+		end
 		table.insert(steps, { at = t0 + cc * per + per / 2, run = function(s)
 			for k = 1, n do
 				S78_Despawn("iv" .. k)
 				s.objs["iv" .. k] = nil
+			end
+			-- after the victims are gone (fire allowed again only once there is nothing to shoot at)
+			if opt.nofire == "order" then
+				S78_Idle47NoFire(s, name, n, false, cc)
 			end
 			S78_Mark(name .. "_off" .. cc)
 		end })
@@ -1727,35 +1754,74 @@ function S78_QuietSweep(s, who, player, keep_farthest)
 		table.getn(mob) .. "|despawned=" .. gone .. "|kept=" .. (keep and S78_ObjId(keep) or "-") .. "|other=" .. other)
 end
 
-function S78_ScnIdle47Q()
-	local steps = {}
-	local pre = S78_IDLE47Q_PRE
-	local len = (S78_IDLE47X_OPT.cycles + 1) * S78_IDLE47X_OPT.period
+-- the quiet-background stages shared by IDLE47Q and IDLE47N: bg_pre (0..300), the first sweep (+300, repeated every
+-- 300 frames by S78_QuietTick), bg_post (+450 .. the first phase at S78_IDLE47Q_PRE)
+function S78_QuietSteps(steps)
 	table.insert(steps, { at = 0, run = function(s) S78_Mark("bg_pre") end })
 	table.insert(steps, { at = 300, run = function(s)
 		s.q_next = 300
 		S78_Mark("sweep")
 	end })
 	table.insert(steps, { at = 450, run = function(s) S78_Mark("bg_post") end })
+end
+
+function S78_QuietTick(s, rel)
+	if s.q_next and rel >= s.q_next then
+		s.q_next = rel + 300
+		S78_QuietSweep(s, "ai", PlayerObject, true)
+		if S78_CFG.quiet_human ~= false then
+			local hp = S78_Try("Find_Player:human", function() return Find_Player(S78_CFG.human_faction) end)
+			-- the Saboteur is the human's kept unit; without it keep the farthest one
+			S78_QuietSweep(s, "human", hp, not S78_Valid(S78_HUMAN))
+		end
+	end
+end
+
+function S78_ScnIdle47Q()
+	local steps = {}
+	local pre = S78_IDLE47Q_PRE
+	local len = (S78_IDLE47X_OPT.cycles + 1) * S78_IDLE47X_OPT.period
+	S78_QuietSteps(steps)
 	S78_Idle47VPhase(steps, "P", "Pod_Walker", pre, nil, S78_IDLE47X_OPT)
 	S78_Idle47VPhase(steps, "D", "Dark_Trooper_PhaseII", pre + len, { "JET_PACK" }, S78_IDLE47X_OPT)
 	S78_Idle47VPhase(steps, "V", nil, pre + 2 * len, nil, S78_IDLE47X_OPT)
-	return {
-		name = "IDLE47Q",
-		dur = pre + 3 * len,
-		steps = steps,
-		tick = function(s, rel)
-			if s.q_next and rel >= s.q_next then
-				s.q_next = rel + 300
-				S78_QuietSweep(s, "ai", PlayerObject, true)
-				if S78_CFG.quiet_human ~= false then
-					local hp = S78_Try("Find_Player:human", function() return Find_Player(S78_CFG.human_faction) end)
-					-- the Saboteur is the human's kept unit; without it keep the farthest one
-					S78_QuietSweep(s, "human", hp, not S78_Valid(S78_HUMAN))
-				end
-			end
-		end,
+	return { name = "IDLE47Q", dur = pre + 3 * len, steps = steps, tick = S78_QuietTick }
+end
+
+-- s78i t01: slot 47 with the attackers' fire blocked but targeting kept. In IDLE47Q (104750) Pod_Walker and
+-- Dark_Trooper_PhaseII both added ~1 synced draw per attacker per frame, but the attackers fired at their
+-- (invulnerable) victims, and a land shot draws 2 (own-weapon inaccuracy, TACTICAL_COMBAT 3.1.2), so part of D may be
+-- fire. IDLE47N is IDLE47Q (same quiet background and sweeps, 12 attackers, 200-frame cycles) with Prevent_All_Fire on
+-- the attackers. The retail flag's effect on targeting is not mapped, so it is set two ways:
+--   P  Pod_Walker (no ATTACKIDLE clip), flag set when placed: the no-clip control (should still draw ~1 / attacker);
+--   D  Dark_Trooper_PhaseII (JET_PACK autofire off), flag set when placed, before any attack order;
+--   E  Dark_Trooper_PhaseII, flag set 6 frames (two or more free-store services) after each cycle's attack orders,
+--      cleared when the victims go (in case a flag set before the order stops the attack being taken);
+--   F  Dark_Trooper_PhaseII firing (no flag), 3 cycles only: shows that its shots are seen as PROJ_ objects, so
+--      "0 shots" in D / E means blocked;
+--   V  victims only.
+-- The parser reads, per phase, targeting state and clip while the victims exist, shots near the attackers, and the
+-- draws per attacker per frame (on minus off, V subtracted).
+S78_IDLE47N_SPAWN = { n = 12, gap = 75, along0 = -200, cycles = 15, period = 200, nofire = "spawn" }
+S78_IDLE47N_ORDER = { n = 12, gap = 75, along0 = -200, cycles = 15, period = 200, nofire = "order", nofire_at = 6 }
+S78_IDLE47N_FIRE = { n = 12, gap = 75, along0 = -200, cycles = 3, period = 200 }
+
+function S78_ScnIdle47N()
+	local steps = {}
+	local t = S78_IDLE47Q_PRE
+	S78_QuietSteps(steps)
+	local phases = {
+		{ "P", "Pod_Walker", nil, S78_IDLE47N_SPAWN },
+		{ "D", "Dark_Trooper_PhaseII", { "JET_PACK" }, S78_IDLE47N_SPAWN },
+		{ "E", "Dark_Trooper_PhaseII", { "JET_PACK" }, S78_IDLE47N_ORDER },
+		{ "F", "Dark_Trooper_PhaseII", { "JET_PACK" }, S78_IDLE47N_FIRE },
+		{ "V", nil, nil, S78_IDLE47N_SPAWN },
 	}
+	for i, p in ipairs(phases) do
+		S78_Idle47VPhase(steps, p[1], p[2], t, p[3], p[4])
+		t = t + (p[4].cycles + 1) * p[4].period
+	end
+	return { name = "IDLE47N", dur = t, steps = steps, tick = S78_QuietTick }
 end
 
 S78_SCN_BY_NAME = {
@@ -1766,7 +1832,7 @@ S78_SCN_BY_NAME = {
 	SPMAT_EDGE = S78_ScnSpmatEdge, IDLE47V = S78_ScnIdle47V, GUARD_MOVE = S78_ScnGuardMove,
 	SPMAT_EDGE2 = S78_ScnSpmatEdge2, SPMAT_CTRL = S78_ScnSpmatCtrl, IDLE47W = S78_ScnIdle47W, REINF2 = S78_ScnReinf2,
 	GUARD_HAND = S78_ScnGuardHand, SPMAT_EDGE3 = S78_ScnSpmatEdge3, IDLE47X = S78_ScnIdle47X,
-	SPMAT_EDGE4 = S78_ScnSpmatEdge4, IDLE47Q = S78_ScnIdle47Q,
+	SPMAT_EDGE4 = S78_ScnSpmatEdge4, IDLE47Q = S78_ScnIdle47Q, IDLE47N = S78_ScnIdle47N,
 }
 
 function S78_Scenarios()
