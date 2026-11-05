@@ -68,7 +68,9 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
    setup step in `toolchain\2_setup.cmd` — never system-wide, no admin, no PATH/registry changes.
 6. When a task finishes, update the roadmap (`roadmap_store.py write`, see `docs/ROADMAP_PROTOCOL.md`) and the current phase status (project docs
    `claude/roadmap.md`, `claude/phase2-status.md`, and `docs/PHASE2.md` here): tick the item, update the
-   Mermaid flowchart node, record results and open items. Keep edits minimal and factual. When all tasks in a roadmap group
+   Mermaid flowchart node, record results and open items. A roadmap update always updates both copies (Gabriel, 2026-11-04): the GitHub
+   store (`roadmap_store.py write` pushes it) and the local pages (`ROADMAP.html`, `docs/ROADMAP.html`), and the regenerated local pages are committed with
+   the work, never reverted or left out of the PR (`docs/ROADMAP_PROTOCOL.md`, "Both copies on every update"). Keep edits minimal and factual. When all tasks in a roadmap group
    are finished, mark the group `done` on the roadmap in the same update (Gabriel, 2026-10-30, 2026-10-31): after closing tasks, re-read
    each group you touched, and if it has no `todo` task left set `status: done` (and drop its `preset`) in that same write; a group
    left open with every task closed is a mistake to fix before ending the task. A flowchart box's status is not derived from its
