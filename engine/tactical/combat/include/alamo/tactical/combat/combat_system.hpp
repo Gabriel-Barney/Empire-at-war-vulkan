@@ -22,7 +22,8 @@
 // outputs only and never draw from the RNG; every synced draw happens in a serial phase, in a fixed
 // order, so results are identical for any worker count:
 //   A  modifiers   [parallel per unit] purge expired object entries (player sets serially first),
-//                  refresh the reduced-value cache and the Mod_Multiplier products; [serial] squad min.
+//                  refresh the reduced-value cache and the Mod_Multiplier products (every unit keeps its own;
+//                  the squad value is team_mod_multiplier, s78h t03); [serial] team heads and team slots.
 //   B  upkeep      [serial] delayed-damage countdowns (queue order); [parallel per unit] shield
 //                  regeneration, hull <-> hardpoint 0.2 coupling.
 //   C  gather      [parallel per unit due a target scan] tree queries per enemy player (cube of
@@ -32,6 +33,11 @@
 //                  reschedule draw, start-player draw, per-candidate aim-point draws, selection rule
 //                  2.4; then each weapon hardpoint in HardPoints order (Update_Weapon / Fire_At:
 //                  muzzle, lead, inaccuracy, spawn, recharge draws), then the non-hardpoint weapon.
+//                  s78h t06: a land team's TeamTargeting (its head's decide + team_targeting_service)
+//                  runs once per tick at the team's container slot, just before the team's highest
+//                  phase-A index in this walk (even if that unit died earlier in the walk), on the
+//                  team's current live head (the heir after an in-tick hand-over); the head's own
+//                  slot runs no targeting.
 //   E  sweep       [parallel per projectile] segment ray queries against every hostile player tree;
 //                  first hit by (t, object id) among units alive at the start of the phase.
 //   F  commit      [serial, projectile serial order] re-sweep if the victim died this phase, hit
@@ -1335,6 +1341,14 @@ public:
     // start of each tick and on demand when stale.
     float modifier(ObjectId id, ModList list);
     float mod_multiplier(ObjectId id, ModKind kind);
+    // s78h t03 (TACTICAL_COMBAT §4.4 "Who the squad leader is"): the value 0x398010 returns for a TEAM container, keyed
+    // by the container id (`damage_team`: `team` on land, the squadron id in space). The container's own product when
+    // that is != 1 (only when the container is a combat unit; the port's containers have no abilities, so 1.0), else
+    // the minimum over ALL live members' own products (the team_leader stand-in and 1.0-valued members included), 1.0
+    // when the team has no live member. Only container-level readers use it (a team locomotor's SPEED [M]); every
+    // per-unit reader (mod_multiplier, weapons, shields, damage) reads the unit's own product. No caller in the port
+    // yet: the host has no team locomotor (members move one by one). Pure function of the current state.
+    float team_mod_multiplier(uint32_t team, ModKind kind) const;
     float attack_range(ObjectId id);  // Get_Max_Attack_Range
     void set_health(ObjectId id, float h);
     void set_shield(ObjectId id, float s);
@@ -1467,8 +1481,7 @@ private:
         uint32_t mod_ver = 0, player_ver = 0;
         uint8_t mod_valid = 0;
         std::array<float, kModKindCount> own_mult{};
-        std::array<float, kModKindCount> mult{};
-        uint16_t squad_seen = 0;
+        std::array<float, kModKindCount> mult{};  // s78h t03: = own_mult (a member never takes the squad value)
         uint8_t needs_scan = 0;  // phase C output
         uint8_t scan_due = 0;
         ObjectId share_group = kNoObject;  // S8 t17: squadron of the shared team target (host, per tick)
@@ -1658,6 +1671,8 @@ private:
     void hold_fire(Unit& u, ObjectId target);                      // s78f t08: the services' last rule
     ObjectId container_or_self(ObjectId id) const;                 // s78f t08: a team member -> its container
     const Unit* land_team_head(const Unit& u) const;  // s78f t03: the head of a land team member (no TARGETING of its own)
+    Unit* team_head_of(uint32_t team);  // s78h t06: a team's current live head (container unit, else team_leader), or null
+    bool targeting_idle(const Unit& u, uint32_t frame) const;  // phase D: stunned, unpowered or targeting suspended
     void drop_target(Unit& u);                        // slot 27: the order and scan targets are dropped
     bool lob_turret_aim(Unit& u);                     // s78f t04: 0x631fe0 toward the lobbing order's point (one slew step)
     int32_t model_alt_of(const Unit& u) const;
@@ -1788,6 +1803,14 @@ private:
     std::vector<std::pair<uint32_t, uint32_t>> leaders_;  // (team, unit index) scratch
     std::vector<std::pair<uint32_t, ObjectId>> team_heads_;  // OI tactical: (team, team_leader id), built in phase A
     std::vector<ObjectId> land_heads_;  // s78f t03: ground team heads (TeamTargeting), phase A scratch read in phase D
+    // s78h t06: one TeamTargeting service per land team per tick at the team's container slot = the team's highest unit
+    // index (head included), reached first in phase D's descending walk. Built in phase A, slot descending (ties: team).
+    struct LandTeamSlot {
+        uint32_t slot = 0;     // units_ index the service runs just before
+        uint32_t team = 0;
+        uint8_t serviced = 0;  // serviced this tick
+    };
+    std::vector<LandTeamSlot> land_teams_;
     std::vector<float> dim_x_, dim_y_, dim_y2_;              // OI tactical: diminishing-firepower spline (sorted)
     uint32_t next_serial_ = 1;
     uint32_t frame_ = 0;

@@ -367,7 +367,9 @@ def lua_config(cfg):
              '\tfaction = "%s",' % cfg['faction'],
              '\thuman_faction = "%s",' % cfg['human_faction'],
              '\tstart_frame = %d,' % cfg['start_frame'],
-             '\ttext = %s,' % ('true' if cfg.get('text') else 'false')]
+             '\ttext = %s,' % ('true' if cfg.get('text') else 'false'),
+             # s78h IDLE47Q: also despawn the human's mobile units (all but the Saboteur); ALAMO_S78_QUIET_HUMAN=0 = off
+             '\tquiet_human = %s,' % ('false' if os.environ.get('ALAMO_S78_QUIET_HUMAN', '1') == '0' else 'true')]
     for key, env, dflt in (('land_list', 'ALAMO_S78_LAND', LAND_LIST), ('space_list', 'ALAMO_S78_SPACE', SPACE_LIST)):
         names = [n.strip().upper() for n in os.environ.get(env, '').split(',') if n.strip()] or dflt
         lines.append('\t%s = { %s },' % (key, ', '.join('"%s"' % n for n in names)))

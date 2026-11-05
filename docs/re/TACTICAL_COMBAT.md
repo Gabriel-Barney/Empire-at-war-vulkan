@@ -1071,8 +1071,42 @@ half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor;
     (200 / 172 / 249 / 141 / 288): delays 9 / 11 / 29 / 41 / 52 / 61. So the delay grows by about **11.3 frames
     per unit spawned earlier** (least-squares slope; residual 5.9), whatever the gap. It is a per-unit stagger, not
     a random initial delay (a random one would spread up to 159). The REINF run's first shots also sit on a
-    161-frame clock, but REINF2 does not, so that clock was a coincidence of the equal gaps. Not yet explained:
-    what the stagger counts (alive attackers of one player, or services queued behind them).
+    161-frame clock, but REINF2 does not, so that clock was a coincidence of the equal gaps. Explained by s78h t05
+    (next item): the stagger is the hull turn from the spawn facing, not a count of units or services.
+  - *What the "stagger" is* (s78h t05, 2026-11-05) [H]. It counts nothing. It is the **body turn from the
+    `Spawn_Unit` facing to the target**, and it only looked per-unit because the probe placed each later spawn
+    further along the line, so each one had to turn further.
+    - **`Spawn_Unit` facing** (`LuaSpawnUnitCommandClass::Lua_Call` 0x6a1f90, tactical branch) [H]. The position
+      comes from parameter 2 (0x4990b0; an object gives its position). The orientation is built by 0x20acd0(position,
+      (0, 0, 0)), i.e. the angles **looking from the spawn point at the world origin**: yaw = atan2(0 − y, 0 − x) in
+      degrees, mapped to [0, 360) (yaw 0 when x = y = 0); pitch = −atan2(0 − z, horizontal distance); roll 0. Then
+      0x29e960(type, position, that orientation, player) creates the units. Each one gets it through 0x2b3be0
+      parameter 4. A team container formed by 0x2a5a60 takes the first member's +0x84. An object given as the
+      location does **not** lend its own facing. The galactic branch (mode vf +0xf0 false → 0x6a2520) is a
+      different path.
+    - **The turn.** The order's target is set 1–2 frames after the spawn, and the state becomes 3 (slot 48: off the
+      target yaw by more than half a step). Each service then turns the hull by one step R = `Max_Rate_Of_Turn` ×
+      `Object_Max_Speed_Multiplier_Land` (MZ8: 1.0 × 1.56 = 1.56° per frame; MOVEMENT §3.4). The state becomes 4,
+      and the shot follows at once, when the remaining error is ≤ R / 2. The WEAPON initial delay plays no part,
+      because it is zeroed on the first service, as the item above says.
+    - **Check against both runs.** Victim at (3280, 4640); the attackers' x = 3480 (REINF2 unit 2 at 3387.0, 4730.7).
+      Yaw to the origin is about 233°. Turn needed (frames in state 3 before state 4):
+      - REINF: 26.0° (16), 43.4° (27), 62.8° (39), 80.2° (50).
+      - REINF2: 12.9° (7), 14.1° (8), 43.4° (28), 62.8° (39), 80.2° (50), 93.3° (59).
+
+      All ten fit angle / 1.56 within 1–2 frames. REINF2 units 4 / 5 stand where REINF units 3 / 4 stood and took the
+      same 39 / 50 frames, although 3 / 4 units were alive before them instead of 2 / 3. A facing of 270° (−Y), or
+      the port's +X, does not fit.
+    - **Port check (2026-11-05).** The weapon side matches. `fire_unit_weapon` subtracts the frames since the last
+      service, which start at 0, so the drawn initial delay is gone on a late spawn's first service. The state 3 / 4
+      gate and the turn step also match: `needs_turn_to` uses tolerance R / 2, and `face_toward` makes one
+      clamp(±R) step per service. `turn_step` = `turn_rate` × `Object_Max_Speed_Multiplier_Land` (1.56).
+      **Mismatch:** the port's Lua `Spawn_Unit` (`engine/lua/src/bind_objects.cpp` `spawn()`) gives a position spawn
+      facing +X, and an object-location spawn that object's facing. **Change:** in the tactical store, set
+      `sp.facing` to the unit vector (−x, −y, 0) / |(−x, −y)| from the spawn position, with (1, 0, 0) when x = y = 0.
+      This applies to an object location too, using its position. Keep the company members on that same facing.
+      [port] The 0.3° pitch is dropped, because land units stay level. Not checked: `Create_Generic_Object`,
+      `Reinforce_Unit` and the AI / story spawn paths, which use their own callers.
 
 **Targeting states, slots 47 / 48 and team copies (s78f, 2026-11-03)** [H unless tagged]. TD = obj +0xf0; the TD
 pack is shared by TARGETING, WEAPON (TD +0x80 = the WeaponBehavior, stored by its attach 0x54ceb0) and TURRET
@@ -1179,6 +1213,44 @@ Overrides:
   the container's locomotor vf +0x2e8(target), and 4 if no member needs to turn any more. No TURRET branch.
 - Space squadrons have no team targeting service; their shared target is FIGHTER_FLYING §4.10 B (team data +0x30,
   `Set_Target` on every member).
+- *When the container is serviced, and a member's death in the same frame* (s78h t06, 2026-11-05).
+  - **Its own entry** [H]. TeamTargeting is a behaviour of the container object. It runs from the container's own
+    object service (0x3a6b80, behaviours in attach order), at the container's own place in the store's serviced
+    list (OBJECT_RUNTIME §5.3). It is never called through a member or a leader. 0x62ee00 reads only the container
+    (param_1[5]): its locomotor kind, its +0x3a1 burning bit and its TD. 0x62eeb0 walks the members only to push
+    state, facing and pose.
+  - **A member's death does not touch it** [H for one service per frame from the service structure; M that no
+    death hook writes the container's TD, because the death path (OBJECT_RUNTIME §2.2) was not re-read for one].
+    Nothing on the death path re-services the container or changes its
+    TD (target TD +8, state TD +0x18, scan timer TD +0x20). So a container alive at its slot gets exactly **one**
+    TeamTargeting service that frame, whichever members died before or after its slot. There is no re-service and
+    no hand-over. A container that dies earlier in the walk keeps its list entry with zero serviced behaviours until
+    the flush (OBJECT_RUNTIME §5.3), so it gets no service.
+  - **Its place relative to its members** [H creation order, M list direction]. 0x29e960 (the creator behind Lua
+    `Spawn_Unit`; other spawn paths that reach 0x2a5a60 were not traced) first creates every company unit (type list +0x958 / +0x978 → 0x2b3be0). Only then, when
+    the first unit's type has +0x67 set, does 0x2a5a60 build the team container (0x29f810 at the members' mean
+    position, then members added by 0x404190). The container therefore registers **after** its members. The serviced
+    list is walked newest first, so the container is serviced **before all of its members** each frame. Their
+    WEAPON services then read the state it pushed that same frame.
+  - **Port (2026-11-05).** The port has no container unit. The team's lowest-index member (`team_leader`, set in
+    `engine/apps/sim/src/tactical_battle.cpp`) stands in for it, and phase D walks `units_` from the highest index
+    down. That gives two differences from the above:
+    1. The head service runs **after** the other members' slots, so their `update_weapons` read the previous
+       tick's team state (one tick late).
+    2. The s78g t06 hand-over goes to the lowest-id live member. That member always has a higher index than the dead
+       leader, so its slot was passed earlier in the walk. A leader killed inside phase D, from a slot between the
+       heir's and its own (or by its own burning / infection service), leaves the team with no TeamTargeting that
+       tick. Retail never skips one.
+
+    **Recommended change** (in `combat_system.cpp` phase D): run each land team's TeamTargeting, meaning the
+    head's `decide` (on `cands_[head index]`) followed by `team_targeting_service`, **once per tick at the team's
+    container slot**. That slot is just before the team's highest-index member, reached first in the descending
+    walk. Run it even when that member is already dead, as long as the team still has a live head. Keep a per-team
+    "serviced this tick" flag, and drop the head's own-slot team call. A hand-over after the slot then needs no
+    re-service, and one before it is picked up at the slot. `hand_over_team` keeps the record copy, and its in-tick
+    re-gather is still needed only for the copied scan flags. This moves team draws (scan, slot-47 blends) earlier
+    in the tick, so the land team goldens and CRCs change. A smaller fix that closes only gap 2: at the dead former
+    leader's own slot, if its team has not been serviced this tick, service the current head there.
 
 *For the implementer:* keep one state per object (0–4) and gate the own weapon on 4. Land: turret units use "turret
 aimed"; weapon units use "facing within half a frame of turn" (snap when within, turn request when not); moving
@@ -1627,6 +1699,55 @@ order, not nearest along the segment. The port should sort by segment fraction, 
 7. On-detonation effects, in this order: stun, distract, heal, convert, invulnerability, combat mod, ion stun
    (single target when its radius is 0), infection.
 
+**Convert and its team rule** (`Projectile_Convert_Enemy_*`; 0x4ca020 → per victim 0x4ca2f0) (s78h t04,
+2026-11-05) [H unless tagged]:
+1. **Gate (0x4ca020):** the projectile type has the convert flag, the detonating object (+0x28) is a projectile
+   of that type, and `Projectile_Convert_Enemy_Radius` (type +0x1f10, read as a float) > 0. New owner = the
+   projectile object's owner (+0x58).
+2. **Victims:** the players from 0x294910(owner) [M: the owner's enemies], each in list order. For each one,
+   the GOM radius query 0x2a8fb0 on that player's tree at the projectile position, taken in query order. A
+   victim must pass 0x395c10:
+   - its type category (+0x1648) matches `..._Targets_Category_Mask` (+0x1f28);
+   - obj +0x3a2 bit 3 is clear;
+   - slot byte +0x387 is −1;
+   - type +0x23ec ≤ 0 and type +0x13 = 0;
+   - obj +0x150 is null or both its +8 and +0x10 are null [M meaning].
+   **There is no mode gate** and no test of the victim's team.
+3. **Per victim (0x4ca2f0):**
+   - **Skip** when the victim's owner already is the new owner. After the first member of a team converts, the
+     rest of that team is skipped, so each team converts once.
+   - **"Is a team member" is 0x39b1a0:** the victim's parent (obj +0x2b0) is non-null **and** has a TEAM slot
+     (parent +0x348 ≠ −1). This is the same container test FIGHTER_FLYING §1.5 uses for squadrons, so **in
+     space the fighter squadron container is the team, exactly as the infantry team container is on land**.
+   - **Converted flag** (+0x3a2 |= 4, the decay of ABILITIES_HARDPOINTS §4.10):
+     - not a member: set on the victim only;
+     - member: set on the **container**, then on every non-null entry of the container's TEAM member list
+       (container +0x110: array +0x10, count +0x18, list order). The victim is one of those entries.
+4. **Owner change:** `Change_Owner` 0x38e5a0(victim, owner, 0). It propagates through the team by itself:
+   - a non-container whose parent is a TEAM container calls it on the container;
+   - a TEAM container calls it on each member in list order;
+   - an object that already has the new owner returns at once.
+   So the container and **all** its members change owner, whatever their position, category or distance.
+5. **Notifications, in this order:**
+   - for the victim: store / parent (0x2c0340 when 0x372230 on its type, 0x2b2cc0 when obj +0x54 ≠ 0x3fffff);
+   - the victim's type is swapped to type +0x1ad0 when that is set and differs [M meaning];
+   - the spawn effect (0x38d580) when +0x1f20 is set;
+   - behaviour 0x20 vf+0x78, then 0x3a54c0.
+   For a member, the same steps then run for the container (0x2c0340 and behaviour 0x20) and for each other
+   member (all of them, including the type swap and the spawn effect).
+6. **Last:** the victim's slot 0x50 / 0x4f / 0x56 (the first that exists, checked in that order) gets 0x444ab0
+   [L meaning].
+
+> **Port gap (2026-11-05):** `CombatSystem::detonation_effects` (`engine/tactical/combat/src/combat_system.cpp`,
+> "Convert" block) spreads the conversion over `v->team`. The host sets `team` for land team members only
+> (`apps/sim/src/tactical_battle.cpp` deploy, "not registered" note for space), so a converted space squadron
+> member converts alone and its squadron mates stay with the old owner. **Fix:** spread over the container id. A
+> space squadron member carries it in `damage_team`, and spawn sets `damage_team` to `team` when `team` ≠ 0, so
+> `damage_team` is the 0x39b1a0 container id in both modes. Compare `m.damage_team == v->damage_team` (when
+> non-zero) in place of `team`. Also skip a victim whose `owner` already equals `p.owner` (step 3), so a team
+> listed several times in `vs` converts and raises `UnitEffect::Converted` once per object, not once per listed
+> member.
+
 **Area damage** (0x4c7f70):
 1. Players are visited in index order. R = `Projectile_Blast_Area_Range` × the shooter's `SCATTER_RADIUS`
    unit-ability multiplier (kind 10).
@@ -1855,6 +1976,44 @@ and ascending-category summation are kept.
 - **Multiplier** (0x398010) = the **product** over the type's first two ability slots, counted only where the
   ability is active, with LUCKY_SHOT skipped.
   - For a squad leader whose own product is 1, the result is the **minimum** over squad members.
+  - **Who the "squad leader" is (s78h t03, 2026-11-05) [H]:** the **team container itself**, the object with a
+    TEAM slot (obj +0x348 ≠ −1, behaviour 0x16). It is never one of its members.
+    - Slots: the own product uses the object's own type (+0x298) and its own ability state (+0x3d0 + 16 × t),
+      and an ability type ≥ 0x4d or = 0x22 (LUCKY_SHOT) counts 1.0.
+    - Trigger: when that own product is **exactly 1.0** and the object has a TEAM slot, it fetches the TEAM
+      behaviour (vf+0x10 with 0x16).
+    - Walk: the TEAM member list (count 0x405300, entry 0x4052d0: the container +0x110 vector, list order).
+      It calls 0x398010 **recursively on each non-null member**, so a member contributes its full value, which
+      is its own product, because members have no TEAM slot.
+    - Minimum: kept with `<=` from a 1e18 start. Every member counts, including members whose product is 1.0
+      (inactive), so one member at 1.0 caps the team at ≤ 1.0. **The container's own value (1.0) is not in
+      the minimum**; it is multiplied by it (1.0 × min = min).
+    - Edge cases: an empty list, or no non-null member, leaves 1.0. A min > 1 is used as is (all members at 1.5
+      give the container 1.5).
+    - A container whose own product ≠ 1 keeps its own product. Its own slots are active only for per-unit
+      (U = 1) abilities, because U = 0 activations are forwarded to the members (ABILITIES_HARDPOINTS §2.3).
+    - **A member never takes the squad value.** Without a TEAM slot it returns its own product. Every reader
+      that passes a member therefore reads that member's own product: fire recharge 0x54cef0 / 0x54d8f0 /
+      0x3825b0, shields 0x549250 / 0x5494b0, energy 0x56bfd0 / 0x56c030, `Take_Damage` kinds 7 / 8, blast
+      radius 0x4c7f70, ion / lucky shot 0x704b50 / 0x7064e0 / 0x706d90.
+    - The squad minimum reaches only callers that pass the container [M which ones]. The candidates are the
+      SPEED reads 0x3728f0 / 0x376990, for a team locomotor (MOVEMENT §3.4).
+    - **No mode gate:** a space fighter squadron container (TEAM slot) gets the same rule.
+  - **Port gap (2026-11-05):** the port has no container unit, so a `team_leader` member stands in for it
+    (`apps/sim/src/tactical_battle.cpp` deploy sets the chunk's first member; `tactical_battle_bt.cpp` the
+    same).
+    - Phase A of `CombatSystem::tick` (`engine/tactical/combat/src/combat_system.cpp`, "Squad rule (serial)")
+      overwrites that member's `mult` with the minimum over the *other* members. The stand-in's own product is
+      both left out of the minimum and replaced for its own weapons, shields, damage and speed.
+    - `mod_multiplier()` / `mult()` therefore return the squad value for one real member. Space squadrons get no
+      rule, because `team` is land only.
+    - **Rule to implement:** every unit, the `team_leader` included, keeps `mult = own_mult`. Add a separate
+      per-team value, keyed by the container id (`team`, or `damage_team` for a space squadron), equal to the
+      container's own product (1.0 while the port has no container abilities) when that is ≠ 1, else the
+      minimum over **all** live members of the team (stand-in included, 1.0-valued members included, 1.0 when
+      none).
+    - Only container-level readers use the per-team value (a team locomotor's SPEED, when the host models one).
+      Drop `squad_seen`, and change `squad_multiplier` (`modifiers.cpp`) so the caller passes every member.
 - **Flag** (0x397f60) = AND across the active slots, default true.
 - **Where the kinds apply:**
 

@@ -572,14 +572,24 @@ int issue_and_block(Call& c, const Event& e) {
 
 // Creates `type` (and, for a company, its Company_Units as contained members, list order) at `pos`.
 // [inferred] creation is direct (no reinforcement / landing sequence); in galactic mode an object
-// location becomes the container (fleet / planet). Facing: the location object's, else +X.
-ObjectHandle spawn(Call& c, TypeIndex type, int32_t owner, Vec3 pos, ObjectHandle location, bool company) {
+// location becomes the container (fleet / planet). Facing: the location object's, else +X; with
+// `face_origin` in a tactical store (Spawn_Unit, TACTICAL_COMBAT §3.1.1 s78h t05) the XY unit vector from the
+// spawn position toward the world origin, +X at x = y = 0 (an object location lends only its position; [port]
+// no pitch). Company members share the container's facing.
+ObjectHandle spawn(Call& c, TypeIndex type, int32_t owner, Vec3 pos, ObjectHandle location, bool company,
+                   bool face_origin = false) {
     objects::ObjectStore* st = store(c);
     objects::SpawnParams sp;
     sp.type = type;
     sp.owner = owner;
     sp.position = pos;
-    sp.facing = location ? st->facing(location) : Vec3{1.0f, 0.0f, 0.0f};
+    if (face_origin && st->mode() != objects::ModeKind::Galactic) {
+        const float dx = -pos.x, dy = -pos.y;
+        const float len = dmath::sqrt(dx * dx + dy * dy);
+        sp.facing = len > 0.0f ? Vec3{dx / len, dy / len, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
+    } else {
+        sp.facing = location ? st->facing(location) : Vec3{1.0f, 0.0f, 0.0f};
+    }
     if (location && st->mode() == objects::ModeKind::Galactic) sp.container = location;
     const ObjectHandle h = st->create(sp);
     if (company && types(c)) {
@@ -848,7 +858,7 @@ int g_spawn_unit(Call& c) {
     // a1g t06: at a planet of the galactic sim the unit is placed by the sim (fleet / surface / planet, one company
     // object); anywhere else it is created directly with its company members.
     ObjectHandle h = loc ? detail::galactic_spawn_unit(c, static_cast<uint32_t>(t->value), p->id, loc) : ObjectHandle{};
-    if (!h) h = spawn(c, static_cast<TypeIndex>(t->value), p->id, pos, loc, true);
+    if (!h) h = spawn(c, static_cast<TypeIndex>(t->value), p->id, pos, loc, true, /*face_origin=*/true);
     detail::push_object(c.L, *c.vm, h);
     lua_rawseti(c.L, -2, 1);
     return 1;

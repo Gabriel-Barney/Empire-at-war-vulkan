@@ -1594,6 +1594,170 @@ function S78_ScnGuardHand()
 	}
 end
 
+-- ---- s78h scenarios (2026-11-05) -----------------------------------------------------------------------------------
+
+-- s78h t01: SPMAT range edge by auto-acquire (LOB_SOLVER sec. 9). In SPMAT_EDGE3 (run 20261105-092438) the deployed
+-- walker acquired nothing, not even the in-range control at 450: a deployed AI unit without an order may not acquire a
+-- target outside the AI's vision. SPMAT_EDGE4 is EDGE3 plus vision at the edge tank: an AI-owned spotter
+-- (Rebel_Infiltrator: invulnerable, no fire, locomotor suspended, 100 to the side of the tank spot, spawned with the
+-- 275 aim tank so it sees the spot before the tank appears) and FogOfWar.Reveal(PlayerObject, tank, 250, 250), undone
+-- at the next window. No order at the edge tank. Two passes, the 450 control first in each; the victims are the
+-- human's (S78_VICTIM_PLAYER), never Hostile.
+S78_EDGE4_D = { 450, 540, 544, 547, 550, 556, 450, 556, 550, 547, 544, 540 }
+S78_EDGE4_SPOT_SIDE = 100
+
+function S78_Edge4Unreveal(s)
+	if s.e4_reveal then
+		local h = s.e4_reveal
+		s.e4_reveal = nil
+		S78_Order("reveal", "undo_reveal", function() h.Undo_Reveal() end)
+	end
+end
+
+function S78_Edge4Window(steps, i)
+	S78_Edge2Window(steps, i, true, S78_EDGE4_D)
+	local t0 = (i - 1) * S78_EDGE2_WIN
+	local spot = "spot" .. i
+	table.insert(steps, { at = t0 + 6, run = function(s)
+		S78_Edge4Unreveal(s)
+		if i > 1 then
+			S78_Despawn("spot" .. (i - 1))
+		end
+		local d = S78_EDGE4_D[i]
+		local w, how = S78_At("site", d, S78_EDGE4_SPOT_SIDE)
+		local u = S78_Spawn(spot, "Rebel_Infiltrator", w, how, PlayerObject)
+		if u then
+			S78_Setup(spot, u, { { "Prevent_AI_Usage", true }, { "Make_Invulnerable", true },
+				{ "Prevent_All_Fire", true }, { "Suspend_Locomotor", true } })
+		end
+		S78_Mark("spot" .. i, "d=" .. d .. "|side=" .. S78_EDGE4_SPOT_SIDE .. "|ok=" .. (u and "1" or "0"))
+	end })
+	-- after the edge tank appears (+150): reveal around it for the AI player
+	table.insert(steps, { at = t0 + 152, run = function(s)
+		local ev = s.objs["ev" .. i]
+		local h = nil
+		if S78_Valid(ev) then
+			h = S78_Try("FogOfWar.Reveal", function() return FogOfWar.Reveal(PlayerObject, ev, 250, 250) end)
+		end
+		s.e4_reveal = h
+		S78_Rec("ORDER", "scn=" .. s.name .. "|tag=ev" .. i .. "|order=reveal|ok=" .. (h and "1" or "0"))
+	end })
+	if i == table.getn(S78_EDGE4_D) then
+		table.insert(steps, { at = t0 + S78_EDGE2_WIN - 6, run = function(s) S78_Edge4Unreveal(s) end })
+	end
+end
+
+function S78_ScnSpmatEdge4()
+	local steps = {}
+	for i = 1, table.getn(S78_EDGE4_D) do
+		S78_Edge4Window(steps, i)
+	end
+	return { name = "SPMAT_EDGE4", dur = table.getn(S78_EDGE4_D) * S78_EDGE2_WIN, steps = steps }
+end
+
+-- s78h t02: slot 47 with-clip comparison on a quiet background. In IDLE47X (092438) the background was ~440 synced
+-- draws / frame +-100, mostly the armies' own units. IDLE47Q first measures the background (300 frames), then
+-- despawns the AI player's mobile units (Is_Category Infantry / Vehicle / Air / LandHero; structures and anything
+-- else stay) except the one farthest from the site (so the AI is never left without units), and the human's except
+-- the Saboteur (S78_CFG.quiet_human, default on). The sweep repeats every 300 frames (AI reinforcements and builds).
+-- Then the IDLE47X phases P / D / V run unchanged (12 attackers, 15 cycles of 200). The parser reports the
+-- background before and after the sweep and the IDLE47X statistic.
+S78_QUIET_CATS = { "Infantry", "Vehicle", "Air", "LandHero" }
+S78_IDLE47Q_PRE = 900
+
+function S78_QuietMobile(o)
+	for i, c in ipairs(S78_QUIET_CATS) do
+		local ok, v = pcall(function() return o.Is_Category(c) end)
+		if ok and v == true then
+			return true
+		end
+	end
+	return false
+end
+
+function S78_QuietSweep(s, who, player, keep_farthest)
+	if player == nil then
+		S78_Rec("COUNT", "scn=" .. s.name .. "|what=quiet|who=" .. who .. "|player=0")
+		return
+	end
+	local ok, l = pcall(function() return Find_All_Objects_Of_Type(player) end)
+	if not (ok and type(l) == "table") then
+		S78_Rec("COUNT", "scn=" .. s.name .. "|what=quiet|who=" .. who .. "|list=0")
+		return
+	end
+	local mine = {}
+	for i, o in ipairs(s.spawned) do
+		mine[S78_ObjId(o)] = true
+	end
+	local sx, sy = S78_SiteXY("site", 0, 0)
+	local mob, other = {}, 0
+	for i, o in ipairs(l) do
+		local hum = S78_HUMAN ~= nil and (o == S78_HUMAN or S78_ObjId(o) == S78_ObjId(S78_HUMAN))
+		if S78_Valid(o) and not mine[S78_ObjId(o)] and not hum then
+			if S78_QuietMobile(o) then
+				table.insert(mob, o)
+			else
+				other = other + 1
+			end
+		end
+	end
+	local keep = nil
+	if keep_farthest and type(sx) == "number" then
+		local best = -1
+		for i, o in ipairs(mob) do
+			local x, y = S78_XYZ(o)
+			if type(x) == "number" then
+				local d2 = (x - sx) * (x - sx) + (y - sy) * (y - sy)
+				if d2 > best then
+					best = d2
+					keep = o
+				end
+			end
+		end
+	elseif keep_farthest then
+		keep = mob[1]
+	end
+	local gone = 0
+	for i, o in ipairs(mob) do
+		if o ~= keep and pcall(function() o.Despawn() end) then
+			gone = gone + 1
+		end
+	end
+	S78_Rec("COUNT", "scn=" .. s.name .. "|what=quiet|who=" .. who .. "|objects=" .. S78_Count(l) .. "|mobile=" ..
+		table.getn(mob) .. "|despawned=" .. gone .. "|kept=" .. (keep and S78_ObjId(keep) or "-") .. "|other=" .. other)
+end
+
+function S78_ScnIdle47Q()
+	local steps = {}
+	local pre = S78_IDLE47Q_PRE
+	local len = (S78_IDLE47X_OPT.cycles + 1) * S78_IDLE47X_OPT.period
+	table.insert(steps, { at = 0, run = function(s) S78_Mark("bg_pre") end })
+	table.insert(steps, { at = 300, run = function(s)
+		s.q_next = 300
+		S78_Mark("sweep")
+	end })
+	table.insert(steps, { at = 450, run = function(s) S78_Mark("bg_post") end })
+	S78_Idle47VPhase(steps, "P", "Pod_Walker", pre, nil, S78_IDLE47X_OPT)
+	S78_Idle47VPhase(steps, "D", "Dark_Trooper_PhaseII", pre + len, { "JET_PACK" }, S78_IDLE47X_OPT)
+	S78_Idle47VPhase(steps, "V", nil, pre + 2 * len, nil, S78_IDLE47X_OPT)
+	return {
+		name = "IDLE47Q",
+		dur = pre + 3 * len,
+		steps = steps,
+		tick = function(s, rel)
+			if s.q_next and rel >= s.q_next then
+				s.q_next = rel + 300
+				S78_QuietSweep(s, "ai", PlayerObject, true)
+				if S78_CFG.quiet_human ~= false then
+					local hp = S78_Try("Find_Player:human", function() return Find_Player(S78_CFG.human_faction) end)
+					-- the Saboteur is the human's kept unit; without it keep the farthest one
+					S78_QuietSweep(s, "human", hp, not S78_Valid(S78_HUMAN))
+				end
+			end
+		end,
+	}
+end
+
 S78_SCN_BY_NAME = {
 	SPMAT = S78_ScnSpmat, ATAT = S78_ScnAtat, MDU = S78_ScnMdu, STICKY = S78_ScnSticky, DT3 = S78_ScnDt3,
 	REINF = S78_ScnReinf, MUZZLE_LAND = S78_ScnMuzzleLand, MAGNEPULSE = S78_ScnMagnepulse, BUNKER = S78_ScnBunker,
@@ -1602,6 +1766,7 @@ S78_SCN_BY_NAME = {
 	SPMAT_EDGE = S78_ScnSpmatEdge, IDLE47V = S78_ScnIdle47V, GUARD_MOVE = S78_ScnGuardMove,
 	SPMAT_EDGE2 = S78_ScnSpmatEdge2, SPMAT_CTRL = S78_ScnSpmatCtrl, IDLE47W = S78_ScnIdle47W, REINF2 = S78_ScnReinf2,
 	GUARD_HAND = S78_ScnGuardHand, SPMAT_EDGE3 = S78_ScnSpmatEdge3, IDLE47X = S78_ScnIdle47X,
+	SPMAT_EDGE4 = S78_ScnSpmatEdge4, IDLE47Q = S78_ScnIdle47Q,
 }
 
 function S78_Scenarios()

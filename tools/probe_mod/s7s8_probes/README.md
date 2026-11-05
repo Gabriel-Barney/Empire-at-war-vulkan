@@ -319,6 +319,105 @@ What the 073814 run showed, and what changed:
 **Space, about 2 min 45 s.** GUARD_HAND only, with the same hand orders and messages as above: F 450 / 900 / 1800 /
 2700 / 3450 / 4350 (0:15 / 0:30 / 1:00 / 1:30 / 1:55 / 2:25). It ends at F 4950.
 
+## s78h run (2026-11-05: roadmap group s78h, t01 and t02 prep, t07)
+
+What the s78g rerun `out/20261105-092438` showed, and what changed:
+- **t07, kit departure verdict.** Both GUARD_HAND pairs read `NO_DEPARTURE`, yet the trace shows the squadron leaving
+  for the waypoint at about 5.5 / frame each time. The s78g rule needed two `AWAY` rows (moving away from G and more
+  than 600 from it); here the squadron flew *past* G on its way out, so those rows were `WITH_G` / `CHASE` / `DRIFT`.
+  The waypoint is in no record (the click is on empty space), so the parser now takes it as the **settle point**: the
+  first place after the shift message where the squadron, after a leg faster than 3 / frame, stays below 1.5 / frame
+  for three rows (90 frames), away from G (more than 300 from it, or G pulling away). The departure is the first row
+  of that leg faster than **3 units / frame whose motion has a positive component along the direction to the
+  waypoint**. When no settle point exists, the old `AWAY` rule is the fallback. The pair line now prints the
+  waypoint, its frame and which rule found the departure. Re-parsing 092438 with this gives:
+  - `t02_guard_shift_1 = WAYPOINT_TAKEN_WHILE_G_MOVES (+150 after the shift message)`. Waypoint (−399, 148) at
+    F 2040, departure F 1950, G moving at 2.2 / frame.
+  - `t02_guard_shift_2 = WAYPOINT_TAKEN_WHILE_G_MOVES (+120 after the shift message) NOT_FOLLOWING_AT_SHIFT (dist
+    836)`. Waypoint (−853, −161) at F 3840, departure F 3570, G stopped only at F 4350.
+
+  So in both pairs the waypoint was taken while G still moved: no wait for G to stop. Pair 2 is weaker, because the
+  squadron was not with G when the shift order came. The selftest has a synthetic trace of the 092438 shape (section 3).
+- **t01, the SPMAT edge by auto-acquire.** In SPMAT_EDGE3 the deployed walker acquired nothing, not even the in-range
+  control at 450: every window was `NOT_TARGETED`, ts 0. The likely reason is vision: a deployed AI unit without an
+  order may not acquire a target outside the AI's vision. **SPMAT_EDGE4** is EDGE3 with vision at the edge tank:
+  - an AI-owned spotter, a `Rebel_Infiltrator` (invulnerable, `Prevent_All_Fire`, locomotor suspended). It stands
+    100 to the side of the tank spot and is spawned with the 275 aim tank, so it already sees the spot when the edge
+    tank appears;
+  - `FogOfWar.Reveal(PlayerObject, tank, 250, 250)` 2 frames after the tank appears, undone (`Undo_Reveal`) at the
+    next window. The shipped AI script `BurnUnitsLand.lua` uses the same FogOfWar API.
+
+  The rest is unchanged: there is **no order at the edge tank**, the victims are the human's (never Hostile), and
+  windows are 450 frames. Distances: 12 windows in two passes, 450 (control), 540, 544, 547, 550, 556, then 450, 556,
+  550, 547, 544, 540. Only one edge tank exists at a time. Answer **`1_edge4`**:
+  - `CONTROL_NOT_FIRED (...)`: the 450 control never fired, so vision or acquisition is still the limit;
+  - otherwise the EDGE3 verdict plus `per d 540=F/F 544=T/T ...`. Per pass, F = fired, T = targeted not fired,
+    N = not targeted, x = invalid window (moved or undeployed).
+
+  The block adds one line per distance (measured distance, verdict and grenades per pass) and how many spotters and
+  reveals worked. Expected from LOB_SOLVER §4: F up to 540 and T from 544 on. If the reach is above 544, the edge lies
+  between the last F and the first T.
+- **t02, slot 47 on a quiet background.** The IDLE47X background was about 440 synced draws per frame, ±100, mostly
+  from the two armies. **IDLE47Q** runs in four stages:
+  1. It measures the background for 300 frames (`bg_pre`).
+  2. At +300 it sweeps both armies. It despawns every AI-owned object that answers `Is_Category` Infantry, Vehicle,
+     Air or LandHero. Structures and everything else stay, and so does the AI unit farthest from the site, so the AI
+     is never left without units. The human's mobile units go too, all but the Saboteur
+     (`set ALAMO_S78_QUIET_HUMAN=0` keeps them). The probe's own objects are never touched. The sweep repeats every
+     300 frames, to catch reinforcements and new builds (COUNT `quiet` records).
+  3. It measures the background again (`bg_post`, +450 to +900).
+  4. It runs the IDLE47X phases unchanged: P (Pod_Walker), D (Dark_Trooper_PhaseII), V (victims only), 12 attackers
+     each, 15 cycles of 200 frames.
+
+  Answer **`t03_slot47_clip_q`**: the IDLE47X verdict (same 3-sigma rule) plus `[background a -> b draws/frame]`. The
+  block also has the sweep counts. Read the background numbers first: if b is not well below a, the sweep missed the
+  main draw source.
+
+  **Per-object reading of the slot-47 draw was considered and set aside.** The reader is read-only and samples the
+  synced LCG state once per poll, so a draw can be counted but not tied to the object that made it. Tying draws to
+  objects would need one of two things:
+  - a hook on the slot-47 service, which is not read-only;
+  - a per-object field that the slot-47 draw writes, such as the ATTACKIDLE_00 / _01 variant chosen on pose entry or
+    a randomised idle countdown. The reader would then log it for each attacker.
+
+  No such field is mapped in docs/re yet, and the primary anim slot the reader already logs (clip type : mode :
+  position : speed) does not show the variant index. The quiet-background route needs no new offsets.
+
+**Kit command.** One land battle, no space battle. Run it from PowerShell in the main checkout (or a worktree with
+`toolchain` and game data junctioned). Run it in the background: it waits for the game to exit.
+
+```
+$env:ALAMO_S78_LAND = 'SPMAT_EDGE4,IDLE47Q'; $env:ALAMO_S78_SPACE = 'GUARD_HAND'
+& tools\probe_mod\s7s8_probes\run_s7s8.cmd --no-launch --non-interactive
+```
+
+From cmd use `set ALAMO_S78_LAND=SPMAT_EDGE4,IDLE47Q` and `set ALAMO_S78_SPACE=GUARD_HAND`, then
+`run_s7s8.cmd --no-launch --non-interactive`. The space list only matters if a space battle is started; none is
+needed this time.
+
+**In-game steps (computer use).**
+1. Wait until `out\<run>\reader.log` exists. Start `StarWarsG.exe WINDOWED MODPATH=Mods\S7S8Probe` in
+   `F:\SteamLibrary\steamapps\common\Star Wars Empire at War\corruption` (Steam running). Check that reader.log shows
+   `GAME ... identity=ok`.
+2. Double-click the title bar to maximise the window. The menu coordinates below are for the 1456x819 frame.
+3. **Single Player > Skirmish > LAND**, map **GEONOSIS**. Slot 1 (you): **EMPIRE**, team 1. Slot 2: **AI** (any
+   difficulty), **REBEL**, team 2. Every other slot: **closed**. Credits, tech and settings: defaults.
+4. Click **Start Game** (about (1193, 587)), then **Begin** (about (970, 726)).
+5. Give **no orders at all**. The Saboteur spawned for you is not used, and neither are H1–H3. At about 3 min 25 s
+   your own starting army disappears: that is the IDLE47Q sweep, not a defeat. Your base structures and the
+   Saboteur stay.
+6. Timeline (battle time = frame / 30):
+   - SPMAT_EDGE4: F 450–5850 (0:15–3:15);
+   - IDLE47Q: F 5853–16353 (3:15–9:05). The sweep is at F 6153 (3:25) and phase P starts at F 6753 (3:45).
+7. *"land scenarios done"* appears at about **9 min 05 s** (F 16356). Then press **Esc > Quit** (about (728, 485)),
+   **Yes** (about (610, 440)) and **Exit** (about (1047, 694)).
+8. The kit writes `out\<run>\report.txt` and removes the mod. The run folder is in `out\latest.txt`. Read the ANSWERS
+   keys `1_edge4` and `t03_slot47_clip_q`, and the `-- SPMAT_EDGE4` / `-- IDLE47Q` blocks.
+
+The sweep keeps one AI unit and your Saboteur so that neither side is left without units. If the battle still ends
+early (a victory or defeat screen after the sweep), the IDLE47Q block shows how far it got. Rerun with
+`set ALAMO_S78_QUIET_HUMAN=0`, which leaves your army alone.
+
 ## Feeding results back
 
 Edit only `docs/re` (RE/doc task). Quote the run folder and the report line. Then:
@@ -343,7 +442,7 @@ Then tick the matching roadmap tasks (S7 / S8 follow-ups) with `roadmap_store.py
 | `s7s8_hook.lua` | The scenarios (Lua 5.0, everything pcall'd) |
 | `s7s8_reader.py` | Read-only memory recorder (`--selftest`) |
 | `s7s8_parse.py` | Report and answers (`parse <log>`, `--selftest` on a synthetic log built from the expected model) |
-| `selftest/s7s8_selftest.py` | Runs the hooked script under stock Lua 5.0.2 against a stub engine (land, space, other faction), parses those records, runs both `--selftest`s. `selftest/build_lua50.cmd` builds `out\tools\lua50.exe` |
+| `selftest/s7s8_selftest.py` | Runs the hooked script under stock Lua 5.0.2 against a stub engine (land, space, other faction; the s78g and s78h lists), parses those records, parses synthetic memory traces for the s78h GUARD_HAND departure and SPMAT_EDGE4 per-distance verdicts, runs both `--selftest`s. `selftest/build_lua50.cmd` builds `out\tools\lua50.exe` |
 
 Run the selftest: `toolchain\venv\Scripts\python.exe -I tools\probe_mod\s7s8_probes\selftest\s7s8_selftest.py`.
 It ends with `S7S8 SELFTEST OK`.
