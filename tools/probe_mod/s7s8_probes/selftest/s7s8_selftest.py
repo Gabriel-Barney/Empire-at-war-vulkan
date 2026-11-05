@@ -43,6 +43,10 @@ LUA = os.path.join(ROOT, 'out', 'tools', 'lua50.exe')
 RECORD_RE = re.compile(r'S78P1\|([A-Z]+)\|([ -~]{0,385}?)\|END')  # = s7s8_reader.RECORD_RE on text
 LAND = ['SPMAT', 'ATAT', 'MDU', 'STICKY', 'DT3', 'REINF', 'MUZZLE_LAND']
 SPACE = ['MUZZLE_SPACE', 'SQUAD', 'ESCORT']
+# s78g run (README "s78g run")
+LAND_G = ['SPMAT_EDGE2', 'SPMAT_CTRL', 'REINF', 'REINF2', 'IDLE47W']
+SPACE_G = ['GUARD_HAND', 'ESCORT']
+LAND_R = ['SPMAT_EDGE3', 'IDLE47X']  # s78g rerun (2026-11-05); space rerun = GUARD_HAND alone
 
 STUBS = r'''
 H = { F = 0, fss = 0, ous = 0, next_id = 100, objs = {}, blocks = {}, mode = "Land", msgs = 0, moves = 0 }
@@ -76,7 +80,8 @@ for i, n in ipairs({ "SPMAT_WALKER", "T4B_TANK", "AT_AT_WALKER", "REBEL_MOBILE_D
 	"UNDERWORLD_INFANTRY_DROID_SHUTTLE", "UNDERWORLD_INFANTRY_DROID_SHUTTLE_LANDING",
 	"TYBER_ZANN_BOARDING_SHUTTLE_PROLOGUE", "UM07_CLOUD_CITY_FLYOVER", "UM07_CLOUDCITY_REFINERY", "UNDERWORLD_SABOTEUR",
 	"REBEL_X-WING_SQUADRON", "TARTAN_PATROL_CRUISER", "STAR_DESTROYER", "TIE_INTERCEPTOR_SQUADRON",
-	"DUMMY_BARRAGE_TARGET", "PROJ_REMOTE_BOMB" }) do
+	"DUMMY_BARRAGE_TARGET", "PROJ_REMOTE_BOMB", "POD_WALKER", "DARK_TROOPER_PHASEII", "BROADSIDE_CLASS_CRUISER",
+	"TIE_FIGHTER_SQUADRON" }) do
 	types[n] = true
 end
 function Find_Object_Type(n)
@@ -130,6 +135,8 @@ function make_obj(tname, x, y, z, owner)
 		o.moving = true
 	end
 	o.Attack_Target = function(t) if not TestValid(t) then error("bad target") end end
+	o.Stop = function() o.moving = false end
+	o.Guard_Target = function(t) end
 	o.Despawn = function() o.valid = false end
 	o.Take_Damage = function(d) o.valid = false end
 	o.Is_Category = function(c) return false end
@@ -190,6 +197,9 @@ end
 '''
 
 DRIVER = r'''
+-- the retail free-store Lua has no math library (s78g 2026-11-05): hide it from the hooked script
+local mmod = math.mod
+math = nil
 dofile(H_SCRIPT)
 PlayerObject = make_player(2, H_FACTION)
 H.mode = H_MODE
@@ -203,13 +213,13 @@ local resumes = 0
 for F = 0, H_FRAMES do
 	H.F = F
 	H.frame()
-	if math.mod(F, 3) == 0 and (F / 30 - last) > ServiceRate then
+	if mmod(F, 3) == 0 and (F / 30 - last) > ServiceRate then
 		last = F / 30
 		resumes = resumes + 1
 		local ok, err = coroutine.resume(co)
 		if not ok then print("RESUME_ERROR " .. tostring(err)) end
 	end
-	if math.mod(F, 60) == 1 then
+	if mmod(F, 60) == 1 then
 		On_Unit_Service(unit)
 	end
 end
@@ -351,7 +361,7 @@ def main():
     marks = [field(r, 'mark') for r in recs2 if kind(r) == 'MARK']
     check(['drop1', 'drop2', 'moved', 'carrier_dead', 'guard_point', 'intruder', 'intruder_gone'] == marks,
           'run B: marks %s' % marks, fails)
-    cnt = next((r for r in recs2 if kind(r) == 'COUNT'), '')
+    cnt = next((r for r in recs2 if kind(r) == 'COUNT' and field(r, 'what') == 'escorts_launched'), '')
     check(field(cnt, 'squadrons') == '2', 'run B: escorts launched counted (%s)' % cnt[:100], fails)
     check('HUMAN' not in k2 and 'done=true' in state2 and 'on=false' in state2, 'run B: no human track; after DONE '
                                                                                  '%s' % state2, fails)
@@ -362,6 +372,79 @@ def main():
     m3 = re.search(r'fss=(\d+) ous=(\d+)', state3)
     check(rc3 == 0 and 'RESUME_ERROR' not in text3 and k3 == ['LOAD', 'SKIP'] and m3 and int(m3.group(1)) > 0,
           'run C (EMPIRE): records %s, shipped bodies ran (%s)' % (k3, m3.group(0) if m3 else '-'), fails)
+
+    # runs D / E: the s78g lists (README "s78g run")
+    saved = {k: os.environ.get(k) for k in ('ALAMO_S78_LAND', 'ALAMO_S78_SPACE')}
+    os.environ['ALAMO_S78_LAND'] = ','.join(LAND_G)
+    os.environ['ALAMO_S78_SPACE'] = ','.join(SPACE_G)
+    try:
+        data_g, _src = build_s7s8_mod.freestore_text(a.game, cfg, a.source_zip)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    script_g = os.path.join(OUT, 'BusyTacticalFreeStore_s78g.lua')
+    with open(script_g, 'wb') as f:
+        f.write(data_g)
+    spath_g = script_g.replace('\\', '/')
+    rc4, recs4, state4, text4 = run_lua(spath_g, 'REBEL', 'Land', 13500, 'land_s78g')
+    common_checks('D (land s78g)', rc4, recs4, state4, text4, LAND_G, fails)
+    m4 = [field(r, 'mark') for r in recs4 if kind(r) == 'MARK' and field(r, 'scn') == 'SPMAT_EDGE2']
+    check(m4.count('aim1') == 1 and 'win9' in m4 and len([x for x in m4 if x.startswith('win')]) == 9,
+          'run D: SPMAT_EDGE2 9 windows (%d marks)' % len(m4), fails)
+    d4 = [field(r, 'ret') for r in recs4 if kind(r) == 'ACT' and field(r, 'scn') == 'SPMAT_EDGE2']
+    check(len(d4) == 9 and all(x == 'block' for x in d4), 'run D: one DEPLOY block per EDGE2 window (%s)' % d4[:3],
+          fails)
+    c4 = [field(r, 'fac') for r in recs4 if kind(r) == 'MARK' and field(r, 'scn') == 'SPMAT_CTRL']
+    check(c4 == ['Hostile', 'Empire'], 'run D: SPMAT_CTRL windows Hostile, Empire (%s)' % c4, fails)
+    dt = [r for r in recs4 if kind(r) == 'SETUP' and field(r, 'scn') == 'IDLE47W' and 'Set_Single_Ability_Autofire=1'
+          in r]
+    check(len(dt) == 6, 'run D: IDLE47W JET_PACK autofire off on the six Dark_Trooper_PhaseII (%d)' % len(dt), fails)
+    r2 = [field(r, 'tag') for r in recs4 if kind(r) == 'SPAWN' and field(r, 'scn') == 'REINF2']
+    check(r2 == ['victim'] + ['mz8_%d' % k for k in range(1, 7)], 'run D: REINF2 spawns %s' % r2, fails)
+    rc5, recs5, state5, text5 = run_lua(spath_g, 'REBEL', 'Space', 9600, 'space_s78g')
+    common_checks('E (space s78g)', rc5, recs5, state5, text5, SPACE_G, fails)
+    m5 = [field(r, 'mark') for r in recs5 if kind(r) == 'MARK' and field(r, 'scn') == 'GUARD_HAND']
+    check(m5 == ['find', 'g_move', 'guard_go', 'shift_go', 'guard_go2', 'shift_go2', 'g_stop'],
+          'run E: GUARD_HAND marks %s' % m5, fails)
+    legs = [field(r, 'order') for r in recs5 if kind(r) == 'ORDER' and field(r, 'scn') == 'GUARD_HAND']
+    gh = [r for r in recs5 if kind(r) == 'COUNT' and field(r, 'what') == 'gh']
+    check(legs[:2] == ['leg1', 'leg2'] and 'stop' in legs and len(gh) >= 140, 'run E: G legs %s, %d gh records' % (
+        legs, len(gh)), fails)
+    held = [r for r in recs5 if kind(r) == 'COUNT' and field(r, 'what') == 'escorts_held']
+    em = [field(r, 'mark') for r in recs5 if kind(r) == 'MARK' and field(r, 'scn') == 'ESCORT']
+    gp = next((r for r in recs5 if kind(r) == 'SPAWN' and field(r, 'tag') == 'intruder'), '')
+    check(held and field(held[0], 'new') == '2' and field(gp, 'how') == 'death_point' and 'intruder_gone' in em,
+          'run E: escorts held (%s), intruder at the death point (%s)' % (held[:1], field(gp, 'how')), fails)
+
+    # run F: the s78g land rerun list
+    saved = {k: os.environ.get(k) for k in ('ALAMO_S78_LAND', 'ALAMO_S78_SPACE')}
+    os.environ['ALAMO_S78_LAND'] = ','.join(LAND_R)
+    os.environ['ALAMO_S78_SPACE'] = 'GUARD_HAND'
+    try:
+        data_r, _src = build_s7s8_mod.freestore_text(a.game, cfg, a.source_zip)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    script_r = os.path.join(OUT, 'BusyTacticalFreeStore_s78g_rerun.lua')
+    with open(script_r, 'wb') as f:
+        f.write(data_r)
+    rc6, recs6, state6, text6 = run_lua(script_r.replace('\\', '/'), 'REBEL', 'Land', 15000, 'land_s78g_rerun')
+    common_checks('F (land s78g rerun)', rc6, recs6, state6, text6, LAND_R, fails)
+    m6 = [field(r, 'mark') for r in recs6 if kind(r) == 'MARK' and field(r, 'scn') == 'SPMAT_EDGE3']
+    o6 = [field(r, 'order') for r in recs6 if kind(r) == 'ORDER' and field(r, 'scn') == 'SPMAT_EDGE3']
+    check(len([x for x in m6 if x.startswith('win')]) == 10 and o6.count('attack_aim') == 10 and
+          'attack_ev' not in o6, 'run F: SPMAT_EDGE3 10 windows, aim orders only (%s)' % sorted(set(o6)), fails)
+    sx = [field(r, 'tag') for r in recs6 if kind(r) == 'SPAWN' and field(r, 'scn') == 'IDLE47X']
+    mx = [field(r, 'mark') for r in recs6 if kind(r) == 'MARK' and field(r, 'scn') == 'IDLE47X']
+    check(sx.count('i12') == 2 and sx.count('iv12') == 45 and 'D_on15' in mx and 'V_off15' in mx,
+          'run F: IDLE47X 12 attackers in P and D, 15 cycles per phase (i12 %d, iv12 %d)' % (
+              sx.count('i12'), sx.count('iv12')), fails)
 
     print('2. Lua records -> s7s8_parse.py (no memory data)')
     log = os.path.join(OUT, 'reader_lua_only.log')
@@ -384,6 +467,24 @@ def main():
                                                                                 ans.get('5_target_dies'),
                                                                                 ans.get('3_atat')), fails)
     print('  report: %s' % os.path.join(OUT, 'report_lua_only.txt'))
+    log_g = os.path.join(OUT, 'reader_lua_only_s78g.log')
+    with open(log_g, 'w') as f:
+        f.write('S78READER 1 selftest\nGAME pid=0 base=0x0 identity=selftest\n')
+        for n, typ, rr in ((1, 1, recs4), (2, 2, recs5), (3, 1, recs6)):
+            f.write('MODE n=%d ptr=0x%d type=%d game_type=3 stack=1 frame=0 gframe=0\n' % (n, n, typ))
+            for i, r in enumerate(reversed(rr)):  # address order is not time order
+                f.write('LUA n=%d frame=99999 addr=0x%x rec=%s\n' % (n, 0x1000 + i, r))
+            f.write('MODE_END n=%d last_frame=14000\n' % n)
+        f.write('EXIT reason=game_exited modes=2\n')
+    try:
+        resg = s7s8_parse.cmd_parse(argparse.Namespace(log=log_g, out=os.path.join(OUT, 'report_lua_only_s78g.txt'),
+                                                       json=None))
+        gotg = [[r['name'] for r in run['scenarios']] for run in resg['runs']]
+        ag = resg['answers']
+        check(gotg == [LAND_G + ['HUMAN'], SPACE_G, LAND_R + ['HUMAN']] and 't02_guard_shift_1' in ag and
+              '1_edge2' in ag and '1_edge3' in ag and 't03_slot47_clip' in ag and 't03_slot47_clip_x' in ag, 's78g records (reversed) -> parser: %s; answers %s' % (gotg, sorted(ag)), fails)
+    except Exception as e:  # noqa: BLE001
+        check(False, 's78g records -> parser: %r' % e, fails)
 
     print('3. reader and parser selftests')
     for script_name in ('s7s8_reader.py', 's7s8_parse.py'):

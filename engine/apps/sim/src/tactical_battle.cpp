@@ -1097,6 +1097,9 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32
             cs.team = static_cast<uint32_t>(containers_[u.container].id);
             cs.team_leader = i == first || units_[i - 1].container != u.container;
         }
+        // s78g t06 (TACTICAL_COMBAT §3.6 step 2, no mode gate): a space squadron member still counts in its squadron for
+        // the Take_Damage redirect / share rules (vanilla Luke_XWing in Red Squadron, TIE_Prototype in Vader's squadron).
+        if (space_ && u.container != kNoContainer) cs.damage_team = static_cast<uint32_t>(containers_[u.container].id);
         abilities_->add_unit(cs, cs.desc, frame_, rng, u.container != kNoContainer ? containers_[u.container].id : tc::kNoObject);
         hg_adopt(u, rng);  // hangars: engine mode enter, SPAWN_SQUADRON add_carrier (attach order)
         u.range = combat_->attack_range(u.id);

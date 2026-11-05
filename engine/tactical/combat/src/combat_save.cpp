@@ -43,13 +43,14 @@ namespace alamo::tactical::combat {
 
 namespace {
 
-constexpr uint32_t kCombatSaveVersion = 10;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
+constexpr uint32_t kCombatSaveVersion = 11;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
                                              // 4: refixf t06 attack goal / weapon aim / order lock; 5: refixf t06 scan
                                              // target hardpoint (auto_hp); 6: a1g t03 damage event hull_lost; 7: S8 t04
                                              // grenade flight / sticky state; 8: S8 t06 stuck_offset in the parent's frame
                                              // (same layout, new meaning), S7 t15 A2 last weapon service frame, S8 t06 B4
                                              // fire-bone cycle index; 9: S8 t26 fire-at-position order; 10: s78f t03
-                                             // targeting state + its target, s78f t04 lobbing turret angles
+                                             // targeting state + its target, s78f t04 lobbing turret angles; 11:
+                                             // s78g t06 damage_team
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 
@@ -120,7 +121,7 @@ void CombatSystem::write(ByteWriter& w) const {
 
     w.u32(static_cast<uint32_t>(units_.size()));
     for (const Unit& u : units_) {
-        w.i32(u.id).u32(u.desc).i32(u.owner).u32(u.team).u8(u.team_leader).i32(u.damage_parent).u32(u.flags);
+        w.i32(u.id).u32(u.desc).i32(u.owner).u32(u.team).u8(u.team_leader).u32(u.damage_team).i32(u.damage_parent).u32(u.flags);
         put_vec3(w, u.pos);
         put_vec3(w, u.last_pos);
         put_vec3(w, u.facing);
@@ -276,6 +277,7 @@ bool CombatSystem::read(ByteReader& r) {
         u.owner = r.i32();
         u.team = r.u32();
         u.team_leader = r.u8();
+        u.damage_team = r.u32();
         u.damage_parent = r.i32();
         u.flags = r.u32();
         u.pos = get_vec3(r);

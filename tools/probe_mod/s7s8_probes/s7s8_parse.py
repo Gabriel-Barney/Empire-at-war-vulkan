@@ -97,7 +97,8 @@ def read_log(path):
     meta = {'modeloff': [], 'teamdata': [], 'scans': 0, 'src': False, 'exit': None, 'game': None}
 
     def battle(n):
-        return battles.setdefault(n, {'n': n, 'type': None, 'objs': {}, 'players': {}, 'last': None})
+        return battles.setdefault(n, {'n': n, 'type': None, 'objs': {}, 'players': {}, 'last': None, 'rng': [],
+                                         'tgts': {}})
 
     with open(path, encoding='ascii', errors='replace') as f:
         for line in f:
@@ -145,6 +146,14 @@ def read_log(path):
                                 'tgt': d.get('tgt', '-'), 'ts': _int(d.get('ts')), 'cont': d.get('cont', '-'),
                                 'tt': d.get('tt', '-')})
                 b['last'] = max(b['last'] or 0, F)
+            elif kind == 'RNG':
+                F = _int(d.get('frame'))
+                if F is not None and d.get('s'):
+                    battle(n)['rng'].append((F, int(d['s'], 16)))
+            elif kind == 'TGT':
+                oid = _int(d.get('obj'))
+                if oid is not None:
+                    battle(n)['tgts'].setdefault(oid, d)
             elif kind == 'GONE':
                 b = battle(n)
                 o = b['objs'].get(_int(d.get('obj')))
@@ -344,22 +353,32 @@ def arc_fit(o):
 # ---- scenario binding ----------------------------------------------------------------------------------------------
 
 def scenarios_of(recs):
+    """Scenario windows of one run. The heap scan finds the records in address order, not in time order (s78g t05:
+    in the s78f t12 run ESCORT and REINF got the previous scenario's end record, F=5856..5853 / 8406..8403, so their
+    windows were empty). So: sort by frame, pair each start with the first end of the same name at or after it, and
+    give a scenario the records of its name inside its window."""
+    by_time = sorted((x for x in recs if x[2].get('F') is not None), key=lambda x: x[2]['F'])
+    starts = [d for _n, k, d, _t in by_time if k == 'SCN' and d.get('ev') == 'start']
+    ends = [d for _n, k, d, _t in by_time if k == 'SCN' and d.get('ev') == 'end']
     out = []
-    cur = None
-    for _n, kind, d, _t in recs:
-        if kind == 'SCN' and d.get('ev') == 'start':
-            cur = {'name': d.get('scn'), 'start': d['F'], 'end': None, 'recs': []}
-            out.append(cur)
-            continue
-        if cur is None:
-            continue
-        if kind == 'SCN' and d.get('ev') == 'end':
-            cur['end'] = d['F']
-            cur['end_rec'] = d
-            cur = None
-            continue
-        if d.get('scn') == cur['name']:
+    used = set()
+    for st in starts:
+        name = st.get('scn')
+        nxt = [d for d in starts if d is not st and d['F'] >= st['F'] and d.get('scn') == name]
+        lim = nxt[0]['F'] if nxt else None
+        end = next((i for i, d in enumerate(ends) if i not in used and d.get('scn') == name and d['F'] >= st['F'] and
+                    (lim is None or d['F'] <= lim)), None)
+        cur = {'name': name, 'start': st['F'], 'end': None, 'recs': []}
+        if end is not None:
+            used.add(end)
+            cur['end'] = ends[end]['F']
+            cur['end_rec'] = ends[end]
+        hi = cur['end'] if cur['end'] is not None else lim
+        for _n, kind, d, _t in by_time:
+            if kind == 'SCN' or d.get('scn') != name or d['F'] < st['F'] or (hi is not None and d['F'] > hi):
+                continue
             cur['recs'].append((kind, d))
+        out.append(cur)
     return out
 
 
@@ -422,6 +441,7 @@ class Scn:
             if k == 'MARK':
                 self.marks.setdefault(d.get('mark'), d)
         self.orders = [d for k, d in sc['recs'] if k == 'ORDER']
+        self.sc_recs = sc['recs']
         self.L = []
 
     def order(self, tag, what):
@@ -778,8 +798,52 @@ def an_reinf(s):
         s.L.append('%s spawn F=%s, targeting state 4 at +%s, first shot +%s (%d shots)' % (
             sp['tag'], F0, fmt(None if att is None else att - F0), fmt(u['delay']), u['shots']))
     ds = [u['delay'] for u in r['units'] if u['delay'] is not None]
+    # s78g t05: s78f t12 gave 18 / 29 / 41 / 52 with first shots 161 / 162 / 161 apart (spawns 150 apart). Test
+    # whether the first shots sit on one shared clock: every gap between first shots near a multiple of one period
+    # P in 155..165, while the spawn gaps are not.
+    fs = sorted(u['first'] for u in r['units'] if u['first'] is not None)
+    sp = sorted(u['spawn'] for u in r['units'] if u['first'] is not None and u['spawn'] is not None)
+    shot_gaps = [b - a for a, b in zip(fs, fs[1:])]
+    spawn_gaps = [b - a for a, b in zip(sp, sp[1:])]
+
+    def on_clock(gaps, P, tol=4):
+        return bool(gaps) and all(round(g / P) >= 1 and abs(g - round(g / P) * P) <= tol for g in gaps)
+
+    clock = None
+    if len(shot_gaps) >= 2:
+        fits = [(max(abs(g - round(g / P) * P) for g in shot_gaps), P) for P in range(155, 166)
+                if on_clock(shot_gaps, P) and not on_clock(spawn_gaps, P)]
+        if fits:
+            clock = min(fits)[1]
+    r['first_shots'], r['shot_gaps'], r['spawn_gaps'], r['clock'] = fs, shot_gaps, spawn_gaps, clock
+    s.L.append('first shots at F=%s; gaps between first shots %s; spawn gaps %s; shared clock: %s' % (
+        fs, shot_gaps, spawn_gaps, ('period %d (every first-shot gap a multiple of it, spawn gaps not)' % clock)
+        if clock else 'no'))
+    # s78g 2026-11-05: REINF2 gave delays 9 / 11 / 29 / 41 / 52 / 61 for spawns 1..6, rising about 11 per earlier
+    # spawned unit: a per-unit stagger (first shot waits for the units spawned before it), not a random delay
+    units = sorted((u for u in r['units'] if u['delay'] is not None), key=lambda u: u['spawn'])
+    stag = None
+    if len(units) >= 3:
+        xs = list(range(len(units)))
+        ys = [u['delay'] for u in units]
+        mx, my = sum(xs) / float(len(xs)), sum(ys) / float(len(ys))
+        sxx = sum((x - mx) ** 2 for x in xs)
+        slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+        icpt = my - slope * mx
+        res = max(abs(y - (icpt + slope * x)) for x, y in zip(xs, ys))
+        mono = all(b >= a for a, b in zip(ys, ys[1:]))
+        r['slope'], r['intercept'], r['max_residual'] = slope, icpt, res
+        s.L.append('delay vs spawn index (0 = first spawned): %s; least squares %.1f + %.2f * index, max residual %.1f, '
+                   'non-decreasing %s' % (ys, icpt, slope, res, mono))
+        if mono and slope > 5 and res <= 12:
+            stag = 'PER_UNIT_STAGGER (slope %.1f frames per earlier unit, delays %d..%d, max residual %.1f%s)' % (
+                slope, min(ys), max(ys), res, ', first shots also fit a %d-frame clock' % clock if clock else '')
     if len(ds) < 2:
         r['verdict'] = 'NOT_MEASURED'
+    elif stag:
+        r['verdict'] = stag
+    elif clock:
+        r['verdict'] = 'FIRST_SHOT_ON_SHARED_CLOCK (P=%d, delays %d..%d)' % (clock, min(ds), max(ds))
     elif max(ds) - min(ds) <= 30 and max(ds) <= 90:
         r['verdict'] = 'NO_RANDOM_DELAY'
     elif max(ds) - min(ds) > 45:
@@ -905,6 +969,16 @@ def an_escort(s):
     Fi = s.marks.get('intruder', {}).get('F')
     Fo = s.marks.get('intruder_gone', {}).get('F')
     r['escorts'] = len(esc)
+    # s78g t05: Lua side (escorts held from AI plans, centroid every 90 frames)
+    held_n = sum(_int(d.get('new'), 0) for k, d in s.sc_recs if k == 'COUNT' and d.get('what') == 'escorts_held')
+    lua_c = [(d['F'], _float(d.get('x')), _float(d.get('y')), _int(d.get('n'), 0)) for k, d in s.sc_recs
+             if k == 'COUNT' and d.get('what') == 'escort_centroid' and _float(d.get('x')) is not None]
+    s.L.append('Lua: %d escorts given Prevent_AI_Usage; %d escort centroid records' % (held_n, len(lua_c)))
+    if dead is not None and lua_c and _float(dead.get('x')) is not None:
+        dx, dy = _float(dead['x']), _float(dead['y'])
+        s.L.append('Lua escort centroid distance from the death point: %s' % ', '.join(
+            '+%d: %.0f (n=%d)' % (F - dead['F'], math.hypot(x - dx, y - dy), n) for F, x, y, n in lua_c
+            if 0 <= F - dead['F'] <= 1800 and (F - dead['F']) % 270 < 90))
     if not fighters or dead is None:
         r['verdict'] = 'NOT_MEASURED'
         s.L.append('escorts %d, carrier_dead mark %s -> NOT_MEASURED' % (len(fighters), 'yes' if dead else 'no'))
@@ -923,6 +997,24 @@ def an_escort(s):
     s.L.append('escorts %d (%d fighters); carrier dies F=%s at (%.0f, %.0f); escort centroid distance from there: '
                '%s' % (len(esc), len(fighters), Fd, dp[1], dp[2], ', '.join('+%d: %s' % (k, fmt(v, 0))
                                                                              for k, v in pts.items())))
+    # s78g t05: what pulled them away? targets held by the escorts after the death, by the target's type / owner
+    tg = {}
+    for o in fighters:
+        for x in o['st']:
+            if x['F'] >= Fd and x['tgt'] not in (None, '-', 'none', 'x'):
+                t = s.b['objs'].get(_int(x['tgt']))
+                # s78g: TGT lines (reader) name targets that are not watched, e.g. pre-existing units
+                g = s.b.get('tgts', {}).get(_int(x['tgt']))
+                if t:
+                    key = '%s/owner%s' % (t['type'], t['owner0'])
+                elif g and g.get('type') not in (None, '?'):
+                    key = 'obj%s=%s/owner%s%s' % (x['tgt'], g.get('type'), g.get('owner'),
+                                                  ' (pre-existing)' if g.get('initial') == '1' else '')
+                else:
+                    key = 'obj%s' % x['tgt']
+                tg.setdefault(key, set()).add(o['id'])
+    s.L.append('escort targets after the death (type/owner: escorts): %s' % (
+        ', '.join('%s: %d' % (k, len(v)) for k, v in sorted(tg.items())) or 'none'))
     eng = None
     near = None
     back = None
@@ -961,7 +1053,362 @@ def an_escort(s):
     return r
 
 
-ANALYSERS = {'SPMAT': an_spmat, 'ATAT': an_atat, 'MDU': an_mdu, 'STICKY': an_sticky, 'DT3': an_dt3,
+# ---- s78g (2026-11-05) ---------------------------------------------------------------------------------------------
+
+def hold_hist(objs, key, a, b, fn=None):
+    """Frames per value of one ST field in [a, b), summed over objs. ST lines come only on change, so a value holds
+    until the next sample (counting samples undercounts steady states: the s78f IDLE47 'never targeted' error)."""
+    h = {}
+    for o in objs:
+        if o is None:
+            continue
+        cur, cf = None, None
+        for x in o['st']:
+            if x['F'] >= b:
+                break
+            if cf is not None and x['F'] > a:
+                k = fn(cur) if fn else cur
+                h[k] = h.get(k, 0) + x['F'] - max(cf, a)
+            cur, cf = x[key], x['F']
+        end = b if o['gone'] is None else min(b, o['gone'])
+        if cf is not None and end > max(cf, a):
+            k = fn(cur) if fn else cur
+            h[k] = h.get(k, 0) + end - max(cf, a)
+    return h
+
+
+def an_edge2(s):
+    """s78g t01: per window, fired / not fired at d (fresh deployed SPMAT, target in front, no Suspend_Locomotor)."""
+    r = {'name': s.name, 'windows': []}
+    nades = projectiles(s.b, s.start, s.end, (GRENADE,))
+    k = 1
+    while s.marks.get('win%d' % k):
+        w = s.marks['win%d' % k]
+        a = s.marks.get('aim%d' % k)
+        F = w['F']
+        nxt = s.marks.get('aim%d' % (k + 1))
+        F1 = nxt['F'] - 6 if nxt else s.end
+        sp, ev = s.obj('sp%d' % k), s.obj('ev%d' % k)
+        aim_n = len([g for g in nades if a and a['F'] <= g['frame'] < F])
+        test = [g for g in nades if F + 2 <= g['frame'] < F1]
+        dist = None
+        if sp and ev:
+            p0, p1 = pos_at(sp, F), pos_at(ev, F + 6)
+            dist = dist2(p0, p1) if p0 and p1 else None
+        eid = str(ev['id']) if ev else None
+        tg = hold_hist([sp], 'tgt', F, F1, lambda v: 'victim' if v == eid else ('none' if v in ('none', None) else
+                                                                                 ('?' if v == '-' else 'other')))
+        ts = hold_hist([sp], 'ts', F, F1)
+        lo = hold_hist([sp], 'loco', F, F1, loco_name)
+        loco0 = value_at(sp, 'loco', F) if sp else None
+        p_at = pos_at(sp, F) if sp else None
+        moved = max((math.hypot(x['x'] - p_at[1], x['y'] - p_at[2]) for x in sp['st']
+                     if F <= x['F'] < F1 and x['x'] is not None), default=0.0) if p_at else None
+        stayed = not ((moved or 0) > 15 or any(x not in ('deployed', '?') for x in lo))
+        if test and stayed:
+            v = 'FIRED'
+        elif test:
+            # s78g EDGE2: the explicit order undeployed the walker and drove it ~209 units in; not a range answer
+            v = 'FIRED_AFTER_MOVING (moved %s)' % fmt(moved, 0)
+        elif sp is None or ev is None:
+            v = 'NOT_SPAWNED'
+        elif loco0 is not None and loco0 != 0x19:
+            v = 'NOT_DEPLOYED_AT_ORDER (%s)' % loco_name(loco0)
+        elif not stayed:
+            v = 'UNDEPLOYED_OR_MOVED'
+        elif tg.get('victim'):
+            v = 'TARGETED_NOT_FIRED' + ('_THEN_DROPPED' if tg.get('none') else '')
+        elif not readable(sp, 'tgt'):
+            v = 'NOT_FIRED (target unreadable)'
+        else:
+            v = 'NOT_TARGETED'
+        row = {'d': _int(w.get('d')), 'dist': dist, 'verdict': v, 'grenades': len(test), 'aim_grenades': aim_n}
+        r['windows'].append(row)
+        s.L.append('win%d d=%s (measured %s) F=%d..%d: aim@275 grenades %d; test grenades %d first +%s; target %s; '
+                   'ts %s; loco %s; moved %s -> %s' % (
+                       k, w.get('d'), fmt(dist), F, F1, aim_n, len(test), fmt(test[0]['frame'] - F if test else None),
+                       tg, ts, lo, fmt(moved, 0), v))
+        k += 1
+    fired = [x for x in r['windows'] if x['verdict'] == 'FIRED']
+    # only windows where the walker held its deploy count as "not fired" (a move invalidates the window)
+    nf = [x for x in r['windows'] if x['verdict'].startswith(('TARGETED_NOT_FIRED', 'NOT_TARGETED', 'NOT_FIRED'))]
+    bad = [x for x in r['windows'] if x not in fired and x not in nf]
+    if not r['windows'] or all(x['verdict'] == 'NOT_SPAWNED' for x in r['windows']):
+        r['verdict'] = 'NOT_MEASURED (no SPMAT / T4B in memory)'
+    elif not fired and not nf:
+        r['verdict'] = 'INVALID (no window held deploy: %s)' % ', '.join(
+            'd=%s %s' % (x['d'], x['verdict']) for x in bad)
+    elif not fired:
+        r['verdict'] = 'NONE_FIRED (aim@275 control fired in %d of %d windows)' % (
+            len([x for x in r['windows'] if x['aim_grenades']]), len(r['windows']))
+    elif not nf:
+        r['verdict'] = 'ALL_FIRED (reach >= %s)' % max(x['d'] for x in fired)
+    else:
+        lo_ = max(fired, key=lambda x: x['d'])
+        hi_ = min(nf, key=lambda x: x['d'])
+        mono = all(x['d'] < hi_['d'] for x in fired)
+        r['verdict'] = 'EDGE fired d=%s (%s), not fired d=%s (%s, %s)%s' % (
+            lo_['d'], fmt(lo_['dist']), hi_['d'], fmt(hi_['dist']), hi_['verdict'], '' if mono else ' NON_MONOTONIC')
+    if bad and fired + nf:
+        r['verdict'] += '; invalid windows d=%s' % ','.join(str(x['d']) for x in bad)
+    r['fired_d'] = [x['d'] for x in r['windows'] if x['verdict'] == 'FIRED']
+    s.L.append('fired at d=%s; held deploy, not fired at d=%s' % (r['fired_d'], [x['d'] for x in nf]))
+    s.L.append('%s -> %s' % (s.name, r['verdict']))
+    return r
+
+
+def an_spmat_ctrl(s):
+    """s78g t04 control: undeployed SPMAT, no DEPLOY, Hostile vs human-faction victim at 275."""
+    r = {'name': s.name, 'windows': []}
+    nades = projectiles(s.b, s.start, s.end, (GRENADE,))
+    out = []
+    for k in (1, 2):
+        m = s.marks.get('ctrl%d' % k)
+        if not m:
+            continue
+        F = m['F']
+        F1 = s.marks['ctrl%d' % (k + 1)]['F'] - 30 if s.marks.get('ctrl%d' % (k + 1)) else s.end
+        sp, v = s.obj('csp%d' % k), s.obj('cv%d' % k)
+        vid = str(v['id']) if v else None
+        n = len([g for g in nades if F <= g['frame'] < F1])
+        tg = hold_hist([sp], 'tgt', F, F1, lambda x: 'victim' if x == vid else str(x))
+        ts = hold_hist([sp], 'ts', F, F1)
+        first4 = first_where(sp, 'ts', lambda x: x == 4, F) if sp else None
+        r['windows'].append({'fac': m.get('fac'), 'grenades': n, 'state4': first4})
+        out.append('%s:%s' % (m.get('fac'), 'FIRED' if n else ('NOT_MEASURED' if sp is None or v is None else
+                                                              'TARGETED_NOT_FIRED' if tg.get('victim') else 'IGNORED')))
+        s.L.append('ctrl%d victim owner %s (player found %s) F=%d..%d: grenades %d; state 4 at +%s; target %s; ts %s' % (
+            k, m.get('fac'), m.get('player'), F, F1, n, fmt(None if first4 is None else first4 - F), tg, ts))
+    r['verdict'] = ' '.join(out) or 'NOT_MEASURED'
+    s.L.append('SPMAT_CTRL -> %s' % r['verdict'])
+    return r
+
+
+ANIM_NAMES = {0: 'IDLE', 1: 'SPACE_IDLE', 2: 'MOVE', 3: 'TURNL', 4: 'TURNR', 5: 'ATTACK', 6: 'ATTACKIDLE', 7: 'DIE',
+              8: 'ROTATE'}  # docs/re/ANIM_PARTICLES.md anim type ids
+
+
+def clip_names(h):
+    return dict(sorted(('%s %s' % (k, ANIM_NAMES.get(k, '?')) if isinstance(k, int) else str(k), v)
+                       for k, v in h.items()))
+
+
+def mean_se(v):
+    """mean and standard error of a list (stderr None below 2 values)"""
+    if not v:
+        return None, None
+    m = sum(v) / float(len(v))
+    if len(v) < 2:
+        return m, None
+    var = sum((x - m) ** 2 for x in v) / float(len(v) - 1)
+    return m, math.sqrt(var / len(v))
+
+
+def an_idle47w(s):
+    """s78g t03: slot 47 with and without an Attack Idle clip; draws per frame at the on / off edges, frame-weighted
+    targeting state and clip of the attackers while their victims exist."""
+    import statistics
+    import s78f_extra_parse as X
+    r = {'name': s.name, 'phases': {}}
+    rng = [x for x in s.b.get('rng', []) if s.start - 200 <= x[0] <= s.end + 10]
+    per, unknown = X.draws_per_frame(rng)
+    fr = sorted(per)
+    single = {f: per[f] for i, f in enumerate(fr) if i and fr[i - 1] == f - 1}
+
+    def med(a, b):
+        v = [single[f] for f in range(a, b) if f in single]
+        return statistics.median(v) if v else None
+
+    def mean(a, b):
+        v = [per.get(f, 0) for f in range(a, b)]
+        return sum(v) / float(len(v)) if v else None
+
+    s.L.append('RNG samples %d, frames with draws %d, unreadable gaps %d' % (len(rng), len(per), unknown))
+    phases = sorted((m['F'], k[6:]) for k, m in s.marks.items() if k.startswith('phase_'))
+    for i, (P0, ph) in enumerate(phases):
+        P1 = phases[i + 1][0] if i + 1 < len(phases) else s.end
+        att = [s.b['objs'].get(_int(d.get('id'))) for d in s.spawns if d.get('ok') == '1' and
+               re.match(r'i\d+$', d.get('tag', '')) and P0 <= (d['F'] or -1) < P0 + 10]
+        att = [o for o in att if o]
+        ups, downs, on_m, off_m, dc = [], [], [], [], []
+        ts_on, clip_on = {}, {}
+        # s78g: windows follow the marks (IDLE47V / W: 150 on / 150 off; IDLE47X: 100 / 100). off_w[0] is the stretch
+        # after the attackers were placed and before the first victims.
+        c = 1
+        off_w = [mean(P0 + 30, s.marks['%s_on1' % ph]['F'] - 5) if s.marks.get('%s_on1' % ph) else None]
+        on_w = []
+        while s.marks.get('%s_on%d' % (ph, c)):
+            fo = s.marks['%s_on%d' % (ph, c)]['F']
+            ff = s.marks.get('%s_off%d' % (ph, c), {}).get('F')
+            if ff is None:
+                break
+            nxt = s.marks.get('%s_on%d' % (ph, c + 1), {}).get('F', min(P1, ff + (ff - fo)))
+            h = ff - fo
+            b, a = med(fo - h + 10, fo - 10), med(fo + 20, ff - 5)
+            if a is not None and b is not None:
+                ups.append(a - b)
+            b, a = med(ff - h + 20, ff - 5), med(ff + 20, nxt - 10)
+            if a is not None and b is not None:
+                downs.append(a - b)
+            on_m.append(mean(fo + 20, ff - 5))
+            off_m.append(mean(ff + 20, nxt - 5))
+            on_w.append(on_m[-1])
+            off_w.append(off_m[-1])
+            for kk, vv in hold_hist(att, 'ts', fo + 20, ff - 5).items():
+                ts_on[kk] = ts_on.get(kk, 0) + vv
+            for kk, vv in hold_hist(att, 'anim', fo + 20, ff - 5, lambda x: x[0] if x else None).items():
+                clip_on[kk] = clip_on.get(kk, 0) + vv
+            c += 1
+        # per-cycle on minus the mean of the off windows either side (draws per frame, all frames): the land
+        # background (~440 draws / frame, drifting by +-100 over 150 frames) cancels to first order
+        for k, o in enumerate(on_w):
+            if o is not None and off_w[k] is not None and off_w[k + 1] is not None:
+                dc.append(o - (off_w[k] + off_w[k + 1]) / 2.0)
+        on_med = statistics.median(ups) if ups else None
+        off_med = statistics.median(downs) if downs else None
+        tot = float(sum(ts_on.values()) or 1)
+        dmean, dse = mean_se(dc)
+        r['phases'][ph] = {'dc': dc, 'dmean': dmean, 'dse': dse, 'on': on_med, 'off': off_med,
+                           'ts4': ts_on.get(4, 0) / tot, 'ts34': (ts_on.get(3, 0) + ts_on.get(4, 0)) / tot,
+                           'clip6': clip_on.get(6, 0) / tot, 'clip5': clip_on.get(5, 0) / tot, 'attackers': len(att)}
+        s.L.append('%s (%d attackers, F=%d..%d): on steps %s (median %s); off steps %s (median %s); draws/frame on '
+                   '%s off %s; attacker-frames while victims exist: ts %s, clip %s' % (
+                       ph, len(att), P0, P1, ' '.join('%+.0f' % x for x in ups), fmt(on_med),
+                       ' '.join('%+.0f' % x for x in downs), fmt(off_med),
+                       fmt(statistics.mean([x for x in on_m if x is not None]) if any(on_m) else None, 2),
+                       fmt(statistics.mean([x for x in off_m if x is not None]) if any(off_m) else None, 2),
+                       dict(sorted(ts_on.items(), key=lambda kv: str(kv[0]))),
+                       clip_names(clip_on)))
+        s.L.append('%s per-cycle draws/frame, on minus the off windows either side: %s -> mean %s +- %s (stderr, %d '
+                   'cycles)' % (ph, ' '.join('%+.1f' % x for x in dc), fmt(dmean), fmt(dse), len(dc)))
+    P, D, V = (r['phases'].get(x) for x in ('P', 'D', 'V'))
+
+    def sep(a, b):
+        """(difference, combined stderr, separated at 3 sigma) of two phases' per-cycle means"""
+        if not a or not b or a['dmean'] is None or b['dmean'] is None or a['dse'] is None or b['dse'] is None:
+            return None, None, None
+        diff, se = a['dmean'] - b['dmean'], math.hypot(a['dse'], b['dse'])
+        return diff, se, abs(diff) > 3 * se and se > 0
+
+    pv, dv, pd = sep(P, V), sep(D, V), sep(P, D)
+    r['pv'], r['dv'], r['pd'] = pv, dv, pd
+    nums = 'P-V %s +- %s, D-V %s +- %s, P-D %s +- %s' % (fmt(pv[0]), fmt(pv[1]), fmt(dv[0]), fmt(dv[1]),
+                                                         fmt(pd[0]), fmt(pd[1]))
+    if not D or D['dmean'] is None:
+        v = 'NOT_MEASURED'
+    elif D['ts34'] < 0.5:
+        v = 'D_DID_NOT_TAKE_TARGETS (ts 3/4 in %.0f%% of attacker-frames)' % (100 * D['ts34'])
+    elif pv[2] and pv[0] > 0 and dv[2] is False and pd[2]:
+        v = 'WITH_CLIP_NO_PER_SERVICE_DRAW (%s; D clip ATTACKIDLE %.0f%%)' % (nums, 100 * D['clip6'])
+    elif dv[2] and dv[0] > 0 and pd[2] is False:
+        v = 'WITH_CLIP_ALSO_DRAWS (%s)' % nums
+    else:
+        v = 'UNCLEAR (%s; 3-sigma separation needed)' % nums
+    r['verdict'] = v
+    s.L.append('%s -> %s' % (s.name, v))
+    return r
+
+
+def an_guard_hand(s):
+    """s78g t02: squadron centroid vs G every 30 frames; when the guard took effect, whether it followed, and when the
+    squadron left for the shift waypoint relative to G's motion and stop."""
+    r = {'name': s.name}
+    g = s.obj('g')
+    sq = next((d for d in s.spawns if d.get('tag') == 'squad' and d.get('ok') == '1'), None)
+    sqid = sq.get('id') if sq else None
+    mem = [o for o in s.b['objs'].values() if sqid and any(x['cont'] == sqid for x in o['st'])]
+    lua = {d['F']: d for k, d in s.sc_recs if k == 'COUNT' and d.get('what') == 'gh'}
+    s.L.append('G %s; squadron container %s, members %s; Lua position records %d' % (
+        g['id'] if g else '-', sqid, [o['id'] for o in mem], len(lua)))
+    marks = {k: m['F'] for k, m in s.marks.items()}
+    s.L.append('marks: %s' % ', '.join('%s F=%s' % kv for kv in sorted(marks.items(), key=lambda kv: kv[1])))
+    rows = []
+    prev = None
+    for F in range(s.start, s.end + 1, 30):
+        gp = pos_at(g, F) if g else None
+        c = centroid(mem, F) if mem else None
+        if (gp is None or c is None) and lua:
+            near = min(lua, key=lambda f: abs(f - F))
+            if abs(near - F) <= 30:
+                d = lua[near]
+                if gp is None and _float(d.get('gx')) is not None:
+                    gp = (F, _float(d['gx']), _float(d['gy']), 0.0)
+                if c is None and _float(d.get('sx')) is not None:
+                    c = (F, _float(d['sx']), _float(d['sy']), 0.0)
+        if gp is None or c is None:
+            prev = None
+            continue
+        row = {'F': F, 'g': gp, 'c': c, 'dist': dist2(c, gp), 'gs': 0.0, 'cs': 0.0, 'cls': '-'}
+        if prev:
+            row['gs'] = dist2(gp, prev['g']) / 30.0
+            vx, vy = c[1] - prev['c'][1], c[2] - prev['c'][2]
+            row['cs'] = math.hypot(vx, vy) / 30.0
+            tx, ty = gp[1] - c[1], gp[2] - c[2]
+            cos = (vx * tx + vy * ty) / (math.hypot(vx, vy) * math.hypot(tx, ty) or 1.0)
+            if row['dist'] < 600:
+                row['cls'] = 'WITH_G'
+            elif row['cs'] > 2.0 and cos > 0.7:
+                row['cls'] = 'CHASE'
+            elif row['cs'] > 2.0 and cos < 0.0:
+                row['cls'] = 'AWAY'
+            elif row['cs'] <= 1.5:
+                row['cls'] = 'HOLD'
+            else:
+                row['cls'] = 'DRIFT'
+        tg = sorted({value_at(o, 'tgt', F) for o in mem} - {None, '-', 'none'})
+        row['tgt'] = tg
+        rows.append(row)
+        prev = row
+    for row in rows:
+        s.L.append('F=%5d G (%6.0f, %6.0f) %4.1f/fr  squad (%6.0f, %6.0f) %4.1f/fr  dist %5.0f  %-6s tgt %s' % (
+            row['F'], row['g'][1], row['g'][2], row['gs'], row['c'][1], row['c'][2], row['cs'], row['dist'],
+            row['cls'], ','.join(row['tgt']) or '-'))
+    stop = marks.get('g_stop')
+    r['pairs'] = {}
+    for p, (gk, sk, nk) in enumerate((('guard_go', 'shift_go', 'guard_go2'), ('guard_go2', 'shift_go2', None)), 1):
+        G0, S0 = marks.get(gk), marks.get(sk)
+        N0 = marks.get(nk) if nk else s.end
+        if G0 is None or S0 is None:
+            r['pairs'][p] = 'NOT_REACHED'
+            continue
+        win = [x for x in rows if G0 <= x['F'] < (N0 or s.end)]
+        chase = next((x['F'] for x in win if x['cls'] in ('CHASE', 'WITH_G') and x['F'] < S0 + 600), None)
+        before = [x for x in win if x['F'] < S0 and (chase is None or x['F'] >= chase)]
+        caught = next((x['F'] for x in before if x['dist'] < 500), None)
+        fol = [x for x in before if caught and x['F'] >= caught and x['gs'] > 0.5]
+        ffrac = (len([x for x in fol if x['dist'] < 600]) / float(len(fol))) if fol else None
+        at_shift = next((x for x in win if x['F'] >= S0), None)
+        dep = None
+        aw = [x for x in win if x['F'] >= S0]
+        for a, b in zip(aw, aw[1:]):
+            if a['cls'] == 'AWAY' and b['cls'] == 'AWAY':
+                dep = a
+                break
+        if chase is None:
+            v = 'NO_GUARD_SEEN'
+        elif dep is None:
+            v = 'NO_DEPARTURE (waypoint not given, or never taken)'
+        elif dep['gs'] > 0.5 and (stop is None or dep['F'] < stop):
+            v = 'WAYPOINT_TAKEN_WHILE_G_MOVES (+%d after the shift message)' % (dep['F'] - S0)
+        elif stop is not None and dep['F'] >= stop:
+            v = 'WAYPOINT_WAITED_UNTIL_G_STOPPED (left +%d after the stop)' % (dep['F'] - stop)
+        else:
+            v = 'WAYPOINT_TAKEN_G_SLOW (G %.1f/fr)' % dep['gs']
+        if at_shift is not None and at_shift['dist'] > 800:
+            v += ' NOT_FOLLOWING_AT_SHIFT (dist %.0f)' % at_shift['dist']
+        r['pairs'][p] = v
+        s.L.append('pair %d: guard message F=%s, squadron reacts F=%s, within 500 of G F=%s, follow while G moves %s; '
+                   'shift message F=%s (dist then %s); departure F=%s -> %s' % (
+                       p, G0, chase, caught, fmt(None if ffrac is None else 100 * ffrac, 0) + '%' if ffrac is not None
+                       else '-', S0, fmt(at_shift and at_shift['dist'], 0), dep['F'] if dep else '-', v))
+    r['verdict'] = r['pairs']
+    return r
+
+
+ANALYSERS = {'SPMAT_EDGE2': an_edge2, 'SPMAT_EDGE3': an_edge2, 'SPMAT_CTRL': an_spmat_ctrl, 'IDLE47W': an_idle47w,
+             'IDLE47V': an_idle47w, 'IDLE47X': an_idle47w,
+             'REINF2': an_reinf,
+             'GUARD_HAND': an_guard_hand, 'SPMAT': an_spmat, 'ATAT': an_atat, 'MDU': an_mdu, 'STICKY': an_sticky, 'DT3': an_dt3,
              'REINF': an_reinf, 'MUZZLE_LAND': an_muzzle, 'MUZZLE_SPACE': an_muzzle, 'SQUAD': an_squad,
              'ESCORT': an_escort}
 
@@ -1092,7 +1539,7 @@ def parse(path):
         L.append('== run %s: %s battle %s, AI %s (player %s), map %s, points_ok=%s, %s ==' % (
             rid, mode, bn, arm.get('fac'), arm.get('pid'), arm.get('map'), arm.get('points_ok'),
             arm.get('service_rate')))
-        ticks = [d['F'] for _n, k, d, _t in rr if k == 'TICK' and d['F'] is not None]
+        ticks = sorted(d['F'] for _n, k, d, _t in rr if k == 'TICK' and d['F'] is not None)
         L.append('script resumes: %s (gaps %s; 3 = every free-store service); Lua->memory frame offset %+d (from %d '
                  'spawn ids)' % (ticks[:8], sorted({ticks[i + 1] - ticks[i] for i in range(len(ticks) - 1)}), off, nm))
         vic = next((d for _n, k, d, _t in rr if k == 'VICTIMS'), {})
@@ -1151,6 +1598,21 @@ def parse(path):
             ans['8_first_shot'] = by['REINF'].get('verdict')
         if 'DT3' in by:
             ans['8_dt3'] = by['DT3'].get('verdict')
+        # s78g (2026-11-05)
+        if 'SPMAT_EDGE2' in by:
+            ans['1_edge2'] = by['SPMAT_EDGE2'].get('verdict')
+        if 'SPMAT_CTRL' in by:
+            ans['t04_victim_owner'] = by['SPMAT_CTRL'].get('verdict')
+        if 'SPMAT_EDGE3' in by:
+            ans['1_edge3'] = by['SPMAT_EDGE3'].get('verdict')
+        for k in ('IDLE47W', 'IDLE47X'):
+            if k in by:
+                ans['t03_slot47_clip' + ('' if k == 'IDLE47W' else '_x')] = by[k].get('verdict')
+        if 'REINF2' in by:
+            ans['8_first_shot2'] = by['REINF2'].get('verdict')
+        if 'GUARD_HAND' in by:
+            for p, v in sorted((by['GUARD_HAND'].get('pairs') or {}).items()):
+                ans['t02_guard_shift_%d' % p] = v
     L.append('')
     L.append('== ANSWERS (README.md lists the expected values) ==')
     for k in sorted(ans):
@@ -1527,6 +1989,21 @@ def selftest(keep=None):
           'arc fit: %.1f deg, v %.2f, g %.3f' % (m.get('theta', 0), m.get('v', 0), m.get('g', 0)))
     report = open(os.path.join(d, 'report.txt')).read()
     check('== ANSWERS' in report and 'ESCORT ->' in report, 'report text written (%d lines)' % report.count('\n'))
+    # s78g t05: the heap scan delivers the Lua records in address order, not time order; shuffled LUA lines must
+    # give the same scenario windows and answers
+    import random
+    lines = text.splitlines()
+    lua_ix = [i for i, x in enumerate(lines) if x.startswith('LUA ')]
+    lua_l = [lines[i] for i in lua_ix]
+    random.Random(7).shuffle(lua_l)
+    for i, x in zip(lua_ix, lua_l):
+        lines[i] = x
+    log3 = os.path.join(d, 'reader_shuffled.log')
+    with open(log3, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+    r3 = cmd_parse(argparse.Namespace(log=log3, out=os.path.join(d, 'report_shuffled.txt'), json=None))
+    win = lambda res_: [[(x['name'], x.get('start'), x.get('end')) for x in run['scenarios']] for run in res_['runs']]
+    check(r3['answers'] == a and win(r3) == win(res), 'records in address order (shuffled): same windows and answers')
     # a log without memory data (Lua only) must still parse
     lua_only = '\n'.join(x for x in text.splitlines() if not x.startswith(('OBJ ', 'ST ', 'GONE '))) + '\n'
     log2 = os.path.join(d, 'reader_lua_only.log')

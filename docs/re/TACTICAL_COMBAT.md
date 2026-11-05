@@ -305,7 +305,8 @@ These apply in `Scan_Player` and again in `Validate_Current_Target` (0x567c50).
   5. `Category_Exclusions` → −1, unless a property entry matched.
   6. `Property_Exclusions` → −1.
 - **Selection inside one scan.** The best score is shared across all players visited. The first valid
-  candidate becomes the current best.
+  candidate becomes the current best. **Correction (s78g t04, §2.10):** each player's first passing candidate
+  replaces the best unconditionally, so the pick comes from the last visited player that has a candidate.
   - **Early exit:** if a candidate is the current target and scores exactly 1.0, the scan returns immediately.
   - **Replacement rule:** a later candidate replaces the best when the first of these applies:
     1. exactly one of the two is at or below the health-fraction threshold (constant 0x140b27338; the fraction
@@ -752,7 +753,63 @@ value 0 (0x2823c0 / 0x2823e0), "enemy" = value 1 (0x2824d0 / 0x2824f0, Lua `Play
     Relation check (s78f t12, 2026-11-05, `out/20261105-062322`, REL records): Lua `Is_Enemy` between the Rebel AI
     and Hostile (player 4) is **true both ways**, in land and in space (Empire: true; Neutral and Rebel: false). So
     the relation Lua sees is "enemy", and the drop happens elsewhere [M: the candidate scan skips the Hostile
-    player's objects, or they are not in the per-player lists the scan reads].
+    player's objects, or they are not in the per-player lists the scan reads]. **Superseded by s78g t04 below:
+    there is no drop.**
+  - **s78g t04 (RE and raw-log re-read, 2026-11-05): nothing drops Hostile-owned objects** [H for the code paths
+    and the logged states unless tagged].
+    1. *Binary.* The only owner-dependent tests on the target paths are these:
+       - Auto scan `Acquire_Target` 0x568a00, per visited player: skip when the player's faction (player +0x68)
+         has `Is_Neutral` (+0x108), or when the attacker player's +0x370[id] ≠ 1 (0x2824f0). `Hostile` is
+         `Is_Neutral` No (FACTIONS.XML), and 0x297300 gives it 1 (the same table Lua `Is_Enemy` 0x603760 reads).
+       - `Scan_Player` 0x5662b0 and `Validate_Current_Target` 0x567c50 (§2.3) test the owner only in the stealth
+         exception (same owner) and in the fog test 0x35f470, where an ally of the attacker counts as visible
+         (0x39a230). Nothing else about the owner is read.
+       - `Order_Attack` 0x38d730, which Lua `GameObjectWrapper.Attack_Target` 0x5730f0 calls with (unit, t, 0,
+         ordered 1, 0, −1, force 0): 0x2824d0(attacker's player, target +0x58) must be 1. The other refusals
+         (stealth, melee vs airborne, garrisoned, +0x3a0 & 0x42) do not depend on the owner.
+       - No path tests the player type, human or AI, `Is_Playable`, `Create_Player_In_Multiplayer_Games` or any
+         other player flag.
+       - The player trees exist for Hostile. 0x2af130 allocates GOM+0xd0 for `DAT_140a16fb0` (the maximum player
+         count). `Register_Object` 0x2b5ad0 inserts every collidable object at GOM+0xd0 + owner × 0x38, and the
+         scan queries tree player +0x4c.
+    2. *Logged states* (`tools/probe_mod/s7s8_probes/out/20261105-051443/reader.log`, Geonosis, Rebel AI = player 1,
+       victims owner 4 = Hostile):
+       - IDLE47 phase b: the six `Pod_Walker`s (82269 … 82279, owner 1) took the held Hostile T4Bs (82270 …
+         82280, owner 4) as targets 7 frames after the spawn (F 4061). They reached state 3, then state 4 by
+         F 4086, and were still in state 4 in the last samples (F ≈ 4650).
+       - REINF: `MZ8_Pulse_Cannon_Tank` 82938 took Hostile T4B 82901 two frames after its spawn (F 12498, state
+         3), reached state 4 at +40 and fired 8 shots.
+       - The report's "attackers 6 ts {}" for IDLE47 b is a parser miss on sparse ST samples, not what the game did.
+    3. *Why the s78f cases saw state 0.* Neither case compares owners on equal terms.
+       - **SPMAT** (`-045131`, `-051443`): this was the DEPLOY scenario. The attack order at F 480 was followed by
+         `deploy1` at F 495, which ran a deploy block (ret = block, finished +45, deploy clip 25). In the Empire
+         control (`-055142`) the same call returned nil, with no transition, and the SPMAT took the target. So the
+         unit state differed between the runs [M: what keeps the deploying SPMAT at state 0 is not traced].
+       - **Garrisoned mercs** (`-051443` BUNKER): the Hostile T4B stood at (3180, 4640), 300 from the bunker
+         centre. That is beyond the merc's 172.5 reach, which is measured from the bunker centre (LOB_SOLVER,
+         BUNKER2 probe). This is a range result.
+    4. *Side finding: selection across players* [H from the decompiled code; not re-checked in disassembly]. This
+       corrects §2.4 "the best score is shared across all players". `Scan_Player` starts each player with no local
+       best. It accepts that player's first passing candidate unconditionally (the test is "shared score = −1
+       **or** no local best") and overwrites the shared score with it. Later candidates of the same player use the
+       §2.4 replacement rule. 0x568a00 replaces its result with every non-null per-player return. **The pick is
+       therefore the best candidate of the last player, in the cyclic visit order from the random start player, that
+       has a passing candidate.** A better candidate of an earlier player is lost. The early exit (current target
+       scoring exactly 1.0) fires only once that candidate has been accepted as the local best. The scan then stops
+       at that player.
+    5. *Index and ID* [M]. 0x568a00 counts players by the player vector (list +0 / +8). It fetches each player
+       **by ID** (0x294bc0, the by-ID table at list +0x20 / +0x28), and it skips the ID equal to its own player's
+       list index (+0x48). 0x291a50 gives each new player the lowest free ID, so ID = index in skirmish and
+       campaign, and the mix does no harm there. In the decompiled loop, a null player entry, or a fog failure while
+       the attacker is inside an `Is_Nebula` object (0x35f3b0), does not advance the player index. The remaining
+       iterations then repeat that entry, so later players are not visited.
+    - *Port* (read-only check): `TacticalBattle` sets `PlayerInfo.active = !Is_Neutral` and builds the relation
+      from `bt_relation`. `CombatSystem::gather` / `decide_target` (`engine/tactical/combat/src/combat_system.cpp`) visits every active enemy player. Hostile is targeted, as in retail. The port
+      differs in item 4: it carries one best across all players. To match retail, restart the best at each
+      visited player that has a candidate. Also take the early exit only after the candidate has been accepted
+      as best.
+    - *Optional probe* to close the SPMAT [M]: the SPMAT scenario without the `DEPLOY` calls, run twice at the same
+      frame offset, once with Hostile victims and once with Empire victims. Both should reach state 3 / 4 on v275.
 - **Skirmish with the map / game record byte +0xb5 set** (0x295cf0 → 0x297470) [M: a team-game setting]: same, but
   allies are self or the same team id (player +0x54 ≠ −1); faction is not used.
 - **At run time:** Lua `PlayerWrapper.Make_Ally` (0x6046a0) writes 0, `Make_Enemy` (0x604780) writes 1 (one
@@ -1004,9 +1061,18 @@ half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor;
     `UM07_Cloud_City_Flyover`, `Moldy_Crow`, `Moldy_Crow_Landing` and `Luke_Jedi_Xwing_Landing` fired.
     `Tyber_Zann_Boarding_Shuttle_Prologue` and `Underworld_Infantry_Droid_Shuttle_Landing` stayed silent, but their
     targeting state never reached 4 (0, or 0 / 2), so that is not a muzzle failure. The land control ran only against
-    the Hostile-owned victims that nothing targets (relation item above), so it proves nothing.
+    the Hostile-owned victims that nothing targets (relation item above), so it proves nothing. (s78g t04, §2.10:
+    Hostile-owned victims are targeted. The land control failed for other reasons.)
   - *First shot after a late spawn*: one `MZ8_Pulse_Cannon_Tank` reached state 4 and fired 40 frames after spawning.
     Its second did not spawn, so a surviving random delay is not ruled out (one sample, needs at least four).
+  - *First shot after a late spawn, measured* (s78g t05, 2026-11-05, `out/20261105-073814`) [M]. REINF (re-parsed
+    t12 run and this run): four `MZ8_Pulse_Cannon_Tank`s spawned 150 frames apart, each ordered at once to attack a
+    held tank at 200. First-shot delays after spawn were 18 / 29 / 41 / 52. REINF2: six spawned at irregular gaps
+    (200 / 172 / 249 / 141 / 288): delays 9 / 11 / 29 / 41 / 52 / 61. So the delay grows by about **11.3 frames
+    per unit spawned earlier** (least-squares slope; residual 5.9), whatever the gap. It is a per-unit stagger, not
+    a random initial delay (a random one would spread up to 159). The REINF run's first shots also sit on a
+    161-frame clock, but REINF2 does not, so that clock was a coincidence of the equal gaps. Not yet explained:
+    what the stagger counts (alive attackers of one player, or services queued behind them).
 
 **Targeting states, slots 47 / 48 and team copies (s78f, 2026-11-03)** [H unless tagged]. TD = obj +0xf0; the TD
 pack is shared by TARGETING, WEAPON (TD +0x80 = the WeaponBehavior, stored by its attach 0x54ceb0) and TURRET
@@ -1260,6 +1326,17 @@ gives R = 3.588° and a slot-48 tolerance of 1.794° in land.
     on clip 6). So the about-6 step comes with six no-clip walkers in state 4, as a per-service slot-47 redraw
     predicts, and the victims alone do not produce it. The with-clip side is still not clean, because the
     infiltrators mostly did not take their targets.
+  - With-clip control again (s78g t03, 2026-11-05) [M: not separated]. The with-clip attacker was
+    `Dark_Trooper_PhaseII`; clip ids 5 / 6 are ATTACK / ATTACKIDLE. The troopers took their targets (state 4,
+    2730 of 3750 attacker-frames in ATTACK, 1020 in ATTACKIDLE). The Pod_Walkers stayed on clip 0. The background is
+    about 440 synced draws per frame and drifts ±100 over 150 frames, which swamps a 6–12 draw effect.
+    - IDLE47W (`out/20261105-073814`, 6 attackers): per-cycle on-minus-off was P +1.9 ± 31.8, D +13.5 ± 25.6,
+      V −48.6 ± 39.9.
+    - IDLE47X (`out/20261105-092438`, 12 attackers, 15 cycles per phase, drift-cancelled): P−V −42.3 ± 24.4,
+      D−V +27.7 ± 17.4, P−D −70.0 ± 25.4.
+    Neither run separates the phases at 3 sigma, so whether a model with an ATTACKIDLE clip skips the per-service
+    draw is still open. The draw-count method needs a quiet background (no AI army) or a per-object read of the
+    slot-47 call to settle it.
   - *Port:* when clip 6 is missing, leave the current clip as it is and draw the blend each service in state 3 / 4,
     as retail does.
 

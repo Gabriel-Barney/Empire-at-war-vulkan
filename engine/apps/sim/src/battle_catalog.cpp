@@ -601,6 +601,10 @@ void BattleCatalog::s9_unit_fields(uint32_t t, tc::UnitDesc& u, BuildState& s) c
     u.shield_hit_particle_count = clamp_count(vis.shield_hit.size());
     u.damaged_smoke = !vis.smoke.empty();
     u.target_stealth_units = ty.get_bool(t, "Target_Stealth_Units");
+    // s78g t06 (TACTICAL_COMBAT §3.6 step 2): the Take_Damage team rules (vanilla: Droid_R2D2 / Droid_C3P0 share, Luke_XWing
+    // / TIE_Prototype redirect). Never read before, so the rules had not run in any battle.
+    u.redirect_damage_to_teammates = ty.get_bool(t, "Redirect_Damage_To_Teammates");
+    u.share_damage_with_teammates = ty.get_bool(t, "Share_Damage_With_Teammates");
     u.combustible = ty.get_bool(t, "Is_Combustible");
     u.burning_damage_per_second = ty.get_float(t, "Burning_Damage_Per_Second");
     u.energy_capacity = ty.get_float(t, "Energy_Capacity");

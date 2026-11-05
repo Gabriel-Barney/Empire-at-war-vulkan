@@ -220,6 +220,7 @@ uint32_t TacticalBattle::bt_adopt_built(TacticalMode& mode, objects::ObjectHandl
         cs.team = static_cast<uint32_t>(containers_[container].id);
         cs.team_leader = leader;
     }
+    if (member && space_) cs.damage_team = static_cast<uint32_t>(containers_[container].id);  // s78g t06 (see deploy)
     abilities_->add_unit(cs, cs.desc, frame_, *rng, member ? containers_[container].id : tc::kNoObject);
     u.range = combat_->attack_range(u.id);
     const auto it = std::lower_bound(units_.begin(), units_.end(), u.id, [](const Unit& a, objects::ObjectId v) { return a.id < v; });
