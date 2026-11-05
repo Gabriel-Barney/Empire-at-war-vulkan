@@ -461,6 +461,40 @@ static void test_queries(const Db& db) {
     CHECK(contains(run(vm, "t1.Has_Ability(1)"), "GameObjectWrapper::Has_Ability -- invalid type for ability 1. Expected string."));
 }
 
+// s78h t05 (TACTICAL_COMBAT §3.1.1): tactical Spawn_Unit faces the unit from its spawn point toward the world
+// origin, +X at x = y = 0; an object location lends its position only; company members share the facing.
+// Create_Generic_Object keeps the old rule (unchecked against retail).
+static void test_spawn_unit_facing(const Db& db) {
+    Scene s(db);
+    LuaVm& vm = *s.vm;
+    auto facing_of = [&](const char* global) {
+        const objects::ObjectId id = static_cast<objects::ObjectId>(gnum(vm, global));
+        return s.store.facing(s.store.find(id));
+    };
+    CHECK(run(vm, "a = Spawn_Unit(Find_Object_Type('Tank'), Create_Position(100, 0, 0), p1)[1].Get_Object_ID() "
+                  "b = Spawn_Unit(Find_Object_Type('Tank'), Create_Position(0, 0, 7), p1)[1].Get_Object_ID() "
+                  "d = Spawn_Unit(Find_Object_Type('Tank'), Create_Position(-3, 4, 0), p1)[1].Get_Object_ID()") == "");
+    Vec3 f = facing_of("a");
+    CHECK(f.x == -1.0f && f.y == 0.0f && f.z == 0.0f);
+    f = facing_of("b");
+    CHECK(f.x == 1.0f && f.y == 0.0f && f.z == 0.0f);
+    f = facing_of("d");
+    CHECK(f.x == 0.6f && f.y == -0.8f && f.z == 0.0f);
+    // Object location: marker1 sits at (100, 0, 0) facing +Y; only its position counts.
+    s.store.set_facing(s.marker1, {0.0f, 1.0f, 0.0f});
+    CHECK(run(vm, "team = Spawn_Unit(Find_Object_Type('Trooper_Team'), Find_Hint('Marker_Generic', 'spawnpoint'), p1)[1] "
+                  "tm = team.Get_Object_ID() mem = Find_All_Objects_Of_Type('Trooper') "
+                  "m1 = mem[1].Get_Object_ID() m2 = mem[2].Get_Object_ID()") == "");
+    for (const char* g : {"tm", "m1", "m2"}) {
+        f = facing_of(g);
+        CHECK(f.x == -1.0f && f.y == 0.0f && f.z == 0.0f);
+    }
+    // Create_Generic_Object is unchanged: +X at a position.
+    CHECK(run(vm, "g = Create_Generic_Object('Tank', Create_Position(100, 0, 0), p1).Get_Object_ID()") == "");
+    f = facing_of("g");
+    CHECK(f.x == 1.0f && f.y == 0.0f);
+}
+
 static void test_spawn_and_state(const Db& db) {
     Scene s(db);
     LuaVm& vm = *s.vm;
@@ -912,6 +946,7 @@ int main() {
     test_queries(db);
     test_stage3(db);
     test_spawn_and_state(db);
+    test_spawn_unit_facing(db);
     test_dead_handles(db);
     test_wave1(db);
 #if ALAMO_LUA_HAVE_COMMANDS

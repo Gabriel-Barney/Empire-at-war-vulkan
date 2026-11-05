@@ -142,6 +142,7 @@ void CombatSystem::reserve(uint32_t units, uint32_t projectiles, uint32_t candid
     attack_events_.reserve(units);  // s78f t08: at most one signal 0x1E per unit and tick
     leaders_.reserve(units);
     team_heads_.reserve(units);  // OI tactical
+    land_teams_.reserve(units);  // s78h t06
     serial_ctx_.reserve(std::max<uint32_t>(candidates_per_unit, units));
 }
 
@@ -793,6 +794,43 @@ const CombatSystem::Unit* CombatSystem::team_head(const Unit& u) const {
     if (it == team_heads_.end() || it->first != u.team) return nullptr;
     const Unit* l = unit(it->second);
     return (live(l) && l != &u) ? l : nullptr;
+}
+
+CombatSystem::Unit* CombatSystem::team_head_of(uint32_t team) {
+    // s78h t06: team_head() for the team itself (no member needed): the container when it is a live combat unit, else
+    // the live team_leader member (team_heads_, kept current by hand_over_team).
+    if (team == 0) return nullptr;
+    if (team <= static_cast<uint32_t>(kNoObject)) {
+        Unit* c = unit(static_cast<ObjectId>(team));
+        if (live(c)) return c;
+    }
+    const auto it = std::lower_bound(team_heads_.begin(), team_heads_.end(), std::make_pair(team, ObjectId{-1}));
+    if (it == team_heads_.end() || it->first != team) return nullptr;
+    Unit* l = unit(it->second);
+    return live(l) ? l : nullptr;
+}
+
+bool CombatSystem::targeting_idle(const Unit& u, uint32_t frame) const {
+    // OI abilities: a stunned unit's targeting is suspended (0x647290); Requires_Base_Power units do not act without base
+    // power (0x632270). S7 t14: the jetpack suspends TARGETING; S8 t25: targeting suspended.
+    const bool idle = u.stun_end > frame || (desc_of(u).requires_base_power && !has_base_power(u.owner));
+    return idle || (u.flags & kUnitWeaponsSuspended) || (u.flags & kUnitTargetingSuspended);
+}
+
+float CombatSystem::team_mod_multiplier(uint32_t team, ModKind kind) const {
+    // s78h t03 (TACTICAL_COMBAT §4.4 "Who the squad leader is"): 0x398010 on the TEAM container. Members = every live unit
+    // whose container id (damage_team: team on land, the squadron in space) is `team`, in units_ (ascending id) order.
+    const auto k = static_cast<uint32_t>(kind) - 1u;
+    if (team == 0 || k >= kModKindCount) return 1.0f;
+    float own = 1.0f;
+    if (team <= static_cast<uint32_t>(kNoObject)) {
+        const Unit* c = unit(static_cast<ObjectId>(team));
+        if (live(c)) own = c->own_mult[k];
+    }
+    std::vector<float> members;
+    for (const Unit& m : units_)
+        if (m.damage_team == team && static_cast<uint32_t>(m.id) != team && !(m.flags & kUnitDead)) members.push_back(m.own_mult[k]);
+    return squad_multiplier(own, members);
 }
 
 void CombatSystem::hand_over_team(const Unit& d) {
@@ -2664,14 +2702,18 @@ void CombatSystem::detonation_effects(const Projectile& p, Vec3 center, ObjectId
     // Convert: enemies in radius -> the victim and its team members: converted flag (decay) + owner := projectile owner.
     if (pd.convert && pd.convert_radius > 0.0f && p.owner >= 0) {
         effect_victims(p.owner, true, center, pd.convert_radius, vs);
+        // s78h t04 (TACTICAL_COMBAT §3.5 "Convert and its team rule"): a victim already owned by the new owner is skipped
+        // (0x4ca2f0), so a team listed several times converts once. The team is the 0x39b1a0 container: damage_team
+        // (= team on land, the squadron in space), so a space squadron converts as a whole as a land team does.
         for (Unit* v : vs) {
             if (!effect_match(*v, pd.convert_mask, nullptr) || !live(v)) continue;
-            const uint32_t team = v->team;
+            if (v->owner == p.owner) continue;
+            const uint32_t team = v->damage_team;
             const ObjectId vid = v->id;
             convert_unit(vid, p.owner);
             if (team != 0)
                 for (Unit& m : units_)
-                    if (m.team == team && m.id != vid && live(&m)) convert_unit(m.id, p.owner);
+                    if (m.damage_team == team && m.id != vid && live(&m)) convert_unit(m.id, p.owner);
         }
     }
     // Invulnerability: the projectile's target first, then owner + allies in radius, up to Max_Targets (0x4cc010).
@@ -3796,13 +3838,13 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
                 const bool act[2] = {u.ability_active[0] != 0, u.ability_active[1] != 0};
                 for (uint32_t k = 0; k < kModKindCount; ++k)
                     u.own_mult[k] = ability_product(ab, act, static_cast<ModKind>(k + 1));
-                u.mult = u.own_mult;
-                u.squad_seen = 0;
+                u.mult = u.own_mult;  // s78h t03: the team_leader too (the squad value is team_mod_multiplier)
             }
         };
         pf(n, cfg_.grain, fn);
     }
-    // Squad rule (serial): a leader whose own product is 1 takes the minimum over its members.
+    // Team heads (serial). s78h t03: no squad rule here any more; a member (the team_leader stand-in included) keeps its own
+    // Mod_Multiplier, and the container's squad value is team_mod_multiplier (TACTICAL_COMBAT §4.4).
     leaders_.clear();
     for (uint32_t i = 0; i < n; ++i)
         if (units_[i].team != 0 && units_[i].team_leader && !(units_[i].flags & kUnitDead)) leaders_.emplace_back(units_[i].team, i);
@@ -3828,22 +3870,27 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
                 }
     std::sort(land_heads_.begin(), land_heads_.end());
     land_heads_.erase(std::unique(land_heads_.begin(), land_heads_.end()), land_heads_.end());
-    if (!leaders_.empty()) {
-        std::sort(leaders_.begin(), leaders_.end());
+    // s78h t06 (TACTICAL_COMBAT §3.1.1 "When the container is serviced"): each land team's container slot = its highest
+    // live unit index (members and head) in phase A; phase D's descending walk reaches it before any of the team's units.
+    land_teams_.clear();
+    if (cfg_.mode == GameMode::Land)
         for (uint32_t i = 0; i < n; ++i) {
             const Unit& m = units_[i];
-            if (m.team == 0 || m.team_leader || (m.flags & kUnitDead)) continue;
-            const auto it = std::lower_bound(leaders_.begin(), leaders_.end(), std::make_pair(m.team, 0u));
-            if (it == leaders_.end() || it->first != m.team) continue;
-            Unit& L = units_[it->second];
-            for (uint32_t k = 0; k < kModKindCount; ++k) {
-                if (L.own_mult[k] != 1.0f) continue;
-                const auto bit = static_cast<uint16_t>(1u << k);
-                if (!(L.squad_seen & bit) || m.own_mult[k] < L.mult[k]) L.mult[k] = m.own_mult[k];
-                L.squad_seen = static_cast<uint16_t>(L.squad_seen | bit);
+            if (m.flags & kUnitDead) continue;
+            const Unit* h = land_team_head(m);
+            if (!h) continue;
+            const auto hi = static_cast<uint32_t>(h - units_.data());
+            const uint32_t top = hi > i ? hi : i;
+            auto it = std::find_if(land_teams_.begin(), land_teams_.end(), [&](const LandTeamSlot& t) { return t.team == m.team; });
+            if (it == land_teams_.end()) {
+                land_teams_.push_back(LandTeamSlot{top, m.team, 0});
+            } else if (top > it->slot) {
+                it->slot = top;
             }
         }
-    }
+    std::sort(land_teams_.begin(), land_teams_.end(), [](const LandTeamSlot& a, const LandTeamSlot& b) {
+        return a.slot != b.slot ? a.slot > b.slot : a.team < b.team;
+    });
     if (hooks_) hooks_->begin_tick(frame);
 
     // B1. delayed damage (queue order)
@@ -3891,7 +3938,24 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
     //    countdown (hook) -> burning -> targeting -> pending ability + special abilities (hook) ->
     //    hardpoints / weapons -> converted-unit decay.
     if (hooks_) hooks_->before_units(frame, rng);
+    size_t next_team = 0;  // s78h t06: land_teams_ cursor (slot descending)
     for (uint32_t k = n; k-- > 0;) {
+        // s78h t06: a land team's TeamTargeting runs once, at its container slot just before its highest-index unit, even
+        // when that unit died earlier in the walk, while the team has a live head (after an in-tick hand-over: the heir).
+        for (; next_team < land_teams_.size() && land_teams_[next_team].slot >= k; ++next_team) {
+            LandTeamSlot& ts = land_teams_[next_team];
+            if (ts.serviced) continue;
+            ts.serviced = 1;
+            Unit* h = team_head_of(ts.team);
+            if (!h) continue;
+            const auto hi = static_cast<uint32_t>(h - units_.data());
+            if (hi >= n) continue;  // spawned this tick: phase C has no candidates for it [port]
+            h->acquired = 0;
+            if (!targeting_idle(*h, frame)) {
+                decide(*h, cands_[hi], frame, rng);
+                team_targeting_service(*h, frame, rng);
+            }
+        }
         Unit& u = units_[k];
         if (u.flags & kUnitDead) continue;
         if (hooks_) {
@@ -3914,16 +3978,15 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         const bool suspended = (u.flags & kUnitWeaponsSuspended) != 0;
         // S7 t15 A2: an idle unit's weapons are not serviced; the WeaponBehavior recharge still elapses (fire_unit_weapon
         // subtracts the frames since its last service when it runs again).
-        u.acquired = 0;
+        // s78h t06: a land team head's TARGETING (TeamTargeting) ran at its team's container slot above (its acquired flag
+        // was reset there); a member has none of its own (its container's service writes its state).
+        const bool land_head = std::binary_search(land_heads_.begin(), land_heads_.end(), u.id);
+        if (!land_head) u.acquired = 0;
         if (!idle && !suspended && !(u.flags & kUnitTargetingSuspended)) {  // S8 t25
-            // s78f t03: TARGETING = the scan, then the state service (TACTICAL_COMBAT §3.1.1 "Targeting states"). A ground
-            // team member has no TARGETING (its container's service writes its state); the head's is TeamTargeting.
-            if (!land_team_head(u)) {
+            // s78f t03: TARGETING = the scan, then the state service (TACTICAL_COMBAT §3.1.1 "Targeting states").
+            if (!land_head && !land_team_head(u)) {
                 decide(u, cands_[k], frame, rng);
-                if (std::binary_search(land_heads_.begin(), land_heads_.end(), u.id))
-                    team_targeting_service(u, frame, rng);
-                else
-                    targeting_service(u, frame, rng);
+                targeting_service(u, frame, rng);
             }
         }
         if (hooks_) {

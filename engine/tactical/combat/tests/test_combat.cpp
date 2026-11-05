@@ -4,6 +4,7 @@
 // golden file on every compiler, a per-tick allocation count and a modifier-aggregation benchmark.
 //   alamo_tactical_combat_tests [--golden <file>] [--write-golden <file>] [--no-bench]
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -3034,7 +3035,7 @@ void test_save_rejects() {
     bad = saved;
     put_u32_at(bad, 0, 99);
     CHECK(rejected(bad));
-    for (const uint32_t v : {10u, 12u}) {  // s78g t06: the version before (s78f took 10; damage_team = 11) and after
+    for (const uint32_t v : {11u, 13u}) {  // s78h t03: the version before (damage_team = 11; squad_seen dropped = 12) and after
         bad = saved;
         put_u32_at(bad, 0, v);
         CHECK(rejected(bad));
@@ -5433,7 +5434,7 @@ void test_team_handover_and_damage() {
         CHECK_F(w.sys->health(12), h0 - loss);
         hit(14, 50.0f);
         CHECK_F(w.sys->health(14), h0 - loss);
-        // Save round trip (combat save v11): damage_team survives a load; the same redirect hit then gives the same
+        // Save round trip (combat save v11+): damage_team survives a load; the same redirect hit then gives the same
         // result in the saved and the loaded system.
         World b;
         b.data = w.data;
@@ -5666,6 +5667,255 @@ void test_team_targeting_copy() {
     }
 }
 
+void test_squad_value() {
+    // s78h t03 (TACTICAL_COMBAT §4.4 "Who the squad leader is"): the squad value belongs to the TEAM container. Every unit,
+    // the team_leader stand-in included, keeps its own Mod_Multiplier; team_mod_multiplier(container id) = the container's
+    // own product if != 1, else the minimum over ALL live members (stand-in and 1.0-valued members included), 1.0 if none.
+    const float members[2] = {1.0f, 0.8f};
+    CHECK_F(squad_multiplier(1.0f, members), 0.8f);
+    const float high[2] = {1.5f, 1.5f};
+    CHECK_F(squad_multiplier(1.0f, high), 1.5f);  // a minimum > 1 is used as is
+    const auto run = [](GameMode mode) {
+        World w;
+        UnitAbilityDesc on;
+        on.ability_type = kAbilityPowerToWeapons;
+        on.mult[static_cast<size_t>(ModKind::FireRate) - 1] = 0.5f;
+        on.mult[static_cast<size_t>(ModKind::Speed) - 1] = 1.5f;
+        w.data.abilities.push_back(on);
+        UnitAbilityDesc mid = on;
+        mid.mult[static_cast<size_t>(ModKind::FireRate) - 1] = 0.8f;
+        w.data.abilities.push_back(mid);
+        UnitDesc d;
+        d.tactical_health = 100.0f;
+        d.abilities = {0, -1};
+        const uint32_t d_half = push_unit(w.data, d);
+        d.abilities = {1, -1};
+        const uint32_t d_mid = push_unit(w.data, d);
+        CombatConfig cfg;
+        cfg.mode = mode;
+        w.make(cfg);
+        const bool land = mode == GameMode::Land;
+        auto add = [&](ObjectId id, uint32_t desc, bool leader) {
+            UnitSpawn sp;
+            sp.id = id;
+            sp.desc = desc;
+            sp.owner = 0;
+            sp.position = Vec3{static_cast<float>(id) * 10.0f, 0, 0};
+            if (land) {
+                sp.team = 7;
+                sp.team_leader = leader;
+            } else {
+                sp.damage_team = 7;  // a space squadron member
+            }
+            CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+        };
+        add(10, d_half, true);  // the stand-in leader on land; ability inactive: own 1.0
+        add(11, d_mid, false);
+        add(12, d_half, false);
+        w.sys->set_ability_active(11, 0, true);
+        w.tick();
+        // The leader keeps its own 1.0 (the old phase-A rule gave it the members' 0.8).
+        CHECK_F(w.sys->mod_multiplier(10, ModKind::FireRate), 1.0f);
+        CHECK_F(w.sys->mod_multiplier(11, ModKind::FireRate), 0.8f);
+        CHECK_F(w.sys->mod_multiplier(12, ModKind::FireRate), 1.0f);
+        CHECK_F(w.sys->team_mod_multiplier(7, ModKind::FireRate), 0.8f);
+        CHECK_F(w.sys->team_mod_multiplier(7, ModKind::Speed), 1.0f);  // 10 and 12 at 1.0 cap the team
+        // The stand-in counts in the minimum and keeps its own value.
+        w.sys->set_ability_active(10, 0, true);
+        w.tick();
+        CHECK_F(w.sys->mod_multiplier(10, ModKind::FireRate), 0.5f);
+        CHECK_F(w.sys->team_mod_multiplier(7, ModKind::FireRate), 0.5f);
+        w.sys->set_ability_active(12, 0, true);
+        w.tick();
+        CHECK_F(w.sys->team_mod_multiplier(7, ModKind::Speed), 1.5f);  // every member at 1.5
+        CHECK_F(w.sys->mod_multiplier(11, ModKind::Speed), 1.5f);
+        // Dead members leave the minimum; no live member -> 1.0; an unknown team -> 1.0.
+        w.sys->kill_unit(10, kNoObject, kKindNormal, w.frame);
+        w.sys->kill_unit(12, kNoObject, kKindNormal, w.frame);
+        w.tick();
+        CHECK_F(w.sys->team_mod_multiplier(7, ModKind::FireRate), 0.8f);
+        w.sys->kill_unit(11, kNoObject, kKindNormal, w.frame);
+        w.tick();
+        CHECK_F(w.sys->team_mod_multiplier(7, ModKind::FireRate), 1.0f);
+        CHECK_F(w.sys->team_mod_multiplier(99, ModKind::FireRate), 1.0f);
+    };
+    run(GameMode::Land);
+    run(GameMode::Space);
+}
+
+void test_convert_team() {
+    // s78h t04 (TACTICAL_COMBAT §3.5 "Convert and its team rule"): the team is the container (damage_team), in space too,
+    // so a converted squadron member converts every mate, wherever it is; a victim already owned by the new owner is
+    // skipped, so each object converts (and raises UnitEffect::Converted) once.
+    struct ConvertHooks final : CombatHooks {
+        std::vector<ObjectId> converted;
+        void unit_effect(ObjectId id, UnitEffect e, int32_t, Vec3, uint32_t) override {
+            if (e == UnitEffect::Converted) converted.push_back(id);
+        }
+    };
+    for (const GameMode mode : {GameMode::Space, GameMode::Land}) {
+        World w;
+        ConvertHooks hk;
+        ProjectileDesc cv;
+        cv.name = "Proj_Convert";
+        cv.max_speed = 10.0f;
+        cv.convert = true;
+        cv.convert_radius = 100.0f;
+        w.data.projectiles.push_back(cv);
+        UnitDesc d;
+        d.tactical_health = 100.0f;
+        const uint32_t ud = push_unit(w.data, d);
+        CombatConfig cfg;
+        cfg.mode = mode;
+        w.make(cfg);
+        w.sys->set_hooks(&hk);
+        auto add = [&](ObjectId id, Vec3 at, uint32_t team, bool leader) {
+            UnitSpawn sp;
+            sp.id = id;
+            sp.desc = ud;
+            sp.owner = 1;
+            sp.position = at;
+            if (mode == GameMode::Land) {
+                sp.team = team;
+                sp.team_leader = leader;
+            } else {
+                sp.damage_team = team;
+            }
+            CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+            TreeMembership m;
+            m.owner = 1;
+            CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(at, 1.0f), 1u, m));
+        };
+        add(10, Vec3{10, 0, 0}, 9, true);
+        add(11, Vec3{20, 0, 0}, 9, false);
+        add(12, Vec3{30, 0, 0}, 9, false);
+        add(13, Vec3{900, 0, 0}, 9, false);  // out of the radius: converts with its team
+        add(14, Vec3{0, 20, 0}, 0, false);   // no team, in the radius
+        add(15, Vec3{950, 0, 0}, 0, false);  // no team, out of the radius
+        ProjectileLaunch l;
+        l.owner = 0;
+        l.projectile = 0;
+        l.from = Vec3{0, 0, 0};
+        l.point = l.from;
+        l.fuse_seconds = 0.0f;
+        CHECK(w.sys->launch_projectile(l, w.frame));
+        w.tick();
+        w.tick();
+        for (const ObjectId id : {ObjectId{10}, ObjectId{11}, ObjectId{12}, ObjectId{13}, ObjectId{14}}) {
+            CHECK(w.sys->owner(id) == 0 && (w.sys->flags(id) & kUnitConverted));
+            CHECK(std::count(hk.converted.begin(), hk.converted.end(), id) == 1);
+        }
+        CHECK(w.sys->owner(15) == 1 && !(w.sys->flags(15) & kUnitConverted));
+        CHECK(hk.converted.size() == 5);
+    }
+}
+
+void test_team_container_slot() {
+    // s78h t06 (TACTICAL_COMBAT §3.1.1 "When the container is serviced, and a member's death in the same frame"): a land
+    // team's TeamTargeting runs once per tick at the container slot, before every member's own service (the descending
+    // walk reaches the team's highest index first), and still runs when the stand-in leader dies inside phase D.
+    struct OrderHooks final : CombatHooks {
+        CombatSystem* sys = nullptr;
+        ObjectId kill_at = kNoObject;  // unit_begin of this unit kills `victim`
+        ObjectId victim = kNoObject;
+        std::vector<std::pair<char, ObjectId>> log;  // 'b' = unit_begin, 'i' = slot 47 (team service)
+        void unit_begin(ObjectId id, uint32_t frame, SimRng&) override {
+            log.emplace_back('b', id);
+            if (id == kill_at) {
+                kill_at = kNoObject;
+                sys->kill_unit(victim, kNoObject, kKindNormal, frame);
+            }
+        }
+        void attack_idle(ObjectId id, bool, uint32_t, SimRng&) override { log.emplace_back('i', id); }
+    };
+    struct TeamWorld {
+        World w;
+        OrderHooks h;
+        TeamWorld() {
+            ProjectileDesc p;
+            p.max_speed = 20.0f;
+            w.data.projectiles.push_back(p);
+            UnitDesc s;
+            s.tactical_health = 100.0f;
+            s.max_attack_distance = 300.0f;
+            s.weapon_projectile = 0;
+            s.weapon_recharge = 100.0f;  // never fires during the test
+            s.turn_rate = 10.0f;
+            push_unit(w.data, s);
+            UnitDesc t;
+            t.tactical_health = 1.0e7f;
+            t.radius = 5.0f;
+            push_unit(w.data, t);
+            UnitDesc ally;
+            ally.tactical_health = 100.0f;
+            push_unit(w.data, ally);
+            CombatConfig cfg;
+            cfg.mode = GameMode::Land;
+            cfg.inaccuracy_enabled = false;
+            w.make(cfg);
+            h.sys = w.sys.get();
+            w.sys->set_hooks(&h);
+            w.add(2, 1, 1, Vec3{200, 5, 0});
+            for (const ObjectId id : {ObjectId{10}, ObjectId{11}, ObjectId{12}}) {
+                UnitSpawn sp;
+                sp.id = id;
+                sp.desc = 0;
+                sp.owner = 0;
+                sp.position = Vec3{0, static_cast<float>(id - 10) * 10.0f, 0};
+                sp.team = 7;
+                sp.team_leader = id == 10;
+                CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+                TreeMembership m;
+                m.owner = 0;
+                CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(sp.position, 1.0f), 1u, m));
+            }
+            w.add(30, 2, 0, Vec3{0, -50, 0});  // highest index: serviced before the team slot
+        }
+        size_t services() const {  // slot-47 calls this tick: one per live team unit per team service at state 4
+            size_t n = 0;
+            for (const auto& e : h.log) n += e.first == 'i' ? 1u : 0u;
+            return n;
+        }
+        size_t pos(char c, ObjectId id) const {
+            for (size_t i = 0; i < h.log.size(); ++i)
+                if (h.log[i] == std::make_pair(c, id)) return i;
+            return h.log.size();
+        }
+    };
+    {  // the first tick: the team state and the members' slot 47 come before any member's own service
+        TeamWorld t;
+        t.w.tick();
+        CHECK(t.w.sys->targeting_state(10) == 4 && t.w.sys->targeting_state(12) == 4);
+        CHECK(t.services() == 3);
+        CHECK(t.pos('b', 30) < t.pos('i', 10));
+        for (const ObjectId id : {ObjectId{10}, ObjectId{11}, ObjectId{12}})
+            CHECK(t.pos('i', id) < t.pos('b', 12) && t.pos('b', 12) < t.h.log.size());
+    }
+    // The leader dies at its own slot (old port: the heir's slot had passed, so the team got no service that tick), or at
+    // the top member's slot (after the team slot: no second service for the heir); or the top member dies before the slot;
+    // or the leader dies before the slot (ally 30's slot): team_head_of gives the heir 11 at the slot, which decides on
+    // its re-gathered candidates, and the heir's own slot (now in land_heads_) runs no second service.
+    const std::array<std::pair<ObjectId, ObjectId>, 4> cases{{{10, 10}, {12, 10}, {30, 12}, {30, 10}}};
+    for (const auto& [at, victim] : cases) {
+        TeamWorld t;
+        t.w.tick();
+        t.h.log.clear();
+        t.h.kill_at = at;
+        t.h.victim = victim;
+        t.w.tick();
+        CHECK(!t.w.sys->alive(victim));
+        const bool before_slot = at == 30;  // the victim died before the team slot: 2 live team units at the service
+        CHECK(t.services() == (before_slot ? 2u : 3u));  // one team service this tick
+        CHECK(t.pos('i', 11) < t.pos('b', 11));
+        for (size_t i = t.pos('b', 12); i < t.h.log.size(); ++i) CHECK(t.h.log[i].first != 'i');  // all at the slot
+        if (victim == 10) CHECK(t.w.sys->auto_target(11) == 2 && t.w.sys->targeting_state(11) == 4);  // the heir leads
+        t.h.log.clear();
+        t.w.tick();  // the next tick: the team (the heir's after a hand-over) is serviced once
+        CHECK(t.services() == 2);
+        CHECK(t.w.sys->current_target(11) == 2 && t.w.sys->targeting_state(11) == 4);
+    }
+}
+
 void test_charge_up_slew() {
     // s78f t04 (LOB_SOLVER §3.6 "Charge-up aim"): the lobbing TURRET slews Turret_Rotate_Speed degrees per service from
     // Turret_Rest_Angle; the charge-up starts on the service where the angles are reached; the turret then holds its aim.
@@ -5791,6 +6041,9 @@ int main(int argc, char** argv) {
     test_targeting_t08();            // s78f t08
     test_team_targeting_copy();      // s78f t03
     test_team_handover_and_damage();  // s78g t06
+    test_squad_value();               // s78h t03
+    test_convert_team();              // s78h t04
+    test_team_container_slot();       // s78h t06
     test_scan_player_order();         // s78g t04
     test_charge_up_slew();           // s78f t04
     test_hardpoint_aim_target_bones();  // S8 t27

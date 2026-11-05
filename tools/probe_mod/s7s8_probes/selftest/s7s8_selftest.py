@@ -26,6 +26,7 @@ import os
 # the selftest checks the original S7/S8 scenario set and order (the s78f additions run only in game)
 os.environ.setdefault("ALAMO_S78_LAND", "SPMAT,ATAT,MDU,STICKY,DT3,REINF,MUZZLE_LAND")
 os.environ.setdefault("ALAMO_S78_SPACE", "MUZZLE_SPACE,SQUAD,ESCORT")
+import math
 import re
 import subprocess
 import sys
@@ -47,6 +48,7 @@ SPACE = ['MUZZLE_SPACE', 'SQUAD', 'ESCORT']
 LAND_G = ['SPMAT_EDGE2', 'SPMAT_CTRL', 'REINF', 'REINF2', 'IDLE47W']
 SPACE_G = ['GUARD_HAND', 'ESCORT']
 LAND_R = ['SPMAT_EDGE3', 'IDLE47X']  # s78g rerun (2026-11-05); space rerun = GUARD_HAND alone
+LAND_H = ['SPMAT_EDGE4', 'IDLE47Q']  # s78h t01 / t02 (README "s78h run")
 
 STUBS = r'''
 H = { F = 0, fss = 0, ous = 0, next_id = 100, objs = {}, blocks = {}, mode = "Land", msgs = 0, moves = 0 }
@@ -69,6 +71,13 @@ end
 PlayerObject = make_player(2, "REBEL")
 local players = { Hostile = make_player(4, "HOSTILE"), Empire = make_player(1, "EMPIRE"), Rebel = PlayerObject }
 function Find_Player(n) return players[n] end
+
+H.reveals = 0
+H.unreveals = 0
+FogOfWar = { Reveal = function(p, o, r1, r2)
+	H.reveals = H.reveals + 1
+	return { Undo_Reveal = function() H.unreveals = H.unreveals + 1 end }
+end }
 
 function Create_Position(x, y, z)
 	return { Get_XYZ = function() return x, y, z end }
@@ -139,7 +148,8 @@ function make_obj(tname, x, y, z, owner)
 	o.Guard_Target = function(t) end
 	o.Despawn = function() o.valid = false end
 	o.Take_Damage = function(d) o.valid = false end
-	o.Is_Category = function(c) return false end
+	-- the start armies are "Vehicle"s (IDLE47Q sweeps them); everything spawned by the probe answers false
+	o.Is_Category = function(c) return c == "Vehicle" and (tname == "REBEL_TANK" or tname == "EMPIRE_UNIT") end
 	o.Get_Attack_Target = function() return nil end
 	o.Has_Active_Orders = function() H.ous = H.ous + 1 return true end
 	o.Is_Ability_Ready = function(ab) return true end
@@ -225,7 +235,8 @@ for F = 0, H_FRAMES do
 end
 for i, r in ipairs(S78_LOG) do print(r) end
 print("STATE service_rate=" .. tostring(ServiceRate) .. " fss=" .. H.fss .. " ous=" .. H.ous .. " resumes=" .. resumes ..
-	" done=" .. tostring(S78_DONE) .. " on=" .. tostring(S78_ON) .. " msgs=" .. H.msgs)
+	" done=" .. tostring(S78_DONE) .. " on=" .. tostring(S78_ON) .. " msgs=" .. H.msgs .. " reveals=" .. H.reveals ..
+	" unreveals=" .. H.unreveals)
 '''
 
 
@@ -280,6 +291,111 @@ def common_checks(tag, rc, recs, state, text, names, fails):
     check(first is not None and 450 <= first <= 453, 'run %s: first scenario at F=%s (start_frame 450)' % (tag, first),
           fails)
     return kinds
+
+
+def synth_guard_hand(S):
+    """GUARD_HAND trace shaped like run 20261105-092438: the squadron catches G, follows it, and after each shift
+    message flies past G to a waypoint that ends 350-650 from G, so no row is AWAY (the s78g rule saw NO_DEPARTURE)."""
+    S.mode(2, 1)
+    S.rec('ARM', 0, 'pid=2|fac=REBEL|mode=Space|map=_MP_SPACE_KUAT|points_ok=true|service_rate=20->0.05')
+    S.scn(450, 'GUARD_HAND', 1, 4500)
+    gid = S.spawn(450, 'GUARD_HAND', 'g', 'Broadside_Class_Cruiser', 'other', 0.0, 0.0, owner=1)
+    sqid = S.spawn(450, 'GUARD_HAND', 'squad', 'TIE_Fighter_Squadron', 'other', -300.0, 0.0, owner=1)
+    mem = [S.obj(451, 'TIE_FIGHTER', 'other', -300.0, 10.0 * k, owner=1) for k in range(3)]
+    marks = (('find', 450), ('g_move', 480), ('guard_go', 900), ('shift_go', 1800), ('guard_go2', 2700),
+             ('shift_go2', 3450), ('g_stop', 4350))
+    for m, f in marks:
+        S.rec('MARK', f, 'scn=GUARD_HAND|mark=%s|' % m)
+
+    def gpos(F):
+        return 2.2 * (min(max(F, 480), 4350) - 480), 0.0
+
+    x, y, state, wp = -300.0, 0.0, 'idle', None
+    truth = {}
+    for F in range(451, 4951):
+        gx, gy = gpos(F)
+        if F == 1000 or F == 2850:
+            state = 'chase'
+        if F in (1890, 3540):
+            gx0, gy0 = gpos(F)
+            wp = (gx0 + 400.0, 350.0) if F == 1890 else (gx0 + 500.0, -400.0)
+            truth[F] = wp
+            state = 'go'
+        if state == 'chase':
+            dx, dy = gx - x, gy - y
+            d = math.hypot(dx, dy)
+            if d < 120:
+                state = 'follow'
+            else:
+                x, y = x + 6.0 * dx / d, y + 6.0 * dy / d
+        elif state == 'follow':
+            x, y = gx - 100.0, gy
+        elif state == 'go':
+            dx, dy = wp[0] - x, wp[1] - y
+            d = math.hypot(dx, dy)
+            if d < 6:
+                x, y, state = wp[0], wp[1], 'hold'
+            else:
+                x, y = x + 5.5 * dx / d, y + 5.5 * dy / d
+        if F % 30 == 0:
+            S.st(F, gid, gx, gy, owner=1)
+            for k, o in enumerate(mem):
+                S.st(F, o, x, y + 10.0 * k, owner=1, cont=str(sqid))
+    S.scn_end(4950, 'GUARD_HAND')
+    return truth
+
+
+def synth_edge4(S):
+    """SPMAT_EDGE4 trace: fired at 450 and 540, targeted but not fired from 544 on, both passes."""
+    S.mode(1, 2)
+    S.rec('ARM', 0, 'pid=2|fac=REBEL|mode=Land|map=_MP_LAND_GEONOSIS|points_ok=true|service_rate=20->0.05')
+    ds = [450, 540, 544, 547, 550, 556, 450, 556, 550, 547, 544, 540]
+    X, Y = 3480.0, 4640.0
+    S.scn(450, 'SPMAT_EDGE4', 1, 450 * len(ds))
+    for i, d in enumerate(ds, 1):
+        t0 = 450 + (i - 1) * 450
+        sp = S.spawn(t0, 'SPMAT_EDGE4', 'sp%d' % i, 'SPMAT_Walker', 'attacker', X, Y)
+        S.spawn(t0 + 6, 'SPMAT_EDGE4', 'aim%d' % i, 'T4B_Tank', 'victim', X - 275, Y)
+        S.rec('MARK', t0 + 6, 'scn=SPMAT_EDGE4|mark=aim%d|' % i)
+        S.spawn(t0 + 6, 'SPMAT_EDGE4', 'spot%d' % i, 'Rebel_Infiltrator', 'attacker', X - d, Y + 100)
+        S.rec('MARK', t0 + 6, 'scn=SPMAT_EDGE4|mark=spot%d|d=%d|side=100|ok=1' % (i, d))
+        S.st(t0 + 30, sp, X, Y, loco='0x19')
+        ev = S.spawn(t0 + 150, 'SPMAT_EDGE4', 'ev%d' % i, 'T4B_Tank', 'victim', X - d, Y)
+        S.rec('MARK', t0 + 150, 'scn=SPMAT_EDGE4|mark=win%d|d=%d' % (i, d))
+        S.rec('ORDER', t0 + 152, 'scn=SPMAT_EDGE4|tag=ev%d|order=reveal|ok=1' % i)
+        fire = d <= 540
+        S.st(t0 + 170, sp, X, Y, loco='0x19', tgt=str(ev), ts=4 if fire else 3)
+        if fire:
+            S.proj(t0 + 200, s7s8_parse.GRENADE, X - 10, Y, life=20)
+    S.scn_end(450 + 450 * len(ds), 'SPMAT_EDGE4')
+
+
+def synth_checks(fails):
+    S = s7s8_parse.Synth()
+    truth = synth_guard_hand(S)
+    synth_edge4(S)
+    log = os.path.join(OUT, 'reader_synth_s78h.log')
+    with open(log, 'w') as f:
+        f.write(S.text())
+    res = s7s8_parse.cmd_parse(argparse.Namespace(log=log, out=os.path.join(OUT, 'report_synth_s78h.txt'), json=None))
+    a = res['answers']
+    gh = next((r for run in res['runs'] for r in run['scenarios'] if r['name'] == 'GUARD_HAND'), {})
+    dep = gh.get('departures') or {}
+    v1, v2 = a.get('t02_guard_shift_1') or '', a.get('t02_guard_shift_2') or ''
+    ok1 = v1.startswith('WAYPOINT_TAKEN_WHILE_G_MOVES') and abs((dep.get(1, {}).get('F') or 0) - 1890) <= 30
+    ok2 = v2.startswith('WAYPOINT_TAKEN_WHILE_G_MOVES') and abs((dep.get(2, {}).get('F') or 0) - 3540) <= 30
+    wp_ok = all(dep.get(p, {}).get('waypoint') and math.hypot(dep[p]['waypoint'][0] - truth[f][0],
+                                                              dep[p]['waypoint'][1] - truth[f][1]) < 40
+                for p, f in ((1, 1890), (2, 3540)))
+    check(ok1 and ok2 and wp_ok, 't07: departure past G toward the waypoint: pair 1 %s (dep F=%s, true 1890), pair 2 '
+          '%s (dep F=%s, true 3540), waypoints %s' % (v1, dep.get(1, {}).get('F'), v2, dep.get(2, {}).get('F'),
+                                                      [dep.get(p, {}).get('waypoint') for p in (1, 2)]), fails)
+    e4 = a.get('1_edge4') or ''
+    ed = next((r for run in res['runs'] for r in run['scenarios'] if r['name'] == 'SPMAT_EDGE4'), {})
+    per = ed.get('per_d') or {}
+    check(e4.startswith('EDGE fired d=540') and 'NON_MONOTONIC' not in e4 and per.get(450) == ['FIRED', 'FIRED'] and
+          per.get(544) == ['TARGETED_NOT_FIRED', 'TARGETED_NOT_FIRED'] and '556=T/T' in e4,
+          't01: SPMAT_EDGE4 per distance %s -> %s' % (per, e4), fails)
 
 
 def main():
@@ -446,6 +562,49 @@ def main():
           'run F: IDLE47X 12 attackers in P and D, 15 cycles per phase (i12 %d, iv12 %d)' % (
               sx.count('i12'), sx.count('iv12')), fails)
 
+    # run G: the s78h land list (README "s78h run")
+    saved = {k: os.environ.get(k) for k in ('ALAMO_S78_LAND', 'ALAMO_S78_SPACE')}
+    os.environ['ALAMO_S78_LAND'] = ','.join(LAND_H)
+    os.environ['ALAMO_S78_SPACE'] = 'GUARD_HAND'
+    try:
+        data_h, _src = build_s7s8_mod.freestore_text(a.game, cfg, a.source_zip)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    script_h = os.path.join(OUT, 'BusyTacticalFreeStore_s78h.lua')
+    with open(script_h, 'wb') as f:
+        f.write(data_h)
+    rc7, recs7, state7, text7 = run_lua(script_h.replace('\\', '/'), 'REBEL', 'Land', 16700, 'land_s78h')
+    common_checks('G (land s78h)', rc7, recs7, state7, text7, LAND_H, fails)
+    m7 = [field(r, 'mark') for r in recs7 if kind(r) == 'MARK' and field(r, 'scn') == 'SPMAT_EDGE4']
+    o7 = [field(r, 'order') for r in recs7 if kind(r) == 'ORDER' and field(r, 'scn') == 'SPMAT_EDGE4']
+    sp7 = [r for r in recs7 if kind(r) == 'SPAWN' and field(r, 'scn') == 'SPMAT_EDGE4' and
+           (field(r, 'tag') or '').startswith('spot') and field(r, 'ok') == '1']
+    rv = [field(r, 'ok') for r in recs7 if kind(r) == 'ORDER' and field(r, 'order') == 'reveal']
+    d7 = [field(r, 'd') for r in recs7 if kind(r) == 'MARK' and (field(r, 'mark') or '').startswith('win') and
+          field(r, 'scn') == 'SPMAT_EDGE4']
+    check(len([x for x in m7 if x.startswith('win')]) == 12 and len(sp7) == 12 and rv == ['1'] * 12 and
+          o7.count('undo_reveal') == 12 and 'attack_ev' not in o7 and o7.count('attack_aim') == 12 and
+          'reveals=12 unreveals=12' in state7,
+          'run G: SPMAT_EDGE4 12 windows d=%s, 12 spotters, reveal / undo %s / %d, no edge order' % (
+              ','.join(d7), rv.count('1'), o7.count('undo_reveal')), fails)
+    q7 = [r for r in recs7 if kind(r) == 'COUNT' and field(r, 'what') == 'quiet']
+    qa = [r for r in q7 if field(r, 'who') == 'ai']
+    qh = [r for r in q7 if field(r, 'who') == 'human']
+    mq = [field(r, 'mark') for r in recs7 if kind(r) == 'MARK' and field(r, 'scn') == 'IDLE47Q']
+    check(qa and field(qa[0], 'mobile') == '1' and field(qa[0], 'despawned') == '0' and field(qa[0], 'kept') != '-' and
+          qh and field(qh[0], 'despawned') == '3' and len(qa) >= 30 and mq[:3] == ['bg_pre', 'sweep', 'bg_post'] and
+          'phase_P' in mq and 'V_off15' in mq,
+          'run G: IDLE47Q sweeps ai %d (first %s), human first despawned %s, marks %s..%s' % (
+              len(qa), qa[0][:120] if qa else '-', field(qh[0], 'despawned') if qh else '-', mq[:3], mq[-1:]), fails)
+    spawned_q = [field(r, 'tag') for r in recs7 if kind(r) == 'SPAWN' and field(r, 'scn') == 'IDLE47Q']
+    check(spawned_q.count('i12') == 2 and spawned_q.count('iv12') == 45,
+          'run G: IDLE47Q keeps the IDLE47X phases (i12 %d, iv12 %d)' % (spawned_q.count('i12'),
+                                                                        spawned_q.count('iv12')), fails)
+
     print('2. Lua records -> s7s8_parse.py (no memory data)')
     log = os.path.join(OUT, 'reader_lua_only.log')
     with open(log, 'w') as f:
@@ -486,7 +645,28 @@ def main():
     except Exception as e:  # noqa: BLE001
         check(False, 's78g records -> parser: %r' % e, fails)
 
-    print('3. reader and parser selftests')
+    log_h = os.path.join(OUT, 'reader_lua_only_s78h.log')
+    with open(log_h, 'w') as f:
+        f.write('S78READER 1 selftest\nGAME pid=0 base=0x0 identity=selftest\n')
+        f.write('MODE n=1 ptr=0x1 type=1 game_type=3 stack=1 frame=0 gframe=0\n')
+        for i, r in enumerate(reversed(recs7)):
+            f.write('LUA n=1 frame=99999 addr=0x%x rec=%s\n' % (0x1000 + i, r))
+        f.write('MODE_END n=1 last_frame=17000\nEXIT reason=game_exited modes=1\n')
+    try:
+        resh = s7s8_parse.cmd_parse(argparse.Namespace(log=log_h, out=os.path.join(OUT, 'report_lua_only_s78h.txt'),
+                                                       json=None))
+        gh_ = [[r['name'] for r in run['scenarios']] for run in resh['runs']]
+        ah = resh['answers']
+        check(gh_ == [LAND_H + ['HUMAN']] and '1_edge4' in ah and 't03_slot47_clip_q' in ah,
+              's78h records (reversed) -> parser: %s; 1_edge4 %s; t03_slot47_clip_q %s' % (
+                  gh_, ah.get('1_edge4'), ah.get('t03_slot47_clip_q')), fails)
+    except Exception as e:  # noqa: BLE001
+        check(False, 's78h records -> parser: %r' % e, fails)
+
+    print('3. synthetic memory traces -> s7s8_parse.py (s78h t07 departure, t01 edge by auto-acquire)')
+    synth_checks(fails)
+
+    print('4. reader and parser selftests')
     for script_name in ('s7s8_reader.py', 's7s8_parse.py'):
         r = subprocess.run([sys.executable, '-I', os.path.join(ROOT, script_name), '--selftest'], capture_output=True,
                            text=True)

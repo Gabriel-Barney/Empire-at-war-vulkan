@@ -1309,6 +1309,38 @@ def an_idle47w(s):
     return r
 
 
+GH_FAST, GH_HOLD = 3.0, 1.5  # units / frame (30-frame rows)
+
+
+def gh_departure(aw):
+    """s78h t07: departure for the shift waypoint. The waypoint is not in any record (a click on empty space), so it is
+    taken as the point where the squadron settles after its first fast leg: three rows in a row below GH_HOLD, away
+    from G (more than 300 from it, or G pulling away by more than 60 over those rows: a settle next to a G that it
+    follows is the guard catch-up, and the search goes on). The departure is the first row of that leg faster than
+    GH_FAST whose motion has a positive component along the direction to the waypoint. (In 092438 the old rule, two
+    AWAY rows in a row, missed both legs: the squadron passed G on its way out, so the rows read WITH_G / CHASE / DRIFT.)
+    Returns (row, (x, y), settle row) or (None, None, None)."""
+    lo = 0
+    while lo < len(aw):
+        k0 = next((j for j in range(lo, len(aw)) if aw[j]['cs'] > GH_FAST), None)
+        if k0 is None:
+            return None, None, None
+        k = next((j for j in range(k0 + 1, len(aw) - 2) if all(x['cs'] < GH_HOLD for x in aw[j:j + 3])), None)
+        if k is None:
+            return None, None, None
+        st = aw[k]
+        away = st['dist'] > 300 or aw[k + 2]['dist'] - st['dist'] > 60
+        if away:
+            wx, wy = st['c'][1], st['c'][2]
+            for x in aw[lo:k + 1]:
+                if x['cs'] > GH_FAST and x['p'] is not None:
+                    tx, ty = wx - x['p'][1], wy - x['p'][2]
+                    if x['v'][0] * tx + x['v'][1] * ty > 0:
+                        return x, (wx, wy), st
+        lo = k + 3
+    return None, None, None
+
+
 def an_guard_hand(s):
     """s78g t02: squadron centroid vs G every 30 frames; when the guard took effect, whether it followed, and when the
     squadron left for the shift waypoint relative to G's motion and stop."""
@@ -1338,10 +1370,12 @@ def an_guard_hand(s):
         if gp is None or c is None:
             prev = None
             continue
-        row = {'F': F, 'g': gp, 'c': c, 'dist': dist2(c, gp), 'gs': 0.0, 'cs': 0.0, 'cls': '-'}
+        row = {'F': F, 'g': gp, 'c': c, 'dist': dist2(c, gp), 'gs': 0.0, 'cs': 0.0, 'cls': '-', 'v': (0.0, 0.0),
+               'p': None}
         if prev:
             row['gs'] = dist2(gp, prev['g']) / 30.0
             vx, vy = c[1] - prev['c'][1], c[2] - prev['c'][2]
+            row['v'], row['p'] = (vx, vy), prev['c']
             row['cs'] = math.hypot(vx, vy) / 30.0
             tx, ty = gp[1] - c[1], gp[2] - c[2]
             cos = (vx * tx + vy * ty) / (math.hypot(vx, vy) * math.hypot(tx, ty) or 1.0)
@@ -1378,12 +1412,15 @@ def an_guard_hand(s):
         fol = [x for x in before if caught and x['F'] >= caught and x['gs'] > 0.5]
         ffrac = (len([x for x in fol if x['dist'] < 600]) / float(len(fol))) if fol else None
         at_shift = next((x for x in win if x['F'] >= S0), None)
-        dep = None
         aw = [x for x in win if x['F'] >= S0]
-        for a, b in zip(aw, aw[1:]):
-            if a['cls'] == 'AWAY' and b['cls'] == 'AWAY':
-                dep = a
-                break
+        dep, wp, settle = gh_departure(aw)
+        how = 'toward the waypoint'
+        if dep is None:
+            # no settled waypoint seen: the s78g rule (two AWAY rows in a row)
+            for a, b in zip(aw, aw[1:]):
+                if a['cls'] == 'AWAY' and b['cls'] == 'AWAY':
+                    dep, how = a, 'AWAY rows'
+                    break
         if chase is None:
             v = 'NO_GUARD_SEEN'
         elif dep is None:
@@ -1397,15 +1434,93 @@ def an_guard_hand(s):
         if at_shift is not None and at_shift['dist'] > 800:
             v += ' NOT_FOLLOWING_AT_SHIFT (dist %.0f)' % at_shift['dist']
         r['pairs'][p] = v
+        r.setdefault('departures', {})[p] = {'F': dep['F'] if dep else None, 'waypoint': wp,
+                                             'settle': settle['F'] if settle else None}
         s.L.append('pair %d: guard message F=%s, squadron reacts F=%s, within 500 of G F=%s, follow while G moves %s; '
-                   'shift message F=%s (dist then %s); departure F=%s -> %s' % (
+                   'shift message F=%s (dist then %s); waypoint (settle point) %s at F=%s; departure F=%s (%s) -> %s' % (
                        p, G0, chase, caught, fmt(None if ffrac is None else 100 * ffrac, 0) + '%' if ffrac is not None
-                       else '-', S0, fmt(at_shift and at_shift['dist'], 0), dep['F'] if dep else '-', v))
+                       else '-', S0, fmt(at_shift and at_shift['dist'], 0),
+                       '(%.0f, %.0f)' % wp if wp else '-', settle['F'] if settle else '-', dep['F'] if dep else '-',
+                       how if dep else '-', v))
     r['verdict'] = r['pairs']
     return r
 
 
-ANALYSERS = {'SPMAT_EDGE2': an_edge2, 'SPMAT_EDGE3': an_edge2, 'SPMAT_CTRL': an_spmat_ctrl, 'IDLE47W': an_idle47w,
+def an_edge4(s):
+    """s78h t01: EDGE3 (no order at the edge tank) with an AI spotter and a FOW reveal at the tank. Per window as
+    an_edge2; then one line per distance (both passes) and a verdict that needs the in-range control (450) to fire:
+    otherwise vision or acquisition is still the limit and the edge says nothing."""
+    r = an_edge2(s)
+    spots = {}
+    k = 1
+    while s.marks.get('spot%d' % k):
+        spots[k] = s.marks['spot%d' % k].get('ok') == '1' and s.obj('spot%d' % k) is not None
+        k += 1
+    reveals = [d.get('ok') for d in s.orders if d.get('order') == 'reveal']
+    per = {}
+    for i, w in enumerate(r['windows'], 1):
+        w['spotter'] = spots.get(i, False)
+        per.setdefault(w['d'], []).append(w)
+    s.L.append('spotters in memory %d of %d windows; FogOfWar.Reveal ok in %d of %d windows' % (
+        len([v for v in spots.values() if v]), len(r['windows']), reveals.count('1'), len(reveals)))
+    rows = {}
+    for d in sorted(x for x in per if x is not None):
+        ws = per[d]
+        tag = ['FIRED' if w['verdict'] == 'FIRED' else w['verdict'].split(' ')[0] for w in ws]
+        rows[d] = tag
+        s.L.append('d=%-4s measured %s: %s' % (d, ' / '.join(fmt(w['dist']) for w in ws), ' / '.join(
+            '%s (%d grenades)' % (t, w['grenades']) for t, w in zip(tag, ws))))
+    r['per_d'] = rows
+    ctrl = rows.get(450, [])
+    if not r['windows'] or r['verdict'].startswith('NOT_MEASURED'):
+        v = r['verdict']
+    elif 'FIRED' not in ctrl:
+        v = 'CONTROL_NOT_FIRED (450: %s; vision / acquisition still the limit)' % ','.join(ctrl or ['-'])
+    else:
+        edge = [(d, t) for d, t in sorted(rows.items()) if d != 450]
+        v = r['verdict'] + '; per d ' + ' '.join('%s=%s' % (d, '/'.join(
+            'F' if x == 'FIRED' else 'T' if x.startswith('TARGETED') else 'N' if x == 'NOT_TARGETED' else 'x'
+            for x in t)) for d, t in edge)
+    r['verdict'] = v
+    s.L.append('per d: F = fired, T = targeted not fired, N = not targeted, x = invalid window')
+    s.L.append('%s -> %s' % (s.name, v))
+    return r
+
+
+def an_idle47q(s):
+    """s78h t02: IDLE47X on a quiet background. Background draws / frame before the sweep (bg_pre .. sweep) and after
+    it (bg_post .. phase P), the sweep counts, then the IDLE47X statistic (an_idle47w)."""
+    import s78f_extra_parse as X
+    rng = [x for x in s.b.get('rng', []) if s.start - 200 <= x[0] <= s.end + 10]
+    per, _unknown = X.draws_per_frame(rng)
+
+    def mean(a, b):
+        v = [per.get(f, 0) for f in range(a, b)]
+        return sum(v) / float(len(v)) if v else None
+
+    m = {k: d['F'] for k, d in s.marks.items()}
+    pre = mean(m['bg_pre'] + 10, m['sweep'] - 5) if 'bg_pre' in m and 'sweep' in m else None
+    post = mean(m['bg_post'], m['phase_P'] - 5) if 'bg_post' in m and 'phase_P' in m else None
+    sweeps = [d for k, d in s.sc_recs if k == 'COUNT' and d.get('what') == 'quiet']
+    first = {}
+    for d in sweeps:
+        first.setdefault(d.get('who'), d)
+    tot = {}
+    for d in sweeps:
+        tot[d.get('who')] = tot.get(d.get('who'), 0) + (_int(d.get('despawned'), 0) or 0)
+    for who, d in sorted(first.items()):
+        s.L.append('sweep %s: first F=%s objects %s mobile %s despawned %s kept %s other %s; despawned in all %d '
+                   'sweeps: %d' % (who, d['F'], d.get('objects'), d.get('mobile'), d.get('despawned'), d.get('kept'),
+                                   d.get('other'), len([x for x in sweeps if x.get('who') == who]), tot[who]))
+    s.L.append('background draws/frame: before the sweep %s, after it %s' % (fmt(pre, 2), fmt(post, 2)))
+    r = an_idle47w(s)
+    r['bg_pre'], r['bg_post'] = pre, post
+    if pre is not None and post is not None:
+        r['verdict'] += ' [background %s -> %s draws/frame]' % (fmt(pre, 0), fmt(post, 0))
+    return r
+
+
+ANALYSERS = {'SPMAT_EDGE4': an_edge4, 'IDLE47Q': an_idle47q, 'SPMAT_EDGE2': an_edge2, 'SPMAT_EDGE3': an_edge2, 'SPMAT_CTRL': an_spmat_ctrl, 'IDLE47W': an_idle47w,
              'IDLE47V': an_idle47w, 'IDLE47X': an_idle47w,
              'REINF2': an_reinf,
              'GUARD_HAND': an_guard_hand, 'SPMAT': an_spmat, 'ATAT': an_atat, 'MDU': an_mdu, 'STICKY': an_sticky, 'DT3': an_dt3,
@@ -1610,6 +1725,11 @@ def parse(path):
                 ans['t03_slot47_clip' + ('' if k == 'IDLE47W' else '_x')] = by[k].get('verdict')
         if 'REINF2' in by:
             ans['8_first_shot2'] = by['REINF2'].get('verdict')
+        # s78h (2026-11-05)
+        if 'SPMAT_EDGE4' in by:
+            ans['1_edge4'] = by['SPMAT_EDGE4'].get('verdict')
+        if 'IDLE47Q' in by:
+            ans['t03_slot47_clip_q'] = by['IDLE47Q'].get('verdict')
         if 'GUARD_HAND' in by:
             for p, v in sorted((by['GUARD_HAND'].get('pairs') or {}).items()):
                 ans['t02_guard_shift_%d' % p] = v
