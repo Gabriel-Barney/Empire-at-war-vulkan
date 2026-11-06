@@ -157,9 +157,11 @@ bool GalacticSim::faction_pairing(int32_t player, int32_t owner) const {
     const std::string& a = faction_of(player).name;
     const std::string& b = faction_of(owner).name;
     auto is = [](const std::string& n, const char* f) { return iequals(n, f); };
+    // [name-ok-begin: retail by-name pairing in 0x48d900, docs/re/P4_SIM_SYSTEMS.md §1.2 step 1]
     if (is(a, "Rebel")) return is(b, "Empire") || is(b, "Underworld");
     if (is(a, "Empire")) return is(b, "Rebel") || is(b, "Underworld");
     if (is(a, "Underworld")) return is(b, "Rebel") || is(b, "Empire");
+    // [name-ok-end]
     return false;
 }
 

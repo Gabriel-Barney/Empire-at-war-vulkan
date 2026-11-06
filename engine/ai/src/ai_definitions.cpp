@@ -128,7 +128,7 @@ uint32_t parse_application_flags(std::string_view s, bool* ok) {
     static constexpr std::pair<const char*, uint32_t> kNames[] = {
         {"Friendly", app::Friendly},
         {"Enemy", app::Enemy},
-        {"Neutral", app::Neutral},
+        {"Neutral", app::Neutral},  // [name-ok: AIGoalApplicationFlags keyword, not a faction]
         {"Contested", app::Contested},
         {"Global", app::Global},
         {"Friendly_Unit", app::FriendlyUnit},

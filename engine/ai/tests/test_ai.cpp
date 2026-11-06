@@ -1120,11 +1120,12 @@ static void real_data(const std::string& root, const char* label, bool foc) {
         CHECK(differ == 0);
     }
     const ForceTypeLookup lookup = make_force_type_lookup(types);
+    const CampaignSeedOptions seed_options = seed_options_from_factions(*v);
     uint32_t campaigns = 0, with_values = 0, unknown_forces = 0;
     for (const data::CampaignDef& c : db.campaigns()) {
         const GalaxyMap map = data::build_galaxy_map(db, c.name);
         if (map.planets.size() == 0) continue;
-        CampaignSeed seed = seed_campaign_snapshot(c, map, lookup);
+        CampaignSeed seed = seed_campaign_snapshot(c, map, lookup, seed_options);
         CHECK(seed.snapshot.validate().empty());
         for (const std::string& d : seed.diagnostics)
             if (d.find("unknown type") != std::string::npos) ++unknown_forces;

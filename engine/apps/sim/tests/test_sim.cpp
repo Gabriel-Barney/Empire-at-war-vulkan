@@ -670,9 +670,11 @@ static GalacticRules rules() {
     GalacticRules r;
     FactionRules emp;
     emp.name = "Empire";
+    emp.basic_ai = "BasicEmpire";
     emp.can_control_planets = emp.is_playable = true;
     FactionRules und;
     und.name = "Underworld";
+    und.basic_ai = "AI_Player_Underworld";
     und.can_control_planets = und.is_playable = und.benefits_from_corruption = true;
     FactionRules neu;
     neu.name = "Neutral";

@@ -55,7 +55,7 @@ const Pair kPassability[] = {{"Invalid", -1},    {"None", 0},       {"Clear", 1}
                              {"Obstacle", 4},    {"RebelWall", 8},  {"EmpireWall", 16}, {"Water", 32},
                              {"Shield", 64},     {"InfantryOnly", 128}, {"Impassable", 256}};
 const Pair kContainer[] = {{"None", -1}, {"Rows", 0}, {"Dartboard", 1}};
-const Pair kForce[] = {{"Light", 0}, {"Neutral", 1}, {"Dark", 2}};
+const Pair kForce[] = {{"Light", 0}, {"Neutral", 1}, {"Dark", 2}};  // [name-ok: Force_Alignment keyword, not a faction]
 const Pair kFormup[] = {{"WaitForAll", 0}, {"WaitForFront", 1}, {"WaitNone", 2}};
 const Pair kGrouping[] = {{"Solo", 0}, {"SameOrder", 1}, {"Standard", 2}};
 const Pair kVisibility[] = {

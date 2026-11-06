@@ -129,9 +129,9 @@ const char* kHardpoints = R"(<HardPoints>
 )";
 
 const char* kFactions = R"(<Factions>
- <Faction Name="Empire"><Is_Playable>Yes</Is_Playable><Can_Control_Planets>Yes</Can_Control_Planets>
+ <Faction Name="Empire"><Is_Playable>Yes</Is_Playable><Basic_AI>BasicEmpire</Basic_AI><Can_Control_Planets>Yes</Can_Control_Planets>
   <Space_Tactical_Unit_Cap>6</Space_Tactical_Unit_Cap><Space_Retreat_Countdown_Seconds>5</Space_Retreat_Countdown_Seconds></Faction>
- <Faction Name="Underworld"><Is_Playable>Yes</Is_Playable><Can_Control_Planets>Yes</Can_Control_Planets>
+ <Faction Name="Underworld"><Is_Playable>Yes</Is_Playable><Basic_AI>AI_Player_Underworld</Basic_AI><Can_Control_Planets>Yes</Can_Control_Planets>
   <Space_Tactical_Unit_Cap>6</Space_Tactical_Unit_Cap></Faction>
  <Faction Name="Neutral"><Is_Neutral>Yes</Is_Neutral></Faction>
 </Factions>
@@ -599,8 +599,10 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
                                                "<Fighter_Bay_Flyout_Distance>100</Fighter_Bay_Flyout_Distance></HardPoint></HardPoints>\n");
     write_file(x / "FactionFiles.xml", "<FactionFiles><File>S10Factions.xml</File></FactionFiles>\n");
     std::string factions = kFactions;
-    if (s4)  // S10 map owners: a native faction (3), Hostile (4) and a playable faction without a player (5)
-        factions.insert(factions.find("</Factions>"), " <Faction Name=\"S10_Natives\"></Faction>\n <Faction Name=\"Hostile\"></Faction>\n"
+    // S10 map owners: Hostile (3), a native faction (4) and a playable faction without a player (5). modc t03: the first
+    // native faction (not playable, neutral or planet-controlling) owns the natives, so Hostile comes first as in FoC.
+    if (s4)
+        factions.insert(factions.find("</Factions>"), " <Faction Name=\"Hostile\"></Faction>\n <Faction Name=\"S10_Natives\"></Faction>\n"
                                                       " <Faction Name=\"S10_Absent\"><Is_Playable>Yes</Is_Playable></Faction>\n");
     write_file(x / "S10Factions.xml", factions);
     if (!s4) {
@@ -4059,7 +4061,7 @@ void test_bt_pass(const Data& d) {
 // player; natives without a player -> the Hostile player; a playable faction without a player -> dropped. The attacker
 // that owns no reinforcement point gets the Neutral one nearest its Attacker Entry marker. The galaxy's player order
 // deliberately differs from the faction order: Underworld (faction 1) = player 0 invades, Empire (faction 0) = player 1
-// defends, Neutral (2) = player 2, Hostile (faction 4) = player 3. ---
+// defends, Neutral (2) = player 2, Hostile (faction 3) = player 3. ---
 void test_map_owners(const Data& d) {
     jobs::JobSystem js(jobs::JobSystemConfig{0});
     SimConfig cfg;
@@ -4071,7 +4073,7 @@ void test_map_owners(const Data& d) {
     for (galactic::StartingForce& f : setup.forces) f.player = f.player == 0 ? 1 : f.player == 1 ? 0 : f.player;
     galactic::PlayerSetup hostile;
     hostile.faction = d.rules.find_faction("Hostile");
-    CHECK(hostile.faction == 4u && d.rules.find_faction("S10_Natives") == 3u && d.rules.find_faction("S10_Absent") == 5u);
+    CHECK(hostile.faction == 3u && d.rules.find_faction("S10_Natives") == 4u && d.rules.find_faction("S10_Absent") == 5u);
     setup.players.push_back(hostile);
     galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(setup));
     CHECK(gs != nullptr);
@@ -4097,9 +4099,9 @@ void test_map_owners(const Data& d) {
                                 place("S4_RPoint", 330.0f, 320.0f, 2);    // nearest the entry: the attacker's landing point
                                 place("S4_Post", 600.0f, 1800.0f, 0);     // Empire -> player 1
                                 place("S4_Post", 700.0f, 1800.0f, 1);     // Underworld -> player 0 = attacker: branched-map discard (§3.1 item 4)
-                                place("S4_Post", 800.0f, 1800.0f, 3);     // native faction, no player -> Hostile (3)
+                                place("S4_Post", 800.0f, 1800.0f, 4);     // native faction, no player -> Hostile (3)
                                 place("S4_Post", 900.0f, 1800.0f, 5);     // playable faction without a player -> dropped
-                                place("S4_Post", 1000.0f, 1800.0f, 4);    // Hostile -> player 3
+                                place("S4_Post", 1000.0f, 1800.0f, 3);    // Hostile -> player 3
                                 place("S4_Post", 1100.0f, 1800.0f, 9);    // no such faction -> dropped
                                 return true;
                             },
@@ -4164,7 +4166,7 @@ galactic::GalacticSetup campaign_setup(const Data& d, bool drop_hostile) {
 }
 
 // The S10_GC land invasion of S10_B (Underworld 1 attacks Empire 0): map posts at x 600.. with raw owners (faction
-// indices) 0 Empire, 1 Underworld, 3 S10_Natives, 4 Hostile; returns x -> owner at battle frame 1.
+// indices) 0 Empire, 1 Underworld, 4 S10_Natives, 3 Hostile; returns x -> owner at battle frame 1.
 std::map<int, int32_t> campaign_battle_posts(const Data& d, bool drop_hostile) {
     std::map<int, int32_t> out;
     jobs::JobSystem js(jobs::JobSystemConfig{0});
@@ -4192,8 +4194,8 @@ std::map<int, int32_t> campaign_battle_posts(const Data& d, bool drop_hostile) {
                                 };
                                 place("S4_Post", 600.0f, 1800.0f, 0);   // Empire (defender) -> player 0
                                 place("S4_Post", 700.0f, 1800.0f, 1);   // Underworld (attacker): branched-map discard
-                                place("S4_Post", 800.0f, 1800.0f, 3);   // native faction without a player -> Hostile
-                                place("S4_Post", 1000.0f, 1800.0f, 4);  // Hostile
+                                place("S4_Post", 800.0f, 1800.0f, 4);   // native faction without a player -> Hostile
+                                place("S4_Post", 1000.0f, 1800.0f, 3);  // Hostile
                                 return true;
                             },
                             opt);

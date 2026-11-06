@@ -256,6 +256,8 @@ std::vector<StoryPlotSet> campaign_plot_sets(const data::CampaignDef& campaign, 
         return -1;
     };
     std::vector<StoryPlotSet> out;
+    // [name-ok: retail campaign fields Rebel_ / Empire_ / Underworld_Story_Name (+0x48 / +0x68 / ...) read by
+    // TheStoryMode::Load_Plots for those factions' players, docs/re/STORY.md §2 "One plot table"]
     for (const char* faction : {"Rebel", "Empire", "Underworld"}) {
         const int32_t player = player_of(faction);
         if (player < 0) continue;

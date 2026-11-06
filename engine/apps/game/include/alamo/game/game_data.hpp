@@ -56,7 +56,7 @@ struct AiData {
 #endif
 };
 #endif
-// ai_type_for / is_stock_faction / resolve_ai_type: alamo/game/skirmish_rules.hpp (q6 t03).
+// resolve_ai_type: alamo/game/skirmish_rules.hpp (q6 t03, modc t03).
 
 struct GameData {
     std::string root;                      // game folder (FoC "corruption") or synthetic data folder
@@ -86,6 +86,10 @@ struct GameData {
     };
     std::vector<LoadStage> stages;
     std::vector<std::string> args;  // N1 / t09: the VFS command line the data was loaded with (save descriptors)
+    // modc t03: a MODPATH= / STEAMMOD= layer is mounted (Vfs::mod_dirs non-empty). Keys the [port] rules that apply only
+    // to mods (docs/MODS.md §6): campaign AI_Player_Control pairs, no base-game skirmish lists. Synthetic data: false
+    // (tests set it to stand for a mod).
+    bool mod_layer = false;
     // N1 / t09: sim::fingerprint_types of `types`, computed on first use (saves / loads only; one process-wide cache).
     uint64_t types_fingerprint() const;
 
@@ -100,14 +104,15 @@ bool load_game_data(const std::string& root, const std::vector<std::string>& arg
 bool load_game_data_dir(const std::string& dir, GameData& out, std::string* err = nullptr);
 
 // Skirmish galaxy (see the file comment). Players: 0 = human (`human_faction`), 1 = AI (`ai_faction`), 2 = the first
-// neutral faction. `units_human` / `units_ai` = type names of the starting fleets (unknown names are skipped);
+// neutral faction, then the native-owner faction (GalacticRules::native_owner_faction). An empty faction name is the
+// default slot faction (default_skirmish_faction). `units_human` / `units_ai` = type names of the starting fleets (unknown names are skipped);
 // empty = the faction's default fleet (default_skirmish_fleet). `planet_type` = a planet type name ("" = the first of
 // Kuat / Coruscant / any PLANET type). False + err when a faction or every unit is unknown.
 // Land skirmish (land = true): the AI's ground forces hold planet 1's surface (no space units, so no space conflict);
 // the human's ground forces ride a fleet (one space unit + the ground units launched at session start) that hops to
 // planet 1 and invades on arrival (the session submits the Invade order): the land battle on the chosen land map.
 struct SkirmishSetup {
-    std::string human_faction = "Rebel", ai_faction = "Empire";
+    std::string human_faction, ai_faction;  // "" = default_skirmish_faction (modc t03: from the data, not by name)
     std::vector<std::string> units_human, units_ai;    // space fleets ("" = default_skirmish_fleet)
     bool land = false;
     // Land: ground forces ("" = default_skirmish_ground). Space (P4 host, tests): a non-empty ground_human stands on the
@@ -122,10 +127,16 @@ struct SkirmishSetup {
     bool no_forces = false;
 };
 bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic::GalacticSetup& out, std::string* err = nullptr);
+// modc t03 [port] (retail's lobby always names both slots): the faction of an unnamed skirmish slot. Human slot: the first
+// Is_Playable faction in FactionFiles.xml order; AI slot: the first Is_Playable faction other than `human` (FoC: Rebel,
+// Empire, the port's old built-in defaults). "" when the data has none.
+std::string default_skirmish_faction(const galactic::GalacticRules& rules, bool ai_slot, std::string_view human = {});
+// `s` with its empty slot factions replaced by default_skirmish_faction.
+SkirmishSetup resolve_skirmish_factions(const galactic::GalacticRules& rules, SkirmishSetup s);
 // q6 t08: the default forces make_skirmish_galaxy uses, as type names the data defines (skirmish_rules.hpp
-// skirmish_default_forces with the alamo_game options: stock lists, hyperspace leader):
-//   stock faction (is_stock_faction)  default_skirmish_fleet / _ground(faction), unchanged (names unknown to the data are
-//                                     kept; the galaxy skips them).
+// skirmish_default_forces with the alamo_game options: base-game lists unless data.mod_layer, hyperspace leader):
+//   base-game list, no mod layer      default_skirmish_fleet / _ground(faction), unchanged (names unknown to the data are
+//                                     kept; the galaxy skips them). [port] MODS.md §6; replacement modc t17.
 //   other factions                    the faction's Space_ / Land_Skirmish_AI_Default_Forces (SKIRMISH_SETUP §2 step 4),
 //                                     names the data does not define, and types the galaxy cannot hold (space: not a
 //                                     SpaceUnit / Squadron kind; land: not a GroundUnit kind), dropped. [port] none left: up

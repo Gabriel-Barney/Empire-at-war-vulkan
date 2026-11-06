@@ -165,6 +165,7 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
     const std::vector<ai::GalacticAiDifficulty> difficulties = ai::load_ai_difficulties(*files);
     const std::vector<ai::GalacticAiTypeInfo> tinfo = ai::make_galactic_ai_type_info(types);
 
+    // [name-ok: test host default campaign (--galactic-ai without --map), the galactic_ai_hotm goldens]
     const std::string name = !opt.map.empty() ? opt.map : std::string("Sandbox_Heart_Of_The_Maw_Underworld");
     galactic::GalacticSetup setup = galactic::build_campaign_setup(db, rules, name, {}, &diag);
     if (setup.map.planets.size() == 0) {
