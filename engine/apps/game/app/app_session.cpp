@@ -36,7 +36,7 @@ bool App::attract_step(const ui::InputFrame& raw) {
     const bool moved = raw.mouse_x != last_mouse_x_ || raw.mouse_y != last_mouse_y_;
     last_mouse_x_ = raw.mouse_x;
     last_mouse_y_ = raw.mouse_y;
-    if (!script_.empty() || !attract_.armed()) return false;
+    if (!script_.empty() || bench_active() || !attract_.armed()) return false;  // BM2a: no attract demo
     const bool input = raw.keys_pressed != ui::KeySet{} || raw.buttons_pressed != 0 || raw.wheel != 0.0f || moved;
     using D = AttractController::Dialogs;
     const D dialogs = ui_.gui.find("IDD_MAIN_MENU_DIALOG") ? D::MainMenu : ui_.gui.top() ? D::Other : D::None;
@@ -399,8 +399,10 @@ void App::story_ui_step() {
             v.corruption_planet = d->planet_id;
         story_ui_.observe(v);
     }
-    for (const sim::StoryUiNotification& n : story_ui_.take())
-        if (session_->notify_story_ui(n)) ++story_ui_sent_;
+    for (const sim::StoryUiNotification& n : story_ui_.take()) {
+        if (bench_active()) bench_.story_pending.push_back(n);  // BM2a: sent before the next tick (bench_step_sim)
+        else if (session_->notify_story_ui(n)) ++story_ui_sent_;
+    }
 }
 
 void App::shutdown() {
@@ -572,7 +574,7 @@ void App::begin_battle() {
 void App::start_battle_view() {
     battle_view_pending_ = false;
     std::string err;
-    bview_.set_blocking_models(!script_.empty());  // scripted runs: a new model draws on its first frame (screenshots)
+    bview_.set_blocking_models(!script_.empty() || bench_fixed());  // BM2a: fixed frames draw every model on its first frame  // scripted runs: a new model draws on its first frame (screenshots)
     if (!bview_.start(gpu_, data_, *session_, targets_.width, targets_.height, &err)) {
         std::fprintf(stderr, "battle view: %s\n", err.c_str());
         notes_.push_back("battle view failed: " + err);
