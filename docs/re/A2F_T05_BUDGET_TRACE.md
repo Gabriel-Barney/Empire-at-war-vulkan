@@ -52,6 +52,7 @@ Experiment (scratch only): set the budget reset flag on every income tick, so ea
 So a per-tick reset is not the missing piece; the pools hoarding in Infrastructure (P 3555 at the first tick, 65 % of the credits) does not decide the
 outcome. The template-switch hint in BASICEMPIRETEMPLATES.XML ("the template switch alone causes the entire budget to be redistributed") would
 set the flag at Tech_Upgrade on / off only (the Empire switched at frames 1376 and 1829); not tested, left to the t07 probe.
+**a2g t01 (2026-11-05):** confirmed in game: the flag is set at each Tech_Upgrade on / off switch and cleared at the next tick (`A2G_T01_RESET_FLAG_PROBE.md`).
 Infrastructure plans also fail repeatedly early (Build_Base_Component_Heavy_Vehicle_Factory at Tatooine 14 times, an `Empire_Star_Base_N` order at Kashyyyk
 16 times "production dropped"); that is the `build_check` area of t08 (engine/galactic), not the budget.
 
@@ -111,6 +112,8 @@ The Empire takes Naboo 13389 ticks earlier with fewer Conquer_Opponent plans: th
 ships) are no longer accepted, so the Offensive pool is not tied up and the later plans that land are mostly free-store forces. The doubled
 "failure (released)" count is Lift_Blockade (18 -> 31) and base-component builds (Heavy_Vehicle_Factory 15 -> 31, Advanced 0 -> 8, Barracks 3 -> 7):
 single-structure plans whose ETA includes a queue wait now exceed their nominal build time x tolerance (`Normal_Default` multiplier 0.8 here).
+**Correction (a2g t04, `A2G_T02_T04_PORT_VS_RETAIL.md`):** that explanation is wrong. For single-structure plans the ETA at accept equals the
+nominal time, so t09 leaves their AllowedTime unchanged; the doubling is a trajectory effect (more loop bursts later in the run), not a time-test release.
 36000 ticks (the ctest run): owner changes as before (Felucia, NalHutta), 8 Conquer_Opponent plans as before, orders 442 -> 397.
 
 CRC columns (36000-tick HotM-human, t05 vs t09): `ai.goals` moves at tick 1 (the new hashed field), the synced `rng` at tick 557 (the AI's

@@ -44,7 +44,7 @@ GalacticAiWorld::Impl::Impl(gal::GalacticSim& s, objects::ObjectStore& st, const
 GalacticSimTokenResolver::Hooks GalacticAiWorld::Impl::make_hooks() {
     GalacticSimTokenResolver::Hooks h;
     h.story_campaign = cfg.story_campaign;
-    h.active_goals = [this](int32_t p) { return active_goals(p); };
+    h.active_goals = [this](int32_t p, std::span<const std::string_view> cats) { return active_goals(p, cats); };
     h.markup = [this](int32_t p, int32_t planet) {
         const auto it = markup.find({p, planet});
         return it == markup.end() ? 0.0 : it->second;
@@ -84,10 +84,22 @@ GalacticSimTokenResolver::Hooks GalacticAiWorld::Impl::make_hooks() {
     return h;
 }
 
-int32_t GalacticAiWorld::Impl::active_goals(int32_t p) const {
+// ActiveGoals 0x6e0490 (AI_GALACTIC_TOKENS) [H]: the active goals whose category is in the Parameter_Category mask (0x721f70).
+// The names form a mask, so a repeated name counts its category once; an unknown name adds no category [M: as the unit
+// category masks, ai_category_bit]; no Parameter_Category = every category [M: the "default all" of the other category
+// tokens] (a2g F1, A2G_T02_T04_PORT_VS_RETAIL.md: was every goal whatever the parameter).
+int32_t GalacticAiWorld::Impl::active_goals(int32_t p, std::span<const std::string_view> categories) const {
+    const PlayerAi* pa = player_ai(p);
+    if (!pa) return 0;
+    const auto& active = pa->ctx.goals.active();
+    std::vector<uint8_t> in(active.size(), categories.empty() ? 1 : 0);
+    for (const std::string_view name : categories) {
+        const int32_t c = defs.find_category(name);
+        if (c >= 0 && static_cast<size_t>(c) < in.size()) in[static_cast<size_t>(c)] = 1;
+    }
     int32_t n = 0;
-    if (const PlayerAi* pa = player_ai(p))
-        for (const auto& cat : pa->ctx.goals.active()) n += static_cast<int32_t>(cat.size());
+    for (size_t c = 0; c < active.size(); ++c)
+        if (in[c]) n += static_cast<int32_t>(active[c].size());
     return n;
 }
 
@@ -712,6 +724,10 @@ void PlayerAi::execution_service(int64_t) {
 }
 
 void PlayerAi::templates_changed(int64_t) {
+    // a2g F2: retail sets the budget reset flag +0x74 exactly when the template set changes, in either direction, and the
+    // next fiscal tick clears it (FoC HotM probe, docs/re/A2G_T01_RESET_FLAG_PROBE.md) [H correlation; the setter is
+    // unread]. The initial selection runs before the budget's Init, which clears the flag.
+    ctx.budget.request_reset();
     std::string names;
     for (const uint32_t t : ctx.templates.active()) names += " " + w->defs.templates[t].name;
     w->decide(player, "templates" + names);

@@ -454,6 +454,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
             pt.tech_level = types.get_int(ti, "Tech_Level");
             pt.population = type_population(static_cast<int32_t>(t));
             pt.build_cost = static_cast<float>(types.get_int(ti, "Build_Cost_Credits"));  // int field
+            pt.build_time_seconds = types.get_int(ti, "Build_Time_Seconds");  // int field +0x890 (A2g t06: AllowedTime base)
             for (const std::string_view f : types.get_list(ti, "Affiliation")) pt.affiliation.emplace_back(f);
             // flags +0x67 Create_Team / +0x29 squadron member / +0x21 Cinematic_Object_Only, behaviours 0x5C DUMMY_STAR_BASE /
             // 0x5B DUMMY_GROUND_BASE (AI_GALACTIC_3 §6 table) [battle host: replaces the Is_Dummy stand-in]

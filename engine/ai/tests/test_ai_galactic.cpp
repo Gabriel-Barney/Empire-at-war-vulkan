@@ -2439,6 +2439,392 @@ static void test_goal_allowed_time_base() {
     CHECK(pw.world->potential_plan_nominal_time(-5) == -1.0f && pw.world->potential_plan_selection(-5).empty());
 }
 
+// ================================================================ a2g t03: btime(T, none) with Production_Speed_Factor
+//
+// 0x371230 without a planet = T0 of GALACTIC_ECONOMY §2.3: float(uint32(float(Build_Time_Seconds) x Production_Speed_Factor)),
+// truncated. It feeds 0x6c0450 (Goal::nominal_time) and BudgetFractionToBuild's D (AI_GALACTIC_TOKENS). Barracks 10 s x 0.75
+// = 7.5 -> 7; with the player's Galactic_Build_Time_Multiplier 1.5 the nominal time is 10.5 (untruncated it would be 11.25).
+static void test_btime_none_speed_factor() {
+    ParityWorld pw(
+        false, {"BuildBarracks"}, [](gal::GalacticSetup& s) { s.players[0].difficulty = 1; },
+        [](gal::GalacticRules& r) {
+            r.constants.production_speed_factor = 0.75f;
+            r.difficulties.push_back({"Easy", 1.0f, 1.5f});
+        });
+    Goal found;
+    bool have = false;
+    int32_t frame = 0;
+    while (frame < 30 * 60 && !have) {
+        pw.sim->update();
+        pw.world->update_player(0, ++frame, true, false);
+        if (const AiContext* c = pw.world->context(0))
+            for (const auto& cat : c->goals.active())
+                for (const Goal& a : cat)
+                    if (!have && a.pp_valid && !pw.world->potential_plan_selection(a.pp_handle).empty()) {
+                        found = a;
+                        have = true;
+                    }
+    }
+    CHECK(have);
+    if (have) {
+        const std::vector<uint32_t> sel = pw.world->potential_plan_selection(found.pp_handle);
+        std::vector<float> bt, raw;
+        for (const uint32_t t : sel) {
+            const float p = static_cast<float>(pw.rules.types[t].build_time_seconds) * 0.75f;
+            bt.push_back(std::floor(p));  // every build time here is small and positive
+            raw.push_back(p);
+        }
+        const float expect = galactic_nominal_time(bt, 1.5f);
+        const float untruncated = galactic_nominal_time(raw, 1.5f);
+        std::printf("btime none: factor 0.75, %zu selected (Barracks %s), nominal %.2f (expected %.2f, untruncated %.2f)\n",
+                    sel.size(), pw.has(sel, tBarracks) ? "yes" : "no", static_cast<double>(found.nominal_time),
+                    static_cast<double>(expect), static_cast<double>(untruncated));
+        CHECK(pw.has(sel, tBarracks));
+        CHECK(found.nominal_time == expect);
+        CHECK(pw.world->potential_plan_nominal_time(found.pp_handle) == expect);
+        CHECK(expect != untruncated);  // the truncation is visible
+        CHECK(gal::econ::build_time_t0(10, 0.75f) == 7.0f);
+    }
+    // BudgetFractionToBuild (0x667120): R / D, D = btime(T, none) x income rate + credits (every category). Run on until the
+    // budget holds an income rate, so the time term is read.
+    while (frame < 30 * 240) {
+        const AiContext* c = pw.world->context(0);
+        if (c && c->budget.income_per_second() > 0.0f) break;
+        pw.sim->update();
+        pw.world->update_player(0, ++frame, true, false);
+    }
+    EquationSet e;
+    e.add("T", "Variable_Self.BudgetFractionToBuild {Parameter_Type = \"Barracks\"}");
+    e.link();
+    EvalContext c;
+    c.self = 0;
+    const EvalResult r = evaluate(e, e.find("T"), c, pw.world->resolver());
+    const AiContext* ctx = pw.world->context(0);
+    CHECK(r.ok && ctx);
+    if (r.ok && ctx) {
+        const double rate = static_cast<double>(ctx->budget.income_per_second());
+        const double avail = static_cast<double>(pw.sim->credits(0));
+        const double expect = 500.0 / (7.0 * rate + avail);
+        std::printf("btime none: BudgetFractionToBuild Barracks %.6f (rate %.3f, credits %.0f, expected %.6f, factor 1 %.6f)\n",
+                    r.value, rate, avail, expect, 500.0 / (10.0 * rate + avail));
+        CHECK(rate > 0.0);  // the time term is read
+        CHECK(r.value == expect);
+    }
+}
+
+// ================================================================ a2g t05 (a): nominal_time follows the plan_activatable re-solve
+//
+// Commit's 0x6c4a50 re-solves a new proposal's PP honouring the free-store reservations (A1_READINGS §28.6 step 3), and
+// AllowedTime reads the re-solved selection (A2f t09). HeroDeny's team "HeroShip | Corvette = 1,1": the proposal's first
+// solve takes the free-store hero (build time 50 s -> nominal 50); the hero is then reserved by another PP before the
+// Commit, so the re-solve produces a Corvette (100 s -> nominal 100). The activated goal's nominal_time is the new one's.
+static void test_goal_nominal_time_resolve() {
+    ParityWorld pw(
+        false, {"HeroDeny"}, [](gal::GalacticSetup& s) { s.planet_type[2] = tPlanet; },  // P2 (the target) lets Corvettes in
+        [](gal::GalacticRules& r) {
+            r.types[tTypes].build_time_seconds = 50;  // HeroShip (pushed at tTypes)
+            r.types[tCorvette].build_time_seconds = 100;
+        });
+    CHECK(pw.hero == tTypes);
+    const objects::ObjectHandle hero = pw.world->free_store_supply(0, pw.hero);
+    CHECK(static_cast<bool>(hero));
+    std::map<uint32_t, std::pair<std::vector<uint32_t>, float>> at_proposal;  // goal serial -> (selection, nominal_time)
+    uint32_t watched = 0;
+    bool reserved = false, checked = false;
+    for (int32_t f = 1; f <= 30 * 120 && !checked; ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+        const AiContext* c = pw.world->context(0);
+        if (!c) continue;
+        for (const auto& cat : c->goals.proposed())
+            for (const Goal& g : cat) {
+                if (!g.pp_valid || at_proposal.count(g.serial) != 0) continue;
+                const std::vector<uint32_t> sel = pw.world->potential_plan_selection(g.pp_handle);
+                at_proposal.emplace(g.serial, std::make_pair(sel, g.nominal_time));
+                if (!reserved && pw.has(sel, pw.hero) && pw.world->free_store_owner(hero) == -1) {
+                    pw.world->set_free_store_owner(hero, 1 << 30);  // another PP's reservation (0x6c2b20)
+                    reserved = true;
+                    watched = g.serial;
+                }
+            }
+        for (const auto& cat : c->goals.active())
+            for (const Goal& a : cat) {
+                if (checked || !reserved || a.serial != watched) continue;
+                const auto& before = at_proposal[a.serial];
+                const std::vector<uint32_t> now_sel = pw.world->potential_plan_selection(a.pp_handle);
+                std::printf("nominal re-solve: goal %u proposed with %zu selected (hero %s, nominal %.1f), active with %zu (hero %s, "
+                            "corvette %s, nominal %.1f, PP %.1f)\n",
+                            a.serial, before.first.size(), pw.has(before.first, pw.hero) ? "yes" : "no",
+                            static_cast<double>(before.second), now_sel.size(), pw.has(now_sel, pw.hero) ? "yes" : "no",
+                            pw.has(now_sel, tCorvette) ? "yes" : "no", static_cast<double>(a.nominal_time),
+                            static_cast<double>(pw.world->potential_plan_nominal_time(a.pp_handle)));
+                CHECK(before.second == 50.0f);
+                CHECK(now_sel != before.first && !pw.has(now_sel, pw.hero) && pw.has(now_sel, tCorvette));
+                CHECK(a.nominal_time == 100.0f);
+                CHECK(a.nominal_time == pw.world->potential_plan_nominal_time(a.pp_handle));
+                checked = true;
+            }
+    }
+    std::printf("nominal re-solve: reserved %s, goal %u checked %s\n", reserved ? "yes" : "no", watched, checked ? "yes" : "no");
+    CHECK(reserved && checked);
+}
+
+// ================================================================ a2g t05 (b): Resolve's time_ok (0x6c8970) on its own
+//
+// Resolve_Category (AI_GALACTIC §1.6): a candidate passes plan_activatable (0x6c4a50) and fundable, then time_ok: AllowedTime
+// (nominal_time x Build_Time_Delay_Tolerance, A2f t09) >= ETA, or AllowedTime <= 0. A failure in the greedy phase records an
+// activation failure and stops it; the weighted phase then draws the goal, fails it again and releases it. Tolerance 2.0
+// keeps the products exact; ETA 10.
+static const char* kResolveGoals = R"(<Goals>
+  <Resolve_Goal><AIGoalApplicationFlags>Friendly</AIGoalApplicationFlags><GameMode>Galactic</GameMode>
+    <Category>Offensive</Category><Reachability>Any</Reachability><Time_Limit>240</Time_Limit>
+    <Build_Time_Delay_Tolerance>2.0</Build_Time_Delay_Tolerance>
+    <Activation_Tracking_Duration>60</Activation_Tracking_Duration></Resolve_Goal>
+</Goals>)";
+
+struct ResolveHooks final : GoalModeHooks {
+    float eta = 10.0f, nominal = 20.0f;  // set at accept
+    float resolved = -1.0f;              // >= 0: the re-solve's new nominal_time
+    bool budget = true;
+    int32_t activatable_calls = 0, drops = 0, instantiated = 0;
+    uint32_t target_count() override { return 1; }
+    bool applies(int32_t, uint32_t) override { return true; }
+    bool blocked(uint32_t, int32_t) override { return false; }
+    bool evaluate(const std::string&, int32_t, double& out) override {
+        out = 10.0;
+        return true;
+    }
+    bool accept(Goal& g) override {
+        g.plan = 0;
+        g.pp_valid = true;
+        g.eta = eta;
+        g.nominal_time = nominal;
+        return true;
+    }
+    bool plan_activatable(Goal& g) override {
+        ++activatable_calls;
+        if (resolved >= 0.0f) g.nominal_time = resolved;
+        return true;
+    }
+    bool plan_invalid(const Goal& g) override { return g.running < 0; }
+    bool replaceable(const Goal&) override { return true; }
+    void refresh_plan(Goal&) override {}
+    bool uses_budget() override { return budget; }
+    bool can_fund(const Goal&) override { return true; }
+    float category_credits(int32_t) override { return 1.0f; }
+    void budget_add(Goal&) override {}
+    void budget_release(Goal&) override {}
+    void budget_weights() override {}
+    std::vector<int32_t> category_order() override { return {}; }
+    void queue_production(Goal&) override {}
+    void instantiate(Goal& g) override {
+        g.running = 1;
+        ++instantiated;
+    }
+    void end_plan(Goal&, bool) override {}
+    void drop_potential_plan(Goal&) override { ++drops; }
+    void suspend_reservations(Goal&) override {}
+    float elapsed_eta(const Goal& g) override { return g.eta; }
+    int32_t quota_players() override { return 1; }
+};
+
+struct ResolveOutcome {
+    bool activated = false;
+    int32_t activatable_calls = 0, activation_failures = 0, drops = 0;
+};
+
+static ResolveOutcome resolve_once(float nominal, float resolved, bool budget, bool galactic = true) {
+    AiDefinitions defs;
+    defs.add_goals(kResolveGoals, "g.xml");
+    defs.link();
+    ResolveHooks hooks;
+    hooks.nominal = nominal;
+    hooks.resolved = resolved;
+    hooks.budget = budget;
+    LearningSystem learning;
+    SimRng rng(1);
+    GoalSystem gs;
+    gs.init(defs, {{0u, "F"}}, &hooks, &learning, nullptr, &rng, galactic ? galactic_goal_config() : GoalSystemConfig{});
+    gs.service(1);  // first pass: one slice, then Commit
+    ResolveOutcome o;
+    CHECK(gs.commits() == 1);
+    for (const auto& cat : gs.active()) o.activated = o.activated || !cat.empty();
+    CHECK(o.activated == (hooks.instantiated == 1));
+    o.activatable_calls = hooks.activatable_calls;
+    o.activation_failures = learning.recent_activation_failures(0, 0, 1);
+    o.drops = hooks.drops;
+    return o;
+}
+
+static void test_goal_resolve_time_ok() {
+    // The re-solve keeps nominal 20 (AllowedTime 40 >= 10): activated in the greedy phase.
+    const ResolveOutcome keep = resolve_once(20.0f, -1.0f, true);
+    CHECK(keep.activated && keep.activatable_calls == 1 && keep.activation_failures == 0);
+    // Re-solved to nominal 5: AllowedTime 10 == ETA passes (the test is AllowedTime < ETA).
+    const ResolveOutcome edge = resolve_once(20.0f, 5.0f, true);
+    CHECK(edge.activated && edge.activatable_calls == 1 && edge.activation_failures == 0);
+    // Re-solved to nominal 4.5: AllowedTime 9 < 10. plan_activatable and fundable pass; time_ok alone fails it twice
+    // (greedy: failure recorded, break; weighted: failure recorded, released) and its PP is dropped.
+    const ResolveOutcome late = resolve_once(20.0f, 4.5f, true);
+    std::printf("resolve time_ok: nominal 20 -> %s, re-solved 5 -> %s, re-solved 4.5 -> %s (%d re-solves, %d activation failures, "
+                "%d PP drops)\n",
+                keep.activated ? "active" : "released", edge.activated ? "active" : "released", late.activated ? "active" : "released",
+                late.activatable_calls, late.activation_failures, late.drops);
+    CHECK(!late.activated && late.activatable_calls == 2 && late.activation_failures == 2 && late.drops >= 1);
+    // Without a budget the accept test (0x6b8660's time / budget check) is skipped, so Resolve's time_ok is the only time
+    // gate: an accepted nominal 4.5 is released there; nominal 0 (AllowedTime 0) is no limit.
+    const ResolveOutcome nobudget = resolve_once(4.5f, -1.0f, false);
+    CHECK(!nobudget.activated && nobudget.activatable_calls == 2 && nobudget.activation_failures == 2);
+    const ResolveOutcome zero = resolve_once(0.0f, -1.0f, false);
+    CHECK(zero.activated && zero.activation_failures == 0);
+    // Tactical configuration (ETA base): AllowedTime = 10 x 2 = 20 >= 10 whatever nominal_time holds.
+    const ResolveOutcome tactical = resolve_once(20.0f, 4.5f, true, false);
+    CHECK(tactical.activated && tactical.activation_failures == 0);
+}
+
+// ================================================================ a2g F1: ActiveGoals honours Parameter_Category
+//
+// Variable_Self.ActiveGoals 0x6e0490 (AI_GALACTIC_TOKENS) [H]: the active goals whose category is in the Parameter_Category
+// mask; without the parameter every active goal. Shipped use: Can_Reclaim_Excess_MajorItem_Budget
+// (ActiveGoals {Parameter_Category = AIGoalCategoryType[MajorItem]} > 0), which counted every goal before
+// (A2G_T02_T04_PORT_VS_RETAIL.md F1). The synthetic goals: Conquer_Planet / Build_Space_Forces = Offensive,
+// Upgrade_Starbase = Infrastructure; nothing is MajorItem.
+static void test_active_goals_category() {
+    ParityWorld pw(false, {"BuildBarracks", "HeroDeny"}, [](gal::GalacticSetup& s) { s.planet_type[2] = tPlanet; });
+    const int32_t off = pw.defs.find_category("Offensive"), infra = pw.defs.find_category("Infrastructure");
+    CHECK(off >= 0 && infra >= 0 && pw.defs.find_category("MajorItem") >= 0 && pw.defs.find_category("No_Such_Category") < 0);
+    auto token = [&pw](const char* text, bool& ok) {
+        EquationSet e;
+        e.add("T", text);
+        e.link();
+        EvalContext c;
+        c.self = 0;
+        const EvalResult r = evaluate(e, e.find("T"), c, pw.world->resolver());
+        ok = r.ok;
+        return r.value;
+    };
+    size_t n_off = 0, n_infra = 0, n_all = 0;
+    for (int32_t f = 1; f <= 30 * 120; ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+        const AiContext* c = pw.world->context(0);
+        if (!c) continue;
+        const auto& act = c->goals.active();
+        n_off = act[static_cast<size_t>(off)].size();
+        n_infra = act[static_cast<size_t>(infra)].size();
+        n_all = 0;
+        for (const auto& cat : act) n_all += cat.size();
+        if (n_off > 0 && n_infra > 0) break;
+    }
+    bool ok = false;
+    const double all = token("Variable_Self.ActiveGoals", ok);
+    CHECK(ok);
+    const double v_off = token("Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[Offensive]}", ok);
+    CHECK(ok);
+    const double v_infra = token("Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[Infrastructure]}", ok);
+    CHECK(ok);
+    const double v_both = token("Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[Offensive|Infrastructure]}", ok);
+    CHECK(ok);
+    const double v_twice = token("Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[Offensive|Offensive]}", ok);
+    CHECK(ok);
+    const double v_major = token("Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[MajorItem]}", ok);
+    CHECK(ok);
+    const double v_unknown = token("Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[No_Such_Category]}", ok);
+    const bool ok_unknown = ok;
+    const double v_mixed = token("Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[No_Such_Category|Infrastructure]}", ok);
+    const bool ok_mixed = ok;
+    std::printf("active goals: %zu active (Offensive %zu, Infrastructure %zu); token all %.0f, Offensive %.0f, Infrastructure %.0f, "
+                "both %.0f, Offensive twice %.0f, MajorItem %.0f, unknown %.0f (%s), unknown|Infrastructure %.0f (%s)\n",
+                n_all, n_off, n_infra, all, v_off, v_infra, v_both, v_twice, v_major, v_unknown, ok_unknown ? "ok" : "failed", v_mixed,
+                ok_mixed ? "ok" : "failed");
+    CHECK(n_off > 0 && n_infra > 0);
+    CHECK(all == static_cast<double>(n_all));
+    CHECK(v_off == static_cast<double>(n_off) && v_infra == static_cast<double>(n_infra));
+    CHECK(v_both == static_cast<double>(n_off + n_infra));
+    CHECK(v_twice == v_off);  // a mask: a repeated name counts once
+    CHECK(v_major == 0.0 && v_major < all);
+    // An unknown name adds no category (the shipped equations never name one).
+    CHECK(ok_unknown && v_unknown == 0.0);
+    CHECK(ok_mixed && v_mixed == v_infra);
+}
+
+// ================================================================ a2g F2: the budget reset flag +0x74 on a template switch
+//
+// AI_GALACTIC_2 §3.1 tick second pass: with the reset flag, P = Σ x w first, then P += (credits - Σ) x w; the tick clears it.
+// Retail sets it when the template set changes (docs/re/A2G_T01_RESET_FLAG_PROBE.md); the port never set it before.
+static void test_budget_reset_on_template_switch() {
+    // AiBudget alone: Init {1, 1} with 1000 credits (A = P = 500 each), reweight {3, 1} (w 0.75 / 0.25, A = P = 500), one
+    // tick with 1100 credits (Σ = 1000). Without the flag P = 500 + 100 w; with it P = 1000 w + 100 w.
+    auto run = [](bool reset, AiBudget& b) {
+        b.reset(2);
+        const std::vector<float> even = {1.0f, 1.0f}, skew = {3.0f, 1.0f};
+        b.init(even, 1000.0f);
+        b.reweight(skew);
+        if (reset) b.request_reset();
+        CHECK(b.reset_requested() == reset);
+    };
+    AiBudget plain, flagged;
+    run(false, plain);
+    run(true, flagged);
+    {
+        ByteWriter w;  // the flag is saved and hashed
+        flagged.write(w);
+        AiBudget back;
+        back.reset(2);
+        ByteReader r(w.bytes());
+        CHECK(back.read(r) && back.reset_requested());
+        StateHasher ha, hb, hp;
+        flagged.hash(ha);
+        back.hash(hb);
+        plain.hash(hp);
+        CHECK(ha.digest() == hb.digest() && ha.digest() != hp.digest());
+    }
+    plain.tick(100.0f, 45.0f, 1100.0f);
+    flagged.tick(100.0f, 45.0f, 1100.0f);
+    std::printf("budget reset flag: after the tick P = %.1f / %.1f without, %.1f / %.1f with the flag\n", static_cast<double>(plain.pool(0)),
+                static_cast<double>(plain.pool(1)), static_cast<double>(flagged.pool(0)), static_cast<double>(flagged.pool(1)));
+    CHECK(plain.pool(0) == 575.0f && plain.pool(1) == 525.0f);
+    CHECK(flagged.pool(0) == 825.0f && flagged.pool(1) == 275.0f);
+    CHECK(!flagged.reset_requested() && !plain.reset_requested());  // the tick clears it
+    flagged.tick(0.0f, 45.0f, 1100.0f);  // the next tick starts from P = A again and has no reset: the unflagged result
+    CHECK(flagged.pool(0) == 575.0f && flagged.pool(1) == 525.0f);
+    AiBudget again;  // init clears a pending flag
+    again.reset(2);
+    again.request_reset();
+    const std::vector<float> even = {1.0f, 1.0f};
+    again.init(even, 10.0f);
+    CHECK(!again.reset_requested());
+
+    // In a world: Syn_Rich (priority 3, trigger Is_Rich) turns on once the AI credits drop below 5500 (6000 at the start; the
+    // Barracks plan spends) -> a template switch -> the flag is set until the next fiscal tick. The control world (Is_Rich
+    // never true) keeps the initial selection only (before Init) and never shows the flag.
+    for (const bool rich : {true, false}) {
+        ParityWorld pw(false, {"BuildBarracks"}, {}, {}, [rich](EquationSet& e) {
+            e.add("Is_Rich", rich ? "Variable_Self.CreditsUnnormalized < 5500" : "Variable_Self.CreditsUnnormalized > 1000000");
+        });
+        int32_t set_at = -1, cleared_at = -1, switches = 0;
+        size_t seen = 0;
+        for (int32_t f = 1; f <= 30 * 150 && cleared_at < 0; ++f) {
+            pw.sim->update();
+            pw.world->update_player(0, f, true, false);
+            const std::vector<AiDecision>& log = pw.world->decision_log();
+            for (; seen < log.size(); ++seen)
+                if (log[seen].text.rfind("templates", 0) == 0) ++switches;
+            const AiContext* c = pw.world->context(0);
+            if (!c) continue;
+            if (c->budget.reset_requested() && set_at < 0) set_at = f;
+            if (set_at >= 0 && !c->budget.reset_requested()) cleared_at = f;
+        }
+        std::printf("budget reset flag: %s world, %d template decisions, flag set at frame %d, cleared at %d\n",
+                    rich ? "switching" : "control", switches, set_at, cleared_at);
+        if (rich) {
+            CHECK(switches >= 2 && set_at > 0 && cleared_at > set_at && cleared_at - set_at <= 1350 + 1);
+        } else {
+            CHECK(switches == 1 && set_at < 0);
+        }
+    }
+}
+
 // ================================================================ FIXPASS_GALACTIC §1: free-store moves on Friendly_Only
 //
 // Pure parts: the corrected AI request flags (§1.4), the hop-weight sum / high-16-bit test (§1.3 step 4), the orbit owner
@@ -3677,6 +4063,11 @@ int main(int argc, char** argv) {
     test_production_unbuildable();
     test_goal_time_drop();
     test_goal_allowed_time_base();  // A2f t09
+    test_btime_none_speed_factor();    // a2g t03
+    test_goal_nominal_time_resolve();  // a2g t05 (a)
+    test_goal_resolve_time_ok();       // a2g t05 (b)
+    test_active_goals_category();      // a2g F1
+    test_budget_reset_on_template_switch();  // a2g F2
     test_free_store_path_rules();
     test_free_store_world();
     test_underworld_special();

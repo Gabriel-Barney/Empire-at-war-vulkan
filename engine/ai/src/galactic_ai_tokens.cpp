@@ -8,6 +8,7 @@
 #include "alamo/ai/ai_free_store_path.hpp"
 #include "alamo/ai/ai_types.hpp"
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/galactic/economy.hpp"  // build_time_t0 (0x371230)
 #include "alamo/galactic/fleet_path.hpp"
 #include "alamo/objects/enums.hpp"
 #include "galactic_slots.hpp"
@@ -1371,7 +1372,11 @@ struct GalacticSimTokenResolver::Impl {
                 double rate = 0.0, avail = 0.0;
                 if (!r.hooks_.budget(pl, cats.empty() ? std::string_view{} : cats[0], rate, avail)) return false;
                 const double R = static_cast<double>(rules.types[t].build_cost);  // [port] no in-progress reduction
-                const double D = static_cast<double>(rules.types[t].build_time_seconds) * rate + avail;
+                // D's build time is 0x371230 without a planet: T0 = truncated Build_Time_Seconds x Production_Speed_Factor
+                // (GALACTIC_ECONOMY §2.3, a2g t03) [H]; [port] not min'd with an in-progress item's remaining time.
+                const double bt = static_cast<double>(
+                    gal::econ::build_time_t0(rules.types[t].build_time_seconds, rules.constants.production_speed_factor));
+                const double D = bt * rate + avail;
                 if (R < 0.0001) v = 0.0;
                 else if (D <= 0.0) v = kNever;
                 else v = R / D;
@@ -1464,7 +1469,10 @@ struct GalacticSimTokenResolver::Impl {
                 v = b2d(n <= 0);
                 return true;
             }, out);
-        if (k == "ACTIVEGOALS") return out = r.hooks_.active_goals ? r.hooks_.active_goals(pl) : 0.0, true;
+        if (k == "ACTIVEGOALS") {  // 0x6e0490: Parameter_Category mask (AI_GALACTIC_TOKENS) [H]; a2g F1
+            const std::vector<std::string_view> cats = param_texts(params, "Parameter_Category");
+            return out = r.hooks_.active_goals ? r.hooks_.active_goals(pl, cats) : 0.0, true;
+        }
         if (k == "STORYTRIGGER") {
             const std::vector<std::string_view> n = param_texts(params, "Parameter_Name");
             if (n.empty()) return false;

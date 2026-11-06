@@ -346,9 +346,9 @@ void GoalSystem::purge(int32_t keep_running) {
 // ---------------------------------------------------------------- commit / resolve
 
 // 0x692860(G, 0) [H]: no PP -> 0 + Time_Limit; else (0x6c0450(PP) + 0) x Build_Time_Delay_Tolerance (A2F_RE_READS §1.4
-// item 2, A2f t09). 0x6c0450 is Goal::nominal_time (the selection's nominal build time x Galactic_Build_Time_Multiplier),
+// item 2, A2f t09). 0x6c0450 is Goal::nominal_time (the selection's nominal build time x the mode's Build_Time_Multiplier),
 // not the PP ETA: the accept test (0x6b8660), Resolve's time_ok (0x6c8970) and maintenance compare it with the ETA.
-// [port] Without GoalSystemConfig::nominal_allowed_time (tactical) the base stays the PP ETA.
+// [port] Without GoalSystemConfig::nominal_allowed_time the base stays the PP ETA (both AIs set it since A2g t06).
 float GoalSystem::allowed_time(const Goal& g) const {
     const GoalTypeDef& def = defs_->goals[g.type];
     if (g.plan == kAiNone || !g.pp_valid) return def.time_limit;
@@ -606,7 +606,7 @@ void GoalSystem::hash(StateHasher& h) const {
     h.u32(evals_pass_);
     h.u32(evals_last_);
     h.u32(next_serial_);
-    const bool nominal = cfg_.nominal_allowed_time;  // A2f t09: hashed only where it is read (galactic)
+    const bool nominal = cfg_.nominal_allowed_time;  // A2f t09: hashed only where it is read (galactic, tactical since A2g t06)
     auto goal = [&h, nominal](const Goal& g) {
         h.u32(g.serial);
         h.u32(g.type);

@@ -92,8 +92,8 @@ struct Goal {
     bool pp_valid = false;
     float cost = 0.0f;              // +0x78
     float eta = 0.0f;               // +0x7c seconds
-    // A2f t09: 0x6c0450(PP), the galactic AllowedTime base (GoalSystemConfig::nominal_allowed_time): sum of btime(T, none)
-    // over the PP's selection x the plan player's Galactic_Build_Time_Multiplier. Set with eta; refreshed when the PP is
+    // A2f t09: 0x6c0450(PP), the AllowedTime base (GoalSystemConfig::nominal_allowed_time): sum of btime(T, none)
+    // over the PP's selection x the plan player's Galactic_ (A2f t09) / Land_ / Space_ (A2g t06) Build_Time_Multiplier. Set with eta; refreshed when the PP is
     // re-solved (plan_activatable). 0 without a PP.
     float nominal_time = 0.0f;
     int32_t pp_handle = -1;         // mode-owned PotentialPlan record
@@ -179,8 +179,8 @@ struct GoalSystemConfig {
     // tactical AI still uses this default of 1 (its goldens move with 2; follow-up for the tactical owner).
     int32_t extra_goals_per_category = 1;
     // A2f t09 (A2F_RE_READS §1.4 item 2) [H]: AllowedTime (0x692860) with a PP = Goal::nominal_time x
-    // Build_Time_Delay_Tolerance, and nominal_time is hashed. The galactic AI sets it; off (the tactical AI) keeps the
-    // PP ETA x tolerance base (tactical goals carry ETA 0; the Land / Space multipliers are a separate change).
+    // Build_Time_Delay_Tolerance, and nominal_time is hashed. The galactic AI (A2f t09) and the tactical AI (A2g t06,
+    // Land_ / Space_Build_Time_Multiplier) set it; off keeps the PP ETA x tolerance base.
     bool nominal_allowed_time = false;
 };
 

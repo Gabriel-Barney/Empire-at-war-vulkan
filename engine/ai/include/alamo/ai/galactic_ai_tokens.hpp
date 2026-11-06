@@ -155,7 +155,8 @@ GalacticSnapshot snapshot_from_sim(const galactic::GalacticSim& sim, bool ai_use
 class GalacticSimTokenResolver final : public TokenResolver {
 public:
     struct Hooks {
-        std::function<int32_t(int32_t player)> active_goals;  // Variable_Self.ActiveGoals
+        // Variable_Self.ActiveGoals (0x6e0490): active goals whose category is in the Parameter_Category names (empty = all).
+        std::function<int32_t(int32_t player, std::span<const std::string_view> categories)> active_goals;
         bool story_campaign = false;                          // Game.IsStoryCampaign
         // Apply_Markup accumulator of `player`'s AI target for `planet` (+0x80).
         std::function<double(int32_t player, int32_t planet)> markup;

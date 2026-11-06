@@ -3,6 +3,10 @@
 Roadmap group a2f, task t07: "Gabriel probe: budget reset flag +0x74 setter and the Empire's pre-Init Infrastructure pool /
 template state at HotM start (in-game Lua Budget queries)". One run of Heart of the Maw (HotM) as REBEL, hands off for about
 5 minutes. Run in game on 2026-11-05 (two runs, results in `docs/re/A2F_T07_BUDGET_PROBE.md`).
+A2g t01 (2026-11-05): a 20-minute run found the +0x74 setter (a template switch; `docs/re/A2G_T01_RESET_FLAG_PROBE.md`). Since
+then the story script keeps a full sample every 30 s after DONE (so a long run stays covered), and the watcher reads +0x74 as
+a byte (the three bytes after it are uninitialised padding). For a long run keep the game in front and auto-resolve the
+battles the AI starts: their prompt pauses galactic time.
 
 ## 1. What it records
 

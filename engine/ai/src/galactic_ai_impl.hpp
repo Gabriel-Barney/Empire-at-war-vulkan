@@ -193,7 +193,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
          GameRandom& r, const AiDefinitions& d, const EquationSet& e, std::vector<GalacticAiTypeInfo> ti, AiOrderSink snk,
          GalacticAiConfig c);
     GalacticSimTokenResolver::Hooks make_hooks();
-    int32_t active_goals(int32_t p) const;
+    int32_t active_goals(int32_t p, std::span<const std::string_view> categories) const;  // Variable_Self.ActiveGoals
 
     gal::GalacticSim& sim;
     objects::ObjectStore& store;
@@ -315,9 +315,11 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
         const gal::TypeInfo* ti = type_info(t);
         return ti ? static_cast<float>(ti->build_cost) : 0.0f;
     }
-    float btime_none(uint32_t t) const {  // 0x371230 without a planet: +0x890 x 0x140b15920 [M: factor 1]
+    // 0x371230 without a planet (GALACTIC_ECONOMY §2.3 T0) [H]: float(uint32(float(+0x890) x 0x140b15920)), the type's
+    // Build_Time_Seconds x GameConstants Production_Speed_Factor, truncated (a2g t03; was factor 1).
+    float btime_none(uint32_t t) const {
         const gal::TypeInfo* ti = type_info(t);
-        return ti ? static_cast<float>(ti->build_time_seconds) : 0.0f;
+        return ti ? gal::econ::build_time_t0(ti->build_time_seconds, sim.rules().constants.production_speed_factor) : 0.0f;
     }
     float cost_at(int32_t player, uint32_t t, PlanetIndex p) const {
         return valid_planet(p) ? static_cast<float>(sim.build_cost_for(player, p, t)) : cost_none(t);

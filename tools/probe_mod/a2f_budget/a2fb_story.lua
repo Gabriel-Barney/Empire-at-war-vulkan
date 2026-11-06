@@ -10,7 +10,8 @@
 --     44.5 s before to 2.5 s after), a small sample (SM: Sigma-of-pools CreditsUnnormalized, NetIncome, probe-type
 --     BudgetFractionToBuild for ALL / Infrastructure / Offensive);
 --   * a full sample (SM + BF + SH: all categories, the shipped weight / trigger equations) once per second until
---     120 s, every 5 s until 300 s; then the script goes quiet (ServiceRate 60).
+--     120 s, every 5 s until 300 s (DONE); after that a full sample every 30 s for as long as the run lasts
+--     (a2g t01: long runs until a template switch / Tech_Upgrade).
 -- The AI's budget is initialised at the first service of its galactic context (AI_GALACTIC 1.1: template init, then
 -- budget init 0x6137b0), which can be after this script's first service: the first samples can therefore show the
 -- state before Init (zero pools: BudgetFractionToBuild 1e18) and the following ones the state after it.
@@ -106,7 +107,12 @@ function A2FB_Update()
 			A2FB_Say("DONE", "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " records=" .. A2FB_Seq)
 			pcall(Game_Message, "TEXT_A2FB_DONE")
 		end
-		ServiceRate = 60
+		-- a2g t01 (long run until a template switch): keep a full sample every 30 s after DONE
+		if (t - A2FB_LAST_FULL) >= 29.999 then
+			A2FB_LAST_FULL = t
+			A2FB_Round(t, true)
+		end
+		ServiceRate = 30
 		return
 	end
 	local dense, full, rate = A2FB_Plan(t)

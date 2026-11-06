@@ -79,6 +79,11 @@ public:
     // Release 0x614880: A += c + a; struct deleted. `reclaimed` = the PAYG reclaim r (A -= r, P -= r, +0x80 += r).
     void release(int32_t c, uint32_t goal, float reclaimed);
     void flush(int32_t c);  // Flush_Category [H]: A = 0
+    // Reset flag +0x74 (a byte): the next tick() sets P = Σ x w before the drift redistribution, then clears it
+    // (AI_GALACTIC_2 §3.1). Set on a template switch (docs/re/A2G_T01_RESET_FLAG_PROBE.md [H correlation, setter unread]);
+    // init() clears it.
+    void request_reset() { reset_ = true; }
+    bool reset_requested() const { return reset_; }
 
     float weight(int32_t c) const { return valid(c) ? cat_[static_cast<size_t>(c)].weight : 0.0f; }
     float available(int32_t c) const { return valid(c) ? cat_[static_cast<size_t>(c)].A : 0.0f; }
