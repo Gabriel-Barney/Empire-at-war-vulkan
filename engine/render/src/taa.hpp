@@ -8,6 +8,10 @@
 //                    then history[cur] -> scene colour through the sharpen pass (amount 0 = plain copy). The caller's
 //                    StretchRect out follows unchanged;
 //   commit_motion(): remembers this frame's instance transforms for the next frame.
+// [port] BM2b provisional frames (RecordOptions::taa_provisional): begin_frame(view, true) keeps the state the frame starts
+// from; discard() puts it back, so the next frame jitters, reprojects and sees object motion as if this one had not been
+// drawn. The GPU side needs nothing: the frame only read history[cur ^ 1] and wrote history[cur], which the next frame
+// overwrites. keep() forgets the saved state (the frame stands); reset() and a non-provisional begin_frame() do too.
 // Velocity pass: the opaque items of instances that moved are drawn again into an RGBA32F target (taa_velocity.hlsl),
 // depth-tested against the finished scene depth, writing where each visible surface point stood in the previous image.
 // The resolve uses it at the nearest-depth pixel instead of the camera-only reprojection.
@@ -48,9 +52,14 @@ public:
         history_valid_ = false;
         motion_.clear();
         frame_ = 0;
+        undo_.armed = false;  // nothing before a reset to go back to
     }
     // Jittered camera of this frame (`view` = the caller's un-jittered camera); decides whether the history is used.
-    ViewMatrices begin_frame(const ViewMatrices& view);
+    // `provisional`: keep the state this frame starts from for discard().
+    ViewMatrices begin_frame(const ViewMatrices& view, bool provisional = false);
+    // [port] BM2b: undo the last provisional frame's TAA step (false: none to undo). keep(): it stands.
+    bool discard();
+    void keep() { undo_.armed = false; }
     // `cur` is the instance's transform this frame: true (and `delta` = previous x inverse(cur), the world-space move of
     // everything attached to it) when the instance was seen in the previous TAA frame and has moved since.
     bool motion_delta(uint64_t motion_id, const Mat3x4& cur, Mat3x4& delta) const;
@@ -101,6 +110,18 @@ private:
     std::unordered_map<uint64_t, MotionRec> motion_;  // keyed lookups and an erase sweep only: never ordered
     std::vector<TaaMover> movers_;
     uint32_t last_movers_ = 0;
+    uint64_t history_generation_ = 0;  // bumped whenever ensure_history (re)creates the history targets
+    struct Undo {  // BM2b: the state a provisional frame started from
+        bool armed = false;
+        bool motion_saved = false;  // commit_motion ran: `motion` holds the previous frame's records
+        uint32_t cur = 0;
+        uint64_t frame = 0, generation = 0;
+        bool history_valid = false, reset_now = true;
+        TaaCamera prev, cam;
+        Mat4 jittered_vp;
+        uint32_t last_movers = 0;
+        std::unordered_map<uint64_t, MotionRec> motion;
+    } undo_;
 };
 
 }  // namespace alamo::render
