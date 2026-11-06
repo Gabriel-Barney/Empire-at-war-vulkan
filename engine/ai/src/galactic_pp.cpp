@@ -376,7 +376,10 @@ public:
         float c = 0.0f, available = 0.0f;
         if (p_.eta == 0.0f) {
             float t = 0.0f;
-            if (!p_.has_target() || p_.is_structure(r.type)) {
+            // A2K_T01_BUILD_COST_RE 3.1 [H] (AI_GALACTIC_2 1.4 corrected): no target, or an ordinary unit (none of
+            // 0x60 / 0x5F / 0x5C / 0x5B) -> the base price and half the base time; only a structure type with a target
+            // uses the target planet's price and time.
+            if (!p_.has_target() || !p_.is_structure(r.type)) {
                 t = 0.5f * p_.w.btime_none(r.type);
                 c = p_.w.cost_none(r.type);
             } else {

@@ -41,7 +41,9 @@ namespace alamo::galactic {
 
 namespace {
 
-constexpr uint32_t kGalacticSaveVersion = 2;  // v2 (story t11): + i32 victory hold; reads v1
+// v2 (story t11): + i32 victory hold; v3 (A2k t01): - the two PlanetState build bonus floats (the production modifiers
+// are derived, GalacticSim::production_bonus). Reads v1 and v2.
+constexpr uint32_t kGalacticSaveVersion = 3;
 constexpr uint32_t kConflictSaveVersion = 2;  // v2: BattleRequest::linked (story t10)
 
 // Element count, bounded by the bytes left (each element takes at least `min_bytes`), so corrupt counts never
@@ -173,7 +175,7 @@ void GalacticSim::write(ByteWriter& w) const {
         }
         w.f32(p.piracy_pool).i32(p.siphon_player).f32(p.siphon_fraction).i32(p.siphon_until).f32(p.siphon_amount);
         w.i32(p.halt_until).boolean(p.min_income_set).boolean(p.max_income_set).f32(p.min_income).f32(p.max_income);
-        w.f32(p.build_time_bonus).f32(p.build_cost_bonus).boolean(p.hidden).boolean(p.in_battle);
+        w.boolean(p.hidden).boolean(p.in_battle);
         w.u32(static_cast<uint32_t>(p.income.size()));
         for (const IncomeEntry& e : p.income) {
             w.u8(e.kind).f32(e.value).i32(e.expiry);
@@ -347,8 +349,10 @@ bool GalacticSim::read(ByteReader& r) {
         p.max_income_set = r.boolean();
         p.min_income = r.f32();
         p.max_income = r.f32();
-        p.build_time_bonus = r.f32();
-        p.build_cost_bonus = r.f32();
+        if (version < 3) {  // v1 / v2: the two unused build bonus floats (always 0), dropped
+            (void)r.f32();
+            (void)r.f32();
+        }
         p.hidden = r.boolean();
         p.in_battle = r.boolean();
         if (!r.ok()) return false;

@@ -1,4 +1,5 @@
 // P4 sim (owner: galactic agent): loader of the special-system tables (special_data.hpp, docs/re/P4_SIM_SYSTEMS.md).
+#include <algorithm>
 #include <map>
 #include <memory>
 
@@ -57,6 +58,8 @@ SpecialAbilityClass class_of(std::string_view tag) {
     if (ieq(tag, "Planet_Income_Gambling_Ability")) return SpecialAbilityClass::IncomeGambling;
     if (ieq(tag, "Slicer_Ability")) return SpecialAbilityClass::Slicer;
     if (ieq(tag, "System_Spy_Ability")) return SpecialAbilityClass::SystemSpy;
+    if (ieq(tag, "Reduce_Production_Price_Ability")) return SpecialAbilityClass::ReducePrice;
+    if (ieq(tag, "Reduce_Production_Time_Ability")) return SpecialAbilityClass::ReduceTime;
     return SpecialAbilityClass::Other;
 }
 
@@ -129,6 +132,9 @@ SpecialAbilityDef parse_ability(const objects::ObjectTypeDatabase& raw, objects:
         else if (ieq(tag, "Chance_Affinity_Modifier")) a.chance_affinity = to_f(v);
         else if (ieq(tag, "Cost_Affinity_Modifier")) a.cost_affinity = to_f(v);
         else if (ieq(tag, "Duration_In_Secs")) a.spy_duration = to_f(v);
+        else if (ieq(tag, "Price_Reduction_Percentage") || ieq(tag, "Time_Reduction_Percentage")) a.production_reduction = to_f(v);
+        else if (ieq(tag, "Stacking_Category")) a.stacking_category = static_cast<int32_t>(to_f(v));
+        else if (ieq(tag, "Galaxy_Wide")) a.galaxy_wide = objects::parse_type_bool(v);
         else if (a.cls == SpecialAbilityClass::SystemSpy) {
             for (const SpyFlag& sf : kSpyFlags)
                 if (ieq(tag, sf.tag)) {
@@ -224,9 +230,51 @@ SpecialAbilityDef parse_ability(const objects::ObjectTypeDatabase& raw, objects:
         }
         break;
     }
+    case SpecialAbilityClass::ReducePrice:
+    case SpecialAbilityClass::ReduceTime:
+        // A2K_T01_BUILD_COST_RE 1.3 [H] (0x70af70): the fraction must be < 1.0, else 1.0 with an error; the only allowed
+        // Activation_Style is Galactic_Automatic (anything else is forced to it with an error). [port] The same rules
+        // for the time class (same class family, not traced separately).
+        if (a.production_reduction >= 1.0f) {
+            note(diag, "galactic: " + a.name + ": production reduction >= 1.0 set to 1.0");
+            a.production_reduction = 1.0f;
+        }
+        if (have_style && a.style != ActivationStyle::GalacticAutomatic)
+            note(diag, "galactic: " + a.name + ": production ability needs Galactic_Automatic");
+        a.style = ActivationStyle::GalacticAutomatic;
+        break;
     case SpecialAbilityClass::Other: break;
     }
     return a;
+}
+
+// The applicable set of a production ability (0x48d070 inputs): Applicable_Unit_Categories (GameObjectCategoryType mask,
+// "All" = every bit), Applicable_Unit_Types and Excluded_Unit_Types (resolved type names; unknown names are dropped).
+void parse_production_targets(const objects::GameObjectTypes& types, objects::FieldIndex f, SpecialAbilityDef& a,
+                              std::vector<std::string>* diag) {
+    const objects::ObjectTypeDatabase& raw = types.raw();
+    const objects::FieldColumns& fc = raw.fields();
+    const auto names = [&](std::string_view v) {
+        std::vector<uint32_t> out;
+        for (std::string_view n : objects::split_type_list(v)) {
+            const objects::TypeIndex r = types.resolve_name(trim(n));
+            if (r != objects::kNone) out.push_back(r);
+            else note(diag, "galactic: " + a.name + ": unknown type " + std::string(trim(n)));
+        }
+        return out;
+    };
+    for (objects::FieldIndex g = f + 1; g < fc.size() && fc.depth[g] > fc.depth[f]; ++g) {
+        if (fc.parent[g] != f) continue;
+        const std::string_view tag = raw.tag_name(g);
+        const std::string_view v = trim(fc.text[g]);
+        if (v.empty()) continue;
+        if (ieq(tag, "Applicable_Unit_Categories")) {
+            const auto m = types.enums().get(objects::EnumId::GameObjectCategory).convert(v);
+            if (m) a.applicable_categories = static_cast<uint64_t>(*m);
+            else note(diag, "galactic: " + a.name + ": unknown Applicable_Unit_Categories " + std::string(v));
+        } else if (ieq(tag, "Applicable_Unit_Types")) a.applicable_types = names(v);
+        else if (ieq(tag, "Excluded_Unit_Types")) a.excluded_types = names(v);
+    }
 }
 
 std::vector<std::string_view> list_or_split(const objects::GameObjectTypes& types, objects::TypeIndex t, std::string_view tag) {
@@ -311,6 +359,13 @@ uint32_t SpecialRules::find_item(uint32_t crc) const {
     return kNoIndex;
 }
 
+bool SpecialRules::production_applies(const SpecialAbilityDef& a, uint32_t t, uint64_t categories) {
+    if (std::find(a.excluded_types.begin(), a.excluded_types.end(), t) != a.excluded_types.end()) return false;
+    if (std::find(a.applicable_types.begin(), a.applicable_types.end(), t) != a.applicable_types.end()) return true;
+    if (a.applicable_categories == ~uint64_t{0}) return true;  // "All": every type [port choice, RE open point 3]
+    return (a.applicable_categories & categories) != 0;
+}
+
 uint32_t SpecialRules::find_item_by_name(std::string_view name) const {
     for (size_t i = 0; i < items.size(); ++i)
         if (items[i].name == name) return static_cast<uint32_t>(i);
@@ -338,7 +393,7 @@ void load_special_rules(const FileProvider& provider, const data::GameDatabase& 
     const objects::ObjectTypeDatabase& raw = types.raw();
     const size_t n = types.size();
     s.types.assign(n, TypeSpecial{});
-    std::map<objects::FieldIndex, uint32_t> parsed;  // lookup only
+    std::map<objects::FieldIndex, uint32_t> parsed, parsed_production;  // lookup only
     for (objects::TypeIndex t = 0; t < n; ++t) {
         TypeSpecial& ts = s.types[t];
         for (objects::FieldIndex f : types.get_sub_objects(t, "Abilities")) {
@@ -354,7 +409,20 @@ void load_special_rules(const FileProvider& provider, const data::GameDatabase& 
                 for (objects::FieldIndex c = f + 1; c < fc.size() && fc.depth[c] > fc.depth[f]; ++c)
                     if (fc.parent[c] == f && ieq(raw.tag_name(c), "Detection_Chance")) ts.detection_chance = to_f(fc.text[c]);
             }
-            if (class_of(tag) == SpecialAbilityClass::Other) continue;
+            const SpecialAbilityClass cls = class_of(tag);
+            if (cls == SpecialAbilityClass::Other) continue;
+            if (cls == SpecialAbilityClass::ReducePrice || cls == SpecialAbilityClass::ReduceTime) {
+                auto pit = parsed_production.find(f);
+                if (pit == parsed_production.end()) {
+                    SpecialAbilityDef a = parse_ability(raw, f, diagnostics);
+                    parse_production_targets(types, f, a, diagnostics);
+                    if (!a.initially_enabled) continue;
+                    pit = parsed_production.emplace(f, static_cast<uint32_t>(s.production.size())).first;
+                    s.production.push_back(std::move(a));
+                }
+                ts.production.push_back(pit->second);
+                continue;
+            }
             auto it = parsed.find(f);
             if (it == parsed.end()) {
                 it = parsed.emplace(f, static_cast<uint32_t>(s.abilities.size())).first;
@@ -417,6 +485,7 @@ void load_special_rules(const FileProvider& provider, const data::GameDatabase& 
         }
         const TypeSpecial& m = s.types[ts.members.front()];
         if (ts.abilities.empty()) ts.abilities = m.abilities;
+        if (ts.production.empty()) ts.production = m.production;
         ts.generic_hero = ts.generic_hero || m.generic_hero;
         ts.named_hero = ts.named_hero || m.named_hero;
         if (ts.text_crc == 0) ts.text_crc = m.text_crc;

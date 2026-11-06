@@ -237,9 +237,9 @@ struct PlanetState {
     int32_t halt_until = INT32_MIN;       // credit halt list folded: halted while now <= halt_until [M]
     bool min_income_set = false, max_income_set = false;  // D +0x280 / +0x281
     float min_income = 0.0f, max_income = 0.0f;           // D +0x278 / +0x27c
-    float build_time_bonus = 0.0f;  // m_planet = 1 - bonus [M]
-    float build_cost_bonus = 0.0f;  // m_planet_cost = 1 - bonus [M]
-    bool hidden = false;            // D +0x2e0 inaccessible
+    // (The per-planet build price / time modifiers m_planet_cost / m_planet are derived on demand from the holders present:
+    // GalacticSim::production_bonus, A2K_T01_BUILD_COST_RE 1.2.)
+    bool hidden = false;           // D +0x2e0 inaccessible
     bool in_battle = false;         // galactic conflict list (battles are tactical: never set by S3)
     std::vector<IncomeEntry> income;               // breakdown list D +0x268 (order matters)
     std::array<std::vector<BuildEntry>, 2> queue;  // ground, space
@@ -572,6 +572,10 @@ public:
     bool corrupted(PlanetIndex planet) const { return planets_[planet].corruption != kCorruptionNone; }
     float build_time_for(int32_t player, PlanetIndex planet, uint32_t type) const;
     int32_t build_cost_for(int32_t player, PlanetIndex planet, uint32_t type) const;
+    // A2K_T01_BUILD_COST_RE 1.2 (0x559c10 price / 0x55a010 time): the production bonus of `type` built by `player` at
+    // `planet` = sum over stacking categories (ascending) of the largest value in each, over the merged player-wide
+    // and planet-local tables, capped at 0.999999; the multiplier is 1 - bonus. 0 when nothing applies.
+    float production_bonus(int32_t player, PlanetIndex planet, uint32_t type, bool time) const;
     bool pays_as_you_go(int32_t player) const;
     PlayerView player_view(int32_t player) const;
 
