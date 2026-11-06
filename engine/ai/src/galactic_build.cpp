@@ -315,7 +315,9 @@ void GalacticAiWorld::Impl::market_planet(PlanetIndex p) {
                 const float ft = funds_time(b);
                 const bool reachable = delivery_reachable(owner, b, p);  // 0x6955a0
                 if (reachable && ft >= queue_time) {
-                    queue_time += std::min(ft, btime_at(owner, b.type, p));  // PAYG player
+                    // queueTime += btime, or min(fundsTime, btime) for a pay-as-you-go player (§2.3 step 2).
+                    const float bt = btime_at(owner, b.type, p);
+                    queue_time += sim.pays_as_you_go(owner) ? std::min(ft, bt) : bt;
                     if (!can_build_at(owner, b.type, p)) fail_build(b, "not buildable here");
                     continue;
                 }
