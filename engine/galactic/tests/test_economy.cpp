@@ -822,6 +822,27 @@ void test_a2_spawn_convert() {
     CHECK(s.blockaded(rA, pEmpire) && s.blockaded(rA, pUnder) && !s.blockaded(rB, pEmpire) && !s.blockaded(rCore, pEmpire));
 }
 
+// a2j t06 (docs/re/A2J_T03_INCOME.md §2): a derived-owner change (0x3fb040) keeps the owner of a starbase that outlives
+// it; GE 4.1 step 3 then hands the planet back to the starbase owner when the ground units are gone.
+void test_a2j_starbase_owner() {
+    World w({{pEmpire, rA, tSB1}, {pEmpire, rA, tInfantry}, {pUnder, rE, tSB1}});
+    GalacticSim& s = w.sim;
+    const ObjectHandle sb = w.planet(rE).starbase;
+    CHECK(w.planet(rE).owner == pUnder && w.planet(rE).starbase_owner == pUnder && w.store.alive(sb));
+    const ObjectHandle inf = s.spawn_unit(pEmpire, rE, tInfantry);  // a ground unit under a foreign starbase
+    CHECK(w.store.alive(inf) && w.planet(rE).surface.size() == 1);
+    w.run(1);
+    CHECK(w.planet(rE).owner == pEmpire);  // GE 4.1 step 2 before step 3
+    CHECK(w.store.alive(sb) && w.planet(rE).starbase == sb && w.planet(rE).starbase_level == 1);
+    CHECK(w.planet(rE).starbase_owner == pUnder && w.store.owner(sb) == pUnder);  // was -1 before a2j t06
+    CHECK(s.destroy_object(inf));
+    w.run(1);
+    CHECK(w.planet(rE).owner == pUnder && w.planet(rE).starbase_owner == pUnder);  // step 3: the starbase owner again
+    // The starbase destroyed: both the handle and the owner are cleared.
+    CHECK(s.destroy_object(sb));
+    CHECK(w.planet(rE).starbase_level == 0 && w.planet(rE).starbase_owner == kNoPlayer);
+}
+
 // ---- A2 gal t04 / t05 / t06 (docs/re/A2GAL_READINGS.md §2-§4) -------------------------------------------------------
 
 void test_a2gal_population() {
@@ -2470,6 +2491,35 @@ void test_foc_corellia_kuat_hop(const FocData& d) {
                 static_cast<double>(orig_ticks) / 30.0, t == orig_ticks ? "" : "  [port differs: strategic.cpp kApplyModeSpeedMultiplier]");
 }
 
+// a2j t03 (docs/re/A2J_T03_INCOME.md): the Empire's first fiscal payment in Sandbox_Heart_Of_The_Maw_Rebel is retail's 667.5
+// (a2f t07 probe: 14.8333/s, 7 cycles with the four starting planets). Per planet (GALACTIC_ECONOMY 1.4): Corellia base 105 +
+// trade 105 (Corellia_Kuat, Corellia_Tatooine at 0.5) + mining 210 (Empire_Mining_Income_Bonus, 2 x base, no mining colony)
+// = 420; Kuat 75 + 75 = 150; Kashyyyk 30 + 15 = 45 (Felucia / NalHutta are Underworld); Tatooine 35 + 17.5 = 52.5.
+// Kashyyyk's share of the sum is 82.5 (its 45 and Kuat's 37.5 link to it): 667.5 - 82.5 = 585, the a2h-era port payment.
+void test_foc_hotm_rebel_income(const FocData& d) {
+    std::printf("  FoC HotM Rebel entry: Empire income at the first payment (a2j t03)\n");
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, d.types, &ids);
+    SimRng rng(1u);
+    GalacticSim s(d.rules, store, rng);
+    CHECK(s.start(build_campaign_setup(d.db, d.rules, "Sandbox_Heart_Of_The_Maw_Rebel")));
+    const int32_t E = s.player_of_faction("Empire");
+    const PlanetIndex cor = s.map().planets.find("Corellia"), kuat = s.map().planets.find("Kuat"),
+                      kas = s.map().planets.find("Kashyyyk"), tat = s.map().planets.find("Tatooine");
+    CHECK(E >= 0 && cor != kInvalidPlanet && kuat != kInvalidPlanet && kas != kInvalidPlanet && tat != kInvalidPlanet);
+    if (E < 0 || cor == kInvalidPlanet || kuat == kInvalidPlanet || kas == kInvalidPlanet || tat == kInvalidPlanet) return;
+    while (s.frame() <= 1350) s.update();  // the first payment is on frame 1350
+    CHECK(s.last_income(E) == 667.5f);
+    CHECK(s.planets()[cor].owner == E && s.planets()[kuat].owner == E && s.planets()[kas].owner == E && s.planets()[tat].owner == E);
+    CHECK(s.planet_income(cor, false) == 420.0f && s.planet_income(kuat, false) == 150.0f);
+    CHECK(s.planet_income(kas, false) == 45.0f && s.planet_income(tat, false) == 52.5f);
+    CHECK(s.mining_income(E) == 210.0f);
+    std::printf("  FoC HotM Rebel entry: Empire %.1f (Corellia %.1f, Kuat %.1f, Kashyyyk %.1f, Tatooine %.1f)\n",
+                static_cast<double>(s.last_income(E)), static_cast<double>(s.planet_income(cor, false)),
+                static_cast<double>(s.planet_income(kuat, false)), static_cast<double>(s.planet_income(kas, false)),
+                static_cast<double>(s.planet_income(tat, false)));
+}
+
 // Thrawn's Revenge (workshop 1125571106) through the VFS (mod folder over the FoC install), when present: M = 11.34 and
 // the `|` OR groups of Required_Special_Structures (SG 1.3 step 14, NR_Government.xml / Research_Dummies.xml).
 void test_oi_thrawns_revenge() {
@@ -2561,6 +2611,7 @@ void test_foc_campaign() {
     test_oi_foc(d);  // OI galactic
     test_foc_player_fleet_moves(d);
     test_foc_corellia_kuat_hop(d);  // G1
+    test_foc_hotm_rebel_income(d);  // a2j t03
     const int32_t days = 10;
     RunResult base;
     bool first = true;
@@ -2605,6 +2656,7 @@ int main(int argc, char** argv) {
         test_a2_fleet_management();
         test_fleet_slots();
         test_a2_spawn_convert();
+        test_a2j_starbase_owner();  // a2j t06
         test_a2_population_terrain();
         test_a2gal_population();
         test_a2gal_steal_order();
