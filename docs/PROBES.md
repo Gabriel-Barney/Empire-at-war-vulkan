@@ -14,6 +14,7 @@ roadmap (`roadmap-store/`). Probes need the original game and Gabriel's go-ahead
 | `fow_regrow/` | fowf t06: fog regrow window and top-edge circle shift | `re/FOG_OF_WAR.md` §9 item 8 |
 | `g1_capture/` | G1 in-game render capture (DXVK, apitrace; RenderDoc is out of scope) | `re/RENDER.md` §7.2 / §7.3 |
 | `g1_hops/` | STRATEGIC_GAPS probe G1: ticks per galactic hop, fleet speed multiplier | `re/STRATEGIC_GAPS.md` §2.1 |
+| `modc_loader/` | modc t13 / t14: Lua script with a UTF-8 BOM, XML element names starting with a digit, campaign without planets (run 2026-11-06) | `re/MODC_LOADER.md` |
 | `oi_abilities/` | OI abilities: `Destroy_When_Stunned_Over_Water` and clip timings | `re/ABILITIES_HARDPOINTS.md` §4.12 / §4.13 |
 | `p1_camera_input/` | P1 camera and input checks (observations, no mod files) | `re/P1_CAMERA_INPUT.md`, `re/P1_DOUBLE_CLICK_MOVE.md` |
 | `q2_traces/` | Q2 reference traces: tick-by-tick recordings of the original galactic and space-skirmish runs (also `-Mod tr`) | traces under the kit's `out/`; comparison in `PHASE4_HISTORY.md` and the roadmap |
