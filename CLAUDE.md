@@ -95,7 +95,7 @@ A change to `engine/core` public headers or the top-level CMake goes through the
 - Stacks: branch lanes from `main`; stack a PR on another only for a true dependency, at most 2 deep, and merge the bottom first.
 - Golden CRC files (2026-11-06): `ALAMO_CRC 2` stores a checkpoint every 64 ticks instead of every tick, so a behaviour change is a
   small diff. `--crc-out` still writes full logs; `--crc-checkpoint N` writes v2. Regenerate after an intended behaviour change with
-  `tools\regen_goldens.cmd` and say so in the PR. Format and workflow: `docs/status/golden-checkpoints.md`. Converting the existing
-  v1 goldens waits for PRs #79-#88 (`tools\goldens\convert_goldens.py --all --in-place --check`).
+  `tools\regen_goldens.cmd` and say so in the PR. Format and workflow: `docs/status/golden-checkpoints.md`. All 20 goldens
+  were converted on 2026-11-06 (`tools\goldens\convert_goldens.py --all --in-place --check`; MSVC and clang 174/174).
 - PR check without hosted CI: `tools\pr_check.cmd [PR] [--compiler msvc|clang|both] [--tests fast|all] [--post]`.
 - `tools\docs\split_phase4.py --check|--apply` moves dated `PHASE4.md` sections into `docs/status/` (not applied yet: PR #89 also reorganizes docs).
