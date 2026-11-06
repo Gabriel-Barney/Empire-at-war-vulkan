@@ -21,7 +21,16 @@
 //   alamo_headless --record-stream FILE [--seed S] [--frames N] [--synthetic P] [--ais K] [--latency F]
 //       Writes a random (seeded, deterministic) command stream for replays/tests.
 //   alamo_headless --compare EXPECTED.crc ACTUAL.crc
-//       Prints the first diverging tick and system; exit 1 if the logs differ.
+//       Prints the first diverging tick and system; exit 1 if the logs differ. A checkpoint log (ALAMO_CRC 2) on
+//       either side is compared on its stored ticks only; a mismatch names the first bad checkpoint, its window of
+//       ticks and the differing columns.
+//   --crc-out FILE [--crc-checkpoint N [--crc-keep T,T,...]] (every run mode that writes a CRC log): by default the full
+//       per-tick log (ALAMO_CRC 1); with --crc-checkpoint N the checkpoint log (ALAMO_CRC 2: first and last tick, every
+//       multiple of N and the --crc-keep ticks). The checked-in goldens are checkpoint logs (docs/status/golden-checkpoints.md);
+//       --golden accepts either form.
+//   alamo_headless --crc-convert IN.crc OUT.crc [--crc-checkpoint N (default 64)] [--crc-keep T,T,...]
+//       Rewrites a CRC log as a checkpoint log (same writer as --crc-checkpoint; tools/goldens/convert_goldens.py is the
+//       same rule in Python and a ctest checks they agree byte for byte).
 //
 // G0 / S5 tactical host (engine/apps/sim; docs/PHASE4.md S5/G0):
 //   alamo_headless --map NAME [--game DIR] [--ticks N] [--workers W] [--seed S] [--no-ai] [--realtime]
@@ -120,6 +129,7 @@
 #include "ai_run.hpp"  // A2
 #include "skirmish_run.hpp"  // A1 stage 2
 #include "battle_run.hpp"
+#include "crc_out.hpp"
 #include "map_run.hpp"
 #include "save_run.hpp"  // N1
 #endif
@@ -151,6 +161,7 @@ struct Options {
     bool quiet = false;
     // Q1
     std::string replay, crc_out, golden, record_stream, compare_a, compare_b;
+    std::string convert_in, convert_out;  // --crc-convert IN OUT
     bool check_workers = false;
     uint64_t seed = 1;
     // G0 map host
@@ -611,6 +622,8 @@ int usage() {
                  "       alamo_headless --replay STREAM [--workers N] [--frames N] [--crc-out FILE] [--golden FILE] [--check-workers]\n"
                  "       alamo_headless --record-stream FILE [--seed S] [--frames N] [--synthetic P] [--ais K] [--latency F]\n"
                  "       alamo_headless --compare EXPECTED.crc ACTUAL.crc\n"
+                 "       alamo_headless --crc-convert IN.crc OUT.crc [--crc-checkpoint N] [--crc-keep T,T,...]\n"
+                 "       (any run with --crc-out FILE also takes --crc-checkpoint N [--crc-keep T,T,...]: write the checkpoint log)\n"
                  "       alamo_headless --map NAME [--game DIR] [--ticks N] [--workers W] [--seed S] [--no-ai] [--realtime]\n"
                  "                      [--record-orders FILE | --replay FILE] [--crc-out FILE] [--golden FILE] [--check-workers]\n"
                  "       alamo_headless --economy | --story (--game DIR | --data DIR) [--campaign NAME] [--ticks N] [--workers W]\n"
@@ -712,6 +725,24 @@ int compare_mode(const Options& opt) {
     return d.diverged ? 1 : 0;
 }
 
+int convert_mode(const Options& opt) {
+    alamo::CrcLog log;
+    std::string err;
+    if (!alamo::CrcLog::load(opt.convert_in, log, &err)) {
+        std::fprintf(stderr, "%s: %s\n", opt.convert_in.c_str(), err.c_str());
+        return 2;
+    }
+    const alamo_headless::CrcOutSpec& spec = alamo_headless::crc_out_spec();
+    const alamo::CrcLog out = log.checkpointed(spec.checkpoint != 0 ? spec.checkpoint : 64u, spec.keep);
+    if (!out.save(opt.convert_out, &err)) {
+        std::fprintf(stderr, "%s\n", err.c_str());
+        return 2;
+    }
+    std::printf("wrote %s (%zu of %zu records, checkpoint %u)\n", opt.convert_out.c_str(), out.records.size(), log.records.size(),
+                out.checkpoint);
+    return 0;
+}
+
 int replay_mode(const Options& opt) {
     cmd::CommandRecording rec;
     std::string err;
@@ -755,7 +786,7 @@ int replay_mode(const Options& opt) {
         run_one(opt.workers, log);
     }
     if (!opt.crc_out.empty()) {
-        if (!log.save(opt.crc_out, &err)) {
+        if (!alamo_headless::save_crc_log(log, opt.crc_out, &err)) {
             std::fprintf(stderr, "%s\n", err.c_str());
             return 2;
         }
@@ -801,6 +832,19 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--replay") opt.replay = next();
         else if (a == "--crc-out") opt.crc_out = next();
         else if (a == "--golden") opt.golden = next();
+        else if (a == "--crc-checkpoint") alamo_headless::crc_out_spec().checkpoint = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
+        else if (a == "--crc-keep") {
+            const std::string list = next();
+            size_t i0 = 0;
+            while (i0 <= list.size()) {
+                const size_t e = std::min(list.find(',', i0), list.size());
+                if (e > i0) alamo_headless::crc_out_spec().keep.push_back(std::strtoull(list.substr(i0, e - i0).c_str(), nullptr, 10));
+                i0 = e + 1;
+            }
+        } else if (a == "--crc-convert") {
+            opt.convert_in = next();
+            opt.convert_out = next();
+        }
         else if (a == "--check-workers") opt.check_workers = true;
         else if (a == "--record-stream") opt.record_stream = next();
         else if (a == "--seed") {
@@ -959,6 +1003,7 @@ static int headless_main(int argc, char** argv) {
 #endif
     }
     if (!opt.compare_a.empty()) return compare_mode(opt);
+    if (!opt.convert_in.empty()) return convert_mode(opt);
     if (!opt.record_stream.empty()) return record_stream_mode(opt);
     if (!opt.replay.empty()) return replay_mode(opt);
 

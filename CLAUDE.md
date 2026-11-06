@@ -80,6 +80,22 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
 
 ## Parallel work
 
-Agents split work by module folder: one agent owns one `engine/<module>/` folder and does not edit
-others. A change to `engine/core` public headers or the top-level CMake goes through the integrating
-agent. Subagent definitions for this split live in `.claude/agents/`.
+Real work is done per roadmap group by a `lane` agent (`.claude/agents/lane.md`; `/start-group <id>`, `/finish-group <id>`) in its
+own worktree. Lanes own a group, not a folder: two lanes must not edit the same files, and a PR names any golden that changed.
+A change to `engine/core` public headers or the top-level CMake goes through the integrating agent. Single-module
+`engine-module` agents remain for narrow side tasks. Definitions live in `.claude/agents/`.
+- Worktrees (2026-11-06): `tools\new_worktree.cmd <name> [--base main]` creates `.claude\worktrees\<name>` on `claude/<name>`, with
+  junctions to `Data`, `extracted`, `toolchain` and `roadmap-store`, and syncs the roadmap. Use ONE build tree per worktree
+  (`build_agent.cmd msvc wt "<modules>"` gives `build-wt-msvc`). After the PR merges, `tools\clean_worktrees.cmd` (dry run;
+  `--apply --only <name>`; `--trees` for idle build trees) removes merged, clean, pushed, idle worktrees, unlinking junctions
+  first. Engine: `tools/worktree/worktree_tool.py` (`--selftest`).
+- Claims (2026-11-06): `python roadmap-store/roadmap_store.py claim <group> --by <session>` before starting a group (24 h, `release` when
+  done), `claims` lists them, `batch [N]` prints ready groups whose `touches` do not overlap, for handing out a parallel batch.
+  Build records are batched: `record-build` no longer pushes by itself; `write`, `sync` and `flush` do. See `docs/ROADMAP_PROTOCOL.md`.
+- Stacks: branch lanes from `main`; stack a PR on another only for a true dependency, at most 2 deep, and merge the bottom first.
+- Golden CRC files (2026-11-06): `ALAMO_CRC 2` stores a checkpoint every 64 ticks instead of every tick, so a behaviour change is a
+  small diff. `--crc-out` still writes full logs; `--crc-checkpoint N` writes v2. Regenerate after an intended behaviour change with
+  `tools\regen_goldens.cmd` and say so in the PR. Format and workflow: `docs/status/golden-checkpoints.md`. Converting the existing
+  v1 goldens waits for PRs #79-#88 (`tools\goldens\convert_goldens.py --all --in-place --check`).
+- PR check without hosted CI: `tools\pr_check.cmd [PR] [--compiler msvc|clang|both] [--tests fast|all] [--post]`.
+- `tools\docs\split_phase4.py --check|--apply` moves dated `PHASE4.md` sections into `docs/status/` (not applied yet: PR #89 also reorganizes docs).

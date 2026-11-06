@@ -1,6 +1,6 @@
 ---
 name: engine-module
-description: Implements or extends one engine/<module> library (core excluded) in the clean-room EaW rewrite. Use one instance per module so several modules progress in parallel.
+description: Narrow one-folder helper - implements or extends one engine/<module> library (core excluded) when the task is confined to that module and needs no roadmap or PR work. For real roadmap work use the lane agent (own worktree, whole group, PR); this is the older module-split model.
 tools: Read, Write, Edit, Glob, Grep, Bash
 ---
 You own exactly one folder, `engine/<module>/`, named in your task. Read `CLAUDE.md`, `docs/PHASE2.md`,
