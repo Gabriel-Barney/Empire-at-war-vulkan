@@ -197,22 +197,23 @@ function(alamo_game_add_exe)
                                                  --saves-dir ${_smoke_out}/saveload_saves)
   set_tests_properties(alamo_game_smoke_saveload PROPERTIES TIMEOUT 1800 FIXTURES_SETUP alamo_game_smoke_saveload_run)
   # BM2a: the benchmark mode on the saveload smoke's saves (bench_check.cmake; skipped without them): fixed frames from the
-  # battle save twice (same CRC, identical PNGs), real time from the galactic save (frame times reported).
+  # battle save and from the galactic save, each twice (same CRC log, identical PNGs); real time from the galactic save
+  # twice (frame times reported, same CRC log).
   set(_bench_out ${_smoke_out}/bench)
   file(MAKE_DIRECTORY ${_bench_out})
-  foreach(_m fixed realtime)
-    if(_m STREQUAL "fixed")
-      set(_bench_save ${_smoke_out}/saveload_saves/smoke_battle.alsv)
-    else()
-      set(_bench_save ${_smoke_out}/saveload_saves/smoke_main.alsv)
-    endif()
-    add_test(NAME alamo_game_bench_${_m}
-             COMMAND ${CMAKE_COMMAND} -DGAME=$<TARGET_FILE:alamo_game> -DSAVE=${_bench_save} -DOUT=${_bench_out}/${_m} -DMODE=${_m}
-                     -P ${PROJECT_SOURCE_DIR}/engine/apps/game/bench_check.cmake)
-    set_tests_properties(alamo_game_bench_${_m} PROPERTIES TIMEOUT 1200 FIXTURES_REQUIRED alamo_game_smoke_saveload_run)
+  foreach(_case fixed:smoke_battle:fixed fixed_galactic:smoke_main:fixed realtime:smoke_main:realtime)
+    string(REPLACE ":" ";" _parts ${_case})
+    list(GET _parts 0 _name)
+    list(GET _parts 1 _save)
+    list(GET _parts 2 _m)
+    add_test(NAME alamo_game_bench_${_name}
+             COMMAND ${CMAKE_COMMAND} -DGAME=$<TARGET_FILE:alamo_game> -DSAVE=${_smoke_out}/saveload_saves/${_save}.alsv
+                     -DOUT=${_bench_out}/${_name} -DMODE=${_m} -P ${PROJECT_SOURCE_DIR}/engine/apps/game/bench_check.cmake)
+    set_tests_properties(alamo_game_bench_${_name} PROPERTIES TIMEOUT 1200 FIXTURES_REQUIRED alamo_game_smoke_saveload_run)
   endforeach()
   alamo_label_slow(alamo_game_smoke_skirmish alamo_game_smoke_campaign alamo_game_smoke_land alamo_game_smoke_screens
                    alamo_game_smoke_skirmish_golden alamo_game_smoke_campaign_golden alamo_game_smoke_land_golden
-                   alamo_game_smoke_screens_golden alamo_game_smoke_saveload alamo_game_bench_fixed alamo_game_bench_realtime)
+                   alamo_game_smoke_screens_golden alamo_game_smoke_saveload alamo_game_bench_fixed alamo_game_bench_fixed_galactic
+                   alamo_game_bench_realtime)
 endfunction()
 cmake_language(DEFER DIRECTORY ${PROJECT_SOURCE_DIR} CALL alamo_game_add_exe)

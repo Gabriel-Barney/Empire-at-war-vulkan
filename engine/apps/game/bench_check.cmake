@@ -1,5 +1,6 @@
 # BM2a: alamo_game benchmark mode on a saved game (ctest alamo_game_bench_fixed / alamo_game_bench_realtime).
 #   cmake -DGAME=<alamo_game> -DSAVE=<.alsv> -DOUT=<dir> -DMODE=fixed|realtime -P bench_check.cmake
+# Both modes: the two runs' CRC logs must be identical byte for byte.
 # fixed:    two fixed-frames runs (bm-smoke, 2 frames per tick, 60 ticks, a PNG every 10th counted frame) must both pass
 #           (presentation on/off check included), report the same final CRC and frame count, and write identical PNGs.
 # realtime: two real-time runs (bm-smoke, 90 ticks) must pass, report measured frames with frame times and the same
@@ -39,6 +40,15 @@ function(json_field report key out_var)
   set(${out_var} "${v}" PARENT_SCOPE)
 endfunction()
 
+# The two runs' per-tick CRC logs, byte for byte (not just the final value).
+function(compare_crc_logs)
+  file(SHA256 "${OUT}/a/run.crc" ca)
+  file(SHA256 "${OUT}/b/run.crc" cb)
+  if(NOT ca STREQUAL cb)
+    message(FATAL_ERROR "alamo_game bench ${MODE}: the two runs' CRC logs differ (${OUT}/a/run.crc vs ${OUT}/b/run.crc)")
+  endif()
+endfunction()
+
 bench_run(a ra)
 json_field("${ra}" result res_a)
 json_field("${ra}" frames frames_a)
@@ -60,6 +70,7 @@ if(MODE STREQUAL "realtime")
   if(NOT crc_a STREQUAL crc_b)
     message(FATAL_ERROR "alamo_game bench realtime: final CRC ${crc_a} vs ${crc_b}")
   endif()
+  compare_crc_logs()
   message(STATUS "alamo_game bench realtime: OK (${frames_a} frames, median ${median_a} ms, CRC ${crc_a} in both runs)")
   return()
 endif()
@@ -73,6 +84,9 @@ endif()
 if(NOT crc_a STREQUAL crc_b)
   message(FATAL_ERROR "alamo_game bench fixed: final CRC ${crc_a} vs ${crc_b}")
 endif()
+compare_crc_logs()
+json_field("${ra}" unsettled_frames unsettled_a)
+json_field("${rb}" unsettled_frames unsettled_b)
 file(GLOB pngs_a RELATIVE "${OUT}/a" "${OUT}/a/bench_*.png")
 file(GLOB pngs_b RELATIVE "${OUT}/b" "${OUT}/b/bench_*.png")
 list(SORT pngs_a)
@@ -92,4 +106,4 @@ endforeach()
 if(diff)
   message(FATAL_ERROR "alamo_game bench fixed: frames differ between the two runs: ${diff}")
 endif()
-message(STATUS "alamo_game bench fixed: OK (${n} identical PNGs over 120 counted frames, CRC ${crc_a})")
+message(STATUS "alamo_game bench fixed: OK (${n} identical PNGs over 120 counted frames, CRC ${crc_a}, unsettled frames redrawn ${unsettled_a} / ${unsettled_b})")

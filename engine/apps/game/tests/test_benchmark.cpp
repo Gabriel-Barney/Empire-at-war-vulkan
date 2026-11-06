@@ -190,11 +190,13 @@ void test_report() {
     r.frame_ms = frame_time_stats(std::vector<float>{1.0f, 2.0f, 3.0f});
     r.autopilot = {"load screen: Begin at tick 5"};
     r.presentation_check = "match";
+    r.device = "GPU";
     const std::string j = bench_report_json(r);
     CHECK(j.rfind("{\n  \"alamo_game_benchmark\": 1,\n  \"result\": \"ok\",", 0) == 0);
     CHECK(j.find("\"error\"") == std::string::npos);  // only when failed
     CHECK(j.find("\"save\": \"C:\\\\saves\\\\a \\\"b\\\".alsv\"") != std::string::npos);
     CHECK(j.find("\"final_crc\": \"00000000000000ab\"") != std::string::npos);
+    CHECK(j.find("\"device\": \"GPU\"") != std::string::npos);
     CHECK(j.find("\"frame_ms\": {\"count\": 3, \"mean\": 2.0000, \"median\": 2.0000, \"p99\": 3.0000, \"worst\": 3.0000, \"total\": 6.0000}") !=
           std::string::npos);
     CHECK(j.find("\"autopilot\": [\"load screen: Begin at tick 5\"]\n}\n") != std::string::npos);

@@ -145,14 +145,20 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   intro movies, the attract demo, the video options file and display mode changes; audio = null backend; the unsynced
   presentation generator is seeded fixed. What waits for the player is answered in the frame it appears: battle prompt =
   Begin (fight, drawn), battle load screen = Begin, battle-end screen = Continue, story dialog = closed, full-screen movie
-  = finished at once (STORY_MOVIE_DONE sent), advisor loop = stopped, a saved pause = lifted (all listed in the report's
-  `autopilot`). The session ending (skirmish over, campaign end) before the target ticks fails the run.
+  = finished at once (STORY_MOVIE_DONE sent), advisor loop = stopped, story summary = closed, a saved pause = lifted (all
+  listed in the report's `autopilot`); a retry box (mission lost) or the session ending (skirmish over, campaign end)
+  before the target ticks fails the run. Presentation timing that reaches the sim is tied to ticks so real-time runs keep
+  the same CRC: the audio clock advances 1/30 s per tick that ran (STORY_SPEECH_DONE), and every story UI notification
+  raised between two ticks is submitted just before the next tick. Only frames that were actually drawn count. Known
+  residual risk: presentation state that advances per drawn frame and not per counted frame would break fixed-frames
+  identity on a redraw (the galactic view's own particles are stepped with a zero time on a redraw); the tests check
+  identical PNGs from a battle save and a galactic save.
   [port] presets (`bench_presets`): `bm-low` 1280x720 detail 0, no TAA / soft shadows / heat / bloom; `bm-medium` 1920x1080
   detail 40, no TAA, 4x anisotropy; `bm-high` (default) 1920x1080 detail 75, TAA Medium (63), 8x; `bm-ultra` 1920x1080
   detail 100, TAA Medium, ambient occlusion, 16x; `bm-smoke` 640x360 detail 75, no TAA (tests). All: V-sync off, no cap,
   gamma 50, null audio; `--width` / `--height` win over the preset's size. [port] fixed-frames mode turns TAA off because
   its history would include the redrawn unsettled frames. Tests: `alamo_game_benchmark_tests` (data-free), and on the FoC
-  data `alamo_game_bench_fixed` / `alamo_game_bench_realtime` (on the saveload smoke's saves: two fixed-frames runs draw
-  identical PNGs and the same CRC; two real-time runs from the galactic save report frame times and the same CRC). Left for BM2 (group bm2): the scenario file as
+  data `alamo_game_bench_fixed` / `_fixed_galactic` / `_realtime` (on the saveload smoke's saves: two fixed-frames runs
+  from the battle save and two from the galactic save draw identical PNGs and write identical CRC logs; two real-time runs from the galactic save report frame times and the same CRC). Left for BM2 (group bm2): the scenario file as
   the source of `BenchmarkOptions` and of the recording, the tick-driven camera path, GPU timer scopes and the image-match
   check.

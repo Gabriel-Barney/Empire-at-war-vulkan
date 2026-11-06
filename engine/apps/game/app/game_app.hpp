@@ -593,6 +593,11 @@ public:
         uint32_t settled_run = 0, unsettled_run = 0;
         uint64_t warmup_frames = 0, unsettled = 0, excluded = 0, rt_ticks = 0, start_tick = 0;
         bool counted = false, ticked = false, tick_missed = false;  // the last frame: counted / ran a tick / a due tick did not run
+        bool drawn = false;     // render_frame recorded and submitted a frame (not minimized / out of date)
+        uint64_t retry_boxes = 0;  // retry_boxes_ at the start: a new one = the mission was lost
+        // Story UI notifications (STORY_SPEECH_DONE, battle_end_closed, ...) wait here and go to the sim just before the
+        // next tick, whichever frame raised them (the frame count between ticks varies).
+        std::vector<sim::StoryUiNotification> story_pending;
         std::vector<float> frame_ms, render_ms, sim_ms;
         Clock::time_point t_load{}, t_start{}, t_progress{};  // load start, measuring start, last measured frame
         double wall = 0.0;

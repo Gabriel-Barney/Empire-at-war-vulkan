@@ -7,7 +7,10 @@
 // video options file: the preset sets the window size, present mode, frame cap and video options. What would wait for the
 // player is answered at once, in the frame it appears (so the same tick in every run): the battle prompt = Begin (the
 // battle is fought and drawn), the battle load screen = Begin, the battle-end screen = Continue, a story dialog = closed,
-// a full-screen movie = finished (STORY_MOVIE_DONE sent), an advisor loop = stopped; a saved pause is lifted.
+// a full-screen movie = finished (STORY_MOVIE_DONE sent), an advisor loop = stopped, a story summary = closed; a saved pause
+// is lifted; a retry box (mission lost) fails the run. Sim-facing presentation timing is tied to ticks: the audio clock
+// advances 1/30 s per tick (a speech's STORY_SPEECH_DONE), and every story UI notification raised between two ticks is sent
+// just before the next one (bench_step_sim).
 //   Phases: Loading (the save loads, its load screen) -> Settling (gameplay frames, the sim holds until settle_frames
 //   settled frames in a row) -> Measuring (the measured ticks) -> Done. Real-time: the original pacing
 //   (GameSession::loop_iteration, 30 ticks/s on the wall clock), every gameplay frame measured. Fixed frames: one tick per
@@ -75,6 +78,7 @@ bool App::bench_start() {
         bench_fail("the save " + opt_.bench.save + " did not load");
         return true;  // init succeeded: run() writes the failed report
     }
+    bench_.retry_boxes = retry_boxes_;
     if (session_->pause_requested()) {  // a game saved paused: the benchmark runs it
         toggle_pause();
         bench_.autopilot.push_back("saved pause lifted at tick " + std::to_string(session_->host().frame()));
@@ -106,8 +110,16 @@ void App::bench_sample(const FrameTimes& closed) {
 
 void App::bench_step_sim() {
     if (!bench_measuring() || !session_) return;  // the warm-up holds the sim
+    // The story UI notifications raised since the last tick, in order, right before the next one (no tick may run between
+    // a notification and its submission, and none does: this is the only place that ticks).
+    const auto flush_story = [this] {
+        for (const sim::StoryUiNotification& n : bench_.story_pending)
+            if (session_->notify_story_ui(n)) ++story_ui_sent_;
+        bench_.story_pending.clear();
+    };
     if (bench_fixed()) {
         if (!bench_.clock.tick_due() || bench_.clock.finished(opt_.bench.ticks)) return;
+        flush_story();
         if (session_->tick()) {
             bench_.clock.ticked();
             bench_.ticked = true;
@@ -119,6 +131,7 @@ void App::bench_step_sim() {
     }
     if (bench_.rt_ticks >= opt_.bench.ticks) return;
     const auto now = static_cast<uint32_t>(ms_since(t0_));
+    flush_story();  // the host frame stays put until a tick, so "now" and "just before the next tick" are the same
     if (session_->loop_iteration(now)) {
         prev_tick_ms_ = last_tick_ms_;
         last_tick_ms_ = now;
@@ -152,6 +165,17 @@ void App::bench_autopilot() {
         handle_screen_actions({a});
         note("battle-end screen: Continue");
     }
+    if (story_summary_open_ && ui_.gui.find(ui::dlg::kStorySummary)) {  // a Story_Dialog_Popup chapter (holds the sim)
+        ui_.gui.close(ui::dlg::kStorySummary);
+        ui::ScreenAction a;
+        a.kind = ui::ScreenAction::Kind::StorySummaryClosed;
+        handle_screen_actions({a});
+        note("story summary closed");
+    }
+    if (retry_boxes_ != bench_.retry_boxes) {  // Activate_Retry_Dialog: the mission was lost - no answer keeps the run valid
+        bench_fail("the mission was lost (retry box) at tick " + std::to_string(session_->host().frame()));
+        return;
+    }
     if (ui_.gui.find(ui::dlg::kStory)) {
         ui_.gui.close(ui::dlg::kStory);
         note("story dialog closed");
@@ -175,7 +199,7 @@ void App::bench_frame_end() {
     }
     const bool gameplay = (screen_ == Screen::Galactic || screen_ == Screen::Battle) && !ui_.load.is_open() && !battle_view_pending_ &&
                           load_intro_frames_ == 0 && !paused_ && !battle_end_open_ && !story_summary_open_ && !ui_.gui.has_focus();
-    const bool settled = gameplay && present_settled() && !b.tick_missed;
+    const bool settled = gameplay && b.drawn && present_settled() && !b.tick_missed;
     if (b.phase == P::Loading || b.phase == P::Settling) {
         ++b.warmup_frames;
         if (gameplay) b.phase = P::Settling;
@@ -207,8 +231,8 @@ void App::bench_frame_end() {
                 bench_fail(std::to_string(b.unsettled_run) + " unsettled frames in a row at tick " + std::to_string(session_->host().frame()));
         }
     } else {
-        counted = gameplay;
-        if (!gameplay) ++b.excluded;
+        counted = gameplay && b.drawn;
+        if (!counted) ++b.excluded;
     }
     b.counted = counted;
     if (counted) b.t_progress = Clock::now();
@@ -232,6 +256,7 @@ int App::bench_finish() {
     r.mode = bench_mode_name(opt_.bench.mode);
     r.preset = opt_.bench.preset;
     r.save = opt_.bench.save;
+    r.device = ctx_.caps().name;
     r.width = targets_.width;
     r.height = targets_.height;
     const VkPresentModeKHR pm = sc_.present_mode();

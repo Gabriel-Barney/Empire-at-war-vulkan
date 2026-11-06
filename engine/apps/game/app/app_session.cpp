@@ -399,8 +399,10 @@ void App::story_ui_step() {
             v.corruption_planet = d->planet_id;
         story_ui_.observe(v);
     }
-    for (const sim::StoryUiNotification& n : story_ui_.take())
-        if (session_->notify_story_ui(n)) ++story_ui_sent_;
+    for (const sim::StoryUiNotification& n : story_ui_.take()) {
+        if (bench_active()) bench_.story_pending.push_back(n);  // BM2a: sent before the next tick (bench_step_sim)
+        else if (session_->notify_story_ui(n)) ++story_ui_sent_;
+    }
 }
 
 void App::shutdown() {

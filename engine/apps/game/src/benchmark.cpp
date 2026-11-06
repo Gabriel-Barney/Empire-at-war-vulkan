@@ -192,6 +192,7 @@ std::string bench_report_json(const BenchReport& r) {
     str("mode", r.mode);
     str("preset", r.preset);
     str("save", r.save);
+    str("device", r.device);
     val("width", std::to_string(r.width));
     val("height", std::to_string(r.height));
     str("present_mode", r.present_mode);

@@ -112,6 +112,7 @@ struct BenchReport {
     std::string mode, preset, save, result = "ok", error;  // result "ok" / "failed" (error says why)
     std::string present_mode;                              // the swapchain's mode in use ("immediate" / "mailbox" / "fifo")
     std::string screen;                                    // where the run ended ("galactic" / "battle" / ...)
+    std::string device;                                    // the Vulkan device name
     uint32_t width = 0, height = 0, frames_per_tick = 0;
     int32_t frame_cap = 0;
     bool taa = false;

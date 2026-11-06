@@ -12,6 +12,7 @@ bool App::present_settled() const {
 }
 
 bool App::render_frame() {
+    bench_.drawn = false;  // BM2a: set once this frame is submitted
     if (!sc_.valid() || win_.minimized()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
         return true;
@@ -305,6 +306,7 @@ bool App::render_frame() {
     fs.waits = {waits, nw};
     fs.signals = {&signal, 1};
     if (!gpu_.ring.end_frame(*f, fs)) return false;
+    bench_.drawn = true;
     const auto wait1 = Clock::now();
     const rhi::SwapchainStatus ps = sc_.present(image);
     ft_.wait += static_cast<float>(ms_since(wait1));
@@ -536,7 +538,13 @@ void App::frame() {
         audio_.set_listener({cp.eye.x, cp.eye.y, cp.eye.z}, {cp.target.x, cp.target.y, cp.target.z}, cinematic);
     }
     audio_flags();  // OI host: modal / GUI-only / attract
-    audio_.update(dt_);
+    // BM2a: in a benchmark the audio clock runs on the sim (1/30 s per tick that ran this frame) and a speech's end is
+    // taken now, before any later tick, so its STORY_SPEECH_DONE goes in before the next tick in every run.
+    audio_.update(bench_active() ? (bench_.ticked ? 1.0f / 30.0f : 0.0f) : dt_);
+    if (bench_active() && session_ && !demo_session()) {
+        for (const std::string& e : audio_.take_speech_done()) story_ui_.speech_done(e);
+        for (const sim::StoryUiNotification& n : story_ui_.take()) bench_.story_pending.push_back(n);
+    }
     ++frames_;
     if (frames_ % 60 == 0 && !opt_.hidden) {
         char title[256];
