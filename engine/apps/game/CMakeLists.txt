@@ -25,6 +25,7 @@ add_library(alamo_game_core STATIC
   src/mod_check.cpp
   src/benchmark.cpp
   src/benchmark_scenario.cpp
+  src/benchmark_save.cpp
 )
 target_include_directories(alamo_game_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(alamo_game_core PUBLIC alamo_sim alamo_vfs alamo_data alamo_core alamo_engine_flags)

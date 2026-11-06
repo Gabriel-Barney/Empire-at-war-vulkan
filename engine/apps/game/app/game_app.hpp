@@ -25,6 +25,7 @@
 #include "alamo/game/battle_fx.hpp"
 #include "alamo/game/battle_summary.hpp"
 #include "alamo/game/benchmark.hpp"
+#include "alamo/game/benchmark_save.hpp"
 #include "alamo/game/benchmark_scenario.hpp"
 #include "alamo/game/game_audio_host.hpp"
 #include "alamo/game/game_controls.hpp"
@@ -156,6 +157,7 @@ struct Options {
     // BM2a: --benchmark realtime|fixed and the --bench-* flags (benchmark.hpp; app_benchmark.cpp). size_set: --width /
     // --height given (they win over the preset's window size).
     BenchmarkOptions bench;
+    BenchNewSave bench_new;  // BM3: --bench-new-save / --bench-maps (a render-free mode that never opens a window)
     bool size_set = false;
 };
 
@@ -609,6 +611,7 @@ public:
         std::vector<float> frame_ms, render_ms, sim_ms;
         Clock::time_point t_load{}, t_start{}, t_progress{};  // load start, measuring start, last measured frame
         double wall = 0.0;
+        double load_ms = 0.0;   // bm3: the load start to the first measured tick
         bool failed = false;
         std::string error;
         std::vector<std::string> autopilot;
@@ -625,6 +628,7 @@ public:
     void bench_autopilot();     // after the sim: answers what would wait for the player
     void bench_frame_end();     // after render: settle / count / finish
     void bench_fail(std::string why);
+    void bench_trace();         // BM3 --bench-trace: the live objects per owner (count, centroid, extent) of the tick just run
     float bench_alpha() const;
     double bench_now() const;
     int bench_finish();         // report, CRC log, presentation check; the exit code

@@ -70,6 +70,7 @@ struct BenchmarkOptions {
     std::string crc_out;                                // --bench-crc-out FILE: the run's per-tick CRC log (CrcLog::save)
     std::string png_dir;                                // --bench-png-dir DIR: PNG of every Nth counted frame
     uint32_t png_every = 0;                             // --bench-png-every N (0 = none)
+    uint32_t trace_every = 0;                           // --bench-trace N (BM3): print the live objects per owner every N measured ticks (scene authoring)
     bool verify = true;                                 // --bench-no-verify: skip the presentation on/off replay check
     bool active() const { return mode != BenchMode::Off; }
     bool fixed() const { return mode == BenchMode::FixedFrames; }
@@ -146,7 +147,19 @@ struct BenchReport {
     bool gpu_timestamps = false;
     uint64_t gpu_frames = 0;
     std::vector<std::pair<std::string, FrameTimeStats>> gpu_ms;
+    // bm3 t04: load and first-use cost. load_ms = from the save's load start to the first measured tick (the load screen, the
+    // warm-up frames and every pipeline / model / texture the first view waits for); early_ms = the first kEarlyFrames counted
+    // frames; hitches = counted frames over hitch_threshold_ms (4 x the median, at least 25 ms): their count and the worst
+    // kMaxHitches as {frame index, ms}, worst first.
+    double load_ms = 0;
+    FrameTimeStats early_ms;
+    double hitch_threshold_ms = 0;
+    uint64_t hitch_count = 0;
+    std::vector<std::pair<uint64_t, float>> hitches;
 };
+inline constexpr size_t kEarlyFrames = 300, kMaxHitches = 8;
+// Fills early_ms, hitch_threshold_ms, hitch_count and hitches from the counted frames' times (frame_ms.median must be set).
+void bench_hitches(std::span<const float> frame_ms, BenchReport& r);
 std::string bench_report_json(const BenchReport& r);
 
 }  // namespace alamo::game

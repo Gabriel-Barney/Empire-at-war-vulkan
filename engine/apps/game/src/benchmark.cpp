@@ -104,9 +104,9 @@ int parse_benchmark_arg(std::span<const std::string> args, size_t& i, BenchmarkO
         o.verify = false;
         return 1;
     }
-    static constexpr std::array<std::string_view, 11> kValued = {"--benchmark",      "--bench-save",        "--bench-preset",  "--bench-ticks",
+    static constexpr std::array<std::string_view, 12> kValued = {"--benchmark",      "--bench-save",        "--bench-preset",  "--bench-ticks",
                                                                  "--bench-frames-per-tick", "--bench-settle", "--bench-max-unsettled",
-                                                                 "--bench-report",   "--bench-crc-out",     "--bench-png-dir", "--bench-png-every"};
+                                                                 "--bench-report",   "--bench-crc-out",     "--bench-png-dir", "--bench-png-every", "--bench-trace"};
     if (std::find(kValued.begin(), kValued.end(), std::string_view(a)) == kValued.end()) return 0;
     if (i + 1 >= args.size()) return fail("needs a value");
     const std::string& v = args[++i];
@@ -132,6 +132,7 @@ int parse_benchmark_arg(std::span<const std::string> args, size_t& i, BenchmarkO
         else if (a == "--bench-frames-per-tick") o.frames_per_tick = static_cast<uint32_t>(n);
         else if (a == "--bench-settle") o.settle_frames = static_cast<uint32_t>(n);
         else if (a == "--bench-max-unsettled") o.max_unsettled = static_cast<uint32_t>(n);
+        else if (a == "--bench-trace") o.trace_every = static_cast<uint32_t>(n);
         else o.png_every = static_cast<uint32_t>(n);  // --bench-png-every
     }
     return 1;
@@ -171,6 +172,20 @@ FrameTimeStats frame_time_stats(std::span<const float> ms) {
     s.p99 = rank(99.0);
     s.worst = static_cast<double>(v.back());
     return s;
+}
+
+void bench_hitches(std::span<const float> frame_ms, BenchReport& r) {
+    r.early_ms = frame_time_stats(frame_ms.first(std::min(frame_ms.size(), kEarlyFrames)));
+    r.hitch_threshold_ms = std::max(4.0 * r.frame_ms.median, 25.0);
+    r.hitch_count = 0;
+    r.hitches.clear();
+    for (size_t k = 0; k < frame_ms.size(); ++k)
+        if (static_cast<double>(frame_ms[k]) > r.hitch_threshold_ms) {
+            ++r.hitch_count;
+            r.hitches.emplace_back(k, frame_ms[k]);
+        }
+    std::stable_sort(r.hitches.begin(), r.hitches.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    if (r.hitches.size() > kMaxHitches) r.hitches.resize(kMaxHitches);
 }
 
 std::string bench_report_json(const BenchReport& r) {
@@ -231,6 +246,15 @@ std::string bench_report_json(const BenchReport& r) {
         gpu += ": " + stats_json(r.gpu_ms[k].second);
     }
     val("gpu_ms", gpu + "}");
+    // bm3 t04: load time and the first frames' hitches.
+    val("load_ms", num(r.load_ms));
+    val("early_ms", stats_json(r.early_ms));
+    std::string hit = "{\"threshold_ms\": " + num(r.hitch_threshold_ms) + ", \"count\": " + std::to_string(r.hitch_count) + ", \"worst\": [";
+    for (size_t k = 0; k < r.hitches.size(); ++k) {
+        if (k) hit += ", ";
+        hit += "[" + std::to_string(r.hitches[k].first) + ", " + num(static_cast<double>(r.hitches[k].second)) + "]";
+    }
+    val("hitches", hit + "]}");
     o += "  \"autopilot\": [";
     for (size_t k = 0; k < r.autopilot.size(); ++k) {
         if (k) o += ", ";
