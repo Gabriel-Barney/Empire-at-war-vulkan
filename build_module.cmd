@@ -18,6 +18,8 @@ set LOG=logs\module_%~1.txt
 call toolchain\msvc\setup_x64.bat >nul
 call "%~dp0tools\test_env.cmd"
 call "%~dp0tools\cache_env.cmd"
+rem Tests: -j 4 unless ALAMO_CTEST_JOBS is set (several agents share the machine).
+if not defined ALAMO_CTEST_JOBS set ALAMO_CTEST_JOBS=4
 set PATH=%~dp0toolchain\venv\Scripts;%PATH%
 > %LOG% (
   cmake -S . -B build-%~1 -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=cl "-DALAMO_ENGINE_MODULES=!MODULES!" 2>&1
@@ -28,11 +30,12 @@ set PATH=%~dp0toolchain\venv\Scripts;%PATH%
   if not exist build-%~1\tmp mkdir build-%~1\tmp
   set "TMP=%~dp0build-%~1\tmp"
   set "TEMP=%~dp0build-%~1\tmp"
-  ctest --test-dir build-%~1 --output-on-failure -j 4 !SLOWFILTER! -R "%~1" 2>&1
+  ctest --test-dir build-%~1 --output-on-failure -j %ALAMO_CTEST_JOBS% !SLOWFILTER! -L "^%~1$" --no-tests=error 2>&1
   echo ctest exit !ERRORLEVEL!
 )
 echo MODULE_DONE>> %LOG%
-python roadmap-store\roadmap_store.py record-build msvc build-%~1 %LOG%
+rem Inner-loop builds are not recorded (see build_agent.cmd); set ALAMO_RECORD_BUILD=1 to record this run on the roadmap.
+if "%ALAMO_RECORD_BUILD%"=="1" python roadmap-store\roadmap_store.py record-build msvc build-%~1 %LOG%
 python tools\lint\build_summary.py %LOG%
 echo full log: %LOG%
 if defined ALAMO_FULL_LOG type %LOG%

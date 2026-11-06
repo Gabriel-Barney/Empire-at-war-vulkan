@@ -12,6 +12,8 @@ if defined DIRTY (
   echo %DATE% %TIME% !SHA! skipped: uncommitted changes>> logs\gate_history.txt
   exit /b 3
 )
+rem The nightly run is the only one that includes the tests labelled "nightly" (engine/CMakeLists.txt).
+set ALAMO_TESTS=all
 call "%~dp0..\build_gate.cmd"
 set RC=!ERRORLEVEL!
 echo %DATE% %TIME% !SHA! gate exit !RC!>> logs\gate_history.txt

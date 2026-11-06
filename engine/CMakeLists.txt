@@ -81,6 +81,18 @@ function(alamo_label_slow)
   endforeach()
 endfunction()
 
+# Nightly tier (2026-11-06): tests with the ctest label "nightly" repeat coverage the per-change gate already has (today the 1- and
+# 16-worker runs of the long worker-count checks, which add nothing the 0 / 4 / machine-default runs do not show on most edits). The
+# gate scripts (build_msvc / build_clang / build_asan / build_gate) skip them (ctest -LE nightly); tools\gate_scheduled.cmd, the
+# nightly task, and `set ALAMO_TESTS=all` run everything. Labelling a test that does not exist is a no-op.
+function(alamo_label_nightly)
+  foreach(_t IN LISTS ARGN)
+    if(TEST ${_t})
+      set_property(TEST ${_t} APPEND PROPERTY LABELS nightly)
+    endif()
+  endforeach()
+endfunction()
+
 # Worker-count check (OPT3 t07; docs/PHASE4.md "Worker-count check"): one scenario at 0 / 1 / 4 / 16 workers and the
 # machine default (hardware threads - 1), per-tick CRCs compared. One ctest entry per count so a long run's counts go side
 # by side under ctest -j: <name> runs `--workers 0 --crc-out <bin>/<name>_w0.crc` (FIXTURES_SETUP <name>_w0) and
@@ -90,23 +102,35 @@ endfunction()
 #       [SETUP_ARGS arg...]   extra args for the 0-worker entry only (e.g. --golden <checked-in file>, an --expect check)
 #       [CHECK_ARGS arg...]   extra args for the other entries only
 #       [WORKERS n...]        counts besides 0 (default 1 4 16 and the machine default; duplicates and 0 dropped)
+#       [NIGHTLY_WORKERS n...] counts that also run but carry the label "nightly" (see above); default with SLOW and no WORKERS: 1 16
+#                             (then WORKERS defaults to 4 and the machine default). Ignored counts already in WORKERS.
 #       [TIMEOUT s] [SLOW]    TIMEOUT for every entry; SLOW labels them all "slow" (do it for runs over ~5 s)
 #       [PROPERTIES p v...])  more test properties for every entry (e.g. SKIP_RETURN_CODE 77)
 # More entries can compare against the same log: FIXTURES_REQUIRED <name>_w0 and --golden <bin>/<name>_w0.crc
 # (the path is also in <name>_CRC in the caller's scope). For short scenarios the in-process form is
 # alamo::jobs::check_worker_counts() (engine/jobs crc_recorder.hpp).
 function(alamo_add_worker_count_check name)
-  cmake_parse_arguments(PARSE_ARGV 1 _wc "SLOW" "TIMEOUT" "COMMAND;SETUP_ARGS;CHECK_ARGS;WORKERS;PROPERTIES")
+  cmake_parse_arguments(PARSE_ARGV 1 _wc "SLOW" "TIMEOUT" "COMMAND;SETUP_ARGS;CHECK_ARGS;WORKERS;NIGHTLY_WORKERS;PROPERTIES")
   if(NOT _wc_COMMAND)
     message(FATAL_ERROR "alamo_add_worker_count_check(${name}): COMMAND is required")
   endif()
+  cmake_host_system_information(RESULT _cores QUERY NUMBER_OF_LOGICAL_CORES)
+  math(EXPR _default "${_cores} - 1")
   if(NOT _wc_WORKERS)
-    cmake_host_system_information(RESULT _cores QUERY NUMBER_OF_LOGICAL_CORES)
-    math(EXPR _default "${_cores} - 1")
-    set(_wc_WORKERS 1 4 16 ${_default})
+    if(_wc_SLOW AND NOT _wc_NIGHTLY_WORKERS)
+      set(_wc_WORKERS 4 ${_default})
+      set(_wc_NIGHTLY_WORKERS 1 16)
+    else()
+      set(_wc_WORKERS 1 4 16 ${_default})
+    endif()
   endif()
   list(REMOVE_DUPLICATES _wc_WORKERS)
   list(REMOVE_ITEM _wc_WORKERS 0)
+  list(REMOVE_DUPLICATES _wc_NIGHTLY_WORKERS)
+  list(REMOVE_ITEM _wc_NIGHTLY_WORKERS 0)
+  foreach(_w IN LISTS _wc_WORKERS)
+    list(REMOVE_ITEM _wc_NIGHTLY_WORKERS ${_w})
+  endforeach()
   set(_crc ${CMAKE_CURRENT_BINARY_DIR}/${name}_w0.crc)
   set(_props ${_wc_PROPERTIES})
   if(_wc_TIMEOUT)
@@ -117,15 +141,35 @@ function(alamo_add_worker_count_check name)
   endif()
   add_test(NAME ${name} COMMAND ${_wc_COMMAND} --workers 0 --crc-out ${_crc} ${_wc_SETUP_ARGS})
   set_tests_properties(${name} PROPERTIES FIXTURES_SETUP ${name}_w0 ${_props})
-  foreach(_w IN LISTS _wc_WORKERS)
+  foreach(_w IN LISTS _wc_WORKERS _wc_NIGHTLY_WORKERS)
     add_test(NAME ${name}_w${_w} COMMAND ${_wc_COMMAND} --workers ${_w} --golden ${_crc} ${_wc_CHECK_ARGS})
     set_tests_properties(${name}_w${_w} PROPERTIES FIXTURES_REQUIRED ${name}_w0 ${_props})
   endforeach()
+  foreach(_w IN LISTS _wc_NIGHTLY_WORKERS)
+    alamo_label_nightly(${name}_w${_w})
+  endforeach()
   set(${name}_CRC ${_crc} PARENT_SCOPE)
+endfunction()
+
+# Module labels (2026-11-06): every test gets the label of the engine module whose folder (or a subfolder) created it, so
+# `ctest -L "^<module>$"` runs a module's tests (build_module.cmd does) instead of guessing from test names. Needs the DIRECTORY
+# form of set_property(TEST) / the directory property TESTS (CMake 3.28+; older CMake just skips the labels).
+function(alamo_label_module_tests dir module)
+  get_property(_tests DIRECTORY ${dir} PROPERTY TESTS)
+  foreach(_t IN LISTS _tests)
+    set_property(TEST ${_t} DIRECTORY ${dir} APPEND PROPERTY LABELS ${module})
+  endforeach()
+  get_property(_subdirs DIRECTORY ${dir} PROPERTY SUBDIRECTORIES)
+  foreach(_d IN LISTS _subdirs)
+    alamo_label_module_tests(${_d} ${module})
+  endforeach()
 endfunction()
 
 foreach(m core vfs data jobs galactic objects anim commands tactical lua ai assets rhi shaderxlat materials terrain render ui audio video apps)
   if(m IN_LIST ALAMO_ENGINE_MODULES AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${m}/CMakeLists.txt)
     add_subdirectory(${m})
+    if(NOT CMAKE_VERSION VERSION_LESS 3.28)
+      alamo_label_module_tests(${CMAKE_CURRENT_SOURCE_DIR}/${m} ${m})
+    endif()
   endif()
 endforeach()

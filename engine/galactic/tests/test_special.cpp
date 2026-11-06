@@ -40,7 +40,7 @@ static int g_checks = 0;
     do {                                                             \
         ++g_checks;                                                  \
         if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
+            std::printf("FAIL %s:%d: %s\n", __builtin_FILE(), __LINE__, #c); \
             ++g_fail;                                                \
         }                                                            \
     } while (0)

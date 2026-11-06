@@ -17,6 +17,11 @@ set CMAKE=%TC%\venv\Scripts\cmake.exe
 set CTEST=%TC%\venv\Scripts\ctest.exe
 call "%~dp0tools\test_env.cmd"
 call "%~dp0tools\cache_env.cmd"
+rem Tests (2026-11-06): -j defaults to the logical core count (ALAMO_CTEST_JOBS overrides; the parallel gate sets it per stage). The
+rem nightly-labelled repeats (engine/CMakeLists.txt) are skipped unless ALAMO_TESTS=all (tools\gate_scheduled.cmd sets it).
+if not defined ALAMO_CTEST_JOBS set ALAMO_CTEST_JOBS=%NUMBER_OF_PROCESSORS%
+set NIGHTLY_FILTER=-LE nightly
+if /i "%ALAMO_TESTS%"=="all" set NIGHTLY_FILTER=
 > logs\clang_configure.txt (
   "%TC%\llvm\bin\clang++.exe" --version 2>&1
   rem -U drops a cached module list so the full build always gets every module (engine/CMakeLists.txt default).
@@ -31,10 +36,11 @@ call "%~dp0tools\cache_env.cmd"
   if not exist build-clang\tmp mkdir build-clang\tmp
   set "TMP=%~dp0build-clang\tmp"
   set "TEMP=%~dp0build-clang\tmp"
-  "%CTEST%" --test-dir build-clang --output-on-failure --output-junit "%~dp0build-clang\ctest_junit.xml" -j 8 2>&1
+  "%CTEST%" --test-dir build-clang --output-on-failure --output-junit "%~dp0build-clang\ctest_junit.xml" -j %ALAMO_CTEST_JOBS% %NIGHTLY_FILTER% 2>&1
   echo ctest exit !ERRORLEVEL!
   python tools\lint\ctest_skips.py "%~dp0build-clang\ctest_junit.xml"
 )
 echo BUILD_DONE>> logs\clang_configure.txt
 python tools\lint\build_summary.py logs\clang_configure.txt logs\clang_build.txt
-python roadmap-store\roadmap_store.py record-build clang build-clang logs\clang_configure.txt logs\clang_build.txt
+rem The parallel gate (build_gate.cmd) sets ALAMO_DEFER_RECORD and records the stages itself, one after another.
+if not defined ALAMO_DEFER_RECORD python roadmap-store\roadmap_store.py record-build clang build-clang logs\clang_configure.txt logs\clang_build.txt

@@ -73,7 +73,7 @@ int g_fail = 0;
 #define CHECK(c)                                                         \
     do {                                                                 \
         if (!(c)) {                                                      \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);     \
+            std::printf("FAIL %s:%d: %s\n", __builtin_FILE(), __LINE__, #c);     \
             ++g_fail;                                                    \
         }                                                                \
     } while (0)
@@ -81,7 +81,7 @@ int g_fail = 0;
     do {                                                                                                  \
         const float va_ = (a), vb_ = (b);                                                                 \
         if (!(va_ == vb_)) {                                                                              \
-            std::printf("FAIL %s:%d: %s == %s (%.9g vs %.9g)\n", __FILE__, __LINE__, #a, #b, static_cast<double>(va_), \
+            std::printf("FAIL %s:%d: %s == %s (%.9g vs %.9g)\n", __builtin_FILE(), __LINE__, #a, #b, static_cast<double>(va_), \
                         static_cast<double>(vb_));                                                        \
             ++g_fail;                                                                                     \
         }                                                                                                 \
@@ -90,7 +90,7 @@ int g_fail = 0;
     do {                                                                                                  \
         const double va_ = (a), vb_ = (b);                                                                \
         if (!(std::fabs(va_ - vb_) <= (eps))) {                                                           \
-            std::printf("FAIL %s:%d: %s ~ %s (%.9g vs %.9g)\n", __FILE__, __LINE__, #a, #b, va_, vb_);  \
+            std::printf("FAIL %s:%d: %s ~ %s (%.9g vs %.9g)\n", __builtin_FILE(), __LINE__, #a, #b, va_, vb_);  \
             ++g_fail;                                                                                     \
         }                                                                                                 \
     } while (0)

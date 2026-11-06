@@ -140,8 +140,10 @@ comparing `ROADMAP.html` with `roadmap-store/ROADMAP.html` (byte-identical after
 
 ## Build records
 
-`build_msvc.cmd`, `build_clang.cmd`, `build_module.cmd` and `build_agent.cmd` record every finished run in the store with
-`record-build`, so the roadmap shows them with no further step. The full log stays in `logs\` on the machine that built; the
+`build_msvc.cmd`, `build_clang.cmd` and `build_asan.cmd` (so the gate) record every finished run in the store with
+`record-build`, so the roadmap shows them with no further step. `build_module.cmd` and `build_agent.cmd` (the inner loop) record
+only when `ALAMO_RECORD_BUILD=1` is set (2026-11-06: a record takes the store lock, starts a background git push and rewrites
+the 760 KB pages, which dirties the tree after every edit-build cycle). The full log stays in `logs\` on the machine that built; the
 record carries the summary and the first error lines. Set `ALAMO_ROADMAP_GROUP=<group id>` before a build to link it to a
 group, and `ALAMO_SESSION=<name>` to name the session instead of the OS user. Records are only added: do not edit or prune them.
 

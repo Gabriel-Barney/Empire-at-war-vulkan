@@ -59,7 +59,7 @@ static bool g_regen = false;
 #define CHECK(c)                                                     \
     do {                                                             \
         if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
+            std::printf("FAIL %s:%d: %s\n", __builtin_FILE(), __LINE__, #c); \
             ++g_fail;                                                \
         }                                                            \
     } while (0)

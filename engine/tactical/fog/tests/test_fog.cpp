@@ -24,7 +24,7 @@ int g_checks = 0;
         ++g_checks;                                                             \
         if (!(c)) {                                                             \
             ++g_fail;                                                           \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);           \
+            std::printf("FAIL %s:%d: %s\n", __builtin_FILE(), __LINE__, #c);           \
         }                                                                       \
     } while (0)
 

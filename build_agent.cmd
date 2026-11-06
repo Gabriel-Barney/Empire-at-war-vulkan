@@ -12,12 +12,17 @@ setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 if "%~3"=="" (echo usage: build_agent.cmd ^<msvc^|clang^> ^<tree^> "^<module list^>" [ctest regex]& exit /b 2)
 set TC=%~dp0toolchain
-set B=build-%~2-%~1
-set LOG=logs\agent_%~2_%~1.txt
+rem Tree name: a leading "build-" is dropped (passing build-foo used to make build-build-foo-msvc).
+set NAME=%~2
+if /i "!NAME:~0,6!"=="build-" set NAME=!NAME:~6!
+set B=build-!NAME!-%~1
+set LOG=logs\agent_!NAME!_%~1.txt
 if not exist logs mkdir logs
 call "%TC%\msvc\setup_x64.bat" >nul
 call "%~dp0tools\test_env.cmd"
 call "%~dp0tools\cache_env.cmd"
+rem Tests: -j 4 unless ALAMO_CTEST_JOBS is set (several agents share the machine).
+if not defined ALAMO_CTEST_JOBS set ALAMO_CTEST_JOBS=4
 set PATH=%TC%\llvm\bin;%TC%\venv\Scripts;%PATH%
 if /i "%~1"=="clang" (
   set COMPILER="-DCMAKE_CXX_COMPILER=%TC%\llvm\bin\clang++.exe" "-DCMAKE_CXX_FLAGS=-Wconversion -Wshadow"
@@ -34,11 +39,13 @@ if "%~4"=="" (set FILTER=-LE slow) else if /i "%~4"=="all" (set FILTER=) else se
   if not exist %B%\tmp mkdir %B%\tmp
   set "TMP=%~dp0%B%\tmp"
   set "TEMP=%~dp0%B%\tmp"
-  ctest --test-dir %B% --output-on-failure -j 4 !FILTER! 2>&1
+  ctest --test-dir %B% --output-on-failure -j %ALAMO_CTEST_JOBS% !FILTER! 2>&1
   echo ctest exit !ERRORLEVEL!
 )
 echo AGENT_DONE>> %LOG%
-python roadmap-store\roadmap_store.py record-build %~1 %B% %LOG%
+rem Inner-loop builds are not recorded (the store lock, a background git push and two 760 KB page rewrites cost more than the
+rem build summary is worth); set ALAMO_RECORD_BUILD=1 to record this run on the roadmap. The gate scripts always record.
+if "%ALAMO_RECORD_BUILD%"=="1" python roadmap-store\roadmap_store.py record-build %~1 %B% %LOG%
 python tools\lint\build_summary.py %LOG%
 echo full log: %LOG%
 if defined ALAMO_FULL_LOG type %LOG%

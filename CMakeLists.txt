@@ -30,6 +30,13 @@ endif()
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 enable_testing()
+
+# ctest -j starts the longest tests first, from the costs of the previous run in the same build tree. A fresh tree (new worktree,
+# build_agent / build_module tree) has none, so seed it from tests/ctest_cost_seed.txt (tools/lint/ctest_cost_seed.py refreshes it).
+set(_alamo_cost_file "${CMAKE_BINARY_DIR}/Testing/Temporary/CTestCostData.txt")
+if(NOT EXISTS "${_alamo_cost_file}" AND EXISTS "${CMAKE_SOURCE_DIR}/tests/ctest_cost_seed.txt")
+  configure_file("${CMAKE_SOURCE_DIR}/tests/ctest_cost_seed.txt" "${_alamo_cost_file}" COPYONLY)
+endif()
 add_subdirectory(tools/meg)
 add_subdirectory(tools/formats)
 add_subdirectory(tools/shaders/cpp)

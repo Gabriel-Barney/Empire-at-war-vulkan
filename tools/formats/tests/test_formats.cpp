@@ -13,7 +13,7 @@ using namespace alamo;
 static int g_fail = 0;
 #define CHECK(x)                                                         \
     do {                                                                 \
-        if (!(x)) { std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #x); ++g_fail; } \
+        if (!(x)) { std::printf("FAIL %s:%d: %s\n", __builtin_FILE(), __LINE__, #x); ++g_fail; } \
     } while (0)
 
 namespace {

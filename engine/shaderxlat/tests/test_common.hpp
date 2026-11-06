@@ -15,7 +15,7 @@ extern int g_fail;
     do {                                                                                  \
         if (!(cond)) {                                                                    \
             ++::alamo::shaderxlat::test::g_fail;                                          \
-            std::printf("CHECK failed: %s (%s:%d)\n", #cond, __FILE__, __LINE__);         \
+            std::printf("CHECK failed: %s (%s:%d)\n", #cond, __builtin_FILE(), __LINE__);         \
         }                                                                                 \
     } while (0)
 

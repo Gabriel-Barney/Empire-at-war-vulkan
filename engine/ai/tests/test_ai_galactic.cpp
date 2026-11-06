@@ -60,7 +60,7 @@ static int g_fail = 0, g_checks = 0;
         ++g_checks;                                                               \
         if (!(c)) {                                                               \
             ++g_fail;                                                             \
-            std::printf("FAILED %s:%d: %s\n", __FILE__, __LINE__, #c);            \
+            std::printf("FAILED %s:%d: %s\n", __builtin_FILE(), __LINE__, #c);            \
         }                                                                         \
     } while (0)
 

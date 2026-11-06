@@ -12,6 +12,11 @@ call toolchain\msvc\setup_x64.bat >nul
 set PATH=%~dp0toolchain\venv\Scripts;%PATH%
 call "%~dp0tools\test_env.cmd"
 call "%~dp0tools\cache_env.cmd"
+rem Tests (2026-11-06): -j defaults to the logical core count (ALAMO_CTEST_JOBS overrides; the parallel gate sets it per stage). The
+rem nightly-labelled repeats (engine/CMakeLists.txt) are skipped unless ALAMO_TESTS=all (tools\gate_scheduled.cmd sets it).
+if not defined ALAMO_CTEST_JOBS set ALAMO_CTEST_JOBS=%NUMBER_OF_PROCESSORS%
+set NIGHTLY_FILTER=-LE nightly
+if /i "%ALAMO_TESTS%"=="all" set NIGHTLY_FILTER=
 > logs\msvc_configure.txt (
   where cl.exe 2>&1
   cl.exe 2>&1
@@ -27,10 +32,11 @@ call "%~dp0tools\cache_env.cmd"
   if not exist build-msvc\tmp mkdir build-msvc\tmp
   set "TMP=%~dp0build-msvc\tmp"
   set "TEMP=%~dp0build-msvc\tmp"
-  ctest --test-dir build-msvc --output-on-failure --output-junit "%~dp0build-msvc\ctest_junit.xml" -j 8 2>&1
+  ctest --test-dir build-msvc --output-on-failure --output-junit "%~dp0build-msvc\ctest_junit.xml" -j %ALAMO_CTEST_JOBS% %NIGHTLY_FILTER% 2>&1
   echo ctest exit !ERRORLEVEL!
   python tools\lint\ctest_skips.py "%~dp0build-msvc\ctest_junit.xml"
 )
 echo BUILD_DONE>> logs\msvc_configure.txt
 python tools\lint\build_summary.py logs\msvc_configure.txt logs\msvc_build.txt
-python roadmap-store\roadmap_store.py record-build msvc build-msvc logs\msvc_configure.txt logs\msvc_build.txt
+rem The parallel gate (build_gate.cmd) sets ALAMO_DEFER_RECORD and records the stages itself, one after another.
+if not defined ALAMO_DEFER_RECORD python roadmap-store\roadmap_store.py record-build msvc build-msvc logs\msvc_configure.txt logs\msvc_build.txt
