@@ -781,6 +781,54 @@ static void test_path_finder_costs_and_fog() {
     CHECK(zf.weight(D, B) == hop(50.0f) && zf.weight(B, D) == hop(30.0f));
 }
 
+// A2k t02: the Lua _FindStageArea stage (cheapest_stage). S1(0,0) - X1(50,0) - T(100,50) and S2(0,100) - X2(50,100) - T,
+// free hop <= 75, so both owned candidates are 2 hops from T and S1 has the lower row (the former fewest-hops stage).
+// Node costs X1 = 5, X2 = 1: W[S2][T] < W[S1][T], so the stage is S2 and Find_Path(stage, T) avoids X1 (HotM: the
+// Underworld's Corellia path through Naboo / Tatooine instead of Kashyyyk / Kuat). The pick follows the matrices.
+static void test_path_finder_cheapest_stage() {
+    GalaxyMap m;
+    m.campaign_name = "ai_stage";
+    m.max_fleet_move_distance = 75.0f;
+    const float xy[5][2] = {{0.0f, 0.0f}, {0.0f, 100.0f}, {50.0f, 0.0f}, {50.0f, 100.0f}, {100.0f, 50.0f}};
+    for (uint32_t i = 0; i < 5; ++i) {
+        const auto p = m.planets.add("P" + std::to_string(i));
+        m.planets.flags[p] = kPlanetHasPlanetBehavior;
+        m.planets.position[p] = {xy[i][0], xy[i][1], 0.0f};
+    }
+    const galactic::PlanetGraph g = galactic::PlanetGraph::build(m);
+    const PlanetIndex S1 = 0, S2 = 1, X1 = 2, X2 = 3, T = 4;
+    const std::vector<PlanetIndex> own{S1, S2};
+    AiPathFinder none;
+    CHECK(cheapest_stage(none, own, T) == kInvalidPlanet);  // no matrix yet
+    std::vector<double> nv(5, 0.0);
+    nv[X1] = 500.0;
+    nv[X2] = 100.0;
+    AiPathFinder f;
+    f.create(g, ai_path_input(nv, nullptr, true, false), 0, 0, 1);
+    CHECK(f.path(S1, T) == (std::vector<PlanetIndex>{S1, X1, T}) && f.path(S2, T) == (std::vector<PlanetIndex>{S2, X2, T}));
+    CHECK(f.weight(S2, T) < f.weight(S1, T));
+    CHECK(cheapest_stage(f, own, T) == S2);
+    CHECK(cheapest_stage(f, own, S1) == S1);                                  // an owned target: itself (W = 0)
+    CHECK(cheapest_stage(f, std::vector<PlanetIndex>{S1}, T) == S1);          // the only candidate
+    CHECK(cheapest_stage(f, std::vector<PlanetIndex>{}, T) == kInvalidPlanet);
+    // Equal weights: the first candidate (row order) wins.
+    AiPathFinder eq;
+    eq.create(g, ai_path_input(std::vector<double>(5, 0.0), nullptr, true, false), 0, 0, 1);
+    CHECK(eq.weight(S1, T) == eq.weight(S2, T) && cheapest_stage(eq, own, T) == S1);
+    // The costs swap: so does the stage.
+    nv[X1] = 100.0;
+    nv[X2] = 500.0;
+    AiPathFinder sw;
+    sw.create(g, ai_path_input(nv, nullptr, true, false), 0, 0, 1);
+    CHECK(cheapest_stage(sw, own, T) == S1);
+    // Unreachable candidates are skipped: X2 unrevealed for a non-human AI cuts S2 off.
+    galactic::Bitset revealed(5, true);
+    revealed.set(X2, false);
+    AiPathFinder fog;
+    fog.create(g, ai_path_input(std::vector<double>(5, 0.0), &revealed, true, false), 0, 0, 1);
+    CHECK(fog.weight(S2, T) == galactic::kUnlinked && cheapest_stage(fog, std::vector<PlanetIndex>{S2, S1}, T) == S1);
+}
+
 // The finder on the Q11 cadence over a perturbed synthetic galaxy: K AI players, staggered, 90-frame services every
 // 3 frames (the Execution interval). Digest over every finder's hash after each frame + all paths at the end.
 // OPT2 t02 / OPT3 t04: `latency` > 0 runs the background mode on `bg` (publish at the start of each frame); `save_at` >= 0
@@ -1085,6 +1133,7 @@ int main(int argc, char** argv) {
     test_determinism(write_golden);
     test_path_finder_cadence();
     test_path_finder_costs_and_fog();
+    test_path_finder_cheapest_stage();
     test_path_finder_determinism();
     test_path_finder_background();
     real_data(env_or("ALAMO_FOC_DATA", "/home/claude/data/foc"), "FoC", true);

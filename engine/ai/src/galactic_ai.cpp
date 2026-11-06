@@ -326,6 +326,32 @@ PlanetIndex GalacticAiWorld::Impl::nearest_owned(int32_t player, int32_t target)
     return best;
 }
 
+// Lua _FindStageArea (0x6990f0) for a planet target, A2k t02 [M]: the player's own planet that starts the AI's cheapest
+// all-pairs path to the target (cheapest_stage, ai_path_finder.hpp), so PathBonusForDistantTargets' Find_Path(stage,
+// target) marks up the planets of that path. Retail (A2J_T02_T04_PROBE_RESULTS §1, run 20261106-074145): the Underworld's
+// Corellia markup is on Kashyyyk only around frame 22800 and gone 300 frames later, so the stage / path follows the
+// varying node costs. The former fewest-hops stage picked Felucia (lowest row of four 3-hop planets) and put Kashyyyk
+// on the path from frame 372 on. Exact rule: docs/re/A2K_T02_RE_QUESTIONS.md Q1. Without a created finder (or for a
+// non-planet target) the fewest-hops planet (nearest_owned) as before.
+PlanetIndex GalacticAiWorld::Impl::lua_stage_area(int32_t player, PlanetIndex target) const {
+    if (!valid_planet(target)) return nearest_owned(player, -1);
+    const PlayerAi* pa = player_ai(player);
+    if (!pa || !pa->paths.created()) return nearest_owned(player, static_cast<int32_t>(target));
+    const auto planets = sim.planets();
+    std::vector<PlanetIndex> own;
+    for (size_t i = 0; i < planets.size(); ++i)
+        if (planets[i].is_planet && planets[i].owner == player) own.push_back(static_cast<PlanetIndex>(i));
+    return cheapest_stage(pa->paths, own, target);
+}
+
+int32_t GalacticAiWorld::Impl::find_stage_area(int32_t, const lua::AiArg& player, const lua::AiArg& target, const lua::AiArg&) {
+    if (player.player < 0) return -1;
+    const PlanetIndex s = lua_stage_area(player.player, planet_arg(target));
+    return s == kInvalidPlanet ? -1 : static_cast<int32_t>(s);
+}
+
+PlanetIndex GalacticAiWorld::stage_area(int32_t player, PlanetIndex target) const { return impl_->lua_stage_area(player, target); }
+
 uint32_t GalacticAiWorld::Impl::next_starbase_type(int32_t player, PlanetIndex p) const {
     const auto& all = sim.rules().types;
     for (size_t t = 0; t < all.size(); ++t)

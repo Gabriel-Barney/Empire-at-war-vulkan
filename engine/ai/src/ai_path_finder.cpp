@@ -122,6 +122,20 @@ uint32_t AiPathFinder::weight(PlanetIndex from, PlanetIndex to) const {
     return m.weight(from, to);
 }
 
+PlanetIndex cheapest_stage(const AiPathFinder& f, std::span<const PlanetIndex> candidates, PlanetIndex target) {
+    PlanetIndex best = kInvalidPlanet;
+    uint32_t best_w = galactic::kUnlinked;
+    for (const PlanetIndex s : candidates) {
+        const uint32_t w = f.weight(s, target);
+        if (w == galactic::kUnlinked) continue;
+        if (best == kInvalidPlanet || w < best_w) {
+            best = s;
+            best_w = w;
+        }
+    }
+    return best;
+}
+
 void AiPathFinder::hash(StateHasher& h) const {
     h.boolean(created_);
     if (!created_) return;

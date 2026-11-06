@@ -520,13 +520,9 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     bool unit_safe(ObjectHandle unit) override;
     bool free_store_move(int32_t script, ObjectHandle unit, const lua::AiArg& destination) override;
     int32_t find_target(int32_t script, const lua::AiFindTargetRequest& r) override;
-    int32_t find_stage_area(int32_t, const lua::AiArg& player, const lua::AiArg& target, const lua::AiArg&) override {
-        const int32_t p = player.player >= 0 ? player.player : -1;
-        const PlanetIndex t = planet_arg(target);
-        if (p < 0) return -1;
-        const PlanetIndex s = nearest_owned(p, t == kInvalidPlanet ? -1 : static_cast<int32_t>(t));
-        return s == kInvalidPlanet ? -1 : static_cast<int32_t>(s);
-    }
+    int32_t find_stage_area(int32_t, const lua::AiArg& player, const lua::AiArg& target, const lua::AiArg&) override;
+    // A2k t02: the Lua _FindStageArea planet (galactic_ai.cpp).
+    PlanetIndex lua_stage_area(int32_t player, PlanetIndex target) const;
     lua::AiGlobalValue global_value(std::string_view name) override {
         if (gv_store) return gv_store->get(name);  // Int-final: the session-wide table
         const auto it = globals.find(std::string(name));
