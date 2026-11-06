@@ -12,6 +12,7 @@ bool App::present_settled() const {
 }
 
 bool App::render_frame() {
+    bench_.drawn = false;  // BM2a: set once this frame is submitted
     if (!sc_.valid() || win_.minimized()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
         return true;
@@ -157,7 +158,7 @@ bool App::render_frame() {
     const bool battle_hud = screen_ == Screen::Battle && battle && !cinematic_hides_hud();
     if (galactic || battle_hud) build_panels(panel_lists);
     for (const ui::HudDrawList& pl : panel_lists) merge_lists(hud_list, pl);
-    if (galactic || battle_hud) build_encyclopedia(hud_list, *canvas);
+    if ((galactic || battle_hud) && !bench_active()) build_encyclopedia(hud_list, *canvas);  // BM2a: no tooltips
     if (battle) draw_letterbox(dialogs, *canvas, w, h);  // refixf t05: cinematic letterbox, over the world, under the dialogs
     // OI host: the attract demo world under the menu. GuiManager's backdrop paints an opaque black fill under the
     // MenuBack_overlay quad, which would hide the world: left out while the demo is drawn [port: until engine/ui draws the
@@ -215,7 +216,7 @@ bool App::render_frame() {
         overlay_.build(dialogs, *canvas, *ui_.fonts);
     }
     ui::HudDrawList cursor_list;
-    update_cursor(cursor_list);
+    if (!bench_active()) update_cursor(cursor_list);  // BM2a: no cursor
     if (drawer) drawer->make_resident(gpu_.renderer);
     if (panel_shells_ok_) panel_drawer_.make_resident(gpu_.renderer);
     // Radar event models (tactical HUD only): uploaded the first time a ping names them, drawn at the Models2 step.
@@ -256,7 +257,7 @@ bool App::render_frame() {
                          }
                  }
              },
-             nullptr, &dialogs, cursor_ok_ ? &cursor_list : nullptr) &&
+             nullptr, &dialogs, cursor_ok_ && !bench_active() ? &cursor_list : nullptr) &&
          ok;
     draw_stats_.pending_pipeline += shell_stats.pending_pipeline;
     // Options > Video > Gamma over the finished frame (world + HUD), 50 = identity (t11).
@@ -305,6 +306,7 @@ bool App::render_frame() {
     fs.waits = {waits, nw};
     fs.signals = {&signal, 1};
     if (!gpu_.ring.end_frame(*f, fs)) return false;
+    bench_.drawn = true;
     const auto wait1 = Clock::now();
     const rhi::SwapchainStatus ps = sc_.present(image);
     ft_.wait += static_cast<float>(ms_since(wait1));
@@ -339,13 +341,15 @@ void App::frame() {
         if (frame_t0_ != Clock::time_point{}) {
             ft_.frame = static_cast<float>(std::chrono::duration<double, std::milli>(start - frame_t0_).count());
             overlay_.add_frame(ft_);
+            if (bench_active()) bench_sample(ft_);  // BM2a: the frame just closed, when it was a measured one
         }
         ft_ = {};
         frame_t0_ = start;
     }
     // Scripted runs are frame-driven (30 frames per presentation second): camera smoothing, double-tap windows and
     // pop-up delays then advance identically on every machine, so the recorded command stream is machine independent.
-    const double now = script_.empty() ? ms_since(t0_) / 1000.0 : static_cast<double>(frames_) / 30.0;
+    // BM2a: a fixed-frames benchmark runs on its counted frames (FixedFrameClock::seconds), a real-time one on the wall clock.
+    const double now = bench_active() ? bench_now() : script_.empty() ? ms_since(t0_) / 1000.0 : static_cast<double>(frames_) / 30.0;
     dt_ = static_cast<float>(std::clamp(now - now_s_, 0.0, 0.1));
     now_s_ = now;
     if (win_.take_resized() && win_.width() > 0 && win_.height() > 0) {
@@ -386,6 +390,9 @@ void App::frame() {
             }
         }
         (void)ui::capture_input(win_, now_s_, dt_);  // consume the window's edges
+    } else if (bench_active()) {  // BM2a: no player input - the idle frame (cursor parked, not inside: no edge scroll)
+        raw = idle_frame();
+        (void)ui::capture_input(win_, now_s_, dt_);
     } else {
         raw = ui::capture_input(win_, now_s_, dt_);
     }
@@ -396,6 +403,7 @@ void App::frame() {
     }
     cinematic_input(raw);  // refixf t05: the cinematic controller takes the mouse first (TSW_PLANET_DESTROY.md §11.2)
     std::u32string typed = printable(win_.take_text());
+    if (bench_active()) typed.clear();
     // OI host: attract demo (idle clock, idle pause, map cycle); input reaches the menus as usual.
     attract_step(raw);
     // 2. Routing: overlay -> dialogs -> HUD -> world.
@@ -485,6 +493,7 @@ void App::frame() {
     linked_ui_step();  // story t13: after this frame's Lua ops
     story_reward_step();  // L1/S4 wave 1: START_MOVIE / MULTIMEDIA reward media
     if (screen_ == Screen::Galactic && session_) galactic_screens();
+    if (bench_active()) bench_autopilot();  // BM2a: battle prompts, load screens, battle-end and story dialogs, movies
     if (screen_ != Screen::Movie) {
         if (full_movie_.playing() && !full_movie_.update(dt_, gpu_.hud, kMoviePage)) {
             story_ui_.movie_done(full_movie_.name());  // L1/S4 wave 1: STORY_MOVIE_DONE (an in-game full-screen movie ended)
@@ -499,6 +508,15 @@ void App::frame() {
     story_ui_step();  // L1/S4 wave 1: this frame's UI notifications for the story
     // 4. Render, 5. audio (listener from the camera).
     if (screen_ == Screen::Quit) return;
+    // BM2a: a PNG of every Nth counted frame (named by its index; an unsettled frame is drawn again under the same name).
+    if (bench_measuring() && opt_.bench.png_every && shot_path_.empty()) {
+        const uint64_t idx = bench_fixed() ? bench_.clock.frames() : static_cast<uint64_t>(bench_.frame_ms.size());
+        if (idx % opt_.bench.png_every == 0) {
+            char name[64];
+            std::snprintf(name, sizeof name, "/bench_%06" PRIu64 ".png", idx);
+            shot_path_ = opt_.bench.png_dir + name;
+        }
+    }
     const auto render0 = Clock::now();
     const bool rendered = render_frame();
     ft_.render = static_cast<float>(ms_since(render0));
@@ -509,6 +527,7 @@ void App::frame() {
         return;
     }
     end_load_intro_frame();
+    if (bench_active()) bench_frame_end();
     const bool cinematic = presentation_cinematic() || cine_.shot.active();  // OI host: Lua / TSW cinematic camera -> listener rules
     if (screen_ == Screen::Galactic) {
         const ui::CameraParams cp = gview_.camera_params(targets_.width, targets_.height);
@@ -519,7 +538,13 @@ void App::frame() {
         audio_.set_listener({cp.eye.x, cp.eye.y, cp.eye.z}, {cp.target.x, cp.target.y, cp.target.z}, cinematic);
     }
     audio_flags();  // OI host: modal / GUI-only / attract
-    audio_.update(dt_);
+    // BM2a: in a benchmark the audio clock runs on the sim (1/30 s per tick that ran this frame) and a speech's end is
+    // taken now, before any later tick, so its STORY_SPEECH_DONE goes in before the next tick in every run.
+    audio_.update(bench_active() ? (bench_.ticked ? 1.0f / 30.0f : 0.0f) : dt_);
+    if (bench_active() && session_ && !demo_session()) {
+        for (const std::string& e : audio_.take_speech_done()) story_ui_.speech_done(e);
+        for (const sim::StoryUiNotification& n : story_ui_.take()) bench_.story_pending.push_back(n);
+    }
     ++frames_;
     if (frames_ % 60 == 0 && !opt_.hidden) {
         char title[256];
@@ -559,7 +584,7 @@ bool App::crc_check() {
         for (uint64_t i = 0; i < ticks; ++i) replay.tick();
         off = replay.host().crc_log();
     }
-    if (!opt_.png_dir.empty()) {  // the run's CRC log and command stream, for cross-build comparisons
+    if (!opt_.png_dir.empty() && !opt_.smoke.empty()) {  // the run's CRC log and command stream, for cross-build comparisons
         std::string e;
         const std::string base = opt_.png_dir + "/game_smoke_" + opt_.smoke;
         if (!on.save(base + ".crc", &e) || !recording_.save(base + ".rec", &e)) std::fprintf(stderr, "crc / recording save: %s\n", e.c_str());
