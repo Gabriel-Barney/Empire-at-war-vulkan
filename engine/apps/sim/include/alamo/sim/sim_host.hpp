@@ -85,10 +85,16 @@ struct GalacticSetup;
 
 namespace alamo::sim {
 
+// Q6: SimConfig::players for a galactic session over a setup with `setup_players` players: at least 8 (the default, so
+// stock FoC sessions keep their CRC), at most kMaxPlayers (start_galactic refuses a setup with more players than this).
+inline uint32_t session_players(size_t setup_players) {
+    return static_cast<uint32_t>(setup_players < 8 ? 8 : setup_players > kMaxPlayers ? kMaxPlayers : setup_players);
+}
+
 struct SimConfig {
     uint32_t seed = 0;                                          // synced RNG session seed
     uint32_t free_seed = 0x12345678u;                           // free RNG (never sim state)
-    uint32_t players = 8;                                       // PlayerList size (<= 16)
+    uint32_t players = 8;                                       // PlayerList size (<= kMaxPlayers); see session_players
     commands::SchedulerConfig scheduler = commands::SchedulerConfig::single_player();
     bool parallel_crc = true;                                   // CRC hashers on the job system
     bool story_crc = false;                                     // register the "story" CRC system (S4)
@@ -109,7 +115,8 @@ public:
     bool end_game_mode();                 // End_Game_Mode (pop)
     // Galactic campaign with the S3 economy: Start_Game(galactic) (new session if the stack is empty),
     // then GalacticSim::start on the mode's primary store with the SYNCED RNG. Returns nullptr (and
-    // pops the mode) when the setup is unusable. Galactic events (MoveObjectToObject,
+    // pops the mode) when the setup is unusable, or has more players than SimConfig::players (Q6: those players would
+    // get no controller and no orders; size the host with session_players). Galactic events (MoveObjectToObject,
     // MoveThroughObjects, Production, Invade) then go to GalacticSim::handle_command.
     galactic::GalacticSim* start_galactic(const galactic::GalacticRules& rules, const galactic::GalacticSetup& setup,
                                           std::vector<std::string>* diagnostics = nullptr);

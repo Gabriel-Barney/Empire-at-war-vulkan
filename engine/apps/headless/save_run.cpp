@@ -425,6 +425,7 @@ public:
         sim::SimConfig cfg;
         cfg.seed = seed;
         cfg.story_crc = story_;
+        cfg.players = sim::session_players(setup_.players.size());
         s->host = std::make_unique<sim::SimHost>(types_, *s->js, cfg);
         sim::SimHost& host = *s->host;
         s->gs = host.start_galactic(rules_, setup_);
@@ -577,6 +578,7 @@ public:
         sim::SimConfig cfg;
         cfg.seed = seed;
         cfg.story_crc = ho_.story;
+        cfg.players = sim::session_players(setup_.players.size());
         s->host = std::make_unique<sim::SimHost>(types_, *s->js, cfg);
         sim::SimHost& host = *s->host;
         s->gs = host.start_galactic(rules_, setup_);

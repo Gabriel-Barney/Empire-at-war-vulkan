@@ -60,7 +60,7 @@ using objects::ObjectHandle;
 using objects::ObjectId;
 using objects::kNoObjectId;
 
-inline constexpr uint32_t kMaxPlayers = 16;  // = commands::kMaxPlayerSlots
+inline constexpr uint32_t kMaxPlayers = 32;  // = commands::kMaxPlayerSlots
 
 // Spatial category bits (TreeSet masks).
 inline constexpr uint32_t kCatUnit = 0x1;       // has a locomotor

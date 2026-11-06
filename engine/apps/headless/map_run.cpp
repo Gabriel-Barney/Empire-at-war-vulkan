@@ -91,6 +91,7 @@ int economy_run(const MapRunOptions& opt, const std::string& data_dir) {
         jobs::JobSystem js(jobs::JobSystemConfig{workers});
         sim::SimConfig cfg;
         cfg.seed = opt.seed;
+        cfg.players = sim::session_players(setup.players.size());
         sim::SimHost host(types, js, cfg);
         galactic::GalacticSim* gs = host.start_galactic(rules, setup);
         if (!gs) return false;
@@ -191,6 +192,7 @@ int story_run(const MapRunOptions& opt, const std::string& data_dir, const std::
         sim::SimConfig cfg;
         cfg.seed = opt.seed;
         cfg.story_crc = true;
+        cfg.players = sim::session_players(setup.players.size());
         sim::SimHost host(types, js, cfg);
         galactic::GalacticSim* gs = host.start_galactic(rules, setup);
         if (!gs) return false;

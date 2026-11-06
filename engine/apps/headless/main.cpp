@@ -102,6 +102,7 @@
 #include <cinttypes>
 #include <cmath>
 #include <cstdio>
+#include <exception>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -1245,6 +1246,17 @@ static int headless_main(int argc, char** argv) {
 // and prints p50 / p99 / max tick time, per-zone shares and the 20 worst ticks after it. Wall-clock data only: the run's
 // results and CRCs are unchanged. Runs that tick several hosts in turn (--selfcheck, --check-workers) report them together.
 int main(int argc, char** argv) {
+    // Q5: an uncaught exception (e.g. mod data past a fixed limit) names itself instead of a silent 0xC0000409 exit.
+    std::set_terminate([] {
+        try {
+            if (const std::exception_ptr e = std::current_exception()) std::rethrow_exception(e);
+        } catch (const std::exception& x) {
+            std::fprintf(stderr, "alamo_headless: uncaught exception: %s\n", x.what());
+        } catch (...) {
+            std::fprintf(stderr, "alamo_headless: uncaught exception\n");
+        }
+        std::abort();
+    });
     std::vector<char*> args;
     bool profile_on = false;
     std::string profile_out;
