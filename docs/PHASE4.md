@@ -1,16 +1,10 @@
-# Phase 4 status — the game (started 2026-10-27)
+# Phase 4 — the game: decisions, step map, measurements and port choices (started 2026-10-27)
 
-Roadmap: Step ids below; finished results, finished notes and the build / fix logs are in `docs/PHASE4_HISTORY.md`. Open items: the main roadmap (`ROADMAP.html` in the project root; update with `roadmap_store.py write`, see `docs/ROADMAP_PROTOCOL.md`). Scope: single player, **Windows only** (Gabriel, 2026-10-27); multiplayer out of scope (Gabriel, 2026-10-29). Compilers: **MSVC + clang**.
+Step ids below; finished results, finished notes and the build / fix logs are in `docs/PHASE4_HISTORY.md`. Status and open items: the main roadmap (`ROADMAP.html` in the project root; update with `roadmap_store.py write`, see `docs/ROADMAP_PROTOCOL.md`). Scope: single player, **Windows only** (Gabriel, 2026-10-27); multiplayer out of scope (Gabriel, 2026-10-29). Compilers: **MSVC + clang**.
 
-## At a glance
+## Status
 
-| | Status |
-|---|---|
-| ✅ **Done** | G0 (S1, Q1, G0-3, S5/G0, S6), S2–S10, L1 (stages 1–3, families, waves 1 / 2a / 2b, fog, S4 fin, final, systems), A1, A2 (first cut + stage 2 + stage 3) + A2 gal, R1–R5 + R-int, P1–P4 + P3 video + P4 sim (black market, sabotage, hack, income abilities; 2026-10-28) + L1 P4, P host, FOW, Int-B, Int-H, Q3, OI galactic, all RE-* spec rows; Int-final integration pass; Int-verify final verification (rows below); N1 save / load + replay (galactic and mid-battle saves, alamo_game save / load menus, 150 KB saves; 2026-10-29) |
-| ⏭ **Next** | The rest of REMAINING_GAPS (the galactic goldens were regenerated 2026-10-28; every golden passed 2026-10-29). N1 save/load + replay is done (2026-10-29; the last of Milestone 4 and the gate for the first playable test build): Q5 mod diagnostics (the in-game check of the save / load menus is automated since 2026-10-31, N1 row). the Q4 comparison harness (group q4h) and Q6 mod loading can start now, only the Q4 run waits on OPT2 (re-sequenced 2026-10-31) |
-| 🔄 **In progress** | OPT2 (spread and parallelise sim / AI work). OPT1 is done (2026-11-02: t07 in-game frame-time overlay, see "alamo_game frame profile"); OPT2 t05 (sim tick / render overlap) closed 2026-11-02 without shipping an overlap (same section) |
-| 👤 **Needs Gabriel** | G1 in-game capture is now unattended (2026-10-29: kit drives the menus itself, runs `dxvk_20261029_231246`, `apitrace_20261029_231628`, `apitrace_20261029_232301` all restore-verified; answers in RENDER.md §7.3; leftovers in roadmap `g1f`, no Gabriel step needed) · Q2 reference traces are now unattended too (2026-10-30, q2-runs: `-NonInteractive` drives the menus with q2_ui.py; runs `20261030-061228-galactic-vanilla-lua` and `20261030-062751-skirmish-vanilla-lua` complete, cleanup CLEAN and profile restore verified; no Gabriel step needed; game folder used as it is now, prior patch chain / DXVK absent and not restored). Other in-game probes of the open items approved 2026-10-27; kits under tools/probe_mod/. Saved so far: 3 Q2 traces (`tools/probe_mod/q2_traces/out/`), 1 unanalysed apitrace of a Kuat skirmish (`tools/probe_mod/g1_capture/out/runs/`, 3 GB); RenderDoc runs failed (the game hides its window under RenderDoc). Game folder restored and hash-verified after every run |
-| Build | Latest full runs (build records on the roadmap, 2026-10-31 after the renderer / test / game_main splits): MSVC and clang **129/129, 0 warnings**; last three-compiler gate `logs\gate_summary.txt` (2026-10-30 19:04): MSVC 128/128, clang 128/128, ASan 11/11, 1 data skip (`alamo_lua_players_tests`). Older results: `docs/PHASE4_HISTORY.md`. |
+Status, open work, the flowchart and build results live only on the main roadmap (`ROADMAP.html`, `docs/ROADMAP_PROTOCOL.md`; build records are on it too). The "At a glance" table that used to be here was moved verbatim to `docs/PHASE4_HISTORY.md` on 2026-11-06 (it was a second copy of the roadmap). This file keeps the decisions, the step map (what each step is and where its code is), measurements and port choices.
 
 ## Decisions (Gabriel, 2026-10-27)
 
@@ -81,6 +75,8 @@ The base layer every gameplay system sits on. Done = the engine spawns a map's r
 | 5 | Spatial partitioning: near-point, ray, visibility queries; parallel rebuild | S6 (engine/tactical) |
 
 ## Steps
+
+The Status column is the state when the row was last written; the roadmap is authoritative.
 
 | Step | What | Status | Where |
 |---|---|---|---|
@@ -863,21 +859,9 @@ or a sim-only model load (positions, indices and skeleton only). The second batt
   destructor then wrote to the freed system (test fixture order, `World::make`); `luaG_checkcode` indexed `luaP_opmodes` with an opcode
   from a corrupt save (patch in `engine/lua/CMakeLists.txt`, the save is now rejected).
 
-## Open items
+## Port choices and per-step notes (tracked on the roadmap)
 
-**How to read this list** (status tags added 2026-10-28; inline, ✅ marks a finished sub-item, often also struck through, and ⬜ marks one still open):
-
-| Tag | Meaning |
-|---|---|
-| 🟡 **PARTLY DONE** | Some sub-items are finished (✅ inline), others still need code. |
-| ⬜ **OPEN** | Nothing in the bullet is finished yet. |
-| 🧩 **SPEC-BLOCKED** | Every code task that has a spec is finished; what is left waits for an RE spec, a probe or a design decision (listed in the bullet). |
-| 🔎 **PROBE ONLY** | No code task; only guesses that an in-game probe has to confirm. |
-
-- ⬜ **OPEN**: 15
-- 🟡 **PARTLY DONE**: 11
-- 🧩 **SPEC-BLOCKED**: 2
-- 🔎 **PROBE ONLY**: 1
+This list holds the [port] / [inferred] / [M] choices and per-step notes. Which items are still open is decided on the main roadmap, not by the tags here (the tag legend and counts that were here were moved verbatim to `docs/PHASE4_HISTORY.md` on 2026-11-06). Inline, ✅ marks a finished sub-item, often also struck through, and ⬜ marks one still open.
 
 - ✅ **DONE 2026-10-31** (L1P4_LUA_GAPS §1–3 coded: galactic Activate_Ability object-type filter + GalacticTaskForce; BUY_BLACK_MARKET at click time from GameSession to all plots, BlackMarketPurchase route dropped; SABOTAGE_STRUCTURE by planet type name, GALACTIC_SABOTAGE to all plots. ✅ ~~Left [M]: the M04 smuggler Get_Parent_Object fleet may fire every member; task-force call still returns the host status~~ done 2026-10-31 (refix t04: galactic company member views in Lua, `GalacticSim::representative_type`, GalacticTaskForce.Activate_Ability returns nothing)) · L1 P4: [port]/[inferred] (marked "P4 lua") — BUY_BLACK_MARKET fires on the executed human purchase (the original's dialog fires at click time, also when the purchase then fails for credits); the galactic Activate_Ability type filter argument is a guess; SABOTAGE_STRUCTURE planet matched by map name, else planet type name; ✅ ~~story LOCK_UNIT reward (0x4D, same lock list) not applied by StorySession yet~~ done 2026-10-28 (OI lua block in story_session.cpp: Param1 unit type -> GalacticSim::lock_type for the plot's player; also REMOVE_CORRUPTION, Param1 planet, cleared at once [port] instead of the timed 0x3f6770 removal; unknown type / planet logged; test_sim.cpp test_story_rewards_oi). Also OI lua: BUILDABLE_UNIT / ENABLE_BUILDABLE [inferred from the shipped event names] Param1 -> lock_type(false) (leaves Lock_Tech, joins the unlocked list when Build_Initially_Locked; BUILDABLE_UNIT Param2 not applied); Give_Random_Sliceable_Tech -> GalacticSim::unlock_type; LuaPlayerWorld relations forward to GalacticSim::relation / set_relation when a sim is attached. Unlock paths wired so far: Lua Unlock_Tech, Give_Random_Sliceable_Tech, story BUILDABLE_UNIT / ENABLE_BUILDABLE; not wired: DISABLE_BUILDABLE (no spec), UNIQUE_UNIT, Rebel tech theft, black-market / slicer paths outside Lua; the stage-2 gate checks a team container's own type (the original: its first member's slot). **OI2 pass (2026-10-28)**: ✅ every unlock path is wired: DISABLE_BUILDABLE → production-disabled list (story_session.cpp ~833), UNIQUE_UNIT spawns and does not unlock (REMAINING_GAPS §1.5), Rebel tech theft, corruption capture variant (campaign.cpp ~534, now tested); the team-container note is moot (galactic scripts have no TEAM containers; the tactical gate uses the first member, ability_system.cpp ~688). Left, spec / probe only: the galactic Activate_Ability type filter [inferred], BUY_BLACK_MARKET at click time, SABOTAGE_STRUCTURE planet match.
 - ⬜ **OPEN** · P4 sim: [inferred]/[port] (marked in code) — Default_Hero_Respawn_Time negative = no respawn (kept on purpose); respawn planet = nearest owned by squared distance; income-ability sources = the planet owner's structures / starbase / surface / stationary orbit objects, applied once, removed when gone; gambling evaluated on first service then every interval; Destroy_When_Used_As_Corruption_Prereq uses the type loader's ctor default (Yes; heroes set No), so Underworld_Merc requirements are consumed — P4 §5.3 says "vanilla: none" [L, probe]; the corruption accept's T +0xBA test is skipped (would refuse 62/65 planets); double departure (§6.1) = extra draw, scheduled once [L]; sabotage on the port's single structure list (no orbital special structures); powf -> repeated multiplication; BUY_BLACK_MARKET emitted at execute time for human buyers; tactical Autoresolve's retreating player retreats through the galactic write-back instead of the tactical retreat / vf9 [M]; MP branches (uncommon max-tech, remote humans) not modelled.

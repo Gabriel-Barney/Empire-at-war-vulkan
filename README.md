@@ -8,7 +8,7 @@ on top. The goal is the game you already own, running on an engine that uses a m
 > Simulation, renderer, Lua layer, AI, UI, story and save/load are in place. The work now is **parity** (checking
 > behaviour against the original), **mod compatibility** (Thrawn's Revenge is the first target) and **performance**.
 > The last full gate (MSVC, clang, sanitizer) passed with **0 warnings and 170 tests** on each compiler.
-> The live plan is the project roadmap, `ROADMAP.html`; status boards are [`docs/PHASE2.md`](docs/PHASE2.md),
+> The live plan and all status tracking is the project roadmap, `ROADMAP.html`; results and notes per phase are in [`docs/PHASE2.md`](docs/PHASE2.md),
 > [`docs/PHASE3.md`](docs/PHASE3.md) and [`docs/PHASE4.md`](docs/PHASE4.md).
 
 This repository contains **no game assets and no original code**. You need your own copy of the game (Steam:
@@ -399,7 +399,7 @@ alamo_render.exe                    :: renderer test app
 | `roadmap-store/` | The roadmap's data, in its own repository |
 | `CLAUDE.md` | Working rules for contributors and agents |
 
-Good starting points: [`docs/PHASE4.md`](docs/PHASE4.md) for status and every performance measurement,
+Good starting points: [`docs/PHASE4.md`](docs/PHASE4.md) for decisions and every performance measurement (status is on `ROADMAP.html`),
 [`docs/OPT_RESEARCH.md`](docs/OPT_RESEARCH.md) for the optimisation techniques considered,
 [`docs/re/`](docs/re/) for how the original behaves.
 

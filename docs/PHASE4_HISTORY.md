@@ -85,3 +85,33 @@ The Build and In progress rows, as they were:
 | Build | Latest recorded here: After N1 stage 2 + menus + save size (2026-10-29 17:36, build_msvc + build_clang, ALAMO_FOC_DATA set): **116/116 on both, 0 warnings**, every golden passes; the 9 save files the headless save checks write are byte-identical between MSVC and clang. Older results: `docs/PHASE4_HISTORY.md`; current results are the build records on the roadmap. |
 
 | 🔄 **In progress** | Nothing |
+
+## At a glance and Open items legend, moved on 2026-11-06
+
+Cut verbatim from `docs/PHASE4.md` when status tracking was centralised on the roadmap.
+
+## At a glance
+
+| | Status |
+|---|---|
+| ✅ **Done** | G0 (S1, Q1, G0-3, S5/G0, S6), S2–S10, L1 (stages 1–3, families, waves 1 / 2a / 2b, fog, S4 fin, final, systems), A1, A2 (first cut + stage 2 + stage 3) + A2 gal, R1–R5 + R-int, P1–P4 + P3 video + P4 sim (black market, sabotage, hack, income abilities; 2026-10-28) + L1 P4, P host, FOW, Int-B, Int-H, Q3, OI galactic, all RE-* spec rows; Int-final integration pass; Int-verify final verification (rows below); N1 save / load + replay (galactic and mid-battle saves, alamo_game save / load menus, 150 KB saves; 2026-10-29) |
+| ⏭ **Next** | The rest of REMAINING_GAPS (the galactic goldens were regenerated 2026-10-28; every golden passed 2026-10-29). N1 save/load + replay is done (2026-10-29; the last of Milestone 4 and the gate for the first playable test build): Q5 mod diagnostics (the in-game check of the save / load menus is automated since 2026-10-31, N1 row). the Q4 comparison harness (group q4h) and Q6 mod loading can start now, only the Q4 run waits on OPT2 (re-sequenced 2026-10-31) |
+| 🔄 **In progress** | OPT2 (spread and parallelise sim / AI work). OPT1 is done (2026-11-02: t07 in-game frame-time overlay, see "alamo_game frame profile"); OPT2 t05 (sim tick / render overlap) closed 2026-11-02 without shipping an overlap (same section) |
+| 👤 **Needs Gabriel** | G1 in-game capture is now unattended (2026-10-29: kit drives the menus itself, runs `dxvk_20261029_231246`, `apitrace_20261029_231628`, `apitrace_20261029_232301` all restore-verified; answers in RENDER.md §7.3; leftovers in roadmap `g1f`, no Gabriel step needed) · Q2 reference traces are now unattended too (2026-10-30, q2-runs: `-NonInteractive` drives the menus with q2_ui.py; runs `20261030-061228-galactic-vanilla-lua` and `20261030-062751-skirmish-vanilla-lua` complete, cleanup CLEAN and profile restore verified; no Gabriel step needed; game folder used as it is now, prior patch chain / DXVK absent and not restored). Other in-game probes of the open items approved 2026-10-27; kits under tools/probe_mod/. Saved so far: 3 Q2 traces (`tools/probe_mod/q2_traces/out/`), 1 unanalysed apitrace of a Kuat skirmish (`tools/probe_mod/g1_capture/out/runs/`, 3 GB); RenderDoc runs failed (the game hides its window under RenderDoc). Game folder restored and hash-verified after every run |
+| Build | Latest full runs (build records on the roadmap, 2026-10-31 after the renderer / test / game_main splits): MSVC and clang **129/129, 0 warnings**; last three-compiler gate `logs\gate_summary.txt` (2026-10-30 19:04): MSVC 128/128, clang 128/128, ASan 11/11, 1 data skip (`alamo_lua_players_tests`). Older results: `docs/PHASE4_HISTORY.md`. |
+
+## Open items
+
+**How to read this list** (status tags added 2026-10-28; inline, ✅ marks a finished sub-item, often also struck through, and ⬜ marks one still open):
+
+| Tag | Meaning |
+|---|---|
+| 🟡 **PARTLY DONE** | Some sub-items are finished (✅ inline), others still need code. |
+| ⬜ **OPEN** | Nothing in the bullet is finished yet. |
+| 🧩 **SPEC-BLOCKED** | Every code task that has a spec is finished; what is left waits for an RE spec, a probe or a design decision (listed in the bullet). |
+| 🔎 **PROBE ONLY** | No code task; only guesses that an in-game probe has to confirm. |
+
+- ⬜ **OPEN**: 15
+- 🟡 **PARTLY DONE**: 11
+- 🧩 **SPEC-BLOCKED**: 2
+- 🔎 **PROBE ONLY**: 1

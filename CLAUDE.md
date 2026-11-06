@@ -8,12 +8,12 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
 | Path | What |
 |---|---|
 | `engine/` | Engine. One static lib per module: Phase 2 `core`, `vfs`, `data`, `jobs`, `galactic`, `apps`; Phase 3 `assets`, `rhi`, `materials`, `shaderxlat`, `terrain`, `render` (Vulkan 1.3 renderer, `alamo_render.exe`); Phase 4 `objects` (game object model) |
-| `docs/PHASE4.md` | Phase 4 status board (the game); roadmap steps are on `ROADMAP.html` |
+| `docs/PHASE4.md` | Phase 4 decisions (incl. out of scope), step map, measurements and port choices. Status lives on `ROADMAP.html` only |
 | **Project roadmap** | **The main roadmap and flowchart: `ROADMAP.html` in this folder, the project's local roadmap on this device (Gabriel, 2026-10-30 / 2026-10-31). It opens with no sign-in and is generated, so never edit it by hand.** Its page shell is `docs/ROADMAP.html`, which also opens on its own because it carries the same data between the `roadmap-data` markers (the only hand-edited page file: edit outside the markers). Update it with `python roadmap-store/roadmap_store.py write <file>`; ordered stages, boxes and arrows, task groups, tasks, build records and the activity log live in `roadmap-store/data/`. Rules and field list: `docs/ROADMAP_PROTOCOL.md`. When `ROADMAP.html` changes in the GitHub store repo, run `python roadmap-store/roadmap_store.py sync` (pulls and regenerates the local `ROADMAP.html` and the `docs/ROADMAP.html` data block; `write` and the build scripts do the same), see "Keeping the local page current" in the protocol |
 | `roadmap-store/` | Own git repository holding the roadmap data, so every account shares one copy. Rules in its `README.md` |
-| `docs/PHASE3.md` | Phase 3 status board + flowchart (renderer). Long details of finished work: `docs/archive/*.zip` (2026-10-30) |
+| `docs/PHASE3.md` | Phase 3 (renderer) results, assumptions and reference; no status board. Long details of finished work: `docs/archive/*.zip` (2026-10-30) |
 | `tools/` | Phase 1 tools: `meg` (MEG archives, used by the VFS), `formats` (ALO/ALA/…), `shaders`, `re`, `probe_mod` |
-| `docs/PHASE2.md` | Phase 2 status board + flowchart + design notes (determinism contract, file resolution order) |
+| `docs/PHASE2.md` | Phase 2 results and design notes (determinism contract, file resolution order); no status board |
 | `docs/re/` | Behavioural specs recovered from the binary (GALACTIC, HOTSPOTS, STRUCTS, SUBSYSTEMS, LUA_API, xml tags) |
 | `docs/assets/`, `docs/formats/`, `docs/shaders/` | Asset catalog and format specs |
 | `extracted/` | Game text (XML/Lua) zipped: `foc_data_text.zip`, `eaw_data_text.zip` |
@@ -66,9 +66,10 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
 4. Every module has a test exe registered with `add_test`. Keep them passing.
 5. Software a task needs is installed project-locally under `toolchain\` with a pinned version and a
    setup step in `toolchain\2_setup.cmd` — never system-wide, no admin, no PATH/registry changes.
-6. When a task finishes, update the roadmap (`roadmap_store.py write`, see `docs/ROADMAP_PROTOCOL.md`) and the current phase status (project docs
-   `claude/roadmap.md`, `claude/phase2-status.md`, and `docs/PHASE2.md` here): tick the item, update the
-   Mermaid flowchart node, record results and open items. A roadmap update always updates both copies (Gabriel, 2026-11-04): the GitHub
+6. When a task finishes, update the roadmap (`roadmap_store.py write`, see `docs/ROADMAP_PROTOCOL.md`): it is the only place for status, open items and the
+   flowchart (Gabriel, 2026-11-06: one main roadmap; the `docs/PHASE*.md` status boards, their Mermaid flowcharts and the `claude/*.md` project docs are not updated any more).
+   Tick the item, update the flowchart box, record results and open items there. Results, measurements, decisions and port choices still go in
+   `docs/PHASE4.md` (Decisions table, per-step notes) and `docs/re/`. A roadmap update always updates both copies (Gabriel, 2026-11-04): the GitHub
    store (`roadmap_store.py write` pushes it) and the local pages (`ROADMAP.html`, `docs/ROADMAP.html`), and the regenerated local pages are committed with
    the work, never reverted or left out of the PR (`docs/ROADMAP_PROTOCOL.md`, "Both copies on every update"). Keep edits minimal and factual. When all tasks in a roadmap group
    are finished, mark the group `done` on the roadmap in the same update (Gabriel, 2026-10-30, 2026-10-31): after closing tasks, re-read
