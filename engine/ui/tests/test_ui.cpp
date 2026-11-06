@@ -922,6 +922,20 @@ void test_orders() {
         out = ot.take();
         CHECK(out.size() == 1 && out[0].ids("ids").size() == 127 && out[0].ids("ids").front() == 100 &&
               out[0].ids("ids").back() == 226 && out[0].valid());
+        // q6 t19 (OBJECT_SCRIPTS §10.3): the pick tests' skip (Lua-hidden / garrisoned) also drops ids from the box.
+        WorldPickTests wt;
+        wt.skip = [](uint32_t id) { return id < 150; };
+        cb.pick_tests = &wt;
+        mark = s.frames.size();
+        for (int i = 0; i < 40; ++i) s.idle();
+        s.move(1, 1);
+        s.down(Button::Left);
+        s.move(798, 598);
+        s.up(Button::Left);
+        feed(in, ot, keys, cb, s, mark);
+        out = ot.take();
+        CHECK(out.size() == 1 && out[0].ids("ids").size() == 127 && out[0].ids("ids").front() == 150 &&
+              out[0].ids("ids").back() == 276);
     }
 
     // galactic: click fleet selects, right click planet moves each selected fleet, double click planet zooms

@@ -132,15 +132,26 @@ private:
 std::string atlas_key(std::string_view texture_name);  // upper-case, no directory, no extension
 
 // ---- MasterTextFile DAT: u32 count; count x { u32 crc, u32 value_chars, u32 key_chars }; UTF-16LE values;
-// ASCII keys. crc = CRC-32 of the key bytes as stored. Lookup by key CRC (binary search when sorted), exact key
-// compare, then an ASCII case-insensitive scan.
+// ASCII keys. crc = CRC-32 of the key bytes as stored. GALACTIC_DIALOGS §2.7: the lookup is CASE-SENSITIVE (CRC-32 of the
+// raw key bytes, binary search; [port] the key text is compared too, so a CRC clash does not mix two keys up). The text
+// system substitutes nothing (%s / %d are the callers' printf business) and keeps "\n" escapes as written: they become line
+// breaks where the text is wrapped (gui_unescape), not here.
 class TextDatabase {
 public:
     bool parse(std::span<const uint8_t> bytes, std::string* error = nullptr);
-    void add(std::string key, std::u16string value);  // tests; keeps the table sorted by (crc, key)
+    void add(std::string key, std::u16string value);  // tests; keeps the table sorted by (crc, key); marks the table loaded
+    // The table's text for `key`; nullptr when the file has no such key. [port] Runtime additions (below) are not returned,
+    // so a caller's own fallback for a missing key stays as it was.
     const std::u16string* find(std::string_view key) const;
-    // Text for a key, or the key itself (as UTF-16) when missing [port: the original shows the key].
+    // 0x1fa460 (TITLE, TEXT, goal list labels, most UI): the text, else the key itself widened, which is remembered as the
+    // key's text (the runtime-addition map, searched before the table on later lookups) - so an unknown id shows verbatim.
+    // "[MISSING]" for a null key or a table that was never loaded.
     std::u16string text(std::string_view key) const;
+    // 0x1fa680 (Add_Dialog_Text format text, Add_Objective): add = true as text(key); add = false: "[MISSING]" when absent.
+    std::u16string text(std::string_view key, bool add) const;
+    static constexpr std::u16string_view kMissing = u"[MISSING]";
+    bool loaded() const { return loaded_; }
+    size_t added() const { return added_.size(); }  // ids remembered by add-if-missing lookups
     size_t size() const { return keys_.size(); }
     // [port] dev tool (ALAMO_PSEUDO_LOC=1, game_ui.cpp): every value through pseudo_localize(), so every lookup sees it.
     void pseudo_localize_all();
@@ -154,6 +165,10 @@ private:
     std::vector<uint32_t> crcs_;
     std::vector<std::string> keys_;
     std::vector<std::u16string> values_;
+    // The runtime-addition map (+0x20, ordered by CRC; [port] by (CRC, key)). Mutable: a const lookup may add. Not
+    // thread-safe (the UI thread owns the table).
+    mutable std::map<std::pair<uint32_t, std::string>, std::u16string> added_;
+    bool loaded_ = false;
     bool pseudo_ = false;
 };
 // [port] dev tool, not original behaviour: the string in [brackets] with accents, to catch overflow before a real translation does:

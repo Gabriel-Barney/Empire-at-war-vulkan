@@ -130,9 +130,10 @@ So **nothing is forced open at campaign start**; 23.jpg is the player having cli
 Clicking `b_story_arc_g` (0x347600) opens the summary dialog [M: in one player-flag state it only toggles a
 UI flag].
 
-### 2.2 `IDD_STORY_SUMMARY_DIALOG` (23.jpg) [H for controls, M for fill]
+### 2.2 `IDD_STORY_SUMMARY_DIALOG` (23.jpg) [H for controls; fill: §2.8]
 Built by 0x107280, callback 0x107bb0, close 0x107900. In SP opening it **raises the galactic pause**, closing
-releases it. Controls (GUIDialogs.rc, 545 × 572 units, centred):
+releases it. How the list and the recap are filled, and when Completed is enabled, is in §2.8. Controls
+(GUIDialogs.rc, 545 × 572 units, centred):
 
 | control | text / role |
 |---|---|
@@ -247,6 +248,148 @@ holocron summary dialog itself raises the pause while it is open (§2.2), so the
    - recognise the 8 unused keywords instead of counting them as unknown (MUSIC, ANIM, CLEARTEXT, LOADCINEMATIC,
      CLEARIMAGE, HIDECINEMATIC, STOPMOVIE, WAIT_SPEECH).
 3. WAIT is ms of wall-clock time (port: seconds of presentation time, the same thing).
+
+### 2.7 Master text file lookup (q6 t14, 2026-11-04) [H unless tagged]
+
+This section covers lookups and substitution. The file layout is in `docs/assets/README.md` (Text DAT) and
+`docs/formats/SPEC.md` §7, and the language fallback and the "No %s MasterTextFile exists" message are in UI.md §3.5.
+
+**Loading.** The text system is the global at 0x140a7bc58. It is loaded by 0x1f9a60 → 0x1fabc0.
+- The path `.\Data\Text\MasterTextFile.txt` is split into folder and name, and the file opened is folder + name + `_` +
+  the language name (table 0x140a14190) + `.DAT`, for example `MasterTextFile_English.DAT`.
+- The reader takes the record count, then one {index, CRC, value length, key length} record per entry. It fills a
+  record array (+8), the wide values (+0x10) and the narrow keys (+0x18).
+- There is **no sort** on load: the lookup relies on the file being in CRC order already.
+- Byte +0 is the "loaded" flag. The value buffer is 8184 bytes.
+
+**Lookup.**
+- The key is copied into a 256-byte buffer, and its CRC32 is computed over the raw bytes (0x215a30). The lookup is
+  **case-sensitive**: `text_foo` does not find `TEXT_FOO`.
+- It searches the runtime-addition map (+0x20, an ordered map keyed by CRC) first, then binary-searches the record
+  array by CRC.
+- Two keys with the same CRC (or a duplicate key) resolve to whichever record the search lands on [M: no key-text
+  compare was seen].
+
+**Accessors:**
+
+| accessor | used by | id not in the table | null key, or table not loaded |
+|---|---|---|---|
+| 0x1fa460(key) | `TITLE`, `TEXT`, goal list labels, most UI | **adds** the id itself as its text and returns it | `[MISSING]` |
+| 0x1fa680(key, add) | Add_Dialog_Text format text, Add_Objective | add = 1: as 0x1fa460; add = 0: `[MISSING]` | `[MISSING]` |
+| 0x1fa1a0(key, out, add) | Add_Dialog_Text string slots | copies the text out (add as above) | `out` left empty |
+
+- **Missing id.** "Adds" means the key is converted from UTF-8 to wide (MultiByteToWideChar, code page 65001,
+  0x200870) and inserted into the runtime map under its CRC. So an unknown id **shows verbatim** (for example
+  `TEXT_STORY_FOO` on screen), no warning is logged, and later lookups of the same id find the inserted text.
+- **`\n` in values.** The two characters backslash and `n` are not converted at load time. They become a line break
+  only in the wrapped-text line splitter 0x26e070 (strings shorter than 0x2000 characters), called from 0x26deb0
+  [M: which UI paths go through that splitter].
+- **`%s` / `%d`.** The text system substitutes nothing. Substitution happens only where a caller uses the text as a
+  printf format:
+  - Add_Dialog_Text: a wide printf with two wide-string slots (LUA_API "Add_Dialog_Text");
+  - the holocron `TEXT` command with a `Story_Var` (§2.8).
+
+  `Add_Objective` (0x69df00 → 0x326460) looks its text up once, with add = 1, when the objective is added, and stores
+  the resulting text, with no substitution. It needs exactly 2 arguments (string, bool), and errors with "no game mode"
+  outside a mode.
+
+**Port notes**
+- Case-sensitive CRC32 lookup.
+- A missing id shows the id itself and is remembered. `[MISSING]` appears only for a null key, an unloaded table, or
+  an add = 0 lookup.
+- Turn `\n` into a line break at wrap time, not at load.
+- No substitution inside the text system.
+
+### 2.8 Story_Dialog: load time, holocron list and summary fill (q6 t14, 2026-11-04) [H unless tagged]
+
+**Load time.** 0x47d9c0(name, text) loads `data/scripts/story/<name>.txt` (parser §2.6).
+- Its cache map (0x140b311f8) is keyed by the raw CRC of the **name as given**, so the key is case-sensitive although
+  the file system is not.
+- It returns 0 when the name is already cached or the parse fails. A non-null `text` parses that in-memory text
+  instead of reading the file.
+- Callers:
+
+  | caller | what calls it | when the file loads |
+  |---|---|---|
+  | 0x4562a0 | story event build from the parsed plot XML | **plot load**, not Fire |
+  | 0x73e9a0 | Lua `Set_Dialog` | at the call |
+  | 0x4bfdc0 | random plots | when the plot is built |
+  | 0x47e340 | the holocron's save-load chunk reader | at load |
+
+**Holocron list.** Fire step 6 (STORY.md §1.5) calls 0x47dc70(dialog, chapter, Story_Var, tag, &event dialog text
+list, auto-tag flag, 0). The list is a global vector (0x140a2a4c8: data 0x140a2a4d0, count 0x140a2a4d8) of 0x70-byte
+records:
+
+| offset | field |
+|---|---|
+| +0x00 | Story_Dialog name |
+| +0x20 | Story_Var |
+| +0x40 | tag |
+| +0x60 | pointer to the event's Add_Dialog_Text list (event +0x2C0, LUA_API) |
+| +0x68 | chapter |
+| +0x6C | completed |
+| +0x6D | read |
+| +0x6E | auto-tag (the tag was generated, STORY.md §1.5) |
+| +0x6F | not traced |
+
+- A new record is inserted at **index 0** (newest first). There is no de-duplication: an event that fires twice
+  (Perpetual, TRIGGER_EVENT) adds two records.
+- Adding a record sets the "last summary" frame 0x140b311f0 to the global frame 0x140b0a320, and logs "Adding story
+  summary %s, chapter %d, tag %s".
+- Two story rewards act on the list. Each takes the tag in Reward_Param1 and acts on the first (newest) record with
+  that tag:
+  - 0x2C `REMOVE_STORY_GOAL` → 0x47eea0 removes it;
+  - 0x38 → 0x47f5b0 sets completed = 1 [M for the name `STORY_GOAL_COMPLETED`, by elimination; 146 uses in FoC].
+
+  They log "Removing story summary" / "Removing story goal".
+- Saved by 0x28c900 → 0x47f3f0 → 0x47f210 and loaded by 0x47e340 [L: how the list pointer is re-linked to its event
+  after a load].
+
+**Summary dialog fill** (corrects the [M] parts of §2.2):
+
+- **Build** (0x107280):
+  - The Completed tab is enabled only while byte 0x140b305e8 is set. 0x28dbe0 sets that byte from a campaign field
+    (+0x379) [L for the field's meaning].
+  - Active is checked, and flags 0x140a12220 / 0x140a12221 are set to 1.
+  - Pause: in galactic mode the galactic pause (0x28bb80); in a tactical mode, mode vf+0x38. Neither in MP.
+- **Goal list** (0x107f00): one row per record.
+  - The Active tab lists records with completed = 0, the Completed tab those with completed ≠ 0.
+  - The row label is the chapter's **first `TEXT`** key, looked up with 0x1fa460 (not `TITLE`) [H for the read; M that
+    it is exactly one row per record].
+  - The row colour comes from the `TEXTCOLOR` before that `TEXT` (default 128, 128, 255):
+
+    | record | colour |
+    |---|---|
+    | active, unread | the colour |
+    | active, read | 0.66 × the colour, highlight 172, 172, 255 |
+    | completed | 0.66 × the colour |
+
+- **Executor** (0x1089e0), run on the selected record (0x140a12224):
+  - It sets read = 1 and runs the chapter's commands (0x108430(dialog, chapter)).
+  - `TEXT`: the looked-up text. If the record's Story_Var is not empty, the text is used as a wide printf format
+    (`swprintf`, 0x800 characters) with Story_Var as the argument [M: Story_Var is a narrow string, so a plain `%s`
+    would misread it; no shipped event sets Story_Var]. The result is wrapped and added to `IDC_STORY_RECAP` (0x108720,
+    0x1c4920).
+  - `EXTRA_TEXT` (0x1093b0): each line of the record's list, read **through the pointer** each time the chapter is
+    shown, is wrapped and added in the current colour. All lines are added at once, with no WAIT between them. The
+    lines are already formatted (Add_Dialog_Text did the lookup and substitution), so there is no second lookup.
+  - `TITLE`: lookup, then the header (0x1c8ea0).
+  - `TEXTCOLOR` sets the colour; `NEWLINE` (0x1091b0); `WAIT`; `CLEARIMAGE` (0x109bf0); `STOPMOVIE`.
+  - `WAIT_SPEECH` holds while flag 0x140a12221 is set.
+
+**Port notes**
+- Load every `Story_Dialog` file at plot load, cached by the exact name. `Set_Dialog` loads at the call.
+- The holocron log:
+  - newest first, no de-duplication;
+  - each record keeps a reference to its event's dialog text list, so later Add / Clear calls show up in it;
+  - the tag defaults to `<dialog>_<chapter>`;
+  - REMOVE_STORY_GOAL removes, and 0x38 completes, the newest record with the tag.
+- Goal list rows:
+  - label = the chapter's first `TEXT`;
+  - split into Active and Completed by the completed flag;
+  - dimmed (0.66) once read or completed.
+- `EXTRA_TEXT` prints the stored lines as they are.
+- Save the log with the campaign: dialog, chapter, Story_Var, tag, flags, and which event's list it points to.
 
 ---
 
@@ -418,6 +561,11 @@ visible in the original.
 | 0x2706c0 | font load incl. stretch |
 | 0x47d9c0 / 0x47eac0 | story script load (cache by name) / parse; keyword table 0xa2a1d0 (§2.6) |
 | 0x1089e0 / 0x1053c0 | story script executors: holocron summary / IDD_STORY_DIALOG (§2.6) |
+| 0x1f9a60 → 0x1fabc0 | master text file load (§2.7) |
+| 0x1fa460 / 0x1fa680 / 0x1fa1a0 / 0x215a30 | text lookup: add-if-missing / optional add / copy-out / CRC32 (§2.7) |
+| 0x47dc70 / 0x47eea0 / 0x47f5b0 | holocron add / remove by tag (reward 0x2c) / complete by tag (reward 0x38) (§2.8) |
+| 0x47f3f0 → 0x47f210 / 0x47e340 | holocron save / load (§2.8) |
+| 0x107f00 / 0x1093b0 | summary goal list fill / EXTRA_TEXT lines (§2.8) |
 | 0x347ae0 → 0x3d6c30 | `planet_info` click → command-bar callback +0x2898 with HUD +0x2150 (§9) |
 | 0xd3c20 / 0xd3eb0 / 0xd3e00 / 0xd3dc0 | IDD_PLANET_INFO open / fill / callback / close (§9) |
 | 0xd5d00 / 0xd6120 | planet-info list fill (wrap + colour) / planet model render to IDC_PLANET_ICON |

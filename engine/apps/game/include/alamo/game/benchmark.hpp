@@ -17,12 +17,18 @@
 //   STATS        frame_time_stats: count, mean, median, p99 and worst of the counted frames' times (nearest-rank
 //                percentiles on the sorted samples).
 //   REPORT       bench_report_json: one JSON object (fixed key order, "alamo_game_benchmark": 1).
+//   SCENARIO     (bm2) --bench-scenario FILE fills these options from a BM1 / BM2 scenario file instead of the flags
+//                (benchmark_scenario.hpp); --bench-make FILE runs from --bench-save and writes a scenario at the end.
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
+
+#include "alamo/sim/bench_scenario.hpp"
 
 namespace alamo::game {
 
@@ -51,6 +57,12 @@ const BenchPreset* find_bench_preset(std::string_view name);  // case-sensitive;
 struct BenchmarkOptions {
     BenchMode mode = BenchMode::Off;
     std::string save;                                   // --bench-save FILE: the .alsv the run starts from (required)
+    // bm2 (benchmark_scenario.hpp): --bench-scenario FILE (run a scenario: save, orders, fingerprint, settings, camera) or
+    // --bench-make FILE (make = true: run from --bench-save and write the scenario; FILE may be a recipe). The other
+    // flags override what the file says.
+    std::string scenario;
+    bool make = false;
+    std::shared_ptr<const sim::bench::Scenario> scenario_data;  // the loaded manifest / recipe (null without one)
     std::string preset = std::string(kDefaultBenchPreset);  // --bench-preset NAME
     uint64_t ticks = 900;                               // --bench-ticks N: measured sim ticks (900 = 30 s of game time)
     uint32_t frames_per_tick = 2;                       // --bench-frames-per-tick K (fixed-frames mode, 1..64)
@@ -129,6 +141,17 @@ struct BenchReport {
     uint64_t final_crc = 0;
     std::string presentation_check = "skipped";  // "match" / "diverged" / "skipped"
     std::vector<std::string> autopilot;          // what the run answered for the player (battle prompts, dialogs)
+    // bm2: the scenario ("" = a plain --bench-save run), its version, the fingerprint check ("match", "skipped" or why it
+    // diverged: then the run is not comparable), the scenario written by --bench-make, the camera keys used.
+    std::string scenario, fingerprint = "skipped", scenario_made;
+    uint32_t scenario_version = 0;
+    uint64_t camera_keys = 0;
+    // bm2 t06: GPU timer scopes over the counted frames ("frame" = the whole command buffer, then the renderer's
+    // "world" / "scene" / "ao" / "post" / "taa" in first-seen order), in GPU milliseconds. gpu_timestamps false: the
+    // queue has no timestamps (no scopes).
+    bool gpu_timestamps = false;
+    uint64_t gpu_frames = 0;
+    std::vector<std::pair<std::string, FrameTimeStats>> gpu_ms;
 };
 std::string bench_report_json(const BenchReport& r);
 

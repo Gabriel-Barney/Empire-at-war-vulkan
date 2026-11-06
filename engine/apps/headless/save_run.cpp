@@ -207,10 +207,10 @@ const char* const kTypesXml =
     " <Planet Name=\"PlanetC\"><Behavior>PLANET</Behavior></Planet>\n"
     " <Planet Name=\"PlanetD\"><Behavior>PLANET</Behavior></Planet>\n"
     " <StarBase Name=\"SB1\"/>\n"
-    " <SpaceUnit Name=\"Corvette\"/>\n"
+    " <SpaceUnit Name=\"Corvette\"><Lua_Script>Save_Test_Object</Lua_Script></SpaceUnit>\n"
     " <GroundInfantry Name=\"Infantry\"/>\n"
     " <GroundStructure Name=\"Barracks\"/>\n"
-    " <SpaceUnit Name=\"Fighters\"/>\n"
+    " <SpaceUnit Name=\"Fighters\"><Lua_Script>Save_Test_Object</Lua_Script></SpaceUnit>\n"
     "</SaveTest>\n";
 const char* const kPlots =
     "<Story_Mode_Plots><Lua_Script>Story_Save_Test</Lua_Script><Active_Plot>Story_Save_Test.xml</Active_Plot>"
@@ -242,11 +242,38 @@ const char* const kPlot =
     " <Event Name=\"Ack_Flag\"><Event_Type>STORY_FLAG</Event_Type><Event_Param1>Acked</Event_Param1>"
     "<Event_Param2>1</Event_Param2></Event>\n"
     "</Story>\n";
-// Script state across the save: a service counter (global), a coroutine (main's loop) and a GlobalValue.
+// Script state across the save: a service counter (global), a coroutine (main's loop) and a GlobalValue; q6 t19: a
+// thread sleeping on GetCurrentTime (PGBase Sleep inline), a thread waiting for an event the story delivers later
+// (Ten_Seconds / Twenty_Seconds), a closure counter (upvalue), a cycle and a shared table. Every GlobalValue write is in
+// the frame CRC.
 const char* const kScript =
-    "function Base_Definitions() ServiceRate = 0.5 services = 0 seen = {} end\n"
+    "local function make_counter() local c = 0 return function() c = c + 1 return c end end\n"
+    "bump = make_counter()\n"
+    "function Base_Definitions() ServiceRate = 0.5 services = 0 seen = {} ring = {} ring.next = {back = ring} "
+    "graph = {a = seen, b = seen, ring = ring} end\n"
     "function Story_Event_Trigger(name) seen[name] = services if name == \"Tech_Seen\" then Story_Event(\"SCRIPT_SAW_TECH\") end end\n"
-    "function main() while true do services = services + 1 GlobalValue.Set(\"Save_Test_Services\", services) "
+    "function Sleeper() while true do local s = GetCurrentTime() while GetCurrentTime() - s < 3 do coroutine.yield(true) end "
+    "GlobalValue.Set(\"Save_Test_Sleeps\", bump()) end end\n"
+    "function Waiter() while not graph.b[\"Twenty_Seconds\"] do coroutine.yield(true) end "
+    "GlobalValue.Set(\"Save_Test_Waited\", services .. \"/\" .. tostring(graph.a == seen) .. \"/\" .. "
+    "tostring(graph.ring.next.back == ring)) end\n"
+    "function main() Create_Thread(\"Sleeper\") Create_Thread(\"Waiter\") while true do services = services + 1 "
+    "GlobalValue.Set(\"Save_Test_Services\", services) coroutine.yield(true) end end\n";
+// q6 t19: the GameScoring script (SimHost::set_scoring_script; its state is the "scoring" chunk): services, the planet
+// owner changes it is told about (planet wrappers kept in a table), the mode-start event.
+const char* const kScoring =
+    "function Base_Definitions() ServiceRate = 0.3 changes = {} count = 0 end\n"
+    "function Game_Mode_Starting_Event(mode, map) GlobalValue.Set(\"Save_Test_Scoring_Mode\", mode .. \":\" .. map) end\n"
+    "function Galactic_Planet_Faction_Change(planet, new_owner, old_owner) count = count + 1 changes[count] = planet "
+    "GlobalValue.Set(\"Save_Test_Scoring_Changes\", count .. \"/\" .. tostring(changes[count] == planet)) end\n"
+    "function main() local n = 0 while true do n = n + 1 GlobalValue.Set(\"Save_Test_Scoring_Pumps\", n) "
+    "coroutine.yield(true) end end\n";
+// q6 t19: a game-object script on the Corvette (attached at the galaxy setup) and the Fighters (attached as they are
+// built): its state is the "object_scripts" chunk; one first-pump draw each, a GlobalValue per pump.
+const char* const kObjectScript =
+    "function Base_Definitions() ServiceRate = 1 pumps = 0 end\n"
+    "function main() local id = Object.Get_Object_ID() local times = {} while true do pumps = pumps + 1 "
+    "times[pumps] = GetCurrentTime() GlobalValue.Set(\"Save_Test_Object_\" .. id, pumps .. \"/\" .. table.getn(times)) "
     "coroutine.yield(true) end end\n";
 
 GalacticRules rules() {
@@ -409,6 +436,8 @@ public:
         files_.add("Data\\XML\\Story_Plots_Save_Test.xml", syn::kPlots);
         files_.add("Data\\XML\\Story_Save_Test.xml", syn::kPlot);
         files_.add("Data\\Scripts\\Story\\Story_Save_Test.lua", syn::kScript);
+        files_.add("Data\\Scripts\\Miscellaneous\\Save_Test_Scoring.lua", syn::kScoring);    // q6 t19
+        files_.add("Data\\Scripts\\GameObject\\Save_Test_Object.lua", syn::kObjectScript);  // q6 t19
         if (!db_.load(files_) || !types_.build(db_)) {
             err = "synthetic: object types did not build";
             return false;
@@ -425,8 +454,14 @@ public:
         sim::SimConfig cfg;
         cfg.seed = seed;
         cfg.story_crc = story_;
+        cfg.players = sim::session_players(setup_.players.size());
+        cfg.object_scripts = story_;  // q6 t19: the story session also runs a GameScoring and game-object scripts
         s->host = std::make_unique<sim::SimHost>(types_, *s->js, cfg);
         sim::SimHost& host = *s->host;
+        if (story_) {
+            host.set_scoring_script(&files_, "Save_Test_Scoring");
+            host.set_object_script_files(&files_);
+        }
         s->gs = host.start_galactic(rules_, setup_);
         if (!s->gs) {
             err = "synthetic: start_galactic failed";
@@ -449,6 +484,7 @@ public:
         d.campaign = setup_.map.campaign_name;
         for (const galactic::PlayerSetup& ps : setup_.players) d.setup.push_back(session_player(rules_, ps, ps.ai ? "stand-in" : ""));
         d.set_option("story", story_ ? "1" : "0");
+        d.set_option("scripts", story_ ? "scoring,object" : "none");  // q6 t19
         d.set_option("orders", "empire-production,underworld-invade");
         d.data_fingerprint = fingerprint_;
         host.set_session(std::move(d));
@@ -577,6 +613,7 @@ public:
         sim::SimConfig cfg;
         cfg.seed = seed;
         cfg.story_crc = ho_.story;
+        cfg.players = sim::session_players(setup_.players.size());
         s->host = std::make_unique<sim::SimHost>(types_, *s->js, cfg);
         sim::SimHost& host = *s->host;
         s->gs = host.start_galactic(rules_, setup_);
@@ -641,6 +678,7 @@ public:
             *s->gs, host.galactic_mode()->primary(), &types_, files_.get(), host.random(), defs_, eqs_, tinfo_,
             [hp](uint8_t p, const commands::EventData& ev) { return hp->execute_direct(p, commands::CommandSource::AI, ev); }, wcfg);
         ai::GalacticAiWorld& world = *s->world;
+        world.set_conflicts(&s->battles->conflicts());  // q6 t03: TimeSince*Defender/Attacker stamps
         std::vector<std::string> wd;
         if (!world.load_plans(plan_files_, &wd) || !world.start(&wd)) {
             err = "galactic: AI start failed: " + join(wd, "; ");

@@ -46,7 +46,12 @@ using ForceTypeLookup = std::function<ForceType(std::string_view type_name)>;
 // HeroCompany / UniqueUnit and others -> space if the type (or a HeroCompany's first Company_Units
 // member) has a CategoryMask token among Fighter, Bomber, Corvette, Frigate, Capital, SpaceHero,
 // else ground. PROVISIONAL classification. `types` must outlive the lookup.
+// q6: a type takes the galactic role rule (galactic::galactic_unit_kind: DUMMY_* behaviour first, then the tag table)
+// unless its tag is one where the seed's table above and the galactic tag table disagree (GroundBase, HeroCompany,
+// HeroUnit, UniqueUnit, SpaceProp: the rule above, so vanilla seeds do not change); mod tags take their behaviour's role.
 ForceTypeLookup make_force_type_lookup(const objects::GameObjectTypes& types);
+// One type (index into `types`; invalid for an out-of-range index). legacy = the seed's tag rule alone (tests).
+ForceType force_type_of(const objects::GameObjectTypes& types, uint32_t type, bool legacy = false);
 
 struct CampaignSeedOptions {
     std::function<bool(std::string_view faction)> is_neutral;            // default: "Neutral"

@@ -30,6 +30,10 @@
 //   story.bridge     the story VMs' ObjectBridge script state                                                } session
 //   story.players    the story VMs' LuaPlayerWorld                                                           } only
 //   story.presentation  the story VMs' PresentationLog (blocks the scripts wait on, presentation state) (stage 2)
+//   scoring          q6 t19, while a GameScoring script is configured: its script block (lua/script_save.hpp), its own
+//                    player world, queued mode-start events, counters (SimHost::write_scoring)
+//   object_scripts   q6 t19, while the object-script host exists: every live object script, the pools and the type
+//                    instances (ObjectScriptHost::write; object_scripts.hpp "SAVES"); read in pass 2 only
 //   <participants>   systems the application attached (add_save_participant), in registration order, e.g.
 //                    "galactic.conflicts" + "battles" (CampaignBattles::attach), "ai" (GalacticAiWorld, attached by the
 //                    application), "anim" (SimAnimation::attach), and while a battle runs the battle chunks CampaignBattles
@@ -55,7 +59,9 @@
 //           chunks) is read strictly, as for a galactic save.
 // WHEN SAVING IS REFUSED (SimHost::save_allowed): no session; a tactical mode on the stack while no participant has a
 // rebuild callback (e.g. alamo_headless --map runs a bare tactical mode); a story blocker; a participant blocker (e.g.
-// CampaignBattles: a battle that has ended or was stopped for auto-resolve and has not been popped yet).
+// CampaignBattles: a battle that has ended or was stopped for auto-resolve and has not been popped yet). save() itself
+// also fails when a GameScoring or object-script Lua state cannot be persisted (LuaVm::save_error, e.g. a stray light
+// userdata).
 // A failed load (LoadReport names every failing / missing chunk) leaves a half-loaded session: discard it. Orders after a
 // load: SimHost::replay_after_load / record_after_load (commands/recording.hpp "REPLAY FROM A SAVE").
 #pragma once

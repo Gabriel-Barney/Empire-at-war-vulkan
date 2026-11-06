@@ -91,6 +91,7 @@ int economy_run(const MapRunOptions& opt, const std::string& data_dir) {
         jobs::JobSystem js(jobs::JobSystemConfig{workers});
         sim::SimConfig cfg;
         cfg.seed = opt.seed;
+        cfg.players = sim::session_players(setup.players.size());
         sim::SimHost host(types, js, cfg);
         galactic::GalacticSim* gs = host.start_galactic(rules, setup);
         if (!gs) return false;
@@ -191,7 +192,12 @@ int story_run(const MapRunOptions& opt, const std::string& data_dir, const std::
         sim::SimConfig cfg;
         cfg.seed = opt.seed;
         cfg.story_crc = true;
+        cfg.players = sim::session_players(setup.players.size());
         sim::SimHost host(types, js, cfg);
+        if (opt.scoring)  // q6 t06
+            if (const auto scoring = db.constants().get("Game_Scoring_Script_Name"))
+                host.set_scoring_script(files.get(), std::string(*scoring));
+        host.set_scoring_campaign(name);  // q6 t09: Game_Mode_Starting_Event("Galactic", campaign)
         galactic::GalacticSim* gs = host.start_galactic(rules, setup);
         if (!gs) return false;
         sim::StoryStart st;
@@ -214,6 +220,11 @@ int story_run(const MapRunOptions& opt, const std::string& data_dir, const std::
         if (!opt.quiet && workers == (opt.check_workers ? jobs::determinism_worker_counts().front() : opt.workers)) {
             for (const auto& e : s.log()) std::printf("  %s\n", e.text().c_str());
             for (const auto& m : s.lua_messages()) std::printf("  lua: %s\n", m.c_str());
+            for (const auto& m : host.scoring_messages()) std::printf("  scoring: %s\n", m.c_str());
+            if (opt.scoring)  // q6 t09
+                std::printf("  scoring: %" PRIu64 " services, %" PRIu64 " event calls, %" PRIu64 " releases, script %s\n",
+                            host.scoring_services(), host.scoring_calls(), host.scoring_releases(),
+                            host.scoring_vm() ? "running" : "gone");
         }
         return true;
     };

@@ -1,6 +1,9 @@
 #include "alamo/ai/ai_budget.hpp"
 
 #include <algorithm>
+#include <cmath>
+
+#include "alamo/ai/ai_types.hpp"
 
 #include "alamo/core/sim_crc.hpp"
 
@@ -8,6 +11,7 @@ namespace alamo::ai {
 
 void AiBudget::reset(size_t categories) {
     cat_.assign(categories, Category{});
+    order_.clear();
     rate68_ = period_ = refund_ = 0.0f;
     reset_ = init_ = false;
 }
@@ -26,19 +30,34 @@ AiBudget::GoalEntry* AiBudget::find(int32_t c, uint32_t goal) {
     return nullptr;
 }
 
-void AiBudget::normalise(std::span<const float> raw) {
+bool AiBudget::add_member(int32_t c) {
+    if (!valid(c) || is_member(c)) return false;
+    order_.push_back(c);
+    return true;
+}
+
+bool AiBudget::is_member(int32_t c) const { return std::find(order_.begin(), order_.end(), c) != order_.end(); }
+
+void AiBudget::normalise_over(std::span<const float> raw, std::span<const int32_t> order) {
     float sum = 0.0f;
-    for (size_t i = 0; i < cat_.size(); ++i) {
+    for (const int32_t c : order) {
+        const auto i = static_cast<size_t>(c);
         const float w = i < raw.size() && raw[i] > 0.0f ? raw[i] : 0.0f;  // negatives become 0
         cat_[i].weight = w;
         sum += w;
     }
-    for (Category& k : cat_) k.weight = sum != 0.0f ? k.weight / sum : 1.0f / static_cast<float>(cat_.size());
+    for (const int32_t c : order) {
+        Category& k = cat_[static_cast<size_t>(c)];
+        k.weight = sum != 0.0f ? k.weight / sum : 1.0f / static_cast<float>(order.size());
+    }
 }
+
+void AiBudget::normalise(std::span<const float> raw) { normalise_over(raw, order_); }
 
 void AiBudget::init(std::span<const float> raw, float credits) {
     normalise(raw);
-    for (Category& k : cat_) {
+    for (const int32_t c : order_) {
+        Category& k = cat_[static_cast<size_t>(c)];
         k.applied = k.weight;
         k.A = k.P = credits * k.weight;
         k.R = k.I = 0.0f;
@@ -50,7 +69,8 @@ void AiBudget::init(std::span<const float> raw, float credits) {
 
 void AiBudget::reweight(std::span<const float> raw) {
     normalise(raw);
-    for (Category& k : cat_) {
+    for (const int32_t c : order_) {
+        Category& k = cat_[static_cast<size_t>(c)];
         k.A = k.P;
         k.R = k.I;
         for (GoalEntry& e : k.goals) {
@@ -61,13 +81,25 @@ void AiBudget::reweight(std::span<const float> raw) {
     }
 }
 
+void AiBudget::weigh(std::span<const float> raw, std::span<const uint8_t> member) {
+    std::vector<int32_t> order;  // the flagged members in category order
+    for (size_t i = 0; i < cat_.size(); ++i) {
+        cat_[i].weight = 0.0f;
+        if (i < member.size() && member[i] != 0) order.push_back(static_cast<int32_t>(i));
+    }
+    if (order.empty()) return;
+    normalise_over(raw, order);
+    init_ = true;
+}
+
 void AiBudget::tick(float income, float period, float credits) {
     const float T = period;
     if (!(T > 0.0f)) return;
     const float rate = income / T;
     rate68_ = rate;
     float sigma = refund_;
-    for (Category& k : cat_) {
+    for (const int32_t c : order_) {
+        Category& k = cat_[static_cast<size_t>(c)];
         k.P = k.A;
         const float iprev = k.I;
         k.I = k.applied * rate;
@@ -84,7 +116,8 @@ void AiBudget::tick(float income, float period, float credits) {
         k.applied = k.weight;
         sigma += k.P;
     }
-    for (Category& k : cat_) {
+    for (const int32_t c : order_) {
+        Category& k = cat_[static_cast<size_t>(c)];
         if (reset_) k.P = sigma * k.weight;
         k.P += (credits - sigma) * k.weight;  // drift redistribution
     }
@@ -231,7 +264,7 @@ void AiBudget::flush(int32_t c) {
 
 float AiBudget::pools_total() const {
     float s = 0.0f;
-    for (const Category& k : cat_) s += k.P;
+    for (const int32_t c : order_) s += cat_[static_cast<size_t>(c)].P;
     return s;
 }
 
@@ -262,6 +295,39 @@ void AiBudget::hash(StateHasher& h) const {
     h.f32(period_);
     h.f32(refund_);
     h.boolean(reset_);
+    // §9.5 member order (galactic only; the tactical budget has none and hashes as before).
+    if (!order_.empty()) {
+        h.u32(static_cast<uint32_t>(order_.size()));
+        for (const int32_t c : order_) h.i32(c);
+    }
+}
+
+int32_t ai_budget_key(std::span<const Param> params, const std::function<int64_t(std::string_view)>& goal_category,
+                      const std::function<uint64_t(std::string_view)>& object_category) {
+    const auto low32 = [](int64_t v) { return static_cast<int32_t>(static_cast<uint32_t>(static_cast<uint64_t>(v))); };
+    const auto goal = [&](std::string_view n) -> int64_t { return goal_category ? goal_category(n) : -1; };
+    for (const Param& p : params) {
+        if (!ai_iequal(p.name, "Parameter_Category")) continue;
+        switch (p.value.kind) {
+            case ParamValue::Kind::Number:
+                return std::fabs(p.value.number) < 9.0e18 ? low32(static_cast<int64_t>(p.value.number)) : -1;
+            case ParamValue::Kind::Enum: {
+                const bool goal_enum = ai_iequal(p.value.text, "AIGoalCategoryType");
+                int64_t v = 0;
+                for (const std::string& n : p.value.enum_values) {
+                    const int64_t x = goal_enum ? goal(n) : static_cast<int64_t>(object_category ? object_category(n) : uint64_t{0});
+                    if (goal_enum && x < 0) return -1;
+                    v |= x;
+                }
+                return low32(v);
+            }
+            default: {
+                const int64_t x = goal(p.value.text);
+                return x < 0 ? -1 : low32(x);
+            }
+        }
+    }
+    return -1;
 }
 
 }  // namespace alamo::ai

@@ -593,8 +593,15 @@ struct Evaluator {
         return scaled + lo;
     }
 
-    bool fail(EvalError e) {
-        if (error == EvalError::None) error = e;
+    const Expression* fail_expr = nullptr;  // q6 t10 diagnostics: the node of the first failure
+    uint32_t fail_node = 0;
+
+    bool fail(EvalError e, const Expression& x, uint32_t i) {
+        if (error == EvalError::None) {
+            error = e;
+            fail_expr = &x;
+            fail_node = i;
+        }
         return false;
     }
 
@@ -610,20 +617,20 @@ struct Evaluator {
                 t.path = std::span<const TokenId>(x.path).subspan(n.path_begin, n.path_len);
                 t.params = std::span<const Param>(x.params).subspan(n.param_begin, n.param_count);
                 t.tokens = &set.tokens();
-                if (!resolver.resolve(ctx, t, out)) return fail(EvalError::Token);
+                if (!resolver.resolve(ctx, t, out)) return fail(EvalError::Token, x, i);
                 return true;
             }
             case Op::Function: {
-                if (n.ref == kUnresolved || n.ref >= set.size()) return fail(EvalError::Function);
-                if (depth + 1 >= kMaxDepth) return fail(EvalError::Recursion);
+                if (n.ref == kUnresolved || n.ref >= set.size()) return fail(EvalError::Function, x, i);
+                if (depth + 1 >= kMaxDepth) return fail(EvalError::Recursion, x, i);
                 const Equation& e = set.equation(n.ref);
-                if (!e.parsed || e.expr.empty()) return fail(EvalError::Function);
+                if (!e.parsed || e.expr.empty()) return fail(EvalError::Function, x, i);
                 reseed(e.name);  // A2 tactical: the inner Evaluate reseeds the shared '#' state [M]
                 return eval(e.expr, e.expr.root, depth + 1, out);
             }
             case Op::Script: {  // A2 stage 2: the resolver may run the Script_<File> evaluator
                 const std::span<const Param> params = std::span<const Param>(x.params).subspan(n.param_begin, n.param_count);
-                if (!resolver.resolve_script(ctx, n.name, params, out)) return fail(EvalError::Script);
+                if (!resolver.resolve_script(ctx, n.name, params, out)) return fail(EvalError::Script, x, i);
                 return true;
             }
             case Op::Neg: {
@@ -635,7 +642,7 @@ struct Evaluator {
             case Op::Clamp: {
                 double v = 0, lo = 0, hi = 0;
                 if (!eval(x, n.a, depth, v) || !eval(x, n.b, depth, lo) || !eval(x, n.c, depth, hi)) return false;
-                if (lo > hi) return fail(EvalError::Clamp);  // A2 galactic (AI_GALACTIC_3 §7.1) [H]
+                if (lo > hi) return fail(EvalError::Clamp, x, i);  // A2 galactic (AI_GALACTIC_3 §7.1) [H]
                 out = lo > v ? lo : std::min(hi, v);
                 return true;
             }
@@ -655,7 +662,7 @@ struct Evaluator {
                     out = 0.0;
                     return true;
                 }
-                if (b == 0.0) return fail(EvalError::DivideByZero);
+                if (b == 0.0) return fail(EvalError::DivideByZero, x, i);
                 out = a / b;
                 return true;
             case Op::Random:  // A2 tactical: the own reseeded LCG, never the synced RNG (AI_GALACTIC_3 §7.3)
@@ -667,7 +674,7 @@ struct Evaluator {
             case Op::Le: out = a <= b ? 1.0 : 0.0; return true;
             case Op::Eq: out = a == b ? 1.0 : 0.0; return true;
             case Op::Ne: out = a != b ? 1.0 : 0.0; return true;
-            default: return fail(EvalError::Empty);
+            default: return fail(EvalError::Empty, x, i);
         }
     }
 };
@@ -740,6 +747,20 @@ const char* eval_error_name(EvalError e) {
         case EvalError::Clamp: return "clamp-range";            // A2 galactic
     }
     return "?";
+}
+
+std::string eval_failure_site(const EquationSet& set, const EvalResult& r) {
+    if (r.ok) return {};
+    if (!r.fail_expr || r.fail_node >= r.fail_expr->nodes.size()) return eval_error_name(r.error);
+    const Expression& x = *r.fail_expr;
+    const ExprNode& n = x.nodes[r.fail_node];
+    switch (n.op) {
+        case Op::Token:
+            return token_path_string(n.root, std::span<const TokenId>(x.path).subspan(n.path_begin, n.path_len), set.tokens());
+        case Op::Function: return std::string(eval_error_name(r.error)) + " Function_" + n.name;
+        case Op::Script: return "Script_" + n.name;
+        default: return eval_error_name(r.error);
+    }
 }
 
 // ---- parsing ----
@@ -876,6 +897,8 @@ EvalResult evaluate(const EquationSet& set, const Expression& expr, const EvalCo
     ev.reseed({});  // A2 tactical: an anonymous expression (no equation name: CRC part 0)
     r.ok = ev.eval(expr, expr.root, 0, r.value);
     r.error = ev.error;
+    r.fail_expr = ev.fail_expr;
+    r.fail_node = ev.fail_node;
     if (!r.ok) r.value = 0.0;
     return r;
 }
@@ -895,6 +918,8 @@ EvalResult evaluate(const EquationSet& set, uint32_t equation, const EvalContext
     ev.reseed(e.name);  // A2 tactical: 0x5f11a0 before the evaluation (AI_GALACTIC_3 §7.3)
     r.ok = ev.eval(e.expr, e.expr.root, 0, r.value);
     r.error = ev.error;
+    r.fail_expr = ev.fail_expr;
+    r.fail_node = ev.fail_node;
     if (!r.ok) r.value = 0.0;
     return r;
 }

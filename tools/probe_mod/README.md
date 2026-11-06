@@ -224,3 +224,27 @@ Double-click `s7s8_probes\run_s7s8.cmd` and play two skirmish battles:
 
 Send back `s7s8_probes\out\<run>\` (`report.txt` first). Cleanup is automatic (`cleanup_s7s8.cmd` after a crash).
 Full instructions, expected answers and the docs/re sections to update: `s7s8_probes\README.md`.
+
+---
+
+# Q6 t15 probes (`tools\probe_mod\q6_t15_probes\`)
+
+Roadmap Q6 t15: six retail checks of the Q6 `[port]` rules:
+
+- EliminationLatch (does a GC end for a player that owns nothing);
+- the object-script first-pump draw bound, and whether vanilla `Lua_Script` objects run their scripts;
+- the Perpetual STORY_ELAPSED period;
+- the load-time story resume order;
+- the TR Blood Gulch land end time;
+- the Select All (Ctrl+A) look.
+
+Two sessions:
+
+1. `q6_t15_probes\run_q6.cmd` (vanilla, about 20 min): four probe campaigns (story timing, ELIM A / B / C), then
+   skirmish land Geonosis and space Kuat (you Empire, AI Rebel), with Ctrl+A screenshots.
+2. `q6_t15_probes\run_q6_tr.cmd` (Thrawn's Revenge, 35 to 45 min): TR's GCMenu idle for 3 min, then skirmish land
+   Blood Gulch (you Rebel, idle; AI Empire) until the battle ends.
+
+Send back `q6_t15_probes\out\<run>\` (`report.txt` first), the screenshots and your notes. Cleanup is automatic
+(`cleanup_q6.cmd` after a crash). Full instructions, expected answers and the port's behaviour:
+`q6_t15_probes\README.md`.

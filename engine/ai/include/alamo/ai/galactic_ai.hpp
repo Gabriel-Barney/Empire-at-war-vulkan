@@ -51,6 +51,7 @@ class StateHasher;
 namespace alamo::galactic {
 class GalacticSim;
 class ContrastTable;
+class ConflictManager;
 }
 namespace alamo::lua {
 class LuaPlayerWorld;
@@ -132,6 +133,16 @@ public:
     // T7 entry point (see the header comment). `galactic_on_top`: the galactic mode is the top mode;
     // `auto_resolve_busy`: an auto-resolve runs (Planning-only exception).
     void update_player(int32_t player, int64_t now, bool galactic_on_top, bool auto_resolve_busy);
+    // q6 t07: Player::Set_AI_Type during the session (AI_GALACTIC §1.2; the story reward SWITCH_CONTROL, which Thrawn's
+    // Revenge uses to turn its campaigns' "None" players into real AIs). "Human" deletes the player's AI; an unknown type
+    // adds "Unrecognized AI player type <name>" to `diagnostics` and changes nothing [port: the old AI stays]; any other
+    // type replaces the player's AI with a fresh one of that type at `difficulty` (0 Easy, 1 Normal, 2 Hard), which
+    // starts with its first service at the next update_player (opponent pick, path finder, templates). The old AI's
+    // running plans end as released by the goal system, its PotentialPlans and free-store moves are dropped. The same
+    // type and difficulty again: no change [port]. Returns true when the player's AI changed (decision log "ai type X").
+    // Call on the sim thread between updates. Players that get an AI this way need a T7 controller from the host.
+    bool set_ai_type(int32_t player, std::string_view type, int32_t difficulty, std::vector<std::string>* diagnostics = nullptr);
+    std::string ai_type(int32_t player) const;  // the player's AIPlayerType name ("" = no AI)
     // Suspend_AI / galactic pause (TheAI gate).
     void set_suspended(bool suspended);
     void set_galactic_paused(bool paused);
@@ -142,6 +153,11 @@ public:
     // Int-final: the session-wide GlobalValue table (L1_S4_REMAINING §1.5) for every AI VM's GlobalValue.Get / Set;
     // null (default) = the world's own map (its CRC section). Hosts attach SimHost::global_values().
     void set_global_values(lua::GlobalValueStore* store);
+    // q6 t03: the session's conflict manager, read (never written) once per frame for the player tokens
+    // TimeSince{Space,Ground}{Defender,Attacker} (AI_GALACTIC_TOKENS §8.2; GalacticSimTokenResolver::observe_conflicts).
+    // Null (default) = the manager installed as the sim's conflict hooks when it is one (no story gate in front), else no
+    // conflict is seen (the tokens stay at 1e18). It must outlive this object (or be detached first).
+    void set_conflicts(const galactic::ConflictManager* conflicts);
 
     // The player's galactic budget categories as the S10 / A1 land-battle credit transfer reads them
     // (template Tactical_Budget_Allowance, available, pool; category list order). Empty for non-AI players.

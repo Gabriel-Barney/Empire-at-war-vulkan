@@ -15,6 +15,9 @@
 //   * S4 story (built with engine/lua): synthetic plot + Lua script over a synthetic galactic campaign,
 //     fired-event log identical for 0/1/4/N workers = testdata/story_synthetic_golden.txt; with
 //     ALAMO_FOC_DATA the opening of Full_Story_Campaign_Underworld = testdata/story_underworld_golden.txt.
+//   * q6 game-object Lua scripts (SimConfig::object_scripts): attach order, the service gate and its first-pump
+//     draw, ScriptExit / binding-error / runtime-error / death release, proximity order, a mini company spawner, the
+//     save refusal, identical CRCs for 0/1/4 workers.
 // `alamo_sim_tests --regen` rewrites the streams and goldens (MSVC is the reference compiler);
 // `--regen-story` only the story logs; `--story-only` runs pacing + the synthetic story test.
 #include <algorithm>
@@ -47,6 +50,7 @@
 #ifdef ALAMO_SIM_HAVE_STORY
 #include "alamo/lua/story_model.hpp"  // dialog_log (L1/S4 wave 1 test)
 #include "alamo/galactic/conflicts.hpp"  // BattleRequest (L1/S4 wave 2a test)
+#include "alamo/lua/script_remaining.hpp"  // GlobalValueStore (q6 object-script test)
 #endif
 
 using namespace alamo;
@@ -783,15 +787,24 @@ struct Run {
     size_t fired = 0;
     float empire_credits = 0;
     int32_t empire_tech = 0;
+    // q6 t09 (scoring runs): the script's GlobalValue Scoring_Log, its messages and the host counters.
+    std::string scoring_log;
+    std::vector<std::string> scoring_messages;
+    uint64_t scoring_services = 0, scoring_calls = 0, scoring_releases = 0;
 };
 
-static Run run(const World& w, const FileProvider& files, int32_t workers, uint64_t ticks) {
+// scoring: the GameScoring script name to run (q6 t09; nullptr = none, the S4 golden run).
+static Run run(const World& w, const FileProvider& files, int32_t workers, uint64_t ticks, const char* scoring = nullptr) {
     const GalacticRules r = rules();
     jobs::JobSystem js(jobs::JobSystemConfig{workers});
     SimConfig cfg;
     cfg.seed = 7;
     cfg.story_crc = true;
     SimHost host(w.types, js, cfg);
+    if (scoring) {
+        host.set_scoring_script(&files, scoring);
+        host.set_scoring_campaign("StoryTest");
+    }
     GalacticSim* gs = host.start_galactic(r, setup());
     CHECK(gs != nullptr);
     if (!gs) return {};
@@ -822,11 +835,19 @@ static Run run(const World& w, const FileProvider& files, int32_t workers, uint6
             CHECK(gs->invade(pUnder, rC, {}) == RejectReason::None);
             landed = true;
         }
-        if (t == 200) host.start_game(ModeKind::Space);
+        if (t == 200) {
+            host.start_game(ModeKind::Space);
+            host.scoring_mode_started(ModeKind::Space, "Test_Space_Map");  // q6 t09 (no-op without a script)
+        }
         if (t == 230) host.end_game_mode();
         host.tick_once();
     }
     Run out;
+    out.scoring_log = host.global_values()->get("Scoring_Log").text;
+    out.scoring_messages = host.scoring_messages();
+    out.scoring_services = host.scoring_services();
+    out.scoring_calls = host.scoring_calls();
+    out.scoring_releases = host.scoring_releases();
     out.log = host.story()->log_text("S4 synthetic story campaign, seed 7, " + std::to_string(ticks) + " ticks");
     out.crc = host.crc_log();
     out.fired = host.story()->log().size();
@@ -836,7 +857,1028 @@ static Run run(const World& w, const FileProvider& files, int32_t workers, uint6
     CHECK(host.story()->lua_messages().empty());
     return out;
 }
+
+// Q6: a campaign with more players than the default session (Thrawn's Revenge: 22). The host refuses it at the default
+// size (those players would get no controller), starts it sized with session_players, and every player has a controller
+// slot; <Story_Name> "Faction, file" pairs give plot sets to factions without a <Faction>_Story_Name.
+static void test_many_players(const World& w) {
+    CHECK(session_players(3) == 8 && session_players(22) == 22 && session_players(100) == kMaxPlayers);
+    GalacticRules r = rules();
+    GalacticSetup s = setup();
+    for (uint32_t i = 0; i < 17; ++i) {  // 3 + 17 = 20 players: Mod_0..Mod_16 (planet-less AI factions)
+        FactionRules f;
+        f.name = "Mod_" + std::to_string(i);
+        f.can_control_planets = f.is_playable = true;
+        r.factions.push_back(f);
+        PlayerSetup p;
+        p.faction = static_cast<uint32_t>(r.factions.size() - 1);
+        p.ai = true;
+        p.credits = 1000.0f;
+        s.players.push_back(p);
+    }
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    {
+        SimHost host(w.types, js, SimConfig{});
+        std::vector<std::string> diag;
+        CHECK(host.start_galactic(r, s, &diag) == nullptr);
+        CHECK(!diag.empty() && diag.front().find("20 players") != std::string::npos);
+    }
+    SimConfig cfg;
+    cfg.players = session_players(s.players.size());
+    SimHost host(w.types, js, cfg);
+    GalacticSim* gs = host.start_galactic(r, s);
+    CHECK(gs != nullptr && host.players() == 20);
+    if (!gs) return;
+    uint64_t last_frame = 0;
+    host.set_controller(19, [&last_frame](SimHost&, uint8_t, uint64_t frame) { last_frame = frame; });
+    host.run_fast(5);
+    CHECK(last_frame > 0);  // the last player's controller runs
+
+    data::CampaignDef c;
+    c.raw = {{"Empire_Story_Name", "Story_Plots_E.xml"},
+             {"Story_Name", " Empire, Second_E.xml, Mod_3 , Sub\\Story_Plots_M3.xml,\n Mod_16, M16.xml, Dangling "},
+             {"Story_Name", "Mod_3, Later.xml, Mod_5, M5.xml"}};
+    const std::vector<StoryPlotSet> sets = campaign_plot_sets(c, *gs);
+    // q6 t03 (STORY.md §2.1 [H]): the faction tags first, then every Story_Name pair in list order (a faction may get
+    // several sets); a dangling name is dropped.
+    CHECK(sets.size() == 6);
+    if (sets.size() == 6) {
+        CHECK(sets[0].player == pEmpire && sets[0].plots_file == "Story_Plots_E.xml");
+        CHECK(sets[1].player == pEmpire && sets[1].plots_file == "Second_E.xml");
+        CHECK(sets[2].player == 3 + 3 && sets[2].plots_file == "Sub\\Story_Plots_M3.xml");
+        CHECK(sets[3].player == 3 + 16 && sets[3].plots_file == "M16.xml");
+        CHECK(sets[4].player == 3 + 3 && sets[4].plots_file == "Later.xml");
+        CHECK(sets[5].player == 3 + 5 && sets[5].plots_file == "M5.xml");
+    }
+}
+
+// q6 t06 (GAME_SCORING.md §1.2 / §1.3): the GameScoring script is re-created at every new session, after the GlobalValue
+// clear and before the plots load, so a value its Base_Definitions sets (Thrawn's Revenge: MOD_ID) reaches the plot
+// scripts' Base_Definitions.
+static void test_scoring_script(const World& w) {
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_scoring";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/Scripts/Miscellaneous/GameScoring.lua",
+               "ScriptPoolCount = 0\n"
+               "function Base_Definitions()\n"
+               "  GlobalValue.Set(\"Scoring_Runs\", (GlobalValue.Get(\"Scoring_Runs\") or 0) + 1)\n"
+               "  GlobalValue.Set(\"MOD_ID\", \"TEST_MOD\")\n"
+               "end\n"
+               "function main() end\n");
+    write_file(root / "Data/XML/Story_Plots_Scoring.xml",
+               "<Story_Mode_Plots><Lua_Script>Story_Scoring</Lua_Script><Active_Plot>Story_Scoring_Plot.xml</Active_Plot>"
+               "<Suspended_Plot /></Story_Mode_Plots>\n");
+    write_file(root / "Data/XML/Story_Scoring_Plot.xml",
+               "<Story><Event Name=\"Begin\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event></Story>\n");
+    write_file(root / "Data/Scripts/Story/Story_Scoring.lua",
+               "function Base_Definitions() GlobalValue.Set(\"Plot_Saw\", GlobalValue.Get(\"MOD_ID\")) end\n"
+               "function main() end\n");
+    DirectoryProvider files(path_to_utf8(root));
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    const GalacticRules r = rules();  // GalacticSim keeps a reference
+    const GalacticSetup su = setup();
+    SimHost host(w.types, js, SimConfig{});
+    host.set_scoring_script(&files, "GameScoring");
+    for (int session = 0; session < 2; ++session) {
+        GalacticSim* gs = host.start_galactic(r, su);
+        CHECK(gs != nullptr && host.scoring_vm() != nullptr);
+        if (!gs) return;
+        for (const std::string& m : host.scoring_messages()) std::printf("  scoring: %s\n", m.c_str());
+        CHECK(host.scoring_messages().empty());
+        // A fresh state each session over the cleared table: the run counter starts again at 1.
+        CHECK(host.global_values()->get("Scoring_Runs").number == 1.0);
+        StoryStart st;
+        st.files = &files;
+        st.plot_sets = {{pEmpire, "Story_Plots_Scoring.xml"}};
+        CHECK(host.start_story(st));
+        CHECK(host.global_values()->get("Plot_Saw").text == "TEST_MOD");
+        host.run_fast(3);
+        CHECK(host.end_game_mode());  // the stack empties: the next start_galactic is a new session
+        CHECK(host.scoring_vm() == nullptr);
+    }
+    // No name: no script, nothing written.
+    SimHost plain(w.types, js, SimConfig{});
+    CHECK(plain.start_galactic(r, su) != nullptr);
+    CHECK(plain.scoring_vm() == nullptr && plain.global_values()->get("MOD_ID").kind == lua::AiGlobalValue::Nil);
+}
+
+// q6 t09: the frames the Service of GAME_SCORING.md §2 pumps at for `rate`: now = (float)frame / (float)30 widened,
+// due when there is no LastService or now - LastService > rate (strict, double).
+static std::string expected_pumps(double rate, uint64_t ticks) {
+    std::string out;
+    bool has_last = false;
+    double last = 0.0;
+    for (uint64_t f = 1; f <= ticks; ++f) {
+        const double now = static_cast<double>(static_cast<float>(f) / 30.0f);
+        if (has_last && !(now - last > rate)) continue;
+        out += "P" + std::to_string(f) + ";";
+        last = now;
+        has_last = true;
+    }
+    return out;
+}
+
+// Only the "P<frame>;" entries of a scoring log.
+static std::string pump_entries(const std::string& log) {
+    std::string out;
+    size_t i = 0;
+    while (i < log.size()) {
+        const size_t e = log.find(';', i);
+        const std::string tok = log.substr(i, e == std::string::npos ? std::string::npos : e - i);
+        if (!tok.empty() && tok[0] == 'P' && tok.size() > 1 && tok[1] >= '0' && tok[1] <= '9') out += tok + ";";
+        if (e == std::string::npos) break;
+        i = e + 1;
+    }
+    return out;
+}
+
+// The shared part of the q6 t09 test scripts: Log() appends to GlobalValue Scoring_Log; main logs every pump.
+static const char* kScoringCommon =
+    "ScriptPoolCount = 0\n"
+    "function Log(s) ScoringLog = (ScoringLog or \"\") .. s .. \";\" GlobalValue.Set(\"Scoring_Log\", ScoringLog) end\n"
+    "function Game_Mode_Starting_Event(mode, map) Log(\"S:\" .. mode .. \":\" .. tostring(map)) end\n"
+    "function Game_Mode_Ending_Event(mode) Log(\"E:\" .. mode) end\n"
+    "function Reset_Tactical_Stats() Log(\"R\") end\n";
+
+// q6 t09 (GAME_SCORING.md §2 / §3): the Service pump (ServiceRate / LastService), the release on ScriptExit and on a Lua
+// error (thread or event call), the mode starting / ending events, GameRandom.Free_Random off the synced stream.
+static void test_scoring_service(const World& w) {
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_scoring_service";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    auto script = [&root](const char* name, const std::string& body) {
+        write_file(root / "Data/Scripts/Miscellaneous" / (std::string(name) + ".lua"), std::string(kScoringCommon) + body);
+    };
+    // Pump timing at ServiceRate 1 (30 frames, float rounding) and the mode events around a tactical push.
+    script("Scoring_Rate",
+           "function Base_Definitions() ServiceRate = 1 end\n"
+           "function main() while true do Log(\"P\" .. GetCurrentTime.Frame()) coroutine.yield(true) end end\n");
+    // ServiceRate 0: every frame (now grows by 1/30 each frame).
+    script("Scoring_Every",
+           "function Base_Definitions() ServiceRate = 0 end\n"
+           "function main() while true do Log(\"P\" .. GetCurrentTime.Frame()) coroutine.yield(true) end end\n");
+    script("Scoring_Exit",
+           "function Base_Definitions() ServiceRate = 0 n = 0 end\n"
+           "function main() while true do n = n + 1 Log(\"P\" .. n) if n == 3 then _ScriptExit() end coroutine.yield(true) end end\n");
+    script("Scoring_Thread_Error",
+           "function Base_Definitions() ServiceRate = 0 n = 0 end\n"
+           "function main() while true do n = n + 1 Log(\"P\" .. n) if n == 2 then error(\"boom\") end coroutine.yield(true) end end\n");
+    script("Scoring_Event_Error",
+           "function Base_Definitions() ServiceRate = 0 end\n"
+           "function Game_Mode_Starting_Event(mode, map) error(\"bad start\") end\n"
+           "function main() while true do Log(\"P\") coroutine.yield(true) end end\n");
+    script("Scoring_No_Rate",
+           "function Base_Definitions() ServiceRate = \"10\" end\n"  // not a number: absent
+           "function main() while true do Log(\"P\") coroutine.yield(true) end end\n");
+    auto free_script = [&script](const char* name, bool draw) {
+        script(name, std::string("function Base_Definitions() ServiceRate = 0 sum = 0 end\n"
+                                 "function main() while true do ") +
+                         (draw ? "sum = sum + GameRandom.Free_Random(1, 100) " : "") +
+                         "coroutine.yield(true) end end\n");
+    };
+    free_script("Scoring_Free", true);
+    free_script("Scoring_Plain", false);
+    // q6 t03: the players without a story session (Thrawn's Revenge's plugins: Find_Player, PlayerWrapper::Get_Name).
+    script("Scoring_Players",
+           "function Base_Definitions() ServiceRate = 0 n = 0 end\n"
+           "function Game_Mode_Starting_Event(mode, map) local p = Find_Player(\"Empire\") Log(\"N:\" .. p.Get_Name()) end\n"
+           "function main() while true do n = n + 1 if n <= 2 then Log(\"F:\" .. Find_Player(\"Underworld\").Get_Faction_Name()) end "
+           "coroutine.yield(true) end end\n");
+    DirectoryProvider files(path_to_utf8(root));
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    const GalacticRules r = rules();
+    const GalacticSetup su = setup();
+    struct Session {
+        std::unique_ptr<SimHost> host;
+        std::string log() const { return host->global_values()->get("Scoring_Log").text; }
+    };
+    auto start = [&](const char* name) {
+        Session s;
+        s.host = std::make_unique<SimHost>(w.types, js, SimConfig{});
+        s.host->set_scoring_script(&files, name);
+        s.host->set_scoring_campaign("Scoring_Campaign");
+        CHECK(s.host->start_galactic(r, su) != nullptr);
+        CHECK(s.host->scoring_vm() != nullptr);
+        return s;
+    };
+    auto dump = [](const Session& s) {
+        for (const std::string& m : s.host->scoring_messages()) std::printf("  scoring: %s\n", m.c_str());
+    };
+    {  // ServiceRate 1 over 200 frames; a land mode pushed at frame 100 and popped at frame 150; Reset_Tactical_Stats.
+        Session s = start("Scoring_Rate");
+        s.host->run_fast(99);
+        s.host->start_game(ModeKind::Land);
+        s.host->scoring_mode_started(ModeKind::Land, "Scoring_Map");
+        s.host->run_fast(50);
+        s.host->scoring_reset_tactical_stats();
+        CHECK(s.host->end_game_mode());
+        s.host->run_fast(50);
+        const std::string l = s.log();
+        const std::string pumps = pump_entries(l);
+        CHECK(pumps == expected_pumps(1.0, 199));
+        CHECK(s.host->scoring_services() == static_cast<uint64_t>(std::count(pumps.begin(), pumps.end(), ';')));
+        // The galactic start is delivered before the first pump, the land start at the next frame's Service.
+        CHECK(l.rfind("S:Galactic:Scoring_Campaign;P1;", 0) == 0);
+        const size_t land = l.find("S:Land:Scoring_Map;");
+        CHECK(land != std::string::npos && l.find("P", land) != std::string::npos);
+        CHECK(l.find("R;E:Land;") != std::string::npos);
+        CHECK(s.host->end_game_mode());  // the last mode: Game_Mode_Ending_Event, then the script goes with the stack
+        CHECK(s.host->scoring_vm() == nullptr && s.log().size() > 12 && s.log().substr(s.log().size() - 11) == "E:Galactic;");
+        CHECK(s.host->scoring_releases() == 0);
+        dump(s);
+    }
+    {  // ServiceRate 0: one pump per frame.
+        Session s = start("Scoring_Every");
+        s.host->run_fast(10);
+        CHECK(pump_entries(s.log()) == expected_pumps(0.0, 10) && s.host->scoring_services() == 10);
+    }
+    {  // ScriptExit in the third pump: released right after it, nothing later.
+        Session s = start("Scoring_Exit");
+        s.host->run_fast(10);
+        CHECK(s.log() == "S:Galactic:Scoring_Campaign;P1;P2;P3;");
+        CHECK(s.host->scoring_vm() == nullptr && s.host->scoring_releases() == 1 && s.host->scoring_services() == 3);
+        CHECK(!s.host->scoring_messages().empty() && s.host->scoring_messages().back().find("released (ScriptExit)") != std::string::npos);
+    }
+    {  // A Lua error in the thread: released after that pump.
+        Session s = start("Scoring_Thread_Error");
+        s.host->run_fast(10);
+        CHECK(s.log() == "S:Galactic:Scoring_Campaign;P1;P2;");
+        CHECK(s.host->scoring_vm() == nullptr && s.host->scoring_releases() == 1);
+        CHECK(!s.host->scoring_messages().empty() && s.host->scoring_messages().back().find("released (Lua error)") != std::string::npos);
+    }
+    {  // A Lua error in an event call: the next due Service releases the script without pumping.
+        Session s = start("Scoring_Event_Error");
+        s.host->run_fast(5);
+        CHECK(s.log().empty() && s.host->scoring_services() == 0);
+        CHECK(s.host->scoring_vm() == nullptr && s.host->scoring_releases() == 1 && s.host->scoring_calls() == 1);
+        bool named = false;
+        for (const std::string& m : s.host->scoring_messages()) named = named || m.find("Game_Mode_Starting_Event: ") != std::string::npos;
+        CHECK(named);
+    }
+    {  // ServiceRate not a number: no Service at all, the events still run, the script stays.
+        Session s = start("Scoring_No_Rate");
+        s.host->run_fast(40);
+        CHECK(s.log() == "S:Galactic:Scoring_Campaign;" && s.host->scoring_services() == 0 && s.host->scoring_vm() != nullptr);
+    }
+#if defined(ALAMO_LUA_PLAYERS)
+    {  // q6 t03: no story session - the scoring VM has a player world of its own over the campaign's players (before,
+       // Find_Player gave nil there and the first event call released the script).
+        Session s = start("Scoring_Players");
+        s.host->run_fast(10);
+        dump(s);
+        CHECK(s.log() == "N:Empire;F:UNDERWORLD;F:UNDERWORLD;");
+        CHECK(s.host->scoring_vm() != nullptr && s.host->scoring_releases() == 0);
+        CHECK(s.host->end_game_mode() && s.host->scoring_vm() == nullptr);
+    }
+#endif
+    {  // GameRandom.Free_Random (ranged) draws from the free stream: the synced RNG and the frame CRCs are unchanged.
+        Session a = start("Scoring_Free");
+        Session b = start("Scoring_Plain");
+        a.host->run_fast(60);
+        b.host->run_fast(60);
+        CHECK(a.host->scoring_releases() == 0 && b.host->scoring_releases() == 0);
+        dump(a);
+        CHECK(a.host->random().synced().state() == b.host->random().synced().state());
+        CHECK(!first_divergence(a.host->crc_log(), b.host->crc_log()).diverged);
+    }
+}
+
+// q6 t09: GameScoring in the S4 synthetic story campaign (production, conquest, a space mode pushed and popped): the
+// galactic event calls arrive in stream order after T9, and the run is identical for every worker count (rule 3).
+static const char* kScoringStory =
+    "function Base_Definitions() ServiceRate = 0.1 end\n"
+    "function main() while true do Log(\"P\" .. GetCurrentTime.Frame()) GameRandom(1, 6) coroutine.yield(true) end end\n"
+    "function Galactic_Production_Begin_Event(planet, t) Log(\"PB:\" .. tostring(planet ~= nil) .. tostring(t ~= nil)) end\n"
+    "function Galactic_Production_Canceled_Event(planet, t) Log(\"PC\") end\n"
+    "function Galactic_Production_End_Event(planet, o) Log(\"PE:\" .. tostring(planet ~= nil) .. tostring(o ~= nil)) end\n"
+    "function Galactic_Planet_Faction_Change(planet, n, o) Log(\"FC:\" .. tostring(planet ~= nil and n ~= nil and o ~= nil)) end\n"
+    "function Galactic_Unit_Destroyed_Event(object, killer) Log(\"UD\") end\n";
+
+static void test_scoring_story(const World& w) {
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_scoring_story";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/XML/Story_Plots_Host_Test.xml", kPlots);
+    write_file(root / "Data/XML/Story_Host_Test.xml", kPlot);
+    write_file(root / "Data/Scripts/Story/Story_Host_Test.lua", kScript);
+    write_file(root / "Data/Scripts/Miscellaneous/GameScoring.lua", std::string(kScoringCommon) + kScoringStory);
+    DirectoryProvider files(path_to_utf8(root));
+    const uint64_t ticks = 400;
+    const Run a = run(w, files, 0, ticks, "GameScoring");
+    for (const std::string& m : a.scoring_messages) std::printf("  scoring: %s\n", m.c_str());
+    std::printf("scoring story: %" PRIu64 " services, %" PRIu64 " calls, log %zu bytes, final CRC %016" PRIx64 "\n",
+                a.scoring_services, a.scoring_calls, a.scoring_log.size(), a.crc.records.empty() ? 0 : a.crc.records.back().combined);
+    const std::string& l = a.scoring_log;
+    std::string events;  // the log without the pumps
+    for (size_t i = 0; i < l.size();) {
+        const size_t e = l.find(';', i);
+        const std::string tok = l.substr(i, e - i);
+        if (!(tok.size() > 1 && tok[0] == 'P' && tok[1] >= '0' && tok[1] <= '9')) events += tok + ";";
+        if (e == std::string::npos) break;
+        i = e + 1;
+    }
+    std::printf("  scoring story events: %s\n", events.c_str());
+    CHECK(a.scoring_releases == 0);
+    CHECK(l.rfind("S:Galactic:StoryTest;P1;", 0) == 0);
+    CHECK(pump_entries(l) == expected_pumps(0.1, ticks));
+    auto count = [&l](const std::string& tok) {
+        size_t n = 0;
+        for (size_t i = l.find(tok); i != std::string::npos; i = l.find(tok, i + 1)) ++n;
+        return n;
+    };
+    // The two fighters (the type wrapper is nil here: the synthetic galactic rules' type indices are past the test
+    // World's object types; with game data they are the same table).
+    CHECK(count("PB:true") == 2);
+    CHECK(count("PE:truetrue;") == 2);
+    CHECK(count("FC:true;") >= 1);      // Underworld takes C
+    CHECK(count("S:Space:Test_Space_Map;") == 1 && count("E:Space;") == 1);
+    CHECK(l.find("S:Space:Test_Space_Map;") < l.find("E:Space;"));
+    // A scoring run differs from the plain one (its GlobalValue and RNG draws are sim state) but not across workers.
+    const Run plain = run(w, files, 0, ticks);
+    CHECK(first_divergence(a.crc, plain.crc).diverged);
+    for (int32_t workers : jobs::determinism_worker_counts()) {
+        if (workers == 0) continue;
+        const Run b = run(w, files, workers, ticks, "GameScoring");
+        const auto d = first_divergence(a.crc, b.crc);
+        std::printf("  scoring story workers %2d: %s, scoring log %s\n", workers, d.message.c_str(),
+                    b.scoring_log == a.scoring_log ? "identical" : "DIFFERS");
+        CHECK(!d.diverged && b.scoring_log == a.scoring_log && b.log == a.log);
+    }
+}
+
+// q6 (Thrawn's Revenge story chain): (1) a tick-2 event (ELAPSED 0, A2i t01) reaches a PGStoryMode-style script whose
+// state machine starts at load - Story_Event_Trigger only switches state when CurrentState == NextState, which holds
+// only after main's first resume; the load-time resume (StorySession::start_threads_at_load) puts it there before the first T9's STORY_ELAPSED
+// dispatch (T9 step 2) - (2) a prereq-less Perpetual STORY_ELAPSED fires first where the T9 clock has accumulated
+// Param1 seconds since the first T9; the Perpetual reset clears the accumulator and the initialised flag, so the next
+// T9 re-records the start and the next fire comes Param1 seconds after that (STORY.md §4.7 [H]: period Param1 plus one
+// T9), (3) SWITCH_CONTROL rewards reach the host hook (SimHost::set_switch_control_hook), from an XML reward (faction
+// name) and from a Lua Set_Reward_Parameter(0, faction name) like StoryUtil.ChangeAIPlayer (a player object is not a
+// converter value: LUA_API.md "StoryEventWrapper dialog and parameter setters"). Same results for every worker count.
+static const char* kQ6Plot =
+    "<Story>\n"
+    " <Event Name=\"Begin\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event>\n"
+    " <Event Name=\"Cycle\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>2</Event_Param1><Perpetual>True</Perpetual></Event>\n"
+    " <Event Name=\"Switch_Xml\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>SWITCH_XML</Event_Param2>"
+    "<Reward_Type>SWITCH_CONTROL</Reward_Type><Reward_Param1>Underworld</Reward_Param1><Reward_Param2>TestAI</Reward_Param2></Event>\n"
+    " <Event Name=\"Switch_Lua\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>SWITCH_LUA</Event_Param2>"
+    "<Reward_Type>SWITCH_CONTROL</Reward_Type></Event>\n"
+    "</Story>\n";
+// PGStateMachine.lua's rule in miniature: main = Process_States moves CurrentState to NextState; a story event only
+// requests a state change while the machine is settled (CurrentState == NextState).
+static const char* kQ6Script =
+    "function Base_Definitions() ServiceRate = 0.1 NextState = \"Init\" end\n"
+    "function Story_Event_Trigger(name)\n"
+    "  if CurrentState ~= NextState then return end\n"
+    "  if name == \"Begin\" and CurrentState == \"Init\" then NextState = \"Started\" end\n"
+    "end\n"
+    "function main()\n"
+    "  while true do\n"
+    "    if CurrentState ~= NextState then\n"
+    "      CurrentState = NextState\n"
+    "      if CurrentState == \"Started\" then\n"
+    "        Story_Event(\"SWITCH_XML\")\n"
+    "        local ev = Get_Story_Plot(\"Story_Q6.xml\").Get_Event(\"Switch_Lua\")\n"
+    "        ev.Set_Reward_Parameter(0, \"Empire\")\n"
+    "        ev.Set_Reward_Parameter(1, \"OtherAI\")\n"
+    "        Story_Event(\"SWITCH_LUA\")\n"
+    "      end\n"
+    "    end\n"
+    "    coroutine.yield(true)\n"
+    "  end\n"
+    "end\n";
+
+static void test_q6_story_chain(const World& w) {
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_q6_story_chain";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/XML/Story_Plots_Q6.xml",
+               "<Story_Mode_Plots><Lua_Script>Story_Q6</Lua_Script><Active_Plot>Story_Q6.xml</Active_Plot>"
+               "<Suspended_Plot /></Story_Mode_Plots>\n");
+    write_file(root / "Data/XML/Story_Q6.xml", kQ6Plot);
+    write_file(root / "Data/Scripts/Story/Story_Q6.lua", kQ6Script);
+    DirectoryProvider files(path_to_utf8(root));
+    constexpr uint64_t kTicks = 150;
+    std::string first_log, first_switch;
+    for (int32_t workers : jobs::determinism_worker_counts()) {
+        jobs::JobSystem js(jobs::JobSystemConfig{workers});
+        SimConfig cfg;
+        cfg.seed = 7;
+        cfg.story_crc = true;
+        SimHost host(w.types, js, cfg);
+        std::vector<StorySwitchControl> switches;
+        host.set_switch_control_hook([&switches](const StorySwitchControl& sw) { switches.push_back(sw); });
+        const GalacticRules r = rules();
+        GalacticSim* gs = host.start_galactic(r, setup());
+        CHECK(gs != nullptr);
+        if (!gs) return;
+        StoryStart st;
+        st.files = &files;
+        st.plot_sets = {{pEmpire, "Story_Plots_Q6.xml"}};
+        std::vector<std::string> diag;
+        CHECK(host.start_story(st, &diag) && host.story());
+        for (const auto& d : diag) std::printf("  q6 story diag: %s\n", d.c_str());
+        if (!host.story()) return;
+        std::vector<std::pair<uint64_t, double>> clock;  // global frame after the tick, the T9 clock of that tick
+        for (uint64_t t = 1; t <= kTicks; ++t) {
+            const uint64_t seen = host.galactic_mode()->frame();
+            host.tick_once();
+            clock.emplace_back(host.frame(), StorySession::t9_seconds(seen));
+        }
+        for (const std::string& m : host.story()->lua_messages()) std::printf("  q6 story lua: %s\n", m.c_str());
+        CHECK(host.story()->lua_messages().empty());
+        std::map<std::string, std::vector<uint64_t>> fired;
+        std::string log;
+        for (const StoryLogEntry& e : host.story()->log()) {
+            fired[e.event].push_back(e.frame);
+            log += e.text() + "\n";
+        }
+        // (1) Begin at the second T9 (a prereq-less ELAPSED 0 records LastTime at its first T9 and fires at the next:
+        // A2i t01, 0x454980); its Story_Event_Trigger switched the settled machine, so the next Lua service (ServiceRate
+        // 0.1 s: T9 0 s at the first tick, then the tick whose T9 reaches 0.1 s, 3 frames later) entered "Started" and
+        // raised both notifications in the same frame.
+        const uint64_t f0 = clock.size() > 1 ? clock[1].first : 0;
+        const uint64_t f1 = clock.size() > 3 ? clock[3].first : 0;
+        CHECK(fired["Begin"] == std::vector<uint64_t>{f0});
+        CHECK(fired["Switch_Xml"] == std::vector<uint64_t>{f1});
+        CHECK(fired["Switch_Lua"] == std::vector<uint64_t>{f1});
+        // (3) both rewards reached the hook, resolved to players.
+        CHECK(switches.size() == 2);
+        std::string sw_text;
+        for (const StorySwitchControl& sw : switches)
+            sw_text += std::to_string(sw.frame) + " " + std::to_string(sw.plot_set) + " " + std::to_string(sw.player) + " " +
+                       sw.player_text + " " + sw.ai_type + "\n";
+        CHECK(switches.size() == 2 && switches[0].player == pUnder && switches[0].ai_type == "TestAI" &&
+              switches[0].player_text == "Underworld" && switches[0].frame == f1);
+        CHECK(switches.size() == 2 && switches[1].player == pEmpire && switches[1].ai_type == "OtherAI" &&
+              switches[1].player_text == "Empire");
+        // (2) Cycle: the first T9 records LastTime, later T9s add now - LastTime; a fire at accumulated >= 2 s clears
+        // the accumulator and the flag, the T9 after it records LastTime again.
+        std::vector<uint64_t> expect;
+        {
+            double acc = 0.0, last = 0.0;
+            bool init = false;
+            for (const auto& [frame, now] : clock) {
+                if (!init) {
+                    init = true;
+                    last = now;
+                    continue;
+                }
+                acc += now - last;
+                last = now;
+                if (acc >= 2.0) {
+                    expect.push_back(frame);
+                    acc = 0.0;
+                    init = false;
+                }
+            }
+        }
+        const uint64_t first_fire = expect.empty() ? 0 : expect.front();
+        std::printf("  q6 story chain, workers %2d: Begin @%" PRIu64 ", Cycle first @%" PRIu64 " (x%zu), %zu SWITCH_CONTROL\n",
+                    workers, f0, fired["Cycle"].empty() ? 0 : fired["Cycle"].front(), fired["Cycle"].size(), switches.size());
+        CHECK(first_fire >= 60 && first_fire <= 62);  // 2 s = 60 galactic frames after the first T9 (+-1: float clock)
+        CHECK(fired["Cycle"] == expect && expect.size() >= 2 && expect[1] - expect[0] >= 60 && expect[1] - expect[0] <= 63);
+        if (first_log.empty()) {
+            first_log = log;
+            first_switch = sw_text;
+        } else {
+            CHECK(log == first_log && sw_text == first_switch);
+        }
+    }
+    remove_all_long(root, ec);
+}
 }  // namespace story_test
+
+// q6: game-object Lua scripts (object_scripts.hpp, docs/re/OBJECT_SCRIPTS.md) on synthetic land types and scripts.
+namespace object_script_test {
+
+struct OsWorld {
+    fs::path root;
+    std::unique_ptr<DirectoryProvider> files;
+    objects::ObjectTypeDatabase db;
+    objects::GameObjectTypes types;
+};
+
+static void script(const fs::path& root, const char* name, const std::string& body) {
+    write_file(root / "Data/Scripts/GameObject" / (std::string(name) + ".lua"), body);
+}
+
+static std::unique_ptr<OsWorld> make_os_world() {
+    auto w = std::make_unique<OsWorld>();
+    w->root = fs::temp_directory_path() / "alamo_sim_object_scripts";
+    std::error_code ec;
+    remove_all_long(w->root, ec);
+    write_file(w->root / "Data/XML/GameObjectFiles.xml", "<GameObjectFiles><File>Os.xml</File></GameObjectFiles>\n");
+    std::string xml = "<Os>\n";
+    for (const char* n : {"Os_Attach", "Os_Gate", "Os_NoRate", "Os_Exit", "Os_ExitDefs", "Os_BindErr", "Os_ThreadErr", "Os_Death",
+                          "Os_Prox", "Os_Spawner", "Os_Missing", "Os_Pool", "Os_Pool3", "Os_Pool0", "Os_Save"})
+        xml += std::string(" <GroundInfantry Name=\"") + n + "\"><Tactical_Health>10</Tactical_Health><Lua_Script>" + n +
+               (std::string(n) == "Os_Gate" ? ".lua" : "") + "</Lua_Script></GroundInfantry>\n";
+    xml += " <GroundInfantry Name=\"Os_Attach_Variant\"><Variant_Of_Existing_Type>Os_Attach</Variant_Of_Existing_Type></GroundInfantry>\n"
+           " <GroundInfantry Name=\"Os_Plain\"><Tactical_Health>10</Tactical_Health></GroundInfantry>\n"
+           " <GroundInfantry Name=\"Os_Unit\"><Tactical_Health>10</Tactical_Health></GroundInfantry>\n"
+           // q6 t19 (§1.5): a type instance from the Os_Pool4 pool (ScriptPoolCount 4).
+           " <GroundInfantry Name=\"Os_TypeScript\"><Tactical_Health>10</Tactical_Health><Lua_Script>Os_Pool4</Lua_Script>"
+           "<Execute_Script_On_Type>Yes</Execute_Script_On_Type></GroundInfantry>\n"
+           "</Os>\n";
+    write_file(w->root / "Data/XML/Os.xml", xml);
+    const fs::path& r = w->root;
+    // Attach order: Object is nil in the top level and in Base_Definitions, set before the first pump; Get_Name upper-case.
+    script(r, "Os_Attach",
+           "TopSaw = tostring(Object)\n"
+           "function Base_Definitions() ServiceRate = 0 GlobalValue.Set('BD', TopSaw .. '/' .. tostring(Object)) end\n"
+           "function main() GlobalValue.Set('Main', Object.Get_Type().Get_Name() .. '/' .. Object.Get_Object_ID()) "
+           "while true do coroutine.yield(true) end end\n");
+    script(r, "Os_Gate",
+           "function Base_Definitions() ServiceRate = 1 end\n"
+           "function main() while true do GlobalValue.Set('Gate', (GlobalValue.Get('Gate') or '') .. GetCurrentTime.Frame() .. ';') "
+           "coroutine.yield(true) end end\n");
+    script(r, "Os_NoRate", "function main() GlobalValue.Set('NoRate', 1) end\n");
+    script(r, "Os_Exit",
+           "function Base_Definitions() ServiceRate = 0 end\n"
+           "function main() GlobalValue.Set('Exit', (GlobalValue.Get('Exit') or 0) + 1) _ScriptExit() coroutine.yield(false) end\n");
+    script(r, "Os_ExitDefs",
+           "function Base_Definitions() ServiceRate = 0 _ScriptExit() end\n"
+           "function main() GlobalValue.Set('ExitDefs', 1) end\n");
+    script(r, "Os_BindErr",
+           "function Base_Definitions() ServiceRate = 0 end\n"
+           "function main() Object.Event_Object_In_Range(5, 1) GlobalValue.Set('BindErr', (GlobalValue.Get('BindErr') or 0) + 1) "
+           "coroutine.yield(true) GlobalValue.Set('BindErrLater', 1) end\n");
+    script(r, "Os_ThreadErr",
+           "function Base_Definitions() ServiceRate = 0 end\n"
+           "function Second() while true do GlobalValue.Set('Second', (GlobalValue.Get('Second') or 0) + 1) coroutine.yield(true) end end\n"
+           "function main() Create_Thread('Second') coroutine.yield(true) error('boom') end\n");
+    script(r, "Os_Death",
+           "function Base_Definitions() ServiceRate = 0 end\n"
+           "function main() while true do GlobalValue.Set('Death', (GlobalValue.Get('Death') or 0) + 1) coroutine.yield(true) end end\n");
+    script(r, "Os_Prox",
+           "function Base_Definitions() ServiceRate = 0 end\n"
+           "function Hit(o, t) GlobalValue.Set('Hits', (GlobalValue.Get('Hits') or '') .. t.Get_Object_ID() .. ',') end\n"
+           "function main() Object.Event_Object_In_Range(Hit, 50) while true do Object.Service_Wrapper() "
+           "GlobalValue.Set('Hits', (GlobalValue.Get('Hits') or '') .. '|') coroutine.yield(true) end end\n");
+    // A miniature TR GenericCompanySpawner (OBJECT_SCRIPTS.md §6.1): exit outside land, spawn the company at the dummy,
+    // hide it, kill the dummy once 40% or less of the company lives. GameRandom draws on the synced stream.
+    script(r, "Os_Spawner",
+           "function Base_Definitions() ServiceRate = 0.1 Units = {} end\n"
+           "function main()\n"
+           "  if Get_Game_Mode() ~= 'Land' then _ScriptExit() coroutine.yield(false) end\n"
+           "  local t = Find_Object_Type('Os_Unit')\n"
+           "  local x, y, z = Object.Get_Position().Get_XYZ()\n"
+           "  for i = 1, 3 do\n"
+           "    local u = Spawn_Unit(t, Create_Position(x + 5 * i, y + GameRandom(1, 4), z), Object.Get_Owner())[1]\n"
+           "    table.insert(Units, u)\n"
+           "  end\n"
+           "  Object.Hide(true)\n"
+           "  while true do\n"
+           "    local alive = 0\n"
+           "    for _, u in ipairs(Units) do if u.Is_Valid() then alive = alive + 1 end end\n"
+           "    if alive / table.getn(Units) <= 0.4 then GlobalValue.Set('SpawnerDone', alive) Object.Take_Damage(999999) end\n"
+           "    coroutine.yield(true)\n"
+           "  end\n"
+           "end\n");
+    // q6 t19 pool (§1.4, §2.3): no ScriptPoolCount (pool of 1, grows), 3 (preloaded), 0 (no pool), 4 (the type instance's).
+    // TopRuns counts this VM's top-level runs; Kept (a number) survives Flush_G; Flush_G / Base_Definitions count in
+    // GlobalValue (absent at the top level: the engine globals are attached after it, §1.3).
+    const std::string pool_body =
+        "TopRuns = (TopRuns or 0) + 1\n"
+        "Kept = 0\n"
+        "function Flush_G() GlobalValue.Set(Tag .. 'Flush', (GlobalValue.Get(Tag .. 'Flush') or 0) + 1) Tab = nil end\n"
+        "function Base_Definitions() ServiceRate = 0 LastService = nil Tab = {} "
+        "GlobalValue.Set(Tag .. 'BD', (GlobalValue.Get(Tag .. 'BD') or 0) + 1) GlobalValue.Set(Tag .. 'Obj', tostring(Object)) end\n"
+        "function main() Kept = Kept + 1 GlobalValue.Set(Tag .. 'Main', (GlobalValue.Get(Tag .. 'Main') or '') .. GetThreadID() .. '/' "
+        ".. Kept .. '/' .. TopRuns .. '/' .. Object.Get_Object_ID() .. ';') while true do coroutine.yield(true) end end\n";
+    script(r, "Os_Pool", "Tag = 'P'\n" + pool_body);
+    script(r, "Os_Pool3", "Tag = 'P3'\nScriptPoolCount = 3\n" + pool_body);
+    script(r, "Os_Pool0", "Tag = 'P0'\nScriptPoolCount = 0\n" + pool_body);
+    script(r, "Os_Pool4", "Tag = 'P4'\nScriptPoolCount = 4\n" + pool_body);
+    // q6 t19 save / load (§2.6): OnEnter-style work counted once (SaveOnEnter), `main` sleeping in an inline PGBase Sleep,
+    // a second thread waiting for a flag set by main, a closure counter (upvalue), a cycle and a shared table, the Object
+    // wrapper kept in a table (identity), a first-pump draw (ServiceRate > 0). Every pump writes a GlobalValue (frame CRC).
+    script(r, "Os_Save",
+           "TopRuns = (TopRuns or 0) + 1\n"
+           "function Sleep(t) local s = GetCurrentTime() while GetCurrentTime() - s < t do coroutine.yield(true) end end\n"
+           "local function counter() local c = 0 return function() c = c + 1 return c end end\n"
+           "function Base_Definitions() ServiceRate = 0.1 Ring = {} Ring.self = Ring Shared = {n = 0} "
+           "Graph = {a = Shared, b = Shared, list = {Shared, Ring}} end\n"
+           "function Waiter() while true do if Signal then Signal = nil Signals = (Signals or 0) + 1 "
+           "GlobalValue.Set('SaveSig' .. Object.Get_Object_ID(), Signals) end coroutine.yield(true) end end\n"
+           "function main()\n"
+           "  GlobalValue.Set('SaveOnEnter', (GlobalValue.Get('SaveOnEnter') or 0) + 1)\n"
+           "  local tick = counter()\n"
+           "  Mine = {obj = Object}\n"
+           "  Create_Thread('Waiter')\n"
+           "  while true do\n"
+           "    local n = tick()\n"
+           "    Shared.n = Shared.n + 1\n"
+           "    if n == 3 or n == 9 or n == 20 then Signal = true end\n"
+           "    GlobalValue.Set('Save' .. Object.Get_Object_ID(), n .. '/' .. Graph.a.n .. '/' .. tostring(Graph.a == Graph.b) .. '/' "
+           "..  tostring(Graph.list[2].self == Ring) .. '/' .. tostring(Mine.obj == Object) .. '/' .. TopRuns)\n"
+           "    Sleep(0.25)\n"
+           "  end\n"
+           "end\n");
+    w->files = std::make_unique<DirectoryProvider>(path_to_utf8(w->root));
+    CHECK(w->db.load(*w->files));
+    CHECK(w->types.build(w->db));
+    return w;
+}
+
+static ObjectHandle spawn(SimHost& host, const OsWorld& w, const char* type, int32_t owner, Vec3 pos) {
+    objects::SpawnParams sp;
+    sp.type = static_cast<objects::TypeIndex>(w.db.find(type));
+    sp.owner = owner;
+    sp.position = pos;
+    sp.facing = {1.0f, 0.0f, 0.0f};
+    return host.tactical()->spawn(sp);
+}
+
+static std::string gv_text(SimHost& host, const char* key) { return host.global_values()->get(key).text; }
+static double gv_num(SimHost& host, const char* key) { return host.global_values()->get(key).number; }
+
+static SimConfig os_config(bool on) {
+    SimConfig cfg;
+    cfg.seed = 4242;
+    cfg.object_scripts = on;
+    return cfg;
+}
+
+static void test_attach_and_gate(const OsWorld& w) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    {   // Attach order, inherited Lua_Script, Get_Name upper-case; an object without a script attaches nothing.
+        SimHost host(w.types, js, os_config(true));
+        host.set_object_script_files(w.files.get());
+        host.start_game(ModeKind::Land);
+        const ObjectHandle plain = spawn(host, w, "Os_Plain", 0, {0, 0, 0});
+        const ObjectHandle v = spawn(host, w, "Os_Attach_Variant", 0, {0, 0, 0});
+        ObjectScriptHost& os = *host.object_scripts();
+        CHECK(os.live() == 1 && os.stats().attached == 1 && os.has_script(host.tactical()->primary(), v) &&
+              !os.has_script(host.tactical()->primary(), plain));
+        CHECK(gv_text(host, "BD") == "nil/nil");  // Object nil in the top level and in Base_Definitions
+        CHECK(gv_text(host, "Main").empty());     // main created, not run
+        host.run_fast(1);
+        CHECK(gv_text(host, "Main") == "OS_ATTACH_VARIANT/" + std::to_string(host.tactical()->primary().id(v)));
+        std::string why;  // q6 t19: refused for the bare tactical mode (no rebuilder), not for the scripts
+        CHECK(!host.save_allowed(&why) && why.find("game-object") == std::string::npos);
+        // A missing file: no script (counted).
+        spawn(host, w, "Os_Missing", 0, {0, 0, 0});
+        CHECK(os.live() == 1 && os.stats().load_failures == 1 && os.error_total() == 1);
+        // Mode end releases the store's scripts.
+        CHECK(host.end_game_mode() && os.live() == 0 && os.stats().released_mode == 1);
+    }
+    {   // Off (default): nothing attaches, no host.
+        SimHost host(w.types, js, os_config(false));
+        host.start_game(ModeKind::Land);
+        spawn(host, w, "Os_Attach", 0, {0, 0, 0});
+        CHECK(host.object_scripts() == nullptr && host.global_values()->get("BD").kind == lua::AiGlobalValue::Nil);
+    }
+    {   // The gate (§3.2): ServiceRate 1, the first pump at mode frame 0 sets LastService = -(one synced draw in [0, 1]),
+        // then now = (float)frame x 0.033333335f, due when now - LastService > 1 (strict, double).
+        SimHost host(w.types, js, os_config(true));
+        host.set_object_script_files(w.files.get());
+        host.start_game(ModeKind::Land);
+        spawn(host, w, "Os_Gate", 0, {0, 0, 0});
+        spawn(host, w, "Os_NoRate", 0, {0, 0, 0});  // no ServiceRate: never pumped, no draw
+        SimRng copy = host.random().synced();
+        const double r = static_cast<double>(copy.range_float(0.0f, first_pump_draw_hi(1.0)));
+        host.run_fast(200);
+        const std::string got = gv_text(host, "Gate");
+        const uint64_t f0 = std::strtoull(got.c_str(), nullptr, 10);
+        std::string want;
+        size_t pumps = 0;
+        double last = -r;
+        for (uint64_t f = f0; f < f0 + 400; ++f) {
+            const double now = object_script_time(f);
+            if (f != f0 && !(now - last > 1.0)) continue;
+            want += std::to_string(f) + ";";
+            if (f != f0) last = now;
+            if (want.size() <= got.size()) ++pumps;
+        }
+        CHECK(!got.empty() && want.compare(0, got.size(), got) == 0 && pumps >= 6);
+        CHECK(host.object_scripts()->stats().pumps == pumps);
+        CHECK(host.global_values()->get("NoRate").kind == lua::AiGlobalValue::Nil);
+        CHECK(host.object_scripts()->stats().first_draws == 1);
+        CHECK(host.random().synced().state() == copy.state());  // exactly the one draw
+        std::printf("object scripts gate: first draw %.6f, %zu pumps at mode frames %s\n", r, pumps, got.c_str());
+    }
+}
+
+static void test_release(const OsWorld& w) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimHost host(w.types, js, os_config(true));
+    host.set_object_script_files(w.files.get());
+    host.start_game(ModeKind::Land);
+    ObjectScriptHost& os = *host.object_scripts();
+    spawn(host, w, "Os_Exit", 0, {0, 0, 0});
+    spawn(host, w, "Os_ExitDefs", 0, {0, 0, 0});
+    spawn(host, w, "Os_BindErr", 0, {0, 0, 0});
+    spawn(host, w, "Os_ThreadErr", 0, {0, 0, 0});
+    const ObjectHandle dying = spawn(host, w, "Os_Death", 0, {0, 0, 0});
+    CHECK(os.live() == 5);
+    host.run_fast(3);
+    // ScriptExit in a thread: one pump, then released. ScriptExit in Base_Definitions: released before main runs.
+    CHECK(gv_num(host, "Exit") == 1.0 && host.global_values()->get("ExitDefs").kind == lua::AiGlobalValue::Nil);
+    // A binding script error (+0x121): the thread runs on to its yield, then the script is released.
+    CHECK(gv_num(host, "BindErr") == 1.0 && host.global_values()->get("BindErrLater").kind == lua::AiGlobalValue::Nil);
+    CHECK(os.stats().released_exit == 3);
+    // A Lua runtime error kills only its thread: the second thread keeps running.
+    const double second = gv_num(host, "Second");
+    host.run_fast(2);
+    CHECK(second >= 1.0 && gv_num(host, "Second") == second + 2.0 && os.stats().thread_errors == 1);
+    // Death stops the service at once and releases the script.
+    const double deaths = gv_num(host, "Death");
+    CHECK(deaths == 5.0);
+    host.tactical()->destroy(dying);
+    host.run_fast(3);
+    CHECK(gv_num(host, "Death") == deaths && os.stats().released_dead == 1 && os.live() == 1);
+    bool boom = false;
+    for (const auto& [text, n] : os.error_counts()) boom = boom || (text.find("boom") != std::string::npos && n == 1);
+    CHECK(boom);
+}
+
+static void test_proximity_and_spawner(const OsWorld& w) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    {   // Proximity (§4.3): synchronous callbacks inside Service_Wrapper, box of half-size 50, ascending id.
+        SimHost host(w.types, js, os_config(true));
+        host.set_object_script_files(w.files.get());
+        host.start_game(ModeKind::Land);
+        const ObjectHandle far_a = spawn(host, w, "Os_Plain", 1, {40, 40, 0});    // in the box (not in a 50 sphere)
+        spawn(host, w, "Os_Plain", 1, {60, 0, 0});                                // outside
+        const ObjectHandle prox = spawn(host, w, "Os_Prox", 0, {0, 0, 0});
+        const ObjectHandle near_b = spawn(host, w, "Os_Plain", 2, {-10, 0, 0});
+        host.run_fast(2);
+        const objects::ObjectStore& st = host.tactical()->primary();
+        const std::string a = std::to_string(st.id(far_a)), b = std::to_string(st.id(near_b));
+        CHECK(gv_text(host, "Hits") == a + "," + b + ",|" + a + "," + b + ",|");
+        (void)prox;
+    }
+    {   // The mini company spawner: units spawned in the first pump, the dummy dies when <= 40% of them live.
+        SimHost host(w.types, js, os_config(true));
+        host.set_object_script_files(w.files.get());
+        host.start_game(ModeKind::Land);
+        const ObjectHandle dummy = spawn(host, w, "Os_Spawner", 1, {100, 0, 0});
+        host.run_fast(1);
+        const objects::ObjectStore& st = host.tactical()->primary();
+        const std::vector<ObjectHandle> units = st.find_all_of_type(static_cast<objects::TypeIndex>(w.db.find("Os_Unit")));
+        CHECK(units.size() == 3);
+        for (const ObjectHandle u : units) CHECK(st.owner(u) == 1);
+        CHECK(host.object_scripts()->live() == 1);  // the spawned units have no script
+        host.run_fast(10);
+        CHECK(st.alive(dummy));
+        host.tactical()->destroy(units[0]);
+        host.tactical()->destroy(units[1]);
+        host.run_fast(10);
+        CHECK(!st.alive(dummy) && gv_num(host, "SpawnerDone") == 1.0 && host.object_scripts()->live() == 0 &&
+              host.object_scripts()->stats().released_dead == 1);
+    }
+    {   // Galactic store: Get_Game_Mode is "Galactic", the spawner exits on its first pump; q6 t19: a live script no
+        // longer blocks the save.
+        SimHost host(w.types, js, os_config(true));
+        host.set_object_script_files(w.files.get());
+        GameMode& gal = host.start_game(ModeKind::Galactic);
+        objects::SpawnParams sp;
+        sp.type = static_cast<objects::TypeIndex>(w.db.find("Os_Attach"));
+        gal.primary().create(sp);
+        std::string why;
+        CHECK(host.object_scripts()->live() == 1 && host.save_allowed(&why));
+        sp.type = static_cast<objects::TypeIndex>(w.db.find("Os_Spawner"));
+        gal.primary().create(sp);
+        host.run_fast(1);
+        CHECK(host.object_scripts()->live() == 1 && host.object_scripts()->stats().released_exit == 1);
+    }
+}
+
+// Rule 3: the scripts (attach, first-pump draws, GameRandom in a pump, Spawn_Unit) give the same CRCs at every worker count.
+static void test_worker_counts(const OsWorld& w) {
+    CrcLog first;
+    for (const int32_t workers : {0, 1, 4}) {
+        jobs::JobSystem js(jobs::JobSystemConfig{workers});
+        SimHost host(w.types, js, os_config(true));
+        host.set_object_script_files(w.files.get());
+        host.start_game(ModeKind::Land);
+        for (int i = 0; i < 4; ++i) spawn(host, w, "Os_Spawner", i % 2, {static_cast<float>(100 * i), 0, 0});
+        spawn(host, w, "Os_Gate", 0, {0, 0, 0});
+        spawn(host, w, "Os_Prox", 1, {150, 0, 0});
+        // q6 t19: a pooled instance released and handed out again mid-run (each new holder draws on its first pump).
+        const ObjectHandle p1 = spawn(host, w, "Os_Pool", 0, {20, 0, 0});
+        spawn(host, w, "Os_Pool", 1, {30, 0, 0});
+        host.run_fast(30);
+        host.tactical()->destroy(p1);
+        host.run_fast(10);
+        spawn(host, w, "Os_Pool", 0, {40, 0, 0});
+        host.run_fast(80);
+        if (workers == 0) {
+            first = host.crc_log();
+            CHECK(host.object_scripts()->stats().first_draws == 9 && host.object_scripts()->stats().reused == 1);
+        } else {
+            CHECK(!first_divergence(first, host.crc_log()).diverged);
+        }
+    }
+}
+
+// q6 t19: the script pool (§1.4, §2.3) and the type instance (§1.5).
+static const ObjectScriptHost::PoolInfo* pool_of(const std::vector<ObjectScriptHost::PoolInfo>& pools, const char* name) {
+    for (const ObjectScriptHost::PoolInfo& p : pools)
+        if (p.name == name) return &p;
+    return nullptr;
+}
+
+static void test_pool(const OsWorld& w) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimHost host(w.types, js, os_config(true));
+    host.set_object_script_files(w.files.get());
+    host.start_game(ModeKind::Land);
+    ObjectScriptHost& os = *host.object_scripts();
+    const objects::ObjectStore& st = host.tactical()->primary();
+    auto id_of = [&](ObjectHandle h) { return std::to_string(st.id(h)); };
+    // Type setup (§1.5): the Os_TypeScript type instance made the Os_Pool4 pool (4 loaded: 1 held by the type, 3 free);
+    // Base_Definitions once, Object nil, never serviced.
+    const auto type_t = static_cast<objects::TypeIndex>(w.db.find("Os_TypeScript"));
+    CHECK(os.type_instances() == 1 && os.type_vm(type_t) != nullptr && os.stats().loaded == 4);
+    std::vector<ObjectScriptHost::PoolInfo> pools = os.pools();
+    const ObjectScriptHost::PoolInfo* p4 = pool_of(pools, "Os_Pool4");
+    CHECK(p4 && p4->size == 4 && p4->in_use == 1);
+    CHECK(gv_num(host, "P4BD") == 1.0 && gv_text(host, "P4Obj") == "nil");
+    host.run_fast(3);
+    CHECK(host.global_values()->get("P4Main").kind == lua::AiGlobalValue::Nil && os.stats().pumps == 0);
+    // An object of that type takes a free preloaded instance: still fresh, so Base_Definitions runs at its attach.
+    const ObjectHandle ts = spawn(host, w, "Os_TypeScript", 0, {0, 0, 0});
+    CHECK(os.stats().loaded == 4 && os.stats().reused == 1 && gv_num(host, "P4BD") == 2.0);
+    host.run_fast(1);
+    CHECK(gv_text(host, "P4Main") == "0/1/1/" + id_of(ts) + ";");
+    const uint64_t loaded0 = os.stats().loaded, reused0 = os.stats().reused;
+    // No ScriptPoolCount: a pool of 1 that grows to the peak live count. A released instance runs Flush_G and
+    // Base_Definitions at once; its reuse runs neither the top level nor Base_Definitions; thread ids restart at 0;
+    // numbers survive Flush_G.
+    const ObjectHandle a = spawn(host, w, "Os_Pool", 0, {0, 0, 0});
+    pools = os.pools();
+    const ObjectScriptHost::PoolInfo* p = pool_of(pools, "Os_Pool");
+    CHECK(os.stats().loaded == loaded0 + 1 && gv_num(host, "PBD") == 1.0 && p && p->size == 1 && p->in_use == 1);
+    host.run_fast(1);
+    const std::string a_id = id_of(a);  // before the destroy (the handle goes stale)
+    host.tactical()->destroy(a);
+    host.run_fast(1);
+    pools = os.pools();
+    p = pool_of(pools, "Os_Pool");
+    CHECK(p && p->size == 1 && p->in_use == 0 && gv_num(host, "PFlush") == 1.0 && gv_num(host, "PBD") == 2.0 &&
+          os.stats().pooled_releases == 1 && os.stats().released_dead == 1);
+    const ObjectHandle b = spawn(host, w, "Os_Pool", 0, {0, 0, 0});
+    CHECK(os.stats().loaded == loaded0 + 1 && os.stats().reused == reused0 + 1 && gv_num(host, "PBD") == 2.0);
+    host.run_fast(1);
+    CHECK(gv_text(host, "PMain") == "0/1/1/" + a_id + ";0/2/1/" + id_of(b) + ";");
+    spawn(host, w, "Os_Pool", 0, {0, 0, 0});  // none free: one more
+    pools = os.pools();
+    p = pool_of(pools, "Os_Pool");
+    CHECK(p && p->size == 2 && p->in_use == 2 && os.stats().loaded == loaded0 + 2 && gv_num(host, "PBD") == 3.0);
+    // ScriptPoolCount 3: three loaded at the first attach, the next two attaches reuse, the fourth loads one more.
+    const uint64_t loaded1 = os.stats().loaded;
+    for (int i = 0; i < 3; ++i) spawn(host, w, "Os_Pool3", 0, {0, 0, 0});
+    CHECK(os.stats().loaded == loaded1 + 3);
+    spawn(host, w, "Os_Pool3", 0, {0, 0, 0});
+    pools = os.pools();
+    const ObjectScriptHost::PoolInfo* p3 = pool_of(pools, "Os_Pool3");
+    CHECK(os.stats().loaded == loaded1 + 4 && p3 && p3->size == 4 && p3->in_use == 4);
+    // ScriptPoolCount 0: no pool; every attach loads, a release closes the VM (no Flush_G).
+    const uint64_t loaded2 = os.stats().loaded;
+    const ObjectHandle z = spawn(host, w, "Os_Pool0", 0, {0, 0, 0});
+    host.run_fast(1);
+    host.tactical()->destroy(z);
+    host.run_fast(1);
+    spawn(host, w, "Os_Pool0", 0, {0, 0, 0});
+    pools = os.pools();
+    CHECK(os.stats().loaded == loaded2 + 2 && pool_of(pools, "Os_Pool0") == nullptr &&
+          host.global_values()->get("P0Flush").kind == lua::AiGlobalValue::Nil);
+    // Mode end: every pooled instance goes back to its pool (Flush_G + Base_Definitions); the type instance stays.
+    const double flushes = gv_num(host, "PFlush");
+    CHECK(host.end_game_mode());
+    CHECK(gv_num(host, "PFlush") == flushes + 2.0 && os.live() == 0);
+    for (const ObjectScriptHost::PoolInfo& q : os.pools()) CHECK(q.in_use == (q.name == "Os_Pool4" ? 1u : 0u));
+    std::printf("object scripts pool: loaded %llu, reused %llu, pooled releases %llu\n",
+                static_cast<unsigned long long>(os.stats().loaded), static_cast<unsigned long long>(os.stats().reused),
+                static_cast<unsigned long long>(os.stats().pooled_releases));
+}
+
+// q6 t19 (§2.6, LUA_SAVE): object scripts in a save. A bare galactic session plus a battle glue participant that pushes a
+// Land mode at load (two-pass load, as in test_save_session); scripts in both stores, mid-thread (Sleep, a waiting
+// thread), pooled (held and free instances, a pooled release before the save), unpooled (ScriptPoolCount 0), the type
+// instance. The load runs nothing of the scripts (no top level, Base_Definitions, main or Object: SaveOnEnter, TopRuns
+// and the pool counters unchanged) and the run continues with the uninterrupted run's CRCs (GlobalValue writes are in
+// the frame CRC, first-pump draws in the rng CRC).
+static void test_save_load(const OsWorld& w) {
+    struct Glue {
+        SimHost* host = nullptr;
+        bool resume = false;
+        int rebuilds = 0;
+    };
+    auto make = [&w](jobs::JobSystem& js, std::shared_ptr<Glue>& g) {
+        auto h = std::make_unique<SimHost>(w.types, js, os_config(true));
+        h->set_object_script_files(w.files.get());
+        h->start_game(ModeKind::Galactic);
+        g = std::make_shared<Glue>();
+        g->host = h.get();
+        SaveParticipant p;
+        p.name = "test.battle";
+        p.write = [g](ByteWriter& out) { out.boolean(g->host->modes().depth() > 1); };
+        p.read = [g](ByteReader& in) {
+            const bool tactical = in.boolean();
+            if (!in.ok()) return false;
+            g->resume = tactical && g->host->modes().depth() == 1;
+            return true;
+        };
+        p.rebuild = [g] {
+            if (!g->resume) return std::string();
+            g->resume = false;
+            ++g->rebuilds;
+            g->host->start_game(ModeKind::Land);
+            return std::string();
+        };
+        h->add_save_participant(std::move(p));
+        return h;
+    };
+    auto bottom = [](SimHost& h) -> objects::ObjectStore& { return h.modes().at(h.modes().depth() - 1).primary(); };
+    auto create = [&w](objects::ObjectStore& st, const char* type) {
+        objects::SpawnParams sp;
+        sp.type = static_cast<objects::TypeIndex>(w.db.find(type));
+        sp.owner = 0;
+        sp.facing = {1.0f, 0.0f, 0.0f};
+        return st.create(sp);
+    };
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    std::shared_ptr<Glue> ga, gb;
+    auto a = make(js, ga);
+    ObjectScriptHost& osa = *a->object_scripts();
+    const ObjectHandle gal_save = create(bottom(*a), "Os_Save");
+    create(bottom(*a), "Os_Gate");
+    a->run_fast(20);
+    a->start_game(ModeKind::Land);
+    std::vector<ObjectHandle> land;
+    for (const char* t : {"Os_Save", "Os_Save", "Os_Pool", "Os_Pool", "Os_Pool0", "Os_TypeScript", "Os_Prox"})
+        land.push_back(spawn(*a, w, t, 0, {static_cast<float>(10 * land.size()), 0, 0}));
+    spawn(*a, w, "Os_Plain", 1, {75, 10, 0});
+    a->run_fast(25);
+    a->tactical()->destroy(land[2]);  // a pooled release: Flush_G + Base_Definitions, the instance waits free
+    a->run_fast(6);
+    std::string why;
+    CHECK(osa.live() == 8 && a->save_allowed(&why));
+    SaveFile save;
+    CHECK(a->save(save, &why) && save.find("object_scripts") != nullptr);
+    if (!why.empty()) std::printf("  object script save: %s\n", why.c_str());
+    const ObjectScriptHost::Stats at_save = osa.stats();
+    const std::vector<ObjectScriptHost::PoolInfo> pools_at_save = osa.pools();
+    const double on_enter = gv_num(*a, "SaveOnEnter"), pbd = gv_num(*a, "PBD"), p4bd = gv_num(*a, "P4BD");
+    CHECK(on_enter == 3.0 && at_save.pooled_releases == 1);
+    a->run_fast(150);
+    CrcLog log_a;
+    for (const CrcRecord& rec : a->crc_log().records)
+        if (rec.tick >= save.tick) log_a.records.push_back(rec);
+    log_a.systems = a->crc_log().systems;
+    log_a.parity_parts = a->crc_log().parity_parts;
+
+    auto b = make(js, gb);
+    LoadReport rep;
+    CHECK(b->load(save, &why, &rep));
+    if (!rep.ok()) std::printf("  object script load: %s\n", rep.text().c_str());
+    ObjectScriptHost& osb = *b->object_scripts();
+    CHECK(b->modes().depth() == 2 && gb->rebuilds == 1 && osb.live() == 8 && osb.type_instances() == 1);
+    const ObjectScriptHost::Stats s = osb.stats();
+    CHECK(s.attached == at_save.attached && s.loaded == at_save.loaded && s.reused == at_save.reused &&
+          s.pumps == at_save.pumps && s.first_draws == at_save.first_draws && s.pooled_releases == at_save.pooled_releases);
+    const std::vector<ObjectScriptHost::PoolInfo> pools_b = osb.pools();
+    CHECK(pools_b.size() == pools_at_save.size());
+    for (size_t i = 0; i < pools_b.size() && i < pools_at_save.size(); ++i)
+        CHECK(pools_b[i].name == pools_at_save[i].name && pools_b[i].size == pools_at_save[i].size &&
+              pools_b[i].in_use == pools_at_save[i].in_use);
+    CHECK(osb.has_script(bottom(*b), gal_save) && osb.has_script(b->tactical()->primary(), land[0]) &&
+          !osb.has_script(b->tactical()->primary(), land[2]));
+    CHECK(b->run_fast(150) == 150);
+    const CrcDivergence dv = first_divergence(log_a, b->crc_log());
+    if (dv.diverged) std::printf("  object script save: %s\n", dv.message.c_str());
+    CHECK(!dv.diverged);
+    // Nothing re-ran at the load (the OnEnter count, the top levels, the pooled Base_Definitions), the threads went on.
+    CHECK(gv_num(*b, "SaveOnEnter") == on_enter && gv_num(*a, "SaveOnEnter") == on_enter && gv_num(*b, "PBD") == pbd &&
+          gv_num(*b, "P4BD") == p4bd);
+    const std::string key = "Save" + std::to_string(bottom(*a).id(gal_save));
+    CHECK(gv_text(*b, key.c_str()) == gv_text(*a, key.c_str()) && gv_text(*b, key.c_str()).find("/true/true/true/1") != std::string::npos);
+    CHECK(gv_text(*b, "Gate") == gv_text(*a, "Gate") && gv_text(*b, "Hits") == gv_text(*a, "Hits") && !gv_text(*a, "Hits").empty());
+    CHECK(osb.stats().pumps == osa.stats().pumps && osb.stats().first_draws == osa.stats().first_draws);
+    std::printf("object scripts save: %zu chunks, %zu live scripts restored at tick %" PRIu64 ", 150 ticks %s, %s\n",
+                save.chunks().size(), osb.live(), save.tick, dv.diverged ? "DIVERGED" : "identical",
+                gv_text(*b, key.c_str()).c_str());
+}
+
+static void test_object_scripts() {
+    const auto w = make_os_world();
+    test_attach_and_gate(*w);
+    test_release(*w);
+    test_proximity_and_spawner(*w);
+    test_pool(*w);
+    test_worker_counts(*w);
+    test_save_load(*w);
+    std::error_code ec;
+    remove_all_long(w->root, ec);
+    std::printf("object scripts: attach, gate, release, proximity, spawner, worker counts checked\n");
+}
+
+}  // namespace object_script_test
 
 static void test_story_synthetic(const World& w) {
     using namespace story_test;
@@ -1482,6 +2524,8 @@ struct Result {
     bool scoped_ok = false;
     bool battles_ok = false;
     bool special_ok = false;  // P4 lua
+    size_t holocron = 0;      // q6 t14
+    bool holocron_saved = false;
 };
 
 static Result run(const objects::GameObjectTypes& types, const FileProvider& files, int32_t workers) {
@@ -1600,6 +2644,16 @@ static Result run(const objects::GameObjectTypes& types, const FileProvider& fil
         out.dialog_tag = d[0].tag;
         out.dialog_chapter = d[0].chapter;
     }
+    // q6 t14: the holocron record of that fire, saved with the session (v3) and re-linked to its event on load.
+    if (const lua::StoryHolocron* h = story.holocron()) {
+        out.holocron = h->size();
+        story.mark_holocron_read(0);
+        ByteWriter w;
+        story.write(w);
+        ByteReader rd(w.bytes());
+        out.holocron_saved = h->size() == 1 && story.read(rd) && h->size() == 1 && h->entries()[0].tag == "Era_Tag" &&
+                             h->entries()[0].read && h->entries()[0].model == &story.model(0) && h->entries()[0].chapter == 2;
+    }
     return out;
 }
 }  // namespace story_wave1
@@ -1634,6 +2688,7 @@ static void test_story_wave1() {
         }
     CHECK(a.scoped_ok && a.battles_ok && a.dialogs == 1 && a.dialog_tag == "Era_Tag" && a.dialog_chapter == 2);
     CHECK(a.special_ok);  // P4 lua
+    CHECK(a.holocron == 1 && a.holocron_saved);  // q6 t14
     CHECK(a.log.find("UiSelectUnit") != std::string::npos && a.log.find("PlanetDestroyed") != std::string::npos);
     CHECK(!a.log.empty() && a.log == b.log);
     std::printf("story wave 1: %zu log bytes, identical for 0/1/4/15 workers: %s\n", a.log.size(), a.log == b.log ? "yes" : "NO");
@@ -2127,6 +3182,12 @@ int main(int argc, char** argv) {
     test_story_load_construct(*world);  // a2j t05: starting-force / spawn CONSTRUCT and the load-time event stream
     test_story_wave1();
     test_story_wave2a();
+    story_test::test_many_players(*world);  // Q6
+    story_test::test_scoring_script(*world);  // q6 t06
+    story_test::test_scoring_service(*world);  // q6 t09
+    story_test::test_scoring_story(*world);    // q6 t09
+    story_test::test_q6_story_chain(*world);   // q6: load-time resume, Perpetual ELAPSED, SWITCH_CONTROL hook
+    object_script_test::test_object_scripts();  // q6: game-object Lua scripts
 #else
     std::printf("story: built without engine/lua, skipped\n");
 #endif

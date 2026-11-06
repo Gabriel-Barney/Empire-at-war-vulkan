@@ -1,5 +1,6 @@
 // alamo_game App: screens, panels, saves, battle prompts, holocron / encyclopedia, cursor (split from game_main.cpp).
 #include "game_app.hpp"
+#include "alamo/vfs/vfs.hpp"  // q6: the mod layer decides the buy list's [port interim rule]
 
 namespace alamo_game_app {
 
@@ -54,8 +55,10 @@ bool App::skirmish_map_is_land(const std::string& map) const {
     return map.find("_LAND") != std::string::npos;
 }
 
-// Skirmish buy-units screen (IDD_SKIRMISH_BUY_UNITS_DIALOG): [port] 10000 credits, the human faction's buildable space
-// units (land map: ground units) by cost; bought units replace the default fleet, none bought = the default fleet.
+// Skirmish buy-units screen (IDD_SKIRMISH_BUY_UNITS_DIALOG). [port] a pre-battle screen (the original single-player
+// skirmish has none, SKIRMISH_SETUP §2.7): 10000 credits; bought units replace the default fleet, none bought = the
+// default fleet. The list is the original dialog's (game::skirmish_buy_list: cost > 0, Affiliation, Available_In_Skirmish
+// or the map kind's build tab, not cinematic-only, named heroes hidden, most expensive first, no cap: the list box scrolls).
 void App::open_buy_units(const SessionSpec& spec) {
     pending_skirmish_ = spec;
     bought_.clear();
@@ -63,11 +66,13 @@ void App::open_buy_units(const SessionSpec& spec) {
     buy_.credits = opt_.smoke == "skirmish" ? 20000 : 10000;  // [smoke] room for a fleet larger than the space unit cap
     const bool land = skirmish_map_is_land(spec.skirmish_map);
     const uint32_t fac = data_.rules.find_faction(spec.skirmish.human_faction);
-    for (uint32_t t = 0; t < data_.rules.types.size() && buy_.units.size() < 24; ++t) {
+    game::SkirmishBuyOptions bo;
+    bo.heroes = false;  // [port] the staging screen has no heroes option (0x140b154bc bit 0): named heroes stay hidden
+    // [port interim rule, Gabriel 2026-11-04: mod-only port rules keep vanilla behaviour] with a mod layer (MODPATH=) only the
+    // types some Tactical_Buildable_Objects_Multiplayer list names (drops Thrawn's Revenge's option / cheat / marker rows).
+    bo.multiplayer_list_only = data_.vfs && !data_.vfs->mod_dirs().empty();
+    for (const uint32_t t : game::skirmish_buy_list(data_.rules, data_.types, fac, land, bo)) {
         const galactic::TypeInfo& ti = data_.rules.types[t];
-        const bool kind_ok = land ? ti.kind == galactic::UnitKind::GroundUnit : ti.kind == galactic::UnitKind::SpaceUnit;
-        if (!kind_ok || ti.build_cost <= 0 || data_.types.get_bool(t, "Is_Named_Hero")) continue;
-        if (!ti.affiliation.empty() && std::find(ti.affiliation.begin(), ti.affiliation.end(), fac) == ti.affiliation.end()) continue;
         ui::BuyUnitEntry e;
         e.type = ti.name;
         e.name = type_label(data_, ui_.text, t);
@@ -75,7 +80,8 @@ void App::open_buy_units(const SessionSpec& spec) {
         e.icon = t < ui_.hud_types.size() ? ui_.hud_types[t].icon_name : std::string();
         buy_.units.push_back(std::move(e));
     }
-    std::stable_sort(buy_.units.begin(), buy_.units.end(), [](const ui::BuyUnitEntry& a, const ui::BuyUnitEntry& b) { return a.cost < b.cost; });
+    std::printf("skirmish buy list: %zu rows (%s, %s)%s\n", buy_.units.size(), spec.skirmish.human_faction.c_str(), land ? "land" : "space",
+                bo.multiplayer_list_only ? " [mod: Tactical_Buildable_Objects_Multiplayer types only]" : "");
     if (!info_.show_buy_units(buy_)) {  // no dialog in the script: start with the defaults
         if (!start_session(spec)) open_main_menu();
     }
@@ -160,12 +166,13 @@ void App::handle_screen_actions(const std::vector<ui::ScreenAction>& acts) {
                 ui_.front.set_in_game(false);
                 open_main_menu();
                 break;
-            case K::StorySummaryGoal:  // GALACTIC_DIALOGS §2.2: a chapter chosen in the goal list -> refill with it
-                summary_chapter_ = a.button;
+            case K::StorySummaryGoal:  // GALACTIC_DIALOGS §2.2: a record chosen in the goal list -> refill with it
+                if (a.button >= 0 && static_cast<size_t>(a.button) < summary_rows_.size()) summary_entry_ = summary_rows_[static_cast<size_t>(a.button)];
                 open_story_summary();
                 break;
             case K::StorySummaryFilter:
                 summary_completed_ = a.button == 1;
+                summary_entry_ = 0;    // the tab's first row
                 open_story_summary();  // refill
                 break;
             // P4 host: both answers go through the command stream; their results come at the command phase
@@ -364,9 +371,9 @@ void App::save_game_as(const std::string& typed) {
 // worked does it replace the running session (a failed load leaves the current game / menu as it was).
 bool App::load_saved_game(const std::string& name) { return load_save_file(save_path(saves_dir_, name)); }
 
-bool App::load_save_file(const std::string& path) {
+bool App::load_save_file(const std::string& path, const commands::CommandRecording* replay) {
     std::string err;
-    std::unique_ptr<GameSession> s = path.empty() ? nullptr : load_game(data_, *js_, path, &err);
+    std::unique_ptr<GameSession> s = path.empty() ? nullptr : load_game(data_, *js_, path, &err, replay);
     if (!s) {
         save_message(U"The saved game could not be loaded", path.empty() ? std::string("no save name") : err);
         return false;
@@ -375,7 +382,8 @@ bool App::load_save_file(const std::string& path) {
     end_session();
     session_ = std::move(s);
     recording_ = commands::CommandRecording{};
-    session_->record_to(&recording_);  // record_after_load: the stream continues the save
+    if (replay) recording_ = *replay;  // bm2: a replayed stream is the run's stream (crc_check replays it again)
+    else session_->record_to(&recording_);  // record_after_load: the stream continues the save
     loaded_save_ = path;
     ++saves_loaded_;
     paused_ = false;
@@ -498,26 +506,31 @@ void App::open_linked_banner(const galactic::GalacticSim& g, const sim::Campaign
                 r.map.c_str());
 }
 
-// GALACTIC_DIALOGS §2.1: a Story_Dialog event's chapter goes to the mission holocron; b_story_arc_g flashes, the faction's
-// Default_Transmission_Message (TEXT_ENCYCLOPEDIA_HOLOCRON_UPDATED) is a white screen-text line and SFXEvent_Mission_Added
-// plays [port: always - no shipped event sets Story_Dialog_SFX, which the story model does not read]. Story_Dialog_Popup
-// opens the summary at once.
-void App::add_holocron_chapter(const ui::StoryDialogInfo& info, const StoryDialogMeta& meta) {
+// STORY.md §1.6 step 3 / GALACTIC_DIALOGS §2.1: a Story_Dialog event fired (its record is already in the sim's holocron
+// list). Popup false (every shipped event): b_story_arc_g flashes, the faction's Default_Transmission_Message
+// (TEXT_ENCYCLOPEDIA_HOLOCRON_UPDATED for every shipped faction [port: the port reads no faction field for it]) is a white
+// screen-text line, and SFXEvent_Mission_Added plays only when the event has Story_Dialog_SFX (no shipped event does).
+// Popup true: the summary opens at this record instead.
+void App::add_holocron_chapter(const StoryDialogMeta& meta, size_t lines) {
     HolocronChapter ch;
-    ch.title = info.title;
-    ch.lines = info.lines;
-    ch.colors = info.line_colors;
     ch.dialog = meta.dialog;
+    ch.tag = meta.tag;
     ch.chapter = meta.chapter;
+    ch.id = meta.holocron_id;
     holocron_chapters_.push_back(std::move(ch));
     ++holocron_updates_;
+    summary_entry_ = 0;  // the summary opens at the first (newest) row
+    std::printf("holocron: chapter %d of %s added (%zu lines), tag %s%s%s\n", meta.chapter, meta.dialog.c_str(), lines, meta.tag.c_str(),
+                meta.popup ? ", popup" : "", meta.sfx ? ", sfx" : "");
+    if (meta.popup) {
+        summary_completed_ = false;
+        summary_entry_ = meta.holocron_id;
+        open_story_summary();
+        return;
+    }
     holocron_flash_ = true;
-    summary_chapter_ = -1;  // the summary opens at the newest chapter
     screen_line(txt("TEXT_ENCYCLOPEDIA_HOLOCRON_UPDATED", U"The mission holocron has been updated."), ui::Rgba8{255, 255, 255, 255});
-    audio_.faction_sfx("SFXEvent_Mission_Added");
-    std::printf("holocron: chapter %d of %s added (%zu lines)%s\n", meta.chapter, meta.dialog.c_str(), holocron_chapters_.back().lines.size(),
-                meta.popup ? ", popup" : "");
-    if (meta.popup) open_story_summary();
+    if (meta.sfx) audio_.faction_sfx("SFXEvent_Mission_Added");
 }
 
 void App::update_radar() {
@@ -569,13 +582,14 @@ void App::galactic_screens() {
     holo_.sample(*g);
     std::vector<StoryMovie> movies;
     std::vector<StoryDialogMeta> meta;
-    std::vector<ui::StoryDialogInfo> dialogs = new_story_dialogs(*session_, data_, ui_.text, story_cursor_, &movies, &meta);
+    sync_story_scripts(*session_, data_, story_scripts_, story_loads_);  // GALACTIC_DIALOGS §2.8: scripts load with their plots
+    std::vector<ui::StoryDialogInfo> dialogs = new_story_dialogs(*session_, story_scripts_, ui_.text, story_cursor_, &movies, &meta);
     bool offer = false;  // a random-plot offer opened (its talking head plays in the dialog's portrait)
     for (size_t k = 0; k < dialogs.size(); ++k) {
         ui::StoryDialogInfo& i = dialogs[k];
         const StoryDialogMeta md = k < meta.size() ? meta[k] : StoryDialogMeta{};
         if (!md.random_plot) {
-            add_holocron_chapter(i, md);
+            add_holocron_chapter(md, i.lines.size());
             continue;
         }
         // ui ask 11: the talking head (MOVIE looped / MOVIE_ONCE) plays in the dialog's portrait: a GUI image page named
@@ -628,7 +642,7 @@ void App::galactic_screens() {
         }
     }
     if (session_->spec().kind == SessionKind::Campaign && !campaign_over_)
-        if (const int32_t o = galactic::victory_outcome(*g, victory_rules_, local_player()); o != 0) show_campaign_end(o > 0);  // Int-verify
+        if (const int32_t o = galactic::victory_outcome(*g, victory_rules_, local_player(), &elimination_latch_); o != 0) show_campaign_end(o > 0);  // Int-verify
 }
 
 void App::show_campaign_end(bool victory) {
@@ -651,25 +665,22 @@ void App::open_holocron(ui::InfoPage page) {
     if (!info_.show_info(page)) notes_.push_back("holocron page missing");
 }
 
-// GALACTIC_DIALOGS §2.2: IDD_STORY_SUMMARY_DIALOG from the mission holocron - the goal list = the chapters' titles (Active
-// tab; [port] Completed lists none: chapter completion has no source yet), the recap = the newest chapter's body. Opening
-// stops the holocron flash and holds the ticks until it closes (the summary's galactic pause in single player).
+// GALACTIC_DIALOGS §2.2 / §2.8: IDD_STORY_SUMMARY_DIALOG from the sim's holocron list (holocron_summary): the tab's
+// records newest first, labelled by their chapter's first TEXT line, the selected record's chapter as the recap. Showing a
+// record marks it read (0x1089e0; its row dims from now on). Opening stops the holocron flash and holds the ticks until it
+// closes (the summary's galactic pause in single player).
 void App::open_story_summary() {
     if (!session_) return;
-    ui::StorySummaryInfo s;
-    s.completed = summary_completed_;
-    s.has_completed = false;
-    if (!summary_completed_ && !holocron_chapters_.empty()) {
-        for (const HolocronChapter& ch : holocron_chapters_) s.goals.push_back(ch.title.empty() ? ui::utf8_to_utf32(ch.dialog) : ch.title);
-        const size_t sel = summary_chapter_ >= 0 && static_cast<size_t>(summary_chapter_) < holocron_chapters_.size()
-                               ? static_cast<size_t>(summary_chapter_) : holocron_chapters_.size() - 1;
-        const HolocronChapter& ch = holocron_chapters_[sel];
-        s.selected = static_cast<int32_t>(sel);
-        s.title = ch.title;
-        s.recap = ch.lines;
-        s.recap_colors = ch.colors;
-    }
-    if (!info_.show_story_summary(s)) {
+    sync_story_scripts(*session_, data_, story_scripts_, story_loads_);
+    HolocronSummaryView v = holocron_summary(*session_, story_scripts_, ui_.text, summary_completed_, summary_entry_);
+    summary_rows_ = std::move(v.row_ids);
+    if (v.info.selected >= 0 && static_cast<size_t>(v.info.selected) < summary_rows_.size())
+        summary_entry_ = summary_rows_[static_cast<size_t>(v.info.selected)];
+#ifdef ALAMO_SIM_HAVE_STORY
+    if (v.selected_index != SIZE_MAX)
+        if (sim::StorySession* story = session_->host().story()) story->mark_holocron_read(v.selected_index);
+#endif
+    if (!info_.show_story_summary(v.info)) {
         notes_.push_back("story summary dialog missing");
         return;
     }

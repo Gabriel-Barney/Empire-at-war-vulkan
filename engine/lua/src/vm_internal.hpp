@@ -2,10 +2,14 @@
 //
 // Error discipline: Lua 5.0 raises errors with longjmp, which skips C++ destructors. So no Lua error
 // is ever raised while a C++ object with a destructor is alive in a binding:
-//   * binding implementations (ImplFn) never call lua_error / luaL_check*; they write the message
-//     into Call::err (Call::fail) and return -1, or throw a C++ exception (caught by the dispatcher);
-//   * the dispatcher's outermost frame (no C++ locals) raises the Lua error after the
-//     implementation has returned and destroyed everything.
+//   * binding implementations (ImplFn) never call lua_error / luaL_check*. q6 t11 (docs/re/LUA_API.md "Binding error
+//     model across all bindings"): a binding never raises a Lua error at all. An error-level diagnostic is
+//     Call::script_error_stop (log, set the script's stop flag, return no values), a warning Call::script_warning (log
+//     only); the legacy Call::fail (writes Call::err, returns -1: the dispatcher raises it, pcall catches it) is no
+//     longer used by any binding;
+//   * the dispatcher's outermost frame (no C++ locals) raises the Lua error for the port's own failures only (an
+//     unbound binding, a C++ exception, a legacy fail()) after the implementation has returned and destroyed
+//     everything.
 // Only allocation failures inside lua_push* can still longjmp out of an implementation.
 #pragma once
 #include <cstdint>
@@ -111,6 +115,21 @@ void task_force_set_targeting_priorities(Call& c, const std::vector<objects::Obj
 int ai_wrapper_object(Call& c, int i, objects::ObjectHandle& out);
 // An AITargetLocationWrapper with no live object (a region / marker target): its host position [port]. False otherwise.
 bool ai_target_position(Call& c, int i, Vec3& out);
+// q6 t03 (LUA_API.md "Unit order bindings: target arguments"): argument i as an AITargetLocationWrapper.
+//   is_target: the argument is one (false: anything else, nothing else filled);
+//   dead:      no AI host, the target is not valid (the original's AI target +0x38 null), or its object is gone [port];
+//   object:    its live game object (AI target vf+0x30), null for a region / marker target;
+//   has_position / position: the object's position, else the host's target_position (vf+0x68).
+struct AiTargetArg {
+    bool is_target = false;
+    bool dead = false;
+    objects::ObjectHandle object{};
+    bool has_position = false;
+    Vec3 position{};
+};
+AiTargetArg ai_target_arg(Call& c, int i);
+// A task force at argument i (any TaskForceClass kind): true and its live units in host order (empty without a host).
+bool ai_task_force_units(Call& c, int i, std::vector<objects::ObjectHandle>& out);
 // bind_ai_tactical.cpp: EvaluatePerception(name, player [, target at target_index; 0 = none]) through the attached
 // tactical AI host (AI targets and task forces accepted). Pushes the result and returns 1; -2 = no tactical host.
 int tactical_evaluate_perception(Call& c, std::string_view name, int32_t player, int target_index);
@@ -123,12 +142,30 @@ const std::vector<std::string>& class_names();
 uint32_t class_id(std::string_view cls);
 uint32_t parent_class(uint32_t cls);  // kNoClass at the root (LuaUserVar)
 
+// q6 t11 (LUA_API.md "Mode gates", "Dead or null wrappers"): what the dispatcher checks before the implementation runs.
+// The mode gate is tested first (an error), then the dead-wrapper rule of a GameObjectWrapper method.
+enum class ModeGate : uint8_t {
+    None,
+    Tactical,  // error in a galactic mode (the VM's store, or the parent store for a parent-mode wrapper)
+    Galactic,  // error in a tactical mode
+};
+enum class DeadRule : uint8_t {
+    Silent,       // the default: returns nothing, no message, no flag
+    Binding,      // the implementation tests it (Is_Valid = false, the unit orders, the proximity events)
+    Error,        // script error "this object is already dead" (Call::script_error_stop)
+    WarnNothing,  // warning "this object is dead!", returns nothing
+    WarnZero,     // warning "this object is dead!", returns 0
+};
+
 struct MethodSlot {
     uint32_t row = kNoBinding;  // binding row, kNoBinding for extra (implemented-only) methods
     uint32_t cls = kNoClass;    // owner
     ImplFn fn = nullptr;        // nullptr = unbound stub
     std::string label;          // "GameObjectWrapper.Get_Position"
+    ModeGate gate = ModeGate::None;
+    DeadRule dead = DeadRule::Silent;  // GameObjectWrapper methods only
 };
+ModeGate global_gate(uint32_t row);
 const std::vector<MethodSlot>& method_slots();
 // Walks cls, its parents, then LuaUserVar. Returns an index into method_slots() or kNoBinding.
 uint32_t find_method(uint32_t cls, std::string_view name);
@@ -170,6 +207,7 @@ struct LuaVm::Impl {
     // GameObjectWrapper Ud::reserved holds the store tag of its object.
     int32_t store_tag = 0;
     std::string save_error;  // N1: why the last LuaVm::write could not save ("" = it saved)
+    bool touched = false;    // q6 t19: LuaVm::fresh() is !touched
 
     void message(std::string line);
     void kill_thread(int32_t id);  // marks; removal happens in reap()
@@ -201,7 +239,19 @@ struct Call {
         return s ? std::string_view(s, lua_strlen(L, idx(i))) : std::string_view();
     }
     const Ud* userdata(int i, uint32_t cls) const;  // nullptr unless an engine userdata of `cls`
-    int fail(const char* fmt, ...);                 // writes err, returns -1
+    // Legacy (unwinds): writes err, returns -1; the dispatcher raises it as a Lua error that pcall catches. q6 t11: not
+    // the original's behaviour; no binding uses it (kept for the port's own failures).
+    int fail(const char* fmt, ...);
+    // q6 t03 / t11 (LUA_API.md "What an error does to the script", "Binding error model across all bindings"): the
+    // original's script error 0x248190, used for every error-level diagnostic of every binding. Logs "SCRIPT ERROR:
+    // <text>" and sets the script's exited flag (+0x121, LuaVm::Impl::exit_requested, the flag ScriptExit sets), with no
+    // Lua error: the binding returns nothing (returns 0), pcall succeeds, the calling thread runs on to its next yield,
+    // and service_threads then resumes no other thread of the script and kills them all at the end of the pass; the
+    // hosts release the script on exit_requested(). A binding that carries on after an error (a loop entry, a defaulted
+    // argument) ignores the return value.
+    int script_error_stop(const char* fmt, ...);
+    // The original's warning 0x248620: logs "SCRIPT WARNING: <text>", sets no flag, returns 0 (nothing).
+    int script_warning(const char* fmt, ...);
 };
 
 // Pushers. Wrappers are cached per VM: the same engine entity gives the SAME userdata every time, so
@@ -300,7 +350,10 @@ uint32_t member_view_type(const LuaVm::Impl& vm, const Ud& ud);
 
 void install_metatable(lua_State* L, LuaVm::Impl& vm);  // also sets global LuaWrapperMetaTable
 void push_engine_userdata(lua_State* L, const Ud& ud);   // new userdata with the shared metatable
-void install_globals(lua_State* L, LuaVm::Impl& vm);
+// with_script = false: only the binding-table globals (LuaVm::reinstall_engine_globals), not the `Script` object.
+void install_globals(lua_State* L, LuaVm::Impl& vm, bool with_script = true);
+// bind_engine.cpp: drops the GetEvent queue and the last event's parameters (LuaVm::pool_kill_threads).
+void reset_event_queue(lua_State* L);
 void install_math_library(lua_State* L, LuaVm::Impl& vm);  // math_lib.cpp
 
 // ---- N1 save / load (vm_persist.cpp) ----

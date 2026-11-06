@@ -1265,3 +1265,503 @@ type name 0x407c00), but only one optional string, in argument 2; failure → er
 - The empty-string filter → mask 0 path depends on tokenizer 0x2010e0 returning no token for an empty string [M].
 - Which store a galactic script sees while a tactical battle runs (galactic story scripts during a battle): the
   function always uses the current mode's store; which Lua contexts are serviced then was not traced.
+
+## Unit order bindings: target arguments (q6 TR, 2026-11-03)
+
+Hand-written section (keep it when regenerating). Exposed by Thrawn's Revenge:
+`Data/Scripts/FreeStore/BusyTacticalFreeStore.lua:229` calls `object.Attack_Target(best_target)` with the result of
+`FindTarget.Reachable_Target(PlayerObject, "Unit_Needs_To_Be_Destroyed_Freestore", "Enemy_Unit", "Any_Threat", 1.0,
+object, range)`. `Reachable_Target` always returns an **AITargetLocationWrapper** (AI_TACTICAL §6.2), so the original
+accepts an AI target here.
+
+Conventions as SCRIPT_GAPS §0: "error" = 0x248190, "warning" = 0x248620. Lua class ids [H]: GameObjectWrapper
+0x140a43b18 (wrapper object at +0x60), AITargetLocationWrapper 0x140a44280 (AI target at +0x38; its object via vf+0x30,
+its position via vf+0x68), TaskForceClass 0x140a441e0, PositionWrapper 0x140a44290 (x, y, z at +0x28 / +0x2C / +0x30),
+Lua table 0x140a15790, string 0x140a157d0, number 0x140a157c0.
+
+### What an error does to the script [H unless tagged]
+
+- Neither helper unwinds the Lua stack: the binding returns at once with **no value**, so the caller sees `nil` and the
+  script keeps running. There is no Lua error, so `pcall` reports success.
+- The error helper 0x248190 has no logger in the shipped build (callback 0xb09d40 null), so it only sets byte +0x121 of
+  the script object (LUA_SCRIPT_OUTPUT §1, last paragraph). The warning helper does not set it.
+- The script service 0x247a90 checks that flag after each thread it resumes: once it is set it stops resuming the
+  script's other threads, and at the end of the pass calls 0x2488e0. That function kills all the script's threads and
+  clears `LuaThreadTable`, then either re-runs `Flush_G` and `Base_Definitions` (when byte +0x124 is set) or closes the
+  Lua state and unregisters the script. So in the original a binding **error** ends the calling script (or resets it) at
+  the end of its current service pass. A **warning** has no such effect [H for the code path; M for what +0x124 means].
+
+### GameObjectWrapper.Attack_Target([units,] target) — 0x5730f0 [H]
+
+1. The current mode must answer true to mode vf+0xF0 (tactical), else error "this command is only supported in
+   tactical modes".
+2. No argument → error. The wrapper's own object dead (+0x60 null) → returns nothing **without** an error.
+3. The calling object movement-locked (0x39ad40, A1_READINGS §28.8) → warning "locked into existing orders", nothing
+   returned. Only the calling object is tested, even when a unit table is passed.
+4. If argument 1 is a Lua table, it is the list of attackers and the target is argument 2; otherwise the attackers are
+   the calling object alone and the target is argument 1. Too few arguments → error "Expected %d, got %d".
+5. **Target argument.** The conversion is inline here, not a shared helper. It accepts exactly two classes:
+
+| target argument | resolves to | failure |
+|---|---|---|
+| GameObjectWrapper | its object (+0x60) | object dead → error "Target is already dead." |
+| AITargetLocationWrapper | the AI target's object (AI target vf+0x30) | AI target (+0x38) null → error "Target is already dead."; AI target without an object (a region or cell target, e.g. `Tactical_Location`) → error "destination is not valid for an attack command." |
+| anything else: nil, PositionWrapper, TaskForce, number, string, table, player | — | error "Parameter 1 is not a valid destination for unit %s" (always says "Parameter 1") |
+
+   A unit-type AI target (`Enemy_Unit`, as in TR) therefore attacks that unit. The target is not checked against the
+   attacker itself.
+6. No movement coordinator system (mode vf+0x228) → error. No new formation from 0x426010 → error.
+7. **Attackers.** Each table entry must be a GameObjectWrapper. Other entries → warning (the text is a copy-paste:
+   "Find_Best_Local_Threat_Center -- invalid type for entry at index %d in object table.") and are skipped. Dead entries
+   are skipped silently. The live ones are **sorted by object id** (+0x50, ascending; a bubble sort in a static
+   vector). Then, per attacker:
+   - 0x38f5d0(obj), then the attack test 0x38d730(obj, target, 0, 1, 0, −1, 0). If it fails → warning "object %s unable
+     to attack %s.", and the unit is skipped;
+   - if the coordinator accepts the unit (0x425e30): add it (0x426d50), signal 0xB on the unit, add it to the
+     formation (vf+0x18), and append it to the order's unit list;
+   - otherwise, a unit in no team container (obj +0x348 == −1) → warning "unable to make object %s move.". A team
+     container: each member of its team behaviour (slot 0x16) is added the same way. If the container has no team
+     behaviour, the binding returns at once with nothing.
+8. It then builds a `UnitMovementBlockStatus` (0x6ad850; +0x20 = 0x824; 0x6ad960(status, self, units, target)) and
+   issues the formation order 0x4f8200 with kind **3** (object target) and the target object. It returns the status
+   (a blocking object) **even when no attacker was accepted**.
+
+### Move_To / Attack_Move / Guard_Target — shared body Move_Internal 0x57da90 [H]
+
+The three tactical bindings share one body. The flags argument: `Move_To` 0x57e520 → 0 (in galactic mode, mode type 0,
+`Move_To` goes to the galactic mover 0x57d8c0 instead); `Attack_Move` 0x5730e0 → 1; `Guard_Target` 0x579da0 → 2
+(both are register-load-and-jump stubs). Same tactical-mode check, error on a dead caller ("this object is already
+dead"), and locked → warning, as Attack_Target. Argument 1 may be a unit table, as above; non-GameObjectWrapper
+entries → **error** "Entry %d in unit array is not a gameobject." (the loop carries on, but the error flag is set).
+
+**Destination argument** (argument 1, or 2 after a table). Four classes are accepted; anything else (nil, number,
+string, player) → error "Parameter 1 is not a valid destination for unit %s".
+
+| destination | Move_To (0) | Attack_Move (1) / Guard_Target (2) |
+|---|---|---|
+| AITargetLocationWrapper (AI target +0x38 null → error "Target is already dead.") | position: AI target vf+0x68 | object target: AI target vf+0x30, unless it is null, the caller itself, or the caller's container (obj +0x2B0); then the position vf+0x68 |
+| GameObjectWrapper (object dead → error "Target is already dead.") | position: object +0x78 / +0x7C / +0x80 | object target, unless it is the caller or its container; then its position |
+| TaskForceClass | position: task force vf+0x170 | Guard_Target only: the first member object that is not the caller or its container, else vf+0x170. Attack_Move: vf+0x170 |
+| PositionWrapper | position +0x28..+0x30 | same position |
+
+Then, in space mode only (mode vf+0xE0 == 2), an optional string = a space collision type for avoidance, looked up in
+the enum at 0x140b310e8 (unknown → error "unknown space collision type %s"); the order stores its bitwise complement
+(default 0x3F when absent). Then an optional number (default 1e18) stored in the order record [L: a distance or speed
+limit]. Each unit is added as in Attack_Target step 7, **in table order, without sorting**. If no unit was accepted →
+warning "failed to move any objects", nothing returned. Otherwise a `UnitMovementBlockStatus` (0x5761e0(0x824),
+0x6ad960) is created, and the order 0x4f8200 gets kind 3 with the object when an object target was resolved, else
+kind 1 with the position, plus the flags. The status is returned (0x256d40).
+
+**Shared conversion.** There is no shared target-conversion helper. Attack_Target and Move_Internal each test the Lua
+class ids inline, in the same order (AITargetLocationWrapper, then GameObjectWrapper; Move_Internal then TaskForce and
+PositionWrapper). The AI target's object and position come from its vf+0x30 and vf+0x68 in both. Attack_Target accepts
+only the two object-carrying classes and needs an object; Move_Internal also accepts positions and task forces and
+falls back to a position. The task-force variants (`SpaceTaskForceClass` 0x6e54d0 / `LandTaskForceClass` 0x6e99c0
+`Attack_Target`, …) are separate functions with their own messages and were not read here.
+
+**Port status (q6 t03, 2026-11-03).** `engine/lua/src/bind_objects.cpp` (`m_attack_target`, `move_internal`) follows the
+tables above: AI targets, task forces and positions as listed, unit tables (Attack_Target sorted by id, Move_Internal
+in table order, one order per unit), the self / container fallback, the locked warning, and every error above as a
+**script error** (`Call::script_error_stop`: "SCRIPT ERROR" logged, nothing returned, no unwind, and the script's exited
+flag = `LuaVm::Impl::exit_requested`, the flag `ScriptExit` sets, so `service_threads` resumes no further thread of that
+script and kills them all at the end of the pass; the AI plan hosts and the GameScoring host already release a script
+on it). Galactic `Move_To` keeps its stage-2 path (0x57d8c0 not read). [port] not modelled: the formation /
+coordinator checks, the attack test 0x38d730, the team-container expansion, the space collision-type string (skipped,
+not validated), the optional number of Attack_Move / Guard_Target, the task force's own position vf+0x170 (the first
+live unit's position), and Move_To to an object is still the followed MoveToObject order. Open: the other bindings'
+"SCRIPT ERROR" helpers (`script_error()` in bind_objects / bind_script_gaps / bind_script_remaining / bind_fog,
+`script_error_nil` in bind_ai_tactical) and the `fail()` path (a Lua error that unwinds and kills only the calling
+thread) do not set the flag yet; moving them changes which scripts stop, so it needs its own golden pass. The AI free
+store host does not check `exit_requested()` before its per-unit function calls.
+Open (RE, q6 t03): `StoryEventWrapper.Add_Dialog_Text` (0x73df60) argument count. Its message says "Expected 2" and the
+port requires exactly 2, but Thrawn's Revenge `intervention-missions/missions/Recon.lua:117` calls it with one text id
+(`event.Add_Dialog_Text("TEXT_INTERVENTION_RECON_OBJECTIVE_MAIN_FACTION")`), so the port's story run stops there at
+frame 2402. Read whether 0x73df60 accepts 1 or 2 arguments (and what a 1-argument call appends) before changing it.
+**Answered (q6 RE, 2026-11-03):** 1 to 3 arguments; the "Expected 2" text is stale. See "StoryEventWrapper dialog and
+parameter setters" at the end of this file.
+
+## EvaluatePerception(name, player [, target]) — 0x699430: nil versus 0 [H]
+
+The binding returns either one number or **nothing** (nil in Lua). It never substitutes 0. A failed evaluation returns
+nothing: PerceptionFunctionG.dll leaves the output untouched and returns false (AI_GALACTIC_3 §7.1). Paths that
+return nothing:
+
+| case | helper |
+|---|---|
+| not 2 or 3 arguments; argument 1 not a string; unknown function name ("Unrecognised perception function %s") | error |
+| argument 2 not a PlayerWrapper | error |
+| argument 3 present but neither AITargetLocationWrapper nor GameObjectWrapper | error |
+| argument 3 dead: AI target +0x38 null, or the GameObjectWrapper's object gone ("target is already dead") | error |
+| the player has no AI (player +0x360 null) | error |
+| the AI has no context for the current mode, or it is not initialised (0x4b06d0(AI, mode type), byte +0x69 = 0) | **warning** |
+| `PerceptionFunctionClass::Evaluate` false: any failing leaf (unregistered token, unbound root, Self-only leaf on another player, a fogged leaf's failure), a / b with a ≠ 0 and b = 0, Clamp with lo > hi | error |
+
+Bindings: Self = the player; Enemy = the goal system's opponent if any; Human = the first human player if any;
+Target from argument 3. A GameObjectWrapper target binds the planet's perception id (planet data +0x354) when the
+object is a planet (byte obj +0x335 ≠ −1), else the object's name string (0x4dc3a0). An AI target binds via its
+vf+0x28. With only 2 arguments no Target is bound, so any `Variable_Target` path fails → nil. The evaluation runs on the
+perception system of the **current** mode's AI context.
+
+**PATHBONUSFORDISTANTTARGETS.LUA:83** (vanilla FoC and TR are the same here, apart from `/ 2.0` and `Sleep(2.0)`):
+`(EvaluatePerception("GenericPlanetValue", PlayerObject, planet) + EvaluatePerception("Is_Neglected_By_My_Opponent_Space",
+PlayerObject, planet)) / 2`. The planet comes from `FindPlanet.Get_All_Planets()` and passed `TestValid` just before,
+with no yield in between. PlayerObject is the AI. The thread is a galactic plan, and the galactic mode does not tick
+under a tactical battle (MAIN_LOOP §0 item 6), so it runs only while the galactic mode is current. That leaves only the
+equation itself as a source of nil:
+- vanilla `GenericPlanetValue` = (15·BaseIncome + MaxStructureSlots + 2·MaxGroundbaseLevel + 2·MaxStarbaseLevel +
+  10·TradeRoutes) / 30 and `Is_Neglected_By_My_Opponent_Space` = IsHumanControlled · ((EnemyForce.HasSpaceForce +
+  EnemyForce.HasGroundForce) > 0) · (1 − EnemyForce.SpaceTotalNBPTM). These are all planet leaves that fail only
+  without a planet data pack (§1–2 of AI_GALACTIC_TOKENS). The NBPTM normalisation returns 0 for a zero numerator and
+  clamps otherwise (AI_GALACTIC_TOKENS §0), and the divisor is a constant. So **the original script cannot get nil
+  there in a normal game; the arithmetic always sees two numbers** [M: relies on no planet lacking its data pack].
+- TR's `GenericPlanetValue` adds `5.0 * Function_Max_Shipyard_Level.Evaluate`, built from
+  `Variable_Target.Type.IsType {Parameter_Type = …}` sums. `Target.Type` is the planet's GameObjectType evaluator (0x6d8040
+  binds the root evaluator found for the planet's type-name token; GameObjectTypePerceptualEvaluator 0x64fcb0, whose
+  registration 0x650000 has `Token` 0x64ff50 and `IsType` 0x64fd60, reading `Parameter_Type` 0x140a43c68) [H]. So it is
+  valid in the original, provided a type evaluator exists for the planet's type [L: which types get one was not traced].
+  A port that fails `Type.IsType` on planets turns line 83 into nil + number → a Lua arithmetic error in that plan
+  thread.
+- A nil would come only from the warning row (AI context of the current mode missing or not initialised, e.g. during
+  galactic start-up) [L: not observed].
+
+## StoryEventWrapper dialog and parameter setters (q6 RE, 2026-11-03)
+
+Read from 0x73df60, 0x73e4f0, 0x73e9a0, 0x73eaa0, 0x73eca0, 0x73eef0, the shared value converter 0x73e610, the text
+table lookups 0x1fa1a0 / 0x1fa680, and Fire 0x455db0 / holocron add 0x47dc70 (STORY.md §1.5). Conventions as above:
+"error" = 0x248190 (the binding returns nothing, and the calling script is ended at the end of its service pass),
+"warning" = 0x248620. Lua class ids as above, plus GameObjectTypeWrapper 0x140a44270 (type at +0x28, getter 0x6021a0).
+The wrapper's event is at wrapper +0x38. **Every method here returns silently when the wrapper's event is null**,
+before any argument check, and none returns a value [H].
+
+### Add_Dialog_Text(text_id [, a [, b]]) — 0x73df60 [H unless tagged]
+
+Argument count: **1, 2 or 3** (the test is count < 4). The message "invalid number of parameters. Expected 2." is
+printed only for 4 or more arguments and is stale. A count of 0 is not guarded: argument 1 is read from an empty list
+[M: undefined; no FoC or TR call does it]. So TR's `Recon.lua:117` one-argument call is valid in the original.
+
+| step | behaviour |
+|---|---|
+| 1 | Argument 1 must be a Lua string, else error "invalid type for parameter 1. Expected string." and nothing is added |
+| 2 | Each further argument (at most two) fills substitution slot 1 or 2, a wide string that starts empty. Classes are tested in this order: GameObjectWrapper, GameObjectTypeWrapper, string, number |
+| 2a | GameObjectWrapper: the object (0x5791e0), then its **representative type** (0x3973b0: company / transport / team container type, else its own type), then the type's **localized display name** (type +0x140, from `Text_ID`, OBJECT_TYPES §5.1). A dead wrapper (object null) **aborts the whole call silently**: no error, nothing added |
+| 2b | GameObjectTypeWrapper: the type's display name (+0x140). A null type aborts the call silently, as in 2a |
+| 2c | string: looked up as a **text id** in the game text table (0x140a7bc58, 0x1fa1a0 with "add if missing" = 1). A missing id is added to the table with the id itself (widened) as its text, so an unknown string shows verbatim. If the table is not loaded (its first byte is the loaded flag, GALACTIC_DIALOGS §2.7) the slot stays empty |
+| 2d | number: `(int)(n + 0.5)` (C truncation, so −1.7 → −1) formatted with `L"%d"` (0x7ffa20, read from the exe) |
+| 2e | anything else (nil, boolean, table, player, position, AI target, task force, ...): error "invalid type for parameter %d." where %d is the slot number (1 for Lua argument 2, 2 for argument 3). The loop **carries on**, the slot stays empty, and the line **is still added** (the error still ends the script at the end of its pass) |
+| 3 | Format text = argument 1 looked up in the text table (0x1fa680, add-if-missing: a missing id formats as the id itself; table not loaded → `[MISSING]`) |
+| 4 | Line = wide printf of the format text with **both** slots as the two variadic arguments (0x200c00, a `vswprintf` into a wide string). With the MSVC wide printf, `%s` takes a wide string, so the first two `%s` in the text receive slot 1 and slot 2; with fewer arguments the missing slots are empty strings [M: placeholders other than `%s` were not checked; a `%d` in the text would print the string pointer] |
+| 5 | The line is **appended** to the event's dialog text list (event +0x2c0, a vector of wide strings) |
+
+What the list is for [H, display re-read q6 2026-11-04, GALACTIC_DIALOGS §2.8]: when the event fires and has a `Story_Dialog` (Fire 0x455db0
+step 6, STORY.md §1.5), the holocron entry built by 0x47dc70 (dialog, chapter, tag) stores a **pointer** to this list,
+not a copy. It is the "event's extra text" that the story script keyword `EXTRA_TEXT` appends (GALACTIC_DIALOGS §2.6).
+Because the entry keeps the pointer, later Add / Clear calls change what an existing holocron entry shows: the
+summary executor 0x1089e0 reads the list through the pointer each time the chapter is shown. Fire, Lua `Reset`, RESET_EVENT,
+RESET_BRANCH and the Perpetual re-arm never clear the list (Fire does not touch +0x2c0; vf4 0x45e480 / 0x45e550 do
+not) [H], so lines pile up until `Clear_Dialog_Text`. TR's deepcore holocron log sink and `AbstractResourceManager`
+call `Clear_Dialog_Text()` and then one `Add_Dialog_Text` per line for this reason.
+
+TR usage (29 files): one argument (`"TEXT_NONE"` as a blank line, headers), and two arguments with a number
+(`self.TimerStart`, `self.RewardCount`), a type (`Find_Object_Type(self.Reward)`), a string (`self.RewardError`) or a
+planet / object (`RewardLocation`). No TR or FoC call passes three.
+
+### Clear_Dialog_Text() — 0x73e4f0 [H]
+
+Ignores its arguments (no count or type check). Destroys every line in the event's +0x2c0 list and empties it. No
+error path.
+
+### Set_Dialog(name) — 0x73e9a0 [H]
+
+Exactly 1 argument, a string; otherwise error ("Expected 1, got %d.": the count is not passed to the format, so the
+number printed is garbage; or "invalid type for parameter 1. Expected string."). Copies the string into the event's
+`Story_Dialog` (+0x230) and calls the story dialog script loader 0x47d9c0(name, 0) (`Data\Scripts\Story\<name>.txt`,
+cached by name, GALACTIC_DIALOGS §2.6). It does not change the chapter, the tag or the text list.
+
+### Set_Event_Parameter(i, value [, value ...]) — 0x73eaa0 [H]
+
+**2 or more** arguments (the test is count < 2; "Expected 2" is the minimum). Argument 1 must be a number, else error.
+Arguments 2..n go through the shared converter 0x73e610 into one string list (a static vector, cleared on each call),
+which is passed with index `(int)(i + 0.5)` to the event's vf2 (+0x10, STORY.md §0.2). So one call can set a whole
+name list (`Set_Event_Parameter(0, "A", "B")`). The binding does not range-check the index; vf2 decides (for example
+ELAPSED 0x465340 acts only on index 0: threshold = atof of the first string). A value the converter cannot use is
+dropped silently, so vf2 may receive an empty list.
+
+### Set_Reward_Parameter(i, value) — 0x73eca0 [H]
+
+**Exactly 2** arguments, else error. Argument 1 a number, else error. Argument 2 goes through 0x73e610; the result
+must be **exactly one** string, else error "must set exactly one parameter per parameter index." (nil, a boolean, a
+table, a player, a dead object or a null type give this, since the converter drops them). The string is copied into
+event +0x50 + `(int)(i + 0.5)` × 0x20. +0x50 is Reward_Param1 and +0x70 Param2 (the TRIGGER_EVENT and set-spawn cases
+of 0x456970 read them there), so **i is 0-based**. The index is **not range-checked**: a negative or large i writes
+outside the reward parameter strings [H for the missing check; the array length was not read].
+
+### Set_Reward_Type(name) — 0x73eef0 [H]
+
+Exactly 1 string argument, else error. Reward type = the story name→int table 0x45c3f0 (unknown name → 0, no reward),
+stored at event +0x3c.
+
+### Shared value converter 0x73e610 (Set_Event_Parameter, Set_Reward_Parameter) [H]
+
+Per Lua value, in this class order:
+
+| value | string produced |
+|---|---|
+| GameObjectWrapper | the representative type's (0x3973b0) **name** (type +0xf8, the upper-cased XML name, not the display name); a dead wrapper produces nothing |
+| GameObjectTypeWrapper | the type's name (+0xf8); a null type produces nothing |
+| string | the string as is (no text table lookup) |
+| number | `(int)(n + 0.5)` formatted with `"%d"` (0x802468, read from the exe): **fractions are lost**, so `Set_Event_Parameter(0, 2.5)` gives "3" |
+| anything else | nothing, **no error** |
+
+**Not shared with Add_Dialog_Text.** Add_Dialog_Text tests the same four classes inline but produces different text:
+the display name (+0x140) instead of the type name (+0xf8), a text table lookup for strings, a wide `L"%d"`, an error
+for other classes, and a silent abort of the whole call for a dead object. Set_Dialog and Set_Reward_Type read a plain
+string inline. No other StoryEventWrapper method calls 0x73e610.
+
+Port check list (from the above; the port code was not read here): Add_Dialog_Text accepts 1 to 3 arguments; a
+1-argument call appends the looked-up text with empty substitutions; string arguments are text ids with a verbatim
+fallback; a dead object or null type skips the whole line without an error; Set_Event_Parameter accepts several values;
+numbers become rounded integers in both converters; Set_Reward_Parameter has no index range check in the original (the
+port's 0..63 check is stricter, which shipped and TR data never hit).
+
+## Binding error model across all bindings (q6 t11, 2026-11-04)
+
+Hand-written section (keep it when regenerating). It extends "What an error does to the script" (Unit order bindings,
+above) from Attack_Target / Move_Internal to every binding. Scope: all 539 binding implementations in the exe,
+overrides included. They contain about 570 error-message sites and 71 warning sites (63 bindings). Same conventions:
+"error" = 0x248190, "warning" = 0x248620.
+
+### General rules [H]
+
+- **Bridge.** Every binding is called through one lua_CFunction, 0x24a570.
+  - It converts the Lua arguments from stack index 2 onward into a LuaTable (0x2473e0).
+  - A Lua `nil` becomes a placeholder value (`LuaValue<void*,3>`), so a trailing or embedded nil is a **present**
+    argument and counts towards the argument count.
+  - It calls the implementation (vf+0x50) and pushes the returned list.
+  - 0x2488a0 records the current thread first.
+- **No binding unwinds.** No binding or helper calls `lua_error`. Lua errors come only from the VM itself
+  (luaD_throw 0x7bc470: arithmetic on nil, indexing nil, calling nil). So `pcall` never catches anything raised by a
+  binding.
+- **Error (0x248190).**
+  - It logs only if the callback 0xb09d40 is set, which the shipped build does not do.
+  - It always sets script byte +0x121.
+  - The binding then (almost always) cleans up and returns **an empty list**: zero results, which a Lua caller reads as
+    `nil`.
+  - The rest of the current resume still runs. At the end of the service pass 0x247a90 stops resuming the script's
+    other threads and calls 0x2488e0 (kill and reset, or close), as described above.
+  - Exceptions that carry on after an error are the loop cases already documented: Move_Internal list entries and the
+    Add_Dialog_Text slot.
+- **Warning (0x248620).** Logs through 0xb09d48 and sets no flag. What it returns is binding-specific (list below).
+- **Silent.** No message, no flag: the binding returns nothing, nil or false.
+- **No shared argument checkers.** Almost every binding tests its argument count and the Lua class of each argument
+  inline (class ids as in "Unit order bindings"; also bool 0x140a157b0). The only shared check helpers are:
+  - 0x6a4ef0: the `Get_Static_Colliders` count check, shared by `Is_Point_In_Asteroid_Field`, `Is_Point_In_Ion_Storm`
+    and `Is_Point_In_Nebula`;
+  - 0x570a50: `Activate_Ability` (two registrations share it).
+
+  So the classification below is per message kind, not per helper.
+
+**Counts by kind** (message sites, from a scan of every implementation):
+
+| kind | errors | warnings |
+|---|---|---|
+| argument count | 190 | 0 |
+| argument type | 448 | 11 |
+| mode gate | 50 | 2 |
+| dead object | 38 | 14 |
+| lookup (unknown name, not found) | 59 | 3 |
+| other state (not ready, not allowed, …) | 269 | 70 |
+
+(The table counts messages per implementation, so a check that an override inlines again is counted again. Its totals,
+1,054 errors and 100 warnings, are therefore larger than the number of distinct sites.)
+
+**Rule for implementers.** Every diagnostic is an **error**, except the warnings listed below. Argument count and
+argument type checks are always errors.
+
+### Mode gates [H]
+
+A mode gate is an **error**. It is tested **before** the dead-wrapper check, so `Get_Hull` on a dead object in
+galactic mode is an error, not silent.
+
+Globals that error outside their mode:
+- tactical only: `Allow_Localized_SFX`, `Are_On_Opposite_Sides_Of_Shield`, `Camera_To_Follow`,
+  `Create_Cinematic_Transport`, `Enable_Distance_Fog`, `Enable_Fog`, `Find_Hint`, `Find_Nearest`,
+  `Find_Nearest_Space_Field`, `Get_Most_Defended_Position`, `Hide_Object`, `Hide_Sub_Object`, `Point_Camera_At`,
+  `Project_By_Unit_Range`, `Promote_To_Space_Cinematic_Layer`, `Reinforce_Unit`, `Rotate_Camera_By`,
+  `Rotate_Camera_To`, `Scroll_Camera_To`, `Set_Cinematic_Environment`, `Set_New_Environment`, `Spawn_Special_Weapon`,
+  `Start_Cinematic_Space_Retreat`, `Weather_Audio_Pause`, `Zoom_Camera`;
+- galactic only: `Find_Path`;
+- methods: `FogOfWar.Reveal` / `Reveal_All` / `Temporary_Reveal` / `Disable_Rendering`, `PlayerWrapper.Get_Space_Station`,
+  `TaskForce.Get_AI_Power_Vs_Unit`.
+
+GameObjectWrapper methods with a mode or object-kind gate:
+- tactical only: `Attack_Target`, `Get_Energy`, `Get_Hull`, `Get_Shield`, `Hyperspace_Away`, `Make_Invulnerable`,
+  `Stop`, `Teleport`, `Teleport_And_Face`;
+- galactic objects only: `Get_Planet_Location`;
+- planets only: `Is_Planet_Destroyed`, `Get_Next_Starbase_Type`;
+- fleets only: `Invade`.
+
+The only two mode **warnings**:
+- `Evaluate_In_Galactic_Context`: "only in tactical games spawned from campaign", returns nothing;
+- `GalacticFreeStore.Move_Object`: "Galactic mode is currently paused", returns nothing.
+
+### Dead or null wrappers [H for the rule, sampled per class]
+
+- **Silent (the default).** When the wrapper's payload is null, most methods return nothing without a message:
+  - GameObjectWrapper: object at +0x60 (e.g. `Get_Position`, `Get_Owner`, `Divert`, `Make_Invulnerable`);
+  - PlayerWrapper: player at +0x28 (28 methods);
+  - StoryEvent / StoryPlot / LuaScriptWrapper: payload at +0x38;
+  - GalacticTaskForce: +0x120.
+- `Is_Valid` returns **false** for a dead wrapper.
+- **Error "already dead"** (the object the method is called on):
+  - `Are_Engines_Online`, `Contains_Hero`, `Fire_Special_Weapon`, `Get_Build_Pad_Contents`, `Get_Contained_Heroes`,
+    `Get_Distance`, `Get_Starbase_Level`, `Sell`.
+- **Error for a dead target argument**:
+  - `Attack_Target`, `Can_Garrison`, `Garrison`, `Explore_Area`, `Get_AI_Power_Vs_Unit`, `Is_Good_Against`,
+    `Should_Switch_Weapons`;
+  - task force `Build`, `Explore_Area`, `Prepare_Ambush`;
+  - `AITarget.Get_Distance`, `Get_Bribe_Cost`, `Assemble_Fleet`, `Check_Story_Flag`, `EvaluatePerception`,
+    `Find_Nearest`, `Project_By_Unit_Range`.
+- **Warning "this object is dead!"**:
+  - returns nothing: `Change_Owner`, `Despawn`, `Mark_Parent_Mode_Object_For_Death`, `Set_Importance`, `Set_Selectable`,
+    `Take_Damage`, `Set_Targeting_Priorities`, `Set_Targeting_Stickiness_Time_Threshold`;
+  - returns 0: `Get_Rate_Of_Damage_Taken`, `Get_Time_Till_Dead`.
+
+### Lookups [H]
+
+| binding | bad argument (none, wrong class) | unknown name | known name, nothing there |
+|---|---|---|---|
+| `Find_Object_Type` | error | nil, silent | – |
+| `FindPlanet`, `Find_First_Object` | error | nil, silent | nil, silent |
+| `Find_Player` | error (count ≠ 1 or not a string) | **error** "unknown faction" (not in Factions) | nil, silent (faction without a player); `"local"` = the local player |
+| `Get_Story_Plot` | error | **warning**, returns nothing | – |
+| `StoryPlot.Get_Event` | error | **error** | – |
+| `Find_Hint` | error | error "Unable to resolve type name" | – |
+| `Find_All_Objects_With_Hint` | error (count, type) | – | – |
+
+### The complete warning list [H]
+
+Every other diagnostic is an error. "Skip" means that entry is left out and the loop goes on.
+
+| binding | warning | then |
+|---|---|---|
+| `Create_Cinematic_Transport` | invalid position | carries on |
+| `EvaluatePerception` | "AI not yet initialized" | returns nothing |
+| `Find_Best_Local_Threat_Center` | bad entry; "no objects supplied" | skip; returns nothing |
+| `Get_Most_Defended_Position` | "cannot translate target to hint zone" | returns nothing |
+| `Point_Camera_At`, `Scroll_Camera_To`, `Set_Cinematic_Camera_Key`, `Transition_Cinematic_Camera_Key`, `Set_Cinematic_Target_Key`, `Transition_Cinematic_Target_Key` | invalid position | returns |
+| `Project_By_Unit_Range` | identical positions | returns nothing |
+| `Spawn_From_Reinforcement_Pool` | "no objects of type" | returns nothing |
+| `FindTarget.Best_Of` | unsupported or dead entry | skip |
+| `Free_Random` | called in MP | falls back to the synced random |
+| `GalacticFreeStore.Move_Object` | paused (above); blockade; already mid-move; restricted planet | returns nothing |
+| `GalacticTaskForce.Invade` | no units / no FleetObject; no transports; surface not accessible | returns nothing |
+| `GalacticTaskForce.Land_Units`, `Launch_Units` | blockade | returns nothing |
+| `GameObjectWrapper.Attack_Target` | locked into orders; bad entry; unable to move; unable to attack | see "Unit order bindings" |
+| `GameObjectWrapper.Build` | "game rules prevent" | **still returns a value** |
+| `GameObjectWrapper.Cancel_Ability`, `Is_Ability_Ready` | "does not have ability" | `Is_Ability_Ready` still returns a bool |
+| `GameObjectWrapper.Divert` | "between moves" | returns false |
+| `GameObjectWrapper.Fire_Special_Weapon` | not ready; no upgrade; no special weapon; unable to fire | returns nothing |
+| `GameObjectWrapper.Garrison` | no GARRISON_UNIT; masks mismatch | returns nothing |
+| `GameObjectWrapper.Get_Build_Pad_Contents` | "not a build pad" | returns nothing |
+| `GameObjectWrapper.Invade` | not at a planet; planet not an enemy; no land units | returns nothing |
+| `GameObjectWrapper.Lock_Build_Pad_Contents` | pad empty | returns nothing |
+| `GameObjectWrapper.Lock_Current_Orders` / `Unlock_Current_Orders` | already locked / not locked | returns nothing |
+| `GameObjectWrapper.Prevent_AI_Usage` | no AI; no freestore | returns nothing |
+| `GameObjectWrapper.Set_Selectable` | "not selectable" | returns nothing |
+| `GameObjectWrapper.Stop_SFX_Event` | stop failed | returns nothing |
+| dead-object methods | "this object is dead!" | as listed above |
+| `LandTaskForce.Bombing_Run` | cannot run | returns nothing |
+| `LandTaskForce.Build` | target not friendly; rules; cooldown | returns nothing |
+| `LandTaskForce.Build_All` | "nothing to build" | returns nothing |
+| `LandTaskForce.Fire_Special_Weapon` | target dead | returns nothing |
+| `LandTaskForce.Guard_Target`, `SpaceTaskForce.Guard_Target` | empty target | returns nothing |
+| `LandTaskForce.Reinforce` | none available | returns nothing |
+| `PlayerWrapper.Lock_Tech` / `Unlock_Tech` | already locked / unlocked | returns nothing |
+| `PlayerWrapper.Release_Credits_For_Tactical` | no galactic AI | returns nothing |
+| `SpaceTaskForce.Attack_Target` | repeated target | returns nothing |
+| `SpaceTaskForce.Build`, `Build_All` | as land | returns nothing |
+| `SpaceTaskForce.Fire_Special_Weapon` | no upgrade | returns nothing |
+| `SpaceTaskForce.Reinforce` | starbase rule; none available | returns nothing |
+| `TaskForce.Add_Opportunity_Fire_Event_Subscription` / `Remove_…` | already / not subscribed | returns nothing |
+| `TaskForce.Release_Unit` | unit not in the task force | returns nothing |
+| `TaskForce.Test_Target_Contrast` | no plan, goal or potential plan | returns nothing |
+
+### Count messages that are stale (the code accepts something else) [H]
+
+Take argument counts from the code, not from the message text:
+
+| binding | message says | code accepts |
+|---|---|---|
+| `StoryEventWrapper.Add_Dialog_Text` | 2 | 1–3 |
+| `FindTarget` | 2 or 3 | 3–5 |
+| `GiveDesireBonus` | 4 | exactly 5 |
+| `Set_Cinematic_Target_Key` | 8 | 8 or more (FoC Underworld Act I M03 passes 9) |
+
+Also from the code: `EvaluatePerception` takes 2 or 3 arguments; `GameObjectWrapper.Set_Targeting_Priorities` exactly
+1; `TaskForce.Set_Targeting_Priorities` 1 or 2. The FoC two-argument `Set_Targeting_Priorities` calls (PGCommands,
+BombingRun) are on task forces, so they are valid.
+
+### Wrong calls in shipped and TR scripts [H for the outcome]
+
+A scan of the FoC, EaW and Thrawn's Revenge Lua found only the calls below. It compared every call's argument count
+with the code-verified counts, and every `Find_Player` name with the mod's Factions. Argument classes were not
+scanned. In FoC and EaW, every count mismatch against a message is one of the stale messages above, so those calls are
+valid.
+
+- **TR `GameObject/Cargo_Container_Companies.lua:15`**: `EvaluatePerception("Is_Campaign")` with one argument.
+  - This is a count error. The call returns nothing, the rest of `State_Init` runs, then the script ends at the end of
+    its pass.
+- **TR `GameObject/Prop_Alignment.lua:40-43, 65-68`**: `Find_Player("Trade_Federation")`, `"Techno_Union"`,
+  `"Banking_Clan"`, `"Commerce_Guild"`. None of these is a TR faction.
+  - Each call is an "unknown faction" error and returns nil, so the comparisons are false. The script ends at the end
+    of its pass.
+
+Both are object scripts, which are mod-only (PHASE4 decision 2026-11-04).
+
+### Port notes
+
+- Map the port's helpers to the original's three outcomes.
+  - **Error**: log, set the script's stop flag, return no values; do not unwind. This is `script_error_stop`, which
+    replaces:
+    - `Call::fail` (−1, a Lua error that unwinds and is catchable by `pcall`);
+    - the flag-less `script_error()` (bind_objects, bind_fog, bind_script_gaps, bind_script_remaining);
+    - `script_error_nil` (bind_ai_tactical).
+
+    Today there are about 316 `fail()` sites: ai 19, ai_tactical 22, engine 19, objects 104, players 87,
+    presentation 40, story 23, script_remaining 2.
+  - **Warning**: log only, then return what the warning table says (nothing, a value, or skip and continue).
+  - **Silent**: dead wrapper (nothing), `Is_Valid` (false), and the nil lookups.
+- Returning one `nil` instead of zero results is equivalent for every Lua caller except `select('#', …)` and table
+  constructors. Prefer zero results.
+- Test the mode gate before the dead-wrapper check.
+- Count `nil` arguments as present.
+- Take accepted argument counts from the code table above, not from the messages.
+- `Find_Player` with an unknown faction is an error (script stop), but a known faction without a player is silent nil.
+  TR's `Prop_Alignment` relies on the nil result and then stops.
+
+### Port status (q6 t11, 2026-11-04)
+
+- Every binding family reports errors through `Call::script_error_stop` (the family helpers `script_error` of
+  bind_objects / bind_fog / bind_script_gaps / bind_script_remaining / bind_ai_tactical call it or set the flag the same
+  way; `script_error_nil` is gone). Warnings go through `Call::script_warning` or the family `script_warning`, which set
+  no flag. No binding calls `Call::fail` any more (kept in vm_internal.hpp, unused).
+- Mode-gate text: the generic "<name> -- this command is only supported in tactical modes" / "... in galactic mode",
+  except the bindings with their own recovered text (bindings.cpp `kGateTexts`: Find_Nearest, Find_Nearest_Space_Field,
+  Are_On_Opposite_Sides_Of_Shield, Spawn_Special_Weapon, Create_Cinematic_Transport, Start_Cinematic_Space_Retreat,
+  Get_Energy, Hyperspace_Away, Get_AI_Power_Vs_Unit). The dispatcher tests the gate before the argument count, so
+  `Find_Nearest` with a wrong count in galactic mode reports the mode (the exe tests the count first).
+- The dispatcher (bindings.cpp `invoke`) tests the mode gate first (the globals and methods of "Mode gates"; the store of
+  the VM, or the parent store for a parent-mode wrapper; no store = no gate), then the dead-wrapper rule of a
+  GameObjectWrapper method (default silent; the "already dead" errors; the "this object is dead!" warnings; `Is_Valid`,
+  the unit orders and the proximity events test it themselves). The planet / fleet gates stay in their bindings.
+- Still raised as Lua errors (the port's own failures, not binding diagnostics): an unbound binding ("unbound: X") and a
+  C++ exception inside a binding.
+- `Find_Player`: the faction list is the attached GalacticSim's FactionFiles list; a player world without a GalacticSim
+  has no list, so an unknown name is nil there [port].
+- `Evaluate_In_Galactic_Context` outside a galactic mode without a parent galaxy: the warning, nothing returned. In a
+  galactic mode the port still evaluates the galactic perception [port].
+- A PlayerWrapper without a player (no player world, or an id the world lacks) returns nothing silently.
+- Hosts: AI plans (galactic and tactical: the plan ends), GameScoring (released), object scripts (released) and story
+  plot scripts honour the flag after the pass. A story plot's VM stays attached: service_threads kills its threads,
+  and `StoryModel::call_script` / `deliver_script_triggers` no longer call its `Story_Event_Trigger` (the events still
+  fire; the flag is saved with the VM) [port: the exe's plot-script teardown is not traced].

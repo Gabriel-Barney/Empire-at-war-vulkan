@@ -219,6 +219,10 @@ public:
 
     // Called from destroy() when the dying object has a parent-mode id (Â§2.5).
     std::function<void(const ObjectStore&, ObjectHandle dying)> on_parent_mode_death;
+    // q6 object scripts (docs/re/OBJECT_SCRIPTS.md §1.2 / §1.3): called at the end of create(), after the behaviour
+    // lists and the store lists, so a host can attach the type's Lua_Script. Host wiring: not saved, not hashed. Unset:
+    // nothing. [port] The original attaches before the object enters the store lists.
+    std::function<void(ObjectStore&, ObjectHandle created)> on_created;
 
     // ---- queries ----
     bool exists(ObjectHandle h) const;  // live or dead-but-not-flushed

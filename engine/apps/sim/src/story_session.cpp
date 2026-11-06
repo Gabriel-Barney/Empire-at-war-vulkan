@@ -8,6 +8,7 @@
 #include <map>
 
 #include "alamo/commands/pipeline.hpp"  // a1h t04: INVADE_PLANET
+#include "alamo/core/log.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/core/dmath.hpp"
@@ -19,6 +20,7 @@
 #include "alamo/lua/object_bridge.hpp"
 #include "alamo/lua/presentation.hpp"
 #include "alamo/lua/script_remaining.hpp"  // Int-final: attach_global_values
+#include "alamo/lua/script_save.hpp"       // q6 t19: story.lua v4 script blocks
 #include "alamo/lua/story_model.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/sim/save_session.hpp"  // N1: write_section / write_if_saveable
@@ -163,6 +165,9 @@ struct StorySession::Families {
 #endif
     lua::ObjectBridge bridge;
     lua::PresentationLog presentation;
+    // q6 t03: the galactic mode's plot table over the galactic sets' models in load order (STORY.md §2.4: Get_Story_Plot,
+    // STORY_ELEMENT, TRIGGER_EVENT and Lua Story_Event reach every player's plots). Outlives the sets' VMs.
+    lua::StoryTable table;
 };
 
 struct StorySession::Set {
@@ -237,17 +242,39 @@ std::string StoryLogEntry::text() const {
 }
 
 std::vector<StoryPlotSet> campaign_plot_sets(const data::CampaignDef& campaign, const galactic::GalacticSim& sim) {
-    std::vector<StoryPlotSet> out;
+    // q6 t03 (STORY.md §2.1 [H], TheStoryMode::Load_Plots): every plot set goes into the mode's one plot table in this
+    // order: Rebel_Story_Name, Empire_Story_Name, Underworld_Story_Name (the campaign's three fields), each only when that
+    // faction's player exists, then every <Story_Name> "Faction, plot file" pair in list order (campaign field type 0x1b,
+    // as Thrawn's Revenge writes it; a faction may get several sets). [port] a pair whose faction has no player is
+    // skipped; the player of a faction is its first player in the player list.
     const auto players = sim.players();
-    for (size_t p = 0; p < players.size(); ++p) {
-        const uint32_t f = players[p].faction;
-        if (f >= sim.rules().factions.size()) continue;
-        const std::string tag = sim.rules().factions[f].name + "_Story_Name";
+    auto player_of = [&](std::string_view faction) -> int32_t {
+        for (size_t p = 0; p < players.size(); ++p) {
+            const uint32_t f = players[p].faction;
+            if (f < sim.rules().factions.size() && iequal(sim.rules().factions[f].name, faction)) return static_cast<int32_t>(p);
+        }
+        return -1;
+    };
+    std::vector<StoryPlotSet> out;
+    for (const char* faction : {"Rebel", "Empire", "Underworld"}) {
+        const int32_t player = player_of(faction);
+        if (player < 0) continue;
+        const std::string tag = std::string(faction) + "_Story_Name";
         for (const auto& [t, v] : campaign.raw)
             if (iequal(t, tag) && !trim(v).empty()) {
-                out.push_back({static_cast<int32_t>(p), std::string(trim(v))});
+                out.push_back({player, std::string(trim(v))});
                 break;
             }
+    }
+    for (const std::string_view list : campaign.raw_values("Story_Name")) {
+        std::vector<std::string_view> items;
+        for (size_t at = 0; at <= list.size();) {
+            const size_t comma = std::min(list.find(',', at), list.size());
+            if (const std::string_view item = trim(list.substr(at, comma - at)); !item.empty()) items.push_back(item);
+            at = comma + 1;
+        }
+        for (size_t i = 0; i + 1 < items.size(); i += 2)
+            if (const int32_t player = player_of(items[i]); player >= 0) out.push_back({player, std::string(items[i + 1])});
     }
     return out;
 }
@@ -415,6 +442,14 @@ lua::LuaPlayerWorld* StorySession::player_world() {
 
 const lua::StoryModel& StorySession::model(size_t set) const { return sets_.at(set)->model; }
 lua::StoryModel& StorySession::model(size_t set) { return sets_.at(set)->model; }
+const lua::StoryHolocron* StorySession::holocron() const {
+    if (!sets_.empty()) return &sets_.front()->model.holocron();
+    return tactical_ && tactical_->set ? &tactical_->set->model.holocron() : nullptr;
+}
+void StorySession::mark_holocron_read(size_t index) {
+    if (!sets_.empty()) sets_.front()->model.holocron().mark_read(index);
+    else if (tactical_ && tactical_->set) tactical_->set->model.holocron().mark_read(index);
+}
 int32_t StorySession::plot_set_player(size_t set) const { return sets_.at(set)->player; }
 size_t StorySession::script_count() const {
     size_t n = 0;
@@ -455,7 +490,10 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
             return false;
         }
         for (const std::string& w : set->model.warnings()) note("story " + ps.plots_file + ": " + w);
-        if (!sets_.empty()) set->model.share_flags(sets_.front()->model);  // one global flag table (STORY.md §0)
+        if (!sets_.empty()) {
+            set->model.share_flags(sets_.front()->model);     // one global flag table (STORY.md §0)
+            set->model.share_holocron(sets_.front()->model);  // one holocron list (GALACTIC_DIALOGS §2.8)
+        }
         set->model.set_player(ps.player);
         set->model.category_mask = category_resolver(*types_);  // wave 2a: WIN/LOSE_BATTLES CLASS_* tests
         set->model.faction_of = faction_resolver(*sim_);        // wave 2b: FILTER_* compare factions
@@ -469,11 +507,16 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
         };
         sets_.push_back(std::move(set));
     }
+    // q6 t03 (STORY.md §2.4): one plot table for the galactic mode, every player's plot set in load order. A plot listed
+    // again by a later set replaces the earlier one (StoryPlot::in_table), whose script is then not started [port].
+    std::vector<lua::StoryModel*> models;
+    for (const auto& s : sets_) models.push_back(&s->model);
+    lua_->table.assign(std::move(models));
     for (size_t si = 0; st.lua && si < sets_.size(); ++si) {
         Set& s = *sets_[si];
         for (uint32_t p = 0; p < s.model.plot_count(); ++p) {
             const std::string& script = s.model.plot(p).lua_script;
-            if (script.empty()) continue;
+            if (script.empty() || !s.model.plot(p).in_table) continue;
             Script sc;
             sc.plot = p;
             sc.name = script;
@@ -487,6 +530,7 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
             opt.script_name = script;
             sc.vm = std::make_unique<lua::LuaVm>(host, opt);
             lua::attach_story(*sc.vm, &s.model);
+            lua::attach_story_table(*sc.vm, &lua_->table);  // q6 t03
 #if defined(ALAMO_LUA_PLAYERS)
             lua::attach_player_world(*sc.vm, &lua_->players);
 #endif
@@ -500,6 +544,7 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
             s.model.set_script_vm(p, sc.vm.get());  // Story_Event_Trigger synchronously at Fire (§1.5)
             s.scripts.push_back(std::move(sc));
             collect(si, "load");  // Story_Event calls from Definitions (none in the shipped scripts)
+            start_threads_at_load(s, static_cast<uint32_t>(si), s.scripts.back(), seconds_);
         }
     }
     load_pass(forces);
@@ -948,6 +993,19 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
     } else if (type == "ENABLE_FOW") {  // fog follow-up (FOG_OF_WAR.md §6.6): no Param1 -> FOW off; atoi(P1) 0 -> off + hidden
         const std::string p1 = std::string(trim(at(0)));
         if (enable_fow_) enable_fow_(!p1.empty(), static_cast<int32_t>(std::atoi(p1.c_str())));
+    } else if (type == "SWITCH_CONTROL") {  // q6 (AI_GALACTIC.md §1.2, reward case 0x30): the host's AI (header)
+        StorySwitchControl sw;
+        sw.frame = frame_;
+        sw.plot_set = s.number;
+        sw.player_text = std::string(trim(at(0)));
+        sw.ai_type = std::string(trim(at(1)));
+        if (sw.player_text.rfind("#player:", 0) == 0) {
+            const int32_t p = to_int(sw.player_text.substr(8), -1);
+            sw.player = p >= 0 && static_cast<size_t>(p) < sim_->players().size() ? p : -1;
+        } else {
+            sw.player = sim_->player_of_faction(sw.player_text);
+        }
+        if (switch_control_) switch_control_(sw);
     } else if (type == "ENABLE_VICTORY" || type == "VICTORY") {  // story t06 wiring: tactical plot set -> the battle
         const bool tactical = tactical_ && tactical_->set.get() == &s;
         const std::string p1 = std::string(trim(at(0))), p2 = std::string(trim(at(1)));
@@ -1236,6 +1294,15 @@ std::string StorySession::take_tactical_map(bool space) { return std::exchange(t
 void StorySession::collect(size_t set, std::string_view via) { collect_set(*sets_[set], static_cast<uint32_t>(set), via); }
 
 void StorySession::collect_set(Set& s, uint32_t number, std::string_view via) {
+    collect_one(s, number, via);
+    // q6 t03: a galactic set's Lua Story_Event / TRIGGER_EVENT / STORY_ELEMENT reaches the other galactic sets' plots
+    // (one plot table, STORY.md §2.4): their fires are logged with the same cause, after this set's, in set order.
+    if (number < sets_.size() && sets_[number].get() == &s)
+        for (size_t i = 0; i < sets_.size(); ++i)
+            if (i != number) collect_one(*sets_[i], static_cast<uint32_t>(i), via);
+}
+
+void StorySession::collect_one(Set& s, uint32_t number, std::string_view via) {
     const auto& fired = s.model.fired();
     for (; s.fired_seen < fired.size(); ++s.fired_seen) {
         const lua::StoryFired& f = fired[s.fired_seen];
@@ -1255,6 +1322,18 @@ void StorySession::collect_set(Set& s, uint32_t number, std::string_view via) {
     auto& errs = s.model.script_errors();
     for (const std::string& m : errs) lua_messages_.push_back(std::to_string(frame_) + " story: " + m);
     errs.clear();
+}
+
+// q6 [port reading] (header comment, docs/re/STORY.md §8 item 9): one resume of the new script's threads at load, so a
+// PGStoryMode state machine is in its first state's PumpEvents (CurrentState == NextState) before the first story event
+// can fire. Not a Service: LastService / the rate gate are untouched, the first T9 still services the script.
+void StorySession::start_threads_at_load(Set& s, uint32_t number, Script& sc, double seconds) {
+    sc.vm->set_time(seconds);
+    sc.vm->set_frame(static_cast<uint32_t>(frame_));
+    sc.vm->service_threads();
+    const auto& errors = sc.vm->errors();
+    for (; sc.errors_seen < errors.size(); ++sc.errors_seen) lua_note(sc, errors[sc.errors_seen]);
+    collect_set(s, number, "load");
 }
 
 // One plot script's Lua service (T9 step 3), gated by its ServiceRate / LastService.
@@ -1320,6 +1399,7 @@ void StorySession::service(uint64_t frame, double mode_seconds) {
         scratch_.clear();
         sim_->drain_events(scratch_);
         if (drain_tap_ && !scratch_.empty()) drain_tap_(round, scratch_);  // OI host: presentation tap (read-only)
+        if (scoring_tap_ && !scratch_.empty()) scoring_tap_(scratch_);      // q6 t09: GameScoring events (copied)
         std::vector<StoryTrigger> batch;
         batch.reserve(scratch_.size() + pending_host_.size() + pending_ui_.size());
         for (const galactic::GalacticEvent& e : scratch_)
@@ -1597,7 +1677,10 @@ bool StorySession::load_tactical(const std::string& plots, int32_t player, std::
         for (const std::string& w : set->model.warnings()) diagnostics->push_back("story " + plots + ": " + w);
     // The tactical story shares the galactic flag table (STORY.md §0 [H]): a mission's SET_FLAG <mission>_WIN is what the
     // campaign plot's STORY_FLAG waits for.
-    if (!sets_.empty()) set->model.share_flags(sets_.front()->model);
+    if (!sets_.empty()) {
+        set->model.share_flags(sets_.front()->model);
+        set->model.share_holocron(sets_.front()->model);  // the holocron list is global too (GALACTIC_DIALOGS §2.8)
+    }
     set->model.set_player(player);
     set->model.category_mask = category_resolver(*types_);
     set->model.faction_of = faction_resolver(*sim_);  // wave 2b
@@ -1650,6 +1733,7 @@ bool StorySession::load_tactical(const std::string& plots, int32_t player, std::
         s.model.set_script_vm(p, sc.vm.get());
         s.scripts.push_back(std::move(sc));
         collect_set(s, s.number, "load");
+        start_threads_at_load(s, s.number, s.scripts.back(), 0.0);  // tactical story time starts at 0
     }
     tactical_headers_.push_back("# tactical plot set " + std::to_string(s.number) + ": player " + std::to_string(player) + " " +
                                 plots + " (" + std::to_string(s.model.plot_count()) + " plots, " +
@@ -1685,6 +1769,8 @@ void StorySession::end_battle(int32_t winner, uint64_t frame) {
         }
     }
     route_corruption_mission(winner, frame);  // wave 2b
+    // The tactical plots go: holocron records of their events keep a copy of their dialog lines [port].
+    if (tactical_->set) tactical_->set->model.holocron().detach(&tactical_->set->model);
     tactical_.reset();
 }
 
@@ -1983,7 +2069,12 @@ void StorySession::poll_tactical() {
 // (owner: n1-host) SimHost chunks "story", "story.lua", "story.bridge", "story.players" (story_session.hpp).
 namespace {
 
-constexpr uint32_t kStorySaveVersion = 2;  // 2 (stage 2): + the attached tactical story
+// 2 (stage 2): + the attached tactical story; 3 (q6 t14): + the holocron list (GALACTIC_DIALOGS §2.8). 1 and 2 still load
+// (with an empty holocron).
+constexpr uint32_t kStorySaveVersion = 3;
+// "story.lua" (write_scripts): 1 galactic sets, 2 + the tactical set, 3 = 2 (it followed kStorySaveVersion), 4 (q6 t19):
+// each script's Lua state is a script block (alamo/lua/script_save.hpp, LUA_SAVE.md §2) instead of a bare LuaVm image.
+constexpr uint32_t kStoryScriptsVersion = 4;
 constexpr uint32_t kMaxSaveCount = 1u << 24;
 
 uint32_t read_count(ByteReader& r) {
@@ -2117,6 +2208,17 @@ void StorySession::write(ByteWriter& w) const {
     }
     write_strings(w, lines_);
     write_strings(w, lua_messages_);
+    // v3: the holocron list; a record names its event's plot set by number (galactic sets, then the tactical one).
+    w.boolean(holocron() != nullptr);
+    if (const lua::StoryHolocron* h = holocron())
+        write_section(w, [this, h](ByteWriter& sub) {
+            h->write(sub, [this](const lua::StoryModel* m) -> int32_t {
+                for (const auto& sp : sets_)
+                    if (&sp->model == m) return static_cast<int32_t>(sp->number);
+                if (tactical_ && tactical_->set && &tactical_->set->model == m) return static_cast<int32_t>(tactical_->set->number);
+                return -1;
+            });
+        });
     // v2: the attached tactical story.
     w.boolean(tactical_ != nullptr);
     if (!tactical_) return;
@@ -2142,7 +2244,7 @@ void StorySession::write(ByteWriter& w) const {
 
 bool StorySession::read(ByteReader& r) {
     const uint32_t version = r.u32();
-    if (version != 1 && version != kStorySaveVersion) return false;
+    if (version < 1 || version > kStorySaveVersion) return false;
     const uint64_t frame = r.u64();
     const double seconds = r.f64();
     struct SetIn {
@@ -2223,6 +2325,13 @@ bool StorySession::read(ByteReader& r) {
         e.via = r.str();
     }
     if (!read_strings(r, lines) || !read_strings(r, lua_messages) || !r.ok()) return false;
+    bool has_holocron = false;
+    std::span<const uint8_t> holocron_bytes;
+    if (version >= 3) {
+        has_holocron = r.boolean();
+        if (has_holocron) holocron_bytes = r.raw(r.u32());
+        if (!r.ok()) return false;
+    }
     // v2: the attached tactical story (stage 2; see the header for the two load passes).
     bool has_tac = false, has_set = false, has_own = false;
     uint64_t tac_start = 0;
@@ -2288,6 +2397,18 @@ bool StorySession::read(ByteReader& r) {
         ByteReader mr(tac_set.model);
         if (!s.model.read(mr) || !mr.ok() || !mr.done() || tac_set.fired_seen > s.model.fired().size()) return false;
     }
+    // The holocron (v3; older saves: none) after the models, then its references re-linked to the loaded plot sets (the
+    // tactical one only in pass 2, when the battle is rebuilt).
+    lua::StoryHolocron* holo = !sets_.empty() ? &sets_.front()->model.holocron()
+                               : tactical_ && tactical_->set ? &tactical_->set->model.holocron() : nullptr;
+    if (holo && has_holocron) {
+        ByteReader hr(holocron_bytes);
+        if (!holo->read(hr) || !hr.ok() || !hr.done()) return false;
+        for (const auto& sp : sets_) holo->relink(static_cast<int32_t>(sp->number), &sp->model);
+        if (tactical_ && tactical_->set) holo->relink(static_cast<int32_t>(tactical_->set->number), &tactical_->set->model);
+    } else if (holo) {
+        holo->clear();
+    }
     if (tactical_ && has_own) {  // read in place: the tactical VMs hold this bridge
         ByteReader br(own_bridge);
         if (!read_if_saveable(*tactical_->own_bridge, br) || !br.done()) return false;
@@ -2344,10 +2465,10 @@ void StorySession::write_scripts(ByteWriter& w) const {
         for (const Script& sc : s.scripts) {
             w.u32(sc.plot).str(sc.name).f64(sc.rate).f64(sc.last_service).boolean(sc.serviced);
             w.u64(static_cast<uint64_t>(sc.errors_seen));
-            write_section(w, [&sc](ByteWriter& sub) { sc.vm->write(sub); });
+            write_section(w, [&sc](ByteWriter& sub) { lua::write_script_block(sub, *sc.vm); });  // v4
         }
     };
-    w.u32(kStorySaveVersion);
+    w.u32(kStoryScriptsVersion);
     w.u32(static_cast<uint32_t>(sets_.size()));
     for (const auto& sp : sets_) write_set(*sp);
     const Set* tac = tactical_ ? tactical_->set.get() : nullptr;  // v2: the tactical set's scripts
@@ -2384,7 +2505,7 @@ bool StorySession::read_scripts(ByteReader& r) {
         return true;
     };
     const uint32_t version = r.u32();
-    if (version != 1 && version != kStorySaveVersion) return false;
+    if (version < 1 || version > kStoryScriptsVersion) return false;
     const uint32_t nsets = read_count(r);
     if (!r.ok() || nsets != sets_.size()) return false;
     std::vector<Set*> targets;
@@ -2405,10 +2526,19 @@ bool StorySession::read_scripts(ByteReader& r) {
     }
     if (!r.ok() || !r.done()) return false;
     if (tactical_ && tactical_->set && !has_tac) return false;  // a tactical story the save does not have
-    for (size_t i = 0; i < in.size(); ++i)  // each LuaVm::read is all-or-nothing (see read() for a later refusal)
+    // Each read is all-or-nothing (see read() for a later refusal). v4: the script block (LUA_SAVE.md §2 / §4): it names
+    // the script and its thread records; the session's rebuilt VM (Base_Definitions and main already ran at start())
+    // is replaced whole, keeping only its host attachments (ScriptLoad::Any). Earlier versions hold the bare image.
+    for (size_t i = 0; i < in.size(); ++i)
         for (size_t k = 0; k < in[i].size(); ++k) {
             ByteReader vr(in[i][k].vm);
-            if (!targets[i]->scripts[k].vm->read(vr) || !vr.ok() || !vr.done()) return false;
+            lua::LuaVm& vm = *targets[i]->scripts[k].vm;
+            std::string err;
+            const bool ok = version >= 4 ? lua::read_script_block(vr, vm, lua::ScriptLoad::Any, &err) : vm.read(vr);
+            if (!ok || !vr.ok() || !vr.done()) {
+                if (!err.empty()) log::write(log::Level::Warn, "story", "cannot load script '" + in[i][k].name + "': " + err);
+                return false;
+            }
         }
     for (size_t i = 0; i < in.size(); ++i)
         for (size_t k = 0; k < in[i].size(); ++k) {

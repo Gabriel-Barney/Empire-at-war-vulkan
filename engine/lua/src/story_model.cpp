@@ -108,6 +108,17 @@ std::string base_name(std::string_view path) {
     return std::string(cut == std::string_view::npos ? path : path.substr(cut + 1));
 }
 
+// Q6 [port]: a plots / plot file name is read under Data\XML as written (Thrawn's Revenge lists
+// "Conquests\Historical\...\Story_Plots_X.xml"; the original loads those), then by its base name (the earlier port rule;
+// the FoC names have no folder, so both give the same path). Returns the path read, "" when neither exists.
+std::string read_xml_file(const FileProvider& files, std::string_view name, std::vector<uint8_t>& bytes) {
+    std::string as_written(name);
+    std::replace(as_written.begin(), as_written.end(), '/', '\\');
+    for (const std::string& path : {"Data\\XML\\" + as_written, "Data\\XML\\" + base_name(name)})
+        if (files.read(path, bytes)) return path;
+    return {};
+}
+
 bool is_sep(char ch) { return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == ','; }
 
 // A list parameter (the generic list parser: whitespace and commas [M]), upper-cased.
@@ -372,6 +383,10 @@ uint32_t StoryModel::add_plot(std::string_view plot_name, std::string_view xml, 
                 def.story_chapter = parse_int(text, -1);
             } else if (iequal(tag, "Story_Dialog_Popup")) {
                 def.story_dialog_popup = iequal(text, "true") || iequal(text, "yes") || text == "1";
+            } else if (iequal(tag, "Story_Dialog_SFX")) {  // STORY.md §1.6 (+0x2B9); no shipped event sets it
+                def.story_dialog_sfx = iequal(text, "true") || iequal(text, "yes") || text == "1";
+            } else if (iequal(tag, "Story_Var")) {  // +0x258: the printf argument of the chapter's TEXT lines
+                def.story_var = std::string(text);
             } else if (iequal(tag, "Reward_Param_List")) {
                 for (std::string& n : name_list(text)) def.reward_param_list.push_back(std::move(n));
             } else if (const uint32_t i = param_index(tag, "Event_Param")) {
@@ -386,6 +401,7 @@ uint32_t StoryModel::add_plot(std::string_view plot_name, std::string_view xml, 
             continue;
         }
         def.has_prereq_tags = !pre.empty();
+        request_dialog_load(def.story_dialog);  // GALACTIC_DIALOGS §2.8: the dialog script loads with its plot (0x4562a0)
         const std::string key = upper(def.name);
         if (!plot.by_name.emplace(key, static_cast<uint32_t>(plot.events.size())).second) {
             warnings_.push_back(plot.name + ": duplicate event " + def.name + " (only the first is in the table)");
@@ -436,18 +452,38 @@ uint32_t StoryModel::add_plot(std::string_view plot_name, std::string_view xml, 
     return static_cast<uint32_t>(plots_.size() - 1);
 }
 
+// q6 t03 (STORY.md §2.1 [H]): the plot table is a unique map keyed by the CRC-32 of the file name as written; a later
+// plot of the same key takes the node of the first one (its place in the walk) and the earlier plot leaves the table.
+// Plots a StoryTable marked replaced (a later plot set lists the same file) leave it too.
 void StoryModel::build_plot_order() {
     std::vector<uint32_t> keys;
     keys.reserve(plots_.size());
     for (const StoryPlot& p : plots_) keys.push_back(crc32(p.name.data(), p.name.size()));  // name as written
-    plot_walk_ = table_order(keys, nullptr);
+    const std::vector<uint32_t> order = table_order(keys, nullptr);
+    table_replaced_.resize(plots_.size(), 0);
+    for (uint32_t p = 0; p < plots_.size(); ++p) plots_[p].in_table = table_replaced_[p] == 0;
+    plot_walk_.clear();
+    for (const uint32_t first : order) {
+        uint32_t latest = first;  // the last plot of that key (table_order keeps the first one's place)
+        for (uint32_t p = first + 1; p < plots_.size(); ++p)
+            if (keys[p] == keys[first]) {
+                plots_[latest].in_table = false;
+                latest = p;
+            }
+        if (plots_[latest].in_table) plot_walk_.push_back(latest);
+    }
+}
+
+void StoryModel::set_table_replaced(uint32_t plot, bool replaced) {
+    table_replaced_.resize(plots_.size(), 0);
+    if (plot < plots_.size()) table_replaced_[plot] = replaced ? 1 : 0;
 }
 
 bool StoryModel::load_plots(const FileProvider& files, std::string_view plots_file, std::string* err) {
     std::vector<uint8_t> bytes;
-    const std::string path = "Data\\XML\\" + base_name(plots_file);
-    if (!files.read(path, bytes)) {
-        if (err) *err = "cannot read " + path;
+    const std::string path = read_xml_file(files, plots_file, bytes);
+    if (path.empty()) {
+        if (err) *err = "cannot read Data\\XML\\" + std::string(plots_file);
         return false;
     }
     const data::XmlDocument doc = data::XmlDocument::parse(bytes, path);
@@ -465,10 +501,9 @@ bool StoryModel::load_plots(const FileProvider& files, std::string_view plots_fi
         }
         if (text.empty()) continue;  // <Suspended_Plot /> placeholder creates nothing
         const bool active = tag == "Active_Plot";  // Â§2.1: exactly this tag; any other tag loads suspended
-        const std::string plot_path = "Data\\XML\\" + base_name(text);
         std::vector<uint8_t> plot_bytes;
-        if (!files.read(plot_path, plot_bytes)) {
-            if (err) *err = "cannot read plot " + plot_path + " (listed in " + path + ")";
+        if (read_xml_file(files, text, plot_bytes).empty()) {
+            if (err) *err = "cannot read plot Data\\XML\\" + std::string(text) + " (listed in " + path + ")";
             return false;
         }
         std::string perr;
@@ -484,10 +519,13 @@ bool StoryModel::load_plots(const FileProvider& files, std::string_view plots_fi
 
 // ------------------------------------------------------------------------------------------ lookup
 
+// q6 t03 (STORY.md §2.1 / §2.4 [H]): one hash lookup by the CRC-32 of the name as passed - no upper-casing, no trim, no
+// ".xml" added, the path included - so the name must match the Story_Plots text byte for byte. At most one plot of the
+// table has that key.
 uint32_t StoryModel::find_plot(std::string_view name) const {
-    const std::string want = base_name(trim(name));
-    for (uint32_t p = 0; p < plots_.size(); ++p)
-        if (iequal(base_name(plots_[p].name), want)) return p;
+    const uint32_t key = crc32(name.data(), name.size());
+    for (const uint32_t p : plot_walk_)
+        if (crc32(plots_[p].name.data(), plots_[p].name.size()) == key) return p;
     return kNone;
 }
 
@@ -501,8 +539,8 @@ void StoryModel::set_plot_active(uint32_t plot, bool active) {
     if (plot < plots_.size()) plots_[plot].active = active;  // Â§2.2: the flag only
 }
 
-// Â§2.3: for every event: triggered = 0, vf4 twice (events with prereqs disarm, counters restored);
-// disabled flags and ELAPSED accumulators untouched.
+// Â§2.3: for every event: triggered = 0, vf4 twice (events with prereqs disarm, counters restored, ELAPSED /
+// OBJECTIVE_TIMEOUT timers cleared); disabled flags untouched.
 void StoryModel::reset_plot(uint32_t plot) {
     if (plot >= plots_.size()) return;
     for (uint32_t e = 0; e < plots_[plot].events.size(); ++e) {
@@ -534,16 +572,24 @@ bool StoryModel::prereqs_hold(uint32_t p, uint32_t e) const {
     return false;
 }
 
-// vf4: an event with prereq groups disarms (timeout cancelled); counters restored.
+// vf4: an event with prereq groups disarms (timeout cancelled); counters restored. ELAPSED / OBJECTIVE_TIMEOUT override
+// it (0x45e550, q6 t03, STORY.md §2.3 / §4.7 [H]): the base reset, then accumulated = 0 and initialised = 0, so the timer
+// restarts at its next evaluation (vf7 re-records LastTime only when prereqs arm the event again). Shared by Fire's
+// Perpetual step, Lua Reset, RESET_EVENT and RESET_BRANCH.
 void StoryModel::reset_event(uint32_t p, uint32_t e) {
     StoryEventState& st = plots_[p].state[e];
-    if (plots_[p].events[e].has_prereq_tags) {
+    const StoryEventDef& def = plots_[p].events[e];
+    if (def.has_prereq_tags) {
         st.armed = false;
         st.timeout_at = -1.0;
     }
     st.countdowns.clear();
     st.count = 0;
     st.seen_level = -1;
+    if (def.type == "STORY_ELAPSED" || def.type == "STORY_OBJECTIVE_TIMEOUT") {
+        st.timer_acc = 0.0;
+        st.timer_init = false;
+    }
 }
 
 // Â§1.2: armed with activation time = now, Timeout registered; STORY_TRIGGER fires at once, ELAPSED /
@@ -570,6 +616,9 @@ void StoryModel::call_script(uint32_t p, const std::string& name) {
         plot.pending_script_triggers.push_back(name);
         return;
     }
+    // q6 t11 (LUA_API.md "Binding error model across all bindings"): a binding error set the plot script's stop flag;
+    // the script has ended, so its Story_Event_Trigger is not called any more (the event itself still fires).
+    if (vm->exit_requested()) return;
     // Synchronous (0x52f920). A fresh Lua thread, so the call is safe while one of the VM's script
     // threads is running (Story_Event from a script).
     lua_State* L = vm->state();
@@ -624,10 +673,25 @@ bool StoryModel::fire(uint32_t p, uint32_t e, bool forced) {
         st.last_fire_frame = frame_;
     }
     apply_reward(p, e);
-    // Step 6: story dialog / chapter (recorded for the UI, STORY.md 7.7).
-    if (const StoryEventDef& def = plots_[p].events[e]; !def.story_dialog.empty() || !def.story_tag.empty())
-        dialog_log_.push_back(StoryDialogEntry{frame_, p, e, def.story_dialog, def.story_tag, def.story_chapter,
-                                               def.story_dialog_popup});
+    // Step 6 (STORY.md §1.6), only with a Story_Dialog: the tag (Story_Tag, else "<dialog>_<chapter>" + the auto-tag flag),
+    // a holocron record that references this event's Add_Dialog_Text list, and the presentation record for the UI.
+    if (const StoryEventDef& def = plots_[p].events[e]; !def.story_dialog.empty()) {
+        StoryHolocronEntry h;
+        h.dialog = def.story_dialog;
+        h.var = def.story_var;
+        h.chapter = def.story_chapter;
+        h.auto_tag = def.story_tag.empty();
+        h.tag = h.auto_tag ? def.story_dialog + "_" + std::to_string(def.story_chapter) : def.story_tag;
+        h.frame = frame_;
+        h.model = this;
+        h.plot = p;
+        h.event = e;
+        StoryDialogEntry d{frame_, p, e, def.story_dialog, h.tag, def.story_chapter, def.story_dialog_popup,
+                           def.story_dialog_sfx, 0, plots_[p].name};
+        d.holocron_id = holocron_->add(std::move(h));
+        dialog_log_.push_back(d);
+        holocron_->push_log(std::move(d));
+    }
     // Dependants (copy: rewards never change definitions, but stay safe).
     const std::vector<uint32_t> deps = plots_[p].events[e].dependants;
     for (const uint32_t d : deps) {
@@ -689,7 +753,9 @@ void StoryModel::apply_reward(uint32_t p, uint32_t e) {
     } else if (type == "REMOVE_ALL_OBJECTIVES") {
         objectives_.clear();
     } else if (type == "TRIGGER_EVENT") {
-        trigger_event_by_name(p1);
+        // Every plot of the mode's table, every player's, active or not (§2.4): through the StoryTable when there is one.
+        if (table_) table_->trigger_event_by_name(p1);
+        else trigger_event_by_name(p1);
     } else if (type == "RESET_EVENT") {
         std::vector<std::string> names{p1};
         for (const std::string& n : plots_[p].events[e].reward_param_list) names.push_back(n);
@@ -728,14 +794,28 @@ void StoryModel::apply_reward(uint32_t p, uint32_t e) {
         if (p1.empty() || p2.empty()) return;
         const bool disable = parse_int(p2, 0) != 0;
         const bool all = parse_int(p3, 0) != 0;
-        for (uint32_t q = 0; q < plots_.size(); ++q) {
-            if (!all && q != p) continue;
-            const uint32_t ev = find_event(q, p1);
-            if (ev != kNone) plots_[q].state[ev].enabled = !disable;
+        if (all && table_) {
+            table_->set_event_enabled(p1, !disable);  // every plot of the table (q6 t03, §6.2)
+        } else {
+            for (uint32_t q = 0; q < plots_.size(); ++q) {
+                if (!all && q != p) continue;
+                if (all && !plots_[q].in_table) continue;
+                const uint32_t ev = find_event(q, p1);
+                if (ev != kNone) plots_[q].state[ev].enabled = !disable;
+            }
         }
     } else if (type == "STORY_ELEMENT") {
-        const uint32_t q = find_plot(p1 + ".xml");
-        if (q != kNone) set_plot_active(q, true);
+        // Any player's plot of the mode's table, active or suspended; silent when not found (§2.4).
+        if (table_) {
+            const StoryTable::PlotRef q = table_->find_plot(p1 + ".xml");
+            if (q.valid()) table_->model(q.set)->set_plot_active(q.plot, true);
+        } else if (const uint32_t q = find_plot(p1 + ".xml"); q != kNone) {
+            set_plot_active(q, true);
+        }
+    } else if (type == "REMOVE_STORY_GOAL") {  // 0x2C (0x47eea0): the newest holocron record with tag P1 goes
+        holocron_->remove_tag(p1);
+    } else if (type == "STORY_GOAL_COMPLETED") {  // 0x38 (0x47f5b0): ... is marked completed (the Completed tab)
+        holocron_->complete_tag(p1);
     } else if (on_reward) {
         on_reward(p, e, type, rp);
     }
@@ -972,32 +1052,55 @@ bool StoryModel::evaluate(uint32_t p, uint32_t e, std::string_view type, const S
     return true;
 }
 
-uint32_t StoryModel::dispatch(std::string_view type_in, const StoryNotification& n) {
-    const std::string type = upper(trim(type_in));
-    const size_t before = fired_.size();
-    if (type == "STORY_TRIGGER") return 0;  // nobody dispatches STORY_TRIGGER (Â§1.3)
+namespace {
+// The dispatched type, upper-cased; "" for the types no call site dispatches.
+std::string dispatched_type(std::string_view type_in) {
+    std::string type = upper(trim(type_in));
+    if (type == "STORY_TRIGGER") return {};  // nobody dispatches STORY_TRIGGER (Â§1.3)
     // L1/S4 wave 2b (SCRIPT_GAPS.md §4.6): no call site dispatches STORY_DIFFICULTY_LEVEL in 1.121 - parsed, never
     // evaluated.
-    if (type == "STORY_DIFFICULTY_LEVEL") return 0;
+    if (type == "STORY_DIFFICULTY_LEVEL") return {};
     // S4 (docs/re/L1_S4_REMAINING.md §4.3): no call site dispatches STORY_CAPTURE_HERO (0x11) in 1.121 either.
-    if (type == "STORY_CAPTURE_HERO") return 0;
-    for (const uint32_t p : plot_walk_) {
-        if (!plots_[p].active) continue;
-        const std::vector<uint32_t> walk = plots_[p].walk;
-        for (const uint32_t e : walk) {
-            if (plots_[p].events[e].type != type || !gated(p, e)) continue;
-            if (evaluate(p, e, type, n)) fire(p, e);
-        }
-    }
-    return static_cast<uint32_t>(fired_.size() - before);
+    if (type == "STORY_CAPTURE_HERO") return {};
+    return type;
 }
 
-uint32_t StoryModel::story_event(std::string_view name, std::string_view object_type, bool has_object) {
+StoryNotification ai_notification(std::string_view name, std::string_view object_type, bool has_object) {
     StoryNotification n;
     n.name = std::string(trim(name));
     n.has_object = has_object;
     if (has_object) n.params.push_back(StoryParam::of_text(object_type));
-    return dispatch("STORY_AI_NOTIFICATION", n);
+    return n;
+}
+}  // namespace
+
+void StoryModel::dispatch_in(uint32_t p, const std::string& type, const StoryNotification& n) {
+    if (p >= plots_.size() || !plots_[p].active || !plots_[p].in_table) return;
+    const std::vector<uint32_t> walk = plots_[p].walk;
+    for (const uint32_t e : walk) {
+        if (plots_[p].events[e].type != type || !gated(p, e)) continue;
+        if (evaluate(p, e, type, n)) fire(p, e);
+    }
+}
+
+uint32_t StoryModel::dispatch(std::string_view type_in, const StoryNotification& n) {
+    const std::string type = dispatched_type(type_in);
+    if (type.empty()) return 0;
+    const size_t before = fired_.size();
+    for (const uint32_t p : plot_walk_) dispatch_in(p, type, n);
+    return static_cast<uint32_t>(fired_.size() - before);
+}
+
+uint32_t StoryModel::dispatch_plot(uint32_t plot, std::string_view type_in, const StoryNotification& n) {
+    const std::string type = dispatched_type(type_in);
+    if (type.empty()) return 0;
+    const size_t before = fired_.size();
+    dispatch_in(plot, type, n);
+    return static_cast<uint32_t>(fired_.size() - before);
+}
+
+uint32_t StoryModel::story_event(std::string_view name, std::string_view object_type, bool has_object) {
+    return dispatch("STORY_AI_NOTIFICATION", ai_notification(name, object_type, has_object));
 }
 
 uint32_t StoryModel::push_trigger(std::string_view type, std::span<const StoryParam> params) {
@@ -1021,6 +1124,101 @@ uint32_t StoryModel::trigger_event_by_name(std::string_view name) {
         if (e != kNone) fire(p, e);  // active or suspended, no armed / fired / prereq check (Â§6.2)
     }
     return static_cast<uint32_t>(fired_.size() - before);
+}
+
+// ------------------------------------------------------------------------------------------ StoryTable (q6 t03)
+
+void StoryTable::clear() {
+    for (StoryModel* m : models_) {
+        if (!m) continue;
+        m->table_ = nullptr;
+        for (uint32_t p = 0; p < m->plot_count(); ++p) m->set_table_replaced(p, false);
+        m->build_plot_order();
+    }
+    models_.clear();
+    order_.clear();
+}
+
+// One node per key (CRC-32 of the plot file name as written), in the original's table order of the keys inserted in
+// load order (§4.2 emulation, the same as one model's plot_order()); the node holds the LAST plot of that key (§2.1
+// unique map: the later-loaded plot replaces the earlier one, which leaves its model's walks and lookups).
+void StoryTable::assign(std::vector<StoryModel*> models) {
+    clear();
+    models_ = std::move(models);
+    std::vector<uint32_t> keys;
+    std::vector<PlotRef> refs;
+    for (uint32_t s = 0; s < models_.size(); ++s) {
+        if (!models_[s]) continue;
+        for (uint32_t p = 0; p < models_[s]->plot_count(); ++p) {
+            const std::string& name = models_[s]->plot(p).name;
+            keys.push_back(crc32(name.data(), name.size()));
+            refs.push_back(PlotRef{s, p});
+        }
+    }
+    std::vector<uint8_t> replaced(keys.size(), 0);
+    for (const uint32_t first : table_order(keys, nullptr)) {
+        uint32_t latest = first;
+        for (uint32_t i = first + 1; i < keys.size(); ++i)
+            if (keys[i] == keys[first]) {
+                replaced[latest] = 1;
+                latest = i;
+            }
+        order_.push_back(refs[latest]);
+    }
+    for (size_t i = 0; i < refs.size(); ++i) models_[refs[i].set]->set_table_replaced(refs[i].plot, replaced[i] != 0);
+    for (StoryModel* m : models_)
+        if (m) {
+            m->table_ = this;
+            m->build_plot_order();
+        }
+}
+
+uint32_t StoryTable::set_of(const StoryModel* m) const {
+    for (uint32_t s = 0; s < models_.size(); ++s)
+        if (models_[s] == m) return s;
+    return kNone;
+}
+
+StoryTable::PlotRef StoryTable::find_plot(std::string_view name) const {
+    const uint32_t key = crc32(name.data(), name.size());  // as passed: case and path kept (§2.1)
+    for (const PlotRef& r : order_) {
+        const std::string& n = models_[r.set]->plot(r.plot).name;
+        if (crc32(n.data(), n.size()) == key) return r;
+    }
+    return {};
+}
+
+size_t StoryTable::fired_total() const {
+    size_t n = 0;
+    for (const StoryModel* m : models_)
+        if (m) n += m->fired().size();
+    return n;
+}
+
+uint32_t StoryTable::trigger_event_by_name(std::string_view name) {
+    const size_t before = fired_total();
+    for (const PlotRef& r : order_) {
+        StoryModel& m = *models_[r.set];
+        const uint32_t e = m.find_event(r.plot, name);
+        if (e != kNone) m.trigger_event(r.plot, e);  // every plot that has it: no first-match stop (§2.4)
+    }
+    return static_cast<uint32_t>(fired_total() - before);
+}
+
+uint32_t StoryTable::story_event(std::string_view name, std::string_view object_type, bool has_object) {
+    static const std::string kType = "STORY_AI_NOTIFICATION";
+    const StoryNotification n = ai_notification(name, object_type, has_object);
+    const size_t before = fired_total();
+    for (const PlotRef& r : order_) models_[r.set]->dispatch_in(r.plot, kType, n);  // active plots only
+    return static_cast<uint32_t>(fired_total() - before);
+}
+
+void StoryTable::set_event_enabled(std::string_view name, bool enabled) {
+    for (const PlotRef& r : order_) {
+        StoryModel& m = *models_[r.set];
+        const uint32_t e = m.find_event(r.plot, name);
+        if (e != kNone) m.plot(r.plot).state[e].enabled = enabled;
+    }
 }
 
 uint32_t StoryModel::poll(std::string_view type_in, const std::function<bool(const StoryEventDef&)>& match) {
@@ -1182,6 +1380,7 @@ size_t StoryModel::deliver_script_triggers(uint32_t plot, LuaVm& vm, std::string
     lua_State* L = vm.state();
     size_t n = 0;
     for (const std::string& name : queue) {
+        if (vm.exit_requested()) break;  // q6 t11: a stopped plot script gets no more triggers (as call_script)
         lua_pushstring(L, "Story_Event_Trigger");
         lua_rawget(L, LUA_GLOBALSINDEX);
         if (lua_type(L, -1) != LUA_TFUNCTION) {
@@ -1273,7 +1472,7 @@ void StoryModel::hash(StateHasher& h) const {
 // ------------------------------------------------------------------------------------------ save / load (OI lua)
 
 namespace {
-constexpr uint32_t kSaveVersion = 1;
+constexpr uint32_t kSaveVersion = 2;  // 2 (q6 t03): + Story_Dialog of a Lua-edited event (Set_Dialog); 1 still read
 constexpr uint32_t kSaveMaxCount = 1u << 24;  // sanity bound for counts / string lengths
 
 void put_str(ByteWriter& w, std::string_view s) {
@@ -1396,6 +1595,7 @@ void StoryModel::write(ByteWriter& w) const {
                 put_params(w, def.event_params);
                 put_params(w, def.reward_params);
                 put_strs(w, def.dialog);
+                put_str(w, def.story_dialog);
             }
         }
         put_strs(w, plot.pending_script_triggers);
@@ -1415,7 +1615,8 @@ void StoryModel::write(ByteWriter& w) const {
 }
 
 bool StoryModel::read(ByteReader& r) {
-    if (r.u32() != kSaveVersion || !r.ok()) return false;
+    const uint32_t version = r.u32();
+    if (!r.ok() || version < 1 || version > kSaveVersion) return false;
     const uint32_t frame = r.u32();
     const double time = r.f64();
     const bool paused = get_bool(r);
@@ -1493,7 +1694,8 @@ bool StoryModel::read(ByteReader& r) {
             st.seen_level = r.i32();
             st.lua_edits = r.u32();
             if (st.lua_edits && (!get_str(r, def.reward_type) || !get_params(r, def.event_params) ||
-                                 !get_params(r, def.reward_params) || !get_strs(r, def.dialog)))
+                                 !get_params(r, def.reward_params) || !get_strs(r, def.dialog) ||
+                                 (version >= 2 && !get_str(r, def.story_dialog))))
                 return false;
         }
         if (!get_strs(r, plot.pending_script_triggers)) return false;
@@ -1523,7 +1725,130 @@ bool StoryModel::read(ByteReader& r) {
     ai_flags_ = std::move(ai_flags);
     plots_ = std::move(plots);
     fired_ = std::move(fired);
+    // GALACTIC_DIALOGS §2.8: the holocron's load reader loads the dialog scripts again; the plot load already asked for the
+    // XML names, so only the Lua-set ones (Set_Dialog) are asked for here.
+    for (const StoryPlot& plot : plots_)
+        for (size_t i = 0; i < plot.events.size(); ++i)
+            if (plot.state[i].lua_edits) request_dialog_load(plot.events[i].story_dialog);
     return true;
+}
+
+// ------------------------------------------------------------------------------------------ holocron (GALACTIC_DIALOGS §2.8)
+
+uint64_t StoryHolocron::add(StoryHolocronEntry e) {
+    e.id = next_id_++;
+    const uint64_t id = e.id;
+    entries_.insert(entries_.begin(), std::move(e));  // newest first, no de-duplication
+    return id;
+}
+
+bool StoryHolocron::remove_tag(std::string_view tag) {
+    for (size_t i = 0; i < entries_.size(); ++i)
+        if (entries_[i].tag == tag) {
+            entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(i));
+            return true;
+        }
+    return false;
+}
+
+bool StoryHolocron::complete_tag(std::string_view tag) {
+    for (StoryHolocronEntry& e : entries_)
+        if (e.tag == tag) {
+            e.completed = true;
+            return true;
+        }
+    return false;
+}
+
+void StoryHolocron::mark_read(size_t index) {
+    if (index < entries_.size()) entries_[index].read = true;
+}
+
+size_t StoryHolocron::index_of(uint64_t id) const {
+    for (size_t i = 0; i < entries_.size(); ++i)
+        if (entries_[i].id == id) return i;
+    return SIZE_MAX;
+}
+
+const std::vector<std::string>& StoryHolocron::lines(const StoryHolocronEntry& e) const {
+    if (e.model && e.plot < e.model->plot_count() && e.event < e.model->plot(e.plot).events.size())
+        return e.model->plot(e.plot).events[e.event].dialog;
+    return e.detached_lines;
+}
+
+void StoryHolocron::detach(const StoryModel* model) {
+    for (StoryHolocronEntry& e : entries_)
+        if (e.model == model) {
+            e.detached_lines = lines(e);
+            e.model = nullptr;
+            e.ref_set = -1;
+        }
+}
+
+void StoryHolocron::clear() {
+    entries_.clear();
+    log_.clear();
+    next_id_ = 1;
+}
+
+namespace {
+constexpr uint32_t kHolocronVersion = 1;
+}  // namespace
+
+// Layout: u32 version, u64 next id, u32 count, per record (list order, newest first): id, dialog, var, tag, chapter, frame,
+// flags (completed, read, auto-tag), the reference (i32 set number, -1 = none; plot, event) and, without one, the lines.
+void StoryHolocron::write(ByteWriter& w, const std::function<int32_t(const StoryModel*)>& set_of) const {
+    w.u32(kHolocronVersion);
+    w.u64(next_id_);
+    w.u32(static_cast<uint32_t>(entries_.size()));
+    for (const StoryHolocronEntry& e : entries_) {
+        w.u64(e.id);
+        put_str(w, e.dialog);
+        put_str(w, e.var);
+        put_str(w, e.tag);
+        w.i32(e.chapter);
+        w.u32(e.frame);
+        w.u8(e.completed ? 1 : 0);
+        w.u8(e.read ? 1 : 0);
+        w.u8(e.auto_tag ? 1 : 0);
+        const int32_t set = e.model && set_of ? set_of(e.model) : (e.model ? -1 : e.ref_set);
+        w.i32(set);
+        w.u32(e.plot);
+        w.u32(e.event);
+        if (set < 0) put_strs(w, lines(e));
+    }
+}
+
+bool StoryHolocron::read(ByteReader& r) {
+    if (r.u32() != kHolocronVersion || !r.ok()) return false;
+    const uint64_t next = r.u64();
+    uint32_t n = 0;
+    if (!get_count(r, n)) return false;
+    std::vector<StoryHolocronEntry> entries(n);
+    for (StoryHolocronEntry& e : entries) {
+        e.id = r.u64();
+        if (!get_str(r, e.dialog) || !get_str(r, e.var) || !get_str(r, e.tag)) return false;
+        e.chapter = r.i32();
+        e.frame = r.u32();
+        e.completed = get_bool(r);
+        e.read = get_bool(r);
+        e.auto_tag = get_bool(r);
+        e.ref_set = r.i32();
+        e.plot = r.u32();
+        e.event = r.u32();
+        if (e.ref_set < 0 && !get_strs(r, e.detached_lines)) return false;
+        if (!r.ok()) return false;
+    }
+    entries_ = std::move(entries);
+    log_.clear();
+    next_id_ = next;
+    return true;
+}
+
+void StoryHolocron::relink(int32_t set, const StoryModel* model) {
+    for (StoryHolocronEntry& e : entries_)
+        if (e.ref_set == set && set >= 0 && model && e.plot < model->plot_count() && e.event < model->plot(e.plot).events.size())
+            e.model = model;
 }
 
 }  // namespace alamo::lua

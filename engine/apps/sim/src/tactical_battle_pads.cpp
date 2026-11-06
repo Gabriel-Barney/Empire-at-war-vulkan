@@ -32,26 +32,61 @@ std::string_view trim_ws(std::string_view a) {
 
 }  // namespace
 
-void TacticalBattle::pad_persist(const objects::ObjectStore& st, objects::ObjectHandle pad, objects::TypeIndex type, int32_t value, bool add) {
-    // §6.5 0x42f160 gate: tactical mode with a galactic-campaign parent, a battle planet [port: the host passes the list
-    // only then; the GOM state +0x618 != 9 test is not modelled]; the pad type's Tactically_Built_Child_Object_Persists.
-    if (!pad_records_ || !st.alive(pad) || type == objects::kNone) return;
+void TacticalBattle::pad_persist(const objects::ObjectStore& st, objects::ObjectHandle pad, objects::TypeIndex type, const Vec3& pos, bool add) {
+    // AI_GALACTIC_TOKENS §9.4 gate 0x42f160: a campaign battle (not a skirmish) with a battle planet whose list the host
+    // passed, not the sandbox story battle (conflict state 9); the pad type's Tactically_Built_Child_Object_Persists.
+    if (!pad_records_ || cfg_.skirmish || req_.sandbox || !st.alive(pad) || type == objects::kNone) return;
     const objects::GameObjectTypes& types = catalog_->types();
     const objects::TypeIndex pt = st.type(pad);
     if (pt >= types.size() || !types.get_bool(pt, "Tactically_Built_Child_Object_Persists")) return;
-    const Vec3 p = st.position(pad);
     std::vector<PadRecord>& v = *pad_records_;
-    if (add) {  // 0x4b6c70: refused when the position is already present (or the small int > 5)
+    if (add) {
+        // 0x4b6c70: refused when the pad's base level is outside 0..5 (unsigned compare) or a record has the same x and y
+        // (0x4b7ab0, exact, z ignored); else appended {finished type, position, pad base level, pad owner}.
+        const int32_t level = pad_base_level(st.id(pad));
+        if (static_cast<uint32_t>(level) > 5u) return;
         for (const PadRecord& r : v)
-            if (r.x == p.x && r.y == p.y && r.z == p.z) return;
-        v.push_back({static_cast<uint32_t>(type), p.x, p.y, p.z, 0, value});
+            if (r.x == pos.x && r.y == pos.y) return;
+        PadRecord r;
+        r.type = static_cast<uint32_t>(type);
+        r.x = pos.x;
+        r.y = pos.y;
+        r.z = pos.z;
+        r.base_level = level;
+        r.owner = st.owner(pad);
+        v.push_back(r);
         return;
     }
-    for (size_t i = 0; i < v.size(); ++i)  // 0x4bb3a0: position and type must both match
-        if (v[i].x == p.x && v[i].y == p.y && v[i].z == p.z && v[i].type == static_cast<uint32_t>(type)) {
-            v.erase(v.begin() + static_cast<std::ptrdiff_t>(i));
-            return;
-        }
+    // 0x4bb3a0: the record at the object's x and y (the last match, 0x4b7ab0) is removed only when its type is the object's.
+    size_t at = v.size();
+    for (size_t i = 0; i < v.size(); ++i)
+        if (v[i].x == pos.x && v[i].y == pos.y) at = i;
+    if (at < v.size() && v[at].type == static_cast<uint32_t>(type)) v.erase(v.begin() + static_cast<std::ptrdiff_t>(at));
+}
+
+int32_t TacticalBattle::pad_base_level(objects::ObjectId pad) const {
+    const auto it = std::lower_bound(pad_levels_.begin(), pad_levels_.end(), pad,
+                                     [](const std::pair<objects::ObjectId, int32_t>& e, objects::ObjectId id) { return e.first < id; });
+    return it != pad_levels_.end() && it->first == pad ? it->second : 0;
+}
+
+bool TacticalBattle::pad_rule_blocker(const objects::ObjectStore& st, objects::ObjectHandle h, int32_t pad_owner) const {
+    // q6 t19 (AI_TACTICAL §7.5.1, rule 0x42e400; the caller tested alive and Influences_Capture_Point): neither BASE_SHIELD
+    // (slot 0x39) nor DUMMY_GROUND_STRUCTURE (slot 0x5F), and the owner not allied with the pad owner (0x39a230:
+    // relation(pad owner -> owner) != 0). No Neutral exemption: relation-2 owners (the Neutral player's objects) block.
+    static const objects::BehaviorTypeId kBaseShield = objects::behavior_type_id("BASE_SHIELD");
+    static const objects::BehaviorTypeId kGroundStructure = objects::behavior_type_id("DUMMY_GROUND_STRUCTURE");
+    // [port, open] the candidates are the battle's live, non-retreated units - the set the port's capture controller
+    // counts (tactical_battle_garrison step 3). Map props are not candidates: Neutral-owned props with an unset
+    // Influences_Capture_Point (= true) stood within the radius of the Utapau mineral / outpost pads, so with the
+    // Neutral exemption gone the AI could never build there and the vanilla land skirmish stopped ending (q6 t19).
+    // Whether retail's 0x42e400 query reaches props is not read (AI_TACTICAL §7.5.1, SKIRMISH_SETUP "Port status").
+    const objects::ObjectId id = st.id(h);
+    const auto it = std::lower_bound(units_.begin(), units_.end(), id, [](const Unit& u, objects::ObjectId v) { return u.id < v; });
+    if (it == units_.end() || it->id != id || !it->alive || it->retreated) return false;
+    if (kBaseShield != objects::kNoBehavior && st.has_behavior(h, kBaseShield)) return false;
+    if (kGroundStructure != objects::kNoBehavior && st.has_behavior(h, kGroundStructure)) return false;
+    return !bt_allied(pad_owner, st.owner(h));
 }
 
 TacticalBattle::PadState* TacticalBattle::pad_state(objects::ObjectId pad, bool create) {
@@ -85,7 +120,7 @@ void TacticalBattle::pad_lock(objects::ObjectId pad, bool lock) {
     if (s && (s->uc != objects::kNoObjectId || s->built != objects::kNoObjectId)) s->locked = lock;  // empty pad: warning only (§2.2)
 }
 
-int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, objects::TypeIndex type, bool check_rules) {
+int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, objects::TypeIndex type, bool check_rules, int32_t builder) {
     if (finished_) return -1;
     objects::ObjectStore& st = mode.primary();
     const objects::GameObjectTypes& types = catalog_->types();
@@ -95,6 +130,9 @@ int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, obj
     const PadState* cur = pad_state(pad);
     const bool empty = !cur || (cur->uc == objects::kNoObjectId && cur->built == objects::kNoObjectId);
     const int32_t owner = st.owner(ph);
+    // q6 t19 (AI_TACTICAL §7.5.1): the builder defaults to the pad owner (Lua pad.Build 0x5739c0 builds for the pad owner);
+    // the UC and the finished object belong to the builder, and building never changes the pad's owner.
+    if (builder < 0) builder = owner;
     if (check_rules) {
         // Buildable list (0x372c10): the pad owner's faction row of Tactical_Buildable_Objects_Campaign (t50: _Multiplayer in a land skirmish).
         std::string faction;
@@ -111,7 +149,7 @@ int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, obj
             }
             listed = listed || (in_row && same_name(tok, name));
         }
-        // Rule 0x42e400: empty, no blocking (alive, Influences_Capture_Point, not allied) object within the radius.
+        // Rule 0x42e400: empty, no blocking object (alive, Influences_Capture_Point, pad_rule_blocker) within the radius.
         bool blocked = !empty;
         const objects::TypeIndex pt = st.type(ph);
         const double r = pt < types.size() ? static_cast<double>(types.get_float(pt, "Capture_Point_Radius")) : 0.0;
@@ -120,22 +158,20 @@ int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, obj
             if (blocked) break;
             if (!st.active(h) || h == ph) continue;
             const objects::TypeIndex t = st.type(h);
-            if (t >= types.size() || !types.get_bool(t, "Influences_Capture_Point")) continue;
-            const int32_t o = st.owner(h);
-            // skai: a Neutral-faction owner (map props) is not an enemy (see BattleAi::build_pad_check).
-            const bool allied = o == owner || (combat_ && !combat_->is_enemy(owner, o)) || bt_owner_neutral(o);
-            if (allied) continue;
+            if (t >= types.size() || !types.get_bool(t, "Influences_Capture_Point") || !pad_rule_blocker(st, h, owner)) continue;
             const Vec3 q = st.position(h);
             const double dx = static_cast<double>(q.x) - pp.x, dy = static_cast<double>(q.y) - pp.y, dz = static_cast<double>(q.z) - pp.z;
             blocked = dx * dx + dy * dy + dz * dz <= r * r;
         }
         if (!listed || blocked) return 0;
     }
-    // Start build 0x42dbd0 (charge 0, sfx 0): empty pad, cooldown elapsed, the builder exists.
-    if (!empty || (cur && cur->cooldown_end > frame_) || owner < 0) return -1;
+    // Start build 0x42dbd0 (charge 0, sfx 0): empty pad, cooldown elapsed, the builder exists and is allied with the pad
+    // owner (0x39a2c0: relation(builder -> pad owner) == 0). In skirmish the Neutral player is not allied even with itself,
+    // so nobody builds on a Neutral-owned pad (q6 t19, AI_TACTICAL §7.5.1).
+    if (!empty || (cur && cur->cooldown_end > frame_) || owner < 0 || !bt_allied(builder, owner)) return -1;
     objects::SpawnParams sp;
     sp.type = type;
-    sp.owner = owner;
+    sp.owner = builder;
     sp.position = bt_pad_attach_point(mode, ph);  // REMAINING_GAPS §6.5: the attachment bone 0x42e280
     sp.facing = st.facing(ph);
     const objects::ObjectHandle uc = mode.spawn(sp);
@@ -143,7 +179,7 @@ int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, obj
     PadState* s = pad_state(pad, true);
     pads_mode_ = &mode;
     s->uc = st.id(uc);
-    s->builder = owner;
+    s->builder = builder;
     s->cooldown_start = s->cooldown_end = 0;
     const int32_t secs = std::max(0, types.get_int(type, "Tactical_Build_Time_Seconds"));  // int field (+0xa00)
     const uint32_t frames = static_cast<uint32_t>(secs) * 30u;  // [port] per-mode player multiplier 1
@@ -151,7 +187,7 @@ int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, obj
     // battle host: the UC joins the battle as a combat unit of the builder; health ramp vf9 / vf6 (rate = max / frames,
     // starting at one service's worth [inferred]).
     const float start = frames > 0 ? 1.0f / static_cast<float>(frames) : 1.0f;
-    if (bt_adopt_built(mode, uc, owner, start, bt_rng_) != 0xFFFFFFFFu && frames > 0) {
+    if (bt_adopt_built(mode, uc, builder, start, bt_rng_) != 0xFFFFFFFFu && frames > 0) {
         const objects::ObjectId id = st.id(uc);
         const float rate = combat_->max_health(id) / static_cast<float>(frames);
         const auto it = std::lower_bound(bt_ramps_.begin(), bt_ramps_.end(), id, [](const UcRamp& r, objects::ObjectId v) { return r.id < v; });
@@ -173,7 +209,11 @@ void TacticalBattle::pads_tick(TacticalMode& mode) {
         auto child_gone = [&](bool was_built, objects::TypeIndex child_type) {  // 0x42e6d0
             if (was_built) s.locked = false;
             const objects::TypeIndex pt = pad_alive ? st.type(ph) : objects::kNone;
-            if (pad_alive && child_type != objects::kNone) pad_persist(st, ph, child_type, -1, false);  // §6.5 remove
+            if (pad_alive && child_type != objects::kNone) {  // §9.4 remove: the child stood at the build point + 0.1 z
+                Vec3 at = bt_pad_attach_point(mode, ph);
+                at.z += 0.1f;
+                pad_persist(st, ph, child_type, at, false);
+            }
             if (pt < types.size() && types.get_bool(pt, "Destroy_When_Child_Dies")) {
                 mode.destroy(ph);
                 return;
@@ -220,7 +260,6 @@ void TacticalBattle::pads_tick(TacticalMode& mode) {
                     if (st.alive(bh)) bt_adopt_built(mode, bh, sp.owner, frac, bt_rng_);
                 }
                 mode.destroy(uh);
-                const int32_t builder = s.builder;
                 s.uc = objects::kNoObjectId;
                 s.builder = -1;
                 if (st.alive(bh)) {
@@ -242,7 +281,7 @@ void TacticalBattle::pads_tick(TacticalMode& mode) {
                         }
                         for (const objects::ObjectHandle h : victims) bt_kill_silently(mode, h);
                     }
-                    if (pad_alive) pad_persist(st, ph, ft, builder, true);  // §6.5 add
+                    if (pad_alive) pad_persist(st, ph, ft, st.position(bh), true);  // §9.4 add: the finished object's position
                 } else {
                     child_gone(false, objects::kNone);
                 }

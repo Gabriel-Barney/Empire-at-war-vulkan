@@ -129,6 +129,24 @@ The only element attributes used are `Name` (all 3345) and `Description` (4, ign
   +0x118.
 - **Port:** keep the tag string on the type, but drive every behaviour from fields. The root/element tag
   names in the task brief (SpaceUnit, UniqueUnit, …) are conventions for readers, not loader classes.
+- **Galactic role (2026-11-03, q6 t03, data survey, no new binary reading).** The galactic code tests the generic
+  behaviours DUMMY_GROUND_BASE 0x5B, DUMMY_STAR_BASE 0x5C, DUMMY_GROUND_COMPANY 0x5D, DUMMY_SPACE_FIGHTER_SQUADRON
+  0x5E, DUMMY_GROUND_STRUCTURE 0x5F, DUMMY_ORBITAL_STRUCTURE 0x60, DUMMY_STARSHIP 0x61 (STRATEGIC_GAPS §1.2,
+  AI_GALACTIC_TOKENS), not the tag. Survey of the `Behavior` lists (variants inherit): in vanilla FoC and EaW, no type
+  whose tag is one the port's S3 table classifies (StarBase, GroundStructure, GroundBase, SpecialStructure, Squadron,
+  SpaceUnit, GroundCompany, GroundInfantry, GroundVehicle, HeroCompany, HeroUnit, UniqueUnit) has a DUMMY_* behaviour
+  that disagrees with the tag. Vanilla tags outside it with DUMMY_* types: GroundBuildable, SecondaryStructure,
+  SpaceBuildable, SlaveCompany, Marker, Props_Story, MOV_Cinematic, CIN_SpaceUnit, CIN_SpaceProp (FoC 84 types by the
+  generic list, 99 by the port's union of all behaviour lists). Thrawn's Revenge (workshop 1125571106) adds 30+ tags,
+  most carrying the behaviours: `SkirmishSquadron` (101, 0x5E), `SkirmishSpaceUnit` (262, 0x61), `DummyStructure`
+  (815 0x61, 73 structure), `FlagshipUnit` / `FlagshipTemplate` (0x61), `GenericCommanderCompany`,
+  `GroundWarCompany`, `GroundWarFormation` (0x5D), `Generic_Structure`, `Indigenous_Structure`,
+  `Template_Ground_Structure`, `Tactical_Capturable` (0x5F / 0x60), `Template_GroundBase` (0x5B). TR also uses
+  vanilla tags against the vanilla reading: `Starbase` for 11 DUMMY_ORBITAL_STRUCTURE platforms, `HeroCompany` for 5
+  hero fighter squadrons, `UniqueUnit` for 23 squadrons and 5 companies.
+  Port (`galactic_unit_kind`): the behaviour decides when the type has one, the S3 tag table otherwise; the vanilla
+  tags listed above keep Other (as before) so base-game behaviour is unchanged [port, open: the original would place
+  those by their behaviour too].
 
 ---
 

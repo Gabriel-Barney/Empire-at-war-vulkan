@@ -130,6 +130,58 @@ void extract_oi_fields(const objects::GameObjectTypes& types, objects::TypeIndex
 
 }  // namespace
 
+// q6 t03. The port's element-tag table (unchanged since S3).
+UnitKind unit_kind_from_element(std::string_view el, bool hyperspace) {
+    if (iequals(el, "StarBase")) return UnitKind::StarBase;
+    if (iequals(el, "GroundStructure") || iequals(el, "GroundBase") || iequals(el, "SpecialStructure"))
+        return UnitKind::GroundStructure;
+    if (iequals(el, "Squadron")) return UnitKind::Squadron;
+    if (iequals(el, "SpaceUnit")) return UnitKind::SpaceUnit;
+    if (iequals(el, "GroundCompany") || iequals(el, "GroundInfantry") || iequals(el, "GroundVehicle") ||
+        iequals(el, "HeroCompany"))
+        return UnitKind::GroundUnit;
+    if (iequals(el, "HeroUnit") || iequals(el, "UniqueUnit"))
+        return hyperspace ? UnitKind::SpaceUnit : UnitKind::GroundUnit;  // [M]
+    if (iequals(el, "Planet")) return UnitKind::Planet;
+    return UnitKind::Other;
+}
+
+// The behaviour ids 0x5B..0x61 (SG 1.2). Orbital structures share GroundStructure: the port keeps one structure list
+// per planet, and the vanilla SpecialStructure orbital types already mapped there through the tag table.
+UnitKind unit_kind_from_dummy(uint8_t dummy) {
+    switch (dummy) {
+    case kDummyStarBase: return UnitKind::StarBase;
+    case kDummyGroundBase:
+    case kDummyGroundStructure:
+    case kDummyOrbitalStructure: return UnitKind::GroundStructure;
+    case kDummyGroundCompany: return UnitKind::GroundUnit;
+    case kDummyFighterSquadron: return UnitKind::Squadron;
+    case kDummyStarship: return UnitKind::SpaceUnit;
+    default: return UnitKind::Other;
+    }
+}
+
+// Vanilla FoC / EaW element tags outside the tag table whose types carry a role behaviour (FoC: 11 GroundBuildable,
+// 10 SecondaryStructure, 1 SpaceBuildable, 8 SlaveCompany, 1 Marker, 38 Props_Story, 2 MOV_Cinematic, 5 CIN_SpaceUnit,
+// 8 CIN_SpaceProp; EaW a subset). The port always left them Other; they stay so, so base-game behaviour does not
+// change [port: the original would give them their behaviour's role; open, needs a decision].
+bool is_vanilla_unclassified_element(std::string_view el) {
+    static constexpr std::string_view kTags[] = {"GroundBuildable", "SecondaryStructure", "SpaceBuildable",
+                                                 "SlaveCompany",    "Marker",             "Props_Story",
+                                                 "MOV_Cinematic",   "CIN_SpaceUnit",      "CIN_SpaceProp"};
+    for (const std::string_view t : kTags)
+        if (iequals(el, t)) return true;
+    return false;
+}
+
+UnitKind galactic_unit_kind(std::string_view el, bool hyperspace, uint8_t dummy) {
+    const UnitKind by_tag = unit_kind_from_element(el, hyperspace);
+    const UnitKind by_behavior = unit_kind_from_dummy(dummy);
+    if (by_tag == UnitKind::Planet) return by_tag;
+    if (by_tag != UnitKind::Other) return by_behavior != UnitKind::Other ? by_behavior : by_tag;
+    return is_vanilla_unclassified_element(el) ? UnitKind::Other : by_behavior;
+}
+
 uint32_t GalacticRules::find_faction(std::string_view name) const {
     for (size_t i = 0; i < factions.size(); ++i)
         if (iequals(factions[i].name, name)) return static_cast<uint32_t>(i);
@@ -272,19 +324,7 @@ std::vector<TypeInfo> extract_type_info(const objects::GameObjectTypes& types, c
     for (objects::TypeIndex t = 0; t < types.size(); ++t) {
         TypeInfo& i = out[t];
         i.name = std::string(types.raw().types().name[t]);
-        const std::string_view el = types.raw().element_name(t);
         i.hyperspace = types.get_bool(t, "Hyperspace");
-        if (iequals(el, "StarBase")) i.kind = UnitKind::StarBase;
-        else if (iequals(el, "GroundStructure") || iequals(el, "GroundBase") || iequals(el, "SpecialStructure"))
-            i.kind = UnitKind::GroundStructure;
-        else if (iequals(el, "Squadron")) i.kind = UnitKind::Squadron;
-        else if (iequals(el, "SpaceUnit")) i.kind = UnitKind::SpaceUnit;
-        else if (iequals(el, "GroundCompany") || iequals(el, "GroundInfantry") || iequals(el, "GroundVehicle") ||
-                 iequals(el, "HeroCompany"))
-            i.kind = UnitKind::GroundUnit;
-        else if (iequals(el, "HeroUnit") || iequals(el, "UniqueUnit"))
-            i.kind = i.hyperspace ? UnitKind::SpaceUnit : UnitKind::GroundUnit;  // [M]
-        else if (iequals(el, "Planet")) i.kind = UnitKind::Planet;
         i.build_cost = types.get_int(t, "Build_Cost_Credits");
         i.build_time_seconds = types.get_int(t, "Build_Time_Seconds");
         i.tech_level = types.get_int(t, "Tech_Level");
@@ -342,6 +382,7 @@ std::vector<TypeInfo> extract_type_info(const objects::GameObjectTypes& types, c
         for (objects::TypeIndex r : types.get_type_refs(t, "Planet_Restricted_Unit_Types"))
             if (r != objects::kNone) i.restricted_types.push_back(r);
         extract_oi_fields(types, t, i);  // OI galactic (STRATEGIC_GAPS 1.2 / 1.3 / 1.7)
+        i.kind = galactic_unit_kind(types.raw().element_name(t), i.hyperspace, i.dummy);  // q6 t03: needs i.dummy
     }
     // Company / squadron membership flags (type derivation 0x377500: +0x2A / +0x29 on every listed member).
     for (objects::TypeIndex t = 0; t < types.size(); ++t) {

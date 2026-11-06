@@ -22,6 +22,7 @@
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/galactic/conflicts.hpp"  // q6 t03: the player conflict stamps
 #include "alamo/galactic/fleet_path.hpp"
 #include "alamo/lua/ai_bridge.hpp"
 #include "alamo/lua/players.hpp"
@@ -212,6 +213,10 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     std::vector<GalacticAiTypeInfo> tinfo;
     AiOrderSink sink;
     GalacticAiConfig cfg;
+    // q6 t03: the loaded GameObjectCategoryType enum (null = the vanilla table) and the host's conflict manager.
+    const objects::EnumConverter* cat_enum = nullptr;
+    const gal::ConflictManager* conflicts = nullptr;
+    uint64_t category_bit(std::string_view name) const { return ai_category_bit(name, cat_enum); }
 
     // perception
     GalacticSnapshot snap;
@@ -286,6 +291,12 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     const PlayerAi* player_ai(int32_t p) const {
         return p >= 0 && static_cast<size_t>(p) < ai.size() ? ai[static_cast<size_t>(p)].get() : nullptr;
     }
+    // q6 t07: one AI player of `type` (the start() body per player; also the AI type change and a load that rebuilds a
+    // changed player). The stagger ordinal comes from cfg.players, which must already list the player.
+    std::unique_ptr<PlayerAi> make_player(int32_t player, const AiPlayerTypeDef* type, int32_t difficulty,
+                                          std::vector<std::string>* diagnostics);
+    void install_sim_hooks();          // the income / production-service / installment hooks (once, first AI player)
+    void retire_player(int32_t player);  // q6 t07: ends the player's plans, PotentialPlans and free-store moves
     const gal::TypeInfo* type_info(uint32_t t) const { return t < sim.rules().types.size() ? &sim.rules().types[t] : nullptr; }
     std::string type_name(uint32_t t) const { return t < sim.rules().types.size() ? sim.rules().types[t].name : "?"; }
     // Hyperspace type of a unit TYPE (STRATEGIC_GAPS §1.7, the AIBuildTask travel estimate 0x648e80): a ground company's
@@ -604,6 +615,7 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     void budget_add(Goal& g) override;
     void budget_release(Goal& g) override;
     void budget_weights() override;
+    void apply_template_budget();  // §9.5 members + reset flag after a template pass
     std::vector<int32_t> category_order() override;
     void queue_production(Goal& g) override;
     void instantiate(Goal& g) override { g.running = w->instantiate(*this, g); }

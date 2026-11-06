@@ -483,7 +483,7 @@ static void test_parent_mode_object(const Db& db) {
     CHECK(gnum(vm, "px") == 11.0 && gnum(vm, "py") == 22.0 && gnum(vm, "pz") == 33.0 && gtrue(vm, "v") && gnum(vm, "tx") == 1.0);
     CHECK(gnum(vm, "id") == static_cast<double>(galaxy.id(gship)) && gtrue(vm, "ident") && gtrue(vm, "diff") && gnil(vm, "n") && gnil(vm, "pp"));
     galaxy.destroy(gship);
-    CHECK(run(vm, "v2 = p.Is_Valid()") == "" && !gtrue(vm, "v2") && run(vm, "p.Get_Position()") != "");
+    CHECK(run(vm, "v2 = p.Is_Valid()") == "" && !gtrue(vm, "v2") && run(vm, "np = (function(...) return arg.n end)(p.Get_Position())") == "" && !vm.exit_requested());
     vm.sweep_dead_wrappers();
     // Without a parent store: nil.
     e.bridge.parent_store = nullptr;

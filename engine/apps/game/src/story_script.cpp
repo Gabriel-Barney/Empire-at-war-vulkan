@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstddef>
 
+#include "alamo/core/file_provider.hpp"
+
 namespace alamo::game {
 
 namespace {
@@ -140,6 +142,114 @@ bool parse_story_script(std::string_view all, int32_t chapter, StoryScript& out)
         // script uses them; skipped.
     }
     return found;
+}
+
+bool story_script_valid(std::string_view all) {
+    Tokens tk(all);
+    for (std::string_view word = tk.next(); !word.empty(); word = tk.next()) {
+        const std::string cmd = upper(word);
+        const Keyword* kw = nullptr;
+        for (const Keyword& k : kKeywords)
+            if (cmd == k.name) kw = &k;
+        if (!kw) return false;
+        if (kw->arg == Arg::String || kw->arg == Arg::Int) {
+            tk.next();
+        } else if (kw->arg == Arg::Int4) {
+            for (int i = 0; i < 4; ++i)
+                if (tk.next().empty()) break;
+        }
+    }
+    return true;
+}
+
+bool StoryDialogCache::load(const FileProvider& files, std::string_view name) {
+    if (name.empty() || cached(name)) return false;  // 0x47d9c0 returns 0 for a cached name
+    std::vector<uint8_t> bytes;
+    if (!files.read("Data\\Scripts\\Story\\" + std::string(name) + ".txt", bytes)) return false;
+    std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    if (!story_script_valid(text)) return false;  // rejected: nothing cached
+    files_.emplace(std::string(name), std::move(text));
+    return true;
+}
+
+bool StoryDialogCache::chapter(std::string_view name, int32_t chapter, StoryScript& out) const {
+    const auto it = files_.find(std::string(name));
+    if (it == files_.end()) {
+        out = StoryScript{};
+        return false;
+    }
+    return parse_story_script(it->second, chapter, out);
+}
+
+HolocronSummaryFill fill_holocron_summary(const StoryDialogCache& cache, const std::vector<HolocronRecord>& records, bool completed_tab,
+                                          uint64_t selected_id) {
+    HolocronSummaryFill f;
+    for (size_t i = 0; i < records.size(); ++i) {
+        const HolocronRecord& r = records[i];
+        f.has_completed = f.has_completed || r.completed;
+        if (r.completed != completed_tab) continue;
+        HolocronRow row;
+        row.record = i;
+        StoryScript sc;
+        if (cache.chapter(r.dialog, r.chapter, sc))
+            for (const StoryScriptLine& l : sc.lines) {
+                if (l.kind != StoryScriptLine::Kind::Text) continue;
+                row.text_id = l.text_id;
+                if (l.rgba[3] != 0) std::copy(l.rgba, l.rgba + 4, row.rgba);  // else the default 128, 128, 255
+                break;
+            }
+        if (r.read || r.completed)
+            for (int k = 0; k < 3; ++k) row.rgba[k] = static_cast<uint8_t>(static_cast<float>(row.rgba[k]) * 0.66f);
+        if (r.id == selected_id) f.selected = static_cast<int32_t>(f.rows.size());
+        f.rows.push_back(std::move(row));
+    }
+    if (f.selected < 0 && !f.rows.empty()) f.selected = 0;
+    if (f.selected < 0) return f;
+    const HolocronRecord& r = records[f.rows[static_cast<size_t>(f.selected)].record];
+    StoryScript sc;
+    if (!cache.chapter(r.dialog, r.chapter, sc)) return f;
+    f.title_id = sc.title;
+    for (const StoryScriptLine& l : sc.lines) {
+        if (l.kind == StoryScriptLine::Kind::Extra) {  // 0x1093b0: every stored line at once, in the current colour
+            for (const std::string& e : r.lines) {
+                HolocronRecapLine x;
+                x.kind = StoryScriptLine::Kind::Extra;
+                x.text = e;
+                std::copy(l.rgba, l.rgba + 4, x.rgba);
+                f.recap.push_back(std::move(x));
+            }
+            continue;
+        }
+        HolocronRecapLine x;
+        x.kind = l.kind;
+        x.text = l.text_id;
+        std::copy(l.rgba, l.rgba + 4, x.rgba);
+        f.recap.push_back(std::move(x));
+    }
+    return f;
+}
+
+std::u32string story_var_printf(std::u32string_view fmt, std::u32string_view var) {
+    std::u32string out;
+    bool used = false;
+    for (size_t i = 0; i < fmt.size(); ++i) {
+        if (fmt[i] != U'%' || i + 1 >= fmt.size()) {
+            out.push_back(fmt[i]);
+            continue;
+        }
+        const char32_t n = fmt[i + 1];
+        if (n == U'%') {
+            out.push_back(U'%');
+            ++i;
+        } else if (n == U's' || n == U'S' || (n == U'l' && i + 2 < fmt.size() && fmt[i + 2] == U's')) {
+            if (!used) out.append(var);
+            used = true;
+            i += n == U'l' ? 2 : 1;
+        } else {
+            out.push_back(fmt[i]);
+        }
+    }
+    return out;
 }
 
 }  // namespace alamo::game

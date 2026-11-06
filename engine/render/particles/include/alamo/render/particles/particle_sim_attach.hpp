@@ -30,7 +30,7 @@ struct SimAttachStats {
     uint32_t culled = 0;        // Allow_Particle_Model_Culling types the local player cannot see (systems kept, not drawn)
     uint32_t attached = 0, attached_missing = 0;  // InterpolatedFrame::effects synced / whose asset is no particle file
     uint32_t world = 0, world_missing = 0;        // R5 world effects synced / whose asset is no particle file
-    uint32_t contained = 0;                       // R3: kSnapContained objects skipped
+    uint32_t contained = 0;                       // R3: kSnapContained objects skipped (q6 t19: and Lua-hidden ones)
     uint32_t lua = 0, lua_bones = 0;              // R5: Lua Attach_Particle_Effect systems synced / placed at a bone
     uint32_t projectiles = 0;                     // projectiles synced (proxies or particle-file model)
 };

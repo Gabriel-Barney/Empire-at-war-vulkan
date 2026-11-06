@@ -72,6 +72,9 @@ struct LuaHost {
 struct LuaVmOptions {
     std::string script_name = "Script";  // tostring(Script)
     bool math_library = false;           // expose the dmath-backed 'math' table (not in the original)
+    // q6 object scripts: GameObjectTypeWrapper.Get_Name returns the upper-cased name, as the original (it stores type
+    // names upper-cased, OBJECT_TYPES §3.1). [port interim] Off by default: other VMs keep the name as written.
+    bool upper_type_names = false;
 };
 
 struct UnboundHit {
@@ -105,6 +108,12 @@ public:
     bool require(std::string_view name, std::string* err = nullptr);
     // Calls a global function with no arguments (not as a thread: it must not yield).
     bool call(std::string_view global_function, std::string* err = nullptr);
+    // True when the global `name` is a function (raw lookup, no metamethods; q6 t06: optional engine calls).
+    bool has_function(std::string_view name);
+    // q6 t09 (GAME_SCORING.md §2 ServiceRate / LastService): a global number by raw lookup. get_number is false (out
+    // unchanged) when the global is not a Lua number (nil, a string, ...); set_number writes a new number global.
+    bool get_number(std::string_view name, double& out);
+    void set_number(std::string_view name, double value);
 
     // ---- script threads ----
     // Create_Thread(name) from C++. Returns the thread id, or -1 if `name` is not a global function.
@@ -115,6 +124,22 @@ public:
     size_t thread_count() const;
     bool thread_active(int32_t id) const;
     bool exit_requested() const;
+    // q6 t19 (docs/re/LUA_SAVE.md §2.1, the thread records): every thread record in id order (= service order), killed
+    // ones that the next service will reap included, and the id the next Create_Thread gets.
+    struct ThreadInfo {
+        int32_t id = 0;
+        std::string function;  // the start function's global name
+        bool started = false;  // resumed at least once
+        bool killed = false;   // ended; removed at the end of the next service
+        bool operator==(const ThreadInfo&) const = default;
+    };
+    std::vector<ThreadInfo> thread_list() const;
+    int32_t next_thread_id() const;
+    const LuaVmOptions& options() const;
+    // q6 t19 (LUA_SAVE.md §4.1, the from-save instance): true while none of run / require / call / create_thread /
+    // service_threads / read has been called on this VM - only the constructor's libraries, globals and commands exist
+    // (bridges and host values may be attached). Bindings that run code through state() directly are not tracked.
+    bool fresh() const;
 
     // ---- host inputs ----
     void set_time(double seconds);  // GetCurrentTime()
@@ -125,6 +150,22 @@ public:
     void set_object_global(std::string_view name, objects::ObjectHandle h);
     // Drops cached wrappers of dead objects (call at a deterministic point, e.g. after a flush).
     void sweep_dead_wrappers();
+
+    // ---- q6 script pool (docs/re/OBJECT_SCRIPTS.md §1.3, §1.4, §2.3; the host is engine/apps/sim object_scripts) ----
+    // Release steps 1-3 of 0x2488e0: the exit flag set, every thread killed and removed (thread ids restart at 0, as the
+    // original's thread vector is emptied), the ThreadValue table and the GetEvent queue cleared. Globals are untouched:
+    // the caller runs Flush_G() / Base_Definitions() next.
+    void pool_kill_threads();
+    // Release steps 5.3 / 5.5: the Lua stack reset, then one full collection (finalizers included).
+    void collect_garbage();
+    // Handout of a pooled instance (0x244170): the exit flag (+0x121) cleared, no current thread (+0x60 = -1).
+    void pool_handout();
+    // §1.3 step 3 (0x2567b0 / 0x546c70 at every attach): the engine globals of the binding table registered again,
+    // replacing whatever a script stored under those names (`Script`, a constructor global, is left alone).
+    void reinstall_engine_globals();
+    // A new LuaHost for a pooled instance handed to another object. When the store changes, the game-object wrapper
+    // caches are emptied (their handles belong to the old store).
+    void rebind_host(const LuaHost& host);
 
     // ---- diagnostics ----
     const std::vector<std::string>& messages() const;  // _ScriptMessage / _OuputDebug / print lines

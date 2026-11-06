@@ -11,7 +11,7 @@
 //     owned) excluding the point: neutral-owned point -> the first one's owner, any later one not allied with it ->
 //     neutral (contested); owned point -> any one not allied with the owner -> neutral, else the owner; (d) none -> the
 //     owner when the point is sticky (REINFORCEMENT_POINT or Ownership_Sticks), else neutral (decay). (a) build pads
-//     with contents [port: no build pads in the sim yet];
+//     with contents (UC or child) -> the current owner, before (b) (q6 t19: set_pad_occupied);
 //   * progress 0..1: step = 1 / (T x 30) x interval (T = Capture_Point_Transition_Time_Seconds, T <= 0 -> 1; the
 //     controller's Capture_Point_Time_Multiplier m = 1 [port: no battlefield modifiers]); controller == owner ->
 //     progress -= step (min 0; at 0 pending := owner); else pending := controller, progress += step (max 1); at 1 the
@@ -60,6 +60,9 @@ public:
     // REMAINING_GAPS §3.3 start gate: points owned by an Is_Neutral faction's player (faction +0x108) are serviced at once,
     // like unowned / neutral-player points. Unset: only the neutral player counts.
     void set_neutral_owner(std::function<bool(int32_t owner)> fn) { neutral_owner_ = std::move(fn); }
+    // q6 t19 rule (a) (AI_GALACTIC_TOKENS §9.11, AI_TACTICAL §7.5.1 item 1): a build pad whose pad data holds an
+    // under-construction object or a child keeps its current owner, whoever stands on it. Unset: no pads.
+    void set_pad_occupied(std::function<bool(ObjectId point)> fn) { pad_occupied_ = std::move(fn); }
 
     bool add_point(ObjectId id, int32_t owner, Vec3 position, const CapturePointDesc& d, uint32_t first_frame = 0);
     void remove(ObjectId id);
@@ -107,6 +110,7 @@ private:
     std::function<bool(int32_t, int32_t)> allied_;
     std::function<int32_t(ObjectId)> occupant_owner_;
     std::function<bool(int32_t)> neutral_owner_;
+    std::function<bool(ObjectId)> pad_occupied_;
     std::vector<Point> points_;  // ascending id
     std::vector<CaptureEvent> events_;
 };

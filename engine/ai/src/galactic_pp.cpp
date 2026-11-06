@@ -14,11 +14,10 @@ constexpr float kVeto = kAiBigFloat;
 constexpr double kInf = kPpInfinite;
 constexpr float kLevelFactorK = 1.0f;  // 0x140b16c8c = GameConstants +0x148C, ctor 1.0, no XML tag (AI_GALACTIC_3 §8) [H]
 
-struct ContrastEntry {
-    int32_t row = -1;    // contrast-table row (EnemyContrastTypes index); -1 = the untyped layer total
-    bool space = false;  // layer flag (entry 0 space, entry 1 ground; typed space rows then ground rows)
-    double target = 0.0;
-};
+// 0x5f1990 list entry (galactic_ai_tokens.hpp): entry 0 = the ground total, entry 1 = the space total, then the typed ground
+// rows, then the typed space rows (AI_GALACTIC_TOKENS §9.2).
+using ContrastEntry = GalacticContrastEntry;
+constexpr size_t total_entry(bool space) { return space ? 1u : 0u; }
 
 struct PpRec {  // rec[i] (0xB8)
     uint32_t type = gal::kNoIndex;
@@ -32,7 +31,7 @@ struct PpRec {  // rec[i] (0xB8)
     std::vector<std::pair<int32_t, float>> pairs;  // +0x98 (entry, weight)
     bool is_hero = false;        // +0x54
     bool non_escort = false, escort = false;  // +0xB0 / +0xB1
-    bool space = false, ground = false;       // +0x90 / +0x91 layer flags
+    bool ground = false, space = false;       // +0x90 / +0x91 layer flags (AI_GALACTIC_TOKENS §9.8: +0x90 ground, +0x91 space)
 };
 
 struct PpSlot {  // 0x50 B
@@ -90,7 +89,7 @@ struct GalPp {
     float tolerance = 0.0f;
     std::vector<ContrastEntry> entries;
     std::vector<double> remaining;
-    bool layer_active_space = false, layer_active_ground = false;  // PP+0x1A1 / +0x1A0
+    bool layer_active_space = false, layer_active_ground = false;  // PP+0x1A0 / +0x1A1 (AI_GALACTIC_2 Setup C)
     // A2 galactic (AI_GALACTIC_3): PP+0x19C terrain (§6.1; empty = -1) and the remaining population 0x140b3a530
     // (§3.5, only with AI_Uses_Galactic_Pop_Cap).
     int32_t terrain = -1;
@@ -239,25 +238,13 @@ struct GalPp {
     }
 
     // ---- contrast helpers (0x6c5de0 / 0x72ac70 / 0x6c4b20) ----
-    double enemy_strength(bool space, uint64_t mask) const {
-        // 0x5f2430 (galactic_ai_enemy_strength): the members-only leaf Target.EnemyForce.<layer>TotalUnnormalized, plus the
-        // structures' own AI_Combat_Power in the untyped totals only; a typed row is the leaf with the row's mask [M].
-        return galactic_ai_enemy_strength(w.sim, w.tinfo, static_cast<PlanetIndex>(target), player, space, mask);
-    }
     float weight(uint32_t t, int32_t row) const {  // 0x5f1f90 x the terrain factor 0x5f22c0 when PP+0x19C != -1 (§6.3)
         if (!w.cfg.contrast || row < 0) return 0.0f;
         const float c = w.cfg.contrast->contrast(static_cast<size_t>(row), w.type_name(t), w.mask_of(t));
         return terrain < 0 ? c : static_cast<float>(static_cast<double>(c) * effectiveness(t));
     }
-    bool layer_satisfied(bool space) const {
-        double total = 0.0, residual = 0.0;
-        for (size_t e = 2; e < entries.size(); ++e) {
-            if (entries[e].space != space) continue;
-            total += entries[e].target;
-            residual += std::max(remaining[e], 0.0);
-        }
-        if (total <= 0.0) return true;
-        return residual / total <= static_cast<double>(tolerance);
+    bool layer_satisfied(bool space) const {  // 0x72ac70, in float (AI_GALACTIC_TOKENS §9.8 item 4)
+        return galactic_contrast_layer_satisfied(entries, remaining, space, tolerance);
     }
     void recompute_remaining() {
         remaining.resize(entries.size());
@@ -269,13 +256,16 @@ struct GalPp {
             // untyped total of its layer [M].
             const int32_t e = sel_entry[i];
             if (e >= 2 && static_cast<size_t>(e) < entries.size()) remaining[static_cast<size_t>(e)] -= static_cast<double>(weight(r.type, entries[static_cast<size_t>(e)].row)) * P;
-            if (!entries.empty()) {
-                if (r.space) remaining[0] -= P;
-                if (r.ground && entries.size() > 1) remaining[1] -= P;
+            if (entries.size() > 1) {
+                if (r.space) remaining[total_entry(true)] -= P;
+                if (r.ground) remaining[total_entry(false)] -= P;
             }
         }
         main_met = (!layer_active_space || layer_satisfied(true)) && (!layer_active_ground || layer_satisfied(false));
-        escort_met = main_met;  // [port] one requirement list (no separate escort list)
+        // 0x140b3a529 (AI_GALACTIC_TOKENS §9.10 [H]): galactic has no escort list (Setup A empties it, 0x525 = 0), so the
+        // escort test of an empty remaining list passes: 1 after Setup C and every commit recompute of a targeted,
+        // non-IgnoreTarget solve (the only solves that reach this), whatever the main contrast.
+        escort_met = galactic_escort_met(def.ignore_target);
     }
 
     // RequiredCategories masks
@@ -283,7 +273,7 @@ struct GalPp {
         std::vector<uint64_t> out;
         for (const std::string& r : def.required_categories) {
             uint64_t m = 0;
-            for (const std::string& n : ai_split(r, "|")) m |= ai_category_bit(n);
+            for (const std::string& n : ai_split(r, "|")) m |= w.category_bit(n);
             out.push_back(m);
         }
         return out;
@@ -498,8 +488,10 @@ public:
         for (int32_t k = 0; k < n; ++k) {
             const int32_t s = r.teams[static_cast<size_t>((std::max(r.start_team, 0) + k) % n)];
             PpSlot& slot = p_.slots[static_cast<size_t>(s)];
+            // First pass (§9.10): skip a non-escort slot when 0x528 && !0x529, an escort slot when 0x529 && !0x528; in
+            // galactic (0x529 = 1) escort slots wait while the main contrast is unmet, non-escort slots never wait.
             const bool escort = p_.tf_def(slot.tf).escort;
-            if (respect_met && ((escort && p_.escort_met) || (!escort && p_.main_met))) continue;
+            if (respect_met && galactic_place_skip(p_.main_met, p_.escort_met, escort)) continue;
             if (!(p_.slot_percent(slot) || static_cast<int32_t>(slot.assigned.size()) < p_.slot_max(slot))) continue;
             slot.assigned.push_back(sel);
             slot.cost_sum += p_.w.cost_none(r.type);
@@ -782,6 +774,9 @@ class ContrastM final : public PpMarshaller {
 public:
     explicit ContrastM(GalPp& p) : p_(p) {}
     void setup_a() override {  // 0x72bee0 -> 0x6c5de0 [H]
+        // 0x6c3080 at the solver start clears both flags (§9.10); they are first set by Setup C, so clearing them here,
+        // before any Setup C runs, is the same.
+        p_.main_met = p_.escort_met = false;
         p_.entries.clear();
         p_.tolerance = 0.0f;
         bool percent = false;
@@ -796,23 +791,27 @@ public:
         const int32_t f = p_.pa.ctx.learning.recent_plan_failures(p_.plan, p_.target, p_.w.now);
         const float fp = static_cast<float>(f) * p_.def.per_failure_contrast_adjust;
         p_.tolerance = 1.0f - (fp + p_.def.min_contrast_scale) / (fp + p_.def.max_contrast_scale);
-        const double scale = static_cast<double>(p_.def.max_contrast_scale + fp) * static_cast<double>(p_.pa.contrast_mult);
-        const double space_total = p_.enemy_strength(true, ~uint64_t{0});
-        const double ground_total = p_.enemy_strength(false, ~uint64_t{0});
-        p_.entries.push_back({-1, true, space_total});
-        p_.entries.push_back({-1, false, ground_total});
+        // Typed-row scale (§9.8 item 3): (double)Max + (double)(float)(f x PFCA), x the multiplier as double.
+        const double scale = galactic_contrast_scale(p_.def.max_contrast_scale, fp, p_.pa.contrast_mult);
+        // 0x5f1990 -> 0x5f2430 (galactic_ai_contrast_list): ground total, space total, typed ground rows, typed space rows.
+        std::vector<uint64_t> masks;
         const size_t rows = p_.w.cfg.contrast ? p_.w.cfg.contrast->size() : 0;
-        for (const bool space : {true, false})
-            for (size_t j = 0; j < rows; ++j) {
-                const double total = space ? space_total : ground_total;
-                const double v = total > 0.0 ? p_.enemy_strength(space, p_.w.cfg.contrast->rows[j].enemy_mask) * scale : 0.0;
-                p_.entries.push_back({static_cast<int32_t>(j), space, v});
-            }
+        for (size_t j = 0; j < rows; ++j) masks.push_back(p_.w.cfg.contrast->rows[j].enemy_mask);
+        // q6 t18 (§9.6 / §9.9): the leaf part through the AI's perception leaf cache, shared with the equations.
+        p_.entries = galactic_ai_contrast_list(p_.w.sim, p_.w.tinfo, static_cast<PlanetIndex>(p_.target), p_.player, masks, scale,
+                                               p_.w.cat_enum, &p_.w.res);
         p_.remaining.resize(p_.entries.size());
         for (size_t e = 0; e < p_.entries.size(); ++e) p_.remaining[e] = p_.entries[e].target;
     }
     void setup_c() override {  // 0x72aad0 [H]
-        if (p_.def.ignore_target || p_.entries.empty()) return;
+        if (p_.def.ignore_target) return;  // skipped: both flags stay 0 (§9.10)
+        if (p_.entries.empty()) {
+            // No target: both target lists are empty, so both 0x6bff00 tests pass (residual 0) and the commit recompute
+            // returns early: 0x528 = 0x529 = 1 for the whole solve (§9.10). [No reader here: Score returns 0 without
+            // entries and the placement skip rules are then both false.]
+            p_.main_met = p_.escort_met = true;
+            return;
+        }
         for (PpRec& r : p_.recs) {
             for (const int32_t s : r.teams) {
                 const bool esc = p_.tf_def(p_.slots[static_cast<size_t>(s)].tf).escort;
@@ -841,8 +840,10 @@ public:
         const double P = p_.power_eff(i);
         const bool free = r.free_unit >= 0;
         // 0x72b6a0: no pair counts when P <= 0; a pair counts only with w > 0 and R > 0, and a free unit then skips
-        // the tolerance / pop-cap test.
+        // the tolerance / pop-cap test. The main list is scored only for a candidate with a non-escort team (rec+0xB0), the
+        // escort list only with 0x525 (never in galactic): an escort-only candidate keeps v <= 0 (§9.10).
         for (const auto& [e, wgt] : r.pairs) {
+            if (!r.non_escort) break;
             const auto ei = static_cast<size_t>(e);
             const double R = p_.remaining[ei];
             if (!(P > 0.0 && wgt > 0.0f && R > 0.0)) continue;
@@ -856,11 +857,13 @@ public:
             }
         }
         if (v > 0.0) return static_cast<float>(v);
-        const bool layer_ok = (!r.space || p_.layer_satisfied(true)) && (!r.ground || p_.layer_satisfied(false));
-        if (!layer_ok) return kVeto;
+        // The gate (AI_GALACTIC_TOKENS §9.8 item 2): the plan-wide flag 0x140b3a528 (every active layer satisfied) with the
+        // candidate's non-escort team +0xB0, or 0x140b3a529 with +0xB1; not the candidate's own layers.
+        if (!galactic_contrast_gate(p_.main_met, p_.escort_met, r.non_escort, r.escort)) return kVeto;
         if (p_.def.minimum_cost + p_.def.additional_cost > p_.gross) return 0.0f;
-        if ((r.space && p_.remaining.size() > 0 && p_.remaining[0] > 0.0) || (r.ground && p_.remaining.size() > 1 && p_.remaining[1] > 0.0))
-            return 0.0f;
+        // An untyped total of a layer this candidate covers is still short (§9.8 item 1): the totals by their layer byte.
+        // Only through the main list (0x528 && rec+0xB0, §9.10); the escort-list check needs 0x525 (never in galactic).
+        if (p_.main_met && r.non_escort && galactic_contrast_total_open(p_.entries, p_.remaining, r.space, r.ground)) return 0.0f;
         for (const uint64_t m : p_.required_masks())
             if ((m & p_.selected_mask) == 0 && (m & p_.w.mask_of(r.type)) != 0) return 0.0f;
         for (const int32_t s : r.teams) {
@@ -881,7 +884,7 @@ public:
         if (p_.def.ignore_target || p_.entries.empty()) return;
         for (const bool space : {true, false}) {
             if (!(space ? p_.layer_active_space : p_.layer_active_ground)) continue;
-            const size_t e = space ? 0 : 1;
+            const size_t e = total_entry(space);
             if (p_.entries[e].target > 0.0 && p_.remaining[e] / p_.entries[e].target > static_cast<double>(p_.tolerance)) success = false;
             if (!p_.layer_satisfied(space)) success = false;
         }
@@ -909,12 +912,12 @@ const std::vector<uint32_t>& GalacticAiWorld::Impl::team_type_list(uint32_t plan
     uint64_t mask = 0;
     bool is_mask = !t.names.empty();
     for (const std::string& n : t.names) {
-        const uint64_t b = ai_category_bit(n);
+        const uint64_t b = category_bit(n);
         if (b == 0 && !ai_iequal(n, "None")) is_mask = false;
         mask |= b;
     }
     uint64_t filter = 0;
-    for (const std::string& n : d.masks) filter |= ai_category_bit(n);
+    for (const std::string& n : d.masks) filter |= category_bit(n);
     if (is_mask) {
         for (size_t ty = 0; ty < rules.types.size(); ++ty) {
             const gal::TypeInfo& x = rules.types[ty];

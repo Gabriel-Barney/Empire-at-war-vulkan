@@ -58,6 +58,20 @@ private:
     bool prev_;
 };
 
+// q6 land end: while one lives, lookups on its thread count no hits and stores are skipped, so an evaluation leaves the
+// cache unchanged (diagnostics: TacticalAiWorld::diagnostic_value). The values read are the ones the AI would read.
+class LeafCacheReadOnly {
+public:
+    LeafCacheReadOnly();
+    ~LeafCacheReadOnly();
+    LeafCacheReadOnly(const LeafCacheReadOnly&) = delete;
+    LeafCacheReadOnly& operator=(const LeafCacheReadOnly&) = delete;
+
+private:
+    bool prev_;
+    LeafCacheUncounted uncounted_;
+};
+
 class LeafCache {
 public:
     // True and `out` set when the key has a live entry for `now` under `lifetime_s`.

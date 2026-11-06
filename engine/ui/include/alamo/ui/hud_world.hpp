@@ -66,6 +66,8 @@ struct HudTypeInfo {
     std::string radar_icon;
     Vec2f radar_icon_size{0.0f, 0.0f};
     bool visible_on_radar = true, visible_on_enemy_radar = true;
+    // q6 t19 (OBJECT_SCRIPTS §10.3, radar filter 0x35b4d0): Visible_On_Radar_When_Fogged - a Lua-hidden unit keeps its blip.
+    bool visible_on_radar_when_fogged = false;
 };
 BracketSize bracket_size(const HudTypeInfo& t, bool land);
 
@@ -109,6 +111,9 @@ struct HudUnit {
     // R5 stealth (ABILITY_VISUALS 1.4, same filter): the object is Is_Stealthed and hostile to the local player. The radar drops
     // its blip; the world HUD hides its health bars and the hard-point reticles skip it (filter_hardpoints).
     bool stealthed = false;
+    // q6 t19 (OBJECT_SCRIPTS §10.3, same filter): Lua Hide(true) (render::SnapshotObject::script_hidden). The radar drops
+    // its blip for every viewer unless the type has Visible_On_Radar_When_Fogged.
+    bool script_hidden = false;
 };
 
 // One live unit and the unit standing for its squadron / company (itself when alone): TacticalBattle::icon_links.

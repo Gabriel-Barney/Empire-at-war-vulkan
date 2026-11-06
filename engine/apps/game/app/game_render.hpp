@@ -165,6 +165,8 @@ struct BattleViewStats {
     uint64_t decals = 0;
     uint64_t muzzles = 0;  // muzzle flashes handed to the snapshots (sum over captures; R3 attack row)
     uint32_t lasers_peak = 0;  // most laser projectiles handed to the renderer in one frame (playtest R1)
+    // q6 t02: most model projectiles (Projectile_Custom_Render 0, e.g. Thrawn's Revenge's Proj_Space_Laser_*.alo) drawn in one frame
+    uint32_t model_projectiles_peak = 0;
 };
 
 class BattleView {
