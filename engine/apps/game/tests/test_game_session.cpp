@@ -121,9 +121,9 @@ const char* kHardpoints = R"(<HardPoints>
 </HardPoints>
 )";
 const char* kFactions = R"(<Factions>
- <Faction Name="Empire"><Is_Playable>Yes</Is_Playable><Can_Control_Planets>Yes</Can_Control_Planets>
+ <Faction Name="Empire"><Is_Playable>Yes</Is_Playable><Basic_AI>BasicEmpire</Basic_AI><Can_Control_Planets>Yes</Can_Control_Planets>
   <Space_Tactical_Unit_Cap>20</Space_Tactical_Unit_Cap><Space_Retreat_Countdown_Seconds>5</Space_Retreat_Countdown_Seconds></Faction>
- <Faction Name="Rebel"><Is_Playable>Yes</Is_Playable><Can_Control_Planets>Yes</Can_Control_Planets>
+ <Faction Name="Rebel"><Is_Playable>Yes</Is_Playable><Basic_AI>BasicRebel</Basic_AI><Can_Control_Planets>Yes</Can_Control_Planets>
   <Space_Tactical_Unit_Cap>5</Space_Tactical_Unit_Cap><Space_Retreat_Countdown_Seconds>5</Space_Retreat_Countdown_Seconds></Faction>
  <Faction Name="Neutral"><Is_Neutral>Yes</Is_Neutral></Faction>
  <Faction Name="Underworld"><Can_Control_Planets>Yes</Can_Control_Planets></Faction>

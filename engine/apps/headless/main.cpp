@@ -1242,6 +1242,8 @@ static int headless_main(int argc, char** argv) {
     alamo::objects::GameObjectTypes types;
     const bool have_types = odb.load(*provider) && types.build(odb, provider.get());
     const alamo::ai::ForceTypeLookup lookup = alamo::ai::make_force_type_lookup(types);
+    // modc t03: Is_Neutral / Benefits_From_Corruption from FactionFiles.xml (FoC: Neutral / Underworld, as before).
+    const alamo::ai::CampaignSeedOptions seed_options = alamo::ai::seed_options_from_factions(*provider);
     int rc = 0;
     for (const auto& name : names) {
         std::vector<std::string> mdiag;
@@ -1258,7 +1260,7 @@ static int headless_main(int argc, char** argv) {
             print_result(run_campaign(map, opt, opt.workers), opt.workers);  // synthetic perception snapshot
             continue;
         }
-        const alamo::ai::CampaignSeed seed = alamo::ai::seed_campaign_snapshot(*camp, map, lookup);
+        const alamo::ai::CampaignSeed seed = alamo::ai::seed_campaign_snapshot(*camp, map, lookup, seed_options);
         Options o = opt;
         if (!opt.ais_set) o.ais = static_cast<uint32_t>(seed.snapshot.player_count());  // every AI player
         print_result(run_campaign(map, o, opt.workers, nullptr, nullptr, 0, &seed.snapshot), opt.workers);

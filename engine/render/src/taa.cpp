@@ -344,10 +344,24 @@ bool TaaPass::ensure_history(VkExtent2D ext) {
         return false;
     }
     history_valid_ = false;  // resize: start over
+    ++history_generation_;
     return true;
 }
 
-ViewMatrices TaaPass::begin_frame(const ViewMatrices& view) {
+ViewMatrices TaaPass::begin_frame(const ViewMatrices& view, bool provisional) {
+    undo_.armed = provisional;
+    undo_.motion_saved = false;
+    if (provisional) {
+        undo_.cur = cur_;
+        undo_.frame = frame_;
+        undo_.generation = history_generation_;
+        undo_.history_valid = history_valid_;
+        undo_.reset_now = reset_now_;
+        undo_.prev = prev_;
+        undo_.cam = cam_;
+        undo_.jittered_vp = jittered_vp_;
+        undo_.last_movers = last_movers_;
+    }
     float jx = 0, jy = 0;
     taa_jitter_pixels(frame_++, jx, jy);
     const ViewMatrices j = jitter_view(view, jx, jy);
@@ -370,7 +384,32 @@ bool TaaPass::motion_delta(uint64_t motion_id, const Mat3x4& cur, Mat3x4& delta)
     return true;
 }
 
+bool TaaPass::discard() {
+    if (!undo_.armed) return false;
+    undo_.armed = false;
+    cur_ = undo_.cur;
+    frame_ = undo_.frame;
+    // Targets recreated inside the frame (resize) hold nothing of the old history.
+    history_valid_ = undo_.history_valid && undo_.generation == history_generation_;
+    reset_now_ = undo_.reset_now;
+    prev_ = undo_.prev;
+    cam_ = undo_.cam;
+    jittered_vp_ = undo_.jittered_vp;
+    last_movers_ = undo_.last_movers;
+    if (undo_.motion_saved) {
+        motion_ = std::move(undo_.motion);
+        undo_.motion.clear();
+        undo_.motion_saved = false;
+    }
+    return true;
+}
+
 void TaaPass::commit_motion(std::span<const Instance> instances) {
+    if (undo_.armed && !undo_.motion_saved) {  // provisional: set the previous records aside (the sweep below would rebuild
+        undo_.motion = std::move(motion_);     // exactly this frame's keyed instances from an empty map anyway)
+        motion_.clear();
+        undo_.motion_saved = true;
+    }
     for (const Instance& in : instances)
         if (in.motion_id) motion_[in.motion_id] = MotionRec{in.transform, frame_};
     for (auto it = motion_.begin(); it != motion_.end();) it = it->second.frame != frame_ ? motion_.erase(it) : std::next(it);
@@ -561,11 +600,17 @@ ViewMatrices Renderer::taa_begin(const ViewMatrices& view, const RecordOptions& 
             return view;
         }
     }
-    return taa_->begin_frame(view);
+    return taa_->begin_frame(view, opts.taa_provisional);
 }
 
 void Renderer::reset_taa_history() {
     if (taa_) taa_->reset();
+}
+
+bool Renderer::discard_taa_frame() { return taa_ && taa_->discard(); }
+
+void Renderer::keep_taa_frame() {
+    if (taa_) taa_->keep();
 }
 
 }  // namespace alamo::render

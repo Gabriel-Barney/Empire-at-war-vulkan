@@ -1,14 +1,20 @@
 // Interim GalacticSnapshot builders (see the header).
 #include "alamo/ai/galactic_seed.hpp"
 
+#include <algorithm>
+#include <cstdint>
+#include <memory>
 #include <utility>
 
+#include "alamo/core/file_provider.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/data/game_database.hpp"
+#include "alamo/data/xml.hpp"
 #ifdef ALAMO_AI_HAVE_GALACTIC_SIM
 #include "alamo/galactic/galactic_rules.hpp"  // q6: galactic_unit_kind (the galactic role rule)
 #endif
 #include "alamo/objects/game_object_types.hpp"
+#include "alamo/objects/type_fields.hpp"
 
 namespace alamo::ai {
 
@@ -152,6 +158,46 @@ ForceTypeLookup make_force_type_lookup(const objects::GameObjectTypes& types) {
     return [&types](std::string_view name) { return force_type_of(types, types.resolve_name(name)); };
 }
 
+CampaignSeedOptions seed_options_from_factions(const FileProvider& files) {
+    CampaignSeedOptions o;
+    auto neutral = std::make_shared<std::vector<std::string>>();
+    auto corrupt = std::make_shared<std::vector<std::string>>();
+    std::vector<std::string> seen;
+    std::vector<uint8_t> bytes;
+    const auto parse = [&bytes](const std::string& name) {
+        return data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), name);
+    };
+    std::vector<std::string> list;
+    if (files.read("Data\\XML\\FactionFiles.xml", bytes)) {
+        const data::XmlDocument doc = parse("FactionFiles.xml");
+        if (doc.ok())
+            for (const data::XmlNode n : doc.root().children())
+                if (iequals(n.name(), "File")) list.emplace_back(n.text_trimmed());
+    }
+    for (const std::string& f : list) {
+        if (!files.read("Data\\XML\\" + f, bytes)) continue;
+        const data::XmlDocument doc = parse(f);
+        if (!doc.ok()) continue;
+        for (const data::XmlNode n : doc.root().children()) {
+            if (!iequals(n.name(), "Faction")) continue;
+            const std::string name(trim(n.attribute("Name", "")));
+            if (name.empty() || std::any_of(seen.begin(), seen.end(), [&](const std::string& x) { return iequals(x, name); })) continue;
+            seen.push_back(name);
+            if (objects::parse_type_bool(n.child_text("Is_Neutral"))) neutral->push_back(name);
+            if (objects::parse_type_bool(n.child_text("Benefits_From_Corruption"))) corrupt->push_back(name);
+        }
+    }
+    const auto in = [](const std::shared_ptr<std::vector<std::string>>& v) {
+        return [v](std::string_view name) {
+            return std::any_of(v->begin(), v->end(), [&](const std::string& x) { return iequals(x, name); });
+        };
+    };
+    o.is_neutral = in(neutral);
+    o.benefits_from_corruption = in(corrupt);
+    if (!neutral->empty()) o.neutral_faction = neutral->front();
+    return o;
+}
+
 CampaignSeed seed_campaign_snapshot(const data::CampaignDef& campaign, const GalaxyMap& map,
                                     const ForceTypeLookup& lookup, const CampaignSeedOptions& options) {
     CampaignSeed out;
@@ -162,10 +208,8 @@ CampaignSeed seed_campaign_snapshot(const data::CampaignDef& campaign, const Gal
     // [port] the synthetic seed couples the two: no fog also means auto-reveal (keeps the headless goldens).
     s.planet_auto_reveal = !options.fog;
 
-    auto is_neutral = [&](std::string_view f) { return options.is_neutral ? options.is_neutral(f) : iequals(f, "Neutral"); };
-    auto corrupt = [&](std::string_view f) {
-        return options.benefits_from_corruption ? options.benefits_from_corruption(f) : iequals(f, "Underworld");
-    };
+    auto is_neutral = [&](std::string_view f) { return options.is_neutral && options.is_neutral(f); };
+    auto corrupt = [&](std::string_view f) { return options.benefits_from_corruption && options.benefits_from_corruption(f); };
     auto player_of = [&](std::string_view faction) -> PlayerId {
         for (size_t i = 0; i < out.player_names.size(); ++i)
             if (iequals(out.player_names[i], faction)) return static_cast<PlayerId>(i);
@@ -208,7 +252,7 @@ CampaignSeed seed_campaign_snapshot(const data::CampaignDef& campaign, const Gal
             neutral = static_cast<PlayerId>(i);
             break;
         }
-    if (neutral == kNoPlayer) neutral = player_of("Neutral");
+    if (neutral == kNoPlayer) neutral = player_of(options.neutral_faction);
 
     const size_t P = out.player_names.size();
     s.players.resize(P);

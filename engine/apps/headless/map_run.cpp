@@ -177,6 +177,7 @@ int story_run(const MapRunOptions& opt, const std::string& data_dir, const std::
         std::fprintf(stderr, "story: game data incomplete (%zu diagnostics)\n", diag.size());
         return 2;
     }
+    // [name-ok: test host default campaign (--story without --map)]
     const std::string name = !opt.map.empty() ? opt.map : std::string("Full_Story_Campaign_Underworld");
     const data::CampaignDef* camp = nullptr;
     for (const auto& c : db.campaigns())

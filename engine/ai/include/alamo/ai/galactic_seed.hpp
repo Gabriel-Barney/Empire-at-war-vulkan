@@ -4,7 +4,8 @@
 //
 // PROVISIONAL (interim; replaced by the S3 state when it lands):
 //   * players: the factions named by AI_Player_Control, then Home_Location, then Starting_Forces, in
-//     first-appearance order, plus a "Neutral" player if none is named; every non-neutral faction
+//     first-appearance order, plus a neutral player (options.neutral_faction) if no listed faction is neutral; every
+//     non-neutral faction
 //     is an AI player (headless AI-vs-AI); relation = friendly only to itself;
 //   * planet owner: the faction of the first ground force / structure listed at the planet, else of
 //     the starbase, else of the first space force, else the neutral player (GALACTIC_ECONOMY.md 4.1
@@ -27,6 +28,9 @@ struct CampaignDef;
 }
 namespace alamo::objects {
 class GameObjectTypes;
+}
+namespace alamo {
+class FileProvider;
 }
 
 namespace alamo::ai {
@@ -53,11 +57,20 @@ ForceTypeLookup make_force_type_lookup(const objects::GameObjectTypes& types);
 // One type (index into `types`; invalid for an out-of-range index). legacy = the seed's tag rule alone (tests).
 ForceType force_type_of(const objects::GameObjectTypes& types, uint32_t type, bool legacy = false);
 
+// modc t03: the faction facts come from the data (seed_options_from_factions), never from faction names. Unset
+// functions = no faction is neutral / benefits from corruption.
 struct CampaignSeedOptions {
-    std::function<bool(std::string_view faction)> is_neutral;            // default: "Neutral"
-    std::function<bool(std::string_view faction)> benefits_from_corruption;  // default: "Underworld"
+    std::function<bool(std::string_view faction)> is_neutral;                // Is_Neutral
+    std::function<bool(std::string_view faction)> benefits_from_corruption;  // Benefits_From_Corruption
+    // The player added when no listed faction is neutral: the data's first Is_Neutral faction ([port] a placeholder
+    // name that matches no faction when the data has none).
+    std::string neutral_faction = "(no neutral faction)";
     bool fog = true;  // false: GalacticSnapshot::fog_disabled and planet_auto_reveal
 };
+// The options of a campaign seed from Data\XML\FactionFiles.xml and the files it names (list order; the first
+// definition of a name counts, as ai::load_faction_basic_ai): Is_Neutral, Benefits_From_Corruption and the first
+// Is_Neutral faction, names compared case-insensitively. No FactionFiles.xml: the defaults above.
+CampaignSeedOptions seed_options_from_factions(const FileProvider& files);
 
 struct CampaignSeed {
     GalacticSnapshot snapshot;

@@ -673,6 +673,7 @@ public:
         }
         // (pool entries: tactical only) commander teams: Field_Com_* (not space), Fleet_Com_* (not land) -> both in
         // galactic, each when affiliated with the player's faction.
+        // [name-ok: retail type names in 0x726410 (strings 0x8ce5c8..0x8ce610), docs/re/AI_GALACTIC_3.md setup B]
         if (p_.any_hero_attach)
             for (const char* n : {"Field_Com_Rebel_Team", "Field_Com_Empire_Team", "Fleet_Com_Rebel_Team", "Fleet_Com_Empire_Team"}) {
                 const uint32_t t = p_.w.sim.rules().find_type(n);

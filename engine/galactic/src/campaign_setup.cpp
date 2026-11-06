@@ -57,9 +57,10 @@ GalacticSetup build_campaign_setup(const data::GameDatabase& db, const GalacticR
     // REMAINING_GAPS 3.3 [inferred, probe 2026-10-29]: a Hostile player, so tactical maps' native objects (Hostile /
     // Sarlacc / Hutts owners) survive the battle's owner lookup. Retail campaigns hold a player per faction at its
     // faction index; Hostile's own entry was not logged. It takes no galactic part: no AI (no AI_Player_Control),
-    // no credits, not playable (income, victory and the Holocron skip it), owns nothing.
-    const uint32_t hostile = rules.find_faction("Hostile");
-    if (hostile != kNoIndex && !rules.factions[hostile].is_playable && !rules.factions[hostile].is_neutral) used[hostile] = 1;
+    // no credits, not playable (income, victory and the Holocron skip it), owns nothing. modc t03: that faction by data
+    // (GalacticRules::native_owner_faction; FoC: Hostile), not by name.
+    const uint32_t hostile = rules.native_owner_faction();
+    if (hostile != kNoIndex) used[hostile] = 1;
 
     const std::string_view human = options.human_faction.empty() ? std::string_view(c->starting_active_player)
                                                                   : std::string_view(options.human_faction);

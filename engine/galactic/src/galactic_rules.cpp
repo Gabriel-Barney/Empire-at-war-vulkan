@@ -206,6 +206,12 @@ uint32_t GalacticRules::neutral_faction() const {
     return kNoIndex;
 }
 
+uint32_t GalacticRules::native_owner_faction() const {
+    for (size_t i = 0; i < factions.size(); ++i)
+        if (!factions[i].is_playable && !factions[i].is_neutral && !factions[i].can_control_planets) return static_cast<uint32_t>(i);
+    return kNoIndex;
+}
+
 EconomyConstants load_economy_constants(const data::GameDatabase& db) {
     EconomyConstants c;
     const data::GameConstants& g = db.constants();
@@ -267,6 +273,7 @@ std::vector<FactionRules> load_factions(const FileProvider& provider, std::vecto
             r.can_control_planets = objects::parse_type_bool(n.child_text("Can_Control_Planets"));
             r.is_playable = objects::parse_type_bool(n.child_text("Is_Playable"));
             r.benefits_from_corruption = objects::parse_type_bool(n.child_text("Benefits_From_Corruption"));
+            r.basic_ai = std::string(trim_view(n.child_text("Basic_AI")));
             r.hyperspace_speed_factor = atof_or(n.child_text("Hyperspace_Speed_Factor"), r.hyperspace_speed_factor);
             r.maintenance_cost = atof_or(n.child_text("Maintenance_Cost"), r.maintenance_cost);
             r.force_alignment = parse_force_side(n.child_text("Force_Alignment"));

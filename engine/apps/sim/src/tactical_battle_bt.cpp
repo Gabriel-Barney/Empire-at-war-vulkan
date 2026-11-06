@@ -687,14 +687,16 @@ int32_t TacticalBattle::bt_map_owner(uint32_t raw) const {
     // [probe 2026-10-29] (tools/probe_mod/s10_map_owners): a .ted owner (mini 02) is a faction index (FactionFiles order)
     // resolved to that faction's player; a native faction without a player belongs to the Hostile player (Hutts props
     // -> Hostile in skirmish). [inferred] "native" = a faction neither Is_Playable nor Is_Neutral; the Hostile player =
-    // the first player whose faction is named Hostile. Anything else without a player: -1 (dropped as an unknown id).
+    // the first player of GalacticRules::native_owner_faction (modc t03: by data; FoC: Hostile). Anything else without a
+    // player: -1 (dropped as an unknown id).
     const auto& ps = galaxy_->players();
     const auto& fs = galaxy_->rules().factions;
     for (size_t p = 0; p < ps.size(); ++p)
         if (ps[p].faction == raw) return static_cast<int32_t>(p);
     if (raw >= fs.size() || fs[raw].is_playable || fs[raw].is_neutral) return -1;
-    for (size_t p = 0; p < ps.size(); ++p)
-        if (ps[p].faction < fs.size() && iequal_trim(fs[ps[p].faction].name, "Hostile")) return static_cast<int32_t>(p);
+    const uint32_t native = galaxy_->rules().native_owner_faction();
+    for (size_t p = 0; native != galactic::kNoIndex && p < ps.size(); ++p)
+        if (ps[p].faction == native) return static_cast<int32_t>(p);
     return -1;
 }
 

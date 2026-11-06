@@ -264,7 +264,7 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   ticks/s on the wall clock, no catch-up), interpolated rendering as in live play; frame time median / p99 / worst
   (nearest rank) over the gameplay frames, plus render and sim (frames that ticked) times. Fixed frames: exactly K counted
   frames per tick (`FixedFrameClock`), the presentation clock = counted frames / (30 K) s, alpha (sub + 1) / K,
-  Immediate present mode (V-sync off) and no frame cap whatever the preset says, blocking model loads, TAA off; a frame
+  Immediate present mode (V-sync off) and no frame cap whatever the preset says, blocking model loads, the preset's TAA (BM2b; BM2a turned it off); a frame
   counts only when the presentation is settled, else it is drawn again with the same sim state and sub-frame (more than
   `--bench-max-unsettled` (600) in a row fails the run). Frames outside gameplay (load screen, battle-end screen, a dialog
   holding the sim) are excluded in both modes. Disabled in a run (t04): player input (the idle frame: cursor parked, not
@@ -283,8 +283,14 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   [port] presets (`bench_presets`): `bm-low` 1280x720 detail 0, no TAA / soft shadows / heat / bloom; `bm-medium` 1920x1080
   detail 40, no TAA, 4x anisotropy; `bm-high` (default) 1920x1080 detail 75, TAA Medium (63), 8x; `bm-ultra` 1920x1080
   detail 100, TAA Medium, ambient occlusion, 16x; `bm-smoke` 640x360 detail 75, no TAA (tests). All: V-sync off, no cap,
-  gamma 50, null audio; `--width` / `--height` win over the preset's size. [port] fixed-frames mode turns TAA off because
-  its history would include the redrawn unsettled frames. Tests: `alamo_game_benchmark_tests` (data-free), and on the FoC
+  gamma 50, null audio; `--width` / `--height` win over the preset's size. **BM2b (2026-11-06):** fixed-frames runs
+  keep the preset's TAA. Every measured frame is drawn with `RecordOptions::taa_provisional`; `bench_frame_end` keeps a
+  counted frame (`Renderer::keep_taa_frame`) and takes any other one (unsettled, excluded, forced) back out of the TAA
+  state (`Renderer::discard_taa_frame`: jitter index, history slot / validity, previous camera and the object-motion records
+  return to where the frame started; the GPU history needs nothing, the frame only read the previous slot), and the history
+  restarts with the measurement (the warm-up length varies). Test flag `--bench-redraw-every N` (fixed frames): every Nth
+  settled measured frame is drawn again as if unsettled; the report adds `forced_redraws` and `taa_discarded`. Normal
+  rendering is unchanged (the flag is off outside fixed-frames measuring). Tests: `alamo_game_benchmark_tests` (data-free), and on the FoC
   data `alamo_game_bench_fixed` / `_fixed_galactic` / `_realtime` (on the saveload smoke's saves: two fixed-frames runs
   from the battle save and two from the galactic save draw identical PNGs and write identical CRC logs; two real-time runs from the galactic save report frame times and the same CRC). Left for BM2 (group bm2): the scenario file as
   the source of `BenchmarkOptions` and of the recording, the tick-driven camera path, GPU timer scopes and the image-match
