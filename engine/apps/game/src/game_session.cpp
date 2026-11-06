@@ -442,6 +442,20 @@ bool GameSession::choose_battle(galactic::BattleChoice choice) {
     return choice_sent_;
 }
 
+bool GameSession::linked_banner_pending() const { return battles_ && battles_->linked_banner_up() && !banner_sent_; }
+
+const sim::CampaignBattles::LinkedRecord* GameSession::linked_banner_record() const {
+    return linked_banner_pending() ? battles_->linked_record() : nullptr;
+}
+
+bool GameSession::begin_linked() {
+    if (!linked_banner_pending()) return false;
+    commands::EventData ev(commands::EventType::ResumeGame);
+    ev.set("flag", 0u);  // Begin (CampaignBattles::resume_game -> linked_begin while the banner is up)
+    banner_sent_ = submit(std::move(ev)).ok();
+    return banner_sent_;
+}
+
 bool GameSession::autoresolve_locked(PlanetIndex planet) const {
 #ifdef ALAMO_SIM_HAVE_STORY
     if (const sim::StorySession* s = host_ ? host_->story() : nullptr) return s->autoresolve_locked(planet);
@@ -626,6 +640,7 @@ void GameSession::after_tick() {
     save_checked_ = false;
     tap_events(false);
     land_skirmish_invade();
+    if (banner_sent_ && (!battles_ || !battles_->linked_banner_up())) banner_sent_ = false;  // story t13
 }
 
 // --- OI host: Lua presentation -> frame pacing and the parity CRC (docs/re/MAIN_LOOP.md §1.5, COMMANDS.md §7.1 step 6) ---

@@ -254,6 +254,7 @@ public:
     static constexpr float kSlideSeconds = 0.5f;
     void slide_in() { target_ = 1.0f; }
     void slide_out() { target_ = 0.0f; }  // scaled by how far it is in (same rate)
+    void show() { level_ = target_ = 1.0f; }  // story t13: fully in at once (a linked battle's P10 opening)
     void remove() { level_ = target_ = 0.0f; }
     void update(float dt_seconds);
     float level() const { return level_; }

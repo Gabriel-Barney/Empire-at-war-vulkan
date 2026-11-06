@@ -144,4 +144,40 @@ uint64_t StoryUiFeed::raised_total() const {
     return t;
 }
 
+// --- story t13: LinkedBattleOverlay (story_ui.hpp) ---
+void LinkedBattleOverlay::begin(bool letterbox, bool input_block, uint32_t battle_frame) {
+    reset();
+    start_ = battle_frame;
+    block_ = input_block;
+    letterbox_hold_ = letterbox;
+    input_hold_ = input_block;
+    blocked_ = input_block;
+    if (letterbox) bars_.show();
+}
+
+void LinkedBattleOverlay::reset() {
+    bars_.remove();
+    start_ = 0;
+    block_ = letterbox_hold_ = input_hold_ = blocked_ = false;
+}
+
+void LinkedBattleOverlay::script_letterbox(bool in) {
+    letterbox_hold_ = false;
+    if (in) bars_.slide_in();
+    else bars_.slide_out();
+}
+
+void LinkedBattleOverlay::script_controls() { input_hold_ = false; }
+
+void LinkedBattleOverlay::update(uint32_t battle_frame, bool script_locked, float dt_seconds) {
+    const bool late = battle_frame >= start_ && battle_frame - start_ >= kHandOverFrames;
+    if (letterbox_hold_ && late) {
+        letterbox_hold_ = false;
+        bars_.slide_out();
+    }
+    if (input_hold_ && late) input_hold_ = false;
+    blocked_ = block_ && (input_hold_ || script_locked);
+    bars_.update(dt_seconds);
+}
+
 }  // namespace alamo::game
