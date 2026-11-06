@@ -31,7 +31,9 @@ namespace alamo::commands {
 
 inline constexpr uint16_t kWireVersion = 2;  // canonical format (v1 = stage-1 typed orders, retired)
 inline constexpr size_t kCommandHeaderBytes = 28;
-inline constexpr uint8_t kMaxPlayerSlots = 16;
+// [port] PlayerList cap (the original keeps a vector with no fixed cap). 32 since Q6 (was 16): Thrawn's Revenge campaigns
+// have 22 players. The network wire format's player_bits (4) is separate and unchanged (multiplayer is out of scope).
+inline constexpr uint8_t kMaxPlayerSlots = 32;
 inline constexpr uint32_t kMaxPayloadBytes = 1u << 20;  // decode guard
 
 // Who produced the order. Player/Network go through the scheduler; AI/Script use the direct path

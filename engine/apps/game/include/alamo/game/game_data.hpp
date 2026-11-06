@@ -70,6 +70,15 @@ struct GameData {
     std::unique_ptr<sim::BattleCatalog> catalog;
     std::shared_ptr<AiData> ai;  // null: no AI data / built without engine/ai galactic AI
     std::vector<std::string> diagnostics;
+    // Q5: one record per loader step, in load order; the step's diagnostics are diagnostics[first_diag, + diag_count).
+    // ms is wall clock (reports only, never read by the sim).
+    struct LoadStage {
+        std::string name;
+        size_t first_diag = 0, diag_count = 0;
+        double ms = 0;
+        bool ok = true;
+    };
+    std::vector<LoadStage> stages;
     std::vector<std::string> args;  // N1 / t09: the VFS command line the data was loaded with (save descriptors)
     // N1 / t09: sim::fingerprint_types of `types`, computed on first use (saves / loads only; one process-wide cache).
     uint64_t types_fingerprint() const;

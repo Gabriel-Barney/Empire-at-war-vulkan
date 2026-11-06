@@ -169,9 +169,12 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
     // 2. The host (a replay rebuilds the pipeline and takes the recorded seed before the session starts).
     sim::SimConfig cfg;
     cfg.seed = spec_.seed;
-    cfg.players = static_cast<uint32_t>(std::clamp<size_t>(setup_.players.size(), 8, sim::kMaxPlayers));
+    cfg.players = sim::session_players(setup_.players.size());
     host_ = std::make_unique<sim::SimHost>(d.types, *js_, cfg);
     if (replay) host_->replay_from(replay);
+    // q6 t06: the GameScoring script, re-created by every new session before the players and plots (GAME_SCORING.md).
+    if (const auto scoring = d.db.constants().get("Game_Scoring_Script_Name"))
+        host_->set_scoring_script(d.files.get(), std::string(*scoring));
     galactic::GalacticSim* gs = host_->start_galactic(d.rules, setup_, diag);
     if (!gs) return fail("galactic session did not start");
     gs->set_emit_events(true);

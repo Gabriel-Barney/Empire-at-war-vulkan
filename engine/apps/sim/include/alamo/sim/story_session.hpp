@@ -174,7 +174,8 @@ struct StoryPlotSet {
 };
 
 // The campaign's plot sets: for every player in player-list order, the campaign tag
-// "<faction name>_Story_Name" (Rebel_Story_Name, Empire_Story_Name, Underworld_Story_Name ...).
+// "<faction name>_Story_Name" (Rebel_Story_Name, Empire_Story_Name, Underworld_Story_Name ...), else (Q6 [port]) the
+// faction's entry in the campaign's <Story_Name> "Faction, plot file, ..." list (mods: Thrawn's Revenge).
 std::vector<StoryPlotSet> campaign_plot_sets(const data::CampaignDef& campaign, const galactic::GalacticSim& sim);
 
 struct StoryStart {

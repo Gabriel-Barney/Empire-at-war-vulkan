@@ -836,6 +836,107 @@ static Run run(const World& w, const FileProvider& files, int32_t workers, uint6
     CHECK(host.story()->lua_messages().empty());
     return out;
 }
+
+// Q6: a campaign with more players than the default session (Thrawn's Revenge: 22). The host refuses it at the default
+// size (those players would get no controller), starts it sized with session_players, and every player has a controller
+// slot; <Story_Name> "Faction, file" pairs give plot sets to factions without a <Faction>_Story_Name.
+static void test_many_players(const World& w) {
+    CHECK(session_players(3) == 8 && session_players(22) == 22 && session_players(100) == kMaxPlayers);
+    GalacticRules r = rules();
+    GalacticSetup s = setup();
+    for (uint32_t i = 0; i < 17; ++i) {  // 3 + 17 = 20 players: Mod_0..Mod_16 (planet-less AI factions)
+        FactionRules f;
+        f.name = "Mod_" + std::to_string(i);
+        f.can_control_planets = f.is_playable = true;
+        r.factions.push_back(f);
+        PlayerSetup p;
+        p.faction = static_cast<uint32_t>(r.factions.size() - 1);
+        p.ai = true;
+        p.credits = 1000.0f;
+        s.players.push_back(p);
+    }
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    {
+        SimHost host(w.types, js, SimConfig{});
+        std::vector<std::string> diag;
+        CHECK(host.start_galactic(r, s, &diag) == nullptr);
+        CHECK(!diag.empty() && diag.front().find("20 players") != std::string::npos);
+    }
+    SimConfig cfg;
+    cfg.players = session_players(s.players.size());
+    SimHost host(w.types, js, cfg);
+    GalacticSim* gs = host.start_galactic(r, s);
+    CHECK(gs != nullptr && host.players() == 20);
+    if (!gs) return;
+    uint64_t last_frame = 0;
+    host.set_controller(19, [&last_frame](SimHost&, uint8_t, uint64_t frame) { last_frame = frame; });
+    host.run_fast(5);
+    CHECK(last_frame > 0);  // the last player's controller runs
+
+    data::CampaignDef c;
+    c.raw = {{"Empire_Story_Name", "Story_Plots_E.xml"},
+             {"Story_Name", " Empire, Ignored.xml, Mod_3 , Sub\\Story_Plots_M3.xml,\n Mod_16, M16.xml, Dangling "},
+             {"Story_Name", "Mod_3, Later.xml, Mod_5, M5.xml"}};
+    const std::vector<StoryPlotSet> sets = campaign_plot_sets(c, *gs);
+    CHECK(sets.size() == 4);
+    if (sets.size() == 4) {
+        CHECK(sets[0].player == pEmpire && sets[0].plots_file == "Story_Plots_E.xml");  // the faction tag wins
+        CHECK(sets[1].player == 3 + 3 && sets[1].plots_file == "Sub\\Story_Plots_M3.xml");  // the first pair wins
+        CHECK(sets[2].player == 3 + 5 && sets[2].plots_file == "M5.xml");
+        CHECK(sets[3].player == 3 + 16 && sets[3].plots_file == "M16.xml");
+    }
+}
+
+// q6 t06 (GAME_SCORING.md §1.2 / §1.3): the GameScoring script is re-created at every new session, after the GlobalValue
+// clear and before the plots load, so a value its Base_Definitions sets (Thrawn's Revenge: MOD_ID) reaches the plot
+// scripts' Base_Definitions.
+static void test_scoring_script(const World& w) {
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_scoring";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/Scripts/Miscellaneous/GameScoring.lua",
+               "ScriptPoolCount = 0\n"
+               "function Base_Definitions()\n"
+               "  GlobalValue.Set(\"Scoring_Runs\", (GlobalValue.Get(\"Scoring_Runs\") or 0) + 1)\n"
+               "  GlobalValue.Set(\"MOD_ID\", \"TEST_MOD\")\n"
+               "end\n"
+               "function main() end\n");
+    write_file(root / "Data/XML/Story_Plots_Scoring.xml",
+               "<Story_Mode_Plots><Lua_Script>Story_Scoring</Lua_Script><Active_Plot>Story_Scoring_Plot.xml</Active_Plot>"
+               "<Suspended_Plot /></Story_Mode_Plots>\n");
+    write_file(root / "Data/XML/Story_Scoring_Plot.xml",
+               "<Story><Event Name=\"Begin\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event></Story>\n");
+    write_file(root / "Data/Scripts/Story/Story_Scoring.lua",
+               "function Base_Definitions() GlobalValue.Set(\"Plot_Saw\", GlobalValue.Get(\"MOD_ID\")) end\n"
+               "function main() end\n");
+    DirectoryProvider files(path_to_utf8(root));
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    const GalacticRules r = rules();  // GalacticSim keeps a reference
+    const GalacticSetup su = setup();
+    SimHost host(w.types, js, SimConfig{});
+    host.set_scoring_script(&files, "GameScoring");
+    for (int session = 0; session < 2; ++session) {
+        GalacticSim* gs = host.start_galactic(r, su);
+        CHECK(gs != nullptr && host.scoring_vm() != nullptr);
+        if (!gs) return;
+        for (const std::string& m : host.scoring_messages()) std::printf("  scoring: %s\n", m.c_str());
+        CHECK(host.scoring_messages().empty());
+        // A fresh state each session over the cleared table: the run counter starts again at 1.
+        CHECK(host.global_values()->get("Scoring_Runs").number == 1.0);
+        StoryStart st;
+        st.files = &files;
+        st.plot_sets = {{pEmpire, "Story_Plots_Scoring.xml"}};
+        CHECK(host.start_story(st));
+        CHECK(host.global_values()->get("Plot_Saw").text == "TEST_MOD");
+        host.run_fast(3);
+        CHECK(host.end_game_mode());  // the stack empties: the next start_galactic is a new session
+        CHECK(host.scoring_vm() == nullptr);
+    }
+    // No name: no script, nothing written.
+    SimHost plain(w.types, js, SimConfig{});
+    CHECK(plain.start_galactic(r, su) != nullptr);
+    CHECK(plain.scoring_vm() == nullptr && plain.global_values()->get("MOD_ID").kind == lua::AiGlobalValue::Nil);
+}
 }  // namespace story_test
 
 static void test_story_synthetic(const World& w) {
@@ -2127,6 +2228,8 @@ int main(int argc, char** argv) {
     test_story_load_construct(*world);  // a2j t05: starting-force / spawn CONSTRUCT and the load-time event stream
     test_story_wave1();
     test_story_wave2a();
+    story_test::test_many_players(*world);  // Q6
+    story_test::test_scoring_script(*world);  // q6 t06
 #else
     std::printf("story: built without engine/lua, skipped\n");
 #endif

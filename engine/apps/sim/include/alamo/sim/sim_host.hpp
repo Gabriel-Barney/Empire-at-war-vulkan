@@ -72,11 +72,16 @@
 #include "alamo/sim/save_session.hpp"
 #include "alamo/sim/story_session.hpp"
 #ifdef ALAMO_SIM_HAVE_STORY
+#include "alamo/lua/lua_vm.hpp"           // q6 t06: the GameScoring script VM
 #include "alamo/lua/script_remaining.hpp"  // Int-final: GlobalValueStore
 #endif
 
+namespace alamo {
+class FileProvider;
+}
 namespace alamo::lua {
 class GlobalValueStore;
+class LuaVm;
 }
 namespace alamo::galactic {
 struct GalacticRules;
@@ -85,10 +90,16 @@ struct GalacticSetup;
 
 namespace alamo::sim {
 
+// Q6: SimConfig::players for a galactic session over a setup with `setup_players` players: at least 8 (the default, so
+// stock FoC sessions keep their CRC), at most kMaxPlayers (start_galactic refuses a setup with more players than this).
+inline uint32_t session_players(size_t setup_players) {
+    return static_cast<uint32_t>(setup_players < 8 ? 8 : setup_players > kMaxPlayers ? kMaxPlayers : setup_players);
+}
+
 struct SimConfig {
     uint32_t seed = 0;                                          // synced RNG session seed
     uint32_t free_seed = 0x12345678u;                           // free RNG (never sim state)
-    uint32_t players = 8;                                       // PlayerList size (<= 16)
+    uint32_t players = 8;                                       // PlayerList size (<= kMaxPlayers); see session_players
     commands::SchedulerConfig scheduler = commands::SchedulerConfig::single_player();
     bool parallel_crc = true;                                   // CRC hashers on the job system
     bool story_crc = false;                                     // register the "story" CRC system (S4)
@@ -109,7 +120,8 @@ public:
     bool end_game_mode();                 // End_Game_Mode (pop)
     // Galactic campaign with the S3 economy: Start_Game(galactic) (new session if the stack is empty),
     // then GalacticSim::start on the mode's primary store with the SYNCED RNG. Returns nullptr (and
-    // pops the mode) when the setup is unusable. Galactic events (MoveObjectToObject,
+    // pops the mode) when the setup is unusable, or has more players than SimConfig::players (Q6: those players would
+    // get no controller and no orders; size the host with session_players). Galactic events (MoveObjectToObject,
     // MoveThroughObjects, Production, Invade) then go to GalacticSim::handle_command.
     galactic::GalacticSim* start_galactic(const galactic::GalacticRules& rules, const galactic::GalacticSetup& setup,
                                           std::vector<std::string>* diagnostics = nullptr);
@@ -126,6 +138,17 @@ public:
     // hosts, the galactic AI (GalacticAiWorld::set_global_values). Hashed at the end of the "frame" CRC section only
     // while it is non-empty (sessions that never set a GlobalValue keep their CRC stream). Null without engine/lua.
     lua::GlobalValueStore* global_values();
+    // q6 t06 (docs/re/GAME_SCORING.md): the GameScoring script (GameConstants Game_Scoring_Script_Name), re-created at
+    // every new session in start_game (empty stack): after the GlobalValue clear, before start_galactic sets the
+    // players up and before start_story loads the plots, a fresh VM runs the file's top level and Base_Definitions()
+    // and gets its main thread. Mods set session globals there (Thrawn's Revenge: GlobalValue MOD_ID, which its plot
+    // scripts read; vanilla: Allow_AI_Controlled_Fog_Reveal = 1, read by the BurnUnits AI plans). Dropped when the
+    // stack empties [port: the original keeps it until the next session]. Empty name (default) = no script.
+    // [port] Not serviced yet (no main / ServiceRate pump) and no event calls (Game_Mode_Starting_Event, ...).
+    void set_scoring_script(const FileProvider* files, std::string name);
+    const lua::LuaVm* scoring_vm() const;
+    // "<frame> GameScoring: <what>" lines: load / Base_Definitions errors and the script's own messages.
+    const std::vector<std::string>& scoring_messages() const { return scoring_messages_; }
     GameModeManager& modes() { return modes_; }
     const GameModeManager& modes() const { return modes_; }
     TacticalMode* tactical() { return modes_.top_tactical(); }
@@ -316,6 +339,11 @@ private:
 #ifdef ALAMO_SIM_HAVE_STORY
     lua::GlobalValueStore global_values_;  // Int-final
 #endif
+    // q6 t06: the GameScoring script
+    const FileProvider* scoring_files_ = nullptr;
+    std::string scoring_name_;
+    std::vector<std::string> scoring_messages_;
+    void create_scoring(GameMode& m);
     uint32_t last_present_ms_ = 0;
     bool have_present_ = false;
     // N1 save / load
@@ -338,6 +366,10 @@ private:
     // only (0 = every mode, the depth must match).
     uint32_t load_base_depth_ = 0;
     void read_chunks(const SaveFile& in, LoadReport& rep);
+#ifdef ALAMO_SIM_HAVE_STORY
+    // q6 t06: last member, so it is destroyed before the stores, the RNG and the GlobalValue table it points to.
+    std::unique_ptr<lua::LuaVm> scoring_vm_;
+#endif
 };
 
 }  // namespace alamo::sim

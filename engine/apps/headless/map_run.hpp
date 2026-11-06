@@ -33,6 +33,9 @@ struct MapRunOptions {
     // ai::tactical::kDefaultPpLatency). Not recorded in saves.
     bool pp_streams = true;
     int64_t pp_latency = -1;  // < 0: the default
+    // q6 t06 (--story, --galactic-ai): --scoring runs the GameConstants Game_Scoring_Script_Name script at the session start
+    // (SimHost::set_scoring_script) as the game does. Off by default: its GlobalValue writes enter the frame CRC.
+    bool scoring = false;
 };
 
 int map_run(const MapRunOptions& opt);
