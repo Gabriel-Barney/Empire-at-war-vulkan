@@ -29,12 +29,7 @@ GalacticAiWorld::Impl::Impl(gal::GalacticSim& s, objects::ObjectStore& st, const
                             std::vector<GalacticAiTypeInfo> ti, AiOrderSink snk, GalacticAiConfig c)
     : sim(s), store(st), types(ty), files(fp), rng(r), defs(d), eqs(e), tinfo(std::move(ti)), sink(std::move(snk)),
       cfg(std::move(c)), res(s, tinfo, nullptr, {}) {
-    for (GalacticAiTypeInfo& t : tinfo)
-        if (t.category_mask == 0) {
-            uint64_t m = 0;
-            for (const std::string& n : t.categories) m |= ai_category_bit(n);
-            t.category_mask = m;
-        }
+    fill_unset_category_masks(tinfo, types ? &types->enums() : nullptr);  // A2k t06: the data-loaded converter
     type_mask.assign(sim.rules().types.size(), 0u);
     for (size_t t = 0; t < type_mask.size() && t < tinfo.size(); ++t) type_mask[t] = tinfo[t].category_mask;
     init_queue_phases();  // synced draws, 2 per planet (A2J_RE_BUILD_MARKET §4)
@@ -2430,7 +2425,7 @@ std::vector<GalacticAiTypeInfo> make_galactic_ai_type_info(const objects::GameOb
             }
         }
     }
-    fill_category_masks(out);
+    fill_category_masks(out, &types.enums());  // A2k t06: Data\XML\Enum (mod categories get their bits)
     return out;
 }
 

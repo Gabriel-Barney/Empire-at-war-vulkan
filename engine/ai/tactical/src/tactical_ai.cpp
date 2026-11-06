@@ -3411,7 +3411,11 @@ TacticalAiWorld::TacticalAiWorld(objects::ObjectStore& store, const objects::Gam
     });
     w.gate.start_game();
     // Shared perception: threat grid over the map, evaluator handles; land zone graph.
-    w.perc.init(w.cfg.mode, w.cfg.constants, w.cfg.map, static_cast<uint32_t>(std::max<size_t>(w.cfg.lua_players.size(), 1)), w.cfg.zones);
+    // A2k t06: category names convert with the types' data-loaded GameObjectCategoryType converter (mod categories).
+    TacticalPerceptionConfig pcfg;
+    if (w.types) pcfg.category_mask = category_mask_from(w.types->enums());
+    w.perc.init(w.cfg.mode, w.cfg.constants, w.cfg.map, static_cast<uint32_t>(std::max<size_t>(w.cfg.lua_players.size(), 1)), w.cfg.zones,
+                pcfg);
     if (w.cfg.mode == TacticalMode::Land && !w.cfg.zones.empty()) w.zones.build(w.cfg.zones);
 }
 

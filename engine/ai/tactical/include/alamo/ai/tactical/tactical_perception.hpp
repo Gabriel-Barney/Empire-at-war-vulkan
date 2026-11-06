@@ -64,6 +64,9 @@ class StateHasher;
 class ByteWriter;
 class ByteReader;
 }  // namespace alamo
+namespace alamo::objects {
+class EnumRegistry;
+}
 
 namespace alamo::ai::tactical {
 
@@ -80,11 +83,17 @@ struct PerceptionTarget {
 };
 
 struct TacticalPerceptionConfig {
-    // GameObjectCategoryType name -> mask (0 unknown). Default: the objects module's built-in table.
+    // GameObjectCategoryType name -> mask (0 unknown). Default: the objects module's built-in table; TacticalAiWorld sets
+    // category_mask_from(types->enums()) when it has the types (A2k t06).
     std::function<uint64_t(std::string_view)> category_mask;
     // [M] cell-force memory quirk (threat_grid.hpp); true = documented behaviour.
     bool memory_counted_when_not_fogged = true;
 };
+
+// A2k t06: GameObjectCategoryType name -> bits with the converter of `enums` (objects::GameObjectTypes::enums(): loaded from
+// Data\XML\Enum\GameObjectCategoryType.xml through the VFS, so mod categories get their bits); 0 for an unknown name or
+// a discarded converter. `enums` must outlive the returned function.
+std::function<uint64_t(std::string_view)> category_mask_from(const objects::EnumRegistry& enums);
 
 // A1_READINGS §30.1 [H]: the list (iteration) order of the original's MSVC stdext::hash_set<uint32> of zone cells, as a
 // pure function of the insertion sequence (integer code only). h(k) = minstd((k ^ 0xdeadbeef) & 0x7fffffff), bucket =

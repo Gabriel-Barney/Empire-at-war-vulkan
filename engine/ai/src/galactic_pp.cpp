@@ -281,9 +281,10 @@ struct GalPp {
     // RequiredCategories masks
     std::vector<uint64_t> required_masks() const {
         std::vector<uint64_t> out;
+        const objects::EnumRegistry* enums = w.types ? &w.types->enums() : nullptr;  // A2k t06: Data\XML\Enum
         for (const std::string& r : def.required_categories) {
             uint64_t m = 0;
-            for (const std::string& n : ai_split(r, "|")) m |= ai_category_bit(n);
+            for (const std::string& n : ai_split(r, "|")) m |= ai_category_bit(n, enums);
             out.push_back(m);
         }
         return out;
@@ -908,13 +909,16 @@ const std::vector<uint32_t>& GalacticAiWorld::Impl::team_type_list(uint32_t plan
     std::vector<uint32_t> out;
     uint64_t mask = 0;
     bool is_mask = !t.names.empty();
+    const objects::EnumRegistry* enums = types ? &types->enums() : nullptr;  // A2k t06: Data\XML\Enum
     for (const std::string& n : t.names) {
-        const uint64_t b = ai_category_bit(n);
+        // [port, unchanged] "a category name" = converts to nonzero bits (or is None); a mod name with value 0 reads as
+        // a type name.
+        const uint64_t b = ai_category_bit(n, enums);
         if (b == 0 && !ai_iequal(n, "None")) is_mask = false;
         mask |= b;
     }
     uint64_t filter = 0;
-    for (const std::string& n : d.masks) filter |= ai_category_bit(n);
+    for (const std::string& n : d.masks) filter |= ai_category_bit(n, enums);
     if (is_mask) {
         for (size_t ty = 0; ty < rules.types.size(); ++ty) {
             const gal::TypeInfo& x = rules.types[ty];
