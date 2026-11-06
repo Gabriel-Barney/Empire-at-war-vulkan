@@ -25,6 +25,7 @@ add_library(alamo_game_core STATIC
   src/mod_check.cpp
   src/benchmark.cpp
   src/benchmark_scenario.cpp
+  src/benchmark_save.cpp
 )
 target_include_directories(alamo_game_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(alamo_game_core PUBLIC alamo_sim alamo_vfs alamo_data alamo_core alamo_engine_flags)
@@ -122,6 +123,18 @@ add_executable(alamo_game_mod_check_tests tests/test_mod_check.cpp)
 target_link_libraries(alamo_game_mod_check_tests PRIVATE alamo_core alamo_game_core)
 add_test(NAME alamo_game_mod_check_tests COMMAND alamo_game_mod_check_tests)
 set_tests_properties(alamo_game_mod_check_tests PROPERTIES TIMEOUT 300)
+# modc t07: the synthetic mod of testdata/mod_fixture (a new faction, unit, planet, campaign and a Lua override) through
+# the real MODPATH= route, no game data; read only (no fixture path shared with any other test). The second entry runs the
+# exe itself and checks its JSON summary (docs/MODS.md section 5.1).
+add_executable(alamo_game_mod_fixture_tests tests/test_mod_fixture.cpp)
+target_link_libraries(alamo_game_mod_fixture_tests PRIVATE alamo_core alamo_game_core)
+add_test(NAME alamo_game_mod_fixture_tests COMMAND alamo_game_mod_fixture_tests ${CMAKE_CURRENT_SOURCE_DIR}/testdata/mod_fixture)
+set_tests_properties(alamo_game_mod_fixture_tests PROPERTIES TIMEOUT 120)
+add_test(NAME alamo_mod_check_fixture
+         COMMAND alamo_mod_check --game ${CMAKE_CURRENT_SOURCE_DIR}/testdata/mod_fixture/corruption MODPATH=Mods/FixtureMod --json -)
+set_tests_properties(alamo_mod_check_fixture PROPERTIES TIMEOUT 120
+                     PASS_REGULAR_EXPRESSION "\"result\": \"ok\",[^{]*\"errors\": 0,"
+                     FAIL_REGULAR_EXPRESSION "\"run_errors\": \\[[^]]")
 
 # q6 t08: AI player types (Basic_AI / AI_Player_Control) and default skirmish forces for mod factions on synthetic data in its
 # own temp folder; with ALAMO_FOC_DATA also the shipped factions (they resolve as the port's hard-coded tables).
@@ -255,6 +268,17 @@ function(alamo_game_add_exe)
                    -P ${PROJECT_SOURCE_DIR}/engine/apps/game/bench_scenario_check.cmake)
   set_tests_properties(alamo_game_bench_scenario PROPERTIES TIMEOUT 1800 FIXTURES_REQUIRED alamo_game_smoke_saveload_run)
   alamo_label_slow(alamo_game_bench_scenario)
+  # bm3: the committed rendered scenes (tests/benchmark/*.abench with `host game`): each runs 120 ticks hidden and its fingerprint
+  # matches (bench_scene_check.cmake; skipped without ALAMO_FOC_DATA). One entry per scene, each with its own output folder.
+  foreach(_scene space_battle_game nebula_battle water_battle)
+    if(EXISTS ${PROJECT_SOURCE_DIR}/tests/benchmark/${_scene}.abench)
+      add_test(NAME alamo_game_bench_scene_${_scene}
+               COMMAND ${CMAKE_COMMAND} -DGAME=$<TARGET_FILE:alamo_game> -DSCENE=${PROJECT_SOURCE_DIR}/tests/benchmark/${_scene}.abench
+                       -DOUT=${CMAKE_BINARY_DIR}/smoke_out/bench/scene_${_scene} -P ${PROJECT_SOURCE_DIR}/engine/apps/game/bench_scene_check.cmake)
+      set_tests_properties(alamo_game_bench_scene_${_scene} PROPERTIES TIMEOUT 600)
+      alamo_label_slow(alamo_game_bench_scene_${_scene})
+    endif()
+  endforeach()
   # bm2 (no data, no window): BM1's headless scenario is refused with the reason (its save is an alamo_headless harness
   # session, not an alamo_game session) before anything loads.
   add_test(NAME alamo_game_bench_scenario_headless

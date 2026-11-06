@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "alamo/game/benchmark.hpp"
+#include "alamo/game/benchmark_save.hpp"
 #include "alamo/game/benchmark_scenario.hpp"
 
 using namespace alamo;
@@ -357,6 +358,85 @@ void test_report_bm2() {
 
 }  // namespace
 
+// bm3: the load / first-use numbers (bench_hitches, the report keys) and the --bench-new-save / --bench-maps flags.
+void test_bm3() {
+    BenchReport r;
+    std::vector<float> ms(600, 5.0f);
+    ms[0] = 80.0f;   // the cold first frame
+    ms[7] = 30.0f;   // a hitch
+    ms[450] = 26.0f; // a hitch after the early window
+    ms[451] = 24.0f; // under the 25 ms floor: not one
+    r.frame_ms = frame_time_stats(ms);
+    CHECK(r.frame_ms.median == 5.0);
+    bench_hitches(ms, r);
+    CHECK(r.hitch_threshold_ms == 25.0);  // 4 x 5 ms = 20 ms is below the floor
+    CHECK(r.hitch_count == 3 && r.hitches.size() == 3);
+    CHECK(r.hitches[0].first == 0 && r.hitches[0].second == 80.0f);  // worst first
+    CHECK(r.hitches[1].first == 7 && r.hitches[2].first == 450);
+    CHECK(r.early_ms.count == kEarlyFrames && r.early_ms.worst == 80.0);  // only the first kEarlyFrames frames
+    std::vector<float> slow(100, 100.0f);  // a slow scene: the threshold follows the median (4 x 100 ms), nothing is a hitch
+    slow[3] = 399.0f;
+    BenchReport s;
+    s.frame_ms = frame_time_stats(slow);
+    bench_hitches(slow, s);
+    CHECK(s.hitch_threshold_ms == 400.0 && s.hitch_count == 0 && s.hitches.empty());
+    std::vector<float> many(200, 5.0f);
+    for (size_t k = 0; k < 20; ++k) many[k * 5] = 40.0f + static_cast<float>(k);
+    BenchReport m;
+    m.frame_ms = frame_time_stats(many);
+    bench_hitches(many, m);
+    CHECK(m.hitch_count == 20 && m.hitches.size() == kMaxHitches && m.hitches[0].second == 59.0f);
+    BenchReport e;
+    bench_hitches(std::vector<float>{}, e);  // no frames: nothing, no crash
+    CHECK(e.hitch_count == 0 && e.early_ms.count == 0);
+
+    r.load_ms = 1234.5;
+    r.hitch_threshold_ms = 25;
+    const std::string j = bench_report_json(r);
+    CHECK(j.find("\"load_ms\": 1234.5000,") != std::string::npos);
+    CHECK(j.find("\"early_ms\": {\"count\": 300") != std::string::npos);
+    CHECK(j.find("\"hitches\": {\"threshold_ms\": 25.0000, \"count\": 3, \"worst\": [[0, 80.0000], [7, 30.0000], [450, 26.0000]]},\n  \"autopilot\"") !=
+          std::string::npos);
+    CHECK(j.find("\"gpu_ms\"") < j.find("\"load_ms\"") && j.find("\"load_ms\"") < j.find("\"hitches\""));
+
+    auto parse = [](std::vector<std::string> a, BenchNewSave& o, std::string& err) {
+        for (size_t i = 0; i < a.size(); ++i) {
+            const int k = parse_bench_new_arg(a, i, o, &err);
+            if (k <= 0) return k;
+        }
+        return 1;
+    };
+    BenchNewSave o;
+    std::string err;
+    CHECK(!o.active() && o.scale == 1 && o.human == "Empire" && o.ai == "Rebel" && o.save_after == 300 && o.seed == 1);
+    CHECK(parse({"--bench-new-save", "a.alsv", "--bench-map", "_MP_SPACE_KUAT", "--bench-human", "Rebel", "--bench-ai", "Empire", "--bench-scale", "6",
+                 "--bench-save-after", "1000", "--bench-seed", "9"}, o, err) == 1);
+    CHECK(o.out == "a.alsv" && o.map == "_MP_SPACE_KUAT" && o.human == "Rebel" && o.ai == "Empire" && o.scale == 6 && o.save_after == 1000 && o.seed == 9);
+    CHECK(o.active() && check_bench_new_save(o).empty());
+    BenchNewSave p;
+    CHECK(parse({"--bench-maps"}, p, err) == 1 && p.maps && p.active() && check_bench_new_save(p).empty());
+    for (const auto& bad : std::vector<std::vector<std::string>>{{"--bench-scale", "0"}, {"--bench-scale", "17"}, {"--bench-scale", "x"}, {"--bench-save-after", "-1"},
+                                                                  {"--bench-seed", "4294967296"}, {"--bench-map"}}) {
+        BenchNewSave x;
+        err.clear();
+        CHECK(parse(bad, x, err) == -1 && !err.empty());
+    }
+    BenchNewSave u;
+    CHECK(parse({"--bench-preset", "bm-low"}, u, err) == 0);  // not ours
+    BenchNewSave n;
+    n.out = "a.alsv";
+    CHECK(check_bench_new_save(n).find("--bench-map") != std::string::npos);  // a map is required
+    n.map = "_MP_SPACE_KUAT";
+    CHECK(check_bench_new_save(n).empty());
+    n.ai = "EMPIRE";
+    CHECK(check_bench_new_save(n).find("different") != std::string::npos);  // factions compare without case
+    n.ai = "";
+    CHECK(!check_bench_new_save(n).empty());
+    n.ai = "Rebel";
+    n.maps = true;
+    CHECK(check_bench_new_save(n).find("do not mix") != std::string::npos);
+}
+
 int main() {
     test_flags();
     test_presets();
@@ -365,6 +445,7 @@ int main() {
     test_report();
     test_scenario();
     test_report_bm2();
+    test_bm3();
     if (g_fail) {
         std::printf("alamo_game_benchmark_tests: %d FAILED\n", g_fail);
         return 1;

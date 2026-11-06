@@ -212,10 +212,83 @@ headless refusal, report keys), `alamo_game_bench_scenario_headless` (no data: a
 match, 120 counted frames, GPU scopes, identical PNGs in both runs, the camera moved (first and last PNG differ), and a changed
 pinned file refused.
 
+### BM3 - stress scenes, load scenes and reports (2026-11-06, group bm3)
+
+**The scenes** (`tests/benchmark/`; every one is a committed scenario: `.abench` + `.alsv` + `.acmd` + `.crc`, none carries a
+machine-specific path). Reference timings are in [`PERFORMANCE.md`](PERFORMANCE.md) ("Benchmark scenes").
+
+| Scene | Host | What it stresses | Made with | Length |
+|---|---|---|---|---|
+| `space_battle` (BM1) | headless | AI-vs-AI space battle, 4x fleets | `--skirmish-ai foc-fleet` | 1800 ticks |
+| `galactic_late` (t01) | headless | late-game galaxy, all AI: FoC `Sandbox_Equal_Footing_Underworld` (56 planets, 4 AI players), saved at tick 30000: galactic AI goal scoring, auto-resolved conflicts, story Lua | `--save-session galactic --campaign ... --battles auto --story` | 27000 ticks (15 game minutes) |
+| `land_battle` (t02) | headless | one large land battle (pathfinding, infantry, vehicles, tactical AI): `_MP_LAND_UTAPAU`, Empire vs Rebel, six times the `foc-land` company lists | `--skirmish-ai foc-land-army` (new kind, `kArmyScale` = 6) | 3600 ticks (2 game minutes) |
+| `space_battle_game` (bm2c t01) | game | rendered large space battle: `_MP_SPACE_KUAT`, an idle Empire fleet against the Rebel AI, x6, the camera circles the fight | `--bench-new-save` | 1800 ticks, 3600 frames (fixed, 2 per tick, `bm-high`) |
+| `nebula_battle` (t03) | game | explosions + nebula / asteroid overdraw: `_MP_SPACE_DAGOBAH`, x6, the camera flies into the nebula in front of the fight | `--bench-new-save` | same |
+| `water_battle` (t03) | game | water reflection / refraction + rain: `_MP_LAND_KAMINO` (60 % of the grid under water, reflection and refraction 1.0), x4 ground forces, low camera | `--bench-new-save` | same |
+
+The headless scenes run with `alamo_headless --bench tests/benchmark/<name>.abench` (BM1; `tools\benchmark\run_bench.cmd <name>`), the
+rendered ones with `alamo_game --hidden --bench-scenario tests/benchmark/<name>.abench` (BM2; add `--bench-report FILE`).
+
+**Why the rendered scenes are game-made.** `alamo_game` cannot load an `alamo_headless` harness save, and a game save of the attract
+demo cannot be made, so the rendered scenes start from a *skirmish session built by alamo_game's own `GameSession`*:
+`alamo_game --bench-new-save FILE --bench-map MAP [--bench-human F] [--bench-ai F] [--bench-scale N] [--bench-save-after T]
+[--bench-seed S]` (no window, no GPU: `benchmark_save.hpp`) starts the skirmish (the human side's default fleet or army repeated
+N times against the AI's, N 1..16), runs it until the battle is on the mode stack plus T ticks and writes the save. The human side takes
+no orders in a benchmark (it only defends; the AI side attacks and keeps reinforcing). The descriptor's game-data folder is cleared and
+the save has no wall-clock time, so the same arguments make the same bytes on any machine. `alamo_game --bench-maps` lists the
+official skirmish maps with what a scene needs to pick one (space / land, grid, water type / height / share of vertices under it,
+reflection and refraction settings, sky domes, weather, and the positions of placed nebula / cloud / field objects); `--bench-trace N`
+(a benchmark run) prints every Nth tick each owner's object count, centroid and bounding box, which is how the camera paths were
+aimed.
+
+**A game scenario's recipe is its manifest**: the committed `.abench` carries a `make` line (the `--bench-new-save` arguments minus the
+output) plus the format-2 keys (`host game`, `mode`, `preset`, `frames_per_tick`, `camera_anchor`, `camera ...`).
+
+**Regenerate** (after a save-format, sim-behaviour or game-data change: "scenario changed, not comparable", exit 3):
+`alamo_game --hidden --bench-regen tests/benchmark/<name>.abench` remakes the session from the `make` line, runs
+`--bench-make` on it and bumps `version` when the files changed (headless scenes: `tools\benchmark\regen_scenario.cmd <name>`).
+`tools\regen_goldens.cmd --bench-check` checks **every** scene (headless ones with `alamo_headless --bench --runs 1`, game ones with a
+120-tick hidden `alamo_game --bench-scenario` run) and `tools\regen_goldens.cmd --only bench` remakes the stale ones; never by hand.
+New scene: write the recipe (a manifest with `name`, `description`, the `make` line and the format-2 keys), run
+`alamo_game --hidden --bench-regen` on it (or `alamo_headless --bench-make`), commit the four files.
+
+**Rebaseline** (a result file is a baseline for one scenario version on one PC): after an intended speed change run
+`tools\benchmark\run_suite.cmd` on a quiet machine (nothing else building or testing; a run is flagged NOISY when the CPU was busy
+before it), keep the JSON files under `logs\bench_suite\`, and compare against the previous ones with
+`python tools\benchmark\compare_results.py BEFORE.json AFTER.json`. Record the new numbers in `PERFORMANCE.md` with the commit.
+Never record a noisy run as a baseline.
+
+**Result comparison** (t06; `tools/benchmark/compare_results.py`, self-test `test_compare_results.py`, ctest `alamo_bench_compare_tool`):
+reads an `alamo-bench-result` (headless) or `alamo_game_benchmark` (game) file pair and prints metric / before / after / change / verdict
+(`faster`, `SLOWER`, `same` within `--threshold` percent, default 3; headless also the biggest profiler zones; game also the GPU scopes,
+the load time and the hitch count). It **refuses** (exit 2) two files of different kinds, scenario name, version, save or fingerprint
+digest, a run that was not comparable with its scenario, and (game) a different mode / preset / size / frames per tick / tick count, each
+with its own override (`--allow-different-scenario`, `--allow-different-settings`); a different machine or build is only a note
+(`--allow-different-machine` silences it). A noisy run is marked and never counts for `--fail-slower PCT` (exit 4).
+
+**Load scenes and first-use hitches** (t04): a rendered run now reports `load_ms` (from the save's load start to the first measured
+tick: the load screen, warm-up frames and every pipeline / model / texture the first view waits for), `early_ms` (statistics of the
+first 300 counted frames) and `hitches` (counted frames over max(25 ms, 4 x the median): their count and the worst eight as
+`[frame index, ms]`). `tools\benchmark\run_suite.cmd --load` runs the rendered scenes in real time (`--benchmark realtime
+--bench-ticks 300`) with a cold cache (a fresh empty `--cache-dir`: pipelines and shaders compile during the run) and then a warm one
+(the same directory again); the pairs show the cold-cache hitches. In fixed-frames runs the clock waits for the renderer to settle, so
+hitches only show in real-time mode.
+
+**Noise** (t05; `tools\benchmark\run_suite.cmd [--repeats N] [--scenes a,b]`): each scene N times as separate processes; per headline
+metric the min / max / mean, spread ((max - min) / mean) and coefficient of variation go to `logs\bench_suite\suite.json` and the
+console. See `PERFORMANCE.md` for the figures on the reference PC.
+
+**Tests**: `alamo_game_benchmark_tests` (extended: report keys `load_ms` / `early_ms` / `hitches`, hitch detection, the
+`--bench-new-save` / `--bench-maps` flags), `alamo_bench_compare_tool` (compare tool on synthetic files, no data),
+`alamo_headless_bench_galactic_late*` and `alamo_headless_bench_land_battle*` (slow, FoC data: CRCs of 1 / 4 / N workers equal the 0-worker
+run), `alamo_game_bench_scene_<name>` (slow, FoC data, `bench_scene_check.cmake`: 120 hidden ticks per rendered scene, fingerprint match,
+report keys).
+
 ## Port choices and per-step notes (tracked on the roadmap)
 
 This list holds the [port] / [inferred] / [M] choices and per-step notes. Finished ("✅ DONE") items were moved verbatim to `docs/PHASE4_HISTORY.md` on 2026-11-06 (section "Finished open-item notes moved from PHASE4.md"). Which items are still open is decided on the main roadmap, not by the tags here (the tag legend and counts that were here were moved verbatim to `docs/PHASE4_HISTORY.md` on 2026-11-06). Inline, ✅ marks a finished sub-item, often also struck through, and ⬜ marks one still open.
 
+- ⬜ **OPEN** · MODC (mod compatibility, 2026-11-06, modc t01): **Decision**: mods are loaded agnostically, through the same data mechanisms as base FoC, and `engine/` has no mod-specific code paths (binding decision: `DECISIONS.md` "Mod compatibility is agnostic", Gabriel 2026-11-03). Port choices: `MODPATH=` relative to the FoC folder; `STEAMMOD=` resolved from the Steam library folders without the Steam API (modc t10); mod-only port rules keyed on "a mod layer is loaded", never on which mod, listed in `MODS.md` §6. Spec, status per part and known violations: [`MODS.md`](MODS.md)
 - ⬜ **OPEN** · P4 sim: [inferred]/[port] (marked in code) — Default_Hero_Respawn_Time negative = no respawn (kept on purpose); respawn planet = nearest owned by squared distance; income-ability sources = the planet owner's structures / starbase / surface / stationary orbit objects, applied once, removed when gone; gambling evaluated on first service then every interval; Destroy_When_Used_As_Corruption_Prereq uses the type loader's ctor default (Yes; heroes set No), so Underworld_Merc requirements are consumed — P4 §5.3 says "vanilla: none" [L, probe]; the corruption accept's T +0xBA test is skipped (would refuse 62/65 planets); double departure (§6.1) = extra draw, scheduled once [L]; sabotage on the port's single structure list (no orbital special structures); powf -> repeated multiplication; BUY_BLACK_MARKET emitted at execute time for human buyers; tactical Autoresolve's retreating player retreats through the galactic write-back instead of the tactical retreat / vf9 [M]; MP branches (uncommon max-tech, remote humans) not modelled.
 - ⬜ **OPEN** (spec 2026-10-29: docs/re/ABILITY_VISUALS.md: stealth spring drives a Stealth_Color multiply + hardpoint hide + shadow off, HideWhenFogged = 0.25 s spring; tractor / energy-weapon / super-laser / laser-defense lines, jamming blob + radar drop; sim note: beam abilities spawn an Owner_Particle_Effect object per refresh; code left) · R5: [port] choices (marked in fog_view.hpp, surface_fx.hpp, sim_decorations.hpp, sim_view.hpp): whole-grid fog conversion with upload-on-change (the original uploads the camera rectangle); regrow per frame = step / 16 as an integer; HideWhenFogged fade linear over 15 ticks; SurfaceFX surface names for types 1..8 inferred, 9..11 unmapped; nested Surface_Settings flattened; decal random-draw order slot / rotation (no size draw since g1r t01), cap 256 live (oldest non-permanent dropped); UV_Slot pairs read as (column, row); a unit's trail is dropped with the unit; corpses use the damage alternate at health 0. Stage 2 [port] choices: ghost rules (which types, bind pose, removal when the spot is seen); reinforcement overlay shows the local grid; wake energy = speed / Max_Speed; footprint puffs listed 4 s; spin-away rates 3 / 0.6 rad/s, drift 40 u/s; attachment idle rate 1, looped; muzzle bone index read on the owner model (a hardpoint fire bone living in a Model_To_Attach needs SnapshotMuzzle::hardpoint, now carried by SimAnimation::Muzzle). ✅ ~~⬜ Still open: the reinforcement FOW sampler itself~~ sim side ✅ done (OI fog 2026-10-28, TACTICAL_GAPS §5.5: `TacticalBattle::fog_reinforce_overlay(player, cells)` = 0 inside a non-allied Reinforcement_Prevention_Radius, else 0xFF, per FOW cell, row 0 = max-y); render side open: feed it to the palette-3 texture instead of the player's own grid. ✅ Done (checked 2026-10-28): ✅ ~~the hardpoint index of muzzle flashes~~ (`SimAnimation::Muzzle::hardpoint` → `SnapshotMuzzle::hardpoint`); ✅ ~~game_main must call BattleView::set_space_reinforcement_overlay~~ (game_main.cpp calls it while a space reinforcement is being placed). **Host (game-host agent) feeds** (✅ done: game_render.cpp `BattleView`), per battle snapshot between ticks: `apply_battle_state(battle, snap, &table)`, `apply_battle_fog(battle, local_player, snap)` (local player marked human in the fog), `add_snapshot_corpses(snap, table, snapshot_corpses(SimAnimation::corpses(mode), frame))`; per frame `FogRenderer::update(scene.world(), *frame.fog, scene.space())`, `SimDecorations::update(frame)` + `apply(scene.world())` (with `model_bone_source`), `SimInstanceBuilder::set_visibility_source` from the AnimPoseCache; before `MapScene::start` `set_runtime_decals_enabled(true)`. **OI render (2026-10-28)**: palette-3 overlay fed by the sampler (`FogFrameInput::reinforce`, `apply_battle_fog_reinforce` while placing; game_render.cpp OI block); shields in the snapshot (`SnapshotObject::shield_fraction`, -1 none); ability state per object (`ability_bits`, `kSnapStealthMeshes`) and this tick's events derived against the previous snapshot (`set_snapshot_ability_events`: Activated / Deactivated / StealthOn / Off; the sim clears its own events inside the tick); consumer: stealth mesh swap (BASEMESH hidden, STEALTH shown, instant [port]); Lua Attach_Particle_Effect requests -> `snapshot_lua_effects` (since the battle's first frame [port: VM frame assumed global]) -> one system per request at the named bone (`lua_effect_key`). ⬜ Open: battle-host session for `alamo_render --sim` (not done: alamo_game BattleView is the battle-host render session); ability events have no other visual consumer yet. **OI2 pass (2026-10-28)**: ✅ the `alamo_render --sim` battle session is covered by alamo_game BattleView (it calls every battle feed; sim_main.cpp comment updated). Left, spec only: the stealth fade spring (0x592e80) and the other ability visuals (tractor, jamming, energy beam).
 - ⬜ **OPEN** · L1/S4 fog: [port]/[M] (marked in code) — Disable_Rendering without an argument = fog off (doc outcome); a non-number radius / dense radius is a script error (the original reads a null pointer); `FogOfWar(...)` called directly returns nothing; without an object hook the Lua fog view is owner + position only; LuaFOWCells handles of an earlier battle are no-ops (epoch); targeting filter step 4 ignores the obj +0x343 exemption; the station can-fire test skips protection (0x540140), readiness is a cooldown ratio (0x385c00 formula not reproduced) and the target assignment is an attack order; Force Sight recharge starts at activation; the reveal-ping object lives one tick (the shipped ping projectile detonates at once). ⬜ Open: LuaFOWCells save / load (needs the save system; `FogScriptCells::entries()` + `recount()`); ENABLE_FOW outside a battle only changes CampaignBattles' carried flags (land battles reset FOW-active at start); the battle's auto-targeting of WEAPON_SPECIAL hard points is unchanged (force 1 only in the Lua station path); `engine/apps/game` game_audio_host (not fog, game-host agent's) shows clang -Wunused-* warnings in builds without the audio module.
