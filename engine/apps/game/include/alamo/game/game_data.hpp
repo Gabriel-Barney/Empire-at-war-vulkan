@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
@@ -98,6 +99,9 @@ struct SkirmishSetup {
     // human's planet surface (FleetManagement launch / land); empty = none, as before.
     std::vector<std::string> ground_human, ground_ai;
     std::string planet_type;
+    // p4uia t02: the colour index (0..8, GameConstants MP_Color_* entry) of player 0 (human) and 1 (AI) chosen on the
+    // staging screen; players without an entry keep their index. Presentation only: the setup and the sim ignore it.
+    std::vector<uint8_t> colors;
 };
 bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic::GalacticSetup& out, std::string* err = nullptr);
 // [port] default skirmish fleets for the stock factions (Empire / Rebel / Underworld); empty for others.
@@ -110,6 +114,46 @@ inline constexpr PlanetIndex kSkirmishHumanPlanet = 2, kSkirmishBattlePlanet = 1
 std::vector<std::string> skirmish_space_maps(const GameData& data);
 // Land skirmish maps (Data\Art\Maps\_MP_LAND_*.ted), sorted. Empty without a VFS.
 std::vector<std::string> skirmish_land_maps(const GameData& data);
+// ---- Skirmish map catalog (docs/re/UI.md section 9, roadmap p4ui t06) --------------------------------------------------
+// The menu's map table: three scans over the layers, each map's header (top chunk 0 of the .ted) read through the normal
+// VFS lookup (mod > FoC loose > MEGs > fallbacks, so a mod's copy of an official map name decides its header).
+//   official      Data\Art\Maps\*.TED   from the FoC-loose and MEG layers; every entry kept, readable or not
+//   custom scan   Data\CustomMaps\*.TED from the FoC-loose and MEG layers, plus Data\Art\Maps\*.TED from the mod layer;
+//                 an entry is kept only when its custom flag (mini 0B) is 1
+// Entries are keyed by the logical path (one entry per path per list; the same path can sit in both lists), in path order.
+struct SkirmishMapEntry {
+    std::string path;      // normalised logical path, e.g. "DATA\ART\MAPS\_MP_LAND_ENDOR.TED"
+    std::string map;       // map id for SessionSpec::skirmish_map / terrain::map_path: the file stem when the file is directly
+                           // under DATA\ART\MAPS\ ("_MP_LAND_ENDOR"), else the full logical path
+    uint32_t kind = 0;     // mini 01: 1 land, 2 space (0 = absent or unreadable)
+    uint32_t players = 1;  // mini 02, 1 when absent
+    bool custom = false;   // mini 0B == 1: the Custom tab shows it, else the Official tab
+    std::string name_key;  // mini 08 (UTF-8 text key), "" when absent
+    bool readable = false; // the file was read and its map-info chunk decoded
+};
+struct SkirmishMapCatalog {
+    std::vector<SkirmishMapEntry> official;
+    std::vector<SkirmishMapEntry> custom_scan;  // kept entries only (custom flag 1)
+};
+// Builds the catalog (reads every candidate's header once). Empty over a null VFS / GameData without one.
+SkirmishMapCatalog build_skirmish_map_catalog(const vfs::Vfs& vfs);
+SkirmishMapCatalog build_skirmish_map_catalog(const GameData& data);
+// The skirmish list of one tab: entries of `official` then `custom_scan` with kind 1 or 2, players >= 2 and
+// custom == `custom_tab` (UI.md 9.4); a logical path listed in both lists appears once.
+std::vector<SkirmishMapEntry> skirmish_map_rows(const SkirmishMapCatalog& catalog, bool custom_tab);
+// The entry for a map id (a stem, a file name or a path: the terrain::map_path rule, case-insensitive), nullptr when absent.
+const SkirmishMapEntry* find_skirmish_map(const SkirmishMapCatalog& catalog, std::string_view map);
+
+// p4uim t03 (UI.md 9.3 / 9.6): what the staging preview needs from a map file, read through the normal VFS lookup.
+struct SkirmishMapPreview {
+    bool found = false;                    // the file was read
+    std::vector<uint8_t> embedded_image;   // top chunk 0x13 (a TGA file), empty = none
+    // Top chunk 3 start positions as fractions of the map (x right, y down), only when the header's mini 12 is set. Land
+    // maps run 0..width / 0..height from the lower left corner, space maps are centred on the origin; world +Y is up.
+    std::vector<std::pair<float, float>> starts;
+};
+SkirmishMapPreview read_skirmish_map_preview(const FileProvider& files, std::string_view map, bool space);
+
 // [port] (no RE rule) the planet type a skirmish map stands for: the name after "_MP_SPACE_" / "_MP_LAND_" (path and
 // extension dropped, case ignored) when it names a PLANET type, e.g. _MP_LAND_TATOOINE -> "Tatooine"; "" otherwise.
 // Presentation only (load screen portrait, tactical HUD planet name): the skirmish galaxy's planets keep the

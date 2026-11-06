@@ -247,14 +247,35 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
     host_->set_order_hook([this](sim::SimHost& h, uint8_t player, const commands::EventData& ev, const std::vector<objects::ObjectId>& sel) {
         return route_battle_order(*battles_, h, player, ev, sel, &order_stats_);
     });
-    // Pause / resume (docs/PHASE4.md "Camera and controls"): a port-only command; a drained pause stops the host from
+    // Pause / resume (docs/DECISIONS.md "Camera and controls"): a port-only command; a drained pause stops the host from
     // ticking (replays tick through it: a pause changes when ticks run, never what they compute).
     host_->set_port_event_hook([this](sim::SimHost&, uint8_t player, const commands::EventData& ev) { return port_event(player, ev); });
     // P4 host: the galactic special events (dialogs, SFX) are tapped before the story drains the stream at T9.
     host_->set_before_story_hook([this](sim::SimHost& h) { tap_events(h.story() != nullptr); });
     // OI host: the Lua presentation's cinematic rate lock -> pacing + parity, right after T9 (see cinematic_rate_lock()).
     host_->set_after_story_hook([this](sim::SimHost& h) { after_story(h); });
-    // 5. AI players: A2's galactic AI (T7, player index order); without it the S10 stand-in (campaign only).
+    // 5. Story (campaigns with plots): StorySession at T9; its AI requests reach the galactic AI (attached in 6).
+    // A2i t01 (A2I_T01_FRAME_ORDER.md §6): started BEFORE the galactic AI, as alamo_headless does. start_story ends with the
+    // load-time STORY_TECH_LEVEL pass, whose hero spawns (HotM: the Accuser, Home_One, ...) must be starting units for the
+    // AI: GalacticAiWorld::start takes the players' units present then as known (no On_Unit_Added at its first service).
+#ifdef ALAMO_SIM_HAVE_STORY
+    if (spec_.kind == SessionKind::Campaign && spec_.story && sim::SimHost::story_supported())
+        if (const data::CampaignDef* camp = d.db.find_campaign(spec_.campaign)) {
+            sim::StoryStart st;
+            st.files = d.files.get();
+            st.plot_sets = sim::campaign_plot_sets(*camp, *gs);
+            if (!st.plot_sets.empty() && host_->start_story(st, diag)) {
+                // OI host: events raised inside T9 (Lua Activate_Ability, story rewards) reach the presentation tap
+                // from the story's later drain rounds (round 0 = what the before-story tap already saw).
+                host_->story()->set_drain_tap([this](int round, const std::vector<galactic::GalacticEvent>& evs) {
+                    const galactic::GalacticSim* g = round > 0 ? galaxy() : nullptr;
+                    if (g)
+                        for (const galactic::GalacticEvent& e : evs) tap_event(*g, e);
+                });
+            }
+        }
+#endif
+    // 6. AI players: A2's galactic AI (T7, player index order); without it the S10 stand-in (campaign only).
 #ifdef ALAMO_GAME_HAVE_GALACTIC_AI
     if (use_ai) {
         sim::SimHost* h = host_.get();
@@ -273,6 +294,9 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
         } else {
             galactic_ai_->register_crc(host_->crc_registry());
             galactic_ai_->set_global_values(host_->global_values());  // Int-final: session-wide GlobalValue table
+#ifdef ALAMO_SIM_HAVE_STORY
+            if (host_->story()) galactic_ai_->attach_story_world(host_->story()->player_world());  // story Find_Path
+#endif
             ai::GalacticAiWorld* w = galactic_ai_.get();
             sim::CampaignBattles* b = battles_.get();
             for (const ai::GalacticAiPlayerConfig& pc : gcfg.players)
@@ -290,27 +314,6 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
             host_->add_save_participant(std::move(ai_part));
         }
     }
-#endif
-    // 6. Story (campaigns with plots): StorySession at T9; its AI requests reach the galactic AI.
-#ifdef ALAMO_SIM_HAVE_STORY
-    if (spec_.kind == SessionKind::Campaign && spec_.story && sim::SimHost::story_supported())
-        if (const data::CampaignDef* camp = d.db.find_campaign(spec_.campaign)) {
-            sim::StoryStart st;
-            st.files = d.files.get();
-            st.plot_sets = sim::campaign_plot_sets(*camp, *gs);
-            if (!st.plot_sets.empty() && host_->start_story(st, diag)) {
-                // OI host: events raised inside T9 (Lua Activate_Ability, story rewards) reach the presentation tap
-                // from the story's later drain rounds (round 0 = what the before-story tap already saw).
-                host_->story()->set_drain_tap([this](int round, const std::vector<galactic::GalacticEvent>& evs) {
-                    const galactic::GalacticSim* g = round > 0 ? galaxy() : nullptr;
-                    if (g)
-                        for (const galactic::GalacticEvent& e : evs) tap_event(*g, e);
-                });
-#ifdef ALAMO_GAME_HAVE_GALACTIC_AI
-                if (galactic_ai_) galactic_ai_->attach_story_world(host_->story()->player_world());
-#endif
-            }
-        }
 #endif
     if (!use_ai && spec_.kind == SessionKind::Campaign && spec_.aggressor_period > 0)
         for (size_t p = 0; p < gs->players().size() && p < host_->players(); ++p) {

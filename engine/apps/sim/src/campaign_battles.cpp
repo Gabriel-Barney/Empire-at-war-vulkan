@@ -91,7 +91,10 @@ CampaignBattles::~CampaignBattles() {
         if (GalacticMode* g = host_->galactic_mode(); g && g->sim() && g->sim()->conflict_hooks() == gate_.get()) g->sim()->set_conflict_hooks(nullptr);
     if (cm_) cm_->detach();
 #ifdef ALAMO_SIM_HAVE_STORY
-    if (story_fog_session_ && story_fog_session_ == host_->story()) story_fog_session_->set_enable_fow_hook({});  // fog follow-up
+    if (story_fog_session_ && story_fog_session_ == host_->story()) {
+        story_fog_session_->set_enable_fow_hook({});  // fog follow-up
+        story_fog_session_->set_victory_hooks({}, {});  // story t09
+    }
 #endif
 }
 
@@ -670,6 +673,7 @@ void CampaignBattles::push_battle(SimHost& host) {
     battle_->set_l1_constants(opt_.l1_constants);  // L1 systems
     battle_->set_weather_data(opt_.weather);       // L1 systems
     battle_->set_l1_factions(opt_.l1_factions);    // L1 systems
+    battle_->set_arrival_hold([this] { return lk_.presentation.hyperspace_hold; });  // story t12 (P9 == 2)
     if (pending_req_.info.planet != kInvalidPlanet) {  // REMAINING_GAPS §6.5: the battle planet's pad persistence list
         std::vector<TacticalBattle::PadRecord>* recs = nullptr;
         for (auto& [pl, v] : pad_records_)
@@ -707,6 +711,8 @@ void CampaignBattles::hook(SimHost& host) {
 #ifdef ALAMO_SIM_HAVE_STORY
     if (StorySession* s = host.story(); s && s != story_fog_session_) {  // fog follow-up: ENABLE_FOW story rewards
         s->set_enable_fow_hook([this](bool has_param, int32_t value) { story_fog_reward(has_param, value); });
+        s->set_victory_hooks([this](bool has_param, int32_t value) { story_victory_enable(has_param, value); },  // story t09
+                             [this](const std::string& faction, bool short_silent) { story_victory(faction, short_silent); });
         story_fog_session_ = s;
     }
 #endif
@@ -1180,6 +1186,8 @@ void CampaignBattles::story_begin(SimHost& host, GameMode& mode) {
         TacticalMode* tm = host_->tactical();
         return (battle_ && tm && tm->primary().exists(o)) ? battle_->representative_type(tm->primary().id(o)) : objects::kNone;
     };
+    // s78i t02: the Reinforce_Unit stand-in faces the owner's entry-facing record (TACTICAL_COMBAT §3.1.1 "other spawns").
+    b.reinforce_facing = [this](int32_t player) { return battle_ ? battle_->player_drop_facing(player) : Vec3{1.0f, 0.0f, 0.0f}; };
     b.pipeline = &host.pipeline();
     // --- L1/S4 wave 2b: Dummy_Barrage_Target for Lua position-targeted abilities, script hooks, feed state ---
     b.spawn_ability_target = [this, h](Vec3 p, int32_t owner) {
@@ -1270,6 +1278,7 @@ void CampaignBattles::story_begin(SimHost& host, GameMode& mode) {
         story_hooks_.hyperspace_out_link = [this, bid](objects::ObjectHandle u, int32_t delay, bool keep) {
             return battle_ && battle_->hyperspace_out(bid(u), delay, keep);
         };
+        story_hooks_.resume_hyperspace_in = [this] { resume_hyperspace_in(); };  // story t12
         lua::RemainingScriptHooks& rb = story_remaining_;
         rb.object_in_field = [this, bid](objects::ObjectHandle o, uint32_t kind) { return battle_ ? battle_->object_in_field(bid(o), kind) : -1; };
         rb.bombing_run_available = [this](int32_t p) { return battle_ && battle_->bombing_run_available(p); };
@@ -1483,6 +1492,23 @@ void CampaignBattles::story_fog_reward(bool has_param, int32_t value) {
     }
 }
 // --- end fog follow-up ---
+
+// --- story t09: tactical ENABLE_VICTORY / VICTORY rewards -> the running battle's victory monitor ---
+void CampaignBattles::story_victory_enable(bool has_param, int32_t value) {
+    if (battle_) battle_->reward_enable_victory(has_param, value);
+}
+
+void CampaignBattles::story_victory(const std::string& faction, bool short_silent) {
+    if (!battle_) return;
+    GalacticMode* g = host_->galactic_mode();
+    const int32_t player = g && g->sim() ? g->sim()->player_of_faction(faction) : galactic::kNoPlayer;
+    if (player < 0) {  // 0x462b70: nothing else happens (the holds stay)
+        log_.push_back("Unable to find faction " + faction + " to force victory");
+        return;
+    }
+    battle_->reward_victory(player, short_silent);
+}
+// --- end story t09 ---
 
 // --- L1/S4 wave 2b: story-forced battles. Each new StorySession::linked_tactical() entry (a LINK_TACTICAL reward) is
 // parsed (parse_link_tactical, BT §2.9.1), written as the linked-battle record (queue_linked, 0x28bd70: refused while a

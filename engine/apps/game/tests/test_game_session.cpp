@@ -1035,6 +1035,7 @@ void attract_demo_script_test(const game::GameData& data, const game::SessionSpe
         const sim::TacticalBattle* b = s.battle();
         CHECK(b != nullptr);
         if (!b) return;
+        CHECK(!s.view_draws_fog());  // the cinematic camera hides the FOW render even once the controller revealed the map
         const tactical::fog::FogOfWar* fog = b->fog();
         CHECK(fog != nullptr);
         for (const int32_t p : {0, 1, 3})
@@ -1090,6 +1091,9 @@ void attract_session_test(const game::GameData& data, const game::SessionSpec& b
             ++t;
         }
         CHECK(s.skirmish_over() && !s.attract_controller_ran() && s.attract_moves() == 0);  // no DEMO_CONTROLLER on this map
+        // Traced rule (MAIN_MENU_BACKGROUND.md §4a): the demo view never draws fog (cinematic camera clears the FOW render
+        // option), yet the demo's sim keeps its fog grids for the AI and targeting (presentation only).
+        CHECK(!s.view_draws_fog());
         fought = s.battles() ? s.battles()->battles_fought() : 0;
         recorded = 0;
         for (const auto& b : rec.batches) recorded += b.commands.size();
@@ -1105,6 +1109,11 @@ void attract_session_test(const game::GameData& data, const game::SessionSpec& b
     const CrcDivergence d = first_divergence(a, b);
     std::printf("attract replay (0 vs 2 workers): %s\n", d.message.c_str());
     CHECK(!d.diverged && a.records.size() == b.records.size());
+    {
+        jobs::JobSystem js(jobs::JobSystemConfig{0});
+        game::GameSession normal(data, js, base);  // a real game (not the demo) draws the fog
+        CHECK(!base.attract && normal.view_draws_fog());
+    }
 }
 
 // EaW .rec attract entries: only the map path is read from the recording header ([port] scan); a synthetic buffer, then
@@ -1333,7 +1342,7 @@ void attract_controller_test(const game::GameData& data) {
 }
 
 #ifdef ALAMO_GAME_HAVE_CONTROLS
-// docs/PHASE4.md "Camera and controls" on the host's tables: after sync_control_bindings the default hotkey table and the
+// docs/DECISIONS.md "Camera and controls" on the host's tables: after sync_control_bindings the default hotkey table and the
 // bindings satisfy every rule; a W/A/S/D binding (here Ctrl+S on Stop) and a missing queue modifier are reported.
 void controls_test() {
     ui::HotkeyTable hk;

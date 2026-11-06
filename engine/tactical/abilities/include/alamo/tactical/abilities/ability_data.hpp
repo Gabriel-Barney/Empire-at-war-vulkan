@@ -76,7 +76,8 @@ struct SpecialAbilityDesc {
     SpecialClass cls = SpecialClass::Unsupported;
     ActivationStyle style = ActivationStyle::None;
     bool initially_enabled = true;  // Initially_Enabled [M default]
-    // Target filter (0x48e290): category mask OR exact type, minus excluded types.
+    // Target filter (0x48e290, TACTICAL_COMBAT §5.4.1): a listed type passes; else the categories must hit the CategoryMask
+    // (empty = reject), then the excluded types reject. No tags: nothing passes. Tactical_Bribe never reads them.
     uint64_t applicable_categories = 0;
     std::vector<int32_t> applicable_types, excluded_types;
     float min_range = 0.0f, max_range = 0.0f;    // Activation_Min_Range / Activation_Max_Range
@@ -194,6 +195,17 @@ struct AbilityObjectDesc {
     // Destroy_When_Stunned_Over_Water (type +0xe6; only MAL_Rocket_Vehicle sets it): [port] a STUNNABLE stun that starts
     // while the host reports the unit over water destroys it (ABILITIES_HARDPOINTS.md §4.12, no RE pass).
     bool destroy_when_stunned_over_water = false;
+    // ---- s78l t05: Tactical_Bribe acceptance (TACTICAL_COMBAT §5.4.1, 0x5b0f70 / 0x5b0ec0 / 0x395c10) ----
+    // Read from the target side (the team container for a member, else the unit) and the user side (the modifiers).
+    // A team container's desc should carry its representative type's values (0x3973b0) [inferred].
+    bool named_hero = false;              // Is_Named_Hero (type +0x13): never bribed (`hero` above also counts generic heroes)
+    // Tactical_Bribe_Cost (type +0x2358, int): <= 1 = cannot be bribed. -1 = [port] the host supplied no value: the cost
+    // gate is skipped and the bribe is free (hosts that predate the field).
+    int32_t tactical_bribe_cost = -1;
+    float bribe_modifier_corrupted = 1.0f;    // Bribe_Modifier_On_Corrupted_Planets (+0x23e4) [inferred default 1]
+    float bribe_modifier_uncorrupted = 1.0f;  // Bribe_Modifier_On_Uncorrupted_Planets (+0x23e0) [inferred default 1]
+    float friendly_damage_amount = 0.0f;      // Friendly_Damage_Amount (+0x23ec): > 0 cannot be bribed
+    bool proximity_mine = false;              // has the PROXIMITY_MINE behaviour (0x55): cannot be bribed
 };
 
 struct AbilityData {

@@ -841,6 +841,65 @@ Scenario space_scenario() {
     return s;
 }
 
+// ---------------------------------------------------------------- s78l t02: arrival turn (version 12)
+// Has_Pre_Turn_Anim walkers with begin / band / end clips (clip data hook) and a plain walker turn to their final
+// facings; saves land in the begin clip, the band turn and the end clip. The host drains the turn clip events.
+bool arrival_clip(ObjectId, int32_t anim, uint32_t& n, float& fps) {
+    switch (anim) {
+        case kAnimTurnLeftBegin:
+        case kAnimTurnRightBegin: n = 12; break;
+        case kAnimTurnLeftEnd:
+        case kAnimTurnRightEnd: n = 9; break;
+        case kAnimTurnLeft:
+        case kAnimTurnRight:
+        case kAnimTurnLeftHalf:
+        case kAnimTurnRightHalf:
+        case kAnimTurnLeftQuarter:
+        case kAnimTurnRightQuarter: n = 10; break;
+        default: return false;
+    }
+    fps = 15.0f;
+    return true;
+}
+
+void build_arrival(World& w) {
+    PassabilityGrid g;
+    g.init(60, 60);
+    w.sys.set_grid(std::move(g));
+    w.sys.set_deploy_clip_fn(arrival_clip);
+    w.rng = SimRng(77);
+    for (ObjectId id = 1; id <= 3; ++id) {
+        UnitDesc d = land_unit(id, cell_center(10, 10 + static_cast<int32_t>(id) * 8), 0, 2.0f, 8.0f, kUccVehicle);
+        d.has_pre_turn_anim = id != 3;
+        d.stopped_turn_rate = id == 1 ? 3.0f : 0.0f;
+        d.rotation_animation_speed = 1.5f;
+        CHECK(w.sys.add_unit(d));
+    }
+}
+
+void arrival_before(World& w, uint32_t f) {
+    if (f != 0) return;
+    for (ObjectId id = 1; id <= 3; ++id) {
+        MoveOrder o;
+        o.units = {id};
+        o.destination = cell_center(20, 10 + static_cast<int32_t>(id) * 8);
+        o.final_facing_deg = id == 2 ? -120.0f : 135.0f;
+        w.sys.move(o, w.rng, f);
+    }
+}
+
+void arrival_after(World& w, uint32_t) { (void)w.sys.take_turn_clip_events(); }
+
+Scenario arrival_scenario() {
+    Scenario s;
+    s.name = "arrival turn";
+    s.build = build_arrival;
+    s.before = arrival_before;
+    s.after = arrival_after;
+    s.frames = 260;
+    return s;
+}
+
 // ---------------------------------------------------------------- rejection and corruption
 void test_rejections() {
     const Scenario land = land_scenario();
@@ -884,7 +943,13 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 8);  // 8: before the a1k t03 pushed move (9)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 10);
+    put_u32(bad, 0, 9);  // 9: before the s78f t02 fighter formation block stacks (10)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 10);  // 10: before the s78k t01 arrival turn / straight move fields (11)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 11);  // 11: before the s78l t02 arrival turn state (12)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 13);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode
@@ -954,6 +1019,23 @@ int main() {
     CHECK(sc.locks > 0 && sc.departures > 0);
     for (uint32_t at : {30u, 75u, 210u, 330u, 430u}) check_resume(space, at, 0);
     check_resume(space, 300, 120);
+    {  // s78l t02: saves inside the begin clip, the band turn and the end clip of the arrival turns
+        const Scenario arr = arrival_scenario();
+        World w(arr.cfg);
+        arr.build(w);
+        uint32_t turning = 0, first = UINT32_MAX, last = 0;
+        for (uint32_t f = 0; f < arr.frames; ++f) {
+            step(arr, w, f, serial_for);
+            if (w.sys.view(1).arrival_turn) {
+                ++turning;
+                first = std::min(first, f + 1);
+                last = f + 1;
+            }
+        }
+        CHECK(turning > 10 && first < last && !w.sys.view(1).arrival_turn && !w.sys.view(2).arrival_turn);
+        for (uint32_t at : {first + 1, (first + last) / 2, last - 1, last}) check_resume(arr, at, 0);
+        std::printf("arrival turn saves: unit 1 turning %u frames (%u..%u)\n", turning, first, last);
+    }
     test_rejections();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

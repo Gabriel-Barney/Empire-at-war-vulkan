@@ -179,8 +179,14 @@ public:
     const sim::TacticalBattle* battle() const { return battles_ ? battles_->battle() : nullptr; }
     bool in_battle() const { return battle() != nullptr && host_->modes().top_tactical() != nullptr; }
     int32_t local_player() const { return local_player_; }
+    // Does the battle view draw the local player's FOW grid and the HideWhenFogged marks? Not in the attract demo: the
+    // original films it with the in-game cinematic camera, and every cinematic shot start (0x49b1a0) clears the FOW render
+    // option 0x140a12501 that all fog draw paths test, so the demo shows no fog on any map, with or without a
+    // DEMO_CONTROLLER reveal (MAIN_MENU_BACKGROUND.md §4a, [H] code chain, [M] that the capture is that). Presentation
+    // only: the demo's sim fog (targeting, AI) is unchanged.
+    bool view_draws_fog() const { return !spec_.attract; }
     // Attract demo: the map's Demo_Attract_Controller ran (game_session.cpp attract_demo_script): at least one
-    // DEMO_CONTROLLER object revealed the map, so the view draws the sim's fog. False before the battle runs and on maps
+    // DEMO_CONTROLLER object revealed the map for Empire / Rebel / Underworld. False before the battle runs and on maps
     // without a controller (the shipped Demo_Attract_Kamino).
     bool attract_controller_ran() const { return attract_controllers_ > 0; }
     uint32_t attract_moves() const { return attract_moves_; }  // its Attack_Move orders the battle accepted

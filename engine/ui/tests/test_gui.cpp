@@ -972,8 +972,8 @@ const char* kGalacticXml = R"(<?xml version="1.0"?>
   <CommandBarComponent Name="b_Create_02"><Type>TextButton</Type><Blank_Texture_Name>i_button_units.tga</Blank_Texture_Name></CommandBarComponent>
   <CommandBarComponent Name="queue00"><Type>TextButton</Type><Blank_Texture_Name>i_button_hologram.tga</Blank_Texture_Name>
     <Build_Texture_Name>i_button_build.tga</Build_Texture_Name></CommandBarComponent>
-  <CommandBarComponent Name="q1_0000"><Type>TextButton</Type><Blank_Texture_Name>i_button_unit_frame.tga</Blank_Texture_Name></CommandBarComponent>
   <CommandBarComponent Name="q1_0001"><Type>TextButton</Type><Blank_Texture_Name>i_button_unit_frame.tga</Blank_Texture_Name></CommandBarComponent>
+  <CommandBarComponent Name="q1_0002"><Type>TextButton</Type><Blank_Texture_Name>i_button_unit_frame.tga</Blank_Texture_Name></CommandBarComponent>
   <CommandBarComponent Name="land_fleet_00"><Type>TextButton</Type></CommandBarComponent>
   <CommandBarComponent Name="objective_back"><Type>TextButton</Type><Blank_Texture_Name>i_tooltip_back.tga</Blank_Texture_Name>
     <No_Shell>True</No_Shell><Base_Layer>3</Base_Layer><Color>255 255 255 80</Color><Size>266 14</Size>
@@ -1602,7 +1602,7 @@ void test_galactic_hud() {
     CHECK(cmds.size() == 1 && cmds[0] == commands::ev::production(101, 101));
     click_component("queue00", cmds, acts);
     CHECK(cmds.size() == 2 && cmds[1] == commands::ev::production(7, 101, true));
-    click_component("q1_0001", cmds, acts);
+    click_component("q1_0002", cmds, acts);
     CHECK(acts.size() == 1 && acts[0].kind == HudAction::Kind::GalacticSelect && acts[0].ids == std::vector<uint32_t>{902});
     // GALACTIC_DIALOGS §5.4: planet_info has no fallback spot (the yellow rectangle); it shows on its shell bone only.
     {

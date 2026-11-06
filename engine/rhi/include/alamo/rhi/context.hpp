@@ -66,6 +66,7 @@ struct DeviceCaps {
     uint32_t vendor_id = 0, device_id = 0;
     uint32_t api_version = 0, driver_version = 0;
     VkPhysicalDeviceType type = VK_PHYSICAL_DEVICE_TYPE_OTHER;
+    uint64_t device_local_bytes = 0;   // the largest device-local memory heap (video memory; shared memory on an integrated GPU)
     bool texture_bc = false;
     bool sampler_anisotropy = false;
     float max_anisotropy = 1.0f;

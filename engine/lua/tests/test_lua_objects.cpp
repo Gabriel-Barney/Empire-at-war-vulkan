@@ -461,6 +461,91 @@ static void test_queries(const Db& db) {
     CHECK(contains(run(vm, "t1.Has_Ability(1)"), "GameObjectWrapper::Has_Ability -- invalid type for ability 1. Expected string."));
 }
 
+// s78h t05 (TACTICAL_COMBAT §3.1.1): tactical Spawn_Unit faces the unit from its spawn point toward the world
+// origin, +X at x = y = 0; an object location lends its position only; company members share the facing.
+// Create_Generic_Object: s78i t02 (test_other_spawn_facing).
+static void test_spawn_unit_facing(const Db& db) {
+    Scene s(db);
+    LuaVm& vm = *s.vm;
+    auto facing_of = [&](const char* global) {
+        const objects::ObjectId id = static_cast<objects::ObjectId>(gnum(vm, global));
+        return s.store.facing(s.store.find(id));
+    };
+    CHECK(run(vm, "a = Spawn_Unit(Find_Object_Type('Tank'), Create_Position(100, 0, 0), p1)[1].Get_Object_ID() "
+                  "b = Spawn_Unit(Find_Object_Type('Tank'), Create_Position(0, 0, 7), p1)[1].Get_Object_ID() "
+                  "d = Spawn_Unit(Find_Object_Type('Tank'), Create_Position(-3, 4, 0), p1)[1].Get_Object_ID()") == "");
+    Vec3 f = facing_of("a");
+    CHECK(f.x == -1.0f && f.y == 0.0f && f.z == 0.0f);
+    f = facing_of("b");
+    CHECK(f.x == 1.0f && f.y == 0.0f && f.z == 0.0f);
+    f = facing_of("d");
+    CHECK(f.x == 0.6f && f.y == -0.8f && f.z == 0.0f);
+    // Object location: marker1 sits at (100, 0, 0) facing +Y; only its position counts.
+    s.store.set_facing(s.marker1, {0.0f, 1.0f, 0.0f});
+    CHECK(run(vm, "team = Spawn_Unit(Find_Object_Type('Trooper_Team'), Find_Hint('Marker_Generic', 'spawnpoint'), p1)[1] "
+                  "tm = team.Get_Object_ID() mem = Find_All_Objects_Of_Type('Trooper') "
+                  "m1 = mem[1].Get_Object_ID() m2 = mem[2].Get_Object_ID()") == "");
+    for (const char* g : {"tm", "m1", "m2"}) {
+        f = facing_of(g);
+        CHECK(f.x == -1.0f && f.y == 0.0f && f.z == 0.0f);
+    }
+    // Create_Generic_Object: +X at a position.
+    CHECK(run(vm, "g = Create_Generic_Object('Tank', Create_Position(100, 0, 0), p1).Get_Object_ID()") == "");
+    f = facing_of("g");
+    CHECK(f.x == 1.0f && f.y == 0.0f);
+}
+
+// s78i t02 (TACTICAL_COMBAT §3.1.1 "other spawns"): Create_Generic_Object faces +X even at an object location;
+// Spawn_From_Reinforcement_Pool (stand-in) faces the world origin like Spawn_Unit; the Reinforce_Unit stand-in faces
+// the owner's entry-facing record from the host hook, +X without one (never the location object's facing).
+static void test_other_spawn_facing(const Db& db) {
+    Scene s(db);
+    LuaVm& vm = *s.vm;
+    auto facing_of = [&](const char* global) {
+        const objects::ObjectId id = static_cast<objects::ObjectId>(gnum(vm, global));
+        return s.store.facing(s.store.find(id));
+    };
+    // marker1 sits at (100, 0, 0); turn it to +Y so a lent facing would show.
+    s.store.set_facing(s.marker1, {0.0f, 1.0f, 0.0f});
+    CHECK(run(vm, "mk = Find_Hint('Marker_Generic', 'spawnpoint') "
+                  "g = Create_Generic_Object('Tank', mk, p1).Get_Object_ID() "
+                  "g2 = Create_Generic_Object('Tank', Create_Position(-3, 4, 0), p1).Get_Object_ID()") == "");
+    for (const char* gname : {"g", "g2"}) {
+        const Vec3 f = facing_of(gname);
+        CHECK(f.x == 1.0f && f.y == 0.0f && f.z == 0.0f);
+    }
+    // Spawn_From_Reinforcement_Pool stand-in: toward the origin; at an object location only its position counts.
+    CHECK(run(vm, "sp1 = Spawn_From_Reinforcement_Pool('Tank', Create_Position(-3, 4, 0), p1)[1].Get_Object_ID() "
+                  "sp2 = Spawn_From_Reinforcement_Pool('Tank', mk, p1)[1].Get_Object_ID() "
+                  "sp3 = Spawn_From_Reinforcement_Pool('Tank', Create_Position(0, 0, 9), p1)[1].Get_Object_ID()") == "");
+    Vec3 f = facing_of("sp1");
+    CHECK(f.x == 0.6f && f.y == -0.8f && f.z == 0.0f);
+    f = facing_of("sp2");
+    CHECK(f.x == -1.0f && f.y == 0.0f && f.z == 0.0f);
+    f = facing_of("sp3");
+    CHECK(f.x == 1.0f && f.y == 0.0f && f.z == 0.0f);
+    // Reinforce_Unit stand-in without a facing hook: +X, not the marker's +Y.
+    CHECK(run(vm, "r1 = Reinforce_Unit('Tank', mk, p1).Result()[1].Get_Object_ID()") == "");
+    f = facing_of("r1");
+    CHECK(f.x == 1.0f && f.y == 0.0f && f.z == 0.0f);
+    // With the hook: the owner's record; a company's members share it.
+    int32_t asked = -1;
+    s.bridge.reinforce_facing = [&asked](int32_t player) {
+        asked = player;
+        return Vec3{0.0f, -1.0f, 0.0f};
+    };
+    CHECK(run(vm, "r2 = Reinforce_Unit(Find_Object_Type('Trooper_Team'), Create_Position(50, 0, 0), p2).Result()[1] "
+                  "r2t = r2.Get_Object_ID() rm = r2t + 1") == "");  // the first member is created right after its container
+    CHECK(asked == 2);
+    CHECK(s.store.container(s.store.find(static_cast<objects::ObjectId>(gnum(vm, "rm")))) ==
+          s.store.find(static_cast<objects::ObjectId>(gnum(vm, "r2t"))));
+    for (const char* gname : {"r2t", "rm"}) {
+        f = facing_of(gname);
+        CHECK(f.x == 0.0f && f.y == -1.0f && f.z == 0.0f);
+    }
+    s.bridge.reinforce_facing = nullptr;
+}
+
 static void test_spawn_and_state(const Db& db) {
     Scene s(db);
     LuaVm& vm = *s.vm;
@@ -912,6 +997,8 @@ int main() {
     test_queries(db);
     test_stage3(db);
     test_spawn_and_state(db);
+    test_spawn_unit_facing(db);
+    test_other_spawn_facing(db);
     test_dead_handles(db);
     test_wave1(db);
 #if ALAMO_LUA_HAVE_COMMANDS

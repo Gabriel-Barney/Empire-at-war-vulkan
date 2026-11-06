@@ -8,6 +8,7 @@
 #include "alamo/ai/ai_free_store_path.hpp"
 #include "alamo/ai/ai_types.hpp"
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/galactic/economy.hpp"  // build_time_t0 (0x371230)
 #include "alamo/galactic/fleet_path.hpp"
 #include "alamo/objects/enums.hpp"
 #include "galactic_slots.hpp"
@@ -16,6 +17,12 @@ namespace alamo::ai {
 
 namespace gal = alamo::galactic;
 using objects::ObjectHandle;
+
+uint64_t galactic_ai_structure_mask(std::span<const GalacticAiTypeInfo> types, uint32_t type) {
+    static const uint64_t capital = ai_category_bit("Capital");
+    const uint64_t m = type < types.size() ? types[type].garrison_mask : 0u;
+    return m != 0 ? m : capital;
+}
 
 bool GalacticAiTypeInfo::has_category(std::string_view c) const {
     for (const std::string& s : categories)
@@ -38,17 +45,22 @@ void fill_category_masks(std::vector<GalacticAiTypeInfo>& types) {
 }
 
 double galactic_ai_member_force(const gal::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types, uint32_t type,
-                                int32_t owner, uint64_t mask) {
+                                int32_t owner, uint64_t mask, bool exact) {
     const auto& gt = sim.rules().types;
     double sum = 0.0;
     if (type >= types.size()) return sum;
     // Per-tech members (0x373f40 count / 0x373e30 type / 0x373d30 count, tech = the owner's tech level +0x84).
-    // [M] a level without entries falls back to the highest lower level with entries (the hangar rule).
+    // A level without entries falls back to the highest lower level with entries for the planet-level leaves (0x373f40 /
+    // 0x373e30 / 0x373d30 [H]); the player-level tokens use the exact list (0x373fd0 / 0x373ee0, `exact`, no fall back)
+    // (A2F_RE_READS §2). The original returns nothing for tech >= 6; the port clamps to slot 5 (unreachable in vanilla).
     const auto players = sim.players();
     const int32_t tech = owner >= 0 && static_cast<size_t>(owner) < players.size() ? players[static_cast<size_t>(owner)].tech_level : 0;
     for (int32_t n = std::min(tech, static_cast<int32_t>(kSpawnTechSlots) - 1); n >= 0; --n) {
         const std::vector<SpawnMember>& list = types[type].spawn_tech[static_cast<size_t>(n)];
-        if (list.empty()) continue;
+        if (list.empty()) {
+            if (exact) break;
+            continue;
+        }
         for (const SpawnMember& m : list)
             if (m.type < types.size() && m.type < gt.size() && m.count > 0 && (types[m.type].category_mask & mask) != 0)
                 sum += static_cast<double>(gt[m.type].ai_combat_power) * static_cast<double>(m.count);
@@ -92,28 +104,38 @@ double galactic_ai_planet_force(const gal::GalacticSim& sim, std::span<const Gal
             }
         }
         if (side(ps.owner)) {
-            // The starbase type's per-tech members, not the starbase's own power [H].
-            if (ps.starbase && st.alive(ps.starbase))
-                sum += galactic_ai_member_force(sim, types, static_cast<uint32_t>(st.type(ps.starbase)), ps.owner, mask);
-            // Ground structures whose type byte +0x1E (Is_Special_Weapon_In_Space) is set, by the structure mask +0x1658
-            // [port: the Capital default; no galactic structure sets Garrison_Category]. Orbital structures D+0x170 [port: none].
-            static const uint64_t capital = ai_category_bit("Capital");
-            if ((mask & capital) != 0)
-                for (const ObjectHandle s : ps.structures)
-                    if (st.alive(s)) {
-                        const uint32_t t = static_cast<uint32_t>(st.type(s));
-                        if (t < types.size() && types[t].special_weapon_space) sum += power(t);
-                    }
+            // A2I_TOKENS_RE §2.1 [H]. The starbase type's per-tech members with the tech of its owner (D +0x74; the port
+            // reads the starbase object's owner: PlanetState::starbase_owner can be -1 while the object lives, seen in the
+            // HotM human run), none when that owner is no player; not the starbase's own power.
+            if (ps.starbase && st.alive(ps.starbase) && valid(st.owner(ps.starbase)))
+                sum += galactic_ai_member_force(sim, types, static_cast<uint32_t>(st.type(ps.starbase)), st.owner(ps.starbase), mask);
+            // Then the own power of the ground structures D +0x158 whose type byte +0x1E (Is_Special_Weapon_In_Space) is
+            // set, then of every orbital structure D +0x170 (no +0x1E test), each when `mask` meets the type's structure
+            // mask +0x1658 (Capital when 0). The port keeps both families in `structures`: DUMMY_ORBITAL_STRUCTURE (0x60)
+            // types are the orbital ones. Vanilla: none of these types has AI_Combat_Power, so this adds 0.
+            for (const bool orbital : {false, true})
+                for (const ObjectHandle s : ps.structures) {
+                    if (!st.alive(s)) continue;
+                    const uint32_t t = static_cast<uint32_t>(st.type(s));
+                    if (t >= rules.types.size() || gal::is_orbital_structure_type(rules.types[t]) != orbital) continue;
+                    if (!orbital && !(t < types.size() && types[t].special_weapon_space)) continue;
+                    if ((mask & galactic_ai_structure_mask(types, t)) != 0) sum += power(t);
+                }
         }
     } else {  // 0x6d95d0
         for (const ObjectHandle u : ps.surface)
             if (st.alive(u) && side(st.owner(u)) && (type_mask(static_cast<uint32_t>(st.type(u))) & mask) != 0)
                 sum += power(static_cast<uint32_t>(st.type(u)));
-        // The per-tech members of every ground structure, not their own power [H]. The Enemy planet-type list +0x20C8
-        // [port: not modelled].
+        // The per-tech members of every ground structure (D +0x158 only: orbital structures are skipped) with the tech of
+        // the structure's own owner (S +0x58), not their own power and no structure mask (A2I_TOKENS_RE §2.2) [H]. The
+        // Enemy planet-type list +0x20C8 [port: not modelled].
         if (side(ps.owner))
-            for (const ObjectHandle s : ps.structures)
-                if (st.alive(s)) sum += galactic_ai_member_force(sim, types, static_cast<uint32_t>(st.type(s)), ps.owner, mask);
+            for (const ObjectHandle s : ps.structures) {
+                if (!st.alive(s)) continue;
+                const uint32_t t = static_cast<uint32_t>(st.type(s));
+                if (t < rules.types.size() && gal::is_orbital_structure_type(rules.types[t])) continue;
+                sum += galactic_ai_member_force(sim, types, t, st.owner(s), mask);
+            }
     }
     return sum;
 }
@@ -121,21 +143,32 @@ double galactic_ai_planet_force(const gal::GalacticSim& sim, std::span<const Gal
 double galactic_ai_enemy_strength(const gal::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types, PlanetIndex planet,
                                   int32_t self, bool space, uint64_t mask) {
     double s = galactic_ai_planet_force(sim, types, planet, self, true, space, mask);
-    if (mask != kAllCategories || static_cast<size_t>(planet) >= sim.planets().size()) return s;
+    if (static_cast<size_t>(planet) >= sim.planets().size()) return s;
     const gal::PlanetState& ps = sim.planets()[static_cast<size_t>(planet)];
     const objects::ObjectStore& st = sim.store();
     const auto& gt = sim.rules().types;
+    // A typed row (the PotentialPlan Contrast rows) adds a structure only when its type's CategoryMask (+0x1648) meets the
+    // row's mask (A2F_RE_READS §3.1, a2i t03 D1 in A2I_T03_TRAJECTORY §3.3) [H]; the untyped row (kAllCategories) adds
+    // every one, as before [port: a type without a CategoryMask counts there].
     auto power = [&](ObjectHandle h) {
         const uint32_t t = static_cast<uint32_t>(st.type(h));
-        return t < gt.size() ? static_cast<double>(gt[t].ai_combat_power) : 0.0;
+        if (t >= gt.size()) return 0.0;
+        if (mask != kAllCategories && (t >= types.size() || (types[t].category_mask & mask) == 0)) return 0.0;
+        return static_cast<double>(gt[t].ai_combat_power);
     };
     // [port] "not held by the AI or an ally" (0x4ad9f0) is read as the leaf's Enemy owner filter (hostile to Self).
     if (ps.owner < 0 || !sim.is_hostile(self, ps.owner)) return s;
     if (space) {
         if (ps.starbase && st.alive(ps.starbase)) s += power(ps.starbase);  // the starbase type's AI_Combat_Power [H]
     } else {
-        for (const ObjectHandle u : ps.structures)  // Σ AI_Combat_Power of the ground structures [H]; garrison types 0x4b8000 [port: none]
-            if (st.alive(u)) s += power(u);
+        // Σ AI_Combat_Power of the ground structures D +0x158 (orbital ones are not in that list) [H]; garrison types
+        // 0x4b8000 [port: none].
+        for (const ObjectHandle u : ps.structures) {
+            if (!st.alive(u)) continue;
+            const uint32_t t = static_cast<uint32_t>(st.type(u));
+            if (t < gt.size() && gal::is_orbital_structure_type(gt[t])) continue;
+            s += power(u);
+        }
     }
     return s;
 }
@@ -161,7 +194,7 @@ const std::string_view kKnownPaths[] = {
     "AVERAGEAGEOFSPACEINTELLIGENCE", "AVERAGEAGEOFGROUNDINTELLIGENCE", "CANADVANCETECH", "BUDGETFRACTIONTOBUILD",
     "NETINCOMEUNNORMALIZED", "NETINCOMENBPTM", "NETINCOMENBTF", "GROSSINCOMEUNNORMALIZED", "GROSSINCOMENBPTM",
     "GROSSINCOMENBTF", "ACTIVEGOALS", "WORSTISLANDFRACTIONOFLARGEST", "HASTECHTOPRODUCE", "STORYTRIGGER",
-    "SPACEDEFENDEDPLANETS", "GROUNDDEFENDEDPLANETS",
+    "SPACEDEFENDEDPLANETS", "GROUNDDEFENDEDPLANETS", "MAXALLPLANETSINCOMEUNNORMALIZED", "MAXOWNEDPLANETSINCOMEUNNORMALIZED",
     // target root (planets)
     "ISHUMANCONTROLLED", "STARBASELEVEL", "STARBASELEVELUNNORMALIZED", "GROUNDBASELEVEL", "GROUNDBASELEVELUNNORMALIZED",
     "MAXSTARBASELEVEL", "MAXSTARBASELEVELUNNORMALIZED", "MAXGROUNDBASELEVEL", "MAXGROUNDBASELEVELUNNORMALIZED",
@@ -182,6 +215,8 @@ const std::string_view kKnownPaths[] = {
     "ENEMYFORCE.HASGROUNDFORCE", "ENEMYFORCE.HASNEARBYSPACEFORCE", "ENEMYFORCE.HASNEARBYGROUNDFORCE",
     "ENEMYFORCE.STARBASETOTALUNNORMALIZED", "ENEMYFORCE.GROUNDBASETOTALUNNORMALIZED",
     "ENEMYFORCE.HASSPACEUNITSBITFIELD", "ENEMYFORCE.HASGROUNDUNITSBITFIELD", "ENEMYFORCE.ANTISTEALTHEFFECTIVENESS",
+    "ENEMYFORCE.MAINTENANCEUNNORMALIZED", "ENEMYFORCE.MAINTENANCE", "FRIENDLYFORCE.MAINTENANCEUNNORMALIZED",
+    "FRIENDLYFORCE.MAINTENANCE",
     "ENEMYFORCE.SPACETOTAL.TIMELASTSEEN", "ENEMYFORCE.SPACETOTAL.TIMELASTSEENUNNORMALIZED",
     "ENEMYFORCE.GROUNDTOTAL.TIMELASTSEEN", "ENEMYFORCE.GROUNDTOTAL.TIMELASTSEENUNNORMALIZED",
     "FRIENDLYFORCE.SPACETOTALUNNORMALIZED", "FRIENDLYFORCE.GROUNDTOTALUNNORMALIZED", "FRIENDLYFORCE.SPACETOTAL",
@@ -329,8 +364,20 @@ GalacticSnapshot snapshot_from_sim(const gal::GalacticSim& sim, bool ai_uses_fog
     const size_t P = players.size();
     s.relation.assign(P * P, 1);
     for (size_t a = 0; a < P; ++a)
-        for (size_t b = 0; b < P; ++b)
-            if (a == b || !sim.is_hostile(static_cast<int32_t>(a), static_cast<int32_t>(b))) s.relation[a * P + b] = 0;
+        for (size_t b = 0; b < P; ++b) {
+            if (a == b) {
+                s.relation[a * P + b] = 0;
+                continue;
+            }
+            // 0x4ad9f0 table (A2F_RE_READS §3.2 [H]): 0 friendly (self, ally), 1 enemy, 2 neutral. The port enum is Self 0,
+            // Ally 1, Neutral 2, Enemy 3, so the map is explicit.
+            switch (sim.relation(static_cast<int32_t>(a), static_cast<int32_t>(b))) {
+                case gal::Relation::Self:
+                case gal::Relation::Ally: s.relation[a * P + b] = 0; break;
+                case gal::Relation::Enemy: s.relation[a * P + b] = 1; break;
+                case gal::Relation::Neutral: s.relation[a * P + b] = 2; break;
+            }
+        }
     auto power = [&](ObjectHandle h) {
         const objects::TypeIndex t = st.type(h);
         return t < rules.types.size() ? rules.types[t].ai_combat_power : 0.0f;
@@ -575,10 +622,17 @@ struct GalacticSimTokenResolver::Impl {
     }
     uint64_t type_mask(uint32_t t) const { return t < r.types_.size() ? r.types_[t].category_mask : 0u; }
     double power(uint32_t t) const { return t < rules.types.size() ? static_cast<double>(rules.types[t].ai_combat_power) : 0.0; }
+    // Parameter_Category read with 0x5f4780 (a raw qword) [H]: a `Type[...]` literal carries the value its converter gave
+    // when the equation was built (A2I_TOKENS_RE §3.1; with A2J t07 that converter may come from Data\XML\Enum), so it is
+    // used as is; any other value form keeps the by-name lookup.
     static uint64_t category_param(std::span<const Param> params) {
         if (!has_param(params, "Parameter_Category")) return kAllCategories;
         uint64_t m = 0;
-        for (const std::string_view n : param_texts(params, "Parameter_Category")) m |= ai_category_bit(n);
+        for (const Param& p : params) {
+            if (!ai_iequal(p.name, "Parameter_Category")) continue;
+            if (p.value.kind == ParamValue::Kind::Enum) m |= static_cast<uint64_t>(p.value.enum_value);
+            else if (p.value.kind != ParamValue::Kind::Number) m |= ai_category_bit(p.value.text);
+        }
         return m;
     }
     bool type_named(uint32_t t, std::span<const std::string_view> names) const {
@@ -645,7 +699,91 @@ struct GalacticSimTokenResolver::Impl {
                                                             false, 0.0f, &siphoned));
     }
 
+    // Potential income 0x3f83b0 (A2I_TOKENS_RE §1.4) [H]: the planet's income at full political control, in float, in this
+    // order: base x black-market multiplier, the force-alignment term (as Planet_Income), the political term at
+    // MaximumPoliticalControl when the owner is not the neutral player, trade routes over every qualifying link whatever
+    // the neighbour's owner (none when the owner is no player). No halt, ability entries, min / max clamp or siphon.
+    double potential_income(size_t i) const {
+        const gal::PlanetState& p = planets[i];
+        if (!p.is_planet || p.type >= rules.types.size()) return 0.0;
+        const gal::EconomyConstants& c = rules.constants;
+        const int32_t b = p.destroyed ? rules.types[p.type].destroyed_credit_value : p.base_value;
+        float sum = gal::econ::income_base(b, p.black_market);
+        bool keep = false;
+        const gal::ForceSide owner_side =
+            valid_player(p.owner) && players[static_cast<size_t>(p.owner)].faction < rules.factions.size()
+                ? rules.factions[players[static_cast<size_t>(p.owner)].faction].force_alignment
+                : gal::ForceSide::Neutral;
+        const float force = gal::econ::income_force(b, owner_side, rules.types[p.type].the_force, rules.types[p.type].force_strength,
+                                                    c.credit_alignment_bonus, c.credit_alignment_penalty, &keep);
+        if (keep) sum += force;
+        if (p.owner != sim.neutral_player())
+            sum += gal::econ::income_political(b, static_cast<float>(kMaxLevel), c.political_income_curve);
+        float gain = 0.0f;
+        if (valid_player(p.owner)) {
+            const GalaxyMap& m = sim.map();
+            for (const uint32_t rt : p.links) {
+                const PlanetIndex nb = m.routes.point_a[rt] == i ? m.routes.point_b[rt] : m.routes.point_a[rt];
+                const float factor = m.routes.credit_gain_factor[rt];
+                if (nb < planets.size() && planets[nb].is_planet && factor > 0.0f) gain += factor;
+            }
+        }
+        sum += gal::econ::income_trade(b, gain);
+        return static_cast<double>(sum);
+    }
+
     // ---------------- planet force (PlanetForce 0x6dcb70) ----------------
+    // Target.<side>.MaintenanceUnnormalized 0x6daf20 (A2I_TOKENS_RE §1.2) [H], lifetime 15 (fogged leaf, mask 0x40: not
+    // modelled, like every fogged leaf of this resolver; AIUsesFogOfWarGalactic is False in the shipped data, so the leaf
+    // is live; A2J_T07_LITERALS §4 has the fog-on rule): over the orbiting, non-moving fleets of that side, every
+    // member M of type T with f = the Maintenance_Cost of M's OWNER's faction and u = T's Maintenance_Cost: skip
+    // f x u = 0, btime(T, none) = 0, or a non-zero Parameter_Category (default all bits; 0 = no test) that T's
+    // CategoryMask does not meet; add (double)(f x u x (cost / btime / 30)) in float.
+    bool force_maintenance_unn(size_t p, bool enemy, std::span<const Param> params, double& out) const {
+        const uint64_t cat = category_param(params);
+        return leaf(enemy ? "PF:E.MAINTUNN" : "PF:F.MAINTUNN", static_cast<int32_t>(p), 15, params, [&](double& v) {
+            v = 0.0;
+            for (const uint32_t f : planets[p].orbit) {
+                if (f >= sim.fleets().size()) continue;
+                const gal::FleetState& fl = sim.fleets()[f];
+                if (!fl.alive || fl.moving || !side(enemy, fl.owner)) continue;
+                for (const ObjectHandle u : fl.contents) {
+                    if (!st.alive(u)) continue;
+                    const uint32_t t = st.type(u);
+                    if (t >= rules.types.size()) continue;
+                    const gal::TypeInfo& ti = rules.types[t];
+                    const int32_t mo = st.owner(u);
+                    const uint32_t fac = valid_player(mo) ? players[static_cast<size_t>(mo)].faction : gal::kNoIndex;
+                    const float fm = fac < rules.factions.size() ? rules.factions[fac].maintenance_cost : 0.0f;
+                    const float fu = fm * ti.maintenance_cost;
+                    if (fu == 0.0f) continue;
+                    const float bt = gal::econ::build_time_t0(ti.build_time_seconds, rules.constants.production_speed_factor);
+                    if (bt == 0.0f) continue;
+                    if (cat != 0 && (type_mask(t) & cat) == 0) continue;
+                    v += static_cast<double>(fu * (static_cast<float>(ti.build_cost) / bt / static_cast<float>(kAiFps)));
+                }
+            }
+            return true;
+        }, out);
+    }
+    // Target.<side>.Maintenance 0x6dabc0 (A2I_TOKENS_RE §1.3) [H], lifetime 15: num = the side's MaintenanceUnnormalized
+    // (no caller parameters); 0 -> 0; den = Variable_Enemy (Enemy side) / Variable_Self (Friendly side)
+    // .GrossIncomeUnnormalized, its success ignored; den > 0 -> num / den, else the token fails.
+    bool force_maintenance(size_t p, bool enemy, std::span<const Param> params, double& out) const {
+        return leaf(enemy ? "PF:E.MAINT" : "PF:F.MAINT", static_cast<int32_t>(p), 15, params, [&](double& v) {
+            double num = 0.0;
+            if (!force_maintenance_unn(p, enemy, {}, num)) return false;
+            if (num == 0.0) {
+                v = 0.0;
+                return true;
+            }
+            double den = 0.0;
+            if (!resolve_player(enemy ? ctx.enemy : ctx.self, "GROSSINCOMEUNNORMALIZED", {}, den)) den = 0.0;
+            if (!(den > 0.0)) return false;
+            v = num / den;
+            return true;
+        }, out);
+    }
     // GroundTotalUnnormalized 0x6d95d0 / SpaceTotalUnnormalized 0x6dbd50 (live; the cache is the caller's).
     double force_raw(size_t p, bool enemy, bool space, uint64_t cat) const {
         return galactic_ai_planet_force(sim, r.types_, static_cast<PlanetIndex>(p), ctx.self, enemy, space, cat);
@@ -798,6 +936,8 @@ struct GalacticSimTokenResolver::Impl {
                 }, out);
             }
         }
+        if (k == "MAINTENANCEUNNORMALIZED") return force_maintenance_unn(p, enemy, params, out);
+        if (k == "MAINTENANCE") return force_maintenance(p, enemy, params, out);
         if (k == "STARBASETOTALUNNORMALIZED") {
             const gal::PlanetState& ps = planets[p];
             out = side(enemy, ps.owner) && ps.starbase && st.alive(ps.starbase) ? power(st.type(ps.starbase)) : 0.0;
@@ -1175,23 +1315,31 @@ struct GalacticSimTokenResolver::Impl {
     }
     double player_total(int32_t pl, bool space, uint64_t cat) const {
         double s = 0.0;
-        const uint64_t capital = ai_category_bit("Capital");
         player_objects(pl, [&](ObjectHandle u) {
             const uint32_t t = st.type(u);
             if (t >= rules.types.size()) return;
             const gal::UnitKind kind = rules.types[t].kind;
+            // A galactic starbase is a type pointer on the planet (PD +0x140), not a GOM object, so 0x66b1c0's object
+            // walk never reaches it: neither its power nor its members count (A2GAL_READINGS §2.1; A2H_T02_SPACE_TOTAL:
+            // retail HST 21135 / SST 24250 fit exactly without starbases) [H].
+            if (kind == gal::UnitKind::StarBase) return;
             if (space) {
+                // DUMMY_STARSHIP / DUMMY_SPACE_FIGHTER_SQUADRON: power by +0x1648. Any other type (A2I_TOKENS_RE §2.4, the
+                // 0x66b1c0 correction) [H]: power when its byte +0x1E (Is_Special_Weapon_In_Space) is set or it is a
+                // DUMMY_ORBITAL_STRUCTURE, and `cat` meets its structure mask +0x1658 (Capital when 0). With the default
+                // all-bits category the mask always passes; companies and plain ground structures are out because they
+                // are neither. Vanilla: those types have no AI_Combat_Power, so the branch adds 0.
                 if (space_kind(kind)) {
                     if ((type_mask(t) & cat) != 0) s += power(t);
-                } else if (kind == gal::UnitKind::StarBase && (cat & capital) != 0) {
-                    s += power(t);  // structures by +0x1658 (default Capital) [H]; orbital dummies excluded [port n/a]
+                } else if ((t < r.types_.size() && r.types_[t].special_weapon_space) || gal::is_orbital_structure_type(rules.types[t])) {
+                    if ((cat & galactic_ai_structure_mask(r.types_, t)) != 0) s += power(t);
                 }
             } else if (ground_kind(kind) && (type_mask(t) & cat) != 0) {
                 s += power(t);  // DUMMY_GROUND_COMPANY only
             }
             // "+ per-tech members (0x373fd0 / 0x373ee0) matching +0x1648" for every walked object, in both variants
-            // (AI_GALACTIC_TOKENS §3) [M: literal reading of the walk; port list = Starting_Spawned_Units_Tech_N].
-            s += galactic_ai_member_force(sim, r.types_, t, pl, cat);
+            // (AI_GALACTIC_TOKENS §3; exact list, A2F_RE_READS §2.3 [H]).
+            s += galactic_ai_member_force(sim, r.types_, t, pl, cat, true);
         });
         return s;
     }
@@ -1204,6 +1352,45 @@ struct GalacticSimTokenResolver::Impl {
             if (!fn(p, v)) return false;
             if (v > 0.0) ++n;
         }
+        return true;
+    }
+    // MaintenanceUnnormalized 0x669420 (A2H_GALACTIC_AI_RE §3) [H]: 0 for a neutral faction; for Self, over the player's
+    // fleets (orbiting and in transit), every member by its type (a company by its company type): k = type
+    // Maintenance_Cost x faction Maintenance_Cost (float); when k != 0 and btime(T, no planet) != 0, + (cost / btime / 30) x k
+    // (float terms, double sum). Surface units, starbases and structures add nothing. Another (non-neutral) root player
+    // (A2I_TOKENS_RE §1.1) [H]: Σ over the target list of Target.EnemyForce.MaintenanceUnnormalized (the planet leaf,
+    // no parameters), relative to Self, so the value does not depend on the root; fleets in transit add nothing. A planet
+    // failure fails.
+    bool maintenance_unnormalized(int32_t pl, bool self, double& out) const {
+        out = 0.0;
+        if (!valid_player(pl) || neutral(pl)) return true;
+        if (!self) {
+            for (size_t p = 0; p < planets.size(); ++p) {
+                if (!planets[p].is_planet) continue;
+                double x = 0.0;
+                if (!force_maintenance_unn(p, true, {}, x)) return false;
+                out += x;
+            }
+            return true;
+        }
+        const uint32_t f = players[static_cast<size_t>(pl)].faction;
+        const float fm = f < rules.factions.size() ? rules.factions[f].maintenance_cost : 0.0f;
+        double s = 0.0;
+        for (const gal::FleetState& fl : sim.fleets()) {
+            if (!fl.alive || fl.owner != pl) continue;
+            for (const ObjectHandle u : fl.contents) {
+                if (!st.alive(u)) continue;
+                const uint32_t t = st.type(u);
+                if (t >= rules.types.size()) continue;
+                const gal::TypeInfo& ti = rules.types[t];
+                const float k = ti.maintenance_cost * fm;
+                if (k == 0.0f) continue;
+                const float bt = gal::econ::build_time_t0(ti.build_time_seconds, rules.constants.production_speed_factor);
+                if (bt == 0.0f) continue;
+                s += static_cast<double>(static_cast<float>(ti.build_cost) / bt / static_cast<float>(kAiFps) * k);
+            }
+        }
+        out = s;
         return true;
     }
     double gross_income(int32_t pl) const {
@@ -1341,23 +1528,57 @@ struct GalacticSimTokenResolver::Impl {
             if (!self) return false;  // Self only [H]
             return out = 0.0, true;   // fog off: TimeLastSeen = 0
         }
-        if (k == "BUDGETFRACTIONTOBUILD")
+        if (k == "BUDGETFRACTIONTOBUILD")  // 0x667120 (A2H_GALACTIC_AI_RE §2) [H]
             return leaf("P:BUDGETFRACTIONTOBUILD", pl, 5, params, [&](double& v) {
-                if (!self) {
+                if (!self) {  // step 1: another root player -> 0
                     v = 0.0;
                     return true;
                 }
+                if (!r.hooks_.budget) return false;  // no goal system
+                // Step 2: Parameter_Type (absent / unknown: fail); Parameter_Category default -1 = every category.
                 const std::vector<std::string_view> names = param_texts(params, "Parameter_Type");
                 const uint32_t t = names.empty() ? gal::kNoIndex : rules.find_type(names[0]);
-                if (t == gal::kNoIndex || !r.hooks_.budget) return false;
+                if (t == gal::kNoIndex) return false;
                 const std::vector<std::string_view> cats = param_texts(params, "Parameter_Category");
-                double rate = 0.0, avail = 0.0;
-                if (!r.hooks_.budget(pl, cats.empty() ? std::string_view{} : cats[0], rate, avail)) return false;
-                const double R = static_cast<double>(rules.types[t].build_cost);  // [port] no in-progress reduction
-                const double D = static_cast<double>(rules.types[t].build_time_seconds) * rate + avail;
-                if (R < 0.0001) v = 0.0;
-                else if (D <= 0.0) v = kNever;
-                else v = R / D;
+                float rate = 0.0f, pool = 0.0f;
+                if (!r.hooks_.budget(pl, cats.empty() ? std::string_view{} : cats[0], rate, pool)) return false;
+                // Step 3: R = cost and T = btime without a planet (T0, GALACTIC_ECONOMY §2.3); queue q as the planet queues.
+                const gal::TypeInfo& ti = rules.types[t];
+                const float cost = static_cast<float>(ti.build_cost);
+                float R = cost;
+                float T = gal::econ::build_time_t0(ti.build_time_seconds, rules.constants.production_speed_factor);
+                const uint32_t q = ti.build_cost >= 1 && sim.queue_kind(t) == gal::kGroundQueue ? 0u : 1u;
+                bool inprog = false;
+                // Step 4: the head entry of queue q of every target-list planet, in list order.
+                for (size_t p = 0; p < planets.size(); ++p) {
+                    if (!planets[p].is_planet) continue;
+                    const std::vector<gal::BuildEntry>& queue = planets[p].queue[q];
+                    if (queue.empty()) continue;
+                    const gal::BuildEntry& e = queue.front();
+                    if (e.type != t || e.player != pl) continue;
+                    // p = clamp(1 - remaining (cached at the last advance) / T, 0, 1) [H]; [port] a 0 build time is done.
+                    const float prog = e.build_time > 0.0f ? std::clamp(1.0f - e.remaining / e.build_time, 0.0f, 1.0f) : 1.0f;
+                    const int64_t left = std::max<int64_t>(0, static_cast<int64_t>(e.start) + e.duration - sim.frame());
+                    const float rem = static_cast<float>(left) / static_cast<float>(kAiFps);  // live timer (0x4ad310)
+                    const QueueTask task = r.hooks_.queue_task ? r.hooks_.queue_task(pl, static_cast<int32_t>(p), q) : QueueTask{};
+                    if (task.kind == QueueTask::Kind::None || task.kind == QueueTask::Kind::EndedReclaimed) {
+                        v = 0.0;  // the whole token returns 0 at once [H]
+                        return true;
+                    }
+                    if (task.kind == QueueTask::Kind::Ended) continue;
+                    R = std::min(R, (1.0f - prog) * cost);
+                    R = std::min(R, task.alloc);                    // 0x6928c0 (0 without a budget)
+                    R = R - std::min(task.alloc, task.a + task.c);  // 0x692ca0: the goal's "have"
+                    T = std::min(T, rem);
+                    T = std::min(T, std::max(task.h, 0.0f));        // 0x692840 (0 without a budget)
+                    inprog = true;
+                }
+                // Steps 5-6: D = (double)(T x rate) (+ pool when nothing is in progress); R / D, 1e18f for D <= 0.
+                double D = static_cast<double>(T * rate);
+                if (!inprog) D += static_cast<double>(pool);
+                if (R < 0.0001f) v = 0.0;
+                else if (D > 0.0) v = static_cast<double>(R) / D;
+                else v = static_cast<double>(1.0e18f);
                 return true;
             }, out);
         if (k == "CANADVANCETECH")
@@ -1391,21 +1612,58 @@ struct GalacticSimTokenResolver::Impl {
             }, out);
         if (k == "GROSSINCOMEUNNORMALIZED" || k == "NETINCOMEUNNORMALIZED")
             return leaf(std::string("P:") + std::string(k), pl, 7, params, [&](double& v) {
-                v = gross_income(pl);  // net = gross - maintenance (0) [port]
+                v = gross_income(pl);  // credits per income cycle (0x667fb0) [H]
+                if (k == "NETINCOMEUNNORMALIZED") {  // 0x66a420: Gross - Unn (a non-Self root: A2I_TOKENS_RE §1.1) [H]
+                    double m = 0.0;
+                    if (!maintenance_unnormalized(pl, self, m)) return false;
+                    v -= m;
+                }
                 return true;
             }, out);
+        // 0x66a730(numerator, denominator) (A2I_TOKENS_RE §1.4) [H]: both paths on the root with no parameters; either
+        // failing fails; den = 0: 0 when num = 0, else fail; otherwise num / den, no clamp (a negative net stays negative).
         if (k == "GROSSINCOMENBPTM" || k == "GROSSINCOMENBTF" || k == "NETINCOMENBPTM" || k == "NETINCOMENBTF")
             return leaf(std::string("P:") + std::string(k), pl, 7, params, [&](double& v) {
-                double den = 0.0;
-                if (k.find("NBPTM") != std::string_view::npos) {
-                    for (size_t p = 0; p < planets.size(); ++p) den += planet_income(p);  // MaxAllPlanetsIncome [L]
-                } else {
-                    for (size_t q = 0; q < players.size(); ++q) den = std::max(den, gross_income(static_cast<int32_t>(q)));  // [L]
+                double num = 0.0, den = 0.0;
+                if (!resolve_player(pl, k.substr(0, 3) == "NET" ? "NETINCOMEUNNORMALIZED" : "GROSSINCOMEUNNORMALIZED", {}, num)) return false;
+                const bool all = k.find("NBPTM") != std::string_view::npos;
+                if (!resolve_player(pl, all ? "MAXALLPLANETSINCOMEUNNORMALIZED" : "MAXOWNEDPLANETSINCOMEUNNORMALIZED", {}, den)) return false;
+                if (den == 0.0) {
+                    if (num != 0.0) return false;
+                    v = 0.0;
+                    return true;
                 }
-                v = normalise(gross_income(pl), den);
+                v = num / den;
                 return true;
             }, out);
-        if (k == "MAINTENANCE" || k == "MAINTENANCEUNNORMALIZED") return out = 0.0, true;  // [port] no upkeep model
+        // MaxAllPlanetsIncomeUnnormalized 0x6698f0 [H]: Σ potential income over every target-list planet (each float term
+        // cast to double), lifetime -1 (computed once, kept for the game). MaxOwnedPlanetsIncomeUnnormalized 0x669ca0 [H]:
+        // the same over the planets whose TargetPlayerID (truncated to int) is the root's id; lifetime 7.
+        if (k == "MAXALLPLANETSINCOMEUNNORMALIZED" || k == "MAXOWNEDPLANETSINCOMEUNNORMALIZED") {
+            const bool all = k == "MAXALLPLANETSINCOMEUNNORMALIZED";
+            return leaf(std::string("P:") + std::string(k), pl, all ? kLifeForever : 7, params, [&](double& v) {
+                v = 0.0;
+                for (size_t p = 0; p < planets.size(); ++p) {
+                    if (!planets[p].is_planet) continue;
+                    if (!all) {
+                        double id = 0.0;
+                        if (!resolve_target(p, "TARGETPLAYERID", {}, id)) return false;
+                        if (static_cast<int32_t>(id) != pl) continue;
+                    }
+                    v += potential_income(p);
+                }
+                return true;
+            }, out);
+        }
+        if (k == "MAINTENANCE" || k == "MAINTENANCEUNNORMALIZED")  // 0x669110 / 0x669420 (A2H_GALACTIC_AI_RE §3) [H]
+            return leaf(std::string("P:") + std::string(k), pl, 7, params, [&](double& v) {
+                if (!maintenance_unnormalized(pl, self, v)) return false;
+                if (k == "MAINTENANCE") {  // Unn / GrossIncomeUnnormalized, 0 when the gross is 0
+                    const double g = gross_income(pl);
+                    v = g == 0.0 ? 0.0 : v / g;
+                }
+                return true;
+            }, out);
         if (k == "TECHLEVEL") return out = ps.tech_level, true;
         if (k == "ISFACTION") return is_faction(pl, params, out);
         if (k == "ISDIFFICULTY") {
@@ -1447,7 +1705,24 @@ struct GalacticSimTokenResolver::Impl {
                 v = b2d(n <= 0);
                 return true;
             }, out);
-        if (k == "ACTIVEGOALS") return out = r.hooks_.active_goals ? r.hooks_.active_goals(pl) : 0.0, true;
+        if (k == "ACTIVEGOALS") {  // 0x6e0490 (A2H_GALACTIC_AI_RE §1) [H]
+            // Exactly one Parameter_Category holding the category value: none, or a repeated parameter (a list value),
+            // fails the token (0x5f4780 has no default) [H / M].
+            const Param* cat = nullptr;
+            int32_t n_cat = 0;
+            for (const Param& p : params)
+                if (ai_iequal(p.name, "Parameter_Category")) {
+                    cat = &p;
+                    ++n_cat;
+                }
+            if (n_cat != 1 || !r.hooks_.active_goals) return false;
+            // One value: an AIGoalCategoryType literal carries exactly one name (A2I_TOKENS_RE §3.3).
+            const std::vector<std::string_view> names = param_texts(std::span<const Param>(cat, 1), "Parameter_Category");
+            if (names.size() != 1) return false;
+            int32_t n = 0;
+            if (!r.hooks_.active_goals(pl, names[0], n)) return false;
+            return out = static_cast<double>(n), true;
+        }
         if (k == "STORYTRIGGER") {
             const std::vector<std::string_view> n = param_texts(params, "Parameter_Name");
             if (n.empty()) return false;

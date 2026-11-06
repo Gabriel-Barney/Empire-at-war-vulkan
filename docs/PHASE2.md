@@ -1,29 +1,6 @@
-# Phase 2 status — Architecture design & headless core (2026-10-26)
+# Phase 2 — Architecture design & headless core: results and design notes (2026-10-26)
 
-Code lives in `C:\Users\Gabriel\Desktop\Star wars empire at war port\engine\`; design notes + flowchart mirrored at `docs\PHASE2.md`. Build: `build_msvc.cmd` (logs in `logs\`).
-
-```mermaid
-flowchart TD
-  B1[✅ B1 CMake targets + alamo_core<br/>hash · log · FileProvider · GalaxyMap SoA · ParallelFor]
-  B2[✅ B2 VFS<br/>MODPATH → corruption\Data → MEGs → FALLBACKPATH → GameData]
-  B3[✅ B3 XML + loaders<br/>GameConstants · Planets · TradeRoutes · Campaigns → GalaxyMap]
-  B4[✅ B4 Job system<br/>thread pool · parallel_for · deterministic tick · deferred results]
-  B5[✅ B5 Galactic pathing<br/>re-entrant A* · FW reference · parallel Dijkstra all-pairs]
-  H1[✅ B6 alamo_headless host<br/>load campaign → tick → path benchmarks]
-  H2[✅ MSVC build + tests + bench on PC]
-  R1[✅ Independent review]
-  F1[✅ B4 fixes from review]
-  H3[✅ MSVC rebuild + bench of B8/fixes on PC]
-  P1 & P2 & F1 --> H3
-  R1 --> F1
-  R2[✅ RE answers for open semantics]
-  P1[✅ B8a galactic vanilla parity]
-  P2[✅ B8b data + VFS parity]
-  H2 --> R1
-  B5 --> R2 --> P1 & P2
-  B1 --> B2 & B3 & B4 & B5
-  B2 & B3 & B4 & B5 --> H1 --> H2
-```
+Phase 2 is finished. Status, open work and the flowchart live only on the main roadmap (`roadmap-store/ROADMAP.html`, `docs/ROADMAP_PROTOCOL.md`); this file keeps the results, decisions, unresolved points and design notes. Code is in `engine\`. Build: `build_msvc.cmd` (logs in `logs\`).
 
 ## Done
 | Item | Result | Location |
@@ -41,11 +18,7 @@ flowchart TD
 | B4 review fixes | `ResultCell`/`CommitBuffer` (no `vector<bool>`), seq_cst wake handshake, strong exception safety on submit/spawn/parallel_for/Deferred/TaskGraph, background priority inherited by nested work (sim thread ran 0/400 background chunks), deterministic abort-after-failure, fewer wake-ups, DEADLOCK RULE doc. TSan 45 runs + reviewer stress, clang clean | engine/jobs |
 | Headless update | New APIs; Q11 cadence; every PlayerView mask populated; perception stand-ins include negative totals (exercises wrap → reference path); checksum now covers weight **and predecessor** matrices; fixed unspecified argument-evaluation order in A* request draws; `--latency F` runs recomputes as background `Deferred` jobs. Selfcheck: identical checksums for 0/1/4 workers at latency 0 and 30. All 33 FoC campaigns run | engine/apps |
 | Independent review | Fresh agent (did not write the code): clang `-Wconversion -Wshadow-all -Wsign-conversion` clean, TSan clean on jobs tests + 300-iteration stress + headless selfcheck. **1 confirmed defect:** `std::vector<bool>` race in `parallel_map_then_ordered_commit`/`parallel_reduce` when the result type is `bool` (reproduced). Plausible: lost wake-up on ARM (x86/MSVC safe), OOM-only exception paths, background-isolation latency leak. Headless gaps: checksum omits predecessor matrices; Deferred/background path and PlayerView masks not exercised | /home/claude review notes → fixes in progress |
-
-## In progress
-| Item | Scope |
-|---|---|
-| ✅ MSVC re-verification (2026-10-26) | `build_msvc.cmd` on the PC: all Phase 2 tests pass, 0 warnings (now 12/12 with the Phase 3 modules); `logs\bench.txt` selfcheck OK (identical checksums 0/1/4 workers, latency 0 and 30), all FoC campaigns run via the real VFS. Phase 3 continues in `docs/PHASE3.md` |
+| MSVC re-verification (2026-10-26) | `build_msvc.cmd` on the PC: all Phase 2 tests pass, 0 warnings (now 12/12 with the Phase 3 modules); `logs\bench.txt` selfcheck OK (identical checksums 0/1/4 workers, latency 0 and 30), all FoC campaigns run via the real VFS. Phase 3 continues in `docs/PHASE3.md` | build_msvc.cmd |
 
 ## Fixes after Phase 2
 - 2026-10-26: `alamo_data_tests` crashed when `ALAMO_FOC_DATA` pointed at a real install (XML in MEGs → empty database → `front()` on an empty vector in the test). The test now mounts the VFS (or skips with a reason); the library only gained a diagnostic. Real-install numbers match the table above; headless checksums unchanged. See `docs/PHASE3.md`.
@@ -55,7 +28,7 @@ flowchart TD
 - Floats: IEEE single, no FMA contraction, so results match across MSVC/clang and thread counts.
 - Graph nodes follow the original (PLANET behaviour + owned); vanilla quirks that can hang or crash the original (cyclic predecessor chains, record-pool exhaustion) return empty/status instead — same result whenever the original terminates.
 
-## Open items
+## Unresolved points and original quirks (notes; open work is tracked on the roadmap)
 - Still unresolved by RE: planet-list (+0x560) population order (fixes node indices), perception function names behind 4 tokens, `player+0x48` in the cadence stagger, whether game-mode +0x10 equals the global frame, galactic game-speed scaling.
 - Original quirks to keep for MP parity: path visibility uses the LOCAL player's mask (possible vanilla desync source), A* pools capped at 3N, a real 0xFFFFFFFF edge weight reads as unlinked.
 - Data assumptions: CRC32 over the list `<File>` text as written (case kept, trimmed); a replacing route/campaign keeps the replaced slot (original's map order unknown); `Variant_Of_Existing_Type` re-pass not ported yet; STEAMMOD shader search paths not handled.
@@ -100,6 +73,7 @@ Rules: C++20, no third-party deps, clean-room (docs only, never `re_reference/`)
 3. MEGs, newest-mounted first: FoC 64Patch > patch2 > Patch > FoC MegaFiles.xml (later-listed wins) > EaW 64Patch > patch2 > Patch > EaW MegaFiles.xml. A mod's own `Data\MegaFiles.xml` / `Patch*.meg` replace the base ones (they are resolved through steps 1–2).
 4. Fallback chain: `FALLBACKPATH=` dirs, then auto-detected EaW `GameData\Data`.
 Campaign list: one `CampaignFiles.xml`, first match, no merge (`--merge-campaign-lists` opt-in).
+Directory scans are not file lookups (docs/re/UI.md §9.2, 2026-11-02): the original's find walks the FoC loose folder first, then every mounted MEG in mount order, each name once; the mod search list and the fallback folders are not part of it (the skirmish map catalog scans each mod dir on its own). `Vfs::list(glob, layers)` restricts a listing to chosen layers for this.
 
 ### Galactic pathing targets (from docs/re/GALACTIC.md)
 - Fleet A*: per-request scratch (re-entrant, parallel-safe); edge cost `distance / HS_Speed_Factor`

@@ -128,6 +128,9 @@ public:
     // B.3 team colour: non-neutral owner -> palette[owner % 9] (index = owner % 9); neutral -> the type's
     // No_Colorization_Color when set, else the owner faction's (index kNeutralTeam).
     materials::float4 team_color(int32_t owner, const SnapshotTypeInfo& t, uint8_t& index) const;
+    // p4uia t02: the palette index (0..8) a non-neutral owner uses instead of owner % 9: owner k takes colours[k]; owners past
+    // the list keep owner % 9. Presentation only (the sim never reads a colour). Empty = every owner % 9.
+    void set_owner_colours(std::vector<uint8_t> colours) { owner_colours_ = std::move(colours); }
     // Tests / tools: replace the model of every type (e.g. a debug box for model-less synthetic types).
     void set_model(objects::TypeIndex t, std::string model) { info_[t].model = std::move(model); }
     // Tests / tools: replace a type's R5 decoration fields.
@@ -173,6 +176,7 @@ private:
     std::vector<SnapshotTypeInfo> info_;
     std::vector<std::pair<std::string, objects::TypeIndex>> by_name_;  // upper-case name, sorted (lookup only)
     std::array<materials::float4, 9> palette_{};
+    std::vector<uint8_t> owner_colours_;  // set_owner_colours
     std::vector<uint8_t> neutral_;                     // per owner index (faction order)
     std::vector<materials::float4> neutral_color_;     // per owner index: the faction's No_Colorization_Color
 };

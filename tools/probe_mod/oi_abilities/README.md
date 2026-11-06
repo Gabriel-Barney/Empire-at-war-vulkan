@@ -32,7 +32,7 @@ health, flags, owner, position and primary animation slot on every frame it can 
 3. Give **no orders** and click nothing on the map. Moving the camera is fine. The probe spawns its units away from the
    start positions: Han Solo and MAL rocket vehicles on land, in shallow water and in deep
    water, then a Rancor, a Rebel Infiltrator and Yoda. **Wait 5 minutes** from the moment the battlefield shows.
-   The scenarios start 15 s in and finish after about 3.2 minutes.
+   The scenarios start 15 s in and finish after about 3.9 minutes.
 4. Press **Esc > Quit** to go back to the main menu, then quit the game. The window running `run_oi.cmd` writes the
    report and removes the mod folder by itself.
 5. Send back `out\<newest run>\`. The folder name is also written in `out\latest.txt`.
@@ -91,7 +91,12 @@ model in §4.13 is wrong.
 How the hook works:
 
 - **Which AI runs it.** Only the free store of the AI player whose faction is `REBEL`, in a land battle, arms the
-  probe. Every other AI player records `SKIP` and keeps the shipped behaviour.
+  probe. Every other AI player records `SKIP` and keeps the shipped behaviour. Retail runs `Base_Definitions` before
+  it sets `PlayerObject`, so the decision is retried from the first service calls until the faction is readable
+  (the first retail run, 2026-11-04, skipped itself with `pid=? fac=?`).
+- **MAL placement.** The MAL is created with `Create_Generic_Object` at its point (`SPAWN how=cfg+generic`);
+  `Spawn_Unit` moves a land unit off water cells. If it is not there, it is driven there (up to 400 frames), and
+  Han is spawned within 120 of it once it arrives (`MALPOS`): the stun blast is centred on Han, radius 150.
 - **How often it runs.** It lowers `ServiceRate` to 0.05 s, so the script runs on every free-store service (every
   3 frames). It is a state machine driven from `FreeStoreService`, with `On_Unit_Service` as a fallback. It uses no
   thread and no yield inside `pcall`.
@@ -118,6 +123,14 @@ The selftest does three things:
 2. It passes those records through the parser.
 3. It runs the reader and parser selftests.
 
+## Results (2026-11-04)
+
+Four retail runs played by Claude (`out61104-*`, not in git). Run 1: the probe skipped itself (the
+`PlayerObject` timing above). Runs 2 and 3: every clip-timing scenario, MALs only on the shore. Run 4: MALs on their
+points, land and shallow only. The findings are in `docs/re/ABILITIES_HARDPOINTS.md` §4.12 / §4.13 "Probe result":
+§4.12 confirmed; Pound, Eat and Grenade match the port; the Berserker cadence and window match, while retail plays
+SpinMove variant 1 and restarts its loop irregularly.
+
 ## Known limits (not checkable offline)
 
 - **Reading the clip position needs the model pointer.** The offset from the object to its `ModelClass` is not
@@ -130,5 +143,11 @@ The selftest does three things:
   spawn comes from the Lua `proj` count, both at 3-frame resolution.
 - **The Rancor might Swat instead of Eat.** It may use `Swat` (chance 0.5) instead of Eat. Three troopers are
   offered, 300 frames apart.
+- **The hook stops after a placed MAL dies.** In the 2026-11-04 run the AI script produced no record after the
+  shallow-water MAL (made by `Create_Generic_Object`) was destroyed, so the deep scenario and the rest never ran.
+  The parser copes (a missing scenario end is taken from the next start, a MAL without a `SPAWN` record is bound by
+  type and frame). The cause is not known; a likely one is a method call on the destroyed object's handle.
+- **Records are found in address order.** The parser sorts each run's records by Lua frame before grouping them
+  into scenarios.
 - **Read races.** Reads can be off by about ±1 frame. The reader polls every 4 ms, while the game runs a frame
   every 33 ms.

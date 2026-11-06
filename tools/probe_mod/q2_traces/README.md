@@ -111,6 +111,7 @@ galaxy is running.
    time) with the Lua probe. It shows whether and when the Rebel AI attacks the idle Empire base: its army size over time
    (is 9 the real 2-player cap), the first tick its units reach the base and which base objects die. Read it with
    `analysis\land_attack.py out\<run>`.
+   **Story mission (story t04), about 15 min:** `run_story.cmd`, see **Story mission run** below.
 7. **Send back:** zip `out\` and send it. Leave out `out\selftest`. Each run has its own folder:
    - `trace.q2t`;
    - `summary.json`;
@@ -118,6 +119,30 @@ galaxy is running.
    - `run_status.json`;
    - `cleanup.log`;
    - with the Lua probe: `lua_summary.json`, `lua_records.txt`, `lua_perception.tsv`, `lua_reader.log`.
+
+### Story mission run (story t04): steps for Gabriel
+
+Goal: a reference trace of one story mission, for roadmap `story` t04 (none of the earlier traces has one: they are the
+Heart of the Maw sandbox galaxy and skirmishes). The reader's `story` scenario (2026-11-03) traces the tactical battle a story
+campaign starts as a child of its galaxy (mode stack 2): it starts when the battle has loaded and stops when the battle ends
+(`reason battle_ended`, a complete trace) or after 18000 ticks (10 min of game time). Nothing is installed in the game folder.
+
+1. Start Steam. Close the game if it is running.
+2. Double-click **`run_story.cmd`** in `tools\probe_mod\q2_traces\`. It rebuilds `q2reader.exe` (needs `toolchain\`), then
+   launches the game **windowed** at 1920x1080. Leave the black command window open.
+3. In the game: Esc through the intro movies, then **Single Player** → **Campaigns** (Forces of Corruption) →
+   **Underworld** → difficulty **Normal** → **Start**. Esc through the opening movie. The campaign starts its first
+   mission at once: the Kessel land battle (Tyber Zann's escape, `STORY_UNDERWORLD_M01_LAND.XML`).
+4. When the battle has loaded (the intro cinematic plays), click nothing and press no keys. Without orders Tyber stays in
+   his cell, so the mission does not finish: the trace stops after 10 minutes of game time and the game closes by itself.
+   If a dialog asks something, do not answer it.
+5. The command window ends with `done: exit <n>` (0 = complete). Send back
+   `tools\probe_mod\q2_traces\out\<yyyymmdd-hhmmss>-story-vanilla\` (zipped): `trace.q2t`, `summary.json`,
+   `run_status.json`, `cleanup.log`.
+
+If the window was closed early or the PC crashed, double-click `cleanup.cmd`. What the trace is compared with: the port's
+Full_Story_Campaign_Underworld linked Kessel battle over the same ticks (RNG draw counts, object counts by type and owner,
+the intro spawns of the M01 Lua, the victory monitor staying held: `story` t04 on the roadmap).
 
 ### Lua probe run (q2f t06): steps for Gabriel
 

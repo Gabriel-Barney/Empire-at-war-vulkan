@@ -514,7 +514,7 @@ void App::build_galactic_hud(ui::GalacticHudFrame& f, std::vector<ui::GalacticPl
                     continue;
                 }
                 const objects::TypeIndex t = st.type(m);
-                gf.units.push_back({static_cast<uint32_t>(st.id(m)), t < types->size() ? (*types)[t].icon_name : std::string(), 1, false});
+                gf.units.push_back({static_cast<uint32_t>(st.id(m)), t < types->size() ? (*types)[t].icon_name : std::string(), 1, false, t});
             }
             if (gf.units.empty() || gf.fleet == 0 || (!own && all_stealth)) continue;
             out.push_back(std::move(gf));

@@ -30,7 +30,7 @@ constexpr uint32_t kFighterGridSaveVersion = 1;
 constexpr uint32_t kFighterGridsSaveVersion = 1;
 constexpr uint32_t kDeparturesSaveVersion = 1;
 constexpr uint32_t kEnginesSaveVersion = 1;
-constexpr uint32_t kMovementSaveVersion = 9;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate; 7: S8 t24 turret params (UnitDesc) + TURRET state (Unit); 8: S7 t37 fighter object goal blocks (FighterGuard), FighterSquad::guard_follow; 9: a1k t03 pushed move (Unit::pushed / push_path / push_next / push_blocked), MovementStats::pushes / push_failures, UnitDesc::hard_x / hard_y
+constexpr uint32_t kMovementSaveVersion = 12;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate; 7: S8 t24 turret params (UnitDesc) + TURRET state (Unit); 8: S7 t37 fighter object goal blocks (FighterGuard), FighterSquad::guard_follow; 9: a1k t03 pushed move (Unit::pushed / push_path / push_next / push_blocked), MovementStats::pushes / push_failures, UnitDesc::hard_x / hard_y; 10: s78f t02 fighter formation block stacks (FighterFormation replaces FighterGuard), FighterParams / FighterSquad chase ranges, FighterSquad::speed_cap dropped; 11: s78k t01 UnitDesc::stopped_turn_rate / movement_directions, Unit::forced (land straight move); 12: s78l t02 UnitDesc::rotation_animation_speed, the Walk arrival turn state (Unit::aturn / aturn_rate / tclip / tclip_start / tclip_speed / aturn_ended / aturn_end_pending)
 
 // u32 byte length + the bytes (like apps/sim write_section / read_section, which this module cannot include).
 template <class F>
@@ -313,6 +313,9 @@ void io_desc(IO& io, D& d) {  // UnitDesc
         io.f32(d.turret_deployed_rest[k]);
     }
     io.f32(d.turret_rest_delay);
+    io.f32(d.stopped_turn_rate);  // s78k t01 (version 11)
+    io.i32(d.movement_directions);
+    io.f32(d.rotation_animation_speed);  // s78l t02 (version 12)
 }
 
 template <class IO, class T>
@@ -415,6 +418,8 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.b(u.failed);
     io.v2(u.goal);
     io.f32(u.facing);
+    io.f32(u.final_facing);  // s78k t01 (version 11)
+    io.b(u.forced);
     io.u32(u.start_frame);
     io.f32(u.formation_speed);
     io.i32(u.large_hover_index);
@@ -460,10 +465,26 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.f32(u.tidle);
     io.b(u.thold);
     io.b(u.taim);
+    io.e8(u.aturn, valid_loco_state);  // s78l t02 (version 12)
+    io.f32(u.aturn_rate);
+    io.i32(u.tclip);
+    io.u32(u.tclip_start);
+    io.f32(u.tclip_speed);
+    io.b(u.aturn_ended);
+    io.b(u.aturn_end_pending);
     io_fighter(io, u.fs);
     io.f32(u.fp.max_thrust);
     io.f32(u.fp.min_follow_distance);
     io.f32(u.fp.attack_range);
+    io_chase(io, u.fp.chase);  // s78f t02 (version 10)
+}
+
+template <class IO, class C>
+void io_chase(IO& io, C& c) {  // FighterChaseRanges (s78f t02, version 10)
+    io.f32(c.guard);
+    io.f32(c.idle);
+    io.f32(c.attack_move);
+    io.f32(c.extension);
 }
 
 template <class IO, class S>
@@ -478,19 +499,33 @@ void io_squad(IO& io, S& s) {  // FighterSquad
     io.cell(s.park);
     io.f3(s.dest);
     io_target(io, s.target);
-    io.f32(s.speed_cap);  // S7 t28 (version 5)
     io.b(s.guard_follow);  // S7 t37 (version 8)
+    io_chase(io, s.chase);  // s78f t02 (version 10; FighterSquad::speed_cap of version 5 dropped)
+}
+
+template <class IO, class B>
+void io_block(IO& io, B& b) {  // FighterBlock (s78f t02, version 10)
+    io.u8(b.kind);
+    io.i32(b.object);
+    io.i32(b.hard_point);
+    io.v2(b.point);
+    io.f32(b.facing);
+    io.f32(b.threat);
+    io.u8(b.flags);
+    io.b(b.pushed);
+    io.b(b.own_speed);
+    io.b(b.loop);
 }
 
 template <class IO, class G>
-void io_guard(IO& io, G& g) {  // FighterGuard (S7 t37, version 8)
+void io_form(IO& io, G& g) {  // FighterFormation (s78f t02, version 10; replaces S7 t37's FighterGuard)
     io.i32(g.key);
-    io.i32(g.object);
-    io.u8(g.flags);
+    io.u8(g.state);
     io.v2(g.goal);
     io.u32(g.next);
+    io.f32(g.speed);
+    io.b(g.single_arrived);
     io.b(g.follow);
-    io.b(g.covered);
 }
 
 template <class IO, class S>
@@ -912,8 +947,12 @@ void MovementSystem::write(ByteWriter& w) const {
     put_section(w, [this](ByteWriter& s) { fgrids_.write(s); });
     w.u32(static_cast<uint32_t>(fevents_.size()));
     for (const FighterEvent& e : fevents_) w.u8(static_cast<uint8_t>(e.kind)).i32(e.who).i32(e.target);
-    w.u32(static_cast<uint32_t>(fguards_.size()));  // S7 t37
-    for (const FighterGuard& g : fguards_) io_guard(out, g);
+    w.u32(static_cast<uint32_t>(fforms_.size()));  // s78f t02
+    for (const FighterFormation& g : fforms_) {
+        io_form(out, g);
+        w.u32(static_cast<uint32_t>(g.blocks.size()));
+        for (const FighterBlock& b : g.blocks) io_block(out, b);
+    }
 }
 
 bool MovementSystem::read(ByteReader& r) {
@@ -965,11 +1004,23 @@ bool MovementSystem::read(ByteReader& r) {
         if (!valid_fighter_event(kind)) return false;
         e.kind = static_cast<FighterEvent::Kind>(kind);
     }
-    if (!get_count(r, 20, n)) return false;  // S7 t37
-    std::vector<FighterGuard> fguards(n);
+    if (!get_count(r, 26, n)) return false;  // s78f t02
+    std::vector<FighterFormation> fforms(n);
     for (uint32_t k = 0; k < n; ++k) {
-        io_guard(in, fguards[k]);
-        if (!r.ok() || fguards[k].key < 0 || (k > 0 && fguards[k].key <= fguards[k - 1].key)) return false;
+        FighterFormation& g = fforms[k];
+        io_form(in, g);
+        if (!r.ok() || g.key < 0 || (k > 0 && g.key <= fforms[k - 1].key)) return false;
+        if (g.state != kFormationPlan && g.state != kFormationMoving && g.state != kFormationArrived && g.state != kFormationPopped)
+            return false;
+        uint32_t nb = 0;
+        if (!get_count(r, 29, nb)) return false;
+        g.blocks.resize(nb);
+        for (FighterBlock& b : g.blocks) {
+            io_block(in, b);
+            if (!r.ok() || (b.kind != kFighterBlockPosition && b.kind != kFighterBlockObject) ||
+                (b.kind == kFighterBlockObject && b.object < 0))
+                return false;
+        }
     }
     if (!r.ok()) return false;
     // Squadron membership both ways (members are fighter units naming their squadron; a unit naming a squadron is in
@@ -1006,8 +1057,8 @@ bool MovementSystem::read(ByteReader& r) {
     squads_ = std::move(squads);
     fgrids_ = std::move(fgrids);
     fevents_ = std::move(fevents);
-    fguards_ = std::move(fguards);
-    fguard_internal_ = false;
+    fforms_ = std::move(fforms);
+    fform_internal_ = false;
     // The region map is a cache of the grid's effective values (rebuilt, see the header); the rebuild also re-derives
     // every unit's mask slot.
     regions_ = RegionMap{};

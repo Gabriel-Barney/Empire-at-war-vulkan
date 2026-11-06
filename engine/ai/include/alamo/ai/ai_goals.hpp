@@ -92,6 +92,10 @@ struct Goal {
     bool pp_valid = false;
     float cost = 0.0f;              // +0x78
     float eta = 0.0f;               // +0x7c seconds
+    // A2f t09: 0x6c0450(PP), the AllowedTime base (GoalSystemConfig::nominal_allowed_time): sum of btime(T, none)
+    // over the PP's selection x the plan player's Galactic_ (A2f t09) / Land_ / Space_ (A2g t06) Build_Time_Multiplier. Set with eta; refreshed when the PP is
+    // re-solved (plan_activatable). 0 without a PP.
+    float nominal_time = 0.0f;
     int32_t pp_handle = -1;         // mode-owned PotentialPlan record
     bool production_queued = false; // commit step 4 done for this PP
     int32_t running = -1;           // running plan instance (mode-owned), -1 = none
@@ -108,10 +112,11 @@ public:
     // Perception for (self, opponent, human, target); `function` names an equation.
     virtual bool evaluate(const std::string& function, int32_t target, double& out) = 0;
     // Slot 10 (galactic 0x6b8660): Find_Plan_For_Goal + PotentialPlan + time/budget gross test. Fills
-    // g.plan / g.pp_* / g.cost / g.eta. False rejects the candidate.
+    // g.plan / g.pp_* / g.cost / g.eta (galactic: g.nominal_time). False rejects the candidate.
     virtual bool accept(Goal& g) = 0;
-    // 0x6c4a50: a new proposal at accept; re-solves its PotentialPlan honouring the reservations (§28.6 step 3).
-    virtual bool plan_activatable(const Goal& g) = 0;
+    // 0x6c4a50: a new proposal at accept; re-solves its PotentialPlan honouring the reservations (§28.6 step 3). The
+    // galactic mode refreshes g.nominal_time from the re-solved selection (AllowedTime reads the PP live, A2f t09).
+    virtual bool plan_activatable(Goal& g) = 0;
     virtual bool plan_invalid(const Goal& g) = 0;      // 0x6c47c0 (-> 0x6c45e0: a unit taken by another PP)
     virtual bool replaceable(const Goal& g) = 0;       // 0x692740
     virtual void refresh_plan(Goal& g) = 0;            // 0x6c2d60: reserve / re-assert (+0x30 = PP)
@@ -173,6 +178,10 @@ struct GoalSystemConfig {
     // AIPlayerType GoalSetExtensionSize (+0xE8, default 2) [H]. The galactic AI passes its player type's value; the
     // tactical AI still uses this default of 1 (its goldens move with 2; follow-up for the tactical owner).
     int32_t extra_goals_per_category = 1;
+    // A2f t09 (A2F_RE_READS §1.4 item 2) [H]: AllowedTime (0x692860) with a PP = Goal::nominal_time x
+    // Build_Time_Delay_Tolerance, and nominal_time is hashed. The galactic AI (A2f t09) and the tactical AI (A2g t06,
+    // Land_ / Space_Build_Time_Multiplier) set it; off keeps the PP ETA x tolerance base.
+    bool nominal_allowed_time = false;
 };
 
 class GoalSystem {
@@ -195,6 +204,9 @@ public:
     int32_t exclusion_count(uint32_t goal_type) const;
     bool proposable(uint32_t goal_type) const;
     static float effective_desire(const Goal& g);
+    // 0x692860 AllowedTime(G, 0): Time_Limit without a PP, else base x Build_Time_Delay_Tolerance (base = nominal_time
+    // with GoalSystemConfig::nominal_allowed_time, else eta). <= 0 = no limit.
+    float allowed_time(const Goal& g) const;
 
     // GiveDesireBonus (0x699ab0): one-shot bump of a PROPOSED (type, target). True when found.
     bool give_desire_bonus(uint32_t goal_type, int32_t target, float bonus);
@@ -232,7 +244,6 @@ private:
     void release(Goal& g, bool by_goal_system);
     bool fundable(const Goal& g);
     bool time_ok(const Goal& g) const;
-    float allowed_time(const Goal& g) const;
     bool is_like(uint32_t type, uint32_t other) const;
 
     const AiDefinitions* defs_ = nullptr;

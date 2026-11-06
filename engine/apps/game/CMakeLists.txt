@@ -59,6 +59,13 @@ add_test(NAME alamo_game_save_tests COMMAND alamo_game_save_tests)
 set_tests_properties(alamo_game_save_tests PROPERTIES TIMEOUT 1200)
 alamo_label_slow(alamo_game_save_tests)
 
+# p4ui t06 (UI.md section 9): the skirmish map catalog (official / custom / mod-folder maps) on a fake install in its own temp
+# folder; with ALAMO_FOC_DATA also the shipped data (24 land + 24 space official rows, no custom).
+add_executable(alamo_game_skirmish_maps_tests tests/test_skirmish_maps.cpp)
+target_link_libraries(alamo_game_skirmish_maps_tests PRIVATE alamo_core alamo_game_core)
+add_test(NAME alamo_game_skirmish_maps_tests COMMAND alamo_game_skirmish_maps_tests)
+set_tests_properties(alamo_game_skirmish_maps_tests PROPERTIES TIMEOUT 120)
+
 # Playtest 2 t13: auto-resolve results screen figures (battle time, bounty, efficiency): pure rules data-free, bounty data
 # on the FoC data (ALAMO_FOC_DATA, skipped without).
 add_executable(alamo_game_battle_summary_tests tests/test_battle_summary.cpp)
