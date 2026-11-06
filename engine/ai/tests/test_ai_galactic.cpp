@@ -41,6 +41,7 @@
 #include "alamo/lua/players.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
+#include "alamo/objects/object_types.hpp"  // A2k t06: ObjectTypeDatabase (mod-category type table)
 #include "../src/galactic_goal_time.hpp"
 #include "../src/galactic_slots.hpp"
 #ifdef ALAMO_AI_HAVE_VFS
@@ -4622,6 +4623,21 @@ static void test_foc_data() {
     // info, so the typed force rows hold squadrons instead of the starbase's own AI_Combat_Power.
     const std::vector<GalacticAiTypeInfo> foc_tinfo = make_galactic_ai_type_info(types);
     {
+        // A2k t06: the masks come from the shipped Data\XML\Enum\GameObjectCategoryType.xml and equal the built-in table's
+        // bit for bit (so no golden moves); the converted CategoryMask field (whole-value conversion) is reported.
+        CHECK(types.enums().get(objects::EnumId::GameObjectCategory).from_file);
+        std::vector<GalacticAiTypeInfo> builtin = foc_tinfo;
+        fill_category_masks(builtin);
+        size_t differ = 0, field_differ = 0;
+        for (size_t t = 0; t < foc_tinfo.size(); ++t) {
+            differ += foc_tinfo[t].category_mask != builtin[t].category_mask ? 1u : 0u;
+            field_differ += foc_tinfo[t].category_mask != types.get_mask(static_cast<objects::TypeIndex>(t), "CategoryMask") ? 1u : 0u;
+        }
+        CHECK(differ == 0 && !foc_tinfo.empty() && foc_tinfo.front().capital_mask == ai_category_bit("Capital"));
+        std::printf("FoC category masks: %zu types, %zu differ from the built-in table, %zu from the CategoryMask field\n",
+                    foc_tinfo.size(), differ, field_differ);
+    }
+    {
         const uint32_t sb1 = rules.find_type("Rebel_Star_Base_1"), xw = rules.find_type("Rebel_X-Wing_Squadron"), yw = rules.find_type("Y-Wing_Squadron");
         CHECK(sb1 != gal::kNoIndex && sb1 < foc_tinfo.size() && xw != gal::kNoIndex && yw != gal::kNoIndex);
         if (sb1 < foc_tinfo.size()) {
@@ -4843,6 +4859,99 @@ static void test_save_foc() {
 }
 #endif
 
+// A2k t06: the type side of a category test (GalacticAiTypeInfo::category_mask, the Capital structure default) uses the
+// data-loaded GameObjectCategoryType converter, so a mod category gets its bit and a renumbered vanilla name its new bits.
+static void test_category_masks_from_enum_files() {
+    MemoryFiles mf;
+    // Mod table: Capital renumbered to 0x40, Super moved, Infantry dropped, Mod_Walker = 2^39 (hex, sscanf %llx).
+    mf.add("Data\\XML\\Enum\\GameObjectCategoryType.xml",
+           "<?xml version=\"1.0\"?>\n<EnumDefinition>\n<Fighter>1</Fighter>\n<Frigate>10</Frigate>\n<Capital>40</Capital>\n"
+           "<Super>20</Super>\n<Structure>400</Structure>\n<Mod_Walker>8000000000</Mod_Walker>\n<None>0</None>\n</EnumDefinition>\n");
+    objects::EnumRegistry mod;
+    mod.load_dynamic(mf);
+    const objects::EnumRegistry vanilla;  // built-in FoC table
+    const uint64_t walker = 0x8000000000ull;
+    CHECK(ai_category_bit("Mod_Walker", &mod) == walker && ai_category_bit("mod_walker ", &mod) == walker);
+    CHECK(ai_category_bit("Mod_Walker") == 0 && ai_category_bit("Mod_Walker", &vanilla) == 0);
+    CHECK(ai_category_bit("Capital", &mod) == 0x40 && ai_category_bit("Capital") == 0x20 && ai_category_bit("Capital", &vanilla) == 0x20);
+    CHECK(ai_category_bit("Infantry", &mod) == 0 && ai_category_bit("Infantry") == 0x80);
+    {
+        std::vector<GalacticAiTypeInfo> t(3);
+        t[0].categories = {"MOD_WALKER", "FRIGATE"};
+        t[1].categories = {"CAPITAL", "INFANTRY"};  // a dropped name adds nothing [port: the OR of the known names]
+        t[2].categories = {"STRUCTURE"};
+        t[2].garrison_mask = 0x10;
+        std::vector<GalacticAiTypeInfo> v = t;
+        fill_category_masks(t, &mod);
+        fill_category_masks(v);  // null = the built-in table (unchanged behaviour)
+        CHECK(t[0].category_mask == (walker | 0x10) && t[1].category_mask == 0x40 && t[2].category_mask == 0x400);
+        CHECK(v[0].category_mask == 0x10 && v[1].category_mask == (0x20 | 0x80) && v[2].category_mask == 0x400);
+        // Structure mask: +0x1658 when set, else the Capital bits of the same converter.
+        CHECK(t[0].capital_mask == 0x40 && galactic_ai_structure_mask(t, 0) == 0x40 && galactic_ai_structure_mask(t, 2) == 0x10);
+        CHECK(galactic_ai_structure_mask(v, 0) == 0x20 && galactic_ai_structure_mask(t, 9) == 0x20);
+        // Never filled: the built-in Capital bit.
+        std::vector<GalacticAiTypeInfo> raw(1);
+        CHECK(!raw[0].capital_mask && galactic_ai_structure_mask(raw, 0) == 0x20);
+        // fill_unset keeps a preset mask, fills the rest.
+        std::vector<GalacticAiTypeInfo> u(2);
+        u[0].categories = u[1].categories = {"MOD_WALKER"};
+        u[0].category_mask = 0x1;
+        fill_unset_category_masks(u, &mod);
+        CHECK(u[0].category_mask == 0x1 && u[1].category_mask == walker && u[0].capital_mask == 0x40);
+        u[1].capital_mask = 0x2;
+        fill_unset_category_masks(u);
+        CHECK(u[1].capital_mask == 0x2);
+    }
+    {
+        // A discarded converter (duplicate value) fails every conversion: no bits, and the Capital default is 0 too (a
+        // structure without +0x1658 then meets no category row), not the built-in bit.
+        MemoryFiles bad;
+        bad.add("Data\\XML\\Enum\\GameObjectCategoryType.xml",
+                "<?xml version=\"1.0\"?>\n<EnumDefinition>\n<Capital>20</Capital>\n<Frigate>20</Frigate>\n</EnumDefinition>\n");
+        objects::EnumRegistry discarded;
+        discarded.load_dynamic(bad);
+        std::vector<GalacticAiTypeInfo> t(1);
+        t[0].categories = {"CAPITAL"};
+        fill_category_masks(t, &discarded);
+        CHECK(t[0].category_mask == 0 && t[0].capital_mask == 0u && galactic_ai_structure_mask(t, 0) == 0);
+    }
+}
+
+// A2k t06: GameObjectTypes loads Data\XML\Enum\GameObjectCategoryType.xml through the provider and
+// make_galactic_ai_type_info / GalacticAiWorld take the mask bits from it (a mod category gets its bit, a renumbered Capital
+// its new bits, also as the structure-mask default).
+static void test_type_info_mod_categories() {
+    MemoryFiles mf;
+    mf.add("Data\\XML\\Enum\\GameObjectCategoryType.xml",
+           "<?xml version=\"1.0\"?>\n<EnumDefinition>\n<Fighter>1</Fighter>\n<Frigate>10</Frigate>\n<Capital>40</Capital>\n"
+           "<Structure>400</Structure>\n<Mod_Walker>8000000000</Mod_Walker>\n<None>0</None>\n</EnumDefinition>\n");
+    mf.add("Data\\XML\\GameObjectFiles.xml", "<L><File>Mod_Units.xml</File></L>");
+    mf.add("Data\\XML\\Mod_Units.xml",
+           "<R>\n <SpaceUnit Name=\"Mod_AT_AT\"><CategoryMask>Mod_Walker | Capital</CategoryMask></SpaceUnit>\n"
+           " <SpaceUnit Name=\"Mod_Ion\"><CategoryMask>Structure</CategoryMask></SpaceUnit>\n"
+           " <SpaceUnit Name=\"Mod_Old\"><CategoryMask>Frigate</CategoryMask></SpaceUnit>\n</R>\n");
+    objects::ObjectTypeDatabase raw;
+    objects::GameObjectTypes types;
+    std::vector<std::string> diag;
+    CHECK(raw.load(mf, &diag) && types.build(raw, &mf, &diag));
+    const objects::TypeIndex atat = raw.find("Mod_AT_AT"), ion = raw.find("Mod_Ion"), old = raw.find("Mod_Old");
+    CHECK(atat != objects::kNone && ion != objects::kNone && old != objects::kNone &&
+          types.enums().get(objects::EnumId::GameObjectCategory).from_file);
+    if (atat == objects::kNone || ion == objects::kNone || old == objects::kNone) return;
+    const uint64_t walker = 0x8000000000ull;
+    std::vector<GalacticAiTypeInfo> ti = make_galactic_ai_type_info(types);
+    CHECK(ti.size() == types.size());
+    if (ti.size() != types.size()) return;
+    CHECK(ti[atat].category_mask == (walker | 0x40) && ti[atat].category_mask == types.get_mask(atat, "CategoryMask"));
+    CHECK(ti[old].category_mask == 0x10 && ti[ion].category_mask == 0x400);
+    CHECK(galactic_ai_structure_mask(ti, static_cast<uint32_t>(ion)) == 0x40);  // Garrison_Category unset -> Capital (mod)
+    // Before A2k t06 (built-in table): the mod bit was lost and Capital read 0x20.
+    std::vector<GalacticAiTypeInfo> builtin = ti;
+    fill_category_masks(builtin);
+    CHECK(builtin[atat].category_mask == 0x20 && galactic_ai_structure_mask(builtin, static_cast<uint32_t>(ion)) == 0x20);
+    CHECK(ai_category_bit("Mod_Walker", &types.enums()) == walker && ai_category_bit("Mod_Walker") == 0);
+}
+
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // keep the progress lines when a test crashes
     for (int i = 1; i < argc; ++i)
@@ -4860,6 +4969,8 @@ int main(int argc, char** argv) {
     test_sim_hooks();
     test_starbase_force_split();
     test_force_members();
+    test_category_masks_from_enum_files();  // A2k t06
+    test_type_info_mod_categories();        // A2k t06
     test_parity_rules();
     test_free_store_supply();
     test_stage_and_setup_a();

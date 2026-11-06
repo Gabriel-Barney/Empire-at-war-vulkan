@@ -1076,6 +1076,18 @@ uint64_t default_category_mask(std::string_view name) {
     return v ? static_cast<uint64_t>(*v) : 0;
 }
 
+}  // namespace
+
+std::function<uint64_t(std::string_view)> category_mask_from(const objects::EnumRegistry& enums) {
+    const objects::EnumConverter* cat = &enums.get(objects::EnumId::GameObjectCategory);
+    return [cat](std::string_view name) -> uint64_t {
+        const auto v = cat->lookup(name);
+        return v ? static_cast<uint64_t>(*v) : 0;
+    };
+}
+
+namespace {
+
 // TACTICAL_GAPS 6.8 name-id match [M: ASCII case-insensitive].
 bool zone_names_equal(std::string_view a, std::string_view b) {
     if (a.size() != b.size()) return false;

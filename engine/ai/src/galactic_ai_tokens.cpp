@@ -19,9 +19,11 @@ namespace gal = alamo::galactic;
 using objects::ObjectHandle;
 
 uint64_t galactic_ai_structure_mask(std::span<const GalacticAiTypeInfo> types, uint32_t type) {
-    static const uint64_t capital = ai_category_bit("Capital");
-    const uint64_t m = type < types.size() ? types[type].garrison_mask : 0u;
-    return m != 0 ? m : capital;
+    static const uint64_t builtin_capital = ai_category_bit("Capital");
+    if (type >= types.size()) return builtin_capital;
+    const GalacticAiTypeInfo& t = types[type];
+    if (t.garrison_mask != 0) return t.garrison_mask;
+    return t.capital_mask ? *t.capital_mask : builtin_capital;
 }
 
 bool GalacticAiTypeInfo::has_category(std::string_view c) const {
@@ -30,17 +32,36 @@ bool GalacticAiTypeInfo::has_category(std::string_view c) const {
     return false;
 }
 
-uint64_t ai_category_bit(std::string_view name) {
-    static const objects::EnumRegistry reg;
+uint64_t ai_category_bit(std::string_view name, const objects::EnumRegistry* enums) {
+    static const objects::EnumRegistry builtin;
+    const objects::EnumRegistry& reg = enums ? *enums : builtin;
     const auto v = reg.get(objects::EnumId::GameObjectCategory).lookup(name);
     return v ? static_cast<uint64_t>(*v) : 0u;
 }
 
-void fill_category_masks(std::vector<GalacticAiTypeInfo>& types) {
+namespace {
+uint64_t names_mask(const GalacticAiTypeInfo& t, const objects::EnumRegistry* enums) {
+    // [port, unchanged] the OR of the names the port knows; the exe converts the CategoryMask value as a whole (one
+    // unknown token fails it, OBJECT_TYPES §9.1). Same result for shipped data (every token converts).
+    uint64_t m = 0;
+    for (const std::string& c : t.categories) m |= ai_category_bit(c, enums);
+    return m;
+}
+}  // namespace
+
+void fill_category_masks(std::vector<GalacticAiTypeInfo>& types, const objects::EnumRegistry* enums) {
+    const uint64_t capital = ai_category_bit("Capital", enums);
     for (GalacticAiTypeInfo& t : types) {
-        uint64_t m = 0;
-        for (const std::string& c : t.categories) m |= ai_category_bit(c);
-        t.category_mask = m;
+        t.category_mask = names_mask(t, enums);
+        t.capital_mask = capital;
+    }
+}
+
+void fill_unset_category_masks(std::vector<GalacticAiTypeInfo>& types, const objects::EnumRegistry* enums) {
+    const uint64_t capital = ai_category_bit("Capital", enums);
+    for (GalacticAiTypeInfo& t : types) {
+        if (t.category_mask == 0) t.category_mask = names_mask(t, enums);
+        if (!t.capital_mask) t.capital_mask = capital;
     }
 }
 
@@ -629,7 +650,8 @@ struct GalacticSimTokenResolver::Impl {
     double power(uint32_t t) const { return t < rules.types.size() ? static_cast<double>(rules.types[t].ai_combat_power) : 0.0; }
     // Parameter_Category read with 0x5f4780 (a raw qword) [H]: a `Type[...]` literal carries the value its converter gave
     // when the equation was built (A2I_TOKENS_RE §3.1; with A2J t07 that converter may come from Data\XML\Enum), so it is
-    // used as is; any other value form keeps the by-name lookup.
+    // used as is; any other value form keeps the by-name lookup [port: in the built-in table, the resolver holds no
+    // converter; every shipped Parameter_Category is a literal].
     static uint64_t category_param(std::span<const Param> params) {
         if (!has_param(params, "Parameter_Category")) return kAllCategories;
         uint64_t m = 0;
