@@ -38,17 +38,22 @@ void fill_category_masks(std::vector<GalacticAiTypeInfo>& types) {
 }
 
 double galactic_ai_member_force(const gal::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types, uint32_t type,
-                                int32_t owner, uint64_t mask) {
+                                int32_t owner, uint64_t mask, bool exact) {
     const auto& gt = sim.rules().types;
     double sum = 0.0;
     if (type >= types.size()) return sum;
     // Per-tech members (0x373f40 count / 0x373e30 type / 0x373d30 count, tech = the owner's tech level +0x84).
-    // [M] a level without entries falls back to the highest lower level with entries (the hangar rule).
+    // A level without entries falls back to the highest lower level with entries for the planet-level leaves (0x373f40 /
+    // 0x373e30 / 0x373d30 [H]); the player-level tokens use the exact list (0x373fd0 / 0x373ee0, `exact`, no fall back)
+    // (A2F_RE_READS §2). The original returns nothing for tech >= 6; the port clamps to slot 5 (unreachable in vanilla).
     const auto players = sim.players();
     const int32_t tech = owner >= 0 && static_cast<size_t>(owner) < players.size() ? players[static_cast<size_t>(owner)].tech_level : 0;
     for (int32_t n = std::min(tech, static_cast<int32_t>(kSpawnTechSlots) - 1); n >= 0; --n) {
         const std::vector<SpawnMember>& list = types[type].spawn_tech[static_cast<size_t>(n)];
-        if (list.empty()) continue;
+        if (list.empty()) {
+            if (exact) break;
+            continue;
+        }
         for (const SpawnMember& m : list)
             if (m.type < types.size() && m.type < gt.size() && m.count > 0 && (types[m.type].category_mask & mask) != 0)
                 sum += static_cast<double>(gt[m.type].ai_combat_power) * static_cast<double>(m.count);
@@ -329,8 +334,20 @@ GalacticSnapshot snapshot_from_sim(const gal::GalacticSim& sim, bool ai_uses_fog
     const size_t P = players.size();
     s.relation.assign(P * P, 1);
     for (size_t a = 0; a < P; ++a)
-        for (size_t b = 0; b < P; ++b)
-            if (a == b || !sim.is_hostile(static_cast<int32_t>(a), static_cast<int32_t>(b))) s.relation[a * P + b] = 0;
+        for (size_t b = 0; b < P; ++b) {
+            if (a == b) {
+                s.relation[a * P + b] = 0;
+                continue;
+            }
+            // 0x4ad9f0 table (A2F_RE_READS §3.2 [H]): 0 friendly (self, ally), 1 enemy, 2 neutral. The port enum is Self 0,
+            // Ally 1, Neutral 2, Enemy 3, so the map is explicit.
+            switch (sim.relation(static_cast<int32_t>(a), static_cast<int32_t>(b))) {
+                case gal::Relation::Self:
+                case gal::Relation::Ally: s.relation[a * P + b] = 0; break;
+                case gal::Relation::Enemy: s.relation[a * P + b] = 1; break;
+                case gal::Relation::Neutral: s.relation[a * P + b] = 2; break;
+            }
+        }
     auto power = [&](ObjectHandle h) {
         const objects::TypeIndex t = st.type(h);
         return t < rules.types.size() ? rules.types[t].ai_combat_power : 0.0f;
@@ -1190,8 +1207,8 @@ struct GalacticSimTokenResolver::Impl {
                 s += power(t);  // DUMMY_GROUND_COMPANY only
             }
             // "+ per-tech members (0x373fd0 / 0x373ee0) matching +0x1648" for every walked object, in both variants
-            // (AI_GALACTIC_TOKENS §3) [M: literal reading of the walk; port list = Starting_Spawned_Units_Tech_N].
-            s += galactic_ai_member_force(sim, r.types_, t, pl, cat);
+            // (AI_GALACTIC_TOKENS §3; exact list, A2F_RE_READS §2.3 [H]).
+            s += galactic_ai_member_force(sim, r.types_, t, pl, cat, true);
         });
         return s;
     }

@@ -1,0 +1,129 @@
+-- ==== a2f t07 budget probe: story plot script (channel S) ====
+-- Plot-level Lua_Script of Story_Plots_Sandbox_12U_{Rebel,Underworld,Empire}.xml (mod override): it runs in the Heart
+-- of the Maw campaign for whichever faction the human plays. Play REBEL or UNDERWORLD: then the Empire is an AI player
+-- with a goal system and a budget; with the human as Empire there is no Empire budget and only Rebel / Underworld
+-- are sampled.
+--
+-- What it records, per AI player (Empire, Rebel, Underworld), with the generated header + a2fb_core.lua in front:
+--   * from the first service on: every service (ServiceRate 0.01 = every frame) for the first 4 s of galactic time,
+--     then every frame in a window around each of the first four fiscal-cycle payments (45 s, 90 s, 135 s, 180 s:
+--     44.5 s before to 2.5 s after), a small sample (SM: Sigma-of-pools CreditsUnnormalized, NetIncome, probe-type
+--     BudgetFractionToBuild for ALL / Infrastructure / Offensive);
+--   * a full sample (SM + BF + SH: all categories, the shipped weight / trigger equations) once per second until
+--     120 s, every 5 s until 300 s; then the script goes quiet (ServiceRate 60).
+-- The AI's budget is initialised at the first service of its galactic context (AI_GALACTIC 1.1: template init, then
+-- budget init 0x6137b0), which can be after this script's first service: the first samples can therefore show the
+-- state before Init (zero pools: BudgetFractionToBuild 1e18) and the following ones the state after it.
+require("PGStoryMode")
+
+A2FB_CANARY = "Mods\\A2fBudgetProbe\\A2FB_Canary_Story.txt"
+A2FB_FACS = { "Empire", "Rebel", "Underworld", "Pirates" }
+A2FB_LAST_FULL = -100
+A2FB_STOPPED = false
+A2FB_FIRST = true
+
+A2FB_Say("LOAD", "story plot script chunk ran modeq=" .. tostring(A2FB_MODEQ))
+A2FB_Canary(A2FB_CANARY)
+
+function Definitions()
+	A2FB_Say("DEF", "Definitions ran")
+	ServiceRate = 0.01
+	StoryModeEvents = {}
+	Define_State("A2FB_State", A2FB_State)
+end
+
+-- Seconds until the next fiscal window (44.5 s before each of the first four payments) starts.
+function A2FB_NextWindow(t)
+	for k = 1, 4 do
+		local start = 45 * k - 0.5
+		if t < start then
+			return start - t
+		end
+	end
+	return 1000
+end
+
+-- Which sample the time t asks for: returns dense (every service), full (a full sample is due), rate (next ServiceRate).
+function A2FB_Plan(t)
+	local dense = false
+	if t < 4 then
+		dense = true
+	elseif t > 40 and t < 185 then
+		local k = tonumber(string.format("%d", t / 45))
+		local frac = t - k * 45
+		if frac >= 44.45 or (frac < 2.5 and k >= 1) then
+			dense = true
+		end
+	end
+	local gap = 1
+	if t >= 120 then
+		gap = 5
+	end
+	local full = (t - A2FB_LAST_FULL) >= gap - 0.001
+	local rate = gap
+	if dense then
+		rate = 0.01
+	else
+		-- be serviced again before the next fiscal window opens (the engine tests now - last > rate)
+		local w = A2FB_NextWindow(t) - 0.05
+		if w < rate then
+			rate = w
+		end
+		if rate < 0.01 then
+			rate = 0.01
+		end
+	end
+	return dense, full, rate
+end
+
+function A2FB_Round(t, full)
+	for i = 1, table.getn(A2FB_FACS) do
+		local ok, p = pcall(Find_Player, A2FB_FACS[i])
+		if ok and p ~= nil then
+			local okh, human = pcall(function() return p.Is_Human() end)
+			local is_human = okh and human
+			-- full rounds cover every player (credits of the human and Pirates too), small rounds the AI players
+			if full or (i <= 3 and not is_human) then
+				A2FB_Sample("ST", p, full)
+			end
+		end
+	end
+end
+
+function A2FB_Update()
+	local t = A2FB_Now()
+	if t < 0 then
+		return
+	end
+	if A2FB_FIRST then
+		A2FB_FIRST = false
+		A2FB_Say("FIRST", "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " humanexists=" .. tostring(A2FB_HumanExists()))
+		pcall(Game_Message, "TEXT_A2FB_LOADED")
+	end
+	if t >= 300 then
+		if not A2FB_STOPPED then
+			A2FB_STOPPED = true
+			A2FB_Say("DONE", "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " records=" .. A2FB_Seq)
+			pcall(Game_Message, "TEXT_A2FB_DONE")
+		end
+		ServiceRate = 60
+		return
+	end
+	local dense, full, rate = A2FB_Plan(t)
+	if full then
+		A2FB_LAST_FULL = t
+	end
+	A2FB_Round(t, full)
+	ServiceRate = rate
+end
+
+function A2FB_State(message)
+	if message == OnEnter then
+		A2FB_Say("ENTER", "t=" .. A2FB_Num(A2FB_Now()))
+	elseif message == OnUpdate then
+		local ok, err = pcall(A2FB_Update)
+		if not ok then
+			A2FB_Error("Update", err)
+		end
+	end
+end

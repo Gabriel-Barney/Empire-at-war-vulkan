@@ -1509,6 +1509,8 @@ static void test_starbase_force_split() {
     CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, corv) == 1000.0);
     CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, frig | corv) == 2000.0);
     CHECK(galactic_ai_member_force(sim, ti, tSB2, 1, kAllCategories) == 0.0);  // no members
+    // Player-level tokens use the exact list (0x373fd0 / 0x373ee0): tech 1 has no list, so nothing; the fall-back walk reads slot 0.
+    CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, kAllCategories, true) == 0.0);
     // The leaf (members only) and the 0x5f2430 helper (+ the starbase's own power in the untyped total only).
     CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, kAllCategories) == 2000.0);
     CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 2600.0);
@@ -1636,11 +1638,12 @@ static void test_force_members() {
     CHECK(value("Ground_All") == 800.0);
     CHECK(value("Ground_Infantry") == 800.0);
     CHECK(value("Game_Space") == 3700.0);  // Σ planets: only P7 holds Rebel force
-    // Player root (Self = Rebel): space = base 600 (Capital default) + frigate 1000, ground = infantry 200; members of
-    // every walked object in both: base 1000 + frigate 500 + barracks 600 + infantry 1000 = 3100 [M literal reading].
+    // Player root (Self = Rebel): space = base 600 (Capital default) + frigate 1000, ground = infantry 200. The members of
+    // every walked object use the EXACT per-tech list of the owner's tech level (0x373fd0 / 0x373ee0, A2F_RE_READS §2.3):
+    // the Rebel is above tech 0 and every list here is Tech_0, so no member is added.
     c.self = 1;
-    CHECK(value("Self_Space") == 4700.0);
-    CHECK(value("Self_Ground") == 3300.0);
+    CHECK(value("Self_Space") == 1600.0);
+    CHECK(value("Self_Ground") == 200.0);
     std::printf("force members: space leaf 3700 (fleet + carrier members + base members + special weapon), ground leaf 800, "
                 "0x5f2430 untyped 4300 / 2300\n");
 }
@@ -2237,16 +2240,16 @@ static int64_t late_goal_released_after(bool removable, float eta, LateMode mode
 
 static void test_goal_time_drop() {
     CHECK(galactic_maintenance_eta(10.0f, 300, 300) == 10.0f);
-    CHECK(galactic_maintenance_eta(0.0f, 300, 690) == 13.0f);
+    CHECK(galactic_maintenance_eta(0.0f, 300, 690) == 0.0f);  // 0x722a30: elapsed is added only when the production time > 0
     CHECK(galactic_maintenance_eta(4.0f, 300, 391) > 7.0f);
     // ETA 10, tolerance 1.3 (AllowedTime 13). Stalled: 10 + elapsed > 13 after 3 s (90 frames).
     const int64_t stalled = late_goal_released_after(true, 10.0f, LateMode::Stalled);
-    // On schedule: max(10 - elapsed, 0) + elapsed > 13 only once elapsed > 13 s (390 frames).
+    // On schedule: max(10 - elapsed, 0) + elapsed stays 10 <= 13, then the production time is 0 and the goal is never dropped.
     const int64_t on_time = late_goal_released_after(true, 10.0f, LateMode::OnSchedule);
     std::printf("goal time drop: ETA 10, tolerance 1.3 -> stalled released after %lld frames, on schedule after %lld\n",
                 static_cast<long long>(stalled), static_cast<long long>(on_time));
     CHECK(stalled > 90 && stalled <= 92);
-    CHECK(on_time > 390 && on_time <= 392);
+    CHECK(on_time < 0);
     CHECK(late_goal_released_after(false, 10.0f, LateMode::Stalled) < 0);  // Set_As_Goal_System_Removable(false): kept
     CHECK(late_goal_released_after(true, 0.0f, LateMode::Stalled) < 0);    // ETA 0 -> AllowedTime 0 = no limit
 
@@ -2450,15 +2453,16 @@ static void test_free_store_world() {
     CHECK(logged("Unable to find a path from P0 to P7"));
     const gal::FleetState* hf = fleet_of(hero);
     CHECK(hf && hf->planet == 0 && !hf->moving);
-    // P0 -> P3: the matrix passes (no node cost on the way: the neutral frigate is no enemy force), the hero hops
-    // P1, P2; at P2 the next hop P3 has an orbit owner (the neutral player) that is not this player -> the move ends.
+    // P0 -> P3: the neutral frigate (relation 2 in the AI snapshot, A2F_RE_READS §3.3: any relation != 0 is hostile for the
+    // last-seen-units test) gives P3 a node cost -> no path; logged; the hero stays at P0.
     const uint64_t moves_before = world.orders_issued();
     CHECK(world.free_store_move(0, hero, 3));
     const int32_t t3 = run_until_idle(30 * 300);
     hf = fleet_of(hero);
     std::printf("free store world: hero P0 -> P3 ended after %d frames at P%u (%zu orders)\n", t3, hf ? hf->planet : 99u,
                 static_cast<size_t>(world.orders_issued() - moves_before));
-    CHECK(world.pending_free_store_moves() == 0 && hf && hf->planet == 2 && !hf->moving);
+    CHECK(world.pending_free_store_moves() == 0 && hf && hf->planet == 0 && !hf->moving);
+    CHECK(logged("Unable to find a path from P0 to P3"));
     CHECK(world.path(0, 0, 3).size() == 4);  // P0 P1 P2 P3
 
     // Reachable_Target's Friendly_Only filter (§1.4): only planets held by the player or an ally.

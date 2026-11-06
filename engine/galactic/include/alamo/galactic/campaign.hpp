@@ -564,6 +564,8 @@ public:
     uint32_t fleet_in_slot(PlanetIndex planet, int32_t owner, int32_t slot) const;
     // True while no slot was ever chosen by a command: slots are then only auto-assigned and not hashed (see hash_slots).
     bool slot_state_default() const { return !slot_choices_; }
+    // Ground base level (planet data +0x130) [M]: the live ground-family (0x5F) structures on the surface; orbital
+    // structures do not count.
     int32_t ground_base_level(PlanetIndex planet) const;
     int32_t planets_owned(int32_t player) const;
     int32_t derive_owner(PlanetIndex planet) const;  // GE 4.1 precedence (pure)

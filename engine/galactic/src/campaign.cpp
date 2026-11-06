@@ -126,7 +126,13 @@ std::vector<uint32_t> GalacticSim::fleets_at(PlanetIndex planet, int32_t player)
 }
 
 int32_t GalacticSim::ground_base_level(PlanetIndex planet) const {
-    return static_cast<int32_t>(planets_[planet].structures.size());
+    // Ground base level (planet data +0x130) is not modelled as its own counter: it is the number of live ground-family
+    // structures on the surface (is_ground_structure_type, 0x5F); orbital structures do not count [M] (A2f t08;
+    // STRATEGIC_GAPS §1.3 step 18 reads the same surface count, "0 when no ground base").
+    int32_t n = 0;
+    for (ObjectHandle s : planets_[planet].structures)
+        if (store_->alive(s) && is_ground_structure_type(rules_->types[static_cast<size_t>(store_->type(s))])) ++n;
+    return n;
 }
 
 int32_t GalacticSim::planets_owned(int32_t player) const {

@@ -4,7 +4,7 @@
 // AllowedTime (0x692860: plan ETA x Build_Time_Delay_Tolerance, Time_Limit without a plan) < ETA, with
 // ETA = 0x525200 + elapsed, elapsed = (NOW - created) / FPS. The goal system's "0 < AllowedTime" guard (ai_goals.cpp)
 // stays: AllowedTime <= 0 means no limit, as in the greedy phase.
-// 0x525200 is read (AI_GALACTIC_2 §3.4 "Goal production time", q2f t01 [H]); the port is
+// 0x525200 is read (AI_GALACTIC_2 §3.4 "Goal production time", q2f t01; A2F_RE_READS.md §1 [H]); the port is
 // GalacticAiWorld::Impl::goal_production_time (galactic_build.cpp).
 #pragma once
 #include <cstdint>
@@ -14,8 +14,10 @@
 namespace alamo::ai {
 
 inline float galactic_maintenance_eta(float production_time, int64_t created, int64_t now) {
-    const double elapsed = static_cast<double>(now - created) / static_cast<double>(kAiFps);
-    return production_time + static_cast<float>(elapsed);
+    // 0x722a30 [H]: p = 0x525200(); if (0 < p) p += (float)(NOW - created) / (float)FPS (int subtraction, float division).
+    // With every build task producing (or none produced) p is 0 and the goal is never time-dropped (A2f t06).
+    if (!(production_time > 0.0f)) return production_time;
+    return production_time + static_cast<float>(now - created) / static_cast<float>(kAiFps);
 }
 
 }  // namespace alamo::ai

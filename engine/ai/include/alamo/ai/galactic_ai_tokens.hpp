@@ -100,11 +100,11 @@ inline constexpr uint64_t kAllCategories = ~uint64_t{0};
 // The per-tech members of one TYPE held by `owner` (AI_GALACTIC_TOKENS §2 "per-tech members": 0x373f40 count /
 // 0x373e30 type / 0x373d30 count, tech = the owner's tech level +0x84): Σ AI_Combat_Power x count over the members
 // whose category mask meets `mask`. Never the type's own power.
-//   [port] the list is the type's Starting_Spawned_Units_Tech_N (the hangar lists of starbases, carriers and land
-//   spawn structures, STATION_HANGARS_SOUND §2.1); [M] the member's own mask +0x1648 is tested; [M] the slot is the
-//   highest N <= the tech level with entries (the hangar rule).
+//   [H] the list is the type's Starting_Spawned_Units_Tech_N (type +0xAD0 + 0x18 x N, A2F_RE_READS §2); the member's
+//   own mask +0x1648 is tested. `exact` = false (planet-level leaves): the slot is the highest N <= the tech level with
+//   entries (0x373f40 / 0x373e30 / 0x373d30); `exact` = true (player-level tokens 0x66b1c0 / 0x6682c0): list N only.
 double galactic_ai_member_force(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
-                                uint32_t type, int32_t owner, uint64_t mask);
+                                uint32_t type, int32_t owner, uint64_t mask, bool exact = false);
 
 // Target.<side>.{Space,Ground}TotalUnnormalized of `planet` for Self = `self` (PlanetForce 0x6dbd50 / 0x6d95d0,
 // AI_GALACTIC_TOKENS §2; side = Enemy (hostile to Self) or Friendly (Self or a non-neutral ally)), category `mask`
