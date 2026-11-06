@@ -3925,6 +3925,11 @@ struct UwResult {
     size_t purchased = 0;
     bool p3_destroyed = false, ds_locked = false, ds_alive = true;
     float uw_credits = 0.0f;
+    // a2k t08: the AI update in which the first corruption applied: credits and Σ category pools / available before
+    // and after it (frame -1: no corruption applied).
+    int32_t corr_frame = -1;
+    float corr_credits_before = 0.0f, corr_credits_after = 0.0f;
+    double corr_pool_before = 0.0, corr_pool_after = 0.0, corr_avail_before = 0.0, corr_avail_after = 0.0;
 };
 
 static UwResult run_underworld(unsigned threads, int32_t frames) {
@@ -4003,9 +4008,34 @@ static UwResult run_underworld(unsigned threads, int32_t frames) {
     for (const std::string& d : pd) std::printf("  underworld plans: %s\n", d.c_str());
     CHECK(world.plans().plans.size() == 3);
     CHECK(world.start(&pd));
+    // Σ over the budget categories of the Underworld AI (player 1): pools P and available A.
+    auto budget_sums = [&world, &defs](double& pool, double& avail) {
+        pool = avail = 0.0;
+        const AiContext* c = world.context(1);
+        if (!c) return;
+        for (size_t k = 0; k < defs.categories.size(); ++k) {
+            pool += static_cast<double>(c->budget.pool(static_cast<int32_t>(k)));
+            avail += static_cast<double>(c->budget.available(static_cast<int32_t>(k)));
+        }
+    };
     for (int32_t f = 1; f <= frames; ++f) {
         sim.update();
-        for (int32_t p = 0; p < static_cast<int32_t>(sim.players().size()); ++p) world.update_player(p, f, true, false);
+        for (int32_t p = 0; p < static_cast<int32_t>(sim.players().size()); ++p) {
+            const bool watch = p == 1 && out.corr_frame < 0;
+            const int32_t done_before = watch ? sim.corruptions_completed(1, 6) : 0;
+            double pool = 0.0, avail = 0.0;
+            const float cr = sim.credits(1);
+            if (watch) budget_sums(pool, avail);
+            world.update_player(p, f, true, false);
+            if (watch && sim.corruptions_completed(1, 6) > done_before) {
+                out.corr_frame = f;
+                out.corr_credits_before = cr;
+                out.corr_credits_after = sim.credits(1);
+                out.corr_pool_before = pool;
+                out.corr_avail_before = avail;
+                budget_sums(out.corr_pool_after, out.corr_avail_after);
+            }
+        }
         StateHasher h;
         sim.hash_state(h);
         world.hash(h);
@@ -4050,6 +4080,17 @@ static void test_underworld_special() {
     CHECK(base.sabotage_p2 >= 1);                              // Sabotage_Planet: a structure of the corrupted P2
     CHECK(base.purchased >= 1);                                // Black_Market_Purchase at the Black_Market planet
     CHECK(base.p3_destroyed && base.ds_locked && !base.ds_alive);  // Hack_Super_Weapon through Land_Units
+    // a2k t08 (docs/re/A2K_T08_RE_QUESTIONS.md §1): the AI corruption cost is not reserved or charged through the AI
+    // budget. Retail HotM Rebel (a2j probe 074145): 800 credits (Intimidation at Naboo) left the Underworld's credits
+    // between frames 585 and 616 while its Offensive / Infrastructure pools stayed as they were. Here: the update that
+    // applies the Black_Market corruption (500) takes exactly its cost from the credits, and no budget pool or
+    // available amount moves in that update.
+    std::printf("  corruption apply: frame %d credits %.1f -> %.1f, budget pools %.3f -> %.3f, available %.3f -> %.3f\n",
+                base.corr_frame, static_cast<double>(base.corr_credits_before), static_cast<double>(base.corr_credits_after),
+                base.corr_pool_before, base.corr_pool_after, base.corr_avail_before, base.corr_avail_after);
+    CHECK(base.corr_frame > 0);
+    CHECK(base.corr_credits_before - base.corr_credits_after == 500.0f);
+    CHECK(base.corr_pool_before == base.corr_pool_after && base.corr_avail_before == base.corr_avail_after);
     for (const unsigned t : {1u, 4u, 15u}) {
         const UwResult r = run_underworld(t, frames);
         size_t first = r.crc.size() == base.crc.size() ? r.crc.size() : 0;
