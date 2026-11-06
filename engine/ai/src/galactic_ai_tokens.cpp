@@ -622,10 +622,17 @@ struct GalacticSimTokenResolver::Impl {
     }
     uint64_t type_mask(uint32_t t) const { return t < r.types_.size() ? r.types_[t].category_mask : 0u; }
     double power(uint32_t t) const { return t < rules.types.size() ? static_cast<double>(rules.types[t].ai_combat_power) : 0.0; }
+    // Parameter_Category read with 0x5f4780 (a raw qword) [H]: a `Type[...]` literal carries the value its converter gave
+    // when the equation was built (A2I_TOKENS_RE §3.1; with A2J t07 that converter may come from Data\XML\Enum), so it is
+    // used as is; any other value form keeps the by-name lookup.
     static uint64_t category_param(std::span<const Param> params) {
         if (!has_param(params, "Parameter_Category")) return kAllCategories;
         uint64_t m = 0;
-        for (const std::string_view n : param_texts(params, "Parameter_Category")) m |= ai_category_bit(n);
+        for (const Param& p : params) {
+            if (!ai_iequal(p.name, "Parameter_Category")) continue;
+            if (p.value.kind == ParamValue::Kind::Enum) m |= static_cast<uint64_t>(p.value.enum_value);
+            else if (p.value.kind != ParamValue::Kind::Number) m |= ai_category_bit(p.value.text);
+        }
         return m;
     }
     bool type_named(uint32_t t, std::span<const std::string_view> names) const {
@@ -726,11 +733,12 @@ struct GalacticSimTokenResolver::Impl {
     }
 
     // ---------------- planet force (PlanetForce 0x6dcb70) ----------------
-    // Target.<side>.MaintenanceUnnormalized 0x6daf20 (A2I_TOKENS_RE §1.2) [H], lifetime 15 (fog mask 0x40: fog is off in
-    // the shipped data, not modelled): over the orbiting, non-moving fleets of that side, every member M of type T with
-    // f = the Maintenance_Cost of M's OWNER's faction and u = T's Maintenance_Cost: skip f x u = 0, btime(T, none) = 0, or
-    // a non-zero Parameter_Category (default all bits; 0 = no test) that T's CategoryMask does not meet; add
-    // (double)(f x u x (cost / btime / 30)) in float.
+    // Target.<side>.MaintenanceUnnormalized 0x6daf20 (A2I_TOKENS_RE §1.2) [H], lifetime 15 (fogged leaf, mask 0x40: not
+    // modelled, like every fogged leaf of this resolver; AIUsesFogOfWarGalactic is False in the shipped data, so the leaf
+    // is live; A2J_T07_LITERALS §4 has the fog-on rule): over the orbiting, non-moving fleets of that side, every
+    // member M of type T with f = the Maintenance_Cost of M's OWNER's faction and u = T's Maintenance_Cost: skip
+    // f x u = 0, btime(T, none) = 0, or a non-zero Parameter_Category (default all bits; 0 = no test) that T's
+    // CategoryMask does not meet; add (double)(f x u x (cost / btime / 30)) in float.
     bool force_maintenance_unn(size_t p, bool enemy, std::span<const Param> params, double& out) const {
         const uint64_t cat = category_param(params);
         return leaf(enemy ? "PF:E.MAINTUNN" : "PF:F.MAINTUNN", static_cast<int32_t>(p), 15, params, [&](double& v) {

@@ -211,9 +211,12 @@ void AiDefinitions::load_category_enum(std::string_view xml, const std::string& 
     }
     std::vector<std::string> names;
     std::vector<int32_t> values;
+    // Dynamic-enum rules (OBJECT_TYPES §9.1 [H], as the equation-literal table reads the same file, A2J t07): C atoi of
+    // the text; an entry with empty text gets the running entry index.
     for (const data::XmlNode n : doc.root().children()) {
+        const std::string_view t = n.text_trimmed();
         names.emplace_back(n.name());
-        values.push_back(std::atoi(std::string(n.text_trimmed()).c_str()));
+        values.push_back(t.empty() ? static_cast<int32_t>(names.size() - 1) : std::atoi(std::string(t).c_str()));
     }
     if (names.empty()) return;
     categories = std::move(names);
