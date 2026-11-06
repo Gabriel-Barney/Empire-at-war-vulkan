@@ -1,6 +1,11 @@
 // AI framework: AIBudgetClass (docs/re/AI_GALACTIC_2.md §3; galactic only, goal system +0x190).
 //
-// Per category (list order of AIGoalCategoryType): +0x38 applied weight (one-tick lag), +0x3C normalised
+// Membership (AI_GALACTIC_TOKENS §9.5 [H]): the category map holds only the categories an applied template listed
+// (0x615420 <Budget> / 0x615550 Tactical_Budget_Allowance, add_member), in first-insertion order, never removed; every
+// galactic loop over the categories (init, reweight, tick, Σ P) walks that order. A non-member keeps its constructed zeros
+// and reads weight 0. Every insert call and every template removal (0x612ac0) sets the reset flag +0x74 (mark_reset).
+// Storage is indexed by AiDefinitions category index (AIGoalCategoryType list order).
+// Per category: +0x38 applied weight (one-tick lag), +0x3C normalised
 // weight, +0x44 available A, +0x48 available rate R, +0x4C next pool P, +0x50 income rate I, +0x54 running
 // mean of goal horizons, +0x68 the BudgetedGoalStructs (vector order = add order).
 // Per goal (0x50 B): +0x28 req, +0x2C alloc, +0x30 horizon h, +0x34 required rate q, +0x38 accrued a,
@@ -13,10 +18,16 @@
 //   0x614880, spend 0x6110e0 (Allocate_Resources / build-task charge).
 // Flush_Category 0x612cb0 = "available A = 0" and nothing else (AI_GALACTIC_3 §8) [H]; the PAYG reclaim of
 // release (0x5f7d40) is computed by the caller (galactic_build.cpp payg_reclaim) and passed in.
+// Tactical (AI_GALACTIC_TOKENS §9.3 [H]): every goal system has a budget; in battle only its weights are used
+// (weigh(), no money step), filled at the first AI service, reweighted at each proposal-pass end, cleared at battle end.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <span>
+#include <string_view>
 #include <vector>
+
+#include "alamo/ai/perception_equations.hpp"
 
 namespace alamo {
 class ByteReader;
@@ -48,12 +59,25 @@ public:
     void reset(size_t categories);
     size_t size() const { return cat_.size(); }
     bool initialised() const { return init_; }
-    // Init 0x6137b0: normalised weights from `raw` (negatives 0), applied = w, A = P = credits x w, R = I = 0.
+    // 0x615420 / 0x615550 insert (§9.5): appends `c` to the member list when it is not there yet; true when it was new.
+    bool add_member(int32_t c);
+    bool is_member(int32_t c) const;
+    const std::vector<int32_t>& members() const { return order_; }  // insertion order
+    void mark_reset() { reset_ = true; }   // +0x74 (§9.5): every insert call and every 0x612ac0
+    bool reset_pending() const { return reset_; }
+    // Init 0x6137b0: normalised weights from `raw` over the members (negatives 0; w / Σw, 1 / member count when Σw = 0),
+    // applied = w, A = P = credits x w, R = I = 0; clears the reset flag.
     void init(std::span<const float> raw, float credits);
-    // Reweight 0x614590: `raw` = each category's equation value (the caller pre-loads the previous normalised
-    // weight, so a failing equation keeps it). Then A = P, R = I, every goal A -= a, c = 0, needs re-add.
+    // Reweight 0x614590: `raw` = each member's equation value (the caller pre-loads the previous normalised weight, so a
+    // failing equation keeps it; a member without an equation is 0). Then A = P, R = I, every goal A -= a, c = 0, needs re-add.
     void reweight(std::span<const float> raw);
-    // Per-tick accrual 0x614340 (income = the player's gain this tick, period = T seconds, credits = player +0x70).
+    // Tactical weights (AI_GALACTIC_TOKENS §9.3 [H]): the budget map holds only the categories `member` flags (the active
+    // templates' <Budget> and Tactical_Budget_Allowance entries); `raw` = each member's equation value (the caller
+    // pre-loads the previous weight; a member without an equation counts as 0). Negatives -> 0, w / Σw over the members,
+    // 1 / member count when Σw = 0; a non-member reads 0. Money fields untouched. No member: every weight 0.
+    void weigh(std::span<const float> raw, std::span<const uint8_t> member);
+    // Per-tick accrual 0x614340 (income = the player's gain this tick, period = T seconds, credits = player +0x70), over the
+    // members in insertion order; with the reset flag every pool becomes Σ P x w before the drift (= credits x w), flag cleared.
     void tick(float income, float period, float credits);
     // Add goal 0x610d30: the first call creates the struct (req = cost, h = min(eta, time_limit unless < 0));
     // later calls only re-add a struct flagged by reweight. Returns false for an invalid category.
@@ -105,10 +129,21 @@ private:
     const GoalEntry* find(int32_t c, uint32_t goal) const;
     GoalEntry* find(int32_t c, uint32_t goal);
     void normalise(std::span<const float> raw);
+    // The shared weight rule (galactic and tactical): negatives -> 0, Σ in `order`, w / Σ or 1 / |order| when Σ = 0.
+    void normalise_over(std::span<const float> raw, std::span<const int32_t> order);
     void readd(Category& k, GoalEntry& e) const;
     std::vector<Category> cat_;
+    std::vector<int32_t> order_;  // galactic members, first-insertion order (§9.5); empty for the tactical budget
     float rate68_ = 0.0f, period_ = 0.0f, refund_ = 0.0f;
     bool reset_ = false, init_ = false;
 };
+
+// BudgetAllocation's key (AI_GALACTIC_TOKENS §8.3, galactic and tactical leaf 0x6e0560): Parameter_Category (0x5f4780,
+// default -1), the low 32 bits of the parsed value. An AIGoalCategoryType[...] enum value is the category's enum value
+// (`goal_category`: name -> AIGoalCategoryType value, -1 unknown; names OR-ed as the parser does for any enum [M]); another
+// enum type (GameObjectCategoryType) its bits (`object_category`); a number itself; [port] a quoted name the
+// AIGoalCategoryType value of that name. An unknown name -> -1 (no category).
+int32_t ai_budget_key(std::span<const Param> params, const std::function<int64_t(std::string_view)>& goal_category,
+                      const std::function<uint64_t(std::string_view)>& object_category);
 
 }  // namespace alamo::ai

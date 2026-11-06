@@ -2,6 +2,8 @@
 // (app_script_saveload.cpp) are declared in app_script.hpp.
 #include "app_script.hpp"
 
+#include <cctype>
+
 namespace alamo_game_app {
 
 // ------------------------------------------------------------------------------------------------ script
@@ -96,7 +98,17 @@ ScriptStep step_select_row(std::string dialog, std::string control, std::functio
                 if (st->phase == 0) {
                     const int32_t i = d->find(control);
                     const ui::GuiRect r = d->control_rect(static_cast<size_t>(i));
-                    const ui::Vec2f p = a.ui_.gui.canvas().canvas_to_pixel(0.5f * (r.min.x + r.max.x), r.max.y - 6.0f);
+                    const float cx = 0.5f * (r.min.x + r.max.x);
+                    float cy = r.max.y - 6.0f;
+                    // q6 t02: a mod layout can put another control over the list's top row (Thrawn's Revenge: the game type list
+                    // covers the staging map list's first row): click lower, on the first point the list itself owns.
+                    // Vanilla layouts leave the top row free, so the point is unchanged there.
+                    for (int32_t k = 0; k < 64 && cy > r.min.y + 6.0f; ++k) {
+                        const int32_t hit = d->control_at({cx, cy});
+                        if (hit < 0 || hit == i) break;
+                        cy -= 4.0f;
+                    }
+                    const ui::Vec2f p = a.ui_.gui.canvas().canvas_to_pixel(cx, cy);
                     *px = {static_cast<int32_t>(p.x), static_cast<int32_t>(p.y)};
                 }
                 if (st->phase <= 3) {
@@ -749,7 +761,13 @@ ScriptStep step_combat(bool land) {
                     if (an->stats().muzzle_flashes == 0) a.notes_.push_back("combat: no muzzle flash");
                 }
 #endif
-                if (!land && a.bview_.stats().lasers_peak == 0) a.notes_.push_back("space combat: no laser bolt drawn");
+                // q6 t02: a mod may draw its bolts as projectile models (Thrawn's Revenge: Proj_Space_Laser_*.alo) instead of
+                // procedural lasers; only a battle with neither is noted. Vanilla lines unchanged.
+                if (!land && a.bview_.stats().lasers_peak == 0)
+                    a.notes_.push_back(a.bview_.stats().model_projectiles_peak > 0
+                                           ? "space combat: no procedural laser bolt drawn (" + std::to_string(a.bview_.stats().model_projectiles_peak) +
+                                                 " model projectiles peak)"
+                                           : std::string("space combat: no laser bolt drawn"));
                 std::printf("script: %s combat - %" PRIu64 " shots, %" PRIu64 " hits, %u deaths, %u corpse draws, %" PRIu64 " scorch decals, %u anim plays, %u peak laser bolts, %u impact / death effects\n",
                             land ? "land" : "space", bs.shots, bs.hits, bs.deaths, a.bview_.stats().corpses, a.bview_.stats().decals, bs.anim_plays,
                             a.bview_.stats().lasers_peak, bs.particles);
@@ -978,6 +996,40 @@ ScriptStep step_galactic_attack() {
                 return click_at(st->click, f, static_cast<int32_t>(sx), static_cast<int32_t>(sy), ui::Button::Right);
             },
             30000};
+}
+
+// q6 t03: `inner`, except that a battle prompt for a conflict the local player did not start (an AI attack; a pending
+// battle holds the galaxy, so a fleet in flight never arrives) is answered Auto-Resolve first and its result screen
+// closed with Continue. Thrawn's Revenge's Thrawn_Empire AI attacks within the first galactic minutes; in the vanilla
+// smoke no such prompt is open during these steps, so the step runs exactly as `inner` there.
+ScriptStep answer_ai_attacks(ScriptStep inner) {
+    struct State {
+        int phase = 0, wait = 0;
+        ScriptStep cont;
+    };
+    auto st = std::make_shared<State>();
+    return {inner.name, [st, run = std::move(inner.run)](App& a, ui::InputFrame& f) {
+                if (st->phase == 0) {
+                    const galactic::ConflictInfo* c = a.choice_open_ && a.session_ ? a.session_->conflict_head() : nullptr;
+                    if (!c || c->attacker == a.local_player()) return run(a, f);
+                    std::printf("script: battle prompt for an attack by player %d: auto-resolved\n", c->attacker);
+                    ui::HudAction act;
+                    act.kind = ui::HudAction::Kind::BattleAutoResolve;
+                    a.handle_hud_actions({act});
+                    st->phase = 1;
+                    st->wait = 0;
+                    st->cont = step_click_control(ui::dlg::kBattleEnd, "IDC_CONTINUE_BUTTON");
+                    return false;
+                }
+                if (st->phase == 1) {
+                    if (a.battle_end_open_ && a.ui_.gui.find(ui::dlg::kBattleEnd) && a.screen_text_.empty()) st->phase = 2;
+                    else if (++st->wait > 600) st->phase = 0;  // no result screen came: back to the step
+                    return false;
+                }
+                if (st->cont.run(a, f)) st->phase = 0;
+                return false;
+            },
+            inner.timeout_frames + 2400};
 }
 
 // Galactic: a plain fleet hop by input, all the way to arrival (playtest "units can't move planet to planet"). An own
@@ -1218,7 +1270,15 @@ void App::make_script() {
                 const auto& st = a.demo_stats_;
                 std::printf("script: attract camera (%s) - %u frames, followed hull nose-on/tail-on in %u (longest run %u frames), nearby hulls %u / %u nose-on/tail-on\n",
                             a.demo_side_view_ ? "side view" : "first stand-in", st.frames, st.target_nose_on, st.longest_run, st.hulls_nose_on, st.hulls);
-                if (st.frames == 0 || st.target_nose_on * 4 > st.frames) {
+                // q6 t02: a demo map without combat units (Thrawn's Revenge's End_Demo_Attract_* place only props) has
+                // nothing to follow: noted, not a failure. Vanilla demos always follow a hull (frames > 0).
+                const sim::TacticalBattle* b = a.session_->battle();
+                bool any_unit = false;
+                for (const render::SnapshotObject& o : a.bview_.frame().objects)
+                    if (b && o.owner >= 0 && b->combat().has_unit(o.id)) any_unit = true;
+                if (st.frames == 0 && !any_unit) {
+                    a.notes_.push_back("attract demo: no combat unit on the demo map, camera check skipped");
+                } else if (st.frames == 0 || st.target_nose_on * 4 > st.frames) {
                     a.notes_.push_back("attract camera shows the followed hull nose-on / tail-on for a long stretch");
                     a.smoke_ok_ = false;
                 }
@@ -1318,8 +1378,26 @@ void App::make_script() {
         // Row 0; the space skirmish buys corvettes (kSmokeSkirmishBuyType, a cap-counted combat ship) when the list has them.
         const bool space_buy = prefix == "game_skirmish";
         s.push_back(step_select_row(ui::dlg::kBuyUnits, "IDC_SKIRMISH_BUY_FORCES_LISTBOX", [space_buy](App& a) {
-            for (size_t i = 0; space_buy && i < a.buy_.units.size(); ++i)
-                if (a.buy_.units[i].type == kSmokeSkirmishBuyType) return i;
+            // q6 t02: data without the stock corvette (mods): ALAMO_SMOKE_BUY_TYPE names the type; else the first listed
+            // *_Corvette, else the first row that is not Build_Initially_Locked (Thrawn's Revenge lists a locked cheat unit
+            // first). Vanilla always finds kSmokeSkirmishBuyType.
+            const std::string want = env_or_empty("ALAMO_SMOKE_BUY_TYPE");
+            const std::vector<ui::BuyUnitEntry>& u = a.buy_.units;
+            for (size_t i = 0; i < u.size(); ++i)
+                if (!want.empty() && iequal(u[i].type, want)) return i;
+            if (!space_buy) return size_t{0};
+            for (size_t i = 0; i < u.size(); ++i)
+                if (u[i].type == kSmokeSkirmishBuyType) return i;
+            const auto upper_name = [](std::string n) {
+                for (char& c : n) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                return n;
+            };
+            for (size_t i = 0; i < u.size(); ++i)
+                if (upper_name(u[i].type).find("_CORVETTE") != std::string::npos) return i;
+            for (size_t i = 0; i < u.size(); ++i) {
+                const uint32_t t = a.data_.rules.find_type(u[i].type);
+                if (t != galactic::kNoIndex && !a.data_.rules.types[t].build_initially_locked) return i;
+            }
             return size_t{0};
         }));
         s.push_back(step_click_control(ui::dlg::kBuyUnits, "IDC_BUY_BUTTON"));
@@ -1362,9 +1440,82 @@ void App::make_script() {
         battle_steps("game_skirmish");
         s.push_back(step_wait("skirmish over", [](App& a) { return a.session_ && a.skirmish_ended_ && a.screen_ == Screen::Menu; }, 20000));
     } else {
-        s.push_back(step_click_control("IDD_SINGLE_PLAYER_GAMES_MENU_DIALOG", "IDC_CUSTOM_CAMPAIGN_BUTTON"));
-        s.push_back(step_shot("game_campaign_select.png"));
-        s.push_back(step_click_control("IDD_CUSTOM_CAMPAIGN_STAGING_DIALOG", "IDC_PLAY_BUTTON"));
+        // Selects row `row` exactly: step_select_row stops at the first row >= the wanted one (its click can land below
+        // it), then Up keys back to it.
+        auto exact_row = [&s](const char* dialog, const char* control, std::shared_ptr<int64_t> row) {
+            s.push_back(step_select_row(dialog, control, [row](App&) { return static_cast<size_t>(std::max<int64_t>(*row, 0)); }));
+            auto key_frame = std::make_shared<bool>(false);
+            s.push_back({"campaign set row", [row, key_frame, dialog, control](App& a, ui::InputFrame& f) {
+                             ui::GuiDialog* d = a.ui_.gui.find(dialog);
+                             const ui::GuiControl* c = d ? d->get(control) : nullptr;
+                             if (!c || c->selected < 0 || static_cast<int64_t>(c->selected) <= *row) return true;
+                             *key_frame = !*key_frame;
+                             if (*key_frame) {
+                                 f.keys_down.set(ui::vk::kUp);
+                                 f.keys_pressed.set(ui::vk::kUp);
+                             }
+                             return false;
+                         },
+                         2000});
+        };
+        // q6 t02: ALAMO_SMOKE_CAMPAIGN_SET=<Campaign_Set> plays that custom set instead of the list's first one (a mod's
+        // first set can be a scripted menu: Thrawn's Revenge's GCMenu). q6 t03: a New Campaign (story) set, or one campaign
+        // of such a set (Thrawn's Revenge: Thrawn_Empire), is played through New Campaign: its row, then the faction button
+        // of that campaign (the set's first faction for a set name). A mod menu without the New Campaign button (Thrawn's
+        // Revenge reaches its historical campaigns through the GCMenu set's story selector) gets the StartCampaign action
+        // that button path sends (normal difficulty). Unset: the first custom row, as before.
+        const std::string want = env_or_empty("ALAMO_SMOKE_CAMPAIGN_SET");
+        auto custom_row = std::make_shared<int64_t>(-1), story_row = std::make_shared<int64_t>(-1);
+        size_t story_faction = 0;
+        ui::CampaignChoice story_choice;
+        if (!want.empty()) {
+            const ui::CampaignMenu menu = ui::build_campaign_menu(data_.db);
+            for (size_t i = 0; i < menu.custom.size() && *custom_row < 0; ++i)
+                if (iequal(menu.custom[i].set, want)) *custom_row = static_cast<int64_t>(i);
+            for (size_t i = 0; i < menu.story.size() && *custom_row < 0 && *story_row < 0; ++i) {
+                if (iequal(menu.story[i].set, want)) *story_row = static_cast<int64_t>(i);
+                for (size_t j = 0; j < menu.story[i].factions.size() && *story_row < 0; ++j)
+                    if (iequal(menu.story[i].factions[j].campaign, want)) *story_row = static_cast<int64_t>(i), story_faction = j;
+                if (*story_row >= 0 && story_faction < menu.story[i].factions.size()) story_choice = menu.story[i].factions[story_faction];
+            }
+            if (*custom_row < 0 && *story_row < 0)
+                notes_.push_back("ALAMO_SMOKE_CAMPAIGN_SET " + want + ": no such campaign set or campaign, first custom row kept");
+            if (*story_row >= 0) std::printf("script: campaign smoke plays New Campaign row %" PRId64 ", faction button %zu\n", *story_row, story_faction);
+        }
+        if (*story_row >= 0) {
+            auto direct = std::make_shared<bool>(false);
+            s.push_back({"New Campaign button or the campaign's start action", [direct, story_choice](App& a, ui::InputFrame&) {
+                             const ui::GuiDialog* d = a.ui_.gui.find("IDD_SINGLE_PLAYER_GAMES_MENU_DIALOG");
+                             if (!d || d != a.ui_.gui.top()) return false;
+                             if (d->find("IDC_NEW_CAMPAIGN_BUTTON") >= 0) return true;
+                             *direct = true;
+                             std::printf("script: the menu has no New Campaign button: StartCampaign %s (%s)\n", story_choice.campaign.c_str(),
+                                         story_choice.faction.c_str());
+                             ui::MenuAction act;
+                             act.kind = ui::MenuAction::Kind::StartCampaign;
+                             act.campaign = story_choice.campaign;
+                             act.faction = story_choice.faction;
+                             a.handle_menu_actions({act});
+                             return true;
+                         },
+                         600});
+            const auto unless_direct = [direct](ScriptStep st) {
+                return ScriptStep{st.name, [direct, run = std::move(st.run)](App& a, ui::InputFrame& f) { return *direct || run(a, f); },
+                                  st.timeout_frames};
+            };
+            s.push_back(unless_direct(step_click_control("IDD_SINGLE_PLAYER_GAMES_MENU_DIALOG", "IDC_NEW_CAMPAIGN_BUTTON")));
+            s.push_back(unless_direct(step_shot("game_campaign_select.png")));
+            const size_t first = s.size();
+            exact_row("IDD_CAMPAIGN_SELECTION_DIALOG", "IDC_CAMPAIGNS_LIST", story_row);
+            for (size_t k = first; k < s.size(); ++k) s[k] = unless_direct(std::move(s[k]));
+            s.push_back(unless_direct(
+                step_click_control("IDD_CAMPAIGN_SELECTION_DIALOG", story_faction == 0 ? "IDC_PLAY_FACTION_A_BUTTON" : "IDC_PLAY_FACTION_B_BUTTON")));
+        } else {
+            s.push_back(step_click_control("IDD_SINGLE_PLAYER_GAMES_MENU_DIALOG", "IDC_CUSTOM_CAMPAIGN_BUTTON"));
+            s.push_back(step_shot("game_campaign_select.png"));
+            if (*custom_row >= 0) exact_row("IDD_CUSTOM_CAMPAIGN_STAGING_DIALOG", "IDC_STAGING_MAP_LIST", custom_row);
+            s.push_back(step_click_control("IDD_CUSTOM_CAMPAIGN_STAGING_DIALOG", "IDC_PLAY_BUTTON"));
+        }
         s.push_back(step_wait("galactic map", [](App& a) { return a.screen_ == Screen::Galactic; }, 600));
         s.push_back(step_ticks("galaxy runs", 30));
         // GALACTIC_DIALOGS §2: no dialog opens at campaign start; the opening Story_Dialog event adds its chapter to the
@@ -1373,17 +1524,20 @@ void App::make_script() {
             auto n = std::make_shared<int>(0);
             s.push_back({"holocron updated", [n](App& a, ui::InputFrame&) { return a.holocron_updates_ > 0 || ++*n > 300; }, 400});
         }
-        s.push_back(step_wait("holocron button opens the story summary", [](App& a) {
-            if (a.holocron_chapters_.empty()) return true;  // no story chapter in this campaign
+        // q6 t03: without a chapter (Thrawn's Revenge's historical campaigns add none) the summary is not opened, so its shot
+        // and close steps are skipped. Vanilla campaigns always have one.
+        auto no_summary = std::make_shared<bool>(false);
+        s.push_back(step_wait("holocron button opens the story summary", [no_summary](App& a) {
+            if (a.holocron_chapters_.empty()) return *no_summary = true;  // no story chapter in this campaign
             ui::HudAction act;
             act.kind = ui::HudAction::Kind::Button;
             act.name = "b_story_arc_g";
             a.handle_hud_actions({act});
             return a.story_summary_open_ && a.ui_.gui.find(ui::dlg::kStorySummary) != nullptr;
         }, 10));
-        s.push_back(step_shot("game_campaign_story.png"));
-        s.push_back(step_click_control(ui::dlg::kStorySummary, "IDC_SUMMARY_DIALOG_CLOSE_BUTTON"));
-        s.push_back(step_wait("story summary closed", [](App& a) { return !a.story_summary_open_; }, 300));
+        for (ScriptStep st : {step_shot("game_campaign_story.png"), step_click_control(ui::dlg::kStorySummary, "IDC_SUMMARY_DIALOG_CLOSE_BUTTON"),
+                              step_wait("story summary closed", [](App& a) { return !a.story_summary_open_; }, 300)})
+            s.push_back({st.name, [no_summary, run = std::move(st.run)](App& a, ui::InputFrame& f) { return *no_summary || run(a, f); }, st.timeout_frames});
         s.push_back(step_shot("game_campaign_galactic.png"));
         if (env_or_empty("ALAMO_SMOKE_FLEET_SLOTS") == "1")
             s.push_back(step_fleet_slots("game_campaign_fleet_slots.png", "game_campaign_fleet_slot_drag.png"));
@@ -1403,10 +1557,37 @@ void App::make_script() {
         add_pause_steps(s);  // galactic pause / resume
         s.push_back(step_encyclopedia("encyclopedia over a planet"));
         s.push_back(step_shot("game_campaign_encyclopedia.png"));
+        // q6 t13: the fleet steps below (hops, attacks, the battle, the second attack and its auto-resolve) need a fleet of
+        // the local player. A campaign that gives it none (Thrawn's Revenge's only custom set, GCMenu_Rebel, is the mod's
+        // scripted selection menu: two planets, no starting forces) skips them with a log line; the pause, encyclopedia,
+        // options, video modes, black market, holocron, story summary and campaign score checks before and after still run.
+        // Decided on the first frame of the first fleet step, which then runs in that same frame: a campaign with a fleet
+        // (every vanilla one) keeps its frame-for-frame step timing and command stream.
+        auto no_fleet = std::make_shared<int>(-1);  // -1 not decided yet, 0 the local player has a fleet, 1 none
+        auto gated = std::make_shared<size_t>(0);   // how many steps need the fleet
+        const auto needs_fleet = [no_fleet, gated](ScriptStep st) {
+            return ScriptStep{st.name, [no_fleet, gated, run = std::move(st.run)](App& a, ui::InputFrame& f) {
+                                  if (*no_fleet < 0) {
+                                      const galactic::GalacticSim* g = a.session_ ? a.session_->galaxy() : nullptr;
+                                      if (!g) return run(a, f);
+                                      bool own = false;
+                                      for (const galactic::FleetState& fl : g->fleets())
+                                          own = own || (fl.alive && fl.owner == a.local_player() && !fl.contents.empty());
+                                      *no_fleet = own ? 0 : 1;
+                                      if (!own)
+                                          std::printf("script: the local player owns no fleet in %s: the %zu galactic move, attack and battle steps "
+                                                      "are skipped (each logs done without running)\n",
+                                                      a.session_->spec().campaign.c_str(), *gated);
+                                  }
+                                  return *no_fleet == 1 || run(a, f);
+                              },
+                              st.timeout_frames};
+        };
+        const size_t fleet_steps = s.size();
         // Plain fleet hops by input, to arrival (click, then drag).
-        s.push_back(step_galactic_move(false));
-        s.push_back(step_galactic_move(true));
-        s.push_back(step_galactic_attack());
+        s.push_back(answer_ai_attacks(step_galactic_move(false)));
+        s.push_back(answer_ai_attacks(step_galactic_move(true)));
+        s.push_back(answer_ai_attacks(step_galactic_attack()));
         // The pending-battle choice (message box): Fight.
         s.push_back(step_wait("battle prompt shown", [](App& a) { return a.choice_open_; }, 6000));
         s.push_back(step_shot("game_campaign_battle_choice.png"));
@@ -1433,6 +1614,8 @@ void App::make_script() {
         s.push_back(step_wait("auto-resolve battle-end screen", [](App& a) { return a.auto_results_ > 0 && a.battle_end_open_ && a.ui_.gui.find(ui::dlg::kBattleEnd) && a.screen_text_.empty(); }, 600));
         s.push_back(step_shot("game_campaign_auto_result.png"));
         s.push_back(step_click_control(ui::dlg::kBattleEnd, "IDC_CONTINUE_BUTTON"));
+        *gated = s.size() - fleet_steps;
+        for (size_t k = fleet_steps; k < s.size(); ++k) s[k] = needs_fleet(std::move(s[k]));
         // The galaxy stands still from here (presentation-only hold: no AI conflict interrupts the screen checks).
         s.push_back(step_wait("hold the galaxy", [](App& a) { return a.script_hold_ = true; }, 10));
         // In-game options (MAIN_LOOP.md §1.5): the HUD's options button opens the game menu, which pauses the session; the

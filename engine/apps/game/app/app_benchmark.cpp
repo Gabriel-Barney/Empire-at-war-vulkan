@@ -74,7 +74,8 @@ bool App::bench_start() {
         std::error_code ec;
         std::filesystem::create_directories(opt_.bench.png_dir, ec);  // a failure shows as FAILED PNG writes
     }
-    if (!load_save_file(opt_.bench.save)) {
+    if (!bench_scenario_start()) return true;  // bm2: the scenario's orders and the GPU timer (a failure is in the report)
+    if (!load_save_file(opt_.bench.save, bench_replay())) {
         bench_fail("the save " + opt_.bench.save + " did not load");
         return true;  // init succeeded: run() writes the failed report
     }
@@ -235,6 +236,7 @@ void App::bench_frame_end() {
         if (!counted) ++b.excluded;
     }
     b.counted = counted;
+    bench_gpu_counted(counted);  // bm2: this frame's GPU timer scopes count only when the frame does
     if (counted) b.t_progress = Clock::now();
     else if (ms_since(b.t_progress) > kStallLimitMs) bench_fail("no measured frame for 60 s at tick " + std::to_string(session_->host().frame()));
     const bool finished = bench_fixed() ? b.clock.finished(opt_.bench.ticks) : b.rt_ticks >= opt_.bench.ticks;
@@ -292,6 +294,7 @@ int App::bench_finish() {
             b.error = "the presentation on/off check diverged";
         }
     }
+    bench_scenario_end(r);  // bm2: GPU timer scopes, the scenario's fingerprint check, --bench-make's scenario
     r.result = b.failed ? "failed" : "ok";
     r.error = b.error;
     const std::string json = bench_report_json(r);
@@ -307,7 +310,7 @@ int App::bench_finish() {
             return 1;
         }
     }
-    return b.failed ? 1 : 0;
+    return b.failed ? (bscen_.not_comparable ? 3 : 1) : 0;  // 3: scenario changed, not comparable (as alamo_headless --bench)
 }
 
 }  // namespace alamo_game_app

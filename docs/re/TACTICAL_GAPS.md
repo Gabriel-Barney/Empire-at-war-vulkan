@@ -364,9 +364,10 @@ Energy_Weapon (ABILITIES §3). Neutralize_Hero and Base_Destruction are galactic
 
 **2.3.1 Force_Healing** (Heal_Range +0x178, Heal_Percent +0x17c, Heal_Amount +0x180, Heal_Interval_In_Secs
 +0x184, Single_Target_Heal +0x188) [H]
-- Apply is a no-op; update 0x6fbb20 does the work. Skips without a SAP pack, when the combatant pack reports
-  0x380b10, or when garrisoned (+0x3a7). Fires when frame ≥ due (pack +0x25c); due := now + **int(FPS ×
-  interval + 0.5)**.
+- Apply is a no-op; update 0x6fbb20 does the work. Skips without a SAP pack, when the combat data pack's
+  **Force-disable timer** runs (0x380b10, §2.3.1a: a nearby enemy Ysalamiri-type emitter, not combat or damage), or
+  when garrisoned (+0x3a7). Fires when frame ≥ due (pack +0x25c); due := now + **int(FPS × interval + 0.5)**.
+  A skipped update does not move the due frame.
 - Amount > 0 or percent > 0 → heal (vf32 0x6fbf80); amount < 0 and percent ≤ 0 → harm (vf33 0x6fbc20).
 - Heal, range ≤ 0: self when health fraction (0x396470) < 1. Range > 0: query within range of the owner
   (0x2a8fb0); candidate: +0x348 = −1 [L: not a sub-object], applicable filter, **allied** (0x39a230), has a
@@ -378,6 +379,41 @@ Energy_Weapon (ABILITIES §3). Neutralize_Hero and Base_Destruction are galactic
   Then the damage-state refresh 0x3ac290 (§6.3).
 - Harm: enemies in range, health > 0, not garrisoned: `Take_Damage(kind 5, −amount)`; single = lowest hull
   fraction. Animation state 0x76 when present.
+
+**2.3.1a The skip gate 0x380b10 (q6 land follow-through, 2026-11-04)** [H unless tagged]
+
+Question from the port: does a structure under fire stop self-healing? No. The gate is the Force-suppression
+timer, not a combat test.
+- **Test.** 0x380b10(combat data CD = obj +0xf0) reads the frame stamp CD +0x110. A stamp < 0 → false. Else
+  elapsed = (NOW − stamp) / FPS, with elapsed < 0.1 s counted as 0, and the result is elapsed ≤
+  `Force_Ability_Disable_Time` (GameConstants +0x11824). It is the same timer as gate 3 of
+  `Can_Activate_Unit_Ability` (ABILITIES_HARDPOINTS §2.4). Its neighbours are the shield-depleted lockout 0x380ad0
+  (CD +0x108, `Depleted_Shield_Disable_Time`) and the nebula lockout (CD +0x104).
+- **The only writer of CD +0x110** is the behaviour update 0x636260, which is the `Disable_Force_Abilities_Range`
+  emitter (type +0x53c, read as a float here although xml_field_tables lists the tag as int [M]). Every update it queries objects within that 3-D range of the emitter that
+  are not owned by the emitter's owner (GOM query 0x2a9ff0 mode 2 [M: "other owners"]). For each object that is
+  alive (+0x3a0 bits 0x40, 0x80 and 0x02 clear), not a projectile (+0x33a = −1), has a model and a type, and owns at
+  least one unit ability whose info-table entry has the **F (Force power)** column set (0x3986b0 × 0x43fa30 over
+  types 0..0x4c), it stamps CD +0x110 := NOW.
+- Users: FoC `Ysalamiri_Tree` (150), `Underworld_Ysalamiri_Cage` (250), `Rebel_Mobile_Shield_Generator` (150).
+  Thrawn's Revenge sets the tag only once, to 0 (`Conquest_Bases.xml`).
+- With the shipped `Force_Ability_Disable_Time` 0.0 (FoC and TR), the gate is true only for about 0.1 s after the
+  last stamp, so it holds exactly while the emitter keeps re-stamping (the victim stays in range).
+- **Effect on Force_Healing.** A healer is skipped only while it is Force-suppressed. Taking damage, being targeted,
+  being in combat, being a structure and the owner do not matter. A structure, or any object without an F-flag unit
+  ability, is never stamped, so it never skips. The TR / FoC `R_Command_Center_Self_Repair` (Heal_Range 0, 2.5 % every
+  5 s, `Skirmish_Automatic`) therefore heals 70 hp (2800 × 0.025) every 150 frames while under fire, as long as
+  hull < max.
+- The same 0x380b10 test also ends Force_Sight early (ABILITIES_HARDPOINTS §4.14, Force_Sight).
+- One more condition in the update: when `Heal_Range` (+0x178) ≥ 0, 0x6fc3d0 runs first, every update. It was not
+  read [L: area visuals or the candidate refresh]. It does not gate the heal.
+
+**Port notes**
+- Implement 0x380b10 as "Force-disabled": CD +0x110 is written only by the `Disable_Force_Abilities_Range`
+  behaviour, for victims that own an F-flag unit ability. Do not tie Force_Healing to damage, attack or "in combat"
+  state. A self-repairing command centre heals at full rate while it is attacked.
+- With current FoC and TR data the gate never fires for any structure. A land skirmish that stalls on a
+  self-healing CC is an AI follow-through problem (AI_TACTICAL §7.7), not a healing bug.
 
 **2.3.2 Berserker** (Activation_Max_Range +0x17c, Speed +0x180, Damage +0x184, Damage_Range +0x188,
 Duration_In_Secs +0x18c) [H unless tagged]

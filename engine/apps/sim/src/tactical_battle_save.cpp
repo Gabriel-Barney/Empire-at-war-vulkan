@@ -1,4 +1,5 @@
 // N1 stage 2 save / load of a running battle (owner: n2-host): tactical_battle.hpp "N1 stage 2 save / load".
+#include <algorithm>
 #include <utility>
 
 #include "alamo/sim/save_session.hpp"
@@ -13,7 +14,7 @@ namespace alamo::sim {
 
 namespace {
 
-constexpr uint32_t kBattleStateVersion = 7;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save)
+constexpr uint32_t kBattleStateVersion = 8;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: q6 attacks on TEAM containers / s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save) (two branches); 8: both merged
 constexpr uint32_t kBattlePartVersion = 1;
 
 // One module system in a part: presence flag + a section with its own write (nothing when it has no write / read).
@@ -99,6 +100,7 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
         x(q.has_current, q.current);
     });
     a(b.queue_group_, b.queue_used_);
+    a.seq(b.team_attacks_, [](auto& x, auto& r) { x(r.attacker, r.container, r.member, r.goal); });  // q6 (state version 7)
 #ifdef ALAMO_SIM_HAVE_GARRISON
     a(b.s4_used_);
 #endif
@@ -217,9 +219,21 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
             const std::vector<uint32_t> types_used = types_used_, descs = descs_;
             save_io::In in(r);
             state_io(in, *this);
-            bool ok = r.ok() && r.done() && types_used_ == types_used && descs_ == descs;
+            // q6 t12: types a game-object script added mid-battle (script_add_types) follow the rebuilt setup's list; they
+            // are built onto the rebuilt tables again (same append order -> the same descriptor indices).
+            const bool same = types_used_ == types_used && descs_ == descs;
+            const bool extended = !same && types_used_.size() > types_used.size() && descs_.size() == types_used_.size() &&
+                                  std::equal(types_used.begin(), types_used.end(), types_used_.begin()) &&
+                                  std::equal(descs.begin(), descs.end(), descs_.begin());
+            bool ok = r.ok() && r.done() && (same || extended);
             for (const Unit& u : units_)
                 if (u.participant >= parts_.size() || (u.container != 0xFFFFFFFFu && u.container >= containers_.size())) ok = false;
+            if (ok && extended) {
+                const std::vector<uint32_t> saved_descs = descs_;
+                descs_ = descs;
+                tables_extend();
+                ok = descs_ == saved_descs;
+            }
             if (!ok) {
                 ByteReader br(backup.bytes());
                 save_io::In restore(br);

@@ -501,8 +501,118 @@ bool decode_tga(std::vector<std::uint8_t> file, TextureAsset& out, std::string* 
     return true;
 }
 
+// ---- BMP -------------------------------------------------------------------------------------
+
+bool decode_bmp(std::vector<std::uint8_t> file, TextureAsset& out, std::string* error) {
+    if (file.size() < 26 || file[0] != 'B' || file[1] != 'M') return fail(error, "not a BMP file");
+    const std::uint32_t pix_off = rd32(file, 10);
+    const std::uint32_t hsz = rd32(file, 14);
+    std::int64_t w = 0, h = 0;
+    std::uint32_t bpp = 0, comp = 0;
+    if (hsz == 12) {  // BITMAPCOREHEADER: 16-bit unsigned dimensions, always bottom-up
+        w = rd16(file, 18);
+        h = rd16(file, 20);
+        bpp = rd16(file, 24);
+    } else if (hsz >= 40) {  // BITMAPINFOHEADER / V2..V5: signed 32-bit dimensions, height < 0 = top-down
+        if (file.size() < 54) return fail(error, "BMP header truncated");
+        w = static_cast<std::int32_t>(rd32(file, 18));
+        h = static_cast<std::int32_t>(rd32(file, 22));
+        bpp = rd16(file, 28);
+        comp = rd32(file, 30);
+    } else {
+        return fail(error, "unsupported BMP header size " + std::to_string(hsz));
+    }
+    const bool top_down = h < 0;
+    if (top_down) h = -h;
+    if (w <= 0 || h <= 0 || w > kMaxDim || h > kMaxDim)
+        return fail(error, "BMP dimensions out of range (" + std::to_string(w) + "x" + std::to_string(h) + ")");
+    const std::uint32_t width = static_cast<std::uint32_t>(w), height = static_cast<std::uint32_t>(h);
+
+    MaskFormat mf;
+    mf.bits = bpp;
+    bool all_zero_alpha_is_opaque = false;
+    if (comp == 0) {  // BI_RGB
+        switch (bpp) {
+            case 16: mf.r = 0x7C00; mf.g = 0x3E0; mf.b = 0x1F; break;
+            case 24: mf.r = 0xFF0000; mf.g = 0xFF00; mf.b = 0xFF; break;
+            case 32:
+                // The fourth byte is "reserved" in the format, but files converted from 32-bit TGAs carry their alpha
+                // there (Thrawn's Revenge MT_Commandbar.tga is such a BMP), so it is kept; a file whose fourth byte is
+                // zero everywhere is opaque [port: inferred, as most BMP readers do].
+                mf.r = 0xFF0000; mf.g = 0xFF00; mf.b = 0xFF; mf.a = 0xFF000000u;
+                all_zero_alpha_is_opaque = true;
+                break;
+            default: return fail(error, "unsupported BMP bit depth " + std::to_string(bpp) + " (BI_RGB)");
+        }
+    } else if (comp == 3 || comp == 6) {  // BI_BITFIELDS / BI_ALPHABITFIELDS
+        if (bpp != 16 && bpp != 32) return fail(error, "unsupported BMP bit depth " + std::to_string(bpp) + " (bit fields)");
+        // Masks sit inside a V2+ header (offset 40 of the DIB header), else right after a 40-byte one.
+        const std::size_t m = 14 + 40;
+        const bool alpha = comp == 6 || hsz >= 56;
+        if (file.size() < m + (alpha ? 16u : 12u)) return fail(error, "BMP bit-field masks truncated");
+        mf.r = rd32(file, m);
+        mf.g = rd32(file, m + 4);
+        mf.b = rd32(file, m + 8);
+        mf.a = alpha ? rd32(file, m + 12) : 0;
+        if (bpp == 16) {
+            mf.r &= 0xFFFFu; mf.g &= 0xFFFFu; mf.b &= 0xFFFFu; mf.a &= 0xFFFFu;
+        }
+    } else {
+        return fail(error, "unsupported BMP compression " + std::to_string(comp));
+    }
+
+    const std::uint32_t spp = bpp / 8;
+    const std::uint64_t stride = (std::uint64_t(width) * bpp + 31) / 32 * 4;
+    const std::uint64_t need = stride * (height - 1) + std::uint64_t(width) * spp;  // last row may lack its padding
+    if (pix_off < 26 || pix_off > file.size() || file.size() - pix_off < need) return fail(error, "BMP pixel data truncated");
+    if (!within_budget(TextureFormat::BGRA8, width, height, 1, 1, error)) return false;
+
+    TextureAsset t;
+    t.format = TextureFormat::BGRA8;
+    t.data.resize(std::size_t(width) * height * 4);
+    const Channel cr(mf.r), cg(mf.g), cb(mf.b), ca(mf.a);
+    bool any_alpha = false;
+    for (std::uint32_t y = 0; y < height; ++y) {
+        const std::uint32_t sy = top_down ? y : height - 1 - y;
+        const std::uint8_t* s = file.data() + pix_off + sy * stride;
+        std::uint8_t* d = t.data.data() + std::size_t(y) * width * 4;
+        for (std::uint32_t x = 0; x < width; ++x, s += spp, d += 4) {
+            std::uint32_t px = 0;
+            std::memcpy(&px, s, spp);
+            const int r = cr.get(px), g = cg.get(px), b = cb.get(px), a = ca.get(px);
+            d[0] = static_cast<std::uint8_t>(b < 0 ? 0 : b);
+            d[1] = static_cast<std::uint8_t>(g < 0 ? 0 : g);
+            d[2] = static_cast<std::uint8_t>(r < 0 ? 0 : r);
+            d[3] = static_cast<std::uint8_t>(a < 0 ? 255 : a);
+            any_alpha = any_alpha || a > 0;
+        }
+    }
+    std::vector<std::uint8_t>().swap(file);
+    if (all_zero_alpha_is_opaque && !any_alpha)
+        for (std::size_t i = 3; i < t.data.size(); i += 4) t.data[i] = 255;
+    t.width = width;
+    t.height = height;
+    t.mip_levels = 1;
+    t.layers = 1;
+    t.levels.push_back({0, 0, width, height, 0, t.data.size()});
+    generate_mips(t);
+    out = std::move(t);
+    return true;
+}
+
+TextureFileKind sniff_texture_file(std::span<const std::uint8_t> bytes) {
+    if (bytes.size() >= 4 && bytes[0] == 'D' && bytes[1] == 'D' && bytes[2] == 'S' && bytes[3] == ' ') return TextureFileKind::Dds;
+    // A TGA cannot start with "BM": its second byte is the colour-map type (0 or 1), never 'M'.
+    if (bytes.size() >= 2 && bytes[0] == 'B' && bytes[1] == 'M') return TextureFileKind::Bmp;
+    return TextureFileKind::Tga;
+}
+
 bool decode_texture(std::vector<std::uint8_t> file, TextureAsset& out, std::string* error) {
-    if (file.size() >= 4 && rd32(file, 0) == fourcc('D', 'D', 'S', ' ')) return decode_dds(std::move(file), out, error);
+    switch (sniff_texture_file(file)) {
+        case TextureFileKind::Dds: return decode_dds(std::move(file), out, error);
+        case TextureFileKind::Bmp: return decode_bmp(std::move(file), out, error);
+        case TextureFileKind::Tga: break;
+    }
     return decode_tga(std::move(file), out, error);
 }
 

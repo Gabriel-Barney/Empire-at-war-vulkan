@@ -72,18 +72,21 @@ struct StoryDialogInfo {
     std::string image;
     bool accept = true, cancel = false, close = true;  // buttons shown
 };
-// GALACTIC_DIALOGS §2.2: goals = chapter titles of the selected tab (IDC_GOAL_LIST, `selected` preselected); title = the
-// selected chapter's TITLE text (the IDC_STATIC above the recap, placeholder TEXT_STORY_GOALS); recap = its body lines
-// (recap_colors parallel, alpha 0 = skin colours: TEXTCOLOR white 255,255,255,176 / red 255,24,39,255). Completed is
-// disabled while has_completed is false; Abandon hidden; IDC_HINTS = TEXT_STORY_HINT (data). A goal click emits
-// ScreenAction::StorySummaryGoal (button = row); the host refills with that chapter. The host holds the galactic pause
-// while it is open.
+// GALACTIC_DIALOGS §2.2 / §2.8: goals = the selected tab's holocron records, newest first (IDC_GOAL_LIST, `selected`
+// preselected): each row's label is its chapter's first TEXT line, drawn in goal_colors (parallel; the TEXTCOLOR before
+// that TEXT, default 128,128,255, x 0.66 once read or completed; missing = skin colours); title = the selected chapter's
+// TITLE text (the IDC_STATIC above the recap, placeholder TEXT_STORY_GOALS); recap = its body lines (recap_colors
+// parallel, alpha 0 = skin colours: TEXTCOLOR white 255,255,255,176 / red 255,24,39,255), wrapped in the list (text
+// escapes for line breaks become breaks there, §2.7). Completed is disabled while has_completed is false; Abandon hidden;
+// IDC_HINTS = TEXT_STORY_HINT (data). A goal click emits ScreenAction::StorySummaryGoal (button = row); the host refills
+// with that record. The host holds the galactic pause while it is open.
 struct StorySummaryInfo {
     std::vector<std::u32string> goals, recap;
+    std::vector<Rgba8> goal_colors;
     bool completed = false;     // Completed radio checked
     std::u32string title;       // chapter TITLE line ("" = keep the placeholder)
     std::vector<Rgba8> recap_colors;
-    int32_t selected = -1;      // goal row preselected (-1 = the last row, the newest chapter)
+    int32_t selected = -1;      // goal row preselected (-1 = the last row)
     bool has_completed = true;  // false: the Completed tab is disabled
 };
 

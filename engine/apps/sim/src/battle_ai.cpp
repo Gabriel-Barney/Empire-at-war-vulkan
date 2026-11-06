@@ -782,6 +782,12 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
             }
         }
         a.damage_tracking = o.has_damage_tracking || st.has_behavior(h, kDamageTracking);
+        // q6 t19 - 0x5680b0 (A1_READINGS §33.2.1): TEAM container or both type flags; not garrisoned / a hidden landing
+        // (+0x3a7); not dead (listed objects are alive); not in a transport [port: battles model no carried units, the
+        // garrison holder stands in]; no hero clash (+0x3b4, never set yet); SPECIAL_WEAPON only on a DUMMY_STAR_BASE.
+        a.valid_target = (fs.is_team || (types.get_bool(ti, "Collidable_By_Projectile_Living") && types.get_bool(ti, "Is_Valid_Target"))) &&
+                         b_->garrison_holder_of(id) == objects::kNoObjectId && !b_->landing_hidden(id) && !fs.dead_or_removing &&
+                         !a.hero_clash && (!fs.has_special_weapon || o.dummy_star_base);
         w.objects[i] = std::move(o);
         out[i] = std::move(a);
     };
@@ -829,6 +835,7 @@ bool BattleAi::is_fighter(objects::ObjectId id) const {
 // ---- a1h t02: object-goal follow (A1_READINGS §33.4, rule §33.5.2) ----------------------------------------------------
 
 void BattleAi::follow_drop(const std::vector<objects::ObjectId>& units) {
+    b_->team_attack_drop(units);  // q6: a newer order ends an attack on a TEAM container (signal 0xb)
     for (ObjectFollow& f : follows_)
         f.units.erase(std::remove_if(f.units.begin(), f.units.end(),
                                      [&units](objects::ObjectId id) { return std::find(units.begin(), units.end(), id) != units.end(); }),
@@ -924,6 +931,7 @@ void BattleAi::order_signals(uint8_t player, const cmd::EventData& ev) {
 }
 
 cmd::RejectReason BattleAi::execute(uint8_t player, const cmd::EventData& ev) {
+    attack_refused_.clear();
     const cmd::RejectReason r = execute_order(player, ev);
     if (r == cmd::RejectReason::None) order_signals(player, ev);
     std::string key(ev.def().name);
@@ -997,26 +1005,39 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
         case T::Attack: {
             const uint32_t tw = ev.u("target");
             const TacticalBattle::Unit* t = tw <= 0x7FFFFFFFu ? b_->unit_by_id(static_cast<objects::ObjectId>(tw)) : nullptr;
-            if (!t || !t->alive || t->retreated || !hostile_owner(player, st.owner(t->h))) return R::InvalidTarget;
+            // q6: a TEAM container is a valid target on its own (A1_READINGS §33.2.1 row 1, 0x5680b0); each attacker attacks
+            // the container's live member nearest it, re-picked until the container is gone (TacticalBattle::TeamAttack).
+            const TacticalBattle::Container* ct = t || tw > 0x7FFFFFFFu ? nullptr : b_->team_target(static_cast<objects::ObjectId>(tw));
+            if (ct ? !hostile_owner(player, st.owner(ct->h)) : (!t || !t->alive || t->retreated || !hostile_owner(player, st.owner(t->h))))
+                return R::InvalidTarget;
             int32_t hp = -1;
-            if (const uint32_t ref2 = ev.u("ref2"); ref2 > 0)
+            if (const uint32_t ref2 = ev.u("ref2"); t && ref2 > 0)
                 for (uint32_t k = 0; k < b_->combat_->hardpoint_count(t->id) && hp < 0; ++k)
                     if (static_cast<uint32_t>(b_->combat_->hardpoint_kind(t->id, k)) == ref2 - 1 && b_->combat_->hardpoint_targetable(t->id, k))
                         hp = static_cast<int32_t>(k);
             uint32_t n = 0;
-            const Vec3 tp = st.position(t->h);
             std::vector<objects::ObjectId> attackers;  // battle host: TEAM containers -> their members
             for (const uint32_t id : ev.ids("attackers"))
                 for (const objects::ObjectId mid : team_units(player, id))
                     if (std::find(attackers.begin(), attackers.end(), mid) == attackers.end()) attackers.push_back(mid);
             follow_drop(attackers);  // a1h t02: a newer order (signal 0xb, A1_READINGS §33.3)
+            std::vector<TacticalBattle::TeamPick> picks;
             for (const objects::ObjectId aid : attackers) {
                 const TacticalBattle::Unit* u = b_->unit_by_id(aid);
                 if (!u) continue;
-                b_->combat_->order_attack(u->id, t->id, hp);
-                b_->combat_->set_attack_goal(u->id, t->id, hp);  // refixf t06: Attack_Target block (kind 3, hard point, §2.8)
+                const TacticalBattle::Unit* tu = t;
+                if (ct) {
+                    const objects::ObjectId m = b_->team_pick(*mode_, *ct, st.position(u->h), b_->combat_->share_group(u->id), picks);
+                    tu = m != objects::kNoObjectId ? b_->unit_by_id(m) : nullptr;
+                    if (!tu) continue;
+                }
+                const Vec3 tp = st.position(tu->h);
+                b_->combat_->order_attack(u->id, tu->id, hp);
+                b_->combat_->set_attack_goal(u->id, tu->id, hp);  // refixf t06: Attack_Target block (kind 3, hard point, §2.8)
+                if (ct && b_->combat_->has_unit(u->id)) b_->team_attack_set(u->id, ct->id, tu->id, true);
                 if (!b_->movement_locked(u->id))  // S7 t22: an object block; a locked unit keeps its formation (as Move_To)
-                    b_->fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp, t->id);
+                    b_->fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp,
+                                      ct && b_->movement_->fighter_squad(ct->id) ? ct->id : tu->id);
                 ++n;
                 if (!u->movable) continue;
                 const Vec3 up = st.position(u->h);
@@ -1101,6 +1122,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                         std::vector<objects::ObjectId> kept;
                         for (const objects::ObjectId id : group.units)
                             if (!b_->combat_->has_unit(id) || b_->combat_->order_attack_issue(id, tu->id, -1)) kept.push_back(id);
+                            else attack_refused_.push_back(static_cast<int32_t>(id));  // q6 t19: not moved, not pending
                         for (const objects::ObjectId id : ids)  // members that do not move still get the order
                             if (std::find(group.units.begin(), group.units.end(), id) == group.units.end() && b_->combat_->has_unit(id))
                                 b_->combat_->order_attack_issue(id, tu->id, -1);
@@ -1350,8 +1372,9 @@ bool pad_name_equal(std::string_view a, std::string_view b) {
 }
 }  // namespace
 
-// The pads `player` can build on: live TACTICAL_BUILD_OBJECTS objects owned by the player or an ally (0x39a230), empty,
-// not fogged for the player, unblocked, cooldown over, ascending id [M: the free store's pad table +0xE8 order]; accepts = the UC types of the pad type's Tactical_Buildable_Objects_Campaign
+// The pads `player` can build on: live TACTICAL_BUILD_OBJECTS objects owned by the player or an ally (0x39a2c0, relation
+// 0: never a Neutral-owned pad, q6 t19), empty, unblocked, cooldown over, ascending id [M: the free store's pad table +0xE8
+// order, a hash map in the original - AI_TACTICAL §7.5.1 asks a defined order]; accepts = the UC types of the pad type's Tactical_Buildable_Objects_Campaign
 // row for the player's faction (S10 battles are campaign battles, as pad_build).
 std::vector<at::TacticalPad> BattleAi::build_pads(int32_t player) {
     std::vector<at::TacticalPad> out;
@@ -1387,9 +1410,9 @@ std::vector<at::TacticalPad> BattleAi::build_pads(int32_t player) {
     return out;
 }
 
-// Build / Build_All's three refusals (AI_TACTICAL §7.5): not friendly / visible (0x39a2c0: allied-owned and not fogged
-// for the player), game rules (0x42e400: empty and no live non-allied Influences_Capture_Point object within the pad
-// type's Capture_Point_Radius, 3-D), rebuild cooldown (0x42daf0).
+// Build / Build_All's three refusals (AI_TACTICAL §7.5): not friendly (0x39a2c0: relation 0 to the pad owner; no
+// visibility test, corrected q6 t19), game rules (0x42e400: empty and no live non-allied Influences_Capture_Point object
+// without BASE_SHIELD / DUMMY_GROUND_STRUCTURE within the pad type's Capture_Point_Radius, 3-D), rebuild cooldown (0x42daf0).
 at::PadCheck BattleAi::build_pad_check(int32_t player, int32_t pad, int32_t) {
     return pad_check(player, pad, capture_influencers());
 }
@@ -1417,21 +1440,20 @@ at::PadCheck BattleAi::pad_check(int32_t player, int32_t pad, const std::vector<
     const objects::ObjectHandle ph = pad >= 0 ? st.find(static_cast<objects::ObjectId>(pad)) : objects::ObjectHandle{};
     if (!st.alive(ph) || !st.has_behavior(ph, kBuildObjects)) return at::PadCheck::NotFriendlyOrVisible;
     const int32_t owner = st.owner(ph);
-    const tc::CombatSystem& c = *b_->combat_;
-    if (owner < 0 || (owner != player && c.is_enemy(player, owner))) return at::PadCheck::NotFriendlyOrVisible;
-#ifdef ALAMO_SIM_HAVE_FOG
-    if (b_->fog() && b_->fog_object_hidden(player, static_cast<objects::ObjectId>(pad), true)) return at::PadCheck::NotFriendlyOrVisible;
-#endif
+    // q6 t19 (AI_TACTICAL §7.5 / §7.5.1): 0x39a2c0 = relation(player -> pad owner) == 0 ("location is no longer friendly");
+    // a Neutral-owned pad (relation 2) is never reserved or built. There is no visibility test here (the player build path
+    // 0x42edf0, TacticalBattle::tactical_build, still refuses a pad under the player's fog).
+    if (owner < 0 || !b_->bt_allied(player, owner)) return at::PadCheck::NotFriendlyOrVisible;
     if (b_->pad_contents(static_cast<objects::ObjectId>(pad)) != objects::kNoObjectId) return at::PadCheck::Blocked;
     const objects::TypeIndex pt = st.type(ph);
     const double r = pt < types.size() ? static_cast<double>(types.get_float(pt, "Capture_Point_Radius")) : 0.0;
     const Vec3 pp = st.position(ph);
     for (const CaptureInfluencer& x : influencers) {
         if (x.h == ph) continue;
-        const int32_t o = x.owner;
-        // skai: a Neutral-faction owner (map props) is not an enemy (BATTLE_TRANSITIONS §0xb: "a Neutral player is simply not
-        // an enemy"; the port keeps it in the other players' combat rows only for ordered attacks).
-        if (o == owner || !c.is_enemy(owner, o) || b_->bt_owner_neutral(o)) continue;
+        // q6 t19 rule 0x42e400 (AI_TACTICAL §7.5.1): every live Influences_Capture_Point object not allied with the pad owner
+        // blocks, Neutral-owned ones included, unless it has BASE_SHIELD or DUMMY_GROUND_STRUCTURE [port: battle units only,
+        // see pad_rule_blocker].
+        if (!b_->pad_rule_blocker(st, x.h, owner)) continue;
         const Vec3 q = x.position;
         const double dx = static_cast<double>(q.x) - pp.x, dy = static_cast<double>(q.y) - pp.y, dz = static_cast<double>(q.z) - pp.z;
         if (dx * dx + dy * dy + dz * dz <= r * r) return at::PadCheck::Blocked;
@@ -1619,6 +1641,12 @@ bool BattleAi::reinforce_in_flight(int32_t player, int32_t key) {
         if (l.timed && l.state != 3 && p.owner == player && p.galactic_id == key) return true;
     }
     return false;
+}
+
+std::vector<ai::tactical::TacticalAiHost::ProductionCompleted> BattleAi::production_completed() {
+    std::vector<ai::tactical::TacticalAiHost::ProductionCompleted> out;
+    for (const TacticalBattle::ProductionDone& d : b_->production_done()) out.push_back({d.player, static_cast<int32_t>(d.type)});
+    return out;
 }
 
 std::vector<ai::tactical::ReinforcementsUnloaded> BattleAi::reinforcements_unloaded() {

@@ -184,7 +184,7 @@ int m_tf_force_count(Call& c) {
     return push_num(c, h ? h->tf_force_count(c.self->id) : 0);
 }
 int tf_flag(Call& c, AiTfFlag flag, const char* name) {
-    if (c.nargs < 1 || !is_bool(c, 1)) return c.fail("TaskForceClass::%s -- expected a boolean parameter.", name);
+    if (c.nargs < 1 || !is_bool(c, 1)) return c.script_error_stop("TaskForceClass::%s -- expected a boolean parameter.", name);
     if (AiScriptHost* h = host_of(c.L)) h->tf_set_flag(c.self->id, flag, to_bool(c, 1));
     return 0;
 }
@@ -225,7 +225,7 @@ int m_tf_all_on_free_store(Call& c) {
 int tf_order(Call& c, AiTfOrder order, bool needs_arg, const char* name) {
     AiScriptHost* h = host_of(c.L);
     const AiArg a = arg(c, 1);
-    if (needs_arg && !a.present) return c.fail("TaskForceClass::%s -- invalid target parameter.", name);
+    if (needs_arg && !a.present) return c.script_error_stop("TaskForceClass::%s -- invalid target parameter.", name);
     if (!h) return push_nil(c);
     return push_status(c, h->tf_order(c.self->id, order, a));
 }
@@ -283,16 +283,16 @@ int m_tf_is_raid_capable(Call& c) {
 int m_tf_release_forces(Call& c) {
     double f = 1.0;
     if (c.nargs >= 1) {
-        if (!c.is_number(1)) return c.fail("TaskForceClass::Release_Forces -- expected a number parameter.");
+        if (!c.is_number(1)) return c.script_error_stop("TaskForceClass::Release_Forces -- expected a number parameter.");
         f = c.number(1);
     }
-    if (f < 0.0 || f > 1.0) return c.fail("TaskForceClass::Release_Forces -- fraction must be in [0, 1].");
+    if (f < 0.0 || f > 1.0) return c.script_error_stop("TaskForceClass::Release_Forces -- fraction must be in [0, 1].");
     if (AiScriptHost* h = host_of(c.L)) h->tf_release_forces(c.self->id, f);
     return 0;
 }
 int m_tf_release_unit(Call& c) {
     const objects::ObjectHandle u = object_arg(c, 1);
-    if (!u) return c.fail("TaskForceClass::Release_Unit -- invalid unit parameter.");
+    if (!u) return c.script_error_stop("TaskForceClass::Release_Unit -- invalid unit parameter.");
     if (AiScriptHost* h = host_of(c.L)) h->tf_release_unit(c.self->id, u);
     return 0;
 }
@@ -322,13 +322,13 @@ int m_tf_goal_type_name(Call& c) {
 // string (default every bit); an unknown category collects nothing. No result.
 int m_tf_collect_all_free_units(Call& c) {
     if (c.nargs > 1)
-        return c.fail("TaskForceClass::Collect_All_Free_Units -- invalid number of parameters.  Expected 0 or 1, got %d.", c.nargs);
+        return c.script_error_stop("TaskForceClass::Collect_All_Free_Units -- invalid number of parameters.  Expected 0 or 1, got %d.", c.nargs);
     uint64_t mask = ~uint64_t{0};
     if (c.nargs == 1) {
-        if (!c.is_string(1)) return c.fail("TaskForceClass::Collect_All_Free_Units -- parameter 1 is not a string.");
+        if (!c.is_string(1)) return c.script_error_stop("TaskForceClass::Collect_All_Free_Units -- parameter 1 is not a string.");
         const objects::GameObjectTypes* types = c.vm->host.types;
         const auto m = types ? types->enums().get(objects::EnumId::GameObjectCategory).convert(c.string(1)) : std::nullopt;
-        if (!m) return c.fail("TaskForceClass::Collect_All_Free_Units -- unrecognized game object category %s.", std::string(c.string(1)).c_str());
+        if (!m) return c.script_error_stop("TaskForceClass::Collect_All_Free_Units -- unrecognized game object category %s.", std::string(c.string(1)).c_str());
         mask = static_cast<uint64_t>(*m);
     }
     if (AiScriptHost* h = host_of(c.L)) h->tf_collect_free_units(c.self->id, mask);
@@ -364,7 +364,7 @@ int m_target_game_object(Call& c) {
 int m_target_distance(Call& c) {
     AiScriptHost* h = host_of(c.L);
     const AiArg other = arg(c, 1);
-    if (!other.present) return c.fail("AITargetLocationWrapper::Get_Distance -- invalid parameter 1.");
+    if (!other.present) return c.script_error_stop("AITargetLocationWrapper::Get_Distance -- invalid parameter 1.");
     const double d = h ? h->target_distance(c.self->id, other) : -1.0;
     return d < 0.0 ? push_nil(c) : push_num(c, d);
 }
@@ -375,11 +375,11 @@ int budget_query(Call& c, AiBudgetOp op, bool has_amount, bool has_type, const c
     double amount = 0.0;
     std::string type;
     if (has_amount) {
-        if (!c.is_number(1)) return c.fail("BudgetWrapper::%s -- invalid type for parameter 1. Expected number.", name);
+        if (!c.is_number(1)) return c.script_error_stop("BudgetWrapper::%s -- invalid type for parameter 1. Expected number.", name);
         amount = c.number(1);
     }
     if (has_type) {
-        if (!c.is_string(2)) return c.fail("BudgetWrapper::%s -- invalid type for parameter 2. Expected string.", name);
+        if (!c.is_string(2)) return c.script_error_stop("BudgetWrapper::%s -- invalid type for parameter 2. Expected string.", name);
         type = std::string(c.string(2));
     }
     AiScriptHost* h = host_of(c.L);
@@ -397,7 +397,7 @@ int m_budget_unallocated(Call& c) {
 int m_budget_give(Call& c) { return budget_query(c, AiBudgetOp::GiveToGoal, true, true, "Give_Resources_To_Goal"); }
 int m_budget_take(Call& c) { return budget_query(c, AiBudgetOp::TakeFromGoal, true, true, "Take_Resources_From_Goal"); }
 int budget_wait(Call& c, AiBudgetOp op, const char* name) {
-    if (!c.is_number(1)) return c.fail("BudgetWrapper::%s -- invalid type for parameter 1. Expected number.", name);
+    if (!c.is_number(1)) return c.script_error_stop("BudgetWrapper::%s -- invalid type for parameter 1. Expected number.", name);
     AiScriptHost* h = host_of(c.L);
     return push_status(c, h ? h->budget_wait(c.self->id, op, c.number(1)) : -1);
 }
@@ -422,20 +422,20 @@ int m_fs_has(Call& c) {
 int m_fs_in_transit(Call& c) {
     AiScriptHost* h = host_of(c.L);
     const objects::ObjectHandle u = object_arg(c, 1);
-    if (!u) return c.fail("GalacticFreeStoreClass::Is_Unit_In_Transit -- invalid unit parameter.");
+    if (!u) return c.script_error_stop("GalacticFreeStoreClass::Is_Unit_In_Transit -- invalid unit parameter.");
     return push_bool(c, h && h->unit_in_transit(u));
 }
 int m_fs_safe(Call& c) {
     AiScriptHost* h = host_of(c.L);
     const objects::ObjectHandle u = object_arg(c, 1);
-    if (!u) return c.fail("GalacticFreeStoreClass::Is_Unit_Safe -- invalid unit parameter.");
+    if (!u) return c.script_error_stop("GalacticFreeStoreClass::Is_Unit_Safe -- invalid unit parameter.");
     return push_bool(c, !h || h->unit_safe(u));
 }
 int m_fs_move_object(Call& c) {
     AiScriptHost* h = host_of(c.L);
     const objects::ObjectHandle u = object_arg(c, 1);
     const AiArg dest = arg(c, 2);
-    if (!u || !dest.present) return c.fail("GalacticFreeStoreClass::Move_Object -- invalid parameters.");
+    if (!u || !dest.present) return c.script_error_stop("GalacticFreeStoreClass::Move_Object -- invalid parameters.");
     return push_bool(c, h && h->free_store_move(c.self->id, u, dest));
 }
 
@@ -446,8 +446,10 @@ std::string string_arg(Call& c, int i) { return c.is_string(i) ? std::string(c.s
 // FindTarget(source, perception, application, probability [, max distance]) [arguments per PGTaskForce /
 // PGCommands call sites].
 int g_find_target(Call& c) {
-    if (c.nargs < 3) return c.fail("FindTarget -- invalid number of parameters. Expected at least 3, got %d.", c.nargs);
-    if (!c.is_string(2) || !c.is_string(3)) return c.fail("FindTarget -- invalid type for parameters 2/3. Expected strings.");
+    // q6 t11 (LUA_API.md "Count messages that are stale"): the code takes 3 to 5 arguments (the message says 2 or 3).
+    if (c.nargs < 3 || c.nargs > 5)
+        return c.script_error_stop("FindTarget -- invalid number of parameters. Expected 2 or 3, got %d.", c.nargs);
+    if (!c.is_string(2) || !c.is_string(3)) return c.script_error_stop("FindTarget -- invalid type for parameters 2/3. Expected strings.");
     AiFindTargetRequest r;
     r.source = arg(c, 1);
     r.perception = string_arg(c, 2);
@@ -467,9 +469,9 @@ int g_find_target(Call& c) {
 }
 // FindTarget.Reachable_Target(player, perception, application, reachability, probability [, source [, max distance]])
 int m_reachable_target(Call& c) {
-    if (c.nargs < 5) return c.fail("FindTarget.Reachable_Target -- invalid number of parameters. Expected at least 5, got %d.", c.nargs);
+    if (c.nargs < 5) return c.script_error_stop("FindTarget.Reachable_Target -- invalid number of parameters. Expected at least 5, got %d.", c.nargs);
     if (!c.is_string(2) || !c.is_string(3) || !c.is_string(4))
-        return c.fail("FindTarget.Reachable_Target -- invalid type for parameters 2-4. Expected strings.");
+        return c.script_error_stop("FindTarget.Reachable_Target -- invalid type for parameters 2-4. Expected strings.");
     AiFindTargetRequest r;
     r.source = arg(c, 1);
     r.perception = string_arg(c, 2);
@@ -591,6 +593,7 @@ void push_arg(lua_State* L, LuaVm::Impl& vm, const AiEventArg& a) {
             else
                 lua_pushnil(L);
             break;
+        case AiEventArg::Type: detail::push_type(L, vm, a.type); break;
         default: lua_pushnil(L); break;
     }
 }
@@ -666,6 +669,45 @@ bool detail::ai_target_position(Call& c, int i, Vec3& out) {
     if (!ud || ud->cls != cls_target()) return false;
     AiScriptHost* h = host_of(c.L);
     return h && h->target_valid(ud->id) && h->target_position(ud->id, out);
+}
+
+detail::AiTargetArg detail::ai_target_arg(Call& c, int i) {
+    AiTargetArg a;
+    if (!c.has(i) || lua_type(c.L, c.idx(i)) != LUA_TUSERDATA) return a;
+    const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, c.idx(i)));
+    if (!ud || ud->cls != cls_target()) return a;
+    a.is_target = true;
+    AiScriptHost* h = host_of(c.L);
+    const objects::ObjectStore* st = c.vm->host.store;
+    if (!h || !st || !h->target_valid(ud->id)) {
+        a.dead = true;
+        return a;
+    }
+    if (const objects::ObjectHandle o = h->target_object(ud->id)) {
+        if (!st->alive(o)) {  // [port] a unit target whose unit has died
+            a.dead = true;
+            return a;
+        }
+        a.object = o;
+        a.position = st->position(o);
+        a.has_position = true;
+        return a;
+    }
+    a.has_position = h->target_position(ud->id, a.position);
+    return a;
+}
+
+bool detail::ai_task_force_units(Call& c, int i, std::vector<objects::ObjectHandle>& out) {
+    out.clear();
+    if (!c.has(i) || lua_type(c.L, c.idx(i)) != LUA_TUSERDATA) return false;
+    const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, c.idx(i)));
+    if (!ud || !is_tf_class(ud->cls)) return false;
+    AiScriptHost* h = host_of(c.L);
+    const objects::ObjectStore* st = c.vm->host.store;
+    if (!h || !st) return true;
+    for (const objects::ObjectHandle u : h->tf_units(ud->id))
+        if (u && st->alive(u)) out.push_back(u);
+    return true;
 }
 
 // ================================================================ host-side API

@@ -5,7 +5,11 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <map>
+#include <optional>
 
+#include "alamo/core/file_provider.hpp"
+#include "alamo/data/xml.hpp"
 #include "alamo/sim/save_session.hpp"
 #include "alamo/terrain/chunk.hpp"
 #include "alamo/terrain/ted.hpp"
@@ -33,6 +37,8 @@ bool stage(GameData& out, const char* name, F&& step) {
     return out.stages.back().ok;
 }
 
+void load_faction_skirmish_data(GameData& out);
+
 bool load_common(GameData& out, std::string* err) {
     if (!stage(out, "game database", [&](std::vector<std::string>& diag) { return out.db.load(*out.files, {}, &diag); })) {
         if (err) *err = "game database: load failed under " + out.root;
@@ -58,12 +64,20 @@ bool load_common(GameData& out, std::string* err) {
         out.catalog = std::make_unique<sim::BattleCatalog>(out.types, out.files.get(), &out.db.constants(), &diag);
         return true;
     });
+    load_faction_skirmish_data(out);  // q6 t08: no stage of its own (the Q5 stage list stays as it was)
     return true;
 }
 
 std::string upper(std::string s) {
     for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     return s;
+}
+
+void load_faction_skirmish_data(GameData& out) {
+    out.skirmish_forces = load_skirmish_forces(*out.files);
+#ifdef ALAMO_GAME_HAVE_GALACTIC_AI
+    out.basic_ai = ai::load_faction_basic_ai(*out.files);
+#endif
 }
 
 uint32_t neutral_faction(const galactic::GalacticRules& rules) {
@@ -125,14 +139,6 @@ uint64_t GameData::types_fingerprint() const {
     return types_fp_;
 }
 
-std::string ai_type_for(const std::string& faction) {
-    const std::string f = upper(faction);
-    if (f == "EMPIRE") return "BasicEmpire";
-    if (f == "REBEL") return "BasicRebel";
-    if (f == "UNDERWORLD") return "AI_Player_Underworld";
-    return {};
-}
-
 bool load_game_data_dir(const std::string& dir, GameData& out, std::string* err) {
     out.root = dir;
     out.vfs = nullptr;
@@ -140,23 +146,22 @@ bool load_game_data_dir(const std::string& dir, GameData& out, std::string* err)
     return load_common(out, err);
 }
 
-std::vector<std::string> default_skirmish_fleet(const std::string& faction) {
-    const std::string f = upper(faction);
-    if (f == "EMPIRE")
-        return {"Star_Destroyer", "Tartan_Patrol_Cruiser", "Tartan_Patrol_Cruiser", "Acclamator_Assault_Ship", "Broadside_Class_Cruiser"};
-    if (f == "REBEL")
-        return {"Calamari_Cruiser", "Nebulon_B_Frigate", "Corellian_Corvette", "Corellian_Corvette", "Alliance_Assault_Frigate"};
-    if (f == "UNDERWORLD")
-        return {"Vengeance_Frigate", "Kedalbe_Battleship", "Interceptor4_Frigate", "Crusader_Gunship", "Crusader_Gunship"};
-    return {};
+std::vector<std::string> data_fallback_forces(const GameData& data, const std::string& faction, bool land) {
+    return game::data_fallback_forces(data.rules, data.types, faction, land);
 }
 
-std::vector<std::string> default_skirmish_ground(const std::string& faction) {
-    const std::string f = upper(faction);
-    if (f == "EMPIRE") return {"Imperial_Stormtrooper_Squad", "Imperial_Stormtrooper_Squad", "Imperial_Armor_Group", "Imperial_Anti_Infantry_Brigade"};
-    if (f == "REBEL") return {"Rebel_Infantry_Squad", "Rebel_Infantry_Squad", "Rebel_Light_Tank_Brigade", "Rebel_Tank_Buster_Squad"};
-    if (f == "UNDERWORLD") return {"Underworld_Merc_Squad", "Underworld_Merc_Squad", "Underworld_Disruptor_Merc_Squad", "MZ8_Pulse_Cannon_Tank_Company"};
-    return {};
+namespace {
+std::vector<std::string> game_default_forces(const GameData& data, const std::string& faction, bool land) {
+    return skirmish_default_forces({data.rules, data.types, data.skirmish_forces, data.basic_ai}, faction, land);
+}
+}  // namespace
+
+std::vector<std::string> default_skirmish_fleet(const GameData& data, const std::string& faction) {
+    return game_default_forces(data, faction, false);
+}
+
+std::vector<std::string> default_skirmish_ground(const GameData& data, const std::string& faction) {
+    return game_default_forces(data, faction, true);
 }
 
 bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic::GalacticSetup& g, std::string* err) {
@@ -207,7 +212,8 @@ bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic
     hostile.faction = rules.find_faction("Hostile");
     if (hostile.faction != galactic::kNoIndex && hostile.faction != human.faction && hostile.faction != ai.faction) g.players.push_back(hostile);
     auto add = [&](int32_t player, PlanetIndex at, const std::vector<std::string>& names, const std::string& faction, bool ground = false) {
-        const std::vector<std::string> list = !names.empty() ? names : ground ? default_skirmish_ground(faction) : default_skirmish_fleet(faction);
+        const std::vector<std::string> list =
+            !names.empty() ? names : ground ? default_skirmish_ground(data, faction) : default_skirmish_fleet(data, faction);
         uint32_t n = 0;
         for (const std::string& name : list)
             if (const uint32_t t = rules.find_type(name); t != galactic::kNoIndex) {
@@ -217,14 +223,26 @@ bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic
         return n;
     };
     // Defender (AI) holds the battle planet first, then the human's forces at the far planet.
+    if (s.no_forces) return true;
     uint32_t na = 0, nh = 0;
     if (s.land) {
         na = add(1, kSkirmishBattlePlanet, s.ground_ai, s.ai_faction, true);
-        const std::vector<std::string> fleet = s.units_human.empty() ? default_skirmish_fleet(s.human_faction) : s.units_human;
+        const std::vector<std::string> fleet = s.units_human.empty() ? default_skirmish_fleet(data, s.human_faction) : s.units_human;
         if (!fleet.empty() && add(0, kSkirmishHumanPlanet, {fleet.front()}, s.human_faction) > 0)  // the carrier fleet
             nh = add(0, kSkirmishHumanPlanet, s.ground_human, s.human_faction, true);
     } else {
         na = add(1, kSkirmishBattlePlanet, s.units_ai, s.ai_faction);
+        // q6 [port]: the human fleet hops to the battle (the skirmish is hosted as a galactic hop), so a bought fleet
+        // without a hyperspace member (Thrawn's Revenge sells Nantex fighters) is led by the hyperspace ship the default
+        // forces would get (skirmish_hyperspace_leader); otherwise its opening hop is refused and the battle never starts.
+        // Retail places the bought units at the map's spawn markers (SKIRMISH_SETUP 2.2). Default fleets carry their own.
+        if (!s.units_human.empty()) {
+            std::vector<uint32_t> bought;
+            for (const std::string& name : s.units_human)
+                if (const uint32_t t = rules.find_type(name); t != galactic::kNoIndex) bought.push_back(t);
+            if (const uint32_t lead = skirmish_hyperspace_leader(rules, data.types, human.faction, bought); lead != galactic::kNoIndex)
+                g.forces.push_back({0, kSkirmishHumanPlanet, lead});
+        }
         nh = add(0, kSkirmishHumanPlanet, s.units_human, s.human_faction);
         if (nh > 0 && !s.ground_human.empty()) add(0, kSkirmishHumanPlanet, s.ground_human, s.human_faction, true);  // P4 host
     }
@@ -236,6 +254,19 @@ bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic
 }
 
 namespace {
+// q6 t02 [port]: a listed map whose loose file (through the normal lookup, mod first) is empty or cannot be sized is left
+// out - Thrawn's Revenge ships 0-byte _MP_SPACE_KUAT.ted / _MP_LAND_*.ted files over the FoC maps. A file stat, not a read
+// (mod maps run to 20 MB each). MEG entries are kept as indexed. No shipped FoC / EaW map is empty, so vanilla lists are
+// unchanged.
+bool map_file_usable(const vfs::Vfs& v, const std::string& path) {
+    const std::optional<vfs::Vfs::Resolution> r = v.resolve(path);
+    if (!r) return false;
+    if (r->layer == vfs::Vfs::Resolution::Meg) return true;
+    std::error_code ec;
+    const std::uintmax_t n = std::filesystem::file_size(path_from_utf8(r->location), ec);
+    return !ec && n > 0;
+}
+
 std::vector<std::string> list_maps(const GameData& data, const char* glob) {
     std::vector<std::string> out;
     if (!data.vfs) return out;
@@ -244,7 +275,9 @@ std::vector<std::string> list_maps(const GameData& data, const char* glob) {
         if (const size_t s = stem.find_last_of("\\/"); s != std::string::npos) stem = stem.substr(s + 1);
         if (const size_t d = stem.find_last_of('.'); d != std::string::npos) stem = stem.substr(0, d);
         stem = upper(stem);
-        if (std::find(out.begin(), out.end(), stem) == out.end()) out.push_back(stem);
+        if (std::find(out.begin(), out.end(), stem) != out.end()) continue;
+        if (!map_file_usable(*data.vfs, p)) continue;
+        out.push_back(stem);
     }
     std::sort(out.begin(), out.end());
     return out;
@@ -253,30 +286,8 @@ std::vector<std::string> list_maps(const GameData& data, const char* glob) {
 
 std::vector<std::string> skirmish_land_maps(const GameData& data) { return list_maps(data, "Data\\Art\\Maps\\_MP_LAND_*.ted"); }
 
-std::string skirmish_map_planet_type(const galactic::GalacticRules& rules, std::string_view map) {
-    std::string stem(map);
-    if (const size_t s = stem.find_last_of("\\/"); s != std::string::npos) stem = stem.substr(s + 1);
-    if (const size_t d = stem.find_last_of('.'); d != std::string::npos) stem = stem.substr(0, d);
-    stem = upper(stem);
-    for (const std::string_view prefix : {std::string_view("_MP_SPACE_"), std::string_view("_MP_LAND_")}) {
-        if (stem.size() <= prefix.size() || stem.compare(0, prefix.size(), prefix) != 0) continue;
-        const uint32_t t = rules.find_type(std::string_view(stem).substr(prefix.size()));
-        if (t != galactic::kNoIndex && rules.types[t].kind == galactic::UnitKind::Planet) return rules.types[t].name;
-    }
-    return {};
-}
-
 std::vector<std::string> skirmish_space_maps(const GameData& data) {
-    std::vector<std::string> out;
-    if (!data.vfs) return out;
-    for (const std::string& p : data.vfs->list("Data\\Art\\Maps\\_MP_SPACE_*.ted")) {
-        std::string stem = p;
-        if (const size_t s = stem.find_last_of("\\/"); s != std::string::npos) stem = stem.substr(s + 1);
-        if (const size_t d = stem.find_last_of('.'); d != std::string::npos) stem = stem.substr(0, d);
-        stem = upper(stem);
-        if (std::find(out.begin(), out.end(), stem) == out.end()) out.push_back(stem);
-    }
-    std::sort(out.begin(), out.end());
+    std::vector<std::string> out = list_maps(data, "Data\\Art\\Maps\\_MP_SPACE_*.ted");
     if (const auto it = std::find(out.begin(), out.end(), "_MP_SPACE_KUAT"); it != out.end()) std::rotate(out.begin(), it, it + 1);
     return out;
 }

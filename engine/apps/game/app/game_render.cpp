@@ -639,6 +639,8 @@ void BattleView::capture(const GameSession& session) {
         append_lob_chargeups(*b, *snap);                            // S8 t31: lobbing charge-up particles
         // Int-final: garrisoned objects (the battle's garrison host) are not drawn (R3 kSnapContained).
         render::apply_contained(*snap, [b](const render::SnapshotObject& o) { return b->contained_by(o.id) != objects::kNoObjectId; });
+        // q6 t19 (OBJECT_SCRIPTS §10.3): Lua Hide(true) - no model, particles, ghost or surface FX (presentation only).
+        render::apply_script_hidden(*snap, [&session](const render::SnapshotObject& o) { return session.script_hidden(o.id); });
 #ifdef ALAMO_SIM_HAVE_FOG
         // R5: the local player's FOW grid + HideWhenFogged marks. Not in the attract demo (GameSession::view_draws_fog): the
         // original's cinematic camera clears the FOW render option at every shot start, so the demo never draws fog, with or
@@ -725,6 +727,7 @@ void BattleView::prepare(GpuCore& gpu, float alpha) {
         if (beams_on_) gpu.renderer.set_beams(render::beams_from_frame(frame_, &beam_styles_, beam_bone_), p.curr->tick);
         gpu.renderer.set_lasers(builder_->lasers(), laser_k_);  // the frame's laser projectiles (Transparent bucket, main scene)
         stats_.lasers_peak = std::max(stats_.lasers_peak, static_cast<uint32_t>(builder_->lasers().size()));
+        stats_.model_projectiles_peak = std::max(stats_.model_projectiles_peak, istats_.projectiles_drawn - istats_.projectiles_lasers);
 #ifdef ALAMO_PARTICLES_HAVE_SIM
         if (pattach_) {
             render::particles::sync_sim_frame(*pattach_, frame_, table_, *models_, *builder_, pose_fn_ ? &pose_fn_ : nullptr, &popt_,

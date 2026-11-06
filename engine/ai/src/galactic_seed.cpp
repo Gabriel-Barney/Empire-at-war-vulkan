@@ -5,6 +5,9 @@
 
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/data/game_database.hpp"
+#ifdef ALAMO_AI_HAVE_GALACTIC_SIM
+#include "alamo/galactic/galactic_rules.hpp"  // q6: galactic_unit_kind (the galactic role rule)
+#endif
 #include "alamo/objects/game_object_types.hpp"
 
 namespace alamo::ai {
@@ -56,38 +59,97 @@ void build_csr(uint32_t n, const std::vector<std::vector<UnitPresence>>& per, Ga
 
 }  // namespace
 
-ForceTypeLookup make_force_type_lookup(const objects::GameObjectTypes& types) {
-    return [&types](std::string_view name) {
-        ForceType f;
-        const objects::TypeIndex t = types.resolve_name(name);
-        if (t == objects::kNone || t >= types.size()) return f;
-        f.valid = true;
-        f.combat_power = types.columns().ai_combat_power[t];
-        const std::string_view el = types.raw().element_name(t);
-        if (iequals(el, "StarBase")) {
+namespace {
+
+// The element tags the seed's own rule classifies (StarBase, structures, space units, ground units).
+bool seed_tag(std::string_view el) {
+    static constexpr std::string_view kTags[] = {"StarBase", "GroundStructure", "SpecialStructure", "SpaceUnit",    "Squadron",
+                                                 "SpaceProp", "GroundCompany",  "GroundInfantry",   "GroundVehicle"};
+    for (const std::string_view k : kTags)
+        if (iequals(el, k)) return true;
+    return false;
+}
+
+// The seed's own element-tag rule (S2, unchanged).
+void legacy_force_type(const objects::GameObjectTypes& types, objects::TypeIndex t, ForceType& f) {
+    const std::string_view el = types.raw().element_name(t);
+    if (iequals(el, "StarBase")) {
+        f.starbase = true;
+        f.layer = UnitLayer::Space;
+        f.base_level = types.get_int(t, "Base_Level");
+    } else if (iequals(el, "GroundStructure") || iequals(el, "SpecialStructure")) {
+        f.structure = true;
+        f.layer = UnitLayer::Ground;
+    } else if (iequals(el, "SpaceUnit") || iequals(el, "Squadron") || iequals(el, "SpaceProp")) {
+        f.layer = UnitLayer::Space;
+    } else if (iequals(el, "GroundCompany") || iequals(el, "GroundInfantry") || iequals(el, "GroundVehicle")) {
+        f.layer = UnitLayer::Ground;
+    } else {
+        bool space = space_category(types.get_list(t, "CategoryMask"));
+        if (!space && iequals(el, "HeroCompany")) {
+            const auto members = types.get_list(t, "Company_Units");
+            if (!members.empty()) {
+                const objects::TypeIndex m = types.resolve_name(members.front());
+                if (m != objects::kNone && m < types.size()) space = space_category(types.get_list(m, "CategoryMask"));
+            }
+        }
+        f.layer = space ? UnitLayer::Space : UnitLayer::Ground;
+    }
+}
+
+}  // namespace
+
+// q6: the galactic role rule (galactic::galactic_unit_kind: a DUMMY_* behaviour's role first, then the tag table, a vanilla
+// unclassified tag stays unclassified). Roles: StarBase -> starbase (space, Base_Level), GroundStructure -> structure
+// (ground), SpaceUnit / Squadron -> space, GroundUnit -> ground; no role (Other, Planet) -> the seed's own rule.
+// [port] The tags where the seed's own table and the galactic tag table disagree keep the seed's rule, so base-game seeds
+// do not change (FoC 85 / EaW 44 types): GroundBase (galactic: a structure), HeroCompany / HeroUnit / UniqueUnit
+// (galactic: ground, or Hyperspace -> space; the seed: CategoryMask / the first company member), SpaceProp (galactic: no
+// role). Mod tags outside both tables (Thrawn's Revenge) take their DUMMY_* behaviour's role.
+ForceType force_type_of(const objects::GameObjectTypes& types, objects::TypeIndex t, bool legacy) {
+    ForceType f;
+    if (t == objects::kNone || t >= types.size()) return f;
+    f.valid = true;
+    f.combat_power = types.columns().ai_combat_power[t];
+    const std::string_view el = types.raw().element_name(t);
+#ifdef ALAMO_AI_HAVE_GALACTIC_SIM
+    const bool galactic_tag = galactic::unit_kind_from_element(el, false) != galactic::UnitKind::Other;
+#else
+    legacy = true;  // no galactic rules library in this module list
+    const bool galactic_tag = false;
+#endif
+    if (legacy || galactic_tag != seed_tag(el)) {
+        legacy_force_type(types, t, f);
+        return f;
+    }
+#ifdef ALAMO_AI_HAVE_GALACTIC_SIM
+    uint8_t dummy = 0;
+    for (uint8_t id = galactic::kDummyGroundBase; id <= galactic::kDummyStarship; ++id)
+        if (types.has_behavior(t, objects::BehaviorSet::Union, id)) {
+            dummy = id;
+            break;
+        }
+    const galactic::UnitKind k = galactic::galactic_unit_kind(el, types.get_bool(t, "Hyperspace"), dummy);
+    switch (k) {
+        case galactic::UnitKind::StarBase:
             f.starbase = true;
             f.layer = UnitLayer::Space;
             f.base_level = types.get_int(t, "Base_Level");
-        } else if (iequals(el, "GroundStructure") || iequals(el, "SpecialStructure")) {
+            break;
+        case galactic::UnitKind::GroundStructure:
             f.structure = true;
             f.layer = UnitLayer::Ground;
-        } else if (iequals(el, "SpaceUnit") || iequals(el, "Squadron") || iequals(el, "SpaceProp")) {
-            f.layer = UnitLayer::Space;
-        } else if (iequals(el, "GroundCompany") || iequals(el, "GroundInfantry") || iequals(el, "GroundVehicle")) {
-            f.layer = UnitLayer::Ground;
-        } else {
-            bool space = space_category(types.get_list(t, "CategoryMask"));
-            if (!space && iequals(el, "HeroCompany")) {
-                const auto members = types.get_list(t, "Company_Units");
-                if (!members.empty()) {
-                    const objects::TypeIndex m = types.resolve_name(members.front());
-                    if (m != objects::kNone && m < types.size()) space = space_category(types.get_list(m, "CategoryMask"));
-                }
-            }
-            f.layer = space ? UnitLayer::Space : UnitLayer::Ground;
-        }
-        return f;
-    };
+            break;
+        case galactic::UnitKind::SpaceUnit: case galactic::UnitKind::Squadron: f.layer = UnitLayer::Space; break;
+        case galactic::UnitKind::GroundUnit: f.layer = UnitLayer::Ground; break;
+        default: legacy_force_type(types, t, f); break;
+    }
+#endif
+    return f;
+}
+
+ForceTypeLookup make_force_type_lookup(const objects::GameObjectTypes& types) {
+    return [&types](std::string_view name) { return force_type_of(types, types.resolve_name(name)); };
 }
 
 CampaignSeed seed_campaign_snapshot(const data::CampaignDef& campaign, const GalaxyMap& map,

@@ -185,7 +185,7 @@ Every marshaller call runs over the list in this order. This includes commit, so
 *Setup A* 0x72a3b0 [H]:
 - Build one slot per (TF in order × team in order): {TFDef, TeamDef, assigned indices, costSum (+0x28) = 0, category mask (+0x30) = 0, heroAttach (+0x38), specialWeapon (+0x39), stage (+0x40), TF unit count (+0x48), TF force (+0x4C)}.
 - Clear every record's team list (+0x20).
-- Globals: 0x140b3a526 = any TF allows hero attach; 0x140b3a527 = any TF allows special-weapon attach; 0x140b3a525 = any TF is EscortForce.
+- Globals: 0x140b3a526 = any TF allows hero attach; 0x140b3a527 = any TF allows special-weapon attach; 0x140b3a525 = any TF is EscortForce. Contrast's Setup A (0x6c5de0, later in the order) overwrites 0x140b3a525: 0 in galactic and for no target / IgnoreTarget, the same test again in tactical (AI_GALACTIC_TOKENS §9.10).
 
 *Setup B* 0x729550 [H]. For each slot s, for each type T of its team:
 - If T is affiliated with the player's faction (0x3751a0), or T has behaviour 0x5C/0x5B, or the free store holds a unit of T (0x4d3570): add s to rec(T).teams, creating the candidate (§1.2).
@@ -208,7 +208,7 @@ Every marshaller call runs over the list in this order. This includes commit, so
 *Commit* 0x72a720 → 0x729830 [H]:
 - OR the type's category mask into 0x140b3a538.
 - Place the unit: starting from startTeam, round-robin over the candidate's teams, choose the first slot whose team lists this type and that is percent-based or below max.
-  - First pass: skip EscortForce slots whose escort contrast is already met (0x140b3a529), and non-escort slots whose main contrast is met (0x140b3a528).
+  - First pass: skip an EscortForce slot when the escort contrast is met and the main one is not (0x140b3a529 ∧ ¬0x140b3a528), and a non-escort slot when the main contrast is met and the escort one is not (0x140b3a528 ∧ ¬0x140b3a529). Corrected q6 t18 (AI_GALACTIC_TOKENS §9.10): in galactic 0x140b3a529 is always 1, so escort slots wait for the main contrast and non-escort slots are never skipped.
   - Second pass: ignore the met flags.
 - Placing adds:
   - the selection index to the slot;
@@ -274,9 +274,12 @@ Every marshaller call runs over the list in this order. This includes commit, so
   - No target or IgnoreTarget → empty lists and tolerance 0.
   - Otherwise tolerance T = 1 − (f·PFCA + MinContrastScale)/(f·PFCA + MaxContrastScale), with f = recent plan failures at this target (Learning 0x588980). Shipped 1.1 / 1.5 gives T = 0.2667 at f = 0.
   - Galactic list (0x5f1990):
-    - entry 0 = (null, total enemy **space** strength at the target 0x5f2430(…, 1), flag 1);
-    - entry 1 = (null, total enemy **ground** strength, flag 0);
-    - then one entry per EnemyContrastTypes type (plan map +0x68, map order) for space, then for ground. Each = that type's enemy strength × (MaxContrastScale + f·PFCA) × difficulty `Galactic_AI_Contrast_Multiplier`.
+    - entry 0 = (null, total enemy strength at the target 0x5f2430(…, 1), flag 1);
+    - entry 1 = (null, total enemy strength 0x5f2430(…, 0), flag 0);
+    - (q6 2026-11-04 correction, AI_GALACTIC_TOKENS §9.2 [H]: flag 1 is the **ground** layer (GroundTotalUnnormalized
+      plus ground structures), flag 0 the **space** layer, so entry 0 is ground and the typed ground rows come first;
+      the totals and typed rows also include the matching structures' own AI_Combat_Power);
+    - then one entry per EnemyContrastTypes type (plan map +0x68, map order) for flag 1, then for flag 0. Each = that type's enemy strength × (MaxContrastScale + f·PFCA) × difficulty `Galactic_AI_Contrast_Multiplier`.
     - The two totals are **not** scaled.
     - When a total is ≤ 0, its per-type entries are 0.
   - "Remaining" = a copy of the list.
@@ -284,7 +287,7 @@ Every marshaller call runs over the list in this order. This includes commit, so
 - *Setup C* 0x72aad0 (not IgnoreTarget):
   - for each candidate, rec+0xB0 = has a non-escort team; rec+0xB1 = has an escort team;
   - build rec+0x98 = (entry index, weight w) for every entry with a non-null type and positive remaining, where w = 0x5f1f90(T, plan) (this type's weight against that enemy type from the Friendly/EnemyContrastTypes maps; a category match counts unless the weight is 1.0) × terrain factor 0x5f22c0 when PP+0x19C ≠ −1;
-  - flags PP+0x1A0 / +0x1A1 = which layers (ground / space) have any positive weight;
+  - flags PP+0x1A0 / +0x1A1 = which layers (layer byte 0 = **space** / byte 1 = **ground**, 0x6bff00 tests them in that order; q6 2026-11-04 correction) have any positive weight;
   - then 0x140b3a528 / 0x140b3a529 = main / escort contrast already satisfied (0x6bff00).
 - **Satisfied test** 0x72ac70 [H], per layer flag:
   - total = Σ target strength over typed entries of that layer;
@@ -301,8 +304,8 @@ Every marshaller call runs over the list in this order. This includes commit, so
     - Galactic adds the contributions of contained units (+0x60), each clamped ≥ 0.
   - v > 0 → return v (×2 in tactical modes).
   - v ≤ 0:
-    - if the relevant contrast layer is **not** yet satisfied → **veto** (non-permanent);
-    - if satisfied → return 0 (still allowed) when any of these holds: MinimumCost + AdditionalCost > gross cost; an untyped total entry still has remaining > 0 that the candidate's layer flags (+0x90 / +0x91) cover; a RequiredCategories mask is unmet and this type provides it; any of the candidate's slots is below min, MinimumTotalForce or MinimumTotalSize;
+    - if the relevant contrast layer is **not** yet satisfied → **veto** (non-permanent). "Relevant" is the plan-wide flag 0x140b3a528 (every *active* layer satisfied, 0x6bff00) together with the candidate's non-escort flag rec+0xB0 (or 0x140b3a529 with rec+0xB1), not the candidate's own layers (AI_GALACTIC_TOKENS §9.8);
+    - if satisfied → return 0 (still allowed) when any of these holds: MinimumCost + AdditionalCost > gross cost; an untyped total entry (key 0) still has remaining > 0 and the candidate covers **that entry's layer**: layer byte 1 (ground) → rec+0x90, byte 0 (space) → rec+0x91. The entry is found by its layer byte, not by its position in the list; a RequiredCategories mask is unmet and this type provides it; any of the candidate's slots is below min, MinimumTotalForce or MinimumTotalSize;
     - otherwise **veto**.
   - **This veto is what normally ends the solve.**
 - *Commit* 0x6c4b20 [H]:
@@ -407,7 +410,7 @@ Each run:
 
 ## 3. Budget (AI_GALACTIC open item 7)
 
-The AIBudgetClass lives at goal system +0x190. Galactic only (context mode == 0).
+The AIBudgetClass lives at goal system +0x190. Galactic only (context mode == 0). (Since corrected: the weights exist in every mode and only the money is galactic-only, AI_GALACTIC_TOKENS §9.3. Members are only the categories the active templates list, §9.5.)
 
 **Per category:** +0x30 weight equation, +0x38 applied weight (one-tick lag), +0x3C normalised weight, +0x44 available A, +0x48 available rate R, +0x4C next pool P, +0x50 income rate I, +0x54 average horizon, +0x68 goal structs.
 

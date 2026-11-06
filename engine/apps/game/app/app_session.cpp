@@ -411,6 +411,7 @@ void App::shutdown() {
     stop_movies();
     gpu_.ring.wait_idle();
     ctx_.wait_idle();
+    bscen_.gpu.shutdown();  // bm2: the benchmark's GPU timer (bench_finish normally shuts it down first)
     if (bview_.active()) bview_.stop(gpu_);
     session_.reset();
     gview_.destroy();
@@ -467,8 +468,12 @@ void App::session_started(const std::vector<std::string>& diag) {
     ar_log_seen_ = 0;
     holocron_chapters_.clear();
     holocron_flash_ = story_summary_open_ = false;
-    summary_chapter_ = -1;
+    summary_entry_ = 0;
+    summary_rows_.clear();
+    story_scripts_.clear();  // the new session's plots ask for their dialog scripts again (sync_story_scripts)
+    story_loads_ = {};
     screen_lines_.clear();
+    elimination_latch_.reset();
     victory_rules_ = {};  // Int-verify: galactic victory conditions of the campaign (none for a skirmish)
     if (const galactic::GalacticSim* vg = session_->galaxy(); vg && spec.kind == SessionKind::Campaign)
         victory_rules_ = galactic::load_victory_rules(data_.db, vg->map().campaign_name, vg->map());

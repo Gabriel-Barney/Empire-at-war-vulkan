@@ -1,13 +1,13 @@
 ALAMO_BENCH 1
 name space_battle
-version 1
+version 2
 description One large AI-vs-AI space battle: FoC _MP_SPACE_KUAT, Empire vs Rebel with four times the --skirmish-ai foc fleets, saved at tick 300 in the battle, then 1 min of battle
 make --save-session skirmish --campaign foc-fleet --save-when battle --bench-save-at 300 --ticks 1800 --bench-every 16 --bench-desc "One large AI-vs-AI space battle: FoC _MP_SPACE_KUAT, Empire vs Rebel with four times the --skirmish-ai foc fleets, saved at tick 300 in the battle, then 1 min of battle"
-save space_battle.alsv 168561 3d54dd59453ea3a8
-orders space_battle.acmd 72 0fe7a5c18045c7f1
-fingerprint space_battle.crc 29259 db0591ee4384bc74
+save space_battle.alsv 168633 4e21ad4d0e1c7fa2
+orders space_battle.acmd 72 804a8fcc31623e6f
+fingerprint space_battle.crc 29259 05226f52f41e2170
 fingerprint_every 16
 start_tick 300
 ticks 1800
 workers auto
-final_crc 1cccf8b2f6505d84
+final_crc e5996c2392c6d130

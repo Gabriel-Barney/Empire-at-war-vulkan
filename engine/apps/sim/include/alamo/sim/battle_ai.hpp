@@ -168,6 +168,11 @@ public:
     // Reinforce command re-runs it) with this battle's mode. AI drops pass human = false (movers ignored, landing
     // transports block).
     bool land_drop_ok(int32_t player, int32_t key, const ai::tactical::Vec3f& p) override { return land_drop_valid(player, key, p, false); }
+    // q6 t19 (A1_READINGS §33.2.2): the units the last executed task-force Attack_Move on an object dropped because
+    // CombatSystem::order_attack_issue refused them (cleared at every execute).
+    std::vector<int32_t> attack_order_refused() override { return attack_refused_; }
+    // q6 t19: TacticalBattle::production_done of the tick just run (land builds that went to the reinforcement pool).
+    std::vector<ai::tactical::TacticalAiHost::ProductionCompleted> production_completed() override;
     bool land_drop_valid(int32_t player, int32_t key, const ai::tactical::Vec3f& p, bool human);
     // a1j t01 - land TF.Reinforce with BattleConfig::landing_unload_timed (A1_READINGS §36): reinforce_in_flight = the
     // player's timed landing object of pool entry `key` (participant galactic id) has not finished its unload;
@@ -225,6 +230,7 @@ private:
     uint32_t order_listener_ = 0;   // S7 t31: TacticalBattle::add_order_replaced_listener token (world_->order_replaced)
     std::vector<uint8_t> ai_side_;  // per player: has a tactical AI
     uint32_t stale_ = 0;  // object orders whose target died before execution (no-ops)
+    std::vector<int32_t> attack_refused_;  // q6 t19: attack_order_refused() of the last execute (not saved: read at once)
     std::map<std::string, std::pair<uint32_t, uint32_t>> executed_;  // event name -> (applied, rejected) [diagnostic]
     std::vector<std::pair<uint64_t, int32_t>> opp_prev_;  // battle host: (unit id << 8 | hp, target), ascending key
     // UnitAI data-pack re-projection stamps (A1_READINGS §14) of the listed UNIT_AI objects, drawn once per object

@@ -190,6 +190,17 @@ struct VictoryClaim {
 // diagonal, Neutral when either faction Is_Neutral, else Enemy.
 enum class Relation : uint8_t { Self = 0, Ally = 1, Neutral = 2, Enemy = 3 };
 
+// AI_GALACTIC_TOKENS §9.4: one persisted tactical built object (PersistentTacticalBuiltObjectStruct, planet data D+0x10
+// record, 0x18 bytes). Written by the tactical battle host (sim TacticalBattle: add at a pad's construction completion,
+// remove at the child's death / sale, recreate at pad setup), filtered by the land results (ConflictManager), read by the
+// galactic AI's contrast term (0x4b8000).
+struct PersistedBuiltObject {
+    uint32_t type = kNoIndex;            // +0x00 the FINISHED type (type index; the original keys by its name CRC)
+    float x = 0.0f, y = 0.0f, z = 0.0f;  // +0x04 the finished object's position at creation (pad build point + 0.1 z)
+    int32_t base_level = 0;              // +0x10 the pad's base level (map mini 0x0B, 0..5); saved, never read [M]
+    int32_t owner = kNoPlayer;           // +0x14 the pad's owner at completion
+};
+
 struct PlanetState {
     bool is_planet = false;  // row has a planet object (scenery rows stay inert)
     uint32_t type = kNoIndex;
@@ -257,6 +268,10 @@ struct PlanetState {
     // P4 sim
     int32_t sabotage_count = 0;            // D +0x350 [M]: sabotages done here (cost exponent)
     std::vector<RespawnEntry> respawns;    // hero spawn list D +0x240 (P4 6.2), scheduling order
+    // AI_GALACTIC_TOKENS §9.4: the persisted tactical built objects D +0x10, list order (empty at the start; grows only in
+    // fought, non-sandbox campaign land battles). Saved (galactic save v2); hashed by the battle host ("battle.state",
+    // only planets with records) [port].
+    std::vector<PersistedBuiltObject> built_objects;
 };
 
 struct FleetState {
@@ -552,6 +567,15 @@ public:
     const GalaxyMap& map() const { return map_; }
     std::span<const PlayerState> players() const { return players_; }
     std::span<const PlanetState> planets() const { return planets_; }
+    // AI_GALACTIC_TOKENS §9.4: the planet's persisted tactical built objects, for the battle host that adds / removes
+    // records (null for a bad row). The vector lives as long as the session (planet rows are never re-created).
+    std::vector<PersistedBuiltObject>* built_objects(PlanetIndex planet) {
+        return planet < planets_.size() ? &planets_[planet].built_objects : nullptr;
+    }
+    // Owner filter 0x4b7d90: erase every record of `planet` whose owner is not `keep`, walking last to first (the order of
+    // the rest is unchanged). Called after every land result (ConflictManager: fought battle, land auto-resolve, invasion
+    // without a battle); other owner changes keep the records.
+    void keep_built_objects(PlanetIndex planet, int32_t keep);
     std::span<const FleetState> fleets() const { return fleets_; }
     float credits(int32_t player) const { return players_[static_cast<size_t>(player)].account.credits; }
     int32_t neutral_player() const { return neutral_player_; }

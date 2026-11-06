@@ -86,6 +86,7 @@ CampaignBattles::~CampaignBattles() {
     remove_battle_chunks();  // N1 stage 2
     host_->set_after_mode_update({});
     host_->set_tactical_command_hook({});
+    host_->set_select_all_hook({});        // q6
     host_->set_galactic_command_hook({});  // Int-final
     if (gate_)  // battle host: the story-block gate was installed in front of the manager
         if (GalacticMode* g = host_->galactic_mode(); g && g->sim() && g->sim()->conflict_hooks() == gate_.get()) g->sim()->set_conflict_hooks(nullptr);
@@ -95,6 +96,17 @@ CampaignBattles::~CampaignBattles() {
         story_fog_session_->set_enable_fow_hook({});  // fog follow-up
         story_fog_session_->set_victory_hooks({}, {});  // story t09
     }
+#endif
+}
+
+bool CampaignBattles::script_hidden(objects::ObjectId id) const {
+#ifdef ALAMO_SIM_HAVE_STORY
+    if (!battle_ || !story_bridge_) return false;
+    const lua::ScriptObjectState* s = story_bridge_->find_state(id);
+    return s && s->hidden;
+#else
+    (void)id;
+    return false;
 #endif
 }
 
@@ -158,17 +170,23 @@ bool CampaignBattles::attach(std::vector<std::string>* diag) {
         reg.add("battle.state", [this](StateHasher& h) {
             h.boolean(battle_ != nullptr);
             if (battle_) battle_->hash(h);
-            for (const auto& [pl, v] : pad_records_) {  // REMAINING_GAPS §6.5: only planets with records (none: no bytes)
-                if (v.empty()) continue;
-                h.u32(static_cast<uint32_t>(pl));
-                h.u32(static_cast<uint32_t>(v.size()));
-                for (const TacticalBattle::PadRecord& r : v) {
-                    h.u32(r.type);
-                    h.f32(r.x);
-                    h.f32(r.y);
-                    h.f32(r.z);
-                    h.i32(r.level);
-                    h.i32(r.value);
+            // AI_GALACTIC_TOKENS §9.4: the planets' persisted tactical built objects, planet order, only planets with
+            // records (none: no bytes).
+            if (const GalacticMode* gm = host_->galactic_mode(); gm && gm->sim()) {
+                const std::span<const galactic::PlanetState> planets = gm->sim()->planets();
+                for (size_t pl = 0; pl < planets.size(); ++pl) {
+                    const std::vector<galactic::PersistedBuiltObject>& v = planets[pl].built_objects;
+                    if (v.empty()) continue;
+                    h.u32(static_cast<uint32_t>(pl));
+                    h.u32(static_cast<uint32_t>(v.size()));
+                    for (const galactic::PersistedBuiltObject& r : v) {
+                        h.u32(r.type);
+                        h.f32(r.x);
+                        h.f32(r.y);
+                        h.f32(r.z);
+                        h.i32(r.base_level);
+                        h.i32(r.owner);
+                    }
                 }
             }
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
@@ -214,6 +232,28 @@ bool CampaignBattles::attach(std::vector<std::string>* diag) {
         if (!battle_ || !tm || pending_) return commands::RejectReason::Unhandled;
         return battle_->handle_command(*tm, player, ev, h.random().synced());
     });
+    // q6 (COMMANDS §2.4.1): Select All in the running battle: TEAM members, garrisoned units and a retreating side are
+    // skipped (TacticalBattle::select_all_entry), a container brings its members; only objects whose selection flag is
+    // set (Set_Selectable, the tactical bridge's script state: unset = selectable) enter.
+    host_->set_select_all_hook([this](SimHost& h, uint8_t, objects::ObjectHandle o, std::vector<objects::ObjectId>& members) {
+        TacticalMode* tm = h.tactical();
+        if (!battle_ || !tm || pending_) return true;
+        const objects::ObjectStore& st = tm->primary();
+        auto flag = [this](objects::ObjectId id) {
+#ifdef ALAMO_SIM_HAVE_STORY
+            const lua::ScriptObjectState* s = story_bridge_ ? story_bridge_->find_state(id) : nullptr;
+            return !s || s->selectable != 0;
+#else
+            (void)this;
+            (void)id;
+            return true;
+#endif
+        };
+        const objects::ObjectId id = st.id(o);
+        if (!flag(id) || !battle_->select_all_entry(id, st.owner(o), members)) return false;
+        members.erase(std::remove_if(members.begin(), members.end(), [&](objects::ObjectId m) { return !flag(m); }), members.end());
+        return true;
+    });
     // Int-final: galactic SpecialAbility commands GalacticSim leaves unhandled (kind 6 = the corruption choice).
     host_->set_galactic_command_hook([this](SimHost&, uint8_t player, const commands::EventData& ev) {
         if (ev.type() == commands::EventType::ResumeGame) return resume_game(player, ev);  // battle host: TACTICAL_GAPS §4.11
@@ -237,7 +277,8 @@ bool CampaignBattles::attach(std::vector<std::string>* diag) {
 
 // --- N1 save / load (owner: n1-host; stage 2 n2-host; campaign_battles.hpp) ---
 namespace {
-constexpr uint32_t kBattlesSaveVersion = 3;  // 2: + the battle in flight (stage 2); 3: + the linked-battle state (story t07)
+constexpr uint32_t kBattlesSaveVersion = 4;  // 2: + the battle in flight (stage 2); 3: + the linked-battle state (story t07);
+                                             // 4: the pad records moved to the planets (galactic save v2, q6)
 constexpr uint32_t kBattleLevelVersion = 1;
 constexpr uint32_t kMaxBattlesCount = 1u << 24;
 
@@ -277,11 +318,6 @@ void CampaignBattles::write_state(ByteWriter& w) const {
     w.u8(static_cast<uint8_t>(last_corruption_));
     w.u32(static_cast<uint32_t>(log_.size()));
     for (const std::string& l : log_) w.str(l);
-    w.u32(static_cast<uint32_t>(pad_records_.size()));
-    for (const auto& [planet, recs] : pad_records_) {
-        w.u32(static_cast<uint32_t>(planet)).u32(static_cast<uint32_t>(recs.size()));
-        for (const TacticalBattle::PadRecord& p : recs) w.u32(p.type).f32(p.x).f32(p.y).f32(p.z).i32(p.level).i32(p.value);
-    }
     w.u32(static_cast<uint32_t>(corruption_queued_.size()));
     for (const CorruptionMission& m : corruption_queued_) write_mission(m);
     write_mission(corruption_active_);
@@ -302,7 +338,8 @@ void CampaignBattles::write_state(ByteWriter& w) const {
     if (flight != 0) {
         save_io::Out o(w);
         request_io(o, pending_req_);
-        o(pending_req_.linked);  // v3
+        o(pending_req_.linked);   // v3
+        o(pending_req_.sandbox);  // v4
     }
     write_linked(w);  // v3
 }
@@ -326,17 +363,19 @@ bool CampaignBattles::read_state(ByteReader& r) {
     if (last > static_cast<uint8_t>(CorruptionStart::MissionQueued)) r.fail();
     std::vector<std::string> log(read_count(r));
     for (std::string& l : log) l = r.str();
-    std::vector<std::pair<PlanetIndex, std::vector<TacticalBattle::PadRecord>>> pads(read_count(r));
+    // v1-3: the per-planet pad records lived here {u32 planet, u32 n, n x {u32 type, f32 x, y, z, i32 level, i32 value}};
+    // they move to the planets' built_objects below (v4 keeps them in the galactic save).
+    std::vector<std::pair<PlanetIndex, std::vector<galactic::PersistedBuiltObject>>> pads(version < 4 ? read_count(r) : 0u);
     for (auto& [planet, recs] : pads) {
         planet = static_cast<PlanetIndex>(r.u32());
         recs.resize(read_count(r));
-        for (TacticalBattle::PadRecord& p : recs) {
+        for (galactic::PersistedBuiltObject& p : recs) {
             p.type = r.u32();
             p.x = r.f32();
             p.y = r.f32();
             p.z = r.f32();
-            p.level = r.i32();
-            p.value = r.i32();
+            p.base_level = r.i32();
+            p.owner = r.i32();
         }
     }
     std::vector<CorruptionMission> queued(read_count(r));
@@ -358,6 +397,7 @@ bool CampaignBattles::read_state(ByteReader& r) {
         save_io::In in(r);
         request_io(in, req);
         if (version >= 3) in(req.linked);
+        if (version >= 4) in(req.sandbox);
     }
     LinkedState linked_state;  // v3 (older saves: the defaults, no record)
     if (version >= 3) read_linked(r, linked_state);
@@ -377,7 +417,10 @@ bool CampaignBattles::read_state(ByteReader& r) {
     direct_ = direct;
     last_corruption_ = static_cast<CorruptionStart>(last);
     log_ = std::move(log);
-    pad_records_ = std::move(pads);
+    if (!pads.empty())
+        if (GalacticMode* gm = host_->galactic_mode(); gm && gm->sim())
+            for (auto& [planet, recs] : pads)
+                if (std::vector<galactic::PersistedBuiltObject>* dst = gm->sim()->built_objects(planet)) *dst = std::move(recs);
     corruption_queued_ = std::move(queued);
     corruption_active_ = std::move(active);
     lk_ = std::move(linked_state);
@@ -395,12 +438,10 @@ bool CampaignBattles::read_state(ByteReader& r) {
     }
     if (!battle_) pending_ = flight == 1;
     if (battle_ && pending_req_.info.planet != kInvalidPlanet) {
-        // Pass 2: pad_records_ was replaced; the battle's pad persistence list is relinked (as push_battle links it).
-        std::vector<TacticalBattle::PadRecord>* recs = nullptr;
-        for (auto& [pl, v] : pad_records_)
-            if (pl == pending_req_.info.planet) recs = &v;
-        if (!recs) recs = &pad_records_.emplace_back(pending_req_.info.planet, std::vector<TacticalBattle::PadRecord>{}).second;
-        battle_->set_pad_persistence(recs);
+        // Pass 2: the galactic read replaced the planet rows; the battle's pad persistence list is relinked (as push_battle
+        // links it; no recreate: the battle was set up already).
+        GalacticMode* gm = host_->galactic_mode();
+        battle_->set_pad_persistence(gm && gm->sim() ? gm->sim()->built_objects(pending_req_.info.planet) : nullptr, false);
     }
     return true;
 }
@@ -417,7 +458,9 @@ std::string CampaignBattles::rebuild() {
     if (!load_battle_map(loader_, req, map)) return "map " + req.map + " did not load as the saved battle's map";
     pending_req_ = std::move(req);
     pending_map_ = std::move(map);
+    rebuilding_ = true;  // §9.4: a loaded battle keeps its saved objects (no recreate at its setup)
     push_battle(*host_);
+    rebuilding_ = false;
     return battle_ ? std::string() : std::string("the battle did not start");
 }
 
@@ -674,13 +717,10 @@ void CampaignBattles::push_battle(SimHost& host) {
     battle_->set_weather_data(opt_.weather);       // L1 systems
     battle_->set_l1_factions(opt_.l1_factions);    // L1 systems
     battle_->set_arrival_hold([this] { return lk_.presentation.hyperspace_hold; });  // story t12 (P9 == 2)
-    if (pending_req_.info.planet != kInvalidPlanet) {  // REMAINING_GAPS §6.5: the battle planet's pad persistence list
-        std::vector<TacticalBattle::PadRecord>* recs = nullptr;
-        for (auto& [pl, v] : pad_records_)
-            if (pl == pending_req_.info.planet) recs = &v;
-        if (!recs) recs = &pad_records_.emplace_back(pending_req_.info.planet, std::vector<TacticalBattle::PadRecord>{}).second;
-        battle_->set_pad_persistence(recs);
-    }
+    // AI_GALACTIC_TOKENS §9.4: the battle planet's persisted built objects (the battle applies the gate: not in a skirmish,
+    // not the sandbox battle). A battle rebuilt by a save load does not recreate them (the save has the battle's objects).
+    if (pending_req_.info.planet != kInvalidPlanet)
+        battle_->set_pad_persistence(g->sim()->built_objects(pending_req_.info.planet), !rebuilding_);
     {  // battle host: TacticalBuild charges / TacticalSell refunds spend the galactic account ([port] no AI notify)
         galactic::GalacticSim* gsim = g->sim();
         battle_->set_credit_hooks(
@@ -705,9 +745,32 @@ void CampaignBattles::push_battle(SimHost& host) {
     galactic_context_begin(kind);  // a1j t07
 #endif
     register_battle_chunks();  // N1 stage 2: the running battle's save chunks
+    host.scoring_mode_started(kind, pending_req_.map);  // q6 t09: Game_Mode_Starting_Event(Land / Space, map)
+}
+
+// q6 t09 (campaign_battles.hpp ar_log_seen_): Reset_Tactical_Stats once per auto-resolve, at its begin when it is seen
+// running, else when its log entry appears.
+void CampaignBattles::scoring_auto_resolve() {
+    if (!cm_) return;
+    const std::vector<galactic::ConflictLogEntry>& log = cm_->log();
+    if (!ar_log_init_ || ar_log_seen_ > log.size()) {
+        ar_log_seen_ = log.size();
+        ar_log_init_ = true;
+    }
+    for (; ar_log_seen_ < log.size(); ++ar_log_seen_) {
+        if (log[ar_log_seen_].how != 1) continue;
+        if (ar_reset_sent_) ar_reset_sent_ = false;  // the one seen running ended
+        else host_->scoring_reset_tactical_stats();
+    }
+    const galactic::ConflictState s = cm_->state();
+    if ((s == galactic::ConflictState::AutoSetup || s == galactic::ConflictState::AutoRunning) && !ar_reset_sent_) {
+        host_->scoring_reset_tactical_stats();
+        ar_reset_sent_ = true;
+    }
 }
 
 void CampaignBattles::hook(SimHost& host) {
+    scoring_auto_resolve();  // q6 t09
 #ifdef ALAMO_SIM_HAVE_STORY
     if (StorySession* s = host.story(); s && s != story_fog_session_) {  // fog follow-up: ENABLE_FOW story rewards
         s->set_enable_fow_hook([this](bool has_param, int32_t value) { story_fog_reward(has_param, value); });
@@ -785,6 +848,9 @@ void CampaignBattles::hook(SimHost& host) {
     const bool auto_resolved = ar_requested_;
     ar_requested_ = false;
     if (auto_resolved) {
+        scoring_auto_resolve();               // q6 t09: entries before this one are settled first
+        host.scoring_reset_tactical_stats();  // q6 t09: the HUD auto-resolve begins inside resolve_battle
+        ar_reset_sent_ = true;                // its log entry consumes it
         result.winner = cm_->resolve_battle(result);
         log_.push_back("auto-resolve from tactical: winner " + std::to_string(result.winner));
     }
@@ -1165,7 +1231,10 @@ void CampaignBattles::story_load_map(galactic::BattleRequest& r) {
 // --- L1/S4 wave 2a story hookup (story_session.hpp "battle-host calls") ---
 void CampaignBattles::story_begin(SimHost& host, GameMode& mode) {
     StorySession* s = host.story();
-    if (!s || !battle_) return;
+    // q6: the battle's game-object scripts use this bridge too, so it is built without a story session as well when the
+    // host runs object scripts (SimConfig::object_scripts; off by default, so the sessions before q6 are unchanged).
+    ObjectScriptHost* scripts = host.object_scripts();
+    if ((!s && !scripts) || !battle_) return;
     story_bridge_ = std::make_unique<lua::ObjectBridge>();
     lua::ObjectBridge& b = *story_bridge_;
     b.abilities = &battle_->abilities();
@@ -1322,6 +1391,49 @@ void CampaignBattles::story_begin(SimHost& host, GameMode& mode) {
     };
     if (corruption_active_.player >= 0 && !corruption_active_.plots.empty()) st.plots_file = corruption_active_.plots;  // mission plots
     // --- end S4 ---
+    if (scripts) {  // q6: Spawn_Unit of an object script makes battle units (TacticalBattle::script_spawn)
+        b.spawn_unit = [this, h](const objects::SpawnParams& p) {
+            TacticalMode* tm = h->tactical();
+            return (battle_ && tm) ? battle_->script_spawn(*tm, p) : objects::ObjectHandle{};
+        };
+        // q6 t12: companies come down as battle companies (members + TEAM containers), Take_Damage goes through combat.
+        // [port] Set only with object scripts on (the bridge is shared with the story VMs of this battle), so sessions
+        // without them keep the store-only Take_Damage of the story bindings.
+        b.spawn_company = [this, h](const objects::SpawnParams& p) {
+            TacticalMode* tm = h->tactical();
+            return (battle_ && tm) ? battle_->script_spawn_company(*tm, p) : objects::ObjectHandle{};
+        };
+        b.take_damage = [this, h](objects::ObjectHandle u, float amount, bool cannot_die) {
+            TacticalMode* tm = h->tactical();
+            return battle_ && tm && tm->primary().alive(u) && battle_->script_damage(*tm, tm->primary().id(u), amount, cannot_die);
+        };
+        // q6 (OBJECT_SCRIPTS §10.1-10.3): Make_Invulnerable -> combat's damage-kind gate, Prevent_AI_Usage -> the owner's
+        // AI free store, Hide -> the model test. [port] Object-script sessions only, like the hooks above.
+        b.invulnerable_changed = [this, h](objects::ObjectHandle u, bool on) {
+            TacticalMode* tm = h->tactical();
+            if (battle_ && tm && tm->primary().alive(u)) battle_->script_invulnerable(tm->primary().id(u), on);
+        };
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+        b.prevent_ai_usage = [this, h](objects::ObjectHandle u, bool on) {
+            TacticalMode* tm = h->tactical();
+            if (!ai_ || !tm || !tm->primary().alive(u)) return lua::PreventAiResult::NoAiPlayer;
+            const objects::ObjectStore& s2 = tm->primary();
+            return ai_->world().prevent_ai_usage(s2.id(u), s2.owner(u), on);
+        };
+#else
+        b.prevent_ai_usage = [](objects::ObjectHandle, bool) { return lua::PreventAiResult::NoAiPlayer; };
+#endif
+        b.has_model = [this, h](objects::ObjectHandle u) {
+            TacticalMode* tm = h->tactical();
+            return !battle_ || !tm || battle_->script_has_model(*tm, u);
+        };
+        b.spawn_facing = [this](Vec3 pos) { return battle_ ? battle_->script_spawn_facing(pos) : Vec3{1.0f, 0.0f, 0.0f}; };
+        scripts->set_bridge(mode.primary(), &b);
+#if defined(ALAMO_LUA_PLAYERS)
+        scripts->set_player_world(mode.primary(), s ? s->player_world() : host.object_script_players());
+#endif
+    }
+    if (!s) return;
     std::vector<std::string> diag;
     s->begin_battle(st, host.frame(), &diag);
     for (std::string& d : diag) log_.push_back(std::move(d));

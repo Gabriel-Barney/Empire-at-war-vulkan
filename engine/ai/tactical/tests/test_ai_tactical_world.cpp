@@ -476,7 +476,7 @@ function MainForce_Thread()
   ScriptExit()
 end
 )";
-// S7 t21 (AI_TACTICAL §7.3.1): Prepare_Ambush argument errors (nil), a "front" ambush whose every point is too dangerous
+// S7 t21 (AI_TACTICAL §7.3.1): Prepare_Ambush argument errors (nothing returned, the plan stops: q6 t11), a "front" ambush whose every point is too dangerous
 // (tolerance -1: finished at once with result false), then a "BACK" ambush (case-insensitive) with a large tolerance: the
 // group flies to 1000 behind the target (facing +x), re-plans after 150 frames while flying, and finishes when every
 // mover's movement finished (Unit_Move_Finished each) or on the target's / members' deaths.
@@ -496,16 +496,18 @@ function MainForce_Thread()
   Moved = 0
   BlockOnCommand(MainForce.Produce_Force())
   if not TestValid(Target) then ScriptExit() end
-  local e1 = MainForce.Prepare_Ambush(Target, "back", 1000)
-  local e2 = MainForce.Prepare_Ambush(Target, "sideways", 1000, 500)
-  local e3 = MainForce.Prepare_Ambush(Target, "back", -5, 500)
-  local e4 = MainForce.Prepare_Ambush(MainForce, "back", 1000, 500)
   local nb = MainForce.Prepare_Ambush(Target, "front", 1000, -1)
   local nopoint = nb ~= nil and nb.IsFinished() and nb.Result() == false
   local b = MainForce.Prepare_Ambush(Target, "BACK", 1000, 1.0e9)
   local imm = b ~= nil and b.IsFinished()
   BlockOnCommand(b, 90)
   Reported = true
+  -- q6 t11: a binding error stops the plan at the end of this pass (no unwinding), so the errors come last, just
+  -- before the report (which raises in the same pass)
+  local e1 = MainForce.Prepare_Ambush(Target, "back", 1000)
+  local e2 = MainForce.Prepare_Ambush(Target, "sideways", 1000, 500)
+  local e3 = MainForce.Prepare_Ambush(Target, "back", -5, 500)
+  local e4 = MainForce.Prepare_Ambush(MainForce, "back", 1000, 500)
   Report(string.format("AMBUSH player=%d errors=%s nopoint=%s imm=%s fin=%s res=%s moved=%d", PlayerObject.Get_ID(),
     tostring(e1 == nil and e2 == nil and e3 == nil and e4 == nil), tostring(nopoint), tostring(imm),
     tostring(b ~= nil and b.IsFinished()), tostring(b ~= nil and b.Result()), Moved or 0))
@@ -582,6 +584,27 @@ function MainForce_Thread()
   while true do Sleep(10) end
 end
 )";
+// q6 t19 (A1_READINGS §33.2.2, variant 10, land): a land Attack_Move block on an object returns nil in every case - here
+// the target dies while the units approach (signal 0x10: the block ends at once).
+const char* kPlanAttackResult = R"(
+require("SynAICommands")
+function Report(m) error(m) end
+ScriptPoolCount = 1
+function Definitions()
+  Category = "Syn_Destroy_Unit"
+  TaskForce = { { "MainForce", "Frigate | Corvette = 2,3" } }
+end
+function MainForce_Thread()
+  if Reported then
+    while true do Sleep(10) end
+  end
+  BlockOnCommand(MainForce.Produce_Force())
+  if not TestValid(Target) then ScriptExit() end
+  local res = BlockOnCommand(MainForce.Attack_Move(Target), 60)
+  Reported = true
+  Report(string.format("AMRESULT player=%d res=%s valid=%s", PlayerObject.Get_ID(), tostring(res), tostring(TestValid(Target))))
+end
+)";
 const char* kFreeStore = R"(
 require("SynBase")
 function Base_Definitions()
@@ -636,6 +659,9 @@ bool g_land = false;
 // a1j t01: land landings in the mock (g_land runs): 0 off (Reinforce spawns at once), 1 a Reinforce unloads its unit
 // kLandingDelay frames later with a signal 0x19 record, 2 the landing dies before its unit is out (a record without units).
 int g_landing = 0;
+// q6 (AI_GALACTIC_TOKENS 9.3): Syn_Space carries a <Budget> block (Defensive 3, Tactical_Targeted = Game.Age, Map_Control =
+// the Defensive BudgetAllocation, Tactical_Untargeted -2) and a Tactical_Budget_Allowance-only Hero entry.
+bool g_budget = false;
 constexpr uint32_t kLandingDelay = 60;
 
 class MockHost final : public TacticalAiHost {
@@ -1037,6 +1063,10 @@ public:
         for (MockUnit& u : units_)
             if (u.owner == owner && u.type <= tCorvette) u.hp = 0.0f;
     }
+    void kill_id(int32_t id) {  // q6 t19: one unit dies at the next tick
+        for (MockUnit& u : units_)
+            if (u.id == id) u.hp = 0.0f;
+    }
     void kill_type(int32_t owner, int32_t type) {  // every unit of `owner` and `type` dies at the next tick
         for (MockUnit& u : units_)
             if (u.owner == owner && u.type == type) u.hp = 0.0f;
@@ -1171,7 +1201,17 @@ void syn_data(MemoryFiles& files, AiDefinitions& defs, EquationSet& eqs, bool sc
     defs.add_goals(mode_text(kGoals), "goals.xml");
     defs.link();
     defs.add_function_set("SynSpaceSet", kSet, "SynSpaceSet.xml");
-    defs.add_templates(kTemplates, "t.xml");
+    if (g_budget) {
+        std::string t = kTemplates;
+        const std::string at = "<Priority>1</Priority><Trigger>One</Trigger>";
+        t.insert(t.find(at) + at.size(),
+                 "<Budget><Defensive>Syn_Budget_Def</Defensive><Tactical_Targeted>Syn_Budget_Age</Tactical_Targeted>"
+                 "<Map_Control>Syn_Budget_Probe</Map_Control><Tactical_Untargeted>Syn_Budget_Neg</Tactical_Untargeted></Budget>"
+                 "<Tactical_Budget_Allowance><Hero>1.0</Hero></Tactical_Budget_Allowance>");
+        defs.add_templates(t, "t.xml");
+    } else {
+        defs.add_templates(kTemplates, "t.xml");
+    }
     char buf[1024];
     const std::string player = mode_text(kPlayer);
     for (const char* n : {"SynEmpire", "SynRebel"}) {
@@ -1194,6 +1234,12 @@ void syn_data(MemoryFiles& files, AiDefinitions& defs, EquationSet& eqs, bool sc
         eqs.add("Syn_Want_Retreat", "(Game.Age > 75) * 3");
     }
     eqs.add("Current_Enemy_Location", "Variable_Target.EnemyForceUnnormalized");
+    if (g_budget) {
+        eqs.add("Syn_Budget_Def", "3.0");
+        eqs.add("Syn_Budget_Age", "Game.Age");
+        eqs.add("Syn_Budget_Probe", "Variable_Self.BudgetAllocation {Parameter_Category = AIGoalCategoryType[Defensive]}");
+        eqs.add("Syn_Budget_Neg", "-2.0");
+    }
     eqs.link();
 }
 
@@ -1263,6 +1309,7 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
         files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", plan);
     }
     if (variant == 7) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanAbility);
+    if (variant == 10) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanAttackResult);  // q6 t19
     if (variant == 8) files.add("Data\\Scripts\\AI\\LandMode\\SynLandOnly.lua", kPlanLanding);  // replaces kPlanLandOnly
     if (variant == 9) {  // a1k t01
         files.add("Data\\Scripts\\AI\\SpaceMode\\SynSweep.lua", kPlanCollect);
@@ -1497,6 +1544,111 @@ struct PpFixture {
     }
 };
 
+// q6 t03: a mod's GameObjectCategoryType.xml (Thrawn's Revenge renumbers the categories and adds AirGunship, AirSpeeder,
+// InfantryHero, ...) reaches the tactical AI's name -> mask lookups. Before, the AI resolved names through the built-in
+// vanilla table while the types' CategoryMask bits came from the mod's enum, so TR's land team specs ("Infantry |
+// Vehicle | AirGunship | AirSpeeder = 1, 10") matched no type and nearly every land plan failed the Plan marshaller.
+void test_mod_category_enum() {
+    MemoryFiles tf;
+    tf.add("Data\\XML\\Enum\\GameObjectCategoryType.xml",
+           "<EnumDefinition><Fighter>0x1</Fighter><Infantry>0x100</Infantry><Vehicle>0x200</Vehicle>"
+           "<AirSpeeder>0x400</AirSpeeder><AirGunship>0x800</AirGunship><Structure>0x1000</Structure>"
+           "<InfantryHero>0x8000000</InfantryHero><All>0xFFFFFFFFFFFFFFFF</All><None>0</None></EnumDefinition>");
+    tf.add("Data\\XML\\GameObjectFiles.xml", "<L><File>ModTypes.xml</File></L>");
+    tf.add("Data\\XML\\ModTypes.xml",
+           "<Types><GroundInfantry Name=\"Mod_Trooper\"><CategoryMask>Infantry</CategoryMask></GroundInfantry>"
+           "<GroundVehicle Name=\"Mod_Gunship\"><CategoryMask>AirGunship</CategoryMask></GroundVehicle>"
+           "<GroundStructure Name=\"Mod_Barracks\"><CategoryMask>Structure</CategoryMask></GroundStructure></Types>");
+    objects::ObjectTypeDatabase raw;
+    objects::GameObjectTypes types;
+    CHECK(raw.load(tf) && types.build(raw, &tf) && types.size() == 3);
+    const auto mod = tactical_category_resolver(&types);
+    CHECK(mod && !tactical_category_resolver(nullptr));
+    if (!mod) return;
+    CHECK(mod("Infantry") == 0x100 && mod("AirGunship") == 0x800 && mod("infantryhero") == 0x8000000 && mod("LandHero") == 0);
+    const TacticalPerception stock;  // the built-in vanilla table: Infantry 0x80, no AirGunship
+    CHECK(stock.config().category_mask("Infantry") == 0x80 && stock.config().category_mask("AirGunship") == 0);
+    std::vector<PerceptionType> pts(types.size());
+    for (objects::TypeIndex t = 0; t < types.size(); ++t) {
+        pts[t].name = std::string(types.raw().types().name[t]);
+        pts[t].category = types.get_mask(t, "CategoryMask");
+    }
+    CHECK(pts[0].category == 0x100 && pts[1].category == 0x800);
+    TaskForceDef d;
+    CHECK(parse_task_force({"MainForce", "Infantry | Vehicle | AirGunship | AirSpeeder = 1, 10"}, d) && d.teams.size() == 1);
+    if (d.teams.size() != 1) return;
+    CHECK((pp_team_types(d, d.teams[0], pts, mod) == std::vector<int32_t>{0, 1}));
+    CHECK(pp_team_types(d, d.teams[0], pts, stock.config().category_mask).empty());  // the old lookup: no candidates
+    // The solve: one free trooper fills the team (min 1) through the mod resolver.
+    PlanDefinition def;
+    def.name = "MOD_TEST";
+    def.task_forces.push_back(d);
+    SimRng rng{5u};
+    TacticalPpInput in;
+    in.mode = TacticalMode::Land;
+    in.def = &def;
+    in.player = 0;
+    in.faction = "Empire";
+    in.types = &pts;
+    in.category_mask = mod;
+    in.rng = &rng;
+    in.free_units = {{21, 0, {}, 1.0f, false}};
+    TacticalPpResult r;
+    CHECK(solve_tactical_pp(in, r) && r.picks.size() == 1 && r.picks[0].source == PpSource::FreeStore && r.picks[0].ref == 21);
+    in.category_mask = stock.config().category_mask;
+    CHECK(!solve_tactical_pp(in, r) && r.last_veto == "Plan");
+    std::printf("mod category enum: OK\n");
+}
+
+// q6 t03: the PotentialPlan space layer (rec +0x90 / +0x91) from the loaded converter: the single-bit entries below
+// INFANTRY except TRANSPORT, plus SPACEHERO. Vanilla = the stock names; Thrawn's Revenge adds Gunship and SuperCapital
+// (before, both were ground records, so TR space plans read the land Contrast rows).
+void test_space_layer_categories() {
+    const TacticalPerception stock;
+    const auto& cm = stock.config().category_mask;
+    const uint64_t stock_space = cm("Fighter") | cm("Bomber") | cm("Corvette") | cm("Frigate") | cm("Capital") | cm("Super") | cm("SpaceHero");
+    const objects::GameObjectTypes vanilla;  // built-in converters (the vanilla table)
+    CHECK(tactical_space_categories(&vanilla) == stock_space && stock_space == 0x200007Bu);
+    CHECK(tactical_space_categories(nullptr) == 0);
+    objects::EnumConverter tr;
+    tr.enum_name = "GameObjectCategoryType";
+    tr.bitfield = tr.valid = true;
+    const std::pair<const char*, int64_t> rows[] = {
+        {"Fighter", 0x1},      {"Bomber", 0x2},       {"Transport", 0x4},  {"Gunship", 0x8},      {"Corvette", 0x10},
+        {"Frigate", 0x20},     {"Capital", 0x40},     {"SuperCapital", 0x80}, {"Infantry", 0x100}, {"Vehicle", 0x200},
+        {"Structure", 0x1000}, {"SpaceHero", 0x20000000}, {"All", -1},     {"None", 0}};
+    for (const auto& [n, v] : rows) CHECK(tr.add(n, v));
+    CHECK(tactical_space_categories(tr) == 0x200000FBu);
+    objects::EnumConverter bad = tr;
+    bad.valid = false;
+    CHECK(tactical_space_categories(bad) == 0);
+    // The solve: a Gunship (TR 0x8, a ground name in the stock table) is a space record with the loaded set.
+    std::vector<PerceptionType> pts(1);
+    pts[0].name = "TR_Gunship";
+    pts[0].category = 0x8;
+    pts[0].combat_power = 100.0f;
+    TaskForceDef d;
+    CHECK(parse_task_force({"MainForce", "TR_Gunship = 1"}, d) && d.teams.size() == 1);
+    PlanDefinition def;
+    def.name = "TR_SPACE";
+    def.task_forces.push_back(d);
+    SimRng rng{5u};
+    TacticalPpInput in;
+    in.mode = TacticalMode::Space;
+    in.def = &def;
+    in.player = 0;
+    in.faction = "Empire";
+    in.types = &pts;
+    in.category_mask = cm;
+    in.space_categories = tactical_space_categories(tr);
+    in.rng = &rng;
+    in.free_units = {{31, 0, {}, 1.0f, false}};
+    TacticalPpResult r;
+    CHECK(solve_tactical_pp(in, r) && r.picks.size() == 1 && r.picks[0].ref == 31);
+    std::printf("space layer categories: vanilla %llx, TR %llx\n", static_cast<unsigned long long>(stock_space),
+                static_cast<unsigned long long>(in.space_categories));
+}
+
 void test_potential_plan() {
     // 1. Reinforcement (AI_GALACTIC_3 §1.4): a pool unit scores 2.0 and replaces a free unit of its type that is not at
     //    the stage (key >= 300); the 50 % rule; a used entry no longer matches; then the remaining free unit.
@@ -1616,6 +1768,46 @@ void test_potential_plan() {
         in = f.input(TacticalMode::Space);
         in.pool = {{1, 1, 1.0f, 1, -1, false, 1, false}};
         CHECK(solve_tactical_pp(in, r) && r.picks.size() == 1);
+    }
+    // 7. q6 t19 - the tactical escort list (AI_TACTICAL §7.7.1, AI_GALACTIC_TOKENS §9.10): a plan with an EscortForce TF
+    //    has a second contrast list (escort_strength: the target's defenders). Frigates (1000 x weight 1.5) against a
+    //    corvette target of 400 (main row 400 x 1.5 = 600: one frigate) with defenders of D (escort row D x 1.5). MainForce
+    //    1-2, GuardForce (EscortForce) 0-1. The commit walk puts the second MainForce frigate - placed after main is met -
+    //    into the escort list, so D = 2000 (escort row 3000 = 2 frigates) is covered by the guard plus that frigate; with
+    //    D = 3000 (4500) the teams fill up short of the escort list and Finalize fails.
+    {
+        PpFixture f;
+        f.plan({{"MainForce", "Syn_Frigate = 1,2"}, {"GuardForce", "EscortForce", "Syn_Frigate = 0,1"}});
+        CHECK(f.def.task_forces.size() == 2 && f.def.task_forces[1].escort && !f.def.task_forces[0].escort);
+        galactic::ContrastTable ct;
+        galactic::ContrastRow row;
+        row.enemy = "Corvette";
+        row.enemy_mask = f.mask("Corvette");
+        row.friendly.push_back({"Frigate", f.mask("Frigate"), 1.5f});
+        ct.rows.push_back(row);
+        auto solve = [&](double defenders, TacticalPpResult& r) {
+            TacticalPpInput in = f.input(TacticalMode::Space);
+            in.has_target = true;
+            in.target_object = 900;
+            in.target_position = {0.0f, 0.0f, 0.0f};
+            in.contrast = &ct;
+            in.enemy_strength = [](uint64_t) { return 400.0; };
+            in.escort_strength = [defenders](uint64_t) { return defenders; };
+            in.free_units = {{11, 0, {100.0f, 0.0f, 0.0f}, 1.0f, false},
+                             {12, 0, {200.0f, 0.0f, 0.0f}, 1.0f, false},
+                             {13, 0, {300.0f, 0.0f, 0.0f}, 1.0f, false},
+                             {14, 0, {400.0f, 0.0f, 0.0f}, 1.0f, false}};
+            return solve_tactical_pp(in, r);
+        };
+        TacticalPpResult r;
+        const bool covered = solve(2000.0, r);
+        int32_t main_n = 0, guard_n = 0;
+        for (const TacticalPpPick& k : r.picks) (k.tf == 0 ? main_n : guard_n) += 1;
+        std::printf("  escort list: covered %d (%zu picks: main %d, guard %d)", covered, r.picks.size(), main_n, guard_n);
+        CHECK(covered && r.picks.size() == 3 && main_n == 2 && guard_n == 1);
+        const bool short_of = solve(3000.0, r);
+        std::printf(", defenders 3000: solved %d (failed %s)\n", short_of, r.last_veto.c_str());
+        CHECK(!short_of && r.last_veto == "Contrast");
     }
     // 6. Team expansion: category masks over types (mask overlap), names, exclusions.
     {
@@ -2836,12 +3028,102 @@ void test_order_results_bounded(int variant, int32_t frames) {
 }
 }  // namespace
 
+// q6 (AI_GALACTIC_TOKENS 9.3, AI_TACTICAL_PERCEPTION 3.4): the battle budget. Filled at the first AI service from the active
+// template's <Budget> / Tactical_Budget_Allowance entries (normalised over the listed categories only), reweighted at each
+// proposal-pass end (Tactical_Targeted follows Game.Age; Map_Control reads Variable_Self.BudgetAllocation of Defensive, so it
+// is 0 at the init and the previous Defensive weight after), negatives -> 0, an allowance-only category listed with weight
+// 0, an unlisted category 0; cleared at battle end. The plain synthetic template has no <Budget>: every weight stays 0.
+void test_battle_budget() {
+    const int32_t frames = 30 * 60;
+    AiDefinitions defs;
+    {
+        MemoryFiles files;
+        EquationSet eqs;
+        syn_data(files, defs, eqs);
+    }
+    const int32_t def = defs.find_category("Defensive"), tt = defs.find_category("Tactical_Targeted"),
+                  mc = defs.find_category("Map_Control"), tu = defs.find_category("Tactical_Untargeted"),
+                  hero = defs.find_category("Hero"), off = defs.find_category("Offensive");
+    CHECK(def >= 0 && tt >= 0 && mc >= 0 && tu >= 0 && hero >= 0 && off >= 0);
+    std::vector<float> first, last;
+    uint32_t changes = 0;
+    const auto capture = [&](int32_t, MockHost&, TacticalAiWorld& world) {
+        const AiContext* c = world.context(0);
+        if (!c || !c->initialised()) return;
+        std::vector<float> now;
+        for (size_t k = 0; k < c->budget.size(); ++k) now.push_back(c->budget.weight(static_cast<int32_t>(k)));
+        if (first.empty()) first = now;
+        else if (now != last) ++changes;
+        last = now;
+    };
+    g_budget = true;
+    const RunResult r = run(frames, 1, 0, nullptr, false, capture);
+    g_budget = false;
+    CHECK(r.errors.empty());
+    const auto at = [](const std::vector<float>& v, int32_t k) { return k >= 0 && static_cast<size_t>(k) < v.size() ? v[static_cast<size_t>(k)] : -1.0f; };
+    CHECK(!first.empty() && !last.empty());
+    // Init (frame of the first service, Game.Age = f / 30): Defensive 3, Tactical_Targeted Age, Map_Control 0, the rest 0.
+    float sum = 0.0f;
+    for (const float x : first) sum += x;
+    CHECK(std::fabs(sum - 1.0f) < 1e-5f);
+    CHECK(at(first, def) > 0.9f && at(first, tt) > 0.0f && at(first, tt) < 0.1f && at(first, mc) == 0.0f);
+    CHECK(at(first, tu) == 0.0f && at(first, hero) == 0.0f && at(first, off) == 0.0f);
+    // Reweighted at the pass ends: Tactical_Targeted grows with Game.Age, Map_Control = the previous Defensive weight > 0.
+    sum = 0.0f;
+    for (const float x : last) sum += x;
+    CHECK(std::fabs(sum - 1.0f) < 1e-5f);
+    CHECK(changes > 0 && at(last, tt) > at(first, tt) && at(last, mc) > 0.0f && at(last, tu) == 0.0f && at(last, off) == 0.0f);
+    std::printf("battle budget: init Defensive %.4f Tactical_Targeted %.4f Map_Control %.4f; after %u reweights Defensive %.4f "
+                "Tactical_Targeted %.4f Map_Control %.4f\n", static_cast<double>(at(first, def)), static_cast<double>(at(first, tt)),
+                static_cast<double>(at(first, mc)), changes, static_cast<double>(at(last, def)), static_cast<double>(at(last, tt)),
+                static_cast<double>(at(last, mc)));
+    // Without a <Budget> block nothing is listed: every weight stays 0 (the shipped-equation-free synthetic golden).
+    bool zero = true;
+    const RunResult plain = run(30 * 20, 1, 0, nullptr, false, [&](int32_t, MockHost&, TacticalAiWorld& world) {
+        if (const AiContext* c = world.context(0))
+            for (size_t k = 0; k < c->budget.size(); ++k) zero = zero && c->budget.weight(static_cast<int32_t>(k)) == 0.0f;
+    });
+    CHECK(zero && plain.errors.empty());
+}
+
+// q6 t19 (A1_READINGS §33.2.2): in land a task force's Attack_Move block on an enemy unit ends at once when the target dies
+// (30 frames after the order, units still approaching) and BlockOnCommand returns nil (was true).
+void test_attack_move_result() {
+    g_land = true;
+    int32_t target = -1, kill_frame = -1;
+    const RunResult r = run(30 * 60, 1, 10, nullptr, false, [&](int32_t f, MockHost& host, TacticalAiWorld& world) {
+        if (kill_frame >= 0) return;
+        for (const TacticalAiDecision& d : world.decision_log()) {
+            const size_t at = d.text.find(" attack-move ");
+            const size_t obj = d.text.find(" obj ", at == std::string::npos ? 0 : at);
+            if (at == std::string::npos || obj == std::string::npos || d.text.find("tf MainForce") == std::string::npos) continue;
+            if (f < d.frame + 30) return;
+            target = std::atoi(d.text.c_str() + obj + 5);
+            host.kill_id(target);
+            kill_frame = f;
+            return;
+        }
+    });
+    g_land = false;
+    std::string rep_line;  // whichever player's Destroy plan reached its target first (player 1 in this setup)
+    for (const std::string& e : r.errors)
+        if (rep_line.empty() && e.find("AMRESULT player=") != std::string::npos) rep_line = e;
+    const size_t ended = count_decisions(r, "ended: target destroyed");
+    std::printf("land attack-move result: target %d killed at %d, %zu block(s) ended by the death, %s\n", target, kill_frame, ended,
+                rep_line.empty() ? "(no report)" : rep_line.c_str());
+    CHECK(target >= 0 && ended >= 1);
+    CHECK(rep_line.find("res=nil") != std::string::npos && rep_line.find("valid=false") != std::string::npos);
+}
+
 int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i)
         if (std::strcmp(argv[i], "--write-golden") == 0) g_write_golden = true;
     test_potential_plan();
+    test_mod_category_enum();  // q6 t03
+    test_space_layer_categories();  // q6 t03
     test_nominal_allowed_time();  // A2g t06
     test_skirmish();
+    test_battle_budget();  // q6 (AI_GALACTIC_TOKENS 9.3)
     test_opportunity_and_hijack();
     test_group_orders();
     test_tactical_production();
@@ -2868,6 +3150,7 @@ int main(int argc, char** argv) {
     test_landing_wait(true);
     test_landing_save();
     test_replan_and_priority_lifetime();  // a1k t01
+    test_attack_move_result();            // q6 t19
     std::printf(g_fail ? "alamo_ai_tactical_world_tests: %d FAILED\n" : "alamo_ai_tactical_world_tests: OK\n", g_fail);
     return g_fail ? 1 : 0;
 }

@@ -1,0 +1,65 @@
+Alamo engine test build, 2026-11-04
+====================================
+
+How to run
+----------
+- Play.cmd                  Forces of Corruption, as before. Log: alamo_game_log.txt.
+- Play_ThrawnsRevenge.cmd   Thrawn's Revenge 3.3 on Forces of Corruption. Log: alamo_game_tr_log.txt.
+- Check_ThrawnsRevenge.cmd  Loads Thrawn's Revenge without a window and opens a report
+                            (mod_check_tr.txt): which files the mod replaces, every load step, the
+                            campaigns and skirmish maps it found. Run it first if the game will not start.
+
+The Thrawn's Revenge launchers find the mod on their own in the Steam workshop folder next to the game
+(steamapps\workshop\content\32470\1125571106; subscribe to the mod on Steam if it is missing). If your
+game or the mod is elsewhere, edit GAME / TR in tr_paths.cmd. Thrawn's Revenge saves go to saves_tr next
+to these files, so they never mix with Forces of Corruption saves (%LOCALAPPDATA%\alamo\Saves).
+The first start of each launcher builds its shader cache (cache, cache_tr), so it is slower.
+
+Built from: @BUILD@ (PR #69). MSVC and clang 177/177 tests, UBSan 56/56, 0 warnings.
+
+Thrawn's Revenge: what to try
+-----------------------------
+- Galactic conquest: Single Player -> Custom Campaign. The default Rebel campaign (GCMenu) starts you
+  with no planets or fleets, as the mod intends. The AI plays: it builds, moves fleets and attacks.
+- Skirmish, land and space (Blood Gulch is the land map the port has been tested on). Land skirmishes
+  end now: in the port's AI-vs-AI test the Rebels win Blood Gulch after about 10 minutes.
+- Save and load during a campaign and during a battle. The mod's Lua scripts (company spawners,
+  story scripts, scoring) are saved with the game now.
+- Select All (Ctrl+A) in battle, heroes and companies, building on pads, reinforcements by landing craft.
+
+Please check
+- Anything that looks or plays differently from the real mod: send the log, a screenshot and what you did.
+- How the galactic AI plays: it now starts many more battles than before (the AI reads enemy strength
+  values that are up to 15 seconds old, as the original does). Too aggressive?
+- Land battles: does the AI build its base, attack your companies, and does the battle end?
+- Saves made with this build reload; saves from older builds that had the mod's scripts running
+  will not load (the save now carries the script state).
+
+Known gaps (Thrawn's Revenge)
+- Nobody has played the mod by hand in the port yet; all of the above comes from automated runs.
+- Its GameScoring script stops on its own error (BootanaHutta.lua line 15 reads a player that does not
+  exist); scores and battle statistics may be missing.
+- The Rebel refinery stall in galactic conquest comes from the mod's data.
+- Behaviour has not been compared with the real game yet (retail probe runs are prepared, not run).
+
+Changes since test build 2026-10-30
+-----------------------------------
+- Thrawn's Revenge loads and plays (mod layer, the mod's Lua scripts on game objects, story text and
+  holocron, GameScoring, the skirmish buy list from the mod's multiplayer list). Mod-only rules stay
+  off for plain Forces of Corruption.
+- Land skirmish: the skirmish base, income and skirmish victory rules; the AI builds on its own pads
+  only (nobody builds on neutral pads); units with no team arrive by landing craft; attacks on companies
+  work; land skirmishes end.
+- Galactic AI: installments, goal timing, contrast and budget rules from the original; the 15 second
+  perception cache.
+- Battles: fighter blocks, targeting states, garrisons, giant-vehicle push, landing unloads, station
+  targeting, ambushes; all land and station battles end.
+- Story campaigns: shared story flags, event parameters, tactical victory monitor, linked tactical
+  missions, Story_Dialog text and the holocron.
+- Menus: skirmish setup matches the original (colour combos, game types, map list from loose, MEG and
+  mod folders, map preview and description); fleet organiser panes; tech-tree arrows.
+- Speed: staggered and parallel AI thinking, parallel Lua garbage collection, cheaper worst ticks
+  (battle end 27 -> 5 ms). F11 shows a frame-time overlay.
+- Hidden objects (scripts' Hide) are not drawn, heard, shown on the radar or clickable. Box select
+  also skips garrisoned units now.
+- The pre-battle skirmish buy screen stays as a port feature (the original has none).

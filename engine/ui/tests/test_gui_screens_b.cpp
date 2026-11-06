@@ -542,7 +542,8 @@ void test_info_screens() {
     CHECK(is.show_buy_units(bs));
     GuiDialog* d = env.gui.find(dlg::kBuyUnits);
     CHECK(d && d->get("IDC_SKIRMISH_BUY_FORCES_LISTBOX")->items.size() == 2 &&
-          d->get("IDC_SKIRMISH_BUY_FORCES_LISTBOX")->items[1] == U"T2-B  1200  x2" && d->get("IDC_BUY_BUTTON")->enabled &&
+          d->get("IDC_SKIRMISH_BUY_FORCES_LISTBOX")->items[1] == U"T2-B  x2  1200" &&
+          d->get("IDC_SKIRMISH_BUY_FORCES_LISTBOX")->items[0] == U"Infantry  200" && d->get("IDC_BUY_BUTTON")->enabled &&
           !d->get("IDC_SELL_BUTTON")->enabled && d->get("IDC_SELL_ALL_BUTTON")->enabled &&
           d->get("IDC_SKIRMISH_BUY_MENU_UNIT_IMAGE")->image == "i_unit.tga" &&
           d->get("IDC_SKIRMISH_BUY_UNITS_CREDITS_TEXT")->text == U"Credits: 1000");

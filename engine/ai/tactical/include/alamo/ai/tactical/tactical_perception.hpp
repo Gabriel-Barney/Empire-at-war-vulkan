@@ -130,6 +130,10 @@ private:
 
 // Script_<File>.Evaluate hook (the host's Lua evaluator VMs, alamo/ai/ai_lua_runtime.hpp ScriptEvaluators).
 using TacticalScriptEvaluator = std::function<bool(const EvalContext&, std::string_view name, std::span<const Param>, double&)>;
+// Variable_Self.BudgetAllocation (0x6e0560, AI_GALACTIC_TOKENS §8.3 / §9.3): the normalised weight of the Parameter_Category
+// key in `player`'s battle budget, 0.0 for a key not in it. Called only for Self (other roots fail first); const reads only
+// (goal values may evaluate on any thread).
+using TacticalBudgetWeight = std::function<double(int32_t player, std::span<const Param> params)>;
 
 class TacticalPerception {
 public:
@@ -138,6 +142,9 @@ public:
     // Script_ references (AI_GALACTIC_2 §4.4): null = every Script_ reference fails (S2 default). The hook may run Lua
     // and draw synced RNG, so evaluations that reach it must be serial (the tactical AI evaluates on the sim thread).
     void set_script_evaluator(TacticalScriptEvaluator fn) { script_ = std::move(fn); }
+    // BudgetAllocation's value: null = 0.0 for every key (no battle budget).
+    void set_budget_weight(TacticalBudgetWeight fn) { budget_ = std::move(fn); }
+    const TacticalBudgetWeight& budget_weight() const { return budget_; }
 
     // Battle start: builds the threat grid over `map` (players = player list size) and the zones'
     // threat-cell lists. Clears targets and the cache.
@@ -216,6 +223,7 @@ private:
     std::vector<std::pair<int64_t, int32_t>> cell_handles_;  // ((x << 32) | y, handle)
     mutable LeafCache cache_;
     TacticalScriptEvaluator script_;
+    TacticalBudgetWeight budget_;
 };
 
 }  // namespace alamo::ai::tactical

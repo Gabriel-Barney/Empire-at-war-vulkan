@@ -152,6 +152,10 @@ struct BattleRequest {
     // story t10 (REMAINING_GAPS §3.1 item 4, [M] global 0x140b155d8): a linked battle (LINK_TACTICAL / corruption
     // mission record): the branched-map discard also keeps attacker-owned objects (Kessel UM01's jailed UMP_TYBER_ZANN).
     bool linked = false;
+    // q6 (AI_GALACTIC_TOKENS §9.4 gate condition 3): a sandbox story-linked battle (start_linked with Reward_Param8), the
+    // one battle in which the original's conflict state GOM+0x618 is 9 (set by 0x28f590): nothing built there is
+    // persisted, nothing destroyed or sold there is removed from the planet's records.
+    bool sandbox = false;
 };
 struct BattleResult {
     int32_t winner = kNoPlayer;
@@ -300,6 +304,18 @@ public:
     // story t07: rule (a) with a forced type (LINK_TACTICAL Param6): the first record unit of `forced_type` leads.
     void split_land_forces(const ConflictInfo& head, BattleForces& defender, BattleForces& attacker, uint32_t forced_type) const;
     bool raid_force(int32_t player, const std::vector<ObjectHandle>& units) const;  // 0x432e20
+    // q6 t18: the overrun side strength 0x2ab880 (AI_GALACTIC_TOKENS §9.12, BT §1.6 step 2) [H], float throughout, read only
+    // when Overrun_Auto_Resolve_Multiple != 0 (FoC / TR leave it commented out). The player's own objects of the orbit list
+    // (space) or the surface list (ground), each with its unit power (type + members, 0x395d10); the attacker's ground side
+    // adds the ground power its orbit fleets carry [M: 0x395d10 flag 0 on a fleet = its ground units]; the defender's ground
+    // side adds the AI_Combat_Power of every ground structure on the planet (D+0x158: no mask, owner or alive test [port:
+    // the list holds live objects]) and the persisted-record sum 0x4b8000(D, all bits) (records whose type resolves and has
+    // a non-zero CategoryMask); the defender's space side adds, when the starbase level D+0x148 != 0, the AI_Combat_Power of
+    // the starbase type of that level for the defender's faction (by level, not the planet's starbase object [M: the first
+    // such type in type order]). The attacker's space strength (summed inline in 0x2b92e0) is the first term alone.
+    float overrun_strength(const ConflictInfo& record, bool defender, bool space) const;
+    // The units the overrun strength of that side counts (the named-hero test, BT §1.6).
+    std::vector<ObjectHandle> overrun_units(const ConflictInfo& record, bool defender, bool space) const;
     // OI galactic: retreat destination finders (TACTICAL_GAPS 4.5). Candidates = planets newest first (reverse row order),
     // smallest squared 3-D distance (double, strict <); filters in order: orbit controller = player (starbase owner when
     // level > 0, else the first idle combat fleet in orbit), ground-base / starbase owner = player, owner neutral, any.

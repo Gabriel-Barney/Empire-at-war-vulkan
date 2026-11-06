@@ -627,6 +627,12 @@ void drive_synthetic(GalacticSim& s, ConflictManager& cm, const objects::ObjectS
             break;
         case 50: s.story_set_planet_visibility(rD, "Empire", "Fleet_Presence", "SAVE_TEST_KEY", 40.0f); break;
         case 55: s.set_tech_level(pUnder, 2); break;
+        case 60:  // q6 (AI_GALACTIC_TOKENS §9.4): persisted tactical built objects on D (save v2), filtered by its land result
+            if (std::vector<PersistedBuiltObject>* v = s.built_objects(rD)) {
+                v->push_back({tInfantry, 100.0f, -50.0f, 0.1f, 2, pUnder});
+                v->push_back({tFrigate, 300.5f, 40.25f, 12.1f, 0, pEmpire});
+            }
+            break;
         case 300: {
             const uint32_t f = idle_fleet(s, rE, pUnder);
             if (f != kNoFleet)

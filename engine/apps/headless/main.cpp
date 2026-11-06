@@ -54,6 +54,8 @@
 //   alamo_headless --economy --galactic-ai [--battles auto|fight|fight-all] [--ai-log FILE] [--ai-golden FILE] ...
 //       A2: AI-vs-AI galactic campaign, every playable faction a galactic AI player (ai_run.hpp).
 //       [--human FACTION [--human-script FILE]]: that faction is a scripted human (fixed recorded command stream).
+//       [--ai-type FACTION=TYPE ...]: that faction's AI player type from the start instead of the campaign's AI_Player_Control
+//       (q6 t07 [port] test knob: as a SWITCH_CONTROL story reward at frame 0, e.g. Thrawn's Revenge's INITIALIZE_AI types).
 //       [--trace-out FILE]: per-tick Q2TRACE 1 state trace (port_trace.hpp) for tools/probe_mod/q2_traces/q2trace.py.
 //       [--story]: also run the campaign's story plot sets, as the retail sandbox does (q2f t03).
 //       [--ai-latency F] [--no-ai-stagger] (also --skirmish-ai): OPT2 t02 / t01 parity knobs - the AI path recompute latency
@@ -67,6 +69,9 @@
 //       skai (q2f t04): foc-land and skirmish are the skirmish host: Empire (slot 0) vs Rebel (slot 1) on an _MP_ map
 //       (skirmish: --map, default _MP_SPACE_GEONOSIS), MP_Default_Credits, the factions' skirmish default forces, the battle
 //       started on the map; [--human FACTION]: that slot is an idle human (no AI, no orders).
+//       q6 t02: [--ai FACTION[,FACTION]] the slots' factions (mods, MODPATH=): two names = slot 0, slot 1 (--human may name one);
+//       one name = the AI slot (slot 1) beside the --human faction (slot 0). Each AI slot plays its faction's Basic_AI, starts with
+//       its Space_ / Land_Skirmish_AI_Default_Forces (else the cheapest buildable units, [port]).
 //       A1 stage 2: AI-vs-AI space skirmish fought by the tactical AI in an S10 battle (skirmish_run.hpp); foc-land: a land skirmish (t50), foc-land-campaign: the campaign-rules land invasion.
 //       [--fail-on-lua-errors]: fail on any tactical AI Lua error (foc-station always does; a1j t07).
 //       Prints and writes the fired-event log (frame, plot set:sequence, plot, event, type, params,
@@ -184,6 +189,7 @@ struct Options {
     // S4 story
     bool story = false;
     bool scoring = false;  // q6 t06: --scoring
+    bool object_scripts = false;  // q6: --object-scripts
     std::string story_out, story_golden;
     // S10 battle transitions (battle_run.hpp): --battles auto|fight|fight-all
     std::string battles;
@@ -194,6 +200,7 @@ struct Options {
     bool galactic_ai = false;
     std::string ai_log, ai_golden;
     std::string ai_human, ai_human_script;  // A2 galactic: --human FACTION [--human-script FILE]
+    std::vector<std::string> ai_types;      // q6 t07: --ai-type FACTION=TYPE (repeatable)
     std::string trace_out;                  // q2f t05: --trace-out FILE (Q2TRACE 1 state trace, galactic AI runs)
     int64_t ai_latency = -1;                // OPT2 t02: --ai-latency F (galactic / tactical AI path recomputes)
     bool ai_stagger = true;                 // OPT2 t01: --no-ai-stagger
@@ -201,6 +208,7 @@ struct Options {
     int64_t pp_latency = -1;                // OPT2 t10: --pp-latency F
     // A1 stage 2 tactical AI (skirmish_run.hpp): --skirmish-ai synthetic|foc
     std::string skirmish_ai;
+    std::string skirmish_factions;  // q6 t02: --ai FACTION[,FACTION]
     bool expect_battle_end = false;  // S10 land outcome: --expect-battle-end
     bool expect_skirmish_base = false;  // t50: --expect-skirmish-base
     bool fail_on_lua_errors = false;  // a1j t07: --fail-on-lua-errors
@@ -650,6 +658,8 @@ int usage() {
                  "       alamo_headless --economy | --story (--game DIR | --data DIR) [--campaign NAME] [--ticks N] [--workers W]\n"
                  "                      [--seed S] [--check-workers] [--story-out FILE] [--story-golden FILE] [--crc-out FILE]\n"
                  "                      [--scoring] (run the GameScoring script at the session start, as the game does)\n"
+                 "                      [--object-scripts] (game-object Lua scripts, docs/re/OBJECT_SCRIPTS.md; --skirmish-ai:\n"
+                 "                      also runs the GameScoring script)\n"
                  "       alamo_headless --economy --battles auto|fight|fight-all [--aggressor FRAMES] [--battle-retreat R]\n"
                  "                      [--battle-max-frames N] (+ the --economy options)\n"
                  "       alamo_headless --save-session synthetic|hotm|galactic|skirmish [--campaign NAME] --save-at T FILE [--ticks K]\n"
@@ -891,11 +901,13 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--economy") opt.economy = true;
         else if (a == "--story") opt.story = true;
         else if (a == "--scoring") opt.scoring = true;  // q6 t06
+        else if (a == "--object-scripts") opt.object_scripts = true;  // q6
         else if (a == "--story-out") opt.story_out = next();
         else if (a == "--story-golden") opt.story_golden = next();
         else if (a == "--battles") opt.battles = next();  // S10
         else if (a == "--galactic-ai") opt.galactic_ai = true;  // A2
         else if (a == "--skirmish-ai") opt.skirmish_ai = next();  // A1 stage 2
+        else if (a == "--ai") opt.skirmish_factions = next();     // q6 t02
         else if (a == "--expect-battle-end") opt.expect_battle_end = true;  // S10 land outcome
         else if (a == "--expect-skirmish-base") opt.expect_skirmish_base = true;  // t50
         else if (a == "--fail-on-lua-errors") opt.fail_on_lua_errors = true;  // a1j t07
@@ -903,6 +915,7 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--ai-golden") opt.ai_golden = next();
         else if (a == "--human") opt.ai_human = next();                // A2 galactic
         else if (a == "--human-script") opt.ai_human_script = next();  // A2 galactic
+        else if (a == "--ai-type") opt.ai_types.push_back(next());        // q6 t07
         else if (a == "--trace-out") opt.trace_out = next();            // q2f t05
         else if (a == "--ai-latency") opt.ai_latency = std::strtoll(next().c_str(), nullptr, 10);  // OPT2 t02
         else if (a == "--no-ai-stagger") opt.ai_stagger = false;                                   // OPT2 t01
@@ -956,6 +969,11 @@ static int headless_main(int argc, char** argv) {
         if (!alamo::sim::bench::Scenario::load(opt.bench_regen, sc, &err)) {
             std::fprintf(stderr, "bench-regen: %s\n", err.c_str());
             return 1;
+        }
+        if (sc.host == alamo::sim::bench::Host::Game) {  // BM2: alamo_game remakes its own (alamo_game --bench-make)
+            std::fprintf(stderr, "bench-regen: %s was made by alamo_game (host game): remake it with alamo_game --bench-make\n",
+                         opt.bench_regen.c_str());
+            return 2;
         }
         if (sc.make_args.empty()) {
             std::fprintf(stderr, "bench-regen: %s records no make arguments\n", opt.bench_regen.c_str());
@@ -1079,11 +1097,13 @@ static int headless_main(int argc, char** argv) {
         m.pp_streams = opt.pp_streams;  // OPT2 t10 parity knobs
         m.pp_latency = opt.pp_latency;
         m.scoring = opt.scoring;  // q6 t06
+        m.object_scripts = opt.object_scripts;  // q6
         if (!opt.skirmish_ai.empty()) {  // A1 stage 2: --skirmish-ai synthetic|foc [--map NAME]
             m.map = opt.map;
             m.expect_battle_end = opt.expect_battle_end;
             m.expect_skirmish_base = opt.expect_skirmish_base;
             m.human = opt.ai_human;  // skai: --skirmish-ai skirmish --human FACTION
+            m.ai_factions = opt.skirmish_factions;  // q6 t02
             m.fail_on_lua_errors = opt.fail_on_lua_errors;
             return skirmish_ai_run(m, opt.skirmish_ai, opt.ai_log);
         }
@@ -1099,6 +1119,7 @@ static int headless_main(int argc, char** argv) {
             a.ai_golden = opt.ai_golden;
             a.human = opt.ai_human;                // A2 galactic
             a.human_script = opt.ai_human_script;  // A2 galactic
+            a.ai_types = opt.ai_types;             // q6 t07
             a.trace_out = opt.trace_out;           // q2f t05
             a.story = opt.story;                   // q2f t03
             a.verbose = !opt.quiet;

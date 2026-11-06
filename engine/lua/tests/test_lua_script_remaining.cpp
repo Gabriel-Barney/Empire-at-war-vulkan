@@ -31,6 +31,11 @@
 #include "alamo/objects/object_store.hpp"
 #include "alamo/objects/object_types.hpp"
 #include "vm_internal.hpp"
+#if ALAMO_LUA_HAVE_COMMANDS
+#include <bit>
+
+#include "alamo/commands/pipeline.hpp"
+#endif
 
 #include <lua.h>
 
@@ -52,6 +57,20 @@ static std::string run(LuaVm& vm, const std::string& code) {
     std::string err;
     if (!vm.run(code, "test", &err)) return err.empty() ? "error" : err;
     return {};
+}
+// q6 t11 (docs/re/LUA_API.md "Binding error model across all bindings"): a binding error does not unwind; it logs
+// "SCRIPT ERROR: ..." and sets the script's stop flag. run_stop() reports those lines as its result (a Lua error as
+// before) and clears the flag, so the next snippet runs on a live script.
+static std::string run_stop(LuaVm& vm, const std::string& code) {
+    std::string err;
+    const size_t m0 = vm.messages().size();
+    if (!vm.run(code, "test", &err)) return err.empty() ? "error" : err;
+    if (!vm.exit_requested()) return {};
+    std::string out;
+    for (size_t i = m0; i < vm.messages().size(); ++i)
+        if (vm.messages()[i].rfind("SCRIPT ERROR: ", 0) == 0) out += vm.messages()[i] + "\n";
+    reset_script_threads(vm);
+    return out.empty() ? std::string("stop") : out;
 }
 static bool gtrue(LuaVm& vm, const char* name) {
     lua_State* L = vm.state();
@@ -205,8 +224,13 @@ struct FakeAi final : AiScriptHost {
     bool tf_collect_free_units(int32_t, uint64_t) override { return false; }
     bool status_finished(int32_t) override { return true; }
     AiStatusResult status_result(int32_t) override { return AiStatusResult::Nil; }
-    bool target_valid(int32_t t) override { return t == 5; }
+    bool target_valid(int32_t t) override { return t == 5 || t == 6; }  // q6 t03: 6 = a region target (no object)
     ObjectHandle target_object(int32_t t) override { return t == 5 ? target : ObjectHandle{}; }
+    bool target_position(int32_t t, Vec3& out) override {
+        if (t != 6) return false;
+        out = {7.0f, 8.0f, 9.0f};
+        return true;
+    }
     double target_distance(int32_t, const AiArg&) override { return -1.0; }
     double budget_op(int32_t, AiBudgetOp, double, std::string_view) override { return 0.0; }
     int32_t budget_wait(int32_t, AiBudgetOp, double) override { return -1; }
@@ -529,7 +553,7 @@ static void test_object_methods(const Db& db) {
     // Get_Energy is tactical only.
     Env gal(db, objects::ModeKind::Galactic);
     gal.global("Ship", make(gal.store, db.t("Ship"), 0, {0, 0, 0}));
-    CHECK(run(*gal.vm, "Ship.Get_Energy()") == "" && last_message_has(*gal.vm, "only valid in tactical mode"));
+    CHECK(run(*gal.vm, "Ship.Get_Energy()") == "" && gal.vm->exit_requested() && last_message_has(*gal.vm, "Get_Energy -- only valid in tactical mode"));
 }
 
 static void test_player_methods(const Db& db) {
@@ -578,8 +602,8 @@ static void test_task_forces(const Db& db) {
     CHECK(run(vm, "a = TF.Add_Force(Ship); n = TF.Get_Force_Count(); ty = TF.Get_Type_Of_Unit(2).Get_Name(); "
                   "t0 = TF.Get_Type_Of_Unit(0).Get_Name(); t9 = TF.Get_Type_Of_Unit(9); tn = TF.Get_Type_Of_Unit(-1)") == "");
     CHECK(gnil(vm, "a") && gnum(vm, "n") == 3.0 && gstr(vm, "ty") == "Ship" && gstr(vm, "t0") == "Trooper" && gnil(vm, "t9") && gnil(vm, "tn"));
-    CHECK(run(vm, "TF.Add_Force(3)").find("expected a GameObjectClass") != std::string::npos);
-    CHECK(run(vm, "TF.Get_Type_Of_Unit('x')").find("expected an integer index") != std::string::npos);
+    CHECK(run_stop(vm, "TF.Add_Force(3)").find("expected a GameObjectClass") != std::string::npos);
+    CHECK(run_stop(vm, "TF.Get_Type_Of_Unit('x')").find("expected an integer index") != std::string::npos);
     // Opportunity-fire subscriptions: weapon hard-point types only.
     CHECK(run(vm, "TF.Add_Opportunity_Fire_Event_Subscription('HARD_POINT_WEAPON_LASER'); "
                   "TF.Add_Opportunity_Fire_Event_Subscription('hard_point_weapon_torpedo')") == "");
@@ -619,8 +643,8 @@ static void test_task_forces(const Db& db) {
         CHECK(s1 && s2 && s3 && s1->targeting_priorities == "Trooper_Set" && s2->targeting_priorities == "Trooper_Set" &&
               s3->targeting_priorities == "Capital_Set");
     }
-    CHECK(run(vm, "TF.Set_Targeting_Priorities()").find("Expected 1 or 2, got 0") != std::string::npos);
-    CHECK(run(vm, "TF.Set_Targeting_Priorities('a', 3)").find("parameter 2. Expected string.") != std::string::npos);
+    CHECK(run_stop(vm, "TF.Set_Targeting_Priorities()").find("Expected 1 or 2, got 0") != std::string::npos);
+    CHECK(run_stop(vm, "TF.Set_Targeting_Priorities('a', 3)").find("parameter 2. Expected string.") != std::string::npos);
     // Find_Closest_Enemy.
     CHECK(run(vm, "ce = TF.Find_Closest_Enemy('Infantry'); ca = TF.Find_Closest_Enemy(); cx = TF.Find_Closest_Enemy('Fighter')") == "");
     CHECK(gid(vm, "ce") == e.store.id(enemy_near) && gid(vm, "ca") == e.store.id(enemy_ship) && gnil(vm, "cx"));
@@ -666,11 +690,158 @@ static void test_task_forces(const Db& db) {
     const uint32_t before = e.bridge.orders_issued;
     CHECK(run(vm, "s1 = Ship.Attack_Move(Tgt); s2 = Ship.Move_To(TF); s3 = Ship.Guard_Target(Tgt)") == "");
     CHECK(e.bridge.orders_issued == before + 3 && !gnil(vm, "s1") && !gnil(vm, "s2"));
-    CHECK(run(vm, "Ship.Move_To(Gone)").find("could not extract a position") != std::string::npos);
+    // q6 t03: an invalid AI target is a script error (no unwind, the script's exited flag), not a Lua error.
+    CHECK(run(vm, "Ship.Move_To(Gone)") == "" && last_message_has(vm, "SCRIPT ERROR: GameObjectWrapper::Move_To -- Target is already dead."));
+    CHECK(vm.exit_requested());
+    reset_script_threads(vm);
     ai.units.clear();
     CHECK(run(vm, "n5 = Find_Nearest(TF)") == "" && gnil(vm, "n5"));
     attach_ai_host(vm, nullptr, -1);
     CHECK(run(vm, "n6 = Find_Nearest(Tgt)") == "" && gnil(vm, "n6"));  // no host: an AI wrapper resolves to nothing
+}
+
+// q6 t03 (docs/re/LUA_API.md "Unit order bindings: target arguments"): GameObjectWrapper Attack_Target takes an object or
+// an AI target (its object), Move_To / Attack_Move / Guard_Target also task forces and positions; argument errors are
+// script errors (logged, nothing returned, pcall succeeds, the script's exited flag), the thread runs on to its yield and
+// the Service then stops the script's other threads.
+#if ALAMO_LUA_HAVE_COMMANDS
+static uint32_t payload_u32(const commands::EventData& e, size_t at) {
+    const auto d = e.bytes_view("data");
+    return static_cast<uint32_t>(d[at]) | (static_cast<uint32_t>(d[at + 1]) << 8) | (static_cast<uint32_t>(d[at + 2]) << 16) |
+           (static_cast<uint32_t>(d[at + 3]) << 24);
+}
+#endif
+
+static void test_unit_order_targets(const Db& db) {
+    Env e(db, objects::ModeKind::Land);
+    LuaVm& vm = *e.vm;
+    FakeAi ai;
+    attach_ai_host(vm, &ai, 1);
+#if ALAMO_LUA_HAVE_COMMANDS
+    commands::CommandPipeline pipe;
+    std::vector<commands::Command> cmds;
+    pipe.set_handler([&cmds](uint64_t, const commands::Command& c) {
+        cmds.push_back(c);
+        return commands::RejectReason::None;
+    });
+    e.bridge.pipeline = &pipe;
+#endif
+    const ObjectHandle ship = make(e.store, db.t("Ship"), 0, {0, 0, 0});
+    const ObjectHandle t1 = make(e.store, db.t("Trooper"), 0, {10, 0, 0});
+    const ObjectHandle t2 = make(e.store, db.t("Trooper"), 0, {20, 0, 0});
+    const ObjectHandle enemy = make(e.store, db.t("Trooper"), 1, {100, 0, 0});
+    const ObjectHandle gone = make(e.store, db.t("Trooper"), 1, {200, 0, 0});
+    const objects::ObjectId ship_id = e.store.id(ship), t1_id = e.store.id(t1), t2_id = e.store.id(t2);
+    const objects::ObjectId enemy_id = e.store.id(enemy);
+    ai.target = enemy;
+    ai.units = {ship, t1};
+    set_task_force_global(vm, "TF", 3, AiTaskForceKind::Land);
+    set_ai_target_global(vm, "Tgt", 5);     // unit target -> enemy
+    set_ai_target_global(vm, "Region", 6);  // region target: a position, no object
+    set_ai_target_global(vm, "Bad", 9);     // not a valid target
+    e.global("Ship", ship);
+    e.global("T1", t1);
+    e.global("T2", t2);
+    e.global("Enemy", enemy);
+    e.global("Gone", gone);
+    CHECK(e.store.destroy(gone));
+    auto stopped = [&vm] {  // the exited flag is up; reset it for the next case
+        const bool up = vm.exit_requested();
+        reset_script_threads(vm);
+        return up;
+    };
+
+    // Attack_Target(AI target): the target's object, as an attack order (Thrawn's Revenge BusyTacticalFreeStore).
+    CHECK(run(vm, "s = Ship.Attack_Target(Tgt) hat = Ship.Get_Attack_Target().Get_Object_ID()") == "" && !gnil(vm, "s"));
+    CHECK(gnum(vm, "hat") == static_cast<double>(enemy_id) && !vm.exit_requested());
+#if ALAMO_LUA_HAVE_COMMANDS
+    CHECK(!cmds.empty() && cmds.back().payload.type() == commands::EventType::Attack &&
+          cmds.back().payload.u("target") == static_cast<uint32_t>(enemy_id) &&
+          cmds.back().payload.ids("attackers") == std::vector<uint32_t>{static_cast<uint32_t>(ship_id)});
+#endif
+    // The error cases: script errors with nothing returned; pcall succeeds.
+    struct Case {
+        const char* call;
+        const char* text;
+    };
+    const Case attack_cases[] = {
+        {"Ship.Attack_Target(Bad)", "Attack_Target -- Target is already dead."},
+        {"Ship.Attack_Target(Gone)", "Attack_Target -- Target is already dead."},
+        {"Ship.Attack_Target(Region)", "Attack_Target -- destination is not valid for an attack command."},
+        {"Ship.Attack_Target(TF)", "Attack_Target -- Parameter 1 is not a valid destination for unit Ship"},
+        {"Ship.Attack_Target(Create_Position(1, 2, 3))", "Parameter 1 is not a valid destination for unit Ship"},
+        {"Ship.Attack_Target(nil)", "Parameter 1 is not a valid destination for unit Ship"},
+        {"Ship.Attack_Target()", "Attack_Target -- invalid number of parameters. Expected 1, got 0."},
+        {"Ship.Attack_Target({T1})", "Attack_Target -- invalid number of parameters. Expected 2, got 1."},
+        {"Ship.Move_To(Bad)", "Move_To -- Target is already dead."},
+        {"Ship.Attack_Move(Gone)", "Attack_Move -- Target is already dead."},
+        {"Ship.Guard_Target(5)", "Guard_Target -- Parameter 1 is not a valid destination for unit Ship"},
+        {"Ship.Move_To()", "Move_To -- Parameter 1 is not a valid destination for unit Ship"},
+        {"Ship.Move_To({T1, 7}, Enemy)", "Move_To -- Entry 2 in unit array is not a gameobject."},
+        {"Gone.Move_To(Enemy)", "Move_To -- this object is already dead"},
+    };
+    for (const Case& k : attack_cases) {
+        const std::string code = std::string("r = 1 ok = pcall(function() r = ") + k.call + " end)";
+        const bool ran = run(vm, code) == "";
+        const bool said = last_message_has(vm, k.text) && last_message_has(vm, "SCRIPT ERROR: ");
+        const bool flagged = stopped();
+        if (!ran || !gtrue(vm, "ok") || !said || !flagged)
+            std::printf("  case %s: %s\n", k.call, vm.messages().empty() ? "(no message)" : vm.messages().back().c_str());
+        CHECK(ran && gtrue(vm, "ok") && said && flagged);
+        if (std::strstr(k.call, "{T1, 7}") == nullptr) CHECK(gnil(vm, "r"));  // the table case still orders T1
+    }
+    // A dead caller: Attack_Target returns nothing without an error.
+    const size_t said = vm.messages().size();
+    CHECK(run(vm, "r = 1 r = Gone.Attack_Target(Enemy)") == "" && gnil(vm, "r") && vm.messages().size() == said && !stopped());
+
+    // Unit tables: Attack_Target's attackers are the live objects in id order (a non-object entry is a warning).
+    CHECK(run(vm, "s = Ship.Attack_Target({T2, 'x', Gone, T1}, Enemy)") == "" && !gnil(vm, "s") && !vm.exit_requested());
+    CHECK(last_message_has(vm, "SCRIPT WARNING: Find_Best_Local_Threat_Center -- invalid type for entry at index 2 in object table."));
+#if ALAMO_LUA_HAVE_COMMANDS
+    CHECK(cmds.back().payload.type() == commands::EventType::Attack &&
+          cmds.back().payload.ids("attackers") == (std::vector<uint32_t>{static_cast<uint32_t>(t1_id), static_cast<uint32_t>(t2_id)}));
+    // Move_Internal: positions, AI targets, task forces. Attack_Move / Guard_Target take an object target unless it is the
+    // caller (then its position); Attack_Move to a task force goes to its position; Guard_Target guards its first member
+    // that is not the caller.
+    auto lua_order_of = [&cmds](size_t back) -> const commands::EventData& { return cmds[cmds.size() - 1 - back].payload; };
+    const uint32_t none = static_cast<uint32_t>(objects::kNoObjectId);
+    CHECK(run(vm, "a = Ship.Move_To(Region) b = Ship.Attack_Move(Tgt) c = Ship.Attack_Move(TF) d = Ship.Guard_Target(TF) "
+                  "f = Ship.Attack_Move(Ship)") == "");
+    CHECK(!gnil(vm, "a") && !gnil(vm, "b") && !gnil(vm, "c") && !gnil(vm, "d") && !gnil(vm, "f") && !vm.exit_requested());
+    CHECK(lua_order_of(4).u("subtype") == kLuaOrderSubtype + static_cast<uint32_t>(LuaOrder::MoveTo) &&
+          payload_u32(lua_order_of(4), 4) == none && std::bit_cast<float>(payload_u32(lua_order_of(4), 8)) == 7.0f);
+    CHECK(payload_u32(lua_order_of(3), 4) == static_cast<uint32_t>(enemy_id));
+    CHECK(payload_u32(lua_order_of(2), 4) == none && std::bit_cast<float>(payload_u32(lua_order_of(2), 8)) == 0.0f);
+    CHECK(lua_order_of(1).u("subtype") == kLuaOrderSubtype + static_cast<uint32_t>(LuaOrder::Guard) &&
+          payload_u32(lua_order_of(1), 4) == static_cast<uint32_t>(t1_id));
+    CHECK(payload_u32(lua_order_of(0), 4) == none);
+    // A unit table: one order per live unit, in table order; the non-object entry is a script error (the loop goes on).
+    const size_t n = cmds.size();
+    CHECK(run(vm, "g = Ship.Guard_Target({T2, 7, T1}, Create_Position(1, 2, 3))") == "" && !gnil(vm, "g") && stopped());
+    CHECK(cmds.size() == n + 2 && payload_u32(cmds[n].payload, 0) == static_cast<uint32_t>(t2_id) &&
+          payload_u32(cmds[n + 1].payload, 0) == static_cast<uint32_t>(t1_id));
+#endif
+    // A locked caller: the warning only, nothing returned, no exited flag.
+    CHECK(run(vm, "Ship.Lock_Current_Orders() r = 1 r = Ship.Attack_Move(Enemy)") == "" && gnil(vm, "r") && !vm.exit_requested());
+    CHECK(last_message_has(vm, "is locked into existing orders"));
+    CHECK(run(vm, "Ship.Unlock_Current_Orders()") == "");
+    // Galactic-only order bindings refuse a tactical-only command in a galactic store (Attack_Target / Attack_Move).
+    {
+        Env g(db, objects::ModeKind::Galactic);
+        const ObjectHandle u = make(g.store, db.t("Ship"), 0, {0, 0, 0});
+        g.global("U", u);
+        CHECK(run(*g.vm, "r = 1 r = U.Attack_Target(U)") == "" && gnil(*g.vm, "r") && g.vm->exit_requested() &&
+              last_message_has(*g.vm, "this command is only supported in tactical modes"));
+    }
+
+    // The exited flag stops the script after the current thread: that thread runs on to its yield, the next thread of
+    // the same pass is not resumed, and every thread is gone after the pass.
+    CHECK(run(vm, "function A() Ship.Attack_Target(Bad) after = 1 coroutine.yield(true) after2 = 1 end "
+                  "function B() b_ran = 1 coroutine.yield(true) end") == "");
+    CHECK(vm.create_thread("A") >= 0 && vm.create_thread("B") >= 0);
+    vm.service_threads();
+    CHECK(gnum(vm, "after") == 1.0 && gnil(vm, "after2") && gnil(vm, "b_ran") && vm.thread_count() == 0 && vm.exit_requested());
+    reset_script_threads(vm);
 }
 
 #if ALAMO_LUA_PLAYERS
@@ -729,7 +900,7 @@ static void test_tactical_perception(const Db& db) {
     CHECK(gnum(vm, "a") == 7.5 && gnum(vm, "b") == 7.5 && gnum(vm, "c") == 7.5 && gnil(vm, "d") && th.calls == 4);
     CHECK(th.name == "Missing" && th.player == 1 && th.target == -1 && th.tf == -1);
     CHECK(run(vm, "EvaluatePerception('X', P, TF)") == "" && th.tf == 3 && th.target == -1);
-    CHECK(run(vm, "EvaluatePerception(1, P)").find("Expected string") != std::string::npos);
+    CHECK(run_stop(vm, "EvaluatePerception(1, P)").find("Expected string") != std::string::npos);
     // S7 t20 (AI_TACTICAL §7.3.2): Move_To argument errors are script errors (logged, no unwind) answering nil.
     CHECK(run(vm, "m1 = TF.Move_To()") == "" && gnil(vm, "m1") && last_message_has(vm, "SCRIPT ERROR: No destination set for TaskForce"));
     CHECK(run(vm, "m2 = TF.Move_To(nil)") == "" && gnil(vm, "m2") &&
@@ -778,7 +949,7 @@ static void test_l1_system_hooks(const Db& db) {
     CHECK(run(vm, "r = Ship.Hyperspace_Away(); Ship.Hyperspace_Away(false)") == "" && gnil(vm, "r"));
     const std::string sid = std::to_string(e.store.id(ship));
     CHECK(jumps == (std::vector<std::string>{sid + ":0:1", sid + ":0:0"}));
-    CHECK(run(vm, "Prop.Hyperspace_Away()").find("no locomotor") != std::string::npos);
+    CHECK(run_stop(vm, "Prop.Hyperspace_Away()").find("no locomotor") != std::string::npos);
     // Is_In_*: the host's per-object answer; -1 -> the point test.
     e.hooks.object_in_field = [ship](ObjectHandle h, uint32_t kind) { return h == ship ? (kind == kFieldNebula ? 1 : 0) : -1; };
     CHECK(run(vm, "a = Ship.Is_In_Nebula(); b = Ship.Is_In_Ion_Storm(); c = Prop.Is_In_Nebula()") == "");
@@ -823,7 +994,7 @@ static void test_l1_system_hooks(const Db& db) {
     CHECK(run(lv, "P.Disable_Bombing_Run(true); P.Disable_Orbital_Bombardment(false); P.Remove_Orbital_Bombardment(true)") == "");
     CHECK(sw == (std::vector<std::string>{"run 0 on", "bomb 0 off", "remove 0 on"}) && world.states()[0].bombing_run_disabled &&
           world.states()[0].orbital_bombardment_removed);
-    CHECK(run(lv, "P.Disable_Bombing_Run(1)").find("Expected boolean.") != std::string::npos && sw.size() == 3);
+    CHECK(run_stop(lv, "P.Disable_Bombing_Run(1)").find("Expected boolean.") != std::string::npos && sw.size() == 3);
     attach_player_world(lv, nullptr);
 #endif
 }
@@ -883,6 +1054,7 @@ int main() {
         test_object_methods(db);
         test_player_methods(db);
         test_task_forces(db);
+        test_unit_order_targets(db);  // q6 t03
 #if ALAMO_LUA_PLAYERS
         test_tactical_perception(db);
 #endif

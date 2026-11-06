@@ -80,8 +80,10 @@ void InfoScreens::close_all() {
 void InfoScreens::fill_buy(GuiDialog& d) {
     std::vector<std::u32string> rows;
     for (const BuyUnitEntry& u : buy_.units) {
-        std::u32string r = u.name + U"  " + num32(u.cost);
+        // SKIRMISH_SETUP §2.7 row columns: the name, "x n" when bought n > 0 times, the cost (no population column).
+        std::u32string r = u.name;
         if (u.owned > 0) r += U"  x" + num32(u.owned);
+        r += U"  " + num32(u.cost);
         rows.push_back(std::move(r));
     }
     const GuiControl* l = d.get("IDC_SKIRMISH_BUY_FORCES_LISTBOX");
@@ -176,6 +178,9 @@ bool InfoScreens::show_story_summary(const StorySummaryInfo& s) {
     const int32_t n = static_cast<int32_t>(s.goals.size());
     const int32_t sel = n == 0 ? -1 : (s.selected >= 0 && s.selected < n ? s.selected : n - 1);
     d->set_items("IDC_GOAL_LIST", s.goals, sel);
+    if (GuiControl* c = d->get("IDC_GOAL_LIST"))  // §2.8 row colours (read / completed rows dimmed)
+        c->item_text_colors.assign(s.goal_colors.begin(),
+                                   s.goal_colors.begin() + static_cast<std::ptrdiff_t>(std::min(s.goals.size(), s.goal_colors.size())));
     d->set_items("IDC_STORY_RECAP", s.recap, -1);
     if (GuiControl* c = d->get("IDC_STORY_RECAP")) {
         c->item_text_colors.assign(s.recap_colors.begin(), s.recap_colors.begin() + static_cast<std::ptrdiff_t>(std::min(s.recap.size(), s.recap_colors.size())));

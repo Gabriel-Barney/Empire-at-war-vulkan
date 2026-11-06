@@ -12,6 +12,9 @@
 //              planet, Rebel companies lift off from the next planet, fly in and invade (S10 land conflict, fought AI vs AI).
 //              Players: Empire, Rebel, Neutral, Hostile (map owners resolve by faction, TacticalBattle::bt_map_owner).
 //   foc-land-campaign: the same invasion under the campaign rules on Utapau's campaign map (--map, default _Land_Planet_Utapau_01).
+//   foc-land / skirmish (skai, q6 t02): the skirmish host on any data (MODPATH= mods too): MapRunOptions::ai_factions (--ai) picks
+//              the slots' factions (default Empire, Rebel); each AI slot plays its faction's Basic_AI (stock factions: the stock
+//              type), starts with its Space_ / Land_Skirmish_AI_Default_Forces (else its cheapest buildable units, [port]).
 // Both: a 3-planet galaxy whose attacker fleet moves into the defender's orbit (S10 conflict, fought AI vs AI),
 // every playable side a tactical AI at Normal; per-tick CRC log (--crc-out / --golden), --check-workers
 // compares 0/1/4/N workers. Prints orders issued / rejected, the battle result and the Lua error count.

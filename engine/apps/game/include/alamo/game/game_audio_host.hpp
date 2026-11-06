@@ -16,6 +16,7 @@
 // Unit sounds come from the typed object view (GameObjectTypes::get_string), cached per type.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -110,9 +111,10 @@ public:
     void movie_started(bool movie_music, bool halt_music);
     void movie_cue(std::string_view music_event);
     void movie_ended();
-    // After every tick of a running battle (const reads).
+    // After every tick of a running battle (const reads). q6 t19 (OBJECT_SCRIPTS §10.3): `script_hidden` (optional,
+    // GameSession::script_hidden) mutes Lua-hidden objects like fogged / stealthed ones (loops muted, never stopped).
     void battle_tick(const sim::TacticalBattle& battle, const objects::ObjectStore& store, const objects::GameObjectTypes& types,
-                     int32_t local_player);
+                     int32_t local_player, const std::function<bool(objects::ObjectId)>& script_hidden = {});
     void battle_reset();
     // refix t06 (TSW_PLANET_DESTROY §3 / §4 step 5; battle_fx.hpp): the tactical super weapon's sounds, in cue order.
     // Firing: the TSW type's TSW_SFXEvent_Activate_Voice and TSW_SFXEvent_Weapon_Power_Up attached to the TSW (2D or 3D
