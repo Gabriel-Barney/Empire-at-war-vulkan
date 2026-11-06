@@ -5,18 +5,19 @@ The simulation is rebuilt from scratch as a headless, multithreaded, determinist
 on top. The goal is the game you already own, running on an engine that uses a modern PC.
 
 > **Status (2026-11-06):** active development, playable end to end through its own host, `alamo_game`.
-> Simulation, renderer, Lua layer, AI, UI, story and save/load are in place. The work now is **parity** (checking
-> behaviour against the original, mostly by recording the original game and probing it in game), **mod compatibility**
-> (Thrawn's Revenge is the first target; that work is finished on an integration branch and not yet merged here) and
-> **performance**. The last full gate (MSVC, clang, sanitizer, 2026-11-06) passed with **0 warnings and 170 tests** on
-> each compiler (54 under the sanitizer). Task tracking is the project roadmap, kept in its own repository and not in this
-> one (543 of 779 roadmap tasks done); results and notes per phase are in [`docs/PHASE2.md`](docs/PHASE2.md),
-> [`docs/PHASE3.md`](docs/PHASE3.md) and [`docs/PHASE4.md`](docs/PHASE4.md), and every document is indexed in
-> [`docs/README.md`](docs/README.md).
+> Simulation, renderer, Lua layer, AI, UI, story and save/load are in place, and **Thrawn's Revenge now loads and plays
+> on `main`** (its skirmish, land and campaign smoke runs pass and its galactic AI plays). The work now is **parity**
+> (checking behaviour against the original, by behaviour within tolerance rather than bit for bit), the **mod
+> platform** (mod-agnostic loading, a mod load report, the Steam workshop resolver; a second mod is the next proof) and the
+> last **performance** item (the first tick of a battle). The newest recorded builds (2026-11-06) pass with **0 warnings
+> and 198 tests** on MSVC and on clang, and 58 under the sanitizer. Task tracking is the project roadmap, kept in its own
+> repository and not in this one (591 of 694 roadmap tasks done, 74 of 107 groups); results and notes per phase are in
+> [`docs/PHASE2.md`](docs/PHASE2.md), [`docs/PHASE3.md`](docs/PHASE3.md) and [`docs/PHASE4.md`](docs/PHASE4.md), and every
+> document is indexed in [`docs/README.md`](docs/README.md).
 
 This repository contains **no game assets and no original code**. You need your own copy of the game (Steam:
 *Star Wars: Empire at War - Forces of Corruption*). Behaviour was recovered by studying the shipped binary and data
-and written up as specs in [`docs/re/`](docs/re/) (68 documents) before any engine code was written.
+and written up as specs in [`docs/re/`](docs/re/) (94 documents) before any engine code was written.
 
 **Contents:** [Goals](#goals) · [Features](#features) · [Performance](#performance) · [Architecture](#architecture) ·
 [Quality](#quality-and-process) · [Where the project is](#where-the-project-is) · [Building](#building-and-running) ·
@@ -44,15 +45,15 @@ and written up as specs in [`docs/re/`](docs/re/) (68 documents) before any engi
 **Scope.** Windows x64 only, single player. Multiplayer, loading the original game's save files, non-Windows
 platforms and RenderDoc support are deliberately out of scope.
 
-### Side goals (planned, not required for a playable game)
+### Side goals (not required for a playable game)
 
 These are on the roadmap as separate lanes, each with a written plan and a recommended model/effort preset.
 
 | Side goal | What it is | Roadmap |
 |---|---|---|
-| **Repeatable benchmark** | The same input every run (fixed saves, recorded orders, scripted camera) with per-tick CRCs proving each run matched; sim-only, real-time and fixed-frame modes; shared stress scenes and an in-game screen | BM1-BM4 |
-| **First-person ground unit** | Possess a ground unit and play it in first person, Battlefront style. The sim side is a command in the stream, so it replays | FP1-FP3 |
-| **Captain's view** | A bridge camera and holo-table for a capital ship, subsystem targeting, squadron orders and optional cinematic camera moves; presentation plus ordinary commands | CB1-CB4 |
+| **Repeatable benchmark** | The same input every run (fixed saves, recorded orders, scripted camera) with per-tick CRCs proving each run matched; sim-only, real-time and fixed-frame modes; shared stress scenes and comparison reports. **BM1-BM3 are done**; the in-game benchmark screen (BM4) and the first quiet-machine baseline are open | BM1-BM4 |
+| **First-person ground unit** | Possess a ground unit and play it in first person, Battlefront style. The sim side is a command in the stream, so it replays. Planned | FP1-FP3 |
+| **Captain's view** | A bridge camera and holo-table for a capital ship, subsystem targeting, squadron orders and optional cinematic camera moves; presentation plus ordinary commands. Planned | CB1-CB4 |
 
 Deferred on 2026-11-06 until the core game and the mod platform are complete: shader precompile, loading and build speed, CPU efficiency, GPU efficiency and graphics fidelity (`docs/DEFERRED_SIDE_GOALS.md`).
 
@@ -129,6 +130,13 @@ networking.
 - `alamo_headless`: runs the whole simulation without a window, for tests, benchmarks and AI experiments.
 - **Per-tick state checksums** with a per-system breakdown, recorded and compared across thread counts and compilers.
 - A **tick profiler** (`--profile`): p50/p99/max per tick and per system, worker utilisation, the 20 worst ticks.
+- **Benchmark tooling** (`tools/benchmark/`, scenarios in `tests/benchmark/`): versioned scenario files (save, recorded
+  orders, scripted camera, expected per-tick CRC fingerprint). `alamo_headless --bench` times the sim alone,
+  `alamo_game --bench-scenario` renders the same run in real-time or fixed-frame mode with GPU timers, and a run whose CRCs
+  differ is flagged "not comparable" instead of reported as a speedup. Reports are JSON and can be compared.
+- **Mod load report** (`alamo_mod_check`): for any mod folder or workshop id, lists loader diagnostics, missing files,
+  unread XML tags and scripts that error, with a machine-readable summary. A lint step fails the gate on a mod or faction
+  name written into engine code.
 - **Visual regression** checks (screenshot diffs against stored baselines) and a scheduled nightly gate.
 - Tools for the original formats: MEG archives, ALO/ALA models and animations, shaders.
 - **Parity tooling** (`tools/probe_mod/`, index in [`docs/PROBES.md`](docs/PROBES.md)): a read-only external recorder that
@@ -206,23 +214,26 @@ worker count so the counts run side by side. Clang's logs equal MSVC's.
 - **Two compilers in the loop.** MSVC ships; clang 20 checks (extra warnings: `-Wconversion -Wshadow`) and provides a
   second compiler for determinism. Sim changes get both; threading changes also run under a clang sanitizer.
 - **Zero warnings** at MSVC `/W4 /permissive-` and clang `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
-- **170 tests** in the last full gate (2026-11-06), on each of MSVC and clang (sanitizer build: 54 sim-module tests),
-  plus golden-file checks of whole battles and campaigns, each compared across worker counts. The full suite takes about
-  2 minutes on the development PC; slow tests carry a label so quick iteration can skip them.
+- **198 tests** in the newest recorded builds (2026-11-06), on each of MSVC and clang (sanitizer build: 58 sim-module
+  tests), plus golden-file checks of whole battles and campaigns, each compared across worker counts. Goldens store a
+  checkpoint every 64 ticks, so a behaviour change is a small diff. The full suite takes about 4 minutes on the
+  development PC; slow tests carry a label so quick iteration can skip them.
 - **Pre-merge gate** (`build_gate.cmd`): MSVC, clang and sanitizer builds, each recorded on the roadmap. A nightly
   scheduled gate can run on the development PC.
 - **Parity is checked against the real game.** Reference traces recorded from the original (credits, owners, production,
   RNG draws per tick) and in-game probe runs settle questions the binary leaves open; each answer is written into the
   matching spec in `docs/re/` before the engine follows it.
-- **Parallel agent workflow.** Work is split by module across agent sessions, each in its own git worktree and branch and
-  merged by pull request; the roadmap lives in its own repository so every session shares one copy.
+- **Parallel agent workflow.** Work is split by roadmap group across agent sessions, each in its own git worktree, with
+  claims so two sessions do not take the same group. **`dev` is the development branch** (GitHub's default); sessions land
+  on it directly, and `main` is the released branch, updated from `dev` by a release pull request once the full gate
+  passes. The roadmap lives in its own repository so every session shares one copy.
 - **Clean-room.** Engine code is written from the specs in `docs/re/`, never from decompiled output, which is kept out of
   the engine tree.
 - **Project-local toolchain.** MSVC 14.51, Windows SDK, CMake, Ninja, DXC, LLVM and FFmpeg's Bink decoder live under
   `toolchain\` with pinned versions and hashes. Nothing is installed system-wide.
 - **Third-party code** in `engine/` is limited to approved dependencies: Vulkan-Headers, DXC, VMA, Lua 5.0.2 (vendored,
   original semantics), miniaudio and FFmpeg's Bink decoder (LGPL, dynamically linked).
-- About **360,000 lines** of C++ in `engine/` (tests included), across 21 modules.
+- About **380,000 lines** of C++ in `engine/` (tests included), across 21 modules.
 
 ---
 
@@ -232,13 +243,15 @@ worker count so the counts run side by side. Clang's logs equal MSVC's.
 |---|---|
 | Simulation, renderer, Lua, AI, UI, save/load, story | **Done and playable**; remaining work is parity polish |
 | Performance (OPT1-OPT3) | **Mostly done**: p99 budget met everywhere. The first tick of a battle (setup) is still over 33.3 ms: land campaign 55, space 42, land skirmish 139 ms at 15 workers; a plan to shorten it is open |
-| Movement and combat parity | Ongoing, driven by in-game probes of the original: fighter formations, targeting, landing and unload facings, team speed and hand-over, idle animation draws. Corner cases and a few stand-in constants remain |
-| Galactic AI parity (Q2 follow-ups, A2) | Ongoing: the AI's budget, goal, contrast and story-load rules now follow the original (in the Heart of the Maw scenario the Empire AI now captures a planet, as the original does); the Rebel and Empire opening production and the RNG draw count on tick 1 (84 of 130) still differ |
+| Movement and combat parity | Ongoing, driven by in-game probes of the original (fighter formations, targeting, landing and unload facings, team speed and hand-over). Judged by behaviour within tolerance; tasks that only chase bit-exact agreement were dropped on 2026-11-06 |
+| Galactic AI parity (Q2 follow-ups, A2) | Ongoing: the AI's budget, goal, contrast and story-load rules now follow the original (in the Heart of the Maw scenario the Empire AI captures a planet, as the original does); the Rebel and Empire opening production still differs and is the first thing the parity check will measure |
 | Story campaigns end to end | Event system, linked tactical battles, victory handling and corruption missions in; one comparison against a recorded original mission remains |
-| Mod diagnostics (Q5) | Done, on the integration branch |
-| Thrawn's Revenge (Q6) | **Mostly done on the integration branch** `claude/q6-integration` (about 94 commits ahead of `main`, not yet merged): the mod loads, its skirmish, land and campaign smoke runs pass, and its galactic AI plays. Left: retail probes for the port's guessed rules, and a final re-check after the parity check |
-| Parity check against the original (Q4) | Planned; the comparison harness comes first |
-| Side goals (benchmark, first-person, captain's view) | Planned |
+| Mod diagnostics (Q5) | Done |
+| Thrawn's Revenge (Q6) | **Merged into `main`** (2026-11-06): the mod loads with no loader diagnostics, its skirmish, land and campaign smoke runs pass, and its galactic AI plays. Left: Gabriel's retail probes for a few guessed rules, and a final re-check after the parity check |
+| Mod platform (MODC) | **Mostly done**: the loading contract (`docs/MODS.md`), an audit and lint for mod names in engine code, the mod load report, a `STEAMMOD=` resolver and a synthetic fixture mod in the tests are in. Left: proving a second mod, a mod picker in the game UI, shader model 3 translation and compiling mod `.fx` sources, and removing the last base-game names from presentation code |
+| Parity check against the original (Q4) | Next up: the comparison harness is built first, then run and compared against a baseline; small confirm items are fixed only where it flags a difference |
+| Benchmark (side goal) | BM1-BM3 done (scenarios, sim-only and rendered runs, stress scenes, reports); the in-game screen and a quiet-machine baseline are open |
+| First-person and captain's view (side goals) | Planned |
 
 The detail, task by task, is on the project roadmap, which is kept in its own repository (not this one) and is the only place for status.
 
@@ -281,9 +294,9 @@ alamo_render.exe                    :: renderer test app
 | Path | What |
 |---|---|
 | `engine/` | The engine, one static library per module: `core`, `vfs`, `data`, `jobs`, `galactic`, `assets`, `rhi`, `materials`, `shaderxlat`, `terrain`, `render`, `objects`, `tactical`, `ai`, `lua`, `anim`, `commands`, `audio`, `video`, `ui`, `apps` |
-| `tools/` | MEG archive tool, format readers, shader tools, in-game probe kits and trace recorder (`probe_mod/`), analysis and parity-compare scripts, visual diff, lint and build-summary scripts |
+| `tools/` | MEG archive tool, format readers, shader tools, in-game probe kits and trace recorder (`probe_mod/`), benchmark runner (`benchmark/`), golden regeneration, worktree and landing scripts, analysis and parity-compare scripts, visual diff, lint and build-summary scripts |
 | `docs/` | All documentation, indexed in [`docs/README.md`](docs/README.md): decisions, build and test, performance, probes, phase results, behaviour specs recovered from the original (`docs/re/`), asset, format and shader specs |
-| `tests/visual_baselines/` | Screenshot baselines for visual regression |
+| `tests/` | Screenshot baselines for visual regression (`visual_baselines/`) and benchmark scenarios (`benchmark/`) |
 | `CLAUDE.md` | Working rules for contributors and agents |
 
 Not tracked here, by design: `toolchain/` (rebuilt locally), `Data/` and `extracted/` (game data from your own install),
