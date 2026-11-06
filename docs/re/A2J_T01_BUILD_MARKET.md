@@ -114,3 +114,4 @@ after 41. **No spec deviation.** The a2h result "no plan in 3000 frames" no long
 5. **Probe (retail, lane E):** log `Galactic_Production_Begin_Event` (type, planet, frame) for every AI player in frames
    0..1500 of this scenario. It would show which items start at 54 / 80 / 96 / 102 / 103 and whether the Empire's HSS
    goes to Tatooine or Kuat, and it would settle J4 / J5 and the D5 Infrastructure item of §3.3.
+6. **Answers to Q1–Q4:** `A2J_RE_BUILD_MARKET.md` (2026-11-06). The pending list is scanned oldest first; bound tasks are never released; each queue's last-run frame starts at a synced Get_Int(1, 30). Also: PAYG queue time is max, not min, and there is a step-5 slack correction.
