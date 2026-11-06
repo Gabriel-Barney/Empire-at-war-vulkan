@@ -2170,6 +2170,14 @@ float GalacticAiWorld::potential_plan_nominal_time(int32_t pp_handle) const {
     return it == impl_->pps.end() ? -1.0f : impl_->pp_nominal_time(it->second);
 }
 
+bool GalacticAiWorld::potential_plan_cost(int32_t pp_handle, float* net, float* eta) const {
+    const auto it = impl_->pps.find(pp_handle);
+    if (it == impl_->pps.end()) return false;
+    if (net) *net = it->second.net;
+    if (eta) *eta = it->second.eta;
+    return true;
+}
+
 std::vector<uint32_t> GalacticAiWorld::solve_potential_plan(int32_t player, std::string_view plan, std::string_view goal,
                                                            int32_t target, bool* ok, float* eta) {
     Impl& w = *impl_;

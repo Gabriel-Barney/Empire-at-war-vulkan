@@ -194,6 +194,8 @@ public:
     // (the goal's AllowedTime base, Goal::nominal_time); empty / -1 for an unknown handle.
     std::vector<uint32_t> potential_plan_selection(int32_t pp_handle) const;
     float potential_plan_nominal_time(int32_t pp_handle) const;
+    // a2k t01, tests / diagnostics: a live PotentialPlan's net cost (PP +0x44) and ETA (PP +0x48); false for an unknown handle.
+    bool potential_plan_cost(int32_t pp_handle, float* net, float* eta) const;
 
     // Free store (docs/re/FIXPASS_GALACTIC.md §1), tests / diagnostics. These act like the player's free-store script:
     //   free_store_move   = FreeStore.Move_Object(unit, planet): false when refused (§1.2); a true return with no
