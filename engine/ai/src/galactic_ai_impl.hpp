@@ -392,7 +392,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     // ---- build tasks + market (galactic_build.cpp) ----
     void create_build_tasks(TaskForceRec& tf);
     void market_planet(PlanetIndex p);       // one planet's queues (> 30 frames since their last run), sim hook
-    // 0x525200 stand-in [M] (galactic_goal_time.hpp): the time the running plan's unfinished build tasks still need.
+    // 0x525200 [H] (A2F_RE_READS §1, galactic_goal_time.hpp): the time the running plan's unfinished build tasks still need.
     float goal_production_time(int32_t running) const;
     void service_build_tasks(int32_t player);  // PRODUCTION_QUEUED polls, claims, failures
     float installment(PlanetIndex p, uint32_t q, const gal::BuildEntry& head, float a);  // PAYG installment (q2f t01)
@@ -587,7 +587,7 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         if (g.running >= 0) w->end_plan(g.running, by_goal_system);
     }
     void drop_potential_plan(Goal& g) override;
-    float elapsed_eta(const Goal& g) override {  // §1.6: 0x525200 [M] + elapsed [H] (galactic_goal_time.hpp)
+    float elapsed_eta(const Goal& g) override {  // §1.6: 0x525200 [H] + elapsed when > 0 [H] (galactic_goal_time.hpp)
         return galactic_maintenance_eta(w->goal_production_time(g.running), g.created, w->now);
     }
     int32_t quota_players() override;

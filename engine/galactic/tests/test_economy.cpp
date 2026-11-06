@@ -1611,6 +1611,15 @@ void test_oi_buildability() {
     w.rules.types[tPlanetA].ground_structure_slots = 4;  // barracks, StructB, StructC present
     CHECK(s.build_check(pEmpire, rA, tStructA).ok && s.enqueue(pEmpire, rA, tStructA) == RejectReason::None);
     CHECK(s.build_check(pEmpire, rA, tStructA).step == 18);
+    // A2f t08: the ground base level counts ground-family structures only (an orbital one does not).
+    {
+        const int32_t gbl = s.ground_base_level(rA);
+        CHECK(gbl == 3);
+        w.rules.types[tStructC].dummy = kDummyOrbitalStructure;  // StructC now reads as an orbital structure
+        CHECK(s.ground_base_level(rA) == gbl - 1);
+        w.rules.types[tStructC].dummy = 0;
+        CHECK(s.ground_base_level(rA) == gbl);
+    }
     // Build_Max_Instances_Per_Planet: one StructB here already.
     w.rules.types[tStructB].max_instances_per_planet = 1;
     w.rules.types[tPlanetA].ground_structure_slots = -1;
