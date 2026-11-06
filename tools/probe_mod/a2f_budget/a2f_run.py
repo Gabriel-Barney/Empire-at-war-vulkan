@@ -53,8 +53,10 @@ STEPS = r'''
  2) The campaign opens with the "Active Story Objectives" box: close it. The galaxy then runs. Click nothing else, give
     no orders, do not pause; keep the game window in front (FoC pauses when it loses focus). "A2FB PROBE: story script
     running" shows at the start.
- 3) After about 5 minutes of game time (about 5 minutes at normal speed) "A2FB PROBE: done" shows. Then Esc > Quit to the
-    main menu > Quit. Do not save the campaign. The run finishes by itself (A2F_RUN_DONE exit=<n>).
+ 3) After 5 minutes of game time "A2FB PROBE: 5-minute dense phase done" shows: keep the game running. If the AI attacks
+    and a battle prompt appears, choose auto-resolve (the prompt pauses galactic time). At 25 minutes of game time (normal
+    speed) "A2FB PROBE: 25 minutes recorded" shows (a2h t02 needs at least 20 minutes for the MajorItem question). Then
+    Esc > Quit to the main menu > Quit. Do not save the campaign. The run finishes by itself (A2F_RUN_DONE exit=<n>).
 '''
 
 

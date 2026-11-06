@@ -9,8 +9,8 @@ order, through tools/probe_mod/s10_map_owners/ted_owners.py; the extracted text 
   Data\\XML\\Story_Plots_Sandbox_12U_{Rebel,Underworld,Empire}.xml   Lua_Script = A2fb_Story (human faction's plot)
   Data\\Scripts\\Story\\A2fb_Story.lua                    header + core + a2fb_story.lua (channel S)
   Data\\Scripts\\FreeStore\\GalacticFreeStore.lua        shipped + header + core + a2fb_freestore_hook.lua (channel F)
-  Data\\Scripts\\AI\\<plan>.lua x 6                       shipped + header + core + a2fb_plan_hook.lua (channel P)
-  Data\\Text\\MasterTextFile_English.dat                 shipped + TEXT_A2FB_LOADED / TEXT_A2FB_DONE (when readable)
+  Data\\Scripts\\AI\\<plan>.lua x 11                      shipped + header + core + a2fb_plan_hook.lua (channel P)
+  Data\\Text\\MasterTextFile_English.dat                 shipped + TEXT_A2FB_LOADED / _DONE / _LONG_DONE (when readable)
   A2FB_Canary_{Story,FreeStore,Plan}.txt                _CustomScriptMessage deletes each on its first call
   A2FB_TYPES.json                                       cost / build time of the probe structure types
   A2FB_PROBE_MARKER.txt                                 lets cleanup recognise the folder as ours
@@ -49,11 +49,20 @@ PLANS = [
     ('UpgradeStarbasePlan', 'BaseForce_Thread'),
     ('BuildEconomicStructurePlan', 'StructureForce_Thread'),
     ('EmpireAdvanceTechPlan', 'TechForce_Thread'),
+    # a2h t02 (A2G_T02_T04_PORT_VS_RETAIL.md section 4): the plans the port releases / runs that retail had no count for
+    ('BuildBaseComponentHeavyVehicleFactory', 'BaseForce_Thread'),
+    ('BuildBaseComponentAdvancedVehicleFactory', 'BaseForce_Thread'),
+    ('LiftBlockadePlan', 'MainForce_Thread'),
+    ('FlushMajorItemBudget', 'MainForce_Thread'),
+    ('ConquerPiratePlan', 'MainForce_Thread'),
 ]
+# Plans whose start and end samples are full ones (all BFB categories: the MajorItem pool before / after the flush).
+FULL_SAMPLE_PLANS = {'FlushMajorItemBudget'}
 SPECIAL_STRUCTURES = ['DATA\\XML\\SPECIALSTRUCTURES.XML', 'DATA\\XML\\SPECIALSTRUCTURES_UNDERWORLD.XML']
 TEXTS = [
-    ('TEXT_A2FB_LOADED', 'A2FB PROBE: story script running. Do not touch the game; it records for 5 minutes.'),
-    ('TEXT_A2FB_DONE', 'A2FB PROBE: done. You can quit now (Esc > Quit to the main menu > Quit).'),
+    ('TEXT_A2FB_LOADED', 'A2FB PROBE: story script running. Do not touch the game; keep it running for 25 minutes.'),
+    ('TEXT_A2FB_DONE', 'A2FB PROBE: 5-minute dense phase done. Keep the game running (30 s samples continue).'),
+    ('TEXT_A2FB_LONG_DONE', 'A2FB PROBE: 25 minutes recorded. You can quit now (Esc > Quit to the main menu > Quit).'),
 ]
 CANARIES = {'Story': 'A2FB_Canary_Story.txt', 'FreeStore': 'A2FB_Canary_FreeStore.txt', 'Plan': 'A2FB_Canary_Plan.txt'}
 
@@ -118,6 +127,12 @@ def assemble(orig, channel, hook, use_mod_eq, subs=None):
     return orig + '\n' + body
 
 
+def plan_subs(name, thread):
+    """Substitutions of a2fb_plan_hook.lua for one plan: name, thread function, task force, full-sample flag."""
+    return {'@@PLAN@@': name, '@@THREAD@@': thread, '@@FORCE@@': thread[:-len('_Thread')],
+            '@@FULL@@': 'true' if name in FULL_SAMPLE_PLANS else 'false'}
+
+
 def story_lua(use_mod_eq=True):
     return assemble(None, 'S', 'a2fb_story.lua', use_mod_eq)
 
@@ -158,7 +173,7 @@ def build(game, out, zip_path=None, use_mod_eq=True):
         if not re.search(r'function\s+%s\s*\(' % re.escape(thread), orig):
             raise SystemExit('%s: thread function %s not found: the hook cannot wrap it' % (name, thread))
         write(os.path.join(out, 'Data', 'Scripts', 'AI', '%s.lua' % name),
-              crlf(assemble(orig, 'P', 'a2fb_plan_hook.lua', use_mod_eq, {'@@PLAN@@': name, '@@THREAD@@': thread})))
+              crlf(assemble(orig, 'P', 'a2fb_plan_hook.lua', use_mod_eq, plan_subs(name, thread))))
     notes.append('%d plan scripts' % len(PLANS))
 
     # probe type data

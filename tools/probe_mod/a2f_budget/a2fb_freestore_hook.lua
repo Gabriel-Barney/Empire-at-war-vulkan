@@ -5,7 +5,9 @@
 -- PlayerObject first and then calls the shipped function exactly as before: no rate change, no extra call, so the
 -- AI's own schedule is the shipped one. Samples start at the player's first free-store service (the AI context is
 -- long initialised by then, so this channel shows the post-Init state every 8 s, independent of the story script).
-A2FB_MAX = 400
+-- 400 records = 100 full samples (PL SM BF SH) until a2g; 500 since a2h t02 so the Empire's extra MJ record keeps the
+-- same 100 samples (about 13 minutes at 8 s).
+A2FB_MAX = 500
 A2FB_CANARY = "Mods\\A2fBudgetProbe\\A2FB_Canary_FreeStore.txt"
 A2FB_FS_N = 0
 

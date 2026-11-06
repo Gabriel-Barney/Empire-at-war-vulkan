@@ -1,0 +1,188 @@
+a2f t07 budget probe: report
+records: 803 (channels {'F': 503, 'P': 298, 'S': 2}), samples: 132
+
+Scripts that ran (canary = _CustomScriptMessage deleted the kit's file; the run status says which files are gone): F: file=Mods\A2fBudgetProbe\A2FB_Canary_FreeStore.txt ok=true err=nil; F: file=Mods\A2fBudgetProbe\A2FB_Canary_FreeStore.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil
+
+== 1. Pools by category (decoded from BudgetFractionToBuild; a = available credits, r = rate) ==
+
+-- UNDERWORLD: 127 samples; mod equations answer
+   first / last sample frame with OFF and INFRA empty (budget not initialised): None, last: None, first with real pools: 241.0
+   [F FS] f=241 cr=5666.77 CU=5666.77 ALL[a=5666.80 r=-0.000944] OFF[a=1529.83 r=0.000184] DEF[empty] INFO[empty] INFRA[a=4136.97 r=8.39e-05] MAJOR[empty]
+   [F FS] f=481 cr=3839.85 CU=3839.85 ALL[a=3839.85 r=-7.23e-05] OFF[a=1302.98 r=0.000117] DEF[empty] INFO[empty] INFRA[a=2536.96 r=3.15e-05] MAJOR[empty]
+   [F FS] f=724 cr=1736.53 CU=1736.53 ALL[a=1736.53 r=0.000296] OFF[a=1239.65 r=-0.000121] DEF[empty] INFO[empty] INFRA[a=1296.96 r=0.000165] MAJOR[empty]
+   [F FS] f=967 cr=533.204 CU=533.204 ALL[a=533.20 r=9.76e-05] OFF[a=429.65 r=-3.62e-05] DEF[empty] INFO[empty] INFRA[a=903.63 r=-0.0002] MAJOR[empty]
+   [F FS] f=1210 cr=0.0 CU=0.0 ALL[empty] OFF[a=102.98 r=1.35e-05] DEF[empty] INFO[empty] INFRA[a=498.62 r=4.88e-05] MAJOR[empty]
+   [F FS] f=1453 cr=2150.0 CU=2150.0 ALL[a=2150.00 r=47.78] OFF[a=982.14 r=16.14] DEF[empty] INFO[empty] INFRA[a=1167.86 r=31.63] MAJOR[empty]
+   [P PS] f=1495 cr=2150.0 CU=2150.0 ALL[a=2150.00 r=47.78] OFF[a=982.14 r=16.14] INFRA[a=1167.86 r=31.63]
+   [F FS] f=1693 cr=1256.67 CU=1256.67 ALL[a=1256.66 r=47.78] OFF[a=722.15 r=16.14] DEF[empty] INFO[empty] INFRA[a=534.52 r=31.64] MAJOR[empty]
+   [F FS] f=1936 cr=318.337 CU=318.337 ALL[a=318.33 r=47.78] OFF[a=317.15 r=16.14] DEF[empty] INFO[empty] INFRA[a=1.19 r=31.63] MAJOR[empty]
+   [F FS] f=2179 cr=1.6704 CU=1.6704 ALL[a=1.66 r=47.78] OFF[a=0.48 r=16.14] DEF[empty] INFO[empty] INFRA[a=1.19 r=31.63] MAJOR[empty]
+   [F FS] f=2422 cr=1.6704 CU=1.6704 ALL[a=1.66 r=47.78] OFF[a=0.48 r=16.14] DEF[empty] INFO[empty] INFRA[a=1.19 r=31.63] MAJOR[empty]
+   [F FS] f=2665 cr=1.6704 CU=1.6704 ALL[a=1.66 r=47.78] OFF[a=0.48 r=16.14] DEF[empty] INFO[empty] INFRA[a=1.19 r=31.63] MAJOR[empty]
+   [F FS] f=2908 cr=1709.24 CU=1709.24 ALL[a=1709.24 r=50.54] OFF[a=670.68 r=25.39] DEF[empty] INFO[empty] INFRA[a=1038.55 r=25.15] MAJOR[empty]
+   [F FS] f=3151 cr=1820.91 CU=1820.91 ALL[a=1820.91 r=50.54] OFF[a=766.98 r=25.39] DEF[empty] INFO[empty] INFRA[a=1053.93 r=25.15] MAJOR[empty]
+   [F FS] f=12382 cr=1578.98 CU=1578.98 ALL[zero] OFF[zero] DEF[mixed] INFO[mixed] INFRA[zero] MAJOR[mixed]
+   [F FS] f=12625 cr=673.503 CU=673.503 ALL[a=673.50 r=53.28] OFF[a=131.04 r=30.44] DEF[empty] INFO[empty] INFRA[a=542.48 r=22.84] MAJOR[empty]
+   [F FS] f=17242 cr=154.712 CU=154.712 ALL[zero] OFF[zero] DEF[mixed] INFO[mixed] INFRA[zero] MAJOR[mixed]
+   [F FS] f=17485 cr=1821.14 CU=1821.14 ALL[a=1821.14 r=52.89] OFF[a=1678.57 r=30.22] DEF[empty] INFO[empty] INFRA[a=1742.58 r=22.68] MAJOR[empty]
+   [P PS] f=25756 cr=13372.8 CU=13372.8 ALL[a=13384.45 r=66.93] OFF[a=8827.17 r=44.66] INFRA[a=4557.30 r=22.26]
+   [F FS] f=25987 cr=10843.7 CU=10843.7 ALL[zero] OFF[zero] DEF[mixed] INFO[mixed] INFRA[zero] MAJOR[mixed]
+   [F FS] f=26716 cr=557.422 CU=557.422 ALL[a=557.42 r=66.93] OFF[a=0.01 r=44.67] DEF[empty] INFO[empty] INFRA[a=557.29 r=22.26] MAJOR[empty]
+   [F FS] f=30361 cr=868.605 CU=868.605 ALL[a=868.61 r=60.29] OFF[a=1158.70 r=40.23] INFRA[a=709.87 r=20.06]
+   ... 105 more samples in report.json / samples.tsv
+   first real pools (f=241.0, credits 5666.77): measured weights {'OFF': 0.27, 'DEF': 0.0, 'INFO': 0.0, 'INFRA': 0.73, 'MAJOR': 0.0}
+   distance (L1) to the template candidates (smaller = closer; 0 = that template's weights): {'base': 0.4006}
+   shipped equations (first 3 / last):
+     f=241.0 t=8.03333 {'wOFF': 6.0, 'wINFRA': 6.75822}
+     f=481.0 t=16.0333 {'wOFF': 6.0, 'wINFRA': 6.75872}
+     f=724.0 t=24.1333 {'wOFF': 6.0, 'wINFRA': 6.75462}
+     f=30118.0 t=1003.93 {'wOFF': 8.08333, 'wINFRA': 4.02978}
+
+-- EMPIRE: 2 samples; mod equations answer
+   first / last sample frame with OFF and INFRA empty (budget not initialised): None, last: None, first with real pools: 5416.0
+   [P PS] f=5416 cr=2908.09 CU=2908.09 ALL[a=2985.71 r=11.73] OFF[a=259.08 r=5.76] INFRA[a=1490.99 r=7.42]
+   [P PS] f=51511 cr=4306.0 CU=4306.0 ALL[a=4306.02 r=8.33] OFF[a=1185.27 r=1.21] INFRA[a=905.06 r=6.73]
+
+== 2. Plan hook (Budget.Get_Spendable_Resources / Get_Unallocated_Resources at plan start) ==
+   ConquerPiratePlan f=17404 fac=EMPIRE budget=userdata spendable=0 unallocated=0 cr=2170.78
+   ConquerPiratePlan f=17869 fac=EMPIRE budget=userdata spendable=0 unallocated=0 cr=3372.89
+   ConquerPiratePlan f=18109 fac=EMPIRE budget=userdata spendable=0 unallocated=0 cr=3372.89
+   ConquerPiratePlan f=18349 fac=EMPIRE budget=userdata spendable=0 unallocated=0 cr=3372.89
+   ConquerPiratePlan f=18829 fac=EMPIRE budget=userdata spendable=0 unallocated=0 cr=3372.89
+   ConquerPiratePlan f=19069 fac=EMPIRE budget=userdata spendable=0 unallocated=0 cr=3957.89
+   ConquerPiratePlan f=19309 fac=EMPIRE budget=userdata spendable=0 unallocated=0 cr=3957.89
+   ConquerPiratePlan f=19789 fac=EMPIRE budget=userdata spendable=0 unallocated=0 cr=3957.89
+   ConquerPiratePlan f=20029 fac=EMPIRE budget=userdata spendable=0 unallocated=150 cr=3957.89
+   ConquerPiratePlan f=20269 fac=EMPIRE budget=userdata spendable=0 unallocated=150 cr=4542.89
+   ConquerPiratePlan f=20509 fac=EMPIRE budget=userdata spendable=0 unallocated=150 cr=4542.89
+   ConquerPiratePlan f=20758 fac=EMPIRE budget=userdata spendable=0 unallocated=150 cr=4542.89
+   ConquerPiratePlan f=20995 fac=EMPIRE budget=userdata spendable=0 unallocated=150 cr=4542.89
+   ConquerPiratePlan f=21235 fac=EMPIRE budget=userdata spendable=0 unallocated=150 cr=4542.89
+   ConquerPiratePlan f=21487 fac=EMPIRE budget=userdata spendable=0 unallocated=300 cr=4542.89
+   ConquerPiratePlan f=21721 fac=EMPIRE budget=userdata spendable=0 unallocated=300 cr=5127.89
+   ConquerPiratePlan f=23311 fac=EMPIRE budget=userdata spendable=0 unallocated=600 cr=4362.93
+   ConquerPiratePlan f=23551 fac=EMPIRE budget=userdata spendable=0 unallocated=600 cr=4362.93
+   ConquerPiratePlan f=23791 fac=EMPIRE budget=userdata spendable=0 unallocated=600 cr=4362.93
+   ConquerPiratePlan f=24031 fac=EMPIRE budget=userdata spendable=0 unallocated=750 cr=4362.93
+   ConquerPiratePlan f=24271 fac=EMPIRE budget=userdata spendable=0 unallocated=750 cr=4362.93
+   ConquerPiratePlan f=24511 fac=EMPIRE budget=userdata spendable=0 unallocated=750 cr=4947.93
+   ConquerPiratePlan f=24751 fac=EMPIRE budget=userdata spendable=0 unallocated=750 cr=4947.93
+   ConquerPiratePlan f=24991 fac=EMPIRE budget=userdata spendable=0 unallocated=900 cr=4947.93
+   ConquerPiratePlan f=25231 fac=EMPIRE budget=userdata spendable=0 unallocated=900 cr=4947.93
+   ConquerPiratePlan f=25471 fac=EMPIRE budget=userdata spendable=0 unallocated=900 cr=4947.93
+   ConquerPiratePlan f=25711 fac=EMPIRE budget=userdata spendable=0 unallocated=900 cr=5532.93
+   ConquerPiratePlan f=25963 fac=EMPIRE budget=userdata spendable=0 unallocated=1050 cr=5532.93
+   ConquerPiratePlan f=26467 fac=EMPIRE budget=userdata spendable=0 unallocated=1050 cr=4032.93
+   ConquerPiratePlan f=26719 fac=EMPIRE budget=userdata spendable=0 unallocated=1200 cr=4032.93
+   ConquerPiratePlan f=26968 fac=EMPIRE budget=userdata spendable=0 unallocated=1200 cr=4032.93
+   ConquerPiratePlan f=43657 fac=EMPIRE budget=userdata spendable=0 unallocated=0 cr=3556
+   ConquerPiratePlan f=44041 fac=EMPIRE budget=userdata spendable=0 unallocated=0 cr=3556
+   ConquerPiratePlan f=44296 fac=EMPIRE budget=userdata spendable=0 unallocated=0 cr=3556
+   ConquerPiratePlan f=45148 fac=EMPIRE budget=userdata spendable=0 unallocated=0 cr=2431
+   ConquerPiratePlan f=45388 fac=EMPIRE budget=userdata spendable=0 unallocated=0 cr=2431
+   ConquerPiratePlan f=54583 fac=UNDERWORLD budget=userdata spendable=0 unallocated=0 cr=5934.21
+   ConquerPiratePlan f=55168 fac=UNDERWORLD budget=userdata spendable=0 unallocated=0 cr=4656.44
+   BuildBaseComponentBarracks f=5416 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=2908.09
+   BuildBaseComponentBarracks f=6211 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=2649.03
+   per plan (a2h t02: end records; no_end = no PRET / PEXIT / PFAIL for that start: released by the goal system or the record was lost; confirmed = the next start of the same script says prev=none):
+     plan                                       faction     starts  PEXIT  PFAIL   PRET  no_end confirmed  first_f   last_f
+     BuildBaseComponentBarracks                 EMPIRE          17      0      0      0      17        16     5416    37780
+     BuildBaseComponentHeavyVehicleFactory      EMPIRE          21      0      0      0      21        20     3457    24877
+     BuildBaseComponentLightVehicleFactory      EMPIRE           5      0      0      0       5         4     1435    12376
+     BuildEconomicStructurePlan                 EMPIRE          34      0      0      0      34        32    44554    55237
+     ConquerPiratePlan                          EMPIRE          36      0      0      0      36        36    17404    45388
+     ConquerPiratePlan                          UNDERWORLD       2      0      0      0       2         1    54583    55168
+     FlushMajorItemBudget                       UNDERWORLD      21      0      0      0      21        20      847     7198
+     UpgradeStarbasePlan                        EMPIRE          21      0      0      0      21        21    16246    41413
+     UpgradeStarbasePlan                        UNDERWORLD      81      2      0      0      79        78     1495    56050
+     ConquerPiratePlan f=17404 fac=EMPIRE ends=-
+     ConquerPiratePlan f=17869 fac=EMPIRE ends=-
+     ConquerPiratePlan f=18109 fac=EMPIRE ends=-
+     ConquerPiratePlan f=18349 fac=EMPIRE ends=-
+     ConquerPiratePlan f=18829 fac=EMPIRE ends=-
+     ConquerPiratePlan f=19069 fac=EMPIRE ends=-
+     ConquerPiratePlan f=19309 fac=EMPIRE ends=-
+     ConquerPiratePlan f=19789 fac=EMPIRE ends=-
+     ConquerPiratePlan f=20029 fac=EMPIRE ends=-
+     ConquerPiratePlan f=20269 fac=EMPIRE ends=-
+     ConquerPiratePlan f=20509 fac=EMPIRE ends=-
+     ConquerPiratePlan f=20758 fac=EMPIRE ends=-
+     ConquerPiratePlan f=20995 fac=EMPIRE ends=-
+     ConquerPiratePlan f=21235 fac=EMPIRE ends=-
+     ConquerPiratePlan f=21487 fac=EMPIRE ends=-
+     ConquerPiratePlan f=21721 fac=EMPIRE ends=-
+     ConquerPiratePlan f=23311 fac=EMPIRE ends=-
+     ConquerPiratePlan f=23551 fac=EMPIRE ends=-
+     ConquerPiratePlan f=23791 fac=EMPIRE ends=-
+     ConquerPiratePlan f=24031 fac=EMPIRE ends=-
+     ConquerPiratePlan f=24271 fac=EMPIRE ends=-
+     ConquerPiratePlan f=24511 fac=EMPIRE ends=-
+     ConquerPiratePlan f=24751 fac=EMPIRE ends=-
+     ConquerPiratePlan f=24991 fac=EMPIRE ends=-
+     ConquerPiratePlan f=25231 fac=EMPIRE ends=-
+     ConquerPiratePlan f=25471 fac=EMPIRE ends=-
+     ConquerPiratePlan f=25711 fac=EMPIRE ends=-
+     ConquerPiratePlan f=25963 fac=EMPIRE ends=-
+     ConquerPiratePlan f=26467 fac=EMPIRE ends=-
+     ConquerPiratePlan f=26719 fac=EMPIRE ends=-
+
+== 3. Budget block watcher (memory, read only): reset flag +0x74 ==
+-- EMPIRE: found at 0x16e40cd7870
+   states logged: 394; init byte changes: none
+   reset flag transitions (mode frame): NONE observed (flag stayed 0)
+   first state: mf=1 init=1 income/s=0.0 T=0.0 flag=0 refund=0.0
+   income / T / refund changes: mf 1351: inc=14.833333015441895 T=45.0 refund=0.0; mf 17551: inc=13.0 T=45.0 refund=0.0; mf 44551: inc=8.333333015441895 T=45.0 refund=0.0
+-- PIRATES: found at 0x16e40cd7030
+   states logged: 392; init byte changes: none
+   reset flag transitions (mode frame): NONE observed (flag stayed 0)
+   first state: mf=1 init=1 income/s=0.0 T=0.0 flag=0 refund=0.0
+   income / T / refund changes: none
+-- UNDERWORLD: found at 0x16e40cd6530
+   states logged: 427; init byte changes: none
+   reset flag transitions (mode frame): NONE observed (flag stayed 0)
+   first state: mf=1 init=1 income/s=0.0 T=0.0 flag=0 refund=0.0
+   income / T / refund changes: mf 1351: inc=47.77777862548828 T=45.0 refund=0.0; mf 2701: inc=50.53851318359375 T=45.0 refund=0.0; mf 4051: inc=56.341487884521484 T=45.0 refund=0.0; mf 5401: inc=54.80133819580078 T=45.0 refund=0.0; mf 6751: inc=56.61582946777344 T=45.0 refund=0.0; mf 8101: inc=55.37150573730469 T=45.0 refund=0.0; mf 9451: inc=55.196311950683594 T=45.0 refund=0.0; mf 10801: inc=54.463531494140625 T=45.0 refund=0.0
+
+== 4. Answers ==
+UNDERWORLD: pre-Init (Lua saw 1e18 in every category) up to frame None; first real pools at frame 241.0.
+EMPIRE: pre-Init (Lua saw 1e18 in every category) up to frame None; first real pools at frame 5416.0.
+Reset flag: see section 3 (its setter is the transition 0 -> nonzero; compare its frame with the Lua samples around it: a template switch shows as a change of the SH trigger values, the first service as the init byte change).
+
+== 5. MajorItem flush / reclaim (a2h t02; MJ record, A2G_T02_T04_PORT_VS_RETAIL.md section 4) ==
+   keys: NMS Needs_More_Space_Force_Globally, NTF Need_To_Flush_MajorItem_Budget (goal Flush_MajorItem_Budget),
+         CRM Can_Reclaim_Excess_MajorItem_Budget (goal Reclaim_Excess_...), HES Has_Enough_Space_Force_Globally,
+         FRT / ERT friendly / enemy space raw totals, HST / SST Variable_Human / Variable_Self.SpaceTotalUnnormalized,
+         AG / AGM ActiveGoals without / with Parameter_Category MajorItem, HDS HasUnit(Death_Star),
+         MNT / MNTU Maintenance, PLC / PLCU PlanetsControlled (skip = no human player, nil = no answer)
+   25-minute mark (LONGDONE) NOT reached: the run was shorter than 1500 s of galactic time
+-- EMPIRE: 4 samples with MJ, frames 1435 .. 51511
+   NMS  > 0 in 0 of 4 samples
+   NTF  > 0 in 0 of 4 samples
+   CRM  > 0 in 0 of 4 samples
+   HES  > 0 in 4 of 4 samples (first at frame 1435, last 51511)
+   AGM  > 0 in 0 of 4 samples
+   HDS  > 0 in 0 of 4 samples
+   changes of NMS/NTF/CRM/HES/AGM/HDS (frame: values):
+     f=1435 [P PS] NMS=0 NTF=0 CRM=0 HES=1 FRT=20250 ERT=0 HST=21135 SST=24250 AG=nil AGM=0 HDS=0 MNT=0.00106742 MNTU=0.7125 PLC=0.333333 PLCU=4
+     f=51511 [P PS] NMS=0 NTF=0 CRM=0 HES=1 FRT=22750 ERT=0 HST=21135 SST=26750 AG=nil AGM=0 HDS=0 MNT=0.00209185 MNTU=0.784444 PLC=0.25 PLCU=3
+   FlushMajorItemBudget plan runs: 21
+     f=847 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=1171 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=1495 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=1654 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=1975 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=2134 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=2293 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=3250 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=3580 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=4087 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=4255 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=5209 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=5383 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=5644 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=5989 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=6163 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=6337 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=6508 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=6682 fac=UNDERWORLD spend=0 unalloc=0 ends=-
+     f=7027 fac=UNDERWORLD spend=0 unalloc=0 ends=-

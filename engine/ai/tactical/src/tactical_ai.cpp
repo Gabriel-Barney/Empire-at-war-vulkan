@@ -1058,6 +1058,8 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         // --- end A2 tactical ---
         g.plan = plan;
         g.pp_valid = true;
+        // A2h t06 (A2H_T06_TACTICAL_ETA §2.1) [H]: in land / space mode the solve reset clears PP +0x44 (cost source) and
+        // +0x48 (ETA) and the ETA step writes only in galactic mode, so every tactical goal carries cost 0 and ETA 0.
         g.cost = 0.0f;
         g.eta = 0.0f;
         return true;
@@ -1184,6 +1186,8 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         }
         g.pp_handle = -1;
     }
+    // A2h t06 (A2H_T06_TACTICAL_ETA §4) [H]: retail skips the maintenance time-drop outside galactic mode, so 0 is exact,
+    // not a stand-in (the goal system's time-drop never fires: uses_budget() false and this 0).
     float elapsed_eta(const Goal&) override { return 0.0f; }
     int32_t quota_players() override {
         int32_t n = 0, humans = 0;
@@ -1914,7 +1918,9 @@ bool TacticalAiWorld::Impl::resolve_pp(PlayerAi& p, const Goal& g) {
     return true;
 }
 
-// A2g t06: 0x6c0450(PP) of one of p's PotentialPlans (tactical_nominal_time), the goal's AllowedTime base.
+// A2g t06: 0x6c0450(PP) of one of p's PotentialPlans (tactical_nominal_time), the goal's AllowedTime base. A2h t06
+// (A2H_T06_TACTICAL_ETA §3) [H]: retail reads the galactic Build_Time_Seconds (+0x890) in every mode, never
+// Tactical_Build_Time_Seconds (+0xA00), x Production_Speed_Factor (truncated) x the Land_ / Space_Build_Time_Multiplier; keep it so.
 float TacticalAiWorld::Impl::pp_nominal_time(const PlayerAi& p, const std::vector<TacticalPpPick>& picks) const {
     return tactical_nominal_time(picks, w.types, cfg.constants.production_speed_factor, p.build_time_mult);
 }
@@ -3498,8 +3504,9 @@ bool TacticalAiWorld::start(std::vector<std::string>* diagnostics) {
         // Slot 11: Land_ / Space_AI_Goal_Cycle_Sleep_Duration x FPS after a commit (Easy 15 s, §4.5).
         gcfg.sleep_frames = static_cast<int32_t>(static_cast<float>(kAiFps) * sleep);
         // A2g t06: AllowedTime with a PP = Goal::nominal_time (0x6c0450, tactical_nominal_time) x Build_Time_Delay_Tolerance,
-        // as galactic (A2F_RE_READS §1.4 item 2) [H]. [port] Tactical goals carry ETA 0 (accept_result), so the time tests
-        // (Resolve time_ok: 0 < AllowedTime < ETA) never fail; the value is hashed and saved with the goal.
+        // as galactic (A2F_RE_READS §1.4 item 2) [H]. Tactical goals carry ETA 0 (accept_result) [H, A2H_T06_TACTICAL_ETA
+        // §2.1], so the time tests (accept, Resolve time_ok: 0 < AllowedTime < ETA) never fail (§4); the value is hashed and
+        // saved with the goal.
         gcfg.nominal_allowed_time = true;
         p.ctx.goals.init(w.defs, std::move(sources), &p, &p.ctx.learning, &p.ctx.templates, &w.rng.synced(), gcfg);
         p.ctx.attach(&p, [&w, &p](const std::string& eq, double& out) { return w.evaluate(p.player, eq, -1, out); });

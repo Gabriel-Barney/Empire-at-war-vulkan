@@ -89,6 +89,7 @@ public:
     float available(int32_t c) const { return valid(c) ? cat_[static_cast<size_t>(c)].A : 0.0f; }
     float rate(int32_t c) const { return valid(c) ? cat_[static_cast<size_t>(c)].R : 0.0f; }
     float pool(int32_t c) const { return valid(c) ? cat_[static_cast<size_t>(c)].P : 0.0f; }
+    float income_rate(int32_t c) const { return valid(c) ? cat_[static_cast<size_t>(c)].I : 0.0f; }  // +0x50
     float income_per_second() const { return rate68_; }
     float period() const { return period_; }
     float pools_total() const;  // Σ P (AI CreditsUnnormalized, 0x6136b0 [M])

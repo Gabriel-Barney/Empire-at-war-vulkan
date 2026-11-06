@@ -12,6 +12,8 @@ cannot drift apart:
   * A2FB_CreditsUnnorm = Variable_Self.CreditsUnnormalized (AI player: the budget's total of pools, 0x6136b0 [M]).
   * shipped equations (no mod file needed): the budget-weight equations of each faction's galactic templates and the
     Tech_Upgrade trigger / untrigger.
+  * a2h t02 (MJ record, Empire): the MajorItem flush / reclaim trigger equations (shipped) and their inputs (mod
+    equations A2FB_HumanSpaceTotal, A2FB_ActiveGoals[Major], ...), MAJOR_SHIPPED / MAJOR_MOD below.
 
 None of these equations contains the '#' operator (a random draw inside an evaluation, AI_GALACTIC section 8), so
 evaluating them draws nothing from the game's synchronised RNG (selftest_a2f.py checks the shipped ones).
@@ -57,6 +59,32 @@ SHIPPED = {
 SHIPPED_NEEDS_HUMAN = ['Underworld_Offensive_Budget_Allocation', 'Underworld_Infrastructure_Budget_Allocation']
 
 COMMON_EQS = [('A2FB_CreditsUnnorm', 'CU'), ('A2FB_NetIncome', 'NET')]
+
+# a2h t02 (docs/re/A2G_T02_T04_PORT_VS_RETAIL.md section 4): the MajorItem flush / reclaim triggers and their inputs, one
+# MJ record per sample (small and full) of these factions. Shipped equations: (name, key, needs a human player).
+MAJOR_FACTIONS = ['EMPIRE']
+MAJOR_SHIPPED = [
+    ('Needs_More_Space_Force_Globally', 'NMS', True),        # Variable_Human.SpaceTotalUnnormalized > Self x 1.0
+    ('Need_To_Flush_MajorItem_Budget', 'NTF', True),         # NMS + HasUnit(Death_Star): goal Flush_MajorItem_Budget
+    ('Can_Reclaim_Excess_MajorItem_Budget', 'CRM', False),   # ActiveGoals{MajorItem} > 0: goal Reclaim_Excess_...
+    ('Has_Enough_Space_Force_Globally', 'HES', False),       # 0.9 x FRT > ERT
+    ('Friendly_Global_Space_Unit_Raw_Total', 'FRT', False),
+    ('Enemy_Global_Space_Unit_Raw_Total', 'ERT', False),
+]
+# Mod equations (name, key, body, needs a human player): added to the equation file with the A2FB_* ones above.
+MAJOR_MOD = [
+    ('A2FB_HumanSpaceTotal', 'HST', 'Variable_Human.SpaceTotalUnnormalized', True),
+    ('A2FB_SelfSpaceTotal', 'SST', 'Variable_Self.SpaceTotalUnnormalized', False),
+    ('A2FB_ActiveGoals', 'AG', 'Variable_Self.ActiveGoals', False),
+    ('A2FB_ActiveGoalsMajor', 'AGM', 'Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[MajorItem]}',
+     False),
+    ('A2FB_HasDeathStar', 'HDS', 'Variable_Self.HasUnit{Parameter_Type = "Death_Star", Parameter_Count = 1}', False),
+    ('A2FB_Maintenance', 'MNT', 'Variable_Self.Maintenance', False),
+    ('A2FB_MaintenanceUnnorm', 'MNTU', 'Variable_Self.MaintenanceUnnormalized', False),
+    ('A2FB_PlanetsControlled', 'PLC', 'Variable_Self.PlanetsControlled', False),
+    ('A2FB_PlanetsControlledUnnorm', 'PLCU', 'Variable_Self.PlanetsControlledUnnormalized', False),
+]
+MAJOR_KEYS = [k for _n, k, _h in MAJOR_SHIPPED] + [k for _n, k, _b, _h in MAJOR_MOD]
 
 # Template that is active when: base template always (Basic_*_Default), Tech_Upgrade when TRIG > 0 (Empire only).
 # Raw weights of the candidates, by the shipped equation keys above (a2f_report.py compares normalised pools).
@@ -104,7 +132,15 @@ def equations_xml():
                     body = ('Variable_Self.BudgetFractionToBuild{Parameter_Type = "%s", '
                             'Parameter_Category = AIGoalCategoryType[%s]}' % (t, cat_name[ckey]))
                 lines += ['\t<%s>' % n, '\t\t' + body, '\t</%s>' % n]
+    lines.append('\t<!-- a2h t02: MajorItem flush / reclaim inputs (A2G_T02_T04_PORT_VS_RETAIL.md section 4) -->')
+    for n, _k, body, _h in MAJOR_MOD:
+        lines += ['\t<%s>' % n, '\t\t' + body, '\t</%s>' % n]
     return '\n'.join(lines) + '\n'
+
+
+def probe_equation_count():
+    """Number of A2FB_* equations equations_xml() adds."""
+    return len(COMMON_EQS) + len(bfb_equations()) + len(MAJOR_MOD)
 
 
 def patch_equation_file(shipped_text):
@@ -137,6 +173,12 @@ def lua_header(use_mod_eq=True):
         ship = ', '.join('{ "%s", "%s", %s }' % (key, n, 'true' if n in SHIPPED_NEEDS_HUMAN else 'false')
                          for n, key in SHIPPED[fkey])
         L.append('\tshipped = { %s },' % ship)
+        if fkey in MAJOR_FACTIONS:
+            # { key, equation, needs a human, mod equation }
+            major = ['{ "%s", "%s", %s, false }' % (k, n, 'true' if h else 'false') for n, k, h in MAJOR_SHIPPED]
+            if use_mod_eq:
+                major += ['{ "%s", "%s", %s, true }' % (k, n, 'true' if h else 'false') for n, k, _b, h in MAJOR_MOD]
+            L.append('\tmajor = { %s },' % ', '.join(major))
         L.append('}')
     L.append('A2FB_COMMON = { %s }' % ', '.join('{ "%s", "%s" }' % (k, n) for n, k in COMMON_EQS))
     return '\n'.join(L) + '\n'

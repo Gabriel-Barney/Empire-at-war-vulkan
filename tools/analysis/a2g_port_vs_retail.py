@@ -13,6 +13,12 @@ Commands
   plans   --retail-records records.txt [more records.txt] --port-log LOG [LOG ...] [--window FRAMES]
           plan starts per plan name in [0, window] (retail PSTART deduplicated by plan + frame over all given runs; the port's
           "plan N NAME for" lines), per galactic minute (30 frames per second), and the port's "ended ... (released)" count.
+          With records of the a2h t02 kit (PSTART n=, PRET / PEXIT / PFAIL) it also counts how each retail start ended.
+  major   --retail-records records.txt [more] [--port-log LOG ...] [--faction EMPIRE] [--window FRAMES]
+          a2h t02: the retail MJ samples (Needs_More_Space_Force_Globally, Need_To_Flush_MajorItem_Budget,
+          Can_Reclaim_Excess_MajorItem_Budget, ActiveGoals with / without MajorItem, space totals, ...): how often each
+          trigger was > 0 and every change, the retail FlushMajorItemBudget plan starts, and the port's flush / reclaim
+          plan starts in the same window.
   drops   --port-trace ERR [--port-log LOG] [--window FRAMES]
           goal-system maintenance drops by goal and reason (fund / desire / invalid / time / notrunning), time drops with
           AllowedTime vs the ETA they failed.
@@ -176,6 +182,38 @@ def cmd_budget(a):
 
 PSTART_RE = re.compile(r'\|PSTART\|plan=(\w+) t=\S+ f=(\d+) fac=(\w+)')
 PLAN_RE = re.compile(r'^(\d+) p(\d+) plan (\d+) (\S+) (for|ended) ?(.*)$')
+# a2h t02 kit (tools/probe_mod/a2f_budget): start number n and the end records of the same script instance (sid)
+REC_RE = re.compile(r'^A2FB1\|P\|([^|]*)\|\d+\|(PSTART|PRET|PEXIT|PFAIL)\|plan=(\w+) t=\S+ f=(\d+) fac=(\w+) (.*)\|END$')
+MJ_RE = re.compile(r'\|MJ\|tag=(\w+) t=\S+ f=(\d+) fac=(\w+) (.*)\|END$')
+
+
+def retail_plan_ends(paths, window):
+    """{(plan, fac): Counter(PEXIT / PFAIL / PRET / no_end / with_n)} over the given records.txt files (a2h kit only:
+    records with n=; older runs give an empty result)."""
+    out = collections.defaultdict(collections.Counter)
+    for path in paths or []:
+        starts, ends = {}, collections.defaultdict(set)
+        with open(path, encoding='latin-1') as f:
+            for line in f:
+                m = REC_RE.match(line.strip())
+                if not m or int(m.group(4)) > window:
+                    continue
+                kv = dict(t.split('=', 1) for t in m.group(6).split(' ') if '=' in t)
+                if 'n' not in kv:
+                    continue
+                key = (m.group(1), kv['n'])
+                if m.group(2) == 'PSTART':
+                    starts[key] = (m.group(3), m.group(5))
+                else:
+                    ends[key].add(m.group(2))
+        for key, pf in starts.items():
+            c = out[pf]
+            c['with_n'] += 1
+            for k in ends.get(key, ()):
+                c[k] += 1
+            if not ends.get(key):
+                c['no_end'] += 1
+    return out
 
 
 def norm_plan(name):
@@ -197,6 +235,13 @@ def cmd_plans(a):
     for (p, fac), n in sorted(rcount.items()):
         frames = sorted(f for (pp, f, ff) in retail if norm_plan(pp) == p and ff == fac)
         print('  %-40s %-10s %3d  (%.2f/min)  frames %s' % (p, fac, n, n / minutes, frames))
+    ends = retail_plan_ends(a.retail_records, window)
+    if ends:
+        print('== retail plan ends (a2h kit: PEXIT = ScriptExit, PFAIL = production failed, no_end = released / killed '
+              'or the record was lost)')
+        for (p, fac), c in sorted(ends.items()):
+            print('  %-40s %-10s starts %3d  PEXIT %3d  PFAIL %3d  PRET %3d  no_end %3d' % (
+                p, fac, c['with_n'], c['PEXIT'], c['PFAIL'], c['PRET'], c['no_end']))
     for path in a.port_log:
         starts, rel, ends = collections.Counter(), collections.Counter(), collections.Counter()
         with open(path, encoding='utf-8', errors='replace') as f:
@@ -244,6 +289,70 @@ def cmd_drops(a):
             print('    f=%6d at=%7.2f eta_el=%7.2f eta=%7.2f nominal=%7.2f age=%6.1f' % x)
 
 
+MJ_FLAGS = ['NMS', 'NTF', 'CRM', 'HES', 'AGM', 'HDS']
+MJ_SHOW = ['NMS', 'NTF', 'CRM', 'HES', 'HST', 'SST', 'FRT', 'ERT', 'AG', 'AGM', 'HDS', 'MNT', 'PLC']
+
+
+def cmd_major(a):
+    """Retail MajorItem flush / reclaim triggers (MJ records of the a2h kit) and the flush plan starts, against the
+    port's Flush / Reclaim plan starts in the same window."""
+    rows = {}
+    flush = set()
+    for path in a.retail_records:
+        with open(path, encoding='latin-1') as f:
+            for line in f:
+                m = MJ_RE.search(line)
+                if m and m.group(3) == a.faction and int(m.group(2)) <= a.window:
+                    kv = dict(t.split('=', 1) for t in m.group(4).split(' ') if '=' in t)
+                    rows[(int(m.group(2)), m.group(1))] = kv
+                    continue
+                m = PSTART_RE.search(line)
+                if m and m.group(1) == 'FlushMajorItemBudget' and m.group(3) == a.faction and int(m.group(2)) <= a.window:
+                    flush.add(int(m.group(2)))
+    keys = sorted(rows)
+    print('== retail %s MJ samples in frames 0..%d: %d (%s)' % (a.faction, a.window, len(keys),
+          ('frames %d .. %d' % (keys[0][0], keys[-1][0])) if keys else 'none: not an a2h-kit run'))
+
+    def on(v):
+        try:
+            return float(v) > 0
+        except (TypeError, ValueError):
+            return False
+    for k in MJ_FLAGS:
+        hit = [fr for (fr, _t) in keys if on(rows[(fr, _t)].get(k))]
+        print('  %-4s > 0 in %5d of %5d samples%s' % (k, len(hit), len(keys),
+              (' (first %d, last %d)' % (hit[0], hit[-1])) if hit else ''))
+    print('== changes of %s' % '/'.join(MJ_FLAGS))
+    last = None
+    n = 0
+    for key in keys:
+        v = rows[key]
+        sig = tuple(on(v.get(k)) for k in MJ_FLAGS)
+        if sig != last and n < a.limit:
+            print('  f=%6d %-2s %s' % (key[0], key[1], ' '.join('%s=%s' % (k, v[k]) for k in MJ_SHOW if k in v)))
+            n += 1
+        last = sig
+    print('== retail FlushMajorItemBudget plan starts (Flush_MajorItem_Budget or Reclaim_Excess_MajorItem_Budget): %d %s'
+          % (len(flush), sorted(flush)[:40]))
+    for path in a.port_log or []:
+        c = collections.Counter()
+        first = {}
+        with open(path, encoding='utf-8', errors='replace') as f:
+            for line in f:
+                m = PLAN_RE.match(line.strip())
+                if not m or m.group(5) != 'for' or int(m.group(1)) > a.window:
+                    continue
+                if 'FLUSHMAJORITEM' in norm_plan(m.group(4)) or 'MAJORITEM' in norm_plan(m.group(6)):
+                    key = (m.group(4), 'p' + m.group(2))
+                    c[key] += 1
+                    first.setdefault(key, int(m.group(1)))
+        print('== port %s: flush / reclaim plan starts in frames 0..%d' % (path, a.window))
+        for key, cnt in sorted(c.items()):
+            print('  %-50s %-4s %4d  first f=%d' % (key[0], key[1], cnt, first[key]))
+        if not c:
+            print('  none')
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -262,8 +371,14 @@ def main(argv=None):
     d.add_argument('--window', type=int, default=72000)
     d.add_argument('--all', action='store_true')
     d.add_argument('--limit', type=int, default=12)
+    j = sub.add_parser('major')
+    j.add_argument('--retail-records', nargs='+', required=True)
+    j.add_argument('--port-log', nargs='*')
+    j.add_argument('--faction', default='EMPIRE')
+    j.add_argument('--window', type=int, default=10 ** 9)
+    j.add_argument('--limit', type=int, default=60)
     a = ap.parse_args(argv)
-    {'budget': cmd_budget, 'plans': cmd_plans, 'drops': cmd_drops}[a.cmd](a)
+    {'budget': cmd_budget, 'plans': cmd_plans, 'drops': cmd_drops, 'major': cmd_major}[a.cmd](a)
     return 0
 
 

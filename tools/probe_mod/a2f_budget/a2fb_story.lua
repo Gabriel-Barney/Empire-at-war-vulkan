@@ -11,7 +11,9 @@
 --     BudgetFractionToBuild for ALL / Infrastructure / Offensive);
 --   * a full sample (SM + BF + SH: all categories, the shipped weight / trigger equations) once per second until
 --     120 s, every 5 s until 300 s (DONE); after that a full sample every 30 s for as long as the run lasts
---     (a2g t01: long runs until a template switch / Tech_Upgrade).
+--     (a2g t01: long runs until a template switch / Tech_Upgrade);
+--   * a2h t02: an MJ record (MajorItem flush / reclaim triggers and inputs) with every Empire sample, and the message
+--     TEXT_A2FB_LONG_DONE (record LONGDONE) at 1500 s = 25 galactic minutes, the length the MajorItem question needs.
 -- The AI's budget is initialised at the first service of its galactic context (AI_GALACTIC 1.1: template init, then
 -- budget init 0x6137b0), which can be after this script's first service: the first samples can therefore show the
 -- state before Init (zero pools: BudgetFractionToBuild 1e18) and the following ones the state after it.
@@ -19,6 +21,10 @@ require("PGStoryMode")
 
 A2FB_CANARY = "Mods\\A2fBudgetProbe\\A2FB_Canary_Story.txt"
 A2FB_FACS = { "Empire", "Rebel", "Underworld", "Pirates" }
+-- a2h t02: room for the MJ records and a long run (a2g's 20-minute run used 4870 of the core's default 8000)
+A2FB_MAX = 20000
+A2FB_LONG_T = 1500
+A2FB_LONG_DONE = false
 A2FB_LAST_FULL = -100
 A2FB_STOPPED = false
 A2FB_FIRST = true
@@ -106,6 +112,11 @@ function A2FB_Update()
 			A2FB_STOPPED = true
 			A2FB_Say("DONE", "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " records=" .. A2FB_Seq)
 			pcall(Game_Message, "TEXT_A2FB_DONE")
+		end
+		if t >= A2FB_LONG_T and not A2FB_LONG_DONE then
+			A2FB_LONG_DONE = true
+			A2FB_Say("LONGDONE", "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " records=" .. A2FB_Seq)
+			pcall(Game_Message, "TEXT_A2FB_LONG_DONE")
 		end
 		-- a2g t01 (long run until a template switch): keep a full sample every 30 s after DONE
 		if (t - A2FB_LAST_FULL) >= 29.999 then

@@ -2542,6 +2542,15 @@ void test_foc_campaign() {
     CHECK(uw != kNoIndex && d.rules.factions[uw].benefits_from_corruption && d.rules.factions[uw].hyperspace_speed_factor == 0.07f);
     const uint32_t emp = d.rules.find_faction("Empire");
     CHECK(emp != kNoIndex && d.rules.factions[emp].corruption_price_mult[1] == 0.9f);
+    // A2h t03: Maintenance_Cost (faction +0x3AC, type +0x798; variants inherit), read only by the AI upkeep tokens.
+    CHECK(emp != kNoIndex && d.rules.factions[emp].maintenance_cost == 0.25f && d.rules.factions[uw].maintenance_cost == 0.25f);
+    const uint32_t tartan = d.rules.find_type("Tartan_Patrol_Cruiser"), vic = d.rules.find_type("Victory_Destroyer");
+    const uint32_t accuser = d.rules.find_type("Accuser_Star_Destroyer"), sb_e1 = d.rules.find_type("Empire_Star_Base_1");
+    CHECK(tartan != kNoIndex && d.rules.types[tartan].maintenance_cost == 0.05f);
+    CHECK(vic != kNoIndex && d.rules.types[vic].maintenance_cost == 0.1f && d.rules.types[vic].build_cost == 3800);  // variant
+    CHECK(accuser != kNoIndex && d.rules.types[accuser].maintenance_cost == 0.3f && d.rules.types[accuser].build_cost == 5000 &&
+          d.rules.types[accuser].build_time_seconds == 90);  // Generic_Star_Destroyer's upkeep and time, its own cost
+    CHECK(sb_e1 != kNoIndex && d.rules.types[sb_e1].maintenance_cost == 0.0f);
     const uint32_t hard = d.rules.find_difficulty("Hard_Default");
     CHECK(hard != kNoIndex && d.rules.difficulties[hard].credit_multiplier == 1.2f);
     const uint32_t cg = d.rules.find_type("Crusader_Gunship");

@@ -10,6 +10,9 @@ Inputs
   budget_watch.jsonl the read-only memory watcher (a2f_watch.py): found / state / flag / chain events
   A2FB_TYPES.json    cost and build time of the probe structure types (written by build_a2f_mod.py)
 
+Outputs: report.txt / report.json, samples.tsv (pools), and since a2h t02 major.tsv (MJ: the MajorItem flush / reclaim
+triggers and inputs per Empire sample) and plans.tsv (one row per plan start with its PRET / PEXIT / PFAIL end records).
+
 How the pools are decoded (docs/re/AI_GALACTIC_TOKENS.md BudgetFractionToBuild, AI_GALACTIC_2.md section 3)
   value v = R / D with R = cost of the probe type, D = build time b x category income rate + category available
   credits (all categories: budget +0x68 income per second and the player's credits).  Two probe types with different
@@ -68,7 +71,7 @@ def build_samples(recs):
     samples = {}
     order = []
     for r in recs:
-        if r['kind'] not in ('PL', 'SM', 'BF', 'SH'):
+        if r['kind'] not in ('PL', 'SM', 'BF', 'SH', 'MJ'):
             continue
         f = r['f']
         key = (r['ch'], r['sid'], f.get('tag'), f.get('t'), f.get('fac'))
@@ -262,7 +265,180 @@ def analyse(recs, types, events):
                                                 'T': e.get('T'), 'refund': e.get('refund')})
             w['last_state'] = e
     res['watch'] = fl
+    res['plans'] = plan_runs(recs)
+    res['major'] = major_series(samples, types)
+    res['longdone'] = [r['f'].get('f') for r in recs if r['kind'] == 'LONGDONE']
     return res
+
+
+# ---- a2h t02: plan runs (PSTART + PRET / PEXIT / PFAIL) and the MajorItem flush / reclaim series (MJ) ----------------
+
+END_KINDS = ('PRET', 'PEXIT', 'PFAIL')
+MAJOR_FLAGS = ['NMS', 'NTF', 'CRM', 'HES', 'AGM', 'HDS']
+
+
+def plan_runs(recs):
+    """{'runs': [run], 'summary': {plan|fac: counts}}. A run is one PSTART with the end records of the same script
+    instance (channel, sid) and start number n. Runs without n (a2f / a2g records) are listed without ends."""
+    runs = []
+    by_key = {}
+    for r in recs:
+        if r['ch'] != 'P' or r['kind'] != 'PSTART':
+            continue
+        f = r['f']
+        run = {'plan': f.get('plan'), 'fac': f.get('fac'), 'f': num(f.get('f')), 't': num(f.get('t')),
+               'sid': r['sid'], 'n': f.get('n'), 'prev': f.get('prev'), 'spend': f.get('spend'),
+               'unalloc': f.get('unalloc'), 'cr': f.get('cr'), 'ends': []}
+        runs.append(run)
+        if run['n'] is not None:
+            by_key[(r['sid'], run['n'])] = run
+    orphans = []
+    for r in recs:
+        if r['ch'] != 'P' or r['kind'] not in END_KINDS:
+            continue
+        f = r['f']
+        e = {'kind': r['kind'], 'f': num(f.get('f')), 'age': num(f.get('age')), 'spend': f.get('spend'),
+             'unalloc': f.get('unalloc'), 'by': f.get('by'), 'line': f.get('line'), 'args': f.get('args'),
+             'text': r['text']}
+        run = by_key.get((r['sid'], f.get('n')))
+        if run is None:
+            orphans.append(dict(e, plan=f.get('plan'), fac=f.get('fac')))
+        else:
+            run['ends'].append(e)
+    # a run whose end record was lost from the scan: the next run of the same instance names its end in prev=
+    by_sid = {}
+    for run in runs:
+        by_sid.setdefault(run['sid'], []).append(run)
+    for lst in by_sid.values():
+        lst.sort(key=lambda x: int(x['n']) if (x['n'] or '').isdigit() else 0)
+        for a, b in zip(lst, lst[1:]):
+            a['next_prev'] = b['prev']
+    summary = {}
+    for run in runs:
+        key = '%s|%s' % (run['plan'], run['fac'])
+        s = summary.setdefault(key, {'starts': 0, 'PRET': 0, 'PEXIT': 0, 'PFAIL': 0, 'no_end': 0, 'no_end_confirmed': 0,
+                                     'with_n': 0, 'first_f': None, 'last_f': None})
+        s['starts'] += 1
+        if s['first_f'] is None or (run['f'] is not None and run['f'] < s['first_f']):
+            s['first_f'] = run['f']
+        if s['last_f'] is None or (run['f'] is not None and run['f'] > s['last_f']):
+            s['last_f'] = run['f']
+        if run['n'] is None:
+            continue
+        s['with_n'] += 1
+        kinds = [e['kind'] for e in run['ends']]
+        for k in END_KINDS:
+            if k in kinds:
+                s[k] += 1
+        if not kinds:
+            s['no_end'] += 1
+            if run.get('next_prev') == 'none':
+                s['no_end_confirmed'] += 1     # released by the goal system (thread killed), not a lost record
+    return {'runs': runs, 'summary': summary, 'orphan_ends': orphans}
+
+
+def major_series(samples, types):
+    """{faction: [{'ch', 'tag', 't', 'f', 'vals': {key: str}, 'major': decoded MajorItem pool or None}]} from the MJ
+    fields of the merged samples (sorted by time)."""
+    out = {}
+    for s in samples:
+        if s['fac'] not in a2fb_spec.MAJOR_FACTIONS:
+            continue
+        vals = {k: s['v'][k] for k in a2fb_spec.MAJOR_KEYS if k in s['v']}
+        if not vals:
+            continue
+        pools = decode_pools(s['v'], s['fac'], types)
+        out.setdefault(s['fac'], []).append({'ch': s['ch'], 'tag': s['tag'], 't': s['t'], 'f': s['f'], 'vals': vals,
+                                             'major': pools.get('MAJOR')})
+    for lst in out.values():
+        lst.sort(key=lambda x: (x['t'] if x['t'] is not None else -1, x['ch']))
+    return out
+
+
+def fi(x):
+    """A frame number for printing (int, or '-')."""
+    return '-' if x is None else int(x)
+
+
+def flag_on(v):
+    x = num(v)
+    return x is not None and x > 0
+
+
+def render_major(res):
+    L = ['', '== 5. MajorItem flush / reclaim (a2h t02; MJ record, A2G_T02_T04_PORT_VS_RETAIL.md section 4) ==']
+    L.append('   keys: NMS Needs_More_Space_Force_Globally, NTF Need_To_Flush_MajorItem_Budget (goal Flush_MajorItem_Budget),')
+    L.append('         CRM Can_Reclaim_Excess_MajorItem_Budget (goal Reclaim_Excess_...), HES Has_Enough_Space_Force_Globally,')
+    L.append('         FRT / ERT friendly / enemy space raw totals, HST / SST Variable_Human / Variable_Self.SpaceTotalUnnormalized,')
+    L.append('         AG / AGM ActiveGoals without / with Parameter_Category MajorItem, HDS HasUnit(Death_Star),')
+    L.append('         MNT / MNTU Maintenance, PLC / PLCU PlanetsControlled (skip = no human player, nil = no answer)')
+    if res.get('longdone'):
+        L.append('   25-minute mark (LONGDONE) reached at frame %s' % res['longdone'][0])
+    else:
+        L.append('   25-minute mark (LONGDONE) NOT reached: the run was shorter than 1500 s of galactic time')
+    if not res['major']:
+        L.append('   no MJ records (old kit, or the Empire is human / not sampled)')
+    for fac, rows in res['major'].items():
+        L.append('-- %s: %d samples with MJ, frames %s .. %s' % (fac, len(rows), fi(rows[0]['f']), fi(rows[-1]['f'])))
+        for k in MAJOR_FLAGS:
+            on = [r for r in rows if flag_on(r['vals'].get(k))]
+            skip = sum(1 for r in rows if r['vals'].get(k) in ('skip', 'nil', 'ERR'))
+            L.append('   %-4s > 0 in %d of %d samples%s%s' % (
+                k, len(on), len(rows), (' (first at frame %s, last %s)' % (fi(on[0]['f']), fi(on[-1]['f']))) if on else '',
+                (', %d skip / nil / ERR' % skip) if skip else ''))
+        L.append('   changes of %s (frame: values):' % '/'.join(MAJOR_FLAGS))
+        last = None
+        shown = 0
+        for r in rows:
+            sig = tuple(flag_on(r['vals'].get(k)) for k in MAJOR_FLAGS)
+            if sig != last or r is rows[0] or r is rows[-1]:
+                if shown < 80:
+                    v = r['vals']
+                    L.append('     f=%s [%s %s] %s' % (
+                        int(r['f']) if r['f'] is not None else '?', r['ch'], r['tag'],
+                        ' '.join('%s=%s' % (k, v[k]) for k in a2fb_spec.MAJOR_KEYS if k in v)))
+                shown += 1
+            last = sig
+        if shown > 80:
+            L.append('     ... %d more changes in major.tsv' % (shown - 80))
+    fl = [r for r in res['plans']['runs'] if r['plan'] == 'FlushMajorItemBudget']
+    L.append('   FlushMajorItemBudget plan runs: %d' % len(fl))
+    for r in fl[:20]:
+        L.append('     f=%s fac=%s spend=%s unalloc=%s ends=%s' % (
+            fi(r['f']), r['fac'], r['spend'], r['unalloc'],
+            ','.join('%s@%s' % (e['kind'], fi(e['f'])) for e in r['ends']) or '-'))
+    # MajorItem pool around each Flush run (PS = before, PE = after; full samples of that plan)
+    for fac, rows in res['major'].items():
+        pe = [r for r in rows if r['tag'] in ('PS', 'PE') and r['major']]
+        for r in pe[:20]:
+            m = r['major']
+            L.append('     %s f=%s MajorItem pool %s' % (r['tag'], fi(r['f']), (
+                'a=%.1f r=%.3f' % (m['avail'], m['rate'])) if m.get('state') == 'ok' else m.get('state')))
+    return L
+
+
+def render_plans(res):
+    L = ['   per plan (a2h t02: end records; no_end = no PRET / PEXIT / PFAIL for that start: released by the goal system '
+         'or the record was lost; confirmed = the next start of the same script says prev=none):']
+    summ = res['plans']['summary']
+    if not summ:
+        return L + ['     none']
+    L.append('     %-42s %-11s %6s %6s %6s %6s %7s %9s %8s %8s' % ('plan', 'faction', 'starts', 'PEXIT', 'PFAIL', 'PRET',
+                                                               'no_end', 'confirmed', 'first_f', 'last_f'))
+    for key in sorted(summ):
+        plan, fac = key.split('|', 1)
+        s = summ[key]
+        L.append('     %-42s %-11s %6d %6d %6d %6d %7d %9d %8s %8s' % (
+            plan, fac, s['starts'], s['PEXIT'], s['PFAIL'], s['PRET'], s['no_end'], s['no_end_confirmed'],
+            int(s['first_f']) if s['first_f'] is not None else '-', int(s['last_f']) if s['last_f'] is not None else '-'))
+    if res['plans']['orphan_ends']:
+        L.append('     end records whose PSTART was not found (lost from the scan): %d' % len(res['plans']['orphan_ends']))
+    cp = [r for r in res['plans']['runs'] if r['plan'] in ('ConquerPiratePlan', 'LiftBlockadePlan')]
+    for r in cp[:30]:
+        L.append('     %s f=%s fac=%s ends=%s' % (r['plan'], fi(r['f']), r['fac'], ', '.join(
+            '%s@%s age=%s%s' % (e['kind'], fi(e['f']), e['age'], (' line=%s' % e['line']) if e.get('line') else '')
+            for e in r['ends']) or '-'))
+    return L
 
 
 def render(res):
@@ -317,6 +493,7 @@ def render(res):
                 p.get('cr')))
     else:
         L.append('   none recorded (no hooked plan started, or the plan scripts did not load)')
+    L += render_plans(res)
     L.append('')
     L.append('== 3. Budget block watcher (memory, read only): reset flag +0x74 ==')
     if not res['watch']:
@@ -352,6 +529,7 @@ def render(res):
     L.append('Reset flag: see section 3 (its setter is the transition 0 -> nonzero; compare its frame with the Lua '
              'samples around it: a template switch shows as a change of the SH trigger values, the first service as '
              'the init byte change).')
+    L += render_major(res)
     return '\n'.join(L) + '\n'
 
 
@@ -369,6 +547,31 @@ def write_tsv(res, path):
                                    str(r['CU'])] + cells) + '\n')
 
 
+def write_major_tsv(res, path):
+    """a2h t02: one row per sample with MJ fields (the MajorItem flush / reclaim triggers and inputs)."""
+    with open(path, 'w') as f:
+        f.write('faction\tchannel\ttag\tt\tframe\t' + '\t'.join(a2fb_spec.MAJOR_KEYS) +
+                '\tMAJOR_avail\tMAJOR_rate\tMAJOR_state\n')
+        for fac, rows in res['major'].items():
+            for r in rows:
+                m = r['major'] or {}
+                f.write('\t'.join([fac, r['ch'], str(r['tag']), str(r['t']), str(r['f'])] +
+                                  [r['vals'].get(k, '') for k in a2fb_spec.MAJOR_KEYS] +
+                                  [str(m.get('avail', '')), str(m.get('rate', '')), m.get('state', '')]) + '\n')
+
+
+def write_plans_tsv(res, path):
+    """a2h t02: one row per plan run (PSTART) with its end records."""
+    with open(path, 'w') as f:
+        f.write('plan\tfaction\tframe\tsid\tn\tprev\tspend\tunalloc\tcredits\tends\n')
+        for r in res['plans']['runs']:
+            ends = ';'.join('%s@%s age=%s%s' % (e['kind'], e['f'], e['age'],
+                                                (' by=%s line=%s' % (e['by'], e['line'])) if e.get('by') else '')
+                            for e in r['ends'])
+            f.write('\t'.join(str(x) for x in (r['plan'], r['fac'], r['f'], r['sid'], r['n'], r['prev'], r['spend'],
+                                                r['unalloc'], r['cr'], ends)) + '\n')
+
+
 def run(records, watch, types_path, out_dir):
     recs = parse_records(records) if records and os.path.exists(records) else []
     types = json.load(open(types_path)) if types_path and os.path.exists(types_path) else {}
@@ -384,6 +587,8 @@ def run(records, watch, types_path, out_dir):
     with open(os.path.join(out_dir, 'report.json'), 'w') as f:
         json.dump(res, f, indent=1, default=str)
     write_tsv(res, os.path.join(out_dir, 'samples.tsv'))
+    write_major_tsv(res, os.path.join(out_dir, 'major.tsv'))
+    write_plans_tsv(res, os.path.join(out_dir, 'plans.tsv'))
     return res, text
 
 

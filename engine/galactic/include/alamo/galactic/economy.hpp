@@ -87,6 +87,7 @@ struct FactionRules {
     bool is_playable = false;               // Is_Playable (+0x20a8)
     bool benefits_from_corruption = false;  // Benefits_From_Corruption (+0x10b)
     float hyperspace_speed_factor = 0.07f;  // Hyperspace_Speed_Factor (+0x3b0); default [L] (every vanilla faction sets 0.07)
+    float maintenance_cost = 0.0f;          // Maintenance_Cost (+0x3AC): AI upkeep factor only (A2H_GALACTIC_AI_RE §3) [H]
     ForceSide force_alignment = ForceSide::Neutral;  // Force_Alignment (+0x110)
     std::array<float, 2> corruption_time_mult{1.0f, 1.0f};   // Corruption_Galactic_Production_Time_Multipliers
     std::array<float, 2> corruption_price_mult{1.0f, 1.0f};  // Corruption_Galactic_Production_Price_Multipliers

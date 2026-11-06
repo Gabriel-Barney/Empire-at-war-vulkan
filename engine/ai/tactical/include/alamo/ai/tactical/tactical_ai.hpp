@@ -518,9 +518,9 @@ float tactical_build_time_multiplier(const std::vector<TacticalAiDifficulty>& di
 //   0x6c0450(PP): S = the float sum, in selection order, of btime(T, none) over every selected type (every pick, whatever
 //   its source: free store, reinforcement pool, build pad, production) [H structure], then S x the multiplier above.
 //   btime(T, none) = 0x371230 without a planet = float(uint32(float(Build_Time_Seconds +0x890) x Production_Speed_Factor))
-//   (GALACTIC_ECONOMY §2.3 T0) [H for 0x371230; M that the tactical branch of 0x6c0450 calls the same 0x371230: the
-//   read lists the multiplier field as its only mode branch, so Tactical_Build_Time_Seconds (+0xa00, 0x496f00) is not
-//   used]. A pick whose type is out of range adds 0 [port].
+//   (GALACTIC_ECONOMY §2.3 T0) [H; 0x6c0450 calls the same 0x371230 in every mode, its only mode branch is the
+//   multiplier field, and Tactical_Build_Time_Seconds (+0xa00, 0x496f00) is not read: A2H_T06_TACTICAL_ETA §3].
+//   A pick whose type is out of range adds 0 [port].
 float tactical_nominal_time(const std::vector<TacticalPpPick>& picks, const std::vector<PerceptionType>& types,
                             float production_speed_factor, float multiplier);
 

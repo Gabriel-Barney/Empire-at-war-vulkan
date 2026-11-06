@@ -154,16 +154,35 @@ GalacticSnapshot snapshot_from_sim(const galactic::GalacticSim& sim, bool ai_use
 
 class GalacticSimTokenResolver final : public TokenResolver {
 public:
+    // The AI build task of a planet's AIPlanetBuildQueue (0x559b40(planet +0xD0, queue) +0x18) as BudgetFractionToBuild
+    // 0x667120 reads it (A2H_GALACTIC_AI_RE §2 step 4).
+    struct QueueTask {
+        enum class Kind : uint8_t {
+            None,            // no task: the token returns 0
+            Ended,           // ended (+0xA8), not reclaimed: the entry is ignored
+            EndedReclaimed,  // ended and taken by the PAYG reclaim (+0xD9): the token returns 0
+            Live,            // a running task: its goal's budget entry below
+        };
+        Kind kind = Kind::None;
+        bool budget = false;  // the goal has a BudgetedGoalStruct (else alloc = a = c = h = 0)
+        float alloc = 0.0f, a = 0.0f, c = 0.0f, h = 0.0f;  // +0x2C, +0x38, +0x3C, +0x30
+    };
     struct Hooks {
-        // Variable_Self.ActiveGoals (0x6e0490): active goals whose category is in the Parameter_Category names (empty = all).
-        std::function<int32_t(int32_t player, std::span<const std::string_view> categories)> active_goals;
+        // Variable_<root>.ActiveGoals (0x6e0490, A2H_GALACTIC_AI_RE §1): `key` = the OR of the Parameter_Category names'
+        // AIGoalCategoryType values; out = the size of the root player's active-set vector of the category whose value is
+        // `key` (0 when none). false (the token fails) for an unknown name or a player without a galactic AI.
+        std::function<bool(int32_t player, std::span<const std::string_view> categories, int32_t& out)> active_goals;
         bool story_campaign = false;                          // Game.IsStoryCampaign
         // Apply_Markup accumulator of `player`'s AI target for `planet` (+0x80).
         std::function<double(int32_t player, int32_t planet)> markup;
         // AI CreditsUnnormalized: the galactic budget total (false = no galactic AI for that player).
         std::function<bool(int32_t player, double& out)> ai_credits;
-        // Budget income rate / available of `category` ("" = all) for BudgetFractionToBuild (false = none).
-        std::function<bool(int32_t player, std::string_view category, double& rate, double& available)> budget;
+        // BudgetFractionToBuild's rate and pool (0x667120 step 5): `category` "" = budget +0x68 and the player's credits;
+        // else the category's income rate I (+0x50) and pool P (+0x4C), 0 / 0 for a name without a budget entry.
+        // false = no goal system (the token fails).
+        std::function<bool(int32_t player, std::string_view category, float& rate, float& pool)> budget;
+        // The AI build task of `planet`'s queue `queue` (0 ground, 1 space) for BudgetFractionToBuild (null = None).
+        std::function<QueueTask(int32_t player, int32_t planet, uint32_t queue)> queue_task;
         // AI difficulty index (0 Easy, 1 Normal, 2 Hard; -1 = no AI system).
         std::function<int32_t(int32_t player)> difficulty;
         // Script_<name>.Evaluate (AI_GALACTIC_2 §4.4); null = fails.

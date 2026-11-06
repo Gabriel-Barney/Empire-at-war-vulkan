@@ -99,10 +99,15 @@ struct QueueReservation {
     uint32_t type = gal::kNoIndex;
     float time = 0.0f;
 };
+// PlanetBuildQueue::current while the production of a task whose plan ended goes on (current_queue_id >= 0): the
+// original keeps the ended task (+0xA8) on the queue; the port keeps only whether the PAYG reclaim took it (+0xD9), which
+// BudgetFractionToBuild reads (A2H_GALACTIC_AI_RE §2 step 4) [port].
+inline constexpr int32_t kQueueTaskEnded = -1;
+inline constexpr int32_t kQueueTaskEndedReclaimed = -2;
 struct PlanetBuildQueue {
     int64_t last_run = 0;
     std::vector<int32_t> tasks;  // claimed build tasks (+0x10), claim order
-    int32_t current = -1;        // +0x20 producing task (-1 idle)
+    int32_t current = -1;        // +0x20 producing task (< 0 none: kQueueTaskEnded / kQueueTaskEndedReclaimed)
     int32_t current_queue_id = -1;
     uint32_t current_type = gal::kNoIndex;
     std::vector<QueueReservation> reservations;
@@ -193,7 +198,9 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
          GameRandom& r, const AiDefinitions& d, const EquationSet& e, std::vector<GalacticAiTypeInfo> ti, AiOrderSink snk,
          GalacticAiConfig c);
     GalacticSimTokenResolver::Hooks make_hooks();
-    int32_t active_goals(int32_t p, std::span<const std::string_view> categories) const;  // Variable_Self.ActiveGoals
+    bool active_goals(int32_t p, std::span<const std::string_view> categories, int32_t& out) const;  // <root>.ActiveGoals
+    // BudgetFractionToBuild's view of a planet queue's AI build task (A2H_GALACTIC_AI_RE §2 step 4).
+    GalacticSimTokenResolver::QueueTask queue_task(PlanetIndex planet, uint32_t queue) const;
 
     gal::GalacticSim& sim;
     objects::ObjectStore& store;

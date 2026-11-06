@@ -162,8 +162,8 @@ void GalacticAiWorld::Impl::end_plan_builds(int32_t plan) {
             for (PlanetBuildQueue& q : pq) {
                 q.tasks.erase(std::remove(q.tasks.begin(), q.tasks.end(), b.id), q.tasks.end());
                 // A production in progress keeps the queue busy; its object goes to the free store (signals 3 / 4
-                // with the task gone).
-                if (q.current == b.id) q.current = -1;
+                // with the task gone). Whether the PAYG reclaim took the task stays readable (BudgetFractionToBuild).
+                if (q.current == b.id) q.current = b.reclaimed ? kQueueTaskEndedReclaimed : kQueueTaskEnded;
             }
         it = builds.erase(it);
     }
@@ -291,6 +291,7 @@ void GalacticAiWorld::Impl::market_planet(PlanetIndex p) {
                 bool there = false;
                 for (const gal::BuildEntry& e : sim.queue_of(p, qi)) there = there || (e.type == Q.current_type && e.player == owner);
                 if (!there) {
+                    Q.current = kQueueTaskEnded;
                     Q.current_queue_id = -1;
                     Q.current_type = gal::kNoIndex;
                 }

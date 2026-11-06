@@ -1,6 +1,6 @@
 -- ==== a2f t07 budget probe: shared core (tools/probe_mod/a2f_budget/a2fb_core.lua) ====
 -- Prepended (after the generated header: A2FB_CH, A2FB_MODEQ, A2FB_SPEC, A2FB_COMMON) to every probe script: the
--- story plot script, the galactic free store and the Infrastructure plan scripts. Lua 5.0, and the free store has NO
+-- story plot script, the galactic free store and the hooked plan scripts. Lua 5.0, and the free store has NO
 -- math library (docs/re, s78g), so nothing here calls math.*, '#', '%' or string.rep.
 --
 -- Read-only: no GameRandom, no orders, no spawns, no story events. Every engine call is inside pcall; an evaluation
@@ -139,6 +139,7 @@ end
 --   SM  cr=credits +  common + small BFB group: CU, NET, B1/B2 for ALL, INFRA, OFF   (mod equations)
 --   BF  the remaining BFB categories (full samples only)
 --   SH  the shipped budget-weight / trigger equations (full samples only)
+--   MJ  a2h t02: MajorItem flush / reclaim triggers and inputs (every sample; factions with spec.major: Empire)
 -- key B<k><CAT> = A2FB_<FAC>_BFB_<k>_<CAT> = BudgetFractionToBuild of probe type k in category CAT (CAT ALL = no
 -- Parameter_Category). Decoded by a2f_report.py.
 function A2FB_Sample(tag, p, full)
@@ -175,6 +176,21 @@ function A2FB_Sample(tag, p, full)
 			end
 		end
 		A2FB_Say("SH", s)
+	end
+	-- a2h t02: MajorItem flush / reclaim triggers and inputs, every sample (small and full) of the factions that have
+	-- spec.major (Empire). A mod equation entry exists only when the mod equation file is in use.
+	if spec.major ~= nil then
+		local s = head
+		local hx = A2FB_HumanExists()
+		for i = 1, table.getn(spec.major) do
+			local e = spec.major[i]
+			if e[3] and not hx then
+				s = s .. " " .. e[1] .. "=skip"
+			else
+				s = s .. " " .. e[1] .. "=" .. A2FB_Eval(e[2], p)
+			end
+		end
+		A2FB_Say("MJ", s)
 	end
 end
 -- ==== end of the shared core ====

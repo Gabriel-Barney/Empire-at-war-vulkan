@@ -1193,17 +1193,18 @@ struct GalacticSimTokenResolver::Impl {
     }
     double player_total(int32_t pl, bool space, uint64_t cat) const {
         double s = 0.0;
-        const uint64_t capital = ai_category_bit("Capital");
         player_objects(pl, [&](ObjectHandle u) {
             const uint32_t t = st.type(u);
             if (t >= rules.types.size()) return;
             const gal::UnitKind kind = rules.types[t].kind;
+            // A galactic starbase is a type pointer on the planet (PD +0x140), not a GOM object, so 0x66b1c0's object
+            // walk never reaches it: neither its power nor its members count (A2GAL_READINGS §2.1; A2H_T02_SPACE_TOTAL:
+            // retail HST 21135 / SST 24250 fit exactly without starbases) [H].
+            if (kind == gal::UnitKind::StarBase) return;
             if (space) {
-                if (space_kind(kind)) {
-                    if ((type_mask(t) & cat) != 0) s += power(t);
-                } else if (kind == gal::UnitKind::StarBase && (cat & capital) != 0) {
-                    s += power(t);  // structures by +0x1658 (default Capital) [H]; orbital dummies excluded [port n/a]
-                }
+                // The structure branch tests +0x1658 = Garrison_Category, which holds only Infantry / Vehicle in the
+                // shipped XML, so it adds 0 for every vanilla type [M] (A2H_T02_SPACE_TOTAL).
+                if (space_kind(kind) && (type_mask(t) & cat) != 0) s += power(t);
             } else if (ground_kind(kind) && (type_mask(t) & cat) != 0) {
                 s += power(t);  // DUMMY_GROUND_COMPANY only
             }
@@ -1223,6 +1224,32 @@ struct GalacticSimTokenResolver::Impl {
             if (v > 0.0) ++n;
         }
         return true;
+    }
+    // MaintenanceUnnormalized 0x669420 (A2H_GALACTIC_AI_RE §3) [H]: 0 for a neutral faction; for Self, over the player's
+    // fleets (orbiting and in transit), every member by its type (a company by its company type): k = type
+    // Maintenance_Cost x faction Maintenance_Cost (float); when k != 0 and btime(T, no planet) != 0, + (cost / btime / 30) x k
+    // (float terms, double sum). Surface units, starbases and structures add nothing. [port] Another root player: the
+    // planet-force sum Target.EnemyForce.MaintenanceUnnormalized (0x6daf20, body unread) is 0; no shipped equation uses it.
+    double maintenance_unnormalized(int32_t pl, bool self) const {
+        if (!valid_player(pl) || neutral(pl) || !self) return 0.0;
+        const uint32_t f = players[static_cast<size_t>(pl)].faction;
+        const float fm = f < rules.factions.size() ? rules.factions[f].maintenance_cost : 0.0f;
+        double s = 0.0;
+        for (const gal::FleetState& fl : sim.fleets()) {
+            if (!fl.alive || fl.owner != pl) continue;
+            for (const ObjectHandle u : fl.contents) {
+                if (!st.alive(u)) continue;
+                const uint32_t t = st.type(u);
+                if (t >= rules.types.size()) continue;
+                const gal::TypeInfo& ti = rules.types[t];
+                const float k = ti.maintenance_cost * fm;
+                if (k == 0.0f) continue;
+                const float bt = gal::econ::build_time_t0(ti.build_time_seconds, rules.constants.production_speed_factor);
+                if (bt == 0.0f) continue;
+                s += static_cast<double>(static_cast<float>(ti.build_cost) / bt / static_cast<float>(kAiFps) * k);
+            }
+        }
+        return s;
     }
     double gross_income(int32_t pl) const {
         double s = 0.0;
@@ -1359,27 +1386,57 @@ struct GalacticSimTokenResolver::Impl {
             if (!self) return false;  // Self only [H]
             return out = 0.0, true;   // fog off: TimeLastSeen = 0
         }
-        if (k == "BUDGETFRACTIONTOBUILD")
+        if (k == "BUDGETFRACTIONTOBUILD")  // 0x667120 (A2H_GALACTIC_AI_RE §2) [H]
             return leaf("P:BUDGETFRACTIONTOBUILD", pl, 5, params, [&](double& v) {
-                if (!self) {
+                if (!self) {  // step 1: another root player -> 0
                     v = 0.0;
                     return true;
                 }
+                if (!r.hooks_.budget) return false;  // no goal system
+                // Step 2: Parameter_Type (absent / unknown: fail); Parameter_Category default -1 = every category.
                 const std::vector<std::string_view> names = param_texts(params, "Parameter_Type");
                 const uint32_t t = names.empty() ? gal::kNoIndex : rules.find_type(names[0]);
-                if (t == gal::kNoIndex || !r.hooks_.budget) return false;
+                if (t == gal::kNoIndex) return false;
                 const std::vector<std::string_view> cats = param_texts(params, "Parameter_Category");
-                double rate = 0.0, avail = 0.0;
-                if (!r.hooks_.budget(pl, cats.empty() ? std::string_view{} : cats[0], rate, avail)) return false;
-                const double R = static_cast<double>(rules.types[t].build_cost);  // [port] no in-progress reduction
-                // D's build time is 0x371230 without a planet: T0 = truncated Build_Time_Seconds x Production_Speed_Factor
-                // (GALACTIC_ECONOMY §2.3, a2g t03) [H]; [port] not min'd with an in-progress item's remaining time.
-                const double bt = static_cast<double>(
-                    gal::econ::build_time_t0(rules.types[t].build_time_seconds, rules.constants.production_speed_factor));
-                const double D = bt * rate + avail;
-                if (R < 0.0001) v = 0.0;
-                else if (D <= 0.0) v = kNever;
-                else v = R / D;
+                float rate = 0.0f, pool = 0.0f;
+                if (!r.hooks_.budget(pl, cats.empty() ? std::string_view{} : cats[0], rate, pool)) return false;
+                // Step 3: R = cost and T = btime without a planet (T0, GALACTIC_ECONOMY §2.3); queue q as the planet queues.
+                const gal::TypeInfo& ti = rules.types[t];
+                const float cost = static_cast<float>(ti.build_cost);
+                float R = cost;
+                float T = gal::econ::build_time_t0(ti.build_time_seconds, rules.constants.production_speed_factor);
+                const uint32_t q = ti.build_cost >= 1 && sim.queue_kind(t) == gal::kGroundQueue ? 0u : 1u;
+                bool inprog = false;
+                // Step 4: the head entry of queue q of every target-list planet, in list order.
+                for (size_t p = 0; p < planets.size(); ++p) {
+                    if (!planets[p].is_planet) continue;
+                    const std::vector<gal::BuildEntry>& queue = planets[p].queue[q];
+                    if (queue.empty()) continue;
+                    const gal::BuildEntry& e = queue.front();
+                    if (e.type != t || e.player != pl) continue;
+                    // p = clamp(1 - remaining (cached at the last advance) / T, 0, 1) [H]; [port] a 0 build time is done.
+                    const float prog = e.build_time > 0.0f ? std::clamp(1.0f - e.remaining / e.build_time, 0.0f, 1.0f) : 1.0f;
+                    const int64_t left = std::max<int64_t>(0, static_cast<int64_t>(e.start) + e.duration - sim.frame());
+                    const float rem = static_cast<float>(left) / static_cast<float>(kAiFps);  // live timer (0x4ad310)
+                    const QueueTask task = r.hooks_.queue_task ? r.hooks_.queue_task(pl, static_cast<int32_t>(p), q) : QueueTask{};
+                    if (task.kind == QueueTask::Kind::None || task.kind == QueueTask::Kind::EndedReclaimed) {
+                        v = 0.0;  // the whole token returns 0 at once [H]
+                        return true;
+                    }
+                    if (task.kind == QueueTask::Kind::Ended) continue;
+                    R = std::min(R, (1.0f - prog) * cost);
+                    R = std::min(R, task.alloc);                    // 0x6928c0 (0 without a budget)
+                    R = R - std::min(task.alloc, task.a + task.c);  // 0x692ca0: the goal's "have"
+                    T = std::min(T, rem);
+                    T = std::min(T, std::max(task.h, 0.0f));        // 0x692840 (0 without a budget)
+                    inprog = true;
+                }
+                // Steps 5-6: D = (double)(T x rate) (+ pool when nothing is in progress); R / D, 1e18f for D <= 0.
+                double D = static_cast<double>(T * rate);
+                if (!inprog) D += static_cast<double>(pool);
+                if (R < 0.0001f) v = 0.0;
+                else if (D > 0.0) v = static_cast<double>(R) / D;
+                else v = static_cast<double>(1.0e18f);
                 return true;
             }, out);
         if (k == "CANADVANCETECH")
@@ -1413,7 +1470,8 @@ struct GalacticSimTokenResolver::Impl {
             }, out);
         if (k == "GROSSINCOMEUNNORMALIZED" || k == "NETINCOMEUNNORMALIZED")
             return leaf(std::string("P:") + std::string(k), pl, 7, params, [&](double& v) {
-                v = gross_income(pl);  // net = gross - maintenance (0) [port]
+                v = gross_income(pl);  // credits per income cycle (0x667fb0) [H]
+                if (k == "NETINCOMEUNNORMALIZED") v -= maintenance_unnormalized(pl, self);  // 0x66a420: Gross - Unn [H]
                 return true;
             }, out);
         if (k == "GROSSINCOMENBPTM" || k == "GROSSINCOMENBTF" || k == "NETINCOMENBPTM" || k == "NETINCOMENBTF")
@@ -1424,10 +1482,20 @@ struct GalacticSimTokenResolver::Impl {
                 } else {
                     for (size_t q = 0; q < players.size(); ++q) den = std::max(den, gross_income(static_cast<int32_t>(q)));  // [L]
                 }
-                v = normalise(gross_income(pl), den);
+                double num = gross_income(pl);
+                if (k.substr(0, 3) == "NET") num -= maintenance_unnormalized(pl, self);  // Net / ... [M]
+                v = normalise(num, den);
                 return true;
             }, out);
-        if (k == "MAINTENANCE" || k == "MAINTENANCEUNNORMALIZED") return out = 0.0, true;  // [port] no upkeep model
+        if (k == "MAINTENANCE" || k == "MAINTENANCEUNNORMALIZED")  // 0x669110 / 0x669420 (A2H_GALACTIC_AI_RE §3) [H]
+            return leaf(std::string("P:") + std::string(k), pl, 7, params, [&](double& v) {
+                v = maintenance_unnormalized(pl, self);
+                if (k == "MAINTENANCE") {  // Unn / GrossIncomeUnnormalized, 0 when the gross is 0
+                    const double g = gross_income(pl);
+                    v = g == 0.0 ? 0.0 : v / g;
+                }
+                return true;
+            }, out);
         if (k == "TECHLEVEL") return out = ps.tech_level, true;
         if (k == "ISFACTION") return is_faction(pl, params, out);
         if (k == "ISDIFFICULTY") {
@@ -1469,9 +1537,22 @@ struct GalacticSimTokenResolver::Impl {
                 v = b2d(n <= 0);
                 return true;
             }, out);
-        if (k == "ACTIVEGOALS") {  // 0x6e0490: Parameter_Category mask (AI_GALACTIC_TOKENS) [H]; a2g F1
-            const std::vector<std::string_view> cats = param_texts(params, "Parameter_Category");
-            return out = r.hooks_.active_goals ? r.hooks_.active_goals(pl, cats) : 0.0, true;
+        if (k == "ACTIVEGOALS") {  // 0x6e0490 (A2H_GALACTIC_AI_RE §1) [H]
+            // Exactly one Parameter_Category holding the category value: none, or a repeated parameter (a list value),
+            // fails the token (0x5f4780 has no default) [H / M].
+            const Param* cat = nullptr;
+            int32_t n_cat = 0;
+            for (const Param& p : params)
+                if (ai_iequal(p.name, "Parameter_Category")) {
+                    cat = &p;
+                    ++n_cat;
+                }
+            if (n_cat != 1 || !r.hooks_.active_goals) return false;
+            const std::vector<std::string_view> names = param_texts(std::span<const Param>(cat, 1), "Parameter_Category");
+            if (names.empty()) return false;
+            int32_t n = 0;
+            if (!r.hooks_.active_goals(pl, names, n)) return false;
+            return out = static_cast<double>(n), true;
         }
         if (k == "STORYTRIGGER") {
             const std::vector<std::string_view> n = param_texts(params, "Parameter_Name");

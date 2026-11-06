@@ -67,6 +67,9 @@ def spec_checks(z):
         for n, _k in lst:
             if not re.search(r'<%s>' % re.escape(n), all_eq, re.I):
                 missing.append(n)
+    for n, _k, _h in a2fb_spec.MAJOR_SHIPPED:
+        if not re.search(r'<%s>' % re.escape(n), all_eq, re.I):
+            missing.append(n)
     check('spec: shipped equations exist', not missing, str(missing))
     galactic = [t for n, t in eqtext.items() if 'LAND' not in n and 'SPACE' not in n]
     check('spec: galactic equation files have no # operator',
@@ -83,11 +86,16 @@ def spec_checks(z):
         t = zread(z, names, 'DATA/SCRIPTS/AI/%s.LUA' % name.upper())
         check('spec: plan %s defines %s' % (name, thread),
               re.search(r'function\s+%s\s*\(' % thread, t) is not None)
+    check('spec: a2h plans hooked (HVF, AdvancedVF, LiftBlockade, FlushMajorItem, ConquerPirate)',
+          {'BuildBaseComponentHeavyVehicleFactory', 'BuildBaseComponentAdvancedVehicleFactory', 'LiftBlockadePlan',
+           'FlushMajorItemBudget', 'ConquerPiratePlan'} <= {n for n, _t in build_a2f_mod.PLANS})
     pe = a2fb_spec.patch_equation_file(zread(z, names, a2fb_spec.PROBE_EQ_FILE.replace('\\', '/')))
     try:
         root = ET.fromstring(pe)
         n = [e.tag for e in root if e.tag.startswith('A2FB_')]
-        check('spec: patched equation file is XML with %d probe equations' % (2 + 36), len(n) == 2 + 36, str(len(n)))
+        want = a2fb_spec.probe_equation_count()
+        check('spec: patched equation file is XML with %d probe equations' % want, len(n) == want == 2 + 36 + 9,
+              str(len(n)))
         check('spec: shipped equations are kept', root.find('Roaming_Empire_Fleet_Target') is not None)
         bad = [e.tag for e in root if e.tag.startswith('A2FB_') and '#' in (e.text or '')]
         check('spec: probe equations have no #', not bad)
@@ -150,6 +158,12 @@ A2_SHIPPED = {
 	BasicRebelOffensiveBudgetAllocation = 7, BasicRebelDefensiveBudgetAllocation = 1,
 	BasicRebelInformationBudgetAllocation = 1, BasicRebelInfrastructureBudgetAllocation = 5,
 	Underworld_Offensive_Budget_Allocation = 9, Underworld_Infrastructure_Budget_Allocation = 4,
+	-- a2h t02 (MJ)
+	Needs_More_Space_Force_Globally = 1, Need_To_Flush_MajorItem_Budget = 1, Can_Reclaim_Excess_MajorItem_Budget = 0,
+	Has_Enough_Space_Force_Globally = 0, Friendly_Global_Space_Unit_Raw_Total = 52600,
+	Enemy_Global_Space_Unit_Raw_Total = 61000, A2FB_HumanSpaceTotal = 70000, A2FB_SelfSpaceTotal = 52600,
+	A2FB_ActiveGoals = 5, A2FB_ActiveGoalsMajor = 0, A2FB_HasDeathStar = 0, A2FB_Maintenance = 0.12,
+	A2FB_PlanetsControlled = 0.3,
 }
 A2_PLAYERS = {}
 local function mkplayer(n)
@@ -196,7 +210,7 @@ Base_Definitions()
 local main_co = coroutine.create(main)
 local last = -100
 local services = 0
-for frame = 0, 9600 do
+for frame = 0, 46000 do
 	A2_T = frame / 30
 	if (A2_T - last) > ServiceRate then
 		last = A2_T
@@ -239,7 +253,8 @@ def story_test(lua, lib, out, types):
     check('story: lua exit 0, no MAIN_ERROR', rc == 0 and 'MAIN_ERROR' not in out_text, (text + out_text)[:600])
     check('story: state machine ran A2FB_State', 'STATE A2FB_State' in out_text)
     check('story: canary call + game messages', 'CANARYCALL Mods\\A2fBudgetProbe\\A2FB_Canary_Story.txt' in out_text
-          and 'GAME_MESSAGE TEXT_A2FB_LOADED' in out_text and 'GAME_MESSAGE TEXT_A2FB_DONE' in out_text)
+          and 'GAME_MESSAGE TEXT_A2FB_LOADED' in out_text and 'GAME_MESSAGE TEXT_A2FB_DONE' in out_text
+          and 'GAME_MESSAGE TEXT_A2FB_LONG_DONE' in out_text)
     records = os.path.join(out, 'records.txt')
     with open(records, 'w') as f:
         for ln in out_text.splitlines():
@@ -249,7 +264,8 @@ def story_test(lua, lib, out, types):
     kinds = {}
     for r in recs:
         kinds[r['kind']] = kinds.get(r['kind'], 0) + 1
-    check('story: records of every kind', all(k in kinds for k in ('LOAD', 'DEF', 'CANARY', 'ENTER', 'FIRST', 'SM', 'BF', 'SH', 'PL', 'DONE')),
+    check('story: records of every kind', all(k in kinds for k in ('LOAD', 'DEF', 'CANARY', 'ENTER', 'FIRST', 'SM', 'BF', 'SH', 'PL', 'DONE',
+                                                                    'MJ', 'LONGDONE')),
           str(kinds))
     check('story: record length <= 400 bytes incl. needle', all(len(r['text']) + 60 <= 400 for r in recs))
     sm = [r for r in recs if r['kind'] == 'SM' and r['f'].get('fac') == 'EMPIRE']
@@ -258,7 +274,17 @@ def story_test(lua, lib, out, types):
     check('story: Rebel (human) has no SM records', not [r for r in recs if r['kind'] == 'SM' and r['f'].get('fac') == 'REBEL'])
     win = [f for f in frames if 1330 <= f <= 1430]
     check('story: dense window around the 45 s fiscal tick', len(win) >= 80, str(len(win)))
-    check('story: record count within the cap', len(recs) < 8000, str(len(recs)))
+    check('story: record count within the cap', len(recs) < 20000, str(len(recs)))
+    mj = [r for r in recs if r['kind'] == 'MJ']
+    check('story: MJ with every Empire sample, no other faction', len(mj) == len(sm) and
+          all(r['f'].get('fac') == 'EMPIRE' for r in mj), '%d MJ / %d Empire SM' % (len(mj), len(sm)))
+    check('story: MJ carries the shipped and mod keys', bool(mj) and all(
+        (' %s=' % k) in mj[0]['text'] for k in a2fb_spec.MAJOR_KEYS) and 'NTF=1' in mj[0]['text'] and
+        'AGM=0' in mj[0]['text'], mj[0]['text'] if mj else '')
+    late = sorted({int(float(r['f']['f'])) for r in recs if r['kind'] == 'SH' and r['f'].get('fac') == 'EMPIRE' and
+                   float(r['f']['f']) > 9100})
+    check('story: a full sample every 30 s after DONE up to the 25-minute mark', len(late) >= 40 and
+          all(899 <= b - a <= 902 for a, b in zip(late, late[1:])), str(late[:5]))
     shutil.copy(os.path.join(out, 'A2FB_TYPES.json'), os.path.join(out, 'types_copy.json'))
     res, text = a2f_report.run(records, None, os.path.join(out, 'A2FB_TYPES.json'), out)
     emp = res['factions'].get('EMPIRE', {})
@@ -281,7 +307,12 @@ def story_test(lua, lib, out, types):
           str(t)[:300])
     check('report: Underworld decoded too', bool(res['factions'].get('UNDERWORLD', {}).get('samples')))
     txt = open(os.path.join(out, 'report.txt')).read()
-    check('report: report.txt written with sections 1-4', all(s in txt for s in ('== 1.', '== 2.', '== 3.', '== 4.')))
+    check('report: report.txt written with sections 1-5', all(s in txt for s in ('== 1.', '== 2.', '== 3.', '== 4.', '== 5.')))
+    check('report: MajorItem section counts NTF and AGM, LONGDONE seen',
+          'NTF  > 0 in %d of %d samples' % (len(mj), len(mj)) in txt and 'AGM  > 0 in 0 of' in txt and
+          '25-minute mark (LONGDONE) reached' in txt, txt[txt.find('== 5.'):][:900])
+    mt = open(os.path.join(out, 'major.tsv')).read().splitlines()
+    check('report: major.tsv has one row per MJ sample', len(mt) == len(mj) + 1 and 'AGM' in mt[0], str(len(mt)))
     return ok_all
 
 
@@ -304,20 +335,32 @@ A2_OUT:close()
 PLAN_PRE = r'''
 A2_T = 12.5
 PlayerObject = A2_PLAYERS["Empire"]
-Budget = { Get_Spendable_Resources = function() return 321 end, Get_Unallocated_Resources = function() return 123.5 end }
+Budget = { Get_Spendable_Resources = function() return 321 end, Get_Unallocated_Resources = function() return 123.5 end,
+	Flush_Category = function(c) A2_FLUSHED = c end }
 '''
 PLAN_DRIVER = r'''
 Sleep = function() end
 AssembleForce = function() A2_RAN = true end
+SynchronizedAssemble = AssembleForce
 BaseForce = { Set_Plan_Result = function() end, Set_As_Goal_System_Removable = function() end,
-	Produce_Force = function() return nil end }
+	Produce_Force = function() return nil end, Are_All_Units_On_Free_Store = function() return true end,
+	Move_To = function() return nil end, Get_Force_Count = function() return 1 end, Release_Forces = function() end }
 StructureForce = BaseForce
 TechForce = BaseForce
+MainForce = BaseForce
+Target = {}
+Invade = function() return true end
+FundBases = function() end
 BlockOnCommand = function() end
 Purge_Goals = function() end
-ScriptExit = function() A2_EXIT = true end
+-- the real ScriptExit (PGBase, wrapped by the hook) runs; outside a thread it does not yield
+_ScriptExit = function() A2_EXIT = true end
+GetThreadID = function() return -1 end
+A2_TYPE = { Get_Name = function() return "E_GROUND_HEAVY_VEHICLE_FACTORY" end }
 %s()
-A2_OUT:write("PLAN_RAN " .. tostring(A2_RAN) .. " EXIT " .. tostring(A2_EXIT) .. "\n")
+A2_T = 14
+if %s_Production_Failed ~= nil then %s_Production_Failed(%s, A2_TYPE) end
+A2_OUT:write("PLAN_RAN " .. tostring(A2_RAN) .. " EXIT " .. tostring(A2_EXIT) .. " FLUSHED " .. tostring(A2_FLUSHED) .. "\n")
 for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Records[i] .. "\n") end
 A2_OUT:close()
 '''
@@ -344,7 +387,7 @@ def hook_tests(lua, lib, out, types, z):
     names = {i.filename.upper(): i for i in z.infolist()}
     for plan, thread in build_a2f_mod.PLANS:
         orig = zread(z, names, 'DATA/SCRIPTS/AI/%s.LUA' % plan.upper())
-        body = build_a2f_mod.assemble(orig, 'P', 'a2fb_plan_hook.lua', True, {'@@PLAN@@': plan, '@@THREAD@@': thread})
+        body = build_a2f_mod.assemble(orig, 'P', 'a2fb_plan_hook.lua', True, build_a2f_mod.plan_subs(plan, thread))
         outfile = os.path.join(out, 'plan_%s.txt' % plan)
         script = os.path.join(out, 'plan_%s.lua' % plan)
         with open(script, 'w', encoding='latin-1') as f:
@@ -354,13 +397,32 @@ def hook_tests(lua, lib, out, types, z):
             f.write(body)
             f.write(PLAN_PRE)
             f.write('Definitions()\n')
-            f.write(PLAN_DRIVER % thread)
+            force = thread[:-len('_Thread')]
+            f.write(PLAN_DRIVER % (thread, force, force, force))
         rc, text = lua_run(lua, script, env)
         o = open(outfile).read() if os.path.exists(outfile) else ''
         check('hooks: plan %s records PSTART and still runs' % plan,
               rc == 0 and 'PLAN_RAN' in o and
-              ('plan=%s t=12.5 f=375 fac=EMPIRE budget=table spend=321 unalloc=123.5 cr=13000' % plan) in o,
+              ('plan=%s t=12.5 f=375 fac=EMPIRE budget=table spend=321 unalloc=123.5 cr=13000 n=1 prev=first' % plan) in o,
               (text + o)[:500])
+        # a2h t02: end records. The test thread is not a coroutine, so ScriptExit returns and the thread returns too.
+        body_thread = re.split(r'\nfunction\s', orig.replace('\r\n', '\n').split('function %s' % thread, 1)[1], maxsplit=1)[0]
+        has_exit = re.search(r'\bScriptExit\s*\(', body_thread) is not None
+        force = thread[:-len('_Thread')]
+        has_fail = re.search(r'function\s+%s_Production_Failed\s*\(' % force, orig) is not None
+        ok = ('|PRET|plan=%s t=12.5 f=375 fac=EMPIRE n=1 age=0 spend=321' % plan) in o
+        if has_exit:
+            m = re.search(r'\|PEXIT\|plan=%s t=12.5 f=375 fac=EMPIRE n=1 age=0 spend=321 unalloc=123.5 cr=13000 '
+                          r'by=(\S+) line=(\d+)' % plan, o)
+            ok = ok and m is not None and m.group(1) == 'A2FB_Thread_Orig'
+        if has_fail:
+            ok = ok and ('|PFAIL|plan=%s t=14 f=420 fac=EMPIRE n=1 age=1.5 spend=321 unalloc=123.5 cr=13000 args=2 ERR '
+                         'E_GROUND_HEAVY_VEHICLE_FACTORY' % plan) in o
+        check('hooks: plan %s end records (PRET%s%s)' % (plan, ', PEXIT' if has_exit else '', ', PFAIL' if has_fail else ''),
+              rc == 0 and ok, o[-900:])
+        if plan in build_a2f_mod.FULL_SAMPLE_PLANS:
+            check('hooks: plan %s full samples at start and end, Flush_Category ran' % plan,
+                  'FLUSHED MajorItem' in o and '|BF|tag=PS' in o and '|BF|tag=PE' in o and '|MJ|tag=PS' in o, o[-700:])
 
 
 def build_test(out, zip_path):

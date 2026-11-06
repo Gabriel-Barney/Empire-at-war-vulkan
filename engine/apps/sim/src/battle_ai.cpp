@@ -11,6 +11,7 @@
 #include "alamo/ai/tactical/tactical_perception.hpp"
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/data/game_database.hpp"  // a2h t05: load_tactical_ai_data
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/lua/object_bridge.hpp"
@@ -54,6 +55,16 @@ std::string default_tactical_ai_type(int32_t player, const galactic::GalacticSim
     if (ai::ai_iequal(f.name, "Rebel")) return "BasicRebel";
     if (ai::ai_iequal(f.name, "Underworld")) return "AI_Player_Underworld";
     return {};
+}
+
+void load_tactical_ai_data(TacticalAiSetup& s, const FileProvider& files, const data::GameConstants* gc,
+                           const std::function<std::vector<std::string>(std::string_view)>& list) {
+    if (list) {
+        s.space_plans = at::tactical_plan_files(at::TacticalMode::Space, list);
+        s.land_plans = at::tactical_plan_files(at::TacticalMode::Land, list);
+    }
+    s.difficulties = at::load_tactical_ai_difficulties(files);
+    if (gc) s.constants.load(*gc);
 }
 
 BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, const TacticalAiSetup& setup)

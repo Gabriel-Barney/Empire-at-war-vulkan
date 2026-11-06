@@ -44,7 +44,7 @@ GalacticAiWorld::Impl::Impl(gal::GalacticSim& s, objects::ObjectStore& st, const
 GalacticSimTokenResolver::Hooks GalacticAiWorld::Impl::make_hooks() {
     GalacticSimTokenResolver::Hooks h;
     h.story_campaign = cfg.story_campaign;
-    h.active_goals = [this](int32_t p, std::span<const std::string_view> cats) { return active_goals(p, cats); };
+    h.active_goals = [this](int32_t p, std::span<const std::string_view> cats, int32_t& n) { return active_goals(p, cats, n); };
     h.markup = [this](int32_t p, int32_t planet) {
         const auto it = markup.find({p, planet});
         return it == markup.end() ? 0.0 : it->second;
@@ -60,19 +60,24 @@ GalacticSimTokenResolver::Hooks GalacticAiWorld::Impl::make_hooks() {
     // weights first (AI_GALACTIC_2 §3.2), when every rate / available still holds its constructed 0 [M: ctor zeros]
     // (A2 f t01: failing here made the Empire's Infrastructure / MajorItem equations fail at Init, so Offensive got the
     // whole starting bank).
-    h.budget = [this](int32_t p, std::string_view category, double& rate, double& available) {
+    // BudgetFractionToBuild 0x667120 step 5 (A2H_GALACTIC_AI_RE §2) [H]: a category's income rate I (+0x50) and pool P
+    // (+0x4C), not A / R (the port read R / A before a2h t07); a name with no budget entry gives 0 / 0 [M: the name -> id
+    // step is the DLL's].
+    h.budget = [this](int32_t p, std::string_view category, float& rate, float& pool) {
         const PlayerAi* pa = player_ai(p);
         if (!pa) return false;
         if (category.empty()) {  // every category: budget +0x68 and the player's credits [H]
             rate = pa->ctx.budget.income_per_second();
-            available = sim.credits(p);
+            pool = sim.credits(p);
             return true;
         }
         const int32_t c = defs.find_category(category);
-        if (c < 0) return false;
-        rate = pa->ctx.budget.rate(c);
-        available = pa->ctx.budget.available(c);
+        rate = c >= 0 ? pa->ctx.budget.income_rate(c) : 0.0f;
+        pool = c >= 0 ? pa->ctx.budget.pool(c) : 0.0f;
         return true;
+    };
+    h.queue_task = [this](int32_t, int32_t planet, uint32_t queue) {
+        return planet >= 0 ? queue_task(static_cast<PlanetIndex>(planet), queue) : GalacticSimTokenResolver::QueueTask{};
     };
     h.difficulty = [this](int32_t p) {
         const PlayerAi* pa = player_ai(p);
@@ -84,23 +89,59 @@ GalacticSimTokenResolver::Hooks GalacticAiWorld::Impl::make_hooks() {
     return h;
 }
 
-// ActiveGoals 0x6e0490 (AI_GALACTIC_TOKENS) [H]: the active goals whose category is in the Parameter_Category mask (0x721f70).
-// The names form a mask, so a repeated name counts its category once; an unknown name adds no category [M: as the unit
-// category masks, ai_category_bit]; no Parameter_Category = every category [M: the "default all" of the other category
-// tokens] (a2g F1, A2G_T02_T04_PORT_VS_RETAIL.md: was every goal whatever the parameter).
-int32_t GalacticAiWorld::Impl::active_goals(int32_t p, std::span<const std::string_view> categories) const {
+// ActiveGoals 0x6e0490 (A2H_GALACTIC_AI_RE §1) [H]: key = the OR of the names' AIGoalCategoryType VALUES (a plain id
+// enum, so [Offensive|Infrastructure] = 0 | 3 = Infrastructure) [M: the OR is the DLL's]; the result is the size of the
+// active-set vector filed under that category id (0x721f70, an exact key lookup, every entry whatever its state; 0 when
+// no category has the value). The goals are filed by their type's Category. An unknown name or a player without a
+// galactic AI fails [L / M]. The parameter checks (exactly one Parameter_Category) are the token's.
+bool GalacticAiWorld::Impl::active_goals(int32_t p, std::span<const std::string_view> categories, int32_t& out) const {
     const PlayerAi* pa = player_ai(p);
-    if (!pa) return 0;
-    const auto& active = pa->ctx.goals.active();
-    std::vector<uint8_t> in(active.size(), categories.empty() ? 1 : 0);
+    if (!pa || categories.empty()) return false;
+    int32_t key = 0;
     for (const std::string_view name : categories) {
         const int32_t c = defs.find_category(name);
-        if (c >= 0 && static_cast<size_t>(c) < in.size()) in[static_cast<size_t>(c)] = 1;
+        if (c < 0 || static_cast<size_t>(c) >= defs.category_value.size()) return false;
+        key |= defs.category_value[static_cast<size_t>(c)];
     }
-    int32_t n = 0;
-    for (size_t c = 0; c < active.size(); ++c)
-        if (in[c]) n += static_cast<int32_t>(active[c].size());
-    return n;
+    out = 0;
+    const auto& active = pa->ctx.goals.active();
+    for (size_t c = 0; c < defs.category_value.size() && c < active.size(); ++c)
+        if (defs.category_value[c] == key) {
+            out = static_cast<int32_t>(active[c].size());
+            break;
+        }
+    return true;
+}
+
+// A2H_GALACTIC_AI_RE §2 step 4: the planet's AIPlanetBuildQueue task (0x559b40(planet +0xD0, queue) +0x18) [H]; the
+// port's producing task PlanetBuildQueue::current [port]. A task whose plan ended while its production goes on is Ended
+// (reclaimed when the PAYG reclaim took it); its goal's BudgetedGoalStruct (G +0x80, 0x612bd0) gives alloc / a / c / h.
+GalacticSimTokenResolver::QueueTask GalacticAiWorld::Impl::queue_task(PlanetIndex planet, uint32_t queue) const {
+    using QT = GalacticSimTokenResolver::QueueTask;
+    QT out;
+    if (planet >= planet_queues.size() || queue > 1) return out;
+    const PlanetBuildQueue& Q = planet_queues[planet][queue];
+    if (Q.current < 0) {
+        if (Q.current_queue_id >= 0) out.kind = Q.current == kQueueTaskEndedReclaimed ? QT::Kind::EndedReclaimed : QT::Kind::Ended;
+        return out;
+    }
+    const auto it = builds.find(Q.current);
+    if (it == builds.end()) return out;
+    const BuildTask& b = it->second;
+    if (b.state == BuildState::Finished || b.state == BuildState::Failed) {
+        out.kind = b.reclaimed ? QT::Kind::EndedReclaimed : QT::Kind::Ended;
+        return out;
+    }
+    out.kind = QT::Kind::Live;
+    const PlayerAi* owner = player_ai(b.player);
+    if (const AiBudget::GoalEntry* e = owner ? owner->ctx.budget.goal(b.category, b.goal_key) : nullptr) {
+        out.budget = true;
+        out.alloc = e->alloc;
+        out.a = e->a;
+        out.c = e->c;
+        out.h = e->h;
+    }
+    return out;
 }
 
 uint32_t GalacticAiWorld::Impl::equation(const std::string& name) {
@@ -1027,6 +1068,7 @@ void GalacticAiWorld::Impl::claim_units(int32_t player) {
             if (at < planet_queues.size())
                 for (PlanetBuildQueue& q : planet_queues[at])
                     if (q.current < 0 && q.current_queue_id >= 0 && q.current_type == type) {
+                        q.current = kQueueTaskEnded;
                         q.current_queue_id = -1;
                         q.current_type = gal::kNoIndex;
                         break;
