@@ -589,7 +589,13 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     bool plan_activatable(Goal& g) override {
         if (!(g.pp_valid && g.plan != kAiNone && ctx.templates.plan_value(g.plan) > 0 && w->resolve_pp(*this, g))) return false;
         // [M] the re-solve rewrites the PP's selection (+0x58), which AllowedTime (0x692860 -> 0x6c0450) reads live.
-        if (const auto it = w->pps.find(g.pp_handle); it != w->pps.end()) g.nominal_time = w->pp_nominal_time(it->second);
+        // a2k t01: 0x6c4a50 also copies the re-solved net cost and ETA to the goal (G +0x78 := PP +0x44, G +0x7C := PP +0x48,
+        // A2H_T06_TACTICAL_ETA §2.1) [H], so Resolve's fundable test and budget add (0x610d30) see the new selection's cost.
+        if (const auto it = w->pps.find(g.pp_handle); it != w->pps.end()) {
+            g.cost = it->second.net;
+            g.eta = it->second.eta;
+            g.nominal_time = w->pp_nominal_time(it->second);
+        }
         return true;
     }
     bool plan_invalid(const Goal& g) override;
