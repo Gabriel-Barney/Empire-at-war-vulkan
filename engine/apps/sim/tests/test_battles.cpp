@@ -30,6 +30,7 @@
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/galactic/corruption.hpp"  // S4
 #include "alamo/galactic/galactic_rules.hpp"
+#include "alamo/galactic/victory.hpp"  // story t11
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
 #include "alamo/objects/behaviors.hpp"
@@ -1785,6 +1786,244 @@ void test_linked_map_objects(const Data& d) {
     const LinkedRun r = run_linked(d, false, false, {}, false, true);
     std::printf("  linked land: attacker's branched-discardable trooper kept %d, request linked %d\n", r.post_kept, r.request_linked ? 1 : 0);
     CHECK(r.started && r.request_linked && r.post_kept == 1);
+}
+
+// story t09 / t12: a linked space battle (LINK_TACTICAL P7 = tactical plots, P9 = 2; no galactic units, so nothing ever
+// dies) whose tactical plot holds the victory monitor at its start (ENABLE_VICTORY 0), names an unknown faction at 1 s
+// (logged, nothing) and ends with VICTORY Underworld (Param2 1: 1 s, silent) at 12 s, past the 300-frame time limit, which
+// does not run while the monitor is held. The tactical script calls Resume_Hyperspace_In after 20 services: the P9 = 2
+// reinforcement hold is up at the start (TacticalBattle::arrival_held) and cleared by the script.
+struct StoryRewardRun {
+    bool started = false, held_at_start = false, hold_at_start = false, resumed = false, ended = false;
+    int32_t hold = -1;
+    uint32_t resume_frame = 0, end_frame = 0, win_frame = 0;
+    uint8_t declared_type = 0;
+    int32_t declared_player = -2;
+    bool silent = false;
+    std::string summary, log;
+};
+StoryRewardRun run_story_rewards(const Data& d) {
+    StoryRewardRun out;
+    const fs::path x = d.root / "Data/XML";
+    write_file(x / "Story_Plots_VLink.xml", "<Story_Mode_Plots><Active_Plot>Story_VLink.xml</Active_Plot></Story_Mode_Plots>\n");
+    write_file(x / "Story_VLink.xml",
+               "<Story>\n"
+               " <Event Name=\"Link\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>1</Event_Param1>"
+               "<Reward_Type>LINK_TACTICAL</Reward_Type><Reward_Param1>S10_B</Reward_Param1><Reward_Param2>SPACE</Reward_Param2>"
+               "<Reward_Param3>Underworld</Reward_Param3><Reward_Param4>S10_Space_B</Reward_Param4><Reward_Param5>Empire</Reward_Param5>"
+               "<Reward_Param6></Reward_Param6><Reward_Param7>Story_Plots_VTac.xml</Reward_Param7><Reward_Param8>0</Reward_Param8>"
+               "<Reward_Param9>2</Reward_Param9></Event>\n"
+               "</Story>\n");
+    write_file(x / "Story_Plots_VTac.xml",
+               "<Story_Mode_Plots><Lua_Script>Story_VTac</Lua_Script><Active_Plot>Story_VTac.xml</Active_Plot></Story_Mode_Plots>\n");
+    write_file(x / "Story_VTac.xml",
+               "<Story>\n"
+               " <Event Name=\"Hold\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1>"
+               "<Reward_Type>ENABLE_VICTORY</Reward_Type><Reward_Param1>0</Reward_Param1></Event>\n"
+               " <Event Name=\"Bad\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>1</Event_Param1>"
+               "<Reward_Type>VICTORY</Reward_Type><Reward_Param1>Nobody</Reward_Param1></Event>\n"
+               " <Event Name=\"Win\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>12</Event_Param1>"
+               "<Reward_Type>VICTORY</Reward_Type><Reward_Param1>Underworld</Reward_Param1><Reward_Param2>1</Reward_Param2></Event>\n"
+               "</Story>\n");
+    write_file(d.root / "Data/Scripts/Story/Story_VTac.lua",
+               "function Base_Definitions() ServiceRate = 0.1 n = 0 end\n"
+               "function main() while true do n = n + 1 if n == 20 then Resume_Hyperspace_In() end coroutine.yield(true) end end\n");
+    DirectoryProvider files(path_to_utf8(d.root));
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d, false));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    StoryStart st;
+    st.files = &files;
+    st.plot_sets = {{0, "Story_Plots_VLink.xml"}};
+    std::vector<std::string> diag;
+    CHECK(host.start_story(st, &diag));
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 300;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    uint32_t last_frame = 0;
+    for (uint64_t t = 0; t < 1500; ++t) {
+        host.tick_once();
+        TacticalBattle* b = battles.battle();
+        if (!b) {
+            if (!out.started) continue;
+            out.ended = true;
+            out.end_frame = last_frame + 1;
+            out.summary = battles.log().empty() ? std::string() : battles.log().back();
+            break;
+        }
+        last_frame = b->frame();
+        if (!out.started) {
+            out.started = true;
+            out.held_at_start = b->arrival_held();
+            out.hold_at_start = battles.linked_presentation().hyperspace_hold;
+        }
+        if (out.hold < 0 && b->victory_hold() > 0) out.hold = b->victory_hold();
+        if (!out.resumed && !battles.linked_presentation().hyperspace_hold) {
+            out.resumed = true;
+            out.resume_frame = b->frame();
+            CHECK(!b->arrival_held());
+        }
+        if (out.win_frame == 0 && b->victory_declared()) {
+            out.win_frame = b->frame();
+            out.declared_type = b->victory_declared_type();
+            out.declared_player = b->victory_declared_player();
+            out.silent = b->victory_declared_silent();
+        }
+    }
+    for (const std::string& l : battles.log()) out.log += l + "; ";
+    if (host.story())
+        for (const std::string& m : host.story()->lua_messages()) out.log += "lua: " + m + "; ";
+    return out;
+}
+
+// story t12: the P9 = 2 hold in a normal space battle (the arrival source installed by hand): three extra Underworld
+// corvettes stay in the pool (unit cap 6); while held the Reinforce order is refused NotAllowed and the stand-in deploy
+// waits even for an empty side; released, the order goes through the usual rules (cap: QueueFull, or deployed).
+void test_arrival_hold(const Data& d) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSetup setup = make_setup(d, false);
+    for (int i = 0; i < 3; ++i) setup.forces.push_back({1, 2, type_of(d, "S10_Corvette")});
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(setup));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 600;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    bool held = true, checked = false;
+    uint32_t deployed_held = 0, frames_held = 0;
+    commands::RejectReason in_hold = commands::RejectReason::None, after = commands::RejectReason::NotAllowed;
+    size_t pool = 0;
+    for (uint64_t t = 0; t < 3000 && !checked; ++t) {
+        host.tick_once();
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) continue;
+        if (b->frame() == 1) {
+            b->set_arrival_hold([&held] { return held; });
+            deployed_held = b->stats().reinforcements;
+            const auto r = b->reserves(1);
+            pool = r.size();
+            if (!r.empty()) in_hold = b->order_reinforce(*tm, 1, r[0].galactic_id, 0.0f, 0.0f, host.random().synced());
+        }
+        if (b->frame() >= 1 && held) {
+            ++frames_held;
+            CHECK(b->stats().reinforcements == deployed_held);
+        }
+        if (b->frame() == 500 || (b->finished() && held)) {
+            held = false;
+            const auto r = b->reserves(1);
+            if (!r.empty()) after = b->order_reinforce(*tm, 1, r[0].galactic_id, 0.0f, 0.0f, host.random().synced());
+            checked = true;
+        }
+    }
+    std::printf("  arrival hold: pool %zu, Reinforce held %d / released %d, %u frames held with %u deployments\n", pool,
+                static_cast<int>(in_hold), static_cast<int>(after), frames_held, deployed_held);
+    CHECK(pool > 0 && in_hold == commands::RejectReason::NotAllowed && after != commands::RejectReason::NotAllowed);
+}
+
+void test_story_victory_rewards(const Data& d) {
+    const StoryRewardRun r = run_story_rewards(d);
+    std::printf("  story rewards: held %d / %d at start, monitor hold %d, resumed at %u, declared 0x%x for %d (silent %d) at %u, "
+                "end %u\n    %s\n    %s\n",
+                r.held_at_start ? 1 : 0, r.hold_at_start ? 1 : 0, r.hold, r.resume_frame, static_cast<unsigned>(r.declared_type),
+                r.declared_player, r.silent ? 1 : 0, r.win_frame, r.end_frame, r.summary.c_str(), r.log.c_str());
+    CHECK(r.started && r.held_at_start && r.hold_at_start && r.hold == 1);
+    CHECK(r.resumed && r.resume_frame > 30 && r.resume_frame < 120);
+    CHECK(r.declared_type == galactic::kVictoryStory && r.declared_player == 1 && r.silent);
+    CHECK(r.win_frame > 300 && r.ended && r.end_frame == r.win_frame + 30);
+    CHECK(r.summary.find("winner Underworld, victory 16, retreated Empire") != std::string::npos);
+    CHECK(r.log.find("Unable to find faction Nobody to force victory") != std::string::npos);
+    test_arrival_hold(d);
+}
+
+// story t11: the galactic plot set's ENABLE_VICTORY / VICTORY act on the galactic monitor (GalacticSim::victory_hold,
+// galactic::check_victory): two holds at 0 s, one release and a Param1-less no-op at 1 s, an unknown faction at 2 s
+// (logged), VICTORY Underworld at 3 s: the hold is released and the campaign ends for the Underworld 210 frames later. The
+// human Empire's Credits_Accrued 0 would win at once without the hold. A prereq-less ELAPSED 0 fires at its second T9
+// (tick 2, StoryModel::tick_timer, A2I_T01_FRAME_ORDER.md §6), so the monitor is polled from the tick the holds are up.
+void test_galactic_story_victory(const Data& d) {
+    const fs::path x = d.root / "Data/XML";
+    write_file(x / "Story_Plots_GVic.xml", "<Story_Mode_Plots><Active_Plot>Story_GVic.xml</Active_Plot></Story_Mode_Plots>\n");
+    const auto ev = [](const char* name, const char* sec, const char* reward, const char* p1) {
+        std::string s = std::string(" <Event Name=\"") + name + "\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>" + sec +
+                        "</Event_Param1><Reward_Type>" + reward + "</Reward_Type>";
+        if (p1) s += std::string("<Reward_Param1>") + p1 + "</Reward_Param1>";
+        return s + "</Event>\n";
+    };
+    write_file(x / "Story_GVic.xml", "<Story>\n" + ev("H1", "0", "ENABLE_VICTORY", "0") + ev("H2", "0", "ENABLE_VICTORY", "0") +
+                                         ev("R1", "1", "ENABLE_VICTORY", "1") + ev("N1", "1", "ENABLE_VICTORY", nullptr) +
+                                         ev("Bad", "2", "VICTORY", "Nobody") + ev("Win", "3", "VICTORY", "Underworld") + "</Story>\n");
+    DirectoryProvider files(path_to_utf8(d.root));
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d, false));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    galactic::VictoryRules rules;
+    rules.human.conditions = {galactic::VictoryCondition::CreditsAccrued};
+    CHECK(galactic::check_victory(*gs, rules).winner == 0);  // nothing held yet: the Empire's credits win
+    StoryStart st;
+    st.files = &files;
+    st.plot_sets = {{0, "Story_Plots_GVic.xml"}};
+    CHECK(host.start_story(st, nullptr));
+    int32_t max_hold = 0, hold_after_release = -1;
+    int32_t victory_frame = -1, end_frame = -1;
+    bool won_early = false;
+    for (uint64_t t = 0; t < 600 && end_frame < 0; ++t) {
+        host.tick_once();
+        max_hold = std::max(max_hold, gs->victory_hold());
+        if (max_hold == 2 && hold_after_release < 0 && gs->victory_hold() == 1) hold_after_release = 1;
+        if (max_hold == 0) {
+            CHECK(t < 2);  // the 0 s holds are up by tick 2
+            continue;
+        }
+        const galactic::VictoryResult v = galactic::check_victory(*gs, rules);
+        if (victory_frame < 0 && !gs->victory_claims().empty()) victory_frame = gs->victory_claims()[0].frame;
+        if (v.finished()) {
+            if (v.winner != 1 || v.how != galactic::VictoryCondition::StoryTriggered) won_early = true;
+            end_frame = gs->frame();
+        }
+    }
+    std::string lua;
+    if (host.story())
+        for (const std::string& m : host.story()->lua_messages()) lua += m + "; ";
+    std::printf("  galactic story victory: max hold %d, after release %d, claim at %d, campaign end at %d (hold %d)\n    %s\n", max_hold,
+                hold_after_release, victory_frame, end_frame, gs->victory_hold(), lua.c_str());
+    CHECK(max_hold == 2 && hold_after_release == 1 && !won_early && gs->victory_hold() == 0);
+    CHECK(victory_frame > 0 && end_frame == victory_frame + 210 && gs->victory_claims().size() == 1 &&
+          gs->victory_claims()[0].type == galactic::GalacticSim::kVictoryStoryClaim && gs->victory_claims()[0].player == 1);
+    CHECK(galactic::victory_outcome(*gs, rules, 0) == -1 && galactic::victory_outcome(*gs, rules, 1) == 1);
+    CHECK(lua.find("Unable to find faction Nobody to force victory") != std::string::npos);
 }
 
 // a1j t05 (A1_READINGS §31.7, BT §1.4 step 2): 0x2be640 skips the space/land state machines while the story block holds
@@ -7295,6 +7534,9 @@ int main(int argc, char** argv) {
     test_linked_battle(*d);
     test_linked_params(*d);  // story t07
     test_linked_map_objects(*d);  // story t10
+    std::printf("story t09 / t11 / t12: victory rewards (tactical, galactic) and the P9 hyperspace hold\n");
+    test_story_victory_rewards(*d);
+    test_galactic_story_victory(*d);
     std::printf("story Invade() of a scripted fleet (a1f t08, S10 PROBE A)\n");
     test_probe_invade(*d);
     test_invade_planet_reward(*d);

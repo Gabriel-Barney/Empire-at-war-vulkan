@@ -223,6 +223,7 @@ bool GalacticSim::start(const GalacticSetup& setup, std::vector<std::string>* di
     stealthed_.clear();  // OI galactic
     slot_choices_ = false;
     claims_.clear();
+    victory_hold_ = 0;  // story t11
     frame_ = pause_ = last_cycle_frame_ = next_cycle_frame_ = cycle_counter_ = 0;
     linked_battle_pending_ = false;
     local_player_ = kNoPlayer;  // GRC: pinned below

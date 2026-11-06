@@ -955,6 +955,14 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
             enable_victory_(!p1.empty(), static_cast<int32_t>(std::atoi(p1.c_str())));
         else if (tactical && type == "VICTORY" && victory_)
             victory_(p1, std::atoi(p2.c_str()) != 0);
+        else if (!tactical && type == "ENABLE_VICTORY" && !p1.empty()) {  // story t11: the galactic monitor
+            if (std::atoi(p1.c_str()) == 0) sim_->victory_hold_raise();
+            else sim_->victory_hold_release();
+        } else if (!tactical && type == "VICTORY") {  // story t11: campaign end (0x462b70 on the galactic monitor)
+            const int32_t player = sim_->player_of_faction(p1);
+            if (player < 0) lua_messages_.push_back(std::to_string(frame_) + " story: Unable to find faction " + p1 + " to force victory");
+            else sim_->story_victory(player, std::atoi(p2.c_str()) != 0);
+        }
     } else if (type == "SET_TACTICAL_MAP") {
         // S4 (L1_S4_REMAINING.md §4.4, 0x461d90): Reward_Param1 = map file; Reward_Param2 location via the CRC keyword map
         // (SPACE 1 -> space slot; 0 / missing -> land slot; anything else: "invalid location (GROUND/SPACE)", ignored);

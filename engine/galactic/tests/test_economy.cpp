@@ -1052,6 +1052,39 @@ void test_a2_victory() {
     CHECK(check_victory(s, r).winner == kNoPlayer);
     for (PlanetIndex p : {rC, rD, rE}) s.change_owner(w.planet(p).object, pEmpire);
     CHECK(check_victory(s, r).winner == pEmpire);
+    // story t11 (BT §3.1a item 3 on the galactic monitor): ENABLE_VICTORY 0 holds every result (the elimination is still
+    // reported), extra releases are no-ops, the story VICTORY releases every level and wins for its player (even one whose
+    // side lists nothing) once its countdown ran out; until then nobody wins. Hashed only once used.
+    StateHasher h0;
+    s.hash_state(h0);
+    s.victory_hold_raise();
+    s.victory_hold_raise();
+    CHECK(s.victory_hold() == 2 && check_victory(s, r).winner == kNoPlayer && check_victory(s, r).eliminated == std::vector<int32_t>{pUnder});
+    StateHasher h1;
+    s.hash_state(h1);
+    CHECK(h0.digest() != h1.digest());
+    s.victory_hold_release();
+    CHECK(s.victory_hold() == 1 && check_victory(s, r).winner == kNoPlayer);
+    s.victory_hold_release();
+    s.victory_hold_release();  // not held: nothing
+    CHECK(s.victory_hold() == 0 && check_victory(s, r).winner == pEmpire);
+    StateHasher h2;
+    s.hash_state(h2);
+    CHECK(h2.digest() == h0.digest());
+    s.victory_hold_raise();
+    CHECK(!s.story_victory(-1, false) && s.victory_hold() == 1);  // unknown player: nothing
+    CHECK(s.story_victory(pNeutral, false) && s.victory_hold() == 0);
+    CHECK(s.victory_claims().back().type == GalacticSim::kVictoryStoryClaim && s.victory_claims().back().countdown == 210);
+    CHECK(check_victory(s, r).winner == kNoPlayer && victory_outcome(s, r, pEmpire) == 0);  // declared, counting down
+    w.run(209);
+    CHECK(check_victory(s, r).winner == kNoPlayer);
+    w.run(1);
+    v = check_victory(s, r);
+    CHECK(v.winner == pNeutral && v.how == VictoryCondition::StoryTriggered && victory_outcome(s, r, pEmpire) == -1);
+    s.victory_hold_raise();  // a hold raised after the declaration delays the result (0x342d80)
+    CHECK(check_victory(s, r).winner == kNoPlayer);
+    s.victory_hold_release();
+    CHECK(check_victory(s, r).winner == pNeutral);
 }
 
 void test_a2_prerequisites_and_market_hook() {
