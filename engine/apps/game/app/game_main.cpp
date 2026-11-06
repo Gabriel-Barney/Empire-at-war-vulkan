@@ -414,6 +414,13 @@ int main(int argc, char** argv) {
     enable_dpi_awareness();  // before any window: sizes and the video modes in physical pixels
     Options opt;
     const std::vector<std::string> args(argv, argv + argc);
+    {  // bm2: --bench-scenario / --bench-make FILE first; the flags below override what the file sets
+        std::string serr;
+        if (load_bench_scenario_arg(args, opt.bench, &serr) < 0) {
+            std::fprintf(stderr, "benchmark: %s\n", serr.c_str());
+            return 2;
+        }
+    }
     for (int i = 1; i < argc; ++i) {
         {  // BM2a: the benchmark flags (benchmark.hpp)
             size_t bi = static_cast<size_t>(i);
@@ -462,6 +469,7 @@ int main(int argc, char** argv) {
         else if (a == "--profile") opt.profile = true;
         else if (a == "--profile-out") opt.profile = true, opt.profile_out = next();
         else if (a == "--profile-budget") opt.profile_budget = std::strtod(next().c_str(), nullptr);
+        else if (a == "--bench-scenario" || a == "--bench-make") (void)next();  // bm2: read before this loop
         else if (a.find('=') != std::string::npos) opt.game_args.push_back(a);
         else return usage();
     }
@@ -471,6 +479,10 @@ int main(int argc, char** argv) {
         if (const std::string why = check_benchmark_options(opt.bench); !why.empty() || !opt.smoke.empty()) {
             std::fprintf(stderr, "benchmark: %s\n", why.empty() ? "--benchmark and --smoke do not mix" : why.c_str());
             return usage();
+        }
+        if (const std::string why = check_bench_scenario(opt.bench); !why.empty()) {  // bm2
+            std::fprintf(stderr, "benchmark: %s\n", why.c_str());
+            return 2;
         }
         opt.intro = opt.attract = opt.frame_overlay = false;
         opt.movies.clear();

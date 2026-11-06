@@ -69,12 +69,115 @@ static void test_manifest() {
     CHECK(bench::Scenario::parse(t2, r, &err) && !r.orders.present() && r.workers == 4);
 
     // Errors.
-    CHECK(!bench::Scenario::parse("ALAMO_BENCH 2\nname x\n", r, &err) && err.find("format") != std::string::npos);
+    CHECK(!bench::Scenario::parse("ALAMO_BENCH 3\nname x\n", r, &err) && err.find("format") != std::string::npos);
     CHECK(!bench::Scenario::parse("name x\n", r, &err));
     CHECK(!bench::Scenario::parse(text + "bogus 1\n", r, &err) && err.find("unknown key") != std::string::npos);
     CHECK(!bench::Scenario::parse("ALAMO_BENCH 1\nname x\nticks 5\n", r, &err) && err.find("missing") != std::string::npos);
     CHECK(!bench::Scenario::parse("ALAMO_BENCH 1\nname two words\n", r, &err));
     CHECK(!bench::Scenario::parse("ALAMO_BENCH 1\nname x\nsave a.alsv 1 zz\n", r, &err));
+}
+
+// BM2 format 2: alamo_game's run settings and the scripted camera; format 1 stays byte for byte.
+static void test_format2() {
+    const bench::Scenario v1 = sample();
+    CHECK(!v1.has_v2());
+    CHECK(v1.to_text().rfind("ALAMO_BENCH 1\n", 0) == 0);  // no format-2 key: still written as format 1
+    bench::Scenario s = v1;
+    s.host = bench::Host::Game;
+    s.mode = "fixed";
+    s.preset = "bm-smoke";
+    s.frames_per_tick = 3;
+    s.camera_anchor = bench::CameraAnchor::Start;
+    bench::CameraKey k0;
+    k0.tick = 0;
+    k0.target[0] = 1.5f;
+    k0.target[1] = -2.0f;
+    k0.target[2] = 0.1f;  // not exact in binary: the text must still round-trip the bits
+    k0.yaw_deg = 0;
+    k0.pitch_deg = 30;
+    k0.distance = 1200;
+    bench::CameraKey k1 = k0;
+    k1.tick = 60;
+    k1.yaw_deg = 720;
+    k1.pitch_deg = 45;
+    k1.distance = 600;
+    k1.fov_deg = 50;
+    s.camera = {k0, k1};
+    CHECK(s.has_v2());
+    const std::string text = s.to_text();
+    CHECK(text.rfind("ALAMO_BENCH 2\n", 0) == 0);
+    CHECK(text.find("final_crc deadbeefcafef00d\nhost game\nmode fixed\npreset bm-smoke\nframes_per_tick 3\ncamera_anchor start\n"
+                    "camera 0 1.5 -2 0.1 0 30 1200\ncamera 60 1.5 -2 0.1 720 45 600 50\n") != std::string::npos);
+    bench::Scenario r;
+    std::string err;
+    CHECK(bench::Scenario::parse(text, r, &err));
+    CHECK(r.host == bench::Host::Game && r.mode == "fixed" && r.preset == "bm-smoke" && r.frames_per_tick == 3);
+    CHECK(r.camera_anchor == bench::CameraAnchor::Start && r.camera == s.camera);
+    CHECK(r.to_text() == text && r.same_content(s));
+    bench::Scenario moved = s;
+    moved.camera[1].yaw_deg = 360;  // another camera path is another scenario (the version bumps on a remake)
+    CHECK(!moved.same_content(s));
+    bench::Scenario copy = v1;
+    copy.copy_run_settings(s);
+    CHECK(copy.same_content(s));
+
+    // Format-2 keys need format 2; bad values; key order.
+    CHECK(!bench::Scenario::parse(v1.to_text() + "host game\n", r, &err) && err.find("format-2 key") != std::string::npos);
+    const std::string head = "ALAMO_BENCH 2\nname x\nsave a 1 1\nfingerprint b 1 1\nticks 5\n";
+    CHECK(bench::Scenario::parse(head, r, &err) && r.host == bench::Host::Headless && !r.has_v2());
+    CHECK(!bench::Scenario::parse(head + "host both\n", r, &err));
+    CHECK(!bench::Scenario::parse(head + "mode slow\n", r, &err));
+    CHECK(!bench::Scenario::parse(head + "frames_per_tick 0\n", r, &err));
+    CHECK(!bench::Scenario::parse(head + "camera_anchor here\n", r, &err));
+    CHECK(!bench::Scenario::parse(head + "camera 0 0 0 0 0 30\n", r, &err));         // too few values
+    CHECK(!bench::Scenario::parse(head + "camera 0 0 0 0 0 90 100\n", r, &err));     // pitch out of range
+    CHECK(!bench::Scenario::parse(head + "camera 0 0 0 0 0 30 0\n", r, &err));       // distance 0
+    CHECK(!bench::Scenario::parse(head + "camera 0 0 0 0 0 30 1e\n", r, &err));      // not a number
+    CHECK(!bench::Scenario::parse(head + "camera 5 0 0 0 0 30 100\ncamera 5 0 0 0 0 30 100\n", r, &err) &&
+          err.find("increase") != std::string::npos);
+    CHECK(bench::Scenario::parse(head + "camera 0 0 0 0 0 30 100\ncamera 9 0 0 0 0 30 100 60\n", r, &err) && r.camera.size() == 2);
+
+    // A recipe: settings and camera, no pins.
+    CHECK(!bench::Scenario::parse("ALAMO_BENCH 2\nname x\nhost game\n", r, &err));
+    CHECK(bench::Scenario::parse_recipe("ALAMO_BENCH 2\nname x\nhost game\ncamera 0 0 0 0 0 30 100\n", r, &err) &&
+          r.host == bench::Host::Game && r.camera.size() == 1 && !r.save.present());
+    CHECK(!bench::Scenario::parse_recipe("ALAMO_BENCH 2\nhost game\n", r, &err));  // a name is still needed
+}
+
+// The camera path: a function of the tick count and the render alpha only.
+static void test_camera() {
+    CHECK(bench::camera_time(0, 0.5f) == 0.0);  // before the first tick: the first pose
+    CHECK(bench::camera_time(1, 0.5f) == 0.5);
+    CHECK(bench::camera_time(10, 1.0f) == 10.0);
+    CHECK(bench::camera_time(10, 2.0f) == 10.0);  // alpha clamped to 0..1
+    bench::CameraKey a;
+    a.tick = 10;
+    a.target[0] = 100;
+    a.yaw_deg = 0;
+    a.pitch_deg = 20;
+    a.distance = 1000;
+    bench::CameraKey b = a;
+    b.tick = 20;
+    b.target[0] = 200;
+    b.yaw_deg = 360;
+    b.pitch_deg = 40;
+    b.distance = 500;
+    b.fov_deg = 60;
+    bench::CameraKey c = b;
+    c.tick = 30;
+    c.fov_deg = 40;
+    const std::vector<bench::CameraKey> keys = {a, b, c};
+    CHECK(bench::camera_pose(keys, 0.0) == a);  // held before the first key
+    CHECK(bench::camera_pose(keys, 99.0) == c); // and after the last
+    const bench::CameraKey m = bench::camera_pose(keys, 15.0);
+    CHECK(m.target[0] == 150.0f && m.yaw_deg == 180.0f && m.pitch_deg == 30.0f && m.distance == 750.0f);
+    CHECK(m.fov_deg == 0.0f);  // a has no fov: the earlier key's (the view's own)
+    const bench::CameraKey q = bench::camera_pose(keys, 25.0);
+    CHECK(q.fov_deg == 50.0f && q.yaw_deg == 360.0f);
+    CHECK(bench::camera_pose(keys, 20.0) == bench::camera_pose(keys, 20.0));
+    const bench::CameraKey at = bench::camera_pose(keys, 20.0);
+    CHECK(at.target[0] == 200.0f && at.yaw_deg == 360.0f);  // exactly the key at its tick
+    CHECK(bench::camera_pose({a}, 15.0) == a);
 }
 
 static void test_files() {
@@ -213,6 +316,8 @@ static void test_json() {
 
 int main() {
     test_manifest();
+    test_format2();
+    test_camera();
     test_files();
     test_stats();
     test_compare();

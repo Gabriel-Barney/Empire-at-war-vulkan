@@ -31,6 +31,7 @@ bool App::render_frame() {
         return as != rhi::SwapchainStatus::Error;
     }
     VkCommandBuffer cmd = f->cmd();
+    if (bench_active()) bench_gpu_begin(*f, cmd);  // bm2: GPU timer scopes (the slot's last results, "frame" opens)
     const rhi::DeviceFns& fn = ctx_.vkd();
     const rhi::AcquireResult acq = gpu_.up.record_acquires(cmd);
     gpu_.renderer.set_time(static_cast<float>(now_s_));
@@ -65,8 +66,10 @@ bool App::render_frame() {
         gview_.set_particle_detail(particle_detail(adv_video_.particle));
         bview_.set_particle_detail(particle_detail(adv_video_.particle));
     }
+    gro.gpu_timer = bro.gpu_timer = bench_gpu_timer();  // bm2: the renderer's scopes (null outside a benchmark)
     if (galactic) {
-        const ui::CameraParams cp = gview_.camera_params(w, h);
+        ui::CameraParams cp = gview_.camera_params(w, h);
+        bench_camera(cp, 1, w, h);  // bm2: a scenario's scripted camera
         const auto prep0 = Clock::now();
         gview_.prepare(render_alpha(), now_s_, selected_planet_, &cp);
         ft_.prepare += static_cast<float>(ms_since(prep0));
@@ -84,6 +87,7 @@ bool App::render_frame() {
         bview_.use_scene(gpu_);
         ui::CameraParams cp = bview_.camera_params(w, h);
         cinematic_camera(cp);  // refixf t05: the TSW firing shot + its shake replace the drawn view (the controller is untouched)
+        bench_camera(cp, 2, w, h);  // bm2: a scenario's scripted camera replaces the drawn view in a benchmark run
         const float env_scale = detail_options_ ? environment_fade_scale(adv_video_.environment) : 1.0f;  // Environment detail [M]
         gpu_.renderer.set_object_fade(cp.fade_begin * env_scale, cp.fade_end * env_scale);
         for (int i = 0; i < 4; ++i) pt.clear[i] = bview_.clear_color(i);
@@ -302,6 +306,7 @@ bool App::render_frame() {
     waits[nw++] = rhi::semaphore_info(f->acquire_semaphore(), 0, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
     if (acq.wait_value) waits[nw++] = rhi::semaphore_info(gpu_.up.timeline(), acq.wait_value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     const VkSemaphoreSubmitInfo signal = rhi::semaphore_info(sc_.render_finished(image), 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    if (bench_active()) bench_gpu_end(cmd);  // bm2: "frame" closes (world, HUD, gamma, present blit, readback)
     rhi::FrameSubmit fs;
     fs.waits = {waits, nw};
     fs.signals = {&signal, 1};

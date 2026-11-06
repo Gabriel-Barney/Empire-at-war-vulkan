@@ -364,9 +364,9 @@ void App::save_game_as(const std::string& typed) {
 // worked does it replace the running session (a failed load leaves the current game / menu as it was).
 bool App::load_saved_game(const std::string& name) { return load_save_file(save_path(saves_dir_, name)); }
 
-bool App::load_save_file(const std::string& path) {
+bool App::load_save_file(const std::string& path, const commands::CommandRecording* replay) {
     std::string err;
-    std::unique_ptr<GameSession> s = path.empty() ? nullptr : load_game(data_, *js_, path, &err);
+    std::unique_ptr<GameSession> s = path.empty() ? nullptr : load_game(data_, *js_, path, &err, replay);
     if (!s) {
         save_message(U"The saved game could not be loaded", path.empty() ? std::string("no save name") : err);
         return false;
@@ -375,7 +375,8 @@ bool App::load_save_file(const std::string& path) {
     end_session();
     session_ = std::move(s);
     recording_ = commands::CommandRecording{};
-    session_->record_to(&recording_);  // record_after_load: the stream continues the save
+    if (replay) recording_ = *replay;  // bm2: a replayed stream is the run's stream (crc_check replays it again)
+    else session_->record_to(&recording_);  // record_after_load: the stream continues the save
     loaded_save_ = path;
     ++saves_loaded_;
     paused_ = false;

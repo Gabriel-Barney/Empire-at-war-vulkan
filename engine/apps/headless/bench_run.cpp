@@ -281,6 +281,11 @@ int bench_run(const BenchOptions& opt) {
         return 1;
     }
     std::printf("bench: scenario %s version %u: %s\n", sc.name.c_str(), sc.version, sc.description.c_str());
+    if (sc.host == bench::Host::Game) {  // BM2: an alamo_game save (game.campaign / game.skirmish), not a headless harness
+        std::fprintf(stderr, "bench: %s was made by alamo_game (host game): run it with alamo_game --bench-scenario %s\n", sc.name.c_str(),
+                     opt.scenario.c_str());
+        return 2;
+    }
     if (!bench::verify_files(sc, &err)) return not_comparable(opt, err);
     CrcLog fingerprint;
     if (!CrcLog::load(sc.resolve(sc.fingerprint), fingerprint, &err) || fingerprint.records.empty()) {
@@ -656,6 +661,10 @@ int bench_make(const BenchOptions& opt) {
     bench::Scenario old;
     const bool had_old = bench::Scenario::load(opt.scenario, old, nullptr);
     sc.description = !opt.description.empty() ? opt.description : had_old ? old.description : std::string();
+    if (had_old) {  // BM2 format-2 keys (the rendered run's settings and camera) stay with the scenario
+        sc.copy_run_settings(old);
+        sc.host = bench::Host::Headless;
+    }
     // Everything is written next to its final name first (pins taken from the written bytes), then moved in place with the
     // manifest last, so a failure before the moves leaves the old scenario untouched.
     for (auto [tmp, file] : {std::pair{tmp_save, &sc.save}, std::pair{tmp_orders, &sc.orders}, std::pair{tmp_fp, &sc.fingerprint}}) {

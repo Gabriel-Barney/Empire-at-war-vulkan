@@ -2,6 +2,8 @@
 #include "alamo/sim/bench_scenario.hpp"
 
 #include <algorithm>
+#include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -96,7 +98,87 @@ bool parse_file(std::string_view v, ScenarioFile& f) {
     return !f.path.empty() && parse_u64(parts[1], f.bytes) && parse_hex64(parts[2], f.digest);
 }
 
+// Floats: shortest round-trip text (std::to_chars), read back with std::from_chars - the same bits in every build.
+std::string float_text(float v) {
+    char buf[32];
+    const auto r = std::to_chars(buf, buf + sizeof buf, v);
+    return std::string(buf, r.ptr);
+}
+
+bool parse_float(std::string_view s, float& out) {
+    if (s.empty()) return false;
+    float v = 0;
+    const auto r = std::from_chars(s.data(), s.data() + s.size(), v);
+    if (r.ec != std::errc() || r.ptr != s.data() + s.size() || !std::isfinite(v)) return false;
+    out = v;
+    return true;
+}
+
+std::vector<std::string_view> words(std::string_view s) {
+    std::vector<std::string_view> w;
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
+        const size_t b = i;
+        while (i < s.size() && s[i] != ' ' && s[i] != '\t') ++i;
+        if (i > b) w.push_back(s.substr(b, i - b));
+    }
+    return w;
+}
+
+std::string camera_line(const CameraKey& k) {
+    std::string t = "camera " + std::to_string(k.tick);
+    for (const float v : {k.target[0], k.target[1], k.target[2], k.yaw_deg, k.pitch_deg, k.distance}) t += " " + float_text(v);
+    if (k.fov_deg != 0.0f) t += " " + float_text(k.fov_deg);
+    return t + "\n";
+}
+
+bool parse_camera(std::string_view v, CameraKey& k) {
+    const std::vector<std::string_view> w = words(v);
+    if (w.size() != 7 && w.size() != 8) return false;
+    k = {};
+    if (!parse_u64(w[0], k.tick)) return false;
+    float* dst[7] = {&k.target[0], &k.target[1], &k.target[2], &k.yaw_deg, &k.pitch_deg, &k.distance, &k.fov_deg};
+    for (size_t i = 1; i < w.size(); ++i)
+        if (!parse_float(w[i], *dst[i - 1])) return false;
+    return k.distance > 0.0f && k.pitch_deg >= -89.0f && k.pitch_deg <= 89.0f && k.fov_deg >= 0.0f && k.fov_deg < 180.0f;
+}
+
+bool parse_impl(std::string_view text, Scenario& out, std::string* err, bool recipe);
+
 }  // namespace
+
+const char* host_name(Host h) { return h == Host::Game ? "game" : "headless"; }
+
+double camera_time(uint64_t ticks_run, float alpha) {
+    if (ticks_run == 0) return 0.0;
+    const double a = std::clamp(static_cast<double>(alpha), 0.0, 1.0);
+    return static_cast<double>(ticks_run - 1) + a;
+}
+
+CameraKey camera_pose(const std::vector<CameraKey>& keys, double u) {
+    if (keys.empty()) return {};
+    if (u <= static_cast<double>(keys.front().tick)) return keys.front();
+    if (u >= static_cast<double>(keys.back().tick)) return keys.back();
+    size_t i = 1;
+    while (i + 1 < keys.size() && static_cast<double>(keys[i].tick) <= u) ++i;
+    const CameraKey& a = keys[i - 1];
+    const CameraKey& b = keys[i];
+    const double t = (u - static_cast<double>(a.tick)) / static_cast<double>(b.tick - a.tick);
+    const auto lerp = [t](float x, float y) {
+        const double d = static_cast<double>(y) - static_cast<double>(x);
+        const double m = d * t;  // two separate operations (and -ffp-contract=off / fp:precise): no FMA
+        return static_cast<float>(static_cast<double>(x) + m);
+    };
+    CameraKey p;
+    p.tick = a.tick;
+    for (int j = 0; j < 3; ++j) p.target[j] = lerp(a.target[j], b.target[j]);
+    p.yaw_deg = lerp(a.yaw_deg, b.yaw_deg);
+    p.pitch_deg = lerp(a.pitch_deg, b.pitch_deg);
+    p.distance = lerp(a.distance, b.distance);
+    p.fov_deg = a.fov_deg > 0.0f && b.fov_deg > 0.0f ? lerp(a.fov_deg, b.fov_deg) : a.fov_deg;
+    return p;
+}
 
 std::string hex64(uint64_t v) {
     char buf[17];
@@ -125,7 +207,8 @@ std::string Scenario::resolve(const ScenarioFile& f) const {
 }
 
 std::string Scenario::to_text() const {
-    std::string t = "ALAMO_BENCH " + std::to_string(format) + "\n";
+    const bool v2 = has_v2();
+    std::string t = "ALAMO_BENCH " + std::to_string(v2 ? kFormat : kFormatV1) + "\n";
     t += "name " + name + "\n";
     t += "version " + std::to_string(version) + "\n";
     if (!description.empty()) t += "description " + description + "\n";
@@ -142,10 +225,22 @@ std::string Scenario::to_text() const {
     t += "ticks " + std::to_string(ticks) + "\n";
     t += "workers " + (workers < 0 ? std::string("auto") : std::to_string(workers)) + "\n";
     t += "final_crc " + hex64(final_crc) + "\n";
+    if (!v2) return t;
+    t += std::string("host ") + host_name(host) + "\n";
+    if (!mode.empty()) t += "mode " + mode + "\n";
+    if (!preset.empty()) t += "preset " + preset + "\n";
+    if (frames_per_tick) t += "frames_per_tick " + std::to_string(frames_per_tick) + "\n";
+    if (camera_anchor != CameraAnchor::World) t += "camera_anchor start\n";
+    for (const CameraKey& k : camera) t += camera_line(k);
     return t;
 }
 
-bool Scenario::parse(std::string_view text, Scenario& out, std::string* err) {
+bool Scenario::parse(std::string_view text, Scenario& out, std::string* err) { return parse_impl(text, out, err, false); }
+bool Scenario::parse_recipe(std::string_view text, Scenario& out, std::string* err) { return parse_impl(text, out, err, true); }
+
+namespace {
+
+bool parse_impl(std::string_view text, Scenario& out, std::string* err, bool recipe) {
     out = {};
     bool have_format = false, have_name = false, have_save = false, have_fp = false, have_ticks = false;
     size_t line_no = 0;
@@ -170,7 +265,7 @@ bool Scenario::parse(std::string_view text, Scenario& out, std::string* err) {
         uint64_t n = 0;
         if (!have_format) {
             if (key != "ALAMO_BENCH" || !parse_u64(val, n)) return bad("expected 'ALAMO_BENCH <format>' first");
-            if (n != kFormat) return bad("unsupported scenario format (this build reads format 1)");
+            if (n != kFormat && n != kFormatV1) return bad("unsupported scenario format (this build reads formats 1 and 2)");
             out.format = static_cast<uint32_t>(n);
             have_format = true;
         } else if (key == "name") {
@@ -206,17 +301,58 @@ bool Scenario::parse(std::string_view text, Scenario& out, std::string* err) {
             else return bad("workers: an integer or 'auto'");
         } else if (key == "final_crc") {
             if (!parse_hex64(val, out.final_crc)) return bad("final_crc: 16 hex digits");
+        } else if (key == "host" || key == "mode" || key == "preset" || key == "frames_per_tick" || key == "camera_anchor" || key == "camera") {
+            if (out.format < kFormat) return bad("a format-2 key in a format-1 manifest (write 'ALAMO_BENCH 2')");
+            if (key == "host") {
+                if (val == "headless") out.host = Host::Headless;
+                else if (val == "game") out.host = Host::Game;
+                else return bad("host: headless or game");
+            } else if (key == "mode") {
+                if (val != "realtime" && val != "fixed") return bad("mode: realtime or fixed");
+                out.mode = std::string(val);
+            } else if (key == "preset") {
+                if (val.empty() || val.find_first_of(" \t") != std::string_view::npos) return bad("preset: one word");
+                out.preset = std::string(val);
+            } else if (key == "frames_per_tick") {
+                if (!parse_u64(val, n) || n == 0 || n > 64) return bad("frames_per_tick: 1..64");
+                out.frames_per_tick = static_cast<uint32_t>(n);
+            } else if (key == "camera_anchor") {
+                if (val == "world") out.camera_anchor = CameraAnchor::World;
+                else if (val == "start") out.camera_anchor = CameraAnchor::Start;
+                else return bad("camera_anchor: world or start");
+            } else {
+                CameraKey k;
+                if (!parse_camera(val, k)) return bad("camera: <tick> <tx> <ty> <tz> <yaw> <pitch -89..89> <distance > 0> [<fov 0..180>]");
+                if (!out.camera.empty() && k.tick <= out.camera.back().tick) return bad("camera: key ticks must increase");
+                out.camera.push_back(k);
+            }
         } else {
             return bad("unknown key");
         }
         if (e == text.size()) break;
     }
-    if (!have_format || !have_name || !have_save || !have_fp || !have_ticks) {
-        fail(err, "scenario: missing one of ALAMO_BENCH / name / save / fingerprint / ticks");
+    if (!have_format || !have_name || (!recipe && (!have_save || !have_fp || !have_ticks))) {
+        fail(err, recipe ? "scenario: missing ALAMO_BENCH / name" : "scenario: missing one of ALAMO_BENCH / name / save / fingerprint / ticks");
         return false;
     }
     return true;
 }
+
+bool load_impl(const std::string& path, Scenario& out, std::string* err, bool recipe) {
+    std::string text;
+    if (!read_bytes(path, text)) {
+        fail(err, "cannot read " + path);
+        return false;
+    }
+    if (!parse_impl(text, out, err, recipe)) {
+        if (err) *err = path + ": " + *err;
+        return false;
+    }
+    out.dir = std::filesystem::path(path).parent_path().string();
+    return true;
+}
+
+}  // namespace
 
 bool Scenario::save_manifest(const std::string& path, std::string* err) const {
     std::ofstream f(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
@@ -228,19 +364,8 @@ bool Scenario::save_manifest(const std::string& path, std::string* err) const {
     return true;
 }
 
-bool Scenario::load(const std::string& path, Scenario& out, std::string* err) {
-    std::string text;
-    if (!read_bytes(path, text)) {
-        fail(err, "cannot read " + path);
-        return false;
-    }
-    if (!parse(text, out, err)) {
-        if (err) *err = path + ": " + *err;
-        return false;
-    }
-    out.dir = std::filesystem::path(path).parent_path().string();
-    return true;
-}
+bool Scenario::load(const std::string& path, Scenario& out, std::string* err) { return load_impl(path, out, err, false); }
+bool Scenario::load_recipe(const std::string& path, Scenario& out, std::string* err) { return load_impl(path, out, err, true); }
 
 bool pin_file(const std::string& path, ScenarioFile& f, std::string* err) {
     std::string bytes;

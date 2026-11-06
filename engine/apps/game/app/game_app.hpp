@@ -25,6 +25,7 @@
 #include "alamo/game/battle_fx.hpp"
 #include "alamo/game/battle_summary.hpp"
 #include "alamo/game/benchmark.hpp"
+#include "alamo/game/benchmark_scenario.hpp"
 #include "alamo/game/game_audio_host.hpp"
 #include "alamo/game/game_controls.hpp"
 #include "alamo/game/game_data.hpp"
@@ -169,6 +170,8 @@ inline int usage() {
                  "                  [--bench-frames-per-tick K] [--bench-settle N] [--bench-max-unsettled N] [--bench-report FILE]\n"
                  "                  [--bench-crc-out FILE] [--bench-png-dir DIR --bench-png-every N] [--bench-no-verify]\n"
                  "                  presets: bm-low, bm-medium, bm-high (default), bm-ultra, bm-smoke\n"
+                 "       alamo_game --bench-scenario S.abench [--bench-* flags]     a BM1/BM2 scenario (host game); flags win over the file\n"
+                 "       alamo_game --bench-make S.abench --bench-save FILE [...]   run from the save, then write the scenario S\n"
                  "       game data: --game DIR or ALAMO_FOC_DATA (the corruption folder)\n");
     return 2;
 }
@@ -621,6 +624,30 @@ public:
     double bench_now() const;
     int bench_finish();         // report, CRC log, presentation check; the exit code
 
+    // ---- bm2: scenario runs, the scripted camera, GPU timer scopes (app_bench_scenario.cpp, benchmark_scenario.hpp) ----
+    struct BenchScenarioState {
+        commands::CommandRecording orders;  // the scenario's recorded orders (replayed)
+        bool have_orders = false;
+        int view = 0;              // the world view the camera path drives (1 galactic, 2 battle; 0 = not chosen yet)
+        tactical::Vec3 anchor{};   // camera_anchor start: that view's own camera target at its first gameplay frame
+        rhi::GpuTimer gpu;
+        bool gpu_on = false;
+        uint32_t gpu_slot = UINT32_MAX, gpu_frame_scope = UINT32_MAX;  // this frame's slot / "frame" scope
+        std::vector<uint8_t> slot_counted;  // per frame slot: the frame last recorded there counted
+        std::vector<std::pair<std::string, std::vector<float>>> gpu_ms;  // per scope, first-seen order
+        uint64_t gpu_frames = 0;
+        bool not_comparable = false;
+    } bscen_;
+    bool bench_scenario_start();  // bench_start: the scenario's orders, the GPU timer
+    const commands::CommandRecording* bench_replay() const { return bscen_.have_orders ? &bscen_.orders : nullptr; }
+    // The scripted camera over the drawn view's own camera (view 1 galactic, 2 battle); false = not applied.
+    bool bench_camera(ui::CameraParams& cp, int view, uint32_t w, uint32_t h);
+    rhi::GpuTimer* bench_gpu_timer() { return bscen_.gpu_on ? &bscen_.gpu : nullptr; }
+    void bench_gpu_begin(rhi::Frame& f, VkCommandBuffer cmd);  // render_frame, first: the slot's previous results, "frame" opens
+    void bench_gpu_end(VkCommandBuffer cmd);                   // render_frame, before the submit: "frame" closes
+    void bench_gpu_counted(bool counted);                      // bench_frame_end: whether this frame's slot counts
+    void bench_scenario_end(BenchReport& r);  // bench_finish: GPU stats, fingerprint check, --bench-make output
+
     bool init();
     void shutdown();
     void frame();
@@ -631,7 +658,7 @@ public:
     // N1 / t09: the Save / Load / Delete requests of the menus.
     void save_game_as(const std::string& typed);
     bool load_saved_game(const std::string& name);
-    bool load_save_file(const std::string& path);  // BM2a: load_saved_game by path
+    bool load_save_file(const std::string& path, const commands::CommandRecording* replay = nullptr);  // BM2a: load_saved_game by path (bm2: with a replay)
     void delete_saved_game(const std::string& name);
     void save_message(std::u32string caption, const std::string& detail);
     std::string session_title() const;  // the campaign's display name / the skirmish map (save descriptions)
