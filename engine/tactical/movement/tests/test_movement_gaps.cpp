@@ -11,6 +11,7 @@
 #include <map>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
@@ -2211,6 +2212,585 @@ static void test_speed_override() {
     CHECK(!sys.set_speed_override(99, 1.0f));
 }
 
+// s78k t01 (MOVEMENT §3.5.1, §6.1): the Walk locomotor's arrival turn to a move's final facing, and the flag-0x20
+// straight path.
+static void test_arrival_turn() {
+    // One unit walking east (yaw 0) to cell (20, 10) with a final facing; returns the yaws after the arrival frame.
+    struct Run {
+        bool arrived = false;
+        float arrival_yaw = 0.0f;
+        std::vector<float> after;  // yaw per frame after the arrival frame
+    };
+    auto run = [](float final_facing, float stopped_rate, int32_t directions, int stop_after = -1, bool reorder = false) {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        UnitDesc d = unit(1, cell_center(10, 10), 2, 2.0f, 8.0f, LocomotorKind::Default);
+        d.stopped_turn_rate = stopped_rate;
+        d.movement_directions = directions;
+        CHECK(sys.add_unit(d));
+        SimRng rng(3);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(20, 10);
+        o.final_facing_deg = final_facing;
+        sys.move(o, rng, 0);
+        Run r;
+        uint32_t f = 1;
+        for (; f < 400 && !r.arrived; ++f) {
+            sys.tick(f, rng);
+            if (sys.view(1).arrived) {
+                r.arrived = true;
+                r.arrival_yaw = sys.view(1).yaw;
+            }
+        }
+        for (int k = 0; k < 40; ++k, ++f) {
+            if (k == stop_after) {
+                const ObjectId ids[] = {1};
+                sys.stop(ids);
+            }
+            if (reorder && k == stop_after) {
+                MoveOrder b;  // a new order without a final facing replaces the turn
+                b.units = {1};
+                b.destination = cell_center(10, 10);
+                sys.move(b, rng, f);
+            }
+            sys.tick(f, rng);
+            r.after.push_back(sys.view(1).yaw);
+        }
+        return r;
+    };
+    const float rate = 6.0f * MovementConstants{}.land_speed_multiplier;  // Max_Rate_Of_Turn x the land multiplier
+    {  // 90 degrees off: rate-limited turn landing exactly on 90
+        const Run r = run(90.0f, 0.0f, 1);
+        CHECK(r.arrived && std::fabs(r.arrival_yaw) < 1e-3f);
+        float prev = r.arrival_yaw;
+        size_t steps = 0;
+        for (const float y : r.after) {
+            CHECK(std::fabs(wrap_deg(y - prev)) <= rate + 1e-4f);
+            if (y != prev) ++steps;
+            prev = y;
+        }
+        CHECK(r.after.back() == 90.0f);
+        CHECK(steps == static_cast<size_t>(std::ceil(90.0f / rate)));
+        std::printf("arrival turn: 90 deg in %zu frames at %.2f deg/frame\n", steps, static_cast<double>(rate));
+    }
+    {  // Stopped_Rate_Of_Turn 30 replaces the Max_Rate_Of_Turn rate
+        const Run r = run(90.0f, 30.0f, 1);
+        CHECK(r.after.size() >= 3 && r.after[0] == 30.0f && r.after[1] == 60.0f && r.after[2] == 90.0f && r.after.back() == 90.0f);
+    }
+    {  // within 10 degrees: no turn
+        const Run r = run(8.0f, 0.0f, 1);
+        CHECK(r.arrived && r.after.back() == r.arrival_yaw);
+    }
+    {  // no final facing: the arrival heading is kept
+        const Run r = run(kNoFacing, 0.0f, 1);
+        CHECK(r.arrived && r.after.back() == r.arrival_yaw);
+    }
+    {  // Movement_Directions_Count 2: of {180, 0} the one closest to yaw 0 -> no turn; <= 0: the current yaw
+        CHECK(run(180.0f, 30.0f, 2).after.back() == 0.0f);
+        CHECK(run(150.0f, 30.0f, 2).after.back() == -30.0f);  // {150, -30}: -30 is 30 off -> turn to -30
+        CHECK(run(90.0f, 30.0f, 0).after.back() == 0.0f);
+    }
+    {  // a stop during the turn keeps the yaw reached
+        const Run r = run(90.0f, 30.0f, 1, 1);
+        CHECK(r.after[0] == 30.0f && r.after.back() == 30.0f);
+    }
+    {  // s78l t02: a stop drops the running turn -> arrival_turn_ended on the next tick only
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        UnitDesc d = unit(1, cell_center(10, 10), 2, 2.0f, 8.0f, LocomotorKind::Default);
+        d.stopped_turn_rate = 5.0f;
+        CHECK(sys.add_unit(d));
+        SimRng rng(3);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(20, 10);
+        o.final_facing_deg = 90.0f;
+        sys.move(o, rng, 0);
+        uint32_t f = 1;
+        for (; f < 400 && !sys.view(1).arrived; ++f) sys.tick(f, rng);
+        sys.tick(f++, rng);
+        CHECK(sys.view(1).arrival_turn && !sys.view(1).arrival_turn_ended);
+        const ObjectId ids[] = {1};
+        sys.stop(ids);
+        sys.tick(f++, rng);
+        CHECK(!sys.view(1).arrival_turn && sys.view(1).arrival_turn_ended);
+        sys.tick(f++, rng);
+        CHECK(!sys.view(1).arrival_turn_ended);
+    }
+    {  // a new order replaces the turn: walking back west ends on the travel heading
+        const Run r = run(90.0f, 30.0f, 1, 1, true);
+        CHECK(r.after[0] == 30.0f && std::fabs(std::fabs(r.after.back()) - 180.0f) < 1e-3f);
+    }
+}
+
+static void test_forced_path() {
+    // A wall across x = 15 (the whole height): a normal move stops at the nearest reachable spot on the near side; a
+    // flag-0x20 move walks straight through to the destination.
+    for (const bool forced : {false, true}) {
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g = open_grid(40, 40);
+        for (int32_t y = 0; y < 40; ++y) g.set_base(15, y, kPassImpassable);
+        sys.set_grid(std::move(g));
+        CHECK(sys.add_unit(unit(1, cell_center(10, 10), 2, 2.0f, 8.0f, LocomotorKind::Default)));
+        SimRng rng(3);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(20, 12);
+        if (forced) o.flags = kMoveFlagSkipValidation;
+        sys.move(o, rng, 0);
+        bool arrived = false;
+        for (uint32_t f = 1; f < 600 && !arrived; ++f) {
+            sys.tick(f, rng);
+            arrived = sys.view(1).arrived;
+        }
+        const UnitView v = sys.view(1);
+        std::printf("forced path %d: arrived %d at (%.1f, %.1f), failed %d\n", forced ? 1 : 0, arrived ? 1 : 0,
+                    static_cast<double>(v.pos.x), static_cast<double>(v.pos.y), v.failed ? 1 : 0);
+        if (forced) {
+            CHECK(arrived && v.pos.x == cell_center(20, 12).x && v.pos.y == cell_center(20, 12).y);
+        } else {
+            CHECK(v.pos.x < 15.0f * kCellSize);  // the wall closes the map: the route ends on the near side
+        }
+    }
+}
+
+// s78k t03 (MOVEMENT §3.4 / §3.7): the team locomotor cap - two team units of different Max_Speed, moved one at a time
+// (no formation): each walks at most at min(Max_Speed) x mult x the container factor; leaving the team removes it.
+static void test_team_cap() {
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    CHECK(sys.add_unit(unit(1, cell_center(10, 10), 2, 1.0f, 8.0f, LocomotorKind::Default)));
+    CHECK(sys.add_unit(unit(2, cell_center(10, 30), 2, 3.0f, 8.0f, LocomotorKind::Default)));
+    const float mult = MovementConstants{}.land_speed_multiplier;
+    CHECK(sys.set_team(1, 50, 1.5f) && sys.set_team(2, 50, 1.5f) && !sys.set_team(9, 50, 1.0f));
+    SimRng rng(3);
+    MoveOrder o;
+    o.units = {2};
+    o.destination = cell_center(60, 30);
+    sys.move(o, rng, 0);
+    float top = 0.0f;
+    for (uint32_t f = 1; f < 40; ++f) {
+        sys.tick(f, rng);
+        top = std::max(top, sys.view(2).speed);
+    }
+    const float cap = (1.0f * mult) * 1.5f;
+    CHECK(sys.view(1).team_speed == cap && sys.view(2).team_speed == cap && top == cap);
+    CHECK(sys.set_team(2, -1, 1.0f));
+    for (uint32_t f = 40; f < 60; ++f) {
+        sys.tick(f, rng);
+        top = std::max(top, sys.view(2).speed);
+    }
+    CHECK(sys.view(2).team_speed > 1.0e30f && top == 3.0f * mult);
+    std::printf("team cap: %.3f in the team, %.3f alone\n", static_cast<double>(cap), static_cast<double>(top));
+}
+
+// s78l t04 (FIGHTER_FLYING §4.11 item 4, MOVEMENT §3.4, TACTICAL_COMBAT §4.4 "No mode gate"): a space squadron's
+// formation speed (F +0x21c, 0x41b2a0) is the container's effective max speed - the minimum raw Max_Speed of its fighters
+// x the space multiplier x the container factor set_team gives it (the squad Mod_Multiplier SPEED) - and not the fighters'
+// own speed factors. A lone fighter's formation keeps its own effective max speed (own factor included).
+static void test_squad_team_speed() {
+    MovementConfig cfg;
+    cfg.mode = MoveMode::Space;
+    const float mult = MovementConstants{}.space_speed_multiplier;
+    // Guarding a fast carrier (2 x its speed > any fighter speed below, so the follow cap never bites): the formation's
+    // speed after `frames` frames with the given container factor / fighter-1 own factor; `squad` false = fighter 1 alone.
+    const auto run = [&](bool squad, float team_factor, float own_factor, uint32_t frames) {
+        MovementSystem sys(cfg);
+        sys.space().set_box({-4000.0f, -4000.0f}, {4000.0f, 4000.0f});
+        const float speeds[3] = {10.0f, 8.0f, 12.0f};  // raw Max_Speed; fighter 2 is the slowest
+        FighterSquadDesc sq;
+        sq.id = 500;
+        for (ObjectId i = 1; i <= 3; ++i) {
+            const float side = static_cast<float>(i - 2) * 30.0f;
+            UnitDesc f = unit(i, {-2000.0f, 1500.0f + side}, -1, speeds[i - 1], 10.0f, LocomotorKind::Fighter);
+            f.space_layer = kLayerFighter;
+            f.space_layer_type = 0;
+            CHECK(sys.add_unit(f));
+            sq.members.push_back(i);
+            sq.slots.push_back({0.0f, side, 0.0f});
+        }
+        if (squad) {
+            CHECK(sys.set_fighter_squad(sq));
+            for (ObjectId i = 1; i <= 3; ++i) CHECK(sys.set_team(i, 500, team_factor));
+        }
+        CHECK(sys.set_speed_factor(1, own_factor));
+        UnitDesc c = unit(50, {-2000.0f, 0.0f}, -1, 20.0f, 60.0f, LocomotorKind::Default);
+        c.space_layer_type = 2;
+        CHECK(sys.add_unit(c));
+        SimRng rng(5);
+        MoveOrder g;
+        g.units = squad ? std::vector<ObjectId>{1, 2, 3} : std::vector<ObjectId>{1};
+        g.destination = {-2000.0f, 0.0f};
+        g.flags = kMoveFlagGuardMove;
+        g.goal_object = 50;
+        sys.move(g, rng, 0);
+        MoveOrder mc;
+        mc.units = {50};
+        mc.destination = {3000.0f, 0.0f};
+        sys.move(mc, rng, 0);
+        float speed = -1.0f;
+        for (uint32_t fr = 0; fr < frames; ++fr) {
+            sys.tick(fr, rng);
+            if (const FighterFormation* f = sys.fighter_formation(squad ? 500 : 1)) speed = f->speed;
+        }
+        CHECK(2.0f * sys.view(50).max_speed > 12.0f * mult * 2.0f);  // the follow cap stays above every value below
+        return std::pair<float, float>{speed, sys.view(1).max_speed};
+    };
+    const float slow = 8.0f * mult;
+    CHECK(run(true, 1.0f, 1.0f, 40).first == slow);         // squadron, factor 1: the slowest fighter's raw speed x mult
+    CHECK(run(true, 1.5f, 1.0f, 40).first == slow * 1.5f);  // container factor 1.5 (squad SPRINT)
+    CHECK(run(true, 0.5f, 1.0f, 40).first == slow * 0.5f);  // container factor 0.5
+    {  // a fighter's own factor (0.25 on fighter 1, which would make it the slowest) is not read for a squadron
+        const auto [s, own] = run(true, 1.0f, 0.25f, 40);
+        CHECK(s == slow && own == 10.0f * mult * 0.25f);
+    }
+    {  // a lone fighter: its own effective max speed, own factor included; set_team is not involved
+        const auto [s, own] = run(false, 1.0f, 0.5f, 40);
+        CHECK(s == own && own == 10.0f * mult * 0.5f);
+    }
+    std::printf("squad team speed: slowest %.3f, x1.5 %.3f, x0.5 %.3f\n", static_cast<double>(slow), static_cast<double>(slow * 1.5f),
+                static_cast<double>(slow * 0.5f));
+}
+
+// s78l t01 (MOVEMENT §3.4 "Team cap, exact" / "Full team formula", TACTICAL_COMBAT §4.4 "Team move speed"): the team
+// speed is min(container Max_Speed, min member raw Max_Speed) x mult x the container factor, and a member walks AT it -
+// its own speed factor is not multiplied in (no double count); a stunned member (factor 0) stays put.
+static void test_team_speed_exact() {
+    const float mult = MovementConstants{}.land_speed_multiplier;
+    // Two members (raw 1.0 and 1.2) of a Stormtrooper_Team-like container (Max_Speed 0.8); member 2 walks alone.
+    const auto run = [&](float container_max, float factor, float own2) {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(unit(1, cell_center(10, 10), 2, 1.0f, 6.0f, LocomotorKind::Default)));
+        CHECK(sys.add_unit(unit(2, cell_center(10, 30), 2, 1.2f, 6.0f, LocomotorKind::Default)));
+        CHECK(sys.set_team(1, 50, factor, container_max) && sys.set_team(2, 50, factor, container_max));
+        CHECK(sys.set_speed_factor(2, own2));
+        SimRng rng(3);
+        MoveOrder o;
+        o.units = {2};
+        o.destination = cell_center(60, 30);
+        sys.move(o, rng, 0);
+        float top = 0.0f;
+        for (uint32_t f = 1; f < 40; ++f) {
+            sys.tick(f, rng);
+            top = std::max(top, sys.view(2).speed);
+        }
+        return std::pair<float, float>{sys.view(2).team_speed, top};
+    };
+    {  // the container's 0.8 is below both members: it sets the team speed
+        const auto [ts, top] = run(0.8f, 1.0f, 1.0f);
+        CHECK(ts == 0.8f * mult && top == ts);
+    }
+    {  // a container faster than its members (Sandpeople_Team 1.0 over 0.5 members): the slowest member
+        const auto [ts, top] = run(1.5f, 1.0f, 1.0f);
+        CHECK(ts == 1.0f * mult && top == ts);
+    }
+    {  // container unknown (-1): the members' minimum alone (the s78k behaviour)
+        const auto [ts, top] = run(-1.0f, 1.0f, 1.0f);
+        CHECK(ts == 1.0f * mult && top == ts);
+    }
+    {  // the container factor applies once; the member's own factor 0.5 does not enter, nor caps it
+        const auto [ts, top] = run(0.8f, 1.25f, 0.5f);
+        CHECK(ts == 0.8f * mult * 1.25f && top == ts);
+    }
+    {  // a factor above the member's own top speed: the team speed still rules (the container moves the team)
+        const auto [ts, top] = run(-1.0f, 1.5f, 1.0f);
+        CHECK(ts == 1.0f * mult * 1.5f && top == ts && top > 1.2f * mult);
+    }
+    {  // a stunned member (own factor 0: its locomotor is suspended) does not move
+        const auto [ts, top] = run(0.8f, 1.0f, 0.0f);
+        CHECK(ts == 0.8f * mult && top == 0.0f);
+    }
+    {  // space squadron: the container's Max_Speed is in the formation speed minimum too (0x41b2a0 -> 0x370f00)
+        MovementConfig cfg;
+        cfg.mode = MoveMode::Space;
+        const float sm = MovementConstants{}.space_speed_multiplier;
+        MovementSystem sys(cfg);
+        sys.space().set_box({-4000.0f, -4000.0f}, {4000.0f, 4000.0f});
+        FighterSquadDesc sq;
+        sq.id = 500;
+        for (ObjectId i = 1; i <= 2; ++i) {
+            const float side = static_cast<float>(i) * 30.0f;
+            UnitDesc f = unit(i, {-2000.0f, 1500.0f + side}, -1, 10.0f, 10.0f, LocomotorKind::Fighter);
+            f.space_layer = kLayerFighter;
+            f.space_layer_type = 0;
+            CHECK(sys.add_unit(f));
+            sq.members.push_back(i);
+            sq.slots.push_back({0.0f, side, 0.0f});
+        }
+        CHECK(sys.set_fighter_squad(sq));
+        for (ObjectId i = 1; i <= 2; ++i) CHECK(sys.set_team(i, 500, 1.0f, 6.0f));
+        UnitDesc c = unit(50, {-2000.0f, 0.0f}, -1, 20.0f, 60.0f, LocomotorKind::Default);
+        c.space_layer_type = 2;
+        CHECK(sys.add_unit(c));
+        SimRng rng(5);
+        MoveOrder g;
+        g.units = {1, 2};
+        g.destination = {-2000.0f, 0.0f};
+        g.flags = kMoveFlagGuardMove;
+        g.goal_object = 50;
+        sys.move(g, rng, 0);
+        MoveOrder mc;
+        mc.units = {50};
+        mc.destination = {3000.0f, 0.0f};
+        sys.move(mc, rng, 0);
+        float speed = -1.0f;
+        for (uint32_t fr = 0; fr < 40; ++fr) {
+            sys.tick(fr, rng);
+            if (const FighterFormation* f = sys.fighter_formation(500)) speed = f->speed;
+        }
+        CHECK(speed == 6.0f * sm);
+    }
+    std::printf("team speed exact: container 0.8 -> %.3f\n", static_cast<double>(0.8f * mult));
+}
+
+// s78l t02 (MOVEMENT §3.5.1 "Arrival turn, details"): the pure rules.
+static void test_arrival_turn_rules() {
+    CHECK(arrival_turn_threshold(6.0f, false) == 10.0f && arrival_turn_threshold(6.0f, true) == 6.0f &&
+          arrival_turn_threshold(12.0f, true) == 10.0f);
+    CHECK(anim_idle_class(0) && anim_idle_class(1) && anim_idle_class(71) && anim_idle_class(77) && anim_idle_class(82) &&
+          !anim_idle_class(2) && !anim_idle_class(83) && !anim_idle_class(kAnimNone));
+    CHECK(anim_turn_clip(3) && anim_turn_clip(4) && anim_turn_clip(21) && anim_turn_clip(24) && !anim_turn_clip(12) &&
+          !anim_turn_clip(13) && !anim_turn_clip(25));
+    {
+        const TurnAnim q = arrival_turn_band(15.0f, 3.0f, 10.0f, 0);
+        CHECK(q.anim == kAnimTurnLeftQuarter && q.rate == 3.0f * 0.25f * 15.0f / 11.25f);
+        const TurnAnim h = arrival_turn_band(-30.0f, 3.0f, 10.0f, 0);
+        CHECK(h.anim == kAnimTurnRightHalf && h.rate == 1.5f);
+        const TurnAnim f = arrival_turn_band(45.0f, 3.0f, 10.0f, 0);
+        CHECK(f.anim == kAnimTurnLeft && f.rate == 3.0f);
+        const TurnAnim n = arrival_turn_band(9.5f, 3.0f, 10.0f, kAnimTurnLeftHalf);  // |e| < T: clip unchanged, rate S
+        CHECK(n.anim == kAnimTurnLeftHalf && n.rate == 3.0f);
+        const TurnAnim t = arrival_turn_band(10.0f, 3.0f, 10.0f, 0);  // e >= T
+        CHECK(t.anim == kAnimTurnLeftQuarter);
+    }
+    CHECK(arrival_turn_end_clip(3) == kAnimTurnLeftEnd && arrival_turn_end_clip(12) == kAnimTurnLeftEnd &&
+          arrival_turn_end_clip(22) == kAnimTurnLeftEnd && arrival_turn_end_clip(4) == kAnimTurnRightEnd &&
+          arrival_turn_end_clip(14) == kAnimTurnRightEnd && arrival_turn_end_clip(23) == kAnimTurnRightEnd &&
+          arrival_turn_end_clip(0) == kAnimNone && arrival_turn_end_clip(2) == kAnimNone);
+}
+
+// s78l t02 (b): the Has_Pre_Turn_Anim arrival turn - begin clip holds the yaw, band rates from the frame after the
+// pick, the end clip, then the pop with the default idle; without clip data the band still sets the rate and the turn
+// ends early (|e| < 10 with an idle-class clip); a unit without Has_Pre_Turn_Anim plays TURNL once and lands exactly.
+static bool arrival_clips(ObjectId, int32_t anim, uint32_t& n, float& fps) {
+    switch (anim) {
+        case kAnimTurnLeftBegin:
+        case kAnimTurnRightBegin: n = 12; break;  // 12 frames at 15 fps: 0.5 x speed clip frames per sim frame
+        case kAnimTurnLeftEnd:
+        case kAnimTurnRightEnd: n = 8; break;
+        case kAnimTurnLeft:
+        case kAnimTurnRight:
+        case kAnimTurnLeftHalf:
+        case kAnimTurnRightHalf:
+        case kAnimTurnLeftQuarter:
+        case kAnimTurnRightQuarter: n = 10; break;
+        default: return false;
+    }
+    fps = 15.0f;
+    return true;
+}
+
+static void test_arrival_turn_clips() {
+    struct Frame {
+        float yaw = 0.0f;
+        bool turning = false;
+        bool ended = false;
+        std::vector<MovementSystem::TurnClipEvent> ev;
+    };
+    struct Run {
+        float arrival_yaw = 0.0f;
+        std::vector<Frame> fr;  // from the frame after the arrival
+    };
+    const auto run = [](bool pre, bool clips, float stopped, float ras) {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        if (clips) sys.set_deploy_clip_fn(arrival_clips);
+        UnitDesc d = unit(1, cell_center(10, 10), 2, 2.0f, 8.0f, LocomotorKind::Default);
+        d.has_pre_turn_anim = pre;
+        d.stopped_turn_rate = stopped;
+        d.rotation_animation_speed = ras;
+        CHECK(sys.add_unit(d));
+        SimRng rng(3);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(20, 10);
+        o.final_facing_deg = 90.0f;
+        sys.move(o, rng, 0);
+        Run r;
+        uint32_t f = 1;
+        for (; f < 400 && !sys.view(1).arrived; ++f) sys.tick(f, rng);
+        CHECK(sys.take_turn_clip_events().empty());
+        r.arrival_yaw = sys.view(1).yaw;
+        for (int k = 0; k < 120; ++k, ++f) {
+            sys.tick(f, rng);
+            Frame x;
+            x.yaw = sys.view(1).yaw;
+            x.turning = sys.view(1).arrival_turn;
+            x.ended = sys.view(1).arrival_turn_ended;
+            x.ev = sys.take_turn_clip_events();
+            CHECK(x.ev.size() <= 1);
+            r.fr.push_back(x);
+        }
+        return r;
+    };
+    {  // with clips: begin (yaw held) -> TURNL band clips -> end clip -> pop + idle
+        const Run r = run(true, true, 3.0f, 1.5f);
+        CHECK(std::fabs(r.arrival_yaw) < 1e-3f);
+        CHECK(!r.fr[0].ev.empty() && r.fr[0].ev[0].anim == kAnimTurnLeftBegin && r.fr[0].ev[0].speed == 2.0f &&
+              r.fr[0].ev[0].blend < 0.0f && r.fr[0].turning);
+        // Begin clip: 12 frames at 15 fps x speed 2 = 1 clip frame per sim frame -> in its last 2 frames at position 10.
+        size_t k = 1;
+        while (k < r.fr.size() && r.fr[k].yaw == r.arrival_yaw) ++k;
+        CHECK(k == 10);  // frames 0..9 hold the yaw; the turn starts on frame 10
+        CHECK(r.fr[k].yaw == 3.0f);  // first turn frame at S = Stopped_Rate_Of_Turn
+        CHECK(!r.fr[k].ev.empty() && r.fr[k].ev[0].anim == kAnimTurnLeft);  // e = 87 after the step: TURNL at S
+        bool end = false, idle = false, half = false, quarter = false;
+        size_t pop = 0;
+        for (size_t j = k; j < r.fr.size(); ++j) {
+            for (const auto& e : r.fr[j].ev) {
+                half = half || e.anim == kAnimTurnLeftHalf;
+                quarter = quarter || e.anim == kAnimTurnLeftQuarter;
+                end = end || e.anim == kAnimTurnLeftEnd;
+                if (e.idle) {
+                    idle = true;
+                    pop = j;
+                }
+            }
+        }
+        CHECK(half && quarter && end && idle);
+        CHECK(!r.fr[pop].turning && (pop == 0 || r.fr[pop - 1].turning));
+        for (size_t j = 0; j < r.fr.size(); ++j) CHECK(r.fr[j].ended == (j == pop));  // only the pop frame
+        CHECK(std::fabs(r.fr.back().yaw - 90.0f) <= 10.0f && !r.fr.back().turning);
+        std::printf("arrival turn (clips): begin held %zu frames, popped at +%zu, final yaw %.3f\n", k, pop,
+                    static_cast<double>(r.fr.back().yaw));
+    }
+    {  // Has_Pre_Turn_Anim without clip data: band rates, early end with 0 < |e| < 10, no events
+        const Run r = run(true, false, 3.0f, 1.5f);
+        CHECK(r.fr[0].yaw == 3.0f && r.fr[1].yaw == 6.0f);  // S (first frame), then TURNL band at S
+        for (const Frame& x : r.fr) CHECK(x.ev.empty());
+        const float left = std::fabs(wrap_deg(90.0f - r.fr.back().yaw));
+        CHECK(left > 0.0f && left < 10.0f && !r.fr.back().turning);
+        // in the quarter band the step shrinks with the error (S x 0.25 x e / 11.25)
+        bool shrinking = false;
+        for (size_t j = 2; j < r.fr.size(); ++j) {
+            const float a = r.fr[j - 1].yaw - r.fr[j - 2].yaw, b = r.fr[j].yaw - r.fr[j - 1].yaw;
+            if (b > 0.0f && a > 0.0f && b < a && b < 1.5f) shrinking = true;
+        }
+        CHECK(shrinking);
+        std::printf("arrival turn (no clip data): stopped %.3f deg short\n", static_cast<double>(left));
+    }
+    {  // without Has_Pre_Turn_Anim, with clip data: TURNL once (speed 1, blend |e| / r x 0.03333), exact landing
+        const Run r = run(false, true, 30.0f, 0.0f);
+        CHECK(r.fr[0].yaw == 30.0f && r.fr[1].yaw == 60.0f && r.fr[2].yaw == 90.0f);
+        CHECK(r.fr[0].ev.size() == 1 && r.fr[0].ev[0].anim == kAnimTurnLeft && r.fr[0].ev[0].speed == 1.0f &&
+              r.fr[0].ev[0].blend == 90.0f / 30.0f * 0.03333f);
+        size_t plays = 0;
+        for (const Frame& x : r.fr)
+            for (const auto& e : x.ev) plays += e.idle ? 0u : 1u;
+        CHECK(plays == 1);
+        size_t ends = 0;
+        for (const Frame& x : r.fr) ends += x.ended ? 1u : 0u;
+        CHECK(ends == 1);
+    }
+    {  // TURNL blend cap: |e0| / r x 0.03333 = 90 / 10 x 0.03333 = 0.3 -> kArrivalTurnBlendCapPort
+        const Run r = run(false, true, 10.0f, 0.0f);
+        CHECK(r.fr[0].ev.size() == 1 && r.fr[0].ev[0].anim == kAnimTurnLeft && r.fr[0].ev[0].blend == kArrivalTurnBlendCapPort);
+        // TURNL (10 frames at 0.5 per sim frame) holds the state until its last 2 frames: the pop waits for the clip.
+        CHECK(r.fr.back().yaw == 90.0f && !r.fr.back().turning);
+    }
+}
+
+// s78l t02 (a, step 1): End Move brought to a stop short of the last point (here: a speed override of 0 holds it) on the
+// last segment within 5 units of the last point, along the segment, counts as arrived where it stands; further out the
+// move stays open.
+static void test_arrival_close() {
+    const auto run = [](float stop_within) {
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g = open_grid(60, 60);
+        sys.set_grid(std::move(g));
+        UnitDesc d = unit(1, cell_center(10, 10), 2, 1.0f, 6.0f, LocomotorKind::Default);
+        d.decel = 0.02f;  // a long End Move
+        CHECK(sys.add_unit(d));
+        SimRng rng(3);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(20, 10);
+        sys.move(o, rng, 0);
+        bool held = false;
+        uint32_t f = 1;
+        for (; f < 400 && !sys.view(1).arrived; ++f) {
+            sys.tick(f, rng);
+            if (!held && sys.view(1).has_goal && sys.view(1).goal.x - sys.view(1).pos.x < stop_within) {
+                CHECK(sys.set_speed_override(1, 0.0f));
+                held = true;
+            }
+            if (held && f > 300) break;
+        }
+        const UnitView v = sys.view(1);
+        CHECK(held);
+        return std::pair<bool, float>{v.arrived, v.goal.x - v.pos.x};
+    };
+    {
+        const auto [arrived, short_by] = run(4.0f);
+        CHECK(arrived && short_by > 0.0f && short_by < 4.0f);
+        std::printf("arrival close: arrived %.3f units short of the last point\n", static_cast<double>(short_by));
+    }
+    {
+        const auto [arrived, short_by] = run(9.0f);
+        CHECK(!arrived && short_by >= 5.0f);
+    }
+}
+
+// s78l t02 (c, MOVEMENT §6.1 "Forced-path destination check and fallback"): a flag-0x20 destination in a blocked cell is
+// placed by the ring search (the first passable sample from the unit's yaw, counter-clockwise); a destination off the grid
+// or with no passable sample in 20 rings gives no path and no move.
+static void test_forced_destination() {
+    const auto run = [](V2 dest, bool block_ring) {
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g = open_grid(40, 40);
+        g.set_base(20, 12, kPassImpassable);  // the destination's cell
+        if (block_ring)
+            for (int32_t y = 0; y < 40; ++y)
+                for (int32_t x = 12; x < 40; ++x) g.set_base(x, y, kPassImpassable);
+        sys.set_grid(std::move(g));
+        CHECK(sys.add_unit(unit(1, cell_center(5, 12), 2, 2.0f, 8.0f, LocomotorKind::Default)));
+        SimRng rng(3);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = dest;
+        o.flags = kMoveFlagSkipValidation;
+        sys.move(o, rng, 0);
+        bool arrived = false;
+        for (uint32_t f = 1; f < 600 && !arrived && !sys.view(1).failed; ++f) {
+            sys.tick(f, rng);
+            arrived = sys.view(1).arrived;
+        }
+        return sys.view(1);
+    };
+    const V2 d = cell_center(20, 12);
+    {  // blocked cell: ring search from yaw 0 (east); the first passable sample leaves the cell [390, 410) x [230, 250)
+        const UnitView v = run(d, false);
+        CHECK(v.arrived && !v.failed);
+        CHECK(world_to_cell(v.pos.x) != 20 || world_to_cell(v.pos.y) != 12);
+        CHECK(distance(v.pos, d) > 10.0f && distance(v.pos, d) < 30.0f);
+        CHECK(v.goal.x == v.pos.x && v.goal.y == v.pos.y);
+        // first ring that leaves the cell: R = 13 (0, 1, 2.8, 5.4, 8.8, 13), sample 0 at yaw 0 -> (d.x + 13, d.y)
+        CHECK(std::fabs(v.pos.x - (d.x + 13.0f)) < 1e-3f && std::fabs(v.pos.y - d.y) < 1e-3f);
+        std::printf("forced destination: placed at (%.2f, %.2f), %.2f from the blocked point\n", static_cast<double>(v.pos.x),
+                    static_cast<double>(v.pos.y), static_cast<double>(distance(v.pos, d)));
+    }
+    {  // off the grid: no passable sample -> no path, the unit stays
+        const UnitView v = run({-2000.0f, -2000.0f}, false);
+        CHECK(v.failed && !v.arrived && v.pos.x == cell_center(5, 12).x && v.pos.y == cell_center(5, 12).y);
+    }
+    {  // everything within the 20 rings blocked -> no path
+        const UnitView v = run(cell_center(30, 20), true);
+        CHECK(v.failed && !v.arrived && v.pos.x == cell_center(5, 12).x);
+    }
+}
+
 static void test_determinism() {
     const unsigned hw = std::max(2u, std::thread::hardware_concurrency());
     const CrcLog a = mixed_run(serial_for);
@@ -2505,6 +3085,15 @@ int main() {
     test_fighter_formation_stack();  // s78f t02
     test_space_avoid();
     test_speed_override();
+    test_arrival_turn();  // s78k t01
+    test_forced_path();   // s78k t01
+    test_team_cap();      // s78k t03
+    test_squad_team_speed();  // s78l t04
+    test_team_speed_exact();     // s78l t01
+    test_arrival_turn_rules();   // s78l t02
+    test_arrival_turn_clips();   // s78l t02
+    test_arrival_close();        // s78l t02
+    test_forced_destination();   // s78l t02
     test_determinism();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

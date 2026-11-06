@@ -121,6 +121,25 @@ struct TurnAnim {
 };
 TurnAnim jetpack_turn_anim(float err_deg, float turn_rate, bool has_pre_turn_anim);
 
+// ---- s78l t02: the Walk locomotor's arrival turn (MOVEMENT §3.5.1 "Arrival turn, details") ----
+// Clip classes: idle-class (0x27b5e0: 0, 1, 71, 77-82) and the turn clips (3, 4, 21-24).
+bool anim_idle_class(int32_t anim);
+bool anim_turn_clip(int32_t anim);
+// State 0x15 threshold: 10 degrees, or R (Max_Rate_Of_Turn x the mode multiplier) when R <= 10 and the path is a
+// collision-resolution path (`collision_path`: path kind 3 or the current waypoint's speed cap 0).
+float arrival_turn_threshold(float turn_rate, bool collision_path);
+// Has_Pre_Turn_Anim band pick 0x6204f0: e = the signed error after this frame's step (positive = left), S the turn rate
+// (Stopped_Rate_Of_Turn, else R), T the band threshold (10 on an ordinary arrival, else S). e >= T: e < 22.5 TURNL_QUARTER
+// 22 at S x 0.25 x e / 11.25, e < 45 TURNL_HALF 21 at S x 0.5, else TURNL 3 at S; e <= -T mirrored (24 / 23 / 4);
+// |e| < T: `current` (the clip is unchanged) at S.
+TurnAnim arrival_turn_band(float err_deg, float stopped_rate, float threshold, int32_t current);
+// End clip 0x61d810 of the clip `anim` that ended the turn: {3, 12, 13, 21, 22} -> TURNL_END 13, {4, 14, 15, 23, 24} ->
+// TURNR_END 15, else kAnimNone.
+int32_t arrival_turn_end_clip(int32_t anim);
+// The TURNL / TURNR blend cap of a unit without Has_Pre_Turn_Anim (GameConstants global 0x140b16d28, value not read):
+// [port] 0.2 seconds. Blend = min(|e0| / r x 0.03333, cap).
+inline constexpr float kArrivalTurnBlendCapPort = 0.2f;
+
 // Jetpack altitude (0x6404e0). `track(i)` = the unit's position i frames ahead (path playback, or position +
 // facing x speed x i); `terrain(p)`; `inside(p)` = inside the map box. base = slot z offset (0 [port]) + Hover_Offset;
 // for i in [0, 60) inside the box: h = max(terrain + Hover_Offset, floor), h > base -> (h - base)(1 - i/60) + base;

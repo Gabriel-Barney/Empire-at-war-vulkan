@@ -109,6 +109,9 @@ enum class AbilityEventKind : uint8_t {
     // kills it (0x391310(marker, 1): ordinary Destroy_Object). Not raised when the toss never happens (interrupted, null
     // target lookup, refused apply): the marker then stays.
     MarkerTossed,
+    // s78l t05 (TACTICAL_COMBAT §5.4.1): Tactical_Bribe apply refused for too few credits - the "cannot" event (ability
+    // +0x1b8); `id` the user, `target` the target. No conversion, no recharge [M: whether the order is consumed].
+    BribeRefused,
 };
 
 struct AbilityEvent {
@@ -231,6 +234,12 @@ struct AbilityHost {
     // S8 t10 (LOB_SOLVER §3.5 "Facing at apply"): 0x3a8710 - snap `id`'s yaw to `yaw_deg` at once (no turn rate; roll and
     // pitch 0). Unset: [port] the facing is not changed.
     std::function<void(ObjectId id, float yaw_deg)> snap_yaw;
+    // s78l t05 (TACTICAL_COMBAT §5.4.1, Tactical_Bribe 0x5b0ec0 / 0x5b07c0): the current battle's planet is corrupted
+    // (0x28a890 -> +0xb8 -> +0x2f4 != -1 [M]). Unset: uncorrupted (Bribe_Modifier_On_Uncorrupted_Planets).
+    std::function<bool()> battle_planet_corrupted;
+    // The bribe payment: false when `player`'s credits (player +0x70) are below `cost` (nothing changes), else deducts
+    // `cost` and returns true. Unset: [port] bribes are free.
+    std::function<bool(int32_t player, float cost)> pay_credits;
 };
 
 // OI abilities: the per-player tactical lists Battlefield_Modifier writes (§2.3.11) besides the reveal range.
@@ -632,6 +641,9 @@ private:
     bool activate_by_name(Obj& o, uint32_t crc, ObjectId target, int32_t hp, uint32_t frame, uint8_t trigger);
     bool accepts(const Obj& o, const SpecialAbilityDesc& s, ObjectId target, uint32_t frame) const;
     bool target_filter(const SpecialAbilityDesc& s, ObjectId target) const;
+    // s78l t05: Tactical_Bribe accept (0x5b0f70) and cost (0x5b0ec0; -1 = no cost data, [port] free).
+    bool bribe_accepts(const Obj& o, ObjectId target) const;
+    float bribe_cost(const Obj& o, ObjectId target) const;
     bool in_range(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const;
     bool apply(Obj& o, SpecialState& sp, ObjectId target, int32_t hp, uint32_t frame);
     void update_special(Obj& o, SpecialState& sp, uint32_t frame);

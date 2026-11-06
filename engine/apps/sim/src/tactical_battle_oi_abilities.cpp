@@ -189,6 +189,19 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
     h.snap_yaw = [this](tc::ObjectId id, float yaw_deg) {
         if (movement_) movement_->snap_yaw(id, yaw_deg);
     };
+    // s78l t05 (TACTICAL_COMBAT §5.4.1): Tactical_Bribe pays from the player's credits (the battle's credit hooks: the
+    // galactic account in campaign battles; unset hooks = 0 credits, so a bribe with a cost fails) and reads the battle
+    // planet's corruption (GalacticSim::corrupted of the request's planet; no planet = uncorrupted).
+    h.pay_credits = [this](int32_t player, float cost) {
+        const float have = credits_get_ ? credits_get_(player) : 0.0f;
+        if (have < cost) return false;
+        if (cost > 0.0f && credits_add_) credits_add_(player, -cost);
+        return true;
+    };
+    h.battle_planet_corrupted = [this]() {
+        const auto p = req_.info.planet;
+        return galaxy_ && p != kInvalidPlanet && static_cast<size_t>(p) < galaxy_->planets().size() && galaxy_->corrupted(p);
+    };
     hg_ability_host(h);  // hangars: DEPLOY_SQUAD gate / handler (HangarSystem::deploy_ready / deploy_squad)
     abilities_->set_host(std::move(h));
 }
@@ -266,6 +279,13 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
             case ta::AbilityEventKind::OwnerChanged: {  // Hack / Tactical_Bribe / convert: store, trees, movement, fog
                 const objects::ObjectHandle h = store.find(e.id);
                 if (store.alive(h) && store.owner(h) != e.value) change_owner(mode, h, e.value);
+                // s78k t04 (TACTICAL_COMBAT §3.5 "Convert and its team rule" steps 4-5, 0x38e5a0): Change_Owner spreads
+                // through the team, so the TEAM container follows its member - the store owner (not a combat unit, so
+                // CombatSystem's convert spread raises no event for it) and Container::owner (loss records, replenish) -
+                // and every other live member not changed yet ([port] container, then ascending id: the notification
+                // order). Convert raises one event per member (each finds the team done); Hack / Bribe raise the object
+                // and its container. A non-team object has no container: nothing more.
+                if (store.alive(h) && store.owner(h) == e.value) team_change_owner(mode, e.id, e.value);
                 break;
             }
             default: break;
