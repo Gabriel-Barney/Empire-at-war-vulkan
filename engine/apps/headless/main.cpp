@@ -140,6 +140,7 @@
 #ifdef ALAMO_HEADLESS_HAVE_SIM
 #include "alamo/sim/bench_scenario.hpp"  // BM1 --bench-regen
 #endif
+#include "alamo/vfs/steam_workshop.hpp"
 #include "alamo/vfs/vfs.hpp"
 #ifdef ALAMO_HEADLESS_HAVE_SIM
 #include "ai_run.hpp"  // A2
@@ -1271,6 +1272,7 @@ static int headless_main(int argc, char** argv) {
 // and prints p50 / p99 / max tick time, per-zone shares and the 20 worst ticks after it. Wall-clock data only: the run's
 // results and CRCs are unchanged. Runs that tick several hosts in turn (--selfcheck, --check-workers) report them together.
 int main(int argc, char** argv) {
+    alamo::vfs::install_steam_workshop_lookup();  // modc t10: STEAMMOD= from the Steam library folders
     // Q5: an uncaught exception (e.g. mod data past a fixed limit) names itself instead of a silent 0xC0000409 exit.
     std::set_terminate([] {
         try {

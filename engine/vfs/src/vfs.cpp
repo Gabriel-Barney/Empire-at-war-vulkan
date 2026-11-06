@@ -1,5 +1,6 @@
 // alamo_vfs implementation. See include/alamo/vfs/vfs.hpp for the resolution rules.
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/vfs/steam_workshop.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -464,6 +465,8 @@ std::unique_ptr<Vfs> Vfs::create(const VfsConfig& cfg, std::string* err) {
 
     // One ordered mod search list (Q14): mod_search in order (STEAMMOD ids resolved through the
     // caller's resolver; unresolved ids add nothing, like the original), then mod_paths.
+    SteamModResolver steam_resolver;  // built on the first STEAMMOD= entry only (no disk / registry reads otherwise)
+    bool steam_resolver_ready = false;
     for (const ModSearchEntry& e : cfg.mod_search) {
         if (e.kind == ModSearchEntry::Kind::Path) {
             if (e.value.empty()) continue;
@@ -471,11 +474,16 @@ std::unique_ptr<Vfs> Vfs::create(const VfsConfig& cfg, std::string* err) {
             impl->mod_labels.emplace_back("MODPATH");
             continue;
         }
+        // The caller's resolver, else the process-wide Steam library lookup if an app installed it (steam_workshop.hpp).
+        if (!steam_resolver_ready) {
+            steam_resolver = cfg.steam_resolver ? cfg.steam_resolver : default_steam_resolver(cfg.foc_root);
+            steam_resolver_ready = true;
+        }
         std::optional<std::string> dir;
-        if (cfg.steam_resolver) dir = cfg.steam_resolver(e.value);
+        if (steam_resolver) dir = steam_resolver(e.value);
         if (!dir || dir->empty()) {
-            impl->warn("STEAMMOD=" + e.value + (cfg.steam_resolver ? ": workshop item not found; nothing mounted"
-                                                                  : ": no workshop resolver; nothing mounted"));
+            impl->warn("STEAMMOD=" + e.value + (steam_resolver ? ": workshop item not found; nothing mounted"
+                                                               : ": no workshop resolver; nothing mounted"));
             continue;
         }
         impl->mod_dirs.push_back(std::move(*dir));
