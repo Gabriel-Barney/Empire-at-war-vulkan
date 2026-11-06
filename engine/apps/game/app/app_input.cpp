@@ -179,6 +179,10 @@ void App::step_sim() {
             if (session_->tick()) post_tick();
         return;
     }
+    if (bench_active()) {  // BM2a: the benchmark's own schedule (app_benchmark.cpp)
+        bench_step_sim();
+        return;
+    }
     if (smoke) {
         const int n = screen_ == Screen::Galactic ? 16 : 4;
         const Screen at = screen_;  // a battle start / end ends the frame's ticks (the presentation catches up)
