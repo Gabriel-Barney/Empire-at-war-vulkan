@@ -35,6 +35,7 @@
 #include "alamo/data/xml.hpp"
 #include "alamo/galactic/auto_resolve.hpp"
 #include "alamo/galactic/cadence.hpp"  // PHASE2_ANSWERS Q11 all-pairs cadence (land path finder)
+#include "alamo/galactic/economy.hpp"  // A2g t06: econ::build_time_t0 (0x371230 without a planet)
 #include "alamo/lua/ai_bridge.hpp"
 #include "alamo/lua/ai_tactical_bridge.hpp"
 #include "alamo/lua/gc_schedule.hpp"  // OPT2 t04
@@ -285,6 +286,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     // reads nothing that changes after this call and may run on any thread, now or frames later.
     void pp_input(PlayerAi& p, uint32_t plan, const Goal& g, bool first_solve, bool snapshot, TacticalPpInput& in);
     bool resolve_pp(PlayerAi& p, const Goal& g);          // 0x6c4a50: re-solve at accept (A1_READINGS §28.6 step 3)
+    float pp_nominal_time(const PlayerAi& p, const std::vector<TacticalPpPick>& picks) const;  // A2g t06: 0x6c0450(PP)
     void reserve_pp(int32_t handle);                      // 0x6c2d60 (+ 0x6c2b20)
     void suspend_pp(int32_t handle);                      // 0x6c0be0's +0x30 part (Commit step 4)
     bool pp_stolen(int32_t handle);                       // 0x6c45e0
@@ -546,6 +548,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     bool ambush_point(const StatusRec& s, int32_t player, Vec3f& out, bool* no_walk = nullptr) const;
     void ambush_plan(StatusRec& s, bool first);
     void opportunity_events(const std::vector<OpportunityTargetEvent>& events);  // STRATEGIC_GAPS §5.3
+    void target_in_range_events(const std::vector<AttackStateSignal>& events);   // s78f t08: signal 0x1E
     void service_statuses(int32_t player);
     bool step_status(StatusRec& s);
     void space_reinforce_poll(StatusRec& s);  // refixf t06: SpaceReinforceBlockStatus IsFinished (AI_TACTICAL §7.4)
@@ -865,6 +868,7 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     };
     std::map<std::pair<int32_t, uint8_t>, FloodSet> floods;
     float contrast_mult = 1.0f;  // A2 tactical: Land_ / Space_AI_Contrast_Multiplier of the difficulty
+    float build_time_mult = 1.0f;  // A2g t06: Land_ / Space_Build_Time_Multiplier of the difficulty (AllowedTime base)
     // Land execution path finder (TACTICAL_GAPS §6.1): the player's own zone graph (node costs from its threat grid),
     // created at Execution slot 6 (first service) and recomputed on the PHASE2_ANSWERS Q11 cadence.
     ZoneGraph paths;
@@ -1048,11 +1052,14 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         rec.player = player;
         rec.plan = plan;
         rec.picks = std::move(pp.picks);
+        g.nominal_time = w->pp_nominal_time(*this, rec.picks);  // A2g t06: AllowedTime base 0x6c0450(PP)
         w->pps.emplace(h, std::move(rec));
         g.pp_handle = h;
         // --- end A2 tactical ---
         g.plan = plan;
         g.pp_valid = true;
+        // A2h t06 (A2H_T06_TACTICAL_ETA §2.1) [H]: in land / space mode the solve reset clears PP +0x44 (cost source) and
+        // +0x48 (ETA) and the ETA step writes only in galactic mode, so every tactical goal carries cost 0 and ETA 0.
         g.cost = 0.0f;
         g.eta = 0.0f;
         return true;
@@ -1136,8 +1143,13 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         pp_out.clear();
         pp_out_ready = false;
     }
-    bool plan_activatable(const Goal& g) override {
-        return g.pp_valid && g.plan != kAiNone && ctx.templates.plan_value(g.plan) > 0 && w->resolve_pp(*this, g);
+    bool plan_activatable(Goal& g) override {
+        if (!(g.pp_valid && g.plan != kAiNone && ctx.templates.plan_value(g.plan) > 0 && w->resolve_pp(*this, g))) return false;
+        // A2g t06 [M, as galactic]: the re-solve rewrites the PP's selection, which AllowedTime (0x692860 -> 0x6c0450) reads
+        // live. Later pick edits (0x6c27d0 unit left, 0x6bf3d0 joined) change the unit list PP+0x108, not the selection, so
+        // the value is not refreshed there.
+        if (const auto it = w->pps.find(g.pp_handle); it != w->pps.end()) g.nominal_time = w->pp_nominal_time(*this, it->second.picks);
+        return true;
     }
     bool plan_invalid(const Goal& g) override {
         if (g.running < 0) return true;
@@ -1174,6 +1186,8 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         }
         g.pp_handle = -1;
     }
+    // A2h t06 (A2H_T06_TACTICAL_ETA §4) [H]: retail skips the maintenance time-drop outside galactic mode, so 0 is exact,
+    // not a stand-in (the goal system's time-drop never fires: uses_budget() false and this 0).
     float elapsed_eta(const Goal&) override { return 0.0f; }
     int32_t quota_players() override {
         int32_t n = 0, humans = 0;
@@ -1904,6 +1918,13 @@ bool TacticalAiWorld::Impl::resolve_pp(PlayerAi& p, const Goal& g) {
     return true;
 }
 
+// A2g t06: 0x6c0450(PP) of one of p's PotentialPlans (tactical_nominal_time), the goal's AllowedTime base. A2h t06
+// (A2H_T06_TACTICAL_ETA §3) [H]: retail reads the galactic Build_Time_Seconds (+0x890) in every mode, never
+// Tactical_Build_Time_Seconds (+0xA00), x Production_Speed_Factor (truncated) x the Land_ / Space_Build_Time_Multiplier; keep it so.
+float TacticalAiWorld::Impl::pp_nominal_time(const PlayerAi& p, const std::vector<TacticalPpPick>& picks) const {
+    return tactical_nominal_time(picks, w.types, cfg.constants.production_speed_factor, p.build_time_mult);
+}
+
 // 0x6c2d60 (A1_READINGS §28.4): +0x30 = PP (0x6c2b20, overwriting any owner) for every PP+0x108 unit still on the
 // free store; the first call (PP+0x100) also reserves the reinforcement-pool and build-pad slots [port: the tactical
 // credits reservation is not modelled].
@@ -2133,6 +2154,33 @@ void TacticalAiWorld::Impl::opportunity_events(const std::vector<OpportunityTarg
         decide(t->player, "event Hardpoint_Opportunity_Target_Acquired (tf " + t->name + ")");
         const TfRec copy = *t;
         tf_event(copy, "Hardpoint_Opportunity_Target_Acquired", {a, b});
+    }
+}
+
+// s78f t08 (TACTICAL_COMBAT §3.1.1 "s78f t08 answers" 4 [H]): the task-force handler 0x5fe5d0 case 0x1E takes the unit's
+// formation attack target, or its TD +8 target (the host's AttackStateSignal::target), and when there is one raises plan
+// event 12 Target_In_Range (unit wrapper, target wrapper) synchronously (0x6006b0). The unit is matched as a TF unit
+// (the signal of a team member is raised on its container, which the TF holds).
+void TacticalAiWorld::Impl::target_in_range_events(const std::vector<AttackStateSignal>& events) {
+    for (const AttackStateSignal& e : events) {
+        const ObjectHandle unit = store.find(e.unit);
+        const ObjectHandle target = store.find(e.target);
+        if (!store.alive(unit) || !store.alive(target)) continue;
+        int32_t hit = -1;
+        for (const auto& [id, t] : tfs) {  // ascending TF id; a unit is held by at most one TF
+            for (const ObjectHandle u : t.units)
+                if (u == unit) hit = id;
+            if (hit >= 0) break;
+        }
+        const TfRec* t = hit >= 0 ? tf_rec(hit) : nullptr;
+        if (!t) continue;
+        lua::AiEventArg a, b;
+        a.kind = b.kind = lua::AiEventArg::Object;
+        a.object = unit;
+        b.object = target;
+        decide(t->player, "event Target_In_Range (tf " + t->name + ")");
+        const TfRec copy = *t;
+        tf_event(copy, "Target_In_Range", {a, b});
     }
 }
 
@@ -3429,6 +3477,7 @@ bool TacticalAiWorld::start(std::vector<std::string>* diagnostics) {
                 sleep = w.cfg.mode == TacticalMode::Land ? d.land_goal_sleep : d.space_goal_sleep;
                 pa->contrast_mult = w.cfg.mode == TacticalMode::Land ? d.land_contrast : d.space_contrast;  // A2 tactical
             }
+        pa->build_time_mult = tactical_build_time_multiplier(w.cfg.difficulties, dname, w.cfg.mode);  // A2g t06
         std::vector<GoalSource> sources;
         for (const std::string& set_name : type->function_sets) {
             const GoalFunctionSet* set = w.defs.find_set(set_name);
@@ -3454,6 +3503,11 @@ bool TacticalAiWorld::start(std::vector<std::string>* diagnostics) {
         GoalSystemConfig gcfg;
         // Slot 11: Land_ / Space_AI_Goal_Cycle_Sleep_Duration x FPS after a commit (Easy 15 s, §4.5).
         gcfg.sleep_frames = static_cast<int32_t>(static_cast<float>(kAiFps) * sleep);
+        // A2g t06: AllowedTime with a PP = Goal::nominal_time (0x6c0450, tactical_nominal_time) x Build_Time_Delay_Tolerance,
+        // as galactic (A2F_RE_READS §1.4 item 2) [H]. Tactical goals carry ETA 0 (accept_result) [H, A2H_T06_TACTICAL_ETA
+        // §2.1], so the time tests (accept, Resolve time_ok: 0 < AllowedTime < ETA) never fail (§4); the value is hashed and
+        // saved with the goal.
+        gcfg.nominal_allowed_time = true;
         p.ctx.goals.init(w.defs, std::move(sources), &p, &p.ctx.learning, &p.ctx.templates, &w.rng.synced(), gcfg);
         p.ctx.attach(&p, [&w, &p](const std::string& eq, double& out) { return w.evaluate(p.player, eq, -1, out); });
         if (w.cfg.stagger) {  // OPT2 t01: a fixed planning phase from the player's AI ordinal (players in index order)
@@ -3515,6 +3569,7 @@ void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
         ALAMO_PROFILE_SCOPE("tac.ai.perception");  // OPT2 t08: snapshot, threat grid, signals
         w.refresh();
         w.opportunity_events(w.host.opportunity_targets());  // STRATEGIC_GAPS §5.3
+        w.target_in_range_events(w.host.attack_state_signals());  // s78f t08: signal 0x1E
         w.ability_signals(w.host.ability_finished());       // S7 t15 A1: signal 0x29
         w.reinforcements_unloaded(w.host.reinforcements_unloaded());  // a1j t01: signal 0x19 (land landings)
         w.status_signals();                                  // S7 t21 / S7 t15 A1: ambush / ability status signals
@@ -4656,9 +4711,30 @@ std::vector<TacticalAiDifficulty> load_tactical_ai_difficulties(const FileProvid
         if (ai_parse_float(n.child_text("Space_AI_Goal_Cycle_Sleep_Duration"), v)) d.space_goal_sleep = v;
         if (ai_parse_float(n.child_text("Land_AI_Contrast_Multiplier"), v)) d.land_contrast = v;
         if (ai_parse_float(n.child_text("Space_AI_Contrast_Multiplier"), v)) d.space_contrast = v;
+        if (ai_parse_float(n.child_text("Land_Build_Time_Multiplier"), v)) d.land_build_time = v;  // A2g t06 (+0x30)
+        if (ai_parse_float(n.child_text("Space_Build_Time_Multiplier"), v)) d.space_build_time = v;  // A2g t06 (+0x2C)
         out.push_back(std::move(d));
     }
     return out;
+}
+
+float tactical_build_time_multiplier(const std::vector<TacticalAiDifficulty>& difficulties, std::string_view adjustment,
+                                     TacticalMode mode) {
+    float m = 1.0f;  // the all-1.0 adjustment
+    for (const TacticalAiDifficulty& d : difficulties)
+        if (ai_iequal(d.name, adjustment)) m = mode == TacticalMode::Land ? d.land_build_time : d.space_build_time;
+    return m;
+}
+
+float tactical_nominal_time(const std::vector<TacticalPpPick>& picks, const std::vector<PerceptionType>& types,
+                            float production_speed_factor, float multiplier) {
+    float s = 0.0f;
+    for (const TacticalPpPick& k : picks)
+        if (k.type >= 0 && static_cast<size_t>(k.type) < types.size()) {
+            const int32_t seconds = types[static_cast<size_t>(k.type)].build_time_seconds;
+            s += ::alamo::galactic::econ::build_time_t0(seconds, production_speed_factor);
+        }
+    return s * multiplier;
 }
 
 // AI_GALACTIC §1.9.1 [H] (A1_READINGS §34.2): the loader 0x4e7e30 puts every plan folder into one plan manager, so a

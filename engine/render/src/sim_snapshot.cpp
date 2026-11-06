@@ -263,7 +263,8 @@ int8_t damage_alt_index(const SnapshotTypeInfo& t, float health_fraction) {
 materials::float4 SnapshotTypeTable::team_color(int32_t owner, const SnapshotTypeInfo& t, uint8_t& index) const {
     const bool neutral = owner < 0 || (static_cast<size_t>(owner) < neutral_.size() && neutral_[static_cast<size_t>(owner)] != 0);
     if (!neutral) {
-        index = static_cast<uint8_t>(static_cast<uint32_t>(owner) % kMpPaletteSize);
+        const auto o = static_cast<size_t>(owner);
+        index = static_cast<uint8_t>(o < owner_colours_.size() ? owner_colours_[o] % kMpPaletteSize : static_cast<uint32_t>(owner) % kMpPaletteSize);
         return palette_[index];
     }
     index = kNeutralTeam;

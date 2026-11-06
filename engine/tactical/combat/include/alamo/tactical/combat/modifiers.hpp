@@ -26,9 +26,9 @@
 //     results are identical with or without it; it is never hashed.
 //
 // System B - unit-ability Mod_Multiplier, section 4.4 [H]: 12 kinds, product over the type's first
-// two ability slots counted only where the ability is active (LUCKY_SHOT skipped); a squad leader
-// whose own product is 1 takes the minimum over its members. Mod_Flag = AND across active slots,
-// default true.
+// two ability slots counted only where the ability is active (LUCKY_SHOT skipped); a TEAM container
+// whose own product is 1 takes the minimum over all its members (members keep their own). Mod_Flag =
+// AND across active slots, default true.
 #pragma once
 #include <array>
 #include <cstdint>
@@ -171,8 +171,10 @@ struct UnitAbilityDesc {
 // Get_Unit_Ability_Mod_Multiplier (0x398010) for one object: product over the 2 slots where the
 // ability is active, LUCKY_SHOT skipped. `abilities` = the type's slot data (nullptr = empty slot).
 float ability_product(const UnitAbilityDesc* const abilities[2], const bool active[2], ModKind kind);
-// Squad rule: own product if != 1, else the minimum over `members` (each member's own product,
-// member order, strictly-less replaces); no members -> 1.
+// Squad rule (s78h t03): a TEAM container's value. `own` = the container's own product; `members` =
+// EVERY live member's own product (a stand-in leader and 1.0-valued members included). own if != 1,
+// else the minimum over `members` (member order, <= replaces); no members -> 1. Members themselves
+// never take this value (each reads its own product).
 float squad_multiplier(float own, std::span<const float> members);
 // Get_Unit_Ability_Mod_Flag (0x397f60): AND across active slots whose ability sets the flag; true default.
 bool ability_flag(const UnitAbilityDesc* const abilities[2], const bool active[2], uint8_t flag);

@@ -80,7 +80,8 @@ Does nothing when `Demo_Attract_Maps` is empty. Otherwise:
    0x2cd870 → 0x4aaf00 chains to a new shot when one ends (0x2cda20 / 0x2cd930). Gated by
    `In_Game_Cinematics` (True in FoC and EaW). During attract the 0.5 overlay call 0x44b2c0(0x140a28c10)
    is skipped [M: that call is the cinematic letterbox/overlay fade]. Starting a cinematic hides the HUD
-   (0x49b1a0) but **does not hide the mouse cursor during attract** (explicit check). [M for the shot logic
+   (0x49b1a0) but **does not hide the mouse cursor during attract** (explicit check). The same call **clears the FOW render
+   option**, so the demo draws no fog (§4a). [M for the shot logic
    details; H for the calls]
 9. 0xc6c30: `Main_Menu_Music_Event` mode 13 again, re-arm if needed, recreate the overlay quad exactly as in
    §2 step 4 (2D scene #1).
@@ -168,6 +169,55 @@ dialog. **The demo battle and the overlay stay**: the sub-menus show the same mo
   probably the recording playback used by the quick-load-recording path 0x69040].
 - EaW's own `MENUBACK_OVERLAY.DDS` in textures.meg is 512×384; both games' Patch2 replace it with 1024×768. [H]
 
+## 4a. Why the attract view shows no fog (traced 2026-11-01)
+
+**Rule:** the attract demo is filmed by the in-game cinematic camera, and **every cinematic shot start clears the FOW
+render option (byte 0x140a12501)**, which is the switch every fog draw path tests. So the demo draws **no fog overlay on any
+map**, with or without a `DEMO_CONTROLLER` reveal. The demo's *sim* fog is untouched (grids, targeting, AI use it as in any
+space battle). [H for the code chain below; M that the G1 / EaW attract captures show exactly this, since a capture cannot
+tell "not drawn" from "all revealed"]
+
+Chain (all RVAs, image base 0x140000000):
+1. `0x22f10` step 8 starts the camera: `0x2cca80(0x140b27a10, 1)`. It tries a combat shot (`0x2cc780` → `0x4a30b0`), then the
+   mode's object (`0x4a4ac0`), then `0x49f370`, then `Start_Interesting_Object_Cinematic` (`0x2cd930` → `0x4a53f0`). [H]
+2. **Every shot starter calls `0x49b1a0(camera, 0)` once it has set its shot up** (`0x4a30b0`, `0x4a4ac0`, `0x49f370`, and
+   everything `0x4a53f0` dispatches to: `0x4a3b40`, `0x4a47d0`, `0x4a0140`, `0x4a4e30`, `0x4a17c0`, `0x4a26f0`, `0x4a6dd0`,
+   `0x4a23d0`, `0x4a0830`, `0x4a1c90`, `0x4a5ef0`, `0x4a6790`). The per-frame update `0x2cd870` → `0x4aaf00` chains to the
+   next shot through `0x2cda20` / `0x2cd930`, i.e. through the same starters, so the effect is continuous while the demo
+   lasts. [H]
+3. `0x49b1a0(camera, 0)` (the "cinematic presentation state" switch; the HUD hide of §3.1 is part of it) saves and changes
+   several presentation switches and remembers them in camera bytes: **if the FOW render option (`0x13ecd0` reads it) is set →
+   camera +0x311 := 1 and `0x13ecc0(0)` clears it** (code `0x49b1a0` lines `if (0x13ecd0() != 0) { +0x311 = 1; 0x13ecc0(0) }`,
+   no attract or map condition); a second render switch (`0x48a680` / `0x48a3a0`, +0x312), a scene-flag pair (+0x313,
+   `0x140b2a5f9`), +0x314 / +0x316 (counter `0x140b2c198`, flag `0x140b28d63`) and the world camera save (+0x310) are handled
+   alike [M for what those are]. It also holds the mouse-cursor decision that §3.1 step 8 notes. [H for the FOW option]
+4. `0x49b1a0(camera, 1)` (reached from `CinematicClass::End_Cinematic_Mode` `0x49b5c0` and from `0x2cbc90`) undoes it:
+   if +0x311 is set, `0x13ecc0(0x140b15490 == 0)` → the option comes back on (0x140b15490 is cleared at start-up and read in
+   about 50 places as a "skip graphics" test, never seen written otherwise: 0 in the shipped game [M]). [H]
+5. The consumers of the render option (each tests `0x13ecd0`): the tactical mode's per-frame FOW renderer update (the
+   `0x7db070` call, made only when the option is set), the space mode's FOW renderer update `0x4d8de0` (option clear → the
+   renderer object's flag |= 1, which hides it), the scene draw paths `0x192d40` and case 4 of `0x1946f0` (the FOW
+   renderer's passes through vtable +0x40..+0x58 run only when it is set), the FOW material choice `0x7dab30` (picks the
+   FOW-off object when it is clear) and the fog value query `0x35e450` (returns 1.0 = fully visible when it is clear). [H for
+   the gates, M for what each pass is]
+6. Static defaults, read from the exe image: render option 0x140a12501 = 1, FOW-active 0x140a284c4 = 1. The space mode start
+   (`0x4d7d10` → `0x35eb40`) does not set the option (it only clears it when FOW-active is 0 or when 0x140b15490 is set); only
+   the land mode start (`0x3b86f0`) sets both to 1. The attract map is a space map, so nothing between the boot and the first
+   shot re-enables it. [H]
+
+What this rules out: the demo's *viewpoint player* is not the cause (`0x22f10` neither changes the local player nor the FOW
+flags) and the FOW draw is not skipped by an `attract-running` (GMM +0x1e4) test: the gate is the cinematic camera.
+Consequences:
+- A demo map **with** a `DEMO_CONTROLLER` (Geonosis, not in any shipped list) shows no fog either; the controller's
+  `Reveal_All` only changes the sim.
+- If a shot cannot start at all (no combat unit and no interesting object), `0x2cca80` returns 0 with the option untouched and
+  the fog would show with the normal RTS camera. With the shipped Kamino fleets this does not happen. Between shots the end
+  call (`0x49b5c0`, only when chaining fails) restores the option for at most the frame in which the next starter clears it
+  again. [M]
+- A gap in the trace: the writes of the option are all via `0x13ecc0`; the starter of a normal skirmish (`0xbd380`) also ends
+  with `0x13ecc0(0)`, and where a space skirmish turns the option on again was not found (§7 open items). It does not affect
+  the attract trace: the option is only ever *cleared* on this path.
+
 ## 5. Composition [H unless tagged]
 
 Frame order (RENDER §1, UI §1): the attract space mode renders its 3D scenes (backdrop, planet, ships, effects)
@@ -214,7 +264,7 @@ black fade rect, cursor.
    SFX play (AUDIO §1.6 flag); don't restart the theme on returning to the menu while it is current.
 6. **EaW data:** the `.rec` entry has to be handled by the port itself: read the map path from the recording
    header (or strip `.rec` → `Front_end_demo_attract.ted`) and either replay the recorded commands or run it AI vs
-   AI. Choose and record the decision in docs/PHASE4.md.
+   AI. Choose and record the decision in docs/DECISIONS.md.
    > **Status 2026-10-30:** Done, decision taken (Gabriel 2026-10-28): a `.rec` entry is not replayed; its header only names the map and the same live AI-vs-AI demo runs there (`attract_rec_map`, `engine/apps/game/src/attract_mode.cpp:66-84`; `App::start_attract_map`, `engine/apps/game/app/game_main.cpp:843-881`). An entry with no map path is skipped with a warning.
 7. While the demo map loads (synchronous in the original), keep showing the previous frame / black; a job-thread
    load is fine as long as the menu stays responsive.
@@ -223,10 +273,10 @@ black fade rect, cursor.
 - TextureRect draw path (blend state, filtering) — confirm straight alpha in a capture.
 - Exact owner split of the Kamino units. (Whether any object carries a Lua script: settled 2026-10-31, §4 data check:
   no `DEMO_CONTROLLER` on any shipped demo map.)
-- **Fog in the attract view.** No demo map the games ship reveals the map, yet the original's attract menus show no space
-  FOW grid (G1 capture `apitrace_20261027_103544`, EaW attract frames: `analysis/snap/f_0012738515.png`,
-  `f_0013907249.png`) [M, picture only]. Not traced: which player is the attract demo's viewpoint (a player without a
-  grid, e.g. the first neutral one, would see no fog and hide nothing: FOG_OF_WAR §5.2), or whether the FOW draw is
-  skipped while the demo runs. The port draws no fog in the attract view unless a controller revealed the map [port].
+- ~~**Fog in the attract view.**~~ Settled 2026-11-01, §4a [H code chain, M capture match]: the cinematic camera clears the FOW
+  render option at every shot start, so the attract view never draws fog. The port: `GameSession::view_draws_fog()` is false for
+  the demo (`BattleView::capture`), whichever map or controller; the sim fog is unchanged.
+- FOW render option: where a normal space skirmish sets it back to 1 after `0xbd380` ends with `0x13ecc0(0)` (not needed for the
+  attract rule; the gate itself is FOG_OF_WAR.md §8 item 4).
 - Role of byte +0x3cb set on the 0x1a-category objects at demo start.
 - How the EaW exe plays `.rec` attract entries.

@@ -533,6 +533,16 @@ void test_real(Gpu& g, const std::string& src_dir) {
         clicked("IDD_VIDEO_OPTIONS_DIALOG", "IDC_ADVANCED");
         CHECK(fe2.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG");
         shoot("advanced_video", [&](double) {});
+        for (const char* id : {"IDC_PORT_PARTICLE_DETAIL", "IDC_PORT_MESH_DETAIL", "IDC_PORT_TEXTURE_DETAIL", "IDC_PORT_WATER_DETAIL", "IDC_PORT_SHADER_DETAIL",
+                               "IDC_PORT_SHADOW_DETAIL", "IDC_PORT_ENVIRONMENT_DETAIL"}) {
+            const int32_t k = gui.top() ? gui.top()->find(id) : -1;
+            CHECK(k >= 0 && gui.combo_rows(*gui.top(), static_cast<size_t>(k)) == static_cast<int32_t>(gui.top()->get(id)->items.size()));  // every level reachable
+        }
+        if (ui::GuiControl* tex = gui.top() ? gui.top()->get("IDC_PORT_TEXTURE_DETAIL") : nullptr) {  // a list with the longest level names
+            tex->open = true;
+            shoot("advanced_video_texture_open", [&](double) {});
+            tex->open = false;
+        }
         gui.close_all();
         fe2.show_pause_menu();
         shoot("pause_menu", [&](double) {});
@@ -567,6 +577,16 @@ void test_real(Gpu& g, const std::string& src_dir) {
         if (vd && fe3.top() == "IDD_VIDEO_OPTIONS_DIALOG") {
             CHECK(vd->get("IDC_DEVICE_DESC_STATIC") && vd->get("IDC_DEVICE_DESC_STATIC")->text.empty());
             shoot("video_options", [&](double) {});
+            // The two named-level lists open, one at a time (a list covers the rows under it): every level name fits its list.
+            for (const auto& [id, shot] : {std::pair{"IDC_PORT_ANTI_ALIASING", "video_options_aa_open"}, std::pair{"IDC_PORT_DETAIL_LEVEL", "video_options_quality_open"}}) {
+                ui::GuiControl* list = vd->get(id);
+                CHECK(list != nullptr && list->items.size() >= 4);
+                if (!list) continue;
+                CHECK(gui.combo_rows(*vd, static_cast<size_t>(vd->find(id))) == static_cast<int32_t>(list->items.size()));  // no level cut off
+                list->open = true;
+                shoot(shot, [&](double) {});
+                list->open = false;
+            }
             // Every text glyph of a static lies inside its control rect (x) and inside the dialog.
             ui::HudDrawList dl;
             gui.build(dl, 1.0);
@@ -1095,8 +1115,8 @@ void test_real(Gpu& g, const std::string& src_dir) {
             hk.faction_alt = 1;
             hk.time = 1.0;
             hack.build(hk);
-            // Drag fleet slot q1_0000 towards a planet.
-            const int32_t qc = table.find("q1_0000");
+            // Drag fleet slot q1_0001 towards a planet.
+            const int32_t qc = table.find("q1_0001");
             ui::Vec2f qp{-1, -1};
             for (const ui::HudHitBox& h : hud.hit_boxes())
                 if (h.component == qc) qp = hud.canvas().canvas_to_pixel(0.5f * (h.min.x + h.max.x), 0.5f * (h.min.y + h.max.y));

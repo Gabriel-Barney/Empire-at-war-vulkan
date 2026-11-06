@@ -7,7 +7,7 @@ namespace {
 
 using namespace test_gui_screens_t;
 
-constexpr int kPad = 3;  // unit pads per pane in the synthetic table (q{n}_0000 .. q{n}_0002)
+constexpr int kPad = 3;  // unit pads per pane in the synthetic table (q{n}_0001 .. q{n}_0003; q{n}_0000 is the header pad, UI.md §7.4)
 
 std::string organizer_xml() {
     std::string x = "<CommandBarComponents>\n";
@@ -17,7 +17,7 @@ std::string organizer_xml() {
     };
     for (int n = 1; n <= 3; ++n) {
         add("q" + std::to_string(n) + "_fleet");
-        for (int c = 0; c < kPad; ++c) add("q" + std::to_string(n) + "_000" + std::to_string(c));
+        for (int c = 0; c <= kPad; ++c) add("q" + std::to_string(n) + "_000" + std::to_string(c));
     }
     return x + "</CommandBarComponents>";
 }
@@ -68,7 +68,7 @@ struct Env {
         hud.build(frame);
     }
     int32_t id(const std::string& name) const { return table.find(name); }
-    static std::string pad_name(int pane, int pad) { return "q" + std::to_string(pane + 1) + "_000" + std::to_string(pad); }
+    static std::string pad_name(int pane, int pad) { return "q" + std::to_string(pane + 1) + "_000" + std::to_string(pad + 1); }
     bool hidden(const std::string& name) {
         const ButtonRuntime* r = hud.buttons().find_state(static_cast<uint32_t>(id(name)));
         return r == nullptr || r->hidden;
@@ -91,11 +91,12 @@ struct Env {
             if (h.component == c) return hud.canvas().canvas_to_pixel(0.5f * (h.min.x + h.max.x), 0.5f * (h.min.y + h.max.y));
         return Vec2f{-1, -1};
     }
-    // Press `from`, drag to `to_name`'s pad, release; the commands the drop issued.
+    // Press `from`, start the drag, rebuild (the empty pads appear, UI.md §7.3), move onto `to_name`'s pad, release; the
+    // commands the drop issued.
     std::vector<commands::EventData> drag(const std::string& from, const std::string& to_name, bool* valid = nullptr) {
         const int32_t fc = id(from), tc = id(to_name);
-        const Vec2f p = center_px(from), to = center_px(to_name);
-        CHECK(p.x >= 0 && to.x >= 0);
+        const Vec2f p = center_px(from);
+        CHECK(p.x >= 0);
         std::vector<commands::EventData> out;
         RoutedInput r;
         r.world.mouse_x = static_cast<int32_t>(p.x);
@@ -105,6 +106,12 @@ struct Env {
         r.hud = {{HudPointerEvent::Kind::Press, Button::Left, fc, r.world.mouse_x, r.world.mouse_y}};
         hud.update_input(r, false, false, 1.0, out);
         r.hud.clear();
+        r.world.mouse_x += 10;
+        hud.update_input(r, false, false, 1.05, out);
+        CHECK(hud.drag().active);
+        hud.build(frame);
+        const Vec2f to = center_px(to_name);
+        CHECK(to.x >= 0);
         r.world.mouse_x = static_cast<int32_t>(to.x);
         r.world.mouse_y = static_cast<int32_t>(to.y);
         r.hover_component = tc;
@@ -152,7 +159,7 @@ void test_slots_to_panes() {
     e.build({make_fleet(902, 2, false, 1), make_fleet(900, 0, false, 1), make_fleet(901, 1, false, 1)}, true);
     CHECK(e.icon(0, 0) == "i_900_0.tga" && e.icon(1, 0) == "i_901_0.tga" && e.icon(2, 0) == "i_902_0.tga");
     CHECK(e.header_shown(0) && e.header_shown(1) && e.header_shown(2) && e.hud.stats().fleet_slots == 3);
-    CHECK(e.hud.draggable(e.id("q1_fleet")) && e.hud.draggable(e.id("q2_0000")) && e.hud.draggable(e.id("q3_0000")));
+    CHECK(e.hud.draggable(e.id("q1_fleet")) && e.hud.draggable(e.id("q2_0001")) && e.hud.draggable(e.id("q3_0001")));
 }
 
 // UI.md §7.2: every own slot-0 fleet merges into pane 0, one pad run after the other from the first pad.
@@ -204,20 +211,20 @@ void test_foreign_orbit() {
     CHECK(e.filled(2) == kPad && e.icon(2, 0) == "i_903_0.tga" && e.icon(2, 1) == "i_902_0.tga" && e.icon(2, 2) == "i_902_1.tga");
     CHECK(e.header_shown(0) && e.header_shown(1) && e.header_shown(2));
     // Pane 0 is foreign: not draggable (header and pads), clicks do nothing; the own panes are draggable and click-selectable.
-    CHECK(!e.hud.draggable(e.id("q1_fleet")) && !e.hud.draggable(e.id("q1_0000")) && !e.hud.draggable(e.id("q1_0001")));
-    CHECK(e.hud.draggable(e.id("q2_fleet")) && e.hud.draggable(e.id("q2_0000")) && e.hud.draggable(e.id("q3_0000")));
-    CHECK(e.click("q1_0000").empty() && e.click("q1_fleet").empty());
-    const std::vector<HudAction> own = e.click("q2_0000");
+    CHECK(!e.hud.draggable(e.id("q1_fleet")) && !e.hud.draggable(e.id("q1_0001")) && !e.hud.draggable(e.id("q1_0002")));
+    CHECK(e.hud.draggable(e.id("q2_fleet")) && e.hud.draggable(e.id("q2_0001")) && e.hud.draggable(e.id("q3_0001")));
+    CHECK(e.click("q1_0001").empty() && e.click("q1_fleet").empty());
+    const std::vector<HudAction> own = e.click("q2_0001");
     CHECK(own.size() == 1 && own[0].kind == HudAction::Kind::GalacticSelect && own[0].ids == std::vector<uint32_t>{9011});
     // Dropping an own unit on a foreign pad merges nothing; on an own fleet's pad it merges (op 3).
     bool valid = true;
-    CHECK(e.drag("q2_0000", "q1_0000", &valid).empty() && !valid);
-    CHECK(e.drag("q2_0000", "q1_fleet", &valid).empty() && !valid);
-    const std::vector<commands::EventData> o = e.drag("q2_0000", "q3_0000", &valid);
+    CHECK(e.drag("q2_0001", "q1_0001", &valid).empty() && !valid);
+    CHECK(e.drag("q2_0001", "q1_fleet", &valid).empty() && !valid);
+    const std::vector<commands::EventData> o = e.drag("q2_0001", "q3_0001", &valid);
     CHECK(valid && o.size() == 1 && o[0] == fleet_management_event(903, 901, 9011, 3));
     // A lone foreign fleet: pane 0 only, the other panes empty.
     e.build({make_fleet(906, 0, true, 1)}, false);
-    CHECK(e.filled(0) == 1 && e.filled(1) == 0 && e.filled(2) == 0 && !e.hud.draggable(e.id("q1_0000")));
+    CHECK(e.filled(0) == 1 && e.filled(1) == 0 && e.filled(2) == 0 && !e.hud.draggable(e.id("q1_0001")));
 }
 
 // [port] fleets without a slot, or on a taken pane, take the first empty pane (as the map's build_planet_stacks).
@@ -239,6 +246,77 @@ void test_unknown_slots() {
     CHECK(e.filled(0) == 1 && e.filled(1) == 1 && e.filled(2) == 1 && e.hud.stats().fleet_slots == 3);
 }
 
+// UI.md §7.4: q{n}_0000 is the header pad, never a unit pad: units start at q{n}_0001.
+void test_header_pad() {
+    Env e;
+    e.build({make_fleet(900, 0, false, 2)}, true);
+    CHECK(!e.hidden("q1_0001") && !e.hidden("q1_0002") && e.hidden("q1_0003"));
+    // The header pad shows in every pane, empty and inert: no drag, no click, no drop target.
+    CHECK(!e.hidden("q1_0000") && !e.hidden("q2_0000") && !e.hidden("q3_0000") && e.icon(0, -1).empty());
+    CHECK(!e.hud.draggable(e.id("q1_0000")) && e.click("q1_0000").empty());
+    e.build({make_fleet(900, 0, false, 2), make_fleet(901, 1, false, 1)}, true);
+    bool valid = true;
+    CHECK(e.drag("q2_0001", "q1_0000", &valid).empty() && !valid);
+}
+
+// UI.md §7.2: units of one fleet with the same type share a pad with the count; other types and kNoSlotType units do not.
+void test_stacks() {
+    Env e;
+    GalacticFleet f = make_fleet(900, 0, false, 0);
+    auto unit = [&](uint32_t obj, const char* icon, uint32_t type) { f.units.push_back({obj, icon, 1, false, type}); };
+    unit(9001, "i_900_0.tga", 7);
+    unit(9002, "i_900_1.tga", 8);
+    unit(9003, "i_900_0.tga", 7);
+    unit(9004, "i_900_0.tga", 7);
+    unit(9005, "i_900_1.tga", kNoSlotType);
+    unit(9006, "i_900_1.tga", kNoSlotType);
+    e.build({f}, true);
+    CHECK(e.filled(0) == 3 && e.icon(0, 0) == "i_900_0.tga" && e.icon(0, 1) == "i_900_1.tga" && e.icon(0, 2) == "i_900_1.tga");
+    CHECK(e.hud.stats().fleet_slots == 3);
+    auto text = [&](int pad) { return e.hud.buttons().find_state(static_cast<uint32_t>(e.id(e.pad_name(0, pad))))->text; };
+    CHECK(text(0) == U"3" && text(1).empty() && text(2).empty());
+    // Clicking a stack selects all its members; dragging it takes its first unit only.
+    const std::vector<HudAction> a = e.click("q1_0001");
+    CHECK(a.size() == 1 && a[0].ids == std::vector<uint32_t>({9001, 9003, 9004}));
+    // Two fleets do not share stacks even with equal types (a drag names one fleet).
+    GalacticFleet g = make_fleet(901, 0, false, 0);
+    g.units.push_back({9101, "i_901_0.tga", 7, false, 7});
+    e.build({f, g}, true);
+    CHECK(e.filled(0) == kPad);  // 3 stacks of f fill the 3 pads; fleet 901's stack has no pad left
+    bool valid = false;
+    e.build({make_fleet(902, 1, false, 1), g}, true);
+    const std::vector<commands::EventData> o = e.drag("q1_0001", "q2_0001", &valid);
+    CHECK(valid && o.size() == 1 && o[0] == fleet_management_event(902, 901, 9101, 3));
+}
+
+// UI.md §7.3: empty pads show only while dragging; a drop on an empty pane makes a new fleet in that slot, on a pad of an
+// occupied pane it merges.
+void test_empty_pads() {
+    Env e;
+    e.build({make_fleet(900, 0, false, 2), make_fleet(901, 1, false, 1)}, true);
+    CHECK(e.hidden("q1_0003") && e.hidden("q2_0002") && e.hidden("q3_0001"));
+    // Drag unit 9011 (fleet 901, pane 1) onto the empty pane 2: detach into a new fleet in slot 2.
+    bool valid = false;
+    std::vector<commands::EventData> o = e.drag("q2_0001", "q3_0001", &valid);
+    commands::EventData want = fleet_management_event(100, 901, 9011, 2);
+    want.set("b", 2u);
+    CHECK(valid && o.size() == 1 && o[0] == want);
+    // The empty pads are gone again after the drop.
+    CHECK(e.hidden("q3_0001") && e.hidden("q1_0003"));
+    // A drop on an empty pad of an occupied pane merges into that pane's fleet; of its own fleet it does nothing.
+    o = e.drag("q2_0001", "q1_0003", &valid);
+    CHECK(valid && o.size() == 1 && o[0] == fleet_management_event(900, 901, 9011, 3));
+    o = e.drag("q1_0001", "q1_0003", &valid);
+    CHECK(!valid && o.empty());
+    // The whole fleet (its header) dropped on an empty pane changes its slot (op 8).
+    o = e.drag("q2_fleet", "q3_0002", &valid);
+    CHECK(valid && o.size() == 1 && o[0] == fleet_management_event(100, 901, commands::kNoObject, 8, 2));
+    // A foreign pane is no target, empty pads included.
+    e.build({make_fleet(906, 0, true, 1), make_fleet(901, 1, false, 1)}, false);
+    o = e.drag("q2_0001", "q1_0002", &valid);
+    CHECK(!valid && o.empty());
+}
+
 // The organiser feeds nothing while it is closed.
 void test_closed() {
     Env e;
@@ -256,6 +334,9 @@ int main() {
     test_pane_overflow();
     test_foreign_orbit();
     test_unknown_slots();
+    test_header_pad();
+    test_stacks();
+    test_empty_pads();
     test_closed();
     if (g_fail) {
         std::printf("alamo_ui_organizer_tests: %d failure(s)\n", g_fail);

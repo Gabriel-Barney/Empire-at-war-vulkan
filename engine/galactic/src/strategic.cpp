@@ -225,14 +225,16 @@ BuildCheck GalacticSim::build_check(int32_t player, PlanetIndex planet, uint32_t
     if (ground_base_level(planet) < t.required_ground_base)
         return fail(17, kBuildGroundBase, static_cast<uint32_t>(t.required_ground_base));
     if (p.starbase_level < t.required_star_base) return fail(17, kBuildStarBase, static_cast<uint32_t>(t.required_star_base));
-    // 18. structure slots: present + queued (both queues) of the same family < the planet type's slots.
+    // 18. structure slots: structures on the surface (0 when there is no ground base; orbital: 0 when there is no starbase)
+    // + queued items of the same family (0x5F / 0x60, both queues) < the planet type's slots (STRATEGIC_GAPS §1.3 step 18).
     const auto family_count = [&](bool orbital) {
         int32_t n = 0;
-        for (ObjectHandle s : p.structures)
-            if (store_->alive(s)) {
-                const TypeInfo& st = rules_->types[static_cast<size_t>(store_->type(s))];
-                n += (orbital ? is_orbital_structure_type(st) : is_ground_structure_type(st)) ? 1 : 0;
-            }
+        if (orbital ? p.starbase_level > 0 : ground_base_level(planet) > 0)
+            for (ObjectHandle s : p.structures)
+                if (store_->alive(s)) {
+                    const TypeInfo& st = rules_->types[static_cast<size_t>(store_->type(s))];
+                    n += (orbital ? is_orbital_structure_type(st) : is_ground_structure_type(st)) ? 1 : 0;
+                }
         for (const auto& q : p.queue)
             for (const BuildEntry& e : q)
                 n += (orbital ? is_orbital_structure_type(rules_->types[e.type]) : is_ground_structure_type(rules_->types[e.type])) ? 1 : 0;

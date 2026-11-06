@@ -148,7 +148,7 @@ void test_anim_hack_drag() {
     };
     gf.providers.land_forces = [](uint32_t, std::vector<GalacticFleetSlot>& out) { out.push_back({701, "i_frame.tga", 1, false}); };
     hud.build(gf);
-    CHECK(hud.draggable(ft.find("q1_0000")) && hud.draggable(ft.find("q1_fleet")) && hud.draggable(ft.find("land_fleet_00")));
+    CHECK(hud.draggable(ft.find("q1_0001")) && hud.draggable(ft.find("q1_fleet")) && hud.draggable(ft.find("land_fleet_00")));
     auto center_px = [&](std::string_view name) {
         const int32_t c = ft.find(name);
         for (const HudHitBox& h : hud.hit_boxes())
@@ -183,7 +183,7 @@ void test_anim_hack_drag() {
         return out;
     };
     // unit 902 of fleet 900 onto fleet 950's pad -> merge (op 3) {target 950, fleet 900, unit 902}
-    std::vector<commands::EventData> o = drag("q1_0001", center_px("q2_0000"), ft.find("q2_0000"));
+    std::vector<commands::EventData> o = drag("q1_0002", center_px("q2_0001"), ft.find("q2_0001"));
     CHECK(o.size() == 1 && o[0] == fleet_management_event(950, 900, 902, 3));
     // fleet 900 header onto the other planet -> MoveObjectToObject(900, 101)
     float sx = 0, sy = 0;
@@ -193,16 +193,16 @@ void test_anim_hack_drag() {
     // fleet header onto its own planet -> nothing; land unit onto a fleet -> launch (op 4)
     CHECK(project(gf.view, planets[0].position, sx, sy));
     CHECK(drag("q1_fleet", {sx, sy}, -1).empty());
-    o = drag("land_fleet_00", center_px("q1_0000"), ft.find("q1_0000"));
+    o = drag("land_fleet_00", center_px("q1_0001"), ft.find("q1_0001"));
     CHECK(o.size() == 1 && o[0] == fleet_management_event(900, commands::kNoObject, 701, 4));
     // unit into empty space -> detach (op 2) into a new fleet at the selected planet
-    o = drag("q1_0000", {1000, 10}, -1);
+    o = drag("q1_0001", {1000, 10}, -1);
     CHECK(o.size() == 1 && o[0] == fleet_management_event(100, commands::kNoObject, 901, 2));
     // a short press (no drag) still clicks: GalacticSelect
     std::vector<HudAction> ga;
     std::vector<commands::EventData> co;
     RoutedInput r;
-    const int32_t fc = ft.find("q1_0000");
+    const int32_t fc = ft.find("q1_0001");
     r.hover_component = fc;
     r.hud = {{HudPointerEvent::Kind::Press, Button::Left, fc, 0, 0}, {HudPointerEvent::Kind::Release, Button::Left, fc, 0, 0},
              {HudPointerEvent::Kind::Click, Button::Left, fc, 0, 0}};
@@ -244,7 +244,7 @@ void test_anim_hack_drag() {
         CHECK(fleet_px.size() == 2 && land_px.x >= 0 && hud.draggable(gpf) && !hud.draggable(gpl));
         // Right presses on these buttons go to the world (planet picking / right-click move); left presses stay on the HUD.
         CHECK(!hud.takes_button(gpf, Button::Right) && !hud.takes_button(gpl, Button::Right) && hud.takes_button(gpf, Button::Left) &&
-              hud.takes_button(ft.find("q1_0000"), Button::Right));
+              hud.takes_button(ft.find("q1_0001"), Button::Right));
         {
             InputRouter router;
             RouteHooks hooks;
@@ -427,7 +427,7 @@ void test_anim_hack_drag() {
         //    first free one).
         planets[0].stacks = {b2};  // 961 in slot 1; 0 and 2 free
         hud.build(gf);
-        so = drag("q1_0001", slot_px(0, 2), gpf);
+        so = drag("q1_0002", slot_px(0, 2), gpf);
         CHECK(so.size() == 1 && so[0] == fleet_management_event(100, 900, 902, 2).set("b", 2u));  // the sim gives the slot
         GalacticPlanetStack c = a;
         c.fleet = 905;

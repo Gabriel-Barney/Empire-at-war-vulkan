@@ -1,4 +1,4 @@
-// alamo_game_skirmish_maps_tests (p4ui t06, docs/re/UI.md section 9): the skirmish map catalog on a fake FoC install
+// alamo_game_skirmish_maps_tests (p4ui t06 + p4uim t03, docs/re/UI.md section 9): the skirmish map catalog and map preview on a fake FoC install
 // (loose official + custom maps, a MEG, a mod folder), in its own temp folder; and, with ALAMO_FOC_DATA, on the shipped data.
 #include <algorithm>
 #include <cstdio>
@@ -105,6 +105,54 @@ const SkirmishMapEntry* by_path(const std::vector<SkirmishMapEntry>& v, const st
     for (const auto& e : v)
         if (e.path == p) return &e;
     return nullptr;
+}
+
+// p4uim t03: read_skirmish_map_preview on synthetic maps: the embedded top chunk 0x13, the start positions as 0..1 fractions
+// (land from the lower left corner, space centred; y flipped to screen down), mini 12 gating, a missing file.
+void test_preview() {
+    const fs::path T = fs::temp_directory_path() / "alamo_game_skirmish_preview_test";
+    fs::remove_all(T);
+    const fs::path MAPS = fs::path("Data") / "Art" / "Maps";
+    const auto map = [](uint32_t kind, uint8_t flag12, std::vector<alamo::terrain::Vec2f> starts) {
+        alamo::terrain::MapData md;
+        md.info.present = true;
+        md.info.format = 513;
+        md.info.map_type = kind;
+        md.info.counts[0] = 2;
+        md.info.world_width = 1000.0f;
+        md.info.world_height = 2000.0f;
+        md.info.flag_12 = flag12;
+        md.start_positions = std::move(starts);
+        return alamo::terrain::write_ted(md);
+    };
+    write_file(T / "StarWarsG.exe", {'M', 'Z'});
+    write_file(T / MAPS / "LANDP.TED", map(1, 1, {{250.0f, 500.0f}, {1000.0f, 0.0f}, {2000.0f, -5.0f}}));
+    write_file(T / MAPS / "SPACEP.TED", map(2, 1, {{0.0f, 0.0f}, {-500.0f, 1000.0f}}));
+    write_file(T / MAPS / "NOFLAG.TED", map(1, 0, {{250.0f, 500.0f}}));
+    Bytes embedded = map(1, 1, {{500.0f, 1000.0f}});  // a TGA-looking payload appended as top chunk 0x13
+    const Bytes tga = {0, 0, 2, 9, 9, 9};
+    put_u32(embedded, 0x13);
+    put_u32(embedded, static_cast<uint32_t>(tga.size()));
+    embedded.insert(embedded.end(), tga.begin(), tga.end());
+    write_file(T / MAPS / "EMBED.TED", embedded);
+    alamo::vfs::VfsConfig cfg;
+    cfg.foc_root = alamo::path_to_utf8(T);
+    std::string err;
+    auto v = alamo::vfs::Vfs::create(cfg, &err);
+    CHECK(v != nullptr);
+    if (!v) return;
+    using alamo::game::read_skirmish_map_preview;
+    const auto land = read_skirmish_map_preview(*v, "LANDP", false);
+    CHECK(land.found && land.embedded_image.empty() && land.starts.size() == 3);
+    CHECK(land.starts[0] == std::make_pair(0.25f, 0.75f) && land.starts[1] == std::make_pair(1.0f, 1.0f) && land.starts[2] == std::make_pair(1.0f, 1.0f));  // clamped
+    const auto space = read_skirmish_map_preview(*v, "SPACEP", true);
+    CHECK(space.starts.size() == 2 && space.starts[0] == std::make_pair(0.5f, 0.5f) && space.starts[1] == std::make_pair(0.0f, 0.0f));
+    CHECK(read_skirmish_map_preview(*v, "NOFLAG", false).starts.empty());  // no start positions without mini 12
+    const auto emb = read_skirmish_map_preview(*v, "embed", false);
+    CHECK(emb.found && emb.embedded_image == tga && emb.starts.size() == 1);
+    const auto missing = read_skirmish_map_preview(*v, "NOPE", false);
+    CHECK(!missing.found && missing.starts.empty() && missing.embedded_image.empty());
+    fs::remove_all(T);
 }
 
 void test_fake_install() {
@@ -240,6 +288,7 @@ void test_real_data() {
 }  // namespace
 
 int main() {
+    test_preview();
     test_fake_install();
     test_real_data();
     std::printf(g_fail ? "alamo_game_skirmish_maps_tests: %d failure(s)\n" : "alamo_game_skirmish_maps_tests: OK\n", g_fail);

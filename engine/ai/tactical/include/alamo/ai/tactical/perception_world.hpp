@@ -45,6 +45,9 @@ struct PerceptionType {
     int32_t tech_level = 0;                // Tech_Level (+0x89C)
     float population = 0.0f;               // pop(T, mode) 0x373500 (Land_/Space_Override_Population_Value if >= 0)
     float build_cost = 0.0f;               // Build_Cost_Credits (+0x86C)
+    // A2g t06: Build_Time_Seconds (+0x890, int field), 0x371230's base without a planet: the tactical AllowedTime base
+    // 0x6c0450 sums it over a PotentialPlan's selection (tactical_nominal_time, tactical_ai.hpp).
+    int32_t build_time_seconds = 0;
     float tactical_cost = 0.0f;            // TacticalBuild price: pad price 0x3744e0 (UC types) / tactical price 0x496d80
     std::vector<std::string> affiliation;  // Affiliation (0x3751a0); empty = every faction
     // Team expansion filter (AI_GALACTIC_2 §1.3, STRATEGIC_GAPS §1.2 [H]): flag +0x67 Create_Team, +0x29 = listed in

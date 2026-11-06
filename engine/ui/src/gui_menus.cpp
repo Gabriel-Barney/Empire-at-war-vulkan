@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <initializer_list>
 #include <iterator>
+#include <optional>
+#include <span>
 
 #include "alamo/data/game_database.hpp"
 #include "alamo/ui/hud_components.hpp"  // utf8_to_utf32
@@ -73,19 +75,24 @@ constexpr const char* kInGameOptions = "IDD_IN_GAME_OPTIONS_DIALOG";
 constexpr const char* kAudio = "IDD_AUDIO_OPTIONS_DIALOG";
 constexpr const char* kVideo = "IDD_VIDEO_OPTIONS_DIALOG";
 constexpr const char* kAdvancedVideo = "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG";
-struct AdvSlider {
-    const char* id;
+// [port: Gabriel] each detail option the shipped dialog has as a 0..100 slider is a list of named levels (LevelChoice); the
+// shipped slider and the Low / High captions at its ends are hidden, the port's list takes its place.
+struct AdvLevel {
+    const char* slider;
+    const char* combo;
     int32_t AdvancedVideoSettings::*field;
+    std::span<const LevelChoice> choices;
 };
-constexpr AdvSlider kAdvSliders[] = {
-    {"IDC_PARTICLE_DETAIL_SLIDER", &AdvancedVideoSettings::particle},
-    {"IDC_MESH_DETAIL_SLIDER", &AdvancedVideoSettings::mesh},
-    {"IDC_TEXTURE_MIP_DETAIL_SLIDER", &AdvancedVideoSettings::texture},
-    {"IDC_WATER_DETAIL_SLIDER", &AdvancedVideoSettings::water},
-    {"IDC_SHADER_DETAIL_SLIDER", &AdvancedVideoSettings::shader},
-    {"IDC_SHADOW_DETAIL_SLIDER", &AdvancedVideoSettings::shadow},
-    {"IDC_ENVIRONMENT_DETAIL_SLIDER", &AdvancedVideoSettings::environment},
+constexpr AdvLevel kAdvLevels[] = {
+    {"IDC_PARTICLE_DETAIL_SLIDER", "IDC_PORT_PARTICLE_DETAIL", &AdvancedVideoSettings::particle, kLevels4},
+    {"IDC_MESH_DETAIL_SLIDER", "IDC_PORT_MESH_DETAIL", &AdvancedVideoSettings::mesh, kLevels4},
+    {"IDC_TEXTURE_MIP_DETAIL_SLIDER", "IDC_PORT_TEXTURE_DETAIL", &AdvancedVideoSettings::texture, kTextureChoices},
+    {"IDC_WATER_DETAIL_SLIDER", "IDC_PORT_WATER_DETAIL", &AdvancedVideoSettings::water, kLevels3},
+    {"IDC_SHADER_DETAIL_SLIDER", "IDC_PORT_SHADER_DETAIL", &AdvancedVideoSettings::shader, kLevels4},
+    {"IDC_SHADOW_DETAIL_SLIDER", "IDC_PORT_SHADOW_DETAIL", &AdvancedVideoSettings::shadow, kShadowChoices},
+    {"IDC_ENVIRONMENT_DETAIL_SLIDER", "IDC_PORT_ENVIRONMENT_DETAIL", &AdvancedVideoSettings::environment, kLevels4},
 };
+constexpr const char32_t* kQualityNames[kQualityCount + 1] = {U"Low", U"Medium", U"High", U"Ultra", U"Custom - see Advanced"};
 struct AdvCheck {
     const char* id;
     bool AdvancedVideoSettings::*field;
@@ -268,15 +275,20 @@ BEGIN
     COMBOBOX        IDC_PORT_VSYNC_MODE,357,162,188,80,CBS_DROPDOWNLIST | WS_TABSTOP
     LTEXT           "Frame Rate Cap",IDC_PORT_FRAME_CAP_TEXT,357,188,188,18
     COMBOBOX        IDC_PORT_FRAME_CAP,357,208,188,90,CBS_DROPDOWNLIST | WS_TABSTOP
-    RTEXT           "",IDC_PORT_ANTI_ALIAS_VALUE,143,246,32,21
-    RTEXT           "",IDC_PORT_DETAIL_VALUE,143,271,32,21
+    COMBOBOX        IDC_PORT_ANTI_ALIASING,196,246,311,108,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_DETAIL_LEVEL,196,271,311,130,CBS_DROPDOWNLIST | WS_TABSTOP
     RTEXT           "",IDC_PORT_GAMMA_VALUE,143,297,32,21
     LTEXT           "",IDC_PORT_DISPLAY_INFO,22,376,526,18
 END
 IDD_ADVANCED_VIDEO_OPTIONS_DIALOG DIALOGEX 0, 0, 571, 454
 BEGIN
-    LTEXT           "Anti-Aliasing",IDC_PORT_ANTI_ALIASING_TEXT,297,272,218,18
-    COMBOBOX        IDC_PORT_ANTI_ALIASING,297,292,218,60,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_PARTICLE_DETAIL,230,75,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_MESH_DETAIL,230,105,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_WATER_DETAIL,230,135,251,88,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_SHADER_DETAIL,230,165,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_TEXTURE_DETAIL,230,195,251,88,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_SHADOW_DETAIL,230,225,251,66,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_ENVIRONMENT_DETAIL,230,255,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
     LTEXT           "Anisotropic Filtering",IDC_PORT_ANISOTROPY_TEXT,297,360,218,18
     COMBOBOX        IDC_PORT_ANISOTROPY,297,380,218,120,CBS_DROPDOWNLIST | WS_TABSTOP
     CONTROL         "Ambient Occlusion",IDC_PORT_AMBIENT_OCCLUSION,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,33,385,215,23
@@ -293,6 +305,37 @@ std::u32string value_text(int32_t v) { return ascii32(std::to_string(v)); }
 void use_ui_font(GuiDialog& d, std::initializer_list<const char*> ids) {
     for (const char* id : ids)
         if (GuiControl* c = d.get(id)) c->ui_font = true;
+}
+// [port: Gabriel] hides a shipped slider and the end captions beside it (Low / Off / Max / High: statics with no id of their
+// own, found by their row and by sitting clear of the row's title on the left, which ends well before the slider's start).
+void hide_slider(GuiDialog& d, const char* id) {
+    const GuiControl* s = d.get(id);
+    if (!s || !s->def) return;
+    const int32_t x = s->def->x, y = s->def->y;
+    d.show(id, false);
+    for (size_t i = 0; i < d.size(); ++i) {
+        GuiControl& c = d[i];
+        if (c.type == GuiGadgetType::Text && c.def && c.def->x >= x - 70 && std::abs(c.def->y - y) <= 4) c.visible = false;
+    }
+}
+// The items of a list of named levels, in the dialog's text path (pseudo-localization, translation).
+std::vector<std::u32string> level_items(const GuiManager& gui, std::span<const LevelChoice> choices) {
+    std::vector<std::u32string> items;
+    for (const LevelChoice& c : choices) items.push_back(gui.port_text(c.label));
+    return items;
+}
+// The advanced options the player is on now: the host's, else (a host with no advanced provider) the Detail value for all seven.
+AdvancedVideoSettings current_advanced(const MenuProviders& p, const VideoSettings& v) {
+    if (p.advanced_video) return p.advanced_video();
+    AdvancedVideoSettings a;
+    set_advanced_detail(a, v.detail);
+    return a;
+}
+// The row a list has selected, when it names one of `count` choices.
+std::optional<size_t> picked(const GuiDialog& d, const char* id, size_t count) {
+    const GuiControl* c = d.get(id);
+    if (!c || c->selected < 0 || static_cast<size_t>(c->selected) >= count) return std::nullopt;
+    return static_cast<size_t>(c->selected);
 }
 // QA U11: the shipped IDD_GAME_OPTIONS_DIALOG leaves one button row empty between Options and Quit Game, with no control
 // for it in GUIDialogs.rc. Quit and Resume move up by that row and the dialog ends that much sooner [port].
@@ -561,9 +604,10 @@ std::u32string FrontEnd::skirmish_row_text(const SkirmishMapInfo& m) const {
     return ascii32("(" + std::to_string(m.players ? m.players : m.max_players) + ") ") + t;
 }
 
-// The active tab's maps: space maps first, then land maps (the port's one combined list), each by row text
-// case-insensitively, ties by map id (UI.md 9.4 / 9.5). The selection is the map started last when it is listed, else
-// _MP_SPACE_KUAT [port: stands in for the original's "map chosen last", and keeps the smoke runs on Kuat], else row 0.
+// The rows of the active tab and game type (UI.md 9.4: a space map is listed under Space, the others under Land), each by
+// row text case-insensitively, ties by map id. The selection is the map selected last for that game type when it is listed
+// (UI.md 9.5 / 9.7), else _MP_SPACE_KUAT on the Space type [port: keeps the smoke runs on Kuat], else row 0. The row
+// selected becomes the map remembered for the type.
 void FrontEnd::fill_skirmish_maps(GuiDialog& d) {
     struct Row {
         size_t index;
@@ -571,10 +615,9 @@ void FrontEnd::fill_skirmish_maps(GuiDialog& d) {
     };
     std::vector<Row> rows;
     for (size_t i = 0; i < maps_.size(); ++i)
-        if (maps_[i].custom == custom_tab_) rows.push_back({i, skirmish_row_text(maps_[i])});
+        if (maps_[i].custom == custom_tab_ && maps_[i].space == space_type_) rows.push_back({i, skirmish_row_text(maps_[i])});
     std::sort(rows.begin(), rows.end(), [&](const Row& a, const Row& b) {
         const SkirmishMapInfo &ma = maps_[a.index], &mb = maps_[b.index];
-        if (ma.space != mb.space) return ma.space;
         if (a.text != b.text) {
             const bool ab = row_text_less(a.text, b.text), ba = row_text_less(b.text, a.text);
             if (ab != ba) return ab;
@@ -586,16 +629,19 @@ void FrontEnd::fill_skirmish_maps(GuiDialog& d) {
     std::vector<std::u32string> items;
     int32_t sel = rows.empty() ? -1 : 0;
     int32_t kuat = -1, last = -1;
+    const std::string& last_map = last_map_[space_type_ ? 1 : 0];
     for (size_t r = 0; r < rows.size(); ++r) {
         const SkirmishMapInfo& m = maps_[rows[r].index];
         map_view_.push_back(rows[r].index);
         items.push_back(std::move(rows[r].text));
-        if (kuat < 0 && iequal(m.map, "_MP_SPACE_KUAT")) kuat = static_cast<int32_t>(r);
-        if (last < 0 && !last_map_.empty() && iequal(m.map, last_map_)) last = static_cast<int32_t>(r);
+        if (kuat < 0 && space_type_ && iequal(m.map, "_MP_SPACE_KUAT")) kuat = static_cast<int32_t>(r);
+        if (last < 0 && !last_map.empty() && iequal(m.map, last_map)) last = static_cast<int32_t>(r);
     }
     if (last >= 0) sel = last;
     else if (kuat >= 0) sel = kuat;
     d.set_items("IDC_STAGING_MAP_LIST", std::move(items), sel);
+    if (sel >= 0) last_map_[space_type_ ? 1 : 0] = maps_[map_view_[static_cast<size_t>(sel)]].map;
+    fill_skirmish_preview(d);
 }
 
 int32_t FrontEnd::skirmish_map_row(std::string_view map) const {
@@ -604,9 +650,82 @@ int32_t FrontEnd::skirmish_map_row(std::string_view map) const {
     return -1;
 }
 
+void FrontEnd::fill_skirmish_game_types(GuiDialog& d) {
+    // Land first (game type 2), then Space (3) as in UI.md 9.4; the names are the text database's game type entries.
+    d.set_items("IDC_GAME_TYPE_LIST", {text_or("TEXT_GAME_TYPE_TEAM_LAND", gui_->port_text(U"Land")),
+                                       text_or("TEXT_GAME_TYPE_TEAM_SPACE", gui_->port_text(U"Space"))},
+                space_type_ ? 1 : 0);
+}
+
+void FrontEnd::fill_skirmish_colours(GuiDialog& d) {
+    char id[32];
+    for (int32_t p = 0; p < 2; ++p) {  // the used slots [port: local player + one AI]
+        std::snprintf(id, sizeof id, "IDC_PLAYER_COLOR_%d", p);
+        const bool has = !colour_palette_.empty();
+        d.show(id, has);
+        if (!has) continue;
+        // UI.md 3.7.1: one U+25A0 per palette entry, drawn in the entry's colour.
+        d.set_items(id, std::vector<std::u32string>(colour_palette_.size(), std::u32string(1, 0x25A0)),
+                    std::min(slot_colour_[p], static_cast<int32_t>(colour_palette_.size()) - 1));
+        if (GuiControl* c = d.get(id)) c->item_colors = colour_palette_;
+    }
+}
+
+int32_t FrontEnd::skirmish_colour(int32_t slot) const {
+    return slot >= 0 && slot < 2 && !colour_palette_.empty() ? std::min(slot_colour_[slot], static_cast<int32_t>(colour_palette_.size()) - 1) : -1;
+}
+
+// IDC_IMAGE and its start numbers for the selected row (UI.md 9.6 / 9.6.1); IDC_SCENARIO_DESCRIPTION_TEXT_BOX is switched
+// off and never filled (9.6.2).
+void FrontEnd::fill_skirmish_preview(GuiDialog& d) {
+    const GuiControl* list = d.get("IDC_STAGING_MAP_LIST");
+    const SkirmishMapInfo* m = list && list->selected >= 0 && static_cast<size_t>(list->selected) < map_view_.size()
+                                   ? &maps_[map_view_[static_cast<size_t>(list->selected)]]
+                                   : nullptr;
+    SkirmishPreview pv;
+    if (m && p_.skirmish_preview) pv = p_.skirmish_preview(*m);
+    d.set_image("IDC_IMAGE", pv.texture);
+    if (GuiControl* c = d.get("IDC_IMAGE")) {
+        c->markers.clear();
+        for (size_t i = 0; i < pv.starts.size(); ++i)  // start i shows the number i + 1, opaque white
+            c->markers.push_back({pv.starts[i], ascii32(std::to_string(i + 1)), Rgba8{255, 255, 255, 255}});
+    }
+    d.set_text("IDC_SCENARIO_DESCRIPTION_TEXT_BOX", std::u32string());
+    d.show("IDC_SCENARIO_DESCRIPTION_TEXT_BOX", false);
+}
+
+// UI.md 9.7: the picks are stored as they are, then in slot order slot 0 keeps its colour and each later slot whose colour
+// an earlier slot uses takes the lowest colour index no earlier slot uses; the combos show the result.
+void FrontEnd::resolve_skirmish_colours(GuiDialog& d) {
+    constexpr int32_t kUsed = 2;  // [port] local player + one AI
+    const auto palette = static_cast<int32_t>(colour_palette_.size());
+    for (int32_t p = 1; p < kUsed; ++p) {
+        const auto taken = [&](int32_t col) {
+            for (int32_t q = 0; q < p; ++q)
+                if (slot_colour_[q] == col) return true;
+            return false;
+        };
+        if (!taken(slot_colour_[p])) continue;
+        for (int32_t col = 0; col < palette; ++col)
+            if (!taken(col)) {
+                slot_colour_[p] = col;
+                break;
+            }
+    }
+    char id[32];
+    for (int32_t p = 0; p < kUsed; ++p) {
+        std::snprintf(id, sizeof id, "IDC_PLAYER_COLOR_%d", p);
+        const GuiControl* c = d.get(id);
+        if (c && c->selected != slot_colour_[p]) d.set_selected(id, slot_colour_[p]);
+    }
+}
+
 void FrontEnd::fill_skirmish(GuiDialog& d) {
     maps_ = p_.skirmish_maps ? p_.skirmish_maps() : std::vector<SkirmishMapInfo>{};
+    colour_palette_ = p_.player_colors ? p_.player_colors() : std::vector<Rgba8>{};
+    for (int32_t i = 0; i < 8; ++i) slot_colour_[i] = i;  // the default colour is the slot index
     custom_tab_ = false;  // the Official tab is active when the dialog opens
+    fill_skirmish_game_types(d);
     fill_skirmish_maps(d);
     d.show("IDC_SELECT_OFFICIAL_MAPS", true);
     d.show("IDC_SELECT_CUSTOM_MAPS", true);
@@ -626,9 +745,8 @@ void FrontEnd::fill_skirmish(GuiDialog& d) {
         d.set_items(id, factions, factions.empty() ? -1 : std::min<int32_t>(p, static_cast<int32_t>(factions.size()) - 1));
         std::snprintf(id, sizeof id, "IDC_PLAYER_TEAM_%d", p);
         d.set_items(id, {U"1", U"2"}, p);
-        std::snprintf(id, sizeof id, "IDC_PLAYER_COLOR_%d", p);
-        d.show(id, false);
     }
+    fill_skirmish_colours(d);
 }
 
 void FrontEnd::fill_saves(GuiDialog& d) {
@@ -674,11 +792,14 @@ void FrontEnd::fill_video(GuiDialog& d) {
     d.set_checked("IDC_VSYNC_ENABLED", v.vsync);
     d.set_checked("IDC_WIDESCREEN", v.widescreen);
     d.set_checked("IDC_HARDWARE_MOUSE", v.hardware_mouse);
-    d.set_value("IDC_DETAIL_LEVEL_SLIDER", v.detail);
-    d.set_value("IDC_ANTI_ALIAS_SLIDER", v.anti_alias);
+    // [port: Gabriel] Anti-Aliasing and Detail Level are lists of named levels in the sliders' rows; Gamma stays a slider.
+    hide_slider(d, "IDC_ANTI_ALIAS_SLIDER");
+    hide_slider(d, "IDC_DETAIL_LEVEL_SLIDER");
+    d.set_items("IDC_PORT_ANTI_ALIASING", level_items(*gui_, kAntiAliasChoices), static_cast<int32_t>(level_index(kAntiAliasChoices, v.anti_alias)));
+    std::vector<std::u32string> quality;
+    for (const char32_t* q : kQualityNames) quality.push_back(gui_->port_text(q));
+    d.set_items("IDC_PORT_DETAIL_LEVEL", std::move(quality), static_cast<int32_t>(quality_level(current_advanced(p_, v))));
     d.set_value("IDC_GAMMA_SLIDER", v.gamma);
-    d.set_text("IDC_PORT_ANTI_ALIAS_VALUE", value_text(v.anti_alias));
-    d.set_text("IDC_PORT_DETAIL_VALUE", value_text(v.detail));
     d.set_text("IDC_PORT_GAMMA_VALUE", value_text(v.gamma));
     d.set_text("IDC_DEVICE_DESC_STATIC", v.device);
     vsync_on_row_ = static_cast<int32_t>(v.vsync_mode) + 1;
@@ -694,11 +815,11 @@ void FrontEnd::fill_video(GuiDialog& d) {
         if (c == v.frame_cap) cap_sel = static_cast<int32_t>(i);
     }
     d.set_items("IDC_PORT_FRAME_CAP", std::move(caps), cap_sel);
-    use_ui_font(d, {"IDC_PORT_VSYNC_MODE", "IDC_PORT_FRAME_CAP"});
+    use_ui_font(d, {"IDC_PORT_VSYNC_MODE", "IDC_PORT_FRAME_CAP", "IDC_PORT_ANTI_ALIASING", "IDC_PORT_DETAIL_LEVEL"});
     d.set_text("IDC_PORT_DISPLAY_INFO", gui_->port_text(v.display_info));
-    // t47 [port]: the value columns (143..175) sit inside the shipped caption boxes (41..187, Detail Level has no id of its own):
-    // the captions end where their value starts and are narrowed to fit, or a long one runs under the number.
-    for (const char* id : {"IDC_PORT_ANTI_ALIAS_VALUE", "IDC_PORT_DETAIL_VALUE", "IDC_PORT_GAMMA_VALUE"}) {
+    // t47 [port]: the value column (143..175) sits inside the shipped caption box (41..187):
+    // the caption ends where its value starts and is narrowed to fit, or a long one runs under the number.
+    for (const char* id : {"IDC_PORT_GAMMA_VALUE"}) {
         const GuiControl* value = d.get(id);
         if (!value || !value->def) continue;
         for (size_t i = 0; i < d.size(); ++i) {
@@ -710,10 +831,22 @@ void FrontEnd::fill_video(GuiDialog& d) {
     }
 }
 
+void FrontEnd::refresh_video_dialogs() {
+    if (GuiDialog* vd = gui_->find(kVideo)) {
+        const VideoSettings v = p_.video ? p_.video() : VideoSettings{};
+        vd->set_selected("IDC_PORT_ANTI_ALIASING", static_cast<int32_t>(level_index(kAntiAliasChoices, v.anti_alias)));
+        vd->set_selected("IDC_PORT_DETAIL_LEVEL", static_cast<int32_t>(quality_level(current_advanced(p_, v))));
+    }
+    if (GuiDialog* ad = gui_->find(kAdvancedVideo)) fill_advanced_video(*ad, current_advanced(p_, p_.video ? p_.video() : VideoSettings{}));
+}
+
 void FrontEnd::fill_advanced_video(GuiDialog& d, const AdvancedVideoSettings& s) {
-    for (const AdvSlider& v : kAdvSliders) d.set_value(v.id, s.*v.field);
+    for (const AdvLevel& l : kAdvLevels) {
+        hide_slider(d, l.slider);
+        d.set_items(l.combo, level_items(*gui_, l.choices), static_cast<int32_t>(level_index(l.choices, s.*l.field)));
+        use_ui_font(d, {l.combo});
+    }
     for (const AdvCheck& c : kAdvChecks) d.set_checked(c.id, s.*c.field);
-    d.set_items("IDC_PORT_ANTI_ALIASING", {gui_->port_text(U"Off"), gui_->port_text(U"Temporal (TAA)")}, static_cast<int32_t>(s.anti_aliasing));
     std::vector<std::u32string> af;
     int32_t af_sel = 0;
     for (size_t i = 0; i < std::size(kAnisotropyChoices); ++i) {
@@ -723,7 +856,7 @@ void FrontEnd::fill_advanced_video(GuiDialog& d, const AdvancedVideoSettings& s)
     }
     d.set_items("IDC_PORT_ANISOTROPY", std::move(af), af_sel);
     d.set_checked("IDC_PORT_AMBIENT_OCCLUSION", s.ambient_occlusion);
-    use_ui_font(d, {"IDC_PORT_ANTI_ALIASING", "IDC_PORT_ANISOTROPY"});
+    use_ui_font(d, {"IDC_PORT_ANISOTROPY"});
     // QA D8 [port]: the check rows are widened up to the combo column, so "Heat Distortion" is not narrowed to fit 152 units.
     for (const AdvCheck& k : kAdvChecks)
         if (GuiControl* c = d.get(k.id); c && c->def->w > 0) c->scale.x = kAdvCheckWidth / static_cast<float>(c->def->w);
@@ -731,12 +864,12 @@ void FrontEnd::fill_advanced_video(GuiDialog& d, const AdvancedVideoSettings& s)
 
 AdvancedVideoSettings FrontEnd::read_advanced_video(const GuiDialog& d) const {
     AdvancedVideoSettings s = p_.advanced_video ? p_.advanced_video() : AdvancedVideoSettings{};
-    for (const AdvSlider& v : kAdvSliders)
-        if (const GuiControl* c = d.get(v.id)) s.*v.field = c->value;
+    // A list still on the level the stored value falls in keeps that exact value (an older profile's 55 is not rewritten to 75).
+    for (const AdvLevel& l : kAdvLevels)
+        if (const std::optional<size_t> row = picked(d, l.combo, l.choices.size()); row && *row != level_index(l.choices, s.*l.field))
+            s.*l.field = l.choices[*row].value;
     for (const AdvCheck& k : kAdvChecks)
         if (const GuiControl* c = d.get(k.id)) s.*k.field = c->checked;
-    if (const GuiControl* c = d.get("IDC_PORT_ANTI_ALIASING"); c && c->selected >= 0 && static_cast<size_t>(c->selected) < kAntiAliasingCount)
-        s.anti_aliasing = static_cast<AntiAliasing>(c->selected);
     if (const GuiControl* c = d.get("IDC_PORT_ANISOTROPY"); c && c->selected >= 0 && static_cast<size_t>(c->selected) < std::size(kAnisotropyChoices))
         s.anisotropy = kAnisotropyChoices[static_cast<size_t>(c->selected)];
     if (const GuiControl* c = d.get("IDC_PORT_AMBIENT_OCCLUSION")) s.ambient_occlusion = c->checked;
@@ -845,12 +978,10 @@ void FrontEnd::setup(GuiDialog& d) {
         fill_video(d);
     } else if (iequal(n, kAdvancedVideo)) {
         AdvancedVideoSettings s = p_.advanced_video ? p_.advanced_video() : AdvancedVideoSettings{};
-        // t19 / D9: opened from the Video dialog, the combo shows that dialog's slider, moved or not.
-        if (const GuiDialog* vd = gui_->find(kVideo)) {
-            if (const GuiControl* c = vd->get("IDC_ANTI_ALIAS_SLIDER")) s.anti_aliasing = anti_aliasing_from_slider(c->value);
-            // t43: a Detail slider moved but not yet applied shows here as the preset it will be.
-            if (const GuiControl* c = vd->get("IDC_DETAIL_LEVEL_SLIDER"); c && p_.video && c->value != p_.video().detail) set_advanced_detail(s, c->value);
-        }
+        // t43: opened from the Video dialog, a quality level picked there but not yet applied shows here as the preset it will be.
+        if (const GuiDialog* vd = gui_->find(kVideo))
+            if (const std::optional<size_t> level = picked(*vd, "IDC_PORT_DETAIL_LEVEL", kQualityCount); level && *level != quality_level(s))
+                set_advanced_detail(s, kQualityPresets[*level]);
         fill_advanced_video(d, s);
     } else if (iequal(n, kGameplay)) {
         fill_gameplay(d, p_.gameplay ? p_.gameplay() : GameplaySettings{});
@@ -972,6 +1103,27 @@ void FrontEnd::on_change(const GuiEvent& e, std::vector<MenuAction>& out) {
     const std::string_view n = e.dialog;
     if (iequal(n, kCampaignSelect)) fill_campaign_select(*d);
     else if (iequal(n, kCustomStaging) && e.control == "IDC_STAGING_MAP_LIST") fill_custom_staging(*d);
+    else if (iequal(n, kSkirmish) && e.kind == GuiEvent::Kind::SelectionChanged) {
+        if (e.control == "IDC_GAME_TYPE_LIST" && e.value >= 0 && e.value < 2) {
+            if (space_type_ != (e.value == 1)) {
+                space_type_ = e.value == 1;
+                fill_skirmish_maps(*d);
+            }
+        } else if (e.control == "IDC_STAGING_MAP_LIST") {
+            // UI.md 9.7: every selection change stores the row's map for the current game type.
+            if (e.value >= 0 && static_cast<size_t>(e.value) < map_view_.size())
+                last_map_[space_type_ ? 1 : 0] = maps_[map_view_[static_cast<size_t>(e.value)]].map;
+            fill_skirmish_preview(*d);
+        } else if (istarts(e.control, "IDC_PLAYER_COLOR_") && e.control.size() == 18 && e.value >= 0 &&
+                   static_cast<size_t>(e.value) < colour_palette_.size()) {
+            // UI.md 9.7: the pick is stored as it is, then the clash rule runs in slot order.
+            const int32_t slot = e.control.back() - '0';
+            if (slot >= 0 && slot < 2) {
+                slot_colour_[slot] = e.value;
+                resolve_skirmish_colours(*d);
+            }
+        }
+    }
     else if (iequal(n, kAudio) && e.kind == GuiEvent::Kind::ValueChanged) {
         MenuAction a = act(MenuAction::Kind::PreviewAudio);
         a.audio = read_audio(*d);
@@ -988,9 +1140,7 @@ void FrontEnd::on_change(const GuiEvent& e, std::vector<MenuAction>& out) {
     } else if (is_port_controls(n) && e.kind == GuiEvent::Kind::ValueChanged) {  // [port: Gabriel] FOV value labels
         if (e.control == "IDC_PORT_GALACTIC_FOV_SLIDER") d->set_text("IDC_PORT_GALACTIC_FOV_VALUE", fov_text(static_cast<float>(e.value)));
         if (e.control == "IDC_PORT_TACTICAL_FOV_SLIDER") d->set_text("IDC_PORT_TACTICAL_FOV_VALUE", fov_text(static_cast<float>(e.value)));
-    } else if (iequal(n, kVideo) && e.kind == GuiEvent::Kind::ValueChanged) {  // [port] the values beside the sliders (U8)
-        if (e.control == "IDC_ANTI_ALIAS_SLIDER") d->set_text("IDC_PORT_ANTI_ALIAS_VALUE", value_text(e.value));
-        if (e.control == "IDC_DETAIL_LEVEL_SLIDER") d->set_text("IDC_PORT_DETAIL_VALUE", value_text(e.value));
+    } else if (iequal(n, kVideo) && e.kind == GuiEvent::Kind::ValueChanged) {  // [port] the value beside the Gamma slider (U8)
         if (e.control == "IDC_GAMMA_SLIDER") d->set_text("IDC_PORT_GAMMA_VALUE", value_text(e.value));
     } else if (iequal(n, kVideo) && e.kind == GuiEvent::Kind::Checked && e.control == "IDC_VSYNC_ENABLED") {  // U9: one setting
         d->set_selected("IDC_PORT_VSYNC_MODE", e.value != 0 ? vsync_on_row_ : 0);
@@ -1071,8 +1221,8 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             if (list && list->selected >= 0 && static_cast<size_t>(list->selected) < map_view_.size()) {
                 MenuAction a = act(MenuAction::Kind::StartSkirmish);
                 a.map = maps_[map_view_[static_cast<size_t>(list->selected)]].map;
-                last_map_ = a.map;
                 for (int32_t p = 0; p < 2; ++p) {
+                    a.colors.push_back(slot_colour_[p]);
                     char id[32];
                     std::snprintf(id, sizeof id, "IDC_PLAYER_FACTION_%d", p);
                     const GuiControl* f = d->get(id);
@@ -1139,6 +1289,14 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             auto val = [&](const char* id, int32_t& o) {
                 if (const GuiControl* x = d->get(id)) o = x->value;
             };
+            // [port: Gabriel] A list still on the level the stored value falls in keeps that exact value; one moved stores its
+            // level's value. A new quality level (not Custom) also asks the host to set the seven advanced options to it.
+            if (const std::optional<size_t> row = picked(*d, "IDC_PORT_ANTI_ALIASING", std::size(kAntiAliasChoices)); row && *row != level_index(kAntiAliasChoices, v.anti_alias))
+                v.anti_alias = kAntiAliasChoices[*row].value;
+            if (const std::optional<size_t> row = picked(*d, "IDC_PORT_DETAIL_LEVEL", kQualityCount); row && *row != quality_level(current_advanced(p_, v))) {
+                v.detail = kQualityPresets[*row];
+                v.detail_picked = true;
+            }
             chk("IDC_WINDOWED_MODE", v.windowed);
             chk("IDC_VSYNC_ENABLED", v.vsync);
             // U9: row 0 is Off (the check box above says so); the mode is remembered while v-sync is off.
@@ -1148,8 +1306,6 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
                 v.frame_cap = kFrameCapChoices[static_cast<size_t>(x->selected)];
             chk("IDC_WIDESCREEN", v.widescreen);
             chk("IDC_HARDWARE_MOUSE", v.hardware_mouse);
-            val("IDC_DETAIL_LEVEL_SLIDER", v.detail);
-            val("IDC_ANTI_ALIAS_SLIDER", v.anti_alias);
             val("IDC_GAMMA_SLIDER", v.gamma);
             // t12: a different resolution / refresh rate asks "keep these settings?" first (the Yes answer stores it).
             const bool confirm = v.resolution >= 0 && v.resolution != previous_resolution && !res_confirm_;
@@ -1172,18 +1328,9 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
         if (is("IDC_OK") || is("IDC_APPLY")) {
             MenuAction a = act(MenuAction::Kind::ApplyAdvancedVideo);
             a.advanced = read_advanced_video(*d);
-            // t19 / D9: the Video dialog underneath shows the same setting (its Accept would otherwise undo this one).
-            if (GuiDialog* vd = gui_->find(kVideo)) {
-                if (const GuiControl* aa = vd->get("IDC_ANTI_ALIAS_SLIDER")) {
-                    const int32_t slider = anti_alias_slider_for(a.advanced.anti_aliasing, aa->value);
-                    vd->set_value("IDC_ANTI_ALIAS_SLIDER", slider);
-                    vd->set_text("IDC_PORT_ANTI_ALIAS_VALUE", value_text(slider));
-                }
-                // t43: and the Detail slider the level of the seven (the host stores the same, so Accept is no new preset).
-                const int32_t detail = advanced_detail_level(a.advanced);
-                vd->set_value("IDC_DETAIL_LEVEL_SLIDER", detail);
-                vd->set_text("IDC_PORT_DETAIL_VALUE", value_text(detail));
-            }
+            // t43: the Video dialog underneath shows the quality level the seven now make (the host stores the same, so its
+            // Accept is no new preset).
+            if (GuiDialog* vd = gui_->find(kVideo)) vd->set_selected("IDC_PORT_DETAIL_LEVEL", static_cast<int32_t>(quality_level(a.advanced)));
             out.push_back(std::move(a));
             if (is("IDC_OK")) pop();
         } else if (is("IDC_AUTO_DETECT")) {

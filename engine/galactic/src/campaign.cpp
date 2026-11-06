@@ -126,7 +126,13 @@ std::vector<uint32_t> GalacticSim::fleets_at(PlanetIndex planet, int32_t player)
 }
 
 int32_t GalacticSim::ground_base_level(PlanetIndex planet) const {
-    return static_cast<int32_t>(planets_[planet].structures.size());
+    // Ground base level (planet data +0x130) is not modelled as its own counter: it is the number of live ground-family
+    // structures on the surface (is_ground_structure_type, 0x5F); orbital structures do not count [M] (A2f t08;
+    // STRATEGIC_GAPS §1.3 step 18 reads the same surface count, "0 when no ground base").
+    int32_t n = 0;
+    for (ObjectHandle s : planets_[planet].structures)
+        if (store_->alive(s) && is_ground_structure_type(rules_->types[static_cast<size_t>(store_->type(s))])) ++n;
+    return n;
 }
 
 int32_t GalacticSim::planets_owned(int32_t player) const {
@@ -584,10 +590,14 @@ void GalacticSim::on_owner_change(PlanetIndex planet, int32_t old_owner) {
         p.siphon_player = kNoPlayer;
         p.siphon_amount = 0.0f;
     }
-    // GE 2.8: the space queue is re-evaluated at level 0 and the starbase owner reset to -1 [H]. The
-    // ground queue's entries of other players are dropped without refund ([L]: 0x2bff60 not traced).
+    // GE 2.8: the space queue is re-evaluated at level 0 [M]. The ground queue's entries of other players are dropped
+    // without refund ([L]: 0x2bff60 not traced).
     reevaluate_queue(planet, kSpaceQueue, 0);
-    p.starbase_owner = kNoPlayer;
+    // a2j t06 (A2J_T03_INCOME.md §2) [M]: the starbase owner D +0x13c is reset only together with the starbase handle
+    // (0x4bda40, BATTLE_TRANSITIONS §3.3a; Change_Owner 0x3f7280 and the revolt 0x3f98a0 call it, GE 2.8 / 4.2). The
+    // derived-owner change 0x3fb040 (GE 4.2 "On an owner change") does not touch it, so a starbase that outlives the
+    // owner change keeps its owner. Without a starbase object the field is already -1 (every destroy path clears it).
+    if (!store_->alive(p.starbase)) p.starbase_owner = kNoPlayer;
     auto& g = p.queue[kGroundQueue];
     const bool head_gone = !g.empty() && g[0].player != now_owner;
     for (const BuildEntry& e : g)

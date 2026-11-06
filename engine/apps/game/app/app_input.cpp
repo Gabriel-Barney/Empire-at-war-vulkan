@@ -792,6 +792,7 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 s.skirmish.ai_faction = a.factions.size() > 1 && !a.factions[1].empty() ? a.factions[1] : "Empire";
                 if (iequal(s.skirmish.ai_faction, s.skirmish.human_faction))  // [port] the AI needs a hostile faction
                     s.skirmish.ai_faction = iequal(s.skirmish.human_faction, "Empire") ? "Rebel" : "Empire";
+                for (const int32_t c : a.colors) s.skirmish.colors.push_back(static_cast<uint8_t>(std::clamp(c, 0, 8)));
                 s.seed = opt_.seed;
                 s.battle_max_frames = opt_.battle_max_frames;
                 s.battle_end_hold_frames = kBattleEndHoldFrames;
@@ -843,30 +844,47 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 }
                 update_display_rate(true);
                 // t12: tried now, stored on the Yes answer of "keep these settings?" (or as the old mode on No / timeout).
-                {
-                    const int32_t old_detail = video_profile_.detail;
-                    if (update_video_profile(video_profile_, a.video, display_modes_)) {
-                        adv_video_.anti_aliasing = video_profile_.advanced.anti_aliasing;  // t19 / D9
-                        // t11 [M]: a moved overall Detail slider is a preset for the seven advanced detail sliders.
-                        if (video_profile_.detail != old_detail) {
-                            adv_video_ = detail_preset(adv_video_, video_profile_.detail);
-                            video_profile_.advanced = adv_video_;
-                        }
-                        save_video_options();
+                if (update_video_profile(video_profile_, a.video, display_modes_)) {
+                    // t11 [M]: a quality level picked in the Detail Level list is a preset for the seven advanced detail options.
+                    if (a.video.detail_picked) {
+                        adv_video_ = detail_preset(adv_video_, video_profile_.detail);
+                        video_profile_.advanced = adv_video_;
                     }
+                    std::printf("video: anti-aliasing %s (strength %d), detail level %d\n", taa_active(video_profile_.anti_alias) ? "TAA" : "off",
+                                video_profile_.anti_alias, video_profile_.detail);
+                    save_video_options();
                 }
                 break;
-            case K::ApplyAdvancedVideo:  // TAA / AO go into the next frame's RecordOptions; anisotropy latches next frame
+            case K::ApplyAdvancedVideo:  // AO goes into the next frame's RecordOptions; anisotropy latches next frame
                 adv_video_ = a.advanced;
                 gpu_.renderer.set_anisotropy(static_cast<uint32_t>(adv_video_.anisotropy));
-                std::printf("video: anti-aliasing %s, ambient occlusion %s, anisotropy %dx requested\n",
-                            adv_video_.anti_aliasing == ui::AntiAliasing::Taa ? "TAA" : "off", adv_video_.ambient_occlusion ? "on" : "off",
+                std::printf("video: ambient occlusion %s, anisotropy %dx requested\n", adv_video_.ambient_occlusion ? "on" : "off",
                             adv_video_.anisotropy);
                 video_profile_.advanced = adv_video_;
-                sync_detail(video_profile_);  // t43: the Detail slider follows
-                video_profile_.anti_alias = ui::anti_alias_slider_for(adv_video_.anti_aliasing, video_profile_.anti_alias);  // t19 / D9
+                sync_detail(video_profile_);  // t43: the Detail value follows
                 save_video_options();
                 break;
+            case K::AutoDetectVideo: {  // gfxf t02: a quality level from the GPU; the open dialogs show it
+                const rhi::DeviceCaps& caps = ctx_.caps();
+                GpuClass gpu;
+                gpu.kind = caps.type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? GpuKind::Discrete
+                           : caps.type == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? GpuKind::Integrated
+                                                                                 : GpuKind::Other;
+                gpu.memory_bytes = caps.device_local_bytes;
+                gpu.sampler_anisotropy = caps.sampler_anisotropy;
+                gpu.max_anisotropy = caps.max_anisotropy;
+                static constexpr const char* kQualityNames[] = {"low", "medium", "high", "ultra"};
+                const AutoVideoChoice choice = recommend_video(gpu);
+                apply_auto_video(video_profile_, choice);
+                adv_video_ = video_profile_.advanced;
+                gpu_.renderer.set_anisotropy(static_cast<uint32_t>(adv_video_.anisotropy));
+                std::printf("video: auto detect (%s, %llu MiB): %s detail, anti-aliasing strength %d, anisotropy %dx, ambient occlusion %s\n",
+                            caps.name.c_str(), static_cast<unsigned long long>(caps.device_local_bytes >> 20),
+                            kQualityNames[choice.quality], video_profile_.anti_alias, adv_video_.anisotropy, adv_video_.ambient_occlusion ? "on" : "off");
+                save_video_options();
+                ui_.front.refresh_video_dialogs();
+                break;
+            }
             default: break;
         }
     }
