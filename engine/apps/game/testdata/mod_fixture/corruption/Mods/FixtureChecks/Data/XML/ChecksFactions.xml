@@ -1,0 +1,6 @@
+<Factions>
+  <Faction Name="Checks_Faction">
+    <Is_Playable>Yes</Is_Playable>
+    <Checks_Unread_Faction_Tag>1</Checks_Unread_Faction_Tag>
+  </Faction>
+</Factions>

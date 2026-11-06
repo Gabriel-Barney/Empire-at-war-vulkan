@@ -4,20 +4,29 @@
 #include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <map>
 #include <set>
+#include <span>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 #include "alamo/core/hash.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/objects/coverage.hpp"
+#include "alamo/objects/field_schema.hpp"
+#include "alamo/vfs/steam_workshop.hpp"
 #include "alamo/vfs/vfs.hpp"
 #ifdef ALAMO_GAME_HAVE_LUA_VM
+#include <lua.h>  // Lua 5.0 is built as C++ (engine/lua/CMakeLists.txt): no extern "C"
+
 #include "alamo/lua/bindings.hpp"
 #include "alamo/lua/lua_vm.hpp"
 #include "alamo/lua/script_loader.hpp"
+#include "alamo/lua/script_remaining.hpp"
 #endif
 
 namespace alamo::game {
@@ -179,12 +188,140 @@ void check_files(const GameData& d, ModCheckReport& r) {
     for (auto& [path, f] : m) r.missing_files.push_back(std::move(f));
 }
 
+// modc t15: the XML databases besides the object types that the port loads. Per database: where its entries are (the
+// <File> entries of a Data\XML list, as the loader reads them, or one Data\XML file), the entry element below the root
+// (or the root itself), and which child tags count as read: the rows of the original's descriptor table for the class
+// (docs/re/xml_field_tables.md through objects::field_schema(), by segment owner) plus the tags the port's loader reads
+// that no row lists (cited per database). Only direct children of an entry are checked. Left out: databases whose table
+// in the doc visibly misses rows (CommandBarComponent: 48 tags base FoC uses have none) and nested ones (RadarMap.xml).
+struct XmlDatabase {
+    std::string_view name;
+    std::string_view list;     // Data\XML\<list> holds the entry files; "" = `file`
+    std::string_view file;     // Data\XML\<file> holds the entries
+    std::string_view element;  // entry element below the root; "" = the root element is the one entry
+    std::span<const std::string_view> owners;     // field_schema() segment owners
+    std::span<const std::string_view> port_tags;  // read by the port's loader, no table row
+};
+
+constexpr std::string_view kFaction[] = {"Faction"};
+constexpr std::string_view kCampaign[] = {"Campaign"};
+constexpr std::string_view kTradeRoute[] = {"TradeRoute"};
+constexpr std::string_view kHardPoint[] = {"HardPoint"};
+constexpr std::string_view kHardPointPort[] = {"Type"};  // render/hardpoints.cpp (hard point type)
+constexpr std::string_view kGameConstants[] = {"GameConstants"};
+constexpr std::string_view kGameConstantsPort[] = {"Ships_Per_Stack"};  // apps/game app_screens.cpp (fleet stacks)
+constexpr std::string_view kSfxEvent[] = {"SFXEvent"};
+constexpr std::string_view kMusicEvent[] = {"MusicEvent"};
+// SpeechEvent has no table in the doc: what audio_db.cpp speech_fields() reads.
+constexpr std::string_view kSpeechEventPort[] = {"Files", "Text_ID", "Volume_Percent", "Overlap_Test"};
+constexpr std::string_view kAudio[] = {"Audio"};
+constexpr std::string_view kAudioPort[] = {"Ambient_Map_Sounds"};  // audio/ambience.hpp (map ambient beds)
+constexpr std::string_view kTacticalCamera[] = {"TacticalCamera"};
+constexpr std::string_view kTacticalCameraPort[] = {"MinHeightAboveTerrain"};  // ui/camera.cpp
+constexpr std::string_view kMovie[] = {"Movie"};
+constexpr std::string_view kDifficulty[] = {"Difficulty_Adjustment"};
+constexpr std::string_view kLightning[] = {"LightningEffect"};
+constexpr std::string_view kPrioritySet[] = {"Priority_Set"};
+constexpr std::string_view kMousePointer[] = {"MousePointer"};
+
+constexpr XmlDatabase kXmlDatabases[] = {
+    {"factions", "FactionFiles.xml", "", "Faction", kFaction, {}},
+    {"campaigns", "CampaignFiles.xml", "", "Campaign", kCampaign, {}},
+    {"trade routes", "TradeRouteFiles.xml", "", "TradeRoute", kTradeRoute, {}},
+    {"hard points", "HardPointDataFiles.xml", "", "HardPoint", kHardPoint, kHardPointPort},
+    {"game constants", "", "GameConstants.xml", "", kGameConstants, kGameConstantsPort},
+    {"sfx events", "SFXEventFiles.xml", "", "SFXEvent", kSfxEvent, {}},
+    {"music events", "", "MusicEvents.xml", "MusicEvent", kMusicEvent, {}},
+    {"speech events", "", "SpeechEvents.xml", "SpeechEvent", {}, kSpeechEventPort},
+    {"audio", "", "Audio.xml", "", kAudio, kAudioPort},
+    {"tactical cameras", "", "TacticalCameras.xml", "TacticalCamera", kTacticalCamera, kTacticalCameraPort},
+    {"movies", "", "Movies.xml", "Movie", kMovie, {}},
+    {"difficulty adjustments", "", "DifficultyAdjustments.xml", "Difficulty_Adjustment", kDifficulty, {}},
+    {"lightning effects", "", "LightningEffectTypes.xml", "LightningEffect", kLightning, {}},
+    {"targeting priority sets", "TargetingPrioritySetFiles.xml", "", "Priority_Set", kPrioritySet, {}},
+    {"mouse pointers", "", "MousePointers.xml", "MousePointer", kMousePointer, {}},  // as app game_main.cpp reads it
+};
+
+std::string lower(std::string_view in) {
+    std::string s(in);
+    for (char& c : s)
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    return s;
+}
+
+// The Data\XML files of a database in load order, each once.
+std::vector<std::string> database_files(const GameData& d, const XmlDatabase& db) {
+    std::vector<std::string> out;
+    if (db.list.empty()) {
+        out.push_back("Data\\XML\\" + std::string(db.file));
+        return out;
+    }
+    std::vector<uint8_t> bytes;
+    if (!d.files->read("Data\\XML\\" + std::string(db.list), bytes)) return out;
+    const data::XmlDocument doc = data::XmlDocument::parse(bytes, std::string(db.list));
+    if (!doc.ok()) return out;
+    std::set<std::string> seen;
+    for (data::XmlNode f : doc.root().children("File")) {
+        const std::string_view name = f.text_trimmed();
+        if (name.empty()) continue;
+        std::string path = "Data\\XML\\" + std::string(name);
+        if (seen.insert(upper(path)).second) out.push_back(std::move(path));
+    }
+    return out;
+}
+
+void check_database_tags(const GameData& d, const XmlDatabase& db, ModCheckReport& r) {
+    std::set<std::string, std::less<>> known;
+    for (const objects::FieldSchema& row : objects::field_schema())
+        for (const std::string_view o : db.owners)
+            if (iequals(row.owner, o)) known.insert(lower(row.tag));
+    for (const std::string_view t : db.port_tags) known.insert(lower(t));
+    struct Seen {
+        UnknownXmlTag u;
+        std::set<std::string> entries;
+    };
+    std::map<std::string, Seen> unknown;  // by lower-case tag: sorted, deterministic
+    std::vector<uint8_t> bytes;
+    for (const std::string& path : database_files(d, db)) {
+        if (!d.files->read(path, bytes)) continue;  // a missing list entry is reported by the files check
+        const data::XmlDocument doc = data::XmlDocument::parse(bytes, path);
+        if (!doc.ok()) continue;  // its loader reports the parse error
+        const bool in_mod = d.vfs && in_mod_layer(*d.vfs, path);
+        std::vector<data::XmlNode> entries;
+        if (db.element.empty()) entries.push_back(doc.root());
+        else
+            for (data::XmlNode e : doc.root().children())
+                if (iequals(e.name(), db.element)) entries.push_back(e);
+        uint32_t index = 0;
+        for (const data::XmlNode e : entries) {
+            const std::string entry = path + "#" + std::to_string(index++);
+            for (data::XmlNode c : e.children()) {
+                std::string key = lower(c.name());
+                if (known.count(key)) continue;
+                Seen& s = unknown[std::move(key)];
+                if (s.u.occurrences++ == 0) {
+                    s.u.database = std::string(db.name);
+                    s.u.tag = std::string(c.name());
+                    s.u.first_file = path;
+                }
+                s.u.in_mod = s.u.in_mod || in_mod;
+                s.entries.insert(entry);
+            }
+        }
+    }
+    for (auto& [key, s] : unknown) {
+        s.u.types = static_cast<uint32_t>(s.entries.size());
+        r.unknown_xml_tags.push_back(std::move(s.u));
+    }
+}
+
 void check_xml_tags(const GameData& d, ModCheckReport& r) {
     const objects::CoverageReport cov = objects::build_coverage(d.raw, 0);
     const auto& files = d.raw.files();
     for (const objects::TagCoverage& t : cov.tags) {
         if (!t.unknown() || t.occurrences == 0) continue;
         UnknownXmlTag u;
+        u.database = "object types";
         u.tag = std::string(t.name);
         u.occurrences = t.occurrences;
         u.types = t.types;
@@ -196,9 +333,122 @@ void check_xml_tags(const GameData& d, ModCheckReport& r) {
             }
         r.unknown_xml_tags.push_back(std::move(u));
     }
-    std::sort(r.unknown_xml_tags.begin(), r.unknown_xml_tags.end(), [](const UnknownXmlTag& a, const UnknownXmlTag& b) {
-        return a.occurrences != b.occurrences ? a.occurrences > b.occurrences : a.tag < b.tag;
+    if (d.files)
+        for (const XmlDatabase& db : kXmlDatabases) check_database_tags(d, db, r);
+    std::stable_sort(r.unknown_xml_tags.begin(), r.unknown_xml_tags.end(), [](const UnknownXmlTag& a, const UnknownXmlTag& b) {
+        if (a.occurrences != b.occurrences) return a.occurrences > b.occurrences;
+        if (a.database != b.database) return a.database < b.database;
+        return a.tag < b.tag;
     });
+}
+
+// ---- modc t16: submods ----
+namespace fs = std::filesystem;
+
+// Data\XML files the mod's own list files name that no layer has (MissingFile::in_mod; models are not counted: a full
+// mod misses art too, only a mod whose own database lists another mod's XML files is a submod).
+std::vector<std::string> missing_list_entries(const ModCheckReport& r) {
+    std::vector<std::string> out;
+    for (const MissingFile& f : r.missing_files)
+        if (f.in_mod && f.path.starts_with("DATA\\XML\\")) out.push_back(f.path);
+    return out;
+}
+
+bool same_folder(const fs::path& a, const std::string& b) {
+    std::error_code ec;
+    return fs::equivalent(a, fs::path(b), ec) && !ec;
+}
+
+// Sub-folders of `dir` that hold a Data folder, sorted by name (deterministic, whatever the directory order).
+std::vector<fs::path> mod_folders_in(const fs::path& dir, bool digits_only) {
+    std::vector<fs::path> out;
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec)) return out;
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        if (!it->is_directory(ec)) continue;
+        const std::string name = it->path().filename().string();
+        if (digits_only && (name.empty() || name.find_first_not_of("0123456789") != std::string::npos)) continue;
+        if (fs::is_directory(it->path() / "Data", ec)) out.push_back(it->path());
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+// How many of `paths` the candidate's own files have: a Vfs with the candidate as its only tree (its loose Data, the
+// MEGs its MegaFiles.xml / Patch*.meg name; no EaW, no FoC), so every hit is the candidate's.
+uint32_t provided_by(const fs::path& candidate, const std::vector<std::string>& paths) {
+    vfs::VfsConfig cfg;
+    cfg.foc_root = candidate.string();
+    cfg.eaw_root = std::string();
+    std::string err;
+    const std::unique_ptr<vfs::Vfs> v = vfs::Vfs::create(cfg, &err);
+    if (!v) return 0;
+    uint32_t n = 0;
+    for (const std::string& p : paths) n += v->exists(p) ? 1u : 0u;
+    return n;
+}
+
+// Every digit run of the mod folders' modinfo.json files (workshop ids a submod names, e.g. "Requires ... 1125571106").
+std::set<std::string> modinfo_numbers(const std::vector<std::string>& mod_dirs) {
+    std::set<std::string> out;
+    for (const std::string& dir : mod_dirs) {
+        std::ifstream in(fs::path(dir) / "modinfo.json", std::ios::binary);
+        if (!in) continue;
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        for (size_t i = 0; i < text.size();) {
+            if (text[i] < '0' || text[i] > '9') {
+                ++i;
+                continue;
+            }
+            const size_t b = i;
+            while (i < text.size() && text[i] >= '0' && text[i] <= '9') ++i;
+            out.insert(text.substr(b, i - b));
+        }
+    }
+    return out;
+}
+
+void check_submod(const ModCheckReport& base, const ModCheckOptions& o, SubmodHint& h) {
+    if (base.mod_dirs.empty()) return;
+    const std::vector<std::string> missing = missing_list_entries(base);
+    h.missing = static_cast<uint32_t>(missing.size());
+    if (missing.empty()) return;
+    const std::set<std::string> mentioned = modinfo_numbers(base.mod_dirs);
+    std::vector<ModParentCandidate> cands;
+    const auto consider = [&](const fs::path& dir, bool workshop) {
+        for (const std::string& m : base.mod_dirs)
+            if (same_folder(dir, m)) return;  // already in the stack
+        ModParentCandidate c;
+        c.id = dir.filename().string();
+        c.workshop = workshop;
+        c.path = dir.string();
+        c.arg = workshop ? "STEAMMOD=" + c.id : "MODPATH=Mods\\" + c.id;
+        c.mentioned = workshop && mentioned.count(c.id) != 0;
+        c.provides = provided_by(dir, missing);
+        if (c.provides > 0) cands.push_back(std::move(c));
+    };
+    std::set<std::string> seen_items;  // a workshop id found in an earlier library wins (find_workshop_item order)
+    for (const std::string& lib : o.workshop_libraries)
+        for (const fs::path& item :
+             mod_folders_in(fs::path(lib) / "steamapps" / "workshop" / "content" / std::string(vfs::kFocSteamAppId), true))
+            if (seen_items.insert(item.filename().string()).second) consider(item, true);
+    for (const fs::path& local : mod_folders_in(fs::path(base.game) / "Mods", false)) consider(local, false);
+    std::sort(cands.begin(), cands.end(), [](const ModParentCandidate& a, const ModParentCandidate& b) {
+        if (a.provides != b.provides) return a.provides > b.provides;
+        if (a.mentioned != b.mentioned) return a.mentioned;
+        if (a.workshop != b.workshop) return a.workshop;
+        return a.id < b.id;
+    });
+    constexpr size_t kListed = 5;
+    if (cands.size() > kListed) cands.resize(kListed);
+    h.parents = std::move(cands);
+    if (h.parents.empty()) return;
+    const ModParentCandidate& top = h.parents.front();
+    h.likely = top.provides >= SubmodHint::kMinProvided && 2 * top.provides >= h.missing;
+    if (h.likely) {
+        h.stacked_args = base.args;
+        h.stacked_args.push_back(top.arg);
+    }
 }
 
 #ifdef ALAMO_GAME_HAVE_LUA_VM
@@ -236,6 +486,76 @@ bool is_entry_script(std::string_view path) {
 
 using UnboundMap = std::map<std::pair<std::string, bool>, UnboundLuaCall>;  // (name, method): sorted, deterministic
 
+// modc t12. Run before an entry script's main chunk, in its VM: GlobalValue becomes a table whose Get / Set call the
+// engine's (dot or colon call) and which records, in __alamo_mod_check_unset, every string key Get found unset.
+constexpr std::string_view kGlobalValueProbe = R"lua(
+local gv = GlobalValue
+if gv == nil then return end
+local get, set = gv.Get, gv.Set
+local unset = {}
+__alamo_mod_check_unset = unset
+local proxy = {}
+proxy.Get = function(a, b)
+  local k = a
+  if a == proxy then k = b end
+  local v = get(k)
+  if v == nil and type(k) == "string" then unset[k] = true end
+  return v
+end
+proxy.Set = function(a, b, c)
+  if a == proxy then return set(b, c) end
+  return set(a, b)
+end
+GlobalValue = proxy
+)lua";
+
+// The keys the probe recorded, sorted.
+std::vector<std::string> unset_global_values(lua::LuaVm& vm) {
+    std::vector<std::string> keys;
+    lua_State* L = vm.state();
+    lua_pushstring(L, "__alamo_mod_check_unset");
+    lua_gettable(L, LUA_GLOBALSINDEX);
+    if (lua_istable(L, -1)) {
+        lua_pushnil(L);
+        while (lua_next(L, -2) != 0) {
+            if (lua_type(L, -2) == LUA_TSTRING) keys.emplace_back(lua_tostring(L, -2), lua_strlen(L, -2));
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    std::sort(keys.begin(), keys.end());
+    return keys;
+}
+
+// Literal keys of GlobalValue.Set("KEY", ...) / GlobalValue:Set('KEY', ...) calls outside line comments.
+void scan_global_value_sets(std::string_view src, const std::string& path, std::map<std::string, std::string>& set_by) {
+    constexpr std::string_view kName = "GlobalValue";
+    for (size_t at = src.find(kName); at != std::string_view::npos; at = src.find(kName, at + 1)) {
+        const size_t nl = src.rfind('\n', at);
+        const size_t bol = nl == std::string_view::npos ? 0 : nl + 1;
+        if (src.substr(bol, at - bol).find("--") != std::string_view::npos) continue;
+        size_t i = at + kName.size();
+        const auto skip_ws = [&] {
+            while (i < src.size() && (src[i] == ' ' || src[i] == '\t')) ++i;
+        };
+        skip_ws();
+        if (i >= src.size() || (src[i] != '.' && src[i] != ':')) continue;
+        ++i;
+        skip_ws();
+        if (src.substr(i, 3) != "Set") continue;
+        i += 3;
+        skip_ws();
+        if (i >= src.size() || src[i] != '(') continue;
+        ++i;
+        skip_ws();
+        if (i >= src.size() || (src[i] != '"' && src[i] != '\'')) continue;
+        const char q = src[i++];
+        const size_t end = src.find(q, i);
+        if (end == std::string_view::npos || src.substr(i, end - i).find('\n') != std::string_view::npos) continue;
+        set_by.emplace(std::string(src.substr(i, end - i)), path);  // the first script (path order) keeps it
+    }
+}
+
 void add_unbound(UnboundMap& calls, const std::map<std::string, uint32_t>& found, const std::set<std::string, std::less<>>& unbound,
                  bool method) {
     for (const auto& [name, sites] : found) {
@@ -259,6 +579,14 @@ void check_lua(const GameData& d, ModCheckReport& r, bool run_chunks) {
     const UnboundNames unbound;
     UnboundMap calls;
     std::vector<uint8_t> bytes;
+    // One GlobalValue store for every run, as the session has one: a value a main chunk sets is seen by later ones.
+    lua::GlobalValueStore global_values;
+    std::map<std::string, std::string> set_by;  // GlobalValue key -> first script (path order) that sets it
+    struct Failed {
+        LuaIssue issue;
+        std::vector<std::string> unset;  // GlobalValue keys the chunk read while unset
+    };
+    std::vector<Failed> failed;
     for (const std::string& path : d.vfs->list("Data\\Scripts\\**.lua")) {
         ++r.lua_scripts;
         std::string err;
@@ -274,6 +602,7 @@ void check_lua(const GameData& d, ModCheckReport& r, bool run_chunks) {
         }
         lua::ScriptScan scan;
         lua::scan_script(chunk, scan);
+        scan_global_value_sets(chunk, path, set_by);
         add_unbound(calls, scan.global_calls, unbound.globals, false);
         add_unbound(calls, scan.method_calls, unbound.methods, true);
         if (!run_chunks || !is_entry_script(path)) continue;
@@ -283,8 +612,27 @@ void check_lua(const GameData& d, ModCheckReport& r, bool run_chunks) {
         const size_t slash = path.rfind('\\');
         opt.script_name = path.substr(slash == std::string::npos ? 0 : slash + 1);
         lua::LuaVm vm(host, opt);
+        lua::attach_global_values(vm, &global_values);
+        std::string probe_err;
+        const bool probed = vm.run(kGlobalValueProbe, "=mod_check_global_value_probe", &probe_err);
         ++r.lua_run;
-        if (!vm.run(chunk, path, &err)) r.lua_run_errors.push_back({path, err, in_mod});
+        if (!vm.run(chunk, path, &err)) {
+            Failed f{LuaIssue(path, err, in_mod), {}};
+            if (probed) f.unset = unset_global_values(vm);
+            failed.push_back(std::move(f));
+        }
+    }
+    // A failed chunk that read a key some script sets (in its main chunk after this one, or in a function the session
+    // calls) depends on session state; the others are load warnings.
+    for (Failed& f : failed) {
+        for (const std::string& key : f.unset) {
+            const auto it = set_by.find(key);
+            if (it == set_by.end()) continue;
+            f.issue.global_value = key;
+            f.issue.set_by = it->second;
+            break;
+        }
+        (f.issue.global_value.empty() ? r.lua_run_errors : r.lua_session_errors).push_back(std::move(f.issue));
     }
     for (auto& [key, c] : calls) r.unbound_lua_calls.push_back(std::move(c));
     std::sort(r.unbound_lua_calls.begin(), r.unbound_lua_calls.end(), [](const UnboundLuaCall& a, const UnboundLuaCall& b) {
@@ -317,12 +665,13 @@ void append_list(std::string& s, const std::vector<std::string>& items, size_t f
 size_t ModCheckReport::error_count() const {
     size_t n = loaded ? 0 : 1;
     for (const auto& s : stages) n += s.ok ? 0 : 1;
-    return n + campaigns_without_planets.size() + check_errors.size();
+    return n + (no_startable_campaign() ? 1u : 0u) + check_errors.size();
 }
 
 size_t ModCheckReport::warning_count() const {
-    return vfs_warnings.size() + diagnostics.size() + campaign_warning_count + missing_files.size() + unknown_xml_tags.size() +
-           lua_errors.size() + lua_run_errors.size() + unbound_lua_calls.size();
+    const size_t menu_only = no_startable_campaign() ? 0 : campaigns_without_planets.size();
+    return vfs_warnings.size() + diagnostics.size() + menu_only + campaign_warning_count + missing_files.size() +
+           unknown_xml_tags.size() + lua_errors.size() + lua_run_errors.size() + unbound_lua_calls.size();
 }
 
 ModCheckReport check_mod_data(const std::string& root, const std::vector<std::string>& args, const ModCheckOptions& options) {
@@ -361,6 +710,7 @@ ModCheckReport check_mod_data(const std::string& root, const std::vector<std::st
     if (options.files) guarded("files", [&] { check_files(d, r); });
     if (options.xml_tags) guarded("xml tags", [&] { check_xml_tags(d, r); });
     if (options.lua) guarded("lua", [&] { check_lua(d, r, options.lua_run); });
+    if (options.files && options.submod) guarded("submod", [&] { check_submod(r, options, r.submod); });
     return r;
 }
 
@@ -400,8 +750,10 @@ std::string format_mod_report(const ModCheckReport& r, bool verbose) {
             s += "AI: no AI data\n";
         append(s, "skirmish maps: %zu official, %zu custom\n", c.official_maps, c.custom_maps);
 
-        append(s, "== campaigns\n%zu checked, %zu without planets (errors), %zu skipped rows (warnings)\n", r.campaigns_checked,
-               r.campaigns_without_planets.size(), r.campaign_warning_count);
+        append(s, "== campaigns\n%zu checked, %zu without planets (%s), %zu skipped rows (warnings)\n", r.campaigns_checked,
+               r.campaigns_without_planets.size(),
+               r.no_startable_campaign() ? "ERROR: no campaign can be started" : "warnings: menu entries that cannot be started",
+               r.campaign_warning_count);
         append_list(s, r.campaigns_without_planets, 0, r.campaigns_without_planets.size(), verbose);
         append_list(s, r.campaign_warnings, 0, r.campaign_warnings.size(), verbose);
         append(s, "== missing files\n%zu files named by the data that no layer has (warnings)\n", r.missing_files.size());
@@ -412,13 +764,19 @@ std::string format_mod_report(const ModCheckReport& r, bool verbose) {
                                 (f.references > 1 ? ", +" + std::to_string(f.references - 1) + " more" : std::string()) + ")");
             append_list(s, lines, 0, lines.size(), verbose);
         }
-        append(s, "== xml tags\n%zu object type tags the original does not read (warnings)\n", r.unknown_xml_tags.size());
+        {
+            std::map<std::string, size_t> per_db;
+            for (const UnknownXmlTag& t : r.unknown_xml_tags) ++per_db[t.database];
+            std::string dbs;
+            for (const auto& [db, n] : per_db) append(dbs, "%s%s %zu", dbs.empty() ? ": " : ", ", db.c_str(), n);
+            append(s, "== xml tags\n%zu tags the original does not read (warnings)%s\n", r.unknown_xml_tags.size(), dbs.c_str());
+        }
         {
             std::vector<std::string> lines;
             for (const UnknownXmlTag& t : r.unknown_xml_tags) {
                 std::string line;
-                append(line, "%s%-40s %6u uses in %u types, first in %s", t.in_mod ? "[mod] " : "      ", t.tag.c_str(), t.occurrences,
-                       t.types, t.first_file.c_str());
+                append(line, "%s%-14.14s %-40s %6u uses in %u entries, first in %s", t.in_mod ? "[mod] " : "      ", t.database.c_str(),
+                       t.tag.c_str(), t.occurrences, t.types, t.first_file.c_str());
                 lines.push_back(std::move(line));
             }
             append_list(s, lines, 0, lines.size(), verbose);
@@ -434,6 +792,18 @@ std::string format_mod_report(const ModCheckReport& r, bool verbose) {
         append(s, "%zu entry scripts' main chunks run, %zu raise an error (warnings)\n", r.lua_run, r.lua_run_errors.size());
         const std::vector<std::string> run_lines = issue_lines(r.lua_run_errors);
         append_list(s, run_lines, 0, run_lines.size(), verbose);
+        append(s, "%zu more fail only for session state: they read a GlobalValue a script sets in the session (info)\n",
+               r.lua_session_errors.size());
+        {
+            std::map<std::pair<std::string, std::string>, size_t> by_key;  // (key, setter) -> scripts
+            for (const LuaIssue& e : r.lua_session_errors) ++by_key[{e.global_value, e.set_by}];
+            std::vector<std::string> lines;
+            for (const auto& [k, n] : by_key)
+                lines.push_back("GlobalValue \"" + k.first + "\" (set by " + k.second + "): " + std::to_string(n) + " scripts");
+            if (verbose)
+                for (const LuaIssue& e : r.lua_session_errors) lines.push_back(std::string(e.in_mod ? "[mod] " : "      ") + e.text());
+            append_list(s, lines, 0, lines.size(), verbose);
+        }
         append(s, "%zu unbound engine functions / methods called (warnings)\n", r.unbound_lua_calls.size());
         {
             std::vector<std::string> lines;
@@ -446,11 +816,25 @@ std::string format_mod_report(const ModCheckReport& r, bool verbose) {
             append_list(s, lines, 0, lines.size(), verbose);
         }
     }
+    if (r.submod.missing > 0) {
+        const SubmodHint& h = r.submod;
+        append(s, "== submod\n%u XML files the mod's own lists name are in no layer; %s\n", h.missing,
+               h.likely ? "likely a submod (info)" : "no installed mod has most of them");
+        for (const ModParentCandidate& c : h.parents)
+            append(s, "    %-14s %5u of %u%s  %s\n", c.arg.c_str(), c.provides, h.missing, c.mentioned ? "  (named in modinfo.json)" : "",
+                   c.path.c_str());
+        if (h.likely) {
+            std::string args;
+            for (const std::string& a : h.stacked_args) args += " " + a;
+            s += "    check it stacked:" + args + "\n";
+        }
+    }
     if (!r.check_errors.empty()) {
         append(s, "== check errors: %zu\n", r.check_errors.size());
         append_list(s, r.check_errors, 0, r.check_errors.size(), true);
     }
-    append(s, "== result: %s, %zu errors, %zu warnings\n", r.error_count() ? "ERRORS" : "OK", r.error_count(), r.warning_count());
+    append(s, "== result: %s, %zu errors, %zu warnings%s\n", r.error_count() ? "ERRORS" : "OK", r.error_count(), r.warning_count(),
+           r.submod.likely ? " (likely a submod: check it stacked, see == submod)" : "");
     return s;
 }
 
@@ -569,7 +953,7 @@ private:
     bool pending_value_ = false;
 };
 
-void lua_issues(Json& j, std::string_view k, const std::vector<LuaIssue>& v) {
+void lua_issues(Json& j, std::string_view k, const std::vector<LuaIssue>& v, bool session = false) {
     j.key(k);
     j.open('[');
     for (const LuaIssue& e : v) {
@@ -580,6 +964,12 @@ void lua_issues(Json& j, std::string_view k, const std::vector<LuaIssue>& v) {
         j.str(e.error);
         j.key("in_mod");
         j.boolean(e.in_mod);
+        if (session) {
+            j.key("global_value");
+            j.str(e.global_value);
+            j.key("set_by");
+            j.str(e.set_by);
+        }
         j.close('}');
     }
     j.close(']');
@@ -597,7 +987,7 @@ std::string format_mod_report_json(const ModCheckReport& r) {
     j.open('{');
     j.key("schema");
     j.str("alamo.mod_report");
-    count(j, "version", 1);
+    count(j, "version", 2);
     j.key("result");
     j.str(r.error_count() ? "errors" : "ok");
     count(j, "errors", r.error_count());
@@ -690,6 +1080,8 @@ std::string format_mod_report_json(const ModCheckReport& r) {
     j.open('[');
     for (const UnknownXmlTag& t : r.unknown_xml_tags) {
         j.open('{');
+        j.key("database");
+        j.str(t.database);
         j.key("tag");
         j.str(t.tag);
         count(j, "occurrences", t.occurrences);
@@ -708,6 +1100,7 @@ std::string format_mod_report_json(const ModCheckReport& r) {
     lua_issues(j, "compile_errors", r.lua_errors);
     count(j, "chunks_run", r.lua_run);
     lua_issues(j, "run_errors", r.lua_run_errors);
+    lua_issues(j, "session_errors", r.lua_session_errors, true);
     j.key("unbound_calls");
     j.open('[');
     for (const UnboundLuaCall& u : r.unbound_lua_calls) {
@@ -721,6 +1114,32 @@ std::string format_mod_report_json(const ModCheckReport& r) {
         j.close('}');
     }
     j.close(']');
+    j.close('}');
+
+    j.key("submod");
+    j.open('{');
+    j.key("likely");
+    j.boolean(r.submod.likely);
+    count(j, "missing_list_entries", r.submod.missing);
+    j.key("parents");
+    j.open('[');
+    for (const ModParentCandidate& p : r.submod.parents) {
+        j.open('{');
+        j.key("id");
+        j.str(p.id);
+        j.key("kind");
+        j.str(p.workshop ? "workshop" : "local");
+        j.key("path");
+        j.str(p.path);
+        j.key("arg");
+        j.str(p.arg);
+        count(j, "provides", p.provides);
+        j.key("mentioned");
+        j.boolean(p.mentioned);
+        j.close('}');
+    }
+    j.close(']');
+    j.strings("stacked_args", r.submod.stacked_args);
     j.close('}');
 
     j.strings("check_errors", r.check_errors);

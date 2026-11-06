@@ -1,0 +1,48 @@
+# modc t04: names that must not appear as string literals in engine/ sim code (docs/MODS.md §1 rule 1, docs/status/modc-audit.md).
+# One name per line, matched case-insensitively as a whole token inside a literal: the characters before and after
+# the match must not be letters or digits ('_' and punctuation separate tokens), so "Rebel_Infantry_Squad" and
+# "AI_Player_Underworld" match REBEL / UNDERWORLD, "BasicRebel" and "TEXT_FACTION_REBELLION" do not.
+# A line starting with '=' is matched only against the whole literal (trimmed, any case): for names that are also
+# common words or tag parts ("Is_Neutral", "no longer hostile").
+# A literal that is 9 to 11 digits not starting with 0 (a Steam workshop item id) is always a violation.
+# Allowed uses carry a marker comment (check_mod_names.py, docs/status/modc-audit.md).
+
+# Base EaW / FoC factions (Factions.xml, Expansion_Factions.xml) and the singular forms retail code uses.
+Empire
+Rebel
+Rebels
+Underworld
+Pirates
+Pirate
+Hutts
+Hutt
+=Neutral
+=Hostile
+Sarlacc
+
+# Mod factions seen in the mods tested so far (Thrawn's Revenge 1125571106, Fall of the Republic 1976399102).
+Independent_Forces
+Hutt_Cartels
+Eriadu_Authority
+Greater_Maldrood
+Pentastar
+Zsinj_Empire
+Corporate_Sector
+Hapes_Consortium
+EmpireoftheHand
+Chiss
+Killik_Hives
+SsiRuuvi_Imperium
+Mandalorians
+Warlords
+Imperial_Proteus
+Yevetha
+Banking_Clan
+Commerce_Guild
+Techno_Union
+Trade_Federation
+Sector_Forces
+
+# Mod names.
+Thrawn
+Thrawns_Revenge

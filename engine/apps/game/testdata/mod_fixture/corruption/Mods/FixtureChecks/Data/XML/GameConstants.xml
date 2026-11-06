@@ -1,0 +1,5 @@
+<GameConstants>
+  <Damage_Types>Damage_Default</Damage_Types>
+  <Ships_Per_Stack>4</Ships_Per_Stack>
+  <Checks_Unread_Constant>5</Checks_Unread_Constant>
+</GameConstants>

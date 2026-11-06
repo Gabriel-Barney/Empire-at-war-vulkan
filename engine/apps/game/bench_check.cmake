@@ -5,6 +5,9 @@
 #           (presentation on/off check included), report the same final CRC and frame count, and write identical PNGs.
 # realtime: two real-time runs (bm-smoke, 90 ticks) must pass, report measured frames with frame times and the same
 #           final CRC.
+# -DTAA=1 (BM2b, fixed only): the runs use bm-high (TAA Medium) at 640x360 and run b adds --bench-redraw-every 3, so a
+#           third of its settled frames are drawn again and taken back out of the TAA history; both reports must say
+#           "taa": true, run b must report forced redraws and TAA discards, and the PNGs must still match run a's.
 # Without the save (no ALAMO_FOC_DATA: the saveload smoke skipped) the check is skipped.
 if(NOT EXISTS "${SAVE}")
   message(STATUS "alamo_game bench ${MODE}: ${SAVE} missing (saveload smoke skipped?): skipped")
@@ -15,10 +18,17 @@ function(bench_run tag out_var)
   set(dir "${OUT}/${tag}")
   file(REMOVE_RECURSE "${dir}")
   file(MAKE_DIRECTORY "${dir}")
-  set(args --hidden --benchmark ${MODE} --bench-save "${SAVE}" --bench-preset bm-smoke --bench-report "${dir}/report.json"
+  set(preset bm-smoke)
+  if(TAA)
+    set(preset bm-high --width 640 --height 360)
+  endif()
+  set(args --hidden --benchmark ${MODE} --bench-save "${SAVE}" --bench-preset ${preset} --bench-report "${dir}/report.json"
            --bench-crc-out "${dir}/run.crc")
   if(MODE STREQUAL "fixed")
     list(APPEND args --bench-ticks 60 --bench-frames-per-tick 2 --bench-png-dir "${dir}" --bench-png-every 10)
+    if(TAA AND tag STREQUAL "b")
+      list(APPEND args --bench-redraw-every 3)
+    endif()
   else()
     list(APPEND args --bench-ticks 90)
   endif()
@@ -87,6 +97,21 @@ endif()
 compare_crc_logs()
 json_field("${ra}" unsettled_frames unsettled_a)
 json_field("${rb}" unsettled_frames unsettled_b)
+json_field("${ra}" taa taa_a)
+json_field("${rb}" taa taa_b)
+json_field("${rb}" forced_redraws forced_b)
+json_field("${rb}" taa_discarded discarded_b)
+if(TAA)
+  if(NOT taa_a STREQUAL "ON" OR NOT taa_b STREQUAL "ON")
+    message(FATAL_ERROR "alamo_game bench fixed TAA: report taa ${taa_a} / ${taa_b}, expected true in both runs")
+  endif()
+  # 120 counted frames, every 3rd settled one forced: about 60 redraws, each taken back out of the TAA history.
+  if(forced_b LESS 50 OR discarded_b LESS forced_b)
+    message(FATAL_ERROR "alamo_game bench fixed TAA: run b forced ${forced_b} redraws, ${discarded_b} TAA discards")
+  endif()
+elseif(NOT taa_a STREQUAL "OFF")
+  message(FATAL_ERROR "alamo_game bench fixed: report taa ${taa_a} with bm-smoke")
+endif()
 file(GLOB pngs_a RELATIVE "${OUT}/a" "${OUT}/a/bench_*.png")
 file(GLOB pngs_b RELATIVE "${OUT}/b" "${OUT}/b/bench_*.png")
 list(SORT pngs_a)
@@ -106,4 +131,4 @@ endforeach()
 if(diff)
   message(FATAL_ERROR "alamo_game bench fixed: frames differ between the two runs: ${diff}")
 endif()
-message(STATUS "alamo_game bench fixed: OK (${n} identical PNGs over 120 counted frames, CRC ${crc_a}, unsettled frames redrawn ${unsettled_a} / ${unsettled_b})")
+message(STATUS "alamo_game bench fixed: OK (${n} identical PNGs over 120 counted frames, CRC ${crc_a}, unsettled frames redrawn ${unsettled_a} / ${unsettled_b}, TAA ${taa_a}, run b forced redraws ${forced_b}, TAA discards ${discarded_b})")

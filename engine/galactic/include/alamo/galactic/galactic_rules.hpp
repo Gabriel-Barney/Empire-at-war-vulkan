@@ -161,6 +161,11 @@ struct GalacticRules {
     uint32_t find_difficulty(std::string_view name) const;
     uint32_t find_type(std::string_view name) const;        // first definition
     uint32_t neutral_faction() const;                       // first Is_Neutral faction, kNoIndex if none
+    // modc t03 [port, inferred from the S10 probe, REMAINING_GAPS 3.3]: the faction whose player owns a tactical map's
+    // native objects when their own faction has no player: the first faction (FactionFiles.xml order) that is neither
+    // Is_Playable nor Is_Neutral nor Can_Control_Planets (FoC: Hostile). kNoIndex if none. Retail holds a player per
+    // faction instead (campaign_setup.cpp); this picks the one native player the port adds, by data, not by name.
+    uint32_t native_owner_faction() const;
 };
 
 // GameConstants -> EconomyConstants (fields absent from the XML keep the vanilla defaults).

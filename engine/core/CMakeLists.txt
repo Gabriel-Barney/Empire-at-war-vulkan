@@ -53,6 +53,21 @@ add_test(NAME alamo_core_sim_math_lint_selftest
                  -P ${PROJECT_SOURCE_DIR}/tools/lint/check_sim_math.cmake)
 set_tests_properties(alamo_core_sim_math_lint_selftest PROPERTIES WILL_FAIL TRUE)
 
+# modc t04: no mod / faction name literals in engine/ sim code (tools/lint/check_mod_names.py, docs/status/modc-audit.md). The
+# self-test checks the lint against its fixture (tools/lint/fixture_mod_names). build_gate.cmd runs both again
+# (tools/lint/gate_summary.py). Python: the project venv first, as the golden checks.
+find_program(ALAMO_LINT_PYTHON NAMES python PATHS ${PROJECT_SOURCE_DIR}/toolchain/venv/Scripts NO_DEFAULT_PATH)
+find_program(ALAMO_LINT_PYTHON NAMES python python3)
+if(ALAMO_LINT_PYTHON)
+  add_test(NAME alamo_core_mod_names_lint
+           COMMAND ${ALAMO_LINT_PYTHON} ${PROJECT_SOURCE_DIR}/tools/lint/check_mod_names.py --engine ${PROJECT_SOURCE_DIR}/engine)
+  add_test(NAME alamo_core_mod_names_lint_selftest
+           COMMAND ${ALAMO_LINT_PYTHON} ${PROJECT_SOURCE_DIR}/tools/lint/check_mod_names.py --selftest)
+  set_tests_properties(alamo_core_mod_names_lint alamo_core_mod_names_lint_selftest PROPERTIES TIMEOUT 120)
+else()
+  message(STATUS "python not found: alamo_core_mod_names_lint not registered (build_gate.cmd still runs it)")
+endif()
+
 # OPT1: profiler zones / laps / ring / report.
 add_executable(alamo_core_profile_tests tests/test_profile.cpp)
 target_link_libraries(alamo_core_profile_tests PRIVATE alamo_core)
