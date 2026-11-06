@@ -132,11 +132,56 @@ original does (the spec column), for base FoC and for mods alike; nothing here i
 | Maps | `Data\Art\Maps\*.ted` | Skirmish map catalog: official = FoC loose + every MEG, custom = `Data\CustomMaps` + each mod folder's `Data\Art\Maps` (`UI.md` §9.2) | **main** |
 | Text and fonts | `Data\Text\MasterTextFile_<lang>.dat`, mod fonts | Through the VFS; font search includes the mod folders | **main** |
 | Art, audio, video | Models, textures, animations, particles, SFX / music / speech, Bink movies | Loaded by name through the VFS when referenced | **main** |
-| Effects (shaders) | `Data\Art\Shaders\**.fx`, `.fxo` | Retail adds each `MODPATH` / `STEAMMOD` folder's `Data\Art\Shaders\` and `\Terrain\` to the shader search (PHASE2_ANSWERS §14); the port's effect order already includes them (`engine/materials/include/alamo/materials/effect_loader.hpp`). The renderer draws with its own SPIR-V translation of the shipped effects | Open: what happens with an effect only a mod ships. Check and report: **modc t11** (new, §8) |
+| Effects (shaders) | `Data\Art\Shaders\**.fx`, `.fxo` | Retail adds each `MODPATH` / `STEAMMOD` folder's `Data\Art\Shaders\` and `\Terrain\` to the shader search (PHASE2_ANSWERS §14); the port's effect order already includes them (`engine/materials/include/alamo/materials/effect_loader.hpp`). The renderer draws with its own SPIR-V translation of the shipped effects. A mod `.fxo` that adds or replaces an effect goes through the same translation; `.fx` sources and shader model 3 do not yet (§4.1) | **main** (modc t11, §4.1); `.fx` compile: **modc t23**; SM3: **modc t22** |
 
 Not supported (by decision, for every mod): multiplayer (no networking), loading the original game's save files, and
 retail 32-bit Lua bytecode (the x64 VM rejects it; retail's own `64Patch.meg` ships text sources for that reason,
 `SUBSYSTEMS.md` "Lua loading"). Lua written for 5.1 or later fails to compile on the 5.0.2 VM, as in retail.
+
+### 4.1 Effects (shaders) in mods
+
+**Original** (`docs/re/RENDER.md` §6, `SPACE_AND_OPEN.md` D.3): each mod folder's `Data\Art\Shaders\` and `\Terrain\` are
+searched before the base ones; every `*.fx`, then every `*.fxo`, is loaded at boot; a name is looked up as `<name>.fx`
+first, then `<name>.fxo`, so **a `.fx` source wins over a `.fxo` of the same name** and is compiled with D3DX at run time.
+The first technique (file order, LOD within Shader Detail) that passes `ValidateTechnique` is used. A missing effect draws
+the built-in green default; a file that fails to compile or load draws the same green effect under its own name.
+
+**Port** (no fixed shader set: every effect is looked up by name through the VFS, mod folders first;
+`engine/materials/include/alamo/materials/effect_loader.hpp`, `effect_audit.hpp`):
+
+| Case | What the port does | Issue kind |
+|---|---|---|
+| Mod `.fxo` replaces or adds an effect | Parsed like a shipped one; shader passes are translated (shaderxlat → HLSL → DXC → SPIR-V) on background jobs and cached on disk. Same result as the original | none |
+| `.fx` and `.fxo` of the same name | The `.fxo` is loaded; the original compiles the `.fx` instead (same result when the `.fxo` was built from that source) | `source_shadowed` |
+| `.fx` without a `.fxo` | Green default under the effect's name (= the original's result when its compile fails); before t11 it counted as missing (silent shared default) | `source_only` |
+| `.fxo` that does not parse / load | Green default under its name (D.3) | `load_failed` |
+| No selectable technique | Shared green default (D.3) | `no_technique` |
+| Best technique has a shader pass the port has no program for (`vs_3_0` / `ps_3_0`; a VS without a PS) | [port] That technique is skipped like one failing `ValidateTechnique`; the next technique by LOD / file order whose passes all have a program is drawn (`MaterialEffect::skipped_technique`) | `technique_skipped` |
+| No technique the port can draw | Submeshes draw unlit (base texture, the pass's blend); Heat / Shadow bucket submeshes are not drawn | `unsupported_pass` |
+| Translation or DXC fails for a pass | Same unlit fallback; logged once per program | `translate_failed` |
+
+Nothing crashes and nothing is skipped silently: every case except the first is a `materials::ShaderIssue`
+(kind, effect, path, `in_mod`, detail). Up front: `materials::audit_effects()` / `alamo_effect_audit <FoC dir> [MODPATH=..]
+[--no-dxc] [--json FILE|-]` (JSON schema `alamo.effect_audit` v1: counts + `issues`). At run time:
+`render::EffectCache::issues()` and `Renderer::shader_issues()` (adds translation failures); each issue is also logged
+once. The load report shows them through modc t21.
+
+**Installed mods** (2026-11-06, base FoC + 64Patch / Patch / Patch2 = 82 effects; workshop folder
+`F:\SteamLibrary\steamapps\workshop\content\32470`; the other 8 items ship no shaders). "Differs" = same path as a base
+file, other bytes; most mods ship a full recompiled set. Audit with DXC, so every translated pass also compiled.
+
+| Item | Shader files (loose + MEG) | Same as base / differs / new | `.fx` / `.fxh` sources | Effects (from the mod) | Issues |
+|---|---|---|---|---|---|
+| 1125571106 Thrawn's Revenge | 87 | 31 / 51 / 5 | `AlamoEngine.fx`, `.fxh` | 85 (84) | `source_shadowed` AlamoEngine |
+| 3622043265 Thrawn's Revenge (other copy) | 88 | 31 / 51 / 6 | + `Terrain\_TerrainRenderBump.fx` | 86 (85) | `source_shadowed` AlamoEngine, `source_only` _TerrainRenderBump |
+| 1976399102 Fall of the Republic | 88 | 31 / 51 / 6 | as 3622043265 | 86 (85) | as 3622043265 |
+| 1770851727 | 93 | 31 / 51 / 11 | none | 93 (93) | `technique_skipped` Planet_Deathstar (`sph_t3` vs_3_0 / ps_3_0 → `sph_t2`) |
+| 2858787558 | 55 | 0 / 49 / 6 | none | 88 (55) | `unsupported_pass` MeshFresnelGlow (only SM3 bytecode: unlit) |
+
+All other mod effects (including 3-11 new `.fxo` per mod, e.g. MeshShieldEngines, MeshBumpSpecGlowColorize, DEFAULT.fxo) load
+and translate: 0 `translate_failed`, 0 `load_failed` in every mod. `_TerrainRenderBump.fx` is preloaded by the original;
+whether any model names it was not checked (t21's report cross-references issue effects with the models' materials). The project-local `fxc.exe` (Windows SDK) compiles `AlamoEngine.fx` with `/T fx_2_0`
+(warning X4717 "Effects deprecated"), so a compile step for `.fx` sources is feasible (t23).
 
 ## 5. Fallbacks and what the loader reports
 
@@ -163,7 +208,10 @@ from a mod's name. Two levels:
 | A Lua script does not compile | `LuaScript Error in <name>.lua!`, script does not run | Listed with the compiler message | Warning | **Q6 stack** (`alamo_mod_check` compiles every `Data\Scripts\**.lua`) |
 | A script calls an engine function the port does not bind, or reads a value that fails | Script error, the script stops | The load report runs the main chunk of every entry script (not `Library\`) once in its own VM and lists the errors, and lists the engine globals / methods the scripts call that the port registers as unbound stubs (static scan). Later failures show up in session runs (`alamo_headless --story` / `--galactic-ai`) | Warning | **main** (modc t05) |
 | An XML tag the port does not read | Ignored | Object type tags that neither the original's field tables nor its sub-object elements know, per tag with counts | Warning | **main** (modc t05); other XML files: not yet |
-| An effect only a mod ships | Compiled by D3DX | Open (§4) | — | **modc t11** |
+| A mod `.fxo` replaces or adds an effect | Loaded | Loaded and translated like a shipped effect (§4.1) | — | **main** (modc t11) |
+| An effect only a mod ships as `.fx` source, or a `.fx` beside a `.fxo` | Compiled by D3DX | `.fx` only: green default under its name; with a `.fxo`: the `.fxo` (§4.1, `source_only` / `source_shadowed`) | Warning | **main** (modc t11); in the report: **modc t21**; compile: **modc t23** |
+| An effect's best technique uses shader model 3 | Drawn (SM3 hardware) | Next drawable technique (`technique_skipped`), else unlit (`unsupported_pass`) | Warning | **main** (modc t11); report **modc t21**; SM3: **modc t22** |
+| An effect fails to load, has no technique, or a pass fails translation | Green default / validation failure | Green default (`load_failed`, `no_technique`) or unlit (`translate_failed`) | Warning | **main** (modc t11); report **modc t21** |
 
 The report: `alamo_mod_check [--game DIR] [MODPATH=..] [STEAMMOD=..] [FALLBACKPATH=..] [--out FILE] [--json FILE|-] [--verbose]
 [--no-campaigns] [--no-lua] [--no-lua-run] [--no-files] [--no-xml-tags]` loads the data exactly as `alamo_game` does and
@@ -243,4 +291,7 @@ Each needs either a data-driven replacement or a `docs/re/` citation showing the
 | Synthetic fixture mod in ctest through the real `MODPATH` route | modc t07 |
 | Mod picker in the game UI | modc t08 |
 | `STEAMMOD=` resolver from the Steam library folders, no Steam API (§3.1) | modc t10 |
-| Mod-only effects: what the renderer does, report unsupported ones | modc t11 |
+| Mod-only effects: what the renderer does, issue record, `alamo_effect_audit` (§4.1) | modc t11 |
+| Shader issues in `alamo_mod_check` and `alamo.mod_report` | modc t21 |
+| Shader model 3 in shaderxlat | modc t22 |
+| `.fx` source compilation (prebuild / cached) | modc t23 |
