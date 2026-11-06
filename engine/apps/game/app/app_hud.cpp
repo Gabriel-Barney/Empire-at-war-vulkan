@@ -468,7 +468,7 @@ void App::build_galactic_hud(ui::GalacticHudFrame& f, std::vector<ui::GalacticPl
     f.time = now_s_;
     f.cursor_px = {static_cast<float>(input_.mouse_x()), static_cast<float>(input_.mouse_y())};
     // HUD_GAPS §6: no galactic hover (planet rings, tooltips) under an open GUI dialog (the story dialog).
-    if (ui_.gui.hit(input_.mouse_x(), input_.mouse_y())) f.cursor_px = {-1.0e6f, -1.0e6f};
+    if (ui_.gui.hit(input_.mouse_x(), input_.mouse_y()) || bench_active()) f.cursor_px = {-1.0e6f, -1.0e6f};  // BM2a: no hover
     if (hud_hit_debug_) {
         const bool fixed = hud_hit_px_ >= 0;
         const int32_t px = fixed ? hud_hit_px_ : input_.mouse_x(), py = fixed ? hud_hit_py_ : input_.mouse_y();
@@ -825,7 +825,7 @@ void App::tactical_hover(ui::TacticalHudFrame& hf, std::vector<ui::HudUnit>& uni
     const bool over_ui = routed_.hover_component >= 0 || ui_.gui.hit(mx, my);
     uint32_t hover = 0;
     int32_t reticle = -1;
-    if (!over_ui) {
+    if (!over_ui && !bench_active()) {  // BM2a: nothing hovered in a benchmark run
         reticle = ui::reticle_at(ui_.tactical_hud.canvas(), hf.world.view, reticles_, hud_hardpoints_, static_cast<float>(mx),
                                  static_cast<float>(my), now_s_);
         if (reticle >= 0) hover = hud_hardpoints_[static_cast<size_t>(reticle)].parent;

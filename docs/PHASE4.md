@@ -81,10 +81,83 @@ The Status column is the state when the row was last written; the roadmap is aut
 | Int-verify | Final verification on the settled tree + leftovers | ✅ 2026-10-27/28 | engine/apps/game (app/game_main.cpp, app/game_info.hpp/.cpp); docs |
 | P4 sim | FoC galactic special systems behind the P4 panels (docs/re/P4_SIM_SYSTEMS.md) + auto-resolve Withdraw / tactical Autoresolve entry points | ✅ 2026-10-28 | engine/galactic (new special_data.hpp, special_systems.hpp, src/special_rules.cpp, src/special_systems.cpp, tests/test_special.cpp = alamo_galactic_special_tests; "P4 sim" blocks in campaign.hpp/.cpp, galactic_rules, economy.hpp, galactic_events.hpp, conflicts.hpp/.cpp, test_conflicts.cpp); engine/apps/sim ("P4 sim" blocks in campaign_battles.*, tactical_battle.*) |
 | N1 | Save / load + replay: stage 1 galactic-map saves, stage 2 saves during a tactical battle, alamo_game save / load menus, save size | ✅ 2026-10-29 (stage 1, then stage 2 + menus + size the same day; in-game check of the menus automated 2026-10-31, below). N1f 2026-10-31: `alamo_game_smoke_saveload` (`--smoke saveload`, ~9 s, slow) drives Save with a typed name, the overwrite and delete questions (No / Yes), Load from the in-game menu and from the main menu (tick + state CRC == the save's) and a mid-battle save loaded back into its battle; a battle save now opens its battle's load screen at load (no galactic tick first, `app_session.cpp` `session_started`); galactic screen text moved to HUD layer 10, below the GUI dialogs (`galactic_hud.cpp`, 12 campaign visual baselines updated); human-fought campaign space and land battles saved mid-battle and loaded through alamo_game (`alamo_game_save_tests`); FoC story save 50 KB at 5 min, 54 KB at 2 h, 58 KB at 4 h of game time, 143 KB mid-battle (guards `alamo_ai_story_save_size`, `_late`, `alamo_game_save_tests` "Story battle") | Stage 2: engine/tactical (movement, fog, tree, combat, abilities, garrison, hangar: src/*_save.cpp), engine/ai/tactical (src/tactical_save.cpp), engine/anim (src/anim_save.cpp), engine/lua (PresentationLog), engine/apps/sim (src/tactical_battle_save.cpp, save_io.hpp, campaign_battles, sim_anim, story_session), engine/apps/headless (save_run, skirmish_run); menus: engine/apps/game (save_games.*, game_session, app/game_main.cpp), engine/ui (gui_menus); size: engine/core (compress.hpp/.cpp, save_file), engine/ai (ai_lua_runtime, galactic_ai_save). Stage 1: engine/core (save_file.hpp/.cpp, ByteWriter/Reader save helpers), engine/objects (ObjectStore), engine/commands (scheduler, events, recording), engine/galactic (src/galactic_save.cpp), engine/ai (src/ai_save*.cpp, src/galactic_ai_save.cpp + every AI system), engine/lua (src/vm_persist.cpp, 2 Lua patches, bridge / players / fog / cinematic write+read), engine/apps/sim (save_session.*, sim_host_save.cpp), engine/apps/headless (save_run.*); build_agent.cmd |
+| BM (BM1) | Repeatable benchmark: versioned scenario files (save + recorded orders + per-tick CRC fingerprint), sim-only mode in `alamo_headless --bench` (BM1), the game-side benchmark (BM2), stress scenes and reports (BM3), the in-game benchmark screen (BM4) | BM1 2026-11-06 (see "BM - repeatable benchmark" below) | engine/apps/sim (bench_scenario.*, bench_stats.*, bench_json.hpp), engine/apps/headless (bench_run.*, check_bench.cmake), tests/benchmark, tools/benchmark |
+| BM (BM2a) | Benchmark side goal, game half: alamo_game benchmark mode (real-time and fixed-frames runs from a save, named presets, no player input; BM1's scenario file comes later, group bm2) | ✅ 2026-11-06 (bm2a; the roadmap is authoritative) | engine/apps/game: include/alamo/game/benchmark.hpp + src/benchmark.cpp (options, flags, presets, FixedFrameClock, stats, JSON report; tests/test_benchmark.cpp = `alamo_game_benchmark_tests`), app/app_benchmark.cpp (the App side), small hooks in game_main / app_frame / app_input / app_hud / app_screens / app_session; `alamo_game_bench_*` ctest entries |
 
 ## Performance, worker-count check and sanitizer limits
 
 Moved on 2026-11-06: the OPT1 / OPT2 / OPT3 measurement sections are in [`PERFORMANCE.md`](PERFORMANCE.md); "Worker-count check" and "Sanitizer limits" are in [`BUILD.md`](BUILD.md).
+
+## BM - repeatable benchmark (BM1, 2026-11-06)
+
+One shared measuring tool for every performance goal: the same game time on every run, and per-tick CRCs that prove each run
+did the same work. AI actions are not in the order stream, so the AI must rerun identically from the save; the CRC proves it did.
+
+**Scenario file** (`engine/apps/sim/include/alamo/sim/bench_scenario.hpp`, in `alamo_sim` so `alamo_game` can load the same
+scenarios in BM2). A text manifest `<name>.abench` (LF, `key value` lines) next to three files it names:
+
+| Key | Meaning |
+|---|---|
+| `ALAMO_BENCH 1` | format line; a reader refuses any other format |
+| `name`, `version`, `description` | `version` is the scenario version: `--bench-make` keeps it when the remade files are identical and bumps it otherwise; results of different versions are never compared |
+| `make <args>` | the `alamo_headless` arguments that made it (`--bench-regen` re-runs them) |
+| `save <file> <bytes> <digest>` | the N1 save the run starts from (FNV-1a 64 of the bytes) |
+| `orders <file> <bytes> <digest>` | the recorded order stream continuing the save (`from_save`), or `-` |
+| `fingerprint <file> <bytes> <digest>` | the expected CRC log from the save tick on (`ALAMO_CRC` 1, or 2 when `fingerprint_every` > 1) |
+| `fingerprint_every <N>` | 1 = every tick stored; N = a checkpoint log (every Nth tick, first and last) |
+| `start_tick`, `ticks`, `workers` | the save's tick, ticks per run, default workers (`auto` = machine default) |
+| `final_crc` | combined CRC after the last tick |
+
+Every pinned file is checked against its size and digest before any timing, so a file changed without remaking the scenario
+is caught. The make is deterministic: remaking with nothing changed gives byte-identical files (the test checks it). The save
+leaves out the machine's game-data folder (the descriptor's informational `data_root`), so a remake on another machine keeps the
+version. All files are written as temporaries and moved in place with the manifest last.
+
+**Commands** (`engine/apps/headless/bench_run.hpp`):
+- `alamo_headless --bench S.abench [--runs 3] [--warmup 1] [--workers N] [--ticks K] [--bench-json F|-] [--bench-baseline OLD.json]`:
+  sim-only mode. Each run loads the save into a fresh session, replays the orders and runs the ticks as fast as possible (no
+  rendering, no pacing). Each tick is timed around `SimHost::tick_once` + the harness step; OPT1's zones are recorded during the timed
+  runs. Prints median / p99 (nearest rank) / worst tick per run and over all timed ticks, and the top zones. Every run's CRCs are
+  compared with the fingerprint, with run 0, and with `--golden` if given. `tools\benchmark\run_bench.cmd [name]` runs it and writes
+  `logs\bench_<name>.json`.
+- `--bench-make S.abench --save-session KIND [...] --bench-save-at T --ticks K [--bench-every N] [--bench-desc TEXT]`: builds the
+  session (the `--save-session` kinds), saves at T, loads and runs K ticks recording the orders, loads again replaying them and requires
+  the same CRCs, which become the fingerprint.
+- `--bench-regen S.abench` (`tools\benchmark\regen_scenario.cmd [name]`): remakes it with the recorded `make` arguments.
+
+**Not comparable.** A fingerprint mismatch, a pinned file that differs, or a save that no longer loads prints
+`scenario changed, not comparable: <first diverging tick and system>` and exits 3 (0 with `--bench-allow-changed`); the timings are
+still printed but labelled, the JSON says `"comparable": false`, and `--bench-baseline` reports no speedup or slowdown for it. Two
+results compare only when both matched the same scenario name, version, fingerprint digest and tick count
+(`alamo::sim::bench::compare`); a different CPU, compiler, worker count or a noisy side is printed as a note.
+
+**Busy machine.** Each run samples the machine's and the process's CPU time (`GetSystemTimes` / `GetProcessTimes`): when other
+processes take more than 10 % of the CPU during a timed run the run and the result are flagged `noisy`. The first space-battle try ran
+while other lanes built and tested (CPU at 100 %): the same 1800 ticks took 4.7 s in one run and 161 s in another. Benchmark on an idle
+machine.
+
+**JSON result** (`format: alamo-bench-result`, version 1): `scenario` (name, version, session, start tick, ticks, save and fingerprint
+digests), `fingerprint` (ok, message), `comparable`, `settings` (ticks, workers requested / used, warm-up and timed runs, rendering off,
+pacing, profiler zones), `machine` (CPU, logical cores, memory, OS build, GPU, GPU memory, GPU driver, `gpu_used: false` in sim-only
+mode), `build` (compiler, config, git commit at configure time, asserts), `summary` (median / p99 / worst + its tick and run, mean,
+ticks per second, `max_other_cpu_pct`, `noisy`), `runs` (the same per run plus load time, wall time, fingerprint, other CPU, final CRC),
+`zones` (top 24 OPT1 zones: share, mean, p50, p99, max) and `baseline` (comparable, ratios or the reason, notes). Shared code for
+BM2: `bench_stats.hpp` (median / p99 / worst, `compare`) and `bench_json.hpp` (the JSON value, write and read).
+
+**First scenario** `tests/benchmark/space_battle.abench`: `--save-session skirmish --campaign foc-fleet` = the `--skirmish-ai foc` space battle
+on `_MP_SPACE_KUAT` with both fleets four times over (20 ships a side: Empire 4 x {Star Destroyer, 2 Tartan, Acclamator, Broadside},
+Rebel 4 x {Mon Calamari, Nebulon-B, 2 Corellian Corvette, Assault Frigate}; ships over the unit cap arrive as reinforcements), saved at tick 300 with
+the battle running, then 1800 ticks (1 min) of AI-vs-AI battle, which does not end within them. No recorded orders (AI only).
+Fingerprint every 16th tick (29 KB; every tick would be 453 KB in the repository): a divergence stays in the state, so it is caught
+at the next stored tick, and `first_divergence` names the 16-tick window. Needs `ALAMO_FOC_DATA` (skipped without it).
+
+**Tests.** `alamo_sim_bench_tests` (manifest round trip and errors, pins, statistics, the comparison rule, JSON);
+`alamo_headless_bench_synthetic` (`headless/check_bench.cmake`, ~1-3 s, no game data: make a synthetic scenario, bench it with JSON,
+remake it unchanged (make line with a quoted `=` argument), compare with a baseline, run 100 of 150 ticks against a
+checkpoint fingerprint, reject `--ticks 0`, and refuse a scenario with another run's fingerprint and an edited sidecar as "not
+comparable"); `alamo_headless_bench_space_battle*` (slow, FoC data): the OPT3 t07 worker-count check on the space battle from its save
+(0 / 1 / 4 / 16 / machine default; `--bench-allow-changed`, so a sim behaviour change only prints "scenario changed" there - remake the
+scenario with `tools\benchmark\regen_scenario.cmd` and commit it with the change).
 
 ## Port choices and per-step notes (tracked on the roadmap)
 
@@ -111,3 +184,54 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
 - 🟡 **PARTLY DONE** · Int-final: [port] choices (marked in code): corruption command layout (u32 defiler, u32 planet, u8 type; COMMANDS.md gives none), defiler = owner check only (no location test), corruption panel enabled = planet not ours, uncorrupted, credits (requirements not checked; superseded 2026-10-28: the panel opens on the sim's SpecialDialog and is enabled by corruption_requirements); build pads: UC / built objects are mode store objects, not battle combat units (no targeting / health ramp / sell / player TacticalBuild 33 / AI TacticalBuild still NotAllowed), no attachment bone, capture point not reset, no galactic persistence, per-mode build-time multiplier 1, Tactical_Buildable_Objects_Campaign always (S10 battles have a galactic parent); weather: every owner weather-affected (no immunity list); muzzles: a hardpoint fire bone the sim resolved in the object's skeleton stays on the object, unresolved ones use the attached model's Muzzle* bones; alamo_game smoke PNGs now go to <build>/smoke_out (were logs/). ⬜ Open: the smoke goldens and the skirmish goldens move with any AI / galactic change (A2 agents were mid-edit during this pass; after they finish the coordinator re-runs the full check); ✅ ~~alamo_galactic_economy_tests runs ~480-590 s of its 600 s ctest timeout~~ (fixed 2026-10-28, galactic agent: one exe, three ctest entries `alamo_galactic_economy_tests` (--only units) / `_synthetic_campaign` / `_foc_campaign`, still 0/1/4/N workers + goldens; the tests' ParallelFor (engine/galactic/tests/thread_parallel_for.hpp, also used by the tactical tests) is now a persistent pool instead of spawning threads per call; MSVC 0.06 / 0.6 / 2.4 s, special tests 41 -> 0.6 s, galactic tests 43 -> 2.7 s); Lua Attach_Particle_Effect entries have no consumer (2026-10-28, OI lua: the call now also records a resolved `ParticleEffectRequest` {frame, seq, object id, type index / name, bone} in `PresentationLog::particle_effects()`, drained by clear_events, not hashed separately; a render host maps it to `ProxyAttachments::sync_effect` — host wiring done, see the Int-final row); S4's note of a tick-6147 battle.abilities divergence in skirmish_ai_foc could not be re-derived (the golden was regenerated by the A2 tactical agent, its old tree state is gone). **Battle host pass (2026-10-28)**: pad UC / constructed objects are battle combat units of the builder (targetable, fight, die; pop 0, no galactic counterpart; their types join the battle tables at setup from the map pads' Tactical_Buildable_Objects_Campaign lists); UC health starts at max / build frames and grows by that per frame [inferred], the constructed object carries the UC's health fraction; TacticalBuild (33) / TacticalSell (34) through the battle command hook (TacticalBattle::tactical_build / 	actical_sell: the 0x42edf0 refusal order, humans charged Tactical_Build_Cost_Campaign (else _Multiplayer) from the galactic account, AI players free; refund int(cost x Tactical_Sell_Percentage), no cooldown, a locked pad refuses); BattleAi's TacticalBuild calls tactical_build(ai = true). Still not modelled: UC attachment bone, galactic persistence, the +0xa60 kill list, capture-point reset, the corruption price factor. **OI2 pass (2026-10-28)**: smoke and skirmish goldens re-checked after this pass: unchanged (92/92). The FoC galactic CRC golden (galactic_foc_crc.txt) skips with the Steam install and differs at tick 0 (galactic.state only) when ALAMO_FOC_DATA points at the unzipped extracted text: check how it was produced. Left: Attach_Particle_Effect host wiring.
 - 🟡 **PARTLY DONE** · Attract demo controller (2026-10-31): ✅ `Demo_Attract_Controller.lua` ported as its effects in the session (`GameSession::attract_demo_script`, engine/apps/game; [port]: the port hosts no GameObject scripts): once the attract battle runs, every `DEMO_CONTROLLER` on the map reveals the map for Empire / Rebel / Underworld and Attack_Moves their non-fighter units to a random `STORY_TRIGGER_ZONE_02 / 00 / 01` (synced `GameRandom(1, 3)`, the script's order and Lua-error stops); the view then draws the sim's fog (`BattleView::capture`). Only `Demo_Attract_Geonosis` places a controller; the shipped Kamino and EaW `Front_end_demo_attract` maps do not, so there it does nothing, as in the original (MAIN_MENU_BACKGROUND §4 data check). [port]: the script runs at the first after-T9 point of the battle; a TEAM container is not expanded to its members. ⬜ Maps without a controller still draw no fog in the attract view [port: presentation only, sim fog unchanged]: the original's attract menus show no FOW grid, why is untraced (MAIN_MENU_BACKGROUND §7: the demo's viewpoint player, or a skipped FOW draw).
 - 🟡 **PARTLY DONE** · Land skirmish base (t50, 2026-11-01): ✅ a land skirmish (`BattleConfig::skirmish`, land) now runs the skirmish rules, not the t48 campaign fallback: pad lists `Tactical_Buildable_Objects_Multiplayer`, pad prices `Tactical_Build_Cost_Multiplayer` (`TacticalBattle::skirmish_land()` / `pad_list_tag()`), the AI's `campaign` flag false (shipped skirmish equations, `IsCampaignGame` false), pop cap = min(Base + allied `Additional_Population_Capacity`, `Land_Skirmish_Unit_Cap_By_Player_Count` at the player count) (`ConflictFactionInfo::unit_cap_for_players`), each side starts with `MP_Default_Credits` (`make_skirmish_galaxy`, headless `foc-land`). Each side gets its base: the 22 maps' neutral `Team_NN_*` MultiplayerStructureMarkers are replaced by the pad of the `Marker_For_Specific_Object_Type` entry whose `Affiliation` is the slot player's faction (the marker is dropped, it would block the pad); `_MP_LAND_UTAPAU` / `_DATHOMIR` keep their explicit faction pads; anchors from `Player_N_Spawn_Point_Marker` / `Team_0N_Spawn_Point_Marker` (`bt_skirmish_anchors`); the Command Center and Barracks pads start built (`bt_skirmish_base`: the first UC type of the owner's faction row, its `Tactical_Buildable_Constructed` type, no charge). `--skirmish-ai foc-land` is now this skirmish on `_MP_LAND_UTAPAU` (4 of 30 pads pre-built, ~3500 shots in 5000 ticks); the old campaign-rules invasion is `foc-land-campaign` (golden unchanged). Tests: `alamo_headless_skirmish_ai_foc_land*` (golden regenerated, outcome tests assert structure through `--expect-skirmish-base`), `..._foc_land_campaign` (old golden), `..._foc_land_campaign_outcome_seed1/2` (seeds 3 and 4 run into the 15-minute limit: the earlier "ends on every seed 1-6" was seed luck), `test_land_skirmish_unit_cap`, `test_pads` skirmish variant. [M] (marked in code): team NN = the NNth of the two sides' players in ascending player id; the pre-built set is Command Center + Barracks only (`.ted` mini 0x2B is 3 on exactly the base pads, value not decoded); first UC type of the faction row; linear interpolation of the pop-cap curve at 2 players; no tactical land cap on reinforcements beyond the AI's own `population_cap`. ⬜ Open: the skirmish AI does not take the enemy base inside 15 minutes (Destroy_Structure reaches it at ~frame 11000 and fails; `Is_Initial_Skirmish_State_Established` needs a refinery, which needs a captured Mineral Processor pad, so `Tactical_Multiplayer_Build_Basic_Structure` never fires and 0 structures are started); land unit purchase and production at the barracks (`production_enabled()` is space only); whether retail pre-builds more than CC + Barracks; whether land skirmish victory uses the base-components condition (BT 0xe / 0xd); whether retail `Find_Nearest` returns particles (needs retail). **skai (2026-11-02, PR #27 via #35):** ✅ the land AI builds structures (Rebel Mining Facility at frame 3575, every base structure from 4853; Empire Mineral Processor, turrets, tech 3) and buys units at the barracks / Command Center (`production_enabled()` covers land; a finished land company appears 120 units in front of its builder [port]); task forces with a unit in production are not empty; `Build` / `Build_All` take the plan's pad picks [M]; perception `built_structure` counts finished pad structures [M]; Neutral owners do not block a pad; unset `Influences_Capture_Point` = true; skirmish victory 0x13 / 0x16; no battle time limit in skirmish. ⬜ Still open (skai t02): neither side takes the other's base in 36000 frames (Rebel army held by Land_Scout_Area / Secure_Contestable at the unit cap of 9, Empire Destroy_Structure plans fail); needs the retail probe `tools/probe_mod/q2_traces/run_skirmish_land_attack.cmd`. Remaining [M] items with their port status: docs/re/SKIRMISH_SETUP.md §10.
+- **BM2a · alamo_game replay support and benchmark mode (2026-11-06, roadmap group bm2a).**
+  **t01: what alamo_game can replay today** (so BM2 can load BM1 scenarios). (1) **Save load: yes.** Engine-format saves
+  (`.alsv`, `save_games.hpp`; `GameSession::start_from_save`, `load_game(data, js, path, &err, replay, record)`) load
+  through the Load dialog and, since bm2a, from the command line (`--bench-save FILE`, `App::load_save_file`). A save taken
+  during a battle comes back in it (its load screen first); a save of other game data / options / seed is refused
+  (`SessionDescriptor::mismatch`). (2) **Recorded orders: recorded, replayed only headless.** Every drained command batch
+  goes into a `commands::CommandRecording` (`GameSession::record_to`; a loaded session records the stream after the load);
+  smoke runs write it as `<png-dir>/game_smoke_<kind>.rec`. A recording is replayed by `GameSession::start(diag, &replay)` /
+  `load_game(..., &replay)` (live `submit()` is then ignored by the pipeline), but only by `crc_check()`'s presentation-free
+  replay at the end of a smoke or benchmark run: the exe has no flag to play a `.rec` with rendering. BM2's hook is to pass
+  the scenario's recording as `load_game`'s `replay` in `bench_start` (one argument; the rest of the benchmark loop is
+  unchanged). (3) **CRC output: yes.** The SimHost per-tick `CrcLog` is always on (`session_->host().crc_log()`); smoke
+  runs save it as `game_smoke_<kind>.crc` and compare it with the goldens (`compare_smoke.cmake`), benchmark runs with
+  `--bench-crc-out FILE` (full ALAMO_CRC 1 log) and print the final combined CRC in the report. No fingerprint check in
+  alamo_game: BM1 defines it in alamo_headless.
+  **Benchmark mode (t02-t04)**, `alamo_game --benchmark realtime|fixed --bench-save FILE [--bench-preset NAME]
+  [--bench-ticks N] [--bench-frames-per-tick K] [--bench-report FILE] [--bench-crc-out FILE] [--bench-png-dir DIR
+  --bench-png-every N] [--bench-settle N] [--bench-max-unsettled N] [--bench-no-verify]`. Entry point for BM2:
+  `game::BenchmarkOptions` (benchmark.hpp); the exe reads nothing else for a run. Phases: load the save -> settle (the sim
+  holds until `--bench-settle` (3) settled gameplay frames in a row: no pending pipeline / model / texture / terrain work)
+  -> measure `--bench-ticks` (900) ticks -> report (stdout JSON, `--bench-report`), CRC log, and unless
+  `--bench-no-verify` the presentation on/off check (the save replayed with the run's recorded commands gives the same CRC
+  log; exit 1 when it diverges). Real-time: the original pacing (`GameSession::loop_iteration`, FrameSynchronizer 30
+  ticks/s on the wall clock, no catch-up), interpolated rendering as in live play; frame time median / p99 / worst
+  (nearest rank) over the gameplay frames, plus render and sim (frames that ticked) times. Fixed frames: exactly K counted
+  frames per tick (`FixedFrameClock`), the presentation clock = counted frames / (30 K) s, alpha (sub + 1) / K,
+  Immediate present mode (V-sync off) and no frame cap whatever the preset says, blocking model loads, TAA off; a frame
+  counts only when the presentation is settled, else it is drawn again with the same sim state and sub-frame (more than
+  `--bench-max-unsettled` (600) in a row fails the run). Frames outside gameplay (load screen, battle-end screen, a dialog
+  holding the sim) are excluded in both modes. Disabled in a run (t04): player input (the idle frame: cursor parked, not
+  inside the window, no WM_CHAR text), cursor, tooltips (encyclopedia), tactical / galactic hover, the frame-time overlay,
+  intro movies, the attract demo, the video options file and display mode changes; audio = null backend; the unsynced
+  presentation generator is seeded fixed. What waits for the player is answered in the frame it appears: battle prompt =
+  Begin (fight, drawn), battle load screen = Begin, battle-end screen = Continue, story dialog = closed, full-screen movie
+  = finished at once (STORY_MOVIE_DONE sent), advisor loop = stopped, story summary = closed, a saved pause = lifted (all
+  listed in the report's `autopilot`); a retry box (mission lost) or the session ending (skirmish over, campaign end)
+  before the target ticks fails the run. Presentation timing that reaches the sim is tied to ticks so real-time runs keep
+  the same CRC: the audio clock advances 1/30 s per tick that ran (STORY_SPEECH_DONE), and every story UI notification
+  raised between two ticks is submitted just before the next tick. Only frames that were actually drawn count. Known
+  residual risk: presentation state that advances per drawn frame and not per counted frame would break fixed-frames
+  identity on a redraw (the galactic view's own particles are stepped with a zero time on a redraw); the tests check
+  identical PNGs from a battle save and a galactic save.
+  [port] presets (`bench_presets`): `bm-low` 1280x720 detail 0, no TAA / soft shadows / heat / bloom; `bm-medium` 1920x1080
+  detail 40, no TAA, 4x anisotropy; `bm-high` (default) 1920x1080 detail 75, TAA Medium (63), 8x; `bm-ultra` 1920x1080
+  detail 100, TAA Medium, ambient occlusion, 16x; `bm-smoke` 640x360 detail 75, no TAA (tests). All: V-sync off, no cap,
+  gamma 50, null audio; `--width` / `--height` win over the preset's size. [port] fixed-frames mode turns TAA off because
+  its history would include the redrawn unsettled frames. Tests: `alamo_game_benchmark_tests` (data-free), and on the FoC
+  data `alamo_game_bench_fixed` / `_fixed_galactic` / `_realtime` (on the saveload smoke's saves: two fixed-frames runs
+  from the battle save and two from the galactic save draw identical PNGs and write identical CRC logs; two real-time runs from the galactic save report frame times and the same CRC). Left for BM2 (group bm2): the scenario file as
+  the source of `BenchmarkOptions` and of the recording, the tick-driven camera path, GPU timer scopes and the image-match
+  check.

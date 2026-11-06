@@ -21,7 +21,9 @@ void App::update_display_rate(bool force) {
     if (hz != refresh_hz_) std::printf("display: %u Hz\n", hz);
     refresh_hz_ = hz;
     const int32_t cap = opt_.frame_cap == ui::kFrameCapDisplay ? static_cast<int32_t>(refresh_hz_) : opt_.frame_cap;
-    limiter_.set_fps(live_input() && cap > 0 ? static_cast<uint32_t>(cap) : 0u);
+    // BM2a: a real-time benchmark run uses its preset's cap (the fixed-frames mode never caps).
+    const bool capped = live_input() || (bench_active() && !bench_fixed());
+    limiter_.set_fps(capped && cap > 0 ? static_cast<uint32_t>(cap) : 0u);
 }
 
 // A new swap mode takes effect on a swapchain recreate (same size).
@@ -39,7 +41,9 @@ void App::set_present_mode(rhi::PresentMode m) {
 // at any refresh rate / frame rate above the tick rate: alpha = time since the last tick over the last tick interval
 // (clamped to 1..2 pacing periods). Smoke and hidden runs draw the current snapshot (alpha 1, the original behaviour).
 float App::render_alpha() {
-    if (!live_input() || !session_ || last_tick_ms_ == prev_tick_ms_) return 1.0f;
+    if (bench_fixed()) return bench_alpha();  // BM2a: (counted frame within the tick + 1) / frames per tick
+    // BM2a: a real-time benchmark interpolates like live play.
+    if ((!live_input() && !bench_active()) || !session_ || last_tick_ms_ == prev_tick_ms_) return 1.0f;
     const uint32_t pace = session_->host().pacing().period_ms();
     const uint32_t period = std::clamp(last_tick_ms_ - prev_tick_ms_, pace, 2u * pace);
     return render::tick_alpha(static_cast<uint32_t>(ms_since(t0_)), last_tick_ms_, period);
@@ -365,8 +369,9 @@ void App::save_game_as(const std::string& typed) {
 
 // Load from the main menu or the in-game menu: the save is rebuilt and loaded into a new session first; only when that
 // worked does it replace the running session (a failed load leaves the current game / menu as it was).
-bool App::load_saved_game(const std::string& name) {
-    const std::string path = save_path(saves_dir_, name);
+bool App::load_saved_game(const std::string& name) { return load_save_file(save_path(saves_dir_, name)); }
+
+bool App::load_save_file(const std::string& path) {
     std::string err;
     std::unique_ptr<GameSession> s = path.empty() ? nullptr : load_game(data_, *js_, path, &err);
     if (!s) {

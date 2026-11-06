@@ -13,6 +13,8 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
     sim/src/map_spawn.cpp
     sim/src/scenario.cpp
     sim/src/object_scripts.cpp  # q6: game-object Lua scripts (SimConfig::object_scripts; a no-op without engine/lua)
+    sim/src/bench_scenario.cpp  # BM1: benchmark scenario manifest (alamo_headless --bench; alamo_game in BM2)
+    sim/src/bench_stats.cpp     # BM1: tick statistics, result comparison, result JSON (shared with BM2)
   )
   add_library(alamo::sim ALIAS alamo_sim)
   target_include_directories(alamo_sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sim/include)
@@ -106,6 +108,11 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
   target_compile_definitions(alamo_sim_tests PRIVATE "ALAMO_SIM_TESTDATA=\"${CMAKE_CURRENT_SOURCE_DIR}/sim/testdata\"")
   add_test(NAME alamo_sim_tests COMMAND alamo_sim_tests)
   set_tests_properties(alamo_sim_tests PROPERTIES TIMEOUT 600)
+  # BM1: the benchmark scenario manifest, tick statistics, comparison rule and result JSON (no game data).
+  add_executable(alamo_sim_bench_tests sim/tests/test_bench.cpp)
+  target_link_libraries(alamo_sim_bench_tests PRIVATE alamo_sim)
+  add_test(NAME alamo_sim_bench_tests COMMAND alamo_sim_bench_tests)
+  set_tests_properties(alamo_sim_bench_tests PROPERTIES TIMEOUT 120)
 endif()
 
 # q6 t03: alamo_game_rules (game/rules), the skirmish rules alamo_headless's skirmish host and alamo_game share.
@@ -363,6 +370,36 @@ if(_alamo_sim)
     endif()
   endif()
   # --- end N1 ---
+  # --- BM1 benchmark (owner: lane-bm1): --bench / --bench-make / --bench-regen (headless/bench_run.cpp) ---
+  target_sources(alamo_headless PRIVATE headless/bench_run.cpp)
+  if(WIN32)
+    target_link_libraries(alamo_headless PRIVATE dxgi dxguid)  # the machine probe: GPU name and driver of the result JSON
+  endif()
+  # The result JSON names the build: git commit at configure time (the build scripts configure on every build) and config.
+  execute_process(COMMAND git describe --always --dirty --abbrev=10 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                  OUTPUT_VARIABLE _alamo_git OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(NOT _alamo_git)
+    set(_alamo_git unknown)
+  endif()
+  set_property(SOURCE headless/bench_run.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+               "ALAMO_BUILD_GIT=\"${_alamo_git}\"" "ALAMO_BUILD_CONFIG=\"$<CONFIG>\"")
+  # t07: make a short synthetic scenario, bench it, regenerate it unchanged, compare with a baseline, and refuse a changed
+  # scenario as "not comparable" (headless/check_bench.cmake; no game data needed).
+  add_test(NAME alamo_headless_bench_synthetic
+           COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:alamo_headless> -DWORK=${CMAKE_CURRENT_BINARY_DIR}/bench_synthetic
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/headless/check_bench.cmake)
+  set_tests_properties(alamo_headless_bench_synthetic PROPERTIES TIMEOUT 300)
+  # t05: the OPT3 t07 worker-count check on the benchmark scenario (tests/benchmark/space_battle.abench, FoC data) from its save:
+  # one timed run per worker count, CRCs compared with the 0-worker run. A scenario whose fingerprint no longer matches
+  # (any sim behaviour change) only prints "scenario changed, not comparable" here (--bench-allow-changed); regenerate it
+  # with tools\benchmark\regen_scenario.cmd. Skipped (exit 0) without ALAMO_FOC_DATA.
+  set(_bm_scenario ${CMAKE_SOURCE_DIR}/tests/benchmark/space_battle.abench)
+  if(EXISTS ${_bm_scenario})
+    alamo_add_worker_count_check(alamo_headless_bench_space_battle
+        COMMAND alamo_headless --bench ${_bm_scenario} --runs 1 --warmup 0 --quiet --bench-allow-changed
+        TIMEOUT 1800 SLOW)
+  endif()
+  # --- end BM1 ---
 endif()
 
 # Self-check on synthetic data (no game files needed): determinism across worker counts
