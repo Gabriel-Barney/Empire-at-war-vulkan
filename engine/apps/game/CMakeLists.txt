@@ -136,6 +136,11 @@ function(alamo_game_add_exe)
     target_link_libraries(alamo_game PRIVATE user32)
   endif()
   alamo_shaderxlat_copy_dxc(alamo_game)
+  # game_app.hpp is the first include of the App sources (game_main, app_*.cpp via app_script.hpp); the helper files with their own
+  # small headers keep compiling without it. See alamo_target_pch in engine/CMakeLists.txt for the numbers.
+  alamo_target_pch(alamo_game ${_dir}/app/game_app.hpp
+                   SKIP ${_dir}/app/game_render.cpp ${_dir}/app/game_ui.cpp ${_dir}/app/game_movies.cpp ${_dir}/app/frame_overlay.cpp
+                        ${_dir}/app/game_info.cpp ${_dir}/app/game_display.cpp)
   # [port] video options helpers (game_display.cpp): mode list text, selection, options file, detail options mapping.
   add_executable(alamo_game_display_tests ${_dir}/tests/test_game_display.cpp ${_dir}/app/game_display.cpp)
   target_link_libraries(alamo_game_display_tests PRIVATE alamo_core alamo_render_sim alamo_ui_hud alamo_engine_flags)

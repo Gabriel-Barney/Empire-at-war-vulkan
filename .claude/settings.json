@@ -1,4 +1,18 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(git fetch *)",
+      "Bash(git merge-base *)",
+      "Bash(python tools/lint/build_summary.py *)",
+      "PowerShell(python tools\\lint\\build_summary.py *)",
+      "Bash(unzip -l *)",
+      "Bash(unzip -p *)",
+      "Bash(python roadmap-store/roadmap_store.py --help)",
+      "mcp__ccd_pr__get_status",
+      "mcp__ccd_session_mgmt__list_events",
+      "mcp__terminal__read_terminal"
+    ]
+  },
   "hooks": {
     "PostToolUse": [
       {

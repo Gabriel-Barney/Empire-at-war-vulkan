@@ -81,6 +81,24 @@ function(alamo_label_slow)
   endforeach()
 endfunction()
 
+# Precompiled project header (2026-11-06): a target whose sources all start with one big shared header (alamo_game: game_app.hpp, ~450
+# headers per file) parses it once instead of once per file; measured on app_screens.cpp / app_input.cpp the compiler front end went
+# from 5.2 s to 0.4 s per file. Only worth it where the shared set is large: most targets share almost no project headers (a std-only PCH
+# saved 0.6 s of 5 s). sccache cannot be assumed to cache PCH compiles, so those files are compiled for real; at about 1 s each that is cheap.
+#   alamo_target_pch(<target> <header> [SKIP <source>...])   SKIP: sources that do not include the header (they would get it force-included)
+# -DALAMO_PCH=OFF turns it off (build trees keep the setting, so pass it once).
+option(ALAMO_PCH "Precompile the shared header of targets that have a big one (alamo_target_pch)" ON)
+function(alamo_target_pch target header)
+  cmake_parse_arguments(PARSE_ARGV 2 _p "" "" "SKIP")
+  if(NOT ALAMO_PCH)
+    return()
+  endif()
+  target_precompile_headers(${target} PRIVATE ${header})
+  if(_p_SKIP)
+    set_source_files_properties(${_p_SKIP} TARGET_DIRECTORY ${target} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  endif()
+endfunction()
+
 # Nightly tier (2026-11-06): tests with the ctest label "nightly" repeat coverage the per-change gate already has (today the 1- and
 # 16-worker runs of the long worker-count checks, which add nothing the 0 / 4 / machine-default runs do not show on most edits). The
 # gate scripts (build_msvc / build_clang / build_asan / build_gate) skip them (ctest -LE nightly); tools\gate_scheduled.cmd, the

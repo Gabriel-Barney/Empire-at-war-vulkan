@@ -93,6 +93,11 @@ def main(paths):
     if len(errs) + len(warns) > MAX_DIAG:
         print(f'  ... {len(errs) + len(warns) - MAX_DIAG} more in the log')
     bad |= bool(warns or errs)
+    # The sccache server remembers the compiler path it saw first. Worktrees share one toolchain through a junction, so after
+    # the worktree that started the server is deleted every other worktree's compiles fail with this error (seen 2026-11-06).
+    if re.search(r'sccache: (error: failed to spawn|encountered fatal error)', text):
+        print('HINT: sccache could not start the compiler (a stale server pointing at a deleted worktree?). '
+              'Run toolchain\\sccache\\sccache.exe --stop-server and build again.')
 
     # ctest prints "100% tests passed out of N" when all pass, "N% tests passed, F tests failed out of M" otherwise.
     m = re.search(r'\d+% tests passed(?:, (\d+) tests failed)? out of (\d+)', text)

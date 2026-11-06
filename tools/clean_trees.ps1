@@ -49,5 +49,11 @@ foreach ($root in $roots) {
         }
     }
 }
+# A running sccache server remembers the first compiler path it saw; if that was a tree or worktree we just removed, every
+# other checkout's compiles fail until it restarts (build_summary.py prints the same hint). Stopping it is free.
+if ($Apply -and $count -gt 0) {
+    $sccache = Join-Path $here 'toolchain\sccache\sccache.exe'
+    if (Test-Path $sccache) { & $sccache --stop-server 2>&1 | Out-Null; Write-Host 'stopped the sccache server (it restarts on the next build)' }
+}
 $verb = if ($Apply) { 'deleted' } else { 'would delete (add -Apply)' }
 Write-Host ("{0} {1} trees, {2:N0} MB older than {3} days" -f $verb, $count, $total, $Days)

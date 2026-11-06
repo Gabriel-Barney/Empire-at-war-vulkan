@@ -22,6 +22,12 @@ rem nightly-labelled repeats (engine/CMakeLists.txt) are skipped unless ALAMO_TE
 if not defined ALAMO_CTEST_JOBS set ALAMO_CTEST_JOBS=%NUMBER_OF_PROCESSORS%
 set NIGHTLY_FILTER=-LE nightly
 if /i "%ALAMO_TESTS%"=="all" set NIGHTLY_FILTER=
+rem ALAMO_EXCLUDE_LABELS ("render|ui|audio|video"): module labels whose tests are not run. The parallel gate sets it for this stage
+rem because those tests write PNGs to <project>\logs\ under fixed names, which clashes with the MSVC stage running them at the same time
+rem (CLAUDE.md: clang tests are required for sim code only, and those modules are not sim code).
+if defined ALAMO_EXCLUDE_LABELS (
+  if defined NIGHTLY_FILTER (set NIGHTLY_FILTER=-LE "nightly|%ALAMO_EXCLUDE_LABELS%") else set NIGHTLY_FILTER=-LE "%ALAMO_EXCLUDE_LABELS%"
+)
 > logs\clang_configure.txt (
   "%TC%\llvm\bin\clang++.exe" --version 2>&1
   rem -U drops a cached module list so the full build always gets every module (engine/CMakeLists.txt default).
