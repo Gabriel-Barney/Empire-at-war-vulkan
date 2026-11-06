@@ -291,7 +291,17 @@ FighterParams fighter_params_from_type(const objects::GameObjectTypes& t, uint32
     if (mfd > 0.0f) p.min_follow_distance = mfd;
     const float range = t.get_float(ti, "Targeting_Max_Attack_Distance");
     if (range > 0.0f) p.attack_range = range;
+    p.chase = fighter_chase_ranges_from_type(t, ti);
     return p;
+}
+
+FighterChaseRanges fighter_chase_ranges_from_type(const objects::GameObjectTypes& t, uint32_t ti) {
+    FighterChaseRanges c;
+    c.guard = t.get_float(ti, "Guard_Chase_Range");
+    c.idle = t.get_float(ti, "Idle_Chase_Range");
+    c.attack_move = t.get_float(ti, "Attack_Move_Response_Range");
+    c.extension = t.get_float(ti, "Autonomous_Move_Extension_Vs_Attacker");
+    return c;
 }
 
 float squadron_tolerance_from_type(const objects::GameObjectTypes& t, uint32_t ti) {

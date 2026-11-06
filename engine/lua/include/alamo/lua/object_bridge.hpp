@@ -181,9 +181,14 @@ public:
     // created there at once (a company: container + Company_Units, like Spawn_Unit), without one
     // nothing is created; either way the block is finished immediately.
     std::function<bool(const ReinforceRequest& r)> reinforce;
+    // s78i t02 (TACTICAL_COMBAT §3.1.1 "other spawns"): the facing of the stand-in's Reinforce_Unit units = `player`'s
+    // entry-facing record (the tactical mode's +0x288 table: start / spawn marker facing, +X when unset). Unset: +X.
+    // A host with `reinforce` applies the record itself.
+    std::function<Vec3(int32_t player)> reinforce_facing;
     // Spawn_From_Reinforcement_Pool(type, position, player): the host takes the unit out of the player's
     // tactical reinforcement pool and spawns it; returns the new top-level objects (empty = none in the
-    // pool). Without a hook [inferred stand-in]: created directly like Spawn_Unit.
+    // pool). Without a hook [inferred stand-in]: created directly like Spawn_Unit. Facing (s78i t02): toward the world
+    // origin, as Spawn_Unit, in every mode (TACTICAL_COMBAT §3.1.1 "other spawns"); a host hook applies the same rule.
     std::function<std::vector<objects::ObjectHandle>(objects::TypeIndex type, int32_t player, Vec3 position)>
         spawn_from_pool;
     // refixf t03: the representative type 0x3973b0 (docs/re/LUA_API.md "Find_All_Objects_Of_Type and the sibling

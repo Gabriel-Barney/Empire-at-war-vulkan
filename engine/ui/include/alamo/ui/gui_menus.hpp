@@ -95,7 +95,11 @@ struct VideoSettings {
     bool mailbox_available = true;           // false: the Mailbox row says the driver lacks it (FIFO is used)
     int32_t frame_cap = 0;                   // [port: Gabriel] IDC_PORT_FRAME_CAP: one of kFrameCapChoices
     std::u32string display_info;             // [port: Gabriel] IDC_PORT_DISPLAY_INFO ("160 Hz, Mailbox"); empty = blank
-    int32_t detail = 100, anti_alias = 0, gamma = 50;  // slider values 0..100
+    int32_t detail = 100, anti_alias = 0, gamma = 50;  // 0..100: Detail / Anti-aliasing are picked from lists (kQualityPresets, kAntiAliasChoices), Gamma is a slider
+    // Set on the ApplyVideo where the player picked a quality level (Low .. Ultra) the options did not already have: `detail`
+    // is then that level's value and the host sets the seven advanced detail options to it (detail_preset). Left false when
+    // the list still says what the options say, or says Custom, so a hand-made mix is never overwritten by an Apply.
+    bool detail_picked = false;
     // IDC_DEVICE_DESC_STATIC (top right): the display adapter's name; its RC caption TEXT_VIDEO_RESOLUTION is a
     // placeholder the original overwrites, so empty leaves the field blank [port].
     std::u32string device;
@@ -107,38 +111,75 @@ struct VideoSettings {
 // [port: Gabriel] t12: seconds the resolution-change confirmation waits before it reverts (the original's countdown,
 // TEXT_REVERTING_IN_X_SECONDS, is not in the recovered specs: 15 s as Windows' own display dialog [M] guess).
 inline constexpr double kResolutionConfirmSeconds = 15.0;
-// IDD_ADVANCED_VIDEO_OPTIONS_DIALOG (from IDD_VIDEO_OPTIONS_DIALOG's Advanced button): 7 detail sliders 0..100 + 3 checks.
-// [port: Gabriel] plus the port's anti-aliasing combo (IDC_PORT_ANTI_ALIASING), ambient occlusion check
-// (IDC_PORT_AMBIENT_OCCLUSION) and anisotropic filtering combo (IDC_PORT_ANISOTROPY) from kPortDialogExtensionsRc.
-enum class AntiAliasing : uint8_t { Off, Taa };
-inline constexpr size_t kAntiAliasingCount = 2;
+// IDD_ADVANCED_VIDEO_OPTIONS_DIALOG (from IDD_VIDEO_OPTIONS_DIALOG's Advanced button): 7 detail options + 3 checks.
+// [port: Gabriel] plus the port's ambient occlusion check (IDC_PORT_AMBIENT_OCCLUSION) and anisotropic filtering combo
+// (IDC_PORT_ANISOTROPY) from kPortDialogExtensionsRc. Anti-aliasing is not here: it is one list in the Video dialog.
 inline constexpr int32_t kAnisotropyChoices[] = {0, 2, 4, 8, 16};  // 0 = off (the materials' own sampler state)
-// [port] t19 / D9: the Video dialog's Anti-aliasing slider and the Advanced dialog's combo are one setting: slider 0 = Off,
-// above 0 = TAA at that strength. Turning TAA on from the combo starts at kAntiAliasDefaultSlider, the slider position
-// closest to the tuned current-frame weight of 0.1 [inferred: the original has no such combo].
-inline constexpr int32_t kAntiAliasDefaultSlider = 63;
-constexpr AntiAliasing anti_aliasing_from_slider(int32_t slider) { return slider > 0 ? AntiAliasing::Taa : AntiAliasing::Off; }
-constexpr int32_t anti_alias_slider_for(AntiAliasing mode, int32_t slider) {
-    return mode == AntiAliasing::Off ? 0 : slider > 0 ? slider : kAntiAliasDefaultSlider;
+
+// [port: Gabriel] Named levels for the options that were 0..100 sliders. The stored values stay 0..100 (the profile file and
+// the renderer's mappings in game_display.hpp are unchanged); a list shows the level a stored value falls in, and picking a
+// level stores its `value`. `from` is the lowest stored value that level covers, so a value from an older profile or a
+// slider-era preset lands on the level the renderer already treated it as.
+struct LevelChoice {
+    int32_t value;
+    int32_t from;
+    const char32_t* label;
+};
+// Anti-aliasing (temporal, TAA): the stored value is the strength, 0 = off; the share of the current frame falls from 0.2 to
+// 0.04 as it rises (game_display.hpp apply_aa_options): more history means smoother edges and more softness in motion.
+// Medium is the tuned default (current-frame weight 0.1) [inferred: the original has no anti-aliasing option].
+inline constexpr int32_t kAntiAliasDefaultSlider = 63;  // Medium: what an old profile's "anti_aliasing=taa" with strength 0 becomes
+inline constexpr LevelChoice kAntiAliasChoices[] = {
+    {0, 0, U"Off"}, {30, 1, U"Low - light smoothing"}, {kAntiAliasDefaultSlider, 47, U"Medium - balanced"}, {100, 82, U"High - smoothest, softer in motion"}};
+// The seven detail options. Four levels where the renderer has four steps (Shader) or a continuous scale (Particle, Mesh,
+// Environment); three where it has three (Texture: top mips skipped 2 / 1 / 0, Water: reflection targets 0 / 1 / 2);
+// Shadow is on or off (any value above 0 draws shadows). Each list ends at the value the old slider's Max stood for.
+inline constexpr LevelChoice kLevels4[] = {{0, 0, U"Low"}, {40, 17, U"Medium"}, {75, 50, U"High"}, {100, 84, U"Ultra"}};
+inline constexpr LevelChoice kLevels3[] = {{0, 0, U"Low"}, {40, 25, U"Medium"}, {100, 75, U"High"}};
+inline constexpr LevelChoice kTextureChoices[] = {
+    {0, 0, U"Low - quarter size"}, {40, 25, U"Medium - half size"}, {100, 75, U"High - full size"}};
+inline constexpr LevelChoice kShadowChoices[] = {{0, 0, U"Off"}, {100, 1, U"On"}};
+// The index of the level a stored value falls in.
+constexpr size_t level_index(std::span<const LevelChoice> choices, int32_t value) {
+    size_t k = 0;
+    for (size_t i = 1; i < choices.size(); ++i)
+        if (value >= choices[i].from) k = i;
+    return k;
 }
+
 struct AdvancedVideoSettings {
     int32_t particle = 100, mesh = 100, texture = 100, water = 100, shader = 100, shadow = 100, environment = 100;
     bool soft_shadows = true, heat_distortion = true, bloom = true;
-    AntiAliasing anti_aliasing = AntiAliasing::Off;
     bool ambient_occlusion = false;
     int32_t anisotropy = 0;  // one of kAnisotropyChoices
     friend bool operator==(const AdvancedVideoSettings&, const AdvancedVideoSettings&) = default;
 };
-// t43 [port]: the Video dialog's Detail slider and the seven advanced detail sliders agree both ways. A moved Detail slider
-// is a preset for the seven; the seven give Detail their rounded mean, so equal sliders give that value back exactly
-// [inferred: what the original's Detail slider shows after a custom mix is not recovered].
+// The overall quality levels of the Video dialog's Detail Level list: each one sets all seven detail options to its value
+// (the checks, anti-aliasing and anisotropy are left alone). A mix that is none of them reads as Custom.
+inline constexpr int32_t kQualityPresets[] = {0, 40, 75, 100};  // Low, Medium, High, Ultra
+inline constexpr size_t kQualityCount = 4;
+inline constexpr size_t kQualityCustom = kQualityCount;  // the list's last row
+// t43 [port]: the Detail value kept in the profile is the rounded mean of the seven, so equal options give back exactly that
+// value. [inferred: what the original's Detail slider shows after a custom mix is not recovered].
 constexpr int32_t advanced_detail_level(const AdvancedVideoSettings& s) {
     return (s.particle + s.mesh + s.texture + s.water + s.shader + s.shadow + s.environment + 3) / 7;
 }
 constexpr void set_advanced_detail(AdvancedVideoSettings& s, int32_t detail) {
     s.particle = s.mesh = s.texture = s.water = s.shader = s.shadow = s.environment = detail;
 }
-// [port: Gabriel] camera / controls settings (docs/PHASE4.md "Camera and controls"): galactic and tactical field of view
+// Which quality level the seven options make: the preset whose levels they all fall in, else kQualityCustom.
+constexpr size_t quality_level(const AdvancedVideoSettings& s) {
+    for (size_t p = 0; p < kQualityCount; ++p) {
+        const int32_t v = kQualityPresets[p];
+        if (level_index(kLevels4, s.particle) == level_index(kLevels4, v) && level_index(kLevels4, s.mesh) == level_index(kLevels4, v) &&
+            level_index(kLevels4, s.shader) == level_index(kLevels4, v) && level_index(kLevels4, s.environment) == level_index(kLevels4, v) &&
+            level_index(kLevels3, s.water) == level_index(kLevels3, v) && level_index(kTextureChoices, s.texture) == level_index(kTextureChoices, v) &&
+            level_index(kShadowChoices, s.shadow) == level_index(kShadowChoices, v))
+            return p;
+    }
+    return kQualityCustom;
+}
+// [port: Gabriel] camera / controls settings (docs/DECISIONS.md "Camera and controls"): galactic and tactical field of view
 // (degrees: galactic horizontal, tactical as TacticalCameras.xml - defined for 4:3) for GalacticCameraController::
 // set_fov_deg / TacticalCameraController::set_fov_override, and the queue modifier (Bindings::set_queue_mods).
 struct CameraSettings {
@@ -156,11 +197,14 @@ inline constexpr float kGalacticFovMinDeg = 15.0f, kGalacticFovMaxDeg = 60.0f, k
 extern const char* const kPortDialogsRc;
 inline constexpr const char* kPortControlsDialog = "IDD_PORT_CAMERA_CONTROLS_DIALOG";
 // [port: Gabriel] controls the port adds to shipped dialogs: IDD_VIDEO_OPTIONS_DIALOG gets the V-sync mode combo
-// (IDC_PORT_VSYNC_MODE), the frame rate cap combo (IDC_PORT_FRAME_CAP), a live 0..100 value beside each slider's title
-// (IDC_PORT_ANTI_ALIAS_VALUE, _DETAIL_VALUE, _GAMMA_VALUE; the shipped Low / Off / Max captions only name the slider's ends)
-// and a display line (IDC_PORT_DISPLAY_INFO: refresh rate and the swap mode in use) under the
-// Advanced button; IDD_ADVANCED_VIDEO_OPTIONS_DIALOG gets the anti-aliasing / anisotropic filtering combos and the
-// ambient occlusion check (AdvancedVideoSettings). Add with DialogScript::extend after GUIDialogs.rc is loaded.
+// (IDC_PORT_VSYNC_MODE), the frame rate cap combo (IDC_PORT_FRAME_CAP), a live 0..100 value beside the Gamma slider
+// (IDC_PORT_GAMMA_VALUE; the shipped Low / Max captions only name the slider's ends) and a display line
+// (IDC_PORT_DISPLAY_INFO: refresh rate and the swap mode in use) under the Advanced button. Its Anti-Aliasing and Detail
+// Level sliders are replaced by two lists in their rows (IDC_PORT_ANTI_ALIASING: kAntiAliasChoices; IDC_PORT_DETAIL_LEVEL:
+// Low / Medium / High / Ultra / Custom, see kQualityPresets); the shipped sliders and their end captions are hidden.
+// IDD_ADVANCED_VIDEO_OPTIONS_DIALOG gets a list in place of each of the seven detail sliders (IDC_PORT_<NAME>_DETAIL, the
+// level lists above), the anisotropic filtering combo and the ambient occlusion check (AdvancedVideoSettings).
+// Add with DialogScript::extend after GUIDialogs.rc is loaded.
 extern const char* const kPortDialogExtensionsRc;
 
 // IDC_SCROLL_SPEED_SLIDER: the dialog slider runs 0..100; the original option is 0..3 with Defaults = 1.0
@@ -193,7 +237,8 @@ struct SkirmishMapInfo {
 };
 // p4uim t03 (docs/re/UI.md section 9.6): what IDC_IMAGE shows for the selected map. `texture` is the image the host chose
 // (<stem>.tga, else the map's embedded image, else Generic_Space / Generic_Land.tga; "" = none); `starts` are the start
-// positions as 0..1 fractions of the image (x right, y down), drawn over it when the map has them (mini 12).
+// positions as 0..1 fractions of the image (x right, y down), drawn over it as the numbers 1..N when the map has them
+// (mini 12, UI.md 9.6.1).
 struct SkirmishPreview {
     std::string texture;
     std::vector<Vec2f> starts;
@@ -271,6 +316,10 @@ public:
     void show_pause_menu();       // in-game menu (IDD_GAME_OPTIONS_DIALOG) over the HUD
     void close_pause_menu();
     bool pause_menu_open() const;
+    // [port] After the host answered MenuAction::Kind::AutoDetectVideo by changing its video options: the open Video dialog's
+    // Anti-Aliasing and Detail Level lists and the open Advanced dialog's lists, checks and anisotropy show the provider's
+    // values again. Everything else in those dialogs (resolution, v-sync, gamma, ...) keeps what the player has set.
+    void refresh_video_dialogs();
     bool in_game() const { return in_game_; }
     void set_in_game(bool g) { in_game_ = g; }
     const CampaignMenu& campaigns() const { return menu_; }
@@ -293,7 +342,7 @@ public:
     // Which tab the skirmish staging list shows: false Official (the dialog's state when it opens), true Custom.
     bool skirmish_custom_tab() const { return custom_tab_; }
     // p4uim t01: the game type IDC_GAME_TYPE_LIST selects (the list shows the maps of that type): true Space, false Land.
-    // A dialog opened for the first time starts on Space [port]; later on the type of the map started last (t02).
+    // A dialog opened for the first time starts on Land; later on the type selected last, remembered at once (UI.md 9.7).
     bool skirmish_space_type() const { return space_type_; }
     // p4uia t01: the colour index shown in skirmish slot `slot` (0..7), -1 when the slot is not shown.
     int32_t skirmish_colour(int32_t slot) const;
@@ -312,7 +361,8 @@ private:
     void fill_skirmish_maps(GuiDialog& d);  // the list of the active tab and game type, from maps_
     void fill_skirmish_game_types(GuiDialog& d);
     void fill_skirmish_colours(GuiDialog& d);
-    void fill_skirmish_preview(GuiDialog& d);  // IDC_IMAGE, its start markers and IDC_SCENARIO_DESCRIPTION_TEXT_BOX
+    void fill_skirmish_preview(GuiDialog& d);  // IDC_IMAGE and its start numbers; IDC_SCENARIO_DESCRIPTION_TEXT_BOX stays hidden
+    void resolve_skirmish_colours(GuiDialog& d);  // the colour clash rule (UI.md 9.7), slot order
     std::u32string skirmish_row_text(const SkirmishMapInfo& m) const;
     void fill_saves(GuiDialog& d);
     void fill_audio(GuiDialog& d, const AudioVolumes& v);
@@ -344,9 +394,8 @@ private:
     std::vector<SkirmishMapInfo> maps_;
     std::vector<size_t> map_view_;   // skirmish list rows -> index into maps_ (active tab, sorted)
     bool custom_tab_ = false;        // skirmish list: Custom tab active
-    bool space_type_ = true;         // skirmish list: Space game type (false Land)
-    int32_t last_type_ = -1;         // the game type of the last StartSkirmish (0 land, 1 space), -1 = none yet
-    std::string last_map_[2];        // the map the last StartSkirmish used per game type [0 land, 1 space] ("" = none yet)
+    bool space_type_ = false;        // skirmish list: Space game type (false Land); the type selected last (UI.md 9.7)
+    std::string last_map_[2];        // the map selected last per game type [0 land, 1 space] ("" = none yet; UI.md 9.5)
     std::vector<Rgba8> colour_palette_;   // the host palette read when the skirmish dialog opened
     int32_t slot_colour_[8] = {0, 1, 2, 3, 4, 5, 6, 7};  // colour index of each skirmish slot (default = the slot index)
     std::string quit_action_;  // "exit" / "main"; N1 / t09: "overwrite" / "delete" (confirm_save_)

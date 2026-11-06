@@ -753,8 +753,12 @@ void StoryModel::apply_reward(uint32_t p, uint32_t e) {
 
 bool StoryModel::tick_timer(StoryEventState& st, double threshold) {
     if (!st.timer_init) {
-        st.timer_init = true;  // first evaluation (prereq-less): LastTime = now
+        // First evaluation (prereq-less): LastTime = now, initialised, and return without the accumulator test (0x454980,
+        // A2I_T01_FRAME_ORDER.md §6 [H]). So a prereq-less ELAPSED 0 fires at its second T9 (tick 2 for an Active_Plot),
+        // not its first. A prereq-armed timer was initialised by arm() (vf7) and never takes this branch.
+        st.timer_init = true;
         st.timer_last = time_;
+        return false;
     } else if (time_ < st.timer_last) {
         st.timer_last = time_;  // time went backwards: reset, add nothing
     } else {

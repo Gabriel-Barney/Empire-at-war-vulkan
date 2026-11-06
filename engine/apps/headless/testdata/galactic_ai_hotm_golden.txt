@@ -1,15 +1,15 @@
 # galactic-ai campaign Sandbox_Heart_Of_The_Maw_Underworld battles auto seed 1 ticks 18000
-# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers 4: 18000 ticks (6627.4 ms), galactic frame 18000, decisions 1053, orders 106 (rejected 0), conflicts 13, battles 0, planet owner changes 0, running plans 4, Lua errors 0, planets: 0=4/1430 1=4/1314 2=0/0 3=0/0 4=0/0 5=4/4395, final CRC 929be73c9c3b9e8e
-# t=60s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 8 conflicts 2 crc 1580b41162832b11
-# t=120s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 2 crc 9eeeb8e12dff9e4c
-# t=180s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 2 crc ae5185e3586953b0
-# t=240s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 2 crc 7a38fbe77a6e0f1d
-# t=300s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 2 crc 64ac4e5df68ca92d
-# t=360s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 6 crc fd7c49f0f4bfaaf1
-# t=420s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 13 crc 99892743aa62d263
-# t=480s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 13 crc a7da3cf90724df5c
-# t=540s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 13 crc 7689ce69138952cc
-# t=600s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 4 conflicts 13 crc 929be73c9c3b9e8e
+# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers 4: 18000 ticks (3654.7 ms), galactic frame 18000, decisions 503, orders 203 (rejected 0), conflicts 28, battles 0, planet owner changes 0, running plans 6, Lua errors 0, planets: 0=4/1640 1=4/2168 2=0/0 3=0/0 4=0/0 5=4/1734, final CRC d9afc5aac41301fd
+# t=60s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 8 conflicts 6 crc 69ee1e8fd8bb65d8
+# t=120s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 4 conflicts 11 crc 091913e320b81a6b
+# t=180s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 11 crc 0eecf61ae5e52da9
+# t=240s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 11 crc f948414cb01fe19d
+# t=300s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 11 crc 43d0b280a3931a3a
+# t=360s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 8 conflicts 14 crc eeca21eb77ab0d40
+# t=420s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 21 crc c5cf593fea4f32f0
+# t=480s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 28 crc 73115978a3734e3a
+# t=540s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 28 crc 546433d512351e71
+# t=600s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 28 crc d9afc5aac41301fd
 1 p0 opponent 5
 1 p0 templates Basic_Rebel_Default
 1 p1 opponent 5
@@ -21,1058 +21,523 @@
 3 p5 order auto-land 75 at NalHutta
 54 p0 plan 1 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Kamino StructureForce(0+1) net 500 gross 500 eta 24.0
 54 p0 plan 2 BUILDTURBOLASERS for Build_Turbolasers @MonCalimari StructureForce(0+1) net 4000 gross 4000 eta 48.0
-54 p0 plan 3 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1350 gross 1350 eta 14.4
+54 p0 plan 3 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1800 gross 1800 eta 10.8
 54 p0 plan 4 PATHBONUSFORDISTANTTARGETS for Distant_System_Path_Bonus @global EmptyForce(0+0) net 0 gross 0 eta 0.0
 54 p5 plan 5 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDPALACE for Build_Underworld_Palace @Shola BaseForce(0+1) net 2000 gross 2000 eta 20.0
 54 p5 plan 6 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Shola BaseForce(0+1) net 2400 gross 2400 eta 28.0
 54 p5 plan 7 PATHBONUSFORDISTANTTARGETS for Distant_System_Path_Bonus @global EmptyForce(0+0) net 0 gross 0 eta 0.0
 54 p5 build task 0 U_Ground_Palace for BaseForce at Shola
 54 p5 build task 1 U_Ground_Vehicle_Factory for BaseForce at Shola
-55 p0 build task 2 Corellian_Gunboat for ReserveForce
+55 p0 build task 2 Marauder_Missile_Cruiser for ReserveForce
 56 p1 plan 8 BUILDWEAPONSTRUCTUREPLAN for Build_Weapon @Tatooine StructureForce(0+1) net 2000 gross 2000 eta 48.0
-56 p1 plan 9 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+2) net 3050 gross 3050 eta 12.0
+56 p1 plan 9 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 2500 gross 2500 eta 18.0
 56 p1 plan 10 PATHBONUSFORDISTANTTARGETS for Distant_System_Path_Bonus @global EmptyForce(0+0) net 0 gross 0 eta 0.0
-58 p1 build task 3 Broadside_Class_Cruiser for ReserveForce
-58 p1 build task 4 Tartan_Patrol_Cruiser for ReserveForce
-62 p5 order build U_Ground_Palace at Shola
-85 p0 build task 5 Rebel_Ground_Mining_Facility for StructureForce at Kamino
-85 p0 build task 6 R_Galactic_Turbolaser_Tower_Defenses for StructureForce at MonCalimari
-91 p1 build task 7 Ground_Magnepulse_Cannon for StructureForce at Tatooine
-93 p1 order build Ground_Magnepulse_Cannon at Tatooine
-93 p0 order build R_Galactic_Turbolaser_Tower_Defenses at MonCalimari
-93 p0 order build Rebel_Ground_Mining_Facility at Kamino
-93 p0 order build Corellian_Gunboat at Naboo
-93 p1 order build Broadside_Class_Cruiser at Corellia
+58 p1 build task 3 Acclamator_Assault_Ship for ReserveForce
+66 p5 order build U_Ground_Palace at Shola
+85 p0 build task 4 Rebel_Ground_Mining_Facility for StructureForce at Kamino
+85 p0 build task 5 R_Galactic_Turbolaser_Tower_Defenses for StructureForce at MonCalimari
+91 p1 order build Acclamator_Assault_Ship at Corellia
+91 p1 build task 6 Ground_Magnepulse_Cannon for StructureForce at Tatooine
+92 p0 order build Rebel_Ground_Mining_Facility at Kamino
+100 p1 order build Ground_Magnepulse_Cannon at Tatooine
+106 p0 order build R_Galactic_Turbolaser_Tower_Defenses at MonCalimari
+112 p0 order build Marauder_Missile_Cruiser at Naboo
 130 p5 plan 11 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @NalHutta BaseForce(0+1) net 2400 gross 2400 eta 28.0
 130 p5 plan 12 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Felucia BaseForce(0+1) net 2400 gross 2400 eta 28.0
-130 p5 plan 13 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-132 p0 plan 14 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Naboo StructureForce(0+1) net 500 gross 500 eta 24.0
-132 p0 plan 15 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Yavin StructureForce(0+1) net 500 gross 500 eta 24.0
-132 p0 plan 16 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-132 p0 plan 17 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+3) net 627 gross 627 eta 64.7
-132 p5 build task 8 U_Ground_Vehicle_Factory for BaseForce at NalHutta
-132 p5 build task 9 U_Ground_Vehicle_Factory for BaseForce at Felucia
-132 p5 plan 13 FLUSHMAJORITEMBUDGET ended failure
-133 p0 plan 16 FLUSHMAJORITEMBUDGET ended failure
-133 p0 build task 10 Rebel_Light_Tank_Brigade for ReserveForce
-133 p0 build task 11 Rebel_Tank_Buster_Squad for ReserveForce
-133 p0 build task 12 Rebel_Infantry_Squad for ReserveForce
-138 p1 plan 18 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
-138 p1 plan 19 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 20.0
-138 p1 plan 20 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-139 p1 plan 20 FLUSHMAJORITEMBUDGET ended failure
-155 p5 order build U_Ground_Vehicle_Factory at NalHutta
-155 p5 order build U_Ground_Vehicle_Factory at Felucia
-163 p0 build task 13 Rebel_Ground_Mining_Facility for StructureForce at Naboo
-163 p0 build task 14 Rebel_Ground_Mining_Facility for StructureForce at Yavin
-169 p1 build task 15 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-169 p1 build task 16 E_Ground_Barracks for BaseForce at Kashyyyk
-186 p0 order build Rebel_Ground_Mining_Facility at Yavin
-186 p1 order build E_Ground_Barracks at Kashyyyk
-186 p0 order build Rebel_Light_Tank_Brigade at Naboo
-204 p5 plan 21 UPGRADESTARBASEPLAN for Upgrade_Starbase @Shola BaseForce(0+1) net 1600 gross 1600 eta 14.4
-204 p5 plan 22 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(1+0) net 0 gross 1000 eta 0.0
-204 p5 build task 17 Underworld_Star_Base_2 for BaseForce at Shola
-204 p5 order launch 75 at NalHutta
-204 p5 order form 75 alone
-207 p5 order move fleet 107 -> Felucia
-208 p0 plan 14 BUILDECONOMICSTRUCTUREPLAN ended failure (released)
-217 p5 order build Underworld_Star_Base_2 at Shola
-217 p1 order build Tartan_Patrol_Cruiser at Kuat
-219 p1 plan 18 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-285 p0 plan 23 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Naboo StructureForce(0+1) net 500 gross 500 eta 24.0
-285 p0 plan 24 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY for Build_Base_Component_Light_Vehicle_Factory @Naboo BaseForce(0+1) net 500 gross 500 eta 24.0
-285 p0 plan 15 BUILDECONOMICSTRUCTUREPLAN ended failure (released)
-285 p0 plan 25 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-286 p0 plan 25 FLUSHMAJORITEMBUDGET ended failure
-301 p1 plan 26 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
-301 p1 plan 27 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY for Build_Base_Component_Light_Vehicle_Factory @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 24.0
-301 p1 plan 19 BUILDBASECOMPONENTBARRACKS ended failure (released)
-301 p1 plan 28 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-301 p1 plan 28 FLUSHMAJORITEMBUDGET ended failure
-306 p5 tf MainForce move to MonCalimari
-306 p5 order move fleet 98 -> Kashyyyk
-316 p0 build task 18 Rebel_Ground_Mining_Facility for StructureForce at Naboo
-316 p0 build task 19 R_Ground_Light_Vehicle_Factory for BaseForce at Naboo
-331 p1 build task 20 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-331 p1 build task 21 E_Ground_Light_Vehicle_Factory for BaseForce at Kashyyyk
-351 p5 plan 29 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(0+1) net 1000 gross 1000 eta 64.5
-351 p5 plan 30 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(0+1) net 1000 gross 1000 eta 64.5
-351 p5 plan 31 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-351 p5 build task 22 Underworld_Saboteur_Team for MainForce
-351 p5 build task 23 Underworld_Saboteur_Team for MainForce
-351 p5 plan 31 FLUSHMAJORITEMBUDGET ended failure
-361 p0 plan 23 BUILDECONOMICSTRUCTUREPLAN ended failure (released)
-361 p0 plan 24 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY ended failure (released)
-378 p5 plan 22 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-382 p1 plan 26 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-382 p1 plan 27 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY ended failure (released)
-439 p0 plan 32 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-439 p0 plan 33 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Naboo StructureForce(0+1) net 500 gross 500 eta 24.0
-439 p0 plan 34 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Yavin StructureForce(0+1) net 500 gross 500 eta 24.0
-439 p0 plan 32 FLUSHMAJORITEMBUDGET ended failure
-454 p1 order move fleet 51 -> Corellia
-464 p1 plan 35 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
-464 p1 plan 36 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 20.0
-464 p1 plan 37 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-466 p1 plan 37 FLUSHMAJORITEMBUDGET ended failure
-469 p0 build task 24 Rebel_Ground_Mining_Facility for StructureForce at Naboo
-469 p0 build task 25 Rebel_Ground_Mining_Facility for StructureForce at Yavin
-487 p1 plan 9 BUILDSPACEFORCESPLAN ended success
-495 p5 plan 6 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended failure (released)
-496 p1 build task 26 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-496 p1 build task 27 E_Ground_Barracks for BaseForce at Kashyyyk
-515 p0 plan 33 BUILDECONOMICSTRUCTUREPLAN ended failure (released)
-515 p0 plan 34 BUILDECONOMICSTRUCTUREPLAN ended failure (released)
-532 p0 plan 3 BUILDSPACEFORCESPLAN ended success
-545 p1 plan 35 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-545 p1 plan 36 BUILDBASECOMPONENTBARRACKS ended failure (released)
-593 p0 plan 38 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-593 p0 plan 39 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Naboo StructureForce(0+1) net 500 gross 500 eta 24.0
-593 p0 plan 40 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Yavin StructureForce(0+1) net 500 gross 500 eta 24.0
-595 p0 plan 38 FLUSHMAJORITEMBUDGET ended failure
-625 p0 build task 28 Rebel_Ground_Mining_Facility for StructureForce at Naboo
-625 p0 build task 29 Rebel_Ground_Mining_Facility for StructureForce at Yavin
-628 p1 plan 41 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
-628 p1 plan 42 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 20.0
-628 p1 plan 43 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-628 p1 plan 43 FLUSHMAJORITEMBUDGET ended failure
-642 p5 plan 44 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Shola BaseForce(0+1) net 2400 gross 2400 eta 28.0
-642 p5 plan 45 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(0+1) net 1000 gross 1000 eta 69.8
-642 p5 plan 46 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(0+1) net 1000 gross 1000 eta 69.8
-642 p5 plan 29 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-642 p5 plan 30 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-642 p5 plan 5 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDPALACE ended failure (released)
-642 p5 plan 11 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended failure (released)
-642 p5 plan 12 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended failure (released)
-642 p5 plan 47 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-642 p5 build task 30 U_Ground_Vehicle_Factory for BaseForce at Shola
-642 p5 build task 31 Underworld_Saboteur_Team for MainForce
-642 p5 build task 32 Underworld_Saboteur_Team for MainForce
-642 p5 plan 47 FLUSHMAJORITEMBUDGET ended failure
-657 p5 plan 21 UPGRADESTARBASEPLAN ended success
-658 p1 build task 33 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-658 p1 build task 34 E_Ground_Barracks for BaseForce at Kashyyyk
-670 p0 plan 39 BUILDECONOMICSTRUCTUREPLAN ended failure (released)
-670 p0 plan 40 BUILDECONOMICSTRUCTUREPLAN ended failure (released)
-682 p5 order build U_Ground_Vehicle_Factory at Shola
-709 p1 plan 41 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-709 p1 plan 42 BUILDBASECOMPONENTBARRACKS ended failure (released)
-748 p0 plan 48 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-748 p0 plan 49 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Naboo StructureForce(0+1) net 500 gross 500 eta 24.0
-748 p0 plan 50 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Yavin StructureForce(0+1) net 500 gross 500 eta 24.0
-748 p0 plan 48 FLUSHMAJORITEMBUDGET ended failure
-778 p0 build task 35 Rebel_Ground_Mining_Facility for StructureForce at Naboo
-778 p0 build task 36 Rebel_Ground_Mining_Facility for StructureForce at Yavin
-790 p5 plan 51 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(0+1) net 1000 gross 1000 eta 21.8
-790 p5 plan 52 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(0+1) net 1000 gross 1000 eta 21.8
-790 p5 plan 44 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended failure (released)
-792 p1 plan 53 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
-792 p1 plan 54 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 20.0
-792 p1 plan 55 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-792 p5 build task 37 Underworld_Saboteur_Team for MainForce
-792 p5 build task 38 Underworld_Saboteur_Team for MainForce
-793 p1 plan 55 FLUSHMAJORITEMBUDGET ended failure
+132 p0 plan 13 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Naboo StructureForce(0+1) net 500 gross 500 eta 24.0
+132 p0 plan 14 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Yavin StructureForce(0+1) net 500 gross 500 eta 24.0
+132 p5 build task 7 U_Ground_Vehicle_Factory for BaseForce at NalHutta
+132 p5 build task 8 U_Ground_Vehicle_Factory for BaseForce at Felucia
+138 p1 plan 15 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
+138 p1 plan 16 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 20.0
+151 p5 order build U_Ground_Vehicle_Factory at NalHutta
+159 p5 order build U_Ground_Vehicle_Factory at Felucia
+163 p0 build task 9 Rebel_Ground_Mining_Facility for StructureForce at Naboo
+163 p0 build task 10 Rebel_Ground_Mining_Facility for StructureForce at Yavin
+165 p0 order build Rebel_Ground_Mining_Facility at Naboo
+169 p1 build task 11 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+169 p1 build task 12 E_Ground_Barracks for BaseForce at Kashyyyk
+185 p0 order build Rebel_Ground_Mining_Facility at Yavin
+198 p1 order build E_Ground_Barracks at Kashyyyk
+205 p5 plan 17 UPGRADESTARBASEPLAN for Upgrade_Starbase @Shola BaseForce(0+1) net 1600 gross 1600 eta 14.4
+205 p5 plan 18 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(1+0) net 0 gross 1000 eta 0.0
+207 p5 build task 13 Underworld_Star_Base_2 for BaseForce at Shola
+207 p5 order launch 75 at NalHutta
+207 p5 order form 75 alone
+210 p5 order move fleet 107 -> Felucia
+219 p1 plan 15 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+233 p5 order build Underworld_Star_Base_2 at Shola
+301 p1 plan 19 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
+301 p1 plan 20 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY for Build_Base_Component_Light_Vehicle_Factory @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 24.0
+301 p1 plan 16 BUILDBASECOMPONENTBARRACKS ended failure (released)
+309 p5 tf MainForce move to MonCalimari
+309 p5 order move fleet 98 -> Kashyyyk
+331 p1 build task 14 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+331 p1 build task 15 E_Ground_Light_Vehicle_Factory for BaseForce at Kashyyyk
+352 p5 plan 6 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended failure (released)
+381 p5 plan 18 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+382 p1 plan 19 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+382 p1 plan 20 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY ended failure (released)
+442 p0 plan 3 BUILDSPACEFORCESPLAN ended success
+464 p1 plan 21 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
+464 p1 plan 22 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 20.0
+496 p1 build task 16 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+496 p1 build task 17 E_Ground_Barracks for BaseForce at Kashyyyk
+500 p5 plan 23 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Shola BaseForce(0+1) net 2400 gross 2400 eta 28.0
+500 p5 plan 24 UPGRADESTARBASEPLAN for Upgrade_Starbase @NalHutta BaseForce(0+1) net 3000 gross 3000 eta 24.0
+500 p5 plan 11 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended failure (released)
+500 p5 plan 12 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended failure (released)
+501 p5 build task 18 U_Ground_Vehicle_Factory for BaseForce at Shola
+501 p5 build task 19 Underworld_Star_Base_3 for BaseForce at NalHutta
+525 p5 order build Underworld_Star_Base_3 at NalHutta
+545 p1 plan 21 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+545 p1 plan 22 BUILDBASECOMPONENTBARRACKS ended failure (released)
+627 p1 plan 25 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
+627 p1 plan 26 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 20.0
+637 p1 plan 9 BUILDSPACEFORCESPLAN ended success
+649 p5 plan 5 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDPALACE ended failure (released)
+649 p5 plan 23 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended failure (released)
+658 p1 build task 20 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+658 p1 build task 21 E_Ground_Barracks for BaseForce at Kashyyyk
+672 p5 plan 17 UPGRADESTARBASEPLAN ended success
+708 p1 plan 25 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+708 p1 plan 26 BUILDBASECOMPONENTBARRACKS ended failure (released)
+791 p1 plan 27 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
+791 p1 plan 28 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 20.0
+791 p1 plan 29 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 450 gross 450 eta 42.0
+793 p1 build task 22 Imperial_Anti_Infantry_Brigade for ReserveForce
+793 p1 build task 23 Imperial_Stormtrooper_Squad for ReserveForce
+793 p1 build task 24 Imperial_Heavy_Scout_Squad for ReserveForce
+793 p1 build task 25 Imperial_Stormtrooper_Squad for ReserveForce
 820 p0 plan 1 BUILDECONOMICSTRUCTUREPLAN ended success
-823 p1 build task 39 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-823 p1 build task 40 E_Ground_Barracks for BaseForce at Kashyyyk
-825 p0 plan 49 BUILDECONOMICSTRUCTUREPLAN ended failure (released)
-825 p0 plan 50 BUILDECONOMICSTRUCTUREPLAN ended failure (released)
-837 p1 order build E_Ground_Barracks at Kashyyyk
-873 p1 plan 53 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-873 p1 plan 54 BUILDBASECOMPONENTBARRACKS ended failure (released)
-904 p0 plan 56 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-904 p0 plan 57 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Naboo StructureForce(0+1) net 500 gross 500 eta 24.0
-904 p0 plan 58 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Yavin StructureForce(0+1) net 500 gross 500 eta 24.0
-904 p0 plan 56 FLUSHMAJORITEMBUDGET ended failure
-934 p0 build task 41 Rebel_Ground_Mining_Facility for StructureForce at Naboo
-934 p0 build task 42 Rebel_Ground_Mining_Facility for StructureForce at Yavin
-939 p5 plan 51 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-939 p5 plan 52 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-939 p5 plan 59 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-939 p5 plan 59 FLUSHMAJORITEMBUDGET ended failure
-956 p1 plan 60 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
-956 p1 plan 61 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-958 p1 plan 61 FLUSHMAJORITEMBUDGET ended failure
-961 p0 order build Rebel_Ground_Mining_Facility at Yavin
-981 p0 plan 57 BUILDECONOMICSTRUCTUREPLAN ended failure (released)
-981 p0 plan 58 BUILDECONOMICSTRUCTUREPLAN ended failure (released)
-991 p1 build task 43 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-1038 p1 plan 60 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-1054 p5 order build Underworld_Saboteur_Team at Felucia
-1060 p0 plan 62 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1060 p0 plan 63 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Naboo BaseForce(0+1) net 1000 gross 1000 eta 48.0
-1060 p0 plan 62 FLUSHMAJORITEMBUDGET ended failure
-1089 p5 plan 46 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-1090 p0 build task 44 R_Ground_Heavy_Vehicle_Factory for BaseForce at Naboo
-1116 p0 order build R_Ground_Heavy_Vehicle_Factory at Naboo
-1121 p1 plan 64 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
-1121 p1 plan 65 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1123 p1 plan 65 FLUSHMAJORITEMBUDGET ended failure
-1153 p1 build task 45 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-1203 p1 plan 64 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-1216 p0 plan 66 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1216 p0 plan 66 FLUSHMAJORITEMBUDGET ended failure
-1241 p5 plan 67 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(0+1) net 1000 gross 1000 eta 24.4
-1241 p5 plan 68 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1242 p5 build task 46 Underworld_Saboteur_Team for MainForce
-1242 p5 plan 68 FLUSHMAJORITEMBUDGET ended failure
-1286 p1 plan 69 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
-1286 p1 plan 70 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1288 p1 plan 70 FLUSHMAJORITEMBUDGET ended failure
-1318 p1 build task 47 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-1368 p1 plan 69 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-1372 p0 plan 71 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1372 p0 plan 71 FLUSHMAJORITEMBUDGET ended failure
-1451 p1 plan 72 BUILDWEAPONSTRUCTUREPLAN for Build_Weapon @Kashyyyk StructureForce(0+1) net 2000 gross 2000 eta 48.0
-1451 p1 plan 73 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1451 p1 plan 74 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 450 gross 450 eta 18.0
-1453 p1 plan 73 FLUSHMAJORITEMBUDGET ended failure
-1453 p1 build task 48 Imperial_Anti_Infantry_Brigade for ReserveForce
-1453 p1 build task 49 Imperial_Stormtrooper_Squad for ReserveForce
-1453 p1 build task 50 Imperial_Light_Scout_Squad for ReserveForce
-1453 p1 build task 51 Imperial_Stormtrooper_Squad for ReserveForce
-1467 p5 plan 75 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1467 p5 plan 75 FLUSHMAJORITEMBUDGET ended failure
-1483 p1 build task 52 Ground_Magnepulse_Cannon for StructureForce at Kashyyyk
-1488 p1 order build Ground_Magnepulse_Cannon at Kashyyyk
-1488 p1 order build Imperial_Anti_Infantry_Brigade at Kuat
-1488 p1 order build Imperial_Stormtrooper_Squad at Corellia
-1512 p5 tf MainForce move to MonCalimari
-1512 p5 order move fleet 122 -> Kashyyyk
-1528 p0 plan 76 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1528 p0 plan 76 FLUSHMAJORITEMBUDGET ended failure
-1540 p0 plan 2 BUILDTURBOLASERS ended success
-1540 p1 plan 8 BUILDWEAPONSTRUCTUREPLAN ended success
-1550 p5 order build Underworld_Saboteur_Team at Felucia
-1581 p5 order move fleet 122 -> NalHutta
-1608 p5 order move fleet 76 -> Shola
-1612 p1 order build Imperial_Light_Scout_Squad at Tatooine
-1614 p1 plan 77 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1615 p1 plan 77 FLUSHMAJORITEMBUDGET ended failure
-1685 p0 plan 78 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1687 p0 plan 78 FLUSHMAJORITEMBUDGET ended failure
-1693 p5 plan 79 UPGRADESTARBASEPLAN for Upgrade_Starbase @Shola BaseForce(0+1) net 3000 gross 3000 eta 24.0
-1693 p5 plan 45 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-1693 p5 plan 67 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-1693 p5 plan 80 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1695 p5 build task 53 Underworld_Star_Base_3 for BaseForce at Shola
-1695 p5 plan 80 FLUSHMAJORITEMBUDGET ended failure
-1705 p5 order build Underworld_Star_Base_3 at Shola
-1716 p5 order auto-land 121 at Shola
-1778 p1 plan 81 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1780 p1 plan 81 FLUSHMAJORITEMBUDGET ended failure
-1842 p0 plan 82 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1843 p0 plan 82 FLUSHMAJORITEMBUDGET ended failure
-1845 p5 plan 83 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1845 p5 plan 83 FLUSHMAJORITEMBUDGET ended failure
-1860 p1 order build Imperial_Stormtrooper_Squad at Corellia
-1942 p1 plan 84 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1942 p1 plan 84 FLUSHMAJORITEMBUDGET ended failure
-1997 p5 plan 85 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1998 p5 plan 85 FLUSHMAJORITEMBUDGET ended failure
-1999 p0 plan 86 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1999 p0 plan 86 FLUSHMAJORITEMBUDGET ended failure
-2001 p5 order auto-land 128 at Felucia
-2106 p1 plan 87 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2107 p1 plan 87 FLUSHMAJORITEMBUDGET ended failure
-2149 p5 plan 88 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2151 p5 plan 88 FLUSHMAJORITEMBUDGET ended failure
-2156 p0 plan 89 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2158 p0 plan 89 FLUSHMAJORITEMBUDGET ended failure
-2212 p1 order launch 130 at Kuat
-2212 p1 order form 130 alone
-2212 p1 order launch 132 at Tatooine
-2212 p1 order form 132 alone
-2215 p1 order move fleet 133 -> Corellia
-2215 p1 order move fleet 134 -> Corellia
-2248 p1 plan 74 BUILDGROUNDFORCESPLAN ended success
-2248 p1 order auto-land 132 at Corellia
-2248 p1 order auto-land 130 at Corellia
-2270 p1 plan 90 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2272 p1 plan 90 FLUSHMAJORITEMBUDGET ended failure
-2301 p5 plan 91 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2301 p5 plan 91 FLUSHMAJORITEMBUDGET ended failure
-2313 p0 plan 92 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2314 p0 plan 92 FLUSHMAJORITEMBUDGET ended failure
-2433 p5 plan 79 UPGRADESTARBASEPLAN ended success
-2435 p1 plan 93 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2437 p1 plan 93 FLUSHMAJORITEMBUDGET ended failure
-2453 p5 plan 94 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2454 p5 plan 94 FLUSHMAJORITEMBUDGET ended failure
-2470 p0 plan 95 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2470 p0 plan 95 FLUSHMAJORITEMBUDGET ended failure
-2563 p0 plan 63 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
-2600 p1 plan 96 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2602 p1 plan 96 FLUSHMAJORITEMBUDGET ended failure
-2606 p5 plan 97 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2607 p5 plan 97 FLUSHMAJORITEMBUDGET ended failure
-2627 p0 plan 98 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2629 p0 plan 98 FLUSHMAJORITEMBUDGET ended failure
-2759 p5 plan 99 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2760 p5 plan 99 FLUSHMAJORITEMBUDGET ended failure
-2765 p1 plan 100 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2767 p1 plan 100 FLUSHMAJORITEMBUDGET ended failure
-2785 p0 plan 101 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2785 p0 plan 101 FLUSHMAJORITEMBUDGET ended failure
-2835 p5 plan 102 UPGRADESTARBASEPLAN for Upgrade_Starbase @Felucia BaseForce(0+1) net 3000 gross 3000 eta 24.0
-2835 p5 build task 54 Underworld_Star_Base_3 for BaseForce at Felucia
-2852 p5 order build Underworld_Star_Base_3 at Felucia
-2911 p5 plan 103 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2913 p5 plan 103 FLUSHMAJORITEMBUDGET ended failure
-2930 p1 plan 104 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2932 p1 plan 104 FLUSHMAJORITEMBUDGET ended failure
-2935 p1 plan 72 BUILDWEAPONSTRUCTUREPLAN ended success
-2943 p0 plan 105 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2944 p0 plan 105 FLUSHMAJORITEMBUDGET ended failure
-3063 p5 plan 106 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3063 p5 plan 106 FLUSHMAJORITEMBUDGET ended failure
-3095 p1 plan 107 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3097 p1 plan 107 FLUSHMAJORITEMBUDGET ended failure
-3101 p0 plan 108 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3103 p0 plan 108 FLUSHMAJORITEMBUDGET ended failure
-3215 p5 plan 109 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3216 p5 plan 109 FLUSHMAJORITEMBUDGET ended failure
-3259 p0 plan 110 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3259 p0 plan 110 FLUSHMAJORITEMBUDGET ended failure
-3261 p1 plan 111 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3262 p1 plan 111 FLUSHMAJORITEMBUDGET ended failure
-3367 p5 plan 112 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3369 p5 plan 112 FLUSHMAJORITEMBUDGET ended failure
-3417 p0 plan 113 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3418 p0 plan 113 FLUSHMAJORITEMBUDGET ended failure
-3427 p1 plan 114 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3427 p1 plan 114 FLUSHMAJORITEMBUDGET ended failure
-3519 p5 plan 115 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3519 p5 plan 115 FLUSHMAJORITEMBUDGET ended failure
-3575 p0 plan 116 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3577 p0 plan 116 FLUSHMAJORITEMBUDGET ended failure
-3593 p1 plan 117 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3595 p1 plan 117 FLUSHMAJORITEMBUDGET ended failure
-3671 p5 plan 118 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3672 p5 plan 118 FLUSHMAJORITEMBUDGET ended failure
-3733 p0 plan 119 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3733 p0 plan 119 FLUSHMAJORITEMBUDGET ended failure
-3759 p1 plan 120 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3760 p1 plan 120 FLUSHMAJORITEMBUDGET ended failure
-3823 p5 plan 121 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3825 p5 plan 121 FLUSHMAJORITEMBUDGET ended failure
-3891 p0 plan 122 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3892 p0 plan 122 FLUSHMAJORITEMBUDGET ended failure
-3925 p1 plan 123 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3925 p1 plan 123 FLUSHMAJORITEMBUDGET ended failure
-3975 p5 plan 124 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3975 p5 plan 124 FLUSHMAJORITEMBUDGET ended failure
-4049 p0 plan 125 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4051 p0 plan 125 FLUSHMAJORITEMBUDGET ended failure
-4091 p1 plan 126 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4093 p1 plan 126 FLUSHMAJORITEMBUDGET ended failure
-4127 p5 plan 127 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4128 p5 plan 127 FLUSHMAJORITEMBUDGET ended failure
-4174 p1 plan 128 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
-4204 p1 build task 55 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-4207 p0 plan 129 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4207 p0 plan 130 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kamino BaseForce(0+1) net 500 gross 500 eta 20.0
-4207 p0 plan 129 FLUSHMAJORITEMBUDGET ended failure
-4216 p1 order build E_Ground_Heavy_Vehicle_Factory at Tatooine
-4237 p0 build task 56 R_Ground_Barracks for BaseForce at Kamino
-4247 p0 order build R_Ground_Barracks at Kamino
-4248 p5 plan 102 UPGRADESTARBASEPLAN ended success
-4257 p1 plan 131 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4258 p1 plan 131 FLUSHMAJORITEMBUDGET ended failure
-4279 p5 plan 132 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4281 p5 plan 132 FLUSHMAJORITEMBUDGET ended failure
-4364 p0 plan 133 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4366 p0 plan 133 FLUSHMAJORITEMBUDGET ended failure
-4422 p1 plan 134 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4423 p1 plan 134 FLUSHMAJORITEMBUDGET ended failure
-4432 p5 plan 135 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4434 p5 plan 135 FLUSHMAJORITEMBUDGET ended failure
-4521 p0 plan 136 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4522 p0 plan 136 FLUSHMAJORITEMBUDGET ended failure
-4585 p5 plan 137 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4587 p1 plan 138 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4587 p5 plan 137 FLUSHMAJORITEMBUDGET ended failure
-4588 p1 plan 138 FLUSHMAJORITEMBUDGET ended failure
-4678 p0 plan 139 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4678 p0 plan 139 FLUSHMAJORITEMBUDGET ended failure
-4738 p5 plan 140 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4740 p5 plan 140 FLUSHMAJORITEMBUDGET ended failure
-4752 p1 plan 141 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4753 p1 plan 141 FLUSHMAJORITEMBUDGET ended failure
-4835 p0 plan 142 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4837 p0 plan 142 FLUSHMAJORITEMBUDGET ended failure
-4855 p0 plan 130 BUILDBASECOMPONENTBARRACKS ended success
-4891 p5 plan 143 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4893 p5 plan 143 FLUSHMAJORITEMBUDGET ended failure
-4917 p1 plan 144 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4918 p1 plan 144 FLUSHMAJORITEMBUDGET ended failure
-4992 p0 plan 145 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4993 p0 plan 145 FLUSHMAJORITEMBUDGET ended failure
-5044 p5 plan 146 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5046 p5 plan 146 FLUSHMAJORITEMBUDGET ended failure
-5082 p1 plan 147 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5083 p1 plan 147 FLUSHMAJORITEMBUDGET ended failure
-5150 p0 plan 148 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5152 p0 plan 148 FLUSHMAJORITEMBUDGET ended failure
-5197 p5 plan 149 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5199 p5 plan 149 FLUSHMAJORITEMBUDGET ended failure
-5247 p1 plan 150 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5248 p1 plan 150 FLUSHMAJORITEMBUDGET ended failure
-5308 p0 plan 151 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5308 p0 plan 151 FLUSHMAJORITEMBUDGET ended failure
-5350 p5 plan 152 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5352 p5 plan 152 FLUSHMAJORITEMBUDGET ended failure
-5412 p1 plan 153 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5413 p1 plan 153 FLUSHMAJORITEMBUDGET ended failure
-5466 p0 plan 154 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5467 p0 plan 154 FLUSHMAJORITEMBUDGET ended failure
-5503 p5 plan 155 UPGRADESTARBASEPLAN for Upgrade_Starbase @NalHutta BaseForce(0+1) net 3000 gross 3000 eta 24.0
-5503 p5 plan 156 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5505 p5 build task 57 Underworld_Star_Base_3 for BaseForce at NalHutta
-5505 p5 plan 156 FLUSHMAJORITEMBUDGET ended failure
-5518 p5 order build Underworld_Star_Base_3 at NalHutta
-5577 p1 plan 157 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5578 p1 plan 157 FLUSHMAJORITEMBUDGET ended failure
-5624 p0 plan 158 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5626 p0 plan 158 FLUSHMAJORITEMBUDGET ended failure
-5655 p5 plan 159 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5655 p5 plan 159 FLUSHMAJORITEMBUDGET ended failure
-5662 p1 plan 128 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
-5742 p1 plan 160 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5743 p1 plan 160 FLUSHMAJORITEMBUDGET ended failure
-5782 p0 plan 161 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5782 p0 plan 161 FLUSHMAJORITEMBUDGET ended failure
-5807 p5 plan 162 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5808 p5 plan 162 FLUSHMAJORITEMBUDGET ended failure
-5908 p1 plan 163 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5908 p1 plan 163 FLUSHMAJORITEMBUDGET ended failure
-5940 p0 plan 164 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5941 p0 plan 164 FLUSHMAJORITEMBUDGET ended failure
-5959 p5 plan 165 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5961 p5 plan 165 FLUSHMAJORITEMBUDGET ended failure
-6074 p1 plan 166 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6076 p1 plan 166 FLUSHMAJORITEMBUDGET ended failure
-6098 p0 plan 167 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6100 p0 plan 167 FLUSHMAJORITEMBUDGET ended failure
-6111 p5 plan 168 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6111 p5 plan 168 FLUSHMAJORITEMBUDGET ended failure
-6240 p1 plan 169 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6241 p1 plan 169 FLUSHMAJORITEMBUDGET ended failure
-6246 p5 plan 155 UPGRADESTARBASEPLAN ended success
-6256 p0 plan 170 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6256 p0 plan 170 FLUSHMAJORITEMBUDGET ended failure
-6263 p5 plan 171 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6264 p5 plan 171 FLUSHMAJORITEMBUDGET ended failure
-6406 p1 plan 172 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6406 p1 plan 172 FLUSHMAJORITEMBUDGET ended failure
-6414 p0 plan 173 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6415 p0 plan 173 FLUSHMAJORITEMBUDGET ended failure
-6416 p5 plan 174 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6417 p5 plan 174 FLUSHMAJORITEMBUDGET ended failure
-6569 p5 plan 175 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6570 p5 plan 175 FLUSHMAJORITEMBUDGET ended failure
-6572 p0 plan 176 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6572 p1 plan 177 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6574 p0 plan 176 FLUSHMAJORITEMBUDGET ended failure
-6574 p1 plan 177 FLUSHMAJORITEMBUDGET ended failure
-6722 p5 plan 178 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6723 p5 plan 178 FLUSHMAJORITEMBUDGET ended failure
-6730 p0 plan 179 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6730 p0 plan 179 FLUSHMAJORITEMBUDGET ended failure
-6738 p1 plan 180 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6739 p1 plan 180 FLUSHMAJORITEMBUDGET ended failure
-6875 p5 plan 181 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Shola BaseForce(0+1) net 2400 gross 2400 eta 28.0
-6875 p5 plan 182 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6876 p5 build task 58 U_Ground_Vehicle_Factory for BaseForce at Shola
-6876 p5 plan 182 FLUSHMAJORITEMBUDGET ended failure
-6882 p5 order build U_Ground_Vehicle_Factory at Shola
-6888 p0 plan 183 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1800 gross 1800 eta 10.8
-6888 p0 plan 184 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6889 p0 build task 59 Marauder_Missile_Cruiser for ReserveForce
-6889 p0 plan 184 FLUSHMAJORITEMBUDGET ended failure
-6904 p1 plan 185 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6904 p1 plan 185 FLUSHMAJORITEMBUDGET ended failure
-6944 p0 order build Marauder_Missile_Cruiser at Naboo
-7027 p5 plan 186 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7029 p5 plan 186 FLUSHMAJORITEMBUDGET ended failure
-7045 p0 plan 187 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7045 p0 plan 187 FLUSHMAJORITEMBUDGET ended failure
-7070 p1 plan 188 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7072 p1 plan 188 FLUSHMAJORITEMBUDGET ended failure
-7179 p5 plan 189 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7179 p5 plan 189 FLUSHMAJORITEMBUDGET ended failure
-7202 p0 plan 190 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7204 p0 plan 190 FLUSHMAJORITEMBUDGET ended failure
-7236 p1 plan 191 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7237 p1 plan 191 FLUSHMAJORITEMBUDGET ended failure
-7276 p0 plan 183 BUILDSPACEFORCESPLAN ended success
-7331 p5 plan 192 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7332 p5 plan 192 FLUSHMAJORITEMBUDGET ended failure
-7359 p0 plan 193 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7360 p0 plan 193 FLUSHMAJORITEMBUDGET ended failure
-7402 p1 plan 194 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7402 p1 plan 194 FLUSHMAJORITEMBUDGET ended failure
-7483 p5 plan 195 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7485 p5 plan 195 FLUSHMAJORITEMBUDGET ended failure
-7517 p0 plan 196 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7519 p0 plan 196 FLUSHMAJORITEMBUDGET ended failure
-7568 p1 plan 197 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7570 p1 plan 197 FLUSHMAJORITEMBUDGET ended failure
-7635 p5 plan 198 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7635 p5 plan 198 FLUSHMAJORITEMBUDGET ended failure
-7675 p0 plan 199 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7675 p0 plan 199 FLUSHMAJORITEMBUDGET ended failure
-7728 p5 plan 181 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
-7734 p1 plan 200 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7735 p1 plan 200 FLUSHMAJORITEMBUDGET ended failure
-7787 p5 plan 201 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS for Build_Underworld_Barracks @Shola BaseForce(0+1) net 1000 gross 1000 eta 14.4
-7787 p5 plan 202 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7788 p5 build task 60 U_Ground_Barracks for BaseForce at Shola
-7788 p5 plan 202 FLUSHMAJORITEMBUDGET ended failure
-7812 p5 order build U_Ground_Barracks at Shola
-7833 p0 plan 203 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7834 p0 plan 203 FLUSHMAJORITEMBUDGET ended failure
-7900 p1 plan 204 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7900 p1 plan 204 FLUSHMAJORITEMBUDGET ended failure
-7939 p5 plan 205 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7941 p5 plan 205 FLUSHMAJORITEMBUDGET ended failure
-7991 p0 plan 206 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7993 p0 plan 206 FLUSHMAJORITEMBUDGET ended failure
-8066 p1 plan 207 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8068 p1 plan 207 FLUSHMAJORITEMBUDGET ended failure
-8091 p5 plan 208 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8091 p5 plan 208 FLUSHMAJORITEMBUDGET ended failure
-8149 p0 plan 209 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8149 p0 plan 209 FLUSHMAJORITEMBUDGET ended failure
-8232 p1 plan 210 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
-8232 p1 plan 211 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1250 gross 1250 eta 9.0
-8232 p1 plan 212 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8233 p1 build task 61 Tartan_Patrol_Cruiser for ReserveForce
-8233 p1 plan 212 FLUSHMAJORITEMBUDGET ended failure
-8243 p5 plan 213 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Felucia BaseForce(0+1) net 2400 gross 2400 eta 28.0
-8243 p5 plan 201 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended failure (released)
-8243 p5 plan 214 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8244 p5 build task 62 U_Ground_Vehicle_Factory for BaseForce at Felucia
-8244 p5 plan 214 FLUSHMAJORITEMBUDGET ended failure
-8246 p5 order build U_Ground_Vehicle_Factory at Felucia
-8263 p1 build task 63 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-8277 p1 order build E_Ground_Heavy_Vehicle_Factory at Tatooine
-8277 p1 order build Tartan_Patrol_Cruiser at Corellia
-8307 p0 plan 215 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8308 p0 plan 215 FLUSHMAJORITEMBUDGET ended failure
-8314 p1 plan 216 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+2) net 240 gross 240 eta 18.0
-8314 p1 build task 64 Imperial_Anti_Infantry_Brigade for ReserveForce
-8314 p1 build task 65 Imperial_Stormtrooper_Squad for ReserveForce
-8370 p1 order build Imperial_Anti_Infantry_Brigade at Kuat
-8370 p1 order build Imperial_Stormtrooper_Squad at Corellia
-8395 p5 plan 217 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8396 p1 plan 218 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8397 p5 plan 217 FLUSHMAJORITEMBUDGET ended failure
-8398 p1 plan 218 FLUSHMAJORITEMBUDGET ended failure
-8465 p0 plan 219 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8467 p0 plan 219 FLUSHMAJORITEMBUDGET ended failure
-8547 p5 plan 220 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8547 p5 plan 220 FLUSHMAJORITEMBUDGET ended failure
-8554 p1 plan 211 BUILDSPACEFORCESPLAN ended success
-8559 p1 plan 221 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8560 p1 plan 221 FLUSHMAJORITEMBUDGET ended failure
-8623 p0 plan 222 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8623 p0 plan 222 FLUSHMAJORITEMBUDGET ended failure
-8699 p5 plan 223 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8700 p5 plan 223 FLUSHMAJORITEMBUDGET ended failure
-8723 p1 plan 224 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8725 p1 plan 224 FLUSHMAJORITEMBUDGET ended failure
-8781 p0 plan 225 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8782 p0 plan 225 FLUSHMAJORITEMBUDGET ended failure
-8851 p5 plan 226 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8853 p5 plan 226 FLUSHMAJORITEMBUDGET ended failure
-8887 p1 plan 227 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8887 p1 plan 227 FLUSHMAJORITEMBUDGET ended failure
-8911 p1 order launch 147 at Kuat
-8911 p1 order form 147 alone
-8914 p1 order move fleet 148 -> Corellia
-8939 p0 plan 228 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8941 p0 plan 228 FLUSHMAJORITEMBUDGET ended failure
-8947 p1 plan 216 BUILDGROUNDFORCESPLAN ended success
-8947 p1 order auto-land 147 at Corellia
-9003 p5 plan 229 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9003 p5 plan 229 FLUSHMAJORITEMBUDGET ended failure
-9052 p1 plan 230 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9052 p1 plan 230 FLUSHMAJORITEMBUDGET ended failure
-9097 p0 plan 231 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9097 p0 plan 231 FLUSHMAJORITEMBUDGET ended failure
-9155 p5 plan 232 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9156 p5 plan 232 FLUSHMAJORITEMBUDGET ended failure
-9217 p1 plan 233 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9217 p1 plan 233 FLUSHMAJORITEMBUDGET ended failure
-9231 p5 plan 213 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended failure (released)
-9255 p0 plan 234 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9256 p0 plan 234 FLUSHMAJORITEMBUDGET ended failure
-9308 p5 plan 235 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9309 p5 plan 235 FLUSHMAJORITEMBUDGET ended failure
-9382 p1 plan 236 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9382 p1 plan 236 FLUSHMAJORITEMBUDGET ended failure
-9413 p0 plan 237 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9415 p0 plan 237 FLUSHMAJORITEMBUDGET ended failure
-9461 p5 plan 238 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(1+0) net 0 gross 1000 eta 0.0
-9461 p5 plan 239 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9462 p5 plan 239 FLUSHMAJORITEMBUDGET ended failure
-9462 p5 order launch 121 at Shola
-9462 p5 order form 121 alone
-9465 p5 order move fleet 150 -> Felucia
-9537 p5 plan 240 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Felucia BaseForce(0+1) net 2400 gross 2400 eta 28.0
-9537 p5 build task 66 U_Ground_Vehicle_Factory for BaseForce at Felucia
-9547 p1 plan 241 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9547 p1 plan 241 FLUSHMAJORITEMBUDGET ended failure
-9548 p5 order build U_Ground_Vehicle_Factory at Felucia
-9571 p0 plan 242 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9571 p0 plan 242 FLUSHMAJORITEMBUDGET ended failure
-9613 p5 plan 243 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9615 p5 plan 243 FLUSHMAJORITEMBUDGET ended failure
-9672 p5 tf MainForce move to MonCalimari
-9672 p5 order move fleet 150 -> Kashyyyk
-9712 p1 plan 244 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9712 p1 plan 244 FLUSHMAJORITEMBUDGET ended failure
-9724 p1 plan 210 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
-9729 p0 plan 245 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9730 p0 plan 245 FLUSHMAJORITEMBUDGET ended failure
-9741 p5 order move fleet 150 -> NalHutta
-9768 p5 order move fleet 150 -> Shola
-9839 p5 plan 246 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
-9839 p5 plan 247 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9840 p5 plan 247 FLUSHMAJORITEMBUDGET ended failure
-9849 p5 tf MainForce move to Yavin
-9849 p5 order launch 128 at Felucia
-9849 p5 order form 128 alone
-9849 p5 order move fleet 152 -> Kashyyyk
-9876 p5 order move fleet 89 -> MonCalimari
-9877 p1 plan 248 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9877 p1 plan 248 FLUSHMAJORITEMBUDGET ended failure
-9887 p0 plan 249 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9889 p0 plan 249 FLUSHMAJORITEMBUDGET ended failure
-9918 p5 order move fleet 152 -> The_Maw
-9960 p5 plan 238 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-10043 p1 plan 250 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10045 p0 plan 251 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10045 p0 plan 251 FLUSHMAJORITEMBUDGET ended failure
-10045 p1 plan 250 FLUSHMAJORITEMBUDGET ended failure
-10064 p5 plan 252 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10065 p5 plan 252 FLUSHMAJORITEMBUDGET ended failure
-10080 p5 order move fleet 83 -> Yavin
-10182 p5 tf MainForce ability Underworld_Saboteur_Team 128 at Yavin not applied
-10203 p0 plan 253 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10204 p0 plan 253 FLUSHMAJORITEMBUDGET ended failure
-10209 p1 plan 254 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10210 p1 plan 254 FLUSHMAJORITEMBUDGET ended failure
-10361 p0 plan 255 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10363 p0 plan 255 FLUSHMAJORITEMBUDGET ended failure
-10365 p5 plan 256 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10365 p5 plan 256 FLUSHMAJORITEMBUDGET ended failure
-10375 p1 plan 257 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10375 p1 plan 257 FLUSHMAJORITEMBUDGET ended failure
-10482 p5 plan 246 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-10519 p0 plan 258 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10519 p0 plan 258 FLUSHMAJORITEMBUDGET ended failure
-10541 p1 plan 259 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10543 p1 plan 259 FLUSHMAJORITEMBUDGET ended failure
-10591 p5 plan 240 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended failure (released)
-10591 p5 plan 260 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10593 p5 plan 260 FLUSHMAJORITEMBUDGET ended failure
-10667 p5 plan 261 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
-10668 p5 order move fleet 83 -> Felucia
-10677 p0 plan 262 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10678 p0 plan 262 FLUSHMAJORITEMBUDGET ended failure
-10707 p1 plan 263 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10708 p1 plan 263 FLUSHMAJORITEMBUDGET ended failure
-10743 p5 plan 264 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10743 p5 plan 264 FLUSHMAJORITEMBUDGET ended failure
-10835 p0 plan 265 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10835 p0 plan 266 UPGRADESTARBASEPLAN for Build_Initial_Starbase_Only @Yavin BaseForce(0+1) net 600 gross 600 eta 20.0
-10837 p0 plan 265 FLUSHMAJORITEMBUDGET ended failure
-10837 p0 build task 67 Rebel_Star_Base_1 for BaseForce at Yavin
-10850 p0 order build Rebel_Star_Base_1 at Yavin
-10873 p1 plan 267 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10873 p1 plan 267 FLUSHMAJORITEMBUDGET ended failure
-10895 p5 plan 268 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(0+1) net 1000 gross 1000 eta 11.0
-10895 p5 plan 269 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(0+1) net 1000 gross 1000 eta 11.0
-10895 p5 plan 270 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10896 p5 build task 68 Underworld_Saboteur_Team for MainForce
-10896 p5 build task 69 Underworld_Saboteur_Team for MainForce
-10896 p5 plan 270 FLUSHMAJORITEMBUDGET ended failure
-10913 p0 plan 271 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1350 gross 1350 eta 14.4
-10915 p0 build task 70 Corellian_Gunboat for ReserveForce
-10943 p5 order build Underworld_Saboteur_Team at Felucia
-10956 p1 plan 272 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
-10968 p5 tf MainForce move to Yavin
-10968 p5 order move fleet 83 -> Kashyyyk
-10970 p5 plan 269 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-10974 p0 order build Corellian_Gunboat at Naboo
-10987 p1 build task 71 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-10991 p0 plan 273 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10993 p0 plan 273 FLUSHMAJORITEMBUDGET ended failure
-11005 p1 order build E_Ground_Heavy_Vehicle_Factory at Tatooine
-11039 p1 plan 274 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11040 p5 plan 261 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-11041 p1 plan 274 FLUSHMAJORITEMBUDGET ended failure
-11121 p5 plan 275 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(0+1) net 1000 gross 1000 eta 22.0
-11121 p5 plan 276 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(0+1) net 1000 gross 1000 eta 22.0
-11121 p5 plan 277 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11121 p5 build task 72 Underworld_Saboteur_Team for MainForce
-11121 p5 build task 73 Underworld_Saboteur_Team for MainForce
-11121 p5 plan 277 FLUSHMAJORITEMBUDGET ended failure
-11147 p0 plan 278 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11149 p0 plan 278 FLUSHMAJORITEMBUDGET ended failure
-11196 p5 plan 275 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-11196 p5 plan 276 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-11204 p1 plan 279 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11206 p1 plan 279 FLUSHMAJORITEMBUDGET ended failure
-11280 p5 tf MainForce move to Naboo
-11280 p5 order move fleet 155 -> Kashyyyk
-11303 p0 plan 280 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11305 p0 plan 280 FLUSHMAJORITEMBUDGET ended failure
-11348 p5 plan 268 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-11348 p5 plan 281 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11349 p5 plan 281 FLUSHMAJORITEMBUDGET ended failure
-11369 p1 plan 282 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11371 p1 plan 282 FLUSHMAJORITEMBUDGET ended failure
-11413 p0 plan 271 BUILDSPACEFORCESPLAN ended success
-11424 p5 plan 283 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(1+0) net 0 gross 1000 eta 0.0
-11424 p5 order move fleet 155 -> Felucia
-11458 p0 plan 266 UPGRADESTARBASEPLAN ended success
-11459 p0 plan 284 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11461 p0 plan 284 FLUSHMAJORITEMBUDGET ended failure
-11499 p5 tf MainForce move to Naboo
-11499 p5 order move fleet 155 -> Kashyyyk
-11500 p5 plan 285 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11502 p5 plan 285 FLUSHMAJORITEMBUDGET ended failure
-11534 p1 plan 286 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11536 p1 plan 286 FLUSHMAJORITEMBUDGET ended failure
-11568 p5 order move fleet 155 -> Kuat
-11598 p5 order move fleet 155 -> Corellia
-11617 p0 plan 287 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11617 p0 plan 287 FLUSHMAJORITEMBUDGET ended failure
-11625 p5 order move fleet 155 -> Tatooine
-11652 p5 plan 288 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11652 p5 plan 288 FLUSHMAJORITEMBUDGET ended failure
-11652 p5 order move fleet 155 -> Naboo
-11699 p1 plan 289 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11701 p1 plan 289 FLUSHMAJORITEMBUDGET ended failure
-11772 p5 tf MainForce ability Underworld_Saboteur_Team 154 at Naboo not applied
-11775 p0 plan 290 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11776 p0 plan 290 FLUSHMAJORITEMBUDGET ended failure
-11804 p5 plan 291 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11805 p5 plan 291 FLUSHMAJORITEMBUDGET ended failure
-11864 p1 plan 292 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11866 p1 plan 292 FLUSHMAJORITEMBUDGET ended failure
-11933 p0 plan 293 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11935 p0 plan 293 FLUSHMAJORITEMBUDGET ended failure
-11956 p5 plan 294 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11958 p5 plan 294 FLUSHMAJORITEMBUDGET ended failure
-12029 p1 plan 295 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12031 p1 plan 295 FLUSHMAJORITEMBUDGET ended failure
-12072 p5 plan 283 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-12091 p0 plan 296 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12091 p0 plan 296 FLUSHMAJORITEMBUDGET ended failure
-12108 p5 plan 297 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12108 p5 plan 297 FLUSHMAJORITEMBUDGET ended failure
-12194 p1 plan 298 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12196 p1 plan 298 FLUSHMAJORITEMBUDGET ended failure
-12249 p0 plan 299 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12250 p0 plan 299 FLUSHMAJORITEMBUDGET ended failure
-12261 p5 plan 300 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @NalHutta BaseForce(0+1) net 2400 gross 2400 eta 28.0
-12261 p5 plan 301 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12261 p5 build task 74 U_Ground_Vehicle_Factory for BaseForce at NalHutta
-12261 p5 plan 301 FLUSHMAJORITEMBUDGET ended failure
-12276 p5 order build U_Ground_Vehicle_Factory at NalHutta
-12359 p1 plan 302 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12361 p1 plan 302 FLUSHMAJORITEMBUDGET ended failure
-12407 p0 plan 303 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12409 p0 plan 303 FLUSHMAJORITEMBUDGET ended failure
-12413 p5 plan 304 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12414 p5 plan 304 FLUSHMAJORITEMBUDGET ended failure
-12451 p1 plan 272 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
-12524 p1 plan 305 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12526 p1 plan 305 FLUSHMAJORITEMBUDGET ended failure
-12565 p0 plan 306 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12565 p0 plan 306 FLUSHMAJORITEMBUDGET ended failure
-12565 p5 plan 307 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12567 p5 plan 307 FLUSHMAJORITEMBUDGET ended failure
-12690 p1 plan 308 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12691 p1 plan 308 FLUSHMAJORITEMBUDGET ended failure
-12717 p5 plan 309 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12717 p5 plan 309 FLUSHMAJORITEMBUDGET ended failure
-12723 p0 plan 310 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12724 p0 plan 310 FLUSHMAJORITEMBUDGET ended failure
-12856 p1 plan 311 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12856 p1 plan 311 FLUSHMAJORITEMBUDGET ended failure
-12869 p5 plan 312 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12870 p5 plan 312 FLUSHMAJORITEMBUDGET ended failure
-12881 p0 plan 313 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12883 p0 plan 313 FLUSHMAJORITEMBUDGET ended failure
-13021 p5 plan 314 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13022 p1 plan 315 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13023 p5 plan 314 FLUSHMAJORITEMBUDGET ended failure
-13024 p1 plan 315 FLUSHMAJORITEMBUDGET ended failure
-13039 p0 plan 316 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13039 p0 plan 316 FLUSHMAJORITEMBUDGET ended failure
-13122 p5 plan 300 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
-13173 p5 plan 317 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13173 p5 plan 317 FLUSHMAJORITEMBUDGET ended failure
-13188 p1 plan 318 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13189 p1 plan 318 FLUSHMAJORITEMBUDGET ended failure
-13197 p0 plan 319 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13198 p0 plan 319 FLUSHMAJORITEMBUDGET ended failure
-13326 p5 plan 320 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13326 p5 plan 320 FLUSHMAJORITEMBUDGET ended failure
-13354 p1 plan 321 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13354 p1 plan 321 FLUSHMAJORITEMBUDGET ended failure
-13355 p0 plan 322 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13357 p0 plan 322 FLUSHMAJORITEMBUDGET ended failure
-13479 p5 plan 323 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13479 p5 plan 323 FLUSHMAJORITEMBUDGET ended failure
-13513 p0 plan 324 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13513 p0 plan 324 FLUSHMAJORITEMBUDGET ended failure
-13520 p1 plan 325 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13522 p1 plan 325 FLUSHMAJORITEMBUDGET ended failure
-13632 p5 plan 326 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @NalHutta BaseForce(0+1) net 2400 gross 2400 eta 28.0
-13632 p5 plan 327 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13632 p5 build task 75 U_Ground_Vehicle_Factory for BaseForce at NalHutta
-13632 p5 plan 327 FLUSHMAJORITEMBUDGET ended failure
-13640 p5 order build U_Ground_Vehicle_Factory at NalHutta
-13671 p0 plan 328 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13672 p0 plan 328 FLUSHMAJORITEMBUDGET ended failure
-13686 p1 plan 329 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13687 p1 plan 329 FLUSHMAJORITEMBUDGET ended failure
-13784 p5 plan 330 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13785 p5 plan 330 FLUSHMAJORITEMBUDGET ended failure
-13829 p0 plan 331 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13831 p0 plan 331 FLUSHMAJORITEMBUDGET ended failure
-13852 p1 plan 332 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13852 p1 plan 332 FLUSHMAJORITEMBUDGET ended failure
-13936 p5 plan 333 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13938 p5 plan 333 FLUSHMAJORITEMBUDGET ended failure
-13987 p0 plan 334 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13987 p0 plan 334 FLUSHMAJORITEMBUDGET ended failure
-14018 p1 plan 335 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14020 p1 plan 335 FLUSHMAJORITEMBUDGET ended failure
-14088 p5 plan 336 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14088 p5 plan 336 FLUSHMAJORITEMBUDGET ended failure
-14145 p0 plan 337 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14146 p0 plan 337 FLUSHMAJORITEMBUDGET ended failure
-14184 p1 plan 338 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14185 p1 plan 338 FLUSHMAJORITEMBUDGET ended failure
-14240 p5 plan 339 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14241 p5 plan 339 FLUSHMAJORITEMBUDGET ended failure
-14303 p0 plan 340 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14305 p0 plan 340 FLUSHMAJORITEMBUDGET ended failure
-14350 p1 plan 341 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14350 p1 plan 341 FLUSHMAJORITEMBUDGET ended failure
-14392 p5 plan 342 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14394 p5 plan 342 FLUSHMAJORITEMBUDGET ended failure
-14461 p0 plan 343 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14461 p0 plan 343 FLUSHMAJORITEMBUDGET ended failure
-14487 p5 plan 326 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
-14516 p1 plan 344 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14518 p1 plan 344 FLUSHMAJORITEMBUDGET ended failure
-14544 p5 plan 345 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @NalHutta BaseForce(0+1) net 1300 gross 1300 eta 17.6
-14544 p5 plan 346 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14544 p5 build task 76 U_Ground_Droid_Works for BaseForce at NalHutta
-14544 p5 plan 346 FLUSHMAJORITEMBUDGET ended failure
-14570 p5 order build U_Ground_Droid_Works at NalHutta
-14619 p0 plan 347 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14620 p0 plan 347 FLUSHMAJORITEMBUDGET ended failure
-14682 p1 plan 348 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14683 p1 plan 348 FLUSHMAJORITEMBUDGET ended failure
-14696 p5 plan 349 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14697 p5 plan 349 FLUSHMAJORITEMBUDGET ended failure
-14777 p0 plan 350 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14779 p0 plan 350 FLUSHMAJORITEMBUDGET ended failure
-14848 p1 plan 351 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14848 p1 plan 351 FLUSHMAJORITEMBUDGET ended failure
-14848 p5 plan 352 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14850 p5 plan 352 FLUSHMAJORITEMBUDGET ended failure
-14935 p0 plan 353 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1350 gross 1350 eta 14.4
-14935 p0 plan 354 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14935 p0 plan 355 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Naboo BaseForce(0+1) net 1000 gross 1000 eta 48.0
-14935 p0 build task 77 Corellian_Gunboat for ReserveForce
-14935 p0 plan 354 FLUSHMAJORITEMBUDGET ended failure
-14965 p0 build task 78 R_Ground_Heavy_Vehicle_Factory for BaseForce at Naboo
-14973 p0 order build R_Ground_Heavy_Vehicle_Factory at Naboo
-14973 p0 order build Corellian_Gunboat at Naboo
-15000 p5 plan 356 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS for Build_Underworld_Barracks @NalHutta BaseForce(0+1) net 1000 gross 1000 eta 14.4
-15000 p5 plan 357 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15000 p5 build task 79 U_Ground_Barracks for BaseForce at NalHutta
-15000 p5 plan 357 FLUSHMAJORITEMBUDGET ended failure
-15014 p1 plan 358 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1250 gross 1250 eta 9.0
-15014 p1 plan 359 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15016 p1 build task 80 Tartan_Patrol_Cruiser for ReserveForce
-15016 p1 plan 359 FLUSHMAJORITEMBUDGET ended failure
-15066 p1 order build Tartan_Patrol_Cruiser at Corellia
-15075 p5 plan 356 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended failure (released)
-15091 p0 plan 360 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15091 p0 plan 360 FLUSHMAJORITEMBUDGET ended failure
-15096 p1 plan 361 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+3) net 270 gross 270 eta 24.0
-15097 p1 build task 81 Imperial_Heavy_Scout_Squad for ReserveForce
-15097 p1 build task 82 Imperial_Stormtrooper_Squad for ReserveForce
-15097 p1 build task 83 Imperial_Stormtrooper_Squad for ReserveForce
-15105 p5 plan 345 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS ended success
-15159 p1 order build Imperial_Heavy_Scout_Squad at Kuat
-15159 p1 order build Imperial_Stormtrooper_Squad at Corellia
-15178 p1 plan 362 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15178 p1 plan 362 FLUSHMAJORITEMBUDGET ended failure
-15227 p5 plan 363 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS for Build_Underworld_Barracks @NalHutta BaseForce(0+1) net 1000 gross 1000 eta 14.4
-15227 p5 plan 364 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15228 p5 build task 84 U_Ground_Barracks for BaseForce at NalHutta
-15228 p5 plan 364 FLUSHMAJORITEMBUDGET ended failure
-15247 p0 plan 365 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15247 p0 plan 365 FLUSHMAJORITEMBUDGET ended failure
-15252 p5 order build U_Ground_Barracks at NalHutta
-15283 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
-15303 p5 plan 366 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @NalHutta BaseForce(0+1) net 1300 gross 1300 eta 17.6
-15303 p5 plan 363 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended failure (released)
-15303 p5 build task 85 U_Ground_Droid_Works for BaseForce at NalHutta
-15342 p1 plan 367 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15343 p1 plan 358 BUILDSPACEFORCESPLAN ended success
-15343 p1 plan 367 FLUSHMAJORITEMBUDGET ended failure
-15379 p5 plan 366 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS ended failure (released)
-15379 p5 plan 368 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15381 p5 plan 368 FLUSHMAJORITEMBUDGET ended failure
-15403 p0 plan 369 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15403 p0 plan 369 FLUSHMAJORITEMBUDGET ended failure
-15412 p0 plan 353 BUILDSPACEFORCESPLAN ended success
-15455 p5 plan 370 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @NalHutta BaseForce(0+1) net 1300 gross 1300 eta 17.6
-15456 p5 build task 86 U_Ground_Droid_Works for BaseForce at NalHutta
-15507 p1 plan 371 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15508 p1 plan 371 FLUSHMAJORITEMBUDGET ended failure
-15531 p5 plan 370 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS ended failure (released)
-15531 p5 plan 372 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15531 p5 plan 372 FLUSHMAJORITEMBUDGET ended failure
-15560 p0 plan 373 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15562 p0 plan 373 FLUSHMAJORITEMBUDGET ended failure
-15607 p5 plan 374 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @NalHutta BaseForce(0+1) net 1300 gross 1300 eta 17.6
-15609 p5 build task 87 U_Ground_Droid_Works for BaseForce at NalHutta
-15672 p1 plan 375 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15673 p1 plan 375 FLUSHMAJORITEMBUDGET ended failure
-15683 p5 plan 374 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS ended failure (released)
-15683 p5 plan 376 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15684 p5 plan 376 FLUSHMAJORITEMBUDGET ended failure
-15717 p0 plan 377 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15718 p0 plan 377 FLUSHMAJORITEMBUDGET ended failure
-15759 p5 plan 378 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @NalHutta BaseForce(0+1) net 1300 gross 1300 eta 17.6
-15759 p5 build task 88 U_Ground_Droid_Works for BaseForce at NalHutta
-15779 p5 order build U_Ground_Droid_Works at NalHutta
-15835 p5 plan 379 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15837 p1 plan 380 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15837 p5 plan 379 FLUSHMAJORITEMBUDGET ended failure
-15838 p1 plan 380 FLUSHMAJORITEMBUDGET ended failure
-15874 p0 plan 381 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15874 p0 plan 381 FLUSHMAJORITEMBUDGET ended failure
-15880 p1 order launch 163 at Kashyyyk
-15880 p1 order form 163 alone
-15880 p1 order launch 167 at Kuat
-15880 p1 order form 167 alone
-15883 p1 order move fleet 168 -> Corellia
-15883 p1 order move fleet 169 -> Corellia
-15943 p1 plan 361 BUILDGROUNDFORCESPLAN ended success
-15943 p1 order auto-land 167 at Corellia
-15943 p1 order auto-land 163 at Corellia
-15987 p5 plan 382 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15987 p5 plan 382 FLUSHMAJORITEMBUDGET ended failure
-16002 p1 plan 383 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16003 p1 plan 383 FLUSHMAJORITEMBUDGET ended failure
-16031 p0 plan 384 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16033 p0 plan 384 FLUSHMAJORITEMBUDGET ended failure
-16139 p5 plan 385 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16140 p5 plan 385 FLUSHMAJORITEMBUDGET ended failure
-16168 p1 plan 386 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16168 p1 plan 386 FLUSHMAJORITEMBUDGET ended failure
-16188 p0 plan 387 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16189 p0 plan 387 FLUSHMAJORITEMBUDGET ended failure
-16291 p5 plan 388 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16293 p5 plan 388 FLUSHMAJORITEMBUDGET ended failure
-16314 p5 plan 378 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS ended success
-16334 p1 plan 389 UPGRADESTARBASEPLAN for Upgrade_Starbase @Kashyyyk BaseForce(0+1) net 1200 gross 1200 eta 24.0
-16334 p1 plan 390 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16336 p1 build task 89 Empire_Star_Base_2 for BaseForce at Kashyyyk
-16336 p1 plan 390 FLUSHMAJORITEMBUDGET ended failure
-16337 p1 order build Empire_Star_Base_2 at Kashyyyk
-16345 p0 plan 391 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16345 p0 plan 391 FLUSHMAJORITEMBUDGET ended failure
-16420 p0 plan 355 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
-16444 p5 plan 392 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16446 p5 plan 392 FLUSHMAJORITEMBUDGET ended failure
-16499 p1 plan 393 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16501 p1 plan 393 FLUSHMAJORITEMBUDGET ended failure
-16502 p0 plan 394 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16504 p0 plan 394 FLUSHMAJORITEMBUDGET ended failure
-16597 p5 plan 395 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16599 p5 plan 395 FLUSHMAJORITEMBUDGET ended failure
-16660 p0 plan 396 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16660 p0 plan 396 FLUSHMAJORITEMBUDGET ended failure
-16664 p1 plan 397 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16666 p1 plan 397 FLUSHMAJORITEMBUDGET ended failure
-16750 p5 plan 398 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16752 p5 plan 398 FLUSHMAJORITEMBUDGET ended failure
-16818 p0 plan 399 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16819 p0 plan 399 FLUSHMAJORITEMBUDGET ended failure
-16829 p1 plan 400 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16831 p1 plan 400 FLUSHMAJORITEMBUDGET ended failure
-16903 p5 plan 401 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16905 p5 plan 401 FLUSHMAJORITEMBUDGET ended failure
-16976 p0 plan 402 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16978 p0 plan 402 FLUSHMAJORITEMBUDGET ended failure
-16994 p1 plan 403 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16996 p1 plan 403 FLUSHMAJORITEMBUDGET ended failure
-17056 p5 plan 404 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17058 p5 plan 404 FLUSHMAJORITEMBUDGET ended failure
-17065 p1 plan 389 UPGRADESTARBASEPLAN ended success
-17134 p0 plan 405 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17134 p0 plan 405 FLUSHMAJORITEMBUDGET ended failure
-17159 p1 plan 406 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17161 p1 plan 406 FLUSHMAJORITEMBUDGET ended failure
-17209 p5 plan 407 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17211 p5 plan 407 FLUSHMAJORITEMBUDGET ended failure
-17292 p0 plan 408 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17293 p0 plan 408 FLUSHMAJORITEMBUDGET ended failure
-17325 p1 plan 409 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17326 p1 plan 409 FLUSHMAJORITEMBUDGET ended failure
-17362 p5 plan 410 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17364 p5 plan 410 FLUSHMAJORITEMBUDGET ended failure
-17450 p0 plan 411 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17452 p0 plan 411 FLUSHMAJORITEMBUDGET ended failure
-17491 p1 plan 412 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17491 p1 plan 412 FLUSHMAJORITEMBUDGET ended failure
-17515 p5 plan 413 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17517 p5 plan 413 FLUSHMAJORITEMBUDGET ended failure
-17608 p0 plan 414 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17608 p0 plan 414 FLUSHMAJORITEMBUDGET ended failure
-17657 p1 plan 415 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17659 p1 plan 415 FLUSHMAJORITEMBUDGET ended failure
-17668 p5 plan 416 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17670 p5 plan 416 FLUSHMAJORITEMBUDGET ended failure
-17766 p0 plan 417 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17767 p0 plan 417 FLUSHMAJORITEMBUDGET ended failure
-17821 p5 plan 418 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17823 p1 plan 419 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17823 p5 plan 418 FLUSHMAJORITEMBUDGET ended failure
-17824 p1 plan 419 FLUSHMAJORITEMBUDGET ended failure
-17924 p0 plan 420 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17926 p0 plan 420 FLUSHMAJORITEMBUDGET ended failure
-17974 p5 plan 421 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17976 p5 plan 421 FLUSHMAJORITEMBUDGET ended failure
-17989 p1 plan 422 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17989 p1 plan 422 FLUSHMAJORITEMBUDGET ended failure
-conflict tick 374 gframe 373 space Kashyyyk Underworld vs Empire: auto-resolved, winner Empire, loser Underworld, retreat -, losses att 4 def 1, draws 4
-conflict tick 1580 gframe 1579 space Kashyyyk Underworld vs Empire: dropped
-conflict tick 9740 gframe 9739 space Kashyyyk Underworld vs Empire: dropped
-conflict tick 9917 gframe 9916 space Kashyyyk Underworld vs Empire: dropped
-conflict tick 9955 gframe 9954 space MonCalimari Underworld vs Rebel: auto-resolved, winner Rebel, loser Underworld, retreat -, losses att 5 def 1, draws 8
-conflict tick 10174 gframe 10173 space Yavin Underworld vs Rebel: auto-resolved, winner Underworld, loser Rebel, retreat Rebel, losses att 2 def 3, draws 9
-conflict tick 11036 gframe 11035 space Kashyyyk Underworld vs Empire: auto-resolved, winner Empire, loser Underworld, retreat -, losses att 3 def 1, draws 2
-conflict tick 11348 gframe 11347 space Kashyyyk Underworld vs Empire: dropped
-conflict tick 11567 gframe 11566 space Kashyyyk Underworld vs Empire: dropped
-conflict tick 11596 gframe 11595 space Kuat Underworld vs Empire: dropped
-conflict tick 11624 gframe 11623 space Corellia Underworld vs Empire: dropped
-conflict tick 11651 gframe 11650 space Tatooine Underworld vs Empire: dropped
-conflict tick 11765 gframe 11764 space Naboo Underworld vs Rebel: dropped
+823 p1 build task 26 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+823 p1 build task 27 E_Ground_Barracks for BaseForce at Kashyyyk
+841 p1 order build Imperial_Stormtrooper_Squad at Corellia
+849 p1 order build E_Ground_Barracks at Kashyyyk
+849 p1 order build Imperial_Anti_Infantry_Brigade at Kuat
+872 p1 plan 27 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+872 p1 plan 28 BUILDBASECOMPONENTBARRACKS ended failure (released)
+876 p5 plan 30 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(0+1) net 1000 gross 1000 eta 18.8
+876 p5 plan 31 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(0+1) net 1000 gross 1000 eta 19.1
+876 p5 build task 28 Underworld_Saboteur_Team for MainForce
+876 p5 build task 29 Underworld_Saboteur_Team for MainForce
+892 p0 plan 13 BUILDECONOMICSTRUCTUREPLAN ended success
+913 p0 plan 14 BUILDECONOMICSTRUCTUREPLAN ended success
+951 p5 plan 32 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(0+1) net 1000 gross 1000 eta 15.0
+951 p5 plan 33 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(0+1) net 1000 gross 1000 eta 15.0
+951 p5 build task 30 Underworld_Saboteur_Team for MainForce
+951 p5 build task 31 Underworld_Saboteur_Team for MainForce
+954 p1 plan 34 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
+985 p1 build task 32 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+1036 p1 plan 34 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+1058 p5 order build Underworld_Saboteur_Team at Felucia
+1099 p5 plan 31 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+1099 p5 plan 33 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+1099 p5 plan 32 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+1118 p1 plan 35 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
+1150 p1 build task 33 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+1200 p1 plan 35 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+1213 p1 order build Imperial_Stormtrooper_Squad at Corellia
+1250 p5 plan 36 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(0+1) net 1000 gross 1000 eta 15.0
+1251 p5 plan 24 UPGRADESTARBASEPLAN ended success
+1251 p5 build task 34 Underworld_Saboteur_Team for MainForce
+1282 p1 plan 37 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
+1312 p1 build task 35 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+1325 p5 plan 38 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(0+1) net 1000 gross 1000 eta 21.1
+1326 p5 build task 36 Underworld_Saboteur_Team for MainForce
+1364 p1 plan 37 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+1438 p1 order build Imperial_Heavy_Scout_Squad at Kuat
+1446 p1 plan 39 BUILDWEAPONSTRUCTUREPLAN for Build_Weapon @Kashyyyk StructureForce(0+1) net 2000 gross 2000 eta 48.0
+1475 p5 plan 38 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+1475 p5 plan 36 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+1477 p1 build task 37 Ground_Magnepulse_Cannon for StructureForce at Kashyyyk
+1500 p1 order build Ground_Magnepulse_Cannon at Kashyyyk
+1515 p5 tf MainForce move to Naboo
+1515 p5 order move fleet 124 -> Kashyyyk
+1552 p0 plan 2 BUILDTURBOLASERS ended success
+1584 p5 order move fleet 124 -> Kuat
+1614 p5 order move fleet 124 -> Corellia
+1641 p5 order move fleet 124 -> Tatooine
+1668 p5 order move fleet 124 -> Naboo
+1703 p5 plan 40 UPGRADESTARBASEPLAN for Upgrade_Starbase @Felucia BaseForce(0+1) net 3000 gross 3000 eta 24.0
+1704 p5 build task 38 Underworld_Star_Base_3 for BaseForce at Felucia
+1734 p5 order build Underworld_Star_Base_3 at Felucia
+1788 p5 tf MainForce ability Underworld_Saboteur_Team 123 at Naboo not applied
+2091 p5 plan 30 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+2158 p1 order launch 121 at Kuat
+2158 p1 order form 121 alone
+2158 p1 order launch 127 at Kuat
+2158 p1 order form 127 into fleet 128
+2161 p1 order move fleet 128 -> Corellia
+2194 p1 plan 29 BUILDGROUNDFORCESPLAN ended success
+2194 p1 order auto-land 121 at Corellia
+2194 p1 order auto-land 127 at Corellia
+2235 p5 plan 41 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(1+0) net 0 gross 1000 eta 0.0
+2235 p5 order move fleet 124 -> Felucia
+2502 p5 tf MainForce move to Naboo
+2502 p5 order move fleet 124 -> Kashyyyk
+2571 p5 order move fleet 124 -> Kuat
+2601 p5 order move fleet 124 -> Corellia
+2628 p5 order move fleet 124 -> Tatooine
+2655 p5 order move fleet 124 -> Naboo
+2719 p1 plan 8 BUILDWEAPONSTRUCTUREPLAN ended success
+2775 p5 tf MainForce ability Underworld_Saboteur_Team 123 at Naboo not applied
+2818 p0 plan 42 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1350 gross 1350 eta 14.4
+2818 p0 build task 39 Corellian_Gunboat for ReserveForce
+2841 p5 plan 40 UPGRADESTARBASEPLAN ended success
+2843 p5 plan 43 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @NalHutta BaseForce(0+1) net 2400 gross 2400 eta 28.0
+2844 p5 build task 40 U_Ground_Vehicle_Factory for BaseForce at NalHutta
+2848 p5 order build U_Ground_Vehicle_Factory at NalHutta
+2871 p0 order build Corellian_Gunboat at Naboo
+2947 p1 plan 39 BUILDWEAPONSTRUCTUREPLAN ended success
+3075 p5 plan 41 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+3310 p0 plan 42 BUILDSPACEFORCESPLAN ended success
+4135 p5 plan 44 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Felucia BaseForce(0+1) net 2400 gross 2400 eta 28.0
+4137 p5 build task 41 U_Ground_Vehicle_Factory for BaseForce at Felucia
+4158 p5 order build U_Ground_Vehicle_Factory at Felucia
+4169 p1 plan 45 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 450 gross 450 eta 24.0
+4171 p0 plan 46 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Naboo BaseForce(0+1) net 1000 gross 1000 eta 48.0
+4171 p1 build task 42 Imperial_Heavy_Scout_Squad for ReserveForce
+4171 p1 build task 43 Imperial_Stormtrooper_Squad for ReserveForce
+4171 p1 build task 44 Imperial_Anti_Infantry_Brigade for ReserveForce
+4171 p1 build task 45 Imperial_Stormtrooper_Squad for ReserveForce
+4201 p0 build task 46 R_Ground_Heavy_Vehicle_Factory for BaseForce at Naboo
+4220 p1 order build Imperial_Stormtrooper_Squad at Corellia
+4226 p0 order build R_Ground_Heavy_Vehicle_Factory at Naboo
+4228 p1 order build Imperial_Heavy_Scout_Squad at Kuat
+4233 p5 plan 43 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
+4259 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+4285 p1 order build Imperial_Anti_Infantry_Brigade at Tatooine
+5005 p1 order launch 134 at Kashyyyk
+5005 p1 order form 134 alone
+5005 p1 order launch 136 at Kuat
+5005 p1 order form 136 alone
+5005 p1 order launch 137 at Tatooine
+5005 p1 order form 137 alone
+5008 p1 order move fleet 138 -> Corellia
+5008 p1 order move fleet 139 -> Corellia
+5008 p1 order move fleet 140 -> Corellia
+5068 p1 plan 45 BUILDGROUNDFORCESPLAN ended success
+5068 p1 order auto-land 137 at Corellia
+5068 p1 order auto-land 136 at Corellia
+5068 p1 order auto-land 134 at Corellia
+5497 p1 plan 47 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
+5497 p1 plan 48 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 450 gross 450 eta 32.0
+5497 p1 build task 47 Imperial_Anti_Infantry_Brigade for ReserveForce
+5497 p1 build task 48 Imperial_Stormtrooper_Squad for ReserveForce
+5497 p1 build task 49 Imperial_Heavy_Scout_Squad for ReserveForce
+5497 p1 build task 50 Imperial_Stormtrooper_Squad for ReserveForce
+5527 p1 build task 51 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+5530 p1 order build Imperial_Anti_Infantry_Brigade at Kuat
+5553 p1 order build Imperial_Stormtrooper_Squad at Corellia
+5556 p1 order build E_Ground_Heavy_Vehicle_Factory at Tatooine
+5592 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+5664 p5 plan 44 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
+5674 p0 plan 46 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
+6088 p1 order build Imperial_Heavy_Scout_Squad at Kuat
+6808 p1 order launch 143 at Kashyyyk
+6808 p1 order form 143 alone
+6808 p1 order launch 145 at Kuat
+6808 p1 order form 145 alone
+6808 p1 order launch 146 at Kuat
+6808 p1 order form 146 into fleet 148
+6811 p1 order move fleet 147 -> Corellia
+6811 p1 order move fleet 148 -> Corellia
+6871 p0 plan 49 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1350 gross 1350 eta 14.4
+6871 p0 plan 50 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY for Build_Base_Component_Light_Vehicle_Factory @Kamino BaseForce(0+1) net 500 gross 500 eta 24.0
+6871 p0 build task 52 Corellian_Gunboat for ReserveForce
+6871 p1 plan 48 BUILDGROUNDFORCESPLAN ended success
+6886 p5 plan 51 UPGRADESTARBASEPLAN for Upgrade_Starbase @Shola BaseForce(0+1) net 3000 gross 3000 eta 24.0
+6888 p5 build task 53 Underworld_Star_Base_3 for BaseForce at Shola
+6898 p5 order build Underworld_Star_Base_3 at Shola
+6901 p0 build task 54 R_Ground_Light_Vehicle_Factory for BaseForce at Kamino
+6912 p0 order build R_Ground_Light_Vehicle_Factory at Kamino
+6932 p0 order build Corellian_Gunboat at Naboo
+6950 p0 plan 52 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+3) net 647 gross 647 eta 54.0
+6952 p0 build task 55 Rebel_Artillery_Brigade for ReserveForce
+6952 p0 build task 56 Rebel_Tank_Buster_Squad for ReserveForce
+6952 p0 build task 57 Rebel_Infantry_Squad for ReserveForce
+6985 p0 order build Rebel_Artillery_Brigade at Naboo
+7003 p1 plan 47 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
+7372 p0 plan 49 BUILDSPACEFORCESPLAN ended success
+7626 p5 plan 51 UPGRADESTARBASEPLAN ended success
+7639 p0 plan 50 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY ended success
+8185 p5 plan 53 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @NalHutta BaseForce(0+1) net 2400 gross 2400 eta 28.0
+8187 p5 build task 58 U_Ground_Vehicle_Factory for BaseForce at NalHutta
+8211 p5 order build U_Ground_Vehicle_Factory at NalHutta
+8219 p1 plan 54 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 800 gross 800 eta 40.0
+8221 p1 build task 59 Imperial_Armor_Group for ReserveForce
+8221 p1 build task 60 Imperial_Stormtrooper_Squad for ReserveForce
+8221 p1 build task 61 Imperial_Anti_Infantry_Brigade for ReserveForce
+8221 p1 build task 62 Imperial_Stormtrooper_Squad for ReserveForce
+8253 p1 order build Imperial_Armor_Group at Tatooine
+8258 p1 order build Imperial_Stormtrooper_Squad at Kuat
+8320 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+8568 p1 order build Imperial_Anti_Infantry_Brigade at Kuat
+9057 p5 plan 53 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
+9454 p1 order launch 153 at Kashyyyk
+9454 p1 order form 153 alone
+9454 p1 order launch 154 at Kuat
+9454 p1 order form 154 alone
+9454 p1 order launch 157 at Kuat
+9454 p1 order form 157 into fleet 160
+9454 p1 order launch 158 at Tatooine
+9454 p1 order form 158 alone
+9457 p1 order move fleet 159 -> Corellia
+9457 p1 order move fleet 160 -> Corellia
+9457 p1 order move fleet 161 -> Corellia
+9482 p5 plan 55 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(1+0) net 0 gross 1000 eta 0.0
+9483 p5 order move fleet 124 -> Felucia
+9517 p1 plan 54 BUILDGROUNDFORCESPLAN ended success
+9558 p5 plan 56 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @NalHutta BaseForce(0+1) net 1300 gross 1300 eta 17.6
+9558 p5 plan 55 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+9558 p5 build task 63 U_Ground_Droid_Works for BaseForce at NalHutta
+9575 p5 order build U_Ground_Droid_Works at NalHutta
+9630 p1 plan 57 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+3) net 620 gross 620 eta 40.0
+9631 p1 build task 64 Imperial_Armor_Group for ReserveForce
+9631 p1 build task 65 Imperial_Stormtrooper_Squad for ReserveForce
+9631 p1 build task 66 Imperial_Stormtrooper_Squad for ReserveForce
+9634 p5 plan 58 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS for Build_Underworld_Barracks @NalHutta BaseForce(0+1) net 1000 gross 1000 eta 14.4
+9636 p5 build task 67 U_Ground_Barracks for BaseForce at NalHutta
+9679 p1 order build Imperial_Armor_Group at Tatooine
+9684 p1 order build Imperial_Stormtrooper_Squad at Kuat
+9710 p5 plan 58 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended failure (released)
+9744 p5 order auto-land 123 at Felucia
+9746 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+9786 p5 plan 59 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS for Build_Underworld_Barracks @NalHutta BaseForce(0+1) net 1000 gross 1000 eta 14.4
+9786 p5 build task 68 U_Ground_Barracks for BaseForce at NalHutta
+9862 p5 plan 59 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended failure (released)
+9938 p5 plan 60 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS for Build_Underworld_Barracks @NalHutta BaseForce(0+1) net 1000 gross 1000 eta 14.4
+9939 p5 build task 69 U_Ground_Barracks for BaseForce at NalHutta
+10014 p5 plan 60 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended failure (released)
+10090 p5 plan 61 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS for Build_Underworld_Barracks @NalHutta BaseForce(0+1) net 1000 gross 1000 eta 14.4
+10092 p5 build task 70 U_Ground_Barracks for BaseForce at NalHutta
+10110 p5 plan 56 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS ended success
+10133 p5 order build U_Ground_Barracks at NalHutta
+10242 p5 plan 62 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
+10242 p5 plan 63 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(0+1) net 1000 gross 1000 eta 11.0
+10242 p5 build task 71 Underworld_Saboteur_Team for MainForce
+10251 p5 tf MainForce move to Yavin
+10251 p5 order launch 123 at Felucia
+10251 p5 order form 123 alone
+10251 p5 order move fleet 165 -> Kashyyyk
+10296 p5 order build Underworld_Saboteur_Team at Felucia
+10320 p5 order move fleet 165 -> The_Maw
+10482 p5 order move fleet 83 -> Yavin
+10584 p5 tf MainForce ability Underworld_Saboteur_Team 123 at Yavin not applied
+10653 p5 tf MainForce move to MonCalimari
+10653 p5 order move fleet 167 -> Kashyyyk
+10722 p5 order move fleet 167 -> NalHutta
+10749 p5 order move fleet 76 -> Shola
+10857 p5 order move fleet 89 -> MonCalimari
+10879 p1 order launch 162 at Kashyyyk
+10879 p1 order form 162 alone
+10879 p1 order launch 163 at Kuat
+10879 p1 order form 163 alone
+10879 p1 order launch 168 at Tatooine
+10879 p1 order form 168 alone
+10882 p1 order move fleet 169 -> Corellia
+10882 p1 order move fleet 170 -> Corellia
+10882 p1 order move fleet 171 -> Corellia
+10884 p5 plan 62 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+10894 p0 plan 64 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1250 gross 1250 eta 9.0
+10894 p0 build task 72 Corellian_Corvette for ReserveForce
+10931 p0 order build Corellian_Corvette at Naboo
+10941 p5 plan 63 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+10942 p1 plan 57 BUILDGROUNDFORCESPLAN ended success
+10958 p1 plan 65 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
+10990 p1 build task 73 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+11012 p1 order build E_Ground_Heavy_Vehicle_Factory at Tatooine
+11041 p1 plan 66 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 770 gross 770 eta 135.0
+11041 p1 build task 74 Imperial_Armor_Group for ReserveForce
+11041 p1 build task 75 Imperial_Stormtrooper_Squad for ReserveForce
+11041 p1 build task 76 Imperial_Heavy_Scout_Squad for ReserveForce
+11041 p1 build task 77 Imperial_Stormtrooper_Squad for ReserveForce
+11068 p5 plan 67 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(1+0) net 0 gross 1000 eta 0.0
+11068 p5 plan 68 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @NalHutta BaseForce(0+1) net 1300 gross 1300 eta 17.6
+11068 p5 plan 61 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended failure (released)
+11070 p5 build task 78 U_Ground_Droid_Works for BaseForce at NalHutta
+11070 p5 order move fleet 83 -> Felucia
+11079 p1 order build Imperial_Stormtrooper_Squad at Kuat
+11123 p1 plan 66 BUILDGROUNDFORCESPLAN ended failure (released)
+11131 p0 plan 69 UPGRADESTARBASEPLAN for Build_Initial_Starbase_Only @Yavin BaseForce(0+1) net 600 gross 600 eta 20.0
+11131 p0 build task 79 Rebel_Star_Base_1 for BaseForce at Yavin
+11135 p0 order build Rebel_Star_Base_1 at Yavin
+11144 p5 plan 70 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS for Build_Underworld_Barracks @NalHutta BaseForce(0+1) net 1000 gross 1000 eta 14.4
+11145 p5 build task 80 U_Ground_Barracks for BaseForce at NalHutta
+11156 p5 order build U_Ground_Droid_Works at NalHutta
+11187 p5 build task 80 U_Ground_Barracks failed (not buildable here)
+11187 p5 plan 70 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended failure
+11206 p1 plan 71 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 800 gross 800 eta 129.5
+11206 p1 build task 81 Imperial_Armor_Group for ReserveForce
+11206 p1 build task 82 Imperial_Anti_Infantry_Brigade for ReserveForce
+11206 p1 build task 83 Imperial_Stormtrooper_Squad for ReserveForce
+11206 p1 build task 84 Imperial_Stormtrooper_Squad for ReserveForce
+11209 p0 plan 64 BUILDSPACEFORCESPLAN ended success
+11265 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+11370 p5 plan 72 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(0+1) net 1000 gross 1000 eta 11.0
+11370 p5 build task 85 Underworld_Saboteur_Team for MainForce
+11389 p1 order build Imperial_Anti_Infantry_Brigade at Kuat
+11412 p5 order build Underworld_Saboteur_Team at Felucia
+11451 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+11517 p5 tf MainForce move to Kashyyyk
+11517 p5 order move fleet 83 -> Kashyyyk
+11625 p5 plan 67 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+11691 p5 plan 68 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS ended success
+12196 p0 plan 69 UPGRADESTARBASEPLAN ended success
+12277 p5 plan 73 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(0+1) net 1000 gross 1000 eta 12.1
+12277 p5 plan 74 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(0+1) net 1000 gross 1000 eta 11.0
+12279 p5 build task 86 Underworld_Saboteur_Team for MainForce
+12279 p5 build task 87 Underworld_Saboteur_Team for MainForce
+12318 p5 tf MainForce move to Naboo
+12318 p5 order move fleet 181 -> Kashyyyk
+12342 p5 order build Underworld_Saboteur_Team at Felucia
+12352 p5 plan 73 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+12387 p5 order move fleet 181 -> Kuat
+12417 p5 order move fleet 181 -> Corellia
+12444 p5 order move fleet 181 -> Tatooine
+12460 p1 plan 65 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
+12469 p1 order build Imperial_Armor_Group at Tatooine
+12471 p5 order move fleet 181 -> Naboo
+12591 p5 tf MainForce ability Underworld_Saboteur_Team 180 at Naboo not applied
+12678 p5 tf MainForce move to Kashyyyk
+12678 p5 order move fleet 184 -> Kashyyyk
+12753 p5 tf MainForce ability Underworld_Saboteur_Team 183 at Kashyyyk not applied
+12891 p5 plan 72 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+13035 p5 plan 75 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(1+0) net 0 gross 1000 eta 0.0
+13035 p5 order move fleet 181 -> Felucia
+13053 p5 plan 74 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+13069 p1 order launch 175 at Kashyyyk
+13069 p1 order form 175 alone
+13069 p1 order launch 176 at Kashyyyk
+13069 p1 order launch 178 at Kuat
+13069 p1 order form 178 alone
+13069 p1 order launch 185 at Tatooine
+13069 p1 order form 185 alone
+13072 p1 order move fleet 186 -> Corellia
+13072 p1 order move fleet 187 -> Corellia
+13072 p1 order move fleet 188 -> Corellia
+13132 p1 plan 71 BUILDGROUNDFORCESPLAN ended success
+13302 p5 tf MainForce move to Naboo
+13302 p5 order move fleet 181 -> Kashyyyk
+13371 p5 order move fleet 184 -> Kuat
+13401 p5 order move fleet 184 -> Corellia
+13428 p5 order move fleet 184 -> Tatooine
+13455 p5 order move fleet 184 -> Naboo
+13575 p5 tf MainForce ability Underworld_Saboteur_Team 180 at Naboo not applied
+13597 p1 plan 76 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+3) net 300 gross 300 eta 18.0
+13597 p1 build task 88 Imperial_Anti_Infantry_Brigade for ReserveForce
+13597 p1 build task 89 Imperial_Stormtrooper_Squad for ReserveForce
+13597 p1 build task 90 Imperial_Stormtrooper_Squad for ReserveForce
+13643 p5 plan 77 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Felucia BaseForce(0+1) net 2400 gross 2400 eta 28.0
+13644 p5 build task 91 U_Ground_Vehicle_Factory for BaseForce at Felucia
+13652 p1 order build Imperial_Anti_Infantry_Brigade at Kuat
+13675 p5 order build U_Ground_Vehicle_Factory at Felucia
+13714 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+13771 p1 order build Imperial_Stormtrooper_Squad at Tatooine
+13875 p5 plan 75 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+14194 p1 order launch 189 at Kashyyyk
+14194 p1 order form 189 alone
+14194 p1 order launch 190 at Tatooine
+14194 p1 order form 190 alone
+14194 p1 order launch 191 at Kuat
+14194 p1 order form 191 alone
+14197 p1 order move fleet 192 -> Corellia
+14197 p1 order move fleet 193 -> Corellia
+14197 p1 order move fleet 194 -> Corellia
+14257 p1 plan 76 BUILDGROUNDFORCESPLAN ended success
+14523 p5 plan 77 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
+14940 p5 plan 78 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Shola BaseForce(0+1) net 2400 gross 2400 eta 28.0
+14940 p5 build task 92 U_Ground_Vehicle_Factory for BaseForce at Shola
+14946 p5 order build U_Ground_Vehicle_Factory at Shola
+15000 p0 plan 79 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1350 gross 1350 eta 14.4
+15001 p0 build task 93 Corellian_Gunboat for ReserveForce
+15008 p1 plan 80 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
+15008 p1 plan 81 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+3) net 390 gross 390 eta 24.0
+15010 p1 build task 94 Imperial_Heavy_Scout_Squad for ReserveForce
+15010 p1 build task 95 Imperial_Stormtrooper_Squad for ReserveForce
+15010 p1 build task 96 Imperial_Anti_Infantry_Brigade for ReserveForce
+15040 p1 build task 97 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+15042 p1 order build E_Ground_Heavy_Vehicle_Factory at Tatooine
+15047 p1 order build Imperial_Heavy_Scout_Squad at Kuat
+15054 p0 order build Corellian_Gunboat at Naboo
+15109 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+15493 p0 plan 79 BUILDSPACEFORCESPLAN ended success
+15791 p1 order build Imperial_Anti_Infantry_Brigade at Kuat
+15792 p5 plan 78 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
+16314 p5 plan 82 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Shola BaseForce(0+1) net 2400 gross 2400 eta 28.0
+16314 p5 build task 98 U_Ground_Vehicle_Factory for BaseForce at Shola
+16333 p1 order launch 196 at Kashyyyk
+16333 p1 order form 196 alone
+16333 p1 order launch 198 at Kuat
+16333 p1 order form 198 alone
+16333 p1 order launch 200 at Kuat
+16333 p1 order form 200 into fleet 202
+16336 p1 order move fleet 201 -> Corellia
+16336 p1 order move fleet 202 -> Corellia
+16341 p5 order build U_Ground_Vehicle_Factory at Shola
+16343 p0 plan 83 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Naboo BaseForce(0+1) net 1000 gross 1000 eta 48.0
+16375 p0 build task 99 R_Ground_Heavy_Vehicle_Factory for BaseForce at Naboo
+16378 p0 order build R_Ground_Heavy_Vehicle_Factory at Naboo
+16396 p1 plan 81 BUILDGROUNDFORCESPLAN ended success
+16485 p1 plan 84 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+3) net 300 gross 300 eta 18.0
+16486 p1 build task 100 Imperial_Anti_Infantry_Brigade for ReserveForce
+16486 p1 build task 101 Imperial_Stormtrooper_Squad for ReserveForce
+16486 p1 build task 102 Imperial_Stormtrooper_Squad for ReserveForce
+16489 p1 plan 80 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
+16535 p1 order build Imperial_Anti_Infantry_Brigade at Kuat
+16597 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+16654 p1 order build Imperial_Stormtrooper_Squad at Tatooine
+17077 p1 order launch 204 at Kashyyyk
+17077 p1 order form 204 alone
+17077 p1 order launch 205 at Tatooine
+17077 p1 order form 205 alone
+17077 p1 order launch 206 at Kuat
+17077 p1 order form 206 alone
+17080 p1 order move fleet 207 -> Corellia
+17080 p1 order move fleet 208 -> Corellia
+17080 p1 order move fleet 209 -> Corellia
+17140 p1 plan 84 BUILDGROUNDFORCESPLAN ended success
+17187 p5 plan 82 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
+17646 p1 plan 85 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+3) net 300 gross 300 eta 18.0
+17647 p1 build task 103 Imperial_Anti_Infantry_Brigade for ReserveForce
+17647 p1 build task 104 Imperial_Stormtrooper_Squad for ReserveForce
+17647 p1 build task 105 Imperial_Stormtrooper_Squad for ReserveForce
+17682 p1 order build Imperial_Anti_Infantry_Brigade at Kuat
+17688 p5 plan 86 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @Shola BaseForce(0+1) net 1300 gross 1300 eta 17.6
+17688 p5 plan 87 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS for Build_Underworld_Barracks @Shola BaseForce(0+1) net 1000 gross 1000 eta 14.4
+17688 p5 build task 106 U_Ground_Droid_Works for BaseForce at Shola
+17688 p5 build task 107 U_Ground_Barracks for BaseForce at Shola
+17705 p5 order build U_Ground_Droid_Works at Shola
+17744 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+17764 p5 plan 87 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended failure (released)
+17801 p1 order build Imperial_Stormtrooper_Squad at Tatooine
+17824 p0 plan 83 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
+conflict tick 377 gframe 376 space Kashyyyk Underworld vs Empire: auto-resolved, winner Empire, loser Underworld, retreat -, losses att 4 def 1, draws 4
+conflict tick 1583 gframe 1582 space Kashyyyk Underworld vs Empire: dropped
+conflict tick 1612 gframe 1611 space Kuat Underworld vs Empire: dropped
+conflict tick 1640 gframe 1639 space Corellia Underworld vs Empire: dropped
+conflict tick 1667 gframe 1666 space Tatooine Underworld vs Empire: dropped
+conflict tick 1781 gframe 1780 space Naboo Underworld vs Rebel: dropped
+conflict tick 2570 gframe 2569 space Kashyyyk Underworld vs Empire: dropped
+conflict tick 2599 gframe 2598 space Kuat Underworld vs Empire: dropped
+conflict tick 2627 gframe 2626 space Corellia Underworld vs Empire: dropped
+conflict tick 2654 gframe 2653 space Tatooine Underworld vs Empire: dropped
+conflict tick 2768 gframe 2767 space Naboo Underworld vs Rebel: dropped
+conflict tick 10319 gframe 10318 space Kashyyyk Underworld vs Empire: dropped
+conflict tick 10576 gframe 10575 space Yavin Underworld vs Rebel: auto-resolved, winner Underworld, loser Rebel, retreat Rebel, losses att 2 def 3, draws 6
+conflict tick 10721 gframe 10720 space Kashyyyk Underworld vs Empire: dropped
+conflict tick 10936 gframe 10935 space MonCalimari Underworld vs Rebel: auto-resolved, winner Rebel, loser Underworld, retreat -, losses att 5 def 1, draws 9
+conflict tick 11620 gframe 11619 space Kashyyyk Underworld vs Empire: auto-resolved, winner Empire, loser Underworld, retreat -, losses att 3 def 1, draws 2
+conflict tick 12386 gframe 12385 space Kashyyyk Underworld vs Empire: dropped
+conflict tick 12415 gframe 12414 space Kuat Underworld vs Empire: dropped
+conflict tick 12443 gframe 12442 space Corellia Underworld vs Empire: dropped
+conflict tick 12470 gframe 12469 space Tatooine Underworld vs Empire: dropped
+conflict tick 12584 gframe 12583 space Naboo Underworld vs Rebel: dropped
+conflict tick 12746 gframe 12745 space Kashyyyk Underworld vs Empire: dropped
+conflict tick 13070 gframe 13069 space Kashyyyk Empire vs Underworld: dropped
+conflict tick 13370 gframe 13369 space Kashyyyk Underworld vs Empire: dropped
+conflict tick 13399 gframe 13398 space Kuat Underworld vs Empire: dropped
+conflict tick 13427 gframe 13426 space Corellia Underworld vs Empire: dropped
+conflict tick 13454 gframe 13453 space Tatooine Underworld vs Empire: dropped
+conflict tick 13568 gframe 13567 space Naboo Underworld vs Rebel: dropped

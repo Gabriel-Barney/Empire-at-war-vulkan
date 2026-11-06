@@ -197,6 +197,8 @@ land/space pair selected by this id.
   Correction (S7 t25 RE, 2026-11-02) [H]: it runs only when the container's locomotor kind (vf +0x238) is 1 (Walk,
   Bike, LandTeamContainer, LandTeamInfantry), i.e. ground team containers only, not "in space only". Space squadron
   containers (Team locomotor, kind 2) never scan; their target comes from the members' own TARGETING.
+  What the ground container pushes to its members (state, ordered flag, attack-idle pose; not the target): §3.1.1
+  "Targeting states, slots 47 / 48 and team copies" (s78f, 2026-11-03).
 - **Shared squadron target (2026-11-02)** [H]. A member whose own target is empty and whose due scan picks t sets
   the team target (0x406370, team data = container +0x110: +0x30 = t, +0x38 = hard point) and calls `Set_Target` on
   **every** member in index order, overwriting their targets; `Order_Attack`'s set path does the same. A member that
@@ -303,7 +305,8 @@ These apply in `Scan_Player` and again in `Validate_Current_Target` (0x567c50).
   5. `Category_Exclusions` → −1, unless a property entry matched.
   6. `Property_Exclusions` → −1.
 - **Selection inside one scan.** The best score is shared across all players visited. The first valid
-  candidate becomes the current best.
+  candidate becomes the current best. **Correction (s78g t04, §2.10):** each player's first passing candidate
+  replaces the best unconditionally, so the pick comes from the last visited player that has a candidate.
   - **Early exit:** if a candidate is the current target and scores exactly 1.0, the scan returns immediately.
   - **Replacement rule:** a later candidate replaces the best when the first of these applies:
     1. exactly one of the two is at or below the health-fraction threshold (constant 0x140b27338; the fraction
@@ -738,6 +741,75 @@ value 0 (0x2823c0 / 0x2823e0), "enemy" = value 1 (0x2824d0 / 0x2824f0, Lua `Play
   every pair: P's faction `Is_Neutral` → 2 towards everyone (**its own entry too**); else self → 0; Q's faction
   `Is_Neutral` → 2; same faction → 0; otherwise 1. The XML lists are ignored, so Hostile is an enemy of every
   non-neutral faction both ways.
+  - **In-game, seen against this (s78f probe, 2026-11-05)** [M: cause not traced]. In a Geonosis skirmish
+    (Empire human vs Rebel AI), T4Bs spawned by Lua for `Find_Player("Hostile")` (player 4) were never targeted by
+    the AI's units: targeting state 0 throughout. That held for the SPMAT, six `Pod_Walker`s and a garrisoned Merc
+    squad, both on auto and after an explicit Lua `Attack_Target` (which returned without error)
+    (`out/20261105-045131`, `-051443`). The same T4Bs with the same setup (`Prevent_All_Fire`, `Prevent_AI_Usage`,
+    `Suspend_Locomotor`), spawned for the human's Empire player, were acquired within frames (`out/20261105-055142`,
+    `-060346`). So, for targeting, either the skirmish Hostile player is not set up by 0x297300 like the slot
+    players, or something before the relation test drops it. Check that before relying on "Hostile is an enemy" in
+    skirmish.
+    Relation check (s78f t12, 2026-11-05, `out/20261105-062322`, REL records): Lua `Is_Enemy` between the Rebel AI
+    and Hostile (player 4) is **true both ways**, in land and in space (Empire: true; Neutral and Rebel: false). So
+    the relation Lua sees is "enemy", and the drop happens elsewhere [M: the candidate scan skips the Hostile
+    player's objects, or they are not in the per-player lists the scan reads]. **Superseded by s78g t04 below:
+    there is no drop.**
+  - **s78g t04 (RE and raw-log re-read, 2026-11-05): nothing drops Hostile-owned objects** [H for the code paths
+    and the logged states unless tagged].
+    1. *Binary.* The only owner-dependent tests on the target paths are these:
+       - Auto scan `Acquire_Target` 0x568a00, per visited player: skip when the player's faction (player +0x68)
+         has `Is_Neutral` (+0x108), or when the attacker player's +0x370[id] ≠ 1 (0x2824f0). `Hostile` is
+         `Is_Neutral` No (FACTIONS.XML), and 0x297300 gives it 1 (the same table Lua `Is_Enemy` 0x603760 reads).
+       - `Scan_Player` 0x5662b0 and `Validate_Current_Target` 0x567c50 (§2.3) test the owner only in the stealth
+         exception (same owner) and in the fog test 0x35f470, where an ally of the attacker counts as visible
+         (0x39a230). Nothing else about the owner is read.
+       - `Order_Attack` 0x38d730, which Lua `GameObjectWrapper.Attack_Target` 0x5730f0 calls with (unit, t, 0,
+         ordered 1, 0, −1, force 0): 0x2824d0(attacker's player, target +0x58) must be 1. The other refusals
+         (stealth, melee vs airborne, garrisoned, +0x3a0 & 0x42) do not depend on the owner.
+       - No path tests the player type, human or AI, `Is_Playable`, `Create_Player_In_Multiplayer_Games` or any
+         other player flag.
+       - The player trees exist for Hostile. 0x2af130 allocates GOM+0xd0 for `DAT_140a16fb0` (the maximum player
+         count). `Register_Object` 0x2b5ad0 inserts every collidable object at GOM+0xd0 + owner × 0x38, and the
+         scan queries tree player +0x4c.
+    2. *Logged states* (`tools/probe_mod/s7s8_probes/out/20261105-051443/reader.log`, Geonosis, Rebel AI = player 1,
+       victims owner 4 = Hostile):
+       - IDLE47 phase b: the six `Pod_Walker`s (82269 … 82279, owner 1) took the held Hostile T4Bs (82270 …
+         82280, owner 4) as targets 7 frames after the spawn (F 4061). They reached state 3, then state 4 by
+         F 4086, and were still in state 4 in the last samples (F ≈ 4650).
+       - REINF: `MZ8_Pulse_Cannon_Tank` 82938 took Hostile T4B 82901 two frames after its spawn (F 12498, state
+         3), reached state 4 at +40 and fired 8 shots.
+       - The report's "attackers 6 ts {}" for IDLE47 b is a parser miss on sparse ST samples, not what the game did.
+    3. *Why the s78f cases saw state 0.* Neither case compares owners on equal terms.
+       - **SPMAT** (`-045131`, `-051443`): this was the DEPLOY scenario. The attack order at F 480 was followed by
+         `deploy1` at F 495, which ran a deploy block (ret = block, finished +45, deploy clip 25). In the Empire
+         control (`-055142`) the same call returned nil, with no transition, and the SPMAT took the target. So the
+         unit state differed between the runs [M: what keeps the deploying SPMAT at state 0 is not traced].
+       - **Garrisoned mercs** (`-051443` BUNKER): the Hostile T4B stood at (3180, 4640), 300 from the bunker
+         centre. That is beyond the merc's 172.5 reach, which is measured from the bunker centre (LOB_SOLVER,
+         BUNKER2 probe). This is a range result.
+    4. *Side finding: selection across players* [H from the decompiled code; not re-checked in disassembly]. This
+       corrects §2.4 "the best score is shared across all players". `Scan_Player` starts each player with no local
+       best. It accepts that player's first passing candidate unconditionally (the test is "shared score = −1
+       **or** no local best") and overwrites the shared score with it. Later candidates of the same player use the
+       §2.4 replacement rule. 0x568a00 replaces its result with every non-null per-player return. **The pick is
+       therefore the best candidate of the last player, in the cyclic visit order from the random start player, that
+       has a passing candidate.** A better candidate of an earlier player is lost. The early exit (current target
+       scoring exactly 1.0) fires only once that candidate has been accepted as the local best. The scan then stops
+       at that player.
+    5. *Index and ID* [M]. 0x568a00 counts players by the player vector (list +0 / +8). It fetches each player
+       **by ID** (0x294bc0, the by-ID table at list +0x20 / +0x28), and it skips the ID equal to its own player's
+       list index (+0x48). 0x291a50 gives each new player the lowest free ID, so ID = index in skirmish and
+       campaign, and the mix does no harm there. In the decompiled loop, a null player entry, or a fog failure while
+       the attacker is inside an `Is_Nebula` object (0x35f3b0), does not advance the player index. The remaining
+       iterations then repeat that entry, so later players are not visited.
+    - *Port* (read-only check): `TacticalBattle` sets `PlayerInfo.active = !Is_Neutral` and builds the relation
+      from `bt_relation`. `CombatSystem::gather` / `decide_target` (`engine/tactical/combat/src/combat_system.cpp`) visits every active enemy player. Hostile is targeted, as in retail. The port
+      differs in item 4: it carries one best across all players. To match retail, restart the best at each
+      visited player that has a candidate. Also take the early exit only after the candidate has been accepted
+      as best.
+    - *Optional probe* to close the SPMAT [M]: the SPMAT scenario without the `DEPLOY` calls, run twice at the same
+      frame offset, once with Hostile victims and once with Empire victims. Both should reach state 3 / 4 on v275.
 - **Skirmish with the map / game record byte +0xb5 set** (0x295cf0 → 0x297470) [M: a team-game setting]: same, but
   allies are self or the same team id (player +0x54 ≠ −1); faction is not used.
 - **At run time:** Lua `PlayerWrapper.Make_Ally` (0x6046a0) writes 0, `Make_Enemy` (0x604780) writes 1 (one
@@ -952,7 +1024,8 @@ above.
     the members). Entering 4 raises signal 0x1E. **4 = attacking**: the target is in range (slot 44) and not inside
     the min range (slot 45), set by `Service_Land` 0x634810 / `_Space` / 0x62eeb0. State 3 = in range but the turret
     or facing is not ready yet (slot 48 0x568230 is true while the facing is off the target direction by more than
-half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor; 0x20af60 compare [M on its units]). State 2 = out of
+half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor; 0x20af60 compare; units and the full
+    state table: "Targeting states, slots 47 / 48 and team copies (s78f, 2026-11-03)" below). State 2 = out of
     range. This is the fire-time range gate (LOB_SOLVER §8 item 22).
   - After a shot from a LOBBING_SUPERWEAPON object, TD +0x3c / +0x3d and +0x30…+0x38 are cleared.
 - **ROCKET_ATTACK detection (step 4, hardpoint step 6).** 0x39b950(obj, 11, 1) reads the per-type slot
@@ -981,6 +1054,638 @@ half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor;
     first entry. An empty list or an out-of-range index returns nothing.
   - A team container (slot byte +0x348 ≠ −1) is first replaced by its first member (0x4ec820 on team +0x110: list
     +0x10, count +0x18). An empty team returns nothing.
+- **In-game probe (s78f t01, 2026-11-05; `tools/probe_mod/s7s8_probes/out/20261105-045131`, `-051443`, `-055142`).**
+  - *Deploy window* [H for what was seen]: an ordered `SPMAT_Walker` threw nothing in 0x18 (45 frames). Targeting
+    state went 1 → 3 at the 0x19 frame and 4 eighteen frames later, with the first grenade on that same frame.
+  - *Muzzle types in space* [H for what was seen]: `Underworld_Infantry_Droid_Shuttle`, `UM07_CloudCity_Refinery`,
+    `UM07_Cloud_City_Flyover`, `Moldy_Crow`, `Moldy_Crow_Landing` and `Luke_Jedi_Xwing_Landing` fired.
+    `Tyber_Zann_Boarding_Shuttle_Prologue` and `Underworld_Infantry_Droid_Shuttle_Landing` stayed silent, but their
+    targeting state never reached 4 (0, or 0 / 2), so that is not a muzzle failure. The land control ran only against
+    the Hostile-owned victims that nothing targets (relation item above), so it proves nothing. (s78g t04, §2.10:
+    Hostile-owned victims are targeted. The land control failed for other reasons.)
+  - *First shot after a late spawn*: one `MZ8_Pulse_Cannon_Tank` reached state 4 and fired 40 frames after spawning.
+    Its second did not spawn, so a surviving random delay is not ruled out (one sample, needs at least four).
+  - *First shot after a late spawn, measured* (s78g t05, 2026-11-05, `out/20261105-073814`) [M]. REINF (re-parsed
+    t12 run and this run): four `MZ8_Pulse_Cannon_Tank`s spawned 150 frames apart, each ordered at once to attack a
+    held tank at 200. First-shot delays after spawn were 18 / 29 / 41 / 52. REINF2: six spawned at irregular gaps
+    (200 / 172 / 249 / 141 / 288): delays 9 / 11 / 29 / 41 / 52 / 61. So the delay grows by about **11.3 frames
+    per unit spawned earlier** (least-squares slope; residual 5.9), whatever the gap. It is a per-unit stagger, not
+    a random initial delay (a random one would spread up to 159). The REINF run's first shots also sit on a
+    161-frame clock, but REINF2 does not, so that clock was a coincidence of the equal gaps. Explained by s78h t05
+    (next item): the stagger is the hull turn from the spawn facing, not a count of units or services.
+  - *What the "stagger" is* (s78h t05, 2026-11-05) [H]. It counts nothing. It is the **body turn from the
+    `Spawn_Unit` facing to the target**, and it only looked per-unit because the probe placed each later spawn
+    further along the line, so each one had to turn further.
+    - **`Spawn_Unit` facing** (`LuaSpawnUnitCommandClass::Lua_Call` 0x6a1f90, tactical branch) [H]. The position
+      comes from parameter 2 (0x4990b0; an object gives its position). The orientation is built by 0x20acd0(position,
+      (0, 0, 0)), i.e. the angles **looking from the spawn point at the world origin**: yaw = atan2(0 − y, 0 − x) in
+      degrees, mapped to [0, 360) (yaw 0 when x = y = 0); pitch = −atan2(0 − z, horizontal distance); roll 0. Then
+      0x29e960(type, position, that orientation, player) creates the units. Each one gets it through 0x2b3be0
+      parameter 4. A team container formed by 0x2a5a60 takes the first member's +0x84. An object given as the
+      location does **not** lend its own facing. The galactic branch (mode vf +0xf0 false → 0x6a2520) is a
+      different path.
+    - **The turn.** The order's target is set 1–2 frames after the spawn, and the state becomes 3 (slot 48: off the
+      target yaw by more than half a step). Each service then turns the hull by one step R = `Max_Rate_Of_Turn` ×
+      `Object_Max_Speed_Multiplier_Land` (MZ8: 1.0 × 1.56 = 1.56° per frame; MOVEMENT §3.4). The state becomes 4,
+      and the shot follows at once, when the remaining error is ≤ R / 2. The WEAPON initial delay plays no part,
+      because it is zeroed on the first service, as the item above says.
+    - **Check against both runs.** Victim at (3280, 4640); the attackers' x = 3480 (REINF2 unit 2 at 3387.0, 4730.7).
+      Yaw to the origin is about 233°. Turn needed (frames in state 3 before state 4):
+      - REINF: 26.0° (16), 43.4° (27), 62.8° (39), 80.2° (50).
+      - REINF2: 12.9° (7), 14.1° (8), 43.4° (28), 62.8° (39), 80.2° (50), 93.3° (59).
+
+      All ten fit angle / 1.56 within 1–2 frames. REINF2 units 4 / 5 stand where REINF units 3 / 4 stood and took the
+      same 39 / 50 frames, although 3 / 4 units were alive before them instead of 2 / 3. A facing of 270° (−Y), or
+      the port's +X, does not fit.
+    - **Port check (2026-11-05).** The weapon side matches. `fire_unit_weapon` subtracts the frames since the last
+      service, which start at 0, so the drawn initial delay is gone on a late spawn's first service. The state 3 / 4
+      gate and the turn step also match: `needs_turn_to` uses tolerance R / 2, and `face_toward` makes one
+      clamp(±R) step per service. `turn_step` = `turn_rate` × `Object_Max_Speed_Multiplier_Land` (1.56).
+      **Mismatch:** the port's Lua `Spawn_Unit` (`engine/lua/src/bind_objects.cpp` `spawn()`) gives a position spawn
+      facing +X, and an object-location spawn that object's facing. **Change:** in the tactical store, set
+      `sp.facing` to the unit vector (−x, −y, 0) / |(−x, −y)| from the spawn position, with (1, 0, 0) when x = y = 0.
+      This applies to an object location too, using its position. Keep the company members on that same facing.
+      [port] The 0.3° pitch is dropped, because land units stay level. Not checked: `Create_Generic_Object`,
+      `Reinforce_Unit` and the AI / story spawn paths, which use their own callers (answered by the next item).
+  - *Spawn facing of the other Lua and reinforcement spawns* (s78i t02, 2026-11-05). The orientation is the
+    3-float angle triple an object keeps at obj +0x84 (+0x8c = yaw in degrees, yaw 0 = +X, yaw = atan2(y, x) of
+    the facing; +0x88 = pitch). The object constructor 0x388b60 copies it as given. Its "param 7 = 1" adds type
+    +0xdfc to the **position z** only, never to the angles.
+    - **`Create_Generic_Object`** (`LuaCreateGenericObjectClass` 0x6a1d20) [H]. 0x4990b0 reduces parameter 2 to
+      a position; an object given there lends **only its position**. 0x29f810(type, owner, position,
+      orientation (0, 0, 0), 1, 0) then creates **one** object (no company members, no container), so it faces
+      **yaw 0 = +X**, level. There is **no mode check**: the same holds in galactic, land and space.
+    - **`Spawn_From_Reinforcement_Pool`** (0x6aa200) [H].
+      After it removes one entry of that type from the player's pool, it builds the orientation exactly as
+      `Spawn_Unit` does: 0x20acd0(position, (0, 0, 0)) = **facing the world origin** (+X at x = y = 0), then
+      0x29e960 creates the company with it. No mode check, no reinforcement drop, no transport.
+    - **`Reinforce_Unit`** (`LuaReinforceCommandClass` 0x6a0400, tactical only) [H for the creator and the
+      orientation source]. It does not use the Lua position as a facing target. It queues a real
+      reinforcement:
+      - land (mode 1): a free drop point near the position (0x69fc40, radius 1000), then 0x2b5fe0, the same
+        creator the player's reinforcement drop uses;
+      - space (mode 2): a reinforcement block (0x7235c0 / 0x722e80), which later calls 0x2bf2d0, the same
+        creator the player's space reinforcement uses.
+    - **Player reinforcement drop** (event handler 0x403cb0: land → 0x2b5fe0, space → 0x2bf2d0) [H]. Both
+      creators read the orientation from a **per-player table** in the tactical mode object (mode +0x288,
+      12 bytes per player, indexed by player +0x48) and pass that one triple to every object they create:
+      - land 0x2b5fe0: the landing object (the type's +0x1e68 landing type when set, else the unit type), at the
+        drop point raised by a height offset (z only);
+      - space 0x2bf2d0: the unit, or each company member at its own spread position (0x2a9670).
+      The land drop-zone check 0x4d6fd0 lays out the footprint with the same table yaw.
+    - **Where the per-player table comes from** [H for the writes, M for which marker wins].
+      - Skirmish (`Creating_Starting_Forces_For_Skirmish`, 0x2a4fc0): the orientation (+0x84) of the first
+        `PLAYER_<n>_SPAWN_POINT_MARKER` matched for that player (the marker the starting forces use).
+      - Battles from the campaign (0x2a1eb0): the defender gets the first "DEFENDING FORCES POSITION" marker's
+        orientation. The attacker gets the chosen "ATTACKER ENTRY POSITION" marker's orientation, picked by its
+        distance to the defending-forces markers.
+      - A player with no such marker keeps the table's initial value, **(0, 0, 0) = yaw 0 = +X, level** [H, s78j t01].
+        `GameModeClass` ctor 0x35a5e0 builds the `DynamicVectorClass<Vector3>` (mode +0x280, data +0x288, count
+        +0x290) with one entry per player (count 0x140a16fb0) and zeroes every entry. The writers only overwrite an
+        entry when a marker matched (TACTICAL_GAPS §4.2.2 item 1), so a skirmish player with no matching spawn marker,
+        a campaign attacker with no start units or no entry marker, and every third player (neutral, hostile,
+        pirates) drop at yaw 0.
+    - **Units leaving a land landing object** (s78j t01, 2026-11-05; TransportLanding unload step 0x644330, offsets
+      0x643130, A1_READINGS §35.2) [H unless tagged]. Let ψ = the landing object's orientation (obj +0x84, i.e. the
+      per-player table entry it was created with) and O_j = the unload offset of step j (pack +0x90 = j, one per team or
+      vehicle; already rotated by ψ's yaw in 0x643130). 0x20acd0(from, to) gives yaw = atan2(to.y − from.y,
+      to.x − from.x) in [0, 360) (0 when the xy are equal) and pitch = −atan2(dz, horizontal distance).
+      - **Infantry team (member has `Create_Team`).** The n members of step j are created at the landing's position
+        with the orientation 0x20acd0((0, 0, 0), O_j): **facing outward from the landing centre along the team's
+        offset**. Step **j = 0 is overridden** with the landing's own orientation ψ (roll / pitch / yaw copied from
+        obj +0x84…+0x8c), whatever O_0 is. Every member of the step gets the same triple. Then (not instant) one group
+        move 0x2a7b80 to landing position + O_j, flags 0x20, block +0x44 = 0 and **+0x5c = 0** (no final facing).
+        So the team **keeps its travel heading on arrival** [H, s78k t01: with +0x5c clear the last waypoint's facing
+        vector stays (0, 0, 0), and the Walk locomotor's arrival check keeps the current orientation; MOVEMENT §3.5.1].
+        The walk from the centre to O_j points along the created facing anyway, except for team 0.
+      - **Vehicle (no `Create_Team`).** Created at the landing's position with 0x20acd0((0, 0, 0), O_j) (outward
+        along its offset; **no** j = 0 override; a `Unique_Ground_Unit` substitute and its rider get the same triple).
+        Then, not instant:
+        - with a locomotor of the current mode and type byte +0xd4 set: coordinator move 0x4f8200 to landing position +
+          O_j (snapped for the movement class +0x1688), move block flags +0x48 = 0x20, +0x44 = **ψ's yaw** (landing
+          +0x8c, degrees), +0x5c = 1 (final facing set). **On arrival the vehicle turns to ψ** [H, s78k t01; the
+          chain and the turn rule are MOVEMENT §3.5.1]:
+          - flag 0x20 makes the formation path a straight 2-point path (start → destination, no pathfinding) whose
+            waypoint list skips passability (list +0x44 → path +0x5c, the "forced-move" path flag that the unload
+            finish 0x6438a0 clears with 0x3ac210); block +0x5c = 1 writes (cos ψ, sin ψ, 0) into the facing of that
+            path's last waypoint (0x417520 → 0x550bd0); the unit's own path is a copy of it (0x42c680 → 0x5c46a0);
+          - the walk itself faces the travel direction, which is the created facing yaw(O_j), so there is no start
+            turn;
+          - in End Move → state 0x15 (0x61fc30) the unit, now on the last waypoint, compares its yaw with the
+            waypoint facing (0x61d570 → 0x61d890, through `Movement_Directions_Count`, default 1 = that facing
+            exactly). Difference > **10°** → turn state (0xf → 0x10): an optional pre-turn clip (`Has_Pre_Turn_Anim`,
+            clip 0xc / 0xe by side), then a **rate-limited turn-to** at `Stopped_Rate_Of_Turn` (when > 0, else
+            `Max_Rate_Of_Turn` × the mode multiplier) that lands **exactly on ψ** (0x61e730 clamps the last step);
+            difference ≤ 10° → no turn, the path is popped and the unit keeps its arrival yaw (within 10° of ψ);
+          - so it is a turn-to, never a hard set. With the default layout O_j is not straight ahead of ψ, so the
+            vehicle normally ends exactly on ψ after a visible turn in place;
+          - **interrupted**: the unit and its container are locked (0x3a8e50) from the exit move until the unload
+            finish, so player / AI move orders that include it are refused meanwhile and it keeps executing the exit
+            move. The finish (0x6438a0) unlocks it and clears only the path's skip-passability byte, not the waypoint
+            facing, so a vehicle that arrives after the finish still turns. A move given after the unlock replaces the
+            path; an ordinary order's block has +0x5c = 0, so the new arrival keeps its travel heading (no turn to ψ). A
+            stop (0x4261f0) drops the path: no turn [M for the stop path, MOVEMENT §6.2]. A move with its own facing
+            (MoveToPositionFacing) turns to that facing instead;
+        - otherwise: placed at landing position + O_j at once (0x3abb80) and its orientation **set to ψ** (0x3a8710 with
+          landing +0x84).
+      - **Instant-unload mode** (0x35e4c0 +0x30 set, [M] which mode): no move, no placement; every unit stays at the
+        landing's position with its created orientation.
+      - So after the unload: teams face outward along their offset (team 0: the entry facing), vehicles end on the entry
+        facing ψ (placed: exactly; moved: turned to exactly ψ on arrival when more than 10° off, else within 10°).
+      - **Port (s78k t01):** `TacticalBattle::landing_service` (`engine/apps/sim/src/tactical_battle.cpp`) sends
+        the exit move with no flags and no facing, and the land movement (`MovementSystem::tick_land`,
+        `engine/tactical/movement/src/movement_system.cpp`) ignores `Unit::facing` on arrival (only space turns). To
+        match: give both exit moves `kMoveFlagSkipValidation` (0x20; straight path, no passability), give the vehicle's
+        move `facing_deg = yaw(ψ)` (not the team's), and add the land arrival turn of MOVEMENT §3.5.1 for any land move
+        with a facing.
+    - **Summary for the port:**
+
+      | Spawn | Facing |
+      |---|---|
+      | `Spawn_Unit` (tactical) | toward the world origin (item above) |
+      | `Spawn_From_Reinforcement_Pool` | toward the world origin |
+      | `Create_Generic_Object` | +X (yaw 0), any mode, even when given an object |
+      | `Reinforce_Unit`, player reinforcement drop | the landing object and a drop without one: the owner's start-marker facing (per-player table; yaw 0 when no marker) |
+      | units leaving the landing object | team step j: yaw of O_j (j = 0: the landing's facing); vehicle: created at yaw of O_j, ends on the landing's facing |
+
+**Targeting states, slots 47 / 48 and team copies (s78f, 2026-11-03)** [H unless tagged]. TD = obj +0xf0; the TD
+pack is shared by TARGETING, WEAPON (TD +0x80 = the WeaponBehavior, stored by its attach 0x54ceb0) and TURRET
+(TD +0x88 = the TurretBehavior, stored by its attach 0x632120).
+
+*States of TD +0x18* (written only through slot 31 and the team copy of it, below; the writers found are 0x565f90,
+0x569160, the land / space / team services and 0x62f550):
+
+| state | written by | meaning |
+|---|---|---|
+| 0 | target clear 0x565f90 | no target |
+| 1 | `Set_Target` 0x569160 | target just set, not yet evaluated |
+| 2 | the services | target out of range (slot 44 false or slot 45 true), or "hold fire" (below), or a moving unit that may not fire on the move |
+| 3 | the services | in range, but the turret has not reached its aim, or the body must still turn to face the target |
+| 4 | the services | attacking: the own-weapon gate step 7 passes |
+
+*Land unit service* (`Service_Land` 0x634810), after the target checks, when slot 44 is true and slot 45 false:
+1. **TURRET present (TD +0x88):** nothing happens while the unit is in a Walk deploy transition (0x18 / 0x1A), or
+   while it is an `Auto_Deploys` (+0xd0) `Deploys` (+0xd1) unit that is not deployed (0x39a390) and has
+   `Fire_Weapon_When_Undeployed` (+0xaf) clear: the state is left as it was. Otherwise:
+   - the turret can aim at the target (0x631cc0) → aim it (0x632050): angles reached → **4**, else **3**;
+   - it cannot aim (outside `Turret_Rotate_Extent` / `_Elevate_Extent`, or no lob arc) → if the unit is deployed,
+     or the target is not the formation's attack target (0x41a2e0), or the target type's
+     `Should_Cause_Limited_Turrets_To_Turn` (+0x80) is clear: the target is dropped (slot 27) and the service ends;
+     else the body turns: unless the unit is moving, locomotor vf +0x218 gets the vector to the target (a team
+     target: its member, 0x566aa0) (a turn-in-place request: Walk 0x61e4b0 pushes a one-waypoint path at the
+     unit's own position facing that vector, kind 5, +0x6d set; the locomotor turns in its later frames; s78f t08
+     [H]); state **3**.
+2. **No TURRET, WEAPON present (TD +0x80):**
+   - **moving** (0x39ade0 = locomotor vf +0x1c0(0)): state **4** when the model has **no** Attack (type 5) clip
+     (0x397ae0(obj, 5) = the clip count), else **2**. So infantry with attack animations do not fire while they
+     move; vehicles without them do.
+   - **not moving:** t = slot 48 (needs to turn). An auto-deploy check (0x568e60) may request the deploy
+     (0x391260). Then:
+     - t true and (`Deploys` clear, or `Must_Face_Target_To_Attack_When_Deployed` (+0xa6), or
+       `Fire_Weapon_When_Undeployed` (+0xaf)): slot 47(1), state **3**; then the locomotor's vf +0x2e8(target) (turn
+       request: an **immediate** yaw step of at most the turn rate, s78f t08 [H]) and slot 48 again: still off →
+       stays 3; now facing → **4**;
+     - otherwise: when `Deploys` is clear the facing is **snapped** to the target (0x394440: yaw and pitch from
+       obj +0x78 to the target position (a team target: its member); pitch 0 when
+       `Targeting_Land_Model_Stay_Horiz_Flat` (+0xad); with the flag clear, locomotor vf +0x2f8 is then called:
+       the terrain conform 0x42d6a0, which re-derives pitch / roll from the ground and keeps the yaw, s78f t08
+       [H]); state **4**. A deployer that need not face (no +0xa6, no +0xaf) gets 4 without the snap.
+3. **Neither TURRET nor WEAPON:** state **4**.
+
+After that, in every case: state 4 → slot 47(1). Out of range (slot 44 false or slot 45 true): the turret aim is
+released (0x6319d0(turret, 1): "aim requested" TD +0xf6 := 0); with a target, a unit that is neither deployed nor
+deploying, or whose `Max_Dist_Walk_While_Deployed` (+0x23b0) > 0, gets state **2**; a deployed / deploying one drops
+the target. **Hold fire:** last, state 4 with target == the pending-ability target (TD +0x148) and the target type's
+`Should_Attacker_Hold_Fire_For_Special_Ability` (+0x9e) set → state **2** (land, space and team services).
+
+*Space unit service* (0x633ae0): in range → no TURRET: **4**; TURRET: can aim → aimed **4** / not yet **3**; cannot aim
+→ drop the target. Slot 48 is not used in space; there is no facing state.
+
+*Slot 48* (0x568230, "needs to turn"; read-only, no state of its own). True when |wrap(yaw(obj +0x78 → target
++0x78) − obj yaw (+0x8c))| > tol, tol = 0x372560(type) / 2 = `Max_Rate_Of_Turn` (+0x38c, degrees **per frame**
+(per turn call); no frame-time factor anywhere, s78f t08 [H]) × the
+mode multiplier (land `Object_Max_Speed_Multiplier_Land` 1.56; factor 1 when type flag (+0x790) byte 1 bit 0) / 2,
+**except tol ≥ 90 → 0.01°** (0x20af60). Yaw from 0x20acd0 (degrees, [0, 360)); the difference is wrapped to
+(−180, 180]. Target redirect: a team-container target with a shooter whose slot byte +0x33b ≠ −1 is replaced by
+the pending-ability target when that is one of its members, else by its member nearest the shooter (0x404fc0).
+**Readers:** only `Service_Land` (own-weapon branch, twice) and the TeamTargeting land service 0x62eeb0 (twice,
+through its override). No other caller (WEAPON, the gate, Lua and space never read it).
+
+*Slot 31* (0x568c80, set state s):
+- s = 4: the first time (current ≠ 4) signal **0x1E** is raised on the object; for a member of a team with a
+  member list, only the team's first member (0x4ec820) raises it, on the container. (Its only listener is the
+  AI task force: Lua `Target_In_Range`, s78f t08 below.) Then the pending-ability pack
+  (obj +0x100) is told the target (0x37c9a0).
+- s = 4 is **not written** (the old state stays) when the pending-ability target and the current target (each
+  replaced by its container when it has one) are the same object and a pending ability is set (TD +0x150 ≠ 0), or
+  when the type has `Is_Stationary_When_Attacking` (+0x26) and the locomotor's vf +0x1a8 ("moving") is true.
+- Any other s is written as is.
+
+*Slot 47* (0x569540, attack-idle pose; called with 1 at state 4 and on the own-weapon "needs to turn" path):
+- an `Auto_Deploys` + `Deploys` unit without `Fire_Weapon_When_Undeployed`: when TD +0xf4 (the ordered-target flag
+  written by slot 32 from `Set_Target`) is set and the current clip is not 25 (Deploy), request the deploy
+  (0x391260);
+- any other unit: when (argument 0 or `Locomotor_Has_Animation_Priority` (+0x37) clear), the locomotor is not moving
+  (vf +0x1a8), the current clip is not a flinch (79–86, 0x27b590), not 5 (Attack) and not 6 (Attack Idle), and the
+  animation gate 0x397040 is false: play clip 6 Attack Idle, index 0, looping, **blend = one synced
+  `Get_Float(0.2, 0.75)`** (0x1401ffbb0 on 0x140a13e24), speed 1.0. So entering the pose costs one synced draw;
+  while clip 5 or 6 plays, nothing is drawn.
+  - **Order of the tests (s78j t02, re-read 2026-11-05)** [H]. 0x569540 and the per-member 0x569400 have the same body:
+    the current clip is read first (0x3956a0: obj +0x2a0 → +0xc4 when +0xb8 is set, else −1). The draw and the play
+    sit **inside one conjunction**, evaluated left to right with short-circuit: (arg 0 or animation priority clear) →
+    not moving → not a flinch (0x27b590: 79–86) → **clip − 5 > 1 (unsigned), i.e. not 5 and not 6** → 0x397040 (obj
+    +0x2a0 → byte +0x108) false → `Get_Float(0.2, 0.75)` → 0x3a92f0(obj, 6, 0, loop 1, blend, 1.0). There is no else
+    branch for the animation case. So while the current clip is ATTACK (5) or ATTACKIDLE (6) retail **neither draws
+    nor restarts the clip**; the same holds when 0x397040 is true (no draw). A model without clip 6 stays on its old
+    clip and so draws every service (the t11 result below).
+
+*Team targeting copies* (`TeamTargetingBehaviorClass`, vtable 0x8afd90, on ground team containers only: its service
+0x62ee00 runs 0x62eeb0 when the container's locomotor kind is 1 and (obj +0x3a1 & 2 clear or
+`Targeting_Allowed_When_Burning` (+0x83))). Member order = the team list order (0x405300 count, 0x4052d0 index).
+Overrides:
+- **slot 31** (0x62f550): the base on the container, then the **same state written raw** to every member's
+  TD +0x18 (no signal, no hold rule). So members can be in state 4 while the base kept the container's old state.
+- **slot 32** (0x62f4c0): the base (TD +0xf4 := flag, when a target exists or the flag is 0), then the flag written
+  raw to every member's TD +0xf4.
+- **slot 47** (0x62f5e0): the container itself does nothing; 0x569400 (the slot-47 body above) runs on **each
+  member** in order, so each member entering the pose draws its own `Get_Float(0.2, 0.75)`.
+- **slot 48** (0x62ed60): true when **any** member needs to turn (0x568120 per member, same rule).
+- **slot 42** (0x62ecc0, projectile for the range slots): the first member whose `Projectile_Types` has the index.
+- **Not copied:** the target TD +8 and the hardpoint TD +0x10. Land team members (`Squad_*` types:
+  `LAND_TEAM_INFANTRY_LOCOMOTOR`, WEAPON, no TARGETING) keep TD +8 null; their WEAPON service and 0x54c190 fall back
+  to the container's TD +8 when their own is null and the container's locomotor answers vf +0x230 (LandTeamContainer
+  only) [M: no other writer of a land member's TD +8 was looked for].
+- *Team service differences* (0x62eeb0, in range): a **moving** container → state 4 only while SPREAD_OUT (7) is
+  active (0x39b950(container, 7, 1)), else 2. Not moving: no member needs to turn → every member's facing is
+  snapped to the target (0x394440; a team target: its member) and state 4; else slot 47(0) on the members, state 3,
+  the container's locomotor vf +0x2e8(target), and 4 if no member needs to turn any more. No TURRET branch.
+- Space squadrons have no team targeting service; their shared target is FIGHTER_FLYING §4.10 B (team data +0x30,
+  `Set_Target` on every member).
+- *When the container is serviced, and a member's death in the same frame* (s78h t06, 2026-11-05).
+  - **Its own entry** [H]. TeamTargeting is a behaviour of the container object. It runs from the container's own
+    object service (0x3a6b80, behaviours in attach order), at the container's own place in the store's serviced
+    list (OBJECT_RUNTIME §5.3). It is never called through a member or a leader. 0x62ee00 reads only the container
+    (param_1[5]): its locomotor kind, its +0x3a1 burning bit and its TD. 0x62eeb0 walks the members only to push
+    state, facing and pose.
+  - **A member's death does not touch it** [H for one service per frame from the service structure; M that no
+    death hook writes the container's TD, because the death path (OBJECT_RUNTIME §2.2) was not re-read for one].
+    Nothing on the death path re-services the container or changes its
+    TD (target TD +8, state TD +0x18, scan timer TD +0x20). So a container alive at its slot gets exactly **one**
+    TeamTargeting service that frame, whichever members died before or after its slot. There is no re-service and
+    no hand-over. A container that dies earlier in the walk keeps its list entry with zero serviced behaviours until
+    the flush (OBJECT_RUNTIME §5.3), so it gets no service.
+  - **Its place relative to its members** [H creation order, M list direction]. 0x29e960 (the creator behind Lua
+    `Spawn_Unit`; other spawn paths that reach 0x2a5a60 were not traced) first creates every company unit (type list +0x958 / +0x978 → 0x2b3be0). Only then, when
+    the first unit's type has +0x67 set, does 0x2a5a60 build the team container (0x29f810 at the members' mean
+    position, then members added by 0x404190). The container therefore registers **after** its members. The serviced
+    list is walked newest first, so the container is serviced **before all of its members** each frame. Their
+    WEAPON services then read the state it pushed that same frame.
+  - **Port (2026-11-05).** The port has no container unit. The team's lowest-index member (`team_leader`, set in
+    `engine/apps/sim/src/tactical_battle.cpp`) stands in for it, and phase D walks `units_` from the highest index
+    down. That gives two differences from the above:
+    1. The head service runs **after** the other members' slots, so their `update_weapons` read the previous
+       tick's team state (one tick late).
+    2. The s78g t06 hand-over goes to the lowest-id live member. That member always has a higher index than the dead
+       leader, so its slot was passed earlier in the walk. A leader killed inside phase D, from a slot between the
+       heir's and its own (or by its own burning / infection service), leaves the team with no TeamTargeting that
+       tick. Retail never skips one.
+
+    **Recommended change** (in `combat_system.cpp` phase D): run each land team's TeamTargeting, meaning the
+    head's `decide` (on `cands_[head index]`) followed by `team_targeting_service`, **once per tick at the team's
+    container slot**. That slot is just before the team's highest-index member, reached first in the descending
+    walk. Run it even when that member is already dead, as long as the team still has a live head. Keep a per-team
+    "serviced this tick" flag, and drop the head's own-slot team call. A hand-over after the slot then needs no
+    re-service, and one before it is picked up at the slot. `hand_over_team` keeps the record copy, and its in-tick
+    re-gather is still needed only for the copied scan flags. This moves team draws (scan, slot-47 blends) earlier
+    in the tick, so the land team goldens and CRCs change. A smaller fix that closes only gap 2: at the dead former
+    leader's own slot, if its team has not been serviced this tick, service the current head there.
+
+  - **Port (s78i t03, 2026-11-05).** A land team keeps TeamTargeting while its head lives, whatever its member count:
+    a stand-in `team_leader` left with no live member, or a team of one, is still serviced at its container slot by
+    `decide` + `team_targeting_service`, never by its own Service_Land. This matches retail, where the container's
+    TeamTargeting runs while the container lives. `CombatSystem::land_team_lead` returns the head for any team unit,
+    the head included. A team whose head dies with no member left has no heir and ends.
+
+*For the implementer:* keep one state per object (0–4) and gate the own weapon on 4. Land: turret units use "turret
+aimed"; weapon units use "facing within half a frame of turn" (snap when within, turn request when not); moving
+units fire only without Attack clips. Team containers compute the state and push it raw to the members; members use
+the container's target. Draw `Get_Float(0.2, 0.75)` each time a unit (or each team member) enters Attack Idle
+through slot 47.
+
+**s78f t08 answers (2026-11-04)** [H unless tagged]. R below = the turn rate 0x372560(type) =
+`Max_Rate_Of_Turn` (+0x38c) × M × D, where M = the mode multiplier (`Object_Max_Speed_Multiplier_Land` 1.56 in land,
+galactic 5.0, space 1.2, 1.0 for any other mode) and D = the debug game-speed factor 0x140a28568 (1.0); M and D are
+both skipped (factor 1) when type flag (+0x790) byte 1 bit 0 is set. The vanilla default `Max_Rate_Of_Turn` 2.3
+gives R = 3.588° and a slot-48 tolerance of 1.794° in land.
+
+1. **Turn request vf +0x2e8 is immediate.** Walk (vtable 0x8ad798) and LandTeamInfantry (0x8af8d0) share 0x42d7b0:
+   with an owner and a target, the target is replaced by its member (0x566aa0) when it is a team container and the
+   shooter's slot byte +0x33b ≠ −1; the facing toward it is computed (0x20acd0, obj +0x78 → target +0x78) and
+   handed to vf +0x2f0, which turns **in the same call**:
+   - Walk 0x620710: e = wrap(target yaw − obj yaw +0x8c) to (−180, 180]; yaw += clamp(e, −R, +R) (no step when
+     e = 0); roll and pitch are not stepped (the target pitch is ignored). The new orientation is written at once to
+     both copies, obj +0x84… and +0x90… (0x3a8710; skipped while obj +0x3a0 bit 0x10 is set), then vf +0x2f8 = the
+     terrain conform 0x42d6a0 re-derives pitch / roll from the ground with the new yaw and sets the height.
+   - LandTeamInfantry 0x62d400: the same, with R × GC `Fleeing_Infantry_Speed_Bonus` (+0x150c) while the member's
+     (or its team's) current path is kind 7 (0x39a5b0).
+   - LandTeamContainer (0x8a3630) vf +0x2e8 = 0x5adec0: resolves a team target to its member once, then calls each
+     member's own locomotor vf +0x2e8 in team-list order (0x405300 / 0x4052d0), so every member steps by its own R.
+
+   So the second slot-48 check in the same service sees the stepped yaw. A unit e degrees off (e > R/2) reaches
+   state 4 in the same service when e ≤ 1.5 R; in general after ceil((e − R/2) / R) services, one step per service.
+   The leftover error (≤ R/2) is removed by the snap 0x394440 on the next service (slot 48 false → snap branch).
+   No goal is stored for later frames [M: an idle Walk vf6 that re-faces the unit on its own was not looked for].
+   The other turn call, vf +0x218 in the TURRET "limited turret" path, differs: it is a turn-in-place path that the
+   locomotor executes over later frames.
+2. **Unit of the tolerance.** Degrees per call of the turn function, i.e. per targeting service; the targeting
+   service runs on every behaviour service call (§2.1), so per sim frame (30 fps). There is no division by the
+   frame rate or multiplication by a frame time in 0x372560, 0x620710, 0x62d400 or 0x20af60. Exact rule: needs to
+   turn ⇔ |wrap(yaw(obj → target) − obj +0x8c)| > tol, tol = R / 2, except tol := 0.01° when R / 2 ≥ 90.
+3. **No locomotor (structures with WEAPON and no TURRET).** Slot 48 does not use the locomotor (only the owner's
+   +0x78, +0x8c and type), so it works as for any unit. In `Service_Land`, 0x39ade0 ("moving") is false when the
+   locomotor slot byte obj +0x333 is −1, so the not-moving branch runs; `Deploys` is clear, so the auto-deploy check
+   returns false (and 0x391260 would do nothing). Then:
+   - target within R/2 of the current facing → the snap 0x394440 turns the structure to face the target exactly
+     (yaw and pitch; the conform is skipped without a locomotor) and state **4**;
+   - otherwise slot 47(1) (the Attack Idle pose, with its synced draw) and state **3**; the turn call is skipped
+     (vf +0x10(obj, 1) returns null) and the service ends in state 3. Nothing turns the structure, so it stays in
+     **3 as long as the target stays outside the ±R/2 cone**, and fires once a target is inside it.
+
+   FoC example (scan of the FoC XML): `Empire_Offensive_Sensor_Node` (GroundStructure; LandBehavior TARGETING,
+   WEAPON, no TURRET; no `Max_Rate_Of_Turn`, so 2.3 and a cone of ±1.794°) [M: the in-game effect was not observed].
+4. **Signal 0x1E listeners.** The image has one subscription to 0x1E (every 0x220e90 / 0x2406c0 call site was
+   checked, including the register-valued ones: 0x6afe00 is called with 0x12, 0x72bfe0 uses 5 / 8, 0x2215b0 only
+   re-subscribes existing listeners after a load): `TaskForceClass::Add_Force` 0x5f9a90 subscribes the AI task force
+   to signals 0x1A, 0x10, 0x1E, 0x1F, 0x20, 0x21, 0x2B, 0x2C, 0x29 and 0x2D of each unit it takes (unsubscribed on
+   0x10 / 0x1A). Its handler 0x5fe5d0, case 0x1E: target = 0x397a40(unit) (the formation's attack target 0x41a2e0,
+   else the TD +8 target); none → nothing; else it raises task-force plan event **12 `Target_In_Range`** (0x6006b0,
+   not queued, so `<TF>_Target_In_Range` / `Default_Target_In_Range` runs synchronously) with (unit, target).
+   Dispatch (0x240940) calls only the listeners of that id; there is no catch-all listener. So no animation, sound or
+   other engine code reacts to 0x1E: it matters only for units in an AI task force, through the AI's Lua micro
+   (AI_TACTICAL §8). For a team member it is raised on the container (first member only), so the event names the
+   container.
+5. **Auto-deploy check 0x568e60** (this = TARGETING, owner = obj): false when TD is null, `Deploys` (+0xd1) or
+   `Auto_Deploys` (+0xd0) is clear, `Fire_Weapon_When_Undeployed` (+0xaf) is set, or the unit is deployed (0x39a390)
+   or deploying (0x39a400 = locomotor vf +0x130, Walk 0x61df60). Otherwise **true** when any of:
+   - the target is ordered (slot 33 0x566b40, TD +0xf4);
+   - the owner player (player list 0x140a16fd0, index obj +0x58) has an AI (player +0x360 ≠ 0) and is not human
+     (player +0x62 = 0): an AI's auto-deployers deploy for any target in range;
+   - the current target (TD +8) is the formation's attack target (0x41a2e0 on locomotor pack +0x1f0; no formation →
+     false) and either `Max_Dist_Walk_While_Deployed` (+0x23b0) > 0, or the formation has a current block
+     (0x41afb0 count > 0, 0x41a580) whose flags have attack-move (0x01) or guard (0x02).
+
+   Else false: a human player's auto-acquired target outside such an order does not deploy the unit. `Service_Land`
+   then calls 0x391260 = the deploy request: needs `Deploys`, a locomotor slot and locomotor pack +0x2b3 clear; then
+   locomotor vf +0x118(1) (Walk 0x61d300, which starts the Deploy transition unless already in 0x18 / 0x19). The
+   check runs in the TURRET branch only while not moving, and in the WEAPON branch after slot 48. **Slot 47
+   confirmed:** with `Auto_Deploys` + `Deploys` set and `Fire_Weapon_When_Undeployed` clear, 0x569540 / 0x569400 call
+   0x391260 when TD +0xf4 (ordered) is set and the current clip (0x3956a0) is not 25 (Deploy); no pose is played.
+   0x569540 (not the per-member 0x569400) first returns when the behaviour's counter +0x3c > 0 (0x4c36f0)
+   [M: the counter's name; probably the behaviour-disable count].
+6. **TURRET units without `Deploys`: no shortcut.** The deploy tests in the TURRET branch only decide whether the aim
+   runs; the helpers read deploy state only to choose the deployed extents / rest angles, which 0x39a390 gives only
+   to `Deploys` units. 0x631cc0(turret, target) = can aim (0x631a00 on the aim point 0x398440 = target position +
+   type z +0x4dc): false with no TD, no turret bone (TD +0x40 = −1; set at attach 0x632120 from `Turret_Bone_Name`)
+   or no type; false when a lobbed (category 3) current projectile has no lob solution from the weapon's next fire
+   bone; false when |yaw relative to the body (obj +0x90…)| > `Turret_Rotate_Extent_Degrees` (+0x5a0) or, unless
+   `Turret_XY_Only` (+0xb3), |pitch| > `Turret_Elevate_Extent_Degrees` (+0x5a4); else true. 0x632050(turret, target)
+   = aim: false with no TD or no turret bone; else aim point → TD +0x60, "aim requested" TD +0xf6 := 1, one slew step
+   0x631210 (target angles TD +0x54 := (0, pitch, yaw); current TD +0x48 moved by at most `Turret_Rotate_Speed`
+   (+0x5a8) degrees per call per axis, no overshoot); a 0 from the step (out of extent, no lob solution) →
+   +0xf6 := 0, false; else true **only when current = target within 0.0001° per axis** after that step
+   (LOB_SOLVER §3.6). So "aimed" needs the turret to reach the angles; that can happen in the first service when the
+   remaining error ≤ `Turret_Rotate_Speed`. The turret's own service 0x632270 does not slew while +0xf6 = 1, so there
+   is exactly one slew step per targeting service. A TURRET unit whose model lacks the turret bone never aims: its
+   target is dropped (or the limited-turret body turn applies) every service.
+7. **Pending ability (TD +0x148 target, +0x150 ability name CRC, +0x154 type).** Only slot 38 (0x5688f0) sets them:
+   when no target is pending or the new one is non-null, it stores (target, CRC, type), TD +0x10 := the hardpoint,
+   and subscribes to the target's signals 0x28 and 1; when one is pending and null is passed, it raises 0x29 on the
+   owner and clears the target (CRC / type take the passed values). Callers:
+   - `Order_Attack` 0x38d730 with an ability CRC ≠ 0: command 40 / 57 `TacticalSpecialAbility` and Lua
+     `Activate_Ability` with a target (ABILITIES_HARDPOINTS §2.9) → (target, hardpoint, CRC, type);
+   - `Order_Attack` without a CRC (auto acquisition and attack orders) first runs the autofire driver 0x37d280 (owner
+     pack obj +0x100): when it picks an ability (one synced `Get_Int` when several qualify) it stores
+     (target, 0, CRC, −1); when it picks none and the order is ordered (player / script), slot 38(0, 0, 0, −1) clears
+     the pending ability.
+
+   Cleared to (null, 0, −1) by: 0x565de0 when the ability fires (first step of every targeting service); slot 27
+   0x565f90 with its flag set (`Service_Land` passes "target == pending target" when it drops a target); 0x5661f0
+   (vf +0x80) when the pending target is the released object (raises 0x29). So TD +0x148 is non-null exactly while a
+   targeted ability (ordered, or chosen by the autofire driver) waits for range, and +0x150 is then non-zero.
+   Effect of the slot-31 rule: while the pending target (or its team) is the current target (or its team), state 4
+   is never written and the old state stays. A unit that was not yet attacking holds fire (2 / 3) until the ability
+   fires; a unit already in 4 keeps firing, unless the target type has `Should_Attacker_Hold_Fire_For_Special_Ability`
+   (+0x9e), which the end of the land / space / team services turns into **2**.
+
+*For the implementer:*
+- Make the facing turn immediate: one clamp step of R per targeting service, then re-test slot 48 in the same
+  service (state 4 at once when e ≤ 1.5 R). Teams: one step per member, then re-test "any member off".
+- R is degrees per frame: `Max_Rate_Of_Turn` × mode multiplier (× 1.0), no frame-time scaling; tol = R / 2, 0.01°
+  when R / 2 ≥ 90.
+- Units without a locomotor never turn: state 3 until the target is within ±R/2, then snap and 4.
+- Send "entered state 4" only to AI task forces (`Target_In_Range(unit, target)`, synchronous); nothing else listens.
+- Auto-deploy when: ordered target, or AI player, or formation attack target with walk-while-deployed or an
+  attack-move / guard block.
+- A turret is aimed only when the slewed angles equal the target angles; no deploy-flag shortcut; no turret bone
+  means never.
+- The pending ability comes only from slot 38 (`Order_Attack` with a CRC, or the autofire driver); while it names the
+  current target, the state cannot rise to 4.
+- Slot 47 on a model without an Attack Idle clip (s78f t11, in-game probe 2026-11-05) [M]: the current clip **stays
+  unchanged**, so every slot-47 service in state 3 / 4 draws `Get_Float(0.2, 0.75)` again. Setup: six AI-owned
+  `Pod_Walker`s (`EV_PODWALKER`, no `ATTACKIDLE` clip, no TURRET) with the locomotor suspended, ordered to attack
+  held Empire T4Bs.
+  - Clip: through hundreds of frames in state 3 and 4, the walkers' current clip stays 0 (Idle, index 0) and its
+    frame keeps counting up (`out/20261105-055142`, IDLE47). Clip 6 is never current, so the "not 5 and not 6" gate
+    passes on every service.
+  - Draws: when the six walkers (and their held victims) despawn, the steady floor of synced draws per frame falls
+    by exactly 6. That is 46 / 48 → 40 / 42 on a quiet background (`out/20261105-060346`, IDLE47T, F 3750), and
+    448 → 442 in the earlier run (F 2251): one draw per walker per frame.
+  - [M] because the despawn also removed the victims, and the planned on/off toggle failed: `Stop()` did not clear
+    the walkers' targeting, which stayed at 4.
+  - Control: the `Rebel_Infiltrator` phase never took a target (state 0), so there is no with-clip comparison yet.
+  - With-clip control and victim toggle (s78f t12, 2026-11-05, `out/20261105-062322`, IDLE47V) [M]. Six attackers
+    held in place; each 300-frame cycle spawns six held victims and orders the attacks ("on"), and despawns the
+    victims 150 frames later ("off"); five cycles per phase. Median step of the synced draws per frame across the
+    edges: `Pod_Walker` (no ATTACKIDLE) on **+7** / off **−6.5**; `Rebel_Infiltrator` (has ATTACKIDLE) on +5 / off
+    −1; victims only, no attackers: on −2 / off +89 (bursts of about 100 steps in the background make single edges
+    noisy). At on + 60 the walkers were in state 4 on clip 0; the infiltrators were mostly in state 0 (one in state 4
+    on clip 6). So the about-6 step comes with six no-clip walkers in state 4, as a per-service slot-47 redraw
+    predicts, and the victims alone do not produce it. The with-clip side is still not clean, because the
+    infiltrators mostly did not take their targets.
+  - With-clip control again (s78g t03, 2026-11-05) [M: not separated]. The with-clip attacker was
+    `Dark_Trooper_PhaseII`; clip ids 5 / 6 are ATTACK / ATTACKIDLE. The troopers took their targets (state 4,
+    2730 of 3750 attacker-frames in ATTACK, 1020 in ATTACKIDLE). The Pod_Walkers stayed on clip 0. The background is
+    about 440 synced draws per frame and drifts ±100 over 150 frames, which swamps a 6–12 draw effect.
+    - IDLE47W (`out/20261105-073814`, 6 attackers): per-cycle on-minus-off was P +1.9 ± 31.8, D +13.5 ± 25.6,
+      V −48.6 ± 39.9.
+    - IDLE47X (`out/20261105-092438`, 12 attackers, 15 cycles per phase, drift-cancelled): P−V −42.3 ± 24.4,
+      D−V +27.7 ± 17.4, P−D −70.0 ± 25.4.
+    Neither run separates the phases at 3 sigma, so whether a model with an ATTACKIDLE clip skips the per-service
+    draw is still open. The draw-count method needs a quiet background (no AI army) or a per-object read of the
+    slot-47 call to settle it.
+    - IDLE47Q (s78h t02, `out/20261105-104750`, Claude drove the game): the same three phases after a Lua sweep that
+      despawns both sides' mobile units, every 300 frames. The background fell from 210 to **4.5 draws per frame**.
+      Per on/off step (12 attackers), the medians were **P (Pod_Walker, no clip, clip 0 throughout) +13 / −13**,
+      **D (Dark_Trooper_PhaseII, in ATTACK 5 or ATTACKIDLE 6 throughout) +11.5 / −12**, and V (victims only) 0 / +0.5.
+      The per-cycle means were P −1.8 ± 6.5 and D +17.5 ± 3.5. P is pulled down by two periodic −86 steps, which do
+      not come from the attackers. Kit verdict `WITH_CLIP_ALSO_DRAWS`.
+      [M] Both models add about one synced draw per attacker per frame, so the with-clip model does not go silent.
+      That is one draw per service in state 4. It does not fit the port's gate, which skips the draw while the current
+      clip is ATTACK / ATTACKIDLE (`tactical_battle.cpp` `attack_idle`).
+      This is not settled. The attackers fire at the invulnerable victims (`Attack_Target`), and the Dark Troopers'
+      shots may draw too, so part of D's draws may be fire, not slot 47. Leave the port unchanged until the next run.
+      Next run: the same setup with the attackers' fire blocked but targeting kept (follow-up group s78i). If D
+      still adds ~1 draw per attacker per frame there, drop the clip 5 / 6 condition from the draw.
+    - IDLE47N (s78i t01, `out/20261105-125642`, Claude drove the game): IDLE47Q's quiet background (557 → 3.2 draws
+      per frame after the sweep), 12 attackers, 15 cycles. Fire blocked with Lua `Prevent_All_Fire(true)`.
+      - Set at placement, before any attack order (Pod_Walker phase P, Dark_Trooper phase D): the attackers **never
+        target** (state 0, clip 0 Idle throughout), so this way of blocking fire also blocks targeting.
+      - Set 6 frames after each cycle's `Attack_Target` (phase E, Dark_Trooper_PhaseII): state 4 for 93% of the
+        attacker-frames, clip ATTACKIDLE 82% / ATTACK 3%, **0 shots** from on + 10 to off + 5 (115 shots in the first
+        10 frames, before the flag). On / off steps were +8…+13 / −7…−13 (13 of 15 edges each; two ±90 steps are
+        background bursts): median **+10.5 / −10.5**, V subtracted **0.85 draws per attacker per frame**. Firing
+        reference F: 236 shots, median +23 / −13.5.
+      - The kit printed `UNCLEAR` only because the two background bursts widen the per-cycle mean
+        (−0.53 ± 1.22); the step medians are clean.
+      [M] A Dark Trooper in ATTACK / ATTACKIDLE that does not fire still draws about once per frame, so the slot-47
+      draw does not skip clips 5 / 6. **Port (2026-11-05):** `tactical_battle.cpp` `attack_idle` spends the draw on
+      every service (not moving, no animation priority, not in a flinch); it only skips the clip restart while the
+      current clip is 5 / 6. Whether retail also restarts the clip then is not measured.
+      - **s78j t02 (RE, 2026-11-05): IDLE47N phase E did not measure slot 47** [H]. Lua `Prevent_All_Fire(true)`
+        (0x57ee20) suspends behaviours **9 TARGETING and 10 WEAPON** (vf +0xc0, suspend count +0x3c + 1) on the object
+        (and on each member of its behaviour-0x16 list when it has one), plus 0x392570 on its attached hardpoints. The
+        object service runs a behaviour only while that count is 0 (MOVEMENT §3.3), and 0x569540 also returns when it
+        is > 0 (0x4c36f0). So from the flag on, the Dark Troopers' targeting service, and slot 47 with it, did not run:
+        the "state 4 / clip ATTACKIDLE" the kit read was the value left from before the flag. The ~0.85 synced draws per
+        attacker per frame come from somewhere else (found in s78k t02, below: the IDLE behaviour). The static gate
+        above is unambiguous: **retail spends no draw and does not restart the clip while the clip is 5 / 6**. The
+        s78i t01 port change (draw on every service) is therefore wrong; return before the draw when the clip is 5 / 6,
+        as the original s78f t03 version did.
+      - **s78k t02 (RE, 2026-11-05): the source is the IDLE behaviour's "has a target" branch** [H]. Candidates
+        checked against the IDLE47N set-up (locomotor suspended, TARGETING / WEAPON suspended, JET_PACK autofire off,
+        not moving, TD +8 still holding the victim from the 6 frames before the flag):
+
+        | Rank | Candidate | Per-frame synced draw for such a unit? |
+        |---|---|---|
+        | 1 | **IdleBehavior service 0x62e570** (vtable 0x8afc58, interval 1; Dark_Trooper_PhaseII and Pod_Walker both list IDLE) | **yes, exactly one** `Get_Int(0, FPS)` per service while the unit's TARGETING (or, for a team member without one, its container's) has a target. Not suspended by `Prevent_All_Fire` [H] |
+        | 2 | slot 47 / TeamTargeting | no: TARGETING suspended (above); Dark_Trooper_PhaseII is not a team member [H] |
+        | 3 | Walk locomotor (formation jiggle 0x42c270, start delay 0x41c1a0) | no: locomotor suspended, not moving [H] |
+        | 4 | play-clip variant draws (0x3a92f0 / 0x3a8ed0 with index 0xFFFF; idle fidgets, flinches) | no per-frame draw: fidgets are 210–450 frames apart, the victims do not fire, Attack Idle is played with index 0 [H] |
+        | 5 | UNIT_AI (0x4f6070), ability autofire | not shown to draw per frame: the service 0x4f6070 has no direct synced draw, its pack ctor 0x550ed0 draws only at creation (A1_READINGS) [M: its callees were not all read] |
+
+        IdleBehavior service 0x62e570 (obj = the unit, I = its idle pack obj +0xd8):
+        1. Return (no draw) when the unit has a locomotor, `Allow_Idle_When_Moving` (+0x85) is clear and the
+           locomotor reports moving (vf +0x110); also (no draw) when it is a deploying unit (0x39a370) that is
+           deploying / undeploying / deployed (0x39a400, 0x39b2a0, 0x39a390).
+        2. Flinch bookkeeping on I +0x5c / +0x58 / +0x50 (`Idle_` / `Attack_Flinch_Interval_Seconds`, `Max_Flinch_*`;
+           ANIM_PARTICLES §A.7). It may set "flinch in progress".
+        3. T = the unit's TARGETING behaviour (9); when it has none and the locomotor says it is a team member
+           (vf +0x228), the container's. T is fetched whether or not it is suspended.
+        4. **T has a target** (T vf +0xe0 = 0x567080: TD +8 ≠ null):
+           - I +0xc := `Get_Int(0, FPS)` + 90 (**one synced draw every service**), and the idle record list I +0x10
+             is cleared;
+           - when the current clip is 5, 6 or attack-like (0x27b4f0: 5, 25, 26, 31, 33–35, 37–40, 45–47, 63, 64), its
+             play state (anim +0xc8) is 2 (finished) and the model has clip 6: play clip 6, index 0, one-shot, blend
+             0, speed 1 (no draw). Otherwise nothing more.
+        5. No target: the idle records age; I +0xc −= 1 while > 0 (a frame countdown); return when a flinch is in
+           progress or the current clip is still playing (unless the idle type changed class). Then: from an
+           attack-like / 5 / 6 clip (only when T exists) with I +0xc > 0, Attack Idle again with blend `Get_Float(0.2, 0.75)`; with I +0xc
+           ≤ 0, the default idle (blend global 0x140b39930); from any other clip, the idle with a fidget when
+           frame ≥ I +8 (variant `Get_Int(1, n − 1)` when n > 1, next I +8 = frame + `Get_Int(210, 450)`), else
+           index 0.
+
+        That gives one draw per attacker per frame in IDLE47N phase E for as long as the victim is the target (93% of
+        the attacker-frames in state 4 = a target held; measured 0.85, the windows include the frames around the
+        edges), and none in phases D and P, where the flag came before the order and TD +8 never got set (measured
+        −0.01 / 0.01). It also accounts for the ~1 draw per attacker per frame of IDLE47Q (both models held targets
+        while firing). It runs whatever the clip, so it does not bear on the slot-47 clip gate.
+        **Port:** `AnimBehaviors::service_idle` (`engine/anim/src/anim_behaviors.cpp`, called from
+        `SimAnimation::service_idle`, `engine/apps/sim/src/sim_anim.cpp`) runs only when the current clip has finished
+        and draws the [0, 30] only on a fresh engagement, using a frame stamp. Retail: run the IDLE service every frame
+        for every unit with IDLE (after the moving / deploying early returns), and while the unit's target (TD +8, or
+        the team container's for a member without TARGETING) is set, draw `Get_Int(0, 30)` each frame into a
+        countdown (= r + 90), decremented once per no-target service; restart Attack Idle (index 0, one-shot, blend 0)
+        only when an attack-like / 5 / 6 clip has finished. The target must count even while TARGETING is suspended.
+      - **s78l t03 (RE, 2026-11-05): IDLE service coverage, records and flinches** [H unless tagged]. IDLE is
+        behaviour **7** (IdleBehaviorClass vtable 0x8afc58: vf3 0x62e030 answers type 7, vf6 0x62e570 the service,
+        vf7 0x62dd40 the attach, which creates the pack and draws the first fidget frame I +8 := now +
+        `Get_Int(210, 450)`, synced). Interval 1.
+        - (b) **Only objects with IDLE are serviced** [H]: 0x62e570 has no direct caller; it runs only as the vf6 of
+          an IDLE instance, created only from the type's behaviour lists. The two other writers of the pack (the
+          presence scan and the area flinch, below) also skip objects whose behaviour slot 7 (obj +0x339) is −1. Team
+          containers (e.g. `Stormtrooper_Team`: TEAM, SELECTABLE, UNIT_AI + land list) have no IDLE; their members do.
+        - (a) **Moving gate for every locomotor** [H]: step 1 asks the object's behaviour-1 locomotor vf +0x110. In
+          every land / space locomotor vtable that slot is 0x5abbf0 = vf +0x1c0(this, 0) ("has a path"), read from
+          the exe's vtables:
+
+          | Locomotor | vf +0x1c0 | "moving" while |
+          |---|---|---|
+          | Walk (hover and walker units too: one class), Bike, LandTeamContainer, Fighter, SimpleSpace, Team | 0x42cbd0 → 0x5569f0(pack, 0) | the pack's path stack (+0x138…+0x140) is **non-empty**, whatever the speed |
+          | LandTeamInfantry (squad members) | 0x62c980 | the **parent container's** (obj +0x2b0) locomotor says so; no parent → not moving |
+          | Flying | 0x63c290 | a path exists, a formation (pack +0x1f0) exists and (0x41b260(formation) or its current block has flag 0x08) [M names] |
+          | JetPack | 0x640ff0 | pack state ≠ 0x16 (Walk Stopped) |
+          | LandBomber | 0x645ba0 | a formation exists and its block stack holds exactly 1 block |
+          | Fleet (galactic) | 0x569fe0 (direct slot) | not read [L] |
+
+          So a stationary infantry, hover or walker unit (no path record) **is** serviced, and a Walk unit is
+          "moving" for the whole time a path sits on its stack, including the arrival turn (MOVEMENT §3.5.1: the path
+          pops only after it). `Allow_Idle_When_Moving` (type +0x85) skips the gate. No locomotor → never gated.
+          While gated: the record list (I +0x10) is cleared and I +0x58 := 0, no draw, nothing else. The deploy gate
+          (0x39a370 and deploying / undeploying / deployed) returns with nothing changed.
+        - (c) **Idle records, I +0x10** (an MSVC `std::unordered_map<int, int>`: node {next, prev, key +0x10, value
+          +0x14}, 0x18 bytes; list head I +0x18, count I +0x20, buckets I +0x28, mask I +0x40; hash = Park–Miller
+          (16807, Schrage 127773 / 2836) of (key ^ 0xDEADBEEF) & 0x7FFFFFFF, no RNG). Key = a **presence object's
+          id** (obj +0x50), value = frames left.
+          - Added / refreshed only by **IMPOSING_PRESENCE** (0x624ab0, the presence unit's behaviour; TACTICAL_GAPS
+            §6.2): every listed object P inside the AABB of half size `Presence_Range` (+0x1628) whose flags +0x3a0 &
+            0x42 are clear, whose type lists P's type in `Presence_Induced_Animations` (0x370630) and which has IDLE
+            gets 0x62e450(its IDLE, P): value := int(FPS × `Unit_Presence_Relaxation_Time`) (find-or-insert, so a
+            refresh resets the countdown). Skipped when **the receiving unit** (not P) has a target (its TARGETING, or
+            its container's for a member, TD +8 set, suspended or not) or is moving by the gate above.
+          - Cleared: when the receiver has a target (service step 4) and while it is moving (step 1).
+          - Aged: each no-target service, every value −1; a record whose value drops below 1 is erased.
+          - Read only by the default idle type 0x395920 (after the SPREAD_OUT / crouch test → 71): among records whose
+            object still exists, the largest value wins; on ≤, a record whose owner is allied to the unit's owner
+            (0x2823e0) replaces a non-allied best. The idle type = the first `Presence_Induced_Animations` entry of
+            the unit's type whose type list holds the winner's type (0x373530), else 0. Ties between two allied (or
+            two non-allied) records keep the earlier one in map iteration order [M: the port needs that order only
+            when such tied presence objects map to different animations].
+          - Draws: none in the bookkeeping. Indirectly the idle type sets which clip the fidget logic plays and its
+            variant count n, so `Get_Int(1, n − 1)` (only when n > 1) depends on it, and an idle-type change of
+            class (crouch class 67 / 71 / 72 / 73, 0x27b570) forces a replay.
+        - **Step-2 flinch bookkeeping** (I +0x50 cooldown timer {start frame, frames}, ready when start + frames ≤ now;
+          I +0x58 flinch weight; I +0x5c the clip that was playing before the flinch, −1 = none):
+          - **Start** (0x62dde0, called from the projectile code 0x4c73d0 on a hit with the projectile type's
+            `Induced_Flinch_Intensity` +0x20e4 as the weight [M: the caller's branch was not read]; or 0x62e040, called
+            from behaviour vf 0x622440 [M: which behaviour], the area flinch around the object of radius
+            `Induced_Flinch_Range` +0x20e0, weight = clamp((1 − d² / (2 R²)) × intensity, 0.25, 1)): needs the cooldown ready, I +0x58 = 0,
+            not a deploying unit, and the current clip A attack-like (0x27b4f0), Attack Idle 6 or idle-class
+            (0x27b5e0). Clip = Flinch 79–82 (or Attack_Flinch 83–86 when A is attack-like or 6), side by the angle
+            from the facing to the source: |a| < 45 → 82 / 86, 45–135 → 80 / 84 when a > 0 else 79 / 83, > 135 →
+            81 / 85. Played with index 0xFFFF (**synced variant draw when ≥ 2 variants**), loop 1, blend
+            `Max_Flinch_Blend_Seconds`; when the play is accepted: I +0x58 := weight, I +0x5c := A.
+          - **Service step 2**, while I +0x5c ≠ −1 (S = the model's primary slot state, w = its +0x2c [M: the
+            crossfade weight]; X = the crossfade-active byte model +0x108):
+            - S.type ≠ I +0x5c (still on the flinch): "flinch in progress". With I +0x58 > 0: once w ≥ I +0x58 or
+              not X, freeze the crossfade (model +0x104 := 1e-4 [M]), cooldown timer := (now, FPS ×
+              `Max_Flinch_Hold_Seconds` × I +0x58) (the **hold**), I +0x58 := 0. With I +0x58 = 0 (holding): when the
+              timer is ready, play I +0x5c again (index 0xFFFF → **synced draw when ≥ 2 variants**, loop 0, blend
+              `Max_Flinch_Blend_Seconds`, blend mode 3).
+            - S.type = I +0x5c (back on the old clip): while w < 1 and X, still in progress; then cooldown timer :=
+              (now, FPS × `Idle_Flinch_Interval_Seconds`, or `Attack_Flinch_Interval_Seconds` when I +0x5c is
+              attack-like or 6), I +0x5c := −1, done.
+          - Effect on the service: "in progress" makes step 5 return right after the record aging and the countdown
+            decrement, so no idle / fidget / Attack Idle play happens during a flinch. The target branch (step 4,
+            with its per-frame `Get_Int(0, FPS)`) runs regardless.
+        - *Port spec (IDLE):* (1) attach: I +8 = now + `Get_Int(210, 450)`; (2) each frame, for objects with IDLE only:
+          skip entirely while the locomotor has a path (team member: its container's; JetPack: state ≠ stopped;
+          flags as the table) unless `Allow_Idle_When_Moving`, clearing the records and the flinch weight; skip while
+          deploying / undeploying / deployed; (3) flinch step as above; (4) target held → `Get_Int(0, 30)` + 90 into
+          the countdown, clear records, Attack Idle restart rule; (5) else age records and the countdown, return during
+          a flinch, then the idle / fidget logic with the default idle type from the records. Keep the record map
+          keyed by object id and make its iteration order deterministic.
+  - *Port:* when clip 6 is missing, leave the current clip as it is and draw the blend each service in state 3 / 4,
+    as retail does.
 
 *For the implementer:*
 - Gate the own weapon on targeting state 4 (in range and outside min range), not on an XY distance.
@@ -1006,14 +1711,17 @@ the ordered ground point, +0x3c = "order pending", +0x3d = "charged, fire now". 
   - Lua `GameObject.Fire_Special_Weapon(target, player)` 0x576220: readiness ≥ 1.0 (SCRIPT_GAPS §1.1);
   - Lua `LandTaskForce.Fire_Special_Weapon(type_name, target)` 0x6eb7f0: the first task-force unit whose
     representative type (0x3973b0) **is** the named type and is ready (≥ 1.0); point = the target object's bare
-    position, or the AI target's position (SCRIPT_GAPS §1.4). The only shipped AI user is the skirmish/campaign land
+    position, or the AI target's position (SCRIPT_GAPS §1.4; a region AI target with no object is accepted and fires
+    at the region centre: AI_TACTICAL §7.3.4, s78f 2026-11-03). The only shipped AI user is the skirmish/campaign land
     plan `FireMagnepulse.lua` (goal `Fire_Magnepulse`, BasicLandGoalSet), which names `Ground_Magnepulse_Cannon`.
     The skirmish build `Skirmish_Ground_Magnepulse_Cannon_E` is a `Variant_Of_Existing_Type` of it, i.e. a separate
     type object, so the type test should fail and the AI should never fire the skirmish cannon through this plan [M:
     variant identity under the task-force match and 0x3973b0 not checked at run time; in-game probe below].
 - **Charge-up** in the behaviour service 0x4ea6f0 (vf6), every service while +0x3c is set and the charge-up stamp
   (pack +0x24) is 0: aim the TURRET behaviour (0xb) at the point with 0x631fe0 (LOB_SOLVER §3.6: lob solution and
-  turret angles reached). No TURRET, no solution, or not yet aimed → wait (retried next service; no timeout). Once
+  turret angles reached; the turret **slews** at `Turret_Rotate_Speed` degrees per service before "aimed", and a unit
+  without deploy states always uses the undeployed limits: LOB_SOLVER §3.6 "Charge-up aim", s78f 2026-11-03). No
+  TURRET, no solution, or not yet aimed → wait (retried next service; no timeout). Once
   aimed: play `Lobbing_Superweapon_SFXEvent_Chargeup` (type +0x2328), start `Lobbing_Superweapon_Chargeup_Particle`
   on its bone (+0x2300 / +0x2308), stamp pack +0x24 := now. When now ≥ stamp + `Lobbing_Superweapon_Chargeup_Frames`
   (+0x2348; vanilla 90): play `Lobbing_Superweapon_SFXEvent_Fire` (+0x2338), **TD +0x3d := 1**, stamp := 0. The same
@@ -1119,6 +1827,27 @@ The behaviour is attached by the type's `WEAPON` behaviour (0x0A) and is service
 hard points [M: no code path that turns it off when weapon hard points exist was found]. So a type that lists both
 fires its `Projectile_Types` too. FoC: `M1_Repulsor_Tank` is the only such type; its `HP_2M_Tank_00` hard point excludes
 Air / Vehicle / Structure, so only the WeaponBehavior shot hurts vehicles (a1h t01; port: `battle_catalog.cpp`).
+
+**Implementation checklist for the own weapon (s78f, 2026-11-03).** One WeaponBehavior service, in retail order; the
+details are in the blocks above and in LOB_SOLVER §5.
+1. Flash timers; elapsed = frame − TD +0x2c, TD +0x2c := frame; recharge countdown TD +0x24 (skipped while the
+   lobbing order is charged). Pulse count reset when it differs from `Projectile_Fire_Pulse_Count`.
+2. Gate 0x54c910 (steps 1–7). Step 7 reads the **state** set by the last TARGETING / TeamTargeting service
+   ("Targeting states" above); team members read the state the container pushed and the container's target.
+3. Target relation, animation, TURRET-slot and facing gates; energy check (no draws in 1–3).
+4. Advance the fire-bone cycle index (it stays advanced when the spawn fails).
+5. `Spawn_Projectile` (LOB_SOLVER §5, "Order and draws", s78f): early refusals → launch point (**garrison pick: one
+   synced `Get_Int` when ≥ 2 host bones qualify**) → team-target redirect → **lob solve, return null on no arc** →
+   aim (`Target_Bones` `Get_Int`, inaccuracy draws) → create.
+6. Null spawn: stop here (no flash, animation, pulse or recharge change; retried next service).
+7. Success: flash, Attack clip (0.4 / 0.1 blend), SFX, pulse / recharge (0x54d8f0), lobbing order cleared.
+
+Data the port needs for steps 2 and 5:
+- the garrison bones as **world matrices** of the host's current pose (translation = launch point, column 0 = the
+  x axis whose yaw is tested), from the host's current damage ALT (LOB_SOLVER §5.1 "Garrison pick inputs", s78f);
+- the targeting state per object, with the team copy rules (slots 31 / 32 / 47 / 48) and slot 47's synced
+  `Get_Float(0.2, 0.75)` when a unit enters Attack Idle;
+- for lobbing superweapons: the turret slew (LOB_SOLVER §3.6 "Charge-up aim") before the charge-up starts.
 
 #### 3.1.2 Own-weapon (`Projectile_Types`) inaccuracy 0x549f80 (A1j t03, 2026-11-02) [H unless tagged]
 Called from the own-weapon fire path after the aim point (0x54a270, §3.1.1 "Own-weapon aim point") and the lead.
@@ -1244,6 +1973,52 @@ order, not nearest along the segment. The port should sort by segment fraction, 
 6. Area damage, if blast damage and blast range are both > 0 and the hit was not cancelled.
 7. On-detonation effects, in this order: stun, distract, heal, convert, invulnerability, combat mod, ion stun
    (single target when its radius is 0), infection.
+
+**Convert and its team rule** (`Projectile_Convert_Enemy_*`; 0x4ca020 → per victim 0x4ca2f0) (s78h t04,
+2026-11-05) [H unless tagged]:
+1. **Gate (0x4ca020):** the projectile type has the convert flag, the detonating object (+0x28) is a projectile
+   of that type, and `Projectile_Convert_Enemy_Radius` (type +0x1f10, read as a float) > 0. New owner = the
+   projectile object's owner (+0x58).
+2. **Victims:** the players from 0x294910(owner) [M: the owner's enemies], each in list order. For each one,
+   the GOM radius query 0x2a8fb0 on that player's tree at the projectile position, taken in query order. A
+   victim must pass 0x395c10:
+   - its type category (+0x1648) matches `..._Targets_Category_Mask` (+0x1f28);
+   - obj +0x3a2 bit 3 is clear;
+   - slot byte +0x387 is −1;
+   - type +0x23ec ≤ 0 and type +0x13 = 0;
+   - obj +0x150 is null or both its +8 and +0x10 are null [M meaning].
+   **There is no mode gate** and no test of the victim's team.
+3. **Per victim (0x4ca2f0):**
+   - **Skip** when the victim's owner already is the new owner. After the first member of a team converts, the
+     rest of that team is skipped, so each team converts once.
+   - **"Is a team member" is 0x39b1a0:** the victim's parent (obj +0x2b0) is non-null **and** has a TEAM slot
+     (parent +0x348 ≠ −1). This is the same container test FIGHTER_FLYING §1.5 uses for squadrons, so **in
+     space the fighter squadron container is the team, exactly as the infantry team container is on land**.
+   - **Converted flag** (+0x3a2 |= 4, the decay of ABILITIES_HARDPOINTS §4.10):
+     - not a member: set on the victim only;
+     - member: set on the **container**, then on every non-null entry of the container's TEAM member list
+       (container +0x110: array +0x10, count +0x18, list order). The victim is one of those entries.
+4. **Owner change:** `Change_Owner` 0x38e5a0(victim, owner, 0). It propagates through the team by itself:
+   - a non-container whose parent is a TEAM container calls it on the container;
+   - a TEAM container calls it on each member in list order;
+   - an object that already has the new owner returns at once.
+   So the container and **all** its members change owner, whatever their position, category or distance.
+5. **Notifications, in this order:**
+   - for the victim: store / parent (0x2c0340 when 0x372230 on its type, 0x2b2cc0 when obj +0x54 ≠ 0x3fffff);
+   - the victim's type is swapped to type +0x1ad0 when that is set and differs [M meaning];
+   - the spawn effect (0x38d580) when +0x1f20 is set;
+   - behaviour 0x20 vf+0x78, then 0x3a54c0.
+   For a member, the same steps then run for the container (0x2c0340 and behaviour 0x20) and for each other
+   member (all of them, including the type swap and the spawn effect).
+6. **Last:** the victim's slot 0x50 / 0x4f / 0x56 (the first that exists, checked in that order) gets 0x444ab0
+   [L meaning].
+
+> **Port (s78h t04 / s78i t04, 2026-11-05).** The team is the 0x39b1a0 container: `damage_team` for a member (team
+> on land, the squadron in space), or the victim's own id when it is a combat-unit container (its `damage_team` is 0
+> and live units carry its id). A victim already owned by the new owner is skipped. Change_Owner covers the container
+> and every live member, in notification order (step 5): the victim, then the container when it is a combat unit,
+> then the other members in ascending id. Each object raises one `UnitEffect::Converted`. `CombatSystem::set_owner`
+> (Lua / story) does not spread through the team; the host applies owner changes per event.
 
 **Area damage** (0x4c7f70):
 1. Players are visited in index order. R = `Projectile_Blast_Area_Range` × the shooter's `SCATTER_RADIUS`
@@ -1473,6 +2248,56 @@ and ascending-category summation are kept.
 - **Multiplier** (0x398010) = the **product** over the type's first two ability slots, counted only where the
   ability is active, with LUCKY_SHOT skipped.
   - For a squad leader whose own product is 1, the result is the **minimum** over squad members.
+  - **Who the "squad leader" is (s78h t03, 2026-11-05) [H]:** the **team container itself**, the object with a
+    TEAM slot (obj +0x348 ≠ −1, behaviour 0x16). It is never one of its members.
+    - Slots: the own product uses the object's own type (+0x298) and its own ability state (+0x3d0 + 16 × t),
+      and an ability type ≥ 0x4d or = 0x22 (LUCKY_SHOT) counts 1.0.
+    - Trigger: when that own product is **exactly 1.0** and the object has a TEAM slot, it fetches the TEAM
+      behaviour (vf+0x10 with 0x16).
+    - Walk: the TEAM member list (count 0x405300, entry 0x4052d0: the container +0x110 vector, list order).
+      It calls 0x398010 **recursively on each non-null member**, so a member contributes its full value, which
+      is its own product, because members have no TEAM slot.
+    - Minimum: kept with `<=` from a 1e18 start. Every member counts, including members whose product is 1.0
+      (inactive), so one member at 1.0 caps the team at ≤ 1.0. **The container's own value (1.0) is not in
+      the minimum**; it is multiplied by it (1.0 × min = min).
+    - Edge cases: an empty list, or no non-null member, leaves 1.0. A min > 1 is used as is (all members at 1.5
+      give the container 1.5).
+    - A container whose own product ≠ 1 keeps its own product. Its own slots are active only for per-unit
+      (U = 1) abilities, because U = 0 activations are forwarded to the members (ABILITIES_HARDPOINTS §2.3).
+    - **A member never takes the squad value.** Without a TEAM slot it returns its own product. Every reader
+      that passes a member therefore reads that member's own product: fire recharge 0x54cef0 / 0x54d8f0 /
+      0x3825b0, shields 0x549250 / 0x5494b0, energy 0x56bfd0 / 0x56c030, `Take_Damage` kinds 7 / 8, blast
+      radius 0x4c7f70, ion / lucky shot 0x704b50 / 0x7064e0 / 0x706d90.
+    - The squad minimum reaches only callers that pass the container [M which ones]. The candidates are the
+      SPEED reads 0x3728f0 / 0x376990, for a team locomotor (MOVEMENT §3.4).
+    - **Team move speed (s78l t01, 2026-11-05) [H]:** 0x376990(container type, container, base) multiplies by
+      0x398010(**container**, 6) once (the container is not a projectile), with base = min(container
+      `Max_Speed`, raw member `Max_Speed`s) (MOVEMENT §3.4 "Team cap, exact"). So a land team moves at
+      `min(C.Max_Speed, min M_i.Max_Speed) × modeScale × [flee] × team_mod_multiplier × (rest of the container's
+      chain)`. The members' own SPEED products reach it only through `team_mod_multiplier` (the minimum, when the
+      container's own product is 1.0); a member's own `mult` is not multiplied in a second time. The s78k t03 port
+      formula "min member Max_Speed × mult × team_mod_multiplier" is therefore off in two ways: it leaves out the
+      container's `Max_Speed` (0.8 for `Stormtrooper_Team`, whose members reach 1.0), and the extra `mult`
+      double-counts a member value.
+    - **No mode gate:** a space fighter squadron container (TEAM slot) gets the same rule.
+  - **Port gap (2026-11-05):** the port has no container unit, so a `team_leader` member stands in for it
+    (`apps/sim/src/tactical_battle.cpp` deploy sets the chunk's first member; `tactical_battle_bt.cpp` the
+    same).
+    - Phase A of `CombatSystem::tick` (`engine/tactical/combat/src/combat_system.cpp`, "Squad rule (serial)")
+      overwrites that member's `mult` with the minimum over the *other* members. The stand-in's own product is
+      both left out of the minimum and replaced for its own weapons, shields, damage and speed.
+    - `mod_multiplier()` / `mult()` therefore return the squad value for one real member. Space squadrons get no
+      rule, because `team` is land only.
+    - **Rule to implement:** every unit, the `team_leader` included, keeps `mult = own_mult`. Add a separate
+      per-team value, keyed by the container id (`team`, or `damage_team` for a space squadron), equal to the
+      container's own product (1.0 while the port has no container abilities) when that is ≠ 1, else the
+      minimum over **all** live members of the team (stand-in included, 1.0-valued members included, 1.0 when
+      none).
+    - Only container-level readers use the per-team value (a team locomotor's SPEED, when the host models one).
+      Drop `squad_seen`, and change `squad_multiplier` (`modifiers.cpp`) so the caller passes every member.
+    - (s78i t04, 2026-11-05) `CombatSystem::team_mod_multiplier` still has no caller: the port has no team
+      locomotor (movement models fighter squadron formations only; `TEAM_LOCOMOTOR` is just a behaviour name in
+      objects), so no container-level SPEED read exists to wire it to.
 - **Flag** (0x397f60) = AND across the active slots, default true.
 - **Where the kinds apply:**
 
@@ -1604,6 +2429,59 @@ and ascending-category summation are kept.
   mode signals. **No radius scan and no periodic recheck** was found [M]. The modifier semantics are in §4.3.
 - About 92 ability classes exist (SUBSYSTEMS.md "abilities"). Only CombatBonus, BattlefieldModifier, tractor
   beam and the reduce-production pair were read in this pass.
+
+#### 5.4.1 Tactical_Bribe and Hack: target acceptance (s78l t05, 2026-11-05) [H unless tagged]
+Vtables found through RTTI in the exe: `TacticalBribeAbilityClass` 0x8a3c08 (+0x28 accept 0x5b0f70, +0xf0 apply
+0x5b07c0), `HackAbilityClass` 0x8c8450 (+0x28 accept 0x6fd610, +0xf0 apply 0x7013d0). The base class slot +0x28 is
+a stub (0x76af38). Arguments: (ability, user U, target X).
+
+**Target filter 0x48e290** (`Target_Type_Allowed` → 0x39f300(X, `Applicable_Unit_Categories` +0x60,
+`Applicable_Unit_Types` +0x68, mask +0x88, `Excluded_Unit_Types` +0x90)), in order:
+1. X's type is in `Applicable_Unit_Types` → **true** (categories not looked at);
+2. (categories & X.`CategoryMask` (type +0x1648)) = 0 → **false**, so an **empty categories mask rejects
+   everything not listed by type**; (mask +0x88 & CategoryMask) ≠ 0 → false [M: +0x88 is an excluded-categories
+   mask];
+3. X's type in `Excluded_Unit_Types` → false; else true.
+A null X → false. With no filter tags at all the filter accepts nothing.
+
+**Hack accept (0x6fd610):** U and X non-null; X is an **enemy** of U's owner (0x39a450(X, U owner): X's owner, or
+for an object with behaviour slot 3 its parent's owner, and the player relation "enemy" 0x2824f0 of the relation
+table, §2.10); **0x48e290 passes**; X has a model (+0x2a0); when U or X has the layer byte +0x3b4 = 1, 0x39a540 must
+pass (the same layer rule as the tractor beam). Nothing else: no alive / dying test, no unit-kind test, no range.
+`R2D2_Hack_Ability` (empty `Applicable_Unit_Categories`, a 14-turret `Applicable_Unit_Types` list) therefore accepts
+exactly the enemy objects of those 14 types (step 1 of the filter), and nothing else.
+
+**Bribe accept (0x5b0f70)** does **not** call 0x48e290: the XML filter tags are never read for it (so the shipped
+`Tyber_Tactical_Bribe` without them is fine). It accepts when all hold:
+1. U, X non-null; X has a model;
+2. X is an enemy of U's owner (0x39a450, as above);
+3. X flag +0x3a2 & 0x04 clear [M: the "converted" flag of ABILITIES_HARDPOINTS §6, obj +0x3a2 bit 4];
+4. T = X's team container when X is a team member (0x39b1a0: parent obj +0x2b0 with a TEAM slot), else X;
+5. cost 0x5b0ec0(U, T) > 0: c = T type `Tactical_Bribe_Cost` (+0x2358, int); c ≤ 1 → 0 → **reject**; else c ×
+   U type `Bribe_Modifier_On_Corrupted_Planets` (+0x23e4) when the current battle's planet (0x28a890 → +0xb8 →
+   +0x2f4 ≠ −1) is corrupted, else × `Bribe_Modifier_On_Uncorrupted_Planets` (+0x23e0) [M: +0x2f4 as the
+   corruption field]; so a unit with no `Tactical_Bribe_Cost` can never be bribed [M: the type default was assumed ≤ 1, not read];
+6. 0x395c10(T, all categories): T's `CategoryMask` ≠ 0, T +0x3a2 & 0x08 clear, T has no PROXIMITY_MINE behaviour
+   (slot 0x55, obj +0x387 = −1), T type `Friendly_Damage_Amount` (+0x23ec) ≤ 0, T type **`Is_Named_Hero` (+0x13)
+   false** (heroes excluded), and T's link block obj +0x150 null or both its pointers null [M: what that block is];
+7. X flags +0x3a0: 0x40 (dead / death clone), 0x80 and 0x02 [M names] all clear.
+No range and no owner-credit test here. Apply 0x5b07c0 adds them: range = `Target_In_Range` 0x48d820 on T or on X
+(either) and `Must_Close_Range` 0x48e100 false; then the accept above; then credits: when the owner's credits
+(player +0x70) < cost or cost ≤ 0 → play the "cannot" event (ability +0x1b8) and **return 1 without converting**
+[M: whether that consumes the order]; else break both objects' stealth-type state (0x3a9880 on U and X),
+credits −= cost, play the event at ability +0x1a8, start the recharge (0x3a9840(U, 0x3b)), then the effect and the
+owner change (TACTICAL_GAPS §2: 0x38e5a0). Hack's apply 0x7013d0 likewise runs the accept, then 0x48d820 /
+0x48e100.
+
+*Port spec:*
+- `target_filter`: type list first (listed → accept), then categories (empty mask → reject), then excluded types.
+  Do not reject up front because the categories tag is empty.
+- Hack: enemy + `target_filter` + has a model (+ layer rule); range only in the apply / command path
+  (`Activation_Min_Range` / `Activation_Max_Range` through `Target_In_Range`).
+- Bribe: **do not call `target_filter`**. Enemy; not already converted; work on the team container for a member;
+  bribe cost = `Tactical_Bribe_Cost` of the container (or unit) × the user's corrupted / uncorrupted modifier,
+  must be > 0 (cost ≤ 1 rejects); not a named hero, `Friendly_Damage_Amount` ≤ 0, no PROXIMITY_MINE behaviour,
+  non-zero `CategoryMask`; not dead. Range and credits are checked at apply; too few credits: no conversion.
 
 ---
 
@@ -1874,7 +2752,9 @@ Names are proposals. The Ghidra project was not updated. Grouped by section:
 18. `DeathBehaviorClass`, death clones and destruction survivors. (Spin-away and survivors: TACTICAL_GAPS.md §1.9.)
 
 > **Status 2026-10-30:** Item 18 is partly done. Spin-away, `Destruction_Survivors` and death clones are in `engine/tactical/combat/src/combat_system.cpp:1556-1599` (`death_spawns`, the death-clone loop, the spin-away draw). What remains: the deploy / infection key remaps of the death clone are not modelled (comment at `combat_system.cpp:1558`).
-19. Land facing and arc logic (`Base_Land_Targeting_Arc_Angle_Coefficient`, 0x633ae0).
+19. Land facing and arc logic (`Base_Land_Targeting_Arc_Angle_Coefficient`, 0x633ae0). **Partly answered (s78f,
+    2026-11-03):** the land facing test (slot 48, half a frame of turn), the snap / turn request and the state 3 rules
+    are in §3.1.1 "Targeting states, slots 47 / 48 and team copies"; the arc coefficient itself is still open.
 20. ~~AI autofire~~ — in the sim (`Issue_Auto_Target` 0x37d280): TACTICAL_GAPS.md §1.3.
 
 > **Status 2026-10-30:** Item 20 is implemented in the abilities module: the autofire driver and its synced candidate pick are in `engine/tactical/abilities/src/ability_behaviors.cpp:160-237`.

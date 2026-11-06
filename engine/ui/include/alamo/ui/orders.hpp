@@ -58,7 +58,7 @@ namespace alamo::ui {
 
 enum class UiMode : uint8_t { Land, Space, Galactic };
 
-// [port: Gabriel] pause / resume as a command (docs/PHASE4.md "Camera and controls": pausing goes through the command
+// [port: Gabriel] pause / resume as a command (docs/DECISIONS.md "Camera and controls": pausing goes through the command
 // stream so replays and lockstep stay valid). The original has no such event (ResumeGame 51 is the MP battle vote), so it
 // is the port extension event 63 with subtype kPortPauseSubtype and one data byte (1 pause, 0 resume). The host submits
 // it like any order; the sim host stops ticking from the scheduled tick on.

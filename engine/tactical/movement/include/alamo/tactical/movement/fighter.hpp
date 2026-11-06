@@ -57,8 +57,6 @@ inline constexpr float kFighterTwoPi = 6.2831855f;
 inline constexpr float kSpaceIdleMovementSpeed = 0.0f;
 // lock(x) duration: int(float(FPS) x 10.0) = 300 frames (§4.5).
 inline constexpr uint32_t kFighterLockFrames = static_cast<uint32_t>(30.0f * 10.0f);
-// No formation speed cap (FighterSquad::speed_cap).
-inline constexpr float kFighterNoSpeedCap = 3.0e38f;
 // Avoidance hold after an evasion (pack +0x2b4 = 15, §3.5).
 inline constexpr int32_t kFighterAvoidHold = 15;
 
@@ -148,12 +146,21 @@ bool fighter_waypoint_passed(std::span<const SpaceWaypoint> path, uint32_t idx, 
 float fighter_squad_idle(F3 p, F3 leader_p, F3& d, bool leader, float avoid_speed);
 
 // ---- XML-derived parameters the UnitDesc does not carry ----------------------------------------------------------
+// s78f t02 (FIGHTER_FLYING §4.10 A, §4.11 E): the response / leash ranges of a formation unit u's type, read by the
+// leash test 0x4165f0: Guard_Chase_Range (+0x52c), Idle_Chase_Range (+0x530), Attack_Move_Response_Range (+0x538) and
+// Autonomous_Move_Extension_Vs_Attacker (+0x211c). A squadron formation uses the squadron type's (FighterSquadDesc).
+struct FighterChaseRanges {
+    float guard = 0.0f, idle = 0.0f, attack_move = 0.0f, extension = 0.0f;
+};
+FighterChaseRanges fighter_chase_ranges_from_type(const objects::GameObjectTypes& types, uint32_t type_index);
 struct FighterParams {
     float max_thrust = 1.0f;            // Max_Thrust (+0x384), raw ([port] default: the FoC fighter value 1.0)
     float min_follow_distance = 25.0f;  // Minimum_Follow_Distance (+0x534)
     float attack_range = 450.0f;        // max attack range 0x3749d0 (Targeting_Max_Attack_Distance +0x500) [M]
+    FighterChaseRanges chase;           // s78f t02: the fighter type's ranges (a fighter without a squadron)
 };
-// Reads Max_Thrust, Minimum_Follow_Distance and Targeting_Max_Attack_Distance (a value <= 0 keeps the default).
+// Reads Max_Thrust, Minimum_Follow_Distance and Targeting_Max_Attack_Distance (a value <= 0 keeps the default) and the
+// chase ranges (fighter_chase_ranges_from_type).
 FighterParams fighter_params_from_type(const objects::GameObjectTypes& types, uint32_t type_index);
 // Squadron_Formation_Error_Tolerance (+0x9b0) of a squadron type (<= 0: 25).
 float squadron_tolerance_from_type(const objects::GameObjectTypes& types, uint32_t squadron_type_index);
@@ -278,40 +285,77 @@ struct FighterSquad {
     FighterCell dog, park;
     F3 dest;                    // the container's D
     FighterTarget target;
-    // S7 t28 (A1_READINGS §33.4): the formation speed (+0x21c) of a guard of a moving object, min(own speed, 2 x the
-    // object's speed) [M: exact cap]; the members fly their Moving path at most this fast [M: only Moving 0x1B reads it
-    // in the port]. kFighterNoSpeedCap = none; every new move order of a member clears it.
-    float speed_cap = kFighterNoSpeedCap;
-    // S7 t37 (A1_READINGS §33.4.1 step 3): the squadron type T has Space_Layer 0 or Disregard_Space_Layer_For_Guard_
-    // Attack_Move, so its guard of a moving object follows the object (path copy, speed cap).
+    // S7 t37 / s78f t02 (A1_READINGS §33.4.1 step 3, FIGHTER_FLYING §4.11 D 2): the formation's type T (the type of the
+    // first team member, a fighter) has Space_Layer 0 or Disregard_Space_Layer_For_Guard_Attack_Move: the guard follow
+    // (path copy, speed cap) applies, a single object block may re-path and step 5 pops instead of 0x4220d0.
     bool guard_follow = true;
+    FighterChaseRanges chase;  // s78f t02: the squadron type's ranges (0x4165f0 reads u = the container's type)
 };
 struct FighterSquadDesc {
     ObjectId id = -1;
     std::vector<ObjectId> members;  // team index order; fighter units of this system
     std::vector<F3> slots;          // slot offsets, parallel to members (missing = zero)
     float tolerance = 25.0f;
-    bool guard_follow = true;       // FighterSquad::guard_follow (from the squadron type)
+    bool guard_follow = true;       // FighterSquad::guard_follow (from the first member's type)
+    FighterChaseRanges chase;       // FighterSquad::chase (from the squadron type)
 };
 
-// S7 t37 (A1_READINGS §33.4.1, FIGHTER_FLYING §4.10 E): the object goal block (kind 3) of a fighter formation - a
-// squadron container or a fighter without one ("key") - set by a move order with MoveOrder::goal_object and replaced by
-// the formation's next move order or Stop. The formation update 0x4192b0 (MovementSystem tick, at most once per FPS = 30
-// frames, +0x1d8 = next) follows the object: a guard block copies a moving object's path within R and caps the
-// squadron's speed (step 3), else re-paths to the object when the recorded goal (+0x210, set by the order and by each
-// re-path) is more than R from it (step 4). The object's removal (signals 0x10 / 0x1a / 0x2e, listener 0x4f77e0) turns
-// the block into a position block (object -1) at the last waypoint of the formation's path; the flags stay, so a guard
-// keeps guarding that point. [port] One block per formation (the port has no queued formation blocks, so the queued-block
-// pop of step 3 cannot occur); the host's auto attack blocks are reported as `covered` (they are the last block then).
-inline constexpr uint32_t kFighterGuardInterval = 30;
-struct FighterGuard {
-    ObjectId key = -1;     // squadron container id, or the fighter's own id
-    ObjectId object = -1;  // the block's object; -1 = position block (the object is gone)
-    uint8_t flags = 0;     // the order's block flags (kMoveFlag*: 0x02 guard)
-    V2 goal;               // recorded goal point (+0x210)
-    uint32_t next = 0;     // next update frame (+0x1d8)
-    bool follow = true;    // step 3 allowed (FighterSquad::guard_follow; a solo fighter: its Space_Layer is 0)
-    bool covered = false;  // a newer (host auto attack) block is the formation's last block
+// s78f t02 (FIGHTER_FLYING §4.11, A1_READINGS §33.4 / §33.4.1, MOVEMENT §6.1 / §6.2; replaces S7 t37's one-block
+// FighterGuard): the move-block stack of a fighter formation - a squadron container or a fighter without one ("key";
+// the formation 0x290 bytes, blocks F +0xf8..+0x100). blocks.back() is the TOP (the current block, blocks[n-1]),
+// blocks[0] the bottom. Every space move order of the key's fighters builds a new formation with the order's block as
+// its only block (a group move makes a fresh coordinator, Coordinator::Move_To 0x4f8200 -> Set_Move 0x423c10); Stop and
+// the key's removal drop it. Writers: Push 0x41fd30 (the host's auto attack block, MovementSystem::fighter_push), the
+// waypoint append 0x420f70 (MoveOrder::waypoint), Pop 0x4105a0 (fighter_pop, arrival, leash / fog pops), the guard pop of
+// 0x4192b0 step 3, the hidden-goal Set_Move of states 3 / 4, and the object listener 0x4f77e0 (the bottom block's object
+// gone -> a position block at the last waypoint of the formation's path, flags kept).
+// Block flags (MOVEMENT §6.1): kMoveFlag* plus 0x10 space idle movement (never issued with FoC data, §4.11 G 7: not
+// modelled) and 0x40 signal 0x2a on pop (no port reader). Bytes kept: +0x50 push class (the port: `pushed`, an auto block
+// 0x41cf70 [M: class name]), +0x5d `own_speed`, +0x5e `loop` (patrol). [port] Fighter blocks are kind 1 (position) or
+// 3 (object): MoveToRay / kind 4 "stay" / the timed byte +0x61 / +0x62 are not produced for fighters.
+inline constexpr uint32_t kFighterGuardInterval = 30;  // FPS: the 0x4192b0 / 0x410a60 timer step (+0x1d8)
+inline constexpr uint8_t kFighterBlockPosition = 1;
+inline constexpr uint8_t kFighterBlockObject = 3;
+struct FighterBlock {
+    uint8_t kind = kFighterBlockPosition;  // +0x24
+    ObjectId object = -1;                   // +0x28 (kind 3)
+    int32_t hard_point = -1;                // +0x30 [port: kept, not read by the formation]
+    V2 point;                               // a position block's point (the order's destination, clamped)
+    float facing = kNoFacing;               // +0x18 facing of a position block
+    float threat = kThreatOff;              // the order's threat threshold
+    uint8_t flags = 0;                      // +0x48 (kMoveFlag*: 0x01 attack-move, 0x02 guard, 0x04 player order, 0x08 queued)
+    bool pushed = false;                    // +0x50 push class: an auto attack block of Push (0x41cf70) [port marker]
+    bool own_speed = false;                 // +0x5d each member closes at its own speed (auto blocks)
+    bool loop = false;                      // +0x5e patrol loop
+};
+// Formation states (+0x1d0) used here: 0 plan (0x41c1a0, then 1), 1 moving (0x423760: 0x4192b0 and the arrival), 3
+// arrived (0x423070: the hidden-goal rule and 0x410a60), 5 after popping an object block (0x422e50 not read [M]: the port
+// plans as state 0).
+inline constexpr uint8_t kFormationPlan = 0, kFormationMoving = 1, kFormationArrived = 3, kFormationPopped = 5;
+struct FighterFormation {
+    ObjectId key = -1;                  // squadron container id, or the fighter's own id
+    std::vector<FighterBlock> blocks;   // bottom first; back() = top (current)
+    uint8_t state = kFormationMoving;   // +0x1d0
+    V2 goal;                            // recorded goal (+0x210 / +0x214)
+    uint32_t next = 0;                  // +0x1d8 next 0x4192b0 / 0x410a60 frame
+    float speed = -1.0f;                // +0x21c formation speed (-1 = unset; the guard follow's cap)
+    bool single_arrived = false;        // +0x240 arrived on its only block (states 3 / 4 with n = 1)
+    bool follow = true;                 // T has Space_Layer 0 (FighterSquad::guard_follow; a solo fighter: its own)
+    const FighterBlock* top() const { return blocks.empty() ? nullptr : &blocks.back(); }
+};
+// Host data for the formation update (all optional; serial calls from the movement tick, must be deterministic).
+//   hidden(owner, object)  FOW_Object_Hidden(mode, owner, object, force 1) (0x35f470). Unset: never hidden.
+//   attack_target(object)  the object's current attack target (0x397a40(object, 0)); a squadron container: its team
+//                          target. Unset: none.
+//   in_range(member, object)  member can hit the object from where it stands: not inside its min range (TARGETING slot
+//                          46) and inside its max range (slot 43). Unset: 3-D distance <= FighterParams::attack_range.
+//   position(object, p)    position of an object that is not a mover of this system (stations, structures). Unset or
+//                          false: the object is unknown (its block counts as gone).
+struct FighterFormationHooks {
+    std::function<bool(int32_t owner, ObjectId object)> hidden;
+    std::function<ObjectId(ObjectId object)> attack_target;
+    std::function<bool(ObjectId member, ObjectId object)> in_range;
+    std::function<bool(ObjectId object, F3& p)> position;
 };
 
 // Orders the fighter locomotor issues (the host forwards them to combat as attack orders, 0x38d730):

@@ -163,7 +163,14 @@ function(alamo_game_add_exe)
   # CRC of the run == a fresh presentation-off replay of its command stream, 0 validation messages.
   # Int-final: alamo_game_smoke_<kind>_golden then compares the run's dumped CRC log (comments ignored) and command
   # recording with engine/apps/game/testdata/game_smoke_<kind>.crc / .rec (MSVC-generated; clang must match).
-  # Regenerate after an intended sim change: copy build-msvc/smoke_out/game_smoke_<kind>.crc / .rec over the goldens.
+  # Regenerate after an intended sim change: copy build-msvc/smoke_out/game_smoke_<kind>.crc / .rec over the goldens, or run
+  # tools\regen_goldens.cmd (it converts the .crc to the checkpoint form). The .crc golden may be a full log (ALAMO_CRC 1, exact
+  # line compare) or a checkpoint log (ALAMO_CRC 2, docs/status/golden-checkpoints.md: compared on its stored ticks by
+  # alamo_headless --compare, hence -DHEADLESS below).
+  set(_smoke_headless "")
+  if(TARGET alamo_headless)
+    set(_smoke_headless -DHEADLESS=$<TARGET_FILE:alamo_headless>)
+  endif()
   set(_smoke_out ${CMAKE_BINARY_DIR}/smoke_out)
   file(MAKE_DIRECTORY ${_smoke_out})
   foreach(_k skirmish campaign land)
@@ -171,7 +178,7 @@ function(alamo_game_add_exe)
     set_tests_properties(alamo_game_smoke_${_k} PROPERTIES TIMEOUT 1800 FIXTURES_SETUP alamo_game_smoke_${_k}_run)
     add_test(NAME alamo_game_smoke_${_k}_golden
              COMMAND ${CMAKE_COMMAND} -DACTUAL=${_smoke_out}/game_smoke_${_k}
-                     -DGOLDEN=${PROJECT_SOURCE_DIR}/engine/apps/game/testdata/game_smoke_${_k}
+                     -DGOLDEN=${PROJECT_SOURCE_DIR}/engine/apps/game/testdata/game_smoke_${_k} ${_smoke_headless}
                      -P ${PROJECT_SOURCE_DIR}/engine/apps/game/compare_smoke.cmake)
     set_tests_properties(alamo_game_smoke_${_k}_golden PROPERTIES TIMEOUT 120 FIXTURES_REQUIRED alamo_game_smoke_${_k}_run)
   endforeach()
@@ -185,7 +192,7 @@ function(alamo_game_add_exe)
                        ENVIRONMENT "ALAMO_SMOKE_SCREENS=1;ALAMO_PSEUDO_LOC=1")
   add_test(NAME alamo_game_smoke_screens_golden
            COMMAND ${CMAKE_COMMAND} -DACTUAL=${_screens_out}/game_smoke_campaign
-                   -DGOLDEN=${PROJECT_SOURCE_DIR}/engine/apps/game/testdata/game_smoke_campaign
+                   -DGOLDEN=${PROJECT_SOURCE_DIR}/engine/apps/game/testdata/game_smoke_campaign ${_smoke_headless}
                    -P ${PROJECT_SOURCE_DIR}/engine/apps/game/compare_smoke.cmake)
   set_tests_properties(alamo_game_smoke_screens_golden PROPERTIES TIMEOUT 120 FIXTURES_REQUIRED alamo_game_smoke_screens_run)
   # N1 follow-up t01: the save / load menus driven like a player (app_script_saveload.cpp): Save with a typed name, the

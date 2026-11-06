@@ -564,6 +564,8 @@ public:
     uint32_t fleet_in_slot(PlanetIndex planet, int32_t owner, int32_t slot) const;
     // True while no slot was ever chosen by a command: slots are then only auto-assigned and not hashed (see hash_slots).
     bool slot_state_default() const { return !slot_choices_; }
+    // Ground base level (planet data +0x130) [M]: the live ground-family (0x5F) structures on the surface; orbital
+    // structures do not count.
     int32_t ground_base_level(PlanetIndex planet) const;
     int32_t planets_owned(int32_t player) const;
     int32_t derive_owner(PlanetIndex planet) const;  // GE 4.1 precedence (pure)
@@ -700,12 +702,15 @@ public:
     // Change_Owner (Lua GameObjectWrapper.Change_Owner and story; GE 4.2 "Forced transfers" for planets). False
     // when nothing changed: dead object, invalid player, same owner, or a member of a moving fleet [port].
     bool change_owner(ObjectHandle object, int32_t player);
-    // Assemble_Fleet(units) [inferred]: the units (members of stationary fleets orbiting one planet, or units landed
+    // Assemble_Fleet(units): the units (members of stationary fleets orbiting one planet, or units landed
     // on that planet's surface, owned by the first valid unit's owner; others skipped) gathered into one fleet. A
     // fleet that holds exactly those units is returned as is; otherwise a new fleet takes them (list order; a landed
     // unit is launched as by launch_units: off the surface, launch reveal; a1g t06, so the shipped scripts'
     // SpawnList + Assemble_Fleet of ground units at a planet flies them, COMMANDS.md FleetManagement "AssembleFleet")
     // and emptied fleets die. Returns the fleet index, kNoFleet when no unit qualifies.
+    // Confirmed in game (a1k t02, 2026-11-05, tools/probe_mod/a1h_assemble_fleet): starting, Lua-spawned and AI-owned
+    // surface infantry are launched into the new fleet; a ship (in its own spawn fleet) + surface infantry give one new
+    // fleet of exactly the two, not merged into the fleet already orbiting there. The skip rules are still [inferred].
     uint32_t assemble_fleet(std::span<const ObjectHandle> units);
     // Containment as GalacticSim keeps it (OBJECT_RUNTIME.md 3; the store holds no container for ships):
     // container_of = the fleet of a fleet member, the planet of a surface unit / structure / starbase /
@@ -933,6 +938,20 @@ public:
     bool super_weapon_destroy_planet(PlanetIndex planet, int32_t attacker);
     std::span<const VictoryClaim> victory_claims() const { return claims_; }
     void claim_victory(int32_t player, uint8_t type, int32_t countdown);
+    // story t11: the galactic plot sets' ENABLE_VICTORY / VICTORY rewards on the galactic monitor (BT §3.1a item 3, the
+    // same monitor code as the battle's: hold +0x5c). ENABLE_VICTORY atoi(P1) == 0 -> raise (max(0, h + 1));
+    // != 0 -> release one level, only while held. While held, check_victory (victory.hpp) reports no winner (0x342d80:
+    // the result needs hold <= 0). VICTORY (0x462b70) releases every level and claims type 0x10 (kVictoryStoryClaim,
+    // SUB_TACTICAL_STORY_MODE_TRIGGERED_VICTORY) for `player`, countdown 7 s (1 s when short_silent), granted whatever
+    // the side's conditions (the reward adds its own record). [port] no deferred queue: the polled tests run on every
+    // check, so after a release they pass at the next one. Saved; hashed in the "OIG1" tail once non-zero.
+    static constexpr uint8_t kVictoryStoryClaim = 0x10;
+    void victory_hold_raise() { victory_hold_ = victory_hold_ < 0 ? 1 : victory_hold_ + 1; }
+    void victory_hold_release() {
+        if (victory_hold_ > 0) --victory_hold_;
+    }
+    bool story_victory(int32_t player, bool short_silent);  // false: invalid player (nothing changes)
+    int32_t victory_hold() const { return victory_hold_; }
 
     // ---- CRC ----------------------------------------------------------------------------------------------
     // Ordered digest of every S3 data pack (players, planets incl. queues and income lists, fleets, cycle).
@@ -1107,6 +1126,7 @@ private:
     // OI galactic (hashed in the "OIG1" tail once non-default)
     std::vector<int32_t> stealthed_;      // ObjectIds with the galactic stealth byte set, ascending
     std::vector<VictoryClaim> claims_;    // declaration order
+    int32_t victory_hold_ = 0;            // story t11: galactic monitor hold (+0x5c)
     // GRC reveal / corruption transitions (src/reveal.cpp; hashed in the "RVC1" tail once non-default)
     int32_t local_player_ = kNoPlayer;
     bool auto_reveal_ = true;   // galactic mode +0x340

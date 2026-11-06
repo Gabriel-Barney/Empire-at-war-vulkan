@@ -1,5 +1,6 @@
 // alamo_headless --economy --galactic-ai: see ai_run.hpp.
 #include "ai_run.hpp"
+#include "crc_out.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -478,7 +479,7 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
                                " ticks " + std::to_string(opt.ticks) + (aopt.human.empty() ? "" : " human " + aopt.human) + "\n# " +
                                first.summary;
     first.crc.comments = {header.substr(2, header.find('\n') - 2)};
-    if (!opt.crc_out.empty() && first.crc.save(opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
+    if (!opt.crc_out.empty() && alamo_headless::save_crc_log(first.crc, opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
     if (!aopt.ai_log.empty()) {
         std::ofstream(long_path(path_from_utf8(aopt.ai_log)), std::ios::binary) << header << first.ai_text;
         std::printf("wrote %s\n", aopt.ai_log.c_str());

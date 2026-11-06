@@ -234,12 +234,42 @@ uint64_t combine_crcs(std::span<const std::string> names, std::span<const uint64
 }
 
 // ---- CrcLog ----------------------------------------------------------------------------------------
+namespace {
+bool is_stored_tick(uint64_t tick, uint32_t every, const std::vector<uint64_t>& keep) {
+    return (every != 0 && tick % every == 0) || std::binary_search(keep.begin(), keep.end(), tick);
+}
+}  // namespace
+
+CrcLog CrcLog::checkpointed(uint32_t every, const std::vector<uint64_t>& keep_ticks) const {
+    if (every == 0) return *this;
+    CrcLog out;
+    out.systems = systems;
+    out.parity_parts = parity_parts;
+    out.comments = comments;
+    out.checkpoint = every;
+    out.keep = keep_ticks;
+    std::sort(out.keep.begin(), out.keep.end());
+    out.keep.erase(std::unique(out.keep.begin(), out.keep.end()), out.keep.end());
+    for (size_t i = 0; i < records.size(); ++i)
+        if (i == 0 || i + 1 == records.size() || is_stored_tick(records[i].tick, every, out.keep)) out.records.push_back(records[i]);
+    return out;
+}
+
 std::string CrcLog::to_text() const {
-    std::string s = "ALAMO_CRC 1\nsystems " + std::to_string(systems.size());
+    std::string s = checkpoint != 0 ? "ALAMO_CRC 2\nsystems " : "ALAMO_CRC 1\nsystems ";
+    s += std::to_string(systems.size());
     for (const auto& n : systems) s += " " + n;
     s += "\nparity " + std::to_string(parity_parts.size());
     for (const auto& n : parity_parts) s += " " + n;
     s += "\n";
+    if (checkpoint != 0) {
+        s += "checkpoint " + std::to_string(checkpoint) + "\n";
+        if (!keep.empty()) {
+            s += "keep";
+            for (uint64_t t : keep) s += " " + std::to_string(t);
+            s += "\n";
+        }
+    }
     for (const auto& c : comments) s += "# " + c + "\n";
     for (const auto& r : records) {
         s += std::to_string(r.tick) + " " + hex16(r.combined) + " " + hex16(r.parity).substr(8);
@@ -251,7 +281,7 @@ std::string CrcLog::to_text() const {
 
 bool CrcLog::parse(std::string_view text, CrcLog& out, std::string* err) {
     out = CrcLog{};
-    bool have_magic = false, have_systems = false, have_parity = false;
+    bool have_magic = false, have_systems = false, have_parity = false, have_checkpoint = false, v2 = false;
     size_t line_no = 0;
     while (!text.empty()) {
         const size_t nl = text.find('\n');
@@ -269,8 +299,9 @@ bool CrcLog::parse(std::string_view text, CrcLog& out, std::string* err) {
         const auto tok = split_ws(line);
         if (tok.empty()) continue;
         if (!have_magic) {
-            if (tok.size() != 2 || tok[0] != "ALAMO_CRC" || tok[1] != "1")
-                return fail(err, where + "expected 'ALAMO_CRC 1'");
+            if (tok.size() != 2 || tok[0] != "ALAMO_CRC" || (tok[1] != "1" && tok[1] != "2"))
+                return fail(err, where + "expected 'ALAMO_CRC 1' or 'ALAMO_CRC 2'");
+            v2 = tok[1] == "2";
             have_magic = true;
             continue;
         }
@@ -290,6 +321,24 @@ bool CrcLog::parse(std::string_view text, CrcLog& out, std::string* err) {
             have_parity = true;
             continue;
         }
+        if (v2 && !have_checkpoint) {
+            uint64_t n = 0;
+            if (tok[0] != "checkpoint" || tok.size() != 2 || !parse_u64(tok[1], n) || n == 0 || n > 0xFFFFFFFFull)
+                return fail(err, where + "expected 'checkpoint <N>' (N > 0) after the parity line of an ALAMO_CRC 2 file");
+            out.checkpoint = static_cast<uint32_t>(n);
+            have_checkpoint = true;
+            continue;
+        }
+        if (v2 && out.records.empty() && tok[0] == "keep") {
+            if (!out.keep.empty()) return fail(err, where + "second 'keep' line");
+            for (size_t i = 1; i < tok.size(); ++i) {
+                uint64_t t = 0;
+                if (!parse_u64(tok[i], t)) return fail(err, where + "bad tick in 'keep' line");
+                if (!out.keep.empty() && t <= out.keep.back()) return fail(err, where + "'keep' ticks must increase");
+                out.keep.push_back(t);
+            }
+            continue;
+        }
         if (tok.size() != out.systems.size() + 3) return fail(err, where + "wrong number of CRC columns");
         CrcRecord r;
         uint64_t parity = 0;
@@ -305,6 +354,13 @@ bool CrcLog::parse(std::string_view text, CrcLog& out, std::string* err) {
         out.records.push_back(std::move(r));
     }
     if (!have_parity) return fail(err, "missing header");
+    if (v2 && !have_checkpoint) return fail(err, "missing 'checkpoint <N>' line");
+    if (v2) {  // every stored record but the first and the last is a grid tick or a kept tick
+        for (size_t i = 1; i + 1 < out.records.size(); ++i)
+            if (!is_stored_tick(out.records[i].tick, out.checkpoint, out.keep))
+                return fail(err, "tick " + std::to_string(out.records[i].tick) + " is neither a multiple of the checkpoint " +
+                                     std::to_string(out.checkpoint) + " nor in the keep line");
+    }
     return true;
 }
 
@@ -316,21 +372,125 @@ bool CrcLog::load(const std::string& path, CrcLog& out, std::string* err) {
     return parse(text, out, err);
 }
 
-CrcDivergence first_divergence(const CrcLog& expected, const CrcLog& actual) {
+namespace {
+
+CrcDivergence system_lists_differ(const CrcLog& expected, const CrcLog& actual) {
     CrcDivergence d;
-    if (expected.systems != actual.systems || expected.parity_parts != actual.parity_parts) {
-        d.diverged = true;
-        d.message = "system lists differ";
-        for (size_t i = 0; i < std::max(expected.systems.size(), actual.systems.size()); ++i) {
-            const std::string a = i < expected.systems.size() ? expected.systems[i] : "<none>";
-            const std::string b = i < actual.systems.size() ? actual.systems[i] : "<none>";
-            if (a != b) {
-                d.message += ": #" + std::to_string(i) + " expected '" + a + "', got '" + b + "'";
-                break;
-            }
+    d.diverged = true;
+    d.message = "system lists differ";
+    for (size_t i = 0; i < std::max(expected.systems.size(), actual.systems.size()); ++i) {
+        const std::string a = i < expected.systems.size() ? expected.systems[i] : "<none>";
+        const std::string b = i < actual.systems.size() ? actual.systems[i] : "<none>";
+        if (a != b) {
+            d.message += ": #" + std::to_string(i) + " expected '" + a + "', got '" + b + "'";
+            break;
+        }
+    }
+    return d;
+}
+
+// Checkpoint compare (either log has checkpoint != 0): the checkpoint log's stored ticks (the expected one's when both)
+// against the other log's records at the same ticks.
+CrcDivergence checkpoint_divergence(const CrcLog& expected, const CrcLog& actual) {
+    CrcDivergence d;
+    const bool drive_expected = expected.checkpoint != 0;
+    const CrcLog& drv = drive_expected ? expected : actual;
+    const CrcLog& oth = drive_expected ? actual : expected;
+    const char* drv_role = drive_expected ? "expected" : "actual";
+    const char* oth_role = drive_expected ? "actual" : "expected";
+    if (drv.records.empty() || oth.records.empty()) {
+        if (drv.records.empty() != oth.records.empty()) {
+            d.diverged = true;
+            d.message = "expected " + std::to_string(expected.records.size()) + " records, got " + std::to_string(actual.records.size());
+        } else {
+            d.message = "identical (0 ticks)";
         }
         return d;
     }
+    auto find = [](const CrcLog& l, uint64_t tick) -> const CrcRecord* {
+        const auto it = std::lower_bound(l.records.begin(), l.records.end(), tick,
+                                         [](const CrcRecord& r, uint64_t t) { return r.tick < t; });
+        return it != l.records.end() && it->tick == tick ? &*it : nullptr;
+    };
+    uint64_t prev_tick = 0;
+    bool have_prev = false;
+    for (const CrcRecord& dr : drv.records) {
+        const CrcRecord* o = find(oth, dr.tick);
+        if (!o) {
+            d.diverged = true;
+            d.tick = dr.tick;
+            d.message = "checkpoint tick " + std::to_string(dr.tick) + " of the " + drv_role + " log is not in the " + oth_role +
+                        " log (it has " + std::to_string(oth.records.size()) + " records, ticks " +
+                        std::to_string(oth.records.front().tick) + ".." + std::to_string(oth.records.back().tick) + ")";
+            return d;
+        }
+        const CrcRecord& e = drive_expected ? dr : *o;
+        const CrcRecord& a = drive_expected ? *o : dr;
+        if (e == a) {
+            prev_tick = dr.tick;
+            have_prev = true;
+            continue;
+        }
+        d.diverged = true;
+        d.tick = dr.tick;
+        d.window_first = have_prev ? prev_tick + 1 : dr.tick;
+        d.window_last = dr.tick;
+        for (size_t s = 0; s < e.systems.size(); ++s) {
+            if (e.systems[s] == a.systems[s]) continue;
+            if (d.system.empty()) {
+                d.system = expected.systems[s];
+                d.message = "checkpoint tick " + std::to_string(dr.tick) + ": system '" + d.system + "' expected " +
+                            hex16(e.systems[s]) + ", got " + hex16(a.systems[s]);
+            }
+            d.columns.push_back(expected.systems[s]);
+        }
+        if (e.parity != a.parity) {
+            d.columns.push_back("parity");
+            if (d.system.empty()) {
+                d.system = "parity";
+                d.message = "checkpoint tick " + std::to_string(dr.tick) + ": parity CRC differs (" + hex16(e.parity).substr(8) +
+                            " vs " + hex16(a.parity).substr(8) + "), ordered systems equal";
+            }
+        }
+        if (e.combined != a.combined) {
+            d.columns.push_back("combined");
+            if (d.message.empty())
+                d.message = "checkpoint tick " + std::to_string(dr.tick) + ": combined CRC differs (" + hex16(e.combined) +
+                            " vs " + hex16(a.combined) + ")";
+        }
+        d.message += " (first bad checkpoint, every " + std::to_string(drv.checkpoint) + " ticks; columns that differ:";
+        for (size_t i = 0; i < d.columns.size(); ++i) d.message += (i ? ", " : " ") + d.columns[i];
+        d.message += ")\n  the first differing tick is in " + std::to_string(d.window_first) + ".." + std::to_string(d.window_last);
+        d.message += have_prev ? " (checkpoint " + std::to_string(prev_tick) + " matched)." : " (the first stored tick).";
+        d.message +=
+            " For the exact tick run both sides with --crc-out full.crc (no --crc-checkpoint; the expected side is the code "
+            "before the change) and compare the two files: alamo_headless --compare expected_full.crc actual_full.crc";
+        return d;
+    }
+    const uint64_t el = expected.records.back().tick, al = actual.records.back().tick;
+    if (el != al) {
+        d.diverged = true;
+        const CrcLog& longer = el > al ? expected : actual;
+        const uint64_t shorter_last = std::min(el, al);
+        const auto it = std::upper_bound(longer.records.begin(), longer.records.end(), shorter_last,
+                                         [](uint64_t t, const CrcRecord& r) { return t < r.tick; });
+        d.tick = it->tick;
+        d.message = "checkpoints match but the runs end at different ticks: expected last tick " + std::to_string(el) +
+                    ", got " + std::to_string(al) + " (first unmatched tick " + std::to_string(d.tick) + ")";
+        return d;
+    }
+    d.message = "identical on " + std::to_string(drv.records.size()) + " checkpoints (every " + std::to_string(drv.checkpoint) +
+                " ticks, ticks " + std::to_string(drv.records.front().tick) + ".." + std::to_string(drv.records.back().tick) + ")";
+    return d;
+}
+
+}  // namespace
+
+CrcDivergence first_divergence(const CrcLog& expected, const CrcLog& actual) {
+    CrcDivergence d;
+    if (expected.systems != actual.systems || expected.parity_parts != actual.parity_parts)
+        return system_lists_differ(expected, actual);
+    if (expected.checkpoint != 0 || actual.checkpoint != 0) return checkpoint_divergence(expected, actual);
     const size_t n = std::min(expected.records.size(), actual.records.size());
     for (size_t i = 0; i < n; ++i) {
         const CrcRecord& e = expected.records[i];

@@ -477,6 +477,20 @@ text: LOB_SOLVER §3.5, "MARKER removal" and "Facing at apply".
 - **Ground marker.** A `Dummy_Barrage_Target` (command 57) target is killed by the toss 0x71a200 after the spawn
   attempt, even when nothing spawned. It has no lifetime of its own, so it **stays** when the toss never happens.
   [M] Whether the GUI issues command 57 for Remote_Bomb (type 64 is in the Lua object-target list above).
+- **Garrisoned thrower (s78f t03, 2026-11-03)** [H]. The Remote_Bomb toss goes through `Spawn_Projectile`, so a
+  thrower inside a host with garrison guns launches from the host bone chosen by the same rule as a garrisoned
+  WeaponBehavior shot (LOB_SOLVER §5.1 "Garrison pick inputs"):
+  - candidate = the bone's **x-axis yaw** (column 0 of its world matrix, animated pose) within 60° of the yaw from
+    the host position to the target's raw position;
+  - one synced `Get_Int(0, n − 1)` when n ≥ 2, none when n = 1;
+  - the host's current damage ALT selects the bone row;
+  - the pick happens before the lob solve, so a toss with no arc has already spent the draw (LOB_SOLVER §5.2 "Order
+    and draws"); the toss returns false and is not retried (§3.5).
+
+  The port's abilities hook `garrison_fire_bones` returns bone positions only, and `remote_bomb_launch` tests the
+  angle of the bone's **position** around the host. It should get each bone's world position **and** x-axis yaw
+  (or matrix) and test the yaw, as combat's `garrison_muzzle` does. Vanilla bunkers have no animation, so rest pose
+  × host transform is exact.
 - **DEPLOY (2) "active" (§2.7 item 4).** It is `0x39a390`: the locomotor pack's pending flag +0x2b3, or Walk
   state 0x19 (Deployed) only, not 0x18 Deploying (TACTICAL_COMBAT §3.1.1 "Gate details").
 - **Locomotor swaps and hardpoints (S8 t12).** The JET_PACK / locomotor swap (`0x3a9910`, MOVEMENT §3.1.1)
@@ -808,8 +822,8 @@ through **globals** 0x140b2c380–0x140b2c394. The port must pass that context e
 root-finder method is not identified; any deterministic method with the same bracket and stop rule is
 acceptable for our own clients.
 
-### 4.12 `Destroy_When_Stunned_Over_Water` (type +0xe6) — port guess, no RE pass [port]
-Not traced (Gabriel 2026-10-30, `docs/PHASE4.md` "Roadmap trim": a documented guess instead of an RE pass). The
+### 4.12 `Destroy_When_Stunned_Over_Water` (type +0xe6) — port guess, no RE pass, confirmed by probe 2026-11-04
+Not traced (Gabriel 2026-10-30, `docs/DECISIONS.md` "Roadmap trim": a documented guess instead of an RE pass). The
 only vanilla user is `MAL_Rocket_Vehicle` (`UNITS_LAND_UNDERWORLD_MAL.XML`): a `Hover` movement-class vehicle with
 `STUNNABLE` in its land behaviours, so it is the one STUNNABLE unit that can stand on water cells (`Hover`
 passability includes `Water`). The port's reading of the name: a stunned hover vehicle loses its lift and sinks.
@@ -823,8 +837,15 @@ so its position does not change during the stun. Not included: the ion stun (§4
 Earthquake and other immobilisations. Space battles and maps without water never trigger it.
 Why this guess: the tag is a per-type bool that only a hover vehicle sets, and the only state a STUNNABLE unit
 changes is "stunned"; destroying at the stun start keeps the sim simple (no per-frame water scan, no save state).
-**Probe** (if the guess ever matters): stun a MAL rocket vehicle on water and on land with a stun grenade in a
-FoC skirmish; check whether it dies at once, at the stun end, or only on deep water.
+**Probe result (2026-11-04, OI follow-up t02, kit `tools/probe_mod/oi_abilities/`, retail FoC, Dagobah, Han Solo's
+`AREA_EFFECT_STUN`: blast centred on Han, `Projectile_Stun_Radius` 150, 600 frames): rule confirmed.** A MAL stunned
+on dry land (terrain 14.9 above the water plane) gets the stun flag for 600 frames and survives; a MAL placed on the
+water at a point whose terrain is 3.8 below the water plane is removed 2 frames after the stun (the blast's own
+lifetime), with no stun-end delay. MALs stunned on low shore ground (terrain 2.9 and 5.0 above the plane) survive, so
+"over water" is the terrain test above, not "near water". Not measured: the 46-deep point (the run stopped after the
+shallow kill); the port's rule has no depth threshold, and a kill at 3.8 already rules one out above that depth.
+Probe notes: `Spawn_Unit` moves a land unit off water cells (the MALs landed 80–90 units away on the shore);
+`Create_Generic_Object` places it exactly.
 
 ### 4.13 Animation-driven ability timings on sim frames [port]
 Several special-ability classes time their effects from the owner's animation (TACTICAL_GAPS §2.3: "at animation
@@ -853,8 +874,19 @@ sim code (determinism rule 3); instead a clip position is a pure function of fix
   old timings and CRCs.
 - The "not in animation X unless ending" apply gates and Super_Laser's `Attack_Anim_Sub_Index`: §4.14 (implemented
   2026-11-01, OI follow-up t01).
-**Probe** to settle the [port] choices (prepared only when needed): compare in-game kill timings of a Rancor
-(`Rancor_Pound_Vehicles`, `Rancor_Eat_Infantry`), an Infiltrator grenade toss and Yoda's Berserker with the port's frame counts.
+**Probe result (2026-11-04, OI follow-up t02, 3 retail runs with clip positions read from memory, ±1 frame):**
+- Rancor `Rancor_Pound_Vehicles`: clip 63 advances 0.75 clip frames per sim frame (rate × `Attack_Animation_Speedup`
+  0.75); the 240 damage lands 27 frames after each clip start (5 clips over 2 runs), = the port's ceil(20 / 0.75). Match.
+- Rancor `Rancor_Eat_Infantry` (one Eat in 3 runs; the Rancor mostly used its plain attack clip 5): clip 64 at 1.0 clip
+  frame per sim frame; the victim is destroyed at clip start + 112 (position 111); port: position ≥ 110 → +111. Match
+  within the reader's ±1 frame. The attach (re-own) frame was not visible in memory.
+- Infiltrator `STICKY_BOMB`: `PROJ_STICKY_BOMB` appears at `Bombtoss` (47) start + 12 / + 13 (port: position ≥ 12);
+  the clip ends at + 29 and the thrower's next clip starts at + 30 (port: ceil(max(count − 2, 0) / rate)). Match.
+- Yoda `BERSERKER`: damage passes come every 5 frames (counter % 5 = 0 confirmed) and only in the middle of the clip
+  (passes at clip positions 8–29, none at 3–5 or 30+, i.e. about 20 %–80 %). Two differences, kept as the [port]
+  approximation: retail played **variant 1** of `RI_YODA_SPINMOVE` (38 frames; the port uses variant 0, 36 frames)
+  in both runs, and it restarts the clip before its end at irregular points (loops of 36, 35, 34, 34, 34 and 34, 33,
+  36, 34, 33 frames), so no fixed period fits. Measured 23 passes per 6 s activation against 20 in the port model.
 
 ### 4.14 Ability animation gates and sequences (RE pass 2026-11-01) [H unless tagged]
 Settles the gates §4.13 lists as "not modelled". Corrections to TACTICAL_GAPS §2.3: Telekinesis apply has **no**

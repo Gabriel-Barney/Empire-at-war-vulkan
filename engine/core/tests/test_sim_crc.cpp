@@ -318,9 +318,135 @@ static void test_parity() {
     CHECK(d.diverged && d.system == "parity" && d.tick == 3);
 }
 
+// ---- Golden checkpoints (ALAMO_CRC 2) ----------------------------------------------------------------------------
+static alamo::CrcLog make_full_log(uint64_t ticks) {
+    alamo::CrcLog log;
+    log.systems = {"sys.a", "sys.b", "sys.c"};
+    log.parity_parts = {"p"};
+    log.comments = {"checkpoint test seed 5"};
+    uint64_t x = 0x9E3779B97F4A7C15ull;
+    for (uint64_t t = 0; t < ticks; ++t) {
+        alamo::CrcRecord r;
+        r.tick = t;
+        for (int i = 0; i < 3; ++i) {
+            x = x * 6364136223846793005ull + 1442695040888963407ull;
+            r.systems.push_back(x);
+        }
+        r.combined = alamo::combine_crcs(log.systems, r.systems);
+        r.parity = static_cast<uint32_t>(x >> 32);
+        log.records.push_back(r);
+    }
+    return log;
+}
+
+static bool has(const std::string& s, const char* part) { return s.find(part) != std::string::npos; }
+
+static void test_checkpoints() {
+    const alamo::CrcLog full = make_full_log(200);  // ticks 0..199
+    CHECK(full.checkpoint == 0 && full.to_text().rfind("ALAMO_CRC 1\n", 0) == 0);  // the default stays the full v1 log
+    CHECK(full.checkpointed(0).records.size() == 200 && full.checkpointed(0).checkpoint == 0);
+
+    // Which ticks are stored: first, last, multiples of N, kept ticks.
+    const alamo::CrcLog plain = full.checkpointed(64);
+    std::vector<uint64_t> ticks;
+    for (const auto& r : plain.records) ticks.push_back(r.tick);
+    CHECK((ticks == std::vector<uint64_t>{0, 64, 128, 192, 199}));
+    const alamo::CrcLog kept = full.checkpointed(64, {100, 7, 100});
+    ticks.clear();
+    for (const auto& r : kept.records) ticks.push_back(r.tick);
+    CHECK((ticks == std::vector<uint64_t>{0, 7, 64, 100, 128, 192, 199}));
+    CHECK((kept.keep == std::vector<uint64_t>{7, 100}));
+    CHECK(full.checkpointed(1000).records.size() == 2);  // a grid wider than the run: first and last only
+
+    // Round trip: text -> parse -> text is byte-identical; records, comments and the keep line survive.
+    const std::string text = kept.to_text();
+    CHECK(text.rfind("ALAMO_CRC 2\nsystems 3 sys.a sys.b sys.c\nparity 1 p\ncheckpoint 64\nkeep 7 100\n# checkpoint test seed 5\n0 ", 0) == 0);
+    alamo::CrcLog back;
+    std::string err;
+    CHECK(alamo::CrcLog::parse(text, back, &err));
+    CHECK(back.checkpoint == 64 && back.keep == kept.keep && back.records == kept.records && back.comments == kept.comments);
+    CHECK(back.to_text() == text);
+    CHECK(plain.to_text().find("keep") == std::string::npos);  // no keep line when nothing is kept
+    alamo::CrcLog back_plain;
+    CHECK(alamo::CrcLog::parse(plain.to_text(), back_plain, &err) && back_plain.keep.empty() && back_plain.records == plain.records);
+    CHECK(back.checkpointed(64).records.size() == 5);  // re-thinning without the keep list drops the kept ticks off the grid
+
+    // Parse errors name the problem.
+    const std::string head = "ALAMO_CRC 2\nsystems 1 x\nparity 0\n";
+    const std::string rec = "0 0000000000000001 00000000 0000000000000002\n";
+    CHECK(!alamo::CrcLog::parse(head + rec, back, &err) && has(err, "checkpoint"));  // no checkpoint line
+    CHECK(!alamo::CrcLog::parse(head + "checkpoint 0\n" + rec, back, &err));
+    CHECK(!alamo::CrcLog::parse(head + "checkpoint 64\nkeep 9 3\n" + rec, back, &err) && has(err, "increase"));
+    CHECK(alamo::CrcLog::parse(head + "checkpoint 64\n" + rec, back, &err) && back.checkpoint == 64);
+    const std::string odd = "5 0000000000000001 00000000 0000000000000002\n";
+    const std::string at64 = "64 0000000000000001 00000000 0000000000000002\n";
+    const std::string at70 = "70 0000000000000001 00000000 0000000000000002\n";
+    CHECK(!alamo::CrcLog::parse(head + "checkpoint 64\n" + rec + odd + at64 + at70, back, &err) && has(err, "tick 5 is neither"));
+    CHECK(alamo::CrcLog::parse(head + "checkpoint 64\nkeep 5\n" + rec + odd + at64 + at70, back, &err));  // 5 is kept, 70 is the last
+
+    // v1 vs v2: a v2 golden against the full log of the same run, or a fresh run (here: a copy), on its checkpoint ticks.
+    auto d = alamo::first_divergence(kept, full);
+    CHECK(!d.diverged && has(d.message, "identical on 7 checkpoints") && has(d.message, "every 64 ticks"));
+    CHECK(!alamo::first_divergence(full, kept).diverged);  // and the other way round (the v2 log is the driver either way)
+    CHECK(!alamo::first_divergence(kept, kept).diverged);
+    CHECK(!alamo::first_divergence(full, full).diverged && alamo::first_divergence(full, full).message == "identical (200 ticks)");
+    CHECK(!alamo::first_divergence(plain, full.checkpointed(32)).diverged);  // other grid on the other side: every golden tick exists
+
+    // A difference between two stored ticks is not seen (that is the point); one at a stored tick is.
+    alamo::CrcLog fresh = full;
+    fresh.records[130].systems[1] ^= 1;
+    fresh.records[130].combined ^= 1;
+    CHECK(!alamo::first_divergence(plain, fresh).diverged);
+    CHECK(alamo::first_divergence(full, fresh).diverged);  // the full compare finds it
+
+    // Mismatch: first bad checkpoint, window, columns, how to get the exact tick.
+    fresh = full;
+    fresh.records[192].systems[2] ^= 1;  // later bad checkpoint: must not be the one reported
+    fresh.records[128].systems[1] ^= 1;
+    fresh.records[128].systems[2] ^= 1;
+    fresh.records[128].parity ^= 1;
+    fresh.records[128].combined ^= 1;
+    d = alamo::first_divergence(plain, fresh);
+    CHECK(d.diverged && d.tick == 128 && d.system == "sys.b" && d.window_first == 65 && d.window_last == 128);
+    CHECK((d.columns == std::vector<std::string>{"sys.b", "sys.c", "parity", "combined"}));
+    CHECK(has(d.message, "checkpoint tick 128") && has(d.message, "system 'sys.b'") && has(d.message, "65..128") &&
+          has(d.message, "checkpoint 64 matched") && has(d.message, "sys.b, sys.c, parity, combined") &&
+          has(d.message, "--crc-out full.crc"));
+    d = alamo::first_divergence(kept, fresh);  // the kept tick 100 narrows the window
+    CHECK(d.diverged && d.tick == 128 && d.window_first == 101 && d.window_last == 128);
+    alamo::CrcLog first_bad = full;
+    first_bad.records[0].systems[0] ^= 1;
+    d = alamo::first_divergence(plain, first_bad);
+    CHECK(d.diverged && d.tick == 0 && d.window_first == 0 && d.window_last == 0 && d.system == "sys.a" && has(d.message, "first stored tick"));
+    alamo::CrcLog parity_only = full;
+    parity_only.records[64].parity ^= 4;
+    d = alamo::first_divergence(plain, parity_only);
+    CHECK(d.diverged && d.tick == 64 && d.system == "parity" && d.window_first == 1 && d.window_last == 64);
+    d = alamo::first_divergence(full.checkpointed(64), fresh.checkpointed(64));  // both v2
+    CHECK(d.diverged && d.tick == 128);
+    d = alamo::first_divergence(fresh, plain);  // v1 expected, v2 actual: the v2 log drives; same window
+    CHECK(d.diverged && d.tick == 128 && d.window_first == 65);
+
+    // Run length: the last tick must agree; missing checkpoints are named.
+    const alamo::CrcLog longer = make_full_log(250);
+    d = alamo::first_divergence(plain, longer);
+    CHECK(d.diverged && has(d.message, "end at different ticks") && d.tick == 200);
+    d = alamo::first_divergence(plain, make_full_log(150));
+    CHECK(d.diverged && d.tick == 192 && has(d.message, "not in the actual log"));
+    d = alamo::first_divergence(full.checkpointed(32), plain);  // golden grid 32 against a 64-grid log: tick 32 missing
+    CHECK(d.diverged && d.tick == 32 && has(d.message, "not in the actual log"));
+    alamo::CrcLog renamed = full;
+    renamed.systems[1] = "sys.z";
+    CHECK(alamo::first_divergence(plain, renamed).diverged && has(alamo::first_divergence(plain, renamed).message, "system lists differ"));
+    alamo::CrcLog empty = full;
+    empty.records.clear();
+    CHECK(alamo::first_divergence(plain, empty).diverged);
+}
+
 int main() {
     test_hasher();
     test_registry_and_log();
+    test_checkpoints();
     test_bytes();
     test_rng();
     test_parity();

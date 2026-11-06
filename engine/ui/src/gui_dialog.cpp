@@ -454,13 +454,16 @@ GuiRect GuiManager::combo_field(const GuiDialog& d, size_t i) const {
     return r;
 }
 
+int32_t GuiManager::combo_rows(const GuiDialog& d, size_t i) const {
+    const float rh = row_height(d, i);
+    const float avail = std::max(rh, d.control_rect(i).height() - combo_field(d, i).height());
+    return std::max(1, std::min(static_cast<int32_t>(d[i].items.size()), static_cast<int32_t>(avail / rh)));
+}
+
 GuiRect GuiManager::combo_list(const GuiDialog& d, size_t i) const {
-    const GuiControl& c = d[i];
     const GuiRect f = combo_field(d, i);
     const float rh = row_height(d, i);
-    const GuiRect full = d.control_rect(i);
-    const float avail = std::max(rh, full.height() - f.height());
-    const int32_t rows = std::max(1, std::min(static_cast<int32_t>(c.items.size()), static_cast<int32_t>(avail / rh)));
+    const int32_t rows = combo_rows(d, i);
     GuiRect r;
     r.max = {f.max.x, f.min.y};
     r.min = {f.min.x, f.min.y - static_cast<float>(rows) * rh - 4.0f};
@@ -1283,6 +1286,7 @@ void GuiManager::draw_control(HudDrawList& dl, uint32_t layer, const GuiDialog& 
             }
             if (c.open) {  // drop-down list on the popup layer
                 const GuiRect lr = combo_list(d, i);
+                fill(dl, kPopupLayer, lr, {8, 9, 14, 255});  // [port] opaque under the skin's translucent frame art: the rows it covers do not show through
                 frame9(dl, kPopupLayer, d, id, lr, true);
                 const float rh = row_height(d, i);
                 for (size_t k = 0; k < c.items.size(); ++k) {
@@ -1334,10 +1338,13 @@ void GuiManager::draw_control(HudDrawList& dl, uint32_t layer, const GuiDialog& 
         }
         case GuiGadgetType::CustomImage:
             if (!c.image.empty()) quad(dl, layer, c.image, r, c.tint);
-            for (const GuiMarker& m : c.markers) {  // 8-unit squares with a dark rim
-                const float mx = r.min.x + m.pos.x * r.width(), my = r.min.y + m.pos.y * r.height();
-                fill(dl, layer, {{mx - 4.0f, my - 4.0f}, {mx + 4.0f, my + 4.0f}}, {0, 0, 0, 255});
-                fill(dl, layer, {{mx - 3.0f, my - 3.0f}, {mx + 3.0f, my + 3.0f}}, m.color);
+            {  // UI.md 9.6.1: each label centred on its point, in the control's font, inside the rect inset by 5 %
+                const float ax = r.min.x + 0.05f * r.width(), ay = r.max.y - 0.05f * r.height();
+                const float aw = 0.9f * r.width(), ah = 0.9f * r.height();
+                for (const GuiMarker& m : c.markers) {
+                    const float mx = ax + m.pos.x * aw, my = ay - m.pos.y * ah;  // pos.y runs down, the canvas runs up
+                    draw_text(dl, layer, d, i, m.label, {{mx, my}, {mx, my}}, TextAlign::Center, false, true, false, &m.color);
+                }
             }
             break;
         default: break;
