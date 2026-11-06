@@ -1966,7 +1966,8 @@ void test_story_victory_rewards(const Data& d) {
 // story t11: the galactic plot set's ENABLE_VICTORY / VICTORY act on the galactic monitor (GalacticSim::victory_hold,
 // galactic::check_victory): two holds at 0 s, one release and a Param1-less no-op at 1 s, an unknown faction at 2 s
 // (logged), VICTORY Underworld at 3 s: the hold is released and the campaign ends for the Underworld 210 frames later. The
-// human Empire's Credits_Accrued 0 would win at once without the hold.
+// human Empire's Credits_Accrued 0 would win at once without the hold. A prereq-less ELAPSED 0 fires at its second T9
+// (tick 2, StoryModel::tick_timer, A2I_T01_FRAME_ORDER.md §6), so the monitor is polled from the tick the holds are up.
 void test_galactic_story_victory(const Data& d) {
     const fs::path x = d.root / "Data/XML";
     write_file(x / "Story_Plots_GVic.xml", "<Story_Mode_Plots><Active_Plot>Story_GVic.xml</Active_Plot></Story_Mode_Plots>\n");
@@ -2002,6 +2003,10 @@ void test_galactic_story_victory(const Data& d) {
         host.tick_once();
         max_hold = std::max(max_hold, gs->victory_hold());
         if (max_hold == 2 && hold_after_release < 0 && gs->victory_hold() == 1) hold_after_release = 1;
+        if (max_hold == 0) {
+            CHECK(t < 2);  // the 0 s holds are up by tick 2
+            continue;
+        }
         const galactic::VictoryResult v = galactic::check_victory(*gs, rules);
         if (victory_frame < 0 && !gs->victory_claims().empty()) victory_frame = gs->victory_claims()[0].frame;
         if (v.finished()) {
