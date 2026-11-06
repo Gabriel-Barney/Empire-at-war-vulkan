@@ -1,0 +1,9 @@
+<ModObjects>
+  <Planet Name="Mod_Prime"><Galactic_Position>50, 80, 0</Galactic_Position></Planet>
+  <SpaceUnit Name="Mod_Corvette">
+    <Affiliation>Mod_Alliance</Affiliation>
+    <Space_Model_Name>Mod_Corvette.alo</Space_Model_Name>
+    <Tactical_Health>250</Tactical_Health>
+    <Build_Cost_Credits>400</Build_Cost_Credits>
+  </SpaceUnit>
+</ModObjects>

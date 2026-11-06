@@ -123,6 +123,18 @@ add_executable(alamo_game_mod_check_tests tests/test_mod_check.cpp)
 target_link_libraries(alamo_game_mod_check_tests PRIVATE alamo_core alamo_game_core)
 add_test(NAME alamo_game_mod_check_tests COMMAND alamo_game_mod_check_tests)
 set_tests_properties(alamo_game_mod_check_tests PROPERTIES TIMEOUT 300)
+# modc t07: the synthetic mod of testdata/mod_fixture (a new faction, unit, planet, campaign and a Lua override) through
+# the real MODPATH= route, no game data; read only (no fixture path shared with any other test). The second entry runs the
+# exe itself and checks its JSON summary (docs/MODS.md section 5.1).
+add_executable(alamo_game_mod_fixture_tests tests/test_mod_fixture.cpp)
+target_link_libraries(alamo_game_mod_fixture_tests PRIVATE alamo_core alamo_game_core)
+add_test(NAME alamo_game_mod_fixture_tests COMMAND alamo_game_mod_fixture_tests ${CMAKE_CURRENT_SOURCE_DIR}/testdata/mod_fixture)
+set_tests_properties(alamo_game_mod_fixture_tests PROPERTIES TIMEOUT 120)
+add_test(NAME alamo_mod_check_fixture
+         COMMAND alamo_mod_check --game ${CMAKE_CURRENT_SOURCE_DIR}/testdata/mod_fixture/corruption MODPATH=Mods/FixtureMod --json -)
+set_tests_properties(alamo_mod_check_fixture PROPERTIES TIMEOUT 120
+                     PASS_REGULAR_EXPRESSION "\"result\": \"ok\",[^{]*\"errors\": 0,"
+                     FAIL_REGULAR_EXPRESSION "\"run_errors\": \\[[^]]")
 
 # q6 t08: AI player types (Basic_AI / AI_Player_Control) and default skirmish forces for mod factions on synthetic data in its
 # own temp folder; with ALAMO_FOC_DATA also the shipped factions (they resolve as the port's hard-coded tables).

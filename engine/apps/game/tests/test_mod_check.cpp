@@ -34,6 +34,11 @@ bool has(const std::vector<std::string>& v, const std::string& needle) {
         if (s.find(needle) != std::string::npos) return true;
     return false;
 }
+bool has(const std::vector<alamo::game::LuaIssue>& v, const std::string& needle) {
+    for (const auto& e : v)
+        if (e.text().find(needle) != std::string::npos) return true;
+    return false;
+}
 
 const alamo::game::ModFolderStats* folder(const ModCheckReport& r, const std::string& name) {
     for (const auto& f : r.mod_folders)
@@ -117,6 +122,8 @@ void test_fake_install() {
         CHECK(r.campaign_warning_count >= 1);
         CHECK(r.lua_scripts == 3);
         CHECK(r.lua_errors.size() == 1 && has(r.lua_errors, "MOD_BROKEN.LUA"));  // a warning
+        CHECK(r.lua_errors.size() == 1 && r.lua_errors[0].in_mod);
+        CHECK(r.lua_run == 2 && r.lua_run_errors.empty());  // the two story scripts that compile
         CHECK(r.error_count() == 1);  // Empty_GC
         CHECK(r.warning_count() >= 2);
         const std::string text = alamo::game::format_mod_report(r);
@@ -128,6 +135,60 @@ void test_fake_install() {
         o.campaigns = o.lua = false;
         const ModCheckReport r = alamo::game::check_mod_data(foc.string(), {"MODPATH=" + mod.string()}, o);
         CHECK(r.loaded && r.campaigns_checked == 0 && r.lua_scripts == 0 && r.error_count() == 0);
+    }
+    {  // modc t05: a second mod with the report's other warnings - missing files, an unknown tag, Lua load errors
+        const fs::path mod2 = root / "Mods" / "MC2";
+        const fs::path x = mod2 / "Data/XML";
+        write_file(x / "GameObjectFiles.xml",
+                   "<GameObjectFiles><File>MCPlanets.xml</File><File>MC2Units.xml</File><File>MC2Ghost.xml</File></GameObjectFiles>\n");
+        write_file(x / "MC2Units.xml",
+                   "<Units><SpaceUnit Name=\"MC2_Ship\"><Space_Model_Name>MC2_Missing.alo</Space_Model_Name>"
+                   "<MC2_Not_A_Real_Tag>1</MC2_Not_A_Real_Tag></SpaceUnit>\n"
+                   "<SpaceUnit Name=\"MC2_Ship_B\"><Space_Model_Name>mc2_missing.ALO</Space_Model_Name>"
+                   "<MC2_Not_A_Real_Tag>2</MC2_Not_A_Real_Tag></SpaceUnit>\n"
+                   "<SpaceUnit Name=\"MC2_Ok\"><Land_Model_Name>MC2_Present</Land_Model_Name></SpaceUnit></Units>\n");
+        write_file(mod2 / "Data/Art/Models/MC2_Present.alo", "x");  // no extension in the XML: .ALO tried
+        // The message carries a byte that is not UTF-8 (Lua \233 = 0xE9, Latin-1 e acute): the JSON must stay valid.
+        write_file(mod2 / "Data/Scripts/Story/MC2_Errors.lua", "error(\"MC2 load error caf\\233\")\n");
+        write_file(mod2 / "Data/Scripts/Story/MC2_Requires.lua", "require(\"MC2_No_Such_Library\")\n");
+        const ModCheckReport r = alamo::game::check_mod_data(foc.string(), {"MODPATH=" + mod2.string()});
+        CHECK(r.loaded && r.error_count() == 0);
+        CHECK(r.missing_files.size() == 2);
+        if (r.missing_files.size() == 2) {  // sorted by path
+            CHECK(r.missing_files[0].path == "DATA\\ART\\MODELS\\MC2_MISSING.ALO");
+            CHECK(r.missing_files[0].references == 2);
+            CHECK(r.missing_files[0].referenced_by == "MC2_Ship (Space_Model_Name)");
+            CHECK(r.missing_files[0].in_mod && r.missing_files[1].in_mod);
+            CHECK(r.missing_files[1].path == "DATA\\XML\\MC2GHOST.XML");
+            CHECK(r.missing_files[1].referenced_by.find("GAMEOBJECTFILES.XML") != std::string::npos);
+        }
+        CHECK(r.unknown_xml_tags.size() == 1);
+        if (!r.unknown_xml_tags.empty()) {
+            CHECK(r.unknown_xml_tags[0].tag == "MC2_Not_A_Real_Tag");
+            CHECK(r.unknown_xml_tags[0].occurrences == 2 && r.unknown_xml_tags[0].types == 2);
+            CHECK(r.unknown_xml_tags[0].first_file.find("MC2Units.xml") != std::string::npos);
+            CHECK(r.unknown_xml_tags[0].in_mod);
+        }
+        CHECK(r.lua_scripts == 3 && r.lua_run == 3);
+        CHECK(r.lua_run_errors.size() == 2);
+        CHECK(has(r.lua_run_errors, "MC2_ERRORS.LUA") && has(r.lua_run_errors, "MC2 load error"));
+        CHECK(has(r.lua_run_errors, "MC2_REQUIRES.LUA"));
+        for (const auto& e : r.lua_run_errors) CHECK(e.in_mod);
+        CHECK(r.warning_count() >= 5);
+        const std::string text = alamo::game::format_mod_report(r);
+        CHECK(text.find("== missing files\n2 files") != std::string::npos);
+        CHECK(text.find("MC2_Not_A_Real_Tag") != std::string::npos);
+        const std::string js = alamo::game::format_mod_report_json(r);
+        CHECK(js.find("\"path\": \"DATA\\\\ART\\\\MODELS\\\\MC2_MISSING.ALO\"") != std::string::npos);
+        CHECK(js.find("\"tag\": \"MC2_Not_A_Real_Tag\"") != std::string::npos);
+        CHECK(js.find("\"error\": ") != std::string::npos);
+        CHECK(js.find("MC2 load error caf\\u00e9") != std::string::npos);
+        CHECK(js.find('\xE9') == std::string::npos);
+        alamo::game::ModCheckOptions o;
+        o.files = o.xml_tags = o.lua_run = false;
+        const ModCheckReport q = alamo::game::check_mod_data(foc.string(), {"MODPATH=" + mod2.string()}, o);
+        CHECK(q.missing_files.empty() && q.unknown_xml_tags.empty() && q.lua_run == 0 && q.lua_run_errors.empty());
+        CHECK(q.lua_scripts == 3);
     }
     {  // not a folder: load fails, reported as one error
         const ModCheckReport r = alamo::game::check_mod_data((root / "no_such_dir").string(), {});

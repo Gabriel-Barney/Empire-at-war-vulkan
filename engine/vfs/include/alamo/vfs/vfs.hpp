@@ -71,8 +71,9 @@ struct VfsConfig {
     std::optional<std::string> eaw_root;       // nullopt = auto-detect (<foc_root>\..\GameData with
                                                // sweaw.exe), "" = no EaW, else explicit GameData dir
     bool mount_megs = true;
-    // Resolves SteamWorkshop entries of mod_search when the Vfs is created. Unset: those entries
-    // are skipped with a warning.
+    // Resolves SteamWorkshop entries of mod_search when the Vfs is created. Unset: the process-wide
+    // Steam library lookup if an app installed it (steam_workshop.hpp, modc t10), else those entries
+    // are skipped with the warning "no workshop resolver".
     SteamModResolver steam_resolver;
 };
 

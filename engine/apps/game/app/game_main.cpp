@@ -16,6 +16,7 @@
 //                   replay of its recorded command stream) and 0 validation messages. Exit 0 "skipped" without data.
 // Game data: --game DIR or ALAMO_FOC_DATA (the FoC "corruption" folder).
 #include "game_app.hpp"
+#include "alamo/vfs/steam_workshop.hpp"
 
 namespace alamo_game_app {
 
@@ -471,6 +472,7 @@ static int bench_regen_prepare(const Options& opt, const std::vector<std::string
 }
 
 int main(int argc, char** argv) {
+    alamo::vfs::install_steam_workshop_lookup();  // modc t10: STEAMMOD= from the Steam library folders
     enable_dpi_awareness();  // before any window: sizes and the video modes in physical pixels
     Options opt;
     const std::vector<std::string> args(argv, argv + argc);

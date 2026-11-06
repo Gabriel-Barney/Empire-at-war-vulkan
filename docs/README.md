@@ -14,6 +14,7 @@ its kind below and add it there instead of starting a second copy.
 | In-game probes: which kit asks what, where findings go | [`PROBES.md`](PROBES.md) | Kit READMEs under `tools/probe_mod/` say how to run; findings go in `docs/re/` |
 | Roadmap rules and field list | [`ROADMAP_PROTOCOL.md`](ROADMAP_PROTOCOL.md) | The roadmap itself is `roadmap-store/` |
 | Behaviour of the original game (specs recovered from the binary) | [`re/`](re/) | Clean-room: engine code is written from these, never from decompiled output. `re/AUDIT_2026-10-30.md` is the status of each file |
+| Mod loading: what makes a mod loadable, file resolution, mechanisms, load reports, the no-mod-specific-code rule | [`MODS.md`](MODS.md) | The decision is in `DECISIONS.md`; status of each part on the roadmap (group `modc`) |
 | Phase 4 (the game): step map and open per-step port choices | [`PHASE4.md`](PHASE4.md) | Finished-work notes and old build / fix logs: [`PHASE4_HISTORY.md`](PHASE4_HISTORY.md) |
 | Phase 3 (renderer): results, assumptions, reference | [`PHASE3.md`](PHASE3.md) | Details of finished work: `archive/` |
 | Phase 2 (architecture, headless core): results and design notes (determinism contract, file resolution order) | [`PHASE2.md`](PHASE2.md) | |
@@ -29,6 +30,7 @@ its kind below and add it there instead of starting a second copy.
 - A build, test or tooling rule → `BUILD.md` (and one line in `CLAUDE.md` only if agents must follow it every time).
 - What the original game does → the matching `re/` spec (a new file only when no spec covers the subject).
 - A port choice made where the spec was silent → the step's entry in `PHASE4.md`; when the step is finished, move it to `PHASE4_HISTORY.md`.
+- How mods are found, resolved or reported, or a port rule that applies only with a mod loaded → `MODS.md`.
 - A probe result → the `re/` spec the probe names (see `PROBES.md`), not only the kit README.
 - Whether something is done or open → the roadmap, nothing else.
 
