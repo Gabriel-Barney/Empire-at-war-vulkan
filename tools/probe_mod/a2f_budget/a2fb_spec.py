@@ -90,6 +90,52 @@ MAJOR_MOD = [
 ]
 MAJOR_KEYS = [k for _n, k, _h in MAJOR_SHIPPED] + [k for _n, k, _b, _h in MAJOR_MOD]
 
+# a2j t02 (D4, docs/re/A2I_T03_TRAJECTORY.md section 5, docs/re/A2J_T02_PROBE_PLAN.md): the Conquer_Pirate desire of one
+# (AI faction, target planet) pair and its terms, from a plot script of that faction's own AI story plot (channel D, one
+# script per pair, so an evaluation that fails stops only that pair's channel). Pairs: (faction key, Find_Player name,
+# FindPlanet name, script suffix, AI plot file whose Lua_Script the build sets).
+PERC_PAIRS = [
+    ('UNDERWORLD', 'Underworld', 'Kashyyyk', 'U', 'Story_Plots_Underworld_AI_Heroes.xml'),
+    ('EMPIRE', 'Empire', 'Felucia', 'E', 'Story_Plots_Empire_AI_Heroes_EXP.xml'),
+]
+# Shipped equations, evaluated with the planet as the target (name, key, needs a human player). Why each is safe in
+# retail: the goal system evaluates Should_Conquer_Pirate_Planet (Conquer_Pirate's desire) on these very targets every
+# proposal pass, and the others are its sub-functions, so every token in them is evaluated in retail with a planet
+# target already; GenericPlanetValue and Is_Neglected_By_My_Opponent_Space are also called from shipped Lua with a
+# planet target (PathBonusForDistantTargets.lua). Is_AI_And_Should_Be_Ignored (and so Is_Good_Invasion_Target and
+# Should_Conquer_Pirate_Planet) reads Needs_More_Space_Force_Globally -> Variable_Human, which fails with no human: the
+# kit skips them then (as MJ does). No '#' in any galactic equation file (selftest).
+PERC_SHIPPED = [
+    ('Should_Conquer_Pirate_Planet', 'SCP', True),        # Is_Good_Invasion_Target x (IsHumanControlled == 0)
+    ('Is_Good_Invasion_Target', 'IGI', True),
+    ('Opens_New_Front', 'ONF', False),
+    ('Is_AI_And_Should_Be_Ignored', 'IGN', True),
+    ('GenericPlanetValue', 'GPV', False),
+    ('Is_Neglected_By_My_Opponent_Space', 'NEG', False),
+    ('System_Recon_Relevance', 'SRR', False),
+    ('Is_Connected_To_Me', 'ICM', False),
+    ('Is_Connected_To_Enemy', 'ICE', False),
+]
+# Mod equations (name, key, body): each body is a token of Is_Good_Invasion_Target written exactly as it stands there
+# (same root, same parameters, none), so it evaluates wherever that shipped equation does.
+PERC_MOD = [
+    ('A2FB_D4_Markup', 'MK', 'Variable_Target.Markup'),
+    ('A2FB_D4_ConnIso', 'CIP', 'Variable_Target.ConnectsIsolatedPlanetsByForce'),
+    ('A2FB_D4_TradeRoutes', 'TR', 'Variable_Target.TradeRoutes'),
+    ('A2FB_D4_Chokepoint', 'CHK', 'Variable_Target.Hints.Chokepoint'),
+    ('A2FB_D4_PriorityTarget', 'PRI', 'Variable_Target.Hints.PriorityTarget'),
+    ('A2FB_D4_HasGroundForce', 'HGF', 'Variable_Target.EnemyForce.HasGroundForce'),
+    ('A2FB_D4_HasSpaceForce', 'HSF', 'Variable_Target.EnemyForce.HasSpaceForce'),
+    ('A2FB_D4_IsHuman', 'HUM', 'Variable_Target.IsHumanControlled'),
+    ('A2FB_D4_ConnCorruption', 'ICC', 'Variable_Target.IsConnectedToCorruption'),
+    ('A2FB_D4_Corrupted', 'ICOR', 'Variable_Target.IsCorrupted'),
+    ('A2FB_D4_AnyThreats', 'ACT', 'Variable_Self.AnyCurrentThreats'),
+]
+PERC_KEYS = [k for _n, k, _h in PERC_SHIPPED] + [k for _n, k, _b in PERC_MOD]
+PERC_SHIPPED_NAMES = [n for n, _k, _h in PERC_SHIPPED]
+# Sample frames: every 30 frames in 0..600, then every 300 frames to the end of the run (A2I_T03 section 5 asks 0..600).
+PERC_DENSE_END, PERC_DENSE_STEP, PERC_STEP = 600, 30, 300
+
 # Template that is active when: base template always (Basic_*_Default), Tech_Upgrade when TRIG > 0 (Empire only).
 # Raw weights of the candidates, by the shipped equation keys above (a2f_report.py compares normalised pools).
 TEMPLATE_CANDIDATES = {
@@ -139,12 +185,25 @@ def equations_xml():
     lines.append('\t<!-- a2h t02: MajorItem flush / reclaim inputs (A2G_T02_T04_PORT_VS_RETAIL.md section 4) -->')
     for n, _k, body, _h in MAJOR_MOD:
         lines += ['\t<%s>' % n, '\t\t' + body, '\t</%s>' % n]
+    lines.append('\t<!-- a2j t02: D4 perception tokens of Is_Good_Invasion_Target (A2J_T02_PROBE_PLAN.md) -->')
+    for n, _k, body in PERC_MOD:
+        lines += ['\t<%s>' % n, '\t\t' + body, '\t</%s>' % n]
     return '\n'.join(lines) + '\n'
 
 
 def probe_equation_count():
     """Number of A2FB_* equations equations_xml() adds."""
-    return len(COMMON_EQS) + len(bfb_equations()) + len(MAJOR_MOD)
+    return len(COMMON_EQS) + len(bfb_equations()) + len(MAJOR_MOD) + len(PERC_MOD)
+
+
+def perc_lua(fkey, use_mod_eq=True):
+    """Lua text of the D channel's pair table for one faction key (read by a2fb_percept.lua)."""
+    pair = [p for p in PERC_PAIRS if p[0] == fkey][0]
+    ship = ', '.join('{ "%s", "%s", %s }' % (k, n, 'true' if h else 'false') for n, k, h in PERC_SHIPPED)
+    mod = ', '.join('{ "%s", "%s", false }' % (k, n) for n, k, _b in PERC_MOD) if use_mod_eq else ''
+    return ('A2FB_PERC = { fac = "%s", player = "%s", planet = "%s", shipped = { %s }, tokens = { %s } }\n'
+            'A2FB_PERC_DENSE_END = %d\nA2FB_PERC_DENSE_STEP = %d\nA2FB_PERC_STEP = %d\n'
+            % (pair[0], pair[1], pair[2], ship, mod, PERC_DENSE_END, PERC_DENSE_STEP, PERC_STEP))
 
 
 def patch_equation_file(shipped_text):

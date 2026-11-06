@@ -13,7 +13,8 @@
 --     120 s, every 5 s until 300 s (DONE); after that a full sample every 30 s for as long as the run lasts
 --     (a2g t01: long runs until a template switch / Tech_Upgrade);
 --   * a2h t02: an MJ record (MajorItem flush / reclaim triggers and inputs) with every Empire sample, and the message
---     TEXT_A2FB_LONG_DONE (record LONGDONE) at 1500 s = 25 galactic minutes, the length the MajorItem question needs.
+--     TEXT_A2FB_LONG_DONE (record LONGDONE) at 1500 s = 25 galactic minutes, the length the MajorItem question needs;
+--   * a2j t04: the message TEXT_A2FB_MIN30 (record MIN30) at 1800 s = 30 galactic minutes, the end of the a2j run.
 -- The AI's budget is initialised at the first service of its galactic context (AI_GALACTIC 1.1: template init, then
 -- budget init 0x6137b0), which can be after this script's first service: the first samples can therefore show the
 -- state before Init (zero pools: BudgetFractionToBuild 1e18) and the following ones the state after it.
@@ -25,6 +26,8 @@ A2FB_FACS = { "Empire", "Rebel", "Underworld", "Pirates" }
 A2FB_MAX = 20000
 A2FB_LONG_T = 1500
 A2FB_LONG_DONE = false
+A2FB_MIN30_T = 1800
+A2FB_MIN30_DONE = false
 A2FB_LAST_FULL = -100
 A2FB_STOPPED = false
 A2FB_FIRST = true
@@ -128,6 +131,14 @@ function A2FB_Update()
 				return "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " records=" .. A2FB_Seq
 			end)
 			pcall(Game_Message, "TEXT_A2FB_LONG_DONE")
+		end
+		-- a2j t04: the 30-minute run (D3 / D4 and the per-cycle P / I comparison) ends here
+		if t >= A2FB_MIN30_T and not A2FB_MIN30_DONE then
+			A2FB_MIN30_DONE = true
+			A2FB_Rec("MIN30", function()
+				return "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " records=" .. A2FB_Seq
+			end)
+			pcall(Game_Message, "TEXT_A2FB_MIN30")
 		end
 		-- a2g t01 (long run until a template switch): keep a full sample every 30 s after DONE
 		if (t - A2FB_LAST_FULL) >= 29.999 then
