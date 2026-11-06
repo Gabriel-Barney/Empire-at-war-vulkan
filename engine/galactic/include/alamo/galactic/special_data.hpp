@@ -39,6 +39,8 @@ enum class SpecialAbilityClass : uint8_t {
     IncomeGambling = 6, // Planet_Income_Gambling_Ability (P4 4.2)
     Slicer = 7,         // Slicer_Ability (REMAINING_GAPS 1.1: R2D2_Slicer)
     SystemSpy = 8,      // System_Spy_Ability (GRC 2.3 / 2.3.1: planet visibility modifiers)
+    ReducePrice = 9,    // Reduce_Production_Price_Ability (A2K_T01_BUILD_COST_RE 1.3)
+    ReduceTime = 10,    // Reduce_Production_Time_Ability (same class family, the time tables)
 };
 
 struct SpecialAbilityDef {
@@ -85,6 +87,16 @@ struct SpecialAbilityDef {
     // Ground_Activated <= 0 -> 30; any other style -> style None).
     uint32_t spy_mask = 0;                     // ability +0x18C
     float spy_duration = 0.0f;                 // Duration_In_Secs
+    // Reduce_Production_Price_Ability / Reduce_Production_Time_Ability (A2K_T01_BUILD_COST_RE 1.2-1.3): the fraction
+    // (Price_Reduction_Percentage +0x178 / Time_Reduction_Percentage; >= 1.0 is set to 1.0 with a diagnostic, negative
+    // values lengthen / raise), Stacking_Category +0x17c, Galaxy_Wide +0x180 and the applicable set (0x48d070:
+    // Applicable_Unit_Categories / _Types minus Excluded_Unit_Types; "All" = every type [port choice]).
+    float production_reduction = 0.0f;
+    int32_t stacking_category = 0;
+    bool galaxy_wide = false;
+    uint64_t applicable_categories = 0;      // GameObjectCategoryType mask; ~0 = All
+    std::vector<uint32_t> applicable_types;  // type indices
+    std::vector<uint32_t> excluded_types;    // type indices
 };
 
 // BlackMarketItems.xml entry (P4 1.1), table order = file order.
@@ -145,10 +157,14 @@ struct TypeSpecial {
     // GRC 2.3: OR of the spy masks of this type's Initially_Enabled Galactic_Automatic System_Spy_Ability entries (the
     // always-on spies: smugglers, bounty hunters, OLRS, palaces, Bothawui). Derived at load from `abilities`.
     uint32_t auto_spy_mask = 0;
+    // SpecialRules::production indices of this type's Initially_Enabled Reduce_Production_Price / _Time abilities (list
+    // order; a team without its own uses its first member's). Kept out of `abilities` so those indices stay unchanged.
+    std::vector<uint32_t> production;
 };
 
 struct SpecialRules {
     std::vector<SpecialAbilityDef> abilities;  // every galactic-relevant <Abilities> entry, type order then list order
+    std::vector<SpecialAbilityDef> production; // Reduce_Production_Price / _Time entries (ReducePrice / ReduceTime)
     std::vector<BlackMarketItemDef> items;     // BlackMarketItems.xml, file order
     std::vector<TypeSpecial> types;            // index = TypeIndex (empty in hand-built rules: every lookup defaults)
     // GameConstants
@@ -162,6 +178,9 @@ struct SpecialRules {
     const TypeSpecial& type(uint32_t t) const;  // a static default for unknown / missing types
     uint32_t find_item(uint32_t name_crc) const;  // table index (first match), 0xFFFFFFFF if absent (0x48f550)
     uint32_t find_item_by_name(std::string_view name) const;  // exact name (GIVE_BLACK_MARKET 0x7E: length + memcmp)
+    // 0x48d070 applicability of a ReducePrice / ReduceTime ability to type `t` with category mask `categories`:
+    // excluded types never; listed types; else the category mask ("All" = ~0 matches every type) [port choice].
+    static bool production_applies(const SpecialAbilityDef& a, uint32_t t, uint64_t categories);
 };
 
 }  // namespace alamo::galactic

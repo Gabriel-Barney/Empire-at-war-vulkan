@@ -143,9 +143,10 @@ float build_time_t0(int32_t build_time_seconds, float production_speed_factor) {
 
 float tech_time_factor(int32_t starbase_level, int32_t tech_level, const std::array<float, 5>& table) {
     const int32_t d = starbase_level - tech_level;
+    // A2K_T01_BUILD_COST_RE 2.1 [H]: the index is d - 1 (d = 1 -> _0, 3 -> _2, >= 5 -> _4).
     if (d <= 0) return 1.0f;
-    if (d >= 4) return table[4];
-    return table[static_cast<size_t>(d)];
+    if (d >= 5) return table[4];
+    return table[static_cast<size_t>(d - 1)];
 }
 
 float build_time(const BuildTimeInputs& in) {

@@ -731,6 +731,38 @@ void test_queue_phases() {
         for (PlanetIndex p = 0; p < c.planets().size(); ++p)
             for (uint32_t q = 0; q < 2; ++q) CHECK(c.build_queue_phase(p, q) == s.build_queue_phase(p, q));
         CHECK(sim_bytes(c) == bytes);
+
+        // Older layouts still load (A2k integration: v3 queue phases, v4 without the build bonus floats): v3 brings
+        // the saved phases, v1 / v2 keep the reading session's start() draws; everything else reads back to the v4 bytes.
+        for (const uint32_t version : {1u, 2u, 3u}) {
+            ByteWriter ow;
+            s.write_version(ow, version);
+            CHECK(ow.bytes() != bytes);
+            objects::IdCounter ids3;
+            objects::ObjectStore store3(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids3);
+            SimRng rng3(seed + 7u);
+            GalacticSim o(rules, store3, rng3);
+            CHECK(o.start(setup));
+            std::vector<int32_t> own_phases;
+            for (PlanetIndex p = 0; p < o.planets().size(); ++p)
+                for (uint32_t q = 0; q < 2; ++q) own_phases.push_back(o.build_queue_phase(p, q));
+            store3 = store;
+            ids3.set_next(ids.next());
+            ByteReader orr(ow.bytes());
+            CHECK(o.read(orr));
+            ByteWriter back;
+            o.write_version(back, version);
+            CHECK(back.bytes() == ow.bytes());  // same layout round trip
+            if (version == 3) {
+                CHECK(sim_bytes(o) == bytes);
+            } else {
+                size_t i = 0;
+                bool kept = true;
+                for (PlanetIndex p = 0; p < o.planets().size(); ++p)
+                    for (uint32_t q = 0; q < 2; ++q) kept = kept && o.build_queue_phase(p, q) == own_phases[i++];
+                CHECK(kept);
+            }
+        }
     }
 }
 

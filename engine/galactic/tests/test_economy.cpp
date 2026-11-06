@@ -9,6 +9,7 @@
 // Args: --golden-dir <dir> (compare), --write-golden (rewrite the golden files instead), --quick (1./2. only),
 // --only units|synthetic|foc (one part; CMake registers the three parts as separate ctest entries).
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -96,13 +97,22 @@ void test_formulas() {
           corruption_income_pct(c, -1) == 0.0f);
 
     CHECK(build_time_t0(15, 1.0f) == 15.0f && build_time_t0(10, 0.95f) == 9.0f);
-    CHECK(tech_time_factor(3, 1, c.base_vs_tech) == 0.75f && tech_time_factor(5, 0, c.base_vs_tech) == 0.45f &&
-          tech_time_factor(1, 2, c.base_vs_tech) == 1.0f && tech_time_factor(2, 1, c.base_vs_tech) == 0.9f);
+    // A2K_T01_BUILD_COST_RE 2.1 [H]: index d - 1 (d = L - Tech_Level).
+    CHECK(tech_time_factor(2, 1, c.base_vs_tech) == 1.0f);   // d 1 -> _0
+    CHECK(tech_time_factor(3, 1, c.base_vs_tech) == 0.9f);   // d 2 -> _1
+    CHECK(tech_time_factor(3, 0, c.base_vs_tech) == 0.75f);  // d 3 -> _2 (Tartan @Kuat)
+    CHECK(tech_time_factor(4, 0, c.base_vs_tech) == 0.55f);  // d 4 -> _3
+    CHECK(tech_time_factor(5, 0, c.base_vs_tech) == 0.45f);  // d 5 -> _4
+    CHECK(tech_time_factor(1, 2, c.base_vs_tech) == 1.0f && tech_time_factor(2, 2, c.base_vs_tech) == 1.0f);
+    {
+        std::array<float, 5> t{0.1f, 0.2f, 0.3f, 0.4f, 0.5f};
+        CHECK(tech_time_factor(5, -1, t) == 0.5f);  // d 6 clamps to _4
+    }
     BuildTimeInputs in;
     in.build_time_seconds = 15;
     in.tech_factor_applies = true;
-    in.starbase_level = 3;
-    in.tech_level = 1;
+    in.starbase_level = 4;
+    in.tech_level = 1;  // d 3 -> 0.75
     in.base_vs_tech = &c.base_vs_tech;
     in.ai_multiplier = 0.5f;
     in.corruption_multiplier = 0.75f;
@@ -386,12 +396,13 @@ void test_income() {
 void test_production() {
     World w({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pUnder, rE, tSB1}, {pUnder, rE, tBarracks}});
     GalacticSim& s = w.sim;
-    // Human, up-front payment: cost on enqueue, T = 15 * 0.9 (starbase 1 vs tech 0) = 13.5 s = 405 frames.
-    CHECK(s.build_time_for(pEmpire, rA, tFrigate) == 13.5f);
+    // Human, up-front payment: cost on enqueue, T = 15 * _0 1.0 (starbase 1 vs tech 0: d 1 -> _0, A2K_T01 2.1) = 15 s =
+    // 450 frames.
+    CHECK(s.build_time_for(pEmpire, rA, tFrigate) == 15.0f);
     CHECK(s.enqueue(pEmpire, rA, tFrigate) == RejectReason::None);
     CHECK(s.credits(pEmpire) == 3750.0f);
     const BuildEntry head = w.planet(rA).queue[kSpaceQueue][0];
-    CHECK(head.start == 0 && head.duration == 405 && head.cost == 1250.0f);
+    CHECK(head.start == 0 && head.duration == 450 && head.cost == 1250.0f);
     CHECK(s.enqueue(pEmpire, rA, tSB2) == RejectReason::None);  // upgrade, queued behind
     CHECK(s.enqueue(pEmpire, rA, tFighters) == RejectReason::None);
     CHECK(s.enqueue(pEmpire, rA, tFighters) == RejectReason::None);
@@ -406,14 +417,14 @@ void test_production() {
     CHECK(s.cancel(pUnder, rA, kSpaceQueue, 0) == RejectReason::NotOwner);
     // Infantry on the ground queue (needs ground level 1 = the barracks).
     CHECK(s.enqueue(pEmpire, rA, tInfantry) == RejectReason::None);
-    w.run(405);  // frames 0..404
+    w.run(450);  // frames 0..449
     CHECK(w.planet(rA).queue[kSpaceQueue].size() == 4 && w.sim.fleets_at(rA, pEmpire).empty());
-    w.run(1);  // frame 405: done
+    w.run(1);  // frame 450: done
     CHECK(w.planet(rA).queue[kSpaceQueue].size() == 3);
     const uint32_t f = w.fleet(rA, pEmpire);
     CHECK(f != kNoFleet && w.fl(f).contents.size() == 1 && w.store.type(w.fl(f).contents[0]) == tFrigate);
-    CHECK(w.planet(rA).queue[kSpaceQueue][0].type == tSB2 && w.planet(rA).queue[kSpaceQueue][0].start == 405);
-    // Infantry: 10 s * 0.9 (the starbase level is used for ground units too) = 9 s = 270 frames.
+    CHECK(w.planet(rA).queue[kSpaceQueue][0].type == tSB2 && w.planet(rA).queue[kSpaceQueue][0].start == 450);
+    // Infantry: 10 s, no tech factor (ground units never get it, A2K_T01 2.1) = 300 frames.
     CHECK(w.planet(rA).surface.size() == 1);
     // Starbase upgrade head while the starbase is not owned -> dropped without refund.
     const float c2 = s.credits(pEmpire);
@@ -434,7 +445,7 @@ void test_production() {
     CHECK(s.enqueue(pUnder, rE, tCorvette) == RejectReason::None);
     CHECK(s.credits(pUnder) == u0);
     const BuildEntry ce = w.planet(rE).queue[kSpaceQueue][0];
-    CHECK(ce.build_time == 10.0f * 0.9f * 0.6f && ce.duration == econ::timer_frames(ce.build_time));
+    CHECK(ce.build_time == 10.0f * 0.6f && ce.duration == econ::timer_frames(ce.build_time));
     w.run(60);
     const BuildEntry mid = w.planet(rE).queue[kSpaceQueue][0];
     const float paid = u0 - s.credits(pUnder);
@@ -457,6 +468,59 @@ void test_production() {
     CHECK(t.sim.enqueue(pEmpire, rA, tTechUp) == RejectReason::None);
     t.run(t.planet(rA).queue[kSpaceQueue][0].duration + 1);
     CHECK(t.sim.players()[pEmpire].tech_level == 2 && t.planet(rA).queue[kSpaceQueue].empty());
+}
+
+// A2k t01 (A2K_T01_BUILD_COST_RE 1.2 / 1.3): Reduce_Production_Price / _Time abilities. Sum over stacking categories of
+// the per-category max, merged planet-local and player-wide, capped at 0.999999; derived from the holders present.
+void test_production_modifiers() {
+    World w({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pEmpire, rA, tInfantry}, {pEmpire, rB, tBarracks},
+             {pUnder, rE, tSB1}});
+    GalacticSim& s = w.sim;
+    SpecialRules& sp = w.rules.special;
+    sp.types.assign(tTypeCount, TypeSpecial{});
+    const auto add = [&sp](uint32_t holder, SpecialAbilityClass cls, float v, int32_t cat, bool galaxy,
+                           std::vector<uint32_t> types, uint64_t cats) {
+        SpecialAbilityDef a;
+        a.cls = cls;
+        a.style = ActivationStyle::GalacticAutomatic;
+        a.production_reduction = v;
+        a.stacking_category = cat;
+        a.galaxy_wide = galaxy;
+        a.applicable_types = std::move(types);
+        a.applicable_categories = cats;
+        sp.types[holder].production.push_back(static_cast<uint32_t>(sp.production.size()));
+        sp.production.push_back(std::move(a));
+    };
+    constexpr uint64_t kAll = ~uint64_t{0};
+    const auto P = SpecialAbilityClass::ReducePrice;
+    // Before any ability: base prices, 1.0 multipliers.
+    CHECK(s.build_cost_for(pEmpire, rA, tFrigate) == 1250 && s.production_bonus(pEmpire, rA, tFrigate, false) == 0.0f);
+    add(tPlanetA, P, 0.25f, 9, false, {tFrigate}, 0);  // planet ability (PLANETS.XML), local
+    add(tBarracks, P, 0.25f, 0, false, {}, kAll);      // structure holder, category 0
+    add(tInfantry, P, 0.5f, 0, false, {}, kAll);       // "hero" on the surface, category 0: max with the barracks
+    // 0.5 (cat 0 max) + 0.25 (cat 9) = 0.75 -> 0.25 x 1250 = 312.5 -> 313 (half away).
+    CHECK(s.production_bonus(pEmpire, rA, tFrigate, false) == 0.75f && s.build_cost_for(pEmpire, rA, tFrigate) == 313);
+    CHECK(s.build_cost_for(pEmpire, rA, tCorvette) == 400);  // All only: 0.5 x 800
+    CHECK(s.build_time_for(pEmpire, rA, tFrigate) == 15.0f);  // price abilities never touch the time
+    CHECK(s.build_cost_for(pUnder, rE, tFrigate) == 1250);    // other planet, other player
+    // A Galaxy_Wide time ability on planet B's type (Empire owns B): every Empire build of the type, nobody else's.
+    add(tPlanetB, SpecialAbilityClass::ReduceTime, 0.5f, 9, true, {tFrigate}, 0);
+    CHECK(s.build_time_for(pEmpire, rA, tFrigate) == 7.5f);
+    CHECK(s.build_time_for(pUnder, rE, tFrigate) == 15.0f * 0.6f);  // Hard AI x 0.6, no bonus
+    // Excluded types win over All.
+    sp.production[sp.types[tInfantry].production[0]].excluded_types = {tCorvette};
+    CHECK(s.build_cost_for(pEmpire, rA, tCorvette) == 600);  // the barracks' 0.25 is left
+    // Removal: the holder dies -> its entry is gone at once.
+    CHECK(w.planet(rA).surface.size() == 1);
+    CHECK(s.destroy_object(w.planet(rA).surface[0]));
+    CHECK(s.build_cost_for(pEmpire, rA, tFrigate) == 625);  // 0.25 + 0.25
+    // Cap 0.999999: max(1, 1250 x ~1e-6) = 1.
+    add(tPlanetA, P, 1.0f, 5, false, {}, kAll);
+    CHECK(s.production_bonus(pEmpire, rA, tFrigate, false) == std::bit_cast<float>(0x3f7fffefu));
+    CHECK(s.build_cost_for(pEmpire, rA, tFrigate) == 1);
+    // Price is frozen at enqueue (the entry keeps its cost).
+    CHECK(s.enqueue(pEmpire, rA, tFighters) == RejectReason::None);
+    CHECK(w.planet(rA).queue[kSpaceQueue].back().cost == 1.0f);
 }
 
 // ---- 2c. fleets ----------------------------------------------------------------------------------------------------
@@ -2552,6 +2616,52 @@ void test_foc_corellia_kuat_hop(const FocData& d) {
 // trade 105 (Corellia_Kuat, Corellia_Tatooine at 0.5) + mining 210 (Empire_Mining_Income_Bonus, 2 x base, no mining colony)
 // = 420; Kuat 75 + 75 = 150; Kashyyyk 30 + 15 = 45 (Felucia / NalHutta are Underworld); Tatooine 35 + 17.5 = 52.5.
 // Kashyyyk's share of the sum is 82.5 (its 45 and Kuat's 37.5 link to it): 667.5 - 82.5 = 585, the a2h-era port payment.
+// A2k t01 (A2K_T01_BUILD_COST_RE 1.4 / 2.2 / 2.3): HotM day 1 with the Emperor at Corellia. Broadside @Corellia 1350
+// (0.75 x 1800, Emperor_Reduce_Production_Price: All, 0.25, category 0), Tartan @Kuat 9 s (15 x _2 0.75 x Normal 0.8),
+// Heavy_Scout @Kuat no tech factor (40 x 0.8 = 32 s), Stormtrooper @Corellia 45; nothing once he leaves.
+void test_foc_hotm_build_cost(const FocData& d) {
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, d.types, &ids);
+    SimRng rng(1u);
+    GalacticSim s(d.rules, store, rng);
+    CHECK(s.start(build_campaign_setup(d.db, d.rules, "Sandbox_Heart_Of_The_Maw_Rebel")));
+    const int32_t E = s.player_of_faction("Empire");
+    const PlanetIndex cor = s.map().planets.find("Corellia"), kuat = s.map().planets.find("Kuat");
+    const uint32_t broadside = d.rules.find_type("Broadside_Class_Cruiser"), tartan = d.rules.find_type("Tartan_Patrol_Cruiser");
+    const uint32_t scout = d.rules.find_type("Imperial_Heavy_Scout_Squad"), storm = d.rules.find_type("Imperial_Stormtrooper_Squad");
+    const uint32_t emperor = d.rules.find_type("Emperor_Palpatine_Team"), sd = d.rules.find_type("Star_Destroyer");
+    CHECK(E >= 0 && cor != kInvalidPlanet && kuat != kInvalidPlanet && broadside != kNoIndex && tartan != kNoIndex &&
+          scout != kNoIndex && storm != kNoIndex && emperor != kNoIndex && sd != kNoIndex);
+    if (E < 0 || cor == kInvalidPlanet || kuat == kInvalidPlanet || broadside == kNoIndex || tartan == kNoIndex ||
+        scout == kNoIndex || storm == kNoIndex || emperor == kNoIndex || sd == kNoIndex)
+        return;
+    // Loader: the Emperor's entry (via the team's first member), Kuat's Galaxy_Wide Star_Destroyer boost.
+    const TypeSpecial& et = d.rules.special.type(emperor);
+    CHECK(et.production.size() == 1);
+    if (et.production.size() == 1) {
+        const SpecialAbilityDef& a = d.rules.special.production[et.production[0]];
+        CHECK(a.cls == SpecialAbilityClass::ReducePrice && a.production_reduction == 0.25f && a.stacking_category == 0 &&
+              !a.galaxy_wide && a.applicable_categories == ~uint64_t{0} && a.style == ActivationStyle::GalacticAutomatic);
+    }
+    s.update();
+    CHECK(s.planets()[cor].starbase_level == 2 && s.planets()[kuat].starbase_level == 3);
+    CHECK(s.build_cost_for(E, cor, broadside) == 1800 && s.build_cost_for(E, cor, storm) == 60);  // no Emperor yet
+    // Kuat_Star_Destroyer_Production_Boost (Galaxy_Wide Yes, 0.20, category 9): the owner's builds everywhere.
+    CHECK(s.build_cost_for(E, cor, sd) == static_cast<int32_t>(std::lround(0.8f * static_cast<float>(d.rules.types[sd].build_cost))));
+    const ObjectHandle pal = s.spawn_unit(E, cor, emperor);
+    CHECK(store.alive(pal));
+    CHECK(s.build_cost_for(E, cor, broadside) == 1350 && s.build_time_for(E, cor, broadside) == 12.0f);
+    CHECK(s.build_cost_for(E, cor, storm) == 45 && s.build_cost_for(E, kuat, broadside) == 1800);
+    CHECK(s.build_cost_for(E, cor, tartan) == 938);  // 937.5, half away
+    CHECK(s.build_time_for(E, kuat, tartan) == 15.0f * 0.75f * 0.8f);  // 9 s
+    CHECK(s.build_time_for(E, kuat, scout) == 40.0f * 0.8f);          // ground: no tech factor
+    std::printf("  FoC HotM build cost: Broadside @Corellia %d, Tartan @Kuat %.2f s, Heavy_Scout @Kuat %.2f s\n",
+                s.build_cost_for(E, cor, broadside), static_cast<double>(s.build_time_for(E, kuat, tartan)),
+                static_cast<double>(s.build_time_for(E, kuat, scout)));
+    CHECK(s.destroy_object(pal));
+    CHECK(s.build_cost_for(E, cor, broadside) == 1800);
+}
+
 void test_foc_hotm_rebel_income(const FocData& d) {
     std::printf("  FoC HotM Rebel entry: Empire income at the first payment (a2j t03)\n");
     objects::IdCounter ids;
@@ -2668,6 +2778,7 @@ void test_foc_campaign() {
     test_foc_player_fleet_moves(d);
     test_foc_corellia_kuat_hop(d);  // G1
     test_foc_hotm_rebel_income(d);  // a2j t03
+    test_foc_hotm_build_cost(d);    // a2k t01
     const int32_t days = 10;
     RunResult base;
     bool first = true;
@@ -2704,6 +2815,7 @@ int main(int argc, char** argv) {
         test_formulas();
         test_income();
         test_production();
+        test_production_modifiers();
         test_fleets();
         test_ownership();
         test_event_stream();
