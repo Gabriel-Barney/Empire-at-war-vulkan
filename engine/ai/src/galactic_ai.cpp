@@ -299,7 +299,9 @@ std::span<const uint32_t> GalacticAiWorld::Impl::planet_node_rank() {
     if (node_rank.size() == planets.size()) return node_rank;
     std::vector<PlanetIndex> order(planets.size());
     for (size_t i = 0; i < order.size(); ++i) order[i] = static_cast<PlanetIndex>(i);
-    auto key = [&](PlanetIndex p) -> uint64_t { return store.alive(planets[p].object) ? store.id(planets[p].object) : 0; };
+    auto key = [&](PlanetIndex p) -> int64_t {
+        return store.alive(planets[p].object) ? static_cast<int64_t>(store.id(planets[p].object)) : int64_t{-1};
+    };
     std::stable_sort(order.begin(), order.end(), [&](PlanetIndex a, PlanetIndex b) { return key(a) > key(b); });
     node_rank.assign(planets.size(), 0);
     for (size_t k = 0; k < order.size(); ++k) node_rank[order[k]] = static_cast<uint32_t>(k);
