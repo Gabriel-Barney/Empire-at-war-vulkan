@@ -1,20 +1,14 @@
 # Project roadmap: how sessions update it
 
-The main roadmap and flowchart is `ROADMAP.html` in the project root (Gabriel, 2026-10-30; confirmed 2026-10-31 as the project's
-local roadmap on this device). It opens in any browser, and in the Claude desktop Browser pane, with no claude.ai sign-in. It is
-generated, so never edit it by hand: change the documents in `roadmap-store/` and it is rebuilt, along with the copy in that
-repository that other accounts pull. `docs/ROADMAP.html` is its page shell, and it also opens on its own: it carries the same
-read-only copy of the data between the `<!--roadmap-data:begin-->` and `<!--roadmap-data:end-->` markers.
+The main roadmap and flowchart lives in one place: the `roadmap-store/` folder (Gabriel, 2026-11-06; before that the page was also
+tracked in this repository as `ROADMAP.html` and `docs/ROADMAP.html`, which are removed). Open `roadmap-store/ROADMAP.html` in any
+browser, or in the Claude desktop Browser pane: no claude.ai sign-in. It is generated, so never edit it by hand: change the documents
+in `roadmap-store/data/` and it is rebuilt. `roadmap-store/` is its own git repository (remote `Empire-Vulkan-Brenach`) in the main
+checkout; worktrees do not have it, so run the script from the main checkout.
 
-`docs/ROADMAP.html` is both the page source and a loadable page. Edit only the shell, which is everything outside the two markers (layout,
-script, `PRESETS`). Never edit the block between the markers by hand: `roadmap_store.py` rewrites it on every `write`, build record,
-`sync` and `render`, so changes to the data go through `roadmap-store/` and the page is rebuilt from it. A shell without the
-markers still works: the generator then injects the data into the generated copies only (the old behaviour).
-
-Copies, so nobody edits the wrong one: `roadmap-store/page_shell.html` is the shell with the data block emptied, refreshed from
-`docs/ROADMAP.html` on every render (the fallback when the store is cloned alone). `ROADMAP.html` in the project root (the main roadmap) and in
-`roadmap-store/` are byte-identical to the loaded `docs/ROADMAP.html`, and
-`roadmap-store/ROADMAP.md` is the text form. These and the data block are regenerated on every write, and a diff in them is never a
+The page layout is `roadmap-store/page_shell.html`: edit only what is outside the `<!--roadmap-data:begin-->` and `<!--roadmap-data:end-->`
+markers (layout, script, `PRESETS`), then run `python roadmap-store/roadmap_store.py render`. `ROADMAP.html` is the shell plus a
+read-only copy of the data, and `roadmap-store/ROADMAP.md` is the text form; both are regenerated on every write, and a diff in them is never a
 change to review.
 
 To update, write a JSON list of `{"op", "collection", "doc_id", "data"}` to a scratch file, then run:
@@ -60,7 +54,7 @@ give every new group an `eta` (a group without one is counted as "without estima
 
 Status keys (groups and boxes): `next` Do next, `partly` Partly done, `big` Not started, `spec` Spec-blocked,
 `open` Guesses to confirm, `probe` Probe only, `gab` Needs Gabriel, `done` Done, `out` Out of scope.
-Presets: `xhigh`, `high`, `re2ui`, `sonnet`, `tools`, `gab` (defined in the page, `PRESETS` in `docs/ROADMAP.html`).
+Presets: `xhigh`, `high`, `re2ui`, `sonnet`, `tools`, `gab` (defined in the page, `PRESETS` in `roadmap-store/page_shell.html`).
 A preset is the recommended model and effort level for a group: `xhigh` Opus 5.5 · xhigh, `high` Opus 5.5 · high,
 `re2ui` Opus 5.5 · high then Sonnet 5.5 · high, `sonnet` Sonnet 5.5 · high, `tools` Sonnet 5.5 · medium,
 `gab` Gabriel + Opus 5.5 · medium.
@@ -97,46 +91,23 @@ A preset is the recommended model and effort level for a group: `xhigh` Opus 5.5
 5. Keep the rule from `CLAUDE.md` that every finished item is struck through, not deleted: set `s` to `done`.
    Out-of-scope work is the exception (Gabriel, 2026-10-30): delete those tasks (`{"tasks":{"t03":{"__delete__":true}}}`)
    and wholly out-of-scope groups and boxes instead of keeping them as `oos` / `out`. Record the decision in the
-   `docs/PHASE4.md` Decisions table first; that table, not the roadmap, is the record of what is out of scope.
-6. Keep `docs/PHASE4.md` and the phase status docs in step with the roadmap, as before.
+   `docs/DECISIONS.md` first; that table, not the roadmap, is the record of what is out of scope.
+6. The roadmap is the only status tracker (Gabriel, 2026-11-06): `docs/PHASE2.md` / `PHASE3.md` / `PHASE4.md` no longer carry status boards or flowcharts, and `claude/roadmap.md` / `claude/phase2-status.md` are not updated. Record results where `docs/README.md` says (decisions, measurements, build rules, specs), but track what is open or done only here.
 
 ## Other accounts
 
 `roadmap-store/` is its own git repository, and `write` pushes to its remote when one is set. Another account clones it and
 updates the same way (`roadmap-store/README.md`). Until a remote is set, updates stay on this machine.
 
-### Both copies on every update (Gabriel, 2026-11-04)
+### One location (Gabriel, 2026-11-06)
 
-Every roadmap update, by any agent or account, updates **both** copies of the roadmap:
-
-1. **The GitHub copy**: `python roadmap-store/roadmap_store.py write <file>` writes `roadmap-store/data/` and pushes the store repository
-   (`Empire-Vulkan-Brenach`). Check with `sync` (prints `in sync with origin/main`).
-2. **The local copy**: the same `write` regenerates `ROADMAP.html` in the project root and `docs/ROADMAP.html` (data block). Both are
-   tracked in the engine repository, so they show as modified after the write: **commit them in the same branch / PR as the work**.
-   Never `git checkout` them away to get a clean tree, and never leave them out of the PR: the local page is the main roadmap on this
-   device, and a stale one shows work as open that is already done. In a worktree, run `render` once before committing if the
-   pages look older than the store.
-
-An update that reached only one of the two copies is unfinished.
-
-### Keeping the local page current (Gabriel, 2026-10-30)
-
-When `ROADMAP.html` changes in the GitHub store repository (another account or machine wrote to the roadmap), the local
-`docs/ROADMAP.html` data block and the `ROADMAP.html` copy in the project root must change with it. The page is generated from `roadmap-store/data/`, so this happens
-whenever the store is brought up to date through the script:
-
-- `python roadmap-store/roadmap_store.py sync` pulls the remote (`git pull --rebase`), then regenerates the data block of
-  `docs/ROADMAP.html`, both copies of `ROADMAP.html` (in `roadmap-store/` and in the project root) and `ROADMAP.md`, commits and pushes. Run it at the start of a
-  session, and whenever the roadmap on GitHub may have changed.
-- `write` and every build record (`record-build`, called by the build scripts) pull first and regenerate both copies the same
-  way, so any roadmap update on this machine refreshes the local page too.
-- A plain `git pull` inside `roadmap-store/` updates the store's own `ROADMAP.html` but **not** the project-root copy. If you
-  pulled by hand, run `python roadmap-store/roadmap_store.py render` (or `sync`) afterwards.
-- `docs/ROADMAP.html` and the project-root `ROADMAP.html` are tracked in the engine repository, so after a refresh they show as
-  modified there: commit them with the work that triggered the update (the data block is generated, never reviewed or edited by hand).
-
-Check that the two copies agree with `python roadmap-store/roadmap_store.py sync` (prints `in sync with origin/main`) and by
-comparing `ROADMAP.html` with `roadmap-store/ROADMAP.html` (byte-identical after any refresh).
+There is one copy of the roadmap: `roadmap-store/`. A roadmap update is `python roadmap-store/roadmap_store.py write <file>`; it writes
+`roadmap-store/data/`, regenerates `roadmap-store/ROADMAP.html` and `ROADMAP.md` and pushes the store repository. Nothing about the
+roadmap is written into, tracked in or committed to the engine repository, so branches, PRs and worktrees never carry a stale page.
+This replaces the 2026-11-04 "both copies" rule. Check the remote with `python roadmap-store/roadmap_store.py sync` (prints
+`in sync with origin/main`); run it at the start of a session, and whenever the roadmap on GitHub may have changed (another account or
+machine wrote to it). `sync` pulls, regenerates the page and pushes. `write` and every build record pull first the same way.
+If you pulled by hand inside `roadmap-store/`, run `python roadmap-store/roadmap_store.py render` afterwards.
 
 ## Build records
 
