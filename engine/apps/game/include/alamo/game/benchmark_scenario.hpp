@@ -41,7 +41,7 @@ std::string check_bench_scenario(const BenchmarkOptions& o);
 std::string check_bench_fingerprint(const sim::bench::Scenario& sc, const CrcLog& run, uint64_t end_tick);
 
 // --bench-make: writes the scenario (see MAKE above). `base` = the file read before the run (a recipe or a full scenario;
-// null = none), `save` = the save the run started from, `orders` / `log` = the run's command stream and CRC log,
+// null = none: name, description, camera), the version comes from the full scenario at `path` if there is one, `save` = the save the run started from, `orders` / `log` = the run's command stream and CRC log,
 // `start_tick` = the save's tick, `ticks` = the ticks run, `o` = the run's options. *summary = one line for the log.
 bool write_game_scenario(const std::string& path, const sim::bench::Scenario* base, const std::string& save,
                          const commands::CommandRecording& orders, const CrcLog& log, uint64_t start_tick, uint64_t ticks,

@@ -193,8 +193,10 @@ bool write_game_scenario(const std::string& path, const bench::Scenario* base, c
     sc.mode = bench_mode_name(o.mode);
     sc.preset = o.preset;
     sc.frames_per_tick = o.fixed() ? o.frames_per_tick : 0;
-    const bool had_full = base && base->save.present();
-    sc.version = had_full ? (base->same_content(sc) ? base->version : base->version + 1) : 1;
+    // The version: the scenario on disk now (a full one), kept when the remade one is the same work, else bumped.
+    bench::Scenario old;
+    const bool had_full = bench::Scenario::load(path, old, nullptr);
+    sc.version = had_full ? (old.same_content(sc) ? old.version : old.version + 1) : 1;
     if (!sc.save_manifest(tmp_manifest, &e)) {
         fail(err, e);
         cleanup();
@@ -211,7 +213,7 @@ bool write_game_scenario(const std::string& path, const bench::Scenario* base, c
     }
     if (summary)
         *summary = "wrote " + path + " version " + std::to_string(sc.version) +
-                   (had_full ? (sc.version == base->version ? " (unchanged)" : " (changed: version bumped)") : "") + ": save " +
+                   (had_full ? (sc.version == old.version ? " (unchanged)" : " (changed: version bumped)") : "") + ": save " +
                    std::to_string(sc.save.bytes) + " bytes, " + std::to_string(orders.command_count()) + " orders, fingerprint " +
                    std::to_string(fp.records.size()) + " records, final CRC " + bench::hex64(sc.final_crc);
     return true;
