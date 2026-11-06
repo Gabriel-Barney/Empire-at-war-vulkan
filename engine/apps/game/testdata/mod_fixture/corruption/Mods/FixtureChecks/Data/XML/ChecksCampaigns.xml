@@ -3,4 +3,7 @@
     <Locations>Base_Alpha, Base_Beta</Locations>
     <Checks_Unread_Campaign_Tag>1</Checks_Unread_Campaign_Tag>
   </Campaign>
+  <Campaign Name="Checks_Menu_Header">
+    <Text_ID>TEXT_CHECKS_MENU_HEADER</Text_ID>
+  </Campaign>
 </Campaigns>

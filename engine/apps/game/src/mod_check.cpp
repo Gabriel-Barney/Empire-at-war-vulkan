@@ -665,12 +665,13 @@ void append_list(std::string& s, const std::vector<std::string>& items, size_t f
 size_t ModCheckReport::error_count() const {
     size_t n = loaded ? 0 : 1;
     for (const auto& s : stages) n += s.ok ? 0 : 1;
-    return n + campaigns_without_planets.size() + check_errors.size();
+    return n + (no_startable_campaign() ? 1u : 0u) + check_errors.size();
 }
 
 size_t ModCheckReport::warning_count() const {
-    return vfs_warnings.size() + diagnostics.size() + campaign_warning_count + missing_files.size() + unknown_xml_tags.size() +
-           lua_errors.size() + lua_run_errors.size() + unbound_lua_calls.size();
+    const size_t menu_only = no_startable_campaign() ? 0 : campaigns_without_planets.size();
+    return vfs_warnings.size() + diagnostics.size() + menu_only + campaign_warning_count + missing_files.size() +
+           unknown_xml_tags.size() + lua_errors.size() + lua_run_errors.size() + unbound_lua_calls.size();
 }
 
 ModCheckReport check_mod_data(const std::string& root, const std::vector<std::string>& args, const ModCheckOptions& options) {
@@ -749,8 +750,10 @@ std::string format_mod_report(const ModCheckReport& r, bool verbose) {
             s += "AI: no AI data\n";
         append(s, "skirmish maps: %zu official, %zu custom\n", c.official_maps, c.custom_maps);
 
-        append(s, "== campaigns\n%zu checked, %zu without planets (errors), %zu skipped rows (warnings)\n", r.campaigns_checked,
-               r.campaigns_without_planets.size(), r.campaign_warning_count);
+        append(s, "== campaigns\n%zu checked, %zu without planets (%s), %zu skipped rows (warnings)\n", r.campaigns_checked,
+               r.campaigns_without_planets.size(),
+               r.no_startable_campaign() ? "ERROR: no campaign can be started" : "warnings: menu entries that cannot be started",
+               r.campaign_warning_count);
         append_list(s, r.campaigns_without_planets, 0, r.campaigns_without_planets.size(), verbose);
         append_list(s, r.campaign_warnings, 0, r.campaign_warnings.size(), verbose);
         append(s, "== missing files\n%zu files named by the data that no layer has (warnings)\n", r.missing_files.size());

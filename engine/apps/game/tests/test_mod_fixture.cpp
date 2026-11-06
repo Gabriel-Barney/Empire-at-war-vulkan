@@ -144,6 +144,10 @@ void test_checks(const std::string& foc) {
     CHECK(r.loaded && r.error_count() == 0);
     CHECK(r.missing_files.empty());
     CHECK(r.submod.missing == 0 && !r.submod.likely);
+    // A campaign with no Locations next to ones with planets: a menu entry (retail lists it), a warning.
+    CHECK(r.campaigns_checked == 3);
+    CHECK(r.campaigns_without_planets == std::vector<std::string>{"Checks_Menu_Header"});
+    CHECK(!r.no_startable_campaign());
 
     // t15: one unread tag per database, each in the mod; the tags the original's tables or the port's loaders read are
     // not listed (Is_Playable, Locations, Damage_Types, Ships_Per_Stack, Files, Volume_Percent).
@@ -173,8 +177,8 @@ void test_checks(const std::string& foc) {
         CHECK(contains(e.set_by, "MISCELLANEOUS\\CHECKS_SCORING.LUA"));
     }
     // Session-dependent errors are not counted as warnings.
-    CHECK(r.warning_count() == r.vfs_warnings.size() + r.diagnostics.size() + r.campaign_warning_count + r.unknown_xml_tags.size() +
-                                   r.lua_run_errors.size());
+    CHECK(r.warning_count() == r.vfs_warnings.size() + r.diagnostics.size() + r.campaigns_without_planets.size() +
+                                   r.campaign_warning_count + r.unknown_xml_tags.size() + r.lua_run_errors.size());
 
     const std::string text = alamo::game::format_mod_report(r);
     CHECK(contains(text, "1 more fail only for session state"));
@@ -232,6 +236,23 @@ void test_submod(const std::string& fixture, const std::string& foc) {
     if (g_fail) std::fputs(alamo::game::format_mod_report(stacked, true).c_str(), stdout);
 }
 
+// Campaigns without planets are an error only when no checked campaign has planets.
+void test_campaign_levels() {
+    ModCheckReport r;
+    r.loaded = true;
+    r.campaigns_checked = 2;
+    r.campaigns_without_planets = {"Header_A", "Header_B"};
+    CHECK(r.no_startable_campaign());
+    CHECK(r.error_count() == 1 && r.warning_count() == 0);
+    CHECK(contains(alamo::game::format_mod_report(r), "no campaign can be started"));
+    r.campaigns_checked = 3;
+    CHECK(!r.no_startable_campaign());
+    CHECK(r.error_count() == 0 && r.warning_count() == 2);
+    r.campaigns_checked = 0;
+    r.campaigns_without_planets.clear();
+    CHECK(!r.no_startable_campaign() && r.error_count() == 0);  // no campaigns at all (a skirmish-only mod)
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -243,6 +264,7 @@ int main(int argc, char** argv) {
     test_base(foc);
     test_mod(foc);
     test_checks(foc);
+    test_campaign_levels();
     test_submod(argv[1], foc);
     std::printf(g_fail ? "alamo_game_mod_fixture_tests: %d FAILED\n" : "alamo_game_mod_fixture_tests: OK\n", g_fail);
     return g_fail ? 1 : 0;

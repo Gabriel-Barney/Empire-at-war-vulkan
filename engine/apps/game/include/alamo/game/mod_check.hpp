@@ -137,6 +137,9 @@ struct ModCheckReport {
         bool ai = false;  // AI data loaded
     } counts;
     size_t campaigns_checked = 0;
+    // No Locations / no planet resolves. Retail lists such a campaign in the Galactic Conquest menu (a header or notice
+    // row; docs/re/MODC_LOADER.md section 4), so it is a warning: a menu entry that cannot be started. An error only
+    // when no checked campaign has planets (no_startable_campaign()).
     std::vector<std::string> campaigns_without_planets;
     std::vector<std::string> campaign_warnings;  // build_galaxy_map diagnostics, one line per message with its campaigns
     size_t campaign_warning_count = 0;           // the diagnostics behind campaign_warnings (per campaign)
@@ -151,12 +154,14 @@ struct ModCheckReport {
     SubmodHint submod;                           // empty unless the mod's own data names missing files
     std::vector<std::string> check_errors;       // a check above that threw: "<check>: exception: <what>"
 
-    // Errors: the load failed or a step threw / failed, a campaign has no planets, a check threw. Warnings: loader and
+    // Errors: the load failed or a step threw / failed, no campaign has planets (one error), a check threw. Warnings:
+    // campaigns without planets when another one has planets, loader and
     // VFS diagnostics, skipped campaign rows, missing files, unknown XML tags (one per database and tag), scripts that
     // do not compile or whose main chunk errors, unbound engine calls (one per name). Not counted (info): session-
     // dependent main-chunk errors and the submod hint. The original loads with all of these; its Lua
     // 5.0 rejects the same scripts, and mods ship unused ones, e.g. Thrawn's Revenge's Lua 5.1 unit-test specs.
     size_t error_count() const;
+    bool no_startable_campaign() const { return campaigns_checked > 0 && campaigns_without_planets.size() == campaigns_checked; }
     size_t warning_count() const;
 };
 

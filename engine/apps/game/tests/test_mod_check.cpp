@@ -115,7 +115,8 @@ void test_fake_install() {
         CHECK(art && art->added == 1 && art->overrides == 0);
         CHECK(r.counts.campaigns == 3);
         CHECK(r.campaigns_checked == 3);
-        CHECK(r.campaigns_without_planets == std::vector<std::string>{"Empty_GC"});  // an error
+        CHECK(r.campaigns_without_planets == std::vector<std::string>{"Empty_GC"});  // a warning: two others have planets
+        CHECK(!r.no_startable_campaign());
         CHECK(has(r.campaign_warnings, "MC_Missing"));  // unknown planet skipped: a warning, one line per message
         CHECK(has(r.campaign_warnings, "(1 campaign: Mod_GC)"));
         CHECK(!has(r.campaign_warnings, "Base_GC"));
@@ -124,11 +125,12 @@ void test_fake_install() {
         CHECK(r.lua_errors.size() == 1 && has(r.lua_errors, "MOD_BROKEN.LUA"));  // a warning
         CHECK(r.lua_errors.size() == 1 && r.lua_errors[0].in_mod);
         CHECK(r.lua_run == 2 && r.lua_run_errors.empty());  // the two story scripts that compile
-        CHECK(r.error_count() == 1);  // Empty_GC
+        CHECK(r.error_count() == 0);  // Empty_GC is a menu entry only
         CHECK(r.warning_count() >= 2);
         const std::string text = alamo::game::format_mod_report(r);
         CHECK(text.find("mod files: 4 new, 2 replace") != std::string::npos);
-        CHECK(text.find("== result: ERRORS, 1 errors") != std::string::npos);
+        CHECK(text.find("== result: OK, 0 errors") != std::string::npos);
+        CHECK(text.find("1 without planets (warnings: menu entries") != std::string::npos);
     }
     {  // options off
         alamo::game::ModCheckOptions o;
