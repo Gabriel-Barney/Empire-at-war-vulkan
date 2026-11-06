@@ -1281,7 +1281,7 @@ void attract_controller_test(const game::GameData& data) {
 }
 
 #ifdef ALAMO_GAME_HAVE_CONTROLS
-// docs/PHASE4.md "Camera and controls" on the host's tables: after sync_control_bindings the default hotkey table and the
+// docs/DECISIONS.md "Camera and controls" on the host's tables: after sync_control_bindings the default hotkey table and the
 // bindings satisfy every rule; a W/A/S/D binding (here Ctrl+S on Stop) and a missing queue modifier are reported.
 void controls_test() {
     ui::HotkeyTable hk;

@@ -77,7 +77,7 @@ forum threads and talk abstracts, not benchmarks, so OPT1's own profile decides 
 - Running separate AI players' VMs in parallel is possible for the same reason, but only if every C API call
   they make reads the sim's frozen state and queues commands (technique 4); any call that writes the sim
   directly has to move behind the command bus first.
-- **Done (OPT2 t04, 2026-11-02):** (a) and (b) as above, with the details and numbers in `docs/PHASE4.md`
+- **Done (OPT2 t04, 2026-11-02):** (a) and (b) as above, with the details and numbers in `docs/PERFORMANCE.md`
   ("Lua GC schedule"). One change to (a): a VM's slot comes from a hash of its own GC threshold, not from a host
   index, so it is saved with the VM and needs no new save data.
 

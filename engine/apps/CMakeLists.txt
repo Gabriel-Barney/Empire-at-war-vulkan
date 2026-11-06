@@ -189,7 +189,7 @@ if(_alamo_sim)
     # is structure, not a seed's luck (--expect-skirmish-base): both sides start with their pre-built base (Command Center + Barracks of both
     # slots), the shipped skirmish AI issues orders, shots are fired, 0 Lua errors. Whether the skirmish AI takes the enemy base inside the
     # 15-minute limit is not asserted: it does not (the Destroy_Structure plan reaches the base at ~frame 11000 and fails; open item).
-    # OPT3 t08: the worker-count check (alamo_add_worker_count_check, docs/PHASE4.md "Worker-count check"): the 0-worker entry writes
+    # OPT3 t08: the worker-count check (alamo_add_worker_count_check, docs/BUILD.md "Worker-count check"): the 0-worker entry writes
     # the CRC log and checks the base (--expect-skirmish-base), _w1 / _w4 / _w16 / _w<N> compare against it.
     alamo_add_worker_count_check(alamo_headless_skirmish_ai_foc_land_outcome
         COMMAND alamo_headless --skirmish-ai foc-land --ticks 7000 --quiet

@@ -43,14 +43,13 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
    Regenerate only when the behaviour change is intended and the task says so: `tools\regen_goldens.cmd` (never by hand),
    inspect the diff (per-system CRC columns show what moved), and say in the PR description which goldens changed and why.
    Do not edit `engine/apps` goldens another lane is also changing: coordinate through the PR text.
-8. **Roadmap, both copies** (rule 6; `docs/ROADMAP_PROTOCOL.md`). Write a JSON list to a scratch file (not the repo) and run
+8. **Roadmap** (rule 6; `docs/ROADMAP_PROTOCOL.md`). Write a JSON list to a scratch file (not the repo) and run
    `python roadmap-store\roadmap_store.py write <file>` once per finished unit: close each task (`{"tasks":{"t03":{"s":"done"}},
    "updated":"<date>","by":"<session>"}`), then **re-read the group**: if it has no `todo` task left, set the group
    `{"status":"done","preset":{"__delete__":true}}` in the same write, and if it was the last open group in its flowchart box,
    set `nodes/<ID>` `{"status":"done"}` too. Leftovers go in a new follow-up group with a `preset` and an `eta` (say the preset and
-   why in its `why`). Add one `log` line. Update `docs/PHASE4.md` (status line, decisions) and the phase docs the task touches.
-   The roadmap page lives only in `roadmap-store/ROADMAP.html` since store commit 70f324a (2026-11-06; PR #89 removes the engine
-   copies): `write` no longer regenerates `ROADMAP.html` / `docs/ROADMAP.html` in this repository, so do not edit or commit them.
+   why in its `why`). Add one `log` line. Record results where `docs/README.md` says (decisions, measurements, build rules, `docs/re/`); status is tracked only on the roadmap.
+   The roadmap lives only in `roadmap-store/` (PR #89, 2026-11-06): nothing about it is committed to this repository.
    Check that `sync` prints `in sync with origin/main`.
 9. **PR against `main`**, one per lane: `git push -u origin claude/<name>`, `gh pr create --base main` (or the stacked-on branch).
    Description: what changed, build and test results (MSVC / clang / ASan as applicable, skips), goldens changed or "none",

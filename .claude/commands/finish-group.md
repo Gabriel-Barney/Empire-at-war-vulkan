@@ -12,10 +12,9 @@ Finish roadmap group `$ARGUMENTS` in this worktree. Work through the checklist a
    `{"status":"done","preset":{"__delete__":true}}` in that same write**. If it was the last open group of its flowchart box
    (check the other `items` with the same `node`), also `update` `nodes/<ID>` `{"status":"done"}`. Leftovers: a new follow-up group
    with `preset`, `eta`, `after`, and a `why` that names the preset. One `log` line. (Shapes: `docs/ROADMAP_PROTOCOL.md`.)
-3. **Sync.** `python roadmap-store\roadmap_store.py sync` should print `in sync with origin/main`. The page lives only in
-   `roadmap-store\ROADMAP.html` since 2026-11-06 (store commit 70f324a, PR #89): `ROADMAP.html` / `docs\ROADMAP.html` in this
-   repository are no longer regenerated, so leave them out of the commit.
-4. **Docs.** `docs/PHASE4.md` status line and decisions; the phase docs and `docs/re/` pages the tasks name; keep edits minimal and factual.
+3. **Sync.** `python roadmap-store\roadmap_store.py sync` should print `in sync with origin/main`. The roadmap lives only in
+   `roadmap-store\` since 2026-11-06 (PR #89): nothing about it is committed to this repository.
+4. **Docs.** Record results where `docs/README.md` says (decisions, measurements, build rules, `docs/re/` pages the tasks name); status is only on the roadmap. Keep edits minimal and factual.
 5. **Commit and PR.** `git add` the work plus the two pages, commit (end the message with
    `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`), `git push -u origin <branch>`, and `gh pr create --base main`
    (or the branch you are stacked on). The PR text lists: changes, build and test results per compiler, skips, goldens changed or
