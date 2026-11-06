@@ -24,6 +24,7 @@
 #include "alamo/game/attract_mode.hpp"
 #include "alamo/game/battle_fx.hpp"
 #include "alamo/game/battle_summary.hpp"
+#include "alamo/game/benchmark.hpp"
 #include "alamo/game/game_audio_host.hpp"
 #include "alamo/game/game_controls.hpp"
 #include "alamo/game/game_data.hpp"
@@ -151,6 +152,10 @@ struct Options {
     bool frame_overlay = false, profile = false;
     std::string profile_out;
     double profile_budget = 1000.0 / 30.0;
+    // BM2a: --benchmark realtime|fixed and the --bench-* flags (benchmark.hpp; app_benchmark.cpp). size_set: --width /
+    // --height given (they win over the preset's window size).
+    BenchmarkOptions bench;
+    bool size_set = false;
 };
 
 inline int usage() {
@@ -160,6 +165,10 @@ inline int usage() {
                  "                  [--frame-cap N|display] [--video-options FILE] [--saves-dir DIR]\n"
                  "                  [--movie NAME]... [--no-intro] [--attract] [--smoke skirmish|land|campaign|saveload --png-dir DIR] [MODPATH=..]\n"
                  "                  [--frame-overlay] [--profile] [--profile-out FILE] [--profile-budget MS] [FALLBACKPATH=..]\n"
+                 "       alamo_game --benchmark realtime|fixed --bench-save FILE [--bench-preset NAME] [--bench-ticks N]\n"
+                 "                  [--bench-frames-per-tick K] [--bench-settle N] [--bench-max-unsettled N] [--bench-report FILE]\n"
+                 "                  [--bench-crc-out FILE] [--bench-png-dir DIR --bench-png-every N] [--bench-no-verify]\n"
+                 "                  presets: bm-low, bm-medium, bm-high (default), bm-ultra, bm-smoke\n"
                  "       game data: --game DIR or ALAMO_FOC_DATA (the corruption folder)\n");
     return 2;
 }
@@ -423,7 +432,7 @@ public:
     uint64_t move_acks_ = 0, move_ack_kills_ = 0, move_acks_drawn_ = 0;
     void move_ack(const ui::MoveAck& a);
     // P1_CAMERA_INPUT.md §3.1 options -> CameraTuning (live play only; smoke / replay runs keep `t`).
-    bool live_input() const { return opt_.smoke.empty() && !opt_.hidden; }
+    bool live_input() const { return opt_.smoke.empty() && !opt_.hidden && !opt_.bench.active(); }
     ui::CameraTuning option_tuning(ui::CameraTuning t) const;
     void apply_camera_tuning();
     uint64_t reinforce_drops_ = 0;
@@ -575,6 +584,38 @@ public:
     void update_cursor(ui::HudDrawList& dl);
     void update_radar();
 
+    // ---- BM2a benchmark mode (app_benchmark.cpp, benchmark.hpp) ----
+    // Loading: the save is loading / its load screen is up; Settling: gameplay frames until settle_frames settled ones in a
+    // row (the sim holds); Measuring: the measured ticks; Done: finished or failed (run() leaves its loop).
+    struct BenchState {
+        enum class Phase : uint8_t { Loading, Settling, Measuring, Done } phase = Phase::Loading;
+        FixedFrameClock clock{1};
+        uint32_t settled_run = 0, unsettled_run = 0;
+        uint64_t warmup_frames = 0, unsettled = 0, excluded = 0, rt_ticks = 0, start_tick = 0;
+        bool counted = false, ticked = false, tick_missed = false;  // the last frame: counted / ran a tick / a due tick did not run
+        std::vector<float> frame_ms, render_ms, sim_ms;
+        Clock::time_point t_load{}, t_start{}, t_progress{};  // load start, measuring start, last measured frame
+        double wall = 0.0;
+        bool failed = false;
+        std::string error;
+        std::vector<std::string> autopilot;
+    } bench_;
+    bool bench_active() const { return opt_.bench.active(); }
+    bool bench_fixed() const { return opt_.bench.fixed(); }
+    bool bench_measuring() const { return bench_.phase == BenchState::Phase::Measuring; }
+    bool bench_done() const { return bench_.phase == BenchState::Phase::Done; }
+    void bench_apply_window();  // init, before the window: preset size, present mode, frame cap
+    void bench_apply_video();   // init, after the video options: preset detail / AA / gamma / advanced options
+    bool bench_start();         // init: the save loaded, no menus
+    void bench_sample(const FrameTimes& closed);  // frame start: the previous frame's times
+    void bench_step_sim();      // step_sim in benchmark mode
+    void bench_autopilot();     // after the sim: answers what would wait for the player
+    void bench_frame_end();     // after render: settle / count / finish
+    void bench_fail(std::string why);
+    float bench_alpha() const;
+    double bench_now() const;
+    int bench_finish();         // report, CRC log, presentation check; the exit code
+
     bool init();
     void shutdown();
     void frame();
@@ -585,6 +626,7 @@ public:
     // N1 / t09: the Save / Load / Delete requests of the menus.
     void save_game_as(const std::string& typed);
     bool load_saved_game(const std::string& name);
+    bool load_save_file(const std::string& path);  // BM2a: load_saved_game by path
     void delete_saved_game(const std::string& name);
     void save_message(std::u32string caption, const std::string& detail);
     std::string session_title() const;  // the campaign's display name / the skirmish map (save descriptions)

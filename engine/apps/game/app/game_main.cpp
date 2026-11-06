@@ -35,6 +35,7 @@ bool App::init() {
     std::printf("data: %zu object types, %zu factions, %zu campaigns in %.0f ms\n", data_.types.size(), data_.rules.factions.size(),
                 data_.db.campaigns().size(), ms_since(t0));
     js_ = std::make_unique<jobs::JobSystem>(jobs::JobSystemConfig{opt_.workers});
+    if (bench_active()) bench_apply_window();  // BM2a: the preset's window size, present mode and frame cap
     if (!win_.create({"Alamo - Empire at War", opt_.width, opt_.height, true, !opt_.hidden})) return false;
     const bool strict = render::setup_validation_env(ALAMO_RENDER_SOURCE_DIR);
     rhi::ContextDesc cd;
@@ -47,7 +48,11 @@ bool App::init() {
     }
     std::printf("device %s, validation %s%s\n", ctx_.caps().name.c_str(), ctx_.validation_enabled() ? "on" : "off", strict ? " (required)" : "");
     // [port] the saved video options: present mode, frame cap, hardware mouse, advanced video (the resolution below).
-    video_profile_path_ = !opt_.video_options.empty() ? opt_.video_options : live_input() ? default_video_profile_path() : std::string();
+    // BM2a: a benchmark run reads no video options file (its preset sets everything, bench_apply_video).
+    video_profile_path_ = bench_active()                 ? std::string()
+                          : !opt_.video_options.empty() ? opt_.video_options
+                          : live_input()                ? default_video_profile_path()
+                                                        : std::string();
     have_video_profile_ = load_video_profile(video_profile_path_, video_profile_);
     detail_options_ = live_input() || have_video_profile_;
     if (have_video_profile_) {
@@ -60,6 +65,7 @@ bool App::init() {
         adv_video_ = video_profile_.advanced;
         std::printf("video options: %s\n", video_profile_path_.c_str());
     }
+    if (bench_active()) bench_apply_video();
     rhi::SwapchainDesc sd;
     sd.hinstance = win_.native_instance();
     sd.hwnd = win_.native_handle();
@@ -228,7 +234,7 @@ bool App::init() {
         cine_.letterbox_height = gc.get_float("Camera_FX_Manager_Letterbox_Height", 0.085f);
     }
     // The unsynced presentation generator (0x140a2ab18, seeded from the performance counter at boot); smoke runs fixed.
-    cine_.rng.reseed(opt_.smoke.empty() ? static_cast<uint64_t>(Clock::now().time_since_epoch().count()) : 0xf0f0f0f0u);
+    cine_.rng.reseed(opt_.smoke.empty() && !bench_active() ? static_cast<uint64_t>(Clock::now().time_since_epoch().count()) : 0xf0f0f0f0u);
     // Live play: the user's Windows double-click time / rectangle (P1_DOUBLE_CLICK_MOVE.md §0); smoke runs keep the defaults.
     if (live_input()) input_ = ui::InputState(ui::system_input_config());
     if (!audio_.init(data_, opt_.audio, opt_.seed ^ 0xA0D10u, &err)) std::fprintf(stderr, "audio: %s (continuing without)\n", err.c_str());
@@ -304,6 +310,7 @@ bool App::init() {
     }
     if (opt_.frame_overlay) overlay_.set_shown(true, opt_.profile);
     if (!opt_.smoke.empty()) make_script();
+    if (bench_active()) return bench_start();  // BM2a: straight into the save, no intro or menus
     if (!opt_.movies.empty() && next_movie()) screen_ = Screen::Movie;
     else show_menu_after_intro();
     return true;
@@ -320,6 +327,7 @@ int App::run() {
         limiter_.wait();  // [port: Gabriel] frame rate cap (live play only)
         if (opt_.frames >= 0 && static_cast<long>(frames_) >= opt_.frames) break;
         if (!script_.empty() && script_step_ >= script_.size()) break;
+        if (bench_active() && bench_done()) break;
         if (script_.empty() && screen_ == Screen::Menu && !ui_.gui.top() && input_.key_pressed(ui::vk::kEscape)) break;
     }
     if (profile::enabled()) {
@@ -337,7 +345,7 @@ int App::run() {
             }
         }
     }
-    int rc = 0;
+    int rc = bench_active() ? bench_finish() : 0;
     if (!script_.empty()) {
         const bool finished = script_step_ >= script_.size() && !script_failed_;
         std::printf("smoke %s: %zu / %zu steps, %" PRIu64 " frames, %" PRIu64 " battles, galactic AI orders %" PRIu64 "\n", opt_.smoke.c_str(),
@@ -405,12 +413,26 @@ using namespace alamo_game_app;
 int main(int argc, char** argv) {
     enable_dpi_awareness();  // before any window: sizes and the video modes in physical pixels
     Options opt;
+    const std::vector<std::string> args(argv, argv + argc);
     for (int i = 1; i < argc; ++i) {
+        {  // BM2a: the benchmark flags (benchmark.hpp)
+            size_t bi = static_cast<size_t>(i);
+            std::string berr;
+            const int br = parse_benchmark_arg(args, bi, opt.bench, &berr);
+            if (br < 0) {
+                std::fprintf(stderr, "%s\n", berr.c_str());
+                return usage();
+            }
+            if (br > 0) {
+                i = static_cast<int>(bi);
+                continue;
+            }
+        }
         const std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : std::string(); };
         if (a == "--game") opt.game = next();
-        else if (a == "--width") opt.width = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
-        else if (a == "--height") opt.height = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
+        else if (a == "--width") opt.width = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10)), opt.size_set = true;
+        else if (a == "--height") opt.height = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10)), opt.size_set = true;
         else if (a == "--hidden") opt.hidden = true;
         else if (a == "--audio") {
             const std::string m = next();
@@ -445,6 +467,14 @@ int main(int argc, char** argv) {
     }
     if (opt.width == 0 || opt.height == 0) return usage();
     if (!opt.smoke.empty() && opt.smoke != "skirmish" && opt.smoke != "campaign" && opt.smoke != "land" && opt.smoke != "saveload") return usage();
+    if (opt.bench.active()) {  // BM2a: no smoke script, intro, attract demo or frame-time overlay in a benchmark run
+        if (const std::string why = check_benchmark_options(opt.bench); !why.empty() || !opt.smoke.empty()) {
+            std::fprintf(stderr, "benchmark: %s\n", why.empty() ? "--benchmark and --smoke do not mix" : why.c_str());
+            return usage();
+        }
+        opt.intro = opt.attract = opt.frame_overlay = false;
+        opt.movies.clear();
+    }
     log::set_min_level(log::Level::Warn);
     if (opt.movies.empty() && opt.intro) opt.movies = {"Logo1", "Logo2"};  // Movies.xml names (MAIN_LOOP 5.1 step 13): LucasArtsLogo.bik, PetroglyphLogo.bik
     if (!opt.smoke.empty()) {

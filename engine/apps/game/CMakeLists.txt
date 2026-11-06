@@ -22,6 +22,7 @@ add_library(alamo_game_core STATIC
   src/battle_summary.cpp
   src/story_ui.cpp
   src/save_games.cpp
+  src/benchmark.cpp
 )
 target_include_directories(alamo_game_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(alamo_game_core PUBLIC alamo_sim alamo_vfs alamo_data alamo_core alamo_engine_flags)
@@ -73,6 +74,13 @@ target_link_libraries(alamo_game_battle_summary_tests PRIVATE alamo_core alamo_g
 add_test(NAME alamo_game_battle_summary_tests COMMAND alamo_game_battle_summary_tests)
 set_tests_properties(alamo_game_battle_summary_tests PROPERTIES TIMEOUT 600)
 
+# BM2a data-free: the benchmark mode's options / flags, presets, fixed-frames clock, frame-time statistics and JSON report
+# (benchmark.hpp; the exe side is app/app_benchmark.cpp, checked by alamo_game_bench_* below).
+add_executable(alamo_game_benchmark_tests tests/test_benchmark.cpp)
+target_link_libraries(alamo_game_benchmark_tests PRIVATE alamo_core alamo_game_core)
+add_test(NAME alamo_game_benchmark_tests COMMAND alamo_game_benchmark_tests)
+set_tests_properties(alamo_game_benchmark_tests PROPERTIES TIMEOUT 60)
+
 # Data-free: GameAudioHost movie music (modes 14 / 17, Halt_Game_Music) on a synthetic audio tree and the null backend.
 add_executable(alamo_game_audio_host_tests tests/test_game_audio_host.cpp)
 target_link_libraries(alamo_game_audio_host_tests PRIVATE alamo_core alamo_game_core)
@@ -107,7 +115,7 @@ function(alamo_game_add_exe)
     return()
   endif()
   add_executable(alamo_game ${_dir}/app/game_main.cpp ${_dir}/app/app_session.cpp ${_dir}/app/app_input.cpp ${_dir}/app/app_screens.cpp
-                           ${_dir}/app/app_hud.cpp ${_dir}/app/app_frame.cpp ${_dir}/app/app_cinematic.cpp ${_dir}/app/app_script.cpp ${_dir}/app/app_script_saveload.cpp ${_dir}/app/game_render.cpp ${_dir}/app/game_ui.cpp ${_dir}/app/game_movies.cpp ${_dir}/app/frame_overlay.cpp
+                           ${_dir}/app/app_hud.cpp ${_dir}/app/app_frame.cpp ${_dir}/app/app_cinematic.cpp ${_dir}/app/app_script.cpp ${_dir}/app/app_script_saveload.cpp ${_dir}/app/app_benchmark.cpp ${_dir}/app/game_render.cpp ${_dir}/app/game_ui.cpp ${_dir}/app/game_movies.cpp ${_dir}/app/frame_overlay.cpp
                            ${_dir}/app/game_info.cpp ${_dir}/app/game_display.cpp)
   # alamo_core first: tools/formats' inline ByteReader vs core's (LNK2005, see alamo_render_app).
   target_link_libraries(alamo_game PRIVATE alamo_core alamo_game_core alamo_render_galactic alamo_render_sim alamo_ui_draw alamo_ui_hud
@@ -187,9 +195,24 @@ function(alamo_game_add_exe)
   # save's wall-clock time (the .crc matched across MSVC / clang); the checks are the smoke's own plus presentation on/off.
   add_test(NAME alamo_game_smoke_saveload COMMAND alamo_game --smoke saveload --hidden --audio null --png-dir ${_smoke_out}
                                                  --saves-dir ${_smoke_out}/saveload_saves)
-  set_tests_properties(alamo_game_smoke_saveload PROPERTIES TIMEOUT 1800)
+  set_tests_properties(alamo_game_smoke_saveload PROPERTIES TIMEOUT 1800 FIXTURES_SETUP alamo_game_smoke_saveload_run)
+  # BM2a: the benchmark mode on the saveload smoke's saves (bench_check.cmake; skipped without them): fixed frames from the
+  # battle save twice (same CRC, identical PNGs), real time from the galactic save (frame times reported).
+  set(_bench_out ${_smoke_out}/bench)
+  file(MAKE_DIRECTORY ${_bench_out})
+  foreach(_m fixed realtime)
+    if(_m STREQUAL "fixed")
+      set(_bench_save ${_smoke_out}/saveload_saves/smoke_battle.alsv)
+    else()
+      set(_bench_save ${_smoke_out}/saveload_saves/smoke_main.alsv)
+    endif()
+    add_test(NAME alamo_game_bench_${_m}
+             COMMAND ${CMAKE_COMMAND} -DGAME=$<TARGET_FILE:alamo_game> -DSAVE=${_bench_save} -DOUT=${_bench_out}/${_m} -DMODE=${_m}
+                     -P ${PROJECT_SOURCE_DIR}/engine/apps/game/bench_check.cmake)
+    set_tests_properties(alamo_game_bench_${_m} PROPERTIES TIMEOUT 1200 FIXTURES_REQUIRED alamo_game_smoke_saveload_run)
+  endforeach()
   alamo_label_slow(alamo_game_smoke_skirmish alamo_game_smoke_campaign alamo_game_smoke_land alamo_game_smoke_screens
                    alamo_game_smoke_skirmish_golden alamo_game_smoke_campaign_golden alamo_game_smoke_land_golden
-                   alamo_game_smoke_screens_golden alamo_game_smoke_saveload)
+                   alamo_game_smoke_screens_golden alamo_game_smoke_saveload alamo_game_bench_fixed alamo_game_bench_realtime)
 endfunction()
 cmake_language(DEFER DIRECTORY ${PROJECT_SOURCE_DIR} CALL alamo_game_add_exe)
