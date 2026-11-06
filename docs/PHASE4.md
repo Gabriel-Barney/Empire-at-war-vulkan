@@ -80,10 +80,82 @@ The Status column is the state when the row was last written; the roadmap is aut
 | Int-verify | Final verification on the settled tree + leftovers | ✅ 2026-10-27/28 | engine/apps/game (app/game_main.cpp, app/game_info.hpp/.cpp); docs |
 | P4 sim | FoC galactic special systems behind the P4 panels (docs/re/P4_SIM_SYSTEMS.md) + auto-resolve Withdraw / tactical Autoresolve entry points | ✅ 2026-10-28 | engine/galactic (new special_data.hpp, special_systems.hpp, src/special_rules.cpp, src/special_systems.cpp, tests/test_special.cpp = alamo_galactic_special_tests; "P4 sim" blocks in campaign.hpp/.cpp, galactic_rules, economy.hpp, galactic_events.hpp, conflicts.hpp/.cpp, test_conflicts.cpp); engine/apps/sim ("P4 sim" blocks in campaign_battles.*, tactical_battle.*) |
 | N1 | Save / load + replay: stage 1 galactic-map saves, stage 2 saves during a tactical battle, alamo_game save / load menus, save size | ✅ 2026-10-29 (stage 1, then stage 2 + menus + size the same day; in-game check of the menus automated 2026-10-31, below). N1f 2026-10-31: `alamo_game_smoke_saveload` (`--smoke saveload`, ~9 s, slow) drives Save with a typed name, the overwrite and delete questions (No / Yes), Load from the in-game menu and from the main menu (tick + state CRC == the save's) and a mid-battle save loaded back into its battle; a battle save now opens its battle's load screen at load (no galactic tick first, `app_session.cpp` `session_started`); galactic screen text moved to HUD layer 10, below the GUI dialogs (`galactic_hud.cpp`, 12 campaign visual baselines updated); human-fought campaign space and land battles saved mid-battle and loaded through alamo_game (`alamo_game_save_tests`); FoC story save 50 KB at 5 min, 54 KB at 2 h, 58 KB at 4 h of game time, 143 KB mid-battle (guards `alamo_ai_story_save_size`, `_late`, `alamo_game_save_tests` "Story battle") | Stage 2: engine/tactical (movement, fog, tree, combat, abilities, garrison, hangar: src/*_save.cpp), engine/ai/tactical (src/tactical_save.cpp), engine/anim (src/anim_save.cpp), engine/lua (PresentationLog), engine/apps/sim (src/tactical_battle_save.cpp, save_io.hpp, campaign_battles, sim_anim, story_session), engine/apps/headless (save_run, skirmish_run); menus: engine/apps/game (save_games.*, game_session, app/game_main.cpp), engine/ui (gui_menus); size: engine/core (compress.hpp/.cpp, save_file), engine/ai (ai_lua_runtime, galactic_ai_save). Stage 1: engine/core (save_file.hpp/.cpp, ByteWriter/Reader save helpers), engine/objects (ObjectStore), engine/commands (scheduler, events, recording), engine/galactic (src/galactic_save.cpp), engine/ai (src/ai_save*.cpp, src/galactic_ai_save.cpp + every AI system), engine/lua (src/vm_persist.cpp, 2 Lua patches, bridge / players / fog / cinematic write+read), engine/apps/sim (save_session.*, sim_host_save.cpp), engine/apps/headless (save_run.*); build_agent.cmd |
+| BM (BM1) | Repeatable benchmark: versioned scenario files (save + recorded orders + per-tick CRC fingerprint), sim-only mode in `alamo_headless --bench` (BM1), the game-side benchmark (BM2), stress scenes and reports (BM3), the in-game benchmark screen (BM4) | BM1 2026-11-06 (see "BM - repeatable benchmark" below) | engine/apps/sim (bench_scenario.*, bench_stats.*, bench_json.hpp), engine/apps/headless (bench_run.*, check_bench.cmake), tests/benchmark, tools/benchmark |
 
 ## Performance, worker-count check and sanitizer limits
 
 Moved on 2026-11-06: the OPT1 / OPT2 / OPT3 measurement sections are in [`PERFORMANCE.md`](PERFORMANCE.md); "Worker-count check" and "Sanitizer limits" are in [`BUILD.md`](BUILD.md).
+
+## BM - repeatable benchmark (BM1, 2026-11-06)
+
+One shared measuring tool for every performance goal: the same game time on every run, and per-tick CRCs that prove each run
+did the same work. AI actions are not in the order stream, so the AI must rerun identically from the save; the CRC proves it did.
+
+**Scenario file** (`engine/apps/sim/include/alamo/sim/bench_scenario.hpp`, in `alamo_sim` so `alamo_game` can load the same
+scenarios in BM2). A text manifest `<name>.abench` (LF, `key value` lines) next to three files it names:
+
+| Key | Meaning |
+|---|---|
+| `ALAMO_BENCH 1` | format line; a reader refuses any other format |
+| `name`, `version`, `description` | `version` is the scenario version: `--bench-make` keeps it when the remade files are identical and bumps it otherwise; results of different versions are never compared |
+| `make <args>` | the `alamo_headless` arguments that made it (`--bench-regen` re-runs them) |
+| `save <file> <bytes> <digest>` | the N1 save the run starts from (FNV-1a 64 of the bytes) |
+| `orders <file> <bytes> <digest>` | the recorded order stream continuing the save (`from_save`), or `-` |
+| `fingerprint <file> <bytes> <digest>` | the expected CRC log from the save tick on (`ALAMO_CRC` 1, or 2 when `fingerprint_every` > 1) |
+| `fingerprint_every <N>` | 1 = every tick stored; N = a checkpoint log (every Nth tick, first and last) |
+| `start_tick`, `ticks`, `workers` | the save's tick, ticks per run, default workers (`auto` = machine default) |
+| `final_crc` | combined CRC after the last tick |
+
+Every pinned file is checked against its size and digest before any timing, so a file changed without remaking the scenario
+is caught. The make is deterministic: remaking with nothing changed gives byte-identical files (the test checks it). The save
+leaves out the machine's game-data folder (the descriptor's informational `data_root`), so a remake on another machine keeps the
+version. All files are written as temporaries and moved in place with the manifest last.
+
+**Commands** (`engine/apps/headless/bench_run.hpp`):
+- `alamo_headless --bench S.abench [--runs 3] [--warmup 1] [--workers N] [--ticks K] [--bench-json F|-] [--bench-baseline OLD.json]`:
+  sim-only mode. Each run loads the save into a fresh session, replays the orders and runs the ticks as fast as possible (no
+  rendering, no pacing). Each tick is timed around `SimHost::tick_once` + the harness step; OPT1's zones are recorded during the timed
+  runs. Prints median / p99 (nearest rank) / worst tick per run and over all timed ticks, and the top zones. Every run's CRCs are
+  compared with the fingerprint, with run 0, and with `--golden` if given. `tools\benchmark\run_bench.cmd [name]` runs it and writes
+  `logs\bench_<name>.json`.
+- `--bench-make S.abench --save-session KIND [...] --bench-save-at T --ticks K [--bench-every N] [--bench-desc TEXT]`: builds the
+  session (the `--save-session` kinds), saves at T, loads and runs K ticks recording the orders, loads again replaying them and requires
+  the same CRCs, which become the fingerprint.
+- `--bench-regen S.abench` (`tools\benchmark\regen_scenario.cmd [name]`): remakes it with the recorded `make` arguments.
+
+**Not comparable.** A fingerprint mismatch, a pinned file that differs, or a save that no longer loads prints
+`scenario changed, not comparable: <first diverging tick and system>` and exits 3 (0 with `--bench-allow-changed`); the timings are
+still printed but labelled, the JSON says `"comparable": false`, and `--bench-baseline` reports no speedup or slowdown for it. Two
+results compare only when both matched the same scenario name, version, fingerprint digest and tick count
+(`alamo::sim::bench::compare`); a different CPU, compiler, worker count or a noisy side is printed as a note.
+
+**Busy machine.** Each run samples the machine's and the process's CPU time (`GetSystemTimes` / `GetProcessTimes`): when other
+processes take more than 10 % of the CPU during a timed run the run and the result are flagged `noisy`. The first space-battle try ran
+while other lanes built and tested (CPU at 100 %): the same 1800 ticks took 4.7 s in one run and 161 s in another. Benchmark on an idle
+machine.
+
+**JSON result** (`format: alamo-bench-result`, version 1): `scenario` (name, version, session, start tick, ticks, save and fingerprint
+digests), `fingerprint` (ok, message), `comparable`, `settings` (ticks, workers requested / used, warm-up and timed runs, rendering off,
+pacing, profiler zones), `machine` (CPU, logical cores, memory, OS build, GPU, GPU memory, GPU driver, `gpu_used: false` in sim-only
+mode), `build` (compiler, config, git commit at configure time, asserts), `summary` (median / p99 / worst + its tick and run, mean,
+ticks per second, `max_other_cpu_pct`, `noisy`), `runs` (the same per run plus load time, wall time, fingerprint, other CPU, final CRC),
+`zones` (top 24 OPT1 zones: share, mean, p50, p99, max) and `baseline` (comparable, ratios or the reason, notes). Shared code for
+BM2: `bench_stats.hpp` (median / p99 / worst, `compare`) and `bench_json.hpp` (the JSON value, write and read).
+
+**First scenario** `tests/benchmark/space_battle.abench`: `--save-session skirmish --campaign foc-fleet` = the `--skirmish-ai foc` space battle
+on `_MP_SPACE_KUAT` with both fleets four times over (20 ships a side: Empire 4 x {Star Destroyer, 2 Tartan, Acclamator, Broadside},
+Rebel 4 x {Mon Calamari, Nebulon-B, 2 Corellian Corvette, Assault Frigate}; ships over the unit cap arrive as reinforcements), saved at tick 300 with
+the battle running, then 1800 ticks (1 min) of AI-vs-AI battle, which does not end within them. No recorded orders (AI only).
+Fingerprint every 16th tick (29 KB; every tick would be 453 KB in the repository): a divergence stays in the state, so it is caught
+at the next stored tick, and `first_divergence` names the 16-tick window. Needs `ALAMO_FOC_DATA` (skipped without it).
+
+**Tests.** `alamo_sim_bench_tests` (manifest round trip and errors, pins, statistics, the comparison rule, JSON);
+`alamo_headless_bench_synthetic` (`headless/check_bench.cmake`, ~1-3 s, no game data: make a synthetic scenario, bench it with JSON,
+remake it unchanged (make line with a quoted `=` argument), compare with a baseline, run 100 of 150 ticks against a
+checkpoint fingerprint, reject `--ticks 0`, and refuse a scenario with another run's fingerprint and an edited sidecar as "not
+comparable"); `alamo_headless_bench_space_battle*` (slow, FoC data): the OPT3 t07 worker-count check on the space battle from its save
+(0 / 1 / 4 / 16 / machine default; `--bench-allow-changed`, so a sim behaviour change only prints "scenario changed" there - remake the
+scenario with `tools\benchmark\regen_scenario.cmd` and commit it with the change).
 
 ## Port choices and per-step notes (tracked on the roadmap)
 

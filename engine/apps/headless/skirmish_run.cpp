@@ -400,9 +400,14 @@ bool synthetic_session(Session& s, std::vector<std::string>& diag) {
     return true;
 }
 
+// BM1 t02: --skirmish-ai foc-fleet / --save-session skirmish --campaign foc-fleet, the foc space battle with both fleets this many
+// times over (the benchmark's large space battle, tests/benchmark/space_battle.abench).
+constexpr int kFleetScale = 4;
+
 // land: a land battle; land_skirmish (t50): that battle is a skirmish (an _MP_LAND_ map, MP_Default_Credits), else the campaign invasion.
+// fleet_scale (BM1 t02, kind foc-fleet): the space fleets of both sides repeated that many times (the benchmark's large space battle).
 bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>& diag, bool& skipped, bool land, bool station = false,
-                 bool land_skirmish = false) {
+                 bool land_skirmish = false, int fleet_scale = 1) {
     const std::string root = opt.game_dir.empty() ? env_value("ALAMO_FOC_DATA") : opt.game_dir;
     std::error_code ec;
     if (root.empty() || !fs::is_directory(path_from_utf8(root) / "Data", ec)) {
@@ -442,10 +447,12 @@ bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>&
             for (const char* n : {"Calamari_Cruiser", "Nebulon_B_Frigate", "Alliance_Assault_Frigate"})
                 if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) reb.push_back(ty);
     } else {
-        for (const char* n : {"Star_Destroyer", "Tartan_Patrol_Cruiser", "Tartan_Patrol_Cruiser", "Acclamator_Assault_Ship", "Broadside_Class_Cruiser"})
-            if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) emp.push_back(ty);
-        for (const char* n : {"Calamari_Cruiser", "Nebulon_B_Frigate", "Corellian_Corvette", "Corellian_Corvette", "Alliance_Assault_Frigate"})
-            if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) reb.push_back(ty);
+        for (int i = 0; i < fleet_scale; ++i) {
+            for (const char* n : {"Star_Destroyer", "Tartan_Patrol_Cruiser", "Tartan_Patrol_Cruiser", "Acclamator_Assault_Ship", "Broadside_Class_Cruiser"})
+                if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) emp.push_back(ty);
+            for (const char* n : {"Calamari_Cruiser", "Nebulon_B_Frigate", "Corellian_Corvette", "Corellian_Corvette", "Alliance_Assault_Frigate"})
+                if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) reb.push_back(ty);
+        }
     }
     uint32_t planet = s.rules.find_type(land ? "Utapau" : "Kuat");
     if (planet == galactic::kNoIndex) planet = s.rules.find_type("Coruscant");
@@ -622,9 +629,10 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     std::vector<std::string> diag;
     bool skipped = false;
     const bool host = kind == "foc-land" || kind == "skirmish";  // skai: the skirmish host
-    const bool foc = host || kind == "foc" || kind == "foc-land-campaign" || kind == "foc-station";
+    const bool foc = host || kind == "foc" || kind == "foc-land-campaign" || kind == "foc-station" || kind == "foc-fleet";
     const bool ok = host  ? skirmish_host_session(s, opt, diag, skipped, kind)
-                    : foc ? foc_session(s, opt, diag, skipped, kind == "foc-land-campaign", kind == "foc-station", false)
+                    : foc ? foc_session(s, opt, diag, skipped, kind == "foc-land-campaign", kind == "foc-station", false,
+                                        kind == "foc-fleet" ? kFleetScale : 1)
                           : synthetic_session(s, diag);
     if (skipped) {
         std::printf("skirmish-ai %s: ALAMO_FOC_DATA / --game not set: skipped\n", kind.c_str());
@@ -899,16 +907,17 @@ std::shared_ptr<SkirmishSaveData> skirmish_save_load(const std::string& kind, co
     Session& s = d->s;
     std::vector<std::string> diag;
     skipped = false;
-    const bool foc = kind == "foc" || kind == "foc-land" || kind == "foc-land-campaign";
+    const bool foc = kind == "foc" || kind == "foc-land" || kind == "foc-land-campaign" || kind == "foc-fleet";
     if (!foc && kind != "synthetic") {
-        err = "unknown skirmish '" + kind + "' (synthetic | foc | foc-land | foc-land-campaign)";
+        err = "unknown skirmish '" + kind + "' (synthetic | foc | foc-fleet | foc-land | foc-land-campaign)";
         return nullptr;
     }
     MapRunOptions mo;
     mo.game_dir = game_dir;
     mo.game_args = game_args;
     mo.map = map;
-    const bool ok = foc ? foc_session(s, mo, diag, skipped, kind == "foc-land" || kind == "foc-land-campaign", false, kind == "foc-land")
+    const bool ok = foc ? foc_session(s, mo, diag, skipped, kind == "foc-land" || kind == "foc-land-campaign", false, kind == "foc-land",
+                                      kind == "foc-fleet" ? kFleetScale : 1)
                         : synthetic_session(s, diag);
     if (skipped) {
         err = "ALAMO_FOC_DATA / --game not set";
