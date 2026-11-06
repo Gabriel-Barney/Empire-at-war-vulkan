@@ -690,7 +690,7 @@ void test_queue_phases() {
     const GalacticRules rules = make_rules();
     const objects::GameObjectTypes types;
     const GalacticSetup setup = make_setup();
-    for (const uint64_t seed : {0x5A5Eull, 1ull, 0xDEADBEEFull}) {
+    for (const uint32_t seed : {0x5A5Eu, 1u, 0xDEADBEEFu}) {
         objects::IdCounter ids;
         objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids);
         SimRng rng(seed), ref(seed);
@@ -717,7 +717,7 @@ void test_queue_phases() {
         const std::vector<uint8_t> bytes = sim_bytes(s);
         objects::IdCounter ids2;
         objects::ObjectStore store2(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids2);
-        SimRng rng2(seed + 7);
+        SimRng rng2(seed + 7u);
         GalacticSim c(rules, store2, rng2);
         CHECK(c.start(setup));
         bool differ = false;
