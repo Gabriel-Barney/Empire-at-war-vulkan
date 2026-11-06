@@ -13,7 +13,7 @@ worktree name). Follow the `lane` agent loop (`.claude/agents/lane.md`):
 4. Worktree: if this session is already in a `.claude\worktrees\<name>` checkout, verify it: `git status`, `git branch --show-current`,
    and that `Data`, `extracted`, `toolchain`, `roadmap-store` resolve (`dir`); a missing one is re-linked with
    `cmd /c mklink /J <link> <main checkout folder>`. Otherwise, from the main checkout, run
-   `tools\new_worktree.cmd <name> --base main --modules "<modules the tasks touch>"` and continue in the folder it prints (stack on
-   another open lane branch only when the group's work depends on it; depth at most 2).
+   `tools\new_worktree.cmd <name> --modules "<modules the tasks touch>"` (branches from `origin/dev`) and continue in the folder it
+   prints. A session already on its own app branch keeps it: `tools\land_on_dev.cmd` brings `dev` in when it lands.
 5. Print the plan: the tasks you will do in order, the modules and docs they touch, which builds apply (MSVC fast tier; clang when
    sim code changes; ASan for `engine/jobs`), and whether goldens may move. Then begin with the first task.
