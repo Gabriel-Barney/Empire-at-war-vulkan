@@ -381,14 +381,6 @@ if(ALAMO_GOLDEN_PYTHON)
   add_test(NAME alamo_goldens_convert_selftest
            COMMAND ${ALAMO_GOLDEN_PYTHON} ${CMAKE_SOURCE_DIR}/tools/goldens/convert_goldens.py --selftest)
   set_tests_properties(alamo_goldens_convert_selftest PROPERTIES TIMEOUT 60)
-  # tools/docs/split_phase4.py (docs/PHASE4.md -> docs/status/*.md): its selftest, and a dry run on the current docs/PHASE4.md that
-  # proves nothing is lost (the splitter's --check; nothing in the source tree is changed, the result goes to the build tree).
-  add_test(NAME alamo_docs_split_phase4_selftest
-           COMMAND ${ALAMO_GOLDEN_PYTHON} ${CMAKE_SOURCE_DIR}/tools/docs/split_phase4.py --selftest)
-  add_test(NAME alamo_docs_split_phase4_check
-           COMMAND ${ALAMO_GOLDEN_PYTHON} ${CMAKE_SOURCE_DIR}/tools/docs/split_phase4.py --check --no-refs
-                   --input ${CMAKE_SOURCE_DIR}/docs/PHASE4.md --out-dir ${CMAKE_CURRENT_BINARY_DIR}/split_phase4_check)
-  set_tests_properties(alamo_docs_split_phase4_selftest alamo_docs_split_phase4_check PROPERTIES TIMEOUT 120)
 endif()
 
 # Slow tier (label "slow", see engine/CMakeLists.txt): the long headless runs; ctest -LE slow skips them. The land-outcome

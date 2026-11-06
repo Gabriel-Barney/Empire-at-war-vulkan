@@ -77,4 +77,3 @@ A change to `engine/core` public headers or the top-level CMake goes through the
   `tools\regen_goldens.cmd` and say so in the PR. Format and workflow: `docs/status/golden-checkpoints.md`. All 20 goldens
   were converted on 2026-11-06 (`tools\goldens\convert_goldens.py --all --in-place --check`; MSVC and clang 174/174).
 - PR check without hosted CI: `tools\pr_check.cmd [PR] [--compiler msvc|clang|both] [--tests fast|all] [--post]`.
-- `tools\docs\split_phase4.py --check|--apply` moves dated `PHASE4.md` sections into `docs/status/` (not applied yet: PR #89 also reorganizes docs).
