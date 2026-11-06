@@ -22,8 +22,15 @@
 //   order, STORY_TECH_LEVEL with that player's current (starting) tech level to the plot sets that player owns, the whole
 //   Fire chain (Story_Event_Trigger, reward through apply_reward as at T9, dependants) applied at once, logged
 //   "F 0 ... via=load". So the start-of-game tech spawns exist before tick 1 (in the initial CRC record and in the
-//   galactic AI's first T7), and the T9 TECH_LEVEL poll cannot fire them again (fired, not Perpetual). Their galactic
-//   events (unit created) are routed at T9 of tick 1.
+//   galactic AI's first T7), and the T9 TECH_LEVEL poll cannot fire them again (fired, not Perpetual).
+//   a2j t05 (A2J_T05_STORY_LOAD.md): before that tech pass, STORY_CONSTRUCT (+ STORY_CONSTRUCT_LEVEL for a starbase /
+//   ground structure) for every starting-force object (retail L8: the creation path 0x400b40 raises them while the plots
+//   are already loaded), in object creation order, to every plot set, logged "via=load:construct"; the planet levels are
+//   the ones the object's creation left (a planet's k-th ground structure: level k). Inside the load pass, every object a
+//   SPAWN_HERO / UNIQUE_UNIT reward creates raises CONSTRUCT the same way inside the reward call (before the firing
+//   event's dependants), and after each load step the galactic events the load rewards raised are drained and routed at
+//   once (trigger lines "T 0 ...", as the further rounds of a T9), not at T9 of tick 1. None of these load-time
+//   CONSTRUCT dispatches writes a trigger line.
 //
 // T9 story service (SimHost::tick_once, after T7 players / T8 global Lua; docs/re/STORY.md 4.1):
 //   0. [port] the original dispatches game notifications synchronously when they happen; here the
@@ -488,7 +495,25 @@ private:
     std::vector<std::pair<std::string, lua::StoryNotification>> notifications(const StoryTrigger& t) const;
     std::string planet_type_name(uint32_t planet) const;
     void poll(size_t set);
-    void load_pass();  // A2i t01: the load-time STORY_TECH_LEVEL pass at the end of start() (header comment)
+    // a2j t05: one created object for the load-time CONSTRUCT notifications (starting forces, captured when start() begins).
+    struct LoadConstruct {
+        int32_t player = -1;
+        PlanetIndex planet = 0;
+        uint32_t type = 0;
+        int32_t level = 0;  // CONSTRUCT_LEVEL value as of the object's creation (starbase level / ground base level)
+    };
+    std::vector<LoadConstruct> starting_forces() const;
+    // A2i t01 + a2j t05: the load-time story pass at the end of start() (header comment): starting-force CONSTRUCT, then
+    // STORY_TECH_LEVEL per player; the stream the load rewards raise is routed after each step.
+    void load_pass(const std::vector<LoadConstruct>& forces);
+    // STORY_CONSTRUCT (+ STORY_CONSTRUCT_LEVEL for a starbase / ground structure type) for `type` created by `player` at
+    // `planet` (STORY.md §5, 0x326cd0). level < 0: the planet's current level.
+    void construct_notifications(int32_t player, PlanetIndex planet, uint32_t type, int32_t level,
+                                 std::vector<std::pair<std::string, lua::StoryNotification>>& out) const;
+    void dispatch_construct(int32_t player, PlanetIndex planet, uint32_t type, int32_t level);  // every plot set, no log
+    void route_load_events();               // a2j t05: drain + route the galactic stream inside the load pass
+    void collect_all(std::string_view via);  // collect() for every galactic plot set, set order
+    bool loading_ = false;                   // a2j t05: inside load_pass (reward spawns raise CONSTRUCT at once)
     void collect(size_t set, std::string_view via);  // log new fired entries, drain script errors
     void apply_reward(Set& s, const std::string& type, const std::vector<std::string>& params);
     void invade_planet_reward(int32_t plot_player, PlanetIndex planet, const std::string& company);  // a1h t04

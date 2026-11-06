@@ -442,6 +442,8 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
         note("story: no file provider");
         return false;
     }
+    // a2j t05: the starting forces as the galaxy was built (before any plot script runs Base_Definitions).
+    const std::vector<LoadConstruct> forces = starting_forces();
     for (const StoryPlotSet& ps : st.plot_sets) {
         auto set = std::make_unique<Set>();
         set->player = ps.player;
@@ -500,7 +502,7 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
             collect(si, "load");  // Story_Event calls from Definitions (none in the shipped scripts)
         }
     }
-    load_pass();
+    load_pass(forces);
     return true;
 }
 
@@ -509,10 +511,18 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
 // events (HotM: Empire_Enters_Tech_01..03 -> Spawn_Piett, the Rebel hero spawns) and their STORY_TRIGGER dependants fire
 // during the load, before tick 1. Mode frame 0 / time 0, not paused; rewards through on_reward -> apply_reward (the T9
 // code). The tech level is read per player at its turn (an earlier player's SET_TECH_LEVEL reward is seen).
-void StorySession::load_pass() {
+// a2j t05 (A2J_T05_STORY_LOAD.md; A2I_T01 §2 L8, §3.3, §6 "Related differences"): first the starting forces' CONSTRUCT /
+// CONSTRUCT_LEVEL (retail raises them inside the creation path 0x400b40 during L8, with the plots already loaded, so before
+// L10's tech pass). While loading_, a SPAWN_HERO / UNIQUE_UNIT reward's objects raise CONSTRUCT inside the reward call.
+// After each step the galactic events the load rewards raised are routed at once (route_load_events), not at T9 of tick 1.
+void StorySession::load_pass(const std::vector<LoadConstruct>& forces) {
     frame_ = 0;
     seconds_ = 0.0;
     for (const auto& s : sets_) s->model.set_clock(0, 0.0, false);
+    loading_ = true;
+    for (const LoadConstruct& c : forces) dispatch_construct(c.player, c.planet, c.type, c.level);
+    collect_all("load:construct");
+    route_load_events();
     const size_t players = sim_->players().size();
     for (size_t p = 0; p < players; ++p)
         for (size_t si = 0; si < sets_.size(); ++si) {
@@ -520,8 +530,108 @@ void StorySession::load_pass() {
             lua::StoryNotification n;
             n.value = sim_->players()[p].tech_level;
             sets_[si]->model.dispatch("STORY_TECH_LEVEL", n);
-            collect(si, "load");
+            collect_all("load");  // the reward spawns' CONSTRUCT may fire events of any plot set
+            route_load_events();
         }
+    loading_ = false;
+}
+
+// The galactic objects the galaxy build created (starting forces), in creation order (ObjectStore::all_objects keeps it):
+// every live unit / structure / starbase that sits at a planet (starbase, ground structures, surface, orbit fleets).
+// [port] order: the port creates GalacticSetup::forces in <Starting_Forces> entry order; retail's L8 walks "per planet"
+// (A2I_T01 §2), whose exact entry order is not in the spec (A2J_T05 open question 1). A starbase replaced by a later
+// starting-force starbase on the same planet is gone and raises nothing here.
+std::vector<StorySession::LoadConstruct> StorySession::starting_forces() const {
+    std::vector<LoadConstruct> out;
+    const objects::ObjectStore& st = sim_->store();
+    const auto planets = sim_->planets();
+    const auto& types = sim_->rules().types;
+    constexpr PlanetIndex kNowhere = kInvalidPlanet;
+    std::vector<PlanetIndex> where(st.capacity(), kNowhere);
+    std::vector<int32_t> level(st.capacity(), 0);
+    auto put = [&](objects::ObjectHandle h, PlanetIndex p, int32_t lv) {
+        if (!st.alive(h) || h.slot() >= where.size()) return;
+        where[h.slot()] = p;
+        level[h.slot()] = lv;
+    };
+    for (PlanetIndex i = 0; i < planets.size(); ++i) {
+        const galactic::PlanetState& p = planets[i];
+        put(p.starbase, i, p.starbase_level);
+        int32_t ground = 0;  // ground_base_level as of each structure's creation (the list is in creation order)
+        for (const objects::ObjectHandle h : p.structures) {
+            if (st.alive(h) && static_cast<size_t>(st.type(h)) < types.size() &&
+                galactic::is_ground_structure_type(types[static_cast<size_t>(st.type(h))]))
+                ++ground;
+            put(h, i, ground);
+        }
+        for (const objects::ObjectHandle h : p.surface) put(h, i, 0);
+    }
+    for (const galactic::FleetState& f : sim_->fleets())
+        if (f.alive)
+            for (const objects::ObjectHandle h : f.contents) put(h, f.planet, 0);
+    for (const objects::ObjectHandle h : st.all_objects()) {
+        if (!st.alive(h) || h.slot() >= where.size() || where[h.slot()] == kNowhere) continue;
+        const auto ty = static_cast<uint32_t>(st.type(h));
+        if (ty >= types.size()) continue;
+        out.push_back({st.owner(h), where[h.slot()], ty, level[h.slot()]});
+    }
+    return out;
+}
+
+void StorySession::construct_notifications(int32_t player, PlanetIndex planet, uint32_t type, int32_t level,
+                                           std::vector<std::pair<std::string, lua::StoryNotification>>& out) const {
+    lua::StoryNotification n;
+    n.owner = player;
+    n.owner_neutral = player >= 0 && player == sim_->neutral_player();
+    n.planet = planet_type_name(planet);
+    if (type < sim_->rules().types.size()) n.name = sim_->rules().types[type].name;
+    n.has_object = true;  // the planet [M: filter on the producing player]
+    out.emplace_back("STORY_CONSTRUCT", n);
+    if (type < sim_->rules().types.size() && planet < sim_->planets().size()) {
+        const galactic::UnitKind k = sim_->rules().types[type].kind;
+        if (k == galactic::UnitKind::StarBase || k == galactic::UnitKind::GroundStructure) {
+            lua::StoryNotification lv = n;
+            lv.category = k == galactic::UnitKind::StarBase ? 0 : 1;
+            if (level >= 0) lv.value = level;
+            else lv.value = k == galactic::UnitKind::StarBase ? sim_->planets()[planet].starbase_level : sim_->ground_base_level(planet);
+            out.emplace_back("STORY_CONSTRUCT_LEVEL", lv);
+        }
+    }
+}
+
+// Unscoped like the ProductionCompleted route: every galactic plot set in set order, CONSTRUCT then CONSTRUCT_LEVEL.
+// Nothing is collected here (a reward's nested call must not log the firing event under another cause).
+void StorySession::dispatch_construct(int32_t player, PlanetIndex planet, uint32_t type, int32_t level) {
+    std::vector<std::pair<std::string, lua::StoryNotification>> list;
+    construct_notifications(player, planet, type, level, list);
+    for (size_t si = 0; si < sets_.size(); ++si)
+        for (const auto& [name, n] : list) sets_[si]->model.dispatch(name, n);
+}
+
+void StorySession::collect_all(std::string_view via) {
+    for (size_t si = 0; si < sets_.size(); ++si) collect(si, via);
+}
+
+// The T9 drain rounds (service()) at load: what the load rewards (and plot scripts' Base_Definitions) raised, translated
+// and routed now with frame 0, until the stream stays empty (at most kMaxRounds). No poll / host / UI triggers here.
+void StorySession::route_load_events() {
+    for (int round = 0; round < kMaxRounds; ++round) {
+        scratch_.clear();
+        sim_->drain_events(scratch_);
+        if (scratch_.empty()) break;
+        if (drain_tap_) drain_tap_(round + 1, scratch_);  // [port] a tap set before the load sees them as later rounds
+        std::vector<StoryTrigger> batch;
+        batch.reserve(scratch_.size());
+        for (const galactic::GalacticEvent& e : scratch_)
+            if (!(e.kind == galactic::GalacticEventKind::PlanetDestroyed && e.value == 1)) batch.push_back(translate(e));
+        for (StoryTrigger& t : batch) {
+            t.frame = frame_;
+            t.index = static_cast<uint32_t>(triggers_.size());
+            lines_.push_back(t.text());
+            triggers_.push_back(t);
+            route(triggers_.back());
+        }
+    }
 }
 
 void StorySession::host_event(StoryHostEvent e, uint64_t frame) {
@@ -624,22 +734,10 @@ std::vector<std::pair<std::string, lua::StoryNotification>> StorySession::notifi
             out.emplace_back("STORY_CONQUER", n);
             out.emplace_back("STORY_CONQUER_COUNT", n);
             break;
-        case K::ProductionCompleted: {
-            n.name = t.type;
-            n.has_object = true;  // the planet [M: filter on the producing player]
-            out.emplace_back("STORY_CONSTRUCT", n);
-            if (e.type < sim_->rules().types.size() && e.planet < sim_->planets().size()) {
-                const galactic::UnitKind k = sim_->rules().types[e.type].kind;
-                if (k == galactic::UnitKind::StarBase || k == galactic::UnitKind::GroundStructure) {
-                    lua::StoryNotification lv = n;
-                    lv.category = k == galactic::UnitKind::StarBase ? 0 : 1;
-                    lv.value = k == galactic::UnitKind::StarBase ? sim_->planets()[e.planet].starbase_level
-                                                                 : sim_->ground_base_level(e.planet);
-                    out.emplace_back("STORY_CONSTRUCT_LEVEL", lv);
-                }
-            }
+        case K::ProductionCompleted:
+            // The planet's levels now (the stream is routed at the start of T9, after the creation) [port].
+            construct_notifications(e.player, e.planet, e.type, -1, out);
             break;
-        }
         case K::FleetArrived:
             if (e.value == galactic::kArrivePassThrough) break;  // [port] stopping arrivals only
             n.has_object = true;
@@ -1038,7 +1136,10 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
             if (const PlanetIndex n = nearest(row, true); n != kInvalidPlanet) row = n;
         const int32_t copies = trim(p3).empty() ? 1 : to_int(p3, 1);
         if (pl >= 0 && type_index != galactic::kNoIndex && row != kInvalidPlanet) {
-            for (int32_t k = 0; k < copies; ++k) sim_->spawn_unit(pl, row, type_index);
+            // a2j t05: in the load pass each created copy raises CONSTRUCT inside the creation call, as 0x400b40 does
+            // (A2I_T01 §3.3); at T9 spawn_unit raises no story event (open item, A2J_T05_STORY_LOAD.md).
+            for (int32_t k = 0; k < copies; ++k)
+                if (sim_->spawn_unit(pl, row, type_index) && loading_) dispatch_construct(pl, row, type_index, -1);
         } else if (!trim(p1).empty()) {
             lua_messages_.push_back(std::to_string(frame_) + " story: " + type + " failed for '" + p1 + "' at '" + p2 + "'");
         }
