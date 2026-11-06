@@ -805,3 +805,39 @@ wall, 250 ms of Lua thread time, mostly parsing the PG libraries in every plan V
 VFS read, parse, render-vertex packing the sim does not need), and serial steps such as the skirmish's `bt_place_forces` (about 25 ms,
 per-object stamps in RNG order). Getting under 33.3 ms needs setup spread over several ticks or prepared before the battle (moves goldens),
 or a sim-only model load (positions, indices and skeleton only). The second battle tick (first perception, 8-11 ms) is unchanged.
+
+## Benchmark scenario: first numbers (BM1, 2026-11-06)
+
+`alamo_headless --bench tests/benchmark/space_battle.abench` (docs/PHASE4.md "BM - repeatable benchmark"): the FoC `_MP_SPACE_KUAT`
+AI-vs-AI space battle with 20 ships a side, 1800 ticks from its tick-300 save, sim only. Reference PC (Ryzen 7 7800X3D, 16 threads).
+**All of these were taken while other lanes built and tested on the same machine (CPU at 95-100 %), so every one is flagged `noisy`
+and none is a baseline.** They show what the tool reports, not the engine's speed.
+
+| Run | Workers | Median tick | p99 | Worst | Mean |
+|---|---|---|---|---|---|
+| MSVC, ctest worker-count entry | 0 | 1.36 ms | 4.2 ms | 62 ms | 1.57 ms |
+| clang, ctest worker-count entry | 0 | 1.24 ms | 9.3 ms | 37 ms | 1.59 ms |
+| MSVC, `--bench` 1 warm-up + 3 runs | 15 (auto) | 1.71 ms (pooled) | 528 ms | 1068 ms | 39.6 ms |
+
+The last row is the reason for the noisy flag: its three timed runs took 161 s, 48 s and 4.7 s for the same 1800 ticks with identical
+CRCs; the 4.7 s run (mean 2.6 ms) is the closest to an idle machine. Fully loaded, 15 workers lose badly to 0 (mean 12 ms vs 1.6 ms in
+the worker-count entries), because every tick waits on workers the OS does not schedule. A quiet-machine baseline is open on the roadmap.
+
+## alamo_game benchmark mode: first numbers (BM2a, 2026-11-06)
+
+First runs of `alamo_game --benchmark` (docs/PHASE4.md, BM2a note) on the saveload smoke's saves (`build-*/smoke_out/saveload_saves`:
+`smoke_battle` = a small campaign space battle at tick 525, `smoke_main` = the galactic map at tick 192), preset `bm-high`
+(1920x1080, detail 75, TAA Medium in real time / off in fixed frames, Immediate present, no cap, null audio), 300 measured ticks,
+**hidden window** (`--hidden`; a visible window may present slower), MSVC Release, AMD Radeon RX 9070 XT, 16 hardware threads.
+These saves are light scenes: they show that the tool works and what the frame loop costs on its own, not a heavy-battle budget
+(that waits for BM1's scenarios).
+
+| Run | Frames | Frame ms median / p99 / worst | Render ms median / p99 | Sim ms per tick median / p99 / worst | Wall |
+|---|---|---|---|---|---|
+| real time, battle save | 7285 | 1.28 / 2.65 / 21.3 | 1.24 / 1.86 | 0.69 / 3.28 / 4.62 | 9.96 s (30.1 ticks/s) |
+| real time, galactic save | 7080 | 1.35 / 1.95 / 2.87 | 1.32 / 1.87 | 0.29 / 0.84 / 1.10 | 9.95 s |
+| fixed frames (2 per tick), battle save | 600 | 1.85 / 4.43 / 6.48 | 1.28 / 3.33 | 0.69 / 3.01 / 4.94 | 1.17 s |
+
+0 unsettled frames in all three; 17 / 6 / 17 warm-up frames. The real-time worst frame (21 ms) is a single frame in the battle
+run. Fixed-frames runs are bit-identical across runs and across MSVC / clang (same PNGs and CRC log), see the
+`alamo_game_bench_*` ctest entries.

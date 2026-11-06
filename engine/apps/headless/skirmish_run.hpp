@@ -5,6 +5,7 @@
 //   foc:       the FoC data (--game DIR or ALAMO_FOC_DATA; exit 0 "skipped" without it): shipped AI data, plans,
 //              BusyTacticalFreeStore, DifficultyAdjustments, a space map (--map, default _MP_SPACE_KUAT) and an
 //              Empire vs Rebel fleet.
+//   foc-fleet: (BM1 t02) foc with both fleets four times over, the benchmark's large space battle (tests/benchmark/space_battle.abench).
 //   foc-land:  (battle host, t50) a land SKIRMISH on the same FoC data: a multiplayer land map (--map, default _MP_LAND_UTAPAU),
 //              both sides with MP_Default_Credits and their pre-built base (Command Center + Barracks pads built), the skirmish pad
 //              lists / prices / pop cap and the shipped skirmish equations (BattleConfig::skirmish). Empire companies hold the
