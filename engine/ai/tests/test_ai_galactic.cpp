@@ -3947,7 +3947,7 @@ struct UwResult {
     float corr_credits_before = 0.0f, corr_credits_after = 0.0f;
     double corr_pool_before = 0.0, corr_pool_after = 0.0, corr_avail_before = 0.0, corr_avail_after = 0.0;
     // a2k t08 Q2 (shared_fleet runs): frames on which a moving fleet held more than one hero, and the "split" orders.
-    int32_t shared_moves = 0;
+    int32_t shared_moves = 0, first_shared = -1;
     size_t splits = 0;
 };
 
@@ -4029,9 +4029,11 @@ static UwResult run_underworld(unsigned threads, int32_t frames, bool shared_fle
     for (const std::string& d : pd) std::printf("  underworld plans: %s\n", d.c_str());
     CHECK(world.plans().plans.size() == 3);
     CHECK(world.start(&pd));
+    std::vector<objects::ObjectHandle> start_heroes;
     if (shared_fleet) {  // the three (space) heroes start in one orbit fleet at home
         const std::vector<uint32_t> home = sim.fleets_at(0, 1);
         CHECK(home.size() == 1 && sim.fleets()[home.front()].contents.size() == 3);
+        if (!home.empty()) start_heroes = sim.fleets()[home.front()].contents;
     }
     // Σ over the budget categories of the Underworld AI (player 1): pools P and available A.
     auto budget_sums = [&world, &defs](double& pool, double& avail) {
@@ -4064,11 +4066,13 @@ static UwResult run_underworld(unsigned threads, int32_t frames, bool shared_fle
         bool shared = false;
         for (const gal::FleetState& fl : sim.fleets()) {
             if (!fl.alive || !fl.moving) continue;
-            int heroes = 0;
-            for (const objects::ObjectHandle u : fl.contents) heroes += store.alive(u) && store.type(u) != uStruct ? 1 : 0;
+            int heroes = 0;  // starting heroes (free-store units claimed by the plans) in this moving fleet
+            for (const objects::ObjectHandle u : fl.contents)
+                heroes += store.alive(u) && std::find(start_heroes.begin(), start_heroes.end(), u) != start_heroes.end() ? 1 : 0;
             shared = shared || heroes > 1;
         }
         out.shared_moves += shared ? 1 : 0;
+        if (shared && out.first_shared < 0) out.first_shared = f;
         StateHasher h;
         sim.hash_state(h);
         world.hash(h);
@@ -4128,11 +4132,15 @@ static void test_underworld_special() {
     CHECK(base.corr_pool_before == base.corr_pool_after && base.corr_avail_before == base.corr_avail_after);
     {   // a2k t08 Q2 (A2K_T08_RE_ANSWERS Q2.3, PRE_PATH_SEPERATE): the three heroes (space units here) start in one orbit
         // fleet. Each plan's Produce_Force splits its claimed hero out of the shared fleet before the gather, so no fleet
-        // ever jumps with two heroes (Move_To moves the task force's fleet, which then holds only its own hero), and the
-        // corruption still lands. (The hack needs Land_Units of a ground hero: not checked here.)
+        // ever jumps with two of those heroes (Move_To moves the task force's fleet, which then holds only its own hero),
+        // and the corruption still lands. Produced units are not split (PRODUCTION_END paths the unit's fleet as it is).
+        // (The hack needs Land_Units of a ground hero: not checked here.)
         const UwResult sh = run_underworld(0, frames, true);
         std::printf("  shared home fleet: %s; %zu splits, %d frames with a shared moving fleet, %zu Lua errors\n", sh.summary.c_str(),
                     sh.splits, sh.shared_moves, sh.errors.size());
+        if (sh.shared_moves > 0)  // the decisions up to the first such frame
+            for (const std::string& d : sh.decisions)
+                if (std::atoi(d.c_str()) <= sh.first_shared) std::printf("    %s\n", d.c_str());
         CHECK(sh.errors.empty() && sh.splits >= 2 && sh.shared_moves == 0);
         CHECK(sh.corruption_p1 == 6 && sh.completed_bm >= 1);
     }
