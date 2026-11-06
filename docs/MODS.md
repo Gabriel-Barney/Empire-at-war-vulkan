@@ -63,7 +63,7 @@ argument to `vfs::parse_command_line`.
 | Switch | Meaning | Status |
 |---|---|---|
 | `MODPATH=<dir>` | Adds `<dir>` to the mod search list. A relative `<dir>` is resolved against the FoC folder, so the retail convention `MODPATH=Mods\<Name>` finds `corruption\Mods\<Name>`. An absolute path works too, including a Steam workshop item folder | **main** |
-| `STEAMMOD=<id>` | Adds the Steam workshop item `<id>` to the same list, at its command-line position. Retail asks the Steam client for the subscribed item's folder; if the item is not subscribed, nothing is mounted | Parsed on **main**, but no resolver is installed: every `STEAMMOD=` mounts nothing and warns `STEAMMOD=<id>: no workshop resolver; nothing mounted`. Resolver: **modc t10** (new, §8). Until then use `MODPATH=<steam library>\steamapps\workshop\content\32470\<id>` (what `tools/testbuild` launchers do) |
+| `STEAMMOD=<id>` | Adds the Steam workshop item `<id>` to the same list, at its command-line position. Retail asks the Steam client for the subscribed item's folder; if the item is not subscribed, nothing is mounted | **main** (modc t10): `alamo_game`, `alamo_headless` and `alamo_mod_check` install the Steam library lookup (`engine/vfs/include/alamo/vfs/steam_workshop.hpp`, below); an item not found warns `STEAMMOD=<id>: workshop item not found; nothing mounted`. A `Vfs` created by other code (tests, tools) without a `VfsConfig::steam_resolver` still warns `no workshop resolver`. `MODPATH=<item folder>` keeps working |
 | `FALLBACKPATH=<dir>` | Adds `<dir>` to the fallback chain (below the MEGs, above EaW `GameData`) | **main** |
 
 `MODPATH=` and `STEAMMOD=` entries go into **one** search list in command-line order: retail mounts each as it parses the
@@ -74,7 +74,12 @@ Where mods are found, for tools that list them (**modc t08** mod picker):
 
 - local: `<FoC folder>\Mods\<Name>\` (each subfolder with a `Data\` folder is a candidate);
 - Steam workshop: `<library>\steamapps\workshop\content\32470\<id>\` for every Steam library folder (32470 is the FoC app
-  id). The port does not use the Steam API: an item folder present on disk counts as installed (**modc t10**).
+  id). The port does not use the Steam API: an item folder present on disk counts as installed (**main**, modc t10).
+  Library folders, first match wins: the library holding the FoC folder (the parent of its nearest `steamapps` ancestor),
+  then for each Steam client folder the folder itself and every `path` of its `steamapps\libraryfolders.vdf` and
+  `config\libraryfolders.vdf` (file order; the pre-2021 numeric-key form too). Client folders: `ALAMO_STEAM_ROOT`
+  (`;`-separated; when set, nothing else), else the registry's `SteamPath` / `InstallPath` (read only), else
+  `C:\Program Files (x86)\Steam`. An id that is not all digits is never found.
 
 ### 3.2 File resolution order
 
@@ -146,24 +151,58 @@ from a mod's name. Two levels:
 | FoC folder missing / not a directory | Abort | VFS create fails, message names the folder | Error | **main** |
 | EaW install not found | Abort | Warning, EaW MEGs and `GameData` skipped (PHASE2 "VFS: missing EaW install warns") | Warning | **main** |
 | `MODPATH=` folder without `Data\` | Nothing found there | `mod path has no Data folder` | Warning | **main** |
-| `STEAMMOD=` item not installed | Nothing mounted | `workshop item not found; nothing mounted` (today always `no workshop resolver`) | Warning | **main**; resolver **modc t10** |
+| `STEAMMOD=` item not installed | Nothing mounted | `workshop item not found; nothing mounted` | Warning | **main** (modc t10) |
 | `MegaFiles.xml` names a missing or unreadable MEG | Skipped | `MegaFiles.xml entry not found` / `cannot open MEG` | Warning | **main** |
-| A list file (`GameObjectFiles.xml`, ...) names a missing file | Logged, skipped | Loader diagnostic, file skipped | Warning | **main** |
+| A list file (`GameObjectFiles.xml`, ...) names a missing file | Logged, skipped | Loader diagnostic, file skipped; the load report lists it under missing files | Warning | **main** |
+| An object type's `Space_` / `Land_` / `Galactic_Model_Name` names a model no layer has | Draws nothing (not traced) | Listed under missing files (a name without an extension is also tried with `.ALO`) | Warning | **main** (modc t05) |
 | A loader step throws | Crash or log, depends | Step reported as failed with the step name | Error | **Q6 stack** (`GameData::stages`, `alamo_mod_check`) |
 | A campaign has no planets | Unplayable campaign | Listed by name | Error | **Q6 stack** |
 | Campaign row names an unknown planet / route / faction | Row skipped | `build_galaxy_map` diagnostic, grouped by message | Warning | **Q6 stack** |
 | Faction `Basic_AI` / `AI_Player_Control` names an undefined AI type | "Unrecognized AI player type", no AI | No AI for that player, diagnostic | Warning | **Q6 stack** |
 | Faction has no skirmish default forces | Places nothing | [port] up to three of the faction's cheapest buildable units (`data_fallback_forces`), listed as a diagnostic | Warning | **Q6 stack** |
 | A Lua script does not compile | `LuaScript Error in <name>.lua!`, script does not run | Listed with the compiler message | Warning | **Q6 stack** (`alamo_mod_check` compiles every `Data\Scripts\**.lua`) |
-| A script calls an engine function the port does not bind, or reads a value that fails | Script error, the script stops | Reported by the run, not by the static check | Warning | Session runs (`alamo_headless --story` / `--galactic-ai`); in the load report: **modc t05** |
-| An XML tag the port does not read | Ignored | Listed as unsupported, per tag and count | Warning | **modc t05** |
+| A script calls an engine function the port does not bind, or reads a value that fails | Script error, the script stops | The load report runs the main chunk of every entry script (not `Library\`) once in its own VM and lists the errors, and lists the engine globals / methods the scripts call that the port registers as unbound stubs (static scan). Later failures show up in session runs (`alamo_headless --story` / `--galactic-ai`) | Warning | **main** (modc t05) |
+| An XML tag the port does not read | Ignored | Object type tags that neither the original's field tables nor its sub-object elements know, per tag with counts | Warning | **main** (modc t05); other XML files: not yet |
 | An effect only a mod ships | Compiled by D3DX | Open (§4) | — | **modc t11** |
 
-The report: `alamo_mod_check [--game DIR] [MODPATH=..] [STEAMMOD=..] [FALLBACKPATH=..] [--out FILE] [--verbose]` loads the data
-exactly as `alamo_game` does and prints files (VFS layers, warnings, per-folder new / replaced counts), loader steps,
-content counts, campaign checks and Lua compile errors, then `== result: OK|ERRORS, N errors, M warnings` (**Q6 stack**,
-`engine/apps/game/src/mod_check.cpp`). **modc t05** extends it to any mod folder with run-time Lua errors, unsupported tags
-and a machine-readable summary; **modc t08** shows that summary in the game's mod picker before launch.
+The report: `alamo_mod_check [--game DIR] [MODPATH=..] [STEAMMOD=..] [FALLBACKPATH=..] [--out FILE] [--json FILE|-] [--verbose]
+[--no-campaigns] [--no-lua] [--no-lua-run] [--no-files] [--no-xml-tags]` loads the data exactly as `alamo_game` does and
+prints files (VFS layers, warnings, per-folder new / replaced counts), loader steps, content counts, campaign checks,
+missing files, unknown XML tags, Lua compile errors, main-chunk errors and unbound engine calls, then
+`== result: OK|ERRORS, N errors, M warnings` (**main**, `engine/apps/game/src/mod_check.cpp`; exit 0 without errors, 1 with,
+2 usage). Each finding of the last three kinds is marked `[mod]` when it comes from a file in a mod folder: base FoC
+itself has some (49 missing cinematic models, 56 unread tags), so a mod's own problems are the marked ones. `--json`
+writes the summary below (`-`: to stdout instead of the text). **modc t08** shows that summary in the game's mod picker.
+
+A main-chunk error is a lead, not proof: the script runs with no session (no players, objects or `GlobalValue` state
+another script set first), so scripts that read such state at load report errors the game never hits. Example: Thrawn's
+Revenge's `ModContentLoader` reads `GlobalValue.Get("MOD_ID")`, which its GameScoring script sets at startup.
+
+### 5.1 The machine-readable summary (`alamo.mod_report`, version 1)
+
+One JSON object, UTF-8 (bytes of the data that are not UTF-8 are written as the Latin-1 character of that value), keys in
+the order below, every list complete. A new key may be added in a later version of the same number; a key is never
+removed or changed in meaning without raising `version`. Paths are game-relative and upper case unless noted.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `schema`, `version` | string, number | `"alamo.mod_report"`, `1` |
+| `result` | string | `"ok"` (no errors) or `"errors"` |
+| `errors`, `warnings` | number | as the text report's result line (levels in the table above) |
+| `game`, `args` | string, [string] | the FoC folder and the VFS command line as given |
+| `loaded`, `load_error` | bool, string | whether the data loaded; why not |
+| `files` | object | `mod_dirs` [host path], `vfs_warnings` [string], `added`, `replaced` (mod files with no lower-layer copy / replacing one), `folders` [{`folder` (the first folder below `Data`, `""` for `Data` itself), `added`, `replaced`}] |
+| `loaders` | [object] | per loader step in load order: `name`, `ok`, `ms` (wall clock, varies per run), `diagnostics` [string] |
+| `content` | object | `campaigns`, `planets`, `trade_routes`, `object_types`, `factions`, `ai` (bool: AI data loaded), `ai_plans`, `tactical_space_plans`, `tactical_land_plans`, `official_maps`, `custom_maps` |
+| `campaigns` | object | `checked`, `without_planets` [campaign name] (errors), `skipped_rows` (number of skipped rows over all campaigns), `warnings` [one line per message with its campaigns] |
+| `missing_files` | [object] | `path`, `referenced_by` (the first naming list file, or `"<type> (<tag>)"`), `references`, `in_mod`; sorted by path |
+| `unknown_xml_tags` | [object] | `tag` (first spelling), `occurrences`, `types`, `first_file` (as listed, not upper-cased), `in_mod`; most occurrences first |
+| `lua` | object | `scripts` (compiled), `compile_errors` [{`path`, `error`, `in_mod`}], `chunks_run` (entry scripts run), `run_errors` [{`path`, `error`, `in_mod`}], `unbound_calls` [{`name`, `kind` (`"global"` / `"method"`), `call_sites`, `scripts`}] |
+| `check_errors` | [string] | a check that threw (errors) |
+
+`in_mod` is true when the file the finding comes from resolves to a mod folder. The synthetic mod of
+`engine/apps/game/testdata/mod_fixture` (modc t07; README there) is checked through this summary in ctest
+(`alamo_game_mod_fixture_tests`, `alamo_mod_check_fixture`).
 
 ## 6. Port rules that apply only when a mod layer is loaded
 
@@ -199,9 +238,9 @@ Each needs either a data-driven replacement or a `docs/re/` citation showing the
 | Audit of hard-coded names and counts | modc t02 |
 | Data-driven replacements, base-FoC goldens unchanged | modc t03 |
 | Lint: no mod / faction name literals in `engine/` sim code | modc t04 |
-| Load report for any mod folder, machine-readable | modc t05 |
+| Load report for any mod folder, machine-readable (§5, §5.1) | modc t05 |
 | Second mod (not Thrawn's Revenge) loads and plays | modc t06 |
 | Synthetic fixture mod in ctest through the real `MODPATH` route | modc t07 |
 | Mod picker in the game UI | modc t08 |
-| `STEAMMOD=` resolver from the Steam library folders, no Steam API | modc t10 |
+| `STEAMMOD=` resolver from the Steam library folders, no Steam API (§3.1) | modc t10 |
 | Mod-only effects: what the renderer does, report unsupported ones | modc t11 |
