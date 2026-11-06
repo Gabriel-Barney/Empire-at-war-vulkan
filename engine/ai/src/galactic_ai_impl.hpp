@@ -419,6 +419,8 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     void finish_build(BuildTask& b);
     void end_plan_builds(int32_t plan);
     float funds_time(const BuildTask& b) const;
+    const Goal* goal_of_plan(int32_t player, int32_t plan) const;  // the active goal running `plan` (null: none)
+    void init_queue_phases();  // each planet queue's first last-run frame (A2J_RE_BUILD_MARKET §4)
     void remove_pending(int32_t id);
     void planet_lost(PlanetIndex p);
     float payg_reclaim(int32_t plan, float amount);
