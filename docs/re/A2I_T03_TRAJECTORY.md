@@ -19,7 +19,7 @@ Confidence tags: [H] read or measured directly; [M] inferred from several consis
 | D4 | The Underworld's `Conquer_Pirate @Kashyyyk` turns positive only through markup from `Distant_System_Path_Bonus`. It is accepted at 323 and takes Kashyyyk at about 877. Retail shows no Underworld ConquerPirate before 54583. | port deviation, mechanism open | M (deviation), L (cause) |
 | D5 | Underworld `Upgrade_Starbase`: proposed from frame 17 but loses Infrastructure to the two palaces. Port: none in 3000 frames. Retail: first plan at 2794. | open | L |
 | L1 | The weighted pick between Build_Space_Forces plans (Acclamator vs Tartan + Broadside) | synced random draw | M |
-| L2 | The E1 Empire income of 870 at frame 1351 (vs 585) comes from NalHutta, which E1 had already conquered. It is not a separate bug. The base 585 vs 667.5 gap is the t02 question and is not resolved here. | consequence / open | M |
+| L2 | The E1 Empire income of 870 at frame 1351 (vs 585) comes from NalHutta, which E1 had already conquered. It is not a separate bug. The base 585 vs 667.5 gap is the t02 question and is not resolved here. (a2j, `A2J_T03_INCOME.md`: the 585 is the Kashyyyk loss to D4, 82.5 per cycle; no income term deviates.) | consequence / open | M |
 
 ## 2. Method
 
@@ -183,7 +183,7 @@ Orders that reached a production queue:
      - Trace the `galactic_build.cpp` market (bids and the starting task per planet queue) for frames 40–200.
      - Compare the bid formula with AI_GALACTIC_2 §2.3 step 4, especially whether a ground-unit task bids on a queue that a pending structure task for that planet is waiting for.
    - Proposed probe (retail): log the Empire's planet queue heads every 30 frames in frames 0..1400.
-3. **Income [open].** 585 vs 667.5 is not explained by the planet list: the Empire owns the same four planets in both games through 1350. See t02.
+3. **Income [open].** 585 vs 667.5 is not explained by the planet list: the Empire owns the same four planets in both games through 1350. See t02. (Corrected by a2j t03, `A2J_T03_INCOME.md`: in the port the Underworld took Kashyyyk at 876–878, so the port's Empire held three planets at the payment; 667.5 − 82.5 = 585.)
 
 ## 5. Q2: the Underworld's early `Conquer_Pirate @Kashyyyk` (D4)
 
