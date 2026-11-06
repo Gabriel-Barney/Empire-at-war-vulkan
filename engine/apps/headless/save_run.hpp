@@ -47,6 +47,7 @@
 // tick and at T+K.
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -78,3 +79,42 @@ struct SaveRunOptions {
 };
 
 int save_run(const SaveRunOptions& opt);
+
+// --- BM1 benchmark (bench_run.cpp): sessions loaded from a save, any number of times, and a save made for a scenario ---
+namespace alamo {
+struct CrcLog;
+namespace commands {
+struct CommandRecording;
+}
+}  // namespace alamo
+
+// One session loaded from a save, ready to tick.
+class LoadedSession {
+public:
+    virtual ~LoadedSession() = default;
+    virtual bool tick(std::string& err) = 0;  // one SimHost tick + the harness step after it (as save_run's runs)
+    virtual const alamo::CrcLog& crc_log() const = 0;  // from the save tick on (first record: the loaded state)
+    virtual uint64_t frame() const = 0;
+    virtual size_t replay_failures() const = 0;
+    virtual uint32_t worker_count() const = 0;  // the job system's workers (after resolving "machine default")
+};
+
+// A save read once, with the game data its session needs loaded once; load() builds a fresh session and loads the save
+// into it (the harness of --load FILE).
+class SaveSessionSource {
+public:
+    virtual ~SaveSessionSource() = default;
+    virtual uint64_t save_tick() const = 0;
+    virtual std::string describe() const = 0;  // "<kind> '<campaign>' seed <s>"
+    // `replay` (may be null): a stream continuing the save, applied with replay_after_load. `record` (may be null): records
+    // the orders given after the load as a stream continuing the save.
+    virtual std::unique_ptr<LoadedSession> load(int32_t workers, const alamo::commands::CommandRecording* replay,
+                                                alamo::commands::CommandRecording* record, std::string& err) = 0;
+};
+// 1 = opened; 0 = the session needs data that is not there (skipped, err says why); -1 = error.
+int open_save_source(const std::string& save_path, const std::string& game_dir, const std::vector<std::string>& game_args,
+                     std::unique_ptr<SaveSessionSource>& out, std::string& err);
+// Builds a --save-session opt.session session (opt.campaign / map / battles / story / seed / workers), runs it to the
+// save point (opt.save_at, opt.save_when) and writes opt.save_file (without the machine's game-data folder in the descriptor). 1 = written (*saved_tick set); 0 = skipped (no data);
+// -1 = error.
+int make_save(const SaveRunOptions& opt, uint64_t& saved_tick, std::string& err);
