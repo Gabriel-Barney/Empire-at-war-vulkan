@@ -151,6 +151,10 @@ struct MoveOrder {
     // formation exists append the order's block to it (inserted at the bottom with flag 0x04; FIGHTER_FLYING §4.11 B 1)
     // instead of moving now; the order's other units (and fighters without a formation) move as a plain order.
     bool waypoint = false;
+    // s78k t01 (MOVEMENT §6.1 block +0x44 / +0x5c, §3.5.1): the final facing (yaw, degrees) the path's last waypoint
+    // carries; kNoFacing = none (+0x5c clear). Land Walk units turn to it on arrival when more than 10 degrees off (rate
+    // limited, see tick_land). Not `facing_deg` (the +0x18 formation facing), which never makes a final turn.
+    float final_facing_deg = kNoFacing;
 };
 // Movement flag bits (P1_DOUBLE_CLICK_MOVE.md §3.3; corrects MOVEMENT.md §6.1: 0x01 is attack-move, 0x02 guard-move).
 // UI moves send 0x04 | modifiers (0x84 for a double-click); AI / Lua moves send 0.
@@ -184,6 +188,9 @@ struct UnitView {
     uint32_t start_frame = 0;     // OI tactical: frame the current order starts moving (stagger / queue delay)
     V2 jiggle;                    // OI tactical: formation jiggle offset
     float formation_speed = 3.0e38f;     // land: slowest member's max speed of its formation (3e38 = alone)
+    // s78k t03: land team locomotor cap of the last tick (set_team; 3e38 = none): the team's minimum raw Max_Speed x the
+    // mode multiplier x the container's speed factor
+    float team_speed = 3.0e38f;
     int32_t large_hover_index = -1;      // land: index (+0x22c) of its LargeHover formation in the last order, else -1
     // REMAINING_GAPS §4.3-4.7: special locomotors
     LocomotorKind locomotor = LocomotorKind::Default;  // the active locomotor
@@ -448,6 +455,14 @@ public:
     // factor still apply. `speed` < 0 clears it. Hashed by hash_speed only while set (format unchanged otherwise).
     bool set_speed_override(ObjectId id, float speed);
     float speed_override(ObjectId id) const;  // -1 = none
+    // s78k t03 (MOVEMENT §3.4 / §3.7, FIGHTER_FLYING §4.11 item 4, TACTICAL_COMBAT §4.4): the unit's TEAM container `team`
+    // (-1 = none) and that container's speed factor (its Mod_Multiplier SPEED, the squad value). A team's locomotor runs
+    // at the container's effective max speed: the minimum raw Max_Speed of the team's units x the mode multiplier x
+    // `container_factor` (0x370f00 with the 0x4049e0 cap). [port] There is no container mover, so on land every Walk
+    // member (not a jetpack in its airborne kind: 0x371060 has no team cap) walks at most at that speed, formation move
+    // or not; in space a squadron's formation speed (0x41b2a0) is that value. Transient: the host sets it every tick
+    // before tick() (not saved, not hashed); default -1 / 1 = no team.
+    bool set_team(ObjectId id, ObjectId team, float container_factor);
     void hash_speed(StateHasher& h) const;
     void register_speed_crc(CrcRegistry& registry, const std::string& name) const;
 
@@ -495,6 +510,8 @@ private:
         bool has_goal = false, need_path = false, arrived = false, failed = false;
         V2 goal;
         float facing = kNoFacing;
+        float final_facing = kNoFacing;  // s78k t01: MoveOrder::final_facing_deg of the current land move (saved)
+        bool forced = false;             // s78k t01: land flag-0x20 move: straight 2-point path, no passability (saved)
         uint32_t start_frame = 0;
         float formation_speed = 3.0e38f;
         int32_t large_hover_index = -1;  // P1 double-click: formation +0x22c (not hashed; no modelled consumer)
@@ -521,6 +538,9 @@ private:
         uint32_t turn_start = 0, turn_frames = 0;
         float speed_factor = 1.0f;  // S10-int (set_speed_factor)
         float speed_override = -1.0f;  // OI abilities: locomotor +0x2a0 when >= 0 (flag +0x29c)
+        ObjectId team = -1;          // s78k t03: TEAM container (set_team; transient)
+        float team_factor = 1.0f;    // s78k t03: the container's speed factor (set_team; transient)
+        float team_cap = 3.0e38f;    // s78k t03: land team locomotor cap, rebuilt each land tick (team_caps)
         float path_lag = 0.0f;      // S10-int: space playback time offset (frames) from speed factors != 1
         // OI tactical
         V2 jiggle;                  // formation jiggle offset (data pack +0x12c/+0x130)
@@ -574,6 +594,10 @@ private:
     // override as for Max_Speed) while the active jetpack is in its airborne kind, else lp.max_speed / lp.turn_rate.
     bool jet_alternates(const Unit& u) const;
     float loco_max_speed(const Unit& u) const;
+    float team_base_speed(const Unit& u) const;  // s78k t03: raw Max_Speed x the mode multiplier (0x4049e0 operand)
+    void team_caps();                            // s78k t03: Unit::team_cap of every land unit (serial, units_ order)
+    void land_arrival_turn(Unit& u) const;       // s78k t01: MOVEMENT §3.5.1 state 0x15 test on arrival
+    float land_wanted_yaw(const Unit& u) const;  // s78k t01: the final facing through Movement_Directions_Count
     float loco_turn_rate(const Unit& u) const;
     bool ground_collider(const Unit& u) const;  // takes part in land collision / crush
     void tick_special(uint32_t frame, SimRng& rng);

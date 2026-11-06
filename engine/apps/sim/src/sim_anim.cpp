@@ -358,7 +358,9 @@ bool SimAnimation::service_idle(const GameMode& mode, ObjectId id, SimRng& rng, 
     const objects::ObjectStore& store = mode.primary();
     const ObjectHandle h = store.find(id);
     if (!store.exists(h)) return false;
-    return mw.behaviors->service_idle(*mw.world, id, idle_params(mode, id, store.type(h), mw.world->model(id)), rng, frame);
+    anim::IdleTarget target = target_hook_ ? target_hook_(mode, id) : anim::IdleTarget::NoTarget;
+    if (!store.has_behavior(h, objects::beh::Idle)) target = anim::IdleTarget::None;  // [port] no IDLE: no lookup / draw
+    return mw.behaviors->service_idle(*mw.world, id, idle_params(mode, id, store.type(h), mw.world->model(id)), target, rng, frame);
 }
 
 uint32_t SimAnimation::service_locomotor(const GameMode& mode, ObjectId id, anim::LocomotorInput in, float walk_ratio, float min_ratio, SimRng& rng,
@@ -377,6 +379,10 @@ uint32_t SimAnimation::service_locomotor(const GameMode& mode, ObjectId id, anim
     lp.min_move_ratio = min_ratio;
     lp.idle = idle_params(mode, id, t, mw.world->model(id));
     if (idle_hook_ && in.idle_type == anim::kNoAnimType) in.idle_type = idle_hook_(mode, id);
+    // s78k t02: the IDLE service's TARGETING lookup (suspension ignored) and Allow_Idle_When_Moving.
+    if (target_hook_) in.target = target_hook_(mode, id);
+    if (!store.has_behavior(h, objects::beh::Idle)) in.target = anim::IdleTarget::None;  // [port] no IDLE: no lookup / draw
+    in.allow_idle_when_moving = tp.allow_idle_when_moving;
     const uint32_t n = mw.behaviors->service_locomotor(*mw.world, id, lp, in, rng, frame);
     if (n > 0 && anim::is_turn(mw.world->current_type(id))) ++stats_.turns;
     return n;

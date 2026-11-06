@@ -1170,6 +1170,38 @@ The infantry turn-animation time = angle / rate × 1/30 (`0x62bef0`).
 6. **Formation jiggle** (`0x42c270`). Each moving frame, the offset += synced random(±k) × speed fraction × `FormationRaggedness` (+0x16a8), clamped to ±`MaxJiggleDistance` (+0x16ac). Each call draws from the lockstep RNG.
 7. **Hover rise/lower.** z moves by the effective max speed per frame toward terrain + `Hover_Height` (+0x23bc). Deploying states run at `Deployment_Anim_Rate`.
 
+#### 3.5.1 Facing on arrival (s78k t01, 2026-11-05) [H unless tagged]
+
+The Walk locomotor's wanted orientation (0x61d570 → 0x61d890 on the unit's current path, then 0x61ca90):
+- while the path is started (path +0x6d) and not on its last waypoint: the travel direction;
+- on the last waypoint (path +0x60 + 1 ≥ waypoint count, 0x5c5910): the last waypoint's facing vector (+0x0c) when
+  it is non-zero, else the **current** orientation;
+- 0x61ca90 then applies `Movement_Directions_Count` (+0x23fc, default 1; one FoC unit uses 2): 1 → that orientation;
+  ≤ 0 → the current orientation; N → of the N yaws spaced 360/N starting at the wanted one, the one closest to the
+  current facing.
+
+End Move (state 0x14, 0x61f510) switches to state 0x15 (0x61fc30) once the speed is at or below one frame's
+deceleration. State 0x15, on the last waypoint:
+- Δ = |wanted yaw − current yaw| (current = obj +0x90…). The threshold is **10°**, or the turn rate (`0x372560`)
+  when that is ≤ 10° and (path kind +0x48 = 3 or the current waypoint's speed cap is 0) [M which paths those are].
+- Δ > threshold → state 0xf: with `Has_Pre_Turn_Anim` (+0x36) and the clip present, play turn clip 0xc (Δ in
+  (0°, 180°)) or 0xe and wait for it; then state 0x10 (0x620190): each frame the yaw steps toward the wanted yaw by
+  at most the rate (0x61e730; the step that covers the remainder lands **exactly** on it). Rate: locomotor pack +0xe8
+  when > 0 (it is zeroed on entering 0x10), else at speed 0 `Stopped_Rate_Of_Turn` (+0x3b0, raw, 0x374310) when > 0,
+  else `Max_Rate_Of_Turn` × the mode multiplier (0x372560); × `SecondaryTurnInPlaceROTCoefficient` (+0x1670) for the
+  secondary-facing step. When reached: 0x11 → 0x12 → back to 0x15, now within the threshold.
+- Δ ≤ threshold → pop the path (0x557b10), play the default idle (when not a flinch, not burning, not deploying) and
+  go to 0x16 (idle). The unit keeps its yaw, so a final facing within the threshold is **not** corrected.
+
+So a move whose block has a final facing (+0x44 / +0x5c, §6.1) ends with a rate-limited turn-to onto that facing; a
+move without one ends on the arrival heading. A path replaced or dropped before the arrival (new order, stop) never
+turns to the old facing.
+
+**Port:** `MovementSystem::tick_land` (`engine/tactical/movement/src/movement_system.cpp`) ends a land move at
+`r.arrived` without looking at `Unit::facing` (set from `MoveOrder::facing_deg` in `move_land`); only `tick_space`
+turns on arrival. Missing: the arrival turn above (threshold 10°, stopped turn rate, exact landing,
+`Movement_Directions_Count`).
+
 ### 3.6 Terrain conform and commit (vf95 `0x42d6a0` → `0x42bb40`) [H]
 
 - z = terrain height at (x, y). If the movement mask contains Water, z = max(terrain, water plane): hover units ride the water.
@@ -1503,8 +1535,28 @@ Three separate spatial structures exist. The port can unify them only if every q
 | +0x24 | type: 1 position, 2 ray, 3 object |
 | +0x28 | target object |
 | +0x48 | flags |
+| +0x44 | final facing, yaw in degrees; read only when +0x5c is set (s78k t01) [H] |
 | +0x4c | 0x3F (the avoidance mask) |
 | +0x54 | 1e18 |
+| +0x5c | byte: final facing set (s78k t01) [H] |
+
+**Final facing (+0x44 / +0x5c), s78k t01** [H]. The path builder 0x417520 (formation entry, current block = the last
+of the formation's block stack, 0x41a4e0) reads +0x44 only when byte +0x5c is set:
+- land (formation kind 1): after the path is built, the facing vector (cos +0x44, sin +0x44, 0) is written into the
+  facing (+0x0c) of the path's **last waypoint** (0x550bd0). The flag-0x20 branch (below) does the same on its
+  2-point path. The unit's own path is a copy of the formation path (locomotor 0x42c680 → 0x5c46a0, which copies the
+  waypoints with their facings), and the Walk locomotor turns to it on arrival (§3.5.1);
+- space (kind 2): the planner request gets goal facing = +0x44 and "final facing required" (§2.1 record +0xec /
+  +0x120); with +0x5c set the arrival slow-down distance is tripled;
+- the formation's final rotation (0x411980, §4.4) also uses the last block's +0x44 when its +0x5c is set.
+With +0x5c clear every waypoint facing stays (0, 0, 0) and no final turn happens. The +0x18 triple (1e18 = none) is
+**not** what the path builder reads for the final facing [M: its role was not re-traced]. Writers seen: the
+TransportLanding vehicle exit move (0x644330: +0x44 = the landing's yaw, +0x5c = 1); the team exit move writes 0.
+
+**Flag 0x20 path (land)** [H, s78k t01]: 0x417520 builds no route. The formation path is the 2 points start →
+destination (when 0x50e180 rejects the destination, 0x440f90 must place it, else the move fails), and the waypoint
+list's byte +0x44 := 1, which becomes path +0x5c, the skip-passability flag of §3.5 step 4 (0x5c5df0 / the copy in
+0x54e4e0). This is the "forced-move" path flag that the unload finish clears (0x3ac210, A1_READINGS §28.9).
 
 **Flag bits:**
 - 0x02: attack/engage. [M]
