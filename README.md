@@ -4,16 +4,19 @@ A clean-room C++20 rewrite of the *Star Wars: Empire at War: Forces of Corruptio
 The simulation is rebuilt from scratch as a headless, multithreaded, deterministic core, with a Vulkan 1.3 renderer
 on top. The goal is the game you already own, running on an engine that uses a modern PC.
 
-> **Status (2026-11-03):** active development, playable end to end through its own host, `alamo_game`.
+> **Status (2026-11-06):** active development, playable end to end through its own host, `alamo_game`.
 > Simulation, renderer, Lua layer, AI, UI, story and save/load are in place. The work now is **parity** (checking
-> behaviour against the original), **mod compatibility** (Thrawn's Revenge is the first target) and **performance**.
-> The last full gate (MSVC, clang, sanitizer) passed with **0 warnings and 170 tests** on each compiler.
-> The live plan and all status tracking is the project roadmap, `roadmap-store/ROADMAP.html`; results and notes per phase are in [`docs/PHASE2.md`](docs/PHASE2.md),
-> [`docs/PHASE3.md`](docs/PHASE3.md) and [`docs/PHASE4.md`](docs/PHASE4.md).
+> behaviour against the original, mostly by recording the original game and probing it in game), **mod compatibility**
+> (Thrawn's Revenge is the first target; that work is finished on an integration branch and not yet merged here) and
+> **performance**. The last full gate (MSVC, clang, sanitizer, 2026-11-06) passed with **0 warnings and 170 tests** on
+> each compiler (54 under the sanitizer). Task tracking is the project roadmap, kept in its own repository and not in this
+> one (543 of 779 roadmap tasks done); results and notes per phase are in [`docs/PHASE2.md`](docs/PHASE2.md),
+> [`docs/PHASE3.md`](docs/PHASE3.md) and [`docs/PHASE4.md`](docs/PHASE4.md), and every document is indexed in
+> [`docs/README.md`](docs/README.md).
 
 This repository contains **no game assets and no original code**. You need your own copy of the game (Steam:
 *Star Wars: Empire at War - Forces of Corruption*). Behaviour was recovered by studying the shipped binary and data
-and written up as specs in [`docs/re/`](docs/re/) (73 documents) before any engine code was written.
+and written up as specs in [`docs/re/`](docs/re/) (68 documents) before any engine code was written.
 
 **Contents:** [Goals](#goals) · [Features](#features) · [Performance](#performance) · [Architecture](#architecture) ·
 [Quality](#quality-and-process) · [Where the project is](#where-the-project-is) · [Building](#building-and-running) ·
@@ -99,6 +102,8 @@ networking.
   disocclusion rejection and variance clipping, so movers do not smear.
 - **Screen-space ambient occlusion** in land battles (half resolution, depth-aware blur).
 - **Anisotropic filtering** up to 16x.
+- **Auto Detect** in the Video dialogs picks a quality level from the GPU (device memory, discrete or integrated),
+  with anisotropy clamped to what the device supports.
 - **Frame-time overlay** (F11 in game, or `--frame-overlay`): the last 120 sim ticks and host frames against the
   16.7 ms and 33.3 ms lines, with the worst tick's biggest cost.
 
@@ -111,10 +116,11 @@ networking.
 
 ### Interface
 - The original menus and HUD, drawn from the original dialog data, fonts and art.
-- **Skirmish setup** that follows the original's staging rules: start numbers, colour combinations and clash rules,
-  game type list, map preview and description, and a map list that merges loose folders, MEG archives and **mod
-  folders** (Official and Custom tabs).
-- Fleet organiser, tech-tree arrows, results and auto-resolve dialogs, story dialogs and subtitles.
+- **Skirmish setup** that follows the original's staging rules: numbered start positions, colour combinations and clash
+  rules, Land / Space game type with the last map remembered per type, map preview, and a map list that merges loose
+  folders, MEG archives and **mod folders** (Official and Custom tabs).
+- Fleet organiser (drag units between fleet slots, stacks with counts), tech-tree arrows, results and auto-resolve
+  dialogs, story dialogs and subtitles, and the linked-battle banner and letterbox for story battles.
 
 ### Save and load
 - The port's own compact format: a Forces of Corruption story save is about 50-60 KB, a mid-battle save about 150 KB.
@@ -128,12 +134,15 @@ networking.
 - A **tick profiler** (`--profile`): p50/p99/max per tick and per system, worker utilisation, the 20 worst ticks.
 - **Visual regression** checks (screenshot diffs against stored baselines) and a scheduled nightly gate.
 - Tools for the original formats: MEG archives, ALO/ALA models and animations, shaders.
+- **Parity tooling** (`tools/probe_mod/`, index in [`docs/PROBES.md`](docs/PROBES.md)): a read-only external recorder that
+  samples the original game's state per tick, in-game probe mods for questions the binary alone cannot answer, and a
+  compare script that runs the port on the same scenario and reports the first divergence per metric.
 
 ---
 
 ## Performance
 
-The simulation runs on a work-stealing job system with order-stable results (parallel jobs write per-index outputs and reduce in index order), the AI players' clocks are staggered, long AI work runs as fixed-latency background jobs, Lua garbage collection is scheduled by tick number, and the renderer records on several threads. Everything is scheduled **by tick number, never by wall clock or thread timing**, so results are bit-identical for any worker count. The measurements (AMD Ryzen 7 7800X3D, one tick = 33.3 ms), what each fix bought, what was tried and not shipped, and the caveats are in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md). Latest status: see "Where the project is" below.
+The simulation runs on a work-stealing job system with order-stable results (parallel jobs write per-index outputs and reduce in index order), the AI players' clocks are staggered, long AI work runs as fixed-latency background jobs, Lua garbage collection is scheduled by tick number, and the renderer records on several threads. Everything is scheduled **by tick number, never by wall clock or thread timing**, so results are bit-identical for any worker count. The measurements (AMD Ryzen 7 7800X3D, one tick = 33.3 ms), what each fix bought, what was tried and not shipped, and the caveats are in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md). The budget is p99 under 16.7 ms and no tick over 33.3 ms: p99 is met in every measured scenario, and the one miss is the setup tick that starts a battle (see "Where the project is" below).
 
 ---
 
@@ -200,18 +209,23 @@ worker count so the counts run side by side. Clang's logs equal MSVC's.
 - **Two compilers in the loop.** MSVC ships; clang 20 checks (extra warnings: `-Wconversion -Wshadow`) and provides a
   second compiler for determinism. Sim changes get both; threading changes also run under a clang sanitizer.
 - **Zero warnings** at MSVC `/W4 /permissive-` and clang `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
-- **170 tests** in the last full gate, on each of MSVC and clang (sanitizer build: 54 sim-module tests), plus
-  golden-file checks of whole battles and campaigns. The full suite takes about 2 minutes on the development PC; slow
-  tests carry a label so quick iteration can skip them.
+- **170 tests** in the last full gate (2026-11-06), on each of MSVC and clang (sanitizer build: 54 sim-module tests),
+  plus golden-file checks of whole battles and campaigns, each compared across worker counts. The full suite takes about
+  2 minutes on the development PC; slow tests carry a label so quick iteration can skip them.
 - **Pre-merge gate** (`build_gate.cmd`): MSVC, clang and sanitizer builds, each recorded on the roadmap. A nightly
   scheduled gate can run on the development PC.
+- **Parity is checked against the real game.** Reference traces recorded from the original (credits, owners, production,
+  RNG draws per tick) and in-game probe runs settle questions the binary leaves open; each answer is written into the
+  matching spec in `docs/re/` before the engine follows it.
+- **Parallel agent workflow.** Work is split by module across agent sessions, each in its own git worktree and branch and
+  merged by pull request; the roadmap lives in its own repository so every session shares one copy.
 - **Clean-room.** Engine code is written from the specs in `docs/re/`, never from decompiled output, which is kept out of
   the engine tree.
 - **Project-local toolchain.** MSVC 14.51, Windows SDK, CMake, Ninja, DXC, LLVM and FFmpeg's Bink decoder live under
   `toolchain\` with pinned versions and hashes. Nothing is installed system-wide.
 - **Third-party code** in `engine/` is limited to approved dependencies: Vulkan-Headers, DXC, VMA, Lua 5.0.2 (vendored,
   original semantics), miniaudio and FFmpeg's Bink decoder (LGPL, dynamically linked).
-- About **350,000 lines** of C++ in `engine/` (tests included), across 21 modules.
+- About **360,000 lines** of C++ in `engine/` (tests included), across 21 modules.
 
 ---
 
@@ -220,28 +234,32 @@ worker count so the counts run side by side. Clang's logs equal MSVC's.
 | Area | State |
 |---|---|
 | Simulation, renderer, Lua, AI, UI, save/load, story | **Done and playable**; remaining work is parity polish |
-| Performance (OPT1-OPT3) | **Mostly done**: budget p99 met everywhere; first-battle-tick setup is the one miss |
-| Trace parity (Q2 follow-ups) | In progress: the AI and combat gaps found by comparing against reference traces of the original |
-| Story campaigns end to end | Event system, linked tactical battles and corruption missions in; one comparison against a recorded original mission remains |
-| Mod diagnostics (Q5) | Done |
-| Thrawn's Revenge (Q6) | In progress: the mod loads and its campaign and land smoke runs pass on a working branch; the galactic AI barely acts yet and some scripting gaps remain |
+| Performance (OPT1-OPT3) | **Mostly done**: p99 budget met everywhere. The first tick of a battle (setup) is still over 33.3 ms: land campaign 55, space 42, land skirmish 139 ms at 15 workers; a plan to shorten it is open |
+| Movement and combat parity | Ongoing, driven by in-game probes of the original: fighter formations, targeting, landing and unload facings, team speed and hand-over, idle animation draws. Corner cases and a few stand-in constants remain |
+| Galactic AI parity (Q2 follow-ups, A2) | Ongoing: the AI's budget, goal, contrast and story-load rules now follow the original (in the Heart of the Maw scenario the Empire AI now captures a planet, as the original does); the Rebel and Empire opening production and the RNG draw count on tick 1 (84 of 130) still differ |
+| Story campaigns end to end | Event system, linked tactical battles, victory handling and corruption missions in; one comparison against a recorded original mission remains |
+| Mod diagnostics (Q5) | Done, on the integration branch |
+| Thrawn's Revenge (Q6) | **Mostly done on the integration branch** `claude/q6-integration` (about 94 commits ahead of `main`, not yet merged): the mod loads, its skirmish, land and campaign smoke runs pass, and its galactic AI plays. Left: retail probes for the port's guessed rules, and a final re-check after the parity check |
 | Parity check against the original (Q4) | Planned; the comparison harness comes first |
 | Side goals (benchmark, CPU/GPU efficiency, shader precompile, fidelity, first-person, captain's view) | Planned |
 
-The detail, task by task, is in `roadmap-store/ROADMAP.html`.
+The detail, task by task, is on the project roadmap, which is kept in its own repository (not this one) and is the only place for status.
 
 ---
 
 ## Building and running
 
-Everything is built with the project-local toolchain under `toolchain\`.
+Everything is built with a project-local toolchain under `toolchain\` (MSVC, Windows SDK, CMake, Ninja, DXC, LLVM). The
+toolchain, the game data and the roadmap are **not stored in this repository**: the toolchain is rebuilt by the
+`toolchain\*.cmd` setup scripts on the development PC, and the full build and test rules are in
+[`docs/BUILD.md`](docs/BUILD.md).
 
 ```bat
-:: one-time: set up the toolchain (see toolchain\2_setup.cmd)
 build_msvc.cmd        :: configure, build and run all tests with MSVC
 build_clang.cmd       :: the clang 20 check build
 build_asan.cmd        :: sanitizer build of the sim modules
 build_gate.cmd        :: MSVC + clang + sanitizer gate used before merging
+build_module.cmd      :: build and test one module (or a ;-separated list)
 build_agent.cmd       :: fast tier of tests only, for quick iteration
 bench_msvc.cmd        :: re-run the profiler scenarios
 ```
@@ -266,11 +284,14 @@ alamo_render.exe                    :: renderer test app
 | Path | What |
 |---|---|
 | `engine/` | The engine, one static library per module: `core`, `vfs`, `data`, `jobs`, `galactic`, `assets`, `rhi`, `materials`, `shaderxlat`, `terrain`, `render`, `objects`, `tactical`, `ai`, `lua`, `anim`, `commands`, `audio`, `video`, `ui`, `apps` |
-| `tools/` | MEG archive tool, format readers, shader tools, probe kits, visual diff, lint and build-summary scripts |
+| `tools/` | MEG archive tool, format readers, shader tools, in-game probe kits and trace recorder (`probe_mod/`), analysis and parity-compare scripts, visual diff, lint and build-summary scripts |
 | `docs/` | All documentation, indexed in [`docs/README.md`](docs/README.md): decisions, build and test, performance, probes, phase results, behaviour specs recovered from the original (`docs/re/`), asset, format and shader specs |
 | `tests/visual_baselines/` | Screenshot baselines for visual regression |
-| `roadmap-store/` | The project roadmap and flowchart, the one copy: data, generated `ROADMAP.html`, own repository (update with `roadmap-store/roadmap_store.py`) |
 | `CLAUDE.md` | Working rules for contributors and agents |
+
+Not tracked here, by design: `toolchain/` (rebuilt locally), `Data/` and `extracted/` (game data from your own install),
+`re_reference/` (decompiled output, kept out of the engine tree), build trees and logs, and `roadmap-store/`, which is the
+project roadmap and flowchart in its own repository (the only place for status).
 
 Good starting points: [`docs/README.md`](docs/README.md) (index of every document), [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for every performance measurement (status is on the roadmap),
 [`docs/OPT_RESEARCH.md`](docs/OPT_RESEARCH.md) for the optimisation techniques considered,
