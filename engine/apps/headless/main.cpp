@@ -81,6 +81,13 @@
 //   alamo_headless --save-session KIND --save-check --save-at T FILE --ticks K [--expect-pending a,b,...]
 //       N1 done-check: save at T, continue to T+K; load in this process, in a fresh process and with replays, all
 //       must give the original's per-tick CRCs; exit 77 = "PENDING: <chunks>" (systems whose write/read has not landed).
+// BM1 benchmark (bench_run.hpp; scenario format alamo/sim/bench_scenario.hpp):
+//   alamo_headless --bench SCENARIO.abench [--runs R] [--warmup W] [--workers N] [--ticks K] [--bench-json FILE|-]
+//                  [--bench-baseline OLD.json] [--crc-out F] [--golden F] [--bench-allow-changed]
+//       Sim-only mode: the scenario's save + recorded orders, its ticks as fast as possible; median / p99 / worst tick, OPT1
+//       zones, CRCs against the scenario fingerprint (exit 3 "scenario changed, not comparable" on a mismatch).
+//   alamo_headless --bench-make SCENARIO.abench --save-session KIND [...] --bench-save-at T --ticks K [--bench-every N]
+//   alamo_headless --bench-regen SCENARIO.abench    (remake with the manifest's recorded arguments)
 //
 // --data takes a loose folder containing Data\XML (e.g. extracted foc_data_text.zip). --game uses
 // the real VFS (loose dirs + MEGs + EaW fallback). AI inputs come from S2 perception (engine/ai):
@@ -124,11 +131,15 @@
 #include "alamo/jobs/jobs.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
+#ifdef ALAMO_HEADLESS_HAVE_SIM
+#include "alamo/sim/bench_scenario.hpp"  // BM1 --bench-regen
+#endif
 #include "alamo/vfs/vfs.hpp"
 #ifdef ALAMO_HEADLESS_HAVE_SIM
 #include "ai_run.hpp"  // A2
 #include "skirmish_run.hpp"  // A1 stage 2
 #include "battle_run.hpp"
+#include "bench_run.hpp"  // BM1
 #include "crc_out.hpp"
 #include "map_run.hpp"
 #include "save_run.hpp"  // N1
@@ -197,6 +208,12 @@ struct Options {
     bool save_at_set = false, save_check = false;
     std::vector<std::string> expect_pending;
     bool seed_set = false;
+    // BM1 benchmark (bench_run.hpp)
+    std::string bench, bench_make, bench_regen, bench_json, bench_baseline, bench_desc;
+    uint32_t bench_runs = 3, bench_warmup = 1, bench_every = 1;
+    bool bench_allow_changed = false, workers_set = false;
+    uint64_t bench_save_at = 0;
+    bool bench_save_at_set = false;
 };
 
 // Deterministic stand-in for the synced RNG / perception values (real perception comes later).
@@ -634,7 +651,12 @@ int usage() {
                  "         [--battles auto|fight|fight-all[+anim]] [--story] [--map M] [--save-when any|battle|galactic|pending|scheduled]\n"
                  "                      [--crc-out F] [--record-orders F] [--seed S] [--workers W]\n"
                  "       alamo_headless --load FILE [--ticks K] [--crc-out F] [--replay STREAM] [--record-orders F] [--workers W]\n"
-                 "       alamo_headless --save-session KIND --save-check --save-at T FILE --ticks K [--expect-pending a,b,...]\n");
+                 "       alamo_headless --save-session KIND --save-check --save-at T FILE --ticks K [--expect-pending a,b,...]\n"
+                 "       alamo_headless --bench SCENARIO.abench [--runs R] [--warmup W] [--workers N] [--ticks K] [--bench-json FILE|-]\n"
+                 "                      [--bench-baseline OLD.json] [--crc-out F] [--golden F] [--bench-allow-changed]\n"
+                 "       alamo_headless --bench-make SCENARIO.abench --save-session KIND [--campaign C] [--map M] [--battles B] [--story]\n"
+                 "                      [--seed S] --bench-save-at T [--save-when W] --ticks K [--workers N] [--bench-every N] [--bench-desc TEXT]\n"
+                 "       alamo_headless --bench-regen SCENARIO.abench\n");
     return 2;
 }
 
@@ -819,7 +841,10 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--frames") {
             opt.frames = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
             opt.frames_set = true;
-        } else if (a == "--workers") opt.workers = static_cast<int32_t>(std::strtol(next().c_str(), nullptr, 10));
+        } else if (a == "--workers") {
+            opt.workers = static_cast<int32_t>(std::strtol(next().c_str(), nullptr, 10));
+            opt.workers_set = true;
+        }
         else if (a == "--ais") {
             opt.ais = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
             opt.ais_set = true;
@@ -896,6 +921,19 @@ static int headless_main(int argc, char** argv) {
                 if (e > i0) opt.expect_pending.push_back(list.substr(i0, e - i0));
                 i0 = e + 1;
             }
+        } else if (a == "--bench") opt.bench = next();  // BM1
+        else if (a == "--bench-make") opt.bench_make = next();
+        else if (a == "--bench-regen") opt.bench_regen = next();
+        else if (a == "--bench-json") opt.bench_json = next();
+        else if (a == "--bench-baseline") opt.bench_baseline = next();
+        else if (a == "--bench-desc") opt.bench_desc = next();
+        else if (a == "--bench-allow-changed") opt.bench_allow_changed = true;
+        else if (a == "--runs") opt.bench_runs = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
+        else if (a == "--warmup") opt.bench_warmup = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
+        else if (a == "--bench-every") opt.bench_every = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
+        else if (a == "--bench-save-at") {
+            opt.bench_save_at = std::strtoull(next().c_str(), nullptr, 10);
+            opt.bench_save_at_set = true;
         } else if (a == "--compare") {
             opt.compare_a = next();
             opt.compare_b = next();
@@ -903,6 +941,81 @@ static int headless_main(int argc, char** argv) {
         else return usage();
     }
 
+#ifdef ALAMO_HEADLESS_HAVE_SIM
+    if (!opt.bench_regen.empty()) {  // BM1: remake a scenario with the arguments its manifest recorded
+        alamo::sim::bench::Scenario sc;
+        std::string err;
+        if (!alamo::sim::bench::Scenario::load(opt.bench_regen, sc, &err)) {
+            std::fprintf(stderr, "bench-regen: %s\n", err.c_str());
+            return 1;
+        }
+        if (sc.make_args.empty()) {
+            std::fprintf(stderr, "bench-regen: %s records no make arguments\n", opt.bench_regen.c_str());
+            return 2;
+        }
+        std::vector<std::string> args = {argc > 0 ? argv[0] : "alamo_headless", "--bench-make", opt.bench_regen};
+        args.insert(args.end(), sc.make_args.begin(), sc.make_args.end());
+        if (!opt.game_dir.empty()) {
+            args.push_back("--game");
+            args.push_back(opt.game_dir);
+        }
+        args.insert(args.end(), opt.game_args.begin(), opt.game_args.end());
+        if (opt.quiet) args.push_back("--quiet");
+        std::vector<char*> av;
+        for (std::string& x : args) av.push_back(x.data());
+        std::printf("bench-regen: %s version %u, make", opt.bench_regen.c_str(), sc.version);
+        for (const std::string& x : sc.make_args) std::printf(" %s", x.c_str());
+        std::printf("\n");
+        return headless_main(static_cast<int>(av.size()), av.data());
+    }
+#endif
+    if (!opt.bench.empty() || !opt.bench_make.empty()) {  // BM1 benchmark
+#ifdef ALAMO_HEADLESS_HAVE_SIM
+        BenchOptions b;
+        b.scenario = opt.bench.empty() ? opt.bench_make : opt.bench;
+        b.runs = opt.bench_runs;
+        b.warmup = opt.bench_warmup;
+        b.workers = opt.workers;
+        b.workers_set = opt.workers_set;
+        b.ticks = opt.ticks;
+        b.ticks_set = opt.ticks_set;
+        b.json_out = opt.bench_json;
+        b.baseline = opt.bench_baseline;
+        b.crc_out = opt.crc_out;
+        b.golden = opt.golden;
+        b.allow_changed = opt.bench_allow_changed;
+        b.quiet = opt.quiet;
+        b.game_dir = opt.game_dir;
+        b.game_args = opt.game_args;
+        if (opt.bench.empty()) {
+            b.make.session = opt.save_session;
+            b.make.campaign = opt.campaign;
+            b.make.map = opt.map;
+            b.make.battles = opt.battles;
+            b.make.story = opt.story;
+            b.make.seed = static_cast<uint32_t>(opt.seed_set ? opt.seed : 7u);
+            b.make.seed_set = opt.seed_set;
+            b.make.save_at = opt.bench_save_at;
+            b.make.save_at_set = opt.bench_save_at_set;
+            b.make.save_when = opt.save_when;
+            b.make.quiet = opt.quiet;
+            b.fingerprint_every = opt.bench_every;
+            b.description = opt.bench_desc;
+            // The manifest's "make" line: this command's arguments without the output path and the machine-specific ones.
+            for (int i = 1; i < argc; ++i) {
+                const std::string a = argv[i];
+                if ((a == "--bench-make" || a == "--game") && i + 1 < argc) ++i;
+                else if (a == "--quiet" || (a.find('=') != std::string::npos && a.rfind("--", 0) != 0)) continue;
+                else b.make_args.push_back(a);
+            }
+            return bench_make(b);
+        }
+        return bench_run(b);
+#else
+        std::fprintf(stderr, "--bench: this build has no alamo_sim\n");
+        return 2;
+#endif
+    }
     if (!opt.save_session.empty() || !opt.load_file.empty()) {  // N1 save / load
 #ifdef ALAMO_HEADLESS_HAVE_SIM
         SaveRunOptions s;

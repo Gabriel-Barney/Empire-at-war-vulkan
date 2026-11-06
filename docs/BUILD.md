@@ -54,6 +54,8 @@ Converted: `alamo_headless_replay_workers*` (per-process, the 0-worker entry als
 now runs the in-process form) and `alamo_headless_galactic_ai_human*` (36000 ticks, was one `--check-workers` entry running the counts in
 turn; each count's AI log is compared with the golden) and `alamo_headless_skirmish_ai_foc_land_outcome*` (OPT3 t08: 7000-tick land
 skirmish, the 0-worker entry also checks `--expect-skirmish-base`; `_profiled` compares a `--profile` run with the same 0-worker log).
+BM1 t05 (2026-11-06): `alamo_headless_bench_space_battle*` runs the check on the benchmark scenario from its save (`--bench
+tests/benchmark/space_battle.abench --runs 1 --warmup 0`, slow, FoC data; docs/PHASE4.md "BM - repeatable benchmark").
 Not converted: `alamo_headless_skirmish_ai_synthetic` and the in-process loops in `engine/apps/sim/tests` stay as they are (short).
 
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)
