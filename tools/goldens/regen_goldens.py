@@ -13,14 +13,19 @@ Run it through tools\\regen_goldens.cmd (sets the toolchain PATH and the game-da
 3. Game smoke goldens (engine/apps/game/testdata/game_smoke_*.crc / .rec): runs the smoke tests
    alamo_game_smoke_{skirmish,campaign,land} of the tree (they need a GPU and the game data; --only headless skips them),
    converts the dumped full CRC log to a checkpoint file and copies the .rec.
-4. Prints a diff summary per file: unchanged / changed, record counts, the first changed checkpoint (tick, columns that
+4. Benchmark scenarios (tests/benchmark/*.abench, BM1; part of --only headless / all, skipped by --no-bench, alone with --only bench):
+   a scenario carries an expected per-tick CRC fingerprint, so an intended sim behaviour change makes it stale. Each scenario is
+   checked with `alamo_headless --bench X --runs 1 --warmup 0 --quiet` (exit 3 = "scenario changed, not comparable" = stale);
+   a stale one is remade by tools/benchmark/regen_scenario.cmd (version bump + new .crc / .alsv / .acmd, summarised as
+   "version 1 -> 2"). With --dry-run (or --bench-check) nothing is remade: it only reports which scenarios are stale.
+5. Prints a diff summary per file: unchanged / changed, record counts, the first changed checkpoint (tick, columns that
    differ, the window of ticks it lies in), how many checkpoints changed. State the intended behaviour change from that in
    the PR. The exact tick: run the old and the new build with --crc-out full.crc and `alamo_headless --compare`.
 
-Options: --build-dir DIR (default build-msvc; the fast MSVC tree, Release, already built), --only headless|game|all
+Options: --bench-check (only report stale scenarios, exit 4 when one is stale; implies --only bench), --no-bench, --build-dir DIR (default build-msvc; the fast MSVC tree, Release, already built), --only headless|game|all
 (default headless), --match REGEX (only headless goldens whose file name matches), --checkpoint N, --force, --dry-run (run
 everything, change nothing), --list (what would run).
-Exit: 0 ok, 1 a run failed, 3 refused (dirty tree), 2 usage / missing tree.
+Exit: 0 ok, 1 a run failed, 3 refused (dirty tree), 2 usage / missing tree, 4 --bench-check found a stale scenario.
 """
 from __future__ import annotations
 
@@ -161,16 +166,83 @@ def summarize(rel: str, old_text: str | None, new_text: str) -> tuple[str, str]:
     return "changed", "\n".join(lines)
 
 
+BENCH_DIR = "tests/benchmark"
+
+
+def bench_version(path: str) -> str:
+    try:
+        for line in open(path, encoding="utf-8").read().splitlines():
+            if line.startswith("version "):
+                return line.split()[1]
+    except OSError:
+        pass
+    return "?"
+
+
+def bench_scenarios() -> list[str]:
+    d = os.path.join(ROOT, BENCH_DIR)
+    return sorted(f"{BENCH_DIR}/{n}" for n in os.listdir(d) if n.endswith(".abench")) if os.path.isdir(d) else []
+
+
+def bench_step(build_dir: str, build_arg: str, check_only: bool, listing: bool, env, logs, summaries) -> int:
+    """Check every benchmark scenario; remake the stale ones (unless check_only). Returns the number of failed runs; stale
+    scenarios found by a check-only pass are counted in the second result via summaries status 'stale'."""
+    scenarios = bench_scenarios()
+    exe = os.path.join(build_dir, "bin", "alamo_headless.exe")
+    print(f"benchmark scenarios ({len(scenarios)}):")
+    for rel in scenarios:
+        print(f"  {rel}")
+    if listing or not scenarios:
+        return 0
+    if not os.path.isfile(exe):
+        print(f"  FAILED: {exe} not found (build first)")
+        return 1
+    failed = 0
+    for rel in scenarios:
+        print(f"{rel}:")
+        path = os.path.join(ROOT, rel)
+        v0 = bench_version(path)
+        r = run([exe, "--bench", path, "--runs", "1", "--warmup", "0", "--quiet"], ROOT, env, logs)
+        if r.returncode == 0:
+            summaries.append(("unchanged", f"{rel}: scenario fingerprint unchanged (version {v0})"))
+            continue
+        if r.returncode != 3:
+            failed += 1
+            print(f"  FAILED: exit {r.returncode}\n" + "\n".join("    " + l for l in (r.stdout + r.stderr).strip().splitlines()[-8:]))
+            continue
+        why = next((l.split("scenario changed, not comparable:", 1)[1].strip() for l in r.stdout.splitlines()
+                    if "scenario changed, not comparable:" in l), "fingerprint differs")
+        if check_only:
+            summaries.append(("stale", f"{rel}: STALE (version {v0}): {why}"))
+            continue
+        scen = os.path.splitext(os.path.basename(rel))[0]
+        rr = run([os.path.join(ROOT, "tools", "benchmark", "regen_scenario.cmd"), scen, build_arg], ROOT, env, logs)
+        if rr.returncode != 0:
+            failed += 1
+            print(f"  FAILED: regen_scenario exit {rr.returncode}\n" + "\n".join("    " + l for l in (rr.stdout + rr.stderr).strip().splitlines()[-8:]))
+            continue
+        v1 = bench_version(path)
+        if v0 == v1:  # the remake produced the same files (a damaged or hand-edited sidecar was restored)
+            summaries.append(("unchanged", f"{rel}: was stale ({why}); remade, files and version {v0} unchanged"))
+        else:
+            summaries.append(("changed", f"{rel}: CHANGED, regenerated, version {v0} -> {v1} ({why}); commit tests/benchmark/{scen}.*"))
+    return failed
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--build-dir", default="build-msvc")
-    ap.add_argument("--only", choices=("headless", "game", "all"), default="headless")
+    ap.add_argument("--only", choices=("headless", "game", "all", "bench"), default="headless")
+    ap.add_argument("--bench-check", action="store_true", help="only report stale benchmark scenarios (implies --only bench; exit 4 when stale)")
+    ap.add_argument("--no-bench", action="store_true", help="leave the benchmark scenarios (tests/benchmark) alone")
     ap.add_argument("--checkpoint", type=int, default=cg.DEFAULT_CHECKPOINT)
     ap.add_argument("--force", action="store_true", help="run although tracked files have uncommitted edits")
     ap.add_argument("--dry-run", action="store_true", help="run, print the summary, write no golden")
     ap.add_argument("--list", action="store_true", help="print what would run and stop")
     ap.add_argument("--match", default=None, help="regex: only the headless goldens whose file name matches (e.g. 'replay|synthetic')")
     args = ap.parse_args()
+    if args.bench_check:
+        args.only = "bench"
 
     dirty = tracked_changes()
     if dirty and not args.force and not args.list:
@@ -277,10 +349,17 @@ def main() -> int:
                         with open(gpath + ".rec", "wb") as f:
                             f.write(new_rec)
 
+    if args.only in ("headless", "all", "bench") and not (args.no_bench and args.only != "bench"):
+        build_arg = os.path.relpath(build_dir, ROOT) if not os.path.isabs(args.build_dir) else build_dir
+        failed += bench_step(build_dir, build_arg, args.dry_run or args.bench_check, args.list, env, logs, summaries)
+
     print()
     print("=== diff summary" + (" (dry run: nothing written)" if args.dry_run else "") + " ===")
     for _, text in summaries:
         print(text)
+    stale = [s for s in summaries if s[0] == "stale"]
+    if stale:
+        print(f"{len(stale)} benchmark scenario(s) stale: run tools/regen_goldens.cmd (or tools/benchmark/regen_scenario.cmd) to remake them")
     changed = [s for s in summaries if s[0] in ("changed", "new")]
     fmt = [s for s in summaries if s[0] == "format"]
     print(f"{len(changed)} of {len(summaries)} files changed in value" + (f", {len(fmt)} only in format (full log -> checkpoint log)" if fmt else "")
@@ -288,7 +367,9 @@ def main() -> int:
     if changed:
         print("State the intended behaviour change in the PR from the first changed checkpoint of each file; for the exact tick run the old "
               "and the new build with --crc-out full.crc and `alamo_headless --compare old.crc new.crc`.")
-    return 1 if failed else 0
+    if failed:
+        return 1
+    return 4 if stale and args.bench_check else 0
 
 
 if __name__ == "__main__":
