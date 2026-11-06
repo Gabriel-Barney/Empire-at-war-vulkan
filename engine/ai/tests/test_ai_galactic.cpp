@@ -4599,6 +4599,23 @@ static void test_foc_data() {
         std::printf("FoC player %zu AI path finder: %u recomputes, %u pairs, %u reachable (A* stand-in %u), %u identical to A*\n",
                     p, f->recomputes(), pairs, reachable, astar_reachable, same);
         CHECK(reachable > 0);
+        // A2k t02: the Lua _FindStageArea stage is the player's own planet with the cheapest W[stage][target] (first
+        // row on ties), and every Find_Path from it starts there.
+        uint32_t staged = 0;
+        for (PlanetIndex t = 0; t < sim.planets().size(); ++t) {
+            if (!sim.planets()[t].is_planet) continue;
+            const PlanetIndex s = world.stage_area(pi, t);
+            PlanetIndex want = kInvalidPlanet;
+            for (PlanetIndex o = 0; o < sim.planets().size(); ++o)
+                if (sim.planets()[o].is_planet && sim.planets()[o].owner == pi && f->weight(o, t) != gal::kUnlinked &&
+                    (want == kInvalidPlanet || f->weight(o, t) < f->weight(want, t)))
+                    want = o;
+            CHECK(s == want);
+            if (s == kInvalidPlanet) continue;
+            ++staged;
+            CHECK(sim.planets()[s].owner == pi && world.path(pi, s, t).front() == s);
+        }
+        CHECK(staged > 0 || sim.planets_owned(pi) == 0);
     }
     // FIXPASS_GALACTIC §1 on the real galaxy (shipped GalacticFreeStore.lua drives the moves):
     //   * the Friendly_Only source list holds only planets held by the player or an ally (§1.4);

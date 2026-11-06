@@ -156,6 +156,13 @@ private:
     LatencyJob<Result> job_;
 };
 
+// Lua _FindStageArea (0x6990f0) for a planet target, A2k t02 [M]: among `candidates` (the player's own planets, in
+// planet row order) the one with the lowest all-pairs weight W[stage][target], compared unsigned; the first wins ties
+// and unreachable pairs are skipped. kInvalidPlanet when there is none (or `f` is not created). The weight sums the
+// node costs after the stage (high 16 bits) and the hops, so the stage is the start of the AI's cheapest path, not
+// the planet with the fewest hops (docs/re/A2K_T02_RE_QUESTIONS.md).
+PlanetIndex cheapest_stage(const AiPathFinder& f, std::span<const PlanetIndex> candidates, PlanetIndex target);
+
 // Query side for hosts and Lua Find_Path (implemented by GalacticAiWorld::path_query(), attached to the AI's and the
 // story's LuaPlayerWorld). It never creates a finder.
 class AiPathQuery {
