@@ -1,6 +1,6 @@
 # Phase 3 — Vulkan 1.3 renderer: results and notes
 
-Started 2026-10-26. Phase 3 steps C1–C5 and the follow-up waves are finished. Status, open work and the flowchart live only on the main roadmap (`ROADMAP.html`, `docs/ROADMAP_PROTOCOL.md`); this file keeps the results, finished-work notes, assumptions and reference. Build results are recorded on the roadmap.
+Started 2026-10-26. Phase 3 steps C1–C5 and the follow-up waves are finished. Status, open work and the flowchart live only on the main roadmap (`roadmap-store/ROADMAP.html`, `docs/ROADMAP_PROTOCOL.md`); this file keeps the results, finished-work notes, assumptions and reference. Build results are recorded on the roadmap.
 
 ---
 
@@ -133,4 +133,4 @@ Decisions taken where the RE docs were not high confidence. Not bugs, but worth 
 - Code in `engine\`; one agent per module folder (CLAUDE.md "Parallel work"). Build one module with `build_module.cmd <module>` (logs `logs\module_<module>.txt`), everything with `build_msvc.cmd`.
 - Deps (approved by Gabriel 2026-10-26, project-local, pinned + SHA-256 checked by `toolchain\3_renderer_deps.cmd`): Khronos Vulkan-Headers vulkan-sdk-1.3.296.0 (header-only; `vulkan-1.dll` from the driver, loaded at runtime), Microsoft DXC v1.8.2407 (build-time HLSL → SPIR-V), AMD VMA v3.3.0 (header-only, MIT), Khronos validation layers built from source (`toolchain\4_validation_layers.cmd`). No windowing library: plain Win32.
 - Pre-Phase-3 snapshot: `backups\pre-phase3-2026-10-26.zip`.
-- Status and open work: the main roadmap (`ROADMAP.html`), not this file.
+- Status and open work: the main roadmap (`roadmap-store/ROADMAP.html`), not this file.

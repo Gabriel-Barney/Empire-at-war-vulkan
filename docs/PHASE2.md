@@ -1,6 +1,6 @@
 # Phase 2 — Architecture design & headless core: results and design notes (2026-10-26)
 
-Phase 2 is finished. Status, open work and the flowchart live only on the main roadmap (`ROADMAP.html`, `docs/ROADMAP_PROTOCOL.md`); this file keeps the results, decisions, unresolved points and design notes. Code is in `engine\`. Build: `build_msvc.cmd` (logs in `logs\`).
+Phase 2 is finished. Status, open work and the flowchart live only on the main roadmap (`roadmap-store/ROADMAP.html`, `docs/ROADMAP_PROTOCOL.md`); this file keeps the results, decisions, unresolved points and design notes. Code is in `engine\`. Build: `build_msvc.cmd` (logs in `logs\`).
 
 ## Done
 | Item | Result | Location |

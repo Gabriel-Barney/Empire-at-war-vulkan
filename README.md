@@ -8,7 +8,7 @@ on top. The goal is the game you already own, running on an engine that uses a m
 > Simulation, renderer, Lua layer, AI, UI, story and save/load are in place. The work now is **parity** (checking
 > behaviour against the original), **mod compatibility** (Thrawn's Revenge is the first target) and **performance**.
 > The last full gate (MSVC, clang, sanitizer) passed with **0 warnings and 170 tests** on each compiler.
-> The live plan and all status tracking is the project roadmap, `ROADMAP.html`; results and notes per phase are in [`docs/PHASE2.md`](docs/PHASE2.md),
+> The live plan and all status tracking is the project roadmap, `roadmap-store/ROADMAP.html`; results and notes per phase are in [`docs/PHASE2.md`](docs/PHASE2.md),
 > [`docs/PHASE3.md`](docs/PHASE3.md) and [`docs/PHASE4.md`](docs/PHASE4.md).
 
 This repository contains **no game assets and no original code**. You need your own copy of the game (Steam:
@@ -354,7 +354,7 @@ worker count so the counts run side by side. Clang's logs equal MSVC's.
 | Parity check against the original (Q4) | Planned; the comparison harness comes first |
 | Side goals (benchmark, CPU/GPU efficiency, shader precompile, fidelity, first-person, captain's view) | Planned |
 
-The detail, task by task, is in `ROADMAP.html`.
+The detail, task by task, is in `roadmap-store/ROADMAP.html`.
 
 ---
 
@@ -395,11 +395,10 @@ alamo_render.exe                    :: renderer test app
 | `tools/` | MEG archive tool, format readers, shader tools, probe kits, visual diff, lint and build-summary scripts |
 | `docs/` | Phase status boards, optimisation plan and research, behaviour specs recovered from the original (`docs/re/`), asset, format and shader specs |
 | `tests/visual_baselines/` | Screenshot baselines for visual regression |
-| `ROADMAP.html` | The project roadmap and flowchart (generated; update with `roadmap-store/roadmap_store.py`) |
-| `roadmap-store/` | The roadmap's data, in its own repository |
+| `roadmap-store/` | The project roadmap and flowchart, the one copy: data, generated `ROADMAP.html`, own repository (update with `roadmap-store/roadmap_store.py`) |
 | `CLAUDE.md` | Working rules for contributors and agents |
 
-Good starting points: [`docs/PHASE4.md`](docs/PHASE4.md) for decisions and every performance measurement (status is on `ROADMAP.html`),
+Good starting points: [`docs/PHASE4.md`](docs/PHASE4.md) for decisions and every performance measurement (status is on the roadmap),
 [`docs/OPT_RESEARCH.md`](docs/OPT_RESEARCH.md) for the optimisation techniques considered,
 [`docs/re/`](docs/re/) for how the original behaves.
 

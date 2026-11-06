@@ -1,10 +1,10 @@
 # Phase 4 — the game: decisions, step map, measurements and port choices (started 2026-10-27)
 
-Step ids below; finished results, finished notes and the build / fix logs are in `docs/PHASE4_HISTORY.md`. Status and open items: the main roadmap (`ROADMAP.html` in the project root; update with `roadmap_store.py write`, see `docs/ROADMAP_PROTOCOL.md`). Scope: single player, **Windows only** (Gabriel, 2026-10-27); multiplayer out of scope (Gabriel, 2026-10-29). Compilers: **MSVC + clang**.
+Step ids below; finished results, finished notes and the build / fix logs are in `docs/PHASE4_HISTORY.md`. Status and open items: the main roadmap (`roadmap-store/ROADMAP.html`; update with `roadmap_store.py write`, see `docs/ROADMAP_PROTOCOL.md`). Scope: single player, **Windows only** (Gabriel, 2026-10-27); multiplayer out of scope (Gabriel, 2026-10-29). Compilers: **MSVC + clang**.
 
 ## Status
 
-Status, open work, the flowchart and build results live only on the main roadmap (`ROADMAP.html`, `docs/ROADMAP_PROTOCOL.md`; build records are on it too). The "At a glance" table that used to be here was moved verbatim to `docs/PHASE4_HISTORY.md` on 2026-11-06 (it was a second copy of the roadmap). This file keeps the decisions, the step map (what each step is and where its code is), measurements and port choices.
+Status, open work, the flowchart and build results live only on the main roadmap (`roadmap-store/ROADMAP.html`, `docs/ROADMAP_PROTOCOL.md`; build records are on it too). The "At a glance" table that used to be here was moved verbatim to `docs/PHASE4_HISTORY.md` on 2026-11-06 (it was a second copy of the roadmap). This file keeps the decisions, the step map (what each step is and where its code is), measurements and port choices.
 
 ## Decisions (Gabriel, 2026-10-27)
 
