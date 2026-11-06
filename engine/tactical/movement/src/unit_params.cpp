@@ -46,6 +46,11 @@ UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti, flo
     d.alt_turn_rate = t.get_float(ti, "Alternate_Max_Rate_Of_Turn");
     // S8 t11: Deployment_Anim_Rate, unset -> the type ctor's 1.0 (MOVEMENT §3.2).
     if (t.value(ti, objects::find_type_field("Deployment_Anim_Rate")) != nullptr) d.deployment_anim_rate = t.get_float(ti, "Deployment_Anim_Rate");
+    // s78k t01 (MOVEMENT §3.5.1): the arrival turn's stopped rate and the direction count (unset -> the type default 1).
+    d.stopped_turn_rate = t.get_float(ti, "Stopped_Rate_Of_Turn");
+    if (t.value(ti, objects::find_type_field("Movement_Directions_Count")) != nullptr)
+        d.movement_directions = t.get_int(ti, "Movement_Directions_Count");
+    d.rotation_animation_speed = t.get_float(ti, "Rotation_Animation_Speed");  // s78l t02
     // S8 t24: the TURRET of a Deploys type (MOVEMENT §3.2 "Turret recentre around deploy"). s78f t08 (TACTICAL_COMBAT
     // §3.1.1 "s78f t08 answers" 6 [H]): every TURRET type slews the same way (0x632050: one Turret_Rotate_Speed step per
     // service, no shortcut for non-deployers; the deploy state only picks the deployed extents / rest angle), so the model

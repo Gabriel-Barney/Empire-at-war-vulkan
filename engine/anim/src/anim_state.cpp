@@ -507,6 +507,11 @@ uint64_t AnimWorld::idle_timer(ObjectId id) const {
     return r == kNoRow ? 0 : idle_timer_[r];
 }
 
+void AnimWorld::set_idle_timer(ObjectId id, uint64_t frame) {
+    const uint32_t r = row(id);
+    if (r != kNoRow) idle_timer_[r] = frame;
+}
+
 bool AnimWorld::service_idle(ObjectId id, int32_t idle_type, bool crouch_changed, SimRng& rng, uint64_t frame) {
     const uint32_t r = row(id);
     if (r == kNoRow) return false;

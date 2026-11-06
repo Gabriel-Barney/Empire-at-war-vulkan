@@ -1192,7 +1192,8 @@ contains the winner's type; (3) else 0.
 Writer: **IMPOSING_PRESENCE** (0x624ab0, interval 30): AABB query of half-extent `Presence_Range`
 (+0x1628); each object not flagged 0x42 whose type lists the presence type (0x370630) and has IDLE gets an entry
 (0x62e450) with remaining = int(FPS × `Unit_Presence_Relaxation_Time` (GC +0x117a8)); skipped when the
-presence unit has a target or moves without `Allow_Idle_When_Moving` (+0x85). FoC 5 entries (Attention near
+**receiving** unit (the IDLE owner, not the presence unit; corrected s78l t03) has a target or moves without
+`Allow_Idle_When_Moving` (+0x85). Lifecycle of the records: TACTICAL_COMBAT slot 47 "s78l t03". FoC 5 entries (Attention near
 Palpatine / Vader), TR 26. No container-kind table; garrisoned units are hidden.
 
 ### 6.3 Mesh `_ALT` selection 0x3ac290 and the "space damage-model swap" [H]

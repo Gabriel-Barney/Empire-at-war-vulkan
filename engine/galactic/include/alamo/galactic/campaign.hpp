@@ -702,12 +702,15 @@ public:
     // Change_Owner (Lua GameObjectWrapper.Change_Owner and story; GE 4.2 "Forced transfers" for planets). False
     // when nothing changed: dead object, invalid player, same owner, or a member of a moving fleet [port].
     bool change_owner(ObjectHandle object, int32_t player);
-    // Assemble_Fleet(units) [inferred]: the units (members of stationary fleets orbiting one planet, or units landed
+    // Assemble_Fleet(units): the units (members of stationary fleets orbiting one planet, or units landed
     // on that planet's surface, owned by the first valid unit's owner; others skipped) gathered into one fleet. A
     // fleet that holds exactly those units is returned as is; otherwise a new fleet takes them (list order; a landed
     // unit is launched as by launch_units: off the surface, launch reveal; a1g t06, so the shipped scripts'
     // SpawnList + Assemble_Fleet of ground units at a planet flies them, COMMANDS.md FleetManagement "AssembleFleet")
     // and emptied fleets die. Returns the fleet index, kNoFleet when no unit qualifies.
+    // Confirmed in game (a1k t02, 2026-11-05, tools/probe_mod/a1h_assemble_fleet): starting, Lua-spawned and AI-owned
+    // surface infantry are launched into the new fleet; a ship (in its own spawn fleet) + surface infantry give one new
+    // fleet of exactly the two, not merged into the fleet already orbiting there. The skip rules are still [inferred].
     uint32_t assemble_fleet(std::span<const ObjectHandle> units);
     // Containment as GalacticSim keeps it (OBJECT_RUNTIME.md 3; the store holds no container for ships):
     // container_of = the fleet of a fleet member, the planet of a surface unit / structure / starbase /

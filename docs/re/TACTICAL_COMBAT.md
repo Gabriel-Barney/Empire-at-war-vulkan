@@ -1139,10 +1139,65 @@ half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor;
       - Battles from the campaign (0x2a1eb0): the defender gets the first "DEFENDING FORCES POSITION" marker's
         orientation. The attacker gets the chosen "ATTACKER ENTRY POSITION" marker's orientation, picked by its
         distance to the defending-forces markers.
-      - A player with no such marker keeps the table's initial value [L: not traced; presumably zeros, which is
-        yaw 0 = +X].
-    - [L] Not traced: the facing of infantry or vehicles when they leave a land landing object. The landing object
-      itself gets the table facing.
+      - A player with no such marker keeps the table's initial value, **(0, 0, 0) = yaw 0 = +X, level** [H, s78j t01].
+        `GameModeClass` ctor 0x35a5e0 builds the `DynamicVectorClass<Vector3>` (mode +0x280, data +0x288, count
+        +0x290) with one entry per player (count 0x140a16fb0) and zeroes every entry. The writers only overwrite an
+        entry when a marker matched (TACTICAL_GAPS §4.2.2 item 1), so a skirmish player with no matching spawn marker,
+        a campaign attacker with no start units or no entry marker, and every third player (neutral, hostile,
+        pirates) drop at yaw 0.
+    - **Units leaving a land landing object** (s78j t01, 2026-11-05; TransportLanding unload step 0x644330, offsets
+      0x643130, A1_READINGS §35.2) [H unless tagged]. Let ψ = the landing object's orientation (obj +0x84, i.e. the
+      per-player table entry it was created with) and O_j = the unload offset of step j (pack +0x90 = j, one per team or
+      vehicle; already rotated by ψ's yaw in 0x643130). 0x20acd0(from, to) gives yaw = atan2(to.y − from.y,
+      to.x − from.x) in [0, 360) (0 when the xy are equal) and pitch = −atan2(dz, horizontal distance).
+      - **Infantry team (member has `Create_Team`).** The n members of step j are created at the landing's position
+        with the orientation 0x20acd0((0, 0, 0), O_j): **facing outward from the landing centre along the team's
+        offset**. Step **j = 0 is overridden** with the landing's own orientation ψ (roll / pitch / yaw copied from
+        obj +0x84…+0x8c), whatever O_0 is. Every member of the step gets the same triple. Then (not instant) one group
+        move 0x2a7b80 to landing position + O_j, flags 0x20, block +0x44 = 0 and **+0x5c = 0** (no final facing).
+        So the team **keeps its travel heading on arrival** [H, s78k t01: with +0x5c clear the last waypoint's facing
+        vector stays (0, 0, 0), and the Walk locomotor's arrival check keeps the current orientation; MOVEMENT §3.5.1].
+        The walk from the centre to O_j points along the created facing anyway, except for team 0.
+      - **Vehicle (no `Create_Team`).** Created at the landing's position with 0x20acd0((0, 0, 0), O_j) (outward
+        along its offset; **no** j = 0 override; a `Unique_Ground_Unit` substitute and its rider get the same triple).
+        Then, not instant:
+        - with a locomotor of the current mode and type byte +0xd4 set: coordinator move 0x4f8200 to landing position +
+          O_j (snapped for the movement class +0x1688), move block flags +0x48 = 0x20, +0x44 = **ψ's yaw** (landing
+          +0x8c, degrees), +0x5c = 1 (final facing set). **On arrival the vehicle turns to ψ** [H, s78k t01; the
+          chain and the turn rule are MOVEMENT §3.5.1]:
+          - flag 0x20 makes the formation path a straight 2-point path (start → destination, no pathfinding) whose
+            waypoint list skips passability (list +0x44 → path +0x5c, the "forced-move" path flag that the unload
+            finish 0x6438a0 clears with 0x3ac210); block +0x5c = 1 writes (cos ψ, sin ψ, 0) into the facing of that
+            path's last waypoint (0x417520 → 0x550bd0); the unit's own path is a copy of it (0x42c680 → 0x5c46a0);
+          - the walk itself faces the travel direction, which is the created facing yaw(O_j), so there is no start
+            turn;
+          - in End Move → state 0x15 (0x61fc30) the unit, now on the last waypoint, compares its yaw with the
+            waypoint facing (0x61d570 → 0x61d890, through `Movement_Directions_Count`, default 1 = that facing
+            exactly). Difference > **10°** → turn state (0xf → 0x10): an optional pre-turn clip (`Has_Pre_Turn_Anim`,
+            clip 0xc / 0xe by side), then a **rate-limited turn-to** at `Stopped_Rate_Of_Turn` (when > 0, else
+            `Max_Rate_Of_Turn` × the mode multiplier) that lands **exactly on ψ** (0x61e730 clamps the last step);
+            difference ≤ 10° → no turn, the path is popped and the unit keeps its arrival yaw (within 10° of ψ);
+          - so it is a turn-to, never a hard set. With the default layout O_j is not straight ahead of ψ, so the
+            vehicle normally ends exactly on ψ after a visible turn in place;
+          - **interrupted**: the unit and its container are locked (0x3a8e50) from the exit move until the unload
+            finish, so player / AI move orders that include it are refused meanwhile and it keeps executing the exit
+            move. The finish (0x6438a0) unlocks it and clears only the path's skip-passability byte, not the waypoint
+            facing, so a vehicle that arrives after the finish still turns. A move given after the unlock replaces the
+            path; an ordinary order's block has +0x5c = 0, so the new arrival keeps its travel heading (no turn to ψ). A
+            stop (0x4261f0) drops the path: no turn [M for the stop path, MOVEMENT §6.2]. A move with its own facing
+            (MoveToPositionFacing) turns to that facing instead;
+        - otherwise: placed at landing position + O_j at once (0x3abb80) and its orientation **set to ψ** (0x3a8710 with
+          landing +0x84).
+      - **Instant-unload mode** (0x35e4c0 +0x30 set, [M] which mode): no move, no placement; every unit stays at the
+        landing's position with its created orientation.
+      - So after the unload: teams face outward along their offset (team 0: the entry facing), vehicles end on the entry
+        facing ψ (placed: exactly; moved: turned to exactly ψ on arrival when more than 10° off, else within 10°).
+      - **Port (s78k t01):** `TacticalBattle::landing_service` (`engine/apps/sim/src/tactical_battle.cpp`) sends
+        the exit move with no flags and no facing, and the land movement (`MovementSystem::tick_land`,
+        `engine/tactical/movement/src/movement_system.cpp`) ignores `Unit::facing` on arrival (only space turns). To
+        match: give both exit moves `kMoveFlagSkipValidation` (0x20; straight path, no passability), give the vehicle's
+        move `facing_deg = yaw(ψ)` (not the team's), and add the land arrival turn of MOVEMENT §3.5.1 for any land move
+        with a facing.
     - **Summary for the port:**
 
       | Spawn | Facing |
@@ -1150,7 +1205,8 @@ half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor;
       | `Spawn_Unit` (tactical) | toward the world origin (item above) |
       | `Spawn_From_Reinforcement_Pool` | toward the world origin |
       | `Create_Generic_Object` | +X (yaw 0), any mode, even when given an object |
-      | `Reinforce_Unit`, player reinforcement drop | the owner's start-marker facing (per-player table) |
+      | `Reinforce_Unit`, player reinforcement drop | the landing object and a drop without one: the owner's start-marker facing (per-player table; yaw 0 when no marker) |
+      | units leaving the landing object | team step j: yaw of O_j (j = 0: the landing's facing); vehicle: created at yaw of O_j, ends on the landing's facing |
 
 **Targeting states, slots 47 / 48 and team copies (s78f, 2026-11-03)** [H unless tagged]. TD = obj +0xf0; the TD
 pack is shared by TARGETING, WEAPON (TD +0x80 = the WeaponBehavior, stored by its attach 0x54ceb0) and TURRET
@@ -1234,6 +1290,14 @@ through its override). No other caller (WEAPON, the gate, Lua and space never re
   animation gate 0x397040 is false: play clip 6 Attack Idle, index 0, looping, **blend = one synced
   `Get_Float(0.2, 0.75)`** (0x1401ffbb0 on 0x140a13e24), speed 1.0. So entering the pose costs one synced draw;
   while clip 5 or 6 plays, nothing is drawn.
+  - **Order of the tests (s78j t02, re-read 2026-11-05)** [H]. 0x569540 and the per-member 0x569400 have the same body:
+    the current clip is read first (0x3956a0: obj +0x2a0 → +0xc4 when +0xb8 is set, else −1). The draw and the play
+    sit **inside one conjunction**, evaluated left to right with short-circuit: (arg 0 or animation priority clear) →
+    not moving → not a flinch (0x27b590: 79–86) → **clip − 5 > 1 (unsigned), i.e. not 5 and not 6** → 0x397040 (obj
+    +0x2a0 → byte +0x108) false → `Get_Float(0.2, 0.75)` → 0x3a92f0(obj, 6, 0, loop 1, blend, 1.0). There is no else
+    branch for the animation case. So while the current clip is ATTACK (5) or ATTACKIDLE (6) retail **neither draws
+    nor restarts the clip**; the same holds when 0x397040 is true (no draw). A model without clip 6 stays on its old
+    clip and so draws every service (the t11 result below).
 
 *Team targeting copies* (`TeamTargetingBehaviorClass`, vtable 0x8afd90, on ground team containers only: its service
 0x62ee00 runs 0x62eeb0 when the container's locomotor kind is 1 and (obj +0x3a1 & 2 clear or
@@ -1487,6 +1551,139 @@ gives R = 3.588° and a slot-48 tolerance of 1.794° in land.
       draw does not skip clips 5 / 6. **Port (2026-11-05):** `tactical_battle.cpp` `attack_idle` spends the draw on
       every service (not moving, no animation priority, not in a flinch); it only skips the clip restart while the
       current clip is 5 / 6. Whether retail also restarts the clip then is not measured.
+      - **s78j t02 (RE, 2026-11-05): IDLE47N phase E did not measure slot 47** [H]. Lua `Prevent_All_Fire(true)`
+        (0x57ee20) suspends behaviours **9 TARGETING and 10 WEAPON** (vf +0xc0, suspend count +0x3c + 1) on the object
+        (and on each member of its behaviour-0x16 list when it has one), plus 0x392570 on its attached hardpoints. The
+        object service runs a behaviour only while that count is 0 (MOVEMENT §3.3), and 0x569540 also returns when it
+        is > 0 (0x4c36f0). So from the flag on, the Dark Troopers' targeting service, and slot 47 with it, did not run:
+        the "state 4 / clip ATTACKIDLE" the kit read was the value left from before the flag. The ~0.85 synced draws per
+        attacker per frame come from somewhere else (found in s78k t02, below: the IDLE behaviour). The static gate
+        above is unambiguous: **retail spends no draw and does not restart the clip while the clip is 5 / 6**. The
+        s78i t01 port change (draw on every service) is therefore wrong; return before the draw when the clip is 5 / 6,
+        as the original s78f t03 version did.
+      - **s78k t02 (RE, 2026-11-05): the source is the IDLE behaviour's "has a target" branch** [H]. Candidates
+        checked against the IDLE47N set-up (locomotor suspended, TARGETING / WEAPON suspended, JET_PACK autofire off,
+        not moving, TD +8 still holding the victim from the 6 frames before the flag):
+
+        | Rank | Candidate | Per-frame synced draw for such a unit? |
+        |---|---|---|
+        | 1 | **IdleBehavior service 0x62e570** (vtable 0x8afc58, interval 1; Dark_Trooper_PhaseII and Pod_Walker both list IDLE) | **yes, exactly one** `Get_Int(0, FPS)` per service while the unit's TARGETING (or, for a team member without one, its container's) has a target. Not suspended by `Prevent_All_Fire` [H] |
+        | 2 | slot 47 / TeamTargeting | no: TARGETING suspended (above); Dark_Trooper_PhaseII is not a team member [H] |
+        | 3 | Walk locomotor (formation jiggle 0x42c270, start delay 0x41c1a0) | no: locomotor suspended, not moving [H] |
+        | 4 | play-clip variant draws (0x3a92f0 / 0x3a8ed0 with index 0xFFFF; idle fidgets, flinches) | no per-frame draw: fidgets are 210–450 frames apart, the victims do not fire, Attack Idle is played with index 0 [H] |
+        | 5 | UNIT_AI (0x4f6070), ability autofire | not shown to draw per frame: the service 0x4f6070 has no direct synced draw, its pack ctor 0x550ed0 draws only at creation (A1_READINGS) [M: its callees were not all read] |
+
+        IdleBehavior service 0x62e570 (obj = the unit, I = its idle pack obj +0xd8):
+        1. Return (no draw) when the unit has a locomotor, `Allow_Idle_When_Moving` (+0x85) is clear and the
+           locomotor reports moving (vf +0x110); also (no draw) when it is a deploying unit (0x39a370) that is
+           deploying / undeploying / deployed (0x39a400, 0x39b2a0, 0x39a390).
+        2. Flinch bookkeeping on I +0x5c / +0x58 / +0x50 (`Idle_` / `Attack_Flinch_Interval_Seconds`, `Max_Flinch_*`;
+           ANIM_PARTICLES §A.7). It may set "flinch in progress".
+        3. T = the unit's TARGETING behaviour (9); when it has none and the locomotor says it is a team member
+           (vf +0x228), the container's. T is fetched whether or not it is suspended.
+        4. **T has a target** (T vf +0xe0 = 0x567080: TD +8 ≠ null):
+           - I +0xc := `Get_Int(0, FPS)` + 90 (**one synced draw every service**), and the idle record list I +0x10
+             is cleared;
+           - when the current clip is 5, 6 or attack-like (0x27b4f0: 5, 25, 26, 31, 33–35, 37–40, 45–47, 63, 64), its
+             play state (anim +0xc8) is 2 (finished) and the model has clip 6: play clip 6, index 0, one-shot, blend
+             0, speed 1 (no draw). Otherwise nothing more.
+        5. No target: the idle records age; I +0xc −= 1 while > 0 (a frame countdown); return when a flinch is in
+           progress or the current clip is still playing (unless the idle type changed class). Then: from an
+           attack-like / 5 / 6 clip (only when T exists) with I +0xc > 0, Attack Idle again with blend `Get_Float(0.2, 0.75)`; with I +0xc
+           ≤ 0, the default idle (blend global 0x140b39930); from any other clip, the idle with a fidget when
+           frame ≥ I +8 (variant `Get_Int(1, n − 1)` when n > 1, next I +8 = frame + `Get_Int(210, 450)`), else
+           index 0.
+
+        That gives one draw per attacker per frame in IDLE47N phase E for as long as the victim is the target (93% of
+        the attacker-frames in state 4 = a target held; measured 0.85, the windows include the frames around the
+        edges), and none in phases D and P, where the flag came before the order and TD +8 never got set (measured
+        −0.01 / 0.01). It also accounts for the ~1 draw per attacker per frame of IDLE47Q (both models held targets
+        while firing). It runs whatever the clip, so it does not bear on the slot-47 clip gate.
+        **Port:** `AnimBehaviors::service_idle` (`engine/anim/src/anim_behaviors.cpp`, called from
+        `SimAnimation::service_idle`, `engine/apps/sim/src/sim_anim.cpp`) runs only when the current clip has finished
+        and draws the [0, 30] only on a fresh engagement, using a frame stamp. Retail: run the IDLE service every frame
+        for every unit with IDLE (after the moving / deploying early returns), and while the unit's target (TD +8, or
+        the team container's for a member without TARGETING) is set, draw `Get_Int(0, 30)` each frame into a
+        countdown (= r + 90), decremented once per no-target service; restart Attack Idle (index 0, one-shot, blend 0)
+        only when an attack-like / 5 / 6 clip has finished. The target must count even while TARGETING is suspended.
+      - **s78l t03 (RE, 2026-11-05): IDLE service coverage, records and flinches** [H unless tagged]. IDLE is
+        behaviour **7** (IdleBehaviorClass vtable 0x8afc58: vf3 0x62e030 answers type 7, vf6 0x62e570 the service,
+        vf7 0x62dd40 the attach, which creates the pack and draws the first fidget frame I +8 := now +
+        `Get_Int(210, 450)`, synced). Interval 1.
+        - (b) **Only objects with IDLE are serviced** [H]: 0x62e570 has no direct caller; it runs only as the vf6 of
+          an IDLE instance, created only from the type's behaviour lists. The two other writers of the pack (the
+          presence scan and the area flinch, below) also skip objects whose behaviour slot 7 (obj +0x339) is −1. Team
+          containers (e.g. `Stormtrooper_Team`: TEAM, SELECTABLE, UNIT_AI + land list) have no IDLE; their members do.
+        - (a) **Moving gate for every locomotor** [H]: step 1 asks the object's behaviour-1 locomotor vf +0x110. In
+          every land / space locomotor vtable that slot is 0x5abbf0 = vf +0x1c0(this, 0) ("has a path"), read from
+          the exe's vtables:
+
+          | Locomotor | vf +0x1c0 | "moving" while |
+          |---|---|---|
+          | Walk (hover and walker units too: one class), Bike, LandTeamContainer, Fighter, SimpleSpace, Team | 0x42cbd0 → 0x5569f0(pack, 0) | the pack's path stack (+0x138…+0x140) is **non-empty**, whatever the speed |
+          | LandTeamInfantry (squad members) | 0x62c980 | the **parent container's** (obj +0x2b0) locomotor says so; no parent → not moving |
+          | Flying | 0x63c290 | a path exists, a formation (pack +0x1f0) exists and (0x41b260(formation) or its current block has flag 0x08) [M names] |
+          | JetPack | 0x640ff0 | pack state ≠ 0x16 (Walk Stopped) |
+          | LandBomber | 0x645ba0 | a formation exists and its block stack holds exactly 1 block |
+          | Fleet (galactic) | 0x569fe0 (direct slot) | not read [L] |
+
+          So a stationary infantry, hover or walker unit (no path record) **is** serviced, and a Walk unit is
+          "moving" for the whole time a path sits on its stack, including the arrival turn (MOVEMENT §3.5.1: the path
+          pops only after it). `Allow_Idle_When_Moving` (type +0x85) skips the gate. No locomotor → never gated.
+          While gated: the record list (I +0x10) is cleared and I +0x58 := 0, no draw, nothing else. The deploy gate
+          (0x39a370 and deploying / undeploying / deployed) returns with nothing changed.
+        - (c) **Idle records, I +0x10** (an MSVC `std::unordered_map<int, int>`: node {next, prev, key +0x10, value
+          +0x14}, 0x18 bytes; list head I +0x18, count I +0x20, buckets I +0x28, mask I +0x40; hash = Park–Miller
+          (16807, Schrage 127773 / 2836) of (key ^ 0xDEADBEEF) & 0x7FFFFFFF, no RNG). Key = a **presence object's
+          id** (obj +0x50), value = frames left.
+          - Added / refreshed only by **IMPOSING_PRESENCE** (0x624ab0, the presence unit's behaviour; TACTICAL_GAPS
+            §6.2): every listed object P inside the AABB of half size `Presence_Range` (+0x1628) whose flags +0x3a0 &
+            0x42 are clear, whose type lists P's type in `Presence_Induced_Animations` (0x370630) and which has IDLE
+            gets 0x62e450(its IDLE, P): value := int(FPS × `Unit_Presence_Relaxation_Time`) (find-or-insert, so a
+            refresh resets the countdown). Skipped when **the receiving unit** (not P) has a target (its TARGETING, or
+            its container's for a member, TD +8 set, suspended or not) or is moving by the gate above.
+          - Cleared: when the receiver has a target (service step 4) and while it is moving (step 1).
+          - Aged: each no-target service, every value −1; a record whose value drops below 1 is erased.
+          - Read only by the default idle type 0x395920 (after the SPREAD_OUT / crouch test → 71): among records whose
+            object still exists, the largest value wins; on ≤, a record whose owner is allied to the unit's owner
+            (0x2823e0) replaces a non-allied best. The idle type = the first `Presence_Induced_Animations` entry of
+            the unit's type whose type list holds the winner's type (0x373530), else 0. Ties between two allied (or
+            two non-allied) records keep the earlier one in map iteration order [M: the port needs that order only
+            when such tied presence objects map to different animations].
+          - Draws: none in the bookkeeping. Indirectly the idle type sets which clip the fidget logic plays and its
+            variant count n, so `Get_Int(1, n − 1)` (only when n > 1) depends on it, and an idle-type change of
+            class (crouch class 67 / 71 / 72 / 73, 0x27b570) forces a replay.
+        - **Step-2 flinch bookkeeping** (I +0x50 cooldown timer {start frame, frames}, ready when start + frames ≤ now;
+          I +0x58 flinch weight; I +0x5c the clip that was playing before the flinch, −1 = none):
+          - **Start** (0x62dde0, called from the projectile code 0x4c73d0 on a hit with the projectile type's
+            `Induced_Flinch_Intensity` +0x20e4 as the weight [M: the caller's branch was not read]; or 0x62e040, called
+            from behaviour vf 0x622440 [M: which behaviour], the area flinch around the object of radius
+            `Induced_Flinch_Range` +0x20e0, weight = clamp((1 − d² / (2 R²)) × intensity, 0.25, 1)): needs the cooldown ready, I +0x58 = 0,
+            not a deploying unit, and the current clip A attack-like (0x27b4f0), Attack Idle 6 or idle-class
+            (0x27b5e0). Clip = Flinch 79–82 (or Attack_Flinch 83–86 when A is attack-like or 6), side by the angle
+            from the facing to the source: |a| < 45 → 82 / 86, 45–135 → 80 / 84 when a > 0 else 79 / 83, > 135 →
+            81 / 85. Played with index 0xFFFF (**synced variant draw when ≥ 2 variants**), loop 1, blend
+            `Max_Flinch_Blend_Seconds`; when the play is accepted: I +0x58 := weight, I +0x5c := A.
+          - **Service step 2**, while I +0x5c ≠ −1 (S = the model's primary slot state, w = its +0x2c [M: the
+            crossfade weight]; X = the crossfade-active byte model +0x108):
+            - S.type ≠ I +0x5c (still on the flinch): "flinch in progress". With I +0x58 > 0: once w ≥ I +0x58 or
+              not X, freeze the crossfade (model +0x104 := 1e-4 [M]), cooldown timer := (now, FPS ×
+              `Max_Flinch_Hold_Seconds` × I +0x58) (the **hold**), I +0x58 := 0. With I +0x58 = 0 (holding): when the
+              timer is ready, play I +0x5c again (index 0xFFFF → **synced draw when ≥ 2 variants**, loop 0, blend
+              `Max_Flinch_Blend_Seconds`, blend mode 3).
+            - S.type = I +0x5c (back on the old clip): while w < 1 and X, still in progress; then cooldown timer :=
+              (now, FPS × `Idle_Flinch_Interval_Seconds`, or `Attack_Flinch_Interval_Seconds` when I +0x5c is
+              attack-like or 6), I +0x5c := −1, done.
+          - Effect on the service: "in progress" makes step 5 return right after the record aging and the countdown
+            decrement, so no idle / fidget / Attack Idle play happens during a flinch. The target branch (step 4,
+            with its per-frame `Get_Int(0, FPS)`) runs regardless.
+        - *Port spec (IDLE):* (1) attach: I +8 = now + `Get_Int(210, 450)`; (2) each frame, for objects with IDLE only:
+          skip entirely while the locomotor has a path (team member: its container's; JetPack: state ≠ stopped;
+          flags as the table) unless `Allow_Idle_When_Moving`, clearing the records and the flinch weight; skip while
+          deploying / undeploying / deployed; (3) flinch step as above; (4) target held → `Get_Int(0, 30)` + 90 into
+          the countdown, clear records, Attack Idle restart rule; (5) else age records and the countdown, return during
+          a flinch, then the idle / fidget logic with the default idle type from the records. Keep the record map
+          keyed by object id and make its iteration order deterministic.
   - *Port:* when clip 6 is missing, leave the current clip as it is and draw the blend each service in state 3 / 4,
     as retail does.
 
@@ -2073,6 +2270,15 @@ and ascending-category summation are kept.
       radius 0x4c7f70, ion / lucky shot 0x704b50 / 0x7064e0 / 0x706d90.
     - The squad minimum reaches only callers that pass the container [M which ones]. The candidates are the
       SPEED reads 0x3728f0 / 0x376990, for a team locomotor (MOVEMENT §3.4).
+    - **Team move speed (s78l t01, 2026-11-05) [H]:** 0x376990(container type, container, base) multiplies by
+      0x398010(**container**, 6) once (the container is not a projectile), with base = min(container
+      `Max_Speed`, raw member `Max_Speed`s) (MOVEMENT §3.4 "Team cap, exact"). So a land team moves at
+      `min(C.Max_Speed, min M_i.Max_Speed) × modeScale × [flee] × team_mod_multiplier × (rest of the container's
+      chain)`. The members' own SPEED products reach it only through `team_mod_multiplier` (the minimum, when the
+      container's own product is 1.0); a member's own `mult` is not multiplied in a second time. The s78k t03 port
+      formula "min member Max_Speed × mult × team_mod_multiplier" is therefore off in two ways: it leaves out the
+      container's `Max_Speed` (0.8 for `Stormtrooper_Team`, whose members reach 1.0), and the extra `mult`
+      double-counts a member value.
     - **No mode gate:** a space fighter squadron container (TEAM slot) gets the same rule.
   - **Port gap (2026-11-05):** the port has no container unit, so a `team_leader` member stands in for it
     (`apps/sim/src/tactical_battle.cpp` deploy sets the chunk's first member; `tactical_battle_bt.cpp` the
@@ -2223,6 +2429,59 @@ and ascending-category summation are kept.
   mode signals. **No radius scan and no periodic recheck** was found [M]. The modifier semantics are in §4.3.
 - About 92 ability classes exist (SUBSYSTEMS.md "abilities"). Only CombatBonus, BattlefieldModifier, tractor
   beam and the reduce-production pair were read in this pass.
+
+#### 5.4.1 Tactical_Bribe and Hack: target acceptance (s78l t05, 2026-11-05) [H unless tagged]
+Vtables found through RTTI in the exe: `TacticalBribeAbilityClass` 0x8a3c08 (+0x28 accept 0x5b0f70, +0xf0 apply
+0x5b07c0), `HackAbilityClass` 0x8c8450 (+0x28 accept 0x6fd610, +0xf0 apply 0x7013d0). The base class slot +0x28 is
+a stub (0x76af38). Arguments: (ability, user U, target X).
+
+**Target filter 0x48e290** (`Target_Type_Allowed` → 0x39f300(X, `Applicable_Unit_Categories` +0x60,
+`Applicable_Unit_Types` +0x68, mask +0x88, `Excluded_Unit_Types` +0x90)), in order:
+1. X's type is in `Applicable_Unit_Types` → **true** (categories not looked at);
+2. (categories & X.`CategoryMask` (type +0x1648)) = 0 → **false**, so an **empty categories mask rejects
+   everything not listed by type**; (mask +0x88 & CategoryMask) ≠ 0 → false [M: +0x88 is an excluded-categories
+   mask];
+3. X's type in `Excluded_Unit_Types` → false; else true.
+A null X → false. With no filter tags at all the filter accepts nothing.
+
+**Hack accept (0x6fd610):** U and X non-null; X is an **enemy** of U's owner (0x39a450(X, U owner): X's owner, or
+for an object with behaviour slot 3 its parent's owner, and the player relation "enemy" 0x2824f0 of the relation
+table, §2.10); **0x48e290 passes**; X has a model (+0x2a0); when U or X has the layer byte +0x3b4 = 1, 0x39a540 must
+pass (the same layer rule as the tractor beam). Nothing else: no alive / dying test, no unit-kind test, no range.
+`R2D2_Hack_Ability` (empty `Applicable_Unit_Categories`, a 14-turret `Applicable_Unit_Types` list) therefore accepts
+exactly the enemy objects of those 14 types (step 1 of the filter), and nothing else.
+
+**Bribe accept (0x5b0f70)** does **not** call 0x48e290: the XML filter tags are never read for it (so the shipped
+`Tyber_Tactical_Bribe` without them is fine). It accepts when all hold:
+1. U, X non-null; X has a model;
+2. X is an enemy of U's owner (0x39a450, as above);
+3. X flag +0x3a2 & 0x04 clear [M: the "converted" flag of ABILITIES_HARDPOINTS §6, obj +0x3a2 bit 4];
+4. T = X's team container when X is a team member (0x39b1a0: parent obj +0x2b0 with a TEAM slot), else X;
+5. cost 0x5b0ec0(U, T) > 0: c = T type `Tactical_Bribe_Cost` (+0x2358, int); c ≤ 1 → 0 → **reject**; else c ×
+   U type `Bribe_Modifier_On_Corrupted_Planets` (+0x23e4) when the current battle's planet (0x28a890 → +0xb8 →
+   +0x2f4 ≠ −1) is corrupted, else × `Bribe_Modifier_On_Uncorrupted_Planets` (+0x23e0) [M: +0x2f4 as the
+   corruption field]; so a unit with no `Tactical_Bribe_Cost` can never be bribed [M: the type default was assumed ≤ 1, not read];
+6. 0x395c10(T, all categories): T's `CategoryMask` ≠ 0, T +0x3a2 & 0x08 clear, T has no PROXIMITY_MINE behaviour
+   (slot 0x55, obj +0x387 = −1), T type `Friendly_Damage_Amount` (+0x23ec) ≤ 0, T type **`Is_Named_Hero` (+0x13)
+   false** (heroes excluded), and T's link block obj +0x150 null or both its pointers null [M: what that block is];
+7. X flags +0x3a0: 0x40 (dead / death clone), 0x80 and 0x02 [M names] all clear.
+No range and no owner-credit test here. Apply 0x5b07c0 adds them: range = `Target_In_Range` 0x48d820 on T or on X
+(either) and `Must_Close_Range` 0x48e100 false; then the accept above; then credits: when the owner's credits
+(player +0x70) < cost or cost ≤ 0 → play the "cannot" event (ability +0x1b8) and **return 1 without converting**
+[M: whether that consumes the order]; else break both objects' stealth-type state (0x3a9880 on U and X),
+credits −= cost, play the event at ability +0x1a8, start the recharge (0x3a9840(U, 0x3b)), then the effect and the
+owner change (TACTICAL_GAPS §2: 0x38e5a0). Hack's apply 0x7013d0 likewise runs the accept, then 0x48d820 /
+0x48e100.
+
+*Port spec:*
+- `target_filter`: type list first (listed → accept), then categories (empty mask → reject), then excluded types.
+  Do not reject up front because the categories tag is empty.
+- Hack: enemy + `target_filter` + has a model (+ layer rule); range only in the apply / command path
+  (`Activation_Min_Range` / `Activation_Max_Range` through `Target_In_Range`).
+- Bribe: **do not call `target_filter`**. Enemy; not already converted; work on the team container for a member;
+  bribe cost = `Tactical_Bribe_Cost` of the container (or unit) × the user's corrupted / uncorrupted modifier,
+  must be > 0 (cost ≤ 1 rejects); not a named hero, `Friendly_Damage_Amount` ≤ 0, no PROXIMITY_MINE behaviour,
+  non-zero `CategoryMask`; not dead. Range and credits are checked at apply; too few credits: no conversion.
 
 ---
 
