@@ -154,8 +154,8 @@ So the galactic AI does not run during a tactical battle. [H]
 | GameMode | 0x24 | Galactic / Land / Space |
 | Category | 0x28 | AIGoalCategoryType id: budget category and template switch key |
 | Reachability | 0x2c | AIGoalReachabilityType; also the galactic move mode (§2.5) |
-| Time_Limit | 0x30 | float s, −1 = none. AllowedTime (0x692860) = Time_Limit if no plan, else plan ETA × Build_Time_Delay_Tolerance. It also caps the budget horizon. [H] |
-| Build_Time_Delay_Tolerance | 0x34 | multiplier on plan ETA [H] |
+| Time_Limit | 0x30 | float s, −1 = none. AllowedTime (0x692860) = Time_Limit if no plan, else 0x6c0450(PP) × Build_Time_Delay_Tolerance, where 0x6c0450 = sum of the selection's build times (no planet) × the player's Galactic_Build_Time_Multiplier, not the plan ETA (A2F_RE_READS §1.4 item 2; port since A2 f t09). It also caps the budget horizon. [H] |
+| Build_Time_Delay_Tolerance | 0x34 | multiplier on the AllowedTime base (0x6c0450, see Time_Limit) [H] |
 | Is_Like | 0x38 | type-equivalence list; stops Resolve's greedy phase (§1.6) [M] |
 | Global_Exclusions | 0x90 | while a goal of this type is Active, each named type's exclusion counter (goal system map +0x260) is incremented: excluded types cannot be proposed or activated. Release decrements it (0x693550 / 0x693750 / 0x6ca8c0 / 0x6cb070). Scope: one goal system, i.e. one player and mode. [H] |
 | Tracking_Duration | 0xa8 | s; lifetime of goal-outcome history |

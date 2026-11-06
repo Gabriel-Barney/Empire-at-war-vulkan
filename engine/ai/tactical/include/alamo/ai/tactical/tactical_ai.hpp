@@ -67,6 +67,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "alamo/ai/ai_definitions.hpp"
@@ -304,6 +305,9 @@ struct TacticalAiDifficulty {  // DifficultyAdjustments fields of the tactical A
     std::string name;
     float land_goal_sleep = 0.0f, space_goal_sleep = 0.0f;   // *_AI_Goal_Cycle_Sleep_Duration (s)
     float land_contrast = 1.0f, space_contrast = 1.0f;       // *_AI_Contrast_Multiplier
+    // A2g t06: Land_Build_Time_Multiplier (+0x30) / Space_Build_Time_Multiplier (+0x2C), the AllowedTime base's multiplier
+    // (tactical_build_time_multiplier). Vanilla Easy 1.5, Normal 1.0, Hard 0.9 (AI_TACTICAL §4.5).
+    float land_build_time = 1.0f, space_build_time = 1.0f;
 };
 
 struct TacticalAiConfig {
@@ -501,6 +505,24 @@ bool reinforce_join_pp(std::vector<TacticalPpPick>& picks, int32_t unit, int32_t
 
 // DifficultyAdjustments.xml: the tactical fields.
 std::vector<TacticalAiDifficulty> load_tactical_ai_difficulties(const FileProvider& files);
+
+// A2g t06: the AllowedTime base of a tactical goal with a PotentialPlan (0x692860 -> 0x6c0450(PP); A2F_RE_READS §1.4 item 2,
+// galactic in engine/ai galactic_goal_time.hpp). The goal system's AllowedTime = this x Build_Time_Delay_Tolerance.
+//   0x4b0500 in a tactical mode (PP +0x198 = 1 land / 2 space) [H field offsets]: the plan player's difficulty adjustment
+//   (`adjustment` = its AIPlayerType Difficulty_Adjustments name for the player's difficulty) gives Land_ (+0x30) /
+//   Space_Build_Time_Multiplier (+0x2C) [M: the argument Ghidra dropped is read as the plan player, as galactic]; 1.0 (the
+//   all-1.0 adjustment) when no entry has that name [H]. Several entries with the name: the last (as the sleep / contrast
+//   lookup at start) [port].
+float tactical_build_time_multiplier(const std::vector<TacticalAiDifficulty>& difficulties, std::string_view adjustment,
+                                     TacticalMode mode);
+//   0x6c0450(PP): S = the float sum, in selection order, of btime(T, none) over every selected type (every pick, whatever
+//   its source: free store, reinforcement pool, build pad, production) [H structure], then S x the multiplier above.
+//   btime(T, none) = 0x371230 without a planet = float(uint32(float(Build_Time_Seconds +0x890) x Production_Speed_Factor))
+//   (GALACTIC_ECONOMY §2.3 T0) [H; 0x6c0450 calls the same 0x371230 in every mode, its only mode branch is the
+//   multiplier field, and Tactical_Build_Time_Seconds (+0xa00, 0x496f00) is not read: A2H_T06_TACTICAL_ETA §3].
+//   A pick whose type is out of range adds 0 [port].
+float tactical_nominal_time(const std::vector<TacticalPpPick>& picks, const std::vector<PerceptionType>& types,
+                            float production_speed_factor, float multiplier);
 
 // S7 t27 (AI_TACTICAL §7.3.3 item 5): the walk step of land Prepare_Ambush (0x6ec8b0): the land sight range 0x3722a0 =
 // Land_FOW_Reveal_Range x the weather Sight_Range_Modifier of the target's company type; <= 0 -> the target type's max

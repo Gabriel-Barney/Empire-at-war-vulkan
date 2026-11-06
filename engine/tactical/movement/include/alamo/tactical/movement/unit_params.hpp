@@ -78,6 +78,14 @@ struct UnitDesc {
     // S8 t11 (MOVEMENT §3.2 "Deploy states"): Deployment_Anim_Rate (+0x1668, type ctor default 1.0), the speed of the
     // Walk locomotor's deploy / undeploy clips (MovementSystem::deploy).
     float deployment_anim_rate = 1.0f;
+    // s78k t01 (MOVEMENT §3.5.1, save version 11): the Walk locomotor's arrival turn. Stopped_Rate_Of_Turn (+0x3b0, raw,
+    // read by 0x374310 at speed 0; <= 0 -> Max_Rate_Of_Turn x the mode multiplier) and Movement_Directions_Count (+0x23fc,
+    // type default 1).
+    float stopped_turn_rate = 0.0f;
+    int32_t movement_directions = 1;
+    // s78l t02 (MOVEMENT §3.5.1, save version 12): Rotation_Animation_Speed (+0x388, raw). The arrival turn's begin / band /
+    // end clips play at (Stopped_Rate_Of_Turn, else the turn rate) / this when both are > 0, else at 1 (0x3736a0).
+    float rotation_animation_speed = 0.0f;
     // S8 t24 (MOVEMENT §3.2 "Turret recentre around deploy"): the unit TURRET of a `Deploys` type (TurretBehavior, TD
     // +0x48..+0x5c). [port] Modelled only for Deploys types with the TURRET behaviour and Turret_Rotate_Speed > 0 (the
     // deploy gate is its only sim reader); `turret` false = always at rest. Angles: x (never moves), elevation, yaw

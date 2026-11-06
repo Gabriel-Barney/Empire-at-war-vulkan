@@ -198,9 +198,10 @@ bool AbilitySystem::class_accepts(const Obj& o, const SpecialAbilityDesc& s, Obj
         case C::DrainLife:
         case C::LeechShields:
         case C::SuperLaser:
+        // Hack 0x6fd610 (TACTICAL_COMBAT §5.4.1): enemy of the user's owner, the filter, a model (+ the layer rule); no
+        // alive / kind / range test [port: "has a model" stands as a live, targetable combat unit; no layer rule].
         case C::Hack:
         case C::VehicleThief:
-        case C::TacticalBribe:
         case C::Infection:
         case C::SaberThrow:
         case C::FlameThrower:
@@ -208,6 +209,7 @@ bool AbilitySystem::class_accepts(const Obj& o, const SpecialAbilityDesc& s, Obj
         case C::MaximumFirepower: return foe && target_filter(s, target);
         case C::Berserker:  // enemy, not a projectile, has a locomotor, filter
             return foe && combat_->data().units[combat_->desc_index(target)].has_locomotor && target_filter(s, target);
+        case C::TacticalBribe: return bribe_accepts(o, target);  // 0x5b0f70: never the filter (§5.4.1)
         case C::Repair: return live && !dummy && allied(o.owner, combat_->owner(target)) && target_filter(s, target);  // [inferred]
         // 0x712770 (Proximity_Mines, Buzz_Droids, Corrupt_Systems, Summon, Radioactive): the MARKER dummy point object
         // [port: or a live target / none - positions come with the command-57 dummy].
@@ -228,6 +230,57 @@ bool AbilitySystem::class_accepts(const Obj& o, const SpecialAbilityDesc& s, Obj
         case C::ForceCloak: return target == kNoObject || target == o.id || dummy;
         default: return true;
     }
+}
+
+float AbilitySystem::bribe_cost(const Obj& o, ObjectId target) const {
+    // 0x5b0ec0(U, T): c = T's Tactical_Bribe_Cost (int); c <= 1 -> 0; else c x the user type's corrupted / uncorrupted
+    // modifier by the battle planet. T = the team container of a member, else the target. -1: no cost data anywhere
+    // ([port] hosts without the field; the cost gate and the payment are skipped).
+    const Obj* x = obj(target);
+    if (!x) return -1.0f;
+    const Obj* t = x->container != kNoObject ? obj(x->container) : nullptr;
+    const AbilityObjectDesc* td = t ? &data_->objects[t->desc] : nullptr;
+    // [inferred] a container desc without the value falls back to the member's (the port's "Team" container type may not
+    // carry its representative type's fields).
+    if (!td || td->tactical_bribe_cost < 0) td = &data_->objects[x->desc];
+    if (td->tactical_bribe_cost < 0) return -1.0f;
+    if (td->tactical_bribe_cost <= 1) return 0.0f;
+    const AbilityObjectDesc& ud = data_->objects[o.desc];
+    const bool corrupted = host_.battle_planet_corrupted && host_.battle_planet_corrupted();
+    return static_cast<float>(td->tactical_bribe_cost) * (corrupted ? ud.bribe_modifier_corrupted : ud.bribe_modifier_uncorrupted);
+}
+
+bool AbilitySystem::bribe_accepts(const Obj& o, ObjectId target) const {
+    // TacticalBribeAbilityClass +0x28 (0x5b0f70, TACTICAL_COMBAT §5.4.1). The Applicable_* / Excluded_* tags are never read.
+    // 1. a target with a model [port: a combat unit known here]; 7. not dead / a death clone (+0x3a0 & 0x40) [port: alive;
+    //    the 0x80 / 0x02 bits [M] are not modelled].
+    if (target == kNoObject || target == o.id || !combat_->has_unit(target) || !alive_unit(target)) return false;
+    const Obj* x = obj(target);
+    if (!x || x->dead) return false;
+    // 2. an enemy of the user's owner (0x39a450: the target's owner, a team member's through its container [port: the
+    //    combat owner, which change_owner keeps equal to the container's]).
+    if (!enemy(o.owner, combat_->owner(target))) return false;
+    // 3. not already converted (+0x3a2 & 0x04 [M]: the converted flag).
+    if (combat_->flags(target) & combat::kUnitConverted) return false;
+    // 4. T = the team container of a member (0x39b1a0), else the target.
+    const Obj* t = x->container != kNoObject ? obj(x->container) : nullptr;
+    if (!t) t = x;
+    const AbilityObjectDesc& td = data_->objects[t->desc];
+    const AbilityObjectDesc& xd = data_->objects[x->desc];
+    // 5. cost > 0 (c <= 1 rejects). -1 = no cost data [port]: no gate.
+    const float cost = bribe_cost(o, target);
+    if (cost >= 0.0f && !(cost > 0.0f)) return false;
+    // 6. 0x395c10(T, all categories): CategoryMask != 0 ([inferred] a container desc with mask 0 uses the member's), no
+    //    PROXIMITY_MINE, Friendly_Damage_Amount <= 0, not Is_Named_Hero ([inferred] the member's flag counts too).
+    //    [port] T +0x3a2 & 0x08 and the link block +0x150 ([M]) are not modelled.
+    uint64_t mask = td.category_mask;
+    if (mask == 0 && t != x) mask = xd.category_mask;
+    if (mask == 0) mask = combat_->data().units[combat_->desc_index(target)].category_mask;
+    if (mask == 0) return false;
+    if (td.proximity_mine || xd.proximity_mine) return false;
+    if (td.friendly_damage_amount > 0.0f) return false;
+    if (td.named_hero || xd.named_hero) return false;
+    return true;
 }
 
 bool AbilitySystem::range_ok(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const {
@@ -527,6 +580,21 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
         case C::Repair:
         case C::TacticalBribe: {  // the acting member (Team_Member_With_Ability) faces the target; animation 0x5a
             if (!alive_unit(target) || !range_ok(o, s, target)) return false;
+            if (s.cls == C::TacticalBribe) {
+                // 0x5b07c0 (TACTICAL_COMBAT §5.4.1): range (above; [port] on the target only, Must_Close_Range not
+                // modelled), the accept, then the credits: too few (or cost <= 0) -> the "cannot" event and return 1
+                // without converting [M: whether the order is consumed]; else break both stealth states, pay, convert.
+                if (!bribe_accepts(o, target)) return false;
+                const float cost = bribe_cost(o, target);  // -1: no cost data [port], free
+                if (cost >= 0.0f && (!(cost > 0.0f) || (host_.pay_credits && !host_.pay_credits(o.owner, cost)))) {
+                    event(AbilityEventKind::BribeRefused, sp.trigger, o.id, target, frame);
+                    return true;
+                }
+                // 0x3a9880 on U and X [port: break_stealth only when stealthed, so no StealthBroken event otherwise]
+                if (o.stealthed) break_stealth(o, frame);
+                if (Obj* x = obj(target))
+                    if (x->stealthed) break_stealth(*x, frame);
+            }
             sp.applied = 1;
             sp.target = target;
             uint32_t len = 0;  // animation 0x5a: its end on sim frames, else kHackFrames (§4.13)

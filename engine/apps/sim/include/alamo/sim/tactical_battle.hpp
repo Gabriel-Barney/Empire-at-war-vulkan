@@ -94,6 +94,10 @@
 #include "alamo/tactical/garrison/garrison.hpp"
 #endif
 
+namespace alamo::anim {
+struct IdleRecord;  // s78l t03 (alamo/anim/anim_behaviors.hpp)
+}  // namespace alamo::anim
+
 namespace alamo::sim {
 
 class SimAnimation;
@@ -117,6 +121,9 @@ struct BattleConfig {
     uint32_t dummy_lifetime = 900;            // [port] a Dummy_Barrage_Target is removed after this many frames at most
     float walk_speed_ratio = 0.5f;            // [port M] WALKMOVE below this x max speed (global 0x140b16d04 unknown)
     float min_move_anim_ratio = 0.1f;         // [port] move-clip speed floor (current / max speed)
+    // s78l t03 (TACTICAL_GAPS 6.2): GameConstants Unit_Presence_Relaxation_Time (GC +0x117a8), seconds an IMPOSING_PRESENCE
+    // idle record lasts (int(FPS x value) frames). [port] 3.0: the shipped XML does not set it and the default was not read.
+    float presence_relaxation_seconds = 3.0f;
     // Fog of war (docs/re/FOG_OF_WAR.md; owner: fog agent). Not in the frame CRC, never draws RNG.
     bool fog = true;
     // OI fog: overrun reveal (FOG_OF_WAR §3.3) inputs: game type (mode +0xc; only the multiplayer types 1, 2, 4
@@ -982,6 +989,14 @@ public:
     // flyers (and the bike lean); other movers 0 / 0. False (both 0) when `id` is not a mover. Const read only.
     bool unit_attitude(objects::ObjectId id, float& roll_rad, float& pitch_rad) const;
     const tactical::combat::CombatSystem& combat() const { return *combat_; }
+    // s78k t04: a TEAM container's record owner (Container::owner: loss records, replenish spawns); -1 when `id` is no
+    // container of this battle.
+    int32_t container_owner(objects::ObjectId id) const;
+    // s78k t05 test seams (ALAMO_SIM_HAVE_ANIM; without it both return false): the combat hook of slot 47 (the attack-idle
+    // pose, CombatHooks::attack_idle) on `id` with the caller's generator, and a clip play on the battle's animation world
+    // (index 0, looping, hard cut). False when the battle has no animation world or `id` has no row in it.
+    bool test_attack_idle(objects::ObjectId id, bool arg, SimRng& rng);
+    bool test_play_clip(objects::ObjectId id, int32_t clip_type);
     const tactical::abilities::AbilitySystem& abilities() const { return *abilities_; }
     tactical::abilities::AbilitySystem& abilities() { return *abilities_; }
     const BattleTables& tables() const { return *tables_; }
@@ -1153,6 +1168,7 @@ private:
     Vec3 snap_passable(Vec3 p, uint32_t passability_mask, bool always) const;  // slot_position's box clamp + cell search
     std::vector<Vec3> drop_pos_;  // a1g t04 follow-up: order_reinforce's land layout slots for deploy (transient)
     bool deploy_unload_ = false;  // s78i t02: deploy places a landing object's company (keeps the side facing; transient)
+    std::vector<Vec3> drop_face_;  // s78j t01: per member (deploy's member index), the landing unload facing (transient)
     // a1i t04 (A1_READINGS §35.2): one landing object (TransportDataPack fields in brackets).
     struct Landing {
         objects::ObjectId id = objects::kNoObjectId;
@@ -1254,7 +1270,26 @@ private:
     std::vector<std::array<float, 4>> fchase_cache_;  // per type: Guard / Idle_Chase_Range, Attack_Move_Response_Range,
                                                       // Autonomous_Move_Extension_Vs_Attacker (derived)
     std::vector<uint8_t> fchase_have_;
-    void drive_animation(SimRng& rng, uint64_t global_frame);
+    void drive_animation(objects::ObjectStore& store, SimRng& rng, uint64_t global_frame);
+    // s78l t03 (TACTICAL_COMBAT slot 47 "s78l t03", TACTICAL_GAPS 6.2): IMPOSING_PRESENCE (0x624ab0, interval 30 on the
+    // store's behaviour schedule) - idle records for the IDLE units around each presence object. `gated` = per units_
+    // index, the IDLE moving gate of this frame (drive_animation).
+    void imposing_presence(objects::ObjectStore& store, const std::vector<uint8_t>& gated);
+    // Presence_Induced_Animations (anim type + type list per entry, list order) and Presence_Range of a type; cached per
+    // type (a pure function of the type data, not saved).
+    struct PresenceTypeInfo {
+        bool parsed = false;
+        float range = 0.0f;
+        std::vector<std::pair<int32_t, std::vector<uint32_t>>> anims;
+    };
+    const PresenceTypeInfo& presence_info(uint32_t type);
+    // s78l t03: the default idle type's presence step for `unit` over its idle records (anim::IdleRecord, ascending
+    // presence id): the anim type or -1 (none).
+    int32_t presence_pick(const objects::ObjectStore& st, int32_t unit, const anim::IdleRecord* records, size_t count);
+    // s78l t02: drains MovementSystem::take_turn_clip_events after the movement tick and plays them (synced draws).
+    void play_turn_clip_events(SimRng& rng, uint64_t global_frame);
+    std::vector<PresenceTypeInfo> presence_cache_;
+    std::vector<uint8_t> idle_gate_;  // drive_animation scratch (per units_ index)
     void consume_events(TacticalMode& mode, SimRng& rng);
     void spawn_particle(TacticalMode& mode, int32_t type, Vec3 pos, int32_t owner);
     objects::ObjectHandle spawn_prop(TacticalMode& mode, int32_t type, Vec3 pos, Vec3 facing, int32_t owner);
@@ -1338,6 +1373,10 @@ private:
     std::vector<StoryGarrisonEvent> story_garrisoned_;
     std::vector<StoryCaptureEvent> story_captured_;
     void s4_owner_changed(TacticalMode& mode, objects::ObjectId id, int32_t old_owner, int32_t owner);  // change_owner()
+    // s78j t04: one object's script owner change (change_owner(), else store + trees + fog / garrison hooks), and the
+    // team spread of script_change_owner (TACTICAL_COMBAT §3.5 step 4): the container, then the other live members.
+    bool owner_change_one(TacticalMode& mode, objects::ObjectHandle h, int32_t owner);
+    void team_change_owner(TacticalMode& mode, objects::ObjectId id, int32_t owner);
     void s4_init();  // relations / neutral player of the garrison and capture systems (first registration)
     // setup; `spawned` (optional) receives the placed object (null when the spawn failed)
     bool s4_placement(TacticalMode& mode, objects::TypeIndex t, const objects::SpawnParams& sp, float health,

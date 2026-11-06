@@ -29,6 +29,7 @@ void TacticalAiConstants::load(const data::GameConstants& gc) {
     use_reinforcement_points = gc.get_bool("Use_Reinforcement_Points", use_reinforcement_points);  // S10 AI land reinforcement
     space_reinforcement_collision_check_distance =  // refixf t06
         gc.get_float("Space_Reinforcement_Collision_Check_Distance", space_reinforcement_collision_check_distance);
+    production_speed_factor = gc.get_float("Production_Speed_Factor", production_speed_factor);  // A2g t06
 }
 
 }  // namespace alamo::ai::tactical
