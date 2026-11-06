@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -28,6 +29,7 @@
 #include <vector>
 
 #include "alamo/assets/model.hpp"
+#include "alamo/materials/effect_audit.hpp"
 #include "alamo/materials/effect_loader.hpp"
 #include "alamo/materials/pso.hpp"
 #include "alamo/materials/translated.hpp"
@@ -90,10 +92,19 @@ public:
         size_t remapped = 0;   // missing names resolved to a shipped effect (LoadOptions::missing_effect_remap, opt-in)
     };
     Stats stats() const;
+    // Shader issues of the effects requested so far (docs/MODS.md shader section, materials::effect_audit.hpp):
+    // .fx source only / shadowed, load or technique failure, shader passes without a program. One set per
+    // effect name, recorded on its first get() / get_or_default(); sorted by (effect, kind). in_mod from the
+    // VFS shader listing. Translation failures are the renderer's (Renderer::shader_issues()).
+    std::vector<materials::ShaderIssue> issues() const;
 
 private:
+    void record_issues_locked(std::string_view effect, const std::string& key, const materials::MaterialEffect& m,
+                              std::string_view err);
     mutable std::mutex mutex_;
     std::unique_ptr<materials::EffectLibrary> lib_;
+    std::map<std::string, std::vector<materials::ShaderIssue>> issues_;  // effect key -> issues (ordered)
+    std::map<std::string, bool> mod_paths_;  // materials::shader_path_key -> from_mod (VFS shader listing)
     materials::EffectLoadOrder head_;  // without a file provider: the engine head only
     std::unordered_map<std::string, std::shared_ptr<const materials::MaterialEffect>> defaults_;  // D.3 per failed name
     std::unordered_map<std::string, std::shared_ptr<const materials::MaterialEffect>> map_;

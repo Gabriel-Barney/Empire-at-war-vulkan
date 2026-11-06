@@ -547,6 +547,10 @@ public:
         double translate_ms = 0;  // summed job time
     };
     TranslationStats translation_stats() const;
+    // Shader issues met so far (docs/MODS.md shader section): desc.effects->issues() plus one TranslateFailed
+    // per failed translation job (effect, path, translator / DXC message; the submesh draws unlit). Sorted by
+    // (effect, kind); a load report or debug overlay lists them. Thread-safe.
+    std::vector<materials::ShaderIssue> shader_issues() const;
     // Register images of one translated draw (what draw() uploads; tests feed them to the interpreter).
     bool translated_constants(const Instance& inst, const GpuSubmesh& g, const GpuPass& p, const ViewMatrices& view,
                               materials::VSConstants& vs, materials::PSConstants& ps, materials::IntBoolConstants* vs_ib = nullptr,
@@ -779,6 +783,7 @@ private:
         std::atomic<int> state{0};  // 0 pending, 1 ready, 2 failed
         std::shared_ptr<const materials::TranslatedProgram> tp;
         std::string error;
+        std::string effect, path;   // the effect that first asked (shader_issues())
         double ms = 0;
     };
     mutable std::mutex xlat_mutex_;

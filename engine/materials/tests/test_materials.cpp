@@ -21,6 +21,7 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/materials/constants.hpp"
 #include "alamo/materials/d3d9_state.hpp"
+#include "alamo/materials/effect_audit.hpp"
 #include "alamo/materials/effect_loader.hpp"
 #include "alamo/materials/fixed_function.hpp"
 #include "alamo/materials/fxlc.hpp"
@@ -1026,6 +1027,78 @@ void test_default_effect_and_order() {
     CHECK(lib.effect_load_rank(notech) == 0);
 }
 
+// docs/MODS.md shader section (modc t11): .fx sources, the issue record and audit_effects().
+void test_shader_issues() {
+    struct ModShaders final : FileProvider {
+        bool read(std::string_view p, std::vector<uint8_t>& out) const override {
+            const std::string n = normalize_path(p);
+            if (!exists(p)) return false;
+            if (n.size() > 3 && n.substr(n.size() - 3) == ".FX") {
+                const char* src = "technique T { pass P { } }";  // HLSL text: never parsed as an FXO
+                out.assign(src, src + std::strlen(src));
+                return true;
+            }
+            if (n == "DATA\\ART\\SHADERS\\BOTH.FXO") {
+                const uint32_t one = std::bit_cast<uint32_t>(1.0f);
+                out = make_param_fxo({0, 3, 1, 0, 0, 0, 4, 1, one, one, one, one}, 4, 32);  // parses, no technique
+                return true;
+            }
+            out = {0x01, 0x09, 0xFF, 0xFE, 0x00, 0x00, 0x00, 0x00};  // BROKEN.FXO
+            return true;
+        }
+        bool exists(std::string_view p) const override {
+            const std::string n = normalize_path(p);
+            return n == "DATA\\ART\\SHADERS\\SRCONLY.FX" || n == "DATA\\ART\\SHADERS\\BOTH.FX" ||
+                   n == "DATA\\ART\\SHADERS\\BOTH.FXO" || n == "DATA\\ART\\SHADERS\\TERRAIN\\BROKEN.FXO";
+        }
+        std::string origin(std::string_view) const override { return {}; }
+    } files;
+    EffectLibrary lib(files);
+    CHECK(!lib.find_effect_path("SrcOnly.fx") && lib.find_effect_source("SrcOnly.fx").has_value());
+    CHECK(lib.find_effect_path("Both") && lib.find_effect_source("BOTH.FXO"));
+    CHECK(!lib.find_effect_source("Broken.fx") && lib.find_effect_path("Broken.fx") == std::string("Data\\Art\\Shaders\\Terrain\\Broken.fxo"));
+    // A path naming the .fx is never read as compiled bytecode.
+    CHECK(!lib.find_effect_path("Data\\Art\\Shaders\\SrcOnly.fx"));
+    std::string err;
+    CHECK(!lib.load("Data\\Art\\Shaders\\SrcOnly.fx", &err) && err.find(".fxo") != std::string::npos);
+    // .fx only: the original compiles it; the port draws its failed-compile result (green, own name).
+    err.clear();
+    MaterialEffect so = lib.load_or_default("SrcOnly.fx", &err);
+    CHECK(so.fallback == EffectFallback::Failed && so.name == "SRCONLY" && so.path == "Data\\Art\\Shaders\\SrcOnly.fx");
+    CHECK(!err.empty() && so.passes.size() == 1 && so.passes[0].fixed_function);
+    std::vector<ShaderIssue> si = effect_load_issues(lib, "SrcOnly.fx", so, err);
+    CHECK(si.size() == 1 && si[0].kind == ShaderIssueKind::SourceOnly && si[0].effect == "SRCONLY");
+    // A missing name is not a shader issue (the original's silent green default).
+    MaterialEffect miss = lib.load_or_default("Nothing.fx", &err);
+    CHECK(miss.fallback == EffectFallback::Missing && effect_load_issues(lib, "Nothing.fx", miss, err).empty());
+
+    CHECK(std::string(shader_issue_kind_name(ShaderIssueKind::SourceOnly)) == "source_only");
+    CHECK(std::string(shader_issue_kind_name(ShaderIssueKind::UnsupportedPass)) == "unsupported_pass");
+    CHECK(shader_path_key("data/Art\\shaders\\x.fxo") == "DATA\\ART\\SHADERS\\X.FXO");
+    CHECK(host_path_under("C:/Mods/A/Data/Shaders.meg", "c:\\mods\\a") && host_path_under("C:\\Mods\\A\\x", "C:\\Mods\\A\\"));
+    CHECK(!host_path_under("C:\\Mods\\AB\\x.meg", "C:\\Mods\\A") && !host_path_under("C:\\Mods\\A", "C:\\Mods\\A") && !host_path_under("x", ""));
+
+    std::vector<ShaderFileEntry> in = {{"DATA\\ART\\SHADERS\\SRCONLY.FX", true, 0, true},
+                                       {"DATA\\ART\\SHADERS\\BOTH.FX", true, 0, true},
+                                       {"DATA\\ART\\SHADERS\\BOTH.FXO", false, 1, false},
+                                       {"DATA\\ART\\SHADERS\\TERRAIN\\BROKEN.FXO", true, 1, false}};
+    EffectAudit a = audit_effects(lib, in);
+    CHECK(a.effects == 3 && a.mod_effects == 2 && a.loaded == 0 && a.translated_passes == 0 && !a.compiled);
+    CHECK(a.issues.size() == 4);
+    if (a.issues.size() == 4) {
+        CHECK(a.issues[0].effect == "BOTH" && a.issues[0].kind == ShaderIssueKind::SourceShadowed && a.issues[0].in_mod);
+        CHECK(a.issues[1].effect == "BOTH" && a.issues[1].kind == ShaderIssueKind::NoTechnique && !a.issues[1].in_mod);
+        CHECK(a.issues[2].effect == "BROKEN" && a.issues[2].kind == ShaderIssueKind::LoadFailed && !a.issues[2].detail.empty());
+        CHECK(a.issues[3].effect == "SRCONLY" && a.issues[3].kind == ShaderIssueKind::SourceOnly && a.issues[3].in_mod);
+    }
+    CHECK(a.count(ShaderIssueKind::SourceOnly) == 1 && a.count(ShaderIssueKind::TranslateFailed) == 0);
+    std::vector<ShaderFileEntry> rev(in.rbegin(), in.rend());
+    EffectAudit b = audit_effects(lib, rev);
+    CHECK(b.issues.size() == a.issues.size());
+    for (size_t i = 0; i < a.issues.size() && i < b.issues.size(); ++i)
+        CHECK(a.issues[i].effect == b.issues[i].effect && a.issues[i].kind == b.issues[i].kind && a.issues[i].path == b.issues[i].path);
+}
+
 #ifdef ALAMO_MATERIALS_HAVE_VFS
 void test_vanilla(const char* root) {
     vfs::VfsConfig cfg;
@@ -1062,6 +1135,7 @@ void test_vanilla(const char* root) {
             continue;
         }
         ++parsed;
+        CHECK(m->skipped_technique.empty());  // every shipped best technique has programs
         for (const auto& w : m->warnings) std::printf("  warn %s: %s\n", m->name.c_str(), w.c_str());
         const bool is_phase = m->name.rfind("PHASE", 0) == 0;
         for (const auto& p : m->passes) {
@@ -1142,6 +1216,22 @@ void test_vanilla(const char* root) {
     }
     CHECK(failed == 0);
     CHECK(parsed >= 80);
+
+    // Effect audit over the shipped shaders (translation only; the sweep above compiled them): retail has
+    // no shader issue, and nothing comes from a mod.
+    {
+        const auto t0 = std::chrono::steady_clock::now();
+        EffectLibrary alib(*v, opt);
+        const std::vector<ShaderFileEntry> sf = shader_files_from_vfs(*v, true);
+        const EffectAudit au = audit_effects(alib, sf);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("  effect audit: %zu effects, %zu loaded, %zu/%zu track-B passes translate, %zu issues, %.0f ms\n", au.effects,
+                    au.loaded, au.translated_ok, au.translated_passes, au.issues.size(), ms);
+        for (const ShaderIssue& s : au.issues)
+            std::printf("    %s %s %s: %s\n", shader_issue_kind_name(s.kind), s.effect.c_str(), s.path.c_str(), s.detail.c_str());
+        CHECK(au.effects >= 80 && au.mod_effects == 0 && au.issues.empty() && au.translated_ok == au.translated_passes);
+        CHECK(sf.size() > shader_files_from_vfs(*v).size());  // + the Shaders\Engine\ files
+    }
 
     // Translated PsoKey stability: an independent library resolves identical keys and ids.
     {
@@ -1397,6 +1487,7 @@ int main() {
     test_per_draw();
     test_hardening();
     test_default_effect_and_order();
+    test_shader_issues();
     if (const char* root = std::getenv("ALAMO_FOC_DATA")) {
 #ifdef ALAMO_MATERIALS_HAVE_VFS
         test_vanilla(root);

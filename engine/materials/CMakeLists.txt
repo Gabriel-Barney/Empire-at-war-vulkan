@@ -102,6 +102,7 @@ add_library(alamo_materials STATIC
   src/fixed_function.cpp
   src/programs.cpp
   src/effect_loader.cpp
+  src/effect_audit.cpp
   src/translated.cpp
   ${_mat_headers}
 )
@@ -125,3 +126,11 @@ if(TARGET alamo_vfs)
 endif()
 alamo_shaderxlat_copy_dxc(alamo_materials_tests)  # runtime dxcompiler.dll for the translation sweep
 add_test(NAME alamo_materials_tests COMMAND alamo_materials_tests)
+
+# ---------------------------------------------------------------- effect audit tool (docs/MODS.md shader section)
+#   alamo_effect_audit <FoC dir> [MODPATH=<dir>]... [--no-dxc] [--json <file>|-]
+if(TARGET alamo_vfs)
+  add_executable(alamo_effect_audit tools/effect_audit_tool.cpp)
+  target_link_libraries(alamo_effect_audit PRIVATE alamo_materials alamo_vfs)
+  alamo_shaderxlat_copy_dxc(alamo_effect_audit)
+endif()

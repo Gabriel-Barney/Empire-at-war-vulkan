@@ -44,7 +44,33 @@ EffectCache::EffectCache(const FileProvider* files, materials::LoadOptions optio
     if (!files) return;
     lib_ = std::make_unique<materials::EffectLibrary>(*files, options);
     // D.1 effect creation order from the shader directories (a VFS; other providers: the engine head only).
-    if (const auto* v = dynamic_cast<const vfs::Vfs*>(files)) lib_->set_shader_files(materials::shader_files_from_vfs(*v));
+    if (const auto* v = dynamic_cast<const vfs::Vfs*>(files)) {
+        lib_->set_shader_files(materials::shader_files_from_vfs(*v));
+        for (const materials::ShaderFileEntry& f : materials::shader_files_from_vfs(*v, true))
+            if (f.from_mod) mod_paths_[materials::shader_path_key(f.path)] = true;
+    }
+}
+
+void EffectCache::record_issues_locked(std::string_view effect, const std::string& key, const materials::MaterialEffect& m,
+                                       std::string_view err) {
+    if (!lib_ || issues_.count(key)) return;
+    std::vector<materials::ShaderIssue> v = materials::effect_load_issues(*lib_, effect, m, err);
+    for (materials::ShaderIssue& i : v) {
+        i.in_mod = mod_paths_.count(materials::shader_path_key(i.path)) != 0;
+        if (i.kind != materials::ShaderIssueKind::SourceShadowed)
+            log::warnf("render", "effect %s: %s: %s", key.c_str(), materials::shader_issue_kind_name(i.kind), i.detail.c_str());
+    }
+    issues_.emplace(key, std::move(v));
+}
+
+std::vector<materials::ShaderIssue> EffectCache::issues() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<materials::ShaderIssue> out;
+    for (const auto& [k, v] : issues_) out.insert(out.end(), v.begin(), v.end());
+    std::stable_sort(out.begin(), out.end(), [](const materials::ShaderIssue& x, const materials::ShaderIssue& y) {
+        return x.effect != y.effect ? x.effect < y.effect : x.kind < y.kind;
+    });
+    return out;
 }
 
 uint32_t EffectCache::load_rank(const materials::MaterialEffect& e) const {
@@ -70,6 +96,7 @@ std::shared_ptr<const materials::MaterialEffect> EffectCache::get(std::string_vi
         why = "no file provider";
     }
     if (e) {
+        record_issues_locked(effect, key, *e, {});  // shadowing .fx, shader passes without a program
         ++stats_.loaded;
         if (e->used_ff_fallback) ++stats_.ff_fallback;
         for (const auto& p : e->passes) {
@@ -80,9 +107,17 @@ std::shared_ptr<const materials::MaterialEffect> EffectCache::get(std::string_vi
     } else {
         ++stats_.failed;
         // D.3: the original logs nothing for a missing file (one debug line per name here; failures are cached)
-        // and "Failed to load effect" for a file that exists but does not load.
-        if (lib_ && !lib_->find_effect_path(effect)) log::debugf("render", "effect %s: not found (%s)", key.c_str(), why.c_str());
+        // and "Failed to load effect" for a file that exists but does not load (a .fx source without a
+        // .fxo counts as one: get_or_default() records it as a shader issue).
+        if (lib_ && !lib_->find_effect_path(effect) && !lib_->find_effect_source(effect))
+            log::debugf("render", "effect %s: not found (%s)", key.c_str(), why.c_str());
         else log::warnf("render", "effect %s: %s", key.c_str(), why.c_str());
+        if (lib_ && (lib_->find_effect_path(effect) || lib_->find_effect_source(effect))) {
+            // Classified with the fallback the submesh path draws (failures only; cached per name).
+            std::string w;
+            const materials::MaterialEffect d = lib_->load_or_default(effect, &w);
+            record_issues_locked(effect, key, d, w);
+        }
         if (err) *err = why;
     }
     map_[key] = e;

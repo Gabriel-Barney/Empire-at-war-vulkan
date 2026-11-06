@@ -841,3 +841,22 @@ These saves are light scenes: they show that the tool works and what the frame l
 0 unsettled frames in all three; 17 / 6 / 17 warm-up frames. The real-time worst frame (21 ms) is a single frame in the battle
 run. Fixed-frames runs are bit-identical across runs and across MSVC / clang (same PNGs and CRC log), see the
 `alamo_game_bench_*` ctest entries.
+
+## Effect audit: shipped and mod effects (modc t11, 2026-11-06)
+
+`alamo_effect_audit` (`materials::audit_effects`, docs/MODS.md §4.1) loads every effect the shader directories ship and
+translates each track-B pass, MSVC Release, cold shader cache, single thread. With DXC every pass is also compiled to SPIR-V
+(no disk cache: the cost of a first run with a new mod).
+
+| Set | Effects (from the mod) | Track-B passes | Translate only (materials test) | Translate + DXC |
+|---|---|---|---|---|
+| base FoC | 82 (0) | 46 | 19-22 ms | 1.29 s |
+| Thrawn's Revenge 1125571106 | 85 (84) | 51 | | 1.42 s |
+| 1770851727 | 93 (93) | 56 | | 1.63 s |
+| Fall of the Republic 1976399102 | 86 (85) | 51 | | 1.40 s |
+| 2858787558 | 88 (55) | 51 | | 1.49 s |
+| Thrawn's Revenge copy 3622043265 | 86 (85) | 51 | | 1.44 s |
+
+About 28 ms of DXC per pass; parsing and translating the effects is negligible. The renderer does the same work lazily per drawn
+effect on background jobs, cached on disk after the first run (`shaderxlat::ShaderCache`), so a mod adds about 1.5 s of
+translation once, spread over its first frames.

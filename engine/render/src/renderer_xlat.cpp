@@ -71,6 +71,10 @@ const materials::TranslatedProgram* Renderer::translated_program_impl(const std:
         if (slot) return slot->state.load() == 1 ? slot->tp.get() : nullptr;
         slot = std::make_unique<XlatEntry>();
         e = slot.get();
+        if (effect) {
+            e->effect = effect->name;
+            e->path = effect->path;
+        }
     }
     if (instanced) {  // the translation inputs of the pass with the instanced options (kept alive by the job)
         inst_pass = std::make_shared<materials::ResolvedPass>();
@@ -122,6 +126,32 @@ Renderer::TranslationStats Renderer::translation_stats() const {
         s.translate_ms += e->ms;
     }
     return s;
+}
+
+std::vector<materials::ShaderIssue> Renderer::shader_issues() const {
+    std::vector<materials::ShaderIssue> out;
+    if (desc_.effects) out = desc_.effects->issues();
+    std::vector<materials::ShaderIssue> failed;
+    {
+        std::lock_guard<std::mutex> lock(xlat_mutex_);
+        for (const auto& [k, e] : xlat_)
+            if (e->state.load() == 2) failed.push_back({materials::ShaderIssueKind::TranslateFailed, e->effect, e->path, false, e->error});
+    }
+    // xlat_ is hashed: order by content, drop the instanced / cbuffer twins of one failure.
+    auto less = [](const materials::ShaderIssue& x, const materials::ShaderIssue& y) {
+        if (x.effect != y.effect) return x.effect < y.effect;
+        if (x.kind != y.kind) return x.kind < y.kind;
+        return x.detail < y.detail;
+    };
+    std::sort(failed.begin(), failed.end(), less);
+    failed.erase(std::unique(failed.begin(), failed.end(),
+                             [](const materials::ShaderIssue& x, const materials::ShaderIssue& y) {
+                                 return x.effect == y.effect && x.detail == y.detail;
+                             }),
+                 failed.end());
+    out.insert(out.end(), failed.begin(), failed.end());
+    std::stable_sort(out.begin(), out.end(), less);
+    return out;
 }
 
 materials::PsoKey Renderer::translated_key(const GpuSubmesh& g, const GpuPass& p, const materials::TranslatedProgram& tp,
