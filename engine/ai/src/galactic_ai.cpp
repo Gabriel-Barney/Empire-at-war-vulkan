@@ -1231,6 +1231,25 @@ bool GalacticAiWorld::Impl::step_status(StatusRec& s) {
                 decide(tf.player, "tf " + tf.name + " leaves " + std::to_string(drop.size()) + " immobile units");
                 return true;
             }
+            // READY_TO_MERGE -> DO_TASK_FORCE_MERGE / JOIN_TASK_FORCE (A2K_T08_RE_ANSWERS Q2.3 step 4) [H: only fleets
+            // holding TF members merge, op 3 into the TF fleet]: at the stage each member's stationary fleet merges into
+            // the fleet of the first member there (member order). Arrival no longer merges (GalacticSim::arrive, Q1), so
+            // this is what keeps the gathered force one fleet for Move_To. [port] Unit-wise, like Form_Units.
+            {
+                uint32_t dst = gal::kNoFleet;
+                for (const ObjectHandle u : tf.units) {
+                    const uint32_t f = fleet_of_unit(u);
+                    if (f == gal::kNoFleet || sim.fleets()[f].moving || sim.fleets()[f].planet != stage) continue;
+                    if (dst == gal::kNoFleet) {
+                        dst = f;
+                        continue;
+                    }
+                    if (f == dst || !sim.fleets()[dst].alive) continue;
+                    fleet_op(tf.player, gal::kFleetMerge, static_cast<uint32_t>(store.id(sim.fleets()[dst].object)),
+                             static_cast<uint32_t>(store.id(sim.fleets()[f].object)), static_cast<uint32_t>(store.id(u)),
+                             "merge " + std::to_string(store.id(u)) + " at " + planet_name(stage));
+                }
+            }
             if (all_there) return finish(true);
             return false;  // [H] no time-out in the build FSM
         }
