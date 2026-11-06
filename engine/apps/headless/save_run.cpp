@@ -954,6 +954,24 @@ int save_mode(Harness& hz, const SaveRunOptions& opt) {
                : 1;
 }
 
+// The harness that rebuilds the session a save's descriptor describes (--load, BM1 open_save_source).
+std::unique_ptr<Harness> harness_for_save(const sim::SessionDescriptor& d, const std::string& game_dir,
+                                          const std::vector<std::string>& game_args, bool& skip, std::string& err) {
+    // The session kind decides the builder; a galactic save names its campaign.
+    const std::string kind = d.kind == "synthetic" && d.option("story") == "0" ? std::string("synthetic-nostory") : d.kind;
+    HarnessOptions ho;  // N1 stage 2: the session options the save recorded
+    ho.campaign = d.campaign;
+    ho.game_dir = game_dir;
+    ho.game_args = game_args.empty() ? d.data_args : game_args;
+    if (d.kind == "hotm" || d.kind == "galactic") {
+        ho.battles = d.option("battles").empty() ? std::string("auto") : d.option("battles");
+        ho.story = d.option("story") == "1";
+    }
+    ho.anim = d.option("anim") == "1";
+    if (d.kind == "skirmish") ho.map = d.option("map");
+    return make_harness(kind, ho, skip, err);
+}
+
 // --load FILE [--ticks K] [--crc-out F] [--replay F] [--record-orders F]
 int load_mode(const SaveRunOptions& opt) {
     std::string err;
@@ -969,20 +987,8 @@ int load_mode(const SaveRunOptions& opt) {
     }
     std::printf("load: %s (tick %" PRIu64 "): %s session '%s', seed %u, written by %s\n", opt.load_file.c_str(), save.tick, d.kind.c_str(),
                 d.campaign.c_str(), d.seed, d.writer.c_str());
-    // The session kind decides the builder; a galactic save names its campaign.
-    const std::string kind = d.kind == "synthetic" && d.option("story") == "0" ? std::string("synthetic-nostory") : d.kind;
     bool skip = false;
-    HarnessOptions ho;  // N1 stage 2: the session options the save recorded
-    ho.campaign = d.campaign;
-    ho.game_dir = opt.game_dir;
-    ho.game_args = opt.game_args.empty() ? d.data_args : opt.game_args;
-    if (d.kind == "hotm" || d.kind == "galactic") {
-        ho.battles = d.option("battles").empty() ? std::string("auto") : d.option("battles");
-        ho.story = d.option("story") == "1";
-    }
-    ho.anim = d.option("anim") == "1";
-    if (d.kind == "skirmish") ho.map = d.option("map");
-    auto hz = make_harness(kind, ho, skip, err);
+    auto hz = harness_for_save(d, opt.game_dir, opt.game_args, skip, err);
     if (!hz) {
         std::printf("load: %s%s\n", err.c_str(), skip ? ": skipped" : "");
         return skip ? 0 : 1;
@@ -1218,6 +1224,84 @@ int check_mode(Harness& hz, const SaveRunOptions& opt) {
 }
 
 }  // namespace
+
+// ------------------------------------------------------------------------------------------------- BM1 benchmark
+namespace {
+
+class LoadedSessionImpl final : public LoadedSession {
+public:
+    explicit LoadedSessionImpl(std::unique_ptr<Session> s) : s_(std::move(s)) {}
+    bool tick(std::string& err) override { return run_ticks(*s_, 1, err); }
+    const CrcLog& crc_log() const override { return s_->host->crc_log(); }
+    uint64_t frame() const override { return s_->host->frame(); }
+    size_t replay_failures() const override { return s_->host->pipeline().replay_failures(); }
+    uint32_t worker_count() const override { return s_->js->worker_count(); }
+
+private:
+    std::unique_ptr<Session> s_;
+};
+
+// The harness (game data, AI data) outlives every session it built: sessions are destroyed before the source.
+class SaveSessionSourceImpl final : public SaveSessionSource {
+public:
+    SaveFile save;
+    sim::SessionDescriptor d;
+    std::unique_ptr<Harness> hz;
+    commands::SavePoint at;
+
+    uint64_t save_tick() const override { return save.tick; }
+    std::string describe() const override {
+        const std::string map = d.option("map");
+        return d.kind + " '" + d.campaign + "' seed " + std::to_string(d.seed) + (map.empty() ? std::string() : " map " + map);
+    }
+    std::unique_ptr<LoadedSession> load(int32_t workers, const commands::CommandRecording* replay, commands::CommandRecording* record,
+                                        std::string& err) override {
+        auto s = hz->build(d.seed, workers, err);
+        if (!s) return nullptr;
+        sim::LoadReport rep;
+        if (!s->host->load(save, &err, &rep)) {
+            err = "load refused: " + err + " (" + rep.text() + ")";
+            return nullptr;
+        }
+        if (replay && !s->host->replay_after_load(replay, at, &err)) {
+            err = "replay refused: " + err;
+            return nullptr;
+        }
+        if (record) s->host->record_after_load(record, at);
+        return std::make_unique<LoadedSessionImpl>(std::move(s));
+    }
+};
+
+}  // namespace
+
+int open_save_source(const std::string& save_path, const std::string& game_dir, const std::vector<std::string>& game_args,
+                     std::unique_ptr<SaveSessionSource>& out, std::string& err) {
+    auto src = std::make_unique<SaveSessionSourceImpl>();
+    if (!SaveFile::read_file(save_path, src->save, &err) || !sim::read_session(src->save, src->d, &err)) return -1;
+    bool skip = false;
+    src->hz = harness_for_save(src->d, game_dir, game_args, skip, err);
+    if (!src->hz) return skip ? 0 : -1;
+    src->at = save_point(src->save);
+    out = std::move(src);
+    return 1;
+}
+
+int make_save(const SaveRunOptions& opt, uint64_t& saved_tick, std::string& err) {
+    bool skip = false;
+    auto hz = make_harness(opt.session, harness_options(opt), skip, err);
+    if (!hz) return skip ? 0 : -1;
+    auto s = hz->build(opt.seed, opt.workers, err);
+    if (!s) return -1;
+    // The game-data folder is informational (never compared on load) but would make the save's bytes, and so the scenario
+    // version, depend on where this machine installed the game: a checked-in benchmark save does not record it.
+    sim::SessionDescriptor d = s->host->session();
+    d.data_root.clear();
+    s->host->set_session(std::move(d));
+    SaveFile save;
+    if (!run_to_save(*s, opt.save_at, opt.save_when, save, err) || !save.write_file(opt.save_file, &err)) return -1;
+    saved_tick = save.tick;
+    return 1;
+}
 
 int save_run(const SaveRunOptions& opt) {
     if (!opt.load_file.empty() && !opt.check) return load_mode(opt);

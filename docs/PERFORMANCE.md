@@ -805,3 +805,20 @@ wall, 250 ms of Lua thread time, mostly parsing the PG libraries in every plan V
 VFS read, parse, render-vertex packing the sim does not need), and serial steps such as the skirmish's `bt_place_forces` (about 25 ms,
 per-object stamps in RNG order). Getting under 33.3 ms needs setup spread over several ticks or prepared before the battle (moves goldens),
 or a sim-only model load (positions, indices and skeleton only). The second battle tick (first perception, 8-11 ms) is unchanged.
+
+## Benchmark scenario: first numbers (BM1, 2026-11-06)
+
+`alamo_headless --bench tests/benchmark/space_battle.abench` (docs/PHASE4.md "BM - repeatable benchmark"): the FoC `_MP_SPACE_KUAT`
+AI-vs-AI space battle with 20 ships a side, 1800 ticks from its tick-300 save, sim only. Reference PC (Ryzen 7 7800X3D, 16 threads).
+**All of these were taken while other lanes built and tested on the same machine (CPU at 95-100 %), so every one is flagged `noisy`
+and none is a baseline.** They show what the tool reports, not the engine's speed.
+
+| Run | Workers | Median tick | p99 | Worst | Mean |
+|---|---|---|---|---|---|
+| MSVC, ctest worker-count entry | 0 | 1.36 ms | 4.2 ms | 62 ms | 1.57 ms |
+| clang, ctest worker-count entry | 0 | 1.24 ms | 9.3 ms | 37 ms | 1.59 ms |
+| MSVC, `--bench` 1 warm-up + 3 runs | 15 (auto) | 1.71 ms (pooled) | 528 ms | 1068 ms | 39.6 ms |
+
+The last row is the reason for the noisy flag: its three timed runs took 161 s, 48 s and 4.7 s for the same 1800 ticks with identical
+CRCs; the 4.7 s run (mean 2.6 ms) is the closest to an idle machine. Fully loaded, 15 workers lose badly to 0 (mean 12 ms vs 1.6 ms in
+the worker-count entries), because every tick waits on workers the OS does not schedule. A quiet-machine baseline is open on the roadmap.
