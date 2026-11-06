@@ -89,6 +89,109 @@ static double eval_text(const char* text, const MapResolver& r, bool* ok = nullp
     return res.value;
 }
 
+// In-memory provider (path keys normalised like the VFS).
+class MemFiles final : public FileProvider {
+public:
+    std::map<std::string, std::string> files;
+    void put(std::string_view path, std::string text) { files[normalize_path(path)] = std::move(text); }
+    bool read(std::string_view path, std::vector<uint8_t>& out) const override {
+        out.clear();
+        const auto it = files.find(normalize_path(path));
+        if (it == files.end()) return false;
+        out.assign(it->second.begin(), it->second.end());
+        return true;
+    }
+    bool exists(std::string_view path) const override { return files.count(normalize_path(path)) != 0; }
+    std::string origin(std::string_view path) const override { return exists(path) ? "mem" : ""; }
+};
+
+// A2J t07 (docs/re/A2J_T07_LITERALS.md §1): the literal converters read the data enum files (mods may add values).
+static void test_enum_literal_files() {
+    // Built-in table: no file read.
+    {
+        const EnumLiteralTable& b = EnumLiteralTable::builtin();
+        EnumLiteral lit;
+        CHECK(b.has("GameObjectCategoryType") && !b.from_file("GameObjectCategoryType"));
+        CHECK(!b.has("SurfaceFXTriggerType"));  // no built-in table: absent until its file is read
+        CHECK(b.convert("GameObjectCategoryType", "Mod_Walker", lit) == EnumLiteralError::Unconvertible);
+        CHECK(b.convert("AIGoalCategoryType", "Mod_Goal", lit) == EnumLiteralError::Unconvertible);
+    }
+    MemFiles mf;
+    mf.put("Data\\XML\\Enum\\GameObjectCategoryType.xml",
+           "<?xml version=\"1.0\"?>\n<EnumDefinition>\n<!-- c -->\n<Fighter>1</Fighter>\n<Bomber> 0x2 </Bomber>\n"
+           "<Capital>20</Capital>\n<Mod_Walker>8000000000</Mod_Walker>\n</EnumDefinition>\n");
+    mf.put("Data\\XML\\Enum\\AIGoalCategoryType.xml",
+           "<?xml version=\"1.0\"?>\n<EnumDefinition>\n<Offensive> 0 </Offensive>\n<MajorItem> 11 </MajorItem>\n"
+           "<Mod_Goal> 19 </Mod_Goal>\n<Unnumbered></Unnumbered>\n</EnumDefinition>\n");
+    mf.put("Data\\XML\\Enum\\SurfaceFXTriggerType.xml",
+           "<?xml version=\"1.0\"?>\n<EnumDefinition>\n<A>0</A>\n<B>1</B>\n<A>2</A>\n</EnumDefinition>\n");  // duplicate
+    {
+        EnumLiteralTable t;
+        std::vector<std::string> diag;
+        t.load(mf, &diag);
+        EnumLiteral lit;
+        CHECK(t.from_file("GameObjectCategoryType") && t.from_file("aigoalcategorytype"));
+        // Bitfield values are hex (sscanf %llx): "20" = 0x20, "8000000000" = 2^39.
+        CHECK(t.convert("GameObjectCategoryType", "Capital | Mod_Walker", lit) == EnumLiteralError::None &&
+              lit.value == static_cast<int64_t>(0x8000000020ull) && lit.names.size() == 2);
+        // The file replaces the built-in table: a vanilla name the mod file dropped no longer converts.
+        CHECK(t.convert("GameObjectCategoryType", "Infantry", lit) == EnumLiteralError::Unconvertible);
+        CHECK(t.convert("AIGoalCategoryType", "mod_goal", lit) == EnumLiteralError::None && lit.value == 19);
+        CHECK(t.convert("AIGoalCategoryType", "Unnumbered", lit) == EnumLiteralError::None && lit.value == 3);  // index
+        CHECK(t.convert("AIGoalCategoryType", "Hero", lit) == EnumLiteralError::Unconvertible);
+        // Missing files keep the built-in tables; static converters are unaffected.
+        CHECK(!t.from_file("GameObjectPropertiesType") &&
+              t.convert("GameObjectPropertiesType", "Turret", lit) == EnumLiteralError::None && lit.value == 0x4);
+        CHECK(t.convert("DifficultyLevelType", "Hard", lit) == EnumLiteralError::None && lit.value == 2);
+        // A duplicate entry discards the converter: it exists, every literal of it fails.
+        CHECK(t.has("SurfaceFXTriggerType") && t.convert("SurfaceFXTriggerType", "B", lit) == EnumLiteralError::Unconvertible);
+        bool dup = false;
+        for (const std::string& d : diag) dup = dup || d.find("SurfaceFXTriggerType") != std::string::npos;
+        CHECK(dup && diag.size() == 1);
+    }
+    // load_equation_files builds with the data table; a set given a table keeps it.
+    mf.put("Data\\XML\\AI\\PerceptualEquations\\Mod.xml",
+           "<?xml version=\"1.0\"?>\n<Equations>\n"
+           "<Walkers> Variable_Target.EnemyForce.SpaceTotal {Parameter_Category = GameObjectCategoryType[Mod_Walker]} </Walkers>\n"
+           "<Goals> Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[Mod_Goal]} </Goals>\n</Equations>\n");
+    const std::vector<std::string> paths = {"Data\\XML\\AI\\PerceptualEquations\\Mod.xml"};
+    {
+        EquationSet set;
+        const LoadReport rep = load_equation_files(mf, paths, set);
+        CHECK(rep.equations == 2 && rep.parse_errors == 0 && set.has_enum_literals());
+        const uint32_t w = set.find("Walkers");
+        CHECK(w != kUnresolved && set.equation(w).expr.params.size() == 1 &&
+              set.equation(w).expr.params[0].value.enum_value == static_cast<int64_t>(0x8000000000ull));
+        bool dup_msg = false;
+        for (const std::string& m : rep.messages) dup_msg = dup_msg || m.find("SurfaceFXTriggerType") != std::string::npos;
+        CHECK(dup_msg);
+    }
+    {
+        EquationSet set;
+        set.set_enum_literals(std::shared_ptr<const EnumLiteralTable>(&EnumLiteralTable::builtin(), [](const EnumLiteralTable*) {}));
+        const LoadReport rep = load_equation_files(mf, paths, set);
+        CHECK(rep.equations == 2 && rep.parse_errors == 2 && set.find("Walkers") == kUnresolved);
+    }
+    {
+        MemFiles vanilla;  // no enum files: built-in tables, the mod names fail
+        vanilla.files = mf.files;
+        vanilla.files.erase(normalize_path("Data\\XML\\Enum\\GameObjectCategoryType.xml"));
+        vanilla.files.erase(normalize_path("Data\\XML\\Enum\\AIGoalCategoryType.xml"));
+        EquationSet set;
+        const LoadReport rep = load_equation_files(vanilla, paths, set);
+        CHECK(rep.parse_errors == 2);
+    }
+    // parse_expression with an explicit table.
+    {
+        EnumLiteralTable t;
+        t.load(mf);
+        TokenTable tok;
+        Expression x;
+        CHECK(parse_expression("Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[Mod_Goal]}", tok, x, nullptr, &t));
+        CHECK(!parse_expression("Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[Mod_Goal]}", tok, x));
+    }
+}
+
 static void test_language() {
     MapResolver r;
     r.values["Variable_Target.EnemyForce.SpaceTotal"] = 0.25;
@@ -850,6 +953,15 @@ static void real_data(const std::string& root, const char* label, bool foc) {
                 rep.unresolved_functions);
     CHECK(rep.files >= 10 && rep.files_failed == 0);
     CHECK(rep.parse_errors == 0);
+    // A2J t07: the literal converters came from the shipped Data\XML\Enum files.
+    CHECK(set.enum_literals().from_file("GameObjectCategoryType") && set.enum_literals().from_file("AIGoalCategoryType") &&
+          set.enum_literals().from_file("GameObjectPropertiesType"));
+    {
+        EnumLiteral lit;
+        CHECK(set.enum_literals().convert("GameObjectCategoryType", "Infantry | Hero", lit) == EnumLiteralError::None &&
+              lit.value == (0x80 | 0x6400000));
+        CHECK(set.enum_literals().convert("AIGoalCategoryType", "MajorItem", lit) == EnumLiteralError::None && lit.value == 11);
+    }
     CHECK(rep.equations >= 200);
     // Coverage against the galactic resolver.
     GalacticSnapshot dummy = make_synthetic_snapshot(1, 1, 1);
@@ -967,6 +1079,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i)
         if (std::string(argv[i]) == "--write-golden") write_golden = true;
     test_language();
+    test_enum_literal_files();
     test_hand_cases();
     test_visibility_levels();
     test_determinism(write_golden);
