@@ -41,6 +41,24 @@ std::vector<PlanetIndex> ai_reach_flood(const galactic::PlanetGraph& graph, cons
                                         std::span<const PlanetIndex> starts, int m,
                                         std::vector<uint8_t>* reached = nullptr);
 
+// A2k t02 (A2K_T02_RE_ANSWERS Q1(b), A2K_T08_RE_ANSWERS Q3.3) [H]: the per-target source list of the target's
+// PlanetReachabilityClass (0x665160 -> flood 0x3f12e0 with destination = `target`) at AI level m in 0..5. Returns the
+// planets held by the mover or an ally (view.held_by_ally, 0x4ad9f0) in breadth-first pop order:
+//   * flag 4 clear (m <= 1) and the target not held -> empty;
+//   * target held (and, with flag 2 clear, passing the danger test) -> one BFS from the target;
+//   * otherwise one BFS from each neighbour of the target in edge order (ascending planet index) that is not yet
+//     visited and passes, with the visited marks shared; a neighbour that fails is marked visited. The run with
+//     strictly the most held planets is kept (the first wins ties). The target itself is not marked first.
+// BFS: the start is marked visited; each popped planet that is held is emitted; its unvisited neighbours (edge order)
+// are marked visited and queued when they pass. Pass (0x3f2400): an AI mover (has_ai_system, not human) needs the
+// planet revealed; then passable for the player (0x3f2510) -> flag 2, or corrupted with Benefits_From_Corruption, or
+// not dangerous; impassable -> flag 3 and (not dangerous or corrupted with the benefit). [M] the level-4 "keep all"
+// flag of the flood is not modelled (the stage at level 4 is the target itself and never reads the list).
+// Node order (0x3f1c10): the GOM planet list = FindPlanet.Get_All_Planets order. `rank[p]` = p's position in that
+// order (sized to the graph); adjacency is walked in ascending rank. Empty rank = ascending planet index.
+std::vector<PlanetIndex> ai_stage_flood(const galactic::PlanetGraph& graph, const galactic::PlayerView& view,
+                                        PlanetIndex target, int m, std::span<const uint32_t> rank = {});
+
 // 0x691250: wrapping int32 sum of hop_weights[0 .. min(1000, path_size - 1)); -1 for an empty path.
 int32_t free_store_path_sum(std::span<const uint32_t> hop_weights, size_t path_size);
 // 0x6913a0 with the move's threshold (field +0x60 read as a float; mode 0 -> 0.0f).

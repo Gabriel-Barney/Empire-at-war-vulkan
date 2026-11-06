@@ -106,6 +106,22 @@ void test_contrast_parse() {
         CHECK(t.contrast(0, "X", 2 | 1) == 0.25f);  // Bomber listed before Fighter
         CHECK(t.contrast(1, "some_unit", 0) == 2.5f);  // type-name entry, case-insensitive
         CHECK(t.contrast(1, "Other", 2) == 0.0f);
+        // A2k t02: the AI weight 0x5f1f90 (mean of the matching weights != 1.0; 1.0 if only 1.0 entries match; 0 none).
+        CHECK(t.ai_weight(0, "X", 4) == 4.0f);
+        CHECK(t.ai_weight(0, "X", 2 | 1) == 0.25f);       // Bomber 0.25 + Fighter 1.0 match: mean of {0.25}
+        CHECK(t.ai_weight(0, "X", 4 | 2 | 1) == 2.125f);  // mean of {4.0, 0.25}
+        CHECK(t.ai_weight(0, "X", 1) == 1.0f);            // only the 1.0 entry matches
+        CHECK(t.ai_weight(0, "X", 8) == 0.0f);
+        CHECK(t.ai_weight(1, "some_unit", 1) == 2.5f);    // an exact type entry returns its weight at once
+        CHECK(t.ai_weight(1, "Other", 2) == 0.0f && t.ai_weight(5, "X", 1) == 0.0f);
+    }
+    {  // Kedalbe (Capital | AntiFrigate) against the shipped Frigate row (A2K_T02_RE_ANSWERS Q2(b)): 3.0, not the first 1.0
+        ContrastTable k;
+        ContrastRow r;
+        r.friendly = {{"AntiFrigate", 0x10, 3.0f}, {"Corvette", 0x20, 0.5f}, {"Fighter", 0x1, 1.0f}, {"Capital", 0x2, 1.0f}};
+        k.rows = {r};
+        CHECK(k.ai_weight(0, "Kedalbe_Battleship", 0x2 | 0x10) == 3.0f);
+        CHECK(k.ai_weight(0, "Kedalbe_Battleship", 0x2) == 1.0f && k.contrast(0, "Kedalbe_Battleship", 0x2) == 1.0f);
     }
 }
 

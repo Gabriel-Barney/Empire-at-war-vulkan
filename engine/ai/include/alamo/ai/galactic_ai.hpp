@@ -226,9 +226,13 @@ public:
     // next = 0). Empty for a non-AI player, an unknown planet or no path; src == dst gives [src, src].
     std::vector<PlanetIndex> path(int32_t player, PlanetIndex from, PlanetIndex to);
     const AiPathFinder* path_finder(int32_t player) const;  // null for non-AI players
-    // Lua _FindStageArea(player, planet) (A2k t02): the player's own planet starting its cheapest all-pairs path to
-    // `target` (cheapest_stage); the fewest-hops planet while the finder is not created. kInvalidPlanet when none.
-    PlanetIndex stage_area(int32_t player, PlanetIndex target) const;
+    // Lua _FindStageArea(player, planet, tf) (A2k t02, A2K_T02_RE_ANSWERS Q1) at AI level `level` (the TF's goal
+    // Reachability; 0 without a TF): the first planet held by the player or an ally in the target's per-target
+    // reachability list (ai_stage_flood, cached 10 s per target and level); the target at level 4; kInvalidPlanet
+    // (nil) for level > 5, an empty list or a non-AI player.
+    PlanetIndex stage_area(int32_t player, PlanetIndex target, int level);
+    // The per-target list itself (copy; empty for a non-AI player or level outside 0..5).
+    std::vector<PlanetIndex> stage_list(int32_t player, PlanetIndex target, int level);
     // The same queries for Lua Find_Path / hosts (lives as long as this object), but WITHOUT lazy creation: false for a
     // player whose finder is not created. Attached to this world's own LuaPlayerWorld at construction and to the story
     // world by attach_story_world (detached again on replacement and in the destructor).

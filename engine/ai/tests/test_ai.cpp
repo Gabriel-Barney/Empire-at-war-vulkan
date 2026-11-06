@@ -21,6 +21,7 @@
 #include <thread>
 #include <vector>
 
+#include "alamo/ai/ai_free_store_path.hpp"
 #include "alamo/ai/ai_path_finder.hpp"
 #include "alamo/ai/galactic_perception.hpp"
 #include "alamo/ai/galactic_seed.hpp"
@@ -781,52 +782,64 @@ static void test_path_finder_costs_and_fog() {
     CHECK(zf.weight(D, B) == hop(50.0f) && zf.weight(B, D) == hop(30.0f));
 }
 
-// A2k t02: the Lua _FindStageArea stage (cheapest_stage). S1(0,0) - X1(50,0) - T(100,50) and S2(0,100) - X2(50,100) - T,
-// free hop <= 75, so both owned candidates are 2 hops from T and S1 has the lower row (the former fewest-hops stage).
-// Node costs X1 = 5, X2 = 1: W[S2][T] < W[S1][T], so the stage is S2 and Find_Path(stage, T) avoids X1 (HotM: the
-// Underworld's Corellia path through Naboo / Tatooine instead of Kashyyyk / Kuat). The pick follows the matrices.
-static void test_path_finder_cheapest_stage() {
+// A2k t02: the per-target stage flood (ai_stage_flood, A2K_T02_RE_ANSWERS Q1(b)). Line A(0) - B(1) - T(2) - C(3) - D(4),
+// 50 apart, free hop <= 75. Default view: a player without an AI system, every planet visible, non-held planets are
+// enemy-owned (passable only at level 5).
+static void test_ai_stage_flood() {
     GalaxyMap m;
     m.campaign_name = "ai_stage";
     m.max_fleet_move_distance = 75.0f;
-    const float xy[5][2] = {{0.0f, 0.0f}, {0.0f, 100.0f}, {50.0f, 0.0f}, {50.0f, 100.0f}, {100.0f, 50.0f}};
     for (uint32_t i = 0; i < 5; ++i) {
         const auto p = m.planets.add("P" + std::to_string(i));
         m.planets.flags[p] = kPlanetHasPlanetBehavior;
-        m.planets.position[p] = {xy[i][0], xy[i][1], 0.0f};
+        m.planets.position[p] = {50.0f * static_cast<float>(i), 0.0f, 0.0f};
     }
     const galactic::PlanetGraph g = galactic::PlanetGraph::build(m);
-    const PlanetIndex S1 = 0, S2 = 1, X1 = 2, X2 = 3, T = 4;
-    const std::vector<PlanetIndex> own{S1, S2};
-    AiPathFinder none;
-    CHECK(cheapest_stage(none, own, T) == kInvalidPlanet);  // no matrix yet
-    std::vector<double> nv(5, 0.0);
-    nv[X1] = 500.0;
-    nv[X2] = 100.0;
-    AiPathFinder f;
-    f.create(g, ai_path_input(nv, nullptr, true, false), 0, 0, 1);
-    CHECK(f.path(S1, T) == (std::vector<PlanetIndex>{S1, X1, T}) && f.path(S2, T) == (std::vector<PlanetIndex>{S2, X2, T}));
-    CHECK(f.weight(S2, T) < f.weight(S1, T));
-    CHECK(cheapest_stage(f, own, T) == S2);
-    CHECK(cheapest_stage(f, own, S1) == S1);                                  // an owned target: itself (W = 0)
-    CHECK(cheapest_stage(f, std::vector<PlanetIndex>{S1}, T) == S1);          // the only candidate
-    CHECK(cheapest_stage(f, std::vector<PlanetIndex>{}, T) == kInvalidPlanet);
-    // Equal weights: the first candidate (row order) wins.
-    AiPathFinder eq;
-    eq.create(g, ai_path_input(std::vector<double>(5, 0.0), nullptr, true, false), 0, 0, 1);
-    CHECK(eq.weight(S1, T) == eq.weight(S2, T) && cheapest_stage(eq, own, T) == S1);
-    // The costs swap: so does the stage.
-    nv[X1] = 100.0;
-    nv[X2] = 500.0;
-    AiPathFinder sw;
-    sw.create(g, ai_path_input(nv, nullptr, true, false), 0, 0, 1);
-    CHECK(cheapest_stage(sw, own, T) == S1);
-    // Unreachable candidates are skipped: X2 unrevealed for a non-human AI cuts S2 off.
-    galactic::Bitset revealed(5, true);
-    revealed.set(X2, false);
-    AiPathFinder fog;
-    fog.create(g, ai_path_input(std::vector<double>(5, 0.0), &revealed, true, false), 0, 0, 1);
-    CHECK(fog.weight(S2, T) == galactic::kUnlinked && cheapest_stage(fog, std::vector<PlanetIndex>{S2, S1}, T) == S1);
+    const PlanetIndex A = 0, B = 1, T = 2, C = 3, D = 4;
+    auto view_of = [](std::initializer_list<PlanetIndex> held) {
+        galactic::PlayerView v;
+        v.held_by_ally = galactic::Bitset(5);
+        for (const PlanetIndex p : held) v.held_by_ally.set(p, true);
+        return v;
+    };
+    using L = std::vector<PlanetIndex>;
+    {  // Target not held, level 5: BFS from T's first neighbour B (pop order B, A, T, C, D): A before C although C is
+       // one hop from T (hops are counted from the neighbour, not from the target).
+        const galactic::PlayerView v = view_of({A, C});
+        CHECK(ai_stage_flood(g, v, T, 5) == (L{A, C}));
+        CHECK(ai_stage_flood(g, v, T, 0).empty() && ai_stage_flood(g, v, T, 1).empty());  // flag 4 clear: target not held
+        CHECK(ai_stage_flood(g, v, 9, 5).empty());                                       // not a node
+    }
+    {  // Target held: one BFS from the target, the target first (levels 0 and 5).
+        const galactic::PlayerView v = view_of({T, A, D, B});
+        CHECK(ai_stage_flood(g, v, T, 5) == (L{T, B, A, D}));
+        CHECK(ai_stage_flood(g, v, T, 0) == (L{T, B, A}));  // Friendly_Only: C (enemy) does not pass, so D is cut off
+    }
+    {  // Level 2 (Enemy_destination): only held planets pass; the run with strictly the most held planets is kept.
+        CHECK(ai_stage_flood(g, view_of({B, C, D}), T, 2) == (L{C, D}));  // B's run [B] < C's run [C, D]
+        CHECK(ai_stage_flood(g, view_of({B, C}), T, 2) == (L{B}));        // a tie: the first neighbour wins
+        CHECK(ai_stage_flood(g, view_of({A}), T, 2).empty());             // no passable neighbour
+    }
+    {  // Danger (flag 2 clear at level 2): a dangerous held neighbour fails unless corrupted with the benefit.
+        galactic::PlayerView v = view_of({B, C});
+        v.dangerous = galactic::Bitset(5);
+        v.dangerous.set(B, true);
+        CHECK(ai_stage_flood(g, v, T, 2) == (L{C}));
+        CHECK(ai_stage_flood(g, v, T, 5) == (L{B, C}));  // level 5 skips the danger test
+        v.corrupted = galactic::Bitset(5);
+        v.corrupted.set(B, true);
+        v.benefits_from_corruption = true;
+        CHECK(ai_stage_flood(g, v, T, 2) == (L{B}));
+    }
+    {  // Fog: an AI player (not human) never enters an unrevealed planet (B is marked visited and skipped).
+        galactic::PlayerView v = view_of({A, C});
+        v.has_ai_system = true;
+        v.revealed = galactic::Bitset(5, true);
+        v.revealed.set(B, false);
+        CHECK(ai_stage_flood(g, v, T, 5) == (L{C}));  // from C: C, T, D; A is behind B
+        v.is_human = true;
+        CHECK(ai_stage_flood(g, v, T, 5) == (L{A, C}));
+    }
 }
 
 // The finder on the Q11 cadence over a perturbed synthetic galaxy: K AI players, staggered, 90-frame services every
@@ -1133,7 +1146,7 @@ int main(int argc, char** argv) {
     test_determinism(write_golden);
     test_path_finder_cadence();
     test_path_finder_costs_and_fog();
-    test_path_finder_cheapest_stage();
+    test_ai_stage_flood();
     test_path_finder_determinism();
     test_path_finder_background();
     real_data(env_or("ALAMO_FOC_DATA", "/home/claude/data/foc"), "FoC", true);

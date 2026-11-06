@@ -134,6 +134,10 @@ double galactic_ai_planet_force(const galactic::GalacticSim& sim, std::span<cons
 // `mask` (A2F_RE_READS §3.1; a2i t03 D1).
 double galactic_ai_enemy_strength(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
                                   PlanetIndex planet, int32_t self, bool space, uint64_t mask);
+// A2k t02: the hull fraction 0x396df0 a PotentialPlan's P = AI_Combat_Power x hull uses (A2K_T02_RE_ANSWERS Q2(b)) [H]:
+// health / the type's Tactical_Health; 1.0 when the type has no maximum or the stored health is not > 0 ([port] an
+// untyped store keeps health 0).
+double galactic_ai_hull_fraction(float health, float max_health);
 
 // The galactic AI's planning-side buildability: GalacticSim::buildable (cost, queue kind, GalacticSim::build_check =
 // 0x2804d0 in the STRATEGIC_GAPS §1.3 order, no credits).
