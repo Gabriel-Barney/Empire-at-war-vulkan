@@ -104,9 +104,10 @@ int parse_benchmark_arg(std::span<const std::string> args, size_t& i, BenchmarkO
         o.verify = false;
         return 1;
     }
-    static constexpr std::array<std::string_view, 11> kValued = {"--benchmark",      "--bench-save",        "--bench-preset",  "--bench-ticks",
+    static constexpr std::array<std::string_view, 12> kValued = {"--benchmark",      "--bench-save",        "--bench-preset",  "--bench-ticks",
                                                                  "--bench-frames-per-tick", "--bench-settle", "--bench-max-unsettled",
-                                                                 "--bench-report",   "--bench-crc-out",     "--bench-png-dir", "--bench-png-every"};
+                                                                 "--bench-report",   "--bench-crc-out",     "--bench-png-dir", "--bench-png-every",
+                                                                 "--bench-redraw-every"};
     if (std::find(kValued.begin(), kValued.end(), std::string_view(a)) == kValued.end()) return 0;
     if (i + 1 >= args.size()) return fail("needs a value");
     const std::string& v = args[++i];
@@ -132,6 +133,7 @@ int parse_benchmark_arg(std::span<const std::string> args, size_t& i, BenchmarkO
         else if (a == "--bench-frames-per-tick") o.frames_per_tick = static_cast<uint32_t>(n);
         else if (a == "--bench-settle") o.settle_frames = static_cast<uint32_t>(n);
         else if (a == "--bench-max-unsettled") o.max_unsettled = static_cast<uint32_t>(n);
+        else if (a == "--bench-redraw-every") o.redraw_every = static_cast<uint32_t>(n);
         else o.png_every = static_cast<uint32_t>(n);  // --bench-png-every
     }
     return 1;
@@ -149,6 +151,8 @@ std::string check_benchmark_options(const BenchmarkOptions& o) {
     if (o.frames_per_tick == 0 || o.frames_per_tick > 64) return "--bench-frames-per-tick must be 1..64";
     if (o.max_unsettled == 0) return "--bench-max-unsettled must be at least 1";
     if (o.png_every != 0 && o.png_dir.empty()) return "--bench-png-every needs --bench-png-dir DIR";
+    if (o.redraw_every != 0 && !o.fixed()) return "--bench-redraw-every needs --benchmark fixed";
+    if (o.redraw_every == 1) return "--bench-redraw-every must be 0 (off) or at least 2";
     return {};
 }
 
@@ -207,6 +211,8 @@ std::string bench_report_json(const BenchReport& r) {
     val("warmup_frames", std::to_string(r.warmup_frames));
     val("unsettled_frames", std::to_string(r.unsettled_frames));
     val("excluded_frames", std::to_string(r.excluded_frames));
+    val("forced_redraws", std::to_string(r.forced_redraws));
+    val("taa_discarded", std::to_string(r.taa_discarded));
     val("wall_seconds", num(r.wall_seconds));
     val("frame_ms", stats_json(r.frame_ms));
     val("render_ms", stats_json(r.render_ms));
@@ -216,6 +222,21 @@ std::string bench_report_json(const BenchReport& r) {
     str("final_crc", crc);
     str("presentation_check", r.presentation_check);
     str("screen", r.screen);
+    // bm2: the scenario, its fingerprint check and the GPU timer scopes.
+    str("scenario", r.scenario);
+    val("scenario_version", std::to_string(r.scenario_version));
+    str("fingerprint", r.fingerprint);
+    str("scenario_made", r.scenario_made);
+    val("camera_keys", std::to_string(r.camera_keys));
+    val("gpu_timestamps", r.gpu_timestamps ? "true" : "false");
+    val("gpu_frames", std::to_string(r.gpu_frames));
+    std::string gpu = "{";
+    for (size_t k = 0; k < r.gpu_ms.size(); ++k) {
+        if (k) gpu += ", ";
+        json_string(gpu, r.gpu_ms[k].first);
+        gpu += ": " + stats_json(r.gpu_ms[k].second);
+    }
+    val("gpu_ms", gpu + "}");
     o += "  \"autopilot\": [";
     for (size_t k = 0; k < r.autopilot.size(); ++k) {
         if (k) o += ", ";

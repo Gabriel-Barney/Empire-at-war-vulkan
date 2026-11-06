@@ -1028,7 +1028,14 @@ struct Eval {
             }
             case Leaf::CreditsUnnormalized: out = P == ctx.self ? static_cast<double>(pl.credits) : 0.0; return true;
             case Leaf::TechLevel: out = static_cast<double>(pl.tech_level); return true;
-            case Leaf::BudgetAllocation: case Leaf::StoryTrigger: case Leaf::ActiveGoals: out = 0.0; return true;  // [M] galactic
+            // BudgetAllocation 0x6e0560 (AI_GALACTIC_TOKENS 8.3 / 9.3, base Player registration, lifetime 2 s) [H]: Self only,
+            // else the leaf fails; the value is the key's normalised weight in the battle budget (filled from the active
+            // templates' <Budget> entries), 0.0 for a key not in it.
+            case Leaf::BudgetAllocation:
+                if (P != ctx.self) return false;
+                out = p.budget_weight() ? p.budget_weight()(P, ps) : 0.0;
+                return true;
+            case Leaf::StoryTrigger: case Leaf::ActiveGoals: out = 0.0; return true;  // [M] galactic
             default: return false;
         }
     }

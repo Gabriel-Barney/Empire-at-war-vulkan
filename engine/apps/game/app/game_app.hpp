@@ -25,6 +25,7 @@
 #include "alamo/game/battle_fx.hpp"
 #include "alamo/game/battle_summary.hpp"
 #include "alamo/game/benchmark.hpp"
+#include "alamo/game/benchmark_scenario.hpp"
 #include "alamo/game/game_audio_host.hpp"
 #include "alamo/game/game_controls.hpp"
 #include "alamo/game/game_data.hpp"
@@ -169,6 +170,8 @@ inline int usage() {
                  "                  [--bench-frames-per-tick K] [--bench-settle N] [--bench-max-unsettled N] [--bench-report FILE]\n"
                  "                  [--bench-crc-out FILE] [--bench-png-dir DIR --bench-png-every N] [--bench-no-verify]\n"
                  "                  presets: bm-low, bm-medium, bm-high (default), bm-ultra, bm-smoke\n"
+                 "       alamo_game --bench-scenario S.abench [--bench-* flags]     a BM1/BM2 scenario (host game); flags win over the file\n"
+                 "       alamo_game --bench-make S.abench --bench-save FILE [...]   run from the save, then write the scenario S\n"
                  "       game data: --game DIR or ALAMO_FOC_DATA (the corruption folder)\n");
     return 2;
 }
@@ -391,6 +394,7 @@ public:
     std::vector<ui::HeroEntry> galactic_heroes_;
     size_t gui_calls_seen_ = 0, gui_log_events_ = 0;
     uint64_t gui_calls_applied_ = 0, reticle_orders_ = 0, reticle_frames_ = 0;
+    uint64_t buy_bar_behind_camera_ = 0;  // q6: frames the selected builder's buy bar was hidden (builder behind the camera)
     bool hud_hit_debug_ = false;
     // ALAMO_HUD_HIT_DEBUG=x,y: probe that fixed pixel instead of the cursor (smoke runs) and list the visible shells.
     int32_t hud_hit_px_ = -1, hud_hit_py_ = -1;
@@ -443,6 +447,7 @@ public:
     BattleTally tally_;
     bool campaign_over_ = false;
     galactic::VictoryRules victory_rules_;  // Int-verify: the campaign's victory conditions (start_session)
+    galactic::EliminationLatch elimination_latch_;  // q6 [port]: no elimination before the player has owned something
     bool choice_open_ = false;
     // GALACTIC_DIALOGS §1 battle prompt: the banner (pending_battle_shell / story_pending_battle_shell) fed through
     // GalacticHudFrame::battle while choice_open_; its clicks are HudAction BattleBegin / BattleAutoResolve.
@@ -460,15 +465,19 @@ public:
     PlanetIndex auto_planet_ = kInvalidPlanet;
     size_t ar_log_seen_ = 0;
     bool battle_end_auto_ = false;    // the open battle-end screen follows an auto-resolve
-    // §2 mission holocron: the chapters of Story_Dialog events (TITLE + body lines), newest last; the b_story_arc_g flash.
+    // §2 mission holocron. The list itself is sim state (sim::StorySession::holocron, GALACTIC_DIALOGS §2.8); here the
+    // presented adds (Story_Dialog events, oldest first; presentation log only), the loaded story dialog scripts and the
+    // summary's selection (a record id, 0 = the first row) and rows (record ids); the b_story_arc_g flash.
     struct HolocronChapter {
-        std::u32string title;
-        std::vector<std::u32string> lines;
-        std::vector<ui::Rgba8> colors;
-        std::string dialog;
+        std::string dialog, tag;
         int32_t chapter = -1;
+        uint64_t id = 0;
     };
     std::vector<HolocronChapter> holocron_chapters_;
+    StoryDialogCache story_scripts_;
+    StoryScriptLoads story_loads_;
+    uint64_t summary_entry_ = 0;
+    std::vector<uint64_t> summary_rows_;
     bool holocron_flash_ = false;     // b_story_arc_g flashes until the summary is opened
     bool story_summary_open_ = false; // IDD_STORY_SUMMARY_DIALOG open: ticks held (the summary's galactic pause, §2.2)
     // Screen-text lines (§2.1 transmission line, white; §3.1 auto-resolve result, red) [port: printed and kept until a ui
@@ -486,9 +495,8 @@ public:
     void open_linked_banner(const galactic::GalacticSim& g, const sim::CampaignBattles::LinkedRecord& r);  // story t13
     std::string representative_icon(std::span<const objects::ObjectHandle> units, bool hero_filter = false) const;
     void answer_battle_prompt(bool auto_resolve);
-    int32_t summary_chapter_ = -1;  // the story summary's selected chapter (-1 = the newest)
     void auto_resolve_result(const galactic::GalacticSim& g, const galactic::ConflictLogEntry& e);
-    void add_holocron_chapter(const ui::StoryDialogInfo& info, const StoryDialogMeta& meta);
+    void add_holocron_chapter(const StoryDialogMeta& meta, size_t lines);
     void screen_line(std::u32string text, ui::Rgba8 color);
     std::u32string txt(std::string_view id, std::u32string_view fallback) const;
     std::u32string faction_label(int32_t player) const;
@@ -592,6 +600,7 @@ public:
         FixedFrameClock clock{1};
         uint32_t settled_run = 0, unsettled_run = 0;
         uint64_t warmup_frames = 0, unsettled = 0, excluded = 0, rt_ticks = 0, start_tick = 0;
+        uint64_t settled_seen = 0, forced = 0, taa_discarded = 0;  // BM2b: settled measured frames, forced redraws, TAA undos
         bool counted = false, ticked = false, tick_missed = false;  // the last frame: counted / ran a tick / a due tick did not run
         bool drawn = false;     // render_frame recorded and submitted a frame (not minimized / out of date)
         uint64_t retry_boxes = 0;  // retry_boxes_ at the start: a new one = the mission was lost
@@ -609,6 +618,8 @@ public:
     bool bench_fixed() const { return opt_.bench.fixed(); }
     bool bench_measuring() const { return bench_.phase == BenchState::Phase::Measuring; }
     bool bench_done() const { return bench_.phase == BenchState::Phase::Done; }
+    // BM2b: fixed-frames measured frames are drawn TAA-provisional; bench_frame_end keeps or discards each one.
+    bool bench_taa_provisional() const { return bench_fixed() && bench_measuring(); }
     void bench_apply_window();  // init, before the window: preset size, present mode, frame cap
     void bench_apply_video();   // init, after the video options: preset detail / AA / gamma / advanced options
     bool bench_start();         // init: the save loaded, no menus
@@ -621,6 +632,30 @@ public:
     double bench_now() const;
     int bench_finish();         // report, CRC log, presentation check; the exit code
 
+    // ---- bm2: scenario runs, the scripted camera, GPU timer scopes (app_bench_scenario.cpp, benchmark_scenario.hpp) ----
+    struct BenchScenarioState {
+        commands::CommandRecording orders;  // the scenario's recorded orders (replayed)
+        bool have_orders = false;
+        int view = 0;              // the world view the camera path drives (1 galactic, 2 battle; 0 = not chosen yet)
+        tactical::Vec3 anchor{};   // camera_anchor start: that view's own camera target at its first gameplay frame
+        rhi::GpuTimer gpu;
+        bool gpu_on = false;
+        uint32_t gpu_slot = UINT32_MAX, gpu_frame_scope = UINT32_MAX;  // this frame's slot / "frame" scope
+        std::vector<uint8_t> slot_counted;  // per frame slot: the frame last recorded there counted
+        std::vector<std::pair<std::string, std::vector<float>>> gpu_ms;  // per scope, first-seen order
+        uint64_t gpu_frames = 0;
+        bool not_comparable = false;
+    } bscen_;
+    bool bench_scenario_start();  // bench_start: the scenario's orders, the GPU timer
+    const commands::CommandRecording* bench_replay() const { return bscen_.have_orders ? &bscen_.orders : nullptr; }
+    // The scripted camera over the drawn view's own camera (view 1 galactic, 2 battle); false = not applied.
+    bool bench_camera(ui::CameraParams& cp, int view, uint32_t w, uint32_t h);
+    rhi::GpuTimer* bench_gpu_timer() { return bscen_.gpu_on ? &bscen_.gpu : nullptr; }
+    void bench_gpu_begin(rhi::Frame& f, VkCommandBuffer cmd);  // render_frame, first: the slot's previous results, "frame" opens
+    void bench_gpu_end(VkCommandBuffer cmd);                   // render_frame, before the submit: "frame" closes
+    void bench_gpu_counted(bool counted);                      // bench_frame_end: whether this frame's slot counts
+    void bench_scenario_end(BenchReport& r);  // bench_finish: GPU stats, fingerprint check, --bench-make output
+
     bool init();
     void shutdown();
     void frame();
@@ -631,7 +666,7 @@ public:
     // N1 / t09: the Save / Load / Delete requests of the menus.
     void save_game_as(const std::string& typed);
     bool load_saved_game(const std::string& name);
-    bool load_save_file(const std::string& path);  // BM2a: load_saved_game by path
+    bool load_save_file(const std::string& path, const commands::CommandRecording* replay = nullptr);  // BM2a: load_saved_game by path (bm2: with a replay)
     void delete_saved_game(const std::string& name);
     void save_message(std::u32string caption, const std::string& detail);
     std::string session_title() const;  // the campaign's display name / the skirmish map (save descriptions)

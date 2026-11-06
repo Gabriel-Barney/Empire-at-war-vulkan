@@ -14,9 +14,12 @@
 //   Phases: Loading (the save loads, its load screen) -> Settling (gameplay frames, the sim holds until settle_frames
 //   settled frames in a row) -> Measuring (the measured ticks) -> Done. Real-time: the original pacing
 //   (GameSession::loop_iteration, 30 ticks/s on the wall clock), every gameplay frame measured. Fixed frames: one tick per
-//   K counted frames, the presentation clock on the counted frames, alpha (sub + 1) / K, TAA off, blocking models; a
-//   frame counts only when present_settled(), else it is drawn again. Frames outside gameplay (load screens, dialogs
-//   holding the sim) are excluded in both modes.
+//   K counted frames, the presentation clock on the counted frames, alpha (sub + 1) / K, blocking models; a frame counts
+//   only when present_settled(), else it is drawn again. Frames outside gameplay (load screens, dialogs holding the sim)
+//   are excluded in both modes. TAA (BM2b): the preset's in both modes. In fixed frames the TAA history restarts with the
+//   measurement and every measured frame is drawn TAA-provisional: one that counts is kept, any other (unsettled,
+//   excluded, a forced --bench-redraw-every redraw) is taken back (Renderer::discard_taa_frame), so the history and the
+//   jitter cycle only ever see counted frames.
 //   At the end: the report (stdout and --bench-report), the CRC log (--bench-crc-out) and, unless --bench-no-verify, the
 //   presentation on/off check (crc_check: the save replayed with the run's recorded commands gives the same CRC log).
 #include <filesystem>
@@ -49,7 +52,7 @@ void App::bench_apply_video() {
     v.vsync = opt_.mode != rhi::PresentMode::Immediate;
     v.frame_cap = opt_.frame_cap;
     v.detail = p.detail;
-    v.anti_alias = bench_fixed() ? 0 : p.anti_alias;  // TAA's history would carry the redrawn unsettled frames
+    v.anti_alias = p.anti_alias;  // fixed frames too: redrawn frames are discarded from the TAA history (BM2b)
     v.gamma = p.gamma;
     ui::set_advanced_detail(v.advanced, p.detail);
     v.advanced.soft_shadows = p.soft_shadows;
@@ -61,8 +64,7 @@ void App::bench_apply_video() {
     adv_video_ = v.advanced;
     detail_options_ = true;
     hardware_mouse_ = false;
-    std::printf("benchmark: preset %s (%s)%s\n", std::string(p.name).c_str(), std::string(p.description).c_str(),
-                bench_fixed() && p.anti_alias ? ", TAA off in fixed-frames mode" : "");
+    std::printf("benchmark: preset %s (%s)\n", std::string(p.name).c_str(), std::string(p.description).c_str());
 }
 
 bool App::bench_start() {
@@ -74,7 +76,8 @@ bool App::bench_start() {
         std::error_code ec;
         std::filesystem::create_directories(opt_.bench.png_dir, ec);  // a failure shows as FAILED PNG writes
     }
-    if (!load_save_file(opt_.bench.save)) {
+    if (!bench_scenario_start()) return true;  // bm2: the scenario's orders and the GPU timer (a failure is in the report)
+    if (!load_save_file(opt_.bench.save, bench_replay())) {
         bench_fail("the save " + opt_.bench.save + " did not load");
         return true;  // init succeeded: run() writes the failed report
     }
@@ -208,6 +211,9 @@ void App::bench_frame_end() {
             b.phase = P::Measuring;
             b.clock = FixedFrameClock(opt_.bench.frames_per_tick);
             b.start_tick = session_->host().frame();
+            // BM2b: the warm-up's frame count varies from run to run; the measured frames start from an empty history and
+            // the first jitter point.
+            if (bench_fixed()) gpu_.renderer.reset_taa_history();
             b.t_start = b.t_progress = Clock::now();
             std::printf("benchmark: measuring from tick %" PRIu64 " (%s) after %" PRIu64 " warm-up frames, %.1f s\n", b.start_tick,
                         screen_name(screen_), b.warmup_frames, ms_since(b.t_load) / 1000.0);
@@ -219,7 +225,10 @@ void App::bench_frame_end() {
     }
     bool counted = false;
     if (bench_fixed()) {
-        if (settled) {
+        // --bench-redraw-every N: every Nth settled frame is drawn again as if it were unsettled (tests the redraw path).
+        const bool forced = settled && opt_.bench.redraw_every && ++b.settled_seen % opt_.bench.redraw_every == 0;
+        if (forced) ++b.forced;
+        if (settled && !forced) {
             b.clock.frame_counted();
             counted = true;
             b.unsettled_run = 0;
@@ -230,11 +239,15 @@ void App::bench_frame_end() {
             if (++b.unsettled_run > opt_.bench.max_unsettled)
                 bench_fail(std::to_string(b.unsettled_run) + " unsettled frames in a row at tick " + std::to_string(session_->host().frame()));
         }
+        // BM2b: only a counted frame enters the TAA history and advances the jitter cycle.
+        if (counted) gpu_.renderer.keep_taa_frame();
+        else if (gpu_.renderer.discard_taa_frame()) ++b.taa_discarded;
     } else {
         counted = gameplay && b.drawn;
         if (!counted) ++b.excluded;
     }
     b.counted = counted;
+    bench_gpu_counted(counted);  // bm2: this frame's GPU timer scopes count only when the frame does
     if (counted) b.t_progress = Clock::now();
     else if (ms_since(b.t_progress) > kStallLimitMs) bench_fail("no measured frame for 60 s at tick " + std::to_string(session_->host().frame()));
     const bool finished = bench_fixed() ? b.clock.finished(opt_.bench.ticks) : b.rt_ticks >= opt_.bench.ticks;
@@ -271,6 +284,8 @@ int App::bench_finish() {
     r.warmup_frames = b.warmup_frames;
     r.unsettled_frames = b.unsettled;
     r.excluded_frames = b.excluded;
+    r.forced_redraws = b.forced;
+    r.taa_discarded = b.taa_discarded;
     r.wall_seconds = b.wall;
     r.frame_ms = frame_time_stats(b.frame_ms);
     r.render_ms = frame_time_stats(b.render_ms);
@@ -292,6 +307,7 @@ int App::bench_finish() {
             b.error = "the presentation on/off check diverged";
         }
     }
+    bench_scenario_end(r);  // bm2: GPU timer scopes, the scenario's fingerprint check, --bench-make's scenario
     r.result = b.failed ? "failed" : "ok";
     r.error = b.error;
     const std::string json = bench_report_json(r);
@@ -307,7 +323,7 @@ int App::bench_finish() {
             return 1;
         }
     }
-    return b.failed ? 1 : 0;
+    return b.failed ? (bscen_.not_comparable ? 3 : 1) : 0;  // 3: scenario changed, not comparable (as alamo_headless --bench)
 }
 
 }  // namespace alamo_game_app

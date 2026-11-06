@@ -56,11 +56,15 @@ void TemplateSystem::first_service(const Evaluator& eval) {
     if (!templates_.empty()) active_.push_back(templates_[0]);
     for (size_t i = 1; i < templates_.size(); ++i)
         if (!is_active(templates_[i]) && triggers(templates_[i], eval)) active_.push_back(templates_[i]);
+    last_applied_ = active_;
+    last_removed_ = false;
     recompute();
     changed_ = true;
 }
 
 void TemplateSystem::service(const Evaluator& eval) {
+    last_applied_.clear();
+    last_removed_ = false;
     if (templates_.empty()) return;
     bool added = false, removed = false;
     const uint32_t n = static_cast<uint32_t>(templates_.size());
@@ -69,6 +73,7 @@ void TemplateSystem::service(const Evaluator& eval) {
         cursor_ = (cursor_ + 1) % n;
         if (!is_active(t) && triggers(t, eval)) {
             active_.push_back(t);
+            last_applied_.push_back(t);
             added = true;
         }
     }
@@ -81,6 +86,7 @@ void TemplateSystem::service(const Evaluator& eval) {
             ++i;
         }
     }
+    last_removed_ = removed;
     if (added || removed) {
         recompute();
         changed_ = true;
@@ -151,6 +157,12 @@ const std::string& TemplateSystem::budget_equation(int32_t category) const {
 float TemplateSystem::tactical_allowance(int32_t category) const {
     if (category < 0 || static_cast<size_t>(category) >= allowance_.size()) return 0.0f;
     return allowance_[static_cast<size_t>(category)];
+}
+
+bool TemplateSystem::budget_listed(int32_t category) const {
+    if (category < 0 || static_cast<size_t>(category) >= budget_slot_.size()) return false;
+    const auto c = static_cast<size_t>(category);
+    return budget_slot_[c].written || (c < allowance_slot_.size() && allowance_slot_[c].written);
 }
 
 void TemplateSystem::hash(StateHasher& h) const {

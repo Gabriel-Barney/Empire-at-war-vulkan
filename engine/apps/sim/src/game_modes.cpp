@@ -64,6 +64,10 @@ void GameMode::common_tick(const ModeTickContext& ctx) {
         mode_frame, [this, &ctx](objects::ObjectStore& s, ObjectHandle h) { service_object(s, h, ctx); },
         [this, &ctx](objects::ObjectStore& s) { pre_service(s, ctx); });
     trace(ctx, "common.store.primary");
+    if (ctx.object_scripts && !paused()) {  // q6: object scripts after the store update (OBJECT_SCRIPTS.md §3.1) [port]
+        ctx.object_scripts(*this);
+        trace(ctx, "common.object_scripts");
+    }
     secondary_.update(mode_frame, {}, {});
     trace(ctx, "common.store.secondary");
     after_store_update(ctx);
@@ -133,6 +137,10 @@ void GalacticMode::tick(const ModeTickContext& ctx) {
         sim_->update();
         profile::lap("gal.sim");
         trace(ctx, "galactic.sim");
+        if (ctx.object_scripts && !paused()) {  // q6: object scripts after the sim's store service
+            ctx.object_scripts(*this);
+            trace(ctx, "common.object_scripts");
+        }
         secondary_.update(static_cast<uint32_t>(frame_), {}, {});
         trace(ctx, "galactic.end");
         return;
@@ -289,7 +297,12 @@ constexpr objects::BehaviorTypeId kCloneKeepHideWhenFogged = 0x19, kCloneKeepImp
 }  // namespace
 
 ObjectHandle TacticalMode::spawn_death_clone(const objects::SpawnParams& p) {
+    // q6 (OBJECT_SCRIPTS.md §1.2): a death clone's script is released at once, so it never runs; [port] the create hook
+    // is held back for the clone (no attach at all, so its Base_Definitions does not run either).
+    auto created_hook = std::move(primary_.on_created);
+    primary_.on_created = nullptr;
     const ObjectHandle h = primary_.create(p);
+    primary_.on_created = std::move(created_hook);
     primary_.set_flag(h, objects::kFlagDeathClone);
     const objects::TypeIndex t = p.type;
     primary_.set_health(h, t < types_->size() ? types_->columns().tactical_health[t] : 0.0f);
@@ -606,7 +619,8 @@ const TacticalMode* GameModeManager::top_tactical() const {
 }
 
 void GameModeManager::update(const ModeTickContext& ctx) {
-    // 1. countdown [stub]; 2. scoring-manager service [stub]; 3. ONLY the current mode ticks.
+    // 1. countdown [stub]; 2. scoring-manager service (q6 t09: ModeTickContext::scoring); 3. ONLY the current mode ticks.
+    if (ctx.scoring) ctx.scoring();
     if (ctx.trace) ctx.trace->emplace_back("gmm.scoring");
     if (GameMode* t = top()) t->tick(ctx);
     // 4-5. vote manager, MP battle-vote timeout [stubs].

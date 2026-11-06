@@ -138,6 +138,10 @@ public:
     const galactic::ConflictManager& conflicts() const { return *cm_; }
     const TacticalBattle* battle() const { return battle_.get(); }
     TacticalBattle* battle() { return battle_.get(); }
+    // q6 t19 (OBJECT_SCRIPTS §10.3): Lua Hide(true) on an object of the running battle (the battle's script bridge, shared
+    // by the story and the object scripts: ScriptObjectState::hidden). A const read for the presentation side (model,
+    // sound, radar, fog ghost, surface FX, mouse pick); no sim system reads it. False without a battle or a bridge.
+    bool script_hidden(objects::ObjectId id) const;
     const std::vector<std::string>& log() const { return log_; }  // one summary per tactical battle / refusal
     // Playtest QA D1 / V1: TacticalBattle::unit_losses() of the last tactical battle that ended (presentation, not saved).
     std::span<const TacticalBattle::RemovalRecord> last_battle_losses() const { return last_losses_; }
@@ -246,7 +250,8 @@ public:
     // --- N1 save / load (owner: n1-host, stage 2 n2-host): attach() registers two SimHost save participants, removed by
     // the destructor:
     //   "galactic.conflicts"  the ConflictManager (ConflictManager::write / read)
-    //   "battles"             this object's between-battle state: battles fought, log, pad persistence records, the
+    //   "battles"             this object's between-battle state: battles fought, log (v1-3 also held the pad persistence
+    //                         records, now in the galactic save; a v1-3 save's records move to the planets on load), the
     //                         carried fog flags, corruption missions, LINK_TACTICAL records consumed, tactical AI log;
     //                         v2 adds the battle in flight: u8 0 none / 1 pending (accepted, pushed at the next hook:
     //                         the map is loaded again through the MapLoader on read) / 2 running, + its BattleRequest.
@@ -302,13 +307,19 @@ private:
     std::vector<std::string> log_;
     std::vector<TacticalBattle::RemovalRecord> last_losses_;
     uint32_t fought_ = 0;
-    // REMAINING_GAPS §6.5 [port]: the per-planet pad persistence vectors (planet data D +0x10 has no galactic-side storage
-    // yet), planet order of first use; passed to each campaign battle at its planet. Hashed in "battle.state" once used.
-    std::vector<std::pair<PlanetIndex, std::vector<TacticalBattle::PadRecord>>> pad_records_;
+    // AI_GALACTIC_TOKENS §9.4: the pad persistence records live on the planets (GalacticSim::built_objects, galactic save);
+    // each campaign battle gets its planet's list. Hashed in "battle.state" (planets with records only).
+    bool rebuilding_ = false;  // rebuild(): the battle a save load pushes (no recreate of persisted objects)
     // Fog of war (owner: fog agent): the original's global FOW-active flag / render option (static initial 1;
     // land battles set 1, space battles keep the previous value: FOG_OF_WAR §8 item 2).
     bool fog_active_ = true, fog_render_ = true;
     bool ar_requested_ = false;  // P4 sim: auto_resolve_battle() stopped the running battle
+    // q6 t09: SimHost::scoring_reset_tactical_stats at auto-resolve begin, read off the conflict manager every hook: an
+    // auto-resolve seen running (AutoSetup / AutoRunning), or a new auto-resolved log entry not seen running (forced, same
+    // pass). Not saved: the log position is taken at the first hook (also after a load).
+    size_t ar_log_seen_ = 0;
+    bool ar_log_init_ = false, ar_reset_sent_ = false;
+    void scoring_auto_resolve();
     // --- S4 (owner: S4 agent): corruption missions ---
     struct CorruptionMission {
         PlanetIndex planet = kInvalidPlanet;

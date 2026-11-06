@@ -282,7 +282,13 @@ struct EvalResult {
     bool ok = false;
     double value = 0.0;
     EvalError error = EvalError::None;
+    // q6 t10 diagnostics: the node of the first failure (null when ok); valid while the equation set is unchanged.
+    const Expression* fail_expr = nullptr;
+    uint32_t fail_node = 0;
 };
+// The first failure of `r` as text for diagnostics: the token path ("Variable_Human.SpaceTotalUnnormalized"), the
+// function or script name, or the error name; empty when `r` succeeded.
+std::string eval_failure_site(const EquationSet& set, const EvalResult& r);
 
 EvalResult evaluate(const EquationSet& set, const Expression& expr, const EvalContext& ctx,
                     const TokenResolver& resolver);

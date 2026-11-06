@@ -752,7 +752,7 @@ No sim effect. Data: FoC 1 planet with starbase stealth and 7 with ground-base s
   - **add** (0x4b6c70): appends {type index (+0x11c), pad x, y, z, small int ≤ 5, int} (0x18 bytes) to D's persistence vector (+0x10, count +0x18). Refused when the position is already present or the small int > 5. Logs "%s: Successfully added to persistent tracking".
   - **remove** (0x4bb3a0): position and type must both match.
   - **restore** (0x4b7c00): matches exact float x and y; the **last** match wins.
-  - Used when `Tactically_Built_Child_Object_Persists` is set; child death or sale removes the record. The ints' meaning [M: health / level]; save chunk [L].
+  - Used when `Tactically_Built_Child_Object_Persists` is set; child death or sale removes the record. Correction (q6, 2026-11-04): the record holds the **finished object's** position (not the pad's), the small int is the pad's base level (+0x39c) and the last int the pad owner; add / remove compare x and y only. Full spec, save chunk and the recreate rules: AI_GALACTIC_TOKENS §9.4.
 - **The "kill list" +0xa60** is the single type `Previous_Upgrade_Level_Type` (+0xa58 name). On construction complete (0x42e890), every object of exactly that type in the mode (0x2a87d0) whose owner is allied with the pad owner (0x39a230) is killed silently (0x391310 with flag 1).
   - Data: FoC UL_*_L1 → L2 chains (8 types); TR tech / supply upgrade chains.
 - **Capture-point reset:** when the child goes away and the pad has CAPTURE_POINT (slot +0x36f), 0x501050(capture behaviour, neutral player 0x294aa0, −1) runs:

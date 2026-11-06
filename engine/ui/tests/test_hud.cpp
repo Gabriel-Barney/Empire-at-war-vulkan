@@ -278,8 +278,18 @@ void test_atlas_text() {
     TextDatabase d;
     CHECK(d.parse(make_dat(kv)) && d.size() == 2);
     CHECK(d.find("TEXT_BUTTON_BEGIN") && *d.find("TEXT_BUTTON_BEGIN") == u"Begin");
-    CHECK(d.find("text_button_begin") && !d.find("TEXT_NOPE"));
-    CHECK(d.text("TEXT_NOPE") == u"TEXT_NOPE");
+    // q6 t14 (GALACTIC_DIALOGS §2.7): case-sensitive CRC-32 lookup; a missing id shows as itself and is remembered (the
+    // runtime-addition map; find() keeps reporting the file's table only); [MISSING] for an add = 0 lookup, a null key or a
+    // table that never loaded.
+    CHECK(!d.find("text_button_begin") && !d.find("TEXT_NOPE"));
+    CHECK(d.text("text_button_begin") == u"text_button_begin" && d.text("TEXT_BUTTON_BEGIN") == u"Begin");
+    CHECK(d.added() == 1 && d.text("TEXT_NOPE") == u"TEXT_NOPE" && d.added() == 2 && d.text("TEXT_NOPE") == u"TEXT_NOPE" && d.added() == 2);
+    CHECK(d.text("TEXT_OTHER", false) == u"[MISSING]" && d.added() == 2 && d.text("TEXT_NOPE", false) == u"TEXT_NOPE");
+    CHECK(d.text(std::string_view()) == u"[MISSING]" && d.text("x\xc3\xa9") == u"xé");  // UTF-8 -> UTF-16
+    CHECK(TextDatabase{}.text("TEXT_BUTTON_BEGIN") == u"[MISSING]" && !TextDatabase{}.loaded() && d.loaded());
+    TextDatabase esc;  // "\n" stays two characters in the table (the wrapped-text splitter breaks the line)
+    esc.add("TEXT_ESC", u"a\\nb");
+    CHECK(*esc.find("TEXT_ESC") == u"a\\nb" && esc.text("TEXT_ESC") == u"a\\nb");
     std::vector<uint8_t> bad = make_dat(kv);
     bad.resize(bad.size() - 3);
     TextDatabase e2;
@@ -1116,6 +1126,16 @@ void test_tactical_hud() {
         hud.build(fr, units, types);
         CHECK(hud.draw_list().digest() == d1);
         if (w == 1024) digest = d1;
+        // q6 t19 (OBJECT_SCRIPTS §10.3): a Lua-hidden unit has no radar blip unless its type is
+        // Visible_On_Radar_When_Fogged (own units too).
+        units[3].script_hidden = true;
+        hud.build(fr, units, types);
+        CHECK(hud.stats().radar_blips == 3);
+        types[0].visible_on_radar_when_fogged = true;
+        hud.build(fr, units, types);
+        CHECK(hud.stats().radar_blips == 4);
+        types[0].visible_on_radar_when_fogged = false;
+        units[3].script_hidden = false;
     }
     CHECK(digest != 0);
 }

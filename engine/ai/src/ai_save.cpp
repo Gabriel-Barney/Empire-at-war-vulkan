@@ -1,6 +1,8 @@
 // N1 save / load of the AI framework (alamo/core/save_file.hpp contract): goal, template, learning and budget
 // systems, the context, the enable gate, the per-AI path finder and the galactic perception + its snapshot.
 // Every read() parses into a copy / locals and commits only when the whole record was valid.
+#include <algorithm>
+
 #include "ai_save_io.hpp"
 #include "alamo/ai/ai_budget.hpp"
 #include "alamo/ai/ai_context.hpp"
@@ -18,7 +20,7 @@ using save::put;
 using save::put_vec;
 
 namespace {
-constexpr uint32_t kGoalsVersion = 3, kTemplatesVersion = 1, kLearningVersion = 1, kBudgetVersion = 1, kContextVersion = 1,
+constexpr uint32_t kGoalsVersion = 3, kTemplatesVersion = 1, kLearningVersion = 1, kBudgetVersion = 2, kContextVersion = 1,
                    kGateVersion = 1, kPathVersion = 2, kPerceptionVersion = 1, kSnapshotVersion = 1;
 
 void put_goal(ByteWriter& w, const Goal& g) {
@@ -302,6 +304,9 @@ void AiBudget::write(ByteWriter& w) const {
     w.f32(refund_);
     w.boolean(reset_);
     w.boolean(init_);
+    // Version 2 (q6 contrast/budget, AI_GALACTIC_TOKENS §9.5): + the member list in insertion order.
+    w.u32(static_cast<uint32_t>(order_.size()));
+    for (const int32_t c : order_) w.i32(c);
 }
 
 bool AiBudget::read(ByteReader& r) {
@@ -333,8 +338,14 @@ bool AiBudget::read(ByteReader& r) {
     }
     const float rate = r.f32(), period = r.f32(), refund = r.f32();
     const bool reset = r.boolean(), init = r.boolean();
+    std::vector<int32_t> order(save::count(r, 4));
+    for (int32_t& c : order) {
+        c = r.i32();
+        if (c < 0 || static_cast<uint32_t>(c) >= n || std::count(order.data(), &c, c) != 0) return false;  // in range, no repeat
+    }
     if (!r.ok()) return false;
     cat_ = std::move(cats);
+    order_ = std::move(order);
     rate68_ = rate;
     period_ = period;
     refund_ = refund;

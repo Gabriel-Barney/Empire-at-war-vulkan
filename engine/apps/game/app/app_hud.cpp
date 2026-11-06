@@ -729,6 +729,10 @@ void App::build_tactical_hud() {
     };
     // Tactical buy bar: the first selected own builder with production options (skirmish space stations), its options
     // with price / queued count / block reason, anchored at the builder's projected pixel.
+    // q6 [port]: the buttons are the i_build_buttons model at the builder in the world (UI.md: tactical build pads), so a
+    // builder behind the camera shows none. Before, ui::TacticalHud put them at its no-anchor stand-in point near the
+    // screen centre, where they took the right clicks meant for the world (Thrawn's Revenge land smoke: a select-all
+    // holding the Rebel barracks, the camera on an enemy). A builder in front of the camera is drawn as before.
     build_opts_.clear();
     if (const sim::TacticalBattle* b = session_ ? session_->battle() : nullptr; b && tm && b->production_enabled()) {
         const objects::ObjectStore& st = tm->primary();
@@ -736,6 +740,14 @@ void App::build_tactical_hud() {
             if (id > 0x7FFFFFFFu) continue;
             const auto opts = b->station_build_options(st, local_player(), static_cast<objects::ObjectId>(id));
             if (opts.empty()) continue;
+            const Vec3 p = st.position(st.find(static_cast<objects::ObjectId>(id)));
+            float sx = 0.0f, sy = 0.0f;
+            if (!ui::project(hf.world.view, {p.x, p.y, p.z}, sx, sy)) {
+                ++buy_bar_behind_camera_;
+                break;
+            }
+            hf.has_build_anchor = true;
+            hf.build_anchor_px = {sx, sy};
             hf.builder = id;
             for (const sim::TacticalBattle::BuildOptionInfo& o : opts) {
                 ui::HudBuildOption e;
@@ -745,12 +757,6 @@ void App::build_tactical_hud() {
                 e.queued = o.queued;
                 e.block = static_cast<ui::HudBuildOption::Block>(o.block);
                 build_opts_.push_back(std::move(e));
-            }
-            const Vec3 p = st.position(st.find(static_cast<objects::ObjectId>(id)));
-            float sx = 0.0f, sy = 0.0f;
-            if (ui::project(hf.world.view, {p.x, p.y, p.z}, sx, sy)) {
-                hf.has_build_anchor = true;
-                hf.build_anchor_px = {sx, sy};
             }
             break;
         }

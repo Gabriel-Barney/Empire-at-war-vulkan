@@ -49,7 +49,15 @@ public:
     int32_t plan_value(uint32_t plan) const;
     const std::string& budget_equation(int32_t category) const;  // "" = none
     float tactical_allowance(int32_t category) const;
+    // The category is in the budget map: an active template wrote a <Budget> or Tactical_Budget_Allowance entry for it
+    // (0x615420 / 0x615550, AI_GALACTIC_TOKENS §9.3).
+    bool budget_listed(int32_t category) const;
     const std::vector<uint32_t>& active() const { return active_; }  // template indices, activation order
+    // What the last first_service / service did (transient, for the budget's insert / reset rules, AI_GALACTIC_TOKENS §9.5):
+    // the templates it applied (0x670ed0), in apply order (first_service: the base, then every triggering one; service: the
+    // new activations, including one removed again in the same pass), and whether it removed one (0x612ac0).
+    const std::vector<uint32_t>& last_applied() const { return last_applied_; }
+    bool last_removed() const { return last_removed_; }
     const std::vector<uint32_t>& templates() const { return templates_; }
     void hash(StateHasher& h) const;
     // N1 save / load: active list, cursor, count, changed flag; the switch slots are re-derived from the active list
@@ -75,6 +83,8 @@ private:
     std::vector<uint32_t> active_;
     uint32_t cursor_ = 0, count_ = 1;
     bool changed_ = false;
+    std::vector<uint32_t> last_applied_;
+    bool last_removed_ = false;
     std::vector<Slot> goal_cat_, goal_type_, plan_cat_, plan_name_;
     std::vector<Slot> budget_slot_, allowance_slot_;
     std::vector<std::string> budget_eq_;

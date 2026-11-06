@@ -29,10 +29,12 @@ GalacticAiWorld::Impl::Impl(gal::GalacticSim& s, objects::ObjectStore& st, const
                             std::vector<GalacticAiTypeInfo> ti, AiOrderSink snk, GalacticAiConfig c)
     : sim(s), store(st), types(ty), files(fp), rng(r), defs(d), eqs(e), tinfo(std::move(ti)), sink(std::move(snk)),
       cfg(std::move(c)), res(s, tinfo, nullptr, {}) {
+    if (types) cat_enum = &types->enums().get(objects::EnumId::GameObjectCategory);  // q6 t03: the loaded enum
+    res.set_category_enum(cat_enum);
     for (GalacticAiTypeInfo& t : tinfo)
         if (t.category_mask == 0) {
             uint64_t m = 0;
-            for (const std::string& n : t.categories) m |= ai_category_bit(n);
+            for (const std::string& n : t.categories) m |= category_bit(n);
             t.category_mask = m;
         }
     type_mask.assign(sim.rules().types.size(), 0u);
@@ -82,6 +84,24 @@ GalacticSimTokenResolver::Hooks GalacticAiWorld::Impl::make_hooks() {
     h.difficulty = [this](int32_t p) {
         const PlayerAi* pa = player_ai(p);
         return pa ? pa->difficulty : -1;
+    };
+    // q6 t03 BudgetAllocation (AI_GALACTIC_TOKENS §8.3): 0x612ee0 looks the key up among the budget's categories (map key
+    // = the AIGoalCategoryType value; AiBudget holds them in list order, AiDefinitions::category_value) and returns that
+    // category's normalised weight +0x3C; a key no category has -> 0.0. No AI (goal system) -> fails.
+    h.budget_weight = [this](int32_t p, int32_t key, double& out) {
+        const PlayerAi* pa = player_ai(p);
+        if (!pa) return false;
+        out = 0.0;
+        for (size_t c = 0; c < defs.category_value.size() && c < pa->ctx.budget.size(); ++c)
+            if (defs.category_value[c] == key) {
+                out = static_cast<double>(pa->ctx.budget.weight(static_cast<int32_t>(c)));
+                break;
+            }
+        return true;
+    };
+    h.goal_category = [this](std::string_view name) {
+        const int32_t c = defs.find_category(name);
+        return c >= 0 && static_cast<size_t>(c) < defs.category_value.size() ? defs.category_value[static_cast<size_t>(c)] : -1;
     };
     h.script = [this](const EvalContext& c, std::string_view name, std::span<const Param> params, double& out) {
         return script_evaluate(c, name, params, out);
@@ -163,8 +183,9 @@ bool GalacticAiWorld::Impl::evaluate(int32_t self, int32_t opponent, const std::
     c.rng = &rng.synced();
     const EvalResult r = ai::evaluate(eqs, e, c, res);
     ++eval_count;
-    if (target >= 0 || r.ok) ++stats[std::string("~ eval ") + (r.ok ? (r.value > 0.0 ? "pos " : "nonpos ") : "FAIL ") + fn];
-    else ++stats["~ eval FAIL " + fn];
+    // Port diagnostics (never hashed): a failure names its first failing site (q6 t10).
+    if (r.ok) ++stats[std::string("~ eval ") + (r.value > 0.0 ? "pos " : "nonpos ") + fn];
+    else ++stats["~ eval FAIL " + fn + " at " + eval_failure_site(eqs, r)];
     if (!r.ok) return false;
     out = r.value;
     return true;
@@ -648,19 +669,36 @@ void PlayerAi::budget_release(Goal& g) {
 }
 
 void PlayerAi::budget_weights() {
-    // 0x614590 / 0x6137b0: each category's equation, pre-loaded with the previous normalised weight (a failing
-    // equation keeps it); negatives -> 0; normalised.
+    // 0x614590 / 0x6137b0 (AI_GALACTIC_TOKENS §9.5): each member in insertion order; with an equation, the start value is
+    // the previous normalised weight and a failing equation keeps it; without one (allowance-only, or its template was
+    // removed) the weight is 0 but the member counts. Negatives -> 0, w / Σw, 1 / members when Σw = 0 (AiBudget).
     const size_t n = w->defs.categories.size();
     std::vector<float> raw(n, 0.0f);
-    for (size_t c = 0; c < n; ++c) {
-        const auto ci = static_cast<int32_t>(c);
-        raw[c] = ctx.budget.initialised() ? ctx.budget.weight(ci) : 0.0f;
+    for (const int32_t ci : ctx.budget.members()) {
+        const auto c = static_cast<size_t>(ci);
         const std::string& eq = ctx.templates.budget_equation(ci);
+        if (eq.empty()) continue;
+        raw[c] = ctx.budget.initialised() ? ctx.budget.weight(ci) : 0.0f;
         double v = 0.0;
-        if (!eq.empty() && evaluate(eq, -1, v)) raw[c] = static_cast<float>(v);
+        if (evaluate(eq, -1, v)) raw[c] = static_cast<float>(v);
     }
     if (!ctx.budget.initialised()) ctx.budget.init(raw, w->sim.credits(player));
     else ctx.budget.reweight(raw);
+}
+
+void PlayerAi::apply_template_budget() {
+    // §9.5 [H]: template apply 0x670ed0 inserts its <Budget> entries (0x615420), then its Tactical_Budget_Allowance entries
+    // (0x615550) [M: the order of the two lists]; a category joins the map at its first insert and never leaves. Every
+    // insert call and every removal (0x612ac0, which also re-applies the remaining templates) sets the reset flag, so the
+    // next income tick re-splits every pool to credits x w.
+    bool reset = ctx.templates.last_removed();
+    for (const uint32_t t : ctx.templates.last_applied()) {
+        const TemplateDef& d = w->defs.templates[t];
+        for (const auto& e : d.budget) ctx.budget.add_member(e.first);
+        for (const auto& e : d.tactical_allowance) ctx.budget.add_member(e.first);
+        reset = reset || !d.budget.empty() || !d.tactical_allowance.empty();
+    }
+    if (reset) ctx.budget.mark_reset();
 }
 
 // Per galactic income tick (0x614340 from 0x4b2ef0, AI_GALACTIC_2 Â§3.1) [H]: GalacticSim's income-tick listener
@@ -737,6 +775,7 @@ void PlayerAi::first_service(int64_t) {
 }
 
 void PlayerAi::template_init(int64_t) {
+    apply_template_budget();  // the base and the triggering templates insert their categories; Init clears the flag
     budget_weights();
     std::string names;
     for (const uint32_t t : ctx.templates.active()) names += " " + w->defs.templates[t].name;
@@ -763,9 +802,11 @@ void PlayerAi::execution_service(int64_t) {
 }
 
 void PlayerAi::templates_changed(int64_t) {
-    // a2g F2: retail sets the budget reset flag +0x74 exactly when the template set changes, in either direction, and the
-    // next fiscal tick clears it (FoC HotM probe, docs/re/A2G_T01_RESET_FLAG_PROBE.md) [H correlation; the setter is
-    // unread]. The initial selection runs before the budget's Init, which clears the flag.
+    // §9.5: the changed templates insert their budget categories (apply_template_budget). a2g F2: retail sets the budget
+    // reset flag +0x74 exactly when the template set changes, in either direction, and the next fiscal tick clears it
+    // (FoC HotM probe, docs/re/A2G_T01_RESET_FLAG_PROBE.md) [H correlation; the setter is unread]. The initial selection
+    // runs before the budget's Init, which clears the flag.
+    apply_template_budget();
     ctx.budget.request_reset();
     std::string names;
     for (const uint32_t t : ctx.templates.active()) names += " " + w->defs.templates[t].name;
@@ -1875,6 +1916,101 @@ bool GalacticAiWorld::load_plans(const std::vector<std::string>& plan_files, std
     return w.runtime->load(*w.files, plan_files, w.defs, w.library, diagnostics) > 0;
 }
 
+std::unique_ptr<PlayerAi> GalacticAiWorld::Impl::make_player(int32_t player, const AiPlayerTypeDef* type, int32_t difficulty,
+                                                             std::vector<std::string>* diagnostics) {
+    Impl& w = *this;
+    auto pa = std::make_unique<PlayerAi>(&w, player, type, std::clamp(difficulty, 0, 2));
+    float sleep = 0.0f;
+    const std::string& dname = type->difficulty[static_cast<size_t>(pa->difficulty)];
+    for (const GalacticAiDifficulty& d : w.cfg.difficulties)
+        if (ai_iequal(d.name, dname)) {
+            pa->contrast_mult = d.galactic_contrast;
+            sleep = d.galactic_goal_sleep;
+        }
+    std::vector<GoalSource> sources;
+    for (const std::string& set_name : type->function_sets) {
+        const GoalFunctionSet* set = w.defs.find_set(set_name);
+        if (!set) {
+            if (diagnostics) diagnostics->push_back(type->name + ": unknown function set " + set_name);
+            continue;
+        }
+        for (const GoalFunctionEntry& e : set->entries)
+            if (w.defs.goals[e.goal].mode == AiMode::Galactic) sources.push_back({e.goal, e.function});
+    }
+    std::vector<uint32_t> templates;
+    for (const std::string& t : type->templates[static_cast<size_t>(AiMode::Galactic)]) {
+        const uint32_t i = w.defs.template_index(t);
+        if (i == kAiNone) {
+            if (diagnostics) diagnostics->push_back(type->name + ": unknown template " + t);
+        } else {
+            templates.push_back(i);
+        }
+    }
+    PlayerAi& p = *pa;
+    p.ctx.templates.init(w.defs, w.library, std::move(templates));
+    p.ctx.budget.reset(w.defs.categories.size());
+    GoalSystemConfig gcfg;
+    gcfg.sleep_frames = static_cast<int32_t>(static_cast<float>(kAiFps) * sleep);
+    gcfg.extra_goals_per_category = type->goal_set_extension_size;  // AIPlayerType +0xE8 (0x721b60) [H]
+    gcfg.nominal_allowed_time = true;  // A2f t09: AllowedTime = 0x6c0450(PP) x tolerance (A2F_RE_READS §1.4 item 2) [H]
+    p.ctx.goals.init(w.defs, std::move(sources), &p, &p.ctx.learning, &p.ctx.templates, &w.rng.synced(), gcfg);
+    p.ctx.attach(&p, [&w, &p](const std::string& eq, double& out) { return w.evaluate(p.player, p.ctx.opponent, eq, -1, out); });
+    if (w.cfg.stagger) {  // OPT2 t01: a fixed planning phase from the player's AI ordinal (players in index order)
+        int32_t ordinal = 0;
+        for (const GalacticAiPlayerConfig& o : w.cfg.players) ordinal += o.player < player ? 1 : 0;
+        p.ctx.set_stagger(ordinal, static_cast<int32_t>(w.cfg.players.size()));
+    }
+    const std::string& fs = type->free_store_script[static_cast<size_t>(AiMode::Galactic)];
+    if (!fs.empty() && w.files) {
+        std::vector<uint8_t> bytes;
+        const std::string path = "Data\\Scripts\\FreeStore\\" + fs + ".lua";
+        if (w.files->read(path, bytes)) {
+            std::string err;
+            p.fs_vm = w.runtime->make_vm(fs, std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()), path, &err);
+            if (p.fs_vm) {
+                lua::attach_ai_host(*p.fs_vm, &w, kFreeStoreScriptBase + player);
+                p.fs_vm->call("Base_Definitions", &err);
+                lua::set_free_store_global(*p.fs_vm, kFreeStoreScriptBase + player, true);
+                lua::set_player_global(*p.fs_vm, "PlayerObject", player);
+                lua::set_number_global(*p.fs_vm, "LastService", 0.0);
+                lua::set_number_global(*p.fs_vm, "LastUnitService", 0.0);
+                p.fs_vm->create_thread("main");
+            } else if (diagnostics) {
+                diagnostics->push_back(err);
+            }
+        } else if (diagnostics) {
+            diagnostics->push_back(path + ": not found");
+        }
+    }
+    for (const ObjectHandle u : w.player_units(player)) p.known.insert(w.store.id(u));
+    for (const gal::PlanetState& ps : w.sim.planets()) {
+        if (ps.starbase && w.store.alive(ps.starbase)) p.known.insert(w.store.id(ps.starbase));
+        for (const ObjectHandle s : ps.structures)
+            if (w.store.alive(s)) p.known.insert(w.store.id(s));
+    }
+    return pa;
+}
+
+void GalacticAiWorld::Impl::install_sim_hooks() {
+    Impl& w = *this;
+    if (w.income_hook != 0) return;
+    // A2 galactic: the budget's income ticks (AI_GALACTIC_3 §3.1)
+    std::weak_ptr<int> token = w.alive;
+    Impl* self = &w;
+    w.income_hook = w.sim.add_income_hook([token, self](const gal::IncomeTick& t) {
+        if (!token.expired()) self->on_income(t);
+    });
+    // The production market runs inside the planets' production service (AI_GALACTIC_3 Â§5).
+    w.sim.set_production_service_hook([token, self](PlanetIndex p) {
+        if (!token.expired()) self->market_planet(p);
+    });
+    // q2f t01: an AI player's pay-as-you-go installments go through its budget (0x53b900).
+    w.sim.set_installment_hook([token, self, gs = &w.sim](PlanetIndex p, uint32_t q, const gal::BuildEntry& head, float a) {
+        if (!token.expired()) return self->installment(p, q, head, a);
+        return gs->players()[static_cast<size_t>(head.player)].account.credits >= a ? a : -1.0f;  // no AI any more
+    });
+}
+
 bool GalacticAiWorld::start(std::vector<std::string>* diagnostics) {
     Impl& w = *impl_;
     const auto players = w.sim.players();
@@ -1888,95 +2024,71 @@ bool GalacticAiWorld::start(std::vector<std::string>* diagnostics) {
             if (diagnostics) diagnostics->push_back("Unrecognized AI player type " + pc.ai_type);
             continue;
         }
-        auto pa = std::make_unique<PlayerAi>(&w, pc.player, type, std::clamp(pc.difficulty, 0, 2));
-        float sleep = 0.0f;
-        const std::string& dname = type->difficulty[static_cast<size_t>(pa->difficulty)];
-        for (const GalacticAiDifficulty& d : w.cfg.difficulties)
-            if (ai_iequal(d.name, dname)) {
-                pa->contrast_mult = d.galactic_contrast;
-                sleep = d.galactic_goal_sleep;
-            }
-        std::vector<GoalSource> sources;
-        for (const std::string& set_name : type->function_sets) {
-            const GoalFunctionSet* set = w.defs.find_set(set_name);
-            if (!set) {
-                if (diagnostics) diagnostics->push_back(type->name + ": unknown function set " + set_name);
-                continue;
-            }
-            for (const GoalFunctionEntry& e : set->entries)
-                if (w.defs.goals[e.goal].mode == AiMode::Galactic) sources.push_back({e.goal, e.function});
-        }
-        std::vector<uint32_t> templates;
-        for (const std::string& t : type->templates[static_cast<size_t>(AiMode::Galactic)]) {
-            const uint32_t i = w.defs.template_index(t);
-            if (i == kAiNone) {
-                if (diagnostics) diagnostics->push_back(type->name + ": unknown template " + t);
-            } else {
-                templates.push_back(i);
-            }
-        }
-        PlayerAi& p = *pa;
-        p.ctx.templates.init(w.defs, w.library, std::move(templates));
-        p.ctx.budget.reset(w.defs.categories.size());
-        GoalSystemConfig gcfg;
-        gcfg.sleep_frames = static_cast<int32_t>(static_cast<float>(kAiFps) * sleep);
-        gcfg.extra_goals_per_category = type->goal_set_extension_size;  // AIPlayerType +0xE8 (0x721b60) [H]
-        gcfg.nominal_allowed_time = true;  // A2f t09: AllowedTime = 0x6c0450(PP) x tolerance (A2F_RE_READS §1.4 item 2) [H]
-        p.ctx.goals.init(w.defs, std::move(sources), &p, &p.ctx.learning, &p.ctx.templates, &w.rng.synced(), gcfg);
-        p.ctx.attach(&p, [&w, &p](const std::string& eq, double& out) { return w.evaluate(p.player, p.ctx.opponent, eq, -1, out); });
-        if (w.cfg.stagger) {  // OPT2 t01: a fixed planning phase from the player's AI ordinal (players in index order)
-            int32_t ordinal = 0;
-            for (const GalacticAiPlayerConfig& o : w.cfg.players) ordinal += o.player < pc.player ? 1 : 0;
-            p.ctx.set_stagger(ordinal, static_cast<int32_t>(w.cfg.players.size()));
-        }
-        const std::string& fs = type->free_store_script[static_cast<size_t>(AiMode::Galactic)];
-        if (!fs.empty() && w.files) {
-            std::vector<uint8_t> bytes;
-            const std::string path = "Data\\Scripts\\FreeStore\\" + fs + ".lua";
-            if (w.files->read(path, bytes)) {
-                std::string err;
-                p.fs_vm = w.runtime->make_vm(fs, std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()), path, &err);
-                if (p.fs_vm) {
-                    lua::attach_ai_host(*p.fs_vm, &w, kFreeStoreScriptBase + pc.player);
-                    p.fs_vm->call("Base_Definitions", &err);
-                    lua::set_free_store_global(*p.fs_vm, kFreeStoreScriptBase + pc.player, true);
-                    lua::set_player_global(*p.fs_vm, "PlayerObject", pc.player);
-                    lua::set_number_global(*p.fs_vm, "LastService", 0.0);
-                    lua::set_number_global(*p.fs_vm, "LastUnitService", 0.0);
-                    p.fs_vm->create_thread("main");
-                } else if (diagnostics) {
-                    diagnostics->push_back(err);
-                }
-            } else if (diagnostics) {
-                diagnostics->push_back(path + ": not found");
-            }
-        }
-        for (const ObjectHandle u : w.player_units(pc.player)) p.known.insert(w.store.id(u));
-        for (const gal::PlanetState& ps : w.sim.planets()) {
-            if (ps.starbase && w.store.alive(ps.starbase)) p.known.insert(w.store.id(ps.starbase));
-            for (const ObjectHandle s : ps.structures)
-                if (w.store.alive(s)) p.known.insert(w.store.id(s));
-        }
-        w.ai[static_cast<size_t>(pc.player)] = std::move(pa);
+        w.ai[static_cast<size_t>(pc.player)] = w.make_player(pc.player, type, pc.difficulty, diagnostics);
         any = true;
     }
-    if (any && w.income_hook == 0) {  // A2 galactic: the budget's income ticks (Â§3.1)
-        std::weak_ptr<int> token = w.alive;
-        Impl* self = &w;
-        w.income_hook = w.sim.add_income_hook([token, self](const gal::IncomeTick& t) {
-            if (!token.expired()) self->on_income(t);
-        });
-        // The production market runs inside the planets' production service (AI_GALACTIC_3 Â§5).
-        w.sim.set_production_service_hook([token, self](PlanetIndex p) {
-            if (!token.expired()) self->market_planet(p);
-        });
-        // q2f t01: an AI player's pay-as-you-go installments go through its budget (0x53b900).
-        w.sim.set_installment_hook([token, self, gs = &w.sim](PlanetIndex p, uint32_t q, const gal::BuildEntry& head, float a) {
-            if (!token.expired()) return self->installment(p, q, head, a);
-            return gs->players()[static_cast<size_t>(head.player)].account.credits >= a ? a : -1.0f;  // no AI any more
-        });
-    }
+    if (any) w.install_sim_hooks();
     return any;
+}
+
+void GalacticAiWorld::Impl::retire_player(int32_t player) {
+    // Ends what the old AIPlayer owned, in id order: its running plans (released by the goal system: their task forces'
+    // units go back to the player, their build tasks run on to the free store, AI_GALACTIC_3 §8), then its unclaimed
+    // PotentialPlans (queue reservations and free-store entries, 0x6c2320) and its pending free-store moves.
+    // [port] The original deletes the AIPlayer object (Player::Set_AI_Type, AI_GALACTIC §1.2); the order of these
+    // releases inside its destructor is not read. Build tasks already queued keep their sim entries.
+    std::vector<int32_t> ids;
+    for (const auto& [id, pi] : plans)
+        if (pi.player == player) ids.push_back(id);
+    for (const int32_t id : ids) end_plan(id, true);
+    std::vector<int32_t> handles;
+    for (const auto& [h, pp] : pps)
+        if (pp.player == player) handles.push_back(h);
+    for (const int32_t h : handles) {
+        release_pp(h);
+        pps.erase(h);
+    }
+    fs_moves.erase(std::remove_if(fs_moves.begin(), fs_moves.end(), [player](const FreeStoreMove& m) { return m.player == player; }),
+                   fs_moves.end());
+}
+
+bool GalacticAiWorld::set_ai_type(int32_t player, std::string_view type_name, int32_t difficulty,
+                                  std::vector<std::string>* diagnostics) {
+    Impl& w = *impl_;
+    if (player < 0 || static_cast<size_t>(player) >= w.ai.size()) return false;
+    const std::string_view name = ai_trim(type_name);
+    const bool human = ai_iequal(name, "Human");
+    const AiPlayerTypeDef* type = human ? nullptr : w.defs.find_player(name);
+    if (!human && !type) {  // AI_GALACTIC §1.2: logged, no AI created; [port] the current AI player stays
+        if (diagnostics) diagnostics->push_back("Unrecognized AI player type " + std::string(name));
+        return false;
+    }
+    const int32_t d = std::clamp(difficulty, 0, 2);
+    const PlayerAi* cur = w.player_ai(player);
+    if (cur ? (cur->type == type && cur->difficulty == d) : type == nullptr) return false;  // [port] same type: no change
+    if (cur) {
+        w.retire_player(player);
+        w.ai[static_cast<size_t>(player)].reset();
+    }
+    std::vector<GalacticAiPlayerConfig>& cp = w.cfg.players;
+    cp.erase(std::remove_if(cp.begin(), cp.end(), [player](const GalacticAiPlayerConfig& c) { return c.player == player; }), cp.end());
+    w.decide(player, "ai type " + (type ? type->name : std::string("Human")));
+    if (!type) return true;
+    GalacticAiPlayerConfig pc;
+    pc.player = player;
+    pc.ai_type = type->name;
+    pc.difficulty = d;
+    cp.insert(std::upper_bound(cp.begin(), cp.end(), pc,
+                               [](const GalacticAiPlayerConfig& a, const GalacticAiPlayerConfig& b) { return a.player < b.player; }),
+              pc);
+    w.ai[static_cast<size_t>(player)] = w.make_player(player, type, d, diagnostics);
+    w.install_sim_hooks();
+    return true;
+}
+
+std::string GalacticAiWorld::ai_type(int32_t player) const {
+    const PlayerAi* p = impl_->player_ai(player);
+    return p ? p->type->name : std::string();
 }
 
 void GalacticAiWorld::update_player(int32_t player, int64_t now, bool galactic_on_top, bool auto_resolve_busy) {
@@ -2015,7 +2127,10 @@ void GalacticAiWorld::update_player(int32_t player, int64_t now, bool galactic_o
         }
         {
             ALAMO_PROFILE_SCOPE("ai.gal.refresh");  // OPT2 t11
-            w.res.refresh(w.sim.frame());
+            w.res.refresh(w.sim.frame(), now);
+            // q6 t03: the player conflict stamps (signals 0x11 / 0x13) from the conflict manager's state after T5.
+            const gal::ConflictManager* cm = w.conflicts ? w.conflicts : dynamic_cast<const gal::ConflictManager*>(w.sim.conflict_hooks());
+            if (cm) w.res.observe_conflicts(*cm, static_cast<int32_t>(now));
         }
         // Story requests and Suspend_AI from the story session's world (and the AI's own).
         bool suspended = w.world.ai_suspended();
@@ -2075,6 +2190,7 @@ void GalacticAiWorld::attach_story_world(lua::LuaPlayerWorld* world) {
     }
 }
 void GalacticAiWorld::set_global_values(lua::GlobalValueStore* store) { impl_->gv_store = store; }  // Int-final
+void GalacticAiWorld::set_conflicts(const galactic::ConflictManager* conflicts) { impl_->conflicts = conflicts; }  // q6 t03
 const PlanLibrary& GalacticAiWorld::plans() const { return impl_->library; }
 bool GalacticAiWorld::is_ai_player(int32_t player) const { return impl_->player_ai(player) != nullptr; }
 const AiContext* GalacticAiWorld::context(int32_t player) const {
@@ -2430,7 +2546,7 @@ std::vector<GalacticAiTypeInfo> make_galactic_ai_type_info(const objects::GameOb
             }
         }
     }
-    fill_category_masks(out);
+    fill_category_masks(out, &types.enums().get(objects::EnumId::GameObjectCategory));  // q6 t03: the loaded enum
     return out;
 }
 

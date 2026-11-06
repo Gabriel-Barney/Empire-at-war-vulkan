@@ -13,6 +13,7 @@
 #include "alamo/sim/save_session.hpp"
 #include "alamo/sim/tactical_battle.hpp"
 #include "alamo/terrain/ted.hpp"
+#include "alamo/vfs/vfs.hpp"  // q6: the mod layer decides the object-script switch
 #ifdef ALAMO_GAME_HAVE_UI
 #include "alamo/ui/orders.hpp"  // pause_event / read_pause_event
 #endif
@@ -23,6 +24,9 @@
 #include "alamo/lua/presentation.hpp"
 #include "alamo/lua/story_model.hpp"
 #include "alamo/sim/story_session.hpp"
+#if defined(ALAMO_LUA_PLAYERS)
+#include "alamo/lua/players.hpp"  // q6: the story player world's perception source
+#endif
 #endif
 
 namespace alamo::game {
@@ -114,7 +118,9 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
             return fail("skirmish map " + spec_.skirmish_map + ": " + err);
         spec_.skirmish.land = !skirmish_map_.is_space();  // the map decides: space battle or land invasion
         if (spec_.attract && spec_.skirmish.land) return fail("attract demo: " + spec_.skirmish_map + " is not a space map");
-        if (!make_skirmish_galaxy(d, spec_.skirmish, setup_, &err)) return fail(err);
+        SkirmishSetup sk = spec_.skirmish;
+        sk.no_forces = spec_.attract;  // q6 t02: the demo's forces are cleared below; a mod faction without a fleet must not fail it
+        if (!make_skirmish_galaxy(d, sk, setup_, &err)) return fail(err);
         // GALAXY_MAP_PRESENTATION §6: the attract demo is a plain tactical space battle on the map. The map's object owners
         // are player indices in faction order (Factions.xml then Expansion_Factions.xml: Rebel 0, Empire 1, ..., Neutral 3,
         // Underworld 6), so every faction becomes the player of its index; AI on the Rebel and Underworld players (0x22f10's
@@ -146,10 +152,18 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
         gcfg.story_campaign = spec_.kind == SessionKind::Campaign && spec_.story;
         gcfg.ai_uses_fog_galactic = d.db.constants().get_bool("AIUsesFogOfWarGalactic", gcfg.ai_uses_fog_galactic);  // shipped False
         const uint32_t diff = d.rules.find_difficulty(difficulty_name(spec_.difficulty));
+        // q6 t08: the type from the data (resolve_ai_type): campaigns read the campaign's AI_Player_Control pairs, a
+        // skirmish gives only its AI slot (ps.ai) the faction's Basic_AI (SKIRMISH_SETUP §2.1). Stock factions as before.
+        const std::vector<std::string>* control = nullptr;
+        if (spec_.kind == SessionKind::Campaign)
+            if (const data::CampaignDef* c = d.db.find_campaign(spec_.campaign)) control = &c->ai_player_control;
+        const std::vector<std::string> no_pairs;
+        if (spec_.kind == SessionKind::Campaign && !control) control = &no_pairs;
         for (size_t p = 0; p < setup_.players.size(); ++p) {
             galactic::PlayerSetup& ps = setup_.players[p];
             if (ps.human || ps.faction >= d.rules.factions.size() || d.rules.factions[ps.faction].is_neutral) continue;
-            const std::string type = ai_type_for(d.rules.factions[ps.faction].name);
+            if (spec_.kind == SessionKind::Skirmish && !ps.ai) continue;
+            const std::string type = resolve_ai_type(d.rules.factions[ps.faction].name, d.basic_ai, control, &d.ai->defs);
             if (type.empty()) continue;
             ps.ai = true;
             ps.difficulty = diff;
@@ -170,7 +184,12 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
     sim::SimConfig cfg;
     cfg.seed = spec_.seed;
     cfg.players = sim::session_players(setup_.players.size());
+    // q6 (docs/re/OBJECT_SCRIPTS.md "Port status"): game-object Lua scripts. [port interim rule, Gabriel 2026-11-04] On only when a mod layer
+    // (MODPATH=) is loaded - mods such as Thrawn's Revenge need them (its company spawners) - so stock FoC sessions keep
+    // their behaviour and replays until the object scripts are checked against the shipped FoC scripts.
+    cfg.object_scripts = d.vfs && !d.vfs->mod_dirs().empty();
     host_ = std::make_unique<sim::SimHost>(d.types, *js_, cfg);
+    if (cfg.object_scripts) host_->set_object_script_files(d.files.get());
     if (replay) host_->replay_from(replay);
     // q6 t06: the GameScoring script, re-created by every new session before the players and plots (GAME_SCORING.md).
     if (const auto scoring = d.db.constants().get("Game_Scoring_Script_Name"))
@@ -297,18 +316,42 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
         } else {
             galactic_ai_->register_crc(host_->crc_registry());
             galactic_ai_->set_global_values(host_->global_values());  // Int-final: session-wide GlobalValue table
+            galactic_ai_->set_conflicts(&battles_->conflicts());  // q6 t03: TimeSince*Defender/Attacker stamps
 #ifdef ALAMO_SIM_HAVE_STORY
-            if (host_->story()) galactic_ai_->attach_story_world(host_->story()->player_world());  // story Find_Path
+            if (host_->story()) {
+                galactic_ai_->attach_story_world(host_->story()->player_world());  // story Find_Path
+#if defined(ALAMO_LUA_PLAYERS)
+                // q6: the plot scripts' EvaluatePerception answers from the galactic AI's equations and token resolver,
+                // as in alamo_headless (Thrawn's Revenge's VictoryHandler / StoryUtil read perceptions every service).
+                if (lua::LuaPlayerWorld* sw = host_->story()->player_world())
+                    sw->set_perception({&d.ai->equations, &galactic_ai_->resolver()},
+                                       {&d.ai->equations, &galactic_ai_->resolver()});
+#endif
+            }
 #endif
             ai::GalacticAiWorld* w = galactic_ai_.get();
             sim::CampaignBattles* b = battles_.get();
-            for (const ai::GalacticAiPlayerConfig& pc : gcfg.players)
-                host_->set_controller(static_cast<uint8_t>(pc.player), [w, b](sim::SimHost& hh, uint8_t p, uint64_t frame) {
+            // q6: every player but the human and the neutral player gets the T7 controller, because the story reward
+            // SWITCH_CONTROL (below) can give a player an AI later; a player without an AI does nothing there (as before:
+            // no update_player call for it).
+            for (size_t pi = 0; pi < setup_.players.size(); ++pi) {
+                if (setup_.players[pi].human || static_cast<int32_t>(pi) == gs->neutral_player()) continue;
+                host_->set_controller(static_cast<uint8_t>(pi), [w, b](sim::SimHost& hh, uint8_t p, uint64_t frame) {
+                    if (!w->is_ai_player(p)) return;
                     const sim::GameMode* top = hh.modes().top();
                     const bool galactic_top = top && !top->tactical();
                     const bool busy = b->conflicts().state() == galactic::ConflictState::AutoRunning;
                     w->update_player(p, static_cast<int64_t>(frame), galactic_top, busy);
                 });
+            }
+            // q6: story reward SWITCH_CONTROL (AI_GALACTIC.md §1.2: Player::Set_AI_Type, then the difficulty) -> the
+            // galactic AI, while the reward applies in T9: the new AI takes its first service at the next T7. Difficulty =
+            // the session's [M: the original reads the session difficulty global]; the human keeps its control [port].
+            host_->set_switch_control_hook([this](const sim::StorySwitchControl& sw) {
+                if (!galactic_ai_ || sw.player < 0 || static_cast<size_t>(sw.player) >= setup_.players.size()) return;
+                if (setup_.players[static_cast<size_t>(sw.player)].human) return;
+                galactic_ai_->set_ai_type(sw.player, sw.ai_type, std::clamp(spec_.difficulty, 0, 2));
+            });
             // N1 / t09: the galactic AI's chunk, as alamo_headless save_run registers it.
             sim::SaveParticipant ai_part;
             ai_part.name = "ai";

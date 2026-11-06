@@ -25,7 +25,7 @@ Leaf signature: `bool f(evaluator, bindings, double* out)`; false = evaluation f
 Token ids are the 225 globals filled by 0x5b43d0 (names and order are already in `token_registry.inc`).
 
 ### 1.2 Leaf cache (0x64d740 lookup, 0x64d990 store) [H]
-- Each leaf keeps a sorted map keyed by a hash of the full binding set (0x5f3e60) with an equality test (0x5f3990) [M: the hash covers Self/Enemy/Human/Target and the token parameters]. An entry stores the value and the frame `stamp` it was computed.
+- Each leaf keeps a sorted map keyed by a hash of the binding set (0x5f3e60) with an equality test (0x5f3990). Corrected q6 t18 (AI_GALACTIC_TOKENS §9.9 [H]): the key covers the **parameter bindings only**; Self / Enemy / Human / Target are context variables and are not in it. Each leaf node exists once per (perception system, target evaluator), so the cache is per AI player, per mode and per target object. An entry stores the value and the frame `stamp` it was computed.
 - **Lookup** only when the lifetime `L` (+0x98) ≠ 0: hit if `stamp ≠ 0` and (`L = −1` or `NOW ≤ stamp + L × 30`). `L` is in **seconds**; −1 means "forever". A value computed on frame 0 is never a hit (stamp 0).
 - **Store** always happens on a successful computation (also for `L = 0`); entries are never pruned during the battle.
 - Consequence for parity: a token cached for L seconds keeps returning the old value even if the world changed. The port must cache the same way (same key, same lifetime, same frame) — this is part of the deterministic behaviour, not an optimisation.
@@ -168,7 +168,7 @@ P = the player the evaluator belongs to (`Variable_Self`, `Variable_Enemy`, `Var
 | `IsFaction {Faction…}` | 0x6e0700 | −1 | 1 if P's faction name equals one of the strings (exact byte compare after the parser's normalisation [M]) | H |
 | `IsDifficulty {Difficulty_Level_Type}` | 0x6e0620 | 0 | 0 for a human P or when 0x2814d0 is false; else AI difficulty (AIPlayer +0x58) == value | H |
 | `CreditsUnnormalized` | slot 10: 0x6e05f0 | 0 | P's credits (float +0x70) if P is Self, else 0 | H |
-| `TechLevel`, `BudgetAllocation`, `StoryTrigger`, `ActiveGoals` | 0x6e09a0, 0x6e0560, 0x6e08e0, 0x6e0490 | 0 / 2 / 0 / 0 | galactic-side meanings (S2) | M |
+| `TechLevel`, `BudgetAllocation`, `StoryTrigger`, `ActiveGoals` | 0x6e09a0, 0x6e0560, 0x6e08e0, 0x6e0490 | 0 / 2 / 0 / 0 | galactic-side meanings (S2); `BudgetAllocation` in battle = the category's weight in the tactical template's `<Budget>` block, Self only (AI_GALACTIC_TOKENS §9.3, H) | M |
 
 ### 3.5 Game tokens (Game base 0x6e2170, TacticalGame 0x738010)
 

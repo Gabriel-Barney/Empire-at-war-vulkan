@@ -34,12 +34,81 @@ constexpr std::pair<std::string_view, std::string_view> kParents[] = {
 constexpr std::string_view kFixedClasses[] = {"GameObjectTypeWrapper", "GameObjectWrapper", "LuaScriptClass",
                                               "LuaUserVar", "PlayerWrapper"};
 
+// q6 t11 (LUA_API.md "Mode gates"): globals that are a script error outside their mode. The bindings that test it
+// themselves with their own text (Find_Nearest, Create_Cinematic_Transport, Spawn_Special_Weapon, ...) are listed too:
+// the dispatcher's test runs first.
+constexpr std::string_view kTacticalGlobals[] = {
+    "Allow_Localized_SFX",      "Are_On_Opposite_Sides_Of_Shield", "Camera_To_Follow",
+    "Create_Cinematic_Transport", "Enable_Distance_Fog",           "Enable_Fog",
+    "Find_Hint",                "Find_Nearest",                    "Find_Nearest_Space_Field",
+    "Get_Most_Defended_Position", "Hide_Object",                   "Hide_Sub_Object",
+    "Point_Camera_At",          "Project_By_Unit_Range",           "Promote_To_Space_Cinematic_Layer",
+    "Reinforce_Unit",           "Rotate_Camera_By",                "Rotate_Camera_To",
+    "Scroll_Camera_To",         "Set_Cinematic_Environment",       "Set_New_Environment",
+    "Spawn_Special_Weapon",     "Start_Cinematic_Space_Retreat",   "Weather_Audio_Pause",
+    "Zoom_Camera"};
+constexpr std::string_view kGalacticGlobals[] = {"Find_Path"};
+using detail::DeadRule;
+using detail::ModeGate;
+// Methods with a mode or object-kind gate the dispatcher tests ("Class.Method"). The galactic-object / planet / fleet
+// gates of Get_Planet_Location, Is_Planet_Destroyed, Get_Next_Starbase_Type and Invade need the object, so a dead wrapper
+// cannot fail them: Get_Planet_Location is gated on the mode here, the others in their bindings. Attack_Target tests its
+// own gate (bind_objects.cpp).
+constexpr std::pair<std::string_view, ModeGate> kMethodGates[] = {
+    {"GameObjectWrapper.Get_Energy", ModeGate::Tactical},     {"GameObjectWrapper.Get_Hull", ModeGate::Tactical},
+    {"GameObjectWrapper.Get_Shield", ModeGate::Tactical},     {"GameObjectWrapper.Hyperspace_Away", ModeGate::Tactical},
+    {"GameObjectWrapper.Make_Invulnerable", ModeGate::Tactical}, {"GameObjectWrapper.Stop", ModeGate::Tactical},
+    {"GameObjectWrapper.Teleport", ModeGate::Tactical},       {"GameObjectWrapper.Teleport_And_Face", ModeGate::Tactical},
+    {"GameObjectWrapper.Get_Planet_Location", ModeGate::Galactic},
+    {"PlayerWrapper.Get_Space_Station", ModeGate::Tactical},  {"TaskForceClass.Get_AI_Power_Vs_Unit", ModeGate::Tactical},
+};
+// Gated bindings that carry their own recovered text for the mode error (their implementations test the finer mode -
+// space / land - themselves with the same text); the dispatcher's gate uses it instead of the generic "this command is
+// only supported in ..." text. Keyed by the global or method name.
+constexpr std::pair<std::string_view, const char*> kGateTexts[] = {
+    {"Find_Nearest", "Find_Nearest - this function may only be used in tactical modes."},
+    {"Find_Nearest_Space_Field", "Find_Nearest_Space_Field -- may only be used in space mode"},
+    {"Are_On_Opposite_Sides_Of_Shield", "Are_On_Opposite_Sides_Of_Shield -- only valid in land mode"},
+    {"Spawn_Special_Weapon", "Spawn_Special_Weapon -- only available in space tactical mode"},
+    {"Create_Cinematic_Transport", "Create_Cinematic_Transport -- only available in land tactical mode"},
+    {"Start_Cinematic_Space_Retreat", "Start_Cinematic_Space_Retreat -- only available in space tactical mode"},
+    {"Get_Energy", "GameObjectWrapper::Get_Energy -- only valid in tactical mode"},
+    {"Hyperspace_Away", "GameObjectWrapper::Hyperspace_Away -- only valid in space mode"},
+    {"Get_AI_Power_Vs_Unit", "Get_AI_Power_Vs_Unit -- only valid in tactical mode"},
+};
+// LUA_API.md "Dead or null wrappers": GameObjectWrapper methods whose dead wrapper is not the silent default.
+constexpr std::pair<std::string_view, DeadRule> kDeadRules[] = {
+    // the implementation tests it
+    {"Is_Valid", DeadRule::Binding}, {"Is_Pool_Safe", DeadRule::Binding}, {"Service_Wrapper", DeadRule::Binding},
+    // q6 t03 unit orders (Attack_Target returns nothing, Move_Internal reports a script error after its mode gate)
+    {"Attack_Target", DeadRule::Binding}, {"Move_To", DeadRule::Binding}, {"Attack_Move", DeadRule::Binding},
+    {"Guard_Target", DeadRule::Binding},
+    // q6 t12 (OBJECT_SCRIPTS §4.3): the proximity events do nothing on a dead object
+    {"Event_Object_In_Range", DeadRule::Binding}, {"Cancel_Event_Object_In_Range", DeadRule::Binding},
+    // error "already dead"
+    {"Are_Engines_Online", DeadRule::Error}, {"Contains_Hero", DeadRule::Error}, {"Fire_Special_Weapon", DeadRule::Error},
+    {"Get_Build_Pad_Contents", DeadRule::Error}, {"Get_Contained_Heroes", DeadRule::Error}, {"Get_Distance", DeadRule::Error},
+    {"Get_Starbase_Level", DeadRule::Error}, {"Sell", DeadRule::Error},
+    // warning "this object is dead!"
+    {"Change_Owner", DeadRule::WarnNothing}, {"Despawn", DeadRule::WarnNothing},
+    {"Mark_Parent_Mode_Object_For_Death", DeadRule::WarnNothing}, {"Set_Importance", DeadRule::WarnNothing},
+    {"Set_Selectable", DeadRule::WarnNothing}, {"Take_Damage", DeadRule::WarnNothing},
+    {"Set_Targeting_Priorities", DeadRule::WarnNothing}, {"Set_Targeting_Stickiness_Time_Threshold", DeadRule::WarnNothing},
+    {"Get_Rate_Of_Damage_Taken", DeadRule::WarnZero}, {"Get_Time_Till_Dead", DeadRule::WarnZero},
+};
+
+template <class List>
+bool listed(const List& list, std::string_view name) {
+    return std::find(std::begin(list), std::end(list), name) != std::end(list);
+}
+
 struct Registry {
     std::vector<std::string> classes;  // sorted
     std::vector<uint32_t> parent;
     std::vector<detail::MethodSlot> slots;
     std::vector<std::map<std::string, uint32_t, std::less<>>> methods_by_class;  // lookup only
     std::vector<detail::ImplFn> global_fn;  // per table row (globals only)
+    std::vector<detail::ModeGate> global_gate;  // per table row (globals only)
     std::map<std::string, uint32_t, std::less<>> global_rows;
     std::vector<uint32_t> extra_counter;  // per slot: counter index for extra slots
     uint32_t user_var = detail::kNoClass;
@@ -61,11 +130,14 @@ struct Registry {
         methods_by_class.resize(classes.size());
 
         global_fn.assign(std::size(kTable), nullptr);
+        global_gate.assign(std::size(kTable), detail::ModeGate::None);
         for (uint32_t row = 0; row < std::size(kTable); ++row) {
             const BindingInfo& b = kTable[row];
             if (b.kind == BindingKind::Global) {
                 global_rows.emplace(b.name, row);
                 global_fn[row] = find_impl(BindingKind::Global, "", b.name);
+                if (listed(kTacticalGlobals, b.name)) global_gate[row] = detail::ModeGate::Tactical;
+                if (listed(kGalacticGlobals, b.name)) global_gate[row] = detail::ModeGate::Galactic;
             } else {
                 add_slot(row, id(b.cls), b.name, find_impl(BindingKind::Method, b.cls, b.name));
             }
@@ -96,6 +168,11 @@ struct Registry {
         s.cls = cls;
         s.fn = fn;
         s.label = classes[cls] + "." + std::string(name);
+        for (const auto& [label, gate] : kMethodGates)
+            if (label == s.label) s.gate = gate;
+        if (classes[cls] == "GameObjectWrapper")
+            for (const auto& [method, rule] : kDeadRules)
+                if (method == name) s.dead = rule;
         methods_by_class[cls].emplace(std::string(name), static_cast<uint32_t>(slots.size()));
         slots.push_back(std::move(s));
     }
@@ -191,6 +268,7 @@ uint32_t find_method(uint32_t cls, std::string_view name) {
 }
 
 ImplFn global_impl(uint32_t row) { return row < reg().global_fn.size() ? reg().global_fn[row] : nullptr; }
+ModeGate global_gate(uint32_t row) { return row < reg().global_gate.size() ? reg().global_gate[row] : ModeGate::None; }
 
 uint32_t global_row(std::string_view name) {
     const auto it = reg().global_rows.find(name);
@@ -240,6 +318,27 @@ int Call::fail(const char* fmt, ...) {
     std::vsnprintf(err, err_cap, fmt, ap);
     va_end(ap);
     return -1;
+}
+
+int Call::script_error_stop(const char* fmt, ...) {
+    char buf[640];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    vm->message(std::string("SCRIPT ERROR: ") + buf);
+    vm->exit_requested = true;
+    return 0;
+}
+
+int Call::script_warning(const char* fmt, ...) {
+    char buf[640];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    vm->message(std::string("SCRIPT WARNING: ") + buf);
+    return 0;
 }
 
 const Ud* Call::userdata(int i, uint32_t cls) const {
@@ -299,11 +398,21 @@ struct Invocation {
     ImplFn fn;
     uint32_t counter;   // unbound counter slot
     const char* label;  // binding name for messages
-    bool dead_check;    // GameObjectWrapper method other than Is_Valid / Is_Pool_Safe
-    const char* method; // method name (dead message)
+    ModeGate gate;      // q6 t11: tested first
+    bool object;        // a GameObjectWrapper method: `dead` applies
+    DeadRule dead;
+    const char* method; // method name (dead / gate messages)
     int first;
     int nargs;
 };
+
+// The mode the gate tests: the VM's store (the parent store inside a parent-mode wrapper's method). No store: no gate.
+bool gate_fails(const LuaVm::Impl& vm, ModeGate gate) {
+    const objects::ObjectStore* st = vm.host.store;
+    if (gate == ModeGate::None || !st) return false;
+    const bool galactic = st->mode() == objects::ModeKind::Galactic;
+    return gate == ModeGate::Tactical ? galactic : !galactic;
+}
 
 // L1/S4 wave 2b: a method of a parent-mode wrapper runs with host.store = the parent mode's store (restored after).
 struct StoreSwap {
@@ -324,11 +433,33 @@ struct StoreSwap {
     StoreSwap& operator=(const StoreSwap&) = delete;
 };
 
+// q6 t11 (LUA_API.md "Binding error model across all bindings"): the mode gate (a script error), then a dead
+// GameObjectWrapper's rule, then the implementation. Only the port's own failures return -1 (raised by the caller): an
+// unbound binding, a C++ exception, a legacy Call::fail.
 int invoke(lua_State* L, const Invocation& inv, char* err, size_t cap) noexcept {
     const StoreSwap swap(inv.vm, inv.self);
-    if (inv.dead_check && !object_alive(*inv.vm, *inv.self)) {
-        std::snprintf(err, cap, "GameObjectWrapper::%s -- this object is dead!", inv.method);
-        return -1;
+    Call c{L, inv.vm, inv.self, inv.first, inv.nargs, err, cap};
+    if (gate_fails(*inv.vm, inv.gate)) {
+        for (const auto& [name, text] : kGateTexts)
+            if (name == inv.method) return c.script_error_stop("%s", text);
+        const char* who = inv.object ? "GameObjectWrapper::" : "";
+        return c.script_error_stop(inv.gate == ModeGate::Tactical ? "%s%s -- this command is only supported in tactical modes"
+                                                                   : "%s%s -- this command is only supported in galactic mode",
+                                   who, inv.method);
+    }
+    if (inv.object && inv.dead != DeadRule::Binding && !object_alive(*inv.vm, *inv.self)) {
+        switch (inv.dead) {
+            case DeadRule::Error:
+                return c.script_error_stop("GameObjectWrapper::%s -- this object is already dead", inv.method);
+            case DeadRule::WarnNothing:
+                return c.script_warning("GameObjectWrapper::%s -- this object is dead!", inv.method);
+            case DeadRule::WarnZero:
+                c.script_warning("GameObjectWrapper::%s -- this object is dead!", inv.method);
+                lua_pushnumber(L, 0);
+                return 1;
+            default:
+                return 0;  // silent: nothing
+        }
     }
     if (!inv.fn) {
         if (inv.counter < inv.vm->unbound.size()) ++inv.vm->unbound[inv.counter];
@@ -337,7 +468,6 @@ int invoke(lua_State* L, const Invocation& inv, char* err, size_t cap) noexcept 
         return -1;
     }
     try {
-        Call c{L, inv.vm, inv.self, inv.first, inv.nargs, err, cap};
         return inv.fn(c);
     } catch (const std::exception& e) {
         std::snprintf(err, cap, "%s: %s", inv.label, e.what());
@@ -354,8 +484,9 @@ int mt_call(lua_State* L) {
     LuaVm::Impl* vm = vm_of(L);
     const auto* ud = static_cast<const Ud*>(lua_touserdata(L, 1));
     if (!ud || ud->binding == kNoBinding) return raise(L, "this engine object is not callable");
-    const Invocation inv{vm,     ud, global_impl(ud->binding), ud->binding, binding_table()[ud->binding].name,
-                         false, "", 2,  lua_gettop(L) - 1};
+    const char* name = binding_table()[ud->binding].name;
+    const Invocation inv{vm,   ud,    global_impl(ud->binding), ud->binding, name, global_gate(ud->binding),
+                         false, DeadRule::Silent, name, 2, lua_gettop(L) - 1};
     const int n = invoke(L, inv, err, sizeof err);
     if (n < 0) return raise(L, err);
     return n;
@@ -370,10 +501,11 @@ int method_call(lua_State* L) {
     const uint32_t slot = static_cast<uint32_t>(lua_tonumber(L, lua_upvalueindex(3)));
     const MethodSlot& s = method_slots()[slot];
     const char* name = s.label.c_str() + class_names()[s.cls].size() + 1;
-    const bool dead_check = ud->cls == cls_game_object() && std::strcmp(name, "Is_Valid") != 0 &&
-                            std::strcmp(name, "Is_Pool_Safe") != 0;
+    // q6 t11: the gate and the dead-wrapper rule of the slot (kMethodGates / kDeadRules above). The receiver's class
+    // decides whether the dead rule applies (a GameObjectWrapper); the slot's class only names the rule.
+    const bool object = ud->cls == cls_game_object();
     const uint32_t counter = s.row != kNoBinding ? s.row : extra_counter_slot(slot);
-    const Invocation inv{vm, ud, s.fn, counter, s.label.c_str(), dead_check, name, 1, lua_gettop(L)};
+    const Invocation inv{vm, ud, s.fn, counter, s.label.c_str(), s.gate, object, s.dead, name, 1, lua_gettop(L)};
     const int n = invoke(L, inv, err, sizeof err);
     if (n < 0) return raise(L, err);
     return n;
@@ -482,7 +614,7 @@ void push_engine_userdata(lua_State* L, const Ud& ud) {
     lua_setmetatable(L, -2);
 }
 
-void install_globals(lua_State* L, LuaVm::Impl& /*vm*/) {
+void install_globals(lua_State* L, LuaVm::Impl& /*vm*/, bool with_script) {
     const auto table = binding_table();
     for (uint32_t row = 0; row < table.size(); ++row) {
         const BindingInfo& b = table[row];
@@ -496,6 +628,7 @@ void install_globals(lua_State* L, LuaVm::Impl& /*vm*/) {
         push_engine_userdata(L, ud);
         lua_rawset(L, LUA_GLOBALSINDEX);
     }
+    if (!with_script) return;
     Ud script;
     script.cls = cls_script();
     lua_pushstring(L, "Script");
@@ -653,6 +786,25 @@ void LuaVm::sweep_dead_wrappers() {
             }
         }
         lua_pop(L, 1);
+    }
+}
+
+void LuaVm::reinstall_engine_globals() {
+    check_owner();
+    detail::install_globals(impl_->L, *impl_, false);
+    lua_settop(impl_->L, 0);
+}
+
+void LuaVm::rebind_host(const LuaHost& host_in) {
+    check_owner();
+    const bool moved = impl_->host.store != host_in.store;
+    impl_->host = host_in;
+    if (!moved) return;
+    lua_State* L = impl_->L;
+    for (const char* key : {detail::kObjCacheKey, detail::kObjCacheParentKey}) {
+        lua_pushstring(L, key);
+        lua_newtable(L);
+        lua_rawset(L, LUA_REGISTRYINDEX);
     }
 }
 

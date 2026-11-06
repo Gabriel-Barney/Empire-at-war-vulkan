@@ -7,20 +7,28 @@
 //                normal rendering; the report gives frame-time median / p99 / worst.
 //                FixedFrames: exactly frames_per_tick counted frames per sim tick, the presentation clock driven by the
 //                counted frames (frames / (30 x frames_per_tick) s), V-sync off (Immediate) and no frame cap, models loaded
-//                blocking, TAA off; a frame counts only when the presentation is settled (no pending pipeline, model,
-//                texture or terrain work), an unsettled frame is drawn again with the same sim state and sub-frame, so
-//                every run draws the same counted frames.
+//                blocking; a frame counts only when the presentation is settled (no pending pipeline, model, texture or
+//                terrain work), an unsettled frame is drawn again with the same sim state and sub-frame, so every run
+//                draws the same counted frames. TAA keeps the preset's setting (BM2b): every measured frame is drawn
+//                TAA-provisional and a frame that does not count is taken back out of the TAA history and jitter cycle
+//                (Renderer::discard_taa_frame); the history restarts with the measurement.
 //   PRESETS      BenchPreset: the window size and the video / audio settings of a run, by name (bench_presets). Nothing
 //                is read from the player's video options file.
 //   STATS        frame_time_stats: count, mean, median, p99 and worst of the counted frames' times (nearest-rank
 //                percentiles on the sorted samples).
 //   REPORT       bench_report_json: one JSON object (fixed key order, "alamo_game_benchmark": 1).
+//   SCENARIO     (bm2) --bench-scenario FILE fills these options from a BM1 / BM2 scenario file instead of the flags
+//                (benchmark_scenario.hpp); --bench-make FILE runs from --bench-save and writes a scenario at the end.
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
+
+#include "alamo/sim/bench_scenario.hpp"
 
 namespace alamo::game {
 
@@ -49,6 +57,12 @@ const BenchPreset* find_bench_preset(std::string_view name);  // case-sensitive;
 struct BenchmarkOptions {
     BenchMode mode = BenchMode::Off;
     std::string save;                                   // --bench-save FILE: the .alsv the run starts from (required)
+    // bm2 (benchmark_scenario.hpp): --bench-scenario FILE (run a scenario: save, orders, fingerprint, settings, camera) or
+    // --bench-make FILE (make = true: run from --bench-save and write the scenario; FILE may be a recipe). The other
+    // flags override what the file says.
+    std::string scenario;
+    bool make = false;
+    std::shared_ptr<const sim::bench::Scenario> scenario_data;  // the loaded manifest / recipe (null without one)
     std::string preset = std::string(kDefaultBenchPreset);  // --bench-preset NAME
     uint64_t ticks = 900;                               // --bench-ticks N: measured sim ticks (900 = 30 s of game time)
     uint32_t frames_per_tick = 2;                       // --bench-frames-per-tick K (fixed-frames mode, 1..64)
@@ -59,6 +73,8 @@ struct BenchmarkOptions {
     std::string png_dir;                                // --bench-png-dir DIR: PNG of every Nth counted frame
     uint32_t png_every = 0;                             // --bench-png-every N (0 = none)
     bool verify = true;                                 // --bench-no-verify: skip the presentation on/off replay check
+    uint32_t redraw_every = 0;                          // --bench-redraw-every N (tests, fixed frames): every Nth settled
+                                                        // measured frame is treated as unsettled and drawn again (0 = off)
     bool active() const { return mode != BenchMode::Off; }
     bool fixed() const { return mode == BenchMode::FixedFrames; }
 };
@@ -66,7 +82,7 @@ struct BenchmarkOptions {
 // Parses the benchmark flag at args[i] (advancing i past its value). 1 = consumed, 0 = not a benchmark flag, -1 = bad
 // value (*err says why). Flags: --benchmark realtime|fixed, --bench-save, --bench-preset, --bench-ticks,
 // --bench-frames-per-tick, --bench-settle, --bench-max-unsettled, --bench-report, --bench-crc-out, --bench-png-dir,
-// --bench-png-every, --bench-no-verify.
+// --bench-png-every, --bench-no-verify, --bench-redraw-every.
 int parse_benchmark_arg(std::span<const std::string> args, size_t& i, BenchmarkOptions& o, std::string* err = nullptr);
 // After parsing: "" when the options can run, else why not (no save, unknown preset, a value out of range).
 std::string check_benchmark_options(const BenchmarkOptions& o);
@@ -118,11 +134,24 @@ struct BenchReport {
     bool taa = false;
     uint64_t start_tick = 0, end_tick = 0, ticks = 0, target_ticks = 0;
     uint64_t frames = 0, unsettled_frames = 0, excluded_frames = 0, warmup_frames = 0;
+    uint64_t forced_redraws = 0;  // unsettled_frames forced by --bench-redraw-every
+    uint64_t taa_discarded = 0;   // measured frames taken back out of the TAA history (fixed frames with TAA)
     double wall_seconds = 0;
     FrameTimeStats frame_ms, render_ms, sim_ms;  // sim: the counted frames that ran a tick
     uint64_t final_crc = 0;
     std::string presentation_check = "skipped";  // "match" / "diverged" / "skipped"
     std::vector<std::string> autopilot;          // what the run answered for the player (battle prompts, dialogs)
+    // bm2: the scenario ("" = a plain --bench-save run), its version, the fingerprint check ("match", "skipped" or why it
+    // diverged: then the run is not comparable), the scenario written by --bench-make, the camera keys used.
+    std::string scenario, fingerprint = "skipped", scenario_made;
+    uint32_t scenario_version = 0;
+    uint64_t camera_keys = 0;
+    // bm2 t06: GPU timer scopes over the counted frames ("frame" = the whole command buffer, then the renderer's
+    // "world" / "scene" / "ao" / "post" / "taa" in first-seen order), in GPU milliseconds. gpu_timestamps false: the
+    // queue has no timestamps (no scopes).
+    bool gpu_timestamps = false;
+    uint64_t gpu_frames = 0;
+    std::vector<std::pair<std::string, FrameTimeStats>> gpu_ms;
 };
 std::string bench_report_json(const BenchReport& r);
 

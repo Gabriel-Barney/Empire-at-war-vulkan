@@ -122,6 +122,7 @@ Every tactical evaluation (proposal, FindTarget, EvaluatePerception) binds `Vari
 | AI_Player_Underworld | AI_GoalSet_ExpansionGeneric_Land, AI_GoalSet_Underworld_Land, AI_GoalSet_Underworld_Space, BasicOffensiveSpaceSet, BasicLandGoalSet | same | same |
 | None | BasicOffensiveSpaceSet, BasicLandGoalSet, AI_GoalSet_ExpansionGeneric_Land | same | same |
 | Basic*NoGalacticAI | as Basic* minus galactic sets; no free-store scripts declared | **none** → no free-store script runs [M] | same |
+| TR (Thrawn's Revenge) Basic* players (q6, 2026-11-04) | `BasicLandGoalSet` (+ SystemFunctions-type sets); no Expansion / faction land sets | **`LandTacticalFreeStore`** / `BusyTacticalFreeStore` (`LandFreeStoreScript` / `SpaceFreeStoreScript` are separate tags) | `Generic_Land` (Hero, Tactical_Targeted, Defensive, Tactical_Untargeted, High / Med_Priority, Map_Control) |
 
 `Test_Land` / `Test_Space` turn on categories Hero, Tactical_Targeted, Defensive, Tactical_Untargeted, StoryArc, High_Priority, Med_Priority, Map_Control (space also NoBudget) and turn off Macro_Goal. Their `Budget` equations are irrelevant in tactical (the AIBudget is galactic-only, AI_GALACTIC §1.6); the budget does not limit tactical goals. Each goal's numeric desire comes from its `GoalFunctions` perception equation, plus the learning failure terms (AI_GALACTIC §1.5).
 
@@ -199,6 +200,8 @@ Only for AI-owned, mobile objects (has locomotor, TEAM handled). It marks the un
 - The `Allowed_As_Defender_Land` equation is 1 in skirmish, and in campaign gates a defending AI with a base until its army is ≥ 3 × the attacker's force + reinforcements — the "defender turtles" rule.
 
 ### 5.6 Land skirmish end game: how idle units reach enemies they cannot see (RE, 2026-11-02) [H unless tagged]
+Scope: this section is **FoC**. TR runs a different land free store (`LandTacticalFreeStore`: visible enemy only within 600, else `enemy_location`, then heal and walk home), its `Should_Burn_Units_Land` skirmish branch is the pop-capped one only, and its `Should_Firesale_Land` is campaign-only; see §7.7.4-7.7.5.
+
 Question from the port: late FoC skirmish survivors (e.g. an M1 and a TIE Crawler) park for thousands of frames about
 600 from enemy troopers that are fogged to them. Retail has **no unit-level hunt** for this; the AI layer moves the
 units, using knowledge that ignores fog. The pieces, in the order they matter:
@@ -350,7 +353,7 @@ Tactical plans follow the framework (AI_GALACTIC §1.9): `Definitions()` declare
 
 ### 7.2 Producing units in battle
 - `Produce_Force()` (0x5fe240): one AIBuildTask per missing unit of each team (AI_GALACTIC §1.9, §2.4 for the state list). In tactical the relevant states are FREESTORE_ALLOC / WAIT_FOR_FREESTORE_ALLOC / HIJACK_UNIT (take a free unit), WAIT_FOR_CREDITS, GROUND_UNIT_PRODUCTION and PRODUCTION_QUEUED (buy), JOIN_TASK_FORCE. [H states; M tactical path]
-- **Land skirmish purchases** become entries in the player's reinforcement pool (player +0x2c8 table), so a bought land unit is not on the map until `Reinforce` drops it (§7.4). **Space skirmish** units are built at the space station (Tactical_Multiplayer_Build_Space_Units_Generic → `Produce_Force` of station-buildable types). Station upgrades are `Produce_Force` of `*_Starbase_Upgrade` objects (AI_Plan_ExpansionGeneric_SkirmishUpgradeSpaceStation). [M]
+- **Land skirmish purchases** become entries in the player's reinforcement pool (player +0x2c8 table), so a bought land unit is not on the map until `Reinforce` drops it (§7.4). This includes hero companies without a team (e.g. `Boba_Fett_Team_Land_MP`); SKIRMISH_SETUP §3.1 has the full chain [H]. **Space skirmish** units are built at the space station (Tactical_Multiplayer_Build_Space_Units_Generic → `Produce_Force` of station-buildable types). Station upgrades are `Produce_Force` of `*_Starbase_Upgrade` objects (AI_Plan_ExpansionGeneric_SkirmishUpgradeSpaceStation). [M]
 - Unit build time for the AI = normal build time × Land/Space_Build_Time_Multiplier (§4.5).
 
 ### 7.3 Orders (all build a blocking status and return it to Lua) [H unless tagged]
@@ -721,7 +724,7 @@ from retail:
   - Both compute landing positions near the target (0x6eaf60, which honours reinforcement-point zones and `maxWait`), then, **from the last pending unit to the first**, spawn each unit whose population cost (0x373500) fits the remaining cap (0x2acb10), subscribing the block status to its arrival signal 0x19, and add the spawned unit (or its team members / ceil(members/teamSize) copies for `Create_Team` types) to the task force. [H order; M position rules]
 - **Space** (0x6e8620) [H unless tagged; refixf t06]: the target is **not** a drop point that must be valid. The engine searches rings around it, one attempt per Lua poll, until a point passes the space drop test.
   - Arguments: a target convertible to a position (object, AITargetLocation, task force, position; 0x4990b0), optional max wait in seconds. No pending reinforcements for the TF → "taskforce %s has no reinforcements", nil.
-  - Campaign battle (0x28afb0) only: unless the flag at 0x140b155c4 is set [L: debug override], the AI player needs a live allied (0x39a2c0) `DUMMY_STAR_BASE` (behaviour 0x5c) object, else "Rule Change: AI players cannot reinforce after their starbase has been destroyed", nil. The pending ids are mapped to galactic objects (+0x11c).
+  - Skirmish (0x28afb0 true) only (corrected q6 t18: earlier text said "campaign battle"; 0x6e8620 applies the rule when 0x28afb0 returns true, and 0x28afb0 is the skirmish test, SKIRMISH_SETUP §0): unless the flag at 0x140b155c4 is set [L: debug override], the AI player needs a live allied (0x39a2c0) `DUMMY_STAR_BASE` (behaviour 0x5c) object, else "Rule Change: AI players cannot reinforce after their starbase has been destroyed", nil. The pending ids are mapped to galactic objects (+0x11c).
   - Returns a `SpaceReinforceBlockStatus` (ctor 0x722d50, Lua id 0x81f; init 0x7235c0): pending list copy (+0x50..+0x58), target T (+0x68; **z := 0**), timeout frame = now + int(FPS × maxWait) when given (+0x74, else −1), player (+0x80), validate flag +0x84 = 1, ring radius R (+0x7c) = **1000** when T lies inside a non-allied object's `Reinforcement_Prevention_Radius` (0x4d8d10: GOM list +0x2f0, owner not allied (0x39a230), 2-D distance² < radius², radius read as float at type +0x1df8), else **0**.
   - **Placement** runs inside `IsFinished` (vf19 0x7236f0 → 0x722e80), i.e. once per poll; `BlockOnCommand` polls once per script service (`PumpEvents`). Per call, space mode only:
     1. Take the **last** pending entry and resolve its type (0x2acfb0); none → pop it, stop for this call.
@@ -738,11 +741,273 @@ from retail:
 
 ### 7.5 Building structures (land) [H]
 - Build plans name under-construction types (`UC_*`) in their task force; the PotentialPlan's TacticalBuild marshaller reserves (pad, type) pairs (AI_GALACTIC §1.9.3).
-- `Build_All()` (0x6ea620) / `Build(typeName [, pad])` (0x6ea030): for each reservation, refuse with a log if the pad is no longer friendly/visible (0x39a2c0), if game rules block it ("pad may be occupied or enemies may be too close", 0x42e400), or if the rebuild cooldown after a destroyed building is active (0x42daf0); otherwise issue the pad build (0x42edf0, the player's build path, charges credits) and return a TacticalBuildBlockStatus (id 0x81e). `Get_Reserved_Build_Pads` returns the reserved pads.
+- `Build_All()` (0x6ea620) / `Build(typeName [, pad])` (0x6ea030): for each reservation, refuse with a log if the pad's owner is no longer allied with the AI player (0x39a2c0, relation 0; "location is no longer friendly"; there is no visibility test here, corrected q6 t19), if game rules block it ("pad may be occupied or enemies may be too close", 0x42e400), if the rebuild cooldown after a destroyed building is active (0x42daf0), or if the (type, pad) pair is not one of the plan's reservations (0x6c1e80); otherwise issue the pad build through the player's build path 0x42edf0 (for an AI player it builds at once **without a credit charge**, §7.5.1) and return a TacticalBuildBlockStatus (id 0x81e). If no under-construction object appeared, signal 0x22 is raised on the pad and the build cost is credited back to the player (0x27f370(player, +cost, 0)) [H code; M why a refund is due]. `Get_Reserved_Build_Pads` returns the reserved pads.
 - `Sell_Tactical_Structure`, `Fund_Tactical_Structures`, `Purchase_*_Upgrades` are plans over the same primitives.
+
+#### 7.5.1 Build pads: who may build, who owns the result, how pad ownership changes (q6 t19 RE, 2026-11-04) [H unless tagged]
+
+Sources: 0x42edf0 (player build), 0x42dbd0 (start build), 0x42e890 (completion), 0x42e6d0 (child died), 0x42ecd0
+(child sold), 0x42e400 (AI / Lua rule), 0x5739c0 (Lua `pad.Build`), 0x6ea030 (TF `Build`), 0x4d29a0 / 0x4d3830
+(AI pad tables), 0x500a00 (capture controller), 0x39a230 / 0x39a2c0 / 0x2823e0 (alliance), TACTICAL_COMBAT §2.10
+(relation table). Rules already in L1_S4_REMAINING §3.6 / §4.2 and REMAINING_GAPS §6.5 are not repeated.
+
+**Alliance tests.** 0x39a230(obj, playerId) and 0x39a2c0(obj, player) both read the object's owner (planets and
+capture points their controller) and return relation(player → owner) == 0. Relation 2 (neutral) is **not** allied.
+In skirmish the Neutral player's own entry is 2 as well (TACTICAL_COMBAT §2.10), so the Neutral player is not even
+allied with itself there; in campaign the self entry is 0.
+
+**Can anyone build on a neutral, uncaptured pad? No.**
+- Player build (command 33 → 0x42edf0, humans and AI): after the "UC present", "built present" and "pad under the
+  player's FOW" refusals, 0x39a230(pad, player) must be true, else the log "TacticalBuild: Player %d cannot build on
+  %s(%d) because it is not owned by an ally (current owner id=%d)" and the local error SFX. A neutral pad fails.
+- Start build 0x42dbd0 (every path ends here) repeats the test with 0x39a2c0(pad, builder) and returns false.
+- AI: the TacticalBuild marshaller takes its pads only from the free store's pad table (free store +0xe0 map, listed
+  through +0xe8 by 0x4d3830, AI_GALACTIC_3 §1.7). 0x4d29a0 enters a pad there only when its owner is allied with
+  the AI player (0x39a2c0) and subscribes to the pad's 0x10 / 0x1a signals, so **a neutral pad is never reserved**.
+  TF `Build` re-tests 0x39a2c0 before building. To build on a neutral pad the AI must capture it first (the
+  `Secure_Build_Pad` / `SecureBuildPad` plans stand units on it, A1_READINGS §33.3).
+- Lua `pad.Build(type [, true])` (0x5739c0) builds for the **pad owner** (0x42dbd0(…, pad owner id, charge 0, sfx 0)).
+  In skirmish a Neutral-owned pad fails (Neutral is not allied with itself) and the call raises "unknown error
+  starting build". In campaign the self relation is 0, so a story script can build on a Neutral pad and the Neutral
+  player owns the result [H from the relation rules; no shipped script found doing it].
+
+**Who owns the result.** The under-construction object is created for the **builder** (0x29f810 owner = the builder
+id; pad pack +0x20 := builder id), and the finished object for the id stored in +0x20 (then +0x20 := −1). The pad's
+own owner does not change at build start or completion (0x3912c0, called at build start, only clears a local-player
+UI flag). An allied player can therefore build on its ally's pad and own the structure while the pad stays the
+ally's.
+
+**Rule 0x42e400 (AI and Lua `Build(…, true)` only; the player build 0x42edf0 does not test nearby units).** A nearby
+object blocks when it is alive, has `Influences_Capture_Point`, has neither BASE_SHIELD (slot 0x39) nor
+DUMMY_GROUND_STRUCTURE (slot 0x5F) and its owner is **not allied** with the pad owner (0x39a230 false). Relation-2
+objects (the Neutral player's, map props owned by Neutral) therefore block exactly like enemies; there is no neutral
+exemption [H]. (Corrects the port note in SKIRMISH_SETUP "Port status", which exempts a Neutral owner [M].)
+
+**How pad ownership changes during a battle.**
+1. A pad is a CAPTURE_POINT (L1_S4_REMAINING §4.2). Its controller each service (0x500a00) is the pad owner itself
+   whenever the pad pack holds an under-construction **or** a finished object (rule a). So **an occupied pad never
+   changes owner by capture**, whoever stands on it, and an under-construction pad is as safe as a built one.
+2. An empty pad follows the capture rules: a Neutral-owned pad goes to the first in-radius candidate's owner after one
+   transition; an owned empty pad with an enemy goes owner → neutral → capturer (two transitions).
+3. **Child dies** (0x42e6d0, from the death path 0x39bdb0): the pad slot is cleared (the lock +0x2c too when it was
+   the finished object; galactic persistence removed). Then:
+   - pad type `Destroy_When_Child_Dies` (+0x99): the pad itself is killed;
+   - otherwise 0x501050(capture behaviour, Neutral id, −1): **the pad's owner becomes Neutral at once** (no
+     transition time), the capture record's pending controller := Neutral, skin and reveal refreshed; then the
+     `Minimum_Time_Before_Pad_Can_Build_Again` cooldown (+0xa0c > 0) starts; pad anim 0x75.
+4. **Child sold** (0x42ecd0, from `TacticalSellBehaviorClass` 0x5248b0): the slot is cleared and persistence removed,
+   but **no ownership reset and no cooldown**: the seller keeps the empty pad until someone captures it by rule 2.
+5. **Does a pad that turns neutral take its structure with it? No.** The structure is owned by its builder, not
+   through the pad. Owner changes are per object (0x38e5a0 walks only the object's own behaviours and, for a team,
+   its members / container); the pad's behaviour pack has no owner-change handler that touches its child [H for the
+   pad functions read; M that no other listener does]. In practice the pad cannot turn neutral while it has a child
+   (rule 1), and it turns neutral exactly when the child is gone (item 3). A structure whose owner changes by other
+   means (Lua `Change_Owner`) leaves the pad's owner unchanged.
+
+**Port notes**
+- Player build, TF `Build` / `Build_All`, the TacticalBuild pad list and Lua `pad.Build` must all require
+  relation(builder → pad owner) == 0; a Neutral-owned pad is never buildable in skirmish. The AI's open-pad list holds
+  only allied-owned pads (re-enter on the pad's owner-change signal).
+- Create the UC and the finished object for the builder id, never for the pad owner; keep the pad owner unchanged.
+- Capture controller: an occupied pad (UC or finished) keeps its owner. On child death set the pad owner to Neutral
+  immediately (or kill the pad with `Destroy_When_Child_Dies`) and start the cooldown; on sale keep the owner and start
+  no cooldown.
+- 0x42e400: do not exempt Neutral-owned objects; only allied (relation 0) objects are ignored. Human builds skip the
+  proximity test.
+- Iterate the AI pad table in a defined order (it is a hash map in the original, as the free store, §5.3).
+- Port status (q6 t19, 2026-11-04): done in `tactical_battle_pads.cpp` / `tactical_battle_bt.cpp` / `battle_ai.cpp` /
+  `engine/tactical/garrison` (capture rule a): builds need relation 0 to the pad owner (`bt_allied`, so a Neutral pad
+  refuses every build in skirmish), the UC and the result belong to the builder, an occupied pad keeps its owner,
+  child death resets the pad (or kills it), a sale keeps the owner and starts no cooldown; the AI pad list is in
+  ascending id order. 0x42e400 has no Neutral exemption, but its candidates are the battle's live units only [port,
+  open]: Neutral map props (`Prop_Urban_HalfWall_B`, `Prop_Bushes_Tan04`, `Influences_Capture_Point` unset = true)
+  stand within the radius of three Utapau pads, and counting them stopped every AI build there, so the vanilla land
+  skirmish no longer ended. Whether retail's query reaches props is not read.
 
 ### 7.6 Garrisons [H, Lua]
 `Try_Garrison` (PGCommands): nearest own `GarrisonCanFire` container within range that `Can_Garrison(unit)`, else (if not offensive-only) any `CanContainGarrison`; `SPREAD_OUT` off, `unit.Garrison(container)`, and if the unit was in a TF, `Release_Unit` + `Lock_Current_Orders`. `Try_Deploy_Garrison` ejects occupants above a health threshold that are good against the target. `Garrison_Bunker` / `Garrison_Transport` goals run the GarrisonTarget plan (move next to the target, guard until it is ours/empty, then `Garrison`). `TaskForce.Can_Garrison` / `Garrison` (0x5fbcb0 / 0x5fc440) are the TF-wide versions.
+
+### 7.7 Base-attack follow-through: Destroy_Structure sizing, release, re-tasking, and how a land skirmish ends (q6 RE, 2026-11-04) [H unless tagged]
+
+Port symptom: in a TR land skirmish (`_MP_LAND_BLOOD_GULCH`, Empire AI vs Rebel AI) the Empire kills everything but
+`Rebel_Command_Center` (and a barracks). The CC self-repairs (TACTICAL_GAPS §2.3.1a: it heals under fire), the
+Empire's `Destroy_Structure` task forces have 1-5 units and get released, and for 13 minutes no Empire unit came
+within 2884 of the CC. Vanilla FoC land skirmish in the port also had no winner at 40000 ticks. This section adds what
+the docs lacked. Sources: 0x6c5de0, 0x6c47c0, 0x5f1d00, 0x5f2820, 0x5b43d0 (token names), 0x72ac70, 0x6bff00,
+0x73ce80, 0x6e9440; FoC and TR `DestroyStructure.lua`, `PGTaskForce.lua`, `PGEvents.lua`, `BurnUnitsLand.lua`,
+FoC `BusyTacticalFreeStore.lua`, TR `LandTacticalFreeStore.lua`, `LandGoals.xml`, `BasicLandEquations.xml`,
+`AI_Equations_Skirmish.xml`, the structure XML.
+
+#### 7.7.1 The tactical contrast lists (0x6c5de0 / 0x6c47c0 → 0x5f1d00 → 0x5f2820) [H]
+
+AI_GALACTIC §1.9.3 and AI_GALACTIC_2 §1.4 "Contrast" describe the galactic lists (0x5f1990). Tactical modes (PP
++0x198 ≠ 0) build them differently:
+- **No target, or `IgnoreTarget`:** both lists empty, tolerance 0.
+- **Tolerance** T = 1 − (f·PFCA + `MinContrastScale`)/(f·PFCA + `MaxContrastScale`), f = recent failures of this
+  plan at this target (as galactic).
+- **Main list** (0x5f1d00 with flag 0) and, only when some TF of the plan is an `EscortForce`, an **escort list**
+  (flag 1). Layer byte of every entry = (mode == land), so a land list is all "ground".
+  - entry 0: (no type, `S(target, all categories)`), **not scaled**;
+  - then one row per `EnemyContrastTypes` key of the plan (plan +0x68, map order): `S(target, that key's category)` ×
+    (`MaxContrastScale` + f·PFCA) × `Land_AI_Contrast_Multiplier` (difficulty +0x3c; space +0x38);
+  - when entry 0 is ≤ 0, every typed row is 0.
+- **S(target, mask)** (0x5f2820) evaluates one token path in the AI's perception system for the current mode, with
+  `Parameter_Category` = mask when a mask is given (no attenuator, so full power regardless of health). The path
+  (token ids from 0x5b43d0) depends on the target and the flag:
+
+  | Target | Main list (flag 0) | Escort list (flag 1) |
+  |---|---|---|
+  | unit target (has an object) | `Target.ForceUnnormalized`: the target object's own `AI_Combat_Power` if its category matches (AI_TACTICAL_PERCEPTION §3.1) | `Target.Location.EnemyForceUnnormalized`: the enemies of Self around the target, the target itself excluded (§3.3 there) |
+  | region (hint zone) | `Target.EnemyForceUnnormalized` | the same |
+
+  The leaf's failure flag is ignored (a failing leaf counts as 0.0). Unlike galactic 0x5f2430, nothing else is added:
+  no own-structure power term.
+- **Satisfied test** 0x72ac70 (as AI_GALACTIC_2 §1.4): only typed rows (key ≠ 0) with target > 0 and remaining > 0
+  add to the residual. A list with no positive typed row is satisfied at once (residual 0 ≤ T).
+- So against a unit target the **main force is sized against the target object's own power** and the escort against
+  what defends it.
+
+#### 7.7.2 Worked example: `Destroy_Structure` against a command centre [H data, M consequence]
+
+| | FoC `DestroyStructure.lua` | TR `DestroyStructure.lua` |
+|---|---|---|
+| Contrast scales | library default 1.1 / 1.5 → T = 0.267 | `MinContrastScale 0.2`, `MaxContrastScale 2.0` → **T = 0.9** (a 10 % cover is enough) |
+| MainForce | `Infantry \| Vehicle \| Air = 1,10`, `LandHero = 0,2`, `DenyHeroAttach`, minus 4 transport / AA types | `Infantry \| Vehicle \| AirGunship \| AirSpeeder = 1,20`, `InfantryHero \| VehicleHero = 0,2` |
+| GuardForce (EscortForce) | `Squad_Rebel_Trooper \| Squad_Stormtrooper = 0,2` | `Infantry = 0,4` |
+| Goal (LandGoals.xml, same in both) | Enemy_Structure, Tactical_Targeted, Low_Threat, Time_Limit 30, Activation_Tracking_Duration 20, Per_Activation_Failure_Desire_Adjust −15 | same |
+
+- `Rebel_Command_Center` (and `Imperial_Command_Center`) sets **no `AI_Combat_Power`** in FoC or TR, so its power is 0.
+  The main list's entry 0 is 0, all typed rows are 0, and main contrast is satisfied before any unit is chosen.
+  (FoC barracks / factories have 300-800; TR's barracks template has 1.)
+- The solver (AI_GALACTIC_2 §1.2) then fills only the team minimums: Contrast scores 0 for a candidate while a slot is
+  below its min and vetoes it afterwards. Result with no defenders near the CC: **one MainForce unit, no escort**.
+  The pick is the best sum of FreeStore (nearest free unit, 1 − key/maxKey), Plan (team fill), TechTree (tech/5 × 2)
+  and Hero (0): the nearest high-tech unit of any listed category, chosen without regard to its damage against
+  structures (TR infantry do about 0.2 per hit after `ArmourG_Structure`).
+- With defenders near the CC the escort list (their power) is positive. Escort-team candidates fill GuardForce. A
+  candidate that only fits MainForce can also score on the escort list (main contrast met). The first placement pass
+  skips its MainForce slot (main met, escort not), so the second pass puts it there. Corrected q6 t18
+  (AI_GALACTIC_TOKENS §9.10 [H]): the commit 0x6c4b20 subtracts a non-escort unit from the **escort** list once the
+  main contrast is met, so these MainForce units do reduce the escort residual. MainForce and GuardForce together
+  grow until the defenders' power is covered (or the teams are full). This is the only way a `Destroy_Structure` task
+  force against a zero-power structure gets large.
+- Every ground structure without `AI_Combat_Power` behaves like the CC. `Applies` keeps the CC a target while fogged:
+  both CCs set `Last_State_Visible_Under_FOW` (TR also `Initial_State_Visible_Under_FOW`), §3.3 step 1.
+
+#### 7.7.3 When the task force is released [H]
+
+`MainForce_Thread` is `Produce_Force` → `QuickReinforce` → `Set_Land_AI_Targeting_Priorities` →
+`BlockOnCommand(MainForce.Attack_Move(AITarget, MainForce.Get_Self_Threat_Max()))` (no time limit) → `ScriptExit()`.
+GuardForce loops `Escort(GuardForce, MainForce)` forever. The plan ends, and every unit returns to the free store
+(plan end 0x5f6a50, `Release_Forces(1.0)`), on the first of:
+1. **The Attack_Move block finishes** (A1_READINGS §33.2, handler 0x73ce80). For an object target it does **not**
+   finish on arrival. It finishes when the target dies (signal 0x10), when the target turns non-hostile (0x1a), when
+   every unit of the block is gone (died, changed owner, or taken by a newer order, signal 0xb), when the TF is empty,
+   or, after all units reported arrival, when the target is no longer hostile, fails 0x5680b0 (alive, not garrisoned,
+   not in a transport, not in a hero clash, …; A1_READINGS §33.2.1), or is fogged for the AI **and** its type has
+   neither `*_State_Visible_Under_FOW` flag. Its Result is always nil (A1_READINGS §33.2.2). The
+   CC has the flag, so its block cannot finish by fog. While the CC lives, the plan holds its units there.
+2. **Reinforcement path.** In land `QuickReinforce` proceeds only when `Are_All_Units_On_Free_Store()`. If any unit had
+   to be bought (reinforcement pool), it calls `WaitForAllReinforcements(tf, target)` (drops near the target) and then
+   `ScriptExit()` ("Abandonning plan for reproposal if still relevant"). The dropped units are released near the
+   target and the goal is proposed again.
+3. **The goal is dropped by the goal system** (AI_GALACTIC §1.6). `DestroyStructure.lua` never calls
+   `Set_As_Goal_System_Removable(false)`, so its goal is replaceable: maintenance drops it when its re-evaluated desire
+   is ≤ 0 or the PP re-check 0x6c47c0 (contrast lists rebuilt, Finalize re-run) fails; Resolve_Category drops it when
+   higher-effective-desire Tactical_Targeted proposals take the category's slots. `Time_Limit` (30 s) does **not** end
+   a running tactical plan: it is only an activation test (`0 < AllowedTime < ETA`), and the AllowedTime < ETA
+   maintenance drop is galactic-only.
+4. **Plan events.** `Default_No_Units_Remaining` and `Default_Original_Target_Owner_Changed` call `ScriptExit()`;
+   `Default_Original_Target_Destroyed` does not (the block's signal ends the thread).
+5. **Other plans.** `Purge_Goals` from `BurnUnitsLand` (and the tech plans) ends every other running plan.
+6. **Single units** leave without ending the plan: `Default_Unit_Damaged` (PGEvents) releases a unit it sends to kite
+   or heal when the attacker is good against it, it is a hero, or its hull or shield is < 0.33 (`GoHeal(…, release)`
+   = `Move_To(healer)`, `Lock_Current_Orders`, `Release_Unit`); `Try_Garrison` does the same. Damage from the plan's
+   own `AITarget` is ignored by that handler, so a CC without weapons never triggers it.
+
+**Re-tasking.** A released unit is re-admitted to the free store (TF vf49 0x5ff610: free-store admission, then its
+targeting priorities reset to its type's, A1_READINGS §39.2). No stop order is issued, so a unit keeps shooting its
+current target [M: no order call on that path]. The goal is dropped at the next Commit and the same
+(Destroy_Structure, CC) pair is proposed again within one or two passes on Normal / Hard (A1_READINGS §39.1). If its
+activation fails (no free unit, PP fails), each failure in the last 20 s adds −15 to the desire. That silences the CC
+goal for up to 20 s (FoC desire ≈ 15, TR ≈ 5), then it comes back.
+
+#### 7.7.4 What the free store does with idle units near the end [H, shipped Lua]
+
+The two games differ here, and this is where the end game is decided.
+- **FoC `BusyTacticalFreeStore`** (§5.5): `Service_Attack` takes `Find_Nearest(unit, owner, false)`, the nearest
+  enemy UNIT_AI object **visible** to the AI (real fog; structures count: both CCs have UNIT_AI). If it is not good
+  against the unit (a CC without weapons never is), the unit `Attack_Move`s to it when within 600, **and at any
+  distance when `aggressive_mode`**, which is always on in skirmish. Only with no visible enemy does it use
+  `enemy_location` (hint-zone `EnemyUnitConcentration`, power-weighted, A1_READINGS §16, so a zero-power CC adds 0),
+  then `Service_Guard` (guard the nearest own structure).
+- **TR `LandTacticalFreeStore`** (TR's AI players declare `LandFreeStoreScript LandTacticalFreeStore`;
+  `BusyTacticalFreeStore` is their space script): `Service_Attack` needs `aggressive_mode`
+  (`Allowed_As_Defender_Land` > 0, or an `ATTACKER ENTRY POSITION` hint) and a visible nearest enemy. It
+  `Attack_Move`s to that enemy only when it is within `free_store_attack_range` (600; 6000 once an `AirGunship` /
+  `AirSpeeder` was serviced, a global that is never reset), else to `enemy_location`, else it gives up. Then
+  `Service_Kite`, `Service_Heal(1.0)` (an idle unit with any damage walks to the nearest own healer), and
+  `Service_Guard`: `Attack_Move(friendly_location)` (the zone with the highest own unit concentration) plus
+  `Try_Garrison`, or guard the nearest own structure. **An idle TR unit more than 600 from the CC walks home.**
+- TR's land goal set is `BasicLandGoalSet` only (no Expansion / faction land sets) and its land template is
+  `Generic_Land` (Tactical_Targeted on).
+
+#### 7.7.5 Goal proposal for the last structure: no special end-game rule [H]
+
+- No engine code proposes "finish the base". There is no desire ramp over battle time and no cheat or aggression
+  ramp for land targets. FoC and TR land data have no "close to victory" token (`Am_I_In_Winning_Position` is
+  galactic). `Destroy_Structure` is proposed for the CC on every pass with its normal desire.
+- **FoC `Should_Destroy_Structure`** for a CC: `Allowed_As_Defender_Land` (1 in skirmish) × 1.0 (faction owner) ×
+  (0.001 + 15 × (1 − `Target.Location.EnemyForce`)) × (1 − `May_Lose_Land_Control_Game`). With no defenders: ≈ 15.
+- **TR `Should_Destroy_Structure`**: `Allowed_As_Defender_Land` × (1 − neutral owner) × (0.001 + turret / bacta /
+  repair term + `Priority_Structures` + 20 × mines / reinforcement points + 5 × (1 − `Location.EnemyForce`)) ×
+  (1 − turbolaser tower) × (1 − `May_Lose_Land_Control_Game`) × (1 − `IsContestable`) ×
+  **`Is_Initial_Skirmish_State_Established`**. For a CC that is ≈ 5. The last factor is about **Self** (the
+  attacker): it is 1 only while Self owns a barracks **and** a command centre **and** has non-structure force > 0
+  **and** more than one resource structure (`TacticalBuiltStructureCount` of `Mineral_Processor`,
+  `Skirmish_Ground_Mining_Facility`, the two GroundWar reinforcement-point upgrades), or while Self owns any
+  `Ground_Level_*_Tech_Upgrade` (the "+" term; the sum can exceed 1). An Empire with at most one mine and no tech
+  upgrade proposes **no** `Destroy_Structure` at all.
+- **Burn_Units_Land.** FoC: as §5.6 item 5. TR: the campaign branch, or in skirmish `UnitSpaceAvailable` < 1 and
+  reinforcements > 0.25 × (or >) the enemy's half-infantry force. The plan collects every free unit and
+  `Attack_Move`s the nearest **visible** enemy with `InBase` (CCs have it), else the nearest visible enemy, until
+  it dies. With nothing visible it does nothing (one pass, `Sleep(5)`, release). TR's `Should_Firesale_Land` is
+  campaign-only, so TR skirmish never reveals the map. FoC's firesale reveals only for the **losing** AI (no command
+  centre) and the local human, never for the winner.
+
+#### 7.7.6 How a vanilla AI-vs-AI land skirmish ends [M: chain of [H] rules, not probed]
+
+1. `Destroy_Structure` for the enemy CC (desire ≈ 15, applicable while fogged) sends a 1-unit task force (§7.7.2). Its
+   Attack_Move block holds that unit at the CC until the CC dies or the unit dies (§7.7.3 item 1).
+2. Its arrival reveals the CC to the AI. From then on every idle free-store unit, map-wide, `Attack_Move`s to it
+   within about 2 s of its next service (FoC aggressive `Service_Attack`, §7.7.4). Burn_Units_Land does the same for
+   a capped AI. The combined damage beats the 14 hp/s self-repair.
+3. When the last `Victory_Relevant` enemy object dies, 0x2c0340 declares the winner after the 210-frame countdown
+   (SKIRMISH_SETUP §4).
+- If the 1-unit task force dies on the way, the goal is re-proposed (step 1 again). The goal-level pressure is one
+  unit at a time; the end comes from the free store's reaction to a visible target.
+- **TR on the original engine** [M]: step 2 reaches only idle units within 600 (air 6000) of the CC, and step 1
+  depends on `Is_Initial_Skirmish_State_Established` for the attacker. A slow end against a self-repairing CC is
+  therefore what TR's scripts produce. The port should match these rules first and judge TR by them.
+
+**Port notes**
+- Contrast (engine/ai tactical PP): build the tactical lists as §7.7.1: main list `Target.ForceUnnormalized` (unit) /
+  `Target.EnemyForceUnnormalized` (region), escort list `Target.Location.EnemyForceUnnormalized` only when an
+  EscortForce exists, typed rows × (Max + f·PFCA) × `Land_AI_Contrast_Multiplier`, no own-structure term. A 1-unit
+  `Destroy_Structure` task force against a zero-power CC is correct; do not enlarge it.
+- Attack_Move on an object target must stay open after arrival while the target lives and is hostile and not
+  (fogged without the visible-under-FOW flags). If the port's TFs "get released" while the CC lives, check this first:
+  log block finish reasons per plan.
+- Make sure `Applies` honours `Last_State_Visible_Under_FOW` / `Initial_State_Visible_Under_FOW` for the CC, so the
+  goal is proposed while the CC is fogged.
+- TR: log `Is_Initial_Skirmish_State_Established` and `Number_Resource_Structures_Land` for the Empire in the stuck
+  run. If the factor is 0, no `Destroy_Structure` goal exists, which is the 13-minute "no attacker within 2884"
+  picture. `TacticalBuiltStructureCount` and `HasUnit` for tech-upgrade objects must match the original
+  (AI_TACTICAL_PERCEPTION).
+- Free store: run TR's `LandTacticalFreeStore` for land and `BusyTacticalFreeStore` for space, as the AI player XML
+  says; FoC uses `BusyTacticalFreeStore` for both. `Find_Nearest` must include UNIT_AI structures and use real fog
+  for AI players.
+- Do not add an end-game cheat, a reveal for the winner, or a Force_Healing combat gate: the original has none.
 
 ---
 
@@ -805,10 +1070,12 @@ Lua short-circuit order matters: `(GameRandom.Get_Float() > 0.5) and Try_Ability
 4. Reinforcement landing positions (0x6eaf60) and the land ReinforceBlockStatus finish/fail rules. (Space resolved by refixf t06, §7.4: ring search in SpaceReinforceBlockStatus; 0x2b03e0 is the population-room test.)
 5. Free-store admission bit meanings (type bitfield +0x790 bits 0x20, 0x5b, 0x5f; obj +0x2b0/+0xf8; mode +0x38 set) and the +0x30 lock field writer; `Lua_Is_Object_On_Free_Store` / `Get_Object_Count`. **+0x30 writers/readers and the two Lua methods: done, A1_READINGS §28** (+0x30 = owning PP; `Lock_Current_Orders` is obj +0x3a8).
 6. `Project_By_Unit_Range`, `Get_Self_Threat_Max/Sum`, `Get_AI_Power_Vs_Unit`, `Should_Switch_Weapons`, `Is_Good_Against`, `Get_Time_Till_Dead` (used by every land plan and PGEvents).
-7. AIBuildTask tactical path (FREESTORE_ALLOC vs purchase vs HIJACK_UNIT ordering; skirmish purchase into the reinforcement pool vs spawn at the factory) — confirm with a probe.
+7. AIBuildTask tactical path (FREESTORE_ALLOC vs purchase vs HIJACK_UNIT ordering) — confirm with a probe. ~~Skirmish purchase into the reinforcement pool vs spawn at the factory~~: pool, never at the factory (SKIRMISH_SETUP §3.1, q6 t19) [H code].
 8. Event code ↔ name table (shared with AI_GALACTIC open item 8) — needed to dispatch `Unit_Damaged`, `Target_In_Range`, etc. in the right order relative to combat.
 9. Confirm `Has_Space_Evaluator` on own type at space init vs representative type at runtime (§3.1) and the conflict-record attacker/defender offsets (§1.2).
 10. Probe: a skirmish AI-vs-AI land and space run logging per-frame synced-RNG counts and AI orders would validate §2, §5.3 and §10 (Gabriel launches; kit under `tools/probe_mod/`).
+11. From §7.7 (q6, 2026-11-04): confirm on the original that a 1-unit `Destroy_Structure` task force is what the AI sends against a command centre with no defenders, and that MainForce grows only while the escort list is unmet [M]; whether a released unit keeps its current attack order (no order call was found on the release path) [M]; `Number_Resource_Structures_Land` / `TacticalBuiltStructureCount` semantics for structures under construction (they gate TR's `Is_Initial_Skirmish_State_Established`).
+12. Probe (Gabriel): a TR AI-vs-AI `_MP_LAND_BLOOD_GULCH` run on the original, logging how long the last CC survives, would show whether TR's slow end (§7.7.6) is retail behaviour.
 
 ---
 
@@ -817,7 +1084,7 @@ Lua short-circuit order matters: `(GameRandom.Get_Float() > 0.5) and Try_Ability
 **Key rules**
 - One context per AI player per battle; first service picks the opponent (attacker/defender preference), runs the six subsystems' begin hooks, and (land campaign battles only) swaps the AI's credits for the template tactical allowance, returning leftovers × Credit_Multiplier at the end.
 - Cadence is frame-driven in T7, player index order: Goal and Template every frame, Planning and Execution every 3 frames, Perception and Learning every 300 frames (no work). Easy sleeps 15 s after each tactical goal commit.
-- Targets: unit targets for objects whose type has `Has_Land/Space_Evaluator`, appended on creation and erased in place on death; land regions = map AI hint zones; space regions = a 2000-unit grid named `CELL_x_y`. `Applies` classifies by behaviour slots (unit / build pad / cash point / reinforcement point / structure) and owner alliance, and hides fully fogged objects.
+- Targets: unit targets for objects whose type has `Has_Land/Space_Evaluator`, appended on creation and erased in place on death; land regions = map AI hint zones; space regions = a 2000-unit grid named `CELL_x_y`. `Applies` classifies by behaviour slots (unit / build pad / cash point / reinforcement point / structure) and owner alliance, and hides fully fogged objects unless their type has `Last_State_Visible_Under_FOW` / `Initial_State_Visible_Under_FOW` (command centres do). Base attacks: §7.7.
 - Tactical goals are not budget-limited; desire = goal equation + learning terms; each accepted candidate draws once for its plan.
 - The free store runs `FreeStoreService` every ~20 s and `On_Unit_Service` per free unit every ~2 s (BusyTacticalFreeStore); this anti-idle Lua is most of what a casual observer sees the AI do.
 - FindTarget / Reachable_Target: score every applicable target, best-or-weighted pick with P(best) = p and at most one synced draw; FindDeadlyEnemy = max accumulated damage dealer; Get_Most_Defended_Position = max allied-force threat cell, ties by coin flip.

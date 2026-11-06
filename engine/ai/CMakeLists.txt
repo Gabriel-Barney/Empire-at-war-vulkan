@@ -21,6 +21,12 @@ add_library(alamo::ai ALIAS alamo_ai)
 target_include_directories(alamo_ai PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(alamo_ai PUBLIC alamo_galactic alamo_data alamo_core alamo_engine_flags
                                PRIVATE alamo_objects)
+# q6: the galactic seed's force roles use galactic::galactic_unit_kind (galactic_rules.cpp, in alamo_galactic_sim, which
+# exists when data, objects and commands are configured; without it the seed keeps its own tag rule).
+if(TARGET alamo_galactic_sim)
+  target_link_libraries(alamo_ai PRIVATE alamo_galactic_sim)
+  target_compile_definitions(alamo_ai PRIVATE ALAMO_AI_HAVE_GALACTIC_SIM=1)
+endif()
 
 add_executable(alamo_ai_tests tests/test_ai.cpp)
 target_link_libraries(alamo_ai_tests PRIVATE alamo_ai alamo_objects Threads::Threads)
@@ -38,6 +44,10 @@ if(TARGET alamo_jobs)
 endif()
 add_test(NAME alamo_ai_tests COMMAND alamo_ai_tests)
 set_tests_properties(alamo_ai_tests PROPERTIES TIMEOUT 120)
+# q6: galactic seed roles over Thrawn's Revenge (skips without the mod next to the Steam FoC install / ALAMO_TR_DATA).
+add_test(NAME alamo_ai_tests_tr_seed_roles COMMAND alamo_ai_tests --tr-seed-roles)
+set_tests_properties(alamo_ai_tests_tr_seed_roles PROPERTIES TIMEOUT 300)
+alamo_label_slow(alamo_ai_tests_tr_seed_roles)
 
 # --- A2 (owner: A2 agent) -------------------------------------------------------------------------------
 # alamo_ai_lua: plan-script loading + script pool on the Lua bridge (shared with A1).

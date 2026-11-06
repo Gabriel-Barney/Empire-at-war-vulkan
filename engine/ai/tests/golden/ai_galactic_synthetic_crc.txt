@@ -1,184 +1,184 @@
 # A2 synthetic AI-vs-AI campaign: per-frame CRC (every 150th frame + last), decisions
-frame 150 d9fd220953fdd087
-frame 300 4c9dde41572d6871
-frame 450 bcd04a778c6c4f34
-frame 600 e94660732106c426
-frame 750 be5df0222dd57a7d
-frame 900 4e534c651a2a2be0
-frame 1050 3f455c430e04ba43
-frame 1200 4c77359ece35db8a
-frame 1350 7433fc0fdf92a68e
-frame 1500 c7b4e320587f7ee9
-frame 1650 e90b71e9e7102e39
-frame 1800 25b2c0da184d6578
-frame 1950 7aaa49a214fe4b6b
-frame 2100 87f51d4c13645de1
-frame 2250 c5e77f80eef901a9
-frame 2400 2cad71c1df8f0f8f
-frame 2550 4c9716ccba178a4b
-frame 2700 69bc09fb8682b486
-frame 2850 4fe6ccb15c1be5ed
-frame 3000 eabe7d37191b4bc1
-frame 3150 4de60fc4a2f0f909
-frame 3300 46cf3272a6a94458
-frame 3450 a7bf82777ffe4b9a
-frame 3600 8dc73548de3e5b73
-frame 3750 642db68eb0a3bd72
-frame 3900 cf9682562adfea54
-frame 4050 79b5d7b90477eb5c
-frame 4200 7a6d8ce2877d23ab
-frame 4350 966212026686ba29
-frame 4500 44302488555a32e6
-frame 4650 62fb7b68cb349417
-frame 4800 ab197e8ce001ea7e
-frame 4950 084e2af935f23af3
-frame 5100 4ce6a357d195720d
-frame 5250 62a561146dd01e1d
-frame 5400 4b49faa9af22681d
-frame 5550 7199157393074516
-frame 5700 4dc70422456adbcd
-frame 5850 9fcd9e8ffc09c582
-frame 6000 f2c1f809435c026a
-frame 6150 06cc9aa7527e21e1
-frame 6300 aa6a8028e59b4f90
-frame 6450 609f1e9cdd247b93
-frame 6600 79a330abb060f1f3
-frame 6750 b2042f79598d5998
-frame 6900 923348a3d3cb5ea1
-frame 7050 4e206f07b2f2bd74
-frame 7200 0d3d055dc4cb8386
-frame 7350 c10b1ad0e08c1b22
-frame 7500 9a317bb73c303030
-frame 7650 89452e05bf340f3a
-frame 7800 bee4b326a4d5cc21
-frame 7950 0dd50d1fdf1a9158
-frame 8100 f799a0f957f028d8
-frame 8250 83ddc632efa4ad2a
-frame 8400 284e3515dc535b67
-frame 8550 595e9dc0fac14c9b
-frame 8700 18f5d9356898b90e
-frame 8850 2475ffc84447e7c4
-frame 9000 675ff9c2f700635b
-frame 9150 5f171b98294e1b02
-frame 9300 96c3df5b9bac97a2
-frame 9450 f030be7bf8a67480
-frame 9600 7f98b59edfbbb27f
-frame 9750 93f2ded4380a6d4d
-frame 9900 a0cb12fcc3291210
-frame 10050 2a36f9c85c15051a
-frame 10200 2ce090c85abcc152
-frame 10350 d4bf0f71ec5eab36
-frame 10500 c3c5ce389844e2fe
-frame 10650 2e05004c41931261
-frame 10800 7430a98e12b11a67
-frame 10950 36d02a5ec98a70e0
-frame 11100 d296646ae87b1ecc
-frame 11250 18233a3006f0a1c9
-frame 11400 ddda25cbc9a52b14
-frame 11550 1f47b63f5acc5fd6
-frame 11700 bc1f2143dc03f603
-frame 11850 3496884f49a383d1
-frame 12000 b37aab07dd6a86a8
-frame 12150 574c3665e1250288
-frame 12300 092efe4fec201bba
-frame 12450 b5dfe92054a0dc6f
-frame 12600 d7c314e56aacfc20
-frame 12750 4b166adc3b6c7ddc
-frame 12900 2ac0fbcef12d5bd6
-frame 13050 8f933783c1438a03
-frame 13200 acaaa7e239cdbea2
-frame 13350 8d1947632cc41adb
-frame 13500 925869e0d84d6e68
-frame 13650 c6fc212be2d15659
-frame 13800 da5f36c22bab6945
-frame 13950 0385fad42231e56e
-frame 14100 8f334280664631c7
-frame 14250 fd04b83bb7d62127
-frame 14400 8419660393f7538d
-frame 14550 bfb8c2fbc5e7ff2b
-frame 14700 e71082ee11fcada7
-frame 14850 b91112dd1f070a61
-frame 15000 167d4d6d601efe63
-frame 15150 156047dae68c95b8
-frame 15300 4721033da899aca9
-frame 15450 7caaaf252d9df630
-frame 15600 b29858521538689e
-frame 15750 aa7e52c82be561d3
-frame 15900 cc66ff7ba25b7c3a
-frame 16050 8311ee02ca6c8944
-frame 16200 4a52fffee21305c4
-frame 16350 f46b64a0dd90b838
-frame 16500 31ae16c397db4964
-frame 16650 6d58a8ef441907bd
-frame 16800 aba0838da904e018
-frame 16950 6c8add69274b4b71
-frame 17100 c58433b8d97a0ca6
-frame 17250 14a1ddb4a478dad8
-frame 17400 e8af8928ad1d02a9
-frame 17550 4c77258157fe035a
-frame 17700 2e97f9fffa33af23
-frame 17850 e23de06819678078
-frame 18000 4270f2fcf956c624
-frame 18150 3abf1531f2139222
-frame 18300 4fdde9aba9304aae
-frame 18450 5a4a1a8a99b1a24a
-frame 18600 739f0114b334e2a5
-frame 18750 40711a97491c313b
-frame 18900 3c71c52805711bfc
-frame 19050 f0373c936675db71
-frame 19200 064512400296ce3b
-frame 19350 4466185306865d98
-frame 19500 ef366e63e7bedbc1
-frame 19650 f783430012bdb8b5
-frame 19800 348b6583455be28a
-frame 19950 03cc30d872f35356
-frame 20100 2e76f7c5520b9ff3
-frame 20250 af35e29201c31fd3
-frame 20400 f4838b6b4c9c2d2e
-frame 20550 4a463f351f1d1b27
-frame 20700 f95ae1b5ab62d483
-frame 20850 22f52a816bf8376d
-frame 21000 1dc26da3836b2a56
-frame 21150 cc6aa92911c6812d
-frame 21300 3954a7efa49cef90
-frame 21450 7ea98080fc24c969
-frame 21600 405e07e7901b1680
-frame 21750 222b1da8c8ec82db
-frame 21900 51a4d7cc45cbc3b7
-frame 22050 7eae8252edcada04
-frame 22200 356970e1630f1e32
-frame 22350 7b1737f07f78ef27
-frame 22500 195a32758c5306c2
-frame 22650 66e7d888e6aafb89
-frame 22800 aa14b679a3396745
-frame 22950 4b360b75119a65a8
-frame 23100 d4660fdf40225efc
-frame 23250 b016635b7a8a5504
-frame 23400 d9781dea541ede37
-frame 23550 f6ab8d0aa1196095
-frame 23700 96b7d4857bdad792
-frame 23850 86b5f585ffc071e7
-frame 24000 8dca3426c5c892a0
-frame 24150 968ce203967fb5fc
-frame 24300 f914b717a39cde56
-frame 24450 07d6e20472344165
-frame 24600 6217eb02ca1b5998
-frame 24750 6b63f1bda166b8ed
-frame 24900 a2463dae247fd8f8
-frame 25050 40acc8345d99252c
-frame 25200 129f0346ac96ce63
-frame 25350 9238482a35758f11
-frame 25500 3f1f6c212cdadc24
-frame 25650 24cf79335056b183
-frame 25800 185a25c8d1cd95dd
-frame 25950 c1aaf45e476208bb
-frame 26100 752b84d0905a6e42
-frame 26250 6e80e85c33776716
-frame 26400 9865742ca959f24e
-frame 26550 b3b2746445b939b6
-frame 26700 652ac3609498195a
-frame 26850 491ed9fd3c8a1ad9
-frame 27000 7582f6009a2b6dfb
+frame 150 65ab11ba57fcf27a
+frame 300 8aa4b86b67c54aeb
+frame 450 7abe7c86d4a1fe89
+frame 600 148e5db39ad8ba2f
+frame 750 0d58d0206bc72cc8
+frame 900 eb202fa6391ce011
+frame 1050 395e12287e575aa8
+frame 1200 13af6d93a8ebb747
+frame 1350 ce49445d5e9793a1
+frame 1500 3f749298579f30f0
+frame 1650 a5b0aea4959a2ba4
+frame 1800 ff6689a49eb87e7b
+frame 1950 6fc152026bba2f52
+frame 2100 30e37a9490691002
+frame 2250 3642d546f2c0d8a6
+frame 2400 c339052b5d45d454
+frame 2550 3f066a71e0b93ef4
+frame 2700 c2ddbb929b0fea56
+frame 2850 5e16ea03722ec04e
+frame 3000 cf2987a9b177c46f
+frame 3150 34ae00b6ddcbb54f
+frame 3300 2711f36a4966e644
+frame 3450 da7b73f4d77dbfd3
+frame 3600 a421868fab245162
+frame 3750 65df3b80ba2847d3
+frame 3900 56096c88e8a5f36f
+frame 4050 06a669f87a0f855f
+frame 4200 b615168147a49892
+frame 4350 ef577723a0baa87e
+frame 4500 d85ac50076d75be8
+frame 4650 f98e241350dc46ca
+frame 4800 753b3a2bdf7e687f
+frame 4950 4ba7508d8bdd15da
+frame 5100 df36ecede03e9fdf
+frame 5250 b45b1b6f17228578
+frame 5400 63bfc3670e9a8abf
+frame 5550 360ad9422e246ac3
+frame 5700 faaa8ed65c9275a0
+frame 5850 5bffc7608a7b379d
+frame 6000 856c3d8bc1281a71
+frame 6150 e9f637539a15ac32
+frame 6300 b5f98be85e8a313e
+frame 6450 3e4464a46a1d29bb
+frame 6600 ddb6a42666cbeb6c
+frame 6750 a88a149be6ec3198
+frame 6900 23a7c738be3f54f8
+frame 7050 b0cec9cbec35c0f4
+frame 7200 73bfb155e1838174
+frame 7350 428eb2ee97d5d29a
+frame 7500 a67a0a08b9fb57fb
+frame 7650 e26899ae41fa348a
+frame 7800 7c0fd51b1f4bc255
+frame 7950 1a43a8c57720c832
+frame 8100 e21ec2a518ba5979
+frame 8250 6e6f91e9cf77564b
+frame 8400 b0aade338982feed
+frame 8550 1c15a85fd4f6d89c
+frame 8700 0c53bc3e410ea883
+frame 8850 fc5cbf0001871e04
+frame 9000 5a068112c52b8a70
+frame 9150 81eda17b791bebb0
+frame 9300 450e32ef1fd83b6d
+frame 9450 3e2dea3e7a1ef36d
+frame 9600 7f16264794393a7e
+frame 9750 e6443ed7f022d896
+frame 9900 9ebe4e2310fba266
+frame 10050 0d70b2f0399513fe
+frame 10200 2a02034a282546c2
+frame 10350 403d58c1c954f36e
+frame 10500 79e926608f384f2e
+frame 10650 1f9afc9155452ad7
+frame 10800 4e2c86d7ac691465
+frame 10950 69a197ed9a382964
+frame 11100 75cd244e29866a06
+frame 11250 ebb80f090c0ede15
+frame 11400 ff8d326eeee41106
+frame 11550 eac376d2b33baa60
+frame 11700 aa0cc4b1b212aca2
+frame 11850 de1330577e25aaf4
+frame 12000 927c9d4aa2b37dc2
+frame 12150 270faa733288ccb5
+frame 12300 d8ac8d1f209c961f
+frame 12450 148568280e1b6422
+frame 12600 db444724514e21d5
+frame 12750 326c2a654504ab69
+frame 12900 5a4f6330e241b5a4
+frame 13050 3ac69397b44384aa
+frame 13200 f2f9cd4cc7c64836
+frame 13350 3684e3a70134ac4a
+frame 13500 363f39132d15075c
+frame 13650 357aca7af6a7eb77
+frame 13800 07904476de1f85f8
+frame 13950 ad11f95689487549
+frame 14100 39a167dcf9b3b8b3
+frame 14250 a704edd00d66f205
+frame 14400 f2b681d09f492dd1
+frame 14550 26edbf5eac447e69
+frame 14700 d9e19817a6e697ab
+frame 14850 6975f89a8806094a
+frame 15000 649b72ad87c52307
+frame 15150 7c1f44a65454e59f
+frame 15300 cb460ff0c3c3be7a
+frame 15450 8c55029c02f31da3
+frame 15600 e516981c0af37a72
+frame 15750 7ffd0ca3375c9eb4
+frame 15900 64c0e2e3b1c03eb8
+frame 16050 9d3a951f8bf784cf
+frame 16200 e344b2e35955966c
+frame 16350 0feb988e7eabfa24
+frame 16500 348e924ef7d09838
+frame 16650 952522a3ae2d90d4
+frame 16800 8c3ed9387db59053
+frame 16950 76c536f7b5b5d0ba
+frame 17100 d809f6028b09a23b
+frame 17250 cc1b4353aa62c129
+frame 17400 5209679bd45a655d
+frame 17550 24ee59389ab1d522
+frame 17700 81dd0d822f3216fe
+frame 17850 ed68cc135b85c184
+frame 18000 716653e7dfe57726
+frame 18150 6c704348eb0604e6
+frame 18300 b6daf486781c87da
+frame 18450 0cac065c484dfc32
+frame 18600 3989b73576c03fd2
+frame 18750 a3a6709bada9f9bf
+frame 18900 69dfcf8921c6aaa5
+frame 19050 ca7b4af214f11491
+frame 19200 7f5fe44d71b4ad78
+frame 19350 48319c2bbfc4d4c0
+frame 19500 abb4a74e2c70cf4e
+frame 19650 a56f7b2a799bd7d4
+frame 19800 f10cda0f3b5e5eba
+frame 19950 47915c3094e74514
+frame 20100 047dc6833713f5c9
+frame 20250 ca01f6f1ca5cdc25
+frame 20400 1c4dc9ae9c12848c
+frame 20550 84d1dd873751cb93
+frame 20700 bbee2bea84df42ef
+frame 20850 f641a884ce2cef4a
+frame 21000 204936f0ec425d6a
+frame 21150 6cbb8970f006507e
+frame 21300 996ad98744d50cc3
+frame 21450 5476e523a5eaab21
+frame 21600 083f09570108c1ad
+frame 21750 39c7be7a1935578f
+frame 21900 7aad6d98436d9904
+frame 22050 3d8099e6864f5c85
+frame 22200 524f36d374a42cd3
+frame 22350 e107e943b42f2b5c
+frame 22500 04d27f3bde90816c
+frame 22650 99297bce57a91bab
+frame 22800 f6bae152b85e9fdc
+frame 22950 1bdda8159fb4fd3d
+frame 23100 d70f2ebd20c1353c
+frame 23250 6448fd9650b08997
+frame 23400 1dc2f1f2c12855ef
+frame 23550 185466d7f766b05a
+frame 23700 5cb3cebba48f72eb
+frame 23850 dc97842eff83749a
+frame 24000 34fd969b6e25afae
+frame 24150 01ffb3295102b31b
+frame 24300 979fbe8fdf00b1c3
+frame 24450 601513550302718e
+frame 24600 3e8c218e905c687a
+frame 24750 564d50d0416d351c
+frame 24900 e1e54d5828234290
+frame 25050 94815b5a923f45c5
+frame 25200 49c70489f4154b46
+frame 25350 60f53918a30ad815
+frame 25500 3369183ee046ec0b
+frame 25650 f9b02273f88e408e
+frame 25800 99efbb05e24c8fc2
+frame 25950 41a1184834e2f25f
+frame 26100 4fed6d21e34fb5d0
+frame 26250 a329af4f13dd29a8
+frame 26400 52528585c08fab98
+frame 26550 a21395b060b81845
+frame 26700 3705b9a4935f5031
+frame 26850 02318d79b9fa08b8
+frame 27000 f82adc805649328d
 frames 27000 planets E=0 R=8 N=0 credits E=833 R=1208 orders 148 rejected 0 conflicts 28 plans running 0
 1 p0 opponent 1
 1 p0 templates Syn_Default
@@ -427,20 +427,20 @@ frames 27000 planets E=0 R=8 N=0 credits E=833 R=1208 orders 148 rejected 0 conf
 15071 p1 build task 46 Infantry for GroundForce
 15071 p1 order move fleet 37 -> P2
 15106 p0 plan 35 BUILDSPACE ended success
-15120 p0 plan 37 CONQUER for Conquer_Planet @P2 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1300 eta 0.0
-15121 p0 order move fleet 59 -> P1
-15121 p0 order move fleet 57 -> P1
-15121 p0 order launch 52 at P3
-15121 p0 order form 52 alone
-15124 p0 order move fleet 64 -> P1
+15150 p0 plan 37 CONQUER for Conquer_Planet @P2 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1300 eta 0.0
+15151 p0 order move fleet 59 -> P1
+15151 p0 order move fleet 57 -> P1
+15151 p0 order launch 52 at P3
+15151 p0 order form 52 alone
+15154 p0 order move fleet 64 -> P1
 15203 p1 tf SpaceForce move to P1
 15203 p1 order move fleet 37 -> P1
-15208 p0 tf SpaceForce move to P2
-15208 p0 order move fleet 59 -> P2
-15475 p0 tf GroundForce move to P2
-15475 p0 order move fleet 57 -> P2
-15649 p0 order invade P2 with 2
-15655 p0 plan 37 CONQUER ended success
+15238 p0 tf SpaceForce move to P2
+15238 p0 order move fleet 59 -> P2
+15505 p0 tf GroundForce move to P2
+15505 p0 order move fleet 57 -> P2
+15679 p0 order invade P2 with 2
+15685 p0 plan 37 CONQUER ended success
 15796 p1 plan 34 CONQUER ended success (released)
 15802 p1 plan 38 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(0+2) net 500 gross 1600 eta 16.2
 15803 p1 build task 47 Infantry for GroundForce
@@ -477,7 +477,7 @@ frames 27000 planets E=0 R=8 N=0 credits E=833 R=1208 orders 148 rejected 0 conf
 17498 p1 order launch 69 at P7
 17498 p1 order form 69 alone
 17501 p1 order move fleet 70 -> P2
-18356 p1 order launch 66 at P2
+18356 p1 order launch 65 at P2
 18362 p1 tf GroundForce move to P1
 18362 p1 order move fleet 70 -> P1
 18536 p1 order invade P1 with 2
@@ -486,7 +486,7 @@ frames 27000 planets E=0 R=8 N=0 credits E=833 R=1208 orders 148 rejected 0 conf
 18563 p1 tf SpaceForce move to P0
 18563 p1 order move fleet 37 -> P0
 18713 p1 order launch 69 at P1
-18713 p1 order launch 66 at P1
+18713 p1 order launch 65 at P1
 18719 p1 tf GroundForce move to P0
 18719 p1 order move fleet 71 -> P0
 18893 p1 order invade P0 with 2

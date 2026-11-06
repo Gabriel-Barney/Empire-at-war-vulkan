@@ -585,6 +585,20 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
             u.damage_alternates.emplace_back(static_cast<float>(objects::c_atof(trim(th[k]))),
                                              static_cast<int32_t>(objects::c_atof(trim(al[k]))));
     }
+    // q6 t19 - the type half of 0x5680b0 (A1_READINGS §33.2.1 tests 1 and 6) for the path-B goal promotion: both
+    // Collidable_By_Projectile_Living and Is_Valid_Target [port: or a company member type - the combat goal is the member
+    // unit where the original's is its TEAM container, which passes on its own]; a SPECIAL_WEAPON type only when it is
+    // also a DUMMY_STAR_BASE. The object half (garrisoned, dead, hero clash) is tested by the combat system.
+    {
+        static const objects::BehaviorTypeId kSpecialWeapon = objects::behavior_type_id("SPECIAL_WEAPON");
+        static const objects::BehaviorTypeId kDummyStarBase = objects::behavior_type_id("DUMMY_STAR_BASE");
+        const auto beh = [&](objects::BehaviorTypeId b) {
+            return b != objects::kNoBehavior && ty.has_behavior(t, objects::BehaviorSet::Union, b);
+        };
+        u.target_test_type = ((ty.get_bool(t, "Collidable_By_Projectile_Living") && ty.get_bool(t, "Is_Valid_Target")) ||
+                              ty.company_member(t)) &&
+                             (!beh(kSpecialWeapon) || beh(kDummyStarBase));
+    }
     if (s.full) s9_unit_fields(t, u, s);
     return u;
 }

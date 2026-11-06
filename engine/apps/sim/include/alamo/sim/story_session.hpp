@@ -2,8 +2,10 @@
 //
 // A StorySession belongs to one game session of a SimHost (SimHost::start_story). It owns
 //   * one engine/lua StoryModel per plot set (TheStoryMode::Load_Plots loads one plot set per
-//     faction, docs/re/MAIN_LOOP.md 5.2): the plots file named by the campaign's
-//     <Faction>_Story_Name tag, loaded in player-list order;
+//     faction, docs/re/MAIN_LOOP.md 5.2): the campaign's Rebel / Empire / Underworld_Story_Name, then its
+//     <Story_Name> pairs (campaign_plot_sets), and one lua::StoryTable over the galactic sets (q6 t03, STORY.md
+//     §2.4: the original keeps every player's plots in one table per mode, so Get_Story_Plot, STORY_ELEMENT,
+//     TRIGGER_EVENT and Lua Story_Event reach every set; fires in other sets are logged with the caller's cause);
 //   * one LuaVm per plot that has a <Lua_Script> (the original's LuaScriptClass = one lua_State per
 //     script, SUBSYSTEMS.md "lua_script"): Lua globals of two factions' story scripts never share a
 //     state. Every VM of the session is created, serviced and destroyed on the sim thread;
@@ -16,7 +18,14 @@
 //   for each plot set in player-list order: StoryModel::load_plots; then for each plot with a
 //   <Lua_Script>, in plot order: new LuaVm (host = galactic primary store, object types, the session's
 //   GameRandom, the host's FileProvider), attach_story, require(<script>), Base_Definitions(),
-//   Create_Thread("main") (PGBase.lua / PGStateMachine.lua: main = Process_States).
+//   Create_Thread("main") (PGBase.lua / PGStateMachine.lua: main = Process_States), then ONE resume of the
+//   script's threads at load (q6 [port reading], start_threads_at_load): PGStoryMode's state machine reaches its first
+//   state's PumpEvents before any story event can fire. Story_Event_Trigger only switches state when
+//   CurrentState == NextState, i.e. after main's first resume; the frame-1 STORY_ELAPSED dispatch (T9 step 2) comes
+//   before the first T9 Lua service (step 3), and about 60 shipped FoC plots (most tactical missions: <Mission>_Begin,
+//   prereq-less STORY_ELAPSED 0, a StoryModeEvents state) plus Thrawn's Revenge's start
+//   events (Zoom_Zoom, Trigger_Determine_Faction) need that event to reach the state machine.
+//   Not a Service: the first T9 still services the script (no LastService / rate change).
 //   Then the load-time story pass (A2I_T01_FRAME_ORDER.md §6; retail L10 Player::Set_Tech_Level raises STORY_TECH_LEVEL
 //   synchronously inside the campaign load): story clock at frame 0 / time 0, not paused; for each player in player-index
 //   order, STORY_TECH_LEVEL with that player's current (starting) tech level to the plot sets that player owns, the whole
@@ -154,6 +163,7 @@ struct ObjectHandle;
 }  // namespace alamo::objects
 namespace alamo::lua {
 class StoryModel;
+class StoryHolocron;
 class LuaVm;
 class LuaPlayerWorld;
 class GlobalValueStore;  // Int-final
@@ -173,9 +183,9 @@ struct StoryPlotSet {
     std::string plots_file;  // e.g. "Story_Plots_Campaign_Underworld.XML"
 };
 
-// The campaign's plot sets: for every player in player-list order, the campaign tag
-// "<faction name>_Story_Name" (Rebel_Story_Name, Empire_Story_Name, Underworld_Story_Name ...), else (Q6 [port]) the
-// faction's entry in the campaign's <Story_Name> "Faction, plot file, ..." list (mods: Thrawn's Revenge).
+// The campaign's plot sets in the original's load order (q6 t03, STORY.md §2.1 [H]): Rebel_Story_Name, Empire_Story_Name,
+// Underworld_Story_Name (each when that faction has a player), then every <Story_Name> "Faction, plot file, ..." pair in
+// list order (mods: Thrawn's Revenge; [port] a pair whose faction has no player is skipped).
 std::vector<StoryPlotSet> campaign_plot_sets(const data::CampaignDef& campaign, const galactic::GalacticSim& sim);
 
 struct StoryStart {
@@ -323,6 +333,19 @@ struct StoryLogEntry {
     std::string text() const;
 };
 
+// q6: one SWITCH_CONTROL story reward (AI_GALACTIC.md §1.2: reward case 0x30 -> Player::Set_AI_Type, then the
+// difficulty). Reward_Param1 = the player (a faction name, also when set from Lua, e.g. Thrawn's Revenge's
+// StoryUtil.ChangeAIPlayer: Set_Reward_Parameter + Story_Event; "#player:N" only from a save made before q6 t03, when a
+// player object was accepted), Reward_Param2 = the AIPlayerType name ("Human"
+// removes the AI). `player` is the resolved player index (-1 = no such faction / player).
+struct StorySwitchControl {
+    uint64_t frame = 0;
+    uint32_t plot_set = 0;
+    int32_t player = -1;
+    std::string player_text;  // Reward_Param1 as text
+    std::string ai_type;      // Reward_Param2, trimmed
+};
+
 class StorySession {
 public:
     static constexpr int kMaxRounds = 8;
@@ -407,6 +430,11 @@ public:
     // FogOfWar::reward_enable_fow, else its carried FOW-active / render option). Unset: the reward does nothing [port].
     void set_enable_fow_hook(std::function<void(bool has_param, int32_t value)> fn) { enable_fow_ = std::move(fn); }
     // --- end fog follow-up ---
+    // q6: story reward SWITCH_CONTROL from any plot set goes to the host's AI (StorySwitchControl), synchronously while
+    // the reward applies (T9, or a load-time Lua Story_Event). The host owns the AI players: it sets the type and
+    // difficulty and gives a player that has no AI controller one. Unset: the reward does nothing [port]. SimHost installs
+    // its hook (SimHost::set_switch_control_hook) before the plots load. Not hashed (the AI world hashes its own state).
+    void set_switch_control_hook(std::function<void(const StorySwitchControl&)> fn) { switch_control_ = std::move(fn); }
     // --- story t06 wiring (the tactical victory monitor, BT §3.1a): rewards of the TACTICAL plot set go to the running
     // battle. ENABLE_VICTORY -> enable(Reward_Param1 given, atoi(Reward_Param1)); VICTORY -> victory(Reward_Param1 = the
     // faction name as written, atoi(Reward_Param2) != 0 = short and silent); the battle host resolves the faction (unknown:
@@ -426,6 +454,11 @@ public:
         drain_tap_ = std::move(fn);
     }
     // --- end OI host ---
+    // q6 t09 (SimHost only): every drained batch (all rounds, stream order), after the drain tap, for the GameScoring
+    // event calls. Read-only: the host copies the events and calls the script after T9 (SimHost::tick_once).
+    void set_scoring_tap(std::function<void(const std::vector<galactic::GalacticEvent>& events)> fn) {
+        scoring_tap_ = std::move(fn);
+    }
     // --- OI galactic (owner: galactic agent): BT §1.6 story lock 0x4472a0 ("this planet's battle must be fought"),
     // written by the story rewards DISABLE_AUTORESOLVE / ENABLE_AUTORESOLVE (global flag +0x41) and
     // RESTRICT_AUTORESOLVE (Param1 planet, Param2 1 add / 0 remove: the planet list +0x308) [M: field wiring]. Source for
@@ -448,6 +481,11 @@ public:
     const lua::StoryModel& model(size_t set) const;
     lua::StoryModel& model(size_t set);
     int32_t plot_set_player(size_t set) const;
+    // q6 t14 (GALACTIC_DIALOGS §2.8): the game's one holocron list, shared by every plot set (galactic and tactical);
+    // nullptr without plot sets. Saved with the session (save version 3). mark_holocron_read: the summary dialog showed
+    // record `index` (0x1089e0 read = 1; no sim rule reads the flag, so a UI call is safe for the CRC).
+    const lua::StoryHolocron* holocron() const;
+    void mark_holocron_read(size_t index);
     size_t script_count() const;
     // Text form of the whole run: "# header", then every trigger ("T ...") and fired event ("F ...") in
     // the order they happened. Byte-identical across worker counts and compilers.
@@ -534,6 +572,7 @@ private:
     // Lua families shared by every VM of the session (declared before sets_: the VMs go first).
     struct Families;
     std::unique_ptr<Families> lua_;
+    // (q6 t03: the galactic mode's plot table, lua::StoryTable over the galactic sets' models, lives in Families.)
     std::vector<std::unique_ptr<Set>> sets_;
     std::vector<StoryTrigger> triggers_;
     std::vector<StoryTrigger> pending_host_;
@@ -557,11 +596,15 @@ private:
     std::function<void(bool, int32_t)> enable_victory_;        // story t06 wiring: ENABLE_VICTORY (tactical plots)
     std::function<void(const std::string&, bool)> victory_;    // story t06 wiring: VICTORY (tactical plots)
     std::function<void(int, const std::vector<galactic::GalacticEvent>&)> drain_tap_;  // OI host
+    std::function<void(const std::vector<galactic::GalacticEvent>&)> scoring_tap_;    // q6 t09
+    std::function<void(const StorySwitchControl&)> switch_control_;               // q6: SWITCH_CONTROL reward hook
     bool autoresolve_disabled_ = false;              // OI galactic: story lock global flag (+0x41)
     std::vector<PlanetIndex> autoresolve_planets_;   // OI galactic: story lock planet list (+0x308), insertion order
     void route_corruption_mission(int32_t winner, uint64_t frame);
-    void collect_set(Set& s, uint32_t number, std::string_view via);
+    void collect_set(Set& s, uint32_t number, std::string_view via);  // + the other galactic sets (q6 t03)
+    void collect_one(Set& s, uint32_t number, std::string_view via);
     void service_script_in(Set& s, uint32_t number, Script& sc, uint64_t frame, double seconds);
+    void start_threads_at_load(Set& s, uint32_t number, Script& sc, double seconds);  // q6: the first resume (header comment)
     void service_tactical(uint64_t frame);
     void route_tactical(uint64_t frame);
     void poll_tactical();
