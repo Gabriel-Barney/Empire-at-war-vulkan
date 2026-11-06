@@ -3,9 +3,10 @@
 // and unbound engine calls; optionally the machine-readable summary (docs/MODS.md §5.1).
 //
 //   alamo_mod_check [--game DIR] [MODPATH=..] [STEAMMOD=..] [FALLBACKPATH=..] [--out FILE] [--json FILE|-] [--verbose]
-//                   [--no-campaigns] [--no-lua] [--no-lua-run] [--no-files] [--no-xml-tags]
+//                   [--no-campaigns] [--no-lua] [--no-lua-run] [--no-files] [--no-xml-tags] [--no-submod]
 //   --game defaults to ALAMO_FOC_DATA. --json - writes the JSON to stdout instead of the text report.
-//   STEAMMOD=<id> is found in the Steam library folders (alamo/vfs/steam_workshop.hpp).
+//   STEAMMOD=<id> is found in the Steam library folders (alamo/vfs/steam_workshop.hpp); the workshop items of the same
+//   folders and <game>\Mods\* are the parents the submod check considers (modc t16).
 //   Exit 0: no errors (warnings allowed), 1: errors, 2: usage.
 //   Example (a Steam workshop mod):
 //     alamo_mod_check --game "...\corruption" STEAMMOD=1125571106 --json report.json
@@ -22,7 +23,8 @@ namespace {
 int usage() {
     std::fprintf(stderr,
                  "usage: alamo_mod_check [--game DIR] [MODPATH=..] [STEAMMOD=..] [FALLBACKPATH=..] [--out FILE] [--json FILE|-]\n"
-                 "                       [--verbose] [--no-campaigns] [--no-lua] [--no-lua-run] [--no-files] [--no-xml-tags]\n");
+                 "                       [--verbose] [--no-campaigns] [--no-lua] [--no-lua-run] [--no-files] [--no-xml-tags]\n"
+                 "                       [--no-submod]\n");
     return 2;
 }
 
@@ -56,12 +58,14 @@ int main(int argc, char** argv) {
         else if (a == "--no-lua-run") opt.lua_run = false;
         else if (a == "--no-files") opt.files = false;
         else if (a == "--no-xml-tags") opt.xml_tags = false;
+        else if (a == "--no-submod") opt.submod = false;
         else if (a.find('=') != std::string::npos) args.push_back(a);  // MODPATH= etc.
         else return usage();
     }
     if (game.empty())
         if (const char* env = std::getenv("ALAMO_FOC_DATA")) game = env;
     if (game.empty()) return usage();
+    if (opt.submod) opt.workshop_libraries = alamo::vfs::find_steam_libraries(game, alamo::vfs::default_steam_roots());
 
     const alamo::game::ModCheckReport report = alamo::game::check_mod_data(game, args, opt);
     const std::string text = alamo::game::format_mod_report(report, verbose);

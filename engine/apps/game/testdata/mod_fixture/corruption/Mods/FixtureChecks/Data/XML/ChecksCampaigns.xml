@@ -1,0 +1,6 @@
+<Campaigns>
+  <Campaign Name="Checks_GC">
+    <Locations>Base_Alpha, Base_Beta</Locations>
+    <Checks_Unread_Campaign_Tag>1</Checks_Unread_Campaign_Tag>
+  </Campaign>
+</Campaigns>

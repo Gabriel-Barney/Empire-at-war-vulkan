@@ -1,0 +1,11 @@
+<SpeechEvents>
+  <SpeechEvent Name="Checks_Speech">
+    <Files>Checks_Speech.wav</Files>
+    <Volume_Percent>90</Volume_Percent>
+    <Checks_Unread_Speech_Tag>1</Checks_Unread_Speech_Tag>
+  </SpeechEvent>
+  <SpeechEvent Name="Checks_Speech_2">
+    <Files>Checks_Speech_2.wav</Files>
+    <Checks_Unread_Speech_Tag>2</Checks_Unread_Speech_Tag>
+  </SpeechEvent>
+</SpeechEvents>
