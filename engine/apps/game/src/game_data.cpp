@@ -104,9 +104,7 @@ bool load_game_data(const std::string& root, const std::vector<std::string>& arg
             ts->defs = &a->defs;
             ts->equations = &a->equations;
             ts->files = out.files.get();
-            ts->space_plans = ai::tactical::tactical_plan_files(ai::tactical::TacticalMode::Space, lister);
-            ts->land_plans = ai::tactical::tactical_plan_files(ai::tactical::TacticalMode::Land, lister);
-            ts->difficulties = ai::tactical::load_tactical_ai_difficulties(*out.files);
+            sim::load_tactical_ai_data(*ts, *out.files, &out.db.constants(), lister);  // a2h t05: plans, difficulties, GameConstants
             if (!ts->space_plans.empty() || !ts->land_plans.empty()) a->tactical = std::move(ts);
 #endif
             out.ai = std::move(a);
@@ -335,8 +333,10 @@ SkirmishMapPreview read_skirmish_map_preview(const FileProvider& files, std::str
         for (uint32_t i = 0; i < n; ++i) {
             float xy[2];
             std::memcpy(xy, k.payload.data() + 4 + 8 * static_cast<size_t>(i), 8);
-            const float u = xy[0] / w + (space ? 0.5f : 0.0f), v = xy[1] / h + (space ? 0.5f : 0.0f);
-            pv.starts.emplace_back(std::clamp(u, 0.0f, 1.0f), 1.0f - std::clamp(v, 0.0f, 1.0f));
+            // UI.md 9.6.1: space maps are first shifted by half the world size (centred on the origin), land maps not
+            // (origin at the lower-left corner); fx = x / width, fy = y / height, each clamped to 0..1; image y = 1 - fy.
+            const float fx = space ? (xy[0] + w * 0.5f) / w : xy[0] / w, fy = space ? (xy[1] + h * 0.5f) / h : xy[1] / h;
+            pv.starts.emplace_back(std::clamp(fx, 0.0f, 1.0f), 1.0f - std::clamp(fy, 0.0f, 1.0f));
         }
     }
     return pv;

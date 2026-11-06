@@ -179,7 +179,7 @@ struct Options {
 
 void usage() {
     std::fprintf(stderr,
-                 "q2reader --out <trace.q2t> --status <status.json> --scenario galactic|skirmish\n"
+                 "q2reader --out <trace.q2t> --status <status.json> --scenario galactic|skirmish|story\n"
                  "  [--days N=10] [--day-frames 1350] [--ticks M=5400] [--key-every 300]\n"
                  "  [--wait-process-sec 180] [--wait-session-sec 1800] [--timeout-sec 3600]\n"
                  "  [--pause-stop-sec 60] [--close-game] [--allow-unknown-exe] [--meta key=value]...\n"
@@ -229,7 +229,7 @@ bool parse_args(int argc, char** argv, Options& o) {
     }
     if (o.selftest) return true;
     if (o.out.empty() || o.status.empty()) return false;
-    return o.scenario == "galactic" || o.scenario == "skirmish";
+    return o.scenario == "galactic" || o.scenario == "skirmish" || o.scenario == "story";
 }
 
 // ---- process access ---------------------------------------------------------------------------------
@@ -703,6 +703,10 @@ int Tracer::run() {
     t0_ = now_s();
     const uint64_t fs = g_.base + q2::kRvaFrameSync, gmm = g_.base + q2::kRvaGmm;
     const bool galactic = o_.scenario == "galactic";
+    // story t04: a story campaign's tactical mission is a child mode of the galaxy (mode stack 2, land 1 / space 2).
+    // The trace starts with the battle and ends when the battle mode is popped (reason battle_ended, a complete trace).
+    const bool story = o_.scenario == "story";
+    const int32_t want_stack = story ? 2 : 1;
     std::vector<unsigned char> gb, fb;
     // 1. Wait for the session (UI navigation and loading happen here).
     state_ = "waiting_session";
@@ -731,7 +735,7 @@ int Tracer::run() {
                 load_seen = false;
                 have_players = false;
             }
-            if (!galactic && stack >= 1) {
+            if (!galactic && !story && stack >= 1) {
                 std::vector<uint64_t> ptrs;
                 if (have_players) have_players = vec_elems(ps_at, ps_kind, ptrs) && looks_like_players(ptrs);
                 if (!have_players && now_s() - last_ps > 0.25) {
@@ -740,8 +744,8 @@ int Tracer::run() {
                     have_players = search_players(ps_at, ps_kind, how, ptrs);
                 }
             }
-            const bool want = galactic ? (mtype == 0) : ((mtype == 1 || mtype == 2) && have_players);
-            if (stack == 1 && mode != 0 && want && stopped == 0) break;
+            const bool want = galactic ? (mtype == 0) : story ? (mtype == 1 || mtype == 2) : ((mtype == 1 || mtype == 2) && have_players);
+            if (stack == want_stack && mode != 0 && want && stopped == 0) break;
         }
         if (now_s() - last_status_ > 2.0) { write_status(false); last_status_ = now_s(); }
         Sleep(2);
@@ -803,7 +807,11 @@ int Tracer::run() {
         const int32_t mtype = get<int32_t>(gb, q2::kGmmModeType);
         const uint64_t cur_mode = get<uint64_t>(gb, q2::kGmmCurMode);
         const int32_t pause = get<int32_t>(gb, q2::kGmmPause);
-        if (cur_mode != mode || stack != 1 || mtype != mtype0) {
+        if (cur_mode != mode || stack != want_stack || mtype != mtype0) {
+            if (story && !first) {  // the mission's battle ended (or was left): the whole battle is in the trace
+                reason_ = "battle_ended";
+                return finish(0);
+            }
             reason_ = "mode_changed";
             return finish(10);
         }

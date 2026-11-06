@@ -687,13 +687,21 @@ int main(int argc, char** argv) {
     // VICTORY ending wait for the story reward wiring. story t10: the jailed UMP_TYBER_ZANN prop (a Variant_Of_Existing_Type
     // of the Victory_Relevant Tyber_Zann, an Underworld object from frame 0 in the original, §3.1a item 4) survives the
     // branched-map discard: a linked battle keeps attacker-owned objects (REMAINING_GAPS §3.1 item 4, global 0x140b155d8).
+    // story t13: UM01 sets P13 = 0 (no banner under the game's Pending decide) and P9 0 / P10 1 / P11 1 (the overlay's
+    // letterbox and input block, CampaignBattles::linked_presentation).
+    PlanetIndex kessel_planet = kInvalidPlanet;
+    int32_t kessel_attacker = -1;
     {
         game::SessionSpec story = fought_campaign();
         story.campaign = "Full_Story_Campaign_Underworld";
         story.faction = "Underworld";
         game::GameSession s(data, js, story);
         CHECK(s.start(nullptr, nullptr, nullptr));
-        for (uint64_t i = 0; i < 60 && s.started() && !s.in_battle(); ++i) s.tick();
+        bool banner = false;
+        for (uint64_t i = 0; i < 60 && s.started() && !s.in_battle(); ++i) {
+            s.tick();
+            banner = banner || s.linked_banner_pending();
+        }
         const bool kessel = land_battle(s);
         const std::string map = kessel ? s.battles()->conflicts().active_request().map : std::string();
         std::printf("story link: %s battle at tick %" PRIu64 " on %s\n", kessel ? "land" : "no land", s.host().frame(), map.c_str());
@@ -719,8 +727,50 @@ int main(int argc, char** argv) {
                         after && !after->finished() ? "running" : "ended", frames, after && after->victory_declared() ? 1 : 0,
                         after ? after->victory_hold() : 0);
             CHECK(tyber && r.linked);
+            const sim::CampaignBattles::LinkedPresentation& lp = s.battles()->linked_presentation();
+            CHECK(!banner && lp.letterbox && lp.presentation_a && lp.presentation_b && !lp.hyperspace_hold && lp.skip_battle_dialog);
+            kessel_planet = r.info.planet;
+            kessel_attacker = r.info.attacker;
             CHECK(after && !after->finished() && !after->victory_declared() && frames >= 299);
         }
+    }
+    // story t13 (BT §2.9.3 step 2): a record with P13 = 1 under the game's Pending decide waits behind the one-button banner
+    // (galaxy paused, no battle) until GameSession::begin_linked (ResumeGame 51), then starts as a linked battle. Queued
+    // before the first tick, so the campaign's own Kessel record is the one refused (one record at most).
+    if (kessel_planet != kInvalidPlanet) {
+        game::SessionSpec story = fought_campaign();
+        story.campaign = "Full_Story_Campaign_Underworld";
+        story.faction = "Underworld";
+        game::GameSession s(data, js, story);
+        CHECK(s.start(nullptr, nullptr, nullptr));
+        sim::CampaignBattles::LinkedRecord rec;
+        rec.kind = galactic::ConflictKind::Land;
+        rec.planet = kessel_planet;
+        rec.attacker = kessel_attacker;
+        rec.map = "UM01_A_Crimelord_Unleashed.TED";
+        rec.defender = "Empire";
+        rec.resolution = galactic::LinkedResolution::RetreatPlayer;
+        rec.banner = true;
+        CHECK(s.battles() && s.battles()->queue_linked(rec));
+        bool up = false, paused = true;
+        for (uint64_t i = 0; i < 40 && s.started() && !s.in_battle(); ++i) {
+            s.tick();
+            if (s.linked_banner_pending()) {
+                up = true;
+                paused = paused && s.galaxy() && s.galaxy()->paused();
+            }
+        }
+        const sim::CampaignBattles::LinkedRecord* br = s.linked_banner_record();
+        CHECK(up && paused && !s.in_battle() && br && br->planet == kessel_planet && br->map == rec.map);
+        CHECK(s.begin_linked() && !s.linked_banner_pending() && !s.begin_linked());
+        uint64_t started = 0;
+        for (uint64_t i = 0; i < 40 && s.started() && !s.in_battle(); ++i) {
+            s.tick();
+            started = s.host().frame();
+        }
+        CHECK(s.in_battle() && s.battle()->request().linked && !s.battles()->linked_banner_up() && !s.linked_banner_pending());
+        std::printf("story link banner: up %d, galaxy paused %d, battle %s at tick %" PRIu64 "\n", up ? 1 : 0, paused ? 1 : 0,
+                    s.in_battle() ? "started" : "not started", started);
     }
     // t08: the FoC story campaign (Full_Story_Campaign_Underworld as the human Underworld: story plots and their Lua VMs,
     // the battle's tactical story VMs) saved mid-battle. story t06: the Kessel mission above no longer ends at once, so

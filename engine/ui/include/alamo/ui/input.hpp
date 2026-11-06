@@ -151,7 +151,7 @@ enum class Action : uint8_t {
     SelectAll, Stop,
     ControlGroup0, ControlGroup1, ControlGroup2, ControlGroup3, ControlGroup4,
     ControlGroup5, ControlGroup6, ControlGroup7, ControlGroup8, ControlGroup9,
-    // [port: Gabriel] (docs/PHASE4.md "Camera and controls"), appended: free tactical camera axes and pause.
+    // [port: Gabriel] (docs/DECISIONS.md "Camera and controls"), appended: free tactical camera axes and pause.
     PitchUp, PitchDown, RollLeft, RollRight,
     Pause,
     Count

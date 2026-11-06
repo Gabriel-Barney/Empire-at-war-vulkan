@@ -179,8 +179,14 @@ public:
     const sim::TacticalBattle* battle() const { return battles_ ? battles_->battle() : nullptr; }
     bool in_battle() const { return battle() != nullptr && host_->modes().top_tactical() != nullptr; }
     int32_t local_player() const { return local_player_; }
+    // Does the battle view draw the local player's FOW grid and the HideWhenFogged marks? Not in the attract demo: the
+    // original films it with the in-game cinematic camera, and every cinematic shot start (0x49b1a0) clears the FOW render
+    // option 0x140a12501 that all fog draw paths test, so the demo shows no fog on any map, with or without a
+    // DEMO_CONTROLLER reveal (MAIN_MENU_BACKGROUND.md §4a, [H] code chain, [M] that the capture is that). Presentation
+    // only: the demo's sim fog (targeting, AI) is unchanged.
+    bool view_draws_fog() const { return !spec_.attract; }
     // Attract demo: the map's Demo_Attract_Controller ran (game_session.cpp attract_demo_script): at least one
-    // DEMO_CONTROLLER object revealed the map, so the view draws the sim's fog. False before the battle runs and on maps
+    // DEMO_CONTROLLER object revealed the map for Empire / Rebel / Underworld. False before the battle runs and on maps
     // without a controller (the shipped Demo_Attract_Kamino).
     bool attract_controller_ran() const { return attract_controllers_ > 0; }
     uint32_t attract_moves() const { return attract_moves_; }  // its Attack_Move orders the battle accepted
@@ -197,6 +203,12 @@ public:
     // GALACTIC_DIALOGS §1.4: the story lock (DISABLE / RESTRICT_AUTORESOLVE, StorySession::autoresolve_locked) forbids
     // auto-resolving a battle at `planet`: the prompt offers Begin only. False without a running story.
     bool autoresolve_locked(PlanetIndex planet) const;
+    // story t13 (BT §2.9.3 step 2): the one-button pending banner (story_pending_battle_shell) of a LINK_TACTICAL record with
+    // P13 = 1 (CampaignBattles::linked_banner_up, the galaxy paused): its record, and Begin = ResumeGame 51 (a command; the
+    // record starts at the next hook). False / null when no banner is up or the Begin is already in flight.
+    bool linked_banner_pending() const;
+    const sim::CampaignBattles::LinkedRecord* linked_banner_record() const;
+    bool begin_linked();
     bool auto_resolving() const;
     // P4 host requests (commands; true when submitted). Their results come at the command phase (port_event):
     // withdraw = Withdrawl 49 -> ConflictManager::set_retreating(issuer), result ignored (P4_SIM_SYSTEMS §9.2);
@@ -314,6 +326,7 @@ private:
     bool paused_ = false, pause_pending_ = false;
     uint64_t pause_events_ = 0;
     bool choice_sent_ = false;  // a battle choice is in flight for the pending conflict
+    bool banner_sent_ = false;  // story t13: the linked banner's Begin is in flight (cleared once the banner is down)
     PortEventStats port_stats_;
     commands::RejectReason port_event(uint8_t player, const commands::EventData& ev);
     void land_skirmish_invade();

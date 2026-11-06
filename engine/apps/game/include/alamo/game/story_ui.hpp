@@ -26,6 +26,19 @@
 //                    the selected planet).
 //   ZoomOutPlanet    the camera stopped being zoomed: object = the planet it was zoomed onto.
 //   OpenCorruption   the corruption panel opened (or switched planet): object = its planet.
+// story t13 (LINK_TACTICAL presentation, BT §2.9.1 P10 / P11; sim state CampaignBattles::linked_presentation):
+//   LinkedBattleOverlay  what a story-linked battle opens with, until the battle's story script takes over:
+//                    P10 with P9 != 1 (LinkedPresentation::letterbox) -> the letterbox bars of the overlay 0x140a28c10 are
+//                    fully in from the first battle frame; P11 (presentation_b, the cinematic input-block flag 0x140a28c91,
+//                    UI.md §1.3 / §4) -> the world gets no mouse input and the selection circles are hidden. The same
+//                    overlay draws the scripts' Letter_Box_In / _On (in) and _Out / _Off (out) in every battle (TSW §11.2
+//                    [M]: one bar overlay, the same height constant). [port][L] the hand-over: a script letterbox op ends the
+//                    letterbox hold; Lock_Controls / Start_ or End_Cinematic_Mode / _Camera ends the input hold, after which
+//                    the P11 block follows the scripts' own lock (Lock_Controls on, cinematic camera or mode on). Either
+//                    hold also ends kHandOverFrames battle frames after the start, so a battle whose script never takes
+//                    over is not left letterboxed or without input. The script's own letterbox times are not modelled
+//                    (the 0.5 s slide). The other P10 globals (0x140a28c93, 0x140b27ee0 / ee4, 0x140a28c20) have no
+//                    known effect (BT §2.9.9 item 1): not shown.
 #pragma once
 #include <cstdint>
 #include <string>
@@ -33,6 +46,7 @@
 #include <vector>
 
 #include "alamo/commands/command.hpp"
+#include "alamo/game/battle_fx.hpp"
 #include "alamo/sim/story_session.hpp"
 
 namespace alamo::game {
@@ -92,6 +106,33 @@ private:
     bool battle_seeded_ = false;  // the first observe_battle of a battle only records the selection
     std::vector<sim::StoryUiNotification> out_;
     uint64_t counts_[static_cast<size_t>(sim::StoryUiEvent::Count)] = {};
+};
+
+// story t13: see the header comment. Presentation only (wall-time slide, no sim reads beyond the frame number).
+class LinkedBattleOverlay {
+public:
+    static constexpr uint32_t kHandOverFrames = 150;  // [port] 5 s of battle frames at 30 Hz
+    // Battle start: `letterbox` = LinkedPresentation::letterbox, `input_block` = presentation_b of a linked battle (both
+    // false for any other battle); `battle_frame` = TacticalBattle::frame() now.
+    void begin(bool letterbox, bool input_block, uint32_t battle_frame);
+    void reset();  // no battle: bars off, nothing held
+    // This frame's story-script ops, in order: a letterbox op (in = Letter_Box_In / _On) and a control op (Lock_Controls,
+    // Start_ / End_Cinematic_Mode, Start_ / End_Cinematic_Camera).
+    void script_letterbox(bool in);
+    void script_controls();
+    // Once per frame after the sim: the battle frame, the scripts' lock (Lock_Controls on, cinematic camera or mode on) and
+    // the wall time for the slide.
+    void update(uint32_t battle_frame, bool script_locked, float dt_seconds);
+    float letterbox_level() const { return bars_.level(); }
+    bool input_blocked() const { return blocked_; }
+    bool letterbox_held() const { return letterbox_hold_; }
+    bool input_held() const { return input_hold_; }
+
+private:
+    Letterbox bars_;
+    uint32_t start_ = 0;
+    bool block_ = false;  // P11 for this battle
+    bool letterbox_hold_ = false, input_hold_ = false, blocked_ = false;
 };
 
 }  // namespace alamo::game

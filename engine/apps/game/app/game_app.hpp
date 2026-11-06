@@ -235,6 +235,11 @@ public:
     // The cursor is hidden unless the attract demo runs; [port] a GUI dialog with the focus (pause menu) shows it again.
     bool cinematic_hides_cursor() const { return cine_.shot.active() && !demo_session() && !ui_.gui.has_focus(); }
     void draw_letterbox(ui::HudDrawList& dl, const ui::HudCanvas& canvas, uint32_t w, uint32_t h) const;
+    // story t13 (story_ui.hpp LinkedBattleOverlay): a story-linked battle's P10 letterbox / P11 input block and the story
+    // scripts' letterbox, drawn by draw_letterbox with the cinematic's bars; begun by begin_battle, stepped by
+    // cinematic_step, cleared by cinematic_reset.
+    LinkedBattleOverlay linked_ui_;
+    void linked_ui_step();
     std::unique_ptr<GameSession> session_;
     commands::CommandRecording recording_;
     // Bink movies: the full-screen slot (intro / logos, Lua Play_Bink_Movie) and the HUD advisor loop slot.
@@ -291,8 +296,8 @@ public:
     FrameLimiter limiter_;
     uint32_t refresh_hz_ = 0;
     uint64_t refresh_checked_frame_ = 0;
-    // [port: Gabriel] advanced video: anti-aliasing (TAA), ambient occlusion and anisotropic filtering. The detail sliders
-    // and the soft shadow / heat / bloom checks reach the renderer in apply_detail_options (game_display.hpp, t10 / t11). world_view_: the last
+    // [port: Gabriel] advanced video: ambient occlusion and anisotropic filtering (anti-aliasing, TAA, is the profile's
+    // anti_alias strength). The detail levels and the soft shadow / heat / bloom checks reach the renderer in apply_detail_options (game_display.hpp, t10 / t11). world_view_: the last
     // frame's world (0 none, 1 galactic, 2 battle); a change restarts the TAA history.
     ui::AdvancedVideoSettings adv_video_;
     int world_view_ = 0;
@@ -436,6 +441,7 @@ public:
         PlanetIndex planet = kInvalidPlanet;
         bool land = false;
         bool story_pending = false;   // §1.4 single-button shell (story lock): no Auto-Resolve
+        bool linked = false;          // story t13: a LINK_TACTICAL record's P13 banner (Begin = GameSession::begin_linked)
         std::u32string title;         // "<planet>: SPACE / PLANETARY BATTLE IMMINENT!" (log; the ui composes its own)
         std::u32string planet_name;
         BattleForceSummary left, right;  // graph_left = the local player's force, graph_right = the enemy's
@@ -466,7 +472,9 @@ public:
     std::vector<ScreenLine> screen_lines_;
     std::vector<ui::GalacticScreenText> screen_text_;  // this frame's feed (GalacticHudFrame::screen_text points here)
     uint64_t screen_line_count_ = 0, holocron_updates_ = 0, prompts_story_ = 0;
+    uint64_t linked_banners_ = 0, linked_dialog_skips_ = 0;  // story t13
     void open_battle_prompt(const galactic::GalacticSim& g, const galactic::ConflictInfo& c);
+    void open_linked_banner(const galactic::GalacticSim& g, const sim::CampaignBattles::LinkedRecord& r);  // story t13
     std::string representative_icon(std::span<const objects::ObjectHandle> units, bool hero_filter = false) const;
     void answer_battle_prompt(bool auto_resolve);
     int32_t summary_chapter_ = -1;  // the story summary's selected chapter (-1 = the newest)
@@ -557,7 +565,7 @@ public:
     void update_display_rate(bool force);
     void set_present_mode(rhi::PresentMode m);
     float render_alpha();
-    void show_battle_end();
+    void show_battle_end(bool dialog = true);  // story t13: dialog false = the bookkeeping only (BT §2.9.6 skip)
     int32_t galactic_faction_icon(const galactic::GalacticSim& g, int32_t player) const;
     ui::Rgba8 faction_rgba(const galactic::GalacticSim& g, int32_t player, bool text, ui::Rgba8 fallback) const;
     void planet_icons(const galactic::GalacticSim& g, PlanetIndex row, ui::GalacticPlanetInfo& out) const;

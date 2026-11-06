@@ -7,7 +7,6 @@
 //
 //   alamo_ai_tactical_perception_tests [--golden <file>] [--write-golden <file>]
 #include <algorithm>
-#include <atomic>
 #include <bit>
 #include <cinttypes>
 #include <cmath>
@@ -22,6 +21,7 @@
 #include <thread>
 #include <vector>
 
+#include "thread_parallel_for.hpp"
 #include "alamo/ai/perception_equations.hpp"
 #include "alamo/ai/tactical/perception_cache.hpp"
 #include "alamo/ai/tactical/perception_lua.hpp"
@@ -54,25 +54,7 @@ static int g_fail = 0;
 static bool near_eq(double a, double b, double eps = 1e-4) { return std::fabs(a - b) <= eps * std::max(1.0, std::fabs(b)); }
 
 static ParallelFor make_thread_pf(unsigned threads) {
-    return [threads](uint32_t count, uint32_t grain, const RangeFn& fn) {
-        if (count == 0) return;
-        const uint32_t gr = std::max<uint32_t>(1, grain);
-        const uint32_t chunks = (count + gr - 1) / gr;
-        std::atomic<uint32_t> next{0};
-        auto worker = [&] {
-            for (;;) {
-                const uint32_t c = next.fetch_add(1);
-                if (c >= chunks) break;
-                const uint32_t b = c * gr;
-                fn(b, std::min(count, b + gr));
-            }
-        };
-        const unsigned extra = std::min<unsigned>(std::max(1u, threads), chunks) - 1;
-        std::vector<std::thread> ts;
-        for (unsigned t = 0; t < extra; ++t) ts.emplace_back(worker);
-        worker();
-        for (auto& t : ts) t.join();
-    };
+    return ::alamo::ai::tactical::testing::make_thread_parallel_for(threads);  // persistent pool, thread_parallel_for.hpp
 }
 
 // Test category table (the default resolver is the objects module's GameObjectCategoryType).

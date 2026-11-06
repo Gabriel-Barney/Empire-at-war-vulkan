@@ -1,5 +1,6 @@
 // alamo_headless --economy --battles MODE: see battle_run.hpp.
 #include "battle_run.hpp"
+#include "crc_out.hpp"
 
 #include <chrono>
 #include <cinttypes>
@@ -185,7 +186,7 @@ int battle_run(const MapRunOptions& opt, const std::string& data_dir, const Batt
     }
     first.crc.comments = {"battles campaign " + name + " mode " + bopt.mode + " seed " + std::to_string(opt.seed) + " ticks " +
                           std::to_string(opt.ticks) + " aggressor " + std::to_string(bopt.aggressor_period)};
-    if (!opt.crc_out.empty() && first.crc.save(opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
+    if (!opt.crc_out.empty() && alamo_headless::save_crc_log(first.crc, opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
     if (!opt.golden.empty()) {
         CrcLog golden;
         if (!CrcLog::load(opt.golden, golden, &err)) {

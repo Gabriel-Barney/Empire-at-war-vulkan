@@ -331,6 +331,68 @@ a remote bomb sticks to an own unit only when that unit is the target.
     (type +0x5cc) resets the target angles to the rest angles (type +0x5b4.., deployed +0x5c0..).
   So no solution = "not aimed" this frame, retried every frame; the shot is held [M: the readers of the 0x632050 /
   0x631fe0 result were not re-read; they treat 0 as "not yet aimed"].
+  **Readers (s78f, 2026-11-03)** [H]: 0x632050 is read by `Service_Land` / `Service_Space` (aimed → targeting state 4,
+  else 3; TACTICAL_COMBAT §3.1.1 "Targeting states"); 0x631fe0 by the lobbing service 0x4ea6f0 (aimed → charge-up
+  starts, else wait).
+- **Charge-up aim, and units without deploy states (s78f t04, 2026-11-03)** [H unless tagged]. The lobbing service
+  calls 0x631fe0(turret, ordered point) each service while the order is pending and the charge-up stamp is 0.
+  Per call:
+  1. Needs the turret bone (TD +0x40 ≠ −1, from `Turret_Bone_Name` at the turret attach 0x632120); else 0, so the
+     order never charges.
+  2. Aim point := the ordered point as given (TD +0x60…+0x68), "aim requested" TD +0xf6 := 1, then the aim update
+     0x631210:
+     - yaw / pitch from the turret bone's world translation (object position if the bone lookup fails) to the point
+       (0x20acd0), minus the object's angles at obj +0x90, each wrapped to (−180, 180];
+     - a category 3 current projectile (`Magnepulse_Blob` is GRENADE): pitch := −θ, θ from `Lob_Solve` from the
+       **weapon's next fire bone** (the WEAPON pack's cycle index TD +0xf0 into its bone list TD +0x90; object
+       position when none) to the point; no solution → 0;
+     - |yaw| > `Turret_Rotate_Extent_Degrees` (+0x5a0) → 0; unless `Turret_XY_Only` (+0xb3), |pitch| >
+       `Turret_Elevate_Extent_Degrees` (+0x5a4) → 0. The deployed variants +0x5d0 / +0x5d4 replace them only while
+       0x39a390 holds;
+     - target angles TD +0x54…+0x5c := (0, pitch, yaw);
+     - one slew step: the current pitch (TD +0x4c) and yaw (TD +0x50) each move toward the target by at most
+       `Turret_Rotate_Speed` (+0x5a8) **degrees per call**, without overshoot, yaw by the wrapped difference; then the
+       yaw is wrapped and clamped to ±rotate extent; the turret / barrel bone overrides are written (0x12d480).
+  3. Returns 1 only when the current angles equal the target angles after the step (0x386170: each component within
+     0.0001° after mapping negatives into [0, 360)). Any 0 → TD +0xf6 := 0 and the service waits.
+
+  **Units with no deploy states.** 0x39a390 is false unless the type has `Deploys` (+0xd1) and a locomotor slot
+  (obj +0x333), so a unit that does not deploy always aims with the **undeployed** extents (+0x5a0 / +0x5a4) and
+  rests at `Turret_Rest_Angle` (+0x5b4; `Turret_Deployed_Rest_Angle` +0x5c0 needs `Deploys` and deployed or
+  deploying). Neither 0x4ea3f0 nor 0x4ea6f0 tests deploy states. The WEAPON gate for the shot then needs
+  `Fire_Weapon_When_Undeployed` (default true). The only FoC lobbing superweapons, `Ground_Magnepulse_Cannon` and
+  its skirmish variant, are structures without a locomotor or `Deploys`: rotate extent 360, elevate extent 85,
+  speed 4.0, rest (0, −45, 0), `Turret_XY_Only` absent.
+
+  **Timing that is visible in the sim.** The charge-up stamp is set on the service where the slew completes, so
+  the time from the order to the charged shot = the slew services + `Lobbing_Superweapon_Chargeup_Frames` (90). The
+  slew takes ceil(max(|Δpitch|, |Δyaw|) / 4) services from the turret's current angles; from the rest pose to a
+  target behind the cannon that is up to 45 services. After the stamp the lobbing service stops calling 0x631fe0
+  and TD +0xf6 stays 1, so the turret service 0x632270 does not run its own update or the return to rest: the turret
+  **holds** the last aim until something clears +0xf6 (0x6319d0, a failed 0x632050 / 0x631fe0). The cannon has no
+  TARGETING behaviour, so [M] it probably holds its aim until the next order, and the next order's slew starts from
+  there.
+
+  **In-game probe (s78f t09, 2026-11-05; `tools/probe_mod/s7s8_probes/out/20261105-051443`, MAGNEPULSE)** [H for
+  what was seen]. `Ground_Magnepulse_Cannon` on Geonosis, ordered by Lua `Fire_Special_Weapon` each time
+  `Is_Ability_Ready` turned true (30 s recharge), at a T4B 800 east (va), then 800 west (vb), then vb again. Memory
+  frames from the order to the `Magnepulse_Chargeup_Particles` object / to the `Magnepulse_Blob`:
+
+  | order | to charge-up | to blob | slew implied |
+  |---|---|---|---|
+  | va, turret at rest | 33 | 124 | ≈ 128° (32 × 4°) |
+  | vb, 180° away | 46 | 137 | 180° = 45 services |
+  | vb again | 2 | 94 | none |
+
+  So the delay is slew services + 1, then the charge-up of 90–92 frames; the turret **held its aim** for the 900
+  frames between the last two orders (the [M] above is now seen). The port's "aimed at once" starts the charge-up 45
+  frames early on a 180° swap, as said.
+
+  *Port:* `CombatSystem::lobbing_service` treats the turret as aimed as soon as a solution exists ("[port] the turret
+  angles are not modelled"). That starts the charge-up up to 45 frames early. Keep per-object turret angles
+  (pitch, yaw), step them by `Turret_Rotate_Speed` per service toward (−θ or the geometric pitch, yaw relative to
+  the facing), check the extents, and start the charge-up on the service where they match. For non-deployers, use the
+  undeployed limits and rest angle.
 
 ---
 
@@ -397,6 +459,31 @@ The shared spawner used by WeaponBehavior (vf6 0x54d090), the abilities (Grenade
     - Pick: n ≥ 2 candidates → one synced `Get_Int(0, n−1)`; n = 1 → no draw. The chosen bone's matrix becomes the
       launch transform and its translation the launch point.
     - n = 0, or any gate above failing → the normal path: the request's own muzzle bone on the **shooter's** model.
+  - **Garrison pick inputs (s78f, 2026-11-03)** [H unless tagged]. What a port must supply:
+    - **Pose: the animated pose, world space.** 0x12d2c0(host model, bone) first forces the model's pose evaluation
+      (vtable +0x78), then copies the bone's 3×4 world matrix (12 floats: rows (m0 m1 m2 tx), (m4 m5 m6 ty),
+      (m8 m9 m10 tz)). It includes the host's position and orientation and the current animation frame. The x axis
+      is (m0, m4, m8); its yaw = atan2(m4, m0) in degrees, [0, 360) (0x20acd0; 0 when m0 = m4 = 0). The launch point
+      is (tx, ty, tz), and the whole matrix becomes the launch transform.
+    - **Vanilla: rest pose = animated pose.** The asset catalog has no `NB_BUNKER*.ALA` clip (only `NB_BUNKER.ALO`),
+      so the bunker's FP bones never move. A port may use bind pose × host transform; record it as [port] for mods
+      with animated hosts.
+    - **Host → target yaw:** 0x20acd0(host obj +0x78 → T), T = the target object's raw position (obj +0x78, no
+      `Ranged_Target_Z_Adjust`, and a team container is **not** yet replaced by its member) or the ground point.
+      Difference = bone yaw − target yaw via 0x20b100 (into [0, 360)), then > 180 → −360; candidate when |d| ≤ 60.
+    - **ALT index:** the host model instance's current ALT, model +0xc4. It is written by 0x3ac290: health fraction
+      f = health / max (0x3727a0; a team container uses its team fraction 0x405230); walk `Land_Damage_Thresholds`
+      (type +0xeb0, count +0xeb8) in order and keep the `Land_Damage_Alternates` entry (+0xec8) of the **last**
+      threshold with f ≤ threshold; store it only when it is ≤ the model's highest `_ALT` index (0x12dca0), else the
+      old ALT stays. Called after every hull damage (0x3ab890), by the DEATH behaviour (0x58cdb0), 0x3a0930 and three
+      ability classes (0x6fb940, 0x70cb90, 0x71b5d0). `NB_Bunker` (thresholds 1 / 0.66 / 0.33 / 0 → ALT 0 / 1 / 2 / 3):
+      ALT0 at f > 0.66, ALT1 at 0.33 < f ≤ 0.66, ALT2 at 0 < f ≤ 0.33, ALT3 only at 0, which has no table entry.
+    - **Candidate order** = the table order i = 0 … `Num_Garrison_Guns` − 1 (`FP_00` …), skipping −1 entries and
+      failed transforms; the draw indexes the candidates in that order.
+    - **The port's `garrison_fire_bones` hook** (abilities, Remote_Bomb launch) returns positions only and tests the
+      angle of the bone **position** around the host. Retail tests the bone's **x-axis yaw**. The hook must return
+      each bone's world position and its x-axis yaw (or the matrix); combat's `garrison_muzzle` already uses
+      rest yaw + host yaw, which equals retail on level hosts.
   - **Data.** `NB_Bunker` (`Garrison_Bunker_Template`, the only FoC garrison host with guns, 8 of them) has
     `FP_00`…`FP_07` for ALT0–2. ALT3, the destroyed state, has none, and M = 3 excludes it, so a bunker in its
     destroyed state uses the normal path.
@@ -428,6 +515,50 @@ sound, nothing spawned** [H]. The callers' bookkeeping on a null spawn [H] (2026
 - Remote_Bomb toss 0x71a200: returns false; no recharge starts, the toss is not retried (the stored target is
   cleared), and the end of the toss animation ends the ability as usual (§3.5).
 - The other spawner users (Cluster_Bomb, the lobbing superweapons, AttackAction, …) were not re-read [M].
+
+**Order and draws in `Spawn_Projectile`; the no-arc service (s78f t06, 2026-11-03)** [H unless tagged]. 0x54ade0 runs,
+in this order:
+1. Early refusals, no draws: a target of the shooter's own player refused when 0x39b140 holds and type byte +0xa4 is
+   clear [M: the meaning of both]; a target hardpoint index reset when that hardpoint is gone or destroyed; no
+   projectile type → null.
+2. **Launch point.** No shooter → the request point. A garrisoned shooter with a usable host table → the candidate
+   scan and, when n ≥ 1, `Get_Int(0, n − 1)` on the synced generator. Get_Int returns at once when min = max, so
+   **n = 1 spends no draw and n ≥ 2 spends one call** (its rejection loop may step the LCG more than once). n = 0 →
+   the normal path: the request bone (a second bone in the request adds 3 `Get_Float` calls; WeaponBehavior requests
+   never carry one, request +0x1c = −1 from 0x549d70).
+3. Target point: a team container → its member nearest the launch point (no member → null).
+4. **Category 3: the lob solve; no solution → return null.**
+5. Aim 0x54a270 (target-bone `Get_Int`, inaccuracy draws), creation, pack fill.
+
+So **the garrison pick comes before the solve**, and a no-arc spawn from a garrisoned shooter with ≥ 2 qualifying
+bones has already spent that one draw. Nothing after step 4 runs, so the aim draws are not spent.
+
+**WeaponBehavior does not test the arc itself.** The service 0x54d090 never calls slot 44. It reads only the
+targeting state (gate step 7, state 4). For a grenade weapon that state comes from slot 44 = `Lob_Solve` in the
+TARGETING / TeamTargeting service, so the arc test runs in the targeting service (every frame, interval 1), not
+just before each spawn. The two solves use different points:
+
+| | slot 44 (state 4) | spawn (step 4) |
+|---|---|---|
+| from | the targeting object's position obj +0x78. For a team member that is the **container's** position, with the first member's projectile (TeamTargeting slot 42) | the launch point: the chosen garrison bone, or the muzzle bone |
+| to | the target **itself** + its `Ranged_Target_Z_Adjust` (a team container is not replaced) | the nearest member of a team target + its z adjust |
+| when | the targeting service, before or after the WEAPON service in the frame [M: behaviour-list order] | this WEAPON service |
+
+Neither 0x62ee00 nor 0x62eeb0 tests whether the container is garrisoned, so a garrisoned team keeps computing its
+state [M: where a garrisoned container's obj +0x78 sits was not traced]. So retail **can** reach the garrison pick
+with no arc: state 4 passes on the container's solve while the bone's
+solve fails. That happens at the far edge of the reach, or when the nearest member stands beyond the container's
+own point. While that holds, every WEAPON service spends one `Get_Int` (n ≥ 2), spawns nothing, keeps its cooldown
+and retries. Vanilla case: an Underworld Merc squad (`Proj_Merc_Concussion_Grenade`, team members garrisoned, host =
+the grandparent) inside a `Garrison_Bunker_Template` bunker. A non-garrisoned grenadier spends no synced draw in a
+no-arc service (the separate draws of the targeting service, its scan and slot 47, do not depend on the arc).
+
+**Port order:** `CombatSystem::fire_unit_weapon` (engine/tactical/combat/src/combat_system.cpp, S8 t10 / t04) does
+garrison pick → team-member redirect → lob solve, return on no arc → aim draws. **This is the retail order; it does
+not differ.** The PR #36 concern (a no-arc retry spends a draw each service) is retail behaviour and should be kept.
+Two input points to keep equal to retail: the yaw test needs the host bones' x-axis yaw (§5.1 "Garrison pick
+inputs"; the combat path has it, the abilities hook does not), and state 4 must come from a slot-44 solve from the
+targeting object's position (the container's for a team), not from the muzzle.
 
 ### 5.3 Heading and the rest of the aim
 The normal aim 0x54a270 still runs after the solve: random target bone (synced draw, when the target type has a
@@ -706,7 +837,27 @@ Further differences found 2026-11-02 (input for S8 t06; port state as of 96c474e
 - Answered 2026-11-02: the turret callers (§3.6), null-spawn bookkeeping for WeaponBehavior / Grenade_Attack /
   Remote_Bomb (§5.2), the sticky attach (§6.4), the BOMB timer (§6.4), the terrain test (§6.6), the launch point
   (§5.1), the Remote_Bomb toss (§3.5).
-- The readers of the turret "aimed" result (0x632050 / 0x631fe0 callers) [M: hold fire while 0].
+- ~~The readers of the turret "aimed" result (0x632050 / 0x631fe0 callers)~~ — answered (s78f, 2026-11-03, §3.6
+  "Readers"; the charge-up slew and non-deployers: §3.6 "Charge-up aim").
+- Answered (s78f, 2026-11-03): the garrison pick inputs (animated world pose, x-axis yaw, ALT from 0x3ac290; §5.1);
+  the order of the garrison pick, the solve and the draws, and whether the WEAPON service tests the arc (§5.2 "Order
+  and draws"): the port's order matches retail.
+- ~~[M] Where a garrisoned team container's obj +0x78 sits (the from point of its slot-44 solve)~~ — probed
+  (s78f t09, 2026-11-05, `out/20261105-060346`, BUNKER2) [M: inferred from the edge]. Three `Underworld_Merc_Squad`
+  teams garrisoned in `Garrison_Bunker_Rebel` at (3480, 4640) on flat ground, one mortal Empire T4B at a time at
+  distance d (150 frames each):
+
+  | d from the bunker centre | 120 | 150 | 165 | 170 | 175 | 180 … 280 |
+  |---|---|---|---|---|---|---|
+  | grenades thrown | 19 | 17 | 12 | 22 | 0 | 0 |
+
+  The edge lies between 170 and 175, around the merc's flat-ground reach of 172.5 (§4), **measured from the bunker
+  centre**. The grenades spawn at the bunker's four fire points ((3449.7, 4652.1), (3452.7, 4623.5),
+  (3464.0, 4668.3), (3470.0, 4610.0)), which are all nearer to the target, so the solve's from point is the
+  container / bunker position and only the launch uses the fire bones. No throws from 180 to 240 confirms that
+  `Targeting_Max_Attack_Distance` (240) does not apply (§4). An earlier pass at 300–440 (`out/20261105-051443`)
+  threw nothing, as expected. Still open: whether a garrisoned host's own services touch the members' targeting
+  state; the reader loses the members once they garrison.
 - Null-spawn bookkeeping of the other spawner users (Cluster_Bomb, lobbing superweapons, AttackAction) [M].
 - Answered 2026-11-02:
   - the MARKER removal path (§3.5, "MARKER removal");
@@ -719,10 +870,48 @@ Further differences found 2026-11-02 (input for S8 t06; port state as of 96c474e
   - If a `w_smallbomb` marker stays visible at the spot, the GUI does use command 57, and the marker persists
     after an interrupted toss.
   - If no marker ever appears, ground targeting is not offered.
+  - Probe, s78f t01 (2026-11-05, `out/20261105-045131`): on the Saboteur, pressing the Remote Bomb button and then
+    left-clicking bare ground only deselected the unit; no marker and no toss. That points to the last case (the
+    GUI offers no ground target) [M: one map, one unit]. The Saboteur did throw a bomb by itself at an enemy
+    (F 11958).
 - Whether the in-flight position can drift from Q in float (the closed form is evaluated in single precision; the
   hit is decided by the sweep, so a miss by a fraction of a unit only matters at the target's collision edge).
-- **probe** (optional): SPMAT firing at a target ~275 away on flat ground should show a ~64° arc landing in about
-  0.9 s; a target between 544 and 550 away should be scanned but not fired at.
+- ~~**probe**: SPMAT at ~275~~ — done (s78f t01, 2026-11-05, `out/20261105-055142`, SPMAT) [H for the arc]. The
+  SPMAT at (3480, 4640) was ordered to attack an Empire T4B at (3205, 4640). Six grenades came in pairs 9 frames
+  apart, about every 167 frames. Each one launched from the fire bone at (3458.2, 4640, z 55.8), 90 above the
+  ground. Per frame, dz falls by exactly 1.636 (G). Launch speed 19.23 = 0.64 × 30 (two 0.8 slow-down steps);
+  angle 56.4°; 24 frames to the ground. The solver from that bone to the target point (z −28.4, 253.2 away) gives:
+  30 → 77.3°, 24 → 70.0°, 19.2 → **56.5° / 23.9 frames**, 15.36 → no solution. So retail takes the slowest speed
+  that reaches and the high root, as in §2. The 64.3° / 26.4-frame table value assumed shooter and target at the
+  same height; the real launch bone is higher. Range edge, not settled: a T4B 547 away (from the walker centre)
+  was never acquired (targeting state 0 for 600 frames, no explicit order). The "530" control actually spawned 560
+  away. A scan-but-reject between 544 and 550 was not seen; [M] the deployed SPMAT may not auto-acquire there at all.
+  Follow-up with explicit orders (s78f t12, 2026-11-05, `out/20261105-062322`, SPMAT_EDGE) [M: edge still open]:
+  the SPMAT was deployed (block finished at +45), its locomotor suspended, and one held Empire T4B was spawned per
+  240-frame window at d = 500, 530, 540, 544, 546, 548, 550, 553, 560, 575 from its centre (behind its facing),
+  each with a Lua `Attack_Target` (returned ok). **No grenade in any window, d = 500 included**, where the
+  undeployed SPMAT fires. The reader lost the walker's state after its first sample, so the targeting state is not
+  known. So this setup (deployed + `Suspend_Locomotor` + target behind) stops the SPMAT firing by itself; the 544–550
+  edge needs another run without `Suspend_Locomotor` and with the target in front.
+  s78g t01 (2026-11-05, two runs, Claude drove the game) [M: edge still open]:
+  - `out/20261105-073814`, SPMAT_EDGE2: one fresh SPMAT per window, deployed by an attack on a tank at 275, with no
+    `Suspend_Locomotor`. At +150 the aim tank was replaced by a held T4B in front at d = 500…560 with a Lua
+    `Attack_Target`. In every window the walker **undeployed and walked about 209 toward the target** (locomotor
+    0x13 for most of the window, target cleared), and threw nothing. So an explicit order on a target beyond its
+    reach makes a deployed SPMAT undeploy and close in, not scan and reject.
+  - `out/20261105-092438`, SPMAT_EDGE3: the same, but the edge tank got **no order**. The walker stayed deployed
+    (locomotor 0x19, moved 0) in every window but **never took a target, even at d = 450** (in range), targeting
+    state 0 for 300 frames. [M] The likely cause is that the human-owned victim was outside the AI player's
+    vision; an explicit order ignores fog. So auto-acquire at the edge needs a spotter (an AI-owned unit next to the
+    target, or a reveal) before 544–550 can be read.
+  - **s78h t01 (2026-11-05, `out/20261105-104750`, SPMAT_EDGE4, Claude drove the game) [H: edge settled].** Same as
+    EDGE3, but with an AI-owned `Rebel_Infiltrator` spotter 100 beside the edge tank and `FogOfWar.Reveal` on the tank
+    (spotter and reveal confirmed in 12 of 12 windows). No order. Two passes over d = 450, 540, 544, 547, 550, 556 from
+    the walker centre: **450 and 540 fired (4 grenades each, both passes); 544, 547, 550 and 556 were never targeted**
+    (targeting state 0, no grenade). So vision was the limit in EDGE3. Auto-acquire stops between 540 and 544, which
+    fits the slot 44 solver reach (v/G)·√(v² − 12G) = 544.0 (§4), not the 550 scan range: between 544 and 550 the SPMAT
+    neither targets nor fires. The port already accepts by the solver with `Ranged_Target_Z_Adjust` (§4), so no change.
+- ~~**probe**: Magnepulse slew~~ — done (s78f t09, 2026-11-05): §3.6 "In-game probe".
 
 ## Address table
 | RVA | Name |

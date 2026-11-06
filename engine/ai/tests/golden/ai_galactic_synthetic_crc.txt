@@ -1,185 +1,185 @@
 # A2 synthetic AI-vs-AI campaign: per-frame CRC (every 150th frame + last), decisions
-frame 150 ba1a50e408a12fb2
-frame 300 a0728737fc52c0df
-frame 450 5034a7afb5b48fab
-frame 600 521da1c6f6582e55
-frame 750 1af66cc105b69be6
-frame 900 1dd976d1f49eee0a
-frame 1050 866e29598222d0ec
-frame 1200 73d384507fe04b22
-frame 1350 a8e0ca4ecca8e05d
-frame 1500 621b3bd01be1ebe0
-frame 1650 43a718c749733a40
-frame 1800 316e67e6cb4d94fa
-frame 1950 5964702193b07597
-frame 2100 d2b36c2e5aed3bba
-frame 2250 937b14087b54b406
-frame 2400 ba9e36a0d257d891
-frame 2550 1947752c8d095fd5
-frame 2700 1af419def7c7a7e9
-frame 2850 d038c78311b25070
-frame 3000 9ffd2f8860995955
-frame 3150 8499426406b4734c
-frame 3300 a41a7442c4439ff6
-frame 3450 3ab913f5c6234601
-frame 3600 6f3c0a83c326ad5e
-frame 3750 3352d27613ed00e4
-frame 3900 96ac9683dd498e81
-frame 4050 79cd64f3bbe50fcd
-frame 4200 9db25921211728e7
-frame 4350 4e818fb46ad6035c
-frame 4500 8016171f6bf5fe90
-frame 4650 d8c98bbf88a7b5f0
-frame 4800 fe3103adc7cb8d99
-frame 4950 4baea01659e39c5e
-frame 5100 85b08a717a611210
-frame 5250 68ab383c9b39aa92
-frame 5400 c0d2713506661aa4
-frame 5550 6923c81c25d54ca7
-frame 5700 722f1ad748409216
-frame 5850 4ecfd549970bf183
-frame 6000 06c2bef8b7dbc039
-frame 6150 f3d6cce77f9e7e7d
-frame 6300 f2b3cdcb23eb0a17
-frame 6450 88a96697ff619591
-frame 6600 efcc11bc95499f8e
-frame 6750 521a0dda37d85aa4
-frame 6900 a8c713f53bb1a5f0
-frame 7050 06ae4426dedc3cf7
-frame 7200 366fb5b948b26d1f
-frame 7350 02d103ff23bec23b
-frame 7500 47ac3a3bec244163
-frame 7650 50a39eb2237ce530
-frame 7800 8ec5ea43556a4b66
-frame 7950 abea7787e699061c
-frame 8100 292f026c56844f9b
-frame 8250 88af10e2423e3ed5
-frame 8400 be025f60a9eb153b
-frame 8550 ba0c398371ad875e
-frame 8700 38a7dd812e4be28d
-frame 8850 4e9a958518a05b6a
-frame 9000 ea6ac9b8d4f6c84e
-frame 9150 48344140ee5a503e
-frame 9300 ac670d1f52e7c719
-frame 9450 4c14301b93902913
-frame 9600 a164e4b8d6e501c8
-frame 9750 51b0f5874c23384b
-frame 9900 a494bb4c0addd2d9
-frame 10050 3c9c39f91e6a431e
-frame 10200 b2b03c68887cb339
-frame 10350 010726d200fa54ff
-frame 10500 b4bea7d7c6de6280
-frame 10650 9cd06ea187946287
-frame 10800 e4dca3665769c737
-frame 10950 41e3e352915d5f72
-frame 11100 f66f5e23b50fabd7
-frame 11250 c06fe036de7f38ba
-frame 11400 a17a74fc8347a56d
-frame 11550 6cc319354fd8bfa4
-frame 11700 791e411211bb9415
-frame 11850 9437a343303cf4aa
-frame 12000 0c9948926858e60f
-frame 12150 2d2e6e3ac09ab1eb
-frame 12300 67e56193a9b23129
-frame 12450 1e2dead604d6d739
-frame 12600 ad7f7c8de31ff1a6
-frame 12750 ef05231088bfb0cc
-frame 12900 5933ff329420404b
-frame 13050 66889b90c02460bb
-frame 13200 d06da4897e83c686
-frame 13350 b5d952fa530e0477
-frame 13500 b2e700fbb162f18c
-frame 13650 296567127e3d1767
-frame 13800 f08786bf2f915516
-frame 13950 15f9fd7d7a93c398
-frame 14100 46bb2e053e91d925
-frame 14250 5f27f0754d0f7780
-frame 14400 0d25f471dd1c0aea
-frame 14550 46a981e03887ceee
-frame 14700 b58bdc934fb477cd
-frame 14850 41ccfdbafb97c23b
-frame 15000 c98d9b93a6f171de
-frame 15150 446dbeed3f224a6f
-frame 15300 eecff03038b46a08
-frame 15450 fb9aa20707d30761
-frame 15600 5045ab6f4d52fac7
-frame 15750 a439461fbb6d74d4
-frame 15900 3da4758f0d964342
-frame 16050 cbe06775c296c429
-frame 16200 ef617bf4fd664dbe
-frame 16350 38e8f018957b448a
-frame 16500 f49b0298dbbbea66
-frame 16650 817848900289774d
-frame 16800 7e8e8d5236b4172f
-frame 16950 d7eb153d0b5ac5ed
-frame 17100 90a3b7a325ebe1dc
-frame 17250 d51067a6c41613e7
-frame 17400 4f0468209eb6a716
-frame 17550 a091a93e8936730e
-frame 17700 d1a56e8d26f95702
-frame 17850 8f58fe3ba122eb7f
-frame 18000 b5669cb7544e6377
-frame 18150 ab043385c57deb87
-frame 18300 d547840a10430997
-frame 18450 c0ca041c78514e4e
-frame 18600 4f4259618567fdba
-frame 18750 6e73d184886a6268
-frame 18900 c44c466e770848f2
-frame 19050 f2d76a6460e44b66
-frame 19200 419169f33334af37
-frame 19350 f2bc54bc3f87dbc4
-frame 19500 2a500aa216407349
-frame 19650 2f18f0ded3dd8b5f
-frame 19800 8e4be60280df630e
-frame 19950 60714e261c24a790
-frame 20100 d4f5b37dc37619ba
-frame 20250 6d0c9fd175e1b90c
-frame 20400 bd444089257a8b37
-frame 20550 b39a275aec4e4ed4
-frame 20700 9aa695a3c12f4197
-frame 20850 dcb6b15ff68c19d2
-frame 21000 1aa72ee31fa7f7c4
-frame 21150 501fab12d35e3840
-frame 21300 7853c00101479cb1
-frame 21450 d9dbf08c5952a596
-frame 21600 60ff5f04a3120410
-frame 21750 e51a8e615fde9a74
-frame 21900 dbd2bf81aae14e37
-frame 22050 823e6e561a0051fd
-frame 22200 e0838dfcdf4715e8
-frame 22350 96c428cb6edc5016
-frame 22500 2bdc188097c76cc0
-frame 22650 4149545f223900a0
-frame 22800 24aa0499d725cb11
-frame 22950 28cb5515320501ee
-frame 23100 b9ca9ed8181a6ac9
-frame 23250 7d703be923dced77
-frame 23400 af2ada7650da3192
-frame 23550 0be322ea3e84261d
-frame 23700 1c3545e9f7bf0ab9
-frame 23850 c7377377cfe6a041
-frame 24000 6ce404ec8a268a59
-frame 24150 87081dc0c04f9ac8
-frame 24300 c3e8ccf9fb7bbfa3
-frame 24450 17e8f119ce7015e1
-frame 24600 f40d846691418ee4
-frame 24750 12b9ac8815044a0a
-frame 24900 250fba9478a88a8d
-frame 25050 62cca675baa792bf
-frame 25200 c98f7a24d8ff4b2a
-frame 25350 153fe9ee5f737fac
-frame 25500 94fced7c09b8ec5a
-frame 25650 b67679aef8819702
-frame 25800 71f161e348a45bf7
-frame 25950 8adc3245015c854b
-frame 26100 31db80a86eb13b7d
-frame 26250 3997252a9500f1d2
-frame 26400 d11e7f0023a5e56c
-frame 26550 a2a7bb2bfc822266
-frame 26700 be9af73a54c790cb
-frame 26850 fed45ac9eec90779
-frame 27000 809d130d7d620167
-frames 27000 planets E=0 R=8 N=0 credits E=1176 R=1166 orders 138 rejected 0 conflicts 12 plans running 0
+frame 150 d9fd220953fdd087
+frame 300 4c9dde41572d6871
+frame 450 bcd04a778c6c4f34
+frame 600 e94660732106c426
+frame 750 be5df0222dd57a7d
+frame 900 4e534c651a2a2be0
+frame 1050 3f455c430e04ba43
+frame 1200 4c77359ece35db8a
+frame 1350 7433fc0fdf92a68e
+frame 1500 c7b4e320587f7ee9
+frame 1650 e90b71e9e7102e39
+frame 1800 25b2c0da184d6578
+frame 1950 7aaa49a214fe4b6b
+frame 2100 87f51d4c13645de1
+frame 2250 c5e77f80eef901a9
+frame 2400 2cad71c1df8f0f8f
+frame 2550 4c9716ccba178a4b
+frame 2700 69bc09fb8682b486
+frame 2850 4fe6ccb15c1be5ed
+frame 3000 eabe7d37191b4bc1
+frame 3150 4de60fc4a2f0f909
+frame 3300 46cf3272a6a94458
+frame 3450 a7bf82777ffe4b9a
+frame 3600 8dc73548de3e5b73
+frame 3750 642db68eb0a3bd72
+frame 3900 cf9682562adfea54
+frame 4050 79b5d7b90477eb5c
+frame 4200 7a6d8ce2877d23ab
+frame 4350 966212026686ba29
+frame 4500 44302488555a32e6
+frame 4650 62fb7b68cb349417
+frame 4800 ab197e8ce001ea7e
+frame 4950 084e2af935f23af3
+frame 5100 4ce6a357d195720d
+frame 5250 62a561146dd01e1d
+frame 5400 4b49faa9af22681d
+frame 5550 7199157393074516
+frame 5700 4dc70422456adbcd
+frame 5850 9fcd9e8ffc09c582
+frame 6000 f2c1f809435c026a
+frame 6150 06cc9aa7527e21e1
+frame 6300 aa6a8028e59b4f90
+frame 6450 609f1e9cdd247b93
+frame 6600 79a330abb060f1f3
+frame 6750 b2042f79598d5998
+frame 6900 923348a3d3cb5ea1
+frame 7050 4e206f07b2f2bd74
+frame 7200 0d3d055dc4cb8386
+frame 7350 c10b1ad0e08c1b22
+frame 7500 9a317bb73c303030
+frame 7650 89452e05bf340f3a
+frame 7800 bee4b326a4d5cc21
+frame 7950 0dd50d1fdf1a9158
+frame 8100 f799a0f957f028d8
+frame 8250 83ddc632efa4ad2a
+frame 8400 284e3515dc535b67
+frame 8550 595e9dc0fac14c9b
+frame 8700 18f5d9356898b90e
+frame 8850 2475ffc84447e7c4
+frame 9000 675ff9c2f700635b
+frame 9150 5f171b98294e1b02
+frame 9300 96c3df5b9bac97a2
+frame 9450 f030be7bf8a67480
+frame 9600 7f98b59edfbbb27f
+frame 9750 93f2ded4380a6d4d
+frame 9900 a0cb12fcc3291210
+frame 10050 2a36f9c85c15051a
+frame 10200 2ce090c85abcc152
+frame 10350 d4bf0f71ec5eab36
+frame 10500 c3c5ce389844e2fe
+frame 10650 2e05004c41931261
+frame 10800 7430a98e12b11a67
+frame 10950 36d02a5ec98a70e0
+frame 11100 d296646ae87b1ecc
+frame 11250 18233a3006f0a1c9
+frame 11400 ddda25cbc9a52b14
+frame 11550 1f47b63f5acc5fd6
+frame 11700 bc1f2143dc03f603
+frame 11850 3496884f49a383d1
+frame 12000 b37aab07dd6a86a8
+frame 12150 574c3665e1250288
+frame 12300 092efe4fec201bba
+frame 12450 b5dfe92054a0dc6f
+frame 12600 d7c314e56aacfc20
+frame 12750 4b166adc3b6c7ddc
+frame 12900 2ac0fbcef12d5bd6
+frame 13050 8f933783c1438a03
+frame 13200 acaaa7e239cdbea2
+frame 13350 8d1947632cc41adb
+frame 13500 925869e0d84d6e68
+frame 13650 c6fc212be2d15659
+frame 13800 da5f36c22bab6945
+frame 13950 0385fad42231e56e
+frame 14100 8f334280664631c7
+frame 14250 fd04b83bb7d62127
+frame 14400 8419660393f7538d
+frame 14550 bfb8c2fbc5e7ff2b
+frame 14700 e71082ee11fcada7
+frame 14850 b91112dd1f070a61
+frame 15000 167d4d6d601efe63
+frame 15150 156047dae68c95b8
+frame 15300 4721033da899aca9
+frame 15450 7caaaf252d9df630
+frame 15600 b29858521538689e
+frame 15750 aa7e52c82be561d3
+frame 15900 cc66ff7ba25b7c3a
+frame 16050 8311ee02ca6c8944
+frame 16200 4a52fffee21305c4
+frame 16350 f46b64a0dd90b838
+frame 16500 31ae16c397db4964
+frame 16650 6d58a8ef441907bd
+frame 16800 aba0838da904e018
+frame 16950 6c8add69274b4b71
+frame 17100 c58433b8d97a0ca6
+frame 17250 14a1ddb4a478dad8
+frame 17400 e8af8928ad1d02a9
+frame 17550 4c77258157fe035a
+frame 17700 2e97f9fffa33af23
+frame 17850 e23de06819678078
+frame 18000 4270f2fcf956c624
+frame 18150 3abf1531f2139222
+frame 18300 4fdde9aba9304aae
+frame 18450 5a4a1a8a99b1a24a
+frame 18600 739f0114b334e2a5
+frame 18750 40711a97491c313b
+frame 18900 3c71c52805711bfc
+frame 19050 f0373c936675db71
+frame 19200 064512400296ce3b
+frame 19350 4466185306865d98
+frame 19500 ef366e63e7bedbc1
+frame 19650 f783430012bdb8b5
+frame 19800 348b6583455be28a
+frame 19950 03cc30d872f35356
+frame 20100 2e76f7c5520b9ff3
+frame 20250 af35e29201c31fd3
+frame 20400 f4838b6b4c9c2d2e
+frame 20550 4a463f351f1d1b27
+frame 20700 f95ae1b5ab62d483
+frame 20850 22f52a816bf8376d
+frame 21000 1dc26da3836b2a56
+frame 21150 cc6aa92911c6812d
+frame 21300 3954a7efa49cef90
+frame 21450 7ea98080fc24c969
+frame 21600 405e07e7901b1680
+frame 21750 222b1da8c8ec82db
+frame 21900 51a4d7cc45cbc3b7
+frame 22050 7eae8252edcada04
+frame 22200 356970e1630f1e32
+frame 22350 7b1737f07f78ef27
+frame 22500 195a32758c5306c2
+frame 22650 66e7d888e6aafb89
+frame 22800 aa14b679a3396745
+frame 22950 4b360b75119a65a8
+frame 23100 d4660fdf40225efc
+frame 23250 b016635b7a8a5504
+frame 23400 d9781dea541ede37
+frame 23550 f6ab8d0aa1196095
+frame 23700 96b7d4857bdad792
+frame 23850 86b5f585ffc071e7
+frame 24000 8dca3426c5c892a0
+frame 24150 968ce203967fb5fc
+frame 24300 f914b717a39cde56
+frame 24450 07d6e20472344165
+frame 24600 6217eb02ca1b5998
+frame 24750 6b63f1bda166b8ed
+frame 24900 a2463dae247fd8f8
+frame 25050 40acc8345d99252c
+frame 25200 129f0346ac96ce63
+frame 25350 9238482a35758f11
+frame 25500 3f1f6c212cdadc24
+frame 25650 24cf79335056b183
+frame 25800 185a25c8d1cd95dd
+frame 25950 c1aaf45e476208bb
+frame 26100 752b84d0905a6e42
+frame 26250 6e80e85c33776716
+frame 26400 9865742ca959f24e
+frame 26550 b3b2746445b939b6
+frame 26700 652ac3609498195a
+frame 26850 491ed9fd3c8a1ad9
+frame 27000 7582f6009a2b6dfb
+frames 27000 planets E=0 R=8 N=0 credits E=833 R=1208 orders 148 rejected 0 conflicts 28 plans running 0
 1 p0 opponent 1
 1 p0 templates Syn_Default
 1 p0 plan 1 CONQUER for Conquer_Planet @P2 SpaceForce(1+1) GroundForce(1+1) net 650 gross 1600 eta 7.2
@@ -187,8 +187,8 @@ frames 27000 planets E=0 R=8 N=0 credits E=1176 R=1166 orders 138 rejected 0 con
 1 p0 plan 3 UPGRADESTARBASE for Upgrade_Starbase @P0 BaseForce(0+1) net 1500 gross 1500 eta 13.5
 1 p0 build task 0 Corvette for SpaceForce
 1 p0 build task 1 Infantry for GroundForce
-1 p0 build task 2 Corvette for ReserveForce
-1 p0 build task 3 Frigate for ReserveForce
+1 p0 build task 2 Frigate for ReserveForce
+1 p0 build task 3 Corvette for ReserveForce
 1 p0 build task 4 SB2 for BaseForce at P0
 1 p1 opponent 0
 1 p1 templates Syn_Default
@@ -200,289 +200,305 @@ frames 27000 planets E=0 R=8 N=0 credits E=1176 R=1166 orders 138 rejected 0 con
 2 p1 build task 7 Frigate for ReserveForce
 2 p1 build task 8 Corvette for ReserveForce
 2 p1 build task 9 SB1 for BaseForce at P6
-31 p1 order build SB1 at P6
-31 p0 order build SB2 at P0
-31 p0 plan 1 CONQUER ended success (released)
-33 p0 plan 7 CONQUER for Conquer_Planet @P2 SpaceForce(1+1) GroundForce(1+1) net 650 gross 1600 eta 38.6
-34 p0 build task 10 Corvette for SpaceForce
-34 p0 build task 11 Infantry for GroundForce
-62 p1 order build Infantry at P7
-62 p1 order build Corvette at P7
-93 p0 order build Infantry at P0
-224 p1 order launch 19 at P7
-224 p1 order form 19 alone
-227 p1 order move fleet 20 -> P6
-256 p0 order launch 21 at P0
-256 p0 order form 21 alone
-259 p0 order move fleet 22 -> P1
-278 p1 order move fleet 16 -> P6
-283 p1 plan 4 CONQUER ended success (released)
-285 p1 plan 8 CONQUER for Conquer_Planet @P5 SpaceForce(0+2) GroundForce(1+1) net 1350 gross 1600 eta 36.0
-287 p1 build task 12 Frigate for SpaceForce
-287 p1 build task 13 Corvette for SpaceForce
-287 p1 build task 14 Infantry for GroundForce
-310 p1 order build Frigate at P7
-335 p1 plan 6 UPGRADESTARBASE ended success
-341 p1 order build Infantry at P7
-372 p1 order build Frigate at P6
-398 p1 order auto-land 19 at P6
-404 p1 plan 8 CONQUER ended success (released)
-407 p1 plan 9 CONQUER for Conquer_Planet @P5 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
-413 p1 tf SpaceForce move to P5
-413 p1 order move fleet 16 -> P5
-439 p0 plan 3 UPGRADESTARBASE ended success
-496 p0 order build Corvette at P0
-558 p0 plan 7 CONQUER ended success (released)
-559 p0 order auto-land 21 at P1
-561 p0 plan 10 CONQUER for Conquer_Planet @P2 SpaceForce(1+1) GroundForce(2+0) net 400 gross 1600 eta 20.6
-562 p0 build task 15 Corvette for SpaceForce
-566 p1 order launch 18 at P6
-566 p1 order launch 19 at P6
-572 p1 tf GroundForce move to P5
-572 p1 order move fleet 27 -> P5
-682 p1 order build Corvette at P7
-713 p0 order build Frigate at P0
-713 p0 plan 10 CONQUER ended success (released)
-716 p0 plan 11 CONQUER for Conquer_Planet @P2 SpaceForce(1+1) GroundForce(2+0) net 400 gross 1600 eta 14.9
-718 p0 build task 16 Corvette for SpaceForce
-746 p1 order invade P5 with 2
-751 p1 plan 12 CONQUER for Conquer_Planet @P4 SpaceForce(1+1) GroundForce(1+1) net 650 gross 1600 eta 7.2
-752 p1 plan 9 CONQUER ended success
-752 p1 order move fleet 31 -> P5
-752 p1 order launch 26 at P7
-752 p1 order form 26 alone
-755 p1 order move fleet 33 -> P5
-884 p1 tf SpaceForce move to P4
-884 p1 order move fleet 16 -> P4
-902 p1 plan 5 BUILDSPACE ended success
-908 p1 plan 13 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+2) net 1100 gross 1100 eta 14.4
-908 p1 build task 19 Frigate for ReserveForce
-908 p1 build task 20 Corvette for ReserveForce
-961 p1 order build Frigate at P6
-988 p0 plan 2 BUILDSPACE ended success
-993 p0 plan 14 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+2) net 1100 gross 1100 eta 21.0
-994 p0 build task 21 Frigate for ReserveForce
-994 p0 build task 22 Corvette for ReserveForce
-1023 p0 order build Corvette at P0
-1031 p1 plan 12 CONQUER ended success (released)
-1035 p1 plan 15 CONQUER for Conquer_Planet @P4 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
-1037 p1 order move fleet 16 -> P5
-1085 p1 order build Corvette at P7
-1097 p1 order auto-land 26 at P5
-1169 p1 tf SpaceForce move to P4
-1169 p1 order move fleet 16 -> P4
-1204 p0 order move fleet 11 -> P1
-1240 p0 order build Frigate at P0
-1299 p0 plan 11 CONQUER ended success (released)
-1301 p1 order move fleet 28 -> P6
-1302 p0 plan 16 CONQUER for Conquer_Planet @P2 SpaceForce(0+2) GroundForce(2+0) net 1100 gross 1600 eta 27.9
-1303 p0 build task 23 Frigate for SpaceForce
-1303 p0 build task 24 Corvette for SpaceForce
-1343 p1 order launch 18 at P5
-1343 p1 order launch 19 at P5
-1349 p1 tf GroundForce move to P4
-1349 p1 order move fleet 40 -> P4
-1433 p1 plan 13 BUILDSPACE ended success
-1523 p1 order invade P4 with 2
-1529 p1 plan 15 CONQUER ended success
-1532 p1 plan 17 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
-1538 p1 tf SpaceForce move to P3
-1538 p1 order move fleet 16 -> P3
-1550 p0 order build Corvette at P0
-1612 p0 plan 16 CONQUER ended success (released)
-1615 p0 plan 18 CONQUER for Conquer_Planet @P2 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
-1621 p0 tf SpaceForce move to P2
-1621 p0 order move fleet 11 -> P2
-1688 p1 order launch 18 at P4
-1688 p1 order launch 19 at P4
-1694 p1 tf GroundForce move to P3
-1694 p1 order move fleet 43 -> P3
-1735 p0 plan 14 BUILDSPACE ended success
-1740 p0 plan 19 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+2) net 1100 gross 1100 eta 15.0
-1741 p0 build task 25 Frigate for ReserveForce
-1741 p0 build task 26 Corvette for ReserveForce
-1742 p1 plan 17 CONQUER ended success (released)
-1748 p1 plan 20 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(1+1) net 250 gross 1600 eta 5.4
-1748 p1 build task 27 Infantry for GroundForce
-1748 p1 order move fleet 16 -> P4
-1771 p0 order launch 13 at P1
-1771 p0 order launch 21 at P1
-1777 p0 tf GroundForce move to P2
-1777 p0 order move fleet 45 -> P2
-1793 p1 plan 20 CONQUER ended success (released)
-1798 p0 order build Frigate at P0
-1799 p1 plan 21 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(1+1) net 250 gross 1600 eta 5.4
-1799 p1 build task 28 Infantry for GroundForce
-1799 p1 order move fleet 37 -> P4
-1809 p1 plan 22 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 7.2
-1811 p1 build task 29 Corvette for ReserveForce
-1845 p1 plan 21 CONQUER ended success (released)
-1860 p1 order build Corvette at P6
-1880 p1 plan 23 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
-1880 p1 order move fleet 43 -> P4
-1886 p1 tf SpaceForce move to P3
-1886 p1 order move fleet 16 -> P3
-1951 p0 order invade P2 with 2
-1957 p0 plan 18 CONQUER ended success
-1961 p0 plan 24 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
-1969 p0 tf SpaceForce move to P3
-1969 p0 order move fleet 11 -> P3
-2060 p1 tf GroundForce move to P3
-2060 p1 order move fleet 43 -> P3
-2081 p1 plan 22 BUILDSPACE ended success
-2089 p1 plan 25 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 7.2
-2090 p1 build task 30 Corvette for ReserveForce
-2099 p1 plan 23 CONQUER ended failure
-2101 p0 plan 24 CONQUER ended failure
-2106 p0 plan 26 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
-2107 p0 order move fleet 11 -> P2
-2108 p0 order build Corvette at P0
-2139 p1 order build Corvette at P6
-2236 p1 plan 27 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
-2237 p1 order move fleet 43 -> P4
-2239 p0 tf SpaceForce move to P3
-2239 p0 order move fleet 11 -> P3
-2293 p0 plan 19 BUILDSPACE ended success
-2360 p1 plan 25 BUILDSPACE ended success
-2411 p1 tf SpaceForce move to P3
-2411 p1 order move fleet 43 -> P3
-2413 p0 order launch 13 at P2
-2413 p0 order launch 21 at P2
-2419 p0 tf GroundForce move to P3
-2419 p0 order move fleet 51 -> P3
-2584 p0 plan 26 CONQUER ended failure
-2592 p0 plan 28 CONQUER for Conquer_Planet @P3 SpaceForce(4+0) GroundForce(2+0) net 0 gross 2700 eta 0.0
-2593 p0 order move fleet 41 -> P2
-2593 p0 order move fleet 51 -> P2
-2708 p0 plan 29 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 6.0
-2710 p0 build task 31 Corvette for ReserveForce
-2717 p1 tf GroundForce move to P3
-2723 p1 order invade P3 with 2
-2729 p1 plan 27 CONQUER ended success
-2738 p1 plan 30 CONQUER for Conquer_Planet @P2 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
-2744 p1 tf SpaceForce move to P2
-2744 p1 order move fleet 43 -> P2
-2759 p0 order build Corvette at P0
-2851 p0 tf SpaceForce move to P3
-2851 p0 order move fleet 51 -> P3
-2894 p1 order launch 18 at P3
-2894 p1 order launch 19 at P3
-2900 p1 tf GroundForce move to P2
-2900 p1 order move fleet 52 -> P2
-2944 p0 plan 29 BUILDSPACE ended success
-3073 p0 tf GroundForce move to P3
-3074 p1 order invade P2 with 2
-3079 p0 order invade P3 with 2
-3080 p1 plan 30 CONQUER ended success
-3085 p0 plan 28 CONQUER ended success
-3090 p1 plan 31 CONQUER for Conquer_Planet @P1 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
-3093 p0 plan 32 CONQUER for Conquer_Planet @P4 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
-3098 p1 tf SpaceForce move to P1
-3098 p1 order move fleet 43 -> P1
-3100 p0 tf SpaceForce move to P4
-3100 p0 order move fleet 51 -> P4
-3248 p1 order launch 18 at P2
-3248 p1 order launch 19 at P2
-3250 p0 order launch 13 at P3
-3250 p0 order launch 21 at P3
-3254 p1 tf GroundForce move to P1
-3254 p1 order move fleet 55 -> P1
-3256 p0 tf GroundForce move to P4
-3256 p0 order move fleet 56 -> P4
-3428 p1 order invade P1 with 2
-3430 p0 order invade P4 with 2
-3434 p1 plan 31 CONQUER ended success
-3436 p0 plan 32 CONQUER ended success
-3442 p0 plan 33 CONQUER for Conquer_Planet @P5 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
-3442 p1 plan 34 CONQUER for Conquer_Planet @P0 SpaceForce(3+0) GroundForce(2+0) net 0 gross 2000 eta 0.0
-3448 p0 tf SpaceForce move to P5
-3448 p0 order move fleet 51 -> P5
-3449 p1 tf SpaceForce move to P0
-3449 p1 order move fleet 43 -> P0
-3598 p0 order launch 13 at P4
-3598 p0 order launch 21 at P4
-3599 p1 order launch 18 at P1
-3599 p1 order launch 19 at P1
-3604 p0 tf GroundForce move to P5
-3604 p0 order move fleet 57 -> P5
-3605 p1 tf GroundForce move to P0
-3605 p1 order move fleet 58 -> P0
-3778 p0 order invade P5 with 2
-3779 p1 order invade P0 with 2
-3784 p0 plan 33 CONQUER ended success
-3785 p1 plan 34 CONQUER ended success
-3794 p1 plan 35 CONQUER for Conquer_Planet @P5 SpaceForce(4+0) GroundForce(2+0) net 0 gross 2100 eta 0.0
-3794 p1 order move fleet 43 -> P6
-3794 p1 order launch 18 at P0
-3794 p1 order form 18 alone
-3794 p1 order launch 19 at P0
-3797 p1 order move fleet 59 -> P6
-4217 p1 tf SpaceForce move to P5
-4217 p1 order move fleet 47 -> P5
-4304 p1 plan 35 CONQUER ended failure
-5409 p1 plan 36 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 7.2
-5411 p1 build task 32 Corvette for ReserveForce
-5456 p1 order build Corvette at P6
-5675 p1 plan 36 BUILDSPACE ended success
-9466 p1 plan 37 CONQUER for Conquer_Planet @P3 SpaceForce(1+1) GroundForce(2+0) net 400 gross 1300 eta 7.2
-9466 p1 plan 38 UPGRADESTARBASE for Upgrade_Starbase @P0 BaseForce(0+1) net 900 gross 900 eta 10.0
-9467 p1 build task 33 Corvette for SpaceForce
-9467 p1 build task 34 SB1 for BaseForce at P0
-9467 p1 order move fleet 59 -> P2
-9486 p1 order build SB1 at P0
-9502 p1 plan 37 CONQUER ended success (released)
-9509 p1 plan 39 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 7.2
-9509 p1 build task 35 Corvette for ReserveForce
-9548 p1 order build Corvette at P6
-9767 p1 plan 39 BUILDSPACE ended success
-9791 p1 plan 38 UPGRADESTARBASE ended success
-9977 p1 order auto-land 18 at P2
-9977 p1 order auto-land 19 at P2
-9986 p1 plan 40 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1300 eta 0.0
-9986 p1 order move fleet 60 -> P2
-10070 p1 order move fleet 60 -> P2
-10325 p1 tf SpaceForce move to P3
-10325 p1 order move fleet 60 -> P3
-10442 p1 order launch 18 at P2
-10442 p1 order launch 19 at P2
-10448 p1 tf GroundForce move to P3
-10448 p1 order move fleet 64 -> P3
-10622 p1 order invade P3 with 2
-10628 p1 plan 40 CONQUER ended success
-12162 p1 plan 41 CONQUER for Conquer_Planet @P4 SpaceForce(1+1) GroundForce(2+0) net 400 gross 1300 eta 7.2
-12164 p1 build task 36 Corvette for SpaceForce
-12214 p1 order build Corvette at P0
-12431 p1 order move fleet 65 -> P3
-12442 p1 plan 41 CONQUER ended success (released)
-12694 p1 plan 42 CONQUER for Conquer_Planet @P4 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1300 eta 0.0
-12701 p1 tf SpaceForce move to P4
-12701 p1 order move fleet 60 -> P4
-12851 p1 order launch 18 at P3
-12851 p1 order launch 19 at P3
-12857 p1 tf GroundForce move to P4
-12857 p1 order move fleet 67 -> P4
-13031 p1 order invade P4 with 2
-13037 p1 plan 42 CONQUER ended success
-13975 p1 plan 43 CONQUER for Conquer_Planet @P5 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1300 eta 0.0
-13982 p1 tf SpaceForce move to P5
-13982 p1 order move fleet 60 -> P5
-14132 p1 order launch 18 at P4
-14132 p1 order launch 19 at P4
-14138 p1 tf GroundForce move to P5
-14138 p1 order move fleet 68 -> P5
-14312 p1 order invade P5 with 2
-14318 p1 plan 43 CONQUER ended success
-18910 p1 plan 44 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+2) net 1100 gross 1100 eta 10.8
-18911 p1 build task 37 Frigate for ReserveForce
-18911 p1 build task 38 Corvette for ReserveForce
-18972 p1 order build Frigate at P0
-19096 p1 order build Corvette at P6
-19313 p1 order move fleet 71 -> P0
-19820 p1 plan 44 BUILDSPACE ended success
-22963 p1 plan 45 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+2) net 1100 gross 1100 eta 10.8
-22964 p1 build task 39 Corvette for ReserveForce
-22964 p1 build task 40 Frigate for ReserveForce
-23002 p1 order build Corvette at P0
-23126 p1 order build Frigate at P6
-23450 p1 order move fleet 74 -> P0
-24215 p1 plan 45 BUILDSPACE ended success
+42 p0 order build SB2 at P0
+48 p1 order build SB1 at P6
+68 p0 order build Infantry at P0
+69 p1 order build Infantry at P7
+82 p1 order build Corvette at P7
+229 p0 order launch 19 at P0
+229 p0 order form 19 alone
+230 p1 order launch 21 at P7
+230 p1 order form 21 alone
+232 p0 order move fleet 20 -> P1
+233 p1 order move fleet 22 -> P6
+299 p1 order move fleet 16 -> P6
+330 p1 order build Frigate at P7
+353 p1 plan 6 UPGRADESTARBASE ended success
+389 p1 order build Corvette at P6
+431 p1 tf SpaceForce move to P5
+431 p1 order move fleet 22 -> P5
+451 p0 plan 3 UPGRADESTARBASE ended success
+507 p0 order build Corvette at P0
+653 p1 order move fleet 26 -> P7
+688 p0 order move fleet 11 -> P1
+707 p1 order launch 18 at P6
+713 p1 tf GroundForce move to P5
+713 p1 order move fleet 31 -> P5
+724 p0 order build Frigate at P0
+740 p1 plan 5 BUILDSPACE ended success
+745 p1 plan 7 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+2) net 1100 gross 1100 eta 10.8
+746 p1 build task 10 Frigate for ReserveForce
+746 p1 build task 11 Corvette for ReserveForce
+792 p1 order build Frigate at P6
+820 p0 tf SpaceForce move to P2
+820 p0 order move fleet 20 -> P2
+826 p1 order build Corvette at P7
+887 p1 order invade P5 with 2
+891 p1 plan 8 CONQUER for Conquer_Planet @P4 SpaceForce(2+0) GroundForce(0+2) net 500 gross 1600 eta 10.8
+893 p1 plan 4 CONQUER ended success
+893 p1 order move fleet 28 -> P5
+1009 p0 order launch 13 at P1
+1015 p0 tf GroundForce move to P2
+1015 p0 order move fleet 34 -> P2
+1034 p0 order build Corvette at P0
+1115 p1 order move fleet 35 -> P6
+1151 p1 tf SpaceForce move to P4
+1151 p1 order move fleet 22 -> P4
+1189 p0 order invade P2 with 2
+1195 p0 plan 9 CONQUER for Conquer_Planet @P3 SpaceForce(0+2) GroundForce(0+2) net 1600 gross 1600 eta 15.6
+1195 p0 plan 1 CONQUER ended success
+1201 p0 tf SpaceForce move to P3
+1201 p0 order move fleet 20 -> P3
+1202 p1 plan 7 BUILDSPACE ended success
+1207 p1 plan 10 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 700 gross 700 eta 10.8
+1208 p1 build task 18 Frigate for ReserveForce
+1219 p0 plan 2 BUILDSPACE ended success
+1257 p1 order build Frigate at P6
+1349 p1 order launch 21 at P5
+1349 p1 order launch 18 at P5
+1351 p0 order launch 19 at P2
+1351 p0 order launch 13 at P2
+1355 p1 tf GroundForce move to P4
+1355 p1 order move fleet 40 -> P4
+1357 p0 tf GroundForce move to P3
+1357 p0 order move fleet 41 -> P3
+1529 p1 order invade P4 with 2
+1531 p0 order invade P3 with 2
+1535 p1 plan 8 CONQUER ended success
+1537 p0 plan 9 CONQUER ended success
+1541 p1 plan 11 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
+1547 p0 plan 12 CONQUER for Conquer_Planet @P4 SpaceForce(4+0) GroundForce(2+0) net 0 gross 2700 eta 0.0
+1547 p0 plan 13 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+2) net 1100 gross 1100 eta 15.0
+1547 p1 tf SpaceForce move to P3
+1547 p1 order move fleet 22 -> P3
+1549 p0 build task 19 Frigate for ReserveForce
+1549 p0 build task 20 Corvette for ReserveForce
+1549 p0 order move fleet 32 -> P3
+1583 p1 plan 10 BUILDSPACE ended success
+1590 p1 plan 14 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 700 gross 700 eta 10.8
+1592 p0 order build Frigate at P0
+1592 p1 build task 21 Frigate for ReserveForce
+1629 p1 order build Frigate at P6
+1697 p1 order launch 21 at P4
+1697 p1 order launch 18 at P4
+1703 p1 tf GroundForce move to P3
+1703 p1 order move fleet 43 -> P3
+1877 p1 order invade P3 with 2
+1883 p1 plan 11 CONQUER ended success
+1902 p0 order build Corvette at P0
+1933 p0 plan 12 CONQUER ended failure
+1955 p1 plan 14 BUILDSPACE ended success
+2086 p0 plan 13 BUILDSPACE ended success
+2092 p0 plan 15 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(0+2) net 500 gross 1600 eta 9.0
+2092 p0 build task 22 Infantry for GroundForce
+2092 p0 build task 23 Infantry for GroundForce
+2092 p0 order move fleet 44 -> P2
+2096 p0 plan 16 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 700 gross 700 eta 9.0
+2098 p0 build task 24 Frigate for ReserveForce
+2145 p0 order build Infantry at P0
+2150 p0 order build Frigate at P0
+2331 p0 order build Infantry at P0
+2350 p0 tf SpaceForce move to P3
+2350 p0 order move fleet 44 -> P3
+2389 p0 order auto-land 13 at P0
+2425 p0 plan 16 BUILDSPACE ended success
+2467 p0 order launch 49 at P0
+2467 p0 order form 49 alone
+2467 p0 order launch 52 at P0
+2467 p0 order form 52 into fleet 53
+2470 p0 order move fleet 53 -> P2
+2706 p0 plan 17 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 6.0
+2707 p0 build task 25 Corvette for ReserveForce
+2712 p1 plan 18 CONQUER for Conquer_Planet @P2 SpaceForce(2+0) GroundForce(1+1) net 250 gross 1600 eta 5.4
+2714 p1 build task 26 Infantry for GroundForce
+2714 p1 order move fleet 37 -> P3
+2739 p0 order build Corvette at P0
+2766 p1 order build Infantry at P7
+2821 p0 tf GroundForce move to P3
+2821 p0 order move fleet 53 -> P3
+2923 p0 plan 17 BUILDSPACE ended success
+2927 p1 order launch 55 at P7
+2927 p1 order form 55 alone
+2930 p1 order move fleet 56 -> P3
+2995 p0 order invade P3 with 2
+3001 p0 plan 15 CONQUER ended success
+3010 p0 plan 19 CONQUER for Conquer_Planet @P4 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
+3010 p0 order move fleet 50 -> P3
+3010 p0 order launch 13 at P0
+3010 p0 order form 13 alone
+3013 p0 order move fleet 57 -> P3
+3098 p1 tf SpaceForce move to P2
+3098 p1 order move fleet 37 -> P2
+3268 p0 plan 19 CONQUER ended failure
+3620 p1 tf GroundForce move to P2
+3620 p1 order move fleet 56 -> P2
+3794 p1 order invade P2 with 1
+3800 p1 plan 18 CONQUER ended success
+4062 p1 plan 20 UPGRADESTARBASE for Upgrade_Starbase @P4 BaseForce(0+1) net 900 gross 900 eta 10.0
+4064 p1 build task 27 SB1 for BaseForce at P4
+4072 p1 order build SB1 at P4
+4376 p1 plan 20 UPGRADESTARBASE ended success
+5409 p1 plan 21 CONQUER for Conquer_Planet @P1 SpaceForce(2+0) GroundForce(1+1) net 250 gross 1600 eta 5.4
+5411 p1 build task 28 Infantry for GroundForce
+5417 p1 tf SpaceForce move to P1
+5417 p1 order move fleet 37 -> P1
+6473 p1 plan 21 CONQUER ended success (released)
+6481 p1 plan 22 CONQUER for Conquer_Planet @P1 SpaceForce(2+0) GroundForce(1+1) net 250 gross 1600 eta 5.4
+6482 p1 build task 29 Infantry for GroundForce
+6482 p1 order move fleet 37 -> P2
+6614 p1 tf SpaceForce move to P1
+6614 p1 order move fleet 37 -> P1
+7545 p1 plan 22 CONQUER ended success (released)
+7553 p1 plan 23 CONQUER for Conquer_Planet @P1 SpaceForce(2+0) GroundForce(1+1) net 250 gross 1600 eta 5.4
+7553 p1 build task 30 Infantry for GroundForce
+7553 p1 order move fleet 37 -> P2
+7685 p1 tf SpaceForce move to P1
+7685 p1 order move fleet 37 -> P1
+8617 p1 plan 23 CONQUER ended success (released)
+8625 p1 plan 24 CONQUER for Conquer_Planet @P1 SpaceForce(2+0) GroundForce(1+1) net 250 gross 1600 eta 5.4
+8627 p1 build task 31 Infantry for GroundForce
+8627 p1 order move fleet 37 -> P2
+8759 p1 tf SpaceForce move to P1
+8759 p1 order move fleet 37 -> P1
+9461 p0 plan 25 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 6.0
+9463 p0 build task 32 Corvette for ReserveForce
+9497 p0 order build Corvette at P0
+9682 p0 plan 25 BUILDSPACE ended success
+9689 p1 plan 24 CONQUER ended success (released)
+9697 p1 plan 26 CONQUER for Conquer_Planet @P1 SpaceForce(2+0) GroundForce(1+1) net 250 gross 1600 eta 5.4
+9698 p1 build task 33 Infantry for GroundForce
+9698 p1 order move fleet 37 -> P2
+9830 p1 tf SpaceForce move to P1
+9830 p1 order move fleet 37 -> P1
+9949 p1 plan 27 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 7.2
+9950 p1 build task 34 Corvette for ReserveForce
+9993 p1 order build Corvette at P4
+10214 p1 plan 27 BUILDSPACE ended success
+10765 p1 plan 26 CONQUER ended success (released)
+10773 p1 plan 28 CONQUER for Conquer_Planet @P1 SpaceForce(2+0) GroundForce(1+1) net 250 gross 1600 eta 5.4
+10775 p1 build task 35 Infantry for GroundForce
+10775 p1 order move fleet 37 -> P2
+10907 p1 tf SpaceForce move to P1
+10907 p1 order move fleet 37 -> P1
+11837 p1 plan 28 CONQUER ended success (released)
+11845 p1 plan 29 CONQUER for Conquer_Planet @P1 SpaceForce(2+0) GroundForce(1+1) net 250 gross 1600 eta 5.4
+11846 p1 build task 36 Infantry for GroundForce
+11846 p1 order move fleet 37 -> P2
+11978 p1 tf SpaceForce move to P1
+11978 p1 order move fleet 37 -> P1
+12580 p1 plan 30 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(0+2) net 500 gross 1600 eta 16.2
+12581 p1 build task 37 Infantry for GroundForce
+12581 p1 build task 38 Infantry for GroundForce
+12581 p1 order move fleet 61 -> P2
+12581 p1 order move fleet 37 -> P2
+12752 p1 tf SpaceForce move to P3
+12752 p1 order move fleet 37 -> P3
+12910 p1 plan 29 CONQUER ended success (released)
+12917 p1 plan 31 CONQUER for Conquer_Planet @P1 SpaceForce(2+0) GroundForce(1+1) net 250 gross 1600 eta 16.2
+12917 p1 build task 39 Infantry for GroundForce
+12917 p1 order move fleet 37 -> P2
+13049 p1 tf SpaceForce move to P1
+13049 p1 order move fleet 37 -> P1
+13649 p1 plan 30 CONQUER ended success (released)
+13656 p1 plan 32 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(0+2) net 500 gross 1600 eta 16.2
+13658 p1 build task 40 Infantry for GroundForce
+13658 p1 build task 41 Infantry for GroundForce
+13658 p1 order move fleet 37 -> P2
+13790 p1 tf SpaceForce move to P3
+13790 p1 order move fleet 37 -> P3
+13986 p1 plan 31 CONQUER ended success (released)
+13993 p1 plan 33 CONQUER for Conquer_Planet @P1 SpaceForce(2+0) GroundForce(1+1) net 250 gross 1600 eta 16.2
+13994 p1 build task 42 Infantry for GroundForce
+13994 p1 order move fleet 37 -> P2
+14126 p1 tf SpaceForce move to P1
+14126 p1 order move fleet 37 -> P1
+14725 p1 plan 32 CONQUER ended success (released)
+14732 p1 plan 34 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(0+2) net 500 gross 1600 eta 16.2
+14732 p1 build task 43 Infantry for GroundForce
+14732 p1 build task 44 Infantry for GroundForce
+14732 p1 order move fleet 37 -> P2
+14858 p0 plan 35 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 6.0
+14860 p0 build task 45 Corvette for ReserveForce
+14864 p1 tf SpaceForce move to P3
+14864 p1 order move fleet 37 -> P3
+14922 p0 order build Corvette at P0
+15062 p1 plan 33 CONQUER ended success (released)
+15069 p1 plan 36 CONQUER for Conquer_Planet @P1 SpaceForce(2+0) GroundForce(1+1) net 250 gross 1600 eta 16.2
+15071 p1 build task 46 Infantry for GroundForce
+15071 p1 order move fleet 37 -> P2
+15106 p0 plan 35 BUILDSPACE ended success
+15120 p0 plan 37 CONQUER for Conquer_Planet @P2 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1300 eta 0.0
+15121 p0 order move fleet 59 -> P1
+15121 p0 order move fleet 57 -> P1
+15121 p0 order launch 52 at P3
+15121 p0 order form 52 alone
+15124 p0 order move fleet 64 -> P1
+15203 p1 tf SpaceForce move to P1
+15203 p1 order move fleet 37 -> P1
+15208 p0 tf SpaceForce move to P2
+15208 p0 order move fleet 59 -> P2
+15475 p0 tf GroundForce move to P2
+15475 p0 order move fleet 57 -> P2
+15649 p0 order invade P2 with 2
+15655 p0 plan 37 CONQUER ended success
+15796 p1 plan 34 CONQUER ended success (released)
+15802 p1 plan 38 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(0+2) net 500 gross 1600 eta 16.2
+15803 p1 build task 47 Infantry for GroundForce
+15803 p1 build task 48 Infantry for GroundForce
+15803 p1 order move fleet 37 -> P4
+15848 p1 order build Infantry at P7
+15932 p1 order move fleet 37 -> P4
+16065 p1 order build Infantry at P7
+16137 p1 plan 36 CONQUER ended success (released)
+16190 p1 tf SpaceForce move to P3
+16190 p1 order move fleet 37 -> P3
+16226 p1 order launch 65 at P7
+16226 p1 order form 65 alone
+16226 p1 order launch 66 at P7
+16229 p1 order move fleet 67 -> P4
+16748 p1 tf GroundForce move to P3
+16748 p1 order move fleet 67 -> P3
+16922 p1 order invade P3 with 2
+16928 p1 plan 38 CONQUER ended success
+16936 p1 plan 39 CONQUER for Conquer_Planet @P2 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
+16943 p1 tf SpaceForce move to P2
+16943 p1 order move fleet 37 -> P2
+17093 p1 order launch 65 at P3
+17093 p1 order launch 66 at P3
+17099 p1 tf GroundForce move to P2
+17099 p1 order move fleet 68 -> P2
+17273 p1 order invade P2 with 2
+17279 p1 plan 39 CONQUER ended success
+17286 p1 plan 40 CONQUER for Conquer_Planet @P1 SpaceForce(2+0) GroundForce(1+1) net 250 gross 1600 eta 5.4
+17288 p1 build task 49 Infantry for GroundForce
+17294 p1 tf SpaceForce move to P1
+17294 p1 order move fleet 37 -> P1
+17336 p1 order build Infantry at P7
+17498 p1 order launch 69 at P7
+17498 p1 order form 69 alone
+17501 p1 order move fleet 70 -> P2
+18356 p1 order launch 66 at P2
+18362 p1 tf GroundForce move to P1
+18362 p1 order move fleet 70 -> P1
+18536 p1 order invade P1 with 2
+18542 p1 plan 40 CONQUER ended success
+18557 p1 plan 41 CONQUER for Conquer_Planet @P0 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
+18563 p1 tf SpaceForce move to P0
+18563 p1 order move fleet 37 -> P0
+18713 p1 order launch 69 at P1
+18713 p1 order launch 66 at P1
+18719 p1 tf GroundForce move to P0
+18719 p1 order move fleet 71 -> P0
+18893 p1 order invade P0 with 2
+18899 p1 plan 41 CONQUER ended success
+20260 p1 plan 42 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+2) net 1100 gross 1100 eta 10.8
+20261 p1 build task 50 Frigate for ReserveForce
+20261 p1 build task 51 Corvette for ReserveForce
+20316 p1 order build Frigate at P4
+20353 p1 order build Corvette at P6
+20639 p1 order move fleet 72 -> P4
+20810 p1 plan 42 BUILDSPACE ended success
+24313 p1 plan 43 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 700 gross 700 eta 10.8
+24314 p1 build task 52 Frigate for ReserveForce
+24346 p1 order build Frigate at P4
+24674 p1 plan 43 BUILDSPACE ended success

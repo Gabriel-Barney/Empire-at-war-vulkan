@@ -347,7 +347,9 @@ bool AbilitySystem::spread_out(ObjectId id) const {
 bool AbilitySystem::aura_target(const Obj& src, const SpecialAbilityDesc& s, const Obj& t) const {
     if (!t.combat_unit || t.dead || !alive_unit(t.id)) return false;
     if (t.owner != src.owner && !(s.apply_to_all_allies && allied(src.owner, t.owner))) return false;
-    // Applicable_Unit_Categories / _Types minus Excluded_Unit_Types (0x48e290); no filter given = every unit [inferred]
+    // Applicable_Unit_Types, then _Categories, then Excluded_Unit_Types (0x48e290, TACTICAL_COMBAT §5.4.1). No filter
+    // given = every unit [inferred] (the aura path; the plain filter accepts nothing then), still minus the excluded
+    // types - the step-3 test of the same order, as no type is listed.
     if (s.applicable_categories == 0 && s.applicable_types.empty()) {
         const int32_t ot = combat_->data().units[combat_->desc_index(t.id)].object_type;
         for (int32_t x : s.excluded_types)

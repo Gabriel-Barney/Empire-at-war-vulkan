@@ -277,14 +277,8 @@ bool update_video_profile(VideoProfile& p, const ui::VideoSettings& v, const std
     p.hardware_mouse = v.hardware_mouse;
     p.detail = v.detail;
     p.anti_alias = v.anti_alias;
-    p.advanced.anti_aliasing = ui::anti_aliasing_from_slider(v.anti_alias);  // t19 / D9: one setting
     p.gamma = v.gamma;
     return true;
-}
-
-void sync_anti_alias(VideoProfile& p) {
-    p.anti_alias = ui::anti_alias_slider_for(taa_active(p.advanced, p.anti_alias) ? ui::AntiAliasing::Taa : ui::AntiAliasing::Off, p.anti_alias);
-    p.advanced.anti_aliasing = ui::anti_aliasing_from_slider(p.anti_alias);
 }
 
 void sync_detail(VideoProfile& p) { p.detail = ui::advanced_detail_level(p.advanced); }
@@ -321,7 +315,9 @@ bool load_video_profile(const std::string& path, VideoProfile& p) {
     for (const ProfileInt& e : kProfileInts) num(e.key, p.*e.field);
     for (const ProfileAdvInt& e : kProfileAdvInts) num(e.key, p.advanced.*e.field);
     for (const ProfileAdvBool& e : kProfileAdvBools) flag(e.key, p.advanced.*e.field);
-    if (auto it = kv.find("anti_aliasing"); it != kv.end()) p.advanced.anti_aliasing = it->second == "taa" ? ui::AntiAliasing::Taa : ui::AntiAliasing::Off;
+    // A profile from before anti-aliasing was one setting also has "anti_aliasing=taa|off" (the Advanced dialog's box) next to the
+    // strength (the Video dialog's slider): either one on meant TAA. A box on over strength 0 is Medium, the old default.
+    if (auto it = kv.find("anti_aliasing"); it != kv.end() && it->second == "taa" && p.anti_alias <= 0) p.anti_alias = ui::kAntiAliasDefaultSlider;
     return true;
 }
 
@@ -338,7 +334,6 @@ bool save_video_profile(const std::string& path, const VideoProfile& p) {
     for (const ProfileInt& e : kProfileInts) f << e.key << "=" << p.*e.field << "\n";
     for (const ProfileAdvInt& e : kProfileAdvInts) f << e.key << "=" << p.advanced.*e.field << "\n";
     for (const ProfileAdvBool& e : kProfileAdvBools) f << e.key << "=" << (p.advanced.*e.field ? 1 : 0) << "\n";
-    f << "anti_aliasing=" << (p.advanced.anti_aliasing == ui::AntiAliasing::Taa ? "taa" : "off") << "\n";
     return static_cast<bool>(f);
 }
 
@@ -353,15 +348,13 @@ float particle_detail(int32_t slider) { return static_cast<float>(slider_clamp(s
 float environment_fade_scale(int32_t slider) { return 0.6f + 0.4f * static_cast<float>(slider_clamp(slider)) / 100.0f; }
 float gamma_value(int32_t slider) { return std::exp2((static_cast<float>(slider_clamp(slider)) - 50.0f) / 50.0f); }
 
-bool taa_active(const ui::AdvancedVideoSettings& s, int32_t aa_slider) {
-    return s.anti_aliasing == ui::AntiAliasing::Taa || aa_slider > 0;
-}
+bool taa_active(int32_t strength) { return strength > 0; }
 
-void apply_aa_options(render::RecordOptions& o, const ui::AdvancedVideoSettings& s, int32_t aa_slider) {
-    o.taa = taa_active(s, aa_slider);
-    // Slider 0 with TAA picked in the combo: the tuned default. Above 0: the share of the current frame falls with the
-    // slider (more history = smoother edges, a little more softness / ghosting).
-    o.taa_weight = aa_slider > 0 ? 0.2f - 0.16f * static_cast<float>(slider_clamp(aa_slider)) / 100.0f : -1.0f;
+void apply_aa_options(render::RecordOptions& o, int32_t strength) {
+    o.taa = taa_active(strength);
+    // Off keeps the renderer's tuned default weight for a later switch-on. On: the share of the current frame falls with the
+    // strength (more history = smoother edges, a little more softness / ghosting).
+    o.taa_weight = o.taa ? 0.2f - 0.16f * static_cast<float>(slider_clamp(strength)) / 100.0f : -1.0f;
 }
 
 ui::AdvancedVideoSettings detail_preset(const ui::AdvancedVideoSettings& s, int32_t detail) {
@@ -378,6 +371,43 @@ void apply_detail_options(render::RecordOptions& o, const ui::AdvancedVideoSetti
     o.water_detail = water_level(s.water);
     if (!s.bloom) o.bloom_strength = 0.0f;
     if (!s.heat_distortion) o.heat_amount = 0.0f;
+}
+
+AutoVideoChoice recommend_video(const GpuClass& gpu) {
+    constexpr uint64_t kGiB = 1024ull * 1024ull * 1024ull;
+    AutoVideoChoice c;
+    int32_t aniso = 0;
+    bool soft_shadows = false, ao = false;
+    switch (gpu.kind) {
+        case GpuKind::Discrete:
+            if (gpu.memory_bytes >= 6 * kGiB) { c.quality = 3; c.anti_alias = ui::kAntiAliasChoices[3].value; aniso = 16; soft_shadows = true; ao = true; }
+            else if (gpu.memory_bytes >= 3 * kGiB) { c.quality = 2; c.anti_alias = ui::kAntiAliasChoices[2].value; aniso = 8; soft_shadows = true; }
+            else { c.quality = 1; c.anti_alias = ui::kAntiAliasChoices[1].value; aniso = 4; }
+            break;
+        case GpuKind::Integrated:
+            c.quality = gpu.memory_bytes >= 2 * kGiB ? 1 : 0;
+            c.anti_alias = 0;
+            aniso = 2;
+            break;
+        case GpuKind::Other: break;  // Low, everything off
+    }
+    // Filtering the device cannot do is not recommended: the largest listed level at or under its limit.
+    if (!gpu.sampler_anisotropy) aniso = 0;
+    while (aniso > 0 && static_cast<float>(aniso) > gpu.max_anisotropy) aniso /= 2;
+    if (aniso < 2) aniso = 0;
+    ui::set_advanced_detail(c.advanced, ui::kQualityPresets[c.quality]);
+    c.advanced.soft_shadows = soft_shadows;
+    c.advanced.heat_distortion = true;
+    c.advanced.bloom = true;
+    c.advanced.ambient_occlusion = ao;
+    c.advanced.anisotropy = aniso;
+    return c;
+}
+
+void apply_auto_video(VideoProfile& p, const AutoVideoChoice& c) {
+    p.advanced = c.advanced;
+    p.anti_alias = c.anti_alias;
+    sync_detail(p);
 }
 
 }  // namespace alamo::game

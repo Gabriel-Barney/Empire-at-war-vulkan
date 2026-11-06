@@ -54,6 +54,7 @@ struct TypeInfo {
     float influence_range = 0.0f;       // Galactic_Influence_Range (type +0x1a00; REMAINING_GAPS 6.1 launch reveal)
     float piracy_value = 0.0f;          // Piracy_Value_Credits
     float ai_combat_power = 0.0f;       // AI_Combat_Power
+    float maintenance_cost = 0.0f;      // Maintenance_Cost (+0x798, default 0, variants inherit; AI upkeep tokens, A2H_GALACTIC_AI_RE §3)
     bool reduced_by_factories = false;  // Build_Time_Reduced_By_Multiple_Factories
     bool build_initially_locked = false;  // Build_Initially_Locked (type +0xC1)
     bool sliceable = false;               // Build_Can_Be_Unlocked_By_Slicer (type +0xC2; REMAINING_GAPS 1.4 sweep)

@@ -25,7 +25,8 @@
 //   * sim time is kept in double (frame / 30.0); dt = float(t - last) feeds the float frame advance;
 //   * crossfade blend modes 2/3 rescale `remaining` when a fade is running, then duration = blend;
 //   * an unbound clip (bone mismatch) poses as the bind pose; as the previous slot it is ignored;
-//   * the idle behaviour's first fidget timer is 0 (a fidget may play on the first idle service).
+//   * the idle behaviour's first fidget timer is 0 (a fidget may play on the first idle service) unless the caller sets
+//     it (set_idle_timer: SimAnimation does at the IDLE attach, s78l t03).
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -163,6 +164,9 @@ public:
     // tunables().idle_blend_seconds. Returns true if it played.
     bool service_idle(ObjectId id, int32_t idle_type, bool crouch_changed, SimRng& rng, uint64_t frame);
     uint64_t idle_timer(ObjectId id) const;
+    // s78l t03 (b): the IDLE attach (vf7 0x62dd40) sets the first fidget frame I +8 = now + Get_Int(210, 450) (the
+    // caller draws it). No-op without a row.
+    void set_idle_timer(ObjectId id, uint64_t frame);
 
     // ---- pose (model space, §A.6) ----
     // Local transforms of every bone of the object's skeleton (bind pose for bones without a track,

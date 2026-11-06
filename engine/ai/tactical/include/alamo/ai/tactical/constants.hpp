@@ -45,6 +45,9 @@ struct TacticalAiConstants {
     bool use_reinforcement_points = true;          // Use_Reinforcement_Points (+0x118a0), True in FoC and TR
     // refixf t06 (TACTICAL_GAPS §4.2 space drop validity): the occupancy sweep length behind a space drop point.
     float space_reinforcement_collision_check_distance = 200.0f;  // Space_Reinforcement_Collision_Check_Distance (FoC 200, TR 150)
+    // A2g t06: the global factor of 0x371230 without a planet (0x140b15920; GALACTIC_ECONOMY §2.3 T0 [H]), read by the
+    // tactical AllowedTime base 0x6c0450 (tactical_nominal_time). Vanilla 1.0.
+    float production_speed_factor = 1.0f;          // Production_Speed_Factor (+0x120)
 
     // Reads the tags above (missing tags keep the current value).
     void load(const data::GameConstants& gc);
