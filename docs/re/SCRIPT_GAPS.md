@@ -91,6 +91,7 @@ position = the object's position, else the AI target's. Walk the task force's un
 order: the **first** unit whose original type (0x3973b0) is that type, has 0x37 and is ready fires at the
 position (0x4ea3f0); destroy-after sweep for that unit's owner; return that unit. No ready unit →
 returns **false**.
+Full rules (argument checks, region targets, refused orders): AI_TACTICAL §7.3.4 (s78f).
 
 ### 1.5 `SpaceTaskForceClass.Fire_Special_Weapon(type_name, target)` 0x6e6ad0 [H]
 

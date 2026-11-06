@@ -214,7 +214,7 @@ black fade rect, cursor.
    SFX play (AUDIO §1.6 flag); don't restart the theme on returning to the menu while it is current.
 6. **EaW data:** the `.rec` entry has to be handled by the port itself: read the map path from the recording
    header (or strip `.rec` → `Front_end_demo_attract.ted`) and either replay the recorded commands or run it AI vs
-   AI. Choose and record the decision in docs/PHASE4.md.
+   AI. Choose and record the decision in docs/DECISIONS.md.
    > **Status 2026-10-30:** Done, decision taken (Gabriel 2026-10-28): a `.rec` entry is not replayed; its header only names the map and the same live AI-vs-AI demo runs there (`attract_rec_map`, `engine/apps/game/src/attract_mode.cpp:66-84`; `App::start_attract_map`, `engine/apps/game/app/game_main.cpp:843-881`). An entry with no map path is skipped with a warning.
 7. While the demo map loads (synchronous in the original), keep showing the previous frame / black; a job-thread
    load is fine as long as the menu stays responsive.

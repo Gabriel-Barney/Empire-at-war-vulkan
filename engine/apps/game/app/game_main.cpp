@@ -56,7 +56,6 @@ bool App::init() {
                         : video_profile_.vsync_mode == ui::VsyncMode::Mailbox ? rhi::PresentMode::Mailbox : rhi::PresentMode::Fifo;
         if (!opt_.frame_cap_set) opt_.frame_cap = video_profile_.frame_cap;
         hardware_mouse_ = video_profile_.hardware_mouse;
-        sync_anti_alias(video_profile_);
         sync_detail(video_profile_);  // t43
         adv_video_ = video_profile_.advanced;
         std::printf("video options: %s\n", video_profile_path_.c_str());
@@ -113,6 +112,43 @@ bool App::init() {
                 static_cast<size_t>(std::count_if(map_rows.begin(), map_rows.end(), [](const ui::SkirmishMapInfo& m) { return !m.custom; })),
                 static_cast<size_t>(std::count_if(map_rows.begin(), map_rows.end(), [](const ui::SkirmishMapInfo& m) { return m.custom; })),
                 skirmish_catalog_->official.size(), skirmish_catalog_->custom_scan.size());
+    // p4uia t01: the GameConstants MP_Color_* palette (byte RGB) for the staging colour combos.
+    mp.player_colors = [this] {
+        const render::MpPalette pal = gpu_.resolver ? gpu_.resolver->palette() : render::default_mp_palette();
+        const auto byte = [](float v) { return static_cast<uint8_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+        std::vector<ui::Rgba8> out;
+        for (const materials::float4& c : pal.color) out.push_back({byte(c.x), byte(c.y), byte(c.z), 255});
+        return out;
+    };
+    // p4uim t03 (UI.md 9.6): <stem>.tga, else the map's embedded image, else Generic_Space / Generic_Land.tga; plus the start
+    // positions. Cached per map (a selection change asks again; the embedded image is decoded once).
+    auto previews = std::make_shared<std::map<std::string, ui::SkirmishPreview>>();
+    mp.skirmish_preview = [this, previews](const ui::SkirmishMapInfo& m) {
+        if (const auto it = previews->find(m.map); it != previews->end()) return it->second;
+        ui::SkirmishPreview pv;
+        const size_t slash = m.map.find_last_of(std::string_view("\\/"));
+        std::string stem = m.map.substr(slash == std::string::npos ? 0 : slash + 1);
+        if (stem.size() > 4 && iequal(stem.substr(stem.size() - 4), ".ted")) stem.resize(stem.size() - 4);
+        SkirmishMapPreview file;
+        if (data_.files) file = read_skirmish_map_preview(*data_.files, m.map, m.space);
+        if (data_.files)
+            for (const assets::TextureCandidate& c : assets::texture_lookup(stem + ".tga"))
+                if (data_.files->exists(c.path)) {
+                    pv.texture = stem + ".tga";
+                    break;
+                }
+        if (pv.texture.empty() && !file.embedded_image.empty()) {
+            auto t = std::make_shared<assets::TextureAsset>();
+            if (assets::decode_tga(file.embedded_image, *t)) {
+                pv.texture = "temp_map_preview_texture:" + stem;
+                ui_.memory_textures[pv.texture] = std::move(t);
+            }
+        }
+        if (pv.texture.empty()) pv.texture = m.space ? "Generic_Space.tga" : "Generic_Land.tga";
+        for (const auto& [x, y] : file.starts) pv.starts.push_back({x, y});
+        previews->emplace(m.map, pv);
+        return pv;
+    };
     mp.camera_settings = [this] { return camera_; };
     mp.gameplay = [this] { return gameplay_; };
     // Video options: the primary display's modes (the current window size selected, else the largest mode under it); the

@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
@@ -98,6 +99,9 @@ struct SkirmishSetup {
     // human's planet surface (FleetManagement launch / land); empty = none, as before.
     std::vector<std::string> ground_human, ground_ai;
     std::string planet_type;
+    // p4uia t02: the colour index (0..8, GameConstants MP_Color_* entry) of player 0 (human) and 1 (AI) chosen on the
+    // staging screen; players without an entry keep their index. Presentation only: the setup and the sim ignore it.
+    std::vector<uint8_t> colors;
 };
 bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic::GalacticSetup& out, std::string* err = nullptr);
 // [port] default skirmish fleets for the stock factions (Empire / Rebel / Underworld); empty for others.
@@ -139,6 +143,16 @@ SkirmishMapCatalog build_skirmish_map_catalog(const GameData& data);
 std::vector<SkirmishMapEntry> skirmish_map_rows(const SkirmishMapCatalog& catalog, bool custom_tab);
 // The entry for a map id (a stem, a file name or a path: the terrain::map_path rule, case-insensitive), nullptr when absent.
 const SkirmishMapEntry* find_skirmish_map(const SkirmishMapCatalog& catalog, std::string_view map);
+
+// p4uim t03 (UI.md 9.3 / 9.6): what the staging preview needs from a map file, read through the normal VFS lookup.
+struct SkirmishMapPreview {
+    bool found = false;                    // the file was read
+    std::vector<uint8_t> embedded_image;   // top chunk 0x13 (a TGA file), empty = none
+    // Top chunk 3 start positions as fractions of the map (x right, y down), only when the header's mini 12 is set. Land
+    // maps run 0..width / 0..height from the lower left corner, space maps are centred on the origin; world +Y is up.
+    std::vector<std::pair<float, float>> starts;
+};
+SkirmishMapPreview read_skirmish_map_preview(const FileProvider& files, std::string_view map, bool space);
 
 // [port] (no RE rule) the planet type a skirmish map stands for: the name after "_MP_SPACE_" / "_MP_LAND_" (path and
 // extension dropped, case ignored) when it names a PLANET type, e.g. _MP_LAND_TATOOINE -> "Tatooine"; "" otherwise.

@@ -1,88 +1,12 @@
-# Phase 3 status — Vulkan 1.3 renderer
+# Phase 3 — Vulkan 1.3 renderer: results and notes
 
-Started 2026-10-26 · last updated 2026-10-27
-
-## At a glance
-
-| | Status |
-|---|---|
-| ✅ **Done** | All roadmap steps C1–C5, the track-B shader translator, terrain/water/map objects, post chain + shadows, decorations, fog of war, space maps, two review waves and their fixes, C5 records speedup (2000 ships: records 0.90 → 0.37 ms), independent review of all of Phase 3 (4 parallel reviewers) + fixes in every module |
-| 🔄 **In progress** | Nothing active. |
-| ⬜ **To do** | In-game capture (needs Gabriel) · the [open work list](#-to-do) below |
-| Build | MSVC, clang 20: 18/18 tests, 0 warnings, GPU tests validation-clean |
-
-Legend: ✅ done · 🔄 in progress / partly done · ⬜ not started · 👤 needs Gabriel
-
-### Roadmap steps (claude/roadmap.md)
-
-| Step | What | Status |
-|---|---|---|
-| C1 | Device, swapchain, queues, memory | ✅ |
-| C2 | Assets onto the GPU | ✅ (C2a CPU side, C2b upload jobs) |
-| C3 | Shader port + pipeline cache | ✅ (C3a, C3b, track-B translator) |
-| C4 | Fixed-function emulation + rigid 24-bone skinning | ✅ (C4a, C4b) |
-| C5 | Multithreaded command recording | ✅ |
-
-The CPU-side parts of C2–C4 ran in parallel with C1 because they need no Vulkan.
-
-### Flowchart
-
-```mermaid
-flowchart TD
-  classDef done fill:#d4edda,stroke:#28a745,color:#155724
-  classDef todo fill:#eeeeee,stroke:#888888,color:#333333,stroke-dasharray:4 3
-
-  subgraph Foundation
-    S0["✅ S0 Toolchain deps + CMake wiring<br/>Vulkan-Headers · DXC · build_module.cmd"]
-    C1["✅ C1 rhi: device · graphics/compute/transfer queues<br/>Win32 swapchain · memory · upload ring · sync2<br/>bindless slot recycling · pipeline-cache stats"]
-    C2a["✅ C2a assets CPU side<br/>ALO/ALA/DDS/TGA via VFS → GPU-ready spans"]
-    C3a["✅ C3a materials: FXO → PSO keys · hot-set shaders → SPIR-V"]
-    C4a["✅ C4a FF ubershader + rigid skinning NORMAL.w"]
-    D1["✅ RE: render frame structure<br/>docs/re/RENDER.md"]
-    I1["✅ Integration: full MSVC build, 12/12 tests, 0 warnings"]
-    R1["✅ Review of wave 1"]
-    F1["✅ Review fixes in assets · materials · rhi<br/>12/12 tests, 0 warnings"]
-  end
-
-  subgraph "Roadmap C1–C5"
-    C1T["✅ C1 alamo_render test app: clear screen"]
-    C2b["✅ C2b background upload jobs → ship model unlit<br/>+ skinned + --anim"]
-    C3b["✅ C3b pipeline cache on disk · lit hot-set draws"]
-    GC["✅ Clang build check<br/>MSVC · clang 20: 13/13, 0 warnings, same checksums"]
-    C4b["✅ C4b alpha/additive + skinned draws vs Phase 1 glTF"]
-    C5["✅ C5 multithreaded command recording on the job system"]
-    PF["✅ C5 records speedup: parallel material hashing<br/>SH in FrameCB · DrawData 464 → 80 B · records 0.90 → 0.37 ms"]
-  end
-
-  subgraph "Maps and world"
-    TX["✅ Track-B translator: 291/291 shaders"]
-    TW["✅ Terrain · water · objects: alamo_render --map"]
-    PS["✅ Post chain · stencil shadows · MeshHeat · map settings"]
-    OW1["✅ Wave 1 render: batched terrain/water draws<br/>test gaps · CLOUD_TEXTURE hot-set/FF · decal rule"]
-    OW2["✅ Wave 2 render: SPACE_AND_OPEN.md §B answers<br/>env fog · 9-colour palette · LOD_Bias · Damage_Decal masks · bindless recycling"]
-    DC["✅ Wave 2 terrain CPU: decals · map/dynamic tracks<br/>blobs · fog of war · space .ted"]
-    DR["✅ Wave 2 render: decorations + FOW + space maps<br/>tracks · decals · dynamic tracks · blobs · FOW pass · background scene"]
-  end
-
-  RV["✅ Independent review of Phase 3 (2026-10-27)<br/>4 parallel reviewers · fixes in rhi · materials · shaderxlat · assets · terrain · render<br/>MSVC · clang 18/18, 0 warnings"]
-
-  S0 --> C1 & C2a & C3a & D1
-  C3a --> C4a
-  C1 & C2a & C3a --> I1 --> R1 --> F1 --> C1T
-  D1 --> C3b
-  C1T --> C2b --> C3b --> C4b --> C5
-  C5 --> TX --> TW --> PS --> OW1 --> OW2 --> DC --> DR
-  C5 --> RV
-  DR --> PF --> RV
-
-  class S0,C1,C2a,C3a,C4a,D1,I1,R1,F1,C1T,C2b,C3b,GC,C4b,C5,PF,TX,TW,PS,OW1,OW2,DC,DR,RV done
-```
+Started 2026-10-26. Phase 3 steps C1–C5 and the follow-up waves are finished. Status, open work and the flowchart live only on the main roadmap (`roadmap-store/ROADMAP.html`, `docs/ROADMAP_PROTOCOL.md`); this file keeps the results, finished-work notes, assumptions and reference. Build results are recorded on the roadmap.
 
 ---
 
-## ⬜ To do
+## Notes on leftovers and finished work (open work is tracked on the roadmap)
 
-### Next step
+### Last review (done)
 - ✅ **Independent review of Phase 3** (2026-10-27): split across 4 read-only reviewers (render + terrain; rhi; materials + shaderxlat; assets + formats, ~300k ASan/UBSan fuzz iterations on real files). Fixed: rhi 11 (device-lost spin, pool growth, failed partial uploads, cube-array/sampler/fill-mode caps, swapchain rollback + semaphore lifetime, overflow-safe checks, checksummed cache files); shaderxlat 7 (ps_1_x tex-op OOB write/read, bump flag, DLL search path, cache key incl. HLSL + DXC args, CTAB name escaping, bounds-checked test build); materials + fx2_reader 6 (108-byte FXO hang, nested-struct stack overflow, bump env only for ps_1_x bump ops, program-id collisions, int saturation, fuzz tests); assets 6 (32bpp TGA alpha — MT_COMMANDBAR.TGA, non-finite ALA fps + 256 MiB ALA budget, cache by resolved file 1284 names → 1260 decodes, RSkin bone_index[0], 256 MiB texture budget, megtool long paths); terrain 3 (decal budgets, non-finite spline, arc-table budget); render 3 (deferred buffer destruction, budgeted decals, MapScene::load exception boundary). Integration: MSVC, clang 18/18, 0 warnings; map luma unchanged. Note: program-id collision probing depends on registration order (no clashes in vanilla). Details in the wave-3 sections (now in docs/archive/PHASE3_details_2026-10-30.zip).
 
 ### 👤 Needs Gabriel
@@ -107,12 +31,6 @@ flowchart TD
 - ✅ FF inputs hook (2026-10-27): `Instance::ff_hook` (`FfDrawHook`, called per FF draw after the template update, thread-safe); the `ff_data` memcmp shim is gone; the reference test uses the hook.
 - ✅ (2026-10-27) Fleet picks from the game XML (`render/fleet.hpp`): `<SpaceUnit>`/`<UniqueUnit>` with `<Space_Model_Name>`, no `_Death_Clone`, class from `<CategoryMask>` (Capital/Frigate → capital, Corvette, Fighter/Bomber → fighter; Structure/Super/Transport/Upgrade/… excluded), one per model, seeded shuffle per class. FoC install: 51 ship models (19 capital, 11 corvette, 20 fighter loadable); default 6 + 4 + 10 types, layout 1 capital : 2 corvettes : 7 fighters. Track-B coverage: if no pick has a translated pass (EffectCache, render submeshes not ALO-hidden; 2 candidates in the install), one is swapped in from the same RNG, so the fleet identity test checks translated draws unconditionally again (12 translated draws, 0 bytes differ 1 vs 15 threads). 200/2000 ships render, validation 0/0. Frame ring: `ring_recording_threads()` clamps `recording_threads` up to `JobSystem::thread_count()`; the app fails with a message if it is still lower.
 - ✅ Housekeeping (2026-10-27): deleted VVL `toolchain\src` + `toolchain\build` (2.4 GB; incl. the throwaway `build\vvl_check`). `4_validation_layers.cmd` now skips when `vvl\bin` has the manifest and `vvl\VERSION.txt` names the pinned tag; otherwise it wipes src/build, re-clones, builds, installs, writes the marker and deletes src/build again. Removed 14 stale extra build dirs (datafix*, reference, review, review2, rhi/shaderxlat/terrain -clang; 1.4 GB). Toolchain 10.6 → 8.2 GB. LLVM (4.0 GB) kept (build_clang). `build_module.cmd rhi` passes, GPU test validation 0 errors / 0 warnings. Open: `toolchain\downloads` (1.5 GB: LLVM tar.xz 896 MB, MSVC/SDK packages ~480 MB, MinGit 45 MB, DXC 25 MB) is only an offline re-install cache, kept for Gabriel to decide.
-
----
-
-## 🔄 In progress
-
-Nothing is being worked on right now.
 
 ---
 
@@ -215,4 +133,4 @@ Decisions taken where the RE docs were not high confidence. Not bugs, but worth 
 - Code in `engine\`; one agent per module folder (CLAUDE.md "Parallel work"). Build one module with `build_module.cmd <module>` (logs `logs\module_<module>.txt`), everything with `build_msvc.cmd`.
 - Deps (approved by Gabriel 2026-10-26, project-local, pinned + SHA-256 checked by `toolchain\3_renderer_deps.cmd`): Khronos Vulkan-Headers vulkan-sdk-1.3.296.0 (header-only; `vulkan-1.dll` from the driver, loaded at runtime), Microsoft DXC v1.8.2407 (build-time HLSL → SPIR-V), AMD VMA v3.3.0 (header-only, MIT), Khronos validation layers built from source (`toolchain\4_validation_layers.cmd`). No windowing library: plain Win32.
 - Pre-Phase-3 snapshot: `backups\pre-phase3-2026-10-26.zip`.
-- `claude/roadmap.md` / `claude/phase2-status.md` are not in this folder; Phase 3 status is tracked here.
+- Status and open work: the main roadmap (`roadmap-store/ROADMAP.html`), not this file.

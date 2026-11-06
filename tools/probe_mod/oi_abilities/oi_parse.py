@@ -309,6 +309,13 @@ def bind_spawns(battle, scn, spawns):
             out[sp['tag']] = best[1]
     for tag, o in scn.get('inherit', {}).items():
         out.setdefault(tag, o)
+    # MAL scenario whose SPAWN record the reader never found: bind the MAL object created in its first 20 frames
+    if scn.get('name', '').startswith('MAL_') and 'mal' not in out and scn.get('start') is not None:
+        cand = [o for o in battle['objs'].values() if o['type'] == 'MAL_ROCKET_VEHICLE' and o['id'] not in used and
+                o['frame'] is not None and 0 <= o['frame'] - scn['start'] <= 20]
+        if cand:
+            out['mal'] = min(cand, key=lambda o: o['frame'])
+            scn.setdefault('notes', []).append('MAL bound by type and frame (no SPAWN record seen)')
     return out
 
 
@@ -338,6 +345,7 @@ def scenarios_of(recs):
 def analyse_mal(sc, objs, battle):
     res = {'name': sc['name'], 'lines': []}
     L = res['lines']
+    L.extend(sc.get('notes', []))
     mal, han = objs.get('mal'), objs.get('han')
     acts = [d for k, d in sc['recs'] if k == 'ACT']
     fired = [d for k, d in sc['recs'] if k == 'FIRED']
@@ -370,7 +378,24 @@ def analyse_mal(sc, objs, battle):
     dead = death_frame(mal) if mal else None
     if dead is None and lua_dead is not None:
         dead = lua_dead
+    if dead is not None and sc.get('end') is not None and dead >= sc['end'] - 1:
+        L.append('MAL gone at F=%d = the scenario end: the probe despawned it, not a death' % dead)
+        dead = None
     res['dead'] = dead
+    pos = next((d for k, d in sc['recs'] if k == 'MALPOS'), None)
+    if pos:
+        d2 = _float(pos.get('dist2'))
+        L.append('MAL at the stun setup: (%s, %s) z=%s, %s from the configured point' % (
+            pos.get('x'), pos.get('y'), pos.get('z'), fmt(math.sqrt(d2) if d2 is not None else None, 1)))
+    # stun state from memory: flags bit 0x10 (retail run 2026-11-04: set on the stun frame, cleared 600 frames later)
+    stunned = [st['F'] for st in (mal['st'] if mal else []) if st['F'] is not None and st['flags'] & 0x10]
+    res['stunned'] = (min(stunned), max(stunned)) if stunned else None
+    if mal:
+        zs = [st['z'] for st in mal['st'] if stun is not None and st['F'] is not None and st['F'] >= stun and
+              st['z'] is not None]
+        L.append('stun flag (0x10) in memory: %s; MAL z at the stun: %s (water plane %s)' % (
+            ('F=%d..%d (%d frames)' % (min(stunned), max(stunned), max(stunned) - min(stunned) + 1)) if stunned
+            else 'never set', fmt(zs[0] if zs else None, 1), water.get('water_height', '?')))
     moved = None
     if mal and stun is not None:
         base = None
@@ -393,7 +418,7 @@ def analyse_mal(sc, objs, battle):
         drops = hp_drops(mal)
         if drops:
             L.append('MAL health drops: ' + ', '.join('F=%d -%s' % (f, a) for f, a, _h in drops[:8]))
-    if stun is None:
+    if stun is None or (mal and not stunned and dead is None):
         v = 'NO_STUN'
     elif dead is not None:
         dd = dead - stun
@@ -632,6 +657,12 @@ def parse(path):
     runs = {}
     for n, kind, d, text in recs:
         runs.setdefault(d.get('r', '?'), []).append((n, kind, d, text))
+    # A heap scan finds records in address order, not frame order (retail run 2026-11-04: SPAWN records found before
+    # their SCN start were dropped). Order each run by Lua frame; within a frame SCN start first, SCN end last.
+    for rr in runs.values():
+        rr.sort(key=lambda e: (e[2]['F'] if e[2].get('F') is not None else 1 << 30,
+                               0 if e[1] == 'SCN' and e[2].get('ev') == 'start' else
+                               2 if e[1] == 'SCN' and e[2].get('ev') == 'end' else 1))
     out = {'runs': [], 'meta': meta, 'lines': []}
     L = out['lines']
     L.append('OI ability probe report (%s)' % os.path.basename(path))
@@ -673,7 +704,12 @@ def parse(path):
                                'not reached (game quit early?)'))
         keep = {}
         mals = []
-        for sc in scenarios_of(rr):
+        scs = scenarios_of(rr)
+        for i, sc in enumerate(scs):
+            # no end record (retail run 4, 2026-11-04: the hook stalled after a placed MAL died): the next start ends it
+            if sc['end'] is None and i + 1 < len(scs) and scs[i + 1]['start'] is not None:
+                sc['end'] = scs[i + 1]['start'] - 3
+        for sc in scs:
             spawns = [dict(d) for k, d in sc['recs'] if k == 'SPAWN']
             sc['inherit'] = keep
             objs = bind_spawns(battle, sc, spawns)
@@ -801,6 +837,8 @@ def synth_log():
             s.gone(stun + 40, mal)
             truth[name] = ('DIES_AT_ONCE', 1)
         else:
+            s.st(stun, mal, 4, 150.0, x, y, flags=0x10)          # stunned (retail: flags bit 0x10 for 600 frames)
+            s.st(stun + 599, mal, 4, 150.0, x, y, flags=0x10)
             s.st(stun + 601, mal, 4, 150.0, x + 5, y)
             truth[name] = ('SURVIVES', 601)
         s.rec('SCN', F + 900, 'scn=%s|ev=end|why=time|despawned=2|kept=' % name)

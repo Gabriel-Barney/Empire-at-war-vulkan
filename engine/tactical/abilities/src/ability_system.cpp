@@ -784,14 +784,18 @@ bool AbilitySystem::activate_by_name(Obj& o, uint32_t crc, ObjectId target, int3
 }
 
 bool AbilitySystem::target_filter(const SpecialAbilityDesc& s, ObjectId target) const {
-    // 0x48e290: CategoryMask hits Applicable_Unit_Categories or the type is listed; not excluded.
+    // 0x48e290 -> 0x39f300 (TACTICAL_COMBAT §5.4.1), in order: (1) the type is in Applicable_Unit_Types -> true (the
+    // categories and Excluded_Unit_Types are not looked at); (2) Applicable_Unit_Categories misses the CategoryMask ->
+    // false, so an empty categories mask rejects every unlisted type; (3) the type is in Excluded_Unit_Types -> false.
+    // No tags at all: nothing passes. [port] the excluded-categories mask (+0x88, [M]) is not parsed.
+    if (target == kNoObject || !combat_->has_unit(target)) return false;
     const combat::UnitDesc& td = combat_->data().units[combat_->desc_index(target)];
-    for (int32_t x : s.excluded_types)
-        if (x >= 0 && x == td.object_type) return false;
-    if (s.applicable_categories & td.category_mask) return true;
     for (int32_t a : s.applicable_types)
         if (a >= 0 && a == td.object_type) return true;
-    return false;
+    if ((s.applicable_categories & td.category_mask) == 0) return false;
+    for (int32_t x : s.excluded_types)
+        if (x >= 0 && x == td.object_type) return false;
+    return true;
 }
 
 bool AbilitySystem::in_range(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const {

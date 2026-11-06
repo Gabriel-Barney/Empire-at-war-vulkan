@@ -103,7 +103,7 @@ constexpr HotkeySlotInfo kSlots[kHotkeySlots] = {
     {"JumpToControlGroup5", HK::GroupThird, {K('5'), A}}, {"JumpToControlGroup6", HK::GroupThird, {K('6'), A}},
     {"JumpToControlGroup7", HK::GroupThird, {K('7'), A}}, {"JumpToControlGroup8", HK::GroupThird, {K('8'), A}},
     {"JumpToControlGroup9", HK::GroupThird, {K('9'), A}}, {"JumpToControlGroup0", HK::GroupThird, {K('0'), A}},
-    // 153..159 [port: Gabriel] (docs/PHASE4.md "Camera and controls"): pause, free tactical camera axes (the arrows
+    // 153..159 [port: Gabriel] (docs/DECISIONS.md "Camera and controls"): pause, free tactical camera axes (the arrows
     // freed by W A S D, Numpad 4 / 6 for roll).
     {"Pause", HK::Interface, {vk::kPause, N}}, {"CameraYawLeft", HK::Camera, {vk::kLeft, N}},
     {"CameraYawRight", HK::Camera, {vk::kRight, N}}, {"CameraPitchUp", HK::Camera, {vk::kUp, N}},

@@ -18,7 +18,7 @@ using save::put;
 using save::put_vec;
 
 namespace {
-constexpr uint32_t kGoalsVersion = 2, kTemplatesVersion = 1, kLearningVersion = 1, kBudgetVersion = 1, kContextVersion = 1,
+constexpr uint32_t kGoalsVersion = 3, kTemplatesVersion = 1, kLearningVersion = 1, kBudgetVersion = 1, kContextVersion = 1,
                    kGateVersion = 1, kPathVersion = 2, kPerceptionVersion = 1, kSnapshotVersion = 1;
 
 void put_goal(ByteWriter& w, const Goal& g) {
@@ -34,6 +34,7 @@ void put_goal(ByteWriter& w, const Goal& g) {
     w.boolean(g.pp_valid);
     w.f32(g.cost);
     w.f32(g.eta);
+    w.f32(g.nominal_time);  // 3: A2f t09, the AllowedTime base
     w.i32(g.pp_handle);
     w.boolean(g.production_queued);
     w.i32(g.running);
@@ -56,6 +57,7 @@ void get_goal(ByteReader& r, Goal& g) {
     g.pp_valid = r.boolean();
     g.cost = r.f32();
     g.eta = r.f32();
+    g.nominal_time = r.f32();
     g.pp_handle = r.i32();
     g.production_queued = r.boolean();
     g.running = r.i32();

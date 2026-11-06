@@ -868,8 +868,85 @@ file name (§9.4).
 - [port] Entries are keyed by the logical path, so a mod-folder map whose name two mod dirs share is one entry (the
   VFS reads the earlier dir's file; the original lists two rows that load different files). The same logical path can
   sit in both lists; the custom flag decides which tab shows it, as in the original.
-- [port] One list holds space then land maps (the existing combined list) instead of the `IDC_GAME_TYPE_LIST`
-  switch; each kind is sorted by row text, case-insensitively, ties by path. A map's kind comes from mini 01, never
-  from its name.
-- Not modelled yet (follow-up): the game-type list, remembering the last map per type, the preview image and start
-  overlay, `IDC_SCENARIO_DESCRIPTION_TEXT_BOX` (its text source is not read yet).
+- `IDC_GAME_TYPE_LIST` (p4uim t01): two rows, Land then Space (`TEXT_GAME_TYPE_TEAM_LAND` / `_TEAM_SPACE`), and the map
+  list shows only the rows of that type; a map's kind comes from mini 01 (never its name), each list is sorted by row text,
+  case-insensitively, ties by path. [port] The original's third row, Capture Control Points (game type 4, 9.7), is not
+  offered. The row selected when the dialog opens: 9.7 (p4uis t03).
+- The map chosen last is remembered **per game type** (9.7): the selected row of the map list is stored for its type
+  whenever it changes, and any refill (opening, tab switch, type switch) selects that map when the active tab lists it,
+  else Kuat on Space [port: keeps the space smoke run on Kuat], else row 0.
+
+### 9.6 Preview, start overlay, description and colours (p4uim t03 / t04, p4uia t01 / t02; p4uis t01 / t02, 2026-11-03)
+
+- **Colour combos** (`IDC_PLAYER_COLOR_n`, UI.md 3.7.1): the used slots (local player + one AI [port]) are filled with
+  the 9 palette entries from the host (`MP_Color_*`, byte RGB), one U+25A0 item per entry; the default colour is the slot
+  index. What happens when two players pick the same colour: 9.7. Start carries the colour index of each player in player
+  order; the host applies it to the battle's team colours (presentation only: the sim never reads a colour). Without a
+  palette the combos stay hidden.
+- **Preview** `IDC_IMAGE` (9.4, 0xfacb0): the host picks `<file stem>.tga`, else the map's embedded top chunk 0x13, else
+  `Generic_Space.tga` / `Generic_Land.tga`. The shipped `_MP_*` previews are `Data\Art\Textures\<stem>.DDS` found through
+  the `.tga` name; chunk 0x13 is a complete **TGA file** (256 x 256, 32 bit, `Saved by ...` id field; 262 175 bytes in
+  the three `Patch2.meg` maps that have one: `_MP_LAND_HONOGHR`, `_MP_LAND_UTAPAU`, `_MP_SPACE_DATHOMIR`) decoded in memory
+  and registered under `temp_map_preview_texture:<stem>`.
+
+#### 9.6.1 Start overlay (0x1032f0, called by 0xfacb0 when the entry's mini 12 byte +0xb5 is set) [H unless tagged]
+
+- 0xfacb0 first removes the overlay of the previous map (0xfc9a0, also called at the top of 0x1032f0), so a map without
+  mini 12, or no map, shows no overlay.
+- **Marker = a number, not art**: start i (0-based, top chunk 3 order) is the text `"%d"` of **i + 1** (wide format at
+  0x1407ffa20), drawn in **opaque white** (255, 255, 255, 255; 0x1f93e0) in the font of the `IDC_IMAGE` control (its font
+  handle and two style bytes, control +0x20 / +0x4c / +0x4d, read through 0x1c3140). No per-player colour, no square,
+  no rim. Each text is centred on its point: its left = x - text width / 2, its top = y - text height / 2 (0x25b900 /
+  0x25b880 measure it).
+- **Drawing area**: the `IDC_IMAGE` rectangle (position 0x1c2bf0, size 0x1c2c90) inset by 5 % of its size on each side:
+  left = x + 0.05 w, top = y + 0.05 h, width 0.9 w, height 0.9 h.
+- **World to fraction** (world width +0xbc, height +0xc0 from minis 10 / 11; nothing is drawn when either is 0): on the
+  Space game type (3) the point is first shifted by + width / 2, + height / 2 (space maps are centred on the origin); land
+  maps are not shifted (origin at the lower-left corner). Then fx = x / width, fy = y / height, each clamped to [0, 1].
+  Screen point = (left + fx * area width, top + (1 - fy) * area height): world +Y is up, the image's y runs down. This
+  confirms the earlier [M] reading of the patched `_MP_*` maps.
+- Side effects in 0xfacb0, not needed by the port's two-player staging: with the overlay drawn it records the number of
+  start positions (0x140a62290, which caps the `IDC_PLAYER_TEAM_n` choice) and the map's player count (0x140a62294,
+  9 otherwise).
+
+#### 9.6.2 Description box `IDC_SCENARIO_DESCRIPTION_TEXT_BOX` (p4uis t01) [H]
+
+- In the skirmish staging dialog the box is **switched off and never filled**: the dialog's open path (0xf1230, after the
+  first map-list fill) and every `IDC_STAGING_MAP_LIST` selection change (0xf2690) call the control's show (0x1c30d0, control
+  vtable +0x50; the same call GALACTIC_DIALOGS.md reads as switching `IDC_MAP_ICON` off) with 0, and nothing in the skirmish
+  path sets its text or switches it on. In `GUIDialogs.rc` it is an empty `LTEXT` (22,85,179,167) inside the `IDC_IMAGE`
+  rectangle (17,73,190,192), so with it off nothing covers the preview. Per-map descriptions do not exist: the text
+  database has only `TEXT_MAP_NAME_*` for maps.
+- The only code that fills it is an **uncalled** historical-scenario mode of the same dialog (no callers in the call
+  graph): 0xf4880 lists seven `TEXT_SCENARIO_*_NAME` rows (Hoth Assault, ...) in `IDC_STAGING_MAP_LIST`, and 0xf4ad0 switches
+  the box on and sets `TEXT_SCENARIO_*_DESCRIPTION` for the picked one. The keys are in the shipped text database, but the
+  mode is dead in the retail game; the port does not offer it.
+- Port: the box is hidden when the dialog opens and stays hidden; the earlier [port] text (`TEXT_GAME_DESCRIPTION_TEAM_*`)
+  is dropped.
+
+### 9.7 Game type on opening, remembered map and colour clashes (p4uis t03, 2026-11-03) [H unless tagged]
+
+- **Rows**: the open path (0xf1230) adds game types 2, 3, 4 to `IDC_GAME_TYPE_LIST` (LBS_SORT), each row's text from the
+  key table at 0x140a11458 (`TEXT_GAME_TYPE_INVALID`, `_CAMPAIGN`, `_TEAM_LAND`, `_TEAM_SPACE`, `_CAPTURE_CONTROL_POINTS`)
+  and its item data the type, then selects the row whose data is the current type (0x1c4840). Type 4 lists only land maps
+  with the `CONTROL` tag (9.4). The port offers types 2 and 3 only [port], see 9.5.
+- **Type on opening** = the player profile's `LastInternetGameType` + 1 when the stored value is 1..3 (types 2..4), else
+  Land (2). The profile (`PlayerProfileClass`, constructor 0x202510) defaults `LastInternetGameType` to **1**, so a first
+  opening with a fresh profile is on **Land**. Changing the game type stores type - 1 in the profile at once and saves it
+  (0x203330; the same key the LAN / internet dialogs use), so later openings, also after a restart, are on the type
+  selected last, not on the type of the map started last.
+- **Remembered map**: every `IDC_STAGING_MAP_LIST` selection change stores the row's map path in the profile key
+  `LastInternetMapLand` (any type but 3) or `LastInternetMapSpace` (type 3) and saves the profile; a type switch posts a
+  selection change for the row the refill selected, so that row is stored too. The list fill (0xfb950) selects the stored
+  map of the type when it is listed, else row 0 (9.4).
+- **Colour change** (`IDC_PLAYER_COLOR_n` in 0xf2690; 0x288c0 is the LAN / internet dialog's handler, out of scope): the
+  chosen item is stored as slot n's colour as it is, with no check against the other players; for slot 0 it is also saved
+  as the profile's `Color`. Then the player rows are rebuilt (0xfe7c0, 0x1023d0 per slot) and the clash rule runs in
+  **slot order**: slot 0 keeps its colour (clamped to 0..9); each later slot whose colour (< 9) an earlier slot already
+  uses is moved to the **lowest colour index no earlier slot uses**, and its combo shows that. So nothing is refused and
+  nobody shares a colour, but it is not a swap: the earlier slot wins and the later one takes the lowest free index.
+  Two-player examples: slot 0 = 0, slot 1 = 1, slot 0 picks 1: slot 1 becomes 0. Slot 1 picks 0: slot 1 becomes 1 again
+  (the lowest index slot 0 does not use). Slot 0 = 3, slot 1 = 1, slot 0 picks 1: slot 1 becomes 0, not 3.
+- Port: first opening on Land; the type selected last is kept for the session [port: the port's only profile file holds
+  the video options, so the type and the remembered maps do not survive a restart]; the remembered map follows the list selection (not Start); colours follow the
+  slot-order clash rule above.

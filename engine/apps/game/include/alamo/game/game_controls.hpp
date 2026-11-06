@@ -1,4 +1,4 @@
-// OI host (alamo_game): the camera / controls decisions of docs/PHASE4.md "Camera and controls" (Gabriel, 2026-10-27)
+// OI host (alamo_game): the camera / controls decisions of docs/DECISIONS.md "Camera and controls" (Gabriel, 2026-10-27)
 // on the host side. The UI owns the tables (ui::HotkeyTable: the 160-slot hotkey table; ui::Bindings: the P1 camera /
 // order actions); the host keeps them in step:
 //   sync_control_bindings   at start-up and after the options are applied: the hotkey table's camera movement

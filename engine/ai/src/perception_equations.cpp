@@ -2,13 +2,18 @@
 #include "alamo/ai/perception_equations.hpp"
 
 #include <charconv>
+#include <iterator>
 #include <map>
+#include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
+#include "alamo/ai/ai_definitions.hpp"
 #include "alamo/core/hash.hpp"  // A2 tactical: crc32 ('#' reseed)
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/data/xml.hpp"
+#include "alamo/objects/enums.hpp"
 
 namespace alamo::ai {
 
@@ -49,9 +54,187 @@ std::string_view trim(std::string_view s) {
     return s;
 }
 
+// ---- enum literal converters (A2I_TOKENS_RE §3.1; A2J t07: dynamic ones from Data\XML\Enum, A2J_T07_LITERALS §1) ----
+
+constexpr std::string_view kGoalCategoryEnum = "AIGoalCategoryType";
+
+// HardPointType short names, value = index (EnumConversionClass<HardPointType>, TACTICAL_COMBAT §2.4; 11 has no name).
+constexpr std::string_view kHardPointNames[] = {
+    "ENGINE",       "SHIELD_GENERATOR", "GRAVITY_WELL",   "FIGHTER_BAY",       "TRACTOR_BEAM", "WEAPON_LASER", "WEAPON_MISSILE",
+    "WEAPON_TORPEDO", "WEAPON_ION_CANNON", "WEAPON_MASS_DRIVER", "WEAPON_SPECIAL", "",          "DUMMY_ART",
+};
+
+// The converter list of one table. Lookup by converter name: ASCII case-insensitive, trimmed [port; L in the original,
+// A2J_T07_LITERALS §3] (every shipped literal spells the name exactly as registered).
+struct LiteralList {
+    std::vector<objects::EnumConverter> conv;
+    const objects::EnumConverter* find(std::string_view name) const {
+        for (const objects::EnumConverter& c : conv)
+            if (iequals(c.enum_name, trim(name))) return &c;
+        return nullptr;
+    }
+};
+
+// AIGoalCategoryType built-in table: AiDefinitions' shipped list (Data\XML\Enum\AIGoalCategoryType.xml).
+objects::EnumConverter builtin_goal_categories() {
+    const AiDefinitions defs;
+    objects::EnumConverter goal;
+    goal.enum_name = kGoalCategoryEnum;
+    goal.dynamic = goal.valid = true;
+    for (size_t i = 0; i < defs.categories.size() && i < defs.category_value.size(); ++i)
+        goal.add(defs.categories[i], defs.category_value[i]);
+    return goal;
+}
+
+// The static (compiled-in) converters the registry is assumed to hold besides the EnumRegistry ones [M, A2I §3.2].
+void add_static_converters(LiteralList& l) {
+    objects::EnumConverter diff;  // 0x5de400: Easy 0, Normal 1, Hard 2 (SCRIPT_GAPS)
+    diff.enum_name = "DifficultyLevelType";
+    diff.valid = true;
+    diff.add("Easy", 0);
+    diff.add("Normal", 1);
+    diff.add("Hard", 2);
+    l.conv.push_back(std::move(diff));
+    objects::EnumConverter hp;
+    hp.enum_name = "HardPointType";
+    hp.valid = true;
+    for (size_t i = 0; i < std::size(kHardPointNames); ++i)
+        if (!kHardPointNames[i].empty()) hp.add(kHardPointNames[i], static_cast<int64_t>(i));
+    l.conv.push_back(std::move(hp));
+}
+
+// The EnumRegistry converters that exist: built-in / static ones, and dynamic ones read from a file (a discarded file
+// converter stays registered and fails every conversion, OBJECT_TYPES §9.1 [H]; SurfaceFXTriggerType without its file
+// has no table and is absent).
+void add_registry_converters(LiteralList& l, const objects::EnumRegistry& reg) {
+    for (size_t i = 0; i < static_cast<size_t>(objects::EnumId::Count); ++i) {
+        const objects::EnumConverter& c = reg.get(static_cast<objects::EnumId>(i));
+        if ((c.valid || c.from_file) && !c.enum_name.empty()) l.conv.push_back(c);
+    }
+}
+
+void build_builtin(LiteralList& l) {
+    l.conv.clear();
+    add_registry_converters(l, objects::EnumRegistry{});
+    l.conv.push_back(builtin_goal_categories());
+    add_static_converters(l);
+}
+
+// C atoi on an entry text (leading C white space, optional sign, decimal digits; 0 if none; int result). Vanilla
+// values are small; the port stops accumulating past 2^40 (atoi overflow is undefined).
+int64_t entry_atoi(std::string_view s) {
+    size_t i = 0;
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r' || s[i] == '\v' || s[i] == '\f'))
+        ++i;
+    bool neg = false;
+    if (i < s.size() && (s[i] == '+' || s[i] == '-')) neg = s[i++] == '-';
+    int64_t v = 0;
+    for (; i < s.size() && is_digit(s[i]) && v < (int64_t{1} << 40); ++i) v = v * 10 + (s[i] - '0');
+    return static_cast<int64_t>(static_cast<int32_t>(neg ? -v : v));
+}
+
+// A dynamic enum read from Data\XML\Enum\<Name>.xml (OBJECT_TYPES §9.1 "Enum XML files" [H]; AIGoalCategoryType is
+// loaded the same way, §9.1.2): each root child is an entry (tag = name, text = C atoi value, empty text = the running
+// entry index); a duplicate name or value discards the converter. False (out unchanged) when the file cannot be read.
+bool load_dynamic_enum(const FileProvider& files, std::string_view name, objects::EnumConverter& out,
+                       std::vector<std::string>* diagnostics) {
+    std::string path = "Data\\XML\\Enum\\";
+    path += name;
+    path += ".xml";
+    std::vector<uint8_t> bytes;
+    if (!files.read(path, bytes)) return false;
+    const data::XmlDocument doc = data::XmlDocument::parse(bytes, path);
+    objects::EnumConverter fresh;
+    fresh.enum_name = out.enum_name;
+    fresh.dynamic = true;
+    fresh.from_file = true;
+    fresh.valid = doc.ok();
+    if (!doc.ok() && diagnostics) diagnostics->push_back("enum file '" + path + "' unreadable: converter discarded");
+    uint32_t index = 0;
+    for (data::XmlNode e = doc.root().first_child(); e && fresh.valid; e = e.next_sibling(), ++index) {
+        const std::string_view text = trim(e.text());
+        const int64_t value = text.empty() ? static_cast<int64_t>(index) : entry_atoi(text);
+        if (!fresh.add(e.name(), value) && diagnostics)
+            diagnostics->push_back("ERROR: couldn't add enum entry '" + std::string(e.name()) + "' to " + std::string(name) +
+                                   " (converter discarded)");
+    }
+    out = std::move(fresh);
+    return true;
+}
+
+bool literal_delim(char c) { return c == '|' || c == ' ' || c == ',' || c == '\t' || c == '\n'; }
+
+}  // namespace
+
+struct EnumLiteralTable::Impl {
+    LiteralList list;
+};
+
+EnumLiteralTable::EnumLiteralTable() : impl_(std::make_unique<Impl>()) { build_builtin(impl_->list); }
+EnumLiteralTable::~EnumLiteralTable() = default;
+
+void EnumLiteralTable::load(const FileProvider& files, std::vector<std::string>* diagnostics) {
+    objects::EnumRegistry reg;
+    std::vector<std::string> notes;
+    reg.load_dynamic(files, &notes);
+    if (diagnostics)
+        for (std::string& n : notes)
+            if (n.rfind("enum file '", 0) != 0) diagnostics->push_back(std::move(n));  // a missing file is no problem
+    LiteralList l;
+    add_registry_converters(l, reg);
+    objects::EnumConverter goal = builtin_goal_categories();
+    load_dynamic_enum(files, kGoalCategoryEnum, goal, diagnostics);  // missing file: the built-in list stays
+    l.conv.push_back(std::move(goal));
+    add_static_converters(l);
+    impl_->list = std::move(l);
+}
+
+bool EnumLiteralTable::has(std::string_view type) const { return impl_->list.find(type) != nullptr; }
+
+bool EnumLiteralTable::from_file(std::string_view type) const {
+    const objects::EnumConverter* c = impl_->list.find(type);
+    return c && c->from_file;
+}
+
+const EnumLiteralTable& EnumLiteralTable::builtin() {
+    static const EnumLiteralTable t;  // immutable after the (thread-safe) first use
+    return t;
+}
+
+EnumLiteralError convert_enum_literal(std::string_view type, std::string_view text, EnumLiteral& out) {
+    return EnumLiteralTable::builtin().convert(type, text, out);
+}
+
+EnumLiteralError EnumLiteralTable::convert(std::string_view type, std::string_view text, EnumLiteral& out) const {
+    out = EnumLiteral{};
+    const objects::EnumConverter* c = impl_->list.find(type);
+    if (!c) return EnumLiteralError::NoConverter;
+    // One String_To_UInt call on the whole bracket text [H]: a plain enum looks it up as one name, a bitfield splits it.
+    const std::optional<int64_t> v = c->convert(text);
+    if (!v) return EnumLiteralError::Unconvertible;
+    out.bitfield = c->bitfield;
+    out.value = *v;
+    if (!c->bitfield) {
+        out.names.emplace_back(trim(text));
+        return EnumLiteralError::None;
+    }
+    size_t i = 0;
+    while (i < text.size()) {
+        while (i < text.size() && literal_delim(text[i])) ++i;
+        const size_t b = i;
+        while (i < text.size() && !literal_delim(text[i])) ++i;
+        const std::string_view tok = trim(text.substr(b, i - b));
+        if (!tok.empty()) out.names.emplace_back(tok);
+    }
+    return EnumLiteralError::None;
+}
+
+namespace {
+
 class Parser {
 public:
-    Parser(std::string_view text, TokenTable& tokens, Expression& out) : s_(text), tokens_(tokens), out_(out) {}
+    Parser(std::string_view text, TokenTable& tokens, Expression& out, const EnumLiteralTable& literals)
+        : s_(text), tokens_(tokens), literals_(literals), out_(out) {}
 
     bool run(ParseError* err) {
         out_ = Expression{};
@@ -352,15 +535,21 @@ private:
         if (!ident(id)) return false;
         p.value.text = std::string(id);
         if (accept("[")) {
+            // A2I_TOKENS_RE §3.1 [H]: the bracket text goes to the converter named by the identifier, whole, while the
+            // equation is built; no converter or no conversion fails the build (§3.2).
             p.value.kind = ParamValue::Kind::Enum;
-            for (;;) {
-                std::string_view v;
-                if (!ident(v)) return false;
-                p.value.enum_values.emplace_back(v);
-                if (accept("|")) continue;
-                if (accept("]")) break;
-                return fail("'|' or ']' expected in enum value");
-            }
+            const size_t end = s_.find(']', pos_);
+            if (end == std::string_view::npos) return fail("']' expected in enum value");
+            const std::string_view body = s_.substr(pos_, end - pos_);
+            EnumLiteral lit;
+            const EnumLiteralError e = literals_.convert(id, body, lit);
+            if (e == EnumLiteralError::NoConverter) return fail("There is no enum converter named " + std::string(id) + "!");
+            if (e != EnumLiteralError::None)
+                return fail("Enum converter(" + std::string(id) + ") was unable to convert " + std::string(trim(body)) +
+                            " to a valid enum value!");
+            p.value.enum_values = std::move(lit.names);
+            p.value.enum_value = lit.value;
+            pos_ = end + 1;
         } else {
             p.value.kind = ParamValue::Kind::Identifier;
         }
@@ -370,6 +559,7 @@ private:
     std::string_view s_;
     size_t pos_ = 0;
     TokenTable& tokens_;
+    const EnumLiteralTable& literals_;
     Expression& out_;
     std::vector<uint8_t> paren_;
     ParseError error_;
@@ -554,15 +744,16 @@ const char* eval_error_name(EvalError e) {
 
 // ---- parsing ----
 
-bool parse_expression(std::string_view text, TokenTable& tokens, Expression& out, ParseError* err) {
-    Parser p(text, tokens, out);
+bool parse_expression(std::string_view text, TokenTable& tokens, Expression& out, ParseError* err,
+                      const EnumLiteralTable* literals) {
+    Parser p(text, tokens, out, literals ? *literals : EnumLiteralTable::builtin());
     return p.run(err);
 }
 
 bool precedence_sensitive(std::string_view text) {
     TokenTable t;
     Expression x;
-    Parser p(text, t, x);
+    Parser p(text, t, x, EnumLiteralTable::builtin());
     return p.run(nullptr) && p.sensitive();
 }
 
@@ -578,7 +769,7 @@ uint32_t EquationSet::add(std::string_view name, std::string_view text, LoadRepo
         }
         return kUnresolved;
     }
-    Parser p(e.text, tokens_, e.expr);
+    Parser p(e.text, tokens_, e.expr, enum_literals());
     e.parsed = p.run(&e.error);
     if (report) {
         ++report->equations;
@@ -590,10 +781,14 @@ uint32_t EquationSet::add(std::string_view name, std::string_view text, LoadRepo
             ++report->precedence_sensitive;
         }
     }
+    // A2I_TOKENS_RE §3.2 [H]: an equation that fails to build is not added (its file-mates still load); the port keeps
+    // the record for diagnostics, out of the name index.
     const auto idx = static_cast<uint32_t>(eq_.size());
+    const bool parsed = e.parsed;
     eq_.push_back(std::move(e));
+    if (!parsed) return kUnresolved;
     index_.emplace(std::move(key), idx);
-    return eq_[idx].parsed ? idx : kUnresolved;
+    return idx;
 }
 
 void EquationSet::add_file(std::string_view xml, const std::string& file, LoadReport& report) {
@@ -638,8 +833,21 @@ uint32_t EquationSet::find(std::string_view name) const {
     return it == index_.end() ? kUnresolved : it->second;
 }
 
+void EquationSet::set_enum_literals(std::shared_ptr<const EnumLiteralTable> table) { literals_ = std::move(table); }
+
+const EnumLiteralTable& EquationSet::enum_literals() const {
+    return literals_ ? *literals_ : EnumLiteralTable::builtin();
+}
+
 LoadReport load_equation_files(const FileProvider& provider, std::span<const std::string> paths, EquationSet& out) {
     LoadReport report;
+    // A2J t07 (A2J_T07_LITERALS §1): the literal converters come from the same data (Data\XML\Enum through the
+    // provider, so a mod's enum files count) unless the caller set a table; missing files keep the built-in tables.
+    if (!out.has_enum_literals()) {
+        auto table = std::make_shared<EnumLiteralTable>();
+        table->load(provider, &report.messages);
+        out.set_enum_literals(std::move(table));
+    }
     std::vector<uint8_t> bytes;
     for (const std::string& path : paths) {
         bytes.clear();

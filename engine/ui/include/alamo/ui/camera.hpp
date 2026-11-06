@@ -35,7 +35,7 @@
 //     asks the host to zoom onto the hovered / selected planet (take_zoom_in_request), wheel down zooms out.
 // [port] items (behaviour the docs do not give; all tunable in the structs): spline evaluation (piecewise linear over the
 // XML knots), the scroll reference rate, the eye-above-terrain rule (pitch raised, see params()).
-// [port: Gabriel] (docs/PHASE4.md "Camera and controls") kept over the original: keyboard yaw / pitch / roll / zoom
+// [port: Gabriel] (docs/DECISIONS.md "Camera and controls") kept over the original: keyboard yaw / pitch / roll / zoom
 // (the original has none), free 360 degree rotation, W A S D scrolling with any modifier, the FOV settings.
 //
 // P1 completion (2026-10-27), all [port] (xml_field_tables.md gives the fields, the docs give no behaviour):
@@ -192,7 +192,7 @@ struct CameraTuning {
     float key_yaw_deg_per_s = 90.0f;
     float key_zoom_notches_per_s = 4.0f;
     float overview_blend_time = 0.5f;   // overview level changes (smoothstep) [port]
-    // [port: Gabriel] (docs/PHASE4.md "Camera and controls"): the tactical camera rotates freely on every axis - yaw,
+    // [port: Gabriel] (docs/DECISIONS.md "Camera and controls"): the tactical camera rotates freely on every axis - yaw,
     // pitch and roll unclamped (wrapped to -180..180), pitch keys / drag also on Land_Mode (whose data locks the pitch;
     // free_pitch_per_mouse_unit then applies), roll keys. false = the original clamps (Yaw/Pitch_Min/Max).
     bool free_rotation = true;

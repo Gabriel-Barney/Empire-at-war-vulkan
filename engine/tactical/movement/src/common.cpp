@@ -73,6 +73,7 @@ MovementConstants MovementConstants::from_game_constants(const data::GameConstan
     c.space_speed_multiplier = gc.get_float("Object_Max_Speed_Multiplier_Space", c.space_speed_multiplier);
     c.space_guard_range = gc.get_float("Space_Guard_Range", c.space_guard_range);  // S7 t37
     c.land_guard_range = gc.get_float("Land_Guard_Range", c.land_guard_range);
+    c.max_waypoints_per_path = get_u32(gc, "MaxWaypointsPerPath", c.max_waypoints_per_path);  // s78f t02
     return c;
 }
 

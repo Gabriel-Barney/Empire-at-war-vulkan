@@ -984,6 +984,12 @@ Values 9–0xB are unused. SimpleSpace reuses 0x13 (following a path) and 0x16 (
 
 **Deploy states (S8 t11, 2026-11-02)** [H unless tagged]. These are used by the weapon gates (TACTICAL_COMBAT §3.1.1
 "Gate details").
+
+*Seen in game (s78f t01, 2026-11-05, `tools/probe_mod/s7s8_probes/out/20261105-055142`):*
+- An `SPMAT_Walker` given an attack order went 0x16 → 0x18 three frames later, playing clip 25 (Deploy) at rate 2.0.
+- It reached 0x19 after 45 frames.
+- At the end of the scenario it showed 0x1A (Undeploying) before it was despawned.
+- The Lua DEPLOY block timings are in AI_TACTICAL §7.3.3 "In-game probe of the DEPLOY block".
 - Only Walk implements the deploy vfuncs:
   - vf +0x118 = `Deploy(bool)` (`0x61d300`);
   - vf +0x120 = state == 0x19 (`0x61df40`);
@@ -1110,6 +1116,26 @@ The collision system is serviced by the land mode (§5.2). Its order relative to
 **Effective max speed** (`0x371160`, then `0x376990`):
 - Base: `Max_Speed` (+0x37c).
 - For a team/container (group behaviour 0x16), the base is capped at the **minimum Max_Speed of its members** (`0x4049e0`).
+- **Team cap, exact (s78l t01, 2026-11-05) [H]:** `0x371160` / `0x370f00`(type T, object O): when O has a TEAM
+  behaviour (vf +0x10 with 0x16), base = **min(T.`Max_Speed`, m)**, where m = `0x4049e0`(TEAM) = the minimum over
+  the TEAM member list (container +0x110, list order, null entries and members without a type skipped) of
+  `0x371160`(member type, member) = the member's **raw** `Max_Speed` (members have no TEAM slot). So the
+  **container's own `Max_Speed` is in the minimum** (`fVar2 <= container ? fVar2 : container`). No member
+  multiplier enters the base: not their SPEED products, fleeing, burning, mode scale. Every multiplier below is then
+  applied **once, to the container object**. Edge cases straight from the code: member list pointer null → m = 0 →
+  base 0; list present but no valid member → m = −1.0 (the start value) → base −1 [M: a live team never has
+  this]. FoC data: `Stormtrooper_Team`, `Plex_Soldier_Team`, `Empire_Field_Commander_Team` and four civilian /
+  pirate / Hutt teams have `Max_Speed` 0.8 while a member reaches 1.0, so the container caps them; for the other
+  teams (e.g. `Rebel_Trooper_Team` 1.1, `Sandpeople_Team` 1.0 over 0.5 members) the members are slower.
+- **Full team formula** (O = the container, all values of O unless named):
+  `v = min(C.Max_Speed, min_i M_i.Max_Speed)` → v is **replaced** by the script override speed (0x397140) when pack +0x29c is set →
+  × mode scale (mode +0x230; O is not a projectile) → × `Fleeing_Infantry_Speed_Bonus` when O flees (0x39a5b0) →
+  × **SPEED(O)** = `0x398010`(O, 6): O's own unit-ability product when that is ≠ 1.0, else the minimum over the
+  members' own products (TACTICAL_COMBAT §4.4) → the rest of the chain below (engines, retreat, `(1 + Σ bonus)` of
+  O's modifier list, base shield, O burning). A port must **not** multiply a member's own SPEED or modifiers into
+  a team move.
+- Projectiles (behaviour slot 8, obj +0x33a ≠ −1) take a shorter chain: the mode scale only when the type's
+  category (+0x1fe8) is 1, fleeing, and then the function returns unless that category is 1, 2, 3 or 9 [H].
 - The base is then multiplied, in this order, by:
   1. a script override speed, when data-pack flag +0x29c is set;
   2. the mode's speed scale (mode +0x230);
@@ -1163,6 +1189,123 @@ The infantry turn-animation time = angle / rate × 1/30 (`0x62bef0`).
 5. **Normalisation.** Vector normalisation uses the fast inverse square root (magic 0x5f375a86, two Newton steps). **Reproduce this bit-exactly**: it feeds positions.
 6. **Formation jiggle** (`0x42c270`). Each moving frame, the offset += synced random(±k) × speed fraction × `FormationRaggedness` (+0x16a8), clamped to ±`MaxJiggleDistance` (+0x16ac). Each call draws from the lockstep RNG.
 7. **Hover rise/lower.** z moves by the effective max speed per frame toward terrain + `Hover_Height` (+0x23bc). Deploying states run at `Deployment_Anim_Rate`.
+
+#### 3.5.1 Facing on arrival (s78k t01, 2026-11-05) [H unless tagged]
+
+The Walk locomotor's wanted orientation (0x61d570 → 0x61d890 on the unit's current path, then 0x61ca90):
+- while the path is started (path +0x6d) and not on its last waypoint: the travel direction;
+- on the last waypoint (path +0x60 + 1 ≥ waypoint count, 0x5c5910): the last waypoint's facing vector (+0x0c) when
+  it is non-zero, else the **current** orientation;
+- 0x61ca90 then applies `Movement_Directions_Count` (+0x23fc, default 1; one FoC unit uses 2): 1 → that orientation;
+  ≤ 0 → the current orientation; N → of the N yaws spaced 360/N starting at the wanted one, the one closest to the
+  current facing.
+
+End Move (state 0x14, 0x61f510) switches to state 0x15 (0x61fc30) once the speed is at or below one frame's
+deceleration. State 0x15, on the last waypoint:
+- Δ = |wanted yaw − current yaw| (current = obj +0x90…). The threshold is **10°**, or the turn rate (`0x372560`)
+  when that is ≤ 10° and (path kind +0x48 = 3 or the current waypoint's speed cap is 0) (s78l t02 below: kind 3 =
+  the TerrainCollision path; ordinary move orders use 10°).
+- Δ > threshold → state 0xf: with `Has_Pre_Turn_Anim` (+0x36) and the clip present, play turn clip 0xc (Δ in
+  (0°, 180°)) or 0xe and wait for it; then state 0x10 (0x620190): each frame the yaw steps toward the wanted yaw by
+  at most the rate (0x61e730; the step that covers the remainder lands **exactly** on it). Rate: locomotor pack +0xe8
+  when > 0 (it is zeroed on entering 0x10), else at speed 0 `Stopped_Rate_Of_Turn` (+0x3b0, raw, 0x374310) when > 0,
+  else `Max_Rate_Of_Turn` × the mode multiplier (0x372560); × `SecondaryTurnInPlaceROTCoefficient` (+0x1670) for the
+  secondary-facing step. When reached: 0x11 → 0x12 → back to 0x15, now within the threshold.
+- Δ ≤ threshold → pop the path (0x557b10), play the default idle (when not a flinch, not burning, not deploying) and
+  go to 0x16 (idle). The unit keeps its yaw, so a final facing within the threshold is **not** corrected.
+
+So a move whose block has a final facing (+0x44 / +0x5c, §6.1) ends with a rate-limited turn-to onto that facing; a
+move without one ends on the arrival heading. A path replaced or dropped before the arrival (new order, stop) never
+turns to the old facing.
+
+**Arrival turn, details (s78l t02, 2026-11-05)** [H unless tagged]. Read from 0x61fc30 (state 0x15), the dispatch
+loop of vf6 0x61e930, 0x620190 (0x10), 0x6204f0 (turn band), 0x61d810, 0x61e730, 0x5c4af0 / 0x5c5ef0, 0x5070b0.
+Angles are degrees; the yaw is obj +0x8c (the setter 0x3a8710 writes +0x84… and +0x90… together, so 0x61fc30's
+read of +0x98 is the same yaw). Every Walk handler returns "done for this frame" (1) or "run the new state now" (0),
+so 0x15 → 0xf → 0x10 → 0x11 → 0x12 can all run in one frame.
+1. **State 0x15 entry**: pack speed +0xec and +0xf0 := 0. With a started current path: if the path index (+0x60) +
+   2 = waypoint count (heading for the last point) and dot(pos − W, n) > **−5**, where W = the last waypoint and n =
+   the unit segment direction (0x5c5060), the index steps on (0x5c4920: +0x60 += 1, +0x64 := 0, +0x6c := 0). Then
+   not on the last waypoint → state 0 (Start: the move resumes). So a unit that stopped up to 5 units short of the
+   last point (measured along the segment) counts as arrived.
+2. **Δ and the threshold**: wanted yaw w (§3.5.1 above; when 0x61d570 returns the 1e18 triple the turn is skipped
+   and the path pops). Δ = |wrap(w − yaw)|, wrap into (−180, 180]. Threshold = 10, **or** R = `Max_Rate_Of_Turn` ×
+   mode multiplier × global factor (0x372560, type only) when R ≤ 10 **and** (path kind = 3 or the speed cap of
+   waypoint +0x60 is 0). Δ > threshold → state 0xf; else pop.
+   - (a) **The variant changes only the threshold, not the turn rate**: the turn itself (0x10) uses the rule of
+     step 4 in both cases; with the variant a unit is turned until it is within one frame of normal turn
+     (Δ ≤ R) instead of within 10°.
+   - When it applies: the per-waypoint speed caps (path +0x00, 8 bytes per waypoint, cap at +4) default to
+     **1.0** (0x5c5ef0), the land finaliser 0x5070b0 sets the last entry to (1, 1) and only lowers earlier ones (brake
+     pass from count − 2 down), and an index past the end reads a static default [M: zero]. The only cap-0 writer
+     found is the TerrainCollision path (0x687ff0: entry 0 := (1.0, 0.0)), whose path is built by 0x5c80e0 with
+     **kind 3**; the other kinds seen are 1 formation, 4 push, 7 crush push, 5 (three locomotor-internal paths).
+     So an ordinary move order (formation path, last cap 1.0) always uses **10°**; the variant is for
+     collision-resolution paths [M: no other kind-3 writer was searched for exhaustively].
+3. **State 0xf (start turn)**: side = left when wrap360(w − yaw) ∈ (0, 180), else right. With `Has_Pre_Turn_Anim`
+   (type +0x36) and the model has the side's **TURNL_BEGIN 12 / TURNR_BEGIN 14** clip (0x38f9e0): if the current
+   clip is not that clip, play it (index 0xFFFF = synced variant draw when the clip has ≥ 2 variants, loop 0, blend
+   global 0x140b398fc, speed 0x3736a0 = (`Stopped_Rate_Of_Turn`, or R when ≤ 0) / `Rotation_Animation_Speed`
+   (+0x388) when both > 0, else 1) and end the frame; while it is the current clip and not within its last 2 frames
+   (0x39a180: frame ≥ count − 2 − x, or mode 2 finished), wait. **The yaw does not move during the begin clip.**
+   Then (or at once without +0x36 / without the clip) pack +0xe8 := 0 and state 0x10 in the same frame.
+4. **State 0x10 (turn)**, per frame:
+   - rate r = pack +0xe8 when > 0; else, since the state is 0x10, `Stopped_Rate_Of_Turn` (+0x3b0, raw, 0x374310)
+     when the speed +0xec ≤ 0 (always at arrival, step 1 zeroed it) and +0x3b0 > 0, else R. Secondary rate r2 = r ×
+     `SecondaryTurnInPlaceROTCoefficient` (+0x1670).
+   - yaw step (0x61e730): e = wrap(w − yaw); if |e| > r the yaw moves r toward w and r_left = 0, else the yaw
+     **lands exactly on w** and r_left = r − |e|. Roll and pitch := 0, position committed (vf +0x2f8). The secondary
+     facing (pack +0x268…+0x270) steps the same way with r2 (0x61e840). reached = r_left > 0; on the last waypoint
+     with `UseSecondaryFacing` (+0xd2) reached = r2_left > 0 instead.
+   - c = the current clip is within its last 2 frames or finished (0x39a180); A = the current clip.
+   - reached, not c and no path → 0x11. Else if A is a turn clip (3, 4, 21–24) and not c → stay (r stays).
+     Else if (a path exists and is not started) or reached → **0x11**. Else pick a turn clip:
+     - **without** `Has_Pre_Turn_Anim`: only when the model has clip 3 and A is not a turn clip: play TURNL 3 (e at
+       frame start ≥ 0) or TURNR 4, index 0xFFFF, loop 0, blend min(|e0| / r × 0.03333, GC 0x140b16d28), speed
+       1.0. +0xe8 is not written. (So the clip plays once; the yaw keeps turning at r.)
+     - **with** `Has_Pre_Turn_Anim` (0x6204f0): e = the signed error **after** this frame's step, S = 0x374310
+       (`Stopped_Rate_Of_Turn` or R), band threshold T = S, or **10** when a path exists, its kind ≠ 3 and the
+       current waypoint cap > 0 (the normal arrival). For e ≥ T: e < 22.5 → TURNL_QUARTER 22, rate S × 0.25 × e /
+       11.25; e < 45 → TURNL_HALF 21, rate S × 0.5; else TURNL 3, rate S. Mirror for e ≤ −T with 24 / 23 / 4.
+       |e| < T → clip unchanged, rate S. Pack +0xe8 := that rate (used from the **next** frame; the first 0x10
+       frame always turns at S). If the chosen clip is not idle-class (0x27b5e0: 0, 1, 71, 77–82) it is played
+       (index 0xFFFF, loop 0, blend global 0x140b39900, speed 0x3736a0) and the state stays 0x10; if it is
+       idle-class (|e| < T with an idle playing) → **0x11 with |e| < T left over** (up to 10° on an ordinary
+       arrival, which step 2 then accepts).
+   - The band is re-picked only when the previous turn clip reaches its last 2 frames, so the rate changes at clip
+     boundaries.
+5. **State 0x11 (end turn)**: with `Has_Pre_Turn_Anim` and the model has the end clip 0x61d810(A) (A ∈ {3, 12,
+   13, 21, 22} → TURNL_END 13; A ∈ {4, 14, 15, 23, 24} → TURNR_END 15; otherwise none): play it (same arguments
+   as the begin clip) and wait until it is in its last 2 frames. Then state 0x12 (same frame) → back to 0x15, where
+   Δ is now within the threshold.
+6. **Pop** (step 2 within the threshold): 0x557b10 pops the path; then, when the current clip is not idle-class
+   (0x27b5e0), the object is not burning (+0x3a1 & 2) and pack +0x2b3 is clear, play the default idle type
+   (0x395920; TACTICAL_COMBAT slot 47 "s78l t03") with index 0, loop = `Loop_Idle_Anim_00` (type +0x30), blend
+   global 0x140b39908, speed 1. State 0x16.
+
+FoC users of `Has_Pre_Turn_Anim` (15): AT_AT_Walker / Veers_AT_AT_Walker (`Stopped_Rate_Of_Turn` 1,
+`Max_Rate_Of_Turn` 2, `Rotation_Animation_Speed` 0.5), AT_ST_Walker and Scavenger_Droid (7.5 / 7.5 / 2.2),
+AT_AA_Walker (3.5 / 6 / 1.25), SPMAT_Walker (3.1 / 3.5 / 1.0), Pod_Walker and Hutt_Pod_Walker (3.75 / 4 / 1.5),
+HAV_Juggernaut (– / 0.9 / –), and the creatures Rancor, Cuddles_The_Rancor, TaunTaun, Felucia_Beetle, Night_Sister,
+UM06_Night_Sister (no stopped rate). Everyone else: no begin / end clips, TURNL / TURNR once, rate S throughout.
+
+*Port spec (arrival turn):*
+- Arrival = End Move finished (speed ≤ one frame's decel) and either on the last waypoint or within 5 units of the
+  last point along the last segment (then step on); otherwise resume the move.
+- Δ > 10° (or > R on a kind-3 / zero-cap path when R ≤ 10) → turn; else pop the path, play the default idle, idle.
+- `Has_Pre_Turn_Anim` with a begin clip: hold the yaw while TURNx_BEGIN plays to its last 2 frames.
+- Turn frames: first frame at S (`Stopped_Rate_Of_Turn`, else R); exact landing when the remainder ≤ rate.
+  With `Has_Pre_Turn_Anim`: after each step pick the band (T = 10 on ordinary paths) and use its rate from the next
+  frame; keep the band until the turn clip's last 2 frames; |e| < T with an idle clip → end the turn early.
+  Without it: rate S every frame, one TURNL / TURNR clip.
+- End: TURNx_END clip (with +0x36), then re-check Δ (now ≤ threshold) and pop.
+- Synced draws: each play with index 0xFFFF of a clip with ≥ 2 variants draws one `Get_Int(0, n − 1)` (begin, band,
+  TURNL / TURNR, end clips). A clip with one variant draws nothing (0x1ffb40 returns at once for an empty range).
+
+**Port:** `MovementSystem::tick_land` (`engine/tactical/movement/src/movement_system.cpp`) ends a land move at
+`r.arrived` without looking at `Unit::facing` (set from `MoveOrder::facing_deg` in `move_land`); only `tick_space`
+turns on arrival. Missing: the arrival turn above (threshold 10°, stopped turn rate, exact landing,
+`Movement_Directions_Count`).
 
 ### 3.6 Terrain conform and commit (vf95 `0x42d6a0` → `0x42bb40`) [H]
 
@@ -1497,14 +1640,60 @@ Three separate spatial structures exist. The port can unify them only if every q
 | +0x24 | type: 1 position, 2 ray, 3 object |
 | +0x28 | target object |
 | +0x48 | flags |
+| +0x44 | final facing, yaw in degrees; read only when +0x5c is set (s78k t01) [H] |
 | +0x4c | 0x3F (the avoidance mask) |
 | +0x54 | 1e18 |
+| +0x5c | byte: final facing set (s78k t01) [H] |
+
+**Final facing (+0x44 / +0x5c), s78k t01** [H]. The path builder 0x417520 (formation entry, current block = the last
+of the formation's block stack, 0x41a4e0) reads +0x44 only when byte +0x5c is set:
+- land (formation kind 1): after the path is built, the facing vector (cos +0x44, sin +0x44, 0) is written into the
+  facing (+0x0c) of the path's **last waypoint** (0x550bd0). The flag-0x20 branch (below) does the same on its
+  2-point path. The unit's own path is a copy of the formation path (locomotor 0x42c680 → 0x5c46a0, which copies the
+  waypoints with their facings), and the Walk locomotor turns to it on arrival (§3.5.1);
+- space (kind 2): the planner request gets goal facing = +0x44 and "final facing required" (§2.1 record +0xec /
+  +0x120); with +0x5c set the arrival slow-down distance is tripled;
+- the formation's final rotation (0x411980, §4.4) also uses the last block's +0x44 when its +0x5c is set.
+With +0x5c clear every waypoint facing stays (0, 0, 0) and no final turn happens. The +0x18 triple (1e18 = none) is
+**not** what the path builder reads for the final facing [M: its role was not re-traced]. Writers seen: the
+TransportLanding vehicle exit move (0x644330: +0x44 = the landing's yaw, +0x5c = 1); the team exit move writes 0.
+
+**Flag 0x20 path (land)** [H, s78k t01]: 0x417520 builds no route. The formation path is the 2 points start →
+destination (when 0x50e180 rejects the destination, 0x440f90 must place it, else the move fails), and the waypoint
+list's byte +0x44 := 1, which becomes path +0x5c, the skip-passability flag of §3.5 step 4 (0x5c5df0 / the copy in
+0x54e4e0). This is the "forced-move" path flag that the unload finish clears (0x3ac210, A1_READINGS §28.9).
+
+**Forced-path destination check and fallback (s78l t02 c, 2026-11-05)** [H unless tagged]. In 0x417520's flag-0x20
+branch, D = the formation destination (block +0x00, after the formation offset):
+1. **Check** 0x50e180(grid, D, class = formation +0x1c4, layer 0): cell (x, y) = trunc((origin + D) / cell size)
+   with the globals 0x140b36b98…ba4 (as 0x50e280, §1.1); a cell outside the grid reads 0xFFFFFFFF. Passes when
+   (cell bits & class mask 0x477b70(class)) = cell bits, i.e. every bit set in the cell is allowed for the class. Only
+   the point is tested: no line, no occupancy.
+2. **Fails → place**: a search record (0x440be0, A1_READINGS §40.1) for the formation's object (param 2) with:
+   mode **1** (full circle: no cone, no minimum distance), centre = D (x, y, z), start angle = the object's yaw
+   (+0x8c, from the ctor), +0x5d = 1, **+0x5e = 1 (skip occupancy and path tests)**, +0x5f = 0 (point test
+   0x50e180 instead of reachability), movement class +0xa8 = formation +0x1c4, margin = `FormationSpacing` × 5
+   (unused here). 0x440f90 then (A1_READINGS §40.2): land mode only (else it fails); rings while index < 20:
+   R = 0, 1, 2.8, 5.4, 8.8, … (R += step; step := min(step + 0.8, min(1.5 r, 10)), r = the object's footprint
+   radius √(ex² + ey²) of its hard extents, 5 when 0); samples n = trunc(R × 2π / r) + 1 (ring 0: one sample = D),
+   from ring 1 on n = max(4, n); sample i at angle yaw + i × 360 / n, counter-clockwise, at distance R from D.
+   The first sample that is inside the map box (land vf +0x1f8 centre / half sizes) and passes the point test of
+   step 1 (skipped when the class is −1) is taken; **no occupancy or path test** (+0x5e). The found point keeps D's z.
+   No synced draws. r = 0 with R > 0 would divide by zero; land units always have extents [M].
+3. **The path** is start → the found point (D itself when step 1 passed), 2 waypoints, skip-passability flag set; a
+   final facing (+0x5c) goes on waypoint 1 as above.
+4. **No point in 20 rings** (or not land): 0x417520 returns 0 and the formation gets **no path**: the move fails
+   and the unit does not move [M: what the caller does next with the failed formation was not traced].
+*Port spec:* test D's cell against the movement class; when blocked, walk the rings above around D from the unit's
+yaw and take the first in-map passable sample; otherwise fail the forced move; the path then skips the per-frame
+passability check on the way (§3.5 step 4).
 
 **Flag bits:**
 - 0x02: attack/engage. [M]
 - 0x08: queue as a waypoint (shift); also enables the random start delay of §1.6. [H]
 - 0x20: skip destination validation. [M]
 - 0x80: double-click "run" with speed-matched recruitment (§4.2). [H] Input, wire and full bit table: P1_DOUBLE_CLICK_MOVE.md (it corrects 0x02 to guard-move; attack-move is 0x01).
+- Also (2026-11-03, FIGHTER_FLYING §4.11): 0x04 player order (added by the waypoint append; decides pops on arrival and in the formation update); 0x10 space idle-movement block (speed capped at `SpaceIdleMovementSpeed`; `ShouldUseSpaceIdleMovement` is false in FoC); 0x40 raise signal 0x2a on pop. Bytes: +0x50 push class [M], +0x58 expiry frame with +0x61 "timed", +0x5d each member closes at its own speed, +0x5e patrol loop. [H for the readers]
 
 ### 6.2 Dispatch [H]
 
@@ -1530,6 +1719,7 @@ Three separate spatial structures exist. The port can unify them only if every q
    - for each formation in order, `0x4105a0` then `Formation::Set_Move` (`0x423c10`).
 
 **Waypoint queue** (`0x2a8240`): a unit already in a coordinator (`0x426140`) appends the parameters to that coordinator (vf +0x30), once per distinct coordinator in first-seen order. Units with no coordinator form a new one.
+- vf +0x30 (`0x4f7770`, land and space) calls `0x420f70` on each formation. Each formation keeps a **stack** of move blocks (F +0xf8; the last block is the current one). `0x420f70` inserts the block at the **bottom** with flag 0x04, so it runs after everything already queued. Limit `MaxWaypointsPerPath` (GC +0x13f0, FoC 6) blocks with 0x08; a click within 20 (land) / 80 (space) of an earlier player waypoint closes a patrol loop (byte +0x5e) instead. Push, pop, arrival and the guard pop: FIGHTER_FLYING §4.11 B (s78f t02, 2026-11-03). [H]
 
 **MoveToObject:** no coordinator. Each unit (the listed ones, or the whole selection when the count is 0) gets `0x39f580(unit, target)` directly.
 

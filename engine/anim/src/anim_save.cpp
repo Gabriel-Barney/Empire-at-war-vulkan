@@ -14,7 +14,8 @@ namespace alamo::anim {
 namespace {
 
 constexpr uint32_t kAnimWorldVersion = 1;
-constexpr uint32_t kAnimBehaviorsVersion = 1;
+// s78k t02: the u64 is the idle countdown (1: a combat-timer frame); 3: s78l t03 idle records per entry
+constexpr uint32_t kAnimBehaviorsVersion = 3;
 
 // Lower bounds of one saved record (corrupted-count guard: a count larger than the bytes left can hold fails before
 // anything is allocated).
@@ -185,10 +186,12 @@ void AnimBehaviors::write(ByteWriter& w) const {
         w.i32(e.ret_type);
         w.boolean(e.ret_loop);
         w.f32(e.ret_speed);
-        w.u64(e.combat_timer);
+        w.u64(e.idle_countdown);
         w.f32(e.last_yaw);
         w.boolean(e.have_yaw);
         w.boolean(e.last_crouch);
+        w.u32(static_cast<uint32_t>(e.records.size()));
+        for (const IdleRecord& r : e.records) w.i32(r.presence).i32(r.frames);
     }
     w.u32(static_cast<uint32_t>(corpses_.size()));
     for (const Corpse& c : corpses_) {
@@ -211,7 +214,8 @@ void AnimBehaviors::write(ByteWriter& w) const {
 }
 
 bool AnimBehaviors::read(ByteReader& r) {
-    if (r.u32() != kAnimBehaviorsVersion || !r.ok()) {
+    const uint32_t version = r.u32();
+    if ((version != kAnimBehaviorsVersion && version != 2 && version != 1) || !r.ok()) {
         r.fail();
         return false;
     }
@@ -229,10 +233,23 @@ bool AnimBehaviors::read(ByteReader& r) {
         e.ret_type = r.i32();
         e.ret_loop = r.boolean();
         e.ret_speed = r.f32();
-        e.combat_timer = r.u64();
+        e.idle_countdown = r.u64();
+        if (version == 1) e.idle_countdown = 0;  // [port] a frame stamp then: no countdown carried over
+        if (e.idle_countdown > kEngagedBaseFrames + static_cast<uint64_t>(kEngagedRandomFrames)) r.fail();
         e.last_yaw = r.f32();
         e.have_yaw = r.boolean();
         e.last_crouch = r.boolean();
+        if (version >= 3) {
+            uint32_t nr = 0;
+            if (!read_count(r, 8, nr)) return false;
+            e.records.resize(nr);
+            for (size_t k = 0; k < e.records.size(); ++k) {
+                IdleRecord& rec = e.records[k];
+                rec.presence = r.i32();
+                rec.frames = r.i32();
+                if (rec.frames < 1 || (k > 0 && rec.presence <= e.records[k - 1].presence)) r.fail();
+            }
+        }
         if (!valid_type(e.flinch) || !valid_type(e.ret_type)) r.fail();
         if (!r.ok()) return false;
     }

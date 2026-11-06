@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <filesystem>
 
 #include "alamo/sim/save_session.hpp"
@@ -79,9 +80,7 @@ bool load_game_data(const std::string& root, const std::vector<std::string>& arg
             ts->defs = &a->defs;
             ts->equations = &a->equations;
             ts->files = out.files.get();
-            ts->space_plans = ai::tactical::tactical_plan_files(ai::tactical::TacticalMode::Space, lister);
-            ts->land_plans = ai::tactical::tactical_plan_files(ai::tactical::TacticalMode::Land, lister);
-            ts->difficulties = ai::tactical::load_tactical_ai_difficulties(*out.files);
+            sim::load_tactical_ai_data(*ts, *out.files, &out.db.constants(), lister);  // a2h t05: plans, difficulties, GameConstants
             if (!ts->space_plans.empty() || !ts->land_plans.empty()) a->tactical = std::move(ts);
 #endif
             out.ai = std::move(a);
@@ -286,6 +285,37 @@ SkirmishMapEntry read_map_entry(const FileProvider& files, const std::string& pa
     return e;
 }
 }  // namespace
+
+SkirmishMapPreview read_skirmish_map_preview(const FileProvider& files, std::string_view map, bool space) {
+    SkirmishMapPreview pv;
+    std::vector<uint8_t> bytes;
+    if (!files.read(terrain::map_path(map), bytes)) return pv;
+    pv.found = true;
+    terrain::MapData md;
+    terrain::ParseOptions opt;
+    opt.environments_only = true;  // the header only; chunks 3 and 0x13 are taken from the top-level sequence below
+    terrain::parse_ted(bytes, md, nullptr, opt);
+    std::vector<terrain::ChunkView> top;
+    if (!terrain::read_chunks(bytes, top)) return pv;
+    for (const terrain::ChunkView& k : top) {
+        if (k.id == 0x13 && !k.has_children) pv.embedded_image.assign(k.payload.begin(), k.payload.end());
+        if (k.id != 3 || k.has_children || k.payload.size() < 4) continue;
+        const float w = md.info.world_width, h = md.info.world_height;
+        if (!md.info.present || md.info.flag_12 == 0 || !(w > 0.0f) || !(h > 0.0f)) continue;
+        uint32_t n = 0;
+        std::memcpy(&n, k.payload.data(), 4);
+        if (n > (k.payload.size() - 4) / 8) continue;
+        for (uint32_t i = 0; i < n; ++i) {
+            float xy[2];
+            std::memcpy(xy, k.payload.data() + 4 + 8 * static_cast<size_t>(i), 8);
+            // UI.md 9.6.1: space maps are first shifted by half the world size (centred on the origin), land maps not
+            // (origin at the lower-left corner); fx = x / width, fy = y / height, each clamped to 0..1; image y = 1 - fy.
+            const float fx = space ? (xy[0] + w * 0.5f) / w : xy[0] / w, fy = space ? (xy[1] + h * 0.5f) / h : xy[1] / h;
+            pv.starts.emplace_back(std::clamp(fx, 0.0f, 1.0f), 1.0f - std::clamp(fy, 0.0f, 1.0f));
+        }
+    }
+    return pv;
+}
 
 SkirmishMapCatalog build_skirmish_map_catalog(const vfs::Vfs& vfs) {
     SkirmishMapCatalog c;

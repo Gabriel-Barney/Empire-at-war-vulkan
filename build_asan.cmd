@@ -25,7 +25,7 @@ rem ALAMO_SANITIZE picks the sanitizers (default undefined). ASan on clang 20 (M
 rem (even a minimal try/catch) because the stack instrumentation touches the exception funclet frame; address,undefined also
 rem made UBSan report a false "member call on null pointer" in engine/jobs/tests/test_jobs.cpp:196. The same cause: both go
 rem away with -mllvm -asan-stack=0, added below whenever address is on. Cost: ASan then checks heap and globals only, not
-rem stack buffers or use-after-return. Rationale and results: docs/PHASE4.md, "Sanitizer limits".
+rem stack buffers or use-after-return. Rationale and results: docs/BUILD.md, "Sanitizer limits".
 if not defined ALAMO_SANITIZE set ALAMO_SANITIZE=undefined
 set SAN=-fsanitize=%ALAMO_SANITIZE% -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g
 echo %ALAMO_SANITIZE%| findstr /c:address >nul && set SAN=!SAN! -mllvm -asan-stack=0
