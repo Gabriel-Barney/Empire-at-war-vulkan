@@ -162,14 +162,17 @@ struct Data {
     std::unique_ptr<BattleCatalog> catalog;
 };
 
-std::unique_ptr<Data> make_data() {
+// extra: more type entries for kTypes, in their own folder (the golden run's type table stays as it is).
+std::unique_ptr<Data> make_data(const char* folder = "alamo_sim_l1_tests", const char* extra = nullptr) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / "alamo_sim_l1_tests";
+    d->root = fs::temp_directory_path() / folder;
     std::error_code ec;
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>L1Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "L1Types.xml", kTypes);
+    std::string types = kTypes;
+    if (extra) types.insert(types.rfind("</L1>"), extra);
+    write_file(x / "L1Types.xml", types);
     write_file(x / "HardPointDataFiles.xml", "<Hard_Point_Files><File>L1HardPoints.xml</File></Hard_Point_Files>\n");
     write_file(x / "L1HardPoints.xml", kHardpoints);
     write_file(x / "FactionFiles.xml", "<FactionFiles><File>L1Factions.xml</File></FactionFiles>\n");
@@ -1437,6 +1440,219 @@ std::string env_or_empty(const char* name) {
 #endif
 }
 
+// ---- s78f t05: command 25 SpecialWeaponFire (TACTICAL_COMBAT §3.1.1 "Fire-at-position order", LOB_SOLVER §9) ----
+// The Empire defends S10_B with a lobbing superweapon (LOBBING_SUPERWEAPON + TURRET + WEAPON, a grenade projectile,
+// 1 s recharge, 10-frame charge-up). Three markers with DUMMY_DESTROY_AFTER_SPECIAL_WEAPON_FIRED (0x67): two of the
+// Empire, one of the Underworld. TacticalBattle::handle_command with SpecialWeaponFire:
+//   (a) before the pack is ready: AbilityNotReady, no marker dies;
+//   (b) the Underworld naming the Empire's weapon: InvalidUnit;
+//   (b2) ready, but a Requires_Base_Power variant without base power: Fire_Lobbing_At_Position refuses -> NotAllowed and
+//       no sweep (the sweep follows an accepted order only);
+//   (c) ready, at_position 1: None; both Empire markers die silently (no battle death, no new object such as a death
+//       clone), the Underworld's marker stays; the order (point = the command position) is pending in the combat unit;
+//   (d) the WeaponBehavior charges up (LobChargeup, then LobCharged after the charge-up frames, both at the point) and
+//       fires one lob shot, which clears the order; ready again, at_position 0 with a live target: the order's point is
+//       the target's position.
+const char* kSwFireTypes = R"(
+ <Projectile Name="L1_Lob_Proj"><Max_Speed>20.0</Max_Speed><Projectile_Grenade_Gravity>1.0</Projectile_Grenade_Gravity>
+  <Projectile_Grenade_Gravity_Lob_Mod>1.0</Projectile_Grenade_Gravity_Lob_Mod><Projectile_Category>GRENADE</Projectile_Category>
+  <Projectile_Damage>0.0</Projectile_Damage><Projectile_Blast_Area_Damage>10</Projectile_Blast_Area_Damage>
+  <Projectile_Blast_Area_Range>30</Projectile_Blast_Area_Range><Projectile_Max_Lifetime>30.0</Projectile_Max_Lifetime></Projectile>
+ <GroundVehicle Name="L1_Lobber"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>5000</Tactical_Health>
+  <CategoryMask>Vehicle</CategoryMask><Population_Value>1</Population_Value><Targeting_Max_Attack_Distance>400</Targeting_Max_Attack_Distance>
+  <Behavior>SELECTABLE</Behavior><LandBehavior>LOBBING_SUPERWEAPON, TURRET, WEAPON</LandBehavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>
+  <Projectile_Types>L1_Lob_Proj</Projectile_Types><Projectile_Fire_Recharge_Seconds>1.0</Projectile_Fire_Recharge_Seconds>
+  <Lobbing_Superweapon_Chargeup_Frames>10</Lobbing_Superweapon_Chargeup_Frames><Custom_Soft_Footprint_Radius>10</Custom_Soft_Footprint_Radius>
+ </GroundVehicle>
+ <GroundVehicle Name="L1_Lobber_Powered"><Variant_Of_Existing_Type>L1_Lobber</Variant_Of_Existing_Type><Requires_Base_Power>Yes</Requires_Base_Power></GroundVehicle>
+ <MiscObject Name="L1_SW_Marker"><Behavior>DUMMY_DESTROY_AFTER_SPECIAL_WEAPON_FIRED</Behavior><Is_Decoration>No</Is_Decoration></MiscObject>
+)";
+
+struct SwFireRun {
+    bool fought = false, not_ready = false, markers_kept = false, foreign_refused = false, unpowered_refused = false;
+    bool fired = false, own_markers_gone = false, other_marker_kept = false, silent = false, pending_at_point = false;
+    bool restarted = false, chargeup = false, charged = false, shot = false, order_cleared = false;
+    bool target_fired = false, target_point = false;
+    uint32_t fire_frame = 0, chargeup_frame = 0, charged_frame = 0, shot_frame = 0;
+};
+
+SwFireRun run_sw_fire(const Data& d) {
+    using R = commands::RejectReason;
+    using K = tactical::abilities::SwEventKind;
+    SwFireRun out;
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 25;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSetup s = make_setup(d);
+    const uint32_t sq = type_of(d, "S10_Squad"), fr = type_of(d, "S10_Frigate"), lob = type_of(d, "L1_Lobber");
+    const uint32_t lobp = type_of(d, "L1_Lobber_Powered");
+    s.forces = {{0, 1, sq}, {0, 1, lob}, {0, 1, lobp}, {1, 2, fr}, {1, 2, sq}};
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(s));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    opt.battle.order_interval = 0;
+    opt.battle.fog = false;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "L1_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == R::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == R::None);
+    bool invaded = false;
+    objects::ObjectId weapon = objects::kNoObjectId, powered = objects::kNoObjectId, enemy = objects::kNoObjectId;
+    objects::ObjectId markers[3] = {objects::kNoObjectId, objects::kNoObjectId, objects::kNoObjectId};  // owners 0, 0, 1
+    Vec3 point{};
+    auto fire_event = [](objects::ObjectId w, bool at_position, Vec3 p, objects::ObjectId target) {
+        commands::EventData ev(commands::EventType::SpecialWeaponFire);
+        ev.set("weapon", static_cast<uint32_t>(w)).set("player", 0);
+        if (at_position) ev.set("at_position", 1).set_f("x", p.x).set_f("y", p.y).set_f("z", p.z);
+        else ev.set("at_position", 0).set("target", static_cast<uint32_t>(target));
+        return ev;
+    };
+    bool done = false;
+    for (uint64_t t = 0; t < 4000 && !done; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == R::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) {
+            if (out.fought) break;
+            continue;
+        }
+        objects::ObjectStore& st = tm->primary();
+        auto alive = [&st](objects::ObjectId id) { return id != objects::kNoObjectId && st.alive(st.find(id)); };
+        const uint32_t f = b->frame();
+        if (!out.fought) {
+            out.fought = true;
+            for (const objects::ObjectHandle h : st.owned_by(0))
+                if (st.alive(h)) {
+                    if (static_cast<uint32_t>(st.type(h)) == lob) weapon = st.id(h);
+                    if (static_cast<uint32_t>(st.type(h)) == lobp) powered = st.id(h);
+                }
+            for (const objects::ObjectHandle h : st.owned_by(1))
+                if (enemy == objects::kNoObjectId && st.alive(h) && b->combat().has_unit(st.id(h)) && b->combat().alive(st.id(h))) enemy = st.id(h);
+            CHECK(weapon != objects::kNoObjectId && powered != objects::kNoObjectId && enemy != objects::kNoObjectId);
+            CHECK(b->combat().fires_at_position(weapon) && b->combat().fires_at_position(powered));
+            if (weapon == objects::kNoObjectId || powered == objects::kNoObjectId || enemy == objects::kNoObjectId) break;
+            const Vec3 wp = st.position(st.find(weapon));
+            point = Vec3{wp.x + 120.0f, wp.y + 40.0f, wp.z};
+            for (int i = 0; i < 3; ++i) {
+                objects::SpawnParams sp;
+                sp.type = static_cast<objects::TypeIndex>(type_of(d, "L1_SW_Marker"));
+                sp.owner = i < 2 ? 0 : 1;
+                sp.position = {wp.x - 50.0f, wp.y + 30.0f * static_cast<float>(i), wp.z};
+                markers[i] = st.id(tm->spawn(sp));
+            }
+            // (a) not ready (the pack restarted at registration, 1 s recharge); (b) not the issuing player's weapon.
+            const commands::EventData ev = fire_event(weapon, true, point, objects::kNoObjectId);
+            out.not_ready = b->sw_readiness(weapon) >= 0.0f && b->sw_readiness(weapon) < 0.99f &&
+                            b->handle_command(*tm, 0, ev, host.random().synced()) == R::AbilityNotReady;
+            out.foreign_refused = b->handle_command(*tm, 1, ev, host.random().synced()) == R::InvalidUnit;
+            out.markers_kept = alive(markers[0]) && alive(markers[1]) && alive(markers[2]) &&
+                               b->combat().fire_at_position_state(weapon, nullptr) == 0;
+            continue;
+        }
+        if (!alive(weapon)) break;
+        // (c) the first ready frame: an at-position order and the destroy-after sweep.
+        if (!out.fired && b->sw_readiness(weapon) >= 0.99f) {
+            auto live_objects = [&st] {
+                size_t n = 0;
+                for (const objects::ObjectHandle h : st.all_objects()) n += st.alive(h) ? 1u : 0u;
+                return n;
+            };
+            const uint32_t deaths = b->stats().deaths;
+            const size_t before = live_objects();
+            // (b2) refused by the weapon's own behaviour (no base power): no sweep.
+            out.unpowered_refused = b->sw_readiness(powered) >= 0.99f &&
+                                    b->handle_command(*tm, 0, fire_event(powered, true, point, objects::kNoObjectId), host.random().synced()) ==
+                                        R::NotAllowed &&
+                                    alive(markers[0]) && alive(markers[1]) && alive(markers[2]) && live_objects() == before &&
+                                    b->combat().fire_at_position_state(powered, nullptr) == 0;
+            const commands::EventData ev = fire_event(weapon, true, point, objects::kNoObjectId);
+            point = Vec3{ev.f("x"), ev.f("y"), ev.f("z")};  // the quantized command position
+            out.fired = b->handle_command(*tm, 0, ev, host.random().synced()) == R::None;
+            out.fire_frame = f;
+            out.own_markers_gone = !alive(markers[0]) && !alive(markers[1]);
+            out.other_marker_kept = alive(markers[2]);
+            out.silent = b->stats().deaths == deaths && live_objects() + 2 == before;  // no death, no death clone
+            tactical::Vec3 at{};
+            out.pending_at_point = b->combat().fire_at_position_state(weapon, &at) == 1 && at.x == point.x && at.y == point.y &&
+                                   at.z == point.z;
+            out.restarted = b->sw_readiness(weapon) < 0.99f;
+            continue;
+        }
+        if (!out.fired) continue;
+        // (d) the charge-up and the shot at the point.
+        for (const tactical::abilities::SpecialWeaponEvent& e : static_cast<const TacticalBattle*>(b)->special_weapon_events()) {
+            if (e.id != weapon) continue;
+            const bool at_point = e.point.x == point.x && e.point.y == point.y && e.point.z == point.z;
+            if (e.kind == K::LobChargeup && !out.chargeup) {
+                out.chargeup = at_point;
+                out.chargeup_frame = f;
+            }
+            if (e.kind == K::LobCharged && !out.charged) {
+                out.charged = at_point;
+                out.charged_frame = f;
+            }
+        }
+        if (!out.shot)
+            for (size_t i = 0; i < b->combat().projectile_count(); ++i) {
+                const tactical::combat::ProjectileView v = b->combat().projectile(i);
+                if (v.shooter != weapon || !v.alive) continue;
+                out.shot = v.lob;
+                out.shot_frame = f;
+                out.order_cleared = b->combat().fire_at_position_state(weapon, nullptr) == 0;
+            }
+        // Ready again: a target order (at_position 0) aims at the target's bare position.
+        if (out.shot && b->sw_readiness(weapon) >= 0.99f) {
+            if (!alive(enemy)) {
+                for (const objects::ObjectHandle h : st.owned_by(1))
+                    if (st.alive(h) && b->combat().has_unit(st.id(h)) && b->combat().alive(st.id(h))) enemy = st.id(h);
+            }
+            CHECK(alive(enemy));
+            if (!alive(enemy)) break;
+            const Vec3 tp = st.position(st.find(enemy));
+            out.target_fired = b->handle_command(*tm, 0, fire_event(weapon, false, {}, enemy), host.random().synced()) == R::None;
+            tactical::Vec3 at{};
+            out.target_point = b->combat().fire_at_position_state(weapon, &at) == 1 && at.x == tp.x && at.y == tp.y && at.z == tp.z;
+            done = true;
+        }
+    }
+    return out;
+}
+
+void test_sw_fire() {
+    const auto d = make_data("alamo_sim_l1_swfire", kSwFireTypes);
+    const SwFireRun r = run_sw_fire(*d);
+    std::printf("  special weapon fire (cmd 25): fought %d not ready %d foreign refused %d markers kept %d unpowered refused %d; fired %d "
+                "at %u: own markers gone %d other kept %d silent %d pending %d restarted %d; chargeup %d at %u charged %d at %u shot %d "
+                "at %u cleared %d; target order %d at the target %d\n",
+                r.fought, r.not_ready, r.foreign_refused, r.markers_kept, r.unpowered_refused, r.fired, r.fire_frame, r.own_markers_gone,
+                r.other_marker_kept, r.silent, r.pending_at_point, r.restarted, r.chargeup, r.chargeup_frame, r.charged, r.charged_frame,
+                r.shot, r.shot_frame, r.order_cleared, r.target_fired, r.target_point);
+    CHECK(r.fought && r.not_ready && r.foreign_refused && r.markers_kept && r.unpowered_refused);
+    CHECK(r.fired && r.own_markers_gone && r.other_marker_kept && r.silent && r.pending_at_point && r.restarted);
+    CHECK(r.chargeup && r.charged && r.charged_frame == r.chargeup_frame + 10 && r.shot && r.shot_frame >= r.charged_frame && r.order_cleared);
+    CHECK(r.target_fired && r.target_point);
+}
+
 void test_foc() {
     const std::string root = env_or_empty("ALAMO_FOC_DATA");
     if (root.empty()) {
@@ -1499,6 +1715,7 @@ int main(int argc, char** argv) {
     test_jet(*d);   // S7 t10 / t14
     test_deploy(*d);  // S7 t26
     test_script_spawn(*d);  // q6 t12
+    test_sw_fire();   // s78f t05: command 25
     test_foc();
     if (g_fail) {
         std::printf("alamo_sim_l1_tests: %d failure(s)\n", g_fail);

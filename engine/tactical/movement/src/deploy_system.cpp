@@ -29,7 +29,7 @@ bool MovementSystem::turret_at_rest(const Unit& u) const {
 }
 
 const float* MovementSystem::turret_rest_angle(const Unit& u) const {
-    // Turret_Deployed_Rest_Angle when the type Deploys (u.d.turret implies it) and the unit is deployed (0x39a390: state
+    // Turret_Deployed_Rest_Angle when the type Deploys (only a Deploys type reaches these states) and the unit is deployed (0x39a390: state
     // 0x19; [port] the pending flag is not modelled) or Deploying (0x39a400: 0x18); else Turret_Rest_Angle.
     const bool dep = u.deploy == LocoState::WalkDeploying || u.deploy == LocoState::WalkDeployed;
     return dep ? u.d.turret_deployed_rest : u.d.turret_rest;
@@ -47,6 +47,7 @@ void MovementSystem::turret_recentre(Unit& u, const float* rest) {
 void MovementSystem::tick_turrets(uint32_t frame) {
     // TURRET service 0x632270 + motion 0x631210, every frame (behaviour interval 1). [port] after the Walk deploy pass.
     const float now = static_cast<float>(frame) / 30.0f;  // seconds (frame / FPS; the sim runs at 30)
+    if (cfg_.mode != MoveMode::Land) return;  // s78f t08: [port] the space TURRET aim stays unmodelled (aimed at once)
     for (Unit& u : units_) {
         if (!u.d.turret) continue;
         const float* rest = turret_rest_angle(u);

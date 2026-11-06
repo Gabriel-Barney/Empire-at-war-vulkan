@@ -1,5 +1,6 @@
 // alamo_headless --skirmish-ai (A1 stage 2): see skirmish_run.hpp.
 #include "skirmish_run.hpp"
+#include "crc_out.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -394,7 +395,8 @@ bool synthetic_session(Session& s, std::vector<std::string>& diag) {
     s.ai = std::make_shared<sim::TacticalAiSetup>();
     s.ai->space_plans = {"Data\\Scripts\\AI\\SpaceMode\\SkirmishDestroy.lua", "Data\\Scripts\\AI\\SpaceMode\\SkirmishSweep.lua"};
     s.ai->difficulties = {{"Normal_Default", 0.0f, 0.0f, 1.0f, 1.0f}};
-    auto t = [&s](const char* n) { return s.rules.find_type(n); };
+    s.ai->constants.load(s.db.constants());  // a2h t05 (the synthetic GameConstants has no tactical AI tag: the defaults)
+    auto t =[&s](const char* n) { return s.rules.find_type(n); };
     // Defender: frigate + 2 corvettes + starbase (+ reserves over the cap 6); attacker: 3 frigates + 2 corvettes.
     s.setup = make_galaxy(s, t("A1S_B"), {t("A1S_Frigate"), t("A1S_Corvette"), t("A1S_Corvette"), t("A1S_Star_Base_1"), t("A1S_Frigate"), t("A1S_Frigate")},
                           {t("A1S_Frigate"), t("A1S_Frigate"), t("A1S_Frigate"), t("A1S_Corvette"), t("A1S_Corvette")});
@@ -426,9 +428,7 @@ bool foc_load(Session& s, const MapRunOptions& opt, std::vector<std::string>& di
     if (!ai::load_ai_definitions(*s.files, ai::list_ai_data(list), s.defs)) return false;
     ai::load_equation_files(*s.files, vp->list(ai::kPerceptionEquationGlob), s.eqs);
     s.ai = std::make_shared<sim::TacticalAiSetup>();
-    s.ai->space_plans = ai::tactical::tactical_plan_files(ai::tactical::TacticalMode::Space, list);
-    s.ai->land_plans = ai::tactical::tactical_plan_files(ai::tactical::TacticalMode::Land, list);
-    s.ai->difficulties = ai::tactical::load_tactical_ai_difficulties(*s.files);
+    sim::load_tactical_ai_data(*s.ai, *s.files, &s.db.constants(), list);  // a2h t05: plans, difficulties, GameConstants
     return true;
 }
 
@@ -1079,7 +1079,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     }
     first.crc.comments = {"A1 skirmish-ai " + kind + " seed " + std::to_string(opt.seed) + " ticks " + std::to_string(first.ticks)};
     std::string err;
-    if (!opt.crc_out.empty() && first.crc.save(opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
+    if (!opt.crc_out.empty() && alamo_headless::save_crc_log(first.crc, opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
     if (!opt.golden.empty()) {
         CrcLog golden;
         if (!CrcLog::load(opt.golden, golden, &err)) {

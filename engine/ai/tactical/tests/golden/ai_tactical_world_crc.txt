@@ -1,28 +1,28 @@
 # A1 stage 2 synthetic space skirmish (mock battle host): per-frame CRC (every 150th + last), decisions, orders
-frame 150 abfc633cf98d81ce
-frame 300 5d71c3df4c502ad9
-frame 450 47e42ec38f1e2ac4
-frame 600 dae357e97c6769e9
-frame 750 ab7003e27615c602
-frame 900 6cc5ccd4970def7d
-frame 1050 35783117ddec6157
-frame 1200 480005b8c9513b1b
-frame 1350 f48b392da4640fb7
+frame 150 3e87a78e8ab45962
+frame 300 a6fb65638221e5f8
+frame 450 5f9d2450064edc27
+frame 600 e7593c0518de03bc
+frame 750 1a4581b8b6818f0a
+frame 900 fdee7fcca292810d
+frame 1050 d4fdfaca84ef4c70
+frame 1200 2eea62d21693f5a7
+frame 1350 baa360550a9e60ed
 frame 1500 4e6a3f32cc85fe19
-frame 1650 6886cefc5fc5719e
+frame 1650 e4c83253505c0455
 frame 1800 58c8bd9016346bcf
-frame 1950 ebe5158195f838db
+frame 1950 9f563bdd88b091b7
 frame 2100 0e07edaab711acc2
-frame 2250 7cdfef83702429cc
-frame 2400 d82a178c07e558bc
-frame 2550 c235a64c0353aba5
-frame 2700 e2e597822549b845
-frame 2850 bb3bd60bf0c92b04
-frame 3000 e79dfcdd34f4d295
-frame 3150 00f7418cba12975a
-frame 3300 ba7e96f6254d4771
-frame 3450 5635036651663297
-frame 3600 7775c1f7e9850c04
+frame 2250 6798a0d759dd177f
+frame 2400 23033799dae8a667
+frame 2550 397d23cf5a824567
+frame 2700 11a4c01680bc8d66
+frame 2850 11ab2a0c5c354cf2
+frame 3000 0958c190fe352ca5
+frame 3150 295ea9a26e76cce5
+frame 3300 ff7e15a8b055507d
+frame 3450 067a5833da40a1e4
+frame 3600 79f23c994d4d0a89
 frames 3600 orders 37 rejected 0 deaths E=7 R=5 units left 4 plans 2
 1 p0 opponent 1
 1 p0 targets 25 free store 3

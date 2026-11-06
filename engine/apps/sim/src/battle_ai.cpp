@@ -11,6 +11,7 @@
 #include "alamo/ai/tactical/tactical_perception.hpp"
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/data/game_database.hpp"  // a2h t05: load_tactical_ai_data
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/lua/object_bridge.hpp"
@@ -54,6 +55,16 @@ std::string default_tactical_ai_type(int32_t player, const galactic::GalacticSim
     if (ai::ai_iequal(f.name, "Rebel")) return "BasicRebel";
     if (ai::ai_iequal(f.name, "Underworld")) return "AI_Player_Underworld";
     return {};
+}
+
+void load_tactical_ai_data(TacticalAiSetup& s, const FileProvider& files, const data::GameConstants* gc,
+                           const std::function<std::vector<std::string>(std::string_view)>& list) {
+    if (list) {
+        s.space_plans = at::tactical_plan_files(at::TacticalMode::Space, list);
+        s.land_plans = at::tactical_plan_files(at::TacticalMode::Land, list);
+    }
+    s.difficulties = at::load_tactical_ai_difficulties(files);
+    if (gc) s.constants.load(*gc);
 }
 
 BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, const TacticalAiSetup& setup)
@@ -123,6 +134,8 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     br.representative_type = [bt, rep_store](objects::ObjectHandle o) {
         return rep_store->exists(o) ? bt->representative_type(rep_store->id(o)) : objects::kNone;
     };
+    // s78i t02: the Reinforce_Unit stand-in faces the owner's entry-facing record (TACTICAL_COMBAT §3.1.1 "other spawns").
+    br.reinforce_facing = [bt](int32_t player) { return bt->player_drop_facing(player); };
     br.order_finished = [bt](objects::ObjectId id, uint32_t) {
         return !bt->movement_->has_unit(id) || !bt->movement_->view(id).has_goal;
     };
@@ -452,6 +465,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
             pt.tech_level = types.get_int(ti, "Tech_Level");
             pt.population = type_population(static_cast<int32_t>(t));
             pt.build_cost = static_cast<float>(types.get_int(ti, "Build_Cost_Credits"));  // int field
+            pt.build_time_seconds = types.get_int(ti, "Build_Time_Seconds");  // int field +0x890 (A2g t06: AllowedTime base)
             for (const std::string_view f : types.get_list(ti, "Affiliation")) pt.affiliation.emplace_back(f);
             // flags +0x67 Create_Team / +0x29 squadron member / +0x21 Cinematic_Object_Only, behaviours 0x5C DUMMY_STAR_BASE /
             // 0x5B DUMMY_GROUND_BASE (AI_GALACTIC_3 §6 table) [battle host: replaces the Is_Dummy stand-in]
@@ -799,7 +813,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
 
 // ---- order execution ----------------------------------------------------------------------------------------------
 
-bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_threshold) {
+bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_threshold, uint8_t flags, objects::ObjectId goal_object) {
     const TacticalBattle::Unit* u = b_->unit_by_id(id);
     if (!u || !u->alive || u->retreated || !u->movable) return false;
     if (b_->movement_locked(id)) return true;  // OI follow-up t03: the locked unit keeps its order (A1_READINGS §28.9)
@@ -808,8 +822,14 @@ bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_th
     o.units = {id};
     o.destination = {std::clamp(x, bb.min.x, bb.max.x), std::clamp(y, bb.min.y, bb.max.y)};
     o.threat_threshold = threat_threshold;
+    o.flags = flags;  // s78f t10: the order's block flags (0x01 attack-move / 0x02 guard)
+    o.goal_object = goal_object == objects::kNoObjectId ? -1 : goal_object;  // s78f t10: the object block (movement: -1 = none)
     b_->movement_->move(o, host_->random().synced(), b_->frame_);
     return true;
+}
+
+bool BattleAi::is_fighter(objects::ObjectId id) const {
+    return b_->space_ && b_->movement_->has_unit(id) && b_->movement_->view(id).locomotor == mv::LocomotorKind::Fighter;
 }
 
 // ---- a1h t02: object-goal follow (A1_READINGS §33.4, rule §33.5.2) ----------------------------------------------------
@@ -1023,9 +1043,19 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 const Vec3 up = st.position(u->h);
                 const float dx = tp.x - up.x, dy = tp.y - up.y, d = dmath::sqrt(dx * dx + dy * dy);
                 const float range = std::max(u->range, 100.0f);
+                // s78f t10: as the human path (TacticalBattle::exec_attack, FIGHTER_FLYING §4.11 B 1 / B 3): a fighter's move
+                // names the target as its object block; in range nobody moves and the formation is still replaced.
+                const objects::ObjectId fobj = is_fighter(u->id) ? t->id : objects::kNoObjectId;
                 if (d > 0.8f * range) {
                     const float k = (d - 0.7f * range) / d;
-                    move_unit(u->id, up.x + dx * k, up.y + dy * k);
+                    move_unit(u->id, up.x + dx * k, up.y + dy * k, mv::kThreatOff, 0, fobj);
+                } else if (fobj != objects::kNoObjectId && !b_->movement_locked(u->id)) {
+                    mv::MoveOrder o;
+                    o.units = {u->id};
+                    const tactical::Aabb& gb = mode_->bounds();
+                    o.destination = {std::clamp(tp.x, gb.min.x, gb.max.x), std::clamp(tp.y, gb.min.y, gb.max.y)};
+                    o.goal_object = fobj;
+                    b_->movement_->fighter_new_order(o, b_->frame_);
                 }
             }
             return n ? R::None : R::InvalidUnit;
@@ -1140,7 +1170,13 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             const float tt = order == lua::LuaOrder::MoveTo && targ != 0u ? std::bit_cast<float>(targ) : mv::kThreatOff;
             if (tw != cmd::kNoObject && !point_goal) {  // a1h t02: an object goal (kind 3) is followed by the movement layer (§33.4)
                 const Vec3 tp = st.position(st.find(static_cast<objects::ObjectId>(tw)));
-                follow_add(group.units, static_cast<objects::ObjectId>(tw), tp.x, tp.y, tt);
+                // s78f t10: fighters given an object block follow it in their own formation (0x4192b0 steps 3 / 4,
+                // FIGHTER_FLYING §4.11); the follow's re-issued plain move would replace that block with a flags-0 position
+                // block (and drop its pushed auto blocks), so they stay out of the follow.
+                std::vector<objects::ObjectId> fu;
+                for (const objects::ObjectId id : group.units)
+                    if (fobj == objects::kNoObjectId || !is_fighter(id)) fu.push_back(id);
+                follow_add(fu, static_cast<objects::ObjectId>(tw), tp.x, tp.y, tt);
             }
             // refixf t02 / t06 (MOVEMENT §6.3 [H]): Lua Attack_Move / Move_To on a task force build one parameter block and ONE
             // coordinator for all its units, so the formation slots and the destination reservations (§2.4 step 4) give each
@@ -1149,9 +1185,11 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             if (group.units.size() == 1) {  // a single unit: unchanged path
                 if (order != lua::LuaOrder::AttackMove) b_->combat_->clear_order(u->id);
                 if (!b_->movement_locked(u->id)) b_->fighter_order(group.units, fflags, Vec3{x, y, 0.0f}, fobj);
-                return move_unit(u->id, x, y, tt) ? R::None : R::InvalidUnit;
+                return move_unit(u->id, x, y, tt, fflags, fobj) ? R::None : R::InvalidUnit;  // s78f t10: the same block
             }
             group.threat_threshold = tt;
+            group.flags = fflags;  // s78f t10: the movement block = the host record's (flags, object)
+            group.goal_object = fobj == objects::kNoObjectId ? -1 : fobj;
             const tactical::Aabb& gb = mode_->bounds();
             group.destination = {std::clamp(x, gb.min.x, gb.max.x), std::clamp(y, gb.min.y, gb.max.y)};
             b_->drop_locked(group.units);  // OI follow-up t03: locked members keep their order [M: group-move reading]
@@ -1539,6 +1577,12 @@ std::vector<at::OpportunityTargetEvent> BattleAi::opportunity_targets() {
         }
     }
     opp_prev_ = std::move(now);  // ascending (units ascending id, hard points ascending)
+    return out;
+}
+
+std::vector<at::AttackStateSignal> BattleAi::attack_state_signals() {
+    std::vector<at::AttackStateSignal> out;
+    for (const tc::AttackStateEvent& e : b_->combat_->attack_state_events()) out.push_back({e.unit, e.target});
     return out;
 }
 

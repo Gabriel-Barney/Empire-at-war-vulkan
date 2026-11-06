@@ -612,30 +612,70 @@ std::span<const detail::ImplEntry> detail::impl_script_gaps() { return kImpl; }
 
 // ---------------------------------------------------------------- §1.4 / §1.5 task-force variants
 
+namespace {
+
+// LandTaskForce.Fire_Special_Weapon(type_name, target) 0x6eb7f0 (AI_TACTICAL §7.3.4, s78f t04) [H unless tagged]. No
+// block status. Exactly 2 arguments. type_name: a Lua string naming a type with LOBBING_SUPERWEAPON in its Land behaviour
+// set. target: an AITargetLocationWrapper (point = the location's position: a unit target's object position [M: its
+// getter], a region target's stored centre - accepted without an object) or a GameObjectWrapper (the raw position, no
+// Ranged_Target_Z_Adjust); anything else, a plain position included, is an error. Then the FIRST task-force unit (list
+// order) whose representative type (0x3973b0) is the type, that has LOBBING_SUPERWEAPON and whose readiness is >= 1.0
+// gets Fire_Lobbing_At_Position(point) (stored as given), the owner's destroy-after sweep runs and the unit is returned
+// - even when 0x4ea3f0 silently refused the order (no tactical player data, Requires_Base_Power without base power):
+// later units are not tried. No ready unit: false. Errors / warnings return nothing.
+int land_task_force_fire_special_weapon(Call& c, const char* kName, const std::vector<ObjectHandle>& units) {
+    objects::ObjectStore* st = store(c);
+    const objects::GameObjectTypes* ty = types(c);
+    TacticalScriptHooks* hk = hooks(c);
+    if (c.nargs != 2) return script_error(c, "%s -- invalid number of parameters: expected 2 got %d", kName, c.nargs);
+    if (!c.is_string(1)) return script_error(c, "%s -- invalid type for parameter 1. Expected string", kName);
+    const std::string name(c.string(1));
+    const TypeIndex t = ty ? ty->raw().find(name) : objects::kNone;
+    // 0x370320(type, 0x37, 1): the Land behaviour set only (a type with it in <Behavior> alone is refused).
+    const bool lobbing = t != objects::kNone && t < ty->size() && ty->has_behavior(t, objects::BehaviorSet::Land, kBehLobbing);
+    if (!lobbing) return script_error(c, "%s -- %s is not a land special weapon!", kName, name.c_str());
+    Vec3 point;
+    if (const Ud* a = c.userdata(2, cls_target())) {
+        AiScriptHost* ai = c.vm->owner ? ai_host(*c.vm->owner) : nullptr;
+        const ObjectHandle h = ai && ai->target_valid(a->id) ? ai->target_object(a->id) : ObjectHandle{};
+        if (h && st->alive(h)) {
+            point = st->position(h);  // [M] the unit target's position getter (vf +0x68): the object's position
+        } else if (!(ai && ai->target_valid(a->id) && ai->target_position(a->id, point))) {
+            return script_warning(c, "%s -- target is already dead.  Aborting.", kName);
+        }
+    } else if (const Ud* o = c.userdata(2, detail::cls_game_object())) {
+        if (!detail::object_alive(*c.vm, *o)) return script_warning(c, "%s -- target is already dead.  Aborting.", kName);
+        point = st->position(detail::object_handle(*o));
+    } else {
+        return script_error(c, "%s -- Invalid type for parameter 1.  Expected game object or target location", kName);
+    }
+    const ObjectBridge* b = bridge(c);
+    for (const ObjectHandle u : units) {
+        if (!st->alive(u) || !st->has_behavior(u, kBehLobbing) || readiness(hk, u) < 1.0f) continue;
+        TypeIndex rep = b && b->representative_type ? b->representative_type(u) : objects::kNone;
+        if (rep == objects::kNone) rep = st->type(u);
+        if (rep != t) continue;
+        if (hk && hk->fire_lobbing_at) (void)hk->fire_lobbing_at(u, point);  // the result is not checked
+        destroy_after_sweep(c, st->owner(u));
+        detail::push_object(c.L, *c.vm, u);
+        return 1;
+    }
+    return push_bool(c, false);
+}
+
+}  // namespace
+
 int detail::task_force_fire_special_weapon(Call& c, bool space, const std::vector<ObjectHandle>& units, int32_t player) {
     const char* kName = space ? "SpaceTaskForceClass::Fire_Special_Weapon" : "LandTaskForceClass::Fire_Special_Weapon";
     objects::ObjectStore* st = store(c);
     if (!st) return push_bool(c, false);
-    std::string name;
-    const TypeIndex t = type_arg(c, 1, name);
     const objects::GameObjectTypes* ty = types(c);
     TacticalScriptHooks* hk = hooks(c);
+    if (!space) return land_task_force_fire_special_weapon(c, kName, units);
+    std::string name;
+    const TypeIndex t = type_arg(c, 1, name);
     ObjectHandle target;
-    const TargetArg ta = target_arg(c, 2, target);
-    if (!space) {
-        if (t == objects::kNone || !type_has(c, t, kBehLobbing)) return script_error(c, "%s -- %s is not a land special weapon", kName, name.c_str());
-        if (ta == TargetArg::Dead) return script_warning(c, "%s -- target is already dead", kName);
-        if (!target) return script_error(c, "%s -- invalid target", kName);  // [port] an AI target without object: no position
-        const Vec3 pos = st->position(target);
-        for (const ObjectHandle u : units) {
-            if (!st->alive(u) || st->type(u) != t || !st->has_behavior(u, kBehLobbing) || readiness(hk, u) < 1.0f) continue;
-            if (!(hk && hk->fire_lobbing_at && hk->fire_lobbing_at(u, pos))) continue;  // [M] refused: try the next one
-            destroy_after_sweep(c, st->owner(u));
-            detail::push_object(c.L, *c.vm, u);
-            return 1;
-        }
-        return push_bool(c, false);
-    }
+    (void)target_arg(c, 2, target);
     if (t == objects::kNone || !ty || t >= ty->size() || !ty->get_bool(t, "Is_Special_Weapon_In_Space"))
         return script_error(c, "%s -- %s is not a space special weapon", kName, name.c_str());
     if (!target) return script_error(c, "%s -- Expected game object", kName);

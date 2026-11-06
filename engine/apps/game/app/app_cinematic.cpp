@@ -118,6 +118,25 @@ void App::cinematic_step() {
     cine_.clock = cine_.shot.clock(b->frame());
 }
 
+// story t13: after the frame's Lua ops (lua_presentation) - the hand-over timer on the battle frame, the scripts' lock
+// (Lock_Controls on, cinematic camera or mode on) for the P11 block, the bars' slide. No battle: nothing held.
+void App::linked_ui_step() {
+    const sim::TacticalBattle* b = session_ ? session_->battle() : nullptr;
+    if (!b) {
+        linked_ui_.reset();
+        return;
+    }
+    bool locked = false;
+#ifdef ALAMO_SIM_HAVE_STORY
+    if (sim::StorySession* story = session_->host().story())
+        if (const lua::PresentationLog* log = story->presentation()) {
+            const lua::PresentationState& ps = log->state();
+            locked = ps.controls_locked || ps.cinematic_mode || ps.camera == lua::CameraMode::Cinematic;
+        }
+#endif
+    linked_ui_.update(b->frame(), locked, dt_);
+}
+
 // 0x2cc3e0 (no GUI dialog has the focus): the controller is offered the mouse events before the HUD and the world and
 // consumes them. A move within 1/20 of the screen of the cursor at Fire is swallowed; a larger one or any button / wheel
 // event ends the shot at once. [M] the event codes 2, 4, 5, 7, 8, 10, 12 = button / wheel events. Keys are not consumed.
@@ -167,11 +186,13 @@ bool App::cinematic_camera(ui::CameraParams& cp) {
 }
 
 // The letterbox bar overlay (0x140a28c10 [M]): two black bars, each Camera_FX_Manager_Letterbox_Height x level of the
-// screen height, over the world and under the dialogs.
+// screen height, over the world and under the dialogs. story t13: the level is the higher of the TSW shot's bars and the
+// linked-battle / story-script bars (LinkedBattleOverlay).
 void App::draw_letterbox(ui::HudDrawList& dl, const ui::HudCanvas& canvas, uint32_t w, uint32_t h) const {
-    if (!cine_.letterbox.visible()) return;
+    const float level = std::max(cine_.letterbox.level(), linked_ui_.letterbox_level());
+    if (!(level > 0.0f)) return;
     const float fw = static_cast<float>(w), fh = static_cast<float>(h);
-    const float bar = std::clamp(cine_.letterbox_height, 0.0f, 0.5f) * cine_.letterbox.level() * fh;
+    const float bar = std::clamp(cine_.letterbox_height, 0.0f, 0.5f) * level * fh;
     if (!(bar > 0.0f)) return;
     ui::HudQuad top, bottom;
     top.min = canvas.pixel_to_canvas(0.0f, bar);

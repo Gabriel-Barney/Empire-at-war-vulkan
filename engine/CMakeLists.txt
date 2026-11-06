@@ -81,7 +81,7 @@ function(alamo_label_slow)
   endforeach()
 endfunction()
 
-# Worker-count check (OPT3 t07; docs/PHASE4.md "Worker-count check"): one scenario at 0 / 1 / 4 / 16 workers and the
+# Worker-count check (OPT3 t07; docs/BUILD.md "Worker-count check"): one scenario at 0 / 1 / 4 / 16 workers and the
 # machine default (hardware threads - 1), per-tick CRCs compared. One ctest entry per count so a long run's counts go side
 # by side under ctest -j: <name> runs `--workers 0 --crc-out <bin>/<name>_w0.crc` (FIXTURES_SETUP <name>_w0) and
 # <name>_w<N> runs `--workers N --golden <that file>` (FIXTURES_REQUIRED <name>_w0). The command must accept

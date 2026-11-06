@@ -678,6 +678,10 @@ public:
             types_[static_cast<size_t>(i)].under_construction = i == tTurret;  // A2 tactical: a pad structure
             types_[static_cast<size_t>(i)].tactical_cost = i == tTurret ? 150.0f : 0.0f;
         }
+        // A2g t06: Build_Time_Seconds (+0x890) as powers of two, so a goal's nominal time (64 a + 8 b + c) is exact.
+        types_[tFrigate].build_time_seconds = 64;
+        types_[tCorvette].build_time_seconds = 8;
+        types_[tTurret].build_time_seconds = 1;
         contrast_ = make_contrast();
     }
     static uint64_t category(const char* n) {
@@ -1267,6 +1271,8 @@ struct RunResult {
 // landings (kPlanLanding); 9: a1k t01 re-plan / Collect_All_Free_Units / priority-set lifetime (kPlanCollect, kPlanReplan).
 // `hook` runs after each AI frame (the host's next tick sees what it changed).
 using RunHook = std::function<void(int32_t frame, MockHost& host, TacticalAiWorld& world)>;
+// A2g t06: when set, run() uses these DifficultyAdjustments instead of its Easy_Default / Normal_Default pair.
+const std::vector<TacticalAiDifficulty>* g_difficulties = nullptr;
 // The SynType object types for the store (variant 7: Syn_Corvette lists SPRINT in Unit_Abilities_Data).
 bool g_hero_frigate = false;  // S7 t26: Syn_Frigate is Is_Named_Hero (test_no_units_remaining_heroes)
 bool g_original_timing = false;  // a1k t01: TacticalAiConfig::stagger / pp_streams off (the original's planning timing)
@@ -1348,6 +1354,7 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     cfg.mode = g_land ? TacticalMode::Land : TacticalMode::Space;
     cfg.players = {{0, "SynEmpire", difficulty0}, {1, "SynRebel", 1}};
     cfg.difficulties = {{"Easy_Default", 15.0f, 15.0f, 0.67f, 0.75f}, {"Normal_Default", 0.0f, 0.0f, 1.0f, 1.0f}};
+    if (g_difficulties) cfg.difficulties = *g_difficulties;  // A2g t06
     lua::LuaPlayerSetup a, b;
     a.faction = "Empire";
     a.ai = true;
@@ -1813,6 +1820,115 @@ void test_potential_plan() {
         CHECK(b == std::vector<int32_t>{2});
     }
     std::printf("tactical potential plan: OK\n");
+}
+
+// A2g t06: the AllowedTime base of tactical goals with a PotentialPlan (0x6c0450 in a tactical mode): the sum of the
+// selection's btime(T, none) (Build_Time_Seconds x Production_Speed_Factor, truncated) x Land_ / Space_Build_Time_Multiplier
+// of the player's difficulty adjustment, 1.0 without one; AllowedTime = that x Build_Time_Delay_Tolerance.
+struct NominalSample {
+    uint32_t serial = 0, type = 0;
+    float nominal = 0.0f, allowed = 0.0f;
+    bool pp = false;
+};
+std::vector<NominalSample> nominal_run(const std::vector<TacticalAiDifficulty>& diffs, RunResult& out) {
+    std::vector<NominalSample> s;
+    g_difficulties = &diffs;
+    out = run(30 * 60, 1, 0, nullptr, false, [&s](int32_t, MockHost&, TacticalAiWorld& world) {
+        const AiContext* c = world.context(0);
+        if (!c) return;
+        for (const std::vector<Goal>& cat : c->goals.active())
+            for (const Goal& g : cat)
+                s.push_back({g.serial, g.type, g.nominal_time, c->goals.allowed_time(g), g.pp_valid && g.plan != kAiNone});
+    });
+    g_difficulties = nullptr;
+    return s;
+}
+
+void test_nominal_allowed_time() {
+    // 1. The multiplier lookup (0x4b0500 field by mode) and the selection sum.
+    {
+        std::vector<TacticalAiDifficulty> d(2);
+        d[0].name = "Easy_Default";
+        d[0].land_build_time = 1.5f;
+        d[0].space_build_time = 1.25f;
+        d[1].name = "Hard_Default";
+        d[1].land_build_time = 0.9f;
+        d[1].space_build_time = 0.8f;
+        CHECK(tactical_build_time_multiplier(d, "easy_default", TacticalMode::Land) == 1.5f);  // names case-insensitive
+        CHECK(tactical_build_time_multiplier(d, "Easy_Default", TacticalMode::Space) == 1.25f);
+        CHECK(tactical_build_time_multiplier(d, "Hard_Default", TacticalMode::Land) == 0.9f);
+        CHECK(tactical_build_time_multiplier(d, "Hard_Default", TacticalMode::Space) == 0.8f);
+        CHECK(tactical_build_time_multiplier(d, "Normal_Default", TacticalMode::Land) == 1.0f);  // no entry: all-1.0
+        CHECK(tactical_build_time_multiplier({}, "Easy_Default", TacticalMode::Space) == 1.0f);
+        std::vector<PerceptionType> types(3);
+        types[0].build_time_seconds = 40;
+        types[1].build_time_seconds = 15;
+        types[2].build_time_seconds = 10;
+        std::vector<TacticalPpPick> picks(4);
+        picks[0].type = 0;
+        picks[0].source = PpSource::FreeStore;  // free-store entries count too
+        picks[1].type = 1;
+        picks[1].source = PpSource::Reinforcement;
+        picks[2].type = 2;
+        picks[2].source = PpSource::Build;
+        picks[3].type = 7;  // out of range: adds 0 [port]
+        CHECK(tactical_nominal_time(picks, types, 1.0f, 1.0f) == 65.0f);
+        CHECK(tactical_nominal_time(picks, types, 1.0f, 1.5f) == 97.5f);
+        CHECK(tactical_nominal_time(picks, types, 0.5f, 1.0f) == 32.0f);  // T0 truncated per type: 20 + 7 + 5
+        CHECK(tactical_nominal_time({}, types, 1.0f, 1.5f) == 0.0f);
+    }
+    // 2. DifficultyAdjustments.xml: Land_ / Space_Build_Time_Multiplier, 1.0 when absent.
+    {
+        MemoryFiles f;
+        f.add("Data\\XML\\DifficultyAdjustments.xml",
+              "<DifficultyAdjustments><DifficultyAdjustment Name=\"Easy_Default\"><Land_Build_Time_Multiplier>1.5</Land_Build_Time_Multiplier>"
+              "<Space_Build_Time_Multiplier>1.25</Space_Build_Time_Multiplier></DifficultyAdjustment>"
+              "<DifficultyAdjustment Name=\"Normal_Default\"><Land_AI_Contrast_Multiplier>1.0</Land_AI_Contrast_Multiplier></DifficultyAdjustment>"
+              "</DifficultyAdjustments>");
+        const std::vector<TacticalAiDifficulty> d = load_tactical_ai_difficulties(f);
+        CHECK(d.size() == 2);
+        if (d.size() == 2) {
+            CHECK(d[0].name == "Easy_Default" && d[0].land_build_time == 1.5f && d[0].space_build_time == 1.25f);
+            CHECK(d[1].name == "Normal_Default" && d[1].land_build_time == 1.0f && d[1].space_build_time == 1.0f);
+        }
+    }
+    // 3. The world, land and space: player 0 (Normal) with Normal_Default's multipliers 1.5 (land) / 1.25 (space) against
+    //    a run whose adjustments have no Normal_Default (the all-1.0 one). Tactical goals carry ETA 0, so the decisions
+    //    and orders are the same; every goal with a PP has nominal time (64 a + 8 b + c) x the multiplier, and
+    //    AllowedTime = nominal time (the synthetic goals' Build_Time_Delay_Tolerance is 1).
+    for (const bool land : {false, true}) {
+        g_land = land;
+        const float m = land ? 1.5f : 1.25f;
+        std::vector<TacticalAiDifficulty> scaled(1), none(1);
+        scaled[0].name = "Normal_Default";
+        scaled[0].land_build_time = 1.5f;
+        scaled[0].space_build_time = 1.25f;
+        none[0].name = "Other_Default";
+        none[0].land_build_time = none[0].space_build_time = 3.0f;  // not the player's: unused
+        RunResult ra, rb;
+        const std::vector<NominalSample> a = nominal_run(scaled, ra);
+        const std::vector<NominalSample> b = nominal_run(none, rb);
+        g_land = false;
+        CHECK(ra.decisions == rb.decisions && ra.executed == rb.executed);
+        CHECK(a.size() == b.size());
+        size_t with_pp = 0, bad = 0;
+        float first = 0.0f;
+        for (size_t i = 0; i < a.size() && i < b.size(); ++i) {
+            if (a[i].serial != b[i].serial || a[i].type != b[i].type || a[i].pp != b[i].pp) {
+                ++bad;
+                continue;
+            }
+            if (!a[i].pp) continue;
+            ++with_pp;
+            if (first == 0.0f) first = b[i].nominal;
+            if (!(b[i].nominal >= 1.0f && std::floor(b[i].nominal) == b[i].nominal)) ++bad;  // a sum of 64 / 8 / 1
+            if (a[i].nominal != b[i].nominal * m) ++bad;
+            if (a[i].allowed != a[i].nominal || b[i].allowed != b[i].nominal) ++bad;
+        }
+        std::printf("nominal allowed time (%s): %zu goal samples, %zu with a PP (first %.0f s, x %.2f), %zu mismatches\n",
+                    land ? "land" : "space", a.size(), with_pp, static_cast<double>(first), static_cast<double>(m), bad);
+        CHECK(with_pp > 0 && bad == 0);
+    }
 }
 
 void test_skirmish() {
@@ -3005,6 +3121,7 @@ int main(int argc, char** argv) {
     test_potential_plan();
     test_mod_category_enum();  // q6 t03
     test_space_layer_categories();  // q6 t03
+    test_nominal_allowed_time();  // A2g t06
     test_skirmish();
     test_battle_budget();  // q6 (AI_GALACTIC_TOKENS 9.3)
     test_opportunity_and_hijack();

@@ -183,10 +183,11 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
     // OI follow-up t03 (A1_READINGS Â§28.9): the script's shares of the movement lock (Lock_Current_Orders, a Divert).
     // a1i t04: + the unload exit path of a landing object's unloaded units (Â§35.2, the locomotor's forced-move term).
     h.movement_locked = [this](tc::ObjectId id) { return script_movement_locked(id) || landing_locked(id); };
-    // S8 t06 (LOB_SOLVER Â§3.5): Remote_Bomb range tests against a garrisoned target's host. S8 t10 (Â§5.1): the host's gun
-    // bones of its current ALT entry (Num_Garrison_Guns FP_0<i>_ALT<a>, CombatSystem::garrison_fire_bones).
+    // S8 t06 (LOB_SOLVER §3.5): Remote_Bomb range tests against a garrisoned target's host. S8 t10 (§5.1): the host's gun
+    // bones of its current ALT entry (Num_Garrison_Guns FP_0<i>_ALT<a>, CombatSystem::garrison_fire_bones; s78f t03: world
+    // position and x-axis yaw of the current pose).
     h.garrison_holder = [this](tc::ObjectId id) -> tc::ObjectId { return garrison_holder_of(id); };
-    h.garrison_fire_bones = [this](tc::ObjectId holder, tactical::Vec3& holder_pos, std::vector<tactical::Vec3>& bones) {
+    h.garrison_fire_bones = [this](tc::ObjectId holder, tactical::Vec3& holder_pos, std::vector<tc::GarrisonFireBone>& bones) {
         return combat_ && combat_->garrison_fire_bones(holder, holder_pos, bones);
     };
     // S8 t11 (MOVEMENT Â§3.2): DEPLOY drives the Walk locomotor's deploy states; oi_deploy_sync reports the changes back.
@@ -198,6 +199,19 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
     // S8 t10 (LOB_SOLVER Â§3.5 "Facing at apply"): the thrown abilities snap the movement yaw (the combat facing follows).
     h.snap_yaw = [this](tc::ObjectId id, float yaw_deg) {
         if (movement_) movement_->snap_yaw(id, yaw_deg);
+    };
+    // s78l t05 (TACTICAL_COMBAT §5.4.1): Tactical_Bribe pays from the player's credits (the battle's credit hooks: the
+    // galactic account in campaign battles; unset hooks = 0 credits, so a bribe with a cost fails) and reads the battle
+    // planet's corruption (GalacticSim::corrupted of the request's planet; no planet = uncorrupted).
+    h.pay_credits = [this](int32_t player, float cost) {
+        const float have = credits_get_ ? credits_get_(player) : 0.0f;
+        if (have < cost) return false;
+        if (cost > 0.0f && credits_add_) credits_add_(player, -cost);
+        return true;
+    };
+    h.battle_planet_corrupted = [this]() {
+        const auto p = req_.info.planet;
+        return galaxy_ && p != kInvalidPlanet && static_cast<size_t>(p) < galaxy_->planets().size() && galaxy_->corrupted(p);
     };
     hg_ability_host(h);  // hangars: DEPLOY_SQUAD gate / handler (HangarSystem::deploy_ready / deploy_squad)
     abilities_->set_host(std::move(h));
@@ -452,6 +466,13 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
             case ta::AbilityEventKind::OwnerChanged: {  // Hack / Tactical_Bribe / convert: store, trees, movement, fog
                 const objects::ObjectHandle h = store.find(e.id);
                 if (store.alive(h) && store.owner(h) != e.value) change_owner(mode, h, e.value);
+                // s78k t04 (TACTICAL_COMBAT §3.5 "Convert and its team rule" steps 4-5, 0x38e5a0): Change_Owner spreads
+                // through the team, so the TEAM container follows its member - the store owner (not a combat unit, so
+                // CombatSystem's convert spread raises no event for it) and Container::owner (loss records, replenish) -
+                // and every other live member not changed yet ([port] container, then ascending id: the notification
+                // order). Convert raises one event per member (each finds the team done); Hack / Bribe raise the object
+                // and its container. A non-team object has no container: nothing more.
+                if (store.alive(h) && store.owner(h) == e.value) team_change_owner(mode, e.id, e.value);
                 break;
             }
             default: break;

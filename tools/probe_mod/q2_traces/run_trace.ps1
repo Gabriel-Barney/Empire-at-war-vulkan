@@ -1,10 +1,13 @@
 <#
 Q2 reference traces: one recorded run of the original game (FoC Steam x64 1.121).
 
-  run_trace.ps1 -Scenario galactic|skirmish [options]
+  run_trace.ps1 -Scenario galactic|skirmish|story [options]
 
   -Scenario galactic   Galactic Conquest "Heart of the Maw", Empire, hands-off; stops after -Days fiscal cycles
   -Scenario skirmish   space skirmish, hands-off; stops after -Ticks logic ticks
+  -Scenario story      story t04: the first tactical mission of a story campaign (a child mode of the galaxy, picked by
+                       hand: -NoDrive), hands-off; the trace starts with the battle and stops when it ends (complete)
+                       or after -Ticks logic ticks
   -Mod vanilla|tr      vanilla FoC (default) or Thrawn's Revenge (STEAMMOD=1125571106); -ModArg overrides
   -LuaProbe            also install the Lua probe (vanilla only; mod folder Mods\Q2Trace): galactic = story plot script,
                        skirmish = the game's GameScoring.lua with a read-only tactical probe appended. Its records are
@@ -28,7 +31,7 @@ Exit codes: 0 complete trace, 10 partial trace (stopped early: see reason), 20 p
 changed), 30 no trace (reader failed / no session), 40 cleanup left something (see cleanup.log).
 #>
 param(
-    [ValidateSet('galactic', 'skirmish')][string]$Scenario = 'galactic',
+    [ValidateSet('galactic', 'skirmish', 'story')][string]$Scenario = 'galactic',
     [ValidateSet('vanilla', 'tr', 'custom')][string]$Mod = 'vanilla',
     [string]$ModArg = '',
     [switch]$LuaProbe,
@@ -70,6 +73,7 @@ if (-not $NoLaunch -and -not (Get-Process -Name steam -ErrorAction SilentlyConti
 if ($LuaProbe -and $Mod -ne 'vanilla') { Fail 20 '-LuaProbe is for vanilla runs only' }
 $useDriver = (($NonInteractive -or $Drive) -and -not $NoDrive -and -not $NoLaunch)
 if ($useDriver -and $Mod -ne 'vanilla') { Fail 20 'the menu driver knows the vanilla menus only: use -NoDrive with -Mod' }
+if ($useDriver -and $Scenario -eq 'story') { Fail 20 'the menu driver has no story campaign steps: use -NoDrive (run_story.cmd)' }
 $folderBefore = Get-Q2GameFolderState $root
 if (-not (Test-Path -LiteralPath $Q2Python)) { Fail 20 "project Python missing: $Q2Python (toolchain\2_setup.cmd)" }
 $reader = Join-Path $Q2Bin 'q2reader.exe'
@@ -113,6 +117,8 @@ $readerArgs = @('--out', $trace, '--status', $readerStatus, '--dump', (Join-Path
                 '--meta', "game_folder=$($folderBefore.summary)", '--meta', "menu_driver=$([int][bool]$useDriver)")
 if ($Scenario -eq 'galactic') {
     $readerArgs += @('--days', $Days, '--day-frames', $dayFrames, '--meta', 'campaign=Sandbox_Heart_Of_The_Maw_Empire')
+} elseif ($Scenario -eq 'story') {
+    $readerArgs += @('--ticks', $Ticks, '--pause-stop-sec', 100000, '--meta', 'story=first tactical mission of a story campaign (by hand)')
 } else {
     $readerArgs += @('--ticks', $Ticks, '--meta', 'skirmish=space 2 players, human Empire idle vs AI Rebel Medium')
 }

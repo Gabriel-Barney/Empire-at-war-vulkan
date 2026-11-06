@@ -5,9 +5,13 @@
 // writes sim state, draws random numbers or changes anything a sim CRC hashes.
 // Argument contracts and messages: docs/re/LUA_API.md "Binding map" (the original's own strings).
 // Behaviour the docs do not give is marked [inferred].
+// Exception (story t12): Resume_Hyperspace_In also clears the host's reinforcement hold through
+// TacticalScriptHooks::resume_hyperspace_in (script_gaps.hpp) when a tactical host installed it.
 #include <string>
 
+#include "alamo/lua/object_bridge.hpp"
 #include "alamo/lua/presentation.hpp"
+#include "alamo/lua/script_gaps.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "vm_internal.hpp"
 
@@ -590,6 +594,8 @@ int m_in_end_cinematic(Call& c) {
 
 int g_resume_hyperspace_in(Call& c) {
     record(c, PresentationOp::ResumeHyperspaceIn);
+    if (ObjectBridge* b = c.vm->owner ? attached_object_bridge(*c.vm->owner) : nullptr; b && b->tactical && b->tactical->resume_hyperspace_in)
+        b->tactical->resume_hyperspace_in();  // story t12
     return 0;
 }
 

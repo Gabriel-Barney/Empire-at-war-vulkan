@@ -172,7 +172,7 @@ function OIP_WhereNear(obj, dx, dy)
 	return obj, "obj"
 end
 
-function OIP_Spawn(tag, tname, where, how, player)
+function OIP_Spawn(tag, tname, where, how, player, generic)
 	local s = OIP_CUR
 	local t = OIP_Try("Find_Object_Type:" .. tname, function() return Find_Object_Type(tname) end)
 	if t == nil or where == nil then
@@ -180,7 +180,19 @@ function OIP_Spawn(tag, tname, where, how, player)
 			((t == nil) and "no_type" or "no_position"))
 		return nil
 	end
-	local r = OIP_Try("Spawn_Unit:" .. tname, function() return Spawn_Unit(t, where, player) end)
+	local r = nil
+	if generic then
+		-- Create_Generic_Object places at the position; Spawn_Unit moves land units off water cells (retail 2026-11-04)
+		r = OIP_Try("Create_Generic_Object:" .. tname, function() return Create_Generic_Object(t, where, player) end)
+		if OIP_Valid(r) then
+			how = how .. "+generic"
+		else
+			r = nil
+		end
+	end
+	if r == nil then
+		r = OIP_Try("Spawn_Unit:" .. tname, function() return Spawn_Unit(t, where, player) end)
+	end
 	local obj = r
 	if type(r) == "table" and r[1] ~= nil then
 		obj = r[1]
@@ -356,11 +368,27 @@ end
 -- each, in order of readiness. Attackers belong to the probe's AI player (invulnerable, kept from AI use); victims to
 -- Hostile (no fire, held in place unless they must move).
 
+-- MAL at its point: Spawn_Unit moves a land unit off water cells (retail run 2026-11-04: the "shallow" and "deep"
+-- MALs appeared on the shore, 88 and 80 units away), so the MAL (a Hover vehicle) is spawned, then driven onto the
+-- configured point. Han comes once it is there (or after 400 frames), within 120 of it: the stun blast is centred on
+-- Han with Projectile_Stun_Radius 150 (the 2026-11-04 land Han stood 180 away and missed).
+function OIP_MalDist2(s, mal)
+	local p = OIP_CFG.pts[mal]
+	local x, y = OIP_XYZ(s.objs.mal)
+	if p == nil or type(x) ~= "number" or type(y) ~= "number" then
+		return nil
+	end
+	return (x - p.x) * (x - p.x) + (y - p.y) * (y - p.y)
+end
+
 function OIP_MalScenario(kind)
 	local mal, han = "mal_" .. kind, "han_" .. kind
+	local function after(k)
+		return function(s) return s.han_at and OIP_Frame() >= s.han_at + k end
+	end
 	return {
 		name = "MAL_" .. string.upper(kind),
-		dur = 900,
+		dur = 1300,
 		abilities = { han = "AREA_EFFECT_STUN" },
 		argkinds = { han = { "position", "object", "none", "bool" } },
 		proj = "Proj_Special_Han_Solo_Stun_Blast",
@@ -368,14 +396,34 @@ function OIP_MalScenario(kind)
 		steps = {
 			{ at = 0, run = function(s)
 				local w, how = OIP_Where(mal, 0, 0)
-				local m = OIP_Spawn("mal", "MAL_Rocket_Vehicle", w, how, OIP_VICTIM_PLAYER)
+				local m = OIP_Spawn("mal", "MAL_Rocket_Vehicle", w, how, OIP_VICTIM_PLAYER, true)
 				OIP_Victim("mal", m, false)
 				local d = OIP_CFG.pts[mal]
 				OIP_Rec("WATER", "scn=" .. s.name .. "|depth_cfg=" .. OIP_Num(d and d.depth, "%.2f") ..
 					"|water_height=" .. OIP_Num(OIP_CFG.water_height, "%.2f"))
 			end },
 			{ at = 3, run = function(s)
+				local d2 = OIP_MalDist2(s, mal)
+				if d2 ~= nil and d2 > 225 then
+					local w = OIP_Where(mal, 0, 0)
+					OIP_Order("mal", "drive_to_point", function() s.objs.mal.Move_To(w) end)
+				end
+			end },
+			{ at = 6, when = function(s)
+				if OIP_Frame() >= s.f0 + 400 then
+					return true
+				end
+				local d2 = OIP_MalDist2(s, mal)
+				return d2 ~= nil and d2 <= 225
+			end, run = function(s)
+				local x, y, z = OIP_XYZ(s.objs.mal)
+				OIP_Rec("MALPOS", "scn=" .. s.name .. "|dist2=" .. OIP_Num(OIP_MalDist2(s, mal), "%.0f") .. "|x=" ..
+					OIP_Num(x, "%.1f") .. "|y=" .. OIP_Num(y, "%.1f") .. "|z=" .. OIP_Num(z, "%.1f"))
 				local w, how = OIP_Where(han, 0, 0)
+				local p = OIP_CFG.pts[han]
+				if p == nil or type(x) ~= "number" or (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y) > 120 * 120 then
+					w, how = OIP_WhereNear(s.objs.mal, 60, 0)
+				end
 				local h = OIP_Spawn("han", "Han_Solo", w, how, PlayerObject)
 				if h == nil then
 					h = OIP_Spawn("han", "Han_Solo_Team", w, how, PlayerObject)
@@ -384,11 +432,12 @@ function OIP_MalScenario(kind)
 				if h then
 					OIP_Setup("han", h, { { "Prevent_All_Fire", true } })
 				end
+				s.han_at = OIP_Frame()
 			end },
-			{ at = 45, run = function(s) OIP_TryAct("han", "AREA_EFFECT_STUN", s.objs.mal, 1) end },
-			{ at = 75, run = function(s) OIP_TryAct("han", "AREA_EFFECT_STUN", s.objs.mal, 2) end },
-			{ at = 105, run = function(s) OIP_TryAct("han", "AREA_EFFECT_STUN", s.objs.mal, 3) end },
-			{ at = 135, run = function(s) OIP_TryAct("han", "AREA_EFFECT_STUN", s.objs.mal, 4) end },
+			{ when = after(42), run = function(s) OIP_TryAct("han", "AREA_EFFECT_STUN", s.objs.mal, 1) end },
+			{ when = after(72), run = function(s) OIP_TryAct("han", "AREA_EFFECT_STUN", s.objs.mal, 2) end },
+			{ when = after(102), run = function(s) OIP_TryAct("han", "AREA_EFFECT_STUN", s.objs.mal, 3) end },
+			{ when = after(132), run = function(s) OIP_TryAct("han", "AREA_EFFECT_STUN", s.objs.mal, 4) end },
 			-- a stunned unit cannot move: order the MAL toward Han after the stun and again after its end (600 frames)
 			{ when = function(s) return s.fired.han and OIP_Frame() >= s.fired.han + 30 end, run = function(s)
 				OIP_Order("mal", "move_to_han", function() s.objs.mal.Move_To(s.objs.han) end)
@@ -666,6 +715,16 @@ function OIP_FindVictimPlayer()
 	OIP_Rec("VICTIMS", "faction=" .. OIP_VICTIM_FAC .. "|id=" .. id)
 end
 
+OIP_ARM_PENDING = false
+OIP_ARM_TRIES = 0
+
+function OIP_ArmRetry()
+	if OIP_ARM_PENDING then
+		OIP_ARM_TRIES = OIP_ARM_TRIES + 1
+		pcall(OIP_Arm)
+	end
+end
+
 function OIP_Arm()
 	local fac = "?"
 	local mode = "?"
@@ -674,6 +733,13 @@ function OIP_Arm()
 	pcall(function() mode = tostring(Get_Game_Mode()) end)
 	pcall(function() pid = tostring(PlayerObject.Get_ID()) end)
 	OIP_ON = false
+	-- Base_Definitions runs at script load, before the engine sets PlayerObject (retail run 2026-11-04 recorded
+	-- SKIP pid=? fac=?). Undecided until the faction is readable: retried from the first service calls.
+	if fac == "?" and OIP_ARM_TRIES < 200 then
+		OIP_ARM_PENDING = true
+		return
+	end
+	OIP_ARM_PENDING = false
 	if fac == OIP_CFG.faction and mode == "Land" then
 		OIP_RUN = OIP_RUN + 1
 		OIP_ON = true
@@ -708,6 +774,7 @@ end
 
 OIP_Orig_FreeStoreService = FreeStoreService
 function FreeStoreService()
+	OIP_ArmRetry()
 	if OIP_ON then
 		pcall(OIP_Tick, "fss")
 		return
@@ -717,6 +784,7 @@ end
 
 OIP_Orig_On_Unit_Service = On_Unit_Service
 function On_Unit_Service(object)
+	OIP_ArmRetry()
 	if OIP_ON then
 		if OIP_ANCHOR == nil and OIP_Valid(object) then
 			OIP_ANCHOR = object

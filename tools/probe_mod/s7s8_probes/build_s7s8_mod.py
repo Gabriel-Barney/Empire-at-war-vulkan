@@ -71,7 +71,14 @@ MUZZLE_TYPES = ['Moldy_Crow', 'Moldy_Crow_Landing', 'Luke_Jedi_Xwing_Landing', '
                 'UM07_Cloud_City_Flyover', 'UM07_CloudCity_Refinery']
 ATTACKER_TYPES = ['SPMAT_WALKER', 'AT_AT_WALKER', 'DARK_TROOPER_PHASEIII', 'MZ8_PULSE_CANNON_TANK',
                   'REBEL_MOBILE_DEFENSE_UNIT', 'REBEL_INFILTRATOR', 'REBEL_X-WING_SQUADRON', 'X-WING',
-                  'STAR_DESTROYER'] + [t.upper() for t in MUZZLE_TYPES]
+                  'STAR_DESTROYER', 'GROUND_MAGNEPULSE_CANNON', 'SKIRMISH_GROUND_MAGNEPULSE_CANNON_E',
+                  'GARRISON_BUNKER_REBEL', 'UNDERWORLD_MERC', 'UNDERWORLD_MERC_TEAM', 'POD_WALKER',
+                  'TIE_FIGHTER_SQUADRON', 'TIE_FIGHTER', 'DARK_TROOPER_PHASEII', 'BROADSIDE_CLASS_CRUISER'] + \
+    [t.upper() for t in MUZZLE_TYPES]
+# Scenario order (s78f 2026-11-05: ATAT last; the first run's land script stopped right after it started). Override
+# with ALAMO_S78_LAND / ALAMO_S78_SPACE (comma-separated scenario names, s7s8_hook.lua S78_SCN_BY_NAME).
+LAND_LIST = ['SPMAT', 'IDLE47', 'MAGNEPULSE', 'MDU', 'DT3', 'REINF', 'MUZZLE_LAND', 'BUNKER', 'STICKY', 'ATAT']
+SPACE_LIST = ['MUZZLE_SPACE', 'SQUAD', 'ESCORT', 'GUARD_SHIFT']
 VICTIM_TYPES = ['T4B_TANK', 'TARTAN_PATROL_CRUISER']
 HUMAN_TYPES = ['UNDERWORLD_SABOTEUR', 'UNDERWORLD_SABOTEUR_TEAM']
 # Watched wherever they appear (no distance filter): the ground marker of a Remote_Bomb ground order and the bomb.
@@ -84,6 +91,16 @@ TEXTS = [
     ('TEXT_S78_HUMAN_GO', 'S7S8 PROBE: your Saboteur is here (camera). Do steps H1, H2, H3 of the README now.'),
     ('TEXT_S78_LAND_DONE', 'S7S8 PROBE: land scenarios done. Finish H1-H3 if needed, then Esc > Quit.'),
     ('TEXT_S78_SPACE_DONE', 'S7S8 PROBE: space scenarios done. Esc > Quit.'),
+    # s78g t02 (GUARD_HAND, space, orders by hand)
+    ('TEXT_S78_GUARD_FIND', 'S7S8 PROBE: click the CENTRE of the minimap. Your probe TIE squadron and a Broadside '
+                            'are there. Select ONLY the TIE squadron.'),
+    ('TEXT_S78_GUARD_GO', 'S7S8 PROBE: GUARD NOW. With the TIE squadron selected, right-click the moving Broadside.'),
+    ('TEXT_S78_SHIFT_GO', 'S7S8 PROBE: SHIFT WAYPOINT NOW. Keep the squadron selected; hold Shift and right-click '
+                          'empty space about a third of the screen away from the Broadside.'),
+    ('TEXT_S78_GUARD_GO2', 'S7S8 PROBE: GUARD AGAIN. Select the TIE squadron, right-click the Broadside.'),
+    ('TEXT_S78_SHIFT_GO2', 'S7S8 PROBE: SHIFT WAYPOINT AGAIN. Shift + right-click empty space away from the '
+                           'Broadside.'),
+    ('TEXT_S78_G_STOP', 'S7S8 PROBE: the Broadside stops now. Give no more orders.'),
 ]
 
 
@@ -350,7 +367,12 @@ def lua_config(cfg):
              '\tfaction = "%s",' % cfg['faction'],
              '\thuman_faction = "%s",' % cfg['human_faction'],
              '\tstart_frame = %d,' % cfg['start_frame'],
-             '\ttext = %s,' % ('true' if cfg.get('text') else 'false')]
+             '\ttext = %s,' % ('true' if cfg.get('text') else 'false'),
+             # s78h IDLE47Q: also despawn the human's mobile units (all but the Saboteur); ALAMO_S78_QUIET_HUMAN=0 = off
+             '\tquiet_human = %s,' % ('false' if os.environ.get('ALAMO_S78_QUIET_HUMAN', '1') == '0' else 'true')]
+    for key, env, dflt in (('land_list', 'ALAMO_S78_LAND', LAND_LIST), ('space_list', 'ALAMO_S78_SPACE', SPACE_LIST)):
+        names = [n.strip().upper() for n in os.environ.get(env, '').split(',') if n.strip()] or dflt
+        lines.append('\t%s = { %s },' % (key, ', '.join('"%s"' % n for n in names)))
     for mode in ('land', 'space'):
         m = cfg[mode]
         lines += ['\t%s = {' % mode, '\t\tmap = "%s",' % m['map'],

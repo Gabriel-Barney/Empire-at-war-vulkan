@@ -285,7 +285,7 @@ public:
     // TEAM container appends the members that join it. Unset: only the store tests.
     using SelectAllHook = std::function<bool(SimHost& host, uint8_t player, ObjectHandle h, std::vector<ObjectId>& members)>;
     void set_select_all_hook(SelectAllHook hook) { select_all_hook_ = std::move(hook); }
-    // Port-only events (PortExtension 63, e.g. the pause / resume entry of docs/PHASE4.md "Camera and controls") offered to
+    // Port-only events (PortExtension 63, e.g. the pause / resume entry of docs/DECISIONS.md "Camera and controls") offered to
     // the game host at the command phase in every mode, before the galactic / tactical handlers; Unhandled falls through.
     // P4 host: also offered every other event that no handler took (Unhandled after the galactic / tactical paths, e.g.
     // the auto-resolve dialog's Withdrawl 49); the hook's answer is then the command's result.

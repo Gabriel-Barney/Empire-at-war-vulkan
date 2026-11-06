@@ -10,10 +10,11 @@
 //   u32 relation count (0 or P x P) + u8 each
 //   planets (row order): bool is_planet + u32 type (checked against the session), then every other PlanetState field
 //         except the definition-derived position and links (visibility lists, income breakdown, both build queues,
-//         starbase / structures / surface handles, influence ids, orbit fleet indices, respawn list; v2: the persisted
+//         starbase / structures / surface handles, influence ids, orbit fleet indices, respawn list; v3: the persisted
 //         tactical built objects {u32 type, f32 x, y, z, i32 base level, i32 owner}, list order)
 //   u32 fleet count + every FleetState (dead ones too: fleet indices are stable references) incl. path and slots
-//   u32 + i32 stealthed ids; u32 + victory claims; u32 + pending S4 events (GalacticEvent, emission order)
+//   u32 + i32 stealthed ids; u32 + victory claims; (v2) i32 victory hold; u32 + pending S4 events (GalacticEvent,
+//   emission order)
 // Object references: a handle whose object exists (live or dead-not-flushed) is written as its ObjectId and resolved
 // with ObjectStore::find on read (the store is restored first; an unknown id fails the read). A handle that refers to
 // no object any more (stale, or null) is written as kNoObjectId + its raw value, which read keeps as the same stale
@@ -41,7 +42,8 @@ namespace alamo::galactic {
 
 namespace {
 
-constexpr uint32_t kGalacticSaveVersion = 2;  // v2: PlanetState::built_objects (AI_GALACTIC_TOKENS §9.4); v1 loads with none
+// v2 (story t11): + i32 victory hold; v3 (q6, AI_GALACTIC_TOKENS §9.4): + PlanetState::built_objects. Reads v1 / v2.
+constexpr uint32_t kGalacticSaveVersion = 3;
 constexpr uint32_t kConflictSaveVersion = 3;  // v2: BattleRequest::linked (story t10); v3: BattleRequest::sandbox (q6)
 
 // Element count, bounded by the bytes left (each element takes at least `min_bytes`), so corrupt counts never
@@ -195,7 +197,7 @@ void GalacticSim::write(ByteWriter& w) const {
         w.i32(p.sabotage_count);
         w.u32(static_cast<uint32_t>(p.respawns.size()));
         for (const RespawnEntry& e : p.respawns) w.i32(e.due).u32(e.type).i32(e.owner).u8(e.flag);
-        w.u32(static_cast<uint32_t>(p.built_objects.size()));  // v2
+        w.u32(static_cast<uint32_t>(p.built_objects.size()));  // v3
         for (const PersistedBuiltObject& b : p.built_objects) w.u32(b.type).f32(b.x).f32(b.y).f32(b.z).i32(b.base_level).i32(b.owner);
     }
 
@@ -222,6 +224,7 @@ void GalacticSim::write(ByteWriter& w) const {
     for (int32_t id : stealthed_) w.i32(id);
     w.u32(static_cast<uint32_t>(claims_.size()));
     for (const VictoryClaim& c : claims_) w.i32(c.player).u8(c.type).i32(c.frame).i32(c.countdown);
+    w.i32(victory_hold_);
     w.u32(static_cast<uint32_t>(events_.size()));
     for (const GalacticEvent& e : events_) {
         w.i32(e.frame).u8(static_cast<uint8_t>(e.kind)).i32(e.player).i32(e.other_player);
@@ -405,8 +408,8 @@ bool GalacticSim::read(ByteReader& r) {
             e.flag = r.u8();
             if (!r.ok() || e.type >= types || !player_ok(e.owner)) return false;
         }
-        p.built_objects.clear();  // v1: none
-        if (version >= 2) {
+        p.built_objects.clear();  // v1 / v2: none
+        if (version >= 3) {
             uint32_t nb = 0;
             if (!get_count(r, nb, 24)) return false;
             p.built_objects.resize(nb);
@@ -476,6 +479,8 @@ bool GalacticSim::read(ByteReader& r) {
         c.countdown = r.i32();
         if (!r.ok() || !player_ok(c.player)) return false;
     }
+    const int32_t hold = version >= 2 ? r.i32() : 0;
+    if (hold < 0) return false;
     uint32_t ne = 0;
     if (!get_count(r, ne, 37)) return false;
     std::vector<GalacticEvent> events(ne);
@@ -516,6 +521,7 @@ bool GalacticSim::read(ByteReader& r) {
     fleets_ = std::move(fleets);
     stealthed_ = std::move(stealthed);
     claims_ = std::move(claims);
+    victory_hold_ = hold;
     events_ = std::move(events);
     // Rebuilt caches: store slot -> fleet / planet (creation order, so a reused slot maps to the newest fleet as
     // create_fleet left it), the per-tick owner derivation scratch, the spawn payload latch.

@@ -1,6 +1,6 @@
 // OPT2 t02 - fixed-latency background jobs for AI work: start on tick N, apply the result on tick N + k.
 //
-// The pattern (docs/PHASE4.md "AI scheduling"): on the kick tick the sim thread copies everything the computation reads
+// The pattern (docs/PERFORMANCE.md "AI scheduling"): on the kick tick the sim thread copies everything the computation reads
 // (a plain snapshot) and starts the job; the result is applied on the tick the caller fixed at the kick (ready frame),
 // never earlier even when it finished early, and the sim thread blocks on that tick when it is late. So what the sim
 // sees depends on tick numbers only, never on the worker count or wall-clock time: rule 3 holds for any host.

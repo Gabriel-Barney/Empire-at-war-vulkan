@@ -1,6 +1,7 @@
 // alamo_headless --map: loads the game's object types and a .ted map through the VFS, spawns the
 // map into a tactical mode and runs the G0 host (engine/apps/sim), printing per-tick CRCs.
 #include "map_run.hpp"
+#include "crc_out.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -125,7 +126,7 @@ int economy_run(const MapRunOptions& opt, const std::string& data_dir) {
         }
     }
     first.comments = {"economy campaign " + name + " seed " + std::to_string(opt.seed) + " ticks " + std::to_string(opt.ticks)};
-    if (!opt.crc_out.empty() && first.save(opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
+    if (!opt.crc_out.empty() && alamo_headless::save_crc_log(first, opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
     if (!opt.golden.empty()) {
         CrcLog golden;
         if (!CrcLog::load(opt.golden, golden, &err)) {
@@ -251,7 +252,7 @@ int story_run(const MapRunOptions& opt, const std::string& data_dir, const std::
         std::ofstream(alamo::path_from_utf8(story_out), std::ios::binary) << log;
         std::printf("wrote %s\n", story_out.c_str());
     }
-    if (!opt.crc_out.empty() && crc.save(opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
+    if (!opt.crc_out.empty() && alamo_headless::save_crc_log(crc, opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
     if (!story_golden.empty()) {
         std::ifstream in(alamo::path_from_utf8(story_golden), std::ios::binary);
         std::string want((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -384,7 +385,7 @@ int map_run(const MapRunOptions& opt) {
                     rec.batches.size());
     }
     if (!opt.crc_out.empty()) {
-        if (!first.log.save(opt.crc_out, &err)) {
+        if (!alamo_headless::save_crc_log(first.log, opt.crc_out, &err)) {
             std::fprintf(stderr, "%s\n", err.c_str());
             return 2;
         }

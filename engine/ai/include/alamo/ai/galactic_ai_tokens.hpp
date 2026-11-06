@@ -20,10 +20,10 @@
 // PORT STAND-INS (marked [port] next to the code): the per-tech member lists (0x373e30) of fleet units, starbases and
 // structures are the types' Starting_Spawned_Units_Tech_N lists (galactic_ai_member_force); the force leaves hold
 // members only (galactic_ai_planet_force), the helper 0x5f2430 adds the matching structures' own AI_Combat_Power to every
-// contrast row (galactic_ai_enemy_strength, with the 0x4b8000 persisted built objects); the structure mask +0x1658 is the Capital default (no galactic structure
-// sets it); orbital structures D+0x170 and the planet-type garrison list +0x20C8 are not modelled; Timeline = 0; black
-// market = GalacticSim's item table (P4 ai); Hints = the Galactic_Hints defaults (no Markup_Filename file is read);
-// island paths are hop-count shortest paths.
+// contrast row (galactic_ai_enemy_strength, with the 0x4b8000 persisted built objects); the structure mask +0x1658 is
+// Garrison_Category, Capital when 0 (galactic_ai_structure_mask); the planet-type garrison list +0x20C8 is not modelled;
+// Timeline = 0; black market = GalacticSim's item table (P4 ai); Hints = the Galactic_Hints defaults (no Markup_Filename
+// file is read); island paths are hop-count shortest paths.
 // Determinism: refresh(frame) runs once per frame on the sim thread (event stamps, neighbour lists);
 // resolve() reads the sim and the leaf cache (mutex) and draws no RNG (Script_ references may, through
 // their Lua; they run only from serial sim-thread callers).
@@ -78,6 +78,10 @@ struct GalacticAiTypeInfo {
     bool transport_behavior = false;   // a TRANSPORT behaviour (behaviour 5: company transports, IG-2000): not buildable
     bool generic_hero = false;         // Is_Generic_Hero (+0x14, §2.1)
     bool special_weapon_space = false; // Is_Special_Weapon_In_Space (+0x1E, §2.1)
+    // Structure mask +0x1658: Garrison_Category (a company: its members' OR, OBJECT_TYPES §6.2), else
+    // Space_Or_Garrison_Category [port: the original keeps the tag written last]; 0 = unset (galactic_ai_structure_mask
+    // reads it as Capital).
+    uint64_t garrison_mask = 0;
     std::string lua_script;            // Lua_Script (the per-object / type script name, §2.1)
     bool script_on_type = false;       // Execute_Script_On_Type (the type-level script instance exists, §2.1)
     uint32_t representative = 0xFFFFFFFFu;  // first Company_Units member, else first Squadron_Units member (0x6c00c0)
@@ -104,29 +108,34 @@ struct GalacticAiTypeInfo {
 uint64_t ai_category_bit(std::string_view name, const objects::EnumConverter* categories = nullptr);
 // Fills category_mask of every entry from its category names (same enum rule).
 void fill_category_masks(std::vector<GalacticAiTypeInfo>& types, const objects::EnumConverter* categories = nullptr);
+// The structure mask the force leaves test (A2I_TOKENS_RE §2.1 / §2.4) [H]: the type's +0x1658, or the Capital mask when
+// that is 0 (Capital from `categories`, as ai_category_bit).
+uint64_t galactic_ai_structure_mask(std::span<const GalacticAiTypeInfo> types, uint32_t type,
+                                   const objects::EnumConverter* categories = nullptr);
 
 inline constexpr uint64_t kAllCategories = ~uint64_t{0};
 
 // The per-tech members of one TYPE held by `owner` (AI_GALACTIC_TOKENS §2 "per-tech members": 0x373f40 count /
 // 0x373e30 type / 0x373d30 count, tech = the owner's tech level +0x84): Σ AI_Combat_Power x count over the members
 // whose category mask meets `mask`. Never the type's own power.
-//   [port] the list is the type's Starting_Spawned_Units_Tech_N (the hangar lists of starbases, carriers and land
-//   spawn structures, STATION_HANGARS_SOUND §2.1); [M] the member's own mask +0x1648 is tested; [M] the slot is the
-//   highest N <= the tech level with entries (the hangar rule).
+//   [H] the list is the type's Starting_Spawned_Units_Tech_N (type +0xAD0 + 0x18 x N, A2F_RE_READS §2); the member's
+//   own mask +0x1648 is tested. `exact` = false (planet-level leaves): the slot is the highest N <= the tech level with
+//   entries (0x373f40 / 0x373e30 / 0x373d30); `exact` = true (player-level tokens 0x66b1c0 / 0x6682c0): list N only.
 double galactic_ai_member_force(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
-                                uint32_t type, int32_t owner, uint64_t mask);
+                                uint32_t type, int32_t owner, uint64_t mask, bool exact = false);
 
 // Target.<side>.{Space,Ground}TotalUnnormalized of `planet` for Self = `self` (PlanetForce 0x6dbd50 / 0x6d95d0,
 // AI_GALACTIC_TOKENS §2; side = Enemy (hostile to Self) or Friendly (Self or a non-neutral ally)), category `mask`
 // (kAllCategories = no Parameter_Category):
 //   * space: per orbiting, non-moving fleet of that side, per unit: its type's power if its mask meets `mask`, plus
-//     its per-tech members; if the planet's owner is on that side: the starbase's per-tech members (NOT its own
-//     power), plus the own power of ground structures with Is_Special_Weapon_In_Space (+0x1E) when `mask` meets the
-//     structure mask +0x1658 (Capital default) [port: orbital structures D+0x170 not modelled];
+//     its per-tech members; if the planet's owner is on that side: the starbase's per-tech members with its owner's
+//     tech (NOT its own power), plus the own power of ground structures with Is_Special_Weapon_In_Space (+0x1E), then of
+//     every orbital structure (DUMMY_ORBITAL_STRUCTURE, no +0x1E test), each when `mask` meets the structure mask
+//     +0x1658 (galactic_ai_structure_mask: Capital when 0) (A2I_TOKENS_RE §2.1);
 //   * ground: per surface unit of that side, its type's power if its mask meets `mask`; if the planet's owner is on
-//     that side: the per-tech members of every ground structure (NOT their own power) [port: the Enemy planet-type
-//     list +0x20C8 not modelled].
-// `categories`: the enum that resolves the Capital default (ai_category_bit).
+//     that side: the per-tech members of every ground structure (orbital ones skipped) with the structure owner's tech
+//     (NOT their own power) [port: the Enemy planet-type list +0x20C8 not modelled].
+// `categories`: the enum that resolves the Capital default (galactic_ai_structure_mask).
 double galactic_ai_planet_force(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
                                 PlanetIndex planet, int32_t self, bool enemy, bool space, uint64_t mask,
                                 const objects::EnumConverter* categories = nullptr);
@@ -134,7 +143,7 @@ double galactic_ai_planet_force(const galactic::GalacticSim& sim, std::span<cons
 // Enemy leaf above (members only) with the effective mask (`mask`, or every bit for 0), plus, when the planet is NOT held by
 // `self` or an ally (0x4ad9f0: owner set, relation Self / Ally, control > 0; pirates, neutral and unowned planets pass), the
 // own AI_Combat_Power of every structure whose category mask meets the effective mask: space = the planet's starbase type,
-// ground = each ground structure (D+0x158). So a typed row gets it too (every shipped starbase is Capital: the Capital row).
+// ground = each ground structure (D+0x158; the port's orbital structures skipped). So a typed row gets it too (every shipped starbase is Capital: the Capital row).
 // Ground also adds 0x4b8000: the AI_Combat_Power of every persisted tactical built object of the planet
 // (PlanetState::built_objects, §9.4) whose type's category mask meets the effective mask, summed in float.
 // q6 t18 (§9.6 / §9.9): with `leaves` set, the leaf part is read through that resolver's leaf cache
@@ -215,15 +224,36 @@ GalacticSnapshot snapshot_from_sim(const galactic::GalacticSim& sim, bool ai_use
 
 class GalacticSimTokenResolver final : public TokenResolver {
 public:
+    // The AI build task of a planet's AIPlanetBuildQueue (0x559b40(planet +0xD0, queue) +0x18) as BudgetFractionToBuild
+    // 0x667120 reads it (A2H_GALACTIC_AI_RE §2 step 4).
+    struct QueueTask {
+        enum class Kind : uint8_t {
+            None,            // no task: the token returns 0
+            Ended,           // ended (+0xA8), not reclaimed: the entry is ignored
+            EndedReclaimed,  // ended and taken by the PAYG reclaim (+0xD9): the token returns 0
+            Live,            // a running task: its goal's budget entry below
+        };
+        Kind kind = Kind::None;
+        bool budget = false;  // the goal has a BudgetedGoalStruct (else alloc = a = c = h = 0)
+        float alloc = 0.0f, a = 0.0f, c = 0.0f, h = 0.0f;  // +0x2C, +0x38, +0x3C, +0x30
+    };
     struct Hooks {
-        std::function<int32_t(int32_t player)> active_goals;  // Variable_Self.ActiveGoals
+        // Variable_<root>.ActiveGoals (0x6e0490, A2H_GALACTIC_AI_RE §1, A2I_TOKENS_RE §3.3): `category` = the one
+        // Parameter_Category name (the build-time converted AIGoalCategoryType literal); out = the size of the root
+        // player's active-set vector of the category with that name's value (0 when none). false (the token fails) for a
+        // name the definitions lack or a player without a galactic AI.
+        std::function<bool(int32_t player, std::string_view category, int32_t& out)> active_goals;
         bool story_campaign = false;                          // Game.IsStoryCampaign
         // Apply_Markup accumulator of `player`'s AI target for `planet` (+0x80).
         std::function<double(int32_t player, int32_t planet)> markup;
         // AI CreditsUnnormalized: the galactic budget total (false = no galactic AI for that player).
         std::function<bool(int32_t player, double& out)> ai_credits;
-        // Budget income rate / available of `category` ("" = all) for BudgetFractionToBuild (false = none).
-        std::function<bool(int32_t player, std::string_view category, double& rate, double& available)> budget;
+        // BudgetFractionToBuild's rate and pool (0x667120 step 5): `category` "" = budget +0x68 and the player's credits;
+        // else the category's income rate I (+0x50) and pool P (+0x4C), 0 / 0 for a name without a budget entry.
+        // false = no goal system (the token fails).
+        std::function<bool(int32_t player, std::string_view category, float& rate, float& pool)> budget;
+        // The AI build task of `planet`'s queue `queue` (0 ground, 1 space) for BudgetFractionToBuild (null = None).
+        std::function<QueueTask(int32_t player, int32_t planet, uint32_t queue)> queue_task;
         // AI difficulty index (0 Easy, 1 Normal, 2 Hard; -1 = no AI system).
         std::function<int32_t(int32_t player)> difficulty;
         // Script_<name>.Evaluate (AI_GALACTIC_2 §4.4); null = fails.

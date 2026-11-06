@@ -107,6 +107,8 @@ static void run_synthetic(StoryModel& m, std::string* trace) {
     std::string err;
     CHECK(m.add_plot("Story_Test.xml", kPlot, true, "Story_Test", &err) == 0);
     CHECK(m.warnings().size() == 1);  // unknown prereq "Never"
+    m.update(0, 0.0);  // A2i t01: the first T9 only records the prereq-less ELAPSED 0's start (0x454980)
+    CHECK(m.fired().empty());
     m.update(0, 0.0);
     *trace += "u0:" + fired_names(m) + "\n";
     size_t mark = m.fired().size();
@@ -227,6 +229,27 @@ static void test_synthetic() {
         std::printf("  t9 timer: ELAPSED 2 fired at frame %u\n", fired_at);
         CHECK(fired_at == 61 && t.fired().size() == 1);
     }
+    // A2i t01 (A2I_T01_FRAME_ORDER.md §6, 0x454980): a prereq-less ELAPSED 0 only records its start at its first T9 and
+    // fires at the second (tick 2 of the host); a prereq-armed ELAPSED 0 was initialised at its arming (vf7) and fires at
+    // the first T9 after it, the same frame.
+    {
+        const char* kZero =
+            "<Story><Event Name=\"Zero\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event>"
+            "<Event Name=\"Go\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>GO</Event_Param2></Event>"
+            "<Event Name=\"Armed_Zero\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1>"
+            "<Prereq>Go</Prereq></Event></Story>";
+        StoryModel z;
+        std::string ez;
+        CHECK(z.add_plot("Story_Zero.xml", kZero, true, "", &ez) == 0);
+        z.update(1, StoryModel::t9_seconds(0, 1.0f / 30.0f));  // tick 1's T9 (mode frame 0)
+        CHECK(z.fired().empty() && z.plot(0).state[z.find_event(0, "Zero")].timer_init);
+        z.update(2, StoryModel::t9_seconds(1, 1.0f / 30.0f));  // tick 2's T9
+        CHECK(fired_names(z) == "Zero,");
+        z.set_clock(2, StoryModel::t9_seconds(1, 1.0f / 30.0f));
+        CHECK(z.story_event("GO") == 1);
+        z.update(3, StoryModel::t9_seconds(2, 1.0f / 30.0f));
+        CHECK(fired_names(z) == "Zero,Go,Armed_Zero,");
+    }
 
     // Reset (§2.3): nothing fires at the reset; the prereq-less ELAPSED Begin keeps its accumulator and
     // fires again at the next T9; events with prereqs wait for Begin.
@@ -321,6 +344,8 @@ static void test_story_rules() {
     m.trigger_event_by_name("Jump");
     CHECK(m.plot(1).active && fired("B_Start") == 0);
     m.update(2, 2.0);
+    CHECK(fired("B_Start") == 0);  // A2i t01: the first T9 after activation records the start only (0x454980)
+    m.update(3, 2.0 + 1.0 / 30.0);
     CHECK(fired("B_Start") == 1);
 }
 
@@ -346,11 +371,15 @@ static void test_plots_file() {
     CHECK(m.plot_count() == 2 && m.plot(0).lua_script == "Script_A" && m.plot(1).lua_script.empty());
     CHECK(m.plot(0).active && !m.plot(1).active && m.find_plot("B.xml") == 1 && m.find_plot("b.XML") == 0xFFFFFFFFu);
     m.update(0, 0);
+    CHECK(fired_names(m).empty());  // A2i t01: ELAPSED 0 records its start at the first T9 (0x454980)
+    m.update(1, 1.0 / 30.0);
     CHECK(fired_names(m) == "A1,");  // the prereq-less STORY_TRIGGER A_Jump never fires by itself
     m.set_plot_active(1, true);
     CHECK(fired_names(m) == "A1,");  // activation only sets the flag
-    m.update(1, 1.0 / 30.0);
-    CHECK(fired_names(m) == "A1,B1,");  // first T9 after activation
+    m.update(2, 2.0 / 30.0);
+    CHECK(fired_names(m) == "A1,");  // first T9 after activation: B1 records its start
+    m.update(3, 3.0 / 30.0);
+    CHECK(fired_names(m) == "A1,B1,");  // second T9 after activation
     StoryModel bad;
     CHECK(!bad.load_plots(dp, "Missing.xml", &err) && !err.empty());
     // Q6: names with a folder below Data\XML (Thrawn's Revenge) are read as written; a folder that does not exist falls
@@ -404,6 +433,7 @@ static void test_bindings() {
     attach_story(vm, &m);
     CHECK(attached_story(vm) == &m);
     m.update(0, 0.0);
+    m.update(0, 0.0);  // A2i t01: the prereq-less ELAPSED 0 Begin fires at the second T9 (0x454980)
     vm.set_object_global("Object", planet);
 
     CHECK(run(vm, "Story_Event('GO_NOW')") == "");
@@ -1163,6 +1193,8 @@ static void test_foc_campaigns() {
     std::printf("  FoC Underworld: %zu events, %zu load warnings\n", uw.plot(0).events.size(), uw.warnings().size());
     CHECK(uw.warnings().empty());  // "A, B, C" prereq lists resolve
     uw.update(0, 0.0);
+    CHECK(uw.fired().empty());  // A2i t01: the first T9 records the ELAPSED 0 start only (0x454980)
+    uw.update(1, 1.0 / 30.0);
     CHECK(!uw.fired().empty() && uw.fired()[0].event_name == "Underworld_Campaign_Begin");
     CHECK(uw.has_flag("Underworld_Mission_01_Win") && uw.flag("Underworld_Mission_01_Win") == 0);
     const size_t start_fired = uw.fired().size();
@@ -1205,11 +1237,13 @@ static void test_foc_campaigns() {
     StoryModel uw2;
     CHECK(uw2.load_plots(*files, "Story_Plots_Campaign_Underworld.xml", &err));
     uw2.update(0, 0.0);
+    uw2.update(1, 1.0 / 30.0);
     if (!note.empty()) uw2.story_event(note);
     CHECK(fired_names(uw2) == fired_names(uw) && digest(uw2) != 0);
     StoryModel uw3;
     CHECK(uw3.load_plots(*files, "Story_Plots_Campaign_Underworld.xml", &err));
     uw3.update(0, 0.0);
+    uw3.update(1, 1.0 / 30.0);
     if (!note.empty()) uw3.story_event(note);
     CHECK(digest(uw3) == digest(uw2));
 

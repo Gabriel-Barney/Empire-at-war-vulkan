@@ -35,6 +35,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "alamo/ai/tactical/tactical_ai.hpp"
@@ -80,6 +81,13 @@ struct TacticalAiSetup {
 // Underworld -> AI_Player_Underworld (A2's mapping); "" otherwise.
 std::string default_tactical_ai_type(int32_t player, const galactic::GalacticSim& galaxy);
 
+// a2h t05: the session data of the tactical AI, one loader for every battle host (alamo_headless --skirmish-ai and
+// galactic --battles, alamo_game): the tactical_plan_files of both modes (list = the VFS glob lister; empty = the plan
+// lists are left as they are), the difficulty table (load_tactical_ai_difficulties) and the GameConstants values
+// (TacticalAiConstants::load; gc null or a missing tag keeps the current value, i.e. the default).
+void load_tactical_ai_data(TacticalAiSetup& s, const FileProvider& files, const data::GameConstants* gc,
+                           const std::function<std::vector<std::string>(std::string_view)>& list);
+
 class BattleAi final : public ai::tactical::TacticalAiHost {
 public:
     BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, const TacticalAiSetup& setup);
@@ -123,6 +131,8 @@ public:
     // Hard points whose opportunity target changed to a new live target since the previous call (ascending unit id, then
     // hard-point index [port: no in-tick order]); owner = the unit's team container when it has one.
     std::vector<ai::tactical::OpportunityTargetEvent> opportunity_targets() override;
+    // s78f t08: CombatSystem::attack_state_events of the tick just run (the AI updates after the battle tick).
+    std::vector<ai::tactical::AttackStateSignal> attack_state_signals() override;
     // S7 t15 A1: TacticalBattle::ability_finished_events of the tick just run (signal 0x29, in order).
     std::vector<int32_t> ability_finished() override;
     // S7 t21: TacticalBattle::movement_locked (0x39ad40) for the ambush member list.
@@ -204,7 +214,12 @@ private:
     void follow_add(const std::vector<objects::ObjectId>& units, objects::ObjectId target, float x, float y, float threat);
     void follow_service();
     commands::RejectReason execute_order(uint8_t player, const commands::EventData& ev);
-    bool move_unit(objects::ObjectId id, float x, float y, float threat_threshold = ::alamo::tactical::movement::kThreatOff);
+    // s78f t10: `flags` / `goal_object` = the order's movement block (mv::MoveOrder::flags / goal_object), the same values the
+    // host's fighter formation record gets (TacticalBattle::fighter_order), so the movement layer's fighter leash and the
+    // host's chase tests read one block.
+    bool move_unit(objects::ObjectId id, float x, float y, float threat_threshold = ::alamo::tactical::movement::kThreatOff,
+                   uint8_t flags = 0, objects::ObjectId goal_object = objects::kNoObjectId);
+    bool is_fighter(objects::ObjectId id) const;  // s78f t10: a space unit on the fighter locomotor
 
     TacticalBattle* b_;
     TacticalMode* mode_;

@@ -4,6 +4,7 @@
 // golden file on every compiler, a per-tick allocation count and a modifier-aggregation benchmark.
 //   alamo_tactical_combat_tests [--golden <file>] [--write-golden <file>] [--no-bench]
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -1403,6 +1404,30 @@ void test_team_targeting() {
         const uint32_t due = t.w.sys->next_scan(11);
         while (t.w.frame <= due) t.w.tick();
         CHECK(t.w.sys->auto_target(11) == (in_team ? 2 : kNoObject));
+    }
+    // s78f t07: a dead team_leader hands the role to the team's first live member (ascending id). Leader 10 has no set;
+    // after it is removed, member 11 (capital first) leads, so member 12 (no set of its own) scores with 11's set and
+    // takes the farther capital. Without the hand-over 12 would have no head and take the closer fighter (all 1.0).
+    for (const bool remove_leader : {true, false}) {
+        TargetWorld t;
+        UnitDesc noset = t.w.data.units[t.attacker];
+        noset.priority_set = -1;
+        const uint32_t md = push_unit(t.w.data, noset);
+        t.w.make();
+        add_team_unit(t, 10, md, 0, Vec3{0, 300, 0}, 7, true);
+        add_team_unit(t, 11, t.attacker, 0, Vec3{0, -300, 0}, 7, false);
+        add_team_unit(t, 12, md, 0, Vec3{0, 0, 0}, 7, false);
+        t.w.tick();
+        if (remove_leader) {
+            CHECK(t.w.sys->remove_unit(10));
+            t.w.trees.remove(10);
+        }
+        t.w.tick();
+        add_team_unit(t, 20, t.fighter, 1, Vec3{200, 0, 0}, 0, false);
+        add_team_unit(t, 21, t.capital, 1, Vec3{500, 0, 0}, 0, false);
+        const uint32_t due = t.w.sys->next_scan(12);
+        while (t.w.frame <= due) t.w.tick();
+        CHECK(t.w.sys->auto_target(12) == (remove_leader ? 21 : 20));
     }
     // Squad head = the container object when it is a combat unit (team id = its object id): the member scores with
     // the container's set (capital first) although its own type has none.
@@ -3020,6 +3045,11 @@ void test_save_rejects() {
     bad = saved;
     put_u32_at(bad, 0, 99);
     CHECK(rejected(bad));
+    for (const uint32_t v : {11u, 13u}) {  // s78h t03: the version before (damage_team = 11; squad_seen dropped = 12) and after
+        bad = saved;
+        put_u32_at(bad, 0, v);
+        CHECK(rejected(bad));
+    }
     bad = saved;
     put_u32_at(bad, 4, 3);  // player count
     CHECK(rejected(bad));
@@ -4515,13 +4545,26 @@ void test_garrison_fire_bones() {
         std::vector<Vec3> l = g.launches(30);
         CHECK(!l.empty() && same(l.back(), wf));
         Vec3 hp;
-        std::vector<Vec3> bones;
-        CHECK(g.w.sys->garrison_fire_bones(3, hp, bones) && bones.size() == 1 && same(bones[0], wf) && same(hp, Vec3{0, 0, 0}));
+        std::vector<GarrisonFireBone> bones;
+        // s78f t03: the world position and the x-axis yaw of the current pose (host facing +y: local yaw 0 -> world 90)
+        CHECK(g.w.sys->garrison_fire_bones(3, hp, bones) && bones.size() == 1 && same(bones[0].pos, wf) && same(hp, Vec3{0, 0, 0}));
+        CHECK(bones.size() == 1 && std::fabs(bones[0].yaw_deg - 90.0f) < 1e-4f);
         g.w.sys->set_health(3, 200.0f);  // 0.2: ALT 2 = M -> no garrison bones
         CHECK(g.w.sys->model_alt(3) == 2);
         CHECK(!g.w.sys->garrison_fire_bones(3, hp, bones));
         l = g.launches(30);
         CHECK(!l.empty() && same(l.back(), Vec3{0, 0, 0}));
+    }
+    {  // s78f t03 (LOB_SOLVER §5.1 "Garrison pick inputs"): the bone's x-axis yaw is tested, not the angle of its position
+       // around the host: a bone behind the host (local -x) pointing forward (yaw 0) is a candidate; one in front pointing
+       // backward is not.
+        const GarrisonBone behind_fwd{true, Vec3{-5, 0, 3}, 0.0f}, front_back{true, Vec3{5, 0, 3}, 180.0f};
+        Garrison g({{front_back, behind_fwd}}, {}, true);
+        const std::vector<Vec3> l = g.launches(30);
+        CHECK(!l.empty() && same(l.front(), Vec3{0, -5, 3}));
+        // the free test: 60 degrees inclusive, the difference wrapped through 360
+        CHECK(garrison_bone_within(350.0f, Vec3{0, 0, 0}, Vec3{10, 0, 0}) && garrison_bone_within(60.0f, Vec3{0, 0, 0}, Vec3{10, 0, 0}));
+        CHECK(!garrison_bone_within(61.0f, Vec3{0, 0, 0}, Vec3{10, 0, 0}) && garrison_bone_within(180.0f, Vec3{0, 0, 0}, Vec3{-10, -1e-3f, 0}));
     }
 }
 
@@ -5041,6 +5084,1043 @@ void bench_modifiers() {
     }
 }
 
+// ================================================================================================
+// s78f t03 / t04: targeting states 0-4, slots 47 / 48, TeamTargeting copy, charge-up turret slew
+// ================================================================================================
+
+struct StateHooks final : CombatHooks {
+    std::vector<std::pair<ObjectId, bool>> idle;  // slot 47 calls (id, arg)
+    std::vector<ObjectId> faced;                  // facing_set calls
+    int8_t aim = -1;                              // turret_aim_state answer
+    bool draw = false;                            // attack_idle draws Get_Float(0.2, 0.75) like the host
+    void attack_idle(ObjectId id, bool arg, uint32_t, SimRng& rng) override {
+        idle.emplace_back(id, arg);
+        if (draw) (void)rng.range_float(0.2f, 0.75f);
+    }
+    void facing_set(ObjectId id, Vec3) override { faced.push_back(id); }
+    int8_t turret_aim_state(ObjectId) const override { return aim; }
+    ObjectId pending = kNoObject;  // s78f t08: pending_ability_target answer
+    uint32_t deploy_requests = 0;  // s78f t08: request_deploy calls
+    ObjectId pending_ability_target(ObjectId) const override { return pending; }
+    void request_deploy(ObjectId, uint32_t) override { ++deploy_requests; }
+};
+
+float yaw_of(Vec3 f) { return std::atan2(f.y, f.x) * 57.29578f; }
+
+void test_targeting_states() {
+    // s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states, slots 47 / 48 and team copies").
+    const auto turner = [](float rate) {
+        OwnOpt opt;
+        opt.edit = [rate](CombatData& d) { d.units[0].turn_rate = rate; };
+        return opt;
+    };
+    {  // slot 48: target 90 degrees off, Max_Rate_Of_Turn 10 (x the land multiplier 1): state 3 and a 10-degree turn step
+       // per service; the 9th service turns onto the target -> 4 at once (slot 48 re-tested), and the weapon fires.
+        OwnWorld o(turner(10.0f), Vec3{0, 100, 0});
+        StateHooks h;
+        o.w.sys->set_hooks(&h);
+        CHECK(o.w.sys->needs_turn(1));
+        for (int i = 0; i < 8; ++i) {
+            o.w.tick();
+            CHECK(o.w.sys->targeting_state(1) == 3 && !o.w.sys->attacking(1));
+        }
+        CHECK(o.w.sys->stats().shots == 0);
+        CHECK(std::fabs(yaw_of(o.w.sys->facing(1)) - 80.0f) < 1e-3f);
+        CHECK(h.faced.size() == 8 && !h.idle.empty() && h.idle.front() == std::make_pair(ObjectId{1}, true));
+        o.w.tick();
+        CHECK(o.w.sys->targeting_state(1) == 4 && o.w.sys->attacking(1) && !o.w.sys->needs_turn(1));
+        CHECK(std::fabs(yaw_of(o.w.sys->facing(1)) - 90.0f) < 1e-3f);
+        CHECK(o.run(60) > 0);
+    }
+    {  // within half a frame of turn (tol 5): the facing is snapped onto the target, state 4 on the first service
+        OwnWorld o(turner(10.0f), Vec3{100, 4, 0});
+        StateHooks h;
+        o.w.sys->set_hooks(&h);
+        o.w.tick();
+        CHECK(o.w.sys->targeting_state(1) == 4 && h.faced.size() == 1);
+        CHECK(std::fabs(yaw_of(o.w.sys->facing(1)) - std::atan2(4.0f, 100.0f) * 57.29578f) < 1e-3f);
+    }
+    {  // half a frame >= 90: tolerance 0.01 degrees (a 1-degree miss needs the turn step, which lands on the target)
+        OwnWorld o(turner(200.0f), Vec3{100, 1.75f, 0});
+        o.w.tick();
+        CHECK(o.w.sys->targeting_state(1) == 4);
+        CHECK(std::fabs(yaw_of(o.w.sys->facing(1)) - std::atan2(1.75f, 100.0f) * 57.29578f) < 1e-3f);
+    }
+    {  // no locomotor (s78f t08 [H]): slot 48 is still tested - off the cone the structure holds state 3 (nothing turns
+       // it, no shot); within the cone it is snapped onto the target and attacks
+        OwnOpt opt = turner(10.0f);
+        opt.edit = [](CombatData& d) {
+            d.units[0].turn_rate = 10.0f;
+            d.units[0].has_locomotor = false;
+        };
+        OwnWorld o(opt, Vec3{0, 100, 0});
+        CHECK(o.run(30) == 0 && o.w.sys->targeting_state(1) == 3 && std::fabs(yaw_of(o.w.sys->facing(1))) < 1e-3f);
+        OwnWorld c(opt, Vec3{100, 4, 0});
+        c.w.tick();
+        CHECK(c.w.sys->targeting_state(1) == 4);
+        CHECK(std::fabs(yaw_of(c.w.sys->facing(1)) - std::atan2(4.0f, 100.0f) * 57.29578f) < 1e-3f);
+    }
+    {  // moving: state 4 without an Attack clip (fires on the move), 2 with one (no fire)
+        OwnWorld a(turner(10.0f), Vec3{0, 100, 0}), b(turner(10.0f), Vec3{0, 100, 0});
+        a.w.sys->set_flag(1, kUnitMoving, true);
+        b.w.sys->set_flag(1, kUnitMoving, true);
+        b.w.sys->set_flag(1, kUnitAttackClip, true);
+        CHECK(a.run(60) > 0 && a.w.sys->targeting_state(1) == 4);
+        CHECK(b.run(60) == 0 && b.w.sys->targeting_state(1) == 2);
+        CHECK(std::fabs(yaw_of(a.w.sys->facing(1))) < 1e-3f);  // no turn while moving
+    }
+    {  // Is_Stationary_When_Attacking: state 4 is not written while moving (the old state stays: 1 for a new target)
+        OwnOpt opt;
+        opt.edit = [](CombatData& d) { d.units[0].stationary_when_attacking = true; };
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        o.w.sys->set_flag(1, kUnitMoving, true);
+        CHECK(o.run(30) == 0 && o.w.sys->targeting_state(1) == 1);
+        o.w.sys->set_flag(1, kUnitMoving, false);
+        CHECK(o.run(30) > 0 && o.w.sys->targeting_state(1) == 4);
+    }
+    {  // TURRET: the host's aim state - slewing (0) -> 3, reached (1) or not modelled (-1) -> 4
+        OwnOpt opt;
+        opt.edit = [](CombatData& d) { d.units[0].turret = true; };
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        StateHooks h;
+        h.aim = 0;
+        o.w.sys->set_hooks(&h);
+        CHECK(o.run(30) == 0 && o.w.sys->targeting_state(1) == 3);
+        h.aim = 1;
+        CHECK(o.run(30) > 0 && o.w.sys->targeting_state(1) == 4);
+    }
+    {  // out of range: 2 (target kept); a deployed unit drops it unless Max_Dist_Walk_While_Deployed > 0
+        for (const float walk : {0.0f, 5.0f}) {
+            OwnOpt opt;
+            opt.edit = [walk](CombatData& d) {
+                d.units[0].deploys = true;
+                d.units[0].max_dist_walk_while_deployed = walk;
+            };
+            OwnWorld o(opt, Vec3{600, 0, 0}), u(opt, Vec3{600, 0, 0});
+            o.w.sys->set_flag(1, kUnitDeploying, true);
+            o.w.tick();
+            u.w.tick();
+            CHECK(u.w.sys->targeting_state(1) == 2 && u.w.sys->current_target(1) == 2);
+            if (walk > 0.0f) CHECK(o.w.sys->targeting_state(1) == 2 && o.w.sys->current_target(1) == 2);
+            else CHECK(o.w.sys->targeting_state(1) == 0 && o.w.sys->current_target(1) == kNoObject);
+        }
+    }
+    {  // slot 47 at state 4 every service (the host draws only when the pose starts); a Set_Target to another object
+       // reads as state 1 until the next service; the state survives write -> read and is hashed
+        OwnWorld o(OwnOpt{}, Vec3{100, 0, 0});
+        StateHooks h;
+        h.draw = true;
+        o.w.sys->set_hooks(&h);
+        o.w.tick();
+        o.w.tick();
+        CHECK(h.idle.size() == 2 && o.w.sys->targeting_state(1) == 4);
+        ByteWriter wa;
+        o.w.sys->write(wa);
+        OwnWorld c(OwnOpt{}, Vec3{100, 0, 0});
+        ByteReader r(wa.bytes());
+        CHECK(c.w.sys->read(r) && c.w.sys->targeting_state(1) == 4);
+        StateHasher ha, hc;
+        o.w.sys->hash_extended(ha);
+        c.w.sys->hash_extended(hc);
+        CHECK(ha.digest() == hc.digest());
+        o.w.add(3, 1, 1, Vec3{120, 0, 0});
+        o.w.sys->order_attack(1, 3);
+        CHECK(o.w.sys->targeting_state(1) == 1 && !o.w.sys->attacking(1));
+    }
+}
+
+void test_targeting_t08() {
+    // s78f t08 (TACTICAL_COMBAT §3.1.1 "s78f t08 answers").
+    {  // signal 0x1E: one AttackStateEvent on the first entry to 4 (cleared each tick, not raised again while it stays 4)
+        OwnWorld o(OwnOpt{}, Vec3{100, 0, 0});
+        o.w.tick();
+        const auto ev = o.w.sys->attack_state_events();
+        CHECK(ev.size() == 1 && ev[0].unit == 1 && ev[0].target == 2);
+        o.w.tick();
+        CHECK(o.w.sys->targeting_state(1) == 4 && o.w.sys->attack_state_events().empty());
+    }
+    {  // pending ability on the current target: state 4 is not written (Set_Target's 1 stays, no shot, no 0x1E) until the
+       // ability is gone
+        OwnWorld o(OwnOpt{}, Vec3{100, 0, 0});
+        StateHooks h;
+        h.pending = 2;
+        o.w.sys->set_hooks(&h);
+        CHECK(o.run(30) == 0 && o.w.sys->targeting_state(1) == 1 && o.w.sys->attack_state_events().empty());
+        h.pending = kNoObject;
+        CHECK(o.run(30) > 0 && o.w.sys->targeting_state(1) == 4);
+    }
+    {  // hold fire: a unit already attacking keeps 4 through the pending rule, but a target type with
+       // Should_Attacker_Hold_Fire_For_Special_Ability turns it into 2 (no shots)
+        for (const bool flag : {false, true}) {
+            OwnOpt opt;
+            opt.edit = [flag](CombatData& d) { d.units[1].hold_fire_for_special_ability = flag; };
+            OwnWorld o(opt, Vec3{100, 0, 0});
+            StateHooks h;
+            o.w.sys->set_hooks(&h);
+            o.w.tick();
+            CHECK(o.w.sys->targeting_state(1) == 4);
+            h.pending = 2;
+            const uint64_t shots = o.run(30);
+            if (flag) CHECK(shots == 0 && o.w.sys->targeting_state(1) == 2);
+            else CHECK(shots > 0 && o.w.sys->targeting_state(1) == 4);
+        }
+    }
+    {  // the auto-deploy check 0x568e60 + slot 47's deploy branch: an undeployed Auto_Deploys + Deploys unit with an ordered
+       // target requests the deploy; Fire_Weapon_When_Undeployed (or no Auto_Deploys) never does
+        for (int k = 0; k < 3; ++k) {
+            OwnOpt opt;
+            opt.edit = [k](CombatData& d) {
+                d.units[0].deploys = true;
+                d.units[0].auto_deploys = k != 2;
+                d.units[0].fire_weapon_when_undeployed = k == 1;
+            };
+            OwnWorld o(opt, Vec3{100, 0, 0});
+            StateHooks h;
+            o.w.sys->set_hooks(&h);
+            o.w.tick();
+            if (k == 0) CHECK(h.deploy_requests > 0);
+            else CHECK(h.deploy_requests == 0);
+        }
+    }
+    {  // TURRET cannot aim (-2: beyond the rotate extent): the target is dropped; with the target the formation's attack
+       // target and Should_Cause_Limited_Turrets_To_Turn the body turns instead (state 3, one turn step)
+        for (const bool turn : {false, true}) {
+            OwnOpt opt;
+            opt.edit = [turn](CombatData& d) {
+                d.units[0].turret = true;
+                d.units[0].turn_rate = 10.0f;
+                d.units[1].limited_turrets_turn = turn;
+            };
+            OwnWorld o(opt, Vec3{0, 100, 0});
+            StateHooks h;
+            h.aim = -2;
+            o.w.sys->set_hooks(&h);
+            o.w.sys->set_attack_goal(1, 2);
+            o.w.tick();
+            if (turn) {
+                CHECK(o.w.sys->targeting_state(1) == 3 && o.w.sys->current_target(1) == 2);
+                CHECK(std::fabs(yaw_of(o.w.sys->facing(1)) - 10.0f) < 1e-3f);
+            } else {
+                CHECK(o.w.sys->targeting_state(1) == 0 && o.w.sys->ordered_target(1) == kNoObject);
+            }
+        }
+    }
+}
+
+void test_scan_player_order() {
+    // s78g t04 (TACTICAL_COMBAT §2.4 correction, §2.10 item 4): Scan_Player restarts the local best at each visited
+    // player, so the pick is the best of the LAST visited player (cyclic from the random start) with a candidate. Player 1
+    // has a capital (priority 1, closer), player 2 a fighter (priority 3, farther): one shared best would always take the
+    // capital; per player, the fighter wins whenever player 2 is visited after player 1 (start 0 or 1 of 3).
+    uint32_t capital = 0, fighter = 0, same = 0;
+    for (uint32_t seed = 1; seed <= 24; ++seed) {
+        for (const bool split : {true, false}) {
+            World w(3);
+            w.rng = SimRng(seed);
+            PrioritySet ps;
+            ps.attack.push_back({PriorityEntry::Kind::Category, -1, kCatCapital, 1.0f});
+            ps.attack.push_back({PriorityEntry::Kind::Category, -1, kCatFighter, 3.0f});
+            w.data.priority_sets.push_back(ps);
+            w.data.projectiles.push_back(ProjectileDesc{});
+            UnitDesc a;
+            a.tactical_health = 100.0f;
+            a.max_attack_distance = 1000.0f;
+            a.weapon_projectile = 0;
+            a.weapon_recharge = 100.0f;
+            a.priority_set = 0;
+            const uint32_t ad = push_unit(w.data, a);
+            UnitDesc c;
+            c.tactical_health = 100.0f;
+            c.radius = 10.0f;
+            c.category_mask = kCatCapital;
+            const uint32_t cd = push_unit(w.data, c);
+            c.category_mask = kCatFighter;
+            const uint32_t fd = push_unit(w.data, c);
+            w.make({}, {PlayerInfo{}, PlayerInfo{}, PlayerInfo{}});
+            w.add(1, ad, 0, Vec3{0, 0, 0});
+            w.add(2, cd, 1, Vec3{100, 0, 0});
+            w.add(3, fd, split ? 2 : 1, Vec3{500, 0, 0});
+            w.tick();
+            const ObjectId t = w.sys->auto_target(1);
+            CHECK(t == 2 || t == 3);
+            if (!split) {
+                same += t == 2 ? 1u : 0u;  // one player: the ordinary rule (lower score) picks the capital
+            } else {
+                (t == 2 ? capital : fighter) += 1;
+            }
+        }
+    }
+    CHECK(same == 24);
+    CHECK(capital > 0 && fighter > 0 && fighter > capital);
+    std::printf("scan player order: capital %u, fighter %u of 24 split scans\n", capital, fighter);
+}
+
+void test_team_handover_and_damage() {
+    // s78g t06 (TACTICAL_COMBAT §3.1.1 "Team targeting copies", A1_READINGS §29.6): the original's team head is the
+    // container, which a member's death does not touch. The port's stand-in team_leader hands over at the death itself:
+    // the next member (ascending id) leads at once and keeps the team's target and state (no headless rest of the tick).
+    {
+        World w;
+        ProjectileDesc p;
+        p.max_speed = 20.0f;
+        w.data.projectiles.push_back(p);
+        UnitDesc s;
+        s.tactical_health = 100.0f;
+        s.max_attack_distance = 300.0f;
+        s.weapon_projectile = 0;
+        s.weapon_recharge = 0.2f;
+        s.turn_rate = 10.0f;
+        push_unit(w.data, s);
+        UnitDesc t;
+        t.tactical_health = 1.0e7f;
+        t.radius = 5.0f;
+        push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        w.add(2, 1, 1, Vec3{200, 5, 0});
+        for (const ObjectId id : {ObjectId{10}, ObjectId{11}, ObjectId{12}}) {
+            UnitSpawn sp;
+            sp.id = id;
+            sp.desc = 0;
+            sp.owner = 0;
+            sp.position = Vec3{0, static_cast<float>(id - 10) * 10.0f, 0};
+            sp.team = 7;
+            sp.team_leader = id == 10;
+            CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+            TreeMembership m;
+            m.owner = 0;
+            CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(sp.position, 1.0f), 1u, m));
+        }
+        w.tick();
+        CHECK(w.sys->auto_target(10) == 2 && w.sys->current_target(12) == 2 && w.sys->targeting_state(10) == 4);
+        const uint32_t due = w.sys->next_scan(10);
+        w.sys->kill_unit(10, kNoObject, kKindNormal, w.frame);  // between ticks, not flushed yet
+        // At once: 11 leads with the team's target, state and scan timer; 12 reads 11's target.
+        CHECK(w.sys->auto_target(11) == 2 && w.sys->current_target(11) == 2 && w.sys->current_target(12) == 2);
+        CHECK(w.sys->targeting_state(11) == 4 && w.sys->next_scan(11) == due);
+        w.tick();
+        CHECK(!w.sys->alive(10) && w.sys->current_target(11) == 2 && w.sys->current_target(12) == 2);
+        CHECK(w.sys->auto_target(12) == kNoObject && w.sys->targeting_state(12) == 4);
+    }
+    // §3.6 step 2 has no mode gate: a space squadron member (team 0, damage_team = its squadron) with
+    // Redirect_Damage_To_Teammates passes amount / (n - 1) to each other live member and takes none itself.
+    {
+        World w;
+        UnitDesc v;
+        v.tactical_health = 1000.0f;
+        const uint32_t plain = push_unit(w.data, v);
+        v.redirect_damage_to_teammates = true;
+        const uint32_t redirect = push_unit(w.data, v);
+        w.make();
+        auto add = [&](ObjectId id, uint32_t desc, uint32_t damage_team) {
+            UnitSpawn sp;
+            sp.id = id;
+            sp.desc = desc;
+            sp.owner = 0;
+            sp.position = Vec3{static_cast<float>(id) * 50.0f, 0, 0};
+            sp.damage_team = damage_team;
+            CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+        };
+        add(10, redirect, 9);
+        add(11, plain, 9);
+        add(12, plain, 9);
+        add(13, plain, 0);   // control: no team, takes 50 itself
+        add(14, redirect, 0);  // no team: the rule does not apply
+        const float h0 = w.sys->health(10);
+        auto hit = [&](ObjectId id, float amount) {
+            DamageRequest r;
+            r.victim = id;
+            r.amount = amount;
+            w.sys->take_damage(r, 100);
+        };
+        hit(13, 50.0f);
+        const float loss = h0 - w.sys->health(13);
+        CHECK(loss > 0.0f);
+        hit(10, 100.0f);
+        CHECK_F(w.sys->health(10), h0);
+        CHECK_F(w.sys->health(11), h0 - loss);
+        CHECK_F(w.sys->health(12), h0 - loss);
+        hit(14, 50.0f);
+        CHECK_F(w.sys->health(14), h0 - loss);
+        // Save round trip (combat save v11+): damage_team survives a load; the same redirect hit then gives the same
+        // result in the saved and the loaded system.
+        World b;
+        b.data = w.data;
+        b.make();
+        const std::vector<uint8_t> saved = combat_bytes(*w.sys);
+        ByteReader rd(saved);
+        CHECK(b.sys->read(rd));
+        CHECK(combat_bytes(*b.sys) == saved);
+        DamageRequest r;
+        r.victim = 10;
+        r.amount = 60.0f;
+        w.sys->take_damage(r, 200);
+        b.sys->take_damage(r, 200);
+        CHECK_F(w.sys->health(10), h0);
+        CHECK_F(b.sys->health(10), h0);
+        CHECK(w.sys->health(11) < h0 - loss);
+        for (const ObjectId id : {ObjectId{10}, ObjectId{11}, ObjectId{12}}) CHECK_F(b.sys->health(id), w.sys->health(id));
+        CHECK(combat_bytes(*b.sys) == combat_bytes(*w.sys));
+    }
+    // Review (s78g t06): a phase-D death. Leader 10's due scan would keep its target 2 (scored 1.0); a closer fighter 40
+    // (0.5, better) appeared since. Ally 30 (higher index, serviced first) kills 10 in its unit_begin in the tick the
+    // team's scan is due. The heir 11 is re-gathered on the copied record, so it runs the keep test and keeps 2, as the
+    // container would; the member's own gather (always due, no target to keep) would have rescanned and taken 40.
+    {
+        struct KillHooks final : CombatHooks {
+            CombatSystem* sys = nullptr;
+            bool armed = false;
+            void unit_begin(ObjectId id, uint32_t frame, SimRng&) override {
+                if (armed && id == 30) {
+                    armed = false;
+                    sys->kill_unit(10, kNoObject, kKindNormal, frame);
+                }
+            }
+        };
+        // The same tick's synced draws with and without the hand-over: equal (one reschedule draw, no rescan's
+        // start-player draw).
+        auto run = [](bool kill) -> uint64_t {
+            World w;
+            KillHooks hk;
+            ProjectileDesc p;
+            p.max_speed = 20.0f;
+            w.data.projectiles.push_back(p);
+            PrioritySet ps;
+            ps.attack.push_back({PriorityEntry::Kind::Category, -1, kCatCapital, 1.0f});
+            ps.attack.push_back({PriorityEntry::Kind::Category, -1, kCatFighter, 0.5f});
+            w.data.priority_sets.push_back(ps);
+            UnitDesc s;
+            s.tactical_health = 100.0f;
+            s.max_attack_distance = 300.0f;
+            s.weapon_projectile = 0;
+            s.weapon_recharge = 100.0f;  // never fires during the test
+            s.turn_rate = 10.0f;
+            s.priority_set = 0;
+            const uint32_t sd = push_unit(w.data, s);
+            UnitDesc t;
+            t.tactical_health = 1.0e7f;
+            t.radius = 5.0f;
+            t.category_mask = kCatCapital;
+            const uint32_t cd = push_unit(w.data, t);
+            t.category_mask = kCatFighter;
+            const uint32_t fd = push_unit(w.data, t);
+            UnitDesc ally;
+            ally.tactical_health = 100.0f;
+            const uint32_t ad = push_unit(w.data, ally);
+            CombatConfig cfg;
+            cfg.mode = GameMode::Land;
+            cfg.inaccuracy_enabled = false;
+            w.make(cfg);
+            hk.sys = w.sys.get();
+            w.sys->set_hooks(&hk);
+            w.add(2, cd, 1, Vec3{250, 5, 0});
+            for (const ObjectId id : {ObjectId{10}, ObjectId{11}}) {
+                UnitSpawn sp;
+                sp.id = id;
+                sp.desc = sd;
+                sp.owner = 0;
+                sp.position = Vec3{0, static_cast<float>(id - 10) * 10.0f, 0};
+                sp.team = 7;
+                sp.team_leader = id == 10;
+                CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+                TreeMembership m;
+                m.owner = 0;
+                CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(sp.position, 1.0f), 1u, m));
+            }
+            w.add(30, ad, 0, Vec3{0, -50, 0});
+            w.tick();
+            CHECK(w.sys->auto_target(10) == 2);  // scored 1.0 (capital), so the due scan keeps it
+            const uint32_t due = w.sys->next_scan(10);
+            CHECK(due > w.frame);
+            w.add(40, fd, 1, Vec3{100, 0, 0});
+            while (w.frame < due) w.tick();
+            CHECK(w.sys->auto_target(10) == 2);  // no scan of the leader before its due frame
+            hk.armed = kill;
+            const uint64_t d0 = w.rng.draws();
+            w.tick();  // frame == due: phase C keeps 2 for 10; 30 kills 10 in phase D before 11 is serviced
+            const ObjectId head = kill ? 11 : 10;
+            CHECK(w.sys->alive(10) == !kill);
+            CHECK(w.sys->auto_target(head) == 2 && w.sys->current_target(11) == 2);
+            CHECK(w.sys->next_scan(head) > due);  // the team's scan ran (keep test), its timer redrawn
+            return w.rng.draws() - d0;
+        };
+        CHECK(run(true) == run(false));
+    }
+}
+
+void test_team_targeting_copy() {
+    // s78f t03 (§3.1.1 "Team targeting copies"), land: the members of a ground team have no TARGETING. The head (here the
+    // team_leader member standing in for the container) scans; the members read its target, get its state raw, any
+    // member off the target makes the team state 3, and each member runs slot 47.
+    struct Team {
+        World w;
+        StateHooks h;
+        Team(Vec3 target, Vec3 member_facing) {
+            ProjectileDesc p;
+            p.max_speed = 20.0f;
+            w.data.projectiles.push_back(p);
+            UnitDesc s;
+            s.tactical_health = 100.0f;
+            s.max_attack_distance = 300.0f;
+            s.weapon_projectile = 0;
+            s.weapon_recharge = 0.2f;
+            s.turn_rate = 10.0f;
+            push_unit(w.data, s);
+            UnitDesc t;
+            t.tactical_health = 1.0e7f;
+            t.radius = 5.0f;
+            push_unit(w.data, t);
+            CombatConfig cfg;
+            cfg.mode = GameMode::Land;
+            cfg.inaccuracy_enabled = false;
+            w.make(cfg);
+            w.sys->set_hooks(&h);
+            w.add(2, 1, 1, target);
+            for (const ObjectId id : {ObjectId{10}, ObjectId{11}}) {
+                UnitSpawn sp;
+                sp.id = id;
+                sp.desc = 0;
+                sp.owner = 0;
+                sp.position = Vec3{0, id == 10 ? 0.0f : 10.0f, 0};
+                sp.facing = id == 11 ? member_facing : Vec3{1, 0, 0};
+                sp.team = 7;
+                sp.team_leader = id == 10;
+                CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+                TreeMembership m;
+                m.owner = 0;
+                CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(sp.position, 1.0f), 1u, m));
+            }
+        }
+    };
+    {  // every member on the target: the head's scan target, state 4 copied, both fire, one slot 47 per member
+        Team t(Vec3{200, 5, 0}, Vec3{1, 0, 0});
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(10) == 2 && t.w.sys->auto_target(11) == kNoObject && t.w.sys->current_target(11) == 2);
+        CHECK(t.w.sys->targeting_state(10) == 4 && t.w.sys->targeting_state(11) == 4);
+        size_t n10 = 0, n11 = 0;
+        for (const auto& [id, arg] : t.h.idle) (id == 10 ? n10 : n11) += arg ? 1u : 0u;
+        CHECK(n10 == 1 && n11 == 1);
+        bool shot10 = false, shot11 = false;
+        for (int i = 0; i < 60; ++i) {
+            t.w.tick();
+            for (size_t k = 0; k < t.w.sys->projectile_count(); ++k) {
+                shot10 = shot10 || t.w.sys->projectile(k).shooter == 10;
+                shot11 = shot11 || t.w.sys->projectile(k).shooter == 11;
+            }
+        }
+        CHECK(shot10 && shot11);
+    }
+    {  // the member faces away: the team is in state 3 (slot 47(0) on the members) until it has turned, then 4 for all
+        Team t(Vec3{200, 5, 0}, Vec3{-1, 0, 0});
+        t.w.tick();
+        CHECK(t.w.sys->targeting_state(10) == 3 && t.w.sys->targeting_state(11) == 3);
+        CHECK(!t.h.idle.empty() && t.h.idle.front() == std::make_pair(ObjectId{11}, false));
+        int ticks = 1;
+        while (t.w.sys->targeting_state(11) != 4 && ticks < 40) {
+            t.w.tick();
+            ++ticks;
+        }
+        CHECK(ticks == 18 && t.w.sys->targeting_state(10) == 4);  // 178 degrees at 10 per service
+    }
+    {  // s78f review: a member that picked its own target before its head existed drops it when it becomes a member, so
+       // it reads the head's target and never keeps a dead id
+        World w;
+        ProjectileDesc p;
+        p.max_speed = 20.0f;
+        w.data.projectiles.push_back(p);
+        UnitDesc s;
+        s.tactical_health = 100.0f;
+        s.max_attack_distance = 300.0f;
+        s.weapon_projectile = 0;
+        s.weapon_recharge = 0.2f;
+        push_unit(w.data, s);
+        UnitDesc t;
+        t.tactical_health = 1.0e7f;
+        t.radius = 5.0f;
+        push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        w.add(2, 1, 1, Vec3{200, 5, 0});
+        const auto add = [&](ObjectId id, bool leader, Vec3 at) {
+            UnitSpawn sp;
+            sp.id = id;
+            sp.desc = 0;
+            sp.owner = 0;
+            sp.position = at;
+            sp.facing = Vec3{1, 0, 0};
+            sp.team = 7;
+            sp.team_leader = leader;
+            CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+            TreeMembership m;
+            m.owner = 0;
+            CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(sp.position, 1.0f), 1u, m));
+        };
+        add(11, false, Vec3{0, 10, 0});
+        w.tick();
+        const bool own = w.sys->auto_target(11) == 2;  // no head yet: its own scan picked the target
+        add(12, true, Vec3{0, 0, 0});  // ids ascend: the head joins after the member
+        w.tick();
+        const bool joined = w.sys->auto_target(11) == kNoObject && w.sys->current_target(11) == w.sys->current_target(12);
+        // The target dies: the member holds no own id (the old bug kept returning it forever) and reads the head's slot,
+        // which the head's own scan replaces.
+        w.sys->kill_unit(2, kNoObject, 0, w.frame);
+        for (int i = 0; i < 90; ++i) w.tick();
+        const bool dropped = w.sys->auto_target(11) == kNoObject && w.sys->current_target(11) == w.sys->current_target(12) &&
+                             w.sys->current_target(12) != 2;
+        std::printf("team member join: own target %d, cleared on join %d, dead target dropped %d\n", own ? 1 : 0, joined ? 1 : 0,
+                    dropped ? 1 : 0);
+        CHECK(own && joined && dropped);
+    }
+}
+
+void test_squad_value() {
+    // s78h t03 (TACTICAL_COMBAT §4.4 "Who the squad leader is"): the squad value belongs to the TEAM container. Every unit,
+    // the team_leader stand-in included, keeps its own Mod_Multiplier; team_mod_multiplier(container id) = the container's
+    // own product if != 1, else the minimum over ALL live members (stand-in and 1.0-valued members included), 1.0 if none.
+    const float members[2] = {1.0f, 0.8f};
+    CHECK_F(squad_multiplier(1.0f, members), 0.8f);
+    const float high[2] = {1.5f, 1.5f};
+    CHECK_F(squad_multiplier(1.0f, high), 1.5f);  // a minimum > 1 is used as is
+    const auto run = [](GameMode mode) {
+        World w;
+        UnitAbilityDesc on;
+        on.ability_type = kAbilityPowerToWeapons;
+        on.mult[static_cast<size_t>(ModKind::FireRate) - 1] = 0.5f;
+        on.mult[static_cast<size_t>(ModKind::Speed) - 1] = 1.5f;
+        w.data.abilities.push_back(on);
+        UnitAbilityDesc mid = on;
+        mid.mult[static_cast<size_t>(ModKind::FireRate) - 1] = 0.8f;
+        w.data.abilities.push_back(mid);
+        UnitDesc d;
+        d.tactical_health = 100.0f;
+        d.abilities = {0, -1};
+        const uint32_t d_half = push_unit(w.data, d);
+        d.abilities = {1, -1};
+        const uint32_t d_mid = push_unit(w.data, d);
+        CombatConfig cfg;
+        cfg.mode = mode;
+        w.make(cfg);
+        const bool land = mode == GameMode::Land;
+        auto add = [&](ObjectId id, uint32_t desc, bool leader) {
+            UnitSpawn sp;
+            sp.id = id;
+            sp.desc = desc;
+            sp.owner = 0;
+            sp.position = Vec3{static_cast<float>(id) * 10.0f, 0, 0};
+            if (land) {
+                sp.team = 7;
+                sp.team_leader = leader;
+            } else {
+                sp.damage_team = 7;  // a space squadron member
+            }
+            CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+        };
+        add(10, d_half, true);  // the stand-in leader on land; ability inactive: own 1.0
+        add(11, d_mid, false);
+        add(12, d_half, false);
+        w.sys->set_ability_active(11, 0, true);
+        w.tick();
+        // The leader keeps its own 1.0 (the old phase-A rule gave it the members' 0.8).
+        CHECK_F(w.sys->mod_multiplier(10, ModKind::FireRate), 1.0f);
+        CHECK_F(w.sys->mod_multiplier(11, ModKind::FireRate), 0.8f);
+        CHECK_F(w.sys->mod_multiplier(12, ModKind::FireRate), 1.0f);
+        CHECK_F(w.sys->team_mod_multiplier(7, ModKind::FireRate), 0.8f);
+        CHECK_F(w.sys->team_mod_multiplier(7, ModKind::Speed), 1.0f);  // 10 and 12 at 1.0 cap the team
+        // The stand-in counts in the minimum and keeps its own value.
+        w.sys->set_ability_active(10, 0, true);
+        w.tick();
+        CHECK_F(w.sys->mod_multiplier(10, ModKind::FireRate), 0.5f);
+        CHECK_F(w.sys->team_mod_multiplier(7, ModKind::FireRate), 0.5f);
+        w.sys->set_ability_active(12, 0, true);
+        w.tick();
+        CHECK_F(w.sys->team_mod_multiplier(7, ModKind::Speed), 1.5f);  // every member at 1.5
+        CHECK_F(w.sys->mod_multiplier(11, ModKind::Speed), 1.5f);
+        // Dead members leave the minimum; no live member -> 1.0; an unknown team -> 1.0.
+        w.sys->kill_unit(10, kNoObject, kKindNormal, w.frame);
+        w.sys->kill_unit(12, kNoObject, kKindNormal, w.frame);
+        w.tick();
+        CHECK_F(w.sys->team_mod_multiplier(7, ModKind::FireRate), 0.8f);
+        w.sys->kill_unit(11, kNoObject, kKindNormal, w.frame);
+        w.tick();
+        CHECK_F(w.sys->team_mod_multiplier(7, ModKind::FireRate), 1.0f);
+        CHECK_F(w.sys->team_mod_multiplier(99, ModKind::FireRate), 1.0f);
+    };
+    run(GameMode::Land);
+    run(GameMode::Space);
+}
+
+void test_convert_team() {
+    // s78h t04 (TACTICAL_COMBAT §3.5 "Convert and its team rule"): the team is the container (damage_team), in space too,
+    // so a converted squadron member converts every mate, wherever it is; a victim already owned by the new owner is
+    // skipped, so each object converts (and raises UnitEffect::Converted) once.
+    struct ConvertHooks final : CombatHooks {
+        std::vector<ObjectId> converted;
+        void unit_effect(ObjectId id, UnitEffect e, int32_t, Vec3, uint32_t) override {
+            if (e == UnitEffect::Converted) converted.push_back(id);
+        }
+    };
+    for (const GameMode mode : {GameMode::Space, GameMode::Land}) {
+        World w;
+        ConvertHooks hk;
+        ProjectileDesc cv;
+        cv.name = "Proj_Convert";
+        cv.max_speed = 10.0f;
+        cv.convert = true;
+        cv.convert_radius = 100.0f;
+        w.data.projectiles.push_back(cv);
+        UnitDesc d;
+        d.tactical_health = 100.0f;
+        const uint32_t ud = push_unit(w.data, d);
+        CombatConfig cfg;
+        cfg.mode = mode;
+        w.make(cfg);
+        w.sys->set_hooks(&hk);
+        auto add = [&](ObjectId id, Vec3 at, uint32_t team, bool leader) {
+            UnitSpawn sp;
+            sp.id = id;
+            sp.desc = ud;
+            sp.owner = 1;
+            sp.position = at;
+            if (mode == GameMode::Land) {
+                sp.team = team;
+                sp.team_leader = leader;
+            } else {
+                sp.damage_team = team;
+            }
+            CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+            TreeMembership m;
+            m.owner = 1;
+            CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(at, 1.0f), 1u, m));
+        };
+        add(10, Vec3{10, 0, 0}, 9, true);
+        add(11, Vec3{20, 0, 0}, 9, false);
+        add(12, Vec3{30, 0, 0}, 9, false);
+        add(13, Vec3{900, 0, 0}, 9, false);  // out of the radius: converts with its team
+        add(14, Vec3{0, 20, 0}, 0, false);   // no team, in the radius
+        add(15, Vec3{950, 0, 0}, 0, false);  // no team, out of the radius
+        ProjectileLaunch l;
+        l.owner = 0;
+        l.projectile = 0;
+        l.from = Vec3{0, 0, 0};
+        l.point = l.from;
+        l.fuse_seconds = 0.0f;
+        CHECK(w.sys->launch_projectile(l, w.frame));
+        w.tick();
+        w.tick();
+        for (const ObjectId id : {ObjectId{10}, ObjectId{11}, ObjectId{12}, ObjectId{13}, ObjectId{14}}) {
+            CHECK(w.sys->owner(id) == 0 && (w.sys->flags(id) & kUnitConverted));
+            CHECK(std::count(hk.converted.begin(), hk.converted.end(), id) == 1);
+        }
+        CHECK(w.sys->owner(15) == 1 && !(w.sys->flags(15) & kUnitConverted));
+        CHECK(hk.converted.size() == 5);
+    }
+}
+
+void test_team_container_slot() {
+    // s78h t06 (TACTICAL_COMBAT §3.1.1 "When the container is serviced, and a member's death in the same frame"): a land
+    // team's TeamTargeting runs once per tick at the container slot, before every member's own service (the descending
+    // walk reaches the team's highest index first), and still runs when the stand-in leader dies inside phase D.
+    struct OrderHooks final : CombatHooks {
+        CombatSystem* sys = nullptr;
+        ObjectId kill_at = kNoObject;  // unit_begin of this unit kills `victim`
+        ObjectId victim = kNoObject;
+        std::vector<std::pair<char, ObjectId>> log;  // 'b' = unit_begin, 'i' = slot 47 (team service)
+        void unit_begin(ObjectId id, uint32_t frame, SimRng&) override {
+            log.emplace_back('b', id);
+            if (id == kill_at) {
+                kill_at = kNoObject;
+                sys->kill_unit(victim, kNoObject, kKindNormal, frame);
+            }
+        }
+        void attack_idle(ObjectId id, bool, uint32_t, SimRng&) override { log.emplace_back('i', id); }
+    };
+    struct TeamWorld {
+        World w;
+        OrderHooks h;
+        TeamWorld() {
+            ProjectileDesc p;
+            p.max_speed = 20.0f;
+            w.data.projectiles.push_back(p);
+            UnitDesc s;
+            s.tactical_health = 100.0f;
+            s.max_attack_distance = 300.0f;
+            s.weapon_projectile = 0;
+            s.weapon_recharge = 100.0f;  // never fires during the test
+            s.turn_rate = 10.0f;
+            push_unit(w.data, s);
+            UnitDesc t;
+            t.tactical_health = 1.0e7f;
+            t.radius = 5.0f;
+            push_unit(w.data, t);
+            UnitDesc ally;
+            ally.tactical_health = 100.0f;
+            push_unit(w.data, ally);
+            CombatConfig cfg;
+            cfg.mode = GameMode::Land;
+            cfg.inaccuracy_enabled = false;
+            w.make(cfg);
+            h.sys = w.sys.get();
+            w.sys->set_hooks(&h);
+            w.add(2, 1, 1, Vec3{200, 5, 0});
+            for (const ObjectId id : {ObjectId{10}, ObjectId{11}, ObjectId{12}}) {
+                UnitSpawn sp;
+                sp.id = id;
+                sp.desc = 0;
+                sp.owner = 0;
+                sp.position = Vec3{0, static_cast<float>(id - 10) * 10.0f, 0};
+                sp.team = 7;
+                sp.team_leader = id == 10;
+                CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+                TreeMembership m;
+                m.owner = 0;
+                CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(sp.position, 1.0f), 1u, m));
+            }
+            w.add(30, 2, 0, Vec3{0, -50, 0});  // highest index: serviced before the team slot
+        }
+        size_t services() const {  // slot-47 calls this tick: one per live team unit per team service at state 4
+            size_t n = 0;
+            for (const auto& e : h.log) n += e.first == 'i' ? 1u : 0u;
+            return n;
+        }
+        size_t pos(char c, ObjectId id) const {
+            for (size_t i = 0; i < h.log.size(); ++i)
+                if (h.log[i] == std::make_pair(c, id)) return i;
+            return h.log.size();
+        }
+    };
+    {  // the first tick: the team state and the members' slot 47 come before any member's own service
+        TeamWorld t;
+        t.w.tick();
+        CHECK(t.w.sys->targeting_state(10) == 4 && t.w.sys->targeting_state(12) == 4);
+        CHECK(t.services() == 3);
+        CHECK(t.pos('b', 30) < t.pos('i', 10));
+        for (const ObjectId id : {ObjectId{10}, ObjectId{11}, ObjectId{12}})
+            CHECK(t.pos('i', id) < t.pos('b', 12) && t.pos('b', 12) < t.h.log.size());
+    }
+    // The leader dies at its own slot (old port: the heir's slot had passed, so the team got no service that tick), or at
+    // the top member's slot (after the team slot: no second service for the heir); or the top member dies before the slot;
+    // or the leader dies before the slot (ally 30's slot): team_head_of gives the heir 11 at the slot, which decides on
+    // its re-gathered candidates, and the heir's own slot (now in land_heads_) runs no second service.
+    const std::array<std::pair<ObjectId, ObjectId>, 4> cases{{{10, 10}, {12, 10}, {30, 12}, {30, 10}}};
+    for (const auto& [at, victim] : cases) {
+        TeamWorld t;
+        t.w.tick();
+        t.h.log.clear();
+        t.h.kill_at = at;
+        t.h.victim = victim;
+        t.w.tick();
+        CHECK(!t.w.sys->alive(victim));
+        const bool before_slot = at == 30;  // the victim died before the team slot: 2 live team units at the service
+        CHECK(t.services() == (before_slot ? 2u : 3u));  // one team service this tick
+        CHECK(t.pos('i', 11) < t.pos('b', 11));
+        for (size_t i = t.pos('b', 12); i < t.h.log.size(); ++i) CHECK(t.h.log[i].first != 'i');  // all at the slot
+        if (victim == 10) CHECK(t.w.sys->auto_target(11) == 2 && t.w.sys->targeting_state(11) == 4);  // the heir leads
+        t.h.log.clear();
+        t.w.tick();  // the next tick: the team (the heir's after a hand-over) is serviced once
+        CHECK(t.services() == 2);
+        CHECK(t.w.sys->current_target(11) == 2 && t.w.sys->targeting_state(11) == 4);
+    }
+}
+
+void test_team_head_alone() {
+    // s78i t03 (TACTICAL_COMBAT §3.1.1 "Team targeting copies"): TeamTargeting belongs to the container and runs while it
+    // lives, whatever its member count. A land team whose stand-in head is its last live unit (or a team of one) keeps the
+    // team service. Observable: the team service has no TURRET branch, so a turret head whose turret is still slewing
+    // (host aim 0) is in state 4 there, where its own TARGETING (Service_Land) gives 3.
+    struct TurretTeam {
+        World w;
+        StateHooks h;
+        explicit TurretTeam(bool with_member) {
+            ProjectileDesc p;
+            p.max_speed = 20.0f;
+            w.data.projectiles.push_back(p);
+            UnitDesc s;
+            s.tactical_health = 100.0f;
+            s.max_attack_distance = 300.0f;
+            s.weapon_projectile = 0;
+            s.weapon_recharge = 100.0f;
+            s.turn_rate = 10.0f;
+            s.turret = true;
+            push_unit(w.data, s);
+            UnitDesc t;
+            t.tactical_health = 1.0e7f;
+            t.radius = 5.0f;
+            push_unit(w.data, t);
+            CombatConfig cfg;
+            cfg.mode = GameMode::Land;
+            cfg.inaccuracy_enabled = false;
+            w.make(cfg);
+            h.aim = 0;  // the turret is still slewing
+            w.sys->set_hooks(&h);
+            w.add(2, 1, 1, Vec3{200, 5, 0});
+            const auto add = [&](ObjectId id, uint32_t team, bool leader) {
+                UnitSpawn sp;
+                sp.id = id;
+                sp.desc = 0;
+                sp.owner = 0;
+                sp.position = Vec3{0, static_cast<float>(id - 10) * 10.0f, 0};
+                sp.facing = Vec3{1, 0, 0};
+                sp.team = team;
+                sp.team_leader = leader;
+                CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+                TreeMembership m;
+                m.owner = 0;
+                CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(sp.position, 1.0f), 1u, m));
+            };
+            add(10, 7, true);
+            if (with_member) add(11, 7, false);
+            add(20, 0, false);  // control: no team, its own TARGETING
+        }
+    };
+    {  // the member dies: the head alone keeps the team service (state 4 against the control's 3), tick after tick
+        TurretTeam t(true);
+        t.w.tick();
+        CHECK(t.w.sys->targeting_state(10) == 4 && t.w.sys->targeting_state(11) == 4);
+        CHECK(t.w.sys->targeting_state(20) == 3);
+        t.w.sys->kill_unit(11, kNoObject, kKindNormal, t.w.frame);
+        for (int i = 0; i < 5; ++i) {
+            t.w.tick();
+            CHECK(!t.w.sys->alive(11));
+            CHECK(t.w.sys->auto_target(10) == 2 && t.w.sys->targeting_state(10) == 4);
+            CHECK(t.w.sys->targeting_state(20) == 3);
+        }
+    }
+    {  // a team of one from the start: the same
+        TurretTeam t(false);
+        for (int i = 0; i < 3; ++i) {
+            t.w.tick();
+            CHECK(t.w.sys->auto_target(10) == 2 && t.w.sys->targeting_state(10) == 4);
+            CHECK(t.w.sys->targeting_state(20) == 3);
+        }
+    }
+    {  // the member is the last one alive after the head dies: the hand-over gives it the head and the team service
+        TurretTeam t(true);
+        t.w.tick();
+        t.w.sys->kill_unit(10, kNoObject, kKindNormal, t.w.frame);
+        for (int i = 0; i < 3; ++i) {
+            t.w.tick();
+            CHECK(t.w.sys->auto_target(11) == 2 && t.w.sys->targeting_state(11) == 4);
+        }
+    }
+}
+
+void test_convert_container_unit() {
+    // s78i t04 (TACTICAL_COMBAT §3.5 "Convert and its team rule" steps 3-5): a team container that is itself a combat unit
+    // (damage_team 0; members carry its id) converts with its members: Change_Owner covers the container and every
+    // member. Events: the victim, then the container, then the other members (ascending id); each object once.
+    struct ConvertHooks final : CombatHooks {
+        std::vector<ObjectId> converted;
+        void unit_effect(ObjectId id, UnitEffect e, int32_t, Vec3, uint32_t) override {
+            if (e == UnitEffect::Converted) converted.push_back(id);
+        }
+    };
+    for (const GameMode mode : {GameMode::Land, GameMode::Space}) {
+        for (const bool hit_container : {false, true}) {
+            World w;
+            ConvertHooks hk;
+            ProjectileDesc cv;
+            cv.name = "Proj_Convert";
+            cv.max_speed = 10.0f;
+            cv.convert = true;
+            cv.convert_radius = 100.0f;
+            w.data.projectiles.push_back(cv);
+            UnitDesc d;
+            d.tactical_health = 100.0f;
+            const uint32_t ud = push_unit(w.data, d);
+            CombatConfig cfg;
+            cfg.mode = mode;
+            w.make(cfg);
+            w.sys->set_hooks(&hk);
+            auto add = [&](ObjectId id, Vec3 at, uint32_t team) {
+                UnitSpawn sp;
+                sp.id = id;
+                sp.desc = ud;
+                sp.owner = 1;
+                sp.position = at;
+                if (mode == GameMode::Land) {
+                    sp.team = team;
+                } else {
+                    sp.damage_team = team;
+                }
+                CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+                TreeMembership m;
+                m.owner = 1;
+                CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(at, 1.0f), 1u, m));
+            };
+            const Vec3 near{10, 0, 0}, far{900, 0, 0};
+            add(10, hit_container ? far : near, 50);  // members of container 50
+            add(11, Vec3{950, 0, 0}, 50);
+            add(50, hit_container ? near : Vec3{920, 0, 0}, 0);  // the container: a combat unit, damage_team 0
+            add(60, Vec3{930, 0, 0}, 0);                         // unrelated, out of the radius
+            ProjectileLaunch l;
+            l.owner = 0;
+            l.projectile = 0;
+            l.from = Vec3{0, 0, 0};
+            l.point = l.from;
+            l.fuse_seconds = 0.0f;
+            CHECK(w.sys->launch_projectile(l, w.frame));
+            w.tick();
+            w.tick();
+            for (const ObjectId id : {ObjectId{10}, ObjectId{11}, ObjectId{50}})
+                CHECK(w.sys->owner(id) == 0 && (w.sys->flags(id) & kUnitConverted));
+            CHECK(w.sys->owner(60) == 1 && !(w.sys->flags(60) & kUnitConverted));
+            const std::vector<ObjectId> want = hit_container ? std::vector<ObjectId>{50, 10, 11} : std::vector<ObjectId>{10, 50, 11};
+            CHECK(hk.converted == want);
+        }
+    }
+}
+
+void test_charge_up_slew() {
+    // s78f t04 (LOB_SOLVER §3.6 "Charge-up aim"): the lobbing TURRET slews Turret_Rotate_Speed degrees per service from
+    // Turret_Rest_Angle; the charge-up starts on the service where the angles are reached; the turret then holds its aim.
+    const auto make = [](float extent) {
+        OwnOpt opt;
+        opt.lobbing = true;
+        opt.recharge = 0.2f;
+        opt.edit = [extent](CombatData& d) {
+            d.units[0].turret = true;
+            d.units[0].lobbing_chargeup_frames = 90;
+            d.units[0].turret_rotate_speed = 4.0f;
+            d.units[0].turret_extent = extent;
+            d.units[0].turret_elevate_extent = 85.0f;
+            d.units[0].turret_rest_pitch = -45.0f;
+        };
+        return std::make_unique<OwnWorld>(opt, Vec3{100, 0, 0});
+    };
+    {  // a point behind the cannon: 45 services of yaw slew (180 / 4), then 90 frames of charge-up
+        auto o = make(360.0f);
+        const Vec3 at{-150, 0, 0};
+        CHECK(o->w.sys->order_fire_at_position(1, at));
+        const uint32_t f0 = o->w.frame;
+        std::vector<uint32_t> charge;
+        std::vector<uint32_t> shots;
+        for (int i = 0; i < 300; ++i) {
+            const uint64_t s0 = o->w.sys->stats().shots;
+            const uint32_t f = o->w.frame;
+            o->w.tick();
+            for (const LobEvent& e : o->w.sys->lob_events())
+                if (!e.charged) charge.push_back(e.frame);
+            if (o->w.sys->stats().shots != s0) shots.push_back(f);
+        }
+        CHECK(charge.size() == 1 && !charge.empty() && charge[0] == f0 + 44);
+        CHECK(shots.size() == 1 && !shots.empty() && shots[0] == f0 + 44 + 91);
+        // the turret held its aim: the next order at the same point charges on its first service
+        CHECK(o->w.sys->order_fire_at_position(1, at));
+        const uint32_t f1 = o->w.frame;
+        const std::vector<uint32_t> again = o->shot_frames(200);
+        CHECK(again.size() == 1 && !again.empty() && again[0] == f1 + 91);
+    }
+    {  // outside Turret_Rotate_Extent_Degrees: never aimed, the order waits
+        auto o = make(90.0f);
+        CHECK(o->w.sys->order_fire_at_position(1, Vec3{-150, 0, 0}));
+        CHECK(o->run(300) == 0 && o->w.sys->fire_at_position_state(1) == 1);
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -5115,6 +6195,17 @@ int main(int argc, char** argv) {
     test_own_weapon_aim_point();
     test_own_weapon_target_bones();  // S8 t27
     test_fire_at_position();         // S8 t26
+    test_targeting_states();         // s78f t03
+    test_targeting_t08();            // s78f t08
+    test_team_targeting_copy();      // s78f t03
+    test_team_handover_and_damage();  // s78g t06
+    test_squad_value();               // s78h t03
+    test_convert_team();              // s78h t04
+    test_team_container_slot();       // s78h t06
+    test_team_head_alone();           // s78i t03
+    test_convert_container_unit();    // s78i t04
+    test_scan_player_order();         // s78g t04
+    test_charge_up_slew();           // s78f t04
     test_hardpoint_aim_target_bones();  // S8 t27
     test_scan_range_query();
     test_shared_team_target();

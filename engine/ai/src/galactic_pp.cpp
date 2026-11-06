@@ -610,10 +610,10 @@ public:
         // every plan, so the AI never queues a type the story switched off (OI2 ai).
         if (p_.w.sim.production_disabled(p_.player, r.type)) return kVeto;
         if (!p_.def.magic_plan) {
-            // [port] A2f t02 R1: a produced candidate no source planet can build (Setup C t = 1e18: no planet of the
-            // level's list passes 0x2804d0, or a structure 0x2804d0 refuses at the target) is vetoed (permanent). AI_GALACTIC_2
-            // §1.4 lists no such veto (it would score 0 / -0.5); the port vetoes it so a plan never waits on the market for
-            // a type nobody can build (zero cost, Build_Initially_Locked never unlocked, Required_Special_Structures missing).
+            // [H] A2f t02 R1, confirmed by A2F_RE_READS §4 (0x725c50 / 0x726010): a produced candidate no source planet can
+            // build (Setup C t = 1e18: no planet of the level's list passes 0x2804d0, or a structure 0x2804d0 refuses at the
+            // target) is left out of the mean / min / max and Score returns the 1e18, a permanent veto (zero cost,
+            // Build_Initially_Locked never unlocked, Required_Special_Structures missing).
             if (r.prod_t >= kInf) return kVeto;
             // AI_GALACTIC_3 §3.4-3.5 [H]: with AI_Uses_Galactic_Pop_Cap (off in shipped data) a unit whose pop exceeds
             // the remaining population is vetoed (permanent: Production erases it).

@@ -186,7 +186,7 @@ struct SkirmishMapPreview {
     bool found = false;                    // the file was read
     std::vector<uint8_t> embedded_image;   // top chunk 0x13 (a TGA file), empty = none
     // Top chunk 3 start positions as fractions of the map (x right, y down), only when the header's mini 12 is set. Land
-    // maps run 0..width / 0..height from the lower left corner, space maps are centred on the origin [M]; world +Y is up.
+    // maps run 0..width / 0..height from the lower left corner, space maps are centred on the origin; world +Y is up.
     std::vector<std::pair<float, float>> starts;
 };
 SkirmishMapPreview read_skirmish_map_preview(const FileProvider& files, std::string_view map, bool space);

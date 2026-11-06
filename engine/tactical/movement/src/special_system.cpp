@@ -54,7 +54,7 @@ bool MovementSystem::swap_locomotor(Unit& u, bool secondary) {
     u.m.speed = 0.0f;
     u.m.state = LocoState::WalkStopped;
     u.following = false;
-    u.turning = false;
+    arrival_reset(u);  // s78l t02
     u.wps.clear();
     u.path_lag = 0.0f;
     u.on_secondary = secondary;

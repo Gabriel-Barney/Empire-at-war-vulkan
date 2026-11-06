@@ -1,20 +1,14 @@
 # Project roadmap: how sessions update it
 
-The main roadmap and flowchart is `ROADMAP.html` in the project root (Gabriel, 2026-10-30; confirmed 2026-10-31 as the project's
-local roadmap on this device). It opens in any browser, and in the Claude desktop Browser pane, with no claude.ai sign-in. It is
-generated, so never edit it by hand: change the documents in `roadmap-store/` and it is rebuilt, along with the copy in that
-repository that other accounts pull. `docs/ROADMAP.html` is its page shell, and it also opens on its own: it carries the same
-read-only copy of the data between the `<!--roadmap-data:begin-->` and `<!--roadmap-data:end-->` markers.
+The main roadmap and flowchart lives in one place: the `roadmap-store/` folder (Gabriel, 2026-11-06; before that the page was also
+tracked in this repository as `ROADMAP.html` and `docs/ROADMAP.html`, which are removed). Open `roadmap-store/ROADMAP.html` in any
+browser, or in the Claude desktop Browser pane: no claude.ai sign-in. It is generated, so never edit it by hand: change the documents
+in `roadmap-store/data/` and it is rebuilt. `roadmap-store/` is its own git repository (remote `Empire-Vulkan-Brenach`) in the main
+checkout; worktrees do not have it, so run the script from the main checkout.
 
-`docs/ROADMAP.html` is both the page source and a loadable page. Edit only the shell, which is everything outside the two markers (layout,
-script, `PRESETS`). Never edit the block between the markers by hand: `roadmap_store.py` rewrites it on every `write`, build record,
-`sync` and `render`, so changes to the data go through `roadmap-store/` and the page is rebuilt from it. A shell without the
-markers still works: the generator then injects the data into the generated copies only (the old behaviour).
-
-Copies, so nobody edits the wrong one: `roadmap-store/page_shell.html` is the shell with the data block emptied, refreshed from
-`docs/ROADMAP.html` on every render (the fallback when the store is cloned alone). `ROADMAP.html` in the project root (the main roadmap) and in
-`roadmap-store/` are byte-identical to the loaded `docs/ROADMAP.html`, and
-`roadmap-store/ROADMAP.md` is the text form. These and the data block are regenerated on every write, and a diff in them is never a
+The page layout is `roadmap-store/page_shell.html`: edit only what is outside the `<!--roadmap-data:begin-->` and `<!--roadmap-data:end-->`
+markers (layout, script, `PRESETS`), then run `python roadmap-store/roadmap_store.py render`. `ROADMAP.html` is the shell plus a
+read-only copy of the data, and `roadmap-store/ROADMAP.md` is the text form; both are regenerated on every write, and a diff in them is never a
 change to review.
 
 To update, write a JSON list of `{"op", "collection", "doc_id", "data"}` to a scratch file, then run:
@@ -35,7 +29,7 @@ The claude.ai page https://claude.ai/artifact/56dGptBoT3JcDH4rHZ6BjT is retired:
 | `meta` | `page` | `eyebrow`, `title`, `lede`, `build` (last verified build line), `updated` |
 | `lanes` | short id (`st1`…) | One stage of the plan: `title`, `goal` (what the stage is for), `exit` ("done when" condition), `order`. Stages run in `order`, top to bottom in both the plan and the flowchart |
 | `nodes` | box id (`N1`, `MOVE`…) | `label`, `sub`, `lane`, `status`, `shape` (`box`/`pill`), `order`, `to` (map of target box id → `solid` "do before" or `dash` "feeds into") |
-| `items` | group id (`s7`, `n1`…) | `title`, `tag`, `node` (box id), `status`, `preset`, `mod`, `why`, `order`, `after` (list of group ids that must finish first), `updated` (date), `by` (session name), `tasks`, `eta` |
+| `items` | group id (`s7`, `n1`…) | `title`, `tag`, `node` (box id), `status`, `preset`, `mod`, `why`, `order`, `after` (list of group ids that must finish first), `updated` (date), `by` (session name), `tasks`, `eta`; claim fields, all optional, set by `claim` (below): `claimed_by` (session), `claimed_at` (ISO time), `touches` (list of module folders/files the work edits; default: `mod` split on `·` `,` `;`) |
 | `log` | `yyyymmdd-hhmmss-<session>` | `at` (ISO time), `by`, `text` |
 | `builds` | `yyyymmddhhmmss-<machine>-<tree>-<compiler>` | `at`, `by`, `machine`, `compiler`, `tree`, `status` (`pass`/`fail`), `exits`, `warnings`, `tests`, `tests_failed`, `test_seconds`, `excerpt` (first error or warning lines), `group` (optional roadmap group id) |
 
@@ -60,7 +54,7 @@ give every new group an `eta` (a group without one is counted as "without estima
 
 Status keys (groups and boxes): `next` Do next, `partly` Partly done, `big` Not started, `spec` Spec-blocked,
 `open` Guesses to confirm, `probe` Probe only, `gab` Needs Gabriel, `done` Done, `out` Out of scope.
-Presets: `xhigh`, `high`, `re2ui`, `sonnet`, `tools`, `gab` (defined in the page, `PRESETS` in `docs/ROADMAP.html`).
+Presets: `xhigh`, `high`, `re2ui`, `sonnet`, `tools`, `gab` (defined in the page, `PRESETS` in `roadmap-store/page_shell.html`).
 A preset is the recommended model and effort level for a group: `xhigh` Opus 5.5 · xhigh, `high` Opus 5.5 · high,
 `re2ui` Opus 5.5 · high then Sonnet 5.5 · high, `sonnet` Sonnet 5.5 · high, `tools` Sonnet 5.5 · medium,
 `gab` Gabriel + Opus 5.5 · medium.
@@ -97,32 +91,56 @@ A preset is the recommended model and effort level for a group: `xhigh` Opus 5.5
 5. Keep the rule from `CLAUDE.md` that every finished item is struck through, not deleted: set `s` to `done`.
    Out-of-scope work is the exception (Gabriel, 2026-10-30): delete those tasks (`{"tasks":{"t03":{"__delete__":true}}}`)
    and wholly out-of-scope groups and boxes instead of keeping them as `oos` / `out`. Record the decision in the
-   `docs/PHASE4.md` Decisions table first; that table, not the roadmap, is the record of what is out of scope.
-6. Keep `docs/PHASE4.md` and the phase status docs in step with the roadmap, as before.
+   `docs/DECISIONS.md` first; that table, not the roadmap, is the record of what is out of scope.
+6. The roadmap is the only status tracker (Gabriel, 2026-11-06): `docs/PHASE2.md` / `PHASE3.md` / `PHASE4.md` no longer carry status boards or flowcharts, and `claude/roadmap.md` / `claude/phase2-status.md` are not updated. Record results where `docs/README.md` says (decisions, measurements, build rules, specs), but track what is open or done only here.
 
 ## Other accounts
 
 `roadmap-store/` is its own git repository, and `write` pushes to its remote when one is set. Another account clones it and
 updates the same way (`roadmap-store/README.md`). Until a remote is set, updates stay on this machine.
 
-### Keeping the local page current (Gabriel, 2026-10-30)
+### One location (Gabriel, 2026-11-06)
 
-When `ROADMAP.html` changes in the GitHub store repository (another account or machine wrote to the roadmap), the local
-`docs/ROADMAP.html` data block and the `ROADMAP.html` copy in the project root must change with it. The page is generated from `roadmap-store/data/`, so this happens
-whenever the store is brought up to date through the script:
+There is one copy of the roadmap: `roadmap-store/`. A roadmap update is `python roadmap-store/roadmap_store.py write <file>`; it writes
+`roadmap-store/data/`, regenerates `roadmap-store/ROADMAP.html` and `ROADMAP.md` and pushes the store repository. Nothing about the
+roadmap is written into, tracked in or committed to the engine repository, so branches, PRs and worktrees never carry a stale page.
+This replaces the 2026-11-04 "both copies" rule. Check the remote with `python roadmap-store/roadmap_store.py sync` (prints
+`in sync with origin/main`); run it at the start of a session, and whenever the roadmap on GitHub may have changed (another account or
+machine wrote to it). `sync` pulls, regenerates the page and pushes. `write` and every build record pull first the same way.
+If you pulled by hand inside `roadmap-store/`, run `python roadmap-store/roadmap_store.py render` afterwards.
 
-- `python roadmap-store/roadmap_store.py sync` pulls the remote (`git pull --rebase`), then regenerates the data block of
-  `docs/ROADMAP.html`, both copies of `ROADMAP.html` (in `roadmap-store/` and in the project root) and `ROADMAP.md`, commits and pushes. Run it at the start of a
-  session, and whenever the roadmap on GitHub may have changed.
-- `write` and every build record (`record-build`, called by the build scripts) pull first and regenerate both copies the same
-  way, so any roadmap update on this machine refreshes the local page too.
-- A plain `git pull` inside `roadmap-store/` updates the store's own `ROADMAP.html` but **not** the project-root copy. If you
-  pulled by hand, run `python roadmap-store/roadmap_store.py render` (or `sync`) afterwards.
-- `docs/ROADMAP.html` and the project-root `ROADMAP.html` are tracked in the engine repository, so after a refresh they show as
-  modified there: commit them with the work that triggered the update (the data block is generated, never reviewed or edited by hand).
+## Claims and parallel batches
 
-Check that the two copies agree with `python roadmap-store/roadmap_store.py sync` (prints `in sync with origin/main`) and by
-comparing `ROADMAP.html` with `roadmap-store/ROADMAP.html` (byte-identical after any refresh).
+Several agents work in parallel, so a group can be claimed and the coordinator can ask for a batch that cannot collide. All of it
+goes through the normal locked write path (pull, apply, journal, commit, background push), so a claim reaches every account.
+
+```bash
+python roadmap-store/roadmap_store.py batch 5 [--by <session>] [--json]   # up to N ready groups that touch different files
+python roadmap-store/roadmap_store.py claim <group> --by <session> [--touches a,b] [--force]
+python roadmap-store/roadmap_store.py claims [--all]                        # live claims (--all adds expired ones)
+python roadmap-store/roadmap_store.py release <group> [--by <session>] [--force]
+```
+
+- `claim` sets `claimed_by` / `claimed_at`. It fails (exit 1, naming the holder and the expiry) while another session holds a live
+  claim, unless `--force`. A claim is live for 24 hours; claiming again with the same `--by` renews it, and an expired claim can
+  be taken by anyone. `--by` defaults to `ALAMO_SESSION`. `--touches` stores an explicit `touches` list; otherwise `touches` is the
+  group's `mod` string split on `·`, `,` and `;` (`a/b+c` means `a/b` and `a/c`).
+- `release` clears the claim (`--by` makes it refuse another session's live claim without `--force`). A group written as `done` or
+  `out` through `write` (or the page hook) loses its claim in the same write and commit, so nobody has to release it.
+- `batch` prints up to N groups that are open, have every `after` group finished, are not claimed by another session, do not have
+  status `gab`, `probe` or `spec` (or preset `gab`), and whose `touches` overlap neither each other nor the touches of a live claim.
+  Order: status `next` first, then stage, box and group order. Two paths overlap when they are equal or one is a folder of the
+  other (`render` and `render/particles`). A leading `engine/` is ignored, and `apps/sim` counts as `apps`, so `apps`,
+  `engine/apps` and `apps/sim` overlap each other and everything under `apps`. A group with no `mod` and no `touches` never
+  conflicts. `--by <session>` stops that session's own claims from blocking it.
+- Coordinator flow: `batch N`, then each agent runs `claim <group> --by <its name>` before it edits anything; a refused claim means
+  take the next group from a fresh `batch`.
+- The page shows a "claimed by X" badge on groups with a live claim and keeps them out of the "Start here" suggestions (it reads
+  the two fields only; a claim older than 24 hours is ignored). The shell is edited in `roadmap-store/page_shell.html` (what the
+  generator reads), outside the data markers.
+- `python roadmap-store/roadmap_store.py selftest` runs the tests for all of this on a temporary store with a local bare remote
+  (claim conflicts, expiry, overlap and batch logic, done clearing, build-record batching, lock-busy fallback); it never touches
+  the real store.
 
 ## Build records
 
@@ -130,5 +148,13 @@ comparing `ROADMAP.html` with `roadmap-store/ROADMAP.html` (byte-identical after
 `record-build`, so the roadmap shows them with no further step. The full log stays in `logs\` on the machine that built; the
 record carries the summary and the first error lines. Set `ALAMO_ROADMAP_GROUP=<group id>` before a build to link it to a
 group, and `ALAMO_SESSION=<name>` to name the session instead of the OS user. Records are only added: do not edit or prune them.
+
+`record-build` only writes the record file and a journal line (no commit, no regenerate, no push): one build run used to make one
+commit and one push. The commit and the push are batched: a push happens at most every 10 minutes (`FLUSH_INTERVAL`). After a
+record, a detached `flush` runs at once when the last push is older than that, otherwise one waiting `flush --wait` is started
+(one at a time) that runs when the interval is over. `write`, `claim`, `release` and `sync` commit pending records first, pull
+and push as before, so they never lose one; `python roadmap-store/roadmap_store.py flush` does it by hand (it also commits when
+there is no remote). A busy lock is retried (4 tries of 8 s); only if it stays busy is the record written without the lock and a
+line added to `hook_errors.log`, so a record is never dropped. Pushes happen outside the lock, and a rejected push pulls and retries.
 
 The pre-database static page and its seed files are in `backups/docs-archive-2026-10-30.zip`.

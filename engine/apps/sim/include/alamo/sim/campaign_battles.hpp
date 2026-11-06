@@ -205,7 +205,8 @@ public:
         int8_t corruption_type = -1;                                  // story t08: the corruption mission's type (else -1)
     };
     // P9-P11 as 0x28f590 step 4 applies them (globals, kept until the next linked start; saved). Sim-side state only: the
-    // arrival hold and the presentation overlays are read by systems the port does not have yet (BT §2.9.9 item 1).
+    // arrival hold is read by the running battle (story t12, TacticalBattle::set_arrival_hold); the presentation overlays by
+    // the UI (story t13, BT §2.9.9 item 1).
     struct LinkedPresentation {
         int32_t arrival = 0;              // GMM+0x30 = P9
         bool arrival_cinematic = false;   // 0x140b27d5e (P9 != 0) [M: arrival cinematic on]
@@ -234,7 +235,8 @@ public:
     bool linked_banner_up() const { return lk_.banner_up; }
     const LinkedPresentation& linked_presentation() const { return lk_.presentation; }
     galactic::LinkedResolution linked_resolution() const { return lk_.resolution; }  // GOM+0x61c (the running linked battle)
-    // Lua Resume_Hyperspace_In (0x543570): clears the hold. HOOK [lua]: no script binding calls it yet.
+    // Lua Resume_Hyperspace_In (0x543570): clears the hold (story t12: the tactical story VMs' ScriptGapHooks::
+    // resume_hyperspace_in; the running battle reads it through TacticalBattle::set_arrival_hold).
     void resume_hyperspace_in() { lk_.presentation.hyperspace_hold = false; }
     // The global last-invade vector 0x140a172b0: the units of the last human invade (ConflictGate::on_invade) or landing
     // (a human UnitsLanded routed by the story: the last `value` surface units, as StorySession maps it [port]).
@@ -389,7 +391,13 @@ private:
     // battle's fog, else the carried fog_active_ / fog_render_.
     void story_fog_begin(StoryBattleStart& st);
     void story_fog_reward(bool has_param, int32_t value);
-    StorySession* story_fog_session_ = nullptr;  // the session the ENABLE_FOW hook is installed on
+    StorySession* story_fog_session_ = nullptr;  // the session the ENABLE_FOW (and story t09 victory) hooks are installed on
+    // story t09: the tactical plot set's ENABLE_VICTORY / VICTORY rewards (StorySession::set_victory_hooks, installed with the
+    // fog hook) -> the running battle's TacticalBattle::reward_enable_victory / reward_victory (BT §3.1a item 3). VICTORY
+    // resolves Reward_Param1 through the galactic players (unknown: "Unable to find faction %s to force victory" in log()).
+    // No battle running: nothing.
+    void story_victory_enable(bool has_param, int32_t value);
+    void story_victory(const std::string& faction, bool short_silent);
 #ifdef ALAMO_LUA_HAVE_FOG
     lua::FogScriptHooks story_fog_;
 #endif

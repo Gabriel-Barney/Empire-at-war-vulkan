@@ -363,7 +363,7 @@ Tactical plans follow the framework (AI_GALACTIC §1.9): `Definitions()` declare
 | `Attack_Move(dest [, threat])` | 0x6e9440: same, mode 1 (attack-move; object dest uses 0x73c4f0) | 0x6e4fc0 |
 | `Attack_Target(unit [, …])` | 0x6e99c0: unit targets only ("use Move_To instead"); block id 0x819 | 0x6e54d0: optional hard-point type; the string `"Random"` picks a hard-point type with **Get_Int(0, 13)**, 13 meaning "any" — one synced draw |
 | `Guard_Target(target [, …])` | 0x6ebdc0: mode 2; a task-force target guards **one random unit of it** chosen with **Get_Int(0, n−1)** (no draw when n = 1) | 0x6e72c0: same rule |
-| `Explore_Area(AITarget)`, `Fire_Special_Weapon`, `Fire_Orbital_Bombardment`, `Bombing_Run`, `Prepare_Ambush`, `Find_Closest_Enemy` | 0x6eaba0, 0x6eb7f0, 0x6eb730, 0x6e9d90, 0x6ec8b0, 0x6ead30 — bodies not traced except `Prepare_Ambush` (§7.3.1) and `Explore_Area` (L1_S4_REMAINING) | 0x6e66a0, 0x6e6ad0, —, —, 0x6e7e00 (§7.3.1), 0x6e68a0 |
+| `Explore_Area(AITarget)`, `Fire_Special_Weapon`, `Fire_Orbital_Bombardment`, `Bombing_Run`, `Prepare_Ambush`, `Find_Closest_Enemy` | 0x6eaba0, 0x6eb7f0 (§7.3.4), 0x6eb730, 0x6e9d90, 0x6ec8b0, 0x6ead30 — bodies not traced except `Prepare_Ambush` (§7.3.1), `Fire_Special_Weapon` (§7.3.4) and `Explore_Area` (L1_S4_REMAINING) | 0x6e66a0, 0x6e6ad0, —, —, 0x6e7e00 (§7.3.1), 0x6e68a0 |
 | `Activate_Ability(name, on \| target)` | generic 0x5f9890: calls each unit's `Activate_Ability` (0x570a50), returns an AbilityBlockStatus | same |
 
 Object-level orders from Lua (`unit.Move_To`, `Attack_Move`, `Guard_Target`, `Divert`, `Garrison`, `Leave_Garrison`, `Activate_Ability`) are the L1 objects bindings and execute directly (COMMANDS.md).
@@ -644,6 +644,78 @@ Its block rule `ability_block_rule` already matches. What to change:
 
 Nothing else in the dispatch is unclear. The open item is who removes the dummy of ids 50 / 67 / 71 / 73 / 74
 [L]. The port's `dummy_lifetime` 900 frames is a [port] stand-in.
+
+**In-game probe of the DEPLOY block (s78f t01, 2026-11-05)** [H for what was seen]. Source:
+`tools/probe_mod/s7s8_probes/out/20261105-051443` and `-055142` (SPMAT). An AI-owned `SPMAT_Walker` on Geonosis was
+driven from the free-store script:
+- `Activate_Ability("DEPLOY", true)` on an undeployed walker returned a block, which finished **45 frames** later.
+- In memory the locomotor went 0x18 at once (clip 25 = Deploy, at rate 2.0) and 0x19 45 frames later, the frame
+  the block finished.
+- `("DEPLOY", false)` from deployed returned a block that finished after **240 frames**. In the first run the
+  locomotor stayed at 0x19 for most of that time.
+- `("DEPLOY", true)` again right after (state already wanted) returned **nil** (no block), as the "equal → nil" row
+  above says.
+- `("DEPLOY", false)` 12 frames later returned a block that finished in **12 frames**.
+- An `Attack_Target` on a deployable SPMAT (`Auto_Deploys`) started the Deploy clip 3 frames after the order. It
+  reached 0x19 and targeting state 3 at +48, state 4 and the first grenade at +66 (LOB_SOLVER §9).
+
+The free-store script stopped producing records at the AT-AT scenario's first DEPLOY in both land runs (`ret=nil`,
+then silence for the rest of the battle). [M] Something in that scenario blocks the free-store thread for good,
+not an error: the event handlers run in pcall and recorded nothing. Run the AT-AT scenario last.
+Third run (s78f t12, 2026-11-05, `out/20261105-062322`, AT-AT last) [M]. `("DEPLOY", true)` on the AT-AT returned
+nil (ready 0 → 0, not active). The script then falls through to the `DEPLOY_TROOPERS` fallback, and the thread went
+silent for good while the game ran on for about 9600 frames. No later record arrived, not even the ACTC record
+written between `Is_Ability_Ready("DEPLOY_TROOPERS")` and the no-argument `Activate_Ability("DEPLOY_TROOPERS")`. So
+the block is in one of those two calls on an AT-AT that has not deployed. The reader also missed the ACTC of the
+first DEPLOY call in this run, so a lost record cannot be ruled out. Either way, the original's free-store thread
+never resumes after that call.
+
+### 7.3.4 `LandTaskForce.Fire_Special_Weapon(type_name, target)` with a position target (s78f t04, 2026-11-03)
+
+Body 0x6eb7f0 [H unless tagged]. It extends SCRIPT_GAPS §1.4. It returns no block status.
+
+**Arguments.** Exactly 2, else the script error "invalid number of parameters: expected 2 got %d", which returns
+nothing (nil).
+1. **type_name:** a Lua string (else error "invalid type for parameter 1. Expected string"). It is looked up by name
+   (0x407c00); the type must have LOBBING_SUPERWEAPON (0x37) in its **Land** behaviour set (0x370320(type, 0x37, 1)),
+   else error "%s is not a land special weapon!".
+2. **target:** exactly one of two Lua classes:
+   - **AITargetLocationWrapper** (class tag 0x140a44280). Its location (wrapper +0x38) null → warning "target is
+     already dead.  Aborting.", nil. Otherwise point = the location's position (location vf +0x68). For a **region
+     target** (`TacticalRegionAITargetLocationClass`, 0x7254e0) that is the stored centre at +0x1c, i.e. the hint
+     zone's centre (§3.2). The location is **not** asked for a game object, so **a region target with no object is
+     accepted**. For a unit target it is the unit target's position getter [M: the unit class's vf +0x68 was not
+     located; expected the object's position].
+   - **GameObjectWrapper** (0x140a43b18). Object (wrapper +0x60) null → the same warning, nil. Otherwise point = the
+     object's raw position obj +0x78 (no `Ranged_Target_Z_Adjust`).
+   - Anything else, **a plain position value included** (the position class 0x140a44290 that 0x4990b0 accepts
+     elsewhere is not tested here), → error "Invalid type for parameter 1.  Expected game object or target location"
+     (the message says parameter 1), nil.
+
+**Dispatch.**
+- Walk the task-force member list (TF +0x78, wrappers → objects, list order).
+- Take the **first** unit whose representative type (0x3973b0) is the named type, that has the LOBBING_SUPERWEAPON
+  behaviour, and whose readiness (0x4914e0 on obj +0x158) is ≥ 1.0.
+- `Fire_Lobbing_At_Position` 0x4ea3f0(that behaviour, point). The point is stored as given, z included, with no
+  ground snap. 0x4ea3f0 returns nothing and can silently do nothing: no tactical player data for the owner, or
+  `Requires_Base_Power` without base power (0x527520). The caller does not check that.
+- Then the destroy-after sweep: every object of behaviour 0x67 owned by the unit's owner is killed (0x391310(obj, 1))
+  in the list order of 0x2a9ff0.
+- Return the unit's GameObjectWrapper (0x5751d0 with the task force's player). Later matching units are **not**
+  tried, even when the order was silently refused.
+- No ready matching unit → returns **false** (a `LuaValue<bool>`).
+
+**What happens next** (TACTICAL_COMBAT §3.1.1 "Fire-at-position order"; LOB_SOLVER §3.6 "Charge-up aim"): the
+turret slews to the point, the 90-frame charge-up runs, and the WEAPON service fires a ground-point shot (no target
+object, no lead, no bone pick). A region centre whose z is not the ground height is still the solver's target
+point; the grenade detonates on the terrain hit (LOB_SOLVER §6) [M: the hint-zone centre's z].
+
+**Port** (engine/lua/src/bind_script_gaps.cpp `task_force_fire_special_weapon`, read 2026-11-03). Four differences
+from retail:
+- it errors "invalid target" for an AI target without an object; retail fires at the region's position;
+- it compares `st->type(u)` with the type; retail compares the representative type (0x3973b0);
+- when the fire hook refuses, it tries the next unit; retail returns the first ready unit whatever 0x4ea3f0 did;
+- its error texts differ slightly.
 
 ### 7.4 Reinforcement drops (`TF.Reinforce(target [, maxWait])`) [H unless tagged]
 - **Land** (0x6ed5f0): requires the TF to have pending reinforcement types (else "taskforce has no reinforcements", nil). If the player currently cannot reinforce (0x2b03e0 false) it returns an immediately-failing ReinforceBlockStatus (id 0x81a). The target may be an object, an AITargetLocation or a task force (its position). Then:
@@ -994,7 +1066,7 @@ Lua short-circuit order matters: `(GameRandom.Get_Float() > 0.5) and Try_Ability
 > **Status 2026-10-30:** Items 1, 2 and 4 are done: the tactical perceptual evaluators are in `engine/ai/tactical/src/tactical_perception.cpp`, the threat grid in `engine/ai/tactical/src/threat_grid.cpp` (AI_TACTICAL_PERCEPTION.md), and reinforcement landing with the `Use_Reinforcement_Points` rule and the can-reinforce test in `engine/ai/tactical/src/tactical_ai.cpp:1772-1813` and `engine/ai/tactical/include/alamo/ai/tactical/constants.hpp:44-45`. Items 3 and 6 are partly done: `Explore_Area`, `Prepare_Ambush`, `Fire_Special_Weapon`, `Project_By_Unit_Range`, `Get_Self_Threat_Max/Sum`, `Get_AI_Power_Vs_Unit` and `Is_Good_Against` are bound (`engine/lua/src/bind_ai_tactical.cpp`, `bind_script_remaining.cpp`), but `Should_Switch_Weapons` is a stub that always returns false (`engine/lua/src/bind_ai_tactical.cpp:324-328`). Item 7: HIJACK_UNIT is handled for tactical plans (`engine/ai/tactical/src/tactical_ai.cpp:1187-1199`).
 1. **Tactical perceptual evaluators**: exact definitions of the land/space tokens listed in §3.5 (`EnemyUnitConcentration(NBTD)`, `Location.*Force`, `IsContestable`, `TimeLastSeen`, `AdditionalPopulationCapacity`, `UnitSpaceAvailable`, `IsDefender`, `BaseLevel`, …). This is the largest gap for A1 parity: every tactical goal desire depends on them.
 2. **TacticalPerceptionGridClass** (0x653340 ctor, 0x6537d0, 0x657fc0, 0x6585f0): grid origin/size (likely from FOW cells × `AI_FogCellsPerThreatCell` 4), the entry weights in 0x6545d0 / 0x655e50, threat projection (`AI_*ThreatDistanceFactor`, `TurnRateFactor`, `LookAheadTime`, `AreaThreatScaleFactor`, `ThreatRangeCap`), and how `UnitAIBehavior` updates it.
-3. LandMovementBlockStatus / SpaceMovementBlockStatus completion rules (arrival radius, what counts as finished for attack-move and guard), and `Explore_Area`, `Prepare_Ambush`, `Bombing_Run`, `Fire_Special_Weapon`, `Find_Closest_Enemy` bodies. **`Prepare_Ambush` done (S7 t18, §7.3.1); empty-task-force `Move_To` / position done (S7 t17, §7.3.2).** Still open from §7.3.1/§7.3.2: the mode box vf +0x1f8 vs the playable box vf +0x208; the lost 5th signal id of the ambush member subscription [L: 0x1a]; ~~the meaning of the type flags +0x13 / +0x14 / bit 0x37 in the No_Units_Remaining test~~ (done 2026-11-02, §7.3.3: named hero, generic hero, Land LOBBING_SUPERWEAPON; +0x1e = Is_Special_Weapon_In_Space); whether a plan can start with a 0-unit optional team. Still open from §7.3.3: whether an object-target ability's pending entry is cleared when its target dies (else its block waits for 0xb / 0x10 / any 0x29); the meaning of locomotor vf +0x2b0 in the DEPLOY gate.
+3. LandMovementBlockStatus / SpaceMovementBlockStatus completion rules (arrival radius, what counts as finished for attack-move and guard), and `Explore_Area`, `Prepare_Ambush`, `Bombing_Run`, `Fire_Special_Weapon`, `Find_Closest_Enemy` bodies. **`Prepare_Ambush` done (S7 t18, §7.3.1); empty-task-force `Move_To` / position done (S7 t17, §7.3.2); land `Fire_Special_Weapon` done (s78f t04, 2026-11-03, §7.3.4; [M] left: the unit AI target's position getter and the hint-zone centre z).** Still open from §7.3.1/§7.3.2: the mode box vf +0x1f8 vs the playable box vf +0x208; the lost 5th signal id of the ambush member subscription [L: 0x1a]; ~~the meaning of the type flags +0x13 / +0x14 / bit 0x37 in the No_Units_Remaining test~~ (done 2026-11-02, §7.3.3: named hero, generic hero, Land LOBBING_SUPERWEAPON; +0x1e = Is_Special_Weapon_In_Space); whether a plan can start with a 0-unit optional team. Still open from §7.3.3: whether an object-target ability's pending entry is cleared when its target dies (else its block waits for 0xb / 0x10 / any 0x29); the meaning of locomotor vf +0x2b0 in the DEPLOY gate.
 4. Reinforcement landing positions (0x6eaf60) and the land ReinforceBlockStatus finish/fail rules. (Space resolved by refixf t06, §7.4: ring search in SpaceReinforceBlockStatus; 0x2b03e0 is the population-room test.)
 5. Free-store admission bit meanings (type bitfield +0x790 bits 0x20, 0x5b, 0x5f; obj +0x2b0/+0xf8; mode +0x38 set) and the +0x30 lock field writer; `Lua_Is_Object_On_Free_Store` / `Get_Object_Count`. **+0x30 writers/readers and the two Lua methods: done, A1_READINGS §28** (+0x30 = owning PP; `Lock_Current_Orders` is obj +0x3a8).
 6. `Project_By_Unit_Range`, `Get_Self_Threat_Max/Sum`, `Get_AI_Power_Vs_Unit`, `Should_Switch_Weapons`, `Is_Good_Against`, `Get_Time_Till_Dead` (used by every land plan and PGEvents).

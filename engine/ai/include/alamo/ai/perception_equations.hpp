@@ -15,7 +15,7 @@
 //              | Function_<Equation>.Evaluate [params]                            another equation
 //              | Script_<Name>.Evaluate [params]                                  Lua hook (resolve_script)
 //   params    := { [ Parameter_X = value { , Parameter_Y = value } ] }
-//   value     := "string" | number | EnumType[A|B|..] | identifier
+//   value     := "string" | number | EnumType[text] | identifier
 //
 // S2 grammar (STRATEGIC_GAPS §3, [H] from the DLL's spirit rules): precedence loosest -> tightest =
 //   comparisons (chained left to right), + -, * / # ('#' binds like '*': a * b # c = (a*b) # c), unary
@@ -29,11 +29,21 @@
 //     evaluation (ok == false); 0 / x = 0, x / 0 fails (AI_GALACTIC_3 §7.1);
 //   * clamp(x, lo, hi) = x < lo ? lo : (x > hi ? hi : x) (lo tested first; NaN passes through);
 //   * duplicate equation names: the first loaded definition wins (later ones are reported);
-//   * file order: as given (the host passes Vfs::list(), byte-sorted); names case-insensitive.
+//   * file order: as given (the host passes Vfs::list(), byte-sorted); names case-insensitive;
+//   * enum literals (A2I_TOKENS_RE §3) [H]: `Type[text]` is converted when the equation is built, by the converter named
+//     Type (EquationSet::enum_literals(); load_equation_files reads the data enum files, A2J t07): no such converter,
+//     or text it cannot convert, is a parse error. A plain enum
+//     looks the whole trimmed, case-insensitive text up as ONE name (so any '|' fails); a bitfield splits on '|', space,
+//     ',', tab, LF and every token must be defined (value = their OR). An equation that fails to build (syntax or
+//     enum literal) is not registered: find() does not see it, a later definition of the name is the first one, and
+//     Function_ references to it stay unresolved. It is kept in equation() / size() for diagnostics only (parsed false).
+//     A2J t07 [port; L in the original, A2J_T07_LITERALS §2]: the referencing equation still builds; evaluating the
+//     unresolved reference fails the whole evaluation (EvalError::Function), like any failing leaf.
 // Evaluation is pure ('#' included) and re-entrant: one EquationSet may be evaluated from many
 // threads at once with per-call EvalContexts.
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -84,7 +94,8 @@ struct ParamValue {
     Kind kind = Kind::Number;
     double number = 0.0;
     std::string text;                      // String / Identifier text, Enum type name
-    std::vector<std::string> enum_values;  // Enum: the names inside [ ], split at '|'
+    std::vector<std::string> enum_values;  // Enum: the names inside [ ] (bitfield: every token; plain enum: one name)
+    int64_t enum_value = 0;                // Enum: the converted value (the uint64 bit pattern the original carries)
 };
 struct Param {
     std::string name;  // "Parameter_Type"
@@ -122,8 +133,49 @@ struct ParseError {
     uint32_t offset = 0;  // byte offset in the expression text
     std::string message;
 };
-// Parses one expression; tokens are interned into `tokens`. False (and *err) on a syntax error.
-bool parse_expression(std::string_view text, TokenTable& tokens, Expression& out, ParseError* err = nullptr);
+// The equation-literal converter registry (the exe's DatabaseUIntConversionClass registry as the port knows it): the
+// objects::EnumRegistry converters (GameObjectCategoryType, GameObjectPropertiesType, MovementClassType, ...), plus
+// AIGoalCategoryType, DifficultyLevelType (Easy 0, Normal 1, Hard 2) and HardPointType (the short names, value = index).
+// Converter-name lookup ASCII case-insensitive [port; L in the original, A2J_T07_LITERALS §3]; entry names trimmed and
+// case-insensitive [H]. `bitfield` tells how `text` was split; `value` = the converted value; `names` = the trimmed names /
+// tokens (input case).
+struct EnumLiteral {
+    bool bitfield = false;
+    int64_t value = 0;
+    std::vector<std::string> names;
+};
+enum class EnumLiteralError : uint8_t { None, NoConverter, Unconvertible };
+
+// A2J t07 (A2J_T07_LITERALS §1): one registry. Default-constructed = the built-in vanilla tables. load() reads the
+// dynamic converters from Data\XML\Enum\<Name>.xml through `files` (GameObjectCategoryType, GameObjectPropertiesType,
+// MovementClassType, ObjectWeatherCategoryType, SurfaceFXTriggerType as objects::EnumRegistry::load_dynamic does, and
+// AIGoalCategoryType by the same dynamic-enum rules, OBJECT_TYPES §9.1 [H]): a missing file keeps the built-in table; a
+// file with a duplicate entry (or a bitfield with more than 64) discards that converter, which then fails every literal
+// (problems are appended to *diagnostics). DifficultyLevelType and HardPointType are compiled-in tables [H: static
+// EnumConversionClass]. Immutable after load(): safe for concurrent const use.
+class EnumLiteralTable {
+public:
+    EnumLiteralTable();
+    ~EnumLiteralTable();
+    EnumLiteralTable(const EnumLiteralTable&) = delete;
+    EnumLiteralTable& operator=(const EnumLiteralTable&) = delete;
+    void load(const FileProvider& files, std::vector<std::string>* diagnostics = nullptr);
+    EnumLiteralError convert(std::string_view type, std::string_view text, EnumLiteral& out) const;
+    bool has(std::string_view type) const;        // a converter of that name exists (discarded ones included)
+    bool from_file(std::string_view type) const;  // its entries were read from Data\XML\Enum
+    static const EnumLiteralTable& builtin();     // the shared built-in table
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+// convert() on the built-in table.
+EnumLiteralError convert_enum_literal(std::string_view type, std::string_view text, EnumLiteral& out);
+
+// Parses one expression; tokens are interned into `tokens`. False (and *err) on a syntax error or an enum literal that
+// does not convert. `literals` = the converter table (null: the built-in one).
+bool parse_expression(std::string_view text, TokenTable& tokens, Expression& out, ParseError* err = nullptr,
+                      const EnumLiteralTable* literals = nullptr);
 // True when a comparison has an operand that is an unparenthesised arithmetic expression
 // (the precedence assumption matters for it).
 bool precedence_sensitive(std::string_view text);
@@ -159,15 +211,21 @@ public:
     size_t size() const { return eq_.size(); }
     TokenTable& tokens() { return tokens_; }
     const TokenTable& tokens() const { return tokens_; }
+    // The enum-literal converters add() builds with (A2J t07). Unset: the built-in table. Set it before the first add.
+    void set_enum_literals(std::shared_ptr<const EnumLiteralTable> table);
+    bool has_enum_literals() const { return literals_ != nullptr; }
+    const EnumLiteralTable& enum_literals() const;
 
 private:
     std::vector<Equation> eq_;
     std::unordered_map<std::string, uint32_t> index_;  // upper-cased name -> first definition
     TokenTable tokens_;
+    std::shared_ptr<const EnumLiteralTable> literals_;
 };
 
 // Loads `paths` (game-relative, e.g. from Vfs::list(kPerceptionEquationGlob)) in the given order
-// and links. Unreadable files are reported and skipped.
+// and links. Unreadable files are reported and skipped. A2J t07: when `out` has no literal table yet, one is loaded
+// from `provider` first (EnumLiteralTable::load; its problems go to LoadReport::messages) and set on `out`.
 LoadReport load_equation_files(const FileProvider& provider, std::span<const std::string> paths, EquationSet& out);
 
 // ---- evaluation ----------------------------------------------------------------------------------

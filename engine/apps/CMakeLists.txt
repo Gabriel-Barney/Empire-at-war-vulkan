@@ -204,7 +204,7 @@ if(_alamo_sim)
     # S10 land outcome, t50: the land skirmish played on (0/1/4/16/N workers identical); skipped (exit 0) without ALAMO_FOC_DATA. What it asserts
     # is structure, not a seed's luck (--expect-skirmish-base): both sides start with their pre-built base (Command Center + Barracks of both
     # slots), the shipped skirmish AI issues orders, shots are fired, 0 Lua errors. Whether the game ends is checked by the _end test below.
-    # OPT3 t08: the worker-count check (alamo_add_worker_count_check, docs/PHASE4.md "Worker-count check"): the 0-worker entry writes
+    # OPT3 t08: the worker-count check (alamo_add_worker_count_check, docs/BUILD.md "Worker-count check"): the 0-worker entry writes
     # the CRC log and checks the base (--expect-skirmish-base), _w1 / _w4 / _w16 / _w<N> compare against it.
     alamo_add_worker_count_check(alamo_headless_skirmish_ai_foc_land_outcome
         COMMAND alamo_headless --skirmish-ai foc-land --ticks 7000 --quiet
@@ -384,6 +384,28 @@ add_test(NAME alamo_headless_replay_golden
          COMMAND alamo_headless --replay ${_q1_data}/replay_stream.acmd --check-workers
                  --crc-out ${CMAKE_CURRENT_BINARY_DIR}/replay_actual.crc --golden ${_q1_data}/replay_golden.crc)
 set_tests_properties(alamo_headless_replay_golden PROPERTIES TIMEOUT 300)
+
+# Golden checkpoints (ALAMO_CRC 2; docs/status/golden-checkpoints.md): --crc-checkpoint / --crc-convert / --compare on a v2 log,
+# the C++ and the Python (tools/goldens/convert_goldens.py) writers byte for byte, and the game smoke golden check
+# (game/compare_smoke.cmake) on a checkpoint golden; plus the converter's own selftest. The unit tests of the format
+# (round trip, mismatch message, v1 against v2) are alamo_core_sim_tests.
+find_program(ALAMO_GOLDEN_PYTHON NAMES python PATHS ${CMAKE_SOURCE_DIR}/toolchain/venv/Scripts NO_DEFAULT_PATH)
+find_program(ALAMO_GOLDEN_PYTHON NAMES python python3)
+if(NOT ALAMO_GOLDEN_PYTHON)
+  set(ALAMO_GOLDEN_PYTHON "")
+endif()
+add_test(NAME alamo_headless_crc_checkpoint
+         COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:alamo_headless> -DSTREAM=${_q1_data}/replay_stream.acmd
+                 -DCOMPARE_SMOKE=${CMAKE_CURRENT_SOURCE_DIR}/game/compare_smoke.cmake
+                 -DWORK=${CMAKE_CURRENT_BINARY_DIR}/crc_checkpoint -DPY=${ALAMO_GOLDEN_PYTHON}
+                 -DCONVERT=${CMAKE_SOURCE_DIR}/tools/goldens/convert_goldens.py
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/headless/check_crc_checkpoint.cmake)
+set_tests_properties(alamo_headless_crc_checkpoint PROPERTIES TIMEOUT 300)
+if(ALAMO_GOLDEN_PYTHON)
+  add_test(NAME alamo_goldens_convert_selftest
+           COMMAND ${ALAMO_GOLDEN_PYTHON} ${CMAKE_SOURCE_DIR}/tools/goldens/convert_goldens.py --selftest)
+  set_tests_properties(alamo_goldens_convert_selftest PROPERTIES TIMEOUT 60)
+endif()
 
 # Slow tier (label "slow", see engine/CMakeLists.txt): the long headless runs; ctest -LE slow skips them. The land-outcome
 # worker-count tests and the golden checks stay labelled together with the run whose CRC log they need (fixtures).

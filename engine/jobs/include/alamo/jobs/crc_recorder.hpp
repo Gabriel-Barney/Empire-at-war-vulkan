@@ -72,7 +72,7 @@ inline std::vector<int32_t> determinism_worker_counts() {
 // Worker-count check (OPT3 t07), in-process form for unit tests and short runs: runs `run(workers)`
 // (returns the run's CrcLog) for every count in order and compares each log with the first count's.
 // Long runs use the per-process form instead, one ctest entry per count: alamo_add_worker_count_check()
-// in engine/CMakeLists.txt (docs/PHASE4.md "Worker-count check").
+// in engine/CMakeLists.txt (docs/BUILD.md "Worker-count check").
 //
 //   const auto rep = jobs::check_worker_counts([&](int32_t w) { return run_my_sim(w); });
 //   for (const auto& r : rep.runs) std::printf("  workers %d: %s\n", r.workers, r.vs_first.message.c_str());

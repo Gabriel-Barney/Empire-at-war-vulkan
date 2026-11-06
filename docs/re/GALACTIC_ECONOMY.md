@@ -438,7 +438,9 @@ The production service is reached through the galactic store's "planet productio
 ### 2.8 On planet capture
 
 The space queue is re-evaluated with starbase level 0, which deletes everything that needs a starbase, without a
-refund. The starbase owner (D +0x13c) is reset to −1 (0x3f7280, 0x3f98a0). Ground-queue clearing on capture is
+refund. The starbase owner (D +0x13c) is reset to −1 (0x3f7280, 0x3f98a0). Correction (a2j, `A2J_T03_INCOME.md` t06): +0x13c is
+cleared only together with the starbase handle (0x4bda40, BATTLE_TRANSITIONS §3.3a, from Change_Owner and the revolt); the
+derived-owner change 0x3fb040 has no starbase step, so a surviving starbase keeps its owner. Ground-queue clearing on capture is
 logged by 0x2bff60 ("Clearing all land based production objects…") and was not traced. [M]
 
 ---

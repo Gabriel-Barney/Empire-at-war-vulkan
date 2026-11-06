@@ -231,34 +231,57 @@ private:
 
 uint64_t combine_crcs(std::span<const std::string> names, std::span<const uint64_t> crcs);
 
-// A run's CRC sequence. Text file format (LF line ends, written byte-identically by every build):
+// A run's CRC sequence. Text file formats (LF line ends, written byte-identically by every build):
+//   v1, the full log (what --crc-out writes by default; one record per captured tick):
 //     ALAMO_CRC 1
 //     systems <count> <name0> <name1> ...
 //     parity <count> <part0> <part1> ...
 //     # free comment lines (meta: seed, stream, workers ...) - ignored by compare
 //     <tick> <combined:16 hex> <parity:8 hex> <crc0:16 hex> <crc1:16 hex> ...
-// Lines are one record per captured tick, ticks strictly increasing.
+//   v2, a checkpoint log (checked-in goldens; docs/status/golden-checkpoints.md): same header, then
+//     ALAMO_CRC 2
+//     systems ... / parity ...
+//     checkpoint <N>                    (N > 0)
+//     keep <tick> <tick> ...            (optional line: extra ticks that were kept)
+//     # comments
+//     <records>                         only the first record, the last record, every tick with tick % N == 0 and
+//                                       every tick of the keep line; ticks strictly increasing
+// Lines are one record per stored tick, ticks strictly increasing. A v2 log is a subset of the full log of the same
+// run, so it compares against a full log (or a fresh run) on just its stored ticks (first_divergence below).
 struct CrcLog {
     std::vector<std::string> systems;
     std::vector<std::string> parity_parts;
     std::vector<std::string> comments;  // written as "# ..." after the systems line
     std::vector<CrcRecord> records;
+    uint32_t checkpoint = 0;        // 0: a full log (v1); N > 0: a checkpoint log (v2), see above
+    std::vector<uint64_t> keep;     // v2: extra stored ticks (sorted, unique); v1: empty
 
-    std::string to_text() const;
-    static bool parse(std::string_view text, CrcLog& out, std::string* err = nullptr);
+    // The v2 log of this one: first and last record, every tick with tick % every == 0 and every tick in `keep_ticks`.
+    // every == 0 returns a copy unchanged. Comments and the system lists are kept.
+    CrcLog checkpointed(uint32_t every, const std::vector<uint64_t>& keep_ticks = {}) const;
+
+    std::string to_text() const;  // v1 when checkpoint == 0, v2 otherwise
+    static bool parse(std::string_view text, CrcLog& out, std::string* err = nullptr);  // v1 and v2
     bool save(const std::string& path, std::string* err = nullptr) const;
     static bool load(const std::string& path, CrcLog& out, std::string* err = nullptr);
 };
 
 struct CrcDivergence {
     bool diverged = false;
-    uint64_t tick = 0;      // first diverging tick (when diverged)
+    uint64_t tick = 0;      // first diverging tick (when diverged); for a checkpoint compare the first bad checkpoint tick
     std::string system;     // first system (registration order) whose CRC differs, or "parity";
                             // empty if the system lists or the record counts differ
-    std::string message;    // one-line human-readable summary
+    std::string message;    // human-readable summary (checkpoint compares: two lines, the second says how to get the exact tick)
+    // Checkpoint compares only (either log has checkpoint != 0), when a stored record differs:
+    uint64_t window_first = 0, window_last = 0;  // the first differing tick lies in [window_first, window_last]
+    std::vector<std::string> columns;            // every column that differs at the first bad checkpoint: systems, "parity", "combined"
 };
 // Compares records in order (comments ignored). Missing records count as divergence at the first
 // tick present in only one log.
+// When either log is a checkpoint log (v2) only the stored ticks of that log are compared (the expected one's when
+// both are): every stored record must exist in the other log with the same CRCs, and both logs must end at the same
+// tick. A mismatch names the first bad checkpoint, the window of ticks since the previous (matching) checkpoint and the
+// differing columns. Two full logs compare exactly as before.
 CrcDivergence first_divergence(const CrcLog& expected, const CrcLog& actual);
 
 }  // namespace alamo

@@ -56,7 +56,6 @@ bool App::init() {
                         : video_profile_.vsync_mode == ui::VsyncMode::Mailbox ? rhi::PresentMode::Mailbox : rhi::PresentMode::Fifo;
         if (!opt_.frame_cap_set) opt_.frame_cap = video_profile_.frame_cap;
         hardware_mouse_ = video_profile_.hardware_mouse;
-        sync_anti_alias(video_profile_);
         sync_detail(video_profile_);  // t43
         adv_video_ = video_profile_.advanced;
         std::printf("video options: %s\n", video_profile_path_.c_str());

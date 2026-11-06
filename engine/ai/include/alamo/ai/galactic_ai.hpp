@@ -206,6 +206,10 @@ public:
     // A2f t02, tests / diagnostics: the goal maintenance's production-time term (0x525200 stand-in [M]) of a running plan:
     // the largest time its unfinished build tasks still need (0 when none or no such plan).
     float plan_production_time(int32_t running) const;
+    // A2f t09, tests / diagnostics: a live PotentialPlan's selected types (selection order) and its nominal time 0x6c0450
+    // (the goal's AllowedTime base, Goal::nominal_time); empty / -1 for an unknown handle.
+    std::vector<uint32_t> potential_plan_selection(int32_t pp_handle) const;
+    float potential_plan_nominal_time(int32_t pp_handle) const;
 
     // Free store (docs/re/FIXPASS_GALACTIC.md §1), tests / diagnostics. These act like the player's free-store script:
     //   free_store_move   = FreeStore.Move_Object(unit, planet): false when refused (§1.2); a true return with no

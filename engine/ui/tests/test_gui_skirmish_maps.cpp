@@ -1,9 +1,10 @@
-// test_gui_skirmish_maps (p4ui t06 + p4uim, p4uia; docs/re/UI.md sections 9 and 3.7.1): the skirmish staging screen in FrontEnd
-// on a fake provider: Official / Custom tabs, the Land / Space game type list filtering the rows, row text ("(N) name",
-// missing key, file-name fallback with the 22 + "..." cut), order (row text case-insensitively, ties by map id), the initial
-// selection (the map started last for the game type, else Kuat on Space, else row 0), the map and game type remembered across
-// openings, that Start sends the selected row's map id through the filtered / sorted view, the preview image with the start
-// markers, the description text and the colour combos (items, default = slot index, swap, colours carried in StartSkirmish).
+// test_gui_skirmish_maps (p4ui t06 + p4uim, p4uia, p4uis; docs/re/UI.md sections 9 and 3.7.1): the skirmish staging screen in
+// FrontEnd on a fake provider: Official / Custom tabs, the Land / Space game type list filtering the rows (a first opening is
+// on Land, the type selected last is remembered at once), row text ("(N) name", missing key, file-name fallback with the
+// 22 + "..." cut), order (row text case-insensitively, ties by map id), the initial selection (the map selected last for the
+// game type, else Kuat on Space, else row 0), the map remembered on every selection change, that Start sends the selected
+// row's map id through the filtered / sorted view, the preview image with the numbered start markers, the hidden description
+// box and the colour combos (items, default = slot index, the slot-order clash rule, colours carried in StartSkirmish).
 // Data-free.
 #include "test_gui_screens_common.hpp"
 
@@ -158,29 +159,21 @@ void test_skirmish_maps() {
     const GuiDialog* d = rig.env.gui.find(kStaging);
     CHECK(d && d->get("IDC_SELECT_OFFICIAL_MAPS")->visible && d->get("IDC_SELECT_CUSTOM_MAPS")->visible);
 
-    // The game type list (t01): Land, Space from the text database; a first opening is on Space [port].
+    // The game type list (t01): Land, Space from the text database; a first opening is on Land (UI.md 9.7).
     CHECK(rig.control("IDC_GAME_TYPE_LIST")->items == (std::vector<std::u32string>{U"Ground Battle", U"Space Battle"}));
-    CHECK(rig.fe.skirmish_space_type() && rig.control("IDC_GAME_TYPE_LIST")->selected == 1);
+    CHECK(!rig.fe.skirmish_space_type() && rig.control("IDC_GAME_TYPE_LIST")->selected == 0);
 
-    // Official tab on open, Space type: the space maps by row text; "(N) " + the localised name.
+    // Official tab on open, Land type: the land maps by row text; "(N) " + the localised name.
     const std::vector<std::u32string> official_space = {U"(2) TEXT_NO_SUCH_KEY", U"(4) Kuat"};
     const std::vector<std::u32string> official_land = {U"(2) Alpha", U"(4) Endor", U"A234567890123456789012345",
                                                        U"ABCDEFGHIJKLMNOPQRSTUV...", U"Twin", U"Twin", U"Zed Label"};
     CHECK(!rig.fe.skirmish_custom_tab());
-    CHECK(items_of(rig.env.gui) == official_space);
-    // Initial selection: nothing started yet, so Kuat.
-    CHECK(selected_of(rig.env.gui) == 1);
-    CHECK(rig.fe.skirmish_map_row("_mp_space_kuat") == 1 && rig.fe.skirmish_map_row("_MP_LAND_ENDOR") == -1 && rig.fe.skirmish_map_row("nope") == -1);
-    // Start sends the selected row's map id, through the sorted view (row 1 is maps_[2]).
-    CHECK(rig.start() == "_MP_SPACE_KUAT");
-    rig.select(0);
-    CHECK(rig.start() == "_MP_SPACE_ABC");
-
-    // Land type: only the land maps; no Kuat and nothing started on Land yet: row 0.
-    rig.game_type(false);
-    CHECK(!rig.fe.skirmish_space_type() && items_of(rig.env.gui) == official_land && selected_of(rig.env.gui) == 0);
+    CHECK(items_of(rig.env.gui) == official_land);
+    // Initial selection: nothing remembered for Land, so row 0.
+    CHECK(selected_of(rig.env.gui) == 0);
     CHECK(rig.fe.skirmish_map_row("_MP_LAND_ENDOR") == 1 && rig.fe.skirmish_map_row("_MP_SPACE_KUAT") == -1 && rig.fe.skirmish_map_row(kLong) == 3);
-    // Every row maps back to its own map id (row order is not the provider order).
+    CHECK(rig.start() == "_MP_LAND_ALPHA");
+    // Every row maps back to its own map id (row order is not the provider order), through the sorted view.
     const char* const ids[7] = {"_MP_LAND_ALPHA", "_MP_LAND_ENDOR", "A234567890123456789012345", "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "_MP_LAND_TWIN_A",
                                 "_MP_LAND_TWIN_B", "_MP_LAND_LABELED"};
     for (int32_t r = 0; r < 7; ++r) {
@@ -191,19 +184,30 @@ void test_skirmish_maps() {
     rig.game_type(false);
     CHECK(selected_of(rig.env.gui) == 6);
 
-    // t02: per game type, the map started last is selected again after switching away and back (Space: ABC was started after
-    // Kuat, so ABC; Land: the last started row, Zed Label).
+    // Space type: only the space maps; nothing remembered for Space yet, so Kuat.
+    rig.game_type(true);
+    CHECK(rig.fe.skirmish_space_type() && items_of(rig.env.gui) == official_space && selected_of(rig.env.gui) == 1);
+    CHECK(rig.fe.skirmish_map_row("_mp_space_kuat") == 1 && rig.fe.skirmish_map_row("_MP_LAND_ENDOR") == -1 && rig.fe.skirmish_map_row("nope") == -1);
+    CHECK(rig.start() == "_MP_SPACE_KUAT");
+
+    // UI.md 9.5: the map follows the list selection, not Start. Pick a row on each type without starting; after switching away
+    // and back the row picked is selected again.
+    rig.select(0);  // Space: ABC
+    rig.game_type(false);
+    CHECK(items_of(rig.env.gui) == official_land && selected_of(rig.env.gui) == 6);
+    rig.select(4);  // Land: Twin A
     rig.game_type(true);
     CHECK(items_of(rig.env.gui) == official_space && selected_of(rig.env.gui) == 0);
     rig.game_type(false);
-    CHECK(items_of(rig.env.gui) == official_land && selected_of(rig.env.gui) == 6);
+    CHECK(selected_of(rig.env.gui) == 4 && rig.start() == "_MP_LAND_TWIN_A");
 
-    // Custom tab (Land type): a click switches and refills; only the custom land maps; the file name fallback.
+    // Custom tab (Land type): a click switches and refills; only the custom land maps; the file name fallback. The remembered
+    // Land map is an official one, not listed here: row 0, which becomes the remembered map.
     rig.click(kStaging, "IDC_SELECT_CUSTOM_MAPS");
     CHECK(rig.fe.skirmish_custom_tab() && !rig.fe.skirmish_space_type());
     const std::vector<std::u32string> custom_land = {U"My Very Long Custom Ma...", U"SHORT_NAME", U"Short_Two"};
     CHECK(items_of(rig.env.gui) == custom_land);
-    CHECK(selected_of(rig.env.gui) == 0);  // the last land map is an official one, not listed here: row 0
+    CHECK(selected_of(rig.env.gui) == 0);
     CHECK(rig.start() == "DATA\\CUSTOMMAPS\\My Very Long Custom Map Name.TED");
     rig.select(2);
     CHECK(rig.start() == "Data/Art/Maps/Short_Two.ted");
@@ -212,29 +216,35 @@ void test_skirmish_maps() {
     rig.game_type(true);
     CHECK(items_of(rig.env.gui) == (std::vector<std::u32string>{U"CSPACE"}) && selected_of(rig.env.gui) == 0);
     CHECK(rig.start() == "DATA\\CUSTOMMAPS\\CSPACE.TED");
-    // Back to Official: the Space type's last map is the custom one, not listed here, so Kuat.
+    // Back to Official: Space's remembered map is the custom one, not listed here, so Kuat (which is remembered then).
     rig.click(kStaging, "IDC_SELECT_OFFICIAL_MAPS");
     CHECK(!rig.fe.skirmish_custom_tab() && items_of(rig.env.gui) == official_space && selected_of(rig.env.gui) == 1);
 
-    // Closing and reopening the dialog: the Official tab again, on the game type of the map started last (Space: CSPACE), whose
-    // official last map is none (Kuat); Land still remembers the last official land map started.
+    // Closing and reopening the dialog: the Official tab again, on the game type selected last (Space), with its remembered map.
     rig.click(kStaging, "IDC_CANCEL_BUTTON");
     CHECK(rig.fe.top() == kSingle);
     rig.click(kSingle, "IDC_SKIRMISH_GAMES_BUTTON");
     CHECK(rig.fe.top() == kStaging && !rig.fe.skirmish_custom_tab() && rig.fe.skirmish_space_type() && items_of(rig.env.gui) == official_space &&
           selected_of(rig.env.gui) == 1);
     CHECK(rig.control("IDC_GAME_TYPE_LIST")->selected == 1);
+    rig.select(0);
+    // The type is remembered when it is selected, not when a game is started: switch to Land and leave without Start.
     rig.game_type(false);
-    CHECK(items_of(rig.env.gui) == official_land && selected_of(rig.env.gui) == 0);  // Land's last map was a custom one: row 0
+    CHECK(items_of(rig.env.gui) == official_land && selected_of(rig.env.gui) == 0);  // Land's remembered map was a custom one: row 0
     rig.select(6);
-    CHECK(rig.start() == "_MP_LAND_LABELED");
     rig.click(kStaging, "IDC_CANCEL_BUTTON");
     rig.click(kSingle, "IDC_SKIRMISH_GAMES_BUTTON");
     CHECK(!rig.fe.skirmish_space_type() && selected_of(rig.env.gui) == 6 && rig.control("IDC_GAME_TYPE_LIST")->selected == 0);  // Land again
+    CHECK(rig.start() == "_MP_LAND_LABELED");
+    rig.game_type(true);
+    CHECK(selected_of(rig.env.gui) == 0);  // Space's remembered ABC
 
-    // A fresh list without Kuat starts on row 0 of the Space type; custom maps are not shown on the Official tab and vice versa.
+    // A fresh list opens on Land (no official land maps here); switching to Space without Kuat gives row 0; custom maps are not
+    // shown on the Official tab and vice versa.
     Rig plain({map_row("_MP_SPACE_B", "", 2, true, false), map_row("_MP_SPACE_A", "", 2, true, false), map_row("MY_CUSTOM", "", 2, false, true)});
     plain.open_staging();
+    CHECK(!plain.fe.skirmish_space_type() && items_of(plain.env.gui).empty() && selected_of(plain.env.gui) == -1 && plain.start().empty());
+    plain.game_type(true);
     CHECK(items_of(plain.env.gui) == (std::vector<std::u32string>{U"_MP_SPACE_A", U"_MP_SPACE_B"}) && selected_of(plain.env.gui) == 0);
     CHECK(plain.start() == "_MP_SPACE_A");
     plain.click(kStaging, "IDC_SELECT_CUSTOM_MAPS");
@@ -245,52 +255,58 @@ void test_skirmish_maps() {
     // A tab / type without maps: empty list, nothing selected, Start sends nothing, no preview, no description.
     Rig none({map_row("_MP_LAND_ONLY", "", 2, false, false)});
     none.open_staging();
+    CHECK(items_of(none.env.gui).size() == 1 && selected_of(none.env.gui) == 0 && none.previews_asked.size() == 1);
+    none.previews_asked.clear();
+    none.game_type(true);
     CHECK(items_of(none.env.gui).empty() && selected_of(none.env.gui) == -1 && none.start().empty());
     CHECK(none.control("IDC_IMAGE")->image.empty() && none.control("IDC_IMAGE")->markers.empty() &&
           none.control("IDC_SCENARIO_DESCRIPTION_TEXT_BOX")->text.empty() && none.previews_asked.empty());
-    none.game_type(false);
-    CHECK(items_of(none.env.gui).size() == 1 && selected_of(none.env.gui) == 0);
     Rig empty(std::vector<SkirmishMapInfo>{});
     empty.open_staging();
     CHECK(items_of(empty.env.gui).empty() && selected_of(empty.env.gui) == -1 && empty.start().empty());
 }
 
-// t03 / t04: IDC_IMAGE follows the selected row (texture from the host, start markers in the slot colours), the description box
-// shows the game type's text, and nothing is asked of the host while no row is selected.
+// t03 / t04 / p4uis: IDC_IMAGE follows the selected row (texture from the host, the start positions as the white numbers 1..N),
+// the description box is hidden and empty, and nothing is asked of the host while no row is selected.
 void test_skirmish_preview() {
     Rig rig({map_row("_MP_SPACE_KUAT", "TEXT_MAP_NAME_KUAT", 4, true, false), map_row("_MP_SPACE_ABC", "", 2, true, false),
              map_row("_MP_LAND_ALPHA", "TEXT_MAP_NAME_ALPHA", 2, false, false)});
     rig.open_staging();
     const GuiControl* img = rig.control("IDC_IMAGE");
-    CHECK(img->image == "tex:_MP_SPACE_KUAT" && img->markers.size() == 3);  // Kuat is selected
+    CHECK(img->image == "tex:_MP_LAND_ALPHA" && img->markers.size() == 3);  // the dialog opens on Land
     CHECK(img->markers[0].pos.x == 0.25f && img->markers[0].pos.y == 0.5f && img->markers[1].pos.x == 0.75f);
-    const std::vector<Rgba8> pal = palette9();
-    // Start i is drawn in slot i's colour: slots 0 and 1 show colours 0 and 1, the third start takes palette[2].
-    CHECK(img->markers[0].color == pal[0] && img->markers[1].color == pal[1] && img->markers[2].color == pal[2]);
-    CHECK(rig.control("IDC_SCENARIO_DESCRIPTION_TEXT_BOX")->text == U"Space desc");
+    // Start i shows the number i + 1 in opaque white, whatever the slot colours are (UI.md 9.6.1).
+    const Rgba8 white{255, 255, 255, 255};
+    CHECK(img->markers[0].label == U"1" && img->markers[1].label == U"2" && img->markers[2].label == U"3");
+    CHECK(img->markers[0].color == white && img->markers[1].color == white && img->markers[2].color == white);
+    // The description box is switched off and never filled (UI.md 9.6.2).
+    const GuiControl* desc = rig.control("IDC_SCENARIO_DESCRIPTION_TEXT_BOX");
+    CHECK(!desc->visible && desc->text.empty());
+    rig.game_type(true);
+    CHECK(img->image == "tex:_MP_SPACE_KUAT" && !desc->visible && desc->text.empty());
     rig.select(1);
-    CHECK(img->image == "tex:_MP_SPACE_ABC");
-    // A colour change recolours the markers (and swaps with the other slot).
+    CHECK(img->image == "tex:_MP_SPACE_ABC" && !desc->visible && desc->text.empty());
+    // A colour change leaves the numbers white.
     rig.colour(0, 4);
-    CHECK(img->markers[0].color == pal[4] && img->markers[1].color == pal[1] && img->markers[2].color == pal[2]);
-    rig.colour(1, 4);  // slot 0's colour: the two swap
-    CHECK(img->markers[0].color == pal[1] && img->markers[1].color == pal[4]);
-    // The Land type: its row, its description.
+    CHECK(img->markers.size() == 3 && img->markers[0].color == white && img->markers[1].color == white);
+    // The Land type: its row.
     rig.game_type(false);
-    CHECK(img->image == "tex:_MP_LAND_ALPHA" && rig.control("IDC_SCENARIO_DESCRIPTION_TEXT_BOX")->text == U"Land desc");
+    CHECK(img->image == "tex:_MP_LAND_ALPHA" && !desc->visible && desc->text.empty());
     // A tab without rows clears them.
     rig.click(kStaging, "IDC_SELECT_CUSTOM_MAPS");
-    CHECK(img->image.empty() && img->markers.empty() && rig.control("IDC_SCENARIO_DESCRIPTION_TEXT_BOX")->text.empty());
+    CHECK(img->image.empty() && img->markers.empty() && !desc->visible && desc->text.empty());
     // Without a preview provider the image stays empty.
     Rig bare({map_row("_MP_SPACE_KUAT", "", 2, true, false)}, true, false);
     bare.open_staging();
-    CHECK(bare.control("IDC_IMAGE")->image.empty() && bare.control("IDC_IMAGE")->markers.empty() && bare.control("IDC_SCENARIO_DESCRIPTION_TEXT_BOX")->text == U"Space desc");
+    bare.game_type(true);
+    CHECK(bare.control("IDC_IMAGE")->image.empty() && bare.control("IDC_IMAGE")->markers.empty() &&
+          !bare.control("IDC_SCENARIO_DESCRIPTION_TEXT_BOX")->visible && bare.control("IDC_SCENARIO_DESCRIPTION_TEXT_BOX")->text.empty());
 }
 
-// p4uia t01 / t02: IDC_PLAYER_COLOR_n of the used slots hold the 9 palette entries as U+25A0 glyphs, the default colour is the
-// slot index, a colour already taken swaps, and StartSkirmish carries the chosen indices.
+// p4uia t01 / t02, p4uis t03: IDC_PLAYER_COLOR_n of the used slots hold the 9 palette entries as U+25A0 glyphs, the default colour
+// is the slot index, the colour clash rule runs in slot order (UI.md 9.7), and StartSkirmish carries the chosen indices.
 void test_skirmish_colours() {
-    Rig rig({map_row("_MP_SPACE_KUAT", "", 2, true, false)});
+    Rig rig({map_row("_MP_LAND_X", "", 2, false, false)});
     rig.open_staging();
     for (int32_t slot = 0; slot < 2; ++slot) {
         const GuiControl* c = rig.control(slot == 0 ? "IDC_PLAYER_COLOR_0" : "IDC_PLAYER_COLOR_1");
@@ -303,18 +319,32 @@ void test_skirmish_colours() {
         rig.click(kStaging, "IDC_SKIRMISH_START_GAME_BUTTON");
         return rig.acts.size() == 1 ? rig.acts[0].colors : std::vector<int32_t>{-1};
     };
-    CHECK(colours() == (std::vector<int32_t>{0, 1}));
+    // The combos show what the rule leaves, and Start carries it.
+    auto shown = [&](int32_t a, int32_t b) {
+        return rig.fe.skirmish_colour(0) == a && rig.fe.skirmish_colour(1) == b && rig.control("IDC_PLAYER_COLOR_0")->selected == a &&
+               rig.control("IDC_PLAYER_COLOR_1")->selected == b && colours() == (std::vector<int32_t>{a, b});
+    };
+    CHECK(shown(0, 1));
     rig.colour(1, 7);  // a free colour
-    CHECK(rig.fe.skirmish_colour(1) == 7 && rig.fe.skirmish_colour(0) == 0 && colours() == (std::vector<int32_t>{0, 7}));
-    rig.colour(0, 7);  // slot 1's colour: the two swap
-    CHECK(rig.fe.skirmish_colour(0) == 7 && rig.fe.skirmish_colour(1) == 0 && rig.control("IDC_PLAYER_COLOR_1")->selected == 0);
-    CHECK(colours() == (std::vector<int32_t>{7, 0}));
+    CHECK(shown(0, 7));
+    rig.colour(0, 7);  // slot 1's colour: slot 0 wins, slot 1 takes the lowest colour slot 0 does not use
+    CHECK(shown(7, 0));
     // Reopening resets to the slot indices.
     rig.click(kStaging, "IDC_CANCEL_BUTTON");
     rig.click(kSingle, "IDC_SKIRMISH_GAMES_BUTTON");
-    CHECK(rig.fe.skirmish_colour(0) == 0 && rig.fe.skirmish_colour(1) == 1 && colours() == (std::vector<int32_t>{0, 1}));
+    CHECK(shown(0, 1));
+    rig.colour(1, 0);  // (0,1): slot 1 picks slot 0's colour and moves to 1 again
+    CHECK(shown(0, 1));
+    rig.colour(0, 1);  // (0,1): slot 0 picks 1: slot 1 becomes 0
+    CHECK(shown(1, 0));
+    rig.click(kStaging, "IDC_CANCEL_BUTTON");
+    rig.click(kSingle, "IDC_SKIRMISH_GAMES_BUTTON");
+    rig.colour(0, 3);
+    CHECK(shown(3, 1));
+    rig.colour(0, 1);  // (3,1): slot 0 picks 1: slot 1 becomes 0, not 3
+    CHECK(shown(1, 0));
     // Without a palette the combos stay hidden; Start still sends the default indices.
-    Rig bare({map_row("_MP_SPACE_KUAT", "", 2, true, false)}, false);
+    Rig bare({map_row("_MP_LAND_X", "", 2, false, false)}, false);
     bare.open_staging();
     CHECK(!bare.control("IDC_PLAYER_COLOR_0")->visible && !bare.control("IDC_PLAYER_COLOR_1")->visible && bare.fe.skirmish_colour(0) == -1);
     bare.acts.clear();

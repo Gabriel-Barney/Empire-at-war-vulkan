@@ -642,11 +642,10 @@ void BattleView::capture(const GameSession& session) {
         // q6 t19 (OBJECT_SCRIPTS §10.3): Lua Hide(true) - no model, particles, ghost or surface FX (presentation only).
         render::apply_script_hidden(*snap, [&session](const render::SnapshotObject& o) { return session.script_hidden(o.id); });
 #ifdef ALAMO_SIM_HAVE_FOG
-        // R5: the local player's FOW grid + HideWhenFogged marks. The attract demo draws the sim's fog once the map's
-        // DEMO_CONTROLLER revealed it (GameSession::attract_demo_script). A demo map without one (the shipped
-        // Demo_Attract_Kamino) draws none [port: presentation only, the demo's sim fog is unchanged]: the original's attract
-        // menus show no space fog grid (G1 capture, EaW map without a controller), why is open (MAIN_MENU_BACKGROUND.md §7).
-        if (!session.spec().attract || session.attract_controller_ran()) render::apply_battle_fog(*b, local_, *snap);
+        // R5: the local player's FOW grid + HideWhenFogged marks. Not in the attract demo (GameSession::view_draws_fog): the
+        // original's cinematic camera clears the FOW render option at every shot start, so the demo never draws fog, with or
+        // without a DEMO_CONTROLLER reveal (MAIN_MENU_BACKGROUND.md §4a). Presentation only: the demo's sim fog is unchanged.
+        if (session.view_draws_fog()) render::apply_battle_fog(*b, local_, *snap);
 #endif
         // --- OI render: space reinforcement overlay cells (TACTICAL_GAPS §5.5) while the overlay is shown; Lua
         // Attach_Particle_Effect requests of the story VMs (lua::PresentationLog::particle_effects, made since this

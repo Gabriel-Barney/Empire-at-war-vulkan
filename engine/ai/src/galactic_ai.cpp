@@ -39,14 +39,14 @@ GalacticAiWorld::Impl::Impl(gal::GalacticSim& s, objects::ObjectStore& st, const
         }
     type_mask.assign(sim.rules().types.size(), 0u);
     for (size_t t = 0; t < type_mask.size() && t < tinfo.size(); ++t) type_mask[t] = tinfo[t].category_mask;
-    planet_queues.resize(sim.planets().size());
+    init_queue_phases();  // synced draws, 2 per planet (A2J_RE_BUILD_MARKET §4)
     res.set_hooks(make_hooks());
 }
 
 GalacticSimTokenResolver::Hooks GalacticAiWorld::Impl::make_hooks() {
     GalacticSimTokenResolver::Hooks h;
     h.story_campaign = cfg.story_campaign;
-    h.active_goals = [this](int32_t p) { return active_goals(p); };
+    h.active_goals = [this](int32_t p, std::string_view cat, int32_t& n) { return active_goals(p, cat, n); };
     h.markup = [this](int32_t p, int32_t planet) {
         const auto it = markup.find({p, planet});
         return it == markup.end() ? 0.0 : it->second;
@@ -62,19 +62,24 @@ GalacticSimTokenResolver::Hooks GalacticAiWorld::Impl::make_hooks() {
     // weights first (AI_GALACTIC_2 §3.2), when every rate / available still holds its constructed 0 [M: ctor zeros]
     // (A2 f t01: failing here made the Empire's Infrastructure / MajorItem equations fail at Init, so Offensive got the
     // whole starting bank).
-    h.budget = [this](int32_t p, std::string_view category, double& rate, double& available) {
+    // BudgetFractionToBuild 0x667120 step 5 (A2H_GALACTIC_AI_RE §2) [H]: a category's income rate I (+0x50) and pool P
+    // (+0x4C), not A / R (the port read R / A before a2h t07); a name with no budget entry gives 0 / 0 [M: the name -> id
+    // step is the DLL's].
+    h.budget = [this](int32_t p, std::string_view category, float& rate, float& pool) {
         const PlayerAi* pa = player_ai(p);
         if (!pa) return false;
         if (category.empty()) {  // every category: budget +0x68 and the player's credits [H]
             rate = pa->ctx.budget.income_per_second();
-            available = sim.credits(p);
+            pool = sim.credits(p);
             return true;
         }
         const int32_t c = defs.find_category(category);
-        if (c < 0) return false;
-        rate = pa->ctx.budget.rate(c);
-        available = pa->ctx.budget.available(c);
+        rate = c >= 0 ? pa->ctx.budget.income_rate(c) : 0.0f;
+        pool = c >= 0 ? pa->ctx.budget.pool(c) : 0.0f;
         return true;
+    };
+    h.queue_task = [this](int32_t, int32_t planet, uint32_t queue) {
+        return planet >= 0 ? queue_task(static_cast<PlanetIndex>(planet), queue) : GalacticSimTokenResolver::QueueTask{};
     };
     h.difficulty = [this](int32_t p) {
         const PlayerAi* pa = player_ai(p);
@@ -104,11 +109,57 @@ GalacticSimTokenResolver::Hooks GalacticAiWorld::Impl::make_hooks() {
     return h;
 }
 
-int32_t GalacticAiWorld::Impl::active_goals(int32_t p) const {
-    int32_t n = 0;
-    if (const PlayerAi* pa = player_ai(p))
-        for (const auto& cat : pa->ctx.goals.active()) n += static_cast<int32_t>(cat.size());
-    return n;
+// ActiveGoals 0x6e0490 (A2H_GALACTIC_AI_RE §1, A2I_TOKENS_RE §3.3) [H]: key = the one category's AIGoalCategoryType
+// VALUE; the result is the size of the active-set vector filed under that category id (0x721f70, an exact key lookup,
+// every entry whatever its state; 0 when no category has the value). The goals are filed by their type's Category. The
+// literal is converted when the equation is built (AIGoalCategoryType is a plain enum: `[A|B]` or an unknown name never
+// builds), so there is no OR of several names here. A name the loaded definitions lack (a non-literal parameter text) or
+// a player without a galactic AI fails [L / M]. The parameter checks (exactly one Parameter_Category) are the token's.
+bool GalacticAiWorld::Impl::active_goals(int32_t p, std::string_view category, int32_t& out) const {
+    const PlayerAi* pa = player_ai(p);
+    if (!pa) return false;
+    const int32_t id = defs.find_category(category);
+    if (id < 0 || static_cast<size_t>(id) >= defs.category_value.size()) return false;
+    const int32_t key = defs.category_value[static_cast<size_t>(id)];
+    out = 0;
+    const auto& active = pa->ctx.goals.active();
+    for (size_t c = 0; c < defs.category_value.size() && c < active.size(); ++c)
+        if (defs.category_value[c] == key) {
+            out = static_cast<int32_t>(active[c].size());
+            break;
+        }
+    return true;
+}
+
+// A2H_GALACTIC_AI_RE §2 step 4: the planet's AIPlanetBuildQueue task (0x559b40(planet +0xD0, queue) +0x18) [H]; the
+// port's producing task PlanetBuildQueue::current [port]. A task whose plan ended while its production goes on is Ended
+// (reclaimed when the PAYG reclaim took it); its goal's BudgetedGoalStruct (G +0x80, 0x612bd0) gives alloc / a / c / h.
+GalacticSimTokenResolver::QueueTask GalacticAiWorld::Impl::queue_task(PlanetIndex planet, uint32_t queue) const {
+    using QT = GalacticSimTokenResolver::QueueTask;
+    QT out;
+    if (planet >= planet_queues.size() || queue > 1) return out;
+    const PlanetBuildQueue& Q = planet_queues[planet][queue];
+    if (Q.current < 0) {
+        if (Q.current_queue_id >= 0) out.kind = Q.current == kQueueTaskEndedReclaimed ? QT::Kind::EndedReclaimed : QT::Kind::Ended;
+        return out;
+    }
+    const auto it = builds.find(Q.current);
+    if (it == builds.end()) return out;
+    const BuildTask& b = it->second;
+    if (b.state == BuildState::Finished || b.state == BuildState::Failed) {
+        out.kind = b.reclaimed ? QT::Kind::EndedReclaimed : QT::Kind::Ended;
+        return out;
+    }
+    out.kind = QT::Kind::Live;
+    const PlayerAi* owner = player_ai(b.player);
+    if (const AiBudget::GoalEntry* e = owner ? owner->ctx.budget.goal(b.category, b.goal_key) : nullptr) {
+        out.budget = true;
+        out.alloc = e->alloc;
+        out.a = e->a;
+        out.c = e->c;
+        out.h = e->h;
+    }
+    return out;
 }
 
 uint32_t GalacticAiWorld::Impl::equation(const std::string& name) {
@@ -578,6 +629,7 @@ bool PlayerAi::accept(Goal& g) {
     g.pp_valid = true;
     g.cost = pp.net;  // Init 0x6c0d00: net cost -> goal +0x78, ETA -> +0x7c
     g.eta = pp.eta;
+    g.nominal_time = w->pp_nominal_time(pp);  // A2f t09: AllowedTime base 0x6c0450(PP) [H]
     g.pp_handle = h;
     w->pps.emplace(h, std::move(pp));
     return true;
@@ -750,7 +802,12 @@ void PlayerAi::execution_service(int64_t) {
 }
 
 void PlayerAi::templates_changed(int64_t) {
+    // §9.5: the changed templates insert their budget categories (apply_template_budget). a2g F2: retail sets the budget
+    // reset flag +0x74 exactly when the template set changes, in either direction, and the next fiscal tick clears it
+    // (FoC HotM probe, docs/re/A2G_T01_RESET_FLAG_PROBE.md) [H correlation; the setter is unread]. The initial selection
+    // runs before the budget's Init, which clears the flag.
     apply_template_budget();
+    ctx.budget.request_reset();
     std::string names;
     for (const uint32_t t : ctx.templates.active()) names += " " + w->defs.templates[t].name;
     w->decide(player, "templates" + names);
@@ -1050,6 +1107,7 @@ void GalacticAiWorld::Impl::claim_units(int32_t player) {
             if (at < planet_queues.size())
                 for (PlanetBuildQueue& q : planet_queues[at])
                     if (q.current < 0 && q.current_queue_id >= 0 && q.current_type == type) {
+                        q.current = kQueueTaskEnded;
                         q.current_queue_id = -1;
                         q.current_type = gal::kNoIndex;
                         break;
@@ -1894,6 +1952,7 @@ std::unique_ptr<PlayerAi> GalacticAiWorld::Impl::make_player(int32_t player, con
     GoalSystemConfig gcfg;
     gcfg.sleep_frames = static_cast<int32_t>(static_cast<float>(kAiFps) * sleep);
     gcfg.extra_goals_per_category = type->goal_set_extension_size;  // AIPlayerType +0xE8 (0x721b60) [H]
+    gcfg.nominal_allowed_time = true;  // A2f t09: AllowedTime = 0x6c0450(PP) x tolerance (A2F_RE_READS §1.4 item 2) [H]
     p.ctx.goals.init(w.defs, std::move(sources), &p, &p.ctx.learning, &p.ctx.templates, &w.rng.synced(), gcfg);
     p.ctx.attach(&p, [&w, &p](const std::string& eq, double& out) { return w.evaluate(p.player, p.ctx.opponent, eq, -1, out); });
     if (w.cfg.stagger) {  // OPT2 t01: a fixed planning phase from the player's AI ordinal (players in index order)
@@ -2214,6 +2273,19 @@ std::vector<PlanetIndex> GalacticAiWorld::reach_planets(int32_t player, int leve
 
 float GalacticAiWorld::plan_production_time(int32_t running) const { return impl_->goal_production_time(running); }
 
+std::vector<uint32_t> GalacticAiWorld::potential_plan_selection(int32_t pp_handle) const {
+    std::vector<uint32_t> out;
+    const auto it = impl_->pps.find(pp_handle);
+    if (it != impl_->pps.end())
+        for (const PpSelection& s : it->second.sel) out.push_back(s.type);
+    return out;
+}
+
+float GalacticAiWorld::potential_plan_nominal_time(int32_t pp_handle) const {
+    const auto it = impl_->pps.find(pp_handle);
+    return it == impl_->pps.end() ? -1.0f : impl_->pp_nominal_time(it->second);
+}
+
 std::vector<uint32_t> GalacticAiWorld::solve_potential_plan(int32_t player, std::string_view plan, std::string_view goal,
                                                            int32_t target, bool* ok, float* eta) {
     Impl& w = *impl_;
@@ -2419,6 +2491,8 @@ std::vector<GalacticAiTypeInfo> make_galactic_ai_type_info(const objects::GameOb
         o.transport_behavior = types.behavior_count(ti, "TRANSPORT") > 0;
         o.generic_hero = types.get_bool(ti, "Is_Generic_Hero");
         o.special_weapon_space = types.get_bool(ti, "Is_Special_Weapon_In_Space");
+        o.garrison_mask = types.get_mask(ti, "Garrison_Category");  // +0x1658 (A2I_TOKENS_RE §2.1)
+        if (o.garrison_mask == 0) o.garrison_mask = types.get_mask(ti, "Space_Or_Garrison_Category");
         o.lua_script = std::string(ai_trim(types.get_string(ti, "Lua_Script")));
         o.script_on_type = types.get_bool(ti, "Execute_Script_On_Type");
         o.retains_residual_influence = types.get_bool(ti, "Planet_Retains_Residual_Influence");  // P4 ai (default true)

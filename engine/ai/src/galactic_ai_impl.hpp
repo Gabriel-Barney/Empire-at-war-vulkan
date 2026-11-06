@@ -100,10 +100,15 @@ struct QueueReservation {
     uint32_t type = gal::kNoIndex;
     float time = 0.0f;
 };
+// PlanetBuildQueue::current while the production of a task whose plan ended goes on (current_queue_id >= 0): the
+// original keeps the ended task (+0xA8) on the queue; the port keeps only whether the PAYG reclaim took it (+0xD9), which
+// BudgetFractionToBuild reads (A2H_GALACTIC_AI_RE §2 step 4) [port].
+inline constexpr int32_t kQueueTaskEnded = -1;
+inline constexpr int32_t kQueueTaskEndedReclaimed = -2;
 struct PlanetBuildQueue {
     int64_t last_run = 0;
     std::vector<int32_t> tasks;  // claimed build tasks (+0x10), claim order
-    int32_t current = -1;        // +0x20 producing task (-1 idle)
+    int32_t current = -1;        // +0x20 producing task (< 0 none: kQueueTaskEnded / kQueueTaskEndedReclaimed)
     int32_t current_queue_id = -1;
     uint32_t current_type = gal::kNoIndex;
     std::vector<QueueReservation> reservations;
@@ -194,7 +199,9 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
          GameRandom& r, const AiDefinitions& d, const EquationSet& e, std::vector<GalacticAiTypeInfo> ti, AiOrderSink snk,
          GalacticAiConfig c);
     GalacticSimTokenResolver::Hooks make_hooks();
-    int32_t active_goals(int32_t p) const;
+    bool active_goals(int32_t p, std::string_view category, int32_t& out) const;  // <root>.ActiveGoals
+    // BudgetFractionToBuild's view of a planet queue's AI build task (A2H_GALACTIC_AI_RE §2 step 4).
+    GalacticSimTokenResolver::QueueTask queue_task(PlanetIndex planet, uint32_t queue) const;
 
     gal::GalacticSim& sim;
     objects::ObjectStore& store;
@@ -326,15 +333,27 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
         const gal::TypeInfo* ti = type_info(t);
         return ti ? static_cast<float>(ti->build_cost) : 0.0f;
     }
-    float btime_none(uint32_t t) const {  // 0x371230 without a planet: +0x890 x 0x140b15920 [M: factor 1]
+    // 0x371230 without a planet (GALACTIC_ECONOMY §2.3 T0) [H]: float(uint32(float(+0x890) x 0x140b15920)), the type's
+    // Build_Time_Seconds x GameConstants Production_Speed_Factor, truncated (a2g t03; was factor 1).
+    float btime_none(uint32_t t) const {
         const gal::TypeInfo* ti = type_info(t);
-        return ti ? static_cast<float>(ti->build_time_seconds) : 0.0f;
+        return ti ? gal::econ::build_time_t0(ti->build_time_seconds, sim.rules().constants.production_speed_factor) : 0.0f;
     }
     float cost_at(int32_t player, uint32_t t, PlanetIndex p) const {
         return valid_planet(p) ? static_cast<float>(sim.build_cost_for(player, p, t)) : cost_none(t);
     }
     float btime_at(int32_t player, uint32_t t, PlanetIndex p) const {
         return valid_planet(p) ? sim.build_time_for(player, p, t) : btime_none(t);
+    }
+    // 0x6c0450(PP) (galactic_goal_time.hpp, A2f t09): the goal's AllowedTime base, Goal::nominal_time.
+    float pp_nominal_time(const PotentialPlanRec& pp) const {
+        std::vector<float> bt;
+        bt.reserve(pp.sel.size());
+        for (const PpSelection& s : pp.sel) bt.push_back(btime_none(s.type));
+        const auto ps = sim.players();
+        const uint32_t d = pp.player >= 0 && static_cast<size_t>(pp.player) < ps.size() ? ps[static_cast<size_t>(pp.player)].difficulty
+                                                                                         : gal::kNoIndex;
+        return galactic_nominal_time(bt, galactic_build_time_multiplier(sim.rules().difficulties, d));
     }
     bool hostile(int32_t a, int32_t b) const { return sim.is_hostile(a, b); }
     uint32_t equation(const std::string& name);
@@ -403,7 +422,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     // ---- build tasks + market (galactic_build.cpp) ----
     void create_build_tasks(TaskForceRec& tf);
     void market_planet(PlanetIndex p);       // one planet's queues (> 30 frames since their last run), sim hook
-    // 0x525200 stand-in [M] (galactic_goal_time.hpp): the time the running plan's unfinished build tasks still need.
+    // 0x525200 [H] (A2F_RE_READS §1, galactic_goal_time.hpp): the time the running plan's unfinished build tasks still need.
     float goal_production_time(int32_t running) const;
     void service_build_tasks(int32_t player);  // PRODUCTION_QUEUED polls, claims, failures
     float installment(PlanetIndex p, uint32_t q, const gal::BuildEntry& head, float a);  // PAYG installment (q2f t01)
@@ -411,6 +430,8 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     void finish_build(BuildTask& b);
     void end_plan_builds(int32_t plan);
     float funds_time(const BuildTask& b) const;
+    const Goal* goal_of_plan(int32_t player, int32_t plan) const;  // the active goal running `plan` (null: none)
+    void init_queue_phases();  // each planet queue's first last-run frame (A2J_RE_BUILD_MARKET §4)
     void remove_pending(int32_t id);
     void planet_lost(PlanetIndex p);
     float payg_reclaim(int32_t plan, float amount);
@@ -576,8 +597,11 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         return w->evaluate(player, ctx.opponent, function, target, out);
     }
     bool accept(Goal& g) override;
-    bool plan_activatable(const Goal& g) override {
-        return g.pp_valid && g.plan != kAiNone && ctx.templates.plan_value(g.plan) > 0 && w->resolve_pp(*this, g);
+    bool plan_activatable(Goal& g) override {
+        if (!(g.pp_valid && g.plan != kAiNone && ctx.templates.plan_value(g.plan) > 0 && w->resolve_pp(*this, g))) return false;
+        // [M] the re-solve rewrites the PP's selection (+0x58), which AllowedTime (0x692860 -> 0x6c0450) reads live.
+        if (const auto it = w->pps.find(g.pp_handle); it != w->pps.end()) g.nominal_time = w->pp_nominal_time(it->second);
+        return true;
     }
     bool plan_invalid(const Goal& g) override;
     bool replaceable(const Goal& g) override;
@@ -599,7 +623,7 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         if (g.running >= 0) w->end_plan(g.running, by_goal_system);
     }
     void drop_potential_plan(Goal& g) override;
-    float elapsed_eta(const Goal& g) override {  // §1.6: 0x525200 [M] + elapsed [H] (galactic_goal_time.hpp)
+    float elapsed_eta(const Goal& g) override {  // §1.6: 0x525200 [H] + elapsed when > 0 [H] (galactic_goal_time.hpp)
         return galactic_maintenance_eta(w->goal_production_time(g.running), g.created, w->now);
     }
     int32_t quota_players() override;

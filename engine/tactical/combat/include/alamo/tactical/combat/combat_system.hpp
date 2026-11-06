@@ -22,7 +22,8 @@
 // outputs only and never draw from the RNG; every synced draw happens in a serial phase, in a fixed
 // order, so results are identical for any worker count:
 //   A  modifiers   [parallel per unit] purge expired object entries (player sets serially first),
-//                  refresh the reduced-value cache and the Mod_Multiplier products; [serial] squad min.
+//                  refresh the reduced-value cache and the Mod_Multiplier products (every unit keeps its own;
+//                  the squad value is team_mod_multiplier, s78h t03); [serial] team heads and team slots.
 //   B  upkeep      [serial] delayed-damage countdowns (queue order); [parallel per unit] shield
 //                  regeneration, hull <-> hardpoint 0.2 coupling.
 //   C  gather      [parallel per unit due a target scan] tree queries per enemy player (cube of
@@ -32,6 +33,11 @@
 //                  reschedule draw, start-player draw, per-candidate aim-point draws, selection rule
 //                  2.4; then each weapon hardpoint in HardPoints order (Update_Weapon / Fire_At:
 //                  muzzle, lead, inaccuracy, spawn, recharge draws), then the non-hardpoint weapon.
+//                  s78h t06: a land team's TeamTargeting (its head's decide + team_targeting_service)
+//                  runs once per tick at the team's container slot, just before the team's highest
+//                  phase-A index in this walk (even if that unit died earlier in the walk), on the
+//                  team's current live head (the heir after an in-tick hand-over); the head's own
+//                  slot runs no targeting.
 //   E  sweep       [parallel per projectile] segment ray queries against every hostile player tree;
 //                  first hit by (t, object id) among units alive at the start of the phase.
 //   F  commit      [serial, projectile serial order] re-sweep if the victim died this phase, hit
@@ -335,6 +341,17 @@ struct GarrisonBone {
     Vec3 pos;
     float yaw_deg = 0.0f;
 };
+// s78f t03 (LOB_SOLVER §5.1 "Garrison pick inputs"): one gun bone of a garrison host in the host's current pose, world
+// space: `pos` = the matrix translation (the launch point), `yaw_deg` = the yaw of the bone's x axis (matrix column 0),
+// degrees in [0, 360) (0x20acd0). [port] Bind pose x the host's transform (yaw only): vanilla hosts have no animation.
+struct GarrisonFireBone {
+    Vec3 pos;
+    float yaw_deg = 0.0f;
+};
+// The garrison pick's candidate test (Spawn_Projectile 0x54ade0, LOB_SOLVER §5.1): the bone's x-axis yaw within 60 degrees
+// of the yaw from the host position to `target` (difference into [0, 360), > 180 -> -360). Shared by combat's
+// garrison_muzzle and the abilities' Remote_Bomb toss.
+bool garrison_bone_within(float bone_yaw_deg, Vec3 host, Vec3 target);
 
 struct UnitDesc {
     std::string name;
@@ -434,7 +451,7 @@ struct UnitDesc {
     // offsets in unit-local space (as muzzle_bones), list order, names missing on the model dropped. Empty without model
     // data or without the tag (no draw, no bone aim).
     std::vector<Vec3> target_bones;
-    bool turret = false;                       // TURRET behaviour (0xb): the lobbing charge-up aims it [port: no yaw]
+    bool turret = false;                       // TURRET behaviour (0xb): targeting state 3 / the lobbing charge-up aim
     uint32_t lobbing_chargeup_frames = 90;     // Lobbing_Superweapon_Chargeup_Frames (type +0x2348; vanilla 90)
     // Num_Garrison_Guns (type +0x23a8) and the gun-bone table of the type's model (type +0x23a0): one entry per ALT
     // a = 0..M-1 (M = the model's highest _ALT mesh index), Num_Garrison_Guns bones each. Empty without model data.
@@ -443,6 +460,30 @@ struct UnitDesc {
     // Land_Damage_Thresholds / Land_Damage_Alternates pairs, list order (the model's current ALT, TACTICAL_GAPS §6.3:
     // every pair with health fraction <= threshold sets the ALT, the last match wins, default 0).
     std::vector<std::pair<float, int32_t>> damage_alternates;
+    // ---- s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states, slots 47 / 48 and team copies") ----
+    // Max_Rate_Of_Turn (type +0x38c, degrees per frame): slot 48's tolerance = this x Object_Max_Speed_Multiplier_Land / 2
+    // (0.01 when that is >= 90) and the turn request's step (vf +0x2e8 -> Walk 0x620710: one clamp(error, +-R) yaw step
+    // per service, applied at once; s78f t08 [H]). Per service, no frame-time scaling. <= 0: [port] slot 48 is never true
+    // (retail: tolerance 0, so only an exact facing counts; the type default is 2.3).
+    float turn_rate = 0.0f;
+    bool auto_deploys = false;                    // Auto_Deploys (+0xd0)
+    bool must_face_target_when_deployed = false;  // Must_Face_Target_To_Attack_When_Deployed (+0xa6)
+    bool stationary_when_attacking = false;       // Is_Stationary_When_Attacking (+0x26): no state 4 while moving
+    // s78f t08: Should_Attacker_Hold_Fire_For_Special_Ability (+0x9e) - an attacker whose pending ability targets this
+    // type drops from state 4 to 2 (the services' hold-fire rule). Should_Cause_Limited_Turrets_To_Turn (+0x80) - a
+    // TURRET unit that cannot aim at this type (beyond its rotate extent) turns its body instead of dropping it.
+    bool hold_fire_for_special_ability = false;
+    bool limited_turrets_turn = false;
+    float max_dist_walk_while_deployed = 0.0f;    // Max_Dist_Walk_While_Deployed (+0x23b0): > 0 keeps an out-of-range target
+    // ---- s78f t04 (LOB_SOLVER §3.6 "Charge-up aim"): the TURRET of a LOBBING_SUPERWEAPON unit (combat-side slew) ----
+    // Turret_Rotate_Speed (+0x5a8, degrees per service; <= 0: [port] the aim is reached at once), the undeployed
+    // Turret_Rotate_Extent_Degrees / Turret_Elevate_Extent_Degrees (+0x5a0 / +0x5a4; a unit without deploy states always
+    // uses them), Turret_XY_Only (+0xb3) and Turret_Rest_Angle (+0x5b4: x, elevation, yaw - the spawn pose).
+    float turret_rotate_speed = 0.0f;
+    float turret_extent = 180.0f;
+    float turret_elevate_extent = 90.0f;
+    bool turret_xy_only = false;
+    float turret_rest_pitch = 0.0f, turret_rest_yaw = 0.0f;
 };
 
 struct CombatData {
@@ -639,6 +680,38 @@ public:
     virtual bool ion_storm_shields_down(ObjectId /*victim*/, uint32_t /*frame*/) const { return false; }
     // OI abilities: a detonation effect / stun on `id` (serial phases, after the combat-side state changed).
     virtual void unit_effect(ObjectId /*id*/, UnitEffect /*effect*/, int32_t /*player*/, Vec3 /*point*/, uint32_t /*frame*/) {}
+    // ---- s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states, slots 47 / 48 and team copies") ----
+    // Slot 47 (0x569540 / 0x569400, the attack-idle pose) on `id`: called with `arg` 1 at state 4 and on the own-weapon
+    // "needs to turn" path, with 0 by a team container for its members (serial phase D). The host plays clip 6 Attack
+    // Idle (index 0, looping, speed 1) when (`arg` 0 or Locomotor_Has_Animation_Priority clear), the unit is not moving
+    // and its current clip is not a flinch, Attack or Attack Idle; the blend is ONE synced Get_Float(0.2, 0.75) from
+    // `rng`, drawn only then. Default: nothing (no draw).
+    virtual void attack_idle(ObjectId /*id*/, bool /*arg*/, uint32_t /*frame*/, SimRng& /*rng*/) {}
+    // The targeting service turned `id` (the facing snap 0x394440 or the [port] turn step): the new facing (a level unit
+    // vector) for the host's locomotor (serial phase D). Default: nothing.
+    virtual void facing_set(ObjectId /*id*/, Vec3 /*facing*/) {}
+    // The unit's TURRET aim toward its current target (0x631cc0 / 0x632050) as the host models it: 1 the angles are
+    // reached, 0 still slewing, -2 cannot aim (the aim yaw is beyond the rotate extent: 0x631cc0 false), -1 not modelled
+    // or not aiming - [port] treated as reached. Serial phase D. Default: -1.
+    virtual int8_t turret_aim_state(ObjectId /*id*/) const { return -1; }
+    // ---- s78f t08 (TACTICAL_COMBAT §3.1.1 "s78f t08 answers") ----
+    // The unit's pending targeted ability (TD +0x148, written only by slot 38 0x5688f0: an Order_Attack with an ability
+    // CRC, or the autofire driver's pick): its target while one waits for range, else kNoObject. Read-only (serial
+    // phase D). Default: none.
+    virtual ObjectId pending_ability_target(ObjectId /*id*/) const { return kNoObject; }
+    // The deploy request 0x391260 (Walk vf +0x118(1): the Deploy transition) from the targeting service's auto-deploy
+    // check 0x568e60 or slot 47's Auto_Deploys branch. The host refuses it without Deploys, a Walk locomotor or while a
+    // deploy is pending. Serial phase D. Default: nothing.
+    virtual void request_deploy(ObjectId /*id*/, uint32_t /*frame*/) {}
+};
+
+// s78f t08: signal 0x1E (slot 31 entering targeting state 4 the first time) - its only listener is the AI task force
+// (TaskForceClass::Add_Force 0x5f9a90 -> 0x5fe5d0 case 0x1E: task-force Lua event 12 Target_In_Range(unit, target),
+// raised synchronously). `unit` = the object the signal is raised on (a team member's: its container), `target` = the
+// formation attack target when it has one, else the current target.
+struct AttackStateEvent {
+    ObjectId unit = kNoObject;
+    ObjectId target = kNoObject;
 };
 
 // Unit flags (subset of the original's +0x3a0..+0x3b4 bytes).
@@ -694,9 +767,15 @@ enum UnitFlag : uint32_t {
     // targets are kept and the weapons are serviced as usual [M: whether retail's WEAPON fires at the kept target].
     // Set / cleared by the ability system; saved and hashed with the other flags.
     kUnitTargetingSuspended = 1u << 19,
+    // s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states"), mirrored by the host before every tick: the locomotor is
+    // moving (0x39ade0 / vf +0x1a8: an order in progress); and the model has an Attack (type 5) clip (0x397ae0(obj, 5)
+    // != 0). A moving land unit without TURRET attacks (state 4) only without Attack clips. Derived state: not hashed.
+    kUnitMoving = 1u << 20,
+    kUnitAttackClip = 1u << 21,
 };
 // Mirrors the host rewrites before every tick (left out of hash_units).
-inline constexpr uint32_t kUnitHostMirrorFlags = kUnitFighterIdle | kUnitHoverRest | kUnitRocketAttack | kUnitScanQuery;
+inline constexpr uint32_t kUnitHostMirrorFlags =
+    kUnitFighterIdle | kUnitHoverRest | kUnitRocketAttack | kUnitScanQuery | kUnitMoving | kUnitAttackClip;
 
 struct UnitSpawn {
     ObjectId id = kNoObject;
@@ -706,6 +785,9 @@ struct UnitSpawn {
     Vec3 facing{1.0f, 0.0f, 0.0f};
     uint32_t team = 0;              // squad / team container (0 = none)
     bool team_leader = false;       // Mod_Multiplier squad-minimum rule
+    // s78g t06 (TACTICAL_COMBAT §3.6 step 2): the team the Take_Damage redirect / share rules count when `team` is 0 (a
+    // space squadron member: its team takes no other combat team rule in this port). 0 = `team`.
+    uint32_t damage_team = 0;
     ObjectId damage_parent = kNoObject;  // parent container that takes this unit's damage [M]
     float health_fraction = 1.0f;
     uint32_t flags = 0;
@@ -999,7 +1081,8 @@ public:
     // shot overwrites the point). The caller checks readiness / base power and restarts the special-weapon pack (the
     // battle host: SpecialWeaponSystem::fire_lobbing_at). False unless `id` is a live LOBBING_SUPERWEAPON unit with an own
     // weapon. The lobbing service (after the WEAPON service, every tick) waits for the turret aim (TURRET + a lob
-    // solution from the launch point [port: turret angles not modelled, aimed at once]), stamps the frame, and
+    // solution from the next fire bone; s78f t04: the turret slews Turret_Rotate_Speed degrees per service from its
+    // current angles, within the undeployed extents), stamps the frame on the service the aim is reached, and
     // Lobbing_Superweapon_Chargeup_Frames later sets "charged" (+0x3d). The WEAPON service then skips its recharge wait,
     // fires at the point with no target object and clears the order after a successful spawn (a failed one retries).
     bool order_fire_at_position(ObjectId id, Vec3 point);
@@ -1008,6 +1091,8 @@ public:
     // True for a live LOBBING_SUPERWEAPON unit with an own weapon (the units order_fire_at_position accepts).
     bool fires_at_position(ObjectId id) const;
     std::span<const LobEvent> lob_events() const { return lob_events_; }  // S8 t30: this tick's (cleared at tick start)
+    // s78f t08: this tick's signal 0x1E raises (AttackStateEvent), in service order (cleared at tick start).
+    std::span<const AttackStateEvent> attack_state_events() const { return attack_events_; }
     // ---- L1 systems ----
     // A host-launched projectile (ProjectileLaunch). Max travel = the 3-D distance to the aim point (+ the target's
     // radius for a unit target), so a point shot detonates at the point (expiry: area damage / ion stun). It is
@@ -1158,15 +1243,21 @@ public:
     void set_garrison_host_query(std::function<ObjectId(ObjectId unit)> fn) { garrison_host_ = std::move(fn); }
     // The model ALT the unit shows (Land_Damage_Thresholds / _Alternates over its hull fraction); 0 for an unknown id.
     int32_t model_alt(ObjectId id) const;
-    // The gun bones of `host`'s current ALT entry as world positions (valid bones only, gun order) and the host's
-    // position; false when the host has no table, its ALT is outside 0..M-1 or the entry is empty (AbilityHost
-    // garrison_fire_bones, the Remote_Bomb toss).
-    bool garrison_fire_bones(ObjectId host, Vec3& host_pos, std::vector<Vec3>& bones) const;
-    // ---- S8 t10 / t11: targeting state 4 (TACTICAL_COMBAT §3.1.1 "Gate details" step 7, LOB_SOLVER §8 item 22) ----
-    // TD +0x18 == 4 for the unit's current target: slot 44 (In_Max_Range; the lob solver for a grenade weapon) and not
-    // slot 45 (inside min range). [port] State 3 (turret / facing not ready yet, slot 48) is not modelled. False without
-    // a live current target.
+    // The gun bones of `host`'s current ALT entry in the host's current pose (s78f t03: world position and x-axis yaw,
+    // LOB_SOLVER §5.1 "Garrison pick inputs"; valid bones only, gun order) and the host's position; false when the host
+    // has no table, its ALT is outside 0..M-1 or the entry is empty (AbilityHost garrison_fire_bones, the Remote_Bomb
+    // toss). A bone is a candidate when |wrap(yaw_deg - yaw(host -> target))| <= 60.
+    bool garrison_fire_bones(ObjectId host, Vec3& host_pos, std::vector<GarrisonFireBone>& bones) const;
+    // ---- S8 t10 / t11, s78f t03: targeting states (TACTICAL_COMBAT §3.1.1 "Targeting states, slots 47 / 48") ----
+    // TD +0x18 of the unit: 0 no target, 1 target just set, 2 out of range / moving with Attack clips, 3 in range but
+    // the turret or the facing is not on the target yet, 4 attacking. Written by the targeting service of phase D (the
+    // TeamTargeting copy for a land team member); the own weapon fires only in state 4. attacking() = state 4 for the
+    // live current target.
     bool attacking(ObjectId id) const;
+    uint8_t targeting_state(ObjectId id) const;
+    // Slot 48 (0x568230, "needs to turn"): the land facing is off the yaw toward the current target by more than half a
+    // frame of turn. False without a live target, a turn rate or a locomotor ([port]).
+    bool needs_turn(ObjectId id) const;
     // refixf t07: the projectile segment query's per-entry test (precise model test, then the Collision_Box_Modifier
     // sphere). Unset: every tree-box hit is a hit (synthetic data without models).
     void set_precise_hit(PreciseHitFn fn) { precise_hit_ = std::move(fn); }
@@ -1256,6 +1347,15 @@ public:
     // start of each tick and on demand when stale.
     float modifier(ObjectId id, ModList list);
     float mod_multiplier(ObjectId id, ModKind kind);
+    // s78h t03 (TACTICAL_COMBAT §4.4 "Who the squad leader is"): the value 0x398010 returns for a TEAM container, keyed
+    // by the container id (`damage_team`: `team` on land, the squadron id in space). The container's own product when
+    // that is != 1 (only when the container is a combat unit; the port's containers have no abilities, so 1.0), else
+    // the minimum over ALL live members' own products (the team_leader stand-in and 1.0-valued members included), 1.0
+    // when the team has no live member. Only container-level readers use it (a team locomotor's SPEED [M]); every
+    // per-unit reader (mod_multiplier, weapons, shields, damage) reads the unit's own product. Caller (s78k t03): the
+    // host's speed factors pass this SPEED value as the container's factor of the movement layer's team locomotor cap
+    // (land teams and space squadrons; MovementSystem::set_team). Pure function of the current state.
+    float team_mod_multiplier(uint32_t team, ModKind kind) const;
     float attack_range(ObjectId id);  // Get_Max_Attack_Range
     void set_health(ObjectId id, float h);
     void set_shield(ObjectId id, float s);
@@ -1304,6 +1404,7 @@ private:
         int32_t owner = -1;
         uint32_t team = 0;
         uint8_t team_leader = 0;
+        uint32_t damage_team = 0;  // s78g t06: Take_Damage step 2's team (= team, or UnitSpawn::damage_team); not hashed
         ObjectId damage_parent = kNoObject;
         uint32_t flags = 0;
         Vec3 pos, last_pos, facing;
@@ -1330,6 +1431,14 @@ private:
         Vec3 lob_point;
         uint8_t lob_pending = 0, lob_charged = 0;
         uint32_t lob_stamp = 0;
+        // s78f t04 (LOB_SOLVER §3.6 "Charge-up aim"): the lobbing TURRET's current elevation / yaw (TD +0x4c / +0x50,
+        // degrees, relative to the body; spawned at Turret_Rest_Angle, holds the last aim). Saved; hashed in
+        // hash_extended for LOBBING_SUPERWEAPON units with a TURRET.
+        float lob_tpitch = 0.0f, lob_tyaw = 0.0f;
+        // s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states"): TD +0x18 and the target it was computed for (another
+        // current target reads as state 1, Set_Target's write). Saved; hashed in hash_extended when non-zero.
+        uint8_t tstate = 0;
+        ObjectId ttarget = kNoObject;
         std::array<uint8_t, 2> ability_active{0, 0};
         uint32_t hp_begin = 0, hp_count = 0;
         uint8_t ever_hit = 0;
@@ -1379,8 +1488,7 @@ private:
         uint32_t mod_ver = 0, player_ver = 0;
         uint8_t mod_valid = 0;
         std::array<float, kModKindCount> own_mult{};
-        std::array<float, kModKindCount> mult{};
-        uint16_t squad_seen = 0;
+        std::array<float, kModKindCount> mult{};  // s78h t03: = own_mult (a member never takes the squad value)
         uint8_t needs_scan = 0;  // phase C output
         uint8_t scan_due = 0;
         ObjectId share_group = kNoObject;  // S8 t17: squadron of the shared team target (host, per tick)
@@ -1523,6 +1631,9 @@ private:
     // OI tactical (team targeting, TACTICAL_COMBAT 2.3 / 2.4): the unit's squad "container" - the unit whose id is
     // its team id when that is a combat unit, else the team's team_leader member; nullptr when none / itself.
     const Unit* team_head(const Unit& u) const;
+    // s78g t06: a dying team_leader hands the head role (and the team's targeting record) to its team's first live
+    // member at once, so the team is never without a head while a member lives (the original's head is the container).
+    void hand_over_team(const Unit& dead);
     float target_extent(const Unit& t, Vec3 from) const;  // OI tactical: TACTICAL_GAPS 3.1 footprint half-extent E
     // TACTICAL_GAPS 3.1 slot 43 range geometry: XY distance from `from` to the aim point and the slack E.
     void range_geometry(const Unit& t, Vec3 from, float& d, float& E) const;
@@ -1551,10 +1662,36 @@ private:
     // `suspended` (S8 t12, MOVEMENT §3.2 "A locomotor swap undeploys"): TARGETING and WEAPON are suspended (jetpack
     // flight), the hardpoints are not - they keep their last target (nothing new is pushed) and still count down / fire.
     void update_weapons(Unit& u, uint32_t frame, SimRng& rng, bool suspended = false);
-    bool target_state_attacking(const Unit& u, const Unit& t) const;  // S8 t10: TD +0x18 == 4 (slot 44 && !slot 45)
+    // S8 t10: slot 44 && !slot 45 for target `t` measured from `from` (the targeting object's position; a team's from its
+    // head), with `u`'s weapon and range.
+    bool in_attack_range(const Unit& u, Vec3 from, const Unit& t) const;
+    // s78f t03: the targeting service (Service_Land 0x634810 / Service_Space 0x633ae0 after the scan; the TeamTargeting
+    // service 0x62eeb0 for a land team head) and its helpers.
+    void targeting_service(Unit& u, uint32_t frame, SimRng& rng);
+    void team_targeting_service(Unit& head, uint32_t frame, SimRng& rng);
+    void set_tstate(Unit& u, uint8_t s, ObjectId target);  // slot 31 0x568c80
+    bool needs_turn_to(const Unit& u, const Unit& t) const;  // slot 48 0x568230
+    float turn_step(const Unit& u) const;                    // 0x372560: Max_Rate_Of_Turn x the land multiplier
+    void face_toward(Unit& u, Vec3 p, float max_step);      // snap (max_step < 0) or [port] turn step; facing_set hook
+    void attack_idle(Unit& u, bool arg, uint32_t frame, SimRng& rng, bool ordered);  // slot 47 (ordered: TD +0xf4)
+    bool auto_deploy_check(const Unit& u, ObjectId target) const;  // s78f t08: 0x568e60
+    void hold_fire(Unit& u, ObjectId target);                      // s78f t08: the services' last rule
+    ObjectId container_or_self(ObjectId id) const;                 // s78f t08: a team member -> its container
+    const Unit* land_team_head(const Unit& u) const;  // s78f t03: the head of a land team member (no TARGETING of its own)
+    Unit* team_head_of(uint32_t team);  // s78h t06: a team's current live head (container unit, else team_leader), or null
+    // s78i t03: the head of u's land team, u itself when u is that head (the container unit, or the team_leader stand-in,
+    // members or not); null outside a land team. A team keeps TeamTargeting while its head lives, even with no member left.
+    const Unit* land_team_lead(const Unit& u) const;
+    uint32_t convert_container(const Unit& v) const;  // s78i t04: v's 0x39b1a0 team container id (v's own when it is one), else 0
+    bool targeting_idle(const Unit& u, uint32_t frame) const;  // phase D: stunned, unpowered or targeting suspended
+    void drop_target(Unit& u);                        // slot 27: the order and scan targets are dropped
+    bool lob_turret_aim(Unit& u);                     // s78f t04: 0x631fe0 toward the lobbing order's point (one slew step)
     int32_t model_alt_of(const Unit& u) const;
     // S8 t10: Spawn_Projectile's garrison branch - a synced pick among the host's gun bones within 60 degrees of the target.
     bool garrison_muzzle(const Unit& shooter, Vec3 target, SimRng& rng, Vec3& out) const;
+    // s78f t03: the gun bones of `host`'s current ALT entry in its current pose (garrison_muzzle, garrison_fire_bones);
+    // false = no table / ALT outside the table / empty entry.
+    bool host_fire_bones(const Unit& host, std::vector<GarrisonFireBone>& out) const;
     bool fire_hardpoint(Unit& u, Hardpoint& h, uint32_t frame, SimRng& rng);
     void fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng);
     // S8 t08 (TACTICAL_COMBAT §3.1.1): Is_Deployed_Or_Deploying (0x39a390) and the deploy transition (0x39a400 / 0x39b2a0),
@@ -1647,6 +1784,7 @@ private:
     std::vector<HitEvent> hit_events_;  // S10-int
     std::vector<ShotEvent> shot_events_;  // OI fog
     std::vector<LobEvent> lob_events_;    // S8 t30
+    std::vector<AttackStateEvent> attack_events_;  // s78f t08 (signal 0x1E)
     // ---- OI abilities ----
     std::vector<SurvivorEvent> survivor_events_;
     std::vector<std::pair<int32_t, ObjectId>> base_power_;  // (player, source), insertion order
@@ -1675,6 +1813,15 @@ private:
     std::vector<Hardpoint> flush_hps_;
     std::vector<std::pair<uint32_t, uint32_t>> leaders_;  // (team, unit index) scratch
     std::vector<std::pair<uint32_t, ObjectId>> team_heads_;  // OI tactical: (team, team_leader id), built in phase A
+    std::vector<ObjectId> land_heads_;  // s78f t03: ground team heads (TeamTargeting), phase A scratch read in phase D
+    // s78h t06: one TeamTargeting service per land team per tick at the team's container slot = the team's highest unit
+    // index (head included), reached first in phase D's descending walk. Built in phase A, slot descending (ties: team).
+    struct LandTeamSlot {
+        uint32_t slot = 0;     // units_ index the service runs just before
+        uint32_t team = 0;
+        uint8_t serviced = 0;  // serviced this tick
+    };
+    std::vector<LandTeamSlot> land_teams_;
     std::vector<float> dim_x_, dim_y_, dim_y2_;              // OI tactical: diminishing-firepower spline (sorted)
     uint32_t next_serial_ = 1;
     uint32_t frame_ = 0;

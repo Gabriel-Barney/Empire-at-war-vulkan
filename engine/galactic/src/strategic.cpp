@@ -225,14 +225,16 @@ BuildCheck GalacticSim::build_check(int32_t player, PlanetIndex planet, uint32_t
     if (ground_base_level(planet) < t.required_ground_base)
         return fail(17, kBuildGroundBase, static_cast<uint32_t>(t.required_ground_base));
     if (p.starbase_level < t.required_star_base) return fail(17, kBuildStarBase, static_cast<uint32_t>(t.required_star_base));
-    // 18. structure slots: present + queued (both queues) of the same family < the planet type's slots.
+    // 18. structure slots: structures on the surface (0 when there is no ground base; orbital: 0 when there is no starbase)
+    // + queued items of the same family (0x5F / 0x60, both queues) < the planet type's slots (STRATEGIC_GAPS §1.3 step 18).
     const auto family_count = [&](bool orbital) {
         int32_t n = 0;
-        for (ObjectHandle s : p.structures)
-            if (store_->alive(s)) {
-                const TypeInfo& st = rules_->types[static_cast<size_t>(store_->type(s))];
-                n += (orbital ? is_orbital_structure_type(st) : is_ground_structure_type(st)) ? 1 : 0;
-            }
+        if (orbital ? p.starbase_level > 0 : ground_base_level(planet) > 0)
+            for (ObjectHandle s : p.structures)
+                if (store_->alive(s)) {
+                    const TypeInfo& st = rules_->types[static_cast<size_t>(store_->type(s))];
+                    n += (orbital ? is_orbital_structure_type(st) : is_ground_structure_type(st)) ? 1 : 0;
+                }
         for (const auto& q : p.queue)
             for (const BuildEntry& e : q)
                 n += (orbital ? is_orbital_structure_type(rules_->types[e.type]) : is_ground_structure_type(rules_->types[e.type])) ? 1 : 0;
@@ -418,6 +420,13 @@ void GalacticSim::claim_victory(int32_t player, uint8_t type, int32_t countdown)
     claims_.push_back(c);
 }
 
+bool GalacticSim::story_victory(int32_t player, bool short_silent) {
+    if (!valid_player(player)) return false;
+    victory_hold_ = 0;  // 0x343f80(..., 0): every level, no replay
+    claim_victory(player, kVictoryStoryClaim, short_silent ? 30 : 210);
+    return true;
+}
+
 ObjectHandle GalacticSim::super_weapon_at(PlanetIndex planet) const {
     if (!valid_planet(planet)) return {};
     for (uint32_t f : planets_[planet].orbit) {
@@ -511,7 +520,7 @@ bool GalacticSim::tsw_destroy_planet(PlanetIndex planet, int32_t tsw_owner, bool
 // ---- CRC tail --------------------------------------------------------------------------------------------------------------
 
 bool GalacticSim::oi_state_default() const {
-    if (!claims_.empty() || linked_battle_pending_) return false;
+    if (!claims_.empty() || linked_battle_pending_ || victory_hold_ != 0) return false;
     for (int32_t id : stealthed_)
         if (store_->alive(store_->find(static_cast<objects::ObjectId>(id)))) return false;
     for (const PlayerState& p : players_)
@@ -533,6 +542,10 @@ void GalacticSim::hash_oi(StateHasher& h) const {
         h.u8(c.type);
         h.i32(c.frame);
         h.i32(c.countdown);
+    }
+    if (victory_hold_ != 0) {  // story t11 (only once used, so older captures keep their CRC)
+        h.u32(0x56484C44u);  // "VHLD"
+        h.i32(victory_hold_);
     }
     for (const PlayerState& p : players_) {
         h.i32(p.max_tech_level);

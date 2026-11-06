@@ -560,6 +560,18 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
     u.turret = kTurret != objects::kNoBehavior && ty.has_behavior(t, objects::BehaviorSet::Union, kTurret);
     if (u.lobbing_superweapon && !ty.get_string(t, "Lobbing_Superweapon_Chargeup_Frames").empty())
         u.lobbing_chargeup_frames = static_cast<uint32_t>(std::max(0, ty.get_int(t, "Lobbing_Superweapon_Chargeup_Frames")));
+    // s78f t04 (LOB_SOLVER §3.6 "Charge-up aim"): the lobbing TURRET's slew speed, undeployed extents, XY-only flag and
+    // rest angle (absent extents keep the UnitDesc defaults [M: the type ctor's]).
+    if (u.lobbing_superweapon && u.turret) {
+        const auto tagged = [&](const char* tag) { return !ty.get_string(t, tag).empty(); };
+        u.turret_rotate_speed = ty.get_float(t, "Turret_Rotate_Speed");
+        if (tagged("Turret_Rotate_Extent_Degrees")) u.turret_extent = ty.get_float(t, "Turret_Rotate_Extent_Degrees");
+        if (tagged("Turret_Elevate_Extent_Degrees")) u.turret_elevate_extent = ty.get_float(t, "Turret_Elevate_Extent_Degrees");
+        u.turret_xy_only = ty.get_bool(t, "Turret_XY_Only");
+        const std::array<float, 4> r = ty.get_vec(t, "Turret_Rest_Angle");
+        u.turret_rest_pitch = r[1];
+        u.turret_rest_yaw = r[2];
+    }
     if (s.model_mode >= 0) (void)target_bones(t, s.model_mode == 1, u.target_bones);
     u.transport_landing = ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::TransportLanding);
     // S8 t10 (LOB_SOLVER §5.1): Num_Garrison_Guns and the gun-bone table (battle host with model data only); the model ALT
@@ -603,6 +615,10 @@ void BattleCatalog::s9_unit_fields(uint32_t t, tc::UnitDesc& u, BuildState& s) c
     u.shield_hit_particle_count = clamp_count(vis.shield_hit.size());
     u.damaged_smoke = !vis.smoke.empty();
     u.target_stealth_units = ty.get_bool(t, "Target_Stealth_Units");
+    // s78g t06 (TACTICAL_COMBAT §3.6 step 2): the Take_Damage team rules (vanilla: Droid_R2D2 / Droid_C3P0 share, Luke_XWing
+    // / TIE_Prototype redirect). Never read before, so the rules had not run in any battle.
+    u.redirect_damage_to_teammates = ty.get_bool(t, "Redirect_Damage_To_Teammates");
+    u.share_damage_with_teammates = ty.get_bool(t, "Share_Damage_With_Teammates");
     u.combustible = ty.get_bool(t, "Is_Combustible");
     u.burning_damage_per_second = ty.get_float(t, "Burning_Damage_Per_Second");
     u.energy_capacity = ty.get_float(t, "Energy_Capacity");
@@ -632,6 +648,16 @@ void BattleCatalog::s9_unit_fields(uint32_t t, tc::UnitDesc& u, BuildState& s) c
         u.death_clones.push_back({key, ct});
     }
     u.deploys = ty.get_bool(t, "Deploys");
+    // s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states, slots 47 / 48"): the facing test's turn rate and the land
+    // service's deploy / move flags.
+    u.turn_rate = ty.get_float(t, "Max_Rate_Of_Turn");
+    u.auto_deploys = ty.get_bool(t, "Auto_Deploys");
+    u.must_face_target_when_deployed = ty.get_bool(t, "Must_Face_Target_To_Attack_When_Deployed");
+    u.stationary_when_attacking = ty.get_bool(t, "Is_Stationary_When_Attacking");
+    u.max_dist_walk_while_deployed = ty.get_float(t, "Max_Dist_Walk_While_Deployed");
+    // s78f t08: the target-type flags of the hold-fire rule and the TURRET cannot-aim branch.
+    u.hold_fire_for_special_ability = ty.get_bool(t, "Should_Attacker_Hold_Fire_For_Special_Ability");
+    u.limited_turrets_turn = ty.get_bool(t, "Should_Cause_Limited_Turrets_To_Turn");
     for (std::string_view n : ty.get_list(t, "Death_Projectiles")) {
         const int32_t pt = type_or_none(n);
         if (pt >= 0) u.death_projectiles.push_back(projectile(static_cast<uint32_t>(pt), s));
@@ -710,6 +736,16 @@ ta::AbilityObjectDesc BattleCatalog::ability_desc(uint32_t t, BuildState& s) con
     d.hero = ty.get_bool(t, "Is_Named_Hero") || ty.get_bool(t, "Is_Generic_Hero");
     d.passive_missile_shield_radius = ty.get_float(t, "Passive_Missile_Shield_Radius");
     d.destroy_when_stunned_over_water = ty.get_bool(t, "Destroy_When_Stunned_Over_Water");  // OI t02 [port]
+    // s78l t05 (TACTICAL_COMBAT §5.4.1): Tactical_Bribe acceptance / cost. [port] every desc (a TEAM container too) reads
+    // its own type: the FoC containers carry their own Tactical_Bribe_Cost (Stormtrooper_Team 25, its member 10), and
+    // the container type does not name a member type here.
+    d.named_hero = ty.get_bool(t, "Is_Named_Hero");
+    d.tactical_bribe_cost = ty.get_int(t, "Tactical_Bribe_Cost");  // 0 when the tag is missing
+    const auto float_or = [&ty, t](std::string_view tag, float def) { return ty.get_string(t, tag).empty() ? def : ty.get_float(t, tag); };
+    d.bribe_modifier_corrupted = float_or("Bribe_Modifier_On_Corrupted_Planets", 1.0f);
+    d.bribe_modifier_uncorrupted = float_or("Bribe_Modifier_On_Uncorrupted_Planets", 1.0f);
+    d.friendly_damage_amount = ty.get_float(t, "Friendly_Damage_Amount");
+    d.proximity_mine = ty.has_behavior(t, objects::BehaviorSet::Union, objects::behavior_type_id("PROXIMITY_MINE"));
     // 0x3979d0 [port: the mode's FOW reveal range column; land for land battles is not distinguished here]
     if (ty.get_bool(t, "Target_Stealth_Units")) d.stealth_detection_range = ty.columns().space_fow_reveal_range[t];
     ta::AbilityResolvers r;

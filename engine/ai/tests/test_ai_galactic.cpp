@@ -101,7 +101,7 @@ static void test_cadence() {
         bool blocked(uint32_t, int32_t) override { return false; }
         bool evaluate(const std::string&, int32_t, double&) override { return false; }
         bool accept(Goal&) override { return false; }
-        bool plan_activatable(const Goal&) override { return false; }
+        bool plan_activatable(Goal&) override { return false; }
         bool plan_invalid(const Goal&) override { return true; }
         bool replaceable(const Goal&) override { return true; }
         void refresh_plan(Goal&) override {}
@@ -216,7 +216,7 @@ static void test_goal_reservations() {
             trace.push_back("propose " + std::to_string(g.pp_handle));
             return true;
         }
-        bool plan_activatable(const Goal& g) override {
+        bool plan_activatable(Goal& g) override {
             solve(g.pp_handle, false);
             trace.push_back("resolve " + std::to_string(g.pp_handle));
             return !pps[g.pp_handle].units.empty();
@@ -377,7 +377,7 @@ static void test_goal_batched_accept() {
             return true;
         }
         void accept_cancel() override { solves.clear(); }
-        bool plan_activatable(const Goal&) override { return true; }
+        bool plan_activatable(Goal&) override { return true; }
         bool plan_invalid(const Goal& g) override { return g.running < 0; }
         bool replaceable(const Goal&) override { return true; }
         void refresh_plan(Goal&) override {}
@@ -553,7 +553,7 @@ static void test_goal_batched_values() {
             g.pp_valid = true;
             return true;
         }
-        bool plan_activatable(const Goal&) override { return true; }
+        bool plan_activatable(Goal&) override { return true; }
         bool plan_invalid(const Goal& g) override { return g.running < 0; }
         bool replaceable(const Goal&) override { return true; }
         void refresh_plan(Goal&) override {}
@@ -1176,7 +1176,7 @@ static void syn_data(MemoryFiles& files, AiDefinitions& defs, EquationSet& eqs, 
     eqs.add("Allow_Space", "(Variable_Self.CreditsUnnormalized >= 1500) * 2 + (Game.EnemyForce.SpaceTotalUnnormalized > Game.FriendlyForce.SpaceTotalUnnormalized)");
     eqs.add("Conquer_Desire",
             "(3 + 2 * (Variable_Target.EnemyForce.HasSpaceForce == 0) + Variable_Target.BaseIncome) * "
-            "(Variable_Self.SpaceTotalUnnormalized >= 1500)");
+            "(Variable_Self.SpaceTotalUnnormalized >= 1000)");  // the starting frigate (a2h: starbases no longer count)
     eqs.add("Needs_Starbase_Upgrade",
             "(Variable_Target.StarbaseLevel < Variable_Target.MaxStarbaseLevel) * (Variable_Self.CreditsUnnormalized >= 1000) * 4");
     eqs.add("Offensive_Budget", "5 + 10 * Variable_Self.PlanetsControlled");
@@ -1585,6 +1585,8 @@ static void test_starbase_force_split() {
     CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, corv) == 1000.0);
     CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, frig | corv) == 2000.0);
     CHECK(galactic_ai_member_force(sim, ti, tSB2, 1, kAllCategories) == 0.0);  // no members
+    // Player-level tokens use the exact list (0x373fd0 / 0x373ee0): tech 1 has no list, so nothing; the fall-back walk reads slot 0.
+    CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, kAllCategories, true) == 0.0);
     // The leaf (members only) and the 0x5f2430 helper (+ the starbase's own power in every row its Capital mask meets).
     CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, kAllCategories) == 2000.0);
     CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 2600.0);
@@ -1815,6 +1817,16 @@ static void test_force_members() {
     rules.types[tSB2].kind = gal::UnitKind::GroundStructure;  // SB2 stands in for an ion cannon (ground, +0x1E), power 1200
     rules.types[tSB2].base_level = 0;
     rules.types[tSB2].required_star_base = 0;
+    // a2i t05: an orbital structure (DUMMY_ORBITAL_STRUCTURE, a sensor pod), power 50, kept in `structures` by the sim.
+    const uint32_t tPod = static_cast<uint32_t>(rules.types.size());
+    {
+        gal::TypeInfo pod;
+        pod.name = "SensorPod";
+        pod.kind = gal::UnitKind::GroundStructure;
+        pod.dummy = gal::kDummyOrbitalStructure;
+        pod.ai_combat_power = 50.0f;
+        rules.types.push_back(pod);
+    }
     objects::GameObjectTypes types;
     objects::IdCounter ids;
     objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids);
@@ -1822,9 +1834,9 @@ static void test_force_members() {
     gal::GalacticSim sim(rules, store, rng.synced());
     gal::GalacticSetup setup = syn_setup();
     // The Rebel holds P7: a level-1 base, a barracks, an "ion cannon", a frigate fleet and an infantry company.
-    setup.forces = {{0, 0, tSB1}, {1, 7, tSB1}, {1, 7, tBarracks}, {1, 7, tSB2}, {1, 7, tFrigate}, {1, 7, tInfantry}};
+    setup.forces = {{0, 0, tSB1}, {1, 7, tSB1}, {1, 7, tBarracks}, {1, 7, tSB2}, {1, 7, tPod}, {1, 7, tFrigate}, {1, 7, tInfantry}};
     CHECK(sim.start(setup));
-    std::vector<GalacticAiTypeInfo> tinfo(tTypes);
+    std::vector<GalacticAiTypeInfo> tinfo(rules.types.size());
     tinfo[tFrigate].categories = {"FRIGATE"};
     tinfo[tCorvette].categories = {"CORVETTE"};
     tinfo[tInfantry].categories = {"INFANTRY"};
@@ -1835,30 +1847,47 @@ static void test_force_members() {
     tinfo[tBarracks].spawn_tech[0] = {{tInfantry, 3}};  // land garrison: 600
     tinfo[tInfantry].spawn_tech[0] = {{tInfantry, 5}};  // a surface unit's list is never read by the planet leaf
     tinfo[tSB2].special_weapon_space = true;
+    tinfo[tPod].categories = {"STRUCTURE"};
+    tinfo[tPod].spawn_tech[0] = {{tInfantry, 1}};  // an orbital structure's list: never read by the ground leaf (200)
     fill_category_masks(tinfo);
-    const std::span<const GalacticAiTypeInfo> ti(tinfo);
     const uint64_t cap = ai_category_bit("Capital"), frig = ai_category_bit("Frigate"), corv = ai_category_bit("Corvette"),
-                   inf = ai_category_bit("Infantry");
+                   inf = ai_category_bit("Infantry"), structure = ai_category_bit("Structure");
+    tinfo[tPod].garrison_mask = corv;  // its +0x1658 structure mask (Garrison_Category = Corvette)
+    const std::span<const GalacticAiTypeInfo> ti(tinfo);
     const gal::PlanetState& p7 = sim.planets()[7];
-    CHECK(p7.owner == 1 && p7.starbase && p7.structures.size() == 2 && p7.surface.size() == 1 && !p7.orbit.empty());
+    CHECK(p7.owner == 1 && p7.starbase && p7.structures.size() == 3 && p7.surface.size() == 1 && !p7.orbit.empty());
     // Space leaf: frigate 1000 + its corvette 500 + the base's corvettes 1000 + the special-weapon structure's own 1200
-    // (Capital rows only: the +0x1658 default); the starbase's own 600 never.
-    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, kAllCategories) == 3700.0);
+    // (its +0x1658 is 0 -> Capital) + the orbital pod's own 50 (no +0x1E test, its mask Corvette); the starbase's own 600
+    // never (A2I_TOKENS_RE §2.1).
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, kAllCategories) == 3750.0);
     CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, frig) == 1000.0);
-    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, corv) == 1500.0);
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, corv) == 1550.0);
     CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, cap) == 1200.0);
-    // Ground leaf: infantry 200 (not its own list) + barracks members 600; the structures' own power (300, 1200) never.
+    {
+        // The structure mask is the type's +0x1658 when set: SB2 with Garrison_Category = Frigate counts in the Frigate row
+        // and leaves the Capital row.
+        std::vector<GalacticAiTypeInfo> t2 = tinfo;
+        t2[tSB2].garrison_mask = frig;
+        CHECK(galactic_ai_structure_mask(t2, tSB2) == frig && galactic_ai_structure_mask(t2, tBarracks) == cap);
+        CHECK(galactic_ai_planet_force(sim, t2, 7, 0, true, true, frig) == 2200.0);
+        CHECK(galactic_ai_planet_force(sim, t2, 7, 0, true, true, cap) == 0.0);
+        CHECK(galactic_ai_planet_force(sim, t2, 7, 0, true, true, kAllCategories) == 3750.0);
+    }
+    // Ground leaf: infantry 200 (not its own list) + barracks members 600; the structures' own power (300, 1200, 50) never,
+    // and the orbital pod's members (200) are not walked (A2I_TOKENS_RE §2.2).
     CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, false, kAllCategories) == 800.0);
     CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, false, inf) == 800.0);
-    // 0x5f2430: + the starbase's own 600 (space, Capital) / the ground structures' own 300 + 1200 (ground, Structure), in
-    // every row whose mask meets their category (AI_GALACTIC_TOKENS 9.2).
-    const uint64_t structure = ai_category_bit("Structure");
-    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 4300.0);
-    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, corv) == 1500.0);
-    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, cap) == 1800.0);  // leaf 1200 (special weapon) + the starbase's 600
+    // 0x5f2430: + the starbase's own 600 (space) / the ground structures' own 300 + 1200 (ground; the orbital pod is not
+    // a ground structure). The untyped row adds every one; a typed row those whose CategoryMask meets the row (a2i t03 D1,
+    // A2F_RE_READS §3.1): the Capital row gets the Capital starbase's 600, the Structure row the barracks and SB2.
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 4350.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, corv) == 1550.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, cap) == 1800.0);  // 1200 (SB2 by its structure mask) + 600
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, frig) == 1000.0);  // the starbase is not a Frigate
     CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, kAllCategories) == 2300.0);
     CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, inf) == 800.0);
-    CHECK(structure != 0 && galactic_ai_enemy_strength(sim, ti, 7, 0, false, structure) == 1500.0);  // the structures' own power
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, structure) == 1500.0);  // 0 leaf + barracks 300 + SB2 1200
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 1, true, cap) == 0.0);  // the Rebel's own planet: no enemy, no add
     // The token leaves on the live sim (Self = Empire).
     GalacticAiConfig cfg;
     cfg.players = {{0, "SynEmpire", 1}, {1, "SynRebel", 1}};
@@ -1876,20 +1905,24 @@ static void test_force_members() {
         CHECK(r.ok);
         return r.value;
     };
-    CHECK(value("Space_All") == 3700.0);
+    CHECK(value("Space_All") == 3750.0);
     CHECK(value("Space_Capital") == 1200.0);
     CHECK(value("Space_Frigate") == 1000.0);
-    CHECK(value("Space_Corvette") == 1500.0);
+    CHECK(value("Space_Corvette") == 1550.0);
     CHECK(value("Ground_All") == 800.0);
     CHECK(value("Ground_Infantry") == 800.0);
-    CHECK(value("Game_Space") == 3700.0);  // Σ planets: only P7 holds Rebel force
-    // Player root (Self = Rebel): space = base 600 (Capital default) + frigate 1000, ground = infantry 200; members of
-    // every walked object in both: base 1000 + frigate 500 + barracks 600 + infantry 1000 = 3100 [M literal reading].
+    CHECK(value("Game_Space") == 3750.0);  // Σ planets: only P7 holds Rebel force
+    // Player root (Self = Rebel): space = frigate 1000 + the special weapon SB2's 1200 + the orbital pod's 50 (0x66b1c0:
+    // a type that is not a starship / squadron counts when +0x1E is set or it is DUMMY_ORBITAL_STRUCTURE and the category
+    // meets its +0x1658 mask, A2I_TOKENS_RE §2.4); a galactic starbase is not a GOM object, so 0x66b1c0 never adds it
+    // (A2H_T02_SPACE_TOTAL); ground = infantry 200. The members of every walked object use the EXACT per-tech list of
+    // the owner's tech level (0x373fd0 / 0x373ee0, A2F_RE_READS §2.3): the Rebel is above tech 0 and every list here is
+    // Tech_0, so no member is added.
     c.self = 1;
-    CHECK(value("Self_Space") == 4700.0);
-    CHECK(value("Self_Ground") == 3300.0);
-    std::printf("force members: space leaf 3700 (fleet + carrier members + base members + special weapon), ground leaf 800, "
-                "0x5f2430 untyped 4300 / 2300\n");
+    CHECK(value("Self_Space") == 2250.0);
+    CHECK(value("Self_Ground") == 200.0);
+    std::printf("force members: space leaf 3750 (fleet + carrier members + base members + special weapon + orbital pod), "
+                "ground leaf 800, 0x5f2430 untyped 4350 / 2300, typed Capital 1800, Structure 1500\n");
 }
 
 // A2 galactic, AI_GALACTIC_3 rules: heroes never attach through their AI script (§2.4), the TerrainType veto (§6.3),
@@ -2355,7 +2388,7 @@ static void test_budget_fraction_before_init() {
         const double all = token(pw, frac, ok);
         CHECK(ok && all > 0.0 && all <= 500.0 / 6000.0);  // R / (time * income rate + credits)
         const double infra = token(pw, frac_infra, ok);
-        CHECK(ok && infra == 1.0e18);
+        CHECK(ok && infra == static_cast<double>(1.0e18f));  // D = 0 -> (double)1e18f (A2H_GALACTIC_AI_RE §2 step 6)
         CHECK(pw.world->tactical_budget_rows(0).empty() || pw.world->tactical_budget_rows(0)[0].available == 0.0f);
     }
     {
@@ -2476,6 +2509,7 @@ struct LateHooks final : GoalModeHooks {
     int64_t now = 0, ended = -1, created = -1;
     bool removable = true;
     float eta = 10.0f;
+    float nominal = -1.0f;  // Goal::nominal_time (A2f t09); < 0 = the ETA
     LateMode mode = LateMode::Stalled;
     uint32_t target_count() override { return 1; }
     bool applies(int32_t, uint32_t) override { return true; }
@@ -2488,9 +2522,10 @@ struct LateHooks final : GoalModeHooks {
         g.plan = 0;
         g.pp_valid = true;
         g.eta = eta;
+        g.nominal_time = nominal < 0.0f ? eta : nominal;
         return true;
     }
-    bool plan_activatable(const Goal&) override { return true; }
+    bool plan_activatable(Goal&) override { return true; }
     bool plan_invalid(const Goal& g) override { return g.running < 0; }
     bool replaceable(const Goal&) override { return removable; }
     void refresh_plan(Goal&) override {}
@@ -2520,37 +2555,45 @@ struct LateHooks final : GoalModeHooks {
     int32_t quota_players() override { return 1; }
 };
 
-static int64_t late_goal_released_after(bool removable, float eta, LateMode mode) {
+static GoalSystemConfig galactic_goal_config() {
+    GoalSystemConfig c;
+    c.nominal_allowed_time = true;  // as the galactic AI (A2f t09)
+    return c;
+}
+
+static int64_t late_goal_released_after(bool removable, float eta, LateMode mode, float nominal = -1.0f, int64_t* created = nullptr) {
     AiDefinitions defs;
     defs.add_goals(kLateGoals, "g.xml");
     defs.link();
     LateHooks hooks;
     hooks.removable = removable;
     hooks.eta = eta;
+    hooks.nominal = nominal;
     hooks.mode = mode;
     LearningSystem learning;
     SimRng rng(1);
     GoalSystem gs;
-    gs.init(defs, {{0u, "F"}}, &hooks, &learning, nullptr, &rng, {});
+    gs.init(defs, {{0u, "F"}}, &hooks, &learning, nullptr, &rng, galactic_goal_config());
     for (int64_t f = 1; f <= 1200 && hooks.ended < 0; ++f) {
         hooks.now = f;
         gs.service(f);
     }
+    if (created) *created = hooks.created;
     return hooks.created > 0 && hooks.ended > 0 ? hooks.ended - hooks.created : -1;
 }
 
 static void test_goal_time_drop() {
     CHECK(galactic_maintenance_eta(10.0f, 300, 300) == 10.0f);
-    CHECK(galactic_maintenance_eta(0.0f, 300, 690) == 13.0f);
+    CHECK(galactic_maintenance_eta(0.0f, 300, 690) == 0.0f);  // 0x722a30: elapsed is added only when the production time > 0
     CHECK(galactic_maintenance_eta(4.0f, 300, 391) > 7.0f);
     // ETA 10, tolerance 1.3 (AllowedTime 13). Stalled: 10 + elapsed > 13 after 3 s (90 frames).
     const int64_t stalled = late_goal_released_after(true, 10.0f, LateMode::Stalled);
-    // On schedule: max(10 - elapsed, 0) + elapsed > 13 only once elapsed > 13 s (390 frames).
+    // On schedule: max(10 - elapsed, 0) + elapsed stays 10 <= 13, then the production time is 0 and the goal is never dropped.
     const int64_t on_time = late_goal_released_after(true, 10.0f, LateMode::OnSchedule);
     std::printf("goal time drop: ETA 10, tolerance 1.3 -> stalled released after %lld frames, on schedule after %lld\n",
                 static_cast<long long>(stalled), static_cast<long long>(on_time));
     CHECK(stalled > 90 && stalled <= 92);
-    CHECK(on_time > 390 && on_time <= 392);
+    CHECK(on_time < 0);
     CHECK(late_goal_released_after(false, 10.0f, LateMode::Stalled) < 0);  // Set_As_Goal_System_Removable(false): kept
     CHECK(late_goal_released_after(true, 0.0f, LateMode::Stalled) < 0);    // ETA 0 -> AllowedTime 0 = no limit
 
@@ -2584,6 +2627,1146 @@ static void test_goal_time_drop() {
                 static_cast<long long>(zero_after));
     CHECK(plan >= 0 && seen > 0 && first > 0.0f && zero_after > 0);
     CHECK(pw.world->plan_production_time(-1) == 0.0f && pw.world->plan_production_time(123456) == 0.0f);
+}
+
+// ================================================================ A2f t09: AllowedTime base (A2F_RE_READS §1.4 item 2)
+//
+// 0x692860: Time_Limit without a PP, else 0x6c0450(PP) x Build_Time_Delay_Tolerance; 0x6c0450 = the float sum of btime(T, none)
+// over the PP's selection x the plan player's Galactic_Build_Time_Multiplier (none: 1.0).
+static const Goal* last_active(const GoalSystem& gs) {
+    const Goal* out = nullptr;
+    for (const auto& cat : gs.active())
+        for (const Goal& a : cat) out = &a;
+    return out;
+}
+
+static void test_goal_allowed_time_base() {
+    // The multiplier lookup and the sum (galactic_goal_time.hpp).
+    const std::vector<gal::DifficultyRules> diffs = {{"Easy", 1.0f, 1.5f}, {"Normal", 1.0f, 0.8f}, {"Hard", 1.0f, 0.6f}};
+    CHECK(galactic_build_time_multiplier(diffs, 0) == 1.5f);
+    CHECK(galactic_build_time_multiplier(diffs, 1) == 0.8f);
+    CHECK(galactic_build_time_multiplier(diffs, 2) == 0.6f);
+    CHECK(galactic_build_time_multiplier(diffs, 3) == 1.0f);
+    CHECK(galactic_build_time_multiplier(diffs, gal::kNoIndex) == 1.0f);
+    CHECK(galactic_build_time_multiplier({}, 0) == 1.0f);
+    CHECK(galactic_nominal_time({10.0f, 12.0f, 0.5f}, 0.8f) == (10.0f + 12.0f + 0.5f) * 0.8f);
+    CHECK(galactic_nominal_time({}, 1.5f) == 0.0f);
+
+    // GoalSystem::allowed_time with and without a PP, galactic (nominal base) and tactical (ETA base) configuration.
+    AiDefinitions defs;
+    defs.add_goals(kLateGoals, "g.xml");  // Time_Limit 240, tolerance 1.3
+    defs.link();
+    LateHooks hooks;
+    LearningSystem learning;
+    SimRng rng(1);
+    GoalSystem gal_gs, tac_gs;
+    gal_gs.init(defs, {{0u, "F"}}, &hooks, &learning, nullptr, &rng, galactic_goal_config());
+    tac_gs.init(defs, {{0u, "F"}}, &hooks, &learning, nullptr, &rng, {});
+    Goal g;
+    g.type = 0;
+    g.eta = 10.0f;
+    g.nominal_time = 30.0f;
+    CHECK(gal_gs.allowed_time(g) == 240.0f && tac_gs.allowed_time(g) == 240.0f);  // no PP: Time_Limit
+    g.plan = 0;
+    CHECK(gal_gs.allowed_time(g) == 240.0f);  // a plan without a valid PP: still Time_Limit
+    g.pp_valid = true;
+    CHECK(gal_gs.allowed_time(g) == 30.0f * 1.3f);
+    CHECK(tac_gs.allowed_time(g) == 10.0f * 1.3f);
+    g.nominal_time = 0.0f;
+    CHECK(gal_gs.allowed_time(g) == 0.0f);  // every build time 0: no limit
+
+    // Accept (0x6b8660: allowed <= 0 || ETA <= allowed) and the maintenance drop read the nominal base: ETA 10 with a nominal
+    // 20 (AllowedTime 26) survives a stall until ETA + elapsed > 26 (16 s); a nominal 5 (AllowedTime 6.5) rejects the plan.
+    const int64_t longer = late_goal_released_after(true, 10.0f, LateMode::Stalled, 20.0f);
+    int64_t created = 0;
+    const int64_t rejected = late_goal_released_after(true, 10.0f, LateMode::Stalled, 5.0f, &created);
+    std::printf("allowed time base: ETA 10, nominal 20 -> stalled released after %lld frames; nominal 5 -> created %lld\n",
+                static_cast<long long>(longer), static_cast<long long>(created));
+    CHECK(longer > 480 && longer <= 482);
+    CHECK(rejected < 0 && created < 0);
+
+    // Save / load keeps nominal_time; the galactic hash reads it, the tactical one does not.
+    {
+        LateHooks h1;
+        h1.nominal = 20.0f;
+        LearningSystem l1;
+        SimRng r1(1);
+        GoalSystem gs;
+        gs.init(defs, {{0u, "F"}}, &h1, &l1, nullptr, &r1, galactic_goal_config());
+        for (int64_t f = 1; f <= 60; ++f) {
+            h1.now = f;
+            gs.service(f);
+        }
+        const Goal* act = last_active(gs);
+        CHECK(act && act->nominal_time == 20.0f && act->eta == 10.0f);
+        ByteWriter w;
+        gs.write(w);
+        GoalSystem g2;
+        g2.init(defs, {{0u, "F"}}, &h1, &l1, nullptr, &r1, galactic_goal_config());
+        ByteReader rd(w.bytes());
+        CHECK(g2.read(rd) && rd.done());
+        const Goal* back = last_active(g2);
+        CHECK(back && act && back->nominal_time == 20.0f && back->serial == act->serial);
+        StateHasher ha, hb;
+        gs.hash(ha);
+        g2.hash(hb);
+        CHECK(ha.digest() == hb.digest());
+        // The same save with nominal_time 21: a different galactic hash, the same tactical one.
+        std::vector<uint8_t> bytes = w.bytes();
+        ByteWriter probe;
+        probe.f32(20.0f);
+        const std::vector<uint8_t> pat = probe.bytes();
+        const auto at = std::search(bytes.begin(), bytes.end(), pat.begin(), pat.end());
+        CHECK(at != bytes.end());
+        if (at != bytes.end()) {
+            ByteWriter other;
+            other.f32(21.0f);
+            const std::vector<uint8_t> rep = other.bytes();
+            std::copy(rep.begin(), rep.end(), at);
+            GoalSystem g3, t1, t3;
+            g3.init(defs, {{0u, "F"}}, &h1, &l1, nullptr, &r1, galactic_goal_config());
+            t1.init(defs, {{0u, "F"}}, &h1, &l1, nullptr, &r1, {});
+            t3.init(defs, {{0u, "F"}}, &h1, &l1, nullptr, &r1, {});
+            ByteReader r3(bytes), rt1(w.bytes()), rt3(bytes);
+            CHECK(g3.read(r3) && t1.read(rt1) && t3.read(rt3));
+            const Goal* changed = last_active(g3);
+            CHECK(changed && changed->nominal_time == 21.0f);
+            StateHasher hc, ht1, ht3;
+            g3.hash(hc);
+            t1.hash(ht1);
+            t3.hash(ht3);
+            CHECK(hc.digest() != ha.digest());
+            CHECK(ht1.digest() == ht3.digest());
+        }
+    }
+
+    // In a world: the active Barracks plan's goal carries 0x6c0450 of its live PP with the player's difficulty multiplier
+    // (an "Easy" 1.5 entry here; the synthetic rules' Normal_Default is 1.0).
+    ParityWorld pw(
+        false, {"BuildBarracks"}, [](gal::GalacticSetup& s) { s.players[0].difficulty = 1; },
+        [](gal::GalacticRules& r) { r.difficulties.push_back({"Easy", 1.0f, 1.5f}); });
+    Goal found;
+    bool have = false;
+    for (int32_t f = 1; f <= 30 * 60 && !have; ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+        if (const AiContext* c = pw.world->context(0))
+            for (const auto& cat : c->goals.active())
+                for (const Goal& a : cat)
+                    if (!have && a.pp_valid && !pw.world->potential_plan_selection(a.pp_handle).empty()) {
+                        found = a;
+                        have = true;
+                    }
+    }
+    CHECK(have);
+    if (have) {
+        const std::vector<uint32_t> sel = pw.world->potential_plan_selection(found.pp_handle);
+        std::vector<float> bt;
+        for (const uint32_t t : sel) bt.push_back(static_cast<float>(pw.rules.types[t].build_time_seconds));
+        const float expect = galactic_nominal_time(bt, 1.5f);
+        std::printf("allowed time base: world goal %u, %zu selected, nominal %.2f (expected %.2f), ETA %.2f\n", found.serial,
+                    sel.size(), static_cast<double>(found.nominal_time), static_cast<double>(expect), static_cast<double>(found.eta));
+        CHECK(expect > 0.0f);
+        CHECK(found.nominal_time == expect);
+        CHECK(pw.world->potential_plan_nominal_time(found.pp_handle) == expect);
+    }
+    CHECK(pw.world->potential_plan_nominal_time(-5) == -1.0f && pw.world->potential_plan_selection(-5).empty());
+}
+
+// ================================================================ a2g t03: btime(T, none) with Production_Speed_Factor
+//
+// 0x371230 without a planet = T0 of GALACTIC_ECONOMY §2.3: float(uint32(float(Build_Time_Seconds) x Production_Speed_Factor)),
+// truncated. It feeds 0x6c0450 (Goal::nominal_time) and BudgetFractionToBuild's D (AI_GALACTIC_TOKENS). Barracks 10 s x 0.75
+// = 7.5 -> 7; with the player's Galactic_Build_Time_Multiplier 1.5 the nominal time is 10.5 (untruncated it would be 11.25).
+static void test_btime_none_speed_factor() {
+    ParityWorld pw(
+        false, {"BuildBarracks"}, [](gal::GalacticSetup& s) { s.players[0].difficulty = 1; },
+        [](gal::GalacticRules& r) {
+            r.constants.production_speed_factor = 0.75f;
+            r.difficulties.push_back({"Easy", 1.0f, 1.5f});
+        });
+    Goal found;
+    bool have = false;
+    int32_t frame = 0;
+    while (frame < 30 * 60 && !have) {
+        pw.sim->update();
+        pw.world->update_player(0, ++frame, true, false);
+        if (const AiContext* c = pw.world->context(0))
+            for (const auto& cat : c->goals.active())
+                for (const Goal& a : cat)
+                    if (!have && a.pp_valid && !pw.world->potential_plan_selection(a.pp_handle).empty()) {
+                        found = a;
+                        have = true;
+                    }
+    }
+    CHECK(have);
+    if (have) {
+        const std::vector<uint32_t> sel = pw.world->potential_plan_selection(found.pp_handle);
+        std::vector<float> bt, raw;
+        for (const uint32_t t : sel) {
+            const float p = static_cast<float>(pw.rules.types[t].build_time_seconds) * 0.75f;
+            bt.push_back(std::floor(p));  // every build time here is small and positive
+            raw.push_back(p);
+        }
+        const float expect = galactic_nominal_time(bt, 1.5f);
+        const float untruncated = galactic_nominal_time(raw, 1.5f);
+        std::printf("btime none: factor 0.75, %zu selected (Barracks %s), nominal %.2f (expected %.2f, untruncated %.2f)\n",
+                    sel.size(), pw.has(sel, tBarracks) ? "yes" : "no", static_cast<double>(found.nominal_time),
+                    static_cast<double>(expect), static_cast<double>(untruncated));
+        CHECK(pw.has(sel, tBarracks));
+        CHECK(found.nominal_time == expect);
+        CHECK(pw.world->potential_plan_nominal_time(found.pp_handle) == expect);
+        CHECK(expect != untruncated);  // the truncation is visible
+        CHECK(gal::econ::build_time_t0(10, 0.75f) == 7.0f);
+    }
+    // BudgetFractionToBuild (0x667120): R / D, D = btime(T, none) x income rate + credits (every category). Run on until the
+    // budget holds an income rate, so the time term is read.
+    while (frame < 30 * 240) {
+        const AiContext* c = pw.world->context(0);
+        if (c && c->budget.income_per_second() > 0.0f) break;
+        pw.sim->update();
+        pw.world->update_player(0, ++frame, true, false);
+    }
+    EquationSet e;
+    e.add("T", "Variable_Self.BudgetFractionToBuild {Parameter_Type = \"Barracks\"}");
+    e.link();
+    EvalContext c;
+    c.self = 0;
+    const EvalResult r = evaluate(e, e.find("T"), c, pw.world->resolver());
+    const AiContext* ctx = pw.world->context(0);
+    CHECK(r.ok && ctx);
+    if (r.ok && ctx) {
+        const double rate = static_cast<double>(ctx->budget.income_per_second());
+        const double avail = static_cast<double>(pw.sim->credits(0));
+        const bool building = !pw.sim->queue_of(0, 0).empty() || !pw.sim->queue_of(1, 0).empty();
+        const double expect = 500.0 / (static_cast<double>(7.0f * ctx->budget.income_per_second()) + avail);  // float T x rate
+        CHECK(!building);  // nothing of the type in progress: the pool term is read
+        std::printf("btime none: BudgetFractionToBuild Barracks %.6f (rate %.3f, credits %.0f, expected %.6f, factor 1 %.6f)\n",
+                    r.value, rate, avail, expect, 500.0 / (10.0 * rate + avail));
+        CHECK(rate > 0.0);  // the time term is read
+        CHECK(r.value == expect);
+    }
+}
+
+// ================================================================ a2g t05 (a): nominal_time follows the plan_activatable re-solve
+//
+// Commit's 0x6c4a50 re-solves a new proposal's PP honouring the free-store reservations (A1_READINGS §28.6 step 3), and
+// AllowedTime reads the re-solved selection (A2f t09). HeroDeny's team "HeroShip | Corvette = 1,1": the proposal's first
+// solve takes the free-store hero (build time 50 s -> nominal 50); the hero is then reserved by another PP before the
+// Commit, so the re-solve produces a Corvette (100 s -> nominal 100). The activated goal's nominal_time is the new one's.
+static void test_goal_nominal_time_resolve() {
+    ParityWorld pw(
+        false, {"HeroDeny"}, [](gal::GalacticSetup& s) { s.planet_type[2] = tPlanet; },  // P2 (the target) lets Corvettes in
+        [](gal::GalacticRules& r) {
+            r.types[tTypes].build_time_seconds = 50;  // HeroShip (pushed at tTypes)
+            r.types[tCorvette].build_time_seconds = 100;
+        });
+    CHECK(pw.hero == tTypes);
+    const objects::ObjectHandle hero = pw.world->free_store_supply(0, pw.hero);
+    CHECK(static_cast<bool>(hero));
+    std::map<uint32_t, std::pair<std::vector<uint32_t>, float>> at_proposal;  // goal serial -> (selection, nominal_time)
+    uint32_t watched = 0;
+    bool reserved = false, checked = false;
+    for (int32_t f = 1; f <= 30 * 120 && !checked; ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+        const AiContext* c = pw.world->context(0);
+        if (!c) continue;
+        for (const auto& cat : c->goals.proposed())
+            for (const Goal& g : cat) {
+                if (!g.pp_valid || at_proposal.count(g.serial) != 0) continue;
+                const std::vector<uint32_t> sel = pw.world->potential_plan_selection(g.pp_handle);
+                at_proposal.emplace(g.serial, std::make_pair(sel, g.nominal_time));
+                if (!reserved && pw.has(sel, pw.hero) && pw.world->free_store_owner(hero) == -1) {
+                    pw.world->set_free_store_owner(hero, 1 << 30);  // another PP's reservation (0x6c2b20)
+                    reserved = true;
+                    watched = g.serial;
+                }
+            }
+        for (const auto& cat : c->goals.active())
+            for (const Goal& a : cat) {
+                if (checked || !reserved || a.serial != watched) continue;
+                const auto& before = at_proposal[a.serial];
+                const std::vector<uint32_t> now_sel = pw.world->potential_plan_selection(a.pp_handle);
+                std::printf("nominal re-solve: goal %u proposed with %zu selected (hero %s, nominal %.1f), active with %zu (hero %s, "
+                            "corvette %s, nominal %.1f, PP %.1f)\n",
+                            a.serial, before.first.size(), pw.has(before.first, pw.hero) ? "yes" : "no",
+                            static_cast<double>(before.second), now_sel.size(), pw.has(now_sel, pw.hero) ? "yes" : "no",
+                            pw.has(now_sel, tCorvette) ? "yes" : "no", static_cast<double>(a.nominal_time),
+                            static_cast<double>(pw.world->potential_plan_nominal_time(a.pp_handle)));
+                CHECK(before.second == 50.0f);
+                CHECK(now_sel != before.first && !pw.has(now_sel, pw.hero) && pw.has(now_sel, tCorvette));
+                CHECK(a.nominal_time == 100.0f);
+                CHECK(a.nominal_time == pw.world->potential_plan_nominal_time(a.pp_handle));
+                checked = true;
+            }
+    }
+    std::printf("nominal re-solve: reserved %s, goal %u checked %s\n", reserved ? "yes" : "no", watched, checked ? "yes" : "no");
+    CHECK(reserved && checked);
+}
+
+// ================================================================ a2g t05 (b): Resolve's time_ok (0x6c8970) on its own
+//
+// Resolve_Category (AI_GALACTIC §1.6): a candidate passes plan_activatable (0x6c4a50) and fundable, then time_ok: AllowedTime
+// (nominal_time x Build_Time_Delay_Tolerance, A2f t09) >= ETA, or AllowedTime <= 0. A failure in the greedy phase records an
+// activation failure and stops it; the weighted phase then draws the goal, fails it again and releases it. Tolerance 2.0
+// keeps the products exact; ETA 10.
+static const char* kResolveGoals = R"(<Goals>
+  <Resolve_Goal><AIGoalApplicationFlags>Friendly</AIGoalApplicationFlags><GameMode>Galactic</GameMode>
+    <Category>Offensive</Category><Reachability>Any</Reachability><Time_Limit>240</Time_Limit>
+    <Build_Time_Delay_Tolerance>2.0</Build_Time_Delay_Tolerance>
+    <Activation_Tracking_Duration>60</Activation_Tracking_Duration></Resolve_Goal>
+</Goals>)";
+
+struct ResolveHooks final : GoalModeHooks {
+    float eta = 10.0f, nominal = 20.0f;  // set at accept
+    float resolved = -1.0f;              // >= 0: the re-solve's new nominal_time
+    bool budget = true;
+    int32_t activatable_calls = 0, drops = 0, instantiated = 0;
+    uint32_t target_count() override { return 1; }
+    bool applies(int32_t, uint32_t) override { return true; }
+    bool blocked(uint32_t, int32_t) override { return false; }
+    bool evaluate(const std::string&, int32_t, double& out) override {
+        out = 10.0;
+        return true;
+    }
+    bool accept(Goal& g) override {
+        g.plan = 0;
+        g.pp_valid = true;
+        g.eta = eta;
+        g.nominal_time = nominal;
+        return true;
+    }
+    bool plan_activatable(Goal& g) override {
+        ++activatable_calls;
+        if (resolved >= 0.0f) g.nominal_time = resolved;
+        return true;
+    }
+    bool plan_invalid(const Goal& g) override { return g.running < 0; }
+    bool replaceable(const Goal&) override { return true; }
+    void refresh_plan(Goal&) override {}
+    bool uses_budget() override { return budget; }
+    bool can_fund(const Goal&) override { return true; }
+    float category_credits(int32_t) override { return 1.0f; }
+    void budget_add(Goal&) override {}
+    void budget_release(Goal&) override {}
+    void budget_weights() override {}
+    std::vector<int32_t> category_order() override { return {}; }
+    void queue_production(Goal&) override {}
+    void instantiate(Goal& g) override {
+        g.running = 1;
+        ++instantiated;
+    }
+    void end_plan(Goal&, bool) override {}
+    void drop_potential_plan(Goal&) override { ++drops; }
+    void suspend_reservations(Goal&) override {}
+    float elapsed_eta(const Goal& g) override { return g.eta; }
+    int32_t quota_players() override { return 1; }
+};
+
+struct ResolveOutcome {
+    bool activated = false;
+    int32_t activatable_calls = 0, activation_failures = 0, drops = 0;
+};
+
+static ResolveOutcome resolve_once(float nominal, float resolved, bool budget, bool galactic = true) {
+    AiDefinitions defs;
+    defs.add_goals(kResolveGoals, "g.xml");
+    defs.link();
+    ResolveHooks hooks;
+    hooks.nominal = nominal;
+    hooks.resolved = resolved;
+    hooks.budget = budget;
+    LearningSystem learning;
+    SimRng rng(1);
+    GoalSystem gs;
+    gs.init(defs, {{0u, "F"}}, &hooks, &learning, nullptr, &rng, galactic ? galactic_goal_config() : GoalSystemConfig{});
+    gs.service(1);  // first pass: one slice, then Commit
+    ResolveOutcome o;
+    CHECK(gs.commits() == 1);
+    for (const auto& cat : gs.active()) o.activated = o.activated || !cat.empty();
+    CHECK(o.activated == (hooks.instantiated == 1));
+    o.activatable_calls = hooks.activatable_calls;
+    o.activation_failures = learning.recent_activation_failures(0, 0, 1);
+    o.drops = hooks.drops;
+    return o;
+}
+
+static void test_goal_resolve_time_ok() {
+    // The re-solve keeps nominal 20 (AllowedTime 40 >= 10): activated in the greedy phase.
+    const ResolveOutcome keep = resolve_once(20.0f, -1.0f, true);
+    CHECK(keep.activated && keep.activatable_calls == 1 && keep.activation_failures == 0);
+    // Re-solved to nominal 5: AllowedTime 10 == ETA passes (the test is AllowedTime < ETA).
+    const ResolveOutcome edge = resolve_once(20.0f, 5.0f, true);
+    CHECK(edge.activated && edge.activatable_calls == 1 && edge.activation_failures == 0);
+    // Re-solved to nominal 4.5: AllowedTime 9 < 10. plan_activatable and fundable pass; time_ok alone fails it twice
+    // (greedy: failure recorded, break; weighted: failure recorded, released) and its PP is dropped.
+    const ResolveOutcome late = resolve_once(20.0f, 4.5f, true);
+    std::printf("resolve time_ok: nominal 20 -> %s, re-solved 5 -> %s, re-solved 4.5 -> %s (%d re-solves, %d activation failures, "
+                "%d PP drops)\n",
+                keep.activated ? "active" : "released", edge.activated ? "active" : "released", late.activated ? "active" : "released",
+                late.activatable_calls, late.activation_failures, late.drops);
+    CHECK(!late.activated && late.activatable_calls == 2 && late.activation_failures == 2 && late.drops >= 1);
+    // Without a budget the accept test (0x6b8660's time / budget check) is skipped, so Resolve's time_ok is the only time
+    // gate: an accepted nominal 4.5 is released there; nominal 0 (AllowedTime 0) is no limit.
+    const ResolveOutcome nobudget = resolve_once(4.5f, -1.0f, false);
+    CHECK(!nobudget.activated && nobudget.activatable_calls == 2 && nobudget.activation_failures == 2);
+    const ResolveOutcome zero = resolve_once(0.0f, -1.0f, false);
+    CHECK(zero.activated && zero.activation_failures == 0);
+    // Tactical configuration (ETA base): AllowedTime = 10 x 2 = 20 >= 10 whatever nominal_time holds.
+    const ResolveOutcome tactical = resolve_once(20.0f, 4.5f, true, false);
+    CHECK(tactical.activated && tactical.activation_failures == 0);
+}
+
+// ================================================================ a2h t04: ActiveGoals 0x6e0490 (A2H_GALACTIC_AI_RE §1)
+//
+// Exactly one Parameter_Category (no default: none, or a repeated parameter, fails the token); the names' AIGoalCategoryType
+// VALUES are OR'ed (a plain id enum: [Offensive|Infrastructure] = 0 | 3 = 3 = Infrastructure) and the active-set vector of
+// the category with that value is counted (an exact key, every entry). Unknown name: fails [L]. Shipped use:
+// Can_Reclaim_Excess_MajorItem_Budget (ActiveGoals {Parameter_Category = AIGoalCategoryType[MajorItem]} > 0). The
+// synthetic goals: Conquer_Planet / Build_Space_Forces = Offensive, Upgrade_Starbase = Infrastructure; nothing is MajorItem.
+static void test_active_goals_category() {
+    ParityWorld pw(false, {"BuildBarracks", "HeroDeny"}, [](gal::GalacticSetup& s) { s.planet_type[2] = tPlanet; });
+    const int32_t off = pw.defs.find_category("Offensive"), infra = pw.defs.find_category("Infrastructure");
+    CHECK(off >= 0 && infra >= 0 && pw.defs.find_category("MajorItem") >= 0 && pw.defs.find_category("No_Such_Category") < 0);
+    CHECK(pw.defs.category_value[static_cast<size_t>(off)] == 0 && pw.defs.category_value[static_cast<size_t>(infra)] == 3);
+    auto token = [&pw](const char* text, bool& ok) {
+        EquationSet e;
+        e.add("T", text);
+        e.link();
+        EvalContext c;
+        c.self = 0;
+        const EvalResult r = evaluate(e, e.find("T"), c, pw.world->resolver());
+        ok = r.ok;
+        return r.value;
+    };
+    size_t n_off = 0, n_infra = 0, n_all = 0;
+    for (int32_t f = 1; f <= 30 * 120; ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+        const AiContext* c = pw.world->context(0);
+        if (!c) continue;
+        const auto& act = c->goals.active();
+        n_off = act[static_cast<size_t>(off)].size();
+        n_infra = act[static_cast<size_t>(infra)].size();
+        n_all = 0;
+        for (const auto& cat : act) n_all += cat.size();
+        if (n_off > 0 && n_infra > 0 && n_off != n_infra) break;
+    }
+    bool ok = false;
+    token("Variable_Self.ActiveGoals", ok);
+    const bool ok_none = ok;
+    const double v_off = token("Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[Offensive]}", ok);
+    CHECK(ok);
+    const double v_infra = token("Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[Infrastructure]}", ok);
+    CHECK(ok);
+    const double v_major = token("Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[MajorItem]}", ok);
+    CHECK(ok);
+    // a2i t07 (A2I_TOKENS_RE §3.2-3.3) [H]: AIGoalCategoryType is a plain enum, so `[A|B]` (any '|') and an unknown name
+    // do not convert: the equation never builds (not registered), so evaluating it fails. There is no OR of names.
+    const char* unbuilt[] = {
+        "Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[Offensive|Infrastructure]}",
+        "Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[Offensive|Offensive]}",
+        "Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[No_Such_Category]}",
+        "Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[No_Such_Category|Infrastructure]}",
+    };
+    bool none_built = true;
+    for (const char* text : unbuilt) {
+        EquationSet e;
+        none_built = none_built && e.add("T", text) == kUnresolved && e.find("T") == kUnresolved;
+    }
+    CHECK(none_built);
+    token("Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[No_Such_Category]}", ok);
+    const bool ok_unknown = ok;
+    token("Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[Offensive|Infrastructure]}", ok);
+    const bool ok_mixed = ok;
+    // A non-literal parameter text naming a category still reaches the hook as one name.
+    const double v_text = token("Variable_Self.ActiveGoals {Parameter_Category = \"Infrastructure\"}", ok);
+    CHECK(ok);
+    token("Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[Offensive], "
+          "Parameter_Category = AIGoalCategoryType[Infrastructure]}", ok);
+    const bool ok_repeated = ok;
+    // The failure is the equation's: a comparison over the token fails too (the same path as other failing tokens).
+    token("Variable_Self.ActiveGoals > 0", ok);
+    const bool ok_cmp = ok;
+    std::printf("active goals: %zu active (Offensive %zu, Infrastructure %zu); token Offensive %.0f, Infrastructure %.0f, "
+                "MajorItem %.0f, \"Infrastructure\" %.0f; [A|B] / unknown literals unbuilt %s; fails: none %s, unknown %s, "
+                "Offensive|Infrastructure %s, repeated %s\n",
+                n_all, n_off, n_infra, v_off, v_infra, v_major, v_text, none_built ? "yes" : "no", ok_none ? "no" : "yes",
+                ok_unknown ? "no" : "yes", ok_mixed ? "no" : "yes", ok_repeated ? "no" : "yes");
+    CHECK(n_off > 0 && n_infra > 0 && n_off != n_infra);
+    CHECK(v_off == static_cast<double>(n_off) && v_infra == static_cast<double>(n_infra));
+    CHECK(v_text == v_infra);
+    CHECK(v_major == 0.0);
+    CHECK(!ok_none && !ok_unknown && !ok_mixed && !ok_repeated && !ok_cmp);
+}
+
+// ================================================================ a2h t03: Maintenance / MaintenanceUnnormalized / NetIncome
+//
+// 0x669420 (A2H_GALACTIC_AI_RE §3) [H]: Self's fleets, every member: (cost / btime(T, none) / 30) x type Maintenance_Cost x
+// faction Maintenance_Cost (float terms, double sum); surface units, starbases, structures and build time 0 add nothing;
+// neutral faction 0; Maintenance = Unn / GrossIncomeUnnormalized; NetIncomeUnnormalized = Gross - Unn.
+static void test_maintenance_tokens() {
+    ParityWorld pw(
+        false, {"HeroDeny"}, [](gal::GalacticSetup& s) { s.forces.push_back({0, 0, tCorvette}); },
+        [](gal::GalacticRules& r) {
+            r.factions[0].maintenance_cost = 0.25f;  // Empire; the Rebel keeps 0
+            r.types[tFrigate].maintenance_cost = 0.1f;
+            r.types[tCorvette].maintenance_cost = 0.05f;
+            r.types[tInfantry].maintenance_cost = 0.05f;  // on the surface: not counted
+            r.types[tSB1].maintenance_cost = 0.3f;        // a starbase: not counted
+            r.types[tTypes].maintenance_cost = 0.3f;      // HeroShip (build time 0): skipped
+        });
+    pw.run(2);
+    auto token = [&pw](const char* text, int32_t self, bool& ok) {
+        EquationSet e;
+        e.add("T", text);
+        e.link();
+        EvalContext c;
+        c.self = self;
+        c.enemy = 1;
+        const EvalResult r = evaluate(e, e.find("T"), c, pw.world->resolver());
+        ok = r.ok;
+        return r.value;
+    };
+    // Expected: the Empire's fleet members at P0 (Frigate, Corvette, HeroShip).
+    int32_t frigates = 0, corvettes = 0;
+    for (const gal::FleetState& f : pw.sim->fleets())
+        if (f.alive && f.owner == 0)
+            for (const objects::ObjectHandle u : f.contents) {
+                frigates += pw.store->type(u) == tFrigate ? 1 : 0;
+                corvettes += pw.store->type(u) == tCorvette ? 1 : 0;
+            }
+    const float kf = 0.1f * 0.25f, kc = 0.05f * 0.25f;
+    const double expect = frigates * static_cast<double>(700.0f / 12.0f / 30.0f * kf) + corvettes * static_cast<double>(400.0f / 8.0f / 30.0f * kc);
+    bool ok = false;
+    const double unn = token("Variable_Self.MaintenanceUnnormalized", 0, ok);
+    CHECK(ok);
+    const double m = token("Variable_Self.Maintenance", 0, ok);
+    CHECK(ok);
+    const double gross = token("Variable_Self.GrossIncomeUnnormalized", 0, ok);
+    CHECK(ok);
+    const double net = token("Variable_Self.NetIncomeUnnormalized", 0, ok);
+    CHECK(ok);
+    const double rebel = token("Variable_Self.MaintenanceUnnormalized", 1, ok);  // faction Maintenance_Cost 0
+    CHECK(ok);
+    const double neutral = token("Variable_Self.MaintenanceUnnormalized", 2, ok);
+    CHECK(ok);
+    // Another root: the planet-force sum of the Empire's enemies' fleet upkeep (A2I_TOKENS_RE §1.1); the Rebel faction's
+    // Maintenance_Cost is 0 here, so 0 (test_force_maintenance_tokens covers a non-zero case).
+    const double enemy = token("Variable_Enemy.Maintenance", 0, ok);
+    CHECK(ok);
+    std::printf("maintenance: %d frigate(s), %d corvette(s) in fleets; Unn %.6f (expected %.6f), gross %.1f, Maintenance %.8f, net %.6f\n",
+                frigates, corvettes, unn, expect, gross, m, net);
+    CHECK(frigates == 1 && corvettes == 1);
+    CHECK(unn == expect && unn > 0.06 && unn < 0.07);  // 0.048611 + 0.020833
+    CHECK(gross > 0.0 && m == unn / gross && net == gross - unn);
+    CHECK(rebel == 0.0 && neutral == 0.0 && enemy == 0.0);
+}
+
+// ================================================================ a2i t04: non-Self Maintenance, planet-force upkeep, NB* income
+//
+// A2I_TOKENS_RE §1 [H]: Target.<side>.MaintenanceUnnormalized (orbiting fleets of that side, each member by its OWNER's
+// faction factor, f x u x rate in float, Parameter_Category), .Maintenance (/ Variable_Enemy's or Variable_Self's
+// GrossIncomeUnnormalized, den <= 0 fails); a non-Self root's MaintenanceUnnormalized = Σ planets of the Enemy-side leaf;
+// Gross / NetIncomeNBPTM / NBTF = num / Σ potential income (all planets, cached for the game / the root's planets), no
+// clamp, den 0 -> 0 when num is 0, else fail.
+static void test_force_maintenance_tokens() {
+    ParityWorld pw(
+        false, {"HeroDeny"},
+        [](gal::GalacticSetup& s) {
+            // The Rebel: one frigate fleet over P7. Player 3 (a Rebel-faction player) holds nothing. Trade routes P0-P1
+            // (0.5) and P1-P2 (0.25).
+            s.forces = {{0, 0, tSB1}, {0, 0, tBarracks}, {0, 0, tFrigate}, {0, 0, tCorvette}, {0, 1, tInfantry}, {1, 7, tFrigate}};
+            gal::PlayerSetup idle;
+            idle.faction = 1;
+            s.players.push_back(idle);
+            s.map.routes.credit_gain_factor[0] = 0.5f;
+            s.map.routes.credit_gain_factor[1] = 0.25f;
+        },
+        [](gal::GalacticRules& r) {
+            r.factions[0].maintenance_cost = 0.25f;  // Empire
+            r.factions[1].maintenance_cost = 0.5f;   // Rebel
+            r.types[tFrigate].maintenance_cost = 0.1f;
+            r.types[tCorvette].maintenance_cost = 0.05f;
+        });
+    pw.run(1);
+    const gal::GalacticSim& sim = *pw.sim;
+    CHECK(sim.players().size() == 4 && sim.planets_owned(3) == 0 && sim.planets_owned(0) > 0);
+    auto token = [&pw](const char* text, int32_t self, int32_t enemy, int32_t target, bool& ok) {
+        EquationSet e;
+        CHECK(e.add("T", text) != kUnresolved);
+        e.link();
+        EvalContext c;
+        c.self = self;
+        c.enemy = enemy;
+        c.target = target;
+        const EvalResult r = evaluate(e, e.find("T"), c, pw.world->resolver());
+        ok = r.ok;
+        return r.value;
+    };
+    const float rate_f = 700.0f / 12.0f / 30.0f, rate_c = 400.0f / 8.0f / 30.0f;
+    // Expected upkeep of one planet's orbit (Self = Empire), by the spec formula from the sim state.
+    auto upkeep = [&](PlanetIndex p, bool enemy, uint64_t cat) {
+        double v = 0.0;
+        for (const uint32_t f : sim.planets()[p].orbit) {
+            const gal::FleetState& fl = sim.fleets()[f];
+            if (!fl.alive || fl.moving || (enemy ? fl.owner != 1 : fl.owner != 0)) continue;
+            for (const objects::ObjectHandle u : fl.contents) {
+                const uint32_t t = pw.store->type(u);
+                const float fm = pw.store->owner(u) == 1 ? 0.5f : 0.25f;
+                if (t == tFrigate && (cat & ai_category_bit("Frigate")) != 0) v += static_cast<double>(fm * 0.1f * rate_f);
+                if (t == tCorvette && (cat & ai_category_bit("Corvette")) != 0) v += static_cast<double>(fm * 0.05f * rate_c);
+            }
+        }
+        return v;
+    };
+    bool ok = false;
+    const double e7 = token("Variable_Target.EnemyForce.MaintenanceUnnormalized", 0, 1, 7, ok);
+    CHECK(ok && e7 == static_cast<double>(0.5f * 0.1f * rate_f) && e7 == upkeep(7, true, kAllCategories));
+    const double f0 = token("Variable_Target.FriendlyForce.MaintenanceUnnormalized", 0, 1, 0, ok);
+    CHECK(ok && f0 == upkeep(0, false, kAllCategories) && f0 > 0.0);
+    const double f0_frig = token("Variable_Target.FriendlyForce.MaintenanceUnnormalized {Parameter_Category = "
+                                 "GameObjectCategoryType[Frigate]}", 0, 1, 0, ok);
+    CHECK(ok && f0_frig == upkeep(0, false, ai_category_bit("Frigate")));
+    const double f0_corv = token("Variable_Target.FriendlyForce.MaintenanceUnnormalized {Parameter_Category = "
+                                 "GameObjectCategoryType[Corvette]}", 0, 1, 0, ok);
+    CHECK(ok && f0_corv == upkeep(0, false, ai_category_bit("Corvette")) && f0_frig + f0_corv == f0);
+    const double f0_none = token("Variable_Target.FriendlyForce.MaintenanceUnnormalized {Parameter_Category = "
+                                 "GameObjectCategoryType[None]}", 0, 1, 0, ok);  // value 0 = every category
+    CHECK(ok && f0_none == f0);
+    const double f0_inf = token("Variable_Target.FriendlyForce.MaintenanceUnnormalized {Parameter_Category = "
+                                "GameObjectCategoryType[Infantry]}", 0, 1, 0, ok);
+    CHECK(ok && f0_inf == 0.0);
+    const double e0 = token("Variable_Target.EnemyForce.MaintenanceUnnormalized", 0, 1, 0, ok);
+    CHECK(ok && e0 == 0.0);
+    // Maintenance: Unn / the side player's GrossIncomeUnnormalized. Friendly at P0: / the Empire's (Self's) gross. Enemy
+    // at P7: / Variable_Enemy's gross; player 3 holds no planet (gross 0) -> fail; an unbound Variable_Enemy fails the
+    // same way; num 0 -> 0 whatever the den.
+    const double gross0 = token("Variable_Self.GrossIncomeUnnormalized", 0, 1, -1, ok);
+    CHECK(ok && gross0 > 0.0);
+    const double gross1 = token("Variable_Enemy.GrossIncomeUnnormalized", 0, 1, -1, ok);
+    CHECK(ok);
+    const double fm0 = token("Variable_Target.FriendlyForce.Maintenance", 0, 1, 0, ok);
+    CHECK(ok && fm0 == f0 / gross0);
+    const double em7 = token("Variable_Target.EnemyForce.Maintenance", 0, 1, 7, ok);
+    CHECK(gross1 > 0.0 ? ok && em7 == e7 / gross1 : !ok);
+    token("Variable_Target.EnemyForce.Maintenance", 0, 3, 7, ok);
+    const bool ok_enemy_gross0 = ok;
+    token("Variable_Target.EnemyForce.Maintenance", 0, -1, 7, ok);
+    const bool ok_unbound = ok;
+    const double em0 = token("Variable_Target.EnemyForce.Maintenance", 0, -1, 0, ok);
+    CHECK(ok && em0 == 0.0);
+    CHECK(!ok_enemy_gross0 && !ok_unbound);
+    // A non-Self root (the Rebel or player 3 as Variable_Enemy of the Empire): Σ planets of the Enemy-side leaf, the same
+    // for every non-Self root; a neutral root 0.
+    const double unn_enemy = token("Variable_Enemy.MaintenanceUnnormalized", 0, 1, -1, ok);
+    CHECK(ok);
+    double sum = 0.0;
+    for (size_t p = 0; p < sim.planets().size(); ++p)
+        if (sim.planets()[p].is_planet) sum += upkeep(static_cast<PlanetIndex>(p), true, kAllCategories);
+    CHECK(unn_enemy == sum && unn_enemy == e7);
+    const double unn_idle = token("Variable_Enemy.MaintenanceUnnormalized", 0, 3, -1, ok);
+    CHECK(ok && unn_idle == e7);
+    const double unn_neutral = token("Variable_Enemy.MaintenanceUnnormalized", 0, 2, -1, ok);
+    CHECK(ok && unn_neutral == 0.0);
+    const double net_enemy = token("Variable_Enemy.NetIncomeUnnormalized", 0, 1, -1, ok);
+    CHECK(ok && net_enemy == gross1 - e7);
+    const double net3 = token("Variable_Enemy.NetIncomeUnnormalized", 0, 3, -1, ok);
+    CHECK(ok && net3 == 0.0 - e7 && net3 < 0.0);  // gross 0 - the upkeep of the Empire's enemies
+    // Potential income by the spec formula (0x3f83b0): base x black market, political at full control (curve q = 1:
+    // term 0) unless neutral-owned, trade over every link with Credit_Gain_Factor > 0 whatever the neighbour's owner.
+    auto potential = [&](size_t i) {
+        const gal::PlanetState& p = sim.planets()[i];
+        float s = gal::econ::income_base(p.base_value, p.black_market);
+        if (p.owner != sim.neutral_player())
+            s += gal::econ::income_political(p.base_value, 5.0f, sim.rules().constants.political_income_curve);
+        float gain = 0.0f;
+        if (p.owner >= 0)
+            for (const uint32_t rt : p.links) gain += std::max(0.0f, sim.map().routes.credit_gain_factor[rt]);
+        s += gal::econ::income_trade(p.base_value, gain);
+        return static_cast<double>(s);
+    };
+    double max_all = 0.0, max_owned = 0.0;
+    for (size_t i = 0; i < sim.planets().size(); ++i) {
+        if (!sim.planets()[i].is_planet) continue;
+        max_all += potential(i);
+        if (sim.planets()[i].owner == 0) max_owned += potential(i);
+    }
+    const double all = token("Variable_Self.MaxAllPlanetsIncomeUnnormalized", 0, 1, -1, ok);
+    CHECK(ok && all == max_all);
+    const double owned = token("Variable_Self.MaxOwnedPlanetsIncomeUnnormalized", 0, 1, -1, ok);
+    CHECK(ok && owned == max_owned && owned > 0.0 && owned < all);
+    const double gptm = token("Variable_Self.GrossIncomeNBPTM", 0, 1, -1, ok);
+    CHECK(ok && gptm == gross0 / max_all);
+    const double gtf = token("Variable_Self.GrossIncomeNBTF", 0, 1, -1, ok);
+    CHECK(ok && gtf == gross0 / max_owned);
+    const double net0 = token("Variable_Self.NetIncomeUnnormalized", 0, 1, -1, ok);
+    CHECK(ok);
+    const double nptm = token("Variable_Self.NetIncomeNBPTM", 0, 1, -1, ok);
+    CHECK(ok && nptm == net0 / max_all);
+    // Player 3 as the root: no planet, so gross 0 and MaxOwned 0; its net is negative (the non-Self upkeep).
+    const double r_gtf = token("Variable_Enemy.GrossIncomeNBTF", 0, 3, -1, ok);
+    CHECK(ok && r_gtf == 0.0);  // 0 / 0 -> 0
+    token("Variable_Enemy.NetIncomeNBTF", 0, 3, -1, ok);
+    const bool ok_net_den0 = ok;  // num != 0, den 0 -> fail
+    CHECK(!ok_net_den0);
+    const double r_nptm = token("Variable_Enemy.NetIncomeNBPTM", 0, 3, -1, ok);
+    CHECK(ok && r_nptm == net3 / max_all && r_nptm < 0.0);  // no clamp to [0, 1]
+    const double net1 = net3;
+    // MaxAll is cached for the game (lifetime -1), MaxOwned for 7 s: 20 s later only MaxAll hits the cache.
+    pw.run(30 * 20);
+    const uint64_t h0 = pw.world->resolver().cache_hits();
+    token("Variable_Self.MaxAllPlanetsIncomeUnnormalized", 0, 1, -1, ok);
+    const uint64_t h1 = pw.world->resolver().cache_hits();
+    token("Variable_Self.MaxOwnedPlanetsIncomeUnnormalized", 0, 1, -1, ok);
+    const uint64_t h2 = pw.world->resolver().cache_hits();
+    CHECK(h1 == h0 + 1 && h2 == h1);
+    std::printf("force maintenance: enemy@P7 %.8f friendly@P0 %.8f (frigate %.8f corvette %.8f), Maintenance %.8g, "
+                "non-Self Unn %.8f, max all %.1f owned %.1f, NBPTM %.6f NBTF %.6f, player 3 net %.6f NBPTM %.8f\n",
+                e7, f0, f0_frig, f0_corv, fm0, unn_enemy, all, owned, gptm, gtf, net1, r_nptm);
+}
+
+// ================================================================ a2h t07: BudgetFractionToBuild 0x667120 (A2H_GALACTIC_AI_RE §2)
+//
+// A category reads its income rate I (+0x50) and pool P (+0x4C), not A / R; a name without a budget entry gives 0 / 0
+// (-> (double)1e18f). An item of the type at the head of one of Self's queues: no AI task there -> the token is 0; a
+// running task lowers R (cost not yet built, capped by the goal's allocation, minus what the goal holds) and T (time left,
+// capped by the goal's horizon) and drops the pool term.
+static void test_budget_fraction_to_build() {
+    auto token = [](ParityWorld& pw, const char* text, bool& ok) {
+        EquationSet e;
+        e.add("T", text);
+        e.link();
+        EvalContext c;
+        c.self = 0;
+        const EvalResult r = evaluate(e, e.find("T"), c, pw.world->resolver());
+        ok = r.ok;
+        return r.value;
+    };
+    const char* frig = "Variable_Self.BudgetFractionToBuild {Parameter_Type = \"Frigate\"}";
+    const char* frig_off = "Variable_Self.BudgetFractionToBuild {Parameter_Type = \"Frigate\", Parameter_Category = \"Offensive\"}";
+    const char* frig_bad = "Variable_Self.BudgetFractionToBuild {Parameter_Type = \"Frigate\", Parameter_Category = \"No_Such_Category\"}";
+    bool ok = false;
+    {
+        ParityWorld pw(false, {"HeroDeny"});
+        // Run until the budget has ticked (I > 0) and a goal holds a required rate, so A / R differ from P / I.
+        const int32_t off = pw.defs.find_category("Offensive");
+        int32_t f = 0;
+        const AiContext* c = nullptr;
+        while (f < 30 * 400) {
+            pw.sim->update();
+            pw.world->update_player(0, ++f, true, false);
+            c = pw.world->context(0);
+            if (c && c->budget.income_rate(off) > 0.0f && c->budget.pool(off) != c->budget.available(off)) break;
+        }
+        CHECK(c != nullptr);
+        bool building = false;
+        for (size_t p = 0; p < pw.sim->planets().size(); ++p)
+            for (uint32_t q = 0; q < 2; ++q)
+                for (const gal::BuildEntry& e : pw.sim->queue_of(static_cast<PlanetIndex>(p), q))
+                    building = building || (e.type == tFrigate && e.player == 0);
+        if (c && !building) {
+            const double v = token(pw, frig_off, ok);
+            CHECK(ok);
+            const double expect = 700.0 / (static_cast<double>(12.0f * c->budget.income_rate(off)) + static_cast<double>(c->budget.pool(off)));
+            const double old = 700.0 / (12.0 * static_cast<double>(c->budget.rate(off)) + static_cast<double>(c->budget.available(off)));
+            std::printf("budget fraction: frame %d Offensive I %.4f P %.2f (R %.4f A %.2f): Frigate %.6f (expected %.6f, A / R %.6f)\n", f,
+                        static_cast<double>(c->budget.income_rate(off)), static_cast<double>(c->budget.pool(off)),
+                        static_cast<double>(c->budget.rate(off)), static_cast<double>(c->budget.available(off)), v, expect, old);
+            CHECK(v == expect && v != old);
+        }
+        CHECK(!building);
+        const double bad = token(pw, frig_bad, ok);
+        CHECK(ok && bad == static_cast<double>(1.0e18f));  // 0 / 0 -> 999999984306749440, not a failure
+        CHECK(bad == 999999984306749440.0);
+        token(pw, "Variable_Self.BudgetFractionToBuild {Parameter_Type = \"No_Such_Type\"}", ok);
+        CHECK(!ok);
+        token(pw, "Variable_Self.BudgetFractionToBuild", ok);
+        CHECK(!ok);
+        EvalContext ce;
+        ce.self = 0;
+        const TokenResolver& res = pw.world->resolver();
+        // Another root player: 0 (success).
+        EquationSet e2;
+        e2.add("T", "Variable_Enemy.BudgetFractionToBuild {Parameter_Type = \"Frigate\"}");
+        e2.link();
+        ce.enemy = 1;
+        const EvalResult en = evaluate(e2, e2.find("T"), ce, res);
+        CHECK(en.ok && en.value == 0.0);
+    }
+    {
+        // A Frigate queued for the Empire with no AI build task on that planet queue: the whole token is 0.
+        ParityWorld pw(false, {"HeroDeny"});
+        pw.run(2);
+        const double before = token(pw, frig, ok);
+        CHECK(ok && before > 0.0);
+        const auto rr = pw.sim->enqueue(0, 0, tFrigate);
+        CHECK(rr == commands::RejectReason::None && !pw.sim->queue_of(0, 1).empty());
+        // (The leaf cache lives 5 s and is keyed by the parameters: an ignored extra parameter reads it afresh.)
+        const double after = token(pw, "Variable_Self.BudgetFractionToBuild {Parameter_Type = \"Frigate\", Parameter_Count = 1}", ok);
+        std::printf("budget fraction: Frigate %.6f, queued without an AI task %.6f\n", before, after);
+        CHECK(ok && after == 0.0);
+    }
+    {
+        // BuildBarracks: the AI's own Barracks production. While it heads the ground queue with a live task, the token is
+        // (min(cost x (1 - p), alloc) - min(alloc, a + c)) / (min(T, rem, max(h, 0)) x rate), no pool term.
+        ParityWorld pw(false, {"BuildBarracks"});
+        int32_t f = 0, seen = 0, checked = 0;
+        while (f < 30 * 300 && checked < 3) {
+            pw.sim->update();
+            pw.world->update_player(0, ++f, true, false);
+            const AiContext* c = pw.world->context(0);
+            if (!c) continue;
+            for (size_t p = 0; p < pw.sim->planets().size(); ++p) {
+                const auto q0 = pw.sim->queue_of(static_cast<PlanetIndex>(p), 0);
+                if (q0.empty() || q0.front().type != tBarracks || q0.front().player != 0) continue;
+                ++seen;
+                // The goal's budget entry: the only one held in the budget while the plan runs.
+                const AiBudget::GoalEntry* ge = nullptr;
+                int32_t entries = 0;
+                for (int32_t k = 0; k < static_cast<int32_t>(c->budget.size()); ++k)
+                    for (const AiBudget::GoalEntry& g : c->budget.category(k).goals) {
+                        ge = &g;
+                        ++entries;
+                    }
+                if (entries != 1 || f % 37 != 0) continue;
+                const gal::BuildEntry& e = q0.front();
+                const float cost = 500.0f;
+                const float prog = std::clamp(1.0f - e.remaining / e.build_time, 0.0f, 1.0f);
+                float R = std::min(cost, (1.0f - prog) * cost);
+                R = std::min(R, ge->alloc);
+                R = R - std::min(ge->alloc, ge->a + ge->c);
+                float T = 10.0f;
+                T = std::min(T, static_cast<float>(std::max<int64_t>(0, static_cast<int64_t>(e.start) + e.duration - pw.sim->frame())) / 30.0f);
+                T = std::min(T, std::max(ge->h, 0.0f));
+                const double D = static_cast<double>(T * c->budget.income_per_second());
+                const double expect = R < 0.0001f ? 0.0 : D > 0.0 ? static_cast<double>(R) / D : static_cast<double>(1.0e18f);
+                // An ignored extra parameter keyed by the frame: a fresh leaf (the cache lives 5 s).
+                const std::string text =
+                    "Variable_Self.BudgetFractionToBuild {Parameter_Type = \"Barracks\", Parameter_Count = " + std::to_string(f) + "}";
+                const double v = token(pw, text.c_str(), ok);
+                std::printf("budget fraction in progress: frame %d P%zu p %.3f alloc %.1f a %.1f c %.1f h %.2f -> R %.2f T %.2f: %.6g "
+                            "(expected %.6g)\n",
+                            f, p, static_cast<double>(prog), static_cast<double>(ge->alloc), static_cast<double>(ge->a),
+                            static_cast<double>(ge->c), static_cast<double>(ge->h), static_cast<double>(R), static_cast<double>(T), v,
+                            expect);
+                CHECK(ok && v == expect);
+                ++checked;
+            }
+        }
+        std::printf("budget fraction in progress: %d frames with the Barracks at a queue head, %d checked\n", seen, checked);
+        CHECK(checked > 0);
+    }
+}
+
+// ================================================================ a2i t06: BudgetFractionToBuild's in-progress scan, R > 0
+//
+// A2H_GALACTIC_AI_RE §2 steps 4-6 with every input chosen by the test: the head entries' build time, timer start / duration
+// and cached remaining time (written through the N1 save: GalacticSim has no setter), the AI build task of each planet queue
+// and its goal's budget entry (the queue_task hook), the rate and pool (the budget hook). The expected values are the spec
+// formula worked by hand in float (R, T, T x rate), D and the division in double.
+
+// Rewrites the head entry of `planet`'s queue `q` through GalacticSim::write / read (the 28-byte BuildEntry record).
+static bool patch_queue_head(gal::GalacticSim& sim, PlanetIndex planet, uint32_t q, float build_time, int32_t start,
+                             int32_t duration, float remaining) {
+    const auto queue = sim.queue_of(planet, q);
+    if (queue.empty()) return false;
+    auto record = [](const gal::BuildEntry& b) {
+        ByteWriter w;
+        w.u32(b.type).f32(b.build_time).i32(b.start).i32(b.duration).f32(b.remaining).i32(b.player).f32(b.cost);
+        return w.bytes();
+    };
+    const gal::BuildEntry old = queue.front();
+    gal::BuildEntry now = old;
+    now.build_time = build_time;
+    now.start = start;
+    now.duration = duration;
+    now.remaining = remaining;
+    const std::vector<uint8_t> from = record(old), to = record(now);
+    ByteWriter w;
+    sim.write(w);
+    std::vector<uint8_t> bytes = w.bytes();
+    size_t at = bytes.size(), hits = 0;
+    for (size_t i = 0; i + from.size() <= bytes.size(); ++i)
+        if (std::memcmp(bytes.data() + i, from.data(), from.size()) == 0) {
+            at = i;
+            ++hits;
+        }
+    if (hits != 1) return false;  // the record must be unique (the test enqueues on different frames)
+    std::memcpy(bytes.data() + at, to.data(), to.size());
+    ByteReader r(bytes);
+    if (!sim.read(r)) return false;
+    const gal::BuildEntry& e = sim.queue_of(planet, q).front();
+    return e.build_time == build_time && e.start == start && e.duration == duration && e.remaining == remaining;
+}
+
+static void test_budget_fraction_in_progress() {
+    using QT = GalacticSimTokenResolver::QueueTask;
+    gal::GalacticRules rules = syn_rules();
+    objects::GameObjectTypes otypes;
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, otypes, &ids);
+    GameRandom rng(4242u, 77u);
+    gal::GalacticSim sim(rules, store, rng.synced());
+    gal::GalacticSetup setup = syn_setup();
+    setup.forces.push_back({0, 1, tSB1});  // P1: a second Empire starbase (Frigates build there too)
+    CHECK(sim.start(setup));
+    for (int i = 0; i < 40; ++i) sim.update();
+    // Space queue (q = 1: Frigates need no ground base): a Frigate at P0, then one at P1 a frame later (a distinct record).
+    CHECK(sim.enqueue(0, 0, tFrigate) == commands::RejectReason::None);
+    sim.update();
+    CHECK(sim.enqueue(0, 1, tFrigate) == commands::RejectReason::None);
+    const int32_t F = sim.frame();
+    // P0: build time 10 s, cached remaining 6 s -> p = 0.4 (the live timer would give 0.55); live rem = 135 / 30 = 4.5 s.
+    CHECK(patch_queue_head(sim, 0, 1, 10.0f, F - 30, 165, 6.0f));
+    // P1: build time 10 s, cached remaining 2 s -> p = 0.8; live rem = 60 / 30 = 2 s.
+    CHECK(patch_queue_head(sim, 1, 1, 10.0f, F - 300, 360, 2.0f));
+    CHECK(sim.frame() == F && sim.queue_of(0, 1).size() == 1 && sim.queue_of(1, 1).size() == 1);
+
+    const std::vector<GalacticAiTypeInfo> tinfo(rules.types.size());
+    // Rate / pool: all categories 2.5 / 1000, "Offensive" 0.75 / 300 (I and P).
+    const float kRate = 2.5f, kPool = 1000.0f, kRateOff = 0.75f, kPoolOff = 300.0f;
+    std::map<PlanetIndex, QT> tasks;  // planet -> its space-queue task (absent: None)
+    int32_t task_calls = 0;
+    GalacticSimTokenResolver::Hooks hooks;
+    hooks.budget = [&](int32_t, std::string_view cat, float& rate, float& pool) {
+        rate = cat.empty() ? kRate : cat == "Offensive" ? kRateOff : 0.0f;
+        pool = cat.empty() ? kPool : cat == "Offensive" ? kPoolOff : 0.0f;
+        return true;
+    };
+    hooks.queue_task = [&](int32_t, int32_t planet, uint32_t queue) {
+        ++task_calls;
+        CHECK(queue == 1u);
+        const auto it = tasks.find(static_cast<PlanetIndex>(planet));
+        return it == tasks.end() ? QT{} : it->second;
+    };
+    GalacticSimTokenResolver res(sim, tinfo, nullptr, hooks);
+    res.refresh(sim.frame());
+    auto token = [&](const char* text, bool& ok) {
+        res.clear_cache();  // every case reads the leaf afresh
+        task_calls = 0;
+        EquationSet e;
+        e.add("T", text);
+        e.link();
+        EvalContext c;
+        c.self = 0;
+        const EvalResult r = evaluate(e, e.find("T"), c, res);
+        ok = r.ok;
+        return r.value;
+    };
+    auto live = [](float alloc, float a, float c, float h) {
+        QT t;
+        t.kind = QT::Kind::Live;
+        t.budget = true;
+        t.alloc = alloc;
+        t.a = a;
+        t.c = c;
+        t.h = h;
+        return t;
+    };
+    const char* frig = "Variable_Self.BudgetFractionToBuild {Parameter_Type = \"Frigate\"}";
+    const char* frig_off = "Variable_Self.BudgetFractionToBuild {Parameter_Type = \"Frigate\", Parameter_Category = \"Offensive\"}";
+    const float cost = 700.0f;
+    const float T0 = gal::econ::build_time_t0(12, rules.constants.production_speed_factor);
+    CHECK(T0 == 12.0f);
+    // Spec step 4 for one matching head entry, in float.
+    struct Head {
+        float build_time, remaining;
+        int32_t start, duration;
+    };
+    const Head h0{10.0f, 6.0f, F - 30, 165}, h1{10.0f, 2.0f, F - 300, 360};
+    auto step = [&](float& R, float& T, const Head& hd, const QT& t) {
+        const float p = std::clamp(1.0f - hd.remaining / hd.build_time, 0.0f, 1.0f);
+        const float rem = static_cast<float>(std::max(0, hd.start + hd.duration - F)) / 30.0f;
+        R = std::min(R, (1.0f - p) * cost);
+        R = std::min(R, t.alloc);
+        R = R - std::min(t.alloc, t.a + t.c);
+        T = std::min(T, rem);
+        T = std::min(T, std::max(t.h, 0.0f));
+    };
+    auto result = [](float R, float T, float rate, bool inprog, float pool) {
+        double D = static_cast<double>(T * rate);
+        if (!inprog) D += static_cast<double>(pool);
+        return R < 0.0001f ? 0.0 : D > 0.0 ? static_cast<double>(R) / D : static_cast<double>(1.0e18f);
+    };
+    struct Case {
+        const char* name;
+        QT p0, p1;     // the AI build tasks of P0's and P1's space queues
+        bool p1_live;  // P1 takes part (else its task is Ended: the entry is ignored)
+        double nice;   // the expected value with exact decimals (sanity bound on the float result)
+    };
+    const QT ended = [] {
+        QT t;
+        t.kind = QT::Kind::Ended;
+        return t;
+    }();
+    bool ok = false;
+    // (a) (1 - p) x cost is the R min (420 < 700, < alloc 500), the horizon h = 3 the T min (< rem 4.5, < T0 12):
+    //     R = 420 - min(500, 30 + 20) = 370, T = 3, D = 3 x 2.5 = 7.5 (no pool) -> 49.333.
+    // (b) alloc 250 the R min, rem 4.5 the T min (h 8): R = 250 - min(250, 100 + 60) = 90, D = 4.5 x 2.5 -> 8.0.
+    // (c) alloc 100 the R min and a + c = 130 > alloc: R = 100 - 100 = 0 < 0.0001 -> 0 (not R / D).
+    // (d) h = -2 -> max(h, 0) = 0: T = 0, D = 0 (the pool term dropped) and R = 420 -> (double)1e18f.
+    // (e) both planets, target-list order P0 then P1: R 700 -> 420 -> 370 (P0: alloc 500, a + c 50), then
+    //     min(370, (1 - 0.8) x 700 = 140) = 140, min(140, alloc 300), - min(300, 100) = 40; T = min(12, 4.5, 8) = 4.5, then
+    //     min(4.5, 2, h 1.5) = 1.5; D = 1.5 x 2.5 = 3.75 -> 10.667. (P1 then P0 would give 140 - 100 = 40 -> min(40, 420),
+    //     min(40, 500) - 50 = -10 -> 0.)
+    const Case cases[] = {
+        {"(1-p) x cost min, h min", live(500.0f, 30.0f, 20.0f, 3.0f), ended, false, 370.0 / 7.5},
+        {"alloc min, rem min", live(250.0f, 100.0f, 60.0f, 8.0f), ended, false, 90.0 / 11.25},
+        {"R < 0.0001", live(100.0f, 80.0f, 50.0f, 8.0f), ended, false, 0.0},
+        {"D = 0 -> 1e18f", live(500.0f, 0.0f, 0.0f, -2.0f), ended, false, 999999984306749440.0},
+        {"two planets in order", live(500.0f, 30.0f, 20.0f, 8.0f), live(300.0f, 100.0f, 0.0f, 1.5f), true, 40.0 / 3.75},
+    };
+    for (const Case& k : cases) {
+        tasks = {{0, k.p0}, {1, k.p1}};
+        float R = cost, T = T0;
+        step(R, T, h0, k.p0);
+        if (k.p1_live) step(R, T, h1, k.p1);
+        const double expect = result(R, T, kRate, true, kPool);
+        const double v = token(frig, ok);
+        std::printf("budget fraction in progress (%s): R %.5f T %.3f -> %.9g (expected %.9g, exact decimals %.9g), %d task reads\n",
+                    k.name, static_cast<double>(R), static_cast<double>(T), v, expect, k.nice, task_calls);
+        CHECK(ok && v == expect);
+        CHECK(std::fabs(v - k.nice) <= 1e-4 * std::max(1.0, k.nice));
+        CHECK(task_calls == 2);  // both heads match; P1's Ended task is skipped, not a 0 return
+        if (k.p1_live) {  // the reverse order (P1 first) gives another value: the scan really runs in list order
+            float R2 = cost, T2 = T0;
+            step(R2, T2, h1, k.p1);
+            step(R2, T2, h0, k.p0);
+            const double reverse = result(R2, T2, kRate, true, kPool);
+            std::printf("budget fraction in progress: reverse order would give %.9g\n", reverse);
+            CHECK(reverse == 0.0 && v != reverse);
+        }
+    }
+    {
+        // A category: rate = I and pool = P of "Offensive"; with a live task the pool is dropped: 90 / (4.5 x 0.75).
+        tasks = {{0, live(250.0f, 100.0f, 60.0f, 8.0f)}, {1, ended}};
+        float R = cost, T = T0;
+        step(R, T, h0, tasks[0]);
+        const double v = token(frig_off, ok);
+        CHECK(ok && v == result(R, T, kRateOff, true, kPoolOff) && std::fabs(v - 90.0 / 3.375) < 1e-4);
+        // Both tasks Ended: no entry counts, so R = cost, T = T0 and the pool term is back: 700 / (12 x 0.75 + 300).
+        tasks = {{0, ended}, {1, ended}};
+        const double idle = token(frig_off, ok);
+        std::printf("budget fraction in progress: Offensive live %.9g, both Ended %.9g\n", v, idle);
+        CHECK(ok && idle == static_cast<double>(cost) / (static_cast<double>(T0 * kRateOff) + static_cast<double>(kPoolOff)));
+        CHECK(task_calls == 2);
+    }
+    {
+        // An early 0.0 return stops the scan: P0 live, P1 without a task (None) -> 0 although P0 gave R > 0; the same with a
+        // reclaimed P1 task. P0 None: 0 at the first planet (P1 is never read).
+        tasks = {{0, live(500.0f, 30.0f, 20.0f, 8.0f)}};
+        double v = token(frig, ok);
+        CHECK(ok && v == 0.0 && task_calls == 2);
+        QT rec;
+        rec.kind = QT::Kind::EndedReclaimed;
+        tasks = {{0, live(500.0f, 30.0f, 20.0f, 8.0f)}, {1, rec}};
+        v = token(frig, ok);
+        CHECK(ok && v == 0.0 && task_calls == 2);
+        tasks = {{1, live(500.0f, 30.0f, 20.0f, 8.0f)}};
+        v = token(frig, ok);
+        CHECK(ok && v == 0.0 && task_calls == 1);
+        // A goal without a budget entry: alloc = h = 0 -> R = min(420, 0) - 0 = 0 -> 0.
+        tasks = {{0, QT{QT::Kind::Live, false, 0.0f, 0.0f, 0.0f, 0.0f}}, {1, ended}};
+        v = token(frig, ok);
+        CHECK(ok && v == 0.0);
+    }
+    {
+        // Only the head of queue q counts. A second Frigate behind P0's head: P0 is still read once (the entry behind it is
+        // not a match of its own).
+        CHECK(sim.enqueue(0, 0, tFrigate) == commands::RejectReason::None && sim.queue_of(0, 1).size() == 2);
+        tasks = {{0, live(250.0f, 100.0f, 60.0f, 8.0f)}, {1, ended}};
+        float R = cost, T = T0;
+        step(R, T, h0, tasks[0]);
+        const double v = token(frig, ok);
+        CHECK(ok && v == result(R, T, kRate, true, kPool) && task_calls == 2);
+        // A Corvette head (P1 replaced): its Frigate behind is not read, so P1's None task cannot zero the token.
+        CHECK(sim.cancel(0, 1, 1, 0, false) == commands::RejectReason::None && sim.queue_of(1, 1).empty());
+        CHECK(sim.enqueue(0, 1, tCorvette) == commands::RejectReason::None);
+        CHECK(sim.enqueue(0, 1, tFrigate) == commands::RejectReason::None && sim.queue_of(1, 1).size() == 2);
+        tasks = {{0, live(250.0f, 100.0f, 60.0f, 8.0f)}};  // P1: None
+        const double w = token(frig, ok);
+        std::printf("budget fraction in progress: second Frigate behind P0's head %.9g, Frigate behind a Corvette at P1 %.9g\n", v, w);
+        CHECK(ok && w == v && task_calls == 1);
+    }
+}
+
+// ================================================================ a2g F2: the budget reset flag +0x74 on a template switch
+//
+// AI_GALACTIC_2 §3.1 tick second pass: with the reset flag, P = Σ x w first, then P += (credits - Σ) x w; the tick clears it.
+// Retail sets it when the template set changes (docs/re/A2G_T01_RESET_FLAG_PROBE.md); the port never set it before.
+static void test_budget_reset_on_template_switch() {
+    // AiBudget alone: Init {1, 1} with 1000 credits (A = P = 500 each), reweight {3, 1} (w 0.75 / 0.25, A = P = 500), one
+    // tick with 1100 credits (Σ = 1000). Without the flag P = 500 + 100 w; with it P = 1000 w + 100 w.
+    auto run = [](bool reset, AiBudget& b) {
+        b.reset(2);
+        const std::vector<float> even = {1.0f, 1.0f}, skew = {3.0f, 1.0f};
+        b.init(even, 1000.0f);
+        b.reweight(skew);
+        if (reset) b.request_reset();
+        CHECK(b.reset_requested() == reset);
+    };
+    AiBudget plain, flagged;
+    run(false, plain);
+    run(true, flagged);
+    {
+        ByteWriter w;  // the flag is saved and hashed
+        flagged.write(w);
+        AiBudget back;
+        back.reset(2);
+        ByteReader r(w.bytes());
+        CHECK(back.read(r) && back.reset_requested());
+        StateHasher ha, hb, hp;
+        flagged.hash(ha);
+        back.hash(hb);
+        plain.hash(hp);
+        CHECK(ha.digest() == hb.digest() && ha.digest() != hp.digest());
+    }
+    plain.tick(100.0f, 45.0f, 1100.0f);
+    flagged.tick(100.0f, 45.0f, 1100.0f);
+    std::printf("budget reset flag: after the tick P = %.1f / %.1f without, %.1f / %.1f with the flag\n", static_cast<double>(plain.pool(0)),
+                static_cast<double>(plain.pool(1)), static_cast<double>(flagged.pool(0)), static_cast<double>(flagged.pool(1)));
+    CHECK(plain.pool(0) == 575.0f && plain.pool(1) == 525.0f);
+    CHECK(flagged.pool(0) == 825.0f && flagged.pool(1) == 275.0f);
+    CHECK(!flagged.reset_requested() && !plain.reset_requested());  // the tick clears it
+    flagged.tick(0.0f, 45.0f, 1100.0f);  // the next tick starts from P = A again and has no reset: the unflagged result
+    CHECK(flagged.pool(0) == 575.0f && flagged.pool(1) == 525.0f);
+    AiBudget again;  // init clears a pending flag
+    again.reset(2);
+    again.request_reset();
+    const std::vector<float> even = {1.0f, 1.0f};
+    again.init(even, 10.0f);
+    CHECK(!again.reset_requested());
+
+    // In a world: Syn_Rich (priority 3, trigger Is_Rich) turns on once the AI credits drop below 5500 (6000 at the start; the
+    // Barracks plan spends) -> a template switch -> the flag is set until the next fiscal tick. The control world (Is_Rich
+    // never true) keeps the initial selection only (before Init) and never shows the flag.
+    for (const bool rich : {true, false}) {
+        ParityWorld pw(false, {"BuildBarracks"}, {}, {}, [rich](EquationSet& e) {
+            e.add("Is_Rich", rich ? "Variable_Self.CreditsUnnormalized < 5500" : "Variable_Self.CreditsUnnormalized > 1000000");
+        });
+        int32_t set_at = -1, cleared_at = -1, switches = 0;
+        size_t seen = 0;
+        for (int32_t f = 1; f <= 30 * 150 && cleared_at < 0; ++f) {
+            pw.sim->update();
+            pw.world->update_player(0, f, true, false);
+            const std::vector<AiDecision>& log = pw.world->decision_log();
+            for (; seen < log.size(); ++seen)
+                if (log[seen].text.rfind("templates", 0) == 0) ++switches;
+            const AiContext* c = pw.world->context(0);
+            if (!c) continue;
+            if (c->budget.reset_requested() && set_at < 0) set_at = f;
+            if (set_at >= 0 && !c->budget.reset_requested()) cleared_at = f;
+        }
+        std::printf("budget reset flag: %s world, %d template decisions, flag set at frame %d, cleared at %d\n",
+                    rich ? "switching" : "control", switches, set_at, cleared_at);
+        if (rich) {
+            CHECK(switches >= 2 && set_at > 0 && cleared_at > set_at && cleared_at - set_at <= 1350 + 1);
+        } else {
+            CHECK(switches == 1 && set_at < 0);
+        }
+    }
 }
 
 // ================================================================ FIXPASS_GALACTIC §1: free-store moves on Friendly_Only
@@ -2754,15 +3937,16 @@ static void test_free_store_world() {
     CHECK(logged("Unable to find a path from P0 to P7"));
     const gal::FleetState* hf = fleet_of(hero);
     CHECK(hf && hf->planet == 0 && !hf->moving);
-    // P0 -> P3: the matrix passes (no node cost on the way: the neutral frigate is no enemy force), the hero hops
-    // P1, P2; at P2 the next hop P3 has an orbit owner (the neutral player) that is not this player -> the move ends.
+    // P0 -> P3: the neutral frigate (relation 2 in the AI snapshot, A2F_RE_READS §3.3: any relation != 0 is hostile for the
+    // last-seen-units test) gives P3 a node cost -> no path; logged; the hero stays at P0.
     const uint64_t moves_before = world.orders_issued();
     CHECK(world.free_store_move(0, hero, 3));
     const int32_t t3 = run_until_idle(30 * 300);
     hf = fleet_of(hero);
     std::printf("free store world: hero P0 -> P3 ended after %d frames at P%u (%zu orders)\n", t3, hf ? hf->planet : 99u,
                 static_cast<size_t>(world.orders_issued() - moves_before));
-    CHECK(world.pending_free_store_moves() == 0 && hf && hf->planet == 2 && !hf->moving);
+    CHECK(world.pending_free_store_moves() == 0 && hf && hf->planet == 0 && !hf->moving);
+    CHECK(logged("Unable to find a path from P0 to P3"));
     CHECK(world.path(0, 0, 3).size() == 4);  // P0 P1 P2 P3
 
     // Reachable_Target's Friendly_Only filter (§1.4): only planets held by the player or an ally.
@@ -4104,6 +5288,16 @@ int main(int argc, char** argv) {
     test_budget_fraction_before_init();
     test_production_unbuildable();
     test_goal_time_drop();
+    test_goal_allowed_time_base();  // A2f t09
+    test_btime_none_speed_factor();    // a2g t03
+    test_goal_nominal_time_resolve();  // a2g t05 (a)
+    test_goal_resolve_time_ok();       // a2g t05 (b)
+    test_active_goals_category();      // a2g F1, a2h t04
+    test_maintenance_tokens();         // a2h t03
+    test_force_maintenance_tokens();   // a2i t04
+    test_budget_fraction_to_build();   // a2h t07
+    test_budget_fraction_in_progress();  // a2i t06
+    test_budget_reset_on_template_switch();  // a2g F2
     test_free_store_path_rules();
     test_free_store_world();
     test_underworld_special();
