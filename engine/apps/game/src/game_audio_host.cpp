@@ -221,7 +221,7 @@ void GameAudioHost::battle_end(bool won, std::string_view enemy_faction) {
 }
 
 void GameAudioHost::battle_tick(const sim::TacticalBattle& battle, const objects::ObjectStore& store, const objects::GameObjectTypes& types,
-                                int32_t local_player) {
+                                int32_t local_player, const std::function<bool(objects::ObjectId)>& script_hidden) {
     if (!game_) return;
     retreating_player_ = battle.retreating_player();
     const tactical::combat::CombatSystem& cs = battle.combat();
@@ -247,7 +247,8 @@ void GameAudioHost::battle_tick(const sim::TacticalBattle& battle, const objects
             game_->object_spawned(static_cast<uint64_t>(id), sounds(types, store.type(h)), store.position(h));
             ++stats_.spawned;
         }
-        const bool hidden = battle.fog_object_hidden(local_player, id, false) || ab.is_stealthed(id, battle.frame());
+        const bool hidden = battle.fog_object_hidden(local_player, id, false) || ab.is_stealthed(id, battle.frame()) ||
+                            (script_hidden && script_hidden(id));  // q6 t19: Lua Hide(true) mutes the object's sound
         if (hidden) inaudible_.insert(static_cast<uint64_t>(id));
         else inaudible_.erase(static_cast<uint64_t>(id));
         if (battle.hyperspace().departing(id)) continue;  // hyperspace states: the locomotor leaves the loops alone
@@ -489,7 +490,8 @@ void GameAudioHost::movie_started(bool movie_music, bool halt_music) {  // same 
 void GameAudioHost::movie_cue(std::string_view) {}
 void GameAudioHost::movie_ended() { movie_music_on_ = movie_halted_ = false; }
 void GameAudioHost::unit_response(const objects::GameObjectTypes&, objects::TypeIndex, uint64_t, UnitResponse, bool, int32_t) {}
-void GameAudioHost::battle_tick(const sim::TacticalBattle&, const objects::ObjectStore&, const objects::GameObjectTypes&, int32_t) {}
+void GameAudioHost::battle_tick(const sim::TacticalBattle&, const objects::ObjectStore&, const objects::GameObjectTypes&, int32_t,
+                                const std::function<bool(objects::ObjectId)>&) {}
 void GameAudioHost::battle_reset() {  // same bookkeeping as with audio (nothing reads it here)
     last_serial_ = 0;
     have_serial_ = false;

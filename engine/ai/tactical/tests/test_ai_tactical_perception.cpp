@@ -21,6 +21,8 @@
 #include <thread>
 #include <vector>
 
+#include "alamo/ai/ai_budget.hpp"
+#include "alamo/ai/ai_types.hpp"
 #include "thread_parallel_for.hpp"
 #include "alamo/ai/perception_equations.hpp"
 #include "alamo/ai/tactical/perception_cache.hpp"
@@ -521,6 +523,32 @@ static void test_tokens() {
     CHECK(f.val("Variable_Self.BaseLevel") == 1.0);
     CHECK(f.val("Variable_Self.CreditsUnnormalized") == 1000.0);
     CHECK(f.val("Variable_Enemy.CreditsUnnormalized") == 0.0);  // not Self
+    // q6 t10 BudgetAllocation (AI_GALACTIC_TOKENS 8.3): Self only; no tactical budget -> 0.0 for every key.
+    CHECK(f.val("Variable_Self.BudgetAllocation {Parameter_Category = AIGoalCategoryType[MajorItem]}") == 0.0);
+    CHECK(f.val("Variable_Self.BudgetAllocation") == 0.0);
+    {
+        double b = 0;
+        CHECK(!f.eval("Variable_Enemy.BudgetAllocation {Parameter_Category = AIGoalCategoryType[MajorItem]}", b));
+        CHECK(!f.eval("Variable_Human.BudgetAllocation {Parameter_Category = AIGoalCategoryType[MajorItem]}", b));
+        CHECK(!f.eval("1 + Variable_Enemy.BudgetAllocation", b));  // a failing leaf fails the equation
+    }
+    // q6 (AI_GALACTIC_TOKENS 9.3): with the battle budget hook the leaf returns the key's weight (Self only); the key is
+    // ai_budget_key's AIGoalCategoryType value (Defensive 1, Infrastructure 3 here), a key not in the budget reads 0.0.
+    f.p.set_budget_weight([](int32_t player, std::span<const Param> params) {
+        const int32_t key = ai_budget_key(params, [](std::string_view n) -> int64_t {
+            return ai_iequal(n, "Defensive") ? 1 : ai_iequal(n, "Infrastructure") ? 3 : ai_iequal(n, "Hero") ? 8 : -1;
+        }, {});
+        if (player != 0) return -1.0;  // never reached: other roots fail first
+        return key == 1 ? 0.25 : key == 8 ? 0.75 : 0.0;
+    });
+    CHECK(f.val("Variable_Self.BudgetAllocation {Parameter_Category = AIGoalCategoryType[Defensive]}") == 0.25);
+    CHECK(f.val("Variable_Self.BudgetAllocation {Parameter_Category = AIGoalCategoryType[Hero]}") == 0.75);
+    CHECK(f.val("Variable_Self.BudgetAllocation {Parameter_Category = AIGoalCategoryType[Infrastructure]}") == 0.0);
+    {
+        double b = 0;
+        CHECK(!f.eval("Variable_Enemy.BudgetAllocation {Parameter_Category = AIGoalCategoryType[Defensive]}", b));
+    }
+    f.p.set_budget_weight({});
     CHECK(f.val("Variable_Self.UnitSpaceAvailable") == 20.0);
     CHECK(f.val("Variable_Self.TacticalBuiltStructureCount") == 1.0);
     CHECK(f.val("Variable_Self.TacticalBuiltStructureCount {Parameter_Type = \"E_Ground_Barracks\"}") == 1.0);

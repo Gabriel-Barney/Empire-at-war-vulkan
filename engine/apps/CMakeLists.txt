@@ -12,6 +12,7 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
     sim/src/save_session.cpp    # N1 session descriptor + data fingerprints
     sim/src/map_spawn.cpp
     sim/src/scenario.cpp
+    sim/src/object_scripts.cpp  # q6: game-object Lua scripts (SimConfig::object_scripts; a no-op without engine/lua)
     sim/src/bench_scenario.cpp  # BM1: benchmark scenario manifest (alamo_headless --bench; alamo_game in BM2)
     sim/src/bench_stats.cpp     # BM1: tick statistics, result comparison, result JSON (shared with BM2)
   )
@@ -114,6 +115,11 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
   set_tests_properties(alamo_sim_bench_tests PROPERTIES TIMEOUT 120)
 endif()
 
+# q6 t03: alamo_game_rules (game/rules), the skirmish rules alamo_headless's skirmish host and alamo_game share.
+if(_alamo_sim)
+  add_subdirectory(game/rules)
+endif()
+
 # Headless host: load game data through the VFS, build a campaign's galaxy, and run the
 # deterministic tick with per-AI all-pairs recomputes on the job system. Also the Phase 2 smoke test.
 # With alamo_sim: --map NAME --ticks N runs a tactical map through the G0 host.
@@ -164,6 +170,7 @@ if(_alamo_sim)
   # --- A1 stage 2 (owner: A1 agent): --skirmish-ai synthetic|foc (headless/skirmish_run.cpp). Goldens: regenerate
   # after an intended change with the same command and --crc-out <golden path> (MSVC); clang must match. ---
   target_sources(alamo_headless PRIVATE headless/skirmish_run.cpp)
+  target_link_libraries(alamo_headless PRIVATE alamo_game_rules)  # q6 t03: AI types, default forces, map planet type
   if(TARGET alamo_ai_tactical_world)
     add_test(NAME alamo_headless_skirmish_ai_synthetic
              COMMAND alamo_headless --skirmish-ai synthetic --check-workers --quiet
@@ -179,6 +186,15 @@ if(_alamo_sim)
              COMMAND alamo_headless --skirmish-ai skirmish --map _MP_SPACE_GEONOSIS --human Empire --seed 1103945700 --ticks 900 --workers 4 --quiet)
     set_tests_properties(alamo_headless_skirmish_ai_geonosis PROPERTIES TIMEOUT 1200)
     alamo_label_slow(alamo_headless_skirmish_ai_geonosis)
+    # q6 t02: the skirmish host's slots from the data (--ai FACTION[,FACTION]): Underworld (AI_Player_Underworld, its Space_ /
+    # Land_Skirmish_AI_Default_Forces) in slot 0 of a space skirmish, and as the AI beside an idle human Empire on land; no Lua errors.
+    # Skipped (exit 0) without ALAMO_FOC_DATA.
+    add_test(NAME alamo_headless_skirmish_ai_slots_space
+             COMMAND alamo_headless --skirmish-ai skirmish --map _MP_SPACE_GEONOSIS --ai Underworld,Rebel --ticks 900 --workers 4 --quiet
+                     --fail-on-lua-errors)
+    add_test(NAME alamo_headless_skirmish_ai_slots_land
+             COMMAND alamo_headless --skirmish-ai foc-land --human Empire --ai Underworld --ticks 900 --workers 4 --quiet --fail-on-lua-errors)
+    set_tests_properties(alamo_headless_skirmish_ai_slots_space alamo_headless_skirmish_ai_slots_land PROPERTIES TIMEOUT 600)
     # skai: foc-land is the skirmish host (the battle started on the map, the land default forces, income, skirmish victory, land
     # production) since 2026-11-02; before that a galactic invasion with campaign companies (t50).
     # t50: FoC land SKIRMISH (_MP_LAND_UTAPAU: the explicit Empire / Rebel pads, Player_N_Spawn_Point_Marker, MP_Default_Credits, the
@@ -194,8 +210,7 @@ if(_alamo_sim)
     set_tests_properties(alamo_headless_skirmish_ai_foc_land alamo_headless_skirmish_ai_foc_land_campaign PROPERTIES TIMEOUT 1200)
     # S10 land outcome, t50: the land skirmish played on (0/1/4/16/N workers identical); skipped (exit 0) without ALAMO_FOC_DATA. What it asserts
     # is structure, not a seed's luck (--expect-skirmish-base): both sides start with their pre-built base (Command Center + Barracks of both
-    # slots), the shipped skirmish AI issues orders, shots are fired, 0 Lua errors. Whether the skirmish AI takes the enemy base inside the
-    # 15-minute limit is not asserted: it does not (the Destroy_Structure plan reaches the base at ~frame 11000 and fails; open item).
+    # slots), the shipped skirmish AI issues orders, shots are fired, 0 Lua errors. Whether the game ends is checked by the _end test below.
     # OPT3 t08: the worker-count check (alamo_add_worker_count_check, docs/BUILD.md "Worker-count check"): the 0-worker entry writes
     # the CRC log and checks the base (--expect-skirmish-base), _w1 / _w4 / _w16 / _w<N> compare against it.
     alamo_add_worker_count_check(alamo_headless_skirmish_ai_foc_land_outcome
@@ -209,6 +224,15 @@ if(_alamo_sim)
                      --golden ${alamo_headless_skirmish_ai_foc_land_outcome_CRC})
     set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_profiled PROPERTIES TIMEOUT 1800
                          FIXTURES_REQUIRED alamo_headless_skirmish_ai_foc_land_outcome_w0)
+    # q6 land end chain (2026-11-04): the AI-vs-AI land skirmish (_MP_LAND_UTAPAU, Empire vs Rebel, default seed) must END with a
+    # winner (--expect-battle-end; a skirmish's limit is --ticks). Before, no winner in 40000 ticks: produced single-hero companies
+    # (Boba_Fett_Team_Land_MP, no team type) never moved, the AI built on uncaptured neutral pads (neutral-owned mineral processors,
+    # no income) and its object Attack_Move blocks never finished on a non-hostile target (A1_READINGS §33.2). Now the Rebel wins
+    # at about frame 17100.
+    add_test(NAME alamo_headless_skirmish_ai_foc_land_end
+             COMMAND alamo_headless --skirmish-ai foc-land --ticks 30000 --workers 4 --quiet --expect-battle-end --fail-on-lua-errors)
+    set_tests_properties(alamo_headless_skirmish_ai_foc_land_end PROPERTIES TIMEOUT 1800)
+    alamo_label_slow(alamo_headless_skirmish_ai_foc_land_end)
     # The campaign-rules land invasion (foc-land-campaign; before skai this was foc-land) must END with a winner before the frame
     # limit. a1g (2026-11-02): after the free-store reservations (§28) and the land Reinforce drop layout (§30.7, TACTICAL_GAPS
     # §4.2.1) no seed 1-12 ended before the 14400-frame cap. a1h t01: with the M1 WeaponBehavior fix, passive / superseded guard

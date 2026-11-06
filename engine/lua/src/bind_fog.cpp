@@ -33,8 +33,7 @@ int script_error(Call& c, const char* fmt, ...) {
     va_start(ap, fmt);
     std::vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
-    c.vm->message(std::string("SCRIPT ERROR: ") + buf);
-    return 0;
+    return c.script_error_stop("%s", buf);  // q6 t11: sets the stop flag (LUA_API.md "Binding error model")
 }
 
 // The FogOfWar global called as a function: no documented form [port].

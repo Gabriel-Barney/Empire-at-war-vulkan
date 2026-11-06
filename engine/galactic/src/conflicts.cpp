@@ -337,6 +337,48 @@ float ConflictManager::unit_power(ObjectHandle h) const {
 
 bool ConflictManager::can_fight_space(ObjectHandle h) const { return unit_power(h) > 0.0f; }
 
+std::vector<ObjectHandle> ConflictManager::overrun_units(const ConflictInfo& rec, bool defender, bool space) const {
+    const int32_t player = defender ? rec.defender : rec.attacker;
+    if (space) return orbit_units(rec.planet, player, true);
+    std::vector<ObjectHandle> out = surface_units(rec.planet, player);
+    if (!defender)  // the ground power the attacker's orbit fleets carry
+        for (ObjectHandle h : orbit_cargo(rec.planet, player)) out.push_back(h);
+    return out;
+}
+
+float ConflictManager::overrun_strength(const ConflictInfo& rec, bool defender, bool space) const {
+    // 0x2ab880 (AI_GALACTIC_TOKENS §9.12) [H]: planet by id, none -> 0.
+    if (rec.planet >= sim_->planets().size()) return 0.0f;
+    float s = 0.0f;
+    for (ObjectHandle h : overrun_units(rec, defender, space)) s += unit_power(h);
+    if (!defender) return s;
+    const PlanetState& p = sim_->planets()[rec.planet];
+    const auto& types = sim_->rules().types;
+    if (!space) {
+        // + every D+0x158 structure's power, then + 0x4b8000(D, all bits), both in list order and float.
+        for (ObjectHandle st : p.structures) {
+            if (!sim_->store().alive(st)) continue;
+            const auto t = static_cast<uint32_t>(sim_->store().type(st));
+            if (t < types.size()) s += types[t].ai_combat_power;
+        }
+        float records = 0.0f;
+        for (const PersistedBuiltObject& b : p.built_objects)
+            if (b.type < types.size() && rules_->type(b.type).categories != 0) records += types[b.type].ai_combat_power;
+        return s + records;
+    }
+    // + the starbase type for level D+0x148 and the defender's faction (0x407b60(type table, level, faction, 0x5C)).
+    if (p.starbase_level != 0 && rec.defender >= 0 && static_cast<size_t>(rec.defender) < sim_->players().size()) {
+        const uint32_t faction = sim_->players()[static_cast<size_t>(rec.defender)].faction;
+        for (const TypeInfo& t : types) {
+            if (!is_star_base_type(t) || t.base_level != p.starbase_level) continue;
+            if (!t.affiliation.empty() && std::find(t.affiliation.begin(), t.affiliation.end(), faction) == t.affiliation.end()) continue;
+            s += t.ai_combat_power;
+            break;
+        }
+    }
+    return s;
+}
+
 bool ConflictManager::has_hero(const std::vector<ObjectHandle>& units) const {
     for (ObjectHandle h : units) {
         const uint32_t t = static_cast<uint32_t>(sim_->store().type(h));
@@ -563,6 +605,13 @@ void ConflictManager::run(ConflictKind kind) {
     std::vector<ConflictInfo>& q = queue(kind);
     if (q.empty()) return;
     if (state_ != ConflictState::AutoRunning && state_ != ConflictState::InBattle && !validate(q.front())) {
+        // AI_GALACTIC_TOKENS §9.4, 0x2b76a0 site A (invasion without a battle): a land head that fails validation while one
+        // of its invading units still exists and attacker != defender keeps only the attacker's persisted built objects
+        // [port: the rest of site A, the units' landing and the InvasionResult, is the port's existing path].
+        const ConflictInfo& h = q.front();
+        if (kind == ConflictKind::Land && h.attacker != h.defender &&
+            std::any_of(h.units.begin(), h.units.end(), [this](ObjectHandle u) { return sim_->store().alive(u); }))
+            sim_->keep_built_objects(h.planet, h.attacker);
         drop_head(kind, true);
         return;
     }
@@ -577,21 +626,14 @@ void ConflictManager::run(ConflictKind kind) {
                 const bool hum = human(head.attacker) || human(head.defender);
                 int32_t overrun_loser = kNoPlayer;
                 if (rules_->overrun_multiple != 0.0f) {
+                    // q6 t18: the side strengths of 0x2ab880 (overrun_strength, AI_GALACTIC_TOKENS §9.12).
                     const bool space = kind == ConflictKind::Space;
-                    std::vector<ObjectHandle> au = space ? orbit_units(head.planet, head.attacker, true) : head.units;
-                    std::vector<ObjectHandle> du = space ? orbit_units(head.planet, head.defender, true)
-                                                         : surface_units(head.planet, head.defender);
-                    float ap = 0.0f, dp = 0.0f;
-                    for (ObjectHandle h : au)
-                        if (sim_->store().alive(h)) ap += unit_power(h);
-                    for (ObjectHandle h : du) dp += unit_power(h);
-                    const PlanetState& p = sim_->planets()[head.planet];
-                    if (space && p.starbase_owner == head.defender && sim_->store().alive(p.starbase))
-                        dp += unit_power(p.starbase);
+                    const float ap = overrun_strength(head, false, space), dp = overrun_strength(head, true, space);
                     const float mx = std::max(ap, dp), mn = std::min(ap, dp);
                     if (mx > mn * rules_->overrun_multiple) {
                         const bool att_weaker = ap < dp;
-                        if (!has_hero(att_weaker ? au : du)) overrun_loser = att_weaker ? head.attacker : head.defender;
+                        if (!has_hero(overrun_units(head, !att_weaker, space)))
+                            overrun_loser = att_weaker ? head.attacker : head.defender;
                     }
                 }
                 if ((!hum && !cfg_.fight_ai_battles) || overrun_loser != kNoPlayer) {
@@ -784,6 +826,9 @@ void ConflictManager::auto_finish(const ConflictInfo& head) {
             (ar_in_.cargo[i].owner == head.attacker ? e.attacker_losses : e.defender_losses)++;
             sim_->destroy_object(ar_cargo_[i]);
         }
+    // AI_GALACTIC_TOKENS §9.4: a land auto-resolve keeps only the winner's persisted built objects (0x60b930; on an attacker
+    // win 0x2b76a0 site B filters again by the attacker, the same result). [port] no winner: the records stay.
+    if (!space && r.valid && r.winner != kNoPlayer) sim_->keep_built_objects(planet, r.winner);
     if (r.valid && r.winner != kNoPlayer && r.loser != kNoPlayer) {
         if (r.retreating != kNoPlayer) {
             if (!space && r.retreating == head.defender) retreat_ground(r.retreating, planet);
@@ -1030,6 +1075,7 @@ bool ConflictManager::begin_battle(const ConflictInfo& head, Linked linked, uint
     BattleRequest req;
     req.info = head;
     req.linked = linked != Linked::No;
+    req.sandbox = linked == Linked::Sandbox;  // q6: the GOM+0x618 == 9 battle (§9.4 gate)
     const bool space = head.kind == ConflictKind::Space;
     const PlanetState& p = sim_->planets()[head.planet];
     const auto& store = sim_->store();
@@ -1156,6 +1202,7 @@ void ConflictManager::finish_battle(const BattleResult& result, LinkedResolution
         sim_->reevaluate_queue(planet, kGroundQueue, sim_->ground_base_level(planet));
         sim_->reevaluate_queue(planet, kSpaceQueue, sim_->planets()[planet].starbase_level);
     }
+    if (!space) sim_->keep_built_objects(planet, W);  // always (land): only the winner's persisted built objects stay (§9.4)
     if (W == A) sim_->clear_queue(planet, space ? kSpaceQueue : kGroundQueue);
     // §3.3 fleets / ground.
     if (!space) {

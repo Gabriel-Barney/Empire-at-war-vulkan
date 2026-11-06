@@ -684,6 +684,84 @@ Bytes tga(std::uint8_t type, std::uint16_t w, std::uint16_t h, std::uint8_t bpp,
     return cat({x.b, px});
 }
 
+// BMP file: 14-byte file header + DIB header of `hsz` bytes (12 = core, >= 40 = info) + `masks` + pixels.
+Bytes bmp(std::uint32_t hsz, std::int32_t w, std::int32_t h, std::uint16_t bpp, std::uint32_t comp, const Bytes& masks,
+          const Bytes& px) {
+    W d;
+    if (hsz == 12) {
+        d.put(hsz).put(static_cast<std::uint16_t>(w)).put(static_cast<std::uint16_t>(h)).put(std::uint16_t(1)).put(bpp);
+    } else {
+        d.put(hsz).put(w).put(h).put(std::uint16_t(1)).put(bpp).put(comp);
+        d.put(std::uint32_t(px.size())).put(std::uint32_t(2835)).put(std::uint32_t(2835)).put(std::uint32_t(0)).put(std::uint32_t(0));
+        d.b.resize(hsz, 0);
+    }
+    const std::uint32_t off = 14 + static_cast<std::uint32_t>(d.b.size() + masks.size());
+    W f;
+    f.put(std::uint8_t('B')).put(std::uint8_t('M')).put(std::uint32_t(off + px.size())).put(std::uint32_t(0)).put(off);
+    return cat({f.b, d.b, masks, px});
+}
+Bytes u32s(std::initializer_list<std::uint32_t> l) {
+    W x;
+    for (auto v : l) x.put(v);
+    return x.b;
+}
+
+void test_bmp() {
+    std::string err;
+    TextureAsset t;
+    // 24-bit BI_RGB, 1x2, bottom-up: rows are padded to 4 bytes; the first stored row is the bottom row.
+    CHECK(decode_bmp(bmp(40, 1, 2, 24, 0, {}, {1, 2, 3, 0, 4, 5, 6, 0}), t, &err));
+    CHECK(t.format == TextureFormat::BGRA8 && t.width == 1 && t.height == 2 && t.mip_levels == 2);
+    CHECK(t.data[0] == 4 && t.data[1] == 5 && t.data[2] == 6 && t.data[3] == 255 && t.data[4] == 1 && t.data[7] == 255);
+    // Same pixels top-down (negative height): no flip.
+    CHECK(decode_bmp(bmp(40, 1, -2, 24, 0, {}, {1, 2, 3, 0, 4, 5, 6, 0}), t, &err) && t.data[0] == 1 && t.data[4] == 4);
+    // 3x1 24-bit: 9 bytes + 3 padding; the last row's padding may be missing.
+    CHECK(decode_bmp(bmp(40, 3, 1, 24, 0, {}, {1, 2, 3, 4, 5, 6, 7, 8, 9}), t, &err) && t.data[8] == 7 && t.data[10] == 9);
+    // 32-bit BI_RGB keeps the fourth byte as alpha (TR's MT_Commandbar.tga) ...
+    CHECK(decode_bmp(bmp(40, 2, 1, 32, 0, {}, {1, 2, 3, 77, 5, 6, 7, 0}), t, &err));
+    CHECK(t.data[0] == 1 && t.data[2] == 3 && t.data[3] == 77 && t.data[7] == 0 && t.swizzle.a == Swizzle::A);
+    // ... unless it is 0 everywhere: then opaque.
+    CHECK(decode_bmp(bmp(40, 2, 1, 32, 0, {}, {1, 2, 3, 0, 5, 6, 7, 0}), t, &err) && t.data[3] == 255 && t.data[7] == 255);
+    // 32-bit BI_BITFIELDS with masks after a 40-byte header (R in the low byte, no alpha).
+    CHECK(decode_bmp(bmp(40, 1, 1, 32, 3, u32s({0xFF, 0xFF00, 0xFF0000}), {10, 20, 30, 40}), t, &err));
+    CHECK(t.data[0] == 30 && t.data[1] == 20 && t.data[2] == 10 && t.data[3] == 255);
+    // V5 header (124 bytes) with masks inside it, including alpha, top-down.
+    {
+        Bytes b = bmp(124, 1, -1, 32, 3, {}, {10, 20, 30, 40});
+        const Bytes m = u32s({0xFF000000u, 0xFF0000, 0xFF00, 0xFF});  // RGBA in byte order a,b,g,r
+        std::copy(m.begin(), m.end(), b.begin() + 54);
+        CHECK(decode_bmp(b, t, &err) && t.data[0] == 20 && t.data[1] == 30 && t.data[2] == 40 && t.data[3] == 10);
+    }
+    // BI_ALPHABITFIELDS: 4 masks after a 40-byte header.
+    CHECK(decode_bmp(bmp(40, 1, 1, 32, 6, u32s({0xFF0000, 0xFF00, 0xFF, 0xFF000000u}), {1, 2, 3, 4}), t, &err) &&
+          t.data[0] == 1 && t.data[3] == 4);
+    // 16-bit 565 bit fields and 16-bit BI_RGB (X1R5G5B5).
+    CHECK(decode_bmp(bmp(40, 1, 1, 16, 3, u32s({0xF800, 0x7E0, 0x1F}), {0x00, 0xF8, 0, 0}), t, &err) && t.data[2] == 255 &&
+          t.data[1] == 0 && t.data[0] == 0 && t.data[3] == 255);
+    CHECK(decode_bmp(bmp(40, 1, 1, 16, 0, {}, {0x1F, 0x00, 0, 0}), t, &err) && t.data[0] == 255 && t.data[2] == 0);
+    // BITMAPCOREHEADER (OS/2), 24-bit.
+    CHECK(decode_bmp(bmp(12, 1, 1, 24, 0, {}, {7, 8, 9, 0}), t, &err) && t.data[0] == 7 && t.data[2] == 9);
+    // Rejected: palettized, RLE, truncated, absurd size, bad header size.
+    CHECK(!decode_bmp(bmp(40, 1, 1, 8, 0, {}, {0, 0, 0, 0}), t, &err) && err.find("bit depth") != std::string::npos);
+    CHECK(!decode_bmp(bmp(40, 1, 1, 8, 1, {}, {0, 0, 0, 0}), t, &err) && err.find("compression") != std::string::npos);
+    CHECK(!decode_bmp(bmp(40, 2, 2, 24, 0, {}, {1, 2, 3, 4, 5, 6}), t, &err) && err.find("truncated") != std::string::npos);
+    CHECK(!decode_bmp(bmp(40, 16384, 16384, 32, 0, {}, {}), t, &err) && err.find("truncated") != std::string::npos);
+    CHECK(!decode_bmp(bmp(40, 20000, 1, 32, 0, {}, {}), t, &err) && err.find("range") != std::string::npos);
+    CHECK(!decode_bmp(bmp(40, 0, 1, 32, 0, {}, {}), t, &err));
+    CHECK(!decode_bmp(bmp(40, 1, 1, 32, 3, {}, {1, 2, 3, 4}), t, &err));  // masks missing (overlap the 4 pixel bytes only)
+    {
+        Bytes b = bmp(40, 1, 1, 24, 0, {}, {1, 2, 3, 0});
+        b[14] = 20;  // DIB header size 20: unknown
+        CHECK(!decode_bmp(b, t, &err) && err.find("header size") != std::string::npos);
+    }
+    // decode_texture picks the format by content, whatever the name: a BMP called *.tga decodes as a BMP.
+    const Bytes as_tga = bmp(40, 1, 1, 32, 0, {}, {1, 2, 3, 200});
+    CHECK(sniff_texture_file(as_tga) == TextureFileKind::Bmp);
+    CHECK(decode_texture(as_tga, t, &err) && t.format == TextureFormat::BGRA8 && t.data[3] == 200);
+    CHECK(sniff_texture_file(Bytes{'D', 'D', 'S', ' '}) == TextureFileKind::Dds);
+    CHECK(sniff_texture_file(Bytes{}) == TextureFileKind::Tga);
+}
+
 void test_tga() {
     std::string err;
     TextureAsset t;
@@ -731,6 +809,7 @@ void test_tga() {
     }
     // decode_texture sniffs DDS vs TGA
     CHECK(decode_texture(tga(3, 1, 1, 8, 0, {7}), t, &err) && t.data[0] == 7 && t.mip_levels == 1);
+    CHECK(sniff_texture_file(tga(2, 1, 1, 24, 0, {1, 2, 3})) == TextureFileKind::Tga);
     // Lookup order (SPACE_AND_OPEN.md B.2): as named, Textures dir, .dds as named, .dds in Textures dir.
     const auto c = texture_candidates("Foo.tga");
     CHECK(c.size() == 4 && c[0] == "FOO.TGA" && c[1] == "DATA\\ART\\TEXTURES\\FOO.TGA" && c[2] == "FOO.DDS" &&
@@ -840,6 +919,18 @@ private:
     std::map<std::string, Bytes> files_;
     mutable std::atomic<int> reads_{0};
 };
+
+void test_bmp_named_tga() {
+    // Thrawn's Revenge: Data\Art\Textures\MT_Commandbar.tga holds BMP bytes; load_texture and the cache decode it by content.
+    MemProvider mp;
+    mp.add("Data\\Art\\Textures\\X.tga", bmp(40, 2, 2, 24, 0, {}, {1, 2, 3, 4, 5, 6, 0, 0, 1, 2, 3, 4, 5, 6, 0, 0}));
+    std::string err;
+    TextureAsset lt;
+    CHECK(load_texture(mp, "X.tga", lt, &err) && lt.width == 2 && lt.mip_levels == 2 && lt.format == TextureFormat::BGRA8);
+    AssetCache cache(mp);
+    const auto ct = cache.texture("X.tga");
+    CHECK(ct && !ct->is_fallback && ct->width == 2 && ct->data[0] == 1);
+}
 
 void test_cache() {
     MemProvider mp;
@@ -1696,7 +1787,9 @@ int main() {
     test_animation();
     test_dds();
     test_tga();
+    test_bmp();
     test_mips();
+    test_bmp_named_tga();
     test_cache();
     test_lookup_steps();
 #if defined(ALAMO_ASSETS_HAVE_VFS)

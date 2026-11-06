@@ -51,6 +51,20 @@ static std::string run(LuaVm& vm, const std::string& code) {
     if (!vm.run(code, "test", &err)) return err.empty() ? "error" : err;
     return {};
 }
+// q6 t11 (docs/re/LUA_API.md "Binding error model across all bindings"): a binding error does not unwind; it logs
+// "SCRIPT ERROR: ..." and sets the script's stop flag. run_stop() reports those lines as its result (a Lua error as
+// before) and clears the flag, so the next snippet runs on a live script.
+static std::string run_stop(LuaVm& vm, const std::string& code) {
+    std::string err;
+    const size_t m0 = vm.messages().size();
+    if (!vm.run(code, "test", &err)) return err.empty() ? "error" : err;
+    if (!vm.exit_requested()) return {};
+    std::string out;
+    for (size_t i = m0; i < vm.messages().size(); ++i)
+        if (vm.messages()[i].rfind("SCRIPT ERROR: ", 0) == 0) out += vm.messages()[i] + "\n";
+    reset_script_threads(vm);
+    return out.empty() ? std::string("stop") : out;
+}
 static bool gtrue(LuaVm& vm, const char* name) {
     lua_State* L = vm.state();
     lua_pushstring(L, name);
@@ -220,9 +234,9 @@ static void test_no_systems(const Db& db) {
     CHECK(run(vm, "d = s.Is_Under_Effects_Of_Ability('DEFEND')") == "" && !gtrue(vm, "d"));
     CHECK(vm.messages().size() == msgs + 1 && vm.messages().back().find("not yet supported") != std::string::npos);
     CHECK(gnum(vm, "x") == 5.0 && gnum(vm, "y") == 6.0 && gnum(vm, "z") == 7.0);  // [port] no animation data: the position
-    CHECK(run(vm, "s.Force_Ability_Recharge()") != "" && run(vm, "s.Force_Ability_Recharge('DEFEND', 'x')") != "" &&
-          run(vm, "s.Reset_Ability_Counter()") != "" && run(vm, "s.Get_Bone_Position(3)") != "" &&
-          run(vm, "s.Is_Under_Effects_Of_Ability()") != "");
+    CHECK(run_stop(vm, "s.Force_Ability_Recharge()") != "" && run_stop(vm, "s.Force_Ability_Recharge('DEFEND', 'x')") != "" &&
+          run_stop(vm, "s.Reset_Ability_Counter()") != "" && run_stop(vm, "s.Get_Bone_Position(3)") != "" &&
+          run_stop(vm, "s.Is_Under_Effects_Of_Ability()") != "");
     // Cancel_Hyperspace: a Lua order on the direct path (counted even without a pipeline).
     const uint32_t before = bridge.orders_issued;
     CHECK(run(vm, "s.Cancel_Hyperspace()") == "");

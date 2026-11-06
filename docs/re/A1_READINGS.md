@@ -1706,7 +1706,8 @@ So for a guarding unit it is true only when the unit's own targeting has a targe
 - **IsFinished** (vf19 0x73cae0):
   - if the zone-route-leg flag +0x55 is set, it first issues the next zone leg (0x73bc50(status, 0));
   - it returns true when +0x40 is set **or** the task force has no members (TF +0x80 − +0x78 = 0, 0x5fca10).
-- **Result** (vf20) is the BlockingStatus default 0x17d070 (no value).
+- **Result** (vf20) is 0x17d070, which returns no value, so Lua gets **nil** (corrected q6 t19: 0x17d070 is an override,
+  not the BlockingStatus default; the base Result 0x245ca0 returns true). Details §33.2.2.
 - **Polling is passive.** IsFinished never re-issues an order, with one exception: the zone-route leg above, which only
   happens with useZonePath. Legs are issued without re-collecting (collect = 0), so they raise no signal 0xb.
 - **Signal handler.** The handler is 0x73ce80, on the SignalListener sub-object at +0x30; the offsets in this section
@@ -1749,6 +1750,85 @@ does; or when all its units are gone; or when the TF is empty.
 - Object targets of Move_To / Attack_Move stay open after arrival while the object lives and stays a valid, hostile,
   unfogged target.
 - This matches the space version (TACTICAL_COMBAT, SpaceMovementBlockStatus).
+
+#### 33.2.1 The target test 0x5680b0 (q6 t19 RE, 2026-11-04) [H unless tagged]
+
+0x5680b0(obj) is the "still a valid attack target" test used by the pending-empty test above (move / attack-move on an
+object), by the targeting promotion of `Formation_Attack_Target` (TACTICAL_COMBAT §2.8 B) and by the land / space
+attack paths. It returns true when **all** of these hold:
+
+| Test | Field | Meaning |
+|---|---|---|
+| 1 | obj slot 0x16 (TEAM, obj +0x348) present **or** (type +0x41 **and** type +0x6b) | a TEAM container, or a type with `Collidable_By_Projectile_Living` (+0x41) and `Is_Valid_Target` (+0x6b) both true. A team container passes on its own (its type need not set the two flags) |
+| 2 | obj +0x3a7 ≠ 1 | not garrisoned / hidden in a container. Garrison enter sets it; TRANSPORT_LANDING attach also sets it while the landing waits hidden (§35.2) |
+| 3 | obj +0x3a0 bit 0x40 clear | not in the dead / death-clone state |
+| 4 | 0x397060(obj) false | not carried in a transport: obj +0x2b0 (its container) has a transport pack (+0xc8) whose contents list (+0x10, count +0x18) contains obj |
+| 5 | obj +0x3b4 ≠ 1 | **not in a hero clash**: byte set to 1 on both duelling heroes (and on a hero's TEAM container) when a hero clash starts (`MeleeHeroClashClass` 0x6ac780, `ActionDrivenHeroClashClass` 0x6ab200), cleared to 0 when it ends (0x6ab4d0, 0x6ac940, 0x6acb80) [H writers; M name] |
+| 6 | obj slot 0x2F (SPECIAL_WEAPON, +0x361) absent, **or** slot 0x5C (DUMMY_STAR_BASE, +0x38e) present | a special-weapon object is not a target unless it is also a star base |
+
+There is no fog, stealth, owner or `Attack_Category_Restrictions` test in it. Owner hostility is tested separately
+(0x39a4e0) by the callers.
+
+For the movement block this means: after all units arrived, an object Move_To / Attack_Move finishes when its target
+gets garrisoned, enters a transport, dies (also via signal 0x10), starts a hero clash, or is no longer hostile. A guard
+(mode bit 0x02) skips this test.
+
+**Port notes**
+- Implement 0x5680b0 as the table: TEAM container, or both type flags; then not garrisoned, not dead, not in a
+  transport, not in a hero clash, and the special-weapon / star-base rule. The port has no hero clashes (TACTICAL_COMBAT
+  item 24), so test 5 is always passed there until they exist; keep the field so it can be wired.
+- Port status (q6 t19, 2026-11-04): `BattleAi::fill` sets `TacticalAiObject::valid_target` from the table
+  (`hero_clash` kept, always false; "in a transport" = garrisoned, the port has no carried units) and the object
+  block's end test reads it; the combat goal promotion reads the type part (`UnitDesc::target_test_type`,
+  `battle_catalog.cpp`).
+- Attack ordered on a TEAM container (q6, 2026-11-04): the AI host's Attack (`BattleAi::execute_order`) and the human
+  order (`TacticalBattle::order_attack`, also queued) accept a live hostile TEAM container (test 1). The original keeps
+  the container as the attacker's target (`Set_Target` replaces a member by its container, TACTICAL_COMBAT §2.8 B step 5;
+  team target 0x406370, FIGHTER_FLYING §4.10 B) and each shot takes the member nearest the launch point (0x404fc0,
+  LOB_SOLVER §5.1). The port's combat has no container units, so `TacticalBattle::TeamAttack` keeps the container order
+  per attacker and gives combat the member the next shot would take: the live member nearest the attacker [port: XY
+  distance, ties by the lower id; the range test uses that member, not the container's box], a squadron (combat share
+  group) taking its first attacker's pick. After every combat tick the pick is redone (nearest changed, member dead);
+  a pick after a death re-runs the order's approach move [port: the original's attacker follows the container's object
+  block]. The order ends when the container is gone (its last member died or left: signal 0x28 clears the team target),
+  when combat dropped or replaced the attacker's target, or on a newer order. Saved in the battle state (version 7).
+
+#### 33.2.2 Result and arrival for Move_To / Attack_Move on an object (q6 t19 RE, 2026-11-04) [H unless tagged]
+
+**Result.** `LandMovementBlockStatus` overrides vf20 with 0x17d070, a function that returns no Lua value (the same
+function serves no-op Lua globals such as `Enable_Attack_Positioning`). `BlockOnCommand` ends with `return
+block.Result()`, so a land Move_To / Attack_Move / Guard_Target block returns **nil in every case**: target died
+(0x10), new order (0xb), owner change (0x1a), all units arrived, units gone, TF empty. The base BlockingStatus Result
+0x245ca0 (true) is not used. A script cannot tell how a land movement block ended; the shipped land plans do not read
+it. (For comparison: SpaceMovementBlockStatus / FreeStoreMovementBlockStatus use 0x6af930, which returns the value
+stored at +0x48 when set, else nil [M: what is stored there].) `BlockOnCommand` also returns nil on its own timeout,
+its break function and `BreakBlock`.
+
+**Arrival is per formation, reported per unit, once.**
+- Pending list +0x60 is filled only when the order is issued (0x73c140 / 0x73bf40): every unit in the all-units list
+  (+0x58) that joins the new coordinator is appended. With the attack flag (Attack_Move), a unit is moved and made
+  pending only when it has neither a TEAM nor a TARGETING slot, or when the attack order 0x38d730(unit, target, …)
+  is accepted; a unit whose attack order is refused stays in the all-units list but is neither moved nor pending.
+- Signal 10 is raised on every member of a formation when the whole formation arrives (0x423760, §33.4 "Arrival").
+  The handler removes the unit from pending; a unit not in pending is ignored.
+- **A unit that re-paths while following the object does not become pending again.** The formation's follow / re-path
+  (0x4192b0 → 0x417520) and its later signal 10 do not touch the status. Only a new order issue adds units to
+  pending: the next zone leg with `useZonePath` (0x73bc50 → 0x73c140 with collect 0 re-adds every listed unit), or a
+  newer order, which creates a new status anyway (0xb on the old one).
+- If no unit could be moved at issue time (every attack order refused, or no coordinator), pending is empty but no
+  signal 10 ever arrives, so the pending-empty test never runs; the block then ends only by the object's 0x10 / 0xb /
+  0x1a, the units leaving, or the TF emptying [H code, M whether it happens in play].
+- On target death the object's 0x10 finishes the block at once, whether or not the units had arrived.
+
+**Port notes**
+- Land movement blocks return nil from Result, always; do not return true on target death or arrival.
+- Keep a pending set filled only at order issue (and zone legs); remove a unit on its formation-arrival event, on
+  0xb / 0x10 / 0x1a of the unit; never re-add it because its formation re-pathed after the target moved.
+- Attack_Move: exclude units whose attack order is refused from the move and from pending.
+- Port status (q6 t19, 2026-11-04): land object blocks return nil and end at once on the target's death; the status
+  keeps an all-units list and a pending list filled only at issue (minus `attack_order_refused()`), a unit leaves
+  pending once when it stops moving and is never re-added (AI save version 12). Space still returns true on the
+  target's death [port, unchanged].
 
 ### 33.3 Superseded statuses
 

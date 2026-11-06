@@ -94,6 +94,7 @@ class ByteWriter;
 class ByteReader;
 }  // namespace alamo
 namespace alamo::objects {
+class EnumConverter;
 class GameObjectTypes;
 }
 namespace alamo::galactic {
@@ -102,6 +103,7 @@ class ContrastTable;
 namespace alamo::lua {
 class ObjectBridge;
 class GlobalValueStore;  // Int-final
+enum class PreventAiResult : uint8_t;  // object_bridge.hpp
 }  // namespace alamo::lua
 
 namespace alamo::ai {
@@ -121,6 +123,11 @@ struct TacticalAiObject {
     bool moving = false;                  // has a movement goal
     int32_t attack_target = -1;           // object id it is attacking (ordered or automatic), -1 none
     bool damage_tracking = false;         // DAMAGE_TRACKING (FindDeadlyEnemy radius form)
+    // q6 t19 - the target test 0x5680b0 (A1_READINGS §33.2.1): a TEAM container or a type with both
+    // Collidable_By_Projectile_Living and Is_Valid_Target; not garrisoned / hidden (+0x3a7), not dead, not carried in a
+    // transport, not in a hero clash (+0x3b4, `hero_clash`), and no SPECIAL_WEAPON unless it is a DUMMY_STAR_BASE.
+    bool valid_target = true;
+    bool hero_clash = false;  // obj +0x3b4 [port: no hero clashes yet, always false; kept so it can be wired]
     // UnitAI data-pack re-projection stamp (+0x20, A1_READINGS §14): UnitAiStamps::reprojection_check drawn by the host
     // when the UNIT_AI object was created (draw_unit_ai_stamps). kNoReprojectionStamp: the host does not carry it, the
     // grid uses its [port] legacy registration + 300.
@@ -290,6 +297,19 @@ public:
     // the tick just run, in the order they were sent. Defaults: never in flight, none (the units exist at the order).
     virtual bool reinforce_in_flight(int32_t /*player*/, int32_t /*key*/) { return false; }
     virtual std::vector<ReinforcementsUnloaded> reinforcements_unloaded() { return {}; }
+    // q6 t19 (A1_READINGS §33.2.2): the object ids the order just executed dropped from its move because their attack
+    // order (path A, kTfAttackMoveIssueAttack) was refused, in the order tried. Such a unit stays in the block's
+    // all-units list but is neither moved nor pending. Default: none (every unit moved).
+    virtual std::vector<int32_t> attack_order_refused() { return {}; }
+    // q6 t19 (SKIRMISH_SETUP §3 / §3.1, AI_GALACTIC_3 §1.11): land tactical builds completed in the tick just run, in
+    // completion order (signal 0x22): the type went to the player's reinforcement pool (no object appears), so the build
+    // task of the first task force (id order) producing that type ends its entry. Default: none (hosts whose builds
+    // spawn objects; those are claimed when they appear).
+    struct ProductionCompleted {
+        int32_t player = -1;
+        int32_t type = -1;  // PerceptionWorld type index
+    };
+    virtual std::vector<ProductionCompleted> production_completed() { return {}; }
 };
 
 // OPT2 t10: frames from a proposal slice to the apply of its PotentialPlan solves (TacticalAiConfig::pp_latency).
@@ -353,6 +373,19 @@ struct TacticalAiDecision {
     std::string text;
 };
 
+// q6 t03: the GameObjectCategoryType name -> mask resolver of a tactical AI world (perception parameters, PotentialPlan
+// team specs and RequiredCategories): the loaded types' converter (Data\XML\Enum\GameObjectCategoryType.xml, which mods
+// such as Thrawn's Revenge redefine; the objects' CategoryMask bits come from the same converter); no types -> the
+// objects module's built-in vanilla table. 0 for an unknown name.
+std::function<uint64_t(std::string_view)> tactical_category_resolver(const objects::GameObjectTypes* types);
+// q6 t03: the space-layer categories of the PotentialPlan records (rec+0x90 space / +0x91 ground) over the loaded
+// converter [port: the specs leave the rule open]: every single-bit entry below INFANTRY's value except TRANSPORT
+// (the converter's ship-class block: FIGHTER..SUPER in vanilla, FIGHTER..SUPERCAPITAL with GUNSHIP in Thrawn's
+// Revenge), plus SPACEHERO. Vanilla gives the stock set (Fighter|Bomber|Corvette|Frigate|Capital|Super|SpaceHero).
+// 0 (= the stock names through TacticalPpInput::category_mask) without types, an invalid converter or no INFANTRY.
+uint64_t tactical_space_categories(const objects::GameObjectTypes* types);
+uint64_t tactical_space_categories(const objects::EnumConverter& categories);
+
 class TacticalAiWorld {
 public:
     TacticalAiWorld(objects::ObjectStore& store, const objects::GameObjectTypes* types, const FileProvider* files,
@@ -396,6 +429,14 @@ public:
     // PerceptionWorld object_fogged / point_fogged callbacks the host fills (absent = never fogged).
     void refog(int32_t player, float x, float y);
 
+    // q6 (OBJECT_SCRIPTS §10.1): Lua Prevent_AI_Usage on object `id` owned by `owner`, no object flag. true: out of the
+    // owner's free store (nothing when it is not there, e.g. in a task force); false: the normal admission (AI_TACTICAL
+    // §5.1, the TF-release path: no On_Unit_Added). Not sticky: a later admission path puts the object back. [port] the
+    // original admits an object at its creation, before its script runs; an object this world has not perceived yet is
+    // therefore skipped once by its first admission instead. NoAiPlayer: the owner has no tactical AI here (a human, a
+    // neutral player); NotInitialised: its AI has not had its first service.
+    lua::PreventAiResult prevent_ai_usage(int32_t id, int32_t owner, bool on);
+
     // ---- inspection ----
     bool is_ai_player(int32_t player) const;
     int32_t opponent(int32_t player) const;
@@ -417,6 +458,14 @@ public:
     // Threat-grid point danger for `player` at (x, y) (0x653ff0; REMAINING_GAPS §4.2 movement threat mode). Const;
     // safe between AI ticks (the battle's movement planning).
     float point_danger(int32_t player, float x, float y) const;
+    // q6 land end (diagnostics only, never hashed): the value of perception equation `equation` for AI player `player`
+    // with Variable_Target = that player's live unit target of object `target_object` (-1: no target), on the last
+    // update's PerceptionWorld. The leaf cache is read, never written (LeafCacheReadOnly); no RNG (an equation that
+    // reaches a Script_ evaluator fails). False when the equation is unknown or fails, or the target has no live slot.
+    bool diagnostic_value(int32_t player, std::string_view equation, int32_t target_object, double& out) const;
+    // q6 land end (diagnostics only): who holds `player`'s mobile units - the free store (reserved ones counted), each
+    // running plan's task forces (plan name, target, units), and the mobile units held by neither (by type).
+    std::string diagnostic_holdings(int32_t player) const;
 
     void hash(StateHasher& h) const;
     void register_crc(CrcRegistry& registry, const std::string& name = "ai.tactical") const;

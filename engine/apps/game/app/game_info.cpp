@@ -207,7 +207,9 @@ ui::DataChartInfo Holocron::chart(const galactic::GalacticSim& g, const GameData
         const uint32_t f = g.players()[static_cast<size_t>(p)].faction;
         std::u32string name = u32("Player " + std::to_string(p));
         if (f < d.rules.factions.size()) {
-            const std::u16string* t = text.find("TEXT_FACTION_" + d.rules.factions[f].name);
+            std::string key = "TEXT_FACTION_" + d.rules.factions[f].name;  // the lookup is case-sensitive (GALACTIC_DIALOGS §2.7)
+            for (char& ch : key) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            const std::u16string* t = text.find(key);
             name = t ? ui::utf16_to_utf32(*t) : u32(d.rules.factions[f].name);
         }
         const ui::Rgba8 col = kColors[k % std::size(kColors)];
@@ -314,17 +316,24 @@ ui::SummaryInfo Holocron::summary(const galactic::GalacticSim& g, const GameData
 }
 
 // ---- story ------------------------------------------------------------------------------------------------------
-// The story dialog script chapter (story_script.hpp) as dialog lines: text ids resolved, TEXTCOLOR colours, WAIT times,
-// SFX / DIALOG cues, IMAGE; `extra` (the event's Lua dialog lines) at EXTRA_TEXT [port: appended when there is none].
-// False when the file or the chapter is missing.
-bool story_dialog_chapter(const GameData& d, const ui::TextDatabase& text, std::string_view dialog, int32_t chapter,
-                          const std::vector<std::u32string>& extra, ui::StoryDialogInfo& out, StoryMovie* movie) {
-    std::vector<uint8_t> bytes;
-    if (!d.files || !d.files->read("Data\\Scripts\\Story\\" + std::string(dialog) + ".txt", bytes)) return false;
+namespace {
+// A text id through the text system's add-if-missing lookup (0x1fa460, GALACTIC_DIALOGS §2.7): a missing id shows as itself.
+std::u32string lookup(const ui::TextDatabase& text, std::string_view id) { return ui::utf16_to_utf32(text.text(id)); }
+// The TEXT command's text: looked up, then printed with Story_Var as the argument when it is set (0x1089e0).
+std::u32string text_line(const ui::TextDatabase& text, std::string_view id, std::string_view var) {
+    std::u32string t = lookup(text, id);
+    return var.empty() ? t : story_var_printf(t, u32(var));
+}
+}  // namespace
+
+// The story dialog script chapter (story_script.hpp, from the loaded scripts) as dialog lines: TEXT looked up (Story_Var
+// printf), TEXTCOLOR colours, WAIT times, SFX / DIALOG cues, IMAGE; `extra` (the event's Add_Dialog_Text lines, already
+// formatted) as they are at EXTRA_TEXT, nowhere else. False when the script is not loaded or the chapter is missing.
+bool story_dialog_chapter(const StoryDialogCache& cache, const ui::TextDatabase& text, std::string_view dialog, int32_t chapter,
+                          std::string_view var, const std::vector<std::string>& extra, ui::StoryDialogInfo& out, StoryMovie* movie) {
     StoryScript sc;
-    if (!parse_story_script(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), chapter, sc)) return false;
-    if (!sc.title.empty()) out.title = text_or(text, sc.title);
-    bool extra_done = false;
+    if (!cache.chapter(dialog, chapter, sc)) return false;
+    if (!sc.title.empty()) out.title = lookup(text, sc.title);
     auto push = [&out](std::u32string l, const uint8_t* rgba, double at) {
         out.lines.push_back(std::move(l));
         out.line_colors.push_back(ui::Rgba8{rgba[0], rgba[1], rgba[2], rgba[3]});
@@ -332,16 +341,10 @@ bool story_dialog_chapter(const GameData& d, const ui::TextDatabase& text, std::
     };
     for (const StoryScriptLine& l : sc.lines) {
         if (l.kind == StoryScriptLine::Kind::Extra) {
-            for (const std::u32string& e : extra) push(e, l.rgba, l.at);
-            extra_done = true;
+            for (const std::string& e : extra) push(u32(e), l.rgba, l.at);
         } else {
-            push(l.kind == StoryScriptLine::Kind::Text ? text_or(text, l.text_id) : std::u32string(), l.rgba, l.at);
+            push(l.kind == StoryScriptLine::Kind::Text ? text_line(text, l.text_id, var) : std::u32string(), l.rgba, l.at);
         }
-    }
-    if (!extra_done) {
-        const uint8_t none[4] = {0, 0, 0, 0};
-        const double at = sc.lines.empty() ? 0.0 : sc.lines.back().at;
-        for (const std::u32string& e : extra) push(e, none, at);
     }
     for (const StoryScriptCue& c : sc.cues)
         out.cues.push_back({c.at, c.kind == StoryScriptCue::Kind::Speech ? ui::StoryDialogCue::Kind::Speech : ui::StoryDialogCue::Kind::Sfx, c.event});
@@ -350,52 +353,75 @@ bool story_dialog_chapter(const GameData& d, const ui::TextDatabase& text, std::
     return true;
 }
 
-std::vector<ui::StoryDialogInfo> new_story_dialogs(const GameSession& s, const GameData& d, const ui::TextDatabase& text, size_t& cursor,
+void sync_story_scripts(const GameSession& s, const GameData& d, StoryDialogCache& cache, StoryScriptLoads& loads) {
+#ifdef ALAMO_SIM_HAVE_STORY
+    const sim::StorySession* story = s.host().story();
+    if (!story || !d.files) return;
+    auto drain = [&](const lua::StoryModel& m, size_t& cursor) {
+        const std::vector<std::string>& names = m.dialog_loads();
+        for (; cursor < names.size(); ++cursor) cache.load(*d.files, names[cursor]);
+    };
+    loads.cursor.resize(story->plot_set_count(), 0);
+    for (size_t set = 0; set < story->plot_set_count(); ++set) drain(story->model(set), loads.cursor[set]);
+    const lua::StoryModel* tac = story->tactical_model();
+    if (tac != loads.tactical) {
+        loads.tactical = tac;
+        loads.tactical_cursor = 0;
+    }
+    if (tac) drain(*tac, loads.tactical_cursor);
+#else
+    (void)s;
+    (void)d;
+    (void)cache;
+    (void)loads;
+#endif
+}
+
+std::vector<ui::StoryDialogInfo> new_story_dialogs(const GameSession& s, const StoryDialogCache& cache, const ui::TextDatabase& text, size_t& cursor,
                                                    std::vector<StoryMovie>* movies, std::vector<StoryDialogMeta>* meta) {
     std::vector<ui::StoryDialogInfo> out;
 #ifdef ALAMO_SIM_HAVE_STORY
     const sim::StorySession* story = s.host().story();
-    if (!story) return out;
-    size_t seen = 0;  // dialog entries of the local plot sets, set order then firing order
-    for (size_t set = 0; set < story->plot_set_count(); ++set) {
-        if (story->plot_set_player(set) != s.local_player()) continue;
-        const lua::StoryModel& m = story->model(set);
-        for (const lua::StoryDialogEntry& e : m.dialog_log()) {
-            if (seen++ < cursor) continue;
-            ui::StoryDialogInfo i;
-            i.tag = e.tag;
-            // The dialog script's chapter with the Lua dialog lines (Add_Dialog_Text) at EXTRA_TEXT, else the Lua lines,
-            // else the dialog name.
-            const lua::StoryEventDef* def = e.plot < m.plot_count() && e.event < m.plot(e.plot).events.size() ? &m.plot(e.plot).events[e.event] : nullptr;
-            std::vector<std::u32string> extra;
-            if (def)
-                for (const std::string& l : def->dialog) extra.push_back(text_or(text, l));
-            StoryMovie movie;
-            if (e.dialog.empty() || !story_dialog_chapter(d, text, e.dialog, e.chapter, extra, i, &movie)) {
-                i.lines = std::move(extra);
-                if (i.lines.empty() && !e.dialog.empty()) i.lines.push_back(text_or(text, e.dialog));
-            }
-            if (!movie.name.empty() && movies) movies->push_back(movie);
-            if (i.title.empty() && e.chapter >= 0) i.title = U"Chapter " + number(e.chapter);
-            i.accept = true;
-            i.close = true;
-            if (meta) {
-                StoryDialogMeta md;
-                md.popup = e.popup;
-                const std::string& pn = e.plot < m.plot_count() ? m.plot(e.plot).name : std::string();
-                md.random_plot = pn.size() >= 11 && std::equal(pn.begin(), pn.begin() + 11, "random_plot",
-                                                               [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == b; });
-                md.dialog = e.dialog;
-                md.chapter = e.chapter;
-                meta->push_back(std::move(md));
-            }
-            out.push_back(std::move(i));
+    const lua::StoryHolocron* holo = story ? story->holocron() : nullptr;
+    if (!holo) return out;
+    // Fire step 6 records of EVERY plot set in firing order (the holocron list is global, GALACTIC_DIALOGS §2.8).
+    const std::vector<lua::StoryDialogEntry>& log = holo->log();
+    for (; cursor < log.size(); ++cursor) {
+        const lua::StoryDialogEntry& e = log[cursor];
+        const size_t at = holo->index_of(e.holocron_id);
+        const lua::StoryHolocronEntry* rec = at < holo->size() ? &holo->entries()[at] : nullptr;
+        static const std::vector<std::string> kNone;
+        const std::vector<std::string>& extra = rec ? holo->lines(*rec) : kNone;
+        ui::StoryDialogInfo i;
+        i.tag = e.tag;
+        StoryMovie movie;
+        if (!story_dialog_chapter(cache, text, e.dialog, e.chapter, rec ? std::string_view(rec->var) : std::string_view(), extra, i, &movie)) {
+            // [port] no loaded chapter (the original shows nothing): the Lua lines, else the dialog name.
+            for (const std::string& l : extra) i.lines.push_back(u32(l));
+            if (i.lines.empty()) i.lines.push_back(u32(e.dialog));
         }
+        if (!movie.name.empty() && movies) movies->push_back(movie);
+        if (i.title.empty() && e.chapter >= 0) i.title = U"Chapter " + number(e.chapter);
+        i.accept = true;
+        i.close = true;
+        if (meta) {
+            StoryDialogMeta md;
+            md.popup = e.popup;
+            md.sfx = e.sfx;
+            const std::string& pn = e.plot_name;
+            md.random_plot = pn.size() >= 11 && std::equal(pn.begin(), pn.begin() + 11, "random_plot",
+                                                           [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == b; });
+            md.dialog = e.dialog;
+            md.tag = e.tag;
+            md.chapter = e.chapter;
+            md.holocron_id = e.holocron_id;
+            meta->push_back(std::move(md));
+        }
+        out.push_back(std::move(i));
     }
-    cursor = seen;
 #else
     (void)s;
-    (void)d;
+    (void)cache;
     (void)text;
     (void)cursor;
     (void)movies;
@@ -404,24 +430,56 @@ std::vector<ui::StoryDialogInfo> new_story_dialogs(const GameSession& s, const G
     return out;
 }
 
-ui::StorySummaryInfo story_summary(const GameSession& s, const ui::TextDatabase& text, bool completed) {
-    ui::StorySummaryInfo out;
-    out.completed = completed;  // (Abandon: permanently disabled, P4_SIM_SYSTEMS §9.1)
+HolocronSummaryView holocron_summary(const GameSession& s, const StoryDialogCache& cache, const ui::TextDatabase& text, bool completed,
+                                     uint64_t selected_id) {
+    HolocronSummaryView v;
+    v.info.completed = completed;  // (Abandon: permanently disabled, P4_SIM_SYSTEMS §9.1)
+    v.info.has_completed = false;
 #ifdef ALAMO_SIM_HAVE_STORY
-    if (const sim::StorySession* story = s.host().story())
-        for (size_t set = 0; set < story->plot_set_count(); ++set) {
-            if (story->plot_set_player(set) != s.local_player()) continue;
-            const lua::StoryModel& m = story->model(set);
-            for (const lua::StoryObjective& o : m.objectives())
-                if ((o.state == lua::StoryObjectiveState::Active) != completed) out.goals.push_back(text_or(text, o.text));
-            for (const lua::StoryDialogEntry& e : m.dialog_log())
-                if (!e.dialog.empty()) out.recap.push_back(text_or(text, e.dialog));
-        }
+    const sim::StorySession* story = s.host().story();
+    const lua::StoryHolocron* holo = story ? story->holocron() : nullptr;
+    if (!holo) return v;
+    std::vector<HolocronRecord> records;
+    records.reserve(holo->size());
+    for (const lua::StoryHolocronEntry& e : holo->entries()) {
+        HolocronRecord r;
+        r.id = e.id;
+        r.dialog = e.dialog;
+        r.var = e.var;
+        r.tag = e.tag;
+        r.chapter = e.chapter;
+        r.completed = e.completed;
+        r.read = e.read;
+        r.lines = holo->lines(e);
+        records.push_back(std::move(r));
+    }
+    const HolocronSummaryFill f = fill_holocron_summary(cache, records, completed, selected_id);
+    v.info.has_completed = f.has_completed;
+    for (const HolocronRow& row : f.rows) {
+        const HolocronRecord& r = records[row.record];
+        // [port] a chapter without TEXT (or a script that did not load) has no label in the original: its tag stands in.
+        v.info.goals.push_back(row.text_id.empty() ? u32(r.tag) : lookup(text, row.text_id));
+        v.info.goal_colors.push_back(ui::Rgba8{row.rgba[0], row.rgba[1], row.rgba[2], row.rgba[3]});
+        v.row_ids.push_back(r.id);
+    }
+    v.info.selected = f.selected;
+    if (f.selected < 0) return v;
+    const size_t rec = f.rows[static_cast<size_t>(f.selected)].record;
+    v.selected_index = rec;
+    if (!f.title_id.empty()) v.info.title = lookup(text, f.title_id);
+    for (const HolocronRecapLine& l : f.recap) {
+        v.info.recap.push_back(l.kind == StoryScriptLine::Kind::Text    ? text_line(text, l.text, records[rec].var)
+                               : l.kind == StoryScriptLine::Kind::Extra ? u32(l.text)
+                                                                        : std::u32string());
+        v.info.recap_colors.push_back(ui::Rgba8{l.rgba[0], l.rgba[1], l.rgba[2], l.rgba[3]});
+    }
 #else
     (void)s;
+    (void)cache;
     (void)text;
+    (void)selected_id;
 #endif
-    return out;
+    return v;
 }
 
 // ---- campaign end -----------------------------------------------------------------------------------------------

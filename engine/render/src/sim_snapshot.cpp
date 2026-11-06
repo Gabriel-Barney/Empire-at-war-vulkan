@@ -582,6 +582,10 @@ void apply_contained(SimSnapshot& snap, const std::function<bool(const SnapshotO
     }
 }
 
+void apply_script_hidden(SimSnapshot& snap, const std::function<bool(const SnapshotObject&)>& hidden) {
+    for (SnapshotObject& o : snap.objects) o.script_hidden = hidden && hidden(o);
+}
+
 void set_snapshot_muzzles(SimSnapshot& snap, std::span<const SnapshotMuzzle> muzzles) {
     snap.muzzles.clear();
     for (const SnapshotMuzzle& m : muzzles)

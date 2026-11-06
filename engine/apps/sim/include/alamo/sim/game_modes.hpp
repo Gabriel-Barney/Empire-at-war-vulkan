@@ -67,6 +67,8 @@ inline constexpr uint32_t kCatUnit = 0x1;       // has a locomotor
 inline constexpr uint32_t kCatStructure = 0x2;  // selectable, no locomotor
 inline constexpr uint32_t kCatProp = 0x4;       // everything else (props, markers, asteroids)
 
+class GameMode;
+
 // What a mode tick may use from the host. Trace (optional) receives step names for tests.
 struct ModeTickContext {
     uint64_t global_frame = 0;
@@ -74,6 +76,13 @@ struct ModeTickContext {
     const ParallelFor* pf = nullptr;
     uint32_t players = 8;
     std::vector<std::string>* trace = nullptr;
+    // q6 t09: the scoring-manager service (GAME_SCORING.md §2), run by GameModeManager::update at its "gmm.scoring"
+    // step, before the mode tick. Empty = nothing (the host has no GameScoring script).
+    std::function<void()> scoring;
+    // q6: the game-object script service (object_scripts.hpp), right after the mode's primary store update (common tick
+    // step 8; galactic: after GalacticSim::update), not while the mode is paused. Trace step "common.object_scripts"
+    // only while set. Empty = nothing (SimConfig::object_scripts off).
+    std::function<void(GameMode&)> object_scripts;
     double sim_time() const { return static_cast<double>(global_frame) / static_cast<double>(30); }
 };
 
@@ -339,7 +348,7 @@ public:
     TacticalMode* top_tactical();
     const TacticalMode* top_tactical() const;
 
-    // GameModeManager::Update: scoring service [stub], then ONLY the top mode's tick.
+    // GameModeManager::Update: scoring service (ctx.scoring), then ONLY the top mode's tick.
     void update(const ModeTickContext& ctx);
     // Post_Tick: top mode frame += 1 unless paused.
     void post_tick();

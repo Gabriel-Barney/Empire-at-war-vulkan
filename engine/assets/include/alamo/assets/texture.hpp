@@ -7,7 +7,11 @@
 // cubemaps (6 faces; partial cubemaps are rejected). Volume textures are rejected.
 // Supported TGA: types 2/10 (true colour 15/16/24/32-bit, RLE or not) -> BGRA8, types 3/11
 // (8-bit grey) -> R8 + luminance swizzle; bottom-up/right-to-left origins are flipped to top-left.
-// Mips: a TGA, and an uncompressed DDS that carries a single level, get a full chain built by
+// Supported BMP: BITMAPCOREHEADER and BITMAPINFOHEADER..V5, uncompressed 16/24/32-bit BI_RGB and
+// 16/32-bit BI_BITFIELDS / BI_ALPHABITFIELDS, bottom-up or top-down -> BGRA8. A 32-bit BI_RGB file
+// keeps its fourth byte as alpha unless that byte is 0 everywhere (then opaque). Palettized and
+// RLE BMPs are rejected.
+// Mips: a TGA or BMP, and an uncompressed DDS that carries a single level, get a full chain built by
 // generate_mips() (the original D3D9 path left this to D3DX / driver auto-gen; see there).
 // Block-compressed DDS files keep exactly the levels they ship.
 // 32-bit TGA is always A8R8G8B8 (alpha kept even when the descriptor declares 0 alpha bits, as
@@ -93,7 +97,12 @@ struct TextureAsset {
 // Decoders take ownership of the file bytes (DDS data in a native format is kept in place, no copy).
 bool decode_dds(std::vector<std::uint8_t> file, TextureAsset& out, std::string* error = nullptr);
 bool decode_tga(std::vector<std::uint8_t> file, TextureAsset& out, std::string* error = nullptr);
-// DDS if the file starts with "DDS ", else TGA.
+bool decode_bmp(std::vector<std::uint8_t> file, TextureAsset& out, std::string* error = nullptr);
+// The format comes from the file's content, never its extension (the original loads image files by
+// content: Thrawn's Revenge ships a BMP named MT_Commandbar.tga): "DDS " -> DDS, "BM" -> BMP, else
+// TGA (which has no magic; a TGA's second byte, the colour-map type, is 0 or 1, never 'M').
+enum class TextureFileKind : std::uint8_t { Dds, Bmp, Tga };
+TextureFileKind sniff_texture_file(std::span<const std::uint8_t> bytes);
 bool decode_texture(std::vector<std::uint8_t> file, TextureAsset& out, std::string* error = nullptr);
 
 // Box-filter mip chain for an uncompressed texture (RGBA8 / BGRA8 / R8 / R8G8) that has exactly

@@ -178,6 +178,10 @@ public:
     const sim::CampaignBattles* battles() const { return battles_.get(); }
     const sim::TacticalBattle* battle() const { return battles_ ? battles_->battle() : nullptr; }
     bool in_battle() const { return battle() != nullptr && host_->modes().top_tactical() != nullptr; }
+    // q6 t19 (OBJECT_SCRIPTS §10.3): Lua Hide(true) on an object of the running battle (CampaignBattles::script_hidden).
+    // Presentation only: the model, its particles, surface FX and fog ghost, the object's sounds, its radar blip and the
+    // mouse pick skip it; nothing here feeds the sim.
+    bool script_hidden(objects::ObjectId id) const { return battles_ && battles_->script_hidden(id); }
     int32_t local_player() const { return local_player_; }
     // Does the battle view draw the local player's FOW grid and the HideWhenFogged marks? Not in the attract demo: the
     // original films it with the in-game cinematic camera, and every cinematic shot start (0x49b1a0) clears the FOW render
@@ -268,6 +272,8 @@ public:
     bool galactic_ai_running() const;
     bool story_running() const { return host_ && host_->story() != nullptr; }
     uint64_t galactic_ai_orders() const;
+    // q6 t08: per player the galactic AI type the session gave it ("" = none; empty before start / without the galactic AI).
+    const std::vector<std::string>& ai_types() const { return ai_types_; }
 #ifdef ALAMO_SIM_HAVE_ANIM
     const sim::SimAnimation* animation() const { return anim_.get(); }
 #endif

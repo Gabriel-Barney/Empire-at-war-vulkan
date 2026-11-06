@@ -391,6 +391,7 @@ public:
     std::vector<ui::HeroEntry> galactic_heroes_;
     size_t gui_calls_seen_ = 0, gui_log_events_ = 0;
     uint64_t gui_calls_applied_ = 0, reticle_orders_ = 0, reticle_frames_ = 0;
+    uint64_t buy_bar_behind_camera_ = 0;  // q6: frames the selected builder's buy bar was hidden (builder behind the camera)
     bool hud_hit_debug_ = false;
     // ALAMO_HUD_HIT_DEBUG=x,y: probe that fixed pixel instead of the cursor (smoke runs) and list the visible shells.
     int32_t hud_hit_px_ = -1, hud_hit_py_ = -1;
@@ -443,6 +444,7 @@ public:
     BattleTally tally_;
     bool campaign_over_ = false;
     galactic::VictoryRules victory_rules_;  // Int-verify: the campaign's victory conditions (start_session)
+    galactic::EliminationLatch elimination_latch_;  // q6 [port]: no elimination before the player has owned something
     bool choice_open_ = false;
     // GALACTIC_DIALOGS §1 battle prompt: the banner (pending_battle_shell / story_pending_battle_shell) fed through
     // GalacticHudFrame::battle while choice_open_; its clicks are HudAction BattleBegin / BattleAutoResolve.
@@ -460,15 +462,19 @@ public:
     PlanetIndex auto_planet_ = kInvalidPlanet;
     size_t ar_log_seen_ = 0;
     bool battle_end_auto_ = false;    // the open battle-end screen follows an auto-resolve
-    // §2 mission holocron: the chapters of Story_Dialog events (TITLE + body lines), newest last; the b_story_arc_g flash.
+    // §2 mission holocron. The list itself is sim state (sim::StorySession::holocron, GALACTIC_DIALOGS §2.8); here the
+    // presented adds (Story_Dialog events, oldest first; presentation log only), the loaded story dialog scripts and the
+    // summary's selection (a record id, 0 = the first row) and rows (record ids); the b_story_arc_g flash.
     struct HolocronChapter {
-        std::u32string title;
-        std::vector<std::u32string> lines;
-        std::vector<ui::Rgba8> colors;
-        std::string dialog;
+        std::string dialog, tag;
         int32_t chapter = -1;
+        uint64_t id = 0;
     };
     std::vector<HolocronChapter> holocron_chapters_;
+    StoryDialogCache story_scripts_;
+    StoryScriptLoads story_loads_;
+    uint64_t summary_entry_ = 0;
+    std::vector<uint64_t> summary_rows_;
     bool holocron_flash_ = false;     // b_story_arc_g flashes until the summary is opened
     bool story_summary_open_ = false; // IDD_STORY_SUMMARY_DIALOG open: ticks held (the summary's galactic pause, §2.2)
     // Screen-text lines (§2.1 transmission line, white; §3.1 auto-resolve result, red) [port: printed and kept until a ui
@@ -486,9 +492,8 @@ public:
     void open_linked_banner(const galactic::GalacticSim& g, const sim::CampaignBattles::LinkedRecord& r);  // story t13
     std::string representative_icon(std::span<const objects::ObjectHandle> units, bool hero_filter = false) const;
     void answer_battle_prompt(bool auto_resolve);
-    int32_t summary_chapter_ = -1;  // the story summary's selected chapter (-1 = the newest)
     void auto_resolve_result(const galactic::GalacticSim& g, const galactic::ConflictLogEntry& e);
-    void add_holocron_chapter(const ui::StoryDialogInfo& info, const StoryDialogMeta& meta);
+    void add_holocron_chapter(const StoryDialogMeta& meta, size_t lines);
     void screen_line(std::u32string text, ui::Rgba8 color);
     std::u32string txt(std::string_view id, std::u32string_view fallback) const;
     std::u32string faction_label(int32_t player) const;

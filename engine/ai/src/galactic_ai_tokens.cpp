@@ -4,10 +4,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
+#include "alamo/ai/ai_budget.hpp"
 #include "alamo/ai/ai_free_store_path.hpp"
 #include "alamo/ai/ai_types.hpp"
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/galactic/conflicts.hpp"
 #include "alamo/galactic/economy.hpp"  // build_time_t0 (0x371230)
 #include "alamo/galactic/fleet_path.hpp"
 #include "alamo/objects/enums.hpp"
@@ -18,10 +22,10 @@ namespace alamo::ai {
 namespace gal = alamo::galactic;
 using objects::ObjectHandle;
 
-uint64_t galactic_ai_structure_mask(std::span<const GalacticAiTypeInfo> types, uint32_t type) {
-    static const uint64_t capital = ai_category_bit("Capital");
+uint64_t galactic_ai_structure_mask(std::span<const GalacticAiTypeInfo> types, uint32_t type,
+                                   const objects::EnumConverter* categories) {
     const uint64_t m = type < types.size() ? types[type].garrison_mask : 0u;
-    return m != 0 ? m : capital;
+    return m != 0 ? m : ai_category_bit("Capital", categories);
 }
 
 bool GalacticAiTypeInfo::has_category(std::string_view c) const {
@@ -30,16 +34,18 @@ bool GalacticAiTypeInfo::has_category(std::string_view c) const {
     return false;
 }
 
-uint64_t ai_category_bit(std::string_view name) {
+uint64_t ai_category_bit(std::string_view name, const objects::EnumConverter* categories) {
     static const objects::EnumRegistry reg;
-    const auto v = reg.get(objects::EnumId::GameObjectCategory).lookup(name);
+    const objects::EnumConverter& c =
+        categories && categories->valid ? *categories : reg.get(objects::EnumId::GameObjectCategory);
+    const auto v = c.lookup(name);
     return v ? static_cast<uint64_t>(*v) : 0u;
 }
 
-void fill_category_masks(std::vector<GalacticAiTypeInfo>& types) {
+void fill_category_masks(std::vector<GalacticAiTypeInfo>& types, const objects::EnumConverter* categories) {
     for (GalacticAiTypeInfo& t : types) {
         uint64_t m = 0;
-        for (const std::string& c : t.categories) m |= ai_category_bit(c);
+        for (const std::string& c : t.categories) m |= ai_category_bit(c, categories);
         t.category_mask = m;
     }
 }
@@ -70,7 +76,7 @@ double galactic_ai_member_force(const gal::GalacticSim& sim, std::span<const Gal
 }
 
 double galactic_ai_planet_force(const gal::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types, PlanetIndex planet,
-                                int32_t self, bool enemy, bool space, uint64_t mask) {
+                                int32_t self, bool enemy, bool space, uint64_t mask, const objects::EnumConverter* categories) {
     const auto planets = sim.planets();
     const auto players = sim.players();
     const gal::GalacticRules& rules = sim.rules();
@@ -111,15 +117,16 @@ double galactic_ai_planet_force(const gal::GalacticSim& sim, std::span<const Gal
                 sum += galactic_ai_member_force(sim, types, static_cast<uint32_t>(st.type(ps.starbase)), st.owner(ps.starbase), mask);
             // Then the own power of the ground structures D +0x158 whose type byte +0x1E (Is_Special_Weapon_In_Space) is
             // set, then of every orbital structure D +0x170 (no +0x1E test), each when `mask` meets the type's structure
-            // mask +0x1658 (Capital when 0). The port keeps both families in `structures`: DUMMY_ORBITAL_STRUCTURE (0x60)
-            // types are the orbital ones. Vanilla: none of these types has AI_Combat_Power, so this adds 0.
+            // mask +0x1658 (Capital when 0, Capital from `categories`). The port keeps both families in `structures`:
+            // DUMMY_ORBITAL_STRUCTURE (0x60) types are the orbital ones. Vanilla: none of these types has AI_Combat_Power,
+            // so this adds 0.
             for (const bool orbital : {false, true})
                 for (const ObjectHandle s : ps.structures) {
                     if (!st.alive(s)) continue;
                     const uint32_t t = static_cast<uint32_t>(st.type(s));
                     if (t >= rules.types.size() || gal::is_orbital_structure_type(rules.types[t]) != orbital) continue;
                     if (!orbital && !(t < types.size() && types[t].special_weapon_space)) continue;
-                    if ((mask & galactic_ai_structure_mask(types, t)) != 0) sum += power(t);
+                    if ((mask & galactic_ai_structure_mask(types, t, categories)) != 0) sum += power(t);
                 }
         }
     } else {  // 0x6d95d0
@@ -141,36 +148,104 @@ double galactic_ai_planet_force(const gal::GalacticSim& sim, std::span<const Gal
 }
 
 double galactic_ai_enemy_strength(const gal::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types, PlanetIndex planet,
-                                  int32_t self, bool space, uint64_t mask) {
-    double s = galactic_ai_planet_force(sim, types, planet, self, true, space, mask);
+                                  int32_t self, bool space, uint64_t mask, const objects::EnumConverter* categories,
+                                  const GalacticSimTokenResolver* leaves) {
+    // AI_GALACTIC_TOKENS §9.2 [H]. Effective mask = the given mask, or all bits for 0 (the leaf binds no Parameter_Category).
+    const uint64_t m = mask != 0 ? mask : kAllCategories;
+    // 2. The perception leaf Target.EnemyForce.<layer>TotalUnnormalized (members only; a failing leaf counts 0.0). Through
+    // the AI's leaf cache when given (§9.6 / §9.9: the entry an equation or an earlier contrast stored, up to 15 s old).
+    double s = 0.0;
+    if (leaves) {
+        if (!leaves->enemy_force(self, planet, space, mask, s)) s = 0.0;
+    } else {
+        s = galactic_ai_planet_force(sim, types, planet, self, true, space, m, categories);
+    }
     if (static_cast<size_t>(planet) >= sim.planets().size()) return s;
     const gal::PlanetState& ps = sim.planets()[static_cast<size_t>(planet)];
+    // 3. Ownership gate 0x4ad9f0 (PHASE2_ANSWERS §7): held by the AI or an ally (owner set, relation Self / Ally, control
+    // > 0) -> nothing more. Every other owner passes, pirates, the neutral player and an unowned planet included.
+    if (ps.owner >= 0 && sim.allied(self, ps.owner) && ps.control > 0.0f) return s;
     const objects::ObjectStore& st = sim.store();
     const auto& gt = sim.rules().types;
-    // A typed row (the PotentialPlan Contrast rows) adds a structure only when its type's CategoryMask (+0x1648) meets the
-    // row's mask (A2F_RE_READS §3.1, a2i t03 D1 in A2I_T03_TRAJECTORY §3.3) [H]; the untyped row (kAllCategories) adds
-    // every one, as before [port: a type without a CategoryMask counts there].
-    auto power = [&](ObjectHandle h) {
-        const uint32_t t = static_cast<uint32_t>(st.type(h));
-        if (t >= gt.size()) return 0.0;
-        if (mask != kAllCategories && (t >= types.size() || (types[t].category_mask & mask) == 0)) return 0.0;
-        return static_cast<double>(gt[t].ai_combat_power);
-    };
-    // [port] "not held by the AI or an ally" (0x4ad9f0) is read as the leaf's Enemy owner filter (hostile to Self).
-    if (ps.owner < 0 || !sim.is_hostile(self, ps.owner)) return s;
+    auto power = [&](uint32_t t) { return t < gt.size() ? static_cast<double>(gt[t].ai_combat_power) : 0.0; };
+    auto matches = [&](uint32_t t) { return t < types.size() && (types[t].category_mask & m) != 0; };
     if (space) {
-        if (ps.starbase && st.alive(ps.starbase)) s += power(ps.starbase);  // the starbase type's AI_Combat_Power [H]
+        // 5. The starbase TYPE (D+0xB8 -> +0x140, 0x3f8b40) when its category mask +0x1648 meets the mask: + its own power.
+        const uint32_t t = sim.starbase_type(planet);
+        if (t != gal::kNoIndex && matches(t)) s += power(t);
     } else {
-        // Σ AI_Combat_Power of the ground structures D +0x158 (orbital ones are not in that list) [H]; garrison types
-        // 0x4b8000 [port: none].
+        // 6. Every ground structure (D+0x158, list order; the port's orbital structures are not in that list) whose type
+        // meets the mask: + its own power. Then 0x4b8000(D, mask): the persisted tactical built objects (planet data +0x10,
+        // §9.4) in list order, the float AI_Combat_Power of each record whose type's category mask +0x1648 meets the mask
+        // (no owner or alive test: the records are types), summed in float and added widened.
         for (const ObjectHandle u : ps.structures) {
             if (!st.alive(u)) continue;
-            const uint32_t t = static_cast<uint32_t>(st.type(u));
+            const auto t = static_cast<uint32_t>(st.type(u));
             if (t < gt.size() && gal::is_orbital_structure_type(gt[t])) continue;
-            s += power(u);
+            if (matches(t)) s += power(t);
         }
+        float persisted = 0.0f;
+        for (const gal::PersistedBuiltObject& r : ps.built_objects)
+            if (r.type < gt.size() && matches(r.type)) persisted += gt[r.type].ai_combat_power;
+        s += static_cast<double>(persisted);
     }
     return s;
+}
+
+std::vector<GalacticContrastEntry> galactic_ai_contrast_list(const gal::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
+                                                             PlanetIndex planet, int32_t self, std::span<const uint64_t> row_masks,
+                                                             double scale, const objects::EnumConverter* categories,
+                                                             const GalacticSimTokenResolver* leaves) {
+    // 0x5f1990 (AI_GALACTIC_TOKENS §9.2 layer order) [H]: ground total (flag 1), space total (flag 0), the typed ground rows,
+    // the typed space rows; a layer's typed rows are 0 when its total is <= 0; the totals are not scaled.
+    std::vector<GalacticContrastEntry> out;
+    out.reserve(2 + 2 * row_masks.size());
+    const double ground = galactic_ai_enemy_strength(sim, types, planet, self, false, 0, categories, leaves);
+    const double space = galactic_ai_enemy_strength(sim, types, planet, self, true, 0, categories, leaves);
+    out.push_back({-1, false, ground});
+    out.push_back({-1, true, space});
+    for (const bool sp : {false, true}) {
+        const double total = sp ? space : ground;
+        for (size_t j = 0; j < row_masks.size(); ++j) {
+            const double v =
+                total > 0.0 ? galactic_ai_enemy_strength(sim, types, planet, self, sp, row_masks[j], categories, leaves) * scale : 0.0;
+            out.push_back({static_cast<int32_t>(j), sp, v});
+        }
+    }
+    return out;
+}
+
+double galactic_contrast_scale(float max_contrast_scale, float failure_adjust, float multiplier) {
+    // 0x5f1990 (AI_GALACTIC_TOKENS §9.8 item 3) [H]: both terms widened before the add, then x the multiplier as double.
+    return (static_cast<double>(max_contrast_scale) + static_cast<double>(failure_adjust)) * static_cast<double>(multiplier);
+}
+
+bool galactic_contrast_layer_satisfied(std::span<const GalacticContrastEntry> entries, std::span<const double> remaining,
+                                       bool space, float tolerance) {
+    // 0x72ac70 (§9.8 item 4) [H], in float, over the layer's typed entries (row >= 0) in list order.
+    float total = 0.0f;
+    for (const GalacticContrastEntry& e : entries)
+        if (e.row >= 0 && e.space == space) total += static_cast<float>(e.target);
+    float residual = 0.0f;
+    for (size_t i = 0; i < entries.size() && i < remaining.size(); ++i) {
+        const GalacticContrastEntry& e = entries[i];
+        if (e.row < 0 || e.space != space) continue;
+        const auto t = static_cast<float>(e.target), r = static_cast<float>(remaining[i]);
+        if (!(t > 0.0f && r > 0.0f)) continue;
+        residual += (r / t) * (t / total);
+    }
+    return residual <= tolerance;
+}
+
+bool galactic_contrast_total_open(std::span<const GalacticContrastEntry> entries, std::span<const double> remaining,
+                                  bool covers_space, bool covers_ground) {
+    // 0x72b940 (§9.8 item 1) [H]: the key-0 entries by their layer byte (byte 1 ground -> rec+0x90, byte 0 space -> +0x91).
+    for (size_t i = 0; i < entries.size() && i < remaining.size(); ++i) {
+        const GalacticContrastEntry& e = entries[i];
+        if (e.row >= 0) continue;
+        if ((e.space ? covers_space : covers_ground) && remaining[i] > 0.0) return true;
+    }
+    return false;
 }
 
 namespace {
@@ -194,7 +269,9 @@ const std::string_view kKnownPaths[] = {
     "AVERAGEAGEOFSPACEINTELLIGENCE", "AVERAGEAGEOFGROUNDINTELLIGENCE", "CANADVANCETECH", "BUDGETFRACTIONTOBUILD",
     "NETINCOMEUNNORMALIZED", "NETINCOMENBPTM", "NETINCOMENBTF", "GROSSINCOMEUNNORMALIZED", "GROSSINCOMENBPTM",
     "GROSSINCOMENBTF", "ACTIVEGOALS", "WORSTISLANDFRACTIONOFLARGEST", "HASTECHTOPRODUCE", "STORYTRIGGER",
-    "SPACEDEFENDEDPLANETS", "GROUNDDEFENDEDPLANETS", "MAXALLPLANETSINCOMEUNNORMALIZED", "MAXOWNEDPLANETSINCOMEUNNORMALIZED",
+    "SPACEDEFENDEDPLANETS", "GROUNDDEFENDEDPLANETS", "BUDGETALLOCATION", "TIMESINCESPACEDEFENDER",
+    "TIMESINCESPACEATTACKER", "TIMESINCEGROUNDDEFENDER", "TIMESINCEGROUNDATTACKER", "MAXALLPLANETSINCOMEUNNORMALIZED",
+    "MAXOWNEDPLANETSINCOMEUNNORMALIZED",
     // target root (planets)
     "ISHUMANCONTROLLED", "STARBASELEVEL", "STARBASELEVELUNNORMALIZED", "GROUNDBASELEVEL", "GROUNDBASELEVELUNNORMALIZED",
     "MAXSTARBASELEVEL", "MAXSTARBASELEVELUNNORMALIZED", "MAXGROUNDBASELEVEL", "MAXGROUNDBASELEVELUNNORMALIZED",
@@ -205,8 +282,10 @@ const std::string_view kKnownPaths[] = {
     "ISCORRUPTED", "ISCONNECTEDTOCORRUPTION", "ISCORRUPTIONTRANSITIONACTIVE", "RETAINSRESIDUALINFLUENCE",
     "TIMESINCECORRUPTIONCHANGE", "ISSURFACEACCESSIBLE", "HASCREDITSIPHON", "TARGETPOLITICALCONTROL", "TARGETPLAYERID",
     "TIMESINCESPACECONFLICT", "TIMESINCEGROUNDCONFLICT", "TIMESINCECONVERSION", "HASSTARBASEOFLEVEL",
-    "HASGROUNDBASEOFLEVEL", "HASSTRUCTURE", "STRUCTURECOUNT", "ISFACTION", "OWNER.ISFACTION", "TYPE.TOKEN",
+    "HASGROUNDBASEOFLEVEL", "HASSTRUCTURE", "STRUCTURECOUNT", "ISFACTION", "OWNER.ISFACTION", "TYPE.TOKEN", "TYPE.ISTYPE",
     "BLACKMARKETABILITIESAVAILABLE", "BLACKMARKETMINIMUMABILITYPRICE", "BLACKMARKETPRICEMODIFIER",
+    "OWNER.BUDGETALLOCATION", "OWNER.TIMESINCESPACEDEFENDER", "OWNER.TIMESINCESPACEATTACKER",
+    "OWNER.TIMESINCEGROUNDDEFENDER", "OWNER.TIMESINCEGROUNDATTACKER",
     // planet forces (EnemyForce. / FriendlyForce. prefixes)
     "ENEMYFORCE.SPACETOTALUNNORMALIZED", "ENEMYFORCE.GROUNDTOTALUNNORMALIZED", "ENEMYFORCE.SPACETOTAL",
     "ENEMYFORCE.GROUNDTOTAL", "ENEMYFORCE.SPACETOTALNBTD", "ENEMYFORCE.GROUNDTOTALNBTD", "ENEMYFORCE.SPACETOTALNBPTM",
@@ -256,28 +335,100 @@ bool param_number(std::span<const Param> params, std::string_view name, double& 
         }
     return false;
 }
-std::string param_key(std::span<const Param> params) {
-    std::string k;
+// Parameter_Category as a GameObjectCategoryType mask, read with 0x5f4780 (a raw qword) [H]: a `Type[...]` literal carries
+// the value its converter gave when the equation was built (A2I_TOKENS_RE §3.1; with A2J t07 that converter may come from
+// Data\XML\Enum), so it is used as is; a "#<hex>" text is a raw mask (the binding 0x5f2430 makes,
+// GalacticSimTokenResolver::enemy_force); any other text is looked up by name in `categories`. Numbers add nothing.
+// No Parameter_Category = every bit.
+uint64_t category_mask_of(std::span<const Param> params, const objects::EnumConverter* categories) {
+    if (!has_param(params, "Parameter_Category")) return kAllCategories;
+    uint64_t m = 0;
     for (const Param& p : params) {
-        k += ai_upper_copy(p.name);
-        k += '=';
-        switch (p.value.kind) {
-            case ParamValue::Kind::Number: {
-                char b[40];
-                std::snprintf(b, sizeof b, "%.17g", p.value.number);
-                k += b;
-                break;
-            }
-            case ParamValue::Kind::Enum:
-                k += ai_upper_copy(p.value.text);
-                for (const std::string& e : p.value.enum_values) (k += '|') += ai_upper_copy(e);
-                break;
-            default: k += ai_upper_copy(p.value.text); break;
+        if (!ai_iequal(p.name, "Parameter_Category")) continue;
+        if (p.value.kind == ParamValue::Kind::Enum) {
+            m |= static_cast<uint64_t>(p.value.enum_value);
+        } else if (p.value.kind != ParamValue::Kind::Number) {
+            const std::string_view n = p.value.text;
+            if (!n.empty() && n[0] == '#') m |= std::strtoull(std::string(n.substr(1)).c_str(), nullptr, 16);
+            else m |= ai_category_bit(n, categories);
         }
-        k += ';';
     }
-    return k;
+    return m;
 }
+std::string mask_text(uint64_t m) {
+    char b[24];
+    std::snprintf(b, sizeof b, "#%llx", static_cast<unsigned long long>(m));
+    return b;
+}
+// The cache key of a parameter set (AI_GALACTIC_TOKENS §9.9 [H]: equality 0x5f3990 = the same number of bindings, each with
+// an equal binding of the same token; order-free): one "NAME=value" part per parameter, sorted. Numbers exactly (%.17g);
+// texts upper-case [port: the original compares strings byte by byte]. `category_as_mask`: Parameter_Category is the 64-bit
+// mask value (type 10, read by the force leaves), so an equation's {Parameter_Category = ...} and 0x5f2430's mask are the
+// same key when the masks are equal.
+std::string param_key(std::span<const Param> params, bool category_as_mask, const objects::EnumConverter* categories) {
+    std::vector<std::string> parts;
+    parts.reserve(params.size());
+    for (const Param& p : params) {
+        std::string k = ai_upper_copy(p.name);
+        k += '=';
+        if (category_as_mask && ai_iequal(p.name, "Parameter_Category")) {
+            k += mask_text(category_mask_of(std::span<const Param>(&p, 1), categories));
+        } else {
+            switch (p.value.kind) {
+                case ParamValue::Kind::Number: {
+                    char b[40];
+                    std::snprintf(b, sizeof b, "%.17g", p.value.number);
+                    k += b;
+                    break;
+                }
+                case ParamValue::Kind::Enum:
+                    k += ai_upper_copy(p.value.text);
+                    for (const std::string& e : p.value.enum_values) (k += '|') += ai_upper_copy(e);
+                    break;
+                default: k += ai_upper_copy(p.value.text); break;
+            }
+        }
+        parts.push_back(std::move(k));
+    }
+    std::sort(parts.begin(), parts.end());
+    std::string out;
+    for (const std::string& s : parts) (out += s) += ';';
+    return out;
+}
+
+// q6 t18 (§9.9): the fogged leaves the port caches (lifetime != 0) with their leaf mask M (§1 / §2 tables) and the path
+// the 0xE recompute evaluates. Planet evaluator first, then FriendlyForce, then EnemyForce, each in table order [M: the
+// signal's listener order].
+struct FoggedLeaf {
+    const char* key;   // cache leaf key (planet: full; force: after "PF:E." / "PF:F.")
+    uint32_t mask;     // M
+    const char* path;  // Target-relative path (force: after "ENEMYFORCE." / "FRIENDLYFORCE.")
+};
+constexpr FoggedLeaf kPlanetFogged[] = {
+    {"T:OPENSTRUCTURESLOTS", 0x200, "OPENSTRUCTURESLOTS"},
+    {"T:OPENGROUNDCOMPANYSLOTS", 0x80, "OPENGROUNDCOMPANYSLOTS"},
+    {"T:INCOMEUNNORMALIZED", 0x8, "INCOMEUNNORMALIZED"},
+    {"T:ACTIVETRADEROUTES", 0x8, "ACTIVETRADEROUTES"},
+    {"T:HASSTRUCTURE", 0x200, "HASSTRUCTURE"},
+};
+constexpr FoggedLeaf kForceFogged[] = {
+    {"GROUND", 0x80, "GROUNDTOTALUNNORMALIZED"},
+    {"SPACE", 0x20, "SPACETOTALUNNORMALIZED"},
+    {"GROUNDTOTAL", 0x80, "GROUNDTOTAL"},
+    {"SPACETOTAL", 0x20, "SPACETOTAL"},
+    {"GROUNDTOTALNBTD", 0x80, "GROUNDTOTALNBTD"},
+    {"GROUNDTOTALNBPTM", 0x80, "GROUNDTOTALNBPTM"},
+    {"GROUNDTOTALNBTT", 0x80, "GROUNDTOTALNBTT"},
+    {"SPACETOTALNBTD", 0x20, "SPACETOTALNBTD"},
+    {"SPACETOTALNBPTM", 0x20, "SPACETOTALNBPTM"},
+    {"SPACETOTALNBTT", 0x20, "SPACETOTALNBTT"},
+    {"HASSPACE", 0x10, "HASSPACEFORCE"},
+    {"HASGROUND", 0x80, "HASGROUNDFORCE"},
+    {"HASSPACEUNITSBITFIELD", 0x10, "HASSPACEUNITSBITFIELD"},
+    {"HASGROUNDUNITSBITFIELD", 0x80, "HASGROUNDUNITSBITFIELD"},
+};
+constexpr uint32_t kFoggedBits = 0x200u | 0x80u | 0x20u | 0x10u | 0x8u;  // every M above (single bits)
+constexpr size_t kRecomputeMaxEntries = 100;                              // node +0xA8 < 0x65
 double b2d(bool b) { return b ? 1.0 : 0.0; }
 // Normalisation rule of the suffix leaves [H]: num 0 -> 0; num <= den -> num/den (>= 0); else 1.
 double normalise(double num, double den) {
@@ -483,11 +634,16 @@ void GalacticSimTokenResolver::build_neighbours() {
     }
 }
 
-void GalacticSimTokenResolver::refresh(int32_t frame) {
+void GalacticSimTokenResolver::refresh(int32_t frame, int64_t logic_frame) {
     frame_ = frame;
+    logic_frame_ = logic_frame >= 0 ? static_cast<int32_t>(logic_frame) : frame;
+    for (std::vector<int32_t>& s : player_stamps_)
+        if (s.size() < sim_->players().size()) s.resize(sim_->players().size(), -1);
     const auto planets = sim_->planets();
     const size_t n = planets.size();
+    bool setup = false;
     if (neighbours_.size() != n) {
+        setup = true;
         build_neighbours();
         stamp_space_.assign(n, -1);
         stamp_ground_.assign(n, -1);
@@ -504,11 +660,13 @@ void GalacticSimTokenResolver::refresh(int32_t frame) {
     // Event stamps (signals 0x12 space conflict, 0x14 ground conflict, 0x1A conversion) [H]; the port observes
     // the conflict flag's rising edge: hostile fleets in orbit = space, else ground [port].
     const objects::ObjectStore& st = sim_->store();
+    std::vector<uint8_t> owner_changed(n, 0);
     for (size_t i = 0; i < n; ++i) {
         const gal::PlanetState& ps = planets[i];
         if (ps.owner != last_owner_[i]) {
             stamp_conversion_[i] = frame;
             last_owner_[i] = ps.owner;
+            owner_changed[i] = 1;
         }
         if (ps.corruption != last_corruption_[i]) {
             stamp_corruption_[i] = frame;
@@ -532,6 +690,152 @@ void GalacticSimTokenResolver::refresh(int32_t frame) {
             else stamp_ground_[i] = frame;
         }
         last_battle_[i] = battle;
+    }
+    // q6 t18 (AI_GALACTIC_TOKENS §9.9): the presence fold's visibility signal 0xE, planet order, players in id order:
+    //   * galaxy setup (0x295cf0 -> 0x2b5a30, the first refresh): every planet, every AI player;
+    //   * a planet owner change (0x3fb040): every AI player;
+    //   * units landing (0x4f3430 / 0x4f40c0): the owner of each unit new on the surface since the last refresh [M: a unit
+    //     spawned on the surface counts too; the port has no landing signal].
+    // The port reads the state once per frame (before the AI services), so several events of one frame are one signal.
+    if (last_surface_.size() != n) last_surface_.assign(n, {});
+    const size_t pn = sim_->players().size();
+    std::vector<int32_t> now_surface;
+    std::vector<uint8_t> landed(pn, 0);
+    for (size_t i = 0; i < n; ++i) {
+        now_surface.clear();
+        for (const ObjectHandle u : planets[i].surface)
+            if (st.alive(u)) now_surface.push_back(st.id(u));
+        std::sort(now_surface.begin(), now_surface.end());
+        std::fill(landed.begin(), landed.end(), uint8_t{0});
+        bool any_landed = false;
+        if (!setup) {
+            const std::vector<int32_t>& before = last_surface_[i];
+            for (const ObjectHandle u : planets[i].surface) {
+                if (!st.alive(u) || std::binary_search(before.begin(), before.end(), st.id(u))) continue;
+                const int32_t o = st.owner(u);
+                if (o >= 0 && static_cast<size_t>(o) < pn) {
+                    landed[static_cast<size_t>(o)] = 1;
+                    any_landed = true;
+                }
+            }
+        }
+        last_surface_[i] = now_surface;
+        if (!planets[i].is_planet) continue;
+        const auto pi = static_cast<PlanetIndex>(i);
+        if (setup || owner_changed[i]) {
+            for (size_t q = 0; q < pn; ++q) raise_presence(pi, static_cast<int32_t>(q));
+        } else if (any_landed) {
+            for (size_t q = 0; q < pn; ++q)
+                if (landed[q]) raise_presence(pi, static_cast<int32_t>(q));
+        }
+    }
+}
+
+// ---------------------------------------------------------------- player conflict stamps (q6 t03, §8.2)
+
+void GalacticSimTokenResolver::stamp_players(bool space, int32_t attacker, int32_t defender, int32_t now) {
+    // Listener 0x66d490 [H]: the evaluator's player id == the record's defender -> defender stamp; else == the attacker ->
+    // attacker stamp. Every player has its own evaluator, so each player of the record gets its own role's stamp.
+    std::vector<int32_t>& def = player_stamps_[space ? 0u : 2u];
+    std::vector<int32_t>& att = player_stamps_[space ? 1u : 3u];
+    const size_t n = sim_->players().size();
+    if (def.size() < n) def.resize(n, -1);
+    if (att.size() < n) att.resize(n, -1);
+    for (size_t p = 0; p < n; ++p) {
+        const auto id = static_cast<int32_t>(p);
+        if (id == defender) def[p] = now;
+        else if (id == attacker) att[p] = now;
+    }
+}
+
+int32_t GalacticSimTokenResolver::player_stamp(int which, int32_t player) const {
+    if (which < 0 || which > 3 || player < 0) return -1;
+    const std::vector<int32_t>& s = player_stamps_[static_cast<size_t>(which)];
+    return static_cast<size_t>(player) < s.size() ? s[static_cast<size_t>(player)] : -1;
+}
+
+void GalacticSimTokenResolver::observe_conflicts(const gal::ConflictManager& cm, int32_t now) {
+    const std::vector<gal::ConflictLogEntry>& log = cm.log();
+    // A version-1 image (no observer state) or a log shorter than the position seen: re-synchronise without stamping.
+    if (conflict_log_seen_ == kLogUnseen || conflict_log_seen_ > log.size()) conflict_log_seen_ = static_cast<uint32_t>(log.size());
+    const auto same = [](const ObservedConflict& a, uint8_t kind, uint32_t planet, int32_t att, int32_t def) {
+        return a.valid && a.kind == kind && a.planet == planet && a.attacker == att && a.defender == def;
+    };
+    constexpr auto kSpace = static_cast<uint8_t>(gal::ConflictKind::Space);
+    constexpr auto kLand = static_cast<uint8_t>(gal::ConflictKind::Land);
+    // q6 t18 (AI_GALACTIC_TOKENS §9.9 items 2-3): the conflict services' own 0xE signals to the record's attacker when it has
+    // an AI system: space state 4 -> mask 0x70, land state -1 -> mask 0x180 [M: a land head's state -1 also runs for a drop].
+    const auto conflict_signal = [this](bool space, uint32_t planet, int32_t attacker) {
+        const auto players = sim_->players();
+        if (attacker < 0 || static_cast<size_t>(attacker) >= players.size() || !players[static_cast<size_t>(attacker)].ai) return;
+        visibility_event(static_cast<PlanetIndex>(planet), attacker, space ? 0x70u : 0x180u);
+    };
+    // 1. Records that left the queues since the last pass (log order).
+    bool space_logged = false;
+    for (size_t i = conflict_log_seen_; i < log.size(); ++i) {
+        const gal::ConflictLogEntry& e = log[i];
+        const auto kind = static_cast<uint8_t>(e.kind);
+        const bool matched = same(active_, kind, e.planet, e.attacker, e.defender);
+        const ObservedConflict seen = matched ? active_ : ObservedConflict{};
+        if (matched) active_ = {};
+        if (kind == kSpace) {
+            space_logged = true;
+            // a drop raises 0x11 itself (validation failure, before the head goes); any other end stamps only a record
+            // whose start was not observed (started and ended inside one service), never a story-linked battle
+            if (e.how == 0 || !(matched && (seen.space_stamped || seen.linked))) stamp_players(true, e.attacker, e.defender, now);
+            if (e.how != 0 && !matched) conflict_signal(true, e.planet, e.attacker);  // passed state 4 inside one service
+        } else {
+            if (e.how == 1 && !(matched && (seen.ground_stamped || seen.in_battle)))
+                stamp_players(false, e.attacker, e.defender, now);  // a land auto-resolve that began and ended inside one service
+            if (!matched) conflict_signal(false, e.planet, e.attacker);  // its state -1 ran inside one service
+        }
+    }
+    conflict_log_seen_ = static_cast<uint32_t>(log.size());
+    // 2. The active conflict now.
+    const gal::ConflictState st = cm.state();
+    if (st == gal::ConflictState::Idle) {
+        active_ = {};
+        return;
+    }
+    ObservedConflict cur;
+    cur.valid = true;
+    if (st == gal::ConflictState::InBattle) {
+        const gal::BattleRequest& rq = cm.active_request();
+        cur.kind = static_cast<uint8_t>(rq.info.kind);
+        cur.planet = rq.info.planet;
+        cur.attacker = rq.info.attacker;
+        cur.defender = rq.info.defender;
+        cur.linked = rq.linked;
+    } else {
+        // [port] the manager does not expose its active kind: a conflict seen before keeps its kind; a new one is the
+        // space head (the service runs it first) unless a space record ended in this pass or no space record is queued.
+        const uint8_t kind = active_.valid ? active_.kind : (!space_logged && !cm.space_queue().empty() ? kSpace : kLand);
+        const std::vector<gal::ConflictInfo>& q = kind == kSpace ? cm.space_queue() : cm.land_queue();
+        if (q.empty()) {
+            active_ = {};
+            return;
+        }
+        cur.kind = kind;
+        cur.planet = q.front().planet;
+        cur.attacker = q.front().attacker;
+        cur.defender = q.front().defender;
+    }
+    if (!same(active_, cur.kind, cur.planet, cur.attacker, cur.defender)) {
+        active_ = cur;  // a new active conflict: state -1 -> 4 happened in this service (a linked battle bypasses it)
+        if (cur.kind == kSpace && !cur.linked) {
+            stamp_players(true, cur.attacker, cur.defender, now);
+            active_.space_stamped = true;
+        }
+        if (!cur.linked) conflict_signal(cur.kind == kSpace, cur.planet, cur.attacker);
+    }
+    if (active_.kind == kLand) {
+        if (st == gal::ConflictState::InBattle) {
+            active_.in_battle = true;
+        } else if ((st == gal::ConflictState::AutoSetup || st == gal::ConflictState::AutoRunning) && !active_.ground_stamped &&
+                   !active_.in_battle) {
+            stamp_players(false, active_.attacker, active_.defender, now);  // vf3: the land auto-resolve began
+            active_.ground_stamped = true;
+        }
     }
 }
 
@@ -576,7 +880,11 @@ struct GalacticSimTokenResolver::Impl {
         : r(res), ctx(c), sim(*res.sim_), rules(res.sim_->rules()), st(res.sim_->store()), planets(res.sim_->planets()),
           players(res.sim_->players()) {}
 
-    // ---- the leaf cache ----
+    // ---- the leaf cache (AI_GALACTIC_TOKENS §9.9 [H]) ----
+    // The node = (leaf, evaluator instance, the system's player); the entry = the parameter set. `force_leaf` /
+    // `force_inst`: the node a 0xE recompute runs for (no lookup, the result is stored and re-stamped).
+    const std::string* force_leaf = nullptr;
+    int32_t force_inst = -1;
     template <class F>
     bool leaf(std::string_view key, int32_t inst, int32_t life, std::span<const Param> params, F&& compute, double& out) const {
         CacheKey k;
@@ -584,26 +892,27 @@ struct GalacticSimTokenResolver::Impl {
             k.leaf = std::string(key);
             k.inst = inst;
             k.self = ctx.self;
-            k.target = ctx.target;
-            k.enemy = ctx.enemy;
-            k.human = ctx.human;
-            k.params = param_key(params);
-            std::lock_guard<std::mutex> lock(r.mu_);
-            const auto it = r.cache_.find(k);
-            if (it != r.cache_.end() && it->second.stamp != 0 &&
-                (life == kLifeForever ||
-                 static_cast<int64_t>(r.frame_) <= static_cast<int64_t>(it->second.stamp) + static_cast<int64_t>(life) * kAiFps)) {
-                out = it->second.value;
-                ++r.hits_;
-                return true;
+            k.params = param_key(params, key.substr(0, 3) == "PF:", r.categories_);
+            const bool forced = force_leaf != nullptr && *force_leaf == k.leaf && force_inst == inst;
+            if (!forced) {
+                std::lock_guard<std::mutex> lock(r.mu_);
+                const auto it = r.cache_.find(k);
+                if (it != r.cache_.end() && it->second.stamp != 0 &&
+                    (life == kLifeForever ||
+                     static_cast<int64_t>(r.frame_) <= static_cast<int64_t>(it->second.stamp) + static_cast<int64_t>(life) * kAiFps)) {
+                    out = it->second.value;
+                    ++r.hits_;
+                    return true;
+                }
             }
         }
-        if (!compute(out)) return false;
+        if (!compute(out)) return false;  // failures are never cached
         if (life != 0) {
             std::lock_guard<std::mutex> lock(r.mu_);
-            Entry& e = r.cache_[k];
-            e.value = out;
-            e.stamp = r.frame_;
+            const auto [it, inserted] = r.cache_.try_emplace(std::move(k));
+            it->second.value = out;
+            it->second.stamp = r.frame_;
+            if (inserted) it->second.params.assign(params.begin(), params.end());
         }
         return true;
     }
@@ -622,18 +931,11 @@ struct GalacticSimTokenResolver::Impl {
     }
     uint64_t type_mask(uint32_t t) const { return t < r.types_.size() ? r.types_[t].category_mask : 0u; }
     double power(uint32_t t) const { return t < rules.types.size() ? static_cast<double>(rules.types[t].ai_combat_power) : 0.0; }
-    // Parameter_Category read with 0x5f4780 (a raw qword) [H]: a `Type[...]` literal carries the value its converter gave
-    // when the equation was built (A2I_TOKENS_RE §3.1; with A2J t07 that converter may come from Data\XML\Enum), so it is
-    // used as is; any other value form keeps the by-name lookup.
-    static uint64_t category_param(std::span<const Param> params) {
-        if (!has_param(params, "Parameter_Category")) return kAllCategories;
-        uint64_t m = 0;
-        for (const Param& p : params) {
-            if (!ai_iequal(p.name, "Parameter_Category")) continue;
-            if (p.value.kind == ParamValue::Kind::Enum) m |= static_cast<uint64_t>(p.value.enum_value);
-            else if (p.value.kind != ParamValue::Kind::Number) m |= ai_category_bit(p.value.text);
-        }
-        return m;
+    uint64_t category_param(std::span<const Param> params) const { return category_mask_of(params, r.categories_); }
+    // BudgetAllocation's key (§8.3): ai_budget_key (ai_budget.hpp), shared with the tactical leaf.
+    int32_t budget_key(std::span<const Param> params) const {
+        return ai_budget_key(params, r.hooks_.goal_category,
+                             [this](std::string_view n) { return ai_category_bit(n, r.categories_); });
     }
     bool type_named(uint32_t t, std::span<const std::string_view> names) const {
         if (t >= rules.types.size()) return false;
@@ -786,7 +1088,7 @@ struct GalacticSimTokenResolver::Impl {
     }
     // GroundTotalUnnormalized 0x6d95d0 / SpaceTotalUnnormalized 0x6dbd50 (live; the cache is the caller's).
     double force_raw(size_t p, bool enemy, bool space, uint64_t cat) const {
-        return galactic_ai_planet_force(sim, r.types_, static_cast<PlanetIndex>(p), ctx.self, enemy, space, cat);
+        return galactic_ai_planet_force(sim, r.types_, static_cast<PlanetIndex>(p), ctx.self, enemy, space, cat, r.categories_);
     }
     bool force_unn(size_t p, bool enemy, bool space, std::span<const Param> params, double& out) const {
         const char* key = space ? (enemy ? "PF:E.SPACE" : "PF:F.SPACE") : (enemy ? "PF:E.GROUND" : "PF:F.GROUND");
@@ -944,11 +1246,21 @@ struct GalacticSimTokenResolver::Impl {
             return true;
         }
         if (k == "GROUNDBASETOTALUNNORMALIZED") {
+            // 0x6d9470 (AI_GALACTIC_TOKENS §9.12 [H]), lifetime 0 (live, not cached). No planet fails (the caller's
+            // valid_planet); the planet failing the side filter -> 0.0, a success; no D -> fail [port: every planet has it].
+            // Then Σ (double)(float) power over every ground structure (D+0x158) with no mask, owner or alive test [port: the
+            // list holds live objects], plus 0x4b8000(D, all bits): the float sum, in list order, of the power of every
+            // persisted record whose type resolves and has a non-zero category mask, widened. No Parameter_* is read.
+            const gal::PlanetState& ps = planets[p];
+            out = 0.0;
+            if (!side(enemy, ps.owner)) return true;
             double s = 0.0;
-            if (side(enemy, planets[p].owner))
-                for (const ObjectHandle u : planets[p].structures)
-                    if (st.alive(u)) s += power(st.type(u));
-            out = s;
+            for (const ObjectHandle u : ps.structures)
+                if (st.alive(u)) s += power(st.type(u));
+            float records = 0.0f;
+            for (const gal::PersistedBuiltObject& b : ps.built_objects)
+                if (b.type < rules.types.size() && type_mask(b.type) != 0) records += rules.types[b.type].ai_combat_power;
+            out = s + static_cast<double>(records);
             return true;
         }
         if (k == "ANTISTEALTHEFFECTIVENESS") {  // [port] per-unit value 0x395830 not modelled
@@ -1278,6 +1590,14 @@ struct GalacticSimTokenResolver::Impl {
             return false;
         }
         if (k == "TYPE.TOKEN") return out = static_cast<double>(ps.type), true;  // [L] the type evaluator's token
+        // q6 t07: the planet's type evaluator is the global per-type evaluator the tactical side uses (A1_READINGS §23):
+        // IsType = 1.0 when the planet's OWN type name is listed in Parameter_Type (case-insensitive), else 0.0; a planet
+        // without a type fails. [M: the galactic wiring; the leaf is the shared one.] Stock galactic equations never use it;
+        // Thrawn's Revenge picks planets by name with it (BasicGalacticEquations_Generated.xml, ...).
+        if (k == "TYPE.ISTYPE") {
+            if (ps.type >= rules.types.size()) return false;
+            return out = b2d(type_named(ps.type, param_texts(params, "Parameter_Type"))), true;
+        }
         if (k == "BLACKMARKETABILITIESAVAILABLE" || k == "BLACKMARKETMINIMUMABILITYPRICE") {
             const bool avail = k == "BLACKMARKETABILITIESAVAILABLE";
             return leaf(avail ? "T:BLACKMARKETABILITIESAVAILABLE" : "T:BLACKMARKETMINIMUMABILITYPRICE", ip, avail ? 5 : 6, params,
@@ -1288,6 +1608,14 @@ struct GalacticSimTokenResolver::Impl {
                 v = static_cast<double>(rules.special.type(ps.type).black_market_modifier);
                 return true;
             }, out);
+        // q6 t03: Target.Owner = the owner's galactic player evaluator (§8.2 "Roots"), for the player tokens TR uses through
+        // it [M: the Owner sub-evaluator; other Owner.* player tokens stay unregistered here]. An unowned planet fails.
+        if (k.substr(0, 6) == "OWNER.") {
+            const std::string_view sub = k.substr(6);
+            if (sub == "TIMESINCESPACEDEFENDER" || sub == "TIMESINCESPACEATTACKER" || sub == "TIMESINCEGROUNDDEFENDER" ||
+                sub == "TIMESINCEGROUNDATTACKER" || sub == "BUDGETALLOCATION")
+                return resolve_player(ps.owner, sub, params, out);
+        }
         return false;  // IsContestable, HasBuiltObject, Force, TimeLastSeen*, ... are not registered
     }
 
@@ -1332,7 +1660,7 @@ struct GalacticSimTokenResolver::Impl {
                 if (space_kind(kind)) {
                     if ((type_mask(t) & cat) != 0) s += power(t);
                 } else if ((t < r.types_.size() && r.types_[t].special_weapon_space) || gal::is_orbital_structure_type(rules.types[t])) {
-                    if ((cat & galactic_ai_structure_mask(r.types_, t)) != 0) s += power(t);
+                    if ((cat & galactic_ai_structure_mask(r.types_, t, r.categories_)) != 0) s += power(t);
                 }
             } else if (ground_kind(kind) && (type_mask(t) & cat) != 0) {
                 s += power(t);  // DUMMY_GROUND_COMPANY only
@@ -1728,7 +2056,25 @@ struct GalacticSimTokenResolver::Impl {
             if (n.empty()) return false;
             return out = b2d(r.hooks_.story_flag && r.hooks_.story_flag(pl, n[0])), true;
         }
-        return false;  // HomePlanet.*, BudgetAllocation, ... (not modelled)
+        // q6 t03 (AI_GALACTIC_TOKENS §8.2) [H]: leaves 0x66b950 / 0x66b900 / 0x66b8b0 / 0x66b860, lifetime 0, no parameters,
+        // no Self check, never fail: (NOW - stamp) / FPS seconds (int subtraction, NOW = the global logic frame), or the
+        // float 1e18 widened to double when the player was never stamped.
+        if (k == "TIMESINCESPACEDEFENDER" || k == "TIMESINCESPACEATTACKER" || k == "TIMESINCEGROUNDDEFENDER" ||
+            k == "TIMESINCEGROUNDATTACKER") {
+            const int which = k == "TIMESINCESPACEDEFENDER" ? 0 : k == "TIMESINCESPACEATTACKER" ? 1 : k == "TIMESINCEGROUNDDEFENDER" ? 2 : 3;
+            const int32_t s = r.player_stamp(which, pl);
+            out = s < 0 ? static_cast<double>(1.0e18f) : static_cast<double>(r.logic_frame_ - s) / static_cast<double>(kAiFps);
+            return true;
+        }
+        // q6 t03 BudgetAllocation 0x6e0560 (§8.3) [H]: Self only, else the leaf fails; lifetime 2 s; the weight of the
+        // Parameter_Category key in Self's budget, 0.0 for a key it does not hold.
+        if (k == "BUDGETALLOCATION") {
+            if (!self) return false;
+            return leaf("P:BUDGETALLOCATION", pl, 2, params, [&](double& v) {
+                return r.hooks_.budget_weight && r.hooks_.budget_weight(pl, budget_key(params), v);
+            }, out);
+        }
+        return false;  // HomePlanet.*, ... (not modelled)
     }
 
     // ---------------- game ----------------
@@ -1763,6 +2109,96 @@ struct GalacticSimTokenResolver::Impl {
         return false;  // ForceVisibility is not registered on the galactic Game [H]
     }
 };
+
+// ---------------------------------------------------------------- q6 t18: leaf cache readers and the signal 0xE
+
+bool GalacticSimTokenResolver::enemy_force(int32_t self, PlanetIndex planet, bool space, uint64_t mask, double& out) const {
+    EvalContext c;
+    c.self = self;
+    c.target = static_cast<int32_t>(planet);
+    const Impl x(*this, c);
+    if (!x.valid_planet(c.target)) return false;
+    // 0x5f2430 binds Parameter_Category only for a non-zero mask (§9.9 "Consequence"): mask 0 is the no-parameter entry an
+    // equation or a Game.<side> sum shares.
+    std::vector<Param> params;
+    if (mask != 0) {
+        Param p;
+        p.name = "Parameter_Category";
+        p.value.kind = ParamValue::Kind::Identifier;
+        p.value.text = mask_text(mask);
+        params.push_back(std::move(p));
+    }
+    return x.force_unn(planet, true, space, params, out);
+}
+
+size_t GalacticSimTokenResolver::cache_size() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return cache_.size();
+}
+
+uint32_t GalacticSimTokenResolver::visible_flags(PlanetIndex planet, int32_t player) const {
+    if (player < 0 || static_cast<size_t>(player) >= visible_.size()) return 0;
+    const std::vector<uint32_t>& v = visible_[static_cast<size_t>(player)];
+    return planet < v.size() ? v[planet] : 0u;
+}
+
+void GalacticSimTokenResolver::raise_presence(PlanetIndex planet, int32_t player) {
+    // The presence fold 0x3fd080 (GRC 2.3-2.4) signals the player's presence level: -1 when it owns the planet, else its
+    // faction default | 0x71 (own fleet in orbit) | 0x191 (own surface unit). Only players with an AI system.
+    const auto players = sim_->players();
+    if (player < 0 || static_cast<size_t>(player) >= players.size() || !players[static_cast<size_t>(player)].ai) return;
+    visibility_event(planet, player, sim_->visibility_sources(planet, player).presence);
+}
+
+void GalacticSimTokenResolver::visibility_event(PlanetIndex planet, int32_t player, uint32_t mask) {
+    const auto planets = sim_->planets();
+    const auto players = sim_->players();
+    if (planet >= planets.size() || !planets[planet].is_planet || player < 0 || static_cast<size_t>(player) >= players.size()) return;
+    if (visible_.size() < players.size()) visible_.resize(players.size());
+    std::vector<uint32_t>& row = visible_[static_cast<size_t>(player)];
+    if (row.size() < planets.size()) row.resize(planets.size(), 0u);
+    // Listener 0x661a50 / 0x6dde60 per node (M is one bit): covered -> recompute, visible := 1; else visible -> recompute,
+    // visible := 0. So the recomputed masks are (mask | visible) and the new flags are the covered ones.
+    const uint32_t recompute = (mask | row[planet]) & kFoggedBits;
+    row[planet] = mask & kFoggedBits;
+    if (recompute == 0) return;
+    // Recompute 0x65ac40 / 0x6d8f80: a fresh context, Self := the event's player (= the system's), Target := the planet
+    // (Enemy := the opponent [port: no fogged leaf reads it, left unbound]).
+    EvalContext c;
+    c.self = player;
+    c.target = static_cast<int32_t>(planet);
+    Impl x(*this, c);
+    const auto ip = static_cast<int32_t>(planet);
+    auto node = [&](const std::string& key, const std::string& path) {
+        std::vector<std::vector<Param>> entries;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            CacheKey lo;
+            lo.leaf = key;
+            lo.inst = ip;
+            lo.self = player;
+            for (auto it = cache_.lower_bound(lo); it != cache_.end() && it->first.leaf == key && it->first.inst == ip &&
+                                                   it->first.self == player;
+                 ++it)
+                entries.push_back(it->second.params);
+        }
+        if (entries.empty() || entries.size() > kRecomputeMaxEntries) return;
+        x.force_leaf = &key;
+        x.force_inst = ip;
+        for (const std::vector<Param>& params : entries) {
+            double v = 0.0;
+            (void)x.resolve_target(planet, path, params, v);  // a success stores value and stamp NOW; a failure keeps the entry
+        }
+        x.force_leaf = nullptr;
+        x.force_inst = -1;
+    };
+    for (const FoggedLeaf& l : kPlanetFogged)
+        if ((l.mask & recompute) != 0) node(l.key, l.path);
+    for (const bool enemy : {false, true})  // FriendlyForce (+0xA8) is created before EnemyForce (+0xB0) [M: listener order]
+        for (const FoggedLeaf& l : kForceFogged)
+            if ((l.mask & recompute) != 0)
+                node(std::string(enemy ? "PF:E." : "PF:F.") + l.key, std::string(enemy ? "ENEMYFORCE." : "FRIENDLYFORCE.") + l.path);
+}
 
 bool GalacticSimTokenResolver::resolve(const EvalContext& ctx, const TokenRef& token, double& out) const {
     if (!token.tokens) return false;

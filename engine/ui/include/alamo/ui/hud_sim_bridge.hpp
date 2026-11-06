@@ -47,6 +47,7 @@ inline void hud_units_from_frame(const render::InterpolatedFrame& frame, std::sp
         u.team_color = {to8(o.team_color.x), to8(o.team_color.y), to8(o.team_color.z), 255};
         u.jammed = frame.jamming.is_jammed(o.id);  // R5: the radar drops hostile jammed blips (tactical_hud.cpp)
         u.stealthed = frame.jamming.is_stealthed(o.id);  // R5: ... and hostile stealthed ones
+        u.script_hidden = o.script_hidden;  // q6 t19: ... and Lua-hidden ones
         out.push_back(u);
     }
 }

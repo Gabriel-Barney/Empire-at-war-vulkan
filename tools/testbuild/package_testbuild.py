@@ -1,0 +1,145 @@
+"""Packs a test build zip for Gabriel: alamo_game + alamo_mod_check from a Release build tree, the launchers in
+tools/testbuild/launchers (Forces of Corruption and Thrawn's Revenge) and tools/testbuild/CHANGES.txt.
+
+Usage (from the project root; tools/testbuild/package_testbuild.cmd wraps it):
+  python -I tools/testbuild/package_testbuild.py [--build-dir build-msvc] [--name NAME] [--smoke] [--allow-dirty]
+
+  --name         zip name without .zip (default alamo-testbuild-<today>, then -<today>b, c, ... if taken)
+  --smoke        before zipping, run the Thrawn's Revenge mod check and skirmish smoke through the staged launchers
+                 (needs Forces of Corruption, Thrawn's Revenge and a GPU); a failure stops the packaging
+  --allow-dirty  package even when engine/ has uncommitted edits (the zip's BUILD_INFO.txt says so)
+
+Writes dist/<name>.zip (dist/ is git-ignored). CHANGES.txt's @BUILD@ becomes "<branch> <commit>, MSVC <build type>".
+Edit tools/testbuild/CHANGES.txt for each build: what changed, what to check, known gaps.
+"""
+import argparse
+import datetime
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import zipfile
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+HERE = ROOT / "tools" / "testbuild"
+BINARIES = ["alamo_game.exe", "alamo_mod_check.exe", "avcodec-62.dll", "avformat-62.dll", "avutil-60.dll",
+            "dxcompiler.dll", "dxil.dll", "COPYING.LGPLv2.1"]
+LAUNCHERS = ["Play.cmd", "Play_ThrawnsRevenge.cmd", "Check_ThrawnsRevenge.cmd", "tr_paths.cmd"]
+
+
+def git(*args):
+    r = subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def build_type(build_dir):
+    cache = build_dir / "CMakeCache.txt"
+    if not cache.exists():
+        return ""
+    m = re.search(r"^CMAKE_BUILD_TYPE:STRING=(.*)$", cache.read_text(encoding="utf-8", errors="replace"), re.M)
+    return m.group(1).strip() if m else ""
+
+
+def pick_name(dist, wanted):
+    if wanted:
+        return wanted
+    base = "alamo-testbuild-" + datetime.date.today().isoformat()
+    for suffix in [""] + [chr(c) for c in range(ord("b"), ord("z") + 1)]:
+        if not (dist / (base + suffix + ".zip")).exists():
+            return base + suffix
+    sys.exit("no free name for " + base)
+
+
+def crlf(data):
+    return data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+
+
+def run_cmd(script, args=(), env=None):
+    """Runs a .cmd with cmd's /s quoting (a quoted script path plus quoted arguments with spaces)."""
+    line = " ".join(['"%s"' % script] + ['"%s"' % x if " " in x else x for x in args])
+    return subprocess.run('cmd /s /c "%s"' % line, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env)
+
+
+def smoke(stage, out_dir):
+    """Mod check + TR skirmish smoke through the staged launchers. Returns an error text or ''."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    find = run_cmd(stage / "tr_paths.cmd")
+    if find.returncode != 0:
+        return "tr_paths.cmd: " + (find.stdout + find.stderr).strip()
+    env = dict(os.environ, ALAMO_NO_NOTEPAD="1")
+    check = run_cmd(stage / "Check_ThrawnsRevenge.cmd", env=env)
+    report = stage / "mod_check_tr.txt"
+    print(check.stdout.strip())
+    if "Exit code 0." not in check.stdout or not report.exists():
+        return "mod check failed: see " + str(report)
+    run = run_cmd(stage / "Play_ThrawnsRevenge.cmd", ["--smoke", "skirmish", "--png-dir", str(out_dir), "--hidden"])
+    log = stage / "alamo_game_tr_log.txt"
+    text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    if run.returncode != 0 or "smoke skirmish: OK" not in text:
+        return "TR skirmish smoke failed (exit %d): see %s" % (run.returncode, log)
+    print("TR skirmish smoke: OK (shots in %s)" % out_dir)
+    return ""
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--build-dir", default="build-msvc")
+    ap.add_argument("--name", default="")
+    ap.add_argument("--smoke", action="store_true")
+    ap.add_argument("--allow-dirty", action="store_true")
+    a = ap.parse_args()
+
+    build_dir = (ROOT / a.build_dir).resolve()
+    bin_dir = build_dir / "bin"
+    btype = build_type(build_dir)
+    if btype != "Release":
+        sys.exit("%s is not a Release build tree (CMAKE_BUILD_TYPE=%s); run build_msvc.cmd" % (build_dir, btype or "?"))
+    missing = [f for f in BINARIES if not (bin_dir / f).exists()]
+    if missing:
+        sys.exit("missing in %s: %s" % (bin_dir, ", ".join(missing)))
+    dirty = git("status", "--porcelain", "--", "engine")
+    if dirty and not a.allow_dirty:
+        sys.exit("engine/ has uncommitted edits; commit them (or pass --allow-dirty)\n" + dirty)
+    commit, branch = git("rev-parse", "--short", "HEAD"), git("branch", "--show-current") or "detached"
+    exe_time = datetime.datetime.fromtimestamp((bin_dir / "alamo_game.exe").stat().st_mtime)
+
+    dist = ROOT / "dist"
+    dist.mkdir(exist_ok=True)
+    name = pick_name(dist, a.name)
+    zip_path = dist / (name + ".zip")
+    if zip_path.exists():
+        sys.exit(str(zip_path) + " exists; pass another --name")
+
+    stage = build_dir / "testbuild" / name
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.mkdir(parents=True)
+    for f in BINARIES:
+        shutil.copy2(bin_dir / f, stage / f)
+    for f in LAUNCHERS:
+        (stage / f).write_bytes(crlf((HERE / "launchers" / f).read_bytes()))
+    build = "%s %s%s, MSVC %s" % (branch, commit, " + uncommitted edits" if dirty else "", btype.lower())
+    changes = (HERE / "CHANGES.txt").read_text(encoding="utf-8").replace("@BUILD@", build)
+    (stage / "CHANGES.txt").write_bytes(crlf(changes.encode("utf-8")))
+    info = ["Alamo engine test build " + name, "commit: " + git("rev-parse", "HEAD"), "branch: " + branch,
+            "build type: " + btype, "alamo_game.exe built: " + exe_time.strftime("%Y-%m-%d %H:%M"),
+            "uncommitted engine edits: " + ("yes" if dirty else "no"),
+            "packed: " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M")]
+    (stage / "BUILD_INFO.txt").write_bytes(crlf(("\n".join(info) + "\n").encode("utf-8")))
+    files = BINARIES + LAUNCHERS + ["CHANGES.txt", "BUILD_INFO.txt"]
+
+    if a.smoke:
+        err = smoke(stage, build_dir / "testbuild" / (name + "_smoke"))
+        if err:
+            sys.exit(err)
+
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in files:  # only the packed files: the smoke run's logs, caches and saves stay out
+            z.write(stage / f, f)
+    print("%s: %d files, %.1f MB (%s)" % (zip_path, len(files), zip_path.stat().st_size / 1e6, build))
+
+
+if __name__ == "__main__":
+    main()

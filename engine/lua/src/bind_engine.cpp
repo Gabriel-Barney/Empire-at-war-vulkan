@@ -8,6 +8,10 @@
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/objects/game_object_types.hpp"
+#if defined(ALAMO_LUA_PLAYERS)
+#include "alamo/galactic/campaign.hpp"  // q6: a planet's owner (m_object_get_owner)
+#include "alamo/lua/players.hpp"
+#endif
 #include "vm_internal.hpp"
 
 namespace alamo::lua {
@@ -34,7 +38,7 @@ GameRandom* rng(Call& c) { return c.vm->host.rng; }
 // ---------------------------------------------------------------- objects and types
 
 int g_find_object_type(Call& c) {
-    if (!c.is_string(1)) return c.fail("LuaFindObjectType -- Expected type name for parameter 1");
+    if (!c.is_string(1)) return c.script_error_stop("LuaFindObjectType -- Expected type name for parameter 1");
     const objects::GameObjectTypes* types = c.vm->host.types;
     if (!types) return push_nil(c);
     const objects::TypeIndex t = types->raw().find(c.string(1));
@@ -68,15 +72,41 @@ int m_object_get_parent_mode_id(Call& c) {
 }
 
 int m_object_get_owner(Call& c) {
-    detail::push_player(c.L, *c.vm, c.vm->host.store->owner(self_object(c)));
+    const objects::ObjectHandle self = self_object(c);
+    int32_t owner = c.vm->host.store->owner(self);
+#if defined(ALAMO_LUA_PLAYERS)
+    // q6 [inferred]: a galactic planet object reports the planet's owner (GalacticSim PlanetState::owner, the owner every
+    // galactic system reads). The port's planet objects are created without a store owner (campaign.cpp: "planets
+    // report their owner from the data pack"), so the store alone said -1 for every planet; mod scripts read
+    // FindPlanet(x).Get_Owner().Get_Faction_Name() for every planet at start (Thrawn's Revenge GalacticConquest,
+    // RandomSpawnManager). Only with a player world attached to the galactic sim whose store this VM reads.
+    if (c.vm->owner)
+        if (const LuaPlayerWorld* w = player_world(*c.vm->owner))
+            if (const galactic::GalacticSim* sim = w->galactic(); sim && c.vm->host.store == &sim->store()) {
+                const PlanetIndex p = sim->planet_of(self);
+                if (p != kInvalidPlanet && static_cast<size_t>(p) < sim->planets().size()) owner = sim->planets()[p].owner;
+            }
+#endif
+    detail::push_player(c.L, *c.vm, owner);
     return 1;
 }
 
 int m_type_get_name(Call& c) {
     const objects::GameObjectTypes* types = c.vm->host.types;
     if (!types || c.self->value >= types->raw().type_count()) return push_nil(c);
+    // q6 (OBJECT_SCRIPTS.md §6.1 step 4, OBJECT_TYPES §3.1): the original stores type names upper-cased, so Get_Name
+    // returns the upper-case name (TR's GroundCompanyList keys are upper-case type names). [port interim] Only VMs with
+    // LuaVmOptions::upper_type_names (the object-script VMs) do so; the others keep the name as written, so the AI /
+    // story goldens and tests stay as they are until the switch is made for every VM.
     const std::string_view n = types->raw().types().name[c.self->value];
-    lua_pushlstring(c.L, n.data(), n.size());
+    if (!c.vm->options.upper_type_names) {
+        lua_pushlstring(c.L, n.data(), n.size());
+        return 1;
+    }
+    std::string up(n);
+    for (char& ch : up)
+        if (ch >= 'a' && ch <= 'z') ch = static_cast<char>(ch - 'a' + 'A');
+    lua_pushlstring(c.L, up.data(), up.size());
     return 1;
 }
 
@@ -97,16 +127,16 @@ int m_is_pool_safe(Call& c) {
 // SYNCHRONIZED stream (docs/re/COMMANDS.md §8; 0x5423a0). The original int helper caps the span.
 int g_game_random(Call& c) {
     GameRandom* r = rng(c);
-    if (!r) return c.fail("GameRandom -- no game random attached to this script");
+    if (!r) return c.script_error_stop("GameRandom -- no game random attached to this script");
     int32_t v = 0;
     if (c.nargs == 0) {
         v = r->synced().range_int(0, 0xFFFF);
     } else if (c.nargs == 1) {
-        if (!c.is_number(1)) return c.fail("GameRandom -- Invalid parameter 1, expected a number");
+        if (!c.is_number(1)) return c.script_error_stop("GameRandom -- Invalid parameter 1, expected a number");
         v = r->synced().range_int(0, detail::to_int(c.number(1)));
     } else {
-        if (!c.is_number(1)) return c.fail("GameRandom -- Invalid parameter 1, expected a number");
-        if (!c.is_number(2)) return c.fail("GameRandom -- Invalid parameter 2, expected a number");
+        if (!c.is_number(1)) return c.script_error_stop("GameRandom -- Invalid parameter 1, expected a number");
+        if (!c.is_number(2)) return c.script_error_stop("GameRandom -- Invalid parameter 2, expected a number");
         v = r->synced().range_int(detail::to_int(c.number(1)), detail::to_int(c.number(2)));
     }
     return push_num(c, v);
@@ -117,11 +147,11 @@ int g_game_random(Call& c) {
 // single player and fall back to the synchronized state (with a warning) in multiplayer.
 int m_free_random(Call& c) {
     GameRandom* r = rng(c);
-    if (!r) return c.fail("GameRandom::Free_Random -- no game random attached to this script");
+    if (!r) return c.script_error_stop("GameRandom::Free_Random -- no game random attached to this script");
     const bool mp = c.vm->host.multiplayer;
     if (c.nargs == 0) return push_num(c, r->lua_free_random(mp));
-    if (!c.is_number(1)) return c.fail("GameRandom::Free_Random -- Invalid parameter 1, expected a number");
-    if (!c.is_number(2)) return c.fail("GameRandom::Free_Random -- Invalid parameter 2, expected a number");
+    if (!c.is_number(1)) return c.script_error_stop("GameRandom::Free_Random -- Invalid parameter 1, expected a number");
+    if (!c.is_number(2)) return c.script_error_stop("GameRandom::Free_Random -- Invalid parameter 2, expected a number");
     if (mp && !c.vm->mp_free_random_warned) {
         c.vm->mp_free_random_warned = true;
         log::warnf("lua", "GameRandom::Free_Random -- cannot generate non-synchronized random numbers from script in MP");
@@ -132,11 +162,11 @@ int m_free_random(Call& c) {
 // GameRandom.Get_Float([lo, hi]) (0x5461b0): synchronized float helper; no arguments = [0, 1].
 int m_get_float(Call& c) {
     GameRandom* r = rng(c);
-    if (!r) return c.fail("GameRandom::Get_Float -- no game random attached to this script");
+    if (!r) return c.script_error_stop("GameRandom::Get_Float -- no game random attached to this script");
     float lo = 0.0f, hi = 1.0f;
     if (c.nargs >= 1) {
-        if (!c.is_number(1)) return c.fail("GameRandom::Get_Float -- Invalid parameter 1, expected a number");
-        if (!c.is_number(2)) return c.fail("GameRandom::Get_Float -- Invalid parameter 2, expected a number");
+        if (!c.is_number(1)) return c.script_error_stop("GameRandom::Get_Float -- Invalid parameter 1, expected a number");
+        if (!c.is_number(2)) return c.script_error_stop("GameRandom::Get_Float -- Invalid parameter 2, expected a number");
         lo = static_cast<float>(c.number(1));
         hi = static_cast<float>(c.number(2));
     }
@@ -151,7 +181,7 @@ int g_get_thread_id(Call& c) { return push_num(c, c.vm->current_thread); }
 
 // Create_Thread("Function_Name", params...) / Thread.Create(...): returns the new thread id.
 int g_create_thread(Call& c) {
-    if (!c.has(1)) return c.fail("LuaCreateThread -- Expected a string for function name.");
+    if (!c.has(1)) return c.script_error_stop("LuaCreateThread -- Expected a string for function name.");
     int fn_index = c.idx(1);
     std::string name;
     if (c.is_string(1)) {
@@ -160,12 +190,12 @@ int g_create_thread(Call& c) {
         lua_rawget(c.L, LUA_GLOBALSINDEX);
         fn_index = lua_gettop(c.L);
     } else if (lua_type(c.L, c.idx(1)) != LUA_TFUNCTION) {
-        return c.fail("LuaCreateThread -- Expected a string for function name.");
+        return c.script_error_stop("LuaCreateThread -- Expected a string for function name.");
     } else {
         name = "<function>";
     }
     if (lua_type(c.L, fn_index) != LUA_TFUNCTION)
-        return c.fail("LuaCreateThread -- Expected a LuaFunction parameter. (%s is not a global function)", name.c_str());
+        return c.script_error_stop("LuaCreateThread -- Expected a LuaFunction parameter. (%s is not a global function)", name.c_str());
     const int32_t id = c.vm->start_thread(c.L, fn_index, c.idx(2), c.nargs - 1, std::move(name));
     return push_num(c, id);
 }
@@ -173,7 +203,7 @@ int g_create_thread(Call& c) {
 int32_t thread_arg(Call& c) { return c.is_number(1) ? detail::to_int(c.number(1)) : -1; }
 
 int m_thread_kill(Call& c) {
-    if (!c.is_number(1)) return c.fail("LuaCreateThread::Kill -- Expected a thread id.");
+    if (!c.is_number(1)) return c.script_error_stop("LuaCreateThread::Kill -- Expected a thread id.");
     c.vm->kill_thread(thread_arg(c));
     return 0;
 }
@@ -215,7 +245,7 @@ void push_thread_values(Call& c) {
 }
 
 int g_thread_value(Call& c) {
-    if (!c.has(1)) return c.fail("ThreadValue -- Expected a key parameter.");
+    if (!c.has(1)) return c.script_error_stop("ThreadValue -- Expected a key parameter.");
     push_thread_values(c);
     lua_pushvalue(c.L, c.idx(1));
     lua_rawget(c.L, -2);
@@ -224,7 +254,7 @@ int g_thread_value(Call& c) {
 }
 
 int m_thread_value_set(Call& c) {
-    if (!c.has(1) || lua_isnil(c.L, c.idx(1))) return c.fail("ThreadValue::Set -- Expected a key parameter.");
+    if (!c.has(1) || lua_isnil(c.L, c.idx(1))) return c.script_error_stop("ThreadValue::Set -- Expected a key parameter.");
     push_thread_values(c);
     lua_pushvalue(c.L, c.idx(1));
     if (c.has(2))
@@ -363,8 +393,8 @@ int g_script_message(Call& c) {
 }
 
 int g_custom_script_message(Call& c) {
-    if (c.nargs != 2) return c.fail("LuaCustomScriptMessage -- Expected 2 parameters, got %d", c.nargs);
-    if (!c.is_string(1) || !c.is_string(2)) return c.fail("LuaCustomScriptMessage -- expected two string parameters.");
+    if (c.nargs != 2) return c.script_error_stop("LuaCustomScriptMessage -- Expected 2 parameters, got %d", c.nargs);
+    if (!c.is_string(1) || !c.is_string(2)) return c.script_error_stop("LuaCustomScriptMessage -- expected two string parameters.");
     c.vm->message("[CustomScriptMessage:" + std::string(c.string(1)) + "] " + std::string(c.string(2)));
     return 0;
 }
@@ -499,6 +529,14 @@ void detail::queue_event(lua_State* L, int fn_index, int params_index) {
     lua_rawseti(L, q, static_cast<int>(t));
     set_queue_field(L, q, "t", t);
     lua_pop(L, 1);
+}
+
+void detail::reset_event_queue(lua_State* L) {
+    for (const char* key : {kEventQueueKey, kEventParamsKey}) {
+        lua_pushstring(L, key);
+        lua_pushnil(L);
+        lua_rawset(L, LUA_REGISTRYINDEX);
+    }
 }
 
 std::span<const detail::ImplEntry> detail::impl_core() { return kImpl; }

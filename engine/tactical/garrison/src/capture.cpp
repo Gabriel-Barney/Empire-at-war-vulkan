@@ -64,6 +64,7 @@ float CapturePointSystem::progress(ObjectId id) const {
 }
 
 int32_t CapturePointSystem::controller(const Point& p, std::span<const Influencer> inf) const {
+    if (pad_occupied_ && pad_occupied_(p.id)) return p.owner;  // (a) an occupied build pad keeps its owner
     if (occupant_owner_) {  // (b) a garrison host with occupants
         const int32_t o = occupant_owner_(p.id);
         if (o >= 0) return o;

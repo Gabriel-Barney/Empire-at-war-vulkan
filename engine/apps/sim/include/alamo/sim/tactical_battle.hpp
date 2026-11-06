@@ -62,6 +62,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "alamo/commands/command.hpp"
@@ -167,6 +168,7 @@ struct BattleStats {
     uint32_t death_clones_removed = 0;  // refixf t04: clone objects removed by their death plan (at once included)
     // t50 (land skirmish): pads of the two slots, pads that started built, structures started on a pad during the battle.
     uint32_t skirmish_pads = 0, skirmish_prebuilt = 0, pad_builds = 0;
+    uint32_t pad_restored = 0;  // §9.4 persisted pad children recreated at setup
 };
 
 // A render-side attachment reported by the sim (Damaged_Smoke_Asset_Name at 75 % / 50 %).
@@ -241,8 +243,11 @@ void drop_deployed_extents(const objects::GameObjectTypes& types, const BattleCa
 struct FreePlacementBox {
     float min_x = 0.0f, min_y = 0.0f, max_x = 0.0f, max_y = 0.0f;
 };
+// q6 (OBJECT_SCRIPTS §10.4 step 5): `start_deg` turns the ring angles (start, start + 22.5, ..., start + 360); `accept`
+// (land: the candidate's cell is pure Clear) must also pass for a candidate to be taken.
 bool find_free_placement(float px, float py, const FreePlacementBox& local, std::span<const FreePlacementBox> blockers, float radius,
-                         float& out_x, float& out_y);
+                         float& out_x, float& out_y, float start_deg = 0.0f,
+                         const std::function<bool(float x, float y)>& accept = {});
 // ---- end a1g t04 follow-up ----
 // S7 t12 / t22: the space fighter locomotor's formation attack target (FIGHTER_FLYING §2 step 6 / §4.3 / §4.9,
 // Formation_Attack_Target(F, &hp, -1) 0x41a2e0, TACTICAL_COMBAT §2.8) for a squadron leader or a fighter without a
@@ -394,6 +399,20 @@ public:
         std::vector<objects::ObjectId> units;
     };
     std::span<const LandingUnload> landings_unloaded() const { return landings_unloaded_; }
+    // q6 t19 (SKIRMISH_SETUP §3 / §3.1): a finished land tactical build (not DUMMY_UPGRADE) never spawns: 0x27fad0 appends
+    // the type to the player's reinforcement pool (a reserve participant with no galactic counterpart, built = true, key
+    // kBuiltReserveKeyBase + its participant index) and signal 0x22 tells the build task it completed. The records of
+    // the tick just run (transient, not saved), in completion order.
+    static constexpr objects::ObjectId kBuiltReserveKeyBase = 0x01000000;
+    struct ProductionDone {
+        int32_t player = -1;
+        uint32_t type = 0;
+        objects::ObjectId key = objects::kNoObjectId;  // the pool entry, kNoObjectId when the pool refused the type
+    };
+    std::span<const ProductionDone> production_done() const { return production_done_; }
+    // Appends `type` to `owner`'s pool (above). False (nothing added) when the battle finished or a type it spawns is not
+    // in this battle's tables. Returns the key through `key`.
+    bool add_built_reserve(int32_t owner, uint32_t type, objects::ObjectId& key);
     // a1i t04: a landing object still waiting for its footprint to clear (state 4: model hidden) [port: no renderer reads
     // it yet]; the landing objects of `player` that have not finished their unload (timed mode; untimed ones finish at the
     // order).
@@ -688,6 +707,40 @@ public:
     int32_t retreat_increment_frames(int32_t player) const;
     // A script-spawned object joins the L1 systems (special-weapon / TSW packs). Call after TacticalMode::spawn.
     void adopt_object(TacticalMode& mode, objects::ObjectHandle h);
+    // q6 object scripts: Spawn_Unit of a game-object script (ObjectBridge::spawn_unit). TacticalMode::spawn (trees), then
+    // like an ability spawn (oi_spawn_unit): a combat / ability / movement unit, then the L1 systems (adopt_object). q6
+    // t12: a type outside the battle tables joins them first (script_add_types), so every script-spawned unit is a real
+    // battle unit (movement, combat, AI control, the owner's unit lists). An object with a container / attach parent is
+    // only TacticalMode::spawn'd.
+    objects::ObjectHandle script_spawn(TacticalMode& mode, const objects::SpawnParams& p);
+    // q6 t12: Spawn_Unit of a COMPANY type (ObjectBridge::spawn_company): the company comes down like a reinforcement the
+    // battle knows (deploy(): its spawn_types members as battle units, then the REMAINING_GAPS §3.4 TEAM containers), as a
+    // built participant (no galactic object) of p.owner. Members at the reinforcement drop layout around p.position
+    // (land_drop_layout with the side's drop yaw, each slot snapped to a passable cell of its member) [port: Spawn_Unit's
+    // tactical member placement is not in docs/re]. Returns the first TEAM container, else the first member (null when the
+    // type is not a company or nothing spawned). The types join the tables first (script_add_types).
+    objects::ObjectHandle script_spawn_company(TacticalMode& mode, const objects::SpawnParams& p);
+    // q6 t12: Lua Take_Damage(amount) on a battle combat unit (ObjectBridge::take_damage): CombatSystem::take_damage with
+    // damage kind 0 (Debug: passes invulnerability, TACTICAL_COMBAT §3.6 step 3; OBJECT_SCRIPTS §6.1 step 4), no source,
+    // at the battle frame; `cannot_die` (the script's Set_Cannot_Be_Killed) sets kUnitCannotDie for that hit. A kill is
+    // processed at once like a combat death (process_death: store removal, death clone, team container, victory monitor
+    // order) [port: outside the battle tick; the original's Die runs inside Take_Damage]. False when `id` is not a live
+    // combat unit of this battle (the caller keeps its store-only path).
+    bool script_damage(TacticalMode& mode, objects::ObjectId id, float amount, bool cannot_die);
+    // q6 (OBJECT_SCRIPTS §10.2): Lua Make_Invulnerable(on) (ObjectBridge::invulnerable_changed). The INVULNERABLE behaviour:
+    // on = CombatSystem kUnitInvulnerable (permanent, only damage kinds 0 / 13 pass, targeting unchanged); off = detached,
+    // which also ends an Invulnerability-ability duration. A TEAM container passes it to each member, not to itself. False
+    // when `id` is neither a combat unit of this battle nor a TEAM container.
+    bool script_invulnerable(objects::ObjectId id, bool on);
+    // q6 (OBJECT_SCRIPTS §10.3): Lua Hide's model test (ObjectBridge::has_model): the type of `h` names a model for this
+    // battle's mode (Space_ / Land_Model_Name). [port] by type data; the original reads the object's model pointer.
+    bool script_has_model(const TacticalMode& mode, objects::ObjectHandle h) const;
+    // q6 (COMMANDS §2.4.1 step 3 / 4): Select All's battle tests of an owned SELECTABLE object `id` (the store tests are the
+    // caller's, SimHost): false = skipped (its owner's retreat is running [port: every unit of that player], a TEAM member,
+    // a garrisoned unit); a TEAM container appends its live, not retreated members (member order) to `members`.
+    bool select_all_entry(objects::ObjectId id, int32_t owner, std::vector<objects::ObjectId>& members) const;
+    // q6 (OBJECT_SCRIPTS §10.4 step 2): Spawn_Unit's facing at `p`: toward the map origin (ObjectBridge::spawn_facing).
+    Vec3 script_spawn_facing(Vec3 p) const;
     const tactical::abilities::SpecialWeaponSystem& special_weapons() const { return l1_sw_; }
     const tactical::movement::HyperspaceDepartures& hyperspace() const { return l1_jumps_; }
     const tactical::movement::EngineControl& engines() const { return l1_engines_; }
@@ -779,9 +832,11 @@ public:
     // placements); their state is created on first use. pad_build = Lua Build (§2.2) / start build 0x42dbd0 without
     // charge or SFX: 1 started, 0 refused by the rules (check_rules: the type in the pad owner's faction row of
     // Tactical_Buildable_Objects_Campaign [S10 battles are campaign battles] and rule 0x42e400: no live non-allied
-    // Influences_Capture_Point object within the pad type's Capture_Point_Radius, 3-D), -1 start failed (pad not empty,
-    // cooldown running, type missing). The under-construction (UC) object of `type` is spawned at the pad (position,
-    // facing; owner = the pad owner). Each tick (after the S4 step): a UC reaching its end frame (Tactical_Build_Time_Seconds
+    // Influences_Capture_Point object within the pad type's Capture_Point_Radius, 3-D; q6 t19: no Neutral exemption, objects
+    // with BASE_SHIELD / DUMMY_GROUND_STRUCTURE ignored), -1 start failed (pad not empty, cooldown running, type missing,
+    // `builder` not allied with the pad owner - relation 0, so a skirmish Neutral pad never). The under-construction (UC)
+    // object of `type` is spawned at the pad (position, facing; owner = `builder`, default the pad owner as Lua pad.Build;
+    // the pad owner is unchanged, AI_TACTICAL §7.5.1). Each tick (after the S4 step): a UC reaching its end frame (Tactical_Build_Time_Seconds
     // of the UC type x 30 [port: per-mode player multiplier 1]) is replaced by its Tactical_Buildable_Constructed type at
     // the UC position (+0.1 z, same facing, builder's ownership); a UC / built object that died clears the pad (lock
     // cleared with the built object; Destroy_When_Child_Dies kills the pad; else Minimum_Time_Before_Pad_Can_Build_Again
@@ -792,7 +847,7 @@ public:
     // allied with the pad owner is killed silently; when the child goes away a CAPTURE_POINT pad goes back to the
     // neutral player (owner + capture record). Galactic persistence: see set_pad_persistence. CRC: hash_abilities once a
     // pad was used.
-    int32_t pad_build(TacticalMode& mode, objects::ObjectId pad, objects::TypeIndex type, bool check_rules);
+    int32_t pad_build(TacticalMode& mode, objects::ObjectId pad, objects::TypeIndex type, bool check_rules, int32_t builder = -1);
     objects::ObjectId pad_contents(objects::ObjectId pad) const;  // built, else UC, else kNoObjectId
     bool pad_locked(objects::ObjectId pad) const;
     void pad_lock(objects::ObjectId pad, bool lock);
@@ -830,18 +885,25 @@ public:
     // t50: Land_Skirmish_Unit_Cap_By_Player_Count of the player's faction at the battle's player count [M: linear
     // interpolation between the curve's keys, clamped to its ends]; -1 = no curve.
     float skirmish_land_unit_cap(int32_t player) const;
-    // §6.5 galactic persistence (0x42f160 / 0x4b6c70 / 0x4bb3a0 / 0x4b7c00): records of the battle planet's persistent
-    // pad children {type, pad x / y / z, small int <= 5 [M: level], int [port: the builder]}. [port] The planet data
-    // vector (D +0x10) has no galactic-side storage yet: CampaignBattles keeps one list per planet and passes it here
-    // before setup (null = off: skirmish, no planet). Pad types with Tactically_Built_Child_Object_Persists add a record
-    // when their child completes (refused when the position is already present), the child's death / sale removes it
-    // (position and type match), and setup restores every pad whose x and y equal a record's exactly (last match wins).
-    struct PadRecord {
-        uint32_t type = 0;
-        float x = 0.0f, y = 0.0f, z = 0.0f;
-        int32_t level = 0, value = -1;
-    };
-    void set_pad_persistence(std::vector<PadRecord>* records) { pad_records_ = records; }
+    // Galactic persistence (AI_GALACTIC_TOKENS §9.4, REMAINING_GAPS §6.5: gate 0x42f160, add 0x4b6c70, remove 0x4bb3a0,
+    // lookup 0x4b7c00, recreate 0x42d8b0): `records` = the battle planet's GalacticSim::built_objects list, set by the host
+    // before setup (null = off: no planet). Not in a skirmish (cfg.skirmish) at all.
+    //   gate (add / remove)  campaign battle with a planet list, not the sandbox story battle (BattleRequest::sandbox, the
+    //                        original's conflict state 9), the pad type's Tactically_Built_Child_Object_Persists (default yes).
+    //   add                  at construction completion: {finished type, the finished object's position (build point +
+    //                        0.1 z), the pad's base level (map mini 0x0B; refused outside 0..5), the pad's owner};
+    //                        refused when a record has the same x and y (exact; z not compared).
+    //   remove               the pad's finished child dies or is sold: the record at its x and y with the same type.
+    //   recreate (`restore`) at setup, also in a sandbox battle, not while a save is loaded (restore = false: the saved
+    //                        battle keeps its saved objects): each pad's own x and y, last match wins; the finished type
+    //                        for the record's owner at the pad's build point with the pad's facing, full health, in the
+    //                        pad's child slot (so a pre-placed type is not spawned). No match / unknown type / owner -1:
+    //                        nothing, the record stays. [port] an owner that is not a battle player: nothing either.
+    using PadRecord = galactic::PersistedBuiltObject;
+    void set_pad_persistence(std::vector<PadRecord>* records, bool restore = true) {
+        pad_records_ = records;
+        pad_restore_ = restore;
+    }
     // Credits of the galactic player (campaign battles spend the galactic account). Unset: every player has 0 credits
     // and refunds are dropped. CampaignBattles installs GalacticSim::credits / add_credits.
     void set_credit_hooks(std::function<float(int32_t)> get, std::function<void(int32_t, float)> add) {
@@ -1201,7 +1263,13 @@ private:
     // a1i t05 (A1_READINGS §35.4 item 4): the space Reinforce members' positions around (x, y), in spawn order (one member:
     // the point). False when a member's model box is not loaded (no model data) [port: the rows of 6 then].
     bool space_member_spots(TacticalMode& mode, const Participant& p, float x, float y, std::vector<Vec3>& out) const;
+    // q6 (OBJECT_SCRIPTS §10.4 step 5): Spawn_Unit's member spots around `at`, in member order: per member the free
+    // placement ring search (radius 2500, start angle yaw - 45), land candidates on a pure-Clear cell with z := terrain
+    // height; each placed member blocks the later ones; no free spot -> `at`.
+    void script_member_spots(const TacticalMode& mode, std::span<const uint32_t> members, Vec3 at, float yaw_deg,
+                             std::vector<Vec3>& out) const;
     std::vector<LandingUnload> landings_unloaded_;    // transient (not saved): see landings_unloaded()
+    std::vector<ProductionDone> production_done_;     // q6 t19, transient (not saved): see production_done()
     void reinforce(TacticalMode& mode, SimRng& rng, bool force_empty_sides);
     void issue_orders(TacticalMode& mode, SimRng& rng);
     void retreat_policy();
@@ -1300,6 +1368,8 @@ private:
     std::vector<PresenceTypeInfo> presence_cache_;
     std::vector<uint8_t> idle_gate_;  // drive_animation scratch (per units_ index)
     void consume_events(TacticalMode& mode, SimRng& rng);
+    // consume_events step d for one combat death (also script_damage's out-of-tick kills): a dead or unknown unit is skipped.
+    void process_death(TacticalMode& mode, const tactical::combat::DeathEvent& d, SimRng& rng);
     void spawn_particle(TacticalMode& mode, int32_t type, Vec3 pos, int32_t owner);
     objects::ObjectHandle spawn_prop(TacticalMode& mode, int32_t type, Vec3 pos, Vec3 facing, int32_t owner);
     // refix t01 / t03: Die step 8's clone object (flags 0xc0), and the infantry corpse-path test (S9 §1.6).
@@ -1327,6 +1397,35 @@ private:
                    bool attack_move, uint8_t flags = 0, bool switch_locomotor = false,
                    objects::ObjectId goal_object = kNoObjectId);  // S7 t37: an object goal (mv::MoveOrder::goal_object)
     uint32_t exec_attack(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, int32_t hp, SimRng& rng);
+    // --- q6: an attack ordered on a TEAM container (A1_READINGS §33.2.1 row 1: a TEAM container passes 0x5680b0 on its
+    // own; TACTICAL_COMBAT §2.8 B step 5 / FIGHTER_FLYING §4.10 B: the attacker's target is the container itself). The
+    // container is not a combat unit in the port, so the host keeps the container order per attacker and gives combat the
+    // member the next shot would take: the live member nearest the attacker (LOB_SOLVER §5.1, 0x404fc0; XY distance, ties
+    // by the lower id [port]); a squadron (combat share group) shares its first attacker's pick (0x406370). The member is
+    // re-picked after every combat tick (nearest changed, member dead); the order ends when the container is gone (its last
+    // member died or left), the attacker's combat order was dropped or replaced, or a newer order (signal 0xb) arrives.
+    struct TeamAttack {
+        objects::ObjectId attacker = objects::kNoObjectId;   // ascending
+        objects::ObjectId container = objects::kNoObjectId;  // the ordered target
+        objects::ObjectId member = objects::kNoObjectId;     // combat's ordered target (the current pick)
+        bool goal = false;  // the order also set the formation attack goal (AI host: Attack_Target block, §2.8)
+    };
+    std::vector<TeamAttack> team_attacks_;
+    struct TeamPick {  // one pass's squadron pick (0x406370: the squadron shares its first attacker's pick)
+        objects::ObjectId group = objects::kNoObjectId, container = objects::kNoObjectId, member = objects::kNoObjectId;
+    };
+    // A live TEAM container (not removed, at least one member alive), nullptr otherwise (also for a unit id).
+    const Container* team_target(objects::ObjectId id) const;
+    // The member of `c` an attacker at `from` aims at (see above; `group` = the attacker's combat share group, `picks` the
+    // squadron picks already made in this pass); kNoObjectId when no member is alive.
+    objects::ObjectId team_pick(const TacticalMode& mode, const Container& c, Vec3 from, objects::ObjectId group,
+                                std::vector<TeamPick>& picks) const;
+    void team_attack_set(objects::ObjectId attacker, objects::ObjectId container, objects::ObjectId member, bool goal);
+    void team_attack_drop(std::span<const objects::ObjectId> ids);
+    void team_attack_service(TacticalMode& mode, SimRng& rng);  // after the combat tick's events
+    // exec_attack's approach: a movable, unlocked unit farther than 80 % of max(range, 100) from `tp` moves to 70 %. With a
+    // `goal` (the order's object block), a fighter's move names it, and in range the fighter still gets a new formation.
+    void attack_approach(TacticalMode& mode, const Unit& u, Vec3 tp, SimRng& rng, objects::ObjectId goal = objects::kNoObjectId);
     commands::RejectReason handle_ability(TacticalMode& mode, uint8_t player, const commands::EventData& ev, SimRng& rng);
     void hash_queues(StateHasher& h) const;
     // --- end queueable unit actions ---
@@ -1346,7 +1445,7 @@ private:
     std::unique_ptr<BattleTables> tables_;
     std::vector<uint32_t> types_used_;  // every type spawned in this battle, first-use order
     std::vector<uint32_t> descs_;       // CombatData::units index per types_used_ entry
-    std::unique_ptr<BattleCatalog::BattleBuild> tables_build_;  // OPT3 t09: constructor / setup's table build (null after setup)
+    std::unique_ptr<BattleCatalog::BattleBuild> tables_build_;  // OPT3 t09: constructor / setup's table build (q6 t12: kept for script_add_types)
     void tables_extend();  // tables_ / descs_ := the build of types_used_ (only the appended types are built)
     std::unique_ptr<tactical::movement::MovementSystem> movement_;
     std::vector<tactical::movement::ClearanceInfo> clr_types_;  // §6.3.1: per type (derived from type / model data)
@@ -1561,8 +1660,13 @@ private:
         bool locked = false;
         objects::TypeIndex built_type = objects::kNone;  // §6.5: the built child's type (persistence removal)
     };
-    // §6.5 galactic persistence add (0x4b6c70) / remove (0x4bb3a0) for a pad type with Tactically_Built_Child_Object_Persists.
-    void pad_persist(const objects::ObjectStore& st, objects::ObjectHandle pad, objects::TypeIndex type, int32_t value, bool add);
+    // §9.4 galactic persistence add (0x4b6c70, `pos` = the finished object's position) / remove (0x4bb3a0, `pos` = the
+    // child's position) behind the gate 0x42f160 (set_pad_persistence).
+    void pad_persist(const objects::ObjectStore& st, objects::ObjectHandle pad, objects::TypeIndex type, const Vec3& pos, bool add);
+    // §9.4: the pad's base level byte (+0x39C, map mini 0x0B) of map-placed pads with a non-zero level, ascending pad id
+    // (bt_map_load; derived from the map, so not saved: a load's setup rebuilds it). Other pads: 0.
+    std::vector<std::pair<objects::ObjectId, int32_t>> pad_levels_;
+    int32_t pad_base_level(objects::ObjectId pad) const;
     std::vector<PadState> pads_;  // ascending pad id
     bool pads_used_ = false;
     TacticalMode* pads_mode_ = nullptr;
@@ -1617,12 +1721,17 @@ private:
     // S7 t30 (TACTICAL_COMBAT §2.10): the start value of the relation table entry (row p, column q): 0 friendly, 1 enemy,
     // 2 neutral. Skirmish (cfg_.skirmish) or campaign rules; the combat matrix's enemy flag = (value == 1).
     int32_t bt_relation(int32_t p, int32_t q) const;
+    bool bt_allied(int32_t p, int32_t q) const { return bt_relation(p, q) == 0; }  // 0x39a230 / 0x39a2c0 (AI_TACTICAL §7.5.1)
+    // q6 t19 rule 0x42e400 per object (alive + Influences_Capture_Point tested by the caller): no BASE_SHIELD, no
+    // DUMMY_GROUND_STRUCTURE, owner not allied with `pad_owner`.
+    bool pad_rule_blocker(const objects::ObjectStore& st, objects::ObjectHandle h, int32_t pad_owner) const;
     int32_t bt_map_owner(uint32_t raw) const;    // .ted owner (faction index) -> player [probe 2026-10-29]; -1 = unknown
     void s4_capture_grant(TacticalMode& mode, objects::ObjectId point, int32_t owner);  // landing point -> attacker
     void bt_kill_silently(TacticalMode& mode, objects::ObjectHandle h);  // 0x391310 flag 1 (no death events)
     void s4_capture_reset(TacticalMode& mode, objects::ObjectId pad);   // §6.5: the pad's capture point -> neutral
     Vec3 bt_pad_attach_point(const TacticalMode& mode, objects::ObjectHandle pad) const;  // §6.5 UC attachment bone
-    std::vector<PadRecord>* pad_records_ = nullptr;  // §6.5 galactic persistence (host-owned, per planet)
+    std::vector<PadRecord>* pad_records_ = nullptr;  // §9.4 galactic persistence (GalacticSim::built_objects of the planet)
+    bool pad_restore_ = true;                         // §9.4 recreate at setup (false while a save is loaded)
     void bt_pad_restore(TacticalMode& mode);          // setup: persistent pad children back on their pads
     void bt_skirmish_base(TacticalMode& mode);        // t50 setup: the land skirmish's pre-built base (command center, barracks)
     void bt_skirmish_anchors();                       // t50 setup: land skirmish start positions from the slot's map markers
@@ -1668,6 +1777,10 @@ private:
     // Called after the movement tick (clip ends, before the combat flags are read) and after oi_events (requests).
     void oi_deploy_sync();
     objects::ObjectId oi_spawn_unit(TacticalMode& mode, int32_t type, Vec3 pos, Vec3 facing, int32_t owner);
+    // q6 t12: script-spawned types (and, for a company, its members and TEAM types) join the battle tables mid-battle:
+    // appended to types_used_ and built onto the live tables (tables_extend on the kept setup build), then the ability /
+    // survivor types they name (oi_add_ability_types). [port] Their hangar descriptors (hg_add_types) are not added.
+    void script_add_types(std::span<const uint32_t> types);
     void oi_hash(StateHasher& h) const;
     bool oi_company_members(int32_t type, std::vector<int32_t>& members) const;  // §5.2 Company_Units / Squadron_Units
     struct OiRespawn {

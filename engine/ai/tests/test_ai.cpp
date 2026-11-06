@@ -374,6 +374,28 @@ static void test_language() {
         res = evaluate(set, set.find("Bad"), ctx, r);
         CHECK(!res.ok);
         CHECK(set.equation(set.find("B")).line == 5);
+        CHECK(eval_failure_site(set, evaluate(set, set.find("a"), ctx, r)).empty());  // ok: no site
+        CHECK(eval_failure_site(set, evaluate(set, set.find("Loop"), ctx, r)) == "recursion Function_Loop");
+    }
+    // q6 t10 diagnostics: eval_failure_site names the first failing node, also inside a nested Function_.
+    {
+        const char* xml =
+            "<Equations>\n<Outer> 1 + Function_Inner.Evaluate </Outer>\n"
+            "<Inner> Game.IsCampaignGame * Variable_Human.SpaceTotalUnnormalized + Variable_Target.Nope </Inner>\n"
+            "<Div> 1 / (Game.IsCampaignGame - 1) </Div>\n<Scr> Script_AnyFreeLandSlots.Evaluate </Scr>\n</Equations>\n";
+        EquationSet set;
+        LoadReport rep;
+        set.add_file(xml, "site.xml", rep);
+        set.link(&rep);
+        EvalContext ctx;
+        ctx.self = 0;
+        EvalResult res = evaluate(set, set.find("Outer"), ctx, r);
+        CHECK(!res.ok && res.error == EvalError::Token);
+        CHECK(eval_failure_site(set, res) == "Variable_Human.SpaceTotalUnnormalized");
+        res = evaluate(set, set.find("Div"), ctx, r);
+        CHECK(!res.ok && eval_failure_site(set, res) == "divide-by-zero");
+        res = evaluate(set, set.find("Scr"), ctx, r);
+        CHECK(!res.ok && eval_failure_site(set, res) == "Script_AnyFreeLandSlots");
     }
 }
 
@@ -924,6 +946,46 @@ static std::string env_or(const char* name, const char* fallback) {
 #endif
 }
 
+// q6: galactic seed roles (make_force_type_lookup) follow galactic::galactic_unit_kind. Synthetic types: a mod tag takes
+// its DUMMY_* behaviour's role; the seed's vanilla tags keep their rule (a vanilla-unclassified tag ignores the behaviour).
+
+static void test_seed_roles() {
+    MemFiles f;
+    f.put("Data\\XML\\GameObjectFiles.xml", "<L><File>SeedTypes.xml</File></L>");
+    f.put("Data\\XML\\SeedTypes.xml",
+          "<Types>"
+          "<SkirmishSpaceUnit Name=\"Mod_Ship\"><Behavior>DUMMY_STARSHIP</Behavior><CategoryMask>Infantry</CategoryMask></SkirmishSpaceUnit>"
+          "<ModStation Name=\"Mod_Base\"><Behavior>DUMMY_STAR_BASE</Behavior><Base_Level>3</Base_Level></ModStation>"
+          "<ModBuilding Name=\"Mod_Barracks\"><Behavior>DUMMY_GROUND_STRUCTURE</Behavior></ModBuilding>"
+          "<ModCompany Name=\"Mod_Company\"><Behavior>DUMMY_GROUND_COMPANY</Behavior><CategoryMask>Capital</CategoryMask></ModCompany>"
+          "<ModWing Name=\"Mod_Wing\"><Behavior>DUMMY_SPACE_FIGHTER_SQUADRON</Behavior></ModWing>"
+          "<ModThing Name=\"Mod_Plain\"><CategoryMask>Frigate</CategoryMask></ModThing>"
+          "<SpaceUnit Name=\"Van_Frigate\"><CategoryMask>Frigate</CategoryMask></SpaceUnit>"
+          "<GroundBase Name=\"Van_Ground_Base\"><Behavior>DUMMY_GROUND_BASE</Behavior></GroundBase>"
+          "<Props_Story Name=\"Van_Story_Prop\"><Behavior>DUMMY_STARSHIP</Behavior></Props_Story>"
+          "</Types>");
+    objects::ObjectTypeDatabase raw;
+    objects::GameObjectTypes types;
+    CHECK(raw.load(f) && types.build(raw, &f) && types.size() == 9);
+    const ForceTypeLookup lookup = make_force_type_lookup(types);
+    const ForceType ship = lookup("Mod_Ship"), base = lookup("Mod_Base"), barracks = lookup("Mod_Barracks"),
+                    company = lookup("Mod_Company"), wing = lookup("Mod_Wing"), plain = lookup("Mod_Plain"),
+                    frigate = lookup("Van_Frigate"), gbase = lookup("Van_Ground_Base"), story = lookup("Van_Story_Prop");
+    CHECK(ship.valid && ship.layer == UnitLayer::Space && !ship.starbase && !ship.structure);  // the old rule: ground
+    CHECK(base.valid && base.starbase && base.layer == UnitLayer::Space && base.base_level == 3);
+    CHECK(barracks.valid && barracks.structure && barracks.layer == UnitLayer::Ground);
+    CHECK(company.valid && company.layer == UnitLayer::Ground && !company.structure);  // the old rule: space (Capital)
+    CHECK(wing.valid && wing.layer == UnitLayer::Space);
+    CHECK(plain.valid && plain.layer == UnitLayer::Space && !plain.structure);  // no behaviour: CategoryMask
+    CHECK(frigate.valid && frigate.layer == UnitLayer::Space);
+    CHECK(gbase.valid && !gbase.structure && gbase.layer == UnitLayer::Ground);  // the seed's GroundBase rule [port]
+    CHECK(story.valid && story.layer == UnitLayer::Ground);  // vanilla-unclassified tag: the behaviour is ignored
+    CHECK(!lookup("Missing").valid);
+    const ForceType old_ship = force_type_of(types, types.resolve_name("Mod_Ship"), true);
+    CHECK(old_ship.layer == UnitLayer::Ground);
+    std::printf("   seed roles (synthetic): mod tags by DUMMY_* behaviour, vanilla tags unchanged\n");
+}
+
 static void real_data(const std::string& root, const char* label, bool foc) {
     std::error_code ec;
     if (!fs::is_directory(path_from_utf8(root) / "Data", ec)) {
@@ -1041,6 +1103,22 @@ static void real_data(const std::string& root, const char* label, bool foc) {
     raw.load(*v, &diag);
     objects::GameObjectTypes types;
     types.build(raw, v.get(), &diag);
+    // q6: the seed's roles come from galactic_unit_kind; every vanilla type keeps the role of the seed's old tag rule.
+    {
+        uint32_t differ = 0;
+        for (objects::TypeIndex t = 0; t < types.size(); ++t) {
+            const ForceType a = force_type_of(types, t), b = force_type_of(types, t, true);
+            if (a.layer == b.layer && a.starbase == b.starbase && a.structure == b.structure && a.base_level == b.base_level)
+                continue;
+            if (++differ <= 20)
+                std::printf("   seed role differs: %s <%.*s> layer %d/%d starbase %d/%d structure %d/%d\n",
+                            std::string(types.raw().types().name[t]).c_str(), static_cast<int>(types.raw().element_name(t).size()),
+                            types.raw().element_name(t).data(), static_cast<int>(a.layer), static_cast<int>(b.layer), a.starbase,
+                            b.starbase, a.structure, b.structure);
+        }
+        std::printf("   %s seed roles: %zu types, %u differ from the old tag rule\n", label, types.size(), differ);
+        CHECK(differ == 0);
+    }
     const ForceTypeLookup lookup = make_force_type_lookup(types);
     uint32_t campaigns = 0, with_values = 0, unknown_forces = 0;
     for (const data::CampaignDef& c : db.campaigns()) {
@@ -1072,12 +1150,61 @@ static void real_data(const std::string& root, const char* label, bool foc) {
 #endif
 }
 
+// q6: Thrawn's Revenge (workshop 1125571106, next to a Steam FoC install or ALAMO_TR_DATA) through the VFS: its own
+// element tags (SkirmishSpaceUnit, DummyStructure, ...) take their DUMMY_* roles in the galactic seed.
+static void tr_seed_roles(const std::string& foc_data) {
+#ifdef ALAMO_AI_HAVE_VFS
+    std::string tr = env_or("ALAMO_TR_DATA", "");
+    const size_t at = foc_data.find("\\steamapps\\common\\");
+    if (tr.empty() && at != std::string::npos) tr = foc_data.substr(0, at) + "\\steamapps\\workshop\\content\\32470\\1125571106";
+    std::error_code ec;
+    if (tr.empty() || foc_data.empty() || !fs::is_directory(path_from_utf8(tr) / "Data" / "XML", ec)) {
+        std::printf("Thrawn's Revenge data not found (ALAMO_TR_DATA / Steam library): TR seed roles skipped\n");
+        return;
+    }
+    vfs::VfsConfig cfg;
+    cfg.foc_root = foc_data;
+    cfg.mod_paths = {tr};
+    std::string err;
+    auto v = vfs::Vfs::create(cfg, &err);
+    if (!v) {
+        std::printf("Thrawn's Revenge: VFS failed (%s): skipped\n", err.c_str());
+        return;
+    }
+    std::vector<std::string> diag;
+    objects::ObjectTypeDatabase raw;
+    objects::GameObjectTypes types;
+    CHECK(raw.load(*v, &diag) && types.build(raw, v.get(), &diag));
+    uint32_t differ = 0, starbases = 0, structures = 0, space = 0;
+    for (objects::TypeIndex t = 0; t < types.size(); ++t) {
+        const ForceType a = force_type_of(types, t), b = force_type_of(types, t, true);
+        if (a.layer == b.layer && a.starbase == b.starbase && a.structure == b.structure) continue;
+        ++differ;
+        starbases += a.starbase ? 1u : 0u;
+        structures += a.structure ? 1u : 0u;
+        space += !a.starbase && a.layer == UnitLayer::Space ? 1u : 0u;
+    }
+    std::printf("   Thrawn's Revenge seed roles: %zu types, %u take a DUMMY_* role the old tag rule missed (%u starbases, %u "
+                "structures, %u space units)\n",
+                types.size(), differ, starbases, structures, space);
+    CHECK(differ > 0 && structures > 0 && space > 0);
+#else
+    (void)foc_data;
+#endif
+}
+
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     log::set_min_level(log::Level::Error);
     bool write_golden = false;
-    for (int i = 1; i < argc; ++i)
+    for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--write-golden") write_golden = true;
+        if (std::string(argv[i]) == "--tr-seed-roles") {  // q6: the Thrawn's Revenge check alone (slow: ~19k types)
+            tr_seed_roles(env_or("ALAMO_FOC_DATA", ""));
+            std::printf(g_fail ? "alamo_ai_tests: %d failure(s)\n" : "alamo_ai_tests: OK\n", g_fail);
+            return g_fail ? 1 : 0;
+        }
+    }
     test_language();
     test_enum_literal_files();
     test_hand_cases();
@@ -1087,6 +1214,7 @@ int main(int argc, char** argv) {
     test_path_finder_costs_and_fog();
     test_path_finder_determinism();
     test_path_finder_background();
+    test_seed_roles();
     real_data(env_or("ALAMO_FOC_DATA", "/home/claude/data/foc"), "FoC", true);
     real_data(env_or("ALAMO_EAW_DATA", "/home/claude/data/eaw"), "EaW", false);
     std::printf(g_fail ? "alamo_ai_tests: %d failure(s)\n" : "alamo_ai_tests: OK\n", g_fail);

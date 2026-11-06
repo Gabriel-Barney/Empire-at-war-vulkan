@@ -100,7 +100,7 @@ struct ScriptObjectState {
     bool prevent_ai_usage = false;
     bool prevent_all_fire = false;
     bool prevent_opportunity_fire = false;
-    bool invulnerable = false;        // Make_Invulnerable: Take_Damage does nothing
+    bool invulnerable = false;        // Make_Invulnerable (Take_Damage is kind 0 and passes it, q6 t12)
     bool cannot_be_killed = false;    // Set_Cannot_Be_Killed: Take_Damage cannot reach 0
     bool locomotor_suspended = false;
     bool highlighted = false, highlighted_small = false;
@@ -120,6 +120,16 @@ struct ScriptObjectState {
     bool animation_loop = false;
     int32_t animation_index = -1;
     std::map<uint8_t, AbilityState> abilities;  // by UnitAbilityType id (OBJECT_TYPES.md §9.1.4)
+};
+
+// q6 (OBJECT_SCRIPTS §10.1): the outcome of Prevent_AI_Usage on the owner's AI free store. The warnings log and go on; the
+// errors end the script after its pass.
+enum class PreventAiResult : uint8_t {
+    Done = 0,
+    NoAiPlayer,      // warning "No AI Player active on the owner of this object." (a human or AI-less owner: no effect)
+    NoAiPresence,    // error: the owner's AI has no presence in this mode
+    NotInitialised,  // error: the owner's AI is not initialised yet
+    NoFreeStore,     // warning "No freestore exists for this AI Player."
 };
 
 // Reinforce_Unit(type, location | false, player [, ignore_rules [, obey_zones]]) as the host sees it.
@@ -191,6 +201,33 @@ public:
     // origin, as Spawn_Unit, in every mode (TACTICAL_COMBAT §3.1.1 "other spawns"); a host hook applies the same rule.
     std::function<std::vector<objects::ObjectHandle>(objects::TypeIndex type, int32_t player, Vec3 position)>
         spawn_from_pool;
+    // q6 object scripts (OBJECT_SCRIPTS.md §6.1 step 3): Spawn_Unit / Create_Generic_Object-style direct creation
+    // (bind_objects.cpp spawn(): the unit and each Company_Units member) through the host, which links the object into
+    // its systems (a tactical battle: trees, and combat / movement when the type is in the battle tables). Returns the
+    // new object, or a null handle to fall back to ObjectStore::create. Unset (default): ObjectStore::create.
+    std::function<objects::ObjectHandle(const objects::SpawnParams& p)> spawn_unit;
+    // q6 t12: Spawn_Unit of a company type (one with Company_Units) when the host lays out companies itself (a tactical
+    // battle: its members as battle units plus their TEAM containers, TacticalBattle::script_spawn_company). Returns the
+    // object Spawn_Unit hands to Lua; null = not handled (the binding creates the company and its members itself, each
+    // through spawn_unit). Unset (default): the binding's own layout.
+    std::function<objects::ObjectHandle(const objects::SpawnParams& p)> spawn_company;
+    // q6 t12: Take_Damage(amount) without a hardpoint name through the host's damage system (a tactical battle: the
+    // combat Take_Damage with kind 0, TacticalBattle::script_damage); `cannot_die` = the object's Set_Cannot_Be_Killed.
+    // True = applied by the host (the death, if any, processed there); false or unset: the store-only health change.
+    std::function<bool(objects::ObjectHandle unit, float amount, bool cannot_die)> take_damage;
+    // q6 (OBJECT_SCRIPTS §10.2): Make_Invulnerable(on), called after ScriptObjectState::invulnerable is stored: the host's
+    // INVULNERABLE behaviour (a tactical battle: the combat gate that drops every damage kind but 0 and 13; a TEAM
+    // container passes it to its members). Unset: only the flag is stored.
+    std::function<void(objects::ObjectHandle, bool on)> invulnerable_changed;
+    // q6 (OBJECT_SCRIPTS §10.1): Prevent_AI_Usage(on) on the owner's AI free store of the current mode (true: removed,
+    // false: admitted by the normal rules); no object flag. Returns the outcome; unset: only the flag is stored.
+    std::function<PreventAiResult(objects::ObjectHandle, bool on)> prevent_ai_usage;
+    // q6 (OBJECT_SCRIPTS §10.3): whether the object has a model in this mode (decided from the type's model name, never from
+    // loaded art); Hide on an object without one is a script error. Unset: every object has one.
+    std::function<bool(objects::ObjectHandle)> has_model;
+    // q6 (OBJECT_SCRIPTS §10.4 step 2): Spawn_Unit's facing for a point in this mode (a tactical battle: toward the map
+    // origin). Unset: the location object's facing, else +X.
+    std::function<Vec3(Vec3 position)> spawn_facing;
     // refixf t03: the representative type 0x3973b0 (docs/re/LUA_API.md "Find_All_Objects_Of_Type and the sibling
     // finders"; A1_READINGS §29) that Find_All_Objects_Of_Type and Find_Nearest match on: a team container -> the
     // company's Create_Team_Type, else the company type; a transport -> its company type; a squadron fleet -> its

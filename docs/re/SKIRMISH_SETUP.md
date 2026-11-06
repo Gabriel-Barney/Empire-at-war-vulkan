@@ -49,8 +49,9 @@ Order, all three alike [H]:
    is registered via 0x28a4a0.
 5. Mode vf 0x20, 0x2b3e00, 0xcac70.
 
-0xeed80 also copies GC Skirmish_Buy_Credits (GC+0x1184c, 2000) to 0x140a62214 / 0x140a62218: the budget
-of the pre-game buy-units dialog (IDD_SKIRMISH_BUY_UNITS_DIALOG, list built by 0xf0600) [M]. Faction
+Correction (q6 RE, 2026-11-04): 0xeed80 does not touch the buy-units budget. GC Skirmish_Buy_Credits (GC+0x1184c =
+0x140b2704c, 2000) is copied to 0x140a62214 / 0x140a62218 by the dialog's open function 0xeddd0, and only when no game
+mode exists yet. The dialog, its list and where the bought list goes are in §2.7. [H] Faction
 Land_ / Space_Skirmish_Unit_Buy_Credits (+0x28c4 / +0x28c8, 50000 / 100000) have no code reader [M].
 
 ### 2.1 Owner remap 0x294fa0 [H]
@@ -106,6 +107,110 @@ empty, and either not skirmish or (option flag 0x8 and the pad type's Respects_S
 +0xe5), the type is created for the pad owner (+0x58) at the build bone (0x42e280) with the pad
 orientation; an under-construction type is replaced by its Tactical_Buildable_Constructed (+0x9f0).
 Then sell/garrison setup, +0x3cb copied, revealed to all players, +0x18 cleared. Otherwise pad anim 0x75.
+
+### 2.7 The buy-units dialog IDD_SKIRMISH_BUY_UNITS_DIALOG (q6 RE, 2026-11-04) [H unless tagged]
+
+Functions: open 0xeddd0(faction, is_space, game type), list build 0xf0600, list fill 0xef9f0, buy 0xf0920, sell one
+0xf0c30 (also inline in the handler), clear 0xf0de0, message handler 0xee400, budget text 0xf03f0, close 0xee3c0.
+State: list of candidate types 0x140a11d98 (count 0x140a11da0), bought list 0x140a11db0 (count 0x140a11db8), budget
+0x140a62218, start budget 0x140a62214, faction 0x140a62220, is-space flag 0x140a62211, open flag 0x140a62210.
+
+**Who opens it.**
+- In this build the only openers are 0x36250 and 0x37760 (a command-bar callback, registered by 0x30ae50 from
+  `CommandBarComponentFiles`; which button or key uses it is [L]). Both run only during a tactical battle that is a
+  skirmish (0x28afb0), with the dialog closed and a local player present. Arguments: the local player's faction
+  (player +0x68), is_space = (mode vf 0xe0 == 2), game type = GMM+0x18.
+- No opener runs before a game mode exists. The "no mode" branches below (Skirmish_Buy_Credits budget, Sell / Sell All /
+  Next) are therefore unreachable from the single-player skirmish setup in this build [M]. In the multiplayer lobby the
+  bought list is copied into the local player's start-force list (§2 step 4, player +0x2a8) by 0xc9190 (sets player
+  +0x183) and sent to the peers as type name CRCs (+0x11c) by 0xc8d80. Multiplayer is out of scope for the port.
+- So the single-player skirmish has no pre-battle purchase in the original. The start force is the faction's
+  Space_ / Land_Skirmish_AI_Default_Forces when option flag 0x2 is set (§2 step 4), and nothing otherwise.
+
+**Two modes.**
+
+| | no game mode (pre-game branch) | in a tactical skirmish (the reachable one) |
+|---|---|---|
+| budget | GC Skirmish_Buy_Credits (2000), also kept as the start budget | the local player's credits (player +0x70, float truncated to int), re-read on message 0xc |
+| buttons | Buy, Sell (`IDC_SELL_BUTTON`), Sell All, Next, Back | Sell, Sell All and Next are hidden; Buy is relabelled `TEXT_BUTTON_REINFORCE` |
+| Buy (0xf0920) | cost ≤ budget; budget −= cost; the type is appended to the bought list (duplicates allowed) | cost ≤ budget; then 0x33d50(input controller 0x140a60df0, type +0xec) starts a reinforcement placement for that type and the dialog closes. The dialog itself charges nothing [M: whether the placement charges] |
+| Sell (0xf0c30) | the selected type must be in the bought list; refund its cost; remove one entry (0x474a0) | — |
+| Sell All (0xf0de0) | clear the bought list; budget := start budget | — |
+| Next | only when game type == 3: 0xef700 starts the map (0x8d930) and the dialog closes | — |
+| Back / close | close; with no mode, back to the setup screen 0xf1230 | close |
+
+A refused action plays the GUI error sound (0x2d5290). Every change refreshes the list (0xef9f0) and the budget text
+(`TEXT_SKIRMISH_BUY_UNITS_CREDITS_BALANCE` + the formatted budget, in `IDC_SKIRMISH_BUY_UNITS_CREDITS_TEXT`).
+
+**Candidate list 0xf0600** (rebuilt on every open). All object types in type-manager order (0x140b2f020, index
+0..N−1) that pass all of:
+1. `Build_Cost_Credits` (+0x86c) > 0 (0x3711c0 with no planet returns this field).
+2. affiliated with the dialog faction (0x3751a0: the faction is in the type's `Affiliation` list +0xef0; an empty list
+   never matches);
+3. `Available_In_Skirmish` (+0x77) **or** the build tab of the map kind: `Build_Tab_Space_Units` (+0x4d) on a space
+   map, `Build_Tab_Land_Units` (+0x4c) on a land map;
+4. not `Cinematic_Object_Only` (+0x21).
+
+Nothing else is tested: no tech level, `Build_Initially_Locked`, prerequisites, `Build_Limit_*`, unit cap or
+population, `Is_Dummy`, behaviours (DUMMY_*), XML class, the faction's `Skirmish_*` lists or any pad
+`Tactical_Buildable_Objects_*` list. Note the OR in step 3: a type with `Available_In_Skirmish` is listed on both map
+kinds (FoC: `Darth_Team_Executor`, a named hero, is a candidate in the Empire land list too).
+
+**Rows 0xef9f0.** For each candidate in list order, the same tests 1–3 again, and a type with `Is_Named_Hero` (+0x13)
+is hidden unless the heroes option bit (0x140b154bc & 1) is set. The row key is the candidate's index, so the
+selection still maps to the candidate list.
+- Columns: the localized `Text_ID` (+0x120); when the type is in the bought list n > 0 times, a column "x n"; the
+  cost (0x22f780, formatted integer). There is **no population or unit-cap column**.
+- Colours (GUI palette 0x140a7bca0): bought rows palette 5; not bought and cost > budget palette 9; else palette 1 /
+  4 [M: which is normal and which is highlight].
+- **Order:** after the fill the listbox is sorted (0x1c4a10 → 0x1d1c90) with comparator 0xf0e80, which returns
+  `b.data − a.data` (code bytes `8b 42 04 2b 41 04 c3`). The row data is the cost passed to the row insert (0x1c3dd0),
+  so the list shows the **most expensive first** [M: that row field +4 is the cost]. The sort is an introsort, not
+  stable: equal costs come in no defined order.
+- No cap and no paging: every candidate gets a row; the listbox scrolls.
+
+**Buy limits 0xf0920.** cost ≤ budget. `Can_Be_Only_One` (+0x78): in the pre-game branch a type already in the bought
+list is refused; in a battle a type of which the local player already owns an object (0x2a87d0, owner +0x58) is
+refused, where for a DUMMY_GROUND_COMPANY (0x5D) with `Company_Units` the type looked up is the company's second
+member (+0x958 entry 1) [M].
+
+**What the filter gives on shipped data** (evaluated with the XML, 2026-11-04; `Variant_Of_Existing_Type` resolved).
+- FoC: Empire space 23 rows (20 without named heroes), land 16; Rebel 17 / 9; Underworld 20 / 23. They include story
+  and campaign types that happen to carry a build tab and a cost: `Executor_Super_Star_Destroyer` and its
+  `_No_Tractor_Beam` copy, `Eclipse_Super_Star_Destroyer` (all three factions), `UM12_SUPER_STAR_DESTROYER`,
+  `Keldalbe_Prototype`, `UM06_Prisoner_*`, `Tartan_Patrol_Cruiser_Easy`, `Star_Destroyer_E3`. Only 9–14 of each list
+  are named in some type's `Tactical_Buildable_Objects_Multiplayer`.
+- Thrawn's Revenge (workshop 1125571106): Empire space 407 rows (138 of class DummyStructure), land 63; Rebel space 484
+  (183 DummyStructure), land 45; Pentastar space 354, land 51. The original **would list** these marker types:
+  - `Template_Option`, `Option_Cruel_On/Off`, `Option_Factional_Fighters`, `Option_Canon_Units`, `Option_FS_Units`,
+    `Template_Cheat`, `Cheat_Disable_AI`, `Cheat_Give_Credits`, `Cheat_Give_Unit`, `Cheat_Give_Vision`, `Cheat_Government`,
+    `Cheat_Influence`, `Cheat_Infra_And_Discount`, `Cheat_Kill_All`, `Cheat_Turn_Off_Crews`, `Cheat_Victory`
+    (Options.xml / Options_TR.xml: cost 1, `Build_Tab_Space_Units` yes, DUMMY_STARSHIP, every playable TR faction):
+    space lists of all those factions;
+  - `ZLayer_Medium`, `ZLayer_High1..4`, `ZLayer_Low1..4` (LayerDummies.xml: cost 1250, Rebel only, space tab,
+    DUMMY_STARSHIP + POWERED): the Rebel space list;
+  - `Dummy_Treaty_Victory` (cost 1, Empire and Rebel, space tab): those two space lists;
+  - `Cheat_Space_Unit` (cost 1, Rebel / Empire / Underworld / Hutt_Cartels): their space lists;
+  - the galactic ground-war formations `GW_*` / `UNIT_GW_*` (cost 1, space tab): the space lists;
+  - shipyard / Golan / mining-facility orbital structures with a cost and the space tab.
+- TR marker types the original would **not** list: `Victory_Point` (no cost), `Cheat_Dummy_Vision`,
+  `Options_Category_Dummy`, `Cheat_Dummy_Infra_And_Discount`, `Template_Cheat_Dummy_Infra_And_Discount` (cost 0),
+  `Cheat_Team`, `Cheat_Ground_Unit`, `Dark_Empire_Cheat_Choice_*` (no `Affiliation`), `NR_Canon_Option` (no cost).
+
+**Port notes**
+- The port's pre-battle buy screen (`engine/apps/game/app/app_screens.cpp`, `open_buy_units`) is a [port] feature: the
+  original single-player skirmish has none. Its budget, its use of the bought list as the start force and the screen
+  itself stay port decisions (kept by Gabriel 2026-11-04; PHASE4 Decisions).
+- To match the original's list, replace the port's filter (unit kind from `galactic_unit_kind`, first 24 by type index,
+  ascending cost) with steps 1–4 above plus the named-hero rule; no cap; order by cost descending. The original's tie
+  order is undefined; use type index ascending for equal costs [port].
+- An empty `Affiliation` must not match (the port's "empty = every faction" is wrong for this list).
+- Steps 1–4 alone fill a TR list with hundreds of option, cheat, ZLayer and ground-war marker rows, exactly as the
+  original would. A [port] extra rule that removes all of them and keeps real units: list a type only if it is named in
+  some type's `Tactical_Buildable_Objects_Multiplayer` (TR: Empire 106 of 407 space and 38 of 63 land rows remain, every
+  Option_* / Cheat_* / ZLayer_* / Dummy_Treaty_Victory row is gone; FoC: 9–14 rows per list, the story props are gone).
+  Say [port] where it is applied.
+- Cost column = `Build_Cost_Credits` (not the tactical cost); no population column.
 
 ## 3. Tactical production (item 1)
 
@@ -166,6 +271,64 @@ prerequisites and build time constrain it.
 Not traced [L]: GC Skirmish_Reinforcement_Delay_Frames (GC+0x117e8, default 90) is read near
 0x1211656 and 0x894995, in what looks like an ability / countdown context.
 
+### 3.1 What a finished land company becomes: pool, landing, members, AI use (q6 t19 RE, 2026-11-04) [H unless tagged]
+
+Question: how the original creates the members of a land skirmish company that has no team (one member without
+`Create_Team`, e.g. `Boba_Fett_Team_Land_MP`: `Variant_Of_Existing_Type` `Boba_Fett_Team`, a HeroCompany with
+`DUMMY_GROUND_COMPANY`, `Company_Units` = `Boba_Fett`, `Company_Transport_Unit` = `Slave_I`, whose
+`Landing_Transport_Variant` is `Slave_I_Landing`). Sources: 0x27fad0, 0x4d31a0, 0x6ee010, 0x2b5fe0, 0x644330,
+0x6438a0, 0x690a10, A1_READINGS §35, AI_GALACTIC_3 §1.3.
+
+1. **Production never spawns a land unit.** Completion of a non-`DUMMY_UPGRADE` type calls 0x27fad0(player, type):
+   the type is appended to the player's reinforcement table (player +0x2c8, count +0x2d0); when the player has an AI
+   for the current mode, 0x4d31a0 appends one empty reservation slot to the AI free store's vector +0x88 (same index
+   as the pool entry); the local player gets message 0xe7. There is no code path that places a built land company
+   at or in front of its builder. Company or single unit, team or no team, makes no difference here.
+2. **It reaches the map only by a reinforcement drop.** Human: `ReinforceEvent` at a valid drop point. AI: a plan's
+   `TF.Reinforce` (skirmish 0x6ee010, AI_TACTICAL §7.4) for a pool entry that the Reinforcement marshaller assigned to
+   the plan (AI_GALACTIC_3 §1.3: pool entries count as candidates of every AllowFreeStoreUnits plan; free store
+   +0x88[i] non-null = already reserved). The build plan that bought it (`TacticalMultiplayerBuildLandUnitsGeneric`,
+   `ReserveForce`, AllowFreeStoreUnits false) only calls `Produce_Force` and exits; it never drops the units.
+3. **Landing object** (0x2b5fe0, skirmish branch, A1_READINGS §35.1): the pool type T must be in the pool; the landing
+   type L = T's `Company_Transport_Unit[0]` (+0x938 → +8), replaced by its `Landing_Transport_Variant` (+0x1e68) when
+   set (here `Slave_I` → `Slave_I_Landing`). **T without a `Company_Transport_Unit` spawns nothing** (0x2b5fe0
+   returns null; the TF entry is not added). L gets TRANSPORT_LANDING and carries T (TransportDataPack +0x48).
+4. **Members** (0x644330, one step every 2 s × (1 + deploy modifier)): for a member type **without `Create_Team`**
+   (the "no team" case) the vehicle branch runs: **one object of the member type** (with `Unique_Ground_Unit`, the
+   substitute first and the member riding it) is created at the landing position, owned by the landing's owner,
+   registered with the player (pack +0xbc, 0x2b5f70). It gets no TEAM container; obj +0x2b0 stays null. If it has a
+   locomotor for the mode (and type byte +0xd4 [M]), it is sent on a coordinator move to its unload offset with the
+   forced-move flag and **movement-locked**; otherwise it is placed at the offset at once.
+5. **Mobility.** The unload finish (0x6438a0, 2 s after the last step) unlocks every unloaded unit, clears the
+   forced-move flag, sets its locomotor pack +0x38 := 1 and raises signal 0x19 (arrival). From then on the member is
+   an ordinary mobile unit with its own locomotor; nothing in the company type keeps it in place. (Boba Fett has
+   `WALK_LOCOMOTOR` plus a `JETPACK_LOCOMOTOR` secondary.)
+6. **AI admission.** An AI drop's units join the requesting task force on signal 0x19 (AI_TACTICAL §7.4). When that
+   plan ends (`QuickReinforce` → `WaitForAllReinforcements` → `ScriptExit`, or any later release), they go to the free
+   store through the land admission 0x690a10 (A1_READINGS §6.2). A single no-team member passes it: not `Create_Team`,
+   no TRANSPORT, it has the implicit `STARSHIP_COMBATANT` behaviour (OBJECT_TYPES §9) and a locomotor, it is not
+   `Is_Dummy` (the company type is, the member is not), no container (+0x2b0 null). So it is a normal free-store unit
+   [H]. Whether the GOM add hook offers it to the free store already while it is still locked inside the unload, before
+   0x19 moves it to the task force, was not traced [M].
+
+**Port notes**
+- Do not create a finished land company at its builder. Append the type to the player's reinforcement pool (and an
+  empty AI reservation slot) and let the human / AI `Reinforce` drop it through the landing object (A1_READINGS
+  §35.3). The "Port status" row "a finished land company appears 120 units in front of its builder" is a [port]
+  deviation; its stand-in fix that makes no-team members movable (tactical_battle_hangar.cpp, q6 land end chain) is
+  only needed while that deviation exists.
+- A company member without `Create_Team` must become a single movable unit without a TEAM container, locked during
+  its exit move and unlocked at the unload finish; then it is admitted to the AI free store like any unit.
+- A pool type without `Company_Transport_Unit` cannot be dropped in skirmish (no landing object, no members).
+- The AI uses bought pool entries only through the Reinforcement marshaller of a later plan; the buying plan does not
+  drop them.
+- Port status (q6 t19, 2026-11-04): done for land. A finished land company becomes a pool entry
+  (`TacticalBattle::add_built_reserve`, key 0x01000000 + participant index, no galactic counterpart); the producing
+  TF's entry is cleared (`production_completed`) and a later plan drops it through `order_reinforce` and the landing
+  object (locked until the 0x19 unload finish). A skirmish type without a landing object is refused and stays pooled.
+  The hangar no-team stand-in stays only for space hangar launches; space production still spawns at the builder
+  [port].
+
 ## 4. Land skirmish victory, types 0x12..0x16 (item 2)
 
 Names (0x341ff0): 0x12 SKIRMISH_ALL_ENEMY_UNITS_DESTROYED, 0x13 ALL_ENEMY_BASE_COMPONENTS_DESTROYED,
@@ -193,6 +356,44 @@ Evaluator 0x344710 (E wins when no blocker is left) [H unless marked]:
   0x80, non-Victory_Relevant and non-playable-owner ones. None left: E wins. If E is not human, E wins
   only when no remaining starbase is allied (0x39a2c0) with a human player.
 - So "base components" = objects with behaviour DUMMY_LAND_BASE_LEVEL_COMPONENT that are Victory_Relevant.
+
+### 4.1 What else counts, and what does not (q6 RE, 2026-11-04) [H unless tagged]
+
+Re-read of 0x344710 cases 0x12–0x14 and of the readers in OBJECT_SCRIPTS §10. Additions to the list above:
+- **Candidate list:** 0x12 walks the tactical GOM's full object list (gom +0x38) skipping objects owned by E
+  (0x2A9FF0 with exclude-owner = E); 0x13 / 0x14 walk the same list filtered by behaviour 0x62 / 0x5F. Ownership
+  is the object's own owner (+0x58); a TEAM container and its members are separate objects, each counted by its
+  own type (containers' `Team` types are not Victory_Relevant in FoC data, so the members count).
+- **The 0x12 owner filter:** in skirmish (0x28AFB0) or game type 3 (0x28B060), an enemy object counts only when its
+  owner player is human (player +0x62 [M: name]) or has an AI (0x2814D0), or the owner id resolves to no player.
+  Outside those two session types any enemy owner counts.
+- **Not tested by any of 0x12 / 0x13 / 0x14:** INVULNERABLE (`Make_Invulnerable`), `Hide` (model / obj +0x3A2 bit 0),
+  `Prevent_AI_Usage` (free-store membership only), `Set_Selectable`, garrisoned / transported state, stealth, fog,
+  locomotor / UNIT_AI / SELECTABLE behaviours. Such objects count exactly like visible ones. An invulnerable
+  Victory_Relevant object therefore keeps its side alive until it dies through damage kind 0 or 13, `Kill`, or a
+  despawn (OBJECT_SCRIPTS §10.2).
+- **Structures under construction:** the object on the pad is the separate UC type (`UC_*`, L1_S4_REMAINING §3.6),
+  replaced by the final type at completion. It counts only by the UC type's own flags. Shipped FoC UC types set
+  `Victory_Relevant No` or nothing (default false) and none has DUMMY_LAND_BASE_LEVEL_COMPONENT, so a structure under
+  construction never blocks 0x12 or 0x13. The finished structure counts by its final type (e.g. the command centres:
+  DUMMY_LAND_BASE_LEVEL_COMPONENT + DUMMY_GROUND_STRUCTURE, `HQ_Win_Condition_Relevant yes` for 0x14).
+- **Dying objects** (+0x3A0 bit 0x40 or 0x02) never count, so the test run from the death of the last blocker
+  already sees the side as empty.
+- **When:** only from 0x2C0340, i.e. when a Victory_Relevant object leaves its owner (removal from the GOM or owner
+  change). Gaining objects (a script `Spawn_Unit`, a reinforcement landing, a capture) never triggers a test, and a side
+  that never had a Victory_Relevant object is never tested (BATTLE_TRANSITIONS §3.1a item 2). The declared result then
+  waits the record's 210-frame countdown (and any hold) before the battle ends.
+- Reinforcement pool / reserve units are not tactical objects and never count (A1_READINGS §34.1); a landing transport
+  counts by its own type only [M].
+
+**Port notes**
+- The land-skirmish check must ignore every script flag (invulnerable, hidden, AI usage, selectable); count by type
+  flags, ownership (with the skirmish human-or-AI owner filter for 0x12), and not dying.
+- UC objects count by their UC type (all non-relevant in FoC data); do not map them to the final type.
+- Run the check only when a Victory_Relevant object leaves a player (death / removal / owner change), not on spawns,
+  and apply the 210-frame declaration countdown.
+- The win condition that is registered is the lobby option's (§2 step 4): 0x12 alone, or 0x13 / 0x14 when the base /
+  HQ option is chosen; 0x12 is still evaluated first on every trigger.
 
 ## 5. Income streams (item 4)
 
@@ -244,12 +445,16 @@ Evaluator 0x344710 (E wins when no blocker is left) [H unless marked]:
 Already specified in `L1_S4_REMAINING.md` §4.2. Summary: no start delay in skirmish; a neutral pad goes to
 the owner of the first in-radius candidate unless contested; progress 1 / (5 s x 30) per frame, owner
 changes at completion (150 frames). A pad with contents keeps its owner. An empty owned pad with an enemy
-present goes through neutral first (2 x 5 s). When the pad's child dies the pad resets to neutral.
+present goes through neutral first (2 x 5 s). When the pad's child dies the pad resets to neutral at once (no
+transition); a sold child leaves the pad with its owner. Nobody can build on a Neutral-owned pad (the builder must be
+allied with the pad owner), and the structure belongs to its builder, not to the pad: AI_TACTICAL §7.5.1 (q6 t19).
 
 ## 9. Not settled
 
 - Reader and use of Skirmish_Reinforcement_Delay_Frames (GC+0x117e8). [L]
-- The pre-game buy-units dialog: what it buys and how the 2000 budget is spent. [M]
+- ~~The pre-game buy-units dialog: what it buys and how the 2000 budget is spent.~~ §2.7 (q6, 2026-11-04). Still open:
+  which command-bar button / key opens it in battle (0x37760 / 0x36250) [L], and whether the reinforcement placement it
+  starts charges credits [M].
 - Body of victory type 0x15 (control point domination). [L]
 - Meaning of player+0x180, global 0x140b15490 and predicate 0x35f790. [L]
 - Sort key slot+0xa0 for slots when GMM+0x20 != 1. [M]
@@ -284,13 +489,13 @@ Port status (headless `--skirmish-ai skirmish` / `foc-land`, `tactical_battle_sk
 | §2.2 starting forces | the factions' Space_ / Land_Skirmish_AI_Default_Forces as the battle's start participants at the slot's start anchor (Player_k / Team_tt spawn markers, bt_skirmish_anchors); no garrison re-delivery (§2.4) [port]. |
 | §2.3 space special weapons | not placed [port, open]. |
 | §2.5 / §2.6 pre-built pads | t50 rule kept: the Team_NN Command Center and Barracks pads of both slots start built, from MultiplayerStructureMarker data. §2.5 says retail reads that data only in campaign and pre-builds from the map's pre-placed pad type (+0x18), which the port's map reader does not decode [M, open]. |
-| §3 production | land and space skirmish; a finished land company appears 120 units in front of its builder instead of joining the reinforcement pool [port]. |
+| §3 production | land and space skirmish; a finished land company joins the reinforcement pool and arrives by a later Reinforce landing (§3.1, q6 t19, 2026-11-04). Space production still appears in front of its builder [port]. |
 | §4 victory | 0x13 (land) and 0x16 (space) polled each frame, declared at once, reported as 0x0e / 0x0f [port]. |
 | §5 income | per-frame float add of (base × multiplier + additive) / interval / 30 for the object's own stream; a mod on the object's own stream (the supply dock) counts while the object lives; mods on other streams are not applied [M]. |
 | §6 unit cap | ConflictFactionInfo::unit_cap_for_players: sorted keys, linear, 0 outside, integer part (2 players: 9); N = the two slots. |
 | L1_S4 §4.2 capture start gate | 0 in skirmish map battles. |
 | Time limit | none for the skirmish host (the port's 8-minute campaign battle limit is off; the run ends at `--ticks`). |
-| L1_S4 §3.6 pad rule 0x42e400 | a Neutral-faction owner (map props) does not block a pad (BATTLE_TRANSITIONS: "a Neutral player is simply not an enemy"); with `Influences_Capture_Point` defaulting to true, every prop near a pad blocked it before [M]. The Lua `pad_rule` copy (`engine/lua`) still uses the battle's `is_enemy` [open]. |
+| L1_S4 §3.6 pad rule 0x42e400 | a Neutral-faction owner (map props) does not block a pad (BATTLE_TRANSITIONS: "a Neutral player is simply not an enemy"); with `Influences_Capture_Point` defaulting to true, every prop near a pad blocked it before [M]. The Lua `pad_rule` copy (`engine/lua`) still uses the battle's `is_enemy` [open]. Correction (q6 t19, AI_TACTICAL §7.5.1) [H]: 0x42e400 has no Neutral exemption; every alive `Influences_Capture_Point` object not allied (relation ≠ 0) with the pad owner blocks, Neutral-owned ones included, unless it has BASE_SHIELD or DUMMY_GROUND_STRUCTURE. Which shipped props near pads have `Influences_Capture_Point` (default true) decides the effect [open]. Port (q6 t19, 2026-11-04): the exemption is gone, and the candidates are the battle's live units only [port, open], because Neutral props (`Influences_Capture_Point` unset) next to three Utapau pads otherwise stopped every AI build there (AI_TACTICAL §7.5.1 Port notes). |
 | AI_TACTICAL §7.5 Build / Build_All | a task force with no reservations takes its pad picks from its plan's PotentialPlan first (BuildEconStructure.lua calls Build_All without Produce_Force) [M: retail's TF holds them from plan start]. |
 | AI_TACTICAL_PERCEPTION TacticalBuiltStructureCount | counts the player's finished structures on build pads (pre-built base included) [M]. Before, nothing was counted, so `Num_Refineries` stayed 0 and `Tactical_Multiplayer_Should_Build_Units_Generic_Land` (gated by `Is_Initial_Skirmish_State_Established`) never fired. |
 | AI_GALACTIC_3 §1.11 produced unit | a task force with a unit still in production is not empty (No_Units_Remaining waits for it); before, the Produce_Force plan ended 3 frames after its order. Since S7 t20 (main) this is the `units_lost` check, raised from the removal signals; the skai poll was dropped on the merge. |

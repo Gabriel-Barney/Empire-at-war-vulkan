@@ -6,13 +6,13 @@
 //   T2  scheduled commands with frame <= new frame: CommandPipeline::begin_tick(frame) (drain in
 //       tick -> player -> sequence order, batch CRC hook, recording/replay, handler per command)
 //   T4  TreeCull: rebuild dirty spatial trees of the top tactical mode (sim time = frame / 30)
-//   T5  GameModeManager::Update: scoring [stub], then ONLY the top mode's tick
+//   T5  GameModeManager::Update: the GameScoring Service (q6 t09, set_scoring_script), then ONLY the top mode's tick
 //   T6  scene animations [stub]
 //   T7  PlayerList update: per player in index order, the player's controller (AI / script stand-ins
 //       issue orders through execute_direct here, like the original AI)
 //   T8  global Lua [stub]
 //   T9  story (S4): StorySession::service when start_story ran (story_session.hpp); trace step
-//       "T9.story" only then
+//       "T9.story" only then; then the GameScoring galactic event calls (q6 t09; "T9.scoring" only with a script)
 //   T10-T11 tutorial, campaign end [stubs]
 //   T12 Post_Tick: top mode frame += 1 unless paused
 //   T13 End_Tick: event bus delivery, then the CRC record of this frame (CrcRecorder)
@@ -68,6 +68,7 @@
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/jobs/tick.hpp"
 #include "alamo/sim/game_modes.hpp"
+#include "alamo/sim/object_scripts.hpp"
 #include "alamo/sim/pacing.hpp"
 #include "alamo/sim/save_session.hpp"
 #include "alamo/sim/story_session.hpp"
@@ -82,7 +83,9 @@ class FileProvider;
 namespace alamo::lua {
 class GlobalValueStore;
 class LuaVm;
-}
+class LuaPlayerWorld;
+struct AiEventArg;
+}  // namespace alamo::lua
 namespace alamo::galactic {
 struct GalacticRules;
 struct GalacticSetup;
@@ -103,6 +106,9 @@ struct SimConfig {
     commands::SchedulerConfig scheduler = commands::SchedulerConfig::single_player();
     bool parallel_crc = true;                                   // CRC hashers on the job system
     bool story_crc = false;                                     // register the "story" CRC system (S4)
+    // q6: game-object Lua scripts (object_scripts.hpp, docs/re/OBJECT_SCRIPTS.md). Off by default: the attach and the
+    // first-pump draws change the synced stream, so sessions without it keep their CRC streams and goldens.
+    bool object_scripts = false;
 };
 
 // Per-player controller run at T7 (AI / script stand-ins). May call execute_direct.
@@ -144,11 +150,54 @@ public:
     // and gets its main thread. Mods set session globals there (Thrawn's Revenge: GlobalValue MOD_ID, which its plot
     // scripts read; vanilla: Allow_AI_Controlled_Fog_Reveal = 1, read by the BurnUnits AI plans). Dropped when the
     // stack empties [port: the original keeps it until the next session]. Empty name (default) = no script.
-    // [port] Not serviced yet (no main / ServiceRate pump) and no event calls (Game_Mode_Starting_Event, ...).
+    //
+    // q6 t09, the Service (§2) and the event calls (§3). Every call into the script runs on the sim thread at a fixed
+    // point of the tick, in an order that depends only on sim state (never on the worker count), and the VM draws
+    // GameRandom from the session RNG like every script (GameRandom.Free_Random keeps the free stream, LuaVm):
+    //   * T5, GameModeManager::update's "gmm.scoring" step (before the mode tick): first the queued
+    //     Game_Mode_Starting_Event(mode, map) of the modes set up since the last frame (galactic: start_galactic, map =
+    //     set_scoring_campaign() else the SessionDescriptor campaign; tactical: scoring_mode_started from the battle host
+    //     [port: delivered at the next frame's service instead of inside the setup]); then the Service: no number
+    //     ServiceRate = nothing; now = (float)frame / (float)30 as a double; when LastService is not a number or
+    //     now - LastService > ServiceRate: the script's threads are resumed once (LuaVm::service_threads, time = now,
+    //     frame = global frame), then the script is RELEASED (VM dropped, no more calls this session) when it called
+    //     ScriptExit or any call into it (event or thread) raised a Lua error since the last Service, else LastService =
+    //     now. A release found pending at a due Service skips the pump.
+    //   * end_game_mode: Game_Mode_Ending_Event(mode) for every popped mode, before the pop.
+    //   * after T9: the galactic events the story session drained this tick (StorySession::set_scoring_tap; only with a
+    //     story session), in stream order: PlanetOwnerChanged -> Galactic_Planet_Faction_Change(planet, new, old) when
+    //     new != old (a missing player = the neutral player); ProductionBegin / Canceled -> Galactic_Production_Begin_ /
+    //     _Canceled_Event(planet, type); ProductionCompleted -> Galactic_Production_End_Event(planet, object (its team
+    //     container), else the type); ObjectDestroyed -> Galactic_Unit_Destroyed_Event(object, neutral player) only while
+    //     the object is still alive in the store [port: the stream is read after the destroy, so in practice skipped].
+    //   * scoring_reset_tactical_stats(): Reset_Tactical_Stats() (the battle host at auto-resolve begin).
+    // Missing functions are skipped; calls are protected and not threads (they cannot yield). With a story session the
+    // scoring VM also gets the story's player world, object bridge and presentation families.
     void set_scoring_script(const FileProvider* files, std::string name);
     const lua::LuaVm* scoring_vm() const;
     // "<frame> GameScoring: <what>" lines: load / Base_Definitions errors and the script's own messages.
     const std::vector<std::string>& scoring_messages() const { return scoring_messages_; }
+    // q6 t09: map_name of the galactic Game_Mode_Starting_Event (the campaign name); empty = SessionDescriptor::campaign.
+    void set_scoring_campaign(std::string name) { scoring_campaign_ = std::move(name); }
+    // q6 t09: the battle host, once a tactical mode is set up (map loaded): queues Game_Mode_Starting_Event.
+    void scoring_mode_started(ModeKind kind, std::string map_name);
+    // q6 t09: Reset_Tactical_Stats() at auto-resolve begin (BATTLE_TRANSITIONS §"auto-resolve").
+    void scoring_reset_tactical_stats();
+    // q6 t09 diagnostics: Services that pumped the threads this session, event calls made, releases (exit / error).
+    uint64_t scoring_services() const { return scoring_services_; }
+    uint64_t scoring_calls() const { return scoring_calls_; }
+    uint64_t scoring_releases() const { return scoring_releases_; }
+    // q6: game-object Lua scripts (SimConfig::object_scripts; object_scripts.hpp). Null when off. The host hooks every
+    // pushed mode's primary store, services the scripts at T5 after the store update, attaches the session GlobalValue
+    // table, the galactic player world (start_galactic; the story's in start_story) and the story's object bridge;
+    // battle hosts set their store's bridge / world (ObjectScriptHost::set_bridge). Scripts load through
+    // set_object_script_files (null: nothing attaches).
+    ObjectScriptHost* object_scripts() { return object_scripts_.get(); }
+    const ObjectScriptHost* object_scripts() const { return object_scripts_.get(); }
+    void set_object_script_files(const FileProvider* files);
+    // The player world object scripts of a tactical store without a story session use (the galactic sim's players);
+    // null before start_galactic, without object scripts or without the players family.
+    lua::LuaPlayerWorld* object_script_players() { return object_players_.get(); }
     GameModeManager& modes() { return modes_; }
     const GameModeManager& modes() const { return modes_; }
     TacticalMode* tactical() { return modes_.top_tactical(); }
@@ -231,6 +280,11 @@ public:
     using OrderHook = std::function<commands::RejectReason(SimHost& host, uint8_t player, const commands::EventData& ev,
                                                            const std::vector<ObjectId>& selection)>;
     void set_order_hook(OrderHook hook) { order_hook_ = std::move(hook); }
+    // q6 (COMMANDS §2.4.1): Select All's tests that need the running battle (CampaignBattles): false = skip the owned
+    // SELECTABLE object `h` (a TEAM member, a garrisoned unit, a running retreat of its owner, Set_Selectable(false)); a
+    // TEAM container appends the members that join it. Unset: only the store tests.
+    using SelectAllHook = std::function<bool(SimHost& host, uint8_t player, ObjectHandle h, std::vector<ObjectId>& members)>;
+    void set_select_all_hook(SelectAllHook hook) { select_all_hook_ = std::move(hook); }
     // Port-only events (PortExtension 63, e.g. the pause / resume entry of docs/DECISIONS.md "Camera and controls") offered to
     // the game host at the command phase in every mode, before the galactic / tactical handlers; Unhandled falls through.
     // P4 host: also offered every other event that no handler took (Unhandled after the galactic / tactical paths, e.g.
@@ -258,6 +312,13 @@ public:
     // state, draw synced randomness or issue orders. No trace step. ---
     void set_after_story_hook(ModeUpdateHook hook) { after_story_ = std::move(hook); }
     // --- end OI host ---
+    // q6: the story reward SWITCH_CONTROL (StorySession::set_switch_control_hook) -> the host's AI players. Kept here and
+    // installed on every story session start_story creates, before its plots load (a load-time Story_Event can fire it).
+    // Set it before start_story; the hook runs on the sim thread inside T9 (or the load) and may call set_controller.
+    void set_switch_control_hook(std::function<void(const StorySwitchControl&)> hook) {
+        switch_control_ = std::move(hook);
+        if (story_) story_->set_switch_control_hook(switch_control_);
+    }
 
     // ---- N1 save / load (owner: n1-host; save_session.hpp) ----
     // The application describes the session it built (kind, campaign, data, players, options, data fingerprint);
@@ -331,11 +392,13 @@ private:
     TacticalCommandHook tactical_cmd_;  // S10-int
     TacticalCommandHook galactic_cmd_;  // Int-final
     OrderHook order_hook_;              // P host
+    SelectAllHook select_all_hook_;     // q6
     PortEventHook port_hook_;           // P host
     std::array<std::array<std::vector<ObjectId>, 10>, kMaxPlayers> groups_;  // P host: control groups
     bool groups_used_ = false;                                               // P host
     ModeUpdateHook before_story_;                                            // P4 host
     ModeUpdateHook after_story_;                                             // OI host
+    std::function<void(const StorySwitchControl&)> switch_control_;          // q6: SWITCH_CONTROL reward -> host AI
 #ifdef ALAMO_SIM_HAVE_STORY
     lua::GlobalValueStore global_values_;  // Int-final
 #endif
@@ -344,6 +407,20 @@ private:
     std::string scoring_name_;
     std::vector<std::string> scoring_messages_;
     void create_scoring(GameMode& m);
+    // q6 t09
+    std::string scoring_campaign_;
+    std::vector<std::pair<std::string, std::string>> scoring_starts_;  // (mode, map) waiting for the next Service
+    std::vector<galactic::GalacticEvent> scoring_events_;              // tapped from the story drains, delivered after T9
+    bool scoring_failed_ = false;  // the original's exited flag: a Lua error in an event call / thread
+    size_t scoring_seen_messages_ = 0, scoring_seen_errors_ = 0;
+    uint64_t scoring_services_ = 0, scoring_calls_ = 0, scoring_releases_ = 0;
+    void service_scoring();
+    void scoring_flush_starts();
+    void scoring_deliver_events();
+    bool scoring_call(std::string_view function, const std::vector<lua::AiEventArg>& args);
+    void scoring_collect();
+    void scoring_release(std::string_view why);
+    void scoring_note(std::string_view what);
     uint32_t last_present_ms_ = 0;
     bool have_present_ = false;
     // N1 save / load
@@ -361,15 +438,29 @@ private:
     bool read_globals(ByteReader& r);
     void write_spatial(ByteWriter& w) const;
     bool read_spatial(ByteReader& r);
+    // q6 t19: "scoring" (the GameScoring script, LUA_SAVE.md) while a scoring script is configured; "object_scripts"
+    // (ObjectScriptHost::write / read) while the object-script host exists. Write: false (+ *err) when a VM's Lua state
+    // cannot be saved.
+    bool scoring_configured() const;
+    bool write_scoring(ByteWriter& w, std::string* err) const;
+    bool read_scoring(ByteReader& r);
     bool has_tactical_mode() const;
     // N1 stage 2: load pass 1 (before the rebuild) reads "frame" / "objects" for the bottom `load_base_depth_` modes
     // only (0 = every mode, the depth must match).
     uint32_t load_base_depth_ = 0;
     void read_chunks(const SaveFile& in, LoadReport& rep);
 #ifdef ALAMO_SIM_HAVE_STORY
+    // q6 t03: the scoring VM's own player world while no story session runs (start_galactic; GAME_SCORING.md: the
+    // script reaches the session's players in every session). Replaced by the story's world in start_story, dropped
+    // with the VM. Before scoring_vm_, so destroyed after it. Null without the players family.
+    std::shared_ptr<lua::LuaPlayerWorld> scoring_players_;
     // q6 t06: last member, so it is destroyed before the stores, the RNG and the GlobalValue table it points to.
     std::unique_ptr<lua::LuaVm> scoring_vm_;
 #endif
+    // q6 object scripts: after the stores, the RNG and the GlobalValue table (destroyed before them); the player world
+    // before the host whose VMs point to it.
+    std::shared_ptr<lua::LuaPlayerWorld> object_players_;
+    std::unique_ptr<ObjectScriptHost> object_scripts_;
 };
 
 }  // namespace alamo::sim

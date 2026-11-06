@@ -691,6 +691,14 @@ static void test_stage2_builder() {
     f.tick = 7;
     b.build(f, models, main, bg, &st);
     CHECK(main.empty() && st.contained == 1);
+    // q6 t19: Lua-hidden (script_hidden): not drawn, counted apart.
+    render::SnapshotObject hid = sobj(3, 0);
+    hid.type = 2;
+    hid.script_hidden = true;
+    f.objects = {hid};
+    f.tick = 7;
+    b.build(f, models, main, bg, &st);
+    CHECK(main.empty() && st.script_hidden == 1 && st.contained == 0);
     // Muzzle: bone B2 shows the ALO-hidden FLAG mesh this tick only.
     f.objects = {sobj(4, 0)};
     f.objects[0].type = 2;
@@ -715,9 +723,15 @@ static void test_stage2_builder() {
     render::apply_contained(s, [](const render::SnapshotObject& o) { return o.id == 5; });
     CHECK((s.objects[1].flags & render::kSnapContained) && !(s.objects[0].flags & render::kSnapContained));
     CHECK(s.digest() != d0);
+    const uint64_t d1 = s.digest();
+    render::apply_script_hidden(s, [](const render::SnapshotObject& o) { return o.id == 1; });  // q6 t19
+    CHECK(s.objects[0].script_hidden && !s.objects[1].script_hidden && s.digest() == d1);  // presentation only
     render::InterpolatedFrame fi;
     render::interpolate(nullptr, s, 1.0f, render::InterpMode::Original, fi);
     CHECK(fi.muzzles.size() == 3 && fi.foot_plants.size() == 1);
+    CHECK(fi.objects[0].script_hidden && !fi.objects[1].script_hidden);
+    render::apply_script_hidden(s, nullptr);
+    CHECK(!s.objects[0].script_hidden);
     // Corpse roll through the template (a record with info.roll).
     struct RollCorpse {
         int32_t id;

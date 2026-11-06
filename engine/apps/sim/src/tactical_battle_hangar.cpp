@@ -286,6 +286,25 @@ objects::ObjectId TacticalBattle::hg_spawn(TacticalMode& mode, int32_t type, int
                 continue;
             }
             if (Unit* u = unit_by_id(id)) {
+                // q6 land end chain: a company without a team type (e.g. Boba_Fett_Team_Land_MP, one hero) has no
+                // container, so bt_adopt_built left its members immobile (only map / team members move there). They move
+                // like oi_spawn_unit's single units. q6 t19: land production no longer comes here (SKIRMISH_SETUP §3.1: it
+                // goes to the pool and lands through deploy, which moves such members); [port] kept for hangar launches.
+                const objects::TypeIndex mt = store.type(h);
+                if (ci == 0xFFFFFFFFu && !u->movable && movement_ && mode.movable(h) &&
+                    catalog_->types().has_behavior(mt, objects::BehaviorSet::Union, objects::beh::Locomotor)) {
+                    const auto ut = static_cast<uint32_t>(mt);
+                    mv::UnitDesc md = mv::unit_desc_from_type(catalog_->types(), ut);
+                    md.locomotor = mv::locomotor_kind_from_type(catalog_->types(), ut, space_ ? mv::MoveMode::Space : mv::MoveMode::Land);
+                    const Vec3 p = store.position(h), f = store.facing(h);
+                    md.id = id;
+                    md.pos = {p.x, p.y};
+                    md.z = p.z;
+                    md.yaw_deg = dmath::atan2(f.y, f.x) * (180.0f / dmath::kPiF);
+                    md.owner = owner;
+                    movement_->add_unit(md);
+                    u->movable = true;
+                }
                 if (launched) u->flags_3a2 = static_cast<uint8_t>(u->flags_3a2 | 2u);  // hangar spawned (+0x3a2 |= 2)
                 if (u->movable) ordered.push_back(id);
             }
@@ -597,23 +616,20 @@ void TacticalBattle::hg_production(TacticalMode& mode, SimRng& rng) {
             const std::vector<tc::ObjectId> none;
             abilities_->add_container(id, desc_of(static_cast<uint32_t>(t)), o.player, none, frame_, &rng);
             hg_upgrade_objs_.push_back(HgUpgradeObject{id, h});
+        } else if (!space_) {
+            // q6 t19 (SKIRMISH_SETUP §3 / §3.1 item 1): a finished land build never spawns. 0x27fad0 appends the type to
+            // the player's reinforcement pool; the human / AI Reinforce drops it later through its landing object
+            // (Company_Transport_Unit, A1_READINGS §35). Signal 0x22 (production_done) tells the AI build task.
+            ProductionDone d;
+            d.player = o.player;
+            d.type = static_cast<uint32_t>(t);
+            (void)add_built_reserve(o.player, d.type, d.key);
+            production_done_.push_back(d);
         } else {
-            // Other types: the normal tactical spawn at the builder [port: no initial order]. skai t03, land: retail puts the
-            // finished unit in the reinforcement pool for a Reinforce drop (SKIRMISH_SETUP §3); [port] the pool holds only
-            // galactic objects, so the company appears kLandProducedOffset in front of its builder instead.
-            Vec3 at = pos;
-            if (!space_) {
-                const float len = std::sqrt(facing.x * facing.x + facing.y * facing.y);
-                constexpr float kLandProducedOffset = 120.0f;
-                if (len > 0.0f) {
-                    at.x += facing.x / len * kLandProducedOffset;
-                    at.y += facing.y / len * kLandProducedOffset;
-                } else {
-                    at.y -= kLandProducedOffset;
-                }
-            }
+            // Space: the normal tactical spawn at the builder [port: SKIRMISH_SETUP §3 puts space builds in the pool too;
+            // no initial order].
             std::vector<objects::ObjectId> ordered;
-            (void)hg_spawn(mode, o.type, o.player, at, facing, at, false, rng, ordered);
+            (void)hg_spawn(mode, o.type, o.player, pos, facing, pos, false, rng, ordered);
         }
     }
 }

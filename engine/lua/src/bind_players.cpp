@@ -150,6 +150,13 @@ int32_t LuaPlayerWorld::find_faction_player(std::string_view faction) const {
     return -1;
 }
 
+int LuaPlayerWorld::faction_known(std::string_view faction) const {
+    if (!sim_) return -1;
+    for (const galactic::FactionRules& f : sim_->rules().factions)
+        if (iequals(f.name, faction)) return 1;
+    return 0;
+}
+
 PlayerRelation LuaPlayerWorld::relation(int32_t a, int32_t b) const {
     if (!valid(a) || !valid(b)) return PlayerRelation::Neutral;
     if (a == b) return PlayerRelation::Self;
@@ -443,9 +450,9 @@ LuaPlayerWorld* self_world(Call& c) {
     LuaPlayerWorld* w = world_of(c.L);
     return (w && w->valid(c.self->id)) ? w : nullptr;
 }
-int bad_player(Call& c, const char* method) {
-    return c.fail("PlayerWrapper::%s -- invalid player (no player world attached to this script)", method);
-}
+// q6 t11 (LUA_API.md "Dead or null wrappers"): a PlayerWrapper without a player (+0x28 null; here: no player world, or
+// an id the world does not have) returns nothing, silently.
+int bad_player(Call&, const char*) { return 0; }
 
 // A player argument of the attached world, -1 if it is not one.
 int32_t player_arg(Call& c, int i, const LuaPlayerWorld* w) {
@@ -542,12 +549,16 @@ int array_length(lua_State* L, int index) {
 // ---------------------------------------------------------------- Find_Player
 
 int g_find_player(Call& c) {
-    if (c.nargs != 1) return c.fail("Find_Player -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("Find_Player -- invalid type for parameter 1. Expected string.");
+    if (c.nargs != 1) return c.script_error_stop("Find_Player -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("Find_Player -- invalid type for parameter 1. Expected string.");
     const LuaPlayerWorld* w = world_of(c.L);
     if (!w) return push_nil(c);
     const std::string_view name = c.string(1);
-    const int32_t p = iequals(name, "local") ? w->local_player() : w->find_faction_player(name);
+    // q6 t11 (LUA_API.md "Lookups"): a name that is not a faction is a script error; a faction without a player is nil.
+    const bool local = iequals(name, "local");
+    if (!local && w->faction_known(name) == 0)
+        return c.script_error_stop("Find_Player -- unknown faction %s.", std::string(name).c_str());
+    const int32_t p = local ? w->local_player() : w->find_faction_player(name);
     if (!w->valid(p)) return push_nil(c);
     detail::push_player(c.L, *c.vm, p);
     return 1;
@@ -590,8 +601,8 @@ int m_get_credits(Call& c) {
 int m_give_money(Call& c) {
     LuaPlayerWorld* w = self_world(c);
     if (!w) return bad_player(c, "Give_Money");
-    if (c.nargs < 1) return c.fail("PlayerWrapper::Lua_Give_Money -- Missing required parameter.");
-    if (!c.is_number(1)) return c.fail("PlayerWrapper::Lua_Give_Money -- Parameter 1 must be a number.");
+    if (c.nargs < 1) return c.script_error_stop("PlayerWrapper::Lua_Give_Money -- Missing required parameter.");
+    if (!c.is_number(1)) return c.script_error_stop("PlayerWrapper::Lua_Give_Money -- Parameter 1 must be a number.");
     w->give_money(c.self->id, static_cast<float>(c.number(1)));
     return 0;
 }
@@ -615,8 +626,8 @@ int m_get_tech_level(Call& c) {
 int m_set_tech_level(Call& c) {
     LuaPlayerWorld* w = self_world(c);
     if (!w) return bad_player(c, "Set_Tech_Level");
-    if (c.nargs < 1) return c.fail("PlayerWrapper::Lua_Set_Tech_Level -- Missing required parameter.");
-    if (!c.is_number(1)) return c.fail("PlayerWrapper::Lua_Set_Tech_Level -- Parameter 1 must be a number.");
+    if (c.nargs < 1) return c.script_error_stop("PlayerWrapper::Lua_Set_Tech_Level -- Missing required parameter.");
+    if (!c.is_number(1)) return c.script_error_stop("PlayerWrapper::Lua_Set_Tech_Level -- Parameter 1 must be a number.");
     w->set_tech_level(c.self->id, detail::to_int(c.number(1)));
     return 0;
 }
@@ -624,9 +635,9 @@ int m_set_tech_level(Call& c) {
 int relation_query(Call& c, const char* name, bool ally) {
     const LuaPlayerWorld* w = self_world(c);
     if (!w) return bad_player(c, name + 4);  // "Lua_Is_Ally" -> "Is_Ally"
-    if (c.nargs != 1) return c.fail("PlayerWrapper::%s -- invalid number of parameters. Expected 1, got %d.", name, c.nargs);
+    if (c.nargs != 1) return c.script_error_stop("PlayerWrapper::%s -- invalid number of parameters. Expected 1, got %d.", name, c.nargs);
     const int32_t other = player_arg(c, 1, w);
-    if (other < 0) return c.fail("PlayerWrapper::%s -- invalid type for parameter 1. Expected player object.", name);
+    if (other < 0) return c.script_error_stop("PlayerWrapper::%s -- invalid type for parameter 1. Expected player object.", name);
     const PlayerRelation r = w->relation(c.self->id, other);
     return push_bool(c, ally ? (r == PlayerRelation::Self || r == PlayerRelation::Ally) : r == PlayerRelation::Enemy);
 }
@@ -636,9 +647,9 @@ int m_is_enemy(Call& c) { return relation_query(c, "Lua_Is_Enemy", false); }
 int relation_change(Call& c, const char* name, PlayerRelation r) {
     LuaPlayerWorld* w = self_world(c);
     if (!w) return bad_player(c, name);
-    if (c.nargs != 1) return c.fail("PlayerWrapper::%s -- invalid number of parameters. Expected 1, got %d.", name, c.nargs);
+    if (c.nargs != 1) return c.script_error_stop("PlayerWrapper::%s -- invalid number of parameters. Expected 1, got %d.", name, c.nargs);
     const int32_t other = player_arg(c, 1, w);
-    if (other < 0) return c.fail("PlayerWrapper::%s -- invalid type for parameter 1. Expected player.", name);
+    if (other < 0) return c.script_error_stop("PlayerWrapper::%s -- invalid type for parameter 1. Expected player.", name);
     w->set_relation(c.self->id, other, r);
     return 0;
 }
@@ -657,9 +668,9 @@ int m_get_enemy(Call& c) {
 int tech_change(Call& c, const char* name, bool locked) {
     LuaPlayerWorld* w = self_world(c);
     if (!w) return bad_player(c, name + 4);
-    if (c.nargs != 1) return c.fail("PlayerWrapper::%s -- invalid number of parameters. Expected 1, got %d.", name, c.nargs);
+    if (c.nargs != 1) return c.script_error_stop("PlayerWrapper::%s -- invalid number of parameters. Expected 1, got %d.", name, c.nargs);
     const Ud* t = c.userdata(1, detail::cls_type());
-    if (!t) return c.fail("PlayerWrapper::%s -- invalid type for parameter 1. Expected game object type.", name);
+    if (!t) return c.script_error_stop("PlayerWrapper::%s -- invalid type for parameter 1. Expected game object type.", name);
     w->states()[static_cast<size_t>(c.self->id)].tech_override[static_cast<uint32_t>(t->value)] = locked;
     // P4 lua: the same per-player list as the hack lock and story LOCK_UNIT (P4_SIM_SYSTEMS 3.3 step 1, 6.4; player
     // +0x1C8): GalacticSim::enqueue refuses a locked type. Unlock_Tech (0x604540) also joins the unlocked list with no
@@ -677,9 +688,9 @@ int m_select_object(Call& c) {
     LuaPlayerWorld* w = self_world(c);
     if (!w) return bad_player(c, "Select_Object");
     if (c.nargs != 1)
-        return c.fail("PlayerWrapper::Lua_Select_Object -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+        return c.script_error_stop("PlayerWrapper::Lua_Select_Object -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     const objects::ObjectHandle h = object_arg(c, 1);
-    if (!h) return c.fail("PlayerWrapper::Lua_Select_Object -- invalid type for parameter 1. Expected game object.");
+    if (!h) return c.script_error_stop("PlayerWrapper::Lua_Select_Object -- invalid type for parameter 1. Expected game object.");
     w->states()[static_cast<size_t>(c.self->id)].selected = c.vm->host.store->id(h);
     return 0;
 }
@@ -715,40 +726,43 @@ int m_release_credits_for_tactical(Call& c) {
     if (!w) return bad_player(c, "Release_Credits_For_Tactical");
     if (const TacticalGalacticContext* tg = w->tactical_galactic()) {  // a1j t07: 0x603c70 [H] (A1_READINGS §38)
         if (!tg->land)
-            return c.fail("PlayerWrapper::Release_Credits_For_Tactical - this script function is only valid in land tactical");
+            return c.script_error_stop("PlayerWrapper::Release_Credits_For_Tactical - this script function is only valid in land tactical");
         if (c.nargs > 1)
-            return c.fail("PlayerWrapper::Release_Credits_For_Tactical - invalid number of parameters.  Expected 0 or 1, got %d.",
+            return c.script_error_stop("PlayerWrapper::Release_Credits_For_Tactical - invalid number of parameters.  Expected 0 or 1, got %d.",
                           c.nargs);
         if (c.nargs == 1 && !c.is_number(1))
-            return c.fail("PlayerWrapper::Release_Credits_For_Tactical - invalid type for parameter 1.  Expected number.");
+            return c.script_error_stop("PlayerWrapper::Release_Credits_For_Tactical - invalid type for parameter 1.  Expected number.");
         const int32_t p = c.self->id;
         if (!w->has_ai(p))
-            return c.fail("PlayerWrapper::Release_Credits_For_Tactical - this action is not possible: player is not AI controlled.");
+            return c.script_error_stop("PlayerWrapper::Release_Credits_For_Tactical - this action is not possible: player is not AI controlled.");
         if (!tg->has_galactic_ai || !tg->has_galactic_ai(p))
-            return c.fail("PlayerWrapper::Release_Credits_For_Tactical - player has no associated galactic AI.");
+            return c.script_warning("PlayerWrapper::Release_Credits_For_Tactical - player has no associated galactic AI.");  // q6 t11
         if (tg->release_credits) tg->release_credits(p, c.nargs == 1 ? c.number(1) : -1.0);
         return 0;
     }
     if (c.nargs > 1)
-        return c.fail("PlayerWrapper::Release_Credits_For_Tactical - invalid number of parameters. Expected 0 or 1, got %d.",
+        return c.script_error_stop("PlayerWrapper::Release_Credits_For_Tactical - invalid number of parameters. Expected 0 or 1, got %d.",
                       c.nargs);
     if (c.nargs == 1 && !c.is_number(1))
-        return c.fail("PlayerWrapper::Release_Credits_For_Tactical - invalid type for parameter 1. Expected number.");
+        return c.script_error_stop("PlayerWrapper::Release_Credits_For_Tactical - invalid type for parameter 1. Expected number.");
     w->tactical_releases.push_back({c.self->id, c.nargs == 1 ? c.number(1) : -1.0});
     return 0;
 }
 
 // One boolean switch; `missing_style`: the "Missing required parameter." contract instead of the count one.
-int bool_switch(Call& c, const char* name, bool missing_style, bool LuaPlayerState::*field) {
+// `ok` (optional): set when the switch was stored (q6 t11: an error returns 0 like a success).
+int bool_switch(Call& c, const char* name, bool missing_style, bool LuaPlayerState::*field, bool* ok = nullptr) {
+    if (ok) *ok = false;
     LuaPlayerWorld* w = self_world(c);
     if (!w) return bad_player(c, name);
     if (missing_style) {
-        if (c.nargs < 1) return c.fail("PlayerWrapper::%s -- Missing required parameter.", name);
+        if (c.nargs < 1) return c.script_error_stop("PlayerWrapper::%s -- Missing required parameter.", name);
     } else if (c.nargs != 1) {
-        return c.fail("PlayerWrapper::%s -- invalid number of parameters. Expected 1, got %d.", name, c.nargs);
+        return c.script_error_stop("PlayerWrapper::%s -- invalid number of parameters. Expected 1, got %d.", name, c.nargs);
     }
-    if (!is_bool(c, 1)) return c.fail("PlayerWrapper::%s -- invalid type for parameter 1. Expected boolean.", name);
+    if (!is_bool(c, 1)) return c.script_error_stop("PlayerWrapper::%s -- invalid type for parameter 1. Expected boolean.", name);
     w->states()[static_cast<size_t>(c.self->id)].*field = to_bool(c, 1);
+    if (ok) *ok = true;
     return 0;
 }
 // L1 final: the land strike managers of the mode (RemainingScriptHooks, script_remaining.hpp) get the switch too.
@@ -757,34 +771,39 @@ RemainingScriptHooks* strike_hooks(Call& c) {
     return b ? b->remaining : nullptr;
 }
 int m_disable_bombing_run(Call& c) {
-    const int r = bool_switch(c, "Disable_Bombing_Run", false, &LuaPlayerState::bombing_run_disabled);
-    if (r == 0)
+    bool ok = false;
+    const int r = bool_switch(c, "Disable_Bombing_Run", false, &LuaPlayerState::bombing_run_disabled, &ok);
+    if (ok)
         if (RemainingScriptHooks* hk = strike_hooks(c); hk && hk->set_bombing_run_disabled) hk->set_bombing_run_disabled(c.self->id, to_bool(c, 1));
     return r;
 }
 int m_disable_orbital_bombardment(Call& c) {
-    const int r = bool_switch(c, "Disable_Orbital_Bombardment", false, &LuaPlayerState::orbital_bombardment_disabled);
-    if (r == 0)
+    bool ok = false;
+    const int r = bool_switch(c, "Disable_Orbital_Bombardment", false, &LuaPlayerState::orbital_bombardment_disabled, &ok);
+    if (ok)
         if (RemainingScriptHooks* hk = strike_hooks(c); hk && hk->set_bombardment_disabled) hk->set_bombardment_disabled(c.self->id, to_bool(c, 1));
     return r;
 }
 int m_remove_orbital_bombardment(Call& c) {
-    const int r = bool_switch(c, "Remove_Orbital_Bombardment", false, &LuaPlayerState::orbital_bombardment_removed);
-    if (r == 0)
+    bool ok = false;
+    const int r = bool_switch(c, "Remove_Orbital_Bombardment", false, &LuaPlayerState::orbital_bombardment_removed, &ok);
+    if (ok)
         if (RemainingScriptHooks* hk = strike_hooks(c); hk && hk->remove_bombardment) hk->remove_bombardment(c.self->id, to_bool(c, 1));
     return r;
 }
 // P4 lua: the switches are the sim's player flags (P +0x448 / +0x449: black-market tutorial prices, tutorial sabotage
 // cost; P4_SIM_SYSTEMS 1.3 / 2.4); the Lua-side copy stays for setups without a galactic sim.
 int m_set_black_market_tutorial(Call& c) {
-    const int r = bool_switch(c, "Lua_Set_Black_Market_Tutorial", true, &LuaPlayerState::black_market_tutorial);
-    if (galactic::GalacticSim* sim = self_world(c) ? self_world(c)->galactic() : nullptr; r == 0 && sim)
+    bool ok = false;
+    const int r = bool_switch(c, "Lua_Set_Black_Market_Tutorial", true, &LuaPlayerState::black_market_tutorial, &ok);
+    if (galactic::GalacticSim* sim = self_world(c) ? self_world(c)->galactic() : nullptr; ok && sim)
         sim->set_bm_tutorial(c.self->id, to_bool(c, 1));
     return r;
 }
 int m_set_sabotage_tutorial(Call& c) {
-    const int r = bool_switch(c, "Lua_Set_Sabotage_Tutorial", true, &LuaPlayerState::sabotage_tutorial);
-    if (galactic::GalacticSim* sim = self_world(c) ? self_world(c)->galactic() : nullptr; r == 0 && sim)
+    bool ok = false;
+    const int r = bool_switch(c, "Lua_Set_Sabotage_Tutorial", true, &LuaPlayerState::sabotage_tutorial, &ok);
+    if (galactic::GalacticSim* sim = self_world(c) ? self_world(c)->galactic() : nullptr; ok && sim)
         sim->set_sabotage_tutorial(c.self->id, to_bool(c, 1));
     return r;
 }
@@ -793,11 +812,11 @@ int m_enable_advisor_hints(Call& c) {
     LuaPlayerWorld* w = self_world(c);
     if (!w) return bad_player(c, "Enable_Advisor_Hints");
     if (c.nargs != 2)
-        return c.fail("PlayerWrapper::Enable_Advisor_Hints -- invalid number of parameters. Expected 2, got %d.", c.nargs);
+        return c.script_error_stop("PlayerWrapper::Enable_Advisor_Hints -- invalid number of parameters. Expected 2, got %d.", c.nargs);
     if (!c.is_string(1))
-        return c.fail("PlayerWrapper::Enable_Advisor_Hints -- invalid type for parameter 1. Expected string.");
+        return c.script_error_stop("PlayerWrapper::Enable_Advisor_Hints -- invalid type for parameter 1. Expected string.");
     if (!is_bool(c, 2))
-        return c.fail("PlayerWrapper::Enable_Advisor_Hints -- invalid type for parameter 2. Expected boolean.");
+        return c.script_error_stop("PlayerWrapper::Enable_Advisor_Hints -- invalid type for parameter 2. Expected boolean.");
     w->states()[static_cast<size_t>(c.self->id)].advisor_hints[std::string(c.string(1))] = to_bool(c, 2);
     return 0;
 }
@@ -805,17 +824,17 @@ int m_enable_advisor_hints(Call& c) {
 // ---------------------------------------------------------------- AI switches and goal requests
 
 int g_suspend_ai(Call& c) {
-    if (c.nargs < 1) return c.fail("LuaSuspendAI -- Expected float parameter 1");
-    if (!c.is_number(1)) return c.fail("LuaSuspendAI -- Invalid parameter 1, expected a float");
+    if (c.nargs < 1) return c.script_error_stop("LuaSuspendAI -- Expected float parameter 1");
+    if (!c.is_number(1)) return c.script_error_stop("LuaSuspendAI -- Invalid parameter 1, expected a float");
     if (LuaPlayerWorld* w = world_of(c.L)) w->set_ai_suspended(c.number(1) != 0.0);
     return 0;
 }
 
 int g_purge_goals(Call& c) {
-    if (c.nargs != 1) return c.fail("Purge_Goals -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (c.nargs != 1) return c.script_error_stop("Purge_Goals -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     LuaPlayerWorld* w = world_of(c.L);
     const int32_t p = player_arg(c, 1, w);
-    if (p < 0) return c.fail("Purge_Goals -- invalid type for parameter 1. Expected a player.");
+    if (p < 0) return c.script_error_stop("Purge_Goals -- invalid type for parameter 1. Expected a player.");
     w->purge_goal_requests.push_back(p);
     return 0;
 }
@@ -823,17 +842,18 @@ int g_purge_goals(Call& c) {
 // GiveDesireBonus(player, goal, target, bonus[, duration]) - the order PGTaskForce.lua uses. Returns nil
 // (no blocking status: BlockOnCommand returns at once) [inferred].
 int g_give_desire_bonus(Call& c) {
-    if (c.nargs != 4 && c.nargs != 5)
-        return c.fail("Give_Desire_Bonus : invalid number of parameters. Expected 4, got %d.", c.nargs);
+    // q6 t11 (LUA_API.md "Count messages that are stale"): the code takes exactly 5 (the message says 4).
+    if (c.nargs != 5)
+        return c.script_error_stop("Give_Desire_Bonus : invalid number of parameters. Expected 4, got %d.", c.nargs);
     LuaPlayerWorld* w = world_of(c.L);
     const int32_t p = player_arg(c, 1, w);
-    if (p < 0) return c.fail("Give_Desire_Bonus : invalid type for parameter 1. Expected player.");
-    if (!c.is_string(2)) return c.fail("Give_Desire_Bonus : invalid type for parameter 2. Expected string.");
+    if (p < 0) return c.script_error_stop("Give_Desire_Bonus : invalid type for parameter 1. Expected player.");
+    if (!c.is_string(2)) return c.script_error_stop("Give_Desire_Bonus : invalid type for parameter 2. Expected string.");
     const objects::ObjectHandle h = object_arg(c, 3);
-    if (!h) return c.fail("Give_Desire_Bonus : invalid type for parameter 3. Expected AI target location or game object.");
-    if (!c.is_number(4)) return c.fail("Give_Desire_Bonus : invalid type for parameter 4. Expected number.");
-    if (c.nargs == 5 && !c.is_number(5))
-        return c.fail("Give_Desire_Bonus : invalid type for parameter 5. Expected number.");
+    if (!h) return c.script_error_stop("Give_Desire_Bonus : invalid type for parameter 3. Expected AI target location or game object.");
+    if (!c.is_number(4)) return c.script_error_stop("Give_Desire_Bonus : invalid type for parameter 4. Expected number.");
+    if (!c.is_number(5))
+        return c.script_error_stop("Give_Desire_Bonus : invalid type for parameter 5. Expected number.");
     DesireBonusRequest d;
     d.player = p;
     d.goal = std::string(c.string(2));
@@ -851,8 +871,8 @@ int g_declare_goal_type(Call&) { return 0; }
 // Budget.Flush_Category(category): queued for the AI budget of the script's PlayerObject [inferred].
 int m_budget_flush_category(Call& c) {
     if (c.nargs != 1)
-        return c.fail("BudgetWrapper::Flush_Category -- Invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("BudgetWrapper::Flush_Category -- invalid type for parameter 1. Expected string");
+        return c.script_error_stop("BudgetWrapper::Flush_Category -- Invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("BudgetWrapper::Flush_Category -- invalid type for parameter 1. Expected string");
     LuaPlayerWorld* w = world_of(c.L);
     if (!w) return 0;
     lua_pushstring(c.L, "PlayerObject");
@@ -905,8 +925,8 @@ int evaluate_perception(Call& c, const LuaPlayerWorld* w, const PerceptionSource
 
 int g_evaluate_perception(Call& c) {
     if (c.nargs != 2 && c.nargs != 3)
-        return c.fail("Evaluate_Perception: Invalid number of parameters. Expected 2 or 3, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("Evaluate_Perception: Invalid parameter type for parameter 1. Expected string.");
+        return c.script_error_stop("Evaluate_Perception: Invalid number of parameters. Expected 2 or 3, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("Evaluate_Perception: Invalid parameter type for parameter 1. Expected string.");
     // OI lua (A1 ask 2): with a tactical AI host attached (the tactical AI VMs) the tactical context evaluates it and
     // the target may be an AITargetLocationWrapper or a task force (replaces the EvaluatePerception shim).
     if (const Ud* pl = c.userdata(2, detail::cls_player())) {
@@ -915,24 +935,24 @@ int g_evaluate_perception(Call& c) {
     }
     const LuaPlayerWorld* w = world_of(c.L);
     const int32_t p = player_arg(c, 2, w);
-    if (p < 0) return c.fail("Evaluate_Perception: Invalid parameter type for parameter 2. Expected player object.");
+    if (p < 0) return c.script_error_stop("Evaluate_Perception: Invalid parameter type for parameter 2. Expected player object.");
     return evaluate_perception(c, w, w->perception(), c.string(1), p, c.nargs == 3 ? perception_target(c, w, 3) : -1);
 }
 
 // a1j t07: 0x69e1b0 in a tactical mode with a parent galaxy (players.hpp TacticalGalacticContext, A1_READINGS §38).
 int evaluate_in_parent_galaxy(Call& c, const LuaPlayerWorld* w, const TacticalGalacticContext& tg) {
     if (c.nargs != 2)
-        return c.fail("Evaluate_In_Galactic_Context: Invalid number of parameters.  Expected 2, got %d.", c.nargs);
+        return c.script_error_stop("Evaluate_In_Galactic_Context: Invalid number of parameters.  Expected 2, got %d.", c.nargs);
     if (!c.is_string(1))
-        return c.fail("Evaluate_In_Galactic_Context: Invalid parameter type for parameter 1. Expected string.");
+        return c.script_error_stop("Evaluate_In_Galactic_Context: Invalid parameter type for parameter 1. Expected string.");
     const std::string name(c.string(1));
     const uint32_t eq = tg.source.equations ? tg.source.equations->find(name) : ai::kUnresolved;
-    if (eq == ai::kUnresolved) return c.fail("Evaluate_In_Galactic_Context: Unrecognised perception function %s.", name.c_str());
+    if (eq == ai::kUnresolved) return c.script_error_stop("Evaluate_In_Galactic_Context: Unrecognised perception function %s.", name.c_str());
     const int32_t p = player_arg(c, 2, w);
     if (p < 0)
-        return c.fail("Evaluate_In_Galactic_Context: Invalid parameter type for parameter 2.  Expected player object.");
+        return c.script_error_stop("Evaluate_In_Galactic_Context: Invalid parameter type for parameter 2.  Expected player object.");
     if (!tg.has_galactic_ai || !tg.has_galactic_ai(p))
-        return c.fail("Evaluate_In_Galactic_Context: AI player %s has no galactic AI.", w->faction_name(p).c_str());
+        return c.script_error_stop("Evaluate_In_Galactic_Context: AI player %s has no galactic AI.", w->faction_name(p).c_str());
     if (tg.target < 0 || !tg.source.resolver) return 0;  // no conflict record: nothing is returned [L]
     ai::EvalContext ctx;
     ctx.self = p;
@@ -943,7 +963,7 @@ int evaluate_in_parent_galaxy(Call& c, const LuaPlayerWorld* w, const TacticalGa
     ctx.rng = c.vm->host.rng ? &c.vm->host.rng->synced() : nullptr;  // Script_ evaluators only (as evaluate_perception)
     ctx.game_seed = tg.source.game_seed;
     const ai::EvalResult r = ai::evaluate(*tg.source.equations, eq, ctx, *tg.source.resolver);
-    if (!r.ok) return c.fail("Evaluate_Perception: Error evaluating perception function %s.", name.c_str());
+    if (!r.ok) return c.script_error_stop("Evaluate_Perception: Error evaluating perception function %s.", name.c_str());
     return push_num(c, r.value);
 }
 
@@ -951,14 +971,18 @@ int evaluate_in_parent_galaxy(Call& c, const LuaPlayerWorld* w, const TacticalGa
 // battle host: evaluate_in_parent_galaxy.
 int g_evaluate_in_galactic_context(Call& c) {
     if (const LuaPlayerWorld* tw = world_of(c.L); tw && tw->tactical_galactic()) return evaluate_in_parent_galaxy(c, tw, *tw->tactical_galactic());
+    // q6 t11 (LUA_API.md "Mode gates"): without a parent galaxy the original warns and returns nothing. [port] A world
+    // without the parent context outside a galactic mode is that case; the galactic-mode evaluation below is kept.
+    if (const objects::ObjectStore* st = c.vm->host.store; st && st->mode() != objects::ModeKind::Galactic)
+        return c.script_warning("Evaluate_In_Galactic_Context -- only valid in tactical games spawned from a campaign.");
     if (c.nargs != 2)
-        return c.fail("Evaluate_In_Galactic_Context: Invalid number of parameters. Expected 2, got %d.", c.nargs);
+        return c.script_error_stop("Evaluate_In_Galactic_Context: Invalid number of parameters. Expected 2, got %d.", c.nargs);
     if (!c.is_string(1))
-        return c.fail("Evaluate_In_Galactic_Context: Invalid parameter type for parameter 1. Expected string.");
+        return c.script_error_stop("Evaluate_In_Galactic_Context: Invalid parameter type for parameter 1. Expected string.");
     const LuaPlayerWorld* w = world_of(c.L);
     const int32_t p = player_arg(c, 2, w);
     if (p < 0)
-        return c.fail("Evaluate_In_Galactic_Context: Invalid parameter type for parameter 2. Expected player object.");
+        return c.script_error_stop("Evaluate_In_Galactic_Context: Invalid parameter type for parameter 2. Expected player object.");
     return evaluate_perception(c, w, w->galactic_perception(), c.string(1), p, -1);
 }
 
@@ -968,9 +992,9 @@ int m_list_create(Call& c) { return new_instance(c, cls_weighted_list()); }
 
 // Parse(names, weights): replaces the list with names[i] / weights[i] (missing weight = 0) [inferred].
 int m_list_parse(Call& c) {
-    if (!is_instance(c.self, cls_weighted_list())) return c.fail("WeightedTypeListClass -- Invalid parameters");
-    if (c.nargs < 2) return c.fail("WeightedTypeListClass -- Not enough parameters");
-    if (!is_table(c, 1) || !is_table(c, 2)) return c.fail("WeightedTypeListClass -- Invalid parameters");
+    if (!is_instance(c.self, cls_weighted_list())) return c.script_error_stop("WeightedTypeListClass -- Invalid parameters");
+    if (c.nargs < 2) return c.script_error_stop("WeightedTypeListClass -- Not enough parameters");
+    if (!is_table(c, 1) || !is_table(c, 2)) return c.script_error_stop("WeightedTypeListClass -- Invalid parameters");
     lua_State* L = c.L;
     const int names = c.idx(1), weights = c.idx(2);
     const int n = array_length(L, names);
@@ -978,13 +1002,13 @@ int m_list_parse(Call& c) {
         lua_rawgeti(L, names, i);
         const bool ok = lua_type(L, -1) == LUA_TSTRING;
         lua_pop(L, 1);
-        if (!ok) return c.fail("WeightedTypeListClass -- Invalid parameters");
+        if (!ok) return c.script_error_stop("WeightedTypeListClass -- Invalid parameters");
     }
-    if (!push_instance_field(L, c.self->value, "items")) return c.fail("WeightedTypeListClass -- Invalid parameters");
+    if (!push_instance_field(L, c.self->value, "items")) return c.script_error_stop("WeightedTypeListClass -- Invalid parameters");
     const int items = lua_gettop(L);
     if (!push_instance_field(L, c.self->value, "weights")) {
         lua_pop(L, 1);
-        return c.fail("WeightedTypeListClass -- Invalid parameters");
+        return c.script_error_stop("WeightedTypeListClass -- Invalid parameters");
     }
     const int ws = lua_gettop(L);
     const int old = array_length(L, items);
@@ -1011,13 +1035,13 @@ int m_list_parse(Call& c) {
 // itself; in the galaxy also a fleet's members, or a planet's starbase, structures, surface units and
 // orbiting fleets' members. nil for a dead / missing target.
 int g_evaluate_type_list(Call& c) {
-    if (c.nargs != 3) return c.fail("Evaluate_Type_List: Invalid number of parameters. Expected 3, got %d.", c.nargs);
+    if (c.nargs != 3) return c.script_error_stop("Evaluate_Type_List: Invalid number of parameters. Expected 3, got %d.", c.nargs);
     const LuaPlayerWorld* w = world_of(c.L);
     if (player_arg(c, 1, w) < 0)
-        return c.fail("Evaluate_Type_List: Invalid parameter type for parameter 1. Expected Player Wrapper.");
+        return c.script_error_stop("Evaluate_Type_List: Invalid parameter type for parameter 1. Expected Player Wrapper.");
     const Ud* list = c.userdata(3, cls_weighted_list());
     if (!is_instance(list, cls_weighted_list()))
-        return c.fail("Evaluate_Type_List: Invalid parameter type for parameter 3. Expected weighted type list.");
+        return c.script_error_stop("Evaluate_Type_List: Invalid parameter type for parameter 3. Expected weighted type list.");
     const objects::ObjectHandle target = object_arg(c, 2);
     if (!target) return push_nil(c);
 
@@ -1085,16 +1109,16 @@ int m_dist_create(Call& c) { return new_instance(c, cls_distribution()); }
 
 int m_dist_insert(Call& c) {
     if (c.nargs != 2)
-        return c.fail("DiscreteDistribution::Insert -- invalid number of parameters. Expected 2, got %d.", c.nargs);
-    if (!c.is_number(2)) return c.fail("DiscreteDistribution::Insert -- invalid type for parameter 2. Expected number.");
+        return c.script_error_stop("DiscreteDistribution::Insert -- invalid number of parameters. Expected 2, got %d.", c.nargs);
+    if (!c.is_number(2)) return c.script_error_stop("DiscreteDistribution::Insert -- invalid type for parameter 2. Expected number.");
     if (!is_instance(c.self, cls_distribution()) || lua_isnil(c.L, c.idx(1)))
-        return c.fail("DiscreteDistribution::Insert -- invalid type for parameter 1.");
+        return c.script_error_stop("DiscreteDistribution::Insert -- invalid type for parameter 1.");
     lua_State* L = c.L;
-    if (!push_instance_field(L, c.self->value, "items")) return c.fail("DiscreteDistribution::Insert -- invalid distribution.");
+    if (!push_instance_field(L, c.self->value, "items")) return c.script_error_stop("DiscreteDistribution::Insert -- invalid distribution.");
     const int items = lua_gettop(L);
     if (!push_instance_field(L, c.self->value, "weights")) {
         lua_pop(L, 1);
-        return c.fail("DiscreteDistribution::Insert -- invalid distribution.");
+        return c.script_error_stop("DiscreteDistribution::Insert -- invalid distribution.");
     }
     const int ws = lua_gettop(L);
     const int k = array_length(L, items) + 1;
@@ -1109,9 +1133,9 @@ int m_dist_insert(Call& c) {
 // Sample(): one synced draw r = range_float(0, W) over the positive weights (float sum, insertion order);
 // the first entry whose running sum is >= r; nothing when empty or total <= 0 (L1_S4_REMAINING §1.4 [H]).
 int m_dist_sample(Call& c) {
-    if (!is_instance(c.self, cls_distribution())) return c.fail("DiscreteDistribution::Sample -- not a distribution.");
+    if (!is_instance(c.self, cls_distribution())) return c.script_error_stop("DiscreteDistribution::Sample -- not a distribution.");
     GameRandom* rng = c.vm->host.rng;
-    if (!rng) return c.fail("DiscreteDistribution::Sample -- no game random attached to this script");
+    if (!rng) return c.script_error_stop("DiscreteDistribution::Sample -- no game random attached to this script");
     lua_State* L = c.L;
     if (!push_instance_field(L, c.self->value, "items")) return push_nil(c);
     const int items = lua_gettop(L);
@@ -1161,11 +1185,11 @@ int m_dist_sample(Call& c) {
 // script override.
 int m_type_is_build_locked(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectTypeWrapper::Is_Build_Locked -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectTypeWrapper::Is_Build_Locked -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     const LuaPlayerWorld* w = world_of(c.L);
     const int32_t p = player_arg(c, 1, w);
     if (!c.userdata(1, detail::cls_player()))
-        return c.fail("GameObjectTypeWrapper::Is_Build_Locked -- invalid type for parameter 1. Expected player");
+        return c.script_error_stop("GameObjectTypeWrapper::Is_Build_Locked -- invalid type for parameter 1. Expected player");
     if (p < 0) return push_bool(c, false);
     if (const galactic::GalacticSim* sim = w->galactic()) return push_bool(c, sim->type_locked(p, static_cast<uint32_t>(c.self->value)));
     return push_bool(c, w->tech_lock(p, static_cast<uint32_t>(c.self->value)) == 1);
@@ -1175,9 +1199,9 @@ int m_type_is_build_locked(Call& c) {
 // faction (ASCII case-insensitive).
 int m_type_is_affiliated_with(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectTypeWrapper::Is_Affiliated_With -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectTypeWrapper::Is_Affiliated_With -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     if (!c.userdata(1, detail::cls_player()))
-        return c.fail("GameObjectTypeWrapper::Is_Affiliated_With -- invalid type for parameter 1. Expected player");
+        return c.script_error_stop("GameObjectTypeWrapper::Is_Affiliated_With -- invalid type for parameter 1. Expected player");
     const LuaPlayerWorld* w = world_of(c.L);
     const int32_t p = player_arg(c, 1, w);
     const objects::GameObjectTypes* ty = c.vm->host.types;
@@ -1203,19 +1227,19 @@ PlanetIndex planet_row(const galactic::GalacticSim* sim, objects::ObjectHandle h
 //     players get the Is_Planet_Revealed gate (auto-reveal honoured, flag 5); the human single-player hop gate
 //     on the raw revealed byte never applies to Lua.
 int g_find_path(Call& c) {
-    if (c.nargs != 3) return c.fail("Find_Path -- invalid number of parameters. Expected 3, got %d.", c.nargs);
+    if (c.nargs != 3) return c.script_error_stop("Find_Path -- invalid number of parameters. Expected 3, got %d.", c.nargs);
     const LuaPlayerWorld* w = world_of(c.L);
     const galactic::GalacticSim* sim = galactic_of(c, w);
     const PlanetIndex a = planet_row(sim, object_arg(c, 2));
     const PlanetIndex b = planet_row(sim, object_arg(c, 3));
     if (sim && a == kInvalidPlanet)
-        return c.fail("Find_Path -- invalid parameter for parameter 2. This needs to be a valid planet (or wrapper round one)");
+        return c.script_error_stop("Find_Path -- invalid parameter for parameter 2. This needs to be a valid planet (or wrapper round one)");
     if (sim && b == kInvalidPlanet)
-        return c.fail("Find_Path -- invalid parameter for parameter 3. This needs to be a valid planet (or wrapper round one)");
+        return c.script_error_stop("Find_Path -- invalid parameter for parameter 3. This needs to be a valid planet (or wrapper round one)");
     const int32_t p = player_arg(c, 1, w);
     if (!sim || p < 0 || static_cast<size_t>(p) >= sim->players().size()) return push_nil(c);
     if (!sim->players()[static_cast<size_t>(p)].ai)
-        return c.fail("Find_Path -- can't do this from the point of view of non-ai players");
+        return c.script_error_stop("Find_Path -- can't do this from the point of view of non-ai players");
     std::vector<PlanetIndex> path;
     bool answered = false;
     if (ai::AiPathQuery* q = w->ai_paths()) answered = q->ai_path(p, a, b, path);
@@ -1278,8 +1302,8 @@ galactic::GalacticSim* galactic_mut(Call& c) {
 // Assemble_Fleet(table of units): GalacticSim::assemble_fleet (direct, like the original's Lua path);
 // returns the fleet object, nil when no unit qualifies or outside a galactic script.
 int g_assemble_fleet(Call& c) {
-    if (c.nargs != 1) return c.fail("Assemble_Fleet -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (lua_type(c.L, c.idx(1)) != LUA_TTABLE) return c.fail("Assemble_Fleet -- invalid type for parameter 1. Expected lua table of units.");
+    if (c.nargs != 1) return c.script_error_stop("Assemble_Fleet -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (lua_type(c.L, c.idx(1)) != LUA_TTABLE) return c.script_error_stop("Assemble_Fleet -- invalid type for parameter 1. Expected lua table of units.");
     std::vector<objects::ObjectHandle> units;
     const int t = c.idx(1);
     const int n = luaL_getn(c.L, t);
@@ -1290,7 +1314,7 @@ int g_assemble_fleet(Call& c) {
         const objects::ObjectHandle h = (ok && detail::object_alive(*c.vm, *u)) ? detail::object_handle(*u) : objects::ObjectHandle{};
         lua_pop(c.L, 1);
         if (!ok)
-            return c.fail("Assemble_Fleet -- unexpected type found in table of units to assemble. These should all be GameObjectWrappers");
+            return c.script_error_stop("Assemble_Fleet -- unexpected type found in table of units to assemble. These should all be GameObjectWrappers");
         if (h) units.push_back(h);
     }
     galactic::GalacticSim* sim = galactic_mut(c);
@@ -1310,7 +1334,7 @@ int g_assemble_fleet(Call& c) {
 // human local player): nothing is issued, silently. Never an empty list (GalacticSim::invade reads it as "all units").
 // Returns nothing.
 int m_invade(Call& c) {
-    if (c.nargs != 0) return c.fail("GameObjectWrapper::Invade -- invalid number of parameters. Expected 0, got %d.", c.nargs);
+    if (c.nargs != 0) return c.script_error_stop("GameObjectWrapper::Invade -- invalid number of parameters. Expected 0, got %d.", c.nargs);
     LuaPlayerWorld* w = world_of(c.L);
     const galactic::GalacticSim* sim = galactic_of(c, w);
     if (!sim) return 0;
@@ -1366,14 +1390,14 @@ int m_invade(Call& c) {
 constexpr int32_t kMaxBaseLevel = 5;
 int wait_for_base(Call& c, bool starbase) {
     const char* who = starbase ? "WaitForStarbase" : "WaitForGroundbase";
-    if (c.nargs != 2) return c.fail("WaitForGroundBase : Invalid number of parameters: %d should be 2.", c.nargs);  // (sic, both)
+    if (c.nargs != 2) return c.script_error_stop("WaitForGroundBase : Invalid number of parameters: %d should be 2.", c.nargs);  // (sic, both)
     const galactic::GalacticSim* sim = galactic_of(c, world_of(c.L));
     const objects::ObjectHandle planet = object_arg(c, 1);
     if (!c.userdata(1, detail::cls_game_object()) || (sim && planet_row(sim, planet) == kInvalidPlanet))
-        return c.fail("%s : Invalid type for parameter 1. Expected planet game object.", who);
+        return c.script_error_stop("%s : Invalid type for parameter 1. Expected planet game object.", who);
     const int32_t level = c.is_number(2) ? detail::to_int(c.number(2)) : -1;
     if (level < 0 || level > kMaxBaseLevel)
-        return c.fail("%s : Invalid value %d for parameter 2. Must be between %d and %d.", starbase ? "WaitForStarBase" : "WaitForGroundBase",
+        return c.script_error_stop("%s : Invalid value %d for parameter 2. Must be between %d and %d.", starbase ? "WaitForStarBase" : "WaitForGroundBase",
                       level, 0, kMaxBaseLevel);
     Ud u;
     u.cls = detail::class_id("BlockingStatus");
@@ -1411,11 +1435,11 @@ int next_base_type(Call& c, objects::ObjectHandle planet, bool starbase) {
 }
 int g_get_next_base_type(Call& c, bool starbase) {
     const char* who = starbase ? "GetNextStarbaseType" : "GetNextGroundbaseType";
-    if (c.nargs != 1) return c.fail("%s : invalid number of parameters. Expected 1, got %d.", who, c.nargs);
+    if (c.nargs != 1) return c.script_error_stop("%s : invalid number of parameters. Expected 1, got %d.", who, c.nargs);
     const galactic::GalacticSim* sim = galactic_of(c, world_of(c.L));
     const objects::ObjectHandle planet = object_arg(c, 1);
     if (!c.userdata(1, detail::cls_game_object()) || (sim && planet_row(sim, planet) == kInvalidPlanet))
-        return c.fail("%s : invalid parameter type. Expected planet game object.", who);
+        return c.script_error_stop("%s : invalid parameter type. Expected planet game object.", who);
     return next_base_type(c, planet, starbase);
 }
 int g_get_next_starbase_type(Call& c) { return g_get_next_base_type(c, true); }
@@ -1432,9 +1456,9 @@ int m_get_is_planet_ai_usable(Call& c) {
 // and the planet's surface is accessible, not hidden and not destroyed.
 int m_can_land_on_planet(Call& c) {
     if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Can_Land_On_Planet -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectWrapper::Can_Land_On_Planet -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     if (!c.userdata(1, detail::cls_game_object()))
-        return c.fail("GameObjectWrapper::Can_Land_On_Planet -- invalid type for parameter 1. Expected game object.");
+        return c.script_error_stop("GameObjectWrapper::Can_Land_On_Planet -- invalid type for parameter 1. Expected game object.");
     const galactic::GalacticSim* sim = galactic_of(c, world_of(c.L));
     const PlanetIndex row = planet_row(sim, object_arg(c, 1));
     if (row == kInvalidPlanet) return push_bool(c, false);

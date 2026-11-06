@@ -616,6 +616,9 @@ Data pack fields: control +0x68 (float), owner +0x6c, target control +0x70, targ
   - applies with control 1.0.
 - **Planetary revolt** (0x3f98a0): forces every foreign player's units off the planet and hands it to the
   revolting player. [H]
+- None of these, nor the control ramp above, touches the planet's persisted pad structures (D +0x10): only a land
+  result (fought, auto-resolved, or an invasion without a battle) drops the losers' records (AI_GALACTIC_TOKENS §9.4).
+  [H]
 
 **What transfers** (structures destroyed or converted) is decided by the tactical battle and by 0x4b7670 /
 0x4b7860, not traced. [L] Q2: capture a planet with a ground base and a starbase through Lua `Change_Owner` and
@@ -699,7 +702,7 @@ Token globals that were unresolved in PHASE2_ANSWERS, now named from 0x5b43d0:
 | consumer | token path | how the result is used | conf |
 |---|---|---|---|
 | **Node_Weight** (0x693db0 → 0x5f2430, ground flag 0) | `Target.EnemyForce.SpaceTotalUnnormalized` | value = perception + (only if the planet is **not** held by the AI or an ally, 0x4ad9f0) the `AI_Combat_Power` of the planet's **starbase type** (D +0x140). The category mask is "all" | H |
-| ground variant (0x5f2430, ground flag 1) | `Target.EnemyForce.GroundTotalUnnormalized` | + Σ `AI_Combat_Power` of the ground structures (D +0x158) and garrison types (0x4b8000) when not held | H |
+| ground variant (0x5f2430, ground flag 1) | `Target.EnemyForce.GroundTotalUnnormalized` | + Σ `AI_Combat_Power` of the ground structures (D +0x158) and the persisted tactical built objects (0x4b8000, AI_GALACTIC_TOKENS §9.4; earlier called "garrison types") when not held | H |
 | **AI danger** (`Is_Planet_Dangerous` 0x3f18c0) | `Target.EnemyForce.HasSpaceForce` | dangerous if the evaluation fails or the value ≠ 0.0. Only used when the planet has no starbase | H |
 | **AI passability** (`Is_Planet_Passable_For_Player` 0x3f2510) | `Target.TargetPlayerID` | the value is read as a player id: failure → passable; no such player → flag 0; neutral faction → flag 0; otherwise flag 1 | H |
 | A*-family cost (0x3f06d0, called by 0x3ef6a0) | `Target.EnemyForce.SpaceTotalUnnormalized`, then `GroundTotalUnnormalized` | adds the perception value to distance / HS. The caller is a second planet search, not the fleet A* of GALACTIC.md | L |
