@@ -138,6 +138,25 @@ static void test_xml_recovery() {
         CHECK(has_warning(d, 2, "<R> is not closed"));
         CHECK(d.root().child_text("A") == "x < 5");
     }
+    {  // element names may start with a digit (the original loads these unit files: docs/re/MODC_LOADER.md section 3)
+        const char* src =
+            "\xEF\xBB\xBF<?xml version=\"1.0\"?>\r\n"
+            "<181st>\r\n"
+            "\t<UniqueUnit Name=\"U1\"><Variant_Of_Existing_Type>TIE_Fighter</Variant_Of_Existing_Type></UniqueUnit>\r\n"
+            "\t<80s_Visor_Man Name=\"U2\"/>\r\n"
+            "\t<Text>a < 5</Text>\r\n"
+            "</181st>\r\n";
+        XmlDocument d = XmlDocument::parse(src, "digit.xml");
+        CHECK(d.ok());
+        CHECK(d.root().name() == "181st");
+        CHECK(d.root().child_count() == 3);
+        CHECK(d.root().child("UniqueUnit").attribute("Name") == "U1");
+        CHECK(d.root().child("UniqueUnit").child_text("Variant_Of_Existing_Type") == "TIE_Fighter");
+        CHECK(d.root().child("80s_Visor_Man").attribute("Name") == "U2");
+        CHECK(d.root().child_text("Text") == "a < 5");
+        CHECK(has_warning(d, 5, "does not start markup"));
+        CHECK(d.diagnostics().size() == 1);
+    }
     {  // unquoted attribute and self-closing variants
         XmlDocument d = XmlDocument::parse("<R a=1 b = \"2\" c=x/><S/>", "q.xml");
         CHECK(d.ok());
