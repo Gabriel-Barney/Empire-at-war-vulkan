@@ -18,6 +18,7 @@ its kind below and add it there instead of starting a second copy.
 | Phase 3 (renderer): results, assumptions, reference | [`PHASE3.md`](PHASE3.md) | Details of finished work: `archive/` |
 | Phase 2 (architecture, headless core): results and design notes (determinism contract, file resolution order) | [`PHASE2.md`](PHASE2.md) | |
 | Game asset catalog, file formats, shader catalog and porting notes | [`assets/`](assets/), [`formats/`](formats/), [`shaders/`](shaders/) | Generated catalogs: do not edit by hand |
+| Mod compatibility: hard-coded names in `engine/` (audit, replacements, the name lint) | [`status/modc-audit.md`](status/modc-audit.md) | The mod-loading contract is `MODS.md` (PR #92); the audit becomes its section 9 when that lands |
 | Playtest QA notes | [`qa/`](qa/) | |
 | Dated one-off reports | [`PRODUCTION_AUDIT_2026-10-30.md`](PRODUCTION_AUDIT_2026-10-30.md) | History, not kept current |
 | Old versions of moved or trimmed documents | [`archive/`](archive/) | Zips |

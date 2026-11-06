@@ -100,6 +100,7 @@ bool load_game_data(const std::string& root, const std::vector<std::string>& arg
     }
     out.root = root;
     out.args = args;
+    out.mod_layer = !v->mod_dirs().empty();
     out.vfs = v.get();
     out.files = std::move(v);
     if (!load_common(out, err)) return false;
@@ -152,7 +153,9 @@ std::vector<std::string> data_fallback_forces(const GameData& data, const std::s
 
 namespace {
 std::vector<std::string> game_default_forces(const GameData& data, const std::string& faction, bool land) {
-    return skirmish_default_forces({data.rules, data.types, data.skirmish_forces, data.basic_ai}, faction, land);
+    SkirmishForceOptions o;
+    o.base_game_lists = !data.mod_layer;  // [port, docs/MODS.md §6] base-FoC sessions keep their lists
+    return skirmish_default_forces({data.rules, data.types, data.skirmish_forces}, faction, land, o);
 }
 }  // namespace
 
@@ -164,8 +167,24 @@ std::vector<std::string> default_skirmish_ground(const GameData& data, const std
     return game_default_forces(data, faction, true);
 }
 
-bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic::GalacticSetup& g, std::string* err) {
+std::string default_skirmish_faction(const galactic::GalacticRules& rules, bool ai_slot, std::string_view human) {
+    for (const galactic::FactionRules& f : rules.factions) {
+        if (!f.is_playable || f.is_neutral) continue;
+        if (ai_slot && !human.empty() && rules.find_faction(human) == rules.find_faction(f.name)) continue;
+        return f.name;
+    }
+    return {};
+}
+
+SkirmishSetup resolve_skirmish_factions(const galactic::GalacticRules& rules, SkirmishSetup s) {
+    if (s.human_faction.empty()) s.human_faction = default_skirmish_faction(rules, false);
+    if (s.ai_faction.empty()) s.ai_faction = default_skirmish_faction(rules, true, s.human_faction);
+    return s;
+}
+
+bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& setup, galactic::GalacticSetup& g, std::string* err) {
     const galactic::GalacticRules& rules = data.rules;
+    const SkirmishSetup s = resolve_skirmish_factions(rules, setup);
     g = galactic::GalacticSetup{};
     galactic::PlayerSetup human, ai, neutral;
     human.faction = rules.find_faction(s.human_faction);
@@ -209,7 +228,7 @@ bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic
     // S10 map owners [probe 2026-10-29]: retail skirmish has Neutral and Hostile players besides the slots; map objects
     // resolve their owner by faction (TacticalBattle::bt_map_owner), natives without a player go to Hostile.
     galactic::PlayerSetup hostile;
-    hostile.faction = rules.find_faction("Hostile");
+    hostile.faction = rules.native_owner_faction();  // modc t03: by data (FoC: Hostile)
     if (hostile.faction != galactic::kNoIndex && hostile.faction != human.faction && hostile.faction != ai.faction) g.players.push_back(hostile);
     auto add = [&](int32_t player, PlanetIndex at, const std::vector<std::string>& names, const std::string& faction, bool ground = false) {
         const std::vector<std::string> list =

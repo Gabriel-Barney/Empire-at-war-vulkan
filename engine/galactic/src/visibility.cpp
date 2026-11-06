@@ -93,6 +93,7 @@ bool parse_visibility_level(std::string_view text, uint32_t* out) {
 
 uint32_t faction_default_visibility(std::string_view faction_name) {
     // GRC 2.3 baseline: "Rebel" 0x11, "Empire" 0, "Underworld" 0x11, other 0.
+    // [name-ok: retail by-name default in 0x3fa490, docs/re/GALACTIC_REVEAL_CORRUPTION.md "Baseline"]
     if (ieq(faction_name, "Rebel") || ieq(faction_name, "Underworld")) return kVisGoodDefault;
     return kVisEvilDefault;
 }

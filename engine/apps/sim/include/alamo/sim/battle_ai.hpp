@@ -77,8 +77,10 @@ struct TacticalAiSetup {
     uint32_t pp_latency = ai::tactical::kDefaultPpLatency;
 };
 
-// [port] faction -> AIPlayerType for non-human playable players: Empire -> BasicEmpire, Rebel -> BasicRebel,
-// Underworld -> AI_Player_Underworld (A2's mapping); "" otherwise.
+// The AIPlayerType of a non-human, playable, non-neutral player: its faction's Basic_AI (FactionRules::basic_ai, faction
+// +0x378; AI_TACTICAL.md "Skirmish slots use Faction.Basic_AI"); "" for none or "None". modc t03: from the data, not by
+// faction name (FoC's Basic_AI values are the old built-in mapping Empire -> BasicEmpire, Rebel -> BasicRebel,
+// Underworld -> AI_Player_Underworld, so base-FoC battles are unchanged).
 std::string default_tactical_ai_type(int32_t player, const galactic::GalacticSim& galaxy);
 
 // a2h t05: the session data of the tactical AI, one loader for every battle host (alamo_headless --skirmish-ai and

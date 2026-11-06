@@ -127,10 +127,14 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
         // players 0 and 6), no human (player 0 stays the viewpoint), no starting forces: every unit comes from the map. The
         // skirmish galaxy is scaffolding only (no hop, no conflict): the battle starts directly (start_map_battle).
         if (spec_.attract) {
-            // [port] data without Rebel / Underworld (synthetic tests): the skirmish's two factions.
-            attract_sides_ = {d.rules.find_faction("Rebel"), d.rules.find_faction("Underworld")};
-            if (attract_sides_[0] == galactic::kNoIndex || attract_sides_[1] == galactic::kNoIndex)
-                attract_sides_ = {d.rules.find_faction(spec_.skirmish.human_faction), d.rules.find_faction(spec_.skirmish.ai_faction)};
+            // modc t03: by index as 0x22f10 does (players 0 and 6 = faction indices 0 and 6; FoC: Rebel, Underworld), not
+            // by name. [port] data with fewer than 7 factions (synthetic tests): the skirmish's two slot factions.
+            if (d.rules.factions.size() > 6) {
+                attract_sides_ = {0, 6};
+            } else {
+                const SkirmishSetup slots = resolve_skirmish_factions(d.rules, spec_.skirmish);
+                attract_sides_ = {d.rules.find_faction(slots.human_faction), d.rules.find_faction(slots.ai_faction)};
+            }
             setup_.players.clear();
             for (uint32_t f = 0; f < d.rules.factions.size(); ++f) {
                 galactic::PlayerSetup ps;
@@ -163,7 +167,7 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
             galactic::PlayerSetup& ps = setup_.players[p];
             if (ps.human || ps.faction >= d.rules.factions.size() || d.rules.factions[ps.faction].is_neutral) continue;
             if (spec_.kind == SessionKind::Skirmish && !ps.ai) continue;
-            const std::string type = resolve_ai_type(d.rules.factions[ps.faction].name, d.basic_ai, control, &d.ai->defs);
+            const std::string type = resolve_ai_type(d.rules.factions[ps.faction].name, d.basic_ai, control, &d.ai->defs, d.mod_layer);
             if (type.empty()) continue;
             ps.ai = true;
             ps.difficulty = diff;
@@ -742,6 +746,7 @@ void GameSession::attract_demo_script(sim::SimHost& h) {
             if (gs->players()[p].faction == f) return static_cast<int32_t>(p);
         return int32_t{-1};
     };
+    // [name-ok-begin: the shipped Demo_Attract_Controller.lua's names, emulated here until object scripts run it; modc t18]
     const std::array<int32_t, 3> players = {find_player("Empire"), find_player("Rebel"), find_player("Underworld")};
     const std::array<objects::TypeIndex, 3> zone_types = {type_of("STORY_TRIGGER_ZONE_02"), type_of("STORY_TRIGGER_ZONE_00"),
                                                           type_of("STORY_TRIGGER_ZONE_01")};
@@ -749,6 +754,7 @@ void GameSession::attract_demo_script(sim::SimHost& h) {
         type_of("GROUND_EMPIRE_HYPERVELOCITY_GUN"), type_of("GROUND_ION_CANNON"), type_of("REBEL_STAR_BASE_3"),
         type_of("STARVIPER_FIGHTER"), type_of("TIE_PHANTOM"), type_of("TIE_FIGHTER"), type_of("TIE_BOMBER"),
         type_of("A-WING"), type_of("X-WING"), type_of("B-WING")};
+    // [name-ok-end]
     SimRng& rng = h.random().synced();
     for (size_t c = 0; c < controllers; ++c) {
         ++attract_controllers_;

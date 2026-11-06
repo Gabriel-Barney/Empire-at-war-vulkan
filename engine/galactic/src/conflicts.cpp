@@ -41,6 +41,8 @@ int32_t terrain_index(std::string_view s) {
     return -1;
 }
 
+// [name-ok-begin: retail faction-name table 0x140b30568 (Rebel 0, Empire 1, Pirates 2, Underworld 4, Hutts 5),
+// docs/re/L1_S4_REMAINING.md, BATTLE_TRANSITIONS.md "defender faction index"]
 int32_t map_faction_index(std::string_view name) {
     if (iequal(name, "Rebel")) return 0;
     if (iequal(name, "Empire")) return 1;
@@ -49,6 +51,7 @@ int32_t map_faction_index(std::string_view name) {
     if (iequal(name, "Hutts")) return 5;
     return 0;
 }
+// [name-ok-end]
 
 }  // namespace
 

@@ -722,7 +722,8 @@ void test_tech_unlocks() {
         GalacticSim& s = w.sim;
         make_sliceable(w.rules, tFrigate, 1);
         make_sliceable(w.rules, tDS2, 2);
-        CHECK(w.rules.constants.good_side_name == "REBEL");
+        CHECK(w.rules.constants.good_side_name.empty());  // modc t03: no built-in faction name
+        w.rules.constants.good_side_name = "REBEL";       // as FoC's GameConstants.xml
         s.buildable_unit_reward(pReb, tFrigate, tMerc);
         CHECK(s.type_unlocked(pReb, tFrigate) && s.type_locked(pReb, tMerc));
         CHECK(s.players()[pReb].tech_level == 2 && (s.players()[pReb].unlocked_types == V{tFrigate}));  // tDS2 is not < 2
