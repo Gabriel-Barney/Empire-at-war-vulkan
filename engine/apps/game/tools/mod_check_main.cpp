@@ -1,31 +1,47 @@
-// alamo_mod_check - Q5 mod diagnostics (alamo/game/mod_check.hpp): loads the data as alamo_game does and reports files,
-// loader steps, content counts, campaign maps and Lua compile errors.
+// alamo_mod_check - Q5 / modc t05 mod load report (alamo/game/mod_check.hpp): loads the data as alamo_game does and
+// reports files, loader steps, content counts, campaign maps, missing files, unknown XML tags, Lua compile / load errors
+// and unbound engine calls; optionally the machine-readable summary (docs/MODS.md §5.1).
 //
-//   alamo_mod_check [--game DIR] [MODPATH=..] [STEAMMOD=..] [FALLBACKPATH=..] [--out FILE] [--verbose]
-//                   [--no-campaigns] [--no-lua]
-//   --game defaults to ALAMO_FOC_DATA. Exit 0: no errors (warnings allowed), 1: errors, 2: usage.
-//   Example (Thrawn's Revenge from the Steam workshop):
-//     alamo_mod_check --game "...\corruption" MODPATH="...\workshop\content\32470\1125571106"
+//   alamo_mod_check [--game DIR] [MODPATH=..] [STEAMMOD=..] [FALLBACKPATH=..] [--out FILE] [--json FILE|-] [--verbose]
+//                   [--no-campaigns] [--no-lua] [--no-lua-run] [--no-files] [--no-xml-tags]
+//   --game defaults to ALAMO_FOC_DATA. --json - writes the JSON to stdout instead of the text report.
+//   STEAMMOD=<id> is found in the Steam library folders (alamo/vfs/steam_workshop.hpp).
+//   Exit 0: no errors (warnings allowed), 1: errors, 2: usage.
+//   Example (a Steam workshop mod):
+//     alamo_mod_check --game "...\corruption" STEAMMOD=1125571106 --json report.json
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <vector>
 
 #include "alamo/game/mod_check.hpp"
+#include "alamo/vfs/steam_workshop.hpp"
 
 namespace {
 
 int usage() {
     std::fprintf(stderr,
-                 "usage: alamo_mod_check [--game DIR] [MODPATH=..] [STEAMMOD=..] [FALLBACKPATH=..] [--out FILE] [--verbose]\n"
-                 "                       [--no-campaigns] [--no-lua]\n");
+                 "usage: alamo_mod_check [--game DIR] [MODPATH=..] [STEAMMOD=..] [FALLBACKPATH=..] [--out FILE] [--json FILE|-]\n"
+                 "                       [--verbose] [--no-campaigns] [--no-lua] [--no-lua-run] [--no-files] [--no-xml-tags]\n");
     return 2;
+}
+
+bool write_file(const std::string& path, const std::string& text) {
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) {
+        std::fprintf(stderr, "cannot write %s\n", path.c_str());
+        return false;
+    }
+    std::fwrite(text.data(), 1, text.size(), f);
+    std::fclose(f);
+    return true;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string game, out;
+    alamo::vfs::install_steam_workshop_lookup();  // modc t10: STEAMMOD= from the Steam library folders
+    std::string game, out, json;
     std::vector<std::string> args;
     bool verbose = false;
     alamo::game::ModCheckOptions opt;
@@ -33,9 +49,13 @@ int main(int argc, char** argv) {
         const std::string a = argv[i];
         if (a == "--game" && i + 1 < argc) game = argv[++i];
         else if (a == "--out" && i + 1 < argc) out = argv[++i];
+        else if (a == "--json" && i + 1 < argc) json = argv[++i];
         else if (a == "--verbose") verbose = true;
         else if (a == "--no-campaigns") opt.campaigns = false;
         else if (a == "--no-lua") opt.lua = false;
+        else if (a == "--no-lua-run") opt.lua_run = false;
+        else if (a == "--no-files") opt.files = false;
+        else if (a == "--no-xml-tags") opt.xml_tags = false;
         else if (a.find('=') != std::string::npos) args.push_back(a);  // MODPATH= etc.
         else return usage();
     }
@@ -45,15 +65,12 @@ int main(int argc, char** argv) {
 
     const alamo::game::ModCheckReport report = alamo::game::check_mod_data(game, args, opt);
     const std::string text = alamo::game::format_mod_report(report, verbose);
-    std::fputs(text.c_str(), stdout);
-    if (!out.empty()) {
-        FILE* f = std::fopen(out.c_str(), "wb");
-        if (!f) {
-            std::fprintf(stderr, "cannot write %s\n", out.c_str());
-            return 1;
-        }
-        std::fwrite(text.data(), 1, text.size(), f);
-        std::fclose(f);
+    if (json != "-") std::fputs(text.c_str(), stdout);
+    if (!out.empty() && !write_file(out, text)) return 1;
+    if (!json.empty()) {
+        const std::string js = alamo::game::format_mod_report_json(report);
+        if (json == "-") std::fputs(js.c_str(), stdout);
+        else if (!write_file(json, js)) return 1;
     }
     return report.error_count() ? 1 : 0;
 }

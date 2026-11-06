@@ -1,0 +1,10 @@
+<BaseObjects>
+  <Planet Name="Base_Alpha"><Galactic_Position>0, 0, 0</Galactic_Position></Planet>
+  <Planet Name="Base_Beta"><Galactic_Position>100, 0, 0</Galactic_Position></Planet>
+  <SpaceUnit Name="Base_Frigate">
+    <Affiliation>Base_Empire</Affiliation>
+    <Space_Model_Name>Base_Frigate.alo</Space_Model_Name>
+    <Tactical_Health>500</Tactical_Health>
+    <Build_Cost_Credits>800</Build_Cost_Credits>
+  </SpaceUnit>
+</BaseObjects>
