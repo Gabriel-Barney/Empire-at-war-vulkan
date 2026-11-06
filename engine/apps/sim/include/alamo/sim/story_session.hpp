@@ -17,6 +17,13 @@
 //   <Lua_Script>, in plot order: new LuaVm (host = galactic primary store, object types, the session's
 //   GameRandom, the host's FileProvider), attach_story, require(<script>), Base_Definitions(),
 //   Create_Thread("main") (PGBase.lua / PGStateMachine.lua: main = Process_States).
+//   Then the load-time story pass (A2I_T01_FRAME_ORDER.md §6; retail L10 Player::Set_Tech_Level raises STORY_TECH_LEVEL
+//   synchronously inside the campaign load): story clock at frame 0 / time 0, not paused; for each player in player-index
+//   order, STORY_TECH_LEVEL with that player's current (starting) tech level to the plot sets that player owns, the whole
+//   Fire chain (Story_Event_Trigger, reward through apply_reward as at T9, dependants) applied at once, logged
+//   "F 0 ... via=load". So the start-of-game tech spawns exist before tick 1 (in the initial CRC record and in the
+//   galactic AI's first T7), and the T9 TECH_LEVEL poll cannot fire them again (fired, not Perpetual). Their galactic
+//   events (unit created) are routed at T9 of tick 1.
 //
 // T9 story service (SimHost::tick_once, after T7 players / T8 global Lua; docs/re/STORY.md 4.1):
 //   0. [port] the original dispatches game notifications synchronously when they happen; here the
@@ -481,6 +488,7 @@ private:
     std::vector<std::pair<std::string, lua::StoryNotification>> notifications(const StoryTrigger& t) const;
     std::string planet_type_name(uint32_t planet) const;
     void poll(size_t set);
+    void load_pass();  // A2i t01: the load-time STORY_TECH_LEVEL pass at the end of start() (header comment)
     void collect(size_t set, std::string_view via);  // log new fired entries, drain script errors
     void apply_reward(Set& s, const std::string& type, const std::vector<std::string>& params);
     void invade_planet_reward(int32_t plot_player, PlanetIndex planet, const std::string& company);  // a1h t04

@@ -13,7 +13,7 @@ cannot drift apart:
   * shipped equations (no mod file needed): the budget-weight equations of each faction's galactic templates and the
     Tech_Upgrade trigger / untrigger.
   * a2h t02 (MJ record, Empire): the MajorItem flush / reclaim trigger equations (shipped) and their inputs (mod
-    equations A2FB_HumanSpaceTotal, A2FB_ActiveGoals[Major], ...), MAJOR_SHIPPED / MAJOR_MOD below.
+    equations A2FB_HumanSpaceTotal, A2FB_ActiveGoalsMajor, ...), MAJOR_SHIPPED / MAJOR_MOD below.
 
 None of these equations contains the '#' operator (a random draw inside an evaluation, AI_GALACTIC section 8), so
 evaluating them draws nothing from the game's synchronised RNG (selftest_a2f.py checks the shipped ones).
@@ -72,10 +72,14 @@ MAJOR_SHIPPED = [
     ('Enemy_Global_Space_Unit_Raw_Total', 'ERT', False),
 ]
 # Mod equations (name, key, body, needs a human player): added to the equation file with the A2FB_* ones above.
+# a2i t02: A2FB_ActiveGoals (key AG, Variable_Self.ActiveGoals with no Parameter_Category) is gone. Retail cannot evaluate
+# it (ActiveGoals needs exactly one Parameter_Category, A2H_GALACTIC_AI_RE.md section 1), and the failed evaluation sets
+# the calling script's failed flag, which pcall does not see: in run 20261106-040725 it stopped the story script and the
+# Empire's free store after their first sample, and every Empire plan thread at its next sample. Every equation left
+# here answered in that run. selftest_a2f.py (retail_eval_fails) rejects such a body.
 MAJOR_MOD = [
     ('A2FB_HumanSpaceTotal', 'HST', 'Variable_Human.SpaceTotalUnnormalized', True),
     ('A2FB_SelfSpaceTotal', 'SST', 'Variable_Self.SpaceTotalUnnormalized', False),
-    ('A2FB_ActiveGoals', 'AG', 'Variable_Self.ActiveGoals', False),
     ('A2FB_ActiveGoalsMajor', 'AGM', 'Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[MajorItem]}',
      False),
     ('A2FB_HasDeathStar', 'HDS', 'Variable_Self.HasUnit{Parameter_Type = "Death_Star", Parameter_Count = 1}', False),

@@ -29,11 +29,15 @@ A2FB_LAST_FULL = -100
 A2FB_STOPPED = false
 A2FB_FIRST = true
 
-A2FB_Say("LOAD", "story plot script chunk ran modeq=" .. tostring(A2FB_MODEQ))
+-- a2i t02: every record below is built inside pcall (A2FB_Rec) and every player's sample runs in its own pcall, so a
+-- Lua error costs one record or one sample and leaves an ERR record (each distinct message once), never the channel.
+-- (Run 20261106-040725 lost this channel to an equation that fails inside the engine, which pcall cannot catch: see
+-- a2fb_core.lua and the README's known limits.)
+A2FB_Rec("LOAD", function() return "story plot script chunk ran modeq=" .. tostring(A2FB_MODEQ) end)
 A2FB_Canary(A2FB_CANARY)
 
 function Definitions()
-	A2FB_Say("DEF", "Definitions ran")
+	A2FB_Rec("DEF", function() return "Definitions ran" end)
 	ServiceRate = 0.01
 	StoryModeEvents = {}
 	Define_State("A2FB_State", A2FB_State)
@@ -91,7 +95,10 @@ function A2FB_Round(t, full)
 			local is_human = okh and human
 			-- full rounds cover every player (credits of the human and Pirates too), small rounds the AI players
 			if full or (i <= 3 and not is_human) then
-				A2FB_Sample("ST", p, full)
+				local oks, errs = pcall(A2FB_Sample, "ST", p, full)
+				if not oks then
+					A2FB_Error("Sample " .. A2FB_FACS[i], errs)
+				end
 			end
 		end
 	end
@@ -104,18 +111,22 @@ function A2FB_Update()
 	end
 	if A2FB_FIRST then
 		A2FB_FIRST = false
-		A2FB_Say("FIRST", "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " humanexists=" .. tostring(A2FB_HumanExists()))
+		A2FB_Rec("FIRST", function()
+			return "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " humanexists=" .. tostring(A2FB_HumanExists())
+		end)
 		pcall(Game_Message, "TEXT_A2FB_LOADED")
 	end
 	if t >= 300 then
 		if not A2FB_STOPPED then
 			A2FB_STOPPED = true
-			A2FB_Say("DONE", "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " records=" .. A2FB_Seq)
+			A2FB_Rec("DONE", function() return "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " records=" .. A2FB_Seq end)
 			pcall(Game_Message, "TEXT_A2FB_DONE")
 		end
 		if t >= A2FB_LONG_T and not A2FB_LONG_DONE then
 			A2FB_LONG_DONE = true
-			A2FB_Say("LONGDONE", "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " records=" .. A2FB_Seq)
+			A2FB_Rec("LONGDONE", function()
+				return "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " records=" .. A2FB_Seq
+			end)
 			pcall(Game_Message, "TEXT_A2FB_LONG_DONE")
 		end
 		-- a2g t01 (long run until a template switch): keep a full sample every 30 s after DONE
@@ -136,7 +147,7 @@ end
 
 function A2FB_State(message)
 	if message == OnEnter then
-		A2FB_Say("ENTER", "t=" .. A2FB_Num(A2FB_Now()))
+		A2FB_Rec("ENTER", function() return "t=" .. A2FB_Num(A2FB_Now()) end)
 	elseif message == OnUpdate then
 		local ok, err = pcall(A2FB_Update)
 		if not ok then

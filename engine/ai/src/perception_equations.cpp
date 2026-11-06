@@ -2,13 +2,17 @@
 #include "alamo/ai/perception_equations.hpp"
 
 #include <charconv>
+#include <iterator>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 
+#include "alamo/ai/ai_definitions.hpp"
 #include "alamo/core/hash.hpp"  // A2 tactical: crc32 ('#' reseed)
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/data/xml.hpp"
+#include "alamo/objects/enums.hpp"
 
 namespace alamo::ai {
 
@@ -48,6 +52,88 @@ std::string_view trim(std::string_view s) {
     while (!s.empty() && is_space(s.back())) s.remove_suffix(1);
     return s;
 }
+
+// ---- enum literal converters (A2I_TOKENS_RE §3.1) ----
+
+// HardPointType short names, value = index (EnumConversionClass<HardPointType>, TACTICAL_COMBAT §2.4; 11 has no name).
+constexpr std::string_view kHardPointNames[] = {
+    "ENGINE",       "SHIELD_GENERATOR", "GRAVITY_WELL",   "FIGHTER_BAY",       "TRACTOR_BEAM", "WEAPON_LASER", "WEAPON_MISSILE",
+    "WEAPON_TORPEDO", "WEAPON_ION_CANNON", "WEAPON_MASS_DRIVER", "WEAPON_SPECIAL", "",          "DUMMY_ART",
+};
+
+class LiteralConverters {
+public:
+    LiteralConverters() {
+        const objects::EnumRegistry reg;  // built-in vanilla tables (no Data\XML\Enum file is read here)
+        for (size_t i = 0; i < static_cast<size_t>(objects::EnumId::Count); ++i) {
+            const objects::EnumConverter& c = reg.get(static_cast<objects::EnumId>(i));
+            if (c.valid && !c.enum_name.empty()) conv_.push_back(c);
+        }
+        const AiDefinitions defs;  // the shipped AIGoalCategoryType list (Data\XML\Enum\AIGoalCategoryType.xml)
+        objects::EnumConverter goal;
+        goal.enum_name = "AIGoalCategoryType";
+        goal.dynamic = goal.valid = true;
+        for (size_t i = 0; i < defs.categories.size() && i < defs.category_value.size(); ++i)
+            goal.add(defs.categories[i], defs.category_value[i]);
+        conv_.push_back(std::move(goal));
+        objects::EnumConverter diff;  // 0x5de400: Easy 0, Normal 1, Hard 2 (SCRIPT_GAPS)
+        diff.enum_name = "DifficultyLevelType";
+        diff.valid = true;
+        diff.add("Easy", 0);
+        diff.add("Normal", 1);
+        diff.add("Hard", 2);
+        conv_.push_back(std::move(diff));
+        objects::EnumConverter hp;
+        hp.enum_name = "HardPointType";
+        hp.valid = true;
+        for (size_t i = 0; i < std::size(kHardPointNames); ++i)
+            if (!kHardPointNames[i].empty()) hp.add(kHardPointNames[i], static_cast<int64_t>(i));
+        conv_.push_back(std::move(hp));
+    }
+    const objects::EnumConverter* find(std::string_view name) const {
+        for (const objects::EnumConverter& c : conv_)
+            if (iequals(c.enum_name, trim(name))) return &c;
+        return nullptr;
+    }
+
+private:
+    std::vector<objects::EnumConverter> conv_;
+};
+
+const LiteralConverters& literal_converters() {
+    static const LiteralConverters c;  // immutable after the (thread-safe) first use
+    return c;
+}
+
+bool literal_delim(char c) { return c == '|' || c == ' ' || c == ',' || c == '\t' || c == '\n'; }
+
+}  // namespace
+
+EnumLiteralError convert_enum_literal(std::string_view type, std::string_view text, EnumLiteral& out) {
+    out = EnumLiteral{};
+    const objects::EnumConverter* c = literal_converters().find(type);
+    if (!c) return EnumLiteralError::NoConverter;
+    // One String_To_UInt call on the whole bracket text [H]: a plain enum looks it up as one name, a bitfield splits it.
+    const std::optional<int64_t> v = c->convert(text);
+    if (!v) return EnumLiteralError::Unconvertible;
+    out.bitfield = c->bitfield;
+    out.value = *v;
+    if (!c->bitfield) {
+        out.names.emplace_back(trim(text));
+        return EnumLiteralError::None;
+    }
+    size_t i = 0;
+    while (i < text.size()) {
+        while (i < text.size() && literal_delim(text[i])) ++i;
+        const size_t b = i;
+        while (i < text.size() && !literal_delim(text[i])) ++i;
+        const std::string_view tok = trim(text.substr(b, i - b));
+        if (!tok.empty()) out.names.emplace_back(tok);
+    }
+    return EnumLiteralError::None;
+}
+
+namespace {
 
 class Parser {
 public:
@@ -352,15 +438,21 @@ private:
         if (!ident(id)) return false;
         p.value.text = std::string(id);
         if (accept("[")) {
+            // A2I_TOKENS_RE §3.1 [H]: the bracket text goes to the converter named by the identifier, whole, while the
+            // equation is built; no converter or no conversion fails the build (§3.2).
             p.value.kind = ParamValue::Kind::Enum;
-            for (;;) {
-                std::string_view v;
-                if (!ident(v)) return false;
-                p.value.enum_values.emplace_back(v);
-                if (accept("|")) continue;
-                if (accept("]")) break;
-                return fail("'|' or ']' expected in enum value");
-            }
+            const size_t end = s_.find(']', pos_);
+            if (end == std::string_view::npos) return fail("']' expected in enum value");
+            const std::string_view body = s_.substr(pos_, end - pos_);
+            EnumLiteral lit;
+            const EnumLiteralError e = convert_enum_literal(id, body, lit);
+            if (e == EnumLiteralError::NoConverter) return fail("There is no enum converter named " + std::string(id) + "!");
+            if (e != EnumLiteralError::None)
+                return fail("Enum converter(" + std::string(id) + ") was unable to convert " + std::string(trim(body)) +
+                            " to a valid enum value!");
+            p.value.enum_values = std::move(lit.names);
+            p.value.enum_value = lit.value;
+            pos_ = end + 1;
         } else {
             p.value.kind = ParamValue::Kind::Identifier;
         }
@@ -590,10 +682,14 @@ uint32_t EquationSet::add(std::string_view name, std::string_view text, LoadRepo
             ++report->precedence_sensitive;
         }
     }
+    // A2I_TOKENS_RE §3.2 [H]: an equation that fails to build is not added (its file-mates still load); the port keeps
+    // the record for diagnostics, out of the name index.
     const auto idx = static_cast<uint32_t>(eq_.size());
+    const bool parsed = e.parsed;
     eq_.push_back(std::move(e));
+    if (!parsed) return kUnresolved;
     index_.emplace(std::move(key), idx);
-    return eq_[idx].parsed ? idx : kUnresolved;
+    return idx;
 }
 
 void EquationSet::add_file(std::string_view xml, const std::string& file, LoadReport& report) {

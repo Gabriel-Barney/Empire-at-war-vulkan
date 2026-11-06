@@ -33,7 +33,10 @@ FPS = 30.0
 PAY0, PERIOD = 1351, 1350          # first fiscal payment (mode frame) and the cycle, both sides (A2F_T07 1 point 5)
 CATS = [('OFF', 'Offensive'), ('INFRA', 'Infrastructure'), ('MAJOR', 'MajorItem'), ('DEF', 'Defensive'), ('INFO', 'Information')]
 BUD_RE = re.compile(r'^A2G BUD (\w+) f=(-?\d+) p=(\d+) cr=(\S+) gain=(\S+) inc68=(\S+) T=(\S+) sumP=(\S+) \|(.*)$')
-CAT_RE = re.compile(r'(\w+) A=(\S+) R=(\S+) P=(\S+) w=(\S+) n=(\d+);')
+CAT_RE = re.compile(r'(\w+) A=(\S+) R=(\S+) P=(\S+) w=(\S+) n=(\d+)(?: I=(\S+))?;')
+# a2i t02: BudgetFractionToBuild reads the pool P (+0x4C) and income rate I (+0x50) (A2H_GALACTIC_AI_RE.md §2), so the
+# retail columns decoded from it are P / I, not A / R. --port-field P compares the port's P (default A, the a2g reading).
+PORT_FIELD = {'A': 0, 'P': 2}
 
 
 def fnum(s):
@@ -75,7 +78,8 @@ def read_port_budget(path, player):
             names = dict((n, k) for k, n in CATS)
             for c in CAT_RE.finditer(m.group(9)):
                 key = names.get(c.group(1), c.group(1))
-                r['cat'][key] = (float(c.group(2)), float(c.group(3)), float(c.group(4)), float(c.group(5)))
+                r['cat'][key] = (float(c.group(2)), float(c.group(3)), float(c.group(4)), float(c.group(5)),
+                                 fnum(c.group(7)))
             out[r['tag']].append(r)
     return out
 
@@ -106,7 +110,7 @@ def cmd_budget(a):
         ra = r0['cat'].get(key)
         pa = init['cat'].get(key) if init else None
         rv = ra[0] if ra else None
-        pv = pa[0] if pa else None
+        pv = pa[PORT_FIELD[a.port_field]] if pa else None
         tot_r = r0['cr'] or 1.0
         tot_p = (init['cr'] if init else 0) or 1.0
         d = (pv - rv) if (rv is not None and pv is not None) else None
@@ -134,9 +138,9 @@ def cmd_budget(a):
             k += 1
             continue
 
-        def pick(rr, key):
+        def pick(rr, key, port=False):
             v = rr['cat'].get(key)
-            return v[0] if v else None
+            return (v[PORT_FIELD[a.port_field]] if port else v[0]) if v else None
 
         def first_with(key):
             for r in cyc:
@@ -157,9 +161,9 @@ def cmd_budget(a):
             for key in ('OFF', 'INFRA', 'MAJOR'):
                 r = which(key)
                 pr = at_or_before(frames, int(r['f'])) if r else None
-                cols.append((pick(r, key) if r else None, pick(pr, key) if pr else None))
+                cols.append((pick(r, key) if r else None, pick(pr, key, True) if pr else None))
         rmin = min((pick(r, 'INFRA') for r in cyc if pick(r, 'INFRA') is not None), default=None)
-        pmin = min((pick(r, 'INFRA') for r in frames if pay <= r['f'] < nxt and pick(r, 'INFRA') is not None), default=None)
+        pmin = min((pick(r, 'INFRA', True) for r in frames if pay <= r['f'] < nxt and pick(r, 'INFRA') is not None), default=None)
         lr = cyc[-1]
         lp = at_or_before(frames, int(lr['f']))
         line = '  %2d %5d ' % (k + 1, pay)
@@ -361,6 +365,7 @@ def main(argv=None):
     b.add_argument('--port-trace', required=True)
     b.add_argument('--faction', default='EMPIRE')
     b.add_argument('--player', type=int, default=1)
+    b.add_argument('--port-field', choices=['A', 'P'], default='A', help='port pool compared with the retail column (P: a2i reading)')
     p = sub.add_parser('plans')
     p.add_argument('--retail-records', nargs='*')
     p.add_argument('--port-log', nargs='+', required=True)

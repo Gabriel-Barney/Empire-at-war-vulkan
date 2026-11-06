@@ -44,7 +44,7 @@ GalacticAiWorld::Impl::Impl(gal::GalacticSim& s, objects::ObjectStore& st, const
 GalacticSimTokenResolver::Hooks GalacticAiWorld::Impl::make_hooks() {
     GalacticSimTokenResolver::Hooks h;
     h.story_campaign = cfg.story_campaign;
-    h.active_goals = [this](int32_t p, std::span<const std::string_view> cats, int32_t& n) { return active_goals(p, cats, n); };
+    h.active_goals = [this](int32_t p, std::string_view cat, int32_t& n) { return active_goals(p, cat, n); };
     h.markup = [this](int32_t p, int32_t planet) {
         const auto it = markup.find({p, planet});
         return it == markup.end() ? 0.0 : it->second;
@@ -89,20 +89,18 @@ GalacticSimTokenResolver::Hooks GalacticAiWorld::Impl::make_hooks() {
     return h;
 }
 
-// ActiveGoals 0x6e0490 (A2H_GALACTIC_AI_RE §1) [H]: key = the OR of the names' AIGoalCategoryType VALUES (a plain id
-// enum, so [Offensive|Infrastructure] = 0 | 3 = Infrastructure) [M: the OR is the DLL's]; the result is the size of the
-// active-set vector filed under that category id (0x721f70, an exact key lookup, every entry whatever its state; 0 when
-// no category has the value). The goals are filed by their type's Category. An unknown name or a player without a
-// galactic AI fails [L / M]. The parameter checks (exactly one Parameter_Category) are the token's.
-bool GalacticAiWorld::Impl::active_goals(int32_t p, std::span<const std::string_view> categories, int32_t& out) const {
+// ActiveGoals 0x6e0490 (A2H_GALACTIC_AI_RE §1, A2I_TOKENS_RE §3.3) [H]: key = the one category's AIGoalCategoryType
+// VALUE; the result is the size of the active-set vector filed under that category id (0x721f70, an exact key lookup,
+// every entry whatever its state; 0 when no category has the value). The goals are filed by their type's Category. The
+// literal is converted when the equation is built (AIGoalCategoryType is a plain enum: `[A|B]` or an unknown name never
+// builds), so there is no OR of several names here. A name the loaded definitions lack (a non-literal parameter text) or
+// a player without a galactic AI fails [L / M]. The parameter checks (exactly one Parameter_Category) are the token's.
+bool GalacticAiWorld::Impl::active_goals(int32_t p, std::string_view category, int32_t& out) const {
     const PlayerAi* pa = player_ai(p);
-    if (!pa || categories.empty()) return false;
-    int32_t key = 0;
-    for (const std::string_view name : categories) {
-        const int32_t c = defs.find_category(name);
-        if (c < 0 || static_cast<size_t>(c) >= defs.category_value.size()) return false;
-        key |= defs.category_value[static_cast<size_t>(c)];
-    }
+    if (!pa) return false;
+    const int32_t id = defs.find_category(category);
+    if (id < 0 || static_cast<size_t>(id) >= defs.category_value.size()) return false;
+    const int32_t key = defs.category_value[static_cast<size_t>(id)];
     out = 0;
     const auto& active = pa->ctx.goals.active();
     for (size_t c = 0; c < defs.category_value.size() && c < active.size(); ++c)
@@ -2377,6 +2375,8 @@ std::vector<GalacticAiTypeInfo> make_galactic_ai_type_info(const objects::GameOb
         o.transport_behavior = types.behavior_count(ti, "TRANSPORT") > 0;
         o.generic_hero = types.get_bool(ti, "Is_Generic_Hero");
         o.special_weapon_space = types.get_bool(ti, "Is_Special_Weapon_In_Space");
+        o.garrison_mask = types.get_mask(ti, "Garrison_Category");  // +0x1658 (A2I_TOKENS_RE §2.1)
+        if (o.garrison_mask == 0) o.garrison_mask = types.get_mask(ti, "Space_Or_Garrison_Category");
         o.lua_script = std::string(ai_trim(types.get_string(ti, "Lua_Script")));
         o.script_on_type = types.get_bool(ti, "Execute_Script_On_Type");
         o.retains_residual_influence = types.get_bool(ti, "Planet_Retains_Residual_Influence");  // P4 ai (default true)

@@ -172,6 +172,76 @@ static void test_language() {
         CHECK(parse_expression("Variable_Target.EnemyForce.SpaceTotal.TimeLastSeenUnnormalized", t, x, &err) &&
               x.path.size() == 3);
     }
+    // a2i t07 (A2I_TOKENS_RE §3) [H]: Type[text] literals are converted when the equation is built.
+    {
+        TokenTable t;
+        Expression x;
+        ParseError err;
+        auto literal = [&](const char* value, int64_t& v, std::vector<std::string>& names) {
+            const std::string text = std::string("Variable_Self.X {Parameter_Category = ") + value + "}";
+            err = ParseError{};
+            if (!parse_expression(text, t, x, &err)) return false;
+            v = x.params[0].value.enum_value;
+            names = x.params[0].value.enum_values;
+            return x.params[0].value.kind == ParamValue::Kind::Enum;
+        };
+        int64_t v = 0;
+        std::vector<std::string> names;
+        // Plain enums: one whole name (trimmed, case-insensitive); the value is the enum value.
+        CHECK(literal("AIGoalCategoryType[MajorItem]", v, names) && v == 11 && names.size() == 1 && names[0] == "MajorItem");
+        CHECK(literal("AIGoalCategoryType[ offensive ]", v, names) && v == 0 && names.size() == 1 && names[0] == "offensive");
+        CHECK(literal("aigoalcategorytype[Infrastructure]", v, names) && v == 3);  // converter name: case-insensitive [port]
+        CHECK(literal("DifficultyLevelType[Hard]", v, names) && v == 2);
+        CHECK(literal("HardPointType[Shield_Generator]", v, names) && v == 1);
+        // Any '|' on a plain enum looks up "OFFENSIVE|INFRASTRUCTURE" as one name: no conversion, the build fails.
+        CHECK(!literal("AIGoalCategoryType[Offensive|Infrastructure]", v, names));
+        CHECK(err.message.find("unable to convert") != std::string::npos);
+        CHECK(!literal("AIGoalCategoryType[Offensive|Offensive]", v, names));
+        CHECK(!literal("AIGoalCategoryType[No_Such_Category]", v, names));
+        CHECK(!literal("DifficultyLevelType[Easy|Hard]", v, names));
+        // Bitfields: split on '|', space, ',', tab, LF; every token defined; the value is their OR.
+        CHECK(literal("GameObjectCategoryType[Infantry | Hero]", v, names) && v == (0x80 | 0x6400000) && names.size() == 2 &&
+              names[0] == "Infantry" && names[1] == "Hero");
+        CHECK(literal("GameObjectCategoryType[Fighter Bomber,Corvette]", v, names) && v == 0xB && names.size() == 3);
+        CHECK(literal("GameObjectPropertiesType[Turret|Fodder]", v, names) && v == 0x44);
+        CHECK(!literal("GameObjectCategoryType[Fighter | NoSuchCategory]", v, names));  // one unknown token fails it all
+        // No converter of that name.
+        CHECK(!literal("Foo[Bar]", v, names) && err.message.find("no enum converter named Foo") != std::string::npos);
+        CHECK(!literal("GameObjectCategoryType[Fighter", v, names));  // unterminated
+        EnumLiteral lit;
+        CHECK(convert_enum_literal("AIGoalCategoryType", "Map_Control", lit) == EnumLiteralError::None && lit.value == 18 &&
+              !lit.bitfield);
+        CHECK(convert_enum_literal("NoSuchType", "X", lit) == EnumLiteralError::NoConverter);
+        CHECK(convert_enum_literal("GameObjectCategoryType", "Capital|X", lit) == EnumLiteralError::Unconvertible);
+    }
+    // A2I_TOKENS_RE §3.2 [H]: an equation that fails to build is not registered; its file-mates load, a later definition of
+    // the same name is the first registered one, and a Function_ reference to a dropped equation stays unresolved.
+    {
+        const char* xml =
+            "<?xml version=\"1.0\"?>\n<Equations>\n"
+            "<Drop> Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[Offensive|Infrastructure]} </Drop>\n"
+            "<Keep> 2 </Keep>\n<Uses> Function_Drop.Evaluate + 1 </Uses>\n<NoConv> Variable_Self.X {Parameter_A = Foo[Bar]} </NoConv>\n"
+            "<Drop> 7 </Drop>\n<Gone> Variable_Self.X {Parameter_A = AIGoalCategoryType[Nope]} </Gone>\n"
+            "<Late> Function_Gone.Evaluate </Late>\n</Equations>\n";
+        EquationSet set;
+        LoadReport rep;
+        set.add_file(xml, "lit.xml", rep);
+        set.link(&rep);
+        CHECK(rep.equations == 7 && rep.parse_errors == 3 && rep.duplicates == 0 && rep.unresolved_functions == 1);
+        EvalContext ctx;
+        ctx.self = 0;
+        CHECK(set.find("Keep") != kUnresolved && evaluate(set, set.find("Keep"), ctx, r).value == 2.0);
+        CHECK(set.find("NoConv") == kUnresolved && set.find("Gone") == kUnresolved);
+        // The second <Drop> is the first that built: it is the registered one, and Uses resolves to it.
+        CHECK(set.find("Drop") != kUnresolved && set.equation(set.find("Drop")).line == 7);
+        EvalResult res = evaluate(set, set.find("Uses"), ctx, r);
+        CHECK(res.ok && res.value == 8.0);
+        res = evaluate(set, set.find("Late"), ctx, r);
+        CHECK(!res.ok && res.error == EvalError::Function);
+        bool msg = false;
+        for (const std::string& m : rep.messages) msg = msg || m.find("There is no enum converter named Foo!") != std::string::npos;
+        CHECK(msg);
+    }
     // Registry ids are fixed and identical in every table.
     {
         TokenTable a, b;

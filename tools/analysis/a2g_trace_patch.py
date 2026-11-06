@@ -38,8 +38,9 @@ static void a2g_dump(const char* tag, int64_t now, int32_t player, const AiBudge
     for (size_t c = 0; c < b.size(); ++c) {
         const auto& k = b.category(static_cast<int32_t>(c));
         if (k.weight == 0.0f && k.A == 0.0f && k.P == 0.0f && k.goals.empty()) continue;
-        std::fprintf(stderr, " %s A=%.4f R=%.4f P=%.4f w=%.4f n=%zu;", c < d.categories.size() ? d.categories[c].c_str() : "?",
-                     static_cast<double>(k.A), static_cast<double>(k.R), static_cast<double>(k.P), static_cast<double>(k.weight), k.goals.size());
+        std::fprintf(stderr, " %s A=%.4f R=%.4f P=%.4f w=%.4f n=%zu I=%.4f;", c < d.categories.size() ? d.categories[c].c_str() : "?",
+                     static_cast<double>(k.A), static_cast<double>(k.R), static_cast<double>(k.P), static_cast<double>(k.weight), k.goals.size(),
+                     static_cast<double>(k.I));
     }
     std::fprintf(stderr, "\n");
 }

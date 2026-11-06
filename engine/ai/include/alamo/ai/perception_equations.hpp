@@ -15,7 +15,7 @@
 //              | Function_<Equation>.Evaluate [params]                            another equation
 //              | Script_<Name>.Evaluate [params]                                  Lua hook (resolve_script)
 //   params    := { [ Parameter_X = value { , Parameter_Y = value } ] }
-//   value     := "string" | number | EnumType[A|B|..] | identifier
+//   value     := "string" | number | EnumType[text] | identifier
 //
 // S2 grammar (STRATEGIC_GAPS §3, [H] from the DLL's spirit rules): precedence loosest -> tightest =
 //   comparisons (chained left to right), + -, * / # ('#' binds like '*': a * b # c = (a*b) # c), unary
@@ -29,7 +29,13 @@
 //     evaluation (ok == false); 0 / x = 0, x / 0 fails (AI_GALACTIC_3 §7.1);
 //   * clamp(x, lo, hi) = x < lo ? lo : (x > hi ? hi : x) (lo tested first; NaN passes through);
 //   * duplicate equation names: the first loaded definition wins (later ones are reported);
-//   * file order: as given (the host passes Vfs::list(), byte-sorted); names case-insensitive.
+//   * file order: as given (the host passes Vfs::list(), byte-sorted); names case-insensitive;
+//   * enum literals (A2I_TOKENS_RE §3) [H]: `Type[text]` is converted when the equation is built, by the converter named
+//     Type (convert_enum_literal): no such converter, or text it cannot convert, is a parse error. A plain enum
+//     looks the whole trimmed, case-insensitive text up as ONE name (so any '|' fails); a bitfield splits on '|', space,
+//     ',', tab, LF and every token must be defined (value = their OR). An equation that fails to build (syntax or
+//     enum literal) is not registered: find() does not see it, a later definition of the name is the first one, and
+//     Function_ references to it stay unresolved. It is kept in equation() / size() for diagnostics only (parsed false).
 // Evaluation is pure ('#' included) and re-entrant: one EquationSet may be evaluated from many
 // threads at once with per-call EvalContexts.
 #pragma once
@@ -84,7 +90,8 @@ struct ParamValue {
     Kind kind = Kind::Number;
     double number = 0.0;
     std::string text;                      // String / Identifier text, Enum type name
-    std::vector<std::string> enum_values;  // Enum: the names inside [ ], split at '|'
+    std::vector<std::string> enum_values;  // Enum: the names inside [ ] (bitfield: every token; plain enum: one name)
+    int64_t enum_value = 0;                // Enum: the converted value (the uint64 bit pattern the original carries)
 };
 struct Param {
     std::string name;  // "Parameter_Type"
@@ -122,7 +129,21 @@ struct ParseError {
     uint32_t offset = 0;  // byte offset in the expression text
     std::string message;
 };
-// Parses one expression; tokens are interned into `tokens`. False (and *err) on a syntax error.
+// The equation-literal converter registry (the exe's DatabaseUIntConversionClass registry as the port knows it): the
+// objects::EnumRegistry converters (built-in vanilla tables: GameObjectCategoryType, GameObjectPropertiesType, ...), plus
+// AIGoalCategoryType (AiDefinitions' shipped list), DifficultyLevelType (Easy 0, Normal 1, Hard 2) and HardPointType (the
+// short names, value = index). Name lookup ASCII case-insensitive [port; L in the original]. False: no such converter.
+// `bitfield` tells how `text` was split; `value` = the converted value; `names` = the trimmed names / tokens (input case).
+struct EnumLiteral {
+    bool bitfield = false;
+    int64_t value = 0;
+    std::vector<std::string> names;
+};
+enum class EnumLiteralError : uint8_t { None, NoConverter, Unconvertible };
+EnumLiteralError convert_enum_literal(std::string_view type, std::string_view text, EnumLiteral& out);
+
+// Parses one expression; tokens are interned into `tokens`. False (and *err) on a syntax error or an enum literal that
+// does not convert.
 bool parse_expression(std::string_view text, TokenTable& tokens, Expression& out, ParseError* err = nullptr);
 // True when a comparison has an operand that is an unparenthesised arithmetic expression
 // (the precedence assumption matters for it).

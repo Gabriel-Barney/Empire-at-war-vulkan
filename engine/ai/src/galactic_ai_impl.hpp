@@ -198,7 +198,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
          GameRandom& r, const AiDefinitions& d, const EquationSet& e, std::vector<GalacticAiTypeInfo> ti, AiOrderSink snk,
          GalacticAiConfig c);
     GalacticSimTokenResolver::Hooks make_hooks();
-    bool active_goals(int32_t p, std::span<const std::string_view> categories, int32_t& out) const;  // <root>.ActiveGoals
+    bool active_goals(int32_t p, std::string_view category, int32_t& out) const;  // <root>.ActiveGoals
     // BudgetFractionToBuild's view of a planet queue's AI build task (A2H_GALACTIC_AI_RE §2 step 4).
     GalacticSimTokenResolver::QueueTask queue_task(PlanetIndex planet, uint32_t queue) const;
 

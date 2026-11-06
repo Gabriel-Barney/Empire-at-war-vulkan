@@ -370,7 +370,8 @@ def render_major(res):
     L.append('   keys: NMS Needs_More_Space_Force_Globally, NTF Need_To_Flush_MajorItem_Budget (goal Flush_MajorItem_Budget),')
     L.append('         CRM Can_Reclaim_Excess_MajorItem_Budget (goal Reclaim_Excess_...), HES Has_Enough_Space_Force_Globally,')
     L.append('         FRT / ERT friendly / enemy space raw totals, HST / SST Variable_Human / Variable_Self.SpaceTotalUnnormalized,')
-    L.append('         AG / AGM ActiveGoals without / with Parameter_Category MajorItem, HDS HasUnit(Death_Star),')
+    L.append('         AGM ActiveGoals with Parameter_Category MajorItem (AG, without one, is in a2h runs only: it fails in')
+    L.append('         retail and stopped the script that evaluated it, a2i t02), HDS HasUnit(Death_Star),')
     L.append('         MNT / MNTU Maintenance, PLC / PLCU PlanetsControlled (skip = no human player, nil = no answer)')
     if res.get('longdone'):
         L.append('   25-minute mark (LONGDONE) reached at frame %s' % res['longdone'][0])

@@ -20,6 +20,16 @@ Checks (against extracted/foc_data_text.zip, the shipped FoC text data):
   watcher   a2f_watch.py follows a synthetic player -> AI -> context -> budget chain, logs the init byte change and a reset
             flag 0 -> 1 -> 0
   cleanup   the cleanup removes only a marked mod folder
+
+Retail emulation (a2i t02, after run 20261106-040725 lost the story channel): the model engine knows only the equations
+of the shipped galactic files plus the probe's own. An evaluation of an unknown equation, or of a probe equation whose
+body breaks a retail rule (retail_eval_fails: ActiveGoals without exactly one Parameter_Category), sets the model's
+script-failed flag and returns no value, as retail's script error helper does (docs/re/LUA_SCRIPT_OUTPUT.md section 1,
+AI_GALACTIC_3 section 8); pcall does not see it. The drivers then stop servicing that script, as retail did in that run.
+math is removed from every probe environment (no shipped script uses it; the free store has none), debug from the
+story and free-store ones.
+  robust    a fault injected into one record (an error inside the Underworld's SM text) costs only that record: one ERR
+            record, the other records of that sample and of the other players are still written
 """
 import argparse
 import json
@@ -94,14 +104,59 @@ def spec_checks(z):
         root = ET.fromstring(pe)
         n = [e.tag for e in root if e.tag.startswith('A2FB_')]
         want = a2fb_spec.probe_equation_count()
-        check('spec: patched equation file is XML with %d probe equations' % want, len(n) == want == 2 + 36 + 9,
+        check('spec: patched equation file is XML with %d probe equations' % want, len(n) == want == 2 + 36 + 8,
               str(len(n)))
         check('spec: shipped equations are kept', root.find('Roaming_Empire_Fleet_Target') is not None)
         bad = [e.tag for e in root if e.tag.startswith('A2FB_') and '#' in (e.text or '')]
         check('spec: probe equations have no #', not bad)
+        bad = sorted(k for k, b in probe_equation_bodies().items() if retail_eval_fails(b))
+        check('spec: no probe equation fails in retail (ActiveGoals needs one Parameter_Category)', not bad, str(bad))
     except ET.ParseError as e:
         check('spec: patched equation file is XML', False, str(e))
     return types
+
+
+def retail_eval_fails(body):
+    """True when retail can never evaluate this equation body: the evaluation fails, the script error helper sets the
+    calling script's failed flag and that script stops (run 20261106-040725: A2FB_ActiveGoals = Variable_Self.ActiveGoals
+    with no Parameter_Category stopped the story script and the Empire's free store after their first sample).
+    Rule: ActiveGoals reads exactly one Parameter_Category, with no default (A2H_GALACTIC_AI_RE.md section 1)."""
+    for m in re.finditer(r'\.ActiveGoals\b(\s*\{[^}]*\})?', body):
+        if (m.group(1) or '').count('Parameter_Category') != 1:
+            return True
+    return False
+
+
+def probe_equation_bodies():
+    """{name: body} of the probe equations the mod adds (a2fb_spec.equations_xml)."""
+    return {m.group(1): m.group(2).strip()
+            for m in re.finditer(r'<(A2FB_\w+)>(.*?)</\1>', a2fb_spec.equations_xml(), re.S)}
+
+
+MODEL_EQ = ''
+
+
+def model_equations(z):
+    """Lua tables of the model engine: A2_KNOWN_EQ (shipped galactic equations + probe equations) and A2_FAIL_EQ (probe
+    equations that fail in retail)."""
+    known = set()
+    for info in z.infolist():
+        n = info.filename.upper()
+        if n.startswith('DATA/XML/AI/PERCEPTUALEQUATIONS/') and n.endswith('.XML') and 'LAND' not in n and 'SPACE' not in n:
+            text = re.sub(r'<!--.*?-->', '', z.read(info).decode('latin-1'), flags=re.S)
+            known |= set(re.findall(r'^\s*<([A-Za-z_]\w*)>', text, re.M))
+    bodies = probe_equation_bodies()
+    known |= set(bodies)
+    fails = sorted(n for n, b in bodies.items() if retail_eval_fails(b))
+    return ('A2_KNOWN_EQ = { %s }\nA2_FAIL_EQ = { %s }\n' %
+            (', '.join('["%s"] = true' % n for n in sorted(known)), ', '.join('["%s"] = true' % n for n in fails)))
+
+
+def prelude(outfile, types, no_debug=True):
+    """Head of every test script: output file, init time, probe types, the model equation tables, the stubs and the
+    retail library set (math removed everywhere; debug removed unless no_debug is False)."""
+    return ('A2_OUTFILE = "%s"\nA2_INIT_T = 0.5\n' % outfile.replace('\\', '\\\\') + types_lua(types) + MODEL_EQ + STUBS +
+            'math = nil\n' + ('debug = nil\n' if no_debug else ''))
 
 
 def lua_run(lua, script, env=None, cwd=None):
@@ -140,7 +195,8 @@ function _OuputDebug(s) end
 function _MessagePopup(s) end
 function _CustomScriptMessage(f, t) A2_OUT:write("CANARYCALL " .. f .. "\n") end
 function Game_Message(s) A2_OUT:write("GAME_MESSAGE " .. s .. "\n") end
-function DumpCallStack() return debug.traceback() end
+local A2_DBG = debug
+function DumpCallStack() return A2_DBG.traceback() end
 function ScriptExit() error("ScriptExit") end
 
 -- model engine: the budget is not initialised until A2_INIT_T seconds (pools 0, BudgetFractionToBuild 1e18), then
@@ -178,7 +234,18 @@ for _, nm in ipairs({ "Empire", "Rebel", "Underworld", "Pirates" }) do
 	A2_PLAYERS[nm] = mkplayer(nm)
 end
 function Find_Player(n) return A2_PLAYERS[n] end
+-- retail: a failed evaluation calls the script error helper, which only sets the script's failed flag (no Lua error,
+-- so pcall sees nothing) and the binding returns no value; the script is not serviced again (the drivers stop).
+A2_FAILED = false
+function A2_Fail(name, why)
+	if not A2_FAILED then
+		A2_FAILED = name
+		A2_OUT:write("SCRIPT_FAILED " .. name .. " (" .. why .. ") t=" .. GetCurrentTime() .. "\n")
+	end
+end
 function EvaluatePerception(name, player)
+	if A2_FAIL_EQ[name] then A2_Fail(name, "evaluation fails in retail") return end
+	if not A2_KNOWN_EQ[name] then A2_Fail(name, "unknown equation") return end
 	local t = GetCurrentTime()
 	local pre = t < A2_INIT_T
 	if name == "A2FB_CreditsUnnorm" then
@@ -188,7 +255,7 @@ function EvaluatePerception(name, player)
 	if name == "A2FB_NetIncome" then return 667.5 end
 	if A2_SHIPPED[name] ~= nil then return A2_SHIPPED[name] end
 	local s, e, f3, k, cat = string.find(name, "^A2FB_(%u+)_BFB_(%d)_(%u+)$")
-	if s == nil then return nil end
+	if s == nil then return 0 end
 	k = tonumber(k)
 	local tp = A2_TYPES[f3][k]
 	local avail, rate
@@ -210,8 +277,9 @@ Base_Definitions()
 local main_co = coroutine.create(main)
 local last = -100
 local services = 0
-for frame = 0, 46000 do
+for frame = 0, (A2_FRAMES or 46000) do
 	A2_T = frame / 30
+	if A2_FAILED then break end
 	if (A2_T - last) > ServiceRate then
 		last = A2_T
 		services = services + 1
@@ -243,14 +311,14 @@ def story_test(lua, lib, out, types):
     outfile = os.path.join(out, 'story_out.txt')
     script = os.path.join(out, 'story_test.lua')
     with open(script, 'w', encoding='ascii') as f:
-        f.write('A2_OUTFILE = "%s"\nA2_INIT_T = 0.5\n' % outfile.replace('\\', '\\\\'))
-        f.write(types_lua(types))
-        f.write(STUBS)
+        f.write(prelude(outfile, types))
         f.write(build_a2f_mod.story_lua())
         f.write(STORY_DRIVER)
     rc, text = lua_run(lua, script, env)
     out_text = open(outfile).read() if os.path.exists(outfile) else ''
     check('story: lua exit 0, no MAIN_ERROR', rc == 0 and 'MAIN_ERROR' not in out_text, (text + out_text)[:600])
+    fl = [ln for ln in out_text.splitlines() if ln.startswith('SCRIPT_FAILED')]
+    check('story: no evaluation that fails in retail (script-failed flag never set)', not fl, str(fl))
     check('story: state machine ran A2FB_State', 'STATE A2FB_State' in out_text)
     check('story: canary call + game messages', 'CANARYCALL Mods\\A2fBudgetProbe\\A2FB_Canary_Story.txt' in out_text
           and 'GAME_MESSAGE TEXT_A2FB_LOADED' in out_text and 'GAME_MESSAGE TEXT_A2FB_DONE' in out_text
@@ -316,6 +384,40 @@ def story_test(lua, lib, out, types):
     return ok_all
 
 
+# Fault injection (robust test): the Underworld's first small-sample entry gets a nil key, so building the text of its SM
+# record raises a Lua error ("attempt to concatenate"). Lua 5.0 table.getn honours an explicit n field.
+ROBUST_FAULT = r'''
+A2FB_SPEC["UNDERWORLD"].small[1] = { nil, "A2FB_CreditsUnnorm" }
+'''
+
+
+def robust_test(lua, lib, out, types):
+    env = dict(os.environ, LUA_PATH=os.path.join(lib, '?.lua'))
+    outfile = os.path.join(out, 'robust_out.txt')
+    script = os.path.join(out, 'robust_test.lua')
+    with open(script, 'w', encoding='ascii') as f:
+        f.write(prelude(outfile, types))
+        f.write('A2_FRAMES = 300\n')
+        f.write(build_a2f_mod.story_lua())
+        f.write(ROBUST_FAULT)
+        f.write(STORY_DRIVER)
+    rc, text = lua_run(lua, script, env)
+    o = open(outfile).read() if os.path.exists(outfile) else ''
+    recs = [ln.split('|') for ln in o.splitlines() if ln.startswith('A2FB1|')]
+    err = [r for r in recs if r[4] == 'ERR']
+    check('robust: a failing record gives one ERR record (once per message)', rc == 0 and len(err) == 1 and
+          err[0][5].startswith('SM ') and 'concatenate' in err[0][5], str([r[5] for r in err])[:400] + (text + o)[:300])
+
+    def has(kind, fac):
+        return any(r[4] == kind and ('fac=%s ' % fac) in r[5] for r in recs)
+    check('robust: the rest of that sample (Underworld BF / SH / PL) is still recorded',
+          has('BF', 'UNDERWORLD') and has('SH', 'UNDERWORLD') and has('PL', 'UNDERWORLD'))
+    check('robust: the other players are still sampled (Empire SM / MJ, Pirates PL)',
+          has('SM', 'EMPIRE') and has('MJ', 'EMPIRE') and has('PL', 'PIRATES'))
+    uw = [r for r in recs if r[4] in ('BF', 'SH') and 'fac=UNDERWORLD ' in r[5]]
+    check('robust: sampling goes on after the error (Underworld full samples at 0 .. 9 s)', len(uw) >= 18, str(len(uw)))
+
+
 HOOK_FS = r'''
 A2_OUT_CALLS = 0
 function FreeStoreService() A2_OUT_CALLS = A2_OUT_CALLS + 1 end
@@ -326,7 +428,7 @@ PlayerObject = A2_PLAYERS["Empire"]
 A2_T = 10
 FreeStoreService()
 A2_T = 18
-FreeStoreService()
+if not A2_FAILED then FreeStoreService() end
 A2_OUT:write("ORIG_CALLS " .. A2_OUT_CALLS .. "\n")
 for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Records[i] .. "\n") end
 A2_OUT:close()
@@ -373,9 +475,7 @@ def hook_tests(lua, lib, out, types, z):
     script = os.path.join(out, 'fs_test.lua')
     body = build_a2f_mod.assemble(HOOK_FS, 'F', 'a2fb_freestore_hook.lua', True)
     with open(script, 'w', encoding='ascii') as f:
-        f.write('A2_OUTFILE = "%s"\nA2_INIT_T = 0.5\n' % outfile.replace('\\', '\\\\'))
-        f.write(types_lua(types))
-        f.write(STUBS)
+        f.write(prelude(outfile, types))
         f.write(body)
         f.write(FS_DRIVER)
     rc, text = lua_run(lua, script, env)
@@ -383,6 +483,8 @@ def hook_tests(lua, lib, out, types, z):
     check('hooks: free store wrapper calls the shipped function twice', rc == 0 and 'ORIG_CALLS 2' in o, (text + o)[:400])
     check('hooks: free store samples PlayerObject (SM, BF, SH, PL)', all(('|%s|' % k) in o for k in ('SM', 'BF', 'SH', 'PL')))
     check('hooks: free store canary', 'CANARYCALL Mods\\A2fBudgetProbe\\A2FB_Canary_FreeStore.txt' in o)
+    check('hooks: free store: no evaluation that fails in retail', 'SCRIPT_FAILED' not in o,
+          str([ln for ln in o.splitlines() if ln.startswith('SCRIPT_FAILED')]))
     # the real shipped plan scripts with the hook
     names = {i.filename.upper(): i for i in z.infolist()}
     for plan, thread in build_a2f_mod.PLANS:
@@ -391,9 +493,8 @@ def hook_tests(lua, lib, out, types, z):
         outfile = os.path.join(out, 'plan_%s.txt' % plan)
         script = os.path.join(out, 'plan_%s.lua' % plan)
         with open(script, 'w', encoding='latin-1') as f:
-            f.write('A2_OUTFILE = "%s"\nA2_INIT_T = 0.5\n' % outfile.replace('\\', '\\\\'))
-            f.write(types_lua(types))
-            f.write(STUBS)
+            # plan scripts keep debug (PEXIT by= / line=; without it the hook writes by=nodebug)
+            f.write(prelude(outfile, types, no_debug=False))
             f.write(body)
             f.write(PLAN_PRE)
             f.write('Definitions()\n')
@@ -420,6 +521,8 @@ def hook_tests(lua, lib, out, types, z):
                          'E_GROUND_HEAVY_VEHICLE_FACTORY' % plan) in o
         check('hooks: plan %s end records (PRET%s%s)' % (plan, ', PEXIT' if has_exit else '', ', PFAIL' if has_fail else ''),
               rc == 0 and ok, o[-900:])
+        check('hooks: plan %s: no evaluation that fails in retail' % plan, 'SCRIPT_FAILED' not in o,
+              str([ln for ln in o.splitlines() if ln.startswith('SCRIPT_FAILED')]))
         if plan in build_a2f_mod.FULL_SAMPLE_PLANS:
             check('hooks: plan %s full samples at start and end, Flush_Category ran' % plan,
                   'FLUSHED MajorItem' in o and '|BF|tag=PS' in o and '|BF|tag=PE' in o and '|MJ|tag=PS' in o, o[-700:])
@@ -600,6 +703,8 @@ def main():
         print('extracted/foc_data_text.zip not found: cannot self-test')
         return 1
     z = zipfile.ZipFile(ZIP)
+    global MODEL_EQ
+    MODEL_EQ = model_equations(z)
     types = spec_checks(z)
     mod, types = build_test(out, ZIP)
     watcher_test(out)
@@ -608,6 +713,7 @@ def main():
         lib = extract(z, out)
         lua_syntax(lua, mod, out)
         story_test(lua, lib, out, types)
+        robust_test(lua, lib, out, types)
         hook_tests(lua, lib, out, types, z)
     else:
         print('SKIPPED the Lua checks: no lua50.exe (tools\\probe_mod\\a1_tactical\\selftest\\build_lua50.cmd builds one)')

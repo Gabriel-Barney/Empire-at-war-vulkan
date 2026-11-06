@@ -20,7 +20,7 @@ frame 1, so its Empire runs `Flush_MajorItem_Budget`; retail's MajorItem pool ne
   of the instance ended; `none` = no end record = the goal system released it). The 40-start cap per script is gone;
 * an `MJ` record with every Empire sample (all channels): the shipped `Needs_More_Space_Force_Globally`,
   `Need_To_Flush_MajorItem_Budget`, `Can_Reclaim_Excess_MajorItem_Budget`, `Has_Enough_Space_Force_Globally`,
-  `Friendly_` / `Enemy_Global_Space_Unit_Raw_Total`, and 9 mod equations: `Variable_Human` / `Variable_Self.SpaceTotalUnnormalized`,
+  `Friendly_` / `Enemy_Global_Space_Unit_Raw_Total`, and 9 mod equations (8 since a2i, which dropped ActiveGoals without a category, see below): `Variable_Human` / `Variable_Self.SpaceTotalUnnormalized`,
   `Variable_Self.ActiveGoals` without and with `Parameter_Category = AIGoalCategoryType[MajorItem]`, `HasUnit(Death_Star)` (the
   other term of the flush trigger), `Maintenance` (+ Unnormalized), `PlanetsControlled` (+ Unnormalized);
 * the 30 s full sample after DONE (a2g) stays; DONE at 300 s now says "5-minute dense phase done, keep running", and a new
@@ -29,6 +29,25 @@ frame 1, so its Empire runs `Flush_MajorItem_Budget`; retail's MajorItem pool ne
   question is whether the flush goal ever runs before and after that;
 * record caps raised so the long run fits: story 20000 (was 8000), plan scripts 3000 (was 300), free store 500 (was 400:
   the same 100 samples now that the Empire's carry an MJ record).
+
+**a2i t02 (2026-11-06): story channel fix.** In run `20261106-040725` the story channel kept only `LOAD` and `DEF`, the
+Empire's free-store instance stopped after its first sample, and every Empire plan instance recorded one sample and then
+only bare `PSTART` lines. Cause: the MJ mod equation `A2FB_ActiveGoals` (`Variable_Self.ActiveGoals` with no
+`Parameter_Category`, `AG=nil` in that run). Retail cannot evaluate it (`docs/re/A2H_GALACTIC_AI_RE.md` section 1), and a
+failed evaluation calls the script error helper. That helper raises no Lua error, so pcall misses it, but it sets the
+script's failed flag (`docs/re/LUA_SCRIPT_OUTPUT.md` section 1), and the script then stopped. The Underworld, which has no MJ
+record, was not affected. Changes:
+
+* `A2FB_ActiveGoals` (key `AG`) is removed from the equation file and the MJ list (46 probe equations). The answer it gave
+  is already measured: no category means the token fails. Every equation the kit still evaluates answered in that run.
+* every record is built inside pcall (`A2FB_Rec` in `a2fb_core.lua`), and in the story script each player's sample and each
+  marker record (`LOAD`, `DEF`, `ENTER`, `FIRST`, `DONE`, `LONGDONE`) has its own pcall. A Lua error now costs one record and
+  leaves one `ERR` record. It no longer ends the round or the channel.
+* the selftest emulates retail. The model engine fails (failed flag, no value) on an unknown equation and on a probe
+  equation that breaks a retail rule (`retail_eval_fails`: ActiveGoals without exactly one `Parameter_Category`). The drivers
+  then stop servicing that script. `math` is removed from every probe environment, and `debug` from the story and free-store
+  ones. A fault-injection run checks the ERR path. With the a2h code the selftest fails 29 of 101 checks; with this code it
+  passes all of them.
 
 ## 1. What it records
 
@@ -55,7 +74,7 @@ also carry the MJ record (a2h t02, keys in section 5).
   `Budget.Get_Spendable_Resources`, `Get_Unallocated_Resources`, `Allocate_Resources`, ...). So "the flag" cannot be read in Lua.
 * Pools are therefore decoded, not read. The probe adds 38 equations (47 since a2h t02: the 9 MJ ones) to a mod copy of the galactic equation file
   (`A2FB_CreditsUnnorm`, `A2FB_NetIncome`, and `A2FB_<EMP|REB|UWD>_BFB_<k>_<CAT>`: `BudgetFractionToBuild(type, category)` for a
-  probe type with two different build times `b1`, `b2`). With D = R / v (v = the returned number, R = the type's cost), the
+  probe type with two different build times `b1`, `b2`; 46 since a2i). With D = R / v (v = the returned number, R = the type's cost), the
   rate is (D1 - D2) / (b1 - b2) and the available pool is D1 - b1 * rate. v >= 1e17 means D <= 0: the category has no pool
   ("empty"). The ALL row is D = (b x income/s) + player credits, so it stays finite before Init (available = credits, rate 0).
   Before the AI's budget Init every category row is 1e18 and CU is 0; after Init the pool is credits x normalised weight, and
@@ -136,10 +155,22 @@ a2h t02 additions (`report.txt` section 2 end and section 5; `plans.tsv`, `major
   (PS) and after (PE) the flush. Reading it: `NTF` > 0 means the Flush_MajorItem_Budget goal function is on; whether the goal
   then ran is the FlushMajorItemBudget PSTART list (that plan serves both Flush_MajorItem_Budget and
   Reclaim_Excess_MajorItem_Budget: the CRM / AGM values in its PS sample tell which). `NMS` = `HST > SST`, so HST / SST show
-  why it is 0 or 1; `skip` = no human player (Variable_Human), `nil` / `ERR` = the engine gave no value. `AG` vs `AGM` is
-  the port's open ActiveGoals question (A2g F1: the port counted all goals). `major.tsv` has every MJ sample.
+  why it is 0 or 1; `skip` = no human player (Variable_Human), `nil` / `ERR` = the engine gave no value. `AG` vs `AGM` was
+  the port's open ActiveGoals question (A2g F1: the port counted all goals). Run 20261106-040725 answered it with `AG=nil`,
+  so a2i dropped `AG`; runs from a2i on have `AGM` only. `major.tsv` has every MJ sample.
 * `tools/analysis/a2g_port_vs_retail.py major --retail-records out\<run>\records.txt [--port-log LOG]` prints the same
   trigger summary and compares the flush / reclaim plan starts with a port `--ai-log`; `plans` also counts the retail ends.
+
+**ERR records (a2i).** `A2FB1|<ch>|<sid>|<seq>|ERR|<where> <message>|END`, one per distinct message per script instance;
+`report.txt` lists the first 8 under "Lua errors:" (the channel first, then the text). `<where>` is the record kind whose text
+failed (`PL`, `SM`, `BF`, `SH`, `MJ`, `LOAD`, `DEF`, `ENTER`, `FIRST`, `DONE`, `LONGDONE`): that record is missing and the
+rest of the sample and of the round is still written. `Sample <Faction>` means a story sample failed outside a record,
+`Update` is the story's whole service, and `FSSample`, `PlanStart`, `PlanRet`, `PlanExit`, `PlanFail` are the free-store
+and plan wrappers. The message is Lua's own, with the chunk position (`A2fb_Story.lua:<line>`, a line of the generated
+script). An ERR record means a Lua error in the kit (a binding that raised, or a nil in the text), not an equation without
+an answer: that shows as `nil` in its key. Retail gives no ERR for an equation that fails inside the engine, because the
+script just stops (see section 8). The signature of that is a channel whose sequence numbers stop, or a plan instance
+whose later `PSTART` lines have no sample after them.
 
 If nothing came back: check `run_status.txt` (canary files gone = scripts loaded). No canary at all means the mod folder was
 not picked up (check `MODPATH=` and that the game started from `corruption`). Records but all pools "unknown"/empty and
@@ -162,14 +193,18 @@ leaves the watcher (the flag and the raw budget block) unchanged.
 
 ## 7. Offline self-test
 
-`toolchain\venv\Scripts\python.exe -I selftest_a2f.py [--lua PATH] [--out DIR]`. 83 checks (55 until a2g): the spec (shipped equations exist,
-types, plan thread functions, the patched XML has 47 equations); a build from the extracted game-data zip; the Lua syntax of every
+`toolchain\venv\Scripts\python.exe -I selftest_a2f.py [--lua PATH] [--out DIR]`. 101 checks (83 in a2h, 55 until a2g): the spec (shipped equations exist,
+types, plan thread functions, the patched XML has 46 equations, none breaks a retail rule); a build from the extracted game-data zip; the Lua syntax of every
 generated file and a run of the story script under the project's Lua 5.0.2 with the real PG library and a model engine (state
 machine, canary, per-frame start sampling, dense fiscal windows, the human excluded); the free-store hook and the real plan
 scripts with their hooks (a2h: all 11 plans with PSTART n= / prev=, PRET, PEXIT with by= / line=, PFAIL where the script
 has the handler, the Flush plan's full start / end samples; MJ with every Empire sample; the 30 s samples after DONE up to
 the 25-minute LONGDONE); the watcher on a fake memory chain (flag 0 -> 1 at frame 4, 1 -> 0 at frame 6); the cleanup; and the
-report on a synthetic run (pre-Init ALL = credits, pools solved to 13000 / 3900 / 5200, template = base). The Lua part needs
+report on a synthetic run (pre-Init ALL = credits, pools solved to 13000 / 3900 / 5200, template = base). Since a2i the
+model engine emulates retail: an unknown equation, or a probe equation that breaks a retail rule, sets a script-failed flag
+(`SCRIPT_FAILED <name>` in the test output). The drivers then stop servicing that script, and every Lua test checks that the
+flag stays clear. `math` is nil in every test environment and `debug` in the story and free-store ones. A fault-injection
+story run (`robust_test`) checks that one failing record gives one ERR record and costs nothing else. The Lua part needs
 `lua50.exe`: it is auto-detected at `tools\probe_mod\a1_tactical\out\tools\lua50.exe`; build it with
 `tools\probe_mod\a1_tactical\selftest\build_lua50.cmd`, or pass `--lua` (e.g. `tools\probe_mod\s7s8_probes\out\tools\lua50.exe`
 if that kit built one). Without it the Lua checks are skipped, not passed.
@@ -178,9 +213,21 @@ if that kit built one). Without it the Lua checks are skipped, not passed.
 
 * Unproven in game: that the engine loads a mod copy of the galactic equation file (the mod override of
   `Data\XML\...` equation files); `--no-mod-equations` is the fallback.
-* EvaluatePerception of a missing / wrongly typed equation returns nil in the script and may leave a script-failed flag
-  [M]; the probe only evaluates equations that exist and records nil / ERR, but if the story script stops recording after the
-  first sample, suspect this.
+* **An equation that fails inside the engine stops the script that evaluated it. pcall does not help** (measured in run
+  20261106-040725). EvaluatePerception returns nil and the script error helper sets the script's failed flag, but raises no
+  Lua error. Retail then stops the script: the story channel (only `LOAD` / `DEF` were found; the rest of its records were
+  lost from memory too), the Empire's free-store instance after its first sample, and each Empire plan instance after its
+  first sample (its later `PSTART` lines have no sample after them, with no ERR). Equations seen to fail: `ActiveGoals`
+  with no `Parameter_Category`. Expected to fail by the same mechanism: an unknown equation name, and a `Variable_Human`
+  equation with no human player (the kit writes `skip` for those). Rule for kit changes: evaluate only equations that have
+  answered in retail, and add a rule to `retail_eval_fails` in the selftest for every new failure found. Not every `nil` is
+  a failure: "AI not yet initialized" is a warning, also nil, and it does not stop the script (the a2g run's pre-Init samples).
+* pcall per record (a2i) covers Lua errors only: a binding that raises, or a nil in a record's text. They give one `ERR`
+  record per distinct message, and the channel goes on (section 5, "ERR records").
+* Library availability in retail: the free store has no `math` (s78g). For the story and plan scripts it is not measured.
+  No shipped script uses `math` (PGBase has its `math.floor` lines commented out), and the kit uses no `math`, `#`, `%` or
+  `string.rep` anywhere, and `debug` only in the plan hook's PEXIT `by=`, guarded. The selftest removes them as described in
+  section 7.
 * The BFB decode assumes no item of the probe type is already in progress and that the build-time / R definitions are as
   recovered ([M]); an "ok" pool is exact only under that assumption (the report prints D1 and D2 so it can be rechecked).
 * Watcher offsets are [H]/[M]; the per-category budget fields are not decoded (raw block only).
@@ -197,4 +244,5 @@ if that kit built one). Without it the Lua checks are skipped, not passed.
 * PEXIT `by=` / `line=` need the Lua debug library in plan scripts; without it the record says `by=nodebug`. Line numbers
   are lines of the shipped plan script (it comes first in the mod copy).
 * MJ: `Needs_More_Space_Force_Globally`, `Need_To_Flush_MajorItem_Budget` and `A2FB_HumanSpaceTotal` use Variable_Human and
-  are `skip` without a human player. A wrong or unsupported token in a mod equation shows as nil / ERR in its key only.
+  are `skip` without a human player. A mod equation whose token fails in retail does not just show nil in its key: it stops
+  the script (first bullet of this section).

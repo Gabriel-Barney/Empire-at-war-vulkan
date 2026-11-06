@@ -467,8 +467,7 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
         };
         sets_.push_back(std::move(set));
     }
-    if (!st.lua) return true;
-    for (size_t si = 0; si < sets_.size(); ++si) {
+    for (size_t si = 0; st.lua && si < sets_.size(); ++si) {
         Set& s = *sets_[si];
         for (uint32_t p = 0; p < s.model.plot_count(); ++p) {
             const std::string& script = s.model.plot(p).lua_script;
@@ -501,7 +500,28 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
             collect(si, "load");  // Story_Event calls from Definitions (none in the shipped scripts)
         }
     }
+    load_pass();
     return true;
+}
+
+// A2i t01 (A2I_T01_FRAME_ORDER.md §1, §6): retail's campaign load sets every player's starting tech level after the plots
+// are loaded (L10, PlayerList order), and Player::Set_Tech_Level raises STORY_TECH_LEVEL synchronously, so the tech-level
+// events (HotM: Empire_Enters_Tech_01..03 -> Spawn_Piett, the Rebel hero spawns) and their STORY_TRIGGER dependants fire
+// during the load, before tick 1. Mode frame 0 / time 0, not paused; rewards through on_reward -> apply_reward (the T9
+// code). The tech level is read per player at its turn (an earlier player's SET_TECH_LEVEL reward is seen).
+void StorySession::load_pass() {
+    frame_ = 0;
+    seconds_ = 0.0;
+    for (const auto& s : sets_) s->model.set_clock(0, 0.0, false);
+    const size_t players = sim_->players().size();
+    for (size_t p = 0; p < players; ++p)
+        for (size_t si = 0; si < sets_.size(); ++si) {
+            if (sets_[si]->player != static_cast<int32_t>(p)) continue;
+            lua::StoryNotification n;
+            n.value = sim_->players()[p].tech_level;
+            sets_[si]->model.dispatch("STORY_TECH_LEVEL", n);
+            collect(si, "load");
+        }
 }
 
 void StorySession::host_event(StoryHostEvent e, uint64_t frame) {
