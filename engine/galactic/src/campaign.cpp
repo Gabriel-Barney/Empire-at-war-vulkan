@@ -1333,33 +1333,46 @@ void GalacticSim::arrive(uint32_t fleet) {
         depart_hop(fleet, at, f.path[f.path_index], true);
         return;
     }
-    // 4. final hop or stopped: speed 0, path cleared, merge into a friendly fleet already in orbit [H].
+    // 4. final hop or stopped (0x56a1e0, A2K_T08_RE_ANSWERS Q1.3) [H]: speed 0, path cleared; the fleet takes a slot of
+    // its own and merges only for a requested slot.
     f.hop_speed = 0.0f;
     f.path.clear();
     f.path_index = 0;
     const int32_t mover = f.owner;
-    // Playtest 3 t07: a slot requested for this planet (FleetManagement op 8 with a destination): the fleet merges into
-    // the owner's fleet in that slot, or takes the slot when it is free. Without a request it merges into the first
-    // friendly fleet in orbit and otherwise takes the lowest free slot.
+    // The request (fleet data +0x90, written only by FleetManagement op 8 = the galaxy-map GUI drop, Playtest 3 t07) is
+    // read and reset at every final arrival. AI fleets never request one.
     const int32_t want = f.want_planet == at ? f.want_slot : -1;
     f.want_planet = kInvalidPlanet;
     f.want_slot = -1;
     if (conflict && conflicts_) conflicts_->on_space_conflict(at, mover);  // S10: Initiate_Space_Conflict
+    // Merge partner (no conflict, requested slot 1 or 2 only): the first fleet in orbit order holding that slot (0x3f9370,
+    // any owner); merged (0x433dd0) only when it has the same owner. A requested slot 0 is a notification only, and no
+    // request or a conflict never merges.
     uint32_t into = kNoFleet;
-    if (want >= 0) {
-        into = slot_occupant(at, mover, want, fleet);
-    } else {
-        for (uint32_t g : p.orbit)
-            if (g != fleet && fleets_[g].alive && fleets_[g].owner == mover && !fleets_[g].moving) {
-                into = g;
-                break;
-            }
+    if (!conflict && (want == 1 || want == 2)) {
+        for (uint32_t g : p.orbit) {
+            const FleetState& o = fleets_[g];
+            if (g == fleet || !o.alive || o.moving || o.slot != want) continue;
+            if (o.owner == mover) into = g;
+            break;
+        }
     }
     if (into != kNoFleet) {
         merge_fleet(fleet, into);
         return;
     }
-    if (want >= 0) place_in_slot(fleet, want);
+    // Slot (0x3f7d70): a free requested slot when one was asked for [port: Playtest 3 t07]; otherwise the first of
+    // 1, 2, 0 that no other fleet of the owner holds there, and slot 0 (shared) when all three are held [H].
+    FleetState& arrived = fleets_[fleet];
+    if (!(want >= 0 && !conflict && place_in_slot(fleet, want))) {
+        int32_t slot = 0;
+        for (const int32_t s : {1, 2, 0})
+            if (slot_occupant(at, mover, s, fleet) == kNoFleet) {
+                slot = s;
+                break;
+            }
+        arrived.slot = static_cast<int8_t>(slot);
+    }
     settle_slots(at);
 }
 

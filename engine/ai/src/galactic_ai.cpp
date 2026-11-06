@@ -398,6 +398,24 @@ int32_t GalacticAiWorld::Impl::tf_produce_force(int32_t tf, const lua::AiArg& st
     const PlanetIndex sp = planet_arg(stage);
     if (sp != kInvalidPlanet) t.stage = static_cast<int32_t>(sp);
     create_build_tasks(t);
+    // AIBuildTask WAIT_FOR_FREESTORE_ALLOC -> PRE_PATH_SEPERATE (0x64aec0, A2K_T08_RE_ANSWERS Q2.3) [H]: a claimed
+    // free-store unit (the TF's units before any build finished) in a fleet of more than one object is split into a
+    // fleet of its own (op 2, then op 0) before it paths to the stage, so the gather never carries foreign units.
+    // [port] Done once here for the units in a stationary fleet; one in transit keeps its fleet. A unit that cannot jump
+    // by itself stays in its fleet (free_store_move's rule). No destination: PRODUCTION_FINISHED, no split.
+    if (t.stage >= 0) {
+        const std::vector<ObjectHandle> claimed = t.units;
+        for (const ObjectHandle u : claimed) {
+            if (!store.alive(u) || !unit_jumps(u)) continue;
+            const uint32_t f = fleet_of_unit(u);
+            if (f == gal::kNoFleet || sim.fleets()[f].moving || sim.fleets()[f].contents.size() < 2) continue;
+            const PlanetIndex at = sim.fleets()[f].planet;
+            if (!valid_planet(at)) continue;
+            fleet_op(t.player, gal::kFleetDetach, static_cast<uint32_t>(store.id(sim.planets()[at].object)),
+                     static_cast<uint32_t>(store.id(sim.fleets()[f].object)), static_cast<uint32_t>(store.id(u)),
+                     "split " + std::to_string(store.id(u)) + " at " + planet_name(at));
+        }
+    }
     return new_status(t.plan, tf, StatusKind::ProduceForce);
 }
 

@@ -497,13 +497,32 @@ void test_fleets() {
         CHECK(w.store.position(w.fl(f).object).x == 120.0f);
         CHECK(w.planet(rC).owner == pNeutral);  // orbit alone does not capture an accessible planet
     }
-    {   // Merge on arrival into the friendly fleet already in orbit.
-        World w({{pEmpire, rA, tFrigate}, {pEmpire, rB, tFrigate}});
+    {   // A2k t08 (A2K_T08_RE_ANSWERS Q1): without a requested slot an arriving fleet never merges. It takes the first of
+        // slots 1, 2, 0 that no other fleet of its owner holds, and shares slot 0 when all three are held.
+        World w({{pEmpire, rA, tFrigate}, {pEmpire, rA, tFrigate}, {pEmpire, rA, tFrigate}, {pEmpire, rA, tFrigate},
+                 {pEmpire, rA, tSB1}, {pEmpire, rB, tFrigate}});
+        GalacticSim& s = w.sim;
+        const auto id = [&w](ObjectHandle h) { return static_cast<uint32_t>(w.store.id(h)); };
+        const uint32_t pa = id(w.planet(rA).object);
         const uint32_t fa = w.fleet(rA, pEmpire), fb = w.fleet(rB, pEmpire);
-        CHECK(w.sim.move_fleet(pEmpire, fa, rB) == RejectReason::None);
-        w.run(200);
-        CHECK(!w.fl(fa).alive && w.fl(fb).contents.size() == 2 && w.sim.fleets_at(rB, pEmpire).size() == 1);
-        CHECK(!w.store.alive(w.fl(fa).object));
+        CHECK(fa != kNoFleet && fb != kNoFleet && w.fl(fb).slot == 0);
+        const std::vector<ObjectHandle> m = w.fl(fa).contents;
+        CHECK(m.size() == 4);
+        std::vector<uint32_t> movers;
+        for (size_t i = 1; i < m.size(); ++i) {  // three single-frigate fleets split off at A
+            CHECK(s.execute(static_cast<uint8_t>(pEmpire), fleet_management_event(kFleetDetach, pa, commands::kNoObject, id(m[i]))) ==
+                  RejectReason::None);
+            movers.push_back(s.fleet_containing(m[i]));
+        }
+        movers.push_back(fa);
+        const int8_t expect[] = {1, 2, 0, 0};  // B: fb holds 0, so 1, 2, then all held: shared slot 0
+        for (size_t i = 0; i < movers.size(); ++i) {
+            CHECK(s.move_fleet(pEmpire, movers[i], rB) == RejectReason::None);
+            w.run(200);
+            CHECK(w.fl(movers[i]).alive && !w.fl(movers[i]).moving && w.fl(movers[i]).planet == rB && w.fl(movers[i]).slot == expect[i]);
+            CHECK(w.fl(movers[i]).contents.size() == 1 && w.fl(fb).contents.size() == 1);
+        }
+        CHECK(s.fleets_at(rB, pEmpire).size() == 5);
     }
     {   // Interception at the first contested hop; Underworld runs through.
         World w({{pEmpire, rA, tFrigate}, {pUnder, rB, tCorvette}, {pUnder, rE, tCorvette}, {pEmpire, rC, tFrigate}});
@@ -1972,7 +1991,7 @@ void test_fleet_slots() {
         w.run(200);
         CHECK(w.fl(fC).alive && !w.fl(fC).moving && w.fl(fC).planet == rB && w.fl(fC).slot == 1);  // free slot 1: no merge
         CHECK(w.fl(fC).want_planet == kInvalidPlanet && w.fl(fb).alive && w.fl(fb).slot == 0 && s.fleets_at(rB, pEmpire).size() == 2);
-        // A request for an occupied slot merges into that fleet on arrival; without a request it merges into the first one.
+        // A request for an occupied slot 1 / 2 merges into that fleet on arrival; without a request no merge (A2k t08 Q1).
         CHECK(fm(kFleetDetach, pa, none, id(m[2])) == RejectReason::None);
         const uint32_t fD = s.fleet_containing(m[2]);
         CHECK(fD != kNoFleet && fD != f0 && !w.fl(fD).moving && w.fl(fD).slot == 1);
@@ -1982,7 +2001,9 @@ void test_fleet_slots() {
         CHECK(!w.fl(fD).alive && w.fl(fC).contents.size() == 2 && s.fleets_at(rB, pEmpire).size() == 2);
         CHECK(s.move_fleet(pEmpire, f0, rB) == RejectReason::None);
         w.run(200);
-        CHECK(!w.fl(f0).alive && w.fl(fb).contents.size() == 3 && s.fleets_at(rB, pEmpire).size() == 2);  // into the first (slot 0)
+        // No request: its own slot, the first of 1, 2, 0 the owner does not hold (fb 0, fC 1 -> 2), no merge.
+        CHECK(w.fl(f0).alive && w.fl(f0).planet == rB && w.fl(f0).slot == 2 && w.fl(fb).contents.size() == 1 &&
+              s.fleets_at(rB, pEmpire).size() == 3);
     };
     std::vector<uint64_t> ta, tb, tc;
     std::vector<StartingForce> forces = {{pEmpire, rA, tSB1}, {pEmpire, rA, tFrigate}, {pEmpire, rA, tFrigate}, {pEmpire, rA, tFrigate},
@@ -1999,9 +2020,10 @@ void test_fleet_slots() {
     // A world that never chose a slot keeps its CRC independent of the (automatic) slots: no "FSL1" tail.
     World wd({{pEmpire, rA, tFrigate}, {pEmpire, rB, tFrigate}});
     CHECK(wd.sim.slot_state_default());
-    CHECK(wd.sim.move_fleet(pEmpire, wd.fleet(rA, pEmpire), rB) == RejectReason::None);
+    const uint32_t wd_b = wd.fleet(rB, pEmpire), wd_a = wd.fleet(rA, pEmpire);
+    CHECK(wd.sim.move_fleet(pEmpire, wd_a, rB) == RejectReason::None);
     wd.run(200);
-    CHECK(wd.sim.slot_state_default() && wd.sim.fleets_at(rB, pEmpire).size() == 1 && wd.fl(wd.fleet(rB, pEmpire)).slot == 0);
+    CHECK(wd.sim.slot_state_default() && wd.sim.fleets_at(rB, pEmpire).size() == 2 && wd.fl(wd_b).slot == 0 && wd.fl(wd_a).slot == 1);
     {   // Ops 6 / 7 and a unit dragged off its fleet (MoveObjectToObject {unit, planet}).
         World w({{pEmpire, rA, tFrigate}, {pEmpire, rA, tFrigate}, {pEmpire, rA, tFrigate}, {pEmpire, rA, tSB1}});
         GalacticSim& s = w.sim;
@@ -2029,7 +2051,8 @@ void test_fleet_slots() {
         CHECK(s.execute(static_cast<uint8_t>(pEmpire), mo) == RejectReason::None);
         CHECK(s.fleet_containing(m[2]) == f0 && w.fl(f0).contents.size() == 1 && !w.fl(f0).moving);
         w.run(300);
-        CHECK(!w.fl(mv2).alive && w.fl(mv).contents.size() == 2 && w.fl(mv).slot == 2);  // no request: merged into the first one
+        // No request: no merge (A2k t08 Q1); its own slot, the first of 1, 2, 0 free (mv holds 2).
+        CHECK(w.fl(mv2).alive && w.fl(mv2).planet == rB && w.fl(mv2).slot == 1 && w.fl(mv).contents.size() == 1 && w.fl(mv).slot == 2);
     }
 }
 
