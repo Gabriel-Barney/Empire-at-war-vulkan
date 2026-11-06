@@ -169,6 +169,9 @@ Every marshaller call runs over the list in this order. This includes commit, so
   - clamp t to Time_Limit when 0 ≤ TL ≤ t;
   - available = PP+0x38 + t × PP+0x34.
 - Otherwise available = PP+0x38 and c = cost(T, none).
+- **Corrected 2026-11-06 (A2K_T01_BUILD_COST_RE §3.1) [H]:** the two ETA = 0 cases above are swapped. With no
+  target **or a type with none of** 0x60/0x5F/0x5C/0x5B (any ordinary unit): t = 0.5 × btime(T, none), c = cost(T, none).
+  Only a structure / generic type with a target uses cost(T, target) and btime(T, target).
 - **Veto (1e18, non-permanent)** if available < c + PP+0x44. Otherwise 0.
 
 *Commit* 0x7284f0: unless MagicPlan, PP+0x40 += cost(T, none) and PP+0x44 += cost(T, none) [H].
