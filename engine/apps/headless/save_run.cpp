@@ -1,5 +1,6 @@
 // alamo_headless N1 save / load (owner: n1-host): see save_run.hpp.
 #include "save_run.hpp"
+#include "crc_out.hpp"
 
 #include <algorithm>
 #include <cinttypes>
@@ -883,7 +884,7 @@ bool write_crc(CrcLog log, const std::string& path, const std::string& comment) 
     if (path.empty()) return true;
     log.comments = {comment};
     std::string err;
-    if (!log.save(path, &err)) {
+    if (!alamo_headless::save_crc_log(log, path, &err)) {
         std::fprintf(stderr, "crc-out: %s\n", err.c_str());
         return false;
     }

@@ -1,5 +1,6 @@
 // alamo_headless --skirmish-ai (A1 stage 2): see skirmish_run.hpp.
 #include "skirmish_run.hpp"
+#include "crc_out.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -867,7 +868,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     }
     first.crc.comments = {"A1 skirmish-ai " + kind + " seed " + std::to_string(opt.seed) + " ticks " + std::to_string(first.ticks)};
     std::string err;
-    if (!opt.crc_out.empty() && first.crc.save(opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
+    if (!opt.crc_out.empty() && alamo_headless::save_crc_log(first.crc, opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
     if (!opt.golden.empty()) {
         CrcLog golden;
         if (!CrcLog::load(opt.golden, golden, &err)) {

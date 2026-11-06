@@ -361,6 +361,28 @@ add_test(NAME alamo_headless_replay_golden
                  --crc-out ${CMAKE_CURRENT_BINARY_DIR}/replay_actual.crc --golden ${_q1_data}/replay_golden.crc)
 set_tests_properties(alamo_headless_replay_golden PROPERTIES TIMEOUT 300)
 
+# Golden checkpoints (ALAMO_CRC 2; docs/status/golden-checkpoints.md): --crc-checkpoint / --crc-convert / --compare on a v2 log,
+# the C++ and the Python (tools/goldens/convert_goldens.py) writers byte for byte, and the game smoke golden check
+# (game/compare_smoke.cmake) on a checkpoint golden; plus the converter's own selftest. The unit tests of the format
+# (round trip, mismatch message, v1 against v2) are alamo_core_sim_tests.
+find_program(ALAMO_GOLDEN_PYTHON NAMES python PATHS ${CMAKE_SOURCE_DIR}/toolchain/venv/Scripts NO_DEFAULT_PATH)
+find_program(ALAMO_GOLDEN_PYTHON NAMES python python3)
+if(NOT ALAMO_GOLDEN_PYTHON)
+  set(ALAMO_GOLDEN_PYTHON "")
+endif()
+add_test(NAME alamo_headless_crc_checkpoint
+         COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:alamo_headless> -DSTREAM=${_q1_data}/replay_stream.acmd
+                 -DCOMPARE_SMOKE=${CMAKE_CURRENT_SOURCE_DIR}/game/compare_smoke.cmake
+                 -DWORK=${CMAKE_CURRENT_BINARY_DIR}/crc_checkpoint -DPY=${ALAMO_GOLDEN_PYTHON}
+                 -DCONVERT=${CMAKE_SOURCE_DIR}/tools/goldens/convert_goldens.py
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/headless/check_crc_checkpoint.cmake)
+set_tests_properties(alamo_headless_crc_checkpoint PROPERTIES TIMEOUT 300)
+if(ALAMO_GOLDEN_PYTHON)
+  add_test(NAME alamo_goldens_convert_selftest
+           COMMAND ${ALAMO_GOLDEN_PYTHON} ${CMAKE_SOURCE_DIR}/tools/goldens/convert_goldens.py --selftest)
+  set_tests_properties(alamo_goldens_convert_selftest PROPERTIES TIMEOUT 60)
+endif()
+
 # Slow tier (label "slow", see engine/CMakeLists.txt): the long headless runs; ctest -LE slow skips them. The land-outcome
 # worker-count tests and the golden checks stay labelled together with the run whose CRC log they need (fixtures).
 get_directory_property(_alamo_apps_tests TESTS)

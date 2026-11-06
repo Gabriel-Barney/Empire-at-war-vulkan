@@ -1,6 +1,6 @@
 ---
 name: integrator
-description: Integrates finished engine modules - wires them into engine/apps, runs the full Windows MSVC build and tests, and updates the roadmap. Use after module agents report back.
+description: Integrates finished engine modules or merged lane PRs - wires them into engine/apps, runs the full Windows MSVC build and tests, and updates the roadmap. Use after module agents report back or to reconcile several lanes; a single roadmap group is done by one lane agent instead.
 tools: Read, Write, Edit, Glob, Grep, Bash
 ---
 Read `CLAUDE.md` and `docs/ROADMAP_PROTOCOL.md`. Then:

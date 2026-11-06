@@ -29,7 +29,7 @@ The claude.ai page https://claude.ai/artifact/56dGptBoT3JcDH4rHZ6BjT is retired:
 | `meta` | `page` | `eyebrow`, `title`, `lede`, `build` (last verified build line), `updated` |
 | `lanes` | short id (`st1`…) | One stage of the plan: `title`, `goal` (what the stage is for), `exit` ("done when" condition), `order`. Stages run in `order`, top to bottom in both the plan and the flowchart |
 | `nodes` | box id (`N1`, `MOVE`…) | `label`, `sub`, `lane`, `status`, `shape` (`box`/`pill`), `order`, `to` (map of target box id → `solid` "do before" or `dash` "feeds into") |
-| `items` | group id (`s7`, `n1`…) | `title`, `tag`, `node` (box id), `status`, `preset`, `mod`, `why`, `order`, `after` (list of group ids that must finish first), `updated` (date), `by` (session name), `tasks`, `eta` |
+| `items` | group id (`s7`, `n1`…) | `title`, `tag`, `node` (box id), `status`, `preset`, `mod`, `why`, `order`, `after` (list of group ids that must finish first), `updated` (date), `by` (session name), `tasks`, `eta`; claim fields, all optional, set by `claim` (below): `claimed_by` (session), `claimed_at` (ISO time), `touches` (list of module folders/files the work edits; default: `mod` split on `·` `,` `;`) |
 | `log` | `yyyymmdd-hhmmss-<session>` | `at` (ISO time), `by`, `text` |
 | `builds` | `yyyymmddhhmmss-<machine>-<tree>-<compiler>` | `at`, `by`, `machine`, `compiler`, `tree`, `status` (`pass`/`fail`), `exits`, `warnings`, `tests`, `tests_failed`, `test_seconds`, `excerpt` (first error or warning lines), `group` (optional roadmap group id) |
 
@@ -109,11 +109,52 @@ This replaces the 2026-11-04 "both copies" rule. Check the remote with `python r
 machine wrote to it). `sync` pulls, regenerates the page and pushes. `write` and every build record pull first the same way.
 If you pulled by hand inside `roadmap-store/`, run `python roadmap-store/roadmap_store.py render` afterwards.
 
+## Claims and parallel batches
+
+Several agents work in parallel, so a group can be claimed and the coordinator can ask for a batch that cannot collide. All of it
+goes through the normal locked write path (pull, apply, journal, commit, background push), so a claim reaches every account.
+
+```bash
+python roadmap-store/roadmap_store.py batch 5 [--by <session>] [--json]   # up to N ready groups that touch different files
+python roadmap-store/roadmap_store.py claim <group> --by <session> [--touches a,b] [--force]
+python roadmap-store/roadmap_store.py claims [--all]                        # live claims (--all adds expired ones)
+python roadmap-store/roadmap_store.py release <group> [--by <session>] [--force]
+```
+
+- `claim` sets `claimed_by` / `claimed_at`. It fails (exit 1, naming the holder and the expiry) while another session holds a live
+  claim, unless `--force`. A claim is live for 24 hours; claiming again with the same `--by` renews it, and an expired claim can
+  be taken by anyone. `--by` defaults to `ALAMO_SESSION`. `--touches` stores an explicit `touches` list; otherwise `touches` is the
+  group's `mod` string split on `·`, `,` and `;` (`a/b+c` means `a/b` and `a/c`).
+- `release` clears the claim (`--by` makes it refuse another session's live claim without `--force`). A group written as `done` or
+  `out` through `write` (or the page hook) loses its claim in the same write and commit, so nobody has to release it.
+- `batch` prints up to N groups that are open, have every `after` group finished, are not claimed by another session, do not have
+  status `gab`, `probe` or `spec` (or preset `gab`), and whose `touches` overlap neither each other nor the touches of a live claim.
+  Order: status `next` first, then stage, box and group order. Two paths overlap when they are equal or one is a folder of the
+  other (`render` and `render/particles`). A leading `engine/` is ignored, and `apps/sim` counts as `apps`, so `apps`,
+  `engine/apps` and `apps/sim` overlap each other and everything under `apps`. A group with no `mod` and no `touches` never
+  conflicts. `--by <session>` stops that session's own claims from blocking it.
+- Coordinator flow: `batch N`, then each agent runs `claim <group> --by <its name>` before it edits anything; a refused claim means
+  take the next group from a fresh `batch`.
+- The page shows a "claimed by X" badge on groups with a live claim and keeps them out of the "Start here" suggestions (it reads
+  the two fields only; a claim older than 24 hours is ignored). The shell is edited in `roadmap-store/page_shell.html` (what the
+  generator reads), outside the data markers.
+- `python roadmap-store/roadmap_store.py selftest` runs the tests for all of this on a temporary store with a local bare remote
+  (claim conflicts, expiry, overlap and batch logic, done clearing, build-record batching, lock-busy fallback); it never touches
+  the real store.
+
 ## Build records
 
 `build_msvc.cmd`, `build_clang.cmd`, `build_module.cmd` and `build_agent.cmd` record every finished run in the store with
 `record-build`, so the roadmap shows them with no further step. The full log stays in `logs\` on the machine that built; the
 record carries the summary and the first error lines. Set `ALAMO_ROADMAP_GROUP=<group id>` before a build to link it to a
 group, and `ALAMO_SESSION=<name>` to name the session instead of the OS user. Records are only added: do not edit or prune them.
+
+`record-build` only writes the record file and a journal line (no commit, no regenerate, no push): one build run used to make one
+commit and one push. The commit and the push are batched: a push happens at most every 10 minutes (`FLUSH_INTERVAL`). After a
+record, a detached `flush` runs at once when the last push is older than that, otherwise one waiting `flush --wait` is started
+(one at a time) that runs when the interval is over. `write`, `claim`, `release` and `sync` commit pending records first, pull
+and push as before, so they never lose one; `python roadmap-store/roadmap_store.py flush` does it by hand (it also commits when
+there is no remote). A busy lock is retried (4 tries of 8 s); only if it stays busy is the record written without the lock and a
+line added to `hook_errors.log`, so a record is never dropped. Pushes happen outside the lock, and a rejected push pulls and retries.
 
 The pre-database static page and its seed files are in `backups/docs-archive-2026-10-30.zip`.
