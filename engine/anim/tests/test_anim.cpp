@@ -668,7 +668,7 @@ std::unique_ptr<AnimModel> behaviour_model(bool flinch_clips = true) {
 
 // MSVC 19.51; clang 20 / gcc 14 must match. Was 4357bd5e704ab19c before the locomotor state (last yaw / crouch)
 // and the corpse spin-away / damage-kind fields joined AnimBehaviors::hash.
-constexpr uint64_t kBehaviourGolden = 0xd0671711f6a07913ull;
+constexpr uint64_t kBehaviourGolden = 0x53d7bba7979bbe88ull;  // s78k t02: idle service every call, target draws
 
 uint64_t behaviours_hash(const AnimWorld& w, const AnimBehaviors& b) {
     alamo::StateHasher h;
@@ -751,8 +751,10 @@ void test_behaviors() {
         CHECK(!b.on_hit(w, 4, fp, ip, 1, 0, -1, 0, rng, 1) && rng.state() == st);
     }
     {
-        // Idle while engaged: Attack finished -> Attack Idle + combat timer 90 + [0, 30]; replays while engaged,
-        // then the plain idle behaviour.
+        // s78k t02 idle while engaged (IdleBehavior 0x62e570): with a target EVERY service draws one int [0, 30] into the
+        // countdown (r + 90), whatever the clip; Attack Idle (index 0, blend 0, no further draw) only once an attack clip
+        // finished. Without a target the countdown drops by 1 per service; a finished Attack Idle replays with a
+        // [0.2, 0.75] blend draw while it is > 0, then the default idle (index 0, idle blend, no draw).
         AnimWorld w;
         AnimBehaviors b;
         w.create(5, m.get(), {}, nullptr, 0);
@@ -761,24 +763,107 @@ void test_behaviors() {
         atk.type = kAnimAttack;
         w.play(5, atk, &rng, 0);
         uint64_t f = 1;
-        for (; w.current_mode(5) != SlotMode::Finished; ++f) w.advance(f);
-        CHECK(b.service_idle(w, 5, ip, rng, f));
-        const uint64_t timer = f + 90 + static_cast<uint64_t>(replay.range_int(0, 30));
-        CHECK(w.current_type(5) == kAnimAttackIdle && b.combat_timer(5) == timer && rng.state() == replay.state());
-        uint32_t attack_idles = 1, idles = 0;
-        for (++f; f < timer + 60; ++f) {
+        uint32_t draws = 0;
+        for (; w.current_mode(5) != SlotMode::Finished; ++f) {
+            CHECK(!b.service_idle(w, 5, ip, IdleTarget::Target, rng, f));  // attack still playing: draw, no play
+            const uint64_t want = 90 + static_cast<uint64_t>(replay.range_int(0, 30));
+            CHECK(b.idle_countdown(5) == want && rng.state() == replay.state() && w.current_type(5) == kAnimAttack);
+            ++draws;
             w.advance(f);
-            if (b.service_idle(w, 5, ip, rng, f)) {
-                if (w.current_type(5) == kAnimAttackIdle) {
-                    ++attack_idles;
-                    CHECK(f < timer);
-                } else {
-                    ++idles;
-                    CHECK(f >= timer && w.current_type(5) == kAnimIdle);
-                }
+        }
+        CHECK(draws >= 5);
+        CHECK(b.service_idle(w, 5, ip, IdleTarget::Target, rng, f));  // finished: Attack Idle, the draw only
+        CHECK(b.idle_countdown(5) == 90 + static_cast<uint64_t>(replay.range_int(0, 30)) && rng.state() == replay.state());
+        CHECK(w.current_type(5) == kAnimAttackIdle && w.slot(5).variant == 0 && w.current_mode(5) != SlotMode::Loop && !w.crossfading(5));
+        // Target lost: one decrement per service (no draw while the clip plays).
+        uint64_t cd = b.idle_countdown(5);
+        uint32_t attack_idles = 0, idles = 0;
+        for (++f; f < 400; ++f) {
+            w.advance(f);
+            const bool finished = w.current_mode(5) == SlotMode::Finished;
+            const bool was_attack_idle = w.current_type(5) == kAnimAttackIdle;
+            const bool played = b.service_idle(w, 5, ip, IdleTarget::NoTarget, rng, f);
+            if (cd > 0) --cd;
+            CHECK(b.idle_countdown(5) == cd);
+            if (!finished) {
+                CHECK(!played && rng.state() == replay.state());
+                continue;
+            }
+            CHECK(played);
+            if (was_attack_idle && cd > 0) {
+                const float blend = replay.range_float(0.2f, 0.75f);
+                CHECK(w.current_type(5) == kAnimAttackIdle && w.slot(5, kPrevious).type == kAnimAttackIdle && rng.state() == replay.state());
+                (void)blend;
+                ++attack_idles;
+            } else if (was_attack_idle) {
+                CHECK(w.current_type(5) == kAnimIdle && w.slot(5).variant == 0 && rng.state() == replay.state());
+                ++idles;
+            } else {
+                // From the idle: the plain idle behaviour (fidget timer draws).
+                replay = rng;
             }
         }
-        CHECK(attack_idles >= 4 && idles >= 1);
+        CHECK(attack_idles >= 3 && idles == 1 && cd == 0);
+        // Target again while idling: the draw, but no Attack Idle (the clip is not an attack clip).
+        const uint32_t st = rng.state();
+        const int32_t before = w.current_type(5);
+        b.service_idle(w, 5, ip, IdleTarget::Target, rng, f);
+        SimRng one(st);
+        CHECK(b.idle_countdown(5) == 90 + static_cast<uint64_t>(one.range_int(0, 30)) && rng.state() == one.state());
+        CHECK(w.current_type(5) == before);
+    }
+    {
+        // s78k t02: no TARGETING (None) after an attack -> the plain idle behaviour, no countdown; a model without
+        // Attack Idle still draws the blend while the countdown runs (the play fails, the clip stays); the locomotor
+        // runs the idle service only while not moving (Allow_Idle_When_Moving: also while moving), every call.
+        AnimWorld w;
+        AnimBehaviors b;
+        const auto plain = behaviour_model(false);  // no Attack Idle
+        w.create(1, m.get(), {}, nullptr, 0);
+        w.create(2, plain.get(), {}, nullptr, 0);
+        SimRng rng(44);
+        PlayRequest atk;
+        atk.type = kAnimAttack;
+        w.play(1, atk, &rng, 0);
+        w.play(2, atk, &rng, 0);
+        uint64_t f = 1;
+        for (; w.current_mode(1) != SlotMode::Finished || w.current_mode(2) != SlotMode::Finished; ++f) w.advance(f);
+        CHECK(b.service_idle(w, 1, ip, IdleTarget::None, rng, f) && w.current_type(1) == kAnimIdle && b.idle_countdown(1) == 0);
+        CHECK(!b.service_idle(w, 2, ip, IdleTarget::Target, rng, f) && w.current_type(2) == kAnimAttack);
+        const uint64_t cd = b.idle_countdown(2);
+        SimRng replay = rng;
+        CHECK(!b.service_idle(w, 2, ip, IdleTarget::NoTarget, rng, f + 1) && w.current_type(2) == kAnimAttack);
+        replay.range_float(0.2f, 0.75f);
+        CHECK(b.idle_countdown(2) == cd - 1 && rng.state() == replay.state());
+
+        AnimWorld lw;
+        AnimBehaviors lb;
+        lw.create(3, m.get(), {}, nullptr, 0);
+        LocomotorParams lp;
+        lp.idle = ip;
+        LocomotorInput in;
+        in.speed = 1.0f;
+        in.max_speed = 1.0f;
+        in.target = IdleTarget::Target;
+        in.on_path = true;  // s78l t03: the host's moving gate
+        CHECK(lb.service_locomotor(lw, 3, lp, in, rng, 1) == 1 && lw.current_type(3) == kAnimMove);
+        uint32_t st = rng.state();
+        CHECK(lb.service_locomotor(lw, 3, lp, in, rng, 2) == 0 && rng.state() == st && lb.idle_countdown(3) == 0);  // moving: none
+        in.allow_idle_when_moving = true;
+        CHECK(lb.service_locomotor(lw, 3, lp, in, rng, 3) == 0 && rng.state() != st && lb.idle_countdown(3) >= 90);
+        in.allow_idle_when_moving = false;
+        in.speed = 0.0f;  // stopped: back to the idle, then the idle service (one draw with the target)
+        in.on_path = false;
+        st = rng.state();
+        CHECK(lb.service_locomotor(lw, 3, lp, in, rng, 4) == 1 && lw.current_type(3) == kAnimIdle);
+        SimRng chk(st);
+        CHECK(lb.idle_countdown(3) == 90 + static_cast<uint64_t>(chk.range_int(0, 30)) && rng.state() == chk.state());
+        st = rng.state();
+        CHECK(lb.service_locomotor(lw, 3, lp, in, rng, 5) == 0 && rng.state() != st);  // idle playing: still one draw
+        in.target = IdleTarget::NoTarget;
+        const uint64_t c5 = lb.idle_countdown(3);
+        st = rng.state();
+        CHECK(lb.service_locomotor(lw, 3, lp, in, rng, 6) == 0 && rng.state() == st && lb.idle_countdown(3) == c5 - 1);
     }
     {
         // Death clip (random variant, blend 0.5, locked), corpse countdown after the clip, fade, removal.
@@ -799,7 +884,7 @@ void test_behaviors() {
         CHECK(w.current_type(6) == kAnimDie && w.locked(6) && w.crossfading(6) && !b.flinching(6));
         PlayRequest idle;
         CHECK(w.play(6, idle, &rng, 3) == PlayResult::Locked);
-        CHECK(!b.on_hit(w, 6, fp, ip, 1, 0, 1, 0, rng, 100) && !b.service_idle(w, 6, ip, rng, 4));
+        CHECK(!b.on_hit(w, 6, fp, ip, 1, 0, 1, 0, rng, 100) && !b.service_idle(w, 6, ip, IdleTarget::NoTarget, rng, 4));
         std::vector<ObjectId> removed;
         uint64_t f = 4, clip_end = 0, fade_start = 0;
         for (; f < 400 && removed.empty(); ++f) {
@@ -880,7 +965,7 @@ void test_behaviors() {
                         a.index = kRandomVariant;
                         a.blend_seconds = 0.1f;
                         w.play(id, a, &rng, f);
-                    } else b.service_idle(w, id, ip, rng, f);
+                    } else b.service_idle(w, id, ip, (id + static_cast<ObjectId>(f)) % 3 == 0 ? IdleTarget::Target : IdleTarget::NoTarget, rng, f);
                 }
                 b.service(w, f, removed);
                 w.advance(f, pf, 64);
@@ -1088,7 +1173,7 @@ void test_events_and_locomotor() {
 
 // Record sizes of the documented layouts (anim_state.hpp / anim_behaviors.hpp).
 constexpr size_t kAnimSaveRowBytes = 109;
-constexpr size_t kAnimSaveEntryBytes = 51;
+constexpr size_t kAnimSaveEntryBytes = 55;  // + 8 per idle record (s78l t03)
 constexpr size_t kAnimSaveCorpseBytes = 77;
 
 struct SaveScenario {
@@ -1155,8 +1240,10 @@ void save_step(AnimWorld& w, AnimBehaviors& b, SimRng& rng, uint64_t f, const Sa
             req.lock = true;
             req.timed_seconds = 0.4f;
             w.play(id, req, &rng, f);
+        } else if (roll == 14 || roll == 15) {
+            b.presence_refresh(id, static_cast<ObjectId>(100u + roll + static_cast<uint32_t>(id % 3)), static_cast<int32_t>(400 + f % 7));  // s78l t03
         } else {
-            b.service_idle(w, id, ip, rng, f);
+            b.service_idle(w, id, ip, roll % 2 == 0 ? IdleTarget::Target : IdleTarget::NoTarget, rng, f);
         }
     }
 }
@@ -1187,6 +1274,11 @@ void test_save() {
     w.add(13, nullptr, 0);  // a row without a model: saved, model_of not asked
     std::vector<ObjectId> removed;
     for (uint64_t f = 1; f <= 120; ++f) save_step(w, b, rng, f, sc, removed);
+    for (const ObjectId id : {2, 3, 7}) {  // s78l t03: idle records in the save (two on one entry)
+        if (b.is_corpse(id)) continue;
+        b.presence_refresh(id, 900, 50);
+        b.presence_refresh(id, 901, 60);
+    }
     CHECK(!b.corpses().empty() && b.state_count() > 0);
 
     // Save in the host's order: behaviours, world, rng.
@@ -1205,11 +1297,21 @@ void test_save() {
         CHECK(ok && r.ok() && r.done());
     }
     CHECK(world_hash(w2) == world_hash(w) && behaviours_hash(w2, b2) == behaviours_hash(w, b) && rng2 == rng);
-    CHECK(!w2.contains(500) && w2.contains(13) && w2.model(13) == nullptr && w2.model(3) == mb_owner.get());
+    CHECK(!w2.contains(500) && w2.contains(13) && w2.model(13) == nullptr);
+    {
+        size_t other = 0;  // rows of the second model come back with it (model_of)
+        for (const ObjectId id : w.ids()) {
+            CHECK(w2.contains(id) && w2.model(id) == w.model(id));
+            if (w.model(id) == mb_owner.get()) ++other;
+        }
+        CHECK(other > 0);
+    }
     // write -> read -> write: identical bytes; the documented record sizes.
     CHECK(world_bytes(w2) == world_bytes(w) && behaviour_bytes(b2) == behaviour_bytes(b));
     CHECK(world_bytes(w).size() == 8 + w.size() * kAnimSaveRowBytes);
-    CHECK(behaviour_bytes(b).size() == 12 + b.state_count() * kAnimSaveEntryBytes + b.corpses().size() * kAnimSaveCorpseBytes);
+    size_t records = 0;
+    for (const ObjectId id : w.ids()) records += b.idle_records(id).size();
+    CHECK(behaviour_bytes(b).size() == 12 + b.state_count() * kAnimSaveEntryBytes + records * 8 + b.corpses().size() * kAnimSaveCorpseBytes);
 
     // Both run on: identical hashes, removals, full saved state and poses every tick.
     bool same = true;
@@ -1236,6 +1338,12 @@ void test_save() {
                 w.size(), b.corpses().size(), compared);
 
     // ---- rejection: truncated / corrupted data leaves the target unchanged ----
+    for (const ObjectId id : w.ids()) {  // s78l t03: records for the corruption checks below (two on one entry)
+        if (b.is_corpse(id)) continue;
+        b.presence_refresh(id, 900, 50);
+        b.presence_refresh(id, 901, 60);
+        break;
+    }
     const std::vector<uint8_t> wb = world_bytes(w), bb = behaviour_bytes(b);
     // A target with other content (w2 one tick further).
     std::vector<ObjectId> rem;
@@ -1288,7 +1396,16 @@ void test_save() {
         CHECK(behaviours_reject(bad));
         uint32_t entries = 0;
         std::memcpy(&entries, bb.data() + 4, 4);
-        const size_t corpse_count_at = 8 + static_cast<size_t>(entries) * kAnimSaveEntryBytes;
+        // Entry offsets: fixed part + 8 bytes per record (record count at the entry's last 4 fixed bytes).
+        std::vector<size_t> entry_at;
+        size_t at = 8;
+        for (uint32_t k = 0; k < entries; ++k) {
+            entry_at.push_back(at);
+            uint32_t nr = 0;
+            std::memcpy(&nr, bb.data() + at + kAnimSaveEntryBytes - 4, 4);
+            at += kAnimSaveEntryBytes + 8 * static_cast<size_t>(nr);
+        }
+        const size_t corpse_count_at = at;
         uint32_t corpses = 0;
         std::memcpy(&corpses, bb.data() + corpse_count_at, 4);
         CHECK(corpses > 0 && entries > 1);
@@ -1299,12 +1416,33 @@ void test_save() {
         bad[8 + 32] = 5;  // entry 0 return-loop flag: not a bool
         CHECK(entries == 0 || behaviours_reject(bad));
         bad = bb;
-        if (entries > 1) std::memcpy(bad.data() + 8 + kAnimSaveEntryBytes, bad.data() + 8, 4);  // duplicate entry id
+        if (entries > 1) std::memcpy(bad.data() + entry_at[1], bad.data() + 8, 4);  // duplicate entry id
         CHECK(entries < 2 || behaviours_reject(bad));
         bad = bb;
         bad[4] = 0xFF;  // entry count past the data
         bad[6] = 0xFF;
         CHECK(behaviours_reject(bad));
+        // s78l t03: a record with frames < 1, records out of order.
+        size_t with1 = entries, with2 = entries;
+        for (uint32_t k = 0; k < entries; ++k) {
+            uint32_t nr = 0;
+            std::memcpy(&nr, bb.data() + entry_at[k] + kAnimSaveEntryBytes - 4, 4);
+            if (nr >= 1 && with1 == entries) with1 = k;
+            if (nr >= 2 && with2 == entries) with2 = k;
+        }
+        CHECK(with1 < entries);
+        if (with1 < entries) {
+            const size_t rec0 = entry_at[with1] + kAnimSaveEntryBytes;
+            bad = bb;
+            std::memset(bad.data() + rec0 + 4, 0, 4);  // frames 0
+            CHECK(behaviours_reject(bad));
+        }
+        if (with2 < entries) {
+            const size_t rec0 = entry_at[with2] + kAnimSaveEntryBytes;
+            bad = bb;
+            std::memcpy(bad.data() + rec0 + 8, bad.data() + rec0, 4);  // second presence id == first
+            CHECK(behaviours_reject(bad));
+        }
     }
     // A successful read into the dirtied target restores the saved state exactly.
     {
@@ -1549,6 +1687,116 @@ void test_death_plan() {
     }
 }
 
+
+// s78l t03 (TACTICAL_COMBAT slot 47 "s78l t03"): idle records, the moving gate, the presence idle type, IDLE-only service.
+void test_idle_records() {
+    auto m = make_model(3, {{kAnimIdle, 2, 30, 30.0f, 2}, {kAnimMove, 1, 24, 30.0f, 2}, {kAnimAttack, 1, 12, 30.0f, 2},
+                            {kAnimAttackIdle, 1, 20, 30.0f, 2}, {77, 1, 16, 30.0f, 2}});  // 77 = Attention
+    AnimWorld w;
+    AnimBehaviors b;
+    w.create(1, m.get(), {}, nullptr, 0);
+    // find-or-insert, ascending presence id, a refresh resets the value
+    b.presence_refresh(1, 40, 3);
+    b.presence_refresh(1, 20, 2);
+    b.presence_refresh(1, 30, 5);
+    b.presence_refresh(1, 40, 4);
+    {
+        const auto r = b.idle_records(1);
+        CHECK(r.size() == 3 && r[0].presence == 20 && r[1].presence == 30 && r[2].presence == 40 && r[2].frames == 4);
+    }
+    // The presence step: Attention while a record of presence id 30 is held.
+    const PresenceIdleFn pick = [](ObjectId, std::span<const IdleRecord> recs) -> int32_t {
+        for (const IdleRecord& r : recs)
+            if (r.presence == 30) return 77;
+        return kNoAnimType;
+    };
+    IdleParams ip;
+    ip.presence = &pick;
+    CHECK(presence_idle_type(m.get(), 1, ip, b.idle_records(1)) == 77);
+    IdleParams none;
+    CHECK(presence_idle_type(m.get(), 1, none, b.idle_records(1)) == kAnimIdle);
+    const PresenceIdleFn celebrate = [](ObjectId, std::span<const IdleRecord>) -> int32_t { return 78; };  // no clip
+    IdleParams cp;
+    cp.presence = &celebrate;
+    CHECK(presence_idle_type(m.get(), 1, cp, b.idle_records(1)) == kAnimIdle);
+    // A no-target service ages every value by 1 and erases those below 1; no draw while the (fresh) idle plays.
+    SimRng rng(3);
+    const uint32_t st = rng.state();
+    b.service_idle(w, 1, ip, IdleTarget::NoTarget, rng, 1);
+    {
+        const auto r = b.idle_records(1);
+        CHECK(r.size() == 3 && r[0].frames == 1 && r[1].frames == 4 && r[2].frames == 3 && rng.state() == st);
+    }
+    b.service_idle(w, 1, ip, IdleTarget::NoTarget, rng, 2);
+    CHECK(b.idle_records(1).size() == 2 && b.idle_records(1)[0].presence == 30);
+    // Once the clip finished the idle behaviour plays the presence idle (Attention).
+    uint64_t f = 3;
+    for (; w.current_mode(1) != SlotMode::Finished && f < 100; ++f) w.advance(f);
+    b.presence_refresh(1, 30, 50);
+    CHECK(b.service_idle(w, 1, ip, IdleTarget::NoTarget, rng, f) && w.current_type(1) == 77);
+    // A target clears the list (and draws the countdown).
+    b.service_idle(w, 1, ip, IdleTarget::Target, rng, f + 1);
+    CHECK(b.idle_records(1).empty() && b.idle_countdown(1) >= 90);
+    // The gate clears it too, with no draw.
+    b.presence_refresh(1, 50, 9);
+    const uint32_t s2 = rng.state();
+    b.idle_gated(1);
+    CHECK(b.idle_records(1).empty() && rng.state() == s2);
+
+    // Locomotor: the gate is on_path (whatever the speed) for a movable unit; not movable = never gated; no IDLE = no
+    // idle service at all; a gated call clears the records.
+    AnimWorld lw;
+    AnimBehaviors lb;
+    lw.create(2, m.get(), {}, nullptr, 0);
+    LocomotorParams lp;
+    LocomotorInput in;
+    in.target = IdleTarget::Target;
+    in.on_path = true;  // a path, speed 0 (start delay / arrival turn)
+    lb.presence_refresh(2, 7, 30);
+    uint32_t s3 = rng.state();
+    lb.service_locomotor(lw, 2, lp, in, rng, 1);
+    CHECK(rng.state() == s3 && lb.idle_countdown(2) == 0 && lb.idle_records(2).empty());
+    in.allow_idle_when_moving = true;  // skips the gate
+    lb.service_locomotor(lw, 2, lp, in, rng, 2);
+    CHECK(rng.state() != s3 && lb.idle_countdown(2) >= 90);
+    in.allow_idle_when_moving = false;
+    in.movable = false;  // no locomotor: on_path ignored
+    s3 = rng.state();
+    lb.service_locomotor(lw, 2, lp, in, rng, 3);
+    CHECK(rng.state() != s3);
+    in.movable = true;
+    in.on_path = false;  // stationary, no path: serviced
+    s3 = rng.state();
+    lb.service_locomotor(lw, 2, lp, in, rng, 4);
+    CHECK(rng.state() != s3);
+    in.has_idle = false;  // no IDLE behaviour: no service, no draw
+    s3 = rng.state();
+    lb.service_locomotor(lw, 2, lp, in, rng, 5);
+    CHECK(rng.state() == s3);
+    // yaw_changed: the locomotor's last yaw (5 deg after this call)
+    in.has_idle = true;
+    in.yaw_deg = 5.0f;
+    lb.service_locomotor(lw, 2, lp, in, rng, 6);
+    CHECK(!lb.yaw_changed(2, 5.0f) && lb.yaw_changed(2, 6.0f) && lb.yaw_changed(2, -355.5f) && !lb.yaw_changed(3, 1.0f));
+    // The stop clip after a move uses the presence idle (records before the aging).
+    in.yaw_deg = 5.0f;
+    in.speed = 1.0f;
+    in.max_speed = 1.0f;
+    in.target = IdleTarget::NoTarget;
+    in.on_path = true;
+    lb.service_locomotor(lw, 2, lp, in, rng, 7);
+    CHECK(lw.current_type(2) == kAnimMove);
+    in.speed = 0.0f;
+    in.on_path = false;
+    lb.presence_refresh(2, 30, 10);
+    lp.idle.presence = &pick;
+    lb.service_locomotor(lw, 2, lp, in, rng, 8);
+    CHECK(lw.current_type(2) == 77 && lb.idle_records(2).size() == 1 && lb.idle_records(2)[0].frames == 9);
+    in.crouched = true;  // crouched: the presence step does not apply
+    CHECK(default_idle_type(m.get(), in, lp.idle) != 77);
+    std::printf("idle records: aging / clear / gate / presence idle ok\n");
+}
+
 int main() {
     test_types();
     test_death_plan();
@@ -1561,6 +1809,7 @@ int main() {
     test_behaviors();
     test_events_and_locomotor();
     test_save();
+    test_idle_records();
 #ifdef ALAMO_ANIM_HAVE_VFS
     test_real_data();
 #else

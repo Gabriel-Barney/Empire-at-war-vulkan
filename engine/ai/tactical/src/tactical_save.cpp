@@ -248,6 +248,7 @@ uint64_t PerceptionWorld::types_digest() const {
         h.i32(t.tech_level);
         h.f32(t.population);
         h.f32(t.build_cost);
+        h.i32(t.build_time_seconds);  // A2g t06
         h.f32(t.tactical_cost);
         h.u32(static_cast<uint32_t>(t.affiliation.size()));
         for (const std::string& a : t.affiliation) h.str(a);

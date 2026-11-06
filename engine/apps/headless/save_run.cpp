@@ -548,9 +548,7 @@ public:
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
         if (ho_.battles != "auto") {  // N1 stage 2: the tactical AI of fought battles (as skirmish_run.cpp foc_session)
             tai_ = std::make_shared<sim::TacticalAiSetup>();
-            tai_->space_plans = ai::tactical::tactical_plan_files(ai::tactical::TacticalMode::Space, lister);
-            tai_->land_plans = ai::tactical::tactical_plan_files(ai::tactical::TacticalMode::Land, lister);
-            tai_->difficulties = ai::tactical::load_tactical_ai_difficulties(*files_);
+            sim::load_tactical_ai_data(*tai_, *files_, &db_.constants(), lister);  // a2h t05: plans, difficulties, GameConstants
             tai_->defs = &defs_;
             tai_->equations = &eqs_;
             tai_->files = files_.get();
