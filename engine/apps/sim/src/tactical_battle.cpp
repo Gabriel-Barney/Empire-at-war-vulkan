@@ -1540,7 +1540,16 @@ void TacticalBattle::team_attack_service(TacticalMode& mode, SimRng& rng) {
         const Unit* u = unit_by_id(r.attacker);
         if (!live_unit(u)) return false;
         const Container* ct = team_target(r.container);
-        if (!ct || !combat_->is_enemy(st.owner(u->h), st.owner(ct->h))) return false;  // the container left with its last member
+        if (!ct) {
+            // The container left with its last member: the order ends with it. A land team member runs no scan of its own
+            // (s78f t03, TeamTargeting is the container's), so nothing else drops the dead member it still names.
+            if (combat_->ordered_target(u->id) == r.member && !live_unit(unit_by_id(r.member))) {
+                combat_->clear_order(u->id);
+                if (r.goal) combat_->set_attack_goal(u->id, tc::kNoObject);
+            }
+            return false;
+        }
+        if (!combat_->is_enemy(st.owner(u->h), st.owner(ct->h))) return false;
         const auto ci = static_cast<uint32_t>(ct - containers_.data());
         const Unit* mu = unit_by_id(r.member);
         const bool member_live = live_unit(mu);

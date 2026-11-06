@@ -1207,9 +1207,9 @@ static void test_scoring_story(const World& w) {
     }
 }
 
-// q6 (Thrawn's Revenge story chain): (1) a frame-1 event reaches a PGStoryMode-style script whose state machine starts
-// at load - Story_Event_Trigger only switches state when CurrentState == NextState, which holds only after main's first
-// resume; the load-time resume (StorySession::start_threads_at_load) puts it there before the first T9's STORY_ELAPSED
+// q6 (Thrawn's Revenge story chain): (1) a tick-2 event (ELAPSED 0, A2i t01) reaches a PGStoryMode-style script whose
+// state machine starts at load - Story_Event_Trigger only switches state when CurrentState == NextState, which holds
+// only after main's first resume; the load-time resume (StorySession::start_threads_at_load) puts it there before the first T9's STORY_ELAPSED
 // dispatch (T9 step 2) - (2) a prereq-less Perpetual STORY_ELAPSED fires first where the T9 clock has accumulated
 // Param1 seconds since the first T9; the Perpetual reset clears the accumulator and the initialised flag, so the next
 // T9 re-records the start and the next fire comes Param1 seconds after that (STORY.md §4.7 [H]: period Param1 plus one
@@ -1294,10 +1294,13 @@ static void test_q6_story_chain(const World& w) {
             fired[e.event].push_back(e.frame);
             log += e.text() + "\n";
         }
-        // (1) Begin at the first T9; its Story_Event_Trigger switched the settled machine, so the first Lua service of
-        // that T9 entered "Started" and raised both notifications in the same frame.
-        const uint64_t f1 = clock.front().first;
-        CHECK(fired["Begin"] == std::vector<uint64_t>{f1});
+        // (1) Begin at the second T9 (a prereq-less ELAPSED 0 records LastTime at its first T9 and fires at the next:
+        // A2i t01, 0x454980); its Story_Event_Trigger switched the settled machine, so the next Lua service (ServiceRate
+        // 0.1 s: T9 0 s at the first tick, then the tick whose T9 reaches 0.1 s, 3 frames later) entered "Started" and
+        // raised both notifications in the same frame.
+        const uint64_t f0 = clock.size() > 1 ? clock[1].first : 0;
+        const uint64_t f1 = clock.size() > 3 ? clock[3].first : 0;
+        CHECK(fired["Begin"] == std::vector<uint64_t>{f0});
         CHECK(fired["Switch_Xml"] == std::vector<uint64_t>{f1});
         CHECK(fired["Switch_Lua"] == std::vector<uint64_t>{f1});
         // (3) both rewards reached the hook, resolved to players.
@@ -1333,7 +1336,7 @@ static void test_q6_story_chain(const World& w) {
         }
         const uint64_t first_fire = expect.empty() ? 0 : expect.front();
         std::printf("  q6 story chain, workers %2d: Begin @%" PRIu64 ", Cycle first @%" PRIu64 " (x%zu), %zu SWITCH_CONTROL\n",
-                    workers, f1, fired["Cycle"].empty() ? 0 : fired["Cycle"].front(), fired["Cycle"].size(), switches.size());
+                    workers, f0, fired["Cycle"].empty() ? 0 : fired["Cycle"].front(), fired["Cycle"].size(), switches.size());
         CHECK(first_fire >= 60 && first_fire <= 62);  // 2 s = 60 galactic frames after the first T9 (+-1: float clock)
         CHECK(fired["Cycle"] == expect && expect.size() >= 2 && expect[1] - expect[0] >= 60 && expect[1] - expect[0] <= 63);
         if (first_log.empty()) {

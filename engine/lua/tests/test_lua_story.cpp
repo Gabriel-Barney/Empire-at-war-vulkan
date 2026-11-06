@@ -192,8 +192,10 @@ static void test_synthetic() {
         CHECK(copy_b.add_plot("Story_Test.xml", kPlot, true, "Story_Test", &err) == 0 && copy_b.read(rb));
         copy_a.reset_plot(0);
         copy_b.reset_plot(0);
-        copy_a.update(3, 6.0);
+        copy_a.update(3, 6.0);  // the reset cleared Begin's timer (q6 t03): this T9 only records its start (A2i t01)
         copy_b.update(3, 6.0);
+        copy_a.update(4, 6.0);
+        copy_b.update(4, 6.0);
         CHECK(digest(copy_a) == digest(copy_b) && copy_a.fired().size() > m.fired().size() &&
               copy_a.plot(0).state[copy_a.find_event(0, "Begin")].fire_count == 2);
         // Mismatches leave the model unchanged: a different plot set, truncated data.
@@ -251,17 +253,20 @@ static void test_synthetic() {
         CHECK(fired_names(z) == "Zero,Go,Armed_Zero,");
     }
 
-    // Reset (§2.3): nothing fires at the reset; the prereq-less ELAPSED Begin keeps its accumulator and
-    // fires again at the next T9; events with prereqs wait for Begin.
+    // Reset (§2.3): nothing fires at the reset; the prereq-less ELAPSED Begin has its timer cleared (q6 t03, 0x45e550),
+    // so its next T9 only records LastTime (A2i t01, 0x454980) and it fires again at the T9 after; events with prereqs
+    // wait for Begin.
     const uint32_t begin = m.find_event(0, "Begin");
     m.reset_plot(0);
     CHECK(m.plot(0).state[begin].fire_count == 1 && m.plot(0).state[begin].armed &&
           !m.plot(0).state[m.find_event(0, "Later")].armed);
     m.update(3, 6.0);
+    CHECK(m.plot(0).state[begin].fire_count == 1);
+    m.update(4, 6.0);
     CHECK(m.plot(0).state[begin].fire_count == 2);
     m.set_plot_active(0, false);
     const size_t n = m.fired().size();
-    m.update(4, 100.0);
+    m.update(5, 100.0);
     CHECK(m.fired().size() == n);  // suspended plots get no notifications or polls
 }
 

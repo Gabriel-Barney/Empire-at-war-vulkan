@@ -5024,6 +5024,14 @@ void test_battle_attack_team() {
         }
         if (b->frame() < 3) continue;
         objects::ObjectStore& st = tm->primary();
+        // The defenders do not fire back (TARGETING suspended every frame), so the attackers outlive the container: with the
+        // s78f-s78i squad rules (team targeting copies, Mod_Multiplier) player 0's squads win this land fight.
+        {
+            auto& cs = const_cast<tactical::combat::CombatSystem&>(b->combat());
+            for (const objects::ObjectHandle h : st.all_objects())
+                if (st.alive(h) && st.owner(h) == 0 && cs.has_unit(st.id(h)))
+                    cs.set_flag(st.id(h), tactical::combat::kUnitTargetingSuspended, true);
+        }
         auto members_of = [&](objects::ObjectId c) {
             std::vector<objects::ObjectId> m;
             b->select_all_entry(c, -1, m);
@@ -6701,10 +6709,10 @@ void test_landing_drop(bool timed, uint32_t destroy_at = 0) {
             b->write_part(TacticalBattle::SavePart::State, w);
             ByteReader r(w.bytes());
             CHECK(b->read_part(TacticalBattle::SavePart::State, r));
-            // s78f t02: battle state version 7 (FighterFormationRecord::pushed dropped, after main's story t06 v6): 6 and 8
-            // are refused.
+            // s78f t02 / q6: battle state version 8 (the two version-7 branches merged: FighterFormationRecord::pushed dropped
+            // and the q6 TEAM-container attacks): 7 and 9 are refused.
             std::vector<uint8_t> stale(w.bytes().begin(), w.bytes().end());
-            for (const uint32_t v : {6u, 8u}) {
+            for (const uint32_t v : {7u, 9u}) {
                 for (size_t k = 0; k < 4; ++k) stale[k] = static_cast<uint8_t>(v >> (8 * k));
                 ByteReader rs(stale);
                 CHECK(!b->read_part(TacticalBattle::SavePart::State, rs));

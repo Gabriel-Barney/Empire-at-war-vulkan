@@ -2403,10 +2403,12 @@ static void test_budget_fraction_before_init() {
             total += r.available;
         }
         // Leaf cache (AI_GALACTIC_TOKENS §9.9): the key is the parameter set only, so this query hits the entry the
-        // budget Init stored while the budget was still empty (D <= 0 -> 1e18) until its 5 s lifetime runs out.
+        // budget Init stored while the budget was still empty (D <= 0 -> (double)1e18f) until its 5 s lifetime runs out.
         const double cached = token(pw, frac_infra, ok);
-        CHECK(ok && cached == 1.0e18);
-        pw.run(5 * 30 + 1);
+        CHECK(ok && cached == static_cast<double>(1.0e18f));
+        // Read afresh at the same frame (the AI queues its Barracks within the 5 s, after which the in-progress head
+        // decides the token instead of the pool).
+        const_cast<GalacticSimTokenResolver&>(pw.world->resolver()).clear_cache();
         const double infra = token(pw, frac_infra, ok);
         std::printf("budget init with BudgetFractionToBuild in Infra_Budget: %d funded categories, total %.0f, Barracks fraction %.4f\n",
                     funded, static_cast<double>(total), infra);
@@ -3249,12 +3251,14 @@ static void test_force_maintenance_tokens() {
     CHECK(ok);
     const double fm0 = token("Variable_Target.FriendlyForce.Maintenance", 0, 1, 0, ok);
     CHECK(ok && fm0 == f0 / gross0);
-    const double em7 = token("Variable_Target.EnemyForce.Maintenance", 0, 1, 7, ok);
-    CHECK(gross1 > 0.0 ? ok && em7 == e7 / gross1 : !ok);
+    // The failing bindings first: the leaf cache key holds no Variable_Enemy (AI_GALACTIC_TOKENS §9.9, q6 t18) and
+    // failures are never cached, so a value cached for player 1 would answer them for 15 s.
     token("Variable_Target.EnemyForce.Maintenance", 0, 3, 7, ok);
     const bool ok_enemy_gross0 = ok;
     token("Variable_Target.EnemyForce.Maintenance", 0, -1, 7, ok);
     const bool ok_unbound = ok;
+    const double em7 = token("Variable_Target.EnemyForce.Maintenance", 0, 1, 7, ok);
+    CHECK(gross1 > 0.0 ? ok && em7 == e7 / gross1 : !ok);
     const double em0 = token("Variable_Target.EnemyForce.Maintenance", 0, -1, 0, ok);
     CHECK(ok && em0 == 0.0);
     CHECK(!ok_enemy_gross0 && !ok_unbound);
@@ -3701,6 +3705,7 @@ static void test_budget_reset_on_template_switch() {
     // tick with 1100 credits (Σ = 1000). Without the flag P = 500 + 100 w; with it P = 1000 w + 100 w.
     auto run = [](bool reset, AiBudget& b) {
         b.reset(2);
+        CHECK(b.add_member(0) && b.add_member(1));  // q6 (AI_GALACTIC_TOKENS §9.5): only template-listed members weigh
         const std::vector<float> even = {1.0f, 1.0f}, skew = {3.0f, 1.0f};
         b.init(even, 1000.0f);
         b.reweight(skew);
@@ -4875,7 +4880,10 @@ static void test_budget_allocation_token() {
     CHECK(token("Variable_Self.BudgetAllocation {Parameter_Category = 3}", ok) == inf && ok);    // the XML value of Infrastructure
     CHECK(token("Variable_Self.BudgetAllocation {Parameter_Category = 99}", ok) == 0.0 && ok);   // no such category
     CHECK(token("Variable_Self.BudgetAllocation", ok) == 0.0 && ok);                             // key -1
-    CHECK(token("Variable_Self.BudgetAllocation {Parameter_Category = AIGoalCategoryType[NoSuchGoal]}", ok) == 0.0 && ok);
+    // An unknown AIGoalCategoryType literal does not convert: the equation never builds and evaluating it fails (a2i t07,
+    // A2I_TOKENS_RE §3.2-3.3 [H]).
+    token("Variable_Self.BudgetAllocation {Parameter_Category = AIGoalCategoryType[NoSuchGoal]}", ok);
+    CHECK(!ok);
     token("Variable_Enemy.BudgetAllocation {Parameter_Category = AIGoalCategoryType[Offensive]}", ok);
     CHECK(!ok);
     token("Variable_Human.BudgetAllocation {Parameter_Category = AIGoalCategoryType[Offensive]}", ok);

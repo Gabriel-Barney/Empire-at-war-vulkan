@@ -948,28 +948,11 @@ static std::string env_or(const char* name, const char* fallback) {
 
 // q6: galactic seed roles (make_force_type_lookup) follow galactic::galactic_unit_kind. Synthetic types: a mod tag takes
 // its DUMMY_* behaviour's role; the seed's vanilla tags keep their rule (a vanilla-unclassified tag ignores the behaviour).
-namespace {
-class MemFiles final : public FileProvider {
-public:
-    void add(const std::string& path, const std::string& text) { files_[normalize_path(path)] = std::vector<uint8_t>(text.begin(), text.end()); }
-    bool read(std::string_view path, std::vector<uint8_t>& out) const override {
-        const auto it = files_.find(normalize_path(path));
-        if (it == files_.end()) return false;
-        out = it->second;
-        return true;
-    }
-    bool exists(std::string_view path) const override { return files_.count(normalize_path(path)) != 0; }
-    std::string origin(std::string_view path) const override { return exists(path) ? "mem:" + std::string(path) : ""; }
-
-private:
-    std::map<std::string, std::vector<uint8_t>> files_;
-};
-}  // namespace
 
 static void test_seed_roles() {
     MemFiles f;
-    f.add("Data\\XML\\GameObjectFiles.xml", "<L><File>SeedTypes.xml</File></L>");
-    f.add("Data\\XML\\SeedTypes.xml",
+    f.put("Data\\XML\\GameObjectFiles.xml", "<L><File>SeedTypes.xml</File></L>");
+    f.put("Data\\XML\\SeedTypes.xml",
           "<Types>"
           "<SkirmishSpaceUnit Name=\"Mod_Ship\"><Behavior>DUMMY_STARSHIP</Behavior><CategoryMask>Infantry</CategoryMask></SkirmishSpaceUnit>"
           "<ModStation Name=\"Mod_Base\"><Behavior>DUMMY_STAR_BASE</Behavior><Base_Level>3</Base_Level></ModStation>"
