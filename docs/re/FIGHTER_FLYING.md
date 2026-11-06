@@ -1027,9 +1027,55 @@ A1_READINGS §33.4.1 run **only while the formation is moving (state 1)**. The o
     guard pops when the lead leaves `Guard_Chase_Range` of the guarded object; a solo fighter guarding a moving carrier
     flies at ≤ 2 × the carrier's max speed; a hidden auto target over a guard is dropped.
 
-No in-game probe is needed for these rules. An optional probe (tools/probe_mod/): order a squadron to guard a moving
-frigate, shift-click a waypoint, and log the squadron formation's block count and state (F +0xf8..+0x100, +0x1d0)
-when the frigate stops, to confirm B 3.
+No in-game probe is needed for these rules. An optional probe was run (s78f t09, 2026-11-05).
+- **Setup.** Kuat skirmish. A human-owned `Tartan_Patrol_Cruiser` G (speed 4.2 / frame) and a `TIE_Fighter_Squadron`
+  (7 fighters) were spawned by the S7/S8 kit (scenario GUARD_SHIFT). Guards came from Lua `Guard_Target` and from
+  right-clicks; shift waypoints were given by hand. Positions come from memory every frame, so the formation's block
+  stack was not read. Source: `tools/probe_mod/s7s8_probes/out/20261105-055142/reader_space2.log`, parsed by
+  `s78f_extra_parse.py`.
+- **Guard given on a stationary G, then G moves** (Lua at F 510, and by hand later): the fighters close in to about
+  50 and orbit. When G starts moving they **do not follow**: they keep circling the old spot while G pulls 3000 away
+  (F 1050–1830) [M: B 3 says a formation in state 1 follows a moving G; these had arrived (state 3), and 0x410a60
+  evidently does not restart the follow].
+- **Guard given while G moves** (Lua at F 3540, G already 4.2 / frame): the fighters chase at about 5.3 / frame
+  (≤ 2 × G's speed, as item 10 says), sit about 17 from G for the rest of its move, and fan back out to a 150–450
+  orbit when it stops. So a moving guard is followed when the guard is ordered after G started.
+- **Shift waypoint, G stationary** (G2 control, by hand at about F 5250): the squadron leaves G within one 30-frame
+  sample and flies to the waypoint. The pop matches B 3 ("on a stationary G it ends within one 30-frame check").
+- **Shift waypoint while G moves, after a guard given at rest** (by hand: G moved from F 6690, waypoint about
+  120 frames later): the fighters had not followed G. They left for the waypoint at about F 6870, while G was still
+  moving (it stopped at F 7110). With no follow in progress this does not test B 3's "keep following while G moves".
+- Still untested: guard ordered **while** G moves, then a shift waypoint while it still moves. B 3 predicts the
+  waypoint waits until G stops. The scenario ran out before that sequence.
+- **Guard ordered while G moves, again** (s78f t12, 2026-11-05, `out/20261105-062322/reader_space2.log`,
+  GUARD_MOVE, two battles, Lua orders only) [M]. The fighters chase and reach G (distance 70–420 after 250–400
+  frames), then **stop following**. They hold near the point where they caught up while G keeps moving: the
+  distance grows to 3000 (F 1110–1950, second battle) and again on the way back (F 2550–3150). In the first battle
+  they drifted back toward G about 250 frames after it stopped. So the follow seen at F 3540 in t09 is not a steady
+  follow. It looks like a move to G's position that is re-issued only now and then, not B 3's state-1 follow.
+- Still untested: the shift waypoint while G moves. In the windowed game the squadron sat at the map edge under the
+  HUD and could not be box-selected in time, so no waypoint was given.
+- **Squadron team target** (s78f t12, same run, SQUAD; victims owned by the human's Empire player): the five members
+  were on one target for 1605 of 1759 frames. When target t3 was despawned (F 4953), all five cleared at +2 and took
+  t2 at +3, in the same frame (ALL_AT_ONCE). ESCORT: no escort spawned, so it was not measured.
+- **s78g t02, shift waypoint while G moves after a guard ordered while G moves** (2026-11-05, Claude drove the game,
+  `out/20261105-092438`, GUARD_HAND, human-owned Broadside G at about 2.2 / frame and a human TIE squadron; the
+  orders were given with the game paused) [M]. Guard on the moving G at about F 2780: the squadron reacted
+  (F 2850) but did **not** follow. It held at about 0.2–0.3 / frame near (270, −660) while G's route took G to 264
+  of it (F 3150) and away again (836 at F 3450). Shift waypoint at about F 3450: the squadron left at 5.1–5.4 /
+  frame between F 3510 and F 3600 and stopped at the waypoint (F 3900), **while G was still moving** (G stopped at
+  F 4350). So the waypoint did not wait for G to stop, against B 3's prediction. B 3's "follow while G moves" was
+  not observed at all, though: a guard given to a moving G becomes a hold, as in the t12 run. Pair 1 of that run
+  is void (the clicks missed G and became move orders). The kit's t02 verdicts say `NO_DEPARTURE` for both pairs;
+  the trace above is the reading. In the first s78g run (`out/20261105-073814`) G never moved (the probe's Lua
+  used `math`, which the retail free-store Lua lacks): with G stationary, guard plus a queued shift waypoint
+  kept the squadron within 40–120 of G for the whole 4500 frames. The waypoint was never taken, unlike the
+  t09 G2 control, where the waypoint was given with no guard pending.
+- **s78g t05, escorts after the carrier dies** (`out/20261105-073814`, ESCORT, 18 escorts given
+  `Prevent_AI_Usage`) [M]. At the carrier's death (F 5706) all 18 escorts took one pre-existing object (obj
+  67593; the reader did not describe it) and flew about 1700 from the death point. About 600 frames later they
+  came back and stayed 630–700 from it to the end. They never engaged the intruder spawned 700 from the death
+  point (closest escort 1214). So they returned toward the guarded point (E / F) but kept a wide hold.
 
 ---
 

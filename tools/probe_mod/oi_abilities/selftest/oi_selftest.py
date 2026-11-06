@@ -103,6 +103,11 @@ function Spawn_Unit(t, where, player)
 	if where.Get_Position then x, y, z = where.Get_Position().Get_XYZ() else x, y, z = where.Get_XYZ() end
 	return { make_obj(t.name, x, y, z, player) }
 end
+H.generic = 0
+function Create_Generic_Object(t, where, player)
+	H.generic = H.generic + 1
+	return Spawn_Unit(t, where, player)[1]
+end
 
 -- one engine frame: ability state; Han's stun kills a MAL standing at a water point (z == 0) 2 frames later
 function H.frame()
@@ -128,8 +133,10 @@ end
 
 DRIVER = r'''
 dofile(H_SCRIPT)
-PlayerObject = make_player(0, H_FACTION)
+-- Retail runs Base_Definitions before it sets PlayerObject (OI probe run 2026-11-04): the hook must arm later.
+PlayerObject = nil
 Base_Definitions()
+PlayerObject = make_player(0, H_FACTION)
 local unit = make_obj("REBEL_TANK", 2000, 2000, 10, PlayerObject)
 On_Unit_Added(unit)
 local co = coroutine.create(main)
@@ -211,12 +218,12 @@ def main():
     check(all(b < 128 for b in data), 'hooked script is ASCII', fails)
     if not cfg['points_ok']:
         print('  note: no readable map; the harness then spawns at the AI unit and the water checks are skipped')
-    frames = 450 + 3 * 903 + 603 + 903 + 603 + 453 + 900  # + 900: two 20 s services after DONE
+    frames = 450 + 3 * 1303 + 603 + 903 + 603 + 453 + 900  # + 900: two 20 s services after DONE
     rc, recs, state, text = run_lua(script.replace('\\', '/'), 'REBEL', frames, 'rebel')
     check(rc == 0 and 'RESUME_ERROR' not in text and 'error' not in text.lower().replace('call=error', ''),
           'run A (REBEL) ran under Lua 5.0.2 (rc=%d)' % rc, fails)
     kinds = [kind(r) for r in recs]
-    want = {'LOAD', 'ARM', 'TICK', 'HB', 'VICTIMS', 'SCN', 'SPAWN', 'SETUP', 'WATER', 'ACT', 'APIERR', 'FIRED', 'ORDER',
+    want = {'LOAD', 'ARM', 'TICK', 'HB', 'VICTIMS', 'SCN', 'SPAWN', 'SETUP', 'WATER', 'MALPOS', 'ACT', 'APIERR', 'FIRED', 'ORDER',
             'P', 'DONE'}
     check(want <= set(kinds), 'record kinds %s (missing %s)' % (sorted(set(kinds)), sorted(want - set(kinds))), fails)
     check('ERR' not in kinds and 'SKIP' not in kinds, 'no ERR / SKIP record', fails)
@@ -251,8 +258,13 @@ def main():
           len(mal_acts) == 6, 'stun attempts go on after the failure: %s' % mal_acts, fails)
     fired = [field(r, 'scn') for r in recs if kind(r) == 'FIRED']
     check(fired == ['MAL_LAND', 'MAL_SHALLOW', 'MAL_DEEP', 'GRENADE', 'BERSERKER'], 'FIRED in %s' % fired, fails)
-    orders = [r for r in recs if kind(r) == 'ORDER' and field(r, 'scn') == 'MAL_LAND']
-    check(len(orders) == 3, 'MAL_LAND move orders after the stun: %d' % len(orders), fails)
+    orders = [field(r, 'order') for r in recs if kind(r) == 'ORDER' and field(r, 'scn') == 'MAL_LAND']
+    check(orders == ['move_to_han'] * 3,
+          'MAL_LAND placed at its point (no drive order), then 3 move orders after the stun: %s' % orders, fails)
+    gen = [field(r, 'how') for r in recs if kind(r) == 'SPAWN' and field(r, 'tag') == 'mal']
+    check(gen == ['cfg+generic'] * 3, 'MALs placed with Create_Generic_Object: %s' % gen, fails)
+    malpos = [field(r, 'scn') for r in recs if kind(r) == 'MALPOS']
+    check(malpos == ['MAL_LAND', 'MAL_SHALLOW', 'MAL_DEEP'], 'MALPOS before each Han spawn: %s' % malpos, fails)
     check('service_rate=20' in state and 'done=true' in state and 'on=false' in state,
           'after DONE: %s' % state, fails)
     m = re.search(r'fss=(\d+) ous=(\d+)', state)

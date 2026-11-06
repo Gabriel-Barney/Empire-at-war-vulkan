@@ -22,7 +22,8 @@
 // outputs only and never draw from the RNG; every synced draw happens in a serial phase, in a fixed
 // order, so results are identical for any worker count:
 //   A  modifiers   [parallel per unit] purge expired object entries (player sets serially first),
-//                  refresh the reduced-value cache and the Mod_Multiplier products; [serial] squad min.
+//                  refresh the reduced-value cache and the Mod_Multiplier products (every unit keeps its own;
+//                  the squad value is team_mod_multiplier, s78h t03); [serial] team heads and team slots.
 //   B  upkeep      [serial] delayed-damage countdowns (queue order); [parallel per unit] shield
 //                  regeneration, hull <-> hardpoint 0.2 coupling.
 //   C  gather      [parallel per unit due a target scan] tree queries per enemy player (cube of
@@ -32,6 +33,11 @@
 //                  reschedule draw, start-player draw, per-candidate aim-point draws, selection rule
 //                  2.4; then each weapon hardpoint in HardPoints order (Update_Weapon / Fire_At:
 //                  muzzle, lead, inaccuracy, spawn, recharge draws), then the non-hardpoint weapon.
+//                  s78h t06: a land team's TeamTargeting (its head's decide + team_targeting_service)
+//                  runs once per tick at the team's container slot, just before the team's highest
+//                  phase-A index in this walk (even if that unit died earlier in the walk), on the
+//                  team's current live head (the heir after an in-tick hand-over); the head's own
+//                  slot runs no targeting.
 //   E  sweep       [parallel per projectile] segment ray queries against every hostile player tree;
 //                  first hit by (t, object id) among units alive at the start of the phase.
 //   F  commit      [serial, projectile serial order] re-sweep if the victim died this phase, hit
@@ -453,11 +459,18 @@ struct UnitDesc {
     std::vector<std::pair<float, int32_t>> damage_alternates;
     // ---- s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states, slots 47 / 48 and team copies") ----
     // Max_Rate_Of_Turn (type +0x38c, degrees per frame): slot 48's tolerance = this x Object_Max_Speed_Multiplier_Land / 2
-    // (0.01 when that is >= 90) and the [port] turn step. <= 0: [port] slot 48 is never true.
+    // (0.01 when that is >= 90) and the turn request's step (vf +0x2e8 -> Walk 0x620710: one clamp(error, +-R) yaw step
+    // per service, applied at once; s78f t08 [H]). Per service, no frame-time scaling. <= 0: [port] slot 48 is never true
+    // (retail: tolerance 0, so only an exact facing counts; the type default is 2.3).
     float turn_rate = 0.0f;
     bool auto_deploys = false;                    // Auto_Deploys (+0xd0)
     bool must_face_target_when_deployed = false;  // Must_Face_Target_To_Attack_When_Deployed (+0xa6)
     bool stationary_when_attacking = false;       // Is_Stationary_When_Attacking (+0x26): no state 4 while moving
+    // s78f t08: Should_Attacker_Hold_Fire_For_Special_Ability (+0x9e) - an attacker whose pending ability targets this
+    // type drops from state 4 to 2 (the services' hold-fire rule). Should_Cause_Limited_Turrets_To_Turn (+0x80) - a
+    // TURRET unit that cannot aim at this type (beyond its rotate extent) turns its body instead of dropping it.
+    bool hold_fire_for_special_ability = false;
+    bool limited_turrets_turn = false;
     float max_dist_walk_while_deployed = 0.0f;    // Max_Dist_Walk_While_Deployed (+0x23b0): > 0 keeps an out-of-range target
     // ---- s78f t04 (LOB_SOLVER §3.6 "Charge-up aim"): the TURRET of a LOBBING_SUPERWEAPON unit (combat-side slew) ----
     // Turret_Rotate_Speed (+0x5a8, degrees per service; <= 0: [port] the aim is reached at once), the undeployed
@@ -675,9 +688,27 @@ public:
     // vector) for the host's locomotor (serial phase D). Default: nothing.
     virtual void facing_set(ObjectId /*id*/, Vec3 /*facing*/) {}
     // The unit's TURRET aim toward its current target (0x631cc0 / 0x632050) as the host models it: 1 the angles are
-    // reached, 0 still slewing, -1 not modelled (or the target is outside the extents) - [port] treated as reached.
-    // Serial phase D. Default: -1.
+    // reached, 0 still slewing, -2 cannot aim (the aim yaw is beyond the rotate extent: 0x631cc0 false), -1 not modelled
+    // or not aiming - [port] treated as reached. Serial phase D. Default: -1.
     virtual int8_t turret_aim_state(ObjectId /*id*/) const { return -1; }
+    // ---- s78f t08 (TACTICAL_COMBAT §3.1.1 "s78f t08 answers") ----
+    // The unit's pending targeted ability (TD +0x148, written only by slot 38 0x5688f0: an Order_Attack with an ability
+    // CRC, or the autofire driver's pick): its target while one waits for range, else kNoObject. Read-only (serial
+    // phase D). Default: none.
+    virtual ObjectId pending_ability_target(ObjectId /*id*/) const { return kNoObject; }
+    // The deploy request 0x391260 (Walk vf +0x118(1): the Deploy transition) from the targeting service's auto-deploy
+    // check 0x568e60 or slot 47's Auto_Deploys branch. The host refuses it without Deploys, a Walk locomotor or while a
+    // deploy is pending. Serial phase D. Default: nothing.
+    virtual void request_deploy(ObjectId /*id*/, uint32_t /*frame*/) {}
+};
+
+// s78f t08: signal 0x1E (slot 31 entering targeting state 4 the first time) - its only listener is the AI task force
+// (TaskForceClass::Add_Force 0x5f9a90 -> 0x5fe5d0 case 0x1E: task-force Lua event 12 Target_In_Range(unit, target),
+// raised synchronously). `unit` = the object the signal is raised on (a team member's: its container), `target` = the
+// formation attack target when it has one, else the current target.
+struct AttackStateEvent {
+    ObjectId unit = kNoObject;
+    ObjectId target = kNoObject;
 };
 
 // Unit flags (subset of the original's +0x3a0..+0x3b4 bytes).
@@ -751,6 +782,9 @@ struct UnitSpawn {
     Vec3 facing{1.0f, 0.0f, 0.0f};
     uint32_t team = 0;              // squad / team container (0 = none)
     bool team_leader = false;       // Mod_Multiplier squad-minimum rule
+    // s78g t06 (TACTICAL_COMBAT §3.6 step 2): the team the Take_Damage redirect / share rules count when `team` is 0 (a
+    // space squadron member: its team takes no other combat team rule in this port). 0 = `team`.
+    uint32_t damage_team = 0;
     ObjectId damage_parent = kNoObject;  // parent container that takes this unit's damage [M]
     float health_fraction = 1.0f;
     uint32_t flags = 0;
@@ -1054,6 +1088,8 @@ public:
     // True for a live LOBBING_SUPERWEAPON unit with an own weapon (the units order_fire_at_position accepts).
     bool fires_at_position(ObjectId id) const;
     std::span<const LobEvent> lob_events() const { return lob_events_; }  // S8 t30: this tick's (cleared at tick start)
+    // s78f t08: this tick's signal 0x1E raises (AttackStateEvent), in service order (cleared at tick start).
+    std::span<const AttackStateEvent> attack_state_events() const { return attack_events_; }
     // ---- L1 systems ----
     // A host-launched projectile (ProjectileLaunch). Max travel = the 3-D distance to the aim point (+ the target's
     // radius for a unit target), so a point shot detonates at the point (expiry: area damage / ion stun). It is
@@ -1305,6 +1341,15 @@ public:
     // start of each tick and on demand when stale.
     float modifier(ObjectId id, ModList list);
     float mod_multiplier(ObjectId id, ModKind kind);
+    // s78h t03 (TACTICAL_COMBAT §4.4 "Who the squad leader is"): the value 0x398010 returns for a TEAM container, keyed
+    // by the container id (`damage_team`: `team` on land, the squadron id in space). The container's own product when
+    // that is != 1 (only when the container is a combat unit; the port's containers have no abilities, so 1.0), else
+    // the minimum over ALL live members' own products (the team_leader stand-in and 1.0-valued members included), 1.0
+    // when the team has no live member. Only container-level readers use it (a team locomotor's SPEED [M]); every
+    // per-unit reader (mod_multiplier, weapons, shields, damage) reads the unit's own product. Caller (s78k t03): the
+    // host's speed factors pass this SPEED value as the container's factor of the movement layer's team locomotor cap
+    // (land teams and space squadrons; MovementSystem::set_team). Pure function of the current state.
+    float team_mod_multiplier(uint32_t team, ModKind kind) const;
     float attack_range(ObjectId id);  // Get_Max_Attack_Range
     void set_health(ObjectId id, float h);
     void set_shield(ObjectId id, float s);
@@ -1353,6 +1398,7 @@ private:
         int32_t owner = -1;
         uint32_t team = 0;
         uint8_t team_leader = 0;
+        uint32_t damage_team = 0;  // s78g t06: Take_Damage step 2's team (= team, or UnitSpawn::damage_team); not hashed
         ObjectId damage_parent = kNoObject;
         uint32_t flags = 0;
         Vec3 pos, last_pos, facing;
@@ -1436,8 +1482,7 @@ private:
         uint32_t mod_ver = 0, player_ver = 0;
         uint8_t mod_valid = 0;
         std::array<float, kModKindCount> own_mult{};
-        std::array<float, kModKindCount> mult{};
-        uint16_t squad_seen = 0;
+        std::array<float, kModKindCount> mult{};  // s78h t03: = own_mult (a member never takes the squad value)
         uint8_t needs_scan = 0;  // phase C output
         uint8_t scan_due = 0;
         ObjectId share_group = kNoObject;  // S8 t17: squadron of the shared team target (host, per tick)
@@ -1580,6 +1625,9 @@ private:
     // OI tactical (team targeting, TACTICAL_COMBAT 2.3 / 2.4): the unit's squad "container" - the unit whose id is
     // its team id when that is a combat unit, else the team's team_leader member; nullptr when none / itself.
     const Unit* team_head(const Unit& u) const;
+    // s78g t06: a dying team_leader hands the head role (and the team's targeting record) to its team's first live
+    // member at once, so the team is never without a head while a member lives (the original's head is the container).
+    void hand_over_team(const Unit& dead);
     float target_extent(const Unit& t, Vec3 from) const;  // OI tactical: TACTICAL_GAPS 3.1 footprint half-extent E
     // TACTICAL_GAPS 3.1 slot 43 range geometry: XY distance from `from` to the aim point and the slack E.
     void range_geometry(const Unit& t, Vec3 from, float& d, float& E) const;
@@ -1619,8 +1667,17 @@ private:
     bool needs_turn_to(const Unit& u, const Unit& t) const;  // slot 48 0x568230
     float turn_step(const Unit& u) const;                    // 0x372560: Max_Rate_Of_Turn x the land multiplier
     void face_toward(Unit& u, Vec3 p, float max_step);      // snap (max_step < 0) or [port] turn step; facing_set hook
-    void attack_idle(Unit& u, bool arg, uint32_t frame, SimRng& rng);  // slot 47
+    void attack_idle(Unit& u, bool arg, uint32_t frame, SimRng& rng, bool ordered);  // slot 47 (ordered: TD +0xf4)
+    bool auto_deploy_check(const Unit& u, ObjectId target) const;  // s78f t08: 0x568e60
+    void hold_fire(Unit& u, ObjectId target);                      // s78f t08: the services' last rule
+    ObjectId container_or_self(ObjectId id) const;                 // s78f t08: a team member -> its container
     const Unit* land_team_head(const Unit& u) const;  // s78f t03: the head of a land team member (no TARGETING of its own)
+    Unit* team_head_of(uint32_t team);  // s78h t06: a team's current live head (container unit, else team_leader), or null
+    // s78i t03: the head of u's land team, u itself when u is that head (the container unit, or the team_leader stand-in,
+    // members or not); null outside a land team. A team keeps TeamTargeting while its head lives, even with no member left.
+    const Unit* land_team_lead(const Unit& u) const;
+    uint32_t convert_container(const Unit& v) const;  // s78i t04: v's 0x39b1a0 team container id (v's own when it is one), else 0
+    bool targeting_idle(const Unit& u, uint32_t frame) const;  // phase D: stunned, unpowered or targeting suspended
     void drop_target(Unit& u);                        // slot 27: the order and scan targets are dropped
     bool lob_turret_aim(Unit& u);                     // s78f t04: 0x631fe0 toward the lobbing order's point (one slew step)
     int32_t model_alt_of(const Unit& u) const;
@@ -1721,6 +1778,7 @@ private:
     std::vector<HitEvent> hit_events_;  // S10-int
     std::vector<ShotEvent> shot_events_;  // OI fog
     std::vector<LobEvent> lob_events_;    // S8 t30
+    std::vector<AttackStateEvent> attack_events_;  // s78f t08 (signal 0x1E)
     // ---- OI abilities ----
     std::vector<SurvivorEvent> survivor_events_;
     std::vector<std::pair<int32_t, ObjectId>> base_power_;  // (player, source), insertion order
@@ -1750,6 +1808,14 @@ private:
     std::vector<std::pair<uint32_t, uint32_t>> leaders_;  // (team, unit index) scratch
     std::vector<std::pair<uint32_t, ObjectId>> team_heads_;  // OI tactical: (team, team_leader id), built in phase A
     std::vector<ObjectId> land_heads_;  // s78f t03: ground team heads (TeamTargeting), phase A scratch read in phase D
+    // s78h t06: one TeamTargeting service per land team per tick at the team's container slot = the team's highest unit
+    // index (head included), reached first in phase D's descending walk. Built in phase A, slot descending (ties: team).
+    struct LandTeamSlot {
+        uint32_t slot = 0;     // units_ index the service runs just before
+        uint32_t team = 0;
+        uint8_t serviced = 0;  // serviced this tick
+    };
+    std::vector<LandTeamSlot> land_teams_;
     std::vector<float> dim_x_, dim_y_, dim_y2_;              // OI tactical: diminishing-firepower spline (sorted)
     uint32_t next_serial_ = 1;
     uint32_t frame_ = 0;

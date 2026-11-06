@@ -330,11 +330,13 @@ float ability_product(const UnitAbilityDesc* const abilities[2], const bool acti
 }
 
 float squad_multiplier(float own, std::span<const float> members) {
+    // s78h t03 (TACTICAL_COMBAT §4.4 "Who the squad leader is"): the container's own product when != 1, else the
+    // minimum over every member (list order, kept with <= from 1e18); no member leaves the container's 1.0.
     if (own != 1.0f || members.empty()) return own;
-    float best = members[0];
-    for (size_t i = 1; i < members.size(); ++i)
-        if (members[i] < best) best = members[i];
-    return best;
+    float best = 1.0e18f;
+    for (const float m : members)
+        if (m <= best) best = m;
+    return own * best;
 }
 
 bool ability_flag(const UnitAbilityDesc* const abilities[2], const bool active[2], uint8_t flag) {

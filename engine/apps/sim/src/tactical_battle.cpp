@@ -47,6 +47,10 @@ Vec3 facing_of_yaw(float yaw_deg) {
 
 float yaw_of(Vec3 f) { return dmath::atan2(f.y, f.x) * (180.0f / dmath::kPiF); }
 
+// s78j t01 (TACTICAL_COMBAT §3.1.1 "Units leaving a land landing object"): 0x20acd0((0, 0, 0), O) - the level facing
+// along the unload offset O (yaw atan2(O.y, O.x); yaw 0 when O's xy are zero).
+Vec3 offset_facing(float ox, float oy) { return facing_of_yaw(ox == 0.0f && oy == 0.0f ? 0.0f : yaw_of(Vec3{ox, oy, 0.0f})); }
+
 tactical::Vec3 tv(Vec3 v) { return tactical::Vec3{v.x, v.y, v.z}; }
 Vec3 sv(tactical::Vec3 v) { return Vec3{v.x, v.y, v.z}; }
 
@@ -113,6 +117,7 @@ public:
         kind_ = kind;
     }
     anim::AnimWorld* world() const { return world_; }
+    uint64_t global_frame() const { return gframe_; }  // s78k t05: test_play_clip
     // --- R3 anim: behaviour hand-offs (SimAnimation: flinch on hits, death clip / corpse, death clones) ---
     void set_anim_mode(const GameMode* mode) { mode_ = mode; }
     void anim_hit(const tc::HitEvent& e) {
@@ -164,9 +169,11 @@ public:
     void unit_after_targeting(tc::ObjectId id, uint32_t frame, SimRng& rng) override { a_->unit_after_targeting(id, frame, rng); }
     // s78f t03 (TACTICAL_COMBAT §3.1.1 "Slot 47"): the attack-idle pose 0x569400 - clip 6 Attack Idle, index 0, looping,
     // speed 1, blend = one synced Get_Float(0.2, 0.75), when (arg 0 or Locomotor_Has_Animation_Priority clear), the
-    // locomotor is not moving and the current clip is not a flinch (79-86), Attack (5) or Attack Idle (6). The draw is
-    // spent whether or not the model has the clip (the blend is the call's argument). [M] The animation gate 0x397040 is
-    // read as false. Without an animation world nothing is played or drawn [port].
+    // locomotor is not moving, the current clip is not a flinch (79-86) and not Attack (5) / Attack Idle (6) - one
+    // short-circuit conjunction, so while clip 5 / 6 plays nothing is drawn or restarted (s78j t02 [H], reverting s78i
+    // t01). The draw is spent whether or not the model has the clip (the blend is the call's argument; a model without
+    // clip 6 keeps its old clip and draws every service). [M] The animation gate 0x397040 is read as false. Without an
+    // animation world nothing is played or drawn [port].
     void attack_idle(tc::ObjectId id, bool arg, uint32_t frame, SimRng& rng) override {
         (void)frame;
 #ifdef ALAMO_SIM_HAVE_ANIM
@@ -180,12 +187,16 @@ public:
                 return;
         }
         const int32_t cur = world_->current_type(id);
-        if (anim::is_flinch(cur) || cur == anim::kAnimAttack || cur == anim::kAnimAttackIdle) return;
+        if (anim::is_flinch(cur)) return;
+        // s78j t02 (TACTICAL_COMBAT §3.1.1 "Order of the tests" [H]): the clip test comes before the draw. (The s78i t01
+        // probe IDLE47N never ran slot 47: Prevent_All_Fire suspends TARGETING / WEAPON.)
+        if (cur == anim::kAnimAttack || cur == anim::kAnimAttackIdle) return;
+        const float blend = rng.range_float(0.2f, 0.75f);
         anim::PlayRequest r;
         r.type = anim::kAnimAttackIdle;
         r.index = 0;
         r.loop = true;
-        r.blend_seconds = rng.range_float(0.2f, 0.75f);
+        r.blend_seconds = blend;
         r.speed = 1.0f;
         world_->play(id, r, &rng, gframe_);
 #else
@@ -197,11 +208,19 @@ public:
     void facing_set(tc::ObjectId id, tactical::Vec3 f) override {
         if (b_->movement_ && b_->movement_->has_unit(id)) b_->movement_->snap_yaw(id, dmath::atan2(f.y, f.x) * (180.0f / dmath::kPiF));
     }
-    // s78f t03: the TURRET aim of a Deploys turret unit (MovementSystem S8 t24 model, one frame behind the combat target);
-    // other turrets are not modelled (-1: treated as aimed).
+    // s78f t03 / t08: the TURRET aim of a land turret unit (MovementSystem S8 t24 model, one frame behind the combat
+    // target; -2 beyond the rotate extent); units without the model (no movement unit, space) answer -1 (treated as aimed).
     int8_t turret_aim_state(tc::ObjectId id) const override {
         if (!b_->movement_ || !b_->movement_->has_unit(id)) return -1;
         return b_->movement_->view(id).turret_aim;
+    }
+    // s78f t08: the pending targeted ability (TD +0x148: AbilitySystem's pending order) and the deploy request 0x391260
+    // (the Walk locomotor's Deploy(true), as the DEPLOY ability's; the change reaches the abilities through oi_deploy_sync).
+    tc::ObjectId pending_ability_target(tc::ObjectId id) const override {
+        return b_->abilities_ ? b_->abilities_->pending_target(id) : tc::kNoObject;
+    }
+    void request_deploy(tc::ObjectId id, uint32_t frame) override {
+        if (b_->movement_ && b_->movement_->has_unit(id)) (void)b_->movement_->deploy(id, true, frame);
     }
     bool shot_allowed(tc::ObjectId shooter, tc::ObjectId target, int32_t target_hp, int32_t& projectile) override {
 #ifdef ALAMO_SIM_HAVE_ANIM
@@ -966,6 +985,14 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32
         md.locomotor = mv::locomotor_kind_from_type(types, t, space_ ? mv::MoveMode::Space : mv::MoveMode::Land);  // REMAINING_GAPS §4.3-4.7
         Vec3 pos;
         Vec3 face = facing_[side];
+        // s78i t02 (TACTICAL_COMBAT §3.1.1 "other spawns"): a reserve drop (0x2b5fe0 land / 0x2bf2d0 space) gives every
+        // object it creates the owner's entry-facing record (mode +0x288; yaw 0 when unset). A landing object's company
+        // takes the per-member unload facing of drop_face_ (s78j t01).
+        if (P.reserve && !range && !deploy_unload_) {
+            const Vec3 df = side < 2 ? drop_facing_[side] : Vec3{};  // as spawn_landing: the participant's side record
+            face = df.x == 0.0f && df.y == 0.0f ? facing_of_yaw(0.0f) : df;
+        }
+        if (mk < drop_face_.size()) face = drop_face_[mk];
         const bool lead_sw = space_ && bt_have_ds_ && !P.reserve && bt_lead_ == objects::kNoObjectId && bt_is_super_weapon(t);
         if (spot < P.spots.size()) {  // §3.2: the marker chosen for the starbase / structure / step-3 type
             pos = P.spots[spot].first;
@@ -1080,6 +1107,18 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32
         cs.owner = P.owner;
         cs.position = tv(mode.primary().position(u.h));
         cs.facing = tv(mode.primary().facing(u.h));
+        // s78f t07 (TACTICAL_COMBAT §3.1.1 "Team targeting copies"): a land team member joins combat with its team (the
+        // container's object id); the chunk's first member (list order, the lowest id, as slot 31's 0x4ec820) is the
+        // team_leader standing in for the container, which is no combat unit here. This runs the TeamTargeting copy,
+        // team scoring and the Take_Damage redirect / share and convert team rules. [port] Space squadrons keep their
+        // FIGHTER_FLYING §4.10 B shared target and are not registered (no space team targeting service).
+        if (!space_ && u.container != kNoContainer) {
+            cs.team = static_cast<uint32_t>(containers_[u.container].id);
+            cs.team_leader = i == first || units_[i - 1].container != u.container;
+        }
+        // s78g t06 (TACTICAL_COMBAT §3.6 step 2, no mode gate): a space squadron member still counts in its squadron for
+        // the Take_Damage redirect / share rules (vanilla Luke_XWing in Red Squadron, TIE_Prototype in Vader's squadron).
+        if (space_ && u.container != kNoContainer) cs.damage_team = static_cast<uint32_t>(containers_[u.container].id);
         abilities_->add_unit(cs, cs.desc, frame_, rng, u.container != kNoContainer ? containers_[u.container].id : tc::kNoObject);
         hg_adopt(u, rng);  // hangars: engine mode enter, SPAWN_SQUADRON add_carrier (attach order)
         u.range = combat_->attack_range(u.id);
@@ -1335,7 +1374,9 @@ void TacticalBattle::exec_move(TacticalMode& mode, std::span<const objects::Obje
     const tactical::Aabb& bb = mode.bounds();
     mv::MoveOrder o;
     o.units.assign(ids.begin(), ids.end());
-    o.flags = flags;  // P1_DOUBLE_CLICK_MOVE.md §3.2: the event flags, unchanged
+    // P1_DOUBLE_CLICK_MOVE.md §3.2: the event flags, unchanged; s78f t10: plus the attack-move bit, as the queued path and
+    // the host's formation record (fighter_order below) carry it, so the fighter leash reads the same block.
+    o.flags = static_cast<uint8_t>(flags | (attack_move ? mv::kMoveFlagAttackMove : 0));
     o.switch_locomotor = switch_locomotor;  // S7 t10: MoveToPosition's 1-bit (MOVEMENT §6.2)
     o.destination = {std::clamp(x, bb.min.x, bb.max.x), std::clamp(y, bb.min.y, bb.max.y)};
     if (std::isfinite(facing_deg)) o.facing_deg = facing_deg;
@@ -1682,7 +1723,20 @@ cmd::RejectReason TacticalBattle::order_reinforce(TacticalMode& mode, uint8_t pl
                             snap_passable(Vec3{lay.group_x[g], lay.group_y[g], 0.0f}, movement_->classes().mask(md.movement_class), false));
                         m += shape.create_team ? std::min<size_t>(std::max<uint32_t>(shape.squad, 1u), lay.slots.size()) : 1u;
                     }
+                    // s78j t01 (TACTICAL_COMBAT §3.1.1 "Units leaving a land landing object") [H], the untimed unload
+                    // placing everything at once: team step j faces along its offset O_j (the layout's, before the
+                    // passable-cell snap) from the landing centre, step 0 the landing's facing; a vehicle placed at its
+                    // slot ends on the landing's facing (0x3a8710).
+                    const Vec3 psi = mode.primary().facing(landing.h);
+                    drop_face_.assign(lay.slots.size(), psi);
+                    if (shape.create_team) {
+                        const size_t k = std::min<size_t>(std::max<uint32_t>(shape.squad, 1u), lay.slots.size());
+                        for (size_t g = 1, m = k; g < lay.group_x.size() && m < lay.slots.size(); ++g, m += k)
+                            for (size_t q = m; q < std::min(m + k, lay.slots.size()); ++q)
+                                drop_face_[q] = offset_facing(lay.group_x[g] - x, lay.group_y[g] - y);
+                    }
                     if (cfg_.landing_unload_timed) {
+                        drop_face_.clear();  // landing_service picks the facings step by step
                         // §35.2: the company stays inside; landing_service runs the state machine. The reserve leaves the
                         // pool now (deployed), its members spawn step by step.
                         landing.timed = true;
@@ -1696,8 +1750,11 @@ cmd::RejectReason TacticalBattle::order_reinforce(TacticalMode& mode, uint8_t pl
                     for (const LandDropSlot& s : lay.slots) drop_pos_.push_back(Vec3{s.x, s.y, 0.0f});
                 }
                 const size_t first = units_.size();
+                deploy_unload_ = landing.id != objects::kNoObjectId;
                 deploy(mode, i, rng);
+                deploy_unload_ = false;
                 drop_pos_.clear();
+                drop_face_.clear();
                 if (landing.id != objects::kNoObjectId) {
                     // [port] Every unload step runs at the order (the tactical AI takes the units at once, §35.3): the
                     // signal 0x19 record is posted now; the landing object stays for the steps' timers, then leaves.
@@ -2007,6 +2064,15 @@ float TacticalBattle::drop_yaw(uint8_t side) const {
     return f.x == 0.0f && f.y == 0.0f ? 0.0f : yaw_of(f);
 }
 
+Vec3 TacticalBattle::player_drop_facing(int32_t player) const {
+    for (uint8_t side = 0; side < 2; ++side) {
+        if (side_player(side) != player) continue;
+        const Vec3 f = drop_facing_[side];
+        return f.x == 0.0f && f.y == 0.0f ? facing_of_yaw(0.0f) : f;
+    }
+    return facing_of_yaw(0.0f);  // a third player: no record written (yaw 0)
+}
+
 // a1i t04 (A1_READINGS §35.1 / §35.3): the landing object of a land reserve drop. L = the company's
 // Company_Transport_Unit[0], then its Landing_Transport_Variant when set; none -> no landing object (kNoObjectId). Created
 // at (x, y), z = terrain + L's Hover_Offset [the +0xd8 vehicle-height term is [M]], facing = the side's entry-facing
@@ -2143,10 +2209,24 @@ void TacticalBattle::landing_service(TacticalMode& mode, SimRng& rng) {
         const uint32_t cnt = members[i] < types.size() && types.get_bool(members[i], "Create_Team") ? std::min(k, n - i) : 1u;
         const Vec3 at = store.position(l.h);
         drop_pos_.assign(n, Vec3{at.x, at.y, 0.0f});
+        // s78j t01 (TACTICAL_COMBAT §3.1.1 "Units leaving a land landing object") [H]: step j's units are created at the
+        // landing centre facing along the step's offset O_j (0x20acd0((0, 0, 0), O_j)); a team's step 0 takes the
+        // landing's own facing instead (vehicles have no step-0 override). O_j = the unload layout's step offset before the
+        // passable-cell snap, rebuilt here from the landing position and the side's drop yaw (as order_reinforce built it).
+        const Vec3 psi = store.facing(l.h);
+        const bool team = cnt > 1 || (members[i] < types.size() && types.get_bool(members[i], "Create_Team"));
+        {
+            const LandDropLayout lay = land_drop_layout(land_drop_shape(P.type), at.x, at.y, drop_yaw(P.side), 3.0f);
+            const uint32_t j = l.next_offset;
+            Vec3 f = psi;
+            if (lay.ok && j < lay.group_x.size() && !(team && j == 0)) f = offset_facing(lay.group_x[j] - at.x, lay.group_y[j] - at.y);
+            drop_face_.assign(n, f);
+        }
         const size_t first = units_.size();
         const uint32_t pi = l.participant;  // deploy may grow parts_-held state; keep the index
         deploy(mode, pi, rng, i, cnt);
         drop_pos_.clear();
+        drop_face_.clear();
         Landing& lr = landings_[li];
         mv::MoveOrder o;
         for (size_t u = first; u < units_.size(); ++u) {
@@ -2155,6 +2235,12 @@ void TacticalBattle::landing_service(TacticalMode& mode, SimRng& rng) {
         }
         if (!o.units.empty() && lr.next_offset < lr.targets.size()) {
             o.destination = {lr.targets[lr.next_offset].x, lr.targets[lr.next_offset].y};
+            // s78k t01 (TACTICAL_COMBAT §3.1.1 "Units leaving a land landing object", MOVEMENT §6.1 / §3.5.1) [H]: the exit
+            // move has flags 0x20 (a straight 2-point path without passability checks); a vehicle's block carries the
+            // landing's yaw as its final facing (+0x5c = 1), so it turns to psi on arrival when more than 10 degrees off;
+            // a team's block has none (+0x5c = 0) and keeps its travel heading.
+            o.flags = mv::kMoveFlagSkipValidation;
+            if (!team) o.final_facing_deg = yaw_of(psi);
             movement_->move(o, rng, frame_);
             ++stats_.orders;
         }
@@ -2694,6 +2780,23 @@ bool TacticalBattle::victory_relevant(uint32_t type) {
 void TacticalBattle::apply_speed_factors() {
     // MOVEMENT 3.4 items 4, 5, 7 (product order: Mod_Multiplier, engines, list 5) [port: one factor].
     const float engines = catalog_->engines_disabled_speed_modifier();
+    // s78k t03 (TACTICAL_COMBAT §4.4 "Who the squad leader is", MOVEMENT §3.4 / §3.7, FIGHTER_FLYING §4.11 item 4): a TEAM
+    // container's locomotor runs at the container's effective max speed - the minimum member Max_Speed (0x4049e0) x the
+    // container's factors, whose SPEED Mod_Multiplier is the squad value 0x398010 returns for the container
+    // (team_mod_multiplier, keyed by the container id: land teams and space squadrons alike, no mode gate). [port] The
+    // container has no mover, so the movement layer applies it (set_team): a land member walks at most at that speed, a
+    // squadron's formation speed is that speed. Every member keeps its own product for item 4 (a member never takes the
+    // squad value; this replaces s78j t03's stand-in that gave members the team value). The container's engines / list 5
+    // are not modelled (the port's containers take neither), so its factor is the Mod_Multiplier alone. One value per
+    // team per tick (sorted (team, value) pairs, probed only).
+    std::vector<std::pair<uint32_t, float>> team_speed;
+    const auto team_mult = [&](uint32_t team) {
+        auto it = std::lower_bound(team_speed.begin(), team_speed.end(), team,
+                                   [](const std::pair<uint32_t, float>& e, uint32_t t) { return e.first < t; });
+        if (it == team_speed.end() || it->first != team)
+            it = team_speed.insert(it, {team, combat_->team_mod_multiplier(team, tc::ModKind::Speed)});
+        return it->second;
+    };
     for (const Unit& u : units_) {
         if (!u.alive || u.retreated || !u.movable) continue;
         float f = combat_->mod_multiplier(u.id, tc::ModKind::Speed);
@@ -2704,6 +2807,16 @@ void TacticalBattle::apply_speed_factors() {
         if (combat_->stunned(u.id, frame_)) f = 0.0f;  // OI abilities: land stun suspends the locomotor (0x647290)
         movement_->set_speed_factor(u.id, f);
         movement_->set_speed_override(u.id, abilities_->speed_override(u.id));  // OI host: Berserker_Speed (-1 = none)
+        const bool in_team = u.container < containers_.size() && containers_[u.container].team && !containers_[u.container].removed;
+        const auto team = in_team ? static_cast<uint32_t>(containers_[u.container].id) : 0u;
+        // s78l t01 (MOVEMENT §3.4 "Team cap, exact"): the container type's raw Max_Speed is in the team minimum (-1: no
+        // tag / not in a team). [port] the container's further chain factors (fleeing, ...) have no host state here.
+        float cmax = -1.0f;
+        if (in_team && containers_[u.container].type < catalog_->types().size()) {
+            const auto ct = static_cast<objects::TypeIndex>(containers_[u.container].type);
+            if (!catalog_->types().get_string(ct, "Max_Speed").empty()) cmax = catalog_->types().get_float(ct, "Max_Speed");
+        }
+        movement_->set_team(u.id, in_team ? containers_[u.container].id : mv::ObjectId{-1}, in_team ? team_mult(team) : 1.0f, cmax);
     }
 }
 
@@ -3367,24 +3480,216 @@ void TacticalBattle::forward_fighter_events() {
     }
 }
 
-void TacticalBattle::drive_animation(SimRng& rng, uint64_t gframe) {
+const TacticalBattle::PresenceTypeInfo& TacticalBattle::presence_info(uint32_t type) {
+    // s78l t03: Presence_Induced_Animations entries ("<anim type>, <type>, <type>, ..."). [port] repeated tags reach the
+    // port as one flat token list, so a token naming a ModelAnimType starts the next entry.
+    if (presence_cache_.size() < catalog_->types().size()) presence_cache_.resize(catalog_->types().size());
+    static const PresenceTypeInfo kNone{};
+    if (type >= presence_cache_.size()) return kNone;
+    PresenceTypeInfo& info = presence_cache_[type];
+    if (info.parsed) return info;
+    info.parsed = true;
+#ifdef ALAMO_SIM_HAVE_ANIM
+    const objects::GameObjectTypes& ty = catalog_->types();
+    const auto t = static_cast<objects::TypeIndex>(type);
+    info.range = ty.get_float(t, "Presence_Range");
+    for (std::string_view tok : ty.get_list(t, "Presence_Induced_Animations")) {
+        while (!tok.empty() && std::isspace(static_cast<unsigned char>(tok.front()))) tok.remove_prefix(1);
+        while (!tok.empty() && std::isspace(static_cast<unsigned char>(tok.back()))) tok.remove_suffix(1);
+        if (tok.empty()) continue;
+        const int32_t a = anim::find_anim_type(tok);
+        if (a >= 0) {
+            info.anims.push_back({a, {}});
+        } else if (!info.anims.empty()) {
+            const objects::TypeIndex r = ty.resolve_name(tok);
+            if (r != objects::kNone) info.anims.back().second.push_back(static_cast<uint32_t>(r));
+        }
+    }
+#endif
+    return info;
+}
+
+void TacticalBattle::imposing_presence(objects::ObjectStore& store, const std::vector<uint8_t>& gated) {
+#ifdef ALAMO_SIM_HAVE_ANIM
+    // s78l t03 (TACTICAL_COMBAT slot 47 "s78l t03" (c), TACTICAL_GAPS 6.2): IMPOSING_PRESENCE 0x624ab0 on its interval-30
+    // schedule (the store's: first due frame drawn at the attach, TACTICAL_GAPS 6.4). Each due presence object P (alive,
+    // the behaviour enabled; death clones keep it) refreshes, for every battle unit R with IDLE inside the box of half size
+    // P's Presence_Range around P, not dying, whose type lists P's type in Presence_Induced_Animations, R's record of P to
+    // int(FPS x Unit_Presence_Relaxation_Time). Skipped for an R with a target (TARGETING, a team member: its container's;
+    // suspended or not) or that the moving gate stops. No draws; the order of the writes does not change the result.
+    const GameMode* gm = hooks_ ? hooks_->anim_mode() : nullptr;
+    if (!anim_ || !gm || &gm->primary() != &store) return;
+    const float fr = static_cast<float>(anim::kSimTicksPerSecond) * cfg_.presence_relaxation_seconds;
+    const int32_t frames = fr >= 1.0f ? (fr < 1.0e9f ? static_cast<int32_t>(fr) : 1000000000) : 0;
+    if (frames < 1) return;
+    anim::AnimBehaviors& beh = anim_->behaviors(*gm);
+    const uint32_t mf = store.mode_frame();
+    const objects::BehaviorTypeId kImposingPresence = 0x40;
+    for (const objects::ObjectHandle p : store.all_objects()) {
+        if (!store.alive(p)) continue;
+        const uint32_t bi = store.behavior_index(p, kImposingPresence);
+        if (bi == objects::kNone || !store.behavior_enabled(p, bi) || store.behavior_next_service(p, bi) > mf) continue;
+        store.set_behavior_next_service(p, bi, mf + std::max<uint32_t>(1u, store.behavior_interval(p, bi)));
+        const uint32_t pt = store.type(p);
+        const float range = presence_info(pt).range;
+        const Vec3 pp = store.position(p);
+        const objects::ObjectId pid = store.id(p);
+        for (size_t i = 0; i < units_.size(); ++i) {
+            const Unit& u = units_[i];
+            if (!u.alive || u.retreated || !store.active(u.h) || !store.has_behavior(u.h, objects::beh::Idle)) continue;
+            if (i < gated.size() && gated[i]) continue;
+            if (combat_->has_unit(u.id) && combat_->current_target(u.id) != tc::kNoObject) continue;
+            const Vec3 q = store.position(u.h);
+            if (std::fabs(q.x - pp.x) > range || std::fabs(q.y - pp.y) > range || std::fabs(q.z - pp.z) > range) continue;
+            bool listed = false;
+            for (const auto& e : presence_info(store.type(u.h)).anims)
+                listed = listed || std::find(e.second.begin(), e.second.end(), pt) != e.second.end();
+            if (listed) beh.presence_refresh(u.id, pid, frames);
+        }
+    }
+#else
+    (void)store, (void)gated;
+#endif
+}
+
+int32_t TacticalBattle::presence_pick(const objects::ObjectStore& st, int32_t unit, const anim::IdleRecord* records, size_t count) {
+#ifdef ALAMO_SIM_HAVE_ANIM
+    // The default idle type's presence step (0x395920 step 2): among the records whose object still exists the largest
+    // value wins; on <= an allied record (0x2823e0) replaces a non-allied best (ascending presence id); the idle = the
+    // first Presence_Induced_Animations entry of the unit's type listing the winner's type, else none (the plain idle).
+    const objects::ObjectHandle uh = st.find(unit);
+    if (!st.exists(uh)) return anim::kNoAnimType;
+    const int32_t uo = st.owner(uh);
+    bool have = false, best_allied = false;
+    int32_t best_frames = 0;
+    objects::TypeIndex best_type = objects::kNone;
+    for (const anim::IdleRecord& r : std::span<const anim::IdleRecord>(records, count)) {
+        const objects::ObjectHandle ph = st.find(r.presence);
+        if (!st.exists(ph)) continue;
+        const int32_t po = st.owner(ph);
+        // 0x2823e0: relation == 0 (self or Ally); a neutral (not an enemy) presence owner is not allied.
+        const bool allied = po == uo || (galaxy_ && galaxy_->allied(po, uo));
+        if (!have || r.frames > best_frames || (allied && !best_allied)) {
+            have = true;
+            best_frames = r.frames;
+            best_allied = allied;
+            best_type = st.type(ph);
+        }
+    }
+    if (!have) return anim::kNoAnimType;
+    for (const auto& e : presence_info(st.type(uh)).anims)
+        if (std::find(e.second.begin(), e.second.end(), static_cast<uint32_t>(best_type)) != e.second.end()) return e.first;
+    return anim::kNoAnimType;
+#else
+    (void)st, (void)unit, (void)records, (void)count;
+    return -1;
+#endif
+}
+
+void TacticalBattle::play_turn_clip_events(SimRng& rng, uint64_t gframe) {
+    std::vector<mv::MovementSystem::TurnClipEvent> ev = movement_->take_turn_clip_events();
+#ifdef ALAMO_SIM_HAVE_ANIM
+    // s78l t02 (MOVEMENT §3.5.1 "Arrival turn, details"), in the movement's order (ascending id): a clip event plays
+    // `anim` with index 0xFFFF (synced variant draw only when the clip has >= 2 variants), loop 0, at ev.speed, blend
+    // ev.blend when >= 0 (the locomotor caps it with its [port] constant for GC 0x140b16d28), else the clip's global ([port] the move blend tunable: the
+    // globals 0x140b398fc / 0x140b39900 are unread); an idle event plays the default idle type (slot 47: index 0,
+    // Loop_Idle_Anim_00, [port] the idle blend for 0x140b39908, speed 1) unless the unit burns.
+    anim::AnimWorld* w = hooks_ ? hooks_->world() : nullptr;
+    const GameMode* gm = hooks_ ? hooks_->anim_mode() : nullptr;
+    if (!anim_ || !w || !gm) return;
+
+    const objects::ObjectStore& st = gm->primary();
+    const anim::PresenceIdleFn presence = [this, &st](anim::ObjectId unit, std::span<const anim::IdleRecord> recs) {
+        return presence_pick(st, unit, recs.data(), recs.size());
+    };
+    for (const mv::MovementSystem::TurnClipEvent& e : ev) {
+        if (!w->contains(e.id)) continue;
+        if (e.idle) {
+            if (combat_->has_unit(e.id) && combat_->burning(e.id)) continue;
+            if (anim_->play_default_idle(*gm, e.id, gframe, &presence)) ++stats_.anim_plays;
+            continue;
+        }
+        if (e.anim < 0) continue;
+        anim::PlayRequest r;
+        r.type = e.anim;
+        r.index = anim::kRandomVariant;
+        r.loop = false;
+        r.speed = e.speed;
+        r.blend_seconds = e.blend >= 0.0f ? e.blend : w->tunables().move_blend_seconds;
+        const anim::AnimModel* m = w->model(e.id);
+        if (m && m->variant_count(e.anim) < 2) r.index = 0;  // one variant: no draw (0x1ffb40 returns at once)
+        if (w->play(e.id, r, &rng, gframe) == anim::PlayResult::Played) ++stats_.anim_plays;
+    }
+#else
+    (void)rng, (void)gframe;
+#endif
+}
+
+void TacticalBattle::drive_animation(objects::ObjectStore& store, SimRng& rng, uint64_t gframe) {
 #ifdef ALAMO_SIM_HAVE_ANIM
     // R3 anim: WalkLocomotor (0x61f840, A.7 walk / move / turn rows) and the idle behaviour (0x62e570) for battle
     // units, through SimAnimation::service_locomotor (rules in anim_behaviors.hpp); Berserker state first.
     anim::AnimWorld* w = hooks_ ? hooks_->world() : nullptr;
     const GameMode* gm = hooks_ ? hooks_->anim_mode() : nullptr;
     if (!anim_ || !w || !gm) return;
-    for (const Unit& u : units_) {
+    const objects::ObjectStore& st = gm->primary();
+    const bool land = gm->kind() == objects::ModeKind::Land;
+    // s78l t03 (a) (TACTICAL_COMBAT slot 47 "s78l t03"): the IDLE moving gate = the locomotor's vf +0x110. Walk / Bike /
+    // Fighter / SimpleSpace: a path on the stack, whatever the speed ([port] has_goal, a pushed walk, or the Walk arrival
+    // turn - UnitView::arrival_turn - which retail runs with the path still stacked: MOVEMENT 3.5.1); JetPack: state != Walk Stopped; Flying / LandBomber: [port] the goal (formation tests not
+    // modelled); a land team member on the Default locomotor (LandTeamInfantry): its container's, [port] the container
+    // follows its first live member, so that member's. No locomotor (not movable): never gated.
+    const auto own_moving = [&](const Unit&, const mv::UnitView& v) {
+        if (v.locomotor == mv::LocomotorKind::Jetpack) return v.loco_state != mv::LocoState::WalkStopped;
+        return v.has_goal || v.pushed || v.arrival_turn;  // s78l t02: the arrival turn keeps the path stacked
+    };
+    const auto team_of = [&](const Unit& u) -> uint32_t {
+        return land && u.container < containers_.size() && containers_[u.container].team && !containers_[u.container].removed
+                   ? u.container
+                   : 0xFFFFFFFFu;
+    };
+    std::vector<int8_t> head_moving(containers_.size(), -1);  // per team container: its first live member's gate
+    idle_gate_.assign(units_.size(), 0);
+    for (size_t i = 0; i < units_.size(); ++i) {
+        const Unit& u = units_[i];
+        if (!u.alive || u.retreated || !u.movable || !movement_->has_unit(u.id)) continue;
+        const mv::UnitView v = movement_->view(u.id);
+        const bool own = own_moving(u, v);
+        const uint32_t c = team_of(u);
+        if (c != 0xFFFFFFFFu && head_moving[c] < 0) head_moving[c] = own ? 1 : 0;
+        const bool moving = (c != 0xFFFFFFFFu && v.locomotor == mv::LocomotorKind::Default) ? head_moving[c] > 0 : own;
+        // Allow_Idle_When_Moving (+0x85) exempts the unit from the gate (the IDLE service and the presence writer alike).
+        idle_gate_[i] = static_cast<uint8_t>(moving && !anim_->params_for(store.type(u.h), gm->kind()).allow_idle_when_moving);
+    }
+    imposing_presence(store, idle_gate_);
+    // The default idle type's presence step (0x395920 step 2): among the records whose object still exists the largest
+    // value wins; on <= an allied record (0x2823e0) replaces a non-allied best (ascending presence id); the idle = the
+    // first Presence_Induced_Animations entry of the unit's type listing the winner's type, else none (the plain idle).
+    const anim::PresenceIdleFn presence = [this, &st](anim::ObjectId unit, std::span<const anim::IdleRecord> recs) {
+        return presence_pick(st, unit, recs.data(), recs.size());
+    };
+    for (size_t i = 0; i < units_.size(); ++i) {
+        const Unit& u = units_[i];
         if (!u.alive || u.retreated || !w->contains(u.id)) continue;
         anim_->set_berserker(*gm, u.id, abilities_->is_active(u.id, ta::kBerserker));
+        // s78k t02 (TACTICAL_COMBAT slot 47 "s78k t02", IdleBehavior 0x62e570) [H]: the IDLE service reads the TARGETING
+        // behaviour's target (a land team member: its head's) whether or not it is suspended (Prevent_All_Fire), and
+        // draws Get_Int(0, FPS) every service while one is held. current_target keeps the target while suspended.
+        const anim::IdleTarget target = !combat_->has_unit(u.id)                         ? anim::IdleTarget::None
+                                        : combat_->current_target(u.id) != tc::kNoObject ? anim::IdleTarget::Target
+                                                                                         : anim::IdleTarget::NoTarget;
+        const bool gated = idle_gate_[i] != 0;
         anim::LocomotorInput in;
         in.movable = u.movable;
+        in.on_path = gated;
+        in.target = target;
         if (u.movable) {
             const mv::UnitView v = movement_->view(u.id);
             if (v.deploy_state != mv::LocoState::None) {
                 // S8 t11 follow-up (MOVEMENT §3.2, 0x61e930): the Walk deploy states own the animation - the Deploy /
                 // Undeploy clip (synced random variant at Deployment_Anim_Rate) starts when the locomotor starts timing
                 // it; Deployed keeps the finished clip. [port] a reversed clip is drawn from its first frame.
+                // s78l t03: the IDLE deploy gate (deploying / undeploying / deployed) returns with nothing changed.
                 if (v.deploy_state != mv::LocoState::WalkDeployed && v.deploy_clip >= 0 && w->current_type(u.id) != v.deploy_clip &&
                     anim_->deploy(*gm, u.id, v.deploy_clip == static_cast<int32_t>(anim::kAnimUndeploy), rng, gframe))
                     ++stats_.anim_plays;
@@ -3396,16 +3701,22 @@ void TacticalBattle::drive_animation(SimRng& rng, uint64_t gframe) {
                     req.type = v.anim;  // variant 0, no draw; one-shot [port: the locomotor re-requests looping states]
                     if (w->play(u.id, req, nullptr, gframe) == anim::PlayResult::Played) ++stats_.anim_plays;
                 }
+                // s78l t03 (a): then the IDLE service under the same moving gate as every other locomotor.
+                if (anim_->service_idle(*gm, u.id, gated, target, rng, gframe, &presence)) ++stats_.anim_plays;
                 continue;
             }
             in.speed = v.speed;
             in.max_speed = v.max_speed;
             in.yaw_deg = v.yaw;
+            // s78l t02: the arrival turn plays its own clips (play_turn_clip_events), also on the frame it ends. The IDLE gate
+            // does not count that frame as moving: the path pops inside the locomotor (behaviour 1) before the IDLE service
+            // (behaviour 7) of the same frame (MOVEMENT 3.5.1 step 6).
+            in.host_turn = v.arrival_turn || v.arrival_turn_ended;
         }
-        stats_.anim_plays += anim_->service_locomotor(*gm, u.id, in, cfg_.walk_speed_ratio, cfg_.min_move_anim_ratio, rng, gframe);
+        stats_.anim_plays += anim_->service_locomotor(*gm, u.id, in, cfg_.walk_speed_ratio, cfg_.min_move_anim_ratio, rng, gframe, &presence);
     }
 #else
-    (void)rng, (void)gframe;
+    (void)store, (void)rng, (void)gframe;
 #endif
 }
 
@@ -3806,6 +4117,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     profile::lap("tac.pre_move");
     movement_->tick(frame_, rng, pf);
     movement_->commit(store);
+    play_turn_clip_events(rng, global_frame);  // s78l t02: the arrival turn's clip plays (synced variant draws), ascending id
     oi_deploy_sync();  // S8 t11: deploy clip ends (Is_Active, deploy flags, signal 0x29) before the combat tick
     profile::lap("tac.movement");
     fighter_enter_idle();  // S7 t22 / t25: enter_idle drops the squadrons' team targets (§4.7 step 4, §4.10 D)
@@ -3823,7 +4135,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
             mode.trees().update(static_cast<tactical::EntityHandle>(u.id), mode.bounds_of(u.h));
     mode.trees().maintain(sim_time, pf);
     profile::lap("tac.trees");
-    drive_animation(rng, global_frame);
+    drive_animation(store, rng, global_frame);
     profile::lap("tac.anim");
     // 5. combat (abilities run inside its serial phases), events.
     for (const Unit& u : units_) {
@@ -4161,6 +4473,13 @@ bool TacticalBattle::change_owner(TacticalMode& mode, objects::ObjectHandle h, i
 bool TacticalBattle::script_change_owner(TacticalMode& mode, objects::ObjectHandle h, int32_t owner) {
     objects::ObjectStore& store = mode.primary();
     if (!store.alive(h) || owner < 0) return false;
+    if (!owner_change_one(mode, h, owner)) return false;
+    team_change_owner(mode, store.id(h), owner);
+    return true;
+}
+
+bool TacticalBattle::owner_change_one(TacticalMode& mode, objects::ObjectHandle h, int32_t owner) {
+    objects::ObjectStore& store = mode.primary();
     if (change_owner(mode, h, owner)) return true;
     const objects::ObjectId id = store.id(h);
     const int32_t old_owner = store.owner(h);
@@ -4169,6 +4488,63 @@ bool TacticalBattle::script_change_owner(TacticalMode& mode, objects::ObjectHand
     fog_owner_changed(mode, h, old_owner);
     s4_owner_changed(mode, id, old_owner, owner);
     return true;
+}
+
+// s78j t04 (TACTICAL_COMBAT §3.5 "Convert and its team rule" step 4, 0x38e5a0): Change_Owner spreads through a team by
+// itself - a member calls it on its TEAM container, a container on each member in list order, and an object that already
+// has the new owner returns at once. So after `id` (a member or the container) changed, the container follows, then
+// every other live member ([port] list order = ascending id, as convert_container's spread in CombatSystem). The
+// container's record (Container::owner: loss records, replenish spawns) follows too. CombatSystem::set_owner does not
+// spread, so the host does it here for the Lua / story / AI Change_Owner paths.
+void TacticalBattle::team_change_owner(TacticalMode& mode, objects::ObjectId id, int32_t owner) {
+    objects::ObjectStore& store = mode.primary();
+    uint32_t ci = kNoContainer;
+    if (const Unit* u = unit_by_id(id)) {
+        ci = u->container;
+    } else {
+        for (size_t c = 0; c < containers_.size(); ++c)
+            if (containers_[c].id == id && !containers_[c].removed) ci = static_cast<uint32_t>(c);
+    }
+    if (ci >= containers_.size()) return;
+    Container& ct = containers_[ci];
+    ct.owner = owner;
+    if (ct.id != id && !ct.removed && store.alive(ct.h) && store.owner(ct.h) != owner) owner_change_one(mode, ct.h, owner);
+    for (size_t i = 0; i < units_.size(); ++i) {  // owner_change_one does not add or remove units
+        const Unit& m = units_[i];
+        if (m.container != ci || m.id == id || !m.alive || m.retreated || !store.alive(m.h) || store.owner(m.h) == owner) continue;
+        owner_change_one(mode, m.h, owner);
+    }
+}
+
+int32_t TacticalBattle::container_owner(objects::ObjectId id) const {
+    for (const Container& c : containers_)
+        if (c.id == id) return c.owner;
+    return -1;
+}
+
+bool TacticalBattle::test_attack_idle(objects::ObjectId id, bool arg, SimRng& rng) {
+#ifdef ALAMO_SIM_HAVE_ANIM
+    if (!hooks_ || !hooks_->world() || !hooks_->world()->contains(id)) return false;
+    hooks_->attack_idle(id, arg, frame_, rng);
+    return true;
+#else
+    (void)id, (void)arg, (void)rng;
+    return false;
+#endif
+}
+
+bool TacticalBattle::test_play_clip(objects::ObjectId id, int32_t clip_type) {
+#ifdef ALAMO_SIM_HAVE_ANIM
+    if (!hooks_ || !hooks_->world() || !hooks_->world()->contains(id)) return false;
+    anim::PlayRequest r;
+    r.type = clip_type;
+    r.index = 0;
+    r.loop = true;
+    return hooks_->world()->play(id, r, nullptr, hooks_->global_frame()) == anim::PlayResult::Played;
+#else
+    (void)id, (void)clip_type;
+    return false;
+#endif
 }
 
 // ---- reporting / CRC ----------------------------------------------------------------------------------------------

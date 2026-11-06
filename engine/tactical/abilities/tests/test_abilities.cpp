@@ -4248,6 +4248,134 @@ void test_s8_apply_facing_marker_deploy() {
     }
 }
 
+// s78l t05 (TACTICAL_COMBAT §5.4.1): Tactical_Bribe (0x5b0f70) never reads the target filter (the shipped
+// Tyber_Tactical_Bribe has no Applicable_* tags): enemy, cost Tactical_Bribe_Cost x the user's modifier > 0 (c <= 1
+// rejects), not a named hero, Friendly_Damage_Amount <= 0, no PROXIMITY_MINE, CategoryMask != 0; credits at apply. Hack
+// (0x6fd610) uses the filter 0x48e290: a listed type passes first, an empty categories mask rejects the rest.
+struct BribeRun {
+    uint32_t accepted = 0;
+    int32_t owner_after = -1;
+    size_t refused = 0, changed = 0;
+    float paid = -1.0f;
+};
+BribeRun oi_bribe(const AbilityObjectDesc& target, int32_t target_owner, uint64_t target_cats, float credits = -1.0f,
+                  bool corrupted = false) {
+    OiWorld w;
+    SpecialAbilityDesc b = oi_special("Bribe", SpecialClass::TacticalBribe, ActivationStyle::UserInput);
+    b.applicable_categories = 0;  // no Applicable_Unit_Categories / _Types (as shipped)
+    b.max_range = 1000.0f;
+    const uint32_t bs = add_special(w.ad, b);
+    AbilityObjectDesc a;
+    a.unit_abilities = {oi_gui(kTacticalBribe, 0.0f, 10.0f, "Bribe")};
+    a.specials = {bs};
+    a.bribe_modifier_uncorrupted = 1.5f;
+    a.bribe_modifier_corrupted = 3.0f;
+    const uint32_t ad = push(w.cd, w.ad, oi_unit("Tyber", 100.0f), a);
+    const uint32_t td = push(w.cd, w.ad, oi_unit("Trooper", 100.0f, 5.0f, target_cats), target);
+    w.make(GameMode::Land);
+    BribeRun out;
+    float bank = credits;
+    if (credits >= 0.0f || corrupted) {
+        AbilityHost h;
+        h.battle_planet_corrupted = [corrupted] { return corrupted; };
+        h.pay_credits = [&bank, &out](int32_t player, float cost) {
+            if (player != 0 || bank < cost) return false;
+            bank -= cost;
+            out.paid = cost;
+            return true;
+        };
+        w.ab->set_host(std::move(h));
+    }
+    w.add(1, ad, 0, {0, 0, 0});
+    w.add(2, td, target_owner, {300, 0, 0});
+    const ObjectId one[] = {1};
+    out.accepted = w.ab->targeted_ability(one, kTacticalBribe, 2, -1, w.frame);
+    for (int i = 0; i < 5; ++i) w.tick();
+    out.owner_after = w.sys->owner(2);
+    out.refused = w.count(AbilityEventKind::BribeRefused, 1);
+    out.changed = w.count(AbilityEventKind::OwnerChanged, 2);
+    return out;
+}
+
+void test_bribe_hack_accept() {
+    constexpr uint64_t kCatInfantry = 16;
+    {  // no filter tags, no cost data ([port] free): an enemy infantry is bribed at once
+        const BribeRun r = oi_bribe(AbilityObjectDesc{}, 1, kCatInfantry);
+        CHECK(r.accepted == 1 && r.owner_after == 0 && r.changed == 1 && r.refused == 0);
+    }
+    AbilityObjectDesc priced;
+    priced.tactical_bribe_cost = 100;
+    {  // cost 100 x Bribe_Modifier_On_Uncorrupted_Planets 1.5 = 150 paid
+        const BribeRun r = oi_bribe(priced, 1, kCatInfantry, 1000.0f);
+        CHECK(r.accepted == 1 && r.owner_after == 0 && r.paid == 150.0f && r.refused == 0);
+    }
+    {  // corrupted planet: x 3
+        const BribeRun r = oi_bribe(priced, 1, kCatInfantry, 1000.0f, true);
+        CHECK(r.accepted == 1 && r.owner_after == 0 && r.paid == 300.0f);
+    }
+    {  // too few credits: accepted as a target, the apply plays the "cannot" event, no conversion
+        const BribeRun r = oi_bribe(priced, 1, kCatInfantry, 100.0f);
+        CHECK(r.accepted == 1 && r.owner_after == 1 && r.changed == 0 && r.refused == 1 && r.paid < 0.0f);
+    }
+    {  // a named hero is never bribed
+        AbilityObjectDesc hero = priced;
+        hero.named_hero = true;
+        const BribeRun r = oi_bribe(hero, 1, kCatInfantry, 1000.0f);
+        CHECK(r.accepted == 0 && r.owner_after == 1 && r.changed == 0);
+        AbilityObjectDesc generic = priced;
+        generic.hero = true;  // Is_Generic_Hero alone does not block
+        CHECK(oi_bribe(generic, 1, kCatInfantry, 1000.0f).owner_after == 0);
+    }
+    {  // an ally (same owner) is not a target
+        const BribeRun r = oi_bribe(AbilityObjectDesc{}, 0, kCatInfantry);
+        CHECK(r.accepted == 0 && r.changed == 0);
+    }
+    for (int32_t c : {0, 1}) {  // Tactical_Bribe_Cost <= 1: cost 0, rejected
+        AbilityObjectDesc cheap;
+        cheap.tactical_bribe_cost = c;
+        const BribeRun r = oi_bribe(cheap, 1, kCatInfantry, 1000.0f);
+        CHECK(r.accepted == 0 && r.owner_after == 1);
+    }
+    {  // Friendly_Damage_Amount > 0, PROXIMITY_MINE, CategoryMask 0: rejected
+        AbilityObjectDesc fd = priced;
+        fd.friendly_damage_amount = 5.0f;
+        CHECK(oi_bribe(fd, 1, kCatInfantry, 1000.0f).accepted == 0);
+        AbilityObjectDesc mine = priced;
+        mine.proximity_mine = true;
+        CHECK(oi_bribe(mine, 1, kCatInfantry, 1000.0f).accepted == 0);
+        CHECK(oi_bribe(priced, 1, 0, 1000.0f).accepted == 0);
+    }
+    // Hack: Applicable_Unit_Types only (as R2D2_Hack_Ability): a listed type passes (step 1), even when also excluded; an
+    // unlisted type fails on the empty categories mask; no tags at all: nothing passes.
+    auto hack = [](std::vector<int32_t> types, std::vector<int32_t> excluded, uint64_t cats, int32_t target_type) {
+        OiWorld w;
+        SpecialAbilityDesc hk = oi_special("Hack", SpecialClass::Hack, ActivationStyle::UserInput);
+        hk.applicable_categories = cats;
+        hk.applicable_types = std::move(types);
+        hk.excluded_types = std::move(excluded);
+        hk.max_range = 1000.0f;
+        const uint32_t hs = add_special(w.ad, hk);
+        AbilityObjectDesc a;
+        a.unit_abilities = {oi_gui(kTargetedHack, 0.0f, 10.0f, "Hack")};
+        a.specials = {hs};
+        const uint32_t ad = push(w.cd, w.ad, oi_unit("R2", 100.0f), a);
+        UnitDesc t = oi_unit("Turret", 100.0f, 5.0f, kCatInfantry);
+        t.object_type = target_type;
+        const uint32_t td = push(w.cd, w.ad, t, AbilityObjectDesc{});
+        w.make(GameMode::Land);
+        w.add(1, ad, 0, {0, 0, 0});
+        w.add(2, td, 1, {300, 0, 0});
+        const ObjectId one[] = {1};
+        return w.ab->targeted_ability(one, kTargetedHack, 2, -1, w.frame);
+    };
+    CHECK(hack({7, 9}, {}, 0, 9) == 1);
+    CHECK(hack({7, 9}, {9}, 0, 9) == 1);       // the type list is tested before Excluded_Unit_Types
+    CHECK(hack({7, 9}, {}, 0, 8) == 0);        // unlisted, empty categories mask
+    CHECK(hack({}, {}, 0, 9) == 0);            // no filter tags
+    CHECK(hack({}, {}, kCatInfantry, 9) == 1); // categories hit
+    CHECK(hack({}, {9}, kCatInfantry, 9) == 0);  // categories hit, then excluded
+}
+
 int main(int argc, char** argv) {
     const char* golden = nullptr;
     const char* write_golden = nullptr;
@@ -4314,6 +4442,7 @@ int main(int argc, char** argv) {
     test_oi_stun_over_water();
     test_oi_anim_timings();
     test_oi_anim_gates_and_locks();
+    test_bribe_hack_accept();
     test_battle(golden, write_golden);
     test_allocations();
     test_save_load_battle();  // N1 stage 2

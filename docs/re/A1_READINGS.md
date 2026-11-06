@@ -2096,12 +2096,14 @@ Read 2026-11-02 from the decompiled code (0x2b5fe0, TransportLandingBehaviorClas
   cannot see the landing [M]; locomotor pack +0x38 := 0; appended to +0xa8; the behaviour listens to its signal 0x28;
   parent id := G's id (campaign); with +0xbc: 0x2b5f70 (register with the player). The team helper 0x2a5790 groups them
   (failure: members deleted, return). Unless the instant flag: one group move (0x2a7b80) of the team to landing pos +
-  offset[+0x90] with move-block byte +0x5c = 1 (the forced-move flag, §28.9 item 3), then every member and its container is
-  **locked** (0x3a8e50(·, 1)). +0x68 += n.
+  offset[+0x90] with move-block flags +0x48 = 0x20 (skip validation: straight path that skips passability, the forced-move
+  path flag of §28.9 item 3; corrected s78k t01: block byte +0x5c is 0 here, it is the final-facing flag, MOVEMENT §6.1),
+  then every member and its container is **locked** (0x3a8e50(·, 1)). +0x68 += n.
 - Otherwise (vehicle): one object of member i at the landing position (with `Unique_Ground_Unit`: the substitute is created,
   then the member, which rides it, 0x379d30); same registration. Not instant: with a locomotor whose mode matches and type
   byte +0xd4 set [M] → coordinator move (0x4f8200) to landing pos + offset[+0x90] (snapped by 0x5a4c10 for the movement
-  class +0x1688), facing = the landing's yaw, forced-move flag, lock the unit (and its container); otherwise placed at the
+  class +0x1688), flags 0x20 (forced-move path), final facing = the landing's yaw (block +0x44, with +0x5c = 1; the unit
+  turns to it on arrival, TACTICAL_COMBAT §3.1.1), lock the unit (and its container); otherwise placed at the
   offset at once (0x3abb80) and turned to the landing's orientation. +0x68 += 1.
 - Then +0x90 += 1 and **timer := 2 s × (1 + s)** again.
 

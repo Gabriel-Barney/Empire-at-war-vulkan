@@ -11,7 +11,7 @@
 //   relations: P x P u8; special-weapon hardpoint flags: P x u8; player ModifierSets (P, player order)
 //   10 x f32 weather accuracy
 //   u32 + units (every Unit field, incl. its ModifierSet and the caches: reduced modifier values + the versions they
-//         were taken at, the own / squad Mod_Multiplier products, the per-tick scratch bytes - restored verbatim, so
+//         were taken at, the own Mod_Multiplier products, the per-tick scratch bytes - restored verbatim, so
 //         reads before the next phase A see the saved values)
 //   u32 + flat hardpoint table (each unit's [hp_begin, hp_begin + hp_count) range is validated)
 //   u32 + projectiles (dead-not-flushed ones too), u32 + spline-rocket states (refixf t01, serial order: one per
@@ -43,13 +43,15 @@ namespace alamo::tactical::combat {
 
 namespace {
 
-constexpr uint32_t kCombatSaveVersion = 10;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
+constexpr uint32_t kCombatSaveVersion = 12;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
                                              // 4: refixf t06 attack goal / weapon aim / order lock; 5: refixf t06 scan
                                              // target hardpoint (auto_hp); 6: a1g t03 damage event hull_lost; 7: S8 t04
                                              // grenade flight / sticky state; 8: S8 t06 stuck_offset in the parent's frame
                                              // (same layout, new meaning), S7 t15 A2 last weapon service frame, S8 t06 B4
                                              // fire-bone cycle index; 9: S8 t26 fire-at-position order; 10: s78f t03
-                                             // targeting state + its target, s78f t04 lobbing turret angles
+                                             // targeting state + its target, s78f t04 lobbing turret angles; 11:
+                                             // s78g t06 damage_team; 12: s78h t03 squad_seen dropped (no squad rule
+                                             // on a member)
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 
@@ -120,7 +122,7 @@ void CombatSystem::write(ByteWriter& w) const {
 
     w.u32(static_cast<uint32_t>(units_.size()));
     for (const Unit& u : units_) {
-        w.i32(u.id).u32(u.desc).i32(u.owner).u32(u.team).u8(u.team_leader).i32(u.damage_parent).u32(u.flags);
+        w.i32(u.id).u32(u.desc).i32(u.owner).u32(u.team).u8(u.team_leader).u32(u.damage_team).i32(u.damage_parent).u32(u.flags);
         put_vec3(w, u.pos);
         put_vec3(w, u.last_pos);
         put_vec3(w, u.facing);
@@ -153,7 +155,7 @@ void CombatSystem::write(ByteWriter& w) const {
         w.u32(u.mod_ver).u32(u.player_ver).u8(u.mod_valid);
         for (const float v : u.own_mult) w.f32(v);
         for (const float v : u.mult) w.f32(v);
-        w.u16(u.squad_seen).u8(u.needs_scan).u8(u.scan_due);
+        w.u8(u.needs_scan).u8(u.scan_due);
     }
 
     w.u32(static_cast<uint32_t>(hps_.size()));
@@ -276,6 +278,7 @@ bool CombatSystem::read(ByteReader& r) {
         u.owner = r.i32();
         u.team = r.u32();
         u.team_leader = r.u8();
+        u.damage_team = r.u32();
         u.damage_parent = r.i32();
         u.flags = r.u32();
         u.pos = get_vec3(r);
@@ -358,7 +361,6 @@ bool CombatSystem::read(ByteReader& r) {
         u.mod_valid = r.u8();
         for (float& v : u.own_mult) v = r.f32();
         for (float& v : u.mult) v = r.f32();
-        u.squad_seen = r.u16();
         u.needs_scan = r.u8();
         u.scan_due = r.u8();
         if (!r.ok() || u.id == kNoObject || u.desc >= unit_descs || (!first && u.id <= prev)) return false;

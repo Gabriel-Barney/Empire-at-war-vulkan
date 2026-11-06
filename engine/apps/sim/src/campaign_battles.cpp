@@ -1180,6 +1180,8 @@ void CampaignBattles::story_begin(SimHost& host, GameMode& mode) {
         TacticalMode* tm = host_->tactical();
         return (battle_ && tm && tm->primary().exists(o)) ? battle_->representative_type(tm->primary().id(o)) : objects::kNone;
     };
+    // s78i t02: the Reinforce_Unit stand-in faces the owner's entry-facing record (TACTICAL_COMBAT §3.1.1 "other spawns").
+    b.reinforce_facing = [this](int32_t player) { return battle_ ? battle_->player_drop_facing(player) : Vec3{1.0f, 0.0f, 0.0f}; };
     b.pipeline = &host.pipeline();
     // --- L1/S4 wave 2b: Dummy_Barrage_Target for Lua position-targeted abilities, script hooks, feed state ---
     b.spawn_ability_target = [this, h](Vec3 p, int32_t owner) {

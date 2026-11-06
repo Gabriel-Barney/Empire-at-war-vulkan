@@ -1110,8 +1110,9 @@ static void test_story_t9_clock(const World& w) {
         CHECK(differs_from_double);  // the float product is the clock, not mode frame / 30 in double
         // The pushed tactical mode stalls the clock: the global frame ran ahead of the galactic mode frame by the 60 battle ticks.
         CHECK(series.back().global == kTicks && series.back().galactic == kTicks - (kBattleTo - kBattleFrom));
-        // Fired frames: Zero at the first T9; Five / Half where the accumulated T9 clock reaches 5 s / 12.5 s (replayed here
-        // from the recorded series: LastTime = first T9, accumulated += now - LastTime, fire at accumulated >= Param1).
+        // Fired frames: Zero at the second T9 (A2i t01: the first evaluation only records LastTime, 0x454980); Five / Half
+        // where the accumulated T9 clock reaches 5 s / 12.5 s (replayed here from the recorded series: LastTime = first T9,
+        // accumulated += now - LastTime from the second T9 on, fire at accumulated >= Param1).
         std::map<std::string, uint64_t> fired;
         for (const StoryLogEntry& e : host.story()->log()) fired[e.event] = e.frame;
         auto expect = [&series](double threshold) -> uint64_t {
@@ -1119,13 +1120,13 @@ static void test_story_t9_clock(const World& w) {
             for (size_t i = 0; i < series.size(); ++i) {
                 if (i) acc += series[i].time - last;
                 last = series[i].time;
-                if (acc >= threshold) return series[i].global;
+                if (i && acc >= threshold) return series[i].global;
             }
             return 0;
         };
         std::printf("  t9 clock, workers %2d: Zero @%" PRIu64 ", Five @%" PRIu64 ", Half @%" PRIu64 "\n", workers, fired["Zero"],
                     fired["Five"], fired["Half"]);
-        CHECK(fired.size() == 3 && fired["Zero"] == 1);
+        CHECK(fired.size() == 3 && fired["Zero"] == 2 && expect(0.0) == 2);
         CHECK(fired["Five"] == expect(5.0) && fired["Half"] == expect(12.5));
         // The spec's frame: 5 s = 150 galactic frames after the first T9 (+-1 for the float rounding of the clock), and the
         // 60 stalled battle ticks delay the global frame (Five lands after the battle, Half too).
@@ -1143,6 +1144,236 @@ static void test_story_t9_clock(const World& w) {
             CHECK(same);
         }
     }
+    remove_all_long(root, ec);
+}
+
+// A2i t01 (A2I_T01_FRAME_ORDER.md §6): the load-time story pass. start_story ends with STORY_TECH_LEVEL (each player's
+// starting tech level) to that player's plot sets, in player-index order, with the Fire chain applied at once: a
+// TECH_LEVEL event's UNIQUE_UNIT reward spawns its unit before tick 1 (in the initial CRC record), its STORY_TRIGGER
+// dependant pays at load too, the T9 TECH_LEVEL poll never fires them again, and a prereq-less ELAPSED 0 fires at T9 of
+// tick 2 (the timer's first evaluation only records its start, 0x454980). The plot sets are loaded Underworld first so
+// the player order (Empire = player 0 first) is visible in the log and in the object ids. Variant "high": the tech
+// events need level 9 (never fire), to show the spawn is what moves the initial record.
+static void test_story_load_pass(const World& w) {
+    using namespace story_test;
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_story_load";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    auto plot = [](const char* tech_event, const char* level, bool elapsed) {
+        std::string s = "<Story>\n";
+        s += std::string(" <Event Name=\"") + tech_event + "\"><Event_Type>STORY_TECH_LEVEL</Event_Type><Event_Param1>" + level +
+             "</Event_Param1><Reward_Type>UNIQUE_UNIT</Reward_Type><Reward_Param1>Corvette</Reward_Param1></Event>\n";
+        s += std::string(" <Event Name=\"") + tech_event + "_Pay\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>CREDITS</Reward_Type>"
+             "<Reward_Param1>250</Reward_Param1><Prereq>" + tech_event + "</Prereq></Event>\n";
+        if (elapsed) {
+            s += " <Event Name=\"Start\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event>\n";
+            s += " <Event Name=\"Tech_Two\"><Event_Type>STORY_TECH_LEVEL</Event_Type><Event_Param1>2</Event_Param1></Event>\n";
+        }
+        return s + "</Story>\n";
+    };
+    for (const char* variant : {"", "_High"}) {
+        const bool high = *variant != 0;
+        const std::string sfx(variant);
+        write_file(root / ("Data/XML/Story_Plots_Load_E" + sfx + ".xml"),
+                   "<Story_Mode_Plots><Active_Plot>Story_Load_E" + sfx + ".xml</Active_Plot><Suspended_Plot /></Story_Mode_Plots>\n");
+        write_file(root / ("Data/XML/Story_Plots_Load_U" + sfx + ".xml"),
+                   "<Story_Mode_Plots><Active_Plot>Story_Load_U" + sfx + ".xml</Active_Plot><Suspended_Plot /></Story_Mode_Plots>\n");
+        write_file(root / ("Data/XML/Story_Load_E" + sfx + ".xml"), plot("Empire_Tech_1", high ? "9" : "1", true));
+        write_file(root / ("Data/XML/Story_Load_U" + sfx + ".xml"), plot("Under_Tech_1", high ? "9" : "1", false));
+    }
+    DirectoryProvider files(path_to_utf8(root));
+    auto corvettes = [](const GalacticSim& g, int32_t owner) {
+        std::vector<int32_t> ids;  // ObjectIds, fleet then content order
+        for (const FleetState& f : g.fleets())
+            if (f.alive && f.owner == owner)
+                for (const ObjectHandle u : f.contents)
+                    if (g.store().alive(u) && g.store().type(u) == tCorvette) ids.push_back(static_cast<int32_t>(g.store().id(u)));
+        return ids;
+    };
+    struct Out {
+        CrcLog crc;
+        std::string log;
+    };
+    constexpr uint64_t kTicks = 8;
+    auto run_one = [&](int32_t workers, const std::string& sfx, bool checks) -> Out {
+        jobs::JobSystem js(jobs::JobSystemConfig{workers});
+        SimConfig cfg;
+        cfg.seed = 7;
+        cfg.story_crc = true;
+        SimHost host(w.types, js, cfg);
+        const GalacticRules r = rules();
+        GalacticSim* gs = host.start_galactic(r, setup());
+        CHECK(gs != nullptr);
+        if (!gs) return {};
+        const size_t e0 = corvettes(*gs, pEmpire).size(), u0 = corvettes(*gs, pUnder).size();
+        const float credits0 = gs->credits(pEmpire);
+        CHECK(gs->players()[pEmpire].tech_level == 1 && gs->players()[pUnder].tech_level == 1);
+        StoryStart st;
+        st.files = &files;
+        st.plot_sets = {{pUnder, "Story_Plots_Load_U" + sfx + ".xml"}, {pEmpire, "Story_Plots_Load_E" + sfx + ".xml"}};
+        std::vector<std::string> diag;
+        CHECK(host.start_story(st, &diag) && host.story());
+        for (const auto& d : diag) std::printf("  story diag: %s\n", d.c_str());
+        if (!host.story()) return {};
+        const StorySession& story = *host.story();
+        auto count = [&story](const char* ev) {
+            size_t n = 0;
+            for (const StoryLogEntry& e : story.log()) n += e.event == ev ? 1u : 0u;
+            return n;
+        };
+        auto entry = [&story](const char* ev) -> const StoryLogEntry* {
+            for (const StoryLogEntry& e : story.log())
+                if (e.event == ev) return &e;
+            return nullptr;
+        };
+        if (checks) {
+            // Before tick 1: both spawns, the Empire's pay-out, logged at frame 0 via load; Empire (player 0) first.
+            const auto ce = corvettes(*gs, pEmpire), cu = corvettes(*gs, pUnder);
+            CHECK(host.frame() == 0 && ce.size() == e0 + 1 && cu.size() == u0 + 1);
+            CHECK(!ce.empty() && !cu.empty() && ce.back() < cu.back());
+            CHECK(gs->credits(pEmpire) == credits0 + 250.0f);
+            CHECK(story.log().size() == 4);
+            const StoryLogEntry* et = entry("Empire_Tech_1");
+            const StoryLogEntry* ep = entry("Empire_Tech_1_Pay");
+            const StoryLogEntry* ut = entry("Under_Tech_1");
+            CHECK(et && ep && ut && et->frame == 0 && et->via == "load" && ep->via == "load" && ut->via == "load");
+            CHECK(story.log().size() >= 1 && story.log().front().event == "Empire_Tech_1" && story.log().front().plot_set == 1);
+            CHECK(count("Start") == 0);
+        }
+        host.tick_once();
+        if (checks) CHECK(count("Start") == 0);  // tick 1's T9: the ELAPSED 0 timer records its start only
+        for (uint64_t t = 1; t < kTicks; ++t) host.tick_once();
+        if (checks) {
+            const StoryLogEntry* s = entry("Start");
+            CHECK(s && s->frame == 2 && s->via == "clock" && count("Start") == 1);
+            // The T9 TECH_LEVEL poll ran every tick: the load-fired events stay fired (no second spawn, no second pay-out).
+            CHECK(count("Empire_Tech_1") == 1 && count("Empire_Tech_1_Pay") == 1 && count("Under_Tech_1") == 1);
+            CHECK(count("Tech_Two") == 0 && corvettes(*gs, pEmpire).size() == e0 + 1 && corvettes(*gs, pUnder).size() == u0 + 1);
+            CHECK(gs->credits(pEmpire) == credits0 + 250.0f);
+        }
+        return {host.crc_log(), story.log_text("a2i load pass")};
+    };
+    const Out a = run_one(0, "", true);
+    const Out high = run_one(0, "_High", false);
+    // The spawns are in the initial record (captured by the first tick_once before T1): objects and story differ from the
+    // run whose tech events never fire.
+    CHECK(a.crc.records.size() == kTicks + 1 && high.crc.records.size() == kTicks + 1);
+    const auto sys = [&a](const char* name) {
+        for (size_t i = 0; i < a.crc.systems.size(); ++i)
+            if (a.crc.systems[i] == name) return i;
+        return a.crc.systems.size();
+    };
+    const size_t objects = sys("objects"), story = sys("story");
+    CHECK(objects < a.crc.systems.size() && story < a.crc.systems.size());
+    if (!a.crc.records.empty() && !high.crc.records.empty() && objects < a.crc.systems.size() && story < a.crc.systems.size()) {
+        const CrcRecord& r0 = a.crc.records.front();
+        const CrcRecord& h0 = high.crc.records.front();
+        CHECK(r0.tick == 0 && h0.tick == 0);
+        CHECK(r0.systems[objects] != h0.systems[objects] && r0.systems[story] != h0.systems[story]);
+    }
+    for (int32_t workers : jobs::determinism_worker_counts()) {
+        if (workers == 0) continue;
+        const Out b = run_one(workers, "", false);
+        const auto d = first_divergence(a.crc, b.crc);
+        CHECK(!d.diverged && b.log == a.log);
+    }
+    std::printf("story load pass: %zu records, log %zu bytes\n", a.crc.records.size(), a.log.size());
+    remove_all_long(root, ec);
+}
+
+// a2j t05 (A2J_T05_STORY_LOAD.md): the load pass's CONSTRUCT side and its galactic stream. Before the tech pass every
+// starting-force object raises STORY_CONSTRUCT (+ CONSTRUCT_LEVEL for the starbase / ground structure) to every plot set
+// ("via=load:construct"): the Empire's SB1 (CONSTRUCT, starbase level 1) and Barracks (ground level 1, not 2) at A, the
+// Underworld's Corvette at D (FILTER_ENEMY_ONLY for the Empire). In the tech pass the UNIQUE_UNIT reward's Corvette raises
+// CONSTRUCT inside the reward call, so Own_Corvette fires between Tech_1 and Tech_1's STORY_TRIGGER dependant; that
+// dependant's SET_TECH_LEVEL raises TechLevelChanged, routed at load ("T 0 0 ..."), not at T9 of tick 1.
+static void test_story_load_construct(const World& w) {
+    using namespace story_test;
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_story_load_construct";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/XML/Story_Plots_Load_C.xml",
+               "<Story_Mode_Plots><Active_Plot>Story_Load_C.xml</Active_Plot><Suspended_Plot /></Story_Mode_Plots>\n");
+    write_file(root / "Data/XML/Story_Load_C.xml",
+               "<Story>\n"
+               " <Event Name=\"SB_Built\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>SB1</Event_Param1></Event>\n"
+               " <Event Name=\"A_Star_1\"><Event_Type>STORY_CONSTRUCT_LEVEL</Event_Type><Event_Param1>PlanetA</Event_Param1>"
+               "<Event_Param2>1</Event_Param2><Event_Param3>0</Event_Param3></Event>\n"
+               " <Event Name=\"A_Ground_1\"><Event_Type>STORY_CONSTRUCT_LEVEL</Event_Type><Event_Param1>PlanetA</Event_Param1>"
+               "<Event_Param2>1</Event_Param2><Event_Param3>1</Event_Param3></Event>\n"
+               " <Event Name=\"A_Ground_2\"><Event_Type>STORY_CONSTRUCT_LEVEL</Event_Type><Event_Param1>PlanetA</Event_Param1>"
+               "<Event_Param2>2</Event_Param2><Event_Param3>1</Event_Param3></Event>\n"
+               " <Event Name=\"Enemy_Corvette\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>Corvette</Event_Param1>"
+               "<Event_Param3>FILTER_ENEMY_ONLY</Event_Param3></Event>\n"
+               " <Event Name=\"Tech_1\"><Event_Type>STORY_TECH_LEVEL</Event_Type><Event_Param1>1</Event_Param1>"
+               "<Reward_Type>UNIQUE_UNIT</Reward_Type><Reward_Param1>Corvette</Reward_Param1></Event>\n"
+               " <Event Name=\"Own_Corvette\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>Corvette</Event_Param1></Event>\n"
+               " <Event Name=\"Tech_1_Raise\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SET_TECH_LEVEL</Reward_Type>"
+               "<Reward_Param1>Empire</Reward_Param1><Reward_Param2>2</Reward_Param2><Prereq>Tech_1</Prereq></Event>\n"
+               "</Story>\n");
+    DirectoryProvider files(path_to_utf8(root));
+    struct Out {
+        CrcLog crc;
+        std::string log;
+    };
+    auto run_one = [&](int32_t workers, bool checks) -> Out {
+        jobs::JobSystem js(jobs::JobSystemConfig{workers});
+        SimConfig cfg;
+        cfg.seed = 7;
+        cfg.story_crc = true;
+        SimHost host(w.types, js, cfg);
+        const GalacticRules r = rules();
+        GalacticSim* gs = host.start_galactic(r, setup());
+        CHECK(gs != nullptr);
+        if (!gs) return {};
+        StoryStart st;
+        st.files = &files;
+        st.plot_sets = {{pEmpire, "Story_Plots_Load_C.xml"}};
+        std::vector<std::string> diag;
+        CHECK(host.start_story(st, &diag) && host.story());
+        for (const auto& d : diag) std::printf("  story diag: %s\n", d.c_str());
+        if (!host.story()) return {};
+        const StorySession& story = *host.story();
+        auto entry = [&story](const char* ev) -> const StoryLogEntry* {
+            for (const StoryLogEntry& e : story.log())
+                if (e.event == ev) return &e;
+            return nullptr;
+        };
+        if (checks) {
+            for (const StoryLogEntry& e : story.log()) std::printf("  load: %s\n", e.text().c_str());
+            const StoryLogEntry* sb = entry("SB_Built");
+            const StoryLogEntry* a1 = entry("A_Star_1");
+            const StoryLogEntry* g1 = entry("A_Ground_1");
+            const StoryLogEntry* ec_ = entry("Enemy_Corvette");
+            const StoryLogEntry* t1 = entry("Tech_1");
+            const StoryLogEntry* oc = entry("Own_Corvette");
+            const StoryLogEntry* tr = entry("Tech_1_Raise");
+            CHECK(host.frame() == 0 && story.log().size() == 7 && entry("A_Ground_2") == nullptr);
+            CHECK(sb && a1 && g1 && ec_ && t1 && oc && tr);
+            if (sb && a1 && g1 && ec_ && t1 && oc && tr) {
+                for (const StoryLogEntry* e : {sb, a1, g1, ec_}) CHECK(e->frame == 0 && e->via == "load:construct" && e->sequence < t1->sequence);
+                CHECK(t1->via == "load" && oc->via == "load" && tr->via == "load");
+                CHECK(t1->sequence < oc->sequence && oc->sequence < tr->sequence);  // CONSTRUCT inside the reward call
+            }
+            // The dependant's tech raise is routed inside the load pass: trigger 0 at frame 0.
+            CHECK(gs->players()[pEmpire].tech_level == 2);
+            CHECK(story.triggers().size() == 1 && story.triggers()[0].frame == 0 && story.triggers()[0].kind == "TechLevelChanged");
+            CHECK(story.log_text().find("\nT 0 0 TechLevelChanged player=Empire value=2 gframe=0\n") != std::string::npos);
+        }
+        for (int t = 0; t < 4; ++t) host.tick_once();
+        if (checks) {
+            CHECK(story.log().size() == 7 && story.triggers().size() == 1);  // nothing fires twice; no second TechLevelChanged
+        }
+        return {host.crc_log(), story.log_text("a2j load construct")};
+    };
+    const Out a = run_one(0, true);
+    for (int32_t workers : jobs::determinism_worker_counts()) {
+        if (workers == 0) continue;
+        const Out b = run_one(workers, false);
+        const auto d = first_divergence(a.crc, b.crc);
+        CHECK(!d.diverged && b.log == a.log);
+    }
+    std::printf("story load construct: %zu records, log %zu bytes\n", a.crc.records.size(), a.log.size());
     remove_all_long(root, ec);
 }
 
@@ -1892,6 +2123,8 @@ int main(int argc, char** argv) {
     test_story_synthetic(*world);
     test_story_rewards_oi(*world);  // OI lua
     test_story_t9_clock(*world);    // host follow-up: T9 time argument
+    test_story_load_pass(*world);   // A2i t01: load-time STORY_TECH_LEVEL pass, ELAPSED 0 at tick 2
+    test_story_load_construct(*world);  // a2j t05: starting-force / spawn CONSTRUCT and the load-time event stream
     test_story_wave1();
     test_story_wave2a();
 #else
