@@ -105,6 +105,8 @@ public:
     bool require(std::string_view name, std::string* err = nullptr);
     // Calls a global function with no arguments (not as a thread: it must not yield).
     bool call(std::string_view global_function, std::string* err = nullptr);
+    // True when the global `name` is a function (raw lookup, no metamethods; q6 t06: optional engine calls).
+    bool has_function(std::string_view name);
 
     // ---- script threads ----
     // Create_Thread(name) from C++. Returns the thread id, or -1 if `name` is not a global function.

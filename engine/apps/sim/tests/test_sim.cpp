@@ -886,6 +886,57 @@ static void test_many_players(const World& w) {
         CHECK(sets[3].player == 3 + 16 && sets[3].plots_file == "M16.xml");
     }
 }
+
+// q6 t06 (GAME_SCORING.md §1.2 / §1.3): the GameScoring script is re-created at every new session, after the GlobalValue
+// clear and before the plots load, so a value its Base_Definitions sets (Thrawn's Revenge: MOD_ID) reaches the plot
+// scripts' Base_Definitions.
+static void test_scoring_script(const World& w) {
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_scoring";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/Scripts/Miscellaneous/GameScoring.lua",
+               "ScriptPoolCount = 0\n"
+               "function Base_Definitions()\n"
+               "  GlobalValue.Set(\"Scoring_Runs\", (GlobalValue.Get(\"Scoring_Runs\") or 0) + 1)\n"
+               "  GlobalValue.Set(\"MOD_ID\", \"TEST_MOD\")\n"
+               "end\n"
+               "function main() end\n");
+    write_file(root / "Data/XML/Story_Plots_Scoring.xml",
+               "<Story_Mode_Plots><Lua_Script>Story_Scoring</Lua_Script><Active_Plot>Story_Scoring_Plot.xml</Active_Plot>"
+               "<Suspended_Plot /></Story_Mode_Plots>\n");
+    write_file(root / "Data/XML/Story_Scoring_Plot.xml",
+               "<Story><Event Name=\"Begin\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event></Story>\n");
+    write_file(root / "Data/Scripts/Story/Story_Scoring.lua",
+               "function Base_Definitions() GlobalValue.Set(\"Plot_Saw\", GlobalValue.Get(\"MOD_ID\")) end\n"
+               "function main() end\n");
+    DirectoryProvider files(path_to_utf8(root));
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    const GalacticRules r = rules();  // GalacticSim keeps a reference
+    const GalacticSetup su = setup();
+    SimHost host(w.types, js, SimConfig{});
+    host.set_scoring_script(&files, "GameScoring");
+    for (int session = 0; session < 2; ++session) {
+        GalacticSim* gs = host.start_galactic(r, su);
+        CHECK(gs != nullptr && host.scoring_vm() != nullptr);
+        if (!gs) return;
+        for (const std::string& m : host.scoring_messages()) std::printf("  scoring: %s\n", m.c_str());
+        CHECK(host.scoring_messages().empty());
+        // A fresh state each session over the cleared table: the run counter starts again at 1.
+        CHECK(host.global_values()->get("Scoring_Runs").number == 1.0);
+        StoryStart st;
+        st.files = &files;
+        st.plot_sets = {{pEmpire, "Story_Plots_Scoring.xml"}};
+        CHECK(host.start_story(st));
+        CHECK(host.global_values()->get("Plot_Saw").text == "TEST_MOD");
+        host.run_fast(3);
+        CHECK(host.end_game_mode());  // the stack empties: the next start_galactic is a new session
+        CHECK(host.scoring_vm() == nullptr);
+    }
+    // No name: no script, nothing written.
+    SimHost plain(w.types, js, SimConfig{});
+    CHECK(plain.start_galactic(r, su) != nullptr);
+    CHECK(plain.scoring_vm() == nullptr && plain.global_values()->get("MOD_ID").kind == lua::AiGlobalValue::Nil);
+}
 }  // namespace story_test
 
 static void test_story_synthetic(const World& w) {
@@ -2178,6 +2229,7 @@ int main(int argc, char** argv) {
     test_story_wave1();
     test_story_wave2a();
     story_test::test_many_players(*world);  // Q6
+    story_test::test_scoring_script(*world);  // q6 t06
 #else
     std::printf("story: built without engine/lua, skipped\n");
 #endif

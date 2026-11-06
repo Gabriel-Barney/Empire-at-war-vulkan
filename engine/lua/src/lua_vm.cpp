@@ -374,6 +374,16 @@ bool LuaVm::call(std::string_view global_function, std::string* err) {
     return true;
 }
 
+bool LuaVm::has_function(std::string_view name) {
+    check_owner();
+    lua_State* L = impl_->L;
+    lua_pushlstring(L, name.data(), name.size());
+    lua_rawget(L, LUA_GLOBALSINDEX);
+    const bool is_function = lua_type(L, -1) == LUA_TFUNCTION;
+    lua_pop(L, 1);
+    return is_function;
+}
+
 int32_t LuaVm::create_thread(std::string_view global_function) {
     check_owner();
     lua_State* L = impl_->L;
