@@ -1204,6 +1204,20 @@ def mean_se(v):
     return m, math.sqrt(var / len(v))
 
 
+def median_se(v):
+    """s78j t05: median and a robust standard error of a list (1.2533 * 1.4826 * MAD / sqrt(n): the normal-model
+    stderr of a median, with the spread taken from the median absolute deviation so that one or two background
+    bursts of +-50..+-190 draws / frame neither move the centre nor inflate the interval; None below 3 values)"""
+    import statistics
+    if not v:
+        return None, None
+    m = statistics.median(v)
+    if len(v) < 3:
+        return m, None
+    mad = statistics.median([abs(x - m) for x in v])
+    return m, 1.2533 * 1.4826 * mad / math.sqrt(len(v))
+
+
 def an_idle47w(s, verdict=True):
     """s78g t03: slot 47 with and without an Attack Idle clip; draws per frame at the on / off edges, frame-weighted
     targeting state and clip of the attackers while their victims exist. verdict=False (IDLE47N): no P / D / V verdict
@@ -1520,7 +1534,8 @@ def an_idle47n(s):
     draws per attacker per frame with V subtracted:
       k_med  = ((on step - off step) / 2 of the phase - the same for V) / attackers  (median edge steps: robust to the
                periodic background bursts that pulled IDLE47Q's P mean down)
-      k_mean = (per-cycle on-minus-off mean of the phase - V's) / attackers, with its stderr.
+      k_mean = (per-cycle on-minus-off median of the phase - V's) / attackers, with a MAD-based stderr (median_se;
+               s78j t05: was the mean, which two background bursts pushed to UNCLEAR).
     A fire-blocked Dark Trooper phase counts when it held targeting state 4 in >= 50% of the attacker-frames, ATTACK /
     ATTACKIDLE (clip 5 / 6) in >= 50%, and its attackers fired at most one shot per 100 attacker-cycles (at least 1);
     its DRAWS / SILENT / UNCLEAR class is idle47n_class, the verdict idle47n_verdict."""
@@ -1568,20 +1583,31 @@ def an_idle47n(s):
         if n and info.get('on') is not None and info.get('off') is not None:
             vstep = ((V['on'] - V['off']) / 2.0) if V.get('on') is not None and V.get('off') is not None else 0.0
             info['k_med'] = ((info['on'] - info['off']) / 2.0 - vstep) / n
-        if n and info.get('dmean') is not None:
-            info['k_mean'] = (info['dmean'] - (V.get('dmean') or 0.0)) / n
-            if info.get('dse') is not None:
-                info['k_se'] = math.hypot(info['dse'], V.get('dse') or 0.0) / n
+        # s78j t05: the per-cycle interval is median-based (median_se), not the mean: in out/20261105-125642 two
+        # background bursts per phase (E -42 / -43, V +188) pulled E's mean to -0.53 +- 1.22 -> UNCLEAR while 11 of
+        # its 15 cycles sat at +4..+21. k_mean keeps its name (the per-cycle centre); k_avg is the plain mean.
+        dmed, dmse = median_se(info.get('dc') or [])
+        vmed, vmse = median_se(V.get('dc') or [])
+        info['k_avg'] = ((info['dmean'] - (V.get('dmean') or 0.0)) / n
+                         if n and info.get('dmean') is not None else None)
+        if n and dmed is not None:
+            info['k_mean'] = (dmed - (vmed or 0.0)) / n
+            if dmse is not None:
+                info['k_se'] = math.hypot(dmse, vmse or 0.0) / n
         info['status'] = idle47n_class(info)
         s.L.append('%s: %d attackers, while the victims exist ts 4 %.0f%%, clip ATTACK %.0f%% ATTACKIDLE %.0f%%; draws '
-                   'per attacker per frame (V subtracted): median steps %s, per-cycle mean %s +- %s -> %s' % (
+                   'per attacker per frame (V subtracted): median steps %s, per-cycle median %s +- %s (mean %s) -> %s' % (
                        ph, n, 100 * info.get('ts4', 0), 100 * info.get('clip5', 0), 100 * info.get('clip6', 0),
-                       fmt(info['k_med'], 2), fmt(info['k_mean'], 2), fmt(info['k_se'], 2), info['status']))
+                       fmt(info['k_med'], 2), fmt(info['k_mean'], 2), fmt(info['k_se'], 2),
+                       fmt(info.get('k_avg'), 2), info['status']))
     r['verdict'] = idle47n_verdict(r)
     if pre is not None and post is not None:
         r['verdict'] += ' [background %s -> %s draws/frame]' % (fmt(pre, 0), fmt(post, 0))
     s.L.append('k = draws per attacker per frame; ~1 = the slot-47 draw runs in ATTACK / ATTACKIDLE too (drop the clip '
                '5 / 6 condition from tactical_battle.cpp attack_idle), ~0 = it does not (keep it)')
+    s.L.append('CAVEAT (s78j t02, RE [H]): Prevent_All_Fire suspends TARGETING and WEAPON and slot 47 returns while its '
+               'behaviour is suspended, so a fire-blocked phase never runs slot 47: its draws come from elsewhere and '
+               'this verdict does not decide the clip 5 / 6 condition (retail checks the clip before the draw)')
     s.L.append('%s -> %s' % (s.name, r['verdict']))
     return r
 
@@ -1610,7 +1636,7 @@ def idle47n_verdict(r):
 
     def desc(k):
         i = ph.get(k) or {}
-        return '%s %s/attacker/frame (mean %s +- %s), ts4 %.0f%%, ATTACK+ATTACKIDLE %.0f%%, shots %s' % (
+        return '%s %s/attacker/frame (cycle median %s +- %s), ts4 %.0f%%, ATTACK+ATTACKIDLE %.0f%%, shots %s' % (
             k, fmt(i.get('k_med'), 2), fmt(i.get('k_mean'), 2), fmt(i.get('k_se'), 2), 100 * i.get('ts4', 0),
             100 * (i.get('clip5', 0) + i.get('clip6', 0)), i.get('shots', '?'))
 
@@ -2244,6 +2270,14 @@ def selftest(keep=None):
         q['theta'], q['T']))
     check(lob_solve(544.0, 6.0, 30.0) is None and lob_solve(543.0, 6.0, 30.0) is not None and
           lob_solve(550.0 - 7.0, 0.0, 30.0) is not None, 'reach at v 30 ends between 543 and 544 with to.z + 6')
+    # s78j t05: the IDLE47N per-cycle interval ignores two background bursts (E / V cycles of out/20261105-125642)
+    e = [-21.3, 20.5, 11.9, 11.2, 11.5, 7.6, 4.1, 8.6, -42.2, -43.4, 18.6, 11.6, 11.4, 11.4, 8.5]
+    v = [2.1, -42.3, 188.2, 3.0, 0.4, -0.0, 28.3, -10.4, -13.9, -3.4, 0.1, -0.8, 7.5, 7.1, -40.7]
+    (em, es), (vm, vs) = median_se(e), median_se(v)
+    km, kse = (em - vm) / 12.0, math.hypot(es, vs) / 12.0
+    check(abs(km - 0.925) < 0.01 and kse < 0.35 and idle47n_class(
+        {'attackers': 12, 'cycles': 15, 'shots': 0, 'ts4': 0.93, 'k_med': 0.85, 'k_mean': km, 'k_se': kse}) == 'DRAWS',
+        'IDLE47N cycle median with bursts: k %.2f +- %.2f -> DRAWS (the mean gave UNCLEAR)' % (km, kse))
     text, truth = synth_log()
     d = keep or tempfile.mkdtemp(prefix='s7s8_parse_selftest_')
     os.makedirs(d, exist_ok=True)

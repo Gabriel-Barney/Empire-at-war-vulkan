@@ -112,4 +112,17 @@ All Python runs with the project venv: `toolchain\venv\Scripts\python.exe -I <sc
   - the state machine reaches `A1H_Begin`, there are 6 spawns, B spawns for Underworld at Byss, and every verdict
     text exists.
 - `build_a1h_mod.py --out <scratch>` against the install builds the mod.
-- Not run in game yet (Gabriel's run).
+
+## In-game result (2026-11-05, a1k t02, run 20261105-181610, driven by Claude via computer use)
+
+Kit exit 0, cleanup OK. All four cases are **LAUNCHED**: every unit's parent is the new `GALACTIC_FLEET` right after
+`Assemble_Fleet` and 10 s later, and the fleet stays at its planet.
+- C: the 2 starting squads on Tatooine (`BEFORE parent=TATOOINE`) form a fleet of 2.
+- A: the 2 squads spawned on Abregado Rae form a fleet of 2.
+- B: the 2 Underworld mercs on Byss (AI None) form a fleet of 2.
+- D: the Tartan was spawned into its own fleet (`BEFORE parent=GALACTIC_FLEET parent_count=1`) and the squad was on the
+  surface. The result is a new fleet of exactly those 2 units, **not** merged into C's fleet orbiting Tatooine.
+
+The port's rule matches every case (a fleet holding exactly the units is reused, otherwise a new one is made), so the
+surface-launch rule is no longer [inferred] (`campaign.hpp` `assemble_fleet`). Screenshot: fleet icons over Tatooine
+(a ship) and Abregado Rae (infantry). Byss is enemy-owned, so its fleet is hidden on the map.

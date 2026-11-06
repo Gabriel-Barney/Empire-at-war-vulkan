@@ -151,6 +151,10 @@ struct MoveOrder {
     // formation exists append the order's block to it (inserted at the bottom with flag 0x04; FIGHTER_FLYING §4.11 B 1)
     // instead of moving now; the order's other units (and fighters without a formation) move as a plain order.
     bool waypoint = false;
+    // s78k t01 (MOVEMENT §6.1 block +0x44 / +0x5c, §3.5.1): the final facing (yaw, degrees) the path's last waypoint
+    // carries; kNoFacing = none (+0x5c clear). Land Walk units turn to it on arrival when more than 10 degrees off (rate
+    // limited, see tick_land). Not `facing_deg` (the +0x18 formation facing), which never makes a final turn.
+    float final_facing_deg = kNoFacing;
 };
 // Movement flag bits (P1_DOUBLE_CLICK_MOVE.md §3.3; corrects MOVEMENT.md §6.1: 0x01 is attack-move, 0x02 guard-move).
 // UI moves send 0x04 | modifiers (0x84 for a double-click); AI / Lua moves send 0.
@@ -184,6 +188,18 @@ struct UnitView {
     uint32_t start_frame = 0;     // OI tactical: frame the current order starts moving (stagger / queue delay)
     V2 jiggle;                    // OI tactical: formation jiggle offset
     float formation_speed = 3.0e38f;     // land: slowest member's max speed of its formation (3e38 = alone)
+    // s78k t03: land team locomotor cap of the last tick (set_team; 3e38 = none): the team's minimum raw Max_Speed x the
+    // mode multiplier x the container's speed factor
+    float team_speed = 3.0e38f;
+    // s78l t02 (MOVEMENT §3.5.1): the Walk arrival turn runs (states 0x0F / 0x10 / 0x11; the path is still on the
+    // locomotor's stack in retail, so the IDLE moving gate counts the unit as moving), and the turn clip it last played
+    // (-1 none / before the first play).
+    bool arrival_turn = false;
+    int32_t turn_clip = -1;
+    // s78l t02: the arrival turn ended during the last tick - it popped (0x10 -> 0x11 -> pop, possibly in one frame), or a
+    // stop / new order / teleport / locomotor swap dropped a running turn since the tick before (reported on the next
+    // tick). False otherwise. The host treats arrival_turn || arrival_turn_ended as "the turn owns the clip".
+    bool arrival_turn_ended = false;
     int32_t large_hover_index = -1;      // land: index (+0x22c) of its LargeHover formation in the last order, else -1
     // REMAINING_GAPS §4.3-4.7: special locomotors
     LocomotorKind locomotor = LocomotorKind::Default;  // the active locomotor
@@ -448,7 +464,40 @@ public:
     // factor still apply. `speed` < 0 clears it. Hashed by hash_speed only while set (format unchanged otherwise).
     bool set_speed_override(ObjectId id, float speed);
     float speed_override(ObjectId id) const;  // -1 = none
+    // s78k t03 (MOVEMENT §3.4 / §3.7, FIGHTER_FLYING §4.11 item 4, TACTICAL_COMBAT §4.4): the unit's TEAM container `team`
+    // (-1 = none) and that container's speed factor (its Mod_Multiplier SPEED, the squad value). A team's locomotor runs
+    // at the container's effective max speed: the minimum raw Max_Speed of the team's units x the mode multiplier x
+    // `container_factor` (0x370f00 with the 0x4049e0 cap). [port] There is no container mover, so on land every Walk
+    // member (not a jetpack in its airborne kind: 0x371060 has no team cap) walks at most at that speed, formation move
+    // or not; in space a squadron's formation speed (0x41b2a0) is that value. Transient: the host sets it every tick
+    // before tick() (not saved, not hashed); default -1 / 1 = no team.
+    // s78l t01 (MOVEMENT §3.4 "Team cap, exact" / "Full team formula", TACTICAL_COMBAT §4.4 "Team move speed"): the team
+    // speed is min(container Max_Speed, min over the members of their raw Max_Speed) x the mode multiplier x
+    // `container_factor` (the host's product of the container's chain: team_mod_multiplier SPEED, fleeing, ...).
+    // `container_max_speed` = the container type's raw Max_Speed (< 0: unknown, the members' minimum alone). A land team
+    // member walks AT that speed: its own speed factor / Mod_Multiplier does not enter (no double count); only a member
+    // with speed factor 0 (stunned: its locomotor is suspended) stays put.
+    bool set_team(ObjectId id, ObjectId team, float container_factor, float container_max_speed = -1.0f);
     void hash_speed(StateHasher& h) const;
+    // ---- s78l t02 (MOVEMENT §3.5.1 "Arrival turn, details"): clips of the Walk arrival turn ----
+    // Every clip play the arrival turn asks for this tick, ascending id (at most one per unit and tick). The clip data
+    // (frame count, fps) comes from set_deploy_clip_fn's hook (any anim id; no data = the model has no such clip, which
+    // is then never played); the turn times each clip itself (fps / 30 x speed clip frames per sim frame, "in its last 2
+    // frames" = position >= count - 2), so the host only draws: play `anim` with index 0xFFFF (a synced variant draw
+    // when the clip has >= 2 variants), loop 0, at `speed` (begin / band / end clips: the blend globals 0x140b398fc /
+    // 0x140b39900; the plain TURNL / TURNR clip of a unit without Has_Pre_Turn_Anim: blend min(|e| / r x 0.03333, GC
+    // cap) carried in `blend`, speed 1). `idle` = the turn popped the path: play the default idle type (TACTICAL_COMBAT
+    // slot 47; index 0, loop Loop_Idle_Anim_00) unless the unit burns or the pack flag +0x2b3 is set (host tests).
+    // Drained by take_turn_clip_events() right after each tick (not saved); tick() clears the list first, so events not
+    // taken are dropped at the next tick.
+    struct TurnClipEvent {
+        ObjectId id = 0;
+        int32_t anim = -1;  // kAnimNone with `idle`
+        float speed = 1.0f;
+        float blend = -1.0f;  // >= 0: the TURNL / TURNR blend of a unit without Has_Pre_Turn_Anim; -1: the clip's global
+        bool idle = false;
+    };
+    std::vector<TurnClipEvent> take_turn_clip_events();
     void register_speed_crc(CrcRegistry& registry, const std::string& name) const;
 
     // ---- CRC
@@ -495,6 +544,8 @@ private:
         bool has_goal = false, need_path = false, arrived = false, failed = false;
         V2 goal;
         float facing = kNoFacing;
+        float final_facing = kNoFacing;  // s78k t01: MoveOrder::final_facing_deg of the current land move (saved)
+        bool forced = false;             // s78k t01: land flag-0x20 move: straight 2-point path, no passability (saved)
         uint32_t start_frame = 0;
         float formation_speed = 3.0e38f;
         int32_t large_hover_index = -1;  // P1 double-click: formation +0x22c (not hashed; no modelled consumer)
@@ -521,6 +572,24 @@ private:
         uint32_t turn_start = 0, turn_frames = 0;
         float speed_factor = 1.0f;  // S10-int (set_speed_factor)
         float speed_override = -1.0f;  // OI abilities: locomotor +0x2a0 when >= 0 (flag +0x29c)
+        ObjectId team = -1;          // s78k t03: TEAM container (set_team; transient)
+        float team_factor = 1.0f;    // s78k t03: the container's speed factor (set_team; transient)
+        float team_cap = 3.0e38f;    // s78k t03: land team locomotor cap, rebuilt each land tick (team_caps)
+        float team_max = -1.0f;      // s78l t01: the container's raw Max_Speed (set_team; transient; < 0 unknown)
+        // s78l t02 (MOVEMENT §3.5.1, save version 12): the Walk arrival turn state (None, 0x0F begin, 0x10 turn, 0x11 end;
+        // the wanted yaw is turn_to), the band rate pack +0xe8 (0 = the stopped rate), the clip the turn last played
+        // (kAnimNone before the first: treated as idle-class), its start frame and play speed. tplay = this tick's play
+        // request (transient, gathered into turn_events_).
+        LocoState aturn = LocoState::None;
+        float aturn_rate = 0.0f;
+        int32_t tclip = -1;
+        uint32_t tclip_start = 0;
+        float tclip_speed = 1.0f;
+        bool tplay_set = false;
+        TurnClipEvent tplay;
+        // arrival_turn_ended of the last tick, and a drop outside the turn pass (arrival_reset) waiting for the next tick
+        // (saved, version 12).
+        bool aturn_ended = false, aturn_end_pending = false;
         float path_lag = 0.0f;      // S10-int: space playback time offset (frames) from speed factors != 1
         // OI tactical
         V2 jiggle;                  // formation jiggle offset (data pack +0x12c/+0x130)
@@ -574,6 +643,20 @@ private:
     // override as for Max_Speed) while the active jetpack is in its airborne kind, else lp.max_speed / lp.turn_rate.
     bool jet_alternates(const Unit& u) const;
     float loco_max_speed(const Unit& u) const;
+    float team_base_speed(const Unit& u) const;  // s78k t03: raw Max_Speed x the mode multiplier (0x4049e0 operand)
+    void team_caps();                            // s78k t03: Unit::team_cap of every land unit (serial, units_ order)
+    void land_arrival_turn(Unit& u) const;       // s78k t01: MOVEMENT §3.5.1 state 0x15 test on arrival
+    // s78l t02: the arrival turn states 0x0F / 0x10 / 0x11 / 0x15 of one frame (serial), the clip helpers, the reset.
+    void arrival_turn_frame(Unit& u, uint32_t frame) const;
+    bool turn_clip_data(const Unit& u, int32_t anim, DeployClip& c) const;
+    bool turn_clip_near_end(const Unit& u, uint32_t frame) const;  // 0x39a180 on the turn's current clip
+    bool turn_clip_play(Unit& u, int32_t anim, float speed, float blend, uint32_t frame) const;
+    float turn_clip_speed(const Unit& u) const;  // 0x3736a0
+    float stopped_rate(const Unit& u) const;     // 0x374310 at speed 0: Stopped_Rate_Of_Turn, else R
+    static void arrival_reset(Unit& u);
+    // s78l t02 c (MOVEMENT §6.1 "Forced-path destination check and fallback"): the 0x440f90 ring search around `d`.
+    bool forced_spot(const Unit& u, V2 d, V2& out) const;
+    float land_wanted_yaw(const Unit& u) const;  // s78k t01: the final facing through Movement_Directions_Count
     float loco_turn_rate(const Unit& u) const;
     bool ground_collider(const Unit& u) const;  // takes part in land collision / crush
     void tick_special(uint32_t frame, SimRng& rng);
@@ -734,6 +817,7 @@ private:
     TurretRestFn turret_rest_;
     TurretAimFn turret_aim_;
     std::vector<DeployEvent> devents_;  // since the last take_deploy_events()
+    std::vector<TurnClipEvent> tevents_;  // s78l t02: since the last take_turn_clip_events()
 };
 
 }  // namespace alamo::tactical::movement
