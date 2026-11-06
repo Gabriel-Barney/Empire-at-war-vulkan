@@ -10,7 +10,8 @@
 //   u32 relation count (0 or P x P) + u8 each
 //   planets (row order): bool is_planet + u32 type (checked against the session), then every other PlanetState field
 //         except the definition-derived position and links (visibility lists, income breakdown, both build queues,
-//         starbase / structures / surface handles, influence ids, orbit fleet indices, respawn list)
+//         starbase / structures / surface handles, influence ids, orbit fleet indices, respawn list, (v3) i32 x 2 build
+//         queue phases)
 //   u32 fleet count + every FleetState (dead ones too: fleet indices are stable references) incl. path and slots
 //   u32 + i32 stealthed ids; u32 + victory claims; (v2) i32 victory hold; u32 + pending S4 events (GalacticEvent,
 //   emission order)
@@ -41,7 +42,7 @@ namespace alamo::galactic {
 
 namespace {
 
-constexpr uint32_t kGalacticSaveVersion = 2;  // v2 (story t11): + i32 victory hold; reads v1
+constexpr uint32_t kGalacticSaveVersion = 3;  // v2 (story t11): + i32 victory hold; v3 (A2k t04): + queue phases; reads v1
 constexpr uint32_t kConflictSaveVersion = 2;  // v2: BattleRequest::linked (story t10)
 
 // Element count, bounded by the bytes left (each element takes at least `min_bytes`), so corrupt counts never
@@ -195,6 +196,7 @@ void GalacticSim::write(ByteWriter& w) const {
         w.i32(p.sabotage_count);
         w.u32(static_cast<uint32_t>(p.respawns.size()));
         for (const RespawnEntry& e : p.respawns) w.i32(e.due).u32(e.type).i32(e.owner).u8(e.flag);
+        w.i32(p.queue_phase[0]).i32(p.queue_phase[1]);
     }
 
     w.u32(static_cast<uint32_t>(fleets_.size()));
@@ -403,6 +405,11 @@ bool GalacticSim::read(ByteReader& r) {
             e.owner = r.i32();
             e.flag = r.u8();
             if (!r.ok() || e.type >= types || !player_ok(e.owner)) return false;
+        }
+        if (version >= 3) {  // v1 / v2 keep start()'s draws (the AI save holds the live last-run frames)
+            for (int32_t& phase : p.queue_phase) phase = r.i32();
+            for (const int32_t phase : p.queue_phase)
+                if (p.is_planet ? phase < 1 || phase > econ::kFramesPerSecond : phase != 0) return false;
         }
         if (!r.ok()) return false;
     }

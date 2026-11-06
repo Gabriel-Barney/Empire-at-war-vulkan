@@ -37,7 +37,7 @@ GalacticAiWorld::Impl::Impl(gal::GalacticSim& s, objects::ObjectStore& st, const
         }
     type_mask.assign(sim.rules().types.size(), 0u);
     for (size_t t = 0; t < type_mask.size() && t < tinfo.size(); ++t) type_mask[t] = tinfo[t].category_mask;
-    init_queue_phases();  // synced draws, 2 per planet (A2J_RE_BUILD_MARKET §4)
+    init_queue_phases();  // the galaxy build's queue phases (A2J_RE_BUILD_MARKET §4; drawn by GalacticSim::start)
     res.set_hooks(make_hooks());
 }
 
