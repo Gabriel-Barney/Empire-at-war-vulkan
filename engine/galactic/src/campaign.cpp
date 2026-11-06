@@ -589,10 +589,14 @@ void GalacticSim::on_owner_change(PlanetIndex planet, int32_t old_owner) {
         p.siphon_player = kNoPlayer;
         p.siphon_amount = 0.0f;
     }
-    // GE 2.8: the space queue is re-evaluated at level 0 and the starbase owner reset to -1 [H]. The
-    // ground queue's entries of other players are dropped without refund ([L]: 0x2bff60 not traced).
+    // GE 2.8: the space queue is re-evaluated at level 0 [M]. The ground queue's entries of other players are dropped
+    // without refund ([L]: 0x2bff60 not traced).
     reevaluate_queue(planet, kSpaceQueue, 0);
-    p.starbase_owner = kNoPlayer;
+    // a2j t06 (A2J_T03_INCOME.md §2) [M]: the starbase owner D +0x13c is reset only together with the starbase handle
+    // (0x4bda40, BATTLE_TRANSITIONS §3.3a; Change_Owner 0x3f7280 and the revolt 0x3f98a0 call it, GE 2.8 / 4.2). The
+    // derived-owner change 0x3fb040 (GE 4.2 "On an owner change") does not touch it, so a starbase that outlives the
+    // owner change keeps its owner. Without a starbase object the field is already -1 (every destroy path clears it).
+    if (!store_->alive(p.starbase)) p.starbase_owner = kNoPlayer;
     auto& g = p.queue[kGroundQueue];
     const bool head_gone = !g.empty() && g[0].player != now_owner;
     for (const BuildEntry& e : g)

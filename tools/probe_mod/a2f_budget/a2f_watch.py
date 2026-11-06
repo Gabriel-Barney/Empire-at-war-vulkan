@@ -82,6 +82,8 @@ class Watcher:
     def resolve(self):
         """Re-walks player -> AI -> galactic context -> budget for every AI player. Returns the targets dict."""
         pls = self.g.players() or []
+        if isinstance(pls, dict):             # a1mem.Game.players() returns {'by_id': [...], 'count', 'vec'}
+            pls = pls.get('by_id') or []
         found = {}
         for pl in pls:
             fac = pl.get('faction') or ('SLOT%d' % pl.get('slot', -1))
@@ -133,7 +135,7 @@ class Watcher:
     def decode(block):
         inc, = struct.unpack_from('<f', block, B_INCOME)
         t, = struct.unpack_from('<f', block, B_T)
-        flag, = struct.unpack_from('<I', block, B_FLAG)
+        flag = block[B_FLAG]  # a2g t01: a byte; the 3 bytes after it are uninitialised padding (differ per run)
         refund, = struct.unpack_from('<f', block, B_REFUND)
         return inc, t, flag, refund
 

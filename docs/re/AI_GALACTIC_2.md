@@ -12,7 +12,7 @@ Notation:
 - **slot** = a task-force team slot (0x50 B, PP+0xE8 vector).
 - **FPS** = 30.
 - **cost(T)** = 0x3711c0(T, planet). With a planet it is the planet-specific price (rounded, ≥ 1 when positive); without one it is type +0x86C (build cost).
-- **btime(T)** = 0x371230. With a planet it is the planet-specific build time; without one it is type +0x890 × global 0x140b15920.
+- **btime(T)** = 0x371230. With a planet it is the planet-specific build time; without one it is type +0x890 × global 0x140b15920 (GameConstants `Production_Speed_Factor`), truncated: T₀ of GALACTIC_ECONOMY §2.3, float(uint32(float(`Build_Time_Seconds`) × factor)) (port: `btime_none`, a2g t03).
 - **power(T)** = `AI_Combat_Power` (0x370e60).
 
 ---

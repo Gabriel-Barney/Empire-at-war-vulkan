@@ -12,6 +12,8 @@ cannot drift apart:
   * A2FB_CreditsUnnorm = Variable_Self.CreditsUnnormalized (AI player: the budget's total of pools, 0x6136b0 [M]).
   * shipped equations (no mod file needed): the budget-weight equations of each faction's galactic templates and the
     Tech_Upgrade trigger / untrigger.
+  * a2h t02 (MJ record, Empire): the MajorItem flush / reclaim trigger equations (shipped) and their inputs (mod
+    equations A2FB_HumanSpaceTotal, A2FB_ActiveGoalsMajor, ...), MAJOR_SHIPPED / MAJOR_MOD below.
 
 None of these equations contains the '#' operator (a random draw inside an evaluation, AI_GALACTIC section 8), so
 evaluating them draws nothing from the game's synchronised RNG (selftest_a2f.py checks the shipped ones).
@@ -57,6 +59,82 @@ SHIPPED = {
 SHIPPED_NEEDS_HUMAN = ['Underworld_Offensive_Budget_Allocation', 'Underworld_Infrastructure_Budget_Allocation']
 
 COMMON_EQS = [('A2FB_CreditsUnnorm', 'CU'), ('A2FB_NetIncome', 'NET')]
+
+# a2h t02 (docs/re/A2G_T02_T04_PORT_VS_RETAIL.md section 4): the MajorItem flush / reclaim triggers and their inputs, one
+# MJ record per sample (small and full) of these factions. Shipped equations: (name, key, needs a human player).
+MAJOR_FACTIONS = ['EMPIRE']
+MAJOR_SHIPPED = [
+    ('Needs_More_Space_Force_Globally', 'NMS', True),        # Variable_Human.SpaceTotalUnnormalized > Self x 1.0
+    ('Need_To_Flush_MajorItem_Budget', 'NTF', True),         # NMS + HasUnit(Death_Star): goal Flush_MajorItem_Budget
+    ('Can_Reclaim_Excess_MajorItem_Budget', 'CRM', False),   # ActiveGoals{MajorItem} > 0: goal Reclaim_Excess_...
+    ('Has_Enough_Space_Force_Globally', 'HES', False),       # 0.9 x FRT > ERT
+    ('Friendly_Global_Space_Unit_Raw_Total', 'FRT', False),
+    ('Enemy_Global_Space_Unit_Raw_Total', 'ERT', False),
+]
+# Mod equations (name, key, body, needs a human player): added to the equation file with the A2FB_* ones above.
+# a2i t02: A2FB_ActiveGoals (key AG, Variable_Self.ActiveGoals with no Parameter_Category) is gone. Retail cannot evaluate
+# it (ActiveGoals needs exactly one Parameter_Category, A2H_GALACTIC_AI_RE.md section 1), and the failed evaluation sets
+# the calling script's failed flag, which pcall does not see: in run 20261106-040725 it stopped the story script and the
+# Empire's free store after their first sample, and every Empire plan thread at its next sample. Every equation left
+# here answered in that run. selftest_a2f.py (retail_eval_fails) rejects such a body.
+MAJOR_MOD = [
+    ('A2FB_HumanSpaceTotal', 'HST', 'Variable_Human.SpaceTotalUnnormalized', True),
+    ('A2FB_SelfSpaceTotal', 'SST', 'Variable_Self.SpaceTotalUnnormalized', False),
+    ('A2FB_ActiveGoalsMajor', 'AGM', 'Variable_Self.ActiveGoals {Parameter_Category = AIGoalCategoryType[MajorItem]}',
+     False),
+    ('A2FB_HasDeathStar', 'HDS', 'Variable_Self.HasUnit{Parameter_Type = "Death_Star", Parameter_Count = 1}', False),
+    ('A2FB_Maintenance', 'MNT', 'Variable_Self.Maintenance', False),
+    ('A2FB_MaintenanceUnnorm', 'MNTU', 'Variable_Self.MaintenanceUnnormalized', False),
+    ('A2FB_PlanetsControlled', 'PLC', 'Variable_Self.PlanetsControlled', False),
+    ('A2FB_PlanetsControlledUnnorm', 'PLCU', 'Variable_Self.PlanetsControlledUnnormalized', False),
+]
+MAJOR_KEYS = [k for _n, k, _h in MAJOR_SHIPPED] + [k for _n, k, _b, _h in MAJOR_MOD]
+
+# a2j t02 (D4, docs/re/A2I_T03_TRAJECTORY.md section 5, docs/re/A2J_T02_PROBE_PLAN.md): the Conquer_Pirate desire of one
+# (AI faction, target planet) pair and its terms, from a plot script of that faction's own AI story plot (channel D, one
+# script per pair, so an evaluation that fails stops only that pair's channel). Pairs: (faction key, Find_Player name,
+# FindPlanet name, script suffix, AI plot file whose Lua_Script the build sets).
+PERC_PAIRS = [
+    ('UNDERWORLD', 'Underworld', 'Kashyyyk', 'U', 'Story_Plots_Underworld_AI_Heroes.xml'),
+    ('EMPIRE', 'Empire', 'Felucia', 'E', 'Story_Plots_Empire_AI_Heroes_EXP.xml'),
+]
+# Shipped equations, evaluated with the planet as the target (name, key, needs a human player). Why each is safe in
+# retail: the goal system evaluates Should_Conquer_Pirate_Planet (Conquer_Pirate's desire) on these very targets every
+# proposal pass, and the others are its sub-functions, so every token in them is evaluated in retail with a planet
+# target already; GenericPlanetValue and Is_Neglected_By_My_Opponent_Space are also called from shipped Lua with a
+# planet target (PathBonusForDistantTargets.lua). Is_AI_And_Should_Be_Ignored (and so Is_Good_Invasion_Target and
+# Should_Conquer_Pirate_Planet) reads Needs_More_Space_Force_Globally -> Variable_Human, which fails with no human: the
+# kit skips them then (as MJ does). No '#' in any galactic equation file (selftest).
+PERC_SHIPPED = [
+    ('Should_Conquer_Pirate_Planet', 'SCP', True),        # Is_Good_Invasion_Target x (IsHumanControlled == 0)
+    ('Is_Good_Invasion_Target', 'IGI', True),
+    ('Opens_New_Front', 'ONF', False),
+    ('Is_AI_And_Should_Be_Ignored', 'IGN', True),
+    ('GenericPlanetValue', 'GPV', False),
+    ('Is_Neglected_By_My_Opponent_Space', 'NEG', False),
+    ('System_Recon_Relevance', 'SRR', False),
+    ('Is_Connected_To_Me', 'ICM', False),
+    ('Is_Connected_To_Enemy', 'ICE', False),
+]
+# Mod equations (name, key, body): each body is a token of Is_Good_Invasion_Target written exactly as it stands there
+# (same root, same parameters, none), so it evaluates wherever that shipped equation does.
+PERC_MOD = [
+    ('A2FB_D4_Markup', 'MK', 'Variable_Target.Markup'),
+    ('A2FB_D4_ConnIso', 'CIP', 'Variable_Target.ConnectsIsolatedPlanetsByForce'),
+    ('A2FB_D4_TradeRoutes', 'TR', 'Variable_Target.TradeRoutes'),
+    ('A2FB_D4_Chokepoint', 'CHK', 'Variable_Target.Hints.Chokepoint'),
+    ('A2FB_D4_PriorityTarget', 'PRI', 'Variable_Target.Hints.PriorityTarget'),
+    ('A2FB_D4_HasGroundForce', 'HGF', 'Variable_Target.EnemyForce.HasGroundForce'),
+    ('A2FB_D4_HasSpaceForce', 'HSF', 'Variable_Target.EnemyForce.HasSpaceForce'),
+    ('A2FB_D4_IsHuman', 'HUM', 'Variable_Target.IsHumanControlled'),
+    ('A2FB_D4_ConnCorruption', 'ICC', 'Variable_Target.IsConnectedToCorruption'),
+    ('A2FB_D4_Corrupted', 'ICOR', 'Variable_Target.IsCorrupted'),
+    ('A2FB_D4_AnyThreats', 'ACT', 'Variable_Self.AnyCurrentThreats'),
+]
+PERC_KEYS = [k for _n, k, _h in PERC_SHIPPED] + [k for _n, k, _b in PERC_MOD]
+PERC_SHIPPED_NAMES = [n for n, _k, _h in PERC_SHIPPED]
+# Sample frames: every 30 frames in 0..600, then every 300 frames to the end of the run (A2I_T03 section 5 asks 0..600).
+PERC_DENSE_END, PERC_DENSE_STEP, PERC_STEP = 600, 30, 300
 
 # Template that is active when: base template always (Basic_*_Default), Tech_Upgrade when TRIG > 0 (Empire only).
 # Raw weights of the candidates, by the shipped equation keys above (a2f_report.py compares normalised pools).
@@ -104,7 +182,28 @@ def equations_xml():
                     body = ('Variable_Self.BudgetFractionToBuild{Parameter_Type = "%s", '
                             'Parameter_Category = AIGoalCategoryType[%s]}' % (t, cat_name[ckey]))
                 lines += ['\t<%s>' % n, '\t\t' + body, '\t</%s>' % n]
+    lines.append('\t<!-- a2h t02: MajorItem flush / reclaim inputs (A2G_T02_T04_PORT_VS_RETAIL.md section 4) -->')
+    for n, _k, body, _h in MAJOR_MOD:
+        lines += ['\t<%s>' % n, '\t\t' + body, '\t</%s>' % n]
+    lines.append('\t<!-- a2j t02: D4 perception tokens of Is_Good_Invasion_Target (A2J_T02_PROBE_PLAN.md) -->')
+    for n, _k, body in PERC_MOD:
+        lines += ['\t<%s>' % n, '\t\t' + body, '\t</%s>' % n]
     return '\n'.join(lines) + '\n'
+
+
+def probe_equation_count():
+    """Number of A2FB_* equations equations_xml() adds."""
+    return len(COMMON_EQS) + len(bfb_equations()) + len(MAJOR_MOD) + len(PERC_MOD)
+
+
+def perc_lua(fkey, use_mod_eq=True):
+    """Lua text of the D channel's pair table for one faction key (read by a2fb_percept.lua)."""
+    pair = [p for p in PERC_PAIRS if p[0] == fkey][0]
+    ship = ', '.join('{ "%s", "%s", %s }' % (k, n, 'true' if h else 'false') for n, k, h in PERC_SHIPPED)
+    mod = ', '.join('{ "%s", "%s", false }' % (k, n) for n, k, _b in PERC_MOD) if use_mod_eq else ''
+    return ('A2FB_PERC = { fac = "%s", player = "%s", planet = "%s", shipped = { %s }, tokens = { %s } }\n'
+            'A2FB_PERC_DENSE_END = %d\nA2FB_PERC_DENSE_STEP = %d\nA2FB_PERC_STEP = %d\n'
+            % (pair[0], pair[1], pair[2], ship, mod, PERC_DENSE_END, PERC_DENSE_STEP, PERC_STEP))
 
 
 def patch_equation_file(shipped_text):
@@ -137,6 +236,12 @@ def lua_header(use_mod_eq=True):
         ship = ', '.join('{ "%s", "%s", %s }' % (key, n, 'true' if n in SHIPPED_NEEDS_HUMAN else 'false')
                          for n, key in SHIPPED[fkey])
         L.append('\tshipped = { %s },' % ship)
+        if fkey in MAJOR_FACTIONS:
+            # { key, equation, needs a human, mod equation }
+            major = ['{ "%s", "%s", %s, false }' % (k, n, 'true' if h else 'false') for n, k, h in MAJOR_SHIPPED]
+            if use_mod_eq:
+                major += ['{ "%s", "%s", %s, true }' % (k, n, 'true' if h else 'false') for n, k, _b, h in MAJOR_MOD]
+            L.append('\tmajor = { %s },' % ', '.join(major))
         L.append('}')
     L.append('A2FB_COMMON = { %s }' % ', '.join('{ "%s", "%s" }' % (k, n) for n, k in COMMON_EQS))
     return '\n'.join(L) + '\n'

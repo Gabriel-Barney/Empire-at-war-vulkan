@@ -3,15 +3,17 @@
 FoC with the mod, scan the game's memory for the probe Lua's records and watch the AI budget block while it runs, write
 the report when the game exits, then clean up and restore the profile (always, also after an error or Ctrl+C).
 
-  a2f_run.py [--game DIR] [--non-interactive] [--no-launch] [--windowed] [--no-mod-equations] [--no-profile]
+  a2f_run.py [--game DIR] [--non-interactive] [--no-launch] [--windowed] [--no-mod-equations] [--no-percept] [--no-profile]
              [--wait-start-sec N] [--scan-sec S] [--report-only RUN_DIR]
 
   --non-interactive   never waits for a key; progress lines; ends with A2F_RUN_DONE exit=<n>
   --no-launch         install and scan only; start the game yourself (StarWarsG.exe MODPATH=Mods\\A2fBudgetProbe in corruption)
   --windowed          launch with WINDOWED SCREENWIDTH=1920 SCREENHEIGHT=1080 (computer-use driven run)
   --no-mod-equations  build without the A2FB_* equation file and calls (fallback if the game ignores the mod's equations)
+  --no-percept        build without channel D (the D4 EvaluatePerception scripts): a t04 budget run they cannot perturb
   --no-profile        skip the profile snapshot / restore (not recommended)
   --report-only DIR   rebuild report.txt from DIR\\records.txt + budget_watch.jsonl (no game, no install)
+  --port-trace ERR    with --report-only: the per-cycle P / I table against a2j_port.py's port.err (a2j t04)
 
 Output: tools\\probe_mod\\a2f_budget\\out\\<yyyymmdd-hhmmss>\\ with records.txt (every probe string found), budget_watch.jsonl
 (the memory watcher), report.txt / report.json / samples.tsv, run.json, run_status.txt, cleanup.log, profile_backup\\
@@ -43,7 +45,7 @@ import build_a2f_mod  # noqa: E402
 MODPATH = 'MODPATH=Mods\\' + build_a2f_mod.MOD_NAME
 WINDOWED = ['WINDOWED', 'SCREENWIDTH=1920', 'SCREENHEIGHT=1080']
 NEEDLE = b'A2FB' + b'1|'
-RECORD_RE = re.compile(rb'A2FB1\|[SFP]\|[^|]*\|\d+\|[A-Z]+\|[ -~]{0,330}?\|END')
+RECORD_RE = re.compile(rb'A2FB1\|[SFPDQ]\|[^|]*\|\d+\|[A-Z0-9]+\|[ -~]{0,330}?\|END')
 
 STEPS = r'''
  A2F T07 BUDGET PROBE. Nothing is clicked for you; follow these steps and then leave the game alone.
@@ -53,8 +55,11 @@ STEPS = r'''
  2) The campaign opens with the "Active Story Objectives" box: close it. The galaxy then runs. Click nothing else, give
     no orders, do not pause; keep the game window in front (FoC pauses when it loses focus). "A2FB PROBE: story script
     running" shows at the start.
- 3) After about 5 minutes of game time (about 5 minutes at normal speed) "A2FB PROBE: done" shows. Then Esc > Quit to the
-    main menu > Quit. Do not save the campaign. The run finishes by itself (A2F_RUN_DONE exit=<n>).
+ 3) After 5 minutes of game time "A2FB PROBE: 5-minute dense phase done" shows: keep the game running. If the AI attacks
+    and a battle prompt appears, choose auto-resolve (the prompt pauses galactic time). At 25 minutes of game time (normal
+    speed) "A2FB PROBE: 25 minutes recorded" shows: keep going. At 30 minutes "A2FB PROBE: 30 minutes recorded" shows
+    (a2j t04: the 30-minute run). Then Esc > Quit to the main menu > Quit. Do not save the campaign. The run finishes by
+    itself (A2F_RUN_DONE exit=<n>).
 '''
 
 
@@ -82,7 +87,10 @@ def scan_once(proc, seen, out):
         m = RECORD_RE.match(tail)
         if not m:
             continue
-        text = m.group(0).decode('ascii')
+        try:
+            text = m.group(0).decode('ascii')
+        except UnicodeDecodeError:
+            continue                          # a stale heap fragment with garbage bytes (2026-11-05 run 191238)
         if text in seen:
             continue
         seen.add(text)
@@ -92,11 +100,13 @@ def scan_once(proc, seen, out):
     return new, stats
 
 
-def canary_status(mod):
+def canary_status(mod, percept=True):
     """{'Story': 'deleted' | 'present' | 'no mod folder'} - _CustomScriptMessage deleted the file when the script ran."""
     res = {}
     for ch, fn in build_a2f_mod.CANARIES.items():
-        if not os.path.isdir(mod):
+        if not percept and ch.startswith('Percept'):
+            res[ch] = 'not built (--no-percept)'
+        elif not os.path.isdir(mod):
             res[ch] = 'no mod folder'
         else:
             res[ch] = 'present (script did not run)' if os.path.exists(os.path.join(mod, fn)) else 'deleted (script ran)'
@@ -110,15 +120,17 @@ def main():
     ap.add_argument('--no-launch', action='store_true')
     ap.add_argument('--windowed', action='store_true')
     ap.add_argument('--no-mod-equations', action='store_true')
+    ap.add_argument('--no-percept', action='store_true')
     ap.add_argument('--no-profile', action='store_true')
     ap.add_argument('--wait-start-sec', type=float, default=900)
     ap.add_argument('--scan-sec', type=float, default=5.0)
     ap.add_argument('--report-only')
+    ap.add_argument('--port-trace', help='with --report-only: a2j_port.py port.err for the per-cycle P / I table (a2j t04)')
     a = ap.parse_args()
     if a.report_only:
         d = a.report_only
         res, text = a2f_report.run(os.path.join(d, 'records.txt'), os.path.join(d, 'budget_watch.jsonl'),
-                                   os.path.join(d, 'A2FB_TYPES.json'), d)
+                                   os.path.join(d, 'A2FB_TYPES.json'), d, port_trace=a.port_trace)
         say(text)
         return 0 if res['records'] else 10
     import a1mem  # noqa: E402 - Windows-only ctypes
@@ -142,7 +154,8 @@ def main():
     mod = os.path.join(corr, 'Mods', build_a2f_mod.MOD_NAME)
     records_path = os.path.join(run_dir, 'records.txt')
     watch_path = os.path.join(run_dir, 'budget_watch.jsonl')
-    info = {'game': a.game, 'mod': mod, 'started': time.time(), 'scans': 0, 'mod_equations': not a.no_mod_equations}
+    info = {'game': a.game, 'mod': mod, 'started': time.time(), 'scans': 0, 'mod_equations': not a.no_mod_equations,
+            'percept': not a.no_percept}
     code = 0
     proc = None
     watcher_thread = None
@@ -155,9 +168,13 @@ def main():
             profile = q2_profile
             profile.snapshot(run_dir)
         a2f_cleanup.cleanup(a.game, os.path.join(run_dir, 'cleanup.log'))  # a stale folder from a crashed run
-        types = build_a2f_mod.build(a.game, mod, use_mod_eq=not a.no_mod_equations)
+        types = build_a2f_mod.build(a.game, mod, use_mod_eq=not a.no_mod_equations, percept=not a.no_percept)
         with open(os.path.join(run_dir, 'A2FB_TYPES.json'), 'w') as f:
             json.dump(types, f, indent=1)
+        qt = os.path.join(mod, 'A2FB_QUEUE_TYPES.json')     # a2j: ground / space queue per type (report D3)
+        if os.path.exists(qt):
+            with open(qt, 'rb') as src, open(os.path.join(run_dir, 'A2FB_QUEUE_TYPES.json'), 'wb') as dst:
+                dst.write(src.read())
         say('\n' + '=' * 110 + '\n Mod installed (Mods\\%s). Full notes: tools\\probe_mod\\a2f_budget\\README.md'
             % build_a2f_mod.MOD_NAME + STEPS + '=' * 110)
         t0 = time.time()
@@ -198,7 +215,7 @@ def main():
         wf.close()
         info['records'] = len(seen)
         info['watch_lines'] = watcher.lines
-        info['canary'] = canary_status(mod)
+        info['canary'] = canary_status(mod, not a.no_percept)
         say('canary:', info['canary'])
         set_state(run_dir, state='collecting', run_dir=run_dir)
         res, text = a2f_report.run(records_path, watch_path, os.path.join(run_dir, 'A2FB_TYPES.json'), run_dir)

@@ -10,6 +10,9 @@ Inputs
   budget_watch.jsonl the read-only memory watcher (a2f_watch.py): found / state / flag / chain events
   A2FB_TYPES.json    cost and build time of the probe structure types (written by build_a2f_mod.py)
 
+Outputs: report.txt / report.json, samples.tsv (pools), and since a2h t02 major.tsv (MJ: the MajorItem flush / reclaim
+triggers and inputs per Empire sample) and plans.tsv (one row per plan start with its PRET / PEXIT / PFAIL end records).
+
 How the pools are decoded (docs/re/AI_GALACTIC_TOKENS.md BudgetFractionToBuild, AI_GALACTIC_2.md section 3)
   value v = R / D with R = cost of the probe type, D = build time b x category income rate + category available
   credits (all categories: budget +0x68 income per second and the player's credits).  Two probe types with different
@@ -29,7 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import a2fb_spec  # noqa: E402
 
-RECORD_RE = re.compile(r'^A2FB1\|([SFP])\|([^|]*)\|(\d+)\|([A-Z]+)\|(.*)\|END$')
+RECORD_RE = re.compile(r'^A2FB1\|([SFPDQ])\|([^|]*)\|(\d+)\|([A-Z0-9]+)\|(.*)\|END$')
 BIG = 1e17
 CAT_KEYS = [c for c, _ in a2fb_spec.CATS]
 POOL_CATS = ['OFF', 'DEF', 'INFO', 'INFRA', 'MAJOR']
@@ -68,7 +71,7 @@ def build_samples(recs):
     samples = {}
     order = []
     for r in recs:
-        if r['kind'] not in ('PL', 'SM', 'BF', 'SH'):
+        if r['kind'] not in ('PL', 'SM', 'BF', 'SH', 'MJ'):
             continue
         f = r['f']
         key = (r['ch'], r['sid'], f.get('tag'), f.get('t'), f.get('fac'))
@@ -262,10 +265,443 @@ def analyse(recs, types, events):
                                                 'T': e.get('T'), 'refund': e.get('refund')})
             w['last_state'] = e
     res['watch'] = fl
+    res['plans'] = plan_runs(recs)
+    res['major'] = major_series(samples, types)
+    res['longdone'] = [r['f'].get('f') for r in recs if r['kind'] == 'LONGDONE']
+    res['min30'] = [r['f'].get('f') for r in recs if r['kind'] == 'MIN30']
+    res['perception'] = perception_series(recs)
+    res['production'] = production_events(recs)
+    res['last_frame'] = max((num(r['f'].get('f')) or 0 for r in recs), default=None)
     return res
 
 
-def render(res):
+# ---- a2j t02: D4 perception (channel D) and D3 production events (channel Q) --------------------------------------------
+
+def perception_series(recs):
+    """{'FAC>planet': [{'f', 'own', 'v': {key: str}, 'sid'}]} from the DT / DS records (merged per sample frame)."""
+    out = {}
+    idx = {}
+    for r in recs:
+        if r['ch'] != 'D' or r['kind'] not in ('DT', 'DS'):
+            continue
+        f = r['f']
+        key = '%s>%s' % (f.get('fac'), f.get('tgt'))
+        k2 = (key, r['sid'], f.get('f'))
+        row = idx.get(k2)
+        if row is None:
+            row = {'f': num(f.get('f')), 'own': f.get('own'), 'sid': r['sid'], 'v': {}}
+            idx[k2] = row
+            out.setdefault(key, []).append(row)
+        for k, v in f.items():
+            if k in a2fb_spec.PERC_KEYS:
+                row['v'][k] = v
+    for lst in out.values():
+        lst.sort(key=lambda x: x['f'] if x['f'] is not None else -1)
+    return out
+
+
+def read_port_perception(path):
+    """The port reference table (a2j_port.py table): {'FAC>planet': {frame: {'own', 'v'}}}, plus its comment lines."""
+    out, notes = {}, []
+    if not path or not os.path.exists(path):
+        return out, notes
+    head = None
+    for line in open(path, encoding='utf-8'):
+        line = line.rstrip('\n')
+        if line.startswith('#'):
+            notes.append(line[1:].strip())
+            continue
+        cells = line.split('\t')
+        if head is None:
+            head = cells
+            continue
+        d = dict(zip(head, cells))
+        key = '%s>%s' % (d.get('fac'), d.get('tgt'))
+        out.setdefault(key, {})[int(d['frame'])] = {'own': d.get('own'), 'v': {k: d.get(k, '') for k in a2fb_spec.PERC_KEYS}}
+    return out, notes
+
+
+def production_events(recs):
+    """[{'kind': QB / QC / QE, 'f', 'fac', 'pl', 'type', 'cost'}] in record order (one GameScoring instance)."""
+    out = []
+    for r in recs:
+        if r['ch'] == 'Q' and r['kind'] in ('QB', 'QC', 'QE'):
+            f = r['f']
+            out.append({'kind': r['kind'], 'f': num(f.get('f')), 'fac': f.get('fac'), 'pl': f.get('pl'),
+                        'type': f.get('type'), 'cost': f.get('cost'), 'cr': f.get('cr', '-'), 'seq': r['seq'],
+                        'sid': r['sid']})
+    out.sort(key=lambda e: (e['f'] if e['f'] is not None else -1, e['sid'], e['seq']))
+    return out
+
+
+def queue_heads(events, qtypes, fac, frames):
+    """Rebuild each (planet, queue) of faction fac from the events: QB appends, QE removes the first entry of that type,
+    QC the last one. Returns ({(planet, queue): {frame: head text}}, {(planet, queue): max depth}). The head is the first
+    entry; 'n' more entries are queued behind it."""
+    queues, depth, heads = {}, {}, {}
+    ev = [e for e in events if e['fac'] == fac]
+    i = 0
+    for fr in frames:
+        while i < len(ev) and ev[i]['f'] is not None and ev[i]['f'] <= fr:
+            e = ev[i]
+            i += 1
+            q = (e['pl'], qtypes.get((e['type'] or '').upper(), '?'))
+            lst = queues.setdefault(q, [])
+            if e['kind'] == 'QB':
+                lst.append((e['type'], e['f']))
+                depth[q] = max(depth.get(q, 0), len(lst))
+            else:
+                hit = [j for j, x in enumerate(lst) if x[0] == e['type']]
+                if hit:
+                    lst.pop(hit[0] if e['kind'] == 'QE' else hit[-1])
+        for q, lst in queues.items():
+            heads.setdefault(q, {})[fr] = ('%s@%d%s' % (lst[0][0], int(lst[0][1]), (' +%d' % (len(lst) - 1)) if len(lst) > 1 else '')
+                                           if lst else '-')
+    return heads, depth
+
+
+PERC_SHOW = ['SCP', 'IGI', 'MK', 'CIP', 'ONF', 'ACT', 'TR', 'GPV', 'IGN']
+
+
+def render_perception(res, port_ref, port_notes):
+    L = ['', '== 6. D4 perception (a2j t02, channel D; A2I_T03_TRAJECTORY.md section 5, A2J_T02_PROBE_PLAN.md) ==']
+    L.append('   keys: SCP Should_Conquer_Pirate_Planet, IGI Is_Good_Invasion_Target, MK Variable_Target.Markup,')
+    L.append('         CIP ConnectsIsolatedPlanetsByForce, ONF Opens_New_Front, ACT AnyCurrentThreats, TR TradeRoutes,')
+    L.append('         GPV GenericPlanetValue, IGN Is_AI_And_Should_Be_Ignored (all keys in perception.tsv).')
+    L.append('   nil = no value (before the AI Init: a warning; later: a failed evaluation, which stops that pair\'s')
+    L.append('   script: its samples end there), skip = no human player.')
+    if port_notes:
+        L.append('   port reference: ' + ' / '.join(port_notes))
+    if not res['perception']:
+        L.append('   no D records (old kit, or the AI plot scripts did not run: see the PerceptU / PerceptE canaries)')
+    last = res.get('last_frame')
+    for key, rows in res['perception'].items():
+        L.append('-- %s: %d samples, frames %s .. %s%s' % (key, len(rows), fi(rows[0]['f']), fi(rows[-1]['f']), (
+            '; the channel STOPPED %d frames before the end of the run (a failed evaluation?)' % (last - rows[-1]['f']))
+            if last is not None and rows[-1]['f'] is not None and last - rows[-1]['f'] > 400 else ''))
+        nil_keys = sorted({k for r in rows for k, v in r['v'].items() if v in ('nil', 'ERR') and (r['f'] or 0) > 30})
+        if nil_keys:
+            L.append('   keys with nil / ERR after frame 30: %s' % ', '.join(nil_keys))
+        pr = port_ref.get(key, {})
+        L.append('   %6s %-11s %s' % ('frame', 'owner', ' '.join(
+            ('%-17s' % (k + ' r|p' if pr else k)) for k in PERC_SHOW)))
+        for r in rows:
+            if r['f'] is None:
+                continue
+            p = pr.get(int(r['f']))
+            cells = []
+            for k in PERC_SHOW:
+                rv = r['v'].get(k, '')
+                cells.append(('%-17s' % ('%s|%s' % (rv, p['v'].get(k, '') if p else '-'))) if pr else '%-17s' % rv)
+            L.append('   %6d %-11s %s%s' % (int(r['f']), r['own'], ' '.join(cells),
+                                           ('  port own=%s' % p['own']) if p and p['own'] != r['own'] else ''))
+    return L
+
+
+def render_production(res, qtypes):
+    L = ['', '== 7. D3 production (a2j t02, channel Q: GameScoring Galactic_Production_Begin / Canceled / End events) ==']
+    ev = res['production']
+    if not ev:
+        L.append('   no Q records (old kit, or GameScoring did not load: see the Scoring canary)')
+        return L
+    facs = sorted({e['fac'] for e in ev if e['fac']})
+    L.append('   events: %d (%s)' % (len(ev), ', '.join('%s %d' % (f, sum(1 for e in ev if e['fac'] == f)) for f in facs)))
+    qof = lambda e: (qtypes.get((e['type'] or '').upper(), '?') + ' ')[0]
+    early = [e for e in ev if e['f'] is not None and e['f'] <= 1500 and e['fac'] not in ('REBEL', 'NEUTRAL', 'nil')]
+    L.append('   AI players\' events in frames 0..1500 (QB begin, QC cancel, QE end; queue g / s from A2FB_QUEUE_TYPES.json;')
+    L.append('   cr = the owner\'s credits when the event ran):')
+    for e in early[:240]:
+        L.append('     f=%5d %-10s %s %-12s %s %-40s cost=%-6s cr=%s' % (int(e['f']), e['fac'], e['kind'], e['pl'], qof(e),
+                                                                   e['type'], e['cost'], e['cr']))
+    if len(early) > 240:
+        L.append('     ... %d more in production.tsv' % (len(early) - 240))
+    first = {}
+    for e in early:
+        if e['kind'] == 'QB':
+            first.setdefault((e['fac'], e['pl'], qof(e)), e)
+    if first:
+        L.append('   first Begin per (player, planet, queue) in frames 0..1500 (lane A: per-queue start frames):')
+        for k in sorted(first, key=lambda k: (first[k]['f'], k)):
+            e = first[k]
+            L.append('     f=%5d %-10s %-12s %s %-40s cr=%s' % (int(e['f']), k[0], k[1], k[2], e['type'], e['cr']))
+    frames = list(range(0, 1401, 30))
+    heads, depth = queue_heads(ev, qtypes, 'EMPIRE', frames)
+    if heads:
+        cols = sorted(heads)
+        L.append('   Empire queue heads every 30 frames (item@begin frame, +n = queued behind; max depth: %s)' % ', '.join(
+            '%s/%s %d' % (q[0], q[1], depth.get(q, 0)) for q in cols))
+        L.append('     %5s %s' % ('frame', ' '.join('%-30s' % ('%s/%s' % q)[:30] for q in cols)))
+        last = None
+        for fr in frames:
+            row = tuple(heads[q].get(fr, '-') for q in cols)
+            if row != last:
+                L.append('     %5d %s' % (fr, ' '.join('%-30s' % c[:30] for c in row)))
+            last = row
+        L.append('     (rows only where a head changed; a QB while the queue is busy (+n) shows that Begin is the enqueue,')
+        L.append('      not the build start: then an item starts when the one before it ends)')
+    return L
+
+
+# ---- a2j t04: per-fiscal-cycle P / I against a port run (a2j_port.py; the a2g_trace_patch A2G BUD rows) --------------
+
+PORT_PLAYER = {'EMPIRE': 1, 'UNDERWORLD': 5}
+PI_CATS = [('OFF', 'Offensive'), ('INFRA', 'Infrastructure'), ('MAJOR', 'MajorItem')]
+PAY0, PERIOD = 1351, 1350
+
+
+def read_port_bud(path, player):
+    """{'tick': [rows], 'frame': [rows]} of A2G BUD lines; row = {'f', 'cr', 'gain', 'cat': {key: (A, R, P, w, I)}}."""
+    bud = re.compile(r'^A2G BUD (\w+) f=(-?\d+) p=(\d+) cr=(\S+) gain=(\S+) inc68=(\S+) T=(\S+) sumP=(\S+) \|(.*)$')
+    cat = re.compile(r'(\w+) A=(\S+) R=(\S+) P=(\S+) w=(\S+) n=(\d+)(?: I=([^;\s]+))?;')
+    names = dict((n, k) for k, n in a2fb_spec.CATS if n)
+    out = {}
+    for line in open(path, encoding='utf-8', errors='replace'):
+        m = bud.match(line.strip())
+        if not m or int(m.group(3)) != player:
+            continue
+        r = {'f': int(m.group(2)), 'cr': float(m.group(4)), 'gain': float(m.group(5)), 'cat': {}}
+        for c in cat.finditer(m.group(9)):
+            r['cat'][names.get(c.group(1), c.group(1))] = (float(c.group(2)), float(c.group(3)), float(c.group(4)),
+                                                           float(c.group(5)), num(c.group(7)))
+        out.setdefault(m.group(1), []).append(r)
+    return out
+
+
+def render_cycles(res, port_trace):
+    L = ['', '== 8. Per fiscal cycle P / I, retail | port (a2j t04; P = category pool, I = income rate per second) ==']
+    L.append('   port: %s (a2j_port.py run; A2G BUD rows of tools/analysis/a2g_trace_patch.py, ALAMO_A2G_TRACE=3)' % port_trace)
+    L.append('   retail P / I = the decoded BudgetFractionToBuild pool / rate (available / rate in section 1). Rows: the first')
+    L.append('   retail sample at or after each payment (pay = 1351 + 1350 k) and the last one before the next payment; the port')
+    L.append('   row is the last one at or before that frame.')
+    for fac, d in res['factions'].items():
+        if fac not in PORT_PLAYER:
+            continue
+        port = read_port_bud(port_trace, PORT_PLAYER[fac])
+        prow = sorted(port.get('frame', []), key=lambda r: r['f'])
+        if not prow:
+            L.append('-- %s: no port rows for player %d' % (fac, PORT_PLAYER[fac]))
+            continue
+        rows = sorted([r for r in d['samples'] if r['f'] is not None], key=lambda r: r['f'])
+        ticks = port.get('tick', [])
+        L.append('-- %s (port player %d): port payments %s' % (fac, PORT_PLAYER[fac], ', '.join(
+            'f%d +%.1f' % (t['f'], t['gain']) for t in ticks[:24]) or 'none'))
+        L.append('   %2s %5s %4s %6s  %s  %s' % ('k', 'pay', 'at', 'frame', '  '.join(
+            '%-27s' % ('%s P r|p  I r|p' % k) for k, _n in PI_CATS), 'credits r|p'))
+        last_f = min(rows[-1]['f'] if rows else 0, prow[-1]['f'])
+        k = 0
+        while PAY0 + k * PERIOD <= last_f:
+            pay, nxt = PAY0 + k * PERIOD, PAY0 + (k + 1) * PERIOD
+            def has(r, key):
+                return r['pools'].get(key, {}).get('state') in ('ok', 'empty')
+
+            def port_at(fr):
+                p = None
+                for x in prow:
+                    if x['f'] <= fr:
+                        p = x
+                    else:
+                        break
+                return p
+
+            cyc = [r for r in rows if pay <= r['f'] < nxt]
+            for which in ('first', 'last'):
+                # per category the first (last) sample of the cycle that has it (SM samples carry OFF / INFRA only)
+                picks = {}
+                for key, _n in PI_CATS:
+                    lst = [r for r in cyc if has(r, key)]
+                    picks[key] = (lst[0] if which == 'first' else lst[-1]) if lst else None
+                ref = picks['INFRA'] or picks['OFF']
+                if ref is None:
+                    continue
+                cells = []
+                for key, _n in PI_CATS:
+                    r = picks[key]
+                    rp = r['pools'][key] if r else {}
+                    pc = None
+                    if r:
+                        p = port_at(r['f'])
+                        pc = p['cat'].get(key) if p else None
+                    cells.append('%s|%s %s|%s' % (fmt(rp.get('avail'), 6), fmt(pc[2] if pc else None, 6),
+                                                  fmt(rp.get('rate'), 5), fmt(pc[4] if pc else None, 5)))
+                p = port_at(ref['f'])
+                L.append('   %2d %5d %4s %6d  %s  %s|%s' % (k + 1, pay, which[0], int(ref['f']), '  '.join(
+                    '%-27s' % c for c in cells), fmt(ref['cr'], 7), fmt(p['cr'] if p else None, 7)))
+            k += 1
+    return L
+
+
+# ---- a2h t02: plan runs (PSTART + PRET / PEXIT / PFAIL) and the MajorItem flush / reclaim series (MJ) ----------------
+
+END_KINDS = ('PRET', 'PEXIT', 'PFAIL')
+MAJOR_FLAGS = ['NMS', 'NTF', 'CRM', 'HES', 'AGM', 'HDS']
+
+
+def plan_runs(recs):
+    """{'runs': [run], 'summary': {plan|fac: counts}}. A run is one PSTART with the end records of the same script
+    instance (channel, sid) and start number n. Runs without n (a2f / a2g records) are listed without ends."""
+    runs = []
+    by_key = {}
+    for r in recs:
+        if r['ch'] != 'P' or r['kind'] != 'PSTART':
+            continue
+        f = r['f']
+        run = {'plan': f.get('plan'), 'fac': f.get('fac'), 'f': num(f.get('f')), 't': num(f.get('t')),
+               'sid': r['sid'], 'n': f.get('n'), 'prev': f.get('prev'), 'spend': f.get('spend'),
+               'unalloc': f.get('unalloc'), 'cr': f.get('cr'), 'ends': []}
+        runs.append(run)
+        if run['n'] is not None:
+            by_key[(r['sid'], run['n'])] = run
+    orphans = []
+    for r in recs:
+        if r['ch'] != 'P' or r['kind'] not in END_KINDS:
+            continue
+        f = r['f']
+        e = {'kind': r['kind'], 'f': num(f.get('f')), 'age': num(f.get('age')), 'spend': f.get('spend'),
+             'unalloc': f.get('unalloc'), 'by': f.get('by'), 'line': f.get('line'), 'args': f.get('args'),
+             'text': r['text']}
+        run = by_key.get((r['sid'], f.get('n')))
+        if run is None:
+            orphans.append(dict(e, plan=f.get('plan'), fac=f.get('fac')))
+        else:
+            run['ends'].append(e)
+    # a run whose end record was lost from the scan: the next run of the same instance names its end in prev=
+    by_sid = {}
+    for run in runs:
+        by_sid.setdefault(run['sid'], []).append(run)
+    for lst in by_sid.values():
+        lst.sort(key=lambda x: int(x['n']) if (x['n'] or '').isdigit() else 0)
+        for a, b in zip(lst, lst[1:]):
+            a['next_prev'] = b['prev']
+    summary = {}
+    for run in runs:
+        key = '%s|%s' % (run['plan'], run['fac'])
+        s = summary.setdefault(key, {'starts': 0, 'PRET': 0, 'PEXIT': 0, 'PFAIL': 0, 'no_end': 0, 'no_end_confirmed': 0,
+                                     'with_n': 0, 'first_f': None, 'last_f': None})
+        s['starts'] += 1
+        if s['first_f'] is None or (run['f'] is not None and run['f'] < s['first_f']):
+            s['first_f'] = run['f']
+        if s['last_f'] is None or (run['f'] is not None and run['f'] > s['last_f']):
+            s['last_f'] = run['f']
+        if run['n'] is None:
+            continue
+        s['with_n'] += 1
+        kinds = [e['kind'] for e in run['ends']]
+        for k in END_KINDS:
+            if k in kinds:
+                s[k] += 1
+        if not kinds:
+            s['no_end'] += 1
+            if run.get('next_prev') == 'none':
+                s['no_end_confirmed'] += 1     # released by the goal system (thread killed), not a lost record
+    return {'runs': runs, 'summary': summary, 'orphan_ends': orphans}
+
+
+def major_series(samples, types):
+    """{faction: [{'ch', 'tag', 't', 'f', 'vals': {key: str}, 'major': decoded MajorItem pool or None}]} from the MJ
+    fields of the merged samples (sorted by time)."""
+    out = {}
+    for s in samples:
+        if s['fac'] not in a2fb_spec.MAJOR_FACTIONS:
+            continue
+        vals = {k: s['v'][k] for k in a2fb_spec.MAJOR_KEYS if k in s['v']}
+        if not vals:
+            continue
+        pools = decode_pools(s['v'], s['fac'], types)
+        out.setdefault(s['fac'], []).append({'ch': s['ch'], 'tag': s['tag'], 't': s['t'], 'f': s['f'], 'vals': vals,
+                                             'major': pools.get('MAJOR')})
+    for lst in out.values():
+        lst.sort(key=lambda x: (x['t'] if x['t'] is not None else -1, x['ch']))
+    return out
+
+
+def fi(x):
+    """A frame number for printing (int, or '-')."""
+    return '-' if x is None else int(x)
+
+
+def flag_on(v):
+    x = num(v)
+    return x is not None and x > 0
+
+
+def render_major(res):
+    L = ['', '== 5. MajorItem flush / reclaim (a2h t02; MJ record, A2G_T02_T04_PORT_VS_RETAIL.md section 4) ==']
+    L.append('   keys: NMS Needs_More_Space_Force_Globally, NTF Need_To_Flush_MajorItem_Budget (goal Flush_MajorItem_Budget),')
+    L.append('         CRM Can_Reclaim_Excess_MajorItem_Budget (goal Reclaim_Excess_...), HES Has_Enough_Space_Force_Globally,')
+    L.append('         FRT / ERT friendly / enemy space raw totals, HST / SST Variable_Human / Variable_Self.SpaceTotalUnnormalized,')
+    L.append('         AGM ActiveGoals with Parameter_Category MajorItem (AG, without one, is in a2h runs only: it fails in')
+    L.append('         retail and stopped the script that evaluated it, a2i t02), HDS HasUnit(Death_Star),')
+    L.append('         MNT / MNTU Maintenance, PLC / PLCU PlanetsControlled (skip = no human player, nil = no answer)')
+    if res.get('longdone'):
+        L.append('   25-minute mark (LONGDONE) reached at frame %s' % res['longdone'][0])
+    else:
+        L.append('   25-minute mark (LONGDONE) NOT reached: the run was shorter than 1500 s of galactic time')
+    if not res['major']:
+        L.append('   no MJ records (old kit, or the Empire is human / not sampled)')
+    for fac, rows in res['major'].items():
+        L.append('-- %s: %d samples with MJ, frames %s .. %s' % (fac, len(rows), fi(rows[0]['f']), fi(rows[-1]['f'])))
+        for k in MAJOR_FLAGS:
+            on = [r for r in rows if flag_on(r['vals'].get(k))]
+            skip = sum(1 for r in rows if r['vals'].get(k) in ('skip', 'nil', 'ERR'))
+            L.append('   %-4s > 0 in %d of %d samples%s%s' % (
+                k, len(on), len(rows), (' (first at frame %s, last %s)' % (fi(on[0]['f']), fi(on[-1]['f']))) if on else '',
+                (', %d skip / nil / ERR' % skip) if skip else ''))
+        L.append('   changes of %s (frame: values):' % '/'.join(MAJOR_FLAGS))
+        last = None
+        shown = 0
+        for r in rows:
+            sig = tuple(flag_on(r['vals'].get(k)) for k in MAJOR_FLAGS)
+            if sig != last or r is rows[0] or r is rows[-1]:
+                if shown < 80:
+                    v = r['vals']
+                    L.append('     f=%s [%s %s] %s' % (
+                        int(r['f']) if r['f'] is not None else '?', r['ch'], r['tag'],
+                        ' '.join('%s=%s' % (k, v[k]) for k in a2fb_spec.MAJOR_KEYS if k in v)))
+                shown += 1
+            last = sig
+        if shown > 80:
+            L.append('     ... %d more changes in major.tsv' % (shown - 80))
+    fl = [r for r in res['plans']['runs'] if r['plan'] == 'FlushMajorItemBudget']
+    L.append('   FlushMajorItemBudget plan runs: %d' % len(fl))
+    for r in fl[:20]:
+        L.append('     f=%s fac=%s spend=%s unalloc=%s ends=%s' % (
+            fi(r['f']), r['fac'], r['spend'], r['unalloc'],
+            ','.join('%s@%s' % (e['kind'], fi(e['f'])) for e in r['ends']) or '-'))
+    # MajorItem pool around each Flush run (PS = before, PE = after; full samples of that plan)
+    for fac, rows in res['major'].items():
+        pe = [r for r in rows if r['tag'] in ('PS', 'PE') and r['major']]
+        for r in pe[:20]:
+            m = r['major']
+            L.append('     %s f=%s MajorItem pool %s' % (r['tag'], fi(r['f']), (
+                'a=%.1f r=%.3f' % (m['avail'], m['rate'])) if m.get('state') == 'ok' else m.get('state')))
+    return L
+
+
+def render_plans(res):
+    L = ['   per plan (a2h t02: end records; no_end = no PRET / PEXIT / PFAIL for that start: released by the goal system '
+         'or the record was lost; confirmed = the next start of the same script says prev=none):']
+    summ = res['plans']['summary']
+    if not summ:
+        return L + ['     none']
+    L.append('     %-42s %-11s %6s %6s %6s %6s %7s %9s %8s %8s' % ('plan', 'faction', 'starts', 'PEXIT', 'PFAIL', 'PRET',
+                                                               'no_end', 'confirmed', 'first_f', 'last_f'))
+    for key in sorted(summ):
+        plan, fac = key.split('|', 1)
+        s = summ[key]
+        L.append('     %-42s %-11s %6d %6d %6d %6d %7d %9d %8s %8s' % (
+            plan, fac, s['starts'], s['PEXIT'], s['PFAIL'], s['PRET'], s['no_end'], s['no_end_confirmed'],
+            int(s['first_f']) if s['first_f'] is not None else '-', int(s['last_f']) if s['last_f'] is not None else '-'))
+    if res['plans']['orphan_ends']:
+        L.append('     end records whose PSTART was not found (lost from the scan): %d' % len(res['plans']['orphan_ends']))
+    cp = [r for r in res['plans']['runs'] if r['plan'] in ('ConquerPiratePlan', 'LiftBlockadePlan')]
+    for r in cp[:30]:
+        L.append('     %s f=%s fac=%s ends=%s' % (r['plan'], fi(r['f']), r['fac'], ', '.join(
+            '%s@%s age=%s%s' % (e['kind'], fi(e['f']), e['age'], (' line=%s' % e['line']) if e.get('line') else '')
+            for e in r['ends']) or '-'))
+    return L
+
+
+def render(res, extra=None):
     L = []
     L.append('a2f t07 budget probe: report')
     L.append('records: %d (channels %s), samples: %d' % (res['records'], res['channels'], res['samples']))
@@ -317,6 +753,7 @@ def render(res):
                 p.get('cr')))
     else:
         L.append('   none recorded (no hooked plan started, or the plan scripts did not load)')
+    L += render_plans(res)
     L.append('')
     L.append('== 3. Budget block watcher (memory, read only): reset flag +0x74 ==')
     if not res['watch']:
@@ -352,6 +789,13 @@ def render(res):
     L.append('Reset flag: see section 3 (its setter is the transition 0 -> nonzero; compare its frame with the Lua '
              'samples around it: a template switch shows as a change of the SH trigger values, the first service as '
              'the init byte change).')
+    L += render_major(res)
+    L.append('   30-minute mark (MIN30, a2j t04): %s' % (
+        ('reached at frame %s' % res['min30'][0]) if res.get('min30') else 'NOT reached (run shorter than 1800 s)'))
+    L += render_perception(res, *(extra or {}).get('port_perception', ({}, [])))
+    L += render_production(res, (extra or {}).get('qtypes', {}))
+    if (extra or {}).get('port_trace'):
+        L += render_cycles(res, extra['port_trace'])
     return '\n'.join(L) + '\n'
 
 
@@ -369,21 +813,82 @@ def write_tsv(res, path):
                                    str(r['CU'])] + cells) + '\n')
 
 
-def run(records, watch, types_path, out_dir):
+def write_major_tsv(res, path):
+    """a2h t02: one row per sample with MJ fields (the MajorItem flush / reclaim triggers and inputs)."""
+    with open(path, 'w') as f:
+        f.write('faction\tchannel\ttag\tt\tframe\t' + '\t'.join(a2fb_spec.MAJOR_KEYS) +
+                '\tMAJOR_avail\tMAJOR_rate\tMAJOR_state\n')
+        for fac, rows in res['major'].items():
+            for r in rows:
+                m = r['major'] or {}
+                f.write('\t'.join([fac, r['ch'], str(r['tag']), str(r['t']), str(r['f'])] +
+                                  [r['vals'].get(k, '') for k in a2fb_spec.MAJOR_KEYS] +
+                                  [str(m.get('avail', '')), str(m.get('rate', '')), m.get('state', '')]) + '\n')
+
+
+def write_plans_tsv(res, path):
+    """a2h t02: one row per plan run (PSTART) with its end records."""
+    with open(path, 'w') as f:
+        f.write('plan\tfaction\tframe\tsid\tn\tprev\tspend\tunalloc\tcredits\tends\n')
+        for r in res['plans']['runs']:
+            ends = ';'.join('%s@%s age=%s%s' % (e['kind'], e['f'], e['age'],
+                                                (' by=%s line=%s' % (e['by'], e['line'])) if e.get('by') else '')
+                            for e in r['ends'])
+            f.write('\t'.join(str(x) for x in (r['plan'], r['fac'], r['f'], r['sid'], r['n'], r['prev'], r['spend'],
+                                                r['unalloc'], r['cr'], ends)) + '\n')
+
+
+def write_perception_tsv(res, path, port_ref):
+    """a2j t02: one row per D4 sample (retail keys), with the port reference value next to each when it has that frame."""
+    with open(path, 'w') as f:
+        f.write('pair\tframe\towner\t' + '\t'.join(a2fb_spec.PERC_KEYS) + '\tport_owner\t' +
+                '\t'.join('port_' + k for k in a2fb_spec.PERC_KEYS) + '\n')
+        for key, rows in res['perception'].items():
+            pr = port_ref.get(key, {})
+            for r in rows:
+                p = pr.get(int(r['f'])) if r['f'] is not None else None
+                f.write('\t'.join([key, str(fi(r['f'])), str(r['own'])] + [r['v'].get(k, '') for k in a2fb_spec.PERC_KEYS] +
+                                  [p['own'] if p else ''] + [p['v'].get(k, '') if p else '' for k in a2fb_spec.PERC_KEYS])
+                        + '\n')
+
+
+def write_production_tsv(res, path, qtypes):
+    with open(path, 'w') as f:
+        f.write('frame\tevent\tfaction\tplanet\tqueue\ttype\tcost\tcredits\n')
+        for e in res['production']:
+            f.write('\t'.join(str(x) for x in (fi(e['f']), e['kind'], e['fac'], e['pl'],
+                                                qtypes.get((e['type'] or '').upper(), '?'), e['type'], e['cost'],
+                                                e['cr'])) + '\n')
+
+
+DEFAULT_PORT_PERCEPTION = os.path.join(HERE, 'port_reference_a2j.tsv')
+
+
+def run(records, watch, types_path, out_dir, port_trace=None, port_perception=DEFAULT_PORT_PERCEPTION, qtypes_path=None):
     recs = parse_records(records) if records and os.path.exists(records) else []
     types = json.load(open(types_path)) if types_path and os.path.exists(types_path) else {}
+    if qtypes_path is None and types_path:
+        qtypes_path = os.path.join(os.path.dirname(os.path.abspath(types_path)), 'A2FB_QUEUE_TYPES.json')
+    qtypes = json.load(open(qtypes_path)) if qtypes_path and os.path.exists(qtypes_path) else {}
     events = []
     if watch and os.path.exists(watch):
         import a2f_watch
         events = a2f_watch.load_events(watch)
     res = analyse(recs, types, events)
     os.makedirs(out_dir, exist_ok=True)
-    text = render(res)
+    port_ref, port_notes = read_port_perception(port_perception)
+    extra = {'port_perception': (port_ref, port_notes), 'qtypes': qtypes,
+             'port_trace': port_trace if port_trace and os.path.exists(port_trace) else None}
+    text = render(res, extra)
+    write_perception_tsv(res, os.path.join(out_dir, 'perception.tsv'), port_ref)
+    write_production_tsv(res, os.path.join(out_dir, 'production.tsv'), qtypes)
     with open(os.path.join(out_dir, 'report.txt'), 'w') as f:
         f.write(text)
     with open(os.path.join(out_dir, 'report.json'), 'w') as f:
         json.dump(res, f, indent=1, default=str)
     write_tsv(res, os.path.join(out_dir, 'samples.tsv'))
+    write_major_tsv(res, os.path.join(out_dir, 'major.tsv'))
+    write_plans_tsv(res, os.path.join(out_dir, 'plans.tsv'))
     return res, text
 
 
@@ -394,6 +899,9 @@ def main():
     ap.add_argument('--watch')
     ap.add_argument('--types')
     ap.add_argument('--out')
+    ap.add_argument('--port-trace', help='a2j t04: stderr of an a2j_port.py run (A2G BUD rows): section 8, per-cycle P / I')
+    ap.add_argument('--port-perception', default=DEFAULT_PORT_PERCEPTION,
+                    help='a2j t02: port D4 table (a2j_port.py table; default the kit\'s port_reference_a2j.tsv)')
     a = ap.parse_args()
     if a.run_dir:
         rd = a.run_dir
@@ -406,7 +914,7 @@ def main():
             ap.error('give a run dir or --records')
         rec, wat, typ = a.records, a.watch, a.types
         out = a.out or os.path.dirname(os.path.abspath(rec))
-    res, text = run(rec, wat, typ, out)
+    res, text = run(rec, wat, typ, out, a.port_trace, a.port_perception)
     sys.stdout.write(text)
     return 0 if res['records'] else 10
 

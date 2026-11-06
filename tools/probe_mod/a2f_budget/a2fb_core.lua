@@ -1,11 +1,13 @@
 -- ==== a2f t07 budget probe: shared core (tools/probe_mod/a2f_budget/a2fb_core.lua) ====
 -- Prepended (after the generated header: A2FB_CH, A2FB_MODEQ, A2FB_SPEC, A2FB_COMMON) to every probe script: the
--- story plot script, the galactic free store and the Infrastructure plan scripts. Lua 5.0, and the free store has NO
+-- story plot script, the galactic free store and the hooked plan scripts. Lua 5.0, and the free store has NO
 -- math library (docs/re, s78g), so nothing here calls math.*, '#', '%' or string.rep.
 --
 -- Read-only: no GameRandom, no orders, no spawns, no story events. Every engine call is inside pcall; an evaluation
 -- that fails inside the engine (EvaluatePerception raises the script-error helper and returns no value, which
--- the Lua sees as nil, AI_GALACTIC_3 sec. 8) is recorded as nil.
+-- the Lua sees as nil, AI_GALACTIC_3 sec. 8) is recorded as nil. But the helper also sets the script's failed flag,
+-- and retail then stops servicing the script (a2i t02: run 20261106-040725 lost the story channel to one such
+-- equation), so the probe evaluates only equations that answer in retail.
 --
 -- Output (docs/re/LUA_SCRIPT_OUTPUT.md): retail 1.121 writes no file, so every line is kept as a Lua string
 --   A2FB + 1 + |<channel S, F or P>|<sid>|<seq>|<KIND>|<text>|END
@@ -139,8 +141,37 @@ end
 --   SM  cr=credits +  common + small BFB group: CU, NET, B1/B2 for ALL, INFRA, OFF   (mod equations)
 --   BF  the remaining BFB categories (full samples only)
 --   SH  the shipped budget-weight / trigger equations (full samples only)
+--   MJ  a2h t02: MajorItem flush / reclaim triggers and inputs (every sample; factions with spec.major: Empire)
 -- key B<k><CAT> = A2FB_<FAC>_BFB_<k>_<CAT> = BudgetFractionToBuild of probe type k in category CAT (CAT ALL = no
 -- Parameter_Category). Decoded by a2f_report.py.
+-- a2i t02: each record is built inside pcall (A2FB_Rec), so a Lua error in one record (a binding, a nil in the text)
+-- costs that record only and leaves one ERR record "<KIND> <message>" (each distinct message once). pcall does NOT
+-- catch an equation that fails inside the engine: that sets the script's failed flag without a Lua error and the
+-- script stops (run 20261106-040725, A2FB_ActiveGoals); only equations that answer in retail may be evaluated.
+function A2FB_Rec(kind, f)
+	local ok, s = pcall(f)
+	if ok then
+		A2FB_Say(kind, s)
+	else
+		A2FB_Error(kind, s)
+	end
+end
+
+-- Text of the SH / MJ records: list entries { key, equation, needs a human }; skip without a human player.
+function A2FB_JoinH(head, list, p)
+	local s = head
+	local hx = A2FB_HumanExists()
+	for i = 1, table.getn(list) do
+		local e = list[i]
+		if e[3] and not hx then
+			s = s .. " " .. e[1] .. "=skip"
+		else
+			s = s .. " " .. e[1] .. "=" .. A2FB_Eval(e[2], p)
+		end
+	end
+	return s
+end
+
 function A2FB_Sample(tag, p, full)
 	local t = A2FB_Now()
 	local fac = A2FB_Fac(p)
@@ -148,9 +179,11 @@ function A2FB_Sample(tag, p, full)
 	local human = A2FB_Str(function() return p.Is_Human() end)
 	local cr = A2FB_Str(function() return p.Get_Credits() end)
 	if full then
-		A2FB_Say("PL", head .. " human=" .. human .. " cr=" .. cr ..
-			" tech=" .. A2FB_Str(function() return p.Get_Tech_Level() end) ..
-			" diff=" .. A2FB_Str(function() return p.Get_Difficulty() end))
+		A2FB_Rec("PL", function()
+			return head .. " human=" .. human .. " cr=" .. cr ..
+				" tech=" .. A2FB_Str(function() return p.Get_Tech_Level() end) ..
+				" diff=" .. A2FB_Str(function() return p.Get_Difficulty() end)
+		end)
 	end
 	head = head .. " cr=" .. cr
 	local spec = A2FB_SPEC[fac]
@@ -158,23 +191,18 @@ function A2FB_Sample(tag, p, full)
 		return
 	end
 	if A2FB_MODEQ then
-		A2FB_Say("SM", head .. A2FB_Join(A2FB_COMMON, p) .. A2FB_Join(spec.small, p))
+		A2FB_Rec("SM", function() return head .. A2FB_Join(A2FB_COMMON, p) .. A2FB_Join(spec.small, p) end)
 		if full then
-			A2FB_Say("BF", head .. A2FB_Join(spec.full, p))
+			A2FB_Rec("BF", function() return head .. A2FB_Join(spec.full, p) end)
 		end
 	end
 	if full then
-		local s = head
-		local hx = A2FB_HumanExists()
-		for i = 1, table.getn(spec.shipped) do
-			local e = spec.shipped[i]
-			if e[3] and not hx then
-				s = s .. " " .. e[1] .. "=skip"
-			else
-				s = s .. " " .. e[1] .. "=" .. A2FB_Eval(e[2], p)
-			end
-		end
-		A2FB_Say("SH", s)
+		A2FB_Rec("SH", function() return A2FB_JoinH(head, spec.shipped, p) end)
+	end
+	-- a2h t02: MajorItem flush / reclaim triggers and inputs, every sample (small and full) of the factions that have
+	-- spec.major (Empire). A mod equation entry exists only when the mod equation file is in use.
+	if spec.major ~= nil then
+		A2FB_Rec("MJ", function() return A2FB_JoinH(head, spec.major, p) end)
 	end
 end
 -- ==== end of the shared core ====

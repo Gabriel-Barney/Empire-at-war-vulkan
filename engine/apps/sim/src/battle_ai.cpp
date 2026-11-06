@@ -11,6 +11,7 @@
 #include "alamo/ai/tactical/tactical_perception.hpp"
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/data/game_database.hpp"  // a2h t05: load_tactical_ai_data
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/lua/object_bridge.hpp"
@@ -54,6 +55,16 @@ std::string default_tactical_ai_type(int32_t player, const galactic::GalacticSim
     if (ai::ai_iequal(f.name, "Rebel")) return "BasicRebel";
     if (ai::ai_iequal(f.name, "Underworld")) return "AI_Player_Underworld";
     return {};
+}
+
+void load_tactical_ai_data(TacticalAiSetup& s, const FileProvider& files, const data::GameConstants* gc,
+                           const std::function<std::vector<std::string>(std::string_view)>& list) {
+    if (list) {
+        s.space_plans = at::tactical_plan_files(at::TacticalMode::Space, list);
+        s.land_plans = at::tactical_plan_files(at::TacticalMode::Land, list);
+    }
+    s.difficulties = at::load_tactical_ai_difficulties(files);
+    if (gc) s.constants.load(*gc);
 }
 
 BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, const TacticalAiSetup& setup)
@@ -454,6 +465,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
             pt.tech_level = types.get_int(ti, "Tech_Level");
             pt.population = type_population(static_cast<int32_t>(t));
             pt.build_cost = static_cast<float>(types.get_int(ti, "Build_Cost_Credits"));  // int field
+            pt.build_time_seconds = types.get_int(ti, "Build_Time_Seconds");  // int field +0x890 (A2g t06: AllowedTime base)
             for (const std::string_view f : types.get_list(ti, "Affiliation")) pt.affiliation.emplace_back(f);
             // flags +0x67 Create_Team / +0x29 squadron member / +0x21 Cinematic_Object_Only, behaviours 0x5C DUMMY_STAR_BASE /
             // 0x5B DUMMY_GROUND_BASE (AI_GALACTIC_3 §6 table) [battle host: replaces the Is_Dummy stand-in]

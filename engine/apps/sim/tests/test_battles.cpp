@@ -2872,6 +2872,26 @@ void test_foc() {
     std::printf("foc battle: contrast rows %zu, hardpoint records %zu, priority sets %zu, damage types %u\n", crules.contrast.size(),
                 catalog.hardpoint_records(), catalog.priority_sets().size(), catalog.damage().damage_count());
     CHECK(crules.contrast.size() == 11 && catalog.hardpoint_records() > 100 && !catalog.priority_sets().empty());
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+    {  // a2h t05: the hosts' loader on the shipped data - the tags are found (not the defaults' fallback) and read
+        TacticalAiSetup ts;
+        const vfs::Vfs* vp = files.get();
+        load_tactical_ai_data(ts, *files, &db.constants(), [vp](std::string_view g) { return vp->list(g); });
+        const data::GameConstants& gc = db.constants();
+        CHECK(gc.get("Production_Speed_Factor") && gc.get("Max_Ground_Forces_On_Planet") && gc.get("Use_Reinforcement_Points") &&
+              gc.get("Space_Reinforcement_Collision_Check_Distance"));
+        CHECK(ts.constants.production_speed_factor == gc.get_float("Production_Speed_Factor", -1.0f));
+        CHECK(ts.constants.max_ground_forces_on_planet == gc.get_int("Max_Ground_Forces_On_Planet", -1));
+        CHECK(ts.constants.space_reinforcement_collision_check_distance ==
+              gc.get_float("Space_Reinforcement_Collision_Check_Distance", -1.0f));
+        CHECK(!ts.space_plans.empty() && !ts.land_plans.empty() && !ts.difficulties.empty());
+        std::printf("foc tactical AI constants: production_speed_factor %.3f, max_ground_forces %d, space drop sweep %.0f, "
+                    "%zu / %zu space / land plans, %zu difficulties\n",
+                    static_cast<double>(ts.constants.production_speed_factor), ts.constants.max_ground_forces_on_planet,
+                    static_cast<double>(ts.constants.space_reinforcement_collision_check_distance), ts.space_plans.size(),
+                    ts.land_plans.size(), ts.difficulties.size());
+    }
+#endif
     {  // a1g t04 follow-up (TACTICAL_GAPS §4.2.1 worked example): the Rebel_Infantry_Squad drop shape and layout
         const objects::TypeIndex rq = types.resolve_name("Rebel_Infantry_Squad");
         CHECK(rq != objects::kNone && rq < types.size());
@@ -5404,6 +5424,50 @@ void test_battle_ai_land_drop(const Data& d) {
     }
     CHECK(checked);
 }
+
+// a2h t05: load_tactical_ai_data, the battle hosts' loader (alamo_headless --skirmish-ai / galactic --battles, alamo_game),
+// fills TacticalAiSetup::constants from GameConstants; a missing tag, a bad value or no GameConstants keeps the default.
+void test_tactical_ai_constants_load() {
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_tactical_ai_constants";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/XML/GameObjectFiles.xml", "<GameObjectFiles></GameObjectFiles>\n");
+    write_file(root / "Data/XML/TradeRouteFiles.xml", "<TradeRouteFiles></TradeRouteFiles>\n");
+    write_file(root / "Data/XML/CampaignFiles.xml", "<CampaignFiles></CampaignFiles>\n");
+    write_file(root / "Data/XML/GameConstants.xml",
+               "<GameConstants>\n <Production_Speed_Factor>2.5</Production_Speed_Factor>\n"
+               " <Max_Ground_Forces_On_Planet> 7 </Max_Ground_Forces_On_Planet>\n"
+               " <AI_LandEvaluatorRegionSize>1500.0</AI_LandEvaluatorRegionSize>\n"
+               " <AIUsesFogOfWarLand> True </AIUsesFogOfWarLand>\n"
+               " <Use_Reinforcement_Points>False</Use_Reinforcement_Points>\n"
+               " <Health_Low_Percent_Threshold>not a number</Health_Low_Percent_Threshold>\n</GameConstants>\n");
+    DirectoryProvider dp(path_to_utf8(root));
+    data::GameDatabase db;
+    std::vector<std::string> diag;
+    CHECK(db.load(dp, {}, &diag));
+    const ai::tactical::TacticalAiConstants def;
+    TacticalAiSetup s;
+    s.land_plans = {"keep.lua"};
+    load_tactical_ai_data(s, dp, &db.constants(), {});  // no lister: the plan lists stay
+    const ai::tactical::TacticalAiConstants& c = s.constants;
+    std::printf("  tactical AI constants: production_speed_factor %.2f max_ground_forces %d land_region %.0f fow_land %d rp %d health_low %.2f\n",
+                static_cast<double>(c.production_speed_factor), c.max_ground_forces_on_planet, static_cast<double>(c.land_region_size),
+                c.ai_uses_fow_land ? 1 : 0, c.use_reinforcement_points ? 1 : 0, static_cast<double>(c.health_low_percent_threshold));
+    CHECK(c.production_speed_factor == 2.5f && c.max_ground_forces_on_planet == 7 && c.land_region_size == 1500.0f);
+    CHECK(c.ai_uses_fow_land && !c.use_reinforcement_points);
+    CHECK(c.health_low_percent_threshold == def.health_low_percent_threshold);  // unparsable: the default
+    CHECK(c.space_region_size == def.space_region_size && c.high_threat_tolerance == def.high_threat_tolerance &&
+          c.ai_uses_fow_space == def.ai_uses_fow_space);  // missing tags: the defaults
+    CHECK(s.land_plans.size() == 1 && s.space_plans.empty());
+    TacticalAiSetup n;  // no GameConstants: every default; an empty lister empties the plan lists
+    n.land_plans = {"drop.lua"};
+    load_tactical_ai_data(n, dp, nullptr, [](std::string_view) { return std::vector<std::string>(); });
+    CHECK(n.constants.production_speed_factor == def.production_speed_factor &&
+          n.constants.max_ground_forces_on_planet == def.max_ground_forces_on_planet &&
+          n.constants.use_reinforcement_points == def.use_reinforcement_points);
+    CHECK(n.land_plans.empty() && n.space_plans.empty());
+    remove_all_long(root, ec);
+}
 #endif
 // --- end OI host ---
 
@@ -7292,6 +7356,8 @@ int main(int argc, char** argv) {
     test_battle_ai_find_team();
     std::printf("a1g t04 follow-up: BattleAi::land_drop_ok (impassable / fogged / movers / enabling radius)\n");
     test_battle_ai_land_drop(*d);
+    std::printf("a2h t05: the battle hosts load the tactical AI constants from GameConstants\n");
+    test_tactical_ai_constants_load();
 #endif
     std::printf("a1g t04 follow-up: land company drop layout, oriented boxes, reinforcement radii\n");
     test_land_drop_rules();

@@ -216,6 +216,7 @@ std::vector<FactionRules> load_factions(const FileProvider& provider, std::vecto
             r.is_playable = objects::parse_type_bool(n.child_text("Is_Playable"));
             r.benefits_from_corruption = objects::parse_type_bool(n.child_text("Benefits_From_Corruption"));
             r.hyperspace_speed_factor = atof_or(n.child_text("Hyperspace_Speed_Factor"), r.hyperspace_speed_factor);
+            r.maintenance_cost = atof_or(n.child_text("Maintenance_Cost"), r.maintenance_cost);
             r.force_alignment = parse_force_side(n.child_text("Force_Alignment"));
             r.corruption_time_mult = pair_or(n.child_text("Corruption_Galactic_Production_Time_Multipliers"),
                                              r.corruption_time_mult);
@@ -295,6 +296,7 @@ std::vector<TypeInfo> extract_type_info(const objects::GameObjectTypes& types, c
         i.hyperspace_speed = types.get_float(t, "Hyperspace_Speed");
         i.influence_range = types.get_float(t, "Galactic_Influence_Range");
         i.piracy_value = types.get_float(t, "Piracy_Value_Credits");
+        i.maintenance_cost = types.get_float(t, "Maintenance_Cost");
         i.ai_combat_power = types.columns().ai_combat_power[t];
         i.reduced_by_factories = types.get_bool(t, "Build_Time_Reduced_By_Multiple_Factories");
         i.build_initially_locked = types.get_bool(t, "Build_Initially_Locked");

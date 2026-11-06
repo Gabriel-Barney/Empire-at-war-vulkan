@@ -35,6 +35,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "alamo/ai/tactical/tactical_ai.hpp"
@@ -79,6 +80,13 @@ struct TacticalAiSetup {
 // [port] faction -> AIPlayerType for non-human playable players: Empire -> BasicEmpire, Rebel -> BasicRebel,
 // Underworld -> AI_Player_Underworld (A2's mapping); "" otherwise.
 std::string default_tactical_ai_type(int32_t player, const galactic::GalacticSim& galaxy);
+
+// a2h t05: the session data of the tactical AI, one loader for every battle host (alamo_headless --skirmish-ai and
+// galactic --battles, alamo_game): the tactical_plan_files of both modes (list = the VFS glob lister; empty = the plan
+// lists are left as they are), the difficulty table (load_tactical_ai_difficulties) and the GameConstants values
+// (TacticalAiConstants::load; gc null or a missing tag keeps the current value, i.e. the default).
+void load_tactical_ai_data(TacticalAiSetup& s, const FileProvider& files, const data::GameConstants* gc,
+                           const std::function<std::vector<std::string>(std::string_view)>& list);
 
 class BattleAi final : public ai::tactical::TacticalAiHost {
 public:

@@ -10,7 +10,11 @@
 --     44.5 s before to 2.5 s after), a small sample (SM: Sigma-of-pools CreditsUnnormalized, NetIncome, probe-type
 --     BudgetFractionToBuild for ALL / Infrastructure / Offensive);
 --   * a full sample (SM + BF + SH: all categories, the shipped weight / trigger equations) once per second until
---     120 s, every 5 s until 300 s; then the script goes quiet (ServiceRate 60).
+--     120 s, every 5 s until 300 s (DONE); after that a full sample every 30 s for as long as the run lasts
+--     (a2g t01: long runs until a template switch / Tech_Upgrade);
+--   * a2h t02: an MJ record (MajorItem flush / reclaim triggers and inputs) with every Empire sample, and the message
+--     TEXT_A2FB_LONG_DONE (record LONGDONE) at 1500 s = 25 galactic minutes, the length the MajorItem question needs;
+--   * a2j t04: the message TEXT_A2FB_MIN30 (record MIN30) at 1800 s = 30 galactic minutes, the end of the a2j run.
 -- The AI's budget is initialised at the first service of its galactic context (AI_GALACTIC 1.1: template init, then
 -- budget init 0x6137b0), which can be after this script's first service: the first samples can therefore show the
 -- state before Init (zero pools: BudgetFractionToBuild 1e18) and the following ones the state after it.
@@ -18,15 +22,25 @@ require("PGStoryMode")
 
 A2FB_CANARY = "Mods\\A2fBudgetProbe\\A2FB_Canary_Story.txt"
 A2FB_FACS = { "Empire", "Rebel", "Underworld", "Pirates" }
+-- a2h t02: room for the MJ records and a long run (a2g's 20-minute run used 4870 of the core's default 8000)
+A2FB_MAX = 20000
+A2FB_LONG_T = 1500
+A2FB_LONG_DONE = false
+A2FB_MIN30_T = 1800
+A2FB_MIN30_DONE = false
 A2FB_LAST_FULL = -100
 A2FB_STOPPED = false
 A2FB_FIRST = true
 
-A2FB_Say("LOAD", "story plot script chunk ran modeq=" .. tostring(A2FB_MODEQ))
+-- a2i t02: every record below is built inside pcall (A2FB_Rec) and every player's sample runs in its own pcall, so a
+-- Lua error costs one record or one sample and leaves an ERR record (each distinct message once), never the channel.
+-- (Run 20261106-040725 lost this channel to an equation that fails inside the engine, which pcall cannot catch: see
+-- a2fb_core.lua and the README's known limits.)
+A2FB_Rec("LOAD", function() return "story plot script chunk ran modeq=" .. tostring(A2FB_MODEQ) end)
 A2FB_Canary(A2FB_CANARY)
 
 function Definitions()
-	A2FB_Say("DEF", "Definitions ran")
+	A2FB_Rec("DEF", function() return "Definitions ran" end)
 	ServiceRate = 0.01
 	StoryModeEvents = {}
 	Define_State("A2FB_State", A2FB_State)
@@ -84,7 +98,10 @@ function A2FB_Round(t, full)
 			local is_human = okh and human
 			-- full rounds cover every player (credits of the human and Pirates too), small rounds the AI players
 			if full or (i <= 3 and not is_human) then
-				A2FB_Sample("ST", p, full)
+				local oks, errs = pcall(A2FB_Sample, "ST", p, full)
+				if not oks then
+					A2FB_Error("Sample " .. A2FB_FACS[i], errs)
+				end
 			end
 		end
 	end
@@ -97,16 +114,38 @@ function A2FB_Update()
 	end
 	if A2FB_FIRST then
 		A2FB_FIRST = false
-		A2FB_Say("FIRST", "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " humanexists=" .. tostring(A2FB_HumanExists()))
+		A2FB_Rec("FIRST", function()
+			return "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " humanexists=" .. tostring(A2FB_HumanExists())
+		end)
 		pcall(Game_Message, "TEXT_A2FB_LOADED")
 	end
 	if t >= 300 then
 		if not A2FB_STOPPED then
 			A2FB_STOPPED = true
-			A2FB_Say("DONE", "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " records=" .. A2FB_Seq)
+			A2FB_Rec("DONE", function() return "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " records=" .. A2FB_Seq end)
 			pcall(Game_Message, "TEXT_A2FB_DONE")
 		end
-		ServiceRate = 60
+		if t >= A2FB_LONG_T and not A2FB_LONG_DONE then
+			A2FB_LONG_DONE = true
+			A2FB_Rec("LONGDONE", function()
+				return "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " records=" .. A2FB_Seq
+			end)
+			pcall(Game_Message, "TEXT_A2FB_LONG_DONE")
+		end
+		-- a2j t04: the 30-minute run (D3 / D4 and the per-cycle P / I comparison) ends here
+		if t >= A2FB_MIN30_T and not A2FB_MIN30_DONE then
+			A2FB_MIN30_DONE = true
+			A2FB_Rec("MIN30", function()
+				return "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " records=" .. A2FB_Seq
+			end)
+			pcall(Game_Message, "TEXT_A2FB_MIN30")
+		end
+		-- a2g t01 (long run until a template switch): keep a full sample every 30 s after DONE
+		if (t - A2FB_LAST_FULL) >= 29.999 then
+			A2FB_LAST_FULL = t
+			A2FB_Round(t, true)
+		end
+		ServiceRate = 30
 		return
 	end
 	local dense, full, rate = A2FB_Plan(t)
@@ -119,7 +158,7 @@ end
 
 function A2FB_State(message)
 	if message == OnEnter then
-		A2FB_Say("ENTER", "t=" .. A2FB_Num(A2FB_Now()))
+		A2FB_Rec("ENTER", function() return "t=" .. A2FB_Num(A2FB_Now()) end)
 	elseif message == OnUpdate then
 		local ok, err = pcall(A2FB_Update)
 		if not ok then

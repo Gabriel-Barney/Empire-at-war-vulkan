@@ -1,0 +1,200 @@
+a2f t07 budget probe: report
+records: 5779 (channels {'F': 800, 'P': 109, 'S': 4870}), samples: 1877
+
+Scripts that ran (canary = _CustomScriptMessage deleted the kit's file; the run status says which files are gone): F: file=Mods\A2fBudgetProbe\A2FB_Canary_FreeStore.txt ok=true err=nil; F: file=Mods\A2fBudgetProbe\A2FB_Canary_FreeStore.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; P: file=Mods\A2fBudgetProbe\A2FB_Canary_Plan.txt ok=true err=nil; S: file=Mods\A2fBudgetProbe\A2FB_Canary_Story.txt ok=true err=nil
+
+== 1. Pools by category (decoded from BudgetFractionToBuild; a = available credits, r = rate) ==
+
+-- EMPIRE: 761 samples; mod equations answer
+   first / last sample frame with OFF and INFRA empty (budget not initialised): None, last: None, first with real pools: 0.0
+   [S ST] f=0 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] DEF[empty] INFO[empty] INFRA[a=4000.32 r=4.14e-05] MAJOR[mixed]
+   [S ST] f=1 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=2 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=3 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=4 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=5 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=6 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=7 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=8 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=9 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=10 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=11 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=12 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=13 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=30 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] DEF[empty] INFO[empty] INFRA[a=4000.32 r=4.14e-05] MAJOR[a=894.34 r=5.79e-06]
+   [S ST] f=31 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=60 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] DEF[empty] INFO[empty] INFRA[a=4000.32 r=4.14e-05] MAJOR[a=894.34 r=5.79e-06]
+   [S ST] f=61 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=90 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] DEF[empty] INFO[empty] INFRA[a=4000.32 r=4.14e-05] MAJOR[a=894.34 r=5.79e-06]
+   [S ST] f=91 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] INFRA[a=4000.32 r=4.14e-05]
+   [S ST] f=120 cr=7882.5 CU=7882.5 ALL[a=8000.00 r=-0.00] OFF[a=3105.34 r=-4.98e-06] DEF[empty] INFO[empty] INFRA[a=4000.32 r=4.14e-05] MAJOR[a=894.34 r=5.79e-06]
+   [S ST] f=1334 cr=1759.92 CU=1759.92 ALL[a=2042.33 r=0.20] OFF[a=302.84 r=-2.64e-16] INFRA[a=850.27 r=1.05e-05]
+   [S ST] f=1359 cr=2354.06 CU=2354.06 ALL[a=2042.33 r=0.20] OFF[a=302.84 r=-2.64e-16] DEF[empty] INFO[empty] INFRA[a=850.27 r=1.05e-05] MAJOR[a=894.34 r=5.79e-06]
+   [S ST] f=1360 cr=2351.13 CU=2351.13 ALL[a=2042.33 r=0.20] OFF[a=302.84 r=-2.64e-16] INFRA[a=850.27 r=1.05e-05]
+   [S ST] f=1389 cr=2266.04 CU=2266.04 ALL[a=2266.80 r=15.04] OFF[a=538.33 r=5.76] DEF[empty] INFO[empty] INFRA[a=764.63 r=7.42] MAJOR[a=839.39 r=2.20]
+   [S ST] f=1390 cr=2263.11 CU=2263.11 ALL[a=2266.80 r=15.04] OFF[a=538.33 r=5.76] INFRA[a=764.63 r=7.42]
+   [S ST] f=1419 cr=2178.02 CU=2178.02 ALL[a=2266.80 r=15.04] OFF[a=538.33 r=5.76] DEF[empty] INFO[empty] INFRA[a=764.63 r=7.42] MAJOR[a=968.95 r=1.66]
+   [S ST] f=1420 cr=2175.09 CU=2175.09 ALL[a=2266.80 r=15.04] OFF[a=538.33 r=5.76] INFRA[a=764.63 r=7.42]
+   [F FS] f=1453 cr=2078.26 CU=2078.26 ALL[a=2266.80 r=15.04] OFF[a=538.33 r=5.76] DEF[empty] INFO[empty] INFRA[a=764.63 r=7.42] MAJOR[a=968.95 r=1.66]
+   [S ST] f=2684 cr=1298.36 CU=1298.36 ALL[a=1298.36 r=14.83] OFF[a=329.42 r=5.76] INFRA[a=-0.000768 r=7.42]
+   [S ST] f=2695 cr=1298.36 CU=1298.36 ALL[a=1298.36 r=14.83] OFF[a=329.42 r=5.76] DEF[empty] INFO[empty] INFRA[a=-0.000768 r=7.42] MAJOR[a=968.95 r=1.66]
+   [S ST] f=2696 cr=1298.36 CU=1298.36 ALL[a=1298.36 r=14.83] OFF[a=329.42 r=5.76] INFRA[a=-0.000768 r=7.42]
+   [S ST] f=2725 cr=1965.86 CU=1965.86 ALL[a=1298.36 r=14.83] OFF[a=329.42 r=5.76] DEF[empty] INFO[empty] INFRA[a=-0.000768 r=7.42] MAJOR[a=968.95 r=1.66]
+   [S ST] f=2726 cr=1965.86 CU=1965.86 ALL[a=1298.36 r=14.83] OFF[a=329.42 r=5.76] INFRA[a=-0.000768 r=7.42]
+   [S ST] f=2755 cr=1965.86 CU=1965.86 ALL[a=1220.74 r=17.94] OFF[a=329.42 r=5.76] DEF[empty] INFO[empty] INFRA[a=-0.000768 r=7.42] MAJOR[a=960.28 r=2.01]
+   [S ST] f=2756 cr=1965.86 CU=1965.86 ALL[a=1220.74 r=17.94] OFF[a=329.42 r=5.76] INFRA[a=-0.000768 r=7.42]
+   [S ST] f=2806 cr=1965.86 CU=1965.86 ALL[a=1965.85 r=14.83] OFF[a=588.50 r=5.76] DEF[empty] INFO[empty] INFRA[a=333.79 r=7.42] MAJOR[a=960.28 r=2.01]
+   [S ST] f=3612 cr=1965.86 CU=1965.86 ALL[a=1965.85 r=14.83] OFF[a=588.50 r=5.76] INFRA[a=333.79 r=7.42]
+   [F FS] f=3637 cr=1965.86 CU=1965.86 ALL[a=1965.85 r=14.83] OFF[a=588.50 r=5.76] DEF[empty] INFO[empty] INFRA[a=333.79 r=7.42] MAJOR[a=1043.57 r=1.66]
+   [S ST] f=4034 cr=1965.86 CU=1965.86 ALL[a=1965.85 r=14.83] OFF[a=588.50 r=5.76] INFRA[a=333.79 r=7.42]
+   [S ST] f=4064 cr=2633.36 CU=2633.36 ALL[a=1965.85 r=14.83] OFF[a=588.50 r=5.76] DEF[empty] INFO[empty] INFRA[a=333.79 r=7.42] MAJOR[a=1126.86 r=1.31]
+   [S ST] f=4065 cr=2633.36 CU=2633.36 ALL[a=2710.98 r=11.73] OFF[a=847.59 r=5.76] INFRA[a=667.59 r=7.42]
+   [F FS] f=4123 cr=2633.36 CU=2633.36 ALL[a=2633.36 r=14.83] OFF[a=847.59 r=5.76] DEF[empty] INFO[empty] INFRA[a=667.59 r=7.42] MAJOR[a=1118.19 r=1.66]
+   [S ST] f=4123 cr=2633.36 CU=2633.36 ALL[a=2633.36 r=14.83] OFF[a=847.59 r=5.76] INFRA[a=667.59 r=7.42]
+   [S ST] f=4276 cr=2603.16 CU=2603.16 ALL[a=2601.86 r=14.89] OFF[a=817.39 r=5.76] DEF[empty] INFO[empty] INFRA[a=667.59 r=7.42] MAJOR[a=1118.19 r=1.66]
+   [S ST] f=5384 cr=2198.33 CU=2198.33 ALL[a=2198.33 r=14.83] OFF[a=412.58 r=5.76] INFRA[a=667.59 r=7.42]
+   [F FS] f=5581 cr=2752.18 CU=2752.18 ALL[a=2743.82 r=15.17] OFF[a=576.42 r=5.76] DEF[empty] INFO[empty] INFRA[a=986.34 r=7.42] MAJOR[a=1189.44 r=1.66]
+   [P PS] f=12739 cr=4192.83 CU=4192.83 ALL[a=1625.39 r=25.53] OFF[a=342.21 r=5.76] INFRA[a=140.00 r=7.42]
+   [F FS] f=12865 cr=3785.51 CU=3785.51 ALL[a=3776.94 r=15.18] OFF[a=910.87 r=5.76] DEF[empty] INFO[empty] INFRA[a=1206.92 r=7.42] MAJOR[a=1667.72 r=1.66]
+   [F FS] f=24286 cr=983.32 CU=983.32 ALL[a=978.66 r=18.19] OFF[a=0.000473 r=7.13] INFRA[a=634.46 r=9.00]
+   [S ST] f=24726 cr=1609.39 CU=1609.39 ALL[a=1610.74 r=18.02] OFF[a=392.69 r=7.13] DEF[empty] INFO[empty] INFRA[a=808.31 r=9.00] MAJOR[a=410.27 r=1.87]
+   [P PS] f=33298 cr=1502.88 CU=1502.88 ALL[a=1502.88 r=21.33] OFF[a=198.31 r=6.02] INFRA[a=618.02 r=13.73]
+   [S ST] f=33736 cr=1255.38 CU=1255.38 ALL[zero] OFF[zero] DEF[mixed] INFO[mixed] INFRA[zero] MAJOR[zero]
+   [S ST] f=34637 cr=938.002 CU=938.002 ALL[a=1184.18 r=20.83] OFF[a=5.68e-14 r=6.02] DEF[empty] INFO[empty] INFRA[a=414.19 r=13.73] MAJOR[a=757.51 r=1.58]
+   ... 707 more samples in report.json / samples.tsv
+   first real pools (f=30.0, credits 8000.0): measured weights {'OFF': 0.3882, 'DEF': 0.0, 'INFO': 0.0, 'INFRA': 0.5, 'MAJOR': 0.1118}
+   distance (L1) to the template candidates (smaller = closer; 0 = that template's weights): {'base': 0.0, 'tech': 1.5347}
+   shipped equations (first 3 / last):
+     f=0.0 t=0.0 {'wOFF': 8.33333, 'wDEF': 2.0, 'wINFO': 0.0, 'wINFRA': 10.7351, 'wMAJOR': 2.4, 'tOFF': 0.07, 'tDEF': 0.06, 'tINFO': 0.0, 'tINFRA': 0.04, 'tMAJOR': 0.8, 'tReq': 0.8, 'TRIG': 0.0, 'UNTRIG': 0.0}
+     f=30.0 t=1.0 {'wOFF': 8.33333, 'wDEF': 2.0, 'wINFO': 0.0, 'wINFRA': 10.7351, 'wMAJOR': 2.4, 'tOFF': 0.07, 'tDEF': 0.06, 'tINFO': 0.0, 'tINFRA': 0.04, 'tMAJOR': 0.8, 'tReq': 0.8, 'TRIG': 0.0, 'UNTRIG': 0.0}
+     f=60.0 t=2.0 {'wOFF': 8.33333, 'wDEF': 2.0, 'wINFO': 0.0, 'wINFRA': 10.7351, 'wMAJOR': 2.4, 'tOFF': 0.07, 'tDEF': 0.06, 'tINFO': 0.0, 'tINFRA': 0.04, 'tMAJOR': 0.8, 'tReq': 0.8, 'TRIG': 0.0, 'UNTRIG': 0.0}
+     f=35538.0 t=1184.6 {'wOFF': 9.16667, 'wDEF': 2.0, 'wINFO': 0.0, 'wINFRA': 20.9026, 'wMAJOR': 2.4, 'tOFF': -0.0171913, 'tDEF': -0.0271913, 'tINFO': -0.0, 'tINFRA': -0.0181275, 'tMAJOR': 1.09064, 'tReq': 1.09064, 'TRIG': 0.0, 'UNTRIG': 1.0}
+
+-- UNDERWORLD: 758 samples; mod equations answer
+   first / last sample frame with OFF and INFRA empty (budget not initialised): None, last: None, first with real pools: 0.0
+   [S ST] f=0 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] DEF[empty] INFO[empty] INFRA[a=5297.03 r=-0.00] MAJOR[empty]
+   [S ST] f=1 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=2 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=3 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=4 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=5 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=6 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=7 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=8 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=9 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=10 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=11 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=12 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=13 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=30 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] DEF[empty] INFO[empty] INFRA[a=5297.03 r=-0.00] MAJOR[empty]
+   [S ST] f=31 cr=8000.0 CU=8000.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=60 cr=7980.0 CU=7980.0 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] DEF[empty] INFO[empty] INFRA[a=5297.03 r=-0.00] MAJOR[empty]
+   [S ST] f=61 cr=7976.67 CU=7976.67 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=90 cr=7846.66 CU=7846.66 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] DEF[empty] INFO[empty] INFRA[a=5297.03 r=-0.00] MAJOR[empty]
+   [S ST] f=91 cr=7839.99 CU=7839.99 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] INFRA[a=5297.03 r=-0.00]
+   [S ST] f=120 cr=7453.82 CU=7453.82 ALL[a=8000.00 r=-0.00] OFF[a=2702.97 r=3.58e-05] DEF[empty] INFO[empty] INFRA[a=5297.03 r=-0.00] MAJOR[empty]
+   [S ST] f=1236 cr=0.0 CU=0.0 ALL[empty] OFF[a=102.98 r=1.35e-05] DEF[empty] INFO[empty] INFRA[a=455.29 r=5.08e-05] MAJOR[empty]
+   [S ST] f=1334 cr=0.0 CU=0.0 ALL[empty] OFF[a=102.98 r=1.35e-05] INFRA[a=455.29 r=5.08e-05]
+   [S ST] f=1359 cr=2150.0 CU=2150.0 ALL[empty] OFF[a=102.98 r=1.35e-05] DEF[empty] INFO[empty] INFRA[a=455.29 r=5.08e-05] MAJOR[empty]
+   [S ST] f=1360 cr=2150.0 CU=2150.0 ALL[empty] OFF[a=102.98 r=1.35e-05] INFRA[a=455.29 r=5.08e-05]
+   [S ST] f=1387 cr=2150.0 CU=2150.0 ALL[a=2150.00 r=47.78] OFF[a=811.33 r=16.14] INFRA[a=1338.66 r=31.64]
+   [S ST] f=1389 cr=2150.0 CU=2150.0 ALL[a=2150.00 r=47.78] OFF[a=811.33 r=16.14] DEF[empty] INFO[empty] INFRA[a=1338.66 r=31.64] MAJOR[empty]
+   [S ST] f=1390 cr=2150.0 CU=2150.0 ALL[a=2150.00 r=47.78] OFF[a=811.33 r=16.14] INFRA[a=1338.66 r=31.64]
+   [S ST] f=1419 cr=2150.0 CU=2150.0 ALL[a=2150.00 r=47.78] OFF[a=811.33 r=16.14] DEF[empty] INFO[empty] INFRA[a=1338.66 r=31.64] MAJOR[empty]
+   [S ST] f=1420 cr=2150.0 CU=2150.0 ALL[a=2150.00 r=47.78] OFF[a=811.33 r=16.14] INFRA[a=1338.66 r=31.64]
+   [F FS] f=1453 cr=2150.0 CU=2150.0 ALL[a=2150.00 r=47.78] OFF[a=811.33 r=16.14] DEF[empty] INFO[empty] INFRA[a=1338.66 r=31.64] MAJOR[empty]
+   [S ST] f=2684 cr=1150.0 CU=1150.0 ALL[a=1150.00 r=47.78] OFF[a=811.33 r=16.14] INFRA[a=338.66 r=31.64]
+   [S ST] f=2695 cr=1150.0 CU=1150.0 ALL[a=1150.00 r=47.78] OFF[a=811.33 r=16.14] DEF[empty] INFO[empty] INFRA[a=338.66 r=31.64] MAJOR[empty]
+   [S ST] f=2696 cr=1150.0 CU=1150.0 ALL[a=1150.00 r=47.78] OFF[a=811.33 r=16.14] INFRA[a=338.66 r=31.64]
+   [S ST] f=2725 cr=3415.79 CU=3415.79 ALL[a=1150.00 r=47.78] OFF[a=811.33 r=16.14] DEF[empty] INFO[empty] INFRA[a=338.66 r=31.64] MAJOR[empty]
+   [S ST] f=2726 cr=3415.79 CU=3415.79 ALL[a=1150.00 r=47.78] OFF[a=811.33 r=16.14] INFRA[a=338.66 r=31.64]
+   [S ST] f=2755 cr=3415.79 CU=3415.79 ALL[a=1150.00 r=47.78] OFF[a=811.33 r=16.14] DEF[empty] INFO[empty] INFRA[a=338.66 r=31.64] MAJOR[empty]
+   [S ST] f=2756 cr=3415.79 CU=3415.79 ALL[a=1150.00 r=47.78] OFF[a=811.33 r=16.14] INFRA[a=338.66 r=31.64]
+   [S ST] f=2806 cr=3412.45 CU=3412.45 ALL[a=3415.79 r=50.35] OFF[a=1949.60 r=20.38] DEF[empty] INFO[empty] INFRA[a=1466.19 r=29.97] MAJOR[empty]
+   [S ST] f=3612 cr=549.594 CU=549.594 ALL[a=549.60 r=50.35] OFF[a=549.60 r=20.38] INFRA[a=0.00 r=29.97]
+   [F FS] f=3637 cr=549.594 CU=549.594 ALL[a=549.60 r=50.35] OFF[a=549.60 r=20.38] DEF[empty] INFO[empty] INFRA[a=0.00 r=29.97] MAJOR[empty]
+   [S ST] f=4034 cr=549.594 CU=549.594 ALL[a=549.60 r=50.35] OFF[a=549.60 r=20.38] INFRA[a=0.00 r=29.97]
+   [S ST] f=4064 cr=2715.39 CU=2715.39 ALL[a=549.60 r=50.35] OFF[a=549.60 r=20.38] DEF[empty] INFO[empty] INFRA[a=0.00 r=29.97] MAJOR[empty]
+   [S ST] f=4065 cr=2715.39 CU=2715.39 ALL[a=2715.38 r=48.13] OFF[a=1486.52 r=24.18] INFRA[a=1228.87 r=23.95]
+   [F FS] f=4123 cr=2582.06 CU=2582.06 ALL[a=2715.38 r=48.13] OFF[a=1486.52 r=24.18] DEF[empty] INFO[empty] INFRA[a=1228.87 r=23.95] MAJOR[empty]
+   [S ST] f=4123 cr=2582.06 CU=2582.06 ALL[a=2715.38 r=48.13] OFF[a=1486.52 r=24.18] INFRA[a=1228.87 r=23.95]
+   [S ST] f=4276 cr=1757.38 CU=1757.38 ALL[a=1757.39 r=48.13] OFF[a=775.17 r=24.18] DEF[empty] INFO[empty] INFRA[a=982.21 r=23.95] MAJOR[empty]
+   [S ST] f=5384 cr=182.061 CU=182.061 ALL[a=182.05 r=48.13] OFF[a=86.51 r=24.18] INFRA[a=95.54 r=23.95]
+   [F FS] f=5581 cr=2419.08 CU=2419.08 ALL[a=2419.07 r=49.71] OFF[a=1210.28 r=24.97] DEF[empty] INFO[empty] INFRA[a=1208.79 r=24.74] MAJOR[empty]
+   [F FS] f=24286 cr=511.303 CU=511.303 ALL[a=511.31 r=47.05] OFF[a=0.00 r=29.87] INFRA[a=511.31 r=17.18]
+   [S ST] f=24726 cr=0.0 CU=0.0 ALL[a=0.01 r=48.10] OFF[a=1183.67 r=34.22] DEF[empty] INFO[empty] INFRA[a=666.07 r=13.88] MAJOR[empty]
+   ... 707 more samples in report.json / samples.tsv
+   first real pools (f=0.0, credits 8000.0): measured weights {'OFF': 0.3379, 'DEF': 0.0, 'INFO': 0.0, 'INFRA': 0.6621, 'MAJOR': 0.0}
+   distance (L1) to the template candidates (smaller = closer; 0 = that template's weights): {'base': 0.0}
+   shipped equations (first 3 / last):
+     f=0.0 t=0.0 {'wOFF': 6.0, 'wINFRA': 11.7582}
+     f=30.0 t=1.0 {'wOFF': 6.0, 'wINFRA': 11.7582}
+     f=60.0 t=2.0 {'wOFF': 6.0, 'wINFRA': 11.7582}
+     f=35538.0 t=1184.6 {'wOFF': 7.83333, 'wINFRA': 4.50568}
+
+== 2. Plan hook (Budget.Get_Spendable_Resources / Get_Unallocated_Resources at plan start) ==
+   BuildBaseComponentBarracks f=33298 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=1502.88
+   BuildBaseComponentBarracks f=24700 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=1611.28
+   BuildBaseComponentBarracks f=26791 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=1461.4
+   BuildBaseComponentBarracks f=27643 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=1876.01
+   BuildBaseComponentBarracks f=28144 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=1599.08
+   BuildBaseComponentBarracks f=28396 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=2559.08
+   BuildBaseComponentBarracks f=29521 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=984.299
+   BuildBaseComponentBarracks f=29692 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=984.299
+   BuildBaseComponentBarracks f=32701 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=1502.88
+   BuildBaseComponentBarracks f=32872 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=1502.88
+   BuildBaseComponentBarracks f=33043 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=1502.88
+   BuildBaseComponentBarracks f=33127 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=1502.88
+   BuildBaseComponentBarracks f=33298 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=1502.88
+   BuildBaseComponentBarracks f=33862 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=2136.63
+   BuildBaseComponentBarracks f=35401 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=1499.03
+   BuildBaseComponentBarracks f=35572 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=1499.03
+   BuildBaseComponentBarracks f=35743 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=1499.03
+   BuildBaseComponentBarracks f=35914 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=1499.03
+   UpgradeStarbasePlan f=12739 fac=EMPIRE budget=userdata spendable=0 unallocated=600 cr=4192.83
+   UpgradeStarbasePlan f=2794 fac=UNDERWORLD budget=userdata spendable=0 unallocated=1600 cr=3415.79
+   UpgradeStarbasePlan f=11941 fac=UNDERWORLD budget=userdata spendable=0 unallocated=1000 cr=2277.63
+   UpgradeStarbasePlan f=12163 fac=UNDERWORLD budget=userdata spendable=0 unallocated=1000 cr=2780.14
+   UpgradeStarbasePlan f=14458 fac=UNDERWORLD budget=userdata spendable=0 unallocated=1000 cr=493.441
+   UpgradeStarbasePlan f=14758 fac=UNDERWORLD budget=userdata spendable=0 unallocated=1000 cr=493.441
+   UpgradeStarbasePlan f=15169 fac=EMPIRE budget=userdata spendable=0 unallocated=600 cr=3528.63
+   UpgradeStarbasePlan f=17818 fac=UNDERWORLD budget=userdata spendable=0 unallocated=1000 cr=1150.92
+   BuildEconomicStructurePlan f=14431 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=3111.46
+   BuildEconomicStructurePlan f=14935 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=3702.44
+   BuildEconomicStructurePlan f=15169 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=3528.63
+   BuildEconomicStructurePlan f=15877 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=3734.95
+   BuildEconomicStructurePlan f=17230 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=4298.04
+   BuildEconomicStructurePlan f=17695 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=5058.04
+   BuildEconomicStructurePlan f=17935 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=4909.45
+   BuildEconomicStructurePlan f=18301 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=4499.92
+   BuildEconomicStructurePlan f=19198 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=5607.12
+   BuildEconomicStructurePlan f=19603 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=5351.81
+   BuildEconomicStructurePlan f=19840 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=5232.04
+   BuildEconomicStructurePlan f=21718 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=5134.2
+   BuildEconomicStructurePlan f=22048 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=3530.12
+   BuildEconomicStructurePlan f=22963 fac=EMPIRE budget=userdata spendable=0 unallocated=500 cr=3350.93
+
+== 3. Budget block watcher (memory, read only): reset flag +0x74 ==
+-- EMPIRE: found at 0x270c4ce35c0
+   chain: budget block unreadable at 0x270c4ce35c0
+   states logged: 360; init byte changes: none
+   reset flag transitions (mode frame): 17569: 378682880 -> 378682881, 18901: 378682881 -> 378682880, 21042: 378682880 -> 378682881, 22951: 378682881 -> 378682880
+   first state: mf=1 init=1 income/s=0.0 T=0.0 flag=378682880 refund=0.0
+   income / T / refund changes: mf 1351: inc=14.833333015441895 T=45.0 refund=0.0; mf 13501: inc=18.0 T=45.0 refund=0.0; mf 14851: inc=16.52486801147461 T=45.0 refund=0.0; mf 16201: inc=18.0 T=45.0 refund=0.0; mf 20251: inc=14.833333015441895 T=45.0 refund=0.0; mf 21601: inc=17.604236602783203 T=45.0 refund=0.0; mf 22951: inc=18.0 T=45.0 refund=0.0; mf 27001: inc=21.33333396911621 T=45.0 refund=0.0
+-- PIRATES: found at 0x270c4ce3880
+   chain: budget block unreadable at 0x270c4ce3880
+   states logged: 353; init byte changes: none
+   reset flag transitions (mode frame): NONE observed (flag stayed 0)
+   first state: mf=1 init=1 income/s=0.0 T=0.0 flag=0 refund=0.0
+   income / T / refund changes: none
+-- UNDERWORLD: found at 0x270c4ce4380
+   chain: budget block unreadable at 0x270c4ce4380
+   states logged: 374; init byte changes: none
+   reset flag transitions (mode frame): NONE observed (flag stayed 512)
+   first state: mf=1 init=1 income/s=0.0 T=0.0 flag=512 refund=0.0
+   income / T / refund changes: mf 1351: inc=47.77777862548828 T=45.0 refund=0.0; mf 2701: inc=50.350826263427734 T=45.0 refund=0.0; mf 4051: inc=48.12874221801758 T=45.0 refund=0.0; mf 5401: inc=49.711463928222656 T=45.0 refund=0.0; mf 6751: inc=52.95037078857422 T=45.0 refund=0.0; mf 8101: inc=54.61566925048828 T=45.0 refund=0.0; mf 9451: inc=56.61835861206055 T=45.0 refund=0.0; mf 10802: inc=59.41997528076172 T=45.0 refund=0.0
+
+== 4. Answers ==
+EMPIRE: pre-Init (Lua saw 1e18 in every category) up to frame None; first real pools at frame 0.0.
+UNDERWORLD: pre-Init (Lua saw 1e18 in every category) up to frame None; first real pools at frame 0.0.
+Reset flag: see section 3 (its setter is the transition 0 -> nonzero; compare its frame with the Lua samples around it: a template switch shows as a change of the SH trigger values, the first service as the init byte change).

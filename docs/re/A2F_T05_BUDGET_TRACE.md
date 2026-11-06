@@ -52,6 +52,7 @@ Experiment (scratch only): set the budget reset flag on every income tick, so ea
 So a per-tick reset is not the missing piece; the pools hoarding in Infrastructure (P 3555 at the first tick, 65 % of the credits) does not decide the
 outcome. The template-switch hint in BASICEMPIRETEMPLATES.XML ("the template switch alone causes the entire budget to be redistributed") would
 set the flag at Tech_Upgrade on / off only (the Empire switched at frames 1376 and 1829); not tested, left to the t07 probe.
+**a2g t01 (2026-11-05):** confirmed in game: the flag is set at each Tech_Upgrade on / off switch and cleared at the next tick (`A2G_T01_RESET_FLAG_PROBE.md`).
 Infrastructure plans also fail repeatedly early (Build_Base_Component_Heavy_Vehicle_Factory at Tatooine 14 times, an `Empire_Star_Base_N` order at Kashyyyk
 16 times "production dropped"); that is the `build_check` area of t08 (engine/galactic), not the budget.
 
@@ -79,6 +80,41 @@ remaining R > 0, 0x72b6a0); the remaining difference (remaining subtracted from 
 
 ## 6. Open
 
-- 0x525200's AllowedTime base (sum of `btime_none` x difficulty multiplier x tolerance, A2F_RE_READS §1.4 item 2) is not applied; it changes which plans are accepted. Separate follow-up.
+- ~~0x525200's AllowedTime base (A2F_RE_READS §1.4 item 2) is not applied~~: applied in A2f t09, see 7.
 - Reset flag +0x74 setter and the pre-Init pool: t07 probe, still needed to rule the template-switch reading in or out.
 - Rebel / Underworld production order count versus retail (Q2F_T09 O1).
+
+## 7. A2f t09: AllowedTime base (2026-11-05)
+
+Change (A2F_RE_READS §1.4 item 2): `GoalSystem::allowed_time` with a PP returns `Goal::nominal_time x Build_Time_Delay_Tolerance` for the galactic AI
+(`GoalSystemConfig::nominal_allowed_time`), no PP: `Time_Limit` as before. `nominal_time` = 0x6c0450(PP): the float sum, in selection order, of
+`btime_none(T)` over every selected type (free-store entries included) x the plan player's `Galactic_Build_Time_Multiplier` (sim player difficulty
+index into `rules.difficulties`; 1.0 when none). Set at accept next to the ETA and refreshed when 0x6c4a50 re-solves the PP ([M]: the re-solve
+rewrites the selection that 0x692860 reads live). Saved (goal record version 3) and hashed (`ai.goals`, galactic only; the tactical goal hash and
+its ETA base are unchanged). The `at > 0` maintenance guard is kept. Before, the accept test could never fail (ETA <= ETA x tolerance); now a plan whose
+queue-pool ETA exceeds its nominal time x tolerance is rejected, and a stalled one is dropped against the nominal base.
+
+Same method as 1 (`--galactic-ai --human Rebel --human-script galactic_human_hotm.txt --ticks 72000`, counts from `--ai-log` and the proposal stats):
+
+| 72000 ticks, HotM-human | t05 (`f13a592`) | t09 |
+|---|---|---|
+| Conquer_Opponent PP solved ("accepted" stat) | 15 | 9 |
+| Conquer_Opponent plans started | 13 | 9 |
+| rejected orders | 0 | 0 |
+| planet owner changes | 3 (Felucia t777, NalHutta t4743, Naboo t49929) | 3 (Felucia t777, NalHutta t6447, **Naboo t36540**) |
+| first Conquer_Opponent plan | t7392 (eta 64) | t24435 (eta 12) |
+| Empire (p1) plans started / ended "failure (released)" | 475 / 48 | 501 / 96 |
+| Empire fleet orders launch / move | 122 / 117 | 96 / 100 |
+| Underworld (p5) fleet orders launch / move | 8 / 220 | 4 / 249 |
+| final credits Rebel / Empire / Underworld | 20256 / 1099 / 3867 | 19446 / 4227 / 4279 |
+
+The Empire takes Naboo 13389 ticks earlier with fewer Conquer_Opponent plans: the early long plans (t7392 eta 64, t9610 eta 180 with 19 produced
+ships) are no longer accepted, so the Offensive pool is not tied up and the later plans that land are mostly free-store forces. The doubled
+"failure (released)" count is Lift_Blockade (18 -> 31) and base-component builds (Heavy_Vehicle_Factory 15 -> 31, Advanced 0 -> 8, Barracks 3 -> 7):
+single-structure plans whose ETA includes a queue wait now exceed their nominal build time x tolerance (`Normal_Default` multiplier 0.8 here).
+**Correction (a2g t04, `A2G_T02_T04_PORT_VS_RETAIL.md`):** that explanation is wrong. For single-structure plans the ETA at accept equals the
+nominal time, so t09 leaves their AllowedTime unchanged; the doubling is a trajectory effect (more loop bursts later in the run), not a time-test release.
+36000 ticks (the ctest run): owner changes as before (Felucia, NalHutta), 8 Conquer_Opponent plans as before, orders 442 -> 397.
+
+CRC columns (36000-tick HotM-human, t05 vs t09): `ai.goals` moves at tick 1 (the new hashed field), the synced `rng` at tick 557 (the AI's
+draws after a different accept), then `objects` / `galactic.state` / `galactic.conflicts` at 768 from the different orders (the other columns follow later).
