@@ -10,7 +10,8 @@
 //   u32 relation count (0 or P x P) + u8 each
 //   planets (row order): bool is_planet + u32 type (checked against the session), then every other PlanetState field
 //         except the definition-derived position and links (visibility lists, income breakdown, both build queues,
-//         starbase / structures / surface handles, influence ids, orbit fleet indices, respawn list)
+//         starbase / structures / surface handles, influence ids, orbit fleet indices, respawn list, (v3) i32 x 2 build
+//         queue phases; v1..v3 also hold two f32 build bonuses after max_income, dropped in v4)
 //   u32 fleet count + every FleetState (dead ones too: fleet indices are stable references) incl. path and slots
 //   u32 + i32 stealthed ids; u32 + victory claims; (v2) i32 victory hold; u32 + pending S4 events (GalacticEvent,
 //   emission order)
@@ -41,7 +42,9 @@ namespace alamo::galactic {
 
 namespace {
 
-constexpr uint32_t kGalacticSaveVersion = 2;  // v2 (story t11): + i32 victory hold; reads v1
+// v2 (story t11): + i32 victory hold; v3 (A2k t04): + i32 x 2 build queue phases per planet; v4 (A2k t01): - the two
+// PlanetState build bonus floats (the production modifiers are derived, GalacticSim::production_bonus). Reads v1..v3.
+constexpr uint32_t kGalacticSaveVersion = 4;
 constexpr uint32_t kConflictSaveVersion = 2;  // v2: BattleRequest::linked (story t10)
 
 // Element count, bounded by the bytes left (each element takes at least `min_bytes`), so corrupt counts never
@@ -119,9 +122,11 @@ bool get_str(ByteReader& r, std::string& s) {
 
 // ---- GalacticSim --------------------------------------------------------------------------------------------------------
 
-void GalacticSim::write(ByteWriter& w) const {
+void GalacticSim::write(ByteWriter& w) const { write_version(w, kGalacticSaveVersion); }
+
+void GalacticSim::write_version(ByteWriter& w, uint32_t version) const {
     const objects::ObjectStore& st = *store_;
-    w.u32(kGalacticSaveVersion);
+    w.u32(version);
     w.u32(static_cast<uint32_t>(planets_.size()));
     w.u32(static_cast<uint32_t>(map_.routes.size()));
     w.u32(static_cast<uint32_t>(rules_->types.size()));
@@ -173,7 +178,8 @@ void GalacticSim::write(ByteWriter& w) const {
         }
         w.f32(p.piracy_pool).i32(p.siphon_player).f32(p.siphon_fraction).i32(p.siphon_until).f32(p.siphon_amount);
         w.i32(p.halt_until).boolean(p.min_income_set).boolean(p.max_income_set).f32(p.min_income).f32(p.max_income);
-        w.f32(p.build_time_bonus).f32(p.build_cost_bonus).boolean(p.hidden).boolean(p.in_battle);
+        if (version < 4) w.f32(0.0f).f32(0.0f);  // v1..v3: the two build bonus floats (always 0)
+        w.boolean(p.hidden).boolean(p.in_battle);
         w.u32(static_cast<uint32_t>(p.income.size()));
         for (const IncomeEntry& e : p.income) {
             w.u8(e.kind).f32(e.value).i32(e.expiry);
@@ -195,6 +201,7 @@ void GalacticSim::write(ByteWriter& w) const {
         w.i32(p.sabotage_count);
         w.u32(static_cast<uint32_t>(p.respawns.size()));
         for (const RespawnEntry& e : p.respawns) w.i32(e.due).u32(e.type).i32(e.owner).u8(e.flag);
+        if (version >= 3) w.i32(p.queue_phase[0]).i32(p.queue_phase[1]);
     }
 
     w.u32(static_cast<uint32_t>(fleets_.size()));
@@ -220,7 +227,7 @@ void GalacticSim::write(ByteWriter& w) const {
     for (int32_t id : stealthed_) w.i32(id);
     w.u32(static_cast<uint32_t>(claims_.size()));
     for (const VictoryClaim& c : claims_) w.i32(c.player).u8(c.type).i32(c.frame).i32(c.countdown);
-    w.i32(victory_hold_);
+    if (version >= 2) w.i32(victory_hold_);
     w.u32(static_cast<uint32_t>(events_.size()));
     for (const GalacticEvent& e : events_) {
         w.i32(e.frame).u8(static_cast<uint8_t>(e.kind)).i32(e.player).i32(e.other_player);
@@ -347,8 +354,10 @@ bool GalacticSim::read(ByteReader& r) {
         p.max_income_set = r.boolean();
         p.min_income = r.f32();
         p.max_income = r.f32();
-        p.build_time_bonus = r.f32();
-        p.build_cost_bonus = r.f32();
+        if (version < 4) {  // v1..v3: the two unused build bonus floats (always 0), dropped
+            (void)r.f32();
+            (void)r.f32();
+        }
         p.hidden = r.boolean();
         p.in_battle = r.boolean();
         if (!r.ok()) return false;
@@ -403,6 +412,11 @@ bool GalacticSim::read(ByteReader& r) {
             e.owner = r.i32();
             e.flag = r.u8();
             if (!r.ok() || e.type >= types || !player_ok(e.owner)) return false;
+        }
+        if (version >= 3) {  // v3 / v4; v1 / v2 keep start()'s draws (the AI save holds the live last-run frames)
+            for (int32_t& phase : p.queue_phase) phase = r.i32();
+            for (const int32_t phase : p.queue_phase)
+                if (p.is_planet ? phase < 1 || phase > econ::kFramesPerSecond : phase != 0) return false;
         }
         if (!r.ok()) return false;
     }

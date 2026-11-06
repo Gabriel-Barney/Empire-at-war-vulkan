@@ -31,8 +31,10 @@
 #include "alamo/ai/tactical/zone_reachability.hpp"
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/dmath.hpp"
+#include "alamo/core/file_provider.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/objects/enums.hpp"  // A2k t06
 
 #if defined(ALAMO_AI_TACTICAL_HAVE_VFS)
 #include "alamo/vfs/vfs.hpp"
@@ -1337,6 +1339,44 @@ static void test_a1g_readings() {
     std::printf("a1g readings: OK\n");
 }
 
+// A2k t06: the name -> mask config from the data-loaded GameObjectCategoryType converter (mod categories get bits).
+static void test_category_mask_from_enums() {
+    class OneFile final : public FileProvider {
+    public:
+        std::string text;
+        bool read(std::string_view path, std::vector<uint8_t>& out) const override {
+            out.clear();
+            if (normalize_path(path) != normalize_path("Data\\XML\\Enum\\GameObjectCategoryType.xml")) return false;
+            out.assign(text.begin(), text.end());
+            return true;
+        }
+        bool exists(std::string_view path) const override {
+            return normalize_path(path) == normalize_path("Data\\XML\\Enum\\GameObjectCategoryType.xml");
+        }
+        std::string origin(std::string_view path) const override { return exists(path) ? "mem" : ""; }
+    };
+    OneFile f;
+    f.text = "<?xml version=\"1.0\"?>\n<EnumDefinition>\n<Infantry>1</Infantry>\n<Capital>40</Capital>\n"
+             "<Mod_Walker>8000000000</Mod_Walker>\n</EnumDefinition>\n";
+    objects::EnumRegistry mod;
+    mod.load_dynamic(f);
+    const objects::EnumRegistry vanilla;
+    const auto m = category_mask_from(mod);
+    const auto v = category_mask_from(vanilla);
+    CHECK(m("Mod_Walker") == 0x8000000000ull && m(" mod_walker") == 0x8000000000ull && m("Capital") == 0x40 && m("Frigate") == 0);
+    CHECK(v("Mod_Walker") == 0 && v("Capital") == 0x20 && v("Infantry") == 0x80);
+    // Built-in registry = the default config's table bit for bit (the shipped table).
+    const TacticalPerception def;
+    for (const char* n : {"Fighter", "Capital", "Super", "Infantry", "Structure", "Hero", "All", "None", "Nope"})
+        CHECK(v(n) == def.config().category_mask(n));
+    // init keeps a supplied table.
+    TacticalPerception p;
+    TacticalPerceptionConfig c;
+    c.category_mask = m;
+    p.init(TacticalMode::Space, TacticalAiConstants{}, Rect2{0.0f, 0.0f, 100.0f, 100.0f}, 2, {}, c);
+    CHECK(p.config().category_mask("Mod_Walker") == 0x8000000000ull);
+}
+
 int main(int argc, char** argv) {
     const char* golden = nullptr;
     const char* write_golden = nullptr;
@@ -1354,6 +1394,7 @@ int main(int argc, char** argv) {
     test_zone_threat();
     test_lua_functions();
     test_a1g_readings();
+    test_category_mask_from_enums();  // A2k t06
     test_scenario(golden, write_golden);
     test_scenario_save();
 #if defined(ALAMO_AI_TACTICAL_HAVE_VFS)

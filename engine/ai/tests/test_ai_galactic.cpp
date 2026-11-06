@@ -41,6 +41,7 @@
 #include "alamo/lua/players.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
+#include "alamo/objects/object_types.hpp"  // A2k t06: ObjectTypeDatabase (mod-category type table)
 #include "../src/galactic_goal_time.hpp"
 #include "../src/galactic_slots.hpp"
 #ifdef ALAMO_AI_HAVE_VFS
@@ -1174,8 +1175,10 @@ static CampaignResult run_synthetic(unsigned threads, int32_t frames) {
     GalacticAiConfig cfg;
     cfg.players = {{0, "SynEmpire", 1}, {1, "SynRebel", 1}};
     cfg.difficulties = {{"Normal_Default", 1.1f, 0.0f}};
+    const SimRng synced_before_world = rng.synced();
     GalacticAiWorld world(sim, store, &types, &files, rng, defs, eqs, tinfo,
                           [&sim](uint8_t p, const commands::EventData& ev) { return sim.execute(p, ev); }, cfg);
+    CHECK(rng.synced() == synced_before_world);  // A2k t04: the queue phases come from the galaxy build, not drawn here
     std::vector<std::string> pd;
     CHECK(world.load_plans(plan_files, &pd));
     for (const std::string& d : pd) std::printf("  plans: %s\n", d.c_str());
@@ -1862,9 +1865,15 @@ static void test_free_store_supply() {
     std::printf("free-store supply: a reserved unit is supplied (0x4d2bd0 ignores +0x30)\n");
 }
 
+// A2k t02: the production source planets of a planet target are the target's own reachability list (0x665160 with
+// destination = the target, A2K_T02_RE_ANSWERS Q1 port change 3). At Conquer_Planet's Enemy_destination level P3 has a
+// source list only when one of its neighbours is held, so the solver tests that produce for a P3 target give the Empire
+// P2 too (an infantry company; P2 has no starbase, so the Corvette is still built at P0).
+static void own_p2(gal::GalacticSetup& s) { s.forces.push_back({0, 2, tInfantry}); }
+
 static void test_parity_rules() {
     {
-        ParityWorld pw(false, {"HeroAttach", "HeroDeny"});
+        ParityWorld pw(false, {"HeroAttach", "HeroDeny"}, own_p2);
         pw.run(2);  // first service: templates, budget
         bool ok = false;
         // §2.4: the hero record is vetoed in a plan that allows hero attach; the corvette is chosen instead.
@@ -1914,7 +1923,7 @@ static void test_parity_rules() {
     }
     {
         // §3.5: with AI_Uses_Galactic_Pop_Cap a produced Corvette (pop 50) exceeds the remaining population.
-        ParityWorld off(false, {"HeroAttach"}), on(true, {"HeroAttach"});
+        ParityWorld off(false, {"HeroAttach"}, own_p2), on(true, {"HeroAttach"}, own_p2);
         off.run(2);
         on.run(2);
         bool ok_off = false, ok_on = false;
@@ -1939,12 +1948,50 @@ static void test_parity_rules() {
     }
 }
 
+// A2k t02: the per-target stage (A2K_T02_RE_ANSWERS Q1) and FreeStore Setup A (Q2(c)) on the synthetic chain P0..P7
+// (the Empire holds P0 / P1, its hero and frigate at P0; Conquer_Planet = Enemy_destination, level 2).
+static void test_stage_and_setup_a() {
+    CHECK(galactic_ai_hull_fraction(50.0f, 100.0f) == 0.5 && galactic_ai_hull_fraction(0.0f, 100.0f) == 1.0 &&
+          galactic_ai_hull_fraction(30.0f, 0.0f) == 1.0);
+    bool ok = false;
+    {
+        ParityWorld pw(false, {"HeroDeny"});
+        pw.run(2);
+        // P3's neighbours P2 / P4 are not held: no level-2 stage (Setup A then stages at the target). At level 5 the BFS
+        // from P3's first neighbour P2 pops P1 before P0.
+        CHECK(pw.world->stage_area(0, 3, 2) == kInvalidPlanet && pw.world->stage_list(0, 3, 2).empty());
+        CHECK(pw.world->stage_list(0, 3, 5) == (std::vector<PlanetIndex>{1, 0}) && pw.world->stage_area(0, 3, 5) == 1);
+        CHECK(pw.world->stage_area(0, 3, 4) == 3 && pw.world->stage_area(0, 3, 6) == kInvalidPlanet);
+        CHECK(pw.world->stage_area(0, 3, 0) == kInvalidPlanet && pw.world->stage_area(0, 1, 0) == 1);  // held target: itself
+        CHECK(pw.world->stage_area(1, 3, 5) == kInvalidPlanet);  // not an AI player of this world
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
+        CHECK(ok && pw.has(s, pw.hero));  // the hero's path P0 -> P3 has no node cost: eligible
+    }
+    {
+        // The Empire also holds P2: P3's first neighbour is held, so the level-2 stage is P2 (BFS P2, P1, P0).
+        ParityWorld pw(false, {"HeroDeny"}, [](gal::GalacticSetup& s) { s.forces.push_back({0, 2, tInfantry}); });
+        pw.run(2);
+        CHECK(pw.world->stage_list(0, 3, 2) == (std::vector<PlanetIndex>{2, 1, 0}) && pw.world->stage_area(0, 3, 2) == 2);
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
+        CHECK(ok && pw.has(s, pw.hero));
+    }
+    {
+        // A Rebel frigate orbits P2: the hero's only path to the stage (P3) crosses a planet with node cost > 0, so Setup A
+        // drops it (galactic: no finite stage cost) and the solve does not use it.
+        ParityWorld pw(false, {"HeroDeny"}, [](gal::GalacticSetup& s) { s.forces.push_back({1, 2, tFrigate}); });
+        pw.run(2);
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
+        std::printf("setup A: enemy frigate on the hero's path -> %s, hero %s\n", ok ? "solved" : "failed", pw.has(s, pw.hero) ? "yes" : "no");
+        CHECK(!pw.has(s, pw.hero));
+    }
+}
+
 // OI2 ai: production-disabled types (story DISABLE_BUILDABLE, REMAINING_GAPS §1.5) are never picked by AI production -
 // neither by a normal plan's Production marshaller nor by a MagicPlan spawn nor by the team picks; and the build
 // market's delivery path class (REMAINING_GAPS §6.2): 2 by default, 3 with +0xDA, 5 for Is_Stealth_Company.
 static void test_production_disabled_and_delivery() {
     {
-        ParityWorld pw(false, {"HeroAttach"});
+        ParityWorld pw(false, {"HeroAttach"}, own_p2);
         pw.run(2);
         bool ok = false;
         const std::vector<uint32_t> a = pw.world->solve_potential_plan(0, "HeroAttach", "Conquer_Planet", 3, &ok);
@@ -2127,6 +2174,7 @@ static void test_production_unbuildable() {
     float eta = -1.0f;
     const auto no_hero = [](gal::GalacticSetup& s) {
         s.forces.erase(std::remove_if(s.forces.begin(), s.forces.end(), [](const auto& f) { return f.type == tTypes; }), s.forces.end());
+        own_p2(s);
     };
     {
         // HeroShip (cost 0, the HotM Veers case) not on the free store: listed first in the team and tied with the
@@ -2183,7 +2231,7 @@ static void test_production_unbuildable() {
             r.types.push_back(z);
         };
         const auto cat = [&zc](std::vector<GalacticAiTypeInfo>& t) { t[zc].categories = {"CORVETTE"}; };
-        ParityWorld pw(false, {"MaskCorvette"}, {}, add, {}, cat);
+        ParityWorld pw(false, {"MaskCorvette"}, own_p2, add, {}, cat);
         pw.run(2);
         const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "MaskCorvette", "Conquer_Planet", 3, &ok);
         CHECK(ok && pw.has(s, tCorvette) && !pw.has(s, zc));
@@ -2555,6 +2603,10 @@ static void test_btime_none_speed_factor() {
 // AllowedTime reads the re-solved selection (A2f t09). HeroDeny's team "HeroShip | Corvette = 1,1": the proposal's first
 // solve takes the free-store hero (build time 50 s -> nominal 50); the hero is then reserved by another PP before the
 // Commit, so the re-solve produces a Corvette (100 s -> nominal 100). The activated goal's nominal_time is the new one's.
+// a2k t01: 0x6c4a50 also copies the re-solved net cost and ETA to the goal (G +0x78 / +0x7C, A2H_T06_TACTICAL_ETA §2.1) [H],
+// so Resolve's fundable test and the budget add see them: the free hero's net 0 becomes the produced Corvette's cost. (The
+// port kept the proposal's cost: on HotM the Empire's Build_Space_Forces reserved the first solve's Acclamator, 2500,
+// while the re-solve built Tartan + Broadside, 3050, which left room for Build_Ground_Forces at frame 42.)
 static void test_goal_nominal_time_resolve() {
     ParityWorld pw(
         false, {"HeroDeny"}, [](gal::GalacticSetup& s) { s.planet_type[2] = tPlanet; },  // P2 (the target) lets Corvettes in
@@ -2566,6 +2618,7 @@ static void test_goal_nominal_time_resolve() {
     const objects::ObjectHandle hero = pw.world->free_store_supply(0, pw.hero);
     CHECK(static_cast<bool>(hero));
     std::map<uint32_t, std::pair<std::vector<uint32_t>, float>> at_proposal;  // goal serial -> (selection, nominal_time)
+    std::map<uint32_t, std::pair<float, float>> cost_at_proposal;             // goal serial -> (cost, eta)
     uint32_t watched = 0;
     bool reserved = false, checked = false;
     for (int32_t f = 1; f <= 30 * 120 && !checked; ++f) {
@@ -2578,6 +2631,7 @@ static void test_goal_nominal_time_resolve() {
                 if (!g.pp_valid || at_proposal.count(g.serial) != 0) continue;
                 const std::vector<uint32_t> sel = pw.world->potential_plan_selection(g.pp_handle);
                 at_proposal.emplace(g.serial, std::make_pair(sel, g.nominal_time));
+                cost_at_proposal.emplace(g.serial, std::make_pair(g.cost, g.eta));
                 if (!reserved && pw.has(sel, pw.hero) && pw.world->free_store_owner(hero) == -1) {
                     pw.world->set_free_store_owner(hero, 1 << 30);  // another PP's reservation (0x6c2b20)
                     reserved = true;
@@ -2599,6 +2653,16 @@ static void test_goal_nominal_time_resolve() {
                 CHECK(now_sel != before.first && !pw.has(now_sel, pw.hero) && pw.has(now_sel, tCorvette));
                 CHECK(a.nominal_time == 100.0f);
                 CHECK(a.nominal_time == pw.world->potential_plan_nominal_time(a.pp_handle));
+                float net = -1.0f, eta = -1.0f;
+                CHECK(pw.world->potential_plan_cost(a.pp_handle, &net, &eta));
+                const auto& cost_before = cost_at_proposal[a.serial];
+                std::printf("cost re-solve: goal %u proposed net %.1f eta %.2f, active net %.1f eta %.2f (PP %.1f / %.2f, Corvette %d)\n",
+                            a.serial, static_cast<double>(cost_before.first), static_cast<double>(cost_before.second),
+                            static_cast<double>(a.cost), static_cast<double>(a.eta), static_cast<double>(net), static_cast<double>(eta),
+                            pw.rules.types[tCorvette].build_cost);
+                CHECK(cost_before.first == 0.0f);  // the free-store hero costs nothing
+                CHECK(a.cost == net && a.eta == eta);
+                CHECK(a.cost == static_cast<float>(pw.rules.types[tCorvette].build_cost) && a.cost > 0.0f);
                 checked = true;
             }
     }
@@ -3925,9 +3989,17 @@ struct UwResult {
     size_t purchased = 0;
     bool p3_destroyed = false, ds_locked = false, ds_alive = true;
     float uw_credits = 0.0f;
+    // a2k t08: the AI update in which the first corruption applied: credits and Σ category pools / available before
+    // and after it (frame -1: no corruption applied).
+    int32_t corr_frame = -1;
+    float corr_credits_before = 0.0f, corr_credits_after = 0.0f;
+    double corr_pool_before = 0.0, corr_pool_after = 0.0, corr_avail_before = 0.0, corr_avail_after = 0.0;
+    // a2k t08 Q2 (shared_fleet runs): frames on which a moving fleet held more than one hero, and the "split" orders.
+    int32_t shared_moves = 0, first_shared = -1;
+    size_t splits = 0;
 };
 
-static UwResult run_underworld(unsigned threads, int32_t frames) {
+static UwResult run_underworld(unsigned threads, int32_t frames, bool shared_fleet = false) {
     UwResult out;
     MemoryFiles files;
     AiDefinitions defs;
@@ -3972,7 +4044,9 @@ static UwResult run_underworld(unsigned threads, int32_t frames) {
         const std::string g(glob);
         return files.list(g.substr(0, g.find('*')));
     });
-    const gal::GalacticRules rules = uw_rules();
+    gal::GalacticRules rules = uw_rules();
+    if (shared_fleet)  // space heroes: the starting forces put them into one orbit fleet (no auto-land)
+        for (const uint32_t h : {uint32_t{uTyber}, uint32_t{uSaboteur}, uint32_t{uIG88}}) rules.types[h].kind = gal::UnitKind::SpaceUnit;
     objects::GameObjectTypes types;
     objects::IdCounter ids;
     objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids);
@@ -4003,17 +4077,60 @@ static UwResult run_underworld(unsigned threads, int32_t frames) {
     for (const std::string& d : pd) std::printf("  underworld plans: %s\n", d.c_str());
     CHECK(world.plans().plans.size() == 3);
     CHECK(world.start(&pd));
+    std::vector<objects::ObjectHandle> start_heroes;
+    if (shared_fleet) {  // the three (space) heroes start in one orbit fleet at home
+        const std::vector<uint32_t> home = sim.fleets_at(0, 1);
+        CHECK(home.size() == 1 && sim.fleets()[home.front()].contents.size() == 3);
+        if (!home.empty()) start_heroes = sim.fleets()[home.front()].contents;
+    }
+    // Σ over the budget categories of the Underworld AI (player 1): pools P and available A.
+    auto budget_sums = [&world, &defs](double& pool, double& avail) {
+        pool = avail = 0.0;
+        const AiContext* c = world.context(1);
+        if (!c) return;
+        for (size_t k = 0; k < defs.categories.size(); ++k) {
+            pool += static_cast<double>(c->budget.pool(static_cast<int32_t>(k)));
+            avail += static_cast<double>(c->budget.available(static_cast<int32_t>(k)));
+        }
+    };
     for (int32_t f = 1; f <= frames; ++f) {
         sim.update();
-        for (int32_t p = 0; p < static_cast<int32_t>(sim.players().size()); ++p) world.update_player(p, f, true, false);
+        for (int32_t p = 0; p < static_cast<int32_t>(sim.players().size()); ++p) {
+            const bool watch = p == 1 && out.corr_frame < 0;
+            const int32_t done_before = watch ? sim.corruptions_completed(1, 6) : 0;
+            double pool = 0.0, avail = 0.0;
+            const float cr = sim.credits(1);
+            if (watch) budget_sums(pool, avail);
+            world.update_player(p, f, true, false);
+            if (watch && sim.corruptions_completed(1, 6) > done_before) {
+                out.corr_frame = f;
+                out.corr_credits_before = cr;
+                out.corr_credits_after = sim.credits(1);
+                out.corr_pool_before = pool;
+                out.corr_avail_before = avail;
+                budget_sums(out.corr_pool_after, out.corr_avail_after);
+            }
+        }
+        bool shared = false;
+        for (const gal::FleetState& fl : sim.fleets()) {
+            if (!fl.alive || !fl.moving) continue;
+            int heroes = 0;  // starting heroes (free-store units claimed by the plans) in this moving fleet
+            for (const objects::ObjectHandle u : fl.contents)
+                heroes += store.alive(u) && std::find(start_heroes.begin(), start_heroes.end(), u) != start_heroes.end() ? 1 : 0;
+            shared = shared || heroes > 1;
+        }
+        out.shared_moves += shared ? 1 : 0;
+        if (shared && out.first_shared < 0) out.first_shared = f;
         StateHasher h;
         sim.hash_state(h);
         world.hash(h);
         rng.synced().hash(h);
         out.crc.push_back(h.digest());
     }
-    for (const AiDecision& d : world.decision_log())
+    for (const AiDecision& d : world.decision_log()) {
         out.decisions.push_back(std::to_string(d.frame) + " p" + std::to_string(d.player) + " " + d.text);
+        out.splits += d.text.rfind("order split ", 0) == 0 ? 1 : 0;
+    }
     out.errors = world.lua_errors();
     out.corruption_p1 = sim.planets()[1].corruption;
     out.completed_bm = sim.corruptions_completed(1, 6);
@@ -4050,6 +4167,31 @@ static void test_underworld_special() {
     CHECK(base.sabotage_p2 >= 1);                              // Sabotage_Planet: a structure of the corrupted P2
     CHECK(base.purchased >= 1);                                // Black_Market_Purchase at the Black_Market planet
     CHECK(base.p3_destroyed && base.ds_locked && !base.ds_alive);  // Hack_Super_Weapon through Land_Units
+    // a2k t08 (docs/re/A2K_T08_RE_QUESTIONS.md §1): the AI corruption cost is not reserved or charged through the AI
+    // budget. Retail HotM Rebel (a2j probe 074145): 800 credits (Intimidation at Naboo) left the Underworld's credits
+    // between frames 585 and 616 while its Offensive / Infrastructure pools stayed as they were. Here: the update that
+    // applies the Black_Market corruption (500) takes exactly its cost from the credits, and no budget pool or
+    // available amount moves in that update.
+    std::printf("  corruption apply: frame %d credits %.1f -> %.1f, budget pools %.3f -> %.3f, available %.3f -> %.3f\n",
+                base.corr_frame, static_cast<double>(base.corr_credits_before), static_cast<double>(base.corr_credits_after),
+                base.corr_pool_before, base.corr_pool_after, base.corr_avail_before, base.corr_avail_after);
+    CHECK(base.corr_frame > 0);
+    CHECK(base.corr_credits_before - base.corr_credits_after == 500.0f);
+    CHECK(base.corr_pool_before == base.corr_pool_after && base.corr_avail_before == base.corr_avail_after);
+    {   // a2k t08 Q2 (A2K_T08_RE_ANSWERS Q2.3, PRE_PATH_SEPERATE): the three heroes (space units here) start in one orbit
+        // fleet. Each plan's Produce_Force splits its claimed hero out of the shared fleet before the gather, so no fleet
+        // ever jumps with two of those heroes (Move_To moves the task force's fleet, which then holds only its own hero),
+        // and the corruption still lands. Produced units are not split (PRODUCTION_END paths the unit's fleet as it is).
+        // (The hack needs Land_Units of a ground hero: not checked here.)
+        const UwResult sh = run_underworld(0, frames, true);
+        std::printf("  shared home fleet: %s; %zu splits, %d frames with a shared moving fleet, %zu Lua errors\n", sh.summary.c_str(),
+                    sh.splits, sh.shared_moves, sh.errors.size());
+        if (sh.shared_moves > 0)  // the decisions up to the first such frame
+            for (const std::string& d : sh.decisions)
+                if (std::atoi(d.c_str()) <= sh.first_shared) std::printf("    %s\n", d.c_str());
+        CHECK(sh.errors.empty() && sh.splits >= 2 && sh.shared_moves == 0);
+        CHECK(sh.corruption_p1 == 6 && sh.completed_bm >= 1);
+    }
     for (const unsigned t : {1u, 4u, 15u}) {
         const UwResult r = run_underworld(t, frames);
         size_t first = r.crc.size() == base.crc.size() ? r.crc.size() : 0;
@@ -4481,6 +4623,21 @@ static void test_foc_data() {
     // info, so the typed force rows hold squadrons instead of the starbase's own AI_Combat_Power.
     const std::vector<GalacticAiTypeInfo> foc_tinfo = make_galactic_ai_type_info(types);
     {
+        // A2k t06: the masks come from the shipped Data\XML\Enum\GameObjectCategoryType.xml and equal the built-in table's
+        // bit for bit (so no golden moves); the converted CategoryMask field (whole-value conversion) is reported.
+        CHECK(types.enums().get(objects::EnumId::GameObjectCategory).from_file);
+        std::vector<GalacticAiTypeInfo> builtin = foc_tinfo;
+        fill_category_masks(builtin);
+        size_t differ = 0, field_differ = 0;
+        for (size_t t = 0; t < foc_tinfo.size(); ++t) {
+            differ += foc_tinfo[t].category_mask != builtin[t].category_mask ? 1u : 0u;
+            field_differ += foc_tinfo[t].category_mask != types.get_mask(static_cast<objects::TypeIndex>(t), "CategoryMask") ? 1u : 0u;
+        }
+        CHECK(differ == 0 && !foc_tinfo.empty() && foc_tinfo.front().capital_mask == ai_category_bit("Capital"));
+        std::printf("FoC category masks: %zu types, %zu differ from the built-in table, %zu from the CategoryMask field\n",
+                    foc_tinfo.size(), differ, field_differ);
+    }
+    {
         const uint32_t sb1 = rules.find_type("Rebel_Star_Base_1"), xw = rules.find_type("Rebel_X-Wing_Squadron"), yw = rules.find_type("Y-Wing_Squadron");
         CHECK(sb1 != gal::kNoIndex && sb1 < foc_tinfo.size() && xw != gal::kNoIndex && yw != gal::kNoIndex);
         if (sb1 < foc_tinfo.size()) {
@@ -4583,6 +4740,25 @@ static void test_foc_data() {
         std::printf("FoC player %zu AI path finder: %u recomputes, %u pairs, %u reachable (A* stand-in %u), %u identical to A*\n",
                     p, f->recomputes(), pairs, reachable, astar_reachable, same);
         CHECK(reachable > 0);
+        // A2k t02: the Lua _FindStageArea stage is list[0] of the target's per-target reachability list at the TF level
+        // (held by the player or an ally), the target at level 4, nil above 5 and at levels 0 / 1 for a target not held.
+        uint32_t staged = 0;
+        const gal::PlayerView sv = sim.player_view(pi);
+        for (PlanetIndex t = 0; t < sim.planets().size(); ++t) {
+            if (!sim.planets()[t].is_planet) continue;
+            const PlanetIndex s = world.stage_area(pi, t, 5);
+            const std::vector<PlanetIndex> list = world.stage_list(pi, t, 5);
+            CHECK(s == (list.empty() ? kInvalidPlanet : list.front()));
+            for (const PlanetIndex k : list) CHECK(gal::PlayerView::bit(sv.held_by_ally, k, false));
+            CHECK(world.stage_area(pi, t, 4) == t && world.stage_area(pi, t, 6) == kInvalidPlanet);
+            const PlanetIndex s0 = world.stage_area(pi, t, 0);
+            if (!gal::PlayerView::bit(sv.held_by_ally, t, false)) CHECK(s0 == kInvalidPlanet);
+            else CHECK(s0 == kInvalidPlanet || gal::PlayerView::bit(sv.held_by_ally, s0, false));
+            if (s == kInvalidPlanet) continue;
+            ++staged;
+            CHECK(world.path(pi, s, t).empty() || world.path(pi, s, t).front() == s);
+        }
+        CHECK(staged > 0 || sim.planets_owned(pi) == 0);
     }
     // FIXPASS_GALACTIC §1 on the real galaxy (shipped GalacticFreeStore.lua drives the moves):
     //   * the Friendly_Only source list holds only planets held by the player or an ally (§1.4);
@@ -4683,6 +4859,99 @@ static void test_save_foc() {
 }
 #endif
 
+// A2k t06: the type side of a category test (GalacticAiTypeInfo::category_mask, the Capital structure default) uses the
+// data-loaded GameObjectCategoryType converter, so a mod category gets its bit and a renumbered vanilla name its new bits.
+static void test_category_masks_from_enum_files() {
+    MemoryFiles mf;
+    // Mod table: Capital renumbered to 0x40, Super moved, Infantry dropped, Mod_Walker = 2^39 (hex, sscanf %llx).
+    mf.add("Data\\XML\\Enum\\GameObjectCategoryType.xml",
+           "<?xml version=\"1.0\"?>\n<EnumDefinition>\n<Fighter>1</Fighter>\n<Frigate>10</Frigate>\n<Capital>40</Capital>\n"
+           "<Super>20</Super>\n<Structure>400</Structure>\n<Mod_Walker>8000000000</Mod_Walker>\n<None>0</None>\n</EnumDefinition>\n");
+    objects::EnumRegistry mod;
+    mod.load_dynamic(mf);
+    const objects::EnumRegistry vanilla;  // built-in FoC table
+    const uint64_t walker = 0x8000000000ull;
+    CHECK(ai_category_bit("Mod_Walker", &mod) == walker && ai_category_bit("mod_walker ", &mod) == walker);
+    CHECK(ai_category_bit("Mod_Walker") == 0 && ai_category_bit("Mod_Walker", &vanilla) == 0);
+    CHECK(ai_category_bit("Capital", &mod) == 0x40 && ai_category_bit("Capital") == 0x20 && ai_category_bit("Capital", &vanilla) == 0x20);
+    CHECK(ai_category_bit("Infantry", &mod) == 0 && ai_category_bit("Infantry") == 0x80);
+    {
+        std::vector<GalacticAiTypeInfo> t(3);
+        t[0].categories = {"MOD_WALKER", "FRIGATE"};
+        t[1].categories = {"CAPITAL", "INFANTRY"};  // a dropped name adds nothing [port: the OR of the known names]
+        t[2].categories = {"STRUCTURE"};
+        t[2].garrison_mask = 0x10;
+        std::vector<GalacticAiTypeInfo> v = t;
+        fill_category_masks(t, &mod);
+        fill_category_masks(v);  // null = the built-in table (unchanged behaviour)
+        CHECK(t[0].category_mask == (walker | 0x10) && t[1].category_mask == 0x40 && t[2].category_mask == 0x400);
+        CHECK(v[0].category_mask == 0x10 && v[1].category_mask == (0x20 | 0x80) && v[2].category_mask == 0x400);
+        // Structure mask: +0x1658 when set, else the Capital bits of the same converter.
+        CHECK(t[0].capital_mask == 0x40 && galactic_ai_structure_mask(t, 0) == 0x40 && galactic_ai_structure_mask(t, 2) == 0x10);
+        CHECK(galactic_ai_structure_mask(v, 0) == 0x20 && galactic_ai_structure_mask(t, 9) == 0x20);
+        // Never filled: the built-in Capital bit.
+        std::vector<GalacticAiTypeInfo> raw(1);
+        CHECK(!raw[0].capital_mask && galactic_ai_structure_mask(raw, 0) == 0x20);
+        // fill_unset keeps a preset mask, fills the rest.
+        std::vector<GalacticAiTypeInfo> u(2);
+        u[0].categories = u[1].categories = {"MOD_WALKER"};
+        u[0].category_mask = 0x1;
+        fill_unset_category_masks(u, &mod);
+        CHECK(u[0].category_mask == 0x1 && u[1].category_mask == walker && u[0].capital_mask == 0x40);
+        u[1].capital_mask = 0x2;
+        fill_unset_category_masks(u);
+        CHECK(u[1].capital_mask == 0x2);
+    }
+    {
+        // A discarded converter (duplicate value) fails every conversion: no bits, and the Capital default is 0 too (a
+        // structure without +0x1658 then meets no category row), not the built-in bit.
+        MemoryFiles bad;
+        bad.add("Data\\XML\\Enum\\GameObjectCategoryType.xml",
+                "<?xml version=\"1.0\"?>\n<EnumDefinition>\n<Capital>20</Capital>\n<Frigate>20</Frigate>\n</EnumDefinition>\n");
+        objects::EnumRegistry discarded;
+        discarded.load_dynamic(bad);
+        std::vector<GalacticAiTypeInfo> t(1);
+        t[0].categories = {"CAPITAL"};
+        fill_category_masks(t, &discarded);
+        CHECK(t[0].category_mask == 0 && t[0].capital_mask == 0u && galactic_ai_structure_mask(t, 0) == 0);
+    }
+}
+
+// A2k t06: GameObjectTypes loads Data\XML\Enum\GameObjectCategoryType.xml through the provider and
+// make_galactic_ai_type_info / GalacticAiWorld take the mask bits from it (a mod category gets its bit, a renumbered Capital
+// its new bits, also as the structure-mask default).
+static void test_type_info_mod_categories() {
+    MemoryFiles mf;
+    mf.add("Data\\XML\\Enum\\GameObjectCategoryType.xml",
+           "<?xml version=\"1.0\"?>\n<EnumDefinition>\n<Fighter>1</Fighter>\n<Frigate>10</Frigate>\n<Capital>40</Capital>\n"
+           "<Structure>400</Structure>\n<Mod_Walker>8000000000</Mod_Walker>\n<None>0</None>\n</EnumDefinition>\n");
+    mf.add("Data\\XML\\GameObjectFiles.xml", "<L><File>Mod_Units.xml</File></L>");
+    mf.add("Data\\XML\\Mod_Units.xml",
+           "<R>\n <SpaceUnit Name=\"Mod_AT_AT\"><CategoryMask>Mod_Walker | Capital</CategoryMask></SpaceUnit>\n"
+           " <SpaceUnit Name=\"Mod_Ion\"><CategoryMask>Structure</CategoryMask></SpaceUnit>\n"
+           " <SpaceUnit Name=\"Mod_Old\"><CategoryMask>Frigate</CategoryMask></SpaceUnit>\n</R>\n");
+    objects::ObjectTypeDatabase raw;
+    objects::GameObjectTypes types;
+    std::vector<std::string> diag;
+    CHECK(raw.load(mf, &diag) && types.build(raw, &mf, &diag));
+    const objects::TypeIndex atat = raw.find("Mod_AT_AT"), ion = raw.find("Mod_Ion"), old = raw.find("Mod_Old");
+    CHECK(atat != objects::kNone && ion != objects::kNone && old != objects::kNone &&
+          types.enums().get(objects::EnumId::GameObjectCategory).from_file);
+    if (atat == objects::kNone || ion == objects::kNone || old == objects::kNone) return;
+    const uint64_t walker = 0x8000000000ull;
+    std::vector<GalacticAiTypeInfo> ti = make_galactic_ai_type_info(types);
+    CHECK(ti.size() == types.size());
+    if (ti.size() != types.size()) return;
+    CHECK(ti[atat].category_mask == (walker | 0x40) && ti[atat].category_mask == types.get_mask(atat, "CategoryMask"));
+    CHECK(ti[old].category_mask == 0x10 && ti[ion].category_mask == 0x400);
+    CHECK(galactic_ai_structure_mask(ti, static_cast<uint32_t>(ion)) == 0x40);  // Garrison_Category unset -> Capital (mod)
+    // Before A2k t06 (built-in table): the mod bit was lost and Capital read 0x20.
+    std::vector<GalacticAiTypeInfo> builtin = ti;
+    fill_category_masks(builtin);
+    CHECK(builtin[atat].category_mask == 0x20 && galactic_ai_structure_mask(builtin, static_cast<uint32_t>(ion)) == 0x20);
+    CHECK(ai_category_bit("Mod_Walker", &types.enums()) == walker && ai_category_bit("Mod_Walker") == 0);
+}
+
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // keep the progress lines when a test crashes
     for (int i = 1; i < argc; ++i)
@@ -4700,8 +4969,11 @@ int main(int argc, char** argv) {
     test_sim_hooks();
     test_starbase_force_split();
     test_force_members();
+    test_category_masks_from_enum_files();  // A2k t06
+    test_type_info_mod_categories();        // A2k t06
     test_parity_rules();
     test_free_store_supply();
+    test_stage_and_setup_a();
     test_production_disabled_and_delivery();
     test_ground_structure_slots();
     test_budget_fraction_before_init();

@@ -136,12 +136,12 @@
 #include "alamo/sim/bench_scenario.hpp"  // BM1 --bench-regen
 #endif
 #include "alamo/vfs/vfs.hpp"
+#include "crc_out.hpp"  // header-only (core): the --crc-checkpoint options parse without the sim too
 #ifdef ALAMO_HEADLESS_HAVE_SIM
 #include "ai_run.hpp"  // A2
 #include "skirmish_run.hpp"  // A1 stage 2
 #include "battle_run.hpp"
 #include "bench_run.hpp"  // BM1
-#include "crc_out.hpp"
 #include "map_run.hpp"
 #include "save_run.hpp"  // N1
 #endif

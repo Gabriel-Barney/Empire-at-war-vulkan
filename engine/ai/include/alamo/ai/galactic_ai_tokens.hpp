@@ -29,6 +29,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -44,6 +45,9 @@ class ByteWriter;
 }  // namespace alamo
 namespace alamo::galactic {
 class GalacticSim;
+}
+namespace alamo::objects {
+class EnumRegistry;
 }
 
 namespace alamo::ai {
@@ -74,7 +78,11 @@ struct GalacticAiTypeInfo {
     // Space_Or_Garrison_Category [port: the original keeps the tag written last]; 0 = unset (galactic_ai_structure_mask
     // reads it as Capital).
     uint64_t garrison_mask = 0;
-    std::string lua_script;            // Lua_Script (the per-object / type script name, §2.1)
+    // The Capital mask galactic_ai_structure_mask uses for garrison_mask 0 (the exe global 0x140b3a9d0): the "Capital"
+    // bits of the converter fill_category_masks used [M: taken as converted from the name with the loaded
+    // GameObjectCategoryType converter, like the type masks]; empty = never filled (the built-in Capital bit).
+    std::optional<uint64_t> capital_mask;
+    std::string lua_script;           // Lua_Script (the per-object / type script name, §2.1)
     bool script_on_type = false;       // Execute_Script_On_Type (the type-level script instance exists, §2.1)
     uint32_t representative = 0xFFFFFFFFu;  // first Company_Units member, else first Squadron_Units member (0x6c00c0)
     bool retains_residual_influence = true;  // P4 ai: planet types' Planet_Retains_Residual_Influence (+0xBA, default true)
@@ -94,12 +102,19 @@ struct GalacticAiTypeInfo {
     bool has_category(std::string_view c) const;
 };
 
-// GameObjectCategoryType name -> bits (vanilla FoC table, objects::EnumRegistry fallback); 0 if unknown.
-uint64_t ai_category_bit(std::string_view name);
-// Fills category_mask of every entry from its category names.
-void fill_category_masks(std::vector<GalacticAiTypeInfo>& types);
+// GameObjectCategoryType name -> bits with `enums`' converter (A2k t06: the one objects::GameObjectTypes::enums() loaded
+// from Data\XML\Enum\GameObjectCategoryType.xml through the VFS, so a mod's categories get their bits and a renumbered
+// vanilla name its new ones); null = the built-in vanilla FoC table (objects::EnumRegistry fallback). 0 if unknown or the
+// converter was discarded (every conversion fails, OBJECT_TYPES §9.1).
+uint64_t ai_category_bit(std::string_view name, const objects::EnumRegistry* enums = nullptr);
+// Fills category_mask of every entry from its category names (OR of ai_category_bit with `enums`) and capital_mask (the
+// "Capital" bits of the same converter).
+void fill_category_masks(std::vector<GalacticAiTypeInfo>& types, const objects::EnumRegistry* enums = nullptr);
+// As fill_category_masks, but only where unset: category_mask when it is 0, capital_mask when empty (GalacticAiWorld
+// construction: hand-built type tables keep the masks they were given).
+void fill_unset_category_masks(std::vector<GalacticAiTypeInfo>& types, const objects::EnumRegistry* enums = nullptr);
 // The structure mask the force leaves test (A2I_TOKENS_RE §2.1 / §2.4) [H]: the type's +0x1658, or the Capital mask when
-// that is 0.
+// that is 0 (the type's capital_mask; the built-in Capital bit when that was never filled).
 uint64_t galactic_ai_structure_mask(std::span<const GalacticAiTypeInfo> types, uint32_t type);
 
 inline constexpr uint64_t kAllCategories = ~uint64_t{0};
@@ -134,6 +149,10 @@ double galactic_ai_planet_force(const galactic::GalacticSim& sim, std::span<cons
 // `mask` (A2F_RE_READS §3.1; a2i t03 D1).
 double galactic_ai_enemy_strength(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
                                   PlanetIndex planet, int32_t self, bool space, uint64_t mask);
+// A2k t02: the hull fraction 0x396df0 a PotentialPlan's P = AI_Combat_Power x hull uses (A2K_T02_RE_ANSWERS Q2(b)) [H]:
+// health / the type's Tactical_Health; 1.0 when the type has no maximum or the stored health is not > 0 ([port] an
+// untyped store keeps health 0).
+double galactic_ai_hull_fraction(float health, float max_health);
 
 // The galactic AI's planning-side buildability: GalacticSim::buildable (cost, queue kind, GalacticSim::build_check =
 // 0x2804d0 in the STRATEGIC_GAPS §1.3 order, no credits).

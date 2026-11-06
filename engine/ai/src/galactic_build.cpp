@@ -31,17 +31,14 @@ const Goal* GalacticAiWorld::Impl::goal_of_plan(int32_t player, int32_t plan) co
 
 // AIPlanetBuildQueue ctor 0x53b5c0 (A2J_RE_BUILD_MARKET §4) [H]: last-run frame = synced Get_Int(1, (int)(FPS + 0.5))
 // (0x1ffb40), queue 0 then queue 1, for every planet when its PRODUCTION behaviour attaches at galaxy build, in planet
-// creation order. [port] The draws run here, when the AI world is made for an already built galaxy, in planet index
-// order: the galaxy build in engine/galactic has no AI attach point, so they come after its other attach draws instead of
-// interleaved with them. A loaded game overwrites both the values (AI save) and the RNG state.
+// creation order. A2k t04: GalacticSim::start draws them at that point of the galaxy build (build_queue_phase); the AI
+// world only copies them, without drawing. A loaded game overwrites the values (AI save).
 void GalacticAiWorld::Impl::init_queue_phases() {
     const auto planets = sim.planets();
     planet_queues.assign(planets.size(), {});
-    const auto hi = static_cast<int32_t>(static_cast<float>(kAiFps) + 0.5f);
-    for (size_t i = 0; i < planets.size(); ++i) {
-        if (!planets[i].is_planet) continue;
-        for (PlanetBuildQueue& q : planet_queues[i]) q.last_run = rng.synced().range_int(1, hi);
-    }
+    for (size_t i = 0; i < planets.size(); ++i)
+        for (uint32_t q = 0; q < 2; ++q)
+            planet_queues[i][q].last_run = sim.build_queue_phase(static_cast<PlanetIndex>(i), q);
 }
 
 void GalacticAiWorld::Impl::remove_pending(int32_t id) {

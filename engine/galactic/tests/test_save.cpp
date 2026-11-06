@@ -682,6 +682,90 @@ void test_synthetic() {
     run_scenario(sc);
 }
 
+// A2k t04 (A2J_RE_BUILD_MARKET §4): start() draws each planet's two build-queue phases (synced Get_Int(1, 30), queue 0
+// then 1, row order) at the PRODUCTION attach; nothing else in start() draws, so the RNG after start() is the reference
+// stream after exactly those draws. The phases are saved: a session started from another seed reads the saved values.
+void test_queue_phases() {
+    std::printf("  queue phases\n");
+    const GalacticRules rules = make_rules();
+    const objects::GameObjectTypes types;
+    const GalacticSetup setup = make_setup();
+    for (const uint32_t seed : {0x5A5Eu, 1u, 0xDEADBEEFu}) {
+        objects::IdCounter ids;
+        objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids);
+        SimRng rng(seed), ref(seed);
+        GalacticSim s(rules, store, rng);
+        CHECK(s.start(setup));
+        bool spread = false;
+        for (PlanetIndex p = 0; p < s.planets().size(); ++p) {
+            for (uint32_t q = 0; q < 2; ++q) {
+                const int32_t v = s.build_queue_phase(p, q);
+                if (!s.planets()[p].is_planet) {
+                    CHECK(v == 0);
+                    continue;
+                }
+                CHECK(v == ref.range_int(1, 30) && v >= 1 && v <= 30);
+                spread = spread || v != s.build_queue_phase(rA, 0);
+            }
+            CHECK(s.build_queue_phase(p, 2) == 0);
+        }
+        CHECK(s.build_queue_phase(rCore, 0) == 0 && s.build_queue_phase(static_cast<PlanetIndex>(s.planets().size()), 0) == 0);
+        CHECK(spread);   // ten draws are not all equal
+        CHECK(rng == ref);  // the draws are the only ones in start()
+
+        // Saved and restored: a session started from another seed (other phases) reads the saved ones.
+        const std::vector<uint8_t> bytes = sim_bytes(s);
+        objects::IdCounter ids2;
+        objects::ObjectStore store2(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids2);
+        SimRng rng2(seed + 7u);
+        GalacticSim c(rules, store2, rng2);
+        CHECK(c.start(setup));
+        bool differ = false;
+        for (PlanetIndex p = 0; p < c.planets().size(); ++p)
+            for (uint32_t q = 0; q < 2; ++q) differ = differ || c.build_queue_phase(p, q) != s.build_queue_phase(p, q);
+        CHECK(differ);
+        store2 = store;  // ObjectStore::read stand-in, as in run_scenario
+        ids2.set_next(ids.next());
+        ByteReader r(bytes);
+        CHECK(c.read(r));
+        for (PlanetIndex p = 0; p < c.planets().size(); ++p)
+            for (uint32_t q = 0; q < 2; ++q) CHECK(c.build_queue_phase(p, q) == s.build_queue_phase(p, q));
+        CHECK(sim_bytes(c) == bytes);
+
+        // Older layouts still load (A2k integration: v3 queue phases, v4 without the build bonus floats): v3 brings
+        // the saved phases, v1 / v2 keep the reading session's start() draws; everything else reads back to the v4 bytes.
+        for (const uint32_t version : {1u, 2u, 3u}) {
+            ByteWriter ow;
+            s.write_version(ow, version);
+            CHECK(ow.bytes() != bytes);
+            objects::IdCounter ids3;
+            objects::ObjectStore store3(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids3);
+            SimRng rng3(seed + 7u);
+            GalacticSim o(rules, store3, rng3);
+            CHECK(o.start(setup));
+            std::vector<int32_t> own_phases;
+            for (PlanetIndex p = 0; p < o.planets().size(); ++p)
+                for (uint32_t q = 0; q < 2; ++q) own_phases.push_back(o.build_queue_phase(p, q));
+            store3 = store;
+            ids3.set_next(ids.next());
+            ByteReader orr(ow.bytes());
+            CHECK(o.read(orr));
+            ByteWriter back;
+            o.write_version(back, version);
+            CHECK(back.bytes() == ow.bytes());  // same layout round trip
+            if (version == 3) {
+                CHECK(sim_bytes(o) == bytes);
+            } else {
+                size_t i = 0;
+                bool kept = true;
+                for (PlanetIndex p = 0; p < o.planets().size(); ++p)
+                    for (uint32_t q = 0; q < 2; ++q) kept = kept && o.build_queue_phase(p, q) == own_phases[i++];
+                CHECK(kept);
+            }
+        }
+    }
+}
+
 // ---- 3. FoC data ----------------------------------------------------------------------------------------------------------
 
 std::string env_or(const char* name) {
@@ -814,6 +898,7 @@ void test_foc() {
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     test_synthetic();
+    test_queue_phases();
     test_foc();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);
