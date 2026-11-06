@@ -226,23 +226,26 @@ function(alamo_game_add_exe)
   set_tests_properties(alamo_game_smoke_saveload PROPERTIES TIMEOUT 1800 FIXTURES_SETUP alamo_game_smoke_saveload_run)
   # BM2a: the benchmark mode on the saveload smoke's saves (bench_check.cmake; skipped without them): fixed frames from the
   # battle save and from the galactic save, each twice (same CRC log, identical PNGs); real time from the galactic save
-  # twice (frame times reported, same CRC log).
+  # twice (frame times reported, same CRC log). BM2b: fixed frames with TAA (bm-high at 640x360) from the battle save, the
+  # second run forcing every 3rd settled frame to be redrawn: still identical PNGs (the redraws leave the TAA history).
   set(_bench_out ${_smoke_out}/bench)
   file(MAKE_DIRECTORY ${_bench_out})
-  foreach(_case fixed:smoke_battle:fixed fixed_galactic:smoke_main:fixed realtime:smoke_main:realtime)
+  foreach(_case fixed:smoke_battle:fixed:0 fixed_galactic:smoke_main:fixed:0 realtime:smoke_main:realtime:0
+                fixed_taa:smoke_battle:fixed:1)
     string(REPLACE ":" ";" _parts ${_case})
     list(GET _parts 0 _name)
     list(GET _parts 1 _save)
     list(GET _parts 2 _m)
+    list(GET _parts 3 _taa)
     add_test(NAME alamo_game_bench_${_name}
              COMMAND ${CMAKE_COMMAND} -DGAME=$<TARGET_FILE:alamo_game> -DSAVE=${_smoke_out}/saveload_saves/${_save}.alsv
-                     -DOUT=${_bench_out}/${_name} -DMODE=${_m} -P ${PROJECT_SOURCE_DIR}/engine/apps/game/bench_check.cmake)
+                     -DOUT=${_bench_out}/${_name} -DMODE=${_m} -DTAA=${_taa} -P ${PROJECT_SOURCE_DIR}/engine/apps/game/bench_check.cmake)
     set_tests_properties(alamo_game_bench_${_name} PROPERTIES TIMEOUT 1200 FIXTURES_REQUIRED alamo_game_smoke_saveload_run)
   endforeach()
   alamo_label_slow(alamo_game_smoke_skirmish alamo_game_smoke_campaign alamo_game_smoke_land alamo_game_smoke_screens
                    alamo_game_smoke_skirmish_golden alamo_game_smoke_campaign_golden alamo_game_smoke_land_golden
                    alamo_game_smoke_screens_golden alamo_game_smoke_saveload alamo_game_bench_fixed alamo_game_bench_fixed_galactic
-                   alamo_game_bench_realtime)
+                   alamo_game_bench_realtime alamo_game_bench_fixed_taa)
   # bm2: a scenario made with --bench-make from the battle save and the test recipe (testdata/bench_orbit.abench: fixed
   # frames, a camera path anchored on the start view), then run twice with --bench-scenario: the fingerprint matches, GPU
   # timer scopes are reported, the two runs' PNGs are identical and the camera moved; a changed pinned file is refused

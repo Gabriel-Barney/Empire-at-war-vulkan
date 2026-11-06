@@ -3,11 +3,14 @@
 //     otherwise, carried into background_view), the history rules (cut / resize / FOV / small motion).
 //   GPU (skips cleanly without a Vulkan 1.3 device): an empty scene through Renderer::render with TAA - the resolve
 //     runs, the history restarts on the first frame, after a frame without TAA, on a resize, on a camera jump and on
-//     reset_taa_history(), and the output keeps the clear colour. Validation is required when toolchain\vvl\bin (or
+//     reset_taa_history(), and the output keeps the clear colour; BM2b provisional frames (discard_taa_frame puts the
+//     history back, keep_taa_frame / reset_taa_history / a plain frame leave nothing to undo, a resize inside a
+//     discarded frame still restarts the history). Validation is required when toolchain\vvl\bin (or
 //     VK_LAYER_PATH) has the Khronos layer, and every message fails.
 //   Real data (ALAMO_FOC_DATA): _MP_LAND_ENDOR at 1280x720 under a slowly orbiting tactical camera, TAA off vs on ->
 //     logs/render_taa_off.png, logs/render_taa_on.png (+ 4x crops), edge-energy and frame-to-frame shimmer numbers,
-//     GPU time of the resolve.
+//     GPU time of the resolve; BM2b: the keyed slide with a discarded provisional frame (other camera, objects further on)
+//     before every other step draws byte for byte what the plain slide draws.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -499,6 +502,49 @@ void land_map(Gpu& g, const std::string& src_dir, const char* root) {
                                     std::min(by1 - by0, 200u), 3));
                     CHECK(save_crop(src_dir + "/logs/render_taa_move_keyed.png", key_move, W, bx0, by0, std::min(bx1 - bx0, 300u),
                                     std::min(by1 - by0, 200u), 3));
+
+                    // BM2b provisional frames: the keyed slide with TAA, plain, and with a provisional frame before every other
+                    // step (another camera, the objects 7 steps further on) that is then discarded (or, as a control, kept).
+                    // A discarded frame must leave no trace: the last frame matches the plain run byte for byte.
+                    enum class Redraw { None, Discard, Keep };
+                    auto run_redraw = [&](Redraw mode, std::vector<uint8_t>& out) {
+                        ro.taa = true;
+                        rr.reset_taa_history();
+                        for (const Pick& p : picks) moving[p.index].motion_id = render::motion_key(3, p.index + 1);
+                        render::RecordOptions pr = ro;
+                        pr.taa_provisional = mode != Redraw::None;  // a kept provisional frame draws as a plain one
+                        for (int k = 0; k <= kSlide; ++k) {
+                            if (mode != Redraw::None && k % 2 == 1) {
+                                shifted(k + 7);
+                                CHECK(frame(g, rr, o, view_at(40 + k), moving, pr, st, clear, scene.sky()));
+                                CHECK(st.taa);
+                                if (mode == Redraw::Discard) CHECK(rr.discard_taa_frame());
+                                else rr.keep_taa_frame();
+                            }
+                            shifted(k);
+                            CHECK(frame(g, rr, o, v0, moving, pr, st, clear, scene.sky()));
+                            rr.keep_taa_frame();
+                        }
+                        out.assign(o.data(), o.data() + bytes);
+                    };
+                    auto bytes_differ = [&](const std::vector<uint8_t>& a, const std::vector<uint8_t>& b) {
+                        size_t n = 0;
+                        for (size_t i = 0; i < a.size() && i < b.size(); ++i) n += a[i] != b[i];
+                        return n;
+                    };
+                    std::vector<uint8_t> plain, plain2, discarded, kept;
+                    run_redraw(Redraw::None, plain);
+                    run_redraw(Redraw::None, plain2);
+                    run_redraw(Redraw::Discard, discarded);
+                    run_redraw(Redraw::Keep, kept);
+                    const size_t d_repeat = bytes_differ(plain, plain2), d_discard = bytes_differ(plain, discarded);
+                    const size_t d_keep = bytes_differ(plain, kept);
+                    std::printf("provisional frames: %d discarded redraws in a %d-frame keyed slide; bytes differing from the plain run: "
+                                "repeat %zu, discarded %zu, kept (control) %zu\n",
+                                kSlide / 2, kSlide + 1, d_repeat, d_discard, d_keep);
+                    CHECK(d_repeat == 0);   // the renderer draws the same frames run to run (else the next check means nothing)
+                    CHECK(d_discard == 0);  // discarded frames left no trace in the history, jitter or object motion
+                    CHECK(d_keep > 0);      // the redraws would have shown had they stayed in the history
                 }
             }
         } else {
@@ -578,6 +624,42 @@ int run_gpu(const std::string& src_dir) {
             same = true;
             for (size_t i = 0; i < static_cast<size_t>(o2.w) * o2.h; ++i) same = same && rgb_close_to(o2.data() + i * 4, clear, 1);
             CHECK(same);
+            // BM2b provisional frames: a discarded one leaves the history as it was.
+            {
+                render::RecordOptions prov = ro;
+                prov.taa_provisional = true;
+                const render::ViewMatrices v2 = render::make_view(turned, 80, 40);
+                render::OrbitCamera cut_cam = turned;
+                cut_cam.orbit(1.0f, 0.0f);
+                const render::ViewMatrices vcut = render::make_view(cut_cam, 80, 40);
+                CHECK(frame(g, r, o2, v2, {}, ro, st, clear) && st.taa && !st.taa_reset);
+                CHECK(!r.discard_taa_frame());  // a plain frame: nothing to undo
+                CHECK(frame(g, r, o2, vcut, {}, prov, st, clear) && st.taa && st.taa_reset);  // provisional cut
+                CHECK(r.discard_taa_frame());
+                CHECK(!r.discard_taa_frame());  // once only
+                CHECK(frame(g, r, o2, v2, {}, ro, st, clear) && st.taa && !st.taa_reset);  // as if the cut had not been drawn
+                CHECK(frame(g, r, o2, vcut, {}, prov, st, clear) && st.taa_reset);
+                r.keep_taa_frame();  // the cut stands
+                CHECK(!r.discard_taa_frame());
+                CHECK(frame(g, r, o2, v2, {}, ro, st, clear) && st.taa_reset);  // cut back
+                CHECK(frame(g, r, o2, v2, {}, prov, st, clear) && !st.taa_reset);
+                r.reset_taa_history();
+                CHECK(!r.discard_taa_frame());  // a reset after the frame: nothing before it to go back to
+                CHECK(frame(g, r, o2, v2, {}, ro, st, clear) && st.taa_reset);
+                CHECK(frame(g, r, o2, v2, {}, prov, st, clear) && !st.taa_reset);
+                CHECK(r.discard_taa_frame());
+                CHECK(frame(g, r, o2, v2, {}, ro, st, clear) && !st.taa_reset);
+                // A provisional frame at another size recreates the history targets: after its discard nothing is left to
+                // reproject from.
+                CHECK(frame(g, r, o, render::make_view(turned, 64, 48), {}, prov, st, clear) && st.taa_reset);
+                CHECK(r.discard_taa_frame());
+                CHECK(frame(g, r, o2, v2, {}, ro, st, clear) && st.taa && st.taa_reset);
+                CHECK(frame(g, r, o2, v2, {}, ro, st, clear) && st.taa && !st.taa_reset);
+                render::RecordOptions prov_off;  // provisional without TAA: no TAA step to undo
+                prov_off.taa_provisional = true;
+                CHECK(frame(g, r, o2, v2, {}, prov_off, st, clear) && !st.taa);
+                CHECK(!r.discard_taa_frame());
+            }
             g.ring.wait_idle();
         }
         o.destroy(g);

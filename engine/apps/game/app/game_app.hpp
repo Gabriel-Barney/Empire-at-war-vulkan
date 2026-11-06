@@ -602,6 +602,7 @@ public:
         FixedFrameClock clock{1};
         uint32_t settled_run = 0, unsettled_run = 0;
         uint64_t warmup_frames = 0, unsettled = 0, excluded = 0, rt_ticks = 0, start_tick = 0;
+        uint64_t settled_seen = 0, forced = 0, taa_discarded = 0;  // BM2b: settled measured frames, forced redraws, TAA undos
         bool counted = false, ticked = false, tick_missed = false;  // the last frame: counted / ran a tick / a due tick did not run
         bool drawn = false;     // render_frame recorded and submitted a frame (not minimized / out of date)
         uint64_t retry_boxes = 0;  // retry_boxes_ at the start: a new one = the mission was lost
@@ -620,6 +621,8 @@ public:
     bool bench_fixed() const { return opt_.bench.fixed(); }
     bool bench_measuring() const { return bench_.phase == BenchState::Phase::Measuring; }
     bool bench_done() const { return bench_.phase == BenchState::Phase::Done; }
+    // BM2b: fixed-frames measured frames are drawn TAA-provisional; bench_frame_end keeps or discards each one.
+    bool bench_taa_provisional() const { return bench_fixed() && bench_measuring(); }
     void bench_apply_window();  // init, before the window: preset size, present mode, frame cap
     void bench_apply_video();   // init, after the video options: preset detail / AA / gamma / advanced options
     bool bench_start();         // init: the save loaded, no menus
