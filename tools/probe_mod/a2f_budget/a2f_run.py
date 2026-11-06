@@ -82,7 +82,10 @@ def scan_once(proc, seen, out):
         m = RECORD_RE.match(tail)
         if not m:
             continue
-        text = m.group(0).decode('ascii')
+        try:
+            text = m.group(0).decode('ascii')
+        except UnicodeDecodeError:
+            continue                          # a stale heap fragment with garbage bytes (2026-11-05 run 191238)
         if text in seen:
             continue
         seen.add(text)

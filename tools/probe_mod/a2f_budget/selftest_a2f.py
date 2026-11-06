@@ -446,8 +446,8 @@ def watcher_test(out):
         frame = 0
 
         def players(self):
-            return [{'slot': 0, 'addr': player, 'faction': 'EMPIRE', 'human': 0, 'neutral': 0},
-                    {'slot': 1, 'addr': 0x600000, 'faction': 'REBEL', 'human': 1, 'neutral': 0}]
+            return {'by_id': [{'slot': 0, 'addr': player, 'faction': 'EMPIRE', 'human': 0, 'neutral': 0},
+                    {'slot': 1, 'addr': 0x600000, 'faction': 'REBEL', 'human': 1, 'neutral': 0}], 'count': 2, 'vec': []}
 
         def mode(self):
             return {'frame': FakeGame.frame, 'gframe': FakeGame.frame, 'type': 0}

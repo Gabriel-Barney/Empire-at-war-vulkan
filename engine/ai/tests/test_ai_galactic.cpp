@@ -101,7 +101,7 @@ static void test_cadence() {
         bool blocked(uint32_t, int32_t) override { return false; }
         bool evaluate(const std::string&, int32_t, double&) override { return false; }
         bool accept(Goal&) override { return false; }
-        bool plan_activatable(const Goal&) override { return false; }
+        bool plan_activatable(Goal&) override { return false; }
         bool plan_invalid(const Goal&) override { return true; }
         bool replaceable(const Goal&) override { return true; }
         void refresh_plan(Goal&) override {}
@@ -216,7 +216,7 @@ static void test_goal_reservations() {
             trace.push_back("propose " + std::to_string(g.pp_handle));
             return true;
         }
-        bool plan_activatable(const Goal& g) override {
+        bool plan_activatable(Goal& g) override {
             solve(g.pp_handle, false);
             trace.push_back("resolve " + std::to_string(g.pp_handle));
             return !pps[g.pp_handle].units.empty();
@@ -377,7 +377,7 @@ static void test_goal_batched_accept() {
             return true;
         }
         void accept_cancel() override { solves.clear(); }
-        bool plan_activatable(const Goal&) override { return true; }
+        bool plan_activatable(Goal&) override { return true; }
         bool plan_invalid(const Goal& g) override { return g.running < 0; }
         bool replaceable(const Goal&) override { return true; }
         void refresh_plan(Goal&) override {}
@@ -553,7 +553,7 @@ static void test_goal_batched_values() {
             g.pp_valid = true;
             return true;
         }
-        bool plan_activatable(const Goal&) override { return true; }
+        bool plan_activatable(Goal&) override { return true; }
         bool plan_invalid(const Goal& g) override { return g.running < 0; }
         bool replaceable(const Goal&) override { return true; }
         void refresh_plan(Goal&) override {}
@@ -2175,6 +2175,7 @@ struct LateHooks final : GoalModeHooks {
     int64_t now = 0, ended = -1, created = -1;
     bool removable = true;
     float eta = 10.0f;
+    float nominal = -1.0f;  // Goal::nominal_time (A2f t09); < 0 = the ETA
     LateMode mode = LateMode::Stalled;
     uint32_t target_count() override { return 1; }
     bool applies(int32_t, uint32_t) override { return true; }
@@ -2187,9 +2188,10 @@ struct LateHooks final : GoalModeHooks {
         g.plan = 0;
         g.pp_valid = true;
         g.eta = eta;
+        g.nominal_time = nominal < 0.0f ? eta : nominal;
         return true;
     }
-    bool plan_activatable(const Goal&) override { return true; }
+    bool plan_activatable(Goal&) override { return true; }
     bool plan_invalid(const Goal& g) override { return g.running < 0; }
     bool replaceable(const Goal&) override { return removable; }
     void refresh_plan(Goal&) override {}
@@ -2219,22 +2221,30 @@ struct LateHooks final : GoalModeHooks {
     int32_t quota_players() override { return 1; }
 };
 
-static int64_t late_goal_released_after(bool removable, float eta, LateMode mode) {
+static GoalSystemConfig galactic_goal_config() {
+    GoalSystemConfig c;
+    c.nominal_allowed_time = true;  // as the galactic AI (A2f t09)
+    return c;
+}
+
+static int64_t late_goal_released_after(bool removable, float eta, LateMode mode, float nominal = -1.0f, int64_t* created = nullptr) {
     AiDefinitions defs;
     defs.add_goals(kLateGoals, "g.xml");
     defs.link();
     LateHooks hooks;
     hooks.removable = removable;
     hooks.eta = eta;
+    hooks.nominal = nominal;
     hooks.mode = mode;
     LearningSystem learning;
     SimRng rng(1);
     GoalSystem gs;
-    gs.init(defs, {{0u, "F"}}, &hooks, &learning, nullptr, &rng, {});
+    gs.init(defs, {{0u, "F"}}, &hooks, &learning, nullptr, &rng, galactic_goal_config());
     for (int64_t f = 1; f <= 1200 && hooks.ended < 0; ++f) {
         hooks.now = f;
         gs.service(f);
     }
+    if (created) *created = hooks.created;
     return hooks.created > 0 && hooks.ended > 0 ? hooks.ended - hooks.created : -1;
 }
 
@@ -2283,6 +2293,150 @@ static void test_goal_time_drop() {
                 static_cast<long long>(zero_after));
     CHECK(plan >= 0 && seen > 0 && first > 0.0f && zero_after > 0);
     CHECK(pw.world->plan_production_time(-1) == 0.0f && pw.world->plan_production_time(123456) == 0.0f);
+}
+
+// ================================================================ A2f t09: AllowedTime base (A2F_RE_READS §1.4 item 2)
+//
+// 0x692860: Time_Limit without a PP, else 0x6c0450(PP) x Build_Time_Delay_Tolerance; 0x6c0450 = the float sum of btime(T, none)
+// over the PP's selection x the plan player's Galactic_Build_Time_Multiplier (none: 1.0).
+static const Goal* last_active(const GoalSystem& gs) {
+    const Goal* out = nullptr;
+    for (const auto& cat : gs.active())
+        for (const Goal& a : cat) out = &a;
+    return out;
+}
+
+static void test_goal_allowed_time_base() {
+    // The multiplier lookup and the sum (galactic_goal_time.hpp).
+    const std::vector<gal::DifficultyRules> diffs = {{"Easy", 1.0f, 1.5f}, {"Normal", 1.0f, 0.8f}, {"Hard", 1.0f, 0.6f}};
+    CHECK(galactic_build_time_multiplier(diffs, 0) == 1.5f);
+    CHECK(galactic_build_time_multiplier(diffs, 1) == 0.8f);
+    CHECK(galactic_build_time_multiplier(diffs, 2) == 0.6f);
+    CHECK(galactic_build_time_multiplier(diffs, 3) == 1.0f);
+    CHECK(galactic_build_time_multiplier(diffs, gal::kNoIndex) == 1.0f);
+    CHECK(galactic_build_time_multiplier({}, 0) == 1.0f);
+    CHECK(galactic_nominal_time({10.0f, 12.0f, 0.5f}, 0.8f) == (10.0f + 12.0f + 0.5f) * 0.8f);
+    CHECK(galactic_nominal_time({}, 1.5f) == 0.0f);
+
+    // GoalSystem::allowed_time with and without a PP, galactic (nominal base) and tactical (ETA base) configuration.
+    AiDefinitions defs;
+    defs.add_goals(kLateGoals, "g.xml");  // Time_Limit 240, tolerance 1.3
+    defs.link();
+    LateHooks hooks;
+    LearningSystem learning;
+    SimRng rng(1);
+    GoalSystem gal_gs, tac_gs;
+    gal_gs.init(defs, {{0u, "F"}}, &hooks, &learning, nullptr, &rng, galactic_goal_config());
+    tac_gs.init(defs, {{0u, "F"}}, &hooks, &learning, nullptr, &rng, {});
+    Goal g;
+    g.type = 0;
+    g.eta = 10.0f;
+    g.nominal_time = 30.0f;
+    CHECK(gal_gs.allowed_time(g) == 240.0f && tac_gs.allowed_time(g) == 240.0f);  // no PP: Time_Limit
+    g.plan = 0;
+    CHECK(gal_gs.allowed_time(g) == 240.0f);  // a plan without a valid PP: still Time_Limit
+    g.pp_valid = true;
+    CHECK(gal_gs.allowed_time(g) == 30.0f * 1.3f);
+    CHECK(tac_gs.allowed_time(g) == 10.0f * 1.3f);
+    g.nominal_time = 0.0f;
+    CHECK(gal_gs.allowed_time(g) == 0.0f);  // every build time 0: no limit
+
+    // Accept (0x6b8660: allowed <= 0 || ETA <= allowed) and the maintenance drop read the nominal base: ETA 10 with a nominal
+    // 20 (AllowedTime 26) survives a stall until ETA + elapsed > 26 (16 s); a nominal 5 (AllowedTime 6.5) rejects the plan.
+    const int64_t longer = late_goal_released_after(true, 10.0f, LateMode::Stalled, 20.0f);
+    int64_t created = 0;
+    const int64_t rejected = late_goal_released_after(true, 10.0f, LateMode::Stalled, 5.0f, &created);
+    std::printf("allowed time base: ETA 10, nominal 20 -> stalled released after %lld frames; nominal 5 -> created %lld\n",
+                static_cast<long long>(longer), static_cast<long long>(created));
+    CHECK(longer > 480 && longer <= 482);
+    CHECK(rejected < 0 && created < 0);
+
+    // Save / load keeps nominal_time; the galactic hash reads it, the tactical one does not.
+    {
+        LateHooks h1;
+        h1.nominal = 20.0f;
+        LearningSystem l1;
+        SimRng r1(1);
+        GoalSystem gs;
+        gs.init(defs, {{0u, "F"}}, &h1, &l1, nullptr, &r1, galactic_goal_config());
+        for (int64_t f = 1; f <= 60; ++f) {
+            h1.now = f;
+            gs.service(f);
+        }
+        const Goal* act = last_active(gs);
+        CHECK(act && act->nominal_time == 20.0f && act->eta == 10.0f);
+        ByteWriter w;
+        gs.write(w);
+        GoalSystem g2;
+        g2.init(defs, {{0u, "F"}}, &h1, &l1, nullptr, &r1, galactic_goal_config());
+        ByteReader rd(w.bytes());
+        CHECK(g2.read(rd) && rd.done());
+        const Goal* back = last_active(g2);
+        CHECK(back && act && back->nominal_time == 20.0f && back->serial == act->serial);
+        StateHasher ha, hb;
+        gs.hash(ha);
+        g2.hash(hb);
+        CHECK(ha.digest() == hb.digest());
+        // The same save with nominal_time 21: a different galactic hash, the same tactical one.
+        std::vector<uint8_t> bytes = w.bytes();
+        ByteWriter probe;
+        probe.f32(20.0f);
+        const std::vector<uint8_t> pat = probe.bytes();
+        const auto at = std::search(bytes.begin(), bytes.end(), pat.begin(), pat.end());
+        CHECK(at != bytes.end());
+        if (at != bytes.end()) {
+            ByteWriter other;
+            other.f32(21.0f);
+            const std::vector<uint8_t> rep = other.bytes();
+            std::copy(rep.begin(), rep.end(), at);
+            GoalSystem g3, t1, t3;
+            g3.init(defs, {{0u, "F"}}, &h1, &l1, nullptr, &r1, galactic_goal_config());
+            t1.init(defs, {{0u, "F"}}, &h1, &l1, nullptr, &r1, {});
+            t3.init(defs, {{0u, "F"}}, &h1, &l1, nullptr, &r1, {});
+            ByteReader r3(bytes), rt1(w.bytes()), rt3(bytes);
+            CHECK(g3.read(r3) && t1.read(rt1) && t3.read(rt3));
+            const Goal* changed = last_active(g3);
+            CHECK(changed && changed->nominal_time == 21.0f);
+            StateHasher hc, ht1, ht3;
+            g3.hash(hc);
+            t1.hash(ht1);
+            t3.hash(ht3);
+            CHECK(hc.digest() != ha.digest());
+            CHECK(ht1.digest() == ht3.digest());
+        }
+    }
+
+    // In a world: the active Barracks plan's goal carries 0x6c0450 of its live PP with the player's difficulty multiplier
+    // (an "Easy" 1.5 entry here; the synthetic rules' Normal_Default is 1.0).
+    ParityWorld pw(
+        false, {"BuildBarracks"}, [](gal::GalacticSetup& s) { s.players[0].difficulty = 1; },
+        [](gal::GalacticRules& r) { r.difficulties.push_back({"Easy", 1.0f, 1.5f}); });
+    Goal found;
+    bool have = false;
+    for (int32_t f = 1; f <= 30 * 60 && !have; ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+        if (const AiContext* c = pw.world->context(0))
+            for (const auto& cat : c->goals.active())
+                for (const Goal& a : cat)
+                    if (!have && a.pp_valid && !pw.world->potential_plan_selection(a.pp_handle).empty()) {
+                        found = a;
+                        have = true;
+                    }
+    }
+    CHECK(have);
+    if (have) {
+        const std::vector<uint32_t> sel = pw.world->potential_plan_selection(found.pp_handle);
+        std::vector<float> bt;
+        for (const uint32_t t : sel) bt.push_back(static_cast<float>(pw.rules.types[t].build_time_seconds));
+        const float expect = galactic_nominal_time(bt, 1.5f);
+        std::printf("allowed time base: world goal %u, %zu selected, nominal %.2f (expected %.2f), ETA %.2f\n", found.serial,
+                    sel.size(), static_cast<double>(found.nominal_time), static_cast<double>(expect), static_cast<double>(found.eta));
+        CHECK(expect > 0.0f);
+        CHECK(found.nominal_time == expect);
+        CHECK(pw.world->potential_plan_nominal_time(found.pp_handle) == expect);
+    }
+    CHECK(pw.world->potential_plan_nominal_time(-5) == -1.0f && pw.world->potential_plan_selection(-5).empty());
 }
 
 // ================================================================ FIXPASS_GALACTIC §1: free-store moves on Friendly_Only
@@ -3522,6 +3676,7 @@ int main(int argc, char** argv) {
     test_budget_fraction_before_init();
     test_production_unbuildable();
     test_goal_time_drop();
+    test_goal_allowed_time_base();  // A2f t09
     test_free_store_path_rules();
     test_free_store_world();
     test_underworld_special();

@@ -2,7 +2,7 @@
 
 Roadmap group a2f, task t07: "Gabriel probe: budget reset flag +0x74 setter and the Empire's pre-Init Infrastructure pool /
 template state at HotM start (in-game Lua Budget queries)". One run of Heart of the Maw (HotM) as REBEL, hands off for about
-5 minutes. Nothing here is committed or run yet; the kit passed its offline self-test only (section 7).
+5 minutes. Run in game on 2026-11-05 (two runs, results in `docs/re/A2F_T07_BUDGET_PROBE.md`).
 
 ## 1. What it records
 

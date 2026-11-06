@@ -557,6 +557,7 @@ bool PlayerAi::accept(Goal& g) {
     g.pp_valid = true;
     g.cost = pp.net;  // Init 0x6c0d00: net cost -> goal +0x78, ETA -> +0x7c
     g.eta = pp.eta;
+    g.nominal_time = w->pp_nominal_time(pp);  // A2f t09: AllowedTime base 0x6c0450(PP) [H]
     g.pp_handle = h;
     w->pps.emplace(h, std::move(pp));
     return true;
@@ -1864,6 +1865,7 @@ bool GalacticAiWorld::start(std::vector<std::string>* diagnostics) {
         GoalSystemConfig gcfg;
         gcfg.sleep_frames = static_cast<int32_t>(static_cast<float>(kAiFps) * sleep);
         gcfg.extra_goals_per_category = type->goal_set_extension_size;  // AIPlayerType +0xE8 (0x721b60) [H]
+        gcfg.nominal_allowed_time = true;  // A2f t09: AllowedTime = 0x6c0450(PP) x tolerance (A2F_RE_READS §1.4 item 2) [H]
         p.ctx.goals.init(w.defs, std::move(sources), &p, &p.ctx.learning, &p.ctx.templates, &w.rng.synced(), gcfg);
         p.ctx.attach(&p, [&w, &p](const std::string& eq, double& out) { return w.evaluate(p.player, p.ctx.opponent, eq, -1, out); });
         if (w.cfg.stagger) {  // OPT2 t01: a fixed planning phase from the player's AI ordinal (players in index order)
@@ -2098,6 +2100,19 @@ std::vector<PlanetIndex> GalacticAiWorld::reach_planets(int32_t player, int leve
 }
 
 float GalacticAiWorld::plan_production_time(int32_t running) const { return impl_->goal_production_time(running); }
+
+std::vector<uint32_t> GalacticAiWorld::potential_plan_selection(int32_t pp_handle) const {
+    std::vector<uint32_t> out;
+    const auto it = impl_->pps.find(pp_handle);
+    if (it != impl_->pps.end())
+        for (const PpSelection& s : it->second.sel) out.push_back(s.type);
+    return out;
+}
+
+float GalacticAiWorld::potential_plan_nominal_time(int32_t pp_handle) const {
+    const auto it = impl_->pps.find(pp_handle);
+    return it == impl_->pps.end() ? -1.0f : impl_->pp_nominal_time(it->second);
+}
 
 std::vector<uint32_t> GalacticAiWorld::solve_potential_plan(int32_t player, std::string_view plan, std::string_view goal,
                                                            int32_t target, bool* ok, float* eta) {

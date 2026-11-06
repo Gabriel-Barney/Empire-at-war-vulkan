@@ -1137,7 +1137,7 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         pp_out.clear();
         pp_out_ready = false;
     }
-    bool plan_activatable(const Goal& g) override {
+    bool plan_activatable(Goal& g) override {
         return g.pp_valid && g.plan != kAiNone && ctx.templates.plan_value(g.plan) > 0 && w->resolve_pp(*this, g);
     }
     bool plan_invalid(const Goal& g) override {

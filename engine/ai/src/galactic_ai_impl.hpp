@@ -325,6 +325,16 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     float btime_at(int32_t player, uint32_t t, PlanetIndex p) const {
         return valid_planet(p) ? sim.build_time_for(player, p, t) : btime_none(t);
     }
+    // 0x6c0450(PP) (galactic_goal_time.hpp, A2f t09): the goal's AllowedTime base, Goal::nominal_time.
+    float pp_nominal_time(const PotentialPlanRec& pp) const {
+        std::vector<float> bt;
+        bt.reserve(pp.sel.size());
+        for (const PpSelection& s : pp.sel) bt.push_back(btime_none(s.type));
+        const auto ps = sim.players();
+        const uint32_t d = pp.player >= 0 && static_cast<size_t>(pp.player) < ps.size() ? ps[static_cast<size_t>(pp.player)].difficulty
+                                                                                         : gal::kNoIndex;
+        return galactic_nominal_time(bt, galactic_build_time_multiplier(sim.rules().difficulties, d));
+    }
     bool hostile(int32_t a, int32_t b) const { return sim.is_hostile(a, b); }
     uint32_t equation(const std::string& name);
     int32_t first_human() const {
@@ -565,8 +575,11 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         return w->evaluate(player, ctx.opponent, function, target, out);
     }
     bool accept(Goal& g) override;
-    bool plan_activatable(const Goal& g) override {
-        return g.pp_valid && g.plan != kAiNone && ctx.templates.plan_value(g.plan) > 0 && w->resolve_pp(*this, g);
+    bool plan_activatable(Goal& g) override {
+        if (!(g.pp_valid && g.plan != kAiNone && ctx.templates.plan_value(g.plan) > 0 && w->resolve_pp(*this, g))) return false;
+        // [M] the re-solve rewrites the PP's selection (+0x58), which AllowedTime (0x692860 -> 0x6c0450) reads live.
+        if (const auto it = w->pps.find(g.pp_handle); it != w->pps.end()) g.nominal_time = w->pp_nominal_time(it->second);
+        return true;
     }
     bool plan_invalid(const Goal& g) override;
     bool replaceable(const Goal& g) override;
