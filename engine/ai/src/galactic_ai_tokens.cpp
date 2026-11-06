@@ -140,6 +140,11 @@ double galactic_ai_planet_force(const gal::GalacticSim& sim, std::span<const Gal
     return sum;
 }
 
+double galactic_ai_hull_fraction(float health, float max_health) {
+    if (!(max_health > 0.0f) || !(health > 0.0f)) return 1.0;
+    return static_cast<double>(health) / static_cast<double>(max_health);
+}
+
 double galactic_ai_enemy_strength(const gal::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types, PlanetIndex planet,
                                   int32_t self, bool space, uint64_t mask) {
     double s = galactic_ai_planet_force(sim, types, planet, self, true, space, mask);

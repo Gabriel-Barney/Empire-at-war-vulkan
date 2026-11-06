@@ -1862,9 +1862,15 @@ static void test_free_store_supply() {
     std::printf("free-store supply: a reserved unit is supplied (0x4d2bd0 ignores +0x30)\n");
 }
 
+// A2k t02: the production source planets of a planet target are the target's own reachability list (0x665160 with
+// destination = the target, A2K_T02_RE_ANSWERS Q1 port change 3). At Conquer_Planet's Enemy_destination level P3 has a
+// source list only when one of its neighbours is held, so the solver tests that produce for a P3 target give the Empire
+// P2 too (an infantry company; P2 has no starbase, so the Corvette is still built at P0).
+static void own_p2(gal::GalacticSetup& s) { s.forces.push_back({0, 2, tInfantry}); }
+
 static void test_parity_rules() {
     {
-        ParityWorld pw(false, {"HeroAttach", "HeroDeny"});
+        ParityWorld pw(false, {"HeroAttach", "HeroDeny"}, own_p2);
         pw.run(2);  // first service: templates, budget
         bool ok = false;
         // §2.4: the hero record is vetoed in a plan that allows hero attach; the corvette is chosen instead.
@@ -1914,7 +1920,7 @@ static void test_parity_rules() {
     }
     {
         // §3.5: with AI_Uses_Galactic_Pop_Cap a produced Corvette (pop 50) exceeds the remaining population.
-        ParityWorld off(false, {"HeroAttach"}), on(true, {"HeroAttach"});
+        ParityWorld off(false, {"HeroAttach"}, own_p2), on(true, {"HeroAttach"}, own_p2);
         off.run(2);
         on.run(2);
         bool ok_off = false, ok_on = false;
@@ -1939,12 +1945,50 @@ static void test_parity_rules() {
     }
 }
 
+// A2k t02: the per-target stage (A2K_T02_RE_ANSWERS Q1) and FreeStore Setup A (Q2(c)) on the synthetic chain P0..P7
+// (the Empire holds P0 / P1, its hero and frigate at P0; Conquer_Planet = Enemy_destination, level 2).
+static void test_stage_and_setup_a() {
+    CHECK(galactic_ai_hull_fraction(50.0f, 100.0f) == 0.5 && galactic_ai_hull_fraction(0.0f, 100.0f) == 1.0 &&
+          galactic_ai_hull_fraction(30.0f, 0.0f) == 1.0);
+    bool ok = false;
+    {
+        ParityWorld pw(false, {"HeroDeny"});
+        pw.run(2);
+        // P3's neighbours P2 / P4 are not held: no level-2 stage (Setup A then stages at the target). At level 5 the BFS
+        // from P3's first neighbour P2 pops P1 before P0.
+        CHECK(pw.world->stage_area(0, 3, 2) == kInvalidPlanet && pw.world->stage_list(0, 3, 2).empty());
+        CHECK(pw.world->stage_list(0, 3, 5) == (std::vector<PlanetIndex>{1, 0}) && pw.world->stage_area(0, 3, 5) == 1);
+        CHECK(pw.world->stage_area(0, 3, 4) == 3 && pw.world->stage_area(0, 3, 6) == kInvalidPlanet);
+        CHECK(pw.world->stage_area(0, 3, 0) == kInvalidPlanet && pw.world->stage_area(0, 1, 0) == 1);  // held target: itself
+        CHECK(pw.world->stage_area(1, 3, 5) == kInvalidPlanet);  // not an AI player of this world
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
+        CHECK(ok && pw.has(s, pw.hero));  // the hero's path P0 -> P3 has no node cost: eligible
+    }
+    {
+        // The Empire also holds P2: P3's first neighbour is held, so the level-2 stage is P2 (BFS P2, P1, P0).
+        ParityWorld pw(false, {"HeroDeny"}, [](gal::GalacticSetup& s) { s.forces.push_back({0, 2, tInfantry}); });
+        pw.run(2);
+        CHECK(pw.world->stage_list(0, 3, 2) == (std::vector<PlanetIndex>{2, 1, 0}) && pw.world->stage_area(0, 3, 2) == 2);
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
+        CHECK(ok && pw.has(s, pw.hero));
+    }
+    {
+        // A Rebel frigate orbits P2: the hero's only path to the stage (P3) crosses a planet with node cost > 0, so Setup A
+        // drops it (galactic: no finite stage cost) and the solve does not use it.
+        ParityWorld pw(false, {"HeroDeny"}, [](gal::GalacticSetup& s) { s.forces.push_back({1, 2, tFrigate}); });
+        pw.run(2);
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
+        std::printf("setup A: enemy frigate on the hero's path -> %s, hero %s\n", ok ? "solved" : "failed", pw.has(s, pw.hero) ? "yes" : "no");
+        CHECK(!pw.has(s, pw.hero));
+    }
+}
+
 // OI2 ai: production-disabled types (story DISABLE_BUILDABLE, REMAINING_GAPS §1.5) are never picked by AI production -
 // neither by a normal plan's Production marshaller nor by a MagicPlan spawn nor by the team picks; and the build
 // market's delivery path class (REMAINING_GAPS §6.2): 2 by default, 3 with +0xDA, 5 for Is_Stealth_Company.
 static void test_production_disabled_and_delivery() {
     {
-        ParityWorld pw(false, {"HeroAttach"});
+        ParityWorld pw(false, {"HeroAttach"}, own_p2);
         pw.run(2);
         bool ok = false;
         const std::vector<uint32_t> a = pw.world->solve_potential_plan(0, "HeroAttach", "Conquer_Planet", 3, &ok);
@@ -2127,6 +2171,7 @@ static void test_production_unbuildable() {
     float eta = -1.0f;
     const auto no_hero = [](gal::GalacticSetup& s) {
         s.forces.erase(std::remove_if(s.forces.begin(), s.forces.end(), [](const auto& f) { return f.type == tTypes; }), s.forces.end());
+        own_p2(s);
     };
     {
         // HeroShip (cost 0, the HotM Veers case) not on the free store: listed first in the team and tied with the
@@ -2183,7 +2228,7 @@ static void test_production_unbuildable() {
             r.types.push_back(z);
         };
         const auto cat = [&zc](std::vector<GalacticAiTypeInfo>& t) { t[zc].categories = {"CORVETTE"}; };
-        ParityWorld pw(false, {"MaskCorvette"}, {}, add, {}, cat);
+        ParityWorld pw(false, {"MaskCorvette"}, own_p2, add, {}, cat);
         pw.run(2);
         const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "MaskCorvette", "Conquer_Planet", 3, &ok);
         CHECK(ok && pw.has(s, tCorvette) && !pw.has(s, zc));
@@ -4677,6 +4722,25 @@ static void test_foc_data() {
         std::printf("FoC player %zu AI path finder: %u recomputes, %u pairs, %u reachable (A* stand-in %u), %u identical to A*\n",
                     p, f->recomputes(), pairs, reachable, astar_reachable, same);
         CHECK(reachable > 0);
+        // A2k t02: the Lua _FindStageArea stage is list[0] of the target's per-target reachability list at the TF level
+        // (held by the player or an ally), the target at level 4, nil above 5 and at levels 0 / 1 for a target not held.
+        uint32_t staged = 0;
+        const gal::PlayerView sv = sim.player_view(pi);
+        for (PlanetIndex t = 0; t < sim.planets().size(); ++t) {
+            if (!sim.planets()[t].is_planet) continue;
+            const PlanetIndex s = world.stage_area(pi, t, 5);
+            const std::vector<PlanetIndex> list = world.stage_list(pi, t, 5);
+            CHECK(s == (list.empty() ? kInvalidPlanet : list.front()));
+            for (const PlanetIndex k : list) CHECK(gal::PlayerView::bit(sv.held_by_ally, k, false));
+            CHECK(world.stage_area(pi, t, 4) == t && world.stage_area(pi, t, 6) == kInvalidPlanet);
+            const PlanetIndex s0 = world.stage_area(pi, t, 0);
+            if (!gal::PlayerView::bit(sv.held_by_ally, t, false)) CHECK(s0 == kInvalidPlanet);
+            else CHECK(s0 == kInvalidPlanet || gal::PlayerView::bit(sv.held_by_ally, s0, false));
+            if (s == kInvalidPlanet) continue;
+            ++staged;
+            CHECK(world.path(pi, s, t).empty() || world.path(pi, s, t).front() == s);
+        }
+        CHECK(staged > 0 || sim.planets_owned(pi) == 0);
     }
     // FIXPASS_GALACTIC §1 on the real galaxy (shipped GalacticFreeStore.lua drives the moves):
     //   * the Friendly_Only source list holds only planets held by the player or an ally (§1.4);
@@ -4796,6 +4860,7 @@ int main(int argc, char** argv) {
     test_force_members();
     test_parity_rules();
     test_free_store_supply();
+    test_stage_and_setup_a();
     test_production_disabled_and_delivery();
     test_ground_structure_slots();
     test_budget_fraction_before_init();

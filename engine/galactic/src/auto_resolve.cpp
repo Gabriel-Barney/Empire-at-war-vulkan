@@ -67,6 +67,27 @@ float ContrastTable::contrast(size_t row, std::string_view type_name, uint64_t c
     return 0.0f;
 }
 
+float ContrastTable::ai_weight(size_t row, std::string_view type_name, uint64_t categories) const {
+    if (row >= rows.size()) return 0.0f;
+    float sum = 0.0f;
+    int32_t count = 0;
+    bool matched = false;
+    for (const ContrastRow::Entry& e : rows[row].friendly) {
+        if (e.mask == 0) {
+            if (!type_name.empty() && iequal(e.name, type_name)) return e.weight;
+            continue;
+        }
+        if ((e.mask & categories) == 0) continue;
+        matched = true;
+        if (e.weight != 1.0f) {
+            sum += e.weight;
+            ++count;
+        }
+    }
+    if (count > 0) return sum / static_cast<float>(count);
+    return matched ? 1.0f : 0.0f;
+}
+
 bool ContrastTable::parse_lua(std::string_view src, const std::function<uint64_t(std::string_view)>& category_mask,
                               std::vector<std::string>* diag) {
     rows.clear();

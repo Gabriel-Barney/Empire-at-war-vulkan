@@ -291,39 +291,67 @@ bool GalacticAiWorld::Impl::move_fleet(int32_t player, uint32_t fleet, PlanetInd
            cmd::RejectReason::None;
 }
 
-std::vector<int32_t> GalacticAiWorld::Impl::hops_to(PlanetIndex to) const {
-    const gal::PlanetGraph& g = sim.graph();
-    std::vector<int32_t> d(sim.planets().size(), -1);
-    if (to >= d.size() || !g.included(to)) return d;
-    std::vector<PlanetIndex> q{to};
-    d[to] = 0;
-    for (size_t i = 0; i < q.size(); ++i)
-        for (uint32_t e = g.edge_begin(q[i]); e < g.edge_end(q[i]); ++e) {
-            const PlanetIndex n = g.neighbour(e);
-            if (n < d.size() && d[n] < 0) {
-                d[n] = d[q[i]] + 1;
-                q.push_back(n);
-            }
-        }
-    return d;
+// The galactic path finder's node order (0x3f1c10 = the GOM planet list, FindPlanet.Get_All_Planets order: newest
+// object first, ObjectStore::objects_newest_first) as a rank per planet row: descending object id (ids grow with
+// creation; planet objects are never replaced). Rows without a live object go last in row order.
+std::span<const uint32_t> GalacticAiWorld::Impl::planet_node_rank() {
+    const auto planets = sim.planets();
+    if (node_rank.size() == planets.size()) return node_rank;
+    std::vector<PlanetIndex> order(planets.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = static_cast<PlanetIndex>(i);
+    auto key = [&](PlanetIndex p) -> int64_t {
+        return store.alive(planets[p].object) ? static_cast<int64_t>(store.id(planets[p].object)) : int64_t{-1};
+    };
+    std::stable_sort(order.begin(), order.end(), [&](PlanetIndex a, PlanetIndex b) { return key(a) > key(b); });
+    node_rank.assign(planets.size(), 0);
+    for (size_t k = 0; k < order.size(); ++k) node_rank[order[k]] = static_cast<uint32_t>(k);
+    return node_rank;
 }
 
-PlanetIndex GalacticAiWorld::Impl::nearest_owned(int32_t player, int32_t target) const {
+// [port] The stage of a task force whose goal has no target: the player's first planet (row order) with a starbase,
+// else its first planet. (A planet target uses PlayerAi::setup_stage, A2k t02.)
+PlanetIndex GalacticAiWorld::Impl::nearest_owned(int32_t player) const {
     const auto planets = sim.planets();
-    if (target < 0) {
-        for (size_t i = 0; i < planets.size(); ++i)
-            if (planets[i].is_planet && planets[i].owner == player && planets[i].starbase_level > 0) return static_cast<PlanetIndex>(i);
-        for (size_t i = 0; i < planets.size(); ++i)
-            if (planets[i].is_planet && planets[i].owner == player) return static_cast<PlanetIndex>(i);
-        return kInvalidPlanet;
-    }
-    const std::vector<int32_t> d = hops_to(static_cast<PlanetIndex>(target));
-    PlanetIndex best = kInvalidPlanet;
-    for (size_t i = 0; i < planets.size(); ++i) {
-        if (!planets[i].is_planet || planets[i].owner != player || d[i] < 0) continue;
-        if (best == kInvalidPlanet || d[i] < d[best]) best = static_cast<PlanetIndex>(i);
-    }
-    return best;
+    for (size_t i = 0; i < planets.size(); ++i)
+        if (planets[i].is_planet && planets[i].owner == player && planets[i].starbase_level > 0) return static_cast<PlanetIndex>(i);
+    for (size_t i = 0; i < planets.size(); ++i)
+        if (planets[i].is_planet && planets[i].owner == player) return static_cast<PlanetIndex>(i);
+    return kInvalidPlanet;
+}
+
+// Lua _FindStageArea (FindStageAreaClass::Lua_Call 0x6990f0, A2K_T02_RE_ANSWERS Q1) [H]: the target's reachability slot 6
+// (0x664450) at the level = the task force's goal Reachability (0 = Friendly_only without a task force): the first planet
+// held by the player or an ally in the target's per-target flood list (PlayerAi::stage_of); level 4 -> the target, level
+// > 5 or an empty list -> nil. The link mask is ignored in galactic; no exclude / include list. A game-object target
+// resolves to its planet (planet_arg). In HotM this gives the Underworld The_Maw for Kashyyyk and Kuat and Shola for
+// Corellia (retail's 0.2933 / 0.6178 Kashyyyk markups, no third one at 372).
+PlanetIndex GalacticAiWorld::Impl::lua_stage_area(int32_t player, PlanetIndex target, int level) {
+    PlayerAi* pa = player_ai(player);
+    return pa ? pa->stage_of(target, level) : kInvalidPlanet;
+}
+
+int GalacticAiWorld::Impl::tf_reachability(int32_t tf) const {
+    const auto it = tfs.find(tf);
+    if (it == tfs.end()) return 0;
+    const auto pit = plans.find(it->second.plan);
+    if (pit == plans.end() || pit->second.goal_type >= defs.goals.size()) return 0;
+    return static_cast<int>(defs.goals[pit->second.goal_type].reachability);
+}
+
+int32_t GalacticAiWorld::Impl::find_stage_area(int32_t, const lua::AiArg& player, const lua::AiArg& target, const lua::AiArg& tf) {
+    if (player.player < 0) return -1;
+    const int level = tf.present && tf.task_force >= 0 ? tf_reachability(tf.task_force) : 0;
+    const PlanetIndex s = lua_stage_area(player.player, planet_arg(target), level);
+    return s == kInvalidPlanet ? -1 : static_cast<int32_t>(s);
+}
+
+PlanetIndex GalacticAiWorld::stage_area(int32_t player, PlanetIndex target, int level) {
+    return impl_->lua_stage_area(player, target, level);
+}
+
+std::vector<PlanetIndex> GalacticAiWorld::stage_list(int32_t player, PlanetIndex target, int level) {
+    PlayerAi* pa = impl_->player_ai(player);
+    return pa ? pa->stage_list(target, level) : std::vector<PlanetIndex>{};
 }
 
 uint32_t GalacticAiWorld::Impl::next_starbase_type(int32_t player, PlanetIndex p) const {
@@ -579,6 +607,41 @@ const std::vector<PlanetIndex>& PlayerAi::source_planets(int level) {
     return s.planets;
 }
 
+const std::vector<PlanetIndex>& PlayerAi::stage_list(PlanetIndex target, int level) {
+    static const std::vector<PlanetIndex> kNone;
+    const size_t n = w->sim.planets().size();
+    if (target >= n || level < 0 || level > 5) return kNone;
+    if (stage_lists.size() != n) stage_lists.assign(n, {});
+    SourceList& s = stage_lists[target][static_cast<size_t>(level)];
+    if (s.frame < 0 || w->now - s.frame > static_cast<int64_t>(10 * kAiFps)) {
+        s.frame = w->now;
+        gal::PlayerView view = w->sim.player_view(player);
+        view.dangerous = w->ai_dangerous(player);
+        s.planets = ai_stage_flood(w->sim.graph(), view, target, level, w->planet_node_rank());
+    }
+    return s.planets;
+}
+
+PlanetIndex PlayerAi::stage_of(PlanetIndex target, int level) {
+    if (!w->valid_planet(target) || level > 5 || level < 0) return kInvalidPlanet;
+    if (level == 4) return target;
+    const std::vector<PlanetIndex>& list = stage_list(target, level);
+    return list.empty() ? kInvalidPlanet : list.front();
+}
+
+PlanetIndex PlayerAi::setup_stage(PlanetIndex target, int level, const TaskForceDef& tf, std::span<const PlanetIndex> chosen) {
+    if (!w->valid_planet(target)) return kInvalidPlanet;
+    if (level == 4 || level > 5 || level < 0) return target;  // slot 6: level 4 = the target; > 5 null -> the target
+    const bool exclude = tf.require_unique_stage, include = !exclude && tf.require_matching_stage && !chosen.empty();
+    auto in_chosen = [&](PlanetIndex p) { return std::find(chosen.begin(), chosen.end(), p) != chosen.end(); };
+    for (const PlanetIndex p : stage_list(target, level)) {
+        if (exclude && in_chosen(p)) continue;
+        if (include && !in_chosen(p)) continue;
+        return p;
+    }
+    return target;
+}
+
 // The AI's remaining galactic population for the solver 0x5f5080 (AI_GALACTIC_3 Â§3.5) [H; M "committed"]: capacity -
 // pop of the galactic free-store units (skipping units at unusable planets) - the population committed by the
 // player's instantiated plans (PP+0x1A8 over the budget's goal structs).
@@ -828,6 +891,7 @@ int32_t GalacticAiWorld::Impl::instantiate(PlayerAi& p, Goal& g) {
     lua::set_budget_global(*vm, pi.id);
     lua::set_player_global(*vm, "PlayerObject", p.player);
     std::string tf_names;
+    std::vector<PlanetIndex> stages;  // the stages of the earlier TFs (RequireUniqueStage / RequireMatchingStage)
     for (size_t i = 0; i < def.task_forces.size(); ++i) {
         TaskForceRec tf;
         tf.id = next_tf++;
@@ -835,12 +899,18 @@ int32_t GalacticAiWorld::Impl::instantiate(PlayerAi& p, Goal& g) {
         tf.player = p.player;
         tf.def = static_cast<uint32_t>(i);
         tf.name = def.task_forces[i].name;
-        // Stage (0x140b3a660 through the target's reachability object) [port: the player's planet nearest the
-        // target in hops; the target itself when the player owns none on a path].
-        {
-            const PlanetIndex st = nearest_owned(p.player, def.ignore_target ? -1 : g.target);
+        // Stage (0x140b3a660, FreeStore Setup A through the target's reachability object, A2K_T08_RE_ANSWERS Q3.1) [H]:
+        // PlayerAi::setup_stage at the goal's Reachability, the same rule and list as the solve; IgnoreTarget is not
+        // read. [port] A goal without a target keeps the player's first planet with a starbase (retail: null stage).
+        if (g.target >= 0) {
+            const PlanetIndex st = p.setup_stage(static_cast<PlanetIndex>(g.target), static_cast<int>(defs.goals[g.type].reachability),
+                                                 def.task_forces[i], stages);
+            tf.stage = st == kInvalidPlanet ? g.target : static_cast<int32_t>(st);
+        } else {
+            const PlanetIndex st = nearest_owned(p.player);
             tf.stage = st == kInvalidPlanet ? g.target : static_cast<int32_t>(st);
         }
+        stages.push_back(tf.stage >= 0 ? static_cast<PlanetIndex>(tf.stage) : kInvalidPlanet);
         for (const PpSelection& s : pp.sel) {
             if (s.tf != static_cast<int32_t>(i)) continue;
             if (s.unit) {

@@ -367,7 +367,6 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     bool move_fleet(int32_t player, uint32_t fleet, PlanetIndex to);
     cmd::RejectReason fleet_op(int32_t player, gal::FleetOp op, uint32_t target, uint32_t fleet, uint32_t unit, const std::string& what);
     bool launch_and_form(int32_t player, PlanetIndex p, ObjectHandle unit, uint32_t fleet);
-    std::vector<int32_t> hops_to(PlanetIndex to) const;
     // REMAINING_GAPS §6.2 / AI_GALACTIC_2 §2.3: the AI path class of a produced unit's delivery (2, 3 with the task
     // flag +0xDA, 5 for an Is_Stealth_Company type) and the market's path test planet `from` -> b.dest with it.
     int delivery_mode(const BuildTask& b) const;
@@ -375,7 +374,10 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     // The AI's Is_Planet_Dangerous mask for `player` (GalacticPerception::fill_view on this frame's snapshot); empty
     // (= none) before the first perception update.
     gal::Bitset ai_dangerous(int32_t player) const;
-    PlanetIndex nearest_owned(int32_t player, int32_t target) const;
+    PlanetIndex nearest_owned(int32_t player) const;
+    // A2k t02: the path finder's node order as a rank per planet row (galactic_ai.cpp); rebuilt lazily (static data).
+    std::vector<uint32_t> node_rank;
+    std::span<const uint32_t> planet_node_rank();
     bool can_build_at(int32_t player, uint32_t type, PlanetIndex p) const { return galactic_ai_can_build(sim, player, type, p); }
     // Ground structure slots (A2 f t01): the slot max 0x372740 = planet data +0x230, seeded from the planet type's
     // Special_Structures_Land (+0x92C) (AI_GALACTIC_TOKENS MaxStructureSlots, STRATEGIC_GAPS §1 step 18) [H];
@@ -520,13 +522,10 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     bool unit_safe(ObjectHandle unit) override;
     bool free_store_move(int32_t script, ObjectHandle unit, const lua::AiArg& destination) override;
     int32_t find_target(int32_t script, const lua::AiFindTargetRequest& r) override;
-    int32_t find_stage_area(int32_t, const lua::AiArg& player, const lua::AiArg& target, const lua::AiArg&) override {
-        const int32_t p = player.player >= 0 ? player.player : -1;
-        const PlanetIndex t = planet_arg(target);
-        if (p < 0) return -1;
-        const PlanetIndex s = nearest_owned(p, t == kInvalidPlanet ? -1 : static_cast<int32_t>(t));
-        return s == kInvalidPlanet ? -1 : static_cast<int32_t>(s);
-    }
+    int32_t find_stage_area(int32_t, const lua::AiArg& player, const lua::AiArg& target, const lua::AiArg&) override;
+    // A2k t02: the Lua _FindStageArea planet at AI level `level` (galactic_ai.cpp); kInvalidPlanet = nil.
+    PlanetIndex lua_stage_area(int32_t player, PlanetIndex target, int level);
+    int tf_reachability(int32_t tf) const;  // the task force's plan goal Reachability (0 when unknown)
     lua::AiGlobalValue global_value(std::string_view name) override {
         if (gv_store) return gv_store->get(name);  // Int-final: the session-wide table
         const auto it = globals.find(std::string(name));
@@ -581,6 +580,18 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     };
     std::array<SourceList, 6> sources;
     const std::vector<PlanetIndex>& source_planets(int level);
+    // A2k t02: the per-target lists of the target planets' PlanetReachabilityClass (0x665160 with destination = the
+    // target, ai_stage_flood): one cache per (this AI player, target planet row) and level 0..5, rebuilt when more than
+    // 10 x FPS frames old (stamp written before the build). Empty until first used; sized to the planet count.
+    std::vector<std::array<SourceList, 6>> stage_lists;
+    const std::vector<PlanetIndex>& stage_list(PlanetIndex target, int level);
+    // Slot 6 (0x664450) with no exclude / include list: level 4 -> the target; level > 5 or an empty list -> none
+    // (kInvalidPlanet); else list[0].
+    PlanetIndex stage_of(PlanetIndex target, int level);
+    // FreeStore Setup A's per-TF stage (0x7287a0, A2K_T08_RE_ANSWERS Q3.1) [H]: slot 6 with exclude = `chosen` (the
+    // stages of the earlier TFs) when RequireUniqueStage, else include = `chosen` when RequireMatchingStage; no result ->
+    // the target itself. IgnoreTarget is not read. kInvalidPlanet for an invalid target.
+    PlanetIndex setup_stage(PlanetIndex target, int level, const TaskForceDef& tf, std::span<const PlanetIndex> chosen);
     std::vector<PlanetIndex> flood(int mode, std::vector<uint8_t>* reached);
     bool evaluate(const std::string& function, int32_t target, double& out) override {
         return w->evaluate(player, ctx.opponent, function, target, out);
