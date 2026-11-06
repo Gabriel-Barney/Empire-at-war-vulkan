@@ -179,7 +179,7 @@ constexpr size_t quality_level(const AdvancedVideoSettings& s) {
     }
     return kQualityCustom;
 }
-// [port: Gabriel] camera / controls settings (docs/PHASE4.md "Camera and controls"): galactic and tactical field of view
+// [port: Gabriel] camera / controls settings (docs/DECISIONS.md "Camera and controls"): galactic and tactical field of view
 // (degrees: galactic horizontal, tactical as TacticalCameras.xml - defined for 4:3) for GalacticCameraController::
 // set_fov_deg / TacticalCameraController::set_fov_override, and the queue modifier (Bindings::set_queue_mods).
 struct CameraSettings {

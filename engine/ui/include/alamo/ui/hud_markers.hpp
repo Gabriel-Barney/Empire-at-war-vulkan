@@ -36,7 +36,7 @@ struct HudWaypointLine {
 uint32_t add_waypoint_lines(HudDrawList& dl, const HudCanvas& canvas, const View& view, std::span<const HudWaypointLine> lines,
                             uint32_t layer = 0);
 
-// [port: Gabriel] queued orders (docs/PHASE4.md "Camera and controls": shift-queued orders). The host fills one
+// [port: Gabriel] queued orders (docs/DECISIONS.md "Camera and controls": shift-queued orders). The host fills one
 // HudOrderQueue per unit from the sim's read-only queued_orders(unit) query (the current order first, then the queued
 // ones); the HUD draws a dotted line from the unit through every step (colour per kind: move green, attack red,
 // ability blue, other grey) and a numbered marker (1, 2, ...) on each step point - a 7 x 7 px square plus the number

@@ -208,7 +208,7 @@ public:
     using OrderHook = std::function<commands::RejectReason(SimHost& host, uint8_t player, const commands::EventData& ev,
                                                            const std::vector<ObjectId>& selection)>;
     void set_order_hook(OrderHook hook) { order_hook_ = std::move(hook); }
-    // Port-only events (PortExtension 63, e.g. the pause / resume entry of docs/PHASE4.md "Camera and controls") offered to
+    // Port-only events (PortExtension 63, e.g. the pause / resume entry of docs/DECISIONS.md "Camera and controls") offered to
     // the game host at the command phase in every mode, before the galactic / tactical handlers; Unhandled falls through.
     // P4 host: also offered every other event that no handler took (Unhandled after the galactic / tactical paths, e.g.
     // the auto-resolve dialog's Withdrawl 49); the hook's answer is then the command's result.

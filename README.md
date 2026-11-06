@@ -133,133 +133,7 @@ networking.
 
 ## Performance
 
-### How it differs from the original
-
-| | Original engine | This port |
-|---|---|---|
-| Simulation | One thread, run serially inside the frame | Parallel jobs across all cores: movement, combat, spatial queries, pathfinding, perception, animation, galactic graph, AI value scoring |
-| Thread library | Intel TBB shipped but unused | Own work-stealing job system with order-stable results |
-| Graphics API | Direct3D 9 | Vulkan 1.3, bindless, multithreaded recording |
-| AI timing | All AI players think on the same frame | Each AI player's clocks are **staggered**, so players no longer plan on the same tick |
-| Long AI work | Runs inside the tick that asks for it | Path recomputes and plan solves run as **fixed-latency background jobs**: started on tick N from a copy of their inputs, applied on tick N+k |
-| Lua garbage collection | Collects whenever a VM hits its threshold, mid-script | Collections scheduled by tick number at a fixed point, run in parallel; 70-85% moved out of script calls |
-| Frame pacing | Fixed 30 Hz steps shown as-is | Interpolated to the display refresh rate |
-
-Everything is scheduled **by tick number, never by wall clock or thread timing**, so the result is bit-identical for
-any worker count. That constraint is why parallelism here is mostly "per-index outputs, reduce in index order".
-
-### Method
-All numbers are from this project's own profiler (`alamo_headless --profile`, wall-clock and write-only: no simulation
-code ever reads a timing) on an **AMD Ryzen 7 7800X3D (8 cores, 16 threads), Windows 11, MSVC `/O2`**, at 30 ticks per
-second, so **one tick is 33.3 ms**. Each scenario is the median of 3 runs on a quiet machine; runs agree within about
-2%. "W15" is the default 15 workers, "W0" is the serial reference. Full tables and flags are in
-[`docs/PHASE4.md`](docs/PHASE4.md).
-
-**Budget** (set by the project owner): per tick, **p99 below 16.7 ms** (half a tick) and **no tick above 33.3 ms**.
-
-### Tick time on real Forces of Corruption content
-
-The baseline was recorded on 2026-10-30 (OPT1); "now" is the re-run after the OPT2/OPT3 work on 2026-11-03.
-
-| Scenario | Baseline p50 / p99 / max (ms) | Now p50 / p99 / max (ms) |
-|---|---|---|
-| Galactic conquest, Heart of the Maw, every faction an AI (18,000 ticks) | 0.19 / 0.52 / 3.1 | 0.18 / 0.51 / 4.4 |
-| 400-planet synthetic galaxy, 4 AIs | 0.39 / 2.99 / 11.9 | 0.38 / **1.53** / **4.7** |
-| Land battle | 3.06 / 6.39 / 104.7 | **1.32 / 2.21 / 55.1** |
-| Space battle with station | 0.95 / 2.17 / 66.9 | 0.80 / 2.15 / 42.4 |
-
-- **p99 is under 16.7 ms in every scenario, by a wide margin** (worst: 2.2 ms).
-- The land battle's typical tick is **2.3x faster** and its p99 **2.9x** better. The 400-planet galaxy's p99 halved
-  because its first-frame all-pairs recompute now runs in the background.
-- The galactic run is dominated by AI goal proposal and was already tiny, so it did not move.
-- The land and space battles are not the same games as in the baseline: AI fixes since then end them at different
-  tick counts (land 12,374 -> 3,014; space 9,072 -> 12,173). Compare per-tick numbers, not totals.
-- The 400-planet galaxy at W15 against W0 (serial): **3.1x faster on mean and 9x on p99** (1.53 against 14.2 ms).
-- The job system itself scales well: **7.9x at 8 workers and 12x at 15** on a large Dijkstra, **16.9x** on a
-  16-million-element float reduction, with identical results at every worker count.
-
-### The one remaining miss
-**One tick per battle is still above 33.3 ms: the first one.** It is one-off battle setup (loading models, building
-the tactical AI's plan VMs, laying down map objects), already spread over the workers. After the OPT3 fixes it takes
-**55 ms** on the land campaign battle, **42 ms** in space and about **139 ms** on a land skirmish (was 75 / 57 / 193).
-Getting under 33.3 ms needs setup spread over several ticks or a sim-only model load. Every other tick is under about
-12 ms; the next worst are the battle-end tick (land 5.3 ms) and the second battle tick (first perception, 8-11 ms).
-
-### What changed, and what each fix bought
-
-**Measure first (OPT1).** A zone-based tick profiler with per-system times, worker utilisation, a worst-20 table and
-an in-game overlay. It found that the tactical AI, not the battle passes, was most of a land battle's tick.
-
-**One slow equation (OPT2 t13).** On land, a single AI perception leaf, `OpenBuildPadCount`, ran a case-insensitive scan
-of every object type name for every open build pad, 66,749 times at about 380 us each: 25.5 s of the run's 28.6 s in
-perception. The result fed a hook that nothing installs. Doing the lookup once per call, and only when the hook is
-present, changed no output. Land skirmish on a loaded machine, main against the fix: tick p99 **19.7 -> 2.6 ms**, goal
-system p99 **18.1 -> 1.0 ms**, ticks over 33.3 ms **7 -> 1**.
-
-**Plan solve and goal values (OPT2 t03/t10).** The PotentialPlan accept was about half of a land battle's tick. Most of
-it was the host's build-pad query repeated per candidate, now answered once per proposal slice. The solves then run on
-their own RNG streams as a background job applied one tick later, and the AI's per-object view of the battle
-(`BattleAi::fill`) is built in parallel: **p50 1.6 -> 0.70 ms, p99 19 -> 1.3-3.5 ms**.
-
-**Spread the AI out in time (OPT2 t01/t02, OPT3 t04).** Staggered per-player AI clocks and fixed-latency background
-jobs for galactic all-pairs path recomputes and tactical zone reachability, with save rules so a mid-job save loads and
-continues identically.
-
-**Battle setup (OPT3 t05/t09/t11).**
-- The battle's model files load on the job system before any spawn instead of one at a time inside each spawn; the
-  region build runs one job per movement mask.
-- The tactical AI's 54 land / 27 space plan scripts each get their own Lua VM, now built in parallel; their shared
-  `require` reads go through a read cache (**98 -> 25 ms** of file reads per battle).
-- Battle tables are built incrementally; each model is parsed once.
-- Map obstacle stamps run in parallel (**60 -> 17 ms** on a land skirmish).
-- ALO model decode is faster (**51 -> 29 ms** of thread time on a land battle).
-- Combined effect on the first battle tick under a fully loaded PC: **3-4.5x shorter** on the land campaign battle and in
-  space, about 2x on a land skirmish.
-
-**Battle end (OPT3 t11).** The tactical AI's Lua VMs used to be closed one by one inside the final tick (about 23 ms).
-Their finalizers now run on the sim thread and the memory is freed by a background job: land battle-end tick
-**27.0 -> 5.3 ms**, space **23.5 ms -> under 8.4 ms**.
-
-**End-of-tick checksum (OPT3 t05).** Computing the per-tick CRC was 46-54% of every battle tick. One system alone, the
-tactical AI, fed about 65,000 fields through an out-of-line byte-by-byte hasher. Typed inline feeds produce the same byte
-stream and the same digests at a fraction of the cost.
-
-**Space movement spikes (OPT3 t06).** Occupancy queries walked two `std::map`s and rebuilt every track piece per query;
-they are now sorted contiguous vectors with identical iteration order.
-
-**Lua garbage collection (OPT2 t04).** Lua 5.0.2's collector is unchanged; what changed is *when* it runs. Each VM is
-due on a tick determined by a hash of its own state, collected at a fixed point before scripts run, in parallel across
-VMs. **70-85% of collections moved out of script calls**; the worst remaining in-script collection is about 2.8 ms. GC
-was never a large cost (under 0.5% of tick time), so this removes spikes rather than lowering the average.
-
-### Renderer and frame loop
-- The attract-demo land battle at 1280x720 runs a **mean frame of 4.5-5.3 ms** (p50 4.0-4.8 ms). On frames that run a
-  sim tick, that is about 2 ms of tick plus about 5 ms of render.
-- With 2,000 ships on screen (2,502 draws): draw-list build **0.88 -> 0.67 ms**, sort **0.19 -> 0.09 ms**; draw lists are
-  identical at 1, 4 and 15 threads.
-- TAA costs about **0.10 ms** of GPU time at 720p; SSAO about **0.4 ms** at 1080p.
-
-### Tried and not shipped
-Documented so nobody repeats them without new evidence.
-- **Overlapping the sim tick with rendering.** Measured: no gain beyond run-to-run noise (it can save at most the 0.2 ms
-  prepare step), and it changed what the scripted input saw. A real overlap needs a snapshot-fed HUD, a Lua VM hand-off
-  between threads or a render thread; worth doing only once tick + render exceeds 16.7 ms on target hardware.
-- **Running AI players' Lua in parallel.** The scripts are a small share of AI time (0.5-1.5% of the battle AI on land,
-  5.5% in space, under 7% in the galactic AI); the cost is the C++ behind each player's service. Not worth the shared
-  state it would need.
-- **Parallel galactic perception.** Investigated; the same frame's readers use its results, so it stays serial.
-- **A shared Lua bytecode cache** for plan VMs: rejected because it would change VM serials and digests.
-
-### Honest caveats
-- There is **no side-by-side benchmark against the original executable yet**. The architecture table above describes how
-  the designs differ; the measured numbers compare this port with its own earlier builds. The repeatable benchmark
-  (BM1-BM4) is the planned fix.
-- The test battles are two-AI skirmishes, not the largest scenes the game can produce, so the budget will be re-checked
-  as bigger scenes are added.
-- Several "before" measurements in the project notes were taken on a PC busy with other jobs, so those are upper bounds;
-  the table above uses quiet-machine runs.
-- Results come from one machine (16 logical processors). CPU-topology effects on hybrid or dual-chiplet CPUs have not been
-  measured.
+The simulation runs on a work-stealing job system with order-stable results (parallel jobs write per-index outputs and reduce in index order), the AI players' clocks are staggered, long AI work runs as fixed-latency background jobs, Lua garbage collection is scheduled by tick number, and the renderer records on several threads. Everything is scheduled **by tick number, never by wall clock or thread timing**, so results are bit-identical for any worker count. The measurements (AMD Ryzen 7 7800X3D, one tick = 33.3 ms), what each fix bought, what was tried and not shipped, and the caveats are in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md). Latest status: see "Where the project is" below.
 
 ---
 
@@ -393,12 +267,12 @@ alamo_render.exe                    :: renderer test app
 |---|---|
 | `engine/` | The engine, one static library per module: `core`, `vfs`, `data`, `jobs`, `galactic`, `assets`, `rhi`, `materials`, `shaderxlat`, `terrain`, `render`, `objects`, `tactical`, `ai`, `lua`, `anim`, `commands`, `audio`, `video`, `ui`, `apps` |
 | `tools/` | MEG archive tool, format readers, shader tools, probe kits, visual diff, lint and build-summary scripts |
-| `docs/` | Phase status boards, optimisation plan and research, behaviour specs recovered from the original (`docs/re/`), asset, format and shader specs |
+| `docs/` | All documentation, indexed in [`docs/README.md`](docs/README.md): decisions, build and test, performance, probes, phase results, behaviour specs recovered from the original (`docs/re/`), asset, format and shader specs |
 | `tests/visual_baselines/` | Screenshot baselines for visual regression |
 | `roadmap-store/` | The project roadmap and flowchart, the one copy: data, generated `ROADMAP.html`, own repository (update with `roadmap-store/roadmap_store.py`) |
 | `CLAUDE.md` | Working rules for contributors and agents |
 
-Good starting points: [`docs/PHASE4.md`](docs/PHASE4.md) for decisions and every performance measurement (status is on the roadmap),
+Good starting points: [`docs/README.md`](docs/README.md) (index of every document), [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for every performance measurement (status is on the roadmap),
 [`docs/OPT_RESEARCH.md`](docs/OPT_RESEARCH.md) for the optimisation techniques considered,
 [`docs/re/`](docs/re/) for how the original behaves.
 

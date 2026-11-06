@@ -91,8 +91,8 @@ A preset is the recommended model and effort level for a group: `xhigh` Opus 5.5
 5. Keep the rule from `CLAUDE.md` that every finished item is struck through, not deleted: set `s` to `done`.
    Out-of-scope work is the exception (Gabriel, 2026-10-30): delete those tasks (`{"tasks":{"t03":{"__delete__":true}}}`)
    and wholly out-of-scope groups and boxes instead of keeping them as `oos` / `out`. Record the decision in the
-   `docs/PHASE4.md` Decisions table first; that table, not the roadmap, is the record of what is out of scope.
-6. The roadmap is the only status tracker (Gabriel, 2026-11-06): `docs/PHASE2.md` / `PHASE3.md` / `PHASE4.md` no longer carry status boards or flowcharts, and `claude/roadmap.md` / `claude/phase2-status.md` are not updated. Record results, measurements and decisions in `docs/PHASE4.md` and `docs/re/`, but track what is open or done only here.
+   `docs/DECISIONS.md` first; that table, not the roadmap, is the record of what is out of scope.
+6. The roadmap is the only status tracker (Gabriel, 2026-11-06): `docs/PHASE2.md` / `PHASE3.md` / `PHASE4.md` no longer carry status boards or flowcharts, and `claude/roadmap.md` / `claude/phase2-status.md` are not updated. Record results where `docs/README.md` says (decisions, measurements, build rules, specs), but track what is open or done only here.
 
 ## Other accounts
 

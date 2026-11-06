@@ -553,7 +553,7 @@ public:
     Vec3 player_drop_facing(int32_t player) const;
     // --- end P host ---
 
-    // --- [port: Gabriel] queueable unit actions: the per-unit order queue (docs/PHASE4.md "Camera and controls") ---
+    // --- [port: Gabriel] queueable unit actions: the per-unit order queue (docs/DECISIONS.md "Camera and controls") ---
     // Each battle object (unit or ability team container) has a queue of pending orders behind its current one.
     // A queued command (order_* with queued = true; ability commands 40 / 43 / 57 / 58 with EventData::queued())
     // appends one entry per eligible unit (one `group` serial per command); a plain command clears the queues of

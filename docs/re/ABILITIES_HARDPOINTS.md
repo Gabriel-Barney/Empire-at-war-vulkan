@@ -823,7 +823,7 @@ root-finder method is not identified; any deterministic method with the same bra
 acceptable for our own clients.
 
 ### 4.12 `Destroy_When_Stunned_Over_Water` (type +0xe6) — port guess, no RE pass, confirmed by probe 2026-11-04
-Not traced (Gabriel 2026-10-30, `docs/PHASE4.md` "Roadmap trim": a documented guess instead of an RE pass). The
+Not traced (Gabriel 2026-10-30, `docs/DECISIONS.md` "Roadmap trim": a documented guess instead of an RE pass). The
 only vanilla user is `MAL_Rocket_Vehicle` (`UNITS_LAND_UNDERWORLD_MAL.XML`): a `Hover` movement-class vehicle with
 `STUNNABLE` in its land behaviours, so it is the one STUNNABLE unit that can stand on water cells (`Hover`
 passability includes `Water`). The port's reading of the name: a stunned hover vehicle loses its lift and sinks.

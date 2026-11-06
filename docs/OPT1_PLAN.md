@@ -1,6 +1,6 @@
 # OPT1 plan — tick profiler and budgets
 
-Written 2026-10-30. Status 2026-10-30: steps 1-4 and 6 are built (profiler in `engine/core/include/alamo/core/profile.hpp`, baselines and budget in `docs/PHASE4.md`); only the `alamo_game` overlay is open. Deviations from the design below: the ring stores full per-tick records and the report computes exact percentiles from them (no histograms); zone values are inclusive thread time summed across threads; worker utilisation is busy time per job slot as a share of tick time. Roadmap group `opt1`
+Written 2026-10-30. Status 2026-10-30: steps 1-4 and 6 are built (profiler in `engine/core/include/alamo/core/profile.hpp`, baselines and budget in `docs/PERFORMANCE.md`); only the `alamo_game` overlay is open. Deviations from the design below: the ring stores full per-tick records and the report computes exact percentiles from them (no histograms); zone values are inclusive thread time summed across threads; worker utilisation is busy time per job slot as a share of tick time. Roadmap group `opt1`
 (box OPT, preset `high`, estimate ~1–2 days, no hard prerequisites). Goal from the roadmap: use the cores better and stop
 big game / AI updates from landing on a single tick. Nothing in the sim times itself today, so this group measures first.
 Background: `docs/OPT_RESEARCH.md` (techniques ranked by fit). Every later performance group (OPT2/3, CP1–6, LP1/4/5,
@@ -70,7 +70,7 @@ On Gabriel's PC (16 logical processors, `--workers` at default and at 0 for the 
 1. FoC HotM galactic with all AIs (`--game ... --campaign` run, exact flags chosen at step 1).
 2. 400-planet synthetic, 4 AIs (`--synthetic 400 --ais 4`), with and without `--latency 30`.
 3. A large space battle and a large land battle (`--battles` / the skirmish-AI runs; pick the biggest shipped scenes).
-Each run is repeated 3 times; report the median run, and record machine, build, flags and date in `docs/PHASE4.md`.
+Each run is repeated 3 times; report the median run, and record machine, build, flags and date in `docs/PERFORMANCE.md`.
 
 ### Budget (t05)
 - Targets from the baseline, not guessed: a p99 sim-tick target and a spike limit (no tick above a set share of the 33 ms
@@ -88,7 +88,7 @@ a small script compares a new run to the stored baseline and flags regressions (
 3. Add zones in `apps/sim` (galactic and tactical ticks, Lua, story, commit). CRC-identical check with profiling on/off. Gate.
 4. Worker utilisation in `engine/jobs` + tests. Gate including `alamo_jobs_tests`, and the sanitizer run (`build_asan.cmd`).
 5. `alamo_headless --profile` report, then the `alamo_game` overlay (render-side, needs a visual check by Gabriel or a screenshot).
-6. Baselines, budget, `bench_msvc.cmd` additions, `docs/PHASE4.md` record, roadmap update (close tasks, mark group done,
+6. Baselines, budget, `bench_msvc.cmd` additions, `docs/PERFORMANCE.md` record, roadmap update (close tasks, mark group done,
    open the OPT2 inputs).
 
 ## Risks
@@ -101,5 +101,5 @@ a small script compares a new run to the stored baseline and flags regressions (
 
 ## Done when
 `alamo_headless --profile` prints per-system percentiles and the 20 worst ticks for the four baseline scenarios, the baseline and
-budget are in `docs/PHASE4.md`, `bench_msvc.cmd` re-runs them, CRCs are unchanged with profiling on and off at 0/1/4/15
+budget are in `docs/PERFORMANCE.md`, `bench_msvc.cmd` re-runs them, CRCs are unchanged with profiling on and off at 0/1/4/15
 workers, and the gate (`build_gate.cmd`) passes with 0 warnings.

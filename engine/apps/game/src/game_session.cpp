@@ -247,7 +247,7 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
     host_->set_order_hook([this](sim::SimHost& h, uint8_t player, const commands::EventData& ev, const std::vector<objects::ObjectId>& sel) {
         return route_battle_order(*battles_, h, player, ev, sel, &order_stats_);
     });
-    // Pause / resume (docs/PHASE4.md "Camera and controls"): a port-only command; a drained pause stops the host from
+    // Pause / resume (docs/DECISIONS.md "Camera and controls"): a port-only command; a drained pause stops the host from
     // ticking (replays tick through it: a pause changes when ticks run, never what they compute).
     host_->set_port_event_hook([this](sim::SimHost&, uint8_t player, const commands::EventData& ev) { return port_event(player, ev); });
     // P4 host: the galactic special events (dialogs, SFX) are tapped before the story drains the stream at T9.
