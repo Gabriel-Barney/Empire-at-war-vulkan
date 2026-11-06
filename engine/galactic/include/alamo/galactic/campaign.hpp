@@ -938,6 +938,20 @@ public:
     bool super_weapon_destroy_planet(PlanetIndex planet, int32_t attacker);
     std::span<const VictoryClaim> victory_claims() const { return claims_; }
     void claim_victory(int32_t player, uint8_t type, int32_t countdown);
+    // story t11: the galactic plot sets' ENABLE_VICTORY / VICTORY rewards on the galactic monitor (BT §3.1a item 3, the
+    // same monitor code as the battle's: hold +0x5c). ENABLE_VICTORY atoi(P1) == 0 -> raise (max(0, h + 1));
+    // != 0 -> release one level, only while held. While held, check_victory (victory.hpp) reports no winner (0x342d80:
+    // the result needs hold <= 0). VICTORY (0x462b70) releases every level and claims type 0x10 (kVictoryStoryClaim,
+    // SUB_TACTICAL_STORY_MODE_TRIGGERED_VICTORY) for `player`, countdown 7 s (1 s when short_silent), granted whatever
+    // the side's conditions (the reward adds its own record). [port] no deferred queue: the polled tests run on every
+    // check, so after a release they pass at the next one. Saved; hashed in the "OIG1" tail once non-zero.
+    static constexpr uint8_t kVictoryStoryClaim = 0x10;
+    void victory_hold_raise() { victory_hold_ = victory_hold_ < 0 ? 1 : victory_hold_ + 1; }
+    void victory_hold_release() {
+        if (victory_hold_ > 0) --victory_hold_;
+    }
+    bool story_victory(int32_t player, bool short_silent);  // false: invalid player (nothing changes)
+    int32_t victory_hold() const { return victory_hold_; }
 
     // ---- CRC ----------------------------------------------------------------------------------------------
     // Ordered digest of every S3 data pack (players, planets incl. queues and income lists, fleets, cycle).
@@ -1112,6 +1126,7 @@ private:
     // OI galactic (hashed in the "OIG1" tail once non-default)
     std::vector<int32_t> stealthed_;      // ObjectIds with the galactic stealth byte set, ascending
     std::vector<VictoryClaim> claims_;    // declaration order
+    int32_t victory_hold_ = 0;            // story t11: galactic monitor hold (+0x5c)
     // GRC reveal / corruption transitions (src/reveal.cpp; hashed in the "RVC1" tail once non-default)
     int32_t local_player_ = kNoPlayer;
     bool auto_reveal_ = true;   // galactic mode +0x340

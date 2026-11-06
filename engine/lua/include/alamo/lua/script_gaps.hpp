@@ -89,6 +89,9 @@ struct TacticalScriptHooks {
     // true]) -> (unit, 0, bool); Start_Cinematic_Space_Retreat -> (unit, delay, false). False = not such a unit. When set
     // it is used instead of hyperspace_out; unset, Hyperspace_Away keeps its Lua order on the direct path.
     std::function<bool(objects::ObjectHandle unit, int32_t delay_frames, bool keep_parent_link)> hyperspace_out_link;
+    // story t12: Resume_Hyperspace_In() (0x543570) clears the reinforcement hyperspace hold 0x140b27d5f (LINK_TACTICAL
+    // P9 == 2, L1_S4_REMAINING §3.4). Unset: only the presentation event is recorded.
+    std::function<void()> resume_hyperspace_in;
     // The player's faction Space_Retreat_Unit_Increment_Wait_Frames (+0x20c0). Unset: 0 [port].
     std::function<int32_t(int32_t player)> retreat_increment_frames;
 

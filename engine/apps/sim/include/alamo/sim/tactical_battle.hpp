@@ -849,6 +849,15 @@ public:
         credits_add_ = std::move(add);
     }
     // --- end battle host pads ---
+    // --- story t12: the reinforcement hyperspace hold (L1_S4_REMAINING §3.4, flag 0x140b27d5f = LINK_TACTICAL P9 == 2,
+    // cleared by Lua Resume_Hyperspace_In). The source is the host's (CampaignBattles::linked_presentation, saved and
+    // hashed there). While it answers true in a SPACE battle, reinforcements do not arrive: the stand-in deploy (tick
+    // step 1) waits and a Reinforce order (human or tactical AI) is refused NotAllowed, the unit staying in the pool.
+    // [port] the original accepts the order and freezes the arriving unit hidden in its hyperspace-in state 4 until the
+    // release; the port has no hyperspace-in phase (reserves appear at once), so the deployment itself waits. Start units
+    // and land battles are not affected. Unset: never held. ---
+    void set_arrival_hold(std::function<bool()> held) { arrival_hold_ = std::move(held); }
+    bool arrival_held() const { return space_ && arrival_hold_ && arrival_hold_(); }
 
     // --- battle host (BT pass): HIJACK reserve (AI_GALACTIC_3 §4.3 step 5 "tactical with parent") ---
     // Appends a galactic object (a unit the galactic sim just created at the battle planet, e.g. GalacticSim::magic_spawn
@@ -1631,6 +1640,7 @@ private:
     std::vector<objects::ObjectId> bt_shields_;  // stamped shield objects, ascending id
     std::function<float(int32_t)> credits_get_;
     std::function<void(int32_t, float)> credits_add_;
+    std::function<bool()> arrival_hold_;  // story t12
     SimRng* bt_rng_ = nullptr;                 // the host's synced RNG (setup / commands): pad objects' add_unit draws
     std::vector<objects::ObjectId> bt_attrition_ids_;
     uint32_t bt_attrition_kills_ = 0;
