@@ -1174,8 +1174,10 @@ static CampaignResult run_synthetic(unsigned threads, int32_t frames) {
     GalacticAiConfig cfg;
     cfg.players = {{0, "SynEmpire", 1}, {1, "SynRebel", 1}};
     cfg.difficulties = {{"Normal_Default", 1.1f, 0.0f}};
+    const SimRng synced_before_world = rng.synced();
     GalacticAiWorld world(sim, store, &types, &files, rng, defs, eqs, tinfo,
                           [&sim](uint8_t p, const commands::EventData& ev) { return sim.execute(p, ev); }, cfg);
+    CHECK(rng.synced() == synced_before_world);  // A2k t04: the queue phases come from the galaxy build, not drawn here
     std::vector<std::string> pd;
     CHECK(world.load_plans(plan_files, &pd));
     for (const std::string& d : pd) std::printf("  plans: %s\n", d.c_str());

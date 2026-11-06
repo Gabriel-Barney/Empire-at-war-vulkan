@@ -278,6 +278,10 @@ bool GalacticSim::start(const GalacticSetup& setup, std::vector<std::string>* di
         sp.position = p.position;
         p.object = store_->create(sp);
         store_->add_behavior(p.object, beh::Planet);
+        // PRODUCTION attach (after SELECTABLE and PLANET; A2J_RE_BUILD_MARKET §4) [H]: the ProductionDataPack builds
+        // AIPlanetBuildQueue 0 then 1, each drawing its last-run frame as synced Get_Int(1, (int)(FPS + 0.5)).
+        constexpr int32_t kPhaseHi = static_cast<int32_t>(static_cast<float>(econ::kFramesPerSecond) + 0.5f);
+        for (int32_t& phase : p.queue_phase) phase = rng_->range_int(1, kPhaseHi);
         if (planet_by_slot_.size() <= p.object.slot()) planet_by_slot_.resize(p.object.slot() + 1, kInvalidPlanet);
         planet_by_slot_[p.object.slot()] = static_cast<PlanetIndex>(i);
     }
