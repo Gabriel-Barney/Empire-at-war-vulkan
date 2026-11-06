@@ -222,7 +222,10 @@ def bench_step(build_dir: str, build_arg: str, check_only: bool, listing: bool, 
             print(f"  FAILED: regen_scenario exit {rr.returncode}\n" + "\n".join("    " + l for l in (rr.stdout + rr.stderr).strip().splitlines()[-8:]))
             continue
         v1 = bench_version(path)
-        summaries.append(("changed", f"{rel}: CHANGED, regenerated, version {v0} -> {v1} ({why}); commit tests/benchmark/{scen}.*"))
+        if v0 == v1:  # the remake produced the same files (a damaged or hand-edited sidecar was restored)
+            summaries.append(("unchanged", f"{rel}: was stale ({why}); remade, files and version {v0} unchanged"))
+        else:
+            summaries.append(("changed", f"{rel}: CHANGED, regenerated, version {v0} -> {v1} ({why}); commit tests/benchmark/{scen}.*"))
     return failed
 
 

@@ -56,6 +56,7 @@ turn; each count's AI log is compared with the golden) and `alamo_headless_skirm
 skirmish, the 0-worker entry also checks `--expect-skirmish-base`; `_profiled` compares a `--profile` run with the same 0-worker log).
 BM1 t05 (2026-11-06): `alamo_headless_bench_space_battle*` runs the check on the benchmark scenario from its save (`--bench
 tests/benchmark/space_battle.abench --runs 1 --warmup 0`, slow, FoC data; docs/PHASE4.md "BM - repeatable benchmark").
+BM1f t02 (2026-11-06): `tools\regen_goldens.cmd` also remakes a stale benchmark scenario (`tools\benchmark\regen_scenario.cmd`, version bump); `--bench-check` only reports stale ones (exit 4), `--no-bench` skips them (`docs/status/golden-checkpoints.md`).
 Not converted: `alamo_headless_skirmish_ai_synthetic` and the in-process loops in `engine/apps/sim/tests` stay as they are (short).
 
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)
