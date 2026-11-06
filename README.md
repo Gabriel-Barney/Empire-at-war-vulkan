@@ -51,13 +51,10 @@ These are on the roadmap as separate lanes, each with a written plan and a recom
 | Side goal | What it is | Roadmap |
 |---|---|---|
 | **Repeatable benchmark** | The same input every run (fixed saves, recorded orders, scripted camera) with per-tick CRCs proving each run matched; sim-only, real-time and fixed-frame modes; shared stress scenes and an in-game screen | BM1-BM4 |
-| **CPU efficiency** | CPU-aware job system, scratch-arena rollout, parallel AI goal scoring, prefetch in hot loops, a check banning C runtime math in sim code | CP1-CP4, CP6 |
-| **GPU efficiency** | A GPU stress benchmark first, then half-resolution particles and cheaper water reflections if the numbers justify them | GP1-GP3 |
-| **First-launch shader precompile** | Compile every shader and pipeline the game can need behind a loading screen, so a fresh install or new driver never starts cold | SP1-SP6 |
-| **Loading and build speed** | Per-map asset preload, LTO and PGO release builds, and a performance regression gate | LP1, LP4, LP5 |
-| **Graphics fidelity** | HDR tonemapping, render scale and shadow maps, each a Video option the player can turn off | FX1 |
 | **First-person ground unit** | Possess a ground unit and play it in first person, Battlefront style. The sim side is a command in the stream, so it replays | FP1-FP3 |
 | **Captain's view** | A bridge camera and holo-table for a capital ship, subsystem targeting, squadron orders and optional cinematic camera moves; presentation plus ordinary commands | CB1-CB4 |
+
+Deferred on 2026-11-06 until the core game and the mod platform are complete: shader precompile, loading and build speed, CPU efficiency, GPU efficiency and graphics fidelity (`docs/DEFERRED_SIDE_GOALS.md`).
 
 Dropped on purpose: AVX2 dispatch (the build stays on baseline SSE2), Tracy (the in-house profiler and overlay are
 the tools), a compiled XML cache and Lua bytecode cache (never measured as a cost), original-save loading, and all
@@ -241,7 +238,7 @@ worker count so the counts run side by side. Clang's logs equal MSVC's.
 | Mod diagnostics (Q5) | Done, on the integration branch |
 | Thrawn's Revenge (Q6) | **Mostly done on the integration branch** `claude/q6-integration` (about 94 commits ahead of `main`, not yet merged): the mod loads, its skirmish, land and campaign smoke runs pass, and its galactic AI plays. Left: retail probes for the port's guessed rules, and a final re-check after the parity check |
 | Parity check against the original (Q4) | Planned; the comparison harness comes first |
-| Side goals (benchmark, CPU/GPU efficiency, shader precompile, fidelity, first-person, captain's view) | Planned |
+| Side goals (benchmark, first-person, captain's view) | Planned |
 
 The detail, task by task, is on the project roadmap, which is kept in its own repository (not this one) and is the only place for status.
 

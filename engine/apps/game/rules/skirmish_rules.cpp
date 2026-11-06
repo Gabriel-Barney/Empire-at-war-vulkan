@@ -122,34 +122,20 @@ SkirmishForceTable load_skirmish_forces(const FileProvider& files) {
     return out;
 }
 
-std::string ai_type_for(const std::string& faction) {
-    const std::string f = upper(faction);
-    if (f == "EMPIRE") return "BasicEmpire";
-    if (f == "REBEL") return "BasicRebel";
-    if (f == "UNDERWORLD") return "AI_Player_Underworld";
-    return {};
-}
-
-bool is_stock_faction(const std::string& faction, const std::map<std::string, std::string>& basic_ai) {
-    const std::string stock = ai_type_for(faction);
-    if (stock.empty()) return false;
-    const auto it = basic_ai.find(upper(std::string(trim(faction))));
-    return it == basic_ai.end() || iequal(trim(it->second), stock);
-}
-
 #ifdef ALAMO_GAME_RULES_HAVE_AI
 std::string resolve_ai_type(const std::string& faction, const std::map<std::string, std::string>& basic_ai,
-                            const std::vector<std::string>* campaign_control, const ai::AiDefinitions* defs) {
-    if (is_stock_faction(faction, basic_ai)) return ai_type_for(faction);
+                            const std::vector<std::string>* campaign_control, const ai::AiDefinitions* defs, bool campaign_pairs) {
     const auto it = basic_ai.find(upper(std::string(trim(faction))));
     if (it == basic_ai.end()) return {};
-    std::string t = campaign_control ? ai::campaign_ai_type(*campaign_control, basic_ai, faction, false) : std::string(trim(it->second));
+    std::string t = campaign_control && campaign_pairs ? ai::campaign_ai_type(*campaign_control, basic_ai, faction, false)
+                                                       : std::string(trim(it->second));
     if (iequal(t, "Human")) t.clear();
     if (!t.empty() && defs && !defs->find_player(t)) t.clear();  // "Unrecognized AI player type": no AI
     return t;
 }
 #endif
 
+// [name-ok-begin: port base-game skirmish lists (skirmish_rules.hpp), held by the game_smoke goldens; replacement modc t17]
 std::vector<std::string> default_skirmish_fleet(const std::string& faction) {
     const std::string f = upper(faction);
     if (f == "EMPIRE")
@@ -169,6 +155,8 @@ std::vector<std::string> default_skirmish_ground(const std::string& faction) {
     return {};
 }
 
+// [name-ok-end]
+
 std::vector<std::string> data_fallback_forces(const galactic::GalacticRules& rules, const objects::GameObjectTypes& types,
                                               const std::string& faction, bool land) {
     const uint32_t fi = rules.find_faction(faction);
@@ -180,7 +168,7 @@ std::vector<std::string> data_fallback_forces(const galactic::GalacticRules& rul
 
 std::vector<std::string> skirmish_default_forces(const SkirmishForceData& d, const std::string& faction, bool land,
                                                  const SkirmishForceOptions& o) {
-    if (o.stock_lists && is_stock_faction(faction, d.basic_ai))
+    if (o.base_game_lists)
         if (std::vector<std::string> s = land ? default_skirmish_ground(faction) : default_skirmish_fleet(faction); any_known(d.rules, s)) return s;
     std::vector<std::string> out;
     for (const uint32_t t : skirmish_data_force_types(d, faction, land, o)) out.push_back(d.rules.types[t].name);

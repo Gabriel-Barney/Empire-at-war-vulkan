@@ -215,6 +215,7 @@ const char* const kTypesXml =
 const char* const kPlots =
     "<Story_Mode_Plots><Lua_Script>Story_Save_Test</Lua_Script><Active_Plot>Story_Save_Test.xml</Active_Plot>"
     "<Suspended_Plot /></Story_Mode_Plots>\n";
+// [name-ok-begin: synthetic save-test data of the headless test host (factions below), not a rule]
 const char* const kPlot =
     "<Story>\n"
     " <Event Name=\"Begin\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event>\n"
@@ -280,14 +281,17 @@ GalacticRules rules() {
     GalacticRules r;
     FactionRules emp;
     emp.name = "Empire";
+    emp.basic_ai = "BasicEmpire";
     emp.can_control_planets = emp.is_playable = true;
     FactionRules und;
     und.name = "Underworld";
+    und.basic_ai = "AI_Player_Underworld";
     und.can_control_planets = und.is_playable = und.benefits_from_corruption = true;
     FactionRules neu;
     neu.name = "Neutral";
     neu.is_neutral = true;
     r.factions = {emp, und, neu};
+    // [name-ok-end]
     r.difficulties = {{"Normal", 1.0f, 1.0f}};
     r.types.resize(tCount);
     const char* names[] = {"PlanetA", "PlanetB", "PlanetC", "PlanetD"};
@@ -485,7 +489,7 @@ public:
         for (const galactic::PlayerSetup& ps : setup_.players) d.setup.push_back(session_player(rules_, ps, ps.ai ? "stand-in" : ""));
         d.set_option("story", story_ ? "1" : "0");
         d.set_option("scripts", story_ ? "scoring,object" : "none");  // q6 t19
-        d.set_option("orders", "empire-production,underworld-invade");
+        d.set_option("orders", "empire-production,underworld-invade");  // [name-ok: label of the test host's scripted orders]
         d.data_fingerprint = fingerprint_;
         host.set_session(std::move(d));
         return s;
@@ -552,7 +556,7 @@ public:
         ai::load_equation_files(*files_, files_->list(ai::kPerceptionEquationGlob), eqs_);
         plan_files_ = ai::list_plan_files(lister);
         tinfo_ = ai::make_galactic_ai_type_info(types_);
-        campaign_ = campaign.empty() ? std::string("Sandbox_Heart_Of_The_Maw_Underworld") : campaign;
+        campaign_ = campaign.empty() ? std::string("Sandbox_Heart_Of_The_Maw_Underworld") : campaign;  // [name-ok: test default campaign]
         setup_ = galactic::build_campaign_setup(db_, rules_, campaign_, {}, &diag);
         if (setup_.map.planets.size() == 0) {
             err = "galactic: campaign '" + campaign_ + "' has no planets";

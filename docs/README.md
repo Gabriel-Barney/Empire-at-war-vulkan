@@ -9,6 +9,7 @@ its kind below and add it there instead of starting a second copy.
 | Kind of information | The one place | Notes |
 |---|---|---|
 | Binding decisions (scope, platform, parity, dependencies, camera / controls, graphics) | [`DECISIONS.md`](DECISIONS.md) | Add a dated row for every new decision; out-of-scope work is recorded here before it is dropped from the roadmap |
+| Side goals deferred until the core game and mod platform are complete (shader precompile, loading and build speed, CPU / GPU efficiency, graphics fidelity): definitions and re-analysis notes | [`DEFERRED_SIDE_GOALS.md`](DEFERRED_SIDE_GOALS.md) | Not scheduled; restart only by a new row in `DECISIONS.md` |
 | Build, test, gate, sanitizers, worker-count check, compiler cache | [`BUILD.md`](BUILD.md) | `CLAUDE.md` keeps only the short rules |
 | Performance measurements and scheduling results | [`PERFORMANCE.md`](PERFORMANCE.md) | Plans and research: [`OPT1_PLAN.md`](OPT1_PLAN.md), [`OPT_RESEARCH.md`](OPT_RESEARCH.md) |
 | In-game probes: which kit asks what, where findings go | [`PROBES.md`](PROBES.md) | Kit READMEs under `tools/probe_mod/` say how to run; findings go in `docs/re/` |
@@ -19,6 +20,7 @@ its kind below and add it there instead of starting a second copy.
 | Phase 3 (renderer): results, assumptions, reference | [`PHASE3.md`](PHASE3.md) | Details of finished work: `archive/` |
 | Phase 2 (architecture, headless core): results and design notes (determinism contract, file resolution order) | [`PHASE2.md`](PHASE2.md) | |
 | Game asset catalog, file formats, shader catalog and porting notes | [`assets/`](assets/), [`formats/`](formats/), [`shaders/`](shaders/) | Generated catalogs: do not edit by hand |
+| Mod compatibility: hard-coded names in `engine/` (audit, replacements, the name lint) | [`status/modc-audit.md`](status/modc-audit.md) | The mod-loading contract is `MODS.md` (PR #92); the audit becomes its section 9 when that lands |
 | Playtest QA notes | [`qa/`](qa/) | |
 | Dated one-off reports | [`PRODUCTION_AUDIT_2026-10-30.md`](PRODUCTION_AUDIT_2026-10-30.md) | History, not kept current |
 | Old versions of moved or trimmed documents | [`archive/`](archive/) | Zips |

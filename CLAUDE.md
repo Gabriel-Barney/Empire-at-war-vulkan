@@ -33,7 +33,8 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
 - Data-driven tests read `ALAMO_FOC_DATA` / `ALAMO_EAW_DATA` and skip when unset, so a pass without them proves less; the scripts default them (`tools\test_env.cmd`) and end with a `skips:` line.
 - Tests run in parallel (`ctest -j`): two ctest entries must not share a fixed `%TEMP%` fixture or output path (separate paths, or a `RESOURCE_LOCK`); a flaky failure in one tree is a possible clash first. Long determinism tests get one ctest entry per worker count (`alamo_add_worker_count_check`), never `--check-workers`. Label any test over about 5 s `slow`.
 - Line endings: text files are LF (`.gitattributes`; goldens are compared byte for byte), `.cmd` / `.bat` / `.ps1` are CRLF.
-- Version control: the project is a git repository (`main`); commit before and after each agent task and push; `roadmap-store/` is its own repository. Remotes and new-machine setup: `docs/BUILD.md`.
+- Version control: the project is a git repository; commit before and after each agent task and push; `roadmap-store/` is its own repository. Remotes and new-machine setup: `docs/BUILD.md`.
+- Branches (Gabriel, 2026-11-06; full record in `docs/DECISIONS.md`): **`dev` is the development branch (and GitHub's default branch); `main` is the released branch.** All work lands on `dev`; no PR to `main` from a task, group or session branch. Gabriel merges `dev` into `main` when he decides it is ready: `build_gate.cmd` on `dev`'s tip, then `gh pr create --base main --head dev`. Never push `dev` with a failing MSVC build or test. The app still starts every session on its own `claude/...` branch (git allows one branch per worktree; the app has no setting to work on `dev` directly), so treat that branch as scratch and end each task with `tools\land_on_dev.cmd` (after the builds and tests the change needs): it merges `origin/dev` into your branch (conflicts get resolved in your tree, never on `dev`), pushes to `dev` as a plain fast-forward (never force), and deletes your branch on origin. A rejected push means `dev` moved: rerun it. A session whose branch does not contain `origin/dev` yet (started from `main`) gets it from the same script.
 - Tick profiler: `alamo_headless ... --profile`; wall-clock only, never let sim code read a profiler value. Baselines: `docs/PERFORMANCE.md`.
 
 ## Rules
@@ -60,20 +61,21 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
 ## Parallel work
 
 Real work is done per roadmap group by a `lane` agent (`.claude/agents/lane.md`; `/start-group <id>`, `/finish-group <id>`) in its
-own worktree. Lanes own a group, not a folder: two lanes must not edit the same files, and a PR names any golden that changed.
+own worktree. Lanes own a group, not a folder: two lanes must not edit the same files, and a landing commit names any golden that changed.
 A change to `engine/core` public headers or the top-level CMake goes through the integrating agent. Single-module
 `engine-module` agents remain for narrow side tasks. Definitions live in `.claude/agents/`.
-- Worktrees (2026-11-06): `tools\new_worktree.cmd <name> [--base main]` creates `.claude\worktrees\<name>` on `claude/<name>`, with
-  junctions to `Data`, `extracted`, `toolchain` and `roadmap-store`, and syncs the roadmap. Use ONE build tree per worktree
-  (`build_agent.cmd msvc wt "<modules>"` gives `build-wt-msvc`). After the PR merges, `tools\clean_worktrees.cmd` (dry run;
-  `--apply --only <name>`; `--trees` for idle build trees) removes merged, clean, pushed, idle worktrees, unlinking junctions
-  first. Engine: `tools/worktree/worktree_tool.py` (`--selftest`).
+- Worktrees (2026-11-06): `tools\new_worktree.cmd <name> [--base origin/dev]` creates `.claude\worktrees\<name>` on `claude/<name>`
+  from `origin/dev` (default since 2026-11-06), with junctions to `Data`, `extracted`, `toolchain` and `roadmap-store`, and syncs
+  the roadmap. Use ONE build tree per worktree (`build_agent.cmd msvc wt "<modules>"` gives `build-wt-msvc`). After the branch is
+  on `dev`, `tools\clean_worktrees.cmd` (dry run; `--apply --only <name>`; `--trees` for idle build trees) removes merged (into
+  `origin/dev` or `origin/main`), clean, pushed, idle worktrees, unlinking junctions first. Engine: `tools/worktree/worktree_tool.py` (`--selftest`).
 - Claims (2026-11-06): `python roadmap-store/roadmap_store.py claim <group> --by <session>` before starting a group (24 h, `release` when
   done), `claims` lists them, `batch [N]` prints ready groups whose `touches` do not overlap, for handing out a parallel batch.
   Build records are batched: `record-build` no longer pushes by itself; `write`, `sync` and `flush` do. See `docs/ROADMAP_PROTOCOL.md`.
-- Stacks: branch lanes from `main`; stack a PR on another only for a true dependency, at most 2 deep, and merge the bottom first.
+- Dependencies: branch lanes from `origin/dev`. A lane that needs another lane's work waits until that work is on `dev` (or merges
+  that lane's branch in, and lands after it).
 - Golden CRC files (2026-11-06): `ALAMO_CRC 2` stores a checkpoint every 64 ticks instead of every tick, so a behaviour change is a
   small diff. `--crc-out` still writes full logs; `--crc-checkpoint N` writes v2. Regenerate after an intended behaviour change with
-  `tools\regen_goldens.cmd` and say so in the PR. Format and workflow: `docs/status/golden-checkpoints.md`. All 20 goldens
+  `tools\regen_goldens.cmd` and say so in the commit message. Format and workflow: `docs/status/golden-checkpoints.md`. All 20 goldens
   were converted on 2026-11-06 (`tools\goldens\convert_goldens.py --all --in-place --check`; MSVC and clang 174/174).
-- PR check without hosted CI: `tools\pr_check.cmd [PR] [--compiler msvc|clang|both] [--tests fast|all] [--post]`.
+- PR check without hosted CI (now mainly for the `dev` -> `main` PR): `tools\pr_check.cmd [PR] [--compiler msvc|clang|both] [--tests fast|all] [--post]`.

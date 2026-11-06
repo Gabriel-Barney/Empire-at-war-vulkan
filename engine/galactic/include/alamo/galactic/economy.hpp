@@ -75,8 +75,9 @@ struct EconomyConstants {
     // A2 galactic (AI_GALACTIC_3 §3.1): AI_Uses_Galactic_Pop_Cap (+0x11EBC), ctor false, absent from shipped XML.
     bool ai_uses_galactic_pop_cap = false;
     // REMAINING_GAPS 1.5 item 2: Good_Side_Name (+0x12e0; "REBEL" in FoC and TR): story BUILDABLE_UNIT raises this
-    // faction's tech when no sliceable candidate remains.
-    std::string good_side_name = "REBEL";
+    // faction's tech when no sliceable candidate remains. modc t03: no built-in faction name; data without the field
+    // names no faction.
+    std::string good_side_name;
 };
 
 // Faction fields read by S3 (FactionFiles.xml).
@@ -86,6 +87,9 @@ struct FactionRules {
     bool can_control_planets = false;       // Can_Control_Planets (+0x109)
     bool is_playable = false;               // Is_Playable (+0x20a8)
     bool benefits_from_corruption = false;  // Benefits_From_Corruption (+0x10b)
+    // modc t03: Basic_AI (+0x378, xml_field_tables.md), trimmed as written; the AIPlayerType a skirmish slot of this
+    // faction plays (AI_GALACTIC.md §1.2, SKIRMISH_SETUP.md §2.1). "" = none; the shipped "None" is kept as written.
+    std::string basic_ai;
     float hyperspace_speed_factor = 0.07f;  // Hyperspace_Speed_Factor (+0x3b0); default [L] (every vanilla faction sets 0.07)
     float maintenance_cost = 0.0f;          // Maintenance_Cost (+0x3AC): AI upkeep factor only (A2H_GALACTIC_AI_RE §3) [H]
     ForceSide force_alignment = ForceSide::Neutral;  // Force_Alignment (+0x110)

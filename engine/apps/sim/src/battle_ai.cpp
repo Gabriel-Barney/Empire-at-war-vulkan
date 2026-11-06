@@ -51,10 +51,8 @@ std::string default_tactical_ai_type(int32_t player, const galactic::GalacticSim
     if (ps.human || ps.faction >= g.rules().factions.size()) return {};
     const galactic::FactionRules& f = g.rules().factions[ps.faction];
     if (f.is_neutral || !f.is_playable) return {};
-    if (ai::ai_iequal(f.name, "Empire")) return "BasicEmpire";
-    if (ai::ai_iequal(f.name, "Rebel")) return "BasicRebel";
-    if (ai::ai_iequal(f.name, "Underworld")) return "AI_Player_Underworld";
-    return {};
+    if (f.basic_ai.empty() || ai::ai_iequal(f.basic_ai, "None")) return {};
+    return f.basic_ai;
 }
 
 void load_tactical_ai_data(TacticalAiSetup& s, const FileProvider& files, const data::GameConstants* gc,

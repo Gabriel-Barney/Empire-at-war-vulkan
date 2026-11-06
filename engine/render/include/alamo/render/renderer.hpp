@@ -280,6 +280,10 @@ struct RecordOptions {
     bool taa = false;
     float taa_sharpen = 0.25f;  // kTaaDefaultSharpen
     float taa_weight = -1.0f;   // share of the current frame in the resolve (smaller = stronger smoothing); < 0: kTaaCurrentWeight
+    // [port] BM2b: this frame's TAA step (jitter index, history, object motion) may be taken back with
+    // Renderer::discard_taa_frame() before the next render() - the benchmark's fixed-frames mode draws an unsettled frame
+    // again and must not let it into the history. The frame itself is drawn exactly as without the flag.
+    bool taa_provisional = false;
     // [port] The video options' Shader / Water detail on top of the frame graph (RENDER.md 1.5, 6; both default to the
     // maximum = nothing changes). Shader detail 0..3: 0 is the fixed-function path - no shadow volumes, no soft shadows (the
     // StencilDarken variant, TERRAIN_WATER_POST.md 4.3) - and it caps Water detail: < 3 -> 1, < 1 -> 0. Water detail 0..2:
@@ -485,6 +489,12 @@ public:
     // restarts on resize, on a frame without TAA and on a camera jump (taa_history_usable); call this on cuts it can
     // miss (teleports to a similar view, a cinematic cut, a different scene drawn through the same Renderer).
     void reset_taa_history();
+    // [port] BM2b: undo the TAA step of the last render() drawn with RecordOptions::taa_provisional, so the next frame
+    // jitters, reprojects and sees object motion as if it had not been drawn. True when there was one to undo; false after
+    // a render() without the flag or without TAA, a reset_taa_history(), keep_taa_frame() or a discard already done.
+    // keep_taa_frame(): that frame stands (drops what discard would restore).
+    bool discard_taa_frame();
+    void keep_taa_frame();
     SceneHook* scene_hook() const { return scene_hook_; }
     // Laser projectiles (lasers.hpp, PROJECTILE_NEBULA_DRAW.md 1): init_lasers loads W_Laser_Pill.tga /
     // p_particle_master.tga through `textures` and Engine\PrimAdditive; set_lasers gives the frame's lasers (copied),
