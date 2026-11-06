@@ -49,6 +49,31 @@ record, was not affected. Changes:
   ones. A fault-injection run checks the ERR path. With the a2h code the selftest fails 29 of 101 checks; with this code it
   passes all of them.
 
+**a2j t02 / t04 (2026-11-06): D4 perception, D3 production events, 30-minute run.** One run now serves a2j t02 and
+t04 (`docs/re/A2J_T02_PROBE_PLAN.md`; how to run it: section 9). Added, everything else unchanged:
+
+* channel **D** (D4): one plot script per (AI faction, target planet) pair, set as the `Lua_Script` of that faction's
+  own AI story plot (mod copies of `Story_Plots_Underworld_AI_Heroes.xml` and `Story_Plots_Empire_AI_Heroes_EXP.xml`,
+  whose shipped `Lua_Script` is empty): `A2fb_PerceptU` samples Underworld -> Kashyyyk, `A2fb_PerceptE` Empire ->
+  Felucia, every 30 frames in frames 0..600, then every 300 frames to the end of the run. Records `DT` (11 token mod
+  equations `A2FB_D4_*`: Markup, ConnectsIsolatedPlanetsByForce, TradeRoutes, Hints, HasGround / SpaceForce,
+  IsHumanControlled, IsConnectedToCorruption, IsCorrupted, AnyCurrentThreats) and `DS` (9 shipped equations with the
+  planet as target: Should_Conquer_Pirate_Planet, Is_Good_Invasion_Target, Opens_New_Front, Is_AI_And_Should_Be_Ignored,
+  GenericPlanetValue, Is_Neglected_By_My_Opponent_Space, System_Recon_Relevance, Is_Connected_To_Me / _Enemy). One script
+  per pair so that, if one of these fails in retail, only that pair's channel stops (not the budget channels).
+* channel **Q** (D3): the shipped `GameScoring.lua` with a hook on `Galactic_Production_Begin_Event` /
+  `_Canceled_Event` / `_End_Event` (records `QB` / `QC` / `QE`: frame, planet owner, planet, type, cost, and the owner's
+  `Get_Credits()` when the event ran, `cr=`, for lane A's D3 / D5 question), for every player. **The Lua API has
+  no read of a planet's build queue** (LUA_API.md has no queue query), so a 30-frame poll of the queue heads is not
+  possible from Lua; the report rebuilds the heads from these events (section 7 of the report).
+* 30-minute run: the story script adds record `MIN30` and the message "30 minutes recorded" at 1800 s (LONGDONE at
+  1500 s stays, its text now says keep going); free-store cap 300 samples / 1600 records (40 minutes at 8 s).
+* report sections 6 (D4 table, retail | port per frame, against `port_reference_a2j.tsv`), 7 (every AI player's events
+  in 0..1500 with credits, the first Begin per queue, the Empire's queue heads every 30 frames in 0..1400) and 8 (per
+  fiscal cycle P / I, retail | port, with `--port-trace`); new files `perception.tsv`, `production.tsv`. `a2j_port.py`
+  makes the port side (export + traces + run), `port_a2j_patch.py` is its trace patch. `--no-percept` builds without
+  channel D (section 9, "Probe effect"). Selftest: 140 checks.
+
 ## 1. What it records
 
 Retail 1.121 writes no Lua output files, so the probe Lua keeps its records as strings
@@ -186,6 +211,9 @@ leaves the watcher (the flag and the raw budget block) unchanged.
 | `cleanup_a2f.cmd`, `a2f_cleanup.py` | remove the mod, restore the profile |
 | `build_a2f_mod.py`, `a2fb_spec.py` | build `Mods\A2fBudgetProbe` (patched equation file, 3 story plots, plan and free-store hooks, canaries, marker, optional text patch); the single table of probe types, equations and shipped equation names |
 | `a2fb_core.lua`, `a2fb_story.lua`, `a2fb_freestore_hook.lua`, `a2fb_plan_hook.lua` | the probe Lua (Lua 5.0.2: no `#`, no `%`, no math library in the free-store script) |
+| `a2fb_percept.lua`, `a2fb_scoring_hook.lua` | a2j: channel D (AI plot scripts, D4 perception) and channel Q (GameScoring production events) |
+| `a2j_port.py`, `port_a2j_patch.py` | a2j: the port side (export a commit, trace patch, build, run the scenario, write the D4 table) |
+| `port_reference_a2j.tsv` | a2j: the port's D4 values (commit and method in its first lines; section 9) |
 | `a2f_watch.py` | read-only memory watcher of the budget block |
 | `a2f_report.py` | decoder: `records.txt` + `budget_watch.jsonl` + `A2FB_TYPES.json` -> report |
 | `selftest_a2f.py` | offline self-test |
@@ -193,7 +221,14 @@ leaves the watcher (the flag and the raw budget block) unchanged.
 
 ## 7. Offline self-test
 
-`toolchain\venv\Scripts\python.exe -I selftest_a2f.py [--lua PATH] [--out DIR]`. 101 checks (83 in a2h, 55 until a2g): the spec (shipped equations exist,
+`toolchain\venv\Scripts\python.exe -I selftest_a2f.py [--lua PATH] [--out DIR]`. 140 checks since a2j (101 in a2i, 83 in a2h, 55 until a2g).
+a2j adds: the D4 spec (every shipped D4 equation is Should_Conquer_Pirate_Planet or one of its sub-functions, every token
+equation is verbatim a token of them, the needs-human marks match the Variable_Human closure, the AI plot files have no
+Lua_Script, GameScoring has the three events and makes the reads the Q hook makes); the build (AI plot files, queue
+types); both D scripts under the model engine (cadence 0..600 / 30 then / 300, every key, nil before the AI Init, `skip`
+without a human, and a fault-injection run where a token fails: failed flag, one complete record with `MK=nil`, then
+that script stops); the GameScoring hook on the real script (records, the shipped End handler still runs); the report
+sections 6 - 8 against a port table and a synthetic port trace. Earlier checks: the spec (shipped equations exist,
 types, plan thread functions, the patched XML has 46 equations, none breaks a retail rule); a build from the extracted game-data zip; the Lua syntax of every
 generated file and a run of the story script under the project's Lua 5.0.2 with the real PG library and a model engine (state
 machine, canary, per-frame start sampling, dense fiscal windows, the human excluded); the free-store hook and the real plan
@@ -246,3 +281,79 @@ if that kit built one). Without it the Lua checks are skipped, not passed.
 * MJ: `Needs_More_Space_Force_Globally`, `Need_To_Flush_MajorItem_Budget` and `A2FB_HumanSpaceTotal` use Variable_Human and
   are `skip` without a human player. A mod equation whose token fails in retail does not just show nil in its key: it stops
   the script (first bullet of this section).
+* a2j D (perception): unproven in game that an AI faction's story plot runs its `Lua_Script` (STORY / A2I_T01_FRAME_ORDER
+  T9: every active plot gets its Lua service [M]); the `PerceptU` / `PerceptE` canaries tell. If they stay present, the
+  D channel did not run and nothing else is affected. Why each D read is safe: `docs/re/A2J_T02_PROBE_PLAN.md` section 3.
+  Should_Conquer_Pirate_Planet, Is_Good_Invasion_Target and Is_AI_And_Should_Be_Ignored reach Variable_Human: `skip`
+  without a human player (a Rebel-human run has one). Safe is not the same as without effect: the D evaluations share
+  the AI's leaf cache and can shift its refreshes (section 9, "Probe effect"; `--no-percept` leaves channel D out).
+* a2j Q (production): Begin may mean "queued" rather than "started"; the report's queue rebuild shows which (a Begin while
+  the queue is busy). Retail calls GameScoring's production events for every player [M: the names are exe strings; the
+  q2 kit saw GameScoring load in galactic]; the `Scoring` canary only proves the script loaded.
+
+## 9. How to run (a2j)
+
+One in-game run serves a2j t02 (D4 perception, D3 production) and t04 (30 minutes, per-cycle P / I against the port).
+The coordinator asks Gabriel first; nothing here launches the game by itself except step 2.
+
+1. Offline check (no game): `toolchain\venv\Scripts\python.exe -I tools\probe_mod\a2f_budget\selftest_a2f.py` must end with
+   `A2F SELFTEST OK (140 checks, 0 failed)`. A dry build that does not touch the game folder:
+   `toolchain\venv\Scripts\python.exe -I tools\probe_mod\a2f_budget\build_a2f_mod.py --out <scratch>\A2fBudgetProbe`.
+2. Install, launch, record, report, clean up (one command; Steam running, FoC closed):
+   `tools\probe_mod\a2f_budget\run_a2f.cmd` (add `--windowed` for a computer-use run, `--no-launch` to start the game by
+   hand with `StarWarsG.exe MODPATH=Mods\A2fBudgetProbe` in `corruption`). It backs up the profile, builds and installs
+   `corruption\Mods\A2fBudgetProbe`, launches the game, scans for records every 5 s and runs the budget watcher.
+3. In the game: Single Player > Galactic Conquest > "Heart of the Maw", faction **REBEL**, Medium, Start. Close the
+   "Active Story Objectives" box. Then **hands off for 30 minutes of galactic time**: no orders, no pause, normal speed,
+   keep the window in front (FoC pauses on focus loss). When a battle prompt appears (the AI attacks a Rebel planet),
+   choose **auto-resolve** (the prompt pauses galactic time; a tactical battle would leave galactic mode). Messages:
+   "story script running" at the start, "5-minute dense phase done" at 300 s, "25 minutes recorded" at 1500 s (keep
+   going), "30 minutes recorded" at 1800 s: then Esc > Quit to the main menu > Quit, do not save.
+4. Watching: the console prints `+N records (... total)` while it scans; `tools\probe_mod\a2f_budget\out\latest.txt`
+   names the run folder and its `run_status.txt` the state. The run ends by itself after the game exits: report,
+   cleanup, profile restore, `A2F_RUN_DONE exit=<n>` (0 = records and report; 10 = no records).
+5. Cleanup by hand only if the run was killed: `tools\probe_mod\a2f_budget\cleanup_a2f.cmd` (removes the marked mod folder,
+   restores the profile snapshot; `--dry-run` shows what it would do).
+6. Port side and the comparison (no game):
+   * the port reference of the same scenario (export of a commit, traces, build, 30-minute run, D4 table):
+     `toolchain\venv\Scripts\python.exe -I tools\probe_mod\a2f_budget\a2j_port.py all --dir <scratch>\x --out <scratch>\r54000 --ticks 54000 --commit <C>`
+     (`--control` on `run` repeats the run without the A2J perception trace; see "Probe effect" below);
+   * the report with all sections: `toolchain\venv\Scripts\python.exe -I tools\probe_mod\a2f_budget\a2f_report.py tools\probe_mod\a2f_budget\out\<run> --port-trace <scratch>\r54000\port.err`
+     (`--port-perception F` for another port table; the default is `port_reference_a2j.tsv` in this folder). Or
+     `run_a2f.cmd --report-only out\<run> --port-trace <...>`.
+
+**What to send back:** the whole `tools\probe_mod\a2f_budget\out\<run>\` folder, at least `records.txt`, `report.txt`,
+`perception.tsv`, `production.tsv`, `samples.tsv`, `budget_watch.jsonl`, `run_status.txt`, `run.json`. Also say whether
+any battle prompt was not auto-resolved, and the galactic time reached.
+
+**Reading it.** Report section 6: per pair, the D4 terms per sample frame, retail | port. The question (A2I_T03 section
+5) is whether retail's markup (`MK`) on Kashyyyk rises like the port's (0.293 at frame 240, 0.618 at 270, 1.012 at 390)
+and whether retail's `SCP` turns positive; `CIP`, `ONF` and `ACT` are the other non-zero terms of the port's desire
+(A2I_T03 section 5.1). A D channel that
+stops early with a `nil` key names a term that fails in retail. Section 7: every AI player's production events in
+0..1500 with the owner's credits when the event ran (`cr=`), the first Begin per (player, planet, queue), and the Empire's
+queue heads in 0..1400 (D3: what is building at Tatooine, Kuat, Corellia and Kashyyyk, ground and space; D5: which item
+each queue starts and when). Section 8: the P / I of OFF / INFRA / MAJOR per fiscal cycle against the port.
+
+**Probe effect (found 2026-11-06).** Channel D's `EvaluatePerception` calls go through the same per-token leaf cache as
+the AI's own evaluations (AI_TACTICAL_PERCEPTION section 1.2: one cache per token, keyed by the bindings, entries
+stamped with the frame computed; EnemyForce totals live 15 s). So a probe evaluation can change when the AI's cached
+value is refreshed. In the port this changes the run. At 5509c2a, a run with the A2J perception trace has the same
+ai-log as one without it up to frame 1460. Then two plans started in that frame swap order, and the trajectory drifts:
+final CRC 7cf652411ed4a322 against 5d3a792a7601b351 at 54000 ticks. The extra equation file alone changes nothing.
+In 2000-tick runs, Is_Neglected_By_My_Opponent_Space alone does it (and so SCP / IGI, which contain it), and so does the
+token set alone (the EnemyForce.Has* leaves). Retail is expected to behave the same way [M], so:
+
+* D4 and the 30-minute run: compare the retail run with channel D against the traced port run (`a2j_port.py run`, the
+  default). Both carry the same probe effect, with the samples at the same frames. Frames 0..1460 of the port are
+  unaffected.
+* An unperturbed t04 budget comparison, if wanted: a second 30-minute run with `run_a2f.cmd --no-percept` (channel D left
+  out, all else the same), against `a2j_port.py run ... --control`.
+
+**Port reference `port_reference_a2j.tsv`.** Commit 5509c2a (`origin/claude/a2i-followups-4`, A2 i), exported with
+`a2j_port.py` and traced with `tools/analysis/a2g_trace_patch.py` + `port_a2j_patch.py` (scratch copy only, the
+repository's engine is unchanged); scenario `Sandbox_Heart_Of_The_Maw_Rebel`, human Rebel, `--economy --galactic-ai --story
+--seed 1 --workers 0 --ticks 54000`; final CRC 7cf652411ed4a322. The port evaluates each pair right after that AI
+player's own galactic AI service of the frame (retail's plot script runs at T9 of the same tick, after every player's
+AI service: a difference of at most the later players' service in that frame). The port table has no frame-0 row (the
+trace saw no AI service at frame 0); retail's frame-0 sample is expected to be `nil` (AI not initialised yet).
