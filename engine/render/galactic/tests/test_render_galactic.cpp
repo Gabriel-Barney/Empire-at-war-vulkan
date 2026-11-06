@@ -1331,8 +1331,10 @@ static void test_planet_portrait(const std::string& src_dir) {
                 std::printf("wrote %s\n", png.c_str());
             }
         }
+        g.ring.wait_idle();
         portraits.destroy();
         models.destroy();
+        streamer->destroy_all();  // streamer-owned GPU models (render.ib/vb/textures); its destructor does not free them
         streamer.reset();
     }
     g.ring.wait_idle();
