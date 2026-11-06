@@ -2555,6 +2555,10 @@ static void test_btime_none_speed_factor() {
 // AllowedTime reads the re-solved selection (A2f t09). HeroDeny's team "HeroShip | Corvette = 1,1": the proposal's first
 // solve takes the free-store hero (build time 50 s -> nominal 50); the hero is then reserved by another PP before the
 // Commit, so the re-solve produces a Corvette (100 s -> nominal 100). The activated goal's nominal_time is the new one's.
+// a2k t01: 0x6c4a50 also copies the re-solved net cost and ETA to the goal (G +0x78 / +0x7C, A2H_T06_TACTICAL_ETA §2.1) [H],
+// so Resolve's fundable test and the budget add see them: the free hero's net 0 becomes the produced Corvette's cost. (The
+// port kept the proposal's cost: on HotM the Empire's Build_Space_Forces reserved the first solve's Acclamator, 2500,
+// while the re-solve built Tartan + Broadside, 3050, which left room for Build_Ground_Forces at frame 42.)
 static void test_goal_nominal_time_resolve() {
     ParityWorld pw(
         false, {"HeroDeny"}, [](gal::GalacticSetup& s) { s.planet_type[2] = tPlanet; },  // P2 (the target) lets Corvettes in
@@ -2566,6 +2570,7 @@ static void test_goal_nominal_time_resolve() {
     const objects::ObjectHandle hero = pw.world->free_store_supply(0, pw.hero);
     CHECK(static_cast<bool>(hero));
     std::map<uint32_t, std::pair<std::vector<uint32_t>, float>> at_proposal;  // goal serial -> (selection, nominal_time)
+    std::map<uint32_t, std::pair<float, float>> cost_at_proposal;             // goal serial -> (cost, eta)
     uint32_t watched = 0;
     bool reserved = false, checked = false;
     for (int32_t f = 1; f <= 30 * 120 && !checked; ++f) {
@@ -2578,6 +2583,7 @@ static void test_goal_nominal_time_resolve() {
                 if (!g.pp_valid || at_proposal.count(g.serial) != 0) continue;
                 const std::vector<uint32_t> sel = pw.world->potential_plan_selection(g.pp_handle);
                 at_proposal.emplace(g.serial, std::make_pair(sel, g.nominal_time));
+                cost_at_proposal.emplace(g.serial, std::make_pair(g.cost, g.eta));
                 if (!reserved && pw.has(sel, pw.hero) && pw.world->free_store_owner(hero) == -1) {
                     pw.world->set_free_store_owner(hero, 1 << 30);  // another PP's reservation (0x6c2b20)
                     reserved = true;
@@ -2599,6 +2605,16 @@ static void test_goal_nominal_time_resolve() {
                 CHECK(now_sel != before.first && !pw.has(now_sel, pw.hero) && pw.has(now_sel, tCorvette));
                 CHECK(a.nominal_time == 100.0f);
                 CHECK(a.nominal_time == pw.world->potential_plan_nominal_time(a.pp_handle));
+                float net = -1.0f, eta = -1.0f;
+                CHECK(pw.world->potential_plan_cost(a.pp_handle, &net, &eta));
+                const auto& cost_before = cost_at_proposal[a.serial];
+                std::printf("cost re-solve: goal %u proposed net %.1f eta %.2f, active net %.1f eta %.2f (PP %.1f / %.2f, Corvette %d)\n",
+                            a.serial, static_cast<double>(cost_before.first), static_cast<double>(cost_before.second),
+                            static_cast<double>(a.cost), static_cast<double>(a.eta), static_cast<double>(net), static_cast<double>(eta),
+                            pw.rules.types[tCorvette].build_cost);
+                CHECK(cost_before.first == 0.0f);  // the free-store hero costs nothing
+                CHECK(a.cost == net && a.eta == eta);
+                CHECK(a.cost == static_cast<float>(pw.rules.types[tCorvette].build_cost) && a.cost > 0.0f);
                 checked = true;
             }
     }
