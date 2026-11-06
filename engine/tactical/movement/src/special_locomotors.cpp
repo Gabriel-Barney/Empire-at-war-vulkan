@@ -67,6 +67,39 @@ TurnAnim jetpack_turn_anim(float err, float r, bool pre) {
     return a;
 }
 
+// ---- s78l t02 (MOVEMENT §3.5.1 "Arrival turn, details")
+bool anim_idle_class(int32_t a) { return a == 0 || a == 1 || a == 71 || (a >= 77 && a <= 82); }
+bool anim_turn_clip(int32_t a) { return a == kAnimTurnLeft || a == kAnimTurnRight || (a >= kAnimTurnLeftHalf && a <= kAnimTurnRightQuarter); }
+
+float arrival_turn_threshold(float r, bool collision_path) { return collision_path && r <= 10.0f ? r : 10.0f; }
+
+TurnAnim arrival_turn_band(float e, float s, float t, int32_t current) {
+    TurnAnim a;
+    a.anim = current;
+    a.rate = s;
+    const float ae = std::fabs(e);
+    if (!(e >= t) && !(e <= -t)) return a;  // |e| < T: the clip is unchanged
+    const bool left = e > 0.0f;
+    if (ae < 22.5f) {
+        a.anim = left ? kAnimTurnLeftQuarter : kAnimTurnRightQuarter;
+        a.rate = s * 0.25f * ae / 11.25f;
+    } else if (ae < 45.0f) {
+        a.anim = left ? kAnimTurnLeftHalf : kAnimTurnRightHalf;
+        a.rate = s * 0.5f;
+    } else {
+        a.anim = left ? kAnimTurnLeft : kAnimTurnRight;
+    }
+    return a;
+}
+
+int32_t arrival_turn_end_clip(int32_t a) {
+    if (a == kAnimTurnLeft || a == kAnimTurnLeftBegin || a == kAnimTurnLeftEnd || a == kAnimTurnLeftHalf || a == kAnimTurnLeftQuarter)
+        return kAnimTurnLeftEnd;
+    if (a == kAnimTurnRight || a == kAnimTurnRightBegin || a == kAnimTurnRightEnd || a == kAnimTurnRightHalf || a == kAnimTurnRightQuarter)
+        return kAnimTurnRightEnd;
+    return kAnimNone;
+}
+
 float jetpack_altitude_target(const TrackFn& track, const TerrainFn& terrain, const InsideFn& inside, float hover,
                               float floor_z, float z) {
     const float base = hover;  // slot z offset 0 [port]

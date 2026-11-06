@@ -83,6 +83,9 @@ struct UnitDesc {
     // type default 1).
     float stopped_turn_rate = 0.0f;
     int32_t movement_directions = 1;
+    // s78l t02 (MOVEMENT §3.5.1, save version 12): Rotation_Animation_Speed (+0x388, raw). The arrival turn's begin / band /
+    // end clips play at (Stopped_Rate_Of_Turn, else the turn rate) / this when both are > 0, else at 1 (0x3736a0).
+    float rotation_animation_speed = 0.0f;
     // S8 t24 (MOVEMENT §3.2 "Turret recentre around deploy"): the unit TURRET of a `Deploys` type (TurretBehavior, TD
     // +0x48..+0x5c). [port] Modelled only for Deploys types with the TURRET behaviour and Turret_Rotate_Speed > 0 (the
     // deploy gate is its only sim reader); `turret` false = always at rest. Angles: x (never moves), elevation, yaw

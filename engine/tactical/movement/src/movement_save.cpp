@@ -30,7 +30,7 @@ constexpr uint32_t kFighterGridSaveVersion = 1;
 constexpr uint32_t kFighterGridsSaveVersion = 1;
 constexpr uint32_t kDeparturesSaveVersion = 1;
 constexpr uint32_t kEnginesSaveVersion = 1;
-constexpr uint32_t kMovementSaveVersion = 11;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate; 7: S8 t24 turret params (UnitDesc) + TURRET state (Unit); 8: S7 t37 fighter object goal blocks (FighterGuard), FighterSquad::guard_follow; 9: a1k t03 pushed move (Unit::pushed / push_path / push_next / push_blocked), MovementStats::pushes / push_failures, UnitDesc::hard_x / hard_y; 10: s78f t02 fighter formation block stacks (FighterFormation replaces FighterGuard), FighterParams / FighterSquad chase ranges, FighterSquad::speed_cap dropped; 11: s78k t01 UnitDesc::stopped_turn_rate / movement_directions, Unit::forced (land straight move)
+constexpr uint32_t kMovementSaveVersion = 12;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate; 7: S8 t24 turret params (UnitDesc) + TURRET state (Unit); 8: S7 t37 fighter object goal blocks (FighterGuard), FighterSquad::guard_follow; 9: a1k t03 pushed move (Unit::pushed / push_path / push_next / push_blocked), MovementStats::pushes / push_failures, UnitDesc::hard_x / hard_y; 10: s78f t02 fighter formation block stacks (FighterFormation replaces FighterGuard), FighterParams / FighterSquad chase ranges, FighterSquad::speed_cap dropped; 11: s78k t01 UnitDesc::stopped_turn_rate / movement_directions, Unit::forced (land straight move); 12: s78l t02 UnitDesc::rotation_animation_speed, the Walk arrival turn state (Unit::aturn / aturn_rate / tclip / tclip_start / tclip_speed / aturn_ended / aturn_end_pending)
 
 // u32 byte length + the bytes (like apps/sim write_section / read_section, which this module cannot include).
 template <class F>
@@ -315,6 +315,7 @@ void io_desc(IO& io, D& d) {  // UnitDesc
     io.f32(d.turret_rest_delay);
     io.f32(d.stopped_turn_rate);  // s78k t01 (version 11)
     io.i32(d.movement_directions);
+    io.f32(d.rotation_animation_speed);  // s78l t02 (version 12)
 }
 
 template <class IO, class T>
@@ -464,6 +465,13 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.f32(u.tidle);
     io.b(u.thold);
     io.b(u.taim);
+    io.e8(u.aturn, valid_loco_state);  // s78l t02 (version 12)
+    io.f32(u.aturn_rate);
+    io.i32(u.tclip);
+    io.u32(u.tclip_start);
+    io.f32(u.tclip_speed);
+    io.b(u.aturn_ended);
+    io.b(u.aturn_end_pending);
     io_fighter(io, u.fs);
     io.f32(u.fp.max_thrust);
     io.f32(u.fp.min_follow_distance);
