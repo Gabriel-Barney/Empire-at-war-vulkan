@@ -80,7 +80,7 @@ The Status column is the state when the row was last written; the roadmap is aut
 | Int-verify | Final verification on the settled tree + leftovers | ✅ 2026-10-27/28 | engine/apps/game (app/game_main.cpp, app/game_info.hpp/.cpp); docs |
 | P4 sim | FoC galactic special systems behind the P4 panels (docs/re/P4_SIM_SYSTEMS.md) + auto-resolve Withdraw / tactical Autoresolve entry points | ✅ 2026-10-28 | engine/galactic (new special_data.hpp, special_systems.hpp, src/special_rules.cpp, src/special_systems.cpp, tests/test_special.cpp = alamo_galactic_special_tests; "P4 sim" blocks in campaign.hpp/.cpp, galactic_rules, economy.hpp, galactic_events.hpp, conflicts.hpp/.cpp, test_conflicts.cpp); engine/apps/sim ("P4 sim" blocks in campaign_battles.*, tactical_battle.*) |
 | N1 | Save / load + replay: stage 1 galactic-map saves, stage 2 saves during a tactical battle, alamo_game save / load menus, save size | ✅ 2026-10-29 (stage 1, then stage 2 + menus + size the same day; in-game check of the menus automated 2026-10-31, below). N1f 2026-10-31: `alamo_game_smoke_saveload` (`--smoke saveload`, ~9 s, slow) drives Save with a typed name, the overwrite and delete questions (No / Yes), Load from the in-game menu and from the main menu (tick + state CRC == the save's) and a mid-battle save loaded back into its battle; a battle save now opens its battle's load screen at load (no galactic tick first, `app_session.cpp` `session_started`); galactic screen text moved to HUD layer 10, below the GUI dialogs (`galactic_hud.cpp`, 12 campaign visual baselines updated); human-fought campaign space and land battles saved mid-battle and loaded through alamo_game (`alamo_game_save_tests`); FoC story save 50 KB at 5 min, 54 KB at 2 h, 58 KB at 4 h of game time, 143 KB mid-battle (guards `alamo_ai_story_save_size`, `_late`, `alamo_game_save_tests` "Story battle") | Stage 2: engine/tactical (movement, fog, tree, combat, abilities, garrison, hangar: src/*_save.cpp), engine/ai/tactical (src/tactical_save.cpp), engine/anim (src/anim_save.cpp), engine/lua (PresentationLog), engine/apps/sim (src/tactical_battle_save.cpp, save_io.hpp, campaign_battles, sim_anim, story_session), engine/apps/headless (save_run, skirmish_run); menus: engine/apps/game (save_games.*, game_session, app/game_main.cpp), engine/ui (gui_menus); size: engine/core (compress.hpp/.cpp, save_file), engine/ai (ai_lua_runtime, galactic_ai_save). Stage 1: engine/core (save_file.hpp/.cpp, ByteWriter/Reader save helpers), engine/objects (ObjectStore), engine/commands (scheduler, events, recording), engine/galactic (src/galactic_save.cpp), engine/ai (src/ai_save*.cpp, src/galactic_ai_save.cpp + every AI system), engine/lua (src/vm_persist.cpp, 2 Lua patches, bridge / players / fog / cinematic write+read), engine/apps/sim (save_session.*, sim_host_save.cpp), engine/apps/headless (save_run.*); build_agent.cmd |
-| BM | Repeatable benchmark: versioned scenario files (save + recorded orders + per-tick CRC fingerprint), sim-only mode in `alamo_headless --bench` (BM1), the game-side benchmark (BM2), stress scenes and reports (BM3), the in-game benchmark screen (BM4) | BM1 2026-11-06 (see "BM - repeatable benchmark" below) | engine/apps/sim (bench_scenario.*, bench_stats.*, bench_json.hpp), engine/apps/headless (bench_run.*, check_bench.cmake), tests/benchmark, tools/benchmark |
+| BM (BM1) | Repeatable benchmark: versioned scenario files (save + recorded orders + per-tick CRC fingerprint), sim-only mode in `alamo_headless --bench` (BM1), the game-side benchmark (BM2), stress scenes and reports (BM3), the in-game benchmark screen (BM4) | BM1 2026-11-06 (see "BM - repeatable benchmark" below) | engine/apps/sim (bench_scenario.*, bench_stats.*, bench_json.hpp), engine/apps/headless (bench_run.*, check_bench.cmake), tests/benchmark, tools/benchmark |
 
 ## Performance, worker-count check and sanitizer limits
 
@@ -107,7 +107,9 @@ scenarios in BM2). A text manifest `<name>.abench` (LF, `key value` lines) next 
 | `final_crc` | combined CRC after the last tick |
 
 Every pinned file is checked against its size and digest before any timing, so a file changed without remaking the scenario
-is caught. The make is deterministic: remaking with nothing changed gives byte-identical files (the test checks it).
+is caught. The make is deterministic: remaking with nothing changed gives byte-identical files (the test checks it). The save
+leaves out the machine's game-data folder (the descriptor's informational `data_root`), so a remake on another machine keeps the
+version. All files are written as temporaries and moved in place with the manifest last.
 
 **Commands** (`engine/apps/headless/bench_run.hpp`):
 - `alamo_headless --bench S.abench [--runs 3] [--warmup 1] [--workers N] [--ticks K] [--bench-json F|-] [--bench-baseline OLD.json]`:
@@ -149,7 +151,8 @@ at the next stored tick, and `first_divergence` names the 16-tick window. Needs 
 
 **Tests.** `alamo_sim_bench_tests` (manifest round trip and errors, pins, statistics, the comparison rule, JSON);
 `alamo_headless_bench_synthetic` (`headless/check_bench.cmake`, ~1-3 s, no game data: make a synthetic scenario, bench it with JSON,
-remake it unchanged, compare with a baseline, and refuse a scenario with another run's fingerprint and an edited sidecar as "not
+remake it unchanged (make line with a quoted `=` argument), compare with a baseline, run 100 of 150 ticks against a
+checkpoint fingerprint, reject `--ticks 0`, and refuse a scenario with another run's fingerprint and an edited sidecar as "not
 comparable"); `alamo_headless_bench_space_battle*` (slow, FoC data): the OPT3 t07 worker-count check on the space battle from its save
 (0 / 1 / 4 / 16 / machine default; `--bench-allow-changed`, so a sim behaviour change only prints "scenario changed" there - remake the
 scenario with `tools\benchmark\regen_scenario.cmd` and commit it with the change).

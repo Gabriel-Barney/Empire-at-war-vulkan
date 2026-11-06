@@ -303,6 +303,10 @@ int bench_run(const BenchOptions& opt) {
     if (src->save_tick() != sc.start_tick) return not_comparable(opt, "the save is at tick " + std::to_string(src->save_tick()));
 
     const uint64_t ticks = opt.ticks_set ? std::min(opt.ticks, sc.ticks) : sc.ticks;
+    if (ticks == 0) {
+        std::fprintf(stderr, "bench: --ticks must be at least 1\n");
+        return 2;
+    }
     const int32_t workers = opt.workers_set ? opt.workers : sc.workers;
     const uint64_t end_tick = sc.start_tick + ticks;
     const CrcLog expected = until(fingerprint, end_tick);
@@ -364,7 +368,9 @@ int bench_run(const BenchOptions& opt) {
         const CrcDivergence d = first_divergence(expected, actual);
         const bool replay_ok = s->replay_failures() == 0;
         const bool run_fp_ok = !d.diverged && replay_ok;
-        if (!run_fp_ok && fp_ok) fp_message = !replay_ok ? std::to_string(s->replay_failures()) + " recorded orders failed to insert" : d.message;
+        const std::string run_message =
+            run_fp_ok ? std::string() : !replay_ok ? std::to_string(s->replay_failures()) + " recorded orders failed to insert" : d.message;
+        if (!run_fp_ok && fp_ok) fp_message = run_message;
         fp_ok = fp_ok && run_fp_ok;
         if (run == 0) {
             first_log = log;
@@ -395,7 +401,7 @@ int bench_run(const BenchOptions& opt) {
         std::snprintf(label, sizeof label, "  %s %u (load %.0f ms, %.0f ms):", timed ? "run" : "warm-up", timed ? run - opt.warmup + 1 : run + 1,
                       load_ms, wall_ms);
         if (!opt.quiet || timed) print_stats(label, st, sc.start_tick, ticks);
-        if (!run_fp_ok) std::printf("    fingerprint: %s\n", d.diverged ? d.message.c_str() : fp_message.c_str());
+        if (!run_fp_ok) std::printf("    fingerprint: %s\n", run_message.c_str());
         if (other_cpu > kNoisyOtherCpuPct)
             std::printf("    noisy: other processes used %.0f%% of the machine's CPU during this run\n", other_cpu);
         if (timed) {
@@ -650,19 +656,29 @@ int bench_make(const BenchOptions& opt) {
     bench::Scenario old;
     const bool had_old = bench::Scenario::load(opt.scenario, old, nullptr);
     sc.description = !opt.description.empty() ? opt.description : had_old ? old.description : std::string();
-    for (auto [tmp, final_name, file] : {std::tuple{tmp_save, save_name, &sc.save}, std::tuple{tmp_orders, orders_name, &sc.orders},
-                                         std::tuple{tmp_fp, fp_name, &sc.fingerprint}}) {
-        fs::rename(fs::path(tmp), fs::path(in_dir(final_name)), ec);
-        if (ec || !bench::pin_file(in_dir(final_name), *file, &err)) {
-            std::fprintf(stderr, "bench-make: %s: %s\n", final_name.c_str(), ec ? ec.message().c_str() : err.c_str());
+    // Everything is written next to its final name first (pins taken from the written bytes), then moved in place with the
+    // manifest last, so a failure before the moves leaves the old scenario untouched.
+    for (auto [tmp, file] : {std::pair{tmp_save, &sc.save}, std::pair{tmp_orders, &sc.orders}, std::pair{tmp_fp, &sc.fingerprint}}) {
+        if (!bench::pin_file(tmp, *file, &err)) {
+            std::fprintf(stderr, "bench-make: %s\n", err.c_str());
             cleanup();
             return 1;
         }
     }
     sc.version = had_old ? (old.same_content(sc) ? old.version : old.version + 1) : 1;
-    if (!sc.save_manifest(opt.scenario, &err)) {
+    const std::string tmp_manifest = opt.scenario + ".tmp";
+    if (!sc.save_manifest(tmp_manifest, &err)) {
         std::fprintf(stderr, "bench-make: %s\n", err.c_str());
+        cleanup();
         return 1;
+    }
+    for (auto [tmp, final_path] : {std::pair{tmp_save, in_dir(save_name)}, std::pair{tmp_orders, in_dir(orders_name)},
+                                   std::pair{tmp_fp, in_dir(fp_name)}, std::pair{tmp_manifest, opt.scenario}}) {
+        fs::rename(fs::path(tmp), fs::path(final_path), ec);
+        if (ec) {
+            std::fprintf(stderr, "bench-make: %s: %s (rerun --bench-make)\n", final_path.c_str(), ec.message().c_str());
+            return 1;
+        }
     }
     std::printf("bench-make: wrote %s version %u%s: save %" PRIu64 " bytes, %zu orders, fingerprint %zu records, final CRC %s\n",
                 opt.scenario.c_str(), sc.version, had_old ? (sc.version == old.version ? " (unchanged)" : " (changed: version bumped)") : "",

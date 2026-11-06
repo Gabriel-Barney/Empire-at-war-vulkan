@@ -115,6 +115,6 @@ public:
 int open_save_source(const std::string& save_path, const std::string& game_dir, const std::vector<std::string>& game_args,
                      std::unique_ptr<SaveSessionSource>& out, std::string& err);
 // Builds a --save-session opt.session session (opt.campaign / map / battles / story / seed / workers), runs it to the
-// save point (opt.save_at, opt.save_when) and writes opt.save_file. 1 = written (*saved_tick set); 0 = skipped (no data);
+// save point (opt.save_at, opt.save_when) and writes opt.save_file (without the machine's game-data folder in the descriptor). 1 = written (*saved_tick set); 0 = skipped (no data);
 // -1 = error.
 int make_save(const SaveRunOptions& opt, uint64_t& saved_tick, std::string& err);

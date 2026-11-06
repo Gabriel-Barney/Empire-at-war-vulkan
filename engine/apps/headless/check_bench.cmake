@@ -14,7 +14,7 @@ foreach(v EXE WORK)
   endif()
 endforeach()
 file(REMOVE_RECURSE ${WORK})
-file(MAKE_DIRECTORY ${WORK}/a ${WORK}/b ${WORK}/c)
+file(MAKE_DIRECTORY ${WORK}/a ${WORK}/b ${WORK}/c ${WORK}/d)
 
 function(run expect_rc out_var)
   execute_process(COMMAND ${EXE} ${ARGN} RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
@@ -32,10 +32,11 @@ function(expect_in text what)
 endfunction()
 
 set(make_args --save-session synthetic --bench-save-at 150 --ticks 150 --workers 2 --quiet)
-run(0 out --bench-make ${WORK}/a/syn.abench ${make_args} --bench-desc "synthetic check")
+run(0 out --bench-make ${WORK}/a/syn.abench ${make_args} --bench-desc "synthetic check a=b")
 expect_in("${out}" "version 1")
 file(READ ${WORK}/a/syn.abench manifest)
-expect_in("${manifest}" "ALAMO_BENCH 1\nname syn\nversion 1\ndescription synthetic check\n")
+expect_in("${manifest}" "ALAMO_BENCH 1\nname syn\nversion 1\ndescription synthetic check a=b\n")
+expect_in("${manifest}" "--bench-desc \"synthetic check a=b\"")
 expect_in("${manifest}" "fingerprint syn.crc ")
 expect_in("${manifest}" "start_tick 150\nticks 150\nworkers 2\n")
 
@@ -60,6 +61,13 @@ run(0 out --bench ${WORK}/a/syn.abench --runs 1 --warmup 0 --bench-baseline ${WO
 expect_in("${out}" "vs baseline a.json: median")
 expect_in("${out}" "note, compared with the baseline: ")
 expect_in("${out}" "other worker count")
+
+# A checkpoint fingerprint (every 16th tick) and a shorter run that ends between two stored ticks (150 + 100 = 250).
+run(0 out --bench-make ${WORK}/d/syn.abench ${make_args} --bench-every 16)
+expect_in("${out}" "fingerprint 11 records")
+run(0 out --bench ${WORK}/d/syn.abench --runs 1 --warmup 0 --ticks 100)
+expect_in("${out}" "bench: OK")
+run(2 out --bench ${WORK}/d/syn.abench --runs 1 --warmup 0 --ticks 0)
 
 # t04: scenario a's save and orders with the fingerprint of the same session made with seed 8.
 run(0 out --bench-make ${WORK}/b/syn.abench ${make_args} --seed 8)

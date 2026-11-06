@@ -1290,6 +1290,11 @@ int make_save(const SaveRunOptions& opt, uint64_t& saved_tick, std::string& err)
     if (!hz) return skip ? 0 : -1;
     auto s = hz->build(opt.seed, opt.workers, err);
     if (!s) return -1;
+    // The game-data folder is informational (never compared on load) but would make the save's bytes, and so the scenario
+    // version, depend on where this machine installed the game: a checked-in benchmark save does not record it.
+    sim::SessionDescriptor d = s->host->session();
+    d.data_root.clear();
+    s->host->set_session(std::move(d));
     SaveFile save;
     if (!run_to_save(*s, opt.save_at, opt.save_when, save, err) || !save.write_file(opt.save_file, &err)) return -1;
     saved_tick = save.tick;

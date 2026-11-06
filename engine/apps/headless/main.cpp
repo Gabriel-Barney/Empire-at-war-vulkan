@@ -214,6 +214,7 @@ struct Options {
     bool bench_allow_changed = false, workers_set = false;
     uint64_t bench_save_at = 0;
     bool bench_save_at_set = false;
+    std::vector<int> game_arg_index;  // argv indices parsed as game args (left out of a scenario's recorded make line)
 };
 
 // Deterministic stand-in for the synced RNG / perception values (real perception comes later).
@@ -937,8 +938,10 @@ static int headless_main(int argc, char** argv) {
         } else if (a == "--compare") {
             opt.compare_a = next();
             opt.compare_b = next();
-        } else if (a.find('=') != std::string::npos) opt.game_args.push_back(a);  // MODPATH= etc.
-        else return usage();
+        } else if (a.find('=') != std::string::npos) {
+            opt.game_args.push_back(a);  // MODPATH= etc.
+            opt.game_arg_index.push_back(i);
+        } else return usage();
     }
 
 #ifdef ALAMO_HEADLESS_HAVE_SIM
@@ -1004,8 +1007,8 @@ static int headless_main(int argc, char** argv) {
             // The manifest's "make" line: this command's arguments without the output path and the machine-specific ones.
             for (int i = 1; i < argc; ++i) {
                 const std::string a = argv[i];
-                if ((a == "--bench-make" || a == "--game") && i + 1 < argc) ++i;
-                else if (a == "--quiet" || (a.find('=') != std::string::npos && a.rfind("--", 0) != 0)) continue;
+                if ((a == "--bench-make" || a == "--game" || a == "--data") && i + 1 < argc) ++i;
+                else if (a == "--quiet" || std::find(opt.game_arg_index.begin(), opt.game_arg_index.end(), i) != opt.game_arg_index.end()) continue;
                 else b.make_args.push_back(a);
             }
             return bench_make(b);

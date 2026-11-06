@@ -122,6 +122,11 @@ static void test_stats() {
     CHECK(near(s.p99_ms, 198) && near(s.worst_ms, 200) && s.worst_index == 199 && near(s.median_ms, 100.5));
     CHECK(near(bench::percentile(hundred, 50), 100));
     CHECK(near(bench::percentile(hundred, 100), 200));
+    for (size_t n : {100u, 300u, 700u, 1800u, 5400u}) {  // whole-number ranks: ceil(0.99 * n) without floating-point round-up
+        std::vector<double> v;
+        for (size_t i = 1; i <= n; ++i) v.push_back(static_cast<double>(i));
+        CHECK(near(bench::percentile(v, 99), static_cast<double>((99 * n + 99) / 100)));
+    }
     s = bench::summarize(std::vector<double>{});
     CHECK(s.count == 0 && s.median_ms == 0);
     s = bench::summarize(std::vector<double>{7});

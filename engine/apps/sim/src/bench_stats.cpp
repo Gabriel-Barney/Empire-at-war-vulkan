@@ -15,8 +15,12 @@ double percentile(std::span<const double> ms, double p) {
     if (ms.empty()) return 0;
     std::vector<double> v(ms.begin(), ms.end());
     std::sort(v.begin(), v.end());
-    const double rank = std::ceil(p / 100.0 * static_cast<double>(v.size()));
-    const size_t i = rank < 1 ? 0 : std::min(v.size() - 1, static_cast<size_t>(rank) - 1);
+    // Nearest rank ceil(p * n / 100), in integers for whole-number p (99 * 100 / 100 must not round up to 100 in floating point).
+    const double scaled = p * 1000.0;
+    const auto p1000 = static_cast<uint64_t>(std::llround(std::clamp(scaled, 0.0, 100000.0)));
+    const uint64_t n = v.size();
+    const uint64_t rank = (p1000 * n + 99999) / 100000;
+    const size_t i = rank < 1 ? 0 : static_cast<size_t>(std::min<uint64_t>(n, rank) - 1);
     return v[i];
 }
 
