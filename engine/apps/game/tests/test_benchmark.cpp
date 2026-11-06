@@ -7,11 +7,14 @@
 //   * bench_report_json: key order, escaping, CRC as 16 hex digits.
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "alamo/game/benchmark.hpp"
+#include "alamo/game/benchmark_scenario.hpp"
 
 using namespace alamo;
 using namespace alamo::game;
@@ -208,6 +211,134 @@ void test_report() {
     CHECK(f.find("\"error\": \"line\\u000abreak\"") != std::string::npos);
 }
 
+// bm2: scenario files in alamo_game (benchmark_scenario.hpp): flags, settings, the headless refusal, the make and the
+// fingerprint check, on temporary files.
+CrcLog fake_log(uint64_t first, uint64_t last, uint64_t salt) {
+    CrcLog log;
+    log.systems = {"a", "b"};
+    for (uint64_t t = first; t <= last; ++t) {
+        CrcRecord r;
+        r.tick = t;
+        r.systems = {t * 3 + salt, t * 5};
+        r.combined = t * 7 + salt;
+        log.records.push_back(r);
+    }
+    return log;
+}
+
+void write_file(const std::filesystem::path& p, const std::string& text) {
+    std::ofstream f(p, std::ios::binary | std::ios::trunc);
+    f.write(text.data(), static_cast<std::streamsize>(text.size()));
+}
+
+void test_scenario() {
+    namespace fs = std::filesystem;
+    namespace bench = sim::bench;
+    const fs::path dir = fs::temp_directory_path() / "alamo_game_benchmark_tests_scenario";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    const std::string recipe = (dir / "orbit.abench").string();
+    write_file(recipe, "ALAMO_BENCH 2\nname orbit\ndescription a test\nticks 40\nhost game\nmode realtime\npreset bm-smoke\n"
+                       "camera_anchor start\ncamera 0 0 0 0 0 30 900\ncamera 40 0 0 0 90 30 600\n");
+    write_file(dir / "game.alsv", "save bytes");
+    std::string err;
+
+    // No scenario flag: nothing happens.
+    BenchmarkOptions o;
+    CHECK(load_bench_scenario_arg(std::vector<std::string>{"alamo_game", "--benchmark", "fixed"}, o, &err) == 0 && !o.scenario_data);
+    CHECK(check_bench_scenario(o).empty());
+    // Two of them, or no value: refused.
+    CHECK(load_bench_scenario_arg(std::vector<std::string>{"g", "--bench-make", recipe, "--bench-scenario", recipe}, o, &err) == -1);
+    o = {};
+    CHECK(load_bench_scenario_arg(std::vector<std::string>{"g", "--bench-scenario"}, o, &err) == -1 && err.find("value") != std::string::npos);
+
+    // --bench-make on the recipe: its settings apply, flags parsed afterwards win.
+    o = {};
+    const std::vector<std::string> make_args = {"g", "--bench-make", recipe, "--bench-save", (dir / "game.alsv").string(), "--bench-preset",
+                                                "bm-low"};
+    CHECK(load_bench_scenario_arg(make_args, o, &err) == 1 && o.make && o.scenario_data);
+    CHECK(o.mode == BenchMode::RealTime && o.preset == "bm-smoke" && o.ticks == 40 && o.save.empty());
+    for (size_t i = 0; i < make_args.size(); ++i) (void)parse_benchmark_arg(make_args, i, o, &err);
+    CHECK(o.preset == "bm-low" && o.save == (dir / "game.alsv").string());
+    CHECK(check_bench_scenario(o).empty());
+    BenchmarkOptions nv = o;
+    nv.verify = false;
+    CHECK(check_bench_scenario(nv).find("presentation check") != std::string::npos);
+
+    // The make writes a host game scenario: pins, the run's settings, the recipe's camera and description.
+    const CrcLog log = fake_log(300, 340, 0);
+    commands::CommandRecording rec;
+    rec.from_save = commands::SavePoint{300, 0x1234};
+    std::string summary;
+    CHECK(write_game_scenario(recipe, o.scenario_data.get(), o.save, rec, log, 300, 40, o, &summary, &err));
+    CHECK(summary.find("version 1") != std::string::npos);
+    bench::Scenario made;
+    CHECK(bench::Scenario::load(recipe, made, &err) && bench::verify_files(made, &err));
+    CHECK(made.host == bench::Host::Game && made.mode == "realtime" && made.preset == "bm-low" && made.frames_per_tick == 0);
+    CHECK(made.name == "orbit" && made.description == "a test" && made.version == 1 && made.camera.size() == 2);
+    CHECK(made.camera_anchor == bench::CameraAnchor::Start && made.start_tick == 300 && made.ticks == 40 && made.fingerprint_every == 16);
+    CHECK(made.final_crc == 340 * 7 && made.save.bytes == 10 && made.make_args.empty());
+    CHECK(fs::exists(dir / "orbit.alsv") && fs::exists(dir / "orbit.acmd") && fs::exists(dir / "orbit.crc"));
+    // Remade with nothing changed: the version stays; with another camera it is bumped.
+    BenchmarkOptions o2;
+    CHECK(load_bench_scenario_arg(std::vector<std::string>{"g", "--bench-make", recipe, "--bench-preset", "bm-low"}, o2, &err) == 1);
+    for (size_t i = 0; i < 4; ++i) (void)parse_benchmark_arg(std::vector<std::string>{"g", "--bench-make", recipe, "--bench-preset", "bm-low"}, i, o2, &err);
+    CHECK(o2.save == made.resolve(made.save));  // a full scenario's own save is the default
+    CHECK(write_game_scenario(recipe, o2.scenario_data.get(), o2.save, rec, log, 300, 40, o2, &summary, &err) &&
+          summary.find("(unchanged)") != std::string::npos);
+    bench::Scenario moved = *o2.scenario_data;
+    moved.camera[1].yaw_deg = 180;
+    CHECK(write_game_scenario(recipe, &moved, o2.save, rec, log, 300, 40, o2, &summary, &err) && summary.find("version 2") != std::string::npos);
+
+    // --bench-scenario: the file's settings, the pins checked; then the fingerprint.
+    BenchmarkOptions r;
+    CHECK(load_bench_scenario_arg(std::vector<std::string>{"g", "--bench-scenario", recipe}, r, &err) == 1 && !r.make);
+    CHECK(r.mode == BenchMode::RealTime && r.ticks == 40 && r.save == made.resolve(made.save) && r.preset == "bm-low");
+    CHECK(check_bench_scenario(r).empty());
+    BenchmarkOptions longer = r;
+    longer.ticks = 41;
+    CHECK(check_bench_scenario(longer).find("more than") != std::string::npos);
+    const bench::Scenario& sc = *r.scenario_data;
+    CHECK(check_bench_fingerprint(sc, log, 340).empty());
+    CHECK(check_bench_fingerprint(sc, fake_log(300, 320, 0), 320).empty());  // a shorter run: compared up to its last checkpoint
+    CHECK(!check_bench_fingerprint(sc, fake_log(300, 340, 1), 340).empty());  // other work: not comparable
+    CHECK(!check_bench_fingerprint(sc, fake_log(300, 330, 0), 340).empty());  // the run stopped early
+    // A changed pinned file: refused at load.
+    write_file(dir / "orbit.crc", "changed");
+    BenchmarkOptions bad;
+    CHECK(load_bench_scenario_arg(std::vector<std::string>{"g", "--bench-scenario", recipe}, bad, &err) == -1 &&
+          err.find("not comparable") != std::string::npos);
+
+    // A headless (BM1) scenario: alamo_game cannot run it, and says why.
+    const std::string headless = (dir / "space.abench").string();
+    write_file(headless, "ALAMO_BENCH 1\nname space\nsave s.alsv 1 1\nfingerprint s.crc 1 1\nticks 5\n");
+    BenchmarkOptions h;
+    CHECK(load_bench_scenario_arg(std::vector<std::string>{"g", "--bench-scenario", headless}, h, &err) == -1 &&
+          err.find("alamo_headless scenario (host headless)") != std::string::npos);
+    CHECK(load_bench_scenario_arg(std::vector<std::string>{"g", "--bench-make", headless}, h, &err) == -1 &&
+          err.find("--bench-regen") != std::string::npos);
+    fs::remove_all(dir, ec);
+}
+
+void test_report_bm2() {
+    BenchReport r;
+    r.scenario = "s.abench";
+    r.scenario_version = 2;
+    r.fingerprint = "match";
+    r.camera_keys = 3;
+    r.gpu_timestamps = true;
+    r.gpu_frames = 2;
+    const std::vector<float> ms = {1.0f, 3.0f};
+    r.gpu_ms = {{"frame", frame_time_stats(ms)}, {"scene", frame_time_stats(ms)}};
+    const std::string j = bench_report_json(r);
+    CHECK(j.find("\"scenario\": \"s.abench\",\n  \"scenario_version\": 2,\n  \"fingerprint\": \"match\",\n  \"scenario_made\": \"\",\n"
+                 "  \"camera_keys\": 3,\n  \"gpu_timestamps\": true,\n  \"gpu_frames\": 2,\n  \"gpu_ms\": {\"frame\": {\"count\": 2") !=
+          std::string::npos);
+    CHECK(j.find("}, \"scene\": {\"count\": 2") != std::string::npos);
+    CHECK(bench_report_json(BenchReport{}).find("\"gpu_ms\": {},\n") != std::string::npos);
+}
+
 }  // namespace
 
 int main() {
@@ -216,6 +347,8 @@ int main() {
     test_fixed_clock();
     test_stats();
     test_report();
+    test_scenario();
+    test_report_bm2();
     if (g_fail) {
         std::printf("alamo_game_benchmark_tests: %d FAILED\n", g_fail);
         return 1;

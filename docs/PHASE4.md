@@ -83,6 +83,7 @@ The Status column is the state when the row was last written; the roadmap is aut
 | N1 | Save / load + replay: stage 1 galactic-map saves, stage 2 saves during a tactical battle, alamo_game save / load menus, save size | ✅ 2026-10-29 (stage 1, then stage 2 + menus + size the same day; in-game check of the menus automated 2026-10-31, below). N1f 2026-10-31: `alamo_game_smoke_saveload` (`--smoke saveload`, ~9 s, slow) drives Save with a typed name, the overwrite and delete questions (No / Yes), Load from the in-game menu and from the main menu (tick + state CRC == the save's) and a mid-battle save loaded back into its battle; a battle save now opens its battle's load screen at load (no galactic tick first, `app_session.cpp` `session_started`); galactic screen text moved to HUD layer 10, below the GUI dialogs (`galactic_hud.cpp`, 12 campaign visual baselines updated); human-fought campaign space and land battles saved mid-battle and loaded through alamo_game (`alamo_game_save_tests`); FoC story save 50 KB at 5 min, 54 KB at 2 h, 58 KB at 4 h of game time, 143 KB mid-battle (guards `alamo_ai_story_save_size`, `_late`, `alamo_game_save_tests` "Story battle") | Stage 2: engine/tactical (movement, fog, tree, combat, abilities, garrison, hangar: src/*_save.cpp), engine/ai/tactical (src/tactical_save.cpp), engine/anim (src/anim_save.cpp), engine/lua (PresentationLog), engine/apps/sim (src/tactical_battle_save.cpp, save_io.hpp, campaign_battles, sim_anim, story_session), engine/apps/headless (save_run, skirmish_run); menus: engine/apps/game (save_games.*, game_session, app/game_main.cpp), engine/ui (gui_menus); size: engine/core (compress.hpp/.cpp, save_file), engine/ai (ai_lua_runtime, galactic_ai_save). Stage 1: engine/core (save_file.hpp/.cpp, ByteWriter/Reader save helpers), engine/objects (ObjectStore), engine/commands (scheduler, events, recording), engine/galactic (src/galactic_save.cpp), engine/ai (src/ai_save*.cpp, src/galactic_ai_save.cpp + every AI system), engine/lua (src/vm_persist.cpp, 2 Lua patches, bridge / players / fog / cinematic write+read), engine/apps/sim (save_session.*, sim_host_save.cpp), engine/apps/headless (save_run.*); build_agent.cmd |
 | BM (BM1) | Repeatable benchmark: versioned scenario files (save + recorded orders + per-tick CRC fingerprint), sim-only mode in `alamo_headless --bench` (BM1), the game-side benchmark (BM2), stress scenes and reports (BM3), the in-game benchmark screen (BM4) | BM1 2026-11-06 (see "BM - repeatable benchmark" below) | engine/apps/sim (bench_scenario.*, bench_stats.*, bench_json.hpp), engine/apps/headless (bench_run.*, check_bench.cmake), tests/benchmark, tools/benchmark |
 | BM (BM2a) | Benchmark side goal, game half: alamo_game benchmark mode (real-time and fixed-frames runs from a save, named presets, no player input; BM1's scenario file comes later, group bm2) | ✅ 2026-11-06 (bm2a; the roadmap is authoritative) | engine/apps/game: include/alamo/game/benchmark.hpp + src/benchmark.cpp (options, flags, presets, FixedFrameClock, stats, JSON report; tests/test_benchmark.cpp = `alamo_game_benchmark_tests`), app/app_benchmark.cpp (the App side), small hooks in game_main / app_frame / app_input / app_hud / app_screens / app_session; `alamo_game_bench_*` ctest entries |
+| BM (BM2) | Benchmark side goal: rendered runs from a scenario (alamo_game --bench-scenario / --bench-make, scenario format 2 with the run settings and a tick-driven camera path, GPU timer scopes in the report, image match of two fixed-frames runs) | ✅ 2026-11-06 (bm2; the roadmap is authoritative) | engine/apps/sim bench_scenario.* (format 2, camera_pose), engine/apps/game: include/alamo/game/benchmark_scenario.hpp + src/benchmark_scenario.cpp, app/app_bench_scenario.cpp, small hooks in app_benchmark / app_frame / app_screens / game_main; testdata/bench_orbit.abench, bench_scenario_check.cmake |
 
 ## Performance, worker-count check and sanitizer limits
 
@@ -158,6 +159,58 @@ checkpoint fingerprint, reject `--ticks 0`, and refuse a scenario with another r
 comparable"); `alamo_headless_bench_space_battle*` (slow, FoC data): the OPT3 t07 worker-count check on the space battle from its save
 (0 / 1 / 4 / 16 / machine default; `--bench-allow-changed`, so a sim behaviour change only prints "scenario changed" there - remake the
 scenario with `tools\benchmark\regen_scenario.cmd` and commit it with the change).
+
+### BM2 - rendered benchmark runs (2026-11-06, group bm2)
+
+**Scenario format 2** (`bench_scenario.hpp`; BM1's format-1 files read unchanged, and a manifest with no format-2 key is still
+written as format 1 byte for byte, so `space_battle.abench` and `--bench-regen` are unaffected). After `final_crc`:
+`host headless|game` (whose session the save is), `mode realtime|fixed` (default fixed), `preset NAME`, `frames_per_tick K`,
+`camera_anchor world|start`, and any number of `camera <tick> <tx> <ty> <tz> <yaw> <pitch> <distance> [<fov>]` keys (ticks
+strictly increasing; degrees; yaw about +Z, 0 = camera on +X, not wrapped; pitch -89..89; fov 0 or left out = the view's own).
+Floats are written shortest round-trip (`std::to_chars`) and read with `std::from_chars`. A remake keeps the format-2 keys; a
+changed camera or setting bumps the version (`same_content` includes them), so results of two camera paths are never compared.
+A *recipe* is a manifest with only name / description / format-2 keys (`Scenario::parse_recipe`).
+
+**Camera path** (t02): `camera_pose(keys, camera_time(ticks run, alpha))`, where `camera_time` = 0 before the first measured tick,
+else ticks run since the measurement started - 1 + the frame's render alpha (fixed frames: (sub + 1) / K; real time: the live
+interpolation alpha). Linear between keys in double (no FMA), held outside them; the fov is linear only when both keys give one.
+Never wall-clock time. In alamo_game the pose replaces the drawn view's camera (after the cinematic camera) from the first
+gameplay frame on, warm-up included, so the settle check covers the path's first view; it drives the view (galactic or battle)
+shown at that first frame, the other view keeps its own camera. `camera_anchor start` adds that view's own camera target at that
+frame to every key's target (in fixed frames the presentation clock is frozen during the warm-up, so the anchor is the same
+every run).
+
+**alamo_game** (t01, t07; `benchmark_scenario.hpp`): `--bench-scenario S.abench` reads the manifest before the other flags
+(which then win: `--benchmark`, `--bench-preset`, `--bench-ticks` up to the scenario's, `--bench-frames-per-tick`,
+`--width` / `--height`), checks every pin, loads the save with the recorded orders as the session's replay (`load_game(...,
+&replay)`; the run's own commands such as the autopilot's battle choice are ignored by the pipeline: the stream has them at
+the same ticks; `crc_check` replays the same stream) and at the end compares the CRC log with the fingerprint (both cut at the
+last fingerprint record at or before the end tick): a mismatch is `scenario changed, not comparable` (exit 3, as alamo_headless).
+BM2a's named presets stay the default and the override. `--bench-make S.abench --bench-save FILE`: a normal benchmark run; when
+it passes with the presentation check matching, it writes S as a `host game` scenario next to `<name>.alsv` (the save's bytes),
+`<name>.acmd` (the run's recorded stream, continuing the save) and `<name>.crc` (the run's CRC log, checkpointed every 16 ticks)
+with the run's mode / preset / frames per tick / ticks and the existing file's name, description, camera and version (kept when
+nothing changed, else +1). The measurement must start at the save's tick (the sim holds during the warm-up).
+**Finding: alamo_game cannot run BM1's `space_battle.abench`.** Its save is an alamo_headless `--save-session skirmish` harness
+session (descriptor kind `skirmish`, headless participants), not an alamo_game `game.campaign` / `game.skirmish` session, so
+`GameSession::spec_from_save` refuses it and the battle could not be drawn through `CampaignBattles` / the battle view anyway. Both
+programs now refuse the other's scenarios with the reason before anything loads (`host` key; alamo_headless `--bench` /
+`--bench-regen` exit 2 on `host game`). A large game-made space battle scenario is follow-up work.
+
+**GPU timers** (t06): in a benchmark run alamo_game records an `rhi::GpuTimer` per frame: `frame` (the whole command buffer:
+world, HUD, gamma, present blit) and the renderer's own scopes (`world`, `scene`, `ao`, `post`, `taa`). A slot's results are
+read when FrameRing hands the slot out again (that frame has finished) and kept only when that frame counted; the frames still
+in flight are read after a `wait_idle` at the end. Report keys (after `screen`): `scenario`, `scenario_version`, `fingerprint`,
+`scenario_made`, `camera_keys`, `gpu_timestamps` (false when the queue has none), `gpu_frames`, `gpu_ms` (per scope: count /
+mean / median / p99 / worst / total, GPU ms).
+
+**Tests**: `alamo_sim_bench_tests` (format 2 round trip, format 1 unchanged, bad keys, recipes, camera interpolation),
+`alamo_game_benchmark_tests` (flags and settings from a scenario, overrides, make / remake versions, fingerprint check, the
+headless refusal, report keys), `alamo_game_bench_scenario_headless` (no data: alamo_game refuses `space_battle.abench`) and
+`alamo_game_bench_scenario` (slow, FoC data; `bench_scenario_check.cmake`): `--bench-make` on a copy of
+`engine/apps/game/testdata/bench_orbit.abench` from the saveload smoke's battle save, then two `--bench-scenario` runs: fingerprint
+match, 120 counted frames, GPU scopes, identical PNGs in both runs, the camera moved (first and last PNG differ), and a changed
+pinned file refused.
 
 ## Port choices and per-step notes (tracked on the roadmap)
 

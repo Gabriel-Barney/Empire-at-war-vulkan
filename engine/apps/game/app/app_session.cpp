@@ -411,6 +411,7 @@ void App::shutdown() {
     stop_movies();
     gpu_.ring.wait_idle();
     ctx_.wait_idle();
+    bscen_.gpu.shutdown();  // bm2: the benchmark's GPU timer (bench_finish normally shuts it down first)
     if (bview_.active()) bview_.stop(gpu_);
     session_.reset();
     gview_.destroy();

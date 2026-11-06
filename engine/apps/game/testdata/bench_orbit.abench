@@ -1,0 +1,13 @@
+ALAMO_BENCH 2
+# bm2 test recipe (alamo_game_bench_scenario, bench_scenario_check.cmake): alamo_game --bench-make reads it, runs the
+# saveload smoke's battle save and writes the full scenario over a copy of it.
+name battle_orbit
+description bm2 test: the saveload smoke's battle save, 60 fixed-frames ticks, the camera half way round the start view
+ticks 60
+host game
+mode fixed
+preset bm-smoke
+frames_per_tick 2
+camera_anchor start
+camera 0 0 0 0 0 35 900
+camera 60 0 0 0 180 20 600 60

@@ -969,6 +969,11 @@ static int headless_main(int argc, char** argv) {
             std::fprintf(stderr, "bench-regen: %s\n", err.c_str());
             return 1;
         }
+        if (sc.host == alamo::sim::bench::Host::Game) {  // BM2: alamo_game remakes its own (alamo_game --bench-make)
+            std::fprintf(stderr, "bench-regen: %s was made by alamo_game (host game): remake it with alamo_game --bench-make\n",
+                         opt.bench_regen.c_str());
+            return 2;
+        }
         if (sc.make_args.empty()) {
             std::fprintf(stderr, "bench-regen: %s records no make arguments\n", opt.bench_regen.c_str());
             return 2;

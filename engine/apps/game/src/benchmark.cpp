@@ -216,6 +216,21 @@ std::string bench_report_json(const BenchReport& r) {
     str("final_crc", crc);
     str("presentation_check", r.presentation_check);
     str("screen", r.screen);
+    // bm2: the scenario, its fingerprint check and the GPU timer scopes.
+    str("scenario", r.scenario);
+    val("scenario_version", std::to_string(r.scenario_version));
+    str("fingerprint", r.fingerprint);
+    str("scenario_made", r.scenario_made);
+    val("camera_keys", std::to_string(r.camera_keys));
+    val("gpu_timestamps", r.gpu_timestamps ? "true" : "false");
+    val("gpu_frames", std::to_string(r.gpu_frames));
+    std::string gpu = "{";
+    for (size_t k = 0; k < r.gpu_ms.size(); ++k) {
+        if (k) gpu += ", ";
+        json_string(gpu, r.gpu_ms[k].first);
+        gpu += ": " + stats_json(r.gpu_ms[k].second);
+    }
+    val("gpu_ms", gpu + "}");
     o += "  \"autopilot\": [";
     for (size_t k = 0; k < r.autopilot.size(); ++k) {
         if (k) o += ", ";
