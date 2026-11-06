@@ -14,6 +14,14 @@ The one record of the project's binding decisions (Gabriel's calls on scope, pla
   other threading code: also `build_asan.cmd` (clang UBSan by default; `set ALAMO_SANITIZE=address` for ASan, which then runs with `-asan-stack=0` (heap and globals only) because stack instrumentation crashes catch handlers on this toolchain, see `docs/BUILD.md` "Sanitizer limits"; the default module list is the 11 sim modules; no TSan runtime on Windows, so races are covered by the per-worker-count CRC tests).
 - Shaders are compiled by DXC (`toolchain\dxc`) to SPIR-V; the C++ compiler choice doesn't affect them.
 
+## Branching (Gabriel, 2026-11-06)
+- **One long-lived integration branch, `dev`, instead of a branch per task, task group or session.** The repository had 319 branches, nearly all created per session and merged by PR; nothing required that and `main` is not protected.
+- Tasks commit and push to `dev`. Gabriel merges `dev` into `main` by PR when he chooses, after `build_gate.cmd` passes on `dev`. Never push `dev` with a failing MSVC build or test (a red `dev` blocks every agent).
+- A short branch off `dev` is allowed only for a parallel lane (git permits one branch per worktree). It merges back into `dev` and is deleted, local and remote, when the lane ends.
+- The desktop app starts every session on its own `claude/<name>` branch and has no setting to base it on `dev` (its `branch_prefix` setting only renames them), so docs alone cannot stop those branches. `tools\land_on_dev.cmd` makes them harmless: it refuses on `main`, detached HEAD and uncommitted tracked edits, merges `origin/dev` into the session branch (conflicts are resolved in that tree, so `dev` never holds a broken merge), pushes to `dev` as a plain fast-forward (no force; a rejected push means `dev` moved, rerun), and deletes the session branch on origin. The branch gets no PR to `main`. Run it after the builds and tests the change needs. `--create` makes `dev` from `origin/main` the first time.
+- Cleaning up the existing merged `claude/*` branches is a separate step; deleting remote branches needs Gabriel's go-ahead.
+- Rules for agents: `CLAUDE.md`, "Rules" / "Branches"; remotes: `docs/BUILD.md`.
+
 ## Decisions (Gabriel, 2026-10-27)
 
 These settle the roadmap's "Decisions waiting on you" list. They are binding for planning; change them only on Gabriel's word.
