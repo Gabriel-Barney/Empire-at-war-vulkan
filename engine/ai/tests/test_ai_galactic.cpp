@@ -3946,9 +3946,12 @@ struct UwResult {
     int32_t corr_frame = -1;
     float corr_credits_before = 0.0f, corr_credits_after = 0.0f;
     double corr_pool_before = 0.0, corr_pool_after = 0.0, corr_avail_before = 0.0, corr_avail_after = 0.0;
+    // a2k t08 Q2 (shared_fleet runs): frames on which a moving fleet held more than one hero, and the "split" orders.
+    int32_t shared_moves = 0;
+    size_t splits = 0;
 };
 
-static UwResult run_underworld(unsigned threads, int32_t frames) {
+static UwResult run_underworld(unsigned threads, int32_t frames, bool shared_fleet = false) {
     UwResult out;
     MemoryFiles files;
     AiDefinitions defs;
@@ -3993,7 +3996,9 @@ static UwResult run_underworld(unsigned threads, int32_t frames) {
         const std::string g(glob);
         return files.list(g.substr(0, g.find('*')));
     });
-    const gal::GalacticRules rules = uw_rules();
+    gal::GalacticRules rules = uw_rules();
+    if (shared_fleet)  // space heroes: the starting forces put them into one orbit fleet (no auto-land)
+        for (const uint32_t h : {uint32_t{uTyber}, uint32_t{uSaboteur}, uint32_t{uIG88}}) rules.types[h].kind = gal::UnitKind::SpaceUnit;
     objects::GameObjectTypes types;
     objects::IdCounter ids;
     objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids);
@@ -4024,6 +4029,10 @@ static UwResult run_underworld(unsigned threads, int32_t frames) {
     for (const std::string& d : pd) std::printf("  underworld plans: %s\n", d.c_str());
     CHECK(world.plans().plans.size() == 3);
     CHECK(world.start(&pd));
+    if (shared_fleet) {  // the three (space) heroes start in one orbit fleet at home
+        const std::vector<uint32_t> home = sim.fleets_at(0, 1);
+        CHECK(home.size() == 1 && sim.fleets()[home.front()].contents.size() == 3);
+    }
     // Σ over the budget categories of the Underworld AI (player 1): pools P and available A.
     auto budget_sums = [&world, &defs](double& pool, double& avail) {
         pool = avail = 0.0;
@@ -4052,14 +4061,24 @@ static UwResult run_underworld(unsigned threads, int32_t frames) {
                 budget_sums(out.corr_pool_after, out.corr_avail_after);
             }
         }
+        bool shared = false;
+        for (const gal::FleetState& fl : sim.fleets()) {
+            if (!fl.alive || !fl.moving) continue;
+            int heroes = 0;
+            for (const objects::ObjectHandle u : fl.contents) heroes += store.alive(u) && store.type(u) != uStruct ? 1 : 0;
+            shared = shared || heroes > 1;
+        }
+        out.shared_moves += shared ? 1 : 0;
         StateHasher h;
         sim.hash_state(h);
         world.hash(h);
         rng.synced().hash(h);
         out.crc.push_back(h.digest());
     }
-    for (const AiDecision& d : world.decision_log())
+    for (const AiDecision& d : world.decision_log()) {
         out.decisions.push_back(std::to_string(d.frame) + " p" + std::to_string(d.player) + " " + d.text);
+        out.splits += d.text.rfind("order split ", 0) == 0 ? 1 : 0;
+    }
     out.errors = world.lua_errors();
     out.corruption_p1 = sim.planets()[1].corruption;
     out.completed_bm = sim.corruptions_completed(1, 6);
@@ -4107,6 +4126,16 @@ static void test_underworld_special() {
     CHECK(base.corr_frame > 0);
     CHECK(base.corr_credits_before - base.corr_credits_after == 500.0f);
     CHECK(base.corr_pool_before == base.corr_pool_after && base.corr_avail_before == base.corr_avail_after);
+    {   // a2k t08 Q2 (A2K_T08_RE_ANSWERS Q2.3, PRE_PATH_SEPERATE): the three heroes (space units here) start in one orbit
+        // fleet. Each plan's Produce_Force splits its claimed hero out of the shared fleet before the gather, so no fleet
+        // ever jumps with two heroes (Move_To moves the task force's fleet, which then holds only its own hero), and the
+        // corruption still lands. (The hack needs Land_Units of a ground hero: not checked here.)
+        const UwResult sh = run_underworld(0, frames, true);
+        std::printf("  shared home fleet: %s; %zu splits, %d frames with a shared moving fleet, %zu Lua errors\n", sh.summary.c_str(),
+                    sh.splits, sh.shared_moves, sh.errors.size());
+        CHECK(sh.errors.empty() && sh.splits >= 2 && sh.shared_moves == 0);
+        CHECK(sh.corruption_p1 == 6 && sh.completed_bm >= 1);
+    }
     for (const unsigned t : {1u, 4u, 15u}) {
         const UwResult r = run_underworld(t, frames);
         size_t first = r.crc.size() == base.crc.size() ? r.crc.size() : 0;
