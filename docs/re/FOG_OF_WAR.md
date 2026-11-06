@@ -488,6 +488,11 @@ does nothing. Garbage collection of the cells object does **not** undo (dtor 0x6
 3. DECORATIONS §2.1: grid +0x08 = u16 reveal count, +0x10 = fade byte, +0x18 dense mask, +0x4c regrow
    step, +0x50 Reveal_All flag. §2.8: the Lua names are `FogOfWar.*`; `Enable_Fog` is scene fog.
 
+4. (2026-11-01) The FOW **draw** is gated by its own byte, the render option 0x140a12501 (set by `0x13ecc0`, read by
+   `0x13ecd0`), not by the FOW-active flag 0x140a284c4: every cinematic shot start (`0x49b1a0(camera, 0)`) clears it and the
+   cinematic end restores it, so no fog is drawn during a cinematic and in the main-menu attract demo; the sim (§5) still uses
+   the grids. MAIN_MENU_BACKGROUND.md §4a.
+
 ---
 
 ## 9. Open items
