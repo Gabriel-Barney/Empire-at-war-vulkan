@@ -62,7 +62,7 @@ if errorlevel 1 (
 git push origin HEAD:refs/heads/dev
 if errorlevel 1 (
   echo.
-  echo land_on_dev: push rejected, dev has moved since the fetch. Nothing was lost; rerun this script.
+  echo land_on_dev: push rejected. Nothing was pushed and your branch is intact. If git said non-fast-forward, dev moved since the fetch: rerun this script. Otherwise read the git message above.
   exit /b 1
 )
 
