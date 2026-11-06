@@ -57,6 +57,7 @@ bool App::render_frame() {
     bview_.ropt.ambient_occlusion = adv_video_.ambient_occlusion;  // land battles only (render skips space / galactic)
     // The original's detail options on top of each view's own frame options (copies: the views keep theirs).
     render::RecordOptions gro = gview_.ropt, bro = bview_.ropt;
+    gro.taa_provisional = bro.taa_provisional = bench_taa_provisional();  // BM2b: an uncounted frame leaves the TAA history
     if (detail_options_) {
         apply_detail_options(gro, adv_video_);
         apply_detail_options(bro, adv_video_);

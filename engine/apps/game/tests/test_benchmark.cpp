@@ -45,11 +45,13 @@ void test_flags() {
     std::string err;
     CHECK(parse_all({"--hidden", "--benchmark", "fixed", "--bench-save", "C:\\s\\a.alsv", "--bench-preset", "bm-low", "--bench-ticks", "120",
                      "--bench-frames-per-tick", "3", "--bench-settle", "5", "--bench-max-unsettled", "40", "--bench-report", "r.json",
-                     "--bench-crc-out", "c.crc", "--bench-png-dir", "png", "--bench-png-every", "30", "--bench-no-verify", "--width", "800"},
+                     "--bench-crc-out", "c.crc", "--bench-png-dir", "png", "--bench-png-every", "30", "--bench-no-verify", "--bench-redraw-every",
+                     "4", "--width", "800"},
                     o, rest, err) == 0);
     CHECK(o.mode == BenchMode::FixedFrames && o.fixed() && o.active());
     CHECK(o.save == "C:\\s\\a.alsv" && o.preset == "bm-low" && o.ticks == 120 && o.frames_per_tick == 3 && o.settle_frames == 5);
     CHECK(o.max_unsettled == 40 && o.report == "r.json" && o.crc_out == "c.crc" && o.png_dir == "png" && o.png_every == 30 && !o.verify);
+    CHECK(o.redraw_every == 4);
     CHECK(rest == (std::vector<std::string>{"--hidden", "--width", "800"}));
     CHECK(check_benchmark_options(o).empty());
 
@@ -97,6 +99,14 @@ void test_flags() {
     c = o;
     c.max_unsettled = 0;
     CHECK(!check_benchmark_options(c).empty());
+    c = o;
+    c.redraw_every = 1;  // every frame redrawn: the run could never count one
+    CHECK(!check_benchmark_options(c).empty());
+    c = o;
+    c.mode = BenchMode::RealTime;  // forced redraws are a fixed-frames test tool
+    CHECK(!check_benchmark_options(c).empty());
+    c.redraw_every = 0;
+    CHECK(check_benchmark_options(c).empty());
     CHECK(std::string(bench_mode_name(BenchMode::RealTime)) == "realtime" && std::string(bench_mode_name(BenchMode::FixedFrames)) == "fixed");
 }
 
@@ -191,7 +201,13 @@ void test_report() {
     r.autopilot = {"load screen: Begin at tick 5"};
     r.presentation_check = "match";
     r.device = "GPU";
+    r.taa = true;
+    r.forced_redraws = 7;
+    r.taa_discarded = 9;
     const std::string j = bench_report_json(r);
+    CHECK(j.find("\"taa\": true,") != std::string::npos);
+    CHECK(j.find("\"forced_redraws\": 7,\n  \"taa_discarded\": 9,") != std::string::npos);
+    CHECK(j.find("\"excluded_frames\"") < j.find("\"forced_redraws\"") && j.find("\"taa_discarded\"") < j.find("\"wall_seconds\""));
     CHECK(j.rfind("{\n  \"alamo_game_benchmark\": 1,\n  \"result\": \"ok\",", 0) == 0);
     CHECK(j.find("\"error\"") == std::string::npos);  // only when failed
     CHECK(j.find("\"save\": \"C:\\\\saves\\\\a \\\"b\\\".alsv\"") != std::string::npos);
