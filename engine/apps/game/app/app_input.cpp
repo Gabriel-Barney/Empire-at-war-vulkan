@@ -838,6 +838,8 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 open_main_menu();
                 break;
             case K::ExitGame: screen_ = Screen::Quit; break;
+            case K::CheckMod: check_mod(a.mod); break;    // modc t08
+            case K::LaunchMod: launch_mod(a.mod); break;
             case K::PreviewAudio:
             case K::ApplyAudio: audio_.set_volumes(a.audio.master, a.audio.sfx, a.audio.speech, a.audio.music); break;
             case K::ApplyVideo:  // the chosen resolution resizes the window (the resize path recreates swapchain + targets)

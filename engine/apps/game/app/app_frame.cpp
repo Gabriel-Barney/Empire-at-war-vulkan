@@ -447,6 +447,7 @@ void App::frame() {
     std::vector<ui::MenuAction> acts;
     ui_.front.update(gui_events_, raw, acts);
     handle_menu_actions(acts);
+    poll_mod_check();  // modc t08: a finished mod load report goes to the picker
     {  // in-game screens: battle end, retreat, planet info, buy units, story, holocron (P4)
         std::vector<ui::ScreenAction> sacts;
         std::vector<commands::EventData> scmds;

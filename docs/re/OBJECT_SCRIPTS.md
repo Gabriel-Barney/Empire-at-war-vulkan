@@ -765,8 +765,10 @@ Implemented in `engine/apps/sim` (`object_scripts.hpp` / `.cpp`, `ObjectScriptHo
 **Opt-in, off by default.** `SimConfig::object_scripts` (false), `alamo_headless --object-scripts`. With the switch off
 nothing attaches and no RNG is drawn, so every existing golden and CRC stream is unchanged.
 **[port interim rule, kept by Gabriel 2026-11-04]** `alamo_game` (`GameSession`) turns the switch on only when a mod layer is loaded (`MODPATH`,
-the VFS has mod directories). Vanilla FoC runs keep the old streams until the object-script service is checked
-against the original by an in-game probe; then the rule goes and the switch is always on.
+the VFS has mod directories), and in the main-menu attract demo (**modc t18**, 2026-11-06: a map's `DEMO_CONTROLLER` runs
+the shipped `Demo_Attract_Controller.lua`; the demo is never saved, recorded or compared with a golden, so no stream
+moves). Vanilla FoC games keep the old streams until the object-script service is checked against the original by an
+in-game probe; then the rule goes and the switch is always on.
 
 Port choices (`[port]`, each also commented in the code):
 
@@ -774,7 +776,7 @@ Port choices (`[port]`, each also commented in the code):
 |---|---|
 | Stores | Only each mode's primary store attaches scripts; secondary (local / cosmetic) stores attach nothing |
 | Pool (q6 t19) | §1.4 per host (session), keyed by script name: `ScriptPoolCount` read once at the first load of a name (absent → 1; N → N − 1 more loaded at once, top level run for each; 0 / negative / not a number → no pool, a fresh VM per object; **[port]** capped at 256); handout = the last free instance in list order, else a new one appended; release of a pooled instance = threads killed, `Flush_G()` (when a function), `Base_Definitions()`, stack reset + full GC, free. **[port]** the bridges are detached before that `Flush_G` / `Base_Definitions` (at a mode end the battle may be shut down); stale proximity registrations stay in the VM (keyed by never-reused object ids). No RNG draw. `ObjectScriptHost::pools()` lists name / size / in use |
-| Attach order | instance from the pool, engine globals registered again (`LuaVm::reinstall_engine_globals`, §1.3 step 3), GlobalValue + player world + object bridge, `Base_Definitions` only for a fresh instance, `main` thread created (not run), `Object` set last |
+| Attach order | instance from the pool, engine globals registered again (`LuaVm::reinstall_engine_globals`, §1.3 step 3), GlobalValue + player world + object bridge, `Base_Definitions` only for a fresh instance, `main` thread created (not run), `Object` set last. **[port]** (modc t18) a battle's player world is bound to its store before the map objects spawn (`CampaignBattles::push_battle`), so `Base_Definitions` of a map object can call `Find_Player` (the shipped Demo_Attract_Controller.lua does); the object bridge follows in `story_begin`, after the spawn |
 | `Execute_Script_On_Type` (q6 t19) | §1.5: at type setup (**[port]** the first mode pushed with the script files set) each type with `Execute_Script_On_Type` + `Lua_Script`, in type index order, takes one instance from the same pool (so `ScriptPoolCount = 4` gives 1 type + 3 free), engine globals, `Base_Definitions` once (**[port]** not once per load pass), no `main`, no `Object`, never serviced or released. `ObjectScriptHost::type_vm(type)`; **[port]** nothing calls it yet (the AI ports do not call hero scripts) |
 | Death clones | No script (`TacticalMode::spawn_death_clone` suppresses the hook); `Base_Definitions` does not run for them |
 | Service point | After the whole primary store update of the mode (`GameMode::common_tick`; galactic after `GalacticSim::update`), not inside each object's service; newest-attached first; never while the mode is paused |

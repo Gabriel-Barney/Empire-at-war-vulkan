@@ -156,7 +156,8 @@ dialog. **The demo battle and the overlay stay**: the sub-menus show the same mo
   > only `Demo_Attract_Geonosis` (not in either game's `Demo_Attract_Maps`) places 1 controller and 3 of each zone. So in
   > the shipped demos the controller never runs: their fog is not revealed by it. Script details: Empire → zone 02,
   > Rebel → 00, Underworld → 01; `GameRandom(1, 3)` indexes the zone list, so a map with fewer than three zones of a
-  > type stops the script with a Lua error. The port reproduces the script in the session (`GameSession::attract_demo_script`).
+  > type stops the script with a Lua error. The port runs the shipped script itself: the attract session turns the
+  > object-script host on (modc t18, 2026-11-06; before that `GameSession::attract_demo_script` emulated it in C++).
 - During the demo (attract-running = 1): 3D SFX voices are silent (AUDIO §1.6), mode-based music is suppressed
   (0x28e800), so only the menu theme plays; the music lock stops re-requests of mode 13 from restarting the
   theme while it is already current (0x2d21f0: refused only when current mode = 13, lock set, not forced) [H].

@@ -23,6 +23,7 @@ add_library(alamo_game_core STATIC
   src/story_ui.cpp
   src/save_games.cpp
   src/mod_check.cpp
+  src/mod_picker.cpp
   src/benchmark.cpp
   src/benchmark_scenario.cpp
 )
@@ -135,6 +136,13 @@ set_tests_properties(alamo_mod_check_fixture PROPERTIES TIMEOUT 120
                      PASS_REGULAR_EXPRESSION "\"result\": \"ok\",[^{]*\"errors\": 0,"
                      FAIL_REGULAR_EXPRESSION "\"run_errors\": \\[[^]]")
 
+# modc t08: the mod picker's data side (mod_picker.hpp) on the same read-only fixture; its modinfo.json decoding cases write
+# to their own temp folder (%TEMP%lamo_mod_picker_tests, no other test uses it).
+add_executable(alamo_game_mod_picker_tests tests/test_mod_picker.cpp)
+target_link_libraries(alamo_game_mod_picker_tests PRIVATE alamo_core alamo_game_core)
+add_test(NAME alamo_game_mod_picker_tests COMMAND alamo_game_mod_picker_tests ${CMAKE_CURRENT_SOURCE_DIR}/testdata/mod_fixture)
+set_tests_properties(alamo_game_mod_picker_tests PROPERTIES TIMEOUT 120)
+
 # q6 t08: AI player types (Basic_AI / AI_Player_Control) and default skirmish forces for mod factions on synthetic data in its
 # own temp folder; with ALAMO_FOC_DATA also the shipped factions (they resolve as the port's hard-coded tables).
 add_executable(alamo_game_mod_faction_tests tests/test_mod_factions.cpp)
@@ -155,7 +163,7 @@ function(alamo_game_add_exe)
   endif()
   add_executable(alamo_game ${_dir}/app/game_main.cpp ${_dir}/app/app_session.cpp ${_dir}/app/app_input.cpp ${_dir}/app/app_screens.cpp
                            ${_dir}/app/app_hud.cpp ${_dir}/app/app_frame.cpp ${_dir}/app/app_cinematic.cpp ${_dir}/app/app_script.cpp ${_dir}/app/app_script_saveload.cpp ${_dir}/app/app_benchmark.cpp ${_dir}/app/app_bench_scenario.cpp ${_dir}/app/game_render.cpp ${_dir}/app/game_ui.cpp ${_dir}/app/game_movies.cpp ${_dir}/app/frame_overlay.cpp
-                           ${_dir}/app/game_info.cpp ${_dir}/app/game_display.cpp)
+                           ${_dir}/app/game_info.cpp ${_dir}/app/game_display.cpp ${_dir}/app/app_mods.cpp)
   # alamo_core first: tools/formats' inline ByteReader vs core's (LNK2005, see alamo_render_app).
   target_link_libraries(alamo_game PRIVATE alamo_core alamo_game_core alamo_render_galactic alamo_render_sim alamo_ui_draw alamo_ui_hud
                                            alamo_ui_rhi alamo_engine_flags)

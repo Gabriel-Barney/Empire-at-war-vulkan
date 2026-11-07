@@ -1173,6 +1173,28 @@ void App::make_script() {
     }
     s.push_back(step_shot("game_main_menu.png"));
     if (opt_.smoke == "skirmish") {
+        // modc t08: the mod picker from the main menu's Mods button: the rows (base game first, then whatever mods this
+        // machine has), the base game's load report once its check finished, PNG, Back. Never launches anything; the
+        // skirmish session (and its golden) starts afresh later.
+        s.push_back(step_click_control("IDD_MAIN_MENU_DIALOG", "IDC_PORT_MAIN_MENU_MODS"));
+        s.push_back(step_wait("mod picker: base game report shown", [](App& a) {
+            const ui::GuiDialog* d = a.ui_.gui.find(ui::kPortModsDialog);
+            const ui::GuiControl* list = d ? d->get("IDC_PORT_MODS_LIST") : nullptr;
+            const ui::GuiControl* rep = d ? d->get("IDC_PORT_MODS_REPORT") : nullptr;
+            if (!list || !rep || list->items.empty() || rep->items.empty() || rep->items[0] == U"Checking...") return false;
+            std::printf("script: mod picker - %zu rows, base report: %s\n", list->items.size(), utf8_of(rep->items[0]).c_str());
+            if (rep->items[0].rfind(U"Loads", 0) != 0) {
+                a.notes_.push_back("mod picker: base game report " + utf8_of(rep->items[0]));
+                a.smoke_ok_ = false;
+            }
+            return true;
+        }, 6000));
+        s.push_back(step_shot("game_mod_picker.png"));
+        s.push_back(step_click_control(ui::kPortModsDialog, "IDC_CANCEL_BUTTON"));
+        s.push_back(step_wait("main menu again", [](App& a) {
+            const ui::GuiDialog* d = a.ui_.gui.top();
+            return d && iequal(d->name(), "IDD_MAIN_MENU_DIALOG");
+        }, 120));
         // OI host: the attract demo behind the main menu (MAIN_MENU_BACKGROUND.md; started here as the menu-open path would,
         // scripted runs never start it on their own): its battle world is drawn under the menu (world draws > 0, no
         // tactical HUD) and keeps ticking under the menu and its sub-dialogs (input never stops it); the skirmish's start

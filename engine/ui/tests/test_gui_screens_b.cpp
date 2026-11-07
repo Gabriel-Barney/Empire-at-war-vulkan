@@ -422,14 +422,23 @@ void test_panels() {
     BlackMarketPanel bm;
     CHECK(bm.init(env.table, env.atlas, env.fonts));
     bm.resize(1920, 1080);
-    const BlackMarketItem items[2] = {{301, "i_button_vader.tga", U"Ion cannon upgrade", U"Hits harder.", 1200, true, 1},
-                                      {302, "i_button_vader.tga", U"Shield booster", U"", 900, false, -1}};
+    const BlackMarketItem items[2] = {{301, "i_button_vader.tga", U"Ion cannon upgrade", U"Hits harder.", 1200, true, "i_button_e_tech_upgrade_"},
+                                      {302, "i_button_vader.tga", U"Shield booster", U"", 900, false, ""}};
     BlackMarketFrame bf;
     bf.open = true;
     bf.planet = 555;
     bf.title = U"Black Market";
     bf.items = items;
     bm.build(bf);
+    // modc t20: the item's Tech_Level_Icon_Name prefix picks the market_tech_level alternate (i_button_e_ = index 1);
+    // no prefix, no tech icon.
+    int32_t tech_alt0 = -1, tech_slots = 0;
+    for (const PanelSlot& s : bm.slots())
+        if (s.component >= 0 && s.component == env.table.find("market_tech_level00")) {
+            tech_alt0 = s.alt;
+            ++tech_slots;
+        }
+    CHECK(tech_alt0 == 1 && tech_slots == 1);
     acts.clear();
     env.click(bm, "market_01", cmds, acts);  // disabled: swallowed
     env.click(bm, "market_00", cmds, acts);

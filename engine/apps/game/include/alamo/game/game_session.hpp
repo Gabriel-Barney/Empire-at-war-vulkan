@@ -87,7 +87,8 @@ struct SessionSpec {
     // OI host: the main-menu attract demo (docs/re/MAIN_LOOP.md §1.5 / AUDIO.md §1.6 "AI-vs-AI attract demo") [port]: a
     // space skirmish with no human - the skirmish's player 0 is AI controlled too, AI-vs-AI conflicts are fought (both
     // sides by the tactical AI, else the stand-in cadence) and player 0's fleet hop is a direct setup operation (no
-    // command). local_player() stays 0 (the viewpoint). Space maps only (a land map fails start()).
+    // command). local_player() stays 0 (the viewpoint). Space maps only (a land map fails start()). The demo's objects run
+    // their Lua_Scripts (object-script host on, modc t18): a DEMO_CONTROLLER runs Demo_Attract_Controller.lua.
     bool attract = false;
 };
 
@@ -189,11 +190,6 @@ public:
     // DEMO_CONTROLLER reveal (MAIN_MENU_BACKGROUND.md §4a, [H] code chain, [M] that the capture is that). Presentation
     // only: the demo's sim fog (targeting, AI) is unchanged.
     bool view_draws_fog() const { return !spec_.attract; }
-    // Attract demo: the map's Demo_Attract_Controller ran (game_session.cpp attract_demo_script): at least one
-    // DEMO_CONTROLLER object revealed the map for Empire / Rebel / Underworld. False before the battle runs and on maps
-    // without a controller (the shipped Demo_Attract_Kamino).
-    bool attract_controller_ran() const { return attract_controllers_ > 0; }
-    uint32_t attract_moves() const { return attract_moves_; }  // its Attack_Move orders the battle accepted
     const BattleOrderStats& order_stats() const { return order_stats_; }
     uint64_t ticks() const { return ticks_; }
     // Skirmish: the battle ran and ended (the session is over).
@@ -325,9 +321,6 @@ private:
     int32_t local_player_ = 0;
     bool started_ = false;
     std::array<uint32_t, 2> attract_sides_{};  // attract demo: attacker / defender faction = player index (§6)
-    bool attract_script_done_ = false;          // attract demo: the controller script's State_Init point has passed
-    uint32_t attract_controllers_ = 0;          // DEMO_CONTROLLER objects whose script ran
-    uint32_t attract_moves_ = 0;                // their Attack_Move orders the battle accepted
     bool replay_ = false, invaded_ = false;
     bool paused_ = false, pause_pending_ = false;
     uint64_t pause_events_ = 0;
@@ -342,7 +335,6 @@ private:
     void after_tick();
     // OI host: after-T9 hook (rate lock -> pacing + parity) and its state.
     void after_story(sim::SimHost& h);
-    void attract_demo_script(sim::SimHost& h);
     std::function<bool()> rate_lock_source_;
     bool rate_lock_ = false;
     bool pres_lock_ = false;  // refixf t05 (pacing only)

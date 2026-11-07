@@ -222,6 +222,8 @@ const char* menu_action_name(MenuAction::Kind k) {
         case MenuAction::Kind::ApplyAdvancedVideo: return "ApplyAdvancedVideo";
         case MenuAction::Kind::AutoDetectVideo: return "AutoDetectVideo";
         case MenuAction::Kind::ApplyCamera: return "ApplyCamera";
+        case MenuAction::Kind::CheckMod: return "CheckMod";
+        case MenuAction::Kind::LaunchMod: return "LaunchMod";
     }
     return "?";
 }
@@ -266,9 +268,26 @@ BEGIN
     PUSHBUTTON      "TEXT_BUTTON_DEFAULTS",IDC_DEFAULTS_BUTTON,200,398,160,24
     PUSHBUTTON      "TEXT_BUTTON_ACCEPT",IDC_BUTTON_ACCEPT,386,398,160,24
 END
+IDD_PORT_MODS_DIALOG DIALOGEX 0, 0, 760, 440
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP
+CAPTION "Dialog"
+FONT 8, "MS Sans Serif", 0, 0, 0x0
+BEGIN
+    LTEXT           "Mods",IDC_STATIC_MEDIUM,17,10,483,17
+    LTEXT           "Installed",IDC_PORT_MODS_LIST_TEXT,16,40,320,16
+    LISTBOX         IDC_PORT_MODS_LIST,16,58,320,326,LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Load report",IDC_PORT_MODS_REPORT_TEXT,350,40,394,16
+    LISTBOX         IDC_PORT_MODS_REPORT,350,58,394,326,LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "TEXT_BUTTON_BACK",IDC_CANCEL_BUTTON,14,398,160,24
+    PUSHBUTTON      "Launch",IDC_PORT_MODS_LAUNCH,586,398,160,24
+END
 )RC";
 
 const char* const kPortDialogExtensionsRc = R"RC(
+IDD_MAIN_MENU_DIALOG DIALOGEX 0, 0, 512, 1024
+BEGIN
+    PUSHBUTTON      "Mods",IDC_PORT_MAIN_MENU_MODS,265,742,236,22
+END
 IDD_VIDEO_OPTIONS_DIALOG DIALOGEX 0, 0, 570, 454
 BEGIN
     LTEXT           "V-Sync Mode",IDC_PORT_VSYNC_MODE_TEXT,357,142,188,18
@@ -752,6 +771,53 @@ void FrontEnd::fill_skirmish(GuiDialog& d) {
     fill_skirmish_colours(d);
 }
 
+// modc t08: the mod picker. The rows come from the host when the dialog opens; the selection starts on the row selected
+// last, else the active row, else row 0 (the base game). Reports arrive through set_mod_report and are kept per row id.
+void FrontEnd::fill_mods(GuiDialog& d) {
+    mods_ = p_.mods ? p_.mods() : std::vector<ModPickerEntry>{};
+    d.set_text("IDC_STATIC_MEDIUM", gui_->port_text(U"Mods"));
+    d.set_text("IDC_PORT_MODS_LIST_TEXT", gui_->port_text(U"Installed"));
+    d.set_text("IDC_PORT_MODS_REPORT_TEXT", gui_->port_text(U"Load report"));
+    d.set_text("IDC_PORT_MODS_LAUNCH", gui_->port_text(U"Launch"));
+    std::vector<std::u32string> rows;
+    int32_t sel = -1, active = -1;
+    for (size_t i = 0; i < mods_.size(); ++i) {
+        rows.push_back(mods_[i].active ? mods_[i].label + U"  (running)" : mods_[i].label);
+        if (sel < 0 && mod_chosen_ && mods_[i].id == mod_selected_) sel = static_cast<int32_t>(i);
+        if (active < 0 && mods_[i].active) active = static_cast<int32_t>(i);
+    }
+    if (sel < 0) sel = active >= 0 ? active : (mods_.empty() ? -1 : 0);
+    mod_selected_ = sel >= 0 ? mods_[static_cast<size_t>(sel)].id : std::string();
+    mod_chosen_ = sel >= 0;
+    d.set_items("IDC_PORT_MODS_LIST", std::move(rows), sel);
+    show_mod_report(d);
+}
+
+void FrontEnd::show_mod_report(GuiDialog& d) {
+    const std::vector<std::u32string>* lines = nullptr;
+    for (const auto& r : mod_reports_)
+        if (r.first == mod_selected_) lines = &r.second;
+    bool listed = false, active = false;
+    for (const ModPickerEntry& m : mods_)
+        if (m.id == mod_selected_) listed = true, active = m.active;
+    std::vector<std::u32string> items = lines ? *lines : std::vector<std::u32string>{gui_->port_text(U"Checking...")};
+    d.set_items("IDC_PORT_MODS_REPORT", std::move(items), -1);
+    d.enable("IDC_PORT_MODS_LAUNCH", lines != nullptr && listed && !active);
+}
+
+void FrontEnd::set_mod_report(std::string_view id, std::vector<std::u32string> lines) {
+    bool stored = false;
+    for (auto& r : mod_reports_)
+        if (r.first == id) {
+            r.second = std::move(lines);
+            stored = true;
+            break;
+        }
+    if (!stored) mod_reports_.emplace_back(std::string(id), std::move(lines));
+    if (gui_ && id == mod_selected_)
+        if (GuiDialog* d = gui_->find(kPortModsDialog)) show_mod_report(*d);
+}
+
 void FrontEnd::fill_saves(GuiDialog& d) {
     saves_ = p_.saves ? p_.saves() : std::vector<SaveGameInfo>{};
     std::vector<std::u32string> items;
@@ -946,6 +1012,10 @@ void FrontEnd::setup(GuiDialog& d) {
     if (iequal(n, kMain)) {
         d.show("IDC_MAIN_MENU_PLAY_DEMO", p_.demo);
         d.show("IDC_MAIN_MENU_SINGLE_PLAYER_GAMES", !p_.demo);
+        // modc t08: the port's Mods button (kPortDialogExtensionsRc) opens the mod picker.
+        const bool mods = p_.mods && gui_->has_dialog(kPortModsDialog);
+        d.show("IDC_PORT_MAIN_MENU_MODS", mods);
+        if (mods) d.set_text("IDC_PORT_MAIN_MENU_MODS", gui_->port_text(U"Mods"));
     } else if (iequal(n, kSingle)) {
         d.show("IDC_DEBUG_LOAD_SKIRMISH_MAP_BUTTON", false);
         d.enable("IDC_NEW_CAMPAIGN_BUTTON", !menu_.story.empty());
@@ -974,6 +1044,8 @@ void FrontEnd::setup(GuiDialog& d) {
         if (port) d.set_text(slot, gui_->port_text(U"Camera and Controls"));
     } else if (is_port_controls(n)) {
         fill_port_controls(d, p_.camera_settings ? p_.camera_settings() : CameraSettings{});
+    } else if (iequal(n, kPortModsDialog)) {
+        fill_mods(d);
     } else if (iequal(n, kAudio)) {
         audio_before_ = p_.audio ? p_.audio() : AudioVolumes{};
         fill_audio(d, audio_before_);
@@ -1085,7 +1157,7 @@ void FrontEnd::on_cancel(const GuiEvent& e, std::vector<MenuAction>& out) {
         out.push_back(act(MenuAction::Kind::ResumeGame));
         return;
     }
-    if (iequal(n, kSingle) || iequal(n, kOptions)) {
+    if (iequal(n, kSingle) || iequal(n, kOptions) || iequal(n, kPortModsDialog)) {
         go(kMain);
         return;
     }
@@ -1104,6 +1176,17 @@ void FrontEnd::on_change(const GuiEvent& e, std::vector<MenuAction>& out) {
     GuiDialog* d = gui_->find(e.dialog);
     if (!d) return;
     const std::string_view n = e.dialog;
+    if (iequal(n, kPortModsDialog)) {  // modc t08: a picker row selected -> its report (cached, else the host checks it)
+        if (e.control == "IDC_PORT_MODS_LIST" && e.kind == GuiEvent::Kind::SelectionChanged && e.value >= 0 &&
+            static_cast<size_t>(e.value) < mods_.size() && mods_[static_cast<size_t>(e.value)].id != mod_selected_) {
+            mod_selected_ = mods_[static_cast<size_t>(e.value)].id;
+            show_mod_report(*d);
+            MenuAction a = act(MenuAction::Kind::CheckMod);
+            a.mod = mod_selected_;
+            out.push_back(std::move(a));
+        }
+        return;
+    }
     if (iequal(n, kCampaignSelect)) fill_campaign_select(*d);
     else if (iequal(n, kCustomStaging) && e.control == "IDC_STAGING_MAP_LIST") fill_custom_staging(*d);
     else if (iequal(n, kSkirmish) && e.kind == GuiEvent::Kind::SelectionChanged) {
@@ -1166,7 +1249,14 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
         else if (is("IDC_MAIN_MENU_MULTIPLAYER")) out.push_back(act(MenuAction::Kind::OpenMultiplayer));
         else if (is("IDC_LOAD_GAME_MAIN")) push(kLoad);
         else if (is("IDC_OPTIONS")) go(kOptions);
-        else if (is("IDC_MENU_CREDITS")) out.push_back(act(MenuAction::Kind::ShowCredits));
+        else if (is("IDC_PORT_MAIN_MENU_MODS")) {  // modc t08
+            go(kPortModsDialog);
+            if (gui_->find(kPortModsDialog)) {
+                MenuAction a = act(MenuAction::Kind::CheckMod);
+                a.mod = mod_selected_;
+                out.push_back(std::move(a));
+            }
+        } else if (is("IDC_MENU_CREDITS")) out.push_back(act(MenuAction::Kind::ShowCredits));
         else if (is("IDC_MAIN_MENU_EXIT2")) {
             quit_action_ = "exit";
             push(kQuit);
@@ -1365,6 +1455,15 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             keys_work_.reset_defaults();
             keys_dirty_ = true;
             fill_keyboard(*d);
+        }
+    } else if (iequal(n, kPortModsDialog) && d) {  // modc t08
+        const GuiControl* launch = d->get("IDC_PORT_MODS_LAUNCH");
+        if (is("IDC_CANCEL_BUTTON")) {
+            go(kMain);
+        } else if (is("IDC_PORT_MODS_LAUNCH") && launch && launch->enabled) {
+            MenuAction a = act(MenuAction::Kind::LaunchMod);
+            a.mod = mod_selected_;
+            out.push_back(std::move(a));
         }
     } else if (is_port_controls(n) && d) {  // [port: Gabriel]
         if (is("IDC_BUTTON_ACCEPT")) {

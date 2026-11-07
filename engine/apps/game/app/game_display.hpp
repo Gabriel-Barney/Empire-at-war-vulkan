@@ -154,4 +154,9 @@ private:
 // host hides it while the game draws its own cursor (no hardware mouse).
 void set_os_cursor_hidden(bool hidden);
 
+// modc t08: starts this executable again with the command-line arguments `args` (argv[1..] already quoted: the mod
+// picker's relaunch with other MODPATH= / STEAMMOD= arguments), in the current working folder. False + err when the
+// process could not be created; the caller then keeps running.
+bool relaunch_self(const std::string& args, std::string* err = nullptr);
+
 }  // namespace alamo::game

@@ -12,6 +12,7 @@
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <span>
@@ -31,6 +32,8 @@
 #include "alamo/game/game_data.hpp"
 #include "alamo/game/game_session.hpp"
 #include "alamo/game/hud_feeds.hpp"
+#include "alamo/game/mod_check.hpp"
+#include "alamo/game/mod_picker.hpp"
 #include "alamo/game/radar_feed.hpp"
 #include "alamo/game/save_games.hpp"
 #include "alamo/game/story_ui.hpp"
@@ -129,6 +132,7 @@ inline std::u32string printable(std::u32string s) {
 struct Options {
     std::string game, cache_dir, png_dir, smoke;
     std::vector<std::string> game_args;
+    std::vector<std::string> argv;  // modc t08: argv[1..] as given (the mod picker relaunches with these, its mod args replaced)
     std::vector<std::string> movies;  // --movie NAME: Bink movies played before the main menu (Esc / click skips)
     bool intro = true;                // default movies: the LucasArts / Petroglyph logos (--no-intro: none)
     bool attract = false;             // --attract: start the main-menu attract demo at once (OI host)
@@ -660,6 +664,20 @@ public:
     void shutdown();
     void frame();
     void handle_menu_actions(const std::vector<ui::MenuAction>& acts);
+    // modc t08: the mod picker (app_mods.cpp). init_mod_picker lists the installed mods and sets MenuProviders::mods;
+    // check_mod runs the load report of a row on a worker thread (one at a time; the newest request waits), poll_mod_check
+    // hands a finished one to the dialog; launch_mod restarts the exe with the row's mod arguments and quits.
+    void init_mod_picker(ui::MenuProviders& mp);
+    void check_mod(const std::string& id);
+    void poll_mod_check();
+    void launch_mod(const std::string& id);
+    std::string game_root_;                          // the FoC folder the data was loaded from
+    std::vector<std::string> workshop_libraries_;    // Steam library folders (vfs::find_steam_libraries)
+    std::vector<game::InstalledMod> installed_mods_;
+    std::future<game::ModCheckReport> mod_check_;    // the running check (valid() while one runs)
+    std::string mod_check_id_, mod_check_next_;      // its row id; the row asked for while it ran
+    bool mod_check_queued_ = false;
+    std::map<std::string, std::vector<std::string>> mod_launch_;  // checked rows: the arguments that start them
     bool start_session(const SessionSpec& spec);
     void session_started(const std::vector<std::string>& diag);  // the UI / presentation reset for a new session_
     void end_session();

@@ -1035,9 +1035,9 @@ void test_real(Gpu& g, const std::string& src_dir) {
         hf.time = 1.0;
         heroes.build(hf);
         const ui::BlackMarketItem bm_items[3] = {
-            {401, "i_button_EV_TIE_Defender.tga", U"TIE Defender plans", U"Unlocks the TIE Defender at your shipyards.", 3000, true, 1},
-            {402, "i_button_broadside.tga", U"Hull plating", U"", 1200, true, 1},
-            {403, "i_button_victory_class.tga", U"Ion cannon upgrade", U"", 2500, false, -1}};
+            {401, "i_button_EV_TIE_Defender.tga", U"TIE Defender plans", U"Unlocks the TIE Defender at your shipyards.", 3000, true, "i_button_e_tech_upgrade_"},
+            {402, "i_button_broadside.tga", U"Hull plating", U"", 1200, true, "i_button_e_tech_upgrade_"},
+            {403, "i_button_victory_class.tga", U"Ion cannon upgrade", U"", 2500, false, ""}};
         ui::BlackMarketFrame bf;
         bf.open = true;
         bf.planet = 1001;

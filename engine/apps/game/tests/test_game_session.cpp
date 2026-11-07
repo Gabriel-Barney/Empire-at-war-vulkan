@@ -130,6 +130,26 @@ const char* kFactions = R"(<Factions>
 </Factions>
 )";
 
+// modc t18: the DEMO_CONTROLLER marker's Lua_Script for the attract tests. A test stand-in written here (the shipped
+// Demo_Attract_Controller.lua needs the PG library scripts; real data runs it in attract_demo_real_test): the same engine
+// calls in the same order - FogOfWar.Reveal_All for the three players (results kept, as the shipped script keeps them),
+// then every unit of each player Attack_Moves to a GameRandom(1, 3) zone of its side.
+const char* kDemoControllerLua = R"(
+function Base_Definitions() ServiceRate = 0.1 Moves = 0 end
+function main()
+  local sides = { {"Empire", "STORY_TRIGGER_ZONE_02"}, {"Rebel", "STORY_TRIGGER_ZONE_00"}, {"Underworld", "STORY_TRIGGER_ZONE_01"} }
+  Reveals = {}
+  for i, side in ipairs(sides) do Reveals[i] = FogOfWar.Reveal_All(Find_Player(side[1])) end
+  for i, side in ipairs(sides) do
+    local zones = Find_All_Objects_Of_Type(side[2])
+    for k, unit in pairs(Find_All_Objects_Of_Type(Find_Player(side[1]))) do
+      unit.Attack_Move(zones[GameRandom(1, 3)].Get_Position())
+      Moves = Moves + 1
+    end
+  end
+end
+)";
+
 void write_file(const fs::path& p, const std::string& s) {
     fs::create_directories(p.parent_path());
     std::ofstream(p, std::ios::binary) << s;
@@ -142,6 +162,7 @@ std::string make_data() {
     const fs::path x = root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>GSTypes.xml</File></GameObjectFiles>\n");
     write_file(x / "GSTypes.xml", kTypes);
+    write_file(root / "Data/Scripts/GameObject/Demo_Attract_Controller.lua", kDemoControllerLua);
     write_file(x / "HardPointDataFiles.xml", "<Hard_Point_Files><File>GSHardPoints.xml</File></Hard_Point_Files>\n");
     write_file(x / "GSHardPoints.xml", kHardpoints);
     write_file(x / "FactionFiles.xml", "<FactionFiles><File>GSFactions.xml</File></FactionFiles>\n");
@@ -1031,7 +1052,8 @@ void rate_lock_test(const game::GameData& data, const game::SessionSpec& spec) {
     CHECK(combined_diff == 0 && parity_diff == kTo - kFrom && outside_same);
 }
 
-// OI host: the attract demo's Demo_Attract_Controller (GameSession::attract_demo_script) on a map that places one. Factions
+// OI host: the attract demo's DEMO_CONTROLLER (its Lua_Script through the object-script host, modc t18) on a map that
+// places one. Factions
 // in order Empire 0, Rebel 1, Neutral 2, Underworld 3 (= map owners = players); the controller and three zones of each type
 // owned by Neutral, two Empire frigates, two Rebel corvettes, one Underworld frigate. Once the battle runs: the three
 // players' grids are Reveal_All, every unit got its Attack_Move (none excluded, three zones each: no early stop) and moved
@@ -1076,20 +1098,28 @@ void attract_demo_script_test(const game::GameData& data, const game::SessionSpe
         CHECK(s.start(&diag));
         for (const std::string& d : diag) std::printf("  attract script diag: %s\n", d.c_str());
         if (!s.started()) return;
+        const sim::ObjectScriptHost* scripts = s.host().object_scripts();
+        CHECK(scripts != nullptr);  // on in the attract demo (modc t18)
+        if (!scripts) return;
+        const auto revealed = [&s] {
+            const sim::TacticalBattle* b = s.battle();
+            const tactical::fog::FogOfWar* fog = b ? b->fog() : nullptr;
+            for (const int32_t p : {0, 1, 3})
+                if (!fog || !fog->grid(p) || !fog->grid(p)->reveal_all_active()) return false;
+            return true;
+        };
         uint64_t t = 0;
-        while (t < 600 && !s.attract_controller_ran()) {
+        while (t < 600 && !revealed()) {
             s.tick();
             ++t;
         }
-        CHECK(s.attract_controller_ran() && s.attract_moves() == 5);
+        CHECK(revealed());  // the controller's FogOfWar.Reveal_All for the three players
+        CHECK(scripts->stats().attached == 1 && scripts->stats().pumps >= 1 && scripts->error_total() == 0);
+        for (const std::string& m : scripts->messages()) std::printf("  attract script: %s\n", m.c_str());
         const sim::TacticalBattle* b = s.battle();
         CHECK(b != nullptr);
         if (!b) return;
         CHECK(!s.view_draws_fog());  // the cinematic camera hides the FOW render even once the controller revealed the map
-        const tactical::fog::FogOfWar* fog = b->fog();
-        CHECK(fog != nullptr);
-        for (const int32_t p : {0, 1, 3})
-            CHECK(fog && fog->grid(p) && fog->grid(p)->reveal_all_active());
         // Each unit heads for its side's zone column / row: 200 ticks later every one has moved towards it.
         std::vector<std::pair<objects::ObjectId, Vec3>> start;
         const objects::ObjectStore& st = s.host().modes().top_tactical()->primary();
@@ -1105,8 +1135,8 @@ void attract_demo_script_test(const game::GameData& data, const game::SessionSpe
             const float before = o == 0 ? p0.x : o == 1 ? -p0.x : -p0.y, after = o == 0 ? p1.x : o == 1 ? -p1.x : -p1.y;
             if (after < before - 50.0f) ++closer;
         }
-        std::printf("attract script (%d workers): controller ran at tick %" PRIu64 ", %u moves, %u of %zu units closer to their zones\n",
-                    workers, t, s.attract_moves(), closer, start.size());
+        std::printf("attract script (%d workers): controller ran at tick %" PRIu64 ", %u of %zu units closer to their zones\n",
+                    workers, t, closer, start.size());
         CHECK(closer > 0);
         out = s.host().crc_log();
     };
@@ -1140,7 +1170,9 @@ void attract_session_test(const game::GameData& data, const game::SessionSpec& b
             s.tick();
             ++t;
         }
-        CHECK(s.skirmish_over() && !s.attract_controller_ran() && s.attract_moves() == 0);  // no DEMO_CONTROLLER on this map
+        CHECK(s.skirmish_over());
+        // No DEMO_CONTROLLER (the only scripted type of the test data) on this map: nothing attaches (modc t18).
+        CHECK(s.host().object_scripts() && s.host().object_scripts()->stats().attached == 0);
         // Traced rule (MAIN_MENU_BACKGROUND.md §4a): the demo view never draws fog (cinematic camera clears the FOW render
         // option), yet the demo's sim keeps its fog grids for the AI and targeting (presentation only).
         CHECK(!s.view_draws_fog());
@@ -1269,6 +1301,80 @@ void attract_camera_pure_test() {
         const float y1 = game::demo_shot_yaw_deg(y0, 1.0f, 0.0f, 0.0f, 0.1f, tune);
         CHECK(std::fabs(game::demo_wrap_deg(y1 - y0)) <= tune.max_turn_deg_per_s * 0.1f + 1e-3f);
     }
+}
+
+// modc t18 on real data (ALAMO_FOC_DATA, else skipped): Demo_Attract_Geonosis, the one demo map that places a
+// DEMO_CONTROLLER (MAIN_MENU_BACKGROUND.md §4), runs the shipped Demo_Attract_Controller.lua through the object-script
+// host: the controller gets its script, State_Init reveals the map for the Empire, Rebel and Underworld players and the
+// script reports no error; a 0-worker run matches a 2-worker one.
+void attract_demo_real_test() {
+    const char* foc = std::getenv("ALAMO_FOC_DATA");
+    if (!foc || !*foc) {
+        std::printf("attract controller (real data): ALAMO_FOC_DATA not set: skipped\n");
+        return;
+    }
+    game::GameData data;
+    std::string err;
+    if (!game::load_game_data(foc, {}, data, &err)) {
+        std::printf("attract controller (real data): load failed: %s\n", err.c_str());
+        CHECK(false);
+        return;
+    }
+    game::SessionSpec spec;
+    spec.kind = game::SessionKind::Skirmish;
+    spec.attract = true;
+    spec.seed = 1;
+    spec.skirmish_map = "Demo_Attract_Geonosis";
+    spec.battle_max_frames = 3000;
+    const objects::TypeIndex controller = data.types.raw().find("DEMO_CONTROLLER");
+    CHECK(controller != objects::kNone);
+    std::vector<int32_t> players;  // the script's Find_Player names: player index = faction index in the demo
+    for (const char* f : {"Empire", "Rebel", "Underworld"}) players.push_back(static_cast<int32_t>(data.rules.find_faction(f)));
+    auto run = [&](int32_t workers, CrcLog& out) {
+        jobs::JobSystem js(jobs::JobSystemConfig{workers});
+        game::GameSession s(data, js, spec);
+        std::vector<std::string> diag;
+        CHECK(s.start(&diag));
+        for (const std::string& d : diag) std::printf("  attract controller diag: %s\n", d.c_str());
+        if (!s.started()) return;
+        const sim::ObjectScriptHost* scripts = s.host().object_scripts();
+        CHECK(scripts != nullptr);
+        if (!scripts) return;
+        const auto revealed = [&] {
+            const sim::TacticalBattle* b = s.battle();
+            const tactical::fog::FogOfWar* fog = b ? b->fog() : nullptr;
+            for (const int32_t p : players)
+                if (!fog || p < 0 || !fog->grid(p) || !fog->grid(p)->reveal_all_active()) return false;
+            return true;
+        };
+        uint64_t t = 0;
+        while (t < 900 && !revealed() && !s.skirmish_over()) {
+            s.tick();
+            ++t;
+        }
+        bool scripted = false;
+        if (const sim::TacticalMode* tm = s.host().modes().top_tactical())
+            for (const objects::ObjectHandle h : tm->primary().objects_newest_first())
+                if (tm->primary().type(h) == controller && scripts->has_script(tm->primary(), h)) scripted = true;
+        uint64_t controller_errors = 0;
+        for (const auto& [text, n] : scripts->error_counts()) {
+            std::printf("  attract controller (real data, %d workers): script error x%" PRIu64 ": %s\n", workers, n, text.c_str());
+            if (text.find("Demo_Attract_Controller") != std::string::npos || text.find("DEMO_ATTRACT_CONTROLLER") != std::string::npos)
+                controller_errors += n;
+        }
+        std::printf("attract controller (real data, %d workers): revealed at tick %" PRIu64 ", controller scripted %d, %" PRIu64
+                    " live scripts, %" PRIu64 " pumps\n",
+                    workers, t, scripted ? 1 : 0, static_cast<uint64_t>(scripts->live()), scripts->stats().pumps);
+        CHECK(revealed() && scripted && controller_errors == 0);
+        for (int i = 0; i < 300 && s.in_battle(); ++i) s.tick();
+        out = s.host().crc_log();
+    };
+    CrcLog a, b;
+    run(2, a);
+    run(0, b);
+    const CrcDivergence d = first_divergence(a, b);
+    std::printf("attract controller (real data) replay (0 vs 2 workers): %s\n", d.message.c_str());
+    CHECK(!d.diverged && a.records.size() == b.records.size());
 }
 
 // The same camera on the real demo session (ALAMO_FOC_DATA, Demo_Attract_Kamino as the game starts it): a virtual camera (30 Hz,
@@ -2093,6 +2199,7 @@ int main() {
         attract_camera_pure_test();
         attract_rec_test();
         attract_camera_session_test();
+        attract_demo_real_test();
         // N1 / t09: saved games and GameSession save / load.
         save_files_test();
         save_load_test(data, spec);

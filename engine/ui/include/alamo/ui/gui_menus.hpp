@@ -36,6 +36,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "alamo/ui/gui_dialog.hpp"
@@ -194,8 +195,12 @@ inline constexpr float kGalacticFovMinDeg = 15.0f, kGalacticFovMaxDeg = 60.0f, k
 // [port: Gabriel] the port's own dialog IDD_PORT_CAMERA_CONTROLS_DIALOG (FOV sliders, key capture for Pause and the
 // camera yaw / pitch / roll hotkey slots, queue-modifier combo). Merge it into the script after GUIDialogs.rc
 // (DialogScript::merge); the options menus then show it in the slot of the hidden Mods / Network option.
+// modc t08: the same script holds IDD_PORT_MODS_DIALOG, the mod picker (installed mods left, the selected one's load
+// report right, Back / Launch), opened by the port's IDC_PORT_MAIN_MENU_MODS button that kPortDialogExtensionsRc adds to
+// the main menu under Exit (shown when MenuProviders::mods is set and the dialog is merged).
 extern const char* const kPortDialogsRc;
 inline constexpr const char* kPortControlsDialog = "IDD_PORT_CAMERA_CONTROLS_DIALOG";
+inline constexpr const char* kPortModsDialog = "IDD_PORT_MODS_DIALOG";
 // [port: Gabriel] controls the port adds to shipped dialogs: IDD_VIDEO_OPTIONS_DIALOG gets the V-sync mode combo
 // (IDC_PORT_VSYNC_MODE), the frame rate cap combo (IDC_PORT_FRAME_CAP), a live 0..100 value beside the Gamma slider
 // (IDC_PORT_GAMMA_VALUE; the shipped Low / Max captions only name the slider's ends) and a display line
@@ -266,9 +271,13 @@ struct MenuAction {
         ApplyAdvancedVideo,  // advanced
         AutoDetectVideo,     // Auto detect on the video / advanced video dialogs
         ApplyCamera,         // [port: Gabriel] camera (FOVs, queue modifier); hotkeys changed too -> KeybindingsChanged
+        // modc t08 (IDD_PORT_MODS_DIALOG), appended:
+        CheckMod,   // mod: the picker row selected (ModPickerEntry::id; "" = the base game) wants its load report
+        LaunchMod,  // mod: restart with that mod (the host builds the MODPATH= / STEAMMOD= arguments)
     };
     Kind kind = Kind::ResumeGame;
     std::string campaign, faction, map, save;
+    std::string mod;  // CheckMod / LaunchMod
     std::vector<std::string> factions;
     // StartSkirmish (p4uia t02): the colour index (0..8, a GameConstants MP_Color_* entry) of each player, in player order.
     std::vector<int32_t> colors;
@@ -281,6 +290,13 @@ struct MenuAction {
 };
 const char* menu_action_name(MenuAction::Kind k);
 
+// modc t08: one row of the mod picker (IDD_PORT_MODS_DIALOG). The host lists the base game first (id "") and every
+// installed mod (alamo_game: game::list_installed_mods).
+struct ModPickerEntry {
+    std::string id;         // what CheckMod / LaunchMod report ("" = the base game, no mod)
+    std::u32string label;   // the row text
+    bool active = false;    // the data loaded now (the row is marked; Launch is off for it)
+};
 struct SkirmishFaction {
     std::string name;     // Factions.xml Name (what StartSkirmish reports)
     std::string text_id;  // Text_ID ("" = the TEXT_FACTION_<NAME> guess, then the name)
@@ -308,6 +324,8 @@ struct MenuProviders {
     // non-neutral factions in FactionFiles.xml order, each with its Text_ID); empty = the combos stay empty and the
     // StartSkirmish action names no faction (the host's default_skirmish_faction).
     std::vector<SkirmishFaction> skirmish_factions;
+    // modc t08: the mod picker's rows; null = no Mods button on the main menu.
+    std::function<std::vector<ModPickerEntry>()> mods;
     bool demo = false;               // show IDC_MAIN_MENU_PLAY_DEMO instead of Single Player
 };
 
@@ -353,6 +371,11 @@ public:
     bool skirmish_space_type() const { return space_type_; }
     // p4uia t01: the colour index shown in skirmish slot `slot` (0..7), -1 when the slot is not shown.
     int32_t skirmish_colour(int32_t slot) const;
+    // modc t08: the load report of picker row `id` (lines as the host formats them). Kept per id; shown when that row is
+    // selected, and Launch is enabled once the selected row has one (never for the active row).
+    void set_mod_report(std::string_view id, std::vector<std::u32string> lines);
+    // The picker row selected now ("" = the base game or no picker open).
+    const std::string& selected_mod() const { return mod_selected_; }
 
 private:
     void go(std::string_view dialog);    // replace the top dialog
@@ -380,6 +403,8 @@ private:
     CameraSettings read_port_controls(const GuiDialog& d) const;
     void fill_gameplay(GuiDialog& d, const GameplaySettings& g);
     void fill_keyboard(GuiDialog& d);
+    void fill_mods(GuiDialog& d);         // modc t08: rows from MenuProviders::mods, the selected row's report
+    void show_mod_report(GuiDialog& d);   // the report list and Launch state of mod_selected_
     AudioVolumes read_audio(const GuiDialog& d) const;
     GameplaySettings read_gameplay(const GuiDialog& d) const;
     int32_t difficulty_of(const GuiDialog& d) const;
@@ -414,6 +439,10 @@ private:
     double res_deadline_ = 0.0, now_ = 0.0;
     int32_t res_shown_ = -1;    // seconds last written into the countdown line
     VideoSettings res_keep_, res_revert_;
+    std::vector<ModPickerEntry> mods_;  // modc t08: the picker's rows as opened
+    std::string mod_selected_;
+    bool mod_chosen_ = false;  // mod_selected_ names a row (set by the first fill; the base row's id is "")
+    std::vector<std::pair<std::string, std::vector<std::u32string>>> mod_reports_;  // per id, in arrival order
 };
 
 }  // namespace alamo::ui

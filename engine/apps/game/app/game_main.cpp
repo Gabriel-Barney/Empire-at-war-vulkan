@@ -27,6 +27,7 @@ bool App::init() {
         std::fprintf(stderr, "alamo_game needs --game <corruption dir> or ALAMO_FOC_DATA\n");
         return false;
     }
+    game_root_ = root;
     const auto t0 = Clock::now();
     std::string err;
     if (!load_game_data(root, opt_.game_args, data_, &err)) {
@@ -213,6 +214,7 @@ bool App::init() {
     };
     mp.save_exists = [this](const std::string& name) { return game::save_exists(saves_dir_, name); };
     mp.skirmish_maps = [map_rows] { return map_rows; };
+    if (!opt_.bench.active()) init_mod_picker(mp);  // modc t08: the Mods button (scripted runs open it, never Launch)
     // modc t20: the staging faction list from the data (Is_Playable, non-neutral, FactionFiles.xml order), not built-in names.
     for (const galactic::FactionRules& f : data_.rules.factions)
         if (f.is_playable && !f.is_neutral) mp.skirmish_factions.push_back({f.name, f.text_id});
@@ -420,6 +422,7 @@ int main(int argc, char** argv) {
     enable_dpi_awareness();  // before any window: sizes and the video modes in physical pixels
     Options opt;
     const std::vector<std::string> args(argv, argv + argc);
+    opt.argv.assign(args.begin() + (argc > 0 ? 1 : 0), args.end());
     {  // bm2: --bench-scenario / --bench-make FILE first; the flags below override what the file sets
         std::string serr;
         if (load_bench_scenario_arg(args, opt.bench, &serr) < 0) {

@@ -732,6 +732,16 @@ void CampaignBattles::push_battle(SimHost& host) {
 #ifdef ALAMO_SIM_HAVE_FOG
     battle_->set_fog_globals(fog_active_, fog_render_);  // fog: the original's global flag survives battles
 #endif
+#if defined(ALAMO_SIM_HAVE_STORY) && defined(ALAMO_LUA_PLAYERS)
+    // modc t18 (OBJECT_SCRIPTS §1.3): the map's objects attach their scripts while setup spawns them, and the attach runs
+    // Base_Definitions at once - the shipped Demo_Attract_Controller.lua calls Find_Player there, as the players exist in
+    // the original by then - so the store's player world is bound before the spawn (story_begin binds it again together
+    // with the object bridge). Object-script sessions only (off for base FoC games: no golden moves).
+    if (ObjectScriptHost* scripts = host.object_scripts()) {
+        StorySession* s = host.story();
+        scripts->set_player_world(m.primary(), s ? s->player_world() : host.object_script_players());
+    }
+#endif
     battle_->setup(static_cast<TacticalMode&>(m), std::move(pending_map_), host.random().synced(), host.players(),
                    host.parallel_for());
     pending_map_ = terrain::MapData{};

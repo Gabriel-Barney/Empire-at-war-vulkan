@@ -410,4 +410,34 @@ void apply_auto_video(VideoProfile& p, const AutoVideoChoice& c) {
     sync_detail(p);
 }
 
+// modc t08: CreateProcessW on GetModuleFileNameW; `args` is already quoted (mod_picker.hpp windows_command_line). The
+// arguments came from main's narrow argv / the file system's narrow paths: the ANSI code page.
+bool relaunch_self(const std::string& args, std::string* err) {
+    std::wstring exe(32768, L'\0');
+    const DWORD n = GetModuleFileNameW(nullptr, exe.data(), static_cast<DWORD>(exe.size()));
+    if (n == 0 || n >= exe.size()) {
+        if (err) *err = "GetModuleFileNameW failed";
+        return false;
+    }
+    exe.resize(n);
+    std::string narrow_exe(n * 4 + 1, '\0');
+    const int en = WideCharToMultiByte(CP_ACP, 0, exe.c_str(), static_cast<int>(n), narrow_exe.data(), static_cast<int>(narrow_exe.size()),
+                                       nullptr, nullptr);
+    narrow_exe.resize(static_cast<size_t>(std::max(en, 0)));
+    const std::string line = "\"" + narrow_exe + "\"" + (args.empty() ? std::string() : " " + args);
+    const int wn = MultiByteToWideChar(CP_ACP, 0, line.c_str(), static_cast<int>(line.size()), nullptr, 0);
+    std::wstring wline(static_cast<size_t>(std::max(wn, 0)) + 1, L'\0');
+    if (wn > 0) MultiByteToWideChar(CP_ACP, 0, line.c_str(), static_cast<int>(line.size()), wline.data(), wn);
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(exe.c_str(), wline.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+        if (err) *err = "CreateProcessW failed (error " + std::to_string(GetLastError()) + ")";
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
+}
+
 }  // namespace alamo::game

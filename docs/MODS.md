@@ -290,6 +290,30 @@ Version 2 (modc t12, t15, t16, 2026-11-06): `run_errors` no longer holds the ses
 `session_errors`), so `warnings` no longer counts them; `unknown_xml_tags` covers the other databases and has
 `database`; `submod` is new; a campaign without planets is a warning unless no campaign has planets (then one error).
 
+### 5.2 The mod picker in the game (modc t08)
+
+`alamo_game`'s main menu has a **Mods** button (port dialog `IDD_PORT_MODS_DIALOG`, `engine/ui/src/gui_menus.cpp`;
+host side `engine/apps/game/app/app_mods.cpp`, data side `alamo/game/mod_picker.hpp`). It is shown in live play only
+(not in smoke scripts that do not ask for it, not in benchmark runs).
+
+- **Rows**: "Base game (no mod)", then every Steam workshop item (the library folders of §3.1, numeric id order, first
+  library wins), then every `<FoC folder>\Mods\<Name>` folder (name order); a folder needs a `Data` folder. The label is
+  the `name` of the mod's `modinfo.json` (top-level key; else the folder name), the id only when two mods share a name,
+  and where it is installed. The row of the running mod (the first `MODPATH=` / `STEAMMOD=` of this run) says "(running)".
+- **Report**: opening the picker or selecting a row runs `check_mod_data` (the §5 report) for that row on a worker thread,
+  one at a time (the newest request waits); the pane shows "Checking..." until it is done, then a summary: loads or not
+  (error / warning counts), content counts, campaigns without planets, missing files (and how many the mod names), the Lua
+  compile / main-chunk counts, unbound engine calls, the submod hint (parent, how many missing files it has, named in
+  modinfo.json) and the arguments it starts with. Reports are kept per row for the rest of the run.
+- **Launch** (enabled once the selected row has a report and is not the running one): this executable starts again with
+  the same arguments, its `MODPATH=` / `STEAMMOD=` arguments replaced by the row's (a likely submod stacked on its parent:
+  `submod.stacked_args`), and this process quits. [port] The data, text and GUI load once per process, and the original
+  takes mods only on its command line, so switching needs a new process.
+
+Tests: `alamo_game_mod_picker_tests` (rows, modinfo names, arguments, the summary on `testdata/mod_fixture`),
+`alamo_ui_screens_tests` (the dialog flow), the skirmish smoke (opens the picker after the main menu, waits for the base
+game's report, `game_mod_picker.png`).
+
 ## 6. Port rules that apply only when a mod layer is loaded
 
 Each is keyed on "a mod layer is loaded", never on which mod (§1 rule 4). With no mod loaded the port behaves as base FoC.
@@ -327,7 +351,7 @@ Each needs either a data-driven replacement or a `docs/re/` citation showing the
 | Load report for any mod folder, machine-readable (§5, §5.1) | modc t05 |
 | Second mod (not Thrawn's Revenge) loads and plays | modc t06 |
 | Synthetic fixture mod in ctest through the real `MODPATH` route | modc t07 |
-| Mod picker in the game UI | modc t08 |
+| Mod picker in the game UI (§5.2) | modc t08 |
 | `STEAMMOD=` resolver from the Steam library folders, no Steam API (§3.1) | modc t10 |
 | Mod-only effects: what the renderer does, issue record, `alamo_effect_audit` (§4.1) | modc t11 |
 | Shader issues in `alamo_mod_check` and `alamo.mod_report` | modc t21 |

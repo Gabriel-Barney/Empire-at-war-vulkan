@@ -595,6 +595,68 @@ void test_controls() {
         CHECK(keys.binding(hk::kPause).key == 0x78 && binds.binding(Action::Pause, 0).key == 0x78 && binds.queue_mods() == kModCtrl);
         CHECK(env.gui.find(kPortControlsDialog) == nullptr);
     }
+    // modc t08: the mod picker. The port's main-menu Mods button (shown only with a mods provider), the rows (the active one
+    // marked and selected first), a selection asks the host for the row's report (CheckMod), the report arriving enables
+    // Launch (not for the active row), Launch reports the row, Back / Esc return to the main menu.
+    {
+        Env env;
+        CHECK(env.script.merge(kPortDialogsRc) && env.script.extend(kPortDialogExtensionsRc) && env.gui.has_dialog(kPortModsDialog));
+        {  // no provider: no button
+            FrontEnd fe0;
+            fe0.init(env.gui, {}, MenuProviders{});
+            fe0.show_main_menu();
+            const GuiDialog* m = env.gui.find("IDD_MAIN_MENU_DIALOG");
+            CHECK(m && m->get("IDC_PORT_MAIN_MENU_MODS") && !m->get("IDC_PORT_MAIN_MENU_MODS")->visible);
+        }
+        FrontEnd fe;
+        MenuProviders p;
+        p.mods = [] {
+            return std::vector<ModPickerEntry>{{"", U"Base game (no mod)", false}, {"STEAMMOD=900000001", U"Workshop mod", true},
+                                               {"MODPATH=Mods\\Local", U"Local mod", false}};
+        };
+        fe.init(env.gui, {}, p);
+        fe.show_main_menu();
+        const GuiDialog* m = env.gui.find("IDD_MAIN_MENU_DIALOG");
+        CHECK(m && m->get("IDC_PORT_MAIN_MENU_MODS") && m->get("IDC_PORT_MAIN_MENU_MODS")->visible);
+        std::vector<MenuAction> acts;
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_MAIN_MENU_DIALOG", "IDC_PORT_MAIN_MENU_MODS")}, InputFrame{}, acts);
+        CHECK(fe.top() == kPortModsDialog);
+        CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::CheckMod && acts[0].mod == "STEAMMOD=900000001");
+        GuiDialog* d = env.gui.find(kPortModsDialog);
+        CHECK(d && d->get("IDC_PORT_MODS_LIST")->items.size() == 3 && d->get("IDC_PORT_MODS_LIST")->selected == 1 &&
+              d->get("IDC_PORT_MODS_LIST")->items[1] == U"Workshop mod  (running)");
+        CHECK(d && d->get("IDC_PORT_MODS_REPORT")->items == std::vector<std::u32string>{U"Checking..."} &&
+              !d->get("IDC_PORT_MODS_LAUNCH")->enabled);
+        fe.set_mod_report("STEAMMOD=900000001", {U"Loads: OK", U"3 campaigns"});
+        CHECK(d && d->get("IDC_PORT_MODS_REPORT")->items.size() == 2 && !d->get("IDC_PORT_MODS_LAUNCH")->enabled);  // active row
+        acts.clear();
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::SelectionChanged, kPortModsDialog, "IDC_PORT_MODS_LIST", 2)}, InputFrame{}, acts);
+        CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::CheckMod && acts[0].mod == "MODPATH=Mods\\Local" &&
+              fe.selected_mod() == "MODPATH=Mods\\Local");
+        CHECK(d && !d->get("IDC_PORT_MODS_LAUNCH")->enabled);
+        fe.set_mod_report("", {U"base"});  // another row's report: kept, not shown
+        CHECK(d && d->get("IDC_PORT_MODS_REPORT")->items == std::vector<std::u32string>{U"Checking..."});
+        acts.clear();
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, kPortModsDialog, "IDC_PORT_MODS_LAUNCH")}, InputFrame{}, acts);
+        CHECK(acts.empty());  // Launch is off until the report is there
+        fe.set_mod_report("MODPATH=Mods\\Local", {U"Loads: OK", U"Submod of X"});
+        CHECK(d && d->get("IDC_PORT_MODS_LAUNCH")->enabled && d->get("IDC_PORT_MODS_REPORT")->items[1] == U"Submod of X");
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, kPortModsDialog, "IDC_PORT_MODS_LAUNCH")}, InputFrame{}, acts);
+        CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::LaunchMod && acts[0].mod == "MODPATH=Mods\\Local");
+        // Back, then the picker again: the row selected last and its kept report; the base row's kept report too.
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, kPortModsDialog, "IDC_CANCEL_BUTTON")}, InputFrame{}, acts);
+        CHECK(fe.top() == "IDD_MAIN_MENU_DIALOG");
+        acts.clear();
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_MAIN_MENU_DIALOG", "IDC_PORT_MAIN_MENU_MODS")}, InputFrame{}, acts);
+        d = env.gui.find(kPortModsDialog);
+        CHECK(d && d->get("IDC_PORT_MODS_LIST")->selected == 2 && d->get("IDC_PORT_MODS_LAUNCH")->enabled);
+        CHECK(acts.size() == 1 && acts[0].mod == "MODPATH=Mods\\Local");
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::SelectionChanged, kPortModsDialog, "IDC_PORT_MODS_LIST", 0)}, InputFrame{}, acts);
+        CHECK(d && d->get("IDC_PORT_MODS_REPORT")->items == std::vector<std::u32string>{U"base"} && d->get("IDC_PORT_MODS_LAUNCH")->enabled);
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Cancel, kPortModsDialog, "")}, InputFrame{}, acts);
+        CHECK(fe.top() == "IDD_MAIN_MENU_DIALOG");
+        CHECK(std::string(menu_action_name(MenuAction::Kind::LaunchMod)) == "LaunchMod");
+    }
     // t36 (QA V6): every way out of Camera and Controls lands on the Options page that opened it, not the pause menu. Real
     // mouse clicks and Esc through the GUI; the pause menu stays underneath.
     {
