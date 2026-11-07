@@ -876,11 +876,14 @@ bool StoryModel::evaluate(uint32_t p, uint32_t e, std::string_view type, const S
     }
     if (type == "STORY_CONQUER_COUNT") return ++st.count >= parse_int(text_at(ep, 0), 1);
     if (type == "STORY_CONSTRUCT_LEVEL") {
+        // A2k t12 (A2K_T07_STORY_LOAD_RE.md §3.1, 0x4543b0 / 0x455db0): Param1 planets; Param3 story enum GROUND = 0 (ground
+        // base), SPACE = 1 (starbase), anything else no category test (absent / unknown value [L]); fires when Param2 <=
+        // the constructed type's Base_Level (unsigned compare). No owner filter; Param4+ ignored.
         if (!list_has(name_list(text_at(ep, 0)), n.planet)) return false;
-        const std::string_view cat = text_at(ep, 2);
-        if (cat == "0" && n.category != 0) return false;
-        if (cat == "1" && n.category != 1) return false;
-        return n.value >= static_cast<double>(parse_int(text_at(ep, 1), 0));
+        const std::string_view cat = trim(text_at(ep, 2));
+        if (iequal(cat, "GROUND") && n.category != 0) return false;
+        if (iequal(cat, "SPACE") && n.category != 1) return false;
+        return static_cast<uint32_t>(parse_int(text_at(ep, 1), 0)) <= static_cast<uint32_t>(static_cast<int32_t>(n.value));
     }
     if (is_enter_family(type)) {
         const std::vector<std::string> planets = name_list(text_at(ep, 0));

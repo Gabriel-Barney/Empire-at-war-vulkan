@@ -5,7 +5,7 @@ code, [M] one inferred link, [L] unverified. No decompiled code is reproduced.
 
 ## Summary for the port
 
-| # | Question | Answer | Port today (A2j t05) |
+| # | Question | Answer | Port before A2k t12 (A2j t05); since 2026-11-07 the port follows the answer |
 |---|---|---|---|
 | 1 | L8 walk order | planets in `Locations` order; for each planet, the `Starting_Forces` entries of that planet in file order [H] | entry order: same result only when the file groups entries by planet in `Locations` order |
 | 2 | company CONSTRUCT | **one** CONSTRUCT, name = the company type; transport and members raise none. A `+0x2018` chained type gets its own CONSTRUCT through the recursive call [H] | company type: matches |

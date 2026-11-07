@@ -48,6 +48,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
@@ -136,7 +137,7 @@ struct ParseError {
 // The equation-literal converter registry (the exe's DatabaseUIntConversionClass registry as the port knows it): the
 // objects::EnumRegistry converters (GameObjectCategoryType, GameObjectPropertiesType, MovementClassType, ...), plus
 // AIGoalCategoryType, DifficultyLevelType (Easy 0, Normal 1, Hard 2) and HardPointType (the short names, value = index).
-// Converter-name lookup ASCII case-insensitive [port; L in the original, A2J_T07_LITERALS §3]; entry names trimmed and
+// Converter-name lookup trimmed and case-sensitive (A2K_T06_RE.md §2) [H]; entry names trimmed and
 // case-insensitive [H]. `bitfield` tells how `text` was split; `value` = the converted value; `names` = the trimmed names /
 // tokens (input case).
 struct EnumLiteral {
@@ -203,7 +204,9 @@ public:
     // Adds one equation (tests, the galactic consumer paths). Returns its index, or kUnresolved on
     // a syntax error / duplicate (first wins).
     uint32_t add(std::string_view name, std::string_view text, LoadReport* report = nullptr);
-    // Resolves every Function_ reference to an equation index. Call after the last add.
+    // Resolves every Function_ reference to an equation index. Call after the last add. A2k t12: a reference to a name
+    // that no add() named fails its equation's build (counted as a parse error, removed from the index); a reference to
+    // a named equation that failed to build stays unresolved (unresolved_functions; evaluates as an error).
     void link(LoadReport* report = nullptr);
 
     uint32_t find(std::string_view name) const;  // kUnresolved if absent
@@ -219,6 +222,7 @@ public:
 private:
     std::vector<Equation> eq_;
     std::unordered_map<std::string, uint32_t> index_;  // upper-cased name -> first definition
+    std::unordered_set<std::string> declared_;         // a2k t12: every upper-cased name added (the Function_ tokens)
     TokenTable tokens_;
     std::shared_ptr<const EnumLiteralTable> literals_;
 };

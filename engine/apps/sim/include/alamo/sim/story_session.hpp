@@ -535,25 +535,25 @@ private:
     std::vector<std::pair<std::string, lua::StoryNotification>> notifications(const StoryTrigger& t) const;
     std::string planet_type_name(uint32_t planet) const;
     void poll(size_t set);
-    // a2j t05: one created object for the load-time CONSTRUCT notifications (starting forces, captured when start() begins).
+    // a2j t05: one created object for the load-time CONSTRUCT notifications (starting forces, captured when start() begins;
+    // a2k t12: in retail L8 order, planet by planet).
     struct LoadConstruct {
-        int32_t player = -1;
         PlanetIndex planet = 0;
         uint32_t type = 0;
-        int32_t level = 0;  // CONSTRUCT_LEVEL value as of the object's creation (starbase level / ground base level)
     };
     std::vector<LoadConstruct> starting_forces() const;
+    int32_t planet_owner(PlanetIndex planet) const;  // a2k t12: the CONSTRUCT filter's owner (kNoPlayer: none)
     // A2i t01 + a2j t05: the load-time story pass at the end of start() (header comment): starting-force CONSTRUCT, then
     // STORY_TECH_LEVEL per player; the stream the load rewards raise is routed after each step.
     void load_pass(const std::vector<LoadConstruct>& forces);
-    // STORY_CONSTRUCT (+ STORY_CONSTRUCT_LEVEL for a starbase / ground structure type) for `type` created by `player` at
-    // `planet` (STORY.md §5, 0x326cd0). level < 0: the planet's current level.
-    void construct_notifications(int32_t player, PlanetIndex planet, uint32_t type, int32_t level,
+    // STORY_CONSTRUCT (+ STORY_CONSTRUCT_LEVEL for a starbase type) for `type` created at `planet`, judged by the planet
+    // owner `owner` (STORY.md §5, 0x326cd0; A2K_T07_STORY_LOAD_RE.md §3, §5).
+    void construct_notifications(int32_t owner, PlanetIndex planet, uint32_t type,
                                  std::vector<std::pair<std::string, lua::StoryNotification>>& out) const;
-    void dispatch_construct(int32_t player, PlanetIndex planet, uint32_t type, int32_t level);  // every plot set, no log
+    void dispatch_construct(PlanetIndex planet, uint32_t type, int32_t owner);  // every plot set, no log
     void route_load_events();               // a2j t05: drain + route the galactic stream inside the load pass
     void collect_all(std::string_view via);  // collect() for every galactic plot set, set order
-    bool loading_ = false;                   // a2j t05: inside load_pass (reward spawns raise CONSTRUCT at once)
+    std::shared_ptr<StorySession*> self_;   // a2k t12: the sim's spawn hook reaches this session through it
     void collect(size_t set, std::string_view via);  // log new fired entries, drain script errors
     void apply_reward(Set& s, const std::string& type, const std::vector<std::string>& params);
     void invade_planet_reward(int32_t plot_player, PlanetIndex planet, const std::string& company);  // a1h t04

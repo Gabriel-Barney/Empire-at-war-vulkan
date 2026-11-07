@@ -652,11 +652,16 @@ public:
     bool planet_restricts(PlanetIndex planet, uint32_t type) const;
     double terrain_effectiveness(PlanetIndex planet, uint32_t type) const;
     // MagicPlan HIJACK_UNIT (AI_GALACTIC_3 §4.3), galactic part:
-    // spawn_unit = step 4, the planet production "create object" (0x400b40) as a finished queue item: no cost, no queue,
-    // no story event; space units join the player's stationary orbit fleet (found or made), ground units the surface,
+    // spawn_unit = step 4, the planet production "create object" (0x400b40) as a finished queue item: no cost, no queue;
+    // space units join the player's stationary orbit fleet (found or made), ground units the surface,
     // structures / starbases the planet. Returns the new object; null = refused (invalid player / planet / type, a
-    // type with no galactic role) = the task's FAILED. Also the Lua Spawn_Unit at a planet in a galactic script (a1g t06).
+    // type with no galactic role) = the task's FAILED. Also the Lua Spawn_Unit at a planet in a galactic script (a1g t06)
+    // and the story's spawn rewards. A2k t12 (A2K_T07_STORY_LOAD_RE.md §4): a creation calls the spawn hook inside the
+    // call, which raises the story's CONSTRUCT as 0x400b40 does for every caller.
     ObjectHandle spawn_unit(int32_t player, PlanetIndex planet, uint32_t type);
+    // Not saved (the story session installs it); a hook may re-enter the sim (its rewards spawn more).
+    using SpawnHook = std::function<void(int32_t player, PlanetIndex planet, uint32_t type)>;
+    void set_spawn_hook(SpawnHook hook) { spawn_hook_ = std::move(hook); }
     // Step 2 (MagicPlanStealing or a named hero): the first live object of exactly `type` owned by `player`, walking
     // the owner's object list newest first (A2GAL_READINGS 3 [H]: ObjectStore::owned_by in reverse, so a captured
     // object counts as the owner's newest), that is not at `destination` (units in a fleet in transit never are;
@@ -1161,6 +1166,7 @@ private:
     uint32_t next_hook_id_ = 1;
     std::vector<float> last_income_;  // per player
     std::function<void(PlanetIndex)> production_hook_;
+    SpawnHook spawn_hook_;  // a2k t12
     InstallmentHook installment_hook_;
     // OI galactic (hashed in the "OIG1" tail once non-default)
     std::vector<int32_t> stealthed_;      // ObjectIds with the galactic stealth byte set, ascending

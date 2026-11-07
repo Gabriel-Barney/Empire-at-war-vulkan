@@ -2326,10 +2326,13 @@ static void test_story_load_pass(const World& w) {
 }
 
 // a2j t05 (A2J_T05_STORY_LOAD.md): the load pass's CONSTRUCT side and its galactic stream. Before the tech pass every
-// starting-force object raises STORY_CONSTRUCT (+ CONSTRUCT_LEVEL for the starbase / ground structure) to every plot set
-// ("via=load:construct"): the Empire's SB1 (CONSTRUCT, starbase level 1) and Barracks (ground level 1, not 2) at A, the
-// Underworld's Corvette at D (FILTER_ENEMY_ONLY for the Empire). In the tech pass the UNIQUE_UNIT reward's Corvette raises
-// CONSTRUCT inside the reward call, so Own_Corvette fires between Tech_1 and Tech_1's STORY_TRIGGER dependant; that
+// starting-force object raises STORY_CONSTRUCT (+ CONSTRUCT_LEVEL for a starbase) to every plot set ("via=load:construct").
+// a2k t12 (A2K_T07_STORY_LOAD_RE.md): at L8 the planets are still neutral, so only neutral-accepting filters fire
+// (SB_Built with FILTER_NEUTRAL_ONLY, not SB_Friendly with the default FRIENDLY_ONLY, not Enemy_Corvette); CONSTRUCT_LEVEL
+// compares Param2 with SB1's Base_Level 1 under Param3 SPACE (A_Star_1, not A_Star_2), the Barracks raises none
+// (A_Ground_1); the walk is planet by planet in <Locations> order, so the Fighters appended last at A come before the
+// Corvette at D. In the tech pass the UNIQUE_UNIT reward's Corvette raises CONSTRUCT inside the reward call (spawn hook,
+// judged by the Empire-owned planet), so Own_Corvette fires between Tech_1 and Tech_1's STORY_TRIGGER dependant; that
 // dependant's SET_TECH_LEVEL raises TechLevelChanged, routed at load ("T 0 0 ..."), not at T9 of tick 1.
 static void test_story_load_construct(const World& w) {
     using namespace story_test;
@@ -2340,13 +2343,19 @@ static void test_story_load_construct(const World& w) {
                "<Story_Mode_Plots><Active_Plot>Story_Load_C.xml</Active_Plot><Suspended_Plot /></Story_Mode_Plots>\n");
     write_file(root / "Data/XML/Story_Load_C.xml",
                "<Story>\n"
-               " <Event Name=\"SB_Built\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>SB1</Event_Param1></Event>\n"
+               " <Event Name=\"SB_Built\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>SB1</Event_Param1>"
+               "<Event_Param3>FILTER_NEUTRAL_ONLY</Event_Param3></Event>\n"
+               " <Event Name=\"SB_Friendly\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>SB1</Event_Param1></Event>\n"
                " <Event Name=\"A_Star_1\"><Event_Type>STORY_CONSTRUCT_LEVEL</Event_Type><Event_Param1>PlanetA</Event_Param1>"
-               "<Event_Param2>1</Event_Param2><Event_Param3>0</Event_Param3></Event>\n"
+               "<Event_Param2>1</Event_Param2><Event_Param3>SPACE</Event_Param3><Event_Param4>EMPIRE</Event_Param4></Event>\n"
+               " <Event Name=\"A_Star_2\"><Event_Type>STORY_CONSTRUCT_LEVEL</Event_Type><Event_Param1>PlanetA</Event_Param1>"
+               "<Event_Param2>2</Event_Param2><Event_Param3>SPACE</Event_Param3></Event>\n"
                " <Event Name=\"A_Ground_1\"><Event_Type>STORY_CONSTRUCT_LEVEL</Event_Type><Event_Param1>PlanetA</Event_Param1>"
-               "<Event_Param2>1</Event_Param2><Event_Param3>1</Event_Param3></Event>\n"
-               " <Event Name=\"A_Ground_2\"><Event_Type>STORY_CONSTRUCT_LEVEL</Event_Type><Event_Param1>PlanetA</Event_Param1>"
-               "<Event_Param2>2</Event_Param2><Event_Param3>1</Event_Param3></Event>\n"
+               "<Event_Param2>1</Event_Param2><Event_Param3>GROUND</Event_Param3></Event>\n"
+               " <Event Name=\"Fighters_Neutral\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>Fighters</Event_Param1>"
+               "<Event_Param3>FILTER_NEUTRAL_ONLY</Event_Param3></Event>\n"
+               " <Event Name=\"Corvette_Neutral\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>Corvette</Event_Param1>"
+               "<Event_Param3>FILTER_NEUTRAL_ONLY</Event_Param3></Event>\n"
                " <Event Name=\"Enemy_Corvette\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>Corvette</Event_Param1>"
                "<Event_Param3>FILTER_ENEMY_ONLY</Event_Param3></Event>\n"
                " <Event Name=\"Tech_1\"><Event_Type>STORY_TECH_LEVEL</Event_Type><Event_Param1>1</Event_Param1>"
@@ -2367,7 +2376,9 @@ static void test_story_load_construct(const World& w) {
         cfg.story_crc = true;
         SimHost host(w.types, js, cfg);
         const GalacticRules r = rules();
-        GalacticSim* gs = host.start_galactic(r, setup());
+        GalacticSetup su = setup();
+        su.forces.push_back({pEmpire, rA, tFighters});  // last entry, first planet: walked before D's Corvette
+        GalacticSim* gs = host.start_galactic(r, su);
         CHECK(gs != nullptr);
         if (!gs) return {};
         StoryStart st;
@@ -2387,15 +2398,17 @@ static void test_story_load_construct(const World& w) {
             for (const StoryLogEntry& e : story.log()) std::printf("  load: %s\n", e.text().c_str());
             const StoryLogEntry* sb = entry("SB_Built");
             const StoryLogEntry* a1 = entry("A_Star_1");
-            const StoryLogEntry* g1 = entry("A_Ground_1");
-            const StoryLogEntry* ec_ = entry("Enemy_Corvette");
+            const StoryLogEntry* fn = entry("Fighters_Neutral");
+            const StoryLogEntry* cn = entry("Corvette_Neutral");
             const StoryLogEntry* t1 = entry("Tech_1");
             const StoryLogEntry* oc = entry("Own_Corvette");
             const StoryLogEntry* tr = entry("Tech_1_Raise");
-            CHECK(host.frame() == 0 && story.log().size() == 7 && entry("A_Ground_2") == nullptr);
-            CHECK(sb && a1 && g1 && ec_ && t1 && oc && tr);
-            if (sb && a1 && g1 && ec_ && t1 && oc && tr) {
-                for (const StoryLogEntry* e : {sb, a1, g1, ec_}) CHECK(e->frame == 0 && e->via == "load:construct" && e->sequence < t1->sequence);
+            CHECK(host.frame() == 0 && story.log().size() == 7);
+            CHECK(!entry("SB_Friendly") && !entry("A_Star_2") && !entry("A_Ground_1") && !entry("Enemy_Corvette"));
+            CHECK(sb && a1 && fn && cn && t1 && oc && tr);
+            if (sb && a1 && fn && cn && t1 && oc && tr) {
+                for (const StoryLogEntry* e : {sb, a1, fn, cn}) CHECK(e->frame == 0 && e->via == "load:construct" && e->sequence < t1->sequence);
+                CHECK(sb->sequence < fn->sequence && fn->sequence < cn->sequence);  // planet A before planet D
                 CHECK(t1->via == "load" && oc->via == "load" && tr->via == "load");
                 CHECK(t1->sequence < oc->sequence && oc->sequence < tr->sequence);  // CONSTRUCT inside the reward call
             }

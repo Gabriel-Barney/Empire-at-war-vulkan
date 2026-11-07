@@ -70,7 +70,9 @@ ObjectHandle GalacticSim::spawn_unit(int32_t player, PlanetIndex planet, uint32_
         return {};
     last_spawn_ = {};
     if (!create_unit(player, planet, type)) return {};
-    return last_spawn_;
+    const ObjectHandle made = last_spawn_;  // the hook may spawn again
+    if (spawn_hook_) spawn_hook_(player, planet, type);
+    return made;
 }
 
 bool GalacticSim::steal_unit(int32_t player, uint32_t type, PlanetIndex destination, bool include_destination) {

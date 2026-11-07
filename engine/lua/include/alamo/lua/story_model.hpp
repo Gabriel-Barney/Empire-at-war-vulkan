@@ -249,7 +249,7 @@ struct StoryNotification {
     std::string planet;              // planet (Enter family, CONSTRUCT_LEVEL, battles)
     std::vector<std::string> units;  // fleet contents, unit type names (Enter family, MOVE)
     double value = 0.0;              // level / credits / count
-    int32_t category = -1;           // CONSTRUCT_LEVEL: 0 starbase, 1 ground base
+    int32_t category = -1;           // CONSTRUCT_LEVEL: 0 ground base (GROUND), 1 starbase (SPACE); value = its Base_Level
     std::vector<StoryParam> params;  // generic rule for types without a modelled evaluator
     // L1/S4 wave 2a - battles (WIN/LOSE_BATTLES Param2 / Param3, STORY.md §5):
     int32_t location = 0;            // 1 land, 2 space (the S10 battle event's value); 0 unknown

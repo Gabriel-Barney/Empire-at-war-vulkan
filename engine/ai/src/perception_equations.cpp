@@ -68,9 +68,10 @@ constexpr std::string_view kHardPointNames[] = {
 // A2J_T07_LITERALS §3] (every shipped literal spells the name exactly as registered).
 struct LiteralList {
     std::vector<objects::EnumConverter> conv;
+    // A2k t12 (A2K_T06_RE.md §2) [H]: the converter name is trimmed, then compared exactly (case-sensitive).
     const objects::EnumConverter* find(std::string_view name) const {
         for (const objects::EnumConverter& c : conv)
-            if (iequals(c.enum_name, trim(name))) return &c;
+            if (c.enum_name == trim(name)) return &c;
         return nullptr;
     }
 };
@@ -783,6 +784,7 @@ uint32_t EquationSet::add(std::string_view name, std::string_view text, LoadRepo
     e.name = std::string(name);
     e.text = std::string(trim(text));
     std::string key = to_upper(name);
+    declared_.insert(key);  // a2k t12: a Function_ token even when the equation fails to build or is a duplicate
     if (index_.count(key)) {
         if (report) {
             ++report->duplicates;
@@ -836,7 +838,29 @@ void EquationSet::add_file(std::string_view xml, const std::string& file, LoadRe
 
 void EquationSet::link(LoadReport* report) {
     if (report) report->unresolved_functions = 0;
+    // A2k t12 (A2K_T06_RE.md §1.2-1.4) [H]: retail registers Function_<Name> for every root element of every equation file
+    // before it parses any equation, so a reference to a name that no file defines is an invalid token and fails the
+    // referrer's build (dropped like a parse error). A defined name whose equation was dropped stays a valid token: the
+    // referrer builds and the reference evaluates false (unresolved, below). [port] the check runs here, after every
+    // add, so a later duplicate of a referrer dropped by it was already rejected as a duplicate.
+    for (uint32_t i = 0; i < eq_.size(); ++i) {
+        Equation& e = eq_[i];
+        if (!e.parsed) continue;
+        for (const ExprNode& n : e.expr.nodes) {
+            if (n.op != Op::Function || declared_.count(to_upper(n.name))) continue;
+            e.parsed = false;
+            e.error = {0, "Invalid perceptual token (Function_" + n.name + ") while trying to parse an equation!"};
+            const auto it = index_.find(to_upper(e.name));
+            if (it != index_.end() && it->second == i) index_.erase(it);
+            if (report) {
+                ++report->parse_errors;
+                report->messages.push_back(e.file + "(" + std::to_string(e.line) + "): " + e.name + ": " + e.error.message);
+            }
+            break;
+        }
+    }
     for (Equation& e : eq_) {
+        if (!e.parsed) continue;
         for (ExprNode& n : e.expr.nodes) {
             if (n.op != Op::Function) continue;
             n.ref = find(n.name);

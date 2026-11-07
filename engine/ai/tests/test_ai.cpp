@@ -131,7 +131,7 @@ static void test_enum_literal_files() {
         std::vector<std::string> diag;
         t.load(mf, &diag);
         EnumLiteral lit;
-        CHECK(t.from_file("GameObjectCategoryType") && t.from_file("aigoalcategorytype"));
+        CHECK(t.from_file("GameObjectCategoryType") && t.from_file("AIGoalCategoryType") && !t.from_file("aigoalcategorytype"));
         // Bitfield values are hex (sscanf %llx): "20" = 0x20, "8000000000" = 2^39.
         CHECK(t.convert("GameObjectCategoryType", "Capital | Mod_Walker", lit) == EnumLiteralError::None &&
               lit.value == static_cast<int64_t>(0x8000000020ull) && lit.names.size() == 2);
@@ -294,7 +294,7 @@ static void test_language() {
         // Plain enums: one whole name (trimmed, case-insensitive); the value is the enum value.
         CHECK(literal("AIGoalCategoryType[MajorItem]", v, names) && v == 11 && names.size() == 1 && names[0] == "MajorItem");
         CHECK(literal("AIGoalCategoryType[ offensive ]", v, names) && v == 0 && names.size() == 1 && names[0] == "offensive");
-        CHECK(literal("aigoalcategorytype[Infrastructure]", v, names) && v == 3);  // converter name: case-insensitive [port]
+        CHECK(!literal("aigoalcategorytype[Infrastructure]", v, names));  // converter name: case-sensitive (A2K_T06_RE §2)
         CHECK(literal("DifficultyLevelType[Hard]", v, names) && v == 2);
         CHECK(literal("HardPointType[Shield_Generator]", v, names) && v == 1);
         // Any '|' on a plain enum looks up "OFFENSIVE|INFRASTRUCTURE" as one name: no conversion, the build fails.
@@ -377,6 +377,29 @@ static void test_language() {
         CHECK(set.equation(set.find("B")).line == 5);
         CHECK(eval_failure_site(set, evaluate(set, set.find("a"), ctx, r)).empty());  // ok: no site
         CHECK(eval_failure_site(set, evaluate(set, set.find("Loop"), ctx, r)) == "recursion Function_Loop");
+    }
+    // a2k t12 (A2K_T06_RE.md §1-2): every element name of every file is a Function_ token before parsing, so a reference
+    // to a later file's name builds (file order does not matter), a reference to a name no file defines fails the build;
+    // converter names are trimmed and case-sensitive.
+    {
+        EquationSet set;
+        LoadReport rep;
+        set.add_file("<Equations>\n<Early> Function_Later.Evaluate + 1 </Early>\n<Undef> Function_Nowhere.Evaluate </Undef>\n"
+                     "<Lower> Variable_Self.X {Parameter_A = gameobjectcategorytype[Infantry]} </Lower>\n"
+                     "<Spaced> Variable_Self.X {Parameter_A = GameObjectCategoryType [Infantry]} </Spaced>\n</Equations>\n",
+                     "a.xml", rep);
+        set.add_file("<Equations>\n<Later> 4 </Later>\n</Equations>\n", "b.xml", rep);
+        set.link(&rep);
+        CHECK(rep.equations == 5 && rep.parse_errors == 2 && rep.unresolved_functions == 0);
+        CHECK(set.find("Undef") == kUnresolved && set.find("Lower") == kUnresolved && set.find("Spaced") != kUnresolved);
+        EvalContext ctx;
+        ctx.self = 0;
+        const EvalResult res = evaluate(set, set.find("Early"), ctx, r);
+        CHECK(res.ok && res.value == 5.0);
+        bool msg = false;
+        for (const std::string& m : rep.messages)
+            msg = msg || m.find("a.xml(3): Undef: Invalid perceptual token (Function_Nowhere)") != std::string::npos;
+        CHECK(msg);
     }
     // q6 t10 diagnostics: eval_failure_site names the first failing node, also inside a nested Function_.
     {

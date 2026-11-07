@@ -84,6 +84,10 @@ So the converter name is **case-sensitive and exact after trimming white space**
 ("There is no enum converter named %s!") and the equation is dropped; ` GameObjectCategoryType [Infantry]` works. The port's
 case-insensitive compare (`A2J_T07_LITERALS.md` §3) differs only for such misspelled mod data; shipped data is unaffected.
 
+Port (A2k t12, 2026-11-07): `EquationSet::link` drops an equation whose `Function_` reference names no added
+equation (parse error "Invalid perceptual token"), and the converter-name lookup is trimmed and case-sensitive. [port]
+the check runs after all files, so a later duplicate of a referrer dropped this way was already rejected as a duplicate.
+
 ## 3. Confidence and open questions
 
 | claim | tag |
