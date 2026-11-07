@@ -1,5 +1,5 @@
 {
- "commit": "9064172d",
+ "commit": "79576620",
  "scenarios": {
   "geonosis_skirmish": {
    "references": [
@@ -76,14 +76,12 @@
     "build.ticks[REBEL_GROUND_MINING_FACILITY@NABOO]": "PASS",
     "build.ticks[REBEL_INFANTRY_SQUAD@KAMINO]": "FAIL",
     "build.ticks[REBEL_INFANTRY_SQUAD@NABOO]": "FAIL",
-    "build.ticks[REBEL_LIGHT_TANK_BRIGADE@YAVIN]": "PASS",
     "build.ticks[REBEL_TANK_BUSTER_SQUAD@KAMINO]": "PASS",
     "build.ticks[REBEL_TANK_BUSTER_SQUAD@NABOO]": "FAIL",
     "build.ticks[R_GALACTIC_TURBOLASER_TOWER_DEFENSES@YAVIN]": "PASS",
-    "build.ticks[R_GROUND_BARRACKS@KAMINO]": "PASS",
     "build.ticks[R_GROUND_LIGHT_VEHICLE_FACTORY@NABOO]": "PASS",
     "build.ticks[UNDERWORLD_DISRUPTOR_MERC_SQUAD@FELUCIA]": "FAIL",
-    "build.ticks[UNDERWORLD_MERC_SQUAD@NALHUTTA]": "FAIL",
+    "build.ticks[UNDERWORLD_MERC_SQUAD@NALHUTTA]": "PASS",
     "build.ticks[UNDERWORLD_SABOTEUR_TEAM@NALHUTTA]": "PASS",
     "build.ticks[UNDERWORLD_SABOTEUR_TEAM@SHOLA]": "PASS",
     "build.ticks[U_GROUND_PALACE@FELUCIA]": "PASS",
@@ -91,13 +89,13 @@
     "build.ticks[Y-WING_SQUADRON@MONCALIMARI]": "PASS",
     "diag.rng_draws_total": "INFO",
     "econ.credits_at_13500[Empire]": "PASS",
-    "econ.credits_at_13500[Rebel]": "PASS",
+    "econ.credits_at_13500[Rebel]": "FAIL",
     "econ.credits_at_13500[Underworld]": "FAIL",
     "econ.credits_at_4500[Empire]": "PASS",
     "econ.credits_at_4500[Rebel]": "FAIL",
     "econ.credits_at_4500[Underworld]": "PASS",
     "econ.credits_at_9000[Empire]": "PASS",
-    "econ.credits_at_9000[Rebel]": "FAIL",
+    "econ.credits_at_9000[Rebel]": "PASS",
     "econ.credits_at_9000[Underworld]": "FAIL",
     "econ.cycle_tick[10]": "PASS",
     "econ.cycle_tick[1]": "PASS",
@@ -113,7 +111,7 @@
     "econ.income_cycle1[Rebel]": "PASS",
     "econ.income_cycle1[Underworld]": "PASS",
     "econ.income_mean[Empire]": "PASS",
-    "econ.income_mean[Rebel]": "PASS",
+    "econ.income_mean[Rebel]": "FAIL",
     "econ.income_mean[Underworld]": "PASS",
     "outcome.captures[Empire]": "PASS",
     "outcome.captures[Rebel]": "PASS",
@@ -122,8 +120,12 @@
     "outcome.planets_final[Empire]": "PASS",
     "outcome.planets_final[Rebel]": "PASS",
     "outcome.planets_final[Underworld]": "PASS",
+    "travel.hop_ticks[Rebel:CORELLIA->TATOOINE]": "FAIL",
+    "travel.hop_ticks[Rebel:KAMINO->SHOLA]": "PASS",
+    "travel.hop_ticks[Rebel:KUAT->KASHYYYK]": "PASS",
     "travel.hop_ticks[Rebel:MONCALIMARI->SHOLA]": "PASS",
     "travel.hop_ticks[Rebel:NABOO->SHOLA]": "PASS",
+    "travel.hop_ticks[Rebel:SHOLA->NABOO]": "PASS",
     "travel.hop_ticks[Rebel:SHOLA->THE_MAW]": "PASS",
     "travel.hop_ticks[Underworld:FELUCIA->THE_MAW]": "PASS",
     "travel.hop_ticks[Underworld:KAMINO->THE_MAW]": "PASS",
@@ -157,12 +159,12 @@
      "INFO": 1
     },
     "income": {
-     "FAIL": 4,
-     "PASS": 21
+     "FAIL": 5,
+     "PASS": 20
     },
     "timing": {
      "FAIL": 8,
-     "PASS": 34
+     "PASS": 36
     }
    }
   }
