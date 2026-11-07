@@ -85,11 +85,6 @@ std::vector<uint32_t> fallback_types(const galactic::GalacticRules& rules, const
     return out;
 }
 
-// A stock list is kept when the data defines at least one of its names (FoC: all of them).
-bool any_known(const galactic::GalacticRules& rules, const std::vector<std::string>& names) {
-    return std::any_of(names.begin(), names.end(), [&](const std::string& n) { return rules.find_type(n) != galactic::kNoIndex; });
-}
-
 }  // namespace
 
 SkirmishForceTable load_skirmish_forces(const FileProvider& files) {
@@ -124,38 +119,16 @@ SkirmishForceTable load_skirmish_forces(const FileProvider& files) {
 
 #ifdef ALAMO_GAME_RULES_HAVE_AI
 std::string resolve_ai_type(const std::string& faction, const std::map<std::string, std::string>& basic_ai,
-                            const std::vector<std::string>* campaign_control, const ai::AiDefinitions* defs, bool campaign_pairs) {
+                            const std::vector<std::string>* campaign_control, const ai::AiDefinitions* defs) {
     const auto it = basic_ai.find(upper(std::string(trim(faction))));
     if (it == basic_ai.end()) return {};
-    std::string t = campaign_control && campaign_pairs ? ai::campaign_ai_type(*campaign_control, basic_ai, faction, false)
+    std::string t = campaign_control ? ai::campaign_ai_type(*campaign_control, basic_ai, faction, false)
                                                        : std::string(trim(it->second));
     if (iequal(t, "Human")) t.clear();
     if (!t.empty() && defs && !defs->find_player(t)) t.clear();  // "Unrecognized AI player type": no AI
     return t;
 }
 #endif
-
-// [name-ok-begin: port base-game skirmish lists (skirmish_rules.hpp), held by the game_smoke goldens; replacement modc t17]
-std::vector<std::string> default_skirmish_fleet(const std::string& faction) {
-    const std::string f = upper(faction);
-    if (f == "EMPIRE")
-        return {"Star_Destroyer", "Tartan_Patrol_Cruiser", "Tartan_Patrol_Cruiser", "Acclamator_Assault_Ship", "Broadside_Class_Cruiser"};
-    if (f == "REBEL")
-        return {"Calamari_Cruiser", "Nebulon_B_Frigate", "Corellian_Corvette", "Corellian_Corvette", "Alliance_Assault_Frigate"};
-    if (f == "UNDERWORLD")
-        return {"Vengeance_Frigate", "Kedalbe_Battleship", "Interceptor4_Frigate", "Crusader_Gunship", "Crusader_Gunship"};
-    return {};
-}
-
-std::vector<std::string> default_skirmish_ground(const std::string& faction) {
-    const std::string f = upper(faction);
-    if (f == "EMPIRE") return {"Imperial_Stormtrooper_Squad", "Imperial_Stormtrooper_Squad", "Imperial_Armor_Group", "Imperial_Anti_Infantry_Brigade"};
-    if (f == "REBEL") return {"Rebel_Infantry_Squad", "Rebel_Infantry_Squad", "Rebel_Light_Tank_Brigade", "Rebel_Tank_Buster_Squad"};
-    if (f == "UNDERWORLD") return {"Underworld_Merc_Squad", "Underworld_Merc_Squad", "Underworld_Disruptor_Merc_Squad", "MZ8_Pulse_Cannon_Tank_Company"};
-    return {};
-}
-
-// [name-ok-end]
 
 std::vector<std::string> data_fallback_forces(const galactic::GalacticRules& rules, const objects::GameObjectTypes& types,
                                               const std::string& faction, bool land) {
@@ -168,8 +141,6 @@ std::vector<std::string> data_fallback_forces(const galactic::GalacticRules& rul
 
 std::vector<std::string> skirmish_default_forces(const SkirmishForceData& d, const std::string& faction, bool land,
                                                  const SkirmishForceOptions& o) {
-    if (o.base_game_lists)
-        if (std::vector<std::string> s = land ? default_skirmish_ground(faction) : default_skirmish_fleet(faction); any_known(d.rules, s)) return s;
     std::vector<std::string> out;
     for (const uint32_t t : skirmish_data_force_types(d, faction, land, o)) out.push_back(d.rules.types[t].name);
     return out;
@@ -266,6 +237,23 @@ std::string skirmish_map_planet_type(const galactic::GalacticRules& rules, std::
         if (t != galactic::kNoIndex && rules.types[t].kind == galactic::UnitKind::Planet) return rules.types[t].name;
     }
     return {};
+}
+
+uint32_t skirmish_galaxy_planet(const galactic::GalacticRules& rules, std::string_view map, bool land) {
+    const auto usable = [&](uint32_t t) {
+        const galactic::TypeInfo& p = rules.types[t];
+        return p.kind == galactic::UnitKind::Planet && p.terrain >= 0 && p.restricted_categories == 0 && p.restricted_types.empty() &&
+               (!land || p.surface_accessible);
+    };
+    if (!map.empty())
+        if (const uint32_t t = rules.find_type(skirmish_map_planet_type(rules, map)); t != galactic::kNoIndex && usable(t)) return t;
+    uint32_t first = galactic::kNoIndex;
+    for (uint32_t t = 0; t < rules.types.size(); ++t) {
+        if (rules.types[t].kind != galactic::UnitKind::Planet) continue;
+        if (usable(t)) return t;
+        if (first == galactic::kNoIndex) first = t;
+    }
+    return first;
 }
 
 }  // namespace alamo::game

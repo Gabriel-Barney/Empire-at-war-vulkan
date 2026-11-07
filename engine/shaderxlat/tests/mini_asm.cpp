@@ -246,7 +246,7 @@ const OpName kOps[] = {
     {"expp", Op::ExpP}, {"logp", Op::LogP}, {"cnd", Op::Cnd}, {"texreg2rgb", Op::TexReg2Rgb},
     {"texdp3tex", Op::TexDp3Tex}, {"texm3x2depth", Op::TexM3x2Depth}, {"texdp3", Op::TexDp3}, {"texm3x3", Op::TexM3x3},
     {"texdepth", Op::TexDepth}, {"cmp", Op::Cmp}, {"bem", Op::Bem}, {"dp2add", Op::Dp2Add}, {"dsx", Op::Dsx},
-    {"dsy", Op::Dsy}, {"texldd", Op::TexLdd}, {"setp", Op::Setp}, {"breakp", Op::Breakp}, {"phase", Op::Phase},
+    {"dsy", Op::Dsy}, {"texldd", Op::TexLdd}, {"texldl", Op::TexLdl}, {"setp", Op::Setp}, {"breakp", Op::Breakp}, {"phase", Op::Phase},
 };
 
 uint32_t usage_from(const std::string& s, bool& ok) {

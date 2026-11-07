@@ -1,4 +1,4 @@
-// CPU reference interpreter for parsed SM1-2 programs. It implements the semantics documented in
+// CPU reference interpreter for parsed SM1-3 programs. It implements the semantics documented in
 // translate.cpp's header table directly on the instruction list (no shared code with the HLSL
 // emitter beyond the parser and the interface helpers), so the GPU differential test compares
 // two independent implementations. Robust against any program the parser accepts: execution is
@@ -41,6 +41,7 @@ struct PsInputs {
     std::array<F4, 8> texcoord{};
     float fog = 1.0f;
     F4 frag_pos{0.5f, 0.5f, 0.5f, 1.0f};           // SV_Position (x, y, z, 1/w)
+    bool front_face = true;                        // ps_3_0 vFace
 };
 
 struct PsResult {
@@ -52,8 +53,8 @@ struct PsResult {
 
 class Interpreter {
 public:
-    // False (+ *err) for programs the translator would also reject (SM3, unbalanced control flow,
-    // opcodes outside their shader type).
+    // False (+ *err) for programs the translator would also reject (unbalanced control flow, opcodes
+    // outside their shader type, SM3 usages without a varying slot, vertex texture fetch).
     bool init(const Program& program, const TranslateOptions& options, std::string* err = nullptr);
 
     // VS inputs by register v# (not by location).
@@ -76,6 +77,12 @@ private:
     std::array<std::array<int32_t, 4>, 16> ival_{};
     std::array<uint32_t, 16> bval_{};
     std::array<TextureDim, 16> dims_{};
+    struct IoDecl {
+        bool present = false;
+        Usage usage = Usage::Position;
+        uint8_t index = 0;
+    };
+    std::array<IoDecl, 16> io_{};    // SM3: vs_3_0 o# / ps_3_0 v# dcl usages
     std::vector<int32_t> match_;     // if -> else/endif, else -> endif, rep/loop <-> end
     std::array<int32_t, 2048> labels_{};
     bool writes_depth_ = false;

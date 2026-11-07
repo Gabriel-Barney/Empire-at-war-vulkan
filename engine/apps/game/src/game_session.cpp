@@ -119,6 +119,11 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
         spec_.skirmish.land = !skirmish_map_.is_space();  // the map decides: space battle or land invasion
         if (spec_.attract && spec_.skirmish.land) return fail("attract demo: " + spec_.skirmish_map + " is not a space map");
         SkirmishSetup sk = spec_.skirmish;
+        // modc t19 [port]: the galaxy's planet is the map's own planet type when the data has it and it forbids no unit,
+        // else the first such PLANET type (skirmish_galaxy_planet); never a planet by name.
+        if (sk.planet_type.empty())
+            if (const uint32_t pt = skirmish_galaxy_planet(d.rules, spec_.skirmish_map, sk.land); pt != galactic::kNoIndex)
+                sk.planet_type = d.rules.types[pt].name;
         sk.no_forces = spec_.attract;  // q6 t02: the demo's forces are cleared below; a mod faction without a fleet must not fail it
         if (!make_skirmish_galaxy(d, sk, setup_, &err)) return fail(err);
         // GALAXY_MAP_PRESENTATION §6: the attract demo is a plain tactical space battle on the map. The map's object owners
@@ -157,7 +162,7 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
         gcfg.ai_uses_fog_galactic = d.db.constants().get_bool("AIUsesFogOfWarGalactic", gcfg.ai_uses_fog_galactic);  // shipped False
         const uint32_t diff = d.rules.find_difficulty(difficulty_name(spec_.difficulty));
         // q6 t08: the type from the data (resolve_ai_type): campaigns read the campaign's AI_Player_Control pairs, a
-        // skirmish gives only its AI slot (ps.ai) the faction's Basic_AI (SKIRMISH_SETUP §2.1). Stock factions as before.
+        // skirmish gives only its AI slot (ps.ai) the faction's Basic_AI (SKIRMISH_SETUP §2.1). modc t17: base FoC too.
         const std::vector<std::string>* control = nullptr;
         if (spec_.kind == SessionKind::Campaign)
             if (const data::CampaignDef* c = d.db.find_campaign(spec_.campaign)) control = &c->ai_player_control;
@@ -167,7 +172,7 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
             galactic::PlayerSetup& ps = setup_.players[p];
             if (ps.human || ps.faction >= d.rules.factions.size() || d.rules.factions[ps.faction].is_neutral) continue;
             if (spec_.kind == SessionKind::Skirmish && !ps.ai) continue;
-            const std::string type = resolve_ai_type(d.rules.factions[ps.faction].name, d.basic_ai, control, &d.ai->defs, d.mod_layer);
+            const std::string type = resolve_ai_type(d.rules.factions[ps.faction].name, d.basic_ai, control, &d.ai->defs);
             if (type.empty()) continue;
             ps.ai = true;
             ps.difficulty = diff;

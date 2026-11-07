@@ -2,11 +2,11 @@
 // (headless/skirmish_run.cpp), which does not link alamo_game_core (it pulls in UI / audio). Data in, names / types out:
 // no UI, audio, session or sim code. The hosts' deliberate differences are SkirmishForceOptions fields.
 //   AI type       resolve_ai_type (SKIRMISH_SETUP §2.1, AI_GALACTIC §1.2): the faction's Basic_AI / campaign pairs.
-//   forces        the faction's Space_ / Land_Skirmish_AI_Default_Forces (SKIRMISH_SETUP §2 step 4), the [port] base-game
-//                 lists and the [port] cheapest-buildable fallback.
-// modc t03 (docs/MODS.md §1 rule 4): nothing here tests a faction's name to pick a rule; the two [port] rules that keep
-// base-FoC sessions as they were are keyed on "no mod layer is loaded" (MODS.md §6).
-//   map planet    skirmish_map_planet_type (the planet type a _MP_SPACE_ / _MP_LAND_ map stands for).
+//   forces        the faction's Space_ / Land_Skirmish_AI_Default_Forces (SKIRMISH_SETUP §2 step 4) and the [port]
+//                 cheapest-buildable fallback, for base FoC and mods alike (modc t17).
+// modc t03 / t17 / t19 (docs/MODS.md §1 rule 4): nothing here tests a faction, unit, planet or map name to pick a rule.
+//   map planet    skirmish_map_planet_type (the planet type a _MP_SPACE_ / _MP_LAND_ map stands for) and
+//                 skirmish_galaxy_planet (the planet type of the port's skirmish galaxy).
 #pragma once
 #include <cstdint>
 #include <map>
@@ -44,24 +44,15 @@ SkirmishForceTable load_skirmish_forces(const FileProvider& files);
 // name -> Basic_AI (ai::load_faction_basic_ai).
 //   no Basic_AI                        "" (FoC: Pirates / Hostile / Hutts ...).
 //   skirmish (campaign_control null)   the faction's Basic_AI (SKIRMISH_SETUP §2.1: AI slots get Faction.Basic_AI).
-//   campaign, campaign_pairs           ai::campaign_ai_type(*campaign_control, basic_ai, faction, false): the campaign's
-//                                      AI_Player_Control pair; no pair = no AI (only the pairs call Set_AI_Type [M]).
-//   campaign, !campaign_pairs          [port, MODS.md §6] the faction's Basic_AI, the pairs are not read (FoC's "Empire,
-//                                      None" / "Rebel, BasicRebel_NoOpenings" ...: base-FoC sessions have always played
-//                                      Basic_AI). alamo_game passes campaign_pairs = a mod layer is loaded.
+//   campaign (campaign_control set)    ai::campaign_ai_type(*campaign_control, basic_ai, faction, false): the campaign's
+//                                      AI_Player_Control pair (AI_GALACTIC §1.2); no pair = no AI (only the pairs call
+//                                      Set_AI_Type [M]). Base FoC and mods alike (modc t17: FoC's "Empire, None" /
+//                                      "Rebel, BasicRebel_NoOpenings" ... are read as written).
 // "Human" = no AI. A type `defs` does not define is no AI (Set_AI_Type: "Unrecognized AI player type"); defs null = not
 // checked.
 std::string resolve_ai_type(const std::string& faction, const std::map<std::string, std::string>& basic_ai,
-                            const std::vector<std::string>* campaign_control, const ai::AiDefinitions* defs,
-                            bool campaign_pairs = true);
+                            const std::vector<std::string>* campaign_control, const ai::AiDefinitions* defs);
 #endif
-
-// [port] base-game skirmish fleets / ground forces: the lists alamo_game has always started base-FoC skirmishes with
-// (the game_smoke_skirmish / _land goldens hold them), per base-FoC faction; empty for any other name. Used only with
-// SkirmishForceOptions::base_game_lists (no mod layer loaded). Retail starts from the faction's
-// Space_ / Land_Skirmish_AI_Default_Forces instead (SKIRMISH_SETUP §2 step 4); switching moves those goldens (modc t17).
-std::vector<std::string> default_skirmish_fleet(const std::string& faction);
-std::vector<std::string> default_skirmish_ground(const std::string& faction);
 
 struct SkirmishForceData {
     const galactic::GalacticRules& rules;
@@ -69,20 +60,14 @@ struct SkirmishForceData {
     const SkirmishForceTable& forces;
 };
 struct SkirmishForceOptions {
-    // [port, MODS.md §6] the base-game lists above for the factions that have one. alamo_game: true when no mod layer is
-    // loaded (GameData::mod_layer). alamo_headless: false (its skirmish host has always started every faction from the
-    // data's list, which the checked-in skirmish goldens hold).
-    bool base_game_lists = true;
     // alamo_game: true ([port] it hosts a space skirmish as a galactic hop, so the fleet needs a hyperspace member).
     // alamo_headless: false (its battle starts on the map, no hop).
     bool hyperspace_leader = true;
     // Optional notes: dropped names, the fallback's picks (faction first, no host prefix).
     std::vector<std::string>* diag = nullptr;
 };
-// The default forces of `faction`, as type names:
-//   base_game_lists, a list above for `faction`     that list, unchanged when the data defines at least one of its
-//                                                   names (names unknown to the data are kept; the galaxy skips them).
-//   otherwise                                       the faction's Space_ / Land_Skirmish_AI_Default_Forces; names the data
+// The default forces of `faction`, as type names (modc t17: every faction alike, base FoC included):
+//   the list                                        the faction's Space_ / Land_Skirmish_AI_Default_Forces; names the data
 //                                                   does not define, and types the galaxy cannot hold (space: not a
 //                                                   SpaceUnit / Squadron kind; land: not a GroundUnit kind), dropped.
 //                                                   [port] none left: data_fallback_forces.
@@ -92,7 +77,7 @@ struct SkirmishForceOptions {
 //                                                   places these squadrons directly at the map's spawn markers.
 std::vector<std::string> skirmish_default_forces(const SkirmishForceData& data, const std::string& faction, bool land,
                                                  const SkirmishForceOptions& options = {});
-// The data path above (never the base-game lists, options.base_game_lists is not read) as type indices of `data.rules`.
+// The same forces as type indices of `data.rules`.
 std::vector<uint32_t> skirmish_data_force_types(const SkirmishForceData& data, const std::string& faction, bool land,
                                                 const SkirmishForceOptions& options = {});
 // [port] the hyperspace leader of the galactic-hop arrangement for a space fleet of `faction` (type indices of `rules`):
@@ -133,5 +118,14 @@ std::vector<uint32_t> skirmish_buy_list(const galactic::GalacticRules& rules, co
 // [port] (no RE rule) the planet type a skirmish map stands for: the name after "_MP_SPACE_" / "_MP_LAND_" (path and
 // extension dropped, case ignored) when it names a PLANET type, e.g. _MP_LAND_TATOOINE -> "Tatooine"; "" otherwise.
 std::string skirmish_map_planet_type(const galactic::GalacticRules& rules, std::string_view map);
+// modc t19 [port] (retail has no skirmish galaxy: it loads the map directly; the port hosts a skirmish as a galactic hop
+// onto a planet of this type). The planet type of the skirmish galaxy, as a type index of `rules`, from the data only:
+//   1. the map's planet type (skirmish_map_planet_type) when it is usable,
+//   2. else the first usable PLANET type in type order,
+//   3. else the first PLANET type; kNoIndex when the data has none.
+// Usable: a Terrain (FoC's Galaxy_Core_Art_Model, the galaxy backdrop, is a planet type without one), no
+// Planet_Restricted_Unit_Categories / _Types (a planet that forbids units may refuse the starting forces) and, for a land
+// skirmish, Planet_Surface_Accessible. `map` may be "" (rule 2 then).
+uint32_t skirmish_galaxy_planet(const galactic::GalacticRules& rules, std::string_view map, bool land);
 
 }  // namespace alamo::game

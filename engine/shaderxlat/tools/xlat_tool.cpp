@@ -1,5 +1,6 @@
 // alamo_shaderxlat_tool - offline batch translation of FXO shader bytecode (build-time path of
 // PORTING.md track B). For every VS/PS blob of the given effects it writes
+//   <out>/<EFFECT>_<hash16>.asm    D3D9 disassembly (also written when the translation fails)
 //   <out>/<EFFECT>_<hash16>.hlsl   translated HLSL (entry VSMain / PSMain)
 //   <out>/<EFFECT>_<hash16>.json   interface description (ShaderInterface::to_json)
 //   <out>/<EFFECT>_<hash16>.spv    SPIR-V compiled by dxc.exe (same arguments as the runtime path)
@@ -162,7 +163,13 @@ int main(int argc, char** argv) {
             std::snprintf(hex, sizeof(hex), "%016llx", static_cast<unsigned long long>(h));
             const std::string base = (fs::path(out) / (in.name + "_" + hex)).string();
             Translation t;
-            if (!parse(b, prog, &err) || !translate(prog, TranslateOptions{}, t, &err)) {
+            if (!parse(b, prog, &err)) {
+                std::printf("%s_%s: %s\n", in.name.c_str(), hex, err.c_str());
+                ++failed;
+                continue;
+            }
+            std::ofstream(base + ".asm", std::ios::binary) << disassemble(prog);
+            if (!translate(prog, TranslateOptions{}, t, &err)) {
                 std::printf("%s_%s: %s\n", in.name.c_str(), hex, err.c_str());
                 ++failed;
                 continue;

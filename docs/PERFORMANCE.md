@@ -852,9 +852,9 @@ translates each track-B pass, MSVC Release, cold shader cache, single thread. Wi
 |---|---|---|---|---|
 | base FoC | 82 (0) | 46 | 19-22 ms | 1.29 s |
 | Thrawn's Revenge 1125571106 | 85 (84) | 51 | | 1.42 s |
-| 1770851727 | 93 (93) | 56 | | 1.63 s |
+| 1770851727 | 93 (93) | 56 | | 1.63 s (1.60 s after t22: `sph_t3` translated in place of `sph_t2`) |
 | Fall of the Republic 1976399102 | 86 (85) | 51 | | 1.40 s |
-| 2858787558 | 88 (55) | 51 | | 1.49 s |
+| 2858787558 | 88 (55) | 51 (52 after t22) | | 1.49 s (1.48 s after t22) |
 | Thrawn's Revenge copy 3622043265 | 86 (85) | 51 | | 1.44 s |
 
 About 28 ms of DXC per pass; parsing and translating the effects is negligible. The renderer does the same work lazily per drawn

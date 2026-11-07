@@ -1,4 +1,4 @@
-// D3D9 SM1-2 program -> SM6 HLSL (entry VSMain / PSMain) for DXC -spirv, following the interface
+// D3D9 SM1-3 program -> SM6 HLSL (entry VSMain / PSMain) for DXC -spirv, following the interface
 // convention of docs/shaders/PORTING.md section 1 ("translated SM1-3 code"):
 //
 //   set 0 binding 0   cbuffer VSConstants { float4 c[256]; }      D3D9 vertex float constants
@@ -133,7 +133,8 @@ struct Translation {
 };
 
 // Deterministic: the same program + options give the same text on every run and thread.
-// Fails (false + *err) for SM3 or opcodes invalid for the shader type.
+// Fails (false + *err) for opcodes invalid for the shader type and the SM3 features translate.cpp's
+// table lists as rejected (vertex texture fetch, output / input usages without a varying slot, ...).
 bool translate(const Program& program, const TranslateOptions& options, Translation& out, std::string* err = nullptr);
 
 // Effective texture dimension of a sampler slot (options > dcl > CTAB > 2D). Used by the

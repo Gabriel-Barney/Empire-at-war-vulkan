@@ -4,8 +4,12 @@
 //   * synthetic data in its own temp folder: an Empire with Basic_AI BasicEmpire, a Rebel a mod redefined (GenericAI),
 //     mod factions with and without Space_ / Land_Skirmish_AI_Default_Forces, a campaign's AI_Player_Control pairs;
 //     modc t03: with and without a mod layer (GameData::mod_layer), no rule keyed on a faction's name;
-//   * with ALAMO_FOC_DATA: the shipped factions resolve as the port has always played them (vanilla unchanged).
+//     modc t17: the same forces and campaign AI types with and without a mod layer; modc t19: the skirmish galaxy planet;
+//   * with ALAMO_FOC_DATA: the shipped factions start from their Space_ / Land_Skirmish_AI_Default_Forces and the shipped
+//     campaigns' AI_Player_Control pairs are read, as retail (modc t17).
 #include <algorithm>
+#include <cctype>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -31,6 +35,11 @@ namespace {
 
 using Names = std::vector<std::string>;
 
+std::string upper(std::string s) {
+    for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return s;
+}
+
 // A moving hyperspace ship / a ground company / a squadron of `faction` costing `cost`, plus `extra` tags.
 std::string ship(const char* name, const char* faction, int cost, const std::string& extra = "", int tech = 1, int speed = 2) {
     return std::string(" <SpaceUnit Name=\"") + name + "\"><Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.0</Hyperspace_Speed><Max_Speed>" +
@@ -43,7 +52,13 @@ std::string company(const char* name, const char* faction, int cost) {
 }
 
 std::string make_types() {
-    std::string s = "<MF>\n <Planet Name=\"MF_Planet\"><Behavior>PLANET</Behavior><Terrain>Temperate</Terrain></Planet>\n";
+    // modc t19: planets skirmish_galaxy_planet passes over before MF_Planet: a backdrop without Terrain, one that forbids a
+    // unit, one without a surface (land only).
+    std::string s = "<MF>\n <Planet Name=\"MF_Backdrop\"><Behavior>IDLE</Behavior></Planet>\n <Planet Name=\"MF_Locked_Planet\"><Behavior>PLANET</Behavior><Terrain>Temperate</Terrain>"
+                    "<Planet_Restricted_Unit_Types>MF_Squadron</Planet_Restricted_Unit_Types></Planet>\n"
+                    " <Planet Name=\"MF_Rock\"><Behavior>PLANET</Behavior><Terrain>Temperate</Terrain>"
+                    "<Planet_Surface_Accessible>No</Planet_Surface_Accessible></Planet>\n"
+                    " <Planet Name=\"MF_Planet\"><Behavior>PLANET</Behavior><Terrain>Temperate</Terrain></Planet>\n";
     s += ship("Star_Destroyer", "Empire", 3000);
     s += company("Imperial_Stormtrooper_Squad", "Empire", 100);
     s += ship("MF_Cruiser", "Chiss", 1000, "<Squadron_Capacity>4</Squadron_Capacity>");
@@ -178,7 +193,7 @@ void test_synthetic() {
     CHECK(game::resolve_ai_type("Rebel", d.basic_ai, nullptr, &defs).empty());  // GenericAI undefined: no AI
     CHECK(game::resolve_ai_type("Pirates", d.basic_ai, nullptr, &defs).empty());
     CHECK(game::resolve_ai_type("Neutral", d.basic_ai, nullptr, &defs).empty());
-    // Campaign with a mod layer (campaign_pairs): the AI_Player_Control pairs for every faction (no pair = no AI).
+    // Campaign: the AI_Player_Control pairs for every faction (no pair = no AI), with or without a mod layer (modc t17).
     const data::CampaignDef* c = d.db.find_campaign("MF_GC");
     CHECK(c != nullptr);
     if (c) {
@@ -190,22 +205,35 @@ void test_synthetic() {
         CHECK(game::resolve_ai_type("Pirates", d.basic_ai, pairs, &defs).empty());  // no Basic_AI: as before
         const std::vector<std::string> none;
         CHECK(game::resolve_ai_type("Chiss", d.basic_ai, &none, &defs).empty());
-        // Base game (no mod layer, campaign_pairs false): the pairs are not read, Basic_AI as in a skirmish.
-        CHECK(game::resolve_ai_type("Empire", d.basic_ai, pairs, nullptr, false) == "BasicEmpire");
-        CHECK(game::resolve_ai_type("Chiss", d.basic_ai, pairs, &defs, false) == "ChissAI");
-        CHECK(game::resolve_ai_type("Yevetha", d.basic_ai, &none, &defs, false) == "YevethaAI");
-        CHECK(game::resolve_ai_type("Pirates", d.basic_ai, pairs, &defs, false).empty());
     }
 #endif
 
-    // No mod layer: the [port] base-game lists (the data defines Star_Destroyer / Imperial_Stormtrooper_Squad).
-    CHECK(game::default_skirmish_fleet(d, "Empire") == game::default_skirmish_fleet("Empire"));
-    CHECK(game::default_skirmish_ground(d, "Empire") == game::default_skirmish_ground("Empire"));
-    // With a mod layer the base-game lists are never used: Empire starts from its own data (none: the fallback).
-    d.mod_layer = true;
-    CHECK(game::default_skirmish_fleet(d, "Empire") != game::default_skirmish_fleet("Empire"));
-    CHECK(game::default_skirmish_ground(d, "Empire") != game::default_skirmish_ground("Empire"));
+    // modc t17: no built-in lists. Empire has no default forces in the data: the [port] fallback, with or without a mod layer.
+    for (const bool mod : {false, true}) {
+        d.mod_layer = mod;
+        CHECK((game::default_skirmish_fleet(d, "Empire") == Names{"Star_Destroyer"}));
+        CHECK((game::default_skirmish_ground(d, "Empire") == Names{"Imperial_Stormtrooper_Squad"}));
+    }
     d.mod_layer = false;
+
+    // modc t19: the skirmish galaxy planet from the data (no planet by name).
+    {
+        const auto planet = [&](std::string_view map, bool land) {
+            const uint32_t t = game::skirmish_galaxy_planet(d.rules, map, land);
+            return t == galactic::kNoIndex ? std::string() : d.rules.types[t].name;
+        };
+        CHECK(planet("", false) == "MF_Rock");                             // MF_Locked_Planet forbids MF_Squadron
+        CHECK(planet("", true) == "MF_Planet");                            // MF_Rock has no surface
+        CHECK(planet("_MP_SPACE_MF_PLANET", false) == "MF_Planet");        // the map's own planet
+        CHECK(planet("_MP_SPACE_MF_LOCKED_PLANET", false) == "MF_Rock");   // the map's planet forbids a unit
+        CHECK(planet("_MP_LAND_MF_ROCK", true) == "MF_Planet");            // no surface for a land skirmish
+        CHECK(planet("_MP_SPACE_NOWHERE", false) == "MF_Rock");
+        game::SkirmishSetup sp;
+        sp.human_faction = "Chiss";
+        sp.ai_faction = "Yevetha";
+        galactic::GalacticSetup gp;
+        CHECK(game::make_skirmish_galaxy(d, sp, gp, &err) && !gp.planet_type.empty() && gp.planet_type[0] == d.rules.find_type("MF_Rock"));
+    }
     // Chiss: squadrons only, no hyperspace -> the cheapest buildable hyperspace ship holding 2 squadrons leads.
     CHECK((game::default_skirmish_fleet(d, "Chiss") == Names{"MF_Frigate", "MF_Squadron", "MF_Squadron"}));
     CHECK((game::default_skirmish_ground(d, "Chiss") == Names{"MF_Trooper_Company"}));
@@ -345,7 +373,8 @@ void test_buy_list_shipped() {
     CHECK(count(m, "Empire", false, true, true) == 106 && count(m, "Empire", true, true, true) == 38);
 }
 
-// The shipped factions resolve as the port has always played them: vanilla sessions are unchanged.
+// modc t17: the shipped factions start from their own Space_ / Land_Skirmish_AI_Default_Forces (FoC: two squadrons of
+// fighters and two infantry squads each) and the shipped campaigns' AI_Player_Control pairs are read, as retail.
 void test_shipped_data() {
     const char* foc = std::getenv("ALAMO_FOC_DATA");
     if (!foc || !fs::exists(fs::path(foc) / "Data")) {
@@ -356,15 +385,28 @@ void test_shipped_data() {
     std::string err;
     CHECK(game::load_game_data(foc, {}, d, &err));
     CHECK(!d.mod_layer);
-    for (const char* f : {"Empire", "Rebel", "Underworld"}) {
-        CHECK(game::default_skirmish_fleet(d, f) == game::default_skirmish_fleet(f));
-        CHECK(game::default_skirmish_ground(d, f) == game::default_skirmish_ground(f));
+    for (const galactic::FactionRules& f : d.rules.factions) {
+        if (!f.is_playable) continue;
+        const auto it = d.skirmish_forces.find(upper(f.name));
+        CHECK(it != d.skirmish_forces.end());
+        if (it == d.skirmish_forces.end()) continue;
+        const Names fleet = game::default_skirmish_fleet(d, f.name), ground = game::default_skirmish_ground(d, f.name);
+        std::printf("shipped %s: fleet", f.name.c_str());
+        for (const std::string& n : fleet) std::printf(" %s", n.c_str());
+        std::printf("; ground");
+        for (const std::string& n : ground) std::printf(" %s", n.c_str());
+        std::printf("\n");
+        CHECK(ground == it->second.land);  // as written: every name is a ground unit
+        // Space: the list as written, behind a [port] hyperspace leader when the list has no hyperspace member.
+        CHECK(fleet.size() >= it->second.space.size() && it->second.space.size() >= 1);
+        CHECK(std::equal(it->second.space.begin(), it->second.space.end(), fleet.end() - static_cast<std::ptrdiff_t>(it->second.space.size())));
     }
 #ifdef ALAMO_GAME_HAVE_GALACTIC_AI
     CHECK(d.ai != nullptr);
     const ai::AiDefinitions* defs = d.ai ? &d.ai->defs : nullptr;
     // modc t03: the types the port's old built-in table gave (Empire -> BasicEmpire, Rebel -> BasicRebel, Underworld ->
-    // AI_Player_Underworld, others none) now come from the shipped Basic_AI, in skirmishes and (no mod layer) campaigns.
+    // AI_Player_Underworld, others none) come from the shipped Basic_AI in skirmishes. modc t17: campaigns read their
+    // AI_Player_Control pairs (no pair = no AI), as ai::campaign_ai_type.
     const auto old_table = [](const std::string& f) -> std::string {
         if (f == "Empire") return "BasicEmpire";
         if (f == "Rebel") return "BasicRebel";
@@ -373,11 +415,14 @@ void test_shipped_data() {
     };
     for (const galactic::FactionRules& f : d.rules.factions) {
         CHECK(game::resolve_ai_type(f.name, d.basic_ai, nullptr, defs) == old_table(f.name));
-        for (const data::CampaignDef& c : d.db.campaigns())
-            if (game::resolve_ai_type(f.name, d.basic_ai, &c.ai_player_control, defs, d.mod_layer) != old_table(f.name)) {
+        for (const data::CampaignDef& c : d.db.campaigns()) {
+            std::string want = d.basic_ai.count(upper(f.name)) ? ai::campaign_ai_type(c.ai_player_control, d.basic_ai, f.name, false) : std::string();
+            if (defs && !want.empty() && !defs->find_player(want)) want.clear();
+            if (game::resolve_ai_type(f.name, d.basic_ai, &c.ai_player_control, defs) != want) {
                 std::printf("FAIL campaign %s faction %s\n", c.name.c_str(), f.name.c_str());
                 ++g_fail;
             }
+        }
     }
 #endif
 }

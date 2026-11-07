@@ -120,8 +120,8 @@ original does (the spec column), for base FoC and for mods alike; nothing here i
 | Mechanism | Files | Rules (spec) | Status |
 |---|---|---|---|
 | Faction list | `Data\XML\FactionFiles.xml` and the files it names | Factions appended in file order, upper-cased names, no duplicate check: the first definition of a name wins. The default faction of a type with an empty `Affiliation` is the first faction with `Is_Neutral` (`OBJECT_TYPES.md` "Faction list", "Empty list"). Map object owners are faction indices in this order (`GALAXY_MAP_PRESENTATION.md`, `REMAINING_GAPS.md` S10 probe) | **main** (galactic rules); no fixed list anywhere: **modc t02/t03** |
-| AI player type | Faction `Basic_AI`; campaign `AI_Player_Control` pairs; `Data\XML\AI\` definitions | Skirmish: an AI slot gets its faction's `Basic_AI` (`SKIRMISH_SETUP.md` §2.1). Campaign: the campaign's `AI_Player_Control` pair; no pair = no AI. A type the AI definitions do not define = no AI ("Unrecognized AI player type", `AI_GALACTIC.md` §1.2) | `main` uses built-in types by faction name (`ai_type_for`, §7). `resolve_ai_type` / `load_faction_basic_ai`: **Q6 stack** (q6 t08), which still keeps the built-in types for `Empire` / `Rebel` / `Underworld` when their `Basic_AI` matches (`is_stock_faction`). Fully data-driven: **modc t03** |
-| Skirmish starting forces | Faction `Space_Skirmish_AI_Default_Forces`, `Land_Skirmish_AI_Default_Forces` | `SKIRMISH_SETUP.md` §2 step 4, §2.2 | `main` (`alamo_game`) uses built-in lists by faction name (§7). Data path: **Q6 stack** (`skirmish_default_forces`). Built-in lists removed: **modc t03** |
+| AI player type | Faction `Basic_AI`; campaign `AI_Player_Control` pairs; `Data\XML\AI\` definitions | Skirmish: an AI slot gets its faction's `Basic_AI` (`SKIRMISH_SETUP.md` §2.1). Campaign: the campaign's `AI_Player_Control` pair; no pair = no AI. A type the AI definitions do not define = no AI ("Unrecognized AI player type", `AI_GALACTIC.md` §1.2) | Data-driven for base FoC and mods alike (`resolve_ai_type`, `load_faction_basic_ai`; modc t03). Campaign pairs read for base FoC too since **modc t17** (2026-11-06; before, only with a mod layer) |
+| Skirmish starting forces | Faction `Space_Skirmish_AI_Default_Forces`, `Land_Skirmish_AI_Default_Forces` | `SKIRMISH_SETUP.md` §2 step 4, §2.2 | Data path for every faction (`skirmish_default_forces`); the port's built-in base-game lists are gone (**modc t17**, 2026-11-06). A faction without a list, or whose names the data does not define: the [port] fallback of §5 (up to three of its cheapest buildable units, `data_fallback_forces`). Space: [port] a hyperspace ship leads a list without one (the port hosts a skirmish as a galactic hop) |
 | Game object types | `Data\XML\GameObjectFiles.xml` and the files it names | One list, no EaW/FoC merge; files in list order; first definition of a type name wins; `Variant_Of_Existing_Type`; unknown names in lists dropped (`OBJECT_TYPES.md` §1–§6) | **main** (engine/objects) |
 | Galaxy and campaigns | `TradeRouteFiles.xml`, `CampaignFiles.xml`, the planet / route / campaign XML they name | One `CampaignFiles.xml` (first match, no merge); route and campaign lists de-duplicated and parsed in ascending CRC32 of the listed name; last definition wins as a whole (`PHASE2_ANSWERS.md` Q13, `FALLBACK_CAMPAIGNS.md`) | **main** (engine/data) |
 | Story / campaign scripts | Story XML named by the campaign, `Data\Scripts\Story\*.lua` | `docs/re/STORY.md`, `L1_S4_REMAINING.md` | **main** (engine/lua, story session) |
@@ -132,7 +132,7 @@ original does (the spec column), for base FoC and for mods alike; nothing here i
 | Maps | `Data\Art\Maps\*.ted` | Skirmish map catalog: official = FoC loose + every MEG, custom = `Data\CustomMaps` + each mod folder's `Data\Art\Maps` (`UI.md` §9.2) | **main** |
 | Text and fonts | `Data\Text\MasterTextFile_<lang>.dat`, mod fonts | Through the VFS; font search includes the mod folders | **main** |
 | Art, audio, video | Models, textures, animations, particles, SFX / music / speech, Bink movies | Loaded by name through the VFS when referenced | **main** |
-| Effects (shaders) | `Data\Art\Shaders\**.fx`, `.fxo` | Retail adds each `MODPATH` / `STEAMMOD` folder's `Data\Art\Shaders\` and `\Terrain\` to the shader search (PHASE2_ANSWERS §14); the port's effect order already includes them (`engine/materials/include/alamo/materials/effect_loader.hpp`). The renderer draws with its own SPIR-V translation of the shipped effects. A mod `.fxo` that adds or replaces an effect goes through the same translation; `.fx` sources and shader model 3 do not yet (§4.1) | **main** (modc t11, §4.1); `.fx` compile: **modc t23**; SM3: **modc t22** |
+| Effects (shaders) | `Data\Art\Shaders\**.fx`, `.fxo` | Retail adds each `MODPATH` / `STEAMMOD` folder's `Data\Art\Shaders\` and `\Terrain\` to the shader search (PHASE2_ANSWERS §14); the port's effect order already includes them (`engine/materials/include/alamo/materials/effect_loader.hpp`). The renderer draws with its own SPIR-V translation of the shipped effects. A mod `.fxo` that adds or replaces an effect goes through the same translation, shader model 3 included (modc t22); `.fx` sources do not yet (§4.1) | **main** (modc t11, t22, §4.1); `.fx` compile: **modc t23** |
 
 Not supported (by decision, for every mod): multiplayer (no networking), loading the original game's save files, and
 retail 32-bit Lua bytecode (the x64 VM rejects it; retail's own `64Patch.meg` ships text sources for that reason,
@@ -151,14 +151,14 @@ the built-in green default; a file that fails to compile or load draws the same 
 
 | Case | What the port does | Issue kind |
 |---|---|---|
-| Mod `.fxo` replaces or adds an effect | Parsed like a shipped one; shader passes are translated (shaderxlat → HLSL → DXC → SPIR-V) on background jobs and cached on disk. Same result as the original | none |
+| Mod `.fxo` replaces or adds an effect | Parsed like a shipped one; shader passes are translated (shaderxlat → HLSL → DXC → SPIR-V) on background jobs and cached on disk, `vs_3_0` + `ps_3_0` passes included (modc t22, below). Same result as the original | none |
 | `.fx` and `.fxo` of the same name | The `.fxo` is loaded; the original compiles the `.fx` instead (same result when the `.fxo` was built from that source) | `source_shadowed` |
 | `.fx` without a `.fxo` | Green default under the effect's name (= the original's result when its compile fails); before t11 it counted as missing (silent shared default) | `source_only` |
 | `.fxo` that does not parse / load | Green default under its name (D.3) | `load_failed` |
 | No selectable technique | Shared green default (D.3) | `no_technique` |
-| Best technique has a shader pass the port has no program for (`vs_3_0` / `ps_3_0`; a VS without a PS) | [port] That technique is skipped like one failing `ValidateTechnique`; the next technique by LOD / file order whose passes all have a program is drawn (`MaterialEffect::skipped_technique`) | `technique_skipped` |
+| Best technique has a shader pass the port has no program for (a VS without a PS or the reverse; shader model 3 mixed with an older stage, which D3D9 does not draw either) | [port] That technique is skipped like one failing `ValidateTechnique`; the next technique by LOD / file order whose passes all have a program is drawn (`MaterialEffect::skipped_technique`) | `technique_skipped` |
 | No technique the port can draw | Submeshes draw unlit (base texture, the pass's blend); Heat / Shadow bucket submeshes are not drawn | `unsupported_pass` |
-| Translation or DXC fails for a pass | Same unlit fallback; logged once per program | `translate_failed` |
+| Translation or DXC fails for a pass (also an SM3 feature outside the list below) | Same unlit fallback; logged once per program | `translate_failed` |
 
 Nothing crashes and nothing is skipped silently: every case except the first is a `materials::ShaderIssue`
 (kind, effect, path, `in_mod`, detail). Up front: `materials::audit_effects()` / `alamo_effect_audit <FoC dir> [MODPATH=..]
@@ -175,12 +175,26 @@ file, other bytes; most mods ship a full recompiled set. Audit with DXC, so ever
 | 1125571106 Thrawn's Revenge | 87 | 31 / 51 / 5 | `AlamoEngine.fx`, `.fxh` | 85 (84) | `source_shadowed` AlamoEngine |
 | 3622043265 Thrawn's Revenge (other copy) | 88 | 31 / 51 / 6 | + `Terrain\_TerrainRenderBump.fx` | 86 (85) | `source_shadowed` AlamoEngine, `source_only` _TerrainRenderBump |
 | 1976399102 Fall of the Republic | 88 | 31 / 51 / 6 | as 3622043265 | 86 (85) | as 3622043265 |
-| 1770851727 | 93 | 31 / 51 / 11 | none | 93 (93) | `technique_skipped` Planet_Deathstar (`sph_t3` vs_3_0 / ps_3_0 → `sph_t2`) |
-| 2858787558 | 55 | 0 / 49 / 6 | none | 88 (55) | `unsupported_pass` MeshFresnelGlow (only SM3 bytecode: unlit) |
+| 1770851727 | 93 | 31 / 51 / 11 | none | 93 (93) | none since modc t22 (before: `technique_skipped` Planet_Deathstar, `sph_t3` vs_3_0 / ps_3_0 → `sph_t2`) |
+| 2858787558 | 55 | 0 / 49 / 6 | none | 88 (55) | none since modc t22 (before: `unsupported_pass` MeshFresnelGlow, only SM3 bytecode: unlit) |
 
 All other mod effects (including 3-11 new `.fxo` per mod, e.g. MeshShieldEngines, MeshBumpSpecGlowColorize, DEFAULT.fxo) load
 and translate: 0 `translate_failed`, 0 `load_failed` in every mod. `_TerrainRenderBump.fx` is preloaded by the original;
-whether any model names it was not checked (t21's report cross-references issue effects with the models' materials). The project-local `fxc.exe` (Windows SDK) compiles `AlamoEngine.fx` with `/T fx_2_0`
+whether any model names it was not checked (t21's report cross-references issue effects with the models' materials).
+
+**Shader model 3** (modc t22, 2026-11-06): `engine/shaderxlat` translates `vs_3_0` / `ps_3_0` and `resolve_pass` marks a
+pass Translated when both stages are SM1-2 or both are SM3 (D3D9 does not draw a mixed pair). Covered: outputs `o0-o11` and
+`ps_3_0` inputs `v0-v9` by dcl usage (POSITION0, COLOR0-1, TEXCOORD0-7, FOG, PSIZE: the varyings SM1-2 code uses, so no new
+pipeline interface), loops / rep / if / call, predicates, `a0` / `aL` constant addressing, `texldl`, `texldd`, `vPos`,
+`vFace`, `def` constants anywhere in c0-c223. Semantics that differ from SM1-2 (translate.cpp header table): SM3 colors and
+fog are not clamped, `ps_3_0` gets no fixed-function fog (the alpha test still applies), `vPos` = pixel centre - 0.5. Rejected
+with a message (the pass then counts as `translate_failed`): other output / input usages (NORMAL, TANGENT, ... as varyings),
+vertex texture fetch, relative addressing of `v#` / `o#`, non-`def` reads of `ps_3_0` c32+ (the engine's PS register file has
+32 registers); none of the installed mods uses them (follow-up tasks on the roadmap). The real SM3 programs in the
+installed mods (4 blobs: MeshFresnelGlow, Planet_Deathstar) use only semantic I/O, `nrm`, `pow`, `lrp`, `log` / `exp`,
+`texld` and `_pp`; they are part of the shaderxlat corpus (`ALAMO_WORKSHOP_DIR`, else the Steam library's workshop folder)
+and of the GPU differential test, with two synthetic SM3 programs that cover the rest of the list.
+Audit after t22: 1770851727 and 2858787558 report no issues (2858787558: 52 track-B passes, was 51). The project-local `fxc.exe` (Windows SDK) compiles `AlamoEngine.fx` with `/T fx_2_0`
 (warning X4717 "Effects deprecated"), so a compile step for `.fx` sources is feasible (t23).
 
 ## 5. Fallbacks and what the loader reports
@@ -213,7 +227,7 @@ from a mod's name. Two levels:
 | A submod checked without its parent | Its lists name the parent's XML files: skipped, hundreds of missing files | Listed as missing files as before, plus a submod hint naming the installed mod that has them (below) | Info (not counted) | **modc t16** |
 | A mod `.fxo` replaces or adds an effect | Loaded | Loaded and translated like a shipped effect (§4.1) | — | **main** (modc t11) |
 | An effect only a mod ships as `.fx` source, or a `.fx` beside a `.fxo` | Compiled by D3DX | `.fx` only: green default under its name; with a `.fxo`: the `.fxo` (§4.1, `source_only` / `source_shadowed`) | Warning | **main** (modc t11); in the report: **modc t21**; compile: **modc t23** |
-| An effect's best technique uses shader model 3 | Drawn (SM3 hardware) | Next drawable technique (`technique_skipped`), else unlit (`unsupported_pass`) | Warning | **main** (modc t11); report **modc t21**; SM3: **modc t22** |
+| An effect's best technique uses shader model 3 | Drawn (SM3 hardware) | Translated and drawn (§4.1); an SM3 feature outside the covered list: unlit (`translate_failed`) | — | **main** (modc t11, t22) |
 | An effect fails to load, has no technique, or a pass fails translation | Green default / validation failure | Green default (`load_failed`, `no_technique`) or unlit (`translate_failed`) | Warning | **main** (modc t11); report **modc t21** |
 
 The report: `alamo_mod_check [--game DIR] [MODPATH=..] [STEAMMOD=..] [FALLBACKPATH=..] [--out FILE] [--json FILE|-] [--verbose]
@@ -328,14 +342,12 @@ Add a row here for every new rule of this kind, in the same change that adds it.
 
 Found while writing this contract; the full audit is **modc t02**, the replacements **modc t03**, the lint **modc t04**.
 
-- `ai_type_for(faction)`: built-in AI types for `Empire`, `Rebel`, `Underworld` (**main**, `engine/apps/game/src/game_data.cpp`,
-  used by `game_session.cpp`). The **Q6 stack** moves it to `engine/apps/game/rules/skirmish_rules.hpp` and limits it to
-  "stock" factions (`is_stock_faction`: the name matches and the data's `Basic_AI` agrees), which is still a name test.
-- `default_skirmish_fleet(faction)` / `default_skirmish_ground(faction)`: built-in unit lists for the same three factions
-  (**main**; the Q6 stack uses them only for stock factions).
-- `SkirmishSetup` defaults `human_faction = "Rebel"`, `ai_faction = "Empire"`; `make_skirmish_galaxy` looks up `"Hostile"` by
-  name and picks the battle planet from `Kuat` / `Coruscant` first; the skirmish map list puts `_MP_SPACE_KUAT` first
-  (**main**, `engine/apps/game/include/alamo/game/game_data.hpp`, `game_data.cpp`).
+- None left from this list (2026-11-06). `ai_type_for`, `is_stock_faction`, the `Rebel` / `Empire` slot defaults and the
+  `"Hostile"` lookup went in **modc t03**; the built-in skirmish unit lists and the base-game exception for campaign
+  `AI_Player_Control` pairs in **modc t17**; the `Kuat` / `Coruscant` skirmish planet and the `_MP_SPACE_KUAT` default map in
+  **modc t19** (the skirmish galaxy's planet is the map's own planet type when the data has it and it forbids no unit, else
+  the first such `PLANET` type: `skirmish_galaxy_planet`; the staging dialog selects the remembered map, else row 0, as
+  `UI.md` 9.7). The remaining kept rows of the audit (`docs/status/modc-audit.md`) are retail hard-codes or test hosts.
 
 Each needs either a data-driven replacement or a `docs/re/` citation showing the original does the same (§1 rule 3).
 

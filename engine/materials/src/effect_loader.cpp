@@ -249,8 +249,9 @@ ResolvedPass resolve_pass(const fx::Effect& e, int technique, int pass_index, co
     // pass Translated. No DXC here: translate_pass() compiles on demand.
     if (r.program_status == ProgramStatus::NeedsTranslation && !vsb.empty() && !psb.empty()) {
         shaderxlat::Program vp, pp;
-        if (shaderxlat::parse(vsb, vp) && shaderxlat::parse(psb, pp) && vp.is_vs() && pp.is_ps() && vp.major <= 2 &&
-            pp.major <= 2) {
+        // SM1-2 pairs, or vs_3_0 with ps_3_0 (modc t22; D3D9 draws a shader model 3 stage only with the other at 3 too).
+        if (shaderxlat::parse(vsb, vp) && shaderxlat::parse(psb, pp) && vp.is_vs() && pp.is_ps() &&
+            ((vp.major <= 2 && pp.major <= 2) || (vp.major == 3 && pp.major == 3))) {
             r.vs_bytecode.assign(vsb.begin(), vsb.end());
             r.ps_bytecode.assign(psb.begin(), psb.end());
             if (pp.ps1())

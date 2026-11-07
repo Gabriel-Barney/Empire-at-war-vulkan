@@ -506,7 +506,6 @@ std::vector<uint32_t> skirmish_slot_forces(const Session& s, const game::Skirmis
                                            std::vector<std::string>& diag) {
     std::vector<std::string> notes;
     game::SkirmishForceOptions opt;
-    opt.base_game_lists = false;
     opt.hyperspace_leader = false;
     opt.diag = &notes;
     std::vector<uint32_t> out = game::skirmish_data_force_types({s.rules, s.types, table}, faction, land, opt);
