@@ -1,4 +1,4 @@
-// alamo_shaderxlat - PORTING.md track B: D3D9 SM1-2 bytecode -> HLSL (SM6) -> SPIR-V.
+// alamo_shaderxlat - PORTING.md track B: D3D9 SM1-3 bytecode -> HLSL (SM6) -> SPIR-V.
 //
 //   Program prog;            parse(bytecode, prog, &err)                 bytecode.hpp
 //   Translation t;           translate(prog, options, t, &err)           translate.hpp (HLSL + ShaderInterface)
