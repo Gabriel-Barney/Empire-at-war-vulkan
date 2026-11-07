@@ -16,6 +16,8 @@
 
 # Probe captures and traces (many GB)
 /tools/probe_mod/**/out/
+# Q4 parity harness reports and port runs (tools/parity/README.md)
+/tools/parity/out/
 
 # Roadmap data lives in its own repository
 /roadmap-store/

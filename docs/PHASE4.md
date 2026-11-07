@@ -212,6 +212,51 @@ headless refusal, report keys), `alamo_game_bench_scenario_headless` (no data: a
 match, 120 counted frames, GPU scopes, identical PNGs in both runs, the camera moved (first and last PNG differ), and a changed
 pinned file refused.
 
+## Q4 parity baseline (q4h t02, 2026-11-07)
+
+Measured with the Q4 harness (`tools/parity/`, README there: metrics, tolerances and their reasons, grading) on **dev
+`3629d4cf`** (alamo_headless MSVC Release, 4 workers), before the a2k galactic-AI merge landed: **re-run after a2k**
+(`parity_harness.py run`) and re-record `tools/parity/baseline.json` if it moves. The confirm, AI and Q4 groups are judged
+against these numbers. Reference runs: the Q2 traces in the main checkout's `tools/probe_mod/q2_traces/out/`.
+
+| scenario | timing | income | AI choices | battle outcomes | damage |
+|---|---|---|---|---|---|
+| `hotm_galactic` (3 retail runs) | 15 PASS / 5 FAIL | 22 / 3 | 11 / 5 (1 N/A) | 7 / 0 | - |
+| retail leave-one-out, same tolerances | 90 / 17 | 46 / 14 | 30 / 10 | 19 / 2 | - |
+| `geonosis_skirmish` (1 retail run) | - | 3 / 3 | 0 / 5 (1 N/A) | 2 / 3 | 3 N/A |
+
+The leave-one-out row grades each retail run like the port against the other two: the three HotM runs (same seed 0,
+no input) already differ from tick 140 on, so a port FAIL in an AI-driven metric has to be read against that row.
+
+Differences outside tolerance (port vs retail):
+
+- **Timing, galactic.** Fiscal cycles: all 10 exact. Builds: 8 of 10 type/planet pairs within 5% (mining facility,
+  palace, barracks, factories, turbolaser towers: port 600 / 720 / 1440, retail 602 / 722 / 1442, i.e. retail items
+  leave the queue 2 ticks after start + frames); `CORELLIAN_GUNBOAT@NABOO` 432 vs 458-482 and
+  `UNDERWORLD_SABOTEUR_TEAM@NALHUTTA` 540 vs 602 are shorter in the port (engine/galactic production build-time
+  modifiers). Hops: all 7 Rebel routes within 3 ticks (e.g. Shola -> Nal Hutta 160 vs 161, Kamino -> The Maw 277 vs 279);
+  3 Underworld routes off (Nal Hutta -> Shola 160 vs retail 80 / 89 / 107, Felucia -> Kashyyyk 68 vs 104, Kashyyyk -> Kuat
+  28 vs 44): the port's Underworld fleets move at Rebel speed where retail is faster on some hops and slower on others
+  (engine/galactic hyperspace speed: corruption bonus, fleet composition).
+- **Income, galactic.** The idle Empire matches exactly (667.5 per cycle, 15,002.5 / 17,005 / 19,007.5 at ticks 4500 /
+  9000 / 13500). Underworld first payment 2105 vs 2150-2240, Underworld ends at 0 credits (retail 176-312), Rebel mean
+  payment 817 vs 713-736 (engine/galactic income + engine/ai spending).
+- **AI choices, galactic.** Rebel queues 11 items (retail 32-50), type overlap 0.22 (retail runs among themselves 0.30):
+  the q2f t09 gap (no infantry, tank busters, Y-wings). Underworld production is within tolerance (23 items, overlap 0.54),
+  but its fleets leave first at tick 1963 (retail 110) and make 13 departures (retail 37-56), target overlap 0.19 (engine/ai
+  galactic plans). First builds within 4 ticks of retail (Rebel 87 vs 89, Underworld 68 vs 64).
+- **Battle outcomes, galactic.** Final owners within the retail outcomes (4/4/4); 2 owner changes (retail 0-1).
+- **Skirmish (Geonosis, idle Empire vs Rebel AI).** The idle human's credits match to 0.02 (6299.7 / 6599.4 / 6899.1). The
+  port's Empire gains 7 TIE fighters and 4 TIE bombers it never builds (retail: none; engine/apps skirmish host or starbase
+  spawns) and loses 3 units (retail 0: the Rebel AI attacks earlier). The Rebel AI builds X-wings early (frame 600, retail
+  1800), 38 items (retail 25), no mineral extractors (retail 5), balance 2750 / 100 / 400 vs 226 / 1256 / 2112 at frames
+  1800 / 3600 / 5400 (engine/ai tactical production).
+
+Gaps: skirmish damage and first shot have no port side (missing hook: a tactical `--trace-out` in
+`engine/apps/headless/skirmish_run.cpp`; retail: 325 hull lost by the Rebel, first projectile at frame 3953); no retail
+battle-outcome trace (hands-off galactic runs stop when a tactical battle starts); one retail skirmish run only (no spread);
+galactic object counts by type are not comparable (members vs companies).
+
 ## Port choices and per-step notes (tracked on the roadmap)
 
 This list holds the [port] / [inferred] / [M] choices and per-step notes. Finished ("✅ DONE") items were moved verbatim to `docs/PHASE4_HISTORY.md` on 2026-11-06 (section "Finished open-item notes moved from PHASE4.md"). Which items are still open is decided on the main roadmap, not by the tags here (the tag legend and counts that were here were moved verbatim to `docs/PHASE4_HISTORY.md` on 2026-11-06). Inline, ✅ marks a finished sub-item, often also struck through, and ⬜ marks one still open.

@@ -62,6 +62,10 @@ skirmish, the 0-worker entry also checks `--expect-skirmish-base`; `_profiled` c
 BM1 t05 (2026-11-06): `alamo_headless_bench_space_battle*` runs the check on the benchmark scenario from its save (`--bench
 tests/benchmark/space_battle.abench --runs 1 --warmup 0`, slow, FoC data; docs/PHASE4.md "BM - repeatable benchmark").
 BM1f t02 (2026-11-06): `tools\regen_goldens.cmd` also remakes a stale benchmark scenario (`tools\benchmark\regen_scenario.cmd`, version bump); `--bench-check` only reports stale ones (exit 4), `--no-bench` skips them (`docs/status/golden-checkpoints.md`).
+Q4 parity baseline (q4h, 2026-11-07): `parity_harness_hotm_galactic` / `parity_harness_geonosis_skirmish` (slow, FoC data and the Q2
+reference runs, else skipped with exit 77) grade the tree's `alamo_headless` against the original game by behaviour and fail only
+when a metric that passed in `tools/parity/baseline.json` fails now. An intended behaviour change that moves one: re-record the
+baseline (`tools\parity\README.md`) and say so in the commit, as for goldens; `parity_harness_selftest` is in the fast tier.
 Not converted: `alamo_headless_skirmish_ai_synthetic` and the in-process loops in `engine/apps/sim/tests` stay as they are (short).
 
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)

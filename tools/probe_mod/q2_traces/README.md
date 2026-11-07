@@ -289,6 +289,10 @@ Skirmish (space, 2 players):
 
 ## Files
 
+The per-metric `q2trace.py compare <run dir>` report is superseded for Q4 by the behavioural parity harness
+`tools/parity/` (q4h, 2026-11-07: tolerances per metric, retail run-to-run envelope, skirmish scenario, baseline ctest).
+It imports `analysis/q2_parity.py`, so keep that module's functions stable.
+
 | file | what |
 |---|---|
 | `run_galactic.cmd`, `run_skirmish.cmd` → `run_trace.ps1` | one recorded run: preflight, optional mod install, reader + game start, wait, cleanup, validate, Q1 conversion |
