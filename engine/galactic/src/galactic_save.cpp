@@ -5,7 +5,8 @@
 //   u32 version
 //   definition fingerprint (checked, not restored): u32 planet rows, u32 routes, u32 type count, u32 player count
 //   mode: i32 frame, pause, last_cycle_frame, next_cycle_frame, cycle_counter; bool linked_battle_pending;
-//         i32 neutral_player, local_player; bool auto_reveal, reveal_sfx, initial_build_locks, emit_events, slot_choices
+//         i32 neutral_player, local_player; bool auto_reveal, reveal_sfx, initial_build_locks (cu15: a constant true
+//         placeholder, ignored on read; the locks are always on), emit_events, slot_choices
 //   players (player order): PlayerState field by field + f32 last_income
 //   u32 relation count (0 or P x P) + u8 each
 //   planets (row order): bool is_planet + u32 type (checked against the session), then every other PlanetState field
@@ -132,7 +133,7 @@ void GalacticSim::write(ByteWriter& w) const {
     w.i32(frame_).i32(pause_).i32(last_cycle_frame_).i32(next_cycle_frame_).i32(cycle_counter_);
     w.boolean(linked_battle_pending_);
     w.i32(neutral_player_).i32(local_player_);
-    w.boolean(auto_reveal_).boolean(reveal_sfx_).boolean(initial_build_locks_).boolean(emit_events_).boolean(slot_choices_);
+    w.boolean(auto_reveal_).boolean(reveal_sfx_).boolean(true).boolean(emit_events_).boolean(slot_choices_);
 
     for (size_t i = 0; i < players_.size(); ++i) {
         const PlayerState& p = players_[i];
@@ -252,8 +253,9 @@ bool GalacticSim::read(ByteReader& r) {
     const int32_t frame = r.i32(), pause = r.i32(), last_cycle = r.i32(), next_cycle = r.i32(), cycle = r.i32();
     const bool linked = r.boolean();
     const int32_t neutral = r.i32(), local = r.i32();
-    const bool auto_reveal = r.boolean(), reveal_sfx = r.boolean(), build_locks = r.boolean(), emit = r.boolean(),
-               slot_choices = r.boolean();
+    const bool auto_reveal = r.boolean(), reveal_sfx = r.boolean();
+    r.boolean();  // initial_build_locks placeholder (cu15: always on)
+    const bool emit = r.boolean(), slot_choices = r.boolean();
     if (!r.ok() || pause < 0 || !player_ok(neutral) || !player_ok(local)) return false;
 
     std::vector<PlayerState> players(np);
@@ -511,7 +513,6 @@ bool GalacticSim::read(ByteReader& r) {
     local_player_ = local;
     auto_reveal_ = auto_reveal;
     reveal_sfx_ = reveal_sfx;
-    initial_build_locks_ = build_locks;
     emit_events_ = emit;
     slot_choices_ = slot_choices;
     players_ = std::move(players);

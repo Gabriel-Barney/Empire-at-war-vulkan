@@ -11,9 +11,6 @@ namespace beh = objects::beh;
 
 namespace {
 
-Vec3 to_vec(const econ::Vec3f& v) { return {v.x, v.y, v.z}; }
-econ::Vec3f to_vf(const Vec3& v) { return {v.x, v.y, v.z}; }
-
 void note(std::vector<std::string>* diag, std::string msg) {
     if (diag) diag->push_back(std::move(msg));
 }
@@ -425,6 +422,39 @@ float GalacticSim::planet_income(PlanetIndex planet, bool gross) {
     return net;
 }
 
+float GalacticSim::planet_income_preview(PlanetIndex planet) const {
+    // The summation order is part of the AI token values (and so of the AI / campaign CRCs): keep it.
+    if (planet >= planets_.size()) return 0.0f;
+    const PlanetState& p = planets_[planet];
+    if (!p.is_planet || p.type >= rules_->types.size()) return 0.0f;
+    if (frame_ <= p.halt_until) return 0.0f;
+    const EconomyConstants& c = rules_->constants;
+    const int32_t b = p.destroyed ? rules_->types[p.type].destroyed_credit_value : p.base_value;
+    float sum = 0.0f;
+    for (const IncomeEntry& e : p.income)
+        if (e.kind == kIncomeAbility && e.expiry >= frame_) sum += e.value;
+    sum += econ::income_base(b, p.black_market);
+    bool keep = false;
+    const ForceSide owner_side =
+        valid_player(p.owner) && players_[static_cast<size_t>(p.owner)].faction < rules_->factions.size()
+            ? rules_->factions[players_[static_cast<size_t>(p.owner)].faction].force_alignment
+            : ForceSide::Neutral;
+    const float force = econ::income_force(b, owner_side, rules_->types[p.type].the_force, rules_->types[p.type].force_strength,
+                                           c.credit_alignment_bonus, c.credit_alignment_penalty, &keep);
+    if (keep) sum += force;
+    if (p.owner != neutral_player_) sum += econ::income_political(b, p.control, c.political_income_curve);
+    float gain = 0.0f;
+    for (const uint32_t rt : p.links) {
+        const PlanetIndex nb = map_.routes.point_a[rt] == planet ? map_.routes.point_b[rt] : map_.routes.point_a[rt];
+        const float factor = map_.routes.credit_gain_factor[rt];
+        if (nb < planets_.size() && planets_[nb].is_planet && valid_player(p.owner) && planets_[nb].owner == p.owner && factor > 0.0f)
+            gain += factor;
+    }
+    sum += econ::income_trade(b, gain);
+    float siphoned = 0.0f;
+    return econ::income_finish(sum, p.min_income_set, p.min_income, p.max_income_set, p.max_income, false, 0.0f, &siphoned);
+}
+
 float GalacticSim::player_income(int32_t player, bool consume) {
     if (!valid_player(player)) return 0.0f;
     const FactionRules& fr = faction_of(player);
@@ -460,7 +490,7 @@ void GalacticSim::fiscal_cycle() {
     // that player's Add_Credits, with the raw Player_Income I (before the AI Credit_Multiplier, the zero floor and the
     // cap clamp), only for a non-human AI player, and never on a zero-income cycle. The accrual (0x614340) belongs to
     // engine/ai: it listens through the income hooks; listeners only read the sim.
-    const std::vector<std::pair<uint32_t, IncomeHook>> hooks = income_hooks_;  // a listener may unregister
+    const std::vector<std::pair<uint32_t, IncomeHook>> hooks = income_hooks_;  // a listener may register another
     IncomeTick tick;
     tick.period_seconds = rules_->constants.fiscal_cycle_seconds;  // T = Fiscal_Cycle_Time_In_Secs (AI_GALACTIC_3 §8)
     tick.day = cycle_counter_ + 1;  // the day this cycle completes (the counter itself increments after the loop)
@@ -837,10 +867,6 @@ void GalacticSim::service_production(PlanetIndex planet) {
 // ProductionBehavior::Service (AI_GALACTIC_3 §5): the AI market of the planet (A2 galactic hook), then its queues.
 void GalacticSim::planet_production(PlanetIndex planet) {
     if (production_hook_) production_hook_(planet);
-    if (!production_hooks_.empty()) {
-        const auto hooks = production_hooks_;  // a listener may unregister
-        for (const auto& h : hooks) h.second(planet);
-    }
     if (valid_planet(planet)) service_production(planet);
 }
 
@@ -1268,12 +1294,8 @@ void GalacticSim::depart_hop(uint32_t fleet, PlanetIndex from, PlanetIndex to, b
 void GalacticSim::service_fleet(uint32_t fleet) {
     FleetState& f = fleets_[fleet];
     if (!f.alive || !f.moving) return;
-    econ::Vec3f pos = to_vf(f.position);
-    econ::Vec3f facing = to_vf(f.facing);
     // Turning toward the target is not modelled: the facing snaps to the hop direction [M].
-    const bool arrived = econ::fleet_step(pos, to_vf(planets_[f.to].position), f.hop_speed, &facing);
-    f.position = to_vec(pos);
-    f.facing = to_vec(facing);
+    const bool arrived = econ::fleet_step(f.position, planets_[f.to].position, f.hop_speed, &f.facing);
     store_->set_position(f.object, f.position);
     store_->set_facing(f.object, f.facing);
     if (arrived) arrive(fleet);
@@ -1440,10 +1462,6 @@ void GalacticSim::update() {
 
 RejectReason GalacticSim::handle_command(uint64_t /*tick*/, const commands::Command& cmd) {
     return execute(cmd.header.player, cmd.payload);
-}
-
-std::function<RejectReason(uint64_t, const commands::Command&)> GalacticSim::command_handler() {
-    return [this](uint64_t tick, const commands::Command& c) { return handle_command(tick, c); };
 }
 
 RejectReason GalacticSim::execute(uint8_t player_id, const commands::EventData& ev) {

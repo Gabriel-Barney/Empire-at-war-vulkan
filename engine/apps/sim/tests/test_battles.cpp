@@ -28,7 +28,6 @@
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
-#include "alamo/galactic/corruption.hpp"  // S4
 #include "alamo/galactic/galactic_rules.hpp"
 #include "alamo/galactic/victory.hpp"  // story t11
 #include "alamo/objects/game_object_types.hpp"
@@ -3181,22 +3180,24 @@ void test_foc() {
     }
     test_foc_weapon_sources(types, catalog);  // S8 t08 / S8 t06 B4
     {  // --- S4 (owner: S4 agent): shipped corruption options (PLANETS.XML) and garrison / capture descriptors ---
-        const std::vector<galactic::CorruptionOption> ae = galactic::corruption_options(types, types.resolve_name("AetenII"));
+        const std::vector<galactic::CorruptionChoiceDef>& ae = rules.special.type(types.resolve_name("AetenII")).corruption;
         size_t missions = 0, options = 0;
         for (size_t t = 0; t < types.size(); ++t)
-            for (const galactic::CorruptionOption& o : galactic::corruption_options(types, static_cast<objects::TypeIndex>(t))) {
+            for (const galactic::CorruptionChoiceDef& o : rules.special.type(static_cast<uint32_t>(t)).corruption) {
                 ++options;
                 missions += o.tactical ? 1u : 0u;
             }
         std::printf("foc corruption: %zu options, %zu with a tactical mission; AetenII %zu options\n", options, missions, ae.size());
         CHECK(ae.size() == 2 && options > 20 && missions > 5);
         if (ae.size() == 2) {
-            std::printf("  AetenII 1: type %d tactical %d kind %d cost %d map '%s' plots '%s' unit '%s' x%d\n", ae[0].type, ae[0].tactical ? 1 : 0,
-                        static_cast<int>(ae[0].kind), ae[0].credit_cost, ae[0].map.c_str(), ae[0].plots.c_str(), ae[0].required_unit.c_str(),
-                        ae[0].required_unit_count);
-            CHECK(ae[0].type == 1 && ae[0].tactical && ae[0].kind == galactic::ConflictKind::Space && ae[0].credit_cost == 1000 &&
-                  ae[0].map == "_Space_Planet_AetenII_Piracy.ted" && ae[0].plots == "Story_Plots_Underworld_AetenII_Piracy.xml" &&
-                  ae[0].required_unit == "Bossk" && ae[0].required_unit_count == 1);
+            const objects::TypeIndex bossk = types.resolve_name("Bossk");
+            std::printf("  AetenII 1: type %d tactical %d space %d cost %d map '%s' plots '%s' units %zu x%d\n", ae[0].type,
+                        ae[0].tactical ? 1 : 0, ae[0].tactical_space ? 1 : 0, ae[0].credit_cost_rounded, ae[0].tactical_map.c_str(),
+                        ae[0].tactical_plots.c_str(), ae[0].required_unit_types.size(), ae[0].required_unit_count);
+            CHECK(ae[0].type == 1 && ae[0].tactical && ae[0].tactical_space && ae[0].credit_cost_rounded == 1000 &&
+                  ae[0].tactical_map == "_Space_Planet_AetenII_Piracy.ted" &&
+                  ae[0].tactical_plots == "Story_Plots_Underworld_AetenII_Piracy.xml" && bossk != objects::kNone &&
+                  ae[0].required_unit_types == std::vector<uint32_t>{bossk} && ae[0].required_unit_count == 1);
             CHECK(ae[1].type == 3 && !ae[1].tactical && ae[1].required_mission == 0 && ae[1].required_mission_count == 1 &&
                   ae[1].required_unit_count == 2);
         }

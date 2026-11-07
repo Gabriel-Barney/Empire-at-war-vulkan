@@ -287,7 +287,7 @@ void ConflictManager::release_pause() {
 
 // ---- participants ----
 
-std::vector<ObjectHandle> ConflictManager::orbit_units(PlanetIndex planet, int32_t player, bool space_only) const {
+std::vector<ObjectHandle> ConflictManager::orbit_contents(PlanetIndex planet, int32_t player, bool (*keep)(UnitKind)) const {
     std::vector<ObjectHandle> out;
     if (planet >= sim_->planets().size()) return out;
     const auto& store = sim_->store();
@@ -297,28 +297,18 @@ std::vector<ObjectHandle> ConflictManager::orbit_units(PlanetIndex planet, int32
         for (ObjectHandle m : f.contents) {
             if (!store.alive(m)) continue;
             const uint32_t t = static_cast<uint32_t>(store.type(m));
-            const bool sk = t < sim_->rules().types.size() && space_kind(sim_->rules().types[t].kind);
-            if (space_only && !sk) continue;
-            out.push_back(m);
+            if (t < sim_->rules().types.size() && keep(sim_->rules().types[t].kind)) out.push_back(m);
         }
     }
     return out;
 }
 
+std::vector<ObjectHandle> ConflictManager::orbit_units(PlanetIndex planet, int32_t player) const {
+    return orbit_contents(planet, player, space_kind);
+}
+
 std::vector<ObjectHandle> ConflictManager::orbit_cargo(PlanetIndex planet, int32_t player) const {
-    std::vector<ObjectHandle> out;
-    if (planet >= sim_->planets().size()) return out;
-    const auto& store = sim_->store();
-    for (uint32_t fi : sim_->planets()[planet].orbit) {
-        const FleetState& f = sim_->fleets()[fi];
-        if (!f.alive || f.moving || f.owner != player) continue;
-        for (ObjectHandle m : f.contents) {
-            if (!store.alive(m)) continue;
-            const uint32_t t = static_cast<uint32_t>(store.type(m));
-            if (t < sim_->rules().types.size() && sim_->rules().types[t].kind == UnitKind::GroundUnit) out.push_back(m);
-        }
-    }
-    return out;
+    return orbit_contents(planet, player, [](UnitKind k) { return k == UnitKind::GroundUnit; });
 }
 
 std::vector<ObjectHandle> ConflictManager::surface_units(PlanetIndex planet, int32_t player) const {
@@ -342,7 +332,7 @@ bool ConflictManager::can_fight_space(ObjectHandle h) const { return unit_power(
 
 std::vector<ObjectHandle> ConflictManager::overrun_units(const ConflictInfo& rec, bool defender, bool space) const {
     const int32_t player = defender ? rec.defender : rec.attacker;
-    if (space) return orbit_units(rec.planet, player, true);
+    if (space) return orbit_units(rec.planet, player);
     std::vector<ObjectHandle> out = surface_units(rec.planet, player);
     if (!defender)  // the ground power the attacker's orbit fleets carry
         for (ObjectHandle h : orbit_cargo(rec.planet, player)) out.push_back(h);
@@ -487,8 +477,8 @@ bool ConflictManager::validate(const ConflictInfo& c) const {
     const PlanetState& p = sim_->planets()[c.planet];
     if (c.kind == ConflictKind::Space) {
         bool att = false, def = false;
-        for (ObjectHandle h : orbit_units(c.planet, c.attacker, true)) att = att || can_fight_space(h);
-        for (ObjectHandle h : orbit_units(c.planet, c.defender, true)) def = def || can_fight_space(h);
+        for (ObjectHandle h : orbit_units(c.planet, c.attacker)) att = att || can_fight_space(h);
+        for (ObjectHandle h : orbit_units(c.planet, c.defender)) def = def || can_fight_space(h);
         const bool starbase = p.starbase_level > 0 && p.starbase_owner == c.defender && sim_->store().alive(p.starbase);
         return att && (def || starbase);
     }
@@ -507,6 +497,10 @@ void ConflictManager::pop_head(ConflictKind kind) {
         q.erase(q.begin());
         refresh_in_battle(planet);
     }
+    reset_machine();
+}
+
+void ConflictManager::reset_machine() {
     state_ = ConflictState::Idle;
     force_ = false;
     retreating_ = kNoPlayer;
@@ -517,34 +511,29 @@ void ConflictManager::pop_head(ConflictKind kind) {
     ar_cargo_.clear();
 }
 
+ConflictLogEntry ConflictManager::log_entry(const ConflictInfo& c, uint8_t how) const {
+    ConflictLogEntry e;
+    e.tick = tick_;
+    e.galactic_frame = sim_->frame();
+    e.kind = c.kind;
+    e.planet = c.planet;
+    e.attacker = c.attacker;
+    e.defender = c.defender;
+    e.how = how;
+    return e;
+}
+
 bool ConflictManager::yield_to_linked() {
     if (state_ == ConflictState::Idle || state_ == ConflictState::InBattle) return false;
     release_pause();
-    state_ = ConflictState::Idle;
-    force_ = false;
-    retreating_ = kNoPlayer;
-    has_choice_ = false;
-    choice_ = BattleChoice::Pending;
-    ar_in_ = AutoResolveInput{};
-    ar_objects_.clear();
-    ar_cargo_.clear();
+    reset_machine();
     return true;
 }
 
 void ConflictManager::drop_head(ConflictKind kind, bool log_it) {
     const std::vector<ConflictInfo>& q = queue(kind);
     if (q.empty()) return;
-    if (log_it) {
-        ConflictLogEntry e;
-        e.tick = tick_;
-        e.galactic_frame = sim_->frame();
-        e.kind = kind;
-        e.planet = q.front().planet;
-        e.attacker = q.front().attacker;
-        e.defender = q.front().defender;
-        e.how = 0;
-        log_.push_back(std::move(e));
-    }
+    if (log_it) log_.push_back(log_entry(q.front(), 0));
     release_pause();
     pop_head(kind);
 }
@@ -585,15 +574,7 @@ void ConflictManager::on_service_tail() {
                 ++i;
                 continue;
             }
-            ConflictLogEntry e;
-            e.tick = tick_;
-            e.galactic_frame = sim_->frame();
-            e.kind = kind;
-            e.planet = planet;
-            e.attacker = q[i].attacker;
-            e.defender = q[i].defender;
-            e.how = 0;
-            log_.push_back(std::move(e));
+            log_.push_back(log_entry(q[i], 0));
             q.erase(q.begin() + static_cast<std::ptrdiff_t>(i));
             dropped.push_back(planet);
         }
@@ -757,7 +738,7 @@ void ConflictManager::auto_setup(const ConflictInfo& head) {
     };
     if (space) {
         for (int32_t p : {head.defender, head.attacker})
-            for (ObjectHandle h : orbit_units(head.planet, p, true)) add(h);
+            for (ObjectHandle h : orbit_units(head.planet, p)) add(h);
         if (sim_->store().alive(planet.starbase) && planet.starbase_level > 0 &&
             (planet.starbase_owner == head.defender || planet.starbase_owner == head.attacker)) {
             ArCombatant c = combatant_of(planet.starbase, true);
@@ -791,14 +772,7 @@ void ConflictManager::auto_finish(const ConflictInfo& head) {
     const AutoResolveResult& r = last_ar_;
     const bool space = head.kind == ConflictKind::Space;
     const PlanetIndex planet = head.planet;
-    ConflictLogEntry e;
-    e.tick = tick_;
-    e.galactic_frame = sim_->frame();
-    e.kind = head.kind;
-    e.planet = planet;
-    e.attacker = head.attacker;
-    e.defender = head.defender;
-    e.how = 1;
+    ConflictLogEntry e = log_entry(head, 1);
     e.winner = r.winner;
     e.loser = r.loser;
     e.retreating = r.retreating;
@@ -1106,7 +1080,7 @@ bool ConflictManager::begin_battle(const ConflictInfo& head, Linked linked, uint
             if (linked == Linked::Sandbox && !human(pl)) {
                 f.player = pl;  // §2.9.5 sandbox: AI sides get nothing
             } else if (linked == Linked::Sandbox) {  // story t07: 0x2bce30 with Param6 / Param14
-                const std::vector<ObjectHandle> units = orbit_units(head.planet, pl, true);
+                const std::vector<ObjectHandle> units = orbit_units(head.planet, pl);
                 std::vector<ObjectHandle> leads;  // [port] a fleet's lead ship = its first space unit (fleet order)
                 for (uint32_t fi : sim_->fleets_at(head.planet, pl))
                     for (ObjectHandle m : sim_->fleets()[fi].contents)
@@ -1116,7 +1090,7 @@ bool ConflictManager::begin_battle(const ConflictInfo& head, Linked linked, uint
                         }
                 split_space_forces(pl, units, f, forced_type, flagship, leads);
             } else {
-                split_space_forces(pl, orbit_units(head.planet, pl, true), f);
+                split_space_forces(pl, orbit_units(head.planet, pl), f);
             }
             req.forces.push_back(std::move(f));
         }
@@ -1147,14 +1121,7 @@ void ConflictManager::finish_battle(const BattleResult& result, LinkedResolution
     const int32_t W = result.winner;
     const int32_t L = W == D ? A : D;
     const auto& store = sim_->store();
-    ConflictLogEntry e;
-    e.tick = tick_;
-    e.galactic_frame = sim_->frame();
-    e.kind = head.kind;
-    e.planet = planet;
-    e.attacker = A;
-    e.defender = D;
-    e.how = 2;
+    ConflictLogEntry e = log_entry(head, 2);
     e.winner = W;
     e.loser = L;
     e.map = request_.map;
@@ -1278,14 +1245,7 @@ void ConflictManager::finish_corruption_mission(const BattleResult& result) {
     if (state_ != ConflictState::InBattle || queue(active_).empty()) return;
     const ConflictInfo head = queue(active_).front();
     const auto& store = sim_->store();
-    ConflictLogEntry e;
-    e.tick = tick_;
-    e.galactic_frame = sim_->frame();
-    e.kind = head.kind;
-    e.planet = head.planet;
-    e.attacker = head.attacker;
-    e.defender = head.defender;
-    e.how = 2;
+    ConflictLogEntry e = log_entry(head, 2);
     e.winner = result.winner;
     e.loser = result.winner == head.defender ? head.attacker : head.defender;
     e.map = request_.map;
@@ -1386,7 +1346,7 @@ PlanetIndex ConflictManager::nearest_planet(PlanetIndex from, PlanetIndex exclud
     return best;
 }
 
-PlanetIndex ConflictManager::retreat_destination(int32_t player, PlanetIndex from, PlanetIndex /*came_from*/) const {
+PlanetIndex ConflictManager::retreat_destination(int32_t player, PlanetIndex from) const {
     for (int32_t f = 0; f < 4; ++f) {  // 0x2ba6c0: dd0 -> 400 -> ee0 -> 8dd0, excluding the battle planet
         const PlanetIndex p = nearest_planet(from, from, f, player);
         if (p != kInvalidPlanet) return p;

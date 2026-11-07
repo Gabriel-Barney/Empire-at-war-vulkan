@@ -43,7 +43,6 @@
 #include "alamo/render/png.hpp"
 #include "alamo/sim/tactical_battle.hpp"
 #include "alamo/data/xml.hpp"
-#include "alamo/galactic/corruption.hpp"  // Int-final: corruption panel
 #include "alamo/galactic/victory.hpp"     // Int-verify: campaign end
 #include "alamo/sim/campaign_battles.hpp"  // Int-final: corruption command
 #include "alamo/ui/gui_info_screens.hpp"

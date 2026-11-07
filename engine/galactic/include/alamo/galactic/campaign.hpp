@@ -422,9 +422,7 @@ public:
     // kinds 1 / 4 / 5 / 7 (special_systems.hpp; NotAllowed while the galactic pause is raised). Others (SpecialAbility
     // kind 6 included): Unhandled.
     RejectReason execute(uint8_t player, const commands::EventData& event);
-    RejectReason handle_command(uint64_t tick, const commands::Command& cmd);
-    // For CommandPipeline::set_handler.
-    std::function<RejectReason(uint64_t, const commands::Command&)> command_handler();
+    RejectReason handle_command(uint64_t tick, const commands::Command& cmd);  // for CommandPipeline::set_handler
 
     // ---- direct operations (Lua / story / tests) ------------------------------------------------------
     RejectReason enqueue(int32_t player, PlanetIndex planet, uint32_t type);
@@ -450,6 +448,11 @@ public:
     float add_credits(int32_t player, float amount, bool notify_ai = true);
     float player_income(int32_t player, bool consume);
     float planet_income(PlanetIndex planet, bool gross);
+    // Planet_Income(P, gross = 0) 0x3f68b0 read-only, without its side effects (the galactic AI's income tokens) [port]:
+    // in float, in this order: the unexpired IncomeAbility entries (list order), base x black-market multiplier, the
+    // force-alignment term (when kept), the political term (owner not the neutral player), trade routes (neighbour a
+    // planet held by the owner); then the min / max clamp, no siphon. 0 for a non-planet, an unknown type or a halt.
+    float planet_income_preview(PlanetIndex planet) const;
     void recompute_credit_caps();
 
     // Instant corruption change (story / Lua / host stand-ins): cancels a running transition (0x4b6c50), sets the
@@ -602,8 +605,8 @@ public:
     // ---- A2 galactic: hooks for the galactic AI (src/ai_hooks.cpp) ---------------------------------------
     // Income tick listeners (IncomeTick above). Called from update() (serial) on the fiscal-cycle frame, inside the
     // payment loop; a listener may read the sim but must not change it. Not hashed, not saved: hosts re-register them.
-    uint32_t add_income_hook(IncomeHook hook);  // returns an id for remove_income_hook (never 0)
-    void remove_income_hook(uint32_t id);
+    // Several listeners (registration order): a replaced GalacticAiWorld leaves its expired-token listener behind.
+    uint32_t add_income_hook(IncomeHook hook);  // returns a registration id (never 0)
     // The raw income I of `player` at the last fiscal cycle (IncomeTick::gain for AI players); 0 before the first one.
     float last_income(int32_t player) const;
     // Production queries. queue_kind: kGroundQueue / kSpaceQueue, or -1 when the type cannot be queued (GE 2.1).
@@ -664,11 +667,8 @@ public:
     bool ai_blockaded(PlanetIndex planet) const;
     // AI production market hook (AI_GALACTIC_3 §5): called for each planet inside the production service, in planet
     // service order (newest registered first), right before that planet's queues advance. The hook may enqueue or
-    // cancel at that planet (the AIPlanetBuildQueue market). Not hashed. set_ fills the primary slot (null = none; the
-    // galactic AI uses it); add_ registers further listeners, called after the primary one in registration order.
+    // cancel at that planet (the AIPlanetBuildQueue market). Not hashed. One slot (null = none; the galactic AI uses it).
     void set_production_service_hook(std::function<void(PlanetIndex)> hook) { production_hook_ = std::move(hook); }
-    uint32_t add_production_service_hook(std::function<void(PlanetIndex)> hook);  // id for remove_ (never 0)
-    void remove_production_service_hook(uint32_t id);
     // q2f t01: an AI player's pay-as-you-go installment goes through its AI budget (0x53b900, AI_GALACTIC_2 §3.4). The
     // hook gets the planet, the queue index, the queue head and the installment a, and returns the credits to pay (>= 0;
     // the credits floor at 0 and the build advances) or a negative value (the build pauses). Without a hook every
@@ -679,7 +679,6 @@ public:
     // ---- story / script event stream (S4, galactic_events.hpp) --------------------------------------------
     // Off by default. Events are appended in emission order; the stream is not part of hash_state.
     void set_emit_events(bool on) { emit_events_ = on; }
-    bool emit_events() const { return emit_events_; }
     const std::vector<GalacticEvent>& events() const { return events_; }
     // Moves the pending events to the end of `out` (stream order) and clears the stream.
     void drain_events(std::vector<GalacticEvent>& out);
@@ -847,13 +846,11 @@ public:
     // bar and AI production only, not by buildability (REMAINING_GAPS 1.5).
     void set_production_disabled(int32_t player, uint32_t type, bool disabled);
     bool production_disabled(int32_t player, uint32_t type) const;
-    // Build-locked = in the locked list, or (initial build locks on) Build_Initially_Locked and not unlocked
-    // (MagicPlan +0xC1 / 0x282580). prerequisites_met / enqueue / buildable refuse build-locked types.
+    // Build-locked = in the locked list, or Build_Initially_Locked and not unlocked (MagicPlan +0xC1 / 0x282580;
+    // always enforced, REMAINING_GAPS 1.5: every unlock source is wired - slice, tech sweep, story BUILDABLE_UNIT, Lua
+    // Unlock_Tech / Give_Random_Sliceable_Tech, corruption). prerequisites_met / enqueue / buildable refuse build-locked
+    // types.
     bool build_locked(int32_t player, uint32_t type) const;
-    // Build_Initially_Locked enforcement (buildability step 9), on by default (REMAINING_GAPS 1.5: every unlock source
-    // is wired - slice, tech sweep, story BUILDABLE_UNIT, Lua Unlock_Tech / Give_Random_Sliceable_Tech, corruption).
-    void set_initial_build_locks(bool on) { initial_build_locks_ = on; }
-    bool initial_build_locks() const { return initial_build_locks_; }
     // Income abilities (P4 4) and the economy panel (P4 4.3).
     std::vector<EconomyRow> economy_breakdown_by_tag(int32_t player) const;
     float economy_income_for_tag(int32_t player, uint32_t tag) const;
@@ -898,7 +895,6 @@ public:
     uint32_t representative_type(ObjectHandle object) const;
     int32_t surface_forces(PlanetIndex planet) const;       // 0x3f9530 [M]: live surface units, any owner
     // Buildability 0x2804d0 in the SG 1.3 order. check_credits: step 6 for players with Is_Human (+0x62 [M]).
-    // Build_Initially_Locked (step 9) only while initial_build_locks() is on.
     BuildCheck build_check(int32_t player, PlanetIndex planet, uint32_t type, bool check_credits = false) const;
     int32_t built_count(int32_t player, uint32_t type) const;  // step 22 count (0x281c70: + containers listing `type`)
     int32_t live_count(int32_t player, uint32_t type) const;   // step 23 live count (0x281df0)
@@ -1118,7 +1114,6 @@ private:
     PlanetGraph graph_;
     std::vector<PlayerState> players_;
     std::vector<uint8_t> relations_;  // P x P Relation, [a * P + b]; empty = defaults (default_relation)
-    bool initial_build_locks_ = true;   // config, not hashed (REMAINING_GAPS 1.6: on, every unlock source is wired)
     std::vector<PlanetState> planets_;
     std::vector<FleetState> fleets_;
     std::vector<uint32_t> fleet_by_slot_;   // store slot -> fleet index (kNoFleet)
@@ -1146,7 +1141,6 @@ private:
     std::vector<float> last_income_;  // per player
     std::function<void(PlanetIndex)> production_hook_;
     InstallmentHook installment_hook_;
-    std::vector<std::pair<uint32_t, std::function<void(PlanetIndex)>>> production_hooks_;
     // OI galactic (hashed in the "OIG1" tail once non-default)
     std::vector<int32_t> stealthed_;      // ObjectIds with the galactic stealth byte set, ascending
     std::vector<VictoryClaim> claims_;    // declaration order

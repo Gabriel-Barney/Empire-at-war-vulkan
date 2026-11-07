@@ -968,38 +968,7 @@ struct GalacticSimTokenResolver::Impl {
         return false;
     }
     // Planet income, read-only (Planet_Income(P, gross = 0) 0x3f68b0 without the side effects) [port].
-    double planet_income(size_t i) const {
-        const gal::PlanetState& p = planets[i];
-        if (!p.is_planet || p.type >= rules.types.size()) return 0.0;
-        if (sim.frame() <= p.halt_until) return 0.0;
-        const gal::EconomyConstants& c = rules.constants;
-        const int32_t b = p.destroyed ? rules.types[p.type].destroyed_credit_value : p.base_value;
-        float sum = 0.0f;
-        for (const gal::IncomeEntry& e : p.income)
-            if (e.kind == gal::kIncomeAbility && e.expiry >= sim.frame()) sum += e.value;
-        sum += gal::econ::income_base(b, p.black_market);
-        bool keep = false;
-        const gal::ForceSide owner_side =
-            valid_player(p.owner) && players[static_cast<size_t>(p.owner)].faction < rules.factions.size()
-                ? rules.factions[players[static_cast<size_t>(p.owner)].faction].force_alignment
-                : gal::ForceSide::Neutral;
-        const float force = gal::econ::income_force(b, owner_side, rules.types[p.type].the_force, rules.types[p.type].force_strength,
-                                                    c.credit_alignment_bonus, c.credit_alignment_penalty, &keep);
-        if (keep) sum += force;
-        if (p.owner != sim.neutral_player()) sum += gal::econ::income_political(b, p.control, c.political_income_curve);
-        float gain = 0.0f;
-        const GalaxyMap& m = sim.map();
-        for (const uint32_t rt : p.links) {
-            const PlanetIndex nb = m.routes.point_a[rt] == i ? m.routes.point_b[rt] : m.routes.point_a[rt];
-            const float factor = m.routes.credit_gain_factor[rt];
-            if (nb < planets.size() && planets[nb].is_planet && valid_player(p.owner) && planets[nb].owner == p.owner && factor > 0.0f)
-                gain += factor;
-        }
-        sum += gal::econ::income_trade(b, gain);
-        float siphoned = 0.0f;
-        return static_cast<double>(gal::econ::income_finish(sum, p.min_income_set, p.min_income, p.max_income_set, p.max_income,
-                                                            false, 0.0f, &siphoned));
-    }
+    double planet_income(size_t i) const { return static_cast<double>(sim.planet_income_preview(static_cast<PlanetIndex>(i))); }
 
     // Potential income 0x3f83b0 (A2I_TOKENS_RE §1.4) [H]: the planet's income at full political control, in float, in this
     // order: base x black-market multiplier, the force-alignment term (as Planet_Income), the political term at

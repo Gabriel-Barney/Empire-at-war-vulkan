@@ -150,7 +150,8 @@ public:
     // lua::ObjectBridge::change_owner of their tactical story VMs to this (story_session owner). False when no
     // battle runs or the object is not a battle object.
     bool change_owner(objects::ObjectHandle h, int32_t owner);
-    // --- S4 (owner: S4 agent): corruption missions (engine/galactic corruption.hpp; [inferred] rule there) ---
+    // --- S4 (owner: S4 agent): corruption missions (engine/galactic special_data.hpp CorruptionChoiceDef; [inferred]
+    // rule there) ---
     // `player` corrupts `planet` with corruption `type` (CorruptionTypeEnum 0..7). The planet type's option of that type
     // with a tactical mission (story t08, L1_S4_REMAINING §4.5) writes the linked-battle record (queue_linked: the option's
     // kind and map, attacker = `player`, defender = the planet owner's faction, plots = Tactical_Script_Name, not sandbox:

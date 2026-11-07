@@ -288,8 +288,6 @@ public:
     bool battle_active() const { return state_ == ConflictState::InBattle; }
     const BattleRequest& active_request() const { return request_; }
     const std::vector<ConflictLogEntry>& log() const { return log_; }
-    const std::vector<std::string>& planet_maps() const { return planet_map_; }
-    const AutoResolveResult& last_auto_resolve() const { return last_ar_; }
     // Space force split 0x2bd500 (§2.3 rule 4) for one player's units (list order).
     void split_space_forces(int32_t player, const std::vector<ObjectHandle>& units, BattleForces& out) const;
     // story t07: 0x2bd500 with a forced type / the flagship flag (rules 2 / 3, BT §2.3): the first unit of `forced_type`
@@ -319,8 +317,8 @@ public:
     // OI galactic: retreat destination finders (TACTICAL_GAPS 4.5). Candidates = planets newest first (reverse row order),
     // smallest squared 3-D distance (double, strict <); filters in order: orbit controller = player (starbase owner when
     // level > 0, else the first idle combat fleet in orbit), ground-base / starbase owner = player, owner neutral, any.
-    // Fleets: every filter excludes `from` (the battle planet). `came_from` is not used any more (kept for callers).
-    PlanetIndex retreat_destination(int32_t player, PlanetIndex from, PlanetIndex came_from = kInvalidPlanet) const;
+    // Fleets: every filter excludes `from` (the battle planet).
+    PlanetIndex retreat_destination(int32_t player, PlanetIndex from) const;
     // Ground (0x2ba850): the first two filters without exclusion (flag clear: controller then ground base; set: the
     // other order), so `from` itself wins when the player controls its orbit (the units just go up into orbit).
     PlanetIndex retreat_destination_ground(int32_t player, PlanetIndex from, bool flag = false) const;
@@ -344,13 +342,17 @@ private:
     bool validate(const ConflictInfo& c) const;
     void drop_head(ConflictKind kind, bool log_it);
     void pop_head(ConflictKind kind);
+    void reset_machine();  // back to Idle: no force / retreat / choice, no auto-resolve in flight
+    ConflictLogEntry log_entry(const ConflictInfo& c, uint8_t how) const;  // tick, frame, kind, planet, sides, how
     void raise_pause();
     void release_pause();
     bool human(int32_t player) const;
     void apply_choice(BattleChoice c, const ConflictInfo& head);
     // participants
-    std::vector<ObjectHandle> orbit_units(PlanetIndex planet, int32_t player, bool space_only) const;
-    std::vector<ObjectHandle> orbit_cargo(PlanetIndex planet, int32_t player) const;
+    // The live contents of `player`'s idle (non-moving) fleets in orbit whose type kind passes `keep` (fleet order).
+    std::vector<ObjectHandle> orbit_contents(PlanetIndex planet, int32_t player, bool (*keep)(UnitKind)) const;
+    std::vector<ObjectHandle> orbit_units(PlanetIndex planet, int32_t player) const;  // space kinds
+    std::vector<ObjectHandle> orbit_cargo(PlanetIndex planet, int32_t player) const;  // ground units
     std::vector<ObjectHandle> surface_units(PlanetIndex planet, int32_t player) const;
     bool can_fight_space(ObjectHandle h) const;
     float unit_power(ObjectHandle h) const;
