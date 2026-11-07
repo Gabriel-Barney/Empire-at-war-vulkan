@@ -392,7 +392,9 @@ const EffectRemap& compat_missing_effect_remap() {
 }
 
 EffectLibrary::EffectLibrary(const alamo::FileProvider& files, LoadOptions options)
-    : files_(files), options_(std::move(options)) {
+    : files_(files),
+      options_(std::move(options)),
+      fx_cache_(options_.fx_cache_dir.empty() ? FxCache::default_directory() : options_.fx_cache_dir) {
     options_.missing_effect_remap = normalize_remap(options_.missing_effect_remap);
 }
 EffectLibrary::~EffectLibrary() = default;
@@ -481,14 +483,77 @@ std::optional<MaterialEffect> EffectLibrary::load(std::string_view effect, std::
     return std::nullopt;
 }
 
+FxSourceState EffectLibrary::source_state(const std::string& src, std::vector<uint8_t>* fxo, std::string* detail) const {
+    if (!options_.use_fx_sources) return FxSourceState::Disabled;
+    FxSource s;
+    std::string e;
+    if (!collect_fx_source(files_, src, s, &e)) {
+        if (detail) *detail = e;
+        return FxSourceState::Failed;
+    }
+    FxCacheEntry entry;
+    if (!fx_cache_.load(s.key(), entry)) {
+        if (detail) *detail = "no compiled entry in " + alamo::path_to_utf8(fx_cache_.directory()) + " (run alamo_fx_prebuild)";
+        return FxSourceState::NotCompiled;
+    }
+    if (!entry.ok) {
+        if (detail) {
+            // First error line of the fxc log (tools/fx_compile.cpp fx_log_summary(), kept local: no tool dependency).
+            std::string first;
+            size_t i = 0;
+            while (i < entry.log.size()) {
+                const size_t end = std::min(entry.log.find('\n', i), entry.log.size());
+                std::string line = entry.log.substr(i, end - i);
+                while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+                i = end + 1;
+                if (line.empty()) continue;
+                if (line.find("error") != std::string::npos) {
+                    first = line;
+                    break;
+                }
+                if (first.empty()) first = line;
+            }
+            *detail = "fxc failed: " + (first.empty() ? std::string("no output") : first);
+        }
+        return FxSourceState::Failed;
+    }
+    try {
+        (void)fx::parseEffect(entry.fxo.data(), entry.fxo.size());
+    } catch (const std::exception& ex) {
+        if (detail) *detail = std::string("compiled effect does not parse: ") + ex.what();
+        return FxSourceState::Failed;
+    }
+    if (fxo) *fxo = std::move(entry.fxo);
+    return FxSourceState::Compiled;
+}
+
+FxSourceState EffectLibrary::fx_source_status(std::string_view effect, std::string* detail) const {
+    const std::optional<std::string> src = find_effect_source(effect);
+    if (!src) return FxSourceState::None;
+    return source_state(*src, nullptr, detail);
+}
+
 std::optional<MaterialEffect> EffectLibrary::load_file(std::string_view effect, std::string* err) {
     auto path = find_effect_path(effect);
-    if (!path) {
-        if (auto src = find_effect_source(effect)) {
-            // The original compiles the HLSL with D3DX here; the port loads compiled .fxo only.
-            if (err) *err = "effect source " + *src + " has no compiled .fxo (HLSL .fx compilation is not supported)";
+    if (auto src = find_effect_source(effect)) {
+        // The original compiles the HLSL with D3DX here and prefers it to the .fxo (RENDER.md 6); the port
+        // takes the alamo_fx_prebuild result from the FxCache (modc t23), else keeps the .fxo.
+        std::vector<uint8_t> fxo;
+        std::string why;
+        const FxSourceState st = source_state(*src, &fxo, &why);
+        if (st == FxSourceState::Compiled) {
+            auto r = load_from_memory(*src, fxo, err);
+            if (r) r->path = *src;
+            return r;
+        }
+        if (!path) {
+            if (err)
+                *err = "effect source " + *src + " has no compiled .fxo (" +
+                       (st == FxSourceState::Disabled ? std::string("HLSL .fx compilation is off") : why) + ")";
             return std::nullopt;
         }
+    }
+    if (!path) {
         if (err) *err = "effect not found: " + std::string(effect);
         return std::nullopt;
     }
@@ -748,7 +813,9 @@ MaterialEffect EffectLibrary::load_or_default(std::string_view effect, std::stri
     technique_failed_ = false;
     // A .fx source without a .fxo counts as existing: the original compiles it, and when that compile
     // fails it re-creates the green effect under the effect's name (D.3), which is what the port draws.
-    std::optional<std::string> found = find_effect_path(effect);
+    std::optional<std::string> found;
+    if (fx_source_status(effect) == FxSourceState::Compiled) found = find_effect_source(effect);
+    if (!found) found = find_effect_path(effect);
     if (!found) found = find_effect_source(effect);
     const bool exists = found.has_value();
     if (!exists && !no_technique && !options_.missing_effect_remap.empty()) {

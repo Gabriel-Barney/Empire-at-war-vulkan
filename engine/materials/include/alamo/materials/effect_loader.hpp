@@ -6,6 +6,7 @@
 // keys, the hot-set program (or "needs translation") and the parameter bindings.
 #pragma once
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <optional>
@@ -16,6 +17,7 @@
 
 #include "alamo/materials/d3d9_state.hpp"
 #include "alamo/materials/fixed_function.hpp"
+#include "alamo/materials/fx_source.hpp"
 #include "alamo/materials/params.hpp"
 #include "alamo/materials/programs.hpp"
 #include "alamo/materials/pso.hpp"
@@ -280,6 +282,11 @@ struct LoadOptions {
     // exist but fail to load; a mapped effect that is itself missing still gives the green default.
     // Keys in any form ("FissureMeshGloss.fx", a path): normalised by EffectLibrary.
     EffectRemap missing_effect_remap;
+    // modc t23 (fx_source.hpp): an effect's `<name>.fx` compiled by alamo_fx_prebuild is loaded in place of
+    // its `.fxo`, as the original does. Off = the t11 behaviour (.fxo only; a lone .fx loads as Failed).
+    bool use_fx_sources = true;
+    // Where compiled sources are looked up; empty = FxCache::default_directory().
+    std::filesystem::path fx_cache_dir;
 };
 
 // Loads and caches phase baselines; thread-compatible (not internally synchronised).
@@ -298,14 +305,20 @@ public:
     // Baseline state of a phase: engine_device_defaults() (D3D9 defaults + CULLMODE = CW) <-
     // Phase<phase>.fxo pass 0 (device defaults if missing).
     const DeviceState& phase_baseline(RenderPhase p);
-    // The compiled .fxo the loader reads: a game path, never a .fx source (nullopt if none).
+    // The compiled .fxo of the effect: a game path, never a .fx source (nullopt if none).
     std::optional<std::string> find_effect_path(std::string_view effect) const;
     // HLSL source `<name>.fx` of the same name, same search order (nullopt if none). The original
-    // compiles it with D3DX at run time and prefers it over the .fxo (RENDER.md 6). The port has no
-    // fx_2_0 compiler: with a .fxo present the .fxo is loaded; without one load() fails and
+    // compiles it with D3DX at run time and prefers it over the .fxo (RENDER.md 6). The port loads it
+    // when alamo_fx_prebuild has compiled it into the FxCache (fx_source_status() == Compiled; the
+    // effect's path is then the .fx); otherwise the .fxo is loaded, and without one load() fails and
     // load_or_default() returns the green default under the effect's name (EffectFallback::Failed,
     // the original's result when its compile fails). docs/MODS.md, shader section.
     std::optional<std::string> find_effect_source(std::string_view effect) const;
+    // What load() does with the effect's .fx (None without one). Reads the source, its includes and
+    // the cache entry each call; Compiled also means the compiled effect parses. *detail: the fxc
+    // error line (Failed) or the cache folder (NotCompiled).
+    FxSourceState fx_source_status(std::string_view effect, std::string* detail = nullptr) const;
+    const FxCache& fx_cache() const { return fx_cache_; }
 
     // D.3: the built-in green fixed-function effect (fallback = BuiltinDefault), built on first use.
     const MaterialEffect& default_effect();
@@ -343,8 +356,10 @@ private:
                                             std::string* err);
     std::optional<MaterialEffect> load_file(std::string_view effect, std::string* err);
     std::optional<MaterialEffect> load_parsed(std::string_view name, std::shared_ptr<fx::Effect> e, std::string* err);
+    FxSourceState source_state(const std::string& src, std::vector<uint8_t>* fxo, std::string* detail) const;
     const alamo::FileProvider& files_;
     LoadOptions options_;
+    FxCache fx_cache_;
     std::map<RenderPhase, DeviceState> baselines_;
     std::optional<MaterialEffect> default_;
     EffectLoadOrder order_;

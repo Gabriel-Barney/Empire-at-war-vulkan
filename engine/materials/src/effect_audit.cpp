@@ -105,29 +105,36 @@ std::vector<ShaderIssue> effect_load_issues(const EffectLibrary& lib, std::strin
     const std::string name = split_name(effect).first;
     const std::optional<std::string> fxo = lib.find_effect_path(effect);
     const std::optional<std::string> src = lib.find_effect_source(effect);
-    if (src && !fxo) {
-        out.push_back({ShaderIssueKind::SourceOnly, name, *src, false,
-                       "HLSL source without a compiled .fxo: drawn with the green default effect"});
-        return out;
-    }
-    if (!fxo) return out;  // missing: the original's silent green default (D.3), not a shader issue
-    if (src)
+    std::string src_why;
+    const FxSourceState st = src ? lib.fx_source_status(effect, &src_why) : FxSourceState::None;
+    const bool from_src = st == FxSourceState::Compiled;  // modc t23: the compiled .fx is what load() reads
+    if (src && !from_src) {
+        // The original compiles this .fx; the port has no compiled copy of it (why: not prebuilt, fxc error, off).
+        const std::string reason = st == FxSourceState::Disabled ? std::string("HLSL .fx compilation is off") : src_why;
+        if (!fxo) {
+            out.push_back({ShaderIssueKind::SourceOnly, name, *src, false,
+                           reason + "; drawn with the green default effect"});
+            return out;
+        }
         out.push_back({ShaderIssueKind::SourceShadowed, name, *src, false,
-                       "the original compiles this .fx in place of " + *fxo + "; the port loads the .fxo"});
+                       reason + "; the port loads " + *fxo + " in place of this .fx"});
+    }
+    if (!fxo && !from_src) return out;  // missing: the original's silent green default (D.3), not a shader issue
+    const std::string file = from_src ? *src : *fxo;
     if (m.is_default_effect()) {
         const bool no_tech = m.name == kDefaultEffectName;
-        out.push_back({no_tech ? ShaderIssueKind::NoTechnique : ShaderIssueKind::LoadFailed, name, *fxo, false, std::string(err)});
+        out.push_back({no_tech ? ShaderIssueKind::NoTechnique : ShaderIssueKind::LoadFailed, name, file, false, std::string(err)});
         return out;
     }
     if (!m.skipped_technique.empty() && m.effect) {
         const std::string why = unsupported_reason(*m.effect, m.skipped_technique_index, m.skipped_pass);
-        out.push_back({ShaderIssueKind::TechniqueSkipped, name, *fxo, false,
+        out.push_back({ShaderIssueKind::TechniqueSkipped, name, file, false,
                        "technique " + m.skipped_technique + " (" + why + ") skipped; drawn with " + m.technique_name});
     }
     for (const ResolvedPass& p : m.passes) {
         // Same rule as the renderer's LitStatus::Untranslated (render setup_lit).
         if (pass_has_program(p)) continue;
-        out.push_back({ShaderIssueKind::UnsupportedPass, name, *fxo, false,
+        out.push_back({ShaderIssueKind::UnsupportedPass, name, file, false,
                        "pass " + p.name + ": " + (m.effect ? unsupported_reason(*m.effect, m.technique, p.pass_index) : std::string("no effect"))});
     }
     return out;
@@ -158,6 +165,10 @@ EffectAudit audit_effects(EffectLibrary& lib, std::span<const ShaderFileEntry> s
         // The renderer looks submesh effects up by base name; so does the audit (mod dirs first).
         std::string err;
         const MaterialEffect m = lib.load_or_default(name, &err);
+        if (lib.find_effect_source(name)) {
+            ++a.sources;
+            if (lib.fx_source_status(name) == FxSourceState::Compiled) ++a.sources_compiled;
+        }
         for (ShaderIssue& i : effect_load_issues(lib, name, m, err)) {
             i.in_mod = in_mod(i.path);
             a.issues.push_back(std::move(i));
