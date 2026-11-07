@@ -2,8 +2,8 @@
 //
 // Each tracked object keeps attackerId -> accumulated damage. Every behaviour service the entries
 // decay by (maxHealth + maxShield) x AI_SpaceThreatDecayStep and are removed at <= 0 (0x58bd80)
-// [H; M field names]. Feeding: one record() per damage event the combat system applies (see
-// record_combat_damage when engine/tactical/combat is configured).
+// [H; M field names]. Feeding: one record() per damage event the combat system applies (the host's:
+// TacticalBattle records them inline, A1_READINGS §7 / §30.2).
 //
 // [port] ORDER: the retail maps are MSVC hash containers (order = hash of the attacker id). Here
 // every map is a std::map ascending by id: victims ascending, attackers ascending. FindDeadlyEnemy
@@ -24,10 +24,6 @@ class ByteWriter;
 class ByteReader;
 }
 
-#if defined(ALAMO_AI_TACTICAL_HAVE_COMBAT)
-#include "alamo/tactical/combat/combat_system.hpp"
-#endif
-
 namespace alamo::ai::tactical {
 
 inline constexpr int32_t kNoAttacker = -1;
@@ -36,7 +32,6 @@ class DamageTrackingStore {
 public:
     // The object has DAMAGE_TRACKING (spawn); max values feed the decay.
     void enable(int32_t object, float max_health, float max_shield);
-    void set_max(int32_t object, float max_health, float max_shield);
     void disable(int32_t object);  // object removed / dead
     bool tracks(int32_t object) const { return objects_.count(object) != 0; }
 
@@ -65,6 +60,8 @@ private:
         float max_health = 0.0f, max_shield = 0.0f;
         std::map<int32_t, float> by_attacker;
     };
+    // One behaviour service of a tracked object (service / service_all).
+    static void decay(Tracked& t, float decay_step);
     std::map<int32_t, Tracked> objects_;
 };
 
@@ -82,15 +79,5 @@ void collect_tracked(const DamageTrackingStore& store, int32_t object, const Tea
 // objects of that player with DAMAGE_TRACKING within radius (the host's query, id order).
 int32_t find_deadly_enemy(const DamageTrackingStore& store, std::span<const int32_t> victims,
                           const std::function<bool(int32_t attacker)>& exists = {});
-
-#if defined(ALAMO_AI_TACTICAL_HAVE_COMBAT)
-// Combat adapter: records one applied CombatSystem::take_damage result. A1_READINGS §7 [H]: the tracked amount is the
-// actual shield + hull loss (DamageResult::absorbed + hull_lost, the clamped hull loss of §30.2; a hard-point hit changes
-// neither), recorded only when
-// > 0; skipped when not applied or when the source is kNoObject. The attacker is the request's source object (the
-// source-type gates and the TEAM-parent key are the host's: TacticalBattle::consume_events).
-void record_combat_damage(DamageTrackingStore& store, const ::alamo::tactical::combat::DamageRequest& req,
-                          const ::alamo::tactical::combat::DamageResult& res);
-#endif
 
 }  // namespace alamo::ai::tactical

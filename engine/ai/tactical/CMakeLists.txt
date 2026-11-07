@@ -5,8 +5,7 @@
 #   selection, DAMAGE_TRACKING store + FindDeadlyEnemy, free-store admission + service scheduling,
 #   the land campaign credit transfer.
 # Library deps: core (SimRng, CRC), data (GameConstants), galactic (all-pairs reference FW) and
-# galactic_sim (econ::add_credits). Optional: terrain (.ted hint-zone adapter), tactical_movement
-# (passability-component prefilter), tactical_combat (damage-event adapter).
+# galactic_sim (econ::add_credits). Optional: terrain (.ted hint-zone adapter).
 if(NOT TARGET alamo_galactic_sim)
   message(STATUS "alamo_ai_tactical: galactic_sim (data/objects/commands) not configured, skipped")
   return()
@@ -41,15 +40,6 @@ if("terrain" IN_LIST ALAMO_ENGINE_MODULES AND EXISTS ${PROJECT_SOURCE_DIR}/engin
   target_sources(alamo_ai_tactical PRIVATE src/hint_zones_ted.cpp)
   target_link_libraries(alamo_ai_tactical PUBLIC alamo_terrain)
   target_compile_definitions(alamo_ai_tactical PUBLIC ALAMO_AI_TACTICAL_HAVE_TERRAIN=1)
-endif()
-if(TARGET alamo_tactical_movement)
-  target_sources(alamo_ai_tactical PRIVATE src/land_connectivity.cpp)
-  target_link_libraries(alamo_ai_tactical PUBLIC alamo_tactical_movement)
-  target_compile_definitions(alamo_ai_tactical PUBLIC ALAMO_AI_TACTICAL_HAVE_MOVEMENT=1)
-endif()
-if(TARGET alamo_tactical_combat)
-  target_link_libraries(alamo_ai_tactical PUBLIC alamo_tactical_combat)
-  target_compile_definitions(alamo_ai_tactical PUBLIC ALAMO_AI_TACTICAL_HAVE_COMBAT=1)
 endif()
 
 # Stage 2: the tactical AI mode on the A2 framework (contexts, goal hooks, free stores, plans / task forces on

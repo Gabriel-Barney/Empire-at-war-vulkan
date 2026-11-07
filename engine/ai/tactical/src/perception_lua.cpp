@@ -8,8 +8,7 @@
 namespace alamo::ai::tactical {
 
 DefendedPosition most_defended_position_cells(const TacticalPerceptionGrid& g, const PerceptionWorld& w,
-                                              std::span<const uint32_t> cells, int32_t player, SimRng& rng,
-                                              bool memory_counted_when_not_fogged) {
+                                              std::span<const uint32_t> cells, int32_t player, SimRng& rng) {
     DefendedPosition r;
     if (!g.valid() || (g.category_union() & ~0ull) == 0) return r;  // §17: grid mask & category mask 0 -> 1e18, no draws
     GridQuery q;
@@ -17,7 +16,6 @@ DefendedPosition most_defended_position_cells(const TacticalPerceptionGrid& g, c
     q.self = player;
     q.ally = true;
     q.attenuator = 0.0f;
-    q.memory_counted_when_not_fogged = memory_counted_when_not_fogged;
     float best = -1.0f;  // §17: the first cell is always taken (no draw); every later tie draws, 0 == 0 included
     for (const uint32_t cell : cells) {
         if (cell >= g.cell_count()) continue;

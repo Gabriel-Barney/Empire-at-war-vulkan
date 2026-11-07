@@ -54,24 +54,4 @@ FindTargetReturn reachable_target_return_kind(const TacticalTarget* picked) {
     return picked ? FindTargetReturn::TargetLocation : FindTargetReturn::Nil;
 }
 
-void collect_candidates(std::span<const TacticalTarget> targets, const CandidateFilter& f, std::vector<ScoredTarget>& out) {
-    out.clear();
-    const float r2 = f.max_range * f.max_range;
-    for (size_t i = 0; i < targets.size(); ++i) {
-        const TacticalTarget& t = targets[i];
-        if (f.applies && !f.applies(t)) continue;
-        if (!f.score) continue;
-        const std::optional<double> s = f.score(t);
-        if (!s) continue;
-        if (f.max_range > 0.0f) {
-            const Vec3f p = f.position ? f.position(t) : t.position;
-            const float dx = p.x - f.origin.x, dy = p.y - f.origin.y, dz = p.z - f.origin.z;
-            const float d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 > r2) continue;
-        }
-        if (f.reachability && t.has_reachability() && f.reachability(t) == kUnreachable) continue;
-        out.push_back({static_cast<uint32_t>(i), *s});
-    }
-}
-
 }  // namespace alamo::ai::tactical

@@ -30,8 +30,7 @@ struct DefendedPosition {
     bool found() const { return cell >= 0; }
 };
 DefendedPosition most_defended_position_cells(const TacticalPerceptionGrid& g, const PerceptionWorld& w,
-                                              std::span<const uint32_t> cells, int32_t player, SimRng& rng,
-                                              bool memory_counted_when_not_fogged = true);
+                                              std::span<const uint32_t> cells, int32_t player, SimRng& rng);
 DefendedPosition most_defended_position_space(const TacticalPerceptionGrid& g, const PerceptionWorld& w, const Vec3f& pos,
                                               float region_size, int32_t player, SimRng& rng);
 

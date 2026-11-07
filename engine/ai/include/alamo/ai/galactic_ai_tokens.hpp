@@ -321,9 +321,6 @@ public:
     bool resolve_script(const EvalContext& ctx, std::string_view name, std::span<const Param> params,
                         double& out) const override;
 
-    // "Variable_Self.HasStructure" style key of a token path (upper-case, '.'-joined) for diagnostics.
-    static std::string path_key(Root root, std::span<const TokenId> path, const TokenTable& tokens);
-    static std::span<const std::string_view> known_paths();
     uint64_t cache_hits() const;
 
     // N1 save / load: frame, the per-planet event stamps and last-seen values, the leaf cache (key order) and the hit

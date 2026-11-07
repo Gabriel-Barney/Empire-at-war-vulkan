@@ -126,7 +126,6 @@ struct StatusRec {
     PlanetIndex dest = kInvalidPlanet;
     uint8_t mode = 5;
     int64_t started = 0;
-    bool orders_out = false;
     lua::AiBudgetOp op = lua::AiBudgetOp::WaitSpendable;
     double amount = 0.0;
 };
@@ -225,7 +224,6 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     std::unique_ptr<GalacticTokenResolver> s2;
     GalacticSimTokenResolver res;
     int64_t perception_frame = -1;
-    std::map<std::string, uint32_t> eq_index;  // upper-cased equation name -> index (lookup cache)
     // Script_<File> evaluators: one shared Lua instance per file, loaded on first use (AI_GALACTIC_2 §4.4).
     ScriptEvaluators scripts;
     // Apply_Markup accumulators per (player, planet) (+0x80 of the player's AI target).
@@ -233,7 +231,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
 
     // Lua
     lua::LuaPlayerWorld world;
-    std::vector<lua::LuaPlayerWorld*> story_worlds;  // story sessions' worlds drained each frame (attach_story_world)
+    lua::LuaPlayerWorld* story_world = nullptr;  // the story session's world, drained each frame (attach_story_world)
     PlanLibrary library;
     std::unique_ptr<PlanScriptRuntime> runtime;
     std::map<std::string, lua::AiGlobalValue> globals;
@@ -356,7 +354,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
         return galactic_nominal_time(bt, galactic_build_time_multiplier(sim.rules().difficulties, d));
     }
     bool hostile(int32_t a, int32_t b) const { return sim.is_hostile(a, b); }
-    uint32_t equation(const std::string& name);
+    uint32_t equation(const std::string& name) const;
     int32_t first_human() const {
         const auto players = sim.players();
         for (size_t p = 0; p < players.size(); ++p)
@@ -631,7 +629,6 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     // ---- ContextModeServices ----
     void first_service(int64_t) override;
     void template_init(int64_t) override;
-    void perception_service(int64_t) override {}
     void planning_service(int64_t) override { w->service_plans(player); }
     void execution_service(int64_t) override;
     void templates_changed(int64_t) override;

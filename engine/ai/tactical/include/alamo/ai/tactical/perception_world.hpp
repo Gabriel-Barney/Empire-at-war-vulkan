@@ -107,7 +107,6 @@ struct PerceptionObject {
     int32_t garrison_occupants = 0;  // obj +0x210 -> +0x34
     float additional_population_capacity = 0.0f;  // [L]
     std::vector<int32_t> contained_types;  // garrison / contained objects (+0xf8) and team members (types)
-    bool valid_bombing_target = false;     // unused: IsValidBombingTarget is computed (A1_READINGS §21); kept for saves
     bool engines_online = true;            // [L]
     // player-token inputs
     bool dummy_ground_structure = false;   // behaviour 0x5F (BaseLevel, land skirmish)
@@ -204,7 +203,7 @@ struct PerceptionWorld {
     const PerceptionType* rep_type_of(const PerceptionObject& o) const;
     void object_hard_points(const PerceptionObject& o, std::vector<PerceptionHardPoint>& out) const;
 
-    // N1 save / load (contract: alamo/core/save_file.hpp; part of TacticalAiWorld's chunk). Layout: u32 version (1), the
+    // N1 save / load (contract: alamo/core/save_file.hpp; part of TacticalAiWorld's chunk). Layout: u32 version (3), the
     // scalar fields, players (every field), the relation table, `types` as its count + types_digest() only (definitions:
     // the host's fill() rebuilds them), objects in GOM order (every field, hard points included), markers. Not saved:
     // the callbacks (host wiring) and `types`. read() keeps this world's callbacks and types: it fails (unchanged) when

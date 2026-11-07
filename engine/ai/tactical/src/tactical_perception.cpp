@@ -794,7 +794,6 @@ struct Eval {
         GridQuery q;
         q.self = ctx.self;
         q.exclude = a.attached;
-        q.memory_counted_when_not_fogged = p.config().memory_counted_when_not_fogged;
         switch (l) {
             case Leaf::FriendlyForceUnnormalized: case Leaf::EnemyForceUnnormalized: {
                 if (!w.is_player(ctx.self)) return false;
@@ -1359,28 +1358,10 @@ int32_t TacticalPerception::register_cell(int32_t x, int32_t y, const Rect2& rec
     return h;
 }
 
-void TacticalPerception::register_targets(const PerceptionWorld& w, const TacticalTargetList& list, std::vector<int32_t>* handles) {
-    if (handles) handles->clear();
-    for (const TacticalTarget& t : list.targets()) {
-        int32_t h = -1;
-        if (t.is_unit()) h = register_unit(w, t.object_id);
-        else if (t.zone >= 0) h = register_zone(t.zone);
-        else h = register_cell(t.cell_x, t.cell_y, t.eval_rect);
-        if (handles) handles->push_back(h);
-    }
-}
-
-int32_t TacticalPerception::handle_for(const TacticalTarget& t) const {
-    if (t.is_unit()) return handle_of_object(t.object_id);
-    if (t.zone >= 0) {
-        for (const auto& [z, h] : zone_handles_)
-            if (z == t.zone) return h;
-        return -1;
-    }
-    const int64_t key = (static_cast<int64_t>(t.cell_x) << 32) | static_cast<int64_t>(static_cast<uint32_t>(t.cell_y));
-    for (const auto& [k, h] : cell_handles_)
-        if (k == key) return h;
-    return -1;
+int32_t TacticalPerception::register_target(const PerceptionWorld& w, const TacticalTarget& t) {
+    if (t.is_unit()) return register_unit(w, t.object_id);
+    if (t.zone >= 0) return register_zone(t.zone);
+    return register_cell(t.cell_x, t.cell_y, t.eval_rect);
 }
 
 void TacticalPerception::on_object_destroyed(int32_t object_id) {

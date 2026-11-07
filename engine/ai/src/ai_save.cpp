@@ -20,7 +20,8 @@ using save::put;
 using save::put_vec;
 
 namespace {
-constexpr uint32_t kGoalsVersion = 3, kTemplatesVersion = 1, kLearningVersion = 1, kBudgetVersion = 2, kContextVersion = 1,
+// kGoalsVersion 4 (cu12 t15): the blocked byte (= !block_list_.empty()) removed.
+constexpr uint32_t kGoalsVersion = 4, kTemplatesVersion = 1, kLearningVersion = 1, kBudgetVersion = 2, kContextVersion = 1,
                    kGateVersion = 1, kPathVersion = 2, kPerceptionVersion = 1, kSnapshotVersion = 1;
 
 void put_goal(ByteWriter& w, const Goal& g) {
@@ -156,7 +157,6 @@ void GoalSystem::write(ByteWriter& w) const {
     }
     put_vec(w, exclusion_);
     put_vec(w, block_list_);
-    w.boolean(blocked_);
     w.u32(cursor_source_);
     w.u32(cursor_target_);
     w.u32(quota_);
@@ -195,7 +195,6 @@ bool GoalSystem::read(ByteReader& r) {
     if (!get_vec(r, excl) || excl.size() != exclusion_.size()) return false;
     t.exclusion_ = std::move(excl);
     if (!get_vec(r, t.block_list_)) return false;
-    t.blocked_ = r.boolean();
     t.cursor_source_ = r.u32();
     t.cursor_target_ = r.u32();
     t.quota_ = r.u32();
@@ -215,7 +214,7 @@ bool GoalSystem::read(ByteReader& r) {
         if (g.type >= goal_types || g.source >= sources_.size()) r.fail();
     }
     if (t.pending_ready_ < 0 && (np > 0 || t.pending_pass_done_)) r.fail();
-    if (!r.ok() || t.blocked_ != !t.block_list_.empty()) return false;
+    if (!r.ok()) return false;
     *this = std::move(t);
     return true;
 }

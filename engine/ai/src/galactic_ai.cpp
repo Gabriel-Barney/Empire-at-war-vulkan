@@ -162,13 +162,8 @@ GalacticSimTokenResolver::QueueTask GalacticAiWorld::Impl::queue_task(PlanetInde
     return out;
 }
 
-uint32_t GalacticAiWorld::Impl::equation(const std::string& name) {
-    const std::string key = ai_upper_copy(ai_trim(name));
-    const auto it = eq_index.find(key);
-    if (it != eq_index.end()) return it->second;
-    const uint32_t i = eqs.find(key);
-    eq_index.emplace(key, i);
-    return i;
+uint32_t GalacticAiWorld::Impl::equation(const std::string& name) const {
+    return eqs.find(ai_trim(name));  // EquationSet::find upper-cases the name
 }
 
 bool GalacticAiWorld::Impl::evaluate(int32_t self, int32_t opponent, const std::string& fn, int32_t target, double& out) {
@@ -807,7 +802,7 @@ void PlayerAi::templates_changed(int64_t) {
     // (FoC HotM probe, docs/re/A2G_T01_RESET_FLAG_PROBE.md) [H correlation; the setter is unread]. The initial selection
     // runs before the budget's Init, which clears the flag.
     apply_template_budget();
-    ctx.budget.request_reset();
+    ctx.budget.mark_reset();
     std::string names;
     for (const uint32_t t : ctx.templates.active()) names += " " + w->defs.templates[t].name;
     w->decide(player, "templates" + names);
@@ -1901,7 +1896,7 @@ GalacticAiWorld::GalacticAiWorld(gal::GalacticSim& sim, objects::ObjectStore& st
 
 GalacticAiWorld::~GalacticAiWorld() {
     if (!impl_) return;
-    for (lua::LuaPlayerWorld* sw : impl_->story_worlds) sw->attach_ai_paths(nullptr);  // the story world may outlive us
+    if (impl_->story_world) impl_->story_world->attach_ai_paths(nullptr);  // the story world may outlive us
     impl_->world.attach_ai_paths(nullptr);
     for (auto& [id, p] : impl_->plans) p.vm.reset();
     for (auto& a : impl_->ai)
@@ -1961,27 +1956,8 @@ std::unique_ptr<PlayerAi> GalacticAiWorld::Impl::make_player(int32_t player, con
         p.ctx.set_stagger(ordinal, static_cast<int32_t>(w.cfg.players.size()));
     }
     const std::string& fs = type->free_store_script[static_cast<size_t>(AiMode::Galactic)];
-    if (!fs.empty() && w.files) {
-        std::vector<uint8_t> bytes;
-        const std::string path = "Data\\Scripts\\FreeStore\\" + fs + ".lua";
-        if (w.files->read(path, bytes)) {
-            std::string err;
-            p.fs_vm = w.runtime->make_vm(fs, std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()), path, &err);
-            if (p.fs_vm) {
-                lua::attach_ai_host(*p.fs_vm, &w, kFreeStoreScriptBase + player);
-                p.fs_vm->call("Base_Definitions", &err);
-                lua::set_free_store_global(*p.fs_vm, kFreeStoreScriptBase + player, true);
-                lua::set_player_global(*p.fs_vm, "PlayerObject", player);
-                lua::set_number_global(*p.fs_vm, "LastService", 0.0);
-                lua::set_number_global(*p.fs_vm, "LastUnitService", 0.0);
-                p.fs_vm->create_thread("main");
-            } else if (diagnostics) {
-                diagnostics->push_back(err);
-            }
-        } else if (diagnostics) {
-            diagnostics->push_back(path + ": not found");
-        }
-    }
+    if (!fs.empty() && w.files)
+        p.fs_vm = start_free_store_vm(*w.runtime, *w.files, fs, &w, kFreeStoreScriptBase + player, true, player, {}, diagnostics);
     for (const ObjectHandle u : w.player_units(player)) p.known.insert(w.store.id(u));
     for (const gal::PlanetState& ps : w.sim.planets()) {
         if (ps.starbase && w.store.alive(ps.starbase)) p.known.insert(w.store.id(ps.starbase));
@@ -2134,7 +2110,7 @@ void GalacticAiWorld::update_player(int32_t player, int64_t now, bool galactic_o
         }
         // Story requests and Suspend_AI from the story session's world (and the AI's own).
         bool suspended = w.world.ai_suspended();
-        for (lua::LuaPlayerWorld* sw : w.story_worlds) {
+        if (lua::LuaPlayerWorld* sw = w.story_world) {
             w.drain_world_requests(*sw, -1, -1);
             suspended = suspended || sw->ai_suspended();
         }
@@ -2177,17 +2153,11 @@ double GalacticAiWorld::survival_ratio(int32_t player, uint32_t type) const {
     return p ? p->ctx.learning.survival_ratio(impl_->survival_key(type)) : 1.0;
 }
 
-void GalacticAiWorld::set_suspended(bool suspended) { impl_->gate.suspend(suspended); }
-void GalacticAiWorld::set_galactic_paused(bool paused) { impl_->gate.on_galactic_pause(paused); }
 void GalacticAiWorld::attach_story_world(lua::LuaPlayerWorld* world) {
-    auto& v = impl_->story_worlds;
-    for (lua::LuaPlayerWorld* old : v)
-        if (old != world && old->ai_paths() == impl_.get()) old->attach_ai_paths(nullptr);
-    v.clear();
-    if (world) {
-        v.push_back(world);
-        world->attach_ai_paths(impl_.get());  // story Find_Path answers from the AI path finders
-    }
+    lua::LuaPlayerWorld* old = impl_->story_world;
+    if (old && old != world && old->ai_paths() == impl_.get()) old->attach_ai_paths(nullptr);
+    impl_->story_world = world;
+    if (world) world->attach_ai_paths(impl_.get());  // story Find_Path answers from the AI path finders
 }
 void GalacticAiWorld::set_global_values(lua::GlobalValueStore* store) { impl_->gv_store = store; }  // Int-final
 void GalacticAiWorld::set_conflicts(const galactic::ConflictManager* conflicts) { impl_->conflicts = conflicts; }  // q6 t03

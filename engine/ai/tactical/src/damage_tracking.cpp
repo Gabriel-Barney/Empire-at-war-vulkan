@@ -10,13 +10,6 @@ void DamageTrackingStore::enable(int32_t object, float max_health, float max_shi
     t.max_shield = max_shield;
 }
 
-void DamageTrackingStore::set_max(int32_t object, float max_health, float max_shield) {
-    const auto it = objects_.find(object);
-    if (it == objects_.end()) return;
-    it->second.max_health = max_health;
-    it->second.max_shield = max_shield;
-}
-
 void DamageTrackingStore::disable(int32_t object) { objects_.erase(object); }
 
 void DamageTrackingStore::record(int32_t victim, int32_t attacker, float amount) {
@@ -25,30 +18,24 @@ void DamageTrackingStore::record(int32_t victim, int32_t attacker, float amount)
     it->second.by_attacker[attacker] += amount;
 }
 
-namespace {
-void decay(std::map<int32_t, float>& m, float step) {
-    for (auto it = m.begin(); it != m.end();) {
+void DamageTrackingStore::decay(Tracked& t, float decay_step) {
+    const float step = (t.max_health + t.max_shield) * decay_step;
+    for (auto it = t.by_attacker.begin(); it != t.by_attacker.end();) {
         it->second -= step;
         if (it->second <= 0.0f)
-            it = m.erase(it);
+            it = t.by_attacker.erase(it);
         else
             ++it;
     }
 }
-}  // namespace
 
 void DamageTrackingStore::service(int32_t victim, float decay_step) {
     const auto it = objects_.find(victim);
-    if (it == objects_.end()) return;
-    Tracked& t = it->second;
-    decay(t.by_attacker, (t.max_health + t.max_shield) * decay_step);
+    if (it != objects_.end()) decay(it->second, decay_step);
 }
 
 void DamageTrackingStore::service_all(float decay_step) {
-    for (auto& kv : objects_) {
-        Tracked& t = kv.second;
-        decay(t.by_attacker, (t.max_health + t.max_shield) * decay_step);
-    }
+    for (auto& kv : objects_) decay(kv.second, decay_step);
 }
 
 const std::map<int32_t, float>* DamageTrackingStore::entries(int32_t victim) const {
@@ -108,14 +95,5 @@ int32_t find_deadly_enemy(const DamageTrackingStore& store, std::span<const int3
     if (best != kNoAttacker && exists && !exists(best)) return kNoAttacker;
     return best;
 }
-
-#if defined(ALAMO_AI_TACTICAL_HAVE_COMBAT)
-void record_combat_damage(DamageTrackingStore& store, const ::alamo::tactical::combat::DamageRequest& req,
-                          const ::alamo::tactical::combat::DamageResult& res) {
-    if (!res.applied || req.source == ::alamo::tactical::combat::kNoObject) return;
-    const float amount = res.absorbed + res.hull_lost;  // A1_READINGS §7 / §30.2: actual shield + clamped hull loss
-    if (amount > 0.0f) store.record(req.victim, req.source, amount);
-}
-#endif
 
 }  // namespace alamo::ai::tactical

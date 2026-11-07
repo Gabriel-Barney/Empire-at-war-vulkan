@@ -130,7 +130,7 @@ static void test_unit_ai_stamps() {
     g.init(TacticalMode::Land, w.map, 2, land_cfg());
 
     // stamp F - 250 at F = 1000: the first service (F = 1000) runs the check, then 1050, 1350, ...
-    CHECK(g.register_object(w, 1, 1000, 750));
+    CHECK(g.register_object(w, 1, 750));
     nudge(w.objects[0]);
     CHECK(g.service_object(w, 1, 1000));   // first service: check, moved -> re-projected; stamp 1050
     nudge(w.objects[0]);
@@ -141,14 +141,14 @@ static void test_unit_ai_stamps() {
     CHECK(g.service_object(w, 1, 1350));
 
     // an unmoved object: the check runs but nothing is re-projected; the stamp still advances
-    CHECK(g.register_object(w, 2, 1000, 1000));
+    CHECK(g.register_object(w, 2, 1000));
     CHECK(!g.service_object(w, 2, 1000));  // check at the first service, same transform; stamp 1300
     nudge(w.objects[1]);
     CHECK(!g.service_object(w, 2, 1299));
     CHECK(g.service_object(w, 2, 1300));
 
     // catch-up: a stamp far behind advances one step (300) per service, not re-based on F
-    CHECK(g.register_object(w, 3, 1000, 400));
+    CHECK(g.register_object(w, 3, 400));
     nudge(w.objects[2]);
     CHECK(g.service_object(w, 3, 1000));   // 400 -> 700
     nudge(w.objects[2]);
@@ -162,7 +162,7 @@ static void test_unit_ai_stamps() {
     // a stamp before frame 0 (object created at F < 300)
     TacticalPerceptionGrid z;
     z.init(TacticalMode::Land, w.map, 2, land_cfg());
-    CHECK(z.register_object(w, 4, 0, -300));
+    CHECK(z.register_object(w, 4, -300));
     nudge(w.objects[3]);
     CHECK(z.service_object(w, 4, 0));   // -300 -> 0
     nudge(w.objects[3]);
@@ -170,14 +170,6 @@ static void test_unit_ai_stamps() {
     nudge(w.objects[3]);
     CHECK(!z.service_object(w, 4, 2));
     CHECK(z.service_object(w, 4, 300));
-
-    // [port] legacy 3-argument form: stamp = registration + 300
-    TacticalPerceptionGrid l;
-    l.init(TacticalMode::Land, w.map, 2, land_cfg());
-    CHECK(l.register_object(w, 1, 10));
-    nudge(w.objects[0]);
-    CHECK(!l.service_object(w, 1, 10) && !l.service_object(w, 1, 309));
-    CHECK(l.service_object(w, 1, 310));
 }
 
 // ---------------------------------------------------------------- 15 destroyed objects [port]
@@ -195,7 +187,7 @@ static void test_destroy_memory() {
     w.object_fogged = [](int32_t p, int32_t id) { return p == 1 && id == 2; };
     TacticalPerceptionGrid g;
     g.init(TacticalMode::Land, w.map, 2, land_cfg());
-    CHECK(g.register_object(w, 1, 0, 0) && g.register_object(w, 2, 0, 0));
+    CHECK(g.register_object(w, 1, 0) && g.register_object(w, 2, 0));
     const auto c1 = static_cast<uint32_t>(g.cell_clamped(300.0f, 300.0f));
     const auto c2 = static_cast<uint32_t>(g.cell_clamped(600.0f, 600.0f));
     // both players remember both cells
@@ -216,7 +208,7 @@ static void test_destroy_memory() {
     // the memory lists hold no stale slot: a new object reusing the slot is not remembered
     w.objects.push_back(make_unit(3, 1, 900.0f, 900.0f));
     w.index();
-    CHECK(g.register_object(w, 3, 2, 2));
+    CHECK(g.register_object(w, 3, 2));
     CHECK(g.memory_entries(0, c1).empty() && g.memory_entries(0, c2).empty());
 }
 

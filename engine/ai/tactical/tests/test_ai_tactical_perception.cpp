@@ -70,10 +70,9 @@ static uint64_t test_category(std::string_view n) {
     return 0;
 }
 
-static TacticalPerceptionConfig test_config(bool quirk = true) {
+static TacticalPerceptionConfig test_config() {
     TacticalPerceptionConfig c;
     c.category_mask = test_category;
-    c.memory_counted_when_not_fogged = quirk;
     return c;
 }
 
@@ -271,10 +270,10 @@ static void test_grid_projection() {
     TacticalPerceptionGrid g;
     g.init(TacticalMode::Land, w.map, 4, threat_grid_config(TacticalMode::Land, c));
     // stamps as drawn at creation frame 10 (A1_READINGS §14: F + Get_Int(0, 300) - 300, here Get_Int = 300)
-    CHECK(g.register_object(w, 1, 10, 10));
-    CHECK(!g.register_object(w, 1, 10, 10));  // once
-    CHECK(g.register_object(w, 2, 10, 10));
-    CHECK(!g.register_object(w, 3, 10, 10));
+    CHECK(g.register_object(w, 1, 10));
+    CHECK(!g.register_object(w, 1, 10));  // once
+    CHECK(g.register_object(w, 2, 10));
+    CHECK(!g.register_object(w, 3, 10));
     CHECK(g.entry_count() == 3);          // trooper whole + tank 2 hard points
     // trooper: v = 100 * 60 * 60 / (4 * 50^2) = 36 in 6 cells, hostile to players 0 and 2 (relation 1)
     const uint32_t c010 = 0 * 20 + 10;
@@ -329,7 +328,7 @@ static void test_grid_projection() {
     w.objects.push_back(tiny);
     w.objects.push_back(huge);
     w.index();
-    CHECK(g.register_object(w, 4, 10, 10) && g.register_object(w, 5, 10, 10));
+    CHECK(g.register_object(w, 4, 10) && g.register_object(w, 5, 10));
     const float hd = g.half_diagonal();
     const auto ct = static_cast<uint32_t>(g.cell_clamped(300.0f, 300.0f));
     CHECK(g.threat(0, ct) == 10.0f * 3600.0f / (4.0f * hd * hd));
@@ -363,11 +362,8 @@ static void test_grid_projection() {
     q = GridQuery();
     q.self = 0;
     q.ally = false;
-    CHECK(g.cell_force(w, c010, q) == f36 + f36);  // live + memory (AI never fogged): counted twice [M]
-    q.memory_counted_when_not_fogged = false;
-    CHECK(g.cell_force(w, c010, q) == f36);
+    CHECK(g.cell_force(w, c010, q) == f36 + f36);  // live + memory (AI never fogged): counted twice [H]
     // concentration / bitfield count memory only while fogged
-    q.memory_counted_when_not_fogged = true;
     const uint32_t ctr = static_cast<uint32_t>(g.cell_clamped(30.0f, 570.0f));
     const uint32_t one[] = {ctr};
     CHECK(g.cells_concentration(w, one, q) == 10.0f);  // §16: the type's AI_Combat_Power (trooper 10), not the object's 100
@@ -387,7 +383,7 @@ static void test_grid_projection() {
     w.object_fogged = [&](int32_t p, int32_t id) { return fog_on && p == 1 && id == 2; };
     TacticalPerceptionGrid h;
     h.init(TacticalMode::Land, w.map, 4, threat_grid_config(TacticalMode::Land, c));
-    CHECK(h.register_object(w, 2, 0, 0));
+    CHECK(h.register_object(w, 2, 0));
     const auto tcell = static_cast<uint32_t>(h.cell_clamped(-300.0f, -301.0f));
     CHECK(h.snapshot(1, tcell) == 0.0f);  // TEAM/HIDE objects do not touch the snapshot
     h.refog(1, tcell, 50);  // human remembers the tank
@@ -396,10 +392,8 @@ static void test_grid_projection() {
     GridQuery hq;
     hq.self = 1;
     hq.ally = false;
-    // live entry skipped (fogged); memory entry: documented test also skips it while fogged
+    // live entry skipped (fogged); memory entry: the [H] test also skips it while fogged
     CHECK(h.cell_force(w, tcell, hq) == 0.0f);
-    hq.memory_counted_when_not_fogged = false;
-    CHECK(h.cell_force(w, tcell, hq) > 0.0f);
     CHECK(!h.cell_visible(w, 1, tcell) && h.cell_visible(w, 0, tcell));
     // point danger: AI player 0 -> live layer scaled to 800^2
     const Vec3f tp{-300.0f, -301.0f, 0.0f};
@@ -459,7 +453,7 @@ struct Fixture {
         w.index();
         TacticalAiConstants c;
         p.init(TacticalMode::Land, c, w.map, 4, zones, test_config());
-        for (const PerceptionObject& o : w.objects) p.grid().register_object(w, o.id, 1, 1);
+        for (const PerceptionObject& o : w.objects) p.grid().register_object(w, o.id, 1);
         h_tank = p.register_unit(w, 10);
         h_trooper = p.register_unit(w, 11);
         h_pad = p.register_unit(w, 12);
@@ -714,7 +708,7 @@ static void test_duplicate_zone_names() {
     f.zones[3].name = "ZONE2";  // repeats zone 2's name ("Zone2") in another case
     TacticalAiConstants c;
     f.p.init(TacticalMode::Land, c, f.w.map, 4, f.zones, test_config());
-    for (const PerceptionObject& o : f.w.objects) f.p.grid().register_object(f.w, o.id, 1, 1);
+    for (const PerceptionObject& o : f.w.objects) f.p.grid().register_object(f.w, o.id, 1);
     const int32_t h3 = f.p.register_zone(3);  // the later zone registered first: it owns the shared name id
     const int32_t h2 = f.p.register_zone(2);
     const int32_t h4 = f.p.register_zone(4);
@@ -906,7 +900,7 @@ static void test_lua_functions() {
     lw.index();
     TacticalPerceptionGrid g;
     g.init(TacticalMode::Land, lw.map, 4, threat_grid_config(TacticalMode::Land, TacticalAiConstants()));
-    for (int32_t id = 1; id <= 3; ++id) CHECK(g.register_object(lw, id, 0, 0));
+    for (int32_t id = 1; id <= 3; ++id) CHECK(g.register_object(lw, id, 0));
     const uint32_t cells[] = {0, 1, 2, 3};
     SimRng rng(77), ref(77);
     const DefendedPosition d = most_defended_position_cells(g, lw, cells, 0, rng);
@@ -985,7 +979,7 @@ static uint64_t scenario_crc(const ParallelFor& pf, TacticalMode mode, uint32_t 
         }
         w.objects.push_back(o);
         w.index();
-        p->grid().register_object(w, o.id, w.frame, draw_unit_ai_stamps(rng, w.frame).reprojection_check);
+        p->grid().register_object(w, o.id, draw_unit_ai_stamps(rng, w.frame).reprojection_check);
         p->register_unit(w, o.id);
     };
     for (int i = 0; i < 40; ++i) spawn();
@@ -1203,7 +1197,7 @@ static void test_real_data() {
         w.index();
         std::vector<int32_t> handles;
         for (const PerceptionObject& o : w.objects) {
-            p.grid().register_object(w, o.id, 1, 1);
+            p.grid().register_object(w, o.id, 1);
             handles.push_back(p.register_unit(w, o.id));
         }
         if (mode == TacticalMode::Land)
