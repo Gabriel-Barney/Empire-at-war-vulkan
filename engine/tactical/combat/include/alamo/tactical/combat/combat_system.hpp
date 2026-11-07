@@ -495,13 +495,19 @@ struct CombatData {
     std::vector<UnitDesc> units;
 };
 
+// Host input per player (set at construction; configuration, not saved or hashed).
 struct PlayerInfo {
     bool active = true;
     bool ai = false;
-    float ai_damage_multiplier = 1.0f;  // DifficultyAdjustments Damage_Multiplier (AI attackers)
+    // cu8 t03: the AI player's DifficultyAdjustments entry (AI_GALACTIC §1.2 GetAdj: player +0x360 -> +0x50 / +0x54,
+    // TACTICAL_COMBAT §3.6 step 12 / §4.3); 1.0 for humans and players without an adjustment.
+    float ai_damage_multiplier = 1.0f;  // Damage_Multiplier (AI attackers)
     float ai_accuracy = 1.0f;           // land inaccuracy factor input
-    float faction_health = 1.0f;        // faction data +0x50
-    float faction_shield = 1.0f;        // faction data +0x54
+    float faction_health = 1.0f;        // Health_Multiplier (+0x50): max hull
+    float faction_shield = 1.0f;        // Shield_Multiplier (+0x54): max shield
+    // cu8 t03 (TACTICAL_COMBAT §3.6 step 9): the player's faction Space_ / Land_Retreat_Units_Damaged_Mod_Factor
+    // (faction +0x20b8 / +0x2198) for the battle's mode; damage to its retreating units is multiplied by it.
+    float retreat_damage_mod = 1.0f;
     // OI abilities: base power is no longer a player flag - see CombatSystem::add_base_power (TACTICAL_GAPS §7.3: a
     // per-player list of Base_Power_Ability entries; an empty list = no base power).
 };
@@ -528,9 +534,8 @@ struct CombatConfig {
     float depleted_shield_regen_cap = 0.25f;       // GameConstants +0x1183c (absolute points)
     float depleted_shield_disable_time = 5.0f;     // Depleted_Shield_Disable_Time
     float shield_recharge_interval_secs = 3.0f;    // ShieldRechargeIntervalInSecs
-    float under_construction_damage_multiplier = 2.0f;
-    float retreat_damage_mod_factor = 1.0f;        // Space/Land_Retreat_Units_Damaged_Mod_Factor
-    float base_shield_vulnerability = 1.0f;        // Base_Shield_Vulnerability_Modifier
+    float under_construction_damage_multiplier = 2.0f;  // Under_Construction_Damage_Multiplier
+    float base_shield_vulnerability = 1.0f;        // Base_Shield_Vulnerability_Modifier (FoC 2.0)
     float max_secs_for_ae_delayed_damage = 0.0f;   // Max_Secs_For_AE_Delayed_Damage
     // refixf t06 (TACTICAL_COMBAT §2.9 Q1 step 1, port difference 1) [port]: a space hit on a non-target keeps the render
     // mesh it struck; the port has no collision meshes, so the hit goes to the closest live hardpoint whose bone lies
@@ -540,6 +545,8 @@ struct CombatConfig {
     // natural cubic spline through the points sorted by x, float; before the first / past the last point the end
     // value); empty = 1.0.
     std::vector<std::pair<float, float>> diminishing_firepower;
+    // Global gates of the original (TACTICAL_COMBAT §3.6 step 3, weapon fire); their writers are not in docs/re, so no
+    // host changes them (cu8 t03).
     bool weapons_enabled = true;
     bool damage_enabled = true;      // global flag: only kinds 0, 8, 13 pass when false
     bool inaccuracy_enabled = true;  // debug flag 0x140b3934d
@@ -561,7 +568,10 @@ struct CombatConfig {
 
 // OI tactical (TACTICAL_GAPS 3.2 / 3.3): the GameConstants fields combat reads - Health_Low_Percent_Threshold
 // (low_health_threshold), Melee_Cutoff_Range (short_range_cutoff), Hardpoint_Recharge_Cutoff_For_Opportunity_Fire,
-// Diminishing_Firepower (flat number list read as (x, y) pairs). Absent tags keep the current values.
+// Diminishing_Firepower (flat number list read as (x, y) pairs); cu8 t03: Base_Shield_Vulnerability_Modifier,
+// Hull_Vs_Hard_Points_Health_Constraint, Under_Construction_Damage_Multiplier, Depleted_Shield_Regen_Cap,
+// Depleted_Shield_Disable_Time, ShieldRechargeIntervalInSecs, EnergyRechargeIntervalInSecs, EnergyToShieldExchangeRate,
+// Sensor_Jamming_Time, Max_Secs_For_AE_Delayed_Damage (TACTICAL_COMBAT §3.6 / §3.7). Absent tags keep the current values.
 void apply_game_constants(CombatConfig& c, const data::GameConstants& gc);
 
 // Hooks the ability system (S9, engine/tactical/abilities) installs into the combat tick. Every call
@@ -671,6 +681,9 @@ public:
     // L1 systems (L1_S4_REMAINING.md §3.3): the victim's ion-storm lockout - its shields absorb nothing (0x549ac0).
     // Called from Take_Damage (serial phases / host calls). Default: never.
     virtual bool ion_storm_shields_down(ObjectId /*victim*/, uint32_t /*frame*/) const { return false; }
+    // cu8 t01 (L1_S4_REMAINING §3.2, TACTICAL_GAPS §7.4): `player` is weather-affected (no Weatherproof entry). The land
+    // weather accuracy factor applies only to shooters of such players. Called from the fire step (serial). Default: yes.
+    virtual bool weather_affected(int32_t /*player*/) const { return true; }
     // OI abilities: a detonation effect / stun on `id` (serial phases, after the combat-side state changed).
     virtual void unit_effect(ObjectId /*id*/, UnitEffect /*effect*/, int32_t /*player*/, Vec3 /*point*/, uint32_t /*frame*/) {}
     // ---- s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states, slots 47 / 48 and team copies") ----
@@ -1825,7 +1838,9 @@ private:
     std::vector<QueryContext*> ctx_free_;
     QueryContext serial_ctx_;
     std::array<float, 10> weather_acc_{1, 1, 1, 1, 1, 1, 1, 1, 1, 1};  // L1 systems: weather accuracy per category
-    float weather_scale(const ProjectileDesc& pd) const {
+    // Land weather inaccuracy factor (2 - m) of a shot by a unit of `owner`; 1 when the owner is not weather-affected.
+    float weather_scale(const ProjectileDesc& pd, int32_t owner) const {
+        if (hooks_ && !hooks_->weather_affected(owner)) return 1.0f;
         const float m = weather_acc_[static_cast<uint32_t>(pd.category) < 10u ? static_cast<uint32_t>(pd.category) : 0u];
         return 2.0f - m;
     }

@@ -129,6 +129,11 @@ struct DifficultyRules {
     std::string name;
     float credit_multiplier = 1.0f;               // Credit_Multiplier
     float galactic_build_time_multiplier = 1.0f;  // Galactic_Build_Time_Multiplier (+0x28)
+    // cu8 t03 (tactical combat, TACTICAL_COMBAT §3.6 step 12 / §4.3): Damage_Multiplier, Health_Multiplier (+0x50),
+    // Shield_Multiplier (+0x54).
+    float damage_multiplier = 1.0f;
+    float health_multiplier = 1.0f;
+    float shield_multiplier = 1.0f;
 };
 
 namespace econ {

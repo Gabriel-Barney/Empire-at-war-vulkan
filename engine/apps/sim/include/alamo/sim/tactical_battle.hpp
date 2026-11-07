@@ -1025,8 +1025,11 @@ public:
     std::vector<BuildOptionInfo> station_build_options(const objects::ObjectStore& st, int32_t player, objects::ObjectId builder) const;
     // --- end hangars ---
     uint32_t frame() const { return frame_; }
-    // Retreat coordinator request (§3.4 vf9): false when not a participant, not yet allowed or already retreating.
+    // Retreat coordinator request (§3.4 vf9): false when not a participant, not yet allowed, already retreating or
+    // (cu8 t01) prevented by an interdict / Retreat_Prevention entry.
     bool request_retreat(int32_t player);
+    // cu8 t01: the ability check of the request (AbilitySystem::retreat_blocked, TACTICAL_GAPS §1.5).
+    bool retreat_prevented(int32_t player) const;
     // --- OI host: the retreating player while a retreat countdown runs (-1 none / done). The mode's unit-response
     // "excluded set" (AUDIO.md §3.3, STRATEGIC_GAPS §7.4 [M]): that player's units give no unit responses. ---
     int32_t retreating_player() const {
@@ -1552,6 +1555,12 @@ private:
     void l1_setup(TacticalMode& mode);                       // setup(): the world callbacks
     void l1_register(TacticalMode& mode, objects::ObjectHandle h, int32_t type);  // deploy / adopt_object
     void l1_motion(TacticalMode& mode, SimRng& rng);         // tick step 4 (after the movement commit)
+    // cu8 t02 (TACTICAL_GAPS §2.3.1a): the Disable_Force_Abilities_Range emitters stamp the Force-disable timer of every
+    // live battle unit of another owner within that 3-D range that owns an F-flag unit ability. [port] every frame (the
+    // behaviour's update interval is not in docs/re; with Force_Ability_Disable_Time 0.0 per-frame stamping gives the
+    // documented "holds while the victim stays in range"). After the movement commit, before the combat tick.
+    void l1_force_disable(const TacticalMode& mode);
+    std::vector<float> force_disable_range_;  // per type (Disable_Force_Abilities_Range), filled on first use
     void l1_weapons(TacticalMode& mode, SimRng& rng);        // tick after consume_events
     void l1_engines_destroyed(objects::ObjectId id);         // EnginesOffline
     bool l1_engines_off(objects::ObjectId id) const { return !l1_engines_.online(id); }

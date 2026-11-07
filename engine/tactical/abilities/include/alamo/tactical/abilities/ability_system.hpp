@@ -332,7 +332,11 @@ public:
 
     // ---- host-fed state ----
     void set_nebula(ObjectId id, uint32_t frame);         // CD +0x104: last frame inside a nebula
-    void set_force_disabled(ObjectId id, uint32_t frame); // CD +0x110
+    // CD +0x110, the Force-disable stamp (gate 3, TACTICAL_GAPS §2.3.1a). cu8 t02: the battle stamps it every frame for
+    // objects with has_force_ability() in range of a Disable_Force_Abilities_Range emitter (its only writer).
+    void set_force_disabled(ObjectId id, uint32_t frame);
+    // Some unit ability of the object has the F (Force power) column set (0x3986b0 x 0x43fa30 over the types).
+    bool has_force_ability(ObjectId id) const;
     void set_ion_storm(ObjectId id, uint32_t frame);      // CD +0x100
     // ---- L1 systems: space fields (L1_S4_REMAINING.md §3.3) ----
     void clear_nebula(ObjectId id);     // stamp CD +0x104 := -1 (left the nebula)
@@ -346,12 +350,12 @@ public:
     // CombatHooks: shields neither absorb nor count as up during the ion-storm lockout (0x549ac0).
     bool ion_storm_shields_down(ObjectId victim, uint32_t frame) const override;
     void set_locomotor_busy(ObjectId id, bool busy);      // also the combat flag (no ion stun)
-    void set_abilities_disabled(ObjectId id, bool off);   // SAP +0x28
+    // SAP +0x28 (gate 5). NOT WIRED (cu8 t02, roadmap cu8f): its writer is not in docs/re (RE task), so no host calls it.
+    void set_abilities_disabled(ObjectId id, bool off);
     void set_corrupted(ObjectId id, bool on);             // CORRUPT_SYSTEMS behaviour on the victim
     void set_weapons_disabled(ObjectId id, bool off);     // obj +0x3a0 bit 0x10
     void set_garrison_count(ObjectId id, int32_t n);
     void set_special_enabled(int32_t player, uint32_t ability_name_crc, bool enabled);  // player override
-    void set_player_stealth_bonus(int32_t player, float s);  // player list +0x268 (Stealth_Duration_Multiplier)
     // P4 tactical: campaign Black Market gate (ABILITIES_HARDPOINTS 2.4, 0x39bbd0 / 0x39b0b0; P4_SIM_SYSTEMS 1.5).
     // `name_crcs` = the ability names (name_crc: UnitAbilityRecord::gui_name_crc / SpecialAbilityDesc::name_crc) that
     // are blocked for `player`: the host lists a name when its record has Must_Be_Bought_On_Black_Market, some
@@ -399,7 +403,8 @@ public:
     // 0x48d5e0: the map entry when set, else true for AI-controlled (non-human) owners.
     bool autofire_on(ObjectId id, uint8_t type) const;
     // Retreat permission (0x282750 / 0x2825e0, §1.5): true while some interdict / Retreat_Prevention entry targets the
-    // player (the original returns the entry's reason code +0x38 [M]).
+    // player (the original returns the entry's reason code +0x38 [M]). cu8 t01: TacticalBattle refuses the player's
+    // retreat (and the auto-resolve stop) while it holds.
     bool retreat_blocked(int32_t player) const;
     // Command 45 RepairHardpointEvent (§1.12): adds `player` as a repairer of the hardpoint (CombatSystem).
     bool repair_hardpoint(ObjectId id, uint32_t hp, int32_t player);
@@ -408,8 +413,9 @@ public:
     bool set_targeting_priorities(ObjectId id, std::string_view set_name);
     // Battlefield_Modifier player lists (max-then-sum over stacking categories, ascending; 0 when empty).
     float player_list(int32_t player, PlayerList l) const;
-    // Weatherproof (§7.4): weather-affected = no entry for the player (every Weatherproof entry is false).
-    bool weather_affected(int32_t player) const;
+    // Weatherproof (§7.4): weather-affected = no entry for the player (every Weatherproof entry is false). cu8 t01: the
+    // battle gates the land weather sight and accuracy factors on it (CombatHooks::weather_affected).
+    bool weather_affected(int32_t player) const override;
     bool hunting(ObjectId id) const;     // HUNT behaviour enabled
     bool deployed(ObjectId id) const;    // DEPLOY state (DEPLOY 2 Is_Active)
     // S8 t11: the host's Walk deploy state of `id` (MovementSystem::deploy_state: 0 none, 0x18 Deploying, 0x19 Deployed,
@@ -767,7 +773,6 @@ private:
         uint8_t enabled;
     };
     std::vector<TypeOverride> type_overrides_;  // insertion order; hashed only when non-empty
-    std::vector<float> stealth_bonus_;  // per player
     std::vector<std::vector<uint32_t>> bm_blocked_;  // P4 tactical: per player, sorted unique name CRCs
     std::function<void(int32_t, bool)> fog_reveal_all_;  // fog follow-up (Force Sight)
 };

@@ -327,6 +327,9 @@ std::vector<DifficultyRules> load_difficulties(const FileProvider& provider, std
         d.name = std::string(n.attribute("Name"));
         d.credit_multiplier = atof_or(n.child_text("Credit_Multiplier"), 1.0f);
         d.galactic_build_time_multiplier = atof_or(n.child_text("Galactic_Build_Time_Multiplier"), 1.0f);
+        d.damage_multiplier = atof_or(n.child_text("Damage_Multiplier"), 1.0f);
+        d.health_multiplier = atof_or(n.child_text("Health_Multiplier"), 1.0f);
+        d.shield_multiplier = atof_or(n.child_text("Shield_Multiplier"), 1.0f);
         out.push_back(std::move(d));
     }
     return out;

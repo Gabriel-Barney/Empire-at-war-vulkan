@@ -60,7 +60,6 @@ AbilitySystem::AbilitySystem(CombatSystem& combat, const AbilityData& data, Abil
     : combat_(&combat), data_(&data), cfg_(config) {
     if (cfg_.fps == 0) cfg_.fps = combat::kDefaultFps;
     combat_->set_hooks(this);
-    stealth_bonus_.assign(combat_->player_count(), 0.0f);
 }
 
 AbilitySystem::~AbilitySystem() { combat_->set_hooks(nullptr); }
@@ -951,10 +950,9 @@ bool AbilitySystem::apply(Obj& o, SpecialState& sp, ObjectId target, int32_t hp,
             const uint8_t t = sp.trigger ? sp.trigger : static_cast<uint8_t>(kStealth);
             const UnitAbilityRecord* r = record_of(o, t);
             const float e = r ? r->expiration_seconds : 0.0f;
-            // (1 + s), s = the owner player's stealth-duration list +0x268 (OI abilities: Battlefield_Modifier entries,
-            // plus the host-set value)
+            // (1 + s), s = the owner player's stealth-duration list +0x268 (OI abilities: the Battlefield_Modifier entries,
+            // its only writer, §2.3.11)
             float f = 1.0f + player_reduce(o.owner, static_cast<uint8_t>(PlayerList::StealthDuration));
-            if (o.owner >= 0 && static_cast<size_t>(o.owner) < stealth_bonus_.size()) f = f + stealth_bonus_[static_cast<size_t>(o.owner)];
             if (f <= 0.0f) f = 1.0f;
             o.stealth_frames = static_cast<int32_t>(static_cast<float>(cfg_.fps) * f * e);
             o.stealthed = 1;
@@ -1551,6 +1549,13 @@ void AbilitySystem::set_nebula(ObjectId id, uint32_t frame) {
 void AbilitySystem::set_force_disabled(ObjectId id, uint32_t frame) {
     if (Obj* o = obj(id)) o->force_frame = frame;
 }
+bool AbilitySystem::has_force_ability(ObjectId id) const {
+    const Obj* o = obj(id);
+    if (!o || o->dead) return false;
+    for (uint32_t t = 1; t <= kMaxAbilityType; ++t)
+        if (info(t).force && has(*o, t)) return true;
+    return false;
+}
 void AbilitySystem::set_ion_storm(ObjectId id, uint32_t frame) {
     if (Obj* o = obj(id)) o->ion_storm_frame = frame;
 }
@@ -1606,11 +1611,6 @@ void AbilitySystem::set_special_enabled(int32_t player, uint32_t crc, bool on) {
             return;
         }
     overrides_.push_back(PlayerOverride{player, crc, static_cast<uint8_t>(on ? 1 : 0)});
-}
-void AbilitySystem::set_player_stealth_bonus(int32_t player, float s) {
-    if (player < 0) return;
-    if (static_cast<size_t>(player) >= stealth_bonus_.size()) stealth_bonus_.resize(static_cast<size_t>(player) + 1, 0.0f);
-    stealth_bonus_[static_cast<size_t>(player)] = s;
 }
 void AbilitySystem::set_black_market_blocked(int32_t player, std::vector<uint32_t> crcs) {
     // P4 tactical: per-player blocked list, kept sorted / unique (lookup by binary search; order-independent input).

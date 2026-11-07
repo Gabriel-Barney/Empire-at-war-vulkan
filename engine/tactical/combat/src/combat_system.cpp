@@ -91,6 +91,18 @@ void apply_game_constants(CombatConfig& c, const data::GameConstants& gc) {
     c.opportunity_recharge_cutoff = gc.get_float("Hardpoint_Recharge_Cutoff_For_Opportunity_Fire", c.opportunity_recharge_cutoff);
     c.turn_multiplier_space = gc.get_float("Object_Max_Speed_Multiplier_Space", c.turn_multiplier_space);  // S9 t05
     c.turn_multiplier_land = gc.get_float("Object_Max_Speed_Multiplier_Land", c.turn_multiplier_land);
+    // cu8 t03: the remaining data-backed knobs (FoC: only Base_Shield_Vulnerability_Modifier 2.0f differs from the
+    // defaults; AITestGameConstants changes the shield / energy ones).
+    c.base_shield_vulnerability = gc.get_float("Base_Shield_Vulnerability_Modifier", c.base_shield_vulnerability);
+    c.hull_vs_hardpoints_constraint = gc.get_float("Hull_Vs_Hard_Points_Health_Constraint", c.hull_vs_hardpoints_constraint);
+    c.under_construction_damage_multiplier = gc.get_float("Under_Construction_Damage_Multiplier", c.under_construction_damage_multiplier);
+    c.depleted_shield_regen_cap = gc.get_float("Depleted_Shield_Regen_Cap", c.depleted_shield_regen_cap);
+    c.depleted_shield_disable_time = gc.get_float("Depleted_Shield_Disable_Time", c.depleted_shield_disable_time);
+    c.shield_recharge_interval_secs = gc.get_float("ShieldRechargeIntervalInSecs", c.shield_recharge_interval_secs);
+    c.energy_recharge_interval_secs = gc.get_float("EnergyRechargeIntervalInSecs", c.energy_recharge_interval_secs);
+    c.energy_to_shield_exchange_rate = gc.get_float("EnergyToShieldExchangeRate", c.energy_to_shield_exchange_rate);
+    c.sensor_jamming_time = gc.get_float("Sensor_Jamming_Time", c.sensor_jamming_time);
+    c.max_secs_for_ae_delayed_damage = gc.get_float("Max_Secs_For_AE_Delayed_Damage", c.max_secs_for_ae_delayed_damage);
     if (const auto v = gc.get("Diminishing_Firepower")) {
         std::vector<float> nums;
         std::string_view s = *v;
@@ -2117,7 +2129,7 @@ bool CombatSystem::fire_hardpoint(Unit& u, Hardpoint& h, uint32_t frame, SimRng&
             }
         }
         // L1 systems: tactical weather (land) scales the inaccuracy by (2 - m); m = 1 leaves it untouched.
-        const float ws = cfg_.mode == GameMode::Land ? weather_scale(pd) : 1.0f;
+        const float ws = cfg_.mode == GameMode::Land ? weather_scale(pd, u.owner) : 1.0f;
         if (!overridden) r = scale_inaccuracy(ud.fire_inaccuracy_fixed_radius, f);
         if (!overridden && ws != 1.0f) r = r * ws;
         if (r > 0.0f) {
@@ -2264,7 +2276,7 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
         // Targeting_Fire_Inaccuracy entry hitting the target's CategoryMask (scaled like r), and when d > 0 and the 3D
         // muzzle -> led aim distance L != 0: s = d x L / Targeting_Max_Attack_Distance, X, Y, Z draws in (-s, s).
         const float f = inaccuracy_f(cfg_.mode, player(u.owner).ai_accuracy);
-        const float ws = cfg_.mode == GameMode::Land ? weather_scale(pd) : 1.0f;  // L1 systems: weather
+        const float ws = cfg_.mode == GameMode::Land ? weather_scale(pd, u.owner) : 1.0f;  // L1 systems: weather
         float r = scale_inaccuracy(ud.fire_inaccuracy_fixed_radius, f);
         if (ws != 1.0f) r = r * ws;
         for (int s = 0; s < 2; ++s) {
@@ -3201,7 +3213,7 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
         if (allow) x = x * diminishing(frame, v);
     }
     if (v.flags & kUnitUnderConstruction) x = x * cfg_.under_construction_damage_multiplier;  // 8
-    if (v.flags & kUnitRetreating) x = x * cfg_.retreat_damage_mod_factor;                    // 9
+    if (v.flags & kUnitRetreating) x = x * player(v.owner).retreat_damage_mod;               // 9 (cu8 t03: per faction)
     // 10 hardpoint name = r.hardpoint
     int32_t hp_index = r.hardpoint;
     // 11 lucky shot (S9 hook): consumed on the hit, x its CAUSE_DAMAGE multiplier; a hull hit moves

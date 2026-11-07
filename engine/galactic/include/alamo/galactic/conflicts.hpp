@@ -80,6 +80,10 @@ struct ConflictFactionInfo {
     float space_unit_cap = 20.0f;             // Space_Tactical_Unit_Cap (+0x2cd0)
     float space_retreat_countdown = 10.0f;    // Space_Retreat_Countdown_Seconds (+0x20b0)
     float land_retreat_countdown = 10.0f;     // Land_Retreat_Countdown_Seconds (+0x2190)
+    // Space_ / Land_Retreat_Units_Damaged_Mod_Factor (+0x20b8 / +0x2198; TACTICAL_COMBAT §3.6 step 9). FoC: Rebel / Empire
+    // 4.0 / 2.0, Underworld 2.0 / 2.0; 1.0 [port] for factions without the tag (none of them retreats).
+    float space_retreat_damage_mod = 1.0f;
+    float land_retreat_damage_mod = 1.0f;
     int32_t map_faction = 0;                  // random-map faction index: Rebel 0, Empire 1, Pirates 2, Underworld 4, Hutts 5
     // Land_Skirmish_Unit_Cap_By_Player_Count (+0x2cd8): (player count, unit cap) keys in file order (shipped 0,10, 1,10, 8,5).
     // t50 / skai: unit_cap_for_players() evaluates it (SKIRMISH_SETUP §6: linear, 0 outside the keys, integer part).

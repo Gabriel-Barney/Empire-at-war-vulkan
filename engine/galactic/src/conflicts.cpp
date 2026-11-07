@@ -198,6 +198,8 @@ bool load_conflict_rules(const FileProvider& provider, const data::GameDatabase&
                 ci.space_unit_cap = num("Space_Tactical_Unit_Cap", ci.space_unit_cap);
                 ci.space_retreat_countdown = num("Space_Retreat_Countdown_Seconds", ci.space_retreat_countdown);
                 ci.land_retreat_countdown = num("Land_Retreat_Countdown_Seconds", ci.land_retreat_countdown);
+                ci.space_retreat_damage_mod = num("Space_Retreat_Units_Damaged_Mod_Factor", ci.space_retreat_damage_mod);
+                ci.land_retreat_damage_mod = num("Land_Retreat_Units_Damaged_Mod_Factor", ci.land_retreat_damage_mod);
                 {  // t50: "players, cap, players, cap, ..." (numbers separated by commas / blanks)
                     const std::string_view curve = n.child_text("Land_Skirmish_Unit_Cap_By_Player_Count");
                     std::vector<float> v;

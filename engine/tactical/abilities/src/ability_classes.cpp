@@ -563,7 +563,6 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             const UnitAbilityRecord* r = record_of(o, kForceCloak);
             const float e = r ? r->expiration_seconds : 0.0f;
             float f = 1.0f + player_reduce(o.owner, static_cast<uint8_t>(PlayerList::StealthDuration));
-            if (o.owner >= 0 && static_cast<size_t>(o.owner) < stealth_bonus_.size()) f += stealth_bonus_[static_cast<size_t>(o.owner)];
             if (f <= 0.0f) f = 1.0f;
             o.stealth_frames = static_cast<int32_t>(static_cast<float>(fps) * f * e);
             o.stealthed = 1;

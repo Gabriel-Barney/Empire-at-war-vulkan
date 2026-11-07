@@ -269,6 +269,7 @@ public:
     void unit_dying(tc::ObjectId id, uint32_t frame) override { a_->unit_dying(id, frame); }
     void ion_stunned(tc::ObjectId id, uint32_t frame) override { a_->ion_stunned(id, frame); }
     bool ion_storm_shields_down(tc::ObjectId id, uint32_t frame) const override { return a_->ion_storm_shields_down(id, frame); }  // L1 systems
+    bool weather_affected(int32_t player) const override { return a_->weather_affected(player); }  // cu8 t01 (Weatherproof)
     void units_removed() override { a_->units_removed(); }
     // OI abilities: detonation effects / land stuns (TACTICAL_GAPS §1.10)
     void unit_effect(tc::ObjectId id, tc::UnitEffect e, int32_t player, tactical::Vec3 p, uint32_t frame) override {
@@ -780,6 +781,15 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     std::vector<tc::PlayerInfo> infos(players);
     for (uint32_t p = 0; p < players && p < galaxy_->players().size(); ++p) {
         infos[p].ai = !galaxy_->players()[p].human;
+        // cu8 t03: the AI difficulty adjustment (TACTICAL_COMBAT §3.6 step 12 / §4.3) and the faction's retreat damage
+        // factor for this mode (§3.6 step 9).
+        if (const galactic::DifficultyRules* d = galaxy_->ai_difficulty(static_cast<int32_t>(p))) {
+            infos[p].ai_damage_multiplier = d->damage_multiplier;
+            infos[p].faction_health = d->health_multiplier;
+            infos[p].faction_shield = d->shield_multiplier;
+        }
+        const galactic::ConflictFactionInfo& fi = rules_->faction(galaxy_->players()[p].faction);
+        infos[p].retreat_damage_mod = space_ ? fi.space_retreat_damage_mod : fi.land_retreat_damage_mod;
         // TACTICAL_COMBAT §2.2: the target scan skips players whose faction is Is_Neutral (player +0x68 -> faction +0x108).
         infos[p].active = !bt_owner_neutral(static_cast<int32_t>(p));
     }
@@ -2778,9 +2788,17 @@ void TacticalBattle::hash_queues(StateHasher& h) const {
 }
 // ---- end human order API ---------------------------------------------------------------------------------------------
 
+bool TacticalBattle::retreat_prevented(int32_t player) const {
+    // cu8 t01 (TACTICAL_GAPS §1.5, BATTLE_TRANSITIONS §3.4 request check): an interdict / Retreat_Prevention entry that
+    // targets the player refuses the request (0x282750 space / 0x2825e0 land). [L, not ported] the space test's fallback
+    // object query (0x2a9ff0, category 0x2c).
+    return abilities_ && abilities_->retreat_blocked(player);
+}
+
 bool TacticalBattle::request_retreat(int32_t player) {
     const int32_t side = player == req_.info.defender ? 0 : player == req_.info.attacker ? 1 : -1;
     if (side < 0 || finished_ || vm_declared_ || frame_ < retreat_allowed_frame_ || retreat_side_ >= 0) return false;
+    if (retreat_prevented(player)) return false;
     const uint32_t f = static_cast<size_t>(player) < galaxy_->players().size() ? galaxy_->players()[static_cast<size_t>(player)].faction
                                                                                  : galactic::kNoIndex;
     const float secs = space_ ? rules_->faction(f).space_retreat_countdown : rules_->faction(f).land_retreat_countdown;
@@ -2884,6 +2902,7 @@ bool TacticalBattle::stop_for_auto_resolve(int32_t player) {
     // checks of request_retreat: a side, not finished, retreat allowed (countdown), no retreat running.
     const bool side = player == req_.info.defender || player == req_.info.attacker;
     if (!side || finished_ || vm_declared_ || frame_ < retreat_allowed_frame_ || retreat_side_ >= 0) return false;
+    if (retreat_prevented(player)) return false;  // cu8 t01
     finish(kNoPlayer, galactic::kVictoryAllDestroyed, kNoPlayer);
     return true;
 }
@@ -4287,6 +4306,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
         if (const Unit* u = unit_by_id(id)) bt_kill_silently(mode, u->h);
     oi_crush_.assign(movement_->crush_events().begin(), movement_->crush_events().end());  // OI tactical
     l1_motion(mode, rng);  // L1 systems: hyperspace jumps, engine re-enables
+    l1_force_disable(mode);  // cu8 t02: Disable_Force_Abilities_Range emitters (Force-disable stamps)
     hg_engine_service();   // engine loops: SimpleSpace locomotor services (moving first, then idle)
     bt_team_positions(mode);  // battle host: TEAM containers at their members' box centre (A1_READINGS §29.4)
     profile::lap("tac.motion_post");

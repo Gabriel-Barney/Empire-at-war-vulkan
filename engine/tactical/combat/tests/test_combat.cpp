@@ -1464,7 +1464,15 @@ void test_gaps_constants() {
               "<Hardpoint_Recharge_Cutoff_For_Opportunity_Fire>5.0</Hardpoint_Recharge_Cutoff_For_Opportunity_Fire>"
               "<Object_Max_Speed_Multiplier_Space> 1.2 </Object_Max_Speed_Multiplier_Space>"
               "<Object_Max_Speed_Multiplier_Land> 1.56 </Object_Max_Speed_Multiplier_Land>"
-              "<Diminishing_Firepower>0, 0.6, 0.3, 0.7, 0.9, 0.9, 1, 1, 2, 1</Diminishing_Firepower></GameConstants>";
+              "<Diminishing_Firepower>0, 0.6, 0.3, 0.7, 0.9, 0.9, 1, 1, 2, 1</Diminishing_Firepower>"
+              // cu8 t03: the remaining data-backed knobs (FoC writes the vulnerability as "2.0f")
+              "<Base_Shield_Vulnerability_Modifier>2.0f</Base_Shield_Vulnerability_Modifier>"
+              "<Hull_Vs_Hard_Points_Health_Constraint>0.3</Hull_Vs_Hard_Points_Health_Constraint>"
+              "<Under_Construction_Damage_Multiplier>2.5</Under_Construction_Damage_Multiplier>"
+              "<Depleted_Shield_Regen_Cap>0.5</Depleted_Shield_Regen_Cap><Depleted_Shield_Disable_Time>4.0</Depleted_Shield_Disable_Time>"
+              "<ShieldRechargeIntervalInSecs>5.0</ShieldRechargeIntervalInSecs><EnergyRechargeIntervalInSecs>6.0</EnergyRechargeIntervalInSecs>"
+              "<EnergyToShieldExchangeRate>1.0</EnergyToShieldExchangeRate><Sensor_Jamming_Time>.75</Sensor_Jamming_Time>"
+              "<Max_Secs_For_AE_Delayed_Damage>0.5</Max_Secs_For_AE_Delayed_Damage></GameConstants>";
     data::GameDatabase db;
     std::vector<std::string> ignored;
     db.load(fp, {}, &ignored);  // only GameConstants exists: the other loaders report missing files
@@ -1476,6 +1484,29 @@ void test_gaps_constants() {
     CHECK_F(cfg.turn_multiplier_space, 1.2f);  // S9 t05
     CHECK_F(cfg.turn_multiplier_land, 1.56f);
     CHECK(cfg.diminishing_firepower.size() == 5);
+    CHECK_F(cfg.base_shield_vulnerability, 2.0f);  // cu8 t03
+    CHECK_F(cfg.hull_vs_hardpoints_constraint, 0.3f);
+    CHECK_F(cfg.under_construction_damage_multiplier, 2.5f);
+    CHECK_F(cfg.depleted_shield_regen_cap, 0.5f);
+    CHECK_F(cfg.depleted_shield_disable_time, 4.0f);
+    CHECK_F(cfg.shield_recharge_interval_secs, 5.0f);
+    CHECK_F(cfg.energy_recharge_interval_secs, 6.0f);
+    CHECK_F(cfg.energy_to_shield_exchange_rate, 1.0f);
+    CHECK_F(cfg.sensor_jamming_time, 0.75f);
+    CHECK_F(cfg.max_secs_for_ae_delayed_damage, 0.5f);
+    {  // the checks below run with the default values of these knobs
+        const CombatConfig d;
+        cfg.base_shield_vulnerability = d.base_shield_vulnerability;
+        cfg.hull_vs_hardpoints_constraint = d.hull_vs_hardpoints_constraint;
+        cfg.under_construction_damage_multiplier = d.under_construction_damage_multiplier;
+        cfg.depleted_shield_regen_cap = d.depleted_shield_regen_cap;
+        cfg.depleted_shield_disable_time = d.depleted_shield_disable_time;
+        cfg.shield_recharge_interval_secs = d.shield_recharge_interval_secs;
+        cfg.energy_recharge_interval_secs = d.energy_recharge_interval_secs;
+        cfg.energy_to_shield_exchange_rate = d.energy_to_shield_exchange_rate;
+        cfg.sensor_jamming_time = d.sensor_jamming_time;
+        cfg.max_secs_for_ae_delayed_damage = d.max_secs_for_ae_delayed_damage;
+    }
     // Spline through the FoC points: knots reproduced, smooth in between, end values outside.
     World w;
     w.data.damage.add_damage_type("Laser");

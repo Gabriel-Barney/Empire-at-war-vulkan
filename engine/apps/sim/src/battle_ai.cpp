@@ -531,7 +531,8 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         w.players[a].pop_used = static_cast<int32_t>(population_used(static_cast<int32_t>(a)));
         const float cap = population_cap(static_cast<int32_t>(a));
         w.players[a].pop_cap = cap < 0.0f ? 0 : static_cast<int32_t>(cap);
-        w.players[a].can_retreat = b_->retreat_side_ < 0 && b_->frame_ >= b_->retreat_allowed_frame_;
+        w.players[a].can_retreat = b_->retreat_side_ < 0 && b_->frame_ >= b_->retreat_allowed_frame_ &&
+                                   !b_->retreat_prevented(static_cast<int32_t>(a));  // cu8 t01
         // Int-final: IsBombingRunAvailable / IsOrbitalBombardmentAvailable from the battle's land strike managers.
         w.players[a].bombing_run_available = b_->bombing_run_available(static_cast<int32_t>(a));
         w.players[a].orbital_bombardment_available = b_->bombardment_available(static_cast<int32_t>(a));

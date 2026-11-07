@@ -475,6 +475,31 @@ int32_t TacticalBattle::retreat_increment_frames(int32_t player) const {
     return f < l1_retreat_increments_.size() ? l1_retreat_increments_[f] : 0;
 }
 
+void TacticalBattle::l1_force_disable(const TacticalMode& mode) {
+    if (!abilities_) return;
+    const objects::GameObjectTypes& types = catalog_->types();
+    if (force_disable_range_.size() != types.size()) {
+        force_disable_range_.assign(types.size(), 0.0f);
+        for (objects::TypeIndex t = 0; t < types.size(); ++t)
+            force_disable_range_[t] = types.get_float(t, "Disable_Force_Abilities_Range");  // read as a float [M]
+    }
+    const objects::ObjectStore& st = mode.primary();
+    for (const objects::ObjectHandle e : st.all_objects()) {  // emitters, store order
+        const objects::TypeIndex et = st.type(e);
+        if (!st.alive(e) || et >= force_disable_range_.size() || !(force_disable_range_[et] > 0.0f)) continue;
+        const float r = force_disable_range_[et];
+        const Vec3 ep = st.position(e);
+        const int32_t owner = st.owner(e);
+        for (const Unit& u : units_) {  // ascending id; the stamp is order-independent
+            if (!u.alive || u.retreated || !st.alive(u.h) || st.owner(u.h) == owner) continue;
+            const Vec3 p = st.position(u.h);
+            const float dx = p.x - ep.x, dy = p.y - ep.y, dz = p.z - ep.z;
+            if (dx * dx + dy * dy + dz * dz > r * r) continue;
+            if (abilities_->has_force_ability(u.id)) abilities_->set_force_disabled(u.id, frame_);
+        }
+    }
+}
+
 void TacticalBattle::l1_motion(TacticalMode& mode, SimRng& rng) {
     if (!l1_used_) return;
     objects::ObjectStore& st = mode.primary();
@@ -636,6 +661,7 @@ float TacticalBattle::weather_sight_modifier(objects::ObjectId id) const {
     const objects::ObjectStore& st = l1_mode_->primary();
     const objects::ObjectHandle h = st.find(id);
     if (!st.exists(h)) return 1.0f;
+    if (abilities_ && !abilities_->weather_affected(st.owner(h))) return 1.0f;  // cu8 t01: Weatherproof owner
     return l1_weather_.sight_modifier(catalog_->types().get_string(st.type(h), "Weather_Category"));
 }
 

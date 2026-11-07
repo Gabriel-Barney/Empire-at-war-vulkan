@@ -13,8 +13,8 @@
 //         then the animation record (i32 type, u32 start, f32 rate, f32 end, u8 loop / then) and the u8 lock pairs
 //   (only kAbilitySaveVersion reads; the v1 layout without that record is no longer accepted)
 //   u32 + spawn requests, mines, Battlefield_Modifier player entries, interdict / retreat / weatherproof entries,
-//   remote bombs, events, player overrides, type overrides; u32 + stealth bonus per player; u32 + per-player
-//   black-market lists (not hashed, but read by the gates)
+//   remote bombs, events, player overrides, type overrides; u32 + per-player black-market lists (not hashed, but read
+//   by the gates)
 // Rebuilt / not saved: the query scratch lists, the host query table (AbilityHost), the bound RNG, the fog callback.
 //
 // SpecialWeaponSystem layout (version kSpecialWeaponSaveVersion): u32 + descriptors (every field), u32 + packs, u32 +
@@ -39,7 +39,7 @@ using save_io::put_vec3;
 
 namespace {
 
-constexpr uint32_t kAbilitySaveVersion = 2;  // 2: OI follow-up animation record + lock pairs
+constexpr uint32_t kAbilitySaveVersion = 3;  // 2: OI follow-up animation record + lock pairs; 3: cu8 t02 stealth bonus gone
 constexpr uint32_t kSpecialWeaponSaveVersion = 1;
 constexpr uint32_t kSpaceFieldSaveVersion = 1;
 
@@ -133,8 +133,6 @@ void AbilitySystem::write(ByteWriter& w) const {
     for (const PlayerOverride& p : overrides_) w.i32(p.player).u32(p.crc).u8(p.enabled);
     w.u32(static_cast<uint32_t>(type_overrides_.size()));
     for (const TypeOverride& t : type_overrides_) w.i32(t.player).u32(t.desc).u32(t.crc).u8(t.enabled);
-    w.u32(static_cast<uint32_t>(stealth_bonus_.size()));
-    for (const float s : stealth_bonus_) w.f32(s);
     w.u32(static_cast<uint32_t>(bm_blocked_.size()));
     for (const std::vector<uint32_t>& list : bm_blocked_) {
         w.u32(static_cast<uint32_t>(list.size()));
@@ -344,9 +342,6 @@ bool AbilitySystem::read(ByteReader& r) {
         t.enabled = r.u8();
     }
     if (!r.count(n, 4)) return false;
-    std::vector<float> stealth_bonus(n);
-    for (float& s : stealth_bonus) s = r.f32();
-    if (!r.count(n, 4)) return false;
     std::vector<std::vector<uint32_t>> bm_blocked(n);
     for (std::vector<uint32_t>& list : bm_blocked) {
         uint32_t nl = 0;
@@ -367,7 +362,6 @@ bool AbilitySystem::read(ByteReader& r) {
     events_ = std::move(events);
     overrides_ = std::move(overrides);
     type_overrides_ = std::move(type_overrides);
-    stealth_bonus_ = std::move(stealth_bonus);
     bm_blocked_ = std::move(bm_blocked);
     scratch_.clear();
     member_scratch_.clear();

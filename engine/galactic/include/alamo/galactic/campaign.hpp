@@ -720,6 +720,9 @@ public:
         return valid_player(player) ? &players_[static_cast<size_t>(player)].account : nullptr;
     }
     float ai_credit_multiplier(int32_t player) const { return valid_player(player) ? credit_multiplier(player) : 1.0f; }
+    // cu8 t03: the AI player's DifficultyAdjustments entry (AI_GALACTIC §1.2 GetAdj; tactical damage / health / shield
+    // multipliers). Null for humans, players without an AI system or adjustment (the all-1.0 dummy) and invalid players.
+    const DifficultyRules* ai_difficulty(int32_t player) const;
 
     // ---- L1/S4 Lua + story operations (src/story_ops.cpp; owner: L1/S4) -----------------------------------------
     // Change_Owner (Lua GameObjectWrapper.Change_Owner and story; GE 4.2 "Forced transfers" for planets). False

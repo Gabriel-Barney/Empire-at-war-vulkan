@@ -105,10 +105,12 @@ fw::FogObject TacticalBattle::fog_object_of(const objects::ObjectStore& store, o
     o.z = p.z;
     if (t < types.size()) {
         // Land: Land_FOW_Reveal_Range x weather factor (Int-final: the L1 weather system's Sight_Range_Modifier for the
-        // type's Weather_Category, 1.0 while I <= 0.5 / no weather; every owner weather-affected [port]); space:
-        // Space_FOW_Reveal_Range.
+        // type's Weather_Category, 1.0 while I <= 0.5 / no weather; cu8 t01: 1.0 too when the owner is not
+        // weather-affected, FOG_OF_WAR §3.1.1 / TACTICAL_GAPS §7.4); space: Space_FOW_Reveal_Range.
+        const bool weather = !abilities_ || abilities_->weather_affected(o.owner);
         o.sight_range = space_ ? types.columns().space_fow_reveal_range[t]
-                               : types.columns().land_fow_reveal_range[t] * l1_weather_.sight_modifier(types.get_string(t, "Weather_Category"));
+                        : weather ? types.columns().land_fow_reveal_range[t] * l1_weather_.sight_modifier(types.get_string(t, "Weather_Category"))
+                                  : types.columns().land_fow_reveal_range[t];
         o.dense_multiplier = std::clamp(types.get_float(t, "Dense_FOW_Reveal_Range_Multiplier"), 0.0f, 1.0f);
     }
     const objects::ObjectId id = store.id(h);
