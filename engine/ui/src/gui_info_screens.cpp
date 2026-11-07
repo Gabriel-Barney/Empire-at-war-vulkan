@@ -73,7 +73,7 @@ std::u32string InfoScreens::text(std::string_view key, std::u32string_view fallb
 
 void InfoScreens::close_all() {
     if (!gui_) return;
-    for (const char* n : {dlg::kBuyUnits, dlg::kStory, dlg::kStorySummary, dlg::kPlanetDialog}) gui_->close(n);
+    for (const char* n : {dlg::kBuyUnits, dlg::kStory, dlg::kStorySummary}) gui_->close(n);
     if (!info_open_.empty()) gui_->close(info_open_);
     info_open_.clear();
 }
@@ -202,31 +202,6 @@ bool InfoScreens::show_story_summary(const StorySummaryInfo& s) {
     d->set_checked(s.completed ? "IDC_RADIO_COMPLETED" : "IDC_RADIO_ACTIVE", true);
     d->enable("IDC_SUMMARY_DIALOG_ABANDON", false);  // dead in retail (P4_SIM_SYSTEMS §9.1); 23.jpg shows none
     d->show("IDC_SUMMARY_DIALOG_ABANDON", false);
-    return true;
-}
-
-// ---- planet dialog --------------------------------------------------------------------------------------------------
-bool InfoScreens::show_planet(const PlanetDialogInfo& p) {
-    GuiDialog* d = gui_ ? gui_->open(dlg::kPlanetDialog) : nullptr;
-    if (!d) return false;
-    planet_ = p.planet;
-    d->set_text("IDC_PLANET_MENU_PLANET_NAME", p.name);
-    image(*d, "IDC_PLANET_MENU_PLANET_IMAGE", p.image);
-    d->set_text("IDC_TEXT_PLANET_CREDITS", p.credits >= 0 ? U"+" + num32(p.credits) : std::u32string());
-    static const std::vector<std::string> kHidden;
-    const std::pair<const char*, const std::vector<std::string>*> rows[3] = {
-        {"IDC_POLITICAL_ICON_%d", &p.political},
-        {"IDC_STARBASE_ICON_%d", p.starbase_info ? &p.starbase : &kHidden},
-        {"IDC_GROUND_BASE_ICON_%d", p.groundbase_info ? &p.ground_base : &kHidden}};
-    for (const auto& [fmt, list] : rows)
-        for (int32_t k = 0; k < 5; ++k) image(*d, id_n(fmt, k), static_cast<size_t>(k) < list->size() ? (*list)[static_cast<size_t>(k)] : std::string());
-    image(*d, "IDC_GROUND_COMPANIES_ICON", p.companies_icon);
-    image(*d, "IDC_FLEETS_ICON", p.fleets_icon);
-    d->set_text("IDC_TEXT_PLANET_COMPANY_COUNT", p.companies >= 0 ? num32(p.companies) : std::u32string());
-    d->set_text("IDC_TEXT_PLANET_FLEET_COUNT", p.fleets >= 0 ? num32(p.fleets) : std::u32string());
-    d->set_text("IDC_TEXT_PRODUCTION_OBJECT_BUILDING", p.producing);
-    d->show("IDC_PRODUCTION_MENU_PROGRESS", p.progress >= 0.0f);
-    d->set_value("IDC_PRODUCTION_MENU_PROGRESS", static_cast<int32_t>(std::lround(std::clamp(p.progress, 0.0f, 1.0f) * 100.0f)));
     return true;
 }
 
@@ -487,18 +462,6 @@ void InfoScreens::on_click(const GuiEvent& e, std::vector<ScreenAction>& out) {
             gui_->close(n);
             out.push_back(act(ScreenAction::Kind::StorySummaryClosed));
         }  // IDC_SUMMARY_DIALOG_ABANDON: no handler (P4_SIM_SYSTEMS §9.1)
-    } else if (iequal(n, dlg::kPlanetDialog)) {
-        ScreenAction a;
-        if (is("IDC_PLANET_ORGANIZATION_BUTTON")) a.kind = ScreenAction::Kind::PlanetOrganize;
-        else if (is("IDC_PLANET_PRODUCTION_BUTTON")) a.kind = ScreenAction::Kind::PlanetProduction;
-        else if (is("IDC_PLANET_EXIT_BUTTON")) {
-            a.kind = ScreenAction::Kind::PlanetDialogClosed;
-            gui_->close(n);
-        } else {
-            return;
-        }
-        a.object = planet_;
-        out.push_back(std::move(a));
     } else if (info_dialog(n)) {
         if (is("IDC_BUTTON_CLOSE") || is("IDC_BUTTON_EXIT")) {
             gui_->close(n);
@@ -612,11 +575,6 @@ void InfoScreens::update(std::span<const GuiEvent> events, std::vector<ScreenAct
                 } else if (iequal(e.dialog, dlg::kStorySummary)) {
                     gui_->close(e.dialog);
                     out.push_back(act(ScreenAction::Kind::StorySummaryClosed));
-                } else if (iequal(e.dialog, dlg::kPlanetDialog)) {
-                    ScreenAction a = act(ScreenAction::Kind::PlanetDialogClosed);
-                    a.object = planet_;
-                    gui_->close(e.dialog);
-                    out.push_back(std::move(a));
                 } else if (info_dialog(e.dialog)) {
                     gui_->close(e.dialog);
                     info_open_.clear();

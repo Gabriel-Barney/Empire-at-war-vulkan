@@ -51,7 +51,7 @@
 //     the orbit pose stay one consistent camera).
 //   * Control-group camera jump (UI.md §4.4): jump_to(point) moves the look-at point (clamped, terrain-snapped) and
 //     keeps yaw / pitch / zoom; focus_point() = mean of the group's positions in index order. The host gets the jump
-//     from HotkeyDispatcher (HotkeyEvent::camera_jump) or OrderTranslator::take_camera_jump().
+//     from HotkeyDispatcher (HotkeyEvent::camera_jump).
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -252,7 +252,6 @@ public:
     // [port: Gabriel] field of view setting (degrees, defined for 4:3 like the data; <= 0 = TacticalCameras.xml FOV).
     // Presentation only. Replaces the normal-zoom FOV; the overview levels keep their own.
     void set_fov_override(float degrees) { fov_override_ = degrees; }
-    float fov_override() const { return fov_override_; }
     float roll_deg() const { return roll_; }
     const CameraTuning& tuning() const { return t_; }
     void set_tuning(const CameraTuning& t) { t_ = t; }
@@ -269,7 +268,6 @@ public:
     float scroll_speed() const;   // world units / s of a held scroll key at the current distance
     // Smoothed scroll velocity in speed units / s (x 3e-4 x distance = world units / s; y screen-down) and a hard stop.
     float scroll_velocity_x() const { return scroll_vx_; }
-    float scroll_velocity_y() const { return scroll_vy_; }
     void stop_scroll() { scroll_vx_ = scroll_vy_ = 0.0f; }
 
     // Pose for the renderer / picking; pitch raised so the eye clears the terrain by Min_Height_Above_Terrain.
@@ -353,7 +351,6 @@ public:
     // Zoom state (GalacticCameraClass +0x44): 0 free, 1 zooming in, 2 zooming out, 3 zoomed in.
     int32_t zoom_state() const { return t_anim_ < 1.0f ? (zoomed_ ? 1 : 2) : (zoomed_ ? 3 : 0); }
     float scroll_velocity_x() const { return scroll_vx_; }  // key / edge scroll smoothing (ScrollConstants), world u / s
-    float scroll_velocity_y() const { return scroll_vy_; }
     void stop_scroll() { scroll_vx_ = scroll_vy_ = 0.0f; }
     // [port: Gabriel] horizontal field of view setting (degrees; <= 0 = atan(0.5), SPACE_AND_OPEN B.8). Presentation only.
     void set_fov_deg(float degrees) { fov_deg_ = degrees; }

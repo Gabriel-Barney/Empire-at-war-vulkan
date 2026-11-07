@@ -49,13 +49,6 @@ struct SelectedGroup {
 // Selected units grouped by type, groups ordered by their lowest id [port], at most `max_groups`.
 std::vector<SelectedGroup> group_selection(std::span<const HudUnit> units, size_t max_groups = 48);
 
-struct HudHitBox {
-    int32_t component = -1;
-    uint32_t layer = 0;
-    Vec2f min{}, max{};  // canvas units
-    uint32_t slot = 0;   // panel slot (s_select_NN) or 0
-};
-
 // Ability state of a selected group: read-only S9 queries (hud_abilities.hpp abilities_from_s9 fills it from
 // tactical::abilities::AbilitySystem) or any host callback.
 struct HudAbility {

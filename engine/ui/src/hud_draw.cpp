@@ -380,4 +380,50 @@ std::span<const HudFrameStep> hud_frame_steps() {
     return kSteps;
 }
 
+HudHitBox make_hit_box(int32_t component, uint32_t layer, Vec2f center, Vec2f size, uint32_t slot) {
+    HudHitBox h;
+    h.component = component;
+    h.layer = layer;
+    h.min = {center.x - 0.5f * size.x, center.y - 0.5f * size.y};
+    h.max = {center.x + 0.5f * size.x, center.y + 0.5f * size.y};
+    h.slot = slot;
+    return h;
+}
+
+int32_t topmost_hit(std::span<const HudHitBox> hits, const HudCanvas& canvas, int32_t px, int32_t py) {
+    const Vec2f c = canvas.pixel_to_canvas(static_cast<float>(px) + 0.5f, static_cast<float>(py) + 0.5f);
+    int32_t best = -1;
+    uint32_t best_layer = 0;
+    for (const HudHitBox& h : hits) {
+        if (c.x < h.min.x || c.x > h.max.x || c.y < h.min.y || c.y > h.max.y) continue;
+        if (best < 0 || h.layer >= best_layer) {
+            best = h.component;
+            best_layer = h.layer;
+        }
+    }
+    return best;
+}
+
+void frame_rect(HudDrawList& dl, uint32_t layer, Vec2f c, Vec2f size, Rgba8 back, Rgba8 edge) {
+    HudQuad q;
+    q.min = {c.x - 0.5f * size.x, c.y - 0.5f * size.y};
+    q.max = {c.x + 0.5f * size.x, c.y + 0.5f * size.y};
+    q.color = back;
+    dl.add(layer, HudList::Alpha, q);
+    const float t = 2.0f;
+    const HudQuad edges[4] = {
+        {{q.min.x, q.max.y - t}, {q.max.x, q.max.y}, {0, 0}, {1, 1}, edge},
+        {{q.min.x, q.min.y}, {q.max.x, q.min.y + t}, {0, 0}, {1, 1}, edge},
+        {{q.min.x, q.min.y}, {q.min.x + t, q.max.y}, {0, 0}, {1, 1}, edge},
+        {{q.max.x - t, q.min.y}, {q.max.x, q.max.y}, {0, 0}, {1, 1}, edge},
+    };
+    for (const HudQuad& e : edges) dl.add(layer, HudList::Alpha, e);
+}
+
+void resize_canvas(HudCanvas& canvas, FontCache* fonts, uint32_t width, uint32_t height) {
+    const HudCanvas next = HudCanvas::make(width, height);
+    if (fonts && next.screen_height != canvas.screen_height) fonts->clear();
+    canvas = next;
+}
+
 }  // namespace alamo::ui

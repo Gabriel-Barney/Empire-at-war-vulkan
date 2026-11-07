@@ -414,15 +414,11 @@ void test_hotkeys() {
     CHECK2(b.binding(Action::Stop, 0).key == 'G' && b.binding(Action::Stop, 0).mods == kModNone);
     CHECK2(b.binding(Action::ControlGroup1, 0).key == 'Z' && b.binding(Action::SelectAll, 0).mods == kModCtrl &&
            b.binding(Action::ScrollUp, 0).mods == kModAny && b.binding(Action::ScrollUp, 0).key == 'W');
-    // OrderTranslator leaves the keyboard to the dispatcher when asked.
+    // OrderTranslator leaves the keyboard to the dispatcher (cu13 t01): the SelectAll key emits nothing.
     OrderTranslator ot;
-    ot.set_keyboard_orders(false);
     OrderContext ctx;
     ot.update(keys_frame({'Y'}, false, true), Bindings{}, ctx);
     CHECK2(ot.pending().empty());
-    OrderTranslator ot2;
-    ot2.update(keys_frame({'Y'}, false, true), Bindings{}, ctx);
-    CHECK2(ot2.pending().size() == 1);
 }
 
 // ------------------------------------------------------------------------------------------- text wrap

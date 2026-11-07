@@ -75,24 +75,6 @@ void OrderTranslator::update(const InputState& in, const Bindings& keys, const O
     } else {
         tactical(in, ctx);
     }
-    // keyboard orders (both modes)
-    if (!keyboard_orders_) {
-        sync_meta();
-        return;
-    }
-    if (keys.pressed(in, Action::SelectAll)) pending_.push_back(ev::select_all());
-    if (keys.pressed(in, Action::Stop) && !sel_.empty()) pending_.push_back(ev::stop());
-    for (uint8_t g = 0; g < 10; ++g) {
-        const auto a = static_cast<Action>(static_cast<uint8_t>(Action::ControlGroup0) + g);
-        if (!keys.pressed(in, a)) continue;
-        const bool assign = in.ctrl();
-        pending_.push_back(ev::control_group(g, assign, assign && in.shift()));
-        if (assign) continue;
-        const double now = in.frame().time;
-        if (last_recall_group_ == g && now - last_recall_time_ <= kDoubleRecallSeconds) camera_jump_ = g;
-        last_recall_group_ = g;
-        last_recall_time_ = now;
-    }
     sync_meta();
 }
 

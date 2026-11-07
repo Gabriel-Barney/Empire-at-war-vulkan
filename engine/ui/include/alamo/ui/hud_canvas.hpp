@@ -59,8 +59,6 @@ struct HudCanvas {
     // Snap a canvas point to the pixel grid (text, Pixel_Align): round the pixel position (half-pixel bias).
     Vec2f snap_to_pixel(Vec2f c) const;
     // Pixel lengths -> canvas lengths.
-    float px_to_units_x(float px) const { return px * units_per_pixel_x; }
-    float px_to_units_y(float py) const { return py * units_per_pixel_y; }
     // Wrapped text width factor: 0.95 at exactly 800 pixels wide, else 1 (UI.md §2.4, 0x2df0c0).
     float text_wrap_factor() const { return screen_width == 800 ? 0.95f : 1.0f; }
 };

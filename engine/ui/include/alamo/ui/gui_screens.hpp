@@ -15,7 +15,7 @@
 //                                  Cancel / Esc -> RetreatCancelled
 //   IDD_INGAME_CHAT_DIALOG         Enter -> SendChat{text, team_only} (the network layer turns it into the non-scheduled
 //                                  Chat event 16); Esc -> ChatClosed; IDC_TEAM_MEMBERS_ONLY check box = team_only
-//   IDD_PLANET_INFO                GALACTIC_DIALOGS §9 (the organiser's planet_info button; IDD_PLANET_DIALOG is dead):
+//   IDD_PLANET_INFO                GALACTIC_DIALOGS §9 (the organiser's planet_info button):
 //                                  "Planet Info <name>" in the owner colour, planet render + load_overlay.tga, wrapped
 //                                  tactical (50 200 255) / advantages / history lists, population / terrain / weather texts
 //                                  and icons; single instance, no pause; Close / Esc -> PlanetInfoClosed {object = planet}
@@ -143,11 +143,7 @@ struct ScreenAction {
         StoryCancelled,       // tag
         StoryClosed,          // tag
         StorySummaryFilter,   // button 0 = active, 1 = completed stories
-        StoryAbandon,         // never emitted: the retail Abandon is dead (P4_SIM_SYSTEMS §9.1); kept for the enum order
         StorySummaryClosed,
-        PlanetOrganize,       // object = planet
-        PlanetProduction,     // object = planet
-        PlanetDialogClosed,   // object = planet
         InfoPageChanged,      // button = InfoPage
         InfoClosed,
         InfoHintsToggled,     // button = 1 on / 0 off

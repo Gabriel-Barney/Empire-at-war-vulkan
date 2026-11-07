@@ -106,7 +106,8 @@ public:
     bool pressed(const InputState& in, uint16_t slot) const;
     // P1 Bindings sync: scroll (69..72) and camera reset (73) become held/pressed actions with kModAny; SelectAll
     // (10), Stop (16), ControlGroup0..9 (slots 9, 0..8), the free camera axes, Pause and zoom (160 / 161) with their
-    // exact modifier. Every camera action then has exactly one key, and no key drives two of them (End = reset only,
+    // exact modifier. Only the camera, pause and zoom actions have a reader; SelectAll / Stop / ControlGroupN stay in the
+    // Bindings table (key-config UI, clash checks) but this dispatcher is what issues those orders. Every camera action then has exactly one key, and no key drives two of them (End = reset only,
     // Home = CameraHome only).
     void apply_to_bindings(Bindings& b) const;
 

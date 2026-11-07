@@ -109,11 +109,7 @@ const char* screen_action_name(ScreenAction::Kind k) {
         case ScreenAction::Kind::StoryCancelled: return "StoryCancelled";
         case ScreenAction::Kind::StoryClosed: return "StoryClosed";
         case ScreenAction::Kind::StorySummaryFilter: return "StorySummaryFilter";
-        case ScreenAction::Kind::StoryAbandon: return "StoryAbandon";
         case ScreenAction::Kind::StorySummaryClosed: return "StorySummaryClosed";
-        case ScreenAction::Kind::PlanetOrganize: return "PlanetOrganize";
-        case ScreenAction::Kind::PlanetProduction: return "PlanetProduction";
-        case ScreenAction::Kind::PlanetDialogClosed: return "PlanetDialogClosed";
         case ScreenAction::Kind::InfoPageChanged: return "InfoPageChanged";
         case ScreenAction::Kind::InfoClosed: return "InfoClosed";
         case ScreenAction::Kind::InfoHintsToggled: return "InfoHintsToggled";

@@ -171,6 +171,15 @@ public:
     const std::vector<int32_t>& shells() const { return shells_; }
     int32_t active_shell() const { return open_ ? active_shell_ : -1; }
     virtual std::vector<std::string> shell_names() const = 0;
+    // Shell clicks of this frame -> `actions`. `wheel` = the frame's wheel notches (InputFrame::wheel), read by SlicePanel only.
+    virtual void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
+                              float wheel = 0.0f) = 0;
+    // Legacy signature with the unused EventData out parameter; engine/apps still calls it (cu13 t05 open item: call the
+    // virtual through the HudPanel pointer there, then delete this).
+    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>&,
+                      std::vector<HudAction>* actions = nullptr, float wheel = 0.0f) {
+        update_input(routed, shift, ctrl, now, actions, wheel);
+    }
 
     const HudDrawList& draw_list() const { return dl_; }
     const std::vector<HudHitBox>& hit_boxes() const { return hits_; }
@@ -184,6 +193,13 @@ protected:
     void draw_slots(const PanelFrame& f);
     void end(const PanelFrame& f);
     std::vector<ButtonClick> clicks(const RoutedInput& routed, bool shift, bool ctrl, double now);
+    // Shared by build() and update_input() of the shell panels.
+    void add_text_slot(std::string_view name, std::u32string text);  // a text-only slot (text role)
+    void add_close(std::string_view name);                           // the shell's close button slot
+    HudAction click_action(const ButtonClick& k, HudAction::Kind kind) const;  // kind + component + component name
+    template <class Accept, class Fill>
+    void shell_clicks(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions,
+                      HudAction::Kind kind, Accept accept, Fill fill);
     const PanelSlot* slot_of(int32_t component) const;
     int32_t find(std::string_view name) const { return table_ ? table_->find(name) : -1; }
     virtual void fallback_layout() = 0;  // [port] positions without shell bones
@@ -259,8 +275,9 @@ class HeroPanel : public HudPanel {
 public:
     std::vector<std::string> shell_names() const override { return {"good_hero_frame", "evil_hero_frame"}; }
     void build(const HeroPanelFrame& f);
-    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>& out,
-                      std::vector<HudAction>* actions = nullptr);
+    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
+                      float wheel = 0.0f) override;
+    using HudPanel::update_input;  // the legacy overload
     uint32_t hover_hero() const;        // hovered good slot's hero object (0 = none)
     int32_t hover_component() const;    // its slot component (-1 = none)
 
@@ -293,8 +310,9 @@ class BlackMarketPanel : public HudPanel {
 public:
     std::vector<std::string> shell_names() const override { return {"market_frame"}; }
     void build(const BlackMarketFrame& f);
-    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>& out,
-                      std::vector<HudAction>* actions = nullptr);
+    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
+                      float wheel = 0.0f) override;
+    using HudPanel::update_input;  // the legacy overload
 
 private:
     void fallback_layout() override;
@@ -331,10 +349,10 @@ public:
     void build(const SliceFrame& f);
     // `wheel` = this frame's wheel notches (InputFrame::wheel); used while routed.wheel_target is the HUD and the cursor
     // is over one of the panel's components.
-    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>& out,
-                      std::vector<HudAction>* actions = nullptr, float wheel = 0.0f);
+    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
+                      float wheel = 0.0f) override;
+    using HudPanel::update_input;  // the legacy overload
     int32_t first_row() const { return first_; }
-    void set_first_row(int32_t row) { first_ = row < 0 ? 0 : row; }  // clamped to the rows at the next build
 
 private:
     void fallback_layout() override;
@@ -360,8 +378,9 @@ class SabotagePanel : public HudPanel {
 public:
     std::vector<std::string> shell_names() const override { return {"bm_frame"}; }
     void build(const SabotageFrame& f);
-    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>& out,
-                      std::vector<HudAction>* actions = nullptr);
+    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
+                      float wheel = 0.0f) override;
+    using HudPanel::update_input;  // the legacy overload
 
 private:
     void fallback_layout() override;
@@ -388,8 +407,9 @@ class CorruptionPanel : public HudPanel {
 public:
     std::vector<std::string> shell_names() const override { return {"corruption_shell"}; }
     void build(const CorruptionFrame& f);
-    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>& out,
-                      std::vector<HudAction>* actions = nullptr);
+    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
+                      float wheel = 0.0f) override;
+    using HudPanel::update_input;  // the legacy overload
 
 private:
     void fallback_layout() override;
@@ -411,8 +431,9 @@ class HackPanel : public HudPanel {
 public:
     std::vector<std::string> shell_names() const override { return {"hack_shell"}; }
     void build(const HackFrame& f);
-    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>& out,
-                      std::vector<HudAction>* actions = nullptr);
+    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
+                      float wheel = 0.0f) override;
+    using HudPanel::update_input;  // the legacy overload
 
 private:
     void fallback_layout() override;
