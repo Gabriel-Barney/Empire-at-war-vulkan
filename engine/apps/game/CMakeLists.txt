@@ -48,6 +48,10 @@ if(TARGET alamo_lua_vm)  # Q5 mod check: compiles the data's Lua scripts (mod_ch
   target_link_libraries(alamo_game_core PRIVATE alamo_lua_vm)
   target_compile_definitions(alamo_game_core PRIVATE ALAMO_GAME_HAVE_LUA_VM=1)
 endif()
+if(TARGET alamo_materials AND TARGET alamo_assets)  # modc t21 mod check: effect audit + model materials (mod_check.cpp)
+  target_link_libraries(alamo_game_core PRIVATE alamo_materials alamo_assets)
+  target_compile_definitions(alamo_game_core PRIVATE ALAMO_GAME_HAVE_MATERIALS=1)
+endif()
 if(TARGET alamo_audio)
   target_link_libraries(alamo_game_core PUBLIC alamo_audio)
   target_compile_definitions(alamo_game_core PUBLIC ALAMO_GAME_HAVE_AUDIO=1)
@@ -116,6 +120,9 @@ set_tests_properties(alamo_game_battle_fx_tests PROPERTIES TIMEOUT 120)
 # in its own temp folder; with ALAMO_FOC_DATA also the shipped data (no errors).
 add_executable(alamo_mod_check tools/mod_check_main.cpp)
 target_link_libraries(alamo_mod_check PRIVATE alamo_core alamo_game_core)
+if(COMMAND alamo_shaderxlat_copy_dxc)  # modc t21: the runtime DXC compiles the audited shader passes
+  alamo_shaderxlat_copy_dxc(alamo_mod_check)
+endif()
 # q6 t02: alamo_session_run starts a GameSession (campaign or skirmish) on any data set (MODPATH=..) and ticks it, no window.
 add_executable(alamo_session_run tools/session_run_main.cpp)
 target_link_libraries(alamo_session_run PRIVATE alamo_core alamo_game_core)

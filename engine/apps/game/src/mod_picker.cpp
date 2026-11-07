@@ -230,6 +230,9 @@ std::vector<std::string> mod_report_summary(const ModCheckReport& r) {
     out.push_back(fmt("Lua: %llu scripts, %llu do not compile, %llu main-chunk errors", r.lua_scripts, r.lua_errors.size(),
                       r.lua_run_errors.size()));
     if (!r.unbound_lua_calls.empty()) out.push_back(fmt("%llu engine call(s) the port does not bind", r.unbound_lua_calls.size()));
+    if (r.shaders.checked)  // report v3 (modc t21): the effect audit
+        out.push_back(fmt("Shaders: %llu effects (%llu from the mod), %llu issue(s)", r.shaders.effects, r.shaders.mod_effects,
+                          r.shaders.issues.size()));
     const SubmodHint& h = r.submod;
     if (h.likely && !h.parents.empty()) {
         const ModParentCandidate& p = h.parents.front();

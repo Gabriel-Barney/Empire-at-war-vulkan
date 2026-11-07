@@ -90,6 +90,7 @@ void test_report(const std::string& fixture, const std::string& foc) {
     const std::vector<std::string> ps = game::mod_report_summary(plain);
     CHECK(!ps.empty() && ps[0].rfind("Loads: OK, 0 errors", 0) == 0);
     CHECK(has_line(ps, "factions") && has_line(ps, "Lua: ") && !has_line(ps, "Submod"));
+    CHECK(plain.shaders.checked == has_line(ps, "Shaders: "));  // report v3: the effect audit line when it ran
     // A likely submod: launched stacked on its parent (the report's stacked arguments).
     game::ModCheckOptions opt;
     opt.workshop_libraries = {fixture + "/steamlib"};

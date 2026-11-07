@@ -20,7 +20,13 @@
 //              and a static scan of every script for engine functions / methods the port does not bind yet. A main
 //              chunk that fails after reading a GlobalValue key that is unset here but that some script sets
 //              (GlobalValue.Set with that literal key, e.g. in a Base_Definitions the session calls at startup) depends
-//              on session state: it is listed apart (lua_session_errors), not as a load warning (modc t12)
+//              on session state: it is listed apart (lua_session_errors), not as a load warning (modc t12). A main chunk
+//              that fails on a require of a script no layer has fails in retail too (stock Lua 5.0.2 require raises
+//              "could not load package"; docs/re/MODC_LOADER.md section 6): a warning when the data loads the script, an
+//              unused-script lead (lua_unused_scripts, info) when it is a mod's own script that nothing names (modc t24)
+//   shaders    materials::audit_effects over every effect the shader directories reach (mod or base): each
+//              materials::ShaderIssue (docs/MODS.md section 4.1) with, for a Data\Art\Shaders\ effect, how many of the
+//              object types' models name it in a material, so the report says whether anything draws it (modc t21)
 //   submod     a mod whose own data names files no layer has, while an installed mod (Steam workshop item or
 //              <game>\Mods folder) outside the stack has most of them: likely a submod meant to be stacked on that
 //              parent (modc t16). Found from the files only; a modinfo.json naming the parent's workshop id is noted
@@ -28,7 +34,7 @@
 // so a mod's own problems can be told from the base game's (base FoC itself names missing cinematic models and unread tags).
 // It does not run a session: run-time gaps past a script's main chunk (functions the session calls later) show up in
 // alamo_headless --story / --galactic-ai runs.
-// format_mod_report_json: the machine-readable summary, schema "alamo.mod_report" version 2 (docs/MODS.md §5.1).
+// format_mod_report_json: the machine-readable summary, schema "alamo.mod_report" version 3 (docs/MODS.md §5.1).
 // Used by alamo_mod_check (tools/mod_check_main.cpp) and its tests. Render-free.
 #pragma once
 #include <cstdint>
@@ -47,6 +53,8 @@ struct ModCheckOptions {
     bool files = true;      // missing files named by list files and object type model tags
     bool xml_tags = true;   // unknown XML tags of the object types and the other databases
     bool submod = true;     // look for the parent of a mod whose own data names missing files
+    bool shaders = true;    // audit every effect (materials::audit_effects; needs the materials module)
+    bool shader_compile = true;  // with shaders: also compile each translated pass with the runtime DXC when it loads
     // Steam library folders searched for installed workshop items (submod parents), e.g.
     // vfs::find_steam_libraries(game, vfs::default_steam_roots()). Empty: no workshop item is considered (tests).
     // <game>\Mods\* is always searched.
@@ -84,6 +92,12 @@ struct LuaIssue {
     // it was unset (the first such key, by byte order, that a script sets) and the first script (path order) setting it.
     std::string global_value;
     std::string set_by;
+    // Run errors only (modc t24): the script name of a require that found no file (the innermost one when a required
+    // library requires it; "" for other errors), and the first place that names the failing script so the data loads
+    // it: "<xml file> (<tag>)" for an XML script tag, "require in <script>", "AI plan folder" (scripts the original
+    // enumerates), "base script" (the path is also in a base layer), "" when nothing does.
+    std::string missing_require;
+    std::string named_by;
     std::string text() const { return path + ": " + error; }
 };
 
@@ -119,6 +133,29 @@ struct SubmodHint {
     std::vector<std::string> stacked_args;    // likely: the check's args followed by parents.front().arg
 };
 
+// A materials::ShaderIssue of the effect audit (modc t21) and what draws the effect.
+struct ShaderIssueEntry {
+    std::string kind;      // materials::shader_issue_kind_name(): source_only, source_shadowed, load_failed, ...
+    std::string effect;    // upper-case base name
+    std::string path;      // game path of the file concerned
+    bool in_mod = false;   // that file is reached through a mod
+    std::string detail;    // loader / translator / DXC message ("" when the kind says it all)
+    // "models": an effect in Data\Art\Shaders, which models name in their materials; "terrain": one in Shaders\Terrain,
+    // which the terrain renderer selects by name; "engine": one in Shaders\Engine or one of the device-init engine
+    // effects (materials::engine_effect_load_sequence(): GLOBAL, ALAMOENGINE, the Prim* effects, ...), the engine's own.
+    std::string drawn_by;
+    uint32_t models = 0;   // drawn_by "models": object-type models whose materials name the effect
+    std::string first_model;  // the first of them (model path order)
+};
+struct ShaderCheck {
+    bool checked = false;  // the audit ran (built with the materials module and ModCheckOptions::shaders)
+    size_t effects = 0, mod_effects = 0, loaded = 0, translated_passes = 0, translated_ok = 0;  // materials::EffectAudit
+    bool compiled = false;    // the runtime DXC compiled the translated passes
+    size_t fx_sources = 0, fx_sources_compiled = 0;  // EffectAudit::sources / sources_compiled (modc t23 FxCache)
+    size_t models_read = 0;   // object-type models read for the cross-reference (0 when no issue is a model effect)
+    std::vector<ShaderIssueEntry> issues;  // audit order: by effect, then kind
+};
+
 struct ModCheckReport {
     std::string game;                        // the FoC folder checked
     std::vector<std::string> args;           // the VFS command line (MODPATH= ...)
@@ -150,15 +187,17 @@ struct ModCheckReport {
     size_t lua_run = 0;                          // main chunks run (entry scripts that compile)
     std::vector<LuaIssue> lua_run_errors;        // compiles, its main chunk raises an error (not session-dependent)
     std::vector<LuaIssue> lua_session_errors;    // the same after reading an unset GlobalValue that a script sets (info)
+    std::vector<LuaIssue> lua_unused_scripts;    // fails on a missing require, a mod's own script nothing names (info)
     std::vector<UnboundLuaCall> unbound_lua_calls;  // most call sites first, then by name
+    ShaderCheck shaders;                         // effect audit issues (warnings)
     SubmodHint submod;                           // empty unless the mod's own data names missing files
     std::vector<std::string> check_errors;       // a check above that threw: "<check>: exception: <what>"
 
     // Errors: the load failed or a step threw / failed, no campaign has planets (one error), a check threw. Warnings:
     // campaigns without planets when another one has planets, loader and
     // VFS diagnostics, skipped campaign rows, missing files, unknown XML tags (one per database and tag), scripts that
-    // do not compile or whose main chunk errors, unbound engine calls (one per name). Not counted (info): session-
-    // dependent main-chunk errors and the submod hint. The original loads with all of these; its Lua
+    // do not compile or whose main chunk errors, unbound engine calls (one per name), shader issues. Not counted (info):
+    // session-dependent main-chunk errors, unused-script leads and the submod hint. The original loads with all of these; its Lua
     // 5.0 rejects the same scripts, and mods ship unused ones, e.g. Thrawn's Revenge's Lua 5.1 unit-test specs.
     size_t error_count() const;
     bool no_startable_campaign() const { return campaigns_checked > 0 && campaigns_without_planets.size() == campaigns_checked; }

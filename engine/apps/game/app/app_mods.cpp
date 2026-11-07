@@ -75,6 +75,7 @@ void App::check_mod(const std::string& id) {
     if (!id.empty()) args.push_back(id);
     game::ModCheckOptions o;
     o.workshop_libraries = workshop_libraries_;
+    o.shader_compile = false;  // the effect audit without the runtime DXC compile: lighter inside the running game
     const std::string root = game_root_;
     std::printf("mods: checking %s\n", id.empty() ? "the base game" : id.c_str());
     mod_check_ = std::async(std::launch::async, [root, args, o] { return game::check_mod_data(root, args, o); });

@@ -87,3 +87,30 @@ BOM and the `@@KIND@@` string, so the BOM alone stopped the script.
   ("Failed to convert value"), and `Freighter_Acclamator_E` as a variant of itself.
 - 1770851727 trade routes `WW_064`, `WW_126`, `WW_127` name `Allanteen_WW`, which no campaign lists (rows skipped,
   warning).
+
+## 6. `require` of a script no layer has (modc t24)
+
+Question: every main-chunk error left in the load report after modc t12 is a `require` of a script the mod does not
+ship (Thrawn's Revenge `GameScoring_old.lua` -> `BoardingHandler`, `Targeting.lua` -> `LayerTeleport`, ...). Does the
+original raise an error there (the script stops), or does `require` return nil and the script run on?
+
+Answer, from the docs and the Lua 5.0.2 sources (no probe needed):
+
+- The original links stock Lua 5.0.2 ([`PE_OVERVIEW.md`](PE_OVERVIEW.md) "Lua", [`SUBSYSTEMS.md`](SUBSYSTEMS.md)
+  "Lua loading"), and its `require` is the stock `luaB_require`: the exe's strings "could not load package `%s' from
+  path `%s'", "error loading package `%s' (%s)" and "`_LOADED' is not a table" are all referenced by one function,
+  0x7cfc60 ([`ghidra/strings_xrefs.csv`](ghidra/strings_xrefs.csv)), the three messages of `luaB_require` in
+  `toolchain/lua-5.0.2/src/lib/lbaselib.c`. [H]
+- Stock `luaB_require` walks `LUA_PATH`; when no entry finds a file (`LUA_ERRFILE`) it raises
+  `luaL_error("could not load package ...")`. It never returns nil for a missing script. [H, source]
+- So the error unwinds the requiring chunk at the `require` line. Unless the script itself wraps the call in `pcall`
+  (none of the mods' cases do), the main chunk fails, the definitions after that line never run, and the engine reports
+  the load failure (`LuaScript Error in %s.lua!\n\n%s`, 0x246ad0, the string with the error text). [H for the error,
+  M for the engine's handling: a failing chunk is a script that did not load, as for a compile error (§2)]
+
+Port: `engine/lua` `require` already raises an error for a missing script (`lua_vm.cpp`, "cannot find script '<name>'
+in Data\Scripts"), the same outcome. The load report keeps such a script as a warning when the data loads it (an XML
+script tag names it, another script requires it, a base script of the same path, or a root the original enumerates or
+whose loading is not traced), and lists it as an **unused-script lead** (info) when it is a mod's own script under a
+by-name root (GameObject, Story, FreeStore, Miscellaneous) that nothing names: that script never runs in retail either
+(`docs/MODS.md` §5).
