@@ -11,6 +11,7 @@
 #include <climits>
 
 #include "alamo/commands/event_types.hpp"
+#include "alamo/core/bytes.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/galactic/campaign.hpp"
 
@@ -18,17 +19,11 @@ namespace alamo::galactic {
 
 namespace {
 
-void put32(std::vector<uint8_t>& b, uint32_t v) {
-    for (int i = 0; i < 4; ++i) b.push_back(static_cast<uint8_t>(v >> (8 * i)));
-}
-uint32_t get32(std::span<const uint8_t> b, size_t at) {
-    uint32_t v = 0;
-    for (size_t i = 0; i < 4; ++i) v |= static_cast<uint32_t>(b[at + i]) << (8 * i);
-    return v;
-}
-commands::EventData special_event(uint32_t kind, const std::vector<uint8_t>& bytes) {
+// Special-ability payloads (COMMANDS.md, kind + "data" bytes): little-endian u32 fields, then a u8 flag where the kind
+// has one; the exact size per kind is checked on read.
+commands::EventData special_event(uint32_t kind, const ByteWriter& w) {
     commands::EventData e(commands::EventType::SpecialAbility);
-    e.set("kind", kind).set_bytes("data", std::span<const uint8_t>(bytes.data(), bytes.size()));
+    e.set("kind", kind).set_bytes("data", std::span<const uint8_t>(w.bytes()));
     return e;
 }
 
@@ -48,53 +43,53 @@ constexpr int8_t kCorruptionBlackMarket = 6;  // Corruption_Black_Market (P4 1.2
 uint32_t economy_mining_tag() { return special_name_crc("TEXT_ECONOMY_MINING_FACILITIES"); }
 
 commands::EventData special_activate_event(uint32_t planet_id, uint32_t unit_id) {
-    std::vector<uint8_t> b;
-    put32(b, planet_id);
-    put32(b, unit_id);
+    ByteWriter b;
+    b.u32(planet_id);
+    b.u32(unit_id);
     return special_event(kSpecialActivate, b);
 }
 
 commands::EventData black_market_purchase_event(uint32_t planet_id, uint32_t hero_id, uint32_t item_crc, float price,
                                                 float respawn_seconds, bool only_one) {
-    std::vector<uint8_t> b;
-    put32(b, planet_id);
-    put32(b, hero_id);
-    put32(b, item_crc);
-    put32(b, commands::quantize(kQuantAmount, price));
-    put32(b, commands::quantize(kQuantDuration, respawn_seconds));
-    b.push_back(static_cast<uint8_t>(only_one ? 1 : 0));
+    ByteWriter b;
+    b.u32(planet_id);
+    b.u32(hero_id);
+    b.u32(item_crc);
+    b.u32(commands::quantize(kQuantAmount, price));
+    b.u32(commands::quantize(kQuantDuration, respawn_seconds));
+    b.boolean(only_one);
     return special_event(kSpecialBlackMarket, b);
 }
 
 commands::EventData sabotage_structure_event(uint32_t planet_id, uint32_t saboteur_id, uint32_t structure_id, float cost,
                                              float respawn_seconds) {
-    std::vector<uint8_t> b;
-    put32(b, planet_id);
-    put32(b, saboteur_id);
-    put32(b, structure_id);
-    put32(b, commands::quantize(kQuantAmount, cost));
-    put32(b, commands::quantize(kQuantDuration, respawn_seconds));
+    ByteWriter b;
+    b.u32(planet_id);
+    b.u32(saboteur_id);
+    b.u32(structure_id);
+    b.u32(commands::quantize(kQuantAmount, cost));
+    b.u32(commands::quantize(kQuantDuration, respawn_seconds));
     return special_event(kSpecialSabotage, b);
 }
 
 commands::EventData slice_event(uint32_t planet_id, uint32_t slicer_id, uint32_t type, float price, float chance,
                                 float respawn_seconds, bool only_one) {
-    std::vector<uint8_t> b;
-    put32(b, planet_id);
-    put32(b, slicer_id);
-    put32(b, type);
-    put32(b, commands::quantize(kQuantAmount, price));
-    put32(b, commands::quantize(kQuantDuration, chance * 1000.0f));
-    put32(b, commands::quantize(kQuantDuration, respawn_seconds));
-    b.push_back(static_cast<uint8_t>(only_one ? 1 : 0));
+    ByteWriter b;
+    b.u32(planet_id);
+    b.u32(slicer_id);
+    b.u32(type);
+    b.u32(commands::quantize(kQuantAmount, price));
+    b.u32(commands::quantize(kQuantDuration, chance * 1000.0f));
+    b.u32(commands::quantize(kQuantDuration, respawn_seconds));
+    b.boolean(only_one);
     return special_event(kSpecialSlice, b);
 }
 
 commands::EventData hack_super_weapon_event(uint32_t planet_id, uint32_t hacker_id, float cost) {
-    std::vector<uint8_t> b;
-    put32(b, planet_id);
-    put32(b, hacker_id);
-    put32(b, commands::quantize(kQuantAmount, cost));
+    ByteWriter b;
+    b.u32(planet_id);
+    b.u32(hacker_id);
+    b.u32(commands::quantize(kQuantAmount, cost));
     return special_event(kSpecialHack, b);
 }
 
@@ -103,40 +98,42 @@ bool read_special_payload(const commands::EventData& ev, SpecialPayload& out) {
     out = SpecialPayload{};
     out.kind = ev.u("kind");
     const std::span<const uint8_t> b = ev.bytes_view("data");
+    size_t size = 0;  // exact payload size per kind
     switch (out.kind) {
-    case kSpecialActivate:
-        if (b.size() != 8) return false;
-        break;
-    case kSpecialSlice:
-        if (b.size() != 25) return false;
-        out.type = get32(b, 8);
-        out.amount = commands::dequantize(kQuantAmount, get32(b, 12));
-        out.chance = commands::dequantize(kQuantDuration, get32(b, 16)) / 1000.0f;  // unpack 0x4b4470 divides by 1000
-        out.seconds = commands::dequantize(kQuantDuration, get32(b, 20));
-        out.only_one = b[24] != 0;
-        break;
-    case kSpecialBlackMarket:
-        if (b.size() != 21) return false;
-        out.item_crc = get32(b, 8);
-        out.amount = commands::dequantize(kQuantAmount, get32(b, 12));
-        out.seconds = commands::dequantize(kQuantDuration, get32(b, 16));
-        out.only_one = b[20] != 0;
-        break;
-    case kSpecialSabotage:
-        if (b.size() != 20) return false;
-        out.structure = get32(b, 8);
-        out.amount = commands::dequantize(kQuantAmount, get32(b, 12));
-        out.seconds = commands::dequantize(kQuantDuration, get32(b, 16));
-        break;
-    case kSpecialHack:
-        if (b.size() != 12) return false;
-        out.amount = commands::dequantize(kQuantAmount, get32(b, 8));
-        break;
+    case kSpecialActivate: size = 8; break;
+    case kSpecialSlice: size = 25; break;
+    case kSpecialBlackMarket: size = 21; break;
+    case kSpecialSabotage: size = 20; break;
+    case kSpecialHack: size = 12; break;
     default: return false;
     }
-    out.planet = get32(b, 0);
-    out.unit = get32(b, 4);
-    return true;
+    if (b.size() != size) return false;
+    ByteReader r(b);
+    out.planet = r.u32();
+    out.unit = r.u32();
+    switch (out.kind) {
+    case kSpecialSlice:
+        out.type = r.u32();
+        out.amount = commands::dequantize(kQuantAmount, r.u32());
+        out.chance = commands::dequantize(kQuantDuration, r.u32()) / 1000.0f;  // unpack 0x4b4470 divides by 1000
+        out.seconds = commands::dequantize(kQuantDuration, r.u32());
+        out.only_one = r.u8() != 0;  // any non-zero byte, as before (not ByteReader::boolean)
+        break;
+    case kSpecialBlackMarket:
+        out.item_crc = r.u32();
+        out.amount = commands::dequantize(kQuantAmount, r.u32());
+        out.seconds = commands::dequantize(kQuantDuration, r.u32());
+        out.only_one = r.u8() != 0;
+        break;
+    case kSpecialSabotage:
+        out.structure = r.u32();
+        out.amount = commands::dequantize(kQuantAmount, r.u32());
+        out.seconds = commands::dequantize(kQuantDuration, r.u32());
+        break;
+    case kSpecialHack: out.amount = commands::dequantize(kQuantAmount, r.u32()); break;
+    default: break;  // kSpecialActivate: planet and unit only
+    }
+    return r.ok() && r.done();  // always true after the size check
 }
 
 // ---- helpers ----------------------------------------------------------------------------------------------------------

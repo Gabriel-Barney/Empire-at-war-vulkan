@@ -5,6 +5,7 @@
 #include <iterator>
 #include <stdexcept>
 
+#include "alamo/core/bytes.hpp"
 #include "wire.hpp"
 
 namespace alamo::commands {
@@ -13,19 +14,6 @@ namespace {
 bool fail(std::string* err, std::string msg) {
     if (err) *err = std::move(msg);
     return false;
-}
-
-void put_str(std::vector<uint8_t>& out, const std::string& s) {
-    wire::put(out, static_cast<uint32_t>(s.size()));
-    out.insert(out.end(), s.begin(), s.end());
-}
-
-bool get_str(wire::Reader& r, std::string& s) {
-    const uint32_t n = r.get<uint32_t>();
-    if (!r.ok() || r.remaining() < n) return false;
-    const auto d = r.data().subspan(r.pos(), n);
-    s.assign(d.begin(), d.end());
-    return r.skip(n);
 }
 
 }  // namespace
@@ -74,10 +62,9 @@ std::vector<uint8_t> CommandRecording::to_bytes() const {
         wire::put(out, from_save->digest);
     }
     wire::put(out, static_cast<uint32_t>(meta.size()));
-    for (const auto& [k, v] : meta) {
-        put_str(out, k);
-        put_str(out, v);
-    }
+    ByteWriter mw;  // the meta strings: core's u32-length string layout
+    for (const auto& [k, v] : meta) mw.str(k).str(v);
+    out.insert(out.end(), mw.bytes().begin(), mw.bytes().end());
     wire::put(out, static_cast<uint32_t>(batches.size()));
     for (const auto& b : batches) encode_batch(b, out);
     return out;
@@ -117,11 +104,14 @@ bool CommandRecording::from_bytes(std::span<const uint8_t> bytes, CommandRecordi
         return fail(err, "bad scheduler config in header");
     rec.config.late = static_cast<LatePolicy>(late);
     rec.config.mode = static_cast<ScheduleMode>(mode);
+    ByteReader mr(bytes.subspan(r.pos()));  // the meta strings (ByteWriter::str layout)
     for (uint32_t i = 0; i < nmeta; ++i) {
-        std::string k, v;
-        if (!get_str(r, k) || !get_str(r, v)) return fail(err, "truncated meta");
+        std::string k = mr.str();
+        std::string v = mr.str();
+        if (!mr.ok()) return fail(err, "truncated meta");
         rec.meta.emplace_back(std::move(k), std::move(v));
     }
+    r.skip(bytes.size() - r.pos() - mr.remaining());
     const uint32_t nb = r.get<uint32_t>();
     if (!r.ok()) return fail(err, "truncated batch count");
     size_t pos = r.pos();

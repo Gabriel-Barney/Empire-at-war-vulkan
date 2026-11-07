@@ -323,14 +323,13 @@ public:
 
     uint64_t cache_hits() const;
 
-    // N1 save / load: frame, the per-planet event stamps and last-seen values, the leaf cache (key order) and the hit
-    // counter; version 2 (q6 t03) adds the logic frame, the per-player conflict stamps and the conflict observer (log
-    // position, active record). Version 3 (q6 t18): the cache key is (leaf, instance, system player, parameter key) and
-    // every entry keeps its parameters (for the 0xE recompute); then the visible flags and the last seen surface units.
-    // A version-1 / 2 image loads with an empty leaf cache (its keys carried Target / Enemy / Human), no visible flags and
-    // the surface units taken from the sim. A version-1 image loads with no player stamps (-1) and the observer
-    // re-synchronised at its next pass (no stamp for log entries written before). The neighbour lists are rebuilt from the
-    // sim (static map data). read() fails (unchanged) unless the saved planet count is 0 (never refreshed) or the sim's.
+    // N1 save / load (version 3): frame, the per-planet event stamps and last-seen values, the leaf cache (key order; key
+    // = leaf, instance, system player, parameter key, and every entry keeps its parameters for the 0xE recompute), the
+    // hit counter, the logic frame, the per-player conflict stamps, the conflict observer (log position, active record),
+    // the visible flags and the last seen surface units. read() accepts only that version, like the other AI chunks
+    // (the version 1 / 2 images were dropped in cu6; the 2026-11-05 kGoalsVersion 2 -> 3 bump had already made saves of
+    // that time unloadable). The neighbour lists are rebuilt from the sim (static map data). read() fails (unchanged)
+    // unless the saved planet count is 0 (never refreshed) or the sim's.
     // A load is a restore: it raises no visibility signal (the original refreshes every object at a load) [port].
     void write(ByteWriter& w) const;
     bool read(ByteReader& r);

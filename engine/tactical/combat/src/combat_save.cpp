@@ -38,8 +38,12 @@
 #include "alamo/tactical/combat/combat_system.hpp"
 #include "alamo/tactical/combat/modifiers.hpp"
 #include "alamo/tactical/combat/weather.hpp"
+#include "alamo/tactical/save_io.hpp"
 
 namespace alamo::tactical::combat {
+
+using save_io::get_vec3;
+using save_io::put_vec3;
 
 namespace {
 
@@ -54,22 +58,6 @@ constexpr uint32_t kCombatSaveVersion = 12;  // 2: refix t02 INFECTION state, re
                                              // on a member)
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
-
-// Element count, bounded by the bytes left (each element takes at least `min_bytes`), so corrupt counts never allocate.
-bool get_count(ByteReader& r, uint32_t& n, size_t min_bytes) {
-    n = r.u32();
-    return r.ok() && static_cast<uint64_t>(n) * static_cast<uint64_t>(min_bytes) <= static_cast<uint64_t>(r.remaining());
-}
-
-void put_vec3(ByteWriter& w, const Vec3& v) { w.f32(v.x).f32(v.y).f32(v.z); }
-
-Vec3 get_vec3(ByteReader& r) {
-    Vec3 v;
-    v.x = r.f32();
-    v.y = r.f32();
-    v.z = r.f32();
-    return v;
-}
 
 }  // namespace
 
@@ -86,7 +74,7 @@ void ModifierSet::write(ByteWriter& w) const {
 bool ModifierSet::read(ByteReader& r) {
     const uint32_t version = r.u32();
     uint32_t n = 0;
-    if (!r.ok() || !get_count(r, n, 21)) return false;
+    if (!r.ok() || !r.count(n, 21)) return false;
     std::vector<ModifierEntry> entries(n);
     for (ModifierEntry& e : entries) {
         e.value = r.f32();
@@ -268,7 +256,7 @@ bool CombatSystem::read(ByteReader& r) {
     if (!r.ok()) return false;
 
     uint32_t n = 0;
-    if (!get_count(r, n, 64)) return false;
+    if (!r.count(n, 64)) return false;
     std::vector<Unit> units(n);
     ObjectId prev = 0;
     bool first = true;
@@ -281,10 +269,10 @@ bool CombatSystem::read(ByteReader& r) {
         u.damage_team = r.u32();
         u.damage_parent = r.i32();
         u.flags = r.u32();
-        u.pos = get_vec3(r);
-        u.last_pos = get_vec3(r);
-        u.facing = get_vec3(r);
-        u.prev_pos = get_vec3(r);
+        u.pos = get_vec3<Vec3>(r);
+        u.last_pos = get_vec3<Vec3>(r);
+        u.facing = get_vec3<Vec3>(r);
+        u.prev_pos = get_vec3<Vec3>(r);
         u.health = r.f32();
         u.shield = r.f32();
         u.shield_depleted = r.u8();
@@ -329,7 +317,7 @@ bool CombatSystem::read(ByteReader& r) {
         u.auto_hp = r.i32();
         u.weapon_last = r.u32();  // S7 t15 A2
         u.weapon_bone = r.u32();  // S8 t06 B4
-        u.lob_point = get_vec3(r);  // S8 t26
+        u.lob_point = get_vec3<Vec3>(r);  // S8 t26
         u.lob_pending = r.u8();
         u.lob_charged = r.u8();
         u.lob_stamp = r.u32();
@@ -346,7 +334,7 @@ bool CombatSystem::read(ByteReader& r) {
         u.infect_end = r.u32();
         u.infect_next_damage = r.u32();
         uint32_t nx = 0;
-        if (!get_count(r, nx, 8) || u.infect_attached > 1 || u.infect_desc < -1 ||
+        if (!r.count(nx, 8) || u.infect_attached > 1 || u.infect_desc < -1 ||
             (u.infect_desc >= 0 && static_cast<uint32_t>(u.infect_desc) >= unit_descs))
             return false;
         u.infect_exposure.resize(nx);
@@ -372,7 +360,7 @@ bool CombatSystem::read(ByteReader& r) {
         first = false;
     }
 
-    if (!get_count(r, n, 38)) return false;
+    if (!r.count(n, 38)) return false;
     std::vector<Hardpoint> hps(n);
     for (Hardpoint& h : hps) {
         h.desc = r.u32();
@@ -399,7 +387,7 @@ bool CombatSystem::read(ByteReader& r) {
         return (it == units.end() || it->id != id) ? nullptr : &*it;
     };
 
-    if (!get_count(r, n, 82)) return false;
+    if (!r.count(n, 82)) return false;
     std::vector<Projectile> projectiles(n);
     for (Projectile& p : projectiles) {
         p.serial = r.u32();
@@ -408,8 +396,8 @@ bool CombatSystem::read(ByteReader& r) {
         p.owner = r.i32();
         p.target = r.i32();
         p.target_hp = r.i32();
-        p.pos = get_vec3(r);
-        p.dir = get_vec3(r);
+        p.pos = get_vec3<Vec3>(r);
+        p.dir = get_vec3<Vec3>(r);
         p.speed = r.f32();
         p.travelled = r.f32();
         p.max_travel = r.f32();
@@ -426,13 +414,13 @@ bool CombatSystem::read(ByteReader& r) {
         p.stuck = r.u8();
         p.gravity = r.f32();
         p.stuck_to = r.i32();
-        p.launch = get_vec3(r);
-        p.lob_dir = get_vec3(r);
-        p.stuck_offset = get_vec3(r);
+        p.launch = get_vec3<Vec3>(r);
+        p.lob_dir = get_vec3<Vec3>(r);
+        p.stuck_offset = get_vec3<Vec3>(r);
         if (!r.ok() || p.desc >= proj_descs || p.rocket > 1 || p.lob > 1 || p.stuck > 1) return false;
     }
     // refixf t01: rocket states, exactly one per rocket-flagged projectile, in the same (serial) order.
-    if (!get_count(r, n, 61)) return false;
+    if (!r.count(n, 61)) return false;
     std::vector<Rocket> rockets(n);
     {
         size_t j = 0;
@@ -441,15 +429,15 @@ bool CombatSystem::read(ByteReader& r) {
             rk.planned = r.u8();
             rk.s = r.f32();
             rk.budget = r.f32();
-            rk.fire_at = get_vec3(r);
-            rk.launch = get_vec3(r);
-            rk.last_vel = get_vec3(r);
+            rk.fire_at = get_vec3<Vec3>(r);
+            rk.launch = get_vec3<Vec3>(r);
+            rk.last_vel = get_vec3<Vec3>(r);
             uint32_t npts = 0;
-            if (!get_count(r, npts, 12)) return false;
+            if (!r.count(npts, 12)) return false;
             std::vector<Vec3> pts(npts);
-            for (Vec3& v : pts) v = get_vec3(r);
+            for (Vec3& v : pts) v = get_vec3<Vec3>(r);
             uint32_t ns = 0;
-            if (!get_count(r, ns, 52)) return false;
+            if (!r.count(ns, 52)) return false;
             std::vector<RocketSpline::Segment> segs(ns);
             for (RocketSpline::Segment& sg : segs) {
                 for (float& c : sg.k) c = r.f32();
@@ -466,7 +454,7 @@ bool CombatSystem::read(ByteReader& r) {
         if (j != projectiles.size()) return false;  // a rocket-flagged projectile without a state
     }
 
-    if (!get_count(r, n, 28)) return false;
+    if (!r.count(n, 28)) return false;
     std::vector<Delayed> delayed(n);
     for (Delayed& d : delayed) {
         d.victim = r.i32();
@@ -481,13 +469,13 @@ bool CombatSystem::read(ByteReader& r) {
         if (!r.ok() || !proj_ok(d.projectile_desc)) return false;
     }
 
-    if (!get_count(r, n, 8)) return false;
+    if (!r.count(n, 8)) return false;
     std::vector<std::pair<int32_t, ObjectId>> base_power(n);
     for (auto& [pl, src] : base_power) {
         pl = r.i32();
         src = r.i32();
     }
-    if (!get_count(r, n, 12)) return false;
+    if (!r.count(n, 12)) return false;
     std::vector<Repairer> repairs(n);
     for (Repairer& rp : repairs) {
         rp.unit = r.i32();
@@ -497,7 +485,7 @@ bool CombatSystem::read(ByteReader& r) {
         const Unit* u = find_in(rp.unit);
         if (!u || rp.hp >= u->hp_count) return false;
     }
-    if (!get_count(r, n, 8)) return false;
+    if (!r.count(n, 8)) return false;
     std::vector<std::pair<uint32_t, ObjectId>> team_heads(n);
     for (auto& [team, id] : team_heads) {
         team = r.u32();
@@ -505,7 +493,7 @@ bool CombatSystem::read(ByteReader& r) {
     }
     if (!r.ok()) return false;
 
-    if (!get_count(r, n, 22)) return false;
+    if (!r.count(n, 22)) return false;
     std::vector<DeathEvent> deaths(n);
     for (DeathEvent& e : deaths) {
         e.id = r.i32();
@@ -517,7 +505,7 @@ bool CombatSystem::read(ByteReader& r) {
         e.spin_away = r.boolean();
         if (!r.ok() || !proj_ok(e.death_projectile)) return false;
     }
-    if (!get_count(r, n, 19)) return false;
+    if (!r.count(n, 19)) return false;
     std::vector<HardpointEvent> hp_events(n);
     for (HardpointEvent& e : hp_events) {
         e.owner = r.i32();
@@ -530,13 +518,13 @@ bool CombatSystem::read(ByteReader& r) {
         if (!r.ok() || kind > static_cast<uint8_t>(HardpointKind::DummyArt)) return false;
         e.kind = static_cast<HardpointKind>(kind);
     }
-    if (!get_count(r, n, 5)) return false;
+    if (!r.count(n, 5)) return false;
     std::vector<SmokeEvent> smoke(n);
     for (SmokeEvent& e : smoke) {
         e.id = r.i32();
         e.percent = r.u8();
     }
-    if (!get_count(r, n, 51)) return false;
+    if (!r.count(n, 51)) return false;
     std::vector<DamageEvent> damage_events(n);
     for (DamageEvent& e : damage_events) {
         e.victim = r.i32();
@@ -556,35 +544,35 @@ bool CombatSystem::read(ByteReader& r) {
         e.frame = r.u32();
         if (!r.ok() || !proj_ok(e.projectile_desc)) return false;
     }
-    if (!get_count(r, n, 35)) return false;
+    if (!r.count(n, 35)) return false;
     std::vector<HitEvent> hit_events(n);
     for (HitEvent& e : hit_events) {
         e.victim = r.i32();
         e.shooter = r.i32();
         e.owner = r.i32();
         e.projectile_desc = r.u32();
-        e.position = get_vec3(r);
+        e.position = get_vec3<Vec3>(r);
         e.absorbed = r.boolean();
         e.armor_reduced = r.boolean();
         e.delayed = r.boolean();
         e.pick = r.i32();
         if (!r.ok() || e.projectile_desc >= proj_descs) return false;
     }
-    if (!get_count(r, n, 12)) return false;
+    if (!r.count(n, 12)) return false;
     std::vector<ShotEvent> shot_events(n);
     for (ShotEvent& e : shot_events) {
         e.shooter = r.i32();
         e.target = r.i32();
         e.target_owner = r.i32();
     }
-    if (!get_count(r, n, 41)) return false;
+    if (!r.count(n, 41)) return false;
     std::vector<SurvivorEvent> survivors(n);
     for (SurvivorEvent& e : survivors) {
         e.dead = r.i32();
         e.type = r.i32();
         e.owner = r.i32();
-        e.position = get_vec3(r);
-        e.facing = get_vec3(r);
+        e.position = get_vec3<Vec3>(r);
+        e.facing = get_vec3<Vec3>(r);
         e.respawn = r.boolean();
         e.due_frame = r.u32();
     }
@@ -680,7 +668,7 @@ bool WeatherSystem::read(ByteReader& r) {
         if (index >= np || current >= np || next >= np) return false;
     }
     uint32_t n = 0;
-    if (!get_count(r, n, 9)) return false;
+    if (!r.count(n, 9)) return false;
     std::vector<WeatherEvent> events(n);
     for (WeatherEvent& e : events) {
         const uint8_t kind = r.u8();

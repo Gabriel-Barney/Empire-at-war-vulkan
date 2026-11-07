@@ -1,6 +1,6 @@
 // N1 save / load of the galactic AI (GalacticAiWorld::write / read; contract alamo/core/save_file.hpp).
 //
-// LAYOUT (u32 version 2 first; every count before its items; maps in key order, lists in their own order):
+// LAYOUT (u32 kWorldVersion first; every count before its items; maps in key order, lists in their own order):
 //   shape        AI player pattern, plan library size, planet count (validated against the rebuilt world)
 //   counters     now, perception frame, market frame, current plan, the six id counters, orders / rejected
 //   gate         AiEnableGate
@@ -359,7 +359,7 @@ void GalacticSimTokenResolver::write(ByteWriter& w) const {
 
 bool GalacticSimTokenResolver::read(ByteReader& r) {
     const uint32_t version = r.u32();
-    if (!r.ok() || version < 1 || version > kResolverVersion) return false;
+    if (!r.ok() || version != kResolverVersion) return false;
     const int32_t frame = r.i32();
     const uint32_t n = save::count(r, 22);
     if (!r.ok() || (n != 0 && n != sim_->planets().size())) return false;
@@ -376,16 +376,8 @@ bool GalacticSimTokenResolver::read(ByteReader& r) {
         if (e > 1) r.fail();
     }
     std::map<CacheKey, Entry> cache;
-    const uint32_t nc = save::count(r, version >= 3 ? 32 : 40);
+    const uint32_t nc = save::count(r, 32);
     for (uint32_t i = 0; i < nc && r.ok(); ++i) {
-        if (version < 3) {  // the old key carried Target / Enemy / Human: parsed and dropped (the cache restarts empty)
-            (void)r.str();
-            for (int f = 0; f < 5; ++f) (void)r.i32();
-            (void)r.str();
-            (void)r.f64();
-            (void)r.i32();
-            continue;
-        }
         CacheKey k;
         k.leaf = r.str();
         k.inst = r.i32();
@@ -401,57 +393,39 @@ bool GalacticSimTokenResolver::read(ByteReader& r) {
         cache.emplace_hint(cache.end(), std::move(k), std::move(e));
     }
     const uint64_t hits = r.u64();
-    // version 2 (q6 t03); a version-1 image: no stamps, the observer re-synchronises at its next pass
-    int32_t logic_frame = frame;
+    const int32_t logic_frame = r.i32();
     std::array<std::vector<int32_t>, 4> stamps;
-    uint32_t log_seen = kLogUnseen;
-    ObservedConflict active;
-    if (version >= 2) {
-        logic_frame = r.i32();
-        for (std::vector<int32_t>& s : stamps) {
-            s.resize(save::count(r, 4));
-            for (int32_t& x : s) {
-                x = r.i32();
-                if (x < -1) r.fail();
-            }
+    for (std::vector<int32_t>& s : stamps) {
+        s.resize(save::count(r, 4));
+        for (int32_t& x : s) {
+            x = r.i32();
+            if (x < -1) r.fail();
         }
-        log_seen = r.u32();
-        active.valid = r.boolean();
-        active.kind = r.u8();
-        active.planet = r.u32();
-        active.attacker = r.i32();
-        active.defender = r.i32();
-        const uint8_t flags = r.u8();
-        if (flags > 15) r.fail();
-        active.linked = (flags & 1u) != 0;
-        active.space_stamped = (flags & 2u) != 0;
-        active.ground_stamped = (flags & 4u) != 0;
-        active.in_battle = (flags & 8u) != 0;
     }
-    // version 3 (q6 t18); older: no visible flags, the surface units as the sim holds them now (no landing at the next pass)
-    std::vector<std::vector<uint32_t>> visible;
-    std::vector<std::vector<int32_t>> surface;
-    if (version >= 3) {
-        visible.resize(save::count(r, 4));
-        for (std::vector<uint32_t>& row : visible) {
-            row.resize(save::count(r, 4));
-            for (uint32_t& x : row) x = r.u32();
-        }
-        surface.resize(save::count(r, 4));
-        if (!surface.empty() && surface.size() != n) r.fail();
-        for (std::vector<int32_t>& ids : surface) {
-            ids.resize(save::count(r, 4));
-            for (int32_t& id : ids) id = r.i32();
-            if (!std::is_sorted(ids.begin(), ids.end())) r.fail();
-        }
-    } else if (n != 0) {
-        const auto planets = sim_->planets();
-        surface.resize(n);
-        for (size_t i = 0; i < n; ++i) {
-            for (const ObjectHandle u : planets[i].surface)
-                if (sim_->store().alive(u)) surface[i].push_back(sim_->store().id(u));
-            std::sort(surface[i].begin(), surface[i].end());
-        }
+    const uint32_t log_seen = r.u32();
+    ObservedConflict active;
+    active.valid = r.boolean();
+    active.kind = r.u8();
+    active.planet = r.u32();
+    active.attacker = r.i32();
+    active.defender = r.i32();
+    const uint8_t flags = r.u8();
+    if (flags > 15) r.fail();
+    active.linked = (flags & 1u) != 0;
+    active.space_stamped = (flags & 2u) != 0;
+    active.ground_stamped = (flags & 4u) != 0;
+    active.in_battle = (flags & 8u) != 0;
+    std::vector<std::vector<uint32_t>> visible(save::count(r, 4));
+    for (std::vector<uint32_t>& row : visible) {
+        row.resize(save::count(r, 4));
+        for (uint32_t& x : row) x = r.u32();
+    }
+    std::vector<std::vector<int32_t>> surface(save::count(r, 4));
+    if (!surface.empty() && surface.size() != n) r.fail();
+    for (std::vector<int32_t>& ids : surface) {
+        ids.resize(save::count(r, 4));
+        for (int32_t& id : ids) id = r.i32();
+        if (!std::is_sorted(ids.begin(), ids.end())) r.fail();
     }
     if (!r.ok() || !r.done()) return false;
     visible_ = std::move(visible);

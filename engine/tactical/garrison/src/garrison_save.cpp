@@ -15,28 +15,17 @@
 #include "alamo/core/bytes.hpp"
 #include "alamo/tactical/garrison/capture.hpp"
 #include "alamo/tactical/garrison/garrison.hpp"
+#include "alamo/tactical/save_io.hpp"
 
 namespace alamo::tactical::garrison {
+
+using save_io::get_vec3;
+using save_io::put_vec3;
 
 namespace {
 
 constexpr uint32_t kGarrisonSaveVersion = 1;
 constexpr uint32_t kCaptureSaveVersion = 1;
-
-bool get_count(ByteReader& r, uint32_t& n, size_t min_bytes) {
-    n = r.u32();
-    return r.ok() && static_cast<uint64_t>(n) * static_cast<uint64_t>(min_bytes) <= static_cast<uint64_t>(r.remaining());
-}
-
-void put_vec3(ByteWriter& w, const Vec3& v) { w.f32(v.x).f32(v.y).f32(v.z); }
-
-Vec3 get_vec3(ByteReader& r) {
-    Vec3 v;
-    v.x = r.f32();
-    v.y = r.f32();
-    v.z = r.f32();
-    return v;
-}
 
 }  // namespace
 
@@ -69,7 +58,7 @@ bool GarrisonSystem::read(ByteReader& r) {
     if (r.u32() != kGarrisonSaveVersion || !r.ok()) return false;
     const int32_t neutral = r.i32();
     uint32_t n = 0;
-    if (!get_count(r, n, 42)) return false;
+    if (!r.count(n, 42)) return false;
     std::vector<Holder> holders(n);
     for (size_t i = 0; i < holders.size(); ++i) {
         Holder& h = holders[i];
@@ -84,14 +73,14 @@ bool GarrisonSystem::read(ByteReader& r) {
         h.d.can_fire = r.boolean();
         h.d.half_diagonal = r.f32();
         uint32_t ni = 0;
-        if (!get_count(r, ni, 4) || kind > static_cast<uint8_t>(HolderKind::Property)) return false;
+        if (!r.count(ni, 4) || kind > static_cast<uint8_t>(HolderKind::Property)) return false;
         if (i > 0 && h.id <= holders[i - 1].id) return false;
         h.d.kind = static_cast<HolderKind>(kind);
         h.inside.resize(ni);
         for (ObjectId& id : h.inside) id = r.i32();
         if (!r.ok()) return false;
     }
-    if (!get_count(r, n, 33)) return false;
+    if (!r.count(n, 33)) return false;
     std::vector<Unit> units(n);
     for (size_t i = 0; i < units.size(); ++i) {
         Unit& u = units[i];
@@ -109,14 +98,14 @@ bool GarrisonSystem::read(ByteReader& r) {
             return false;
         u.state = static_cast<State>(state);
     }
-    if (!get_count(r, n, 29)) return false;
+    if (!r.count(n, 29)) return false;
     std::vector<GarrisonEvent> events(n);
     for (GarrisonEvent& e : events) {
         const uint8_t kind = r.u8();
         e.unit = r.i32();
         e.holder = r.i32();
         e.owner = r.i32();
-        e.position = get_vec3(r);
+        e.position = get_vec3<Vec3>(r);
         e.frame = r.u32();
         if (!r.ok() || kind > static_cast<uint8_t>(GarrisonEventKind::OrderDropped)) return false;
         e.kind = static_cast<GarrisonEventKind>(kind);
@@ -151,13 +140,13 @@ bool CapturePointSystem::read(ByteReader& r) {
     const uint32_t interval = r.u32(), allowed = r.u32();
     if (!r.ok() || interval == 0) return false;
     uint32_t n = 0;
-    if (!get_count(r, n, 41)) return false;
+    if (!r.count(n, 41)) return false;
     std::vector<Point> points(n);
     for (size_t i = 0; i < points.size(); ++i) {
         Point& p = points[i];
         p.id = r.i32();
         p.owner = r.i32();
-        p.pos = get_vec3(r);
+        p.pos = get_vec3<Vec3>(r);
         p.d.radius = r.f32();
         p.d.transition_seconds = r.f32();
         p.d.sticky = r.boolean();
@@ -167,7 +156,7 @@ bool CapturePointSystem::read(ByteReader& r) {
         p.next = r.u32();
         if (!r.ok() || (i > 0 && p.id <= points[i - 1].id)) return false;
     }
-    if (!get_count(r, n, 16)) return false;
+    if (!r.count(n, 16)) return false;
     std::vector<CaptureEvent> events(n);
     for (CaptureEvent& e : events) {
         e.point = r.i32();
