@@ -1814,6 +1814,34 @@ void test_potential_plan() {
         std::printf(", defenders 3000: solved %d (failed %s)\n", short_of, r.last_veto.c_str());
         CHECK(!short_of && r.last_veto == "Contrast");
     }
+    // 8. a2k t11: the tactical solve weighs with the AI PotentialPlan weight 0x5f1f90 (ContrastTable::ai_weight, the solver
+    //    0x6c3da0 is shared with galactic; A2K_T02_RE_ANSWERS Q2(b)) [H]: the mean of the matching entries != 1.0. Two Frigate
+    //    entries 0.25 and 2.75 -> 1.5: one frigate (1000 x 1.5) meets a corvette target of 400 x 1.5; with only 0.25 it fails.
+    {
+        PpFixture f;
+        f.plan({{"MainForce", "Syn_Frigate = 1"}});
+        auto solve = [&](bool both, TacticalPpResult& r) {
+            galactic::ContrastTable ct;
+            galactic::ContrastRow row;
+            row.enemy = "Corvette";
+            row.enemy_mask = f.mask("Corvette");
+            row.friendly.push_back({"Frigate", f.mask("Frigate"), 0.25f});
+            if (both) row.friendly.push_back({"Frigate", f.mask("Frigate"), 2.75f});
+            ct.rows.push_back(row);
+            CHECK(ct.ai_weight(0, "Syn_Frigate", f.mask("Frigate")) == (both ? 1.5f : 0.25f));
+            TacticalPpInput in = f.input(TacticalMode::Space);
+            in.has_target = true;
+            in.target_object = 900;
+            in.target_position = {0.0f, 0.0f, 0.0f};
+            in.contrast = &ct;
+            in.enemy_strength = [](uint64_t) { return 400.0; };
+            in.free_units = {{11, 0, {100.0f, 0.0f, 0.0f}, 1.0f, false}};
+            return solve_tactical_pp(in, r);
+        };
+        TacticalPpResult r;
+        CHECK(solve(true, r) && r.picks.size() == 1);
+        CHECK(!solve(false, r) && r.last_veto == "Contrast");
+    }
     // 6. Team expansion: category masks over types (mask overlap), names, exclusions.
     {
         PpFixture f;
