@@ -270,6 +270,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     // A2 galactic: GalacticSim income-tick listener (§3.1). The sim may outlive or predecease this object, so the
     // listener holds a weak token instead of being removed in the destructor.
     uint32_t income_hook = 0;
+    uint32_t credit_hook = 0;  // a2k t10: Add_Credits notify (0x4b0310)
     std::shared_ptr<int> alive = std::make_shared<int>(0);
     void on_income(const gal::IncomeTick& t);
 

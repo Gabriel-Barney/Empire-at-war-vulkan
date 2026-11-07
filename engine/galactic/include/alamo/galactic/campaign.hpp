@@ -320,6 +320,10 @@ struct IncomeTick {
     int32_t frame = 0;  // mode frame of the cycle
 };
 using IncomeHook = std::function<void(const IncomeTick&)>;
+// AI credit notify (A2K_T10_CREDIT_NOTIFY_RE Q1) [H]: Add_Credits with its notify flag set, for a player with an AI
+// system, tells the galactic AI budget the APPLIED amount (after the AI Credit_Multiplier, the zero floor and the cap
+// clamp) through 0x4b0310 -> 0x615b40. No test of the amount's sign or of the current mode.
+using CreditNotifyHook = std::function<void(int32_t player, float applied)>;
 
 // FleetManagement (event id 8) ops. Op names are [M] (AI_GALACTIC §2.x, AI_GALACTIC_2 §5.4); payload use [port]:
 //   kFleetForm   {target = planet, fleet = destination fleet (kNoObject = a new fleet), unit}: the unit leaves its
@@ -450,7 +454,7 @@ public:
     RejectReason invade(int32_t player, PlanetIndex planet, std::span<const ObjectHandle> units);
     // Removes a unit, structure, starbase or fleet (battle outcome / story stand-in).
     bool destroy_object(ObjectHandle object);
-    float add_credits(int32_t player, float amount, bool notify_ai = true);
+    float add_credits(int32_t player, float amount, bool notify_ai = true);  // A2K_T10_CREDIT_NOTIFY_RE Q3 table for the flag
     float player_income(int32_t player, bool consume);
     float planet_income(PlanetIndex planet, bool gross);
     // Planet_Income(P, gross = 0) 0x3f68b0 read-only, without its side effects (the galactic AI's income tokens) [port]:
@@ -616,6 +620,11 @@ public:
     // payment loop; a listener may read the sim but must not change it. Not hashed, not saved: hosts re-register them.
     // Several listeners (registration order): a replaced GalacticAiWorld leaves its expired-token listener behind.
     uint32_t add_income_hook(IncomeHook hook);  // returns a registration id (never 0)
+    // Credit notify listeners (CreditNotifyHook above), same rules as the income hooks. add_credits(.., notify_ai = true)
+    // calls notify_ai_credits for a player with an AI system; a host that changes an account directly (the land battle's
+    // end return 0x614a70) calls notify_ai_credits itself with the applied amount.
+    uint32_t add_credit_notify_hook(CreditNotifyHook hook);  // returns a registration id (never 0)
+    void notify_ai_credits(int32_t player, float applied);
     // The raw income I of `player` at the last fiscal cycle (IncomeTick::gain for AI players); 0 before the first one.
     float last_income(int32_t player) const;
     // Production queries. queue_kind: kGroundQueue / kSpaceQueue, or -1 when the type cannot be queued (GE 2.1).
@@ -1163,6 +1172,7 @@ private:
     ConflictHooks* conflicts_ = nullptr;  // S10 (not owned)
     // A2 galactic (not hashed: listeners and the last cycle's gains, both re-derived by hosts / the next cycle)
     std::vector<std::pair<uint32_t, IncomeHook>> income_hooks_;
+    std::vector<std::pair<uint32_t, CreditNotifyHook>> credit_hooks_;
     uint32_t next_hook_id_ = 1;
     std::vector<float> last_income_;  // per player
     std::function<void(PlanetIndex)> production_hook_;

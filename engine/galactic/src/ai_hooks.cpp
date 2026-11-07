@@ -26,6 +26,21 @@ uint32_t GalacticSim::add_income_hook(IncomeHook hook) {
     return id;
 }
 
+uint32_t GalacticSim::add_credit_notify_hook(CreditNotifyHook hook) {
+    const uint32_t id = next_hook_id_++;
+    if (next_hook_id_ == 0) next_hook_id_ = 1;
+    credit_hooks_.emplace_back(id, std::move(hook));
+    return id;
+}
+
+// 0x4b0310 [H]: only for a player with an AI system (player +0x360); the galactic budget is told whatever the current
+// mode is (A2K_T10_CREDIT_NOTIFY_RE Q1).
+void GalacticSim::notify_ai_credits(int32_t player, float applied) {
+    if (!valid_player(player) || !players_[static_cast<size_t>(player)].ai) return;
+    const std::vector<std::pair<uint32_t, CreditNotifyHook>> hooks = credit_hooks_;  // a listener may register another
+    for (const auto& h : hooks) h.second(player, applied);
+}
+
 float GalacticSim::last_income(int32_t player) const {
     return valid_player(player) && static_cast<size_t>(player) < last_income_.size() ? last_income_[static_cast<size_t>(player)]
                                                                                        : 0.0f;

@@ -837,6 +837,27 @@ void test_a2_income_hook() {
     CHECK(z.sim.player_income(pUnder, false) == 0.0f);
     z.run(1351);
     CHECK(zt.size() == 1 && !zt.empty() && zt[0].player == pEmpire && z.sim.last_income(pUnder) == 0.0f);
+
+    // a2k t10 (A2K_T10_CREDIT_NOTIFY_RE Q1 / Q3) [H]: Add_Credits with notify tells an AI player's budget the APPLIED amount
+    // (after Credit_Multiplier, floor and cap); notify off, a player without an AI system and the fiscal income tell nothing.
+    World n({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}});
+    std::vector<std::pair<int32_t, float>> got;
+    CHECK(n.sim.add_credit_notify_hook([&got](int32_t p, float x) { got.emplace_back(p, x); }) != 0);
+    const float u0 = n.sim.credits(pUnder);
+    const float applied = n.sim.add_credits(pUnder, 100.0f, true);  // Underworld (AI): x 1.2
+    CHECK(applied == n.sim.credits(pUnder) - u0 && applied > 100.0f);
+    n.sim.add_credits(pUnder, 100.0f, false);
+    n.sim.add_credits(pEmpire, 100.0f, true);  // human Empire: no AI system
+    n.sim.add_credits(pUnder, -1.0e9f, true);  // floored at 0: the applied amount is what was there
+    CHECK(got.size() == 2);
+    if (got.size() == 2) {
+        CHECK(got[0].first == pUnder && got[0].second == applied);
+        CHECK(got[1].first == pUnder && got[1].second < 0.0f && n.sim.credits(pUnder) == 0.0f);
+    }
+    n.sim.notify_ai_credits(pUnder, 5.0f);  // a host's direct account change (the battle-end return 0x614a70)
+    CHECK(got.size() == 3);
+    n.run(1351);  // the fiscal cycle pays with notify off
+    CHECK(got.size() == 3);
 }
 
 void test_a2_production_queries() {

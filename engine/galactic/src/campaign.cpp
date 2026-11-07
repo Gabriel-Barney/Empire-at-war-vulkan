@@ -338,10 +338,12 @@ bool GalacticSim::start(const GalacticSetup& setup, std::vector<std::string>* di
 
 // ---- credits --------------------------------------------------------------------------------------------------
 
-float GalacticSim::add_credits(int32_t player, float amount, bool /*notify_ai: AI budget (engine/ai)*/) {
+float GalacticSim::add_credits(int32_t player, float amount, bool notify_ai) {
     if (!valid_player(player)) return 0.0f;
     PlayerState& p = players_[static_cast<size_t>(player)];
-    return econ::add_credits(p.account, amount, p.ai, credit_multiplier(player));
+    const float applied = econ::add_credits(p.account, amount, p.ai, credit_multiplier(player));
+    if (notify_ai) notify_ai_credits(player, applied);  // GE 1.1 step 5 -> 0x4b0310 (A2K_T10_CREDIT_NOTIFY_RE)
+    return applied;
 }
 
 void GalacticSim::recompute_credit_caps() {
@@ -825,7 +827,7 @@ RejectReason GalacticSim::enqueue(int32_t player, PlanetIndex planet, uint32_t t
     e.player = player;
     e.cost = static_cast<float>(cost);
     restart_head(e);  // timer starts at the current frame for T [H]
-    if (!payg) add_credits(player, -e.cost, true);
+    if (!payg) add_credits(player, -e.cost, false);  // 0x3fff70: notify off (A2K_T10_CREDIT_NOTIFY_RE Q3)
     queue.push_back(e);
     emit_production(GalacticEventKind::ProductionBegin, planet, static_cast<uint32_t>(q), e, -1);
     return RejectReason::None;

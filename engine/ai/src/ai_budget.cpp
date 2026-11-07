@@ -262,6 +262,13 @@ void AiBudget::flush(int32_t c) {
     if (valid(c)) cat_[static_cast<size_t>(c)].A = 0.0f;
 }
 
+void AiBudget::notify(float x) {
+    for (const int32_t c : order_) {
+        Category& k = cat_[static_cast<size_t>(c)];
+        k.P = x * k.weight + k.P;
+    }
+}
+
 float AiBudget::pools_total() const {
     float s = 0.0f;
     for (const int32_t c : order_) s += cat_[static_cast<size_t>(c)].P;

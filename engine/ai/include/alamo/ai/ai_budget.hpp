@@ -106,6 +106,10 @@ public:
     // Release 0x614880: A += c + a; struct deleted. `reclaimed` = the PAYG reclaim r (A -= r, P -= r, +0x80 += r).
     void release(int32_t c, uint32_t goal, float reclaimed);
     void flush(int32_t c);  // Flush_Category [H]: A = 0
+    // Credit notify 0x615b40 (A2K_T10_CREDIT_NOTIFY_RE Q2) [H]: an Add_Credits with the notify flag passes the applied
+    // amount x; every member category in list order gets P += x * w (normalised weight +0x3C). Nothing else changes; the
+    // next reweight (A = P) makes it spendable and the next accrual starts from P = A, so nothing is counted twice.
+    void notify(float x);
 
     float weight(int32_t c) const { return valid(c) ? cat_[static_cast<size_t>(c)].weight : 0.0f; }
     float available(int32_t c) const { return valid(c) ? cat_[static_cast<size_t>(c)].A : 0.0f; }

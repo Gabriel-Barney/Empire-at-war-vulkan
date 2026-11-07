@@ -887,7 +887,8 @@ void CampaignBattles::hook(SimHost& host) {
     if (GalacticMode* g = host.galactic_mode())
         for (CreditTransfer& ct : credits_)
             if (galactic::econ::CreditAccount* acct = g->sim()->credit_account(ct.player))
-                ai::tactical::end_land_battle_credits(*acct, ct.state, g->sim()->ai_credit_multiplier(ct.player));
+                // 0x614a70 returns the leftover through Add_Credits with notify on (A2K_T10_CREDIT_NOTIFY_RE Q3) [H].
+                g->sim()->notify_ai_credits(ct.player, ai::tactical::end_land_battle_credits(*acct, ct.state, g->sim()->ai_credit_multiplier(ct.player)));
     credits_.clear();
 #endif
     // P4 sim: an auto-resolved battle was written back above. battle host: a corruption mission skips the normal write-back
@@ -993,7 +994,7 @@ CampaignBattles::CorruptionStart CampaignBattles::start_corruption(PlanetIndex p
     }
     log_.push_back("corruption: type " + std::to_string(type) + " mission on " + o->tactical_map + (ok ? " queued" : " refused"));
     if (!ok) {
-        if (cost > 0.0f) gs.add_credits(player, cost);  // [port] refunded when the battle cannot be queued
+        if (cost > 0.0f) gs.add_credits(player, cost, false);  // [port] refunded when the battle cannot be queued (the charge is notify off)
         return CorruptionStart::Refused;
     }
     return CorruptionStart::MissionQueued;

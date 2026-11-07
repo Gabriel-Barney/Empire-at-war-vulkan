@@ -417,7 +417,7 @@ bool GalacticSim::bm_allows_special_ability(int32_t player, uint32_t ability_nam
 bool GalacticSim::bm_purchase(int32_t player, PlanetIndex planet, ObjectHandle hero, uint32_t item, float price, float seconds) {
     // 0x61ab60 [H]: price > credits -> nothing; else charge, add (append if absent), SFX (UI), hero departure.
     if (price > players_[static_cast<size_t>(player)].account.credits) return false;
-    add_credits(player, -price, true);
+    add_credits(player, -price, false);  // notify off (A2K_T10_CREDIT_NOTIFY_RE Q3)
     std::vector<uint32_t>& v = players_[static_cast<size_t>(player)].bm_purchased;
     if (std::find(v.begin(), v.end(), item) == v.end()) v.push_back(item);
     emit_special(GalacticEventKind::BlackMarketPurchase, player, planet, hero, kNoIndex, static_cast<int32_t>(item),
@@ -676,7 +676,7 @@ RejectReason GalacticSim::sabotage_execute_structure(int32_t player, PlanetIndex
     if (!store_->alive(structure) || std::find(p.structures.begin(), p.structures.end(), structure) == p.structures.end())
         return RejectReason::InvalidTarget;
     destroy_structure_sabotage(planet, structure, player, true);  // story GALACTIC_SABOTAGE with the structure type
-    add_credits(player, -c, true);
+    add_credits(player, -c, false);  // notify off (A2K_T10_CREDIT_NOTIFY_RE Q3)
     if (r >= 0.0f) schedule_hero_respawn(saboteur, planet, r);  // R = 0 -> Default_Hero_Respawn_Time
     if (store_->alive(saboteur)) despawn(saboteur);
     ++p.sabotage_count;  // (Sabotage_Particle_Effect, SFXEvent_Sabotage_Success: presentation)
@@ -881,7 +881,7 @@ RejectReason GalacticSim::hack_execute(int32_t player, PlanetIndex planet, Objec
         emit_special(GalacticEventKind::SpecialError, player, planet, hacker, kNoIndex, 0, -1);
         return store_->alive(w) ? RejectReason::CannotAfford : RejectReason::InvalidTarget;
     }
-    add_credits(player, -c, true);
+    add_credits(player, -c, false);  // notify off (A2K_T10_CREDIT_NOTIFY_RE Q3)
     hack_effect(player, planet, hacker, w);  // + SFXEvent_Hack_Success, hack particle effect (presentation)
     return RejectReason::None;
 }
@@ -1212,7 +1212,7 @@ CorruptionCharge GalacticSim::corruption_charge(int32_t player, PlanetIndex plan
     const CorruptionChoiceDef* c = corruption_choice(planet, type);
     const float cost = c ? c->credit_cost : fallback_cost;
     if (!(cost <= 0.0f || cost <= credits(player))) return CorruptionCharge::NoCredits;
-    if (cost > 0.0f) add_credits(player, -cost, true);  // charged BEFORE the unit check [H as read]
+    if (cost > 0.0f) add_credits(player, -cost, false);  // notify off (A2K_T10 Q3); charged BEFORE the unit check [H as read]
     if (c) {
         if (!corruption_requirements(player, planet, *c).units) return CorruptionCharge::UnitsUnmet;  // no refund [H]
         consume_prerequisites(player, planet, *c);
@@ -1414,14 +1414,14 @@ bool GalacticSim::slice_execute(int32_t player, PlanetIndex planet, ObjectHandle
     float r = respawn_seconds;
     const bool success = s < e.chance;
     if (success) {  // 5.
-        add_credits(player, -e.price, true);
+        add_credits(player, -e.price, false);  // notify off (A2K_T10_CREDIT_NOTIFY_RE Q3)
         unlock_type(player, e.type, 2);
         if (only_one) raise_tech_level(player);
         emit_special(GalacticEventKind::Slice, player, planet, slicer, e.type, 0, owner);
     } else {  // 6. k: 1 captured (R x 2), 2 lost effort, 3 cheated (charged)
         const int32_t k = rng_->range_int(1, 3);
         if (k == 1) r *= 2.0f;
-        if (k == 3) add_credits(player, -e.price, true);
+        if (k == 3) add_credits(player, -e.price, false);  // notify off (A2K_T10_CREDIT_NOTIFY_RE Q3)
         emit_special(GalacticEventKind::Slice, player, planet, slicer, e.type, k, owner);
     }
     hero_depart(slicer, planet, r);  // 7.

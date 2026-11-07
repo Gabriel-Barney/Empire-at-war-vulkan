@@ -982,7 +982,7 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
         if (player >= 0 && sim_->max_tech_level(player) < level) sim_->set_max_tech_level(player, level);
         if (player >= 0) sim_->set_tech_level(player, level, true);
     } else if (type == "CREDITS") {
-        if (s.player >= 0) sim_->add_credits(s.player, static_cast<float>(to_int(at(0), 0)), false);
+        if (s.player >= 0) sim_->add_credits(s.player, static_cast<float>(to_int(at(0), 0)), true);  // 0x456970: notify on (A2K_T10 Q3)
     } else if (type == "LINK_TACTICAL") {  // wave 2a: recorded for the battle host / begin_battle (not applied here)
         StoryLinkedTactical l;
         l.frame = frame_;

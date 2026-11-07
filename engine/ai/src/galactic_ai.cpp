@@ -2083,6 +2083,12 @@ void GalacticAiWorld::Impl::install_sim_hooks() {
     w.income_hook = w.sim.add_income_hook([token, self](const gal::IncomeTick& t) {
         if (!token.expired()) self->on_income(t);
     });
+    // a2k t10: Add_Credits with notify -> 0x4b0310 -> 0x615b40 on the galactic budget (A2K_T10_CREDIT_NOTIFY_RE) [H].
+    w.credit_hook = w.sim.add_credit_notify_hook([token, self](int32_t player, float applied) {
+        if (token.expired()) return;
+        PlayerAi* pa = self->player_ai(player);
+        if (pa && pa->ctx.budget.initialised()) pa->ctx.budget.notify(applied);  // before Init, Init's P = credits x w wins
+    });
     // The production market runs inside the planets' production service (AI_GALACTIC_3 Â§5).
     w.sim.set_production_service_hook([token, self](PlanetIndex p) {
         if (!token.expired()) self->market_planet(p);

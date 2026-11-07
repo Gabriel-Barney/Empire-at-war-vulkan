@@ -97,7 +97,8 @@ costs, refunds, story rewards, bounties and Lua `Give_Money`.
 4. If cap ≥ 0, and the current mode's virtual +0xF8 returns true (or there is no mode and the global flag at
    0x140b155c5 is clear), credits are clamped to the cap. [H] for the clamp, [L] for what the mode test means.
 5. Then a player-stats event and a credits-changed notification are sent. With the notify flag set, the AI budget
-   is told the applied amount (0x4b0310).
+   is told the applied amount (0x4b0310): every galactic budget category gets P += applied × w (0x615b40). Which
+   callers set the flag, and the budget arithmetic: `A2K_T10_CREDIT_NOTIFY_RE.md` (2026-11-07).
 
 **Cap (0x288f40)**, recomputed per player:
 - cap = max(1, number of planets the player owns, as float) × `Credit_Cap_Per_Planet`. The planet count comes from

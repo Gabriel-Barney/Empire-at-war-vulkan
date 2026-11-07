@@ -809,6 +809,17 @@ static void test_definitions_and_templates() {
     const float zero[] = {0.0f, 0.0f, 0.0f};
     b.reweight(zero);
     CHECK(std::fabs(b.weight(1) - 1.0f / 3.0f) < 1e-7f);
+    // a2k t10 (A2K_T10_CREDIT_NOTIFY_RE Q2) [H]: a notified Add_Credits adds x * w to every member's P (negative too); A, R
+    // and the goal structs are untouched, and the next reweight (A = P) makes it spendable.
+    const float p0 = b.pool(0), p2 = b.pool(2), a0 = b.available(0), r0 = b.rate(0);
+    b.notify(300.0f);
+    CHECK(b.pool(0) == 300.0f * b.weight(0) + p0 && b.pool(2) == 300.0f * b.weight(2) + p2);
+    CHECK(b.available(0) == a0 && b.rate(0) == r0);
+    b.notify(-300.0f);
+    CHECK(std::fabs(b.pool(0) - p0) < 1e-3f && std::fabs(b.pool(2) - p2) < 1e-3f);
+    b.notify(90.0f);
+    b.reweight(zero);
+    CHECK(b.available(0) == b.pool(0));
 }
 
 // AI_GALACTIC_TOKENS §9.5 [H]: the galactic budget holds only the categories the applied templates listed, in insertion
