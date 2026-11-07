@@ -118,7 +118,6 @@ private:
     // One recompute's input, owned (N1: the matrices are rebuilt from it on load; OPT2 t02: a background job's copy).
     struct Input {
         std::vector<double> value;
-        std::vector<int32_t> cost;
         galactic::Bitset revealed;
         bool has_revealed = false;
         std::vector<float> zoff;

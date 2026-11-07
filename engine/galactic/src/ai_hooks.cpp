@@ -26,25 +26,6 @@ uint32_t GalacticSim::add_income_hook(IncomeHook hook) {
     return id;
 }
 
-void GalacticSim::remove_income_hook(uint32_t id) {
-    income_hooks_.erase(std::remove_if(income_hooks_.begin(), income_hooks_.end(),
-                                       [id](const std::pair<uint32_t, IncomeHook>& h) { return h.first == id; }),
-                        income_hooks_.end());
-}
-
-uint32_t GalacticSim::add_production_service_hook(std::function<void(PlanetIndex)> hook) {
-    const uint32_t id = next_hook_id_++;
-    if (next_hook_id_ == 0) next_hook_id_ = 1;
-    production_hooks_.emplace_back(id, std::move(hook));
-    return id;
-}
-
-void GalacticSim::remove_production_service_hook(uint32_t id) {
-    production_hooks_.erase(std::remove_if(production_hooks_.begin(), production_hooks_.end(),
-                                           [id](const auto& h) { return h.first == id; }),
-                            production_hooks_.end());
-}
-
 float GalacticSim::last_income(int32_t player) const {
     return valid_player(player) && static_cast<size_t>(player) < last_income_.size() ? last_income_[static_cast<size_t>(player)]
                                                                                        : 0.0f;

@@ -186,7 +186,7 @@ BuildCheck GalacticSim::build_check(int32_t player, PlanetIndex planet, uint32_t
     if (t.advances_tech != 0 && (ps.tech_level != t.tech_level || ps.max_tech_level < t.advances_tech)) return fail(7);
     // 8. Lock_Tech list. 9. Build_Initially_Locked.
     if (type_locked(player, type)) return fail(8);
-    if (initial_build_locks_ && t.build_initially_locked && !type_unlocked(player, type)) return fail(9, kBuildInitiallyLocked);
+    if (t.build_initially_locked && !type_unlocked(player, type)) return fail(9, kBuildInitiallyLocked);
     // 10. the planet is the player's.
     if (p.owner != player) return fail(10);
     // 11. not a company / squadron member, not a transport.

@@ -103,17 +103,32 @@ struct BlackMarketItemDef {
     std::vector<std::string> used_by_units;                     // UI only [M]
 };
 
-// One corruption choice of a planet type (Corruption_N_*, P4 5.1 record 0x52c570), slot order 1, 2, 3.
+// One corruption choice of a planet type (Corruption_N_*, P4 5.1 record 0x52c570), slot order 1, 2, 3. Presentation
+// fields (speech events, briefing, Bink holograms) are not read.
+// Corruption mission [inferred until docs/re/L1_S4_REMAINING.md section C]: a choice whose Tactical_Game_Mode is Land /
+// Space and whose Tactical_Map_Name is set starts a tactical battle at the planet on that map (attacker = the corrupting
+// player, defender = the planet's owner) with Tactical_Script_Name as the tactical story (apps/sim
+// CampaignBattles::start_corruption); a choice without one corrupts the planet directly. Credits and the unit
+// requirement are charged / checked by GalacticSim::corruption_charge.
 struct CorruptionChoiceDef {
     uint32_t slot = 0;
     int8_t type = -1;                            // CorruptionTypeEnum 0..7
     float credit_cost = 0.0f;                    // Corruption_N_Credit_Cost (float)
+    // S4: the same field as an int (get_int, else the float rounded half up): start_corruption's credits pre-check and
+    // its corruption_charge fallback cost.
+    int32_t credit_cost_rounded = 0;
     std::vector<uint32_t> required_unit_types;   // Corruption_N_Required_Unit_Type (type indices, a union)
     int32_t required_unit_count = 0;
     int8_t required_mission = -1;                // Corruption_N_Required_Mission_Type
     int32_t required_mission_count = 0;
     std::vector<uint32_t> required_planets;      // Corruption_N_Required_Planets (planet type indices)
     uint32_t success_unlock = 0xFFFFFFFFu;       // Corruption_N_Success_Unlock_Unit_Type (REMAINING_GAPS 1.5 item 5)
+    // Tactical mission (S4): Corruption_N_Tactical_Game_Mode (tSubGameModeType: Galactic 0, Land 1, Space 2),
+    // Tactical_Map_Name and Tactical_Script_Name (a Story_Plots file), both trimmed.
+    bool tactical = false;        // the mode is Land / Space and the map is set
+    bool tactical_space = false;  // mode Space (else Land)
+    std::string tactical_map;
+    std::string tactical_plots;
 };
 
 // Per object type (index = TypeIndex). Default-constructed for every type without these fields.

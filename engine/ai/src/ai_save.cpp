@@ -406,14 +406,15 @@ bool AiEnableGate::read(ByteReader& r) {
 
 void AiPathFinder::Input::write(ByteWriter& w) const {
     put_vec(w, value);
-    put_vec(w, cost);
+    put_vec(w, std::vector<int32_t>{});  // cu15: the removed node_cost input, kept empty so the layout is unchanged
     w.boolean(has_revealed);
     save::put_bitset(w, revealed);
     put_vec(w, zoff);
 }
 
 bool AiPathFinder::Input::read(ByteReader& r) {
-    if (!r.ok() || !get_vec(r, value) || !get_vec(r, cost)) return false;
+    std::vector<int32_t> unused_cost;  // cu15: the removed node_cost input (always empty)
+    if (!r.ok() || !get_vec(r, value) || !get_vec(r, unused_cost)) return false;
     has_revealed = r.boolean();
     return r.ok() && save::get_bitset(r, revealed) && get_vec(r, zoff);
 }

@@ -673,9 +673,9 @@ void test_weight_arithmetic() {
     add_planet(m, "B", {dd, 0, 0});
     add_route(m, 0, 1, hs);
     const PlanetGraph g = PlanetGraph::build(m);
-    const int32_t costs[2] = {0, 2};
+    const double costs[2] = {0.0, 200.0};  // node costs 0, 2
     AllPairsInput in;
-    in.node_cost = costs;
+    in.node_value = costs;
     AllPairsMatrices mm;
     reference_all_pairs(g, in, mm);
     const float dist = g.distance(g.edge_begin(0));
@@ -683,7 +683,7 @@ void test_weight_arithmetic() {
     CHECK(mm.weight(1, 0) == uint32_t(static_cast<int64_t>((dist / hs) * 10.0f) & 0xFFFF));
     CHECK(mm.pred(0, 1) == 0 && mm.pred(0, 0) == kNoPred && mm.weight(0, 0) == 0);
 
-    // node_value path (Q7) == pre-divided node_cost path.
+    // node_value path (Q7): a negative total wraps.
     const double vals[2] = {-50.0, 299.0};
     AllPairsInput iv;
     iv.node_value = vals;
@@ -698,9 +698,9 @@ void test_weight_arithmetic() {
     add_planet(q, "A", {0, 0, 0});
     add_planet(q, "B", {6553.5f, 0, 0});
     const PlanetGraph gq = PlanetGraph::build(q);
-    const int32_t qc[2] = {0, 0xFFFF};
+    const double qc[2] = {0.0, 6553500.0};  // node costs 0, 0xFFFF
     AllPairsInput iq;
-    iq.node_cost = qc;
+    iq.node_value = qc;
     AllPairsMatrices a, b;
     reference_all_pairs(gq, iq, a);
     fast_all_pairs(gq, iq, b);
@@ -997,10 +997,10 @@ void test_cache() {
     p.n = 60;
     GalaxyMap gm = random_galaxy(r, p);
     PlanetGraph g = PlanetGraph::build(gm);
-    std::vector<int32_t> cost(p.n, 1);
+    std::vector<double> cost(p.n, 100.0);  // node cost 1
     Bitset fog(p.n, true);
     AllPairsInput in;
-    in.node_cost = cost;
+    in.node_value = cost;
     in.revealed = &fog;
     AllPairsCache cache;
     AllPairsMatrices ref;
@@ -1010,7 +1010,7 @@ void test_cache() {
     CHECK(cache.recompute_count() == 1);
     reference_all_pairs(g, in, ref);
     CHECK(cache.matrices() == ref);
-    cost[3] = 7;
+    cost[3] = 700.0;
     CHECK(cache.update(g, in));
     CHECK(!cache.update(g, in));
     fog.set(5, false);

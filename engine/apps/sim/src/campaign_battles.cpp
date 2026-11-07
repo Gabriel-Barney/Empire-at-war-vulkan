@@ -4,7 +4,6 @@
 #include <cstdlib>
 
 #include "alamo/galactic/campaign.hpp"
-#include "alamo/galactic/corruption.hpp"  // S4: corruption missions
 #ifdef ALAMO_SIM_HAVE_STORY
 #include "alamo/sim/sim_anim.hpp"  // L1/S4 wave 2a story hookup (SimAnimation::world)
 #endif
@@ -940,7 +939,8 @@ bool CampaignBattles::change_owner(objects::ObjectHandle h, int32_t owner) {
     return battle_->script_change_owner(*tm, h, owner);  // OI host: non-battle objects too (store + trees)
 }
 
-// --- S4 (owner: S4 agent): corruption missions (campaign_battles.hpp start_corruption, galactic/corruption.hpp) ---
+// --- S4 (owner: S4 agent): corruption missions (campaign_battles.hpp start_corruption, galactic special_data.hpp
+// CorruptionChoiceDef) ---
 CampaignBattles::CorruptionStart CampaignBattles::start_corruption(PlanetIndex planet, int32_t player, int8_t type,
                                                                    std::vector<objects::ObjectHandle> units) {
     GalacticMode* g = host_->galactic_mode();
@@ -949,12 +949,12 @@ CampaignBattles::CorruptionStart CampaignBattles::start_corruption(PlanetIndex p
     if (planet >= gs.planets().size() || player < 0 || static_cast<size_t>(player) >= gs.players().size()) return CorruptionStart::Refused;
     const galactic::PlanetState& ps = gs.planets()[planet];
     // §4.5 steps: a planet without corruption in progress (+0x2f4 == -1) [the destroyed / blocked bytes: not modelled];
-    // the planet type's option of that type; credits >= cost, deducted; requirements [M: not enforced, port].
+    // the planet type's first choice of that type; credits >= cost (the int-rounded Credit_Cost); the charge and the
+    // unit requirement are GalacticSim::corruption_charge's (below).
     if (!ps.is_planet || ps.owner == player || ps.corruption != galactic::kCorruptionNone) return CorruptionStart::Refused;
-    const std::vector<galactic::CorruptionOption> options = galactic::corruption_options(catalog_->types(), ps.type);
-    const galactic::CorruptionOption* o = galactic::find_corruption_option(options, type);
+    const galactic::CorruptionChoiceDef* o = gs.corruption_choice(planet, type);
     if (!o) return CorruptionStart::Refused;
-    const float cost = static_cast<float>(o->credit_cost);
+    const float cost = static_cast<float>(o->credit_cost_rounded);
     if (gs.credits(player) < cost) return CorruptionStart::Refused;
     // Mission only with a tactical slot, a non-AI corrupting player, single player [§4.5; AI corrupters apply directly].
     const bool mission = o->tactical && gs.players()[static_cast<size_t>(player)].human;
@@ -964,7 +964,7 @@ CampaignBattles::CorruptionStart CampaignBattles::start_corruption(PlanetIndex p
         const uint32_t f = gs.players()[static_cast<size_t>(ps.owner)].faction;
         if (f < gs.rules().factions.size()) defender_faction = gs.rules().factions[f].name;
     }
-    if (mission && (lk_.present || defender_faction.empty() || o->map.empty())) return CorruptionStart::Refused;
+    if (mission && (lk_.present || defender_faction.empty() || o->tactical_map.empty())) return CorruptionStart::Refused;
     // --- P4 sim (owner: galactic agent): the executor's order (P4_SIM_SYSTEMS §5.2): credits, the charge, then the
     // planet type's Required_Unit check (no refund when it fails) and the consumed prerequisites.
     if (gs.corruption_charge(player, planet, type, cost) != galactic::CorruptionCharge::Charged) return CorruptionStart::Refused;
@@ -980,12 +980,12 @@ CampaignBattles::CorruptionStart CampaignBattles::start_corruption(PlanetIndex p
     // conflict, so no ground unit has to be in orbit). The other record fields keep the reset values of 0x28c640 [port: the
     // executor's arguments for them are not traced]: not sandbox, P9 1, P10 / P11 off, no resolution, banner on, flagship on.
     LinkedRecord rec;
-    rec.kind = o->kind;
+    rec.kind = o->tactical_space ? galactic::ConflictKind::Space : galactic::ConflictKind::Land;
     rec.planet = planet;
     rec.attacker = player;
-    rec.map = o->map;
+    rec.map = o->tactical_map;
     rec.defender = defender_faction;
-    rec.plots = o->plots;
+    rec.plots = o->tactical_plots;
     rec.resolution = galactic::LinkedResolution::None;
     rec.corruption_type = type;
     if (!units.empty()) lk_.last_invade = std::move(units);  // [port] the caller's units stand in for the last-invade vector
@@ -994,7 +994,7 @@ CampaignBattles::CorruptionStart CampaignBattles::start_corruption(PlanetIndex p
         lk_.source = "corruption: mission";
         ok = start_linked_record() != LinkedStart::Refused;  // waiting (banner, another conflict) still counts as queued
     }
-    log_.push_back("corruption: type " + std::to_string(type) + " mission on " + o->map + (ok ? " queued" : " refused"));
+    log_.push_back("corruption: type " + std::to_string(type) + " mission on " + o->tactical_map + (ok ? " queued" : " refused"));
     if (!ok) {
         if (cost > 0.0f) gs.add_credits(player, cost);  // [port] refunded when the battle cannot be queued
         return CorruptionStart::Refused;

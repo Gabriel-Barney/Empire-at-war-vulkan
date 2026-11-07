@@ -395,6 +395,11 @@ void load_special_rules(const FileProvider& provider, const data::GameDatabase& 
                 c.slot = slot;
                 c.type = static_cast<int8_t>(types.get_enum(t, p + "Type"));
                 c.credit_cost = to_f(types.get_string(t, p + "Credit_Cost"));
+                c.credit_cost_rounded = types.get_int(t, p + "Credit_Cost");
+                if (c.credit_cost_rounded == 0) {  // stored as a float field: rounded half up
+                    const float f = types.get_float(t, p + "Credit_Cost");
+                    if (f > 0.0f) c.credit_cost_rounded = static_cast<int32_t>(f + 0.5f);
+                }
                 c.required_unit_types = type_list(types, t, p + "Required_Unit_Type");
                 c.required_unit_count = types.get_int(t, p + "Required_Unit_Count");
                 if (!trim(types.get_string(t, p + "Required_Mission_Type")).empty())
@@ -403,6 +408,12 @@ void load_special_rules(const FileProvider& provider, const data::GameDatabase& 
                 c.required_planets = type_list(types, t, p + "Required_Planets");
                 if (const std::string_view u = trim(types.get_string(t, p + "Success_Unlock_Unit_Type")); !u.empty())
                     if (const objects::TypeIndex r = types.resolve_name(u); r != objects::kNone) c.success_unlock = r;
+                c.tactical_map = std::string(trim(types.get_string(t, p + "Tactical_Map_Name")));
+                c.tactical_plots = std::string(trim(types.get_string(t, p + "Tactical_Script_Name")));
+                const bool has_mode = !trim(types.get_string(t, p + "Tactical_Game_Mode")).empty();
+                const int32_t mode = types.get_enum(t, p + "Tactical_Game_Mode");  // Galactic 0, Land 1, Space 2
+                c.tactical_space = mode == 2;
+                c.tactical = has_mode && (mode == 1 || mode == 2) && !c.tactical_map.empty();
                 ts.corruption.push_back(std::move(c));
             }
     }

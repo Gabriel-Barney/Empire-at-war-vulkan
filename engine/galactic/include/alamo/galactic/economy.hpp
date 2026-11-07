@@ -17,6 +17,7 @@
 #include <string_view>
 #include <vector>
 
+#include "alamo/core/galaxy.hpp"  // Vec3
 #include "alamo/core/sim_rng.hpp"
 
 namespace alamo::galactic {
@@ -208,16 +209,10 @@ float hop_factor(bool mover_benefits, bool a_corrupted, bool b_corrupted, bool h
 float base_speed(float slowest_hyperspace_speed, float faction_factor, float m);
 inline float hop_speed(float v0, float r) { return v0 * r; }
 
-struct Vec3f {
-    float x = 0, y = 0, z = 0;
-};
 // One locomotor frame (GE 3.2) [H rule, M geometry]: velocity = unit(target - pos) * v; step; when the
 // remaining distance after the step is < 2 * |velocity| snap to the target. Returns true on arrival.
 // `facing` receives the unit direction (left unchanged when already at the target).
-bool fleet_step(Vec3f& pos, const Vec3f& target, float v, Vec3f* facing);
-// Frames a straight hop of `distance` takes at v (first k with D - k v < 2 v, float accumulation along
-// one axis) - a closed-form helper for tests.
-int32_t hop_frames_1d(float distance, float v);
+bool fleet_step(Vec3& pos, const Vec3& target, float v, Vec3* facing);
 
 // ---- political control (GE 4.2) ---------------------------------------------------------------------
 // Delta = e / (30 * m * Political_Control_Change_Time_Seconds) [H].
