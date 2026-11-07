@@ -11,7 +11,8 @@ Inputs
   A2FB_TYPES.json    cost and build time of the probe structure types (written by build_a2f_mod.py)
 
 Outputs: report.txt / report.json, samples.tsv (pools), and since a2h t02 major.tsv (MJ: the MajorItem flush / reclaim
-triggers and inputs per Empire sample) and plans.tsv (one row per plan start with its PRET / PEXIT / PFAIL end records).
+triggers and inputs per Empire sample) and plans.tsv (one row per plan start with its PRET / PEXIT / PFAIL end records);
+since a2k t05 saboteur.tsv (section 9: the Underworld saboteur timeline from channels U and F, one row per record).
 
 How the pools are decoded (docs/re/AI_GALACTIC_TOKENS.md BudgetFractionToBuild, AI_GALACTIC_2.md section 3)
   value v = R / D with R = cost of the probe type, D = build time b x category income rate + category available
@@ -32,7 +33,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import a2fb_spec  # noqa: E402
 
-RECORD_RE = re.compile(r'^A2FB1\|([SFPDQ])\|([^|]*)\|(\d+)\|([A-Z0-9]+)\|(.*)\|END$')
+RECORD_RE = re.compile(r'^A2FB1\|([SFPDQU])\|([^|]*)\|(\d+)\|([A-Z0-9]+)\|(.*)\|END$')
 BIG = 1e17
 CAT_KEYS = [c for c, _ in a2fb_spec.CATS]
 POOL_CATS = ['OFF', 'DEF', 'INFO', 'INFRA', 'MAJOR']
@@ -271,6 +272,7 @@ def analyse(recs, types, events):
     res['min30'] = [r['f'].get('f') for r in recs if r['kind'] == 'MIN30']
     res['perception'] = perception_series(recs)
     res['production'] = production_events(recs)
+    res['saboteur'] = saboteur_data(recs)
     res['last_frame'] = max((num(r['f'].get('f')) or 0 for r in recs), default=None)
     return res
 
@@ -796,7 +798,212 @@ def render(res, extra=None):
     L += render_production(res, (extra or {}).get('qtypes', {}))
     if (extra or {}).get('port_trace'):
         L += render_cycles(res, extra['port_trace'])
+    L += render_saboteur(res)
     return '\n'.join(L) + '\n'
+
+
+# ---- a2k t05: the Underworld saboteur (A2K_T08_RE_ANSWERS.md section 5, Q5; H1 / H2 of Q4.2) ------------------------
+
+SAB_PLAN = 'AI_Plan_Underworld_DeploySaboteur'
+SAB_PROGRESS = ('PSTAGE', 'PPROD', 'PMOVS', 'PMOVE', 'PBLK')
+SAB_TIMELINE = {('U', 'US'), ('F', 'FSAB'), ('F', 'FSVC'), ('F', 'FADD')}
+SAB_COLS = ['id', 'src', 'f', 'type', 'pl', 'par', 'parid', 'cnt', 'parpl', 'gp', 'gpid', 'gpcnt', 'gppl', 'st', 'tr',
+            'tp', 'safe', 'ok']
+
+
+def up(v):
+    return (v or '').upper()
+
+
+def saboteur_data(recs):
+    """{'runs': [DeploySaboteur runs with goal / target / stage / results / ends], 'timeline': {id: [rows]},
+    'admissions': [FADD rows], 'desire': {frame: {target: row}}, 'counts': [UN rows], 'marks': {...}}."""
+    starts = {}
+    runs = []
+    for r in recs:
+        if r['ch'] == 'P' and r['kind'] == 'PSTART' and r['f'].get('plan') == SAB_PLAN:
+            f = r['f']
+            run = {'sid': r['sid'], 'n': f.get('n'), 'f': num(f.get('f')), 'prev': f.get('prev'), 'goal': f.get('goal'),
+                   'tgt': up(f.get('tgt')), 'tgtc0': f.get('tgtc'), 'cr': f.get('cr'), 'spend': f.get('spend'),
+                   'progress': [], 'ends': []}
+            runs.append(run)
+            starts[(r['sid'], f.get('n'))] = run
+    orphans = 0
+    for r in recs:
+        if r['ch'] != 'P' or r['f'].get('plan') != SAB_PLAN or r['kind'] not in SAB_PROGRESS + END_KINDS:
+            continue
+        run = starts.get((r['sid'], r['f'].get('n')))
+        if run is None:
+            orphans += 1
+            continue
+        f = r['f']
+        row = {'kind': r['kind'], 'f': num(f.get('f'))}
+        for k in ('stage', 'stage2', 'blk', 'res', 'dt', 'units', 'tgtc', 'by', 'line', 'age', 'k'):
+            if k in f:
+                row[k] = f[k]
+        (run['ends'] if r['kind'] in END_KINDS else run['progress']).append(row)
+    for run in runs:
+        for x in run['progress']:
+            if x['kind'] == 'PSTAGE':
+                run['stage'] = up(x.get('stage'))
+                run['f_stage'] = x['f']
+            elif x['kind'] == 'PPROD':
+                run['produce'] = x.get('res')
+                run['f_produce'] = x['f']
+            elif x['kind'] == 'PMOVS':
+                run['stage2'] = up(x.get('stage2'))
+                run['units'] = x.get('units')
+                run['f_move0'] = x['f']
+            elif x['kind'] == 'PMOVE':
+                run['move'] = x.get('res')
+                run['f_move'] = x['f']
+        ends = sorted(run['ends'], key=lambda e: e['f'] if e['f'] is not None else -1)
+        run['end'] = '+'.join(e['kind'] for e in ends) or 'none'
+        run['f_end'] = ends[-1]['f'] if ends else None
+        run['tgtc_end'] = ends[-1].get('tgtc') if ends else None
+    timeline = {}
+    admissions = []
+    desire = {}
+    counts = []
+    rows_all = []
+    for r in recs:
+        key = (r['ch'], r['kind'])
+        f = r['f']
+        if key in SAB_TIMELINE:
+            row = {'src': '%s/%s' % key, 'f': num(f.get('f')), 'id': f.get('id', '?')}
+            for k in SAB_COLS[3:]:
+                if k in f:
+                    row[k] = f[k]
+            if r['kind'] == 'FADD':
+                admissions.append(row)
+            rows_all.append(row)
+        elif key == ('U', 'UD'):
+            fr = num(f.get('f'))
+            desire.setdefault(fr, {})[up(f.get('tgt'))] = {'own': f.get('own'), 'cor': f.get('cor'), 'CP': f.get('CP'),
+                                                          'SP': f.get('SP')}
+        elif key == ('U', 'UN'):
+            counts.append({'f': num(f.get('f')), 'n': f.get('n'), 'other': f.get('other')})
+    # the saboteur's objects: what channel U / FSAB found by type (company, and a transport the filter matches), the
+    # parents U saw that are not fleets (a transport), and store entries of the saboteur type; FSVC / FADD rows of
+    # other store units go to the count only
+    ids = {x['id'] for x in rows_all if x['src'] in ('U/US', 'F/FSAB')}
+    ids |= {x['parid'] for x in rows_all if x['src'] == 'U/US' and x.get('parid') and up(x.get('par')) != 'GALACTIC_FLEET'}
+    other_svc = 0
+    for x in rows_all:
+        if x['id'] in ids or up(x.get('type')) == 'UNDERWORLD_SABOTEUR_TEAM':
+            timeline.setdefault(x['id'], []).append(x)
+        elif x['src'] == 'F/FSVC':
+            other_svc += 1
+    for rows in timeline.values():
+        rows.sort(key=lambda x: (x['f'] if x['f'] is not None else -1, x['src']))
+    marks = {k: [r['f'].get('f') for r in recs if r['kind'] == k] for k in ('UEND', 'SABDONE', 'SABLOAD')}
+    return {'runs': runs, 'orphans': orphans, 'timeline': timeline, 'admissions': admissions, 'desire': desire,
+            'counts': counts, 'marks': marks, 'other_svc': other_svc}
+
+
+def desire_before(sab, tgt, frame):
+    """The UD row of target tgt at the latest sample frame <= frame (frame, row) or (None, None)."""
+    best = None
+    for fr in sorted(k for k in sab['desire'] if k is not None):
+        if frame is not None and fr > frame:
+            break
+        if tgt in sab['desire'][fr]:
+            best = fr
+    return (best, sab['desire'][best][tgt]) if best is not None else (None, None)
+
+
+def render_saboteur(res):
+    sab = res.get('saboteur') or {}
+    if not (sab.get('runs') or sab.get('timeline') or sab.get('desire') or sab.get('counts')):
+        return []
+    L = ['', '== 9. Underworld saboteur (a2k t05; A2K_T08_RE_ANSWERS.md section 5 = Q5, H1 / H2 of Q4.2) ==']
+    m = sab['marks']
+    L.append('   channel U end (UEND) at frame %s; story SABDONE at %s; extensions loaded (SABLOAD): %d' % (
+        ', '.join(m['UEND']) or '-', ', '.join(m['SABDONE']) or '-', len(m['SABLOAD'])))
+    L.append('   DeploySaboteur runs (P channel; stage = AssembleForce\'s MainForce.Get_Stage(); produce / move = '
+             'BlockOnCommand results of Produce_Force(stage) / Move_To(Target): true / false / nil; desire = the UD '
+             'sample at or before the start, CP for Corrupt_Planet, SP for Sabotage_Planet):')
+    if not sab['runs']:
+        L.append('     none (no AI_Plan_Underworld_DeploySaboteur PSTART)')
+    for r in sab['runs']:
+        dfr, d = desire_before(sab, r['tgt'], r['f'])
+        des = '-'
+        if d is not None:
+            des = '%s@%s' % (d.get('SP') if r['goal'] == 'Sabotage_Planet' else d.get('CP'), fi(dfr))
+        L.append('     f=%5s n=%s %-15s tgt=%-12s desire=%-12s stage=%-12s@%-5s produce=%-5s@%-5s move=%-5s@%-5s '
+                 'stage2=%s units=%s end=%s@%s tgtc %s -> %s prev=%s' % (
+                     fi(r['f']), r['n'], r['goal'], r['tgt'], des, r.get('stage', '-'), fi(r.get('f_stage')),
+                     r.get('produce', '-'), fi(r.get('f_produce')), r.get('move', '-'), fi(r.get('f_move')),
+                     r.get('stage2', '-'), r.get('units', '-'), r['end'], fi(r['f_end']), r['tgtc0'], r['tgtc_end'],
+                     r['prev']))
+    if sab['orphans']:
+        L.append('     progress / end records whose PSTART was not found (lost from the scan): %d' % sab['orphans'])
+    L.append('   saboteur timeline per object id (U/US every 30 frames: pl, parent fleet type / id / member count / '
+             'planet (parpl=nil: in transit); F/FSAB every free-store service (8 s): st = Is_Object_On_Free_Store, '
+             'tr = Is_Unit_In_Transit; F/FSVC = On_Unit_Service (unreserved store entry); F/FADD = admission):')
+    if not sab['timeline']:
+        L.append('     none (no US / FSAB / FSVC / FADD record for a saboteur)')
+    for oid in sorted(sab['timeline'], key=lambda k: (len(k), k)):
+        rows = sab['timeline'][oid]
+        L.append('   -- id %s: %d rows, frames %s .. %s' % (oid, len(rows), fi(rows[0]['f']), fi(rows[-1]['f'])))
+        last_u = None
+        for x in rows:
+            if x['src'] == 'U/US':
+                sig = tuple(x.get(k) for k in ('type', 'pl', 'par', 'parid', 'cnt', 'parpl', 'gp', 'gpid', 'gpcnt', 'gppl'))
+                if sig == last_u:
+                    continue                               # unchanged 30-frame sample: shown once
+                last_u = sig
+                text = '%s pl=%s par=%s parid=%s cnt=%s parpl=%s' % (x.get('type'), x.get('pl'), x.get('par'),
+                                                                     x.get('parid'), x.get('cnt'), x.get('parpl'))
+                if 'gp' in x:
+                    text += ' gp=%s gpid=%s gpcnt=%s gppl=%s' % (x.get('gp'), x.get('gpid'), x.get('gpcnt'), x.get('gppl'))
+            elif x['src'] == 'F/FADD':
+                text = 'pl=%s admitted to the free store (On_Unit_Added) %s' % (x.get('pl'), x.get('type'))
+            else:
+                text = 'pl=%s st=%s tr=%s%s%s' % (x.get('pl'), x.get('st', '-'), x.get('tr', '-'),
+                                                 (' safe=%s' % x['safe']) if 'safe' in x else '',
+                                                 (' tp=%s %s' % (x.get('tp'), x.get('type'))) if 'tp' in x else '')
+            L.append('     f=%5s %-6s %s' % (fi(x['f']), x['src'], text))
+    if sab.get('other_svc'):
+        L.append('   On_Unit_Service calls for other Underworld store units (F/FSVC, not listed): %d' % sab['other_svc'])
+    if sab['counts']:
+        ch = []
+        prev = None
+        for c in sab['counts']:
+            if (c['n'], c['other']) != prev:
+                ch.append('f%s: %s (other %s)' % (fi(c['f']), c['n'], c['other']))
+                prev = (c['n'], c['other'])
+        L.append('   saboteurs the Underworld owns (U/UN, changes only): ' + ', '.join(ch))
+    if sab['admissions']:
+        L.append('   free-store admissions (F/FADD, Underworld, every type): ' + ', '.join(
+            '%s@%s %s' % (x.get('type'), fi(x['f']), x.get('pl')) for x in sab['admissions'][:40]))
+    if sab['desire']:
+        frames = sorted(k for k in sab['desire'] if k is not None)
+        tg = sorted({t for fr in frames for t in sab['desire'][fr]})
+        shown = [t for t in tg if any(sab['desire'][fr].get(t, {}).get('CP') not in (None, 'own') for fr in frames)]
+        L.append('   desire equations per sample frame (U/UD; CP = Should_Corrupt_Planet, SP = Should_Sabotage_Planet, raw '
+                 'values: no learning adjust; "own" = Underworld planet, not a target). Accepted = a DeploySaboteur '
+                 'PSTART above (the goal system\'s proposals are not visible from Lua):')
+        L.append('     %5s ' % 'frame' + ' '.join('%-17s' % t[:17] for t in shown))
+        for fr in frames:
+            cells = []
+            for t in shown:
+                d = sab['desire'][fr].get(t)
+                cells.append('%-17s' % ('-' if d is None else ('%s/%s%s' % (d.get('CP'), d.get('SP'),
+                                                                           ' c' if d.get('cor') == 'true' else ''))))
+            L.append('     %5s ' % fi(fr) + ' '.join(cells))
+    return L
+
+
+def write_saboteur_tsv(res, path):
+    sab = res.get('saboteur') or {}
+    cols = SAB_COLS
+    with open(path, 'w') as f:
+        f.write('\t'.join(cols) + '\n')
+        rows = [x for lst in (sab.get('timeline') or {}).values() for x in lst]
+        rows.sort(key=lambda x: (x['f'] if x['f'] is not None else -1, x['id'], x['src']))
+        for x in rows:
+            f.write('\t'.join('' if x.get(c) is None else str(x.get(c)) for c in cols) + '\n')
 
 
 def write_tsv(res, path):
@@ -889,6 +1096,7 @@ def run(records, watch, types_path, out_dir, port_trace=None, port_perception=DE
     write_tsv(res, os.path.join(out_dir, 'samples.tsv'))
     write_major_tsv(res, os.path.join(out_dir, 'major.tsv'))
     write_plans_tsv(res, os.path.join(out_dir, 'plans.tsv'))
+    write_saboteur_tsv(res, os.path.join(out_dir, 'saboteur.tsv'))
     return res, text
 
 

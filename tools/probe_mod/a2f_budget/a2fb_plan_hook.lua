@@ -16,6 +16,9 @@
 -- A run that the goal system releases has its thread killed: no end record. PSTART's prev= says how the previous
 -- run of the same script instance ended (none = no end record = killed / released), so a lost end record is seen.
 -- No start cap (a2f had 40 per script instance).
+-- a2k t05: a plan-specific extension file (build_a2f_mod.PLAN_EXTRA, appended after this hook) may define
+-- A2FB_PlanStartX() and A2FB_PlanEndX(kind): each returns extra " key=value" text for PSTART / the end records. Each
+-- runs in its own pcall, so a failing extension costs its text only (ERR PlanStartX / PlanEndX), never the record.
 A2FB_MAX = 3000
 A2FB_CANARY = "Mods\\A2fBudgetProbe\\A2FB_Canary_Plan.txt"
 A2FB_PLAN_N = 0
@@ -41,6 +44,22 @@ function A2FB_PlanBudget()
 		" cr=" .. A2FB_Str(function() return PlayerObject.Get_Credits() end)
 end
 
+-- Extra text of an extension function (nil = none), in its own pcall.
+function A2FB_PlanX(where, f, a)
+	if f == nil then
+		return ""
+	end
+	local ok, s = pcall(f, a)
+	if not ok then
+		A2FB_Error(where, s)
+		return ""
+	end
+	if s == nil then
+		return ""
+	end
+	return tostring(s)
+end
+
 function A2FB_PlanStart()
 	local prev = A2FB_PLAN_END
 	if A2FB_PLAN_N == 0 then
@@ -52,7 +71,7 @@ function A2FB_PlanStart()
 	local t = A2FB_Now()
 	A2FB_PLAN_T0 = t
 	A2FB_Say("PSTART", A2FB_PlanHead(t) .. " budget=" .. type(Budget) .. A2FB_PlanBudget() ..
-		" n=" .. A2FB_PLAN_N .. " prev=" .. prev)
+		" n=" .. A2FB_PLAN_N .. " prev=" .. prev .. A2FB_PlanX("PlanStartX", A2FB_PlanStartX))
 	if PlayerObject ~= nil then
 		A2FB_Sample("PS", PlayerObject, A2FB_PLAN_FULL)
 	end
@@ -69,7 +88,8 @@ function A2FB_PlanEnd(kind, extra)
 	else
 		A2FB_PLAN_END = string.sub(A2FB_PLAN_END .. "+" .. kind, 1, 40)
 	end
-	A2FB_Say(kind, A2FB_PlanHead(t) .. " n=" .. A2FB_PLAN_CUR .. " age=" .. age .. A2FB_PlanBudget() .. extra)
+	A2FB_Say(kind, A2FB_PlanHead(t) .. " n=" .. A2FB_PLAN_CUR .. " age=" .. age .. A2FB_PlanBudget() .. extra ..
+		A2FB_PlanX("PlanEndX", A2FB_PlanEndX, kind))
 	if A2FB_PLAN_FULL and kind ~= "PFAIL" and PlayerObject ~= nil then
 		A2FB_Sample("PE", PlayerObject, true)
 	end

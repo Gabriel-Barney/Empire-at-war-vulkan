@@ -116,7 +116,66 @@ def spec_checks(z):
     except ET.ParseError as e:
         check('spec: patched equation file is XML', False, str(e))
     a2j_spec_checks(z, names, all_eq)
+    sab_spec_checks(z, names)
     return types
+
+
+def sab_spec_checks(z, names):
+    """a2k t05: what makes each saboteur read safe and the configuration right, from the shipped data."""
+    plan = zread(z, names, 'DATA/SCRIPTS/AI/AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR.LUA')
+    body = plan.replace('\r\n', '\n')
+    check('sab spec: DeploySaboteur thread = AssembleForce, BlockOnCommand(Move_To(Target)), Get_Goal_Type_Name, '
+          'Is_Corrupted; Production_Failed -> ScriptExit', all(s in body for s in (
+              'AssembleForce(MainForce)', 'BlockOnCommand(MainForce.Move_To(Target))',
+              'MainForce.Get_Goal_Type_Name() == "Corrupt_Planet"', 'Target.Is_Corrupted()')) and
+          re.search(r'function MainForce_Production_Failed\(tf, failed_object_type\)\s*ScriptExit\(\)', body) is not None)
+    tf = zread(z, names, 'DATA/SCRIPTS/LIBRARY/PGTASKFORCE.LUA').replace('\r\n', '\n')
+    af = tf[tf.find('function AssembleForce'):tf.find('function SynchronizedAssemble')]
+    check('sab spec: AssembleForce sets the global stage = taskforce.Get_Stage() and blocks on Produce_Force(stage) '
+          '(the first BlockOnCommand of the run)', '\t\tstage = taskforce.Get_Stage()' in af and
+          'BlockOnCommand(taskforce.Produce_Force(stage))' in af and 'local stage' not in af and
+          af.count('BlockOnCommand') == 1)
+    lua_all = '\n'.join(z.read(i).decode('latin-1') for n, i in names.items()
+                        if n.endswith('.LUA') and ('/SCRIPTS/AI/' in n or '/SCRIPTS/LIBRARY/' in n))
+    check('sab spec: shipped AI / library scripts call Get_Stage and Get_Force_Count on task forces',
+          'taskforce.Get_Stage()' in lua_all and 'MainForce.Get_Force_Count()' in lua_all)
+    fs = zread(z, names, build_a2f_mod.FREESTORE.replace('\\', '/'))
+    check('sab spec: shipped free store defines On_Unit_Added / On_Unit_Service and itself reads Is_Unit_Safe, '
+          'Is_Unit_In_Transit and Get_Planet_Location of a store object', all(s in fs for s in (
+              'function On_Unit_Added(object)', 'function On_Unit_Service(object)', 'FreeStore.Is_Unit_Safe(object)',
+              'FreeStore.Is_Unit_In_Transit(object)', 'object.Get_Planet_Location()')))
+    xml = '\n'.join(z.read(i).decode('latin-1') for n, i in names.items() if n.startswith('DATA/XML/') and n.endswith('.XML'))
+    check('sab spec: %s is an object type' % build_a2f_mod.SAB_TYPE,
+          re.search(r'Name\s*=\s*"%s"' % build_a2f_mod.SAB_TYPE, xml, re.I) is not None)
+    m = re.search(r'<Campaign\s+Name\s*=\s*"Sandbox_Heart_Of_The_Maw_Rebel"(.*?)</Campaign>', xml, re.S | re.I)
+    locs = []
+    if m:
+        lm = re.search(r'<Locations>(.*?)</Locations>', m.group(1), re.S)
+        locs = [s.strip() for s in (lm.group(1) if lm else '').split(',') if s.strip()]
+    check('sab spec: SAB_PLANETS = the Locations of Sandbox_Heart_Of_The_Maw_Rebel (without the art model)',
+          sorted(build_a2f_mod.SAB_PLANETS) == sorted(x for x in locs if x != 'Galaxy_Core_Art_Model'), str(locs))
+    check('sab spec: the starting saboteur is at NalHutta (Starting_Forces)', bool(m) and re.search(
+        r'<Starting_Forces>\s*Underworld,\s*NalHutta,\s*%s\s*</Starting_Forces>' % build_a2f_mod.SAB_TYPE, m.group(1), re.I))
+    gs = zread(z, names, 'DATA/XML/AI/GOALFUNCTIONS/AI_GOALSET_UNDERWORLD_GALACTIC.XML')
+    gl = zread(z, names, 'DATA/XML/AI/GOALS/AI_GOALS_UNDERWORLD_GALACTIC.XML')
+    ok = True
+    for goal, fn in (('Corrupt_Planet', 'Should_Corrupt_Planet'), ('Sabotage_Planet', 'Should_Sabotage_Planet')):
+        ok = ok and re.search(r'<%s>\s*<Goal>%s</Goal>\s*<Function>%s</Function>' % (goal, goal, fn), gs) is not None
+        g = re.search(r'<%s>(.*?)</%s>' % (goal, goal), gl, re.S)
+        ok = ok and g is not None and re.search(r'<AIGoalApplicationFlags>\s*Enemy\s*</AIGoalApplicationFlags>', g.group(1))
+    check('sab spec: Corrupt_Planet / Sabotage_Planet desire functions are Should_Corrupt_Planet / '
+          'Should_Sabotage_Planet, both goals apply to Enemy targets', ok)
+    galactic = '\n'.join(re.sub(r'<!--.*?-->', '', z.read(i).decode('latin-1'), flags=re.S) for n, i in names.items()
+                         if n.startswith('DATA/XML/AI/PERCEPTUALEQUATIONS/') and 'LAND' not in n and 'SPACE' not in n)
+    bad = []
+    for fn in ('Should_Corrupt_Planet', 'Should_Sabotage_Planet'):
+        for n in eq_closure(galactic, fn):
+            b = eq_body(galactic, n)
+            if b is None or 'Variable_Human' in b or '#' in b or retail_eval_fails(b):
+                bad.append(n)
+    check('sab spec: the two desire closures exist, read no Variable_Human and use no #', not bad, str(bad))
+    check('sab spec: the Underworld AI plot is channel D\'s Underworld slot',
+          build_a2f_mod.SAB_PLOT == [p[4] for p in a2fb_spec.PERC_PAIRS if p[0] == 'UNDERWORLD'][0])
 
 
 def eq_body(all_eq, name):
@@ -534,11 +593,14 @@ AssembleForce = function() A2_RAN = true end
 SynchronizedAssemble = AssembleForce
 BaseForce = { Set_Plan_Result = function() end, Set_As_Goal_System_Removable = function() end,
 	Produce_Force = function() return nil end, Are_All_Units_On_Free_Store = function() return true end,
-	Move_To = function() return nil end, Get_Force_Count = function() return 1 end, Release_Forces = function() end }
+	Move_To = function() return nil end, Get_Force_Count = function() return 1 end, Release_Forces = function() end,
+	Activate_Ability = function() end, Get_Goal_Type_Name = function() return "Corrupt_Planet" end,
+	Get_Stage = function() return nil end }
 StructureForce = BaseForce
 TechForce = BaseForce
 MainForce = BaseForce
-Target = {}
+Target = { Is_Corrupted = function() return false end,
+	Get_Type = function() return { Get_Name = function() return "NABOO" end } end }
 Invade = function() return true end
 FundBases = function() end
 BlockOnCommand = function() end
@@ -577,7 +639,7 @@ def hook_tests(lua, lib, out, types, z):
     names = {i.filename.upper(): i for i in z.infolist()}
     for plan, thread in build_a2f_mod.PLANS:
         orig = zread(z, names, 'DATA/SCRIPTS/AI/%s.LUA' % plan.upper())
-        body = build_a2f_mod.assemble(orig, 'P', 'a2fb_plan_hook.lua', True, build_a2f_mod.plan_subs(plan, thread))
+        body = build_a2f_mod.plan_lua(orig, plan, thread, True)
         outfile = os.path.join(out, 'plan_%s.txt' % plan)
         script = os.path.join(out, 'plan_%s.lua' % plan)
         with open(script, 'w', encoding='latin-1') as f:
@@ -623,7 +685,8 @@ def build_test(out, zip_path):
            'Data/Scripts/FreeStore/GalacticFreeStore.lua', 'A2FB_TYPES.json', build_a2f_mod.MARKER,
            'Data/Scripts/Miscellaneous/GameScoring.lua', 'A2FB_QUEUE_TYPES.json'] +           ['Data/XML/%s' % p[4] for p in a2fb_spec.PERC_PAIRS] +           ['Data/Scripts/Story/A2fb_Percept%s.lua' % p[3] for p in a2fb_spec.PERC_PAIRS] + \
           ['Data/XML/Story_Plots_Sandbox_12U_%s.xml' % f for f in build_a2f_mod.PLOTS] + \
-          ['Data/Scripts/AI/%s.lua' % n for n, _ in build_a2f_mod.PLANS] + list(build_a2f_mod.CANARIES.values())
+          ['Data/Scripts/AI/%s.lua' % n for n, _ in build_a2f_mod.PLANS] + \
+          [fn for ch, fn in build_a2f_mod.CANARIES.items() if build_a2f_mod.canary_built(ch)]
     missing = [e for e in exp if not os.path.exists(os.path.join(mod, e))]
     check('build: mod folder complete (%d files)' % len(exp), not missing, str(missing))
     shutil.copy(os.path.join(mod, 'A2FB_TYPES.json'), os.path.join(out, 'A2FB_TYPES.json'))
@@ -652,7 +715,57 @@ def build_test(out, zip_path):
     check('build --no-percept: channel D left out, everything else built',
           not [g for g in gone if os.path.exists(os.path.join(mod2, g))] and
           all(os.path.exists(os.path.join(mod2, e)) for e in kept), str(gone))
+    sab_build_checks(out, zip_path, mod, exp, gone)
     return mod, types
+
+
+def sab_build_checks(out, zip_path, mod, exp, gone):
+    """a2k t05: the DeploySaboteur hook is in every build; --saboteur swaps channel D for channel U and switches on the
+    free-store / story saboteur parts; a normal build has none of them."""
+    plan = open(os.path.join(mod, 'Data', 'Scripts', 'AI', 'AI_Plan_Underworld_DeploySaboteur.lua'), 'rb').read()
+    check('build: DeploySaboteur plan = shipped script + plan hook + saboteur extension (CRLF)',
+          plan.startswith(b'-- $Id:') and b'A2FB_Thread_Orig = MainForce_Thread' in plan and
+          b'A2FB_Block_Orig = BlockOnCommand' in plan and b'\r\n' in plan and b'\n' not in plan.replace(b'\r\n', b''))
+    other = open(os.path.join(mod, 'Data', 'Scripts', 'AI', 'ConquerPiratePlan.lua'), 'rb').read()
+    check('build: other plans have no saboteur extension', b'A2FB_Block_Orig' not in other)
+    normal = [open(os.path.join(mod, *p.split('/')), 'rb').read() for p in
+              ('Data/Scripts/Story/A2fb_Story.lua', 'Data/Scripts/FreeStore/GalacticFreeStore.lua')]
+    check('build: a normal build has no saboteur switch (story, free store) and no channel U',
+          all(b'A2FB_SAB = true' not in t for t in normal) and
+          not os.path.exists(os.path.join(mod, 'Data', 'Scripts', 'Story', build_a2f_mod.SAB_SCRIPT + '.lua')))
+    mod3 = os.path.join(out, 'mod_saboteur')
+    build_a2f_mod.build(None, mod3, zip_path, saboteur=True)
+    sab_files = ['Data/XML/%s' % build_a2f_mod.SAB_PLOT, 'Data/Scripts/Story/%s.lua' % build_a2f_mod.SAB_SCRIPT,
+                 build_a2f_mod.CANARIES['Saboteur']]
+    gone3 = [g for g in gone if g not in sab_files]
+    kept = [e for e in exp if e not in gone]
+    check('build --saboteur: channel U (Underworld AI plot + A2fb_SabU + canary) instead of channel D, rest built',
+          all(os.path.exists(os.path.join(mod3, e)) for e in kept + sab_files) and
+          not [g for g in gone3 if os.path.exists(os.path.join(mod3, g))], str(gone3))
+    try:
+        root = ET.fromstring(open(os.path.join(mod3, 'Data', 'XML', build_a2f_mod.SAB_PLOT), 'rb').read().decode('latin-1')
+                             .lstrip('﻿ï»¿'))
+        ok = root.find('Lua_Script').text == build_a2f_mod.SAB_SCRIPT and root.find('Active_Plot') is not None
+    except (ET.ParseError, AttributeError):
+        ok = False
+    check('build --saboteur: Underworld AI plot is XML with Lua_Script A2fb_SabU and its shipped Active_Plot', ok)
+    st = [open(os.path.join(mod3, *p.split('/')), 'rb').read() for p in
+          ('Data/Scripts/Story/A2fb_Story.lua', 'Data/Scripts/FreeStore/GalacticFreeStore.lua',
+           'Data/Scripts/Story/%s.lua' % build_a2f_mod.SAB_SCRIPT)]
+    check('build --saboteur: story, free store and channel U carry A2FB_SAB and the config (stop 1400, desire to 600)',
+          all(b'A2FB_SAB = true' in t and b'stop = 1400, des_stop = 600' in t for t in st), str([len(t) for t in st]))
+    mod4 = os.path.join(out, 'mod_saboteur_nodes')
+    build_a2f_mod.build(None, mod4, zip_path, saboteur=True, sab_desire=False)
+    u4 = open(os.path.join(mod4, 'Data', 'Scripts', 'Story', build_a2f_mod.SAB_SCRIPT + '.lua'), 'rb').read()
+    check('build --saboteur --no-sab-desire: channel U with des_stop = -1', b'des_stop = -1' in u4)
+    import a2f_run
+    check('run: the recorder\'s scan pattern takes channel U records',
+          a2f_run.RECORD_RE.match(b'A2FB1|U|0x1|3|US|t=1 f=30 id=7|END') is not None and
+          a2f_report.RECORD_RE.match('A2FB1|U|0x1|3|US|t=1 f=30 id=7|END') is not None)
+    cs = a2f_run.canary_status(mod3, True, True)
+    check('run: canary status of a --saboteur build (Saboteur present, Percept not built)',
+          cs['Saboteur'].startswith('present') and cs['PerceptU'].startswith('not built'), str(cs))
+    return mod3
 
 
 def lua_syntax(lua, mod, out):
@@ -992,6 +1105,376 @@ def a2j_report_test(out, perc_records, scoring_records):
           str(pr[:3]))
 
 
+# ---- a2k t05: the saboteur run (DeploySaboteur plan extension, channel U, free-store saboteur records) ---------------
+
+# A coroutine-driven run of the real shipped plan thread with the real PG library (AssembleForce, BlockOnCommand,
+# PumpEvents, Sleep, ScriptExit). The model engine logs every order the plan gives (LOG lines, with the frame); the
+# hooked and the unhooked script must give the same log (the hook changes nothing the plan does).
+SAB_PLAN_DRIVER = r'''
+-- the engine runs Base_Definitions (PGCommands timers, Pump_Service; then Definitions) before any thread; it resets
+-- the plan globals, so the model sets them after it
+Base_Definitions()
+PlayerObject = A2_PLAYERS["Underworld"]
+Budget = { Get_Spendable_Resources = function() return 0 end, Get_Unallocated_Resources = function() return 1000 end }
+function A2_FR() return tonumber(string.format("%d", A2_T * 30 + 0.5)) end
+A2_LOG = {}
+local function log(s) table.insert(A2_LOG, s .. " @" .. A2_FR()) end
+A2_CORRUPT = {}
+local function planet(n)
+	return { planet = n, Get_Type = function() return { Get_Name = function() return string.upper(n) end } end,
+		Is_Corrupted = function() return A2_CORRUPT[n] == true end }
+end
+local function block(done, result)
+	return { IsFinished = function() return A2_FR() >= done end, Result = function() return result end }
+end
+Target = planet("Naboo")
+MainForce = {
+	Get_Stage = function() return planet("Felucia") end,
+	Produce_Force = function(st) log("Produce_Force " .. st.Get_Type().Get_Name())
+		if A2_PROD_NIL then return nil end return block(A2_PROD_DONE, true) end,
+	Move_To = function(t) log("Move_To " .. t.Get_Type().Get_Name()) return block(A2_MOVE_DONE, A2_MOVE_RES) end,
+	Activate_Ability = function() log("Activate_Ability") A2_CORRUPT["Naboo"] = true end,
+	Get_Goal_Type_Name = function() return "Corrupt_Planet" end,
+	Set_Plan_Result = function(r) log("Set_Plan_Result " .. tostring(r)) end,
+	Get_Force_Count = function() return 1 end,
+}
+_ScriptExit = function() log("ScriptExit") A2_EXIT = true end
+GetThreadID = function() return 0 end
+local co = coroutine.create(MainForce_Thread)
+local resumes = 0
+for frame = A2_F0, A2_F0 + 3000 do
+	A2_T = frame / 30
+	A2_CUR = co
+	if A2_FAIL_AT ~= nil and frame == A2_FAIL_AT then
+		-- the engine calls the handler outside the thread; ScriptExit ends the whole script on the next yield
+		GetThreadID = function() return -1 end
+		MainForce_Production_Failed(MainForce, { Get_Name = function() return "UNDERWORLD_SABOTEUR_TEAM" end })
+		GetThreadID = function() return 0 end
+		if A2_EXIT then break end
+	end
+	local ok, v = coroutine.resume(co)
+	resumes = resumes + 1
+	if not ok then A2_OUT:write("THREAD_ERROR " .. tostring(v) .. "\n") break end
+	if coroutine.status(co) == "dead" then break end
+end
+A2_OUT:write("RESUMES " .. resumes .. "\n")
+for i = 1, table.getn(A2_LOG) do A2_OUT:write("LOG " .. A2_LOG[i] .. "\n") end
+if A2FB_Seq ~= nil then for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Records[i] .. "\n") end end
+A2_OUT:close()
+'''
+
+
+def sab_plan_run(lua, lib, out, types, z, name, setup, hooked=True):
+    names = {i.filename.upper(): i for i in z.infolist()}
+    orig = zread(z, names, 'DATA/SCRIPTS/AI/AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR.LUA')
+    body = build_a2f_mod.plan_lua(orig, 'AI_Plan_Underworld_DeploySaboteur', 'MainForce_Thread') if hooked else orig
+    env = dict(os.environ, LUA_PATH=os.path.join(lib, '?.lua'))
+    outfile = os.path.join(out, 'sabplan_%s.txt' % name)
+    script = os.path.join(out, 'sabplan_%s.lua' % name)
+    with open(script, 'w', encoding='latin-1') as f:
+        f.write(prelude(outfile, types, no_debug=False))
+        f.write(body + '\n')
+        f.write(setup)
+        f.write(SAB_PLAN_DRIVER)
+    rc, text = lua_run(lua, script, env)
+    o = open(outfile).read() if os.path.exists(outfile) else ''
+    return rc, text, o
+
+
+def sab_plan_tests(lua, lib, out, types, z):
+    """Returns the records of the hooked runs (for the report test)."""
+    cases = {
+        'ok': 'A2_F0 = 3480\nA2_PROD_DONE = 3600\nA2_MOVE_DONE = 3900\nA2_MOVE_RES = false\n',
+        'nilprod': 'A2_F0 = 120\nA2_PROD_NIL = true\nA2_MOVE_DONE = 400\nA2_MOVE_RES = true\n',
+        'fail': 'A2_F0 = 150\nA2_PROD_DONE = 900\nA2_MOVE_DONE = 1200\nA2_MOVE_RES = true\nA2_FAIL_AT = 300\n',
+    }
+    recs = []
+    for name, setup in cases.items():
+        rc, text, o = sab_plan_run(lua, lib, out, types, z, name, setup)
+        rc0, text0, o0 = sab_plan_run(lua, lib, out, types, z, name + '_shipped', setup, hooked=False)
+        log = [ln for ln in o.splitlines() if ln.startswith('LOG ')]
+        log0 = [ln for ln in o0.splitlines() if ln.startswith('LOG ')]
+        check('sab plan %s: thread runs under the real PG library (no THREAD_ERROR, no failed flag)' % name,
+              rc == 0 and rc0 == 0 and 'RESUMES' in o and 'THREAD_ERROR' not in o + o0 and 'SCRIPT_FAILED' not in o,
+              (text + o)[:700] + (text0 + o0)[:300])
+        check('sab plan %s: same orders at the same frames as the unhooked shipped script (%d)' % (name, len(log0)),
+              bool(log0) and log == log0 and o.count('RESUMES') == 1 and
+              re.search(r'RESUMES (\d+)', o).group(1) == re.search(r'RESUMES (\d+)', o0).group(1),
+              str(log) + ' vs ' + str(log0))
+        recs += [ln for ln in o.splitlines() if ln.startswith('A2FB1|')]
+        if name == 'ok':
+            check('sab plan ok: PSTART carries goal, target, Is_Corrupted', re.search(
+                r'\|PSTART\|plan=AI_Plan_Underworld_DeploySaboteur t=116 f=3480 fac=UNDERWORLD budget=table spend=0 '
+                r'unalloc=1000 cr=13000 n=1 prev=first goal=Corrupt_Planet tgt=NABOO tgtc=false\|', o) is not None,
+                o[:900])
+            # BlockOnCommand pumps once more after the status finishes: the result is seen one frame later (3601)
+            check('sab plan ok: PSTAGE (stage from Get_Stage) / PPROD true / PMOVS / PMOVE false with frames',
+                  '|PSTAGE|plan=AI_Plan_Underworld_DeploySaboteur t=116 f=3480 fac=UNDERWORLD n=1 stage=FELUCIA blk=table|' in o
+                  and '|PPROD|plan=AI_Plan_Underworld_DeploySaboteur t=120.033 f=3601 fac=UNDERWORLD n=1 k=1 res=true '
+                      'dt=4.03333|' in o
+                  and '|PMOVS|plan=AI_Plan_Underworld_DeploySaboteur t=120.033 f=3601 fac=UNDERWORLD n=1 tgt=NABOO '
+                      'stage2=FELUCIA units=1 blk=table|' in o
+                  and '|PMOVE|plan=AI_Plan_Underworld_DeploySaboteur t=130.033 f=3901 fac=UNDERWORLD n=1 k=2 res=false '
+                      'dt=10|' in o, o[:1500])
+            check('sab plan ok: PRET after Sleep(10) with Target.Is_Corrupted() = true and blk=2, plan result set',
+                  re.search(r'\|PRET\|plan=AI_Plan_Underworld_DeploySaboteur t=140.033 f=4201 fac=UNDERWORLD n=1 '
+                            r'age=24.0333 spend=0 unalloc=1000 cr=13000 goal=Corrupt_Planet tgt=NABOO tgtc=true blk=2\|',
+                            o) is not None and 'LOG Set_Plan_Result true @4201' in o, o[-900:])
+        elif name == 'nilprod':
+            check('sab plan nilprod: Produce_Force returns nothing -> PSTAGE blk=nil, PPROD res=nil, the move still runs',
+                  'stage=FELUCIA blk=nil|' in o and ' k=1 res=nil dt=0.0333333|' in o and ' k=2 res=true ' in o, o[:1500])
+        else:
+            check('sab plan fail: Production_Failed -> PFAIL and PEXIT with tgtc, then the script ends (no move)',
+                  re.search(r'\|PFAIL\|plan=AI_Plan_Underworld_DeploySaboteur t=10 f=300 fac=UNDERWORLD n=1 age=5 .* args=2 '
+                            r'ERR UNDERWORLD_SABOTEUR_TEAM goal=Corrupt_Planet tgt=NABOO tgtc=false blk=1\|', o) is not None
+                  and re.search(r'\|PEXIT\|.* by=\S+ line=\d+ goal=Corrupt_Planet tgt=NABOO '
+                                r'tgtc=false blk=1\|', o) is not None and '|PMOVS|' not in o and 'LOG Move_To' not in o,
+                  o[-1200:])
+    return recs
+
+
+# Channel U under the model engine: two Underworld saboteurs (the starting one at NalHutta, in a fleet that is in
+# transit in frames 120..209 and then at Felucia with 3 members; a second one from frame 600), one Empire saboteur
+# (not ours), and desire values per planet.
+SAB_U_SETUP = r'''
+A2_OWNER = { Corellia = "Empire", Felucia = "Underworld", Kamino = "Empire", Kashyyyk = "Empire", Kuat = "Empire",
+	MonCalimari = "Rebel", Naboo = "Empire", NalHutta = "Underworld", Shola = "Underworld", Tatooine = "Empire",
+	The_Maw = "Underworld", Yavin = "Rebel" }
+A2_PERC_V.Should_Corrupt_Planet = 24
+A2_PERC_V.Should_Sabotage_Planet = 0
+local fp = FindPlanet
+function FindPlanet(n)
+	local p = fp(n)
+	if p ~= nil then p.Is_Corrupted = function() return n == "Naboo" and GetCurrentTime() >= 20 end end
+	return p
+end
+local function fr() return GetCurrentTime() * 30 end
+local function ty(n) return { Get_Name = function() return n end } end
+local fleet = { Get_Type = function() return ty("Galactic_Fleet") end, Get_Object_ID = function() return 501 end,
+	Get_Contained_Object_Count = function() if fr() >= 210 then return 3 end return 1 end,
+	Get_Planet_Location = function() if fr() < 120 then return FindPlanet("NalHutta") end
+		if fr() < 210 then return nil end return FindPlanet("Felucia") end,
+	Is_Valid = function() return true end }
+-- the second saboteur is carried by a transport inside the fleet (company -> transport -> fleet)
+local transport = { Get_Type = function() return ty("Underworld_Saboteur_Transport") end,
+	Get_Object_ID = function() return 601 end, Get_Contained_Object_Count = function() return 1 end,
+	Get_Parent_Object = function() return fleet end, Get_Planet_Location = function() return fleet.Get_Planet_Location() end }
+local function sab(id, owner, from, par)
+	return { from = from, Get_Type = function() return ty("Underworld_Saboteur_Team") end,
+		Get_Object_ID = function() return id end, Get_Owner = function() return A2_PLAYERS[owner] end,
+		Get_Parent_Object = function() return par end, Is_Valid = function() return true end,
+		Get_Planet_Location = function() return fleet.Get_Planet_Location() end }
+end
+A2_SABS = { sab(77, "Underworld", 0, fleet), sab(78, "Empire", 0, fleet), sab(91, "Underworld", 600, transport) }
+function Find_All_Objects_Of_Type(t)
+	if t ~= "Underworld_Saboteur_Team" then A2_Fail("Find_All_Objects_Of_Type", "type " .. tostring(t)) return end
+	local r = {}
+	for i = 1, table.getn(A2_SABS) do if fr() >= A2_SABS[i].from then table.insert(r, A2_SABS[i]) end end
+	return r
+end
+'''
+
+
+def sab_u_run(lua, lib, out, types, name, desire=True, frames=1500):
+    env = dict(os.environ, LUA_PATH=os.path.join(lib, '?.lua'))
+    outfile = os.path.join(out, '%s_out.txt' % name)
+    script = os.path.join(out, '%s.lua' % name)
+    with open(script, 'w', encoding='ascii') as f:
+        f.write(prelude(outfile, types))
+        f.write(SAB_U_SETUP)
+        f.write('A2_FRAMES = %d\n' % frames)
+        f.write(build_a2f_mod.sab_lua(True, desire))
+        f.write(PERC_DRIVER)
+    rc, text = lua_run(lua, script, env)
+    o = open(outfile).read() if os.path.exists(outfile) else ''
+    recs_path = os.path.join(out, '%s_records.txt' % name)
+    with open(recs_path, 'w') as f:
+        for ln in o.splitlines():
+            if ln.startswith('A2FB1|'):
+                f.write(ln + '\n')
+    return rc, text, o, a2f_report.parse_records(recs_path), recs_path
+
+
+def sab_u_tests(lua, lib, out, types):
+    rc, text, o, recs, path = sab_u_run(lua, lib, out, types, 'sab_u')
+    check('sab U: lua exit 0, state machine ran, no failed flag, own canary', rc == 0 and 'MAIN_ERROR' not in o and
+          'STATE A2FB_UState' in o and 'SCRIPT_FAILED' not in o and
+          'CANARYCALL Mods\\A2fBudgetProbe\\A2FB_Canary_Saboteur.txt' in o, (text + o)[:600])
+    un = [r for r in recs if r['kind'] == 'UN']
+    us = [r for r in recs if r['kind'] == 'US']
+    ud = [r for r in recs if r['kind'] == 'UD']
+    want = list(range(0, build_a2f_mod.SAB_STOP + 1, build_a2f_mod.SAB_STEP))
+    check('sab U: UN every 30 frames in 0..1400, then UEND and nothing more',
+          [int(r['f']['f']) for r in un] == want and [r['kind'] for r in recs].count('UEND') == 1 and
+          max(int(r['f'].get('f', 0)) for r in recs if r['kind'] in ('UN', 'US', 'UD')) <= 1400,
+          str([r['f']['f'] for r in un][:8]))
+    check('sab U: only the Underworld\'s saboteurs (77, then 91 from frame 600); other= counts the Empire one',
+          {r['f']['id'] for r in us} == {'77', '91'} and un[0]['text'].endswith('n=1 other=1 all=2') and
+          un[-1]['text'].endswith('n=2 other=1 all=3') and
+          len(us) == len(want) + len([f for f in want if f >= 600]), '%d US' % len(us))
+    by_f = {int(r['f']['f']): r['text'] for r in us if r['f']['id'] == '77'}
+    check('sab U: US has planet, parent fleet type / id / count / planet; parpl=nil while in transit',
+          by_f[90].endswith('id=77 type=UNDERWORLD_SABOTEUR_TEAM ok=true pl=NALHUTTA par=GALACTIC_FLEET parid=501 cnt=1 '
+                            'parpl=NALHUTTA') and by_f[150].endswith('pl=nil par=GALACTIC_FLEET parid=501 cnt=1 parpl=nil')
+          and by_f[210].endswith('pl=FELUCIA par=GALACTIC_FLEET parid=501 cnt=3 parpl=FELUCIA'),
+          str([by_f.get(k) for k in (90, 150, 210)]))
+    t91 = [r['text'] for r in us if r['f']['id'] == '91']
+    check('sab U: a saboteur in a transport also gets the grandparent (the fleet): gp / gpid / gpcnt / gppl',
+          bool(t91) and t91[0].endswith('par=UNDERWORLD_SABOTEUR_TRANSPORT parid=601 cnt=1 parpl=FELUCIA gp=GALACTIC_FLEET '
+                                        'gpid=501 gpcnt=3 gppl=FELUCIA'), str(t91[:1]))
+    udf = sorted({int(r['f']['f']) for r in ud})
+    check('sab U: UD every 30 frames in 0..600, one per HotM planet',
+          udf == list(range(0, build_a2f_mod.SAB_DES_STOP + 1, 30)) and
+          len(ud) == len(udf) * len(build_a2f_mod.SAB_PLANETS), '%s / %d' % (udf[:4], len(ud)))
+    naboo = [r['text'] for r in ud if r['f']['tgt'] == 'NABOO']
+    shola = [r['text'] for r in ud if r['f']['tgt'] == 'SHOLA']
+    check('sab U: desire of enemy planets (nil before the AI Init, then CP / SP), own planets not evaluated, '
+          'Is_Corrupted', 'own=EMPIRE cor=false CP=nil SP=nil' in naboo[0] and
+          naboo[4].endswith('own=EMPIRE cor=false CP=24 SP=0') and naboo[-1].endswith('cor=true CP=24 SP=0') and
+          all(s.endswith('own=UNDERWORLD cor=false CP=own SP=own') for s in shola), str(naboo[:2] + shola[:1]))
+    check('sab U: record length <= 400 bytes incl. needle', all(len(r['text']) + 60 <= 400 for r in recs))
+    rc2, text2, o2, recs2, _p = sab_u_run(lua, lib, out, types, 'sab_u_nodes', desire=False, frames=700)
+    check('sab U --no-sab-desire: no UD records, no EvaluatePerception, the timeline unchanged',
+          rc2 == 0 and not [r for r in recs2 if r['kind'] == 'UD'] and
+          len([r for r in recs2 if r['kind'] == 'US']) == len([r for r in us if int(r['f']['f']) <= 700]), o2[:400])
+    return path
+
+
+# The free-store saboteur hooks on stand-ins of the shipped handlers (they count their calls and arguments).
+SAB_FS_ORIG = r'''
+A2_CALLS = { svc = 0, added = 0, unit = 0 }
+function FreeStoreService() A2_CALLS.svc = A2_CALLS.svc + 1 end
+function On_Unit_Added(object) A2_CALLS.added = A2_CALLS.added + 1 A2_LAST_ADDED = object end
+function On_Unit_Service(object) A2_CALLS.unit = A2_CALLS.unit + 1 A2_LAST_UNIT = object return "r" end
+'''
+SAB_FS_DRIVER = r'''
+local function ty(n) return { Get_Name = function() return n end } end
+local function sab(id, owner, onstore)
+	return { Get_Type = function() return ty("Underworld_Saboteur_Team") end, Get_Object_ID = function() return id end,
+		Get_Owner = function() return A2_PLAYERS[owner] end, Is_Valid = function() return true end, onstore = onstore,
+		Get_Planet_Location = function() return FindPlanet("Felucia") end, Is_Transport = function() return false end }
+end
+A2_OWNER.Felucia = "Underworld"
+A2_S = { sab(77, "Underworld", true), sab(91, "Underworld", false), sab(78, "Empire", true) }
+function Find_All_Objects_Of_Type(t) return A2_S end
+FreeStore = {
+	Is_Object_On_Free_Store = function(o) if type(o) ~= "table" or o.onstore == nil then A2_Fail("Is_Object_On_Free_Store", "arg") return end return o.onstore end,
+	Is_Unit_In_Transit = function(o) if not o.onstore then A2_Fail("Is_Unit_In_Transit", "not a store unit") return end return false end,
+	Is_Unit_Safe = function(o) return true end,
+}
+local tank = { onstore = true, Get_Type = function() return ty("Underworld_Destroyer_Droid_Company") end,
+	Get_Object_ID = function() return 12 end,
+	Get_Planet_Location = function() return FindPlanet("Felucia") end, Is_Transport = function() return false end }
+PlayerObject = A2_PLAYERS[A2_FS_PLAYER]
+A2_T = 8
+FreeStoreService()
+A2_T = 9
+On_Unit_Added(A2_S[1])
+On_Unit_Added(tank)
+local r = On_Unit_Service(A2_S[1])
+On_Unit_Service(tank)
+A2_OUT:write("CALLS svc=" .. A2_CALLS.svc .. " added=" .. A2_CALLS.added .. " unit=" .. A2_CALLS.unit ..
+	" same=" .. tostring(A2_LAST_ADDED == tank and A2_LAST_UNIT == tank) .. " ret=" .. tostring(r) .. "\n")
+for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Records[i] .. "\n") end
+A2_OUT:close()
+'''
+
+
+def sab_fs_tests(lua, lib, out, types):
+    env = dict(os.environ, LUA_PATH=os.path.join(lib, '?.lua'))
+    res = {}
+    for name, player, sabm in (('uw', 'Underworld', True), ('emp', 'Empire', True), ('plain', 'Underworld', False)):
+        outfile = os.path.join(out, 'sabfs_%s.txt' % name)
+        script = os.path.join(out, 'sabfs_%s.lua' % name)
+        body = build_a2f_mod.assemble(SAB_FS_ORIG, 'F', 'a2fb_freestore_hook.lua', True,
+                                      head_extra=build_a2f_mod.sab_head() if sabm else '')
+        with open(script, 'w', encoding='ascii') as f:
+            f.write(prelude(outfile, types))
+            f.write('function TestValid(w) return w ~= nil and w.Is_Valid ~= nil and w.Is_Valid() end\n')
+            f.write('A2_FS_PLAYER = "%s"\n' % player)
+            f.write(body)
+            f.write(SAB_FS_DRIVER)
+        rc, text = lua_run(lua, script, env)
+        res[name] = (rc, text, open(outfile).read() if os.path.exists(outfile) else '')
+    rc, text, o = res['uw']
+    check('sab F: wrappers call the shipped FreeStoreService / On_Unit_Added / On_Unit_Service with the same object',
+          rc == 0 and 'CALLS svc=1 added=2 unit=2 same=true ret=r' in o and 'SCRIPT_FAILED' not in o, (text + o)[:600])
+    check('sab F: FSAB per Underworld saboteur (store / transit; transit read only for a store unit), FSABN count',
+          '|FSAB|t=8 f=240 fac=UNDERWORLD id=77 pl=FELUCIA st=true tr=false i=1|' in o and
+          '|FSAB|t=8 f=240 fac=UNDERWORLD id=91 pl=FELUCIA st=false tr=- i=2|' in o and 'id=78' not in o and
+          '|FSABN|t=8 f=240 fac=UNDERWORLD n=2|' in o, o[:1500])
+    check('sab F: FADD and FSVC for every Underworld store unit (type, Is_Transport, safe, transit)',
+          '|FADD|t=9 f=270 fac=UNDERWORLD id=77 pl=FELUCIA type=UNDERWORLD_SABOTEUR_TEAM|' in o and
+          '|FADD|t=9 f=270 fac=UNDERWORLD id=12 pl=FELUCIA type=UNDERWORLD_DESTROYER_DROID_COMPANY|' in o and
+          o.count('|FSVC|') == 2 and
+          '|FSVC|t=9 f=270 fac=UNDERWORLD id=77 pl=FELUCIA type=UNDERWORLD_SABOTEUR_TEAM tp=false safe=true tr=false|' in o and
+          '|FSVC|t=9 f=270 fac=UNDERWORLD id=12 pl=FELUCIA type=UNDERWORLD_DESTROYER_DROID_COMPANY tp=false' in o, o[:1800])
+    rc, text, o = res['emp']
+    check('sab F: the Empire\'s free store records no saboteur data (shipped calls unchanged)',
+          rc == 0 and 'CALLS svc=1 added=2 unit=2 same=true' in o and not re.search(r'\|(FSAB|FSABN|FADD|FSVC)\|', o), o[:600])
+    rc, text, o = res['plain']
+    check('sab F: a normal build adds no saboteur hook', rc == 0 and 'CALLS svc=1 added=2 unit=2 same=true' in o and
+          '|SABLOAD|' not in o and not re.search(r'\|(FSAB|FADD|FSVC)\|', o), o[:600])
+    path = os.path.join(out, 'sabfs_records.txt')
+    with open(path, 'w') as f:
+        for ln in res['uw'][2].splitlines():
+            if ln.startswith('A2FB1|'):
+                f.write(ln + '\n')
+    return path
+
+
+def sab_story_test(lua, lib, out, types):
+    env = dict(os.environ, LUA_PATH=os.path.join(lib, '?.lua'))
+    outfile = os.path.join(out, 'sabstory_out.txt')
+    script = os.path.join(out, 'sabstory.lua')
+    with open(script, 'w', encoding='ascii') as f:
+        f.write(prelude(outfile, types))
+        f.write('A2_FRAMES = 1500\n')
+        f.write(build_a2f_mod.story_lua(True, saboteur=True))
+        f.write(STORY_DRIVER)
+    rc, text = lua_run(lua, script, env)
+    o = open(outfile).read() if os.path.exists(outfile) else ''
+    m = re.search(r'\|SABDONE\|t=\S+ f=(\d+) ', o)
+    check('sab story: TEXT_A2FB_SAB_DONE once, at frame 1410..1440, story samples unchanged before it',
+          rc == 0 and 'SCRIPT_FAILED' not in o and o.count('GAME_MESSAGE TEXT_A2FB_SAB_DONE') == 1 and m is not None and
+          1410 <= int(m.group(1)) <= 1440 and '|SM|' in o, (text + o)[-600:])
+    outfile2 = os.path.join(out, 'story_out.txt')
+    plain = open(outfile2).read() if os.path.exists(outfile2) else ''
+    check('sab story: a normal story run has no SABDONE', bool(plain) and 'SAB_DONE' not in plain and '|SABDONE|' not in plain)
+
+
+def sab_report_test(out, plan_recs, u_path, fs_path):
+    rd = os.path.join(out, 'sabrep')
+    os.makedirs(rd, exist_ok=True)
+    recs = os.path.join(rd, 'records.txt')
+    with open(recs, 'w') as f:
+        f.write('\n'.join(plan_recs) + '\n')
+        f.write(open(u_path).read())
+        f.write(open(fs_path).read())
+    res, txt = a2f_report.run(recs, None, None, rd, port_perception=None)
+    sec = txt[txt.find('== 9.'):]
+    check('report sab: section 9 written', '== 9. Underworld saboteur' in txt, txt[-800:])
+    check('report sab: DeploySaboteur run line (goal, target, desire at start, stage, produce / move results, end, tgtc)',
+          re.search(r'f= 3480 n=1 Corrupt_Planet\s+tgt=NABOO\s+desire=24@600\s+stage=FELUCIA\s*@3480\s+produce=true\s*@3601\s+'
+                    r'move=false\s*@3901\s+stage2=FELUCIA units=1 end=PRET@4201 tgtc false -> true prev=first', sec) is not None
+          and re.search(r'produce=nil\s*@121\s+move=true', sec) is not None and 'end=PFAIL+PEXIT@300' in sec, sec[:1600])
+    check('report sab: timeline per id with U (changes only) and F rows, transit shown as parpl=nil',
+          '-- id 77:' in sec and '-- id 91:' in sec and
+          re.search(r'f=  120 U/US\s+UNDERWORLD_SABOTEUR_TEAM pl=nil par=GALACTIC_FLEET parid=501 cnt=1 parpl=nil', sec) is not None and
+          re.search(r'f=  150 U/US', sec) is None and len(re.findall(r'f=\s+\d+ U/US .*parid=501 cnt=3', sec)) == 1 and
+          re.search(r'f=  600 U/US\s+UNDERWORLD_SABOTEUR_TEAM pl=FELUCIA par=UNDERWORLD_SABOTEUR_TRANSPORT parid=601 cnt=1 '
+                    r'parpl=FELUCIA gp=GALACTIC_FLEET gpid=501 gpcnt=3', sec) is not None and
+          'other Underworld store units (F/FSVC, not listed): 1' in sec and
+          re.search(r'f=  270 F/FADD\s+pl=FELUCIA admitted', sec) is not None and
+          re.search(r'f=  240 F/FSAB\s+pl=FELUCIA st=true tr=false', sec) is not None and
+          re.search(r'f=  270 F/FSVC\s+pl=FELUCIA st=- tr=false safe=true', sec) is not None, sec[:2500])
+    check('report sab: desire table (enemy planets only) and owned-saboteur count changes',
+          re.search(r'\n\s+600 .*24/0 c', sec) is not None and 'SHOLA' not in sec.split('desire equations')[1] and
+          'f0: 1 (other 1), f600: 2 (other 1)' in sec, sec[-1500:])
+    st = open(os.path.join(rd, 'saboteur.tsv')).read().splitlines()
+    check('report sab: saboteur.tsv one row per timeline record', len(st) > 50 and st[0].startswith('id\tsrc\tf'), str(len(st)))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--lua')
@@ -1023,6 +1506,13 @@ def main():
         with open(sc, 'a') as f:      # the E pair's records go into the same report (section 6)
             f.write(open(os.path.join(out, 'percept_E_records.txt')).read())
         a2j_report_test(out, os.path.join(out, 'percept_U_records.txt'), sc)
+        # a2k t05: the saboteur run
+        lua_syntax(lua, os.path.join(out, 'mod_saboteur'), out)
+        plan_recs = sab_plan_tests(lua, lib, out, types, z)
+        u_path = sab_u_tests(lua, lib, out, types)
+        fs_path = sab_fs_tests(lua, lib, out, types)
+        sab_story_test(lua, lib, out, types)
+        sab_report_test(out, plan_recs, u_path, fs_path)
     else:
         print('SKIPPED the Lua checks: no lua50.exe (tools\\probe_mod\\common\\build_lua50.cmd builds one)')
     bad = [n for n, ok in RESULTS if not ok]

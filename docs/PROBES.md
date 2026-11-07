@@ -9,7 +9,7 @@ roadmap (`roadmap-store/`). Probes need the original game and Gabriel's go-ahead
 |---|---|---|
 | `README.md`, `v2/`, `probeE/` (payloads built by `build_probe.py`, not in git) | File-priority probe v2: how `Data\` paths resolve (MODPATH, loose folders, MEGs, fallback) | [`PHASE2.md`](PHASE2.md) "Data\ resolution order" |
 | `a1_tactical/` | A1 t02 free-store timing and A1 t04 landing-point ownership (tactical AI) | `re/AI_TACTICAL.md`, `re/A1_READINGS.md` |
-| `a2f_budget/` | a2f t07 / a2g t01: AI budget reset flag +0x74, pre-Init Infrastructure pool and template state at Heart of the Maw start | `re/A2F_T07_BUDGET_PROBE.md`, `re/A2G_T01_RESET_FLAG_PROBE.md` |
+| `a2f_budget/` | a2f t07 / a2g t01: AI budget reset flag +0x74, pre-Init Infrastructure pool and template state at Heart of the Maw start; a2k t05 (`run_a2f_sab.cmd`, short run): the Underworld saboteur, DeploySaboteur stage / results, free-store return (Q5, H1 / H2) | `re/A2F_T07_BUDGET_PROBE.md`, `re/A2G_T01_RESET_FLAG_PROBE.md`, `re/A2K_T08_RE_ANSWERS.md` §5 |
 | `a1h_assemble_fleet/` | a1h t09: does `Assemble_Fleet` launch ground units from a planet's surface? | `re/A1_READINGS.md` |
 | `fixpass_capture/` | Screenshot checklist for the galactic fix pass (no mod files) | `re/FIXPASS_GALACTIC.md` §4–5 |
 | `fow_regrow/` | fowf t06: fog regrow window and top-edge circle shift | `re/FOG_OF_WAR.md` §9 item 8 |

@@ -74,6 +74,21 @@ t04 (`docs/re/A2J_T02_PROBE_PLAN.md`; how to run it: section 9). Added, everythi
   makes the port side (export + traces + run), `port_a2j_patch.py` is its trace patch. `--no-percept` builds without
   channel D (section 9, "Probe effect"). Selftest: 140 checks.
 
+**a2k t05 (2026-11-07): the Underworld saboteur short run.** For `docs/re/A2K_T08_RE_ANSWERS.md` section 5 (Q5: H1 vs H2 of
+Q4.2, why retail's Naboo got the starting saboteur). How to run it: section 10. Added:
+
+* a 12th hooked plan, `AI_Plan_Underworld_DeploySaboteur` (in every build), with an extension (`a2fb_saboteur_plan.lua`):
+  PSTART and the end records carry `goal=` (`MainForce.Get_Goal_Type_Name()`), `tgt=` (target planet) and `tgtc=`
+  (`Target.Is_Corrupted()`); new records `PSTAGE` (the stage AssembleForce got from `MainForce.Get_Stage()`), `PPROD`
+  (result of `BlockOnCommand(Produce_Force(stage))`), `PMOVS` / `PMOVE` (start and result of `BlockOnCommand(Move_To(Target))`).
+  The generic PFAIL wrapper already records `MainForce_Production_Failed`.
+* `--saboteur` builds (`run_a2f_sab.cmd`): channel **U** (`a2fb_saboteur.lua`, the Underworld AI plot's `Lua_Script`, the
+  slot channel D uses otherwise; channel D is left out) samples every Underworld_Saboteur_Team every 30 frames in 0..1400
+  and the two desire equations per HotM planet every 30 frames in 0..600; the Underworld free store records `FSAB`
+  (`Is_Object_On_Free_Store`, `Is_Unit_In_Transit`, every 8 s), `FADD` (admissions) and `FSVC` (`On_Unit_Service`); the
+  story script shows "saboteur run recorded" at frame 1410.
+* report section 9 and `saboteur.tsv`. Selftest: 197 checks.
+
 ## 1. What it records
 
 Retail 1.121 writes no Lua output files, so the probe Lua keeps its records as strings
@@ -84,7 +99,8 @@ running game (the pattern of the a1h / q2 kits). Three Lua channels plus one Pyt
 |---|---|---|
 | S (story) | a plot script added to the three HotM story plots (`Lua_Script A2fb_Story`), ServiceRate 0.01 | every frame for the first 4 s of galactic time (before and just after the AI's budget Init), every frame in a window around each of the first four fiscal payments (44.5 s .. 47.5 s, 89.5 s .. 92.5 s, ...), a full sample every 1 s until 120 s and every 5 s until 300 s, then it goes quiet |
 | F (free store) | wraps `FreeStoreService` of GalacticFreeStore.lua at its shipped 8 s schedule (no rate change) | one full sample per call, at most 200 |
-| P (plans) | wraps the task-force thread of 11 plans: BuildBaseComponentBarracks, BuildBaseComponentLightVehicleFactory, BuildBaseComponentResearchFacility, UpgradeStarbasePlan, BuildEconomicStructurePlan, EmpireAdvanceTechPlan, and since a2h BuildBaseComponentHeavyVehicleFactory, BuildBaseComponentAdvancedVehicleFactory, LiftBlockadePlan, FlushMajorItemBudget, ConquerPiratePlan; also ScriptExit and `<force>_Production_Failed` (when the script has it) | `Budget.Get_Spendable_Resources` and `Get_Unallocated_Resources` at plan start (PSTART), then a small sample (full for FlushMajorItemBudget); the same fields at the end (PRET / PEXIT / PFAIL) |
+| P (plans) | wraps the task-force thread of 12 plans: BuildBaseComponentBarracks, BuildBaseComponentLightVehicleFactory, BuildBaseComponentResearchFacility, UpgradeStarbasePlan, BuildEconomicStructurePlan, EmpireAdvanceTechPlan, and since a2h BuildBaseComponentHeavyVehicleFactory, BuildBaseComponentAdvancedVehicleFactory, LiftBlockadePlan, FlushMajorItemBudget, ConquerPiratePlan, since a2k t05 AI_Plan_Underworld_DeploySaboteur; also ScriptExit and `<force>_Production_Failed` (when the script has it) | `Budget.Get_Spendable_Resources` and `Get_Unallocated_Resources` at plan start (PSTART), then a small sample (full for FlushMajorItemBudget); the same fields at the end (PRET / PEXIT / PFAIL); DeploySaboteur also goal / target / stage / block results (section 10) |
+| U (saboteur, `--saboteur` only) | the Underworld AI plot's `Lua_Script` (`A2fb_SabU`), ServiceRate set per sample frame | Underworld_Saboteur_Team objects every 30 frames in 0..1400, desire equations per planet every 30 frames in 0..600 (section 10) |
 | watcher | `a2f_watch.py`, a thread of `a2f_run.py`, ReadProcessMemory only (never writes, injects or suspends) | the budget block of each AI player: init byte, income/s, last tick period T, reset flag +0x74, refund accumulator, polled about every 3 ms, with the mode frame of every change |
 
 Per sample (Lua, per AI player; the human is skipped): credits, `CreditsUnnormalized` (CU), net income, and
@@ -212,6 +228,7 @@ leaves the watcher (the flag and the raw budget block) unchanged.
 | `build_a2f_mod.py`, `a2fb_spec.py` | build `Mods\A2fBudgetProbe` (patched equation file, 3 story plots, plan and free-store hooks, canaries, marker, optional text patch); the single table of probe types, equations and shipped equation names |
 | `a2fb_core.lua`, `a2fb_story.lua`, `a2fb_freestore_hook.lua`, `a2fb_plan_hook.lua` | the probe Lua (Lua 5.0.2: no `#`, no `%`, no math library in the free-store script) |
 | `a2fb_percept.lua`, `a2fb_scoring_hook.lua` | a2j: channel D (AI plot scripts, D4 perception) and channel Q (GameScoring production events) |
+| `a2fb_saboteur_plan.lua`, `a2fb_saboteur.lua`, `run_a2f_sab.cmd` | a2k t05: the DeploySaboteur plan extension (channel P), channel U (Underworld AI plot), the short-run launcher (section 10); the free-store part is in `a2fb_freestore_hook.lua` |
 | `a2j_port.py`, `port_a2j_patch.py` | a2j: the port side (export a commit, trace patch, build, run the scenario, write the D4 table) |
 | `port_reference_a2j.tsv` | a2j: the port's D4 values (commit and method in its first lines; section 9) |
 | `a2f_watch.py` | read-only memory watcher of the budget block |
@@ -221,7 +238,16 @@ leaves the watcher (the flag and the raw budget block) unchanged.
 
 ## 7. Offline self-test
 
-`toolchain\venv\Scripts\python.exe -I selftest_a2f.py [--lua PATH] [--out DIR]`. 140 checks since a2j (101 in a2i, 83 in a2h, 55 until a2g).
+`toolchain\venv\Scripts\python.exe -I selftest_a2f.py [--lua PATH] [--out DIR]`. 197 checks since a2k t05 (140 in a2j, 101 in a2i, 83 in a2h, 55 until a2g).
+a2k t05 adds: the saboteur spec (the shipped DeploySaboteur thread and handler, AssembleForce's global `stage`, the reads
+the shipped free store and AI scripts make themselves, the saboteur type, HotM's planets and starting saboteur, the two
+desire functions, Enemy-only goals, closures without Variable_Human or `#`); the `--saboteur` / `--no-sab-desire` builds;
+the DeploySaboteur thread driven as a coroutine under the real PG library (AssembleForce, BlockOnCommand, Sleep,
+ScriptExit) in three cases (normal, Produce_Force returns nothing, Production_Failed): the records, and the **same
+orders at the same frames** as the unhooked shipped script; channel U under the model engine (cadence, owner filter,
+transit, a saboteur in a transport, desire only on enemy planets, no `UD` without desire); the free-store wrappers
+(shipped handlers still called with the same object, Underworld instance only, nothing in a normal build); SABDONE in
+the story script; report section 9.
 a2j adds: the D4 spec (every shipped D4 equation is Should_Conquer_Pirate_Planet or one of its sub-functions, every token
 equation is verbatim a token of them, the needs-human marks match the Variable_Human closure, the AI plot files have no
 Lua_Script, GameScoring has the three events and makes the reads the Q hook makes); the build (AI plot files, queue
@@ -289,6 +315,10 @@ story run (`robust_test`) checks that one failing record gives one ERR record an
 * a2j Q (production): Begin may mean "queued" rather than "started"; the report's queue rebuild shows which (a Begin while
   the queue is busy). Retail calls GameScoring's production events for every player [M: the names are exe strings; the
   q2 kit saw GameScoring load in galactic]; the `Scoring` canary only proves the script loaded.
+* a2k t05 (saboteur, section 10): no hidden-fleet read, no proposal / accept / effective-desire read, no desire inside
+  the plan; `Is_Unit_In_Transit` / `Is_Object_On_Free_Store` only every 8 s and at free-store events (free-store
+  methods); `Is_Object_On_Free_Store` is unproven in retail; the `UD` desire reads may shift the AI's cache refreshes
+  (`--no-sab-desire`). Canary `Saboteur` still present after the run = the U plot script did not run.
 
 ## 9. How to run (a2j)
 
@@ -356,3 +386,74 @@ repository's engine is unchanged); scenario `Sandbox_Heart_Of_The_Maw_Rebel`, hu
 player's own galactic AI service of the frame (retail's plot script runs at T9 of the same tick, after every player's
 AI service: a difference of at most the later players' service in that frame). The port table has no frame-0 row (the
 trace saw no AI service at frame 0); retail's frame-0 sample is expected to be `nil` (AI not initialised yet).
+
+## 10. a2k t05: the Underworld saboteur short run (Q5 of `docs/re/A2K_T08_RE_ANSWERS.md`)
+
+**Question.** In retail the starting saboteur (NalHutta) corrupted Naboo at about frame 600; in the port it is staged at
+Felucia for the MonCalimari proposal and dies at Kashyyyk. Q4.2: H1 = retail's desires rank Naboo first (or MonCalimari is
+not proposed); H2 = the MonCalimari plan ends early, the saboteur returns to the free store and Naboo's build task claims
+it. The run also shows Q1 (fleet members after the stage arrival), Q2 (what Move_To moves) and Q3 (`Get_Stage`).
+
+**Scenario.** `Sandbox_Heart_Of_The_Maw_Rebel` ("Heart of the Maw", faction REBEL, Medium), human Rebel with no orders,
+story on (the campaign's own story plots, as always), frames 0..1400 (about 47 s of galactic time).
+
+**Run it (Gabriel, Steam running, FoC closed).**
+1. Offline check: `toolchain\venv\Scripts\python.exe -I tools\probe_mod\a2f_budget\selftest_a2f.py` ends with
+   `A2F SELFTEST OK (197 checks, 0 failed)` (the Lua checks need `lua50.exe`, section 7).
+2. Double-click `tools\probe_mod\a2f_budget\run_a2f_sab.cmd`. It opens its own console window (`start`), so the recorder
+   does not depend on the shell that launched it. From a Claude session start it detached, for example
+   `Start-Process -FilePath "<repo>\tools\probe_mod\a2f_budget\run_a2f_sab.cmd"` (PowerShell), never in a Claude terminal
+   tab (a2j: the recorder died with the session). The window runs `a2f_run.py --saboteur`: profile backup, build and
+   install `Mods\A2fBudgetProbe` with `--saboteur`, launch, scan, report, cleanup, profile restore. Options are passed on:
+   `--windowed`, `--no-launch`, `--no-sab-desire`, `--game DIR`, `--non-interactive` (no pause at the end).
+3. In the game: Single Player > Galactic Conquest > "Heart of the Maw", **REBEL**, Medium, Start. Close the "Active Story
+   Objectives" box. Hands off: no orders, no pause, normal speed, window in front.
+4. At frame 1410 "A2FB PROBE: saboteur run recorded" shows (record `SABDONE`). Esc > Quit to the main menu > Quit; do not
+   save. The window then writes the report, cleans up and restores the profile, prints `A2F_RUN_DONE exit=<n>` and waits
+   for a key. `tools\probe_mod\a2f_budget\out\latest.txt` names the run folder, its `run_status.txt` the state (also after
+   a Claude session cut).
+5. Cleanup by hand only if the window was killed: `tools\probe_mod\a2f_budget\cleanup_a2f.cmd`.
+6. Send back `out\<run>\` (at least `records.txt`, `report.txt`, `saboteur.tsv`, `plans.tsv`, `run_status.txt`).
+
+**What it records** (all read-only; Q5 items):
+
+| Q5 item | Record | Content |
+|---|---|---|
+| 1 PSTART | P `PSTART` of AI_Plan_Underworld_DeploySaboteur | frame, `n=` (run number of the script instance, with the channel's sid = plan id), `goal=`, `tgt=`, `tgtc=` |
+| 1 stage | P `PSTAGE` | `stage=` the planet AssembleForce got from `MainForce.Get_Stage()` (the script's own global `stage`; no extra call), `blk=` type of the Produce_Force status (`nil` = no status) |
+| 2 progress | P `PPROD`, `PMOVS`, `PMOVE` | `res=` BlockOnCommand's result for Produce_Force(stage) and Move_To(Target) (true / false / nil), `dt=` seconds blocked; PMOVS also `stage2=` (Get_Stage again), `units=` (Get_Force_Count) |
+| 2 failed | P `PFAIL` (+ `PEXIT` from its ScriptExit) | `MainForce_Production_Failed` fired, with `tgtc=` |
+| 3 end | P `PRET` / `PEXIT` / `PFAIL` | result path (`PRET` = thread returned after Set_Plan_Result or not; `PEXIT` = ScriptExit, `by=` / `line=`), `tgtc=` (`Target.Is_Corrupted()`), `blk=` block calls done; no end record = the goal system released the plan |
+| 4 every 30 frames | U `UN`, `US` | per Underworld_Saboteur_Team the Underworld owns: `id=` (Get_Object_ID), `type=`, `pl=`, `par=` / `parid=` / `cnt=` / `parpl=` (parent: the fleet, or a transport, then `gp*` = the fleet); `parpl=nil` = in transit |
+| 4 store | F `FSAB` (8 s), `FADD`, `FSVC` | `st=` `Is_Object_On_Free_Store`, `tr=` `Is_Unit_In_Transit` (read only for a store unit), admissions (every type), `On_Unit_Service` calls (unreserved entries; `safe=`, `tp=`) |
+| 5 proposals | U `UD` (every 30 frames, 0..600) | per HotM planet not owned by the Underworld: `CP=` Should_Corrupt_Planet, `SP=` Should_Sabotage_Planet (the two goals' desire functions), `own=`, `cor=` |
+
+**Not covered, and why** (do not read these from the run):
+* **Hidden fleet**: no Lua binding reads a fleet's hidden / stealth state (LUA_API.md). Indirect evidence: `cnt=` of the
+  saboteur's fleet after its arrival (Q1: merged into a visible fleet = cnt > 1).
+* **Proposals and "accepted"**: the goal system's proposal list, the effective desire (learning, Per_Failure_Desire_Adjust,
+  incumbent bonus) and the accept decision have no Lua API. The `UD` values are the raw desire functions, evaluated
+  only for (goal, target) pairs the goal system itself scores; which proposal was accepted shows as the DeploySaboteur
+  `PSTART` (goal + target) that follows. The pass timing (about 150 frames per pass, AI_GALACTIC 1.x) is not visible
+  either: the 30-frame `UD` samples cover the pass near frame 116 and the next ones.
+* **The desire in PSTART**: a plan cannot read its goal's desire; evaluating the equation inside the plan script would
+  end the plan if it failed (a binding error stops the calling script), so the report joins PSTART with the last `UD`
+  sample of the same target instead (`desire=` in section 9).
+* **In transit every 30 frames**: `Is_Unit_In_Transit` / `Is_Object_On_Free_Store` are free-store methods. Raising the free
+  store's 8 s ServiceRate would change the AI, so they come every 8 s (`FSAB`) and at the events (`FADD`, `FSVC`);
+  channel U's `parpl=nil` is the 30-frame transit signal.
+* `Is_Object_On_Free_Store` is registered but no shipped script calls it: unproven in retail. It gets only a valid game
+  object; if it failed in the engine it would end the Underworld's free-store script (no ERR, the `FSAB` records stop).
+
+**Probe effect.** The `UD` evaluations share the AI's leaf cache (section 9, "Probe effect"): they may move the AI's own
+cache refreshes. The port showed no change before frame 1460 from channel D's reads; for a run without them use
+`run_a2f_sab.cmd --no-sab-desire` (channel U keeps the saboteur samples). Channel D is not built in a `--saboteur` run.
+
+**Reading it.** Report section 9: the DeploySaboteur runs (frame, goal, target, desire, stage, produce / move results with
+their frames, end, `tgtc` start -> end), the timeline per object id (channel U changes only, every F record), owned-saboteur
+count changes, the Underworld's free-store admissions, and the desire table (`CP/SP`, `c` = corrupted). H2 shows as: a
+MonCalimari run that ends (PFAIL / PEXIT, or no end = released) without corrupting, then `FADD` / `FSAB st=true` for the
+starting saboteur's id, then a Naboo run whose `PSTAGE` / `PPROD` follows and Naboo's `cor=true` at about 600. H1 shows as:
+Naboo's `CP` above MonCalimari's at the pass near 116, or no MonCalimari `PSTART`. Compare with the port's trace of the same
+scenario (`docs/re/A2K_T08_RE_QUESTIONS.md` section 2: plan 10 MonCalimari 25.5, plan 11 Naboo 24.0 at 116, staged at
+Felucia). `saboteur.tsv` has one row per timeline record.
