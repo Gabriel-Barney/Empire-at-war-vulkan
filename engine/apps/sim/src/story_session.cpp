@@ -68,17 +68,9 @@ int32_t to_int(std::string_view s, int32_t fallback) {
     return static_cast<int32_t>(neg ? -v : v);
 }
 
-// Event / reward parameter i as text ("" when absent; object / player values set from Lua print as
-// "#object:<id>" / "#player:<id>" and never equal a name).
+// Event / reward parameter i as text ("" when absent).
 std::string param_text(const std::vector<lua::StoryParam>& v, size_t i) {
-    if (i >= v.size()) return {};
-    const lua::StoryParam& p = v[i];
-    switch (p.kind) {
-    case lua::StoryParam::Kind::Text: return std::string(trim(p.text));
-    case lua::StoryParam::Kind::Object: return "#object:" + std::to_string(p.id);
-    case lua::StoryParam::Kind::Player: return "#player:" + std::to_string(p.id);
-    }
-    return {};
+    return i < v.size() ? std::string(trim(v[i].text)) : std::string();
 }
 
 std::string join_params(const std::vector<lua::StoryParam>& v) {

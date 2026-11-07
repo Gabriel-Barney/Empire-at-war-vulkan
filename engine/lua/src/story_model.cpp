@@ -268,7 +268,7 @@ bool is_string_family(std::string_view t) {
 void hash_param(StateHasher& h, const StoryParam& p) {
     h.u8(static_cast<uint8_t>(p.kind));
     h.str(p.text);
-    h.i32(p.id);
+    h.i32(-1);  // constant: the removed id field (hash unchanged)
 }
 
 // ---- the original's CRC-keyed hash table order (Â§4.2) ----
@@ -1485,15 +1485,14 @@ bool get_count(ByteReader& r, uint32_t& n) {
 void put_param(ByteWriter& w, const StoryParam& p) {
     w.u8(static_cast<uint8_t>(p.kind));
     put_str(w, p.text);
-    w.i32(p.id);
+    w.i32(-1);  // constant: the removed id field (save bytes unchanged)
 }
 bool get_param(ByteReader& r, StoryParam& p) {
     const uint8_t k = r.u8();
-    if (!r.ok() || k != static_cast<uint8_t>(StoryParam::Kind::Text)) return false;  // cu14 t03: only text is produced
-    p.kind = static_cast<StoryParam::Kind>(k);
+    if (!r.ok() || k != static_cast<uint8_t>(StoryParam::Kind::Text)) return false;  // only text is produced
+    p.kind = StoryParam::Kind::Text;
     if (!get_str(r, p.text)) return false;
-    p.id = r.i32();
-    return r.ok();
+    return r.i32() == -1 && r.ok();
 }
 void put_params(ByteWriter& w, const std::vector<StoryParam>& v) {
     w.u32(static_cast<uint32_t>(v.size()));

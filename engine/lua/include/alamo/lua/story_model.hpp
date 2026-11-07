@@ -59,16 +59,14 @@ class LuaVm;
 
 // A story event / reward parameter: XML text, or text set from Lua (Set_Event_Parameter stores objects and types as
 // their type name, numbers formatted like Lua's tostring).
-// cu14 t03: only Kind::Text is ever produced (a save with another kind is refused). Object / Player and `id` remain
-// because the save record and the state hash still write the kind byte and the id (u8 0, i32 -1), and the campaign
-// host's param_text (engine/apps/sim story_session.cpp) still switches on the kinds.
+// Only Kind::Text exists (cu14 t03, cu14f). The save record and the state hash still write the old layout's constant
+// bytes (kind u8 0, then an i32 -1 after the text) so the story save bytes and the state hash did not change.
 struct StoryParam {
-    enum class Kind : uint8_t { Text, Object, Player };
+    enum class Kind : uint8_t { Text };
     Kind kind = Kind::Text;
     std::string text;
-    int32_t id = -1;
 
-    static StoryParam of_text(std::string_view s) { return {Kind::Text, std::string(s), -1}; }
+    static StoryParam of_text(std::string_view s) { return {Kind::Text, std::string(s)}; }
     bool empty() const { return kind == Kind::Text && text.empty(); }
 };
 
