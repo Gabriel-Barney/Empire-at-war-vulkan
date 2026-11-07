@@ -21,6 +21,11 @@ add_library(alamo::ai ALIAS alamo_ai)
 target_include_directories(alamo_ai PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(alamo_ai PUBLIC alamo_galactic alamo_data alamo_core alamo_engine_flags
                                PRIVATE alamo_objects)
+# The AI save codec (src/ai_save_io.hpp, not installed) for the tactical AI's save code (engine/ai/tactical): an internal
+# include directory, so its tactical_save_io.hpp reuses it instead of a copy.
+add_library(alamo_ai_save_io INTERFACE)
+target_include_directories(alamo_ai_save_io INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(alamo_ai_save_io INTERFACE alamo_galactic alamo_core)
 # q6: the galactic seed's force roles use galactic::galactic_unit_kind (galactic_rules.cpp, in alamo_galactic_sim, which
 # exists when data, objects and commands are configured; without it the seed keeps its own tag rule).
 if(TARGET alamo_galactic_sim)

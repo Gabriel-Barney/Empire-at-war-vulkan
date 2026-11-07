@@ -4418,13 +4418,7 @@ void TacticalAiWorld::write(ByteWriter& w) const {
                 w.u32(static_cast<uint32_t>(o.candidates));
                 w.str(o.last_veto);
                 io::put_count(w, o.picks.size());
-                for (const TacticalPpPick& k : o.picks) {
-                    w.i32(k.type);
-                    w.u8(static_cast<uint8_t>(k.source));
-                    w.i32(k.ref);
-                    w.i32(k.tf);
-                    w.i32(k.team);
-                }
+                for (const TacticalPpPick& k : o.picks) io::put_pick(w, k);
             }
         }
     }
@@ -4494,13 +4488,7 @@ void TacticalAiWorld::write(ByteWriter& w) const {
         w.u32(pp.plan);
         w.boolean(pp.reserved);
         io::put_count(w, pp.picks.size());
-        for (const TacticalPpPick& k : pp.picks) {
-            w.i32(k.type);
-            w.u8(static_cast<uint8_t>(k.source));
-            w.i32(k.ref);
-            w.i32(k.tf);
-            w.i32(k.team);
-        }
+        for (const TacticalPpPick& k : pp.picks) io::put_pick(w, k);
     }
     put_int_map(w, m.pool_reserved);
     put_int_map(w, m.pad_reserved);
@@ -4704,16 +4692,8 @@ bool TacticalAiWorld::read(ByteReader& r) {
                 o.ok = r.boolean();
                 o.candidates = r.u32();
                 o.last_veto = r.str();
-                o.picks.resize(io::count(r, 17));
-                for (TacticalPpPick& k : o.picks) {
-                    k.type = r.i32();
-                    const uint8_t source = r.u8();
-                    if (source > static_cast<uint8_t>(PpSource::Produce)) r.fail();
-                    k.source = static_cast<PpSource>(source);
-                    k.ref = r.i32();
-                    k.tf = r.i32();
-                    k.team = r.i32();
-                }
+                o.picks.resize(io::count(r, io::kPickBytes));
+                for (TacticalPpPick& k : o.picks) io::get_pick(r, k);
             }
             for (const uint32_t pl : sp.pp_plans)
                 if (pl >= m.library.plans.size()) return io::bad(r);
@@ -4834,16 +4814,8 @@ bool TacticalAiWorld::read(ByteReader& r) {
             pp.player = r.i32();
             pp.plan = r.u32();
             pp.reserved = r.boolean();
-            pp.picks.resize(io::count(r, 17));
-            for (TacticalPpPick& k : pp.picks) {
-                k.type = r.i32();
-                const uint8_t source = r.u8();
-                if (source > static_cast<uint8_t>(PpSource::Produce)) r.fail();
-                k.source = static_cast<PpSource>(source);
-                k.ref = r.i32();
-                k.tf = r.i32();
-                k.team = r.i32();
-            }
+            pp.picks.resize(io::count(r, io::kPickBytes));
+            for (TacticalPpPick& k : pp.picks) io::get_pick(r, k);
             if (!r.ok() || !valid_ai(pp.player) || (pp.plan != kAiNone && pp.plan >= lib) || id < 0 || id >= next[3] ||
                 (!new_pps.empty() && new_pps.rbegin()->first >= id))
                 return io::bad(r);

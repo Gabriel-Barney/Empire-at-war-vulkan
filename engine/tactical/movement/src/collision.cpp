@@ -4,6 +4,7 @@
 
 #include "alamo/tactical/movement/heap.hpp"
 #include "alamo/tactical/movement/land_path.hpp"
+#include "collision_key.hpp"
 
 namespace alamo::tactical::movement {
 
@@ -234,23 +235,16 @@ std::vector<uint32_t> find_crush_victims(std::span<const Box2> crusher_boxes, st
 }
 
 // ---------------------------------------------------------------- collision objects (TACTICAL_GAPS §6.7)
-namespace {
-uint64_t pair_key(ObjectId a, ObjectId b) {
-    const uint32_t x = static_cast<uint32_t>(std::min(a, b)), y = static_cast<uint32_t>(std::max(a, b));
-    return (static_cast<uint64_t>(x) << 32) | y;
-}
-}  // namespace
-
 float collision_priority(float crowd, uint32_t now, uint32_t created) {
     return crowd - static_cast<float>(now - created);
 }
 
 bool CollisionLayer::has_pair(ObjectId a, ObjectId b) const {
-    return std::binary_search(pairs_.begin(), pairs_.end(), pair_key(a, b));
+    return std::binary_search(pairs_.begin(), pairs_.end(), collision_pair_key(a, b));
 }
 
 uint32_t CollisionLayer::add(CollisionKind kind, ObjectId a, ObjectId b, uint32_t frame) {
-    const uint64_t key = pair_key(a, b);
+    const uint64_t key = collision_pair_key(a, b);
     auto it = std::lower_bound(pairs_.begin(), pairs_.end(), key);
     if (it != pairs_.end() && *it == key) return UINT32_MAX;
     pairs_.insert(it, key);
@@ -266,8 +260,8 @@ uint32_t CollisionLayer::add(CollisionKind kind, ObjectId a, ObjectId b, uint32_
 }
 
 void CollisionLayer::drop_pair(const CollisionObject& c) {
-    auto it = std::lower_bound(pairs_.begin(), pairs_.end(), pair_key(c.a, c.b));
-    if (it != pairs_.end() && *it == pair_key(c.a, c.b)) pairs_.erase(it);
+    auto it = std::lower_bound(pairs_.begin(), pairs_.end(), collision_pair_key(c.a, c.b));
+    if (it != pairs_.end() && *it == collision_pair_key(c.a, c.b)) pairs_.erase(it);
 }
 
 void CollisionLayer::run(uint32_t frame, const KeepFn& keep, const CountFn& count, const BudgetFn& budget,

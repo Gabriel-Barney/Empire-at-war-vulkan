@@ -38,7 +38,6 @@ public:
     size_t pos() const noexcept { return pos_; }
     bool ok() const noexcept { return ok_; }
     void fail() noexcept { ok_ = false; }
-    std::span<const uint8_t> data() const noexcept { return d_; }
 
 private:
     std::span<const uint8_t> d_;

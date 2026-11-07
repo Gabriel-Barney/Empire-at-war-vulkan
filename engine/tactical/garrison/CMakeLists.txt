@@ -15,7 +15,8 @@ add_library(alamo_tactical_garrison STATIC
 )
 add_library(alamo::tactical_garrison ALIAS alamo_tactical_garrison)
 target_include_directories(alamo_tactical_garrison PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(alamo_tactical_garrison PUBLIC alamo_objects alamo_core alamo_engine_flags)
+target_link_libraries(alamo_tactical_garrison PUBLIC alamo_objects alamo_core alamo_engine_flags
+                                              PRIVATE alamo_tactical)  # save_io.hpp
 
 add_executable(alamo_tactical_garrison_tests tests/test_garrison.cpp)
 target_link_libraries(alamo_tactical_garrison_tests PRIVATE alamo_tactical_garrison)

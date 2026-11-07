@@ -47,6 +47,9 @@ public:
     double f64() noexcept;
     std::string str();                          // ByteWriter::str; a length past the end clears ok()
     std::span<const uint8_t> raw(size_t n) noexcept;  // the next n bytes (empty + !ok() when short)
+    // A u32 element count whose elements take at least `min_bytes` each (saves): false when the read failed or the
+    // count cannot fit in the bytes left, so a corrupt count never allocates. Does not clear ok() for a big count.
+    bool count(uint32_t& n, size_t min_bytes) noexcept;
     // Clears ok() (a consumer found an invalid value, e.g. an out-of-range enum or count).
     void fail() noexcept { ok_ = false; }
     bool ok() const noexcept { return ok_; }
@@ -59,6 +62,25 @@ private:
     size_t pos_ = 0;
     bool ok_ = true;
 };
+
+// Nested save section: u32 byte length + the bytes `fn(ByteWriter&)` writes, so the outer reader stays aligned.
+template <class F>
+void put_section(ByteWriter& w, F&& fn) {
+    ByteWriter sub;
+    fn(sub);
+    w.u32(static_cast<uint32_t>(sub.size()));
+    w.raw(sub.bytes());
+}
+// Reads a put_section blob and hands `fn(ByteReader&)` a reader over exactly those bytes; true when fn succeeds and
+// consumed them all.
+template <class F>
+bool get_section(ByteReader& r, F&& fn) {
+    const uint32_t n = r.u32();
+    const std::span<const uint8_t> d = r.raw(n);
+    if (!r.ok()) return false;
+    ByteReader sub(d);
+    return fn(sub) && sub.ok() && sub.done();
+}
 
 // Whole-file helpers (binary mode, so text is byte-identical on every platform/CRT).
 bool read_text_file(const std::string& path, std::string& out, std::string* err = nullptr);

@@ -34,7 +34,8 @@ add_library(alamo_ai_tactical STATIC
 add_library(alamo::ai_tactical ALIAS alamo_ai_tactical)
 target_include_directories(alamo_ai_tactical PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # alamo_ai: the S2 perception-equation language (parser, linker, evaluator, token ids), used unchanged.
-target_link_libraries(alamo_ai_tactical PUBLIC alamo_ai alamo_galactic_sim alamo_galactic alamo_data alamo_core alamo_engine_flags)
+target_link_libraries(alamo_ai_tactical PUBLIC alamo_ai alamo_galactic_sim alamo_galactic alamo_data alamo_core alamo_engine_flags
+                                        PRIVATE alamo_ai_save_io)  # tactical_save_io.hpp
 # terrain is configured after ai (engine/CMakeLists.txt order), so test the module list, not TARGET.
 if("terrain" IN_LIST ALAMO_ENGINE_MODULES AND EXISTS ${PROJECT_SOURCE_DIR}/engine/terrain/CMakeLists.txt)
   target_sources(alamo_ai_tactical PRIVATE src/hint_zones_ted.cpp)
@@ -48,7 +49,8 @@ if(TARGET alamo_ai_lua)
   add_library(alamo_ai_tactical_world STATIC src/tactical_ai.cpp)
   add_library(alamo::ai_tactical_world ALIAS alamo_ai_tactical_world)
   target_link_libraries(alamo_ai_tactical_world PUBLIC alamo_ai_tactical alamo_ai_lua alamo_ai alamo_lua alamo_objects
-                                                       alamo_commands alamo_data alamo_engine_flags PRIVATE alamo_lua_vm)
+                                                       alamo_commands alamo_data alamo_engine_flags PRIVATE alamo_lua_vm
+                                                       alamo_ai_save_io)
   add_executable(alamo_ai_tactical_world_tests tests/test_ai_tactical_world.cpp)
   target_link_libraries(alamo_ai_tactical_world_tests PRIVATE alamo_ai_tactical_world Threads::Threads)
   target_compile_definitions(alamo_ai_tactical_world_tests PRIVATE

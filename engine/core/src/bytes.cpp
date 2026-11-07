@@ -76,6 +76,10 @@ std::span<const uint8_t> ByteReader::raw(size_t n) noexcept {
     pos_ += n;
     return s;
 }
+bool ByteReader::count(uint32_t& n, size_t min_bytes) noexcept {
+    n = u32();
+    return ok_ && static_cast<uint64_t>(n) * static_cast<uint64_t>(min_bytes) <= static_cast<uint64_t>(remaining());
+}
 std::string ByteReader::str() {
     const uint32_t n = u32();
     const auto s = raw(n);
