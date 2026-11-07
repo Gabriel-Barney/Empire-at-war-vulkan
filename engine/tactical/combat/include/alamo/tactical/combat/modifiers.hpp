@@ -124,7 +124,8 @@ inline float reduce_list(const ModifierSet* player, const ModifierSet* object, M
 void reduce_all(const ModifierSet* player, const ModifierSet* object, const std::array<ListClamp, kModListCount>& clamps,
                 std::array<float, kModListCount>& out);
 // The player-level reveal-range list variant (0x35b0c0 MostExtreme<float>): per category the value
-// with the largest |value| (first kept on ties), categories summed ascending. No clamp.
+// with the largest |value| (first kept on ties), categories summed ascending. No clamp. Battles reduce the player
+// reveal-range list in FogOfWar (fog_of_war.cpp) with the same reduce_by_category (alamo/tactical/category_reduce.hpp).
 float reduce_most_extreme(std::span<const ModifierEntry> entries, ModList list);
 
 // Stat helpers (section 4.2/4.3).

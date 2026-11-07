@@ -118,8 +118,8 @@ float MovementSystem::loco_turn_rate(const Unit& u) const {
 }
 
 bool MovementSystem::use_secondary_locomotor(ObjectId id, bool secondary) {
-    const int32_t i = find(id);
-    return i >= 0 && swap_locomotor(units_[static_cast<size_t>(i)], secondary);
+    Unit* u = unit_ptr(id);
+    return u && swap_locomotor(*u, secondary);
 }
 
 ThreatFn MovementSystem::owner_threat(const Unit& u) const {
@@ -582,9 +582,9 @@ void MovementSystem::bike_frame(Unit& u, float yaw0, bool walked) const {
 
 // ---------------------------------------------------------------- API
 bool MovementSystem::set_attack_target(ObjectId id, bool has, V2 pos, float z) {
-    const int32_t i = find(id);
-    if (i < 0) return false;
-    SpecialMotion& s = units_[static_cast<size_t>(i)].sm;
+    Unit* u = unit_ptr(id);
+    if (!u) return false;
+    SpecialMotion& s = u->sm;
     s.has_target = has;
     s.target = has ? pos : V2{};
     s.target_z = has ? z : 0.0f;
@@ -592,21 +592,20 @@ bool MovementSystem::set_attack_target(ObjectId id, bool has, V2 pos, float z) {
 }
 
 bool MovementSystem::circle(ObjectId id, V2 centre, float z, float rmin, float rmax) {
-    const int32_t i = find(id);
-    if (i < 0) return false;
-    Unit& u = units_[static_cast<size_t>(i)];
-    if (u.d.locomotor != LocomotorKind::Flying || cfg_.mode != MoveMode::Land) return false;
-    u.sm.state = LocoState::FlyCircling;
-    u.sm.circling = true;
-    u.sm.circle_target = -1;
-    u.sm.circle_c = centre;
-    u.sm.circle_z = z;
-    u.sm.circle_rmin = rmin;
-    u.sm.circle_rmax = std::max(rmin, rmax);
-    u.following = false;
-    u.wps.clear();
-    u.has_goal = false;
-    u.need_path = false;
+    Unit* u = unit_ptr(id);
+    if (!u) return false;
+    if (u->d.locomotor != LocomotorKind::Flying || cfg_.mode != MoveMode::Land) return false;
+    u->sm.state = LocoState::FlyCircling;
+    u->sm.circling = true;
+    u->sm.circle_target = -1;
+    u->sm.circle_c = centre;
+    u->sm.circle_z = z;
+    u->sm.circle_rmin = rmin;
+    u->sm.circle_rmax = std::max(rmin, rmax);
+    u->following = false;
+    u->wps.clear();
+    u->has_goal = false;
+    u->need_path = false;
     return true;
 }
 

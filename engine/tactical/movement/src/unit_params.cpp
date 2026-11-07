@@ -7,7 +7,7 @@
 
 namespace alamo::tactical::movement {
 
-UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti, float model_radius) {
+UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti) {
     UnitDesc d;
     d.max_speed = t.get_float(ti, "Max_Speed");
     d.turn_rate = t.get_float(ti, "Max_Rate_Of_Turn");
@@ -83,8 +83,6 @@ UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti, flo
     const float soft = t.get_float(ti, "Custom_Soft_Footprint_Radius");
     if (soft > 0.0f) {
         d.radius = soft * scale;
-    } else if (model_radius > 0.0f) {
-        d.radius = model_radius;
     } else {
         switch (d.collision_class) {
             case 5: d.radius = 6.0f; break;

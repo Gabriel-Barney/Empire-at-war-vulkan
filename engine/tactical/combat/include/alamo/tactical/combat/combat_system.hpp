@@ -649,20 +649,13 @@ public:
     }
     // Set_System_Online(hp, offline) (0x384d00), after the combat-side offline effects. `destroyed` = the hardpoint
     // was shot down (else disabled by the station-upgrade copy, HARDPOINT_DISABLED.md §3). `last_of_kind` = no
-    // functioning hardpoint of the kind remains (Count_Functioning_Hardpoints 0x397c10). The default forwards to
-    // hardpoint_destroyed (hosts that predate the distinction treat both the same).
-    virtual void hardpoint_offline(ObjectId owner, uint32_t index, HardpointKind kind, bool last_of_kind, bool destroyed,
-                                   uint32_t frame) {
-        (void)destroyed;
-        hardpoint_destroyed(owner, index, kind, last_of_kind, frame);
-    }
+    // functioning hardpoint of the kind remains (Count_Functioning_Hardpoints 0x397c10). Default: nothing.
+    virtual void hardpoint_offline(ObjectId /*owner*/, uint32_t /*index*/, HardpointKind /*kind*/, bool /*last_of_kind*/,
+                                   bool /*destroyed*/, uint32_t /*frame*/) {}
     // Set_System_Online(hp, online) (0x384d00, HARDPOINT_DISABLED.md §9): a hardpoint was repaired to max health
     // (the only online caller), after the combat-side online effects (shield regen block cleared). No live-count
     // check: any one hardpoint of the kind runs it.
     virtual void hardpoint_online(ObjectId /*owner*/, uint32_t /*index*/, HardpointKind /*kind*/, uint32_t /*frame*/) {}
-    // Legacy offline hook (see hardpoint_offline).
-    virtual void hardpoint_destroyed(ObjectId /*owner*/, uint32_t /*index*/, HardpointKind /*kind*/, bool /*last_of_kind*/,
-                                     uint32_t /*frame*/) {}
     // Die step 2 (before the death signal): emitter removal, ability effects.
     virtual void unit_dying(ObjectId /*id*/, uint32_t /*frame*/) {}
     // Ion stun applied (DEFEND is switched off).
@@ -1113,7 +1106,6 @@ public:
     // S8 t06: the host's tree set for detonations it triggers between ticks (DETONATE_REMOTE_BOMB). Set at setup so a
     // detonation before the first tick after a load queries the same trees as an uninterrupted run; tick() also sets it.
     void set_trees(const TreeSet* trees) { last_trees_ = trees; }
-    const RocketTerrain& rocket_terrain() const { return rocket_terrain_; }
     // Spline-rocket state of projectile i (serial order); false when it is not a spline rocket.
     bool rocket(size_t i, RocketView& out) const;
     // Tactical weather (weather.hpp, L1_S4_REMAINING §3.2): accuracy modifier m per Projectile_Category; land shots'
@@ -1153,8 +1145,6 @@ public:
     bool ion_stunned(ObjectId id, uint32_t frame) const;
     uint32_t ion_stun_end(ObjectId id) const;
     float energy(ObjectId id) const;
-    float max_energy(ObjectId id);
-    void set_energy(ObjectId id, float e);
     bool burning(ObjectId id) const;
     // refix t02: INFECTION behaviour (0x54, S9_DEATH_CLONE_SHIELDS.md §1.5). infection_attached: the unit has the
     // behaviour (active or suspended); infection_suspend_count: its suspend counter (+0x3c; 0 = active = kUnitInfected).
@@ -1206,7 +1196,7 @@ public:
     // False for an unknown unit / index.
     bool hardpoint_disabled(ObjectId id, uint32_t hp) const;
     // HP_Set_Disabled (0x387d10): +0x6e := on, then Set_System_Online(hp, online = !on, destroyed = 0) (per-type
-    // offline effects, CombatHooks::hardpoint_destroyed, special-weapon flag). Internal setter; the game's only
+    // offline effects, CombatHooks::hardpoint_offline, special-weapon flag). Internal setter; the game's only
     // caller is the station-upgrade copy (always on = true). No-op for an unknown unit / index.
     void set_hardpoint_disabled(ObjectId id, uint32_t hp, bool on);
     // Station upgrade hardpoint copy (Starbase_Upgrade_Copy_Hardpoints 0x70ec70, HARDPOINT_DISABLED.md §3), by index
@@ -1604,7 +1594,6 @@ private:
     void set_system_online(Unit& u, uint32_t index, bool online, bool destroyed, uint32_t frame);  // 0x384d00
     float min_health_fraction(const Unit& u) const;
     float base_attack_range(const Unit& u) const;
-    float unit_fire_range(const Unit& u) const;
     Vec3 local_to_world(const Unit& u, Vec3 local) const;
     Vec3 hp_world(const Unit& u, const HardpointDesc& hd) const;
     Vec3 velocity(const Unit& u) const;

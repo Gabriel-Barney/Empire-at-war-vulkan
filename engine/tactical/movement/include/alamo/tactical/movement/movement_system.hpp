@@ -9,8 +9,10 @@
 //   tick    - tick(frame, synced rng, pf) once per logic frame, then commit(store) writes position
 //             and the yaw as the store facing direction (cos yaw, sin yaw, 0) of every unit by
 //             ascending object id.
-//   CRC     - register_crc(registry, "movement") adds "movement" (units), "movement.grid" and
-//             "movement.space".
+//   CRC     - the battle host (engine/apps/sim campaign_battles.cpp) hashes hash_units into "battle.movement" and
+//             hash_speed into "battle.abilities" (TacticalBattle::hash_abilities); the grid, the space occupancy and
+//             the fighter cell grids are not in its CRC. register_crc / register_speed_crc register the same hashes
+//             (register_crc adds "<name>", "<name>.grid" and "<name>.space") for the tests and stand-alone runs.
 //
 // Tick order (land):
 //   1. region map rebuild when the grid changed ("regions dirty");
@@ -73,8 +75,8 @@
 //           point, members on their slot), Directed_Combat 0x1E (target resolution / retarget, approach, attack run
 //           pass / break-off, dogfight with cell travel, provocation and the 300-frame lock), Dead_Stop 0x1F
 //           (fighter_dead_stop). Each fighter's occupancy track is its current position (stationary), re-set every
-//           frame [port]. Squadrons (set_fighter_squad), targets (set_fighter_target, or the legacy point target of
-//           set_attack_target), XML values (set_fighter_params) and the avoidance hook (set_fighter_avoid_fn) come from
+//           frame [port]. Squadrons (set_fighter_squad), targets (set_fighter_target; set_attack_target does not drive
+//           fighters), XML values (set_fighter_params) and the avoidance hook (set_fighter_avoid_fn) come from
 //           the host. The fighter cell grids are built from the playable box at the first space tick with a fighter;
 //           their membership is hashed into "<name>.space", the fighter state into "<name>" (both only once fighters
 //           exist). No draws.
@@ -192,10 +194,8 @@ struct UnitView {
     // mode multiplier x the container's speed factor
     float team_speed = 3.0e38f;
     // s78l t02 (MOVEMENT §3.5.1): the Walk arrival turn runs (states 0x0F / 0x10 / 0x11; the path is still on the
-    // locomotor's stack in retail, so the IDLE moving gate counts the unit as moving), and the turn clip it last played
-    // (-1 none / before the first play).
+    // locomotor's stack in retail, so the IDLE moving gate counts the unit as moving).
     bool arrival_turn = false;
-    int32_t turn_clip = -1;
     // s78l t02: the arrival turn ended during the last tick - it popped (0x10 -> 0x11 -> pop, possibly in one frame), or a
     // stop / new order / teleport / locomotor swap dropped a running turn since the tick before (reported on the next
     // tick). False otherwise. The host treats arrival_turn || arrival_turn_ended as "the turn owns the clip".
@@ -397,13 +397,13 @@ public:
     bool set_fighter_squad(const FighterSquadDesc& desc);
     bool remove_fighter_squad(ObjectId id);
     // The formation attack target of a squadron container or of a fighter without one (a member id addresses its
-    // squadron). An unset target (id < 0, !point) clears it. Takes precedence over the legacy point target of
-    // set_attack_target (which still drives a fighter whose squadron / own target is unset: the leader's for a squadron).
+    // squadron). An unset target (id < 0, !point) clears it. The only target source of the fighter locomotor (the point
+    // target of set_attack_target is not read by fighters).
     bool set_fighter_target(ObjectId id, const FighterTarget& t);
     bool set_fighter_params(ObjectId id, const FighterParams& p);  // Max_Thrust, Minimum_Follow_Distance, attack range
     void set_fighter_avoid_fn(FighterAvoidFn fn) { favoid_ = std::move(fn); }
     // s78f t02: the fighter formations' host data (fog, attack targets, range, non-mover positions; FighterFormationHooks).
-    // The fighter formation API itself is below (fighter_formations / fighter_push / fighter_pop).
+    // The fighter formation API itself is below (fighter_formation / fighter_push / fighter_pop).
     // [port] entry to Dead_Stop 0x1F (the retail writer is untraced, "probably the Stop order"): stored orientation =
     // the current one, the path is dropped.
     bool fighter_dead_stop(ObjectId id);
@@ -419,7 +419,6 @@ public:
     // state 3; n >= 2 -> an object top stays (state 3), a 0x04 position top pops only when blocks[n-2] has 0x08, any other
     // position top pops), then 0x4192b0 once per FPS frames; state 3 -> with one block +0x240 := 1 and the hidden-goal
     // rule (C 3), then 0x410a60 on the same timer. Details: fighter_formation.cpp.
-    std::span<const FighterFormation> fighter_formations() const { return fforms_; }
     const FighterFormation* fighter_formation(ObjectId key) const;  // null without one (key = squadron or solo fighter)
     // Push 0x41fd30 of an auto attack block (LocomotorCommon 0x42d0f0 -> 0x41cf70): {kind 3, `object`, hard point,
     // flags 0, push class "auto", +0x5d = 1} on the formation of `key`, after the pre-pop (B 1). False (nothing changed)
@@ -438,7 +437,6 @@ public:
     void set_fighter_formation_hooks(FighterFormationHooks hooks) { fhooks_ = std::move(hooks); }
     std::span<const FighterEvent> fighter_events() const { return fevents_; }  // this tick
     // Save / load access (the grids' membership and the per-unit / per-squadron fighter state are sim state).
-    void build_fighter_grids();  // (re)build from the playable box; membership is cleared
     const FighterCellGrids& fighter_grids() const { return fgrids_; }
     FighterCellGrids& fighter_grids() { return fgrids_; }
     const FighterState* fighter_state(ObjectId id) const;
@@ -456,7 +454,8 @@ public:
     // Engines_Disabled_Speed_Modifier x (1 + modifier list 5); 0 while immobilised). Scales max speed and
     // acceleration / deceleration (land) and the space path playback rate ([port]: a slowed ship lags its
     // reserved occupancy track). Default 1 = unchanged behaviour (bit-identical). Not part of hash_units (so
-    // existing goldens keep their bytes): hosts that set factors register "<name>" via register_speed_crc.
+    // existing goldens keep their bytes): hash_speed holds it (the battle host's "battle.abilities"; register_speed_crc
+    // for the tests and stand-alone runs).
     bool set_speed_factor(ObjectId id, float factor);
     float speed_factor(ObjectId id) const;
     // OI abilities (TACTICAL_GAPS 2.3.2 Berserker): locomotor speed override +0x2a0 with its flag +0x29c. While set
@@ -500,9 +499,9 @@ public:
     std::vector<TurnClipEvent> take_turn_clip_events();
     void register_speed_crc(CrcRegistry& registry, const std::string& name) const;
 
-    // ---- CRC
+    // ---- CRC (see "CRC" in the host contract at the top)
     void hash_units(StateHasher& h) const;
-    void register_crc(CrcRegistry& registry, const std::string& name) const;
+    void register_crc(CrcRegistry& registry, const std::string& name) const;  // tests / stand-alone runs
 
     // ---- N1 stage 2 save / load (contract: alamo/core/save_file.hpp; src/movement_save.cpp) ----
     // The loader builds the battle the same way first: MovementSystem(same MovementConfig), set_grid(grid_from_map) +
@@ -643,7 +642,13 @@ private:
     // override as for Max_Speed) while the active jetpack is in its airborne kind, else lp.max_speed / lp.turn_rate.
     bool jet_alternates(const Unit& u) const;
     float loco_max_speed(const Unit& u) const;
-    float team_base_speed(const Unit& u) const;  // s78k t03: raw Max_Speed x the mode multiplier (0x4049e0 operand)
+    // Object_Max_Speed_Multiplier_Land / _Space by the configured mode.
+    float mode_mult() const {
+        return cfg_.mode == MoveMode::Land ? cfg_.constants.land_speed_multiplier : cfg_.constants.space_speed_multiplier;
+    }
+    // s78k t03 / s78l t01: raw Max_Speed x the mode multiplier (0x4049e0 operand), capped by the container's Max_Speed x
+    // the mode multiplier when set_team gave one.
+    float team_base_speed(const Unit& u) const;
     void team_caps();                            // s78k t03: Unit::team_cap of every land unit (serial, units_ order)
     void land_arrival_turn(Unit& u) const;       // s78k t01: MOVEMENT §3.5.1 state 0x15 test on arrival
     // s78l t02: the arrival turn states 0x0F / 0x10 / 0x11 / 0x15 of one frame (serial), the clip helpers, the reset.
@@ -675,6 +680,8 @@ private:
     // space fighters (movement_system.cpp)
     bool is_fighter(const Unit& u) const { return u.d.locomotor == LocomotorKind::Fighter && cfg_.mode == MoveMode::Space; }
     Unit* unit_ptr(ObjectId id);
+    const Unit* unit_ptr(ObjectId id) const;
+    std::vector<uint32_t> order_indices(const MoveOrder& order) const;  // the order's units_ indices, deduplicated
     FighterSquad* squad_ptr(ObjectId id);
     FighterSquad* fsquad(const Unit& u) { return u.fs.squad >= 0 ? squad_ptr(u.fs.squad) : nullptr; }
     Unit& fleader(Unit& u);
@@ -695,7 +702,6 @@ private:
     bool fpath_open(Unit& u);  // F (the container = the leader, else own) has a current path that is not complete
     void freset_path(Unit& u);
     void fleave(FighterCellGrid& g, Unit& u, bool dogfight);
-    bool fjoin(FighterCellGrid& g, Unit& u, FighterCell c, bool dogfight);
     void tick_fighters(uint32_t frame);
     void fighter_squad_estimates();
     void fighter_step(Unit& u, uint32_t frame);

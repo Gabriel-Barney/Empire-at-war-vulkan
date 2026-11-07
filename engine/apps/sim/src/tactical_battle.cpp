@@ -258,9 +258,6 @@ public:
     bool damage_listener(tc::ObjectId victim, tc::ObjectId source, int32_t projectile_desc, uint32_t frame, SimRng* rng) override {
         return a_->damage_listener(victim, source, projectile_desc, frame, rng);
     }
-    void hardpoint_destroyed(tc::ObjectId owner, uint32_t index, tc::HardpointKind kind, bool last_of_kind, uint32_t frame) override {
-        a_->hardpoint_destroyed(owner, index, kind, last_of_kind, frame);
-    }
     // HARDPOINT_DISABLED.md §9: Set_System_Online offline (destroyed or disabled) / online (repaired to max).
     void hardpoint_offline(tc::ObjectId owner, uint32_t index, tc::HardpointKind kind, bool last_of_kind, bool destroyed,
                            uint32_t frame) override {

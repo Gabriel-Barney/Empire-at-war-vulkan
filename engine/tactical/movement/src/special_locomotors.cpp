@@ -1,10 +1,10 @@
 #include "alamo/tactical/movement/special_locomotors.hpp"
 
 #include <algorithm>
-#include <bit>
 #include <cmath>
 
 #include "alamo/objects/game_object_types.hpp"
+#include "alamo/tactical/movement/fighter.hpp"
 
 namespace alamo::tactical::movement {
 
@@ -130,14 +130,11 @@ float bike_lean(float lean, int32_t turn_anim, float rate, float bank) {
 }
 
 // ---------------------------------------------------------------- FLYING_LOCOMOTOR (FIGHTER_FLYING.md §6)
+// The §1.1 / §1.2 primitives (k, the tiny-angle sin / cos, s(x), wrap, angles) are the fighter ones (fighter.hpp).
 namespace {
-constexpr float kFlyDegToRad = std::bit_cast<float>(0x3C8EFA35u);  // k (§1.1)
-constexpr float kFlyRadToDeg = std::bit_cast<float>(0x42652EE0u);  // 57.295776f (§1.2)
-// §1.1 tiny-angle shortcut: (bits(x) & 0x7F800000) < 0x1D000001 -> sin x = x, cos x = 1.
-bool fly_tiny(float x) { return (std::bit_cast<uint32_t>(x) & 0x7F800000u) < 0x1D000001u; }
-float fly_sin(float x) { return fly_tiny(x) ? x : dmath::sin(x); }
-float fly_cos(float x) { return fly_tiny(x) ? 1.0f : dmath::cos(x); }
-float fly_sign(float x) { return x >= 0.0f ? 1.0f : -1.0f; }  // s(x) of §3.2
+constexpr float kFlyDegToRad = kFighterDegToRad;  // k (§1.1)
+float fly_sin(float x) { return fighter_sin(x); }
+float fly_cos(float x) { return fighter_cos(x); }
 // 0x139800: len = sqrtf((x x + y y) + z z) [M sum order], inv = 1 / len, multiply when len > 0.
 FlyVec3 fly_normalise(FlyVec3 v) {
     const float len = std::sqrt((v.x * v.x + v.y * v.y) + v.z * v.z);
@@ -169,30 +166,15 @@ float fly_budget_step(float v, float d, float& budget) {
 }
 }  // namespace
 
-float fly_wrap180(float a) {
-    if (!(std::fabs(a) < 1.0e6f)) return wrap_deg(a);  // [port] guard: the retail loops never end on inf / huge values
-    while (a > 180.0f) a -= 360.0f;
-    while (a <= -180.0f) a += 360.0f;
-    return a;
-}
+float fly_wrap180(float a) { return fighter_wrap180(a); }
 
-float fly_wrap360(float a) {
-    if (!(std::fabs(a) < 1.0e6f)) return norm_deg(a);
-    while (a >= 360.0f) a -= 360.0f;
-    while (a < 0.0f) a += 360.0f;
-    return a;
-}
+float fly_wrap360(float a) { return fighter_wrap360(a); }
 
 FlyOrient fly_angles(FlyVec3 a, FlyVec3 b) {  // 0x20acd0
+    const FAngles r = fighter_vector_angles(F3{a.x, a.y, a.z}, F3{b.x, b.y, b.z});
     FlyOrient o;
-    if (!(a.x == b.x && a.y == b.y)) {
-        o.yaw = dmath::atan2(b.y - a.y, b.x - a.x) * kFlyRadToDeg;
-        if (o.yaw < 0.0f) o.yaw += 360.0f;
-    }
-    if (a.z != b.z || a.x != b.x) {  // y is not tested (quirk)
-        const float dy = b.y - a.y, dx = b.x - a.x;
-        o.pitch = -(dmath::atan2(b.z - a.z, std::sqrt(dy * dy + dx * dx)) * kFlyRadToDeg);
-    }
+    o.pitch = r.pitch;
+    o.yaw = r.yaw;
     return o;
 }
 
@@ -295,7 +277,7 @@ FlyOrient flying_attitude_step(FlyOrient cur, FlyOrient want, float& by, float& 
     float Y = fly_wrap180(cur.yaw);
     float R = fly_wrap180(cur.roll);
     // Yaw: with the gate only once the roll is on the turning side (a left turn needs R < 0).
-    if (!gate || fly_sign(R) == -fly_sign(dy)) Y = fly_budget_step(Y, dy, by);
+    if (!gate || fighter_sign(R) == -fighter_sign(dy)) Y = fly_budget_step(Y, dy, by);
     // Roll (always): target -5 x dy (the yaw error of this frame, before the yaw step [M]).
     const float e = (-dy * 5.0f) - R;
     if (std::fabs(e) >= rr) R = e > 0.0f ? R + rr : R - rr;

@@ -10,7 +10,6 @@
 namespace alamo::tactical::movement {
 
 namespace {
-float sgn1(float x) { return x >= 0.0f ? 1.0f : -1.0f; }  // §3.2 s(x)
 bool tiny(float x) { return (std::bit_cast<uint32_t>(x) & 0x7F800000u) < 0x1D000001u; }
 // float -> int truncation toward zero; [port] guard against out-of-range / NaN (UB in C++).
 int32_t trunc_i(float f) {
@@ -91,7 +90,7 @@ void fighter_yaw_bank_step(FAttitude& o, const FighterKin& k, float dy, float& b
     } else {
         r += e;
     }
-    if (r != 0.0f && sgn1(-bank) != sgn1(r)) {
+    if (r != 0.0f && fighter_sign(-bank) != fighter_sign(r)) {
         budget = 0.0f;  // still banked the wrong way: no yaw
     } else if (budget < std::fabs(dy)) {
         if (dy <= 0.0f) y -= budget;
@@ -150,7 +149,7 @@ void fighter_steer_to(FighterBody& b, const FighterKin& k, F3 aim, float v, floa
     }
     // §3.1 step 5: roll anticipation.
     const float r = fighter_wrap180(b.o.roll);
-    if (180.0f < std::fabs(k.turn * (r / k.roll) + ry)) ry -= sgn1(ry) * 360.0f;
+    if (180.0f < std::fabs(k.turn * (r / k.roll) + ry)) ry -= fighter_sign(ry) * 360.0f;
     fighter_yaw_bank_step(b.o, k, ry, tb);
     fighter_pitch_step(b.o, rp, lb);
     fighter_speed_step(b, v, thb);

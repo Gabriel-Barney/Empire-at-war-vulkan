@@ -201,7 +201,8 @@ struct FlyWorld {
 };
 
 // §1.1 / §1.2 helpers: wrap180 (-180, 180], wrap360 [0, 360) (the retail subtract / add loops); angles(A -> B) =
-// (roll 0, pitch, yaw) with yaw in [0, 360) and the "pitch only when z or x differ" quirk.
+// (roll 0, pitch, yaw) with yaw in [0, 360) and the "pitch only when z or x differ" quirk. They forward to
+// fighter_wrap180 / fighter_wrap360 / fighter_vector_angles (fighter.hpp), so +-inf / NaN come back unchanged.
 float fly_wrap180(float a);
 float fly_wrap360(float a);
 FlyOrient fly_angles(FlyVec3 from, FlyVec3 to);
