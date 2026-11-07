@@ -302,17 +302,15 @@ std::u32string App::txt(std::string_view id, std::u32string_view fallback) const
     return std::u32string(fallback);
 }
 
-// [port] the faction's Text_ID (FACTIONS.XML: TEXT_FACTION_REBELS / _EMPIRE / _UNDERWORLD ...), else its name.
+// [port] the faction's Text_ID (Factions.xml <Text_ID>; modc t20: read, not built from the name), else its name.
 std::u32string App::faction_label(int32_t player) const {
     const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr;
     if (!g || player < 0 || static_cast<size_t>(player) >= g->players().size()) return {};
     const uint32_t f = g->players()[static_cast<size_t>(player)].faction;
     if (f >= g->rules().factions.size()) return {};
-    const std::string& name = g->rules().factions[f].name;
-    std::string id = "TEXT_FACTION_";
-    for (const char c : name) id.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
-    if (iequal(name, "Rebel")) id = "TEXT_FACTION_REBELS";
-    return txt(id, ui::utf8_to_utf32(name));
+    const galactic::FactionRules& fr = g->rules().factions[f];
+    if (fr.text_id.empty()) return ui::utf8_to_utf32(fr.name);
+    return txt(fr.text_id, ui::utf8_to_utf32(fr.name));
 }
 
 void App::screen_line(std::u32string text, ui::Rgba8 color) {

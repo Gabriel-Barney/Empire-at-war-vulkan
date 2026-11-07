@@ -129,6 +129,7 @@ GalacticViewOptions galactic_view_options(const galactic::GalacticSim& sim, std:
             break;
         }
     const galactic::GalacticRules& rules = sim.rules();
+    if (evil_side_name.empty()) evil_side_name = rules.constants.evil_side_name;
     for (const galactic::PlayerState& p : sim.players()) {
         const bool known = p.faction < rules.factions.size();
         o.neutral.push_back((known && rules.factions[p.faction].is_neutral) ? 1 : 0);

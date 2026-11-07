@@ -46,8 +46,8 @@ bool App::attract_step(const ui::InputFrame& raw) {
     return false;
 }
 
-// The demo session (0x22f10): a space skirmish with no human - player 0 Rebel (BasicRebel), the other side Underworld
-// (AI_Player_Underworld) - on the controller's map. EaW .rec entries (Gabriel 2026-10-28): the recording is not replayed;
+// The demo session (0x22f10): a space skirmish with no human - the players of faction indices 0 and 6 (FoC: Rebel /
+// BasicRebel and Underworld / AI_Player_Underworld; GameSession picks them) - on the controller's map. EaW .rec entries (Gabriel 2026-10-28): the recording is not replayed;
 // its header names the map ([port] scan, attract_rec_map) and the same live demo runs there; no map path -> the entry is
 // skipped with a warning. [port] fallback: the first space skirmish map when the entry does not load as a space map.
 bool App::start_attract_map() {
@@ -56,8 +56,8 @@ bool App::start_attract_map() {
     s.attract = true;
     s.seed = opt_.seed + static_cast<uint32_t>(attract_.starts());
     s.battle_max_frames = static_cast<uint32_t>(std::max(attract_.cycle_delay(), 60.0) * 30.0) + 300u;  // the cycle reloads first
-    s.skirmish.human_faction = "Rebel";
-    s.skirmish.ai_faction = "Underworld";
+    // modc t20: no slot factions - the demo's sides are faction indices (GameSession, 0x22f10); empty slots take the data's
+    // default_skirmish_faction for the scaffolding galaxy.
     std::vector<std::string> maps;
     std::string entry = attract_.map();
     if (is_attract_recording(entry)) {
@@ -493,7 +493,7 @@ void App::session_started(const std::vector<std::string>& diag) {
     hover_ship_ = 0;
     hud_hardpoints_.clear();
     hud_hp_refs_.clear();
-    ui_.set_faction(local_faction());
+    ui_.set_faction(local_faction(), data_.rules.constants.good_side_name, data_.rules.constants.evil_side_name);
     ui_.gui.close_all();
     ui_.gui.set_backdrop({});  // the front end's backdrop (FrontEnd::show_main_menu) is not drawn in game
     ui_.front.set_in_game(true);

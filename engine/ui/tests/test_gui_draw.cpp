@@ -655,7 +655,7 @@ void test_real(Gpu& g, const std::string& src_dir) {
         is.init(gui);
         size_t found = 0, total = 0;
         ui::TechTreeInfo tt;
-        tt.faction = ui::TechFaction::Empire;
+        tt.dialog = "IDD_TECH_TREE_EMPIRE";
         tt.item = [&](std::string_view type, ui::TechTreeItem& out) {
             ++total;
             out.icon = icon_of(type);

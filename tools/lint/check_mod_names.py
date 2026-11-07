@@ -3,8 +3,8 @@
     python tools/lint/check_mod_names.py [--engine DIR] [--names FILE] [--quiet]
     python tools/lint/check_mod_names.py --selftest
 
-Scans the sim code of engine/ (SCOPE below: every module except render, audio, video, UI and the presentation host
-engine/apps/game/app; tests, testdata and tools folders are never scanned) for string literals that contain a name of
+Scans the sim code of engine/ plus the game's presentation host and UI (SCOPE below: every module except render, audio
+and video; engine/apps/game/app and engine/ui since modc t20; tests, testdata and tools folders are never scanned) for string literals that contain a name of
 tools/lint/mod_names.txt as a whole token, or that are a Steam workshop item id (9+ digits). Comments are not code and
 are never flagged. Exit 1 on any violation or malformed marker; 0 otherwise.
 
@@ -19,7 +19,8 @@ import sys
 from pathlib import Path
 
 SCOPE = ['core', 'jobs', 'data', 'galactic', 'objects', 'anim', 'commands', 'tactical', 'ai', 'lua', 'vfs',
-         'apps/sim', 'apps/headless', 'apps/game/src', 'apps/game/rules', 'apps/game/include']
+         'apps/sim', 'apps/headless', 'apps/game/src', 'apps/game/rules', 'apps/game/include',
+         'apps/game/app', 'ui']  # modc t20: the presentation host and the UI
 SKIP_DIRS = {'tests', 'testdata', 'tools', 'bench', 'benches'}
 EXTS = {'.cpp', '.hpp', '.h', '.inl', '.cc'}
 WORKSHOP_ID = re.compile(r'^[1-9]\d{8,10}$')

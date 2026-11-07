@@ -40,7 +40,7 @@ is the first and hardest test case, but it is a test case, not a target the engi
 
 Allowed places for mod and faction names: tests and their fixtures (`engine/*/tests/`, `tests/`), docs, `tools/probe_mod/`,
 `tools/testbuild/` launchers, and comments that cite where a behaviour was observed. The `modc` t04 lint enforces rule 1 on
-`engine/` sim code with an allow-list for these.
+`engine/` sim code, the game host `engine/apps/game/app` and `engine/ui` (modc t20) with an allow-list for these.
 
 ## 2. What a mod is
 

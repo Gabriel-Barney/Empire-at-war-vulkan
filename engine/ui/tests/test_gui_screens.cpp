@@ -150,9 +150,9 @@ void test_real_data() {
             o.icon = "i_x.tga";
             return true;
         };
-        for (TechFaction f : {TechFaction::Rebel, TechFaction::Empire, TechFaction::BlackMarket})
+        for (const char* f : {"IDD_TECH_TREE_REBEL", "IDD_TECH_TREE_EMPIRE", "IDD_TECH_TREE_BLACKMARKET"})
             for (bool space : {false, true}) {
-                tt.faction = f;
+                tt.dialog = f;
                 tt.space = space;
                 is.set_tech_tree(tt);
                 CHECK(is.show_info(InfoPage::TechTree) && is.info_dialog() == tech_tree_dialog(f, space));

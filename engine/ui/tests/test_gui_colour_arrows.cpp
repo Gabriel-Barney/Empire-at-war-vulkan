@@ -338,7 +338,7 @@ void test_tech_tree_arrows() {
     InfoScreens is;
     is.init(f.gui);
     TechTreeInfo tt;
-    tt.faction = TechFaction::Empire;
+    tt.dialog = "IDD_TECH_TREE_EMPIRE";
     tt.item = [](std::string_view type, TechTreeItem& out) {
         out.icon = "i_tech.tga";
         out.state = type == "Locked_Unit" ? TechState::Locked : type == "Researched_Unit" ? TechState::Researched : TechState::Available;

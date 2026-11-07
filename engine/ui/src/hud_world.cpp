@@ -195,7 +195,6 @@ void WorldHud::build(const WorldHudContext& ctx, std::span<const HudUnit> units,
             sb.land = ctx.land;
             if (!t.selection_blob_material.empty()) sb.material = t.selection_blob_material;
             else if (ctx.selection_material) sb.material = ctx.selection_material(u.owner, ctx.land, t.is_hero);
-            else sb.material = ctx.land ? "Selection_Empire_Land" : "Selection_Empire_Space";
             blobs->push_back(std::move(sb));
             ++stats_.blobs;
         }

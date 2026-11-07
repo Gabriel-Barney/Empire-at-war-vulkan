@@ -113,9 +113,10 @@ bool GameUi::init(GpuCore& gpu, const GameData& data, ui::MenuProviders provider
     return true;
 }
 
-void GameUi::set_faction(std::string_view faction) {
-    const int32_t shell_alt = iequal(faction, "Rebel") ? 1 : iequal(faction, "Underworld") ? 2 : 0;
-    faction_alt_ = iequal(faction, "Rebel") ? 0 : 1;
+void GameUi::set_faction(std::string_view faction, std::string_view good_side, std::string_view evil_side) {
+    const bool good = !good_side.empty() && iequal(faction, good_side), evil = !evil_side.empty() && iequal(faction, evil_side);
+    const int32_t shell_alt = good ? 1 : evil ? 0 : 2;
+    faction_alt_ = good ? 0 : 1;
     for (const ui::ShellSet::Shell& s : galactic_shells.shells()) galactic_shells.set_alt(s.component, shell_alt);
     for (const ui::ShellSet::Shell& s : tactical_shells.shells()) tactical_shells.set_alt(s.component, shell_alt);
 }

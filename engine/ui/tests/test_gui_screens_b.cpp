@@ -695,7 +695,7 @@ void test_info_screens() {
     dc.first_cycle = 3;
     is.set_data_chart(dc);
     TechTreeInfo tt;
-    tt.faction = TechFaction::Empire;
+    tt.dialog = "IDD_TECH_TREE_EMPIRE";
     tt.item = [](std::string_view type, TechTreeItem& out) {
         if (type == "Dark_Trooper_PhaseI") return false;
         out.icon = "i_tech.tga";
@@ -734,7 +734,8 @@ void test_info_screens() {
     is.update(env.click(dlg::kSummaryProduction, "IDC_BUTTON_EXIT"), acts);
     CHECK(acts.size() == 2 && acts[0].kind == ScreenAction::Kind::SummarySort && acts[0].tag == "IDC_BUTTON_POP_CAP" &&
           acts[1].kind == ScreenAction::Kind::InfoClosed && is.info_dialog().empty() && env.gui.open_count() == 0);
-    CHECK(tech_tree_dialog(TechFaction::BlackMarket, true) == "IDD_TECH_TREE_BLACKMARKET_SPACE");
+    CHECK(tech_tree_dialog("IDD_TECH_TREE_BLACKMARKET", true) == "IDD_TECH_TREE_BLACKMARKET_SPACE");
+    CHECK(tech_tree_dialog("", true).empty());  // modc t20: a faction without Tech_Tree_Dialog_Name has no tech tree
 }
 
 }  // namespace test_gui_screens_t

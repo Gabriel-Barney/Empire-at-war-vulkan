@@ -634,6 +634,7 @@ void FrontEnd::fill_skirmish_maps(GuiDialog& d) {
         const SkirmishMapInfo& m = maps_[rows[r].index];
         map_view_.push_back(rows[r].index);
         items.push_back(std::move(rows[r].text));
+        // [name-ok: kept port rule (base-game map name; moves the game smoke goldens), replaced by modc t19]
         if (kuat < 0 && space_type_ && iequal(m.map, "_MP_SPACE_KUAT")) kuat = static_cast<int32_t>(r);
         if (last < 0 && !last_map.empty() && iequal(m.map, last_map)) last = static_cast<int32_t>(r);
     }
@@ -730,7 +731,9 @@ void FrontEnd::fill_skirmish(GuiDialog& d) {
     d.show("IDC_SELECT_OFFICIAL_MAPS", true);
     d.show("IDC_SELECT_CUSTOM_MAPS", true);
     std::vector<std::u32string> factions;
-    for (const std::string& f : p_.skirmish_factions) factions.push_back(faction_label(f));
+    for (const SkirmishFaction& f : p_.skirmish_factions)
+        factions.push_back(!f.text_id.empty() && gui_->text_db() && gui_->text_db()->find(f.text_id) ? gui_->caption_text(f.text_id)
+                                                                                                     : faction_label(f.name));
     char id[32];
     for (int32_t p = 0; p < 8; ++p) {
         const bool used = p < 2;  // [port] local player + one AI
@@ -1227,7 +1230,7 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
                     std::snprintf(id, sizeof id, "IDC_PLAYER_FACTION_%d", p);
                     const GuiControl* f = d->get(id);
                     const size_t fi = f && f->selected >= 0 ? static_cast<size_t>(f->selected) : 0;
-                    a.factions.push_back(fi < p_.skirmish_factions.size() ? p_.skirmish_factions[fi] : std::string());
+                    a.factions.push_back(fi < p_.skirmish_factions.size() ? p_.skirmish_factions[fi].name : std::string());
                 }
                 out.push_back(std::move(a));
             }

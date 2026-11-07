@@ -135,7 +135,6 @@ private:
     std::vector<render::FactionColor> colors_;
     render::RouteLineStyle style_;
     render::CorruptionPathSettings corruption_path_;  // FIXPASS_GALACTIC §3.2 (GameConstants)
-    std::string evil_side_name_ = "EMPIRE";           // GameConstants Evil_Side_Name (route sides, §3.1)
     ui::GalacticCameraController camera_;
     GpuCore* gpu_ = nullptr;
     int32_t local_ = -1;  // fog viewpoint (attach)

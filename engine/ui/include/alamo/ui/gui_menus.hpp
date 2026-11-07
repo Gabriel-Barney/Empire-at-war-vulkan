@@ -281,6 +281,10 @@ struct MenuAction {
 };
 const char* menu_action_name(MenuAction::Kind k);
 
+struct SkirmishFaction {
+    std::string name;     // Factions.xml Name (what StartSkirmish reports)
+    std::string text_id;  // Text_ID ("" = the TEXT_FACTION_<NAME> guess, then the name)
+};
 struct MenuProviders {
     std::function<std::vector<SaveGameInfo>()> saves;
     // N1 / t09: save_blocker = "" when the game can be saved now, else why not (asked when the Save dialog opens);
@@ -300,7 +304,10 @@ struct MenuProviders {
     std::function<CameraSettings()> camera_settings;        // [port: Gabriel] null: defaults
     HotkeyTable* hotkeys = nullptr;  // edited by the keyboard dialogs (Accept)
     Bindings* bindings = nullptr;    // synced with apply_to_bindings on Accept
-    std::vector<std::string> skirmish_factions{"Rebel", "Empire", "Underworld"};
+    // modc t20: the skirmish staging faction combos. The host fills it from the data (alamo_game: the Is_Playable,
+    // non-neutral factions in FactionFiles.xml order, each with its Text_ID); empty = the combos stay empty and the
+    // StartSkirmish action names no faction (the host's default_skirmish_faction).
+    std::vector<SkirmishFaction> skirmish_factions;
     bool demo = false;               // show IDC_MAIN_MENU_PLAY_DEMO instead of Single Player
 };
 

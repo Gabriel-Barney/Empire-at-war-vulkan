@@ -255,6 +255,7 @@ EconomyConstants load_economy_constants(const data::GameDatabase& db) {
     float_list("Particle_Scale_Per_Corruption_Level", c.particle_scale_per_level);
     float_list("Particle_Energy_Per_Corruption_Level", c.particle_energy_per_level);
     if (auto t = g.get("Good_Side_Name")) c.good_side_name = std::string(trim_view(*t));  // REMAINING_GAPS 1.5
+    if (auto t = g.get("Evil_Side_Name")) c.evil_side_name = std::string(trim_view(*t));  // modc t20 (presentation)
     return c;
 }
 
@@ -274,6 +275,11 @@ std::vector<FactionRules> load_factions(const FileProvider& provider, std::vecto
             r.is_playable = objects::parse_type_bool(n.child_text("Is_Playable"));
             r.benefits_from_corruption = objects::parse_type_bool(n.child_text("Benefits_From_Corruption"));
             r.basic_ai = std::string(trim_view(n.child_text("Basic_AI")));
+            r.text_id = std::string(trim_view(n.child_text("Text_ID")));
+            r.tech_tree_dialog = std::string(trim_view(n.child_text("Tech_Tree_Dialog_Name")));
+            r.tech_level_icon = std::string(trim_view(n.child_text("Tech_Level_Icon_Name")));
+            r.land_selection_blob = std::string(trim_view(n.child_text("Land_Mode_Selection_Blob_Material_Name")));
+            r.space_selection_blob = std::string(trim_view(n.child_text("Space_Mode_Selection_Blob_Material_Name")));
             r.hyperspace_speed_factor = atof_or(n.child_text("Hyperspace_Speed_Factor"), r.hyperspace_speed_factor);
             r.maintenance_cost = atof_or(n.child_text("Maintenance_Cost"), r.maintenance_cost);
             r.force_alignment = parse_force_side(n.child_text("Force_Alignment"));

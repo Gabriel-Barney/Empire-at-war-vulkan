@@ -65,24 +65,25 @@ data / limit, **P** kept: port rule, follow-up task.
 | 28 | `apps/headless/main.cpp` record stream, `commands` `SchedulerConfig::max_players = 8` | scheduler defaults | **T** defaults of the synthetic hosts; real sessions set it from the setup (sim_host.cpp) |
 | 29 | `apps/game/src/game_session.cpp` campaign AI | FoC campaigns' `AI_Player_Control` pairs ignored (base game) | **P** (part of #7) retail reads the pairs; reading them for base FoC moves game_smoke_campaign. **modc t17** |
 
-### Presentation (engine/apps/game/app, ui, render: MODS.md §1 rule 1 applies, the t04 lint does not scan them)
+### Presentation (engine/apps/game/app, ui, render: MODS.md §1 rule 1 applies; since modc t20 the lint scans apps/game/app and ui)
 
 | # | Where | What it does | Status |
 |---|---|---|---|
-| 30 | `apps/game/app/app_hud.cpp` `galactic_faction_icon` | emblem index by name substring (rebel 0, empire 1, pirate 2, underworld 3, hutt 4) | **R** in part: 0x3d18f0 maps names to the emblem list (GALAXY_MAP_PRESENTATION.md, `Icon_Alternate`); the substring match is the port's. **modc t20** |
-| 31 | `apps/game/app/app_input.cpp` StartSkirmish | default slot factions Rebel / Empire, AI swap by name | **P** **modc t20** (use `default_skirmish_faction`) |
-| 32 | `apps/game/app/app_screens.cpp` | `TEXT_FACTION_REBELS` special case for Rebel | **P** read the faction's `Text_ID`. **modc t20** |
-| 33 | `apps/game/app/app_session.cpp` attract | `human_faction = "Rebel"`, `ai_faction = "Underworld"` | **P** no effect since #10 (the sides are indices); drop. **modc t20** |
-| 34 | `apps/game/app/game_info.cpp` | tech tree / black market faction by name | **P** **modc t20** |
-| 35 | `apps/game/app/game_ui.cpp` `set_faction` | GUI shell alternate by faction name | **P** **modc t20** |
-| 36 | `ui/include/alamo/ui/gui_menus.hpp`, `ui/src/gui_menus.cpp` | skirmish faction list `{"Rebel", "Empire", "Underworld"}`; `_MP_SPACE_KUAT` default map row | **P** list the data's `Is_Playable` factions; map with #15. **modc t20**, **t19** |
-| 37 | `apps/game/app/game_render.hpp`, `render/galactic` `galactic_view_options` | `Evil_Side_Name` default "EMPIRE" (GameConstants overrides) | **P** **modc t20** |
+| 30 | `apps/game/app/app_hud.cpp` `galactic_faction_icon` | emblem index by name substring (rebel 0, empire 1, pirate 2, underworld 3, hutt 4) | **R** t20: exact names as 0x3d18f0 (GALAXY_MAP_PRESENTATION §1.4: Rebel 0, Empire 1, Pirate(s) 2, Underworld 3, any other faction 4), marked; the port's substring match is gone |
+| 31 | `apps/game/app/app_input.cpp` StartSkirmish | default slot factions Rebel / Empire, AI swap by name | **F** t20: `default_skirmish_faction` for an unnamed or clashing slot |
+| 32 | `apps/game/app/app_screens.cpp` | `TEXT_FACTION_REBELS` special case for Rebel | **F** t20: `FactionRules::text_id` (Factions.xml `Text_ID`), else the name |
+| 33 | `apps/game/app/app_session.cpp` attract | `human_faction = "Rebel"`, `ai_faction = "Underworld"` | **F** t20: dropped (the demo's sides are faction indices) |
+| 34 | `apps/game/app/game_info.cpp` | tech tree / black market faction by name | **F** t20: `Tech_Tree_Dialog_Name` picks the dialog (`TechTreeInfo::dialog`; none = no tech tree page), `Tech_Level_Icon_Name` picks the `market_tech_level` alternate by prefix |
+| 35 | `apps/game/app/game_ui.cpp` `set_faction` | GUI shell alternate by faction name | **F** t20 [port]: by the GameConstants sides (Good_Side_Name: shell 1 / pad 0, Evil_Side_Name: shell 0 / pad 1, other: shell 2 / pad 1; FoC unchanged). Also `hud_world.cpp`'s `Selection_Empire_*` fallback: the owner faction's `Land_ / Space_Mode_Selection_Blob_Material_Name` |
+| 36 | `ui/include/alamo/ui/gui_menus.hpp`, `ui/src/gui_menus.cpp` | skirmish faction list `{"Rebel", "Empire", "Underworld"}`; `_MP_SPACE_KUAT` default map row | **F** t20: the host lists the data's `Is_Playable`, non-neutral factions with their `Text_ID` (`MenuProviders::skirmish_factions`). The map row stays (marked): **modc t19** |
+| 37 | `apps/game/app/game_render.hpp`, `render/galactic` `galactic_view_options` | `Evil_Side_Name` default "EMPIRE" (GameConstants overrides) | **F** t20: `EconomyConstants::evil_side_name` (galactic rules) (empty default); `galactic_view_options` reads it when no name is passed |
 | 38 | `render/galactic/src/galactic_session.cpp`, `render/src/lighting.cpp` | synthetic demo galaxy factions and colours; built-in Kuat environment when no map | **T** renderer demo / no-data fallbacks (real data reads `Factions.xml` colours, R2 t01) |
 
 ## The lint (t04)
 
 `tools/lint/check_mod_names.py` (standard library only) scans the sim code of `engine/` (the modules of `check_sim_math.cmake`
-plus `vfs`, `apps/headless`, `apps/game/src`, `apps/game/rules`, `apps/game/include`; never `tests/`, `testdata/`, `tools/`)
+plus `vfs`, `apps/headless`, `apps/game/src`, `apps/game/rules`, `apps/game/include`, and since modc t20 the presentation host
+`apps/game/app` and `ui`; never `tests/`, `testdata/`, `tools/`)
 for string literals that contain a name of `tools/lint/mod_names.txt` as a whole token (letters and digits around the match
 end it, `_` does not: `"Rebel_Infantry_Squad"` and `"AI_Player_Underworld"` match, `"BasicRebel"` does not), a `=` name
 (`Neutral`, `Hostile`) as the whole literal, or a Steam workshop id (9-11 digits). Comments are not code. Exit 1 on a hit.

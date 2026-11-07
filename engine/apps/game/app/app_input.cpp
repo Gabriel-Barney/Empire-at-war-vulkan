@@ -799,10 +799,13 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 SessionSpec s;
                 s.kind = SessionKind::Skirmish;
                 s.skirmish_map = a.map;
-                s.skirmish.human_faction = a.factions.size() > 0 && !a.factions[0].empty() ? a.factions[0] : "Rebel";
-                s.skirmish.ai_faction = a.factions.size() > 1 && !a.factions[1].empty() ? a.factions[1] : "Empire";
-                if (iequal(s.skirmish.ai_faction, s.skirmish.human_faction))  // [port] the AI needs a hostile faction
-                    s.skirmish.ai_faction = iequal(s.skirmish.human_faction, "Empire") ? "Rebel" : "Empire";
+                // modc t20: an unnamed slot takes the data's default (game::default_skirmish_faction: Is_Playable factions in
+                // FactionFiles.xml order), not a base-game name.
+                s.skirmish.human_faction = a.factions.size() > 0 ? a.factions[0] : std::string{};
+                s.skirmish.ai_faction = a.factions.size() > 1 ? a.factions[1] : std::string{};
+                if (s.skirmish.human_faction.empty()) s.skirmish.human_faction = game::default_skirmish_faction(data_.rules, false);
+                if (s.skirmish.ai_faction.empty() || iequal(s.skirmish.ai_faction, s.skirmish.human_faction))  // [port] the AI needs a hostile faction
+                    s.skirmish.ai_faction = game::default_skirmish_faction(data_.rules, true, s.skirmish.human_faction);
                 for (const int32_t c : a.colors) s.skirmish.colors.push_back(static_cast<uint8_t>(std::clamp(c, 0, 8)));
                 s.seed = opt_.seed;
                 s.battle_max_frames = opt_.battle_max_frames;

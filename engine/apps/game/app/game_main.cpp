@@ -37,6 +37,7 @@ bool App::init() {
                 data_.db.campaigns().size(), ms_since(t0));
     js_ = std::make_unique<jobs::JobSystem>(jobs::JobSystemConfig{opt_.workers});
     if (bench_active()) bench_apply_window();  // BM2a: the preset's window size, present mode and frame cap
+    // [name-ok: the window title (the game's name), not a faction]
     if (!win_.create({"Alamo - Empire at War", opt_.width, opt_.height, true, !opt_.hidden})) return false;
     const bool strict = render::setup_validation_env(ALAMO_RENDER_SOURCE_DIR);
     rhi::ContextDesc cd;
@@ -212,6 +213,9 @@ bool App::init() {
     };
     mp.save_exists = [this](const std::string& name) { return game::save_exists(saves_dir_, name); };
     mp.skirmish_maps = [map_rows] { return map_rows; };
+    // modc t20: the staging faction list from the data (Is_Playable, non-neutral, FactionFiles.xml order), not built-in names.
+    for (const galactic::FactionRules& f : data_.rules.factions)
+        if (f.is_playable && !f.is_neutral) mp.skirmish_factions.push_back({f.name, f.text_id});
     if (!ui_.init(gpu_, data_, std::move(mp), &err)) {
         std::fprintf(stderr, "UI: %s\n", err.c_str());
         return false;

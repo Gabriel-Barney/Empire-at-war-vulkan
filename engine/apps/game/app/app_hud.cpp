@@ -4,20 +4,22 @@
 namespace alamo_game_app {
 
 // ------------------------------------------------------------------------------------------------ HUD frames
-// g_planet_fleet faction symbol index of `player` (0 rebel, 1 empire, 2 pirate, 3 underworld, 4 hutt) by faction name
-// [port]; -1 unknown.
+// g_planet_fleet faction-emblem index of `player`: GALAXY_MAP_PRESENTATION §1.4, 0x3d18f0 maps the faction NAME to the
+// Icon_Alternate list - Rebel 0, Empire 1, Pirate 2, Underworld 3, any other faction 4 (a retail hard-code, so a mod's
+// factions get emblem 4 as in the original; modc t20: exact names, any case, instead of the port's old substring match;
+// [M] which of the strings "Pirate" / "Pirates" 0x3d18f0 compares - both are in the string table). -1 = no player.
 int32_t App::galactic_faction_icon(const galactic::GalacticSim& g, int32_t player) const {
     if (player < 0 || static_cast<size_t>(player) >= g.players().size()) return -1;
     const uint32_t fi = g.players()[static_cast<size_t>(player)].faction;
     if (fi >= g.rules().factions.size()) return -1;
-    std::string n = g.rules().factions[fi].name;
-    for (char& c : n) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (n.find("rebel") != std::string::npos) return 0;
-    if (n.find("empire") != std::string::npos) return 1;
-    if (n.find("pirate") != std::string::npos) return 2;
-    if (n.find("underworld") != std::string::npos) return 3;
-    if (n.find("hutt") != std::string::npos) return 4;
-    return -1;
+    const std::string_view n = g.rules().factions[fi].name;
+    // [name-ok-begin: retail hard-code, GALAXY_MAP_PRESENTATION.md §1.4 0x3d18f0 (emblem index by faction name)]
+    if (iequal(n, "Rebel")) return 0;
+    if (iequal(n, "Empire")) return 1;
+    if (iequal(n, "Pirate") || iequal(n, "Pirates")) return 2;
+    if (iequal(n, "Underworld")) return 3;
+    // [name-ok-end]
+    return 4;
 }
 
 // R2 t01: the owner faction's colour from the Factions.xml table (render::load_faction_colors), not a guess: text = true
@@ -597,6 +599,15 @@ void App::build_tactical_hud() {
     hf.world.view = ui::make_view(bview_.camera_params(w, h), w, h);
     hf.world.land = !bview_.space();
     hf.world.local_player = local_player();
+    // UI.md selection circle: the owner faction's Land_ / Space_Mode_Selection_Blob_Material_Name (modc t20: by data).
+    if (const galactic::GalacticSim* gs = session_ ? session_->galaxy() : nullptr)
+        hf.world.selection_material = [gs](int32_t owner, bool land, bool) {
+            if (owner < 0 || static_cast<size_t>(owner) >= gs->players().size()) return std::string();
+            const uint32_t f = gs->players()[static_cast<size_t>(owner)].faction;
+            if (f >= gs->rules().factions.size()) return std::string();
+            const galactic::FactionRules& fr = gs->rules().factions[f];
+            return land ? fr.land_selection_blob : fr.space_selection_blob;
+        };
     if (tm && tm->bounds().max.x - tm->bounds().min.x < 1.0e5f) {
         hf.map_min_x = tm->bounds().min.x;
         hf.map_min_y = tm->bounds().min.y;

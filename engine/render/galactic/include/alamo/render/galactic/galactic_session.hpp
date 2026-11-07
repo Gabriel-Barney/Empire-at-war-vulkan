@@ -100,8 +100,8 @@ inline constexpr const char* kDefaultGalacticCampaign = "Sandbox_Heart_Of_The_Ma
 
 // Viewpoint (route colours) and neutral-player flags of a running sim: the first human player (else 0). Route sides
 // (FIXPASS_GALACTIC 3.1) by faction NAME: GameConstants Good_Side_Name (GalacticRules constants) -> kRouteSideGood,
-// `evil_side_name` (GameConstants Evil_Side_Name; the galactic rules do not parse it) -> kRouteSideEvil, any other
-// non-neutral faction -> kRouteSideOther (Corrupt).
-GalacticViewOptions galactic_view_options(const galactic::GalacticSim& sim, std::string_view evil_side_name = "EMPIRE");
+// `evil_side_name` (default "": GameConstants Evil_Side_Name from the GalacticRules constants; modc t20: no built-in
+// name) -> kRouteSideEvil, any other non-neutral faction -> kRouteSideOther (Corrupt).
+GalacticViewOptions galactic_view_options(const galactic::GalacticSim& sim, std::string_view evil_side_name = {});
 
 }  // namespace alamo::render

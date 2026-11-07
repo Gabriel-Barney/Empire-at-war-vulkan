@@ -51,6 +51,8 @@ void image(GuiDialog& d, const std::string& id, const std::string& tex) {
 constexpr int32_t kProductionRows = 6, kFleetRows = 10, kEconomyRows = 6;
 constexpr const char* kTabs[4] = {"IDC_DROID_LOG_RADIO", "IDC_DATA_CHART_RADIO", "IDC_TECH_TREE_RADIO", "IDC_SUMMARY_SCREEN_RADIO"};
 
+// The tech tree dialogs are matched by the IDD_TECH_TREE_ prefix (FoC's Tech_Tree_Dialog_Name values) and, for any other
+// name a faction gives, as the open info dialog (InfoScreens::info_dialog).
 bool is_info_dialog(std::string_view n) {
     return iequal(n, dlg::kDroidLog) || iequal(n, dlg::kDataChart) || istarts(n, "IDD_TECH_TREE_") ||
            istarts(n, "IDD_SUMMARY_SCREEN_");
@@ -58,9 +60,9 @@ bool is_info_dialog(std::string_view n) {
 
 }  // namespace
 
-std::string tech_tree_dialog(TechFaction f, bool space) {
-    std::string n = f == TechFaction::Rebel ? "IDD_TECH_TREE_REBEL" : f == TechFaction::Empire ? "IDD_TECH_TREE_EMPIRE" : "IDD_TECH_TREE_BLACKMARKET";
-    if (space) n += "_SPACE";
+std::string tech_tree_dialog(std::string_view dialog, bool space) {
+    std::string n(dialog);
+    if (space && !n.empty()) n += "_SPACE";
     return n;
 }
 
@@ -231,8 +233,13 @@ bool InfoScreens::show_planet(const PlanetDialogInfo& p) {
 // ---- holocron pages -------------------------------------------------------------------------------------------------
 std::string InfoScreens::info_dialog() const { return info_open_; }
 
+// modc t20: the open info dialog counts too (a mod's Tech_Tree_Dialog_Name need not start with IDD_TECH_TREE_).
+bool InfoScreens::info_dialog(std::string_view n) const {
+    return is_info_dialog(n) || (!info_open_.empty() && iequal(n, info_open_));
+}
+
 GuiDialog* InfoScreens::go_info(const std::string& name) {
-    if (!gui_) return nullptr;
+    if (!gui_ || name.empty()) return nullptr;
     if (!info_open_.empty() && !iequal(info_open_, name)) gui_->close(info_open_);
     GuiDialog* d = gui_->open(name);
     info_open_ = d ? name : std::string();
@@ -379,7 +386,7 @@ bool InfoScreens::show_info(InfoPage page) {
     switch (page) {
         case InfoPage::DroidLog: name = dlg::kDroidLog; break;
         case InfoPage::DataChart: name = dlg::kDataChart; break;
-        case InfoPage::TechTree: name = tech_tree_dialog(tech_.faction, tech_.space); break;
+        case InfoPage::TechTree: name = tech_tree_dialog(tech_.dialog, tech_.space); break;
         case InfoPage::SummaryProduction: name = dlg::kSummaryProduction; break;
         case InfoPage::SummaryFleets: name = dlg::kSummaryFleets; break;
         case InfoPage::SummaryEconomy: name = dlg::kSummaryEconomy; break;
@@ -492,7 +499,7 @@ void InfoScreens::on_click(const GuiEvent& e, std::vector<ScreenAction>& out) {
         }
         a.object = planet_;
         out.push_back(std::move(a));
-    } else if (is_info_dialog(n)) {
+    } else if (info_dialog(n)) {
         if (is("IDC_BUTTON_CLOSE") || is("IDC_BUTTON_EXIT")) {
             gui_->close(n);
             info_open_.clear();
@@ -538,7 +545,7 @@ void InfoScreens::on_change(const GuiEvent& e, std::vector<ScreenAction>& out) {
         }
         return;
     }
-    if (!is_info_dialog(n)) return;
+    if (!info_dialog(n)) return;
     if (e.kind == GuiEvent::Kind::Checked && e.value == 0) return;  // radios unchecking
     if (is("IDC_HINTS_CHECK")) {
         droid_.hints = e.value != 0;
@@ -610,7 +617,7 @@ void InfoScreens::update(std::span<const GuiEvent> events, std::vector<ScreenAct
                     a.object = planet_;
                     gui_->close(e.dialog);
                     out.push_back(std::move(a));
-                } else if (is_info_dialog(e.dialog)) {
+                } else if (info_dialog(e.dialog)) {
                     gui_->close(e.dialog);
                     info_open_.clear();
                     out.push_back(act(ScreenAction::Kind::InfoClosed));

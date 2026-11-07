@@ -128,9 +128,10 @@ struct TechTreeItem {
     std::string icon;
     TechState state = TechState::Locked;
 };
-enum class TechFaction : uint8_t { Rebel, Empire, BlackMarket };
 struct TechTreeInfo {
-    TechFaction faction = TechFaction::Empire;
+    // modc t20: the player faction's Tech_Tree_Dialog_Name (FoC IDD_TECH_TREE_REBEL / _EMPIRE / _BLACKMARKET); "" = the
+    // faction has no tech tree (the page does not open).
+    std::string dialog;
     bool space = false;
     // Object type name (the IDC_TECHTREE_<name> suffix) -> item; false hides the control.
     std::function<bool(std::string_view type, TechTreeItem& out)> item;
@@ -174,8 +175,8 @@ inline constexpr const char* kSummaryProduction = "IDD_SUMMARY_SCREEN_PRODUCTION
 inline constexpr const char* kSummaryFleets = "IDD_SUMMARY_SCREEN_FLEETS";
 inline constexpr const char* kSummaryEconomy = "IDD_SUMMARY_SCREEN_ECONOMY";
 }  // namespace dlg
-// IDD_TECH_TREE_<faction>[_SPACE].
-std::string tech_tree_dialog(TechFaction f, bool space);
+// `dialog` (TechTreeInfo::dialog, the faction's Tech_Tree_Dialog_Name) + "_SPACE" in space; "" when `dialog` is empty.
+std::string tech_tree_dialog(std::string_view dialog, bool space);
 
 class InfoScreens {
 public:
@@ -211,6 +212,7 @@ public:
 
 private:
     GuiDialog* go_info(const std::string& name);
+    bool info_dialog(std::string_view n) const;
     void fill_buy(GuiDialog& d);
     void fill_droid(GuiDialog& d);
     void fill_chart(GuiDialog& d);

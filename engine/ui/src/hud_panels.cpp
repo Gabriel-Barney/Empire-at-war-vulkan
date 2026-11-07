@@ -54,6 +54,19 @@ bool has_art(const CommandBarComponent& c) {
            !c.mouse_over_texture.empty() || !c.selected_texture.empty();
 }
 
+// Index of the first Icon_Alternate_Texture_Name entry of `c` that starts with `prefix` (ASCII case-insensitive), -1 none.
+int32_t alternate_with_prefix(const CommandBarComponent& c, std::string_view prefix) {
+    for (size_t i = 0; i < c.icon_alternate_texture.size(); ++i) {
+        const std::string& t = c.icon_alternate_texture[i];
+        if (t.size() < prefix.size()) continue;
+        bool same = true;
+        for (size_t k = 0; k < prefix.size() && same; ++k)
+            same = std::tolower(static_cast<unsigned char>(t[k])) == std::tolower(static_cast<unsigned char>(prefix[k]));
+        if (same) return static_cast<int32_t>(i);
+    }
+    return -1;
+}
+
 // Slot roles (PanelSlot::value) shared by the panels.
 constexpr int32_t kRoleText = -1, kRoleClose = -2, kRoleBar = -3, kRoleDeco = -4;
 
@@ -702,10 +715,12 @@ void BlackMarketPanel::build(const BlackMarketFrame& f) {
             slots_.push_back(b);
             text(fmt("market_title%02d", 4 + 2 * ki).c_str(), it.name);
             text(fmt("market_title%02d", 5 + 2 * ki).c_str(), it.cost >= 0 ? num32(it.cost) : std::u32string());
-            if (it.tech_alt >= 0) {
+            const int32_t tc = it.tech_icon.empty() ? -1 : find(fmt("market_tech_level%02d", ki));
+            const int32_t alt = tc >= 0 ? alternate_with_prefix((*table_)[static_cast<size_t>(tc)], it.tech_icon) : -1;
+            if (alt >= 0) {
                 PanelSlot t;
-                t.component = find(fmt("market_tech_level%02d", ki));
-                t.alt = it.tech_alt;
+                t.component = tc;
+                t.alt = alt;
                 t.value = kRoleDeco;
                 slots_.push_back(t);
             }

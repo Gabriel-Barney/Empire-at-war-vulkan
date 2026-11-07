@@ -78,6 +78,9 @@ struct EconomyConstants {
     // faction's tech when no sliceable candidate remains. modc t03: no built-in faction name; data without the field
     // names no faction.
     std::string good_side_name;
+    // modc t20: Evil_Side_Name ("EMPIRE" in FoC), read for presentation only (route sides FIXPASS_GALACTIC 3.1, the HUD
+    // shell alternate); no sim code reads it. "" = none.
+    std::string evil_side_name;
 };
 
 // Faction fields read by S3 (FactionFiles.xml).
@@ -111,6 +114,13 @@ struct FactionRules {
     // S7 t30 (TACTICAL_COMBAT §2.10): Allies (+0x3e0) / Enemies (+0x3f8) faction names as written (comma / space
     // separated in the XML); the campaign relation table compares them case-insensitively.
     std::vector<std::string> allies, enemies;
+    // modc t20: presentation fields read by the game host only (never by sim code; not saved, not in the CRC), so the UI
+    // needs no faction names. Text_ID (offset not in xml_field_tables.md, modc t25; FoC TEXT_FACTION_REBELS ...),
+    // Tech_Tree_Dialog_Name (+0x2698: IDD_TECH_TREE_REBEL / _EMPIRE / _BLACKMARKET), Tech_Level_Icon_Name (+0x138:
+    // i_button_r_tech_upgrade_ / _e_), all trimmed as written; "" = none.
+    std::string text_id, tech_tree_dialog, tech_level_icon;
+    // Land_ / Space_Mode_Selection_Blob_Material_Name (+0x2818 / +0x2840; UI.md selection circle's faction default).
+    std::string land_selection_blob, space_selection_blob;
 };
 
 // DifficultyAdjustments.xml entry (AI players only). No adjustment = the internal all-1.0 one [H].

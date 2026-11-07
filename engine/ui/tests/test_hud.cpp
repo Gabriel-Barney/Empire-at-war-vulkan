@@ -834,7 +834,7 @@ void test_world() {
         wh.build(ctx, std::span<const HudUnit>(&big, 1), types, atlas, fonts, dl4, &blobs);
         CHECK(dl4.items(0, HudList::Alpha).size() >= 2 && near(dl4.items(0, HudList::Alpha)[0].max.y - dl4.items(0, HudList::Alpha)[0].min.y, 32.0f));
         CHECK(wh.stats().bars == 2);
-        CHECK(blobs.size() == 1 && blobs[0].radius == 60.0f && blobs[0].material == "Selection_Empire_Space" && !blobs[0].land);
+        CHECK(blobs.size() == 1 && blobs[0].radius == 60.0f && blobs[0].material.empty() && !blobs[0].land);
         ctx.land = true;
         ctx.selection_material = [](int32_t, bool land, bool) { return std::string(land ? "Selection_Rebel_Land" : "x"); };
         blobs.clear();

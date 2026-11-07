@@ -143,13 +143,8 @@ void GalacticView::init(GpuCore& gpu, const GameData& data, std::vector<render::
     gpu_ = &gpu;
     colors_ = std::move(colors);
     style_ = style;
-    // FIXPASS_GALACTIC §3: the corruption path settings and the evil side name (GameConstants).
+    // FIXPASS_GALACTIC §3: the corruption path settings (GameConstants; the evil side name is in the galactic rules).
     corruption_path_ = render::load_corruption_path_settings(*data.files);
-    {
-        const data::XmlDocument gc = read_xml(*data.files, "Data\\XML\\GameConstants.xml");
-        if (gc.ok())
-            if (const std::string_view evil = gc.root().child_text("Evil_Side_Name"); !evil.empty()) evil_side_name_ = std::string(evil);
-    }
     types_.build(data.types);
     models_ = std::make_unique<render::GalacticModels>(gpu.renderer, gpu.streamer.get(), gpu.cache.get(), data.files.get());
     portrait_models_ = std::make_unique<render::GalacticModels>(gpu.renderer, gpu.streamer.get(), gpu.cache.get(), data.files.get());
@@ -177,7 +172,7 @@ void GalacticView::init(GpuCore& gpu, const GameData& data, std::vector<render::
 
 void GalacticView::attach(const galactic::GalacticSim& sim, int32_t local_player) {
     palette_ = render::make_galactic_palette(sim, colors_);
-    render::GalacticViewOptions vo = render::galactic_view_options(sim, evil_side_name_);
+    render::GalacticViewOptions vo = render::galactic_view_options(sim);
     vo.viewpoint = local_player;
     vo.corruption_path = corruption_path_;
     vo.multiplayer = false;  // [port] multiplayer is deferred: every session is single-player

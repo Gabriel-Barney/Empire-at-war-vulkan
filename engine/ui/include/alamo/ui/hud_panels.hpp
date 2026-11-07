@@ -280,7 +280,9 @@ struct BlackMarketItem {
     std::u32string name, description;
     int32_t cost = -1;
     bool enabled = true;       // affordable / allowed
-    int32_t tech_alt = -1;     // market_tech_level icon index (0 rebel, 1 empire), -1 hidden
+    // modc t20: the item faction's Tech_Level_Icon_Name (FoC i_button_r_tech_upgrade_ / _e_): market_tech_levelNN shows the
+    // first of its Icon_Alternate_Texture_Name entries that starts with it (any case); "" or no match: hidden.
+    std::string tech_icon;
 };
 struct BlackMarketFrame : PanelFrame {
     uint32_t planet = commands::kNoObject;  // the market's planet (reported by the click)
