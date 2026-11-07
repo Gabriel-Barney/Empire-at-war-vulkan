@@ -1,9 +1,10 @@
-// D3D9 shader bytecode (d3dbc) for SM1-SM2: vs_1_0/1_1, vs_2_0/2_x, ps_1_0..1_4, ps_2_0/2_x.
+// D3D9 shader bytecode (d3dbc) for SM1-SM3: vs_1_0/1_1, vs_2_0/2_x, vs_3_0, ps_1_0..1_4, ps_2_0/2_x, ps_3_0.
 // The parser is bounds-checked and validates every register reference against the shader model,
 // so the emitter and the interpreter can index fixed-size register files without further checks.
 // It parses untrusted mod FXO contents: malformed or truncated input returns false + an error
-// message, never undefined behaviour. SM3 bytecode parses structurally (so tools can report it)
-// but the translator rejects it.
+// message, never undefined behaviour. SM3 (modc t22): outputs o0-o11 / ps_3_0 inputs v0-v9 carry a
+// dcl usage, vPos / vFace, texldl; the translator covers what translate.cpp's SM3 table lists and
+// rejects the rest with a message (relative addressing of v# / o#, vertex texture fetch, ...).
 //
 // Token format (public D3D9 DDK documentation):
 //   version      0xFFFE0000 | major<<8 | minor (VS), 0xFFFF0000 | ... (PS)

@@ -75,6 +75,8 @@ struct Interpreter::Frame {
     F4 oPos{}, oFog{}, oPts{};
     std::array<F4, 2> oD{};
     std::array<F4, 8> oT{};
+    std::array<F4, 16> o{};          // vs_3_0 o0-o11
+    F4 vPos{}, vFace{};              // ps_3_0
     std::array<F4, 4> oC{};
     F4 oDepth{};
     bool killed = false;
@@ -92,7 +94,7 @@ bool Interpreter::init(const Program& program, const TranslateOptions& options, 
     bdef_.fill(false);
     labels_.fill(-1);
     writes_depth_ = false;
-    if (program.major >= 3) return fail("SM3 not supported");
+    io_.fill(IoDecl{});
     const size_t n = program.instrs.size();
     match_.assign(n, -1);
     std::vector<int32_t> stack;
@@ -104,7 +106,20 @@ bool Interpreter::init(const Program& program, const TranslateOptions& options, 
                             in.op != Op::ExpP && in.op != Op::LogP && in.op != Op::Cnd && in.op != Op::Def) ||
                            in.op == Op::Bem || in.op == Op::Dsx || in.op == Op::Dsy || in.op == Op::TexLdd;
         if (!ps && texop) return fail("texture op in a vertex shader");
-        if (in.op == Op::Reserved0 || in.op == Op::TexLdl) return fail("unsupported op");
+        if (in.op == Op::Reserved0) return fail("unsupported op");
+        if (in.op == Op::TexLdl && !ps) return fail("vertex texture fetch");
+        if (program.major >= 3 && in.op == Op::Dcl) {
+            const uint8_t t = in.dst.type;
+            if (!ps && t == reg::kSampler) return fail("vertex texture fetch");
+            if ((!ps && t == reg::kOutput) || (ps && t == reg::kInput)) {
+                const Usage u = in.usage;
+                const uint8_t k = in.usage_index;
+                const bool ok = (u == Usage::Color && k < 2) || (u == Usage::Texcoord && k < 8) || (u == Usage::Fog && k == 0) ||
+                                (!ps && ((u == Usage::Position || u == Usage::PSize) && k == 0));
+                if (!ok || in.dst.index >= 16 || io_[in.dst.index].present) return fail("SM3 dcl usage without a varying slot");
+                io_[in.dst.index] = {true, u, k};
+            }
+        }
         // Operand checks, so programs not produced by parse() (which enforces the same rules) cannot
         // index past a register file: ps_1_x stage indices must fit the 8-entry coordinate/texture
         // files, rep/loop counts, labels and def targets must name registers of the right file.
@@ -200,6 +215,7 @@ bool Interpreter::execute(Frame& f) const {
     const bool vs = p.is_vs();
     const bool ps1 = p.ps1();
     const bool ps14 = ps1 && p.minor >= 4;
+    const bool sm3 = p.major >= 3;
     const float range = ps14 ? 8.0f : 1.0f;
     const auto& ins = p.instrs;
     const size_t n = ins.size();
@@ -239,6 +255,7 @@ bool Interpreter::execute(Frame& f) const {
             const auto i = ireg(s.index);
             return {static_cast<float>(i[0]), static_cast<float>(i[1]), static_cast<float>(i[2]), static_cast<float>(i[3])};
         }
+        case reg::kMiscType: return s.index == 0 ? f.vPos : f.vFace;
         default: return {};
         }
     };
@@ -459,6 +476,7 @@ bool Interpreter::execute(Frame& f) const {
             return val(sample(m, a));
         }
         case Op::TexLdd: return val(sample(s[1].index, read_tex(s[0])));
+        case Op::TexLdl: return val(sample(s[1].index, read_tex(s[0])));  // single-level textures: the LOD has no effect
         case Op::TexKill: {
             F4 v{};
             int comps = 3;
@@ -588,7 +606,7 @@ bool Interpreter::execute(Frame& f) const {
         case reg::kAddr: t = &f.t[d.index & 7u]; break;
         case reg::kRastOut: t = d.index == 0 ? &f.oPos : d.index == 1 ? &f.oFog : &f.oPts; break;
         case reg::kAttrOut: t = &f.oD[d.index & 1u]; break;
-        case reg::kTexCrdOut: t = &f.oT[d.index & 7u]; break;
+        case reg::kTexCrdOut: t = sm3 ? &f.o[d.index & 15u] : &f.oT[d.index & 7u]; break;
         case reg::kColorOut: t = &f.oC[d.index & 3u]; break;
         case reg::kDepthOut: t = &f.oDepth; break;
         default: return;
@@ -736,16 +754,33 @@ bool Interpreter::run_vs(const std::array<F4, 16>& inputs, const ConstantState& 
     f.oPts = {1.0f, 0.0f, 0.0f, 0.0f};
     f.oD[0] = {1.0f, 1.0f, 1.0f, 1.0f};
     for (F4& t : f.oT) t = {0.0f, 0.0f, 0.0f, 1.0f};
+    const bool sm3 = prog_.major >= 3;
+    // vs_3_0: each declared o# starts at its varying's default and is copied to it afterwards.
+    auto target = [&](const IoDecl& d) -> F4* {
+        switch (d.usage) {
+        case Usage::Position: return &f.oPos;
+        case Usage::Color: return &f.oD[d.index & 1u];
+        case Usage::Texcoord: return &f.oT[d.index & 7u];
+        case Usage::Fog: return &f.oFog;
+        default: return &f.oPts;
+        }
+    };
+    if (sm3)
+        for (size_t r = 0; r < io_.size(); ++r)
+            if (io_[r].present) f.o[r] = *target(io_[r]);
     if (!execute(f)) return false;
+    if (sm3)
+        for (size_t r = 0; r < io_.size(); ++r)
+            if (io_[r].present) *target(io_[r]) = f.o[r];
     out.pos = f.oPos;
     out.pos[0] = f.oPos[0] + push.pixel_offset[0] * f.oPos[3];
     out.pos[1] = f.oPos[1] + push.pixel_offset[1] * f.oPos[3];
     for (size_t i = 0; i < 4; ++i) {
-        out.color0[i] = sat(f.oD[0][i]);
-        out.color1[i] = sat(f.oD[1][i]);
+        out.color0[i] = sm3 ? f.oD[0][i] : sat(f.oD[0][i]);  // vs_3_0 outputs are not clamped
+        out.color1[i] = sm3 ? f.oD[1][i] : sat(f.oD[1][i]);
     }
     out.texcoord = f.oT;
-    out.fog = sat(f.oFog[0]);
+    out.fog = sm3 ? f.oFog[0] : sat(f.oFog[0]);
     out.point_size = f.oPts[0];
     return true;
 }
@@ -757,8 +792,22 @@ bool Interpreter::run_ps(const PsInputs& inputs, const ConstantState& constants,
     f.k = &constants;
     f.tex = textures;
     f.push = &push;
-    for (size_t i = 0; i < 2; ++i)
-        for (size_t c = 0; c < 4; ++c) f.v[i][c] = sat(inputs.color[i][c]);
+    const bool sm3 = prog_.major >= 3;
+    if (sm3) {
+        // ps_3_0: v# by dcl usage, not saturated; vPos = pixel centre - 0.5 (D3D9 integer centres).
+        for (size_t r = 0; r < io_.size() && r < f.v.size(); ++r) {
+            const IoDecl& d = io_[r];
+            if (!d.present) continue;
+            if (d.usage == Usage::Color) f.v[r] = inputs.color[d.index & 1u];
+            else if (d.usage == Usage::Texcoord) f.v[r] = inputs.texcoord[d.index & 7u];
+            else f.v[r] = {inputs.fog, 0.0f, 0.0f, 0.0f};
+        }
+        f.vPos = {inputs.frag_pos[0] - 0.5f, inputs.frag_pos[1] - 0.5f, 0.0f, 0.0f};
+        f.vFace = splat(inputs.front_face ? 1.0f : -1.0f);
+    } else {
+        for (size_t i = 0; i < 2; ++i)
+            for (size_t c = 0; c < 4; ++c) f.v[i][c] = sat(inputs.color[i][c]);
+    }
     f.tc = inputs.texcoord;
     out = PsResult{};
     if (!execute(f)) return false;
@@ -786,7 +835,7 @@ bool Interpreter::run_ps(const PsInputs& inputs, const ConstantState& constants,
             return true;
         }
     }
-    if (push.flags & kPushFog) {
+    if ((push.flags & kPushFog) && !sm3) {  // ps_3_0: no fixed-function fog
         const uint32_t mode = (push.flags >> kFogTableShift) & 3u;
         float fg = sat(inputs.fog);
         if (mode != 0) {

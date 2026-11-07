@@ -94,8 +94,9 @@ struct ResolvedPass {
 };
 
 // The pass can be drawn as resolved: a restore-only pass, a track-B pass (translated on demand) or one
-// with a hand-written / FF program. False for shader passes track B does not take (shader model 3, a VS
-// without a PS or the reverse, shader + FF mix): the renderer draws those submeshes unlit.
+// with a hand-written / FF program. False for shader passes track B does not take (shader model 3 mixed
+// with an older stage, a VS without a PS or the reverse, shader + FF mix): the renderer draws those
+// submeshes unlit.
 bool pass_has_program(const ResolvedPass& p);
 
 struct ParamBinding {
