@@ -19,14 +19,14 @@ constexpr uint32_t kBattlePartVersion = 1;
 template <class T>
 void put_system(ByteWriter& w, const T* s) {
     w.boolean(s != nullptr);
-    if (s) write_section(w, [s](ByteWriter& sub) { write_if_saveable(*s, sub); });
+    if (s) put_section(w, [s](ByteWriter& sub) { write_if_saveable(*s, sub); });
 }
 
 template <class T>
 bool get_system(ByteReader& r, T* s) {
     const bool has = r.boolean();
     if (!r.ok() || has != (s != nullptr)) return false;
-    return !s || read_section(r, [s](ByteReader& sub) { return read_if_saveable(*s, sub); });
+    return !s || get_section(r, [s](ByteReader& sub) { return read_if_saveable(*s, sub); });
 }
 
 // A part loads only when every system in it has write / read (a pending one fails the part before anything is read).

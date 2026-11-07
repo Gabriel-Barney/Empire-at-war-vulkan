@@ -340,7 +340,7 @@ void follow_fields(A& a, F& f) {
 
 void BattleAi::write(ByteWriter& w) const {
     w.u32(kBattleAiSaveVersion);
-    write_section(w, [this](ByteWriter& sub) { write_if_saveable(*world_, sub); });
+    put_section(w, [this](ByteWriter& sub) { write_if_saveable(*world_, sub); });
     save_io::Out o(w);
     o(ai_side_, stale_, executed_, opp_prev_, unit_ai_stamps_);
     o.seq(follows_, [](save_io::Out& a, const ObjectFollow& f) { follow_fields(a, f); });

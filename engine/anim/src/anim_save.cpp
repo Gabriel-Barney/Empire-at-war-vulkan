@@ -24,13 +24,11 @@ constexpr size_t kRowBytes = 4 + 1 + 4 + 8 + 4 + 8 + 3 * (4 + 4 + 1 + 4 + 4 + 1 
 constexpr size_t kEntryBytes = 4 + 4 + 8 + 8 + 4 + 4 + 1 + 4 + 8 + 4 + 1 + 1;
 constexpr size_t kCorpseBytes = 4 + 1 + 4 + 1 + 1 + 1 + 1 + 8 + 8 + 8 + 8 + 4 + 4 + 12 + 12;
 
+// ByteReader::count, plus fail(): a rejected read leaves the reader !ok() (the tests rely on it).
 bool read_count(ByteReader& r, size_t record_bytes, uint32_t& n) {
-    n = r.u32();
-    if (!r.ok() || static_cast<uint64_t>(n) * record_bytes > r.remaining()) {
-        r.fail();
-        return false;
-    }
-    return true;
+    if (r.count(n, record_bytes)) return true;
+    r.fail();
+    return false;
 }
 
 bool valid_type(int32_t t) { return t == kNoAnimType || (t >= 0 && t < static_cast<int32_t>(kAnimTypeCount)); }

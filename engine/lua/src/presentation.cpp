@@ -221,13 +221,11 @@ namespace {
 constexpr uint32_t kPresentationSaveVersion = 1;
 constexpr size_t kArgBytes = 1 + 1 + 8 + 4 + 4;
 
+// ByteReader::count, plus fail(): a rejected read leaves the reader !ok() (the tests rely on it).
 bool read_count(ByteReader& r, size_t record_bytes, uint32_t& n) {
-    n = r.u32();
-    if (!r.ok() || static_cast<uint64_t>(n) * record_bytes > r.remaining()) {
-        r.fail();
-        return false;
-    }
-    return true;
+    if (r.count(n, record_bytes)) return true;
+    r.fail();
+    return false;
 }
 
 void put_arg(ByteWriter& w, const PresentationArg& a) {

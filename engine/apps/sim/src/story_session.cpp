@@ -23,7 +23,7 @@
 #include "alamo/lua/script_save.hpp"       // q6 t19: story.lua v4 script blocks
 #include "alamo/lua/story_model.hpp"
 #include "alamo/objects/game_object_types.hpp"
-#include "alamo/sim/save_session.hpp"  // N1: write_section / write_if_saveable
+#include "alamo/sim/save_session.hpp"  // N1: write_if_saveable
 #if defined(ALAMO_LUA_PLAYERS)
 #include "alamo/lua/players.hpp"
 #endif
@@ -2163,7 +2163,7 @@ void StorySession::write(ByteWriter& w) const {
         const Set& s = *sp;
         w.i32(s.player).u32(s.number).str(s.file).u32(static_cast<uint32_t>(s.model.plot_count())).u32(static_cast<uint32_t>(s.scripts.size()));
         w.boolean(s.credits_seen).f32(s.last_credits).u64(static_cast<uint64_t>(s.fired_seen));
-        write_section(w, [&s](ByteWriter& sub) { s.model.write(sub); });
+        put_section(w, [&s](ByteWriter& sub) { s.model.write(sub); });
     }
     write_triggers(w, triggers_);
     write_triggers(w, pending_host_);
@@ -2205,7 +2205,7 @@ void StorySession::write(ByteWriter& w) const {
     // v3: the holocron list; a record names its event's plot set by number (galactic sets, then the tactical one).
     w.boolean(holocron() != nullptr);
     if (const lua::StoryHolocron* h = holocron())
-        write_section(w, [this, h](ByteWriter& sub) {
+        put_section(w, [this, h](ByteWriter& sub) {
             h->write(sub, [this](const lua::StoryModel* m) -> int32_t {
                 for (const auto& sp : sets_)
                     if (&sp->model == m) return static_cast<int32_t>(sp->number);
@@ -2223,7 +2223,7 @@ void StorySession::write(ByteWriter& w) const {
         const Set& s = *t.set;
         w.i32(s.player).u32(s.number).str(s.file).u32(static_cast<uint32_t>(s.model.plot_count())).u32(static_cast<uint32_t>(s.scripts.size()));
         w.boolean(s.credits_seen).f32(s.last_credits).u64(static_cast<uint64_t>(s.fired_seen));
-        write_section(w, [&s](ByteWriter& sub) { s.model.write(sub); });
+        put_section(w, [&s](ByteWriter& sub) { s.model.write(sub); });
     }
     w.u32(static_cast<uint32_t>(t.pending.size()));
     for (const Tactical::Pending& p : t.pending) {
@@ -2233,7 +2233,7 @@ void StorySession::write(ByteWriter& w) const {
         w.boolean(p.has_position).f64(p.x).f64(p.y).f64(p.z);
     }
     w.boolean(t.own_bridge != nullptr);
-    if (t.own_bridge) write_section(w, [&t](ByteWriter& sub) { write_if_saveable(*t.own_bridge, sub); });
+    if (t.own_bridge) put_section(w, [&t](ByteWriter& sub) { write_if_saveable(*t.own_bridge, sub); });
 }
 
 bool StorySession::read(ByteReader& r) {
@@ -2459,7 +2459,7 @@ void StorySession::write_scripts(ByteWriter& w) const {
         for (const Script& sc : s.scripts) {
             w.u32(sc.plot).str(sc.name).f64(sc.rate).f64(sc.last_service).boolean(sc.serviced);
             w.u64(static_cast<uint64_t>(sc.errors_seen));
-            write_section(w, [&sc](ByteWriter& sub) { lua::write_script_block(sub, *sc.vm); });  // v4
+            put_section(w, [&sc](ByteWriter& sub) { lua::write_script_block(sub, *sc.vm); });  // v4
         }
     };
     w.u32(kStoryScriptsVersion);

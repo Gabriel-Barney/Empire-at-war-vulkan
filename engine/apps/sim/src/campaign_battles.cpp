@@ -480,12 +480,12 @@ void CampaignBattles::register_battle_chunks() {
     st.name = TacticalBattle::save_part_name(Part::State);
     st.write = [this](ByteWriter& w) {
         if (!battle_) return;
-        write_section(w, [this](ByteWriter& sub) { battle_->write_part(Part::State, sub); });
-        write_section(w, [this](ByteWriter& sub) { write_battle_level(sub); });
+        put_section(w, [this](ByteWriter& sub) { battle_->write_part(Part::State, sub); });
+        put_section(w, [this](ByteWriter& sub) { write_battle_level(sub); });
     };
     st.read = [this](ByteReader& r) {
-        return battle_ && read_section(r, [this](ByteReader& sub) { return battle_->read_part(Part::State, sub); }) &&
-               read_section(r, [this](ByteReader& sub) { return read_battle_level(sub); }) && r.done();
+        return battle_ && get_section(r, [this](ByteReader& sub) { return battle_->read_part(Part::State, sub); }) &&
+               get_section(r, [this](ByteReader& sub) { return read_battle_level(sub); }) && r.done();
     };
     host_->add_save_participant(std::move(st));
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
@@ -522,12 +522,12 @@ void CampaignBattles::write_battle_level(ByteWriter& w) const {
 #ifdef ALAMO_SIM_HAVE_STORY
     w.boolean(true);
     w.boolean(story_bridge_ != nullptr);
-    if (story_bridge_) write_section(w, [this](ByteWriter& sub) { write_if_saveable(*story_bridge_, sub); });
-    write_section(w, [this](ByteWriter& sub) { write_if_saveable(story_transports_, sub); });
+    if (story_bridge_) put_section(w, [this](ByteWriter& sub) { write_if_saveable(*story_bridge_, sub); });
+    put_section(w, [this](ByteWriter& sub) { write_if_saveable(story_transports_, sub); });
     o(story_motion_, story_base_ids_);
 #ifdef ALAMO_LUA_HAVE_FOG
     w.boolean(true).u32(story_fog_.epoch);
-    write_section(w, [this](ByteWriter& sub) { write_if_saveable(story_fog_.cells, sub); });
+    put_section(w, [this](ByteWriter& sub) { write_if_saveable(story_fog_.cells, sub); });
 #else
     w.boolean(false);
 #endif

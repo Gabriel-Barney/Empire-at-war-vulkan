@@ -102,8 +102,8 @@ void SimAnimation::write(const SimHost& host, ByteWriter& w) const {
         const ModeWorld* mw = find_mode_world(modes.at(i));
         w.boolean(mw != nullptr);
         if (!mw) continue;
-        write_section(w, [mw](ByteWriter& sub) { mw->behaviors->write(sub); });
-        write_section(w, [mw](ByteWriter& sub) { mw->world->write(sub); });
+        put_section(w, [mw](ByteWriter& sub) { mw->behaviors->write(sub); });
+        put_section(w, [mw](ByteWriter& sub) { mw->world->write(sub); });
         w.i32(mw->max_seen);
         w.u32(static_cast<uint32_t>(mw->pending_clones.size()));
         for (const ModeWorld::PendingClone& pc : mw->pending_clones)
