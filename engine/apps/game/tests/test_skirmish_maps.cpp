@@ -257,7 +257,7 @@ void test_fake_install() {
 }
 
 // q6 t02: skirmish_space_maps / skirmish_land_maps leave out maps whose file is empty through the normal lookup (Thrawn's
-// Revenge ships a 0-byte _MP_SPACE_KUAT.ted over the FoC one); KUAT still goes first when it reads.
+// Revenge ships a 0-byte _MP_SPACE_KUAT.ted over the FoC one). modc t19: sorted by name, no map moved to the front.
 void test_map_lists_skip_empty() {
     const fs::path T = fs::temp_directory_path() / "alamo_game_skirmish_lists_test";
     fs::remove_all(T);
@@ -279,7 +279,7 @@ void test_map_lists_skip_empty() {
         return std::make_pair(alamo::game::skirmish_space_maps(d), alamo::game::skirmish_land_maps(d));
     };
     const auto plain = lists(false);
-    CHECK(plain.first == (std::vector<std::string>{"_MP_SPACE_KUAT", "_MP_SPACE_ALPHA", "_MP_SPACE_ZETA"}));
+    CHECK(plain.first == (std::vector<std::string>{"_MP_SPACE_ALPHA", "_MP_SPACE_KUAT", "_MP_SPACE_ZETA"}));
     CHECK(plain.second == (std::vector<std::string>{"_MP_LAND_ALPHA", "_MP_LAND_BETA"}));
     write_file(MOD / MAPS / "_MP_SPACE_KUAT.ted", {});  // empty mod copies hide the maps
     write_file(MOD / MAPS / "_MP_LAND_BETA.ted", {});
