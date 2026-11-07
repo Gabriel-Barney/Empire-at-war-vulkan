@@ -729,16 +729,6 @@ private:
 
 }  // namespace
 
-const char* pp_source_name(PpSource s) {
-    switch (s) {
-        case PpSource::FreeStore: return "free store";
-        case PpSource::Reinforcement: return "reinforcement";
-        case PpSource::Build: return "pad";
-        case PpSource::Produce: return "produce";
-    }
-    return "?";
-}
-
 std::vector<int32_t> pp_team_types(const TaskForceDef& d, const TeamDef& t, const std::vector<PerceptionType>& types,
                                    const std::function<uint64_t(std::string_view)>& category_mask) {
     std::vector<int32_t> out;

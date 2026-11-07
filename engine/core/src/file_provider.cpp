@@ -33,6 +33,17 @@ std::string normalize_path(std::string_view path) {
     return out;
 }
 
+std::string with_default_dir_ext(std::string_view name, std::string_view dir, std::string_view ext) {
+    std::string s(name);
+    const bool has_dir = s.find('\\') != std::string::npos || s.find('/') != std::string::npos;
+    const auto slash = s.find_last_of("\\/");
+    const auto dot = s.rfind('.');
+    const bool has_ext = dot != std::string::npos && (slash == std::string::npos || dot > slash);
+    if (!has_ext) s += ext;
+    if (!has_dir) s = std::string(dir) + s;
+    return normalize_path(s);
+}
+
 fs::path path_from_utf8(std::string_view utf8) {
     return fs::path(std::u8string(reinterpret_cast<const char8_t*>(utf8.data()), utf8.size()));
 }

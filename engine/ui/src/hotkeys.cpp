@@ -211,14 +211,6 @@ bool HotkeyTable::load(const HotkeyProfile& in) {
     return true;
 }
 
-uint8_t hotkey_mods(const InputState& in) { return current_mods(in); }
-
-HotkeyMod hotkey_mod_held(const InputState& in) {
-    const int n = (in.shift() ? 1 : 0) + (in.ctrl() ? 1 : 0) + (in.alt() ? 1 : 0);
-    if (n != 1) return HotkeyMod::None;
-    return in.shift() ? HotkeyMod::Shift : in.ctrl() ? HotkeyMod::Ctrl : HotkeyMod::Alt;
-}
-
 namespace {
 // `0x2127f0` (P1_CAMERA_INPUT.md §6): modifier 0 matches only with Shift, Ctrl and Alt all up; 1 / 2 / 3 when Shift /
 // Ctrl / Alt is held (the others are ignored).

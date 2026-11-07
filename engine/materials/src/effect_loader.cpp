@@ -99,18 +99,6 @@ TechniqueLod technique_lod_from_string(std::string_view lod, std::string_view na
     if (upper(name) == "MAX_VIEWPORT") return TechniqueLod::MaxViewport;
     return TechniqueLod::Unknown;
 }
-const char* technique_lod_name(TechniqueLod l) {
-    switch (l) {
-    case TechniqueLod::DX9: return "DX9";
-    case TechniqueLod::DX8ATI: return "DX8ATI";
-    case TechniqueLod::DX8: return "DX8";
-    case TechniqueLod::FixedFunction: return "FIXEDFUNCTION";
-    case TechniqueLod::FF: return "FF";
-    case TechniqueLod::MaxViewport: return "max_viewport";
-    default: return "unknown";
-    }
-}
-
 int pick_best_technique(const fx::Effect& e) {
     int best = -1;
     TechniqueLod best_lod = TechniqueLod::MaxViewport;

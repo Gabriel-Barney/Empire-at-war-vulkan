@@ -8,16 +8,6 @@
 
 namespace alamo::audio {
 
-const char* bus_name(Bus b) {
-    switch (b) {
-        case Bus::Sfx2D: return "sfx2d";
-        case Bus::Sfx3D: return "sfx3d";
-        case Bus::Music: return "music";
-        case Bus::Speech: return "speech";
-    }
-    return "?";
-}
-
 GameSampleSource::GameSampleSource(const FileProvider& files, GameSampleConfig cfg)
     : files_(&files), cfg_(std::move(cfg)) {
     for (const std::string& p : cfg_.sfx_megs) {

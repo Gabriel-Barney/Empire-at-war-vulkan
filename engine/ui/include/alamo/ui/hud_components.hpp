@@ -34,7 +34,6 @@ struct Rgba8 {
 };
 
 enum class ComponentType : uint8_t { Unknown = 0, Shell, Button, TextButton, Bar, Icon };
-const char* component_type_name(ComponentType t);
 
 // Number of HUD layers (UI.md §0 item 4) and the per-layer sub-lists (§2.5).
 inline constexpr uint32_t kHudLayers = 13;

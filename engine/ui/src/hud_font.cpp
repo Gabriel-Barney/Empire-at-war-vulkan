@@ -286,11 +286,6 @@ std::unique_ptr<GlyphRasterizer> make_system_rasterizer() {
     return std::make_unique<GdiRasterizer>();
 }
 
-bool register_private_font_file(const std::string& path_utf8) {
-    const std::wstring w = widen(path_utf8);
-    return AddFontResourceExW(w.c_str(), FR_PRIVATE, nullptr) > 0;
-}
-
 std::vector<TrueTypeFontInfo> find_truetype_fonts(const uint8_t* bytes, size_t size) {
     std::vector<TrueTypeFontInfo> out;
     if (!bytes) return out;

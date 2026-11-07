@@ -296,15 +296,4 @@ bool FxCache::store(const std::string& key, const FxCacheEntry& entry) const {
     return true;
 }
 
-const char* fx_source_state_name(FxSourceState s) {
-    switch (s) {
-    case FxSourceState::None: return "none";
-    case FxSourceState::Disabled: return "disabled";
-    case FxSourceState::NotCompiled: return "not_compiled";
-    case FxSourceState::Failed: return "failed";
-    case FxSourceState::Compiled: return "compiled";
-    }
-    return "?";
-}
-
 }  // namespace alamo::materials

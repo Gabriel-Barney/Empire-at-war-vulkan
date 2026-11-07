@@ -24,7 +24,6 @@
 namespace alamo::ui {
 
 enum class PointerTarget : uint8_t { None = 0, Overlay, Targeting, Dialog, Chat, Hud, World };
-const char* pointer_target_name(PointerTarget t);
 
 struct RouteHooks {
     std::function<bool()> overlay_active;                  // cinematic / movie overlay (consumes the mouse)

@@ -115,9 +115,6 @@ private:
     std::array<HotkeyBinding, kHotkeySlots> slots_{};
 };
 
-uint8_t hotkey_mods(const InputState& in);  // Bindings Modifier bits currently held
-HotkeyMod hotkey_mod_held(const InputState& in);  // exact single modifier, or None when none / several
-
 // A fired slot the HUD / host acts on (targeting modes, camera, menus) - everything that is not a sim command.
 struct HotkeyEvent {
     uint16_t slot = 0;

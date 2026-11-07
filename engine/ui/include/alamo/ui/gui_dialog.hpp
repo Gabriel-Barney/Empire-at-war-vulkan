@@ -235,7 +235,6 @@ struct GuiEvent {
     int32_t value = 0;
     std::u32string text;
 };
-const char* gui_event_name(GuiEvent::Kind k);
 // "\n" / "\r\n" escape sequences of MasterTextFile strings -> line breaks, "\t" -> space [port].
 std::u32string gui_unescape(std::u32string s);
 // QA U1: "" for a text that is an asset name or path (".ted" and other file extensions, path separators); players never

@@ -32,22 +32,6 @@ constexpr float kCheckGlyph = 13.0f;   // [port] QA D8: one check box size; the 
 
 }  // namespace
 
-const char* gui_event_name(GuiEvent::Kind k) {
-    switch (k) {
-        case GuiEvent::Kind::Clicked: return "Clicked";
-        case GuiEvent::Kind::Checked: return "Checked";
-        case GuiEvent::Kind::SelectionChanged: return "SelectionChanged";
-        case GuiEvent::Kind::DoubleClicked: return "DoubleClicked";
-        case GuiEvent::Kind::ValueChanged: return "ValueChanged";
-        case GuiEvent::Kind::TextChanged: return "TextChanged";
-        case GuiEvent::Kind::Submitted: return "Submitted";
-        case GuiEvent::Kind::Cancel: return "Cancel";
-        case GuiEvent::Kind::Opened: return "Opened";
-        case GuiEvent::Kind::Closed: return "Closed";
-    }
-    return "?";
-}
-
 // ---- GuiImagePages ----------------------------------------------------------------------------------------
 int32_t GuiImagePages::page(std::string_view texture) {
     const std::string key = atlas_key(texture);

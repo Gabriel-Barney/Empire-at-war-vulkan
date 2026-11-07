@@ -21,7 +21,6 @@ inline constexpr float kAiBigFloat = 1.0e18f;  // the solver veto / clamp value 
 // Context mode (+0x34): 0 Galactic, 1 Land, 2 Space [H].
 enum class AiMode : uint8_t { Galactic = 0, Land = 1, Space = 2 };
 inline constexpr uint32_t kAiModeCount = 3;
-const char* ai_mode_name(AiMode m);
 // "Galactic" / "Land" / "Space" (case-insensitive); false when unknown.
 bool parse_ai_mode(std::string_view s, AiMode& out);
 

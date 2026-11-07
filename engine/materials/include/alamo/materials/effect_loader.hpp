@@ -44,7 +44,6 @@ const char* phase_effect_file(RenderPhase p);             // "Data\\Art\\Shaders
 
 enum class TechniqueLod : uint8_t { DX9 = 0, DX8ATI, DX8, FixedFunction, FF, Unknown, MaxViewport };
 TechniqueLod technique_lod_from_string(std::string_view lod, std::string_view technique_name);
-const char* technique_lod_name(TechniqueLod l);
 // Index of the best technique (lowest TechniqueLod; first wins on ties), -1 if none.
 int pick_best_technique(const fx::Effect& e);
 

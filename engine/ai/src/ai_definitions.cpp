@@ -35,15 +35,6 @@ bool plan_event_code(std::string_view name, PlanEvent& out) {
     return false;
 }
 
-const char* ai_mode_name(AiMode m) {
-    switch (m) {
-        case AiMode::Galactic: return "Galactic";
-        case AiMode::Land: return "Land";
-        case AiMode::Space: return "Space";
-    }
-    return "?";
-}
-
 bool parse_ai_mode(std::string_view s, AiMode& out) {
     s = ai_trim(s);
     if (ai_iequal(s, "Galactic")) out = AiMode::Galactic;

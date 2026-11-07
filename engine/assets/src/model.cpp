@@ -284,17 +284,6 @@ void build_submesh(const alo::Model& model, const alo::Mesh& mesh, const alo::Su
     bounds_of(vb.position, out.bounds, out.sphere);
 }
 
-std::string with_default_dir_ext(std::string_view name, std::string_view dir, std::string_view ext) {
-    std::string s(name);
-    const bool has_dir = s.find('\\') != std::string::npos || s.find('/') != std::string::npos;
-    const auto slash = s.find_last_of("\\/");
-    const auto dot = s.rfind('.');
-    const bool has_ext = dot != std::string::npos && (slash == std::string::npos || dot > slash);
-    if (!has_ext) s += ext;
-    if (!has_dir) s = std::string(dir) + s;
-    return normalize_path(s);
-}
-
 }  // namespace
 
 const MaterialParam* MaterialRef::find(std::string_view n) const {

@@ -149,17 +149,6 @@ uint32_t rd32(const uint8_t* p) {
 
 }  // namespace
 
-const char* component_type_name(ComponentType t) {
-    switch (t) {
-        case ComponentType::Shell: return "Shell";
-        case ComponentType::Button: return "Button";
-        case ComponentType::TextButton: return "TextButton";
-        case ComponentType::Bar: return "Bar";
-        case ComponentType::Icon: return "Icon";
-        default: return "Unknown";
-    }
-}
-
 std::string_view CommandBarComponent::raw_value(std::string_view tag) const {
     const auto it = raw.find(upper(tag));
     return it == raw.end() ? std::string_view{} : std::string_view(it->second);

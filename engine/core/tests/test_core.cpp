@@ -145,6 +145,9 @@ int main() {
     CHECK(alamo::iequals("Data/Xml", "DATA\\XML"));
     CHECK(!alamo::iequals("abc", "abd"));
     CHECK(alamo::normalize_path(".\\Data//XML\\x.xml") == "DATA\\XML\\X.XML");
+    CHECK(alamo::with_default_dir_ext("ei_trooper", "Data\\Art\\Models\\", ".alo") == "DATA\\ART\\MODELS\\EI_TROOPER.ALO");
+    CHECK(alamo::with_default_dir_ext("Data/Art/Models/x.ALO", "Data\\Art\\Models\\", ".alo") == "DATA\\ART\\MODELS\\X.ALO");
+    CHECK(alamo::with_default_dir_ext("w.v1", "D\\", ".alo") == "D\\W.V1");
 
     // DirectoryProvider: case-insensitive.
     namespace fs = std::filesystem;

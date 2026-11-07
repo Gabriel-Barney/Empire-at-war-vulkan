@@ -73,6 +73,5 @@ enum class FxSourceState : uint8_t {
     Failed,       // fxc failed (or its output does not parse): t11 fallback
     Compiled,     // the compiled source is loaded in place of any `.fxo` (the original's choice)
 };
-const char* fx_source_state_name(FxSourceState s);  // "none", "disabled", "not_compiled", "failed", "compiled"
 
 }  // namespace alamo::materials

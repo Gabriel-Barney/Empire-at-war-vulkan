@@ -19,6 +19,9 @@ namespace alamo {
 
 // Upper-case, '/' -> '\\', strip leading ".\\" and duplicate separators.
 std::string normalize_path(std::string_view path);
+// Asset name -> path: adds `dir` when `name` has no '\\' or '/', and `ext` when its last part has no '.';
+// then normalize_path. ("ei_trooper", "Data\\Art\\Models\\", ".alo") -> "DATA\\ART\\MODELS\\EI_TROOPER.ALO".
+std::string with_default_dir_ext(std::string_view name, std::string_view dir, std::string_view ext);
 
 class FileProvider {
 public:
