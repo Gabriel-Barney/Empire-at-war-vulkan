@@ -5,10 +5,8 @@
 #include "alamo/sim/save_session.hpp"
 #include "alamo/sim/tactical_battle.hpp"
 #include "save_io.hpp"
-#ifdef ALAMO_SIM_HAVE_GARRISON
 #include "alamo/tactical/garrison/capture.hpp"
 #include "alamo/tactical/garrison/garrison.hpp"
-#endif
 
 namespace alamo::sim {
 
@@ -101,12 +99,8 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     });
     a(b.queue_group_, b.queue_used_);
     a.seq(b.team_attacks_, [](auto& x, auto& r) { x(r.attacker, r.container, r.member, r.goal); });  // q6 (state version 7)
-#ifdef ALAMO_SIM_HAVE_GARRISON
     a(b.s4_used_);
-#endif
-#ifdef ALAMO_SIM_HAVE_FOG
     a(b.fog_pings_, b.fog_on_, b.fog_global_active_, b.fog_global_render_);
-#endif
     // L1 systems
     a(b.l1_desc_cache_, b.l1_in_asteroid_, b.l1_weather_started_, b.fog_weather_dirty_);
     a.seq(b.l1_trackers_, [](auto& x, auto& t) { x(t.id, t.acc, t.rate, t.next); });
@@ -171,13 +165,9 @@ void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {
             put_system(w, &l1_fields_);
             break;
         case SavePart::Garrison:
-#ifdef ALAMO_SIM_HAVE_GARRISON
             w.boolean(true);
             put_system(w, &garrison_);
             put_system(w, captures_.get());
-#else
-            w.boolean(false);
-#endif
             break;
         case SavePart::Hangar:
             put_system(w, hangars_.get());
@@ -186,12 +176,8 @@ void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {
             put_system(w, &engine_loops_);
             break;
         case SavePart::Fog:
-#ifdef ALAMO_SIM_HAVE_FOG
             w.boolean(true);
             put_system(w, &fog_);
-#else
-            w.boolean(false);
-#endif
             break;
         case SavePart::Damage:
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
@@ -260,12 +246,8 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
             return get_system(r, abilities_.get()) && get_system(r, &l1_sw_) && get_system(r, &l1_fields_) && r.done();
         case SavePart::Garrison: {
             const bool has = r.boolean();
-#ifdef ALAMO_SIM_HAVE_GARRISON
             if (!has || !all_saveable(&garrison_, captures_.get())) return false;
             return get_system(r, &garrison_) && get_system(r, captures_.get()) && r.done();
-#else
-            return r.ok() && !has && r.done();
-#endif
         }
         case SavePart::Hangar:
             if (!all_saveable(hangars_.get(), contents_.get(), production_.get(), &engine_loops_)) return false;
@@ -273,12 +255,8 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
                    get_system(r, &engine_loops_) && r.done();
         case SavePart::Fog: {
             const bool has = r.boolean();
-#ifdef ALAMO_SIM_HAVE_FOG
             if (!has || !all_saveable(&fog_)) return false;
             return get_system(r, &fog_) && r.done();
-#else
-            return r.ok() && !has && r.done();
-#endif
         }
         case SavePart::Damage: {
             const bool has = r.boolean();

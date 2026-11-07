@@ -271,9 +271,7 @@ cmd::RejectReason TacticalBattle::tactical_build(TacticalMode& mode, uint8_t pla
     if (!st.alive(ph) || pad_behavior() == objects::kNoBehavior || !st.has_behavior(ph, pad_behavior()) || type >= types.size())
         return R::InvalidTarget;
     if (pad_contents(pad) != objects::kNoObjectId) return R::NotAllowed;  // UC present / built present
-#ifdef ALAMO_SIM_HAVE_FOG
     if (fog() && fog_object_hidden(static_cast<int32_t>(player), pad, true)) return R::NotAllowed;  // pad fogged (0x35f470)
-#endif
     const int32_t owner = st.owner(ph);
     // q6 t19 (AI_TACTICAL §7.5.1): 0x39a230(pad, player) = relation(player -> pad owner) == 0. A Neutral-owned (relation 2)
     // pad is not allied, for humans and AI alike; the structure belongs to the builder, the pad keeps its owner.

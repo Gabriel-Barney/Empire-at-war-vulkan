@@ -243,7 +243,7 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
             bt->adopt_object(*md, o);
             return o;
         };
-#if defined(ALAMO_LUA_HAVE_FOG) && defined(ALAMO_SIM_HAVE_FOG)
+#ifdef ALAMO_LUA_HAVE_FOG
         // refixf t03: Find_Nearest(obj, filter, player, bool) skips objects fogged for the player (0x35f470, force = 1).
         fog_hooks_.object_hidden = [bt, bid](objects::ObjectHandle o, int32_t player, bool force) {
             return bt->fog_object_hidden(player, bid(o), force);
@@ -261,12 +261,10 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     // --- end battle host ---
     br.remaining = &remaining_;
     // --- end L1 bindings ---
-#ifdef ALAMO_SIM_HAVE_FOG
     // --- fog of war (owner: fog agent): FOW refog (a cell of a player's grid regrew to 0) -> threat-grid refog at
     // the FOW cell centre (FOG_OF_WAR §4.3, AI_TACTICAL_PERCEPTION §4.7). Cleared in the destructor. ---
     at::TacticalAiWorld* aw = world_.get();
     b_->set_fog_refog([aw](int32_t player, uint32_t, float x, float y) { aw->refog(player, x, y); });
-#endif
     // S7 t31 (AI_TACTICAL §7.3.3 items 1-2): signal 0xb from every host (AI orders, human commands, story orders, Activate_Ability
     // of any VM) reaches this world's ability / movement blocks; this world's Activate_Ability raises it through the battle.
     at::TacticalAiWorld* ow = world_.get();
@@ -285,9 +283,7 @@ BattleAi::~BattleAi() {
     b_->remove_order_replaced_listener(order_listener_);
     if (b_->movement_) b_->movement_->set_threat_fn({});  // the battle outlives its AI
     b_->set_script_movement_lock(this, {});
-#ifdef ALAMO_SIM_HAVE_FOG
     b_->set_fog_refog({});  // fog: the battle outlives its AI (CampaignBattles resets ai_ first)
-#endif
 }
 
 bool BattleAi::start(std::vector<std::string>* diag) {
@@ -579,7 +575,6 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         const TacticalBattle* sb = b_;
         w.in_active_base_shield = [sb](const at::Vec3f& p) { return sb->l1_base_shield_covers({p.x, p.y, p.z}); };
     }
-#ifdef ALAMO_SIM_HAVE_FOG
     // --- fog of war (owner: fog agent): the real fog with force = 1 (the AI target-selection form); the AI gate
     // (non-human players unfogged while AIUsesFogOfWar is False) is applied by the perception's own force-0
     // tests (threat-grid fog memory). fow_active = the battle's FOW-active flag. ---
@@ -592,7 +587,6 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         }
     }
     // --- end fog ---
-#endif
     // Team containers -> members (battle units, ascending id).
     std::map<objects::ObjectId, std::vector<int32_t>> members;
     for (const TacticalBattle::Unit& u : b_->units_)
@@ -1508,9 +1502,7 @@ bool BattleAi::space_drop_ok(int32_t player, int32_t key, const at::Vec3f& p, fl
     const tactical::Aabb& bb = mode_->bounds();
     if (!(p.x >= bb.min.x && p.x <= bb.max.x && p.y >= bb.min.y && p.y <= bb.max.y)) return false;
     if (space_prevention_hit(player, p)) return false;
-#ifdef ALAMO_SIM_HAVE_FOG
     if (!b_->fog_reinforce_point_ok(player, p.x, p.y)) return false;  // fogged for the player (force 1)
-#endif
     const TacticalBattle::Participant* part = nullptr;
     for (const TacticalBattle::Participant& q : b_->parts_)
         if (q.galactic_id == static_cast<objects::ObjectId>(key) && q.owner == player && q.reserve && !q.deployed) {

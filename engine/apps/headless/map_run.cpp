@@ -127,16 +127,7 @@ int economy_run(const MapRunOptions& opt, const std::string& data_dir) {
     }
     first.comments = {"economy campaign " + name + " seed " + std::to_string(opt.seed) + " ticks " + std::to_string(opt.ticks)};
     if (!opt.crc_out.empty() && alamo_headless::save_crc_log(first, opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
-    if (!opt.golden.empty()) {
-        CrcLog golden;
-        if (!CrcLog::load(opt.golden, golden, &err)) {
-            std::fprintf(stderr, "golden: %s\n", err.c_str());
-            return 2;
-        }
-        const auto d = first_divergence(golden, first);
-        std::printf("golden: %s\n", d.message.c_str());
-        if (d.diverged) ok = false;
-    }
+    if (!opt.golden.empty() && alamo_headless::compare_golden(opt.golden, first, ok) != 0) return 2;
     std::printf(ok ? "economy run: OK\n" : "economy run: FAILED\n");
     return ok ? 0 : 1;
 }
@@ -273,16 +264,7 @@ int story_run(const MapRunOptions& opt, const std::string& data_dir, const std::
         std::printf("story golden %s: %s\n", story_golden.c_str(), same ? "MATCH" : "DIFFERS");
         if (!same) ok = false;
     }
-    if (!opt.golden.empty()) {
-        CrcLog golden;
-        if (!CrcLog::load(opt.golden, golden, &err)) {
-            std::fprintf(stderr, "golden: %s\n", err.c_str());
-            return 2;
-        }
-        const auto d = first_divergence(golden, crc);
-        std::printf("golden: %s\n", d.message.c_str());
-        if (d.diverged) ok = false;
-    }
+    if (!opt.golden.empty() && alamo_headless::compare_golden(opt.golden, crc, ok) != 0) return 2;
     std::printf(ok ? "story run: OK\n" : "story run: FAILED\n");
     return ok ? 0 : 1;
 }
@@ -392,16 +374,7 @@ int map_run(const MapRunOptions& opt) {
         }
         std::printf("wrote %s (%zu records)\n", opt.crc_out.c_str(), first.log.records.size());
     }
-    if (!opt.golden.empty()) {
-        CrcLog golden;
-        if (!CrcLog::load(opt.golden, golden, &err)) {
-            std::fprintf(stderr, "golden: %s\n", err.c_str());
-            return 2;
-        }
-        const auto d = first_divergence(golden, first.log);
-        std::printf("golden %s: %s\n", std::filesystem::path(opt.golden).filename().string().c_str(), d.message.c_str());
-        if (d.diverged) ok = false;
-    }
+    if (!opt.golden.empty() && alamo_headless::compare_golden(opt.golden, first.log, ok, true) != 0) return 2;
     std::printf(ok ? "map run: OK\n" : "map run: FAILED\n");
     return ok ? 0 : 1;
 }

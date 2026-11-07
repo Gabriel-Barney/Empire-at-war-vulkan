@@ -547,7 +547,7 @@ void set_snapshot_projectiles(SimSnapshot& snap, const ViewRange& views, std::sp
     }
     sort_snapshot_projectiles(snap);
 }
-#if defined(ALAMO_SIM_HAVE_BATTLES) && defined(ALAMO_SIM_HAVE_FOG)
+#ifdef ALAMO_SIM_HAVE_BATTLES
 // R5: the battle's fog of war for `local_player` (FogOfWar::render_view copied into snap.fog; null when the battle has
 // no fog or the player no grid) and kSnapFogHidden on every object TacticalBattle::fog_object_hidden(local, id, false)
 // reports hidden, or that is an enemy (not FogOfWar::allied) of the local player and AbilitySystem::is_stealthed (FOG_OF_WAR

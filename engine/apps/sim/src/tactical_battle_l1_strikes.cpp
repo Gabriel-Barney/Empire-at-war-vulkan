@@ -257,11 +257,7 @@ bool TacticalBattle::l1_base_shield_covers(Vec3 p) const {
 }
 
 bool TacticalBattle::bombardment_target_valid(int32_t player, Vec3 target) const {
-#ifdef ALAMO_SIM_HAVE_FOG
     if (fog_point_fogged(player, target.x, target.y, true)) return false;  // force 1
-#else
-    (void)player;
-#endif
     return !l1_base_shield_covers(target);
 }
 

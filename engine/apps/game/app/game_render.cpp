@@ -636,18 +636,14 @@ void BattleView::capture(const GameSession& session) {
         render::apply_contained(*snap, [b](const render::SnapshotObject& o) { return b->contained_by(o.id) != objects::kNoObjectId; });
         // q6 t19 (OBJECT_SCRIPTS §10.3): Lua Hide(true) - no model, particles, ghost or surface FX (presentation only).
         render::apply_script_hidden(*snap, [&session](const render::SnapshotObject& o) { return session.script_hidden(o.id); });
-#ifdef ALAMO_SIM_HAVE_FOG
         // R5: the local player's FOW grid + HideWhenFogged marks. Not in the attract demo (GameSession::view_draws_fog): the
         // original's cinematic camera clears the FOW render option at every shot start, so the demo never draws fog, with or
         // without a DEMO_CONTROLLER reveal (MAIN_MENU_BACKGROUND.md §4a). Presentation only: the demo's sim fog is unchanged.
         if (session.view_draws_fog()) render::apply_battle_fog(*b, local_, *snap);
-#endif
         // --- OI render: space reinforcement overlay cells (TACTICAL_GAPS §5.5) while the overlay is shown; Lua
         // Attach_Particle_Effect requests of the story VMs (lua::PresentationLog::particle_effects, made since this
         // battle's first frame [port: the request frame is the VM's sim frame]) as attached effects ---
-#ifdef ALAMO_SIM_HAVE_FOG
         if (space_ && fog_.space_reinforce()) render::apply_battle_fog_reinforce(*b, local_, *snap);
-#endif
 #ifdef ALAMO_SIM_HAVE_STORY
         if (const sim::StorySession* story = host.story())
             if (const sim::TacticalMode* tm = host.modes().top_tactical())

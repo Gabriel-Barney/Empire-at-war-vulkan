@@ -134,7 +134,6 @@ BattleCatalog::BattleCatalog(const objects::GameObjectTypes& types, const FilePr
         k.raid_max_limited = constants->get_int("Raid_Force_Max_Limited_Objects", 0);
         k.raid_max_heroes = constants->get_int("Raid_Force_Max_Heros", 0);
         // --- end battle host ---
-#ifdef ALAMO_SIM_HAVE_FOG
         // --- fog of war constants (owner: fog agent) ---
         tactical::fog::FogConstants& f = fog_constants_;
         f.desired_land_cell_size = constants->get_float("DesiredLandFOWCellSize", f.desired_land_cell_size);
@@ -148,7 +147,6 @@ BattleCatalog::BattleCatalog(const objects::GameObjectTypes& types, const FilePr
         f.setup_phase_enabled = constants->get_bool("SetupPhaseEnabled", f.setup_phase_enabled);  // OI fog
         f.setup_countdown_seconds = constants->get_float("SetupPhaseCountdownSeconds", f.setup_countdown_seconds);  // FOWF t05
         // --- end fog ---
-#endif
     }
     if (files) {
         load_hardpoints(*files, diag);

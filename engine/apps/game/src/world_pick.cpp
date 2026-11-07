@@ -1,7 +1,6 @@
 // refixf t08: host side of the tactical world pick (HUD_GAPS §2.2). See world_pick.hpp.
 #include "alamo/game/world_pick.hpp"
 
-#ifdef ALAMO_GAME_HAVE_UI
 #include <cmath>
 
 #include "alamo/sim/game_modes.hpp"
@@ -60,4 +59,3 @@ ui::WorldPickTests tactical_pick_tests(const sim::TacticalMode& mode, const sim:
 }
 
 }  // namespace alamo::game
-#endif

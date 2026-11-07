@@ -900,7 +900,7 @@ void apply_battle_jamming(const sim::TacticalBattle& battle, int32_t local_playe
 }
 #endif
 
-#if defined(ALAMO_SIM_HAVE_BATTLES) && defined(ALAMO_SIM_HAVE_FOG)
+#ifdef ALAMO_SIM_HAVE_BATTLES
 void apply_battle_fog(const sim::TacticalBattle& battle, int32_t local_player, SimSnapshot& snap) {
     const tactical::fog::FogOfWar* fog = battle.fog();
     if (!fog) {

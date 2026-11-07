@@ -729,9 +729,7 @@ void CampaignBattles::push_battle(SimHost& host) {
                 if (p >= 0 && static_cast<size_t>(p) < gsim->players().size()) gsim->add_credits(p, d, false);
             });
     }
-#ifdef ALAMO_SIM_HAVE_FOG
     battle_->set_fog_globals(fog_active_, fog_render_);  // fog: the original's global flag survives battles
-#endif
 #if defined(ALAMO_SIM_HAVE_STORY) && defined(ALAMO_LUA_PLAYERS)
     // modc t18 (OBJECT_SCRIPTS §1.3): the map's objects attach their scripts while setup spawns them, and the attach runs
     // Base_Definitions at once - the shipped Demo_Attract_Controller.lua calls Find_Player there, as the players exist in
@@ -875,12 +873,10 @@ void CampaignBattles::hook(SimHost& host) {
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
     ai_end();  // A1 stage 2: plans released before the mode pops
 #endif
-#ifdef ALAMO_SIM_HAVE_FOG
     if (const tactical::fog::FogOfWar* f = battle_->fog()) {  // fog: carry FOW-active / render option forward
         fog_active_ = f->fow_active();
         fog_render_ = f->render_option();
     }
-#endif
     remove_battle_chunks();  // N1 stage 2
     host.end_game_mode();
     battle_.reset();
@@ -1325,12 +1321,10 @@ void CampaignBattles::story_begin(SimHost& host, GameMode& mode) {
         goal = Vec3{v.goal.x, v.goal.y, 0.0f};
         return true;
     };
-#ifdef ALAMO_SIM_HAVE_GARRISON
     story_remaining_.can_garrison_fire = [this](objects::ObjectHandle u) {
         TacticalMode* tm = host_->tactical();
         return battle_ && tm && battle_->can_garrison_fire(tm->primary().id(u));
     };
-#endif
     b.remaining = &story_remaining_;
     // --- end L1 bindings ---
     story_motion_.clear();
@@ -1564,17 +1558,13 @@ void CampaignBattles::story_fog_begin(StoryBattleStart& st) {
         const objects::ObjectStore& s = tm->primary();
         return battle_->abilities().combat().special_weapon_fire(s.id(h), s.id(t));
     };
-#ifdef ALAMO_SIM_HAVE_FOG
     // STORY_FOG_POSITION_REVEAL / STORY_FOG_OBJECT_REVEAL (FOG_OF_WAR.md §6.6): "not fogged" for the plot's player,
     // force 0 (both fire at once for non-human plot players and while the fog is off, as in the original).
     st.fog_point_visible = [this](int32_t player, double x, double y, double) {
         return battle_ && !battle_->fog_point_fogged(player, static_cast<float>(x), static_cast<float>(y), false);
     };
     st.fog_object_visible = [this](int32_t player, int32_t id) { return battle_ && !battle_->fog_object_hidden(player, id, false); };
-#else
-    (void)st;
-#endif
-#if defined(ALAMO_LUA_HAVE_FOG) && defined(ALAMO_SIM_HAVE_FOG)
+#ifdef ALAMO_LUA_HAVE_FOG
     // L1: FogOfWar.* / Undo_Reveal of the tactical story VMs on the battle's fog (null when BattleConfig::fog is off).
     story_fog_.fog = battle_ ? battle_->fog() : nullptr;
     story_fog_.epoch = fought_;
@@ -1598,13 +1588,11 @@ void CampaignBattles::story_fog_begin(StoryBattleStart& st) {
 }
 
 void CampaignBattles::story_fog_reward(bool has_param, int32_t value) {
-#ifdef ALAMO_SIM_HAVE_FOG
     if (battle_)
         if (tactical::fog::FogOfWar* f = battle_->fog()) {
             f->reward_enable_fow(has_param, value);
             return;
         }
-#endif
     // No battle running (or its fog off): the carried global flags, same rule as FogOfWar::reward_enable_fow.
     if (!has_param) {
         fog_active_ = false;

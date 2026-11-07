@@ -1,6 +1,6 @@
 // S4 garrisons + structure capture hookup of TacticalBattle (owner: S4 agent; engine/tactical/garrison; rules:
 // docs/re/L1_S4_REMAINING.md §3.5, §4.1, §4.2). Kept in its own file so the other battle hooks (fog, A1, L1 systems) stay
-// separate. Without ALAMO_SIM_HAVE_GARRISON every entry point is a no-op / refusal. Serial code; the only RNG use is the
+// separate. Serial code; the only RNG use is the
 // MovementSystem move of order_garrison (same rule as order_move). Host-side [port] choices:
 //   * garrisoned units stay combat units: kUnitGarrisoned (never a candidate, TACTICAL_COMBAT 2.3 step 3), position =
 //     the host's every tick, fire range x Garrisoned_Max_Attack_Distance_Multiplier (a FireRange modifier entry of their
@@ -21,48 +21,16 @@
 
 #include "alamo/core/dmath.hpp"
 #include "alamo/objects/game_object_types.hpp"
-#ifdef ALAMO_SIM_HAVE_GARRISON
 #include <algorithm>
 
 #include "alamo/tactical/garrison/garrison_types.hpp"
 #include "alamo/tactical/movement/special_locomotors.hpp"
 #include "alamo/tactical/movement/unit_params.hpp"
-#endif
 
 namespace alamo::sim {
 
 namespace cmd = alamo::commands;
 
-#ifndef ALAMO_SIM_HAVE_GARRISON
-
-void TacticalBattle::s4_owner_changed(TacticalMode&, objects::ObjectId, int32_t, int32_t) {}
-void TacticalBattle::s4_init() {}
-void TacticalBattle::s4_capture_reset(TacticalMode&, objects::ObjectId) {}
-void TacticalBattle::s4_capture_grant(TacticalMode&, objects::ObjectId, int32_t) {}
-bool TacticalBattle::s4_board(TacticalMode&, objects::ObjectId, objects::ObjectId) { return false; }
-bool TacticalBattle::s4_placement(TacticalMode&, objects::TypeIndex, const objects::SpawnParams&, float, objects::ObjectHandle*) { return false; }
-void TacticalBattle::s4_register(TacticalMode&, const Unit&) {}
-void TacticalBattle::s4_positions(TacticalMode&) {}
-void TacticalBattle::s4_tick(TacticalMode&, SimRng&) {}
-void TacticalBattle::s4_cancel(std::span<const objects::ObjectId>) {}
-void TacticalBattle::s4_set_owner(TacticalMode&, objects::ObjectId, int32_t) {}
-void TacticalBattle::s4_leave(TacticalMode&, objects::ObjectId, Vec3) {}
-void TacticalBattle::s4_apply(TacticalMode&) {}
-cmd::RejectReason TacticalBattle::s4_command(TacticalMode&, uint8_t, const cmd::EventData&, SimRng&) { return cmd::RejectReason::Unhandled; }
-void TacticalBattle::s4_hash(StateHasher&) const {}
-bool TacticalBattle::can_garrison(objects::ObjectId, objects::ObjectId) const { return false; }
-bool TacticalBattle::can_garrison_fire(objects::ObjectId) const { return false; }
-objects::ObjectId TacticalBattle::garrison_holder_of(objects::ObjectId) const { return objects::kNoObjectId; }
-std::vector<objects::ObjectId> TacticalBattle::garrisoned_units(objects::ObjectId) const { return {}; }
-cmd::RejectReason TacticalBattle::order_garrison(TacticalMode&, uint8_t, std::span<const objects::ObjectId>, objects::ObjectId, SimRng&) {
-    return cmd::RejectReason::NotAllowed;
-}
-cmd::RejectReason TacticalBattle::order_leave_garrison(TacticalMode&, uint8_t, std::span<const objects::ObjectId>) {
-    return cmd::RejectReason::NotAllowed;
-}
-uint32_t TacticalBattle::eject_garrison(TacticalMode&, objects::ObjectId) { return 0; }
-
-#else
 
 namespace tg = alamo::tactical::garrison;
 namespace tc = alamo::tactical::combat;
@@ -450,6 +418,5 @@ uint32_t TacticalBattle::eject_garrison(TacticalMode& mode, objects::ObjectId ho
     return n;
 }
 
-#endif
 
 }  // namespace alamo::sim

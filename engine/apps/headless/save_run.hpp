@@ -10,15 +10,12 @@
 //       first record is the loaded state). --replay applies a recorded command stream on top of the save
 //       (CommandPipeline::replay_from_save: a stream recorded after loading this save, or a full tick-0 stream of the
 //       same run); --record-orders records the orders given after the load as a stream continuing the save.
-//   --save-session KIND --save-check --save-at T FILE --ticks K [--expect-pending a,b,...]
+//   --save-session KIND --save-check --save-at T FILE --ticks K
 //       The N1 done-check: run to T, save, continue to T+K (CRC log A); load the save into a fresh session in this
 //       process and run to T+K (log B); run `--load FILE` in a fresh process (log C); B and C must equal A's records
 //       from T on (first_divergence names the first diverging tick + system). Also: a session with another seed
-//       must refuse the save. Chunks that do not load yet because their system's write/read has not landed are
-//       "pending": when every failing chunk is listed in --expect-pending the check verifies the CRC systems whose
-//       chunks did load at the save tick, prints "PENDING: <chunks>" and exits 77 (ctest SKIP_RETURN_CODE); a failing
-//       chunk not in the list fails the check (exit 1). Listed chunks that now load are reported so the list can be
-//       emptied.
+//       must refuse the save. Every chunk must load: a chunk that fails to load fails the check (exit 1), and a
+//       failed load lists the CRC systems that already differ at the save tick.
 //
 // Sessions:
 //   synthetic  no game data: a 5-planet galaxy (Empire / Underworld / Neutral), a story plot set with a Lua script
@@ -63,7 +60,6 @@ struct SaveRunOptions {
     std::string crc_out;
     std::string replay;         // --replay with --load
     std::string record_orders;  // --record-orders with --load
-    std::vector<std::string> expect_pending;
     std::string game_dir;
     std::vector<std::string> game_args;
     int32_t workers = -1;

@@ -165,9 +165,6 @@ function(alamo_game_add_exe)
     endif()
   endforeach()
   set(_dir ${CMAKE_CURRENT_FUNCTION_LIST_DIR})
-  if(NOT EXISTS ${_dir}/app/game_main.cpp)
-    return()
-  endif()
   add_executable(alamo_game ${_dir}/app/game_main.cpp ${_dir}/app/app_session.cpp ${_dir}/app/app_input.cpp ${_dir}/app/app_screens.cpp
                            ${_dir}/app/app_hud.cpp ${_dir}/app/app_frame.cpp ${_dir}/app/app_cinematic.cpp ${_dir}/app/app_script.cpp ${_dir}/app/app_script_saveload.cpp ${_dir}/app/app_benchmark.cpp ${_dir}/app/app_bench_scenario.cpp ${_dir}/app/game_render.cpp ${_dir}/app/game_ui.cpp ${_dir}/app/game_movies.cpp ${_dir}/app/frame_overlay.cpp
                            ${_dir}/app/game_info.cpp ${_dir}/app/game_display.cpp ${_dir}/app/app_mods.cpp)

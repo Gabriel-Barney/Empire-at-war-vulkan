@@ -31,9 +31,7 @@
 #include "alamo/tactical/abilities/ability_data.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
 #include "alamo/tactical/combat/combat_system.hpp"
-#ifdef ALAMO_SIM_HAVE_FOG
 #include "alamo/tactical/fog/fog_of_war.hpp"  // fog of war constants (owner: fog agent)
-#endif
 
 namespace alamo::data {
 struct GameConstants;
@@ -159,11 +157,9 @@ public:
     // yaw of the bone's x axis; a missing bone is invalid (-1). False without model data (`out` cleared).
     bool garrison_bones(uint32_t type, bool space, int32_t guns, std::vector<std::vector<tactical::combat::GarrisonBone>>& out) const;
     // --- end battle host ---
-#ifdef ALAMO_SIM_HAVE_FOG
     // Fog of war GameConstants (Desired{Land,Space}FOWCellSize, {Land,Space}FOWRegrowTime, AIUsesFogOfWar{Land,Space},
     // Tactical_Overrun_Multiple, Minimum_Tactical_Overrun_Time_In_Secs). Owner: fog agent.
     const tactical::fog::FogConstants& fog_constants() const { return fog_constants_; }
-#endif
 
     // Per-battle tables: one UnitDesc per entry of `unit_types` (same order; duplicates allowed), the
     // hardpoints and projectiles they reference. out_unit_index[i] = UnitDesc index of unit_types[i].
@@ -236,9 +232,7 @@ private:
     const FileProvider* files_ = nullptr;           // battle host: model reads
     struct ModelCache;                              // battle host: (type, mode) -> ModelInfo, mutex-guarded
     std::shared_ptr<ModelCache> model_cache_;
-#ifdef ALAMO_SIM_HAVE_FOG
     tactical::fog::FogConstants fog_constants_;
-#endif
 };
 
 }  // namespace alamo::sim

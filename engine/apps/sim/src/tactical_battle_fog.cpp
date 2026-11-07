@@ -1,9 +1,8 @@
 // Fog of war hookup of TacticalBattle (owner: fog agent; docs/re/FOG_OF_WAR.md, engine/tactical/fog).
-// Kept in its own file so the other battle hooks (A1, L1/S4) stay separate. Without ALAMO_SIM_HAVE_FOG every
-// entry point is a no-op. Fog never draws RNG and is not hashed into the frame CRC.
+// Kept in its own file so the other battle hooks (A1, L1/S4) stay separate. Fog never draws RNG and is not hashed
+// into the frame CRC.
 #include "alamo/sim/tactical_battle.hpp"
 
-#ifdef ALAMO_SIM_HAVE_FOG
 #include <algorithm>
 #include <cmath>
 
@@ -11,24 +10,8 @@
 
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/objects/game_object_types.hpp"
-#endif
 
 namespace alamo::sim {
-
-#ifndef ALAMO_SIM_HAVE_FOG
-
-void TacticalBattle::fog_begin(TacticalMode&, uint32_t) {}
-void TacticalBattle::fog_after_deploy(TacticalMode&) {}
-void TacticalBattle::fog_decay() {}
-void TacticalBattle::fog_service(TacticalMode&) {}
-void TacticalBattle::fog_owner_changed(TacticalMode&, objects::ObjectHandle, int32_t) {}
-void TacticalBattle::fog_ping(objects::ObjectId) {}
-void TacticalBattle::fog_setup_tick() {}
-commands::RejectReason TacticalBattle::fog_setup_command(TacticalMode&, uint8_t, const commands::EventData&) {
-    return commands::RejectReason::NotAllowed;
-}
-
-#else
 
 namespace fw = alamo::tactical::fog;
 
@@ -225,9 +208,7 @@ void TacticalBattle::fog_overrun() {
     float power4 = 0.0f, power8 = 0.0f;
     for (const Unit& u : units_) {
         if (!u.alive || u.retreated || !store.alive(u.h)) continue;
-#ifdef ALAMO_SIM_HAVE_GARRISON
         if (garrison_.garrisoned(u.id)) continue;
-#endif
         const objects::TypeIndex t = store.type(u.h);
         if (t >= types.size()) continue;
         const int32_t o = store.owner(u.h);
@@ -250,9 +231,7 @@ void TacticalBattle::fog_service_sources(const objects::ObjectStore& store) {
         const objects::TypeIndex t = store.type(u.h);
         const bool setup_only = t < catalog_->types().size() && catalog_->types().get_bool(t, "Reveal_During_Setup_Phase_Only");
         bool contained = false;
-#ifdef ALAMO_SIM_HAVE_GARRISON
         contained = garrison_.garrisoned(u.id);  // OI fog: obj +0x3a7 (garrisoned / contained)
-#endif
         fog_.source_service(u.id, fog_object_of(store, u.h), contained, setup_only);
     }
 }
@@ -498,6 +477,5 @@ bool TacticalBattle::fog_reinforce_point_ok(int32_t player, float x, float y) co
     return fog_.reinforce_point_ok(player, x, y, c);
 }
 
-#endif
 
 }  // namespace alamo::sim

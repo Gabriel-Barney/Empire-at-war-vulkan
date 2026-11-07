@@ -56,8 +56,6 @@ namespace {
 
 using namespace alamo;
 
-constexpr int kExitPending = 77;  // ctest SKIP_RETURN_CODE: the check ran as far as the landed chunks allow
-
 std::string env_text(const char* name) {
 #ifdef _MSC_VER
     char* v = nullptr;
@@ -78,10 +76,6 @@ std::string join(const std::vector<std::string>& v, const char* sep = ",") {
     std::string out;
     for (const std::string& s : v) out += (out.empty() ? "" : sep) + s;
     return out;
-}
-
-bool contains(const std::vector<std::string>& v, std::string_view s) {
-    return std::find(v.begin(), v.end(), s) != v.end();
 }
 
 // In-memory Data\ tree (the synthetic session needs no files on disk).
@@ -939,26 +933,6 @@ commands::SavePoint save_point(const SaveFile& f) {
     return {f.tick, commands::save_digest(bytes)};
 }
 
-// The chunks a CRC system's hash depends on (pending mode compares a system only when all of them loaded). Systems not
-// listed here (galactic AI, ...) are compared by the full check only.
-// `chunks`: the chunks of the save.
-std::vector<std::string> crc_dependencies(const std::string& system, const std::vector<std::string>& chunks) {
-    if (system == "commands") return {"frame"};  // batch digest: frame chunk
-    if (system == "spatial")                     // stage 2: the tactical trees ("spatial" only while a battle runs)
-        return contains(chunks, "spatial") ? std::vector<std::string>{"objects", "spatial"} : std::vector<std::string>{"frame"};
-    if (system == "story") return {"story", "story.bridge", "story.players"};
-    if (system == "anim") return {"objects", "anim"};
-    if (system.rfind("galactic.", 0) == 0 && contains(chunks, system)) return {"objects", "galactic.state", system};
-    if (system.rfind("battle.", 0) == 0) {  // stage 2: a battle's hashes span its chunks; no battle: the "battles" chunk
-        std::vector<std::string> deps = {"objects", "battles"};
-        for (const std::string& c : chunks)
-            if (c.rfind("battle.", 0) == 0) deps.push_back(c);
-        return deps;
-    }
-    if (contains(chunks, system)) return {system};
-    return {};
-}
-
 // --save-session KIND --save-at T FILE [--ticks K] [--crc-out F] [--record-orders F]
 int save_mode(Harness& hz, const SaveRunOptions& opt) {
     std::string err;
@@ -1090,7 +1064,7 @@ int run_child(const SaveRunOptions& opt, const std::string& crc_path) {
     return std::system(cmd.c_str());
 }
 
-// --save-session KIND --save-check --save-at T FILE --ticks K [--expect-pending a,b]
+// --save-session KIND --save-check --save-at T FILE --ticks K
 int check_mode(Harness& hz, const SaveRunOptions& opt) {
     std::string err;
     bool ok = true;
@@ -1160,8 +1134,6 @@ int check_mode(Harness& hz, const SaveRunOptions& opt) {
     if (!(b->host->random().synced() == rng_save)) fail("B: the synced RNG after the load differs from the original's at the save tick");
     else std::printf("B load: synced RNG equals the original's at the save tick (state %08x, %" PRIu64 " draws)\n", rng_save.state(),
                      rng_save.draws());
-    std::vector<std::string> saved_chunks;
-    for (const SaveChunk& c : save.chunks()) saved_chunks.push_back(c.name);
     std::printf("B load: %s\n", rep.text().c_str());
     if (!rep.descriptor_error.empty()) {
         fail("load refused its own save: " + rep.descriptor_error);
@@ -1170,45 +1142,18 @@ int check_mode(Harness& hz, const SaveRunOptions& opt) {
     std::vector<std::string> failing = rep.failed;
     failing.insert(failing.end(), rep.missing.begin(), rep.missing.end());
     failing.insert(failing.end(), rep.unexpected.begin(), rep.unexpected.end());
-    std::vector<std::string> unexpected, pending, now_loading;
-    for (const std::string& c : failing) (contains(opt.expect_pending, c) ? pending : unexpected).push_back(c);
-    for (const std::string& c : opt.expect_pending)
-        if (contains(rep.loaded, c)) now_loading.push_back(c);
-    if (!unexpected.empty()) fail("chunks failed to load (not in --expect-pending): " + join(unexpected));
+    if (!failing.empty()) fail("chunks failed to load: " + join(failing));
 
     if (!loaded) {
-        // Pending: verify, at the save tick, every CRC system whose chunks all loaded.
+        fail("load failed: " + load_err);
+        // Diagnostic: the CRC systems whose loaded state already differs from the original's at the save tick.
         const CrcRegistry& reg = b->host->crc_registry();
-        std::vector<std::string> verified, unverified;
-        for (CrcRegistry::SystemId i = 0; i < reg.size(); ++i) {
-            const std::string& name = reg.name(i);
-            const std::vector<std::string> deps = crc_dependencies(name, saved_chunks);
-            const bool all = !deps.empty() && std::all_of(deps.begin(), deps.end(), [&rep](const std::string& c) { return contains(rep.loaded, c); });
-            if (!all || i >= at_save.systems.size()) {
-                unverified.push_back(name);
-                continue;
-            }
-            const uint64_t got = reg.hash_system(i);
-            if (got != at_save.systems[i]) {
-                char m[256];
-                std::snprintf(m, sizeof m, "loaded system %s differs at tick %" PRIu64 ": %016" PRIx64 " != saved %016" PRIx64, name.c_str(), T,
-                              got, at_save.systems[i]);
-                fail(m);
-            } else {
-                verified.push_back(name);
-            }
-        }
-        std::printf("tick %" PRIu64 " CRC systems matching the save: %s\n", T, verified.empty() ? "(none)" : join(verified, " ").c_str());
-        std::printf("not verifiable until the pending chunks load: %s\n", unverified.empty() ? "(none)" : join(unverified, " ").c_str());
-        if (!now_loading.empty()) std::printf("note: --expect-pending lists chunks that load now: %s (remove them)\n", join(now_loading).c_str());
-        if (!ok) {
-            std::printf("save check (%s): FAILED\n", opt.session.c_str());
-            return 1;
-        }
-        std::printf("PENDING: %s (their write/read has not landed; the continue-from-save CRC comparison runs once every chunk "
-                    "loads)\n",
-                    join(pending).c_str());
-        return kExitPending;
+        std::vector<std::string> differing;
+        for (CrcRegistry::SystemId i = 0; i < reg.size() && i < at_save.systems.size(); ++i)
+            if (reg.hash_system(i) != at_save.systems[i]) differing.push_back(reg.name(i));
+        std::printf("tick %" PRIu64 " CRC systems differing from the save: %s\n", T, differing.empty() ? "(none)" : join(differing, " ").c_str());
+        std::printf("save check (%s): FAILED\n", opt.session.c_str());
+        return 1;
     }
 
     // Every chunk loaded: B continues to T+K recording its orders as a stream continuing the save.
@@ -1258,7 +1203,6 @@ int check_mode(Harness& hz, const SaveRunOptions& opt) {
     replay_check("D load + replay of the stream recorded after the load", rec_b);
     replay_check("E load + replay of the original's tick-0 stream", rec_a);
 
-    if (!now_loading.empty()) std::printf("note: --expect-pending lists chunks that load now: %s (remove them)\n", join(now_loading).c_str());
     std::printf("save check (%s, save at %" PRIu64 ", +%" PRIu64 " ticks): %s\n", opt.session.c_str(), T, opt.ticks, ok ? "OK" : "FAILED");
     return ok ? 0 : 1;
 }

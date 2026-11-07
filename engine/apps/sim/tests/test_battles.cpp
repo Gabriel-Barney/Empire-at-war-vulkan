@@ -47,9 +47,7 @@
 #include "alamo/sim/sim_host.hpp"
 #include "alamo/tactical/movement/ted_grid.hpp"  // S7 t07: SPACE_OBSTACLE footprints
 #include "alamo/vfs/vfs.hpp"
-#ifdef ALAMO_SIM_HAVE_GARRISON
 #include "alamo/tactical/garrison/garrison_types.hpp"  // S4
-#endif
 #ifdef ALAMO_SIM_HAVE_ANIM
 #include "alamo/sim/sim_anim.hpp"
 #endif
@@ -765,7 +763,6 @@ void battles_budget_hook(CampaignBattleOptions& opt, std::vector<ai::tactical::T
 }
 #endif
 
-#ifdef ALAMO_SIM_HAVE_FOG
 // Fog of war probe after each tick (owner: fog agent): player 0 = human Empire, 1 = AI Underworld, 2 = neutral.
 void fog_probe(TacticalBattle& b, TacticalMode& tm, Run& out, StateHasher& acc, bool& refog_set) {
     tactical::fog::FogOfWar* f = b.fog();
@@ -911,15 +908,12 @@ void fog_use_ability(TacticalBattle& b, TacticalMode& tm, bool land, Run& out) {
         return;
     }
 }
-#endif
 
 Run run_campaign(const Data& d, bool land, bool fight, int32_t workers, uint64_t ticks, float retreat_ratio = 0.0f, bool fog = true,
                  uint32_t end_hold_frames = 0) {
     Run out;
-#ifdef ALAMO_SIM_HAVE_FOG
     StateHasher fog_acc;
     bool fog_refog_set = false;
-#endif
     jobs::JobSystem js(jobs::JobSystemConfig{workers});
     SimConfig cfg;
     cfg.seed = 2026;
@@ -989,19 +983,15 @@ Run run_campaign(const Data& d, bool land, bool fight, int32_t workers, uint64_t
             out.ability_command = static_cast<int>(host.execute_direct(0, commands::CommandSource::Player, ev));
             for (const auto& o : battles.battle()->tables().abilities.objects) out.ability_records += static_cast<uint32_t>(o.unit_abilities.size());
         }
-#ifdef ALAMO_SIM_HAVE_FOG
         if (fog && !out.fog_ability_frame && battles.battle() && battles.battle()->frame() == 30 && host.tactical())
             fog_use_ability(*battles.battle(), *host.tactical(), land, out);  // fog follow-up (S9)
-#endif
         if (battles.battle()) {
             out.activations = battles.battle()->stats().activations;
             out.particles = battles.battle()->stats().particles;
-#ifdef ALAMO_SIM_HAVE_FOG
             if (TacticalMode* tm = host.tactical()) {
                 fog_probe(*battles.battle(), *tm, out, fog_acc, fog_refog_set);
                 fog_bm_probe(*battles.battle(), *tm, out);  // FOW t01
             }
-#endif
         }
         if (std::getenv("S10_DEBUG") && battles.battle() && (t % 300) == 0) {
             const auto& c = battles.battle()->combat();
@@ -1023,9 +1013,7 @@ Run run_campaign(const Data& d, bool land, bool fight, int32_t workers, uint64_t
             }
         }
     }
-#ifdef ALAMO_SIM_HAVE_FOG
     out.fog_hash = fog_acc.digest();
-#endif
     for (const std::string& s : trace) out.trace_battles = out.trace_battles || s == "T5.battles";
     if (battles.battle()) std::printf("  (battle still running: %s)\n", battles.battle()->summary().c_str());
     out.crc = host.crc_log();
@@ -1379,13 +1367,11 @@ StoryRun run_story_battle(const Data& d, const FileProvider& files, int32_t work
     for (uint64_t t = 0; t < 2500; ++t) {
         host.tick_once();
         if (battles.battle()) out.activations = battles.battle()->stats().activations;
-#ifdef ALAMO_SIM_HAVE_FOG
         if (battles.battle())
             if (const tactical::fog::FogOfWar* f = battles.battle()->fog()) {
                 out.fog_on_seen = out.fog_on_seen || f->fow_active();
                 out.fog_off_seen = out.fog_off_seen || !f->fow_active();
             }
-#endif
     }
     if (host.story()) {
         out.log = host.story()->log_text("S10 story battle");
@@ -2145,7 +2131,7 @@ void test_story_battle(const Data& d) {
     CHECK(a.log.find("BattleStarted") != std::string::npos && a.log.find("BattleEnded") != std::string::npos &&
           a.log.find("TacDestroyed") != std::string::npos);
     CHECK(!a.log.empty() && a.log == b.log);
-#if defined(ALAMO_SIM_HAVE_FOG) && defined(ALAMO_LUA_HAVE_FOG)
+#ifdef ALAMO_LUA_HAVE_FOG
     // fog follow-up: FogOfWar.Reveal from the tactical script -> STORY_FOG_POSITION_REVEAL -> ENABLE_FOW 0.
     std::printf("  fog: Script_Fog %d, Fog_Point %d, Fog_Object %d, FOW active seen %d / off seen %d\n", fired("Script_Fog") ? 1 : 0,
                 fired("Fog_Point") ? 1 : 0, fired("Fog_Object") ? 1 : 0, a.fog_on_seen ? 1 : 0, a.fog_off_seen ? 1 : 0);
@@ -2652,7 +2638,6 @@ std::string env_or_empty(const char* name) {
 #endif
 }
 
-#ifdef ALAMO_SIM_HAVE_FOG
 // Fog of war in battles (owner: fog agent; docs/re/FOG_OF_WAR.md): units with REVEAL reveal for their side, the
 // human sees part of the map and enemy units hidden / shown over time, the AI player is never fogged (force 0),
 // the neutral player has no grid; fog is worker-count independent (identical per-frame fog digests and CRC logs for
@@ -2686,9 +2671,7 @@ void test_fog_battle(const Data& d) {
         CHECK(a.fog_shots > 0 && a.fog_flashed > 0 && a.fog_api_ok && a.fog_api_checked);
     }
 }
-#endif
 
-#ifdef ALAMO_SIM_HAVE_FOG
 // FOWF t05: a land battle with a mod-style setup phase (SetupPhaseEnabled, SetupPhaseCountdownSeconds 3). During setup
 // the human moves an own unit with SetupPhaseMove (31; an enemy unit is refused); SetupPhaseTriggerEnd (32) from the AI arms the 90-frame
 // countdown, from the (only) human ends the phase at the next tick; afterwards 31 is refused.
@@ -2814,7 +2797,6 @@ void test_fog_bm_battle(const Data& d) {
     CHECK(a.bm_r_on == 1350.0f && a.bm_r_off == 900.0f);
     CHECK(a.bm_saved && a.bm_grid_ok && a.bm_save_ok);
 }
-#endif
 
 // S8 t08 (TACTICAL_COMBAT §3.1.1): the units with both weapon sources get their own weapon (WEAPON behaviour +
 // Projectile_Types) next to their weapon hardpoints, with the Fire_Weapon_When_* / Fire_When_* flags of the table; a type
@@ -3218,7 +3200,6 @@ void test_foc() {
             CHECK(ae[1].type == 3 && !ae[1].tactical && ae[1].required_mission == 0 && ae[1].required_mission_count == 1 &&
                   ae[1].required_unit_count == 2);
         }
-#ifdef ALAMO_SIM_HAVE_GARRISON
         tactical::garrison::HolderDesc hd;
         tactical::garrison::OccupantDesc od;
         tactical::garrison::CapturePointDesc cd;
@@ -3229,7 +3210,6 @@ void test_foc() {
         CHECK(tactical::garrison::occupant_desc_from_type(types, types.resolve_name("Dark_Trooper_PhaseIII"), od) && od.value == 2);
         CHECK(tactical::garrison::capture_desc_from_type(types, types.resolve_name("Reinforcement_Point"), cd) && cd.radius == 100.0f &&
               cd.transition_seconds == 10.0f && cd.sticky);
-#endif
     }  // --- end S4 ---
     {  // S7 t07 (MOVEMENT §2.2): the FoC construction / capture pods have no radius tag; with model data their footprint is
        // the space model's collision-bound half extent x Scale_Factor (N_Orbital_Construction_Pod: x 1.75)
@@ -3255,7 +3235,6 @@ void test_foc() {
                         static_cast<double>(hy), static_cast<double>(scale), static_cast<double>(r));
         }
     }
-#ifdef ALAMO_SIM_HAVE_FOG
     // Fog of war on real data (owner: fog agent): shipped GameConstants; grids, dense mask and REVEAL placements of
     // two real maps.
     const tactical::fog::FogConstants& fc = catalog.fog_constants();
@@ -3319,7 +3298,6 @@ void test_foc() {
                     name, g ? g->width() : 0, g ? g->height() : 0, g ? static_cast<double>(g->cell_w()) : 0.0, sources, dense.size(), dense_cells, vis);
         CHECK(g != nullptr && g->width() > 0 && g->width() <= 512 && g->height() > 0 && !fog.grid(2));
     }
-#endif
 }
 
 #ifdef ALAMO_SIM_HAVE_ANIM
@@ -5643,9 +5621,7 @@ void test_reserve_drop_facing(bool attacker_marker) {
         CHECK(reserves.size() == 1);
         if (reserves.empty()) break;
         const objects::ObjectId key = reserves[0].galactic_id;
-#ifdef ALAMO_SIM_HAVE_FOG
         if (b->fog()) b->fog()->reveal_all(1);  // the drop test needs unfogged cells
-#endif
         // The side's start facing (player 1's troopers already on the map), printed for reference.
         std::vector<objects::ObjectId> before;
         Vec3 start_face{};
@@ -5764,7 +5740,6 @@ void test_battle_ai_land_drop(const Data& d) {
         std::vector<ai::tactical::Vec3f> fog_ok, clear_ok;
         scan(fog_ok);
         size_t newly = 0;
-#ifdef ALAMO_SIM_HAVE_FOG
         const bool fog = b->fog() != nullptr;
         if (fog) {
             b->fog()->reveal_all(1);  // nothing fogged for player 1 any more
@@ -5776,10 +5751,6 @@ void test_battle_ai_land_drop(const Data& d) {
         } else {
             clear_ok = fog_ok;
         }
-#else
-        const bool fog = false;
-        clear_ok = fog_ok;
-#endif
         CHECK(!clear_ok.empty());
         for (const auto& q : fog_ok) CHECK(ai.land_drop_ok(1, key, q));  // fog cleared: still valid (and same answer twice)
         const mv::V2 strip = mv::cell_center(2, 31);
@@ -6584,9 +6555,7 @@ void test_landing_drop(bool timed, uint32_t destroy_at = 0) {
             key = reserves[0].galactic_id;
             squad = reserves[0].type;
             spawned_before = b->stats().spawned;
-#ifdef ALAMO_SIM_HAVE_FOG
             if (b->fog()) b->fog()->reveal_all(1);  // the drop test needs unfogged cells
-#endif
             size_t valid = 0, refused = 0;
             for (int32_t cy = 6; cy < 58 && !dropped; cy += 2)
                 for (int32_t cx = 6; cx < 58 && !dropped; cx += 2) {
@@ -6819,9 +6788,7 @@ void test_vehicle_landing_exit() {
             CHECK(!reserves.empty());
             if (reserves.empty()) break;
             const objects::ObjectId key = reserves[0].galactic_id;
-#ifdef ALAMO_SIM_HAVE_FOG
             if (b->fog()) b->fog()->reveal_all(1);
-#endif
             for (int32_t cy = 6; cy < 58 && !dropped; cy += 2)
                 for (int32_t cx = 6; cx < 58 && !dropped; cx += 2) {
                     const mv::V2 c = mv::cell_center(cx, cy);
@@ -7602,7 +7569,6 @@ void test_fighter_station_dies() {
     CHECK(pushed && died && dropped && record_dropped);
 }
 
-#ifdef ALAMO_SIM_HAVE_FOG
 // S7 t22 (FIGHTER_FLYING §4.9 step 3): a goal hidden by fog for the squadron's player is still its formation goal, so the
 // squadron toggles Idle <-> Directed_Combat every frame (Directed_Combat: fogged -> NoTarget -> enter_idle; Idle: a goal
 // that is not dying -> Directed_Combat), as in retail. Here the goal is an ordered Attack on an enemy frigate that no
@@ -7673,7 +7639,6 @@ void test_fighter_fog_toggle() {
     CHECK(window >= 60 && stayed_hidden && order_kept && toggles >= 38);
     CHECK(r && r->goal_object == enemy);
 }
-#endif
 
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -7711,7 +7676,6 @@ int main(int argc, char** argv) {
         test_s4_battle(*ds4);
     }
 #endif
-#ifdef ALAMO_SIM_HAVE_FOG
     std::printf("fog of war battles\n");
     {
         auto dfog = make_data(true);
@@ -7727,7 +7691,6 @@ int main(int argc, char** argv) {
         auto dsetup = make_data(false, false, false, false, false, false, false, false, false, true);
         test_fog_setup_battle(*dsetup);
     }
-#endif
 #ifdef ALAMO_SIM_HAVE_ANIM
     std::printf("anim battles (R3: flinch, death clips, corpses)\n");
     test_anim_battles();
@@ -7803,10 +7766,8 @@ int main(int argc, char** argv) {
     test_escort_attack_in_range();
     test_ai_fighter_blocks();  // s78f t10
     test_fighter_station_dies();
-#ifdef ALAMO_SIM_HAVE_FOG
     std::printf("S7 t22: a fogged formation goal toggles Idle <-> Directed_Combat\n");
     test_fighter_fog_toggle();
-#endif
     std::printf("t41: the final tick's deaths are in the battle's loss records\n");
     test_final_tick_losses(*d);
     std::printf("story t06: tactical victory monitor (hold, queued tests, ENABLE_VICTORY, VICTORY reward)\n");

@@ -87,13 +87,9 @@
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
 #include "alamo/ai/tactical/damage_tracking.hpp"
 #endif
-#ifdef ALAMO_SIM_HAVE_FOG
 #include "alamo/tactical/fog/fog_of_war.hpp"  // fog of war hookup (owner: fog agent)
-#endif
-#ifdef ALAMO_SIM_HAVE_GARRISON
 #include "alamo/tactical/garrison/capture.hpp"   // S4 garrisons + structure capture (owner: S4 agent)
 #include "alamo/tactical/garrison/garrison.hpp"
-#endif
 
 namespace alamo::anim {
 struct IdleRecord;  // s78l t03 (alamo/anim/anim_behaviors.hpp)
@@ -460,10 +456,8 @@ public:
                                           objects::ObjectId holder, SimRng& rng);
     commands::RejectReason order_leave_garrison(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units);
     uint32_t eject_garrison(TacticalMode& mode, objects::ObjectId holder);
-#ifdef ALAMO_SIM_HAVE_GARRISON
     const tactical::garrison::GarrisonSystem& garrison() const { return garrison_; }
     const tactical::garrison::CapturePointSystem* captures() const { return captures_.get(); }
-#endif
     // --- end S4 ---
 
     // --- integration fixes: human order API (alamo_game battle_orders.cpp) ---
@@ -1079,7 +1073,6 @@ public:
     ai::tactical::DamageTrackingStore& damage_tracking() { return damage_tracking_; }
     const ai::tactical::DamageTrackingStore& damage_tracking() const { return damage_tracking_; }
 #endif
-#ifdef ALAMO_SIM_HAVE_FOG
     // --- fog of war (owner: fog agent; tactical_battle_fog.cpp) ---
     // One FogOfWar per battle (BattleConfig::fog): grids created in setup() (neutral player skipped, relations
     // from CombatSystem::is_enemy, humans from the galaxy, dense mask from the mode's nebula / asteroid / ion
@@ -1130,7 +1123,6 @@ public:
     bool fog_reinforce_overlay(int32_t player, std::vector<uint8_t>& out) const;
     bool fog_reinforce_point_ok(int32_t player, float x, float y) const;
     // --- end fog ---
-#endif
     void hash(StateHasher& h) const;  // battle-host state (participants, units, retreat, result)
     // S10-int: abilities.objects + combat.ext (S9 state) and the integration state (speed factors, particles,
     // containers, dummies, engines-offline flags). Registered by CampaignBattles as "battle.abilities".
@@ -1498,12 +1490,10 @@ private:
     void s4_apply(TacticalMode& mode);  // garrison / capture events -> movement, combat, store, owners, story feeds
     commands::RejectReason s4_command(TacticalMode& mode, uint8_t player, const commands::EventData& ev, SimRng& rng);
     void s4_hash(StateHasher& h) const;
-#ifdef ALAMO_SIM_HAVE_GARRISON
     tactical::garrison::GarrisonSystem garrison_;
     std::unique_ptr<tactical::garrison::CapturePointSystem> captures_;
     bool s4_used_ = false;  // some garrison / capture state exists (CRC section on from then)
     objects::ObjectStore* s4_store_ = nullptr;  // the battle mode's primary store (capture rule b)
-#endif
     // --- end S4 ---
     Vec3 anchor_[2]{}, facing_[2]{};
     Vec3 drop_facing_[2]{};  // a1h t06: the sides' entry-facing records (mode +0x288; zero = yaw 0), see drop_yaw
@@ -1531,7 +1521,7 @@ private:
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
     ai::tactical::DamageTrackingStore damage_tracking_;
 #endif
-    // --- fog of war (owner: fog agent; tactical_battle_fog.cpp). No-ops without ALAMO_SIM_HAVE_FOG. ---
+    // --- fog of war (owner: fog agent; tactical_battle_fog.cpp) ---
     void fog_begin(TacticalMode& mode, uint32_t players);  // setup(): before the start forces deploy
     void fog_after_deploy(TacticalMode& mode);              // setup(): dense mask, battle scale
     void fog_decay();                                       // tick(): step 4, before movement
@@ -1544,7 +1534,6 @@ private:
     // AbilityEventKind::SpawnObject handler that spawns it (Spawned_Object_Type at the target, gone next tick [M]).
     void fog_ping(objects::ObjectId id);
     void spawn_ability_object(TacticalMode& mode, const tactical::abilities::AbilityEvent& e);
-#ifdef ALAMO_SIM_HAVE_FOG
     std::vector<objects::ObjectId> fog_pings_;  // fog follow-up: live ping objects, spawn order
     tactical::fog::FogObject fog_object_of(const objects::ObjectStore& store, objects::ObjectHandle h) const;
     std::vector<tactical::fog::FogSetupObject> fog_setup_objects() const;              // OI fog
@@ -1557,7 +1546,6 @@ private:
     bool fog_on_ = false;
     bool fog_global_active_ = true, fog_global_render_ = true;
     objects::BehaviorTypeId fog_reveal_beh_ = 0, fog_hide_beh_ = 0, fog_team_beh_ = 0;
-#endif
     // --- end fog ---
     // --- L1 systems (owner: tactical-systems agent; tactical_battle_l1.cpp) ---
     void l1_add_types(std::vector<uint32_t>& use) const;    // constructor: the mode's special-weapon types

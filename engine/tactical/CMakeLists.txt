@@ -26,9 +26,7 @@ set_tests_properties(alamo_tactical_tree_save_tests PROPERTIES TIMEOUT 300)
 # fog/ = fog of war (alamo_tactical_fog), garrison/ = S4 garrisons + structure capture (alamo_tactical_garrison),
 # hangar/ = SPAWN_SQUADRON launches + station-upgrade completion (alamo_tactical_hangar).
 foreach(_sub movement combat abilities fog garrison hangar)
-  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${_sub}/CMakeLists.txt)
-    add_subdirectory(${_sub})
-  endif()
+  add_subdirectory(${_sub})
 endforeach()
 
 # Benchmark (not a test): alamo_tactical_bench. Uses the job system for the parallel paths.

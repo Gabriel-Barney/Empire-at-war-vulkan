@@ -187,16 +187,7 @@ int battle_run(const MapRunOptions& opt, const std::string& data_dir, const Batt
     first.crc.comments = {"battles campaign " + name + " mode " + bopt.mode + " seed " + std::to_string(opt.seed) + " ticks " +
                           std::to_string(opt.ticks) + " aggressor " + std::to_string(bopt.aggressor_period)};
     if (!opt.crc_out.empty() && alamo_headless::save_crc_log(first.crc, opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
-    if (!opt.golden.empty()) {
-        CrcLog golden;
-        if (!CrcLog::load(opt.golden, golden, &err)) {
-            std::fprintf(stderr, "golden: %s\n", err.c_str());
-            return 2;
-        }
-        const auto d = first_divergence(golden, first.crc);
-        std::printf("golden: %s\n", d.message.c_str());
-        if (d.diverged) ok = false;
-    }
+    if (!opt.golden.empty() && alamo_headless::compare_golden(opt.golden, first.crc, ok) != 0) return 2;
     std::printf(ok ? "battles run: OK\n" : "battles run: FAILED\n");
     return ok ? 0 : 1;
 }

@@ -1090,16 +1090,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     first.crc.comments = {"A1 skirmish-ai " + kind + " seed " + std::to_string(opt.seed) + " ticks " + std::to_string(first.ticks)};
     std::string err;
     if (!opt.crc_out.empty() && alamo_headless::save_crc_log(first.crc, opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
-    if (!opt.golden.empty()) {
-        CrcLog golden;
-        if (!CrcLog::load(opt.golden, golden, &err)) {
-            std::fprintf(stderr, "golden: %s\n", err.c_str());
-            return 2;
-        }
-        const auto dv = first_divergence(golden, first.crc);
-        std::printf("golden: %s\n", dv.message.c_str());
-        if (dv.diverged) good = false;
-    }
+    if (!opt.golden.empty() && alamo_headless::compare_golden(opt.golden, first.crc, good) != 0) return 2;
     std::printf(good ? "skirmish-ai run: OK\n" : "skirmish-ai run: FAILED\n");
     return good ? 0 : 1;
 }

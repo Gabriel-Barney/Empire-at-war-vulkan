@@ -1,6 +1,5 @@
 #include "alamo/game/radar_feed.hpp"
 
-#ifdef ALAMO_GAME_HAVE_CONTROLS
 #include <algorithm>
 
 #include "alamo/data/values.hpp"
@@ -83,7 +82,6 @@ void RadarFeed::battle_tick(const sim::TacticalBattle& battle, const objects::Ob
         deaths_now.push_back(n);
     }
     deaths(deaths_now, settings, events);
-#ifdef ALAMO_SIM_HAVE_GARRISON
     if (const tactical::garrison::CapturePointSystem* cps = battle.captures()) {
         std::vector<RadarCapturePointNote> pts;
         for (size_t i = 0; i < cps->point_count(); ++i) {
@@ -104,9 +102,6 @@ void RadarFeed::battle_tick(const sim::TacticalBattle& battle, const objects::Ob
         }
         capture_points(pts, settings, events);
     }
-#else
-    (void)types;
-#endif
 #ifdef ALAMO_SIM_HAVE_STORY
     std::vector<RadarBlipNote> notes;
     if (story) {
@@ -129,4 +124,3 @@ void RadarFeed::battle_tick(const sim::TacticalBattle& battle, const objects::Ob
 }
 
 }  // namespace alamo::game
-#endif

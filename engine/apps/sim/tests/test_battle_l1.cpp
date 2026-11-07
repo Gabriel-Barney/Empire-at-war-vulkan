@@ -1238,7 +1238,6 @@ PadRun run_pads(const Data& d, int32_t workers, bool skirmish = false) {
             out.cooldown_refused = b->pad_build(*tm, pad, uc_t, false) == -1;
         }
         if (built_frame && f == built_frame + 40) out.rebuilt = b->pad_build(*tm, pad, uc_t, false) == 1;
-#ifdef ALAMO_SIM_HAVE_FOG
         tactical::fog::FogObject fo;
         if (scout != objects::kNoObjectId && b->fog() && b->fog_object(scout, fo)) {
             out.fog_on = true;
@@ -1246,7 +1245,6 @@ PadRun run_pads(const Data& d, int32_t workers, bool skirmish = false) {
             if (rain) out.sight_rain = fo.sight_range;
             else if (b->weather().intensity() <= 0.5f) out.sight_clear = fo.sight_range;
         }
-#endif
         if (out.rebuilt && out.sight_rain >= 0.0f && out.sight_clear >= 0.0f) break;
     }
     out.crc = host.crc_log();
@@ -1261,9 +1259,7 @@ void test_pads(const Data& d) {
                 a.fog_on, static_cast<double>(a.sight_clear), static_cast<double>(a.sight_rain));
     CHECK(a.fought && a.refused_rules && a.started && a.refused_full && a.locked && a.uc_seen && a.built && a.cleared && a.cooldown_refused &&
           a.rebuilt);
-#ifdef ALAMO_SIM_HAVE_FOG
     CHECK(a.fog_on && a.sight_clear == 300.0f && a.sight_rain == 150.0f);  // Land_FOW_Reveal_Range x Sight_Range_Modifier 0.5
-#endif
     CHECK(a.other_list_refused);
     const PadRun w = run_pads(d, 4);
     CHECK(!first_divergence(a.crc, w.crc).diverged);

@@ -287,12 +287,7 @@ public:
     }
     // --- fog follow-up: S8 targeting filter step 4 / special-weapon force 1 (read-only: parallel gather phase) ---
     bool target_hidden(int32_t player, tc::ObjectId target, bool force) const override {
-#ifdef ALAMO_SIM_HAVE_FOG
         return b_->fog_object_hidden(player, target, force);
-#else
-        (void)player, (void)target, (void)force;
-        return false;
-#endif
     }
     // --- end fog follow-up ---
     bool fire_bones(tc::ObjectId shooter, uint32_t hardpoint, tactical::Vec3& a, tactical::Vec3& b) override {
@@ -1834,11 +1829,9 @@ cmd::RejectReason TacticalBattle::order_reinforce(TacticalMode& mode, uint8_t pl
                     used += parts_[u.participant].pop;
                 }
             if (used + p.pop > rules_->faction(f).space_unit_cap) return R::QueueFull;
-#ifdef ALAMO_SIM_HAVE_FOG
             // battle host (fog agent ask): space drop validity 0x4d6fd0 - fogged (force 1) / inside a non-allied prevention
             // radius -> refused (TACTICAL_GAPS §4.2).
             if (!fog_reinforce_point_ok(static_cast<int32_t>(player), x, y)) return R::InvalidPosition;
-#endif
         }
         if (!space_) {
             // a1h t06 (TACTICAL_GAPS §4.2.2 item 5): Execute re-runs the drop validity (force 0, landing rule on, movers
@@ -2536,9 +2529,7 @@ bool TacticalBattle::land_drop_valid(TacticalMode& mode, int32_t player, objects
         if (s.type >= types.size()) return false;
         const mv::UnitDesc md = mv::unit_desc_from_type(types, s.type);
         if (!grid.passable_world({s.x, s.y}, movement_->classes().mask(md.movement_class))) return false;
-#ifdef ALAMO_SIM_HAVE_FOG
         if (fog_point_fogged(player, s.x, s.y, true)) return false;
-#endif
     }
     // 3. footprints: the formation box (broad phase), then each slot's own box against each blocking object's box.
     static const objects::BehaviorTypeId kMine = objects::behavior_type_id("PROXIMITY_MINE");

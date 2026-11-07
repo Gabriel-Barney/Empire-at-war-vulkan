@@ -115,12 +115,10 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
                                   if (credits_add_) credits_add_(p, d);
                               });
     ta::AbilityHost h;
-#ifdef ALAMO_SIM_HAVE_FOG
     h.point_fogged = [this](int32_t p, tactical::Vec3 v, bool force) { return fog_point_fogged(p, v.x, v.y, force); };
     h.object_hidden = [this](int32_t p, tc::ObjectId id, bool force) { return fog_object_hidden(p, id, force); };
     h.fow_reveal_add = [this](int32_t p, int32_t c, uint64_t s, float m) { fog_add_reveal_multiplier(p, c, s, m); };
     h.fow_reveal_remove = [this](int32_t p, uint64_t s) { fog_remove_reveal_modifier(p, s); };
-#endif
     // FIGHTER_FLYING Â§6.5: the snowspeeder tow cable circles its target (a team container: every live member).
     h.cable_attack = [this](tc::ObjectId user, tc::ObjectId target, float r_min, float r_max) {
         if (!movement_) return;

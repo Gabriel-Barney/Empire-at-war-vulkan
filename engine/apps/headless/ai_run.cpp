@@ -604,16 +604,7 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         std::printf("AI golden %s: %s\n", aopt.ai_golden.c_str(), same ? "MATCH" : "DIFFERS");
         if (!same) ok = false;
     }
-    if (!opt.golden.empty()) {
-        CrcLog golden;
-        if (!CrcLog::load(opt.golden, golden, &err)) {
-            std::fprintf(stderr, "golden: %s\n", err.c_str());
-            return 2;
-        }
-        const auto d = first_divergence(golden, first.crc);
-        std::printf("golden: %s\n", d.message.c_str());
-        if (d.diverged) ok = false;
-    }
+    if (!opt.golden.empty() && alamo_headless::compare_golden(opt.golden, first.crc, ok) != 0) return 2;
     std::printf(ok ? "galactic-ai run: OK\n" : "galactic-ai run: FAILED\n");
     return ok ? 0 : 1;
 }

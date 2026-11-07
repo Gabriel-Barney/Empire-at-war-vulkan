@@ -83,9 +83,9 @@
 //       Runs a session to tick T, saves it to FILE, runs K more ticks.
 //   alamo_headless --load FILE [--ticks K] [--crc-out F] [--replay STREAM.acmd] [--record-orders OUT.acmd]
 //       Rebuilds the saved session from its descriptor, loads it and runs K ticks (replaying / recording orders).
-//   alamo_headless --save-session KIND --save-check --save-at T FILE --ticks K [--expect-pending a,b,...]
+//   alamo_headless --save-session KIND --save-check --save-at T FILE --ticks K
 //       N1 done-check: save at T, continue to T+K; load in this process, in a fresh process and with replays, all
-//       must give the original's per-tick CRCs; exit 77 = "PENDING: <chunks>" (systems whose write/read has not landed).
+//       must give the original's per-tick CRCs.
 // BM1 benchmark (bench_run.hpp; scenario format alamo/sim/bench_scenario.hpp):
 //   alamo_headless --bench SCENARIO.abench [--runs R] [--warmup W] [--workers N] [--ticks K] [--bench-json FILE|-]
 //                  [--bench-baseline OLD.json] [--crc-out F] [--golden F] [--bench-allow-changed]
@@ -217,7 +217,6 @@ struct Options {
     std::string save_when = "any";  // N1 stage 2: --save-when any|battle|galactic|pending|scheduled
     uint64_t save_at = 0;
     bool save_at_set = false, save_check = false;
-    std::vector<std::string> expect_pending;
     bool seed_set = false;
     // BM1 benchmark (bench_run.hpp)
     std::string bench, bench_make, bench_regen, bench_json, bench_baseline, bench_desc;
@@ -666,7 +665,7 @@ int usage() {
                  "         [--battles auto|fight|fight-all[+anim]] [--story] [--map M] [--save-when any|battle|galactic|pending|scheduled]\n"
                  "                      [--crc-out F] [--record-orders F] [--seed S] [--workers W]\n"
                  "       alamo_headless --load FILE [--ticks K] [--crc-out F] [--replay STREAM] [--record-orders F] [--workers W]\n"
-                 "       alamo_headless --save-session KIND --save-check --save-at T FILE --ticks K [--expect-pending a,b,...]\n"
+                 "       alamo_headless --save-session KIND --save-check --save-at T FILE --ticks K\n"
                  "       alamo_headless --bench SCENARIO.abench [--runs R] [--warmup W] [--workers N] [--ticks K] [--bench-json FILE|-]\n"
                  "                      [--bench-baseline OLD.json] [--crc-out F] [--golden F] [--bench-allow-changed]\n"
                  "       alamo_headless --bench-make SCENARIO.abench --save-session KIND [--campaign C] [--map M] [--battles B] [--story]\n"
@@ -829,16 +828,7 @@ int replay_mode(const Options& opt) {
         }
         std::printf("wrote %s (%zu records)\n", opt.crc_out.c_str(), log.records.size());
     }
-    if (!opt.golden.empty()) {
-        alamo::CrcLog golden;
-        if (!alamo::CrcLog::load(opt.golden, golden, &err)) {
-            std::fprintf(stderr, "golden: %s\n", err.c_str());
-            return 2;
-        }
-        const auto d = alamo::first_divergence(golden, log);
-        std::printf("golden %s: %s\n", std::filesystem::path(opt.golden).filename().string().c_str(), d.message.c_str());
-        if (d.diverged) ok = false;
-    }
+    if (!opt.golden.empty() && alamo_headless::compare_golden(opt.golden, log, ok, true) != 0) return 2;
     std::printf(ok ? "replay: OK\n" : "replay: FAILED\n");
     return ok ? 0 : 1;
 }
@@ -932,15 +922,7 @@ static int headless_main(int argc, char** argv) {
             opt.save_file = next();
         } else if (a == "--load") opt.load_file = next();
         else if (a == "--save-check") opt.save_check = true;
-        else if (a == "--expect-pending") {
-            const std::string list = next();
-            size_t i0 = 0;
-            while (i0 <= list.size()) {
-                const size_t e = std::min(list.find(',', i0), list.size());
-                if (e > i0) opt.expect_pending.push_back(list.substr(i0, e - i0));
-                i0 = e + 1;
-            }
-        } else if (a == "--bench") opt.bench = next();  // BM1
+        else if (a == "--bench") opt.bench = next();  // BM1
         else if (a == "--bench-make") opt.bench_make = next();
         else if (a == "--bench-regen") opt.bench_regen = next();
         else if (a == "--bench-json") opt.bench_json = next();
@@ -1056,7 +1038,6 @@ static int headless_main(int argc, char** argv) {
         s.crc_out = opt.crc_out;
         s.replay = opt.replay;
         s.record_orders = opt.record_orders;
-        s.expect_pending = opt.expect_pending;
         s.game_dir = opt.game_dir;
         s.game_args = opt.game_args;
         s.workers = opt.workers;
