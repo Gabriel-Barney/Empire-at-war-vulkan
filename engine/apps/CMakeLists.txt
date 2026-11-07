@@ -335,7 +335,7 @@ if(_alamo_sim)
              COMMAND alamo_headless --save-session skirmish --campaign foc-land --save-when battle --save-check
                      --save-at 900 ${CMAKE_CURRENT_BINARY_DIR}/n2_save_skirmish_foc_land.alsv --ticks 2700 --workers 4 --quiet)
     # A campaign with the story on, every conflict fought (tactical AI on all sides): saved during a running battle,
-    # and a hotm galactic save taken before the battles start (they start after the load).
+    # and a galactic save taken before the battles start (they start after the load).
     # A2k integration (2026-11-06): the battle save moved from hotm to Rim Worlds. Since a2k t08 (lane G, retail-like
     # arrival: a fleet no longer merges without a requested slot) the all-AI hotm session fights no tactical battle in
     # 54000 ticks for seeds 2-7 (its only one was the saboteur-merged fleet's Kashyyyk attack at 376), nor do HotM
@@ -344,15 +344,19 @@ if(_alamo_sim)
              COMMAND alamo_headless --save-session galactic --campaign Sandbox_Rim_Worlds_Underworld --battles fight-all --story
                      --save-when battle --save-check --save-at 600 ${CMAKE_CURRENT_BINARY_DIR}/n2_save_galactic_battle.alsv
                      --ticks 900 --workers 4 --quiet)
-    add_test(NAME alamo_headless_save_hotm_before_battle
-             COMMAND alamo_headless --save-session hotm --battles fight-all --story --save-when galactic --save-check
-                     --save-at 600 ${CMAKE_CURRENT_BINARY_DIR}/n2_save_hotm_before_battle.alsv --ticks 1800 --workers 4 --quiet)
+    # a2k t13 (2026-11-07): the before-battle save moved from hotm (no battle after its load any more) to the same Rim Worlds
+    # session: saved at galactic frame 600, the battle starts at 757 after the load (the galactic frame stops there while
+    # it runs), and the in-process / fresh-process / replay loads stay identical through it to tick 2400.
+    add_test(NAME alamo_headless_save_galactic_before_battle
+             COMMAND alamo_headless --save-session galactic --campaign Sandbox_Rim_Worlds_Underworld --battles fight-all --story
+                     --save-when galactic --save-check --save-at 600 ${CMAKE_CURRENT_BINARY_DIR}/n2_save_galactic_before_battle.alsv
+                     --ticks 1800 --workers 4 --quiet)
     # OPT3 t04: the land skirmish saved with a land path recompute in flight (tactical AI, 15-frame latency).
     add_test(NAME alamo_headless_save_skirmish_foc_land_scheduled
              COMMAND alamo_headless --save-session skirmish --campaign foc-land --save-when scheduled --save-check
                      --save-at 900 ${CMAKE_CURRENT_BINARY_DIR}/n2_save_skirmish_foc_land_scheduled.alsv --ticks 1200 --workers 4 --quiet)
     set_tests_properties(alamo_headless_save_skirmish_foc alamo_headless_save_skirmish_foc_land alamo_headless_save_galactic_battle
-                         alamo_headless_save_hotm_before_battle alamo_headless_save_skirmish_foc_land_scheduled
+                         alamo_headless_save_galactic_before_battle alamo_headless_save_skirmish_foc_land_scheduled
                          PROPERTIES TIMEOUT 1800)
     if(TARGET alamo_anim)
       # A battle with the animation on (anim worlds of the galaxy and the battle mode).
@@ -440,7 +444,7 @@ endif()
 # Slow tier (label "slow", see engine/CMakeLists.txt): the long headless runs; ctest -LE slow skips them. The land-outcome
 # worker-count tests and the golden checks stay labelled together with the run whose CRC log they need (fixtures).
 get_directory_property(_alamo_apps_tests TESTS)
-list(FILTER _alamo_apps_tests INCLUDE REGEX "^alamo_headless_(skirmish_ai_foc|galactic_ai_human|save_hotm|save_skirmish)")
+list(FILTER _alamo_apps_tests INCLUDE REGEX "^alamo_headless_(skirmish_ai_foc|galactic_ai_human|save_galactic|save_skirmish)")
 alamo_label_slow(${_alamo_apps_tests})
 
 # --- P host (owner: game host agent): alamo_game, the playable game exe (menus/HUD/renderer/sim/audio per frame) ---

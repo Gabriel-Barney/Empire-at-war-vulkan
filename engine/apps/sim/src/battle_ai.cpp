@@ -415,8 +415,9 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
                 w.markers.push_back(m);
             }
         }
-        const at::TacticalPerception defaults;
-        const auto& mask = defaults.config().category_mask;
+        // A2k t13 / t06: a type without a converted CategoryMask field resolves its names with the types' data-loaded
+        // GameObjectCategoryType converter (mod categories), as the tactical AI's perception does.
+        const auto mask = at::category_mask_from(types.enums());
         // battle host: type flag +0x29 = listed in some type's Squadron_Units (0x377500), sorted for lookup.
         std::vector<uint32_t> squadron_members;
         for (size_t t = 0; t < types.size(); ++t)
