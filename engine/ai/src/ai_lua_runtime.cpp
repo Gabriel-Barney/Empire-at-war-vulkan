@@ -18,11 +18,8 @@ lua::LuaVm* ScriptEvaluators::vm(PlanScriptRuntime& runtime, const FileProvider&
     if (it != vms_.end()) return it->second.vm.get();
     if (missing_.count(key)) return nullptr;
     const std::string path = "Data\\Scripts\\Evaluators\\" +std::string(name) + ".lua";
-    std::vector<uint8_t> bytes;
     std::string err;
-    std::unique_ptr<lua::LuaVm> v;
-    if (files.read(path, bytes))
-        v = runtime.make_vm(std::string(name), std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()), path, &err);
+    std::unique_ptr<lua::LuaVm> v = runtime.make_vm_from_file(files, std::string(name), path, &err);
     if (!v) {
         missing_.insert(key);
         if (!err.empty()) errors.push_back("evaluator " + std::string(name) + ": " + err);
@@ -153,6 +150,15 @@ std::unique_ptr<lua::LuaVm> PlanScriptRuntime::make_vm(const std::string& name, 
                                                         const std::string& chunk_name, std::string* err) {
     ++created_;
     return build_vm(name, chunk, chunk_name, err);
+}
+
+std::unique_ptr<lua::LuaVm> PlanScriptRuntime::make_vm_from_file(const FileProvider& files, const std::string& name,
+                                                                  const std::string& path, std::string* err, bool* found) {
+    std::vector<uint8_t> bytes;
+    const bool ok = files.read(path, bytes);
+    if (found) *found = ok;
+    if (!ok) return nullptr;
+    return make_vm(name, std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()), path, err);
 }
 
 std::unique_ptr<lua::LuaVm> PlanScriptRuntime::build_vm(const std::string& name, const std::string& chunk,
@@ -358,6 +364,29 @@ void append_script_errors(const lua::LuaVm& vm, const std::string& prefix, std::
     for (const std::string& e : vm.errors()) out.push_back(prefix + e);
     for (const std::string& m : vm.messages())
         if (m.starts_with("SCRIPT ERROR")) out.push_back(prefix + m);
+}
+
+std::unique_ptr<lua::LuaVm> start_free_store_vm(PlanScriptRuntime& runtime, const FileProvider& files, const std::string& script,
+                                                lua::AiScriptHost* host, int32_t script_id, bool galactic, int32_t player,
+                                                const std::function<void(lua::LuaVm&)>& before_thread,
+                                                std::vector<std::string>* diagnostics) {
+    const std::string path = "Data\\Scripts\\FreeStore\\" + script + ".lua";
+    std::string err;
+    bool found = false;
+    std::unique_ptr<lua::LuaVm> vm = runtime.make_vm_from_file(files, script, path, &err, &found);
+    if (!vm) {
+        if (diagnostics) diagnostics->push_back(found ? err : path + ": not found");
+        return nullptr;
+    }
+    lua::attach_ai_host(*vm, host, script_id);
+    vm->call("Base_Definitions", &err);
+    lua::set_free_store_global(*vm, script_id, galactic);
+    lua::set_player_global(*vm, "PlayerObject", player);
+    lua::set_number_global(*vm, "LastService", 0.0);
+    lua::set_number_global(*vm, "LastUnitService", 0.0);
+    if (before_thread) before_thread(*vm);
+    vm->create_thread("main");
+    return vm;
 }
 
 std::vector<std::string> list_plan_files(const std::function<std::vector<std::string>(std::string_view)>& list) {

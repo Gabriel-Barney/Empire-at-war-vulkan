@@ -256,7 +256,6 @@ private:
     std::vector<std::vector<Goal>> active_, proposed_;
     std::vector<int32_t> exclusion_;  // per goal type (+0x260)
     std::vector<uint32_t> block_list_;  // +0x2a0 (goal serials)
-    bool blocked_ = false;              // = !block_list_.empty()
     // OPT2 t03: one slice's candidates (visit order) and their batched values; scratch, rebuilt every slice
     struct Candidate {
         uint32_t source = 0;

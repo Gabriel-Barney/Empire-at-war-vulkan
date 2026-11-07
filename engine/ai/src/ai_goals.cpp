@@ -57,7 +57,7 @@ int32_t GoalSystem::exclusion_count(uint32_t goal_type) const {
 }
 
 bool GoalSystem::proposable(uint32_t goal_type) const {
-    if (blocked_) return false;
+    if (proposals_blocked()) return false;
     if (templates_ && templates_->goal_value(goal_type) <= 0) return false;
     return exclusion_count(goal_type) == 0;
 }
@@ -309,7 +309,6 @@ void GoalSystem::block_proposals(uint32_t goal_serial) {
         p.clear();
     }
     block_list_.push_back(goal_serial);
-    blocked_ = true;
     if (!pending_.empty()) {  // OPT2 t10: proposals made before the block are dropped with the proposed set
         for (Goal& g : pending_) hooks_->drop_potential_plan(g);
         pending_.clear();
@@ -319,7 +318,6 @@ void GoalSystem::block_proposals(uint32_t goal_serial) {
 
 void GoalSystem::unblock_proposals(uint32_t goal_serial) {
     block_list_.erase(std::remove(block_list_.begin(), block_list_.end(), goal_serial), block_list_.end());
-    blocked_ = !block_list_.empty();
 }
 
 Goal* GoalSystem::find_active_by_running(int32_t running) {
@@ -537,7 +535,7 @@ void GoalSystem::resolve(int32_t category, int64_t now) {
         if (hooks_->uses_budget() && !(hooks_->category_credits(category) > 0.0f)) break;
         Goal& g = pool[i];
         const GoalTypeDef& def = defs_->goals[g.type];
-        if (blocked_ || !proposable(g.type)) break;
+        if (proposals_blocked() || !proposable(g.type)) break;
         if (is_kept_or_active(g)) break;
         if (!hooks_->plan_activatable(g) || !fundable(g)) {
             learning_->record_activation(g.type, g.target, false, def.activation_tracking_duration, now);
@@ -558,7 +556,7 @@ void GoalSystem::resolve(int32_t category, int64_t now) {
         for (size_t i = 0; i < pool.size(); ++i) {
             if (taken[i]) continue;
             const Goal& g = pool[i];
-            if (blocked_ || !proposable(g.type) || is_kept_or_active(g)) continue;
+            if (proposals_blocked() || !proposable(g.type) || is_kept_or_active(g)) continue;
             if (!fundable(g)) continue;
             const float e = effective_desire(g);
             if (!(e > 0.0f)) continue;

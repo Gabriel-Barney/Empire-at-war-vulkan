@@ -63,7 +63,10 @@ public:
     bool add_member(int32_t c);
     bool is_member(int32_t c) const;
     const std::vector<int32_t>& members() const { return order_; }  // insertion order
-    void mark_reset() { reset_ = true; }   // +0x74 (§9.5): every insert call and every 0x612ac0
+    // Reset flag +0x74 (a byte): set by every insert call and every 0x612ac0 (§9.5), and on a template switch
+    // (docs/re/A2G_T01_RESET_FLAG_PROBE.md [H correlation, setter unread]). The next tick() sets P = Σ x w before the
+    // drift redistribution, then clears it (AI_GALACTIC_2 §3.1); init() clears it.
+    void mark_reset() { reset_ = true; }
     bool reset_pending() const { return reset_; }
     // Init 0x6137b0: normalised weights from `raw` over the members (negatives 0; w / Σw, 1 / member count when Σw = 0),
     // applied = w, A = P = credits x w, R = I = 0; clears the reset flag.
@@ -103,11 +106,6 @@ public:
     // Release 0x614880: A += c + a; struct deleted. `reclaimed` = the PAYG reclaim r (A -= r, P -= r, +0x80 += r).
     void release(int32_t c, uint32_t goal, float reclaimed);
     void flush(int32_t c);  // Flush_Category [H]: A = 0
-    // Reset flag +0x74 (a byte): the next tick() sets P = Σ x w before the drift redistribution, then clears it
-    // (AI_GALACTIC_2 §3.1). Set on a template switch (docs/re/A2G_T01_RESET_FLAG_PROBE.md [H correlation, setter unread]);
-    // init() clears it.
-    void request_reset() { reset_ = true; }
-    bool reset_requested() const { return reset_; }
 
     float weight(int32_t c) const { return valid(c) ? cat_[static_cast<size_t>(c)].weight : 0.0f; }
     float available(int32_t c) const { return valid(c) ? cat_[static_cast<size_t>(c)].A : 0.0f; }

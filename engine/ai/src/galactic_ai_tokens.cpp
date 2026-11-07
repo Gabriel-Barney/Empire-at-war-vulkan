@@ -442,8 +442,6 @@ bool ground_kind(gal::UnitKind k) { return k == gal::UnitKind::GroundUnit; }
 
 }  // namespace
 
-std::span<const std::string_view> GalacticSimTokenResolver::known_paths() { return kKnownPaths; }
-
 // ================================================================ buildability mirror
 
 bool galactic_ai_player_can_build(const gal::GalacticSim& sim, int32_t player, uint32_t type) {
@@ -837,15 +835,6 @@ void GalacticSimTokenResolver::observe_conflicts(const gal::ConflictManager& cm,
             active_.ground_stamped = true;
         }
     }
-}
-
-std::string GalacticSimTokenResolver::path_key(Root root, std::span<const TokenId> path, const TokenTable& tokens) {
-    std::string k = ai_upper_copy(root_name(root));
-    for (const TokenId id : path) {
-        k += '.';
-        k += ai_upper_copy(tokens.name(id));
-    }
-    return k;
 }
 
 bool GalacticSimTokenResolver::implements(Root root, std::span<const TokenId> path, const TokenTable& tokens) const {

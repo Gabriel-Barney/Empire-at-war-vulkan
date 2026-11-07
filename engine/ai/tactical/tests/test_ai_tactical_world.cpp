@@ -651,6 +651,7 @@ struct MockUnit {
     int32_t ordered = -1;  // ordered attack target
     int32_t target = -1;   // current target
     float hp = 0.0f, max_hp = 1.0f;
+    int32_t reprojection_stamp = 0;  // UnitAI data pack +0x20, drawn at creation (A1_READINGS §14)
 };
 
 // S7 t33: run the same plans as a land battle (Land store and mode; the SpaceMode plans copied to LandMode; the objects
@@ -666,7 +667,7 @@ constexpr uint32_t kLandingDelay = 60;
 
 class MockHost final : public TacticalAiHost {
 public:
-    MockHost(objects::ObjectStore& s) : store_(s) {
+    MockHost(objects::ObjectStore& s, GameRandom& rng) : store_(s), rng_(&rng) {
         const char* names[] = {"Syn_Frigate", "Syn_Corvette", "Syn_Station", "Syn_Pad", "UC_Syn_Turret"};
         const float power[] = {1000.0f, 400.0f, 2000.0f, 0.0f, 0.0f};
         const char* cats[] = {"Frigate", "Corvette", "Structure", "Structure", "Structure"};
@@ -712,6 +713,8 @@ public:
         u.type = type;
         u.pos = {x, y, 0.0f};
         u.max_hp = u.hp = type == tFrigate ? 900.0f : type == tCorvette ? 400.0f : type == tStation ? 4000.0f : 1.0e9f;
+        // cu12 t06: the UnitAI data pack's two synced draws at creation, like the battle host (battle_ai.cpp).
+        if (type != tPad) u.reprojection_stamp = draw_unit_ai_stamps(rng_->synced(), build_frame_).reprojection_check;
         units_.push_back(u);
         if (type != tPad) dt_.enable(u.id, u.max_hp, 0.0f);
         return u.id;
@@ -865,6 +868,7 @@ public:
             a.moving = u.has_goal;
             a.attack_target = u.target;
             a.damage_tracking = u.type != tPad;
+            a.reprojection_stamp = u.reprojection_stamp;
             f.push_back(a);
         }
         w.players[0].pop_used = static_cast<int32_t>(population_used(0));
@@ -1141,6 +1145,7 @@ public:
 
 private:
     objects::ObjectStore& store_;
+    GameRandom* rng_;
     std::vector<PerceptionType> types_;
     std::map<int32_t, std::vector<TacticalReinforcement>> pool_;
     DamageTrackingStore dt_;
@@ -1327,7 +1332,7 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     objects::IdCounter ids;
     objects::ObjectStore store(g_land ? objects::ModeKind::Land : objects::ModeKind::Space, objects::StoreKind::Primary, types, &ids);
     GameRandom rng(2027u, 5u);
-    MockHost host(store);
+    MockHost host(store, rng);
     host.emit_opportunity = host.allow_hijack = variant == 1;
     host.ring_test = variant == 4;  // refixf t06
     // Player 0 (Empire) at -x, player 1 (Rebel) at +x; a pad; pools.
@@ -2249,7 +2254,7 @@ struct SaveSession {
     objects::IdCounter ids;
     objects::ObjectStore store{g_land ? objects::ModeKind::Land : objects::ModeKind::Space, objects::StoreKind::Primary, types, &ids};
     GameRandom rng{2027u, 5u};
-    MockHost host{store};
+    MockHost host{store, rng};
     std::unique_ptr<TacticalAiWorld> world;
 
     explicit SaveSession(int variant) {
@@ -2774,10 +2779,12 @@ void test_prepare_ambush() {
     CHECK(count_decisions(r, "p0 tf MainForce ambush: no point") >= 1);  // the "front" call with tolerance -1
     CHECK(rep_line.find("errors=true nopoint=true imm=false fin=true") != std::string::npos);
     CHECK(only_reports(r, "AMBUSH"));
-    // S7 t27: the four argument errors are script errors counted in lua_errors (per reporting instance)
+    // S7 t27: the four argument errors are script errors counted in lua_errors (per reporting instance). An instance whose
+    // target died during the block gets "Target object is already dead" for the calls that take the target.
     const size_t n_amb = script_errors(r, "Invalid number of parameters") + script_errors(r, "Unrecognized direction sideways") +
                          script_errors(r, "Parameter 3 is not a positive number") +
-                         script_errors(r, "Parameter 1 is not a game object or an AI target");
+                         script_errors(r, "Parameter 1 is not a game object or an AI target") +
+                         script_errors(r, "Target object is already dead");
     std::printf("  ambush script errors %zu, reports %zu\n", n_amb, count_reports(r, "AMBUSH"));
     CHECK(n_amb >= 4 && n_amb % 4 == 0);
     bool arrived = false;  // an Empire instance saw its movers arrive (Unit_Move_Finished from the ambush block)
@@ -2824,7 +2831,12 @@ void test_prepare_ambush_land() {
     std::printf("prepare ambush (land): Move_To with the tolerance %zu, ambush moves %zu, paired (target - 1000 x) %zu; %s\n",
                 to_target.size(), ambush.size(), paired, rep_line.c_str());
     CHECK(!to_target.empty() && !ambush.empty() && paired >= 1);
-    CHECK(rep_line.find("errors=true") != std::string::npos && only_reports(r, "AMBUSH"));
+    // The script reaches its report in some instance (either player: which one gets there within 120 s follows the
+    // battle), and every non-script error is such a report.
+    std::string any_rep;
+    for (const std::string& e : r.errors)
+        if (any_rep.empty() && e.find("SCRIPT ERROR: ") == std::string::npos && e.find("AMBUSH player=") != std::string::npos) any_rep = e;
+    CHECK(any_rep.find("errors=true") != std::string::npos && count_reports(r, "AMBUSH") + script_errors(r, "") == r.errors.size());
     CHECK(again.crc == r.crc && again.decisions == r.decisions);
 }
 

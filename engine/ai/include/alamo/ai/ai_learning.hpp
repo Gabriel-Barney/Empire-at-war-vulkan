@@ -44,7 +44,6 @@ public:
     int32_t recent_goal_failures(uint32_t goal_type, int32_t target, int64_t now) const;        // 0x588870
     int32_t recent_activation_failures(uint32_t goal_type, int32_t target, int64_t now) const;  // 0x588760
     int32_t recent_plan_failures(uint32_t plan, int32_t target, int64_t now) const;             // 0x588980
-    double goal_type_success_ratio(uint32_t goal_type) const;  // port: per goal type (1.0 without attempts)
     double plan_success_ratio(uint32_t plan) const;            // 0x588b60 (1.0 without attempts)
     // Per object-type survival (STRATEGIC_GAPS §1.1) [H]: writer 0x58a9a0 (attempts += 1, successes += survived), keyed
     // by the type-name CRC; 0x588a90 = successes / attempts, 1.0 when the type was never recorded. Lookups only.
@@ -57,12 +56,13 @@ public:
     void write(ByteWriter& w) const;  // N1 save / load: every table, key order
     bool read(ByteReader& r);
 
-    const std::map<Key, std::vector<Record>>& recent_goals() const { return recent_goal_; }
-
 private:
     static int64_t expiry_of(float duration, int64_t now);
     static int32_t failures(const std::map<Key, std::vector<Record>>& m, Key k, int64_t now);
+    static double ratio(const std::map<uint32_t, Counter>& m, uint32_t k);  // successes / attempts, 1.0 without attempts
     std::map<Key, std::vector<Record>> recent_goal_, recent_activation_, recent_plan_;
+    // Lifetime counters per (goal type, target) and goal type: written, hashed and saved, not read by any query
+    // (cu12 t18 kept them: dropping them changes the ai.goals CRC and the learning save layout).
     std::map<Key, Counter> type_target_;
     std::map<uint32_t, Counter> type_, plan_;
     std::map<uint32_t, Counter> survival_;  // type-name CRC -> {attempts, successes} (hashed only when non-empty)

@@ -1069,7 +1069,7 @@ public:
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
     // A1 DAMAGE_TRACKING (behaviour 0x3E) per battle: objects with the behaviour are enabled at spawn and
     // serviced on their behaviour cadence (interval 30, first service at once) with AI_SpaceThreatDecayStep.
-    // Fed every tick from CombatSystem::damage_events through ai::tactical::record_combat_damage (S10-int).
+    // Fed every tick from CombatSystem::damage_events, recorded inline in TacticalBattle (S10-int).
     ai::tactical::DamageTrackingStore& damage_tracking() { return damage_tracking_; }
     const ai::tactical::DamageTrackingStore& damage_tracking() const { return damage_tracking_; }
 #endif
