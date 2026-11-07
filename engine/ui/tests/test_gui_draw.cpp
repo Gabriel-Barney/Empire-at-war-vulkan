@@ -730,18 +730,6 @@ void test_real(Gpu& g, const std::string& src_dir) {
         CHECK(is.show_story(sd));
         check_cov(shoot("story", [&](double) {}), "story");
         is.close_all();
-        ui::PlanetDialogInfo pd;
-        pd.name = U"Kuat";
-        pd.credits = 125;
-        pd.political = {icon_of("Darth_Vader")};
-        pd.starbase = {icon_of("Star_Destroyer"), icon_of("Star_Destroyer")};
-        pd.companies = 4;
-        pd.fleets = 2;
-        pd.producing = U"Star Destroyer";
-        pd.progress = 0.4f;
-        CHECK(is.show_planet(pd));
-        check_cov(shoot("planet_dialog", [&](double) {}), "planet_dialog");
-        is.close_all();
     }
     // Galactic HUD: shells, labels, pads, queue, fleets, objectives.
     {

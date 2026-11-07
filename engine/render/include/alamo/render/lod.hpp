@@ -47,7 +47,6 @@ bool is_state_mesh(std::string_view mesh_name);
 bool fallback_damage_decal_rule(std::string_view mesh_name);
 // Default rule without XML (RendererDesc::damage_decal_rule): fallback_damage_decal_rule || is_state_mesh.
 bool default_hidden_mesh_rule(std::string_view mesh_name);
-inline bool is_damage_mesh(std::string_view mesh_name) { return fallback_damage_decal_rule(mesh_name); }
 
 // Visible = LOD matches (or none) && ALT matches (or none) && !hidden && (show_damage || !rule(name)).
 MeshSelection select_meshes(const assets::ModelAsset& model, float detail = 1.0f, int current_alt = 0,

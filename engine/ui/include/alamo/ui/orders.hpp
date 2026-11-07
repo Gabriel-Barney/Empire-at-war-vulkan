@@ -1,9 +1,11 @@
-// P1 click -> order translation. Selection is synced sim state (COMMANDS.md §2.4, §6.2): Select,
-// SelectAll and ControlGroup are SCHEDULED events, so the UI never changes a selection itself - it emits
+// P1 click -> order translation. Selection is synced sim state (COMMANDS.md §2.4, §6.2): Select
+// is a SCHEDULED event, so the UI never changes a selection itself - it emits
 // commands::EventData and the host submits them (CommandPipeline::submit with CommandSource::Player).
 // The translator keeps a local mirror of the selection it last requested (for shift-add and attack
 // lists); the host should overwrite it with set_selection() from the sim's synced selection after the
-// commands execute (SelectAll / control-group recall can only be known there).
+// commands execute (a recalled group can only be known there).
+// Mouse orders only: the keyboard orders (SelectAll / Stop / ControlGroupN and the double-recall camera jump) are
+// HotkeyDispatcher's (hotkeys.hpp, the original 153-slot table).
 //
 // Mapping (tactical; [port] where the docs give no UI rule). Right button = the order button of the default mouse scheme
 // (IDC_ALTERNATE_MOUSE_CONTROLS, orders on the left button, is not implemented). Right-button orders follow
@@ -26,8 +28,6 @@
 //                                          flags | 0x80, never a facing variant; no voice; double-click ack (MoveAck)
 //   right double click on hostile          Attack{..., flag0 ("double") = 1}
 //   right double click on anything else    nothing (the first click's order stands)
-//   SelectAll / Stop action                SelectAll / StopMovement
-//   ControlGroupN (+Ctrl assign, +Ctrl+Shift add)  ControlGroup{N, assign, add}
 // Move flags (move_flag; spec §2.1): 0x04 always; Ctrl or the attack-move toggle 0x01; Ctrl+Alt or the guard toggle 0x02
 //   (wins over 0x01); 0x80 double click; 0x08 from the second order of an Alt (alone) / waypoint-toggle run (the first
 //   starts a fresh path; any order without Alt ends the run) and [port: Gabriel] whenever the queue modifier is held.
@@ -135,10 +135,8 @@ public:
 
     const std::vector<commands::EventData>& pending() const { return pending_; }
     // [port: Gabriel] queued flag per pending() entry (1 = queued: Attack / MoveToObject / MoveToPosition / MoveToRay
-    // issued with Bindings::queue_held; selection and keyboard orders are never queued).
+    // issued with Bindings::queue_held; selection orders are never queued).
     const std::vector<uint8_t>& pending_queued() const { return pending_queued_; }
-    // false per pending() entry: no unit voice for that order (the double-click move / attack).
-    const std::vector<uint8_t>& pending_voice() const { return pending_voice_; }
     std::vector<commands::EventData> take() {
         pending_queued_.clear();
         pending_voice_.clear();
@@ -161,13 +159,9 @@ public:
     std::optional<uint32_t> take_planet_zoom() { return std::exchange(planet_zoom_, std::nullopt); }
     // Galactic left click on nothing: besides Select{}, the host clears its planet selection (when not zoomed in).
     bool take_planet_deselect() { return std::exchange(planet_deselect_, false); }
-    // false: the keyboard orders above (SelectAll / Stop / ControlGroupN) are left to HotkeyDispatcher (hotkeys.hpp,
-    // the original 153-slot table: Ctrl+n assign, Shift+n add); mouse orders are unchanged. Default true.
-    void set_keyboard_orders(bool on) { keyboard_orders_ = on; }
-    // Local camera request (UI.md §4.4): the same control group recalled twice within 1 s (InputFrame::time) - the
-    // host looks the camera at the group (TacticalCameraController::jump_to(focus_point(member positions))).
-    std::optional<uint8_t> take_camera_jump() { return std::exchange(camera_jump_, std::nullopt); }
-    static constexpr double kDoubleRecallSeconds = 1.0;
+    // No-op, kept only until engine/apps drops its two calls (app_session.cpp, game_main.cpp): the translator has no keyboard
+    // orders any more.
+    void set_keyboard_orders(bool) {}
 
 private:
     void emit_select(std::vector<uint32_t> ids);
@@ -195,10 +189,6 @@ private:
     std::optional<uint32_t> planet_zoom_;
     bool planet_deselect_ = false;
     tactical::QueryContext qctx_;
-    bool keyboard_orders_ = true;
-    std::optional<uint8_t> camera_jump_;
-    int16_t last_recall_group_ = -1;
-    double last_recall_time_ = -1e30;
 };
 
 }  // namespace alamo::ui

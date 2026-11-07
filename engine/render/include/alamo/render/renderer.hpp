@@ -467,7 +467,6 @@ public:
     bool render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarget& target, const ViewMatrices& view,
                 std::span<const Instance> instances, DrawMode mode, const RecordOptions& opts, DrawStats* stats = nullptr,
                 DrawTiming* timing = nullptr, std::span<const Instance> sky = {});
-    VkFormat scene_depth_format() const { return ds_format_; }
     // Land map world (terrain bucket 0, water bucket 7 + its reflection / refraction / sky-cube passes),
     // drawn by render() while set. Not owned; null detaches.
     // Detaching (or switching) also drops the world's CLOUD_TEXTURE / FOW_TEXTURE views, slots and matrices.
@@ -481,7 +480,6 @@ public:
         fade_begin_ = begin;
         fade_end_ = end;
     }
-    float object_fade_end() const { return fade_end_; }
     WorldRenderer* world() const { return world_; }
     // R4: effects drawn by render() in buckets 7 / 8 / 11 (SceneHook). Not owned; null detaches.
     void set_scene_hook(SceneHook* h) { scene_hook_ = h; }
@@ -495,7 +493,6 @@ public:
     // keep_taa_frame(): that frame stands (drops what discard would restore).
     bool discard_taa_frame();
     void keep_taa_frame();
-    SceneHook* scene_hook() const { return scene_hook_; }
     // Laser projectiles (lasers.hpp, PROJECTILE_NEBULA_DRAW.md 1): init_lasers loads W_Laser_Pill.tga /
     // p_particle_master.tga through `textures` and Engine\PrimAdditive; set_lasers gives the frame's lasers (copied),
     // drawn by render() in the Transparent bucket after its mesh items (and the hook's transparent draws) with the frame's
@@ -517,7 +514,6 @@ public:
     bool beams_ready() const;  // effect and pipeline inputs ready (textures load on demand)
     void release_beams();      // drops the beam pass, its textures and buffers (GPU idle); set_beams then does nothing until init_beams
     const BeamGeometry& last_beam_geometry() const;
-    bool stencil_shadows_supported() const { return ds_format_ != VK_FORMAT_UNDEFINED; }
     // The draw list of the last draw()/render() (instance, submesh, pass, key, material), in order.
     const std::vector<DrawListEntry>& last_draw_list() const { return last_list_; }
 

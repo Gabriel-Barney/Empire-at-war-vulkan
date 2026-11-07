@@ -29,9 +29,6 @@
 
 namespace alamo::render::detail {
 
-// SHADOW_EXTRUSION_DISTANCE (FrameCB.shadow_params.x); the original's global, 200 world units.
-inline constexpr float kShadowExtrusion = kShadowExtrusionDistance;
-
 // Engine parameters of one draw in the ORIGINAL D3DX form (row-major, row-vector convention:
 // the transpose of the column-vector matrices used elsewhere in the renderer), RENDER.md 2.2.
 // The per-frame half lives in EngineFrame (once per build); this is the per-draw half.
@@ -83,7 +80,6 @@ void xt_images(const Renderer::XTemplate& t, const Renderer::XTemplate::Slot& s,
 materials::CullMode mirrored_cull(materials::CullMode c);
 bool is_fow_binding(const materials::SamplerBinding& sb);
 void count_items(const Renderer::Built& bl, size_t b, size_t e, DrawStats& st);
-size_t bucket_begin(const std::vector<Renderer::Built::Item>& items, PhaseBucket b);
 
 }  // namespace alamo::render::detail
 

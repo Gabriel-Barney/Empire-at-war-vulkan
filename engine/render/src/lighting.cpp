@@ -1,6 +1,6 @@
 #include "alamo/render/lighting.hpp"
 
-#include "alamo/render/ted.hpp"
+#include "alamo/terrain/ted.hpp"
 
 #include <algorithm>
 #include <cmath>

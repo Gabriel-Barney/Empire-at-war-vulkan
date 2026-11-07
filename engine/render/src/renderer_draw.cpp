@@ -17,6 +17,7 @@
 #include "alamo/materials/constants.hpp"
 #include "alamo/materials/params.hpp"
 #include "alamo/render/convert.hpp"
+#include "alamo/render/frustum.hpp"
 #include "alamo/render/ssao.hpp"
 #include "alamo/render/world.hpp"
 #include "render_internal.hpp"
@@ -57,7 +58,7 @@ void Renderer::frame_constants(const ViewMatrices& v, uint32_t extras, materials
     if (extras & kFcbFog) apply_scene_fog(lighting_, cb);
     if (extras & kFcbFade) {
         distance_fade_vals(fade_begin_, fade_end_, cb.fog_vals_fade_vals.z, cb.fog_vals_fade_vals.w);
-        cb.shadow_params.x = kShadowExtrusion;
+        cb.shadow_params.x = kShadowExtrusionDistance;  // SHADOW_EXTRUSION_DISTANCE, FrameCB.shadow_params.x
     }
     if (extras & kFcbWorld) {
         cb.cloud_tex_u = cloud_u_;
@@ -108,23 +109,6 @@ bool beyond_depth(const Mat4& view, const assets::Aabb& b, float depth) {
         if (-(view * p).z <= depth) return false;
     }
     return true;
-}
-
-bool outside_frustum(const Mat4& vp, const assets::Aabb& b) {
-    int out[6] = {0, 0, 0, 0, 0, 0};
-    for (int i = 0; i < 8; ++i) {
-        const Float4 p{(i & 1) ? b.max.x : b.min.x, (i & 2) ? b.max.y : b.min.y, (i & 4) ? b.max.z : b.min.z, 1.0f};
-        const Float4 c = vp * p;
-        out[0] += c.x < -c.w;
-        out[1] += c.x > c.w;
-        out[2] += c.y < -c.w;
-        out[3] += c.y > c.w;
-        out[4] += c.z < 0.0f;
-        out[5] += c.z > c.w;
-    }
-    for (int k = 0; k < 6; ++k)
-        if (out[k] == 8) return true;
-    return false;
 }
 
 materials::CullMode mirrored_cull(materials::CullMode c) {
@@ -528,6 +512,7 @@ bool Renderer::build(rhi::Frame& frame, const ViewMatrices& view, std::span<cons
         return g.effect && (g.bucket == PhaseBucket::Heat || g.bucket == PhaseBucket::Shadow);
     };
     const std::vector<uint32_t>& inst_model = bc.inst_model;
+    const Frustum view_frustum = frustum_of(view.view_proj);
     for_range(desc_.js, par, n_inst, 32, [&](uint32_t b, uint32_t e) {
         for (uint32_t ii = b; ii < e; ++ii) {
             if (inst_model[ii] == UINT32_MAX) continue;
@@ -536,7 +521,7 @@ bool Renderer::build(rhi::Frame& frame, const ViewMatrices& view, std::span<cons
             ++o.st.instances;
             const GpuModel& gm = *in.model;
             const assets::Aabb box = gm.bounds.valid() ? assets::transform_aabb(in.transform, gm.bounds) : assets::Aabb{};
-            if (opts.frustum_cull && box.valid() && outside_frustum(view.view_proj, box)) {
+            if (opts.frustum_cull && box.valid() && !aabb_visible(view_frustum, box)) {
                 ++o.st.culled;
                 continue;
             }

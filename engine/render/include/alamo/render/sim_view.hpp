@@ -196,8 +196,8 @@ private:
 //   * Projectile_Custom_Render 1 / 2: a procedural laser (projectile_laser -> SimInstanceBuilder::lasers(), drawn by
 //     Renderer::set_lasers); the type's ALO is never loaded or drawn;
 //   * otherwise the type's Space_ / Land_Model_Name drawn like an object: projectile_transform (local X = flight direction,
-//     Scale_Factor). `model` is unused (kept for callers).
-assets::Mat3x4 projectile_transform(const SnapshotProjectile& p, const SnapshotTypeInfo* type, const GpuModel* model);
+//     Scale_Factor).
+assets::Mat3x4 projectile_transform(const SnapshotProjectile& p, const SnapshotTypeInfo* type);
 // The laser of a custom-rendered projectile: kind = Projectile_Custom_Render, centred on the position along the flight
 // direction (the render object's local +Y), length = Projectile_Length x Scale_Factor, width, texture slot, colour.
 // False: not a laser type (custom render 0 / unknown) or no width / length.

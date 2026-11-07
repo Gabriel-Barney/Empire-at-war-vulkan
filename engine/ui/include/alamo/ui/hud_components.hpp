@@ -209,12 +209,21 @@ struct ComponentPlacement {
     float z = 0.0f;          // bone z (model units, + = towards the viewer)
 };
 
+// Layer of a component's draw: its base layer, raised to kShellLayerMin when it sits on a shell bone ([port]: above the first
+// shell half), clamped to the 13 HUD layers. Shared by the tactical / galactic HUDs and the shell panels.
+inline constexpr int32_t kShellLayerMin = 2;
+uint32_t layer_of(const CommandBarComponent& c, const ComponentPlacement& p);
+// Size of a component in canvas units: the placement's rectangle, the table size, else the first blank / icon texture's atlas
+// size x scale; `fallback` when it has no art.
+Vec2f component_art_size(const CommandBarComponent& c, const ComponentPlacement& p, const TextureAtlas& atlas, Vec2f fallback);
+// ComponentTable::find of a printf-formatted name with one or two int arguments ("s_select_%02d", "r_%02d%02d").
+int32_t find_fmt(const ComponentTable& table, const char* fmt, int a, int b = -1);
+
 class HudLayout {
 public:
     // Bones of a shell component's model (replaces earlier ones for that shell). Coordinates in model space
     // (see ShellBone); HudLayout::update moves them onto the canvas with shell_offset().
     void set_shell_bones(uint32_t shell_component, std::vector<ShellBone> bones);
-    void clear_shell(uint32_t shell_component) { shells_.erase(shell_component); }
     // Shells whose bones place components (default: all with bones). An inactive shell keeps its bones but
     // places nothing (e.g. i_main_reinforce outside land battles).
     void set_shell_active(uint32_t shell_component, bool active);

@@ -74,7 +74,6 @@ public:
     bool resolve(rhi::Frame& frame, VkCommandBuffer cmd, rhi::RenderTarget& scene, float sharpen, float weight,
                  VkDescriptorSet hot_set0);
     bool history_reset() const { return reset_now_; }  // this frame took the current colour only
-    uint64_t frame_index() const { return frame_; }
     uint32_t last_movers() const { return last_movers_; }  // movers the last resolve drew
 
 private:

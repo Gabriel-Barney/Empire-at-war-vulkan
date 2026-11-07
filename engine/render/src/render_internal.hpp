@@ -310,6 +310,8 @@ namespace detail {
 void begin_target(const rhi::DeviceFns& fn, VkCommandBuffer cmd, rhi::RenderTarget& t, bool depth, const float* clear_color,
                   bool clear_depth, bool secondaries);
 rhi::CopyImage copy_of(const rhi::RenderTarget& t, rhi::ImageState after);
+// First item index whose bucket is >= b (items are sorted by bucket).
+size_t bucket_begin(const std::vector<Renderer::Built::Item>& items, PhaseBucket b);
 }  // namespace detail
 
 }  // namespace alamo::render

@@ -27,6 +27,8 @@ bool ieq(std::string_view a, std::string_view b) {
 }
 
 constexpr double kTicksPerSecond = 30.0;
+// Tracks whose min_geometry_lod exceeds this are not created (the game's geometry detail is not wired in: always full).
+constexpr float kGeometryDetail = 1.0f;
 
 }  // namespace
 
@@ -119,7 +121,7 @@ void SimDecorations::update(const InterpolatedFrame& frame) {
             }
         }
         // ---- scorch marks (objects new this frame)
-        if (options_.scorch && !ti.scorch_mark.empty() && !std::binary_search(prev_ids_.begin(), prev_ids_.end(), o.id)) {
+        if (!ti.scorch_mark.empty() && !std::binary_search(prev_ids_.begin(), prev_ids_.end(), o.id)) {
             ++stats_.scorch_seen;
             const SurfaceFxDef* fx = lib_->find_surface_fx(ti.scorch_mark);
             const SurfaceSettings* ss = fx ? fx->find(surface) : nullptr;
@@ -135,7 +137,7 @@ void SimDecorations::update(const InterpolatedFrame& frame) {
             }
         }
         // ---- dynamic tracks
-        if (!options_.tracks || ti.surface_fx.empty()) continue;
+        if (ti.surface_fx.empty()) continue;
         const SurfaceSettings* chosen = nullptr;
         const terrain::DynamicTrackParams* params = nullptr;
         for (const std::string& name : ti.surface_fx) {
@@ -143,7 +145,7 @@ void SimDecorations::update(const InterpolatedFrame& frame) {
             const SurfaceSettings* ss = fx ? fx->find(surface) : nullptr;
             if (!ss || ss->dynamic_track.empty()) continue;
             const terrain::DynamicTrackParams* p = lib_->find_track(ss->dynamic_track);
-            if (!p || p->min_geometry_lod > options_.geometry_detail) continue;
+            if (!p || p->min_geometry_lod > kGeometryDetail) continue;
             chosen = ss;
             params = p;
             break;

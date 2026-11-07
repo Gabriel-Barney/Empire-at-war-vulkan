@@ -40,19 +40,14 @@ Float4 Mat4::operator*(const Float4& v) const {
     return {o[0], o[1], o[2], o[3]};
 }
 
-Mat4 Mat4::inverse_affine() const {
-    Mat3x4 a;
-    for (int i = 0; i < 3; ++i)
-        for (int j = 0; j < 4; ++j) a.m[i][j] = m[i][j];
-    return from(a.inverse());
-}
-
 Mat3x4 to_mat3x4(const Mat4& a) {
     Mat3x4 r;
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 4; ++j) r.m[i][j] = a.m[i][j];
     return r;
 }
+
+Mat4 Mat4::inverse_affine() const { return from(to_mat3x4(*this).inverse()); }
 
 Mat4 look_at_rh(const Float3& eye, const Float3& target, const Float3& up) {
     const Float3 f = normalize(sub(target, eye));

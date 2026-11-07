@@ -155,6 +155,9 @@ void test_anim_hack_drag() {
             if (h.component == c) return hud.canvas().canvas_to_pixel(0.5f * (h.min.x + h.max.x), 0.5f * (h.min.y + h.max.y));
         return Vec2f{-1, -1};
     };
+    // cu13 t07: GalacticHud::drag_update takes drag().valid from a dry run of drop(), so the highlight (valid) and the drop
+    // (commands emitted) cannot disagree; every drag below is checked against that.
+    bool drag_valid = false;
     auto drag = [&](std::string_view from, Vec2f to, int32_t to_component) {
         const int32_t fc = ft.find(from);
         const Vec2f p = center_px(from);
@@ -173,12 +176,14 @@ void test_anim_hack_drag() {
         r.hover_component = to_component;
         hud.update_input(r, false, false, 1.1, out);
         CHECK(hud.drag().active && hud.drag().component == fc);
+        drag_valid = hud.drag().valid;
         hud.build(gf);  // the dragged icon follows the cursor
         CHECK(!hud.draw_list().items(kHudLayers - 1, HudList::Alpha).empty());
         r.owner = {};
         r.hud = {{HudPointerEvent::Kind::Release, Button::Left, to_component, r.world.mouse_x, r.world.mouse_y}};
         hud.update_input(r, false, false, 1.2, out);
         CHECK(!hud.drag().active);
+        CHECK(drag_valid == !out.empty());
         hud.build(gf);
         return out;
     };
@@ -193,6 +198,12 @@ void test_anim_hack_drag() {
     // fleet header onto its own planet -> nothing; land unit onto a fleet -> launch (op 4)
     CHECK(project(gf.view, planets[0].position, sx, sy));
     CHECK(drag("q1_fleet", {sx, sy}, -1).empty());
+    // a fleet unit onto its own planet: drop() orders the move (it did before cu13 t07), so the highlight says valid now (the
+    // old hand-written predicate refused it); the same unit onto a HUD component that takes no drop is invalid and sends nothing.
+    o = drag("q1_0001", {sx, sy}, -1);
+    CHECK(drag_valid && o.size() == 1 && o[0] == commands::ev::move_object_to_object(901, 100));
+    o = drag("q1_0001", center_px("b_play_pause"), ft.find("b_play_pause"));
+    CHECK(!drag_valid && o.empty());
     o = drag("land_fleet_00", center_px("q1_0001"), ft.find("q1_0001"));
     CHECK(o.size() == 1 && o[0] == fleet_management_event(900, commands::kNoObject, 701, 4));
     // unit into empty space -> detach (op 2) into a new fleet at the selected planet

@@ -453,7 +453,7 @@ void SimInstanceBuilder::build(const InterpolatedFrame& frame, SimModelSource& m
         if (!m) continue;
         Instance in;
         in.model = m;
-        in.transform = projectile_transform(p, table_->valid(p.type) ? &(*table_)[p.type] : nullptr, m);
+        in.transform = projectile_transform(p, table_->valid(p.type) ? &(*table_)[p.type] : nullptr);
         in.motion_id = motion_key(2, p.serial);
         main.push_back(in);
         ++st.projectiles_drawn;
@@ -462,8 +462,7 @@ void SimInstanceBuilder::build(const InterpolatedFrame& frame, SimModelSource& m
     if (stats) *stats = st;
 }
 
-assets::Mat3x4 projectile_transform(const SnapshotProjectile& p, const SnapshotTypeInfo* type, const GpuModel* model) {
-    (void)model;
+assets::Mat3x4 projectile_transform(const SnapshotProjectile& p, const SnapshotTypeInfo* type) {
     return object_transform(p.position, p.direction, type ? type->scale : 1.0f);
 }
 

@@ -1,6 +1,5 @@
 #include "alamo/ui/input.hpp"
 
-#include <bit>
 #include <cstring>
 
 #ifdef _WIN32
@@ -20,7 +19,6 @@ void InputState::update(const InputFrame& f) {
     const bool first = !have_prev_;
     cur_ = f;
     have_prev_ = true;
-    ++frames_;
     mdx_ = first ? 0 : f.mouse_x - prev.mouse_x;
     mdy_ = first ? 0 : f.mouse_y - prev.mouse_y;
 
@@ -170,89 +168,6 @@ bool Bindings::pressed(const InputState& in, Action a) const {
     for (const KeyBinding& b : map_[static_cast<size_t>(a)])
         if (b.key != 0 && in.key_pressed(b.key) && mods_match(b.mods, m)) return true;
     return false;
-}
-
-// ---- replay ------------------------------------------------------------------------------------------
-namespace {
-void put_u8(std::vector<uint8_t>& o, uint8_t v) { o.push_back(v); }
-void put_u32(std::vector<uint8_t>& o, uint32_t v) {
-    for (int i = 0; i < 4; ++i) o.push_back(static_cast<uint8_t>(v >> (8 * i)));
-}
-void put_u64(std::vector<uint8_t>& o, uint64_t v) {
-    for (int i = 0; i < 8; ++i) o.push_back(static_cast<uint8_t>(v >> (8 * i)));
-}
-struct Reader {
-    std::span<const uint8_t> b;
-    size_t p = 0;
-    bool ok = true;
-    uint64_t un(int n) {
-        if (p + static_cast<size_t>(n) > b.size()) {
-            ok = false;
-            return 0;
-        }
-        uint64_t v = 0;
-        for (int i = 0; i < n; ++i) v |= static_cast<uint64_t>(b[p + static_cast<size_t>(i)]) << (8 * i);
-        p += static_cast<size_t>(n);
-        return v;
-    }
-    uint8_t u8() { return static_cast<uint8_t>(un(1)); }
-    uint32_t u32() { return static_cast<uint32_t>(un(4)); }
-    uint64_t u64() { return un(8); }
-};
-}  // namespace
-
-std::vector<uint8_t> InputReplay::serialize() const {
-    std::vector<uint8_t> o;
-    o.reserve(12 + frames.size() * kReplayFrameBytes);
-    o.insert(o.end(), {'A', 'U', 'I', 'R'});
-    put_u32(o, kReplayVersion);
-    put_u32(o, static_cast<uint32_t>(frames.size()));
-    for (const InputFrame& f : frames) {
-        put_u64(o, std::bit_cast<uint64_t>(f.time));
-        put_u32(o, std::bit_cast<uint32_t>(f.dt));
-        put_u32(o, f.width);
-        put_u32(o, f.height);
-        put_u32(o, static_cast<uint32_t>(f.mouse_x));
-        put_u32(o, static_cast<uint32_t>(f.mouse_y));
-        put_u8(o, f.mouse_inside ? 1 : 0);
-        put_u8(o, f.buttons_down);
-        put_u8(o, f.buttons_pressed);
-        put_u8(o, f.buttons_released);
-        put_u32(o, std::bit_cast<uint32_t>(f.wheel));
-        for (uint64_t w : f.keys_down.w) put_u64(o, w);
-        for (uint64_t w : f.keys_pressed.w) put_u64(o, w);
-    }
-    return o;
-}
-
-bool InputReplay::deserialize(std::span<const uint8_t> bytes, InputReplay& out) {
-    out.frames.clear();
-    if (bytes.size() < 12 || std::memcmp(bytes.data(), "AUIR", 4) != 0) return false;
-    Reader r{bytes, 4};
-    if (r.u32() != kReplayVersion) return false;
-    const uint32_t n = r.u32();
-    if ((bytes.size() - 12) != static_cast<size_t>(n) * kReplayFrameBytes) return false;
-    out.frames.resize(n);
-    for (InputFrame& f : out.frames) {
-        f.time = std::bit_cast<double>(r.u64());
-        f.dt = std::bit_cast<float>(r.u32());
-        f.width = r.u32();
-        f.height = r.u32();
-        f.mouse_x = static_cast<int32_t>(r.u32());
-        f.mouse_y = static_cast<int32_t>(r.u32());
-        f.mouse_inside = r.u8() != 0;
-        f.buttons_down = r.u8();
-        f.buttons_pressed = r.u8();
-        f.buttons_released = r.u8();
-        f.wheel = std::bit_cast<float>(r.u32());
-        for (uint64_t& w : f.keys_down.w) w = r.u64();
-        for (uint64_t& w : f.keys_pressed.w) w = r.u64();
-    }
-    if (!r.ok || r.p != bytes.size()) {
-        out.frames.clear();
-        return false;
-    }
-    return true;
 }
 
 }  // namespace alamo::ui

@@ -24,7 +24,6 @@ namespace alamo::render {
 
 class BeamStyleTable {
 public:
-    void set_constants(const BeamConstants& gc) { gc_ = gc; }
     const BeamConstants& constants() const { return gc_; }
     // Reads the specials (<Abilities> sub-objects: Tractor_Beam_Attack_Ability, Energy_Weapon_Attack_Ability,
     // Super_Laser_Ability, Laser_Defense_Ability, Leech_Shields_Ability), Ranged_Target_Z_Adjust and the <HardPoints> names

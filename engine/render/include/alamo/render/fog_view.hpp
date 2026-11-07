@@ -96,7 +96,6 @@ class FogRenderer {
 public:
     void set_colors(const FogColors& c) { colors_ = c; }
     const FogColors& colors() const { return colors_; }
-    void set_blur(bool on) { blur_ = on; }  // DECORATIONS §2.3 step 3 (renderer +0x14, default on)
     // Space reinforcement overlay (DECORATIONS §2.1 / §2.3 palette 3, W_Space_Reinforce_FOW_Grid.tga): while on, space
     // frames use palette 3 and the reinforcement grid texture (WorldRenderer::set_space_fow_reinforce). [L] when the
     // original shows it: while the local player places space reinforcements (the HUD's reinforcement mode). The cells are
@@ -119,7 +118,7 @@ public:
 
 private:
     FogColors colors_;
-    bool blur_ = true, active_ = false, reinforce_ = false;
+    bool active_ = false, reinforce_ = false;
     terrain::FowGrid grid_;
     std::vector<uint8_t> intensity_, processed_, uploaded_;
     uint32_t uploaded_w_ = 0, uploaded_h_ = 0;

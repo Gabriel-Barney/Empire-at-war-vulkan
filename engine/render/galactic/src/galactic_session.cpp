@@ -9,6 +9,10 @@
 
 namespace alamo::render {
 
+namespace {
+constexpr uint32_t kOrderInterval = 90;  // global frames between order rounds
+}
+
 // ------------------------------------------------------------------------------------------ session
 GalacticSession::GalacticSession(const objects::GameObjectTypes& types, jobs::JobSystem& js, const galactic::GalacticRules& rules,
                                  const galactic::GalacticSetup& setup, const GalacticSessionSpec& spec,
@@ -19,23 +23,19 @@ GalacticSession::GalacticSession(const objects::GameObjectTypes& types, jobs::Jo
           cfg.players = sim::session_players(setup.players.size());
           return cfg;
       }()),
-      spec_(spec),
       lcg_(spec.seed * 2654435761u + 12345u) {
-    if (spec_.order_interval == 0) spec_.order_interval = 1;
     sim_ = host_.start_galactic(rules, setup, diagnostics);
     if (!sim_) return;
-    if (spec_.board_ground) {
-        // Ground units board their owner's orbiting fleet (AI / Lua direct path), planet order then player order.
-        const objects::ObjectStore& store = sim_->store();
-        for (PlanetIndex p = 0; p < sim_->planets().size(); ++p) {
-            for (int32_t pl = 0; pl < static_cast<int32_t>(sim_->players().size()); ++pl) {
-                if (pl == sim_->neutral_player() || sim_->fleets_at(p, pl).empty()) continue;
-                std::vector<objects::ObjectHandle> units;
-                for (objects::ObjectHandle h : sim_->planets()[p].surface)
-                    if (store.alive(h) && store.owner(h) == pl) units.push_back(h);
-                if (units.empty()) continue;
-                if (sim_->launch_units(pl, p, units) == commands::RejectReason::None) boarded_ += units.size();
-            }
+    // Ground units board their owner's orbiting fleet (AI / Lua direct path), planet order then player order.
+    const objects::ObjectStore& store = sim_->store();
+    for (PlanetIndex p = 0; p < sim_->planets().size(); ++p) {
+        for (int32_t pl = 0; pl < static_cast<int32_t>(sim_->players().size()); ++pl) {
+            if (pl == sim_->neutral_player() || sim_->fleets_at(p, pl).empty()) continue;
+            std::vector<objects::ObjectHandle> units;
+            for (objects::ObjectHandle h : sim_->planets()[p].surface)
+                if (store.alive(h) && store.owner(h) == pl) units.push_back(h);
+            if (units.empty()) continue;
+            if (sim_->launch_units(pl, p, units) == commands::RejectReason::None) boarded_ += units.size();
         }
     }
     between();  // UI input before the first tick (R1 / run_map order)
@@ -47,7 +47,7 @@ uint32_t GalacticSession::next() {
 }
 
 void GalacticSession::between() {
-    if (!sim_ || !spec_.orders || host_.frame() % spec_.order_interval != 0) return;
+    if (!sim_ || host_.frame() % kOrderInterval != 0) return;
     const objects::ObjectStore& store = sim_->store();
     const std::span<const galactic::PlanetState> planets = sim_->planets();
     const std::span<const galactic::FleetState> fleets = sim_->fleets();

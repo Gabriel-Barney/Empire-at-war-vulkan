@@ -16,7 +16,6 @@ namespace alamo::ui {
 namespace {
 constexpr Rgba8 kPanelBack{12, 18, 28, 190}, kPanelEdge{150, 170, 190, 230};
 constexpr Vec2f kSlotFallback{40, 40};
-constexpr int32_t kShellLayerMin = 2;  // [port] components on a shell bone draw above the first shell half
 
 std::u32string ascii32(std::string_view s) {
     std::u32string o;
@@ -25,41 +24,12 @@ std::u32string ascii32(std::string_view s) {
 }
 
 // A rectangle outline of 2-unit lines plus a translucent fill (the [port] stand-in frame).
-void frame_rect(HudDrawList& dl, uint32_t layer, Vec2f c, Vec2f size, Rgba8 back, Rgba8 edge) {
-    HudQuad q;
-    q.min = {c.x - 0.5f * size.x, c.y - 0.5f * size.y};
-    q.max = {c.x + 0.5f * size.x, c.y + 0.5f * size.y};
-    q.color = back;
-    dl.add(layer, HudList::Alpha, q);
-    const float t = 2.0f;
-    const HudQuad edges[4] = {
-        {{q.min.x, q.max.y - t}, {q.max.x, q.max.y}, {0, 0}, {1, 1}, edge},
-        {{q.min.x, q.min.y}, {q.max.x, q.min.y + t}, {0, 0}, {1, 1}, edge},
-        {{q.min.x, q.min.y}, {q.min.x + t, q.max.y}, {0, 0}, {1, 1}, edge},
-        {{q.max.x - t, q.min.y}, {q.max.x, q.max.y}, {0, 0}, {1, 1}, edge},
-    };
-    for (const HudQuad& e : edges) dl.add(layer, HudList::Alpha, e);
-}
-
 void dot(HudDrawList& dl, uint32_t layer, Vec2f c, float half, Rgba8 color) {
     HudQuad q;
     q.min = {c.x - half, c.y - half};
     q.max = {c.x + half, c.y + half};
     q.color = color;
     dl.add(layer, HudList::Alpha, q);
-}
-
-int32_t find_fmt(const ComponentTable& t, const char* fmt, int a, int b = -1) {
-    char n[48];
-    if (b < 0) std::snprintf(n, sizeof n, fmt, a);
-    else std::snprintf(n, sizeof n, fmt, a, b);
-    return t.find(n);
-}
-
-uint32_t layer_of(const CommandBarComponent& c, const ComponentPlacement& p) {
-    int32_t l = c.base_layer;
-    if (p.from_bone) l = std::max(l, kShellLayerMin);
-    return static_cast<uint32_t>(std::clamp(l, 0, static_cast<int32_t>(kHudLayers) - 1));
 }
 
 std::vector<uint32_t> capped(std::vector<uint32_t> ids, size_t n = 127) {
@@ -235,9 +205,7 @@ void TacticalHud::init(const ComponentTable& table, const TextureAtlas& atlas, F
 }
 
 void TacticalHud::resize(uint32_t width, uint32_t height) {
-    const HudCanvas next = HudCanvas::make(width, height);
-    if (fonts_ && next.screen_height != canvas_.screen_height) fonts_->clear();  // pixel sizes follow screenH
-    canvas_ = next;
+    resize_canvas(canvas_, fonts_, width, height);
     if (table_) {
         apply_tactical_fallback_layout(*table_, canvas_, layout_);
         layout_.update(canvas_, *table_);
@@ -245,29 +213,10 @@ void TacticalHud::resize(uint32_t width, uint32_t height) {
 }
 
 void TacticalHud::hit(int32_t component, uint32_t layer, Vec2f center, Vec2f size, uint32_t slot) {
-    HudHitBox h;
-    h.component = component;
-    h.layer = layer;
-    h.min = {center.x - 0.5f * size.x, center.y - 0.5f * size.y};
-    h.max = {center.x + 0.5f * size.x, center.y + 0.5f * size.y};
-    h.slot = slot;
-    hits_.push_back(h);
+    hits_.push_back(make_hit_box(component, layer, center, size, slot));
 }
 
-int32_t TacticalHud::hit_test(int32_t px, int32_t py) const {
-    const Vec2f c = canvas_.pixel_to_canvas(static_cast<float>(px) + 0.5f, static_cast<float>(py) + 0.5f);
-    // Topmost: highest layer, then the latest added on that layer.
-    int32_t best = -1;
-    uint32_t best_layer = 0;
-    for (const HudHitBox& h : hits_) {
-        if (c.x < h.min.x || c.x > h.max.x || c.y < h.min.y || c.y > h.max.y) continue;
-        if (best < 0 || h.layer >= best_layer) {
-            best = h.component;
-            best_layer = h.layer;
-        }
-    }
-    return best;
-}
+int32_t TacticalHud::hit_test(int32_t px, int32_t py) const { return topmost_hit(hits_, canvas_, px, py); }
 
 std::vector<uint32_t> TacticalHud::selection_ids() const {
     std::vector<uint32_t> ids;
@@ -277,14 +226,7 @@ std::vector<uint32_t> TacticalHud::selection_ids() const {
 }
 
 Vec2f TacticalHud::component_size(uint32_t component, const ComponentPlacement& p) const {
-    if (p.size.x > 0 && p.size.y > 0) return p.size;
-    const CommandBarComponent& c = (*table_)[component];
-    if (c.has_size) return c.size;
-    for (const auto* list : {&c.blank_texture, &c.icon_texture, &c.icon_alternate_texture})
-        if (!list->empty())
-            if (const AtlasEntry* e = atlas_->find(list->front()))
-                return {static_cast<float>(e->width) * c.scale, static_cast<float>(e->height) * c.scale};
-    return {};
+    return component_art_size((*table_)[component], p, *atlas_, {});
 }
 
 void TacticalHud::on_pointer(std::span<const HudPointerEvent> events, std::vector<commands::EventData>& out) const {

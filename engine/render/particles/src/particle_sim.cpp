@@ -110,10 +110,6 @@ void ParticleWorld::set_fade(Handle h, float f) {
 void ParticleWorld::set_water(Handle h, bool w) {
     if (auto* s = const_cast<SystemState*>(system(h))) s->water = w;
 }
-void ParticleWorld::set_scales(Handle h, float emission, float detail) {
-    set_scalar(h, SystemScalar::Emission, std::span<const float>(&emission, 1), 0.0f);
-    set_scalar(h, SystemScalar::Detail, std::span<const float>(&detail, 1), 0.0f);
-}
 
 namespace {
 // One critically damped spring step toward `target` over dt (exact solution, omega = spring rate).

@@ -201,7 +201,6 @@ public:
     void set_objects_enabled(bool on) { objects_enabled_ = on; }
     // Before start(): the map will get R5 runtime decals (WorldDecorations::runtime_decals: the decal atlas is loaded).
     void set_runtime_decals_enabled(bool on) { runtime_decals_ = on; }
-    bool objects_enabled() const { return objects_enabled_; }
     // Per-placement hardpoint state (placement index into placements().placements; hardpoint = index into the
     // type's TypeRenderInfo::hardpoints, or its name, case-insensitive). Destroying applies the B.10 rule on the
     // placement's model (hardpoints.hpp); destroyed = false is a DEBUG RESET only (the game never repairs

@@ -189,7 +189,6 @@ public:
     bool set_image(std::string_view id, std::string texture);
     bool focus(std::string_view id);
     int32_t focus_index() const { return focus_; }
-    bool keyboard_focus() const { return keyboard_focus_; }
 
     // Placement (canvas units): top-left corner of the dialog.
     Vec2f origin() const { return origin_; }
@@ -197,7 +196,6 @@ public:
         origin_ = top_left;
         placed_ = true;
     }
-    bool placed_by_host() const { return placed_; }
     GuiRect rect() const;
     GuiRect control_rect(size_t i) const;
     // Dialog height in canvas units: the .rc height less GuiManager::trim_dialog_height.
@@ -282,7 +280,6 @@ public:
     // GALAXY_MAP_PRESENTATION §5: the version line "V <version> <build>" drawn with the backdrop, bottom-left 2 pixels in,
     // colour (40, 160, 255, 128) [port: Arial 8]. "" = none. Host: e.g. U"V 1.121 <build>".
     void set_version_text(std::u32string text) { version_text_ = std::move(text); }
-    const std::u32string& version_text() const { return version_text_; }
     const TextDatabase* text_db() const { return text_; }
     // Caption -> display text: the MasterTextFile entry for the key, else the caption as written [port].
     std::u32string caption_text(std::string_view caption) const;
@@ -332,8 +329,6 @@ public:
     bool set_paragraphs(GuiDialog& d, std::string_view control, const std::vector<std::u32string>& paragraphs, Rgba8 color,
                         float max_width = 0.0f);
 
-    int32_t hover_control() const { return hover_control_; }
-    const GuiDialog* hover_dialog() const { return hover_dialog_; }
     // Image of a texture name: atlas entry, else the resolver.
     GuiImage image(std::string_view texture) const;
     // Font id for a control (GuiSkin lookup, point -> pixel rule of hud_canvas.hpp, Stretch_Factor).

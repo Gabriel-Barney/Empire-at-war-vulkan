@@ -14,13 +14,6 @@ namespace alamo::ui {
 
 namespace {
 
-int32_t find_fmt(const ComponentTable& t, const char* fmt, int a, int b = -1) {
-    char n[48];
-    if (b < 0) std::snprintf(n, sizeof n, fmt, a);
-    else std::snprintf(n, sizeof n, fmt, a, b);
-    return t.find(n);
-}
-
 std::u32string num32(int64_t v) {
     char b[32];
     std::snprintf(b, sizeof b, "%lld", static_cast<long long>(v));
@@ -56,7 +49,6 @@ const std::string* pick(const std::vector<std::string>& v, int32_t i) {
 }
 
 constexpr Rgba8 kGalacticRadarBackdrop{6, 10, 22, 255};  // [port] radar ground under the faceplate (build_radar)
-constexpr int32_t kShellLayerMin = 2;  // as tactical_hud.cpp: shell-bone components above the first shell half
 // §5.2 queue00..09 bone x (i_galactic_controls.alo, canvas units from the left edge).
 constexpr float kQueueDomeX[10] = {343.0f, 410.0f, 475.0f, 539.9f, 607.9f, 699.0f, 765.0f, 832.0f, 898.0f, 960.0f};
 // §1.2 top-anchored attack-mode shells: model y 92 sits on the screen's top edge [port: 28.jpg].
@@ -68,29 +60,6 @@ constexpr Rgba8 kCostUnaffordable{236, 72, 64, 255};
 constexpr const char* kStealthBadge = "i_icon_stealth.tga";
 constexpr const char* kRaidBadge = "i_icon_raid.tga";
 constexpr uint32_t kShipsPerStack = 5;
-
-// A rectangle outline of 2-unit lines plus a translucent fill ([port] stand-in plates, as tactical_hud.cpp).
-void frame_rect(HudDrawList& dl, uint32_t layer, Vec2f c, Vec2f size, Rgba8 back, Rgba8 edge) {
-    HudQuad q;
-    q.min = {c.x - 0.5f * size.x, c.y - 0.5f * size.y};
-    q.max = {c.x + 0.5f * size.x, c.y + 0.5f * size.y};
-    q.color = back;
-    dl.add(layer, HudList::Alpha, q);
-    const float t = 2.0f;
-    const HudQuad edges[4] = {
-        {{q.min.x, q.max.y - t}, {q.max.x, q.max.y}, {0, 0}, {1, 1}, edge},
-        {{q.min.x, q.min.y}, {q.max.x, q.min.y + t}, {0, 0}, {1, 1}, edge},
-        {{q.min.x, q.min.y}, {q.min.x + t, q.max.y}, {0, 0}, {1, 1}, edge},
-        {{q.max.x - t, q.min.y}, {q.max.x, q.max.y}, {0, 0}, {1, 1}, edge},
-    };
-    for (const HudQuad& e : edges) dl.add(layer, HudList::Alpha, e);
-}
-
-uint32_t layer_of(const CommandBarComponent& c, const ComponentPlacement& p) {
-    int32_t l = c.base_layer;
-    if (p.from_bone) l = std::max(l, kShellLayerMin);
-    return static_cast<uint32_t>(std::clamp(l, 0, static_cast<int32_t>(kHudLayers) - 1));
-}
 
 }  // namespace
 
@@ -260,9 +229,7 @@ void GalacticHud::init(const ComponentTable& table, const TextureAtlas& atlas, F
 }
 
 void GalacticHud::resize(uint32_t width, uint32_t height) {
-    const HudCanvas next = HudCanvas::make(width, height);
-    if (fonts_ && next.screen_height != canvas_.screen_height) fonts_->clear();
-    canvas_ = next;
+    resize_canvas(canvas_, fonts_, width, height);
     if (table_) {
         apply_galactic_fallback_layout(*table_, canvas_, layout_);
         layout_.update(canvas_, *table_);
@@ -270,37 +237,13 @@ void GalacticHud::resize(uint32_t width, uint32_t height) {
 }
 
 void GalacticHud::hit(int32_t component, uint32_t layer, Vec2f center, Vec2f size) {
-    HudHitBox h;
-    h.component = component;
-    h.layer = layer;
-    h.min = {center.x - 0.5f * size.x, center.y - 0.5f * size.y};
-    h.max = {center.x + 0.5f * size.x, center.y + 0.5f * size.y};
-    hits_.push_back(h);
+    hits_.push_back(make_hit_box(component, layer, center, size));
 }
 
-int32_t GalacticHud::hit_test(int32_t px, int32_t py) const {
-    const Vec2f c = canvas_.pixel_to_canvas(static_cast<float>(px) + 0.5f, static_cast<float>(py) + 0.5f);
-    int32_t best = -1;
-    uint32_t best_layer = 0;
-    for (const HudHitBox& h : hits_) {
-        if (c.x < h.min.x || c.x > h.max.x || c.y < h.min.y || c.y > h.max.y) continue;
-        if (best < 0 || h.layer >= best_layer) {
-            best = h.component;
-            best_layer = h.layer;
-        }
-    }
-    return best;
-}
+int32_t GalacticHud::hit_test(int32_t px, int32_t py) const { return topmost_hit(hits_, canvas_, px, py); }
 
 Vec2f GalacticHud::component_size(uint32_t component, const ComponentPlacement& p) const {
-    if (p.size.x > 0 && p.size.y > 0) return p.size;
-    const CommandBarComponent& c = (*table_)[component];
-    if (c.has_size) return c.size;
-    for (const auto* list : {&c.blank_texture, &c.icon_texture, &c.icon_alternate_texture})
-        if (!list->empty())
-            if (const AtlasEntry* e = atlas_->find(list->front()))
-                return {static_cast<float>(e->width) * c.scale, static_cast<float>(e->height) * c.scale};
-    return {40.0f, 40.0f};  // [port] pads without art
+    return component_art_size((*table_)[component], p, *atlas_, {40.0f, 40.0f});  // [port] pads without art
 }
 
 int32_t GalacticHud::font_of(int32_t component) const {
@@ -922,19 +865,19 @@ bool GalacticHud::slot_drop(const StackHit& sh, std::vector<commands::EventData>
     if (sh.planet == home) {
         if (!empty) {
             if (sh.enemy || sh.fleet == drag_.fleet) return false;
-            if (out) out->push_back(land ? fleet_management_event(sh.fleet, kNone, unit, ops_.launch)
-                                         : fleet_management_event(sh.fleet, drag_.fleet, unit, ops_.merge));
+            if (out) out->push_back(land ? fleet_management_event(sh.fleet, kNone, unit, fleet_op::kLaunch)
+                                         : fleet_management_event(sh.fleet, drag_.fleet, unit, fleet_op::kMerge));
             return true;
         }
         if (!land && drag_.unit == 0) {  // re-slot the whole fleet
-            if (out) out->push_back(fleet_management_event(home, drag_.fleet, kNone, ops_.slot, static_cast<uint8_t>(sh.slot)));
+            if (out) out->push_back(fleet_management_event(home, drag_.fleet, kNone, fleet_op::kSlot, static_cast<uint8_t>(sh.slot)));
             return true;
         }
         if (out) {
             // The unit becomes a new fleet in that slot: detach from its fleet, or launch from the surface (op 6 with the
             // destination = its own planet); the slot rides in the payload's `b` and the sim gives it to the new fleet.
-            out->push_back(with_slot_request(land ? fleet_management_event(home, kNone, unit, ops_.move_new, 0, home)
-                                                  : fleet_management_event(home, drag_.fleet, unit, ops_.detach),
+            out->push_back(with_slot_request(land ? fleet_management_event(home, kNone, unit, fleet_op::kMoveNew, 0, home)
+                                                  : fleet_management_event(home, drag_.fleet, unit, fleet_op::kDetach),
                                              sh.slot));
         }
         return true;
@@ -945,11 +888,11 @@ bool GalacticHud::slot_drop(const StackHit& sh, std::vector<commands::EventData>
         // an enemy fleet's slot is no choice.
         const bool choose = sh.slot >= 0 && (empty || !sh.enemy);
         if (land || drag_.unit != 0) {  // the unit becomes a new fleet that moves (op 6; `b` = its slot at the destination)
-            commands::EventData e = fleet_management_event(home, land ? kNone : drag_.fleet, unit, ops_.move_new, 0, sh.planet);
+            commands::EventData e = fleet_management_event(home, land ? kNone : drag_.fleet, unit, fleet_op::kMoveNew, 0, sh.planet);
             out->push_back(choose ? with_slot_request(std::move(e), sh.slot) : std::move(e));
         } else {
             if (choose)  // op 8 with a destination planet: the slot it takes on arrival, ahead of the move order
-                out->push_back(fleet_management_event(home, drag_.fleet, kNone, ops_.slot, static_cast<uint8_t>(sh.slot), sh.planet));
+                out->push_back(fleet_management_event(home, drag_.fleet, kNone, fleet_op::kSlot, static_cast<uint8_t>(sh.slot), sh.planet));
             out->push_back(commands::ev::move_object_to_object(drag_.fleet, sh.planet));
         }
     }
@@ -1025,7 +968,7 @@ void GalacticHud::drag_update(const RoutedInput& routed, std::vector<commands::E
             if (drag_.active) {
                 drag_.cursor_px = {static_cast<float>(e.x), static_cast<float>(e.y)};
                 drag_.over_component = e.component;
-                drop(out);
+                drop(&out);
                 dropped = true;
             }
             press_component_ = -1;
@@ -1063,7 +1006,7 @@ void GalacticHud::drag_update(const RoutedInput& routed, std::vector<commands::E
     drag_.over_slot = -1;
     drag_.over_slot_planet = drag_.over_slot_fleet = 0;
     if (over && over->empty && over->fleet == 0 && !over->foreign) {  // an empty pane: the drop makes a new fleet in its slot
-        drag_.valid = selected_id_ != 0 && slot_drop(pane_hit(*over), nullptr);
+        drag_.valid = drop(nullptr);
         drag_.over_fleet = drag_.valid;
         return;
     }
@@ -1074,55 +1017,48 @@ void GalacticHud::drag_update(const RoutedInput& routed, std::vector<commands::E
             drag_.over_slot_fleet = sh->fleet;
             for (size_t i = 0; i < planet_px_.size(); ++i)
                 if (planet_px_[i].planet == sh->planet) drag_.over_planet = static_cast<int32_t>(i);
-            drag_.valid = slot_drop(*sh, nullptr);
+            drag_.valid = drop(nullptr);
             return;
         }
-    const bool over_land = over && over->fleet_index < 0;
-    const uint32_t home = drag_.planet != 0 ? drag_.planet : selected_id_;
-    const bool own_planet = drag_.over_planet >= 0 && planet_px_[static_cast<size_t>(drag_.over_planet)].planet == home;
-    const bool land_ok = drag_.planet == 0 || drag_.planet == selected_id_;
-    drag_.valid = drag_.over_fleet || (over_land && drag_.fleet_index >= 0 && land_ok) ||
-                  (drag_.over_planet >= 0 && drag_.fleet_index >= 0 && !own_planet) ||
-                  (!over && drag_.over_planet < 0 && drag_.fleet_index >= 0 && drag_.unit != 0);
+    drag_.valid = drop(nullptr);
 }
 
-void GalacticHud::drop(std::vector<commands::EventData>& out) {
+bool GalacticHud::drop(std::vector<commands::EventData>* out) {
     constexpr uint32_t kNone = commands::kNoObject;
+    const auto emit = [out](commands::EventData e) {
+        if (out) out->push_back(std::move(e));
+        return true;
+    };
     const PadSlot* over = pad_of(drag_.over_component);
     const bool from_fleet = drag_.fleet_index >= 0;
     const uint32_t unit = drag_.unit != 0 ? drag_.unit : kNone;
     if (over && over->fleet_index >= 0) {  // onto a fleet pad
-        if (over->foreign) return;  // a foreign pad is no drop target (UI.md §7.2)
-        if (over->empty && over->fleet == 0) {  // an empty pane k: a new fleet in slot k (UI.md §7.2, §7.3)
-            if (selected_id_ != 0) slot_drop(pane_hit(*over), &out);
-            return;
-        }
-        if (over->fleet == drag_.fleet) return;
-        if (from_fleet) out.push_back(fleet_management_event(over->fleet, drag_.fleet, unit, ops_.merge));
-        else out.push_back(fleet_management_event(over->fleet, kNone, unit, ops_.launch));
-        return;
+        if (over->foreign) return false;  // a foreign pad is no drop target (UI.md §7.2)
+        if (over->empty && over->fleet == 0)  // an empty pane k: a new fleet in slot k (UI.md §7.2, §7.3)
+            return selected_id_ != 0 && slot_drop(pane_hit(*over), out);
+        if (over->fleet == drag_.fleet) return false;
+        if (from_fleet) return emit(fleet_management_event(over->fleet, drag_.fleet, unit, fleet_op::kMerge));
+        return emit(fleet_management_event(over->fleet, kNone, unit, fleet_op::kLaunch));
     }
     if (over) {  // onto the land forces (a map fleet: only at the selected planet)
-        if (from_fleet && selected_id_ != 0 && (drag_.planet == 0 || drag_.planet == selected_id_)) out.push_back(fleet_management_event(selected_id_, drag_.fleet, unit, ops_.land));
-        return;
+        if (from_fleet && selected_id_ != 0 && (drag_.planet == 0 || drag_.planet == selected_id_))
+            return emit(fleet_management_event(selected_id_, drag_.fleet, unit, fleet_op::kLand));
+        return false;
     }
     if (drag_.over_component >= 0 && drag_.over_component == planet_fleet_) {  // onto a fleet slot
-        if (const StackHit* sh = stack_at(planet_fleet_, drag_.cursor_px.x, drag_.cursor_px.y)) slot_drop(*sh, &out);
-        return;
+        const StackHit* sh = stack_at(planet_fleet_, drag_.cursor_px.x, drag_.cursor_px.y);
+        return sh && slot_drop(*sh, out);
     }
-    if (drag_.over_component >= 0 || !from_fleet) return;  // another HUD component / land unit into the world
+    if (drag_.over_component >= 0 || !from_fleet) return false;  // another HUD component / land unit into the world
     const int32_t pi = planet_at(drag_.cursor_px.x, drag_.cursor_px.y);
     if (pi >= 0) {
         const uint32_t planet = planet_px_[static_cast<size_t>(pi)].planet;
-        if (drag_.unit == 0) {
-            if (planet != (drag_.planet != 0 ? drag_.planet : selected_id_))
-                out.push_back(commands::ev::move_object_to_object(drag_.fleet, planet));
-        } else {
-            out.push_back(commands::ev::move_object_to_object(drag_.unit, planet));
-        }
-    } else if (drag_.unit != 0 && selected_id_ != 0) {
-        out.push_back(fleet_management_event(selected_id_, kNone, drag_.unit, ops_.detach));
+        if (drag_.unit != 0) return emit(commands::ev::move_object_to_object(drag_.unit, planet));
+        if (planet != (drag_.planet != 0 ? drag_.planet : selected_id_)) return emit(commands::ev::move_object_to_object(drag_.fleet, planet));
+        return false;
     }
+    if (drag_.unit != 0 && selected_id_ != 0) return emit(fleet_management_event(selected_id_, kNone, drag_.unit, fleet_op::kDetach));
+    return false;
 }
 
 void GalacticHud::build_objectives(const GalacticHudFrame& f) {

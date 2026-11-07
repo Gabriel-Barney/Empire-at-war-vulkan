@@ -180,7 +180,6 @@ public:
     void update(float dt);
     // Environment skydome objects for the sky cube (instances at the origin with their skydome transform).
     void set_sky(std::span<const Instance> sky);
-    void environment_changed() { sky_dirty_ = true; }
     const WorldStats& stats() const { return stats_; }
     // Switch between the batched and the reference (unbatched) terrain / water draws (WorldOptions::batch_draws).
     void set_batch_draws(bool batched) { options_.batch_draws = batched; }

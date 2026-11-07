@@ -20,6 +20,8 @@ std::string upper_of(std::string_view s) {
     for (char& c : o) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     return o;
 }
+// The type name of a portrait name, or `name` itself when it is already a bare type name.
+std::string_view type_of(std::string_view name) { return is_planet_portrait_name(name) ? planet_portrait_type(name) : name; }
 bool iprefix(std::string_view s, std::string_view p) {
     if (s.size() < p.size()) return false;
     for (size_t i = 0; i < p.size(); ++i)
@@ -61,19 +63,13 @@ PlanetPortraits::PlanetPortraits(Renderer& r, rhi::Allocator& alloc, rhi::FrameR
 
 PlanetPortraits::~PlanetPortraits() { destroy(); }
 
-PlanetPortraits::Job* PlanetPortraits::find(std::string_view name) {
-    const std::string_view t = is_planet_portrait_name(name) ? planet_portrait_type(name) : name;
-    auto it = jobs_.find(upper_of(t));
-    return it == jobs_.end() ? nullptr : it->second.get();
-}
 const PlanetPortraits::Job* PlanetPortraits::find(std::string_view name) const {
-    const std::string_view t = is_planet_portrait_name(name) ? planet_portrait_type(name) : name;
-    auto it = jobs_.find(upper_of(t));
+    auto it = jobs_.find(upper_of(type_of(name)));
     return it == jobs_.end() ? nullptr : it->second.get();
 }
 
 std::shared_ptr<const assets::TextureAsset> PlanetPortraits::texture(std::string_view name) {
-    const std::string_view t = is_planet_portrait_name(name) ? planet_portrait_type(name) : name;
+    const std::string_view t = type_of(name);
     if (t.empty()) return nullptr;
     auto [it, inserted] = jobs_.try_emplace(upper_of(t));
     if (inserted) {
@@ -88,12 +84,6 @@ std::shared_ptr<const assets::TextureAsset> PlanetPortraits::texture(std::string
 bool PlanetPortraits::failed(std::string_view name) const {
     const Job* j = find(name);
     return j && j->state == State::Failed;
-}
-
-bool PlanetPortraits::pending() const {
-    for (const auto& [k, j] : jobs_)
-        if (j->state == State::Queued || j->state == State::InFlight) return true;
-    return false;
 }
 
 void PlanetPortraits::free_gpu(Job& j) {
@@ -135,7 +125,7 @@ bool PlanetPortraits::render_job(Job& j, rhi::Frame& frame, VkCommandBuffer cmd)
     const std::string& model = (*types_)[ti].model;
     const GpuModel* m = models_->model(model);
     if (!m || !m->resident()) {
-        if (models_->model_failed(model) || ++j.waited > wait_frames_) {
+        if (models_->model_failed(model) || ++j.waited > kModelWaitFrames) {
             j.state = State::Failed;
             free_gpu(j);
         }
