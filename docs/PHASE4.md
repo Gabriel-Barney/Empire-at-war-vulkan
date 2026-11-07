@@ -212,18 +212,29 @@ headless refusal, report keys), `alamo_game_bench_scenario_headless` (no data: a
 match, 120 counted frames, GPU scopes, identical PNGs in both runs, the camera moved (first and last PNG differ), and a changed
 pinned file refused.
 
-## Q4 parity baseline (q4h t02, 2026-11-07)
+## Q4 parity baseline (q4h t02, 2026-11-07; re-recorded after a2k t10 / t11, q4hf t01)
 
-Measured with the Q4 harness (`tools/parity/`, README there: metrics, tolerances and their reasons, grading) on **dev
-`3629d4cf`** (alamo_headless MSVC Release, 4 workers), before the a2k galactic-AI merge landed: **re-run after a2k**
-(`parity_harness.py run`) and re-record `tools/parity/baseline.json` if it moves. The confirm, AI and Q4 groups are judged
-against these numbers. Reference runs: the Q2 traces in the main checkout's `tools/probe_mod/q2_traces/out/`.
+Measured with the Q4 harness (`tools/parity/`, README there: metrics, tolerances and their reasons, grading). The table is
+the current `tools/parity/baseline.json`, recorded at **dev `79576620`** (a2k t10 + t11, alamo_headless MSVC Release, 4
+workers); the first recording was dev `3629d4cf`, before the a2k galactic-AI merge (row "q4h t02" below; the harness has
+more timing metrics since). Re-record it, like a golden, when an intended behaviour change moves a metric. The confirm, AI
+and Q4 groups are judged against these numbers. Reference runs: the Q2 traces in the main checkout's
+`tools/probe_mod/q2_traces/out/`.
 
 | scenario | timing | income | AI choices | battle outcomes | damage |
 |---|---|---|---|---|---|
-| `hotm_galactic` (3 retail runs) | 15 PASS / 5 FAIL | 22 / 3 | 11 / 5 (1 N/A) | 7 / 0 | - |
+| `hotm_galactic` (3 retail runs) at `79576620` | 36 PASS / 8 FAIL | 20 / 5 | 16 / 0 (1 N/A) | 7 / 0 | - |
+| `hotm_galactic` at the a2k merge (`9064172d`) | 34 / 8 | 21 / 4 | 16 / 0 (1 N/A) | 7 / 0 | - |
+| `hotm_galactic`, q4h t02 (`3629d4cf`) | 15 / 5 | 22 / 3 | 11 / 5 (1 N/A) | 7 / 0 | - |
 | retail leave-one-out, same tolerances | 90 / 17 | 46 / 14 | 30 / 10 | 19 / 2 | - |
-| `geonosis_skirmish` (1 retail run) | - | 3 / 3 | 0 / 5 (1 N/A) | 2 / 3 | 3 N/A |
+| `geonosis_skirmish` (1 retail run), unchanged | - | 3 / 3 | 0 / 5 (1 N/A) | 2 / 3 | 3 N/A |
+
+a2k t10 (Add_Credits AI notify, `docs/re/A2K_T10_CREDIT_NOTIFY_RE.md`): `econ.credits_at_9000[Rebel]` 3106 -> 867 (retail
+650..1143, now PASS; the Rebel spends the Shola capture bonus within ~170 ticks). Still FAIL: `credits_at_4500[Rebel]` 1186
+(retail 677..825), `credits_at_9000[Underworld]` 324 (retail 2462..2849; plan choice / trajectory, saboteur question open,
+a2k t05). New FAIL: `credits_at_13500[Rebel]` 1169 (retail 23..899) and `income_mean[Rebel]` 812 (retail 713..736): the
+port's Rebel holds both Shola and a MonCalimari mining facility, a combination neither retail run had. Also
+`build.ticks[UNDERWORLD_MERC_SQUAD@NALHUTTA]` FAIL -> PASS. The bullets below describe the q4h t02 run.
 
 The leave-one-out row grades each retail run like the port against the other two: the three HotM runs (same seed 0,
 no input) already differ from tick 140 on, so a port FAIL in an AI-driven metric has to be read against that row.
