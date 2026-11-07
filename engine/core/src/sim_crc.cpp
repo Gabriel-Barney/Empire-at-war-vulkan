@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 #include "alamo/core/bytes.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/profile.hpp"
 
@@ -106,9 +107,7 @@ uint64_t StateHasher::digest() const noexcept {
 // ---- CrcRegistry -----------------------------------------------------------------------------------
 CrcRegistry::SystemId CrcRegistry::add(std::string name, HashFn fn) {
     if (name.empty()) throw std::invalid_argument("CrcRegistry::add: empty system name");
-    for (char c : name)
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
-            throw std::invalid_argument("CrcRegistry::add: whitespace in system name '" + name + "'");
+    if (!valid_chunk_name(name)) throw std::invalid_argument("CrcRegistry::add: whitespace in system name '" + name + "'");
     for (const auto& s : systems_)
         if (s.name == name) throw std::invalid_argument("CrcRegistry::add: duplicate system '" + name + "'");
     if (!fn) throw std::invalid_argument("CrcRegistry::add: empty hasher for '" + name + "'");
@@ -120,9 +119,7 @@ CrcRegistry::SystemId CrcRegistry::add(std::string name, HashFn fn) {
 
 void CrcRegistry::add_parity(std::string name, ParityFn fn) {
     if (name.empty()) throw std::invalid_argument("CrcRegistry::add_parity: empty name");
-    for (char c : name)
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
-            throw std::invalid_argument("CrcRegistry::add_parity: whitespace in '" + name + "'");
+    if (!valid_chunk_name(name)) throw std::invalid_argument("CrcRegistry::add_parity: whitespace in '" + name + "'");
     for (const auto& p : parity_)
         if (p.name == name) throw std::invalid_argument("CrcRegistry::add_parity: duplicate part '" + name + "'");
     if (!fn) throw std::invalid_argument("CrcRegistry::add_parity: empty function for '" + name + "'");

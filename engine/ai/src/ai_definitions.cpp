@@ -510,7 +510,7 @@ std::map<std::string, std::string> load_faction_basic_ai(const FileProvider& fil
     std::map<std::string, std::string> out;
     std::vector<uint8_t> bytes;
     auto parse = [&bytes](const std::string& name) {
-        return data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), name);
+        return data::XmlDocument::parse(bytes, name);
     };
     if (!files.read("Data\\XML\\FactionFiles.xml", bytes)) return out;
     std::vector<std::string> list;

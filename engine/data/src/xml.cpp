@@ -428,7 +428,7 @@ XmlDocument XmlDocument::parse(std::string_view bytes, std::string file) {
     return d;
 }
 
-XmlDocument XmlDocument::parse(const std::vector<uint8_t>& bytes, std::string file) {
+XmlDocument XmlDocument::parse(std::span<const uint8_t> bytes, std::string file) {
     return parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), std::move(file));
 }
 

@@ -4999,7 +4999,7 @@ std::vector<TacticalAiDifficulty> load_tactical_ai_difficulties(const FileProvid
     std::vector<uint8_t> bytes;
     if (!files.read("Data\\XML\\DifficultyAdjustments.xml", bytes)) return out;
     const data::XmlDocument doc =
-        data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), "DifficultyAdjustments.xml");
+        data::XmlDocument::parse(bytes, "DifficultyAdjustments.xml");
     if (!doc.ok()) return out;
     for (const data::XmlNode n : doc.root().children()) {
         TacticalAiDifficulty d;

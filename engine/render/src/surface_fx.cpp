@@ -30,7 +30,7 @@ bool ieq(std::string_view a, std::string_view b) {
 }
 
 data::XmlDocument parse_doc(std::span<const uint8_t> xml, const char* file, std::string* error) {
-    data::XmlDocument doc = data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(xml.data()), xml.size()), file);
+    data::XmlDocument doc = data::XmlDocument::parse(xml, file);
     if (!doc.ok() && error) *error = std::string(file) + ": no XML root element";
     return doc;
 }

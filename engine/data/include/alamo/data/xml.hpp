@@ -17,6 +17,7 @@
 #pragma once
 #include <cstdint>
 #include <deque>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -112,7 +113,8 @@ public:
 
     // Parses a copy of `bytes`. `file` is only used for diagnostics. Never throws on bad input.
     static XmlDocument parse(std::string_view bytes, std::string file = {});
-    static XmlDocument parse(const std::vector<uint8_t>& bytes, std::string file = {});
+    // Raw file bytes (a std::vector<uint8_t> converts implicitly).
+    static XmlDocument parse(std::span<const uint8_t> bytes, std::string file = {});
 
     bool ok() const { return ok_; }
     const std::string& file() const { return file_; }

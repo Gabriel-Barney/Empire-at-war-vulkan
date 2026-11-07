@@ -628,11 +628,11 @@ void test_real(Gpu& g, const std::string& src_dir) {
         std::map<std::string, std::string> icons;  // upper-case object name -> Icon_Name
         std::vector<uint8_t> list;
         if (files->read("Data\\XML\\GameObjectFiles.xml", list)) {
-            const data::XmlDocument ld = data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(list.data()), list.size()), "g");
+            const data::XmlDocument ld = data::XmlDocument::parse(list, "g");
             for (data::XmlNode f : ld.root().children("File")) {
                 std::vector<uint8_t> bytes;
                 if (!files->read("Data\\XML\\" + std::string(f.text_trimmed()), bytes)) continue;
-                const data::XmlDocument od = data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), "o");
+                const data::XmlDocument od = data::XmlDocument::parse(bytes, "o");
                 for (data::XmlNode o : od.root().children()) {
                     const data::XmlNode ic = o.child("Icon_Name");
                     if (!ic) continue;
@@ -1145,7 +1145,7 @@ void test_real(Gpu& g, const std::string& src_dir) {
             // Cursor from the shipped MousePointers.xml; frame textures from the game data (image pages).
             std::vector<uint8_t> mp;
             CHECK(files->read("Data\\XML\\MousePointers.xml", mp));
-            const data::XmlDocument mdoc = data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(mp.data()), mp.size()), "m");
+            const data::XmlDocument mdoc = data::XmlDocument::parse(mp, "m");
             ui::CursorTable ct;
             ct.parse(mdoc.root());
             ct.resolve_frames([&](std::string_view n) {

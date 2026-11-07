@@ -122,7 +122,7 @@ LightningStyle parse_lightning(const data::XmlNode& e) {
 // ------------------------------------------------------------------------------------------------ constants / styles
 bool parse_beam_constants(std::span<const uint8_t> xml, BeamConstants& out) {
     const data::XmlDocument doc =
-        data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(xml.data()), xml.size()), "GameConstants.xml");
+        data::XmlDocument::parse(xml, "GameConstants.xml");
     if (!doc.ok()) return false;
     const data::XmlNode root = doc.root();
     auto read = [&](std::string_view prefix, BeamConstants::Set& s) {
@@ -263,7 +263,7 @@ void LightningLibrary::add(LightningStyle s) {
 
 bool LightningLibrary::load(std::span<const uint8_t> xml) {
     const data::XmlDocument doc =
-        data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(xml.data()), xml.size()), "LightningEffectTypes.xml");
+        data::XmlDocument::parse(xml, "LightningEffectTypes.xml");
     if (!doc.ok()) return false;
     for (data::XmlNode e = doc.root().first_child(); e; e = e.next_sibling()) {
         if (!iequals(e.name(), "LightningEffect")) continue;

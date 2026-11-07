@@ -168,8 +168,7 @@ void test_real_data() {
     {
         std::vector<uint8_t> bytes;
         CHECK(files->read("Data\\XML\\MousePointers.xml", bytes));
-        const data::XmlDocument doc = data::XmlDocument::parse(
-            std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), "MousePointers.xml");
+        const data::XmlDocument doc = data::XmlDocument::parse(bytes, "MousePointers.xml");
         CursorTable ct;
         const size_t n = ct.parse(doc.root());
         size_t known = 0;

@@ -165,7 +165,7 @@ CampaignSeedOptions seed_options_from_factions(const FileProvider& files) {
     std::vector<std::string> seen;
     std::vector<uint8_t> bytes;
     const auto parse = [&bytes](const std::string& name) {
-        return data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), name);
+        return data::XmlDocument::parse(bytes, name);
     };
     std::vector<std::string> list;
     if (files.read("Data\\XML\\FactionFiles.xml", bytes)) {

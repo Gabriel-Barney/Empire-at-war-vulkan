@@ -473,7 +473,7 @@ void test_real_data() {
         std::vector<uint8_t> xml;
         check(vfs->read("Data\\XML\\Movies.xml", xml), "Movies.xml reads");
         const alamo::data::XmlDocument doc =
-            alamo::data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(xml.data()), xml.size()), "Movies.xml");
+            alamo::data::XmlDocument::parse(xml, "Movies.xml");
         const std::vector<MovieEntry> db = parse_movies(doc.root());
         size_t alpha_entries = 0, alpha_ok = 0, alpha_open = 0;
         const MovieEntry* sample_alpha = nullptr;

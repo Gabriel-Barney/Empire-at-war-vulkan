@@ -128,7 +128,7 @@ PrimVertex vertex(const D3& p, uint32_t color, float u, float v) {
 
 bool parse_laser_constants(std::span<const uint8_t> xml, LaserConstants& out) {
     const data::XmlDocument doc =
-        data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(xml.data()), xml.size()), "GameConstants.xml");
+        data::XmlDocument::parse(xml, "GameConstants.xml");
     if (!doc.ok()) return false;
     const data::XmlNode root = doc.root();
     auto value = [&](std::string_view tag, float& v) {
