@@ -56,7 +56,6 @@ struct CampaignBattleOptions {
     galactic::ConflictConfig conflict;  // human choice (headless default), fight AI-vs-AI battles
     BattleConfig battle;
     bool tactical = true;               // false: every battle is refused -> auto-resolved
-    bool crc = true;                    // register the CRC systems
     // S10-int: sim-owned animation (sim_anim.hpp, attached to the host separately); battles drive its tactical
     // world (weapon Attack, flinch gate, locomotor Move / Walk, idles, animated fire bones). Null = none.
     SimAnimation* animation = nullptr;
@@ -77,12 +76,10 @@ struct CampaignBattleOptions {
     // --- battle host (BT pass): S10 seams the session fills (all optional; unset = unchanged behaviour) ---
     // (a1j t05: the BT §1.4 step 2 story block is no longer a seam: attach() always installs the gate, which reads
     // GalacticSim::story_block(), A1_READINGS §31.7.)
-    // BT §1.6 story lock 0x4472a0 (story rewards DISABLE / ENABLE / RESTRICT_AUTORESOLVE, global flag +0x41 or the planet
-    // list +0x308): "this planet's battle must be fought". A human-involved locked conflict is fought (the pending choice
-    // answers Fight); without the hook the ConflictConfig answer applies.
-    std::function<bool(PlanetIndex planet)> autoresolve_locked;
     // BT §2.1 / TACTICAL_GAPS §4.10 random map picker 0x47bf40: the candidate maps (Data\Art\Maps\*.TED, CustomMaps, mod
     // paths: name, kind, terrain, faction, player count, max base level, flags). Empty = no picker (fallback maps).
+    // NOT WIRED yet (cu8 t07, roadmap cu8f): no host builds the list, because which TED fields give the entry's terrain,
+    // faction, player count and max base level (0x47b030) is not in docs/re (RE task).
     struct MapCandidate {
         std::string name;
         bool space = false;

@@ -275,7 +275,6 @@ public:
     // Host input for the next build(): the camera zoom factor f of FIXPASS_GALACTIC §3.1 (route colour blend; sparkles
     // off at f == 1). Kept until changed; default 0 (zoomed out).
     void set_route_zoom(float f) { route_zoom_ = f; }
-    float route_zoom() const { return route_zoom_; }
     // [port] (QA D6) galaxy-layer overlays (ownership rings, route sparkles, fleet lines, selection model) are world-space
     // and huge from the close-up camera: 1 at f == 0, 0 from f >= 0.25 on. Sparks and lines also narrow with it (their
     // primitives are opaque), the rest fades or is dropped at 0. Routes and corruption paths stay (FIXPASS_GALACTIC §3).

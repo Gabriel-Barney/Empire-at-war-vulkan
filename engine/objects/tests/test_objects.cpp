@@ -651,6 +651,28 @@ static void test_s1_rules() {
     CHECK(ty.get_int(T("TSWG"), "Space_Override_Population_Value") == -1 &&
           ty.get_int(T("TSWG"), "Land_Override_Population_Value") == 3);
     CHECK(ty.placed_at_markers(T("D")) && !ty.placed_at_markers(T("TSW")));
+    {  // OBJECT_RUNTIME §2.5 exception: a +0xE3 type is not marked while a live same-type, same-owner object remains.
+        IdCounter mid;
+        ObjectStore galaxy(ModeKind::Galactic, StoreKind::Primary, ty, &mid);
+        ObjectStore battle(ModeKind::Space, StoreKind::Primary, ty, &mid);
+        battle.on_parent_mode_death = [&](const ObjectStore& s, ObjectHandle d) { mark_parent_mode_object_for_death(galaxy, s, d); };
+        SpawnParams mp;
+        mp.type = T("D");
+        mp.owner = 1;
+        const ObjectHandle g1 = galaxy.create(mp), g2 = galaxy.create(mp);
+        mp.parent_mode_id = galaxy.id(g1);
+        const ObjectHandle d1 = battle.create(mp);
+        mp.parent_mode_id = galaxy.id(g2);
+        const ObjectHandle d2 = battle.create(mp);
+        mp.parent_mode_id = kNoObjectId;
+        mp.owner = 2;
+        const ObjectHandle other_owner = battle.create(mp);
+        battle.destroy(d1);  // d2 (same owner) still alive: skipped
+        CHECK(!(galaxy.flags(g1) & kFlagMarkedByChildMode));
+        battle.destroy(d2);  // the last one of owner 1 (owner 2's copy does not count): marked
+        CHECK(galaxy.flags(g2) & kFlagMarkedByChildMode);
+        CHECK(battle.alive(other_owner));
+    }
     // Company power: IC = 4 x 1 (plain); OC = IC x clamp(2/4) + U (0) = 2.
     CHECK(ty.get_float(T("IC"), "AI_Combat_Power") == 4.0f && ty.get_float(T("OC"), "AI_Combat_Power") == 2.0f);
 

@@ -38,6 +38,7 @@ struct UnitAbilityRecord {
     float effective_radius = 0.0f;       // Effective_Radius
     float recharge_seconds = 0.0f;       // Recharge_Seconds
     float expiration_seconds = 0.0f;     // Expiration_Seconds (<= 0: no active phase)
+    // Parsed, not yet read (cu8 t05, open parity item): LURE pulsed effect (ABILITIES_HARDPOINTS §2.2 table, +0x2c..+0x34).
     bool is_pulsing = false;
     float pulse_frequency_secs = 0.0f;
     int32_t max_pulses = 0;
@@ -45,7 +46,7 @@ struct UnitAbilityRecord {
     std::string gui_activated_ability_name;  // special ability this forwards to (2.5)
     uint32_t gui_name_crc = 0;               // name_crc of it (+0x88)
     std::string spawned_object_type;
-    int32_t max_spawned_objects = 0;
+    int32_t max_spawned_objects = 0;  // parsed, not yet read (cu8 t05; spawn cap, reader not in docs/re)
     float bomb_countdown_seconds = 0.0f;
     float area_effect_decal_distance = 0.0f;
     std::vector<std::string> projectile_override_names;  // Projectile_Types_Override
@@ -61,7 +62,7 @@ struct UnitAbilityRecord {
     // ---- OI abilities ----
     int32_t spawned_type = -1;        // Spawned_Object_Type as a host TypeIndex (resolver.object_type), -1 unknown
     int32_t spawned_projectile = -1;  // ... as a ProjectileDesc index when it is a projectile type (resolver.projectile)
-    std::vector<int32_t> target_types;  // Target_Types (LURE)
+    std::vector<int32_t> target_types;  // Target_Types (LURE); parsed, not yet read (cu8 t05, with the LURE pulses above)
     // REMAINING_GAPS §5.2: Owner_Attachment_Bone (+0x110), DEPLOY_TROOPERS spawn bones in list order (comma lists and
     // repeated tags both append).
     std::vector<std::string> owner_attachment_bones;
@@ -86,7 +87,7 @@ struct SpecialAbilityDesc {
     int32_t stacking_category = 0;
     float damage_per_frame = 0.0f;               // energy weapon
     float duration_secs = 0.0f;                  // Duration_In_Secs (jamming fallback)
-    float stealth_transition_time = 0.0f;
+    float stealth_transition_time = 0.0f;  // parsed, not read by the sim: render-only fade (ABILITY_VISUALS §1.1)
     bool must_be_bought_on_black_market = false;
     // laser defense
     float defense_duration = 0.0f, protection_radius = 0.0f, zap_recharge = 0.0f, dist_travelled = 0.0f;
@@ -118,6 +119,8 @@ struct SpecialAbilityDesc {
     // Battlefield_Modifier (§2.3.11)
     float fow_reveal_multiplier = 1.0f, reinforcement_time_multiplier = 1.0f, stealth_duration_multiplier = 1.0f,
           capture_time_multiplier = 1.0f, reinforcement_deploy_multiplier = 1.0f;
+    // Parsed, not yet read (cu8 t05, open parity item): the Battlefield_Modifier bool lists +0x191..+0x193 (player tactical
+    // data lists, AND-combined; Enable_Special_Weapons +0x1e0 gates the super weapons, SCRIPT_GAPS §2 [M names]).
     bool enable_bombing_runs = false, enable_bombardment = false, enable_special_weapons = false;
     // Force_Healing (§2.3.1)
     float heal_range = 0.0f, heal_percent = 0.0f, heal_amount = 0.0f, heal_interval = 0.0f;
@@ -151,6 +154,9 @@ struct SpecialAbilityDesc {
     float health_per_victim = 0.0f;
     // Super_Laser (§2.3.9)
     int32_t fire_frame = 0;
+    // Parsed, not yet read (cu8 t05, open parity item): Face_Target turn, Firing_Cone gate and the Fire_Continuation
+    // no-target branch (TACTICAL_GAPS §2.3.9 [M], ABILITIES_HARDPOINTS update 0x715450, ABILITY_VISUALS beam end).
+    // Of these four floats only fire_delay is read; Turn_Rate belongs to the Face_Target turn.
     bool face_target = false;
     float turn_rate = 0.0f, firing_cone = 0.0f, fire_delay = 0.0f, fire_continuation = 0.0f;
     // Drain_Life / Leech_Shields / Blast / Corrupt_Systems / Flame thrower (§2.3.10, §2.3.12)
@@ -163,7 +169,7 @@ struct SpecialAbilityDesc {
     // Infection (refix t02; Damage_Per_Second above, Duration_Of_Infection -> duration_secs)
     float distance_to_infect = 0.0f;      // Distance_To_Infect
     float seconds_to_infect = 0.0f;       // Seconds_To_Infect
-    uint64_t infection_categories = 0;    // Infection_CategoryMask
+    uint64_t infection_categories = 0;    // Infection_CategoryMask; parsed, not yet read (cu8 t05: victim filter, no doc rule)
     // Enable_Ability / Cancel_Special
     uint32_t ability_name_crc = 0;        // Ability_Name / Special_Ability_Name
     // Permanent_Weapon_Swap

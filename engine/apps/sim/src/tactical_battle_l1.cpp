@@ -398,6 +398,8 @@ bool TacticalBattle::disable_engines(objects::ObjectId id, float seconds) {
     if (engines_online(id) < 0) return false;
     l1_engines_.disable(id, seconds, frame_);
     l1_used_ = true;
+    // cu8 t04 (STATION_HANGARS_SOUND §3.3): a timed engine disable turns both engine loops off (audio requests only).
+    if (const Unit* u = unit_by_id(id); u && hg_engine_unit(*u)) engine_loops_.timed_disable(id, frame_);
     return true;
 }
 

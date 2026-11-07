@@ -147,13 +147,12 @@ bool CampaignBattles::attach(std::vector<std::string>* diag) {
     // --- battle host (BT pass): optional S10 seams (campaign_battles.hpp CampaignBattleOptions "battle host") ---
     gate_ = std::make_unique<ConflictGate>(*this);  // BT §1.4 step 2: the manager runs unless the story block holds (a1j t05)
     g->sim()->set_conflict_hooks(gate_.get());
-    // BT §1.6 story lock: a locked human-involved conflict is fought. Source: the option, else the running story
+    // BT §1.6 story lock: a locked human-involved conflict is fought. Source: the running story
     // (StorySession::autoresolve_locked); unlocked = the ConflictConfig answer (same as no decide callback).
     cm_->decide = [this](const galactic::ConflictInfo& c) {
         bool locked = false;
-        if (opt_.autoresolve_locked) locked = opt_.autoresolve_locked(c.planet);
 #ifdef ALAMO_SIM_HAVE_STORY
-        else if (const StorySession* s = host_->story()) locked = s->autoresolve_locked(c.planet);
+        if (const StorySession* s = host_->story()) locked = s->autoresolve_locked(c.planet);
 #endif
         return locked ? galactic::BattleChoice::Fight : cm_->config().human_choice;
     };
@@ -163,68 +162,66 @@ bool CampaignBattles::attach(std::vector<std::string>* diag) {
         };
     // --- end battle host ---
     host_->set_after_mode_update([this](SimHost& h) { hook(h); });
-    if (opt_.crc) {
-        CrcRegistry& reg = host_->crc_registry();
-        cm_->register_crc(reg, "galactic.conflicts");
-        reg.add("battle.state", [this](StateHasher& h) {
-            h.boolean(battle_ != nullptr);
-            if (battle_) battle_->hash(h);
-            // AI_GALACTIC_TOKENS §9.4: the planets' persisted tactical built objects, planet order, only planets with
-            // records (none: no bytes).
-            if (const GalacticMode* gm = host_->galactic_mode(); gm && gm->sim()) {
-                const std::span<const galactic::PlanetState> planets = gm->sim()->planets();
-                for (size_t pl = 0; pl < planets.size(); ++pl) {
-                    const std::vector<galactic::PersistedBuiltObject>& v = planets[pl].built_objects;
-                    if (v.empty()) continue;
-                    h.u32(static_cast<uint32_t>(pl));
-                    h.u32(static_cast<uint32_t>(v.size()));
-                    for (const galactic::PersistedBuiltObject& r : v) {
-                        h.u32(r.type);
-                        h.f32(r.x);
-                        h.f32(r.y);
-                        h.f32(r.z);
-                        h.i32(r.base_level);
-                        h.i32(r.owner);
-                    }
+    CrcRegistry& reg = host_->crc_registry();
+    cm_->register_crc(reg, "galactic.conflicts");
+    reg.add("battle.state", [this](StateHasher& h) {
+        h.boolean(battle_ != nullptr);
+        if (battle_) battle_->hash(h);
+        // AI_GALACTIC_TOKENS §9.4: the planets' persisted tactical built objects, planet order, only planets with
+        // records (none: no bytes).
+        if (const GalacticMode* gm = host_->galactic_mode(); gm && gm->sim()) {
+            const std::span<const galactic::PlanetState> planets = gm->sim()->planets();
+            for (size_t pl = 0; pl < planets.size(); ++pl) {
+                const std::vector<galactic::PersistedBuiltObject>& v = planets[pl].built_objects;
+                if (v.empty()) continue;
+                h.u32(static_cast<uint32_t>(pl));
+                h.u32(static_cast<uint32_t>(v.size()));
+                for (const galactic::PersistedBuiltObject& r : v) {
+                    h.u32(r.type);
+                    h.f32(r.x);
+                    h.f32(r.y);
+                    h.f32(r.z);
+                    h.i32(r.base_level);
+                    h.i32(r.owner);
                 }
             }
+        }
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
-            h.u32(static_cast<uint32_t>(credits_.size()));
-            for (const CreditTransfer& ct : credits_) {
-                h.i32(ct.player);
-                ct.state.hash(h);
-            }
+        h.u32(static_cast<uint32_t>(credits_.size()));
+        for (const CreditTransfer& ct : credits_) {
+            h.i32(ct.player);
+            ct.state.hash(h);
+        }
 #else
-            h.u32(0);  // no credit transfers (same layout without engine/ai)
+        h.u32(0);  // no credit transfers (same layout without engine/ai)
 #endif
-            hash_linked(h);  // story t07 / t08 (no bytes while the linked state is at its defaults)
-        });
-        reg.add("battle.movement", [this](StateHasher& h) {
-            h.boolean(battle_ != nullptr);
-            if (battle_) battle_->movement().hash_units(h);
-        });
-        reg.add("battle.combat", [this](StateHasher& h) {
-            h.boolean(battle_ != nullptr);
-            if (!battle_) return;
-            const tactical::combat::CombatSystem& c = battle_->combat();
-            c.hash_units(h);
-            c.hash_projectiles(h);
-            c.hash_modifiers(h);
-            c.hash_delayed(h);
-        });
-        // S10-int: S9 state (abilities.objects + combat.ext), speed factors, particles / containers / dummies.
-        reg.add("battle.abilities", [this](StateHasher& h) {
-            h.boolean(battle_ != nullptr);
-            if (battle_) battle_->hash_abilities(h);
-        });
+        hash_linked(h);  // story t07 / t08 (no bytes while the linked state is at its defaults)
+    });
+    reg.add("battle.movement", [this](StateHasher& h) {
+        h.boolean(battle_ != nullptr);
+        if (battle_) battle_->movement().hash_units(h);
+    });
+    reg.add("battle.combat", [this](StateHasher& h) {
+        h.boolean(battle_ != nullptr);
+        if (!battle_) return;
+        const tactical::combat::CombatSystem& c = battle_->combat();
+        c.hash_units(h);
+        c.hash_projectiles(h);
+        c.hash_modifiers(h);
+        c.hash_delayed(h);
+    });
+    // S10-int: S9 state (abilities.objects + combat.ext), speed factors, particles / containers / dummies.
+    reg.add("battle.abilities", [this](StateHasher& h) {
+        h.boolean(battle_ != nullptr);
+        if (battle_) battle_->hash_abilities(h);
+    });
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
-        if (opt_.tactical_ai)  // A1 stage 2 (opt-in: existing goldens keep their system list)
-            reg.add("battle.ai", [this](StateHasher& h) {
-                h.boolean(ai_ != nullptr);
-                if (ai_) ai_->hash(h);
-            });
+    if (opt_.tactical_ai)  // A1 stage 2 (opt-in: existing goldens keep their system list)
+        reg.add("battle.ai", [this](StateHasher& h) {
+            h.boolean(ai_ != nullptr);
+            if (ai_) ai_->hash(h);
+        });
 #endif
-    }
     // S10-int: ability commands (40 / 43 / 57 / 58) of the running battle at the command phase.
     host_->set_tactical_command_hook([this](SimHost& h, uint8_t player, const commands::EventData& ev) {
         TacticalMode* tm = h.tactical();

@@ -506,12 +506,6 @@ std::string_view XmlNode::attribute(std::string_view attr_name, std::string_view
     return fallback;
 }
 
-bool XmlNode::has_attribute(std::string_view attr_name) const {
-    for (const XmlAttribute* a = attributes_begin(); a != attributes_end(); ++a)
-        if (iequals(a->name, attr_name)) return true;
-    return false;
-}
-
 XmlChildRange XmlNode::children(std::string_view filter) const {
     XmlNode first = first_child();
     if (first && !filter.empty() && !iequals(first.name(), filter)) first = first.next_sibling(filter);

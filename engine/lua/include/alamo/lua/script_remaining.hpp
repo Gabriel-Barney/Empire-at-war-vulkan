@@ -103,19 +103,20 @@ struct RemainingScriptHooks {
     // Can_Garrison_Fire of a holder. Unset: the type's Property_Flags GarrisonCanFire (OBJECT_TYPES.md 9.1.2) [port].
     std::function<bool(objects::ObjectHandle holder)> can_garrison_fire;
     // ---- combat (tactical combat system) ----
-    // Enable_Behavior(behavior id, on): unset -> the family state keeps the override (no system reads it yet).
-    std::function<bool(objects::ObjectHandle unit, int32_t behavior, bool on)> enable_behavior;
+    // (cu8 t08: Enable_Behavior needs no hook: it drives the store's behaviour disable counter directly, §2.6.)
     // Set_Targeting_Stickiness_Time_Threshold (TACTICAL_COMBAT.md 2.5: the Lua override +0x158). Kept in the state too.
+    // NOT WIRED yet (no host assigns it; roadmap cu8f): the combat system has no per-unit stickiness override.
     std::function<void(objects::ObjectHandle unit, float seconds)> set_stickiness;
+    // Lua_Set_Prefer_Ground_Over_Space (UNIT_AI). NOT WIRED yet (no host assigns it; roadmap cu8f): the reader is not in
+    // docs/re. Kept in the state too.
     std::function<void(objects::ObjectHandle unit, bool prefer_ground)> set_prefer_ground;
     // Every projectile type the unit can fire (weapon and hard points, the combat system's order). Unset: the data
     // fallback [port] = the type's Projectile_Types (hard point data is not in GameObjectTypes).
     std::function<std::vector<objects::TypeIndex>(objects::ObjectHandle unit)> projectile_types;
     // Current projectile type (kNone = unknown -> the first of the list above).
     std::function<objects::TypeIndex(objects::ObjectHandle unit)> current_projectile;
-    // Get_Energy (§2.12: tactical only, a fraction 0..1). energy_fraction first; else energy (absolute pool) divided
-    // by Energy_Capacity; < 0 = no pool / unknown. Unset: 1 for a type with Energy_Capacity > 0, else 0 [port].
-    std::function<float(objects::ObjectHandle unit)> energy_fraction;
+    // Get_Energy (§2.12: tactical only, a fraction 0..1): energy (absolute pool) divided by Energy_Capacity; < 0 = no
+    // pool / unknown. Unset: 1 for a type with Energy_Capacity > 0, else 0 [port].
     std::function<float(objects::ObjectHandle unit)> energy;
     // Damage tracking (§2.4): rate (damage / s) and the time until death (s); < 0 = unknown. Unset: 0 / 1e18.
     std::function<double(objects::ObjectHandle unit)> rate_of_damage;
@@ -126,9 +127,8 @@ struct RemainingScriptHooks {
     // < 0 unknown -> 1 [port].
     std::function<double(objects::ObjectHandle unit, objects::ObjectHandle other)> ai_power_vs;
     // ---- galactic ----
-    // Force_Test_Space_Conflict on a fleet (§2.12: re-run the arrival; conflict -> Initiate_Space_Conflict). True = a
-    // conflict was started. Unset: the GalacticSim conflict hooks when the players family has a sim, else false.
-    std::function<bool(objects::ObjectHandle fleet)> test_space_conflict;
+    // (cu8 t08: Force_Test_Space_Conflict needs no hook: it runs the arrival test on the players family's GalacticSim
+    // and its conflict hooks.)
     // Give_Random_Sliceable_Tech(player) -> the chosen type (kNone = none). Unset: §2.9 on the players world.
     std::function<objects::TypeIndex(int32_t player)> give_random_sliceable_tech;
     // GameObjectTypeWrapper.Is_Obsolete(player). Unset: the player's obsolete list (players.hpp LuaPlayerState).
@@ -160,7 +160,7 @@ struct RemainingObjectState {
     bool build_pad_locked = false;        // Lock_Build_Pad_Contents
     int8_t prefer_ground = -1;            // Set_Prefer_Ground_Over_Space; -1 = never set
     float stickiness = -1.0f;             // Set_Targeting_Stickiness_Time_Threshold; < 0 = the type's value
-    std::map<int32_t, bool> behaviors;    // Enable_Behavior overrides (behaviour id -> enabled)
+    std::map<int32_t, bool> behaviors;    // Enable_Behavior calls (behaviour id -> last state; the effect is the store's counter)
     bool diverted = false;                // Divert: move flag 0x40 on the current move (§2.3)
     Vec3 divert_goal{};                   // the goal reported right after the diversion move
     objects::ObjectId pad_uc = objects::kNoObjectId;     // Build without a host: the pad's under-construction object

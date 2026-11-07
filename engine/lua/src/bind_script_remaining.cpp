@@ -808,9 +808,15 @@ int m_enable_behavior(Call& c) {
     if (!is_bool(c, 2)) return c.script_error_stop("%s -- invalid type for state. Expected a bool.", kName);
     const bool on = to_bool(c, 2);
     // A missing behaviour: silently nothing (§2.6).
-    if (!store(c)->has_behavior(self_object(c), static_cast<objects::BehaviorTypeId>(id))) return 0;
+    objects::ObjectStore* st = store(c);
+    const ObjectHandle self = self_object(c);
+    const uint32_t index = st->behavior_index(self, static_cast<objects::BehaviorTypeId>(id));
+    if (index == objects::kNone) return 0;
     if (RemainingObjectState* s = edit_state(c, c.self->id)) s->behaviors[id] = on;
-    if (RemainingScriptHooks* hk = hooks(c); hk && hk->enable_behavior) hk->enable_behavior(self_object(c), id, on);
+    // cu8 t08 (L1_S4_REMAINING §2.6 [H]): true -> vf +0xb8 = Enable (slot 23), false -> vf +0xc0 = Disable (slot 24) on
+    // the object's behaviour of that type: the store's disable counter (TACTICAL_GAPS §6.6).
+    if (on) st->enable_behavior(self, index);
+    else st->disable_behavior(self, index);
     return 0;
 }
 
@@ -852,10 +858,6 @@ int m_force_test_space_conflict(Call& c) {
                 }
         if (!self) return 0;
     }
-#endif
-    RemainingScriptHooks* hk = hooks(c);
-    if (hk && hk->test_space_conflict) return hk->test_space_conflict(self) ? push_finished_block(c) : 0;
-#if ALAMO_LUA_PLAYERS
     // The arrival test [port]: a stationary fleet whose planet holds a fleet hostile to its owner -> the conflict hooks.
     if (sim && sim->conflict_hooks()) {
         const uint32_t f = sim->fleet_of(self);
@@ -990,10 +992,6 @@ int m_get_energy(Call& c) {
         return c.script_error_stop("GameObjectWrapper::Get_Energy -- only valid in tactical mode");
     const ObjectHandle self = self_object(c);
     RemainingScriptHooks* hk = hooks(c);
-    if (hk && hk->energy_fraction) {
-        const float f = hk->energy_fraction(self);
-        if (f >= 0.0f) return push_num(c, std::clamp(f, 0.0f, 1.0f));
-    }
     const objects::GameObjectTypes* ty = types(c);
     const TypeIndex t = store(c)->type(self);
     const float cap = (ty && t < ty->size()) ? ty->get_float(t, "Energy_Capacity") : 0.0f;

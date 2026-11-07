@@ -68,7 +68,6 @@ public:
     size_t attribute_count() const;
     // Value of the first attribute with this name (case-insensitive), or `fallback`.
     std::string_view attribute(std::string_view name, std::string_view fallback = {}) const;
-    bool has_attribute(std::string_view name) const;
 
     // Range over children, optionally filtered by name: for (XmlNode c : n.children("File")).
     XmlChildRange children(std::string_view name = {}) const;

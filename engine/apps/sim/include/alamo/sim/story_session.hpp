@@ -461,8 +461,8 @@ public:
     }
     // --- OI galactic (owner: galactic agent): BT §1.6 story lock 0x4472a0 ("this planet's battle must be fought"),
     // written by the story rewards DISABLE_AUTORESOLVE / ENABLE_AUTORESOLVE (global flag +0x41) and
-    // RESTRICT_AUTORESOLVE (Param1 planet, Param2 1 add / 0 remove: the planet list +0x308) [M: field wiring]. Source for
-    // CampaignBattles' `autoresolve_locked` seam (the host sets it: [&](PlanetIndex p) { return story.autoresolve_locked(p); }).
+    // RESTRICT_AUTORESOLVE (Param1 planet, Param2 1 add / 0 remove: the planet list +0x308) [M: field wiring]. Read by
+    // CampaignBattles' conflict decision through SimHost::story() (a locked human-involved conflict is fought).
     // No source is specified for the story-sequence-active flag (0x140b154d0), so none is offered. Not hashed. ---
     bool autoresolve_locked(PlanetIndex planet) const;
     // --- end OI galactic ---

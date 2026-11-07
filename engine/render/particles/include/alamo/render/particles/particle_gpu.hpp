@@ -51,6 +51,8 @@ public:
     void shutdown();  // the GPU must be idle
     bool initialized() const { return ctx_ != nullptr; }
 
+    // Wind for the Affected_By_Wind particle path (FrameConstants::wind, particles.hlsl). Not wired yet: no host feeds the
+    // map / weather wind here, so it stays zero (open item, roadmap cu8f).
     void set_wind(const Float3& w) { wind_ = w; }
     // Scene fog on the main-scene particle draws (the renderer forwards its lighting's FOG_VALS before prepare; never in
     // the heat pass).

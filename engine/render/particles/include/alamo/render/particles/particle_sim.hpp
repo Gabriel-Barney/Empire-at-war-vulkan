@@ -132,7 +132,6 @@ struct SystemState {
     SystemPtr def;
     Mat3x4 cur, prev;
     Float3 velocity;
-    bool has_transform = false;
     bool visible = true;    // drawing gate (hidden proxies, B.3); updating continues
     float fade = 1.0f;      // parent model fade (submit skipped at <= 0.01)
     bool water = false;     // system flag +0x338: bucket 7 instead of 8

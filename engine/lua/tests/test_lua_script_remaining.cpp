@@ -474,6 +474,8 @@ static void test_object_methods(const Db& db) {
     const RemainingObjectState* ts = e.bridge.find_remaining_state(e.store.id(trooper));
     CHECK(ps && ps->build_pad_locked && ss && !ss->dynamic_lod && ss->behaviors.size() == 1 && ss->behaviors.at(loco) == false &&
           ss->stickiness == 2.5f && ts && ts->prefer_ground == 1);
+    // cu8 t08: Enable_Behavior(id, false) disables the object's behaviour of that type (store counter, §2.6).
+    CHECK(e.store.behavior_disable_count(ship, e.store.behavior_index(ship, static_cast<objects::BehaviorTypeId>(loco))) == 1);
     CHECK(run(vm, "Ship.Set_Prefer_Ground_Over_Space(true)") == "" && last_message_has(vm, "missing Unit_AI behavior"));
     CHECK(run(vm, "Ship.Set_Prefer_Ground_Over_Space()") == "" && last_message_has(vm, "Missing required boolean parameter."));
     CHECK(run(vm, "Ship.Enable_Behavior('x', true)") == "" && last_message_has(vm, "Expected number."));

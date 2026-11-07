@@ -858,7 +858,6 @@ const FieldValue& GameObjectTypes::effective(TypeIndex t, FieldId f) const {
 bool GameObjectTypes::get_bool(TypeIndex t, std::string_view tag) const { return effective(t, find_type_field(tag)).b; }
 int32_t GameObjectTypes::get_int(TypeIndex t, std::string_view tag) const { return effective(t, find_type_field(tag)).i; }
 float GameObjectTypes::get_float(TypeIndex t, std::string_view tag) const { return effective(t, find_type_field(tag)).f; }
-double GameObjectTypes::get_double(TypeIndex t, std::string_view tag) const { return effective(t, find_type_field(tag)).d; }
 int32_t GameObjectTypes::targeting_priority_set(TypeIndex t) const {
     return have_priority_sets_ && ids().priority_set != kNoField ? effective(t, ids().priority_set).i : -1;
 }

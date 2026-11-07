@@ -22,9 +22,14 @@
 //   * engines_offline(id)   - last ENGINE hardpoint destroyed / station-upgrade disable (AbilityEventKind::
 //                             EnginesOffline): moving off, idle off.
 //   * engines_online(id)    - ENGINE hardpoint repaired to full (EnginesOnline): idle on.
-//   * timed_disable(id)     - timed engine disable from Take_Damage (energy-pool projectile): moving off, idle off.
-//                             The timer expiry does not call audio.
+//   * timed_disable(id)     - a timed engine disable (§3.3: Take_Damage, energy-pool projectile): moving off, idle off.
+//                             The timer expiry does not call audio. Called by TacticalBattle::disable_engines (the L1
+//                             timed-disable entry point) for engine-loop units; the energy-pool source itself (0x56c230)
+//                             is not traced in docs/re, so nothing calls disable_engines from combat yet.
 //   * suppress(id) / unsuppress(id) - 0x392410 / 0x393970 (land only in vanilla): both off then blocked / unblocked.
+//                             NOT WIRED (cu8 t04, roadmap cu8f): the callers (§3.4, 0x635xxx land behaviours) are [L], and
+//                             the port runs engine loops for SimpleSpace units only. The land transform caller (0x3a9910)
+//                             is land-only too and has no entry point here.
 //   * remove(id)            - death or removal: forget the object, no request.
 //   * after the tick: requests() to the audio side, then clear_requests().
 #pragma once
@@ -74,7 +79,6 @@ public:
     }
     void engines_offline(combat::ObjectId id, uint32_t frame) { both_off(id, frame); }
     void timed_disable(combat::ObjectId id, uint32_t frame) { both_off(id, frame); }
-    void land_transform(combat::ObjectId id, uint32_t frame) { both_off(id, frame); }
     void engines_online(combat::ObjectId id, uint32_t frame) { set(get(id), EngineLoop::Idle, true, frame); }
     void suppress(combat::ObjectId id, uint32_t frame) {
         Obj& o = get(id);

@@ -239,6 +239,7 @@ public:
     ObjectId id(ObjectHandle h) const { return id_[h.slot()]; }
     ObjectId parent_mode_id(ObjectHandle h) const { return parent_mode_id_[h.slot()]; }
     TypeIndex type(ObjectHandle h) const { return type_[h.slot()]; }
+    const GameObjectTypes& object_types() const { return *types_; }
     int32_t owner(ObjectHandle h) const { return owner_[h.slot()]; }
     Vec3 position(ObjectHandle h) const { return position_[h.slot()]; }
     Vec3 facing(ObjectHandle h) const { return facing_[h.slot()]; }
@@ -355,7 +356,8 @@ private:
 // Parent-mode death marking (§2.5), for use as the tactical store's on_parent_mode_death: the
 // counterpart (by parent-mode id in parent) gets kFlagMarkedByChildMode when it has the dying
 // object's type; otherwise it is a container (fleet / transport) and its first not-yet-marked
-// child of that type (insertion order) is marked. Returns the marked object (null if none).
+// child of that type (insertion order) is marked. Exception (§2.5): a type with placed_at_markers (+0xE3) is not
+// marked while another live object of that type and owner remains in child_store. Returns the marked object (null if none).
 ObjectHandle mark_parent_mode_object_for_death(ObjectStore& parent, const ObjectStore& child_store, ObjectHandle dying);
 
 }  // namespace alamo::objects

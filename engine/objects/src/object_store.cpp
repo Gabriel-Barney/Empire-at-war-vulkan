@@ -795,6 +795,13 @@ ObjectHandle mark_parent_mode_object_for_death(ObjectStore& parent, const Object
     const ObjectHandle c = parent.find(child_store.parent_mode_id(dying));
     if (!parent.alive(c)) return {};
     const TypeIndex t = child_store.type(dying);
+    // OBJECT_RUNTIME §2.5 exception [M]: a type placed at markers (type byte +0xE3, OBJECT_TYPES §9.4) is not marked
+    // while another live object of the same type and owner is still in the tactical store.
+    if (child_store.object_types().placed_at_markers(t)) {
+        const int32_t owner = child_store.owner(dying);
+        for (ObjectHandle h : child_store.all_objects())
+            if (h != dying && child_store.alive(h) && child_store.type(h) == t && child_store.owner(h) == owner) return {};
+    }
     if (parent.type(c) == t) {
         parent.set_flag(c, kFlagMarkedByChildMode);
         return c;

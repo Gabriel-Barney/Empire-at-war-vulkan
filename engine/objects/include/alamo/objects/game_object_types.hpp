@@ -132,7 +132,6 @@ public:
 
     // Field state; nullptr = never set (the default applies).
     const FieldValue* value(TypeIndex t, FieldId f) const;
-    const FieldValue& default_value(FieldId f) const { return defaults_[f]; }
     const FieldValue& effective(TypeIndex t, FieldId f) const;  // value or default
     std::span<const FieldValue> values(TypeIndex t) const { return state_[t]; }  // sorted by field
 
@@ -140,7 +139,6 @@ public:
     bool get_bool(TypeIndex t, std::string_view tag) const;
     int32_t get_int(TypeIndex t, std::string_view tag) const;
     float get_float(TypeIndex t, std::string_view tag) const;
-    double get_double(TypeIndex t, std::string_view tag) const;
     std::string_view get_string(TypeIndex t, std::string_view tag) const;
     std::array<float, 4> get_vec(TypeIndex t, std::string_view tag) const;
     std::span<const std::string_view> get_list(TypeIndex t, std::string_view tag) const;
