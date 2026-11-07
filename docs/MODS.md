@@ -120,8 +120,8 @@ original does (the spec column), for base FoC and for mods alike; nothing here i
 | Mechanism | Files | Rules (spec) | Status |
 |---|---|---|---|
 | Faction list | `Data\XML\FactionFiles.xml` and the files it names | Factions appended in file order, upper-cased names, no duplicate check: the first definition of a name wins. The default faction of a type with an empty `Affiliation` is the first faction with `Is_Neutral` (`OBJECT_TYPES.md` "Faction list", "Empty list"). Map object owners are faction indices in this order (`GALAXY_MAP_PRESENTATION.md`, `REMAINING_GAPS.md` S10 probe) | **main** (galactic rules); no fixed list anywhere: **modc t02/t03** |
-| AI player type | Faction `Basic_AI`; campaign `AI_Player_Control` pairs; `Data\XML\AI\` definitions | Skirmish: an AI slot gets its faction's `Basic_AI` (`SKIRMISH_SETUP.md` §2.1). Campaign: the campaign's `AI_Player_Control` pair; no pair = no AI. A type the AI definitions do not define = no AI ("Unrecognized AI player type", `AI_GALACTIC.md` §1.2) | `main` uses built-in types by faction name (`ai_type_for`, §7). `resolve_ai_type` / `load_faction_basic_ai`: **Q6 stack** (q6 t08), which still keeps the built-in types for `Empire` / `Rebel` / `Underworld` when their `Basic_AI` matches (`is_stock_faction`). Fully data-driven: **modc t03** |
-| Skirmish starting forces | Faction `Space_Skirmish_AI_Default_Forces`, `Land_Skirmish_AI_Default_Forces` | `SKIRMISH_SETUP.md` §2 step 4, §2.2 | `main` (`alamo_game`) uses built-in lists by faction name (§7). Data path: **Q6 stack** (`skirmish_default_forces`). Built-in lists removed: **modc t03** |
+| AI player type | Faction `Basic_AI`; campaign `AI_Player_Control` pairs; `Data\XML\AI\` definitions | Skirmish: an AI slot gets its faction's `Basic_AI` (`SKIRMISH_SETUP.md` §2.1). Campaign: the campaign's `AI_Player_Control` pair; no pair = no AI. A type the AI definitions do not define = no AI ("Unrecognized AI player type", `AI_GALACTIC.md` §1.2) | Data-driven for base FoC and mods alike (`resolve_ai_type`, `load_faction_basic_ai`; modc t03). Campaign pairs read for base FoC too since **modc t17** (2026-11-06; before, only with a mod layer) |
+| Skirmish starting forces | Faction `Space_Skirmish_AI_Default_Forces`, `Land_Skirmish_AI_Default_Forces` | `SKIRMISH_SETUP.md` §2 step 4, §2.2 | Data path for every faction (`skirmish_default_forces`); the port's built-in base-game lists are gone (**modc t17**, 2026-11-06). A faction without a list, or whose names the data does not define: the [port] fallback of §5 (up to three of its cheapest buildable units, `data_fallback_forces`). Space: [port] a hyperspace ship leads a list without one (the port hosts a skirmish as a galactic hop) |
 | Game object types | `Data\XML\GameObjectFiles.xml` and the files it names | One list, no EaW/FoC merge; files in list order; first definition of a type name wins; `Variant_Of_Existing_Type`; unknown names in lists dropped (`OBJECT_TYPES.md` §1–§6) | **main** (engine/objects) |
 | Galaxy and campaigns | `TradeRouteFiles.xml`, `CampaignFiles.xml`, the planet / route / campaign XML they name | One `CampaignFiles.xml` (first match, no merge); route and campaign lists de-duplicated and parsed in ascending CRC32 of the listed name; last definition wins as a whole (`PHASE2_ANSWERS.md` Q13, `FALLBACK_CAMPAIGNS.md`) | **main** (engine/data) |
 | Story / campaign scripts | Story XML named by the campaign, `Data\Scripts\Story\*.lua` | `docs/re/STORY.md`, `L1_S4_REMAINING.md` | **main** (engine/lua, story session) |
@@ -338,14 +338,12 @@ Add a row here for every new rule of this kind, in the same change that adds it.
 
 Found while writing this contract; the full audit is **modc t02**, the replacements **modc t03**, the lint **modc t04**.
 
-- `ai_type_for(faction)`: built-in AI types for `Empire`, `Rebel`, `Underworld` (**main**, `engine/apps/game/src/game_data.cpp`,
-  used by `game_session.cpp`). The **Q6 stack** moves it to `engine/apps/game/rules/skirmish_rules.hpp` and limits it to
-  "stock" factions (`is_stock_faction`: the name matches and the data's `Basic_AI` agrees), which is still a name test.
-- `default_skirmish_fleet(faction)` / `default_skirmish_ground(faction)`: built-in unit lists for the same three factions
-  (**main**; the Q6 stack uses them only for stock factions).
-- `SkirmishSetup` defaults `human_faction = "Rebel"`, `ai_faction = "Empire"`; `make_skirmish_galaxy` looks up `"Hostile"` by
-  name and picks the battle planet from `Kuat` / `Coruscant` first; the skirmish map list puts `_MP_SPACE_KUAT` first
-  (**main**, `engine/apps/game/include/alamo/game/game_data.hpp`, `game_data.cpp`).
+- None left from this list (2026-11-06). `ai_type_for`, `is_stock_faction`, the `Rebel` / `Empire` slot defaults and the
+  `"Hostile"` lookup went in **modc t03**; the built-in skirmish unit lists and the base-game exception for campaign
+  `AI_Player_Control` pairs in **modc t17**; the `Kuat` / `Coruscant` skirmish planet and the `_MP_SPACE_KUAT` default map in
+  **modc t19** (the skirmish galaxy's planet is the map's own planet type when the data has it and it forbids no unit, else
+  the first such `PLANET` type: `skirmish_galaxy_planet`; the staging dialog selects the remembered map, else row 0, as
+  `UI.md` 9.7). The remaining kept rows of the audit (`docs/status/modc-audit.md`) are retail hard-codes or test hosts.
 
 Each needs either a data-driven replacement or a `docs/re/` citation showing the original does the same (§1 rule 3).
 

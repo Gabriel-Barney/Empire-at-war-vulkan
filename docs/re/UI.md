@@ -874,7 +874,7 @@ file name (§9.4).
   offered. The row selected when the dialog opens: 9.7 (p4uis t03).
 - The map chosen last is remembered **per game type** (9.7): the selected row of the map list is stored for its type
   whenever it changes, and any refill (opening, tab switch, type switch) selects that map when the active tab lists it,
-  else Kuat on Space [port: keeps the space smoke run on Kuat], else row 0.
+  else row 0, as the original (9.7; modc t19 dropped the port's Kuat-on-Space default).
 
 ### 9.6 Preview, start overlay, description and colours (p4uim t03 / t04, p4uia t01 / t02; p4uis t01 / t02, 2026-11-03)
 
