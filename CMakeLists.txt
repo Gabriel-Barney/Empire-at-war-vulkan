@@ -36,3 +36,7 @@ add_subdirectory(tools/shaders/cpp)
 
 # Phase 2: headless engine core.
 add_subdirectory(engine)
+
+# Q4 behavioural parity harness (tools/parity, roadmap q4h): its selftest, and the reference-run comparisons when
+# alamo_headless is built.
+add_subdirectory(tools/parity)

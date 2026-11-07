@@ -1,0 +1,58 @@
+{
+ "about": "Q4 parity harness scenarios and tolerances (tools/parity/README.md). A tolerance key is a metric family prefix, optionally with a [Faction] bracket, or an exact metric id; the most specific key wins. abs / rel widen the retail envelope [min, max] of the reference runs; min_overlap grades a type mix; info = reported, not graded. Every entry says why.",
+ "scenarios": {
+  "hotm_galactic": {
+   "kind": "galactic",
+   "title": "Galactic Conquest, Heart of the Maw (Sandbox_Heart_Of_The_Maw_Empire), idle human Empire, Rebel and Underworld AI, seed 0, 13501 ticks (10 fiscal cycles)",
+   "references": [
+    {"run": "20261103-152619-galactic-vanilla-lua", "note": "reader 2: credits, production queues, Lua plan records"},
+    {"run": "20261030-061228-galactic-vanilla-lua", "note": "reader 2: credits, production queues"},
+    {"run": "20261027-101057-galactic-vanilla", "note": "reader 1: no credits, no production queues (travel, fleets and outcomes only); 577 missed ticks"}
+   ],
+   "kit": "tools/probe_mod/q2_traces/run_lua_probe.cmd (or run_galactic.cmd; -NonInteractive drives the menus), README in that folder",
+   "workers": 4
+  },
+  "geonosis_skirmish": {
+   "kind": "skirmish",
+   "title": "Space skirmish, (2) Battle Over Geonosis (_MP_SPACE_GEONOSIS), idle human Empire vs Rebel AI (Medium), 6000 credits, 5400 ticks",
+   "references": [
+    {"run": "20261030-062751-skirmish-vanilla-lua", "note": "seeded 0x41ccdfe4 (the port host uses its own seed); every tick sampled"}
+   ],
+   "kit": "tools/probe_mod/q2_traces/run_skirmish.cmd -LuaProbe (-NonInteractive drives the menus), README in that folder",
+   "map": "_MP_SPACE_GEONOSIS",
+   "human": "Empire",
+   "ticks": 5400,
+   "frames": [600, 1200, 1800, 2400, 3000, 3600, 4200, 4800, 5400],
+   "workers": 4,
+   "gaps": {
+    "combat.damage_taken": "missing port hook: the skirmish host prints no per-object health (a tactical --trace-out in engine/apps/headless/skirmish_run.cpp, like port_trace.hpp does for galactic runs)",
+    "combat.first_shot_frame": "missing port hook: the space skirmish host prints no shot count or first-shot frame (same tactical trace)"
+   }
+  }
+ },
+ "tolerances": {
+  "travel.hop_ticks": {"abs": 3, "rel": 0.03, "nearest": true, "why": "keyed by faction and route; a hop takes its fleet's speed (the units' Hyperspace_Speed, the Underworld corruption bonus), so one route has several durations in retail (Underworld Nal Hutta -> Shola: 89 and 107 ticks) and each port hop must lie within tolerance of some retail hop of that route. A hop is timed from the first moved sample to the first parked sample (same rule on both sides); retail hops of one route and fleet differ by up to 6 ticks (Rebel Kamino -> Shola 221 / 227, Mon Calamari -> Shola 74 / 80), so 3%, at least 3 ticks; a wrong speed multiplier shows as 100+ ticks (tools/probe_mod/g1_hops/README.md)"},
+  "build.ticks": {"abs": 3, "rel": 0.05, "why": "the shortest completed build per type and planet: retail from its queue start to leaving the queue (production.q2q: items finish 2 ticks after start + frames), the port from the AI build order to the new object in its state trace. The retail runs themselves differ by 5% on one planet (mining facility at Mon Calamari 686 vs 722 ticks, Y-wings 344 vs 362: a build-time modifier present in one run only), so 5%, at least 3 ticks"},
+  "econ.cycle_tick": {"abs": 0, "why": "the fiscal period is data (45 s = 1350 frames) and the first payment rule is known (q2f t02): exact; a retail cycle seen across missed samples is a window and the port tick must fall inside it"},
+  "econ.income_cycle1": {"abs": 1, "rel": 0.01, "why": "the first payment comes before AI ownership or structure choices can differ much: planet incomes, starting structures and corruption are data; 1% covers f32 credit arithmetic"},
+  "econ.income_mean": {"rel": 0.1, "why": "later payments follow the planets and mining facilities owned, which follow AI choices; the retail runs already differ in these, 10% on top of their envelope"},
+  "econ.credits_at": {"rel": 0.25, "why": "an AI balance is income minus spending, and AI spending timing differs between runs (the HotM retail runs end with 22 and 899 Rebel credits); 25% on top of the retail envelope. The income metrics are the economy check, this one catches gross spending differences"},
+  "econ.credits_at[Empire]": {"abs": 1, "rel": 0.001, "why": "the Empire is the idle human in both scenarios: it never spends, so its balance is income alone and must match closely"},
+  "ai.build_count": {"abs": 2, "rel": 0.25, "why": "how many items an AI queues depends on its budget and the RNG draw order, which the port does not reproduce draw for draw; 25% (at least 2 items) on top of the retail envelope"},
+  "ai.build_mix": {"min_overlap": 0.5, "retail_floor": true, "why": "an AI must build the same kind of units and structures: its items (multiset of types) must overlap the closest retail run at least as much as the retail runs overlap each other, capped at 0.5 (HotM retail runs overlap only 0.30 for the Rebel and 0.43 for the Underworld; a single reference run uses 0.5)"},
+  "ai.fleet_departures": {"abs": 2, "rel": 0.25, "why": "fleet moves follow AI plans and the RNG; the retail runs of one scenario already differ widely (their envelope); 25% (at least 2) on top"},
+  "ai.fleet_targets": {"min_overlap": 0.5, "retail_floor": true, "why": "the AI must send fleets to the same planets: its departures by target planet must overlap the closest retail run at least as much as the retail runs overlap each other, capped at 0.5 (HotM retail: Rebel 0.23-0.80, Underworld 0.64-0.80)"},
+  "ai.first_build_tick": {"abs": 30, "why": "the first AI decisions come before any run-to-run difference builds up: within 1 s (30 ticks) of retail"},
+  "ai.first_departure_tick": {"abs": 30, "why": "as ai.first_build_tick: the first fleet order within 1 s of retail"},
+  "ai.first_build_frame": {"abs": 600, "why": "skirmish units are counted from snapshots every 600 frames (the port host's state cadence): one snapshot of slack"},
+  "outcome.planets_final": {"abs": 0, "why": "a planet is one discrete outcome; the retail runs already span the outcomes seen (Shola captured or not)"},
+  "outcome.captures": {"abs": 1, "why": "planet captures per faction: one capture more or less than the retail envelope"},
+  "outcome.owner_changes": {"abs": 1, "why": "total planet owner changes: one more or less than the retail envelope"},
+  "outcome.units_final": {"abs": 2, "rel": 0.2, "why": "units alive at the end of a skirmish: production and losses both depend on AI timing; 20% (at least 2 units)"},
+  "outcome.units_lost": {"abs": 2, "rel": 0.25, "why": "units destroyed during the skirmish: 25% (at least 2 units)"},
+  "outcome.battle_ended": {"abs": 0, "why": "whether the battle ends before the tick limit is a discrete outcome"},
+  "combat.damage_taken": {"rel": 0.25, "why": "hull lost per faction over the battle: weapon damage is data, but targeting and fire timing follow AI orders; 25%"},
+  "combat.first_shot_frame": {"abs": 300, "why": "first projectile of the battle: within 10 s (300 frames)"},
+  "diag": {"info": true, "why": "synced-RNG draws are an implementation detail; reported to explain divergences, never graded (parity is behaviour)"}
+ }
+}
