@@ -134,6 +134,10 @@ row 2). The port draws when the AI world is built, which is after `GalacticSim::
 The count (24 draws on HotM) is right, but the stream position is not, so the per-queue values differ from retail's.
 Exact placement needs a hook in `engine/galactic`'s galaxy build (open item below).
 
+A2k t04 (2026-11-06): done. `GalacticSim::start` draws both phases right after each planet object is made (row order,
+before the starting forces), keeps them in `PlanetState::queue_phase` (galactic save v4 since the a2k merge onto dev,
+2026-11-07) and exposes them as `GalacticSim::build_queue_phase(planet, queue)`. `init_queue_phases()` copies them and no longer draws.
+
 ### 5.2 HotM Rebel-human run after the fix [H port]
 
 Same command as §2 (3000 ticks). Synced stream changed: the Empire's Build_Space_Forces now picks Tartan + Broadside

@@ -103,8 +103,9 @@ struct GalacticAiTypeInfo {
 };
 
 // GameObjectCategoryType name -> bits; 0 if unknown. `categories` = the loaded enum (GameObjectTypes::enums(), so a mod's
-// renumbered / renamed categories resolve as the game resolves them); null or a discarded converter = the vanilla FoC
-// table (objects::EnumRegistry fallback). Vanilla data loads an enum equal to that table.
+// renumbered / renamed categories resolve as the game resolves them); null = the vanilla FoC table (objects::EnumRegistry
+// fallback); a discarded converter converts nothing (0, OBJECT_TYPES §9.1, A2k t06). Vanilla data loads an enum equal to
+// that table.
 uint64_t ai_category_bit(std::string_view name, const objects::EnumConverter* categories = nullptr);
 // Fills category_mask of every entry from its category names (same enum rule).
 void fill_category_masks(std::vector<GalacticAiTypeInfo>& types, const objects::EnumConverter* categories = nullptr);
@@ -153,6 +154,10 @@ double galactic_ai_enemy_strength(const galactic::GalacticSim& sim, std::span<co
                                   PlanetIndex planet, int32_t self, bool space, uint64_t mask,
                                   const objects::EnumConverter* categories = nullptr,
                                   const GalacticSimTokenResolver* leaves = nullptr);
+// A2k t02: the hull fraction 0x396df0 a PotentialPlan's P = AI_Combat_Power x hull uses (A2K_T02_RE_ANSWERS Q2(b)) [H]:
+// health / the type's Tactical_Health; 1.0 when the type has no maximum or the stored health is not > 0 ([port] an
+// untyped store keeps health 0).
+double galactic_ai_hull_fraction(float health, float max_health);
 // One entry of the PotentialPlan Contrast requirement list (0x5f1990): `row` = the EnemyContrastTypes row, -1 for a layer
 // total; `space` = layer byte 0 (space) / false = layer byte 1 (ground); `target` = the required strength.
 struct GalacticContrastEntry {

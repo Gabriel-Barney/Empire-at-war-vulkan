@@ -11,10 +11,11 @@
 //   u32 relation count (0 or P x P) + u8 each
 //   planets (row order): bool is_planet + u32 type (checked against the session), then every other PlanetState field
 //         except the definition-derived position and links (visibility lists, income breakdown, both build queues,
-//         starbase / structures / surface handles, influence ids, orbit fleet indices, respawn list; v3: the persisted
-//         tactical built objects {u32 type, f32 x, y, z, i32 base level, i32 owner}, list order)
+//         starbase / structures / surface handles, influence ids, orbit fleet indices, respawn list, the persisted
+//         tactical built objects {u32 type, f32 x, y, z, i32 base level, i32 owner} in list order, i32 x 2 build
+//         queue phases)
 //   u32 fleet count + every FleetState (dead ones too: fleet indices are stable references) incl. path and slots
-//   u32 + i32 stealthed ids; u32 + victory claims; (v2) i32 victory hold; u32 + pending S4 events (GalacticEvent,
+//   u32 + i32 stealthed ids; u32 + victory claims; i32 victory hold; u32 + pending S4 events (GalacticEvent,
 //   emission order)
 // Object references: a handle whose object exists (live or dead-not-flushed) is written as its ObjectId and resolved
 // with ObjectStore::find on read (the store is restored first; an unknown id fails the read). A handle that refers to
@@ -43,8 +44,10 @@ namespace alamo::galactic {
 
 namespace {
 
-// v2 (story t11): + i32 victory hold; v3 (q6, AI_GALACTIC_TOKENS §9.4): + PlanetState::built_objects. Reads v1 / v2.
-constexpr uint32_t kGalacticSaveVersion = 3;
+// v2 (story t11): + i32 victory hold; v3 (q6, AI_GALACTIC_TOKENS §9.4): + PlanetState::built_objects; v4 (A2k t04 /
+// t01): + i32 x 2 build queue phases per planet, - the two PlanetState build bonus floats (the production modifiers are
+// derived, GalacticSim::production_bonus). Only the current version is read.
+constexpr uint32_t kGalacticSaveVersion = 4;
 constexpr uint32_t kConflictSaveVersion = 3;  // v2: BattleRequest::linked (story t10); v3: BattleRequest::sandbox (q6)
 
 void put_handle(ByteWriter& w, const objects::ObjectStore& s, ObjectHandle h) {
@@ -169,7 +172,7 @@ void GalacticSim::write(ByteWriter& w) const {
         }
         w.f32(p.piracy_pool).i32(p.siphon_player).f32(p.siphon_fraction).i32(p.siphon_until).f32(p.siphon_amount);
         w.i32(p.halt_until).boolean(p.min_income_set).boolean(p.max_income_set).f32(p.min_income).f32(p.max_income);
-        w.f32(p.build_time_bonus).f32(p.build_cost_bonus).boolean(p.hidden).boolean(p.in_battle);
+        w.boolean(p.hidden).boolean(p.in_battle);
         w.u32(static_cast<uint32_t>(p.income.size()));
         for (const IncomeEntry& e : p.income) {
             w.u8(e.kind).f32(e.value).i32(e.expiry);
@@ -191,8 +194,9 @@ void GalacticSim::write(ByteWriter& w) const {
         w.i32(p.sabotage_count);
         w.u32(static_cast<uint32_t>(p.respawns.size()));
         for (const RespawnEntry& e : p.respawns) w.i32(e.due).u32(e.type).i32(e.owner).u8(e.flag);
-        w.u32(static_cast<uint32_t>(p.built_objects.size()));  // v3
+        w.u32(static_cast<uint32_t>(p.built_objects.size()));
         for (const PersistedBuiltObject& b : p.built_objects) w.u32(b.type).f32(b.x).f32(b.y).f32(b.z).i32(b.base_level).i32(b.owner);
+        w.i32(p.queue_phase[0]).i32(p.queue_phase[1]);
     }
 
     w.u32(static_cast<uint32_t>(fleets_.size()));
@@ -229,7 +233,7 @@ void GalacticSim::write(ByteWriter& w) const {
 bool GalacticSim::read(ByteReader& r) {
     const objects::ObjectStore& st = *store_;
     const uint32_t version = r.u32();
-    if (version < 1 || version > kGalacticSaveVersion || !r.ok()) return false;
+    if (version != kGalacticSaveVersion || !r.ok()) return false;
     const uint32_t rows = r.u32(), routes = r.u32(), types = r.u32(), np = r.u32();
     if (!r.ok() || rows != planets_.size() || routes != map_.routes.size() || types != rules_->types.size() ||
         np != players_.size())
@@ -346,8 +350,6 @@ bool GalacticSim::read(ByteReader& r) {
         p.max_income_set = r.boolean();
         p.min_income = r.f32();
         p.max_income = r.f32();
-        p.build_time_bonus = r.f32();
-        p.build_cost_bonus = r.f32();
         p.hidden = r.boolean();
         p.in_battle = r.boolean();
         if (!r.ok()) return false;
@@ -403,21 +405,21 @@ bool GalacticSim::read(ByteReader& r) {
             e.flag = r.u8();
             if (!r.ok() || e.type >= types || !player_ok(e.owner)) return false;
         }
-        p.built_objects.clear();  // v1 / v2: none
-        if (version >= 3) {
-            uint32_t nb = 0;
-            if (!r.count(nb, 24)) return false;
-            p.built_objects.resize(nb);
-            for (PersistedBuiltObject& b : p.built_objects) {
-                b.type = r.u32();
-                b.x = r.f32();
-                b.y = r.f32();
-                b.z = r.f32();
-                b.base_level = r.i32();
-                b.owner = r.i32();
-                if (!r.ok() || b.type >= types || !player_ok(b.owner)) return false;
-            }
+        uint32_t nb = 0;
+        if (!r.count(nb, 24)) return false;
+        p.built_objects.resize(nb);
+        for (PersistedBuiltObject& b : p.built_objects) {
+            b.type = r.u32();
+            b.x = r.f32();
+            b.y = r.f32();
+            b.z = r.f32();
+            b.base_level = r.i32();
+            b.owner = r.i32();
+            if (!r.ok() || b.type >= types || !player_ok(b.owner)) return false;
         }
+        for (int32_t& phase : p.queue_phase) phase = r.i32();
+        for (const int32_t phase : p.queue_phase)
+            if (p.is_planet ? phase < 1 || phase > econ::kFramesPerSecond : phase != 0) return false;
         if (!r.ok()) return false;
     }
 
@@ -474,7 +476,7 @@ bool GalacticSim::read(ByteReader& r) {
         c.countdown = r.i32();
         if (!r.ok() || !player_ok(c.player)) return false;
     }
-    const int32_t hold = version >= 2 ? r.i32() : 0;
+    const int32_t hold = r.i32();
     if (hold < 0) return false;
     uint32_t ne = 0;
     if (!r.count(ne, 37)) return false;

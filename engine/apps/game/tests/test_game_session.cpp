@@ -362,6 +362,39 @@ bool live_run(const game::GameData& data, const game::SessionSpec& spec, command
         CHECK(s.order_stats().moves == 2 && s.order_stats().rejected == 0);
         if (s.battle()) CHECK(s.battle()->movement().view(static_cast<objects::ObjectId>(mine[0])).has_goal);
     }
+    // Reinforce (human, through the command stream): the frigate left in the pool by the cap is refused while the cap is
+    // full (QueueFull), then (below, after the queued orders) lands at the requested point once a human unit died and
+    // freed the population. A2k integration: the refusal is checked here, while all three human units still live; after
+    // the queued hard point attack (up to 600 ticks) one of them may already be dead (stream-dependent), and then the
+    // cap is no longer full.
+    uint32_t reserve = 0;
+    if (const sim::TacticalBattle* bt = s.battle()) {
+        const auto pool = bt->reserves(s.local_player());
+        std::printf("reinforce: %zu reserve(s) in the pool\n", pool.size());
+        CHECK(pool.size() == 1);
+        if (!pool.empty()) reserve = static_cast<uint32_t>(pool[0].galactic_id);
+    }
+    // Drop point: next to a live human unit (battle host: the space drop validity 0x4d6fd0 refuses fogged points, TACTICAL_GAPS §4.2).
+    float rx = -1500.0f, ry = 0.0f;
+    const auto drop_point = [&] {
+        if (const sim::TacticalBattle* bt = s.battle())
+            for (const uint32_t id : mine)
+                if (bt->movement().has_unit(static_cast<objects::ObjectId>(id))) {
+                    const auto v = bt->movement().view(static_cast<objects::ObjectId>(id));
+                    rx = v.pos.x;
+                    ry = v.pos.y + 300.0f;
+                    break;
+                }
+    };
+    if (reserve != 0) {
+        for (const uint32_t id : mine) CHECK(store.alive(store.find(static_cast<objects::ObjectId>(id))));  // the cap is full
+        drop_point();
+        const uint64_t rej0 = s.order_stats().rejected;
+        CHECK(s.submit(commands::EventData(commands::EventType::Reinforce).set("unit", reserve).set_f("x", rx).set_f("y", ry)).ok());
+        for (int i = 0; i < 3; ++i) s.tick();
+        t += 3;
+        CHECK(s.order_stats().reinforcements == 0 && s.order_stats().rejected == rej0 + 1);  // QueueFull: the cap is used
+    }
 #ifdef ALAMO_GAME_HAVE_UI
     // Pause / resume through the command stream: once the pause entry drained, no tick runs until the resume.
     CHECK(s.set_paused(true));
@@ -410,31 +443,9 @@ bool live_run(const game::GameData& data, const game::SessionSpec& spec, command
                       bt->movement().view(static_cast<objects::ObjectId>(mine[1])).arrived);
         }
     }
-    // Reinforce (human, through the command stream): the frigate left in the pool by the cap is refused while the cap is
-    // full (QueueFull), then lands at the requested point once a human unit died and freed the population.
-    uint32_t reserve = 0;
-    if (const sim::TacticalBattle* bt = s.battle()) {
-        const auto pool = bt->reserves(s.local_player());
-        std::printf("reinforce: %zu reserve(s) in the pool\n", pool.size());
-        CHECK(pool.size() == 1);
-        if (!pool.empty()) reserve = static_cast<uint32_t>(pool[0].galactic_id);
-    }
-    // Drop point: next to a live human unit (battle host: the space drop validity 0x4d6fd0 refuses fogged points, TACTICAL_GAPS §4.2).
-    float rx = -1500.0f, ry = 0.0f;
-    if (const sim::TacticalBattle* bt = s.battle())
-        for (const uint32_t id : mine)
-            if (bt->movement().has_unit(static_cast<objects::ObjectId>(id))) {
-                const auto v = bt->movement().view(static_cast<objects::ObjectId>(id));
-                rx = v.pos.x;
-                ry = v.pos.y + 300.0f;
-                break;
-            }
+    // The refused reserve lands once a human unit died and freed the population.
     if (reserve != 0) {
-        const uint64_t rej0 = s.order_stats().rejected;
-        CHECK(s.submit(commands::EventData(commands::EventType::Reinforce).set("unit", reserve).set_f("x", rx).set_f("y", ry)).ok());
-        for (int i = 0; i < 3; ++i) s.tick();
-        t += 3;
-        CHECK(s.order_stats().reinforcements == 0 && s.order_stats().rejected == rej0 + 1);  // QueueFull: the cap is used
+        drop_point();
         uint64_t waited = 0;
 #ifdef ALAMO_GAME_HAVE_CONTROLS
         game::RadarFeed radar_feed;  // read-only radar feed over the live battle: one Default_Unit_Die ping per visible death

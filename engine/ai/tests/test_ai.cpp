@@ -21,6 +21,7 @@
 #include <thread>
 #include <vector>
 
+#include "alamo/ai/ai_free_store_path.hpp"
 #include "alamo/ai/ai_path_finder.hpp"
 #include "alamo/ai/galactic_perception.hpp"
 #include "alamo/ai/galactic_seed.hpp"
@@ -803,6 +804,66 @@ static void test_path_finder_costs_and_fog() {
     CHECK(zf.weight(D, B) == hop(50.0f) && zf.weight(B, D) == hop(30.0f));
 }
 
+// A2k t02: the per-target stage flood (ai_stage_flood, A2K_T02_RE_ANSWERS Q1(b)). Line A(0) - B(1) - T(2) - C(3) - D(4),
+// 50 apart, free hop <= 75. Default view: a player without an AI system, every planet visible, non-held planets are
+// enemy-owned (passable only at level 5).
+static void test_ai_stage_flood() {
+    GalaxyMap m;
+    m.campaign_name = "ai_stage";
+    m.max_fleet_move_distance = 75.0f;
+    for (uint32_t i = 0; i < 5; ++i) {
+        const auto p = m.planets.add("P" + std::to_string(i));
+        m.planets.flags[p] = kPlanetHasPlanetBehavior;
+        m.planets.position[p] = {50.0f * static_cast<float>(i), 0.0f, 0.0f};
+    }
+    const galactic::PlanetGraph g = galactic::PlanetGraph::build(m);
+    const PlanetIndex A = 0, B = 1, T = 2, C = 3, D = 4;
+    auto view_of = [](std::initializer_list<PlanetIndex> held) {
+        galactic::PlayerView v;
+        v.held_by_ally = galactic::Bitset(5);
+        for (const PlanetIndex p : held) v.held_by_ally.set(p, true);
+        return v;
+    };
+    using L = std::vector<PlanetIndex>;
+    {  // Target not held, level 5: BFS from T's first neighbour B (pop order B, A, T, C, D): A before C although C is
+       // one hop from T (hops are counted from the neighbour, not from the target).
+        const galactic::PlayerView v = view_of({A, C});
+        CHECK(ai_stage_flood(g, v, T, 5) == (L{A, C}));
+        CHECK(ai_stage_flood(g, v, T, 0).empty() && ai_stage_flood(g, v, T, 1).empty());  // flag 4 clear: target not held
+        CHECK(ai_stage_flood(g, v, 9, 5).empty());                                       // not a node
+    }
+    {  // Target held: one BFS from the target, the target first (levels 0 and 5).
+        const galactic::PlayerView v = view_of({T, A, D, B});
+        CHECK(ai_stage_flood(g, v, T, 5) == (L{T, B, A, D}));
+        CHECK(ai_stage_flood(g, v, T, 0) == (L{T, B, A}));  // Friendly_Only: C (enemy) does not pass, so D is cut off
+    }
+    {  // Level 2 (Enemy_destination): only held planets pass; the run with strictly the most held planets is kept.
+        CHECK(ai_stage_flood(g, view_of({B, C, D}), T, 2) == (L{C, D}));  // B's run [B] < C's run [C, D]
+        CHECK(ai_stage_flood(g, view_of({B, C}), T, 2) == (L{B}));        // a tie: the first neighbour wins
+        CHECK(ai_stage_flood(g, view_of({A}), T, 2).empty());             // no passable neighbour
+    }
+    {  // Danger (flag 2 clear at level 2): a dangerous held neighbour fails unless corrupted with the benefit.
+        galactic::PlayerView v = view_of({B, C});
+        v.dangerous = galactic::Bitset(5);
+        v.dangerous.set(B, true);
+        CHECK(ai_stage_flood(g, v, T, 2) == (L{C}));
+        CHECK(ai_stage_flood(g, v, T, 5) == (L{B, C}));  // level 5 skips the danger test
+        v.corrupted = galactic::Bitset(5);
+        v.corrupted.set(B, true);
+        v.benefits_from_corruption = true;
+        CHECK(ai_stage_flood(g, v, T, 2) == (L{B}));
+    }
+    {  // Fog: an AI player (not human) never enters an unrevealed planet (B is marked visited and skipped).
+        galactic::PlayerView v = view_of({A, C});
+        v.has_ai_system = true;
+        v.revealed = galactic::Bitset(5, true);
+        v.revealed.set(B, false);
+        CHECK(ai_stage_flood(g, v, T, 5) == (L{C}));  // from C: C, T, D; A is behind B
+        v.is_human = true;
+        CHECK(ai_stage_flood(g, v, T, 5) == (L{A, C}));
+    }
+}
+
 // The finder on the Q11 cadence over a perturbed synthetic galaxy: K AI players, staggered, 90-frame services every
 // 3 frames (the Execution interval). Digest over every finder's hash after each frame + all paths at the end.
 // OPT2 t02 / OPT3 t04: `latency` > 0 runs the background mode on `bg` (publish at the start of each frame); `save_at` >= 0
@@ -1213,6 +1274,7 @@ int main(int argc, char** argv) {
     test_determinism(write_golden);
     test_path_finder_cadence();
     test_path_finder_costs_and_fog();
+    test_ai_stage_flood();
     test_path_finder_determinism();
     test_path_finder_background();
     test_seed_roles();

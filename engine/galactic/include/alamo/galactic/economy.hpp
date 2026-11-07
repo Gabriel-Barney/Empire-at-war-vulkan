@@ -54,7 +54,8 @@ struct EconomyConstants {
     int32_t max_build_queue = 5;                   // Max_Build_Queue: constructor default, not in vanilla XML [H]
     bool pay_as_you_go = false;                    // Pay_As_You_Go (humans; AI always PAYG) [H]
     float production_speed_factor = 1.0f;          // Production_Speed_Factor
-    // Production_Speed_Mod_Base_Vs_Tech_0.._4 (_0 is never read, GE 2.3).
+    // Production_Speed_Mod_Base_Vs_Tech_0.._4, indexed by d - 1 with d = starbase level - Tech_Level
+    // (d = 1 -> _0, d >= 5 -> _4; A2K_T01_BUILD_COST_RE 2.1).
     std::array<float, 5> base_vs_tech{1.0f, 0.90f, 0.75f, 0.55f, 0.45f};
     int32_t max_ground_forces_on_planet = 10;      // Max_Ground_Forces_On_Planet (+0x10c8)
     float corruption_hyperspace_bonus = 1.5f;      // Corruption_Hyperspace_Bonus (+0x1213c)

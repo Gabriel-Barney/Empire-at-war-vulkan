@@ -248,12 +248,17 @@ struct PlanetState {
     int32_t halt_until = INT32_MIN;       // credit halt list folded: halted while now <= halt_until [M]
     bool min_income_set = false, max_income_set = false;  // D +0x280 / +0x281
     float min_income = 0.0f, max_income = 0.0f;           // D +0x278 / +0x27c
-    float build_time_bonus = 0.0f;  // m_planet = 1 - bonus [M]
-    float build_cost_bonus = 0.0f;  // m_planet_cost = 1 - bonus [M]
-    bool hidden = false;            // D +0x2e0 inaccessible
+    // (The per-planet build price / time modifiers m_planet_cost / m_planet are derived on demand from the holders present:
+    // GalacticSim::production_bonus, A2K_T01_BUILD_COST_RE 1.2.)
+    bool hidden = false;           // D +0x2e0 inaccessible
     bool in_battle = false;         // galactic conflict list (battles are tactical: never set by S3)
     std::vector<IncomeEntry> income;               // breakdown list D +0x268 (order matters)
     std::array<std::vector<BuildEntry>, 2> queue;  // ground, space
+    // A2k t04: the initial last-run frames of the planet's two AIPlanetBuildQueues (ground, space), synced
+    // Get_Int(1, 30) each, drawn in start() at the planet's PRODUCTION attach (GalacticSim::build_queue_phase). Fixed
+    // after start(); 0 on a row without a planet. Saved (v3); not hashed (the AI's per-queue last-run frames that start
+    // from them are hashed in its state, and the draws themselves move the hashed synced RNG).
+    std::array<int32_t, 2> queue_phase{0, 0};
     // bases and forces
     int32_t starbase_level = 0;           // D +0x148
     int32_t starbase_owner = kNoPlayer;   // D +0x13c
@@ -599,6 +604,10 @@ public:
     bool corrupted(PlanetIndex planet) const { return planets_[planet].corruption != kCorruptionNone; }
     float build_time_for(int32_t player, PlanetIndex planet, uint32_t type) const;
     int32_t build_cost_for(int32_t player, PlanetIndex planet, uint32_t type) const;
+    // A2K_T01_BUILD_COST_RE 1.2 (0x559c10 price / 0x55a010 time): the production bonus of `type` built by `player` at
+    // `planet` = sum over stacking categories (ascending) of the largest value in each, over the merged player-wide
+    // and planet-local tables, capped at 0.999999; the multiplier is 1 - bonus. 0 when nothing applies.
+    float production_bonus(int32_t player, PlanetIndex planet, uint32_t type, bool time) const;
     bool pays_as_you_go(int32_t player) const;
     PlayerView player_view(int32_t player) const;
 
@@ -669,6 +678,15 @@ public:
     // service order (newest registered first), right before that planet's queues advance. The hook may enqueue or
     // cancel at that planet (the AIPlanetBuildQueue market). Not hashed. One slot (null = none; the galactic AI uses it).
     void set_production_service_hook(std::function<void(PlanetIndex)> hook) { production_hook_ = std::move(hook); }
+    // A2k t04 (A2J_RE_BUILD_MARKET §4) [H]: the initial last-run frame of AIPlanetBuildQueue `queue` (0 ground, 1 space)
+    // at `planet`. The ctor 0x53b5c0 draws it as synced Get_Int(1, (int)(FPS + 0.5)) = [1, 30] (0x1ffb40); the
+    // ProductionDataPack ctor 0x559680 makes queue 0 then queue 1 when the planet's PRODUCTION behaviour attaches at
+    // galaxy build, so start() draws both right after each planet object is made, in planet creation (row) order, before
+    // the starting forces. The AI world starts its queues' last-run frames from these instead of drawing. 0 for a row
+    // without a planet or a queue > 1.
+    int32_t build_queue_phase(PlanetIndex planet, uint32_t queue) const {
+        return valid_planet(planet) && queue < 2 ? planets_[planet].queue_phase[queue] : 0;
+    }
     // q2f t01: an AI player's pay-as-you-go installment goes through its AI budget (0x53b900, AI_GALACTIC_2 §3.4). The
     // hook gets the planet, the queue index, the queue head and the installment a, and returns the credits to pay (>= 0;
     // the credits floor at 0 and the build advances) or a negative value (the build pauses). Without a hook every

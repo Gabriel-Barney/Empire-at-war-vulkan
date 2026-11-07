@@ -150,8 +150,25 @@ struct GalPp {
             if (w.store.type(u) == t) return true;
         return false;
     }
-    double power_eff(uint32_t r) const {  // P = power(T) x health of the chosen free unit [port: health 1]
-        return static_cast<double>(w.power_of(recs[r].type));
+    // A2k t02 (A2K_T02_RE_ANSWERS Q2(b)) [H]: P = AI_Combat_Power(T) x the hull fraction (0x396df0) of the chosen free
+    // unit (`unit` = index into `units`; -1 = a produced unit, full hull).
+    double power_eff(uint32_t r, int32_t unit) const {
+        double p = static_cast<double>(w.power_of(recs[r].type));
+        if (unit >= 0 && static_cast<size_t>(unit) < units.size()) p *= hull_fraction(units[static_cast<size_t>(unit)].h);
+        return p;
+    }
+    double hull_fraction(ObjectHandle u) const {  // galactic_ai_hull_fraction on the store's health
+        if (!w.types || !w.store.alive(u)) return 1.0;
+        const uint32_t t = w.store.type(u);
+        const auto& th = w.types->columns().tactical_health;
+        return galactic_ai_hull_fraction(w.store.health(u), t < th.size() ? th[t] : 0.0f);
+    }
+    // The source planets of the production estimates (0x6639f0 / 0x664210 -> 0x665160 of the TARGET's reachability,
+    // A2K_T02_RE_ANSWERS Q1 port change 3) [H]: the per-target list at the goal level; [port] a goal without a target
+    // keeps the player-level flood (no target reachability object).
+    const std::vector<PlanetIndex>& source_list() const {
+        const int level = std::min(reach_level, 5);
+        return has_target() ? pa.stage_list(tplanet(), level) : pa.source_planets(level);
     }
 
     // ---- ETA (0x6bfcf0 -> 0x6639f0, §2.1) [H; source list M] ----
@@ -162,9 +179,8 @@ struct GalPp {
             return;
         }
         const auto planets = w.sim.planets();
-        // Source planets: the reachability object's list for the level (0x665160, AI_GALACTIC_3 §8): the flood from
-        // the player's planets in flood output order, cached 10 s.
-        const std::vector<PlanetIndex> list = pa.source_planets(reach_level);
+        // Source planets: the target reachability object's list for the level (0x665160, AI_GALACTIC_3 §8), cached 10 s.
+        const std::vector<PlanetIndex> list = source_list();
         struct Pool {
             bool used = false;
             float time = 0.0f;
@@ -238,10 +254,13 @@ struct GalPp {
     }
 
     // ---- contrast helpers (0x6c5de0 / 0x72ac70 / 0x6c4b20) ----
-    float weight(uint32_t t, int32_t row) const {  // 0x5f1f90 x the terrain factor 0x5f22c0 when PP+0x19C != -1 (§6.3)
+    // 0x5f1f90 (ContrastTable::ai_weight) x the terrain factor 0x5f22c0 when PP+0x19C != -1 (§6.3). The commit 0x6bf840
+    // applies the terrain factor to ground rows only (A2K_T02_RE_ANSWERS Q2(b)) [H]: it passes ground_row = false for a
+    // space row. The score pairs (Setup C 0x72aad0) keep the factor on every row [M: not re-read].
+    float weight(uint32_t t, int32_t row, bool ground_row = true) const {
         if (!w.cfg.contrast || row < 0) return 0.0f;
-        const float c = w.cfg.contrast->contrast(static_cast<size_t>(row), w.type_name(t), w.mask_of(t));
-        return terrain < 0 ? c : static_cast<float>(static_cast<double>(c) * effectiveness(t));
+        const float c = w.cfg.contrast->ai_weight(static_cast<size_t>(row), w.type_name(t), w.mask_of(t));
+        return terrain < 0 || !ground_row ? c : static_cast<float>(static_cast<double>(c) * effectiveness(t));
     }
     bool layer_satisfied(bool space) const {  // 0x72ac70, in float (AI_GALACTIC_TOKENS §9.8 item 4)
         return galactic_contrast_layer_satisfied(entries, remaining, space, tolerance);
@@ -251,11 +270,14 @@ struct GalPp {
         for (size_t e = 0; e < entries.size(); ++e) remaining[e] = entries[e].target;
         for (size_t i = 0; i < sel_rec.size(); ++i) {
             const PpRec& r = recs[sel_rec[i]];
-            const double P = power_eff(sel_rec[i]);
-            // 0x6bf840: the selection's weighted contribution against its chosen entry, and its power against the
-            // untyped total of its layer [M].
+            const double P = power_eff(sel_rec[i], sel_unit[i]);
+            // 0x6bf840: the selection's weighted contribution against its chosen entry only, and its raw power against
+            // the untyped total of its layer [H].
             const int32_t e = sel_entry[i];
-            if (e >= 2 && static_cast<size_t>(e) < entries.size()) remaining[static_cast<size_t>(e)] -= static_cast<double>(weight(r.type, entries[static_cast<size_t>(e)].row)) * P;
+            if (e >= 2 && static_cast<size_t>(e) < entries.size()) {
+                const ContrastEntry& ce = entries[static_cast<size_t>(e)];
+                remaining[static_cast<size_t>(e)] -= static_cast<double>(weight(r.type, ce.row, !ce.space)) * P;
+            }
             if (entries.size() > 1) {
                 if (r.space) remaining[total_entry(true)] -= P;
                 if (r.ground) remaining[total_entry(false)] -= P;
@@ -285,10 +307,29 @@ struct GalPp {
 class FreeStoreM final : public PpMarshaller {
 public:
     explicit FreeStoreM(GalPp& p) : p_(p) {}
-    void setup_a() override {  // 0x7287a0 [H]
+    // 0x7287a0 [H] (A2K_T02_RE_ANSWERS Q2(c), A2K_T08_RE_ANSWERS Q3.1 / Q3.5). Stages: per TF the target's reachability
+    // slot 6 at the goal Reachability with the RequireUniqueStage / RequireMatchingStage lists (PlayerAi::setup_stage; no
+    // result -> the target; IgnoreTarget is not read). Units (galactic branch, goal with a target):
+    //   * a hidden unit (0x3a9760, GalacticSim::hidden) keeps key 0 and stays eligible;
+    //   * else the unit's planet must be revealed (Is_Planet_Revealed 0x3fa420), else the unit is dropped;
+    //   * per stage c = stage_cost (0 at the stage; else the AI all-pairs path unit planet -> stage when every planet
+    //     after the start has node cost 0, c = (low 16 bits of the hop-weight sum) / 10; else none);
+    //   * key = (sum of finite c^2 + sum of 2-D distance^2 unit planet -> stage) / TFs when any c was finite; a unit
+    //     with no finite c is dropped.
+    // [port] Not modelled: the health threshold, the engaged / battle-pending / moving / behaviour / attach tests
+    // (open item 5 of A2K_T02_RE_ANSWERS); units in transit (no planet) are dropped.
+    void setup_a() override {
         p_.stages.assign(p_.def.task_forces.size(), p_.tplanet());
+        if (p_.has_target()) {
+            const int level = static_cast<int>(p_.w.defs.goals[p_.goal_type].reachability);
+            std::vector<PlanetIndex> chosen;
+            for (size_t tf = 0; tf < p_.stages.size(); ++tf) {
+                p_.stages[tf] = p_.pa.setup_stage(p_.tplanet(), level, p_.def.task_forces[tf], chosen);
+                chosen.push_back(p_.stages[tf]);
+            }
+        }
         if (!(p_.def.allow_free_store_units && !p_.def.magic_plan)) return;
-        const std::vector<int32_t> hops = p_.has_target() ? p_.w.hops_to(p_.tplanet()) : std::vector<int32_t>{};
+        const auto& planets = p_.w.sim.planets();
         for (const ObjectHandle u : p_.w.free_units(p_.player)) {
             const objects::ObjectId id = p_.w.store.id(u);
             // A candidate needs PP+0x104 == 0 (the first solve) or +0x30 == 0 (A1_READINGS §28.5).
@@ -300,26 +341,42 @@ public:
             FsUnit f;
             f.h = u;
             f.type = p_.w.store.type(u);
-            if (p_.has_target()) {
+            if (p_.has_target() && !p_.w.sim.hidden(u)) {
+                if (!p_.w.sim.is_planet_revealed(at)) continue;
                 double sum = 0.0;
                 bool finite = false;
-                const auto& planets = p_.w.sim.planets();
-                for (size_t tf = 0; tf < p_.stages.size(); ++tf) {
-                    const int32_t c = at < hops.size() ? hops[at] : -1;
-                    if (c >= 0) {
-                        sum += static_cast<double>(c) * static_cast<double>(c);
+                for (const PlanetIndex st : p_.stages) {
+                    if (st == kInvalidPlanet) continue;
+                    const double c = stage_cost(at, st);
+                    if (c >= 0.0) {
+                        sum += c * c;
                         finite = true;
                     }
-                    const double dx = static_cast<double>(planets[at].position.x) - planets[static_cast<size_t>(p_.target)].position.x;
-                    const double dy = static_cast<double>(planets[at].position.y) - planets[static_cast<size_t>(p_.target)].position.y;
+                    const double dx = static_cast<double>(planets[at].position.x) - planets[st].position.x;
+                    const double dy = static_cast<double>(planets[at].position.y) - planets[st].position.y;
                     sum += dx * dx + dy * dy;
                 }
-                if (finite && !p_.stages.empty()) sum /= static_cast<double>(p_.stages.size());
-                f.key = sum;
+                if (!finite) continue;  // galactic: no finite stage cost -> not eligible
+                f.key = sum / static_cast<double>(p_.stages.size());
             }
             p_.max_key = std::max(p_.max_key, f.key);
             p_.units.push_back(f);
         }
+    }
+    // Stage reachability slot 7 (0x663810, mode 3; mode 4 for a Reachability-4 goal is taken as the same rule [M]) from
+    // the unit's planet: 0 at the stage; the zero-node-cost all-pairs path length (low 16 bits of the hop sum / 10) with
+    // threshold 1e-4 (0x6913a0); -1 = none (1e18).
+    double stage_cost(PlanetIndex from, PlanetIndex stage) const {
+        if (from == stage) return 0.0;
+        const AiPathFinder* f = p_.w.ensure_path_finder(p_.player);  // 0x690f10 on the player's matrix (lazy 0x524c10)
+        if (!f || !f->created()) return -1.0;
+        std::vector<PlanetIndex> path;
+        std::vector<uint32_t> wts;
+        f->get_path(from, stage, path, &wts);
+        if (path.size() < 2) return -1.0;
+        const int32_t s = free_store_path_sum(wts, path.size());
+        if (!free_store_path_passes(s, 1e-4f)) return -1.0;
+        return static_cast<double>(static_cast<uint32_t>(s) & 0xFFFFu) / 10.0;
     }
     float score(uint32_t i) override {  // 0x728560 [H]
         PpRec& r = p_.recs[i];
@@ -366,7 +423,10 @@ public:
         float c = 0.0f, available = 0.0f;
         if (p_.eta == 0.0f) {
             float t = 0.0f;
-            if (!p_.has_target() || p_.is_structure(r.type)) {
+            // A2K_T01_BUILD_COST_RE 3.1 [H] (AI_GALACTIC_2 1.4 corrected): no target, or an ordinary unit (none of
+            // 0x60 / 0x5F / 0x5C / 0x5B) -> the base price and half the base time; only a structure type with a target
+            // uses the target planet's price and time.
+            if (!p_.has_target() || !p_.is_structure(r.type)) {
                 t = 0.5f * p_.w.btime_none(r.type);
                 c = p_.w.cost_none(r.type);
             } else {
@@ -544,7 +604,7 @@ public:
                 double sum = 0.0;
                 int32_t n = 0;
                 const uint32_t q = p_.w.sim.queue_kind(t) == gal::kGroundQueue ? 0u : 1u;
-                for (const PlanetIndex k : p_.pa.source_planets(std::min(p_.reach_level, 5))) {
+                for (const PlanetIndex k : p_.source_list()) {
                     const bool surface = p_.w.sim.surface_accessible(k);  // 0x375220
                     if (!surface || !p_.w.can_build_at(p_.player, t, k)) continue;
                     sum += static_cast<double>(p_.w.btime_at(p_.player, t, k)) + static_cast<double>(p_.w.planet_queue_time(k, q));
@@ -838,7 +898,7 @@ public:
         if (r.is_hero || p_.entries.empty()) return 0.0f;
         double v = -1.0;
         r.contrast_entry = -1;
-        const double P = p_.power_eff(i);
+        const double P = p_.power_eff(i, r.free_unit);
         const bool free = r.free_unit >= 0;
         // 0x72b6a0: no pair counts when P <= 0; a pair counts only with w > 0 and R > 0, and a free unit then skips
         // the tolerance / pop-cap test. The main list is scored only for a candidate with a non-escort team (rec+0xB0), the

@@ -9,7 +9,8 @@
 //   lua world    the AI's own LuaPlayerWorld (Suspend_AI flag, per-player script state, pending requests) and the
 //                world's GlobalValue map
 //   players      per AI player (index order): AiContext (goals, templates, learning, budget, clocks), known objects,
-//                pending desire bonuses, reachability caches (per frame / 10 s source lists), AiPathFinder, free-store VM
+//                pending desire bonuses, reachability caches (per frame / 10 s source lists, the per-target 10 s stage
+//                lists), AiPathFinder, free-store VM
 //   plans        PlanInstance + its Lua VM; task forces; blocking statuses; PotentialPlans; build tasks, the pending
 //                list, the planet build queues, the market's per-frame delivery floods, free-store reservations and
 //                moves, PAYG reclaims
@@ -25,9 +26,9 @@
 // name, then the AI's host hooks (players world, AI host, markup host) are re-pointed at this world.
 //
 // NOT SAVED (rebuilt or diagnostic): definitions, plan library, equations, type info / masks, the equation-name and
-// team-type lookup caches, planet Layer_Z_Adjust values (static data), the per-player perception memories handed to the
-// S2 resolver and the resolver itself (copies of GalacticPerception's, rebuilt), the token resolver's neighbour lists,
-// the path finders' matrices (rebuilt from their saved inputs and checked against the saved digest), the decision log,
+// team-type lookup caches, planet Layer_Z_Adjust values and the planet node rank (static data), the per-player
+// perception memories handed to the S2 resolver and the resolver itself (copies of GalacticPerception's, rebuilt), the
+// token resolver's neighbour lists, the path finders' matrices (rebuilt from their saved inputs and checked against the saved digest), the decision log,
 // Lua error lists and the proposal statistics (diagnostics), host attachments (order sink, story worlds, the
 // session GlobalValue store, sim hooks registered by start()).
 //
@@ -47,8 +48,8 @@ using save::put_vec;
 
 namespace {
 // 2: pristine pooled VMs by reference; 3: AI player types (q6 t07); 4 (cu12 t14): the status records' orders_out byte
-// removed (never set or read).
-constexpr uint32_t kWorldVersion = 4;
+// removed (never set or read); 5 (A2k t02): per-target stage lists.
+constexpr uint32_t kWorldVersion = 5;
 // 2: logic frame, player conflict stamps, conflict observer (q6 t03); 3: leaf cache keyed by (leaf, instance, system player,
 // parameter set) with each entry's parameters, the 0xE visible flags and the last seen surface units (q6 t18)
 constexpr uint32_t kResolverVersion = 3;
@@ -299,6 +300,7 @@ struct StagedPlayer {
     std::vector<std::vector<uint8_t>> reach;
     AiPathFinder paths;
     std::array<PlayerAi::SourceList, 6> sources;
+    std::vector<std::array<PlayerAi::SourceList, 6>> stage_lists;
     bool has_fs = false;
     std::unique_ptr<lua::LuaVm> fs_vm;  // null with has_fs: keep the current VM (tests without Lua state)
 };
@@ -531,6 +533,12 @@ void GalacticAiWorld::write(ByteWriter& w) const {
             w.i64(s.frame);
             put_vec(w, s.planets);
         }
+        w.u32(static_cast<uint32_t>(p.stage_lists.size()));  // per-target lists (0 or the planet count)
+        for (const auto& levels : p.stage_lists)
+            for (const PlayerAi::SourceList& s : levels) {
+                w.i64(s.frame);
+                put_vec(w, s.planets);
+            }
         w.boolean(p.fs_vm != nullptr);
         if (p.fs_vm) put_vm(w, m.lua_state, *p.fs_vm);
     }
@@ -832,6 +840,15 @@ bool GalacticAiWorld::read(ByteReader& r) {
             s.frame = r.i64();
             if (!get_vec(r, s.planets)) return false;
         }
+        sp.stage_lists.resize(save::count(r, 6 * 12));
+        if (!sp.stage_lists.empty() && sp.stage_lists.size() != planets) r.fail();
+        for (auto& levels : sp.stage_lists)
+            for (PlayerAi::SourceList& s : levels) {
+                s.frame = r.i64();
+                if (!get_vec(r, s.planets)) return false;
+                for (const PlanetIndex k : s.planets)
+                    if (k >= planets) r.fail();
+            }
         sp.has_fs = r.boolean();
         if (!r.ok()) return false;
         if (sp.has_fs) {
@@ -1191,6 +1208,7 @@ bool GalacticAiWorld::read(ByteReader& r) {
         pa.paths = std::move(sp.paths);
         pa.paths.set_background(m.cfg.path_latency, m.cfg.background);  // OPT2 t02: this world's settings
         pa.sources = std::move(sp.sources);
+        pa.stage_lists = std::move(sp.stage_lists);
         if (!sp.has_fs) pa.fs_vm.reset();
         else if (sp.fs_vm) pa.fs_vm = std::move(sp.fs_vm);
     }

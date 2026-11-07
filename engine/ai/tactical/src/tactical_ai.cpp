@@ -3573,10 +3573,7 @@ bool TacticalAiWorld::Impl::script_evaluate(const EvalContext& c, std::string_vi
 
 std::function<uint64_t(std::string_view)> tactical_category_resolver(const objects::GameObjectTypes* types) {
     if (!types) return {};  // TacticalPerception::init falls back to the built-in table
-    return [types](std::string_view name) -> uint64_t {
-        const auto v = types->enums().get(objects::EnumId::GameObjectCategory).lookup(name);
-        return v ? static_cast<uint64_t>(*v) : 0u;
-    };
+    return category_mask_from(types->enums());
 }
 
 uint64_t tactical_space_categories(const objects::EnumConverter& categories) {

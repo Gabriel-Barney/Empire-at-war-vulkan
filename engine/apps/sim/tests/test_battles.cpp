@@ -7506,7 +7506,7 @@ void test_fighter_station_dies() {
     if (!start_fighter_battle(fb, false)) return;
     const uint32_t sb_type = type_of(*fb.d, "S10_Star_Base_1");
     objects::ObjectId squad = objects::kNoObjectId, station = objects::kNoObjectId;
-    std::vector<objects::ObjectId> members;
+    std::vector<objects::ObjectId> members, attackers;
     bool pushed = false, died = false, dropped = false, record_dropped = false;
     uint32_t push_frame = 0, death_frame = 0;
     for (uint64_t t = 0; t < 9000; ++t) {
@@ -7540,7 +7540,7 @@ void test_fighter_station_dies() {
             for (size_t k = 0; k < members.size(); ++k)
                 CHECK(b->teleport(*tm, members[k], Vec3{sp.x + 500.0f + 40.0f * static_cast<float>(k), sp.y, sp.z}, Vec3{-1, 0, 0}));
             CHECK(b->order_move(*tm, 0, members, sp.x + 500.0f, sp.y, fb.host->random().synced()) == R::None);
-            if (!ships.empty()) CHECK(b->order_attack(*tm, 0, ships, station, fb.host->random().synced()) == R::None);
+            attackers = ships;
             continue;
         }
         const objects::ObjectHandle sh = st.find(station);
@@ -7552,6 +7552,12 @@ void test_fighter_station_dies() {
                         pushed = true;
                         push_frame = b->frame();
                     }
+            // A2k integration: the ships are ordered once the auto block is on the station, so the station cannot die
+            // before the squadron's auto attack starts (with them ordered at frame 3 it died at frame 27, stream-dependent).
+            if (pushed && !attackers.empty()) {
+                CHECK(b->order_attack(*tm, 0, attackers, station, fb.host->random().synced()) == R::None);
+                attackers.clear();
+            }
             if (b->frame() > 8000) break;
             continue;
         }

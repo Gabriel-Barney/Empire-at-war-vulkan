@@ -36,8 +36,8 @@ bool GalacticAiTypeInfo::has_category(std::string_view c) const {
 
 uint64_t ai_category_bit(std::string_view name, const objects::EnumConverter* categories) {
     static const objects::EnumRegistry reg;
-    const objects::EnumConverter& c =
-        categories && categories->valid ? *categories : reg.get(objects::EnumId::GameObjectCategory);
+    // A2k t06 (OBJECT_TYPES §9.1): a discarded converter fails every conversion (0), it does not fall back.
+    const objects::EnumConverter& c = categories ? *categories : reg.get(objects::EnumId::GameObjectCategory);
     const auto v = c.lookup(name);
     return v ? static_cast<uint64_t>(*v) : 0u;
 }
@@ -145,6 +145,11 @@ double galactic_ai_planet_force(const gal::GalacticSim& sim, std::span<const Gal
             }
     }
     return sum;
+}
+
+double galactic_ai_hull_fraction(float health, float max_health) {
+    if (!(max_health > 0.0f) || !(health > 0.0f)) return 1.0;
+    return static_cast<double>(health) / static_cast<double>(max_health);
 }
 
 double galactic_ai_enemy_strength(const gal::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types, PlanetIndex planet,

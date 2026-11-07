@@ -1,6 +1,8 @@
 #include "alamo/galactic/campaign.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <utility>
 
 #include "alamo/objects/behaviors.hpp"
 
@@ -281,6 +283,10 @@ bool GalacticSim::start(const GalacticSetup& setup, std::vector<std::string>* di
         sp.position = p.position;
         p.object = store_->create(sp);
         store_->add_behavior(p.object, beh::Planet);
+        // PRODUCTION attach (after SELECTABLE and PLANET; A2J_RE_BUILD_MARKET §4) [H]: the ProductionDataPack builds
+        // AIPlanetBuildQueue 0 then 1, each drawing its last-run frame as synced Get_Int(1, (int)(FPS + 0.5)).
+        constexpr int32_t kPhaseHi = static_cast<int32_t>(static_cast<float>(econ::kFramesPerSecond) + 0.5f);
+        for (int32_t& phase : p.queue_phase) phase = rng_->range_int(1, kPhaseHi);
         if (planet_by_slot_.size() <= p.object.slot()) planet_by_slot_.resize(p.object.slot() + 1, kInvalidPlanet);
         planet_by_slot_[p.object.slot()] = static_cast<PlanetIndex>(i);
     }
@@ -669,6 +675,73 @@ bool GalacticSim::prerequisites_met(int32_t player, PlanetIndex planet, const Ty
     return true;
 }
 
+float GalacticSim::production_bonus(int32_t player, PlanetIndex planet, uint32_t type, bool time) const {
+    // A2K_T01_BUILD_COST_RE 1.2 / 1.3. Retail keeps per-type tables (player +0x238, planet production behaviour +0x88 /
+    // +0x48) written by Reduce_Production_Price / _Time abilities on apply and cleared on remove. [port choice, RE open
+    // points 2-3] The tables are not stored: they are derived here from the holders present at query time, which is
+    // the same as "applied while the holder is there" with add / remove on creation, arrival, departure, death and
+    // owner change, and needs no save state:
+    //   * planet-local (Galaxy_Wide No): the planet's own abilities (PLANETS.XML) and the live objects at the planet
+    //     owned by the planet owner (structures, starbase, surface, stationary orbit fleets); none on a destroyed planet;
+    //   * player-wide (Galaxy_Wide Yes): the live objects of `player` anywhere (planets and every fleet, moving too)
+    //     and the abilities of the planets `player` owns (also for planets: Galaxy_Wide is honoured as written).
+    //   * applicability 0x48d070: excluded types never, listed types, else the category mask; "All" = every type; only
+    //     types with Build_Cost_Credits > 0 (as the apply loop).
+    // The fold is order independent within a category (max) and runs in ascending category order across categories.
+    if (special().production.empty() || !valid_planet(planet) || type >= rules_->types.size()) return 0.0f;
+    const TypeInfo& t = rules_->types[type];
+    if (t.build_cost <= 0) return 0.0f;
+    const SpecialAbilityClass want = time ? SpecialAbilityClass::ReduceTime : SpecialAbilityClass::ReducePrice;
+    std::vector<std::pair<int32_t, float>> best;  // stacking category -> largest value
+    bool local_record = false;
+    const auto take = [&](const TypeSpecial& ts, bool galaxy) {
+        for (uint32_t ai : ts.production) {
+            const SpecialAbilityDef& a = special().production[ai];
+            if (a.cls != want || a.galaxy_wide != galaxy || !SpecialRules::production_applies(a, type, t.categories)) continue;
+            if (!galaxy) local_record = true;
+            auto it = std::find_if(best.begin(), best.end(), [&](const auto& b) { return b.first == a.stacking_category; });
+            if (it == best.end()) best.emplace_back(a.stacking_category, a.production_reduction);
+            else it->second = std::max(it->second, a.production_reduction);
+        }
+    };
+    const auto holder = [&](ObjectHandle h, int32_t owner, bool galaxy) {
+        const TypeSpecial& ts = special_type(h);
+        if (ts.production.empty() || !store_->alive(h) || store_->owner(h) != owner) return;
+        take(ts, galaxy);
+    };
+    const auto at_planet = [&](const PlanetState& q, int32_t owner, bool galaxy) {
+        for (ObjectHandle s : q.structures) holder(s, owner, galaxy);
+        holder(q.starbase, owner, galaxy);
+        for (ObjectHandle u : q.surface) holder(u, owner, galaxy);
+    };
+    const PlanetState& p = planets_[planet];
+    if (!p.destroyed && valid_player(p.owner)) {
+        take(special().type(p.type), false);
+        at_planet(p, p.owner, false);
+        for (uint32_t f : p.orbit)
+            if (fleets_[f].alive && !fleets_[f].moving && fleets_[f].owner == p.owner)
+                for (ObjectHandle m : fleets_[f].contents) holder(m, p.owner, false);
+    }
+    if (valid_player(player)) {
+        for (const PlanetState& q : planets_) {
+            if (!q.is_planet) continue;
+            if (q.owner == player && !q.destroyed) take(special().type(q.type), true);
+            at_planet(q, player, true);
+        }
+        for (const FleetState& f : fleets_)
+            if (f.alive && f.owner == player)
+                for (ObjectHandle m : f.contents) holder(m, player, true);
+    }
+    if (best.empty()) return 0.0f;
+    std::sort(best.begin(), best.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    float bonus = best.front().second;
+    for (size_t i = 1; i < best.size(); ++i) bonus = bonus + best[i].second;
+    // Bounds (step 5): a planet-local record carries the upper bound 0x3f7fffef (~0.999999); bonus >= 1 is capped too.
+    const float cap = std::bit_cast<float>(0x3f7fffefu);
+    if ((local_record && bonus > cap) || bonus >= 1.0f) bonus = cap;
+    return bonus;
+}
+
 float GalacticSim::build_time_for(int32_t player, PlanetIndex planet, uint32_t type) const {
     const TypeInfo& t = rules_->types[type];
     const PlanetState& p = planets_[planet];
@@ -677,8 +750,10 @@ float GalacticSim::build_time_for(int32_t player, PlanetIndex planet, uint32_t t
     econ::BuildTimeInputs in;
     in.build_time_seconds = t.build_time_seconds;
     in.production_speed_factor = rules_->constants.production_speed_factor;
-    in.planet_bonus = p.build_time_bonus;
-    in.tech_factor_applies = t.build_cost >= 1 && t.kind != UnitKind::GroundStructure;
+    in.planet_bonus = production_bonus(player, planet, type, true);  // m_planet = 1 - bonus (0x55a010)
+    // A2K_T01_BUILD_COST_RE 2.1 step 4 [H]: m_tech only for space-queue items (cost >= 1, no ground base level, not a
+    // ground structure, and a star base level or a level-1 starbase type), never ground units.
+    in.tech_factor_applies = t.build_cost >= 1 && queue_kind_of(t) == kSpaceQueue;
     in.starbase_level = p.starbase_level;
     in.tech_level = t.tech_level;
     in.base_vs_tech = &rules_->constants.base_vs_tech;
@@ -703,7 +778,8 @@ int32_t GalacticSim::build_cost_for(int32_t player, PlanetIndex planet, uint32_t
     const FactionRules& fr = faction_of(player);
     const float m_corr = fr.benefits_from_corruption ? 1.0f : fr.corruption_price_mult[corrupted(planet) ? 1 : 0];
     const float m_tech = t.advances_tech != 0 ? std::max(0.0001f, players_[static_cast<size_t>(player)].tech_cost_mult) : 1.0f;
-    return econ::build_cost(t.build_cost, 1.0f - planets_[planet].build_cost_bonus, m_corr, m_tech);
+    // A2K_T01_BUILD_COST_RE 1.1: cost = m_planet_cost x base x m_corr x m_techupg, max(1, x), round half away.
+    return econ::build_cost(t.build_cost, 1.0f - production_bonus(player, planet, type, false), m_corr, m_tech);
 }
 
 void GalacticSim::restart_head(BuildEntry& e) const {
@@ -1361,33 +1437,46 @@ void GalacticSim::arrive(uint32_t fleet) {
         depart_hop(fleet, at, f.path[f.path_index], true);
         return;
     }
-    // 4. final hop or stopped: speed 0, path cleared, merge into a friendly fleet already in orbit [H].
+    // 4. final hop or stopped (0x56a1e0, A2K_T08_RE_ANSWERS Q1.3) [H]: speed 0, path cleared; the fleet takes a slot of
+    // its own and merges only for a requested slot.
     f.hop_speed = 0.0f;
     f.path.clear();
     f.path_index = 0;
     const int32_t mover = f.owner;
-    // Playtest 3 t07: a slot requested for this planet (FleetManagement op 8 with a destination): the fleet merges into
-    // the owner's fleet in that slot, or takes the slot when it is free. Without a request it merges into the first
-    // friendly fleet in orbit and otherwise takes the lowest free slot.
+    // The request (fleet data +0x90, written only by FleetManagement op 8 = the galaxy-map GUI drop, Playtest 3 t07) is
+    // read and reset at every final arrival. AI fleets never request one.
     const int32_t want = f.want_planet == at ? f.want_slot : -1;
     f.want_planet = kInvalidPlanet;
     f.want_slot = -1;
     if (conflict && conflicts_) conflicts_->on_space_conflict(at, mover);  // S10: Initiate_Space_Conflict
+    // Merge partner (no conflict, requested slot 1 or 2 only): the first fleet in orbit order holding that slot (0x3f9370,
+    // any owner); merged (0x433dd0) only when it has the same owner. A requested slot 0 is a notification only, and no
+    // request or a conflict never merges.
     uint32_t into = kNoFleet;
-    if (want >= 0) {
-        into = slot_occupant(at, mover, want, fleet);
-    } else {
-        for (uint32_t g : p.orbit)
-            if (g != fleet && fleets_[g].alive && fleets_[g].owner == mover && !fleets_[g].moving) {
-                into = g;
-                break;
-            }
+    if (!conflict && (want == 1 || want == 2)) {
+        for (uint32_t g : p.orbit) {
+            const FleetState& o = fleets_[g];
+            if (g == fleet || !o.alive || o.moving || o.slot != want) continue;
+            if (o.owner == mover) into = g;
+            break;
+        }
     }
     if (into != kNoFleet) {
         merge_fleet(fleet, into);
         return;
     }
-    if (want >= 0) place_in_slot(fleet, want);
+    // Slot (0x3f7d70): a free requested slot when one was asked for [port: Playtest 3 t07]; otherwise the first of
+    // 1, 2, 0 that no other fleet of the owner holds there, and slot 0 (shared) when all three are held [H].
+    FleetState& arrived = fleets_[fleet];
+    if (!(want >= 0 && !conflict && place_in_slot(fleet, want))) {
+        int32_t slot = 0;
+        for (const int32_t s : {1, 2, 0})
+            if (slot_occupant(at, mover, s, fleet) == kNoFleet) {
+                slot = s;
+                break;
+            }
+        arrived.slot = static_cast<int8_t>(slot);
+    }
     settle_slots(at);
 }
 
@@ -1813,8 +1902,10 @@ void GalacticSim::hash_state(StateHasher& h) const {
         h.boolean(p.max_income_set);
         h.f32(p.min_income);
         h.f32(p.max_income);
-        h.f32(p.build_time_bonus);
-        h.f32(p.build_cost_bonus);
+        // The two former PlanetState build bonus floats (always 0, now derived: production_bonus), hashed as 0 so the
+        // CRC stream keeps its layout.
+        h.f32(0.0f);
+        h.f32(0.0f);
         h.boolean(p.hidden);
         h.boolean(p.in_battle);
         h.u32(static_cast<uint32_t>(p.income.size()));

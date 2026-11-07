@@ -120,6 +120,7 @@ uint32_t AiPathFinder::weight(PlanetIndex from, PlanetIndex to) const {
     return m.weight(from, to);
 }
 
+
 void AiPathFinder::hash(StateHasher& h) const {
     h.boolean(created_);
     if (!created_) return;
