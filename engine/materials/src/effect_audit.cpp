@@ -44,7 +44,8 @@ bool translate_only(const std::vector<uint8_t>& bytecode, const shaderxlat::Tran
 }
 
 // Why a shader pass has neither a hand-written nor a translated program: the shader versions its
-// states reference (the loader takes vs/ps up to 2_x with both stages present, effect_loader resolve_pass).
+// states reference (the loader takes vs/ps up to 2_x, or vs_3_0 with ps_3_0, with both stages present,
+// effect_loader resolve_pass).
 std::string unsupported_reason(const fx::Effect& e, int technique, int pass) {
     if (technique < 0 || static_cast<size_t>(technique) >= e.techniques.size()) return "no technique";
     const auto& passes = e.techniques[static_cast<size_t>(technique)].passes;
@@ -63,7 +64,8 @@ std::string unsupported_reason(const fx::Effect& e, int technique, int pass) {
         if (!versions.empty()) versions += ", ";
         versions += std::string(kind == 0xFFFEu ? "vs_" : "ps_") + std::to_string(major) + "_" + std::to_string(minor);
     }
-    if (vs_major >= 3 || ps_major >= 3) return "shader model 3 is not translated (" + versions + ")";
+    if ((vs_major >= 3) != (ps_major >= 3) && vs_major >= 0 && ps_major >= 0)
+        return "shader model 3 mixed with an older stage (D3D9 needs vs_3_0 with ps_3_0) (" + versions + ")";
     if (vs_major < 0 && ps_major >= 0) return "pixel shader without a vertex shader (" + versions + ")";
     if (ps_major < 0 && vs_major >= 0) return "vertex shader without a pixel shader (" + versions + ")";
     if (vs_major < 0 && ps_major < 0) return "no shader bytecode found";

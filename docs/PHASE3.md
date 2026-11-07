@@ -75,6 +75,7 @@ Short version first; click a row's details below for the full result.
 | 33 | Wave 2 render: decorations, FOW, space maps | Tracks, decals, blobs, FOW pass, space background scene; 18/18 | engine/render |
 | 34 | C5 records speedup | 2000 ships: records 0.90 → 0.37 ms, build 1.55 → 1.00 ms; DrawData 464 → 80 B; draw lists identical 1/4/15 threads | render, materials |
 | 35 | Hardpoint destruction (§B.10) | 3 vanilla examples exact (SD Weapon_FL / Engines, Station One_01); SD turrets attached; `--destroy-hardpoints`; map luma unchanged | engine/render |
+| 36 | Track-B shader model 3 (modc t22, 2026-11-06) | vs_3_0 / ps_3_0 translated (semantic I/O, flow control, predicates, texldl, vPos / vFace); 4/4 mod SM3 blobs + 2 synthetic translate, compile and match the CPU reference on the GPU (0 out of tolerance); SM1-2 output unchanged (goldens identical) | engine/shaderxlat, materials |
 
 ### Details and resolved notes
 
@@ -91,6 +92,7 @@ Decisions taken where the RE docs were not high confidence. Not bugs, but worth 
 - alPrimVert layout assumed (pos, colour, uv). Restore-only passes detected by heuristic. FF: 3 stages, no BUMPENVMAP, TEXCOORD0 only.
 - Lighting in world space (original rigid shaders: object space; differs only under non-uniform scale).
 - All textures UNORM (no sRGB), as in D3D9. LOD choice (`MeshInfo::lod`) is the renderer's job.
+- Shader model 3 (modc t22): `ps_3_0` gets no fixed-function fog and SM3 colors / fog are not clamped (D3D9 SM3 rules as documented, not checked in game) [M]; `vPos` = SV_Position.xy - 0.5 [H]; `vFace` = ±1 from SV_IsFrontFace [M]. Table in `engine/shaderxlat/src/translate.cpp`.
 </details>
 
 <details><summary><b>Terrain and water</b></summary>
