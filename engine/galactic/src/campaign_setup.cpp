@@ -2,23 +2,13 @@
 #include <algorithm>
 
 #include "alamo/data/game_database.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/galactic/campaign.hpp"
 
 namespace alamo::galactic {
 
 namespace {
-
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        char x = a[i], y = b[i];
-        if (x >= 'A' && x <= 'Z') x = static_cast<char>(x - 'A' + 'a');
-        if (y >= 'A' && y <= 'Z') y = static_cast<char>(y - 'A' + 'a');
-        if (x != y) return false;
-    }
-    return true;
-}
 
 }  // namespace
 
@@ -70,10 +60,10 @@ GalacticSetup build_campaign_setup(const data::GameDatabase& db, const GalacticR
         if (!used[f]) continue;
         PlayerSetup p;
         p.faction = f;
-        p.human = iequals(rules.factions[f].name, data::trim(human));
+        p.human = ascii_iequals(rules.factions[f].name, data::trim(human));
         for (const std::string& r : c->ai_player_control) {
             const std::vector<std::string_view> fields = data::split_fields(r);
-            if (fields.size() >= 2 && iequals(fields[0], rules.factions[f].name) && !iequals(fields[1], "None"))
+            if (fields.size() >= 2 && ascii_iequals(fields[0], rules.factions[f].name) && !ascii_iequals(fields[1], "None"))
                 p.ai = !p.human;
         }
         if (p.ai) p.difficulty = difficulty;

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdlib>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/galactic/campaign.hpp"
 #ifdef ALAMO_SIM_HAVE_STORY
 #include "alamo/sim/sim_anim.hpp"  // L1/S4 wave 2a story hookup (SimAnimation::world)
@@ -1623,15 +1624,6 @@ void CampaignBattles::story_victory(const std::string& faction, bool short_silen
 // record waits) and started at once (start_linked_record, 0x28f590; story t07). Entries left after a start wait for a
 // later hook (the battle is pending). ---
 namespace {
-bool same_text(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const char x = (a[i] >= 'a' && a[i] <= 'z') ? static_cast<char>(a[i] - 'a' + 'A') : a[i];
-        const char y = (b[i] >= 'a' && b[i] <= 'z') ? static_cast<char>(b[i] - 'a' + 'A') : b[i];
-        if (x != y) return false;
-    }
-    return true;
-}
 std::string trimmed_text(std::string_view v) {
     while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.remove_prefix(1);
     while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.remove_suffix(1);
@@ -1640,7 +1632,7 @@ std::string trimmed_text(std::string_view v) {
 // [port] a reward bool: an integer (atoi != 0) or TRUE / YES; empty = the default.
 bool reward_bool(const std::string& v, bool def) {
     if (v.empty()) return def;
-    if (same_text(v, "TRUE") || same_text(v, "YES")) return true;
+    if (ascii_iequals(v, "TRUE") || ascii_iequals(v, "YES")) return true;
     return std::atoi(v.c_str()) != 0;
 }
 }  // namespace
@@ -1661,34 +1653,34 @@ bool CampaignBattles::parse_link_tactical(const std::vector<std::string>& params
     const auto& names = gs.map().planets.name;
     for (PlanetIndex i = 0; i < gs.planets().size() && planet == kInvalidPlanet; ++i) {
         const uint32_t ty = gs.planets()[i].type;
-        if ((i < names.size() && same_text(names[i], params[0])) ||
-            (ty < gs.rules().types.size() && same_text(gs.rules().types[ty].name, params[0])))
+        if ((i < names.size() && ascii_iequals(names[i], params[0])) ||
+            (ty < gs.rules().types.size() && ascii_iequals(gs.rules().types[ty].name, params[0])))
             planet = i;
     }
     const int32_t attacker = gs.player_of_faction(params[2]);
     const std::string mode = param(1);
-    if (planet == kInvalidPlanet || attacker < 0 || same_text(mode, "EITHER")) {
+    if (planet == kInvalidPlanet || attacker < 0 || ascii_iequals(mode, "EITHER")) {
         why = "planet / mode / attacker invalid";
         return false;
     }
     out = LinkedRecord{};
-    out.kind = same_text(mode, "SPACE") ? galactic::ConflictKind::Space : galactic::ConflictKind::Land;
+    out.kind = ascii_iequals(mode, "SPACE") ? galactic::ConflictKind::Space : galactic::ConflictKind::Land;
     out.planet = planet;
     out.attacker = attacker;
     out.map = param(3);
     out.defender = param(4);
     if (const std::string t = param(5); !t.empty())  // P6: unknown type = none
         for (uint32_t i = 0; i < gs.rules().types.size() && out.forced_type == galactic::kNoIndex; ++i)
-            if (same_text(gs.rules().types[i].name, t)) out.forced_type = i;
+            if (ascii_iequals(gs.rules().types[i].name, t)) out.forced_type = i;
     out.plots = param(6);
     out.sandbox = std::atoi(param(7).c_str()) != 0;
     if (const std::string v = param(8); !v.empty()) out.arrival = std::atoi(v.c_str());
     out.presentation_a = reward_bool(param(9), false);
     out.presentation_b = reward_bool(param(10), false);
     if (const std::string v = param(11); !v.empty()) {
-        if (same_text(v, "RETREAT_PLAYER")) out.resolution = galactic::LinkedResolution::RetreatPlayer;
-        else if (same_text(v, "RETREAT_AI")) out.resolution = galactic::LinkedResolution::RetreatAi;
-        else if (same_text(v, "DESTROY_AI")) out.resolution = galactic::LinkedResolution::DestroyAi;
+        if (ascii_iequals(v, "RETREAT_PLAYER")) out.resolution = galactic::LinkedResolution::RetreatPlayer;
+        else if (ascii_iequals(v, "RETREAT_AI")) out.resolution = galactic::LinkedResolution::RetreatAi;
+        else if (ascii_iequals(v, "DESTROY_AI")) out.resolution = galactic::LinkedResolution::DestroyAi;
         else log_.push_back("story: LINK_TACTICAL " + params[0] + ": Unknown resolution " + v);  // 0 -> 3
     }
     out.banner = reward_bool(param(12), true);

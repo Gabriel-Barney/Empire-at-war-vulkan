@@ -4,35 +4,19 @@
 #include <cmath>
 
 #include "alamo/core/dmath.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/objects/type_fields.hpp"
 
 namespace alamo::galactic {
 
 namespace {
 
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        char x = a[i], y = b[i];
-        if (x >= 'A' && x <= 'Z') x = static_cast<char>(x - 'A' + 'a');
-        if (y >= 'A' && y <= 'Z') y = static_cast<char>(y - 'A' + 'a');
-        if (x != y) return false;
-    }
-    return true;
-}
-
-std::string_view trim_ws(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return s;
-}
-
 }  // namespace
 
 ForceSide parse_force_side(std::string_view text) {
-    text = trim_ws(text);
-    if (iequals(text, "Light")) return ForceSide::Light;
-    if (iequals(text, "Dark")) return ForceSide::Dark;
+    text = ascii_trim(text);
+    if (ascii_iequals(text, "Light")) return ForceSide::Light;
+    if (ascii_iequals(text, "Dark")) return ForceSide::Dark;
     return ForceSide::Neutral;
 }
 

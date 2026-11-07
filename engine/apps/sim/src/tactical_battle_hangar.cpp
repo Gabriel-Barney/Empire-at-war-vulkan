@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/objects/behaviors.hpp"
@@ -43,12 +44,7 @@ namespace th = alamo::tactical::hangar;
 
 namespace {
 Vec3 hg_sv(tactical::Vec3 v) { return Vec3{v.x, v.y, v.z}; }
-std::string_view hg_trim(std::string_view s) {
-    auto ws = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
-    while (!s.empty() && ws(s.front())) s.remove_prefix(1);
-    while (!s.empty() && ws(s.back())) s.remove_suffix(1);
-    return s;
-}
+std::string_view hg_trim(std::string_view s) { return ascii_trim(s); }
 objects::BehaviorTypeId spawn_squadron_behavior() {
     static const objects::BehaviorTypeId id = objects::behavior_type_id("SPAWN_SQUADRON");
     return id;
@@ -62,15 +58,7 @@ objects::BehaviorTypeId dummy_upgrade_behavior() {
     return id;
 }
 bool hg_same(std::string_view a, std::string_view b) {
-    a = hg_trim(a);
-    b = hg_trim(b);
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const char x = (a[i] >= 'a' && a[i] <= 'z') ? static_cast<char>(a[i] - 32) : a[i];
-        const char y = (b[i] >= 'a' && b[i] <= 'z') ? static_cast<char>(b[i] - 32) : b[i];
-        if (x != y) return false;
-    }
-    return true;
+    return ascii_iequals(ascii_trim(a), ascii_trim(b));
 }
 constexpr const char* kBuildList = "Tactical_Buildable_Objects_Multiplayer";
 }  // namespace

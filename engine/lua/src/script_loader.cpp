@@ -2,6 +2,7 @@
 #include <string>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/lua/script_loader.hpp"
 
 namespace alamo::lua {
@@ -14,17 +15,6 @@ constexpr std::string_view kRoots[] = {
     "Data\\Scripts\\GameObject\\", "Data\\Scripts\\Story\\",       "Data\\Scripts\\Library\\",
     "Data\\Scripts\\FreeStore\\", "Data\\Scripts\\Miscellaneous\\",
 };
-
-bool ends_with_icase(std::string_view s, std::string_view suffix) {
-    if (s.size() < suffix.size()) return false;
-    for (size_t i = 0; i < suffix.size(); ++i) {
-        char a = s[s.size() - suffix.size() + i], b = suffix[i];
-        if (a >= 'A' && a <= 'Z') a = static_cast<char>(a - 'A' + 'a');
-        if (b >= 'A' && b <= 'Z') b = static_cast<char>(b - 'A' + 'a');
-        if (a != b) return false;
-    }
-    return true;
-}
 
 }  // namespace
 
@@ -40,7 +30,7 @@ std::string read_script(const FileProvider& files, std::string_view name, std::v
     for (char& ch : n)
         if (ch == '/') ch = '\\';
     while (n.size() >= 2 && n[0] == '.' && n[1] == '\\') n.erase(0, 2);
-    const bool has_ext = ends_with_icase(n, ".lua") || ends_with_icase(n, ".lc");
+    const bool has_ext = ascii_iends_with(n, ".lua") || ascii_iends_with(n, ".lc");
     for (const std::string_view root : kRoots) {
         if (has_ext) {
             const std::string p = std::string(root) + n;

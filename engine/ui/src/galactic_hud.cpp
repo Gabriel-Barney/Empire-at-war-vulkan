@@ -6,6 +6,7 @@
 #include <string>
 
 #include "alamo/core/ascii.hpp"
+#include "alamo/data/values.hpp"
 #include "alamo/ui/gui_dialog.hpp"
 #include "alamo/ui/hud_font.hpp"
 #include "alamo/ui/hud_radar.hpp"
@@ -344,7 +345,7 @@ void GalacticHud::build_planet_stacks(const GalacticPlanetInfo& p, Vec2f at, uin
             sh.fleet = st.fleet;
             sh.planet = p.planet;
             const std::string_view dd = cc.raw_value("DRAG_AND_DROP");
-            sh.draggable = !st.land && !st.enemy && !dd.empty() && (dd[0] == 'T' || dd[0] == 't' || dd[0] == 'Y' || dd[0] == 'y' || dd[0] == '1');
+            sh.draggable = !st.land && !st.enemy && data::parse_flag_char(dd);
             sh.enemy = st.enemy;
             sh.layers = layers;
             sh.tint = st.owner_color;
@@ -753,7 +754,7 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
         ps.component = ci;
         ps.select = std::move(select);
         const std::string_view dd = c.raw_value("DRAG_AND_DROP");
-        ps.draggable = !foreign && !empty && !dd.empty() && (dd[0] == 'T' || dd[0] == 't' || dd[0] == 'Y' || dd[0] == 'y' || dd[0] == '1');
+        ps.draggable = !foreign && !empty && data::parse_flag_char(dd);
         ps.foreign = foreign;
         ps.fleet_index = fleet_index;
         ps.fleet = fleet;
@@ -1515,7 +1516,7 @@ void GalacticHud::build(const GalacticHudFrame& f) {
         std::string icon = drag_.icon;
         // Drag_Back ("show the pancakes while dragging"): a map fleet's stack under its icon.
         const std::string_view db = c.raw_value("DRAG_BACK");
-        if (drag_.fleet_index == kMapFleetIndex && !db.empty() && (db[0] == 'T' || db[0] == 't' || db[0] == 'Y' || db[0] == 'y' || db[0] == '1'))
+        if (drag_.fleet_index == kMapFleetIndex && data::parse_flag_char(db))
             if (const std::string* b = pick(c.blank_texture, drag_.layers)) {
                 add_atlas_quad(dl_, kHudLayers - 1, HudList::Alpha, *atlas_, *b, canvas_.pixel_to_canvas(drag_.cursor_px.x, drag_.cursor_px.y), {},
                                c.scale, Rgba8{drag_.tint.r, drag_.tint.g, drag_.tint.b, 200});  // the stack keeps its owner tint

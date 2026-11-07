@@ -4,22 +4,12 @@
 #include <algorithm>
 
 #include "alamo/data/game_database.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/data/values.hpp"
 
 namespace alamo::galactic {
 
 namespace {
-
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        char x = a[i], y = b[i];
-        if (x >= 'A' && x <= 'Z') x = static_cast<char>(x - 'A' + 'a');
-        if (y >= 'A' && y <= 'Z') y = static_cast<char>(y - 'A' + 'a');
-        if (x != y) return false;
-    }
-    return true;
-}
 
 VictorySide load_side(const data::CampaignDef& c, std::string_view side, const GalaxyMap& map, std::vector<std::string>* diag) {
     VictorySide s;
@@ -102,7 +92,7 @@ bool victory_condition_met(const GalacticSim& sim, const VictorySide& side, Vict
             if (!side.faction_names.empty()) {
                 const FactionRules* f = faction(sim, p.owner);
                 if (!f || std::none_of(side.faction_names.begin(), side.faction_names.end(),
-                                       [f](const std::string& n) { return iequal(n, f->name); }))
+                                       [f](const std::string& n) { return ascii_iequals(n, f->name); }))
                     continue;
             }
             return false;
@@ -167,7 +157,7 @@ VictoryCondition parse_victory_condition(std::string_view name) {
         "Galactic_Super_Weapon_Destroys_Last_Enemy_Planet", "Galactic_Super_Weapon_Kills_Enemy_Leader",
         "Galactic_Kill_Enemy_Leader", "Galactic_Control_Named_Planets", "Galactic_Cycles_Elapsed"};
     for (uint8_t i = 0; i < 11; ++i)
-        if (iequal(name, kNames[i])) return static_cast<VictoryCondition>(i);
+        if (ascii_iequals(name, kNames[i])) return static_cast<VictoryCondition>(i);
     return VictoryCondition::Unknown;
 }
 

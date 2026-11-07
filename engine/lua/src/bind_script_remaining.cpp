@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "alamo/core/bytes.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
@@ -104,14 +105,6 @@ objects::ObjectStore* store(Call& c) { return c.vm->host.store; }
 const objects::GameObjectTypes* types(Call& c) { return c.vm->host.types; }
 ObjectHandle self_object(Call& c) { return detail::object_handle(*c.self); }
 SimRng* synced(Call& c) { return c.vm->host.rng ? &c.vm->host.rng->synced() : nullptr; }
-
-char upper(char ch) { return (ch >= 'a' && ch <= 'z') ? static_cast<char>(ch - 'a' + 'A') : ch; }
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (upper(a[i]) != upper(b[i])) return false;
-    return true;
-}
 
 bool valid_type(Call& c, TypeIndex t) {
     const objects::GameObjectTypes* ty = types(c);
@@ -601,8 +594,8 @@ bool affiliated(Call& c, TypeIndex t, std::string_view faction) {
     const objects::GameObjectTypes* ty = types(c);
     if (!ty || faction.empty() || !valid_type(c, t)) return false;
     for (const std::string_view a : ty->get_list(t, "Affiliation"))
-        if (iequal(a, faction)) return true;
-    return iequal(ty->get_string(t, "Affiliation"), faction);
+        if (ascii_iequals(a, faction)) return true;
+    return ascii_iequals(ty->get_string(t, "Affiliation"), faction);
 }
 
 bool has_beh(Call& c, ObjectHandle h, const char* name) {
@@ -638,10 +631,10 @@ bool pad_lists(Call& c, TypeIndex pad_type, std::string_view faction, TypeIndex 
     bool in_row = false;
     for (const std::string_view tok : ty->get_list(pad_type, tag)) {
         if (ty->raw().find(tok) == objects::kNone) {  // not a type: a faction name opens a row
-            in_row = iequal(tok, faction);
+            in_row = ascii_iequals(tok, faction);
             continue;
         }
-        if (in_row && iequal(tok, name)) return true;
+        if (in_row && ascii_iequals(tok, name)) return true;
     }
     return false;
 }
@@ -1225,7 +1218,7 @@ int tf_subscription(Call& c, int op, const char* name) {
         if (c.nargs != 1) return c.script_error_stop("%s -- invalid number of paramters. Expected 1, got %d.", name, c.nargs);  // [H] text
         if (!c.is_string(1)) return c.script_error_stop("%s -- invalid type for parameter 1. Expected string", name);
         for (size_t i = 0; i < std::size(kHardPointTypes); ++i)
-            if (iequal(kHardPointTypes[i], c.string(1))) type = static_cast<int32_t>(i);
+            if (ascii_iequals(kHardPointTypes[i], c.string(1))) type = static_cast<int32_t>(i);
         if (type < 0) return c.script_error_stop("%s -- unknown hard point type %s", name, std::string(c.string(1)).c_str());
         if (type < 5 || type > 10) return c.script_error_stop("%s -- %s is not a weapon hard point type", name, std::string(c.string(1)).c_str());
     }
@@ -1776,9 +1769,9 @@ uint32_t parse_space_field_mask(std::string_view text) {
         size_t j = i;
         while (j < text.size() && text[j] != '|' && text[j] != ' ' && text[j] != ',' && text[j] != '\t') ++j;
         const std::string_view w = text.substr(i, j - i);
-        if (iequal(w, "Asteroid") || iequal(w, "Asteroid_Field") || iequal(w, "Asteroids")) mask |= kFieldAsteroid;
-        else if (iequal(w, "Ion_Storm") || iequal(w, "IonStorm")) mask |= kFieldIonStorm;
-        else if (iequal(w, "Nebula") || iequal(w, "Nebulae")) mask |= kFieldNebula;
+        if (ascii_iequals(w, "Asteroid") || ascii_iequals(w, "Asteroid_Field") || ascii_iequals(w, "Asteroids")) mask |= kFieldAsteroid;
+        else if (ascii_iequals(w, "Ion_Storm") || ascii_iequals(w, "IonStorm")) mask |= kFieldIonStorm;
+        else if (ascii_iequals(w, "Nebula") || ascii_iequals(w, "Nebulae")) mask |= kFieldNebula;
         i = j;
     }
     return mask;

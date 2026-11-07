@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "alamo/lua/ai_tactical_bridge.hpp"
+#include "alamo/core/ascii.hpp"
 #include "vm_internal.hpp"
 
 namespace alamo::lua {
@@ -136,16 +137,7 @@ int m_prepare_ambush(Call& c) {
     if (!a.object && a.target < 0) return c.script_error_stop("Parameter 1 is not a game object or an AI target");
     if (!c.is_string(2)) return c.script_error_stop("Parameter 2 is not a direction string");
     const std::string_view text = c.string(2);
-    auto same = [&text](const char* w) {
-        size_t i = 0;
-        for (; w[i] != 0; ++i) {
-            if (i >= text.size()) return false;
-            char x = text[i];
-            if (x >= 'A' && x <= 'Z') x = static_cast<char>(x - 'A' + 'a');
-            if (x != w[i]) return false;
-        }
-        return i == text.size();
-    };
+    auto same = [&text](std::string_view w) { return ascii_iequals(text, w); };
     const int direction = same("front") ? 0 : same("left") ? 1 : same("right") ? 2 : same("back") ? 3 : -1;
     if (direction < 0) return c.script_error_stop("Unrecognized direction %s", std::string(text).c_str());
     if (!c.is_number(3) || !(c.number(3) > 0.0)) return c.script_error_stop("Parameter 3 is not a positive number");

@@ -3,7 +3,6 @@
 #include "crc_out.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cinttypes>
@@ -20,6 +19,7 @@
 #include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/data/game_database.hpp"
+#include "alamo/data/values.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/galactic/galactic_rules.hpp"
@@ -479,11 +479,7 @@ bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>&
     return true;
 }
 
-std::string trimmed(std::string_view v) {
-    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front()))) v.remove_prefix(1);
-    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.remove_suffix(1);
-    return std::string(v);
-}
+std::string trimmed(std::string_view v) { return std::string(data::trim(v)); }  // data::trim = the std::isspace set
 
 // ---- q6 t02 / t03: the skirmish host's data rules for any faction (mods through MODPATH=) ----
 // engine/apps/game/rules (skirmish_rules.hpp), shared with alamo_game. This host's deliberate differences are options:

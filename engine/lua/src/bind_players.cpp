@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "alamo/ai/ai_path_finder.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/ai/perception_equations.hpp"
 #include "alamo/lua/object_bridge.hpp"
 #if ALAMO_LUA_HAVE_COMMANDS
@@ -32,15 +33,6 @@
 namespace alamo::lua {
 
 namespace {
-
-char ascii_upper(char ch) { return (ch >= 'a' && ch <= 'z') ? static_cast<char>(ch - 'a' + 'A') : ch; }
-
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (ascii_upper(a[i]) != ascii_upper(b[i])) return false;
-    return true;
-}
 
 }  // namespace
 
@@ -146,14 +138,14 @@ void LuaPlayerWorld::set_tech_level(int32_t p, int32_t level) {
 
 int32_t LuaPlayerWorld::find_faction_player(std::string_view faction) const {
     for (size_t p = 0; p < state_.size(); ++p)
-        if (iequals(faction_name(static_cast<int32_t>(p)), faction)) return static_cast<int32_t>(p);
+        if (ascii_iequals(faction_name(static_cast<int32_t>(p)), faction)) return static_cast<int32_t>(p);
     return -1;
 }
 
 int LuaPlayerWorld::faction_known(std::string_view faction) const {
     if (!sim_) return -1;
     for (const galactic::FactionRules& f : sim_->rules().factions)
-        if (iequals(f.name, faction)) return 1;
+        if (ascii_iequals(f.name, faction)) return 1;
     return 0;
 }
 
@@ -543,7 +535,7 @@ int g_find_player(Call& c) {
     if (!w) return push_nil(c);
     const std::string_view name = c.string(1);
     // q6 t11 (LUA_API.md "Lookups"): a name that is not a faction is a script error; a faction without a player is nil.
-    const bool local = iequals(name, "local");
+    const bool local = ascii_iequals(name, "local");
     if (!local && w->faction_known(name) == 0)
         return c.script_error_stop("Find_Player -- unknown faction %s.", std::string(name).c_str());
     const int32_t p = local ? w->local_player() : w->find_faction_player(name);
@@ -558,7 +550,7 @@ int m_get_faction_name(Call& c) {
     const LuaPlayerWorld* w = self_world(c);
     if (!w) return bad_player(c, "Get_Faction_Name");
     std::string n = w->faction_name(c.self->id);
-    for (char& ch : n) ch = ascii_upper(ch);
+    for (char& ch : n) ch = ascii_to_upper(ch);
     return push_str(c, n);
 }
 
@@ -1070,17 +1062,17 @@ int g_evaluate_type_list(Call& c) {
         const bool known = types && t < types->raw().type_count();
         for (size_t i = 0; i < items.size(); ++i) {
             if (found[i]) continue;
-            if (iequals(items[i], "All")) {
+            if (ascii_iequals(items[i], "All")) {
                 found[i] = 1;
                 continue;
             }
             if (!known) continue;
-            if (iequals(types->raw().types().name[t], items[i])) {
+            if (ascii_iequals(types->raw().types().name[t], items[i])) {
                 found[i] = 1;
                 continue;
             }
             for (const std::string_view tok : types->get_list(t, "CategoryMask"))
-                if (iequals(tok, items[i])) found[i] = 1;
+                if (ascii_iequals(tok, items[i])) found[i] = 1;
         }
     }
     lua_newtable(c.L);
@@ -1196,7 +1188,7 @@ int m_type_is_affiliated_with(Call& c) {
     if (p < 0 || !ty || c.self->value >= ty->raw().type_count()) return push_bool(c, false);
     const std::string faction = w->faction_name(p);
     for (const std::string_view a : ty->raw().get_list(static_cast<objects::TypeIndex>(c.self->value), "Affiliation"))
-        if (iequals(a, faction)) return push_bool(c, true);
+        if (ascii_iequals(a, faction)) return push_bool(c, true);
     return push_bool(c, false);
 }
 

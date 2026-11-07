@@ -553,7 +553,7 @@ Vec2f shell_anchor_offset(const CommandBarComponent& shell, std::span<const Shel
     // are full-screen dialog scenes whose meshes span the 1024-unit base area around the model origin (x -512..512 in
     // i_black_market.alo / i_hack.alo): the origin is the canvas centre, Model_Offset_X / _Y notwithstanding.
     if (const std::string_view ds = shell.raw_value("DIALOG_SCENE");
-        !ds.empty() && (ds[0] == 'T' || ds[0] == 't' || ds[0] == 'Y' || ds[0] == 'y' || ds[0] == '1'))
+        data::parse_flag_char(ds))
         return off;
     // GALACTIC_DIALOGS §1.2 / §4: horizontally centred shells stuck to the top edge (Model_Offset_X False, _Y True).
     //   Tutorial_Scene banners (pending_battle_shell, story_pending_battle_shell, pause_shell, autoresolve_shell): model
@@ -562,7 +562,7 @@ Vec2f shell_anchor_offset(const CommandBarComponent& shell, std::span<const Shel
     //   canvas) [port: calibrated on 26.jpg: Text_Fleet at y 90 is 295 units below the top].
     if (!shell.model_offset_x && shell.model_offset_y) {
         const std::string_view ts = shell.raw_value("TUTORIAL_SCENE");
-        if (!ts.empty() && (ts[0] == 'T' || ts[0] == 't' || ts[0] == 'Y' || ts[0] == 'y' || ts[0] == '1'))
+        if (data::parse_flag_char(ts))
             return {0.0f, 0.5f * canvas.height - 92.0f};
         if (!shell.manual_offset) return {0.0f, 0.5f * canvas.height - 384.0f};
     }

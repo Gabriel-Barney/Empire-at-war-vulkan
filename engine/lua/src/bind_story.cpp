@@ -7,6 +7,7 @@
 #include <string>
 
 #include "alamo/lua/object_bridge.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/lua/story_model.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
@@ -91,12 +92,6 @@ StoryEventState& self_event_state(Call& c) {
 }
 
 void no_story(Call& c, const char* what) { c.vm->message(std::string("[story] ") + what + " ignored: no story attached"); }
-
-std::string upper_ascii(std::string_view s) {
-    std::string out(s);
-    for (char& ch : out) ch = (ch >= 'a' && ch <= 'z') ? static_cast<char>(ch - 'a' + 'A') : ch;
-    return out;
-}
 
 // `(int)(n + 0.5)` (C truncation, so -1.7 -> -1; saturating) printed with "%d" (LUA_API.md "StoryEventWrapper dialog and
 // parameter setters" 2d / the shared converter).
@@ -316,12 +311,12 @@ bool convert_value(Call& c, int i, std::string& out) {
         if (!detail::object_alive(*c.vm, *o)) return false;
         const objects::TypeIndex t = representative_type(c, *o);
         if (t == objects::kNone) return false;
-        out = upper_ascii(c.vm->host.types->raw().types().name[t]);
+        out = ascii_upper(c.vm->host.types->raw().types().name[t]);
         return true;
     }
     if (const detail::Ud* t = c.userdata(i, detail::cls_type())) {
         if (!c.vm->host.types || t->value >= c.vm->host.types->raw().type_count()) return false;
-        out = upper_ascii(c.vm->host.types->raw().types().name[static_cast<size_t>(t->value)]);
+        out = ascii_upper(c.vm->host.types->raw().types().name[static_cast<size_t>(t->value)]);
         return true;
     }
     const int lt = lua_type(c.L, c.idx(i));
@@ -395,7 +390,7 @@ int m_event_set_reward_type(Call& c) {
     if (!self_event_valid(c)) return 0;
     if (c.nargs != 1) return c.script_error_stop("%sinvalid number of parameters. Expected 1, got %d.", kWho, c.nargs);
     if (!c.is_string(1)) return c.script_error_stop("%sinvalid type for parameter 1. Expected string.", kWho);
-    self_event(c).reward_type = upper_ascii(c.string(1));
+    self_event(c).reward_type = ascii_upper(c.string(1));
     ++self_event_state(c).lua_edits;
     return 0;
 }

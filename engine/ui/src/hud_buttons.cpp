@@ -130,7 +130,7 @@ namespace {
 // A raw Yes / True / 1 flag (fields CommandBarComponent does not model).
 bool raw_flag(const CommandBarComponent& c, std::string_view upper_tag) {
     const std::string_view v = c.raw_value(upper_tag);
-    return !v.empty() && (v[0] == 'T' || v[0] == 't' || v[0] == 'Y' || v[0] == 'y' || v[0] == '1');
+    return data::parse_flag_char(v);
 }
 }  // namespace
 

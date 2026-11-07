@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "alamo/core/hash.hpp"
+#include "alamo/data/values.hpp"
 #include "alamo/objects/field_schema.hpp"
 
 namespace alamo::objects {
@@ -97,26 +98,7 @@ uint32_t find_type_field(std::string_view tag) {
     return it == m.end() ? 0xFFFFFFFFu : it->second;
 }
 
-int32_t c_atoi(std::string_view s) {
-    size_t i = 0;
-    while (i < s.size() && c_space(s[i])) ++i;
-    bool neg = false;
-    if (i < s.size() && (s[i] == '+' || s[i] == '-')) neg = s[i++] == '-';
-    int64_t v = 0;
-    bool overflow = false;
-    for (; i < s.size() && digit(s[i]); ++i) {
-        if (!overflow) {
-            v = v * 10 + (s[i] - '0');
-            if (v > 2147483648ll) overflow = true;
-        }
-    }
-    if (neg) {
-        if (overflow || v > 2147483648ll) return std::numeric_limits<int32_t>::min();
-        return static_cast<int32_t>(-v);
-    }
-    if (overflow || v > 2147483647ll) return std::numeric_limits<int32_t>::max();
-    return static_cast<int32_t>(v);
-}
+int32_t c_atoi(std::string_view s) { return data::parse_int_prefix(s).value_or(0); }
 
 double c_atof(std::string_view s) {
     size_t i = 0;
@@ -177,12 +159,7 @@ double c_atof(std::string_view s) {
     return res.ec == std::errc() ? sign * v : 0.0;
 }
 
-bool parse_type_bool(std::string_view s) {
-    if (s == "1") return true;
-    if (s.empty()) return false;
-    const char c = s[0];
-    return c == 'Y' || c == 'y' || c == 'T' || c == 't';
-}
+bool parse_type_bool(std::string_view s) { return data::parse_type_bool(s); }
 
 std::vector<std::string_view> split_type_list(std::string_view s, bool keep_bar, bool split_bar) {
     std::vector<std::string_view> out;

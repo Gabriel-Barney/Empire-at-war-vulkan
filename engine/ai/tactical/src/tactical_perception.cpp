@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <string>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/objects/enums.hpp"
 
@@ -1095,15 +1096,7 @@ std::function<uint64_t(std::string_view)> category_mask_from(const objects::Enum
 namespace {
 
 // TACTICAL_GAPS 6.8 name-id match [M: ASCII case-insensitive].
-bool zone_names_equal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const char x = (a[i] >= 'A' && a[i] <= 'Z') ? static_cast<char>(a[i] - 'A' + 'a') : a[i];
-        const char y = (b[i] >= 'A' && b[i] <= 'Z') ? static_cast<char>(b[i] - 'A' + 'a') : b[i];
-        if (x != y) return false;
-    }
-    return true;
-}
+bool zone_names_equal(std::string_view a, std::string_view b) { return ascii_iequals(a, b); }
 
 }  // namespace
 

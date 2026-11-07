@@ -9,6 +9,7 @@
 
 #include "alamo/core/hash.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/data/values.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/type_fields.hpp"
 #include "alamo/render/map_scene.hpp"
@@ -89,9 +90,7 @@ bool parse_float(std::string_view s, float& v) {
     return r.ec == std::errc{} && std::isfinite(v);
 }
 
-bool yes_text(const std::string& s) {
-    return !s.empty() && (s[0] == 'y' || s[0] == 'Y' || s[0] == 't' || s[0] == 'T' || s == "1");
-}
+bool yes_text(const std::string& s) { return data::parse_type_bool(s); }
 
 bool finite(float f) { return std::isfinite(f); }
 

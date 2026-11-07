@@ -3,35 +3,26 @@
 #include <algorithm>
 #include <cmath>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/tactical/movement/fighter.hpp"
 
 namespace alamo::tactical::movement {
 
 namespace {
-bool ieq(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        char x = a[i], y = b[i];
-        if (x >= 'a' && x <= 'z') x = static_cast<char>(x - 'a' + 'A');
-        if (y >= 'a' && y <= 'z') y = static_cast<char>(y - 'a' + 'A');
-        if (x != y) return false;
-    }
-    return true;
-}
 bool is_locomotor_token(std::string_view t) {
     // Any *_LOCOMOTOR token occupies the locomotor slot (the Default ones included).
     constexpr std::string_view suffix = "LOCOMOTOR";
-    return t.size() >= suffix.size() && ieq(t.substr(t.size() - suffix.size()), suffix);
+    return t.size() >= suffix.size() && ascii_iequals(t.substr(t.size() - suffix.size()), suffix);
 }
 }  // namespace
 
 LocomotorKind locomotor_kind_from_token(std::string_view t) {
-    if (ieq(t, "BIKE_LOCOMOTOR")) return LocomotorKind::Bike;
-    if (ieq(t, "JETPACK_LOCOMOTOR")) return LocomotorKind::Jetpack;
-    if (ieq(t, "FLYING_LOCOMOTOR")) return LocomotorKind::Flying;
-    if (ieq(t, "LANDBOMBER_LOCOMOTOR")) return LocomotorKind::LandBomber;
-    if (ieq(t, "FIGHTER_LOCOMOTOR")) return LocomotorKind::Fighter;
+    if (ascii_iequals(t, "BIKE_LOCOMOTOR")) return LocomotorKind::Bike;
+    if (ascii_iequals(t, "JETPACK_LOCOMOTOR")) return LocomotorKind::Jetpack;
+    if (ascii_iequals(t, "FLYING_LOCOMOTOR")) return LocomotorKind::Flying;
+    if (ascii_iequals(t, "LANDBOMBER_LOCOMOTOR")) return LocomotorKind::LandBomber;
+    if (ascii_iequals(t, "FIGHTER_LOCOMOTOR")) return LocomotorKind::Fighter;
     return LocomotorKind::Default;
 }
 

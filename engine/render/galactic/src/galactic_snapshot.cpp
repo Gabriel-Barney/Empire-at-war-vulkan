@@ -25,9 +25,7 @@ using objects::ObjectHandle;
 using objects::ObjectId;
 using objects::TypeIndex;
 
-bool yes(std::string_view v) {
-    return !v.empty() && (v[0] == 'y' || v[0] == 'Y' || v[0] == 't' || v[0] == 'T' || v == "1");
-}
+bool yes(std::string_view v) { return data::parse_type_bool(v); }
 
 }  // namespace
 

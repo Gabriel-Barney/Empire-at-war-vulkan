@@ -21,6 +21,7 @@
 #include "alamo/ai/tactical/constants.hpp"
 #include "alamo/ai/tactical/hint_zones.hpp"
 #include "alamo/ai/tactical/target_list.hpp"
+#include "alamo/core/ascii.hpp"
 
 namespace alamo {
 class ByteWriter;
@@ -217,7 +218,7 @@ private:
     std::vector<std::pair<int32_t, uint32_t>> id_index_;  // sorted (id, index); lookup only
 };
 
-// ASCII case-insensitive equality (names, factions).
-bool iequal(std::string_view a, std::string_view b);
+// ASCII case-insensitive equality (names, factions): alamo::ascii_iequals.
+inline bool iequal(std::string_view a, std::string_view b) { return ascii_iequals(a, b); }
 
 }  // namespace alamo::ai::tactical

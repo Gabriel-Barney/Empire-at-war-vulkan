@@ -16,6 +16,7 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/data/game_database.hpp"
+#include "alamo/data/values.hpp"
 
 namespace alamo::render {
 
@@ -176,7 +177,7 @@ bool GameTypeResolver::load_render_xml(const FileProvider& files) {
                 Faction x;
                 x.name = std::string(fa.attribute("Name"));
                 const std::string_view n = fa.child_text("Is_Neutral");
-                x.neutral = !n.empty() && (n[0] == 'y' || n[0] == 'Y' || n[0] == '1' || n[0] == 't' || n[0] == 'T');
+                x.neutral = data::parse_flag_char(n);
                 parse_rgb(fa.child_text("No_Colorization_Color"), x.no_colorization);
                 factions_.push_back(std::move(x));
             }
@@ -203,8 +204,7 @@ TypeRenderInfo GameTypeResolver::render_info(uint32_t crc) const {
             size_t k = 0;
             while (k < v.size() && std::isspace(static_cast<unsigned char>(v[k]))) ++k;
             if (k < v.size()) {
-                const char c = v[k];
-                t.loop_idle = c == 'y' || c == 'Y' || c == '1' || c == 't' || c == 'T';
+                t.loop_idle = data::parse_flag_char(v.substr(k));
                 loop = true;
             }
         }
@@ -229,8 +229,7 @@ TypeRenderInfo GameTypeResolver::render_info(uint32_t crc) const {
             size_t k = 0;
             while (k < v.size() && std::isspace(static_cast<unsigned char>(v[k]))) ++k;
             if (k < v.size()) {
-                const char c = v[k];
-                t.in_background = c == 'y' || c == 'Y' || c == '1' || c == 't' || c == 'T';
+                t.in_background = data::parse_flag_char(v.substr(k));
                 bg = true;
             }
         }

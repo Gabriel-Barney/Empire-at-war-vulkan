@@ -24,6 +24,17 @@ std::optional<int32_t> parse_int(std::string_view s);
 // yes/no, true/false, 1/0, on/off (ASCII case-insensitive). nullopt otherwise.
 std::optional<bool> parse_bool(std::string_view s);
 
+// CU3: the prefix / first-character variants the game itself uses (each is exactly the copy it replaced).
+// MSVC atoi without the "no digits -> 0": leading C whitespace (space, \t, \n, \v, \f, \r), optional sign, the
+// longest digit run, the rest ignored ("2.0" -> 2, "12abc" -> 12); clamps to the int32 range on overflow.
+// nullopt when no digit follows the optional sign. parse_int_prefix(s).value_or(0) is objects::c_atoi.
+std::optional<int32_t> parse_int_prefix(std::string_view s);
+// GameObjectType bool (OBJECT_TYPE_FIELDS §4.5 code 0x0): exactly "1", or a first character Y / y / T / t.
+// No trimming ("10" and " Yes" are false). objects::parse_type_bool.
+bool parse_type_bool(std::string_view s);
+// First-character flag: Y / y / T / t / 1 ("10" is true, "" false). No trimming.
+bool parse_flag_char(std::string_view s);
+
 inline float parse_float_or(std::string_view s, float fallback) { return parse_float(s).value_or(fallback); }
 inline int32_t parse_int_or(std::string_view s, int32_t fallback) { return parse_int(s).value_or(fallback); }
 inline bool parse_bool_or(std::string_view s, bool fallback) { return parse_bool(s).value_or(fallback); }

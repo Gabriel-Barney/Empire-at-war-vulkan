@@ -237,6 +237,24 @@ static void test_values() {
     CHECK(parse_int("3.9") == 3);
     CHECK(!parse_int("x"));
     CHECK(!parse_int("99999999999"));
+    // CU3 prefix / first-character variants.
+    CHECK(parse_int_prefix(" 12abc") == 12);
+    CHECK(parse_int_prefix("\v\f-7") == -7);
+    CHECK(parse_int_prefix("+2.9") == 2);
+    CHECK(parse_int_prefix("-0") == 0);
+    CHECK(!parse_int_prefix(""));
+    CHECK(!parse_int_prefix("x1"));
+    CHECK(!parse_int_prefix(" -"));
+    CHECK(!parse_int_prefix("+-1"));
+    CHECK(parse_int_prefix("99999999999") == 2147483647);
+    CHECK(parse_int_prefix("2147483647") == 2147483647);
+    CHECK(parse_int_prefix("2147483648") == 2147483647);
+    CHECK(parse_int_prefix("-2147483648") == -2147483647 - 1);
+    CHECK(parse_int_prefix("-99999999999999999999") == -2147483647 - 1);
+    CHECK(parse_type_bool("1") && parse_type_bool("yes") && parse_type_bool("True") && parse_type_bool("Y"));
+    CHECK(!parse_type_bool("10") && !parse_type_bool(" Yes") && !parse_type_bool("") && !parse_type_bool("no") && !parse_type_bool("0"));
+    CHECK(parse_flag_char("1") && parse_flag_char("10") && parse_flag_char("yes") && parse_flag_char("t"));
+    CHECK(!parse_flag_char("") && !parse_flag_char(" Yes") && !parse_flag_char("false") && !parse_flag_char("0"));
     CHECK(parse_bool(" Yes ") == true);
     CHECK(parse_bool("TRUE") == true);
     CHECK(parse_bool("1") == true);

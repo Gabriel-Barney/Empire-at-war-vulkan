@@ -1,36 +1,18 @@
 // Int-final: build pads of a tactical battle (L1_S4_REMAINING §2.2 / §3.6; tactical_battle.hpp "build pads").
 // Serial code (Lua service / tick), no RNG draws; pad state in ascending pad id.
 #include <algorithm>
-#include <cctype>
 #include <string>
 #include <string_view>
 
 #include "alamo/core/dmath.hpp"
+#include "alamo/core/ascii.hpp"
+#include "alamo/data/values.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/sim/tactical_battle.hpp"
 
 namespace alamo::sim {
-
-namespace {
-
-bool same_name(std::string_view a, std::string_view b) {
-    while (!a.empty() && std::isspace(static_cast<unsigned char>(a.front()))) a.remove_prefix(1);
-    while (!a.empty() && std::isspace(static_cast<unsigned char>(a.back()))) a.remove_suffix(1);
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) return false;
-    return true;
-}
-
-std::string_view trim_ws(std::string_view a) {
-    while (!a.empty() && std::isspace(static_cast<unsigned char>(a.front()))) a.remove_prefix(1);
-    while (!a.empty() && std::isspace(static_cast<unsigned char>(a.back()))) a.remove_suffix(1);
-    return a;
-}
-
-}  // namespace
 
 void TacticalBattle::pad_persist(const objects::ObjectStore& st, objects::ObjectHandle pad, objects::TypeIndex type, const Vec3& pos, bool add) {
     // AI_GALACTIC_TOKENS §9.4 gate 0x42f160: a campaign battle (not a skirmish) with a battle planet whose list the host
@@ -144,10 +126,10 @@ int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, obj
         bool listed = false, in_row = false;
         for (const std::string_view tok : types.get_list(st.type(ph), pad_list_tag())) {
             if (types.raw().find(tok) == objects::kNone) {
-                in_row = same_name(tok, faction);
+                in_row = ascii_iequals(data::trim(tok), faction);
                 continue;
             }
-            listed = listed || (in_row && same_name(tok, name));
+            listed = listed || (in_row && ascii_iequals(data::trim(tok), name));
         }
         // Rule 0x42e400: empty, no blocking object (alive, Influences_Capture_Point, pad_rule_blocker) within the radius.
         bool blocked = !empty;
@@ -268,8 +250,8 @@ void TacticalBattle::pads_tick(TacticalMode& mode) {
                     // §6.5 kill list (+0xa60): every object of exactly Previous_Upgrade_Level_Type (the built type's, else
                     // the UC type's [M: which type carries the field]) owned by a player allied with the pad owner
                     // (0x39a230) is killed silently (0x391310 flag 1), store order.
-                    std::string_view prev = trim_ws(types.get_string(ft, "Previous_Upgrade_Level_Type"));
-                    if (prev.empty() && ut < types.size()) prev = trim_ws(types.get_string(ut, "Previous_Upgrade_Level_Type"));
+                    std::string_view prev = data::trim(types.get_string(ft, "Previous_Upgrade_Level_Type"));
+                    if (prev.empty() && ut < types.size()) prev = data::trim(types.get_string(ut, "Previous_Upgrade_Level_Type"));
                     const objects::TypeIndex pv = prev.empty() ? objects::kNone : types.resolve_name(prev);
                     if (pv != objects::kNone && pad_alive) {
                         const int32_t po = st.owner(ph);

@@ -10,6 +10,7 @@
 #endif
 
 #include "alamo/core/dmath.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/data/xml.hpp"
@@ -26,27 +27,6 @@ namespace tc = alamo::tactical::combat;
 namespace ta = alamo::tactical::abilities;
 
 namespace {
-
-char upper(char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
-
-std::string upper_str(std::string_view s) {
-    std::string out(s);
-    for (char& c : out) c = upper(c);
-    return out;
-}
-
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (upper(a[i]) != upper(b[i])) return false;
-    return true;
-}
-
-std::string_view trim(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return s;
-}
 
 void note(std::vector<std::string>* d, std::string m) {
     if (d) d->push_back(std::move(m));
@@ -69,7 +49,7 @@ tc::HardpointKind hardpoint_kind(std::string_view type) {
         {"HARD_POINT_DUMMY_ART", tc::HardpointKind::DummyArt},
     };
     for (const auto& [n, k] : kTable)
-        if (iequal(type, n)) return k;
+        if (ascii_iequals(type, n)) return k;
     return tc::HardpointKind::DummyArt;
 }
 
@@ -120,7 +100,7 @@ BattleCatalog::BattleCatalog(const objects::GameObjectTypes& types, const FilePr
             return out;
         };
         if (const auto v = constants->get("Preferred_Pathfinder_Types")) k.preferred_pathfinder_types = words(*v, false);
-        if (const auto v = constants->get("Raid_Force_Required_Faction")) k.raid_required_faction = std::string(trim(*v));
+        if (const auto v = constants->get("Raid_Force_Required_Faction")) k.raid_required_faction = std::string(ascii_trim(*v));
         const objects::EnumConverter& cat = types.enums().get(objects::EnumId::GameObjectCategory);
         auto mask = [&](std::string_view tag) {
             uint64_t m = 0;
@@ -183,11 +163,11 @@ void BattleCatalog::load_hardpoints(const FileProvider& files, std::vector<std::
             Tags tags;
             const std::string_view variant = hp.child_text("Variant_Of_Existing_Type");
             if (!variant.empty()) {
-                const auto it = hardpoints_.find(upper_str(variant));
+                const auto it = hardpoints_.find(ascii_upper(variant));
                 if (it != hardpoints_.end()) tags = it->second;
             }
             for (data::XmlNode c = hp.first_child(); c; c = c.next_sibling()) {
-                const std::string tag = upper_str(c.name());
+                const std::string tag = ascii_upper(c.name());
                 const std::string_view text = c.text_trimmed();
                 // Repeated list tags (Fire_Inaccuracy_Distance) append; other tags replace.
                 bool replaced = false;
@@ -199,7 +179,7 @@ void BattleCatalog::load_hardpoints(const FileProvider& files, std::vector<std::
                         }
                 if (!replaced) tags.emplace_back(tag, std::string(text));
             }
-            hardpoints_[upper_str(hp.attribute("Name"))] = std::move(tags);  // last definition wins
+            hardpoints_[ascii_upper(hp.attribute("Name"))] = std::move(tags);  // last definition wins
         }
     }
 }
@@ -228,7 +208,7 @@ void BattleCatalog::load_priority_sets(const FileProvider& files, std::vector<st
 }
 
 int32_t BattleCatalog::type_or_none(std::string_view name) const {
-    name = trim(name);
+    name = ascii_trim(name);
     if (name.empty()) return -1;
     const objects::TypeIndex t = types_->resolve_name(name);
     return t == objects::kNone ? -1 : static_cast<int32_t>(t);
@@ -243,7 +223,7 @@ int32_t BattleCatalog::projectile(uint32_t t, BuildState& s) const {
     p.name = std::string(ty.raw().types().name[t]);
     p.max_speed = ty.columns().max_speed[t];
     p.damage = ty.get_float(t, "Projectile_Damage");
-    p.damage_type = damage_.damage_index(trim(ty.get_string(t, "Damage_Type")));
+    p.damage_type = damage_.damage_index(ascii_trim(ty.get_string(t, "Damage_Type")));
     const int32_t cat = ty.get_int(t, "Projectile_Category");
     p.homing = cat == 1;
     p.max_rate_of_turn = ty.get_float(t, "Max_Rate_Of_Turn");  // S9 t05: missile-shield / homing turn limit
@@ -317,9 +297,9 @@ int32_t BattleCatalog::projectile(uint32_t t, BuildState& s) const {
             static constexpr const char* kMods[] = {"DEFENSE", "DAMAGE", "HEALTH", "SHIELD", "ENERGY", "SPEED",
                                                    "FIRE_RATE", "FOW_REVEAL_RANGE", "FIRE_RANGE", "ABILITY_RECHARGE_TIME",
                                                    "TACTICAL_BUILD_TIME"};
-            const std::string_view m = trim(ty.get_string(t, "Projectile_Combat_Mod"));
+            const std::string_view m = ascii_trim(ty.get_string(t, "Projectile_Combat_Mod"));
             for (size_t k = 0; k < std::size(kMods) && !m.empty(); ++k)
-                if (iequal(m, kMods[k])) p.combat_mod = static_cast<uint8_t>(k + 1);
+                if (ascii_iequals(m, kMods[k])) p.combat_mod = static_cast<uint8_t>(k + 1);
             p.combat_mod_seconds = ty.get_float(t, "Projectile_Combat_Mod_Duration");
             p.combat_mod_value = ty.get_float(t, "Projectile_Combat_Mod_Value");
             p.combat_mod_mask = ty.get_mask(t, "Projectile_Combat_Mod_Category_Mask");
@@ -339,7 +319,7 @@ int32_t BattleCatalog::projectile(uint32_t t, BuildState& s) const {
 }
 
 int32_t BattleCatalog::hardpoint(std::string_view name, BuildState& s) const {
-    const std::string key = upper_str(name);
+    const std::string key = ascii_upper(name);
     const auto it = s.hp_index.find(key);
     if (it != s.hp_index.end()) return it->second;
     const auto rec = hardpoints_.find(key);
@@ -368,7 +348,7 @@ int32_t BattleCatalog::hardpoint(std::string_view name, BuildState& s) const {
     h.targetable = flag("IS_TARGETABLE", false);
     h.turret = flag("IS_TURRET", false);
     // refixf t07 (TACTICAL_COMBAT §2.9 Q1 step 4): Collision_Mesh (type +0xa0), upper case for the _stricmp lookup.
-    h.collision_mesh = upper_str(trim(tag("COLLISION_MESH")));
+    h.collision_mesh = ascii_upper(ascii_trim(tag("COLLISION_MESH")));
     // refixf t06 (TACTICAL_COMBAT §2.9 Q2 step 4): unset Fire_Cone_Width / Height are 0 (hardpoint type ctor 0x53e3b0).
     h.fire_cone_width = num("FIRE_CONE_WIDTH", 0.0f);
     h.fire_cone_height = num("FIRE_CONE_HEIGHT", 0.0f);
@@ -397,9 +377,9 @@ int32_t BattleCatalog::hardpoint(std::string_view name, BuildState& s) const {
         if (n != "FIRE_INACCURACY_DISTANCE") continue;
         const size_t comma = v.find(',');
         if (comma == std::string::npos) continue;
-        const auto m = cat.lookup(trim(std::string_view(v).substr(0, comma)));
+        const auto m = cat.lookup(ascii_trim(std::string_view(v).substr(0, comma)));
         if (!m) continue;
-        h.inaccuracy.push_back({static_cast<uint64_t>(*m), static_cast<float>(objects::c_atof(trim(std::string_view(v).substr(comma + 1))))});
+        h.inaccuracy.push_back({static_cast<uint64_t>(*m), static_cast<float>(objects::c_atof(ascii_trim(std::string_view(v).substr(comma + 1))))});
     }
     const std::string_view restr = tag("FIRE_CATEGORY_RESTRICTIONS");
     if (!restr.empty()) {
@@ -410,7 +390,7 @@ int32_t BattleCatalog::hardpoint(std::string_view name, BuildState& s) const {
     // special-weapon flag.
     h.allows_special_weapon_use = flag("ALLOWS_SPECIAL_WEAPON_USE", h.allows_special_weapon_use);
     // ENABLE_SPECIAL_ABILITY hardpoints: Special_Ability_Name (type +0x450) as name_crc (0 = empty).
-    if (const std::string_view an = trim(tag("SPECIAL_ABILITY_NAME")); !an.empty())
+    if (const std::string_view an = ascii_trim(tag("SPECIAL_ABILITY_NAME")); !an.empty())
         h.special_ability_name_crc = name_crc(an);
     // S8 t08 (TACTICAL_COMBAT §3.1.1, 0x384850 steps 4-6): the deploy / attack-mode bytes (+0x3d1..+0x3d4, default true)
     // and the per-mode bytes Fire_When_In_<Mode>_Mode (+0x384 + m; listed when No).
@@ -433,7 +413,7 @@ int32_t BattleCatalog::hardpoint(std::string_view name, BuildState& s) const {
     if (s.full) {
         // S10-int: S9 hardpoint fields. Fire bones: B present only when named (Percent(50) pick without
         // randomisation, TACTICAL_COMBAT 2.5 step 8); positions come from the animated pose (host hook).
-        const std::string_view bone_a = trim(tag("FIRE_BONE_A")), bone_b = trim(tag("FIRE_BONE_B"));
+        const std::string_view bone_a = ascii_trim(tag("FIRE_BONE_A")), bone_b = ascii_trim(tag("FIRE_BONE_B"));
         h.has_bone_b = !bone_b.empty();
         h.randomize_between_fire_bones = flag("RANDOMIZE_BETWEEN_FIRE_BONES", h.randomize_between_fire_bones);
         h.death_explosion_type = type_or_none(tag("DEATH_EXPLOSION_PARTICLES"));
@@ -456,8 +436,8 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
     u.tactical_health = ty.columns().tactical_health[t];
     u.shield_points = ty.columns().shield_points[t];
     u.shield_refresh_rate = ty.get_float(t, "Shield_Refresh_Rate");
-    u.armor_type = damage_.armor_index(trim(ty.get_string(t, "Armor_Type")));
-    u.shield_armor_type = damage_.armor_index(trim(ty.get_string(t, "Shield_Armor_Type")));
+    u.armor_type = damage_.armor_index(ascii_trim(ty.get_string(t, "Armor_Type")));
+    u.shield_armor_type = damage_.armor_index(ascii_trim(ty.get_string(t, "Shield_Armor_Type")));
     u.radius = tactical::movement::unit_desc_from_type(ty, t).radius;
     u.max_attack_distance = ty.columns().targeting_max_attack_distance[t];
     // --- OI tactical: targeting slots 44 / 45 (TACTICAL_GAPS 3.1) ---
@@ -479,12 +459,12 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
         const objects::EnumConverter& cat = ty.enums().get(objects::EnumId::GameObjectCategory);
         const std::span<const std::string_view> fi = ty.get_list(t, "Targeting_Fire_Inaccuracy");
         for (size_t i = 0; i + 1 < fi.size(); i += 2)
-            if (const auto m = cat.lookup(trim(fi[i])))
-                u.fire_inaccuracy.push_back({static_cast<uint64_t>(*m), static_cast<float>(objects::c_atof(trim(fi[i + 1])))});
+            if (const auto m = cat.lookup(ascii_trim(fi[i])))
+                u.fire_inaccuracy.push_back({static_cast<uint64_t>(*m), static_cast<float>(objects::c_atof(ascii_trim(fi[i + 1])))});
     }
-    const std::string_view set = trim(ty.get_string(t, "Targeting_Priority_Set"));
+    const std::string_view set = ascii_trim(ty.get_string(t, "Targeting_Priority_Set"));
     for (size_t i = 0; i < priority_sets_.size() && !set.empty(); ++i)
-        if (iequal(priority_sets_[i].name, set)) {
+        if (ascii_iequals(priority_sets_[i].name, set)) {
             u.priority_set = static_cast<int32_t>(i);
             break;
         }
@@ -516,11 +496,11 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
                                ty.has_behavior(t, s.model_mode == 1 ? objects::BehaviorSet::Space : objects::BehaviorSet::Land,
                                                objects::beh::Weapon);
     if (!projs.empty()) {  // the list's first entry for the host's special weapons (UnitDesc::listed_projectile)
-        const objects::TypeIndex pt = ty.resolve_name(trim(projs.front()));
+        const objects::TypeIndex pt = ty.resolve_name(ascii_trim(projs.front()));
         if (pt != objects::kNone) u.listed_projectile = projectile(static_cast<uint32_t>(pt), s);
     }
     if (weapon_behavior && !projs.empty()) {
-        const objects::TypeIndex pt = ty.resolve_name(trim(projs.front()));
+        const objects::TypeIndex pt = ty.resolve_name(ascii_trim(projs.front()));
         if (pt != objects::kNone) {
             u.weapon_projectile = projectile(static_cast<uint32_t>(pt), s);
             u.weapon_recharge = ty.get_float(t, "Projectile_Fire_Recharge_Seconds");
@@ -531,7 +511,7 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
         // SWAP_WEAPONS / Permanent_Weapon_Swap (type +0xc48; combat UnitDesc::weapon_projectiles).
         if (u.weapon_projectile >= 0 && projs.size() > 1)
             for (const std::string_view n : projs)
-                if (const objects::TypeIndex q = ty.resolve_name(trim(n)); q != objects::kNone)
+                if (const objects::TypeIndex q = ty.resolve_name(ascii_trim(n)); q != objects::kNone)
                     u.weapon_projectiles.push_back(projectile(static_cast<uint32_t>(q), s));
         // S8 t08: the own-weapon gate flags (type +0xae..+0xb1, default true).
         auto yes = [&](const char* tag) { return ty.get_string(t, tag).empty() || ty.get_bool(t, tag); };
@@ -580,8 +560,8 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
         const auto th = ty.get_list(t, "Land_Damage_Thresholds");
         const auto al = ty.get_list(t, "Land_Damage_Alternates");
         for (size_t k = 0; k < th.size() && k < al.size(); ++k)
-            u.damage_alternates.emplace_back(static_cast<float>(objects::c_atof(trim(th[k]))),
-                                             static_cast<int32_t>(objects::c_atof(trim(al[k]))));
+            u.damage_alternates.emplace_back(static_cast<float>(objects::c_atof(ascii_trim(th[k]))),
+                                             static_cast<int32_t>(objects::c_atof(ascii_trim(al[k]))));
     }
     // q6 t19 - the type half of 0x5680b0 (A1_READINGS §33.2.1 tests 1 and 6) for the path-B goal promotion: both
     // Collidable_By_Projectile_Living and Is_Valid_Target [port: or a company member type - the combat goal is the member
@@ -608,7 +588,7 @@ void BattleCatalog::s9_unit_fields(uint32_t t, tc::UnitDesc& u, BuildState& s) c
     for (std::string_view n : ty.get_list(t, "Damage_Hit_Particles")) vis.hit.push_back(type_or_none(n));
     for (std::string_view n : ty.get_list(t, "Shield_Hit_Particles")) vis.shield_hit.push_back(type_or_none(n));
     for (std::string_view n : ty.get_list(t, "Death_Explosions")) vis.death_explosions.push_back(type_or_none(n));
-    vis.smoke = std::string(trim(ty.get_string(t, "Damaged_Smoke_Asset_Name")));
+    vis.smoke = std::string(ascii_trim(ty.get_string(t, "Damaged_Smoke_Asset_Name")));
     u.hit_particle_count = clamp_count(vis.hit.size());
     u.shield_hit_particle_count = clamp_count(vis.shield_hit.size());
     u.damaged_smoke = !vis.smoke.empty();
@@ -633,7 +613,7 @@ void BattleCatalog::s9_unit_fields(uint32_t t, tc::UnitDesc& u, BuildState& s) c
     const auto clones = ty.get_list(t, "Death_Clone");
     const objects::EnumConverter& kinds = ty.enums().get(objects::EnumId::DamageType);
     for (size_t i = 0; i + 1 < clones.size(); i += 2) {
-        const std::string_view kn = trim(clones[i]);
+        const std::string_view kn = ascii_trim(clones[i]);
         const int32_t ct = type_or_none(clones[i + 1]);
         if (ct < 0) continue;
         int32_t key = -1;
@@ -668,12 +648,12 @@ void BattleCatalog::s9_unit_fields(uint32_t t, tc::UnitDesc& u, BuildState& s) c
         float cum = 0.0f;
         for (size_t i = 0; i + 1 < list.size(); i += 2) {
             const int32_t st = type_or_none(list[i]);
-            cum = cum + static_cast<float>(objects::c_atof(trim(list[i + 1])));
+            cum = cum + static_cast<float>(objects::c_atof(ascii_trim(list[i + 1])));
             if (st >= 0) u.destruction_survivors.emplace_back(st, cum);
         }
-        if (!trim(ty.get_string(t, "Minimum_Destruction_Survivor_Count")).empty())
+        if (!ascii_trim(ty.get_string(t, "Minimum_Destruction_Survivor_Count")).empty())
             u.min_survivors = ty.get_int(t, "Minimum_Destruction_Survivor_Count");
-        if (!trim(ty.get_string(t, "Maximum_Destruction_Survivor_Count")).empty())
+        if (!ascii_trim(ty.get_string(t, "Maximum_Destruction_Survivor_Count")).empty())
             u.max_survivors = ty.get_int(t, "Maximum_Destruction_Survivor_Count");
     }
     u.tactical_respawn_secs = ty.get_float(t, "Tactical_Respawn_Time_In_Secs");
@@ -710,7 +690,7 @@ bool BattleCatalog::field_node(uint32_t f, data::XmlNode& out) const {
         const data::XmlNode n = stack.back();
         stack.pop_back();
         if (want == 0) {
-            if (n.line() != fc.line[f] || !iequal(n.name(), db.tag_name(f))) return false;
+            if (n.line() != fc.line[f] || !ascii_iequals(n.name(), db.tag_name(f))) return false;
             out = n;
             return true;
         }
@@ -753,25 +733,25 @@ ta::AbilityObjectDesc BattleCatalog::ability_desc(uint32_t t, BuildState& s) con
         return m ? static_cast<uint64_t>(*m) : 0;
     };
     r.object_type = [types](std::string_view name) -> int32_t {
-        const objects::TypeIndex x = types->resolve_name(trim(name));
+        const objects::TypeIndex x = types->resolve_name(ascii_trim(name));
         return x == objects::kNone ? -1 : static_cast<int32_t>(x);
     };
     r.projectile = [this, &s](std::string_view name) -> int32_t {
         const int32_t pt = type_or_none(name);
         return pt < 0 ? -1 : projectile(static_cast<uint32_t>(pt), s);
     };
-    r.armor = [this](std::string_view name) -> uint16_t { return damage_.armor_index(trim(name)); };
+    r.armor = [this](std::string_view name) -> uint16_t { return damage_.armor_index(ascii_trim(name)); };
     // OI abilities: melee Damage_Type and the projectile test for Spawned_Object_Type (instant effects).
-    r.damage = [this](std::string_view name) -> uint16_t { return damage_.damage_index(trim(name)); };
+    r.damage = [this](std::string_view name) -> uint16_t { return damage_.damage_index(ascii_trim(name)); };
     r.is_projectile = [types](std::string_view name) {
-        const objects::TypeIndex x = types->resolve_name(trim(name));
+        const objects::TypeIndex x = types->resolve_name(ascii_trim(name));
         return x != objects::kNone && types->has_behavior(x, objects::BehaviorSet::Union, objects::behavior_type_id("PROJECTILE"));
     };
     std::vector<std::string>* diag = s.full ? &s.full->diagnostics : nullptr;
     // Sub-object lists through the type loader (variants inherit / replace them, OBJECT_TYPES 3.3).
     for (objects::FieldIndex f : ty.get_sub_objects(t, "Unit_Abilities_Data")) {
         data::XmlNode e;
-        if (!field_node(f, e) || !iequal(e.name(), "Unit_Ability")) continue;
+        if (!field_node(f, e) || !ascii_iequals(e.name(), "Unit_Ability")) continue;
         ta::UnitAbilityRecord rec;
         if (ta::parse_unit_ability(e, rec, r, diag)) d.unit_abilities.push_back(std::move(rec));
     }
@@ -860,7 +840,7 @@ std::unique_ptr<tactical::movement::AvoidModel> avoid_from_asset(const assets::M
     assets::Aabb bound;
     for (const assets::MeshInfo& mi : m.meshes) {
         const assets::Aabb box = assets::transform_aabb(bone(mi.attach_bone), mi.file_bounds);
-        if (upper_str(mi.name) == "COLLISIONBOX" && box.valid()) {
+        if (ascii_upper(mi.name) == "COLLISIONBOX" && box.valid()) {
             out->has_collision_box = true;
             out->cbox_c = {(box.min.x + box.max.x) * 0.5f, (box.min.y + box.max.y) * 0.5f, (box.min.z + box.max.z) * 0.5f};
             out->cbox_h = {(box.max.x - box.min.x) * 0.5f, (box.max.y - box.min.y) * 0.5f, (box.max.z - box.min.z) * 0.5f};
@@ -871,7 +851,7 @@ std::unique_ptr<tactical::movement::AvoidModel> avoid_from_asset(const assets::M
             any = true;
         }
         mv::AvoidModel::Mesh mesh;
-        mesh.name = upper_str(mi.name);
+        mesh.name = ascii_upper(mi.name);
         mesh.shield = mesh.name == "SHIELD";
         mesh.bone_visible = mi.attach_bone >= m.skeleton.visible.size() || m.skeleton.visible[mi.attach_bone] != 0;  // S8 t13 ray set
         bool first = true;
@@ -926,14 +906,14 @@ std::unique_ptr<BattleCatalog::ModelInfo> info_from_asset(const assets::ModelAss
         info->max[0] = m.bounds.max.x, info->max[1] = m.bounds.max.y, info->max[2] = m.bounds.max.z;
     }
     for (size_t b = 0; b < m.skeleton.size(); ++b) {
-        info->bones.push_back(upper_str(m.skeleton.names[b]));
+        info->bones.push_back(ascii_upper(m.skeleton.names[b]));
         const assets::Mat3x4& w = m.skeleton.bind_world[b];
         info->bone_pos.push_back({w.m[0][3], w.m[1][3], w.m[2][3]});
         info->bone_rot.push_back({w.m[0][0], w.m[0][1], w.m[0][2], w.m[1][0], w.m[1][1], w.m[1][2], w.m[2][0], w.m[2][1], w.m[2][2]});
     }
     // S8 t10 (0x12dca0 / 0x13f8c0): the highest digit after "_ALT" in the mesh names.
     for (const assets::MeshInfo& mi : m.meshes) {
-        const std::string n = upper_str(mi.name);
+        const std::string n = ascii_upper(mi.name);
         for (size_t i = 0; i + 5 <= n.size(); ++i)
             if (n.compare(i, 4, "_ALT") == 0 && n[i + 4] >= '0' && n[i + 4] <= '9') {
                 info->max_alt = std::max<int32_t>(info->max_alt, n[i + 4] - '0');
@@ -948,7 +928,7 @@ std::unique_ptr<BattleCatalog::ModelInfo> info_from_asset(const assets::ModelAss
 // OPT3 t09: the model file an entry reads ("" none: the entry is null). avoid_model reads the mode's field; model_info
 // the first named field of its order (a missing file: no model data).
 std::string BattleCatalog::avoid_path(uint32_t type, bool space) const {
-    const std::string_view name = trim(types_->get_string(type, space ? "Space_Model_Name" : "Land_Model_Name"));
+    const std::string_view name = ascii_trim(types_->get_string(type, space ? "Space_Model_Name" : "Land_Model_Name"));
     return name.empty() ? std::string() : assets::model_path(name);
 }
 
@@ -959,7 +939,7 @@ std::string BattleCatalog::info_path(uint32_t type, bool space, bool fallback) c
         order.push_back("Galactic_Model_Name");
     }
     for (const char* tag : order) {
-        const std::string_view name = trim(types_->get_string(type, tag));
+        const std::string_view name = ascii_trim(types_->get_string(type, tag));
         if (!name.empty()) return assets::model_path(name);
     }
     return {};
@@ -998,7 +978,7 @@ bool BattleCatalog::space_model_half_extents(uint32_t type, float& half_x, float
 }
 
 int32_t BattleCatalog::ModelInfo::find(std::string_view bone) const {
-    const std::string key = upper_str(trim(bone));
+    const std::string key = ascii_upper(ascii_trim(bone));
     for (size_t i = 0; i < bones.size(); ++i)
         if (bones[i] == key) return static_cast<int32_t>(i);
     return -1;
@@ -1100,7 +1080,7 @@ bool BattleCatalog::muzzle_bones(uint32_t type, bool space, std::vector<tactical
     out.clear();
     const ModelInfo* m = model_info(type, space, false);
     if (!m) return false;
-    std::string base = upper_str(trim(types_->get_string(type, "Muzzle_Bone_Name")));
+    std::string base = ascii_upper(ascii_trim(types_->get_string(type, "Muzzle_Bone_Name")));
     if (base.empty()) base = "MUZZLEA";  // type +0x580 default
     float scale = types_->columns().scale_factor[type];
     if (!(scale > 0.0f)) scale = 1.0f;
@@ -1125,7 +1105,7 @@ bool BattleCatalog::target_bones(uint32_t type, bool space, std::vector<tactical
     float scale = types_->columns().scale_factor[type];
     if (!(scale > 0.0f)) scale = 1.0f;
     for (const std::string_view n : names) {
-        const std::string name = upper_str(trim(n));
+        const std::string name = ascii_upper(ascii_trim(n));
         if (name.empty()) continue;
         const int32_t b = m->find(name);
         if (b < 0) continue;  // missing on the model: dropped
@@ -1172,7 +1152,7 @@ int32_t BattleCatalog::hardpoint_on_model(int32_t base, uint32_t unit_type, Buil
     if (!s.full || base < 0 || static_cast<size_t>(base) >= s.d->hardpoints.size()) return base;
     const ModelInfo* m = model_info(unit_type, s.model_mode == 1, false);
     if (!m) return base;
-    const std::string key = upper_str(s.d->hardpoints[static_cast<size_t>(base)].name);
+    const std::string key = ascii_upper(s.d->hardpoints[static_cast<size_t>(base)].name);
     const std::string cache_key = key + "@" + std::to_string(unit_type);
     if (const auto it = s.hp_index.find(cache_key); it != s.hp_index.end()) return it->second;
     const auto rec = hardpoints_.find(key);

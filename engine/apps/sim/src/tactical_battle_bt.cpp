@@ -3,13 +3,13 @@
 // "battle host (BT pass)" blocks). Serial code; synced draws: retreat attrition (one inline draw per eligible unit) and the
 // hard-point draws of AbilitySystem::add_unit for pad objects.
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <string>
 #include <string_view>
 
 #include "alamo/core/dmath.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/terrain/chunk.hpp"
 #include "alamo/galactic/campaign.hpp"
@@ -29,23 +29,7 @@ namespace cmd = alamo::commands;
 
 namespace {
 
-std::string_view trim(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return s;
-}
-
-bool iequal_trim(std::string_view a, std::string_view b) {
-    a = trim(a);
-    b = trim(b);
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const char x = (a[i] >= 'a' && a[i] <= 'z') ? static_cast<char>(a[i] - 'a' + 'A') : a[i];
-        const char y = (b[i] >= 'a' && b[i] <= 'z') ? static_cast<char>(b[i] - 'a' + 'A') : b[i];
-        if (x != y) return false;
-    }
-    return true;
-}
+bool iequal_trim(std::string_view a, std::string_view b) { return ascii_iequals(ascii_trim(a), ascii_trim(b)); }
 
 objects::BehaviorTypeId pad_behavior() {
     static const objects::BehaviorTypeId id = objects::behavior_type_id("TACTICAL_BUILD_OBJECTS");
@@ -478,7 +462,7 @@ bool TacticalBattle::bt_team(uint32_t company_type, uint32_t first_member, uint3
     // Create_Team_Type (+0x1e50 / +0x1e58), else the type named "Team"; neither resolves -> nothing is created.
     const std::string_view name = types.get_string(company_type, "Create_Team_Type");
     objects::TypeIndex tt = objects::kNone;
-    if (!trim(name).empty()) tt = types.resolve_name(trim(name));
+    if (!ascii_trim(name).empty()) tt = types.resolve_name(ascii_trim(name));
     const bool named = tt != objects::kNone && tt < types.size();
     if (!named) tt = types.resolve_name("Team");
     if (tt == objects::kNone || tt >= types.size()) return false;
@@ -588,10 +572,7 @@ int32_t placement_base_level(const terrain::ObjectPlacement& pl) {
 int32_t team_marker_slot(std::string_view name) {
     if (name.size() < 9) return -1;
     static constexpr std::string_view kTeam = "TEAM_";
-    for (size_t i = 0; i < kTeam.size(); ++i) {
-        const char c = (name[i] >= 'a' && name[i] <= 'z') ? static_cast<char>(name[i] - 'a' + 'A') : name[i];
-        if (c != kTeam[i]) return -1;
-    }
+    if (!ascii_istarts_with(name, kTeam)) return -1;
     if (name[5] < '0' || name[5] > '9' || name[6] < '0' || name[6] > '9' || name[7] != '_') return -1;
     return (name[5] - '0') * 10 + (name[6] - '0');
 }
@@ -611,8 +592,8 @@ std::vector<std::pair<objects::TypeIndex, float>> spawn_table(const objects::Gam
     const std::span<const std::string_view> list = types.get_list(t, "Map_Load_Spawn_Table");
     float cum = 0.0f;
     for (size_t i = 0; i + 1 < list.size(); i += 2) {
-        const objects::TypeIndex x = types.resolve_name(trim(list[i]));
-        const float w = std::strtof(std::string(trim(list[i + 1])).c_str(), nullptr);
+        const objects::TypeIndex x = types.resolve_name(ascii_trim(list[i]));
+        const float w = std::strtof(std::string(ascii_trim(list[i + 1])).c_str(), nullptr);
         if (x == objects::kNone || x >= types.size()) continue;
         cum = cum + w;
         out.emplace_back(x, cum);
@@ -663,21 +644,15 @@ int32_t TacticalBattle::bt_relation(int32_t p, int32_t q) const {
     if (np || nq) return 2;
     if (fp == fq) return 0;
     if (fp >= fs.size() || fq >= fs.size()) return 1;
-    const auto same = [](std::string_view a, std::string_view b) {
-        if (a.size() != b.size()) return false;
-        for (size_t i = 0; i < a.size(); ++i)
-            if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
-        return true;
-    };
     // [port] a faction with neither list stays an enemy of every other non-neutral faction (the old default): only the
     // synthetic test data has such factions; every shipped non-neutral faction lists its Enemies.
     if (fs[fp].allies.empty() && fs[fp].enemies.empty()) return 1;
     const std::string& gname = fs[fq].name;
     int32_t v = 2;  // the constructor's value ("undefined feelings")
     for (const std::string& n : fs[fp].allies)
-        if (same(n, gname)) v = 0;
+        if (ascii_iequals(n, gname)) v = 0;
     for (const std::string& n : fs[fp].enemies)  // Enemies wins over Allies
-        if (same(n, gname)) v = 1;
+        if (ascii_iequals(n, gname)) v = 1;
     return v;
 }
 
@@ -738,7 +713,7 @@ void TacticalBattle::bt_map_prepass() {
         if (f >= galaxy_->rules().factions.size()) return false;
         const std::string& faction = galaxy_->rules().factions[f].name;
         for (const std::string_view tok : types.get_list(mt, "Marker_For_Specific_Object_Type")) {
-            const objects::TypeIndex x = types.resolve_name(trim(tok));
+            const objects::TypeIndex x = types.resolve_name(ascii_trim(tok));
             if (x == objects::kNone || x >= types.size() || x >= type_crcs.size()) continue;
             for (const std::string_view a : types.get_list(x, "Affiliation"))
                 if (iequal_trim(a, faction)) {
@@ -934,7 +909,7 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
             m.pos = pos;
             m.facing = face;
             for (const std::string_view s : types.get_list(t, "Marker_For_Specific_Object_Type")) {
-                const objects::TypeIndex x = types.resolve_name(trim(s));
+                const objects::TypeIndex x = types.resolve_name(ascii_trim(s));
                 if (x != objects::kNone && x < types.size()) m.specific.push_back(x);
             }
             bt_markers_.push_back(std::move(m));
@@ -987,7 +962,7 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
     const size_t n0 = parts_.size();
     for (size_t i = 0; i < n0; ++i) {
         if (!parts_[i].structure || parts_[i].built) continue;
-        const objects::TypeIndex x = types.resolve_name(trim(types.get_string(parts_[i].type, "Tactical_Additional_Structure_Type")));
+        const objects::TypeIndex x = types.resolve_name(ascii_trim(types.get_string(parts_[i].type, "Tactical_Additional_Structure_Type")));
         if (x == objects::kNone || x >= types.size()) continue;
         bool have = false;
         for (const Participant& q : parts_) have = have || (q.structure && q.type == static_cast<uint32_t>(x));
@@ -1006,7 +981,7 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
     //    structure behaviour slot filter is not modelled].
     for (Participant& p : parts_) {
         if (!p.structure) continue;
-        const objects::TypeIndex o = types.resolve_name(trim(types.get_string(p.type, "Place_Other_Type_At_Every_Specific_Marker_Position")));
+        const objects::TypeIndex o = types.resolve_name(ascii_trim(types.get_string(p.type, "Place_Other_Type_At_Every_Specific_Marker_Position")));
         if (o == objects::kNone || o >= types.size()) continue;
         p.other_type = static_cast<int32_t>(o);
         for (size_t i = 0; i < bt_markers_.size(); ++i) {
@@ -1035,7 +1010,7 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
                     pick = static_cast<int64_t>(i);
             }
             if (pick < 0) {
-                const std::string_view bp = trim(types.get_string(p.type, "Base_Position"));
+                const std::string_view bp = ascii_trim(types.get_string(p.type, "Base_Position"));
                 if (iequal_trim(bp, "Orbital")) pick = first_free(kMkOrbital);
                 else if (iequal_trim(bp, "In_Base")) pick = first_free(kMkInBase) >= 0 ? first_free(kMkInBase) : first_free(kMkOutBase);
                 else if (iequal_trim(bp, "Out_Base")) pick = first_free(kMkOutBase) >= 0 ? first_free(kMkOutBase) : first_free(kMkInBase);
@@ -1132,7 +1107,7 @@ Vec3 TacticalBattle::bt_pad_attach_point(const TacticalMode& mode, objects::Obje
     const objects::GameObjectTypes& types = catalog_->types();
     const objects::TypeIndex t = st.type(pad);
     if (t >= types.size()) return p;
-    const std::string_view bone = trim(types.get_string(t, "Tactical_Build_Attachment_Bone_Name"));
+    const std::string_view bone = ascii_trim(types.get_string(t, "Tactical_Build_Attachment_Bone_Name"));
     if (bone.empty()) return p;
     Vec3 out = p;
     return model_bone_point(st, pad, bone, out) > 0 ? out : p;
@@ -1146,9 +1121,7 @@ int TacticalBattle::model_bone_point(const objects::ObjectStore& st, objects::Ob
     if (t >= types.size()) return -1;
     const BattleCatalog::ModelInfo* mi = catalog_->model_info(static_cast<uint32_t>(t), space_, true);
     if (!mi) return -1;
-    std::string upper(trim(bone));
-    for (char& c : upper) c = (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c;
-    const int32_t b = mi->find(upper);
+    const int32_t b = mi->find(ascii_upper(ascii_trim(bone)));
     if (b < 0 || static_cast<size_t>(b) >= mi->bone_pos.size()) return 0;
     const Vec3 p = st.position(h);
     float s = types.columns().scale_factor[t];
@@ -1268,7 +1241,7 @@ void TacticalBattle::bt_skirmish_base(TacticalMode& mode) {
         const objects::TypeIndex mt = types.resolve_name(name);
         if (mt == objects::kNone || mt >= types.size()) continue;
         for (const std::string_view tok : types.get_list(mt, "Marker_For_Specific_Object_Type")) {
-            const objects::TypeIndex x = types.resolve_name(trim(tok));
+            const objects::TypeIndex x = types.resolve_name(ascii_trim(tok));
             if (x != objects::kNone && x < types.size()) pre.push_back(x);
         }
     }

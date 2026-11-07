@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/sim/tactical_battle.hpp"
@@ -18,24 +19,7 @@ namespace {
 
 constexpr float kFrameSeconds = 1.0f / 30.0f;  // tactical frames are 1/30 s
 
-bool ieq(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        char x = a[i], y = b[i];
-        if (x >= 'A' && x <= 'Z') x = static_cast<char>(x - 'A' + 'a');
-        if (y >= 'A' && y <= 'Z') y = static_cast<char>(y - 'A' + 'a');
-        if (x != y) return false;
-    }
-    return true;
-}
-
-std::string_view trim(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return s;
-}
-
-float to_f(std::string_view v) { return static_cast<float>(std::atof(std::string(trim(v)).c_str())); }
+float to_f(std::string_view v) { return static_cast<float>(std::atof(std::string(ascii_trim(v)).c_str())); }
 
 }  // namespace
 
@@ -51,19 +35,19 @@ const TacticalBattle::SkIncome& TacticalBattle::sk_income_of(uint32_t type) {
     const std::string_view self = raw.types().name[type];
     for (const objects::FieldIndex f : types.get_sub_objects(static_cast<objects::TypeIndex>(type), "Abilities")) {
         const std::string_view tag = raw.tag_name(f);
-        const bool stream = ieq(tag, "Income_Stream_Ability"), mod = ieq(tag, "Income_Stream_Mod_Ability");
+        const bool stream = ascii_iequals(tag, "Income_Stream_Ability"), mod = ascii_iequals(tag, "Income_Stream_Mod_Ability");
         if (!stream && !mod) continue;
         float value = 0.0f, interval = 0.0f, additive = 0.0f, multiplier = 1.0f;
         bool enabled = true, own = false;
         for (objects::FieldIndex c = f + 1; c < fc.size() && fc.depth[c] > fc.depth[f]; ++c) {
             if (fc.parent[c] != f) continue;
             const std::string_view k = raw.tag_name(c);
-            if (ieq(k, "Base_Income_Value")) value = to_f(fc.text[c]);
-            else if (ieq(k, "Base_Interval_In_Secs")) interval = to_f(fc.text[c]);
-            else if (ieq(k, "Income_Additive_Value")) additive = to_f(fc.text[c]);
-            else if (ieq(k, "Income_Multiplier")) multiplier = to_f(fc.text[c]);
-            else if (ieq(k, "Initially_Enabled")) enabled = !ieq(trim(fc.text[c]), "No") && !ieq(trim(fc.text[c]), "False");
-            else if (ieq(k, "Target_Stream_Source")) own = ieq(trim(fc.text[c]), self);
+            if (ascii_iequals(k, "Base_Income_Value")) value = to_f(fc.text[c]);
+            else if (ascii_iequals(k, "Base_Interval_In_Secs")) interval = to_f(fc.text[c]);
+            else if (ascii_iequals(k, "Income_Additive_Value")) additive = to_f(fc.text[c]);
+            else if (ascii_iequals(k, "Income_Multiplier")) multiplier = to_f(fc.text[c]);
+            else if (ascii_iequals(k, "Initially_Enabled")) enabled = !ascii_iequals(ascii_trim(fc.text[c]), "No") && !ascii_iequals(ascii_trim(fc.text[c]), "False");
+            else if (ascii_iequals(k, "Target_Stream_Source")) own = ascii_iequals(ascii_trim(fc.text[c]), self);
         }
         if (stream) {
             in.value = value;

@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cmath>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/profile.hpp"
@@ -2040,16 +2041,7 @@ bool drop_token_is(std::string_view list, std::string_view token) {  // case-ins
         while (i < list.size() && sep(list[i])) ++i;
         size_t j = i;
         while (j < list.size() && !sep(list[j])) ++j;
-        if (j - i == token.size()) {
-            bool eq = true;
-            for (size_t k = 0; k < token.size() && eq; ++k) {
-                const char a = list[i + k], b = token[k];
-                const char la = (a >= 'a' && a <= 'z') ? static_cast<char>(a - 32) : a;
-                const char lb = (b >= 'a' && b <= 'z') ? static_cast<char>(b - 32) : b;
-                eq = la == lb;
-            }
-            if (eq) return true;
-        }
+        if (ascii_iequals(list.substr(i, j - i), token)) return true;
         i = j;
     }
     return false;

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/objects/game_object_types.hpp"
@@ -10,13 +11,6 @@
 namespace alamo::sim {
 
 namespace {
-
-std::string upper_key(std::string_view s) {
-    std::string out(s);
-    for (char& c : out)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return out;
-}
 
 anim::FlinchParams flinch_of(const anim::TypeAnimParams& p) {
     anim::FlinchParams f;
@@ -291,7 +285,7 @@ const anim::AnimModel* SimAnimation::model_for(objects::TypeIndex type, objects:
     TypeEntry e;
     if (type < types_->size()) e.params = anim::type_anim_params(*types_, type, mode);
     if (!e.params.model.empty()) {
-        const std::string mk = upper_key(e.params.model) + "|" + upper_key(e.params.anim_override);
+        const std::string mk = ascii_upper(e.params.model) + "|" + ascii_upper(e.params.anim_override);
         auto& slot = models_[mk];
         if (!slot) {
             slot = std::make_unique<anim::AnimModel>();

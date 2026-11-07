@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "alamo/data/game_database.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/objects/enums.hpp"
@@ -13,17 +14,6 @@
 namespace alamo::galactic {
 
 namespace {
-
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        char x = a[i], y = b[i];
-        if (x >= 'A' && x <= 'Z') x = static_cast<char>(x - 'A' + 'a');
-        if (y >= 'A' && y <= 'Z') y = static_cast<char>(y - 'A' + 'a');
-        if (x != y) return false;
-    }
-    return true;
-}
 
 float atof_or(std::string_view text, float fallback) {
     for (char c : text)
@@ -35,12 +25,6 @@ std::array<float, 2> pair_or(std::string_view text, std::array<float, 2> fallbac
     const std::vector<std::string_view> tok = objects::split_type_list(text);
     for (size_t i = 0; i < tok.size() && i < 2; ++i) fallback[i] = static_cast<float>(objects::c_atof(tok[i]));
     return fallback;
-}
-
-std::string_view trim_view(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return s;
 }
 
 void note(std::vector<std::string>* diag, std::string msg) {
@@ -71,7 +55,7 @@ int32_t int_or(const objects::GameObjectTypes& types, objects::TypeIndex t, std:
 }
 
 uint32_t resolve_or_none(const objects::GameObjectTypes& types, std::string_view name) {
-    const objects::TypeIndex r = types.resolve_name(trim_view(name));
+    const objects::TypeIndex r = types.resolve_name(ascii_trim(name));
     return r == objects::kNone ? kNoIndex : static_cast<uint32_t>(r);
 }
 
@@ -99,7 +83,7 @@ void extract_oi_fields(const objects::GameObjectTypes& types, objects::TypeIndex
     // Required_Special_Structures: the parser keeps '|' as a token (0x53 OR markers): `A | B, C` = (A or B) and C.
     bool join = false;
     for (std::string_view tok : types.get_list(t, "Required_Special_Structures")) {
-        tok = trim_view(tok);
+        tok = ascii_trim(tok);
         if (tok.empty()) continue;
         if (tok == "|") {
             join = true;
@@ -117,7 +101,7 @@ void extract_oi_fields(const objects::GameObjectTypes& types, objects::TypeIndex
         std::vector<std::string_view> names(lst.begin(), lst.end());
         if (names.empty()) names = objects::split_type_list(types.get_string(t, "Required_Planets"));
         for (std::string_view n : names)
-            if (!trim_view(n).empty()) i.required_planets.push_back(resolve_or_none(types, n));
+            if (!ascii_trim(n).empty()) i.required_planets.push_back(resolve_or_none(types, n));
     }
     // Defaults when a tag is absent: -1 = unlimited [L: the type constructor values were not read].
     i.max_instances_per_planet = int_or(types, t, "Build_Max_Instances_Per_Planet", -1);
@@ -132,17 +116,17 @@ void extract_oi_fields(const objects::GameObjectTypes& types, objects::TypeIndex
 
 // q6 t03. The port's element-tag table (unchanged since S3).
 UnitKind unit_kind_from_element(std::string_view el, bool hyperspace) {
-    if (iequals(el, "StarBase")) return UnitKind::StarBase;
-    if (iequals(el, "GroundStructure") || iequals(el, "GroundBase") || iequals(el, "SpecialStructure"))
+    if (ascii_iequals(el, "StarBase")) return UnitKind::StarBase;
+    if (ascii_iequals(el, "GroundStructure") || ascii_iequals(el, "GroundBase") || ascii_iequals(el, "SpecialStructure"))
         return UnitKind::GroundStructure;
-    if (iequals(el, "Squadron")) return UnitKind::Squadron;
-    if (iequals(el, "SpaceUnit")) return UnitKind::SpaceUnit;
-    if (iequals(el, "GroundCompany") || iequals(el, "GroundInfantry") || iequals(el, "GroundVehicle") ||
-        iequals(el, "HeroCompany"))
+    if (ascii_iequals(el, "Squadron")) return UnitKind::Squadron;
+    if (ascii_iequals(el, "SpaceUnit")) return UnitKind::SpaceUnit;
+    if (ascii_iequals(el, "GroundCompany") || ascii_iequals(el, "GroundInfantry") || ascii_iequals(el, "GroundVehicle") ||
+        ascii_iequals(el, "HeroCompany"))
         return UnitKind::GroundUnit;
-    if (iequals(el, "HeroUnit") || iequals(el, "UniqueUnit"))
+    if (ascii_iequals(el, "HeroUnit") || ascii_iequals(el, "UniqueUnit"))
         return hyperspace ? UnitKind::SpaceUnit : UnitKind::GroundUnit;  // [M]
-    if (iequals(el, "Planet")) return UnitKind::Planet;
+    if (ascii_iequals(el, "Planet")) return UnitKind::Planet;
     return UnitKind::Other;
 }
 
@@ -170,7 +154,7 @@ bool is_vanilla_unclassified_element(std::string_view el) {
                                                  "SlaveCompany",    "Marker",             "Props_Story",
                                                  "MOV_Cinematic",   "CIN_SpaceUnit",      "CIN_SpaceProp"};
     for (const std::string_view t : kTags)
-        if (iequals(el, t)) return true;
+        if (ascii_iequals(el, t)) return true;
     return false;
 }
 
@@ -184,19 +168,19 @@ UnitKind galactic_unit_kind(std::string_view el, bool hyperspace, uint8_t dummy)
 
 uint32_t GalacticRules::find_faction(std::string_view name) const {
     for (size_t i = 0; i < factions.size(); ++i)
-        if (iequals(factions[i].name, name)) return static_cast<uint32_t>(i);
+        if (ascii_iequals(factions[i].name, name)) return static_cast<uint32_t>(i);
     return kNoIndex;
 }
 
 uint32_t GalacticRules::find_difficulty(std::string_view name) const {
     for (size_t i = 0; i < difficulties.size(); ++i)
-        if (iequals(difficulties[i].name, name)) return static_cast<uint32_t>(i);
+        if (ascii_iequals(difficulties[i].name, name)) return static_cast<uint32_t>(i);
     return kNoIndex;
 }
 
 uint32_t GalacticRules::find_type(std::string_view name) const {
     for (size_t i = 0; i < types.size(); ++i)
-        if (iequals(types[i].name, name)) return static_cast<uint32_t>(i);
+        if (ascii_iequals(types[i].name, name)) return static_cast<uint32_t>(i);
     return kNoIndex;
 }
 
@@ -254,8 +238,8 @@ EconomyConstants load_economy_constants(const data::GameDatabase& db) {
     float_list("Particle_Brightness_Per_Corruption_Level", c.particle_brightness_per_level);
     float_list("Particle_Scale_Per_Corruption_Level", c.particle_scale_per_level);
     float_list("Particle_Energy_Per_Corruption_Level", c.particle_energy_per_level);
-    if (auto t = g.get("Good_Side_Name")) c.good_side_name = std::string(trim_view(*t));  // REMAINING_GAPS 1.5
-    if (auto t = g.get("Evil_Side_Name")) c.evil_side_name = std::string(trim_view(*t));  // modc t20 (presentation)
+    if (auto t = g.get("Good_Side_Name")) c.good_side_name = std::string(ascii_trim(*t));  // REMAINING_GAPS 1.5
+    if (auto t = g.get("Evil_Side_Name")) c.evil_side_name = std::string(ascii_trim(*t));  // modc t20 (presentation)
     return c;
 }
 
@@ -274,12 +258,12 @@ std::vector<FactionRules> load_factions(const FileProvider& provider, std::vecto
             r.can_control_planets = objects::parse_type_bool(n.child_text("Can_Control_Planets"));
             r.is_playable = objects::parse_type_bool(n.child_text("Is_Playable"));
             r.benefits_from_corruption = objects::parse_type_bool(n.child_text("Benefits_From_Corruption"));
-            r.basic_ai = std::string(trim_view(n.child_text("Basic_AI")));
-            r.text_id = std::string(trim_view(n.child_text("Text_ID")));
-            r.tech_tree_dialog = std::string(trim_view(n.child_text("Tech_Tree_Dialog_Name")));
-            r.tech_level_icon = std::string(trim_view(n.child_text("Tech_Level_Icon_Name")));
-            r.land_selection_blob = std::string(trim_view(n.child_text("Land_Mode_Selection_Blob_Material_Name")));
-            r.space_selection_blob = std::string(trim_view(n.child_text("Space_Mode_Selection_Blob_Material_Name")));
+            r.basic_ai = std::string(ascii_trim(n.child_text("Basic_AI")));
+            r.text_id = std::string(ascii_trim(n.child_text("Text_ID")));
+            r.tech_tree_dialog = std::string(ascii_trim(n.child_text("Tech_Tree_Dialog_Name")));
+            r.tech_level_icon = std::string(ascii_trim(n.child_text("Tech_Level_Icon_Name")));
+            r.land_selection_blob = std::string(ascii_trim(n.child_text("Land_Mode_Selection_Blob_Material_Name")));
+            r.space_selection_blob = std::string(ascii_trim(n.child_text("Space_Mode_Selection_Blob_Material_Name")));
             r.hyperspace_speed_factor = atof_or(n.child_text("Hyperspace_Speed_Factor"), r.hyperspace_speed_factor);
             r.maintenance_cost = atof_or(n.child_text("Maintenance_Cost"), r.maintenance_cost);
             r.force_alignment = parse_force_side(n.child_text("Force_Alignment"));
@@ -291,10 +275,10 @@ std::vector<FactionRules> load_factions(const FileProvider& provider, std::vecto
             r.displayed_tech_level_adjustment =  // P4 sim ("+1" parses as 1)
                 static_cast<int32_t>(atof_or(n.child_text("Displayed_Tech_Level_Adjustment"), 0.0f));
             // OI galactic: victory monitor inputs (resolved in load_galactic_rules).
-            r.home_planet = std::string(trim_view(n.child_text("Home_Planet")));
-            r.leader_name = std::string(trim_view(n.child_text("Faction_Leader")));
-            r.leader_company_name = std::string(trim_view(n.child_text("Faction_Leader_Company")));
-            r.primary_enemy_name = std::string(trim_view(n.child_text("Primary_Enemy")));
+            r.home_planet = std::string(ascii_trim(n.child_text("Home_Planet")));
+            r.leader_name = std::string(ascii_trim(n.child_text("Faction_Leader")));
+            r.leader_company_name = std::string(ascii_trim(n.child_text("Faction_Leader_Company")));
+            r.primary_enemy_name = std::string(ascii_trim(n.child_text("Primary_Enemy")));
             // S7 t30 (TACTICAL_COMBAT §2.10): the relation lists.
             const auto names = [](std::string_view s) {
                 std::vector<std::string> v;
@@ -364,7 +348,7 @@ std::vector<TypeInfo> extract_type_info(const objects::GameObjectTypes& types, c
         if (aff.empty()) aff = objects::split_type_list(types.get_string(t, "Affiliation"));
         for (std::string_view a : aff)
             for (size_t f = 0; f < factions.size(); ++f)
-                if (iequals(factions[f].name, a)) {
+                if (ascii_iequals(factions[f].name, a)) {
                     i.affiliation.push_back(static_cast<uint32_t>(f));
                     break;
                 }
@@ -386,13 +370,13 @@ std::vector<TypeInfo> extract_type_info(const objects::GameObjectTypes& types, c
         i.categories = types.get_mask(t, "CategoryMask");
         i.movement_class = types.get_enum(t, "MovementClass");
         for (std::string_view m : types.get_list(t, "Company_Units")) {  // a company: its first member's class
-            const objects::TypeIndex mt = types.resolve_name(trim_view(m));
+            const objects::TypeIndex mt = types.resolve_name(ascii_trim(m));
             if (mt != objects::kNone) i.movement_class = types.get_enum(mt, "MovementClass");
             break;
         }
         {
             const std::string terrain(types.get_string(t, "Terrain"));
-            i.terrain = terrain_id(trim_view(terrain));
+            i.terrain = terrain_id(ascii_trim(terrain));
         }
         i.restricted_categories = types.get_mask(t, "Planet_Restricted_Unit_Categories");
         for (objects::TypeIndex r : types.get_type_refs(t, "Planet_Restricted_Unit_Types"))
@@ -412,7 +396,7 @@ std::vector<TypeInfo> extract_type_info(const objects::GameObjectTypes& types, c
 
 int32_t terrain_id(std::string_view name) {
     for (int32_t i = 0; i < 8; ++i)
-        if (iequals(name, kTerrainNames[i])) return i;
+        if (ascii_iequals(name, kTerrainNames[i])) return i;
     return -1;
 }
 

@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "alamo/data/game_database.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/type_fields.hpp"
@@ -13,20 +14,7 @@ namespace alamo::galactic {
 
 namespace {
 
-char upper(char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
-
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (upper(a[i]) != upper(b[i])) return false;
-    return true;
-}
-
-std::string trimmed(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return std::string(s);
-}
+std::string trimmed(std::string_view s) { return std::string(ascii_trim(s)); }
 
 void note(std::vector<std::string>* d, std::string m) {
     if (d) d->push_back(std::move(m));
@@ -37,18 +25,18 @@ bool space_kind(UnitKind k) { return k == UnitKind::SpaceUnit || k == UnitKind::
 int32_t terrain_index(std::string_view s) {
     static const char* const kNames[] = {"TEMPERATE", "ARCTIC", "DESERT", "FOREST", "SWAMP", "VOLCANIC", "URBAN", "SPACE"};
     for (int32_t i = 0; i < 8; ++i)
-        if (iequal(s, kNames[i])) return i;
+        if (ascii_iequals(s, kNames[i])) return i;
     return -1;
 }
 
 // [name-ok-begin: retail faction-name table 0x140b30568 (Rebel 0, Empire 1, Pirates 2, Underworld 4, Hutts 5),
 // docs/re/L1_S4_REMAINING.md, BATTLE_TRANSITIONS.md "defender faction index"]
 int32_t map_faction_index(std::string_view name) {
-    if (iequal(name, "Rebel")) return 0;
-    if (iequal(name, "Empire")) return 1;
-    if (iequal(name, "Pirates")) return 2;
-    if (iequal(name, "Underworld")) return 4;
-    if (iequal(name, "Hutts")) return 5;
+    if (ascii_iequals(name, "Rebel")) return 0;
+    if (ascii_iequals(name, "Empire")) return 1;
+    if (ascii_iequals(name, "Pirates")) return 2;
+    if (ascii_iequals(name, "Underworld")) return 4;
+    if (ascii_iequals(name, "Hutts")) return 5;
     return 0;
 }
 // [name-ok-end]
@@ -933,7 +921,7 @@ bool ConflictManager::raid_force(int32_t player, const std::vector<ObjectHandle>
     if (!rules_->raid_required_faction.empty()) {
         if (player < 0 || static_cast<size_t>(player) >= sim_->players().size()) return false;
         const uint32_t f = sim_->players()[static_cast<size_t>(player)].faction;
-        if (f >= sim_->rules().factions.size() || !iequal(sim_->rules().factions[f].name, rules_->raid_required_faction)) return false;
+        if (f >= sim_->rules().factions.size() || !ascii_iequals(sim_->rules().factions[f].name, rules_->raid_required_faction)) return false;
     }
     int32_t limited = 0, heroes = 0;
     for (ObjectHandle h : units) {
@@ -991,7 +979,7 @@ void ConflictManager::split_land_impl(const ConflictInfo& head, BattleForces& d,
         if (lead) break;
         for (int pass = 0; pass < 2 && !lead; ++pass)
             for (ObjectHandle h : rec)
-                if (hero(h) == (pass == 1) && iequal(name(h), want)) {
+                if (hero(h) == (pass == 1) && ascii_iequals(name(h), want)) {
                     lead = h;
                     break;
                 }

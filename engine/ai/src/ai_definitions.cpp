@@ -44,28 +44,6 @@ bool parse_ai_mode(std::string_view s, AiMode& out) {
     return true;
 }
 
-char ai_upper(char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
-
-bool ai_iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (ai_upper(a[i]) != ai_upper(b[i])) return false;
-    return true;
-}
-
-std::string ai_upper_copy(std::string_view s) {
-    std::string o(s);
-    for (char& c : o) c = ai_upper(c);
-    return o;
-}
-
-std::string_view ai_trim(std::string_view s) {
-    size_t b = 0, e = s.size();
-    while (b < e && (s[b] == ' ' || s[b] == '\t' || s[b] == '\r' || s[b] == '\n')) ++b;
-    while (e > b && (s[e - 1] == ' ' || s[e - 1] == '\t' || s[e - 1] == '\r' || s[e - 1] == '\n')) --e;
-    return s.substr(b, e - b);
-}
-
 std::vector<std::string> ai_split(std::string_view s, std::string_view seps) {
     std::vector<std::string> out;
     size_t i = 0;

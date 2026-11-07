@@ -8,6 +8,7 @@
 #include <string>
 
 #include "alamo/core/dmath.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/objects/game_object_types.hpp"
@@ -36,16 +37,6 @@ std::vector<std::string> split_names(std::string_view s) {
     }
     if (!cur.empty()) out.push_back(cur);
     return out;
-}
-
-bool same_name(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const char x = (a[i] >= 'a' && a[i] <= 'z') ? static_cast<char>(a[i] - 'a' + 'A') : a[i];
-        const char y = (b[i] >= 'a' && b[i] <= 'z') ? static_cast<char>(b[i] - 'a' + 'A') : b[i];
-        if (x != y) return false;
-    }
-    return true;
 }
 
 constexpr float kBomberAltitude = 150.0f;  // [port] flight height over the ground (the LandBomber path height is not specified)
@@ -163,7 +154,7 @@ int32_t TacticalBattle::l1_projectile_of_type(int32_t type) const {
     if (type < 0) return -1;
     const std::string_view name = catalog_->types().raw().types().name[static_cast<size_t>(type)];
     for (size_t i = 0; i < tables_->combat.projectiles.size(); ++i)
-        if (same_name(tables_->combat.projectiles[i].name, name)) return static_cast<int32_t>(i);
+        if (ascii_iequals(tables_->combat.projectiles[i].name, name)) return static_cast<int32_t>(i);
     return -1;
 }
 
@@ -199,7 +190,7 @@ void TacticalBattle::l1_strikes_setup(TacticalMode& mode) {
         const L1Faction& f = l1_factions_[faction];
         bool any = false;
         for (const uint32_t t : orbit_types)
-            for (const std::string& s : f.bombard_ships) any = any || same_name(types.raw().types().name[t], s);
+            for (const std::string& s : f.bombard_ships) any = any || ascii_iequals(types.raw().types().name[t], s);
         if (any && !f.bombard_projectiles.empty()) {
             L1Bombard r;
             r.player = player;
@@ -217,7 +208,7 @@ void TacticalBattle::l1_strikes_setup(TacticalMode& mode) {
     // interval = max(int(FPS x Min), int(int(FPS x Max) x f)).
     int32_t bombers = 0, bomber_type = -1;
     for (const uint32_t t : orbit_types)
-        if (types.get_int(t, "Ship_Class") == 1 || same_name(types.get_string(t, "Ship_Class"), "bomber")) {  // fighter 0, bomber 1
+        if (types.get_int(t, "Ship_Class") == 1 || ascii_iequals(types.get_string(t, "Ship_Class"), "bomber")) {  // fighter 0, bomber 1
             ++bombers;
             const objects::TypeIndex bt = types.get_type_ref(t, "Land_Bomber_Type");
             if (bt != objects::kNone && bomber_type < 0) bomber_type = static_cast<int32_t>(bt);
