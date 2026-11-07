@@ -860,3 +860,10 @@ translates each track-B pass, MSVC Release, cold shader cache, single thread. Wi
 About 28 ms of DXC per pass; parsing and translating the effects is negligible. The renderer does the same work lazily per drawn
 effect on background jobs, cached on disk after the first run (`shaderxlat::ShaderCache`), so a mod adds about 1.5 s of
 translation once, spread over its first frames.
+
+Effect sources (modc t23, 2026-11-06, `alamo_fx_prebuild`, fxc 10.0.28000.0, same machine): `AlamoEngine.fx` + `.fxh`
+(Thrawn's Revenge) 91-106 ms to compile, `_TerrainRenderBump.fx` 51-60 ms to fail; a whole prebuild run including the VFS
+mount 152-174 ms with one or two compiles, 33-42 ms when every source is in the cache (unchanged source and includes). At
+load the cache lookup reads the source and its includes and hashes them (well under 1 ms per `.fx`). Audit with the
+compiled sources: 1125571106 2.39 s, 3622043265 2.46 s, 1976399102 2.34 s (same passes as before; this run's times are
+about 0.9 s above the table's because of other load on the machine, not the sources).

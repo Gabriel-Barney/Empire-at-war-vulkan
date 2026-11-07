@@ -13,6 +13,8 @@
 //   UnsupportedPass          the submesh is drawn with the unlit fallback (base texture, the pass's blend);
 //                            Heat / Shadow bucket submeshes are not drawn
 //   SourceShadowed           the .fxo is used (the original compiles the .fx instead)
+// A `.fx` that alamo_fx_prebuild compiled (modc t23, fx_source.hpp) is loaded like the original loads it and
+// is no Source* issue; its other issues name the .fx.
 //   TechniqueSkipped         the next technique whose passes all have a program is drawn
 #pragma once
 #include <cstddef>
@@ -31,15 +33,16 @@ class ShaderCache;
 namespace alamo::materials {
 
 enum class ShaderIssueKind : uint8_t {
-    SourceOnly = 0,   // <name>.fx without a compiled <name>.fxo: the original compiles the HLSL with D3DX at run
-                      // time; the port has no fx_2_0 compiler -> green default under the effect's name
-    SourceShadowed,   // <name>.fx and <name>.fxo both reachable: the original compiles the .fx (it wins), the
-                      // port loads the .fxo (same result only if that .fxo was compiled from that .fx)
+    SourceOnly = 0,   // <name>.fx without a compiled <name>.fxo, and no usable alamo_fx_prebuild result for it
+                      // (not prebuilt, fxc error, or LoadOptions::use_fx_sources off; detail says which): the
+                      // original compiles the HLSL with D3DX at run time -> green default under the effect's name
+    SourceShadowed,   // <name>.fx and <name>.fxo both reachable, same condition: the original compiles the .fx (it
+                      // wins), the port loads the .fxo (same result only if that .fxo was compiled from that .fx)
     LoadFailed,       // the .fxo exists but does not parse / load -> green default under its name
     NoTechnique,      // loads, no selectable technique -> the shared green default
     TranslateFailed,  // a track-B pass failed translation or DXC -> unlit fallback draw for its submeshes
-    UnsupportedPass,  // a shader pass track B does not take (vs_3_0 / ps_3_0, a VS without a PS or the reverse,
-                      // a shader + fixed-function mix) and no hand-written program, in every technique -> unlit
+    UnsupportedPass,  // a shader pass track B does not take (a VS without a PS or the reverse, shader model 3
+                      // mixed with an older stage, a shader + fixed-function mix) and no hand-written program, in every technique -> unlit
                       // fallback draw
     TechniqueSkipped, // the best technique has such a pass; a lower one is drawn (MaterialEffect::skipped_technique,
                       // the original on hardware where that technique fails ValidateTechnique)
@@ -64,6 +67,8 @@ struct EffectAudit {
     size_t translated_passes = 0;  // track-B passes of the loaded effects (restore-only passes excluded)
     size_t translated_ok = 0;      // of which translated (and, with DXC, compiled to SPIR-V)
     bool compiled = false;         // DXC was given: TranslateFailed covers DXC errors too
+    size_t sources = 0;            // effects with a reachable <name>.fx (modc t23)
+    size_t sources_compiled = 0;   // of which the compiled source is loaded (FxSourceState::Compiled)
     std::vector<ShaderIssue> issues;  // sorted by (effect, kind)
     size_t count(ShaderIssueKind k) const;
 };
