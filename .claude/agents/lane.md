@@ -54,7 +54,8 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
    Check that `sync` prints `in sync with origin/main`.
 9. **Land on `dev`** (no PR): commit, then `tools\land_on_dev.cmd`. It merges `origin/dev` into your branch (resolve a conflict
    there, rebuild the affected modules, rerun), pushes to `dev` as a fast-forward and deletes your branch on origin. A rejected
-   push means `dev` moved: rerun it. The last commit message says what changed, build and test results (MSVC / clang / ASan as
+   push means `dev` moved: rerun it. It also refuses generated or oversized new files (`tools\lint\check_tracked.py`;
+   tools write into ignored output folders, exceptions go in `tools/lint/tracked_allow.txt`). The last commit message says what changed, build and test results (MSVC / clang / ASan as
    applicable, skips), goldens changed or "none", roadmap group and tasks closed, open items, and ends with
    `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`. Never open a PR to `main` or push `main`: Gabriel releases `dev`.
 10. **Report** (short): files, behaviour, test results, decisions, open items, the `dev` commit. Once it is on `dev` the worktree is removed
