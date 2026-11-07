@@ -16,5 +16,13 @@ call "%~dp0build_asan.cmd" %1
 python tools\lint\gate_summary.py logs > logs\gate_summary.txt
 set GATE=%ERRORLEVEL%
 type logs\gate_summary.txt
+rem Files the release would add to main must pass the tracked-file check too (tools\lint\check_tracked.py).
+git rev-parse -q --verify origin/main >nul 2>&1
+if errorlevel 1 (
+  echo tracked-file check skipped: no origin/main ref, run "git fetch origin" first.
+) else (
+  python -I tools\lint\check_tracked.py --base origin/main --head HEAD
+  if errorlevel 1 set GATE=1
+)
 if %GATE%==0 (echo GATE PASS) else (echo GATE FAIL)
 exit /b %GATE%

@@ -6,7 +6,8 @@ rem Usage (from any worktree, branch committed):  tools\land_on_dev.cmd [--creat
 rem   1. refuses on main, on detached HEAD and with uncommitted tracked edits
 rem   2. fetches origin; with --create makes origin/dev from origin/main when dev does not exist yet
 rem   3. merges origin/dev INTO THIS BRANCH (conflicts are resolved here, so dev never holds a broken merge)
-rem   4. pushes HEAD to origin dev as a plain fast-forward (never --force; a rejected push means dev moved: rerun)
+rem   4. refuses generated or oversized new files (tools\lint\check_tracked.py), then
+rem      pushes HEAD to origin dev as a plain fast-forward (never --force; a rejected push means dev moved: rerun)
 rem   5. deletes this branch on origin when it is not dev
 rem Run the build / tests the change needs (docs/BUILD.md) BEFORE this; dev must stay green.
 rem The local branch and its worktree are left alone (git cannot delete a checked-out branch); the app or
@@ -59,6 +60,17 @@ if errorlevel 1 (
 )
 
 :pushit
+rem Refuse generated or oversized files this landing would add (tools\lint\check_tracked.py; exceptions in
+rem tools\lint\tracked_allow.txt). Nothing is pushed when it fails.
+set "PY=python"
+if exist "%~dp0..\toolchain\venv\Scripts\python.exe" set "PY=%~dp0..\toolchain\venv\Scripts\python.exe"
+"%PY%" -I "%~dp0lint\check_tracked.py" --base origin/dev --head HEAD
+if errorlevel 1 (
+  echo.
+  echo land_on_dev: new files failed the tracked-file check above. Nothing was pushed.
+  exit /b 1
+)
+
 git push origin HEAD:refs/heads/dev
 if errorlevel 1 (
   echo.
