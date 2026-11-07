@@ -1,5 +1,11 @@
 # S10 probe: map owner ids -> battle players (landing / capture-point ownership)
 
+> **Historical (2026-11-07, cu18 t10).** S10 is done: the probe ran on 2026-10-29 and its findings are in
+> `docs/re/REMAINING_GAPS.md` §3.3. The runner, `reader\` and `build_reader.cmd` are kept as they were and are not
+> maintained; a new memory probe should use `a1_tactical/a1mem.py`. Still used by other kits: `build_mod.py` and
+> `expected_objects.json` (the S10 campaign vehicle of `a1_tactical`) and `s10_story.lua`
+> (`engine/apps/sim/tests/test_battles.cpp`). The `.ted` / install reader moved to `common/ted_owners.py`.
+
 Spec: `docs/re/REMAINING_GAPS.md` §3.1 (map pre-pass, branched-map discard) and §3.3 ("the map owner field is a player
 id ... how campaign maps' owner ids line up with the campaign's player order was not traced"). Open item
 REMAINING_GAPS §7 item 1 "Map owner ids vs player ids in campaign land battles" and the PHASE4 probe list ("attacker landing /
@@ -19,7 +25,7 @@ The raw .ted owner (placement mini 02) is used directly as an index into the por
   - skirmish: `engine/apps/game/src/game_data.cpp` ~l.163 `make_skirmish_galaxy` = {human, ai, neutral};
   - attract demo only: `engine/apps/game/src/game_session.cpp` ~l.113 = one player per faction in faction order.
 
-What the shipped maps say (`ted_owners.py scan`): raw owners are always 0..7 and follow the faction order
+What the shipped maps say (`..\common\ted_owners.py scan`): raw owners are always 0..7 and follow the faction order
 **Rebel 0, Empire 1, Pirates 2, Neutral 3, Hostile 4, Sarlacc 5, Underworld 6, Hutts 7** (Factions.xml then
 Expansion_Factions.xml): Rebel walls/build pads 0, Empire walls 1, pirate pads 2, props and nearly every
 reinforcement / capture point 3, natives 4, Sarlacc 5, Underworld props 6, Hutt-world creatures 7. Skirmish (`_MP_`)
@@ -185,7 +191,7 @@ appear; (3) which third-party map objects survive §3.1's discard.
 | `reader\s10reader.cpp`, `reader\s10_layout.hpp` | the memory / popup reader |
 | `reader\s10_fake_game.cpp` | test target: lays out the documented structures with a map's objects, opens a message box |
 | `build_reader.cmd` | builds `bin\s10reader.exe` + `bin\s10_fake_game.exe` (log `logs\s10reader_build.txt`, `BUILD_OK`) |
-| `ted_owners.py` | .ted placement reader over the install's MEGs: `scan`, `list <map>`, `expected` |
+| `..\common\ted_owners.py` | .ted placement reader over the install's MEGs: `scan`, `list <map>`, `expected` |
 | `maps.json`, `expected_objects.json` | scenarios / the port's player tables; the scenario maps' placements |
 | `s10_parse.py` | `parse <log> [--no-popups]`, `fake`, `selftest` |
 | `selftest_hook.py`, `selftest_story.py` | the hook / the story scripts under stock Lua 5.0.2 (`--lua`); the story test runs the game's own PG library from `extracted\foc_data_text.zip` |

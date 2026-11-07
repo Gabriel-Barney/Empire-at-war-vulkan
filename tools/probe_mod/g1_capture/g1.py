@@ -4,7 +4,6 @@ Run with the project venv:  toolchain\\venv\\Scripts\\python.exe -I tools\\probe
 
 Modes
   dxvk       DXVK HUD + DXVK log + timed / requested window screenshots
-  renderdoc  RenderDoc frame captures (Vulkan, on top of DXVK): on request, on a timer, or F12 in the game
   apitrace   D3D9 API trace of the whole session (apitrace d3d9.dll wrapper -> native D3D9)
   cleanup    restore the game folder from the manifest (safe to run any number of times)
   status     print the state as JSON (game, prior patch chain, d3d9.dll, active run / manifest)
@@ -41,8 +40,6 @@ ROOT = os.path.abspath(os.path.join(KIT, "..", "..", ".."))
 CAP = os.path.join(ROOT, "toolchain", "capture")
 TOOLS = {
     "dxvk_d3d9": os.path.join(CAP, "dxvk-3.1.1", "x64", "d3d9.dll"),
-    "rdoc_dir": os.path.join(CAP, "renderdoc-1.46"),
-    "qrenderdoc": os.path.join(CAP, "renderdoc-1.46", "qrenderdoc.exe"),
     "apitrace_d3d9": os.path.join(CAP, "apitrace-14.0", "lib", "wrappers", "d3d9.dll"),
     "apitrace": os.path.join(CAP, "apitrace-14.0", "bin", "apitrace.exe"),
     "d3dretrace": os.path.join(CAP, "apitrace-14.0", "bin", "d3dretrace.exe"),
@@ -318,7 +315,7 @@ class Kit:
         corr = os.path.join(game, "corruption")
         exe = os.path.join(corr, "StarWarsG.exe")
         self.step("game: " + game)
-        for k in ("dxvk_d3d9", "qrenderdoc", "apitrace_d3d9", "apitrace"):
+        for k in ("dxvk_d3d9", "apitrace_d3d9", "apitrace"):
             if not os.path.isfile(TOOLS[k]):
                 raise G1Exit(4, "capture tool missing: %s - run toolchain\\6_capture_tools.cmd" % TOOLS[k])
         if os.path.isfile(self.current_run):
@@ -360,7 +357,6 @@ class Kit:
                "before": self.snapshot(corr), "actions": []}
         if not a.dry_run:
             save_json({"pid": os.getpid(), "mode": a.mode, "run_dir": run_dir, "started": now()}, self.current_run)
-        rdoc = None
         game_proc = None
         try:
             # 1. prior patch chain (PRIOR_PATCH.md / RENDER.md 7.2 preconditions)
@@ -391,9 +387,6 @@ class Kit:
             env_set = {}
             if a.mode == "dxvk":
                 env_set = {"DXVK_HUD": DXVK_HUD, "DXVK_LOG_LEVEL": "info", "DXVK_LOG_PATH": run_dir}
-            elif a.mode == "renderdoc":
-                env_set = {"DXVK_LOG_LEVEL": "info", "DXVK_LOG_PATH": run_dir, "VK_ADD_LAYER_PATH": TOOLS["rdoc_dir"],
-                           "VK_INSTANCE_LAYERS": "VK_LAYER_RENDERDOC_Capture", "ENABLE_VULKAN_RENDERDOC_CAPTURE": "1"}
             else:
                 env_set = {"TRACE_FILE": os.path.join(run_dir, "eaw.trace")}
             env_set.update(dict(kv.split("=", 1) for kv in a.env))
@@ -412,20 +405,8 @@ class Kit:
                     os.remove(os.path.join(self.control, n))
             env = dict(os.environ)
             env.update(env_set)
-            if a.mode == "renderdoc":
-                cfg = {"exe": exe, "workdir": corr, "args": " ".join(gargs), "out_dir": run_dir, "control_dir": self.control,
-                       "auto_trigger_sec": list(a.auto_trigger_sec), "auto_labels": list(a.auto_labels),
-                       "timeout_sec": timeout + 120, "env": env_set}
-                cfg_path = os.path.join(run_dir, "rdoc_config.json")
-                save_json(cfg, cfg_path)
-                set_renderdoc_quiet(self)
-                renv = dict(os.environ)
-                renv["G1_RDOC_CONFIG"] = cfg_path
-                rdoc = subprocess.Popen([TOOLS["qrenderdoc"], "--python", os.path.join(KIT, "rdoc_controller.py")], env=renv)
-                self.step("RenderDoc controller started (pid %d); it launches the game" % rdoc.pid)
-            else:
-                game_proc = subprocess.Popen([exe] + gargs, cwd=corr, env=env)
-                self.step("game started (pid %d)" % game_proc.pid)
+            game_proc = subprocess.Popen([exe] + gargs, cwd=corr, env=env)
+            self.step("game started (pid %d)" % game_proc.pid)
             self.status["launch"]["started"] = now()
             save_json(self.status, os.path.join(run_dir, "status.json"))
 
@@ -442,8 +423,7 @@ class Kit:
                 pids = pids_of_exe(exe)
                 if pids:
                     seen = True
-                rdoc_alive = rdoc is not None and rdoc.poll() is None
-                if seen and not pids and not rdoc_alive:
+                if seen and not pids:
                     break
                 if a.drive and pids and drive_thread is None:
                     drive_thread = self.start_driver(exe, shots_dir)
@@ -460,8 +440,6 @@ class Kit:
                             self.step("quit requested")
                         os.replace(rp, rp[:-4] + ".taken")
                         continue
-                    if a.mode == "renderdoc":
-                        continue  # the controller takes these
                     if a.mode == "dxvk" and pids:
                         p = screenshot_pid(pids[0], shots_dir, lab)
                         if p:
@@ -490,25 +468,12 @@ class Kit:
                         for pid in pids:
                             kill_pid(pid)
                             self.status["launch"]["forced"] = True
-                        if rdoc_alive and since > a.grace + 30:
-                            rdoc.kill()
             if drive_thread is not None:
                 drive_thread.join(30)
             self.status["launch"]["ended"] = now()
             if game_proc is not None:
                 self.status["launch"]["exit_code"] = game_proc.poll()
             self.step("game exited")
-            if rdoc is not None:
-                try:
-                    rdoc.wait(30)
-                except subprocess.TimeoutExpired:
-                    rdoc.kill()
-                rs = os.path.join(run_dir, "rdoc_status.json")
-                if os.path.isfile(rs):
-                    self.status["captures"] = load_json(rs).get("captures", [])
-                err = os.path.join(run_dir, "rdoc_controller_error.txt")
-                if os.path.isfile(err):
-                    self.warn("RenderDoc controller error: " + open(err).read())
             if a.mode == "apitrace":
                 tf = os.path.join(run_dir, "eaw.trace")
                 if os.path.isfile(tf):
@@ -520,8 +485,6 @@ class Kit:
                 if os.path.isfile(p) and GAME_WRITTEN.match(n) and os.path.getmtime(p) >= t0 - 1:
                     shutil.copy2(p, logs)
         finally:
-            if rdoc is not None and rdoc.poll() is None:
-                rdoc.kill()
             self.status["cleanup"] = self.restore(run_dir if not a.dry_run else None)
             if not a.dry_run and os.path.isfile(self.current_run):
                 os.remove(self.current_run)
@@ -653,22 +616,7 @@ class Kit:
     def analyze(self, run_dir):
         if not run_dir or not os.path.isdir(run_dir):
             raise G1Exit(1, "run folder not found: %s" % run_dir)
-        an = {"rdoc_extract": None, "analyze_exit": None, "report": None}
-        rdcs = sorted(os.path.join(run_dir, n) for n in os.listdir(run_dir) if n.lower().endswith(".rdc"))
-        if rdcs:
-            self.step("extracting %d RenderDoc capture(s)" % len(rdcs))
-            cfg = os.path.join(run_dir, "rdoc_extract_config.json")
-            save_json({"captures": rdcs, "out_dir": run_dir}, cfg)
-            set_renderdoc_quiet(self)
-            renv = dict(os.environ)
-            renv["G1_RDOC_EXTRACT"] = cfg
-            p = subprocess.Popen([TOOLS["qrenderdoc"], "--python", os.path.join(KIT, "rdoc_extract.py")], env=renv)
-            try:
-                p.wait(3600)
-            except subprocess.TimeoutExpired:
-                p.kill()
-                self.warn("RenderDoc extraction timed out")
-            an["rdoc_extract"] = os.path.join(run_dir, "rdoc_extract_status.json")
+        an = {"analyze_exit": None, "report": None}
         self.step("running g1_analyze.py")
         r = subprocess.run([sys.executable, "-I", os.path.join(KIT, "g1_analyze.py"), "--run-dir", run_dir,
                             "--apitrace", TOOLS["apitrace"], "--d3dretrace", TOOLS["d3dretrace"]])
@@ -886,29 +834,10 @@ def screenshot_pid(pid, out_dir, label):
     return p
 
 
-def set_renderdoc_quiet(kit):
-    """qrenderdoc asks a modal analytics question on its first start, which would block a scripted run.
-    Give the privacy-preserving answer (opt out) and turn off update checks in RenderDoc's per-user UI.config."""
-    f = os.path.join(os.environ.get("APPDATA", ""), "qrenderdoc", "UI.config")
-    if os.path.isfile(f):
-        t = open(f, encoding="utf-8").read()
-        n = re.sub(r'"Analytics_TotalOptOut":\s*false', '"Analytics_TotalOptOut": true', t)
-        n = re.sub(r'"CheckUpdate_AllowChecks":\s*true', '"CheckUpdate_AllowChecks": false', n)
-        n = re.sub(r'"Tips_HasSeenFirst":\s*false', '"Tips_HasSeenFirst": true', n)
-        if n != t:
-            open(f, "w", encoding="utf-8").write(n)
-            kit.step("RenderDoc UI.config: analytics opt-out, no update checks")
-    else:
-        os.makedirs(os.path.dirname(f), exist_ok=True)
-        open(f, "w", encoding="utf-8").write('{\n    "Analytics_TotalOptOut": true,\n    "CheckUpdate_AllowChecks": false,\n'
-                                             '    "Tips_HasSeenFirst": true\n}\n')
-        kit.step("RenderDoc UI.config created: analytics opt-out, no update checks")
-
-
 # ---------------------------------------------------------------------- main
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["dxvk", "renderdoc", "apitrace", "cleanup", "status", "trigger", "quit", "analyze"])
+    ap.add_argument("mode", choices=["dxvk", "apitrace", "cleanup", "status", "trigger", "quit", "analyze"])
     ap.add_argument("--game-dir", default="")
     ap.add_argument("--non-interactive", action="store_true", help="no prompts; for unattended runs")
     ap.add_argument("--dry-run", action="store_true", help="print what would change; change nothing, launch nothing")
@@ -916,8 +845,6 @@ def main(argv):
     ap.add_argument("--grace", type=int, default=20, help="seconds between WM_CLOSE and a forced kill")
     ap.add_argument("--label", default="capture")
     ap.add_argument("--frames", type=int, default=1)
-    ap.add_argument("--auto-trigger-sec", type=float, nargs="*", default=[], help="renderdoc: capture at these seconds")
-    ap.add_argument("--auto-labels", nargs="*", default=[])
     ap.add_argument("--shot-interval", type=int, default=15, help="dxvk: seconds between timer screenshots (0 = off)")
     ap.add_argument("--fullscreen", action="store_true", help="do not pass WINDOWED SCREENWIDTH= SCREENHEIGHT=")
     ap.add_argument("--width", type=int, default=1920)

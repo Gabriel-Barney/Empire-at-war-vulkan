@@ -6,15 +6,15 @@ session. Nothing from the game is stored in the repository: the mod is built fro
 
 | probe | question | spec | run script | cleanup |
 |---|---|---|---|---|
-| free-store timing (A1 t02) | at which mode frame do `FreeStoreService` and `On_Unit_Service` first run for an AI player? | AI_TACTICAL §5.3, §12 item 10 | `freestore_timing\run_freestore.cmd` | `freestore_timing\cleanup_freestore.cmd` |
-| landing points (A1 t04) | does the attacker own its landing reinforcement point(s) at battle start, and what is its land cap (+0x404)? | PHASE4 A1 "Land reinforcements", AI_GALACTIC_3 §3.3, REMAINING_GAPS §3.3 | `landing_points\run_landing.cmd` | `landing_points\cleanup_landing.cmd` |
+| free-store timing (A1 t02) | at which mode frame do `FreeStoreService` and `On_Unit_Service` first run for an AI player? | AI_TACTICAL §5.3, §12 item 10 | `run_a1.cmd --probe freestore` | `cleanup_a1.cmd` |
+| landing points (A1 t04) | does the attacker own its landing reinforcement point(s) at battle start, and what is its land cap (+0x404)? | PHASE4 A1 "Land reinforcements", AI_GALACTIC_3 §3.3, REMAINING_GAPS §3.3 | `run_a1.cmd --probe landing` | `cleanup_a1.cmd` |
 | both, one session (recommended) | | | `run_a1.cmd` | `cleanup_a1.cmd` |
 
 ## What Gabriel does
 
 1. Start Steam. Double-click **`tools\probe_mod\a1_tactical\run_a1.cmd`** (both probes, about 8 minutes of play).
    It installs the mod, starts the reader, launches `StarWarsG.exe MODPATH=Mods\A1TacticalProbe` from the
-   `corruption` folder and prints the click path below. (`run_freestore.cmd` / `run_landing.cmd` do one probe only.)
+   `corruption` folder and prints the click path below. (`run_a1.cmd --probe freestore|landing` does one probe only.)
 2. In **every** battle: give **no orders** and click nothing on the map; just wait.
    - **A) Skirmish land.** Main menu > Single Player > Skirmish > **Land**. Map **Utapau**. Slot 1 (you): **Empire**,
      team 1. Slot 2: **AI** (any difficulty) **Rebel**, team 2. Other slots closed. Default credits / tech. Start.
@@ -27,8 +27,8 @@ session. Nothing from the game is stored in the repository: the mod is built fro
      **fight** (not auto-resolve, not retreat). The Tatooine land battle loads; wait **60 s**, Esc > Quit.
      If no battle starts within 60 s of the galaxy map appearing, note it and quit to the main menu.
    - Then quit the game (main menu > Quit). The run finishes by itself (`A1_RUN_DONE exit=<n>` in the window).
-   - `run_landing.cmd` alone asks for C and then **D) Skirmish land Utapau** as in A (60 s);
-     `run_freestore.cmd` alone asks for A and B and installs no campaign.
+   - `--probe landing` alone asks for C and then **D) Skirmish land Utapau** as in A (60 s);
+     `--probe freestore` alone asks for A and B and installs no campaign.
 3. **Send back** the run folder `tools\probe_mod\a1_tactical\out\<yyyymmdd-hhmmss>-<probe>\` (`report.txt` first;
    also `reader.log`, `run.json`). `out\latest.txt` names the newest one.
 
@@ -119,14 +119,14 @@ the first frame it owns one, and at frames (first, 30, 300, last) +0x404, held c
 
 | file | what |
 |---|---|
-| `run_a1.cmd`, `freestore_timing\run_freestore.cmd`, `landing_points\run_landing.cmd` → `a1_run.py` | install, start the reader, launch, wait, report, cleanup (`--probe both / freestore / landing`, `--non-interactive`, `--no-launch`, `--game`, `--scan-sec`) |
-| `cleanup_a1.cmd`, `freestore_timing\cleanup_freestore.cmd`, `landing_points\cleanup_landing.cmd` → `a1_cleanup.py` | idempotent cleanup (`--dry-run`, `--no-pause`) |
+| `run_a1.cmd` → `a1_run.py` | install, start the reader, launch, wait, report, cleanup (`--probe both / freestore / landing`, `--non-interactive`, `--no-launch`, `--game`, `--scan-sec`) |
+| `cleanup_a1.cmd` → `a1_cleanup.py` | idempotent cleanup (`--dry-run`, `--no-pause`) |
 | `build_a1_mod.py` | builds `Mods\A1TacticalProbe` from the install (`--out`, `--no-campaign`, `--source-zip`); `--caps-only` writes the capacity table |
 | `freestore_timing\fs_hook.lua` | the Lua appended to the shipped `BusyTacticalFreeStore.lua` |
 | `a1mem.py` | read-only process access (ctypes): exe check, documented layout (same values as `s10_layout.hpp` / `q2_layout.hpp` + the player fields), heap scan |
 | `a1_reader.py` | the recorder (log format in its docstring) |
 | `a1_parse.py` | `parse <reader.log>` → report; `model` prints the predicted free-store frames |
-| `selftest\selftest.py` (`run_selftest.cmd`), `selftest\fake_game.py`, `selftest\build_lua50.cmd` | offline end-to-end test |
+| `selftest\selftest.py` (`run_selftest.cmd`), `selftest\fake_game.py` (Lua: `..\common\build_lua50.cmd`) | offline end-to-end test |
 
 All Python runs with the project venv: `toolchain\venv\Scripts\python.exe -I <script>`.
 
@@ -134,7 +134,7 @@ All Python runs with the project venv: `toolchain\venv\Scripts\python.exe -I <sc
 
 - `selftest\run_selftest.cmd`: **SELFTEST OK**.
   1. The hooked `BusyTacticalFreeStore.lua` (shipped script from `64Patch.meg` + hook) runs under stock Lua 5.0.2
-     (`build_lua50.cmd`, built at /Od: MSVC 14.51 /O2 miscompiles `ltable.c`, see `engine/lua/CMakeLists.txt`) with
+     (`common\build_lua50.cmd`, built at /Od: MSVC 14.51 /O2 miscompiles `ltable.c`, see `engine/lua/CMakeLists.txt`) with
      a harness that plays the 3-frame service for a land battle (float clock) and a space battle (exact clock): all
      record kinds appear, the shipped `FreeStoreService` / `On_Unit_Service` bodies still run, `t=20.0000019` at
      F = 600.

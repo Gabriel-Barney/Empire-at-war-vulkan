@@ -4,7 +4,7 @@
   build_a2f_mod.py [--game DIR] [--out MODDIR] [--source-zip extracted\\foc_data_text.zip] [--no-mod-equations]
 
 Nothing from the game is stored in the repository: every shipped file is read from the install (loose files / MEGs, FoC
-order, through tools/probe_mod/s10_map_owners/ted_owners.py; the extracted text zip is the fallback) and patched:
+order, through tools/probe_mod/common/ted_owners.py; the extracted text zip is the fallback) and patched:
   Data\\XML\\AI\\PerceptualEquations\\AI_Equations_ExpansionGeneric_Galactic.xml   shipped + the A2FB_* probe equations
   Data\\XML\\Story_Plots_Sandbox_12U_{Rebel,Underworld,Empire}.xml   Lua_Script = A2fb_Story (human faction's plot)
   Data\\Scripts\\Story\\A2fb_Story.lua                    header + core + a2fb_story.lua (channel S)
@@ -35,7 +35,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PROBE_MOD = os.path.dirname(HERE)
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 sys.path.insert(0, HERE)
-sys.path.insert(0, os.path.join(PROBE_MOD, 's10_map_owners'))
+sys.path.insert(0, os.path.join(PROBE_MOD, 'common'))
 sys.path.insert(0, PROBE_MOD)
 import a2fb_spec  # noqa: E402
 

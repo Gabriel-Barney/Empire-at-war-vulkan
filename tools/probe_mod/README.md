@@ -7,8 +7,9 @@ first match wins:
 > **(d)** MEGs, newest-mounted first. A mod's own `MegaFiles.xml` replaces the base list, and within one
 > list the later MEG wins. > **(e)** EaW loose `GameData\Data` > `FALLBACKPATH=`
 
-This replaces probe v1. Delete the old `tools\probe_mod\mods\` folder, and also any
-`corruption\Mods\ProbeA/B/C` you already copied from it.
+The probe has been run; its result is in `docs/PHASE2.md` (file resolution order). The payload folders
+(`v2\Mods\`, `v2\OPTIONAL_*\`, and the same under `probeE\`) are not in git: build them with `build_probe.py`
+(see "Rebuild" below) before a rerun.
 
 ## How it works
 
@@ -179,72 +180,7 @@ Rebuild: `python3 -I tools/probe_mod/build_probe.py probeE <extracted/foc root> 
 
 ---
 
-# A1 tactical-AI probes (`tools\probe_mod\a1_tactical\`)
+# Other probe kits
 
-Two probes for roadmap A1, one game session: **free-store timing** (A1 t02: do `FreeStoreService` /
-`On_Unit_Service` first run at mode frame 600 / 63, AI_TACTICAL §5.3 and §12 item 10) and **landing-point
-ownership** (A1 t04: does the campaign attacker own its landing reinforcement point at battle start, and what is its
-land cap +0x404). Double-click `a1_tactical\run_a1.cmd` (or `freestore_timing\run_freestore.cmd` /
-`landing_points\run_landing.cmd`), play skirmish land Utapau and space Kuat (90 s each) and the campaign
-"S10 PROBE A: TATOOINE" as Empire (fight the invasion, 60 s), giving no orders; send back
-`a1_tactical\out\<run>\` (`report.txt` first). Cleanup is automatic (`cleanup_a1.cmd` after a crash).
-Full instructions and how to read the result: `a1_tactical\README.md`.
-
----
-
-# Fog-of-war regrow probe (`tools\probe_mod\fow_regrow\`)
-
-Roadmap FOWF t06 (FOG_OF_WAR §9 item 8): the ~6.4–6.9 s regrow window after the last reveal of a cell is undone, and
-the circle shift at the fog box's top edge. Double-click `fow_regrow\run_fow.cmd`, play skirmish land Polus Winds
-(you Empire, AI Easy Rebel, other slots closed) for 3 minutes giving no orders, then quit; send back
-`fow_regrow\out\<run>\` (`report.txt` first). Cleanup is automatic (`cleanup_fow.cmd` after a crash).
-Full instructions and how to read the result: `fow_regrow\README.md`.
-
----
-
-# S7/S8 probe (`tools\probe_mod\s7s8_probes\`)
-
-This probe covers the open **probe** items of S7 t23–t27 and S8 t10–t13:
-
-- the SPMAT lob arc and range edge;
-- the Remote_Bomb ground marker;
-- deploy windows and reversals;
-- the muzzle-bone types;
-- `Activate_Ability` blocks (DEPLOY, and a target that dies);
-- the squadron team target;
-- escorts of a dead carrier;
-- the first shot after a spawn;
-- Dark_Trooper_PhaseIII missiles after the jet pack.
-
-Double-click `s7s8_probes\run_s7s8.cmd` and play two skirmish battles:
-
-1. Land, Geonosis, about 6.5 min. You Empire, AI Rebel, other slots closed. Give the probe's Saboteur the three
-   Remote Bomb orders H1–H3.
-2. Space, Kuat, about 4.5 min. No orders.
-
-Send back `s7s8_probes\out\<run>\` (`report.txt` first). Cleanup is automatic (`cleanup_s7s8.cmd` after a crash).
-Full instructions, expected answers and the docs/re sections to update: `s7s8_probes\README.md`.
-
----
-
-# Q6 t15 probes (`tools\probe_mod\q6_t15_probes\`)
-
-Roadmap Q6 t15: six retail checks of the Q6 `[port]` rules:
-
-- EliminationLatch (does a GC end for a player that owns nothing);
-- the object-script first-pump draw bound, and whether vanilla `Lua_Script` objects run their scripts;
-- the Perpetual STORY_ELAPSED period;
-- the load-time story resume order;
-- the TR Blood Gulch land end time;
-- the Select All (Ctrl+A) look.
-
-Two sessions:
-
-1. `q6_t15_probes\run_q6.cmd` (vanilla, about 20 min): four probe campaigns (story timing, ELIM A / B / C), then
-   skirmish land Geonosis and space Kuat (you Empire, AI Rebel), with Ctrl+A screenshots.
-2. `q6_t15_probes\run_q6_tr.cmd` (Thrawn's Revenge, 35 to 45 min): TR's GCMenu idle for 3 min, then skirmish land
-   Blood Gulch (you Rebel, idle; AI Empire) until the battle ends.
-
-Send back `q6_t15_probes\out\<run>\` (`report.txt` first), the screenshots and your notes. Cleanup is automatic
-(`cleanup_q6.cmd` after a crash). Full instructions, expected answers and the port's behaviour:
-`q6_t15_probes\README.md`.
+Every other kit in this folder has its own README (how to run it, cleanup, how to read the result). The index of
+kits, the question each one asks and where its findings are recorded is [`docs/PROBES.md`](../../docs/PROBES.md).

@@ -31,6 +31,7 @@ S10 = os.path.join(os.path.dirname(HERE), 's10_map_owners')
 sys.path.insert(0, HERE)
 sys.path.insert(0, S10)
 sys.path.insert(0, os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'common'))
 import ted_owners  # noqa: E402
 
 MOD_NAME = 'A1TacticalProbe'
@@ -40,25 +41,11 @@ CAP_FILES = ('DATA\\XML\\MARKERS.XML', 'DATA\\XML\\PROPS_STORY.XML')
 HOOK = os.path.join(HERE, 'freestore_timing', 'fs_hook.lua')
 
 
-def read_shipped(game, name, source_zip=None):
-    """(bytes, source label) of a shipped Data file: the install in FoC order, or the extracted text zip."""
-    if source_zip:
-        z = zipfile.ZipFile(source_zip)
-        want = name.upper().replace('/', '\\')
-        for n in z.namelist():
-            if n.upper().replace('/', '\\') == want:
-                return z.read(n), source_zip + ':' + n
-        return None, None
-    return ted_owners.GameFiles(game).read(name)
+read_shipped = ted_owners.read_shipped
 
 
 def freestore_text(game, source_zip=None):
-    data, src = read_shipped(game, FREESTORE, source_zip)
-    if data is None:
-        raise SystemExit('shipped BusyTacticalFreeStore.lua not found (game %s, zip %s)' % (game, source_zip))
-    text = data.decode('latin-1').replace('\r\n', '\n')
-    hook = open(HOOK, encoding='ascii').read()
-    return (text.rstrip('\n') + '\n\n' + hook).replace('\n', '\r\n').encode('latin-1'), src
+    return ted_owners.append_to_shipped(game, FREESTORE, open(HOOK, encoding='ascii').read(), source_zip)
 
 
 def caps_table(game, source_zip=None):

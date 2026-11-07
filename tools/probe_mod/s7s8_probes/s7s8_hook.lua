@@ -41,11 +41,6 @@ S78_VICTIM_PLAYER = nil
 S78_VICTIM_FAC = "?"
 S78_HUMAN = nil
 
-if S78_CFG == nil then
-	S78_CFG = { faction = "REBEL", human_faction = "EMPIRE", start_frame = 450, text = false,
-		land = { map = "?", points_ok = false, pts = {} }, space = { map = "?", points_ok = false, pts = {} } }
-end
-
 function S78_Clean(v)
 	local s = tostring(v)
 	s = string.gsub(s, "[^%w%._%-:]", "_")
@@ -1835,28 +1830,28 @@ S78_SCN_BY_NAME = {
 	SPMAT_EDGE4 = S78_ScnSpmatEdge4, IDLE47Q = S78_ScnIdle47Q, IDLE47N = S78_ScnIdle47N,
 }
 
+-- The scenario lists come from S78_CFG.land_list / space_list, which build_s7s8_mod.py always writes. A missing or
+-- empty list, or an unknown name (reported on the first call only), is an ERR record (the run then finishes with no scenario), never a silent default.
 function S78_Scenarios()
-	local names = nil
+	local key = "land_list"
 	if S78_MODE == "Space" then
-		names = S78_CFG.space_list
-	else
-		names = S78_CFG.land_list
+		key = "space_list"
 	end
-	if type(names) == "table" and names[1] then
-		local out = {}
-		for i, n in ipairs(names) do
-			local f = S78_SCN_BY_NAME[n]
-			if f then
-				table.insert(out, f())
-			end
-		end
+	local names = S78_CFG[key]
+	local out = {}
+	if type(names) ~= "table" or names[1] == nil then
+		S78_Rec("ERR", "scn=none|step=list|msg=S78_CFG." .. key .. "_missing_or_empty")
 		return out
 	end
-	if S78_MODE == "Space" then
-		return { S78_ScnMuzzleSpace(), S78_ScnSquad(), S78_ScnEscort() }
+	for i, n in ipairs(names) do
+		local f = S78_SCN_BY_NAME[n]
+		if f then
+			table.insert(out, f())
+		elseif S78_SCN_I == 0 then
+			S78_Rec("ERR", "scn=none|step=list|msg=unknown_scenario_" .. S78_Clean(n))
+		end
 	end
-	return { S78_ScnSpmat(), S78_ScnAtat(), S78_ScnMdu(), S78_ScnSticky(), S78_ScnDt3(), S78_ScnReinf(),
-		S78_ScnMuzzleLand() }
+	return out
 end
 
 -- ---- human track (land): the Saboteur for the Remote_Bomb ground-marker steps --------------------------------------

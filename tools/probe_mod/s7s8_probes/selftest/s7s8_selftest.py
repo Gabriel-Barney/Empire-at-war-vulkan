@@ -4,7 +4,7 @@
   s7s8_selftest.py [--game DIR | --source-zip extracted\\foc_data_text.zip]
 
 1. Lua: the hooked BusyTacticalFreeStore.lua (shipped script + S78_CFG + s7s8_hook.lua, exactly what
-   build_s7s8_mod.py installs) runs under a stock Lua 5.0.2 (build_lua50.cmd builds out\\tools\\lua50.exe), which is
+   build_s7s8_mod.py installs) runs under a stock Lua 5.0.2 (common\\build_lua50.cmd builds tools\\probe_mod\\out\\tools\\lua50.exe), which is
    also the syntax check. The harness plays the engine: Base_Definitions, then the free-store thread (main) resumed on
    a free-store service (every 3rd frame) only when now - last resume > ServiceRate, On_Unit_Service per AI unit
    every 60 frames; a stub object model (Spawn_Unit, Activate_Ability blocks with IsFinished / Result, Despawn,
@@ -36,11 +36,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 REPO = os.path.abspath(os.path.join(ROOT, '..', '..', '..'))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(os.path.dirname(ROOT), 'common'))
+import lua50  # noqa: E402
 import build_s7s8_mod  # noqa: E402
 import s7s8_parse  # noqa: E402
 
 OUT = os.path.join(ROOT, 'out', 'selftest')
-LUA = os.path.join(ROOT, 'out', 'tools', 'lua50.exe')
+LUA = lua50.LUA50
 RECORD_RE = re.compile(r'S78P1\|([A-Z]+)\|([ -~]{0,385}?)\|END')  # = s7s8_reader.RECORD_RE on text
 LAND = ['SPMAT', 'ATAT', 'MDU', 'STICKY', 'DT3', 'REINF', 'MUZZLE_LAND']
 SPACE = ['MUZZLE_SPACE', 'SQUAD', 'ESCORT']
@@ -503,10 +505,8 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     fails = []
     print('1. Lua 5.0.2 harness')
-    if not os.path.exists(LUA):
-        subprocess.run(['cmd', '/c', os.path.join(HERE, 'build_lua50.cmd')], capture_output=True)
-    if not os.path.exists(LUA):
-        print('  FAIL  lua50.exe could not be built (out\\tools\\lua50_build.txt)')
+    if not lua50.find_lua():
+        print('  FAIL  lua50.exe could not be built (%s)' % lua50.BUILD_LOG)
         print('S7S8 SELFTEST FAILED')
         return 1
     cfg = build_s7s8_mod.make_config(a.game, build_s7s8_mod.DEFAULT_LAND_MAP, build_s7s8_mod.DEFAULT_SPACE_MAP,

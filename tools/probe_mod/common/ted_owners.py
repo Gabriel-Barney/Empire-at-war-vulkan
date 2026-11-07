@@ -332,3 +332,31 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# ---- shared by the mod builders (cu18 t09, 2026-11-07: was copied into build_a1 / fow / oi / s7s8_mod.py)
+def read_shipped(game, name, source_zip=None):
+    """(bytes, label) of a shipped Data file: the extracted text zip when given, else the install in FoC order.
+    (None, None) when it is not found."""
+    if source_zip:
+        with zipfile.ZipFile(source_zip) as z:
+            want = name.upper().replace('/', '\\')
+            for n in z.namelist():
+                if n.upper().replace('/', '\\') == want:
+                    return z.read(n), source_zip + ':' + n
+        return None, None
+    if not os.path.isdir(game):
+        return None, None
+    return GameFiles(game).read(name)
+
+
+def append_to_shipped(game, name, tail, source_zip=None):
+    """(bytes, label): the shipped script `name` (latin-1, CRLF) with `tail` appended after one blank line, as the
+    probe kits hook BusyTacticalFreeStore.lua. Exits when the shipped file is not found."""
+    data, src = read_shipped(game, name, source_zip)
+    if data is None:
+        raise SystemExit('shipped %s not found (game %s, zip %s)' % (name.replace('/', '\\').split('\\')[-1], game,
+                                                                     source_zip))
+    text = data.decode('latin-1').replace('\r\n', '\n')
+    out = text.rstrip('\n') + '\n\n' + tail
+    return out.replace('\n', '\r\n').encode('latin-1'), src

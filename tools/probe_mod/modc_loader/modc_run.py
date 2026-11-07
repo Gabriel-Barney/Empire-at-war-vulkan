@@ -27,6 +27,8 @@ import time
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'common'))
+from probe_run import say, running  # noqa: E402
 import build_modc_mod  # noqa: E402
 import modc_cleanup  # noqa: E402
 
@@ -42,15 +44,6 @@ In the game (English text):
      main menu, do not save.
   4. Exit the game. This window then writes the report and removes the probe mod.
 '''
-
-
-def say(*a):
-    print(*a, flush=True)
-
-
-def running(name):
-    r = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq %s' % name, '/NH'], capture_output=True, text=True)
-    return name.lower() in r.stdout.lower()
 
 
 def canary_states(mod):

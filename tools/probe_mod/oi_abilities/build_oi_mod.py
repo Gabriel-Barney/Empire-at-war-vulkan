@@ -12,7 +12,7 @@ What it writes (nothing from the game is stored in the repository):
 and, with --config-out, the same points as JSON for oi_reader.py / oi_parse.py.
 
 Spawn points come from the map file itself (docs/re/TERRAIN_WATER_POST.md §1): the .ted is read from the install
-(FoC file order, tools/probe_mod/s10_map_owners/ted_owners.py), and the script picks, far from every start position
+(FoC file order, tools/probe_mod/common/ted_owners.py), and the script picks, far from every start position
 and inside the playable box:
   mal_land / han_land        a dry Clear patch (no water cell within 200) for the land control MAL and its Han
   mal_shallow / han_shallow  a Water-passable cell (0x10A bit 0x20) 3..10 units under the water plane + dry spot nearby
@@ -34,7 +34,7 @@ from collections import deque
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROBE_MOD = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(PROBE_MOD, 's10_map_owners'))
+sys.path.insert(0, os.path.join(PROBE_MOD, 'common'))
 import ted_owners  # noqa: E402
 
 MOD_NAME = 'OIAbilityProbe'
@@ -57,18 +57,7 @@ HEIGHT_SCALE = 0.048828125
 
 # ---- shipped files -------------------------------------------------------------------------------------------------
 
-def read_shipped(game, name, source_zip=None):
-    """(bytes, label) of a shipped Data file: the extracted text zip when given, else the install in FoC order."""
-    if source_zip:
-        with zipfile.ZipFile(source_zip) as z:
-            want = name.upper().replace('/', '\\')
-            for n in z.namelist():
-                if n.upper().replace('/', '\\') == want:
-                    return z.read(n), source_zip + ':' + n
-        return None, None
-    if not os.path.isdir(game):
-        return None, None
-    return ted_owners.GameFiles(game).read(name)
+read_shipped = ted_owners.read_shipped
 
 
 # ---- map analysis --------------------------------------------------------------------------------------------------
@@ -337,13 +326,8 @@ def lua_config(cfg):
 
 
 def freestore_text(game, cfg, source_zip=None):
-    data, src = read_shipped(game, FREESTORE, source_zip)
-    if data is None:
-        raise SystemExit('shipped BusyTacticalFreeStore.lua not found (game %s, zip %s)' % (game, source_zip))
-    text = data.decode('latin-1').replace('\r\n', '\n')
-    hook = open(HOOK, encoding='ascii').read()
-    out = text.rstrip('\n') + '\n\n' + lua_config(cfg) + '\n' + hook
-    return out.replace('\n', '\r\n').encode('latin-1'), src
+    tail = lua_config(cfg) + '\n' + open(HOOK, encoding='ascii').read()
+    return ted_owners.append_to_shipped(game, FREESTORE, tail, source_zip)
 
 
 def build(game, out, source_zip=None, map_name=DEFAULT_MAP, faction=DEFAULT_FACTION, config_out=None):

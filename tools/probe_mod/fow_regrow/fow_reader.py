@@ -42,6 +42,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'a1_tactical'))
 import a1mem  # noqa: E402  (read-only process access + documented layout, validated by the A1 run 2026-10-31)
+from a1mem import Log, wait_for_game  # noqa: E402
 
 REC_NEEDLE = b'FWR1|'
 SRC_MARKERS = (b'FWRPROBE_SRC_MARK_V1',)
@@ -244,17 +245,6 @@ class FrameProcessor:
 
 # ---- recorder --------------------------------------------------------------------------------------------------------
 
-class Log:
-    def __init__(self, path):
-        self.f = open(path, 'a', encoding='ascii', errors='replace')
-        self.lock = threading.Lock()
-
-    def __call__(self, line):
-        with self.lock:
-            self.f.write(line + '\n')
-            self.f.flush()
-
-
 class Recorder:
     def __init__(self, a, proc, log):
         self.a, self.p, self.log = a, proc, log
@@ -282,11 +272,7 @@ class Recorder:
             self.log('SCAN_ERROR n=%d frame=%s error=%s' % (n, frame, str(e).replace(' ', '_')))
             return
         new = 0
-        for addr, tail in hits[REC_NEEDLE]:
-            m = RECORD_RE.match(tail)
-            if not m:
-                continue
-            text = m.group(0).decode('ascii')
+        for addr, text in a1mem.lua_records(hits[REC_NEEDLE], RECORD_RE):
             if text in self.records:
                 continue
             self.records.add(text)
@@ -404,29 +390,6 @@ class Recorder:
         if (self.frame or 0) >= 90 and time.time() >= self.next_scan:
             self.next_scan = time.time() + self.a.scan_sec
             self.start_scan('periodic')
-
-
-def wait_for_game(a, log):
-    t0 = time.time()
-    ignored = set()
-    while time.time() - t0 < a.wait_process_sec:
-        for pid in a1mem.find_pids():
-            if pid in ignored:
-                continue
-            try:
-                p = a1mem.Proc(pid)
-            except OSError as e:
-                log('OPEN_FAILED pid=%d error=%s' % (pid, str(e).replace(' ', '_')))
-                ignored.add(pid)
-                continue
-            if p.pe_identity() or a.allow_unknown_exe:
-                return p
-            log('IGNORED pid=%d timestamp=%s size_of_image=%s' % (pid, hex(p.timestamp or 0),
-                                                                  hex(p.size_of_image or 0)))
-            ignored.add(pid)
-            p.close()
-        time.sleep(1.0)
-    return None
 
 
 def main():

@@ -61,3 +61,10 @@ it during the following 10 s. Expected: no new lines until about 10 s, then they
    Expected: nothing.
 
 Report each item as matching or not matching, with the screenshot.
+
+## Rerunning a capture
+
+The scripted launcher used for C2 and C3 (`run_plain.py`) was removed on 2026-11-07 (cu18); the screenshots above are
+the results. To rerun with the player's profile protected, take a snapshot with `q2_traces\q2_profile.py snapshot <dir>`
+before starting the unmodified FoC and put it back with `q2_profile.py restore <dir>` afterwards; drive the game with
+`g1_capture\g1_ui.py` if needed.

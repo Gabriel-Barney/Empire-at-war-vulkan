@@ -301,7 +301,7 @@ Skirmish (space, 2 players):
 | `mod\Q2Trace\` | optional Lua probe (vanilla): plot Lua script, `Story_Plots_Sandbox_12U_Empire.xml` with its empty `Lua_Script` set, the galactic equation file plus 4 `Q2_*` equations, `Scripts\Miscellaneous\GameScoring.lua` (original + tactical probe), `Scripts\AI\` copies of three plan scripts (original + plan probe, q2f t09), and the two canary files |
 | `run_lua_probe.cmd` | `run_trace.ps1 -Scenario galactic -LuaProbe` |
 | `q2lua_reader.py` | `run` (started by the run: read-only memory scan for the probe's `Q2L1` records), `summarize` (rebuild the outputs from `lua_reader.log`), `selftest` |
-| `selftest_lua.py` | runs both probe scripts under stock Lua 5.0.2 (`out\tools\lua50.exe`, built with the project MSVC) with stubbed engine calls, and checks that a memory scan of that process finds every record |
+| `selftest_lua.py` | runs both probe scripts under stock Lua 5.0.2 (`tools\probe_mod\out\tools\lua50.exe`, built by `common\build_lua50.cmd`) with stubbed engine calls, and checks that a memory scan of that process finds every record |
 | `q2_ui.py`, `q2_scenes.json`, `refs\` | unattended menu driver (see "Unattended runs") |
 | `q2_profile.py` | `snapshot` / `restore` / `diff <run_dir>`: the player's registry settings and saved-games files |
 | `q2common.ps1` | shared paths, game detection, manifest, install |

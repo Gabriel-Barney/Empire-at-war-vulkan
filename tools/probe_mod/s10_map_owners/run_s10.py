@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""run_s10.py - one S10 map-owner probe session: build + install the mod, start the memory reader, launch FoC with
+"""run_s10.py - HISTORICAL (S10 is done, see README.md): one S10 map-owner probe session: build + install the mod, start the memory reader, launch FoC with
 the mod, wait for the game to exit, write the tables, clean up (always, also after an error or Ctrl+C).
 
   run_s10.py [--game DIR] [--non-interactive] [--no-launch] [--no-popup] [--wait-start-sec N]
@@ -31,6 +31,7 @@ sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'common'))
 import build_mod  # noqa: E402
 import cleanup_s10  # noqa: E402
 import s10_parse  # noqa: E402

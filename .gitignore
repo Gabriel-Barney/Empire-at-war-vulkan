@@ -32,3 +32,9 @@ __pycache__/
 *.actual
 /tools/probe_mod/**/bin/
 /tools/probe_mod/**/*.log
+/tools/probe_mod/**/selftest/work/
+# Generated file-priority probe payloads (build_probe.py writes them; see tools/probe_mod/README.md)
+/tools/probe_mod/v2/Mods/
+/tools/probe_mod/v2/OPTIONAL_*/
+/tools/probe_mod/probeE/Mods/
+/tools/probe_mod/probeE/OPTIONAL_*/

@@ -240,9 +240,8 @@ model engine emulates retail: an unknown equation, or a probe equation that brea
 (`SCRIPT_FAILED <name>` in the test output). The drivers then stop servicing that script, and every Lua test checks that the
 flag stays clear. `math` is nil in every test environment and `debug` in the story and free-store ones. A fault-injection
 story run (`robust_test`) checks that one failing record gives one ERR record and costs nothing else. The Lua part needs
-`lua50.exe`: it is auto-detected at `tools\probe_mod\a1_tactical\out\tools\lua50.exe`; build it with
-`tools\probe_mod\a1_tactical\selftest\build_lua50.cmd`, or pass `--lua` (e.g. `tools\probe_mod\s7s8_probes\out\tools\lua50.exe`
-if that kit built one). Without it the Lua checks are skipped, not passed.
+`lua50.exe`: it is auto-detected at `tools\probe_mod\out\tools\lua50.exe`; build it with
+`tools\probe_mod\common\build_lua50.cmd`, or pass `--lua`. Without it the Lua checks are skipped, not passed.
 
 ## 8. Known limits
 

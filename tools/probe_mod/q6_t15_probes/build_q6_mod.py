@@ -5,7 +5,7 @@
   build_q6_mod.py tr      [--tr DIR] [--out MODDIR]
 
 Nothing from the game or from TR is stored in the repository: the shipped files are read from the install (loose files
-/ MEGs in the FoC order, through tools/probe_mod/s10_map_owners/ted_owners.py) or from TR's folder, and patched.
+/ MEGs in the FoC order, through tools/probe_mod/common/ted_owners.py) or from TR's folder, and patched.
 
 Mods\\Q6T15Probe (vanilla FoC, MODPATH=Mods\\Q6T15Probe):
   Data\\XML\\CampaignFiles.xml                    shipped list + Q6_Probe_Campaigns.xml
@@ -30,7 +30,7 @@ import zipfile
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(os.path.dirname(HERE), 's10_map_owners'))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'common'))
 sys.path.insert(0, os.path.dirname(HERE))
 import ted_owners  # noqa: E402
 from build_probe import dat_read, dat_bytes  # noqa: E402

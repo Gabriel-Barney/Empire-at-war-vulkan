@@ -86,7 +86,7 @@ model in §4.13 is wrong.
 | `oi_reader.py` | Read-only memory recorder. Finds the `OIP1|` records with a heap scan, walks the object id map, and polls the watched objects. Finds the object-to-model pointer offset by a search (`MODELOFF`). `--selftest` |
 | `oi_parse.py` | `parse reader.log --out report.txt --json report.json`. `--selftest` runs a synthetic log built from the port model |
 | `oi_cleanup.py` / `cleanup_oi.cmd` | Deletes `Mods\OIAbilityProbe`, but only when the marker file is there. `--dry-run` |
-| `selftest/oi_selftest.py`, `selftest/build_lua50.cmd` | Offline check, see below |
+| `selftest/oi_selftest.py` (Lua: `../common/build_lua50.cmd`) | Offline check, see below |
 
 How the hook works:
 
@@ -113,7 +113,7 @@ toolchain\venv\Scripts\python.exe -I tools\probe_mod\oi_abilities\build_oi_mod.p
 
 The selftest does three things:
 
-1. It runs the hooked script under a stock Lua 5.0.2 (`out\tools\lua50.exe`), which is also the syntax check. Stub
+1. It runs the hooked script under a stock Lua 5.0.2 (`tools\probe_mod\out\tools\lua50.exe`), which is also the syntax check. Stub
    engine calls and two planted failures check that:
    - the failing API is recorded and the next attempt still runs;
    - a missing type falls back to its alternative;

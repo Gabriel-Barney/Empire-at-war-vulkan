@@ -10,8 +10,8 @@ loads under Lua 5.0, lowers both rates, steps every 3 frames, finds the human, s
 trials (each undo at the wanted decay phase) and 10 top-edge reveals with matching Undo_Reveal calls, samples
 visibility, ends with DONE and no ERR record; the shipped FreeStoreService still runs on its 20 s schedule and the
 shipped On_Unit_Service on its 2 s schedule, never for the probe's own objects.
-Lua: out\\tools\\lua50.exe (built here with the project MSVC at /Od on first use, as a1_tactical does; MSVC /O2
-miscompiles stock 5.0.2) or a1_tactical\\out\\tools\\lua50.exe. Without the toolchain the test is SKIPPED.
+Lua: tools\\probe_mod\\out\\tools\\lua50.exe (common\\lua50.py; built with the project MSVC at /Od on first use, MSVC /O2
+miscompiles stock 5.0.2). Without the toolchain the test is SKIPPED.
 """
 import argparse
 import os
@@ -23,13 +23,12 @@ sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'common'))
+from lua50 import find_lua  # noqa: E402
 import build_fow_mod  # noqa: E402
 
 OUT = os.path.join(HERE, 'out', 'selftest')
 TOOLS = os.path.join(HERE, 'out', 'tools')
-LUA_SRC = ['lapi', 'lcode', 'ldebug', 'ldo', 'ldump', 'lfunc', 'lgc', 'llex', 'lmem', 'lobject', 'lopcodes', 'lparser',
-           'lstate', 'lstring', 'ltable', 'ltm', 'lundump', 'lvm', 'lzio']
-LUA_LIB = ['lauxlib', 'lbaselib', 'ldblib', 'liolib', 'lmathlib', 'loadlib', 'lstrlib', 'ltablib']
 FAILS = []
 
 STUBS = r'''
@@ -146,34 +145,6 @@ def check(cond, what):
     print(('  ok    ' if cond else '  FAIL  ') + what)
     if not cond:
         FAILS.append(what)
-
-
-def find_lua():
-    for p in (os.path.join(TOOLS, 'lua50.exe'), os.path.join(HERE, '..', 'a1_tactical', 'out', 'tools', 'lua50.exe')):
-        if os.path.isfile(p):
-            return p
-    setup = os.path.join(REPO, 'toolchain', 'msvc', 'setup_x64.bat')
-    src = os.path.join(REPO, 'toolchain', 'lua-5.0.2')
-    if not (os.path.isfile(setup) and os.path.isfile(os.path.join(src, 'src', 'lapi.c'))):
-        return None
-    os.makedirs(TOOLS, exist_ok=True)
-    files = ['"%s"' % os.path.join(src, 'src', n + '.c') for n in LUA_SRC] + \
-        ['"%s"' % os.path.join(src, 'src', 'lib', n + '.c') for n in LUA_LIB] + \
-        ['"%s"' % os.path.join(src, 'src', 'lua', 'lua.c')]
-    cmd = 'call "%s" >nul && cl /nologo /Od /W0 /MT /D_CRT_SECURE_NO_WARNINGS /I"%s" /I"%s" %s /Fe"%s"' % (
-        setup, os.path.join(src, 'include'), os.path.join(src, 'src'), ' '.join(files),
-        os.path.join(TOOLS, 'lua50.exe'))
-    bat = os.path.join(TOOLS, 'build_lua50.cmd')
-    with open(bat, 'w') as f:
-        f.write('@echo off\r\n' + cmd + '\r\n')
-    r = subprocess.run(['cmd', '/c', bat], cwd=TOOLS, capture_output=True, text=True)
-    with open(os.path.join(TOOLS, 'lua50_build.txt'), 'w') as f:
-        f.write(r.stdout + r.stderr)
-    for n in os.listdir(TOOLS):
-        if n.endswith('.obj'):
-            os.remove(os.path.join(TOOLS, n))
-    p = os.path.join(TOOLS, 'lua50.exe')
-    return p if os.path.isfile(p) else None
 
 
 def script_text(source_zip):

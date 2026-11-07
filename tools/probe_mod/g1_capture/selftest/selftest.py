@@ -5,10 +5,9 @@
 The fake folder (selftest\\work\\fakegame\\corruption) mimics the real one: StarWarsG.exe is fake_d3d9_game.exe
 (a small D3D9 app, built by build_fake_game.cmd), d3d9.dll/dxgi.dll are the pinned DXVK, d3dx9_43.dll is a dummy
 "proxy" and eaw_modifier_d3dx_original.dll a dummy "original", listed in a patch install JSON like the real one.
-Checks: dry run changes nothing; dxvk / renderdoc / apitrace runs exit 0, produce screenshots / captures / a trace
+Checks: dry run changes nothing; dxvk / apitrace runs exit 0, produce screenshots / captures / a trace
 and analysis, and leave every file byte-identical (recursive SHA-256); a run killed mid-way leaves a manifest that
-`cleanup` restores, and a second `cleanup` is a no-op. Writes selftest\\calibration.json (D3D9 cull mode -> what
-RenderDoc shows after DXVK) and selftest\\work\\selftest_report.json.
+`cleanup` restores, and a second `cleanup` is a no-op. Writes selftest\\work\\selftest_report.json.
 """
 import hashlib
 import json
@@ -131,29 +130,6 @@ def main():
     check("dxvk requested screenshot", any("hud_" in os.path.basename(p) for p in st["screenshots"]))
     check("dxvk log in run folder", any(n.endswith("_d3d9.log") for n in os.listdir(st["run_dir"])))
     check("dxvk patch chain was disabled during the run", any(a["file"] == "d3dx9_43.dll" for a in st["actions"]))
-
-    # RenderDoc: two timed captures + one requested, extraction, analysis
-    st = run_mode("renderdoc", ["--auto-trigger-sec", "2", "4", "--auto-labels", "t2", "t4"],
-                  during=request(["trigger", "--label", "req"], 6))
-    caps = st.get("captures", [])
-    check("renderdoc captures", len(caps) >= 3, ", ".join(c["label"] for c in caps))
-    facts = json.load(open(os.path.join(st["run_dir"], "analysis", "facts.json")))
-    rds = facts.get("renderdoc", {})
-    check("renderdoc extraction + analysis", len(rds) >= 3, "; ".join(facts.get("errors", [])))
-    first = sorted(rds)[0] if rds else None
-    if first:
-        heat = rds[first].get("heat_shift")
-        check("renderdoc heat shift measured", heat is not None and not heat.get("image_is_flat"), json.dumps(heat))
-        summ = json.load(open(os.path.join(st["run_dir"], first)))
-        draws = [d for d in summ["draws"] if not any("lit" in m.lower() for m in d["markers"])]
-        if len(draws) >= 3:
-            calib = {"source": "selftest fake_d3d9_game through DXVK 3.1.1 + RenderDoc 1.46",
-                     "dxvk_cull_map": {"D3DCULL_CW": {"cull": draws[0]["cull"], "front_ccw": draws[0]["front_ccw"]},
-                                       "D3DCULL_CCW": {"cull": draws[1]["cull"], "front_ccw": draws[1]["front_ccw"]},
-                                       "D3DCULL_NONE": {"cull": draws[2]["cull"], "front_ccw": draws[2]["front_ccw"]}}}
-            json.dump(calib, open(os.path.join(HERE, "calibration.json"), "w"), indent=2)
-            m = calib["dxvk_cull_map"]
-            check("cull calibration distinct", len({json.dumps(v, sort_keys=True) for v in m.values()}) == 3, json.dumps(m))
 
     # apitrace: whole-session trace, a marker, then a quit request (graceful close path)
     st = run_mode("apitrace", [], during=None)

@@ -1,10 +1,11 @@
 @echo off
-rem Builds a stock Lua 5.0.2 interpreter (toolchain\lua-5.0.2, project-local MSVC) for s7s8_selftest.py:
-rem out\tools\lua50.exe. Log: out\tools\lua50_build.txt. Exit code 0 = built. /Od: MSVC 14.51 /O2 miscompiles
-rem ltable.c computesizes (engine/lua/CMakeLists.txt), so stock 5.0.2 built at /O2 crashes at start.
+rem Builds the stock Lua 5.0.2 interpreter every probe-kit selftest runs (toolchain\lua-5.0.2, project-local MSVC):
+rem tools\probe_mod\out\tools\lua50.exe. Log: out\tools\lua50_build.txt. Exit code 0 = built. /Od: MSVC 14.51 /O2
+rem miscompiles ltable.c computesizes (engine/lua/CMakeLists.txt), so stock 5.0.2 built at /O2 crashes at start.
+rem Selftests call it through common\lua50.py find_lua() (cu18 t05, 2026-11-07: one copy instead of five).
 setlocal
 set "HERE=%~dp0"
-set "ROOT=%HERE%..\..\..\..\"
+set "ROOT=%HERE%..\..\..\"
 set "LUA=%ROOT%toolchain\lua-5.0.2"
 set "OUT=%HERE%..\out\tools"
 if not exist "%OUT%" mkdir "%OUT%"

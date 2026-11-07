@@ -97,7 +97,7 @@ game's memory). The `Game_Message` lines on screen show the same verdicts.
 |---|---|
 | `run_a1h.cmd` → `a1h_run.py` | build + install, launch (`--no-launch`, `--windowed`), scan, report, cleanup; `--report-only <records.log>` re-reads an earlier run |
 | `cleanup_a1h.cmd` → `a1h_cleanup.py` | idempotent cleanup (`--dry-run`, `--no-pause`) |
-| `build_a1h_mod.py` | builds `Mods\A1hAssembleProbe` (`--game`, `--out`), reusing `s10_map_owners/ted_owners.py` (install reader) and `build_probe.py` (`.dat` writer) |
+| `build_a1h_mod.py` | builds `Mods\A1hAssembleProbe` (`--game`, `--out`), reusing `common/ted_owners.py` (install reader) and `build_probe.py` (`.dat` writer) |
 | `a1h_story.lua` | the story script (cases, records, verdicts) |
 | `selftest_a1h.py` | offline test: the story under stock Lua 5.0.2 with the game's PG library and two engine models, then the report |
 
@@ -105,8 +105,8 @@ All Python runs with the project venv: `toolchain\venv\Scripts\python.exe -I <sc
 
 ## Offline validation (2026-11-02)
 
-- `selftest_a1h.py --lua tools\probe_mod\a1_tactical\out\tools\lua50.exe` (built by
-  `a1_tactical\selftest\build_lua50.cmd`) printed **A1H SELFTEST OK**:
+- `selftest_a1h.py --lua tools\probe_mod\out\tools\lua50.exe` (built by
+  `common\build_lua50.cmd`) printed **A1H SELFTEST OK**:
   - "launch" model (the port's rule): LAUNCHED for C, A, B and D;
   - "keep" model (only orbit units join): NOFLEET for C, A and B, PARTIAL for D;
   - the state machine reaches `A1H_Begin`, there are 6 spawns, B spawns for Underworld at Byss, and every verdict

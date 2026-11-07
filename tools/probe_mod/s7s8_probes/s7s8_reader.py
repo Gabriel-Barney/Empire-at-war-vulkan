@@ -47,6 +47,7 @@ A1 = os.path.join(os.path.dirname(HERE), 'a1_tactical')
 sys.path.insert(0, HERE)
 sys.path.insert(0, A1)
 import a1mem  # noqa: E402
+from a1mem import Log, kv, wait_for_game, plausible_ptr, model_candidates, choose_model_offset  # noqa: E402
 
 REC_NEEDLE = b'S78P1|'
 SRC_MARKERS = (b'S78PROBE_SRC_MARK_V1',)
@@ -69,94 +70,8 @@ RADIUS = {1: 1300.0, 2: 3800.0}
 MAX_WATCH = 700
 
 
-def kv(**k):
-    return ' '.join('%s=%s' % (a, b) for a, b in k.items())
-
-
 def lua_records(hits):
-    out, seen = [], set()
-    for addr, tail in hits:
-        m = RECORD_RE.match(tail)
-        if not m:
-            continue
-        text = m.group(0).decode('ascii')
-        if text not in seen:
-            seen.add(text)
-            out.append((addr, text))
-    return out
-
-
-def plausible_ptr(q):
-    return q is not None and 0x10000 <= q < 0x7FFF00000000 and q % 8 == 0
-
-
-# ---- model pointer search (as oi_reader.py) ------------------------------------------------------------------------
-
-def slot_ok(b, off=SLOT):
-    if len(b) < off + 0x20:
-        return None
-    clip, crc, typ, mode, var, fr, sp = struct.unpack_from('<QIiIiff', b, off)
-    if not plausible_ptr(clip) or crc == 0:
-        return None
-    if not (0 <= typ < ANIM_TYPES) or mode not in (0, 1, 2) or not (0 <= var < 16):
-        return None
-    if not (math.isfinite(fr) and 0.0 <= fr < 5000.0 and math.isfinite(sp) and 0.0 < sp <= 20.0):
-        return None
-    return typ, mode, fr, sp
-
-
-def time_ok(b, sim_t):
-    if sim_t is None or len(b) < MODEL_TIME + 8:
-        return False
-    f32 = struct.unpack_from('<f', b, MODEL_TIME)[0]
-    f64 = struct.unpack_from('<d', b, MODEL_TIME)[0]
-    return (math.isfinite(f32) and abs(f32 - sim_t) < 2.0) or (math.isfinite(f64) and abs(f64 - sim_t) < 2.0)
-
-
-def model_candidates(read, obj, sim_t, span=0x400, span2=0x200):
-    out = {}
-    ob = read(obj, span)
-    if not ob:
-        return out
-    firsts = []
-    for off in range(0, span, 8):
-        q = struct.unpack_from('<Q', ob, off)[0]
-        if not plausible_ptr(q):
-            continue
-        firsts.append((off, q))
-        b = read(q, MODEL_TIME + 8)
-        if b and slot_ok(b):
-            out[(off, None)] = 2 + (2 if time_ok(b, sim_t) else 0)
-    if any(v >= 4 for v in out.values()):
-        return out
-    for off, q in firsts:
-        qb = read(q, span2)
-        if not qb:
-            continue
-        for off2 in range(0, span2, 8):
-            r = struct.unpack_from('<Q', qb, off2)[0]
-            if not plausible_ptr(r):
-                continue
-            b = read(r, MODEL_TIME + 8)
-            if b and slot_ok(b):
-                out[(off, off2)] = 1 + (2 if time_ok(b, sim_t) else 0)
-    return out
-
-
-def choose_model_offset(per_object):
-    tally = {}
-    for cands in per_object:
-        for k, s in cands.items():
-            t = tally.setdefault(k, [0, 0])
-            t[0] += 1
-            t[1] += s
-    if not tally:
-        return None
-    k, (n, s) = max(tally.items(), key=lambda it: (it[1][0], it[1][1], -(it[0][0]), -(it[0][1] or 0)))
-    need = 2 if len(per_object) >= 2 else 1
-    if n < need or (n == 1 and s < 4):
-        return None
-    return k, n, s
+    return a1mem.lua_records(hits, RECORD_RE)
 
 
 # ---- extra fields --------------------------------------------------------------------------------------------------
@@ -227,18 +142,6 @@ def extras(read, ob, known, team_how):
 # ---- recorder ------------------------------------------------------------------------------------------------------
 
 RVA_SYNC_RNG = 0xA13E24  # synced LCG state (image RVA of 0x140a13e24)
-
-
-class Log:
-    def __init__(self, path):
-        self.f = open(path, 'a', encoding='ascii', errors='replace')
-        self.lock = threading.Lock()
-        self.t0 = time.time()
-
-    def __call__(self, line):
-        with self.lock:
-            self.f.write(line + '\n')
-            self.f.flush()
 
 
 class Recorder:
@@ -539,37 +442,6 @@ class Recorder:
             self.start_scan('periodic')
 
 
-def wait_for_game(a, log):
-    t0 = time.time()
-    ignored = set()
-    open_fails = {}
-    while time.time() - t0 < a.wait_process_sec:
-        for pid in a1mem.find_pids():
-            if pid in ignored:
-                continue
-            try:
-                p = a1mem.Proc(pid)
-            except OSError as e:
-                # s78g 2026-11-05: a process caught while still starting fails EnumProcessModulesEx (error 299,
-                # partial copy); retry instead of ignoring it for good, give up after 60 failures.
-                n = open_fails.get(pid, 0) + 1
-                open_fails[pid] = n
-                if n == 1 or n == 60:
-                    log('OPEN_FAILED ' + kv(pid=pid, n=n, error=str(e).replace(' ', '_')))
-                if n >= 60:
-                    ignored.add(pid)
-                continue
-            if p.pe_identity() or a.allow_unknown_exe:
-                return p
-            log('IGNORED ' + kv(pid=pid, timestamp=hex(p.timestamp or 0), size_of_image=hex(p.size_of_image or 0)))
-            ignored.add(pid)
-            p.close()
-        time.sleep(1.0)
-    return None
-
-
-# ---- selftest ------------------------------------------------------------------------------------------------------
-
 class FakeMem:
     def __init__(self):
         self.mem = {}
@@ -597,23 +469,6 @@ def selftest():
     got = lua_records([(0x1000 + i, rec[i:i + 400])])
     check(len(got) == 1 and got[0][1].endswith('|END') and 'blk=deploy1' in got[0][1], 'record regex')
     check(lua_records([(0, b'S78P1|P|f=1|no end here')]) == [], 'unterminated record ignored')
-
-    fm = FakeMem()
-
-    def model(t_sim, typ, fr):
-        b = bytearray(0x200)
-        struct.pack_into('<QIiIiff', b, SLOT, 0x300000, 0xABCD, typ, 1, 0, fr, 1.0)
-        struct.pack_into('<f', b, MODEL_TIME, t_sim)
-        return b
-
-    for base, mdl in ((0x100000, 0x200000), (0x110000, 0x210000)):
-        o = bytearray(0x400)
-        struct.pack_into('<Q', o, 0x120, mdl)
-        fm.put(base, o)
-        fm.put(mdl, model(100.0, 25, 3.0))
-    best = choose_model_offset([model_candidates(fm.read, 0x100000, 100.0),
-                                model_candidates(fm.read, 0x110000, 100.0)])
-    check(best is not None and best[0] == (0x120, None), 'model pointer found at +0x120 (%s)' % (best,))
 
     # extras: object 0x500000 (id 7) with a locomotor pack in state 0x19, a targeting pack aimed at object
     # 0x600000 (id 9) in state 4, inside container 0x700000 (id 11) whose team data (pointer) targets id 9

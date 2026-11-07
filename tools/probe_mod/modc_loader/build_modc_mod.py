@@ -4,7 +4,7 @@
   build_modc_mod.py [--game DIR] [--out MODDIR] [--source-zip extracted\\foc_data_text.zip] [--no-text]
 
 Nothing from the game is stored in the repository: CampaignFiles.xml, GameObjectFiles.xml and MasterTextFile_English.dat
-are read from the install (loose files / MEGs in the FoC order, through tools/probe_mod/s10_map_owners/ted_owners.py)
+are read from the install (loose files / MEGs in the FoC order, through tools/probe_mod/common/ted_owners.py)
 and patched. --source-zip reads the two XML lists from a text zip instead (offline check; the zip has no .dat, so pass
 --no-text with it).
 
@@ -33,7 +33,7 @@ import zipfile
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(os.path.dirname(HERE), 's10_map_owners'))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'common'))
 sys.path.insert(0, os.path.dirname(HERE))
 import ted_owners  # noqa: E402
 from build_probe import dat_read, dat_bytes  # noqa: E402

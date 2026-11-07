@@ -3,8 +3,8 @@ r"""selftest_a2f.py - offline check of the a2f t07 budget probe (no game needed)
 
   selftest_a2f.py [--lua <lua50.exe>] [--out DIR]
 
-  --lua  a stock Lua 5.0.2 interpreter (tools\probe_mod\a1_tactical\selftest\build_lua50.cmd builds one at
-         tools\probe_mod\a1_tactical\out\tools\lua50.exe, which is the default). Without it the Lua checks are skipped.
+  --lua  a stock Lua 5.0.2 interpreter (tools\probe_mod\common\build_lua50.cmd builds one at
+         tools\probe_mod\out\tools\lua50.exe, which is the default). Without it the Lua checks are skipped.
 
 Checks (against extracted/foc_data_text.zip, the shipped FoC text data):
   spec      every shipped equation the probe evaluates exists; none of the galactic equation files contains the '#'
@@ -46,6 +46,8 @@ sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'common'))
+import lua50  # noqa: E402
 import a2f_cleanup  # noqa: E402
 import a2f_report  # noqa: E402
 import a2f_watch  # noqa: E402
@@ -997,11 +999,7 @@ def main():
     a = ap.parse_args()
     lua = a.lua
     if not lua:
-        for cand in (os.path.join(ROOT, 'tools', 'probe_mod', 'a1_tactical', 'out', 'tools', 'lua50.exe'),
-                     os.path.join(os.path.dirname(ROOT), 'a1_tactical', 'out', 'tools', 'lua50.exe')):
-            if os.path.isfile(cand):
-                lua = cand
-                break
+        lua = lua50.find_lua(build=False)
     out = a.out or tempfile.mkdtemp(prefix='a2f_selftest_')
     os.makedirs(out, exist_ok=True)
     if not os.path.isfile(ZIP):
@@ -1026,7 +1024,7 @@ def main():
             f.write(open(os.path.join(out, 'percept_E_records.txt')).read())
         a2j_report_test(out, os.path.join(out, 'percept_U_records.txt'), sc)
     else:
-        print('SKIPPED the Lua checks: no lua50.exe (tools\\probe_mod\\a1_tactical\\selftest\\build_lua50.cmd builds one)')
+        print('SKIPPED the Lua checks: no lua50.exe (tools\\probe_mod\\common\\build_lua50.cmd builds one)')
     bad = [n for n, ok in RESULTS if not ok]
     print('A2F SELFTEST %s (%d checks, %d failed) output: %s' % ('OK' if not bad else 'FAILED', len(RESULTS), len(bad), out))
     return 0 if not bad else 1

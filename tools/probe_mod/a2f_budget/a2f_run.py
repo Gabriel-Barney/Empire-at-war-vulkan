@@ -35,6 +35,8 @@ sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROBE_MOD = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'common'))
+from probe_run import say, running, set_state, scan_once  # noqa: E402
 sys.path.insert(0, os.path.join(PROBE_MOD, 'a1_tactical'))
 sys.path.insert(0, os.path.join(PROBE_MOD, 'q2_traces'))
 import a2f_cleanup  # noqa: E402
@@ -61,43 +63,6 @@ STEPS = r'''
     (a2j t04: the 30-minute run). Then Esc > Quit to the main menu > Quit. Do not save the campaign. The run finishes by
     itself (A2F_RUN_DONE exit=<n>).
 '''
-
-
-def say(*a):
-    print(*a, flush=True)
-
-
-def running(name):
-    r = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq %s' % name, '/NH'], capture_output=True, text=True)
-    return name.lower() in r.stdout.lower()
-
-
-def set_state(where, **kv):
-    with open(os.path.join(where, 'run_status.txt'), 'w') as f:
-        for k, v in kv.items():
-            f.write('%s=%s\n' % (k, v))
-        f.write('time=%s\n' % time.strftime('%Y-%m-%d %H:%M:%S'))
-
-
-def scan_once(proc, seen, out):
-    """One heap scan; appends records not seen before to `out`. Returns (new records, stats)."""
-    hits, stats = proc.scan([NEEDLE])
-    new = 0
-    for _, tail in hits[NEEDLE]:
-        m = RECORD_RE.match(tail)
-        if not m:
-            continue
-        try:
-            text = m.group(0).decode('ascii')
-        except UnicodeDecodeError:
-            continue                          # a stale heap fragment with garbage bytes (2026-11-05 run 191238)
-        if text in seen:
-            continue
-        seen.add(text)
-        out.write(text + '\n')
-        new += 1
-    out.flush()
-    return new, stats
 
 
 def canary_status(mod, percept=True):
@@ -204,7 +169,7 @@ def main():
         seen = set()
         with open(records_path, 'w') as log:
             while proc.alive():
-                new, st = scan_once(proc, seen, log)
+                new, st = scan_once(proc, NEEDLE, RECORD_RE, seen, log)
                 info['scans'] += 1
                 if new:
                     say('  +%d records (%d total, %.0f MB scanned); watcher lines %d' % (
