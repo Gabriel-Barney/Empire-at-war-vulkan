@@ -240,6 +240,5 @@ double MiniaudioBackend::output_latency_seconds() const {  // OI host
 
 uint32_t MiniaudioBackend::sample_rate() const { return ma_engine_get_sample_rate(&impl_->engine); }
 size_t MiniaudioBackend::cached_samples() const { return impl_->cache.size(); }
-const std::string& MiniaudioBackend::last_error() const { return impl_->error; }
 
 }  // namespace alamo::audio

@@ -185,7 +185,7 @@ void test_fake_install() {
 
     alamo::vfs::VfsConfig cfg;
     cfg.foc_root = alamo::path_to_utf8(FOC);
-    cfg.mod_paths = {alamo::path_to_utf8(MOD)};
+    cfg.mod_search = {{alamo::vfs::ModSearchEntry::Kind::Path, alamo::path_to_utf8(MOD)}};
     cfg.eaw_root = std::string();
     std::string err;
     auto v = alamo::vfs::Vfs::create(cfg, &err);
@@ -269,7 +269,7 @@ void test_map_lists_skip_empty() {
         alamo::game::GameData d;
         alamo::vfs::VfsConfig cfg;
         cfg.foc_root = alamo::path_to_utf8(FOC);
-        if (with_mod) cfg.mod_paths = {alamo::path_to_utf8(MOD)};
+        if (with_mod) cfg.mod_search = {{alamo::vfs::ModSearchEntry::Kind::Path, alamo::path_to_utf8(MOD)}};
         cfg.eaw_root = std::string();
         std::string err;
         auto v = alamo::vfs::Vfs::create(cfg, &err);

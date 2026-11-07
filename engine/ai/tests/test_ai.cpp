@@ -1165,7 +1165,7 @@ static void tr_seed_roles(const std::string& foc_data) {
     }
     vfs::VfsConfig cfg;
     cfg.foc_root = foc_data;
-    cfg.mod_paths = {tr};
+    cfg.mod_search = {{vfs::ModSearchEntry::Kind::Path, tr}};
     std::string err;
     auto v = vfs::Vfs::create(cfg, &err);
     if (!v) {

@@ -264,22 +264,22 @@ VkQueueFamilyProperties fam(VkQueueFlags flags, uint32_t count = 1, VkExtent3D g
 
 void test_queue_selection() {
     constexpr VkQueueFlags G = VK_QUEUE_GRAPHICS_BIT, C = VK_QUEUE_COMPUTE_BIT, T = VK_QUEUE_TRANSFER_BIT;
-    {  // AMD-like: universal, async compute, SDMA
+    {  // AMD-like: universal, async compute (not used), SDMA
         const VkQueueFamilyProperties f[] = {fam(G | C | T), fam(C | T, 4), fam(T, 2)};
         const QueueFamilies q = select_queue_families(f, {});
-        CHECK(q.graphics == 0 && q.compute == 1 && q.transfer == 2);
-        const QueueFamilies q2 = select_queue_families(f, {}, false, false);
-        CHECK(q2.graphics == 0 && q2.compute == 0 && q2.transfer == 0);
+        CHECK(q.graphics == 0 && q.transfer == 2);
+        const QueueFamilies q2 = select_queue_families(f, {}, false);
+        CHECK(q2.graphics == 0 && q2.transfer == 0);
     }
     {  // single universal family
         const VkQueueFamilyProperties f[] = {fam(G | C | T, 16)};
         const QueueFamilies q = select_queue_families(f, {});
-        CHECK(q.graphics == 0 && q.compute == 0 && q.transfer == 0);
+        CHECK(q.graphics == 0 && q.transfer == 0);
     }
     {  // transfer family with coarse granularity is not used; graphics-only family loses to universal
         const VkQueueFamilyProperties f[] = {fam(G | T), fam(G | C | T), fam(T, 1, {8, 8, 1})};
         const QueueFamilies q = select_queue_families(f, {});
-        CHECK(q.graphics == 1 && q.transfer == 1 && q.compute == 1);
+        CHECK(q.graphics == 1 && q.transfer == 1);
     }
     {  // presentation restricts the graphics family
         const VkQueueFamilyProperties f[] = {fam(G | C | T), fam(G | C | T)};
@@ -2084,11 +2084,11 @@ int run_gpu() {
         std::printf("SKIP alamo_rhi gpu: no suitable Vulkan 1.3 device\n");
         return 0;
     }
-    std::printf("device: %s, api %u.%u.%u, validation %s%s, async compute %s, transfer queue %s, BC %s\n",
+    std::printf("device: %s, api %u.%u.%u, validation %s%s, transfer queue %s, BC %s\n",
                 g.ctx.caps().name.c_str(), VK_API_VERSION_MAJOR(g.ctx.caps().api_version),
                 VK_API_VERSION_MINOR(g.ctx.caps().api_version), VK_API_VERSION_PATCH(g.ctx.caps().api_version),
                 g.ctx.validation_enabled() ? "on" : "off", strict ? " (required)" : "",
-                g.ctx.has_async_compute() ? "yes" : "no", g.ctx.has_transfer_queue() ? "yes" : "no",
+                g.ctx.has_transfer_queue() ? "yes" : "no",
                 g.ctx.caps().texture_bc ? "yes" : "no");
     CHECK(!strict || g.ctx.validation_enabled());
     if (g.ctx.validation_enabled()) {

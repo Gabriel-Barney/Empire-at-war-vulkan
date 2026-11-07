@@ -272,7 +272,7 @@ struct LoadOptions {
     SamplerKey engine_sampler{};
     // When the best technique has no hot-set program but a FIXEDFUNCTION technique exists, use
     // the FF technique through the FF ubershader. Off by default: such passes are now
-    // ProgramStatus::Translated (track B, translate_pass()).
+    // ProgramStatus::Translated (track B, materials::translate_pass() in translated.hpp: on demand in worker jobs, never at load).
     bool ff_fallback_for_untranslated = false;
     // Overrides _ALAMO_RENDER_PHASE (e.g. effects without metadata drawn by the engine).
     std::optional<RenderPhase> phase_override;
@@ -342,12 +342,6 @@ public:
     const EffectLoadOrder& load_order() const { return order_; }
     uint32_t effect_load_rank(const MaterialEffect& e) const { return order_.rank(e); }
     uint32_t effect_load_rank(std::string_view effect) const { return order_.rank(effect); }
-    // Track B on demand (worker jobs; never at load): see translated.hpp translate_pass().
-    static std::shared_ptr<const TranslatedProgram> translate_pass(const ResolvedPass& pass, const shaderxlat::RuntimeDxc& dxc,
-                                                                   const shaderxlat::ShaderCache* cache,
-                                                                   std::string* err = nullptr) {
-        return materials::translate_pass(pass, dxc, cache, err);
-    }
 
     const LoadOptions& options() const { return options_; }
 

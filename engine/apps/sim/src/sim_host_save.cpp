@@ -594,7 +594,7 @@ bool SimHost::load(const SaveFile& in, std::string* err, LoadReport* report) {
                                                               std::to_string(in.tick);
     if (!rep.ok()) return finish(false);
     // The CRC log restarts at the loaded frame: the next tick first records the loaded state (tick_once).
-    recorder_ = std::make_unique<jobs::CrcRecorder>(sched_, registry_, cfg_.parallel_crc);
+    recorder_ = std::make_unique<jobs::CrcRecorder>(*js_, registry_, cfg_.parallel_crc);
     if (story_) story_->set_command_pipeline(pipeline_.get());
     return finish(true);
 }

@@ -22,10 +22,9 @@ struct CacheKey {
     uint64_t options_key = 0;     // TranslateOptions::key()
     uint32_t translator_version = kTranslatorVersion;
     std::string compiler;         // RuntimeDxc::version() or the offline compiler's identity
-    uint64_t source_hash = 0;     // source_hash() of the emitted HLSL + DXC arguments (0: not source-keyed)
+    uint64_t source_hash = 0;     // source_hash() of the emitted HLSL + DXC arguments
 
-    static CacheKey make(std::span<const uint8_t> bytecode, const TranslateOptions& options, std::string_view compiler);
-    // Preferred: also keys on the translation's HLSL text and dxc_arguments(t), so a translator or
+    // Keys on the bytecode, the options and the translation's HLSL text + dxc_arguments(t), so a translator or
     // argument change can never return stale SPIR-V even without a kTranslatorVersion bump.
     static CacheKey make(std::span<const uint8_t> bytecode, const TranslateOptions& options, std::string_view compiler,
                          const Translation& t);

@@ -43,8 +43,6 @@ uint32_t land_zone_node_cost(double threat_sum) {
     return static_cast<uint32_t>(v) / 100u;
 }
 
-uint32_t default_zone_edge_weight(const HintZone& a, const HintZone& b) { return land_zone_edge_weight(a, b, 0); }
-
 int64_t ZoneLocator::cell_of(float x, float y) {
     const float fx = (x + 10.0f) / 20.0f, fy = (y + 10.0f) / 20.0f;
     if (!(fx > -1.0f) || !(fy > -1.0f) || !(fx < 65536.0f) || !(fy < 65536.0f)) return -1;  // NaN / outside u16 cells

@@ -42,7 +42,6 @@ public:
     uint64_t read_mix(float* out, uint64_t frames);
     uint32_t sample_rate() const;
     size_t cached_samples() const;
-    const std::string& last_error() const;
 
     struct Impl;
 

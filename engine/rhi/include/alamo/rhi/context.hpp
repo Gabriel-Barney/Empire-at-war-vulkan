@@ -7,9 +7,9 @@
 // (that can present when ContextDesc::presentation is set). Discrete GPUs are preferred, then
 // integrated, then the largest device-local heap. ALAMO_VK_DEVICE=<index> overrides the choice.
 //
-// Queues: graphics (+present), compute and transfer. Compute/transfer use dedicated families when
-// the device has them (AMD: async compute + SDMA) and otherwise alias the graphics queue; the
-// accessors always return a usable Queue. Queue::submit() locks a per-VkQueue mutex, so several
+// Queues: graphics (+present) and transfer. Transfer uses a dedicated family when the device has
+// one (AMD: SDMA) and otherwise aliases the graphics queue; the accessors always return a usable
+// Queue. (Compute work runs on the graphics queue: no dedicated async-compute queue is created.) Queue::submit() locks a per-VkQueue mutex, so several
 // threads (frame loop, upload workers) may submit to the same queue.
 //
 // Validation: VK_LAYER_KHRONOS_validation is enabled only when the loader lists it (the loader
@@ -35,7 +35,6 @@ struct ContextDesc {
     const char* app_name = "alamo";
     Validation validation = Validation::IfAvailable;
     bool presentation = false;   // VK_KHR_surface (+ win32) and VK_KHR_swapchain; graphics queue must present
-    bool use_async_compute = true;   // use a dedicated compute family when present
     bool use_transfer_queue = true;  // use a dedicated transfer family when present
     int device_index = -1;           // -1: automatic (env ALAMO_VK_DEVICE overrides)
 };
@@ -53,13 +52,11 @@ struct Queue {
 // Pure queue-family choice, exposed for tests. present_ok may be empty (= every family presents).
 struct QueueFamilies {
     uint32_t graphics = UINT32_MAX;
-    uint32_t compute = UINT32_MAX;   // == graphics when no dedicated compute family
     uint32_t transfer = UINT32_MAX;  // == graphics when no usable dedicated transfer family
     bool valid() const { return graphics != UINT32_MAX; }
 };
 QueueFamilies select_queue_families(std::span<const VkQueueFamilyProperties> families,
-                                    std::span<const bool> present_ok, bool want_compute = true,
-                                    bool want_transfer = true);
+                                    std::span<const bool> present_ok, bool want_transfer = true);
 
 struct DeviceCaps {
     std::string name;
@@ -112,9 +109,7 @@ public:
     const VkPhysicalDeviceMemoryProperties& memory_properties() const { return mem_props_; }
 
     const Queue& graphics() const { return queues_[0]; }
-    const Queue& compute() const { return queues_[slot_compute_]; }
     const Queue& transfer() const { return queues_[slot_transfer_]; }
-    bool has_async_compute() const { return slot_compute_ != 0; }
     bool has_transfer_queue() const { return slot_transfer_ != 0; }
     bool presentation_enabled() const { return presentation_; }
     bool instance_extension_enabled(const char* name) const;
@@ -155,9 +150,9 @@ private:
     VkPhysicalDeviceMemoryProperties mem_props_{};
     QueueFamilies families_{};
 
-    Queue queues_[3];  // [0] graphics, then dedicated compute / transfer when present
-    std::unique_ptr<std::mutex> queue_mutex_[3];
-    uint32_t slot_compute_ = 0, slot_transfer_ = 0, queue_count_ = 1;
+    Queue queues_[2];  // [0] graphics, then the dedicated transfer queue when present
+    std::unique_ptr<std::mutex> queue_mutex_[2];
+    uint32_t slot_transfer_ = 0, queue_count_ = 1;
 
     bool presentation_ = false;
     bool validation_ = false;

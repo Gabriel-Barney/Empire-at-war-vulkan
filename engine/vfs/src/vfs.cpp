@@ -85,7 +85,8 @@ fs::path find_child_ci(const fs::path& dir, std::string_view name) {
     return best.empty() ? fs::path() : dir / path_from_utf8(best);
 }
 
-// Resolves a host path whose components may differ in case from the disk (Linux only matters).
+// Resolves a host path whose components may differ in case from the disk (only matters on
+// case-sensitive directories, e.g. WSL-enabled NTFS folders).
 // Returns the input unchanged if it already exists or cannot be resolved.
 fs::path resolve_ci(const std::string& host) {
     const fs::path p = path_from_utf8(host);
@@ -132,7 +133,7 @@ struct LooseRoot {
             std::string key = std::string(kDataPrefix) + normalize_path(path_to_utf8(rel));
             std::string host = path_to_utf8(d / rel);
             auto [pos, inserted] = index.emplace(std::move(key), host);
-            // Case-only duplicates (Linux): keep the smallest host path, deterministically.
+            // Case-only duplicates (case-sensitive directories): keep the smallest host path, deterministically.
             if (!inserted && host < pos->second) pos->second = std::move(host);
         }
     }
@@ -464,7 +465,7 @@ std::unique_ptr<Vfs> Vfs::create(const VfsConfig& cfg, std::string* err) {
     }
 
     // One ordered mod search list (Q14): mod_search in order (STEAMMOD ids resolved through the
-    // caller's resolver; unresolved ids add nothing, like the original), then mod_paths.
+    // caller's resolver; unresolved ids add nothing, like the original).
     SteamModResolver steam_resolver;  // built on the first STEAMMOD= entry only (no disk / registry reads otherwise)
     bool steam_resolver_ready = false;
     for (const ModSearchEntry& e : cfg.mod_search) {
@@ -488,11 +489,6 @@ std::unique_ptr<Vfs> Vfs::create(const VfsConfig& cfg, std::string* err) {
         }
         impl->mod_dirs.push_back(std::move(*dir));
         impl->mod_labels.push_back("STEAMMOD=" + e.value);
-    }
-    for (const std::string& m : cfg.mod_paths) {
-        if (m.empty()) continue;
-        impl->mod_dirs.push_back(m);
-        impl->mod_labels.emplace_back("mod_paths");
     }
     impl->mods.resize(impl->mod_dirs.size());
     for (size_t i = 0; i < impl->mod_dirs.size(); ++i) {

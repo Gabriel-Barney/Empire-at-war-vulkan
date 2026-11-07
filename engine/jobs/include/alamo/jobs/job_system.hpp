@@ -9,10 +9,10 @@
 //     (function pointer + context + two u32 + counter + priority), so submitting never
 //     heap-allocates except the deque's own block growth. spawn() allocates once (the closure).
 //   - Background priority: one shared FIFO that idle workers take from. Priority is inherited:
-//     anything submitted (incl. parallel_for helpers, TaskGraph nodes, spawn) from inside a
+//     anything submitted (incl. parallel_for helpers, spawn) from inside a
 //     background job of this system is background too. A thread that is NOT inside a
 //     background job never runs somebody else's background work while it waits, so a short
-//     parallel_for / TaskGraph::run / Deferred::sync on the sim thread cannot get stuck running
+//     parallel_for / Deferred::sync on the sim thread cannot get stuck running
 //     chunks of a long AI recompute. wait(c) does run c's *own* background jobs if they have
 //     not started yet (also if they are queued after the waiter went to sleep), which makes
 //     background work progress in serial mode. A thread inside a background job may run any
@@ -20,7 +20,7 @@
 //     Limitation: once a background job has started on a worker, a foreground thread waiting
 //     on it does not help with that job's nested (background) chunks.
 //
-// Waiting helps: wait()/help_while() execute queued foreground jobs while the condition holds,
+// Waiting helps: wait() executes queued foreground jobs while the condition holds,
 // so nested parallel_for / wait inside a job cannot deadlock (as long as the awaited work is
 // in the pool, which it always is for parallel_for).
 //
@@ -33,7 +33,7 @@
 // scratch arena (see scratch.hpp): scratch allocations made inside are released afterwards.
 //
 // DEADLOCK RULE: never hold a (non-recursive) mutex across a nested parallel_for, wait(),
-// help_while(), TaskGraph::run or Deferred::sync. Waits *help*: the waiting thread may run any
+// or Deferred::sync. Waits *help*: the waiting thread may run any
 // other queued job, and if that job takes the same mutex the thread deadlocks on itself.
 // Take locks inside the chunk body, or collect results per index and commit serially.
 //
@@ -135,19 +135,6 @@ public:
     // captured exception (if any) and clears it.
     void wait(JobCounter& counter);
 
-    // Execute queued jobs (foreground; plus background when called from inside a background
-    // job) while keep_waiting() is true; sleeps when there is nothing to do. A sleeping helper
-    // is woken by job pushes, by any JobCounter reaching zero, and by notify_waiters(): whoever
-    // makes keep_waiting() false must cause one of those (after the change, which must be made
-    // with seq_cst atomics or under a lock that keep_waiting also takes). keep_waiting may be
-    // called under an internal lock: keep it cheap and non-blocking.
-    void help_while(FunctionRef<bool()> keep_waiting);
-    // Wake threads sleeping in help_while()/wait() so they re-check their condition.
-    void notify_waiters();
-
-    // Pop and run one foreground job if any is queued. Returns false if none was available.
-    bool try_run_one();
-
     // fn(begin, end) over [0, count) in chunks of `grain` (0 = automatic). Chunk boundaries are
     // multiples of grain. The calling thread participates. Returns after every chunk finished.
     // Satisfies alamo::RangeFn's contract (see core/parallel.hpp).
@@ -176,7 +163,13 @@ private:
     bool pop_background(Job& out);
     bool claim_background(const JobCounter& counter, Job& out);
     void execute(const Job& job, uint32_t self);
+    // Execute queued jobs (foreground; plus background when called from inside a background
+    // job) while keep_waiting() is true; sleeps when there is nothing to do. A sleeping helper
+    // is woken by job pushes and by any JobCounter reaching zero (notify_waiters()). keep_waiting
+    // may be called under an internal lock: keep it cheap and non-blocking.
     void help_loop(FunctionRef<bool()> keep_waiting, JobCounter* claim);
+    // Wake threads sleeping in wait() so they re-check their condition.
+    void notify_waiters();
     void worker_main(uint32_t slot);
 
     uint32_t workers_ = 0;
@@ -189,7 +182,7 @@ private:
 
     std::mutex sleep_mutex_;
     std::condition_variable work_cv_;  // idle workers
-    std::condition_variable done_cv_;  // threads blocked in wait()/help_while()
+    std::condition_variable done_cv_;  // threads blocked in wait()
     std::atomic<uint32_t> idle_workers_{0};
     std::atomic<uint32_t> waiters_{0};
     std::atomic<bool> stop_{false};

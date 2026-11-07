@@ -218,9 +218,5 @@ bool read_if_saveable(T& system, ByteReader& r) {
         return false;
     }
 }
-template <class T>
-constexpr bool is_saveable(const T*) {
-    return SaveableSystem<T>;
-}
 
 }  // namespace alamo::sim

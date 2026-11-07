@@ -1172,7 +1172,7 @@ void test_events_and_locomotor() {
 // ---- N1 save / load: AnimWorld + AnimBehaviors round trip ------------------------------------------------
 
 // Record sizes of the documented layouts (anim_state.hpp / anim_behaviors.hpp).
-constexpr size_t kAnimSaveRowBytes = 109;
+constexpr size_t kAnimSaveRowBytes = 108;
 constexpr size_t kAnimSaveEntryBytes = 55;  // + 8 per idle record (s78l t03)
 constexpr size_t kAnimSaveCorpseBytes = 77;
 
@@ -1376,11 +1376,11 @@ void test_save() {
         bad[8 + 17] = 2;  // row 0 frozen flag: not a bool
         CHECK(world_rejects(bad, model_of));
         bad = wb;
-        bad[8 + 30 + 8] = 3;  // row 0 primary slot mode: no SlotMode 3
+        bad[8 + 29 + 8] = 3;  // row 0 primary slot mode: no SlotMode 3
         CHECK(world_rejects(bad, model_of));
         bad = wb;
-        bad[8 + 30] = 0x77;  // row 0 primary type >= 119
-        bad[8 + 30 + 1] = 0x01;
+        bad[8 + 29] = 0x77;  // row 0 primary type >= 119
+        bad[8 + 29 + 1] = 0x01;
         CHECK(world_rejects(bad, model_of));
         bad = wb;
         std::memcpy(bad.data() + 8 + kAnimSaveRowBytes, bad.data() + 8, 4);  // row 1 id == row 0 id: not ascending

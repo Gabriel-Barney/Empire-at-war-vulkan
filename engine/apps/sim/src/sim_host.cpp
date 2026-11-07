@@ -27,8 +27,7 @@ SimHost::SimHost(const objects::GameObjectTypes& types, jobs::JobSystem& js, Sim
     : js_(&js),
       cfg_(cfg),
       pf_(jobs::make_parallel_for(js)),
-      modes_(types, cfg.players < kMaxPlayers ? cfg.players : kMaxPlayers),
-      sched_(js) {
+      modes_(types, cfg.players < kMaxPlayers ? cfg.players : kMaxPlayers) {
     if (cfg_.players > kMaxPlayers) cfg_.players = kMaxPlayers;
     // Q6: every player may submit orders (a mod's campaign can have more than the scheduler's default 8). Only raised, so
     // sessions of up to 8 players keep their recorded scheduler config.
@@ -43,7 +42,7 @@ SimHost::SimHost(const objects::GameObjectTypes& types, jobs::JobSystem& js, Sim
     }
     make_pipeline(cfg_.scheduler);
     register_crc();
-    recorder_ = std::make_unique<jobs::CrcRecorder>(sched_, registry_, cfg_.parallel_crc);
+    recorder_ = std::make_unique<jobs::CrcRecorder>(js, registry_, cfg_.parallel_crc);
 }
 
 void SimHost::make_pipeline(const cmd::SchedulerConfig& cfg) {
@@ -122,7 +121,7 @@ GameMode& SimHost::start_game(ModeKind kind) {
             frame_ = 0;
             batch_crc_ = 0;
             make_pipeline(cfg_.scheduler);
-            recorder_ = std::make_unique<jobs::CrcRecorder>(sched_, registry_, cfg_.parallel_crc);
+            recorder_ = std::make_unique<jobs::CrcRecorder>(*js_, registry_, cfg_.parallel_crc);
             for (auto& s : selection_) s.clear();
             for (auto& pg : groups_)  // P host: control groups
                 for (auto& g : pg) g.clear();

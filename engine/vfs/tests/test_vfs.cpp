@@ -179,7 +179,7 @@ int main() {
     // ================= Scenario 1: two mods, two fallback dirs, auto-detected EaW =================
     VfsConfig cfg;
     cfg.foc_root = u8(FOC);
-    cfg.mod_paths = {u8(MODA), u8(MODB)};
+    cfg.mod_search = {{alamo::vfs::ModSearchEntry::Kind::Path, u8(MODA)}, {alamo::vfs::ModSearchEntry::Kind::Path, u8(MODB)}};
     cfg.fallback_paths = {u8(FB1), u8(FB2)};
     std::string err;
     auto v = Vfs::create(cfg, &err);
@@ -300,7 +300,7 @@ int main() {
     {
         VfsConfig c2;
         c2.foc_root = u8(FOC);
-        c2.mod_paths = {u8(MEGMOD)};
+        c2.mod_search = {{alamo::vfs::ModSearchEntry::Kind::Path, u8(MEGMOD)}};
         auto v2 = Vfs::create(c2, &err);
         CHECK(v2 != nullptr);
         if (v2) {
@@ -321,7 +321,7 @@ int main() {
     {
         VfsConfig c2;
         c2.foc_root = u8(FOC);
-        c2.mod_paths = {u8(CFGMOD)};
+        c2.mod_search = {{alamo::vfs::ModSearchEntry::Kind::Path, u8(CFGMOD)}};
         auto v2 = Vfs::create(c2, &err);
         CHECK(v2 != nullptr);
         if (v2) {
@@ -383,7 +383,7 @@ int main() {
                                                "NOARTPROCESS",
                                                "MODPATH="};
         CHECK(!alamo::vfs::parse_command_line(args, c));  // empty MODPATH= reported
-        CHECK(c.mod_search.size() == 3 && c.fallback_paths.size() == 2 && c.mod_paths.empty());
+        CHECK(c.mod_search.size() == 3 && c.fallback_paths.size() == 2);
         CHECK(c.mod_search[2].kind == alamo::vfs::ModSearchEntry::Kind::SteamWorkshop && c.mod_search[2].value == "1234567");
         CHECK(alamo::vfs::parse_command_line(std::vector<std::string>{"MODPATH=mods\\moda"}, c));
         CHECK(c.mod_search.size() == 4);
@@ -428,12 +428,12 @@ int main() {
             CHECK(r && r->layer == Vfs::Resolution::Mod && r->layer_index == 1);
             CHECK(va->describe().find("STEAMMOD=111") != std::string::npos);
         }
-        // MODPATH(Mod B) before STEAMMOD(ModA): Mod B wins; mod_paths come after mod_search.
+        // MODPATH(Mod B) before STEAMMOD(ModA): Mod B wins; the later entry (ModA again) is searched last.
         VfsConfig d;
         d.foc_root = u8(FOC);
         d.steam_resolver = resolver;
-        d.mod_paths = {u8(MODA)};
         CHECK(alamo::vfs::parse_command_line(std::vector<std::string>{"MODPATH=Mods\\Mod B", "STEAMMOD=111"}, d));
+        d.mod_search.push_back({alamo::vfs::ModSearchEntry::Kind::Path, u8(MODA)});
         auto vb = Vfs::create(d, &err);
         CHECK(vb != nullptr);
         if (vb) {
@@ -491,7 +491,7 @@ int main() {
 
         VfsConfig cl;
         cl.foc_root = u8(LFOC);
-        cl.mod_paths = {u8(LMOD)};
+        cl.mod_search = {{alamo::vfs::ModSearchEntry::Kind::Path, u8(LMOD)}};
         auto vl = Vfs::create(cl, &err);
         CHECK(vl != nullptr);
         if (!vl) std::printf("  deep create failed: %s\n", err.c_str());
@@ -537,7 +537,7 @@ int main() {
         write_file(BX / MAPS / "Fb_Only.ted", "F");
         VfsConfig cx;
         cx.foc_root = u8(FX);
-        cx.mod_paths = {u8(MX)};
+        cx.mod_search = {{alamo::vfs::ModSearchEntry::Kind::Path, u8(MX)}};
         cx.fallback_paths = {u8(BX)};
         cx.eaw_root = std::string();  // no EaW
         std::string errx;

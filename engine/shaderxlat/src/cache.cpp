@@ -85,7 +85,8 @@ bool read_file(const std::filesystem::path& path, std::vector<uint8_t>& out) {
 }
 }  // namespace
 
-CacheKey CacheKey::make(std::span<const uint8_t> bytecode, const TranslateOptions& options, std::string_view compiler) {
+CacheKey CacheKey::make(std::span<const uint8_t> bytecode, const TranslateOptions& options, std::string_view compiler,
+                        const Translation& t) {
     CacheKey k;
     k.blob_fnv = alamo::fnv1a64(bytecode.data(), bytecode.size());
     k.blob_crc = alamo::crc32(bytecode.data(), bytecode.size());
@@ -93,12 +94,6 @@ CacheKey CacheKey::make(std::span<const uint8_t> bytecode, const TranslateOption
     k.options_key = options.key();
     k.translator_version = kTranslatorVersion;
     k.compiler = std::string(compiler);
-    return k;
-}
-
-CacheKey CacheKey::make(std::span<const uint8_t> bytecode, const TranslateOptions& options, std::string_view compiler,
-                        const Translation& t) {
-    CacheKey k = make(bytecode, options, compiler);
     const std::vector<std::string> args = dxc_arguments(t);
     k.source_hash = source_hash_of(t.hlsl, args);
     return k;

@@ -380,7 +380,7 @@ RunResult run_campaign(const alamo::GalaxyMap& map, const Options& opt, int32_t 
     // supplies the session seed; the sim never reads a clock.
     alamo::GameRandom rng(static_cast<uint32_t>(rng_seed), 0);
 
-    alamo::jobs::TickScheduler sched(js, alamo::jobs::SimClock{});
+    alamo::jobs::TickScheduler sched(js);
     for (auto& ai : ais)
         if (ai.deferred) sched.track(*ai.deferred);
 

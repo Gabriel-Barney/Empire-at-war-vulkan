@@ -77,6 +77,19 @@ bool parse_tokens(const std::vector<uint32_t>& t, std::string* err = nullptr) {
 }
 
 // ---------------------------------------------------------------- parser
+// A key without the source hash (source_hash 0): cache.hpp's CacheKey::make always keys on the HLSL text, so the
+// concurrency / file-name tests build theirs from the blob fields directly (cheap, no translation needed).
+CacheKey plain_key(std::span<const uint8_t> bytecode, const TranslateOptions& options, std::string_view compiler) {
+    CacheKey k;
+    k.blob_fnv = alamo::fnv1a64(bytecode.data(), bytecode.size());
+    k.blob_crc = alamo::crc32(bytecode.data(), bytecode.size());
+    k.blob_size = static_cast<uint32_t>(bytecode.size());
+    k.options_key = options.key();
+    k.translator_version = kTranslatorVersion;
+    k.compiler = std::string(compiler);
+    return k;
+}
+
 void test_parser_units() {
     std::printf("parser unit tests\n");
     {
@@ -341,7 +354,7 @@ void test_review_regressions() {
         Translation t2 = t;
         t2.hlsl += " ";
         const CacheKey b = CacheKey::make(blob, TranslateOptions{}, "dxc-test 1.0", t2);
-        const CacheKey plain = CacheKey::make(blob, TranslateOptions{}, "dxc-test 1.0");
+        const CacheKey plain = plain_key(blob, TranslateOptions{}, "dxc-test 1.0");
         CHECK(a.source_hash != 0 && a.source_hash != b.source_hash);
         CHECK(a.describe() != b.describe() && a.file_name() != b.file_name() && a.file_name() != plain.file_name());
         CHECK(a.translator_version == kTranslatorVersion && kTranslatorVersion >= 2);
@@ -627,7 +640,7 @@ CacheEntry cache_test_entry() {
 int cache_writer(const std::string& dir, int id) {
     ShaderCache c(dir);
     const std::vector<uint8_t> blob = {1, 2, 3, 4, 5, 6, 7, 8};
-    const CacheKey shared = CacheKey::make(blob, TranslateOptions{}, "dxc-test 1.0");
+    const CacheKey shared = plain_key(blob, TranslateOptions{}, "dxc-test 1.0");
     const CacheEntry e = cache_test_entry();
     int bad = 0;
     for (int i = 0; i < 60; ++i) {
@@ -638,7 +651,7 @@ int cache_writer(const std::string& dir, int id) {
         b2.push_back(0xEE);
         b2.push_back(static_cast<uint8_t>(id));
         b2.push_back(static_cast<uint8_t>(i));
-        if (!c.store(CacheKey::make(b2, TranslateOptions{}, "dxc-test 1.0"), e)) ++bad;
+        if (!c.store(plain_key(b2, TranslateOptions{}, "dxc-test 1.0"), e)) ++bad;
     }
     return bad ? 1 : 0;
 }
@@ -656,7 +669,7 @@ void test_cache(bool deep) {
     ShaderCache cache(dir);
     const std::vector<uint8_t> blob = {1, 2, 3, 4, 5, 6, 7, 8};
     TranslateOptions o;
-    CacheKey k = CacheKey::make(blob, o, "dxc-test 1.0");
+    CacheKey k = plain_key(blob, o, "dxc-test 1.0");
     const CacheEntry e = cache_test_entry();
     CacheEntry got;
     CHECK(!cache.load(k, got));
@@ -668,8 +681,8 @@ void test_cache(bool deep) {
     k2.compiler = "dxc-test 1.1";
     CHECK(!cache.load(k2, got));
     o.sampler_dims[3] = TextureDim::Cube;
-    CHECK(!cache.load(CacheKey::make(blob, o, "dxc-test 1.0"), got));
-    CHECK(k.file_name() != CacheKey::make(blob, o, "dxc-test 1.0").file_name());
+    CHECK(!cache.load(plain_key(blob, o, "dxc-test 1.0"), got));
+    CHECK(k.file_name() != plain_key(blob, o, "dxc-test 1.0").file_name());
     // Corruption / truncation is a miss.
     const auto file = dir / k.file_name();
     {
@@ -694,7 +707,7 @@ void test_cache(bool deep) {
                 b2.push_back(static_cast<uint8_t>((t * 40 + i) >> 8));
                 CacheEntry e2 = e;
                 e2.spirv.push_back(static_cast<uint32_t>(t * 40 + i));
-                if (!c.store(CacheKey::make(b2, TranslateOptions{}, "dxc-test 1.0"), e2)) ++failures;
+                if (!c.store(plain_key(b2, TranslateOptions{}, "dxc-test 1.0"), e2)) ++failures;
                 CacheEntry r;
                 if (c.load(k, r) && r.spirv != e.spirv) ++failures;
             }
@@ -708,7 +721,7 @@ void test_cache(bool deep) {
         b2.push_back(static_cast<uint8_t>(i & 0xFF));
         b2.push_back(static_cast<uint8_t>(i >> 8));
         CacheEntry r;
-        if (cache.load(CacheKey::make(b2, TranslateOptions{}, "dxc-test 1.0"), r) && r.spirv.back() == static_cast<uint32_t>(i)) ++ok;
+        if (cache.load(plain_key(b2, TranslateOptions{}, "dxc-test 1.0"), r) && r.spirv.back() == static_cast<uint32_t>(i)) ++ok;
     }
     CHECK(ok == 256 + 64);
     size_t tmp = 0;
@@ -739,7 +752,7 @@ void test_cache(bool deep) {
                 b2.push_back(static_cast<uint8_t>(p));
                 b2.push_back(static_cast<uint8_t>(i));
                 CacheEntry r;
-                found += cache.load(CacheKey::make(b2, TranslateOptions{}, "dxc-test 1.0"), r) && r.spirv == e.spirv ? 1 : 0;
+                found += cache.load(plain_key(b2, TranslateOptions{}, "dxc-test 1.0"), r) && r.spirv == e.spirv ? 1 : 0;
             }
         size_t tmp2 = 0;
         for (const auto& de : alamo::list_directory(dir, lec))

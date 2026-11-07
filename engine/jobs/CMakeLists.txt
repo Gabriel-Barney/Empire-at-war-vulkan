@@ -1,8 +1,7 @@
-# B4 - job system, deterministic helpers, task graph, fixed-step tick. No third-party deps.
+# B4 - job system, deterministic helpers, fixed-step tick. No third-party deps.
 add_library(alamo_jobs STATIC
   src/job_system.cpp
   src/scratch.cpp
-  src/task_graph.cpp
   src/tick.cpp
 )
 add_library(alamo::jobs ALIAS alamo_jobs)

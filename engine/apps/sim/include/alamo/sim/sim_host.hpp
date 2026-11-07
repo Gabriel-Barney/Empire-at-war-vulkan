@@ -384,7 +384,6 @@ private:
     std::array<std::vector<ObjectId>, kMaxPlayers> selection_;
     std::array<PlayerController, kMaxPlayers> controllers_;
     CrcRegistry registry_;
-    jobs::TickScheduler sched_;  // owns nothing but the job-system link CrcRecorder needs
     std::unique_ptr<jobs::CrcRecorder> recorder_;
     std::vector<std::string>* trace_ = nullptr;
     ModeUpdateHook after_mode_update_;  // S10

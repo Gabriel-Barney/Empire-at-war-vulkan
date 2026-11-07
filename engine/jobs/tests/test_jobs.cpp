@@ -400,167 +400,19 @@ static void test_bool_results() {
     }
 }
 
-static void test_task_graph() {
-    section("task graph");
-    for (int32_t w : kWorkerCounts) {
-        JobSystem js({w});
-        // Random-ish DAG of 200 nodes with every 10th a commit node.
-        TaskGraph g;
-        const uint32_t n = 200;
-        std::atomic<uint32_t> clock{0};
-        std::vector<uint32_t> start(n), end(n);
-        std::vector<std::thread::id> commit_thread;
-        std::vector<uint32_t> commit_order;
-        std::vector<std::pair<uint32_t, uint32_t>> edges;
-        for (uint32_t i = 0; i < n; ++i) {
-            const bool commit = i % 10 == 9;
-            auto body = [&, i, commit] {
-                start[i] = clock.fetch_add(1);
-                if (commit) {
-                    commit_thread.push_back(std::this_thread::get_id());
-                    commit_order.push_back(i);
-                } else {
-                    volatile uint32_t x = 0;
-                    for (uint32_t k = 0; k < 500; ++k) x = x + k;
-                }
-                end[i] = clock.fetch_add(1);
-            };
-            g.add("node" + std::to_string(i), body, commit ? TaskGraph::Kind::Commit : TaskGraph::Kind::Parallel);
-        }
-        uint32_t lcg = 7;
-        for (uint32_t i = 1; i < n; ++i) {
-            for (int k = 0; k < 3; ++k) {
-                lcg = lcg * 1664525u + 1013904223u;
-                const uint32_t p = (lcg >> 8) % i;
-                g.precede(p, i);
-                edges.emplace_back(p, i);
-            }
-        }
-        for (int rep = 0; rep < 5; ++rep) {
-            commit_thread.clear();
-            commit_order.clear();
-            g.run(js);
-            bool ok = true;
-            for (auto [a, b] : edges) ok &= end[a] < start[b];
-            CHECK(ok);
-            const auto me = std::this_thread::get_id();
-            bool on_caller = commit_order.size() == n / 10;
-            for (auto t : commit_thread) on_caller &= t == me;
-            for (size_t k = 0; k < commit_order.size(); ++k) on_caller &= commit_order[k] == k * 10 + 9;
-            CHECK(on_caller);
-        }
-    }
-    // Deterministic topological order; serial mode follows it exactly.
-    {
-        TaskGraph g;
-        std::vector<int> seen;
-        const auto a = g.add("a", [&] { seen.push_back(0); });
-        const auto b = g.add("b", [&] { seen.push_back(1); });
-        const auto c = g.add_commit("c", [&] { seen.push_back(2); });
-        const auto d = g.add("d", [&] { seen.push_back(3); });
-        g.precede(b, a);
-        g.precede(d, c);
-        const std::vector<uint32_t> expect = {b, a, d, c};
-        CHECK(g.topological_order() == expect);
-        JobSystem js({0});
-        g.run(js);
-        CHECK(seen == (std::vector<int>{1, 0, 3, 2}));
-    }
-    // Cycle detection.
-    {
-        TaskGraph g;
-        const auto a = g.add("alpha", [] {});
-        const auto b = g.add("beta", [] {});
-        g.add("gamma", [] {});
-        g.precede(a, b);
-        g.precede(b, a);
-        JobSystem js({2});
-        std::string what;
-        try {
-            g.run(js);
-        } catch (const std::logic_error& e) {
-            what = e.what();
-        }
-        CHECK(what.find("alpha") != std::string::npos && what.find("beta") != std::string::npos &&
-              what.find("gamma") == std::string::npos);
-        // Implicit commit chain can also close a cycle: c2 -> c1 explicit + c1 -> c2 implicit.
-        TaskGraph h;
-        const auto c1 = h.add_commit("c1", [] {});
-        const auto c2 = h.add_commit("c2", [] {});
-        h.precede(c2, c1);
-        bool threw = false;
-        try {
-            h.run(js);
-        } catch (const std::logic_error&) {
-            threw = true;
-        }
-        CHECK(threw);
-    }
-    // Exceptions: skipped successors, lowest failing id rethrown, graph reusable.
-    for (int32_t w : kWorkerCounts) {
-        JobSystem js({w});
-        TaskGraph g;
-        bool fail = true;
-        std::atomic<int> after_ran{0};
-        const auto a = g.add("a", [&] {
-            if (fail) throw std::runtime_error("a failed");
-        });
-        const auto b = g.add("b", [&] { after_ran.fetch_add(1); });
-        g.precede(a, b);
-        std::string what;
-        try {
-            g.run(js);
-        } catch (const std::runtime_error& e) {
-            what = e.what();
-        }
-        CHECK(what == "a failed" && after_ran.load() == 0);
-        fail = false;
-        g.run(js);
-        CHECK(after_ran.load() == 1);
-    }
-    // Independent parallel nodes actually overlap when workers exist (wide fan-out).
-    {
-        JobSystem js({4});
-        TaskGraph g;
-        std::atomic<uint32_t> live{0}, peak{0};
-        for (int i = 0; i < 16; ++i)
-            g.add("w", [&] {
-                const uint32_t now = live.fetch_add(1) + 1;
-                uint32_t p = peak.load();
-                while (now > p && !peak.compare_exchange_weak(p, now)) {
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                live.fetch_sub(1);
-            });
-        g.run(js);
-        CHECK(peak.load() >= 2);
-    }
-}
-
-static void test_sim_clock() {
-    section("SimClock");
-    SimClock c(30, 8);
-    CHECK(c.advance(1.0 / 60.0) == 0);
-    CHECK(c.advance(1.0 / 60.0) == 1);  // exactly one tick from two half ticks
-    CHECK(c.advance(0.1) == 3);
-    // 1000 frames at 60 Hz host rate == exactly 500 ticks (no drift)
-    SimClock d(30, 8);
-    uint64_t total = 0;
-    for (int i = 0; i < 1000; ++i) total += d.advance_ns(16'666'667);
-    CHECK(total == 500);
-    // Clamp + dropped.
-    SimClock e(30, 4);
-    CHECK(e.advance(1.0) == 4 && e.dropped_ticks() == 26);
-    CHECK(e.advance(-1.0) == 0 && e.advance(std::nan("")) == 0);
-    CHECK(e.alpha() >= 0.0 && e.alpha() < 1.0);
-    CHECK(std::fabs(SimClock(20).fixed_dt() - 0.05) < 1e-12);
+static void test_tick_rate() {
+    section("tick rate");
+    JobSystem js({0});
+    CHECK(TickScheduler(js).ticks_per_second() == kDefaultTicksPerSecond);
+    CHECK(std::fabs(TickScheduler(js, 20).fixed_dt() - 0.05) < 1e-12);
+    CHECK(TickScheduler(js, 0).ticks_per_second() == 1);  // clamped
 }
 
 static void test_tick_cadence() {
     section("TickScheduler cadence");
     for (int32_t w : {0, 2}) {
         JobSystem js({w});
-        TickScheduler ts(js, SimClock(30, 1000));
+        TickScheduler ts(js);
         std::vector<std::pair<uint64_t, int>> log;
         ts.add_system("every", 1, 0, [&](const TickContext& c) { log.emplace_back(c.frame, 0); });
         ts.add_system("p90", 90, 0, [&](const TickContext& c) { log.emplace_back(c.frame, 1); });
@@ -575,7 +427,7 @@ static void test_tick_cadence() {
             for (auto v : tmp) s += v;
             log.emplace_back(c.frame, 4 + static_cast<int>(s == 100 * c.frame + 4950 ? 0 : 100));
         });
-        CHECK(ts.advance(200.0 / 30.0 + 1e-6) == 200);
+        for (int i = 0; i < 200; ++i) ts.step();
         CHECK(ts.frame() == 200);
         std::vector<std::pair<uint64_t, int>> expect;
         for (uint64_t f = 0; f < 200; ++f) {
@@ -781,15 +633,13 @@ static void test_background_isolation() {
         js.wait(inner);
     }, Priority::Background);
     while (!bg_inner_started.load()) std::this_thread::yield();
-    // Sim thread: short parallel_fors, a task graph and a deferred read while bg is busy.
-    TaskGraph g;
+    // Sim thread: short parallel_fors and a deferred read while bg is busy.
     std::atomic<int> nodes{0};
-    for (int i = 0; i < 8; ++i) g.add("n", [&] { nodes++; });
     for (int frame = 0; frame < 20; ++frame) {
         std::atomic<uint32_t> s{0};
         js.parallel_for(16, 1, [&](uint32_t b, uint32_t e) { s += e - b; });
         CHECK(s.load() == 16);
-        g.run(js);
+        js.parallel_for(8, 1, [&](uint32_t b, uint32_t e) { nodes += static_cast<int>(e - b); });
     }
     Deferred<int> d(js, 0);
     d.kick(0, 1, [] { return 5; });
@@ -907,8 +757,7 @@ int main() {
     test_reduce_determinism();
     test_map_commit();
     test_bool_results();
-    test_task_graph();
-    test_sim_clock();
+    test_tick_rate();
     test_tick_cadence();
     test_deferred();
     test_shutdown();

@@ -35,7 +35,6 @@ struct BinkDecoder::Impl {
     bool end = false;
 
     std::vector<float> audio;  // queued interleaved PCM
-    int64_t audio_total = 0;
 
     ~Impl() { close(); }
 
@@ -218,7 +217,6 @@ struct BinkDecoder::Impl {
                 audio.resize(base);  // unexpected format: drop
                 return;
         }
-        audio_total += n;
     }
 
     void decode_audio_packet() {
@@ -362,7 +360,6 @@ size_t BinkDecoder::take_audio(std::vector<float>& interleaved) {
     return frames;
 }
 
-int64_t BinkDecoder::audio_frames_decoded() const { return impl_->audio_total; }
 
 bool BinkDecoder::rewind() {
     impl_->audio.clear();

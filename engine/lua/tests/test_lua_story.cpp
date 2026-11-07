@@ -1348,7 +1348,7 @@ static void test_tr_campaign_plots() {
     }
     vfs::VfsConfig cfg;
     cfg.foc_root = foc;
-    cfg.mod_paths = {tr};
+    cfg.mod_search = {{vfs::ModSearchEntry::Kind::Path, tr}};
     std::string err;
     std::unique_ptr<vfs::Vfs> files = vfs::Vfs::create(cfg, &err);
     CHECK(files != nullptr);

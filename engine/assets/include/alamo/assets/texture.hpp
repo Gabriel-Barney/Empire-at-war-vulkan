@@ -61,7 +61,6 @@ struct ComponentMapping {
 
 const char* texture_format_name(TextureFormat f);
 const char* texture_format_vk_name(TextureFormat f);  // e.g. "VK_FORMAT_BC3_UNORM_BLOCK"
-bool is_block_compressed(TextureFormat f);
 // Bytes of one tightly packed mip level.
 std::uint64_t texture_level_size(TextureFormat f, std::uint32_t width, std::uint32_t height);
 

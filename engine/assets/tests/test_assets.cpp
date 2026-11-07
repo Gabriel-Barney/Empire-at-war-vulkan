@@ -1764,7 +1764,7 @@ void test_real_data() {
     const std::string mod = std::string(root) + "\\Mods\\Legeds_ships_transfer";
     if (std::filesystem::is_directory(alamo::path_from_utf8(mod))) {
         alamo::vfs::VfsConfig mcfg = cfg;
-        mcfg.mod_paths = {mod};
+        mcfg.mod_search = {{alamo::vfs::ModSearchEntry::Kind::Path, mod}};
         auto mvfs = alamo::vfs::Vfs::create(mcfg, &err);
         CHECK(mvfs != nullptr);
         if (mvfs)

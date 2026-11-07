@@ -2,7 +2,6 @@
 #include "alamo/vfs/steam_workshop.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -12,9 +11,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
 
-#ifdef _WIN32
 #include <windows.h>
-#endif
 
 namespace fs = std::filesystem;
 
@@ -131,7 +128,6 @@ void add_vdf_libraries(const std::string& vdf_path, std::vector<std::string>& ou
     for (std::string& p : parse_steam_library_folders(text)) add_unique(out, keys, std::move(p));
 }
 
-#ifdef _WIN32
 std::string to_utf8(const std::wstring& w) {
     if (w.empty()) return {};
     const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
@@ -159,12 +155,6 @@ std::string env_utf8(const wchar_t* name) {
     w.resize(got < n ? got : 0);
     return to_utf8(w);
 }
-#else
-std::string env_utf8(const char* name) {
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-}
-#endif
 
 struct LookupState {
     std::mutex mu;
@@ -236,11 +226,7 @@ std::vector<std::string> find_steam_libraries(std::string_view foc_root, std::sp
 
 std::vector<std::string> default_steam_roots() {
     std::vector<std::string> out, keys;
-#ifdef _WIN32
     const std::string env = env_utf8(L"ALAMO_STEAM_ROOT");
-#else
-    const std::string env = env_utf8("ALAMO_STEAM_ROOT");
-#endif
     if (!env.empty()) {
         size_t b = 0;
         while (b <= env.size()) {
@@ -252,23 +238,13 @@ std::vector<std::string> default_steam_roots() {
         return out;
     }
     std::vector<std::string> candidates;
-#ifdef _WIN32
     candidates.push_back(registry_string(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath"));
     candidates.push_back(registry_string(HKEY_LOCAL_MACHINE, L"SOFTWARE\\WOW6432Node\\Valve\\Steam", L"InstallPath"));
     candidates.push_back(registry_string(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Valve\\Steam", L"InstallPath"));
     candidates.emplace_back("C:\\Program Files (x86)\\Steam");
-#else
-    const std::string home = env_utf8("HOME");
-    if (!home.empty()) {
-        candidates.push_back(home + "/.steam/steam");
-        candidates.push_back(home + "/.local/share/Steam");
-    }
-#endif
     for (std::string& c : candidates) {
-#ifdef _WIN32
         for (char& ch : c)
             if (ch == '/') ch = '\\';  // the registry's SteamPath uses '/'
-#endif
         if (is_dir(c)) add_unique(out, keys, std::move(c));
     }
     return out;

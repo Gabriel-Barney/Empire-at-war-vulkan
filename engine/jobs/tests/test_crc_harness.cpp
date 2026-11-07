@@ -132,8 +132,12 @@ alamo::CrcLog run(int32_t workers, uint64_t ticks, bool parallel_capture, int64_
         sched.add_system("corrupt", 1, 0, [&sim, corrupt_tick](const TickContext& ctx) {
             if (ctx.frame == static_cast<uint64_t>(corrupt_tick)) sim.vx[123] += 1e-6f;
         });
-    CrcRecorder rec(sched, sim.reg, parallel_capture);
-    rec.run(ticks);
+    CrcRecorder rec(js, sim.reg, parallel_capture);
+    for (uint64_t i = 0; i < ticks; ++i) {
+        const uint64_t frame = sched.frame();
+        sched.step();
+        rec.capture(frame);
+    }
     return rec.log();
 }
 

@@ -5,5 +5,4 @@
 #include "alamo/jobs/function_ref.hpp"
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/jobs/scratch.hpp"
-#include "alamo/jobs/task_graph.hpp"
 #include "alamo/jobs/tick.hpp"

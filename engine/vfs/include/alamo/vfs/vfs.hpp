@@ -64,9 +64,6 @@ struct VfsConfig {
     // The mod search list in command-line order (MODPATH= and STEAMMOD= interleaved), earliest
     // wins. parse_command_line appends here.
     std::vector<ModSearchEntry> mod_search;
-    // Simple form for callers that only use plain directories: searched AFTER mod_search, in
-    // order, earliest wins. parse_command_line does not touch it.
-    std::vector<std::string> mod_paths;
     std::vector<std::string> fallback_paths;   // FALLBACKPATH= dirs, in order
     std::optional<std::string> eaw_root;       // nullopt = auto-detect (<foc_root>\..\GameData with
                                                // sweaw.exe), "" = no EaW, else explicit GameData dir
@@ -134,7 +131,7 @@ public:
 
     const std::vector<Mount>& mounts() const;           // mount order (index 0 = lowest priority)
     // The effective mod search list (host dirs, earliest wins): resolved mod_search entries
-    // (unresolved STEAMMOD ids dropped), then mod_paths. Resolution::layer_index indexes this.
+    // (unresolved STEAMMOD ids dropped). Resolution::layer_index indexes this.
     const std::vector<std::string>& mod_dirs() const;
     const std::vector<std::string>& warnings() const;
     const std::string& eaw_root() const;                // "" if none

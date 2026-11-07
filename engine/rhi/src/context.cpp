@@ -101,7 +101,7 @@ VkResult Queue::wait_idle() const {
 }
 
 QueueFamilies select_queue_families(std::span<const VkQueueFamilyProperties> families,
-                                    std::span<const bool> present_ok, bool want_compute, bool want_transfer) {
+                                    std::span<const bool> present_ok, bool want_transfer) {
     QueueFamilies q;
     const auto n = static_cast<uint32_t>(families.size());
     for (uint32_t i = 0; i < n; ++i) {
@@ -114,17 +114,7 @@ QueueFamilies select_queue_families(std::span<const VkQueueFamilyProperties> fam
             q.graphics = i;
     }
     if (!q.valid()) return q;
-    q.compute = q.graphics;
     q.transfer = q.graphics;
-    if (want_compute) {
-        for (uint32_t i = 0; i < n; ++i) {
-            const auto& f = families[i];
-            if (f.queueCount && (f.queueFlags & VK_QUEUE_COMPUTE_BIT) && !(f.queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
-                q.compute = i;
-                break;
-            }
-        }
-    }
     if (want_transfer) {
         for (uint32_t i = 0; i < n; ++i) {
             const auto& f = families[i];
@@ -171,9 +161,9 @@ bool Context::init(const ContextDesc& desc) {
         shutdown();
         return false;
     }
-    log::infof("rhi", "device: %s (api %u.%u.%u)%s%s%s", caps_.name.c_str(), VK_API_VERSION_MAJOR(caps_.api_version),
+    log::infof("rhi", "device: %s (api %u.%u.%u)%s%s", caps_.name.c_str(), VK_API_VERSION_MAJOR(caps_.api_version),
                VK_API_VERSION_MINOR(caps_.api_version), VK_API_VERSION_PATCH(caps_.api_version),
-               has_async_compute() ? ", async compute" : "", has_transfer_queue() ? ", transfer queue" : "",
+               has_transfer_queue() ? ", transfer queue" : "",
                validation_ ? ", validation" : "");
     return true;
 }
@@ -313,7 +303,7 @@ bool Context::pick_device(const ContextDesc& desc) {
         std::unique_ptr<bool[]> pok_arr(new bool[qn ? qn : 1]);
         for (uint32_t k = 0; k < qn; ++k) pok_arr[k] = pok[k];
         const QueueFamilies qf = select_queue_families(fams, std::span<const bool>(pok_arr.get(), qn),
-                                                       desc.use_async_compute, desc.use_transfer_queue);
+                                                       desc.use_transfer_queue);
         if (!qf.valid()) {
             log::infof("rhi", "skip %s: no graphics%s queue", props.deviceName, desc.presentation ? "+present" : "");
             continue;
@@ -368,9 +358,9 @@ bool Context::pick_device(const ContextDesc& desc) {
 bool Context::create_device(const ContextDesc& desc) {
     const Support& s = *support_;
     float priority = 1.0f;
-    uint32_t fams[3] = {families_.graphics, families_.compute, families_.transfer};
+    uint32_t fams[2] = {families_.graphics, families_.transfer};
     std::vector<VkDeviceQueueCreateInfo> qci;
-    for (uint32_t i = 0; i < 3; ++i) {
+    for (uint32_t i = 0; i < 2; ++i) {
         bool dup = false;
         for (uint32_t j = 0; j < i; ++j) dup |= fams[j] == fams[i];
         if (dup) continue;
@@ -450,7 +440,7 @@ bool Context::create_device(const ContextDesc& desc) {
         if (families_.graphics < qn) caps_.timestamp_valid_bits = qprops[families_.graphics].timestampValidBits;
     }
 
-    // Queues: slot 0 graphics; compute/transfer get their own slot only for a distinct family.
+    // Queues: slot 0 graphics; transfer gets its own slot only for a distinct family.
     auto make_queue = [&](uint32_t slot, uint32_t family) {
         queue_mutex_[slot] = std::make_unique<std::mutex>();
         Queue& q = queues_[slot];
@@ -461,11 +451,7 @@ bool Context::create_device(const ContextDesc& desc) {
     };
     make_queue(0, families_.graphics);
     queue_count_ = 1;
-    slot_compute_ = slot_transfer_ = 0;
-    if (families_.compute != families_.graphics) {
-        slot_compute_ = queue_count_;
-        make_queue(queue_count_++, families_.compute);
-    }
+    slot_transfer_ = 0;
     if (families_.transfer != families_.graphics) {
         slot_transfer_ = queue_count_;
         make_queue(queue_count_++, families_.transfer);
@@ -498,7 +484,7 @@ void Context::shutdown() {
     physical_ = VK_NULL_HANDLE;
     for (auto& q : queues_) q = Queue{};
     for (auto& m : queue_mutex_) m.reset();
-    slot_compute_ = slot_transfer_ = 0;
+    slot_transfer_ = 0;
     queue_count_ = 1;
     support_.reset();
     vki_ = InstanceFns{};
@@ -559,10 +545,9 @@ void Context::set_name(VkObjectType type, uint64_t handle, const char* name) con
 
 VkResult Context::wait_idle() const {
     if (!device_) return VK_SUCCESS;
-    std::unique_lock<std::mutex> l0, l1, l2;
+    std::unique_lock<std::mutex> l0, l1;
     if (queue_count_ > 0 && queue_mutex_[0]) l0 = std::unique_lock<std::mutex>(*queue_mutex_[0]);
     if (queue_count_ > 1 && queue_mutex_[1]) l1 = std::unique_lock<std::mutex>(*queue_mutex_[1]);
-    if (queue_count_ > 2 && queue_mutex_[2]) l2 = std::unique_lock<std::mutex>(*queue_mutex_[2]);
     return vkd_.vkDeviceWaitIdle(device_);
 }
 

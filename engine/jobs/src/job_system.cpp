@@ -227,14 +227,6 @@ void JobSystem::execute(const Job& job, uint32_t self) {
     if (job.counter->pending_.fetch_sub(1, std::memory_order_seq_cst) == 1) notify_waiters();
 }
 
-bool JobSystem::try_run_one() {
-    const uint32_t self = my_slot();
-    Job job;
-    if (!pop_foreground(self, job) && !(t_background_of == this && pop_background(job))) return false;
-    execute(job, self);
-    return true;
-}
-
 void JobSystem::help_loop(FunctionRef<bool()> keep_waiting, JobCounter* claim) {
     const uint32_t self = my_slot();
     const bool background_ctx = t_background_of == this;
@@ -274,8 +266,6 @@ void JobSystem::help_loop(FunctionRef<bool()> keep_waiting, JobCounter* claim) {
         waiters_.fetch_sub(1);
     }
 }
-
-void JobSystem::help_while(FunctionRef<bool()> keep_waiting) { help_loop(keep_waiting, nullptr); }
 
 void JobSystem::wait(JobCounter& counter) {
     if (!counter.done()) {

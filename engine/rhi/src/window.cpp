@@ -213,7 +213,6 @@ intptr_t Window::handle_message(uint32_t msg, uintptr_t wparam, intptr_t lparam)
                        msg == WM_XBUTTONDOWN);
             return 1;  // TRUE for X buttons
         case WM_MOUSEWHEEL: wheel_ += static_cast<int16_t>(HIWORD(static_cast<WPARAM>(wparam))); return 0;
-        case WM_MOUSEHWHEEL: hwheel_ += static_cast<int16_t>(HIWORD(static_cast<WPARAM>(wparam))); return 0;
         case WM_CAPTURECHANGED:
             if (reinterpret_cast<HWND>(lparam) != static_cast<HWND>(hwnd_)) capture_count_ = 0;
             break;

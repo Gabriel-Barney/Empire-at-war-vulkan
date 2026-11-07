@@ -65,8 +65,6 @@ uint32_t land_zone_hop(const HintZone& a, const HintZone& b);
 uint32_t land_zone_edge_weight(const HintZone& a, const HintZone& b, uint32_t node_cost_b);
 // Node cost from a zone's threat sum: (uint32)(int64)max(0, sum) / 100.
 uint32_t land_zone_node_cost(double threat_sum);
-// Weight with node cost 0 (no threat grid / no threat): 0x10000 + hop.
-uint32_t default_zone_edge_weight(const HintZone& a, const HintZone& b);
 
 // OPT2 t02: a ZoneGraph::compute() result (node costs, edges, all-pairs), applied with ZoneGraph::adopt().
 struct ZoneGraphResult {

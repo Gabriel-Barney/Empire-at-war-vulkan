@@ -86,14 +86,6 @@ uint16_t TerrainPass::texel(uint32_t c, uint32_t r) const {
     return static_cast<uint16_t>(blend_texture[o] | (blend_texture[o + 1] << 8));
 }
 
-std::vector<uint8_t> blend_texture_r8(const TerrainPass& pass) {
-    std::vector<uint8_t> r(kBlendTextureSize * kBlendTextureSize);
-    for (uint32_t y = 0; y < kBlendTextureSize; ++y)
-        for (uint32_t x = 0; x < kBlendTextureSize; ++x)
-            r[y * kBlendTextureSize + x] = (pass.texel(x, y) >> 12) ? uint8_t{255} : uint8_t{0};
-    return r;
-}
-
 void build_patch(const Terrain& t, uint32_t px, uint32_t py, const MeshOptions& opt, TerrainPatch& out) {
     out = TerrainPatch{};
     out.px = px;

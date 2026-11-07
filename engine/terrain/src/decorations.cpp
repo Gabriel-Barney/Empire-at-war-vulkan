@@ -490,11 +490,6 @@ std::array<uint8_t, 4> blob_vertex_color(RenderMode mode, const float (&c)[4], f
     return {unorm8(rgb[2]), unorm8(rgb[1]), unorm8(rgb[0]), unorm8(out_a)};
 }
 
-void set_blob_color(BlobGeometry& g, RenderMode mode, const ShadowBlob& b) {
-    const auto c = blob_vertex_color(mode, b.color, b.intensity);
-    for (PrelitVertex& v : g.vertices) set_color(v.color, c);
-}
-
 bool build_blob_geometry(const Terrain& t, const ShadowBlob& b, RenderMode mode, BlobGeometry& out) {
     out = BlobGeometry{};
     if (!terrain_ok(t)) return false;

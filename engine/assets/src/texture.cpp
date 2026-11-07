@@ -146,10 +146,6 @@ const char* texture_format_vk_name(TextureFormat f) {
     }
 }
 
-bool is_block_compressed(TextureFormat f) {
-    return f == TextureFormat::BC1_RGBA || f == TextureFormat::BC2 || f == TextureFormat::BC3;
-}
-
 std::uint64_t texture_level_size(TextureFormat f, std::uint32_t w, std::uint32_t h) {
     const std::uint64_t bw = (std::uint64_t(w) + 3) / 4, bh = (std::uint64_t(h) + 3) / 4;
     switch (f) {
