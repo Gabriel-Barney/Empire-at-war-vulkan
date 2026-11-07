@@ -1,7 +1,6 @@
 // alamo_render - map environments, now read by engine/terrain (the canonical .ted reader). This header
-// keeps the render-side names: Environment is terrain::Environment (a superset of the old record, same
-// member names / types / defaults), MapEnvironments is the terrain EnvironmentSet plus the space flag
-// (no terrain chunk 0x101 -> fills off, RENDER.md 1.2).
+// keeps the render-side names: MapEnvironments is the terrain EnvironmentSet plus the space flag
+// (no terrain chunk 0x101 -> fills off, RENDER.md 1.2). render::Environment lives in lighting.hpp.
 #pragma once
 #include <cstdint>
 #include <span>
@@ -16,8 +15,6 @@ class FileProvider;
 
 namespace alamo::render {
 
-using Environment = terrain::Environment;
-using terrain::decode_environment;
 using terrain::map_path;
 
 struct MapEnvironments : terrain::EnvironmentSet {

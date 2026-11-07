@@ -1,10 +1,11 @@
 // alamo_render_galactic - R2 galactic campaign driver for the renderer (alamo_render --galactic, the R2 tests):
 // SimHost::start_galactic on a campaign (synthetic galaxy or a real FoC campaign), one tick at a time so the caller
 // can snapshot / render between ticks, plus GalacticOrders, a deterministic stand-in for the players' galactic
-// orders (there is no galactic AI yet) so fleets fly and planets change hands on screen.
+// orders so fleets fly and planets change hands on screen. It is a renderer test stand-in; the game's galactic AI
+// (engine/ai) drives real sessions, so this is not a gap waiting for an AI.
 //
 // GalacticOrders [port] (R1's RandomOrders counterpart; an input source, not sim code): before the first tick and
-// after every tick whose global frame is a multiple of `order_interval`, for every non-neutral player in player
+// after every tick whose global frame is a multiple of 90 (kOrderInterval), for every non-neutral player in player
 // order and its idle fleets in fleet order: a fleet orbiting a planet its owner does not hold lands its ground
 // units (Invade event, empty unit list = all); otherwise, with probability 3/4, it is sent to a random graph
 // neighbour of its planet (MoveObjectToObject). Orders go through SimHost::submit (scheduled, recorded in the
@@ -34,9 +35,6 @@ namespace alamo::render {
 
 struct GalacticSessionSpec {
     uint32_t seed = 1;
-    bool orders = true;           // GalacticOrders between ticks
-    uint32_t order_interval = 90; // global frames between order rounds
-    bool board_ground = true;     // ground units board the orbiting fleet at start
 };
 
 class GalacticSession {
@@ -66,7 +64,6 @@ private:
     uint32_t next();
     sim::SimHost host_;
     galactic::GalacticSim* sim_ = nullptr;
-    GalacticSessionSpec spec_;
     uint32_t lcg_ = 1;
     uint64_t ticks_ = 0, orders_ = 0, boarded_ = 0;
 };

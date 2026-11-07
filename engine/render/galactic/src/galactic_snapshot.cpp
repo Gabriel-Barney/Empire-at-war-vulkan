@@ -24,18 +24,6 @@ using objects::ObjectHandle;
 using objects::ObjectId;
 using objects::TypeIndex;
 
-// Text of a tag: the merged typed view when the tag is a GameObjectType field, else the raw store along the
-// variant chain (own value first) - the same rule as R1's SnapshotTypeTable.
-std::string type_text(const GameObjectTypes& types, TypeIndex t, std::string_view tag) {
-    if (objects::find_type_field(tag) != 0xFFFFFFFFu) return std::string(types.get_string(t, tag));
-    const objects::ObjectTypeDatabase& raw = types.raw();
-    for (int depth = 0; t != objects::kNone && t < raw.type_count() && depth < 16; ++depth) {
-        if (const auto v = raw.get_text(t, tag); v && !v->empty()) return std::string(*v);
-        t = raw.types().variant_parent[t];
-    }
-    return {};
-}
-
 std::string trim(std::string_view s) {
     size_t b = 0, e = s.size();
     while (b < e && std::isspace(static_cast<unsigned char>(s[b]))) ++b;

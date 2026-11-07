@@ -47,11 +47,6 @@
 
 namespace alamo::render {
 
-struct SimDecorationOptions {
-    float geometry_detail = 1.0f;  // tracks whose min_geometry_lod exceeds it are not created
-    bool tracks = true, scorch = true;
-};
-
 struct SimDecorationStats {
     uint64_t ticks = 0;
     uint32_t track_objects = 0, generators = 0, faded_only = 0;  // last tick
@@ -69,7 +64,6 @@ public:
     // `terrain` may be null (space: nothing is produced). `lib` and `table` must outlive this object.
     SimDecorations(const SurfaceFxLibrary& lib, const SnapshotTypeTable& table, const terrain::Terrain* terrain,
                    uint64_t seed = 0x52355235ull);
-    void set_options(const SimDecorationOptions& o) { options_ = o; }
     // World position of a named bone of an object (Dynamic_Track_Left/Right_Bone); false when unknown.
     using BoneWorldFn = std::function<bool(const SnapshotObject& o, std::string_view bone, Vec3& out)>;
     void set_bone_source(BoneWorldFn fn) { bones_ = std::move(fn); }
@@ -95,7 +89,6 @@ private:
     const SurfaceFxLibrary* lib_;
     const SnapshotTypeTable* table_;
     const terrain::Terrain* terrain_;
-    SimDecorationOptions options_;
     BoneWorldFn bones_;
     RuntimeDecals decals_;
     std::map<std::pair<objects::ObjectId, int>, Gen> gens_;  // (id, side 0 centre / 1 left / 2 right), ordered

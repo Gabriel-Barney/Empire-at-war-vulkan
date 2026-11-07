@@ -324,7 +324,7 @@ static void test_projectiles(const render::SyntheticSimWorld& w) {
     p.type = frig;
     p.position = {100, 0, 0};
     p.direction = {0, 1, 0};
-    CHECK(near3(render::projectile_transform(p, &table[frig], &box).transform_dir({0, -1, 0}), 0, table[frig].scale, 0));
+    CHECK(near3(render::projectile_transform(p, &table[frig]).transform_dir({0, -1, 0}), 0, table[frig].scale, 0));
     render::Laser laser;
     CHECK(!render::projectile_laser(p, table[frig], laser));
     // Builder: model projectiles after the objects; fogged ones are hidden.

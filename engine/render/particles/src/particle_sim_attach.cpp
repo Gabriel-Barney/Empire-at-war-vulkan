@@ -107,8 +107,9 @@ SimAttachStats sync_sim_frame(ProxyAttachments& attach, const InterpolatedFrame&
         const SnapshotTypeInfo* ti = table.valid(p.type) ? &table[p.type] : nullptr;
         if (!ti || ti->model.empty()) continue;
         const bool visible = !projectile_fogged(frame, p);
+        const assets::Mat3x4 xf = projectile_transform(p, ti);
         if (SystemPtr fx = attach.library().get(ti->model)) {
-            attach.sync_effect(projectile_key(p.serial), std::move(fx), projectile_transform(p, ti, nullptr), 1.0f, visible);
+            attach.sync_effect(projectile_key(p.serial), std::move(fx), xf, 1.0f, visible);
             ++st.projectiles;
             continue;
         }
@@ -116,7 +117,7 @@ SimAttachStats sync_sim_frame(ProxyAttachments& attach, const InterpolatedFrame&
         if (!m || !m->asset || m->asset->proxies.empty()) continue;
         Instance in;
         in.model = m;
-        in.transform = projectile_transform(p, ti, m);
+        in.transform = xf;
         in.light_scale = {1, 1, 1, visible ? 1.0f : 0.0f};
         attach.sync(projectile_key(p.serial), in);
         ++st.projectiles;

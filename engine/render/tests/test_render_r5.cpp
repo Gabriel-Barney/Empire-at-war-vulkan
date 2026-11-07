@@ -963,7 +963,7 @@ static void test_sim_decorations(const render::SurfaceFxLibrary& lib) {
         deco.update(f);
     }
     CHECK(deco.generator_count() == 3 && deco.track_meshes().size() >= 2);
-    // Geometry detail below min_geometry_lod: no new tracks; the object leaves: generators dropped.
+    // The object leaves the frame: its generators are dropped.
     f.tick = 231;
     f.objects.clear();
     deco.update(f);

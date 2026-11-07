@@ -46,12 +46,6 @@ const materials::ResolvedPass* first_draw_pass(const materials::MaterialEffect* 
     return nullptr;
 }
 
-size_t first_of_bucket(const std::vector<Renderer::Built::Item>& items, PhaseBucket b) {
-    size_t i = 0;
-    while (i < items.size() && items[i].bucket < b) ++i;
-    return i;
-}
-
 }  // namespace
 
 // ------------------------------------------------------------------------------------ CPU helpers
@@ -847,7 +841,7 @@ bool Renderer::world_prepass(rhi::Frame& frame, VkCommandBuffer cmd, const ViewM
                                           {PhaseBucket::Transparent, PhaseBucket::Lasers}};
         uint32_t drawn = 0;
         for (const auto& rg : ranges) {
-            const size_t b0 = first_of_bucket(b.items, rg[0]), b1 = first_of_bucket(b.items, rg[1]);
+            const size_t b0 = detail::bucket_begin(b.items, rg[0]), b1 = detail::bucket_begin(b.items, rg[1]);
             if (b1 > b0) {
                 record_range(cmd, b, b0, b1, n, n, true);
                 drawn += static_cast<uint32_t>(b1 - b0);

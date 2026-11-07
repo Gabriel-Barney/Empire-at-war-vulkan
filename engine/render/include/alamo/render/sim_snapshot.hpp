@@ -113,6 +113,10 @@ struct SnapshotTypeInfo {
 // alt 3 at full health.
 int8_t damage_alt_index(const SnapshotTypeInfo& t, float health_fraction);
 
+// Text of a tag on a type: the merged typed view when the tag is a GameObjectType field, else the raw store along the
+// variant chain (own value first). Shared with the galactic snapshot (R2).
+std::string type_text(const objects::GameObjectTypes& types, objects::TypeIndex t, std::string_view tag);
+
 class SnapshotTypeTable {
 public:
     // One entry per TypeIndex of `types`. With a GameTypeResolver (the same one MapScene uses) the model, scale,

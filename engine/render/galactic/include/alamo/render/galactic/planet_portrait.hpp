@@ -62,12 +62,9 @@ public:
     // that fail to load: failed(name) becomes true and the result stays null.
     std::shared_ptr<const assets::TextureAsset> texture(std::string_view name);
     bool failed(std::string_view name) const;
-    bool pending() const;  // any portrait queued or in flight
     // Frame thread, outside a render pass: collects finished readbacks and records the queued portraits whose model
     // is resident (offscreen pass + copy to a readback buffer) into `cmd` of `frame`.
     void record(rhi::Frame& frame, VkCommandBuffer cmd);
-    // Frames a queued portrait waits for its model before it is marked failed (default 1200).
-    void set_model_wait_frames(uint32_t n) { wait_frames_ = n; }
     void destroy();  // GPU idle
 
 private:
@@ -82,19 +79,18 @@ private:
         rhi::Buffer readback;
         std::shared_ptr<const assets::TextureAsset> tex;
     };
-    Job* find(std::string_view name);
     const Job* find(std::string_view name) const;
     bool render_job(Job& j, rhi::Frame& frame, VkCommandBuffer cmd);
     void collect(Job& j);
     void free_gpu(Job& j);
 
+    static constexpr uint32_t kModelWaitFrames = 1200;  // frames a queued portrait waits for its model before it is marked failed
     Renderer* r_;
     rhi::Allocator* alloc_;
     rhi::FrameRing* ring_;
     GalacticModelSource* models_;
     const GalacticTypeTable* types_;
     Lighting lighting_;
-    uint32_t wait_frames_ = 1200;
     std::map<std::string, std::unique_ptr<Job>> jobs_;  // upper-case type name
 };
 

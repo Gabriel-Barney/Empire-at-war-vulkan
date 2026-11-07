@@ -395,7 +395,7 @@ void test_lod() {
     CHECK(render::choose_lod(2, render::lod_detail(4.0f, 0.1f, 1.0f)) == 1 && render::choose_lod(2, render::lod_detail(1.0f, 0.1f, 1.0f)) == 0);
     // Hidden meshes (B.9): Damage_Decal names (exact, case-insensitive) + STEALTH/buildup/charged substrings;
     // without XML the *_BLAST* fallback.
-    CHECK(render::is_damage_mesh("HP_F-R_Blast") && render::is_damage_mesh("hp_trac_blast") && !render::is_damage_mesh("Girders01"));
+    CHECK(render::fallback_damage_decal_rule("HP_F-R_Blast") && render::fallback_damage_decal_rule("hp_trac_blast") && !render::fallback_damage_decal_rule("Girders01"));
     CHECK(render::is_state_mesh("Hull_STEALTH") && render::is_state_mesh("Gun_BuildUp_01") && render::is_state_mesh("charged_fx") &&
           !render::is_state_mesh("HULL"));
     assets::ModelAsset dm;

@@ -329,7 +329,7 @@ bool engine_write(const EngineParams& e, const materials::ParamStore* store, con
         return true;
     }
     case Src::Extrusion: {
-        const float x[4] = {kShadowExtrusion, kShadowExtrusion, kShadowExtrusion, kShadowExtrusion};
+        const float x[4] = {kShadowExtrusionDistance, kShadowExtrusionDistance, kShadowExtrusionDistance, kShadowExtrusionDistance};
         return write_vec(x, out), true;
     }
     case Src::CloudU: return write_vec(f.cloud_u, out), true;
