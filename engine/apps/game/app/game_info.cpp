@@ -9,7 +9,6 @@
 
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
-#include "alamo/galactic/corruption.hpp"  // P4 host: corruption mission lines
 #include "alamo/game/story_script.hpp"
 #include "alamo/tactical/abilities/ability_types.hpp"
 #include "alamo/ui/hud_abilities.hpp"
@@ -574,7 +573,6 @@ SpecialPanelData special_panel(const galactic::GalacticSim& g, const GameData& d
             break;
         case galactic::kSpecialCorruption: {
             out.title = U"Corruption";
-            const std::vector<galactic::CorruptionOption> missions = galactic::corruption_options(d.types, ps.type);
             for (const galactic::CorruptionChoiceDef& c : g.corruption_choices(planet)) {
                 if (out.corruption.size() >= 3) break;
                 const galactic::CorruptionRequirements r = g.corruption_requirements(player, planet, c);
@@ -585,8 +583,8 @@ SpecialPanelData special_panel(const galactic::GalacticSim& g, const GameData& d
                 if (r.mission_need > 0) o.lines.push_back(fraction("Missions ", r.mission_have, r.mission_need));
                 if (r.units_need > 0) o.lines.push_back(fraction("Units ", r.units_have, r.units_need));
                 if (r.planets_need > 0) o.lines.push_back(fraction("Planets ", r.planets_have, r.planets_need));
-                if (const galactic::CorruptionOption* m = galactic::find_corruption_option(missions, c.type); m && m->tactical)
-                    o.lines.push_back(u32(m->kind == galactic::ConflictKind::Space ? "Space mission: " : "Land mission: ") + u32(m->map));
+                if (const galactic::CorruptionChoiceDef* m = g.corruption_choice(planet, c.type); m && m->tactical)
+                    o.lines.push_back(u32(m->tactical_space ? "Space mission: " : "Land mission: ") + u32(m->tactical_map));
                 o.enabled = r.all();
                 out.corruption.push_back(std::move(o));
             }

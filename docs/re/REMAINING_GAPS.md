@@ -18,7 +18,7 @@ Questions come from the wave A/B "under-specified" lists. Read this file togethe
 | § | Item | Status | Unblocks |
 |---|---|---|---|
 | 1.1–1.4 | Rebel tech theft (`Slicer_Ability`, R2D2_Slicer, RebelAdvanceTechPlan) | [H]; dialog / command setter [M]. **Port ✅ 2026-10-28** (galactic: sweep, slicer apply / AI pick / execute, command kind 2; apps/game slice dialog) | engine/galactic (abilities, unlocks), engine/ai (A2 plan), engine/lua |
-| 1.5–1.6 | Every unlock source for `Build_Initially_Locked`; FoC / TR lock lists | [H]. **Port ✅ 2026-10-28**: items 2–5 wired (corruption capture variant 0x3fb040 wired, tested 2026-10-28), locks on by default | engine/galactic: `set_initial_build_locks` can go on once 1.5 is wired |
+| 1.5–1.6 | Every unlock source for `Build_Initially_Locked`; FoC / TR lock lists | [H]. **Port ✅ 2026-10-28**: items 2–5 wired (corruption capture variant 0x3fb040 wired, tested 2026-10-28), locks always on (the `set_initial_build_locks` switch was removed by cu15, 2026-11-07) | engine/galactic: done |
 | 2 | `Build_Advances_Tech_Level` sets **to**, not by | [H]. **Port ✅ 2026-10-28** | engine/galactic production |
 | 3.1–3.2 | Map base layouts: base-level filter, markers, structure placement, starbase, units | [H]; a few call arguments [M]. **Port ✅ 2026-10-28** (base-level / owner / branch filters, spawn-table draws, marker start placement; not modelled: pass-1 markers, planet upgrades, escorts, DUMMY_STAR_BASE) | engine/apps battle host, engine/tactical |
 | 3.3 | Map ownership and reinforcement / capture points at land start | [H]; slot ↔ player-id meaning **probe**. **Port ✅ 2026-10-28** (map owners kept, Is_Neutral gate, countdown from GameConstants) | battle host, tactical capture points |
@@ -242,7 +242,7 @@ Port correction: the PHASE4 L1 note maps ENABLE_BUILDABLE → `lock_type(false)`
 - **TR:** 478 locked types (loose XML), 7 sliceable, no slicer. TR unlocks through Lua and story:
   - Lua: 103 `Unlock_Tech`, 204 `Lock_Tech`, 34 `Set_Tech_Level` references in the scripts;
   - story: 18 BUILDABLE_UNIT, 13 ENABLE / 13 DISABLE_BUILDABLE, 21 LOCK_UNIT, 3 SET_TECH_LEVEL.
-- **Port:** wire §1.4 (the sweep, set-to semantics) and §1.5 items 2–5, then switch `set_initial_build_locks` on.
+- **Port:** done: §1.4 (the sweep, set-to semantics) and §1.5 items 2–5 are wired and `Build_Initially_Locked` is always enforced (cu15 removed the `set_initial_build_locks` switch, 2026-11-07).
 
 ---
 

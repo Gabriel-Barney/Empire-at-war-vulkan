@@ -431,7 +431,7 @@ void test_black_market() {
               d->value == static_cast<int32_t>(commands::quantize(kQuantDuration, 90.0f)) && d->object == static_cast<int32_t>(w.oid(ty)));
         const float c0 = s.credits(pUnd);
         commands::CommandPipeline pipe;
-        pipe.set_handler(s.command_handler());
+        pipe.set_handler([&](uint64_t tick, const commands::Command& c) { return s.handle_command(tick, c); });
         pipe.begin_tick(0);
         pipe.submit(static_cast<uint8_t>(pUnd), commands::CommandSource::Player,
                     black_market_purchase_event(w.pid(rA), w.oid(ty), special_name_crc("Generic_Tech"), 800.0f, 90.0f));
@@ -695,7 +695,7 @@ void test_tech_unlocks() {
         make_sliceable(w.rules, tFrigate, 1);
         make_sliceable(w.rules, tDS2, 1);
         make_sliceable(w.rules, tMerc, 2);
-        CHECK(s.initial_build_locks() && s.build_locked(pEmp, tFrigate));
+        CHECK(s.build_locked(pEmp, tFrigate));
         CHECK((s.slice_candidates(pEmp) == V{tFrigate, tDS2}));  // Tech_Level <= tech (tMerc is tech 2)
         s.lock_type(pEmp, tFrigate, true);
         CHECK(s.type_locked(pEmp, tFrigate) && s.build_locked(pEmp, tFrigate) && (s.slice_candidates(pEmp) == V{tDS2}));
@@ -1112,7 +1112,7 @@ CrcLog run_scripted(const ParallelFor& pf, int32_t frames) {
     s.register_crc(reg, "galactic");
     reg.add("rng", [&w](StateHasher& h) { w.rng.hash(h); });
     commands::CommandPipeline pipe;
-    pipe.set_handler(s.command_handler());
+    pipe.set_handler([&](uint64_t tick, const commands::Command& c) { return s.handle_command(tick, c); });
     CrcLog log;
     log.systems = reg.names();
     ObjectHandle emp_hero, sab, halt, ig;

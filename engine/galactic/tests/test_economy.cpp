@@ -51,6 +51,14 @@ namespace {
 
 bool near(float a, float b, float eps = 1e-4f) { return std::fabs(a - b) <= eps; }
 
+// Frames a straight hop from `from` to `to` takes at v (econ::fleet_step until arrival).
+int32_t frames_for_hop(Vec3 from, Vec3 to, float v) {
+    Vec3 p = from;
+    for (int32_t k = 1; k < 100000; ++k)
+        if (econ::fleet_step(p, to, v, nullptr)) return k;
+    return -1;
+}
+
 // ---- 1. formulas ---------------------------------------------------------------------------------------------
 
 void test_formulas() {
@@ -132,9 +140,9 @@ void test_formulas() {
     CHECK(hop_factor(false, false, false, true, 0.5f, 1.5f) == 1.0f);
     const float v0 = base_speed(1.5f, 0.07f, 1.0f);
     CHECK(v0 == 1.5f * 0.07f);
-    CHECK(hop_frames_1d(60.0f, hop_speed(v0, 5.0f)) == 113);  // GE 3.2 example: ~113 frames
-    CHECK(hop_frames_1d(60.0f, v0) == 570);                   // no route: ~20 s
-    Vec3f p{0, 0, 0}, f{};
+    CHECK(frames_for_hop({0, 0, 0}, {60.0f, 0, 0}, hop_speed(v0, 5.0f)) == 113);  // GE 3.2 example: ~113 frames
+    CHECK(frames_for_hop({0, 0, 0}, {60.0f, 0, 0}, v0) == 570);                   // no route: ~20 s
+    Vec3 p{0, 0, 0}, f{};
     CHECK(!fleet_step(p, {10, 0, 0}, 1.0f, &f) && p.x == 1.0f && f.x == 1.0f);
     p = {7.5f, 0, 0};
     CHECK(fleet_step(p, {10, 0, 0}, 1.0f, &f) && p.x == 10.0f);  // 1.5 left < 2 * 1 -> snap
@@ -462,13 +470,6 @@ void test_production() {
 
 // ---- 2c. fleets ----------------------------------------------------------------------------------------------------
 
-int32_t frames_for_hop(Vec3 from, Vec3 to, float v) {
-    econ::Vec3f p{from.x, from.y, from.z};
-    for (int32_t k = 1; k < 100000; ++k)
-        if (econ::fleet_step(p, {to.x, to.y, to.z}, v, nullptr)) return k;
-    return -1;
-}
-
 void test_fleets() {
     {
         World w({{pEmpire, rA, tSB1}, {pEmpire, rA, tFrigate}, {pEmpire, rA, tFighters}, {pEmpire, rA, tFighters}});
@@ -736,10 +737,6 @@ void test_a2_income_hook() {
     w.run(1);
     CHECK(ticks.size() == 2 && ticks[1].gain == 8.0f && ticks[1].day == 3 && ticks[1].frame == 2700);
     CHECK(s.credits(pUnder) - before < 8.0f * 1.2f - 1.0f);
-    s.remove_income_hook(id);
-    const int32_t stop = s.next_cycle_frame();
-    while (s.frame() <= stop) w.run(1);
-    CHECK(ticks.size() == 2);
 
     // AI Empire: ticks in player order, the gain taken before the cap clamp.
     World a({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pEmpire, rB, tBarracks}, {pUnder, rE, tSB1}}, true);
@@ -1118,21 +1115,15 @@ void test_a2_prerequisites_and_market_hook() {
     CHECK(s.enqueue(pEmpire, rD, tBarracks) == RejectReason::PrerequisitesUnmet);
     // Starbases: only the next level.
     CHECK(!s.buildable(rA, pEmpire, tSB2) && s.enqueue(pEmpire, rA, tSB2) == RejectReason::PrerequisitesUnmet);
-    // Production-service hooks: per planet, newest registered first (reverse row order), primary slot first.
-    std::vector<std::pair<int, PlanetIndex>> calls;
-    s.set_production_service_hook([&calls](PlanetIndex p) { calls.push_back({0, p}); });
-    const uint32_t h1 = s.add_production_service_hook([&calls](PlanetIndex p) { calls.push_back({1, p}); });
-    s.add_production_service_hook([&calls](PlanetIndex p) { calls.push_back({2, p}); });
+    // Production-service hook: per planet, newest registered first (reverse row order).
+    std::vector<PlanetIndex> calls;
+    s.set_production_service_hook([&calls](PlanetIndex p) { calls.push_back(p); });
     s.update();
-    const std::vector<PlanetIndex> rows = {rE, rD, rC, rB, rA};
-    CHECK(calls.size() == 15);
-    for (size_t i = 0; i < calls.size() && i < 15; ++i)
-        CHECK(calls[i].first == static_cast<int>(i % 3) && calls[i].second == rows[i / 3]);
+    CHECK((calls == std::vector<PlanetIndex>{rE, rD, rC, rB, rA}));
     calls.clear();
-    s.remove_production_service_hook(h1);
     s.set_production_service_hook(nullptr);
     s.update();
-    CHECK(calls.size() == 5 && calls[0].first == 2 && calls[4].second == rA);
+    CHECK(calls.empty());
 }
 
 // Relation table (Make_Ally / Make_Enemy) behind every hostility test, and the build locks behind buildability.
@@ -1186,15 +1177,11 @@ void test_diplomacy_and_build_locks() {
     CHECK(s.enqueue(pEmpire, rA, tFrigate) == RejectReason::PrerequisitesUnmet);
     s.lock_type(pEmpire, tFrigate, false);
     CHECK(!s.build_locked(pEmpire, tFrigate) && s.buildable(rA, pEmpire, tFrigate) && s.diplomacy_state_default());
-    // Build_Initially_Locked: only with initial build locks on (the default); Unlock_Tech (unlock_tech) adds it to the
-    // unlocked list.
-    CHECK(s.initial_build_locks());
-    w.rules.types[tCorvette].build_initially_locked = true;
-    s.set_initial_build_locks(false);
+    // Build_Initially_Locked (always enforced); Unlock_Tech (unlock_tech) adds it to the unlocked list.
     CHECK(s.buildable(rA, pEmpire, tCorvette));
-    s.set_initial_build_locks(true);
+    w.rules.types[tCorvette].build_initially_locked = true;
     CHECK(s.build_locked(pEmpire, tCorvette) && !s.buildable(rA, pEmpire, tCorvette) && s.build_locked(pUnder, tCorvette));
-    CHECK(s.diplomacy_state_default() && digest() == fresh);  // a switch, not state
+    CHECK(s.diplomacy_state_default() && digest() == fresh);  // a type flag, not state
     s.lock_type(pEmpire, tCorvette, false);  // only leaves the locked list (REMAINING_GAPS 1.5): still initially locked
     CHECK(!s.type_unlocked(pEmpire, tCorvette) && s.build_locked(pEmpire, tCorvette) && digest() == fresh);
     s.unlock_tech(pEmpire, tCorvette);
@@ -1660,11 +1647,9 @@ void test_oi_buildability() {
     w.rules.types[tFrigate].required_planets = {tPlanetB};
     CHECK(s.build_check(pEmpire, rA, tFrigate).reason == kBuildRequiredPlanet);
     w.rules.types[tFrigate].required_planets.clear();
-    // Initially locked: reason 7 with the initial locks on.
+    // Initially locked: reason 7.
     w.rules.types[tFrigate].build_initially_locked = true;
-    s.set_initial_build_locks(true);
     CHECK(s.build_check(pEmpire, rA, tFrigate).reason == kBuildInitiallyLocked);
-    s.set_initial_build_locks(false);
     w.rules.types[tFrigate].build_initially_locked = false;
     // Starbase: the next level within Max_Space_Base; a hostile visible fleet in orbit blocks a new base (reason 10).
     CHECK(s.build_check(pEmpire, rA, tSB2).ok);
@@ -1982,7 +1967,7 @@ void test_a2_fleet_management() {
     // The same ops through the scheduled command pipeline (the HUD / replay path) and the direct path (AI).
     World v({{pEmpire, rA, tFrigate}, {pEmpire, rA, tCorvette}});
     commands::CommandPipeline pipe;
-    pipe.set_handler(v.sim.command_handler());
+    pipe.set_handler([&](uint64_t tick, const commands::Command& c) { return v.sim.handle_command(tick, c); });
     const uint32_t g = v.fleet(rA, pEmpire);
     const uint32_t vpa = static_cast<uint32_t>(v.store.id(v.planet(rA).object));
     const uint32_t cor = static_cast<uint32_t>(v.store.id(v.fl(g).contents[1]));
@@ -2147,7 +2132,7 @@ RunResult run_synthetic(const ParallelFor& pf, int32_t days, int32_t stride) {
     s.set_black_market_influence(rC, true);
     s.set_black_market_influence(rB, true);
     commands::CommandPipeline pipe;
-    pipe.set_handler(s.command_handler());
+    pipe.set_handler([&](uint64_t tick, const commands::Command& c) { return s.handle_command(tick, c); });
     const CrcRegistry reg = make_registry(s, w.rng);
     RunResult out;
     out.log.systems = out.golden_view.systems = reg.names();
@@ -2318,7 +2303,7 @@ RunResult run_foc(const FocData& d, const ParallelFor& pf, int32_t days, int32_t
     s.set_black_market_influence(row("Felucia"), true);
     s.set_corruption(row("Naboo"), kCorruptionPiracy, U);
     commands::CommandPipeline pipe;
-    pipe.set_handler(s.command_handler());
+    pipe.set_handler([&](uint64_t tick, const commands::Command& c) { return s.handle_command(tick, c); });
     const CrcRegistry reg = make_registry(s, rng);
     RunResult out;
     out.log.systems = out.golden_view.systems = reg.names();

@@ -81,12 +81,7 @@ void build_raw(const PlanetGraph& graph, const AllPairsInput& input, RawOwned& o
                std::vector<uint32_t>* cost_out, std::vector<uint8_t>* hidden_out) {
     const uint32_t n = graph.size();
     std::vector<uint32_t> cost(n, 0);
-    for (uint32_t i = 0; i < n; ++i) {
-        if (!input.node_value.empty())
-            cost[i] = i < input.node_value.size() ? node_cost_from_value(input.node_value[i]) : 0u;
-        else if (i < input.node_cost.size())
-            cost[i] = static_cast<uint32_t>(input.node_cost[i]);
-    }
+    for (uint32_t i = 0; i < n && i < input.node_value.size(); ++i) cost[i] = node_cost_from_value(input.node_value[i]);
     std::vector<uint8_t> hidden(n, 0);
     if (input.revealed && !input.revealed->empty())
         for (uint32_t i = 0; i < n; ++i) hidden[i] = (i < input.revealed->size() && input.revealed->test(i)) ? 0 : 1;

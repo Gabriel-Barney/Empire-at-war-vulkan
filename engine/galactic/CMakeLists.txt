@@ -29,7 +29,6 @@ if("data" IN_LIST ALAMO_ENGINE_MODULES AND "objects" IN_LIST ALAMO_ENGINE_MODULE
     src/auto_resolve.cpp
     src/conflicts.cpp
     src/story_ops.cpp  # L1/S4: Change_Owner, Assemble_Fleet, containment queries
-    src/corruption.cpp  # S4: corruption options / corruption missions (corruption.hpp)
     src/ai_hooks.cpp  # A2 galactic: income ticks, production queries, FleetManagement, AI operations
     src/victory.cpp  # A2 galactic: [port] campaign victory check (victory.hpp)
     src/reveal.cpp     # GALACTIC_REVEAL_CORRUPTION: revealed bytes, pre-step, corruption transitions

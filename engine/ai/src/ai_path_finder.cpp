@@ -21,7 +21,6 @@ galactic::AllPairsInput ai_path_input(std::span<const double> node_value, const 
 
 void AiPathFinder::Input::assign(const galactic::AllPairsInput& in) {
     value.assign(in.node_value.begin(), in.node_value.end());
-    cost.assign(in.node_cost.begin(), in.node_cost.end());
     has_revealed = in.revealed != nullptr;
     revealed = has_revealed ? *in.revealed : galactic::Bitset{};
     zoff.assign(in.z_offset.begin(), in.z_offset.end());
@@ -30,7 +29,6 @@ void AiPathFinder::Input::assign(const galactic::AllPairsInput& in) {
 galactic::AllPairsInput AiPathFinder::Input::view() const {
     galactic::AllPairsInput in;
     in.node_value = value;
-    in.node_cost = cost;
     in.revealed = has_revealed ? &revealed : nullptr;
     in.z_offset = zoff;
     return in;

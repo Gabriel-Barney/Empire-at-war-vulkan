@@ -196,7 +196,7 @@ float base_speed(float slowest_hyperspace_speed, float faction_factor, float m) 
     return slowest_hyperspace_speed * faction_factor * m;
 }
 
-bool fleet_step(Vec3f& pos, const Vec3f& target, float v, Vec3f* facing) {
+bool fleet_step(Vec3& pos, const Vec3& target, float v, Vec3* facing) {
     const float dx = target.x - pos.x, dy = target.y - pos.y, dz = target.z - pos.z;
     const float len2 = dx * dx + dy * dy + dz * dz;
     if (!(len2 > 0.0f)) {
@@ -207,8 +207,8 @@ bool fleet_step(Vec3f& pos, const Vec3f& target, float v, Vec3f* facing) {
     if (facing) *facing = {dx / len, dy / len, dz / len};
     if (!(v > 0.0f)) return false;
     const float k = v / len;
-    const Vec3f vel{dx * k, dy * k, dz * k};
-    const Vec3f np{pos.x + vel.x, pos.y + vel.y, pos.z + vel.z};
+    const Vec3 vel{dx * k, dy * k, dz * k};
+    const Vec3 np{pos.x + vel.x, pos.y + vel.y, pos.z + vel.z};
     const float rx = target.x - np.x, ry = target.y - np.y, rz = target.z - np.z;
     const float rem = dmath::sqrt(rx * rx + ry * ry + rz * rz);
     const float speed = dmath::sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
@@ -218,14 +218,6 @@ bool fleet_step(Vec3f& pos, const Vec3f& target, float v, Vec3f* facing) {
     }
     pos = target;
     return true;
-}
-
-int32_t hop_frames_1d(float distance, float v) {
-    Vec3f p{0.0f, 0.0f, 0.0f};
-    const Vec3f t{distance, 0.0f, 0.0f};
-    for (int32_t k = 1; k < 10000000; ++k)
-        if (fleet_step(p, t, v, nullptr)) return k;
-    return -1;
 }
 
 float political_delta(int32_t elapsed_frames, float m, float change_seconds) {

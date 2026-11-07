@@ -848,8 +848,7 @@ bool GalacticSim::build_locked(int32_t player, uint32_t type) const {
     if (!valid_player(player)) return false;
     const PlayerState& ps = players_[static_cast<size_t>(player)];
     if (!ps.locked_types.empty() && type_locked(player, type)) return true;
-    return initial_build_locks_ && type < rules_->types.size() && rules_->types[type].build_initially_locked &&
-           !type_unlocked(player, type);
+    return type < rules_->types.size() && rules_->types[type].build_initially_locked && !type_unlocked(player, type);
 }
 
 void GalacticSim::hack_effect(int32_t player, PlanetIndex planet, ObjectHandle hacker, ObjectHandle weapon) {
