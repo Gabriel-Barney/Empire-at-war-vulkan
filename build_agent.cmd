@@ -1,6 +1,7 @@
 @echo off
 rem Build a module list in an agent's own tree with MSVC or clang and run ctest (parallel agents, N1 onward).
-rem Usage: build_agent.cmd <msvc|clang> <tree> "<module list>" [ctest -R regex | all]
+rem Usage: build_agent.cmd <msvc|clang> <tree> "<module list>|all" [ctest -R regex | all]
+rem Module list "all": the default ALAMO_ENGINE_MODULES of engine/CMakeLists.txt (configured with -U, like build_msvc.cmd).
 rem Tests: no 4th argument = the fast tier (ctest -LE slow, tests without the "slow" label); a regex runs the matching tests,
 rem slow ones included; "all" runs every test (the gate scripts always do).
 rem Output: a short summary (tools\lint\build_summary.py); set ALAMO_FULL_LOG=1 to also print the whole log.
@@ -25,8 +26,9 @@ if /i "%~1"=="clang" (
   set COMPILER=-DCMAKE_CXX_COMPILER=cl
 )
 if "%~4"=="" (set FILTER=-LE slow) else if /i "%~4"=="all" (set FILTER=) else set FILTER=-R "%~4"
+if /i "%~3"=="all" (set MODULES=-U ALAMO_ENGINE_MODULES) else set MODULES="-DALAMO_ENGINE_MODULES=%~3"
 > %LOG% (
-  cmake -S . -B %B% -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_MAKE_PROGRAM=%TC%\venv\Scripts\ninja.exe" !COMPILER! "-DALAMO_ENGINE_MODULES=%~3" 2>&1
+  cmake -S . -B %B% -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_MAKE_PROGRAM=%TC%\venv\Scripts\ninja.exe" !COMPILER! !MODULES! 2>&1
   echo configure exit !ERRORLEVEL!
   cmake --build %B% 2>&1
   echo build exit !ERRORLEVEL!
@@ -34,8 +36,9 @@ if "%~4"=="" (set FILTER=-LE slow) else if /i "%~4"=="all" (set FILTER=) else se
   if not exist %B%\tmp mkdir %B%\tmp
   set "TMP=%~dp0%B%\tmp"
   set "TEMP=%~dp0%B%\tmp"
-  ctest --test-dir %B% --output-on-failure -j 4 !FILTER! 2>&1
+  ctest --test-dir %B% --output-on-failure --output-junit "%~dp0%B%\ctest_junit.xml" -j 4 !FILTER! 2>&1
   echo ctest exit !ERRORLEVEL!
+  python tools\lint\ctest_skips.py "%~dp0%B%\ctest_junit.xml"
 )
 echo AGENT_DONE>> %LOG%
 python roadmap-store\roadmap_store.py record-build %~1 %B% %LOG%

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Disassemble a function (by RVA) with string annotations. Usage: dis.py <pe> <rva_hex> [maxinsns]"""
+"""Disassemble a function (by RVA) with string annotations. Usage: disfn.py <pe> <rva_hex> [maxinsns]"""
 import sys, capstone, struct
 sys.path.insert(0, __import__('os').path.dirname(__file__))
 import xrefs
@@ -19,8 +19,6 @@ def dis(db, rva, maxn=400):
                 s = db['strings'].get(t)
                 ann = f'  ; {t:#x} ' + (repr(s['s'][:70]) if s else '')
             except Exception: pass
-        elif ins.mnemonic == 'call':
-            pass
         out.append(f'{ins.address-base:#x}: {ins.mnemonic} {ins.op_str}{ann}')
     return out
 if __name__ == '__main__':

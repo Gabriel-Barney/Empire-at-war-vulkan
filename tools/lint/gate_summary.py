@@ -1,6 +1,9 @@
 """Summarise the logs of build_msvc / build_clang / build_asan for build_gate.cmd.
 
 Prints one line per build and exits 1 when any build did not finish, any step exited non-zero, or a warning was logged.
+The step-exit, test-total and skips patterns come from build_summary.py. The warning rule here is deliberately narrower
+than build_summary's (compiler / linker "warning:" lines only): build_summary also counts error-like lines anywhere in the
+log, including the output of passing tests, which would fail the gate on test output.
 Then runs the source lints that need no build (modc t04: check_mod_names.py and its self-test, docs/status/modc-audit.md) and
 prints one line for them; a lint failure fails the gate too. (The same lints also run as ctest entries in every build.)
 Usage: gate_summary.py <logs dir>
@@ -9,6 +12,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+from build_summary import SKIPS, STEP_EXIT, TESTS_TOTAL
 
 LINTS = [('mod names', ['check_mod_names.py']), ('mod names selftest', ['check_mod_names.py', '--selftest'])]
 
@@ -52,15 +57,15 @@ def main(logs):
             bad = True
             continue
         text = c + '\n' + b
-        exits = dict(re.findall(r'^(configure|build|ctest) exit (-?\d+)\s*$', text, re.M))
+        exits = dict(STEP_EXIT.findall(text))
         steps_ok = all(exits.get(s) == '0' for s in ('configure', 'build', 'ctest'))
         warn = len({l.strip() for l in text.splitlines() if re.search(r'\bwarning( [A-Z]+\d+)?:', l)})
-        total = re.search(r'tests passed(?:, \d+ tests failed)? out of (\d+)', text)
-        skips = re.search(r'^skips: .*$', text, re.M)
+        total = TESTS_TOTAL.search(text)
+        skips = SKIPS.search(text)
         ok = steps_ok and warn == 0
         bad |= not ok
         print(f"{name:6} {'PASS' if ok else 'FAIL'}  exits={exits} warnings={warn} "
-              f"tests={total.group(1) if total else '?'}  {skips.group(0) if skips else 'skips: not reported'}")
+              f"tests={total.group(2) if total else '?'}  {skips.group(0) if skips else 'skips: not reported'}")
     bad |= run_lints()
     return 1 if bad else 0
 

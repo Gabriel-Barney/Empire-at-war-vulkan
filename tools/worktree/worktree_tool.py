@@ -11,12 +11,12 @@ Wrappers: tools\\new_worktree.cmd and tools\\clean_worktrees.cmd.
 new    `git worktree add --no-track .claude/worktrees/<name> -b claude/<name> <base>` run from the MAIN checkout (found
        with `git worktree list`). <base> defaults to origin/dev, the development branch (CLAUDE.md "Branches"; origin/main
        when origin has no dev). Then directory junctions (`mklink /J`, no admin) for Data, extracted, toolchain and
-       roadmap-store pointing at the main checkout's folders, `roadmap_store.py sync` (a failure only warns),
-       `tools\\setup_git.cmd` when the new tree has it, and the exact next commands. re_reference/ is never linked
+       roadmap-store pointing at the main checkout's folders, `roadmap_store.py sync` (a failure only warns), and the
+       exact next commands. re_reference/ is never linked
        (clean-room rule: only RE/doc tasks open it, from the main checkout).
 clean  dry run by default: a table of every worktree (branch, merged into origin/dev or origin/main, uncommitted changes, unpushed
        commits, age, build-tree GB) and what --apply would do. --apply removes a worktree only when its HEAD is
-       reachable from origin/dev or origin/main (merged), the tree is clean (the two generated ROADMAP pages may differ), nothing
+       reachable from origin/dev or origin/main (merged), the tree is clean, nothing
        is unpushed, it has been idle for --days days (default 2: a fresh worktree on the dev tip looks "merged"),
        it is not locked, not the main checkout, not the worktree this was started from and not in --keep.
        Links are removed first with `cmd /c rmdir` (never recursive: that would delete the real Data / toolchain),
@@ -40,7 +40,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 LINKED = ("Data", "extracted", "toolchain", "roadmap-store")
-PAGES = {"ROADMAP.html", "docs/ROADMAP.html"}  # generated, tracked; a diff in them alone does not block removal
 MAIN_TREES_KEPT = {"build-msvc", "build-clang", "build-asan"}
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 REPARSE_ATTR = 0x400
@@ -258,7 +257,6 @@ class Info:
     exists: bool = True
     merged: bool | None = None
     dirty: int = 0
-    pages_only: bool = False
     unpushed: int = 0
     commit_ts: float = 0.0
     idle_days: float = 0.0
@@ -303,8 +301,6 @@ def inspect(ctx: Ctx, wt: Worktree, keep: set, only: set, days: float, pushed_ok
         inf.commit_ts = float(t) if t.isdigit() else 0.0
     st = git(wt.path, "status", "--porcelain", check=False).stdout.splitlines()
     inf.dirty = len(st)
-    paths = {ln[3:].strip().strip('"') for ln in st}
-    inf.pages_only = bool(st) and paths <= PAGES
     inf.idle_days = (time.time() - activity_ts(wt, inf.commit_ts)) / DAY
     if sizes:
         for e in sorted(os.listdir(wt.path)):
@@ -316,7 +312,7 @@ def inspect(ctx: Ctx, wt: Worktree, keep: set, only: set, days: float, pushed_ok
         inf.reasons.append("origin/dev and origin/main missing")
     elif not inf.merged and not (pushed_ok and inf.unpushed == 0):
         inf.reasons.append("not merged into origin/dev or origin/main")
-    if inf.dirty and not inf.pages_only:
+    if inf.dirty:
         inf.reasons.append("uncommitted changes")
     if inf.unpushed:
         inf.reasons.append("unpushed commits")
@@ -330,7 +326,7 @@ def print_table(infos: list, out=print):
     for i in infos:
         w = i.wt
         merged = "?" if i.merged is None else ("yes" if i.merged else "no")
-        dirty = "-" if not i.exists else ("pages" if i.pages_only else (str(i.dirty) if i.dirty else "no"))
+        dirty = "-" if not i.exists else (str(i.dirty) if i.dirty else "no")
         age = f"{(time.time() - i.commit_ts) / DAY:.1f}" if i.commit_ts else "-"
         build = f"{gb(i.build_bytes):.2f} ({i.build_trees})" if i.build_trees else "-"
         branch = w.branch or ("(detached)" if w.detached else "-")
@@ -388,15 +384,6 @@ def cmd_new(ctx: Ctx, name: str, base: str | None = None, fetch: bool = False, s
             out(f"  warning: sync failed: {ex}")
     elif sync:
         out("  skip sync: roadmap-store/roadmap_store.py not found")
-
-    setup = target / "tools" / "setup_git.cmd"
-    if setup.is_file():
-        out("tools\\setup_git.cmd ...")
-        p = run(["cmd", "/c", "tools\\setup_git.cmd"], cwd=target, timeout=120)
-        out("  setup_git ok" if p.returncode == 0
-            else f"  warning: setup_git exit {p.returncode}: {(p.stdout + p.stderr).strip()[-300:]}")
-    else:
-        out(f"  note: tools\\setup_git.cmd is not in {base}; run it after merging origin/dev into the branch")
 
     if not modules.split(";")[0] == "core":
         modules = "core;" + modules
@@ -523,7 +510,6 @@ def selftest() -> int:
         g(main, "config", "user.email", "selftest@example.invalid")
         (main / ".gitignore").write_text(
             "/.claude/worktrees/\n/Data/\n/extracted/\n/toolchain/\n/roadmap-store/\n/build-*/\n")
-        (main / "ROADMAP.html").write_text("a\n")
         (main / "x.txt").write_text("x\n")
         g(main, "add", "-A")
         g(main, "commit", "-q", "-m", "init")
@@ -568,8 +554,6 @@ def selftest() -> int:
         d_ = cmd_new(ctx, "st-dirty", sync=False, out=log.append)     # merged but dirty
         (d_ / "scratch.txt").write_text("wip\n")
         k = cmd_new(ctx, "st-keep", sync=False, out=log.append)       # merged, in --keep
-        p_ = cmd_new(ctx, "st-pages", sync=False, out=log.append)     # merged, only a generated page differs
-        (p_ / "ROADMAP.html").write_text("regenerated\n")
         cur = cmd_new(ctx, "st-current", sync=False, out=log.append)  # merged, the tool is "run from" here
         ctx.current.add(norm(cur))
 
@@ -588,8 +572,8 @@ def selftest() -> int:
         check(not res["removed"] and a.exists(), "dry run removed something")
 
         res = cmd_clean(ctx, apply=True, days=0, keep=["st-keep"], out=log.append)
-        check(sorted(res["removed"]) == ["st-a", "st-c", "st-dev", "st-pages"], f"removed set: {res['removed']}")
-        check(not a.exists() and not p_.exists() and not dv.exists(), "removed folders still exist")
+        check(sorted(res["removed"]) == ["st-a", "st-c", "st-dev"], f"removed set: {res['removed']}")
+        check(not a.exists() and not dv.exists(), "removed folders still exist")
         for kept in (b, d_, k, cur):
             check(kept.exists(), f"{kept.name} was removed")
         check((main / "Data" / "keep.txt").read_text() == "real\n", "REAL DATA WAS TOUCHED")

@@ -28,8 +28,9 @@ set PATH=%~dp0toolchain\venv\Scripts;%PATH%
   if not exist build-%~1\tmp mkdir build-%~1\tmp
   set "TMP=%~dp0build-%~1\tmp"
   set "TEMP=%~dp0build-%~1\tmp"
-  ctest --test-dir build-%~1 --output-on-failure -j 4 !SLOWFILTER! -R "%~1" 2>&1
+  ctest --test-dir build-%~1 --output-on-failure --output-junit "%~dp0build-%~1\ctest_junit.xml" -j 4 !SLOWFILTER! -R "%~1" 2>&1
   echo ctest exit !ERRORLEVEL!
+  python tools\lint\ctest_skips.py "%~dp0build-%~1\ctest_junit.xml"
 )
 echo MODULE_DONE>> %LOG%
 python roadmap-store\roadmap_store.py record-build msvc build-%~1 %LOG%

@@ -19,6 +19,11 @@ DONE_MARKERS = ('BUILD_DONE', 'AGENT_DONE', 'MODULE_DONE')
 WARN = re.compile(r'\bwarning( [A-Z]+\d+)?:|: warning\b')
 ERR = re.compile(r'\berror( [A-Z]+\d+)?:|^FAILED: |fatal error|LNK\d+')
 TEST_HEADER = re.compile(r'^\s*\d+/\d+ Test\s+#\d+: (\S+) \.+\s*(.*)$')
+# Shared with gate_summary.py: the build scripts' step exit lines, ctest's total line and the skips line.
+STEP_EXIT = re.compile(r'^(configure|build|ctest) exit (-?\d+)\s*$', re.M)
+# ctest prints "100% tests passed out of N" when all pass, "N% tests passed, F tests failed out of M" otherwise.
+TESTS_TOTAL = re.compile(r'\d+% tests passed(?:, (\d+) tests failed)? out of (\d+)')
+SKIPS = re.compile(r'^skips: .*$', re.M)
 
 
 def unique(lines):
@@ -81,7 +86,7 @@ def main(paths):
     if not done:
         print('NOT FINISHED (no BUILD_DONE / AGENT_DONE / MODULE_DONE in the logs)')
         bad = True
-    exits = re.findall(r'^(configure|build|ctest) exit (-?\d+)\s*$', text, re.M)
+    exits = STEP_EXIT.findall(text)
     print('exits: ' + (' '.join(f'{k}={v}' for k, v in exits) or 'none found'))
     bad |= any(v != '0' for _, v in exits)
 
@@ -94,8 +99,7 @@ def main(paths):
         print(f'  ... {len(errs) + len(warns) - MAX_DIAG} more in the log')
     bad |= bool(warns or errs)
 
-    # ctest prints "100% tests passed out of N" when all pass, "N% tests passed, F tests failed out of M" otherwise.
-    m = re.search(r'\d+% tests passed(?:, (\d+) tests failed)? out of (\d+)', text)
+    m = TESTS_TOTAL.search(text)
     if m:
         nfail = int(m.group(1) or 0)
         print(f'tests: {int(m.group(2)) - nfail}/{m.group(2)} passed' + (f', {nfail} FAILED' if nfail else ''))
@@ -112,7 +116,7 @@ def main(paths):
     cache = cache_stats()
     if cache:
         print(cache)
-    skips = re.search(r'^skips: .*$', text, re.M)
+    skips = SKIPS.search(text)
     if skips:
         print(skips.group(0))
     print('SUMMARY ' + ('FAIL' if bad else 'PASS'))
