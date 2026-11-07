@@ -229,6 +229,29 @@ int32_t ComponentTable::find(std::string_view name) const {
     return it == index_.end() ? -1 : static_cast<int32_t>(it->second);
 }
 
+uint32_t layer_of(const CommandBarComponent& c, const ComponentPlacement& p) {
+    int32_t l = c.base_layer;
+    if (p.from_bone) l = std::max(l, kShellLayerMin);
+    return static_cast<uint32_t>(std::clamp(l, 0, static_cast<int32_t>(kHudLayers) - 1));
+}
+
+Vec2f component_art_size(const CommandBarComponent& c, const ComponentPlacement& p, const TextureAtlas& atlas, Vec2f fallback) {
+    if (p.size.x > 0 && p.size.y > 0) return p.size;
+    if (c.has_size) return c.size;
+    for (const auto* list : {&c.blank_texture, &c.icon_texture, &c.icon_alternate_texture})
+        if (!list->empty())
+            if (const AtlasEntry* e = atlas.find(list->front()))
+                return {static_cast<float>(e->width) * c.scale, static_cast<float>(e->height) * c.scale};
+    return fallback;
+}
+
+int32_t find_fmt(const ComponentTable& t, const char* fmt, int a, int b) {
+    char n[48];
+    if (b < 0) std::snprintf(n, sizeof n, fmt, a);
+    else std::snprintf(n, sizeof n, fmt, a, b);
+    return t.find(n);
+}
+
 // ---- Atlas --------------------------------------------------------------------------------------
 std::string atlas_key(std::string_view n) {
     n = data::trim(n);

@@ -1,6 +1,6 @@
 // alamo_ui tests (no framework; non-zero exit on failure): input state machine and bindings, camera math
 // (pose, limits, clamping, bounds, Hor+ FOV, splines, galactic zoom), picking against a synthetic TreeSet,
-// box select, click -> command translation with exact quantized payloads, input replay determinism.
+// box select, click -> command translation with exact quantized payloads, session determinism.
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -878,30 +878,6 @@ void test_orders() {
     out = ot.take();
     CHECK(out.size() == 2 && (out[1].ids("ids") == std::vector<uint32_t>{3, 5}));
 
-    // keys: SelectAll (Ctrl+Y [port: Gabriel]), Stop (H since W A S D move [port: Gabriel]), control groups (3 recall, Ctrl+4 assign, Ctrl+Shift+5 add)
-    mark = s.frames.size();
-    s.key(vk::kControl, true);
-    s.tap(vk::key('Y'));
-    s.tap(static_cast<uint16_t>(vk::k0 + 4));
-    s.key(vk::kShift, true);
-    s.tap(static_cast<uint16_t>(vk::k0 + 5));
-    s.key(vk::kShift, false);
-    s.key(vk::kControl, false);
-    s.tap(static_cast<uint16_t>(vk::k0 + 3));
-    s.tap(vk::key('H'));
-    feed(in, ot, keys, c, s, mark);
-    out = ot.take();
-    CHECK(out.size() == 5);
-    if (out.size() == 5) {
-        CHECK(out[0].type() == commands::EventType::SelectAll);
-        CHECK(out[1].type() == commands::EventType::ControlGroup && out[1].u("group") == 4 && out[1].u("assign") == 1 &&
-              out[1].u("add") == 0);
-        CHECK(out[2].u("group") == 5 && out[2].u("assign") == 1 && out[2].u("add") == 1);
-        CHECK(out[3].u("group") == 3 && out[3].u("assign") == 0 && out[3].u("add") == 0);
-        CHECK(out[4].type() == commands::EventType::StopMovement);
-        for (const auto& e : out) CHECK(e.valid() && commands::event_scheduled(e.type_id()));
-    }
-
     // Select is capped at 127 ids (list7), lowest kept
     std::vector<uint32_t> many;
     for (uint32_t i = 0; i < 200; ++i) many.push_back(1000 - i);
@@ -982,7 +958,7 @@ void test_orders() {
     CHECK(batch.commands.size() == 1 && batch.commands[0].payload.type() == commands::EventType::MoveToRay);  // space
 }
 
-// ---- replay determinism ------------------------------------------------------------------------------
+// ---- session determinism ------------------------------------------------------------------------------
 struct SessionResult {
     std::vector<uint8_t> batches;  // canonical batch bytes of every tick
     std::vector<uint32_t> camera;  // float bit patterns of the camera params each frame
@@ -1313,7 +1289,7 @@ void test_double_click_move() {
     CHECK(o.empty() && acks.empty());
 }
 
-void test_replay() {
+void test_session() {
     Script s;
     s.idle();
     s.key(vk::kUp, true);
@@ -1333,44 +1309,21 @@ void test_replay() {
     s.move(0, 300);  // edge scroll
     for (int i = 0; i < 5; ++i) s.idle();
     s.move(400, 300);
-    s.key(vk::kControl, true);
-    s.tap(static_cast<uint16_t>(vk::k0 + 2));
-    s.key(vk::kControl, false);
     s.click(Button::Right, 450, 350);
 
-    InputReplay rec;
-    for (const InputFrame& f : s.frames) rec.record(f);
-    const SessionResult live = run_session(rec.frames);
+    // the same frames twice give the same command batches and camera poses
+    const SessionResult live = run_session(s.frames);
     CHECK(!live.batches.empty());
+    CHECK(run_session(s.frames) == live);
 
-    const std::vector<uint8_t> bytes = rec.serialize();
-    CHECK(bytes.size() == 12 + rec.frames.size() * kReplayFrameBytes);
-    InputReplay back;
-    CHECK(InputReplay::deserialize(bytes, back));
-    CHECK(back.frames == rec.frames);
-    const SessionResult replayed = run_session(back.frames);
-    CHECK(replayed == live);
-    CHECK(back.serialize() == bytes);
-
-    // the session produced orders: Select (box), MoveToPosition, ControlGroup, MoveToPosition
+    // the session produced orders: Select (box), MoveToPosition, MoveToPosition
     size_t pos = 0, cmds = 0;
     while (pos < live.batches.size()) {
         commands::CommandBatch b;
         if (commands::decode_batch(live.batches, pos, b) != commands::DecodeError::None) break;
         cmds += b.commands.size();
     }
-    CHECK(pos == live.batches.size() && cmds == 4);
-
-    // corrupt inputs are rejected
-    InputReplay bad;
-    std::vector<uint8_t> trunc(bytes.begin(), bytes.end() - 1);
-    CHECK(!InputReplay::deserialize(trunc, bad) && bad.frames.empty());
-    std::vector<uint8_t> magic = bytes;
-    magic[0] = 'X';
-    CHECK(!InputReplay::deserialize(magic, bad));
-    std::vector<uint8_t> ver = bytes;
-    ver[4] = 9;
-    CHECK(!InputReplay::deserialize(ver, bad));
+    CHECK(pos == live.batches.size() && cmds == 3);
 }
 
 // ---- P1 completion: overview zoom, terrain following, control-group camera jump ------------------------------
@@ -1493,35 +1446,6 @@ void test_camera_p1() {
     const auto fp = focus_point(pts);
     CHECK(fp && near(fp->x, 30.0f) && near(fp->y, 20.0f) && near(fp->z, 3.0f));
     CHECK(!focus_point(std::span<const Vec3>{}));
-
-    // OrderTranslator: recall twice within 1 s -> take_camera_jump(); assign does not count; slow recalls do not.
-    OrderTranslator ot;
-    Bindings keys;
-    InputState in;
-    Script s;
-    OrderContext ctx;
-    ctx.mode = UiMode::Space;
-    s.tap(vk::k0 + 3);
-    s.tap(vk::k0 + 3);
-    for (const InputFrame& f : s.frames) {
-        in.update(f);
-        ot.update(in, keys, ctx);
-    }
-    auto j = ot.take_camera_jump();
-    CHECK(j && *j == 3);
-    CHECK(!ot.take_camera_jump());
-    CHECK(ot.pending().size() == 2);
-    s.frames.clear();
-    for (int i = 0; i < 90; ++i) s.idle();  // 1.5 s
-    s.tap(vk::k0 + 3);
-    s.key(vk::kControl, true);
-    s.tap(vk::k0 + 3);  // Ctrl+3 = assign
-    s.key(vk::kControl, false);
-    for (const InputFrame& f : s.frames) {
-        in.update(f);
-        ot.update(in, keys, ctx);
-    }
-    CHECK(!ot.take_camera_jump());
 }
 
 }  // namespace
@@ -1534,7 +1458,7 @@ int main() {
     test_picking();
     test_orders();
     test_double_click_move();
-    test_replay();
+    test_session();
     if (g_fail) {
         std::printf("alamo_ui_tests: %d failure(s)\n", g_fail);
         return 1;

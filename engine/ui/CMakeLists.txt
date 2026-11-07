@@ -1,6 +1,5 @@
 # P1 ui - input layer, camera controllers (galactic / Land_Mode / Space_Mode), screen-ray picking against
-# the tactical spatial trees, box selection and click -> command translation (engine/commands), plus a
-# headless input-replay format. Headless: depends on core, data, tactical, commands only.
+# the tactical spatial trees, box selection and click -> command translation (engine/commands). Headless: depends on core, data, tactical, commands only.
 #   alamo_ui_rhi  rhi::Window -> InputFrame adapter (only when the rhi module is configured)
 #   render_bridge.hpp  header-only CameraParams -> render::OrbitCamera / ViewMatrices (include from code
 #                      that links alamo_render)

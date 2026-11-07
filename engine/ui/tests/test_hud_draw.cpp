@@ -91,17 +91,6 @@ void test_cpu() {
     const render::Instance in = ui::selection_blob_instance(dummy, b);
     CHECK(in.model == &dummy && near(in.transform.m[0][0], 25) && near(in.transform.m[1][3], 20) &&
           near(in.transform.m[2][3], 30 + ui::kSpaceBlobLift));
-    // Land: terrain shadow blobs with the material index by name.
-    std::vector<terrain::ShadowBlobMaterial> mats = terrain::builtin_blob_materials();
-    terrain::ShadowBlobMaterial land = mat;
-    land.name = "Selection_Rebel_Land";
-    mats.push_back(land);
-    ui::SelectionBlob lb = b;
-    lb.land = true;
-    lb.material = "selection_rebel_land";
-    const ui::SelectionBlob two[2] = {b, lb};
-    const auto sb = ui::land_selection_blobs(two, mats);
-    CHECK(sb.size() == 1 && sb[0].material == mats.size() - 1 && near(sb[0].width, 50) && near(sb[0].position[0], 10));
 
 #ifdef ALAMO_UI_HAVE_OBJECTS
     // Snapshot bridge: dying / faded objects skipped, selection by binary search, groups, hover, team colour.

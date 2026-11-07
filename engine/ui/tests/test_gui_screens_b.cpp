@@ -404,7 +404,7 @@ void test_panels() {
     {
         RoutedInput ri;
         ri.hover_component = env.table.find("hero_slot_good00");
-        heroes.update_input(ri, false, false, 14.0, cmds, &acts);
+        heroes.update_input(ri, false, false, 14.0, &acts);
         CHECK(heroes.hover_component() == ri.hover_component && heroes.hover_hero() == 4001 && acts.empty());
     }
     hf.tactical = false;
@@ -485,14 +485,14 @@ void test_panels() {
         RoutedInput wheel;
         wheel.wheel_target = PointerTarget::Hud;
         wheel.hover_component = env.table.find("market_00");
-        sp.update_input(wheel, false, false, 2.0, cmds, &acts, -5.0f);  // towards the user: down, clamped to 7 - 5
+        sp.update_input(wheel, false, false, 2.0, &acts, -5.0f);  // towards the user: down, clamped to 7 - 5
         sp.build(sf2);
         CHECK(sp.first_row() == 2);
         acts.clear();
         env.click(sp, "market_00", cmds, acts);
         CHECK(acts.size() == 1 && acts[0].unit == 502 && acts[0].value == 2);
         wheel.hover_component = -1;  // not over the panel: ignored
-        sp.update_input(wheel, false, false, 2.1, cmds, &acts, 1.0f);
+        sp.update_input(wheel, false, false, 2.1, &acts, 1.0f);
         CHECK(sp.first_row() == 2);
         acts.clear();
         env.click(sp, "market_close", cmds, acts);
@@ -661,41 +661,6 @@ void test_info_screens() {
         gs2.close_planet_info();  // host: a battle load screen starts
         CHECK(!gs2.planet_info_open() && pc.empty());
     }
-    // Planet dialog (IDD_PLANET_DIALOG: dead in the original, kept).
-    PlanetDialogInfo pd;
-    pd.planet = 77;
-    pd.name = U"Kuat";
-    pd.credits = 120;
-    pd.political = {"i_pol.tga"};
-    pd.producing = U"Star Destroyer";
-    pd.progress = 0.25f;
-    CHECK(is.show_planet(pd));
-    d = env.gui.find(dlg::kPlanetDialog);
-    CHECK(d && d->get("IDC_TEXT_PLANET_CREDITS")->text == U"+120" && d->get("IDC_POLITICAL_ICON_0")->visible &&
-          !d->get("IDC_POLITICAL_ICON_1")->visible && d->get("IDC_PRODUCTION_MENU_PROGRESS")->value == 25);
-    // REMAINING_GAPS Â§6.3 gates: hidden starbase / ground-base info blanks those icon rows.
-    {
-        PlanetDialogInfo hidden = pd;
-        hidden.starbase = {"i_sb.tga", "i_sb.tga"};
-        hidden.ground_base = {"i_gb.tga"};
-        CHECK(is.show_planet(hidden));
-        const GuiDialog* hd = env.gui.find(dlg::kPlanetDialog);
-        const GuiControl* sb = hd ? hd->get("IDC_STARBASE_ICON_0") : nullptr;
-        const GuiControl* gb = hd ? hd->get("IDC_GROUND_BASE_ICON_0") : nullptr;
-        CHECK(sb && gb && sb->visible && gb->visible);
-        hidden.starbase_info = false;
-        hidden.groundbase_info = false;
-        CHECK(is.show_planet(hidden));
-        CHECK(sb && gb && !sb->visible && !gb->visible && hd->get("IDC_POLITICAL_ICON_0")->visible);
-        hidden.groundbase_info = true;
-        CHECK(is.show_planet(hidden));
-        CHECK(sb && gb && !sb->visible && gb->visible);
-        CHECK(is.show_planet(pd));
-    }
-    is.update(env.click(dlg::kPlanetDialog, "IDC_PLANET_PRODUCTION_BUTTON"), acts);
-    is.update(env.frame({5, 5}, false, {vk::kEscape}), acts);
-    CHECK(acts.size() == 3 && acts[1].kind == ScreenAction::Kind::PlanetProduction && acts[1].object == 77 &&
-          acts[2].kind == ScreenAction::Kind::PlanetDialogClosed);
     // Holocron: data chart -> tech tree -> space variant -> summary (scroll) -> close.
     acts.clear();
     DataChartInfo dc;

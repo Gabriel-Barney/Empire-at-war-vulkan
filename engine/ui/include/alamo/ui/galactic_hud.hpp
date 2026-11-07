@@ -269,9 +269,11 @@ struct GalacticHudFrame {
 // FleetManagement ops per AI_GALACTIC.md / AI_GALACTIC_2.md §5.4 (op names [M]): 0 form fleet, 2 detach, 3 merge,
 // 4 launch, 5 land. [port] payload use: target = destination fleet / planet, fleet = source fleet (kNoObject = none /
 // new), unit = the dragged unit (kNoObject = the whole fleet).
-struct FleetOps {
-    uint8_t form = 0, detach = 2, merge = 3, launch = 4, land = 5, move_new = 6, slot = 8;
-};
+// Same values as galactic::FleetOp (campaign.hpp; ui does not link galactic). They are command payload bytes: changing one
+// changes the command stream and its CRCs.
+namespace fleet_op {
+inline constexpr uint8_t kDetach = 2, kMerge = 3, kLaunch = 4, kLand = 5, kMoveNew = 6, kSlot = 8;
+}
 // a = the extra id (payload +0x54: ops 6 / 7 destination planet).
 commands::EventData fleet_management_event(uint32_t target, uint32_t fleet, uint32_t unit, uint8_t op, uint8_t slot = 0,
                                            uint32_t a = 0);
@@ -374,7 +376,6 @@ public:
                       std::vector<HudAction>* actions = nullptr);
     // Fleet drag state (cursor choice: CursorContext::fleet_drag / drop_on_fleet / drop_on_planet / drop_valid).
     const GalacticDrag& drag() const { return drag_; }
-    void set_fleet_ops(const FleetOps& ops) { ops_ = ops; }
     // A draggable pad of the last build (cursor CAN_GRAB).
     bool draggable(int32_t component) const;
     // RouteHooks::hud_takes: false for a right press on g_planet_fleet / g_planet_land_forces (they ignore the right
@@ -384,7 +385,10 @@ public:
 
 private:
     void drag_update(const RoutedInput& routed, std::vector<commands::EventData>& out, bool& dropped);
-    void drop(std::vector<commands::EventData>& out);
+    // What releasing the dragged item over drag_.over_component at drag_.cursor_px does: appends the commands to `out` and
+    // returns true when there are any. out = nullptr is a dry run (no commands), which is what drag_.valid (the drop
+    // highlight and cursor) is: the highlight can never disagree with the drop.
+    bool drop(std::vector<commands::EventData>* out);
     int32_t planet_at(float px, float py) const;
     void build_labels(const GalacticHudFrame& f);
     void build_planet_stacks(const GalacticPlanetInfo& p, Vec2f at, uint8_t alpha, Vec2f cursor);
@@ -476,7 +480,6 @@ private:
     StackHit pane_hit(const PadSlot& pad) const;
     StackHit press_stack_;
     // drag and drop
-    FleetOps ops_;
     GalacticDrag drag_;
     int32_t press_component_ = -1;
     Vec2f press_px_{};

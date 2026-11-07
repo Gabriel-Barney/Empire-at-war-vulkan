@@ -43,12 +43,6 @@ const std::string* pick(const std::vector<std::string>& v, int32_t i) {
     const size_t k = i < 0 ? 0 : std::min(static_cast<size_t>(i), v.size() - 1);
     return &v[k];
 }
-constexpr int32_t kShellLayerMin = 2;  // as the tactical / galactic HUDs: shell-bone components above the first shell half
-uint32_t layer_of(const CommandBarComponent& c, const ComponentPlacement& p) {
-    int32_t l = c.base_layer;
-    if (p.from_bone) l = std::max(l, kShellLayerMin);
-    return static_cast<uint32_t>(std::clamp(l, 0, static_cast<int32_t>(kHudLayers) - 1));
-}
 bool has_art(const CommandBarComponent& c) {
     return !c.blank_texture.empty() || !c.icon_texture.empty() || !c.icon_alternate_texture.empty() ||
            !c.mouse_over_texture.empty() || !c.selected_texture.empty();
@@ -398,9 +392,7 @@ bool HudPanel::init(const ComponentTable& table, const TextureAtlas& atlas, Font
 }
 
 void HudPanel::resize(uint32_t width, uint32_t height) {
-    const HudCanvas next = HudCanvas::make(width, height);
-    if (fonts_ && next.screen_height != canvas_.screen_height) fonts_->clear();
-    canvas_ = next;
+    resize_canvas(canvas_, fonts_, width, height);
     if (table_) {
         fallback_layout();
         layout_.update(canvas_, *table_);
@@ -414,17 +406,7 @@ void HudPanel::put(std::string_view name, float x, float y) {
 
 int32_t HudPanel::hit_test(int32_t px, int32_t py) const {
     if (!open_) return -1;
-    const Vec2f c = canvas_.pixel_to_canvas(static_cast<float>(px) + 0.5f, static_cast<float>(py) + 0.5f);
-    int32_t best = -1;
-    uint32_t best_layer = 0;
-    for (const HudHitBox& h : hits_) {
-        if (c.x < h.min.x || c.x > h.max.x || c.y < h.min.y || c.y > h.max.y) continue;
-        if (best < 0 || h.layer >= best_layer) {
-            best = h.component;
-            best_layer = h.layer;
-        }
-    }
-    return best;
+    return topmost_hit(hits_, canvas_, px, py);
 }
 
 const PanelSlot* HudPanel::slot_of(int32_t component) const {
@@ -489,13 +471,7 @@ void HudPanel::draw_slots(const PanelFrame& f) {
         }
         if (p.size.x > 0) sz = p.size;
         if (sz.x <= 0 || sz.y <= 0) sz = {40.0f, 40.0f};
-        HudHitBox h;
-        h.component = s.component;
-        h.layer = layer;
-        const Vec2f hc = p.size.x > 0 ? p.rect_center : p.center;
-        h.min = {hc.x - 0.5f * sz.x, hc.y - 0.5f * sz.y};
-        h.max = {hc.x + 0.5f * sz.x, hc.y + 0.5f * sz.y};
-        hits_.push_back(h);
+        hits_.push_back(make_hit_box(s.component, layer, p.size.x > 0 ? p.rect_center : p.center, sz));
     }
 }
 
@@ -529,6 +505,47 @@ void close_action(std::vector<HudAction>* actions, const ComponentTable& t, int3
     actions->push_back(std::move(a));
 }
 }  // namespace
+
+void HudPanel::add_text_slot(std::string_view name, std::u32string t) {
+    PanelSlot s;
+    s.component = find(name);
+    s.text = std::move(t);
+    s.value = kRoleText;
+    slots_.push_back(std::move(s));
+}
+
+void HudPanel::add_close(std::string_view name) {
+    PanelSlot close;
+    close.component = find(name);
+    close.value = kRoleClose;
+    slots_.push_back(std::move(close));
+}
+
+HudAction HudPanel::click_action(const ButtonClick& k, HudAction::Kind kind) const {
+    HudAction a;
+    a.kind = kind;
+    a.component = k.component;
+    a.name = (*table_)[static_cast<size_t>(k.component)].name;
+    return a;
+}
+
+// The click loop of the shell panels (market, slice, sabotage, corruption, hack): the close slot or any right click gives
+// PanelClose; a left click on an enabled slot that `accept` takes gives `kind`, completed by `fill`.
+template <class Accept, class Fill>
+void HudPanel::shell_clicks(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions,
+                            HudAction::Kind kind, Accept accept, Fill fill) {
+    for (const ButtonClick& k : clicks(routed, shift, ctrl, now)) {
+        const PanelSlot* s = slot_of(k.component);
+        if (!s) continue;
+        if (s->value == kRoleClose || k.button == Button::Right) {
+            close_action(actions, *table_, active_shell(), k);
+        } else if (actions && k.button == Button::Left && !s->disabled && accept(*s)) {
+            HudAction a = click_action(k, kind);
+            fill(a, *s);
+            actions->push_back(std::move(a));
+        }
+    }
+}
 
 // ==== Hero roster ==================================================================================================
 void HeroPanel::fallback_layout() {
@@ -626,8 +643,8 @@ uint32_t HeroPanel::hover_hero() const {
     return s && s->id != commands::kNoObject ? s->id : 0u;
 }
 
-void HeroPanel::update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>&,
-                             std::vector<HudAction>* actions) {
+void HeroPanel::update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions,
+                             float) {
     constexpr double kDoubleClickTime = 0.5;  // InputConfig::double_click_time
     constexpr int32_t kDoubleClickSlop = 4;   // InputConfig::double_click_slop_px
     for (const ButtonClick& k : clicks(routed, shift, ctrl, now)) {
@@ -645,10 +662,7 @@ void HeroPanel::update_input(const RoutedInput& routed, bool shift, bool ctrl, d
         const HeroEntry& h = shown_[static_cast<size_t>(s->value)];
         if (h.object == 0 || h.object == commands::kNoObject) continue;  // building / respawning: no object
         auto emit = [&](HudAction::Kind kind, std::vector<uint32_t> ids) {
-            HudAction a;
-            a.kind = kind;
-            a.component = k.component;
-            a.name = (*table_)[static_cast<size_t>(k.component)].name;
+            HudAction a = click_action(k, kind);
             a.unit = h.object;
             a.ids = std::move(ids);
             a.button = k.button;
@@ -691,15 +705,8 @@ void BlackMarketPanel::build(const BlackMarketFrame& f) {
     begin(f, 0);
     planet_ = f.planet;
     if (open_) {
-        auto text = [&](const char* name, std::u32string t) {
-            PanelSlot s;
-            s.component = find(name);
-            s.text = std::move(t);
-            s.value = kRoleText;
-            slots_.push_back(std::move(s));
-        };
-        text("market_title00", f.title);
-        text("market_title01", f.subtitle);
+        add_text_slot("market_title00", f.title);
+        add_text_slot("market_title01", f.subtitle);
         int32_t hovered = -1;
         for (size_t k = 0; k < f.items.size() && k < 5; ++k)
             if (buttons_.hover() >= 0 && buttons_.hover() == find(fmt("market_%02d", static_cast<int>(k)))) hovered = static_cast<int32_t>(k);
@@ -713,8 +720,8 @@ void BlackMarketPanel::build(const BlackMarketFrame& f) {
             b.id = it.item;
             b.value = ki;
             slots_.push_back(b);
-            text(fmt("market_title%02d", 4 + 2 * ki).c_str(), it.name);
-            text(fmt("market_title%02d", 5 + 2 * ki).c_str(), it.cost >= 0 ? num32(it.cost) : std::u32string());
+            add_text_slot(fmt("market_title%02d", 4 + 2 * ki).c_str(), it.name);
+            add_text_slot(fmt("market_title%02d", 5 + 2 * ki).c_str(), it.cost >= 0 ? num32(it.cost) : std::u32string());
             const int32_t tc = it.tech_icon.empty() ? -1 : find(fmt("market_tech_level%02d", ki));
             const int32_t alt = tc >= 0 ? alternate_with_prefix((*table_)[static_cast<size_t>(tc)], it.tech_icon) : -1;
             if (alt >= 0) {
@@ -726,35 +733,24 @@ void BlackMarketPanel::build(const BlackMarketFrame& f) {
             }
         }
         const BlackMarketItem* h = hovered >= 0 ? &f.items[static_cast<size_t>(hovered)] : nullptr;
-        text("market_title02", h ? h->description : std::u32string());
-        text("market_title03", h && h->cost >= 0 ? num32(h->cost) : std::u32string());
-        PanelSlot close;
-        close.component = find("market_close");
-        close.value = kRoleClose;
-        slots_.push_back(close);
+        add_text_slot("market_title02", h ? h->description : std::u32string());
+        add_text_slot("market_title03", h && h->cost >= 0 ? num32(h->cost) : std::u32string());
+        add_close("market_close");
         draw_slots(f);
     }
     end(f);
 }
 
-void BlackMarketPanel::update_input(const RoutedInput& routed, bool shift, bool ctrl, double now,
-                                    std::vector<commands::EventData>&, std::vector<HudAction>* actions) {
-    for (const ButtonClick& k : clicks(routed, shift, ctrl, now)) {
-        const PanelSlot* s = slot_of(k.component);
-        if (!s) continue;
-        if (s->value == kRoleClose || k.button == Button::Right) {
-            close_action(actions, *table_, active_shell(), k);
-        } else if (s->value >= 0 && k.button == Button::Left && !s->disabled && planet_ != commands::kNoObject && actions) {
-            HudAction a;
-            a.kind = HudAction::Kind::BlackMarketBuy;
-            a.component = k.component;
-            a.name = (*table_)[static_cast<size_t>(k.component)].name;
-            a.unit = s->id;
-            a.value = s->value;
+void BlackMarketPanel::update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions,
+                                    float) {
+    shell_clicks(
+        routed, shift, ctrl, now, actions, HudAction::Kind::BlackMarketBuy,
+        [this](const PanelSlot& s) { return s.value >= 0 && planet_ != commands::kNoObject; },
+        [this](HudAction& a, const PanelSlot& s) {
+            a.unit = s.id;
+            a.value = s.value;
             a.ids = {planet_};
-            actions->push_back(std::move(a));
-        }
-    }
+        });
 }
 
 // ==== Slice dialog ==================================================================================================
@@ -782,27 +778,20 @@ void SlicePanel::build(const SliceFrame& f) {
     was_open_ = open_;
     first_ = std::clamp(first_, 0, std::max(0, rows_ - kVisibleRows));
     if (open_) {
-        auto text = [&](const std::string& name, std::u32string t) {
-            PanelSlot s;
-            s.component = find(name);
-            s.text = std::move(t);
-            s.value = kRoleText;
-            slots_.push_back(std::move(s));
-        };
         auto chance_text = [](const SliceRow& r) {
             if (!r.description.empty() || r.chance < 0.0f) return r.description;
             return U"Chance " + num32(std::lround(std::clamp(r.chance, 0.0f, 1.0f) * 100.0f)) + U"%";  // [port] wording
         };
-        text("market_title00", f.title);
-        text("market_title01", f.description);
+        add_text_slot("market_title00", f.title);
+        add_text_slot("market_title01", f.description);
         const SliceRow* hovered = nullptr;
         for (int32_t k = 0; k < kVisibleRows; ++k) {
             const int32_t row = first_ + k;
             const std::string pad = fmt("market_%02d", k);
             const std::string name = fmt("market_title%02d", 4 + 2 * k), price = fmt("market_title%02d", 5 + 2 * k);
             if (row >= rows_) {  // unused rows: blank texts, no button
-                text(name, {});
-                text(price, {});
+                add_text_slot(name, {});
+                add_text_slot(price, {});
                 continue;
             }
             const SliceRow& r = f.rows[static_cast<size_t>(row)];
@@ -814,42 +803,31 @@ void SlicePanel::build(const SliceFrame& f) {
             b.id = r.type;
             b.value = row;
             slots_.push_back(std::move(b));
-            text(name, r.name);
-            text(price, r.cost >= 0 ? num32(r.cost) : std::u32string());
+            add_text_slot(name, r.name);
+            add_text_slot(price, r.cost >= 0 ? num32(r.cost) : std::u32string());
         }
-        text("market_title02", hovered ? chance_text(*hovered) : std::u32string());
-        text("market_title03", hovered && hovered->cost >= 0 ? num32(hovered->cost) : std::u32string());
-        PanelSlot close;
-        close.component = find("market_close");
-        close.value = kRoleClose;
-        slots_.push_back(close);
+        add_text_slot("market_title02", hovered ? chance_text(*hovered) : std::u32string());
+        add_text_slot("market_title03", hovered && hovered->cost >= 0 ? num32(hovered->cost) : std::u32string());
+        add_close("market_close");
         draw_slots(f);
     }
     end(f);
 }
 
-void SlicePanel::update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>&,
-                              std::vector<HudAction>* actions, float wheel) {
+void SlicePanel::update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions,
+                              float wheel) {
     if (open_ && wheel != 0.0f && routed.wheel_target == PointerTarget::Hud && owns(routed.hover_component)) {
         const int32_t notches = static_cast<int32_t>(std::lround(wheel));
         first_ = std::clamp(first_ - notches, 0, std::max(0, rows_ - kVisibleRows));  // + = away from the user = up
     }
-    for (const ButtonClick& k : clicks(routed, shift, ctrl, now)) {
-        const PanelSlot* s = slot_of(k.component);
-        if (!s) continue;
-        if (s->value == kRoleClose || k.button == Button::Right) {
-            close_action(actions, *table_, active_shell(), k);
-        } else if (s->value >= 0 && k.button == Button::Left && !s->disabled && planet_ != commands::kNoObject && actions) {
-            HudAction a;
-            a.kind = HudAction::Kind::SliceSelect;
-            a.component = k.component;
-            a.name = (*table_)[static_cast<size_t>(k.component)].name;
-            a.unit = s->id;
-            a.value = s->value;
+    shell_clicks(
+        routed, shift, ctrl, now, actions, HudAction::Kind::SliceSelect,
+        [this](const PanelSlot& s) { return s.value >= 0 && planet_ != commands::kNoObject; },
+        [this](HudAction& a, const PanelSlot& s) {
+            a.unit = s.id;
+            a.value = s.value;
             a.ids = {planet_, slicer_};
-            actions->push_back(std::move(a));
-        }
-    }
+        });
 }
 
 // ==== Sabotage =====================================================================================================
@@ -871,16 +849,9 @@ void SabotagePanel::build(const SabotageFrame& f) {
     begin(f, 0);
     planet_ = f.planet;
     if (open_) {
-        auto text = [&](const std::string& name, std::u32string t) {
-            PanelSlot s;
-            s.component = find(name);
-            s.text = std::move(t);
-            s.value = kRoleText;
-            slots_.push_back(std::move(s));
-        };
-        text("bm_title", f.title);
-        text("bm_title01", f.subtitle);
-        text("bm_text_steal", f.steal_text);
+        add_text_slot("bm_title", f.title);
+        add_text_slot("bm_title01", f.subtitle);
+        add_text_slot("bm_text_steal", f.steal_text);
         for (size_t k = 0; k < f.targets.size() && k < 10; ++k) {
             const SabotageTarget& t = f.targets[k];
             const int r = static_cast<int>(k) / 2, c = static_cast<int>(k) % 2;
@@ -891,35 +862,23 @@ void SabotagePanel::build(const SabotageFrame& f) {
             b.id = t.object;
             b.value = static_cast<int32_t>(k);
             slots_.push_back(b);
-            text(fmt2("bm_title_%d0%d", r, c), t.cost >= 0 ? num32(t.cost) : std::u32string());
-            text(fmt("bm_title_40%d", static_cast<int>(k) + 2), t.name);
+            add_text_slot(fmt2("bm_title_%d0%d", r, c), t.cost >= 0 ? num32(t.cost) : std::u32string());
+            add_text_slot(fmt("bm_title_40%d", static_cast<int>(k) + 2), t.name);
         }
-        PanelSlot close;
-        close.component = find("bm_close");
-        close.value = kRoleClose;
-        slots_.push_back(close);
+        add_close("bm_close");
         draw_slots(f);
     }
     end(f);
 }
 
-void SabotagePanel::update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>&,
-                                 std::vector<HudAction>* actions) {
-    for (const ButtonClick& k : clicks(routed, shift, ctrl, now)) {
-        const PanelSlot* s = slot_of(k.component);
-        if (!s) continue;
-        if (s->value == kRoleClose || k.button == Button::Right) {
-            close_action(actions, *table_, active_shell(), k);
-        } else if (s->value >= 0 && k.button == Button::Left && !s->disabled && actions) {
-            HudAction a;
-            a.kind = HudAction::Kind::SabotageTarget;
-            a.component = k.component;
-            a.name = (*table_)[static_cast<size_t>(k.component)].name;
-            a.unit = s->id;
+void SabotagePanel::update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions,
+                                 float) {
+    shell_clicks(
+        routed, shift, ctrl, now, actions, HudAction::Kind::SabotageTarget, [](const PanelSlot& s) { return s.value >= 0; },
+        [this](HudAction& a, const PanelSlot& s) {
+            a.unit = s.id;
             a.ids = {planet_};
-            actions->push_back(std::move(a));
-        }
-    }
+        });
 }
 
 // ==== Corruption ===================================================================================================
@@ -945,17 +904,10 @@ void CorruptionPanel::build(const CorruptionFrame& f) {
     begin(f, 0);
     planet_ = f.planet;
     if (open_) {
-        auto text = [&](const std::string& name, std::u32string t) {
-            PanelSlot s;
-            s.component = find(name);
-            s.text = std::move(t);
-            s.value = kRoleText;
-            slots_.push_back(std::move(s));
-        };
-        text("corrupt_planet_title00", f.planet_title);
-        text("corrupt_planet_title01", f.planet_subtitle);
-        text("corrupt_planet_defiler_00", f.defiler_text);
-        text("corrupt_planet_defiler_01", f.defiler_text2);
+        add_text_slot("corrupt_planet_title00", f.planet_title);
+        add_text_slot("corrupt_planet_title01", f.planet_subtitle);
+        add_text_slot("corrupt_planet_defiler_00", f.defiler_text);
+        add_text_slot("corrupt_planet_defiler_01", f.defiler_text2);
         const char* abc = "abc";
         for (size_t i = 0; i < f.options.size() && i < 3; ++i) {
             const CorruptionOption& o = f.options[i];
@@ -967,9 +919,9 @@ void CorruptionPanel::build(const CorruptionFrame& f) {
             b.id = static_cast<uint32_t>(i);
             b.value = o.corruption_type >= 0 ? o.corruption_type : 0;
             slots_.push_back(b);
-            text("corrupt_title_" + x1, o.title);
-            text("corrupt_cost_" + x1, o.cost >= 0 ? num32(o.cost) : std::u32string());
-            for (size_t n = 0; n < o.lines.size() && n < 5; ++n) text(fmt("corrupt_text%02d", static_cast<int>(n)) + x1, o.lines[n]);
+            add_text_slot("corrupt_title_" + x1, o.title);
+            add_text_slot("corrupt_cost_" + x1, o.cost >= 0 ? num32(o.cost) : std::u32string());
+            for (size_t n = 0; n < o.lines.size() && n < 5; ++n) add_text_slot(fmt("corrupt_text%02d", static_cast<int>(n)) + x1, o.lines[n]);
             for (size_t n = 0; n < o.requirements.size() && n < 8; ++n) {
                 PanelSlot r;
                 r.component = find(fmt("corrupt_icon_%02d", static_cast<int>(n)) + x1);
@@ -978,32 +930,20 @@ void CorruptionPanel::build(const CorruptionFrame& f) {
                 slots_.push_back(r);
             }
         }
-        PanelSlot close;
-        close.component = find("corrupt_close");
-        close.value = kRoleClose;
-        slots_.push_back(close);
+        add_close("corrupt_close");
         draw_slots(f);
     }
     end(f);
 }
 
-void CorruptionPanel::update_input(const RoutedInput& routed, bool shift, bool ctrl, double now,
-                                   std::vector<commands::EventData>&, std::vector<HudAction>* actions) {
-    for (const ButtonClick& k : clicks(routed, shift, ctrl, now)) {
-        const PanelSlot* s = slot_of(k.component);
-        if (!s) continue;
-        if (s->value == kRoleClose || k.button == Button::Right) {
-            close_action(actions, *table_, active_shell(), k);
-        } else if (s->value >= 0 && k.button == Button::Left && !s->disabled && actions) {
-            HudAction a;
-            a.kind = HudAction::Kind::CorruptionChoice;
-            a.component = k.component;
-            a.name = (*table_)[static_cast<size_t>(k.component)].name;
+void CorruptionPanel::update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions,
+                                   float) {
+    shell_clicks(
+        routed, shift, ctrl, now, actions, HudAction::Kind::CorruptionChoice, [](const PanelSlot& s) { return s.value >= 0; },
+        [this](HudAction& a, const PanelSlot& s) {
             a.unit = planet_;
-            a.value = s->value;
-            actions->push_back(std::move(a));
-        }
-    }
+            a.value = s.value;
+        });
 }
 
 // ==== Hack =========================================================================================================
@@ -1020,16 +960,9 @@ void HackPanel::build(const HackFrame& f) {
     target_ = f.target;
     planet_ = f.planet;
     if (open_) {
-        auto text = [&](const std::string& name, std::u32string t) {
-            PanelSlot s;
-            s.component = find(name);
-            s.text = std::move(t);
-            s.value = kRoleText;
-            slots_.push_back(std::move(s));
-        };
-        text("hack_title01", f.title);
-        for (size_t n = 0; n < f.lines.size() && n < 7; ++n) text(fmt("hack_text_%02d", static_cast<int>(n)), f.lines[n]);
-        text("hack_cost", f.cost);
+        add_text_slot("hack_title01", f.title);
+        for (size_t n = 0; n < f.lines.size() && n < 7; ++n) add_text_slot(fmt("hack_text_%02d", static_cast<int>(n)), f.lines[n]);
+        add_text_slot("hack_cost", f.cost);
         PanelSlot h;
         h.component = find("hack_hack");
         h.text = f.confirm_text;
@@ -1037,32 +970,20 @@ void HackPanel::build(const HackFrame& f) {
         h.id = f.target;
         h.value = 0;
         slots_.push_back(h);
-        PanelSlot close;
-        close.component = find("hack_close");
-        close.value = kRoleClose;
-        slots_.push_back(close);
+        add_close("hack_close");
         draw_slots(f);
     }
     end(f);
 }
 
-void HackPanel::update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>&,
-                             std::vector<HudAction>* actions) {
-    for (const ButtonClick& k : clicks(routed, shift, ctrl, now)) {
-        const PanelSlot* s = slot_of(k.component);
-        if (!s) continue;
-        if (s->value == kRoleClose || k.button == Button::Right) {
-            close_action(actions, *table_, active_shell(), k);
-        } else if (s->value == 0 && k.button == Button::Left && !s->disabled && actions) {
-            HudAction a;
-            a.kind = HudAction::Kind::HackConfirm;
-            a.component = k.component;
-            a.name = (*table_)[static_cast<size_t>(k.component)].name;
+void HackPanel::update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions,
+                             float) {
+    shell_clicks(
+        routed, shift, ctrl, now, actions, HudAction::Kind::HackConfirm, [](const PanelSlot& s) { return s.value == 0; },
+        [this](HudAction& a, const PanelSlot&) {
             a.unit = target_;
             a.ids = {planet_};
-            actions->push_back(std::move(a));
-        }
-    }
+        });
 }
 
 }  // namespace alamo::ui

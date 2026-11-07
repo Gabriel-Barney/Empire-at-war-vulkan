@@ -112,8 +112,7 @@ void test_real_data() {
     {
         InfoScreens is;
         is.init(gui);
-        CHECK(is.show_buy_units({1000, {{"X", U"X", 10, 0, "", true}}}) && is.show_story({}) && is.show_story_summary({}) &&
-              is.show_planet({}));
+        CHECK(is.show_buy_units({1000, {{"X", U"X", 10, 0, "", true}}}) && is.show_story({}) && is.show_story_summary({}));
         // GALACTIC_DIALOGS Â§2.2: chapter TITLE in the IDC_STATIC above the recap, newest chapter preselected, Completed
         // disabled with nothing completed, Abandon hidden.
         {

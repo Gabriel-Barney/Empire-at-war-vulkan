@@ -6,10 +6,9 @@
 //     material through Renderer::upload_model; each selected unit is one render::Instance (transform = scale
 //     radius, translation = blob centre) appended to the frame's main instance list, so the renderer sorts it
 //     into the Transparent bucket like any other transparent mesh.
-//   * Land (alTerrainShadowBlob): terrain::ShadowBlob records (width = height = 2 radius) for
-//     MapScene::set_shadow_blobs, which drapes them over the terrain grid (DECORATIONS.md 3.3).
-// [port] land blobs go through the existing decoration path (blob materials with a custom shader draw in prim
-// mode there: texture = Texture_Name), not through the BlobStencilMasked effect yet - see docs/PHASE4.md P2.
+//   * Land: the same flat blob instance at the unit's position, [port] not draped over the terrain. The original
+//     drapes land circles (alTerrainShadowBlob, terrain::ShadowBlob via MapScene::set_shadow_blobs); that path was
+//     removed in cu13 t03 (docs/re/ABILITY_VISUALS.md flags "flat instead of draped" as a pending visual check).
 #pragma once
 #include <cstdint>
 #include <memory>
@@ -31,8 +30,5 @@ inline constexpr float kSpaceBlobLift = 0.5f;  // [port] z offset above the unit
 std::shared_ptr<assets::ModelAsset> selection_blob_model(const terrain::ShadowBlobMaterial& material);
 // Instance of an uploaded blob model for one blob (space).
 render::Instance selection_blob_instance(const render::GpuModel& model, const SelectionBlob& blob);
-// Land blobs -> terrain shadow blobs (material looked up by name, case-insensitive; unknown -> 0).
-std::vector<terrain::ShadowBlob> land_selection_blobs(std::span<const SelectionBlob> blobs,
-                                                      const std::vector<terrain::ShadowBlobMaterial>& materials);
 
 }  // namespace alamo::ui

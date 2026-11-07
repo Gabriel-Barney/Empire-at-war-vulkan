@@ -129,6 +129,23 @@ private:
     std::array<std::array<std::vector<HudQuad>, kHudSubLists>, kHudLayers> lists_;
 };
 
+struct HudHitBox {
+    int32_t component = -1;
+    uint32_t layer = 0;
+    Vec2f min{}, max{};  // canvas units
+    uint32_t slot = 0;   // panel slot (s_select_NN) or 0
+};
+
+// Hit box of a component drawn at `center` with `size` (canvas units, +Y up).
+HudHitBox make_hit_box(int32_t component, uint32_t layer, Vec2f center, Vec2f size, uint32_t slot = 0);
+// The topmost box under pixel (px, py): highest layer, then the latest added on that layer; its component, or -1.
+int32_t topmost_hit(std::span<const HudHitBox> hits, const HudCanvas& canvas, int32_t px, int32_t py);
+// A rectangle outline of 2-unit lines plus a translucent fill ([port] stand-in plates).
+void frame_rect(HudDrawList& dl, uint32_t layer, Vec2f center, Vec2f size, Rgba8 back, Rgba8 edge);
+// Window resize: `canvas` becomes HudCanvas::make(width, height); the font cache is cleared when the screen height changed
+// (pixel sizes follow it).
+void resize_canvas(HudCanvas& canvas, FontCache* fonts, uint32_t width, uint32_t height);
+
 // ---- Emitters -------------------------------------------------------------------------------------
 // A texture as the GUI draws it: an atlas entry (page 1 + UVs) or an image page (HudRenderer::set_image_page).
 struct GuiImage {
