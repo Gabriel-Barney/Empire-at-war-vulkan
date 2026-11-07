@@ -338,9 +338,11 @@ Version 3 (modc t21, t24, 2026-11-07): `shaders` is new and its issues count as 
 counted). Readers of version 2 keys need no change. `unknown_xml_tags` also covers `"command bar components"` and
 `"radar map"` (modc t25).
 
-Installed mods, 2026-11-07 (base FoC at F:): shader issues per item as in §4.1; `Planet_Deathstar` (1770851727,
-`technique_skipped`) is named by 1 object type model (`EMPIRE_DEATH_STAR.ALO`), `MeshFresnelGlow` (2858787558,
-`unsupported_pass`) by none, `_TerrainRenderBump` is a terrain effect and `AlamoEngine` an engine effect. Missing-require
+Installed mods, 2026-11-07 (base FoC at F:): with modc t22 (SM3 translated) the shader issues left are
+`AlamoEngine` `source_shadowed` (an engine effect: TR, its copy 3622043265, FotR) and `_TerrainRenderBump`
+`source_only` (a terrain effect: 3622043265, FotR). Before t22 the cross-reference found `Planet_Deathstar`
+(1770851727, `technique_skipped`) named by 1 object type model (`EMPIRE_DEATH_STAR.ALO`) and `MeshFresnelGlow`
+(2858787558, `unsupported_pass`) by none. Missing-require
 run errors: Thrawn's Revenge 3 and Fall of the Republic 4 are all unused-script leads (0 left as warnings); 3622043265
 keeps 2 (`InstantAction_*_Tech.lua`, named by `Templates_Instant_Action.xml`, `require("eawx-std/class")` which that copy
 does not ship) and has 3 leads.
