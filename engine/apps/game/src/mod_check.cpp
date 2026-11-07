@@ -432,6 +432,8 @@ void check_shaders(const GameData& d, ModCheckReport& r, bool compile) {
     sc.translated_passes = a.translated_passes;
     sc.translated_ok = a.translated_ok;
     sc.compiled = a.compiled;
+    sc.fx_sources = a.sources;
+    sc.fx_sources_compiled = a.sources_compiled;
     std::map<std::string, size_t> model_effects;  // effect base name -> index of its first issue with drawn_by "models"
     for (const materials::ShaderIssue& i : a.issues) {
         ShaderIssueEntry e;
@@ -1124,6 +1126,7 @@ std::string format_mod_report(const ModCheckReport& r, bool verbose) {
             lines.push_back(std::move(line));
         }
         append_list(s, lines, 0, lines.size(), verbose);
+        if (sc.fx_sources) append(s, "    .fx sources %zu, %zu loaded compiled (alamo_fx_prebuild cache)\n", sc.fx_sources, sc.fx_sources_compiled);
         if (sc.models_read) append(s, "    (%zu object type models read for the cross-reference)\n", sc.models_read);
     }
     if (r.submod.missing > 0) {
@@ -1446,6 +1449,8 @@ std::string format_mod_report_json(const ModCheckReport& r) {
     count(j, "translated_ok", sc.translated_ok);
     j.key("compiled");
     j.boolean(sc.compiled);
+    count(j, "fx_sources", sc.fx_sources);
+    count(j, "fx_sources_compiled", sc.fx_sources_compiled);
     count(j, "models_read", sc.models_read);
     j.key("issues");
     j.open('[');

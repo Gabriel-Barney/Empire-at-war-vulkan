@@ -151,6 +151,7 @@ struct ShaderCheck {
     bool checked = false;  // the audit ran (built with the materials module and ModCheckOptions::shaders)
     size_t effects = 0, mod_effects = 0, loaded = 0, translated_passes = 0, translated_ok = 0;  // materials::EffectAudit
     bool compiled = false;    // the runtime DXC compiled the translated passes
+    size_t fx_sources = 0, fx_sources_compiled = 0;  // EffectAudit::sources / sources_compiled (modc t23 FxCache)
     size_t models_read = 0;   // object-type models read for the cross-reference (0 when no issue is a model effect)
     std::vector<ShaderIssueEntry> issues;  // audit order: by effect, then kind
 };
