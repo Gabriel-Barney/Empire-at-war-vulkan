@@ -1,7 +1,7 @@
 // Binding family: AI plans and free stores (roadmap A2; alamo/lua/ai_bridge.hpp). Every binding forwards to
 // the AiScriptHost attached to the VM (engine/ai implements it); without a host the bindings answer as an
 // empty AI would (no task force, nil statuses). Argument checks follow the vm_internal.hpp error discipline
-// (Call::fail, never lua_error). Validation strings are the port's own unless LUA_API.md gives one.
+// (Call::script_error_stop, never lua_error). Validation strings are the port's own unless LUA_API.md gives one.
 //
 // Methods NOT in the RE binding table (intentional, counted as "extra" by binding_coverage):
 //   * Is_Pool_Safe -> false on TaskForceClass, AIBlockingStatus, AITargetLocationWrapper, BudgetWrapper,
@@ -30,13 +30,7 @@ const char kHostKey[] = "alamo.ai.host";
 const char kScriptKey[] = "alamo.ai.script";
 const char kMetaKey[] = "alamo.meta";  // bindings.cpp: the shared wrapper metatable
 
-AiScriptHost* host_of(lua_State* L) {
-    lua_pushstring(L, kHostKey);
-    lua_rawget(L, LUA_REGISTRYINDEX);
-    void* p = lua_type(L, -1) == LUA_TLIGHTUSERDATA ? lua_touserdata(L, -1) : nullptr;
-    lua_pop(L, 1);
-    return static_cast<AiScriptHost*>(p);
-}
+AiScriptHost* host_of(lua_State* L) { return detail::registry_ptr<AiScriptHost>(L, kHostKey); }
 
 int32_t script_of(lua_State* L) {
     lua_pushstring(L, kScriptKey);
@@ -69,10 +63,7 @@ uint32_t cls_status() {
     static const uint32_t c = cls("AIBlockingStatus");
     return c;
 }
-uint32_t cls_target() {
-    static const uint32_t c = cls("AITargetLocationWrapper");
-    return c;
-}
+using detail::cls_target;
 uint32_t cls_budget() {
     static const uint32_t c = cls("BudgetWrapper");
     return c;
@@ -94,10 +85,7 @@ uint32_t cls_tf(AiTaskForceKind k) {
         default: return generic;
     }
 }
-bool is_tf_class(uint32_t c) {
-    return c == cls_tf(AiTaskForceKind::Generic) || c == cls_tf(AiTaskForceKind::Galactic) ||
-           c == cls_tf(AiTaskForceKind::Space) || c == cls_tf(AiTaskForceKind::Land);
-}
+using detail::is_task_force_class;
 
 // Key spaces for push_cached_userdata are per class; ids are non-negative.
 void push_tf(lua_State* L, int32_t tf, AiTaskForceKind kind) {
@@ -144,29 +132,7 @@ bool is_bool(const Call& c, int i) { return c.has(i) && lua_type(c.L, c.idx(i)) 
 bool to_bool(const Call& c, int i) { return lua_toboolean(c.L, c.idx(i)) != 0; }
 
 // Any wrapper argument -> AiArg.
-AiArg arg_of(lua_State* L, LuaVm::Impl& vm, int index) {
-    AiArg a;
-    if (lua_type(L, index) != LUA_TUSERDATA) return a;
-    const auto* ud = static_cast<const Ud*>(lua_touserdata(L, index));
-    if (!ud) return a;
-    if (ud->cls == detail::cls_game_object()) {
-        if (detail::object_alive(vm, *ud)) {
-            a.present = true;
-            a.object = detail::object_handle(*ud);
-        }
-    } else if (ud->cls == cls_target()) {
-        a.present = true;
-        a.target = ud->id;
-    } else if (is_tf_class(ud->cls)) {
-        a.present = true;
-        a.task_force = ud->id;
-    } else if (ud->cls == detail::cls_player()) {
-        a.present = true;
-        a.player = ud->id;
-    }
-    return a;
-}
-AiArg arg(Call& c, int i) { return c.has(i) ? arg_of(c.L, *c.vm, c.idx(i)) : AiArg{}; }
+AiArg arg(Call& c, int i) { return detail::ai_arg(c, i); }
 
 objects::ObjectHandle object_arg(Call& c, int i) {
     const AiArg a = arg(c, i);
@@ -610,6 +576,34 @@ bool push_global_function(lua_State* L, std::string_view name) {
 
 std::span<const detail::ImplEntry> detail::impl_ai() { return kImpl; }
 
+bool detail::is_task_force_class(uint32_t c) {
+    return c == cls_tf(AiTaskForceKind::Generic) || c == cls_tf(AiTaskForceKind::Galactic) ||
+           c == cls_tf(AiTaskForceKind::Space) || c == cls_tf(AiTaskForceKind::Land);
+}
+
+AiArg detail::ai_arg(Call& c, int i) {
+    AiArg a;
+    if (!c.has(i) || lua_type(c.L, c.idx(i)) != LUA_TUSERDATA) return a;
+    const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, c.idx(i)));
+    if (!ud) return a;
+    if (ud->cls == cls_game_object()) {
+        if (object_alive(*c.vm, *ud)) {
+            a.present = true;
+            a.object = object_handle(*ud);
+        }
+    } else if (ud->cls == cls_target()) {
+        a.present = true;
+        a.target = ud->id;
+    } else if (is_task_force_class(ud->cls)) {
+        a.present = true;
+        a.task_force = ud->id;
+    } else if (ud->cls == cls_player()) {
+        a.present = true;
+        a.player = ud->id;
+    }
+    return a;
+}
+
 // L1P4_LUA_GAPS 1.1 (vm_internal.hpp). Error texts as the original's Activate_Ability_Galactic.
 bool detail::galactic_ability_type_arg(Call& c, const char* who, uint32_t& filter) {
     filter = objects::kNone;
@@ -644,7 +638,7 @@ int detail::ai_wrapper_object(Call& c, int i, objects::ObjectHandle& out) {
     out = {};
     if (!c.has(i) || lua_type(c.L, c.idx(i)) != LUA_TUSERDATA) return 0;
     const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, c.idx(i)));
-    if (!ud || (ud->cls != cls_target() && !is_tf_class(ud->cls))) return 0;
+    if (!ud || (ud->cls != cls_target() && !is_task_force_class(ud->cls))) return 0;
     AiScriptHost* h = host_of(c.L);
     const objects::ObjectStore* st = c.vm->host.store;
     if (!h || !st) return 1;
@@ -701,7 +695,7 @@ bool detail::ai_task_force_units(Call& c, int i, std::vector<objects::ObjectHand
     out.clear();
     if (!c.has(i) || lua_type(c.L, c.idx(i)) != LUA_TUSERDATA) return false;
     const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, c.idx(i)));
-    if (!ud || !is_tf_class(ud->cls)) return false;
+    if (!ud || !is_task_force_class(ud->cls)) return false;
     AiScriptHost* h = host_of(c.L);
     const objects::ObjectStore* st = c.vm->host.store;
     if (!h || !st) return true;
@@ -714,12 +708,7 @@ bool detail::ai_task_force_units(Call& c, int i, std::vector<objects::ObjectHand
 
 void attach_ai_host(LuaVm& vm, AiScriptHost* host, int32_t script_id) {
     lua_State* L = vm.state();
-    lua_pushstring(L, kHostKey);
-    if (host)
-        lua_pushlightuserdata(L, host);
-    else
-        lua_pushnil(L);
-    lua_rawset(L, LUA_REGISTRYINDEX);
+    detail::set_registry_ptr(L, kHostKey, host);
     lua_pushstring(L, kScriptKey);
     lua_pushnumber(L, script_id);
     lua_rawset(L, LUA_REGISTRYINDEX);

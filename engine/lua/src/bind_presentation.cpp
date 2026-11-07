@@ -36,10 +36,8 @@ const detail::Ud* engine_ud(const Call& c, int i) {
 // "Position of some sort": a game object (markers, units), a PositionWrapper or an AI target.
 // [inferred] dead objects are accepted (their last id is recorded).
 bool is_position(const Call& c, int i) {
-    static const uint32_t pos = detail::class_id("PositionWrapper");
-    static const uint32_t target = detail::class_id("AITargetLocationWrapper");
     const detail::Ud* ud = engine_ud(c, i);
-    return ud && (ud->cls == detail::cls_game_object() || ud->cls == pos || ud->cls == target);
+    return ud && (ud->cls == detail::cls_game_object() || ud->cls == detail::cls_position() || ud->cls == detail::cls_target());
 }
 
 bool is_object(const Call& c, int i) {

@@ -5,11 +5,9 @@
 //   * binding implementations (ImplFn) never call lua_error / luaL_check*. q6 t11 (docs/re/LUA_API.md "Binding error
 //     model across all bindings"): a binding never raises a Lua error at all. An error-level diagnostic is
 //     Call::script_error_stop (log, set the script's stop flag, return no values), a warning Call::script_warning (log
-//     only); the legacy Call::fail (writes Call::err, returns -1: the dispatcher raises it, pcall catches it) is no
-//     longer used by any binding;
+//     only);
 //   * the dispatcher's outermost frame (no C++ locals) raises the Lua error for the port's own failures only (an
-//     unbound binding, a C++ exception, a legacy fail()) after the implementation has returned and destroyed
-//     everything.
+//     unbound binding, a C++ exception) after the implementation has returned and destroyed everything.
 // Only allocation failures inside lua_push* can still longjmp out of an implementation.
 #pragma once
 #include <cstdint>
@@ -32,6 +30,8 @@
 #include "alamo/lua/lua_vm.hpp"
 
 namespace alamo::lua {
+
+struct AiArg;  // ai_bridge.hpp
 
 namespace detail {
 
@@ -172,9 +172,6 @@ uint32_t find_method(uint32_t cls, std::string_view name);
 ImplFn global_impl(uint32_t row);
 // Row of a global by name (kNoBinding if not in the table).
 uint32_t global_row(std::string_view name);
-// Number of rows + extra methods (size of the unbound counter array).
-size_t counter_slots();
-uint32_t extra_counter_slot(uint32_t method_slot);
 
 }  // namespace detail
 
@@ -195,7 +192,7 @@ struct LuaVm::Impl {
     double time = 0.0;
     uint32_t frame = 0;
     std::vector<std::string> messages, errors;
-    std::vector<uint32_t> unbound;  // per binding row (then extra slots)
+    std::vector<uint32_t> unbound;  // per binding row (binding_table())
     uint64_t unbound_total = 0;
     std::map<int32_t, ThreadRec> threads;  // id order = service order
     int32_t next_thread = 0;
@@ -226,8 +223,6 @@ struct Call {
     const Ud* self;  // the receiver (methods) or the global userdata (calls)
     int first;
     int nargs;
-    char* err;
-    size_t err_cap;
 
     int idx(int i) const { return first + i - 1; }
     bool has(int i) const { return i >= 1 && i <= nargs; }
@@ -239,9 +234,6 @@ struct Call {
         return s ? std::string_view(s, lua_strlen(L, idx(i))) : std::string_view();
     }
     const Ud* userdata(int i, uint32_t cls) const;  // nullptr unless an engine userdata of `cls`
-    // Legacy (unwinds): writes err, returns -1; the dispatcher raises it as a Lua error that pcall catches. q6 t11: not
-    // the original's behaviour; no binding uses it (kept for the port's own failures).
-    int fail(const char* fmt, ...);
     // q6 t03 / t11 (LUA_API.md "What an error does to the script", "Binding error model across all bindings"): the
     // original's script error 0x248190, used for every error-level diagnostic of every binding. Logs "SCRIPT ERROR:
     // <text>" and sets the script's exited flag (+0x121, LuaVm::Impl::exit_requested, the flag ScriptExit sets), with no
@@ -256,8 +248,8 @@ struct Call {
 
 // Pushers. Wrappers are cached per VM: the same engine entity gives the SAME userdata every time, so
 // scripts can key tables by wrappers (Lua 5.0 table lookup is raw identity; __eq is not consulted).
-//   objects: cache keyed by object id (ids are never reused); dead entries dropped by
-//            LuaVm::sweep_dead_wrappers(); a stale entry (same id, other handle) is replaced;
+//   objects: cache keyed by object id (ids are never reused), kept for the VM's lifetime (dead entries are not
+//            dropped: cu14 t09); a stale entry (same id, other handle) is replaced;
 //   types:   keyed by type index, kept for the VM's lifetime;
 //   players and the other entity wrappers (story plots/events, ...): push_cached_userdata, keyed by
 //            (class, key), kept for the VM's lifetime (their entities live as long as the session).
@@ -377,15 +369,29 @@ bool write_heap(lua_State* L, const void* vm_self, const std::vector<lua_State*>
 bool read_heap(ByteReader& r, lua_State* L_old, void* vm_self, lua_CFunction panic,
                const std::vector<uint32_t>& thread_index, std::vector<lua_State*>& thread_states, lua_State*& out,
                std::string& err);
-struct HeapStats {
-    uint32_t serial = 0;
-    uint64_t bytes = 0, threshold = 0;
-    uint32_t strings = 0;
-};
-HeapStats heap_stats(lua_State* L);
+LuaVm::HeapInfo heap_stats(lua_State* L);  // LuaVm::heap_info (reads the patched lstate.h G(L))
 // The persistence name table's aliases ("name=saved name": names of a C function that is saved under another name,
 // e.g. the shared dispatchers, or functions the linker folded together). Diagnostics / tests.
 std::vector<std::string> cfunction_aliases();
+
+// A host pointer kept in the VM registry under a string key, as a light userdata (nullptr stores nil: detached). The
+// attach_* functions set it, the families read it back (nullptr when nothing is attached).
+inline void set_registry_ptr(lua_State* L, const char* key, void* p) {
+    lua_pushstring(L, key);
+    if (p)
+        lua_pushlightuserdata(L, p);
+    else
+        lua_pushnil(L);
+    lua_rawset(L, LUA_REGISTRYINDEX);
+}
+template <class T>
+T* registry_ptr(lua_State* L, const char* key) {
+    lua_pushstring(L, key);
+    lua_rawget(L, LUA_REGISTRYINDEX);
+    void* p = lua_type(L, -1) == LUA_TLIGHTUSERDATA ? lua_touserdata(L, -1) : nullptr;
+    lua_pop(L, 1);
+    return static_cast<T*>(p);
+}
 
 // Fixed class ids used by the implementations.
 uint32_t cls_game_object();
@@ -393,6 +399,18 @@ uint32_t cls_type();
 uint32_t cls_player();
 uint32_t cls_script();
 uint32_t cls_user_var();
+uint32_t cls_position();  // PositionWrapper
+uint32_t cls_target();    // AITargetLocationWrapper
+// bind_ai.cpp: any task force class (TaskForceClass, GalacticTaskForceClass, SpaceTaskForceClass, LandTaskForceClass).
+bool is_task_force_class(uint32_t cls);
+// bind_ai.cpp: script argument i as the AI host sees it - a live game object, an AI target, a task force or a player
+// (nothing present for a missing argument, a dead object or any other value).
+AiArg ai_arg(Call& c, int i);
+
+// bind_objects.cpp: a PositionWrapper is a value userdata (a new one per push; __eq compares the bits): x / y float
+// bits in Ud::value (x low, y high), z float bits in Ud::id.
+void push_position(lua_State* L, Vec3 p);
+Vec3 position_of(const Ud& u);
 
 }  // namespace detail
 }  // namespace alamo::lua

@@ -85,22 +85,13 @@ bool iequal(std::string_view a, std::string_view b) {
     return true;
 }
 
-uint32_t cls_position() {
-    static const uint32_t c = detail::class_id("PositionWrapper");
-    return c;
-}
+using detail::cls_position;
 uint32_t cls_blocking() {
     static const uint32_t c = detail::class_id("BlockingStatus");
     return c;
 }
 
-ObjectBridge* bridge(Call& c) {
-    lua_pushstring(c.L, kBridgeKey);
-    lua_rawget(c.L, LUA_REGISTRYINDEX);
-    auto* b = static_cast<ObjectBridge*>(lua_touserdata(c.L, -1));
-    lua_pop(c.L, 1);
-    return b;
-}
+ObjectBridge* bridge(Call& c) { return detail::registry_ptr<ObjectBridge>(c.L, kBridgeKey); }
 
 objects::ObjectStore* store(Call& c) { return c.vm->host.store; }
 const objects::GameObjectTypes* types(Call& c) { return c.vm->host.types; }
@@ -156,20 +147,27 @@ ScriptObjectState* edit_self(Call& c) { return edit_state(c, c.self->id); }
 
 // ---------------------------------------------------------------- positions
 
-// PositionWrapper userdata: x / y float bits in Ud::value, z float bits in Ud::id (a value, not a
-// cached wrapper; __eq compares the bits).
-void push_position(lua_State* L, Vec3 p) {
+}  // namespace
+
+// PositionWrapper userdata (vm_internal.hpp): x / y float bits in Ud::value, z float bits in Ud::id (a value, not a
+// cached wrapper; __eq compares the bits). The one encoder / decoder of the layout.
+void detail::push_position(lua_State* L, Vec3 p) {
     Ud u;
     u.cls = cls_position();
     u.value = static_cast<uint64_t>(std::bit_cast<uint32_t>(p.x)) |
               (static_cast<uint64_t>(std::bit_cast<uint32_t>(p.y)) << 32);
     u.id = std::bit_cast<int32_t>(p.z);
-    detail::push_engine_userdata(L, u);
+    push_engine_userdata(L, u);
 }
-Vec3 position_of(const Ud& u) {
+Vec3 detail::position_of(const Ud& u) {
     return {std::bit_cast<float>(static_cast<uint32_t>(u.value & 0xFFFFFFFFu)),
             std::bit_cast<float>(static_cast<uint32_t>(u.value >> 32)), std::bit_cast<float>(u.id)};
 }
+
+namespace {
+
+using detail::position_of;
+using detail::push_position;
 
 enum class PosArg : uint8_t { Ok, Dead, NotPosition };
 // "Something which defines a position": a live GameObjectWrapper or a PositionWrapper.
@@ -252,16 +250,8 @@ bool is_enemy(Call& c, int32_t a, int32_t b) {
 // ---------------------------------------------------------------- object finders (refixf t03)
 //
 // docs/re/LUA_API.md "Find_All_Objects_Of_Type and the sibling finders" (0x540b20 / 0x6970a0 / 0x69e7c0). Their errors
-// go through the original's script error helper 0x248190: logged, no unwind, the binding returns no value (nil).
-
-int script_error(Call& c, const char* fmt, ...) {
-    char buf[512];
-    va_list ap;
-    va_start(ap, fmt);
-    std::vsnprintf(buf, sizeof buf, fmt, ap);
-    va_end(ap);
-    return c.script_error_stop("%s", buf);  // q6 t11: sets the stop flag (LUA_API.md "Binding error model")
-}
+// go through the original's script error helper 0x248190 (Call::script_error_stop): logged, no unwind, the binding
+// returns no value (nil).
 
 // The filters of Find_All_Objects_Of_Type / Find_Nearest; all set filters must pass (AND).
 struct ObjectFilter {
@@ -679,7 +669,7 @@ int g_find_all_with_hint(Call& c) {
 // objects; vm_internal.hpp member views): each entry that passes the filters gives a member view right after the
 // company's place in the walk [port order], with the company's owner and the entry type as its representative type.
 int g_find_all_objects_of_type(Call& c) {
-    if (c.nargs < 1) return script_error(c, "FindAllObjectsOfType -- Expected a filter parameter.");
+    if (c.nargs < 1) return c.script_error_stop("FindAllObjectsOfType -- Expected a filter parameter.");
     const objects::GameObjectTypes* ty = types(c);
     ObjectFilter f;
     for (int i = 1; i <= c.nargs; ++i) {
@@ -689,14 +679,14 @@ int g_find_all_objects_of_type(Call& c) {
             f.owner = p->id;
         } else if (const Ud* t = c.userdata(i, detail::cls_type())) {
             if (!ty || t->value >= ty->raw().type_count()) continue;  // a null type wrapper sets nothing
-            if (f.have_type) return script_error(c, "FindAllObjectsOfType -- unknown filter parameter %d.", i);
+            if (f.have_type) return c.script_error_stop("FindAllObjectsOfType -- unknown filter parameter %d.", i);
             f.have_type = true;
             f.type = static_cast<TypeIndex>(t->value);
         } else if (!c.is_string(i) || !parse_filter_string(c, c.string(i), f)) {
-            return script_error(c, "FindAllObjectsOfType -- unknown filter parameter %d.", i);
+            return c.script_error_stop("FindAllObjectsOfType -- unknown filter parameter %d.", i);
         }
     }
-    if (!f.any()) return script_error(c, "FindAllObjectsOfType -- Invalid parameters.  You must pass a filter.");
+    if (!f.any()) return c.script_error_stop("FindAllObjectsOfType -- Invalid parameters.  You must pass a filter.");
     lua_newtable(c.L);
     const objects::ObjectStore* st = store(c);
     if (!st || !ty) return 1;
@@ -730,8 +720,8 @@ int g_find_all_objects_of_type(Call& c) {
 // refix t04: in the galactic store a company object also stands for its Company_Units members (vm_internal.hpp member
 // views): a member type name finds the company's first matching entry.
 int find_first(Call& c) {
-    if (c.nargs < 1) return script_error(c, "FindPlanet -- No planet name set");
-    if (!c.is_string(1)) return script_error(c, "FindPlanet -- Parameter 1 is not a valid string");
+    if (c.nargs < 1) return c.script_error_stop("FindPlanet -- No planet name set");
+    if (!c.is_string(1)) return c.script_error_stop("FindPlanet -- Parameter 1 is not a valid string");
     const objects::ObjectStore* st = store(c);
     const objects::GameObjectTypes* ty = types(c);
     if (!st || !ty) return push_nil(c);
@@ -789,24 +779,24 @@ int m_get_all_planets(Call& c) {
 // "allied or self" relation is !ObjectBridge::is_enemy (self always); without a player world no player is neutral.
 int g_find_nearest(Call& c) {
     if (c.nargs < 1 || c.nargs > 4)
-        return script_error(c, "Find_Nearest - invalid number of parameters. Expected between 1 and 4, got %d.", c.nargs);
+        return c.script_error_stop("Find_Nearest - invalid number of parameters. Expected between 1 and 4, got %d.", c.nargs);
     objects::ObjectStore* st = store(c);
     if (!st || st->mode() == objects::ModeKind::Galactic)
-        return script_error(c, "Find_Nearest - this function may only be used in tactical modes.");
+        return c.script_error_stop("Find_Nearest - this function may only be used in tactical modes.");
     const Ud* src = c.userdata(1, detail::cls_game_object());
     // OI lua (A1 ask 2): an AI target -> its game object, a task force -> its first live unit; none -> nil (the rule
     // of the former Find_Nearest shim in the AI VMs).
     ObjectHandle ai_src{};
     if (!src && detail::ai_wrapper_object(c, 1, ai_src) && !ai_src) return push_nil(c);
     if (!src && !ai_src)
-        return script_error(c, "Find_Nearest - invalid type for parameter 1; expected game object, ai target or taskforce.");
+        return c.script_error_stop("Find_Nearest - invalid type for parameter 1; expected game object, ai target or taskforce.");
     if (src && !detail::object_alive(*c.vm, *src))
-        return script_error(c, "Find_Nearest - parameter 1 is already dead; cannot extract a position from it.");
+        return c.script_error_stop("Find_Nearest - parameter 1 is already dead; cannot extract a position from it.");
     ObjectFilter f;
     int player_index = 2;
     if (c.is_string(2)) {
         if (!parse_filter_string(c, c.string(2), f))
-            return script_error(c, "Find_Nearest - unknown game object type, properties mask or catefory %s.",
+            return c.script_error_stop("Find_Nearest - unknown game object type, properties mask or catefory %s.",
                                 std::string(c.string(2)).c_str());
         player_index = 3;
     }
@@ -2098,7 +2088,7 @@ bool lock_owner_ok(Call& c, const char* fn, const char* what) {
     // 0x2814d0 [port: "not human" - a player world without the setting treats every player as AI]
     if (const LuaPlayerWorld* w = c.vm->owner ? player_world(*c.vm->owner) : nullptr; w && w->is_human(owner)) {
         const std::string name(object_type_name(c, self_object(c)));
-        script_error(c, "GameObjectWrapper::%s - object %s does not belong to an AI player; cannot %s.", fn, name.c_str(), what);
+        c.script_error_stop("GameObjectWrapper::%s - object %s does not belong to an AI player; cannot %s.", fn, name.c_str(), what);
         return false;
     }
 #else
@@ -2143,7 +2133,7 @@ int m_lock_current_orders(Call& c) {
     const ObjectHandle self = self_object(c);
     if (!st->has_behavior(self, objects::beh::Locomotor)) {
         const std::string name(object_type_name(c, self));
-        return script_error(c, "GameObjectWrapper::Lock_Current_Orders - %s is immobile; locking not supported.", name.c_str());
+        return c.script_error_stop("GameObjectWrapper::Lock_Current_Orders - %s is immobile; locking not supported.", name.c_str());
     }
     // A team that is not a land squad container (locomotor vf+0x230), outside space: lock each member.
     if (st->has_behavior(self, objects::beh::Team) && st->mode() != objects::ModeKind::Space &&
@@ -3239,9 +3229,7 @@ bool detail::object_activate_ability(Call& c, ObjectHandle unit, int first, int 
     const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, -1));
     bool activated = false;
     if (ud && detail::object_alive(*c.vm, *ud)) {
-        char err[256];
-        err[0] = 0;
-        Call sub{c.L, c.vm, ud, first, nargs, err, sizeof err};
+        Call sub{c.L, c.vm, ud, first, nargs};
         activate_ability(sub, &activated);
     }
     lua_settop(c.L, top);
@@ -3249,22 +3237,9 @@ bool detail::object_activate_ability(Call& c, ObjectHandle unit, int first, int 
 }
 
 void attach_object_bridge(LuaVm& vm, ObjectBridge* bridge) {
-    lua_State* L = vm.state();
-    lua_pushstring(L, kBridgeKey);
-    if (bridge)
-        lua_pushlightuserdata(L, bridge);
-    else
-        lua_pushnil(L);
-    lua_rawset(L, LUA_REGISTRYINDEX);
+    detail::set_registry_ptr(vm.state(), kBridgeKey, bridge);
 }
 
-ObjectBridge* attached_object_bridge(LuaVm& vm) {
-    lua_State* L = vm.state();
-    lua_pushstring(L, kBridgeKey);
-    lua_rawget(L, LUA_REGISTRYINDEX);
-    auto* b = static_cast<ObjectBridge*>(lua_touserdata(L, -1));
-    lua_pop(L, 1);
-    return b;
-}
+ObjectBridge* attached_object_bridge(LuaVm& vm) { return detail::registry_ptr<ObjectBridge>(vm.state(), kBridgeKey); }
 
 }  // namespace alamo::lua

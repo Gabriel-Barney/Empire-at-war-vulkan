@@ -1,8 +1,7 @@
 // Binding family: tactical AI (roadmap A1 stage 2; alamo/lua/ai_tactical_bridge.hpp). Every binding forwards
 // to the AiTacticalScriptHost attached to the VM (engine/ai/tactical implements it). Argument checks follow the
-// vm_internal.hpp error discipline (Call::fail, never lua_error). Validation strings are the port's own unless
-// docs/re/AI_TACTICAL.md / LUA_API.md give one.
-#include <bit>
+// vm_internal.hpp error discipline (Call::script_error_stop, never lua_error). Validation strings are the port's
+// own unless docs/re/AI_TACTICAL.md / LUA_API.md give one.
 #include <cstdarg>
 #include <cstdio>
 #include <string>
@@ -21,13 +20,7 @@ using detail::Ud;
 const char kTacticalHostKey[] = "alamo.ai.tactical.host";
 const char kScriptKey[] = "alamo.ai.script";  // bind_ai.cpp: the calling script id (shared registry key)
 
-AiTacticalScriptHost* host_of(lua_State* L) {
-    lua_pushstring(L, kTacticalHostKey);
-    lua_rawget(L, LUA_REGISTRYINDEX);
-    void* p = lua_type(L, -1) == LUA_TLIGHTUSERDATA ? lua_touserdata(L, -1) : nullptr;
-    lua_pop(L, 1);
-    return static_cast<AiTacticalScriptHost*>(p);
-}
+AiTacticalScriptHost* host_of(lua_State* L) { return detail::registry_ptr<AiTacticalScriptHost>(L, kTacticalHostKey); }
 
 int32_t script_of(lua_State* L) {
     lua_pushstring(L, kScriptKey);
@@ -38,29 +31,7 @@ int32_t script_of(lua_State* L) {
 }
 
 uint32_t cls(const char* name) { return detail::class_id(name); }
-uint32_t cls_target() {
-    static const uint32_t c = cls("AITargetLocationWrapper");
-    return c;
-}
-uint32_t cls_position() {
-    static const uint32_t c = cls("PositionWrapper");
-    return c;
-}
-bool is_tf_class(uint32_t c) {
-    static const uint32_t a = cls("TaskForceClass"), b = cls("GalacticTaskForceClass"), s = cls("SpaceTaskForceClass"),
-                          l = cls("LandTaskForceClass");
-    return c == a || c == b || c == s || c == l;
-}
-
-// PositionWrapper layout of bind_objects.cpp (x / y float bits in Ud::value, z float bits in Ud::id). Keep in
-// sync with push_position / position_of there.
-void push_position(lua_State* L, float x, float y, float z) {
-    Ud u;
-    u.cls = cls_position();
-    u.value = static_cast<uint64_t>(std::bit_cast<uint32_t>(x)) | (static_cast<uint64_t>(std::bit_cast<uint32_t>(y)) << 32);
-    u.id = std::bit_cast<int32_t>(z);
-    detail::push_engine_userdata(L, u);
-}
+void push_position(lua_State* L, float x, float y, float z) { detail::push_position(L, Vec3{x, y, z}); }
 
 int push_nil(Call& c) {
     lua_pushnil(c.L);
@@ -90,32 +61,16 @@ int push_object(Call& c, objects::ObjectHandle h) {
 
 bool is_bool(const Call& c, int i) { return c.has(i) && lua_type(c.L, c.idx(i)) == LUA_TBOOLEAN; }
 
-// Any wrapper argument -> AiArg (bind_ai.cpp's rule) plus PositionWrapper -> AiPoint.
+// Any wrapper argument -> AiArg (detail::ai_arg, bind_ai.cpp's rule) plus PositionWrapper -> AiPoint.
 void arg_of(Call& c, int i, AiArg& a, AiPoint& p) {
-    a = AiArg{};
+    a = detail::ai_arg(c, i);
     p = AiPoint{};
-    if (!c.has(i) || lua_type(c.L, c.idx(i)) != LUA_TUSERDATA) return;
-    const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, c.idx(i)));
-    if (!ud) return;
-    if (ud->cls == detail::cls_game_object()) {
-        if (detail::object_alive(*c.vm, *ud)) {
-            a.present = true;
-            a.object = detail::object_handle(*ud);
-        }
-    } else if (ud->cls == cls_target()) {
-        a.present = true;
-        a.target = ud->id;
-    } else if (is_tf_class(ud->cls)) {
-        a.present = true;
-        a.task_force = ud->id;
-    } else if (ud->cls == detail::cls_player()) {
-        a.present = true;
-        a.player = ud->id;
-    } else if (ud->cls == cls_position()) {
+    if (const Ud* ud = c.userdata(i, detail::cls_position())) {
+        const Vec3 v = detail::position_of(*ud);
         p.present = true;
-        p.x = std::bit_cast<float>(static_cast<uint32_t>(ud->value & 0xFFFFFFFFu));
-        p.y = std::bit_cast<float>(static_cast<uint32_t>(ud->value >> 32));
-        p.z = std::bit_cast<float>(ud->id);
+        p.x = v.x;
+        p.y = v.y;
+        p.z = v.z;
     }
 }
 
@@ -139,15 +94,6 @@ int tf_order(Call& c, AiTacticalOrder order, const char* name) {
     if (!h) return push_nil(c);
     return push_status(c, h->tf_tactical_order(c.self->id, order, a, p, number, flag));
 }
-// The original's script error 0x248190 (Call::script_error_stop: logged, the stop flag, no value, no unwind).
-int script_error(Call& c, const char* fmt, ...) {
-    char buf[512];
-    va_list ap;
-    va_start(ap, fmt);
-    std::vsnprintf(buf, sizeof buf, fmt, ap);
-    va_end(ap);
-    return c.script_error_stop("%s", buf);  // q6 t11: the stop flag, no value (LUA_API.md "Binding error model")
-}
 // A GameObjectWrapper of a dead object at argument i (arg_of leaves it absent).
 bool dead_object_arg(Call& c, int i) {
     if (!c.has(i) || lua_type(c.L, c.idx(i)) != LUA_TUSERDATA) return false;
@@ -163,13 +109,13 @@ std::string tf_display_name(Call& c) {
 // is not a valid destination for TaskForce %s"; both logged as script errors (no unwind), nil. A dead object -> nil with no
 // message (an AI target without a location: the host answers nil).
 int m_move_to(Call& c) {
-    if (c.nargs < 1) return script_error(c, "No destination set for TaskForce %s", tf_display_name(c).c_str());
+    if (c.nargs < 1) return c.script_error_stop("No destination set for TaskForce %s", tf_display_name(c).c_str());
     if (dead_object_arg(c, 1)) return push_nil(c);
     AiArg a;
     AiPoint p;
     arg_of(c, 1, a, p);
     if ((!a.present && !p.present) || a.player >= 0)
-        return script_error(c, "Parameter 1 is not a valid destination for TaskForce %s", tf_display_name(c).c_str());
+        return c.script_error_stop("Parameter 1 is not a valid destination for TaskForce %s", tf_display_name(c).c_str());
     return tf_order(c, AiTacticalOrder::MoveTo, "Move_To");
 }
 int m_attack_move(Call& c) { return tf_order(c, AiTacticalOrder::AttackMove, "Attack_Move"); }
@@ -182,13 +128,13 @@ int m_explore_area(Call& c) { return tf_order(c, AiTacticalOrder::ExploreArea, "
 int m_prepare_ambush(Call& c) {
     static const uint32_t land = cls("LandTaskForceClass");
     const bool is_land = c.self->cls == land;
-    if (is_land ? (c.nargs != 4 && c.nargs != 5) : c.nargs != 4) return script_error(c, "Invalid number of parameters");
-    if (dead_object_arg(c, 1)) return script_error(c, "Target object is already dead");
+    if (is_land ? (c.nargs != 4 && c.nargs != 5) : c.nargs != 4) return c.script_error_stop("Invalid number of parameters");
+    if (dead_object_arg(c, 1)) return c.script_error_stop("Target object is already dead");
     AiArg a;
     AiPoint p;
     arg_of(c, 1, a, p);
-    if (!a.object && a.target < 0) return script_error(c, "Parameter 1 is not a game object or an AI target");
-    if (!c.is_string(2)) return script_error(c, "Parameter 2 is not a direction string");
+    if (!a.object && a.target < 0) return c.script_error_stop("Parameter 1 is not a game object or an AI target");
+    if (!c.is_string(2)) return c.script_error_stop("Parameter 2 is not a direction string");
     const std::string_view text = c.string(2);
     auto same = [&text](const char* w) {
         size_t i = 0;
@@ -201,17 +147,17 @@ int m_prepare_ambush(Call& c) {
         return i == text.size();
     };
     const int direction = same("front") ? 0 : same("left") ? 1 : same("right") ? 2 : same("back") ? 3 : -1;
-    if (direction < 0) return script_error(c, "Unrecognized direction %s", std::string(text).c_str());
-    if (!c.is_number(3) || !(c.number(3) > 0.0)) return script_error(c, "Parameter 3 is not a positive number");
-    if (!c.is_number(4)) return script_error(c, "Parameter 4 is not a number");
+    if (direction < 0) return c.script_error_stop("Unrecognized direction %s", std::string(text).c_str());
+    if (!c.is_number(3) || !(c.number(3) > 0.0)) return c.script_error_stop("Parameter 3 is not a positive number");
+    if (!c.is_number(4)) return c.script_error_stop("Parameter 4 is not a number");
     const bool zone_path = is_land && c.nargs == 5 && is_bool(c, 5) && lua_toboolean(c.L, c.idx(5)) != 0;
     AiTacticalScriptHost* h = host_of(c.L);
     if (!h) return push_nil(c);
     std::string name;
     const int32_t st = h->tf_prepare_ambush(c.self->id, a, direction, c.number(3), c.number(4), zone_path, &name);
-    if (st == AiTacticalScriptHost::kAmbushTargetDead) return script_error(c, "Target object is already dead");
+    if (st == AiTacticalScriptHost::kAmbushTargetDead) return c.script_error_stop("Target object is already dead");
     if (st == AiTacticalScriptHost::kAmbushTargetRegion)
-        return script_error(c, "Target %s is invalid: AI targets must represent game objects", name.c_str());
+        return c.script_error_stop("Target %s is invalid: AI targets must represent game objects", name.c_str());
     return push_status(c, st);
 }
 // Fire_Special_Weapon(type_name, target): SCRIPT_GAPS §1.4 / §1.5 on the task force's units (unit-list order),
@@ -452,13 +398,7 @@ int detail::tactical_evaluate_perception(Call& c, std::string_view name, int32_t
 }
 
 void attach_ai_tactical_host(LuaVm& vm, AiTacticalScriptHost* host) {
-    lua_State* L = vm.state();
-    lua_pushstring(L, kTacticalHostKey);
-    if (host)
-        lua_pushlightuserdata(L, host);
-    else
-        lua_pushnil(L);
-    lua_rawset(L, LUA_REGISTRYINDEX);
+    detail::set_registry_ptr(vm.state(), kTacticalHostKey, host);
 }
 
 AiTacticalScriptHost* ai_tactical_host(LuaVm& vm) { return host_of(vm.state()); }

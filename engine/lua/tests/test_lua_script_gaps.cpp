@@ -249,9 +249,8 @@ static int tf_fire(lua_State* L) {
     lua_getupvalue(L, -1, 1);
     auto* impl = static_cast<LuaVm::Impl*>(lua_touserdata(L, -1));
     lua_pop(L, 3);
-    char err[256] = {0};
     const bool space = lua_toboolean(L, 1) != 0;
-    detail::Call c{L, impl, nullptr, 2, lua_gettop(L) - 1, err, sizeof err};
+    detail::Call c{L, impl, nullptr, 2, lua_gettop(L) - 1};
     return detail::task_force_fire_special_weapon(c, space, *g_units, -1);
 }
 
@@ -415,7 +414,10 @@ static void test_space_retreat(const Db& db) {
     const objects::ObjectHandle other = make(e.store, db.t("Ship"), 2, {0, 0, 0});
     make(e.store, db.t("Prop"), 1, {0, 0, 0});  // no locomotor: not retreating
     std::vector<std::pair<objects::ObjectHandle, int32_t>> jumps;
-    e.hooks.hyperspace_out = [&](objects::ObjectHandle h, int32_t delay) { jumps.emplace_back(h, delay); };
+    e.hooks.hyperspace_out_link = [&](objects::ObjectHandle h, int32_t delay, bool) {
+        jumps.emplace_back(h, delay);
+        return true;
+    };
     e.hooks.retreat_increment_frames = [](int32_t) { return 7; };
     CHECK(run(vm, "Start_Cinematic_Space_Retreat(1, 2)") == "");
     // Faster first in the line-up (slot 0 = column -2), facing away from the marker's facing (+X) = -X; then the
@@ -484,7 +486,6 @@ static void test_parent_mode_object(const Db& db) {
     CHECK(gnum(vm, "id") == static_cast<double>(galaxy.id(gship)) && gtrue(vm, "ident") && gtrue(vm, "diff") && gnil(vm, "n") && gnil(vm, "pp"));
     galaxy.destroy(gship);
     CHECK(run(vm, "v2 = p.Is_Valid()") == "" && !gtrue(vm, "v2") && run(vm, "np = (function(...) return arg.n end)(p.Get_Position())") == "" && !vm.exit_requested());
-    vm.sweep_dead_wrappers();
     // Without a parent store: nil.
     e.bridge.parent_store = nullptr;
     CHECK(run(vm, "p3 = t.Get_Parent_Mode_Object()") == "" && gnil(vm, "p3"));

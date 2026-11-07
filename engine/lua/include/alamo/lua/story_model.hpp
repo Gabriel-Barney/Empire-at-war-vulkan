@@ -57,16 +57,18 @@ namespace alamo::lua {
 
 class LuaVm;
 
-// A story event / reward parameter: XML text, or a value set from Lua (object, player).
+// A story event / reward parameter: XML text, or text set from Lua (Set_Event_Parameter stores objects and types as
+// their type name, numbers formatted like Lua's tostring).
+// cu14 t03: only Kind::Text is ever produced (a save with another kind is refused). Object / Player and `id` remain
+// because the save record and the state hash still write the kind byte and the id (u8 0, i32 -1), and the campaign
+// host's param_text (engine/apps/sim story_session.cpp) still switches on the kinds.
 struct StoryParam {
     enum class Kind : uint8_t { Text, Object, Player };
     Kind kind = Kind::Text;
-    std::string text;  // Kind::Text (numbers from Lua are formatted like Lua's tostring)
-    int32_t id = -1;   // Kind::Object: object id; Kind::Player: player id
+    std::string text;
+    int32_t id = -1;
 
     static StoryParam of_text(std::string_view s) { return {Kind::Text, std::string(s), -1}; }
-    static StoryParam of_object(int32_t object_id) { return {Kind::Object, {}, object_id}; }
-    static StoryParam of_player(int32_t player_id) { return {Kind::Player, {}, player_id}; }
     bool empty() const { return kind == Kind::Text && text.empty(); }
 };
 

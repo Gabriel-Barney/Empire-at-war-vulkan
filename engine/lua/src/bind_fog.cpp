@@ -3,7 +3,6 @@
 //
 // Determinism: no RNG; the snapshots live in FogScriptCells (a vector in ascending handle id). FogOfWar itself is
 // order-independent (FOG_OF_WAR §7) and not in the frame CRC.
-#include <bit>
 #include <cstdarg>
 #include <cstdio>
 #include <string>
@@ -26,16 +25,6 @@ namespace {
 
 constexpr const char* kName = "LuaFOWRevealCommandClass";
 
-// The original's script error helper: logged, no unwind; the binding returns nothing.
-int script_error(Call& c, const char* fmt, ...) {
-    char buf[512];
-    va_list ap;
-    va_start(ap, fmt);
-    std::vsnprintf(buf, sizeof buf, fmt, ap);
-    va_end(ap);
-    return c.script_error_stop("%s", buf);  // q6 t11: sets the stop flag (LUA_API.md "Binding error model")
-}
-
 // The FogOfWar global called as a function: no documented form [port].
 int g_fog_of_war(Call&) { return 0; }
 
@@ -46,14 +35,8 @@ uint32_t cls_cells() {
     static const uint32_t c = detail::class_id("LuaFOWCellsClass");
     return c;
 }
-uint32_t cls_position() {
-    static const uint32_t c = detail::class_id("PositionWrapper");
-    return c;
-}
-uint32_t cls_target() {
-    static const uint32_t c = detail::class_id("AITargetLocationWrapper");
-    return c;
-}
+using detail::cls_position;
+using detail::cls_target;
 
 FogScriptHooks* fog_hooks(Call& c) {
     ObjectBridge* b = c.vm->owner ? attached_object_bridge(*c.vm->owner) : nullptr;
@@ -93,8 +76,7 @@ bool position_arg(Call& c, int i, Vec3& out) {
         return true;
     }
     if (const Ud* p = c.userdata(i, cls_position())) {
-        out = {std::bit_cast<float>(static_cast<uint32_t>(p->value & 0xFFFFFFFFu)), std::bit_cast<float>(static_cast<uint32_t>(p->value >> 32)),
-               std::bit_cast<float>(p->id)};
+        out = detail::position_of(*p);
         return true;
     }
     if (const Ud* t = c.userdata(i, cls_target())) {
@@ -118,25 +100,25 @@ void push_cells(Call& c, FogScriptHooks& hk, fw::FogCells cells) {
 
 // FogOfWar.Reveal(player, target [, radius [, denseRadius]]) (§6.2, 0x6a5700).
 int m_reveal(Call& c) {
-    if (c.nargs < 2) return script_error(c, "%s -- Requires at least 2 parameters: (player, object).", kName);
+    if (c.nargs < 2) return c.script_error_stop("%s -- Requires at least 2 parameters: (player, object).", kName);
     const Ud* player = c.userdata(1, detail::cls_player());
-    if (!player) return script_error(c, "%s -- Expected player object as first parameter.", kName);
+    if (!player) return c.script_error_stop("%s -- Expected player object as first parameter.", kName);
     FogScriptHooks* hk = fog_hooks(c);
-    if (!hk || !hk->fog) return script_error(c, "%s -- Command only valid in a tactical game", kName);
+    if (!hk || !hk->fog) return c.script_error_stop("%s -- Command only valid in a tactical game", kName);
     ObjectHandle h;
     if (c.nargs == 2 && object_arg(c, 2, h)) {
         // RevealObject with force 0: own sight when allied to the player, footprint otherwise.
         fw::FogObject o;
-        if (!fog_object(c, *hk, h, o)) return script_error(c, "%s -- Undable to get a valid position", kName);
+        if (!fog_object(c, *hk, h, o)) return c.script_error_stop("%s -- Undable to get a valid position", kName);
         push_cells(c, *hk, hk->fog->lua_reveal_object(player->id, o));
         return 1;
     }
-    if (!c.has(3)) return script_error(c, "%s -- Expected 3rd parameter for reveal radius.", kName);
+    if (!c.has(3)) return c.script_error_stop("%s -- Expected 3rd parameter for reveal radius.", kName);
     // [port] a non-number radius / dense radius reads through a null pointer in the original: an error here.
-    if (!c.is_number(3)) return script_error(c, "%s -- Expected number as 3rd parameter.", kName);
-    if (c.has(4) && !c.is_number(4)) return script_error(c, "%s -- Expected number as 4th parameter.", kName);
+    if (!c.is_number(3)) return c.script_error_stop("%s -- Expected number as 3rd parameter.", kName);
+    if (c.has(4) && !c.is_number(4)) return c.script_error_stop("%s -- Expected number as 4th parameter.", kName);
     Vec3 p{};
-    if (!position_arg(c, 2, p)) return script_error(c, "%s -- Undable to get a valid position", kName);
+    if (!position_arg(c, 2, p)) return c.script_error_stop("%s -- Undable to get a valid position", kName);
     const auto radius = static_cast<float>(c.number(3));
     const float dense = c.has(4) ? static_cast<float>(c.number(4)) : radius;
     push_cells(c, *hk, hk->fog->lua_reveal_position(player->id, p.x, p.y, radius, dense));
@@ -145,11 +127,11 @@ int m_reveal(Call& c) {
 
 // FogOfWar.Reveal_All(player) (§6.5, 0x6a5b00): returns nothing; no Lua way to undo it.
 int m_reveal_all(Call& c) {
-    if (c.nargs < 1) return script_error(c, "%s -- Requires at least 1 parameters: (player).", kName);
+    if (c.nargs < 1) return c.script_error_stop("%s -- Requires at least 1 parameters: (player).", kName);
     const Ud* player = c.userdata(1, detail::cls_player());
-    if (!player) return script_error(c, "%s -- Expected player object as first parameter.", kName);
+    if (!player) return c.script_error_stop("%s -- Expected player object as first parameter.", kName);
     FogScriptHooks* hk = fog_hooks(c);
-    if (!hk || !hk->fog) return script_error(c, "%s -- Command only valid in a tactical game", kName);
+    if (!hk || !hk->fog) return c.script_error_stop("%s -- Command only valid in a tactical game", kName);
     hk->fog->reveal_all(player->id);
     return 0;
 }
@@ -157,14 +139,14 @@ int m_reveal_all(Call& c) {
 // FogOfWar.Temporary_Reveal(player, object [, radius]) (§6.5, 0x6a5cf0): flash, returns nothing.
 int m_temporary_reveal(Call& c) {
     const Ud* player = c.userdata(1, detail::cls_player());
-    if (!player) return script_error(c, "%s -- Expected player object as first parameter.", kName);
+    if (!player) return c.script_error_stop("%s -- Expected player object as first parameter.", kName);
     ObjectHandle h;
-    if (!object_arg(c, 2, h)) return script_error(c, "%s -- Expected object as 2nd parameter.", kName);
-    if (c.has(3) && !c.is_number(3)) return script_error(c, "%s -- Expected number as 3rd parameter.", kName);
+    if (!object_arg(c, 2, h)) return c.script_error_stop("%s -- Expected object as 2nd parameter.", kName);
+    if (c.has(3) && !c.is_number(3)) return c.script_error_stop("%s -- Expected number as 3rd parameter.", kName);
     FogScriptHooks* hk = fog_hooks(c);
-    if (!hk || !hk->fog) return script_error(c, "%s -- Command only valid in a tactical game", kName);
+    if (!hk || !hk->fog) return c.script_error_stop("%s -- Command only valid in a tactical game", kName);
     fw::FogObject o;
-    if (!fog_object(c, *hk, h, o)) return script_error(c, "%s -- Expected object as 2nd parameter.", kName);
+    if (!fog_object(c, *hk, h, o)) return c.script_error_stop("%s -- Expected object as 2nd parameter.", kName);
     hk->fog->temporary_reveal(player->id, o, c.has(3) ? static_cast<float>(c.number(3)) : 0.0f);
     return 0;
 }
@@ -192,15 +174,15 @@ int m_undo_reveal(Call& c) {
 #else
 // Without the fog library every tactical command answers as outside a tactical mode.
 int no_tactical(Call& c) {
-    if (!c.userdata(1, detail::cls_player())) return script_error(c, "%s -- Expected player object as first parameter.", kName);
-    return script_error(c, "%s -- Command only valid in a tactical game", kName);
+    if (!c.userdata(1, detail::cls_player())) return c.script_error_stop("%s -- Expected player object as first parameter.", kName);
+    return c.script_error_stop("%s -- Command only valid in a tactical game", kName);
 }
 int m_reveal(Call& c) {
-    if (c.nargs < 2) return script_error(c, "%s -- Requires at least 2 parameters: (player, object).", kName);
+    if (c.nargs < 2) return c.script_error_stop("%s -- Requires at least 2 parameters: (player, object).", kName);
     return no_tactical(c);
 }
 int m_reveal_all(Call& c) {
-    if (c.nargs < 1) return script_error(c, "%s -- Requires at least 1 parameters: (player).", kName);
+    if (c.nargs < 1) return c.script_error_stop("%s -- Requires at least 1 parameters: (player).", kName);
     return no_tactical(c);
 }
 int m_temporary_reveal(Call& c) { return no_tactical(c); }

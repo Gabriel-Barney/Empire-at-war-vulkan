@@ -1811,11 +1811,6 @@ void CampaignBattles::l1_hooks(SimHost& host) {
     k.teleport = [this, h, id_of](objects::ObjectHandle u, Vec3 p, Vec3 f) {
         if (TacticalMode* tm = h->tactical(); battle_ && tm) battle_->teleport(*tm, id_of(u), p, f);
     };
-    // Locomotor +0x2a8 from Start_Cinematic_Space_Retreat (the hook's only caller): keep_parent_link = false (the
-    // galactic unit survives; L1_S4_REMAINING §3.4).
-    k.hyperspace_out = [this, id_of](objects::ObjectHandle u, int32_t delay) {
-        if (battle_) battle_->hyperspace_out(id_of(u), delay, false);
-    };
     k.retreat_increment_frames = [this](int32_t player) { return battle_ ? battle_->retreat_increment_frames(player) : 0; };
     // Script spawns through the mode; special weapons / TSWs among them join the L1 systems (Spawn_Special_Weapon).
     k.spawn = [this, h](const objects::SpawnParams& p) {

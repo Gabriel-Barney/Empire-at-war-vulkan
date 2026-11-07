@@ -1,7 +1,7 @@
 // Binding family: players, factions, credits, AI and perception (L1 stage 2). State and backing are
 // described in alamo/lua/players.hpp (with the list of [inferred] behaviour); argument checks use the
 // original's own validation strings (docs/re/LUA_API.md "Binding map"). Implementations follow the
-// error discipline of vm_internal.hpp (Call::fail, never lua_error).
+// error discipline of vm_internal.hpp (Call::script_error_stop, never lua_error).
 //
 // Needs the S3 galactic sim (alamo_galactic_sim) and the perception evaluator (alamo_ai); without them
 // (ALAMO_LUA_PLAYERS undefined, engine/lua/CMakeLists.txt) the family table is empty.
@@ -386,24 +386,12 @@ namespace {
 const char kWorldKey[] = "alamo.players.world";
 const char kInstancesKey[] = "alamo.players.instances";
 
-LuaPlayerWorld* world_of(lua_State* L) {
-    lua_pushstring(L, kWorldKey);
-    lua_rawget(L, LUA_REGISTRYINDEX);
-    void* p = lua_type(L, -1) == LUA_TLIGHTUSERDATA ? lua_touserdata(L, -1) : nullptr;
-    lua_pop(L, 1);
-    return static_cast<LuaPlayerWorld*>(p);
-}
+LuaPlayerWorld* world_of(lua_State* L) { return detail::registry_ptr<LuaPlayerWorld>(L, kWorldKey); }
 
 }  // namespace
 
 void attach_player_world(LuaVm& vm, LuaPlayerWorld* world) {
-    lua_State* L = vm.state();
-    lua_pushstring(L, kWorldKey);
-    if (world)
-        lua_pushlightuserdata(L, world);
-    else
-        lua_pushnil(L);
-    lua_rawset(L, LUA_REGISTRYINDEX);
+    detail::set_registry_ptr(vm.state(), kWorldKey, world);
 }
 
 LuaPlayerWorld* player_world(LuaVm& vm) { return world_of(vm.state()); }

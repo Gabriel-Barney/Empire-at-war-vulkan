@@ -9,7 +9,6 @@
 // Floating-point: distances in double with dmath::sqrt only where a length is needed (comparisons use squares).
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -68,38 +67,11 @@ bool is_bool(const Call& c, int i) { return c.has(i) && lua_type(c.L, c.idx(i)) 
 bool to_bool(const Call& c, int i) { return lua_toboolean(c.L, c.idx(i)) != 0; }
 bool is_table(const Call& c, int i) { return c.has(i) && lua_type(c.L, c.idx(i)) == LUA_TTABLE; }
 
-// The original's script error / warning helpers (SCRIPT_GAPS.md conventions): logged, no unwind, nil result.
-int vlog(Call& c, const char* prefix, const char* fmt, va_list ap) {
-    char buf[512];
-    std::vsnprintf(buf, sizeof buf, fmt, ap);
-    c.vm->message(std::string(prefix) + buf);
-    return 0;
-}
-int script_error(Call& c, const char* fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    vlog(c, "SCRIPT ERROR: ", fmt, ap);
-    va_end(ap);
-    c.vm->exit_requested = true;  // q6 t11: the original's error helper sets the stop flag (LUA_API.md "Binding error model")
-    return 0;
-}
-int script_warning(Call& c, const char* fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    vlog(c, "SCRIPT WARNING: ", fmt, ap);
-    va_end(ap);
-    return 0;
-}
-
+// Errors and warnings: Call::script_error_stop / Call::script_warning (the original's helpers, SCRIPT_GAPS.md
+// conventions: logged, no unwind, nil result).
 uint32_t cls_of(const char* name) { return detail::class_id(name); }
-uint32_t cls_position() {
-    static const uint32_t c = cls_of("PositionWrapper");
-    return c;
-}
-uint32_t cls_target() {
-    static const uint32_t c = cls_of("AITargetLocationWrapper");
-    return c;
-}
+using detail::cls_position;
+using detail::cls_target;
 uint32_t cls_blocking() {
     static const uint32_t c = cls_of("BlockingStatus");
     return c;
@@ -112,11 +84,7 @@ uint32_t cls_script_wrapper() {
     static const uint32_t c = cls_of("LuaScriptWrapper");
     return c;
 }
-bool is_tf_class(uint32_t c) {
-    static const uint32_t a = cls_of("TaskForceClass"), b = cls_of("GalacticTaskForceClass"), s = cls_of("SpaceTaskForceClass"),
-                          l = cls_of("LandTaskForceClass");
-    return c == a || c == b || c == s || c == l;
-}
+using detail::is_task_force_class;
 
 ObjectBridge* bridge(Call& c) { return c.vm->owner ? attached_object_bridge(*c.vm->owner) : nullptr; }
 RemainingScriptHooks* hooks(Call& c) {
@@ -177,18 +145,8 @@ int push_object(Call& c, ObjectHandle h) {
     return 1;
 }
 
-// PositionWrapper layout of bind_objects.cpp (x / y float bits in Ud::value, z float bits in Ud::id).
-void push_position(lua_State* L, Vec3 p) {
-    Ud u;
-    u.cls = cls_position();
-    u.value = static_cast<uint64_t>(std::bit_cast<uint32_t>(p.x)) | (static_cast<uint64_t>(std::bit_cast<uint32_t>(p.y)) << 32);
-    u.id = std::bit_cast<int32_t>(p.z);
-    detail::push_engine_userdata(L, u);
-}
-Vec3 position_of(const Ud& u) {
-    return {std::bit_cast<float>(static_cast<uint32_t>(u.value & 0xFFFFFFFFu)), std::bit_cast<float>(static_cast<uint32_t>(u.value >> 32)),
-            std::bit_cast<float>(u.id)};
-}
+using detail::position_of;
+using detail::push_position;
 
 // The live units of a task force (the AI host's list order).
 std::vector<ObjectHandle> tf_units(Call& c, int32_t tf) {
@@ -214,7 +172,7 @@ bool position_arg(Call& c, int i, Vec3& out, ObjectHandle* object = nullptr) {
         return true;
     } else if (ud->cls == cls_target()) {
         if (AiScriptHost* a = ai(c)) h = a->target_object(ud->id);
-    } else if (is_tf_class(ud->cls)) {
+    } else if (is_task_force_class(ud->cls)) {
         const std::vector<ObjectHandle> units = tf_units(c, ud->id);
         if (!units.empty()) h = units.front();
     }
@@ -224,29 +182,7 @@ bool position_arg(Call& c, int i, Vec3& out, ObjectHandle* object = nullptr) {
     return true;
 }
 
-// Any wrapper argument -> AiArg (bind_ai.cpp's rule).
-AiArg ai_arg(Call& c, int i) {
-    AiArg a;
-    if (!c.has(i) || lua_type(c.L, c.idx(i)) != LUA_TUSERDATA) return a;
-    const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, c.idx(i)));
-    if (!ud) return a;
-    if (ud->cls == detail::cls_game_object()) {
-        if (detail::object_alive(*c.vm, *ud)) {
-            a.present = true;
-            a.object = detail::object_handle(*ud);
-        }
-    } else if (ud->cls == cls_target()) {
-        a.present = true;
-        a.target = ud->id;
-    } else if (is_tf_class(ud->cls)) {
-        a.present = true;
-        a.task_force = ud->id;
-    } else if (ud->cls == detail::cls_player()) {
-        a.present = true;
-        a.player = ud->id;
-    }
-    return a;
-}
+using detail::ai_arg;  // any wrapper argument -> AiArg (bind_ai.cpp's rule)
 // An "object or AI target" argument -> its object (null when the AI target has none or the object is dead).
 ObjectHandle object_or_target(Call& c, const AiArg& a) {
     if (a.object) return a.object;
@@ -358,9 +294,9 @@ int g_sfx_manager(Call& c) {
 }
 
 int g_point_in(Call& c, uint32_t mask, const char* name) {
-    if (c.nargs != 1) return script_error(c, "%s -- invalid number of parameters. Expected 1, got %d.", name, c.nargs);
+    if (c.nargs != 1) return c.script_error_stop("%s -- invalid number of parameters. Expected 1, got %d.", name, c.nargs);
     Vec3 p{};
-    if (!position_arg(c, 1, p)) return script_error(c, "%s -- could not extract a position from parameter 1.", name);
+    if (!position_arg(c, 1, p)) return c.script_error_stop("%s -- could not extract a position from parameter 1.", name);
     return push_bool(c, point_in_field(c, p, mask));
 }
 int g_is_point_in_asteroid_field(Call& c) { return g_point_in(c, kFieldAsteroid, "Is_Point_In_Asteroid_Field"); }
@@ -370,16 +306,16 @@ int g_is_point_in_nebula(Call& c) { return g_point_in(c, kFieldNebula, "Is_Point
 int g_find_nearest_space_field(Call& c) {
     constexpr const char* kName = "Find_Nearest_Space_Field";
     if (!store(c) || store(c)->mode() != objects::ModeKind::Space)
-        return script_error(c, "%s -- may only be used in space mode", kName);  // checked first (§1.6)
+        return c.script_error_stop("%s -- may only be used in space mode", kName);  // checked first (§1.6)
     if (c.nargs != 1 && c.nargs != 2)
-        return script_error(c, "%s -- invalid number of paraneters. Expected 1 or 21, got %d.", kName, c.nargs);  // [H] text
+        return c.script_error_stop("%s -- invalid number of paraneters. Expected 1 or 21, got %d.", kName, c.nargs);  // [H] text
     Vec3 p{};
-    if (!position_arg(c, 1, p)) return script_error(c, "%s -- could not deduce source position from parameter 1", kName);
+    if (!position_arg(c, 1, p)) return c.script_error_stop("%s -- could not deduce source position from parameter 1", kName);
     uint32_t mask = kFieldAsteroid | kFieldIonStorm | kFieldNebula;  // default 0x1c (§1.6)
     if (c.nargs == 2) {
-        if (!c.is_string(2)) return script_error(c, "%s -- invalid type for parameter 2. Expected string.", kName);
+        if (!c.is_string(2)) return c.script_error_stop("%s -- invalid type for parameter 2. Expected string.", kName);
         mask = parse_space_field_mask(c.string(2));
-        if (mask == 0) return script_error(c, "%s -- unknown field type %s", kName, std::string(c.string(2)).c_str());
+        if (mask == 0) return c.script_error_stop("%s -- unknown field type %s", kName, std::string(c.string(2)).c_str());
     }
     const ObjectHandle h = nearest_field(c, p, mask);
     if (!h || !store(c)->alive(h)) return 0;  // nothing
@@ -390,23 +326,23 @@ int g_find_nearest_space_field(Call& c) {
 int g_are_on_opposite_sides_of_shield(Call& c) {
     constexpr const char* kName = "Are_On_Opposite_Sides_Of_Shield";
     if (c.nargs != 2 && c.nargs != 4)
-        return script_error(c, "%s -- invalid number of parameters. Expected 2 or 4, got %d.", kName, c.nargs);
+        return c.script_error_stop("%s -- invalid number of parameters. Expected 2 or 4, got %d.", kName, c.nargs);
     Vec3 a{}, b{};
-    if (!position_arg(c, 1, a)) return script_error(c, "%s -- could not extract a position from parameter 1.", kName);
-    if (!position_arg(c, 2, b)) return script_error(c, "%s -- could not extract a position from parameter 2.", kName);
+    if (!position_arg(c, 1, a)) return c.script_error_stop("%s -- could not extract a position from parameter 1.", kName);
+    if (!position_arg(c, 2, b)) return c.script_error_stop("%s -- could not extract a position from parameter 2.", kName);
     int32_t player = -1;
     bool friendly = false;
     if (c.nargs == 4) {
         const Ud* pl = c.userdata(3, detail::cls_player());
-        if (!pl) return script_error(c, "%s -- invalid type for parameter 3. Expected player.", kName);
-        if (!is_bool(c, 4)) return script_error(c, "%s -- invalid type for parameter 4. Expected boolean.", kName);
+        if (!pl) return c.script_error_stop("%s -- invalid type for parameter 3. Expected player.", kName);
+        if (!is_bool(c, 4)) return c.script_error_stop("%s -- invalid type for parameter 4. Expected boolean.", kName);
         player = pl->id;
         friendly = to_bool(c, 4);
     }
     // §1.2: needs a land mode in the stack [port: the VM's store is that land mode, or its parent store is one].
     const objects::ObjectStore* ps = detail::parent_store(*c.vm);
     if (store(c)->mode() != objects::ModeKind::Land && !(ps && ps->mode() == objects::ModeKind::Land))
-        return script_error(c, "%s -- only valid in land mode", kName);
+        return c.script_error_stop("%s -- only valid in land mode", kName);
     RemainingScriptHooks* hk = hooks(c);
     if (hk && c.nargs == 4 && hk->opposite_sides_of_shield4) return push_bool(c, hk->opposite_sides_of_shield4(a, b, player, friendly));
     return push_bool(c, hk && hk->opposite_sides_of_shield && hk->opposite_sides_of_shield(a, b, player));
@@ -414,7 +350,7 @@ int g_are_on_opposite_sides_of_shield(Call& c) {
 
 int g_force_weather(Call& c) {
     RemainingScriptHooks* hk = hooks(c);
-    if (!(hk && hk->force_weather)) return script_warning(c, "Force_Weather -- no weather system in this mode");
+    if (!(hk && hk->force_weather)) return c.script_warning("Force_Weather -- no weather system in this mode");
     hk->force_weather();
     return 0;
 }
@@ -430,9 +366,9 @@ int g_force_weather(Call& c) {
 //   * returns Position(x, y, 0) and the score.
 int g_find_best_local_threat_center(Call& c) {
     constexpr const char* kName = "Find_Best_Local_Threat_Center";
-    if (c.nargs != 2) return script_error(c, "%s -- invalid number of parameters. Expected 2, got %d.", kName, c.nargs);
-    if (!is_table(c, 1)) return script_error(c, "%s -- invalid type for parameter 1. Expected table.", kName);
-    if (!c.is_number(2)) return script_error(c, "%s -- invalid type for parameter 2. Expected number.", kName);
+    if (c.nargs != 2) return c.script_error_stop("%s -- invalid number of parameters. Expected 2, got %d.", kName, c.nargs);
+    if (!is_table(c, 1)) return c.script_error_stop("%s -- invalid type for parameter 1. Expected table.", kName);
+    if (!c.is_number(2)) return c.script_error_stop("%s -- invalid type for parameter 2. Expected number.", kName);
     const double radius = c.number(2);
     std::vector<ObjectHandle> units;
     const int t = c.idx(1);
@@ -443,12 +379,12 @@ int g_find_best_local_threat_center(Call& c) {
         if (ud && ud->cls == detail::cls_game_object()) {
             if (detail::object_alive(*c.vm, *ud)) units.push_back(detail::object_handle(*ud));
         } else {
-            script_warning(c, "%s -- invalid type for entry at index %d in object table.", kName, k);
+            c.script_warning("%s -- invalid type for entry at index %d in object table.", kName, k);
         }
         lua_pop(c.L, 1);
     }
     const objects::ObjectStore* st = store(c);
-    if (units.empty()) return script_warning(c, "%s -- no objects supplied", kName);
+    if (units.empty()) return c.script_warning("%s -- no objects supplied", kName);
     std::stable_sort(units.begin(), units.end(), [st](ObjectHandle a, ObjectHandle b) { return st->id(a) < st->id(b); });
     const size_t count = units.size();
     std::vector<double> px(count), py(count), power(count, 0.0);
@@ -541,14 +477,14 @@ int g_find_best_local_threat_center(Call& c) {
 // reservation 0x6bd600 is not modelled]. Refused -> "Scheduling Production Event Failed!", nothing. Queued -> a
 // BlockingStatus [port: finished at once; the original ProductionBlockStatus 0x696830 follows the build].
 int g_produce_object(Call& c) {
-    if (c.nargs != 3) script_error(c, "ProduceObjectClass::Function_Call -- Invalid Number of parameters: %d should be 3.", c.nargs);
+    if (c.nargs != 3) c.script_error_stop("ProduceObjectClass::Function_Call -- Invalid Number of parameters: %d should be 3.", c.nargs);
     const Ud* player = c.userdata(1, detail::cls_player());
     std::string tname;
     const TypeIndex t = type_arg(c, 2, tname);
     const Ud* planet = c.userdata(3, detail::cls_game_object());
     const bool planet_ok = planet && detail::object_alive(*c.vm, *planet);
     if (!player || !valid_type(c, t) || !planet_ok)
-        return script_error(c, "ProduceObjectClass::Function_Call -- Invalid parameter, Player: %s, Object: %s, Planet: %s",
+        return c.script_error_stop("ProduceObjectClass::Function_Call -- Invalid parameter, Player: %s, Object: %s, Planet: %s",
                             player ? "Ok" : "Invalid", valid_type(c, t) ? "Ok" : "Invalid", planet_ok ? "Ok" : "Invalid");
 #if ALAMO_LUA_PLAYERS
     LuaPlayerWorld* w = c.vm->owner ? player_world(*c.vm->owner) : nullptr;
@@ -556,7 +492,7 @@ int g_produce_object(Call& c) {
     if (sim && sim->enqueue(player->id, sim->planet_of(detail::object_handle(*planet)), t) == commands::RejectReason::None)
         return push_finished_block(c);
 #endif
-    return script_error(c, "ProduceObjectClass::Function_Call -- Scheduling Production Event Failed!");
+    return c.script_error_stop("ProduceObjectClass::Function_Call -- Scheduling Production Event Failed!");
 }
 
 // ================================================================ GlobalValue (GlobalValueClass extras, §1.5)
@@ -617,17 +553,11 @@ bool value_at(lua_State* L, int i, AiGlobalValue& v, int depth = 0) {
         default: return false;
     }
 }
-GlobalValueStore* gv_store(lua_State* L) {
-    lua_pushstring(L, kGlobalValueStoreKey);
-    lua_rawget(L, LUA_REGISTRYINDEX);
-    void* p = lua_type(L, -1) == LUA_TLIGHTUSERDATA ? lua_touserdata(L, -1) : nullptr;
-    lua_pop(L, 1);
-    return static_cast<GlobalValueStore*>(p);
-}
+GlobalValueStore* gv_store(lua_State* L) { return detail::registry_ptr<GlobalValueStore>(L, kGlobalValueStoreKey); }
 // GlobalValue.Get(name): exactly 1 string; the stored value, nothing when unknown.
 int m_gv_get(Call& c) {
-    if (c.nargs != 1) return script_error(c, "GlobalValue::Get -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return script_error(c, "GlobalValue::Get -- invalid type for parameter 1. Expected string.");
+    if (c.nargs != 1) return c.script_error_stop("GlobalValue::Get -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("GlobalValue::Get -- invalid type for parameter 1. Expected string.");
     const std::string_view name = c.string(1);
     AiGlobalValue v;
     if (GlobalValueStore* s = gv_store(c.L)) v = s->get(name);
@@ -639,11 +569,11 @@ int m_gv_get(Call& c) {
 }
 // GlobalValue.Set(name, value): exactly 2 args, name a string; userdata refused; nil erases.
 int m_gv_set(Call& c) {
-    if (c.nargs != 2) return script_error(c, "GlobalValue::Set -- invalid number of parameters. Expected 2, got %d.", c.nargs);
-    if (!c.is_string(1)) return script_error(c, "GlobalValue::Set -- invalid type for parameter 1. Expected string.");
+    if (c.nargs != 2) return c.script_error_stop("GlobalValue::Set -- invalid number of parameters. Expected 2, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("GlobalValue::Set -- invalid type for parameter 1. Expected string.");
     const std::string_view name = c.string(1);
     AiGlobalValue v;
-    if (!value_at(c.L, c.idx(2), v)) return script_error(c, "GlobalValue::Set -- value cannot be a Lua User Variable");
+    if (!value_at(c.L, c.idx(2), v)) return c.script_error_stop("GlobalValue::Set -- value cannot be a Lua User Variable");
     if (GlobalValueStore* s = gv_store(c.L)) s->set(name, v);
     else if (AiScriptHost* h = ai(c)) h->set_global_value(name, v);
     else process_global_values().set(name, v);
@@ -741,33 +671,33 @@ bool pad_rule(Call& c, ObjectHandle pad) {
 // Build(type [, check_rules]) on a build pad (§2.2).
 int m_build(Call& c) {
     constexpr const char* kName = "GameObjectWrapper::Build";
-    if (c.nargs != 1 && c.nargs != 2) return script_error(c, "%s -- invalid number of parameters. Expected 1 or 2, got %d.", kName, c.nargs);
+    if (c.nargs != 1 && c.nargs != 2) return c.script_error_stop("%s -- invalid number of parameters. Expected 1 or 2, got %d.", kName, c.nargs);
     std::string name;
     const TypeIndex t = type_arg(c, 1, name);
     if (!valid_type(c, t)) {
-        if (c.is_string(1)) return script_error(c, "%s -- unknown game object type %s", kName, name.c_str());
-        return script_error(c, "%s -- invalid type for parameter 1. Expected game object type.", kName);
+        if (c.is_string(1)) return c.script_error_stop("%s -- unknown game object type %s", kName, name.c_str());
+        return c.script_error_stop("%s -- invalid type for parameter 1. Expected game object type.", kName);
     }
     const ObjectHandle pad = self_object(c);
-    if (!has_beh(c, pad, "TACTICAL_BUILD_OBJECTS")) return script_error(c, "%s -- %s is not a valid build location", kName, object_name(c, pad).c_str());
-    if (pad_contents(c, pad)) return script_error(c, "%s -- %s already has something built on it", kName, object_name(c, pad).c_str());
+    if (!has_beh(c, pad, "TACTICAL_BUILD_OBJECTS")) return c.script_error_stop("%s -- %s is not a valid build location", kName, object_name(c, pad).c_str());
+    if (pad_contents(c, pad)) return c.script_error_stop("%s -- %s already has something built on it", kName, object_name(c, pad).c_str());
     bool check = false;
     if (c.nargs == 2) {
-        if (!is_bool(c, 2)) return script_error(c, "%s -- invalid type for parameter 2. Expected boolean.", kName);
+        if (!is_bool(c, 2)) return c.script_error_stop("%s -- invalid type for parameter 2. Expected boolean.", kName);
         check = to_bool(c, 2);
     }
     objects::ObjectStore* st = store(c);
     if (RemainingScriptHooks* hk = hooks(c); hk && hk->build) {
         const int r = hk->build(pad, t, check);
         if (r == 0) {
-            script_warning(c, "%s -- game rules prevent building %s at %s", kName, name.c_str(), object_name(c, pad).c_str());
+            c.script_warning("%s -- game rules prevent building %s at %s", kName, name.c_str(), object_name(c, pad).c_str());
             return push_bool(c, false);
         }
-        if (r < 0) return script_error(c, "%s -- unknown error starting build of %s", kName, name.c_str());
+        if (r < 0) return c.script_error_stop("%s -- unknown error starting build of %s", kName, name.c_str());
         return push_bool(c, true);
     }
     if (check && !(pad_lists(c, st->type(pad), faction_of(c, st->owner(pad)), t) && pad_rule(c, pad))) {
-        script_warning(c, "%s -- game rules prevent building %s at %s", kName, name.c_str(), object_name(c, pad).c_str());
+        c.script_warning("%s -- game rules prevent building %s at %s", kName, name.c_str(), object_name(c, pad).c_str());
         return push_bool(c, false);
     }
     // Start build 0x42dbd0 (charge 0, sfx 0) [port]: the type at the pad position with the pad's facing, owned by the
@@ -780,7 +710,7 @@ int m_build(Call& c) {
     ObjectBridge* b = bridge(c);
     TacticalScriptHooks* th = b ? b->tactical : nullptr;
     const ObjectHandle uc = (th && th->spawn) ? th->spawn(sp) : st->create(sp);
-    if (!uc || !st->alive(uc)) return script_error(c, "%s -- unknown error starting build of %s", kName, name.c_str());
+    if (!uc || !st->alive(uc)) return c.script_error_stop("%s -- unknown error starting build of %s", kName, name.c_str());
     if (RemainingObjectState* s = edit_state(c, st->id(pad))) s->pad_uc = st->id(uc);
     return push_bool(c, true);
 }
@@ -788,7 +718,7 @@ int m_build(Call& c) {
 int m_get_build_pad_contents(Call& c) {
     const ObjectHandle pad = self_object(c);
     if (!has_beh(c, pad, "TACTICAL_BUILD_OBJECTS"))
-        return script_warning(c, "GameObjectWrapper::Get_Build_Pad_Contents -- object %s is not a build pad", object_name(c, pad).c_str());
+        return c.script_warning("GameObjectWrapper::Get_Build_Pad_Contents -- object %s is not a build pad", object_name(c, pad).c_str());
     const ObjectHandle h = pad_contents(c, pad);
     if (!h || !store(c)->alive(h)) return 0;
     detail::push_object(c.L, *c.vm, h);
@@ -796,11 +726,11 @@ int m_get_build_pad_contents(Call& c) {
 }
 int m_lock_build_pad_contents(Call& c) {
     constexpr const char* kName = "GameObjectWrapper::Lock_Build_Pad_Contents";
-    if (c.nargs != 1) return script_error(c, "%s -- invalid number of parameters. Expected 1, got %d.", kName, c.nargs);
-    if (!is_bool(c, 1)) return script_error(c, "%s -- invalid type for parameter 1. Expected boolean", kName);
+    if (c.nargs != 1) return c.script_error_stop("%s -- invalid number of parameters. Expected 1, got %d.", kName, c.nargs);
+    if (!is_bool(c, 1)) return c.script_error_stop("%s -- invalid type for parameter 1. Expected boolean", kName);
     const ObjectHandle pad = self_object(c);
-    if (!has_beh(c, pad, "TACTICAL_BUILD_OBJECTS")) return script_error(c, "%s -- %s is not a build pad", kName, object_name(c, pad).c_str());
-    if (!pad_contents(c, pad)) return script_warning(c, "%s -- cannot lock an empty build pad", kName);
+    if (!has_beh(c, pad, "TACTICAL_BUILD_OBJECTS")) return c.script_error_stop("%s -- %s is not a build pad", kName, object_name(c, pad).c_str());
+    if (!pad_contents(c, pad)) return c.script_warning("%s -- cannot lock an empty build pad", kName);
     const bool lock = to_bool(c, 1);
     if (RemainingObjectState* s = edit_state(c, c.self->id)) s->build_pad_locked = lock;
     if (RemainingScriptHooks* hk = hooks(c); hk && hk->lock_build_pad) hk->lock_build_pad(pad, lock);
@@ -824,25 +754,25 @@ bool has_locomotor(Call& c, ObjectHandle h) { return store(c)->has_behavior(h, o
 int m_divert(Call& c) {
     constexpr const char* kName = "GameObjectWrapper::Divert";
     const ObjectHandle self = self_object(c);
-    if (!has_locomotor(c, self)) return script_error(c, "%s -- this object cannot move", kName);
+    if (!has_locomotor(c, self)) return c.script_error_stop("%s -- this object cannot move", kName);
     RemainingScriptHooks* hk = hooks(c);
     if (!(hk && hk->move_to)) {  // no movement host: the formation is missing ("between moves")
-        script_warning(c, "%s -- unable to divert - object %s is between moves", kName, object_name(c, self).c_str());
+        c.script_warning("%s -- unable to divert - object %s is between moves", kName, object_name(c, self).c_str());
         return push_bool(c, false);
     }
-    if (c.nargs != 1 && c.nargs != 2) return script_error(c, "%s -- invalid number of parameters. Expected 1 or 2, got %d.", kName, c.nargs);
+    if (c.nargs != 1 && c.nargs != 2) return c.script_error_stop("%s -- invalid number of parameters. Expected 1 or 2, got %d.", kName, c.nargs);
     // Movement locked (0x39ad40, A1_READINGS §28.9): a script lock, an ability's Disable_Movement share or a running
     // Divert (a second Divert during a Divert is refused). A suspended locomotor is not part of the lock.
     if (detail::movement_locked(c, c.self->id)) {
-        script_warning(c, "%s -- unable to divert - object %s has had its movement locked.", kName, object_name(c, self).c_str());
+        c.script_warning("%s -- unable to divert - object %s has had its movement locked.", kName, object_name(c, self).c_str());
         return push_bool(c, false);
     }
     Vec3 p{};
-    if (!position_arg(c, 1, p)) return script_error(c, "%s -- invalid type for parameter 1; expected something which defines a position", kName);
-    if (c.nargs == 2 && !c.is_number(2)) return script_error(c, "%s -- invalid type for parameter 2; expected number.", kName);
+    if (!position_arg(c, 1, p)) return c.script_error_stop("%s -- invalid type for parameter 1; expected something which defines a position", kName);
+    if (c.nargs == 2 && !c.is_number(2)) return c.script_error_stop("%s -- invalid type for parameter 2; expected number.", kName);
     // [port] the distance limit (move params +0x54) is not modelled by the movement hosts.
     if (!hk->move_to(self, p)) {
-        script_warning(c, "%s -- unable to divert - object %s is between moves", kName, object_name(c, self).c_str());
+        c.script_warning("%s -- unable to divert - object %s is between moves", kName, object_name(c, self).c_str());
         return push_bool(c, false);
     }
     if (RemainingObjectState* s = edit_state(c, c.self->id)) {
@@ -856,7 +786,7 @@ int m_divert(Call& c) {
 // is still the unit's current goal.
 int m_is_on_diversion(Call& c) {
     const ObjectHandle self = self_object(c);
-    if (!has_locomotor(c, self)) return script_error(c, "GameObjectWrapper::Is_On_Diversion -- this object cannot move");
+    if (!has_locomotor(c, self)) return c.script_error_stop("GameObjectWrapper::Is_On_Diversion -- this object cannot move");
     ObjectBridge* b = bridge(c);
     const RemainingObjectState* s = b ? b->find_remaining_state(c.self->id) : nullptr;
     if (!s || !s->diverted) return push_bool(c, false);
@@ -871,11 +801,11 @@ int m_is_on_diversion(Call& c) {
 
 int m_enable_behavior(Call& c) {
     constexpr const char* kName = "GameObjectWrapper::Enable_Behavior";
-    if (c.nargs != 2) return script_error(c, "%s -- invalid number of parameters. Expected 2, got %d.", kName, c.nargs);
-    if (!c.is_number(1)) return script_error(c, "%s -- invalid type for behavior. Expected number.", kName);
+    if (c.nargs != 2) return c.script_error_stop("%s -- invalid number of parameters. Expected 2, got %d.", kName, c.nargs);
+    if (!c.is_number(1)) return c.script_error_stop("%s -- invalid type for behavior. Expected number.", kName);
     const int32_t id = detail::to_int(c.number(1));
-    if (id < 0 || id > 0x69) return script_error(c, "%s -- invalid behavior %d", kName, id);
-    if (!is_bool(c, 2)) return script_error(c, "%s -- invalid type for state. Expected a bool.", kName);
+    if (id < 0 || id > 0x69) return c.script_error_stop("%s -- invalid behavior %d", kName, id);
+    if (!is_bool(c, 2)) return c.script_error_stop("%s -- invalid type for state. Expected a bool.", kName);
     const bool on = to_bool(c, 2);
     // A missing behaviour: silently nothing (§2.6).
     if (!store(c)->has_behavior(self_object(c), static_cast<objects::BehaviorTypeId>(id))) return 0;
@@ -885,19 +815,19 @@ int m_enable_behavior(Call& c) {
 }
 
 int m_enable_dynamic_lod(Call& c) {
-    if (c.nargs != 1) return script_error(c, "GameObjectWrapper::Enable_Dynamic_LOD -- command takes a single boolean value");
-    if (!is_bool(c, 1)) return script_error(c, "GameObjectWrapper::Enable_Dynamic_LOD -- invalid type for parameter 1. Expected boolean.");
+    if (c.nargs != 1) return c.script_error_stop("GameObjectWrapper::Enable_Dynamic_LOD -- command takes a single boolean value");
+    if (!is_bool(c, 1)) return c.script_error_stop("GameObjectWrapper::Enable_Dynamic_LOD -- invalid type for parameter 1. Expected boolean.");
     if (RemainingObjectState* s = edit_state(c, c.self->id)) s->dynamic_lod = to_bool(c, 1);
     return 0;
 }
 
 int m_explore_area(Call& c) {
     if (c.nargs != 1)
-        return script_error(c, "GameObjectWrapper::Explore_Area -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectWrapper::Explore_Area -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     const Ud* t = c.userdata(1, cls_target());
-    if (!t) return script_error(c, "GameObjectWrapper::Explore_Area -- invalid type for parameter 1. Expected ai target location.");
+    if (!t) return c.script_error_stop("GameObjectWrapper::Explore_Area -- invalid type for parameter 1. Expected ai target location.");
     AiScriptHost* h = ai(c);
-    if (h && !h->target_valid(t->id)) return script_error(c, "GameObjectWrapper::Explore_Area -- target is dead");
+    if (h && !h->target_valid(t->id)) return c.script_error_stop("GameObjectWrapper::Explore_Area -- target is dead");
     return push_ai_status(c, h ? h->unit_explore_area(script_id(c.L), self_object(c), t->id) : -1);
 }
 
@@ -907,7 +837,7 @@ int m_force_test_space_conflict(Call& c) {
     constexpr const char* kName = "GameObjectWrapper::Force_Test_Space_Conflict";
     ObjectHandle self = self_object(c);
     const bool fleet = has_beh(c, self, "FLEET"), planet = has_beh(c, self, "PLANET");
-    if (!fleet && !planet) return script_error(c, "%s -- %s is not a fleet or a planet", kName, object_name(c, self).c_str());
+    if (!fleet && !planet) return c.script_error_stop("%s -- %s is not a fleet or a planet", kName, object_name(c, self).c_str());
 #if ALAMO_LUA_PLAYERS
     LuaPlayerWorld* w = players(c);
     galactic::GalacticSim* sim = w ? w->galactic() : nullptr;
@@ -967,12 +897,12 @@ double power_weight(Call& c, ObjectHandle u, ObjectHandle other) {
 }
 // Get_AI_Power_Vs_Unit(target) (§2.12 [M]): P_s x H_s x M_s - P_t x H_t x M_t.
 int m_get_ai_power_vs_unit(Call& c) {
-    if (c.nargs != 1) return script_error(c, "Get_AI_Power_Vs_Unit -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (c.nargs != 1) return c.script_error_stop("Get_AI_Power_Vs_Unit -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     const AiArg other = ai_arg(c, 1);
     if (!other.present || (!other.object && other.target < 0))
-        return script_error(c, "Get_AI_Power_Vs_Unit -- invalid type for parameter 1. Expected object or ai target.");
+        return c.script_error_stop("Get_AI_Power_Vs_Unit -- invalid type for parameter 1. Expected object or ai target.");
     const ObjectHandle self = self_object(c), target = object_or_target(c, other);
-    if (!target) return script_error(c, "Get_AI_Power_Vs_Unit -- target is dead");
+    if (!target) return c.script_error_stop("Get_AI_Power_Vs_Unit -- target is dead");
     return push_num(c, type_power(c, self) * health_fraction(c, self) * power_weight(c, self, target) -
                            type_power(c, target) * health_fraction(c, target) * power_weight(c, target, self));
 }
@@ -983,10 +913,10 @@ int m_get_ai_power_vs_unit(Call& c) {
 int m_get_affiliated_indigenous_type(Call& c) {
     constexpr const char* kName = "GameObjectWrapper::Get_Affiliated_Indigenous_Type";
     const ObjectHandle self = self_object(c);
-    if (!has_beh(c, self, "PLANET")) return script_error(c, "%s -- %s is not a planet", kName, object_name(c, self).c_str());
-    if (c.nargs != 1) return script_error(c, "%s -- invalid number of parameters. Expected 1, got %d.", kName, c.nargs);
+    if (!has_beh(c, self, "PLANET")) return c.script_error_stop("%s -- %s is not a planet", kName, object_name(c, self).c_str());
+    if (c.nargs != 1) return c.script_error_stop("%s -- invalid number of parameters. Expected 1, got %d.", kName, c.nargs);
     const Ud* player = c.userdata(1, detail::cls_player());
-    if (!player) return script_error(c, "%s -- invalid type for parameter 1. Expected player.", kName);
+    if (!player) return c.script_error_stop("%s -- invalid type for parameter 1. Expected player.", kName);
     const objects::GameObjectTypes* ty = types(c);
     const TypeIndex t = store(c)->type(self);
     if (!ty || t >= ty->size()) return 0;
@@ -1057,7 +987,7 @@ int m_get_current_projectile_type(Call& c) {
 // Get_Energy() (§2.12): tactical only; the energy fraction clamp(energy / max, 0, 1), 0 without a pool.
 int m_get_energy(Call& c) {
     if (store(c)->mode() == objects::ModeKind::Galactic)
-        return script_error(c, "GameObjectWrapper::Get_Energy -- only valid in tactical mode");
+        return c.script_error_stop("GameObjectWrapper::Get_Energy -- only valid in tactical mode");
     const ObjectHandle self = self_object(c);
     RemainingScriptHooks* hk = hooks(c);
     if (hk && hk->energy_fraction) {
@@ -1156,10 +1086,10 @@ int m_release(Call& c) {
 
 int m_set_prefer_ground_over_space(Call& c) {
     constexpr const char* kName = "GameObjectWrapper::Lua_Set_Prefer_Ground_Over_Space";
-    if (!is_bool(c, 1)) return script_error(c, "%s -- Missing required boolean parameter.", kName);
+    if (!is_bool(c, 1)) return c.script_error_stop("%s -- Missing required boolean parameter.", kName);
     static const objects::BehaviorTypeId kUnitAi = objects::behavior_type_id("UNIT_AI");
     if (kUnitAi != objects::kNoBehavior && !store(c)->has_behavior(self_object(c), kUnitAi))
-        return script_error(c, "%s -- Object invalid or missing Unit_AI behavior.", kName);
+        return c.script_error_stop("%s -- Object invalid or missing Unit_AI behavior.", kName);
     const bool on = to_bool(c, 1);
     if (RemainingObjectState* s = edit_state(c, c.self->id)) s->prefer_ground = on ? 1 : 0;
     if (RemainingScriptHooks* hk = hooks(c); hk && hk->set_prefer_ground) hk->set_prefer_ground(self_object(c), on);
@@ -1172,8 +1102,8 @@ void set_stickiness(Call& c, ObjectHandle u, float seconds) {
 }
 int m_set_targeting_stickiness(Call& c) {
     constexpr const char* kName = "GameObjectWrapper::Set_Targeting_Stickiness_Time_Threshold";
-    if (c.nargs != 1) return script_error(c, "%s - invalid number of parameters. Expected 1, got %d.", kName, c.nargs);
-    if (!c.is_number(1)) return script_error(c, "%s - invalid type for parameter 1. Expected number.", kName);
+    if (c.nargs != 1) return c.script_error_stop("%s - invalid number of parameters. Expected 1, got %d.", kName, c.nargs);
+    if (!c.is_number(1)) return c.script_error_stop("%s - invalid type for parameter 1. Expected number.", kName);
     set_stickiness(c, self_object(c), static_cast<float>(c.number(1)));
     return 0;
 }
@@ -1190,8 +1120,8 @@ int m_type_get_bribe_cost(Call& c) {
     const int corrupted = (hk && hk->battle_planet_corruption) ? hk->battle_planet_corruption() : -1;
     if (c.nargs == 0 || corrupted < 0) return push_num(c, base);
     const Ud* o = c.userdata(1, detail::cls_game_object());
-    if (!o) return script_error(c, "GameObjectTypeWrapper::Get_Bribe_Cost -- invalid type for parameter 1. Expected game object wrapper.");
-    if (!detail::object_alive(*c.vm, *o)) return script_error(c, "GameObjectTypeWrapper::Get_Bribe_Cost -- bribing object is dead");
+    if (!o) return c.script_error_stop("GameObjectTypeWrapper::Get_Bribe_Cost -- invalid type for parameter 1. Expected game object wrapper.");
+    if (!detail::object_alive(*c.vm, *o)) return c.script_error_stop("GameObjectTypeWrapper::Get_Bribe_Cost -- bribing object is dead");
     const TypeIndex bt = store(c)->type(detail::object_handle(*o));
     if (!valid_type(c, bt)) return push_num(c, base);
     const double f = static_cast<double>(
@@ -1203,9 +1133,9 @@ int m_type_get_bribe_cost(Call& c) {
 // GalacticSim::lock_type). No automatic obsolescence. Without a sim: the world's Lock_Tech overrides.
 int m_type_is_obsolete(Call& c) {
     if (c.nargs != 1)
-        return script_error(c, "GameObjectTypeWrapper::Is_Obsolete -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+        return c.script_error_stop("GameObjectTypeWrapper::Is_Obsolete -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     const Ud* player = c.userdata(1, detail::cls_player());
-    if (!player) return script_error(c, "GameObjectTypeWrapper::Is_Obsolete -- invalid type for parameter 1. Expected player");
+    if (!player) return c.script_error_stop("GameObjectTypeWrapper::Is_Obsolete -- invalid type for parameter 1. Expected player");
     const auto t = static_cast<TypeIndex>(c.self->value);
     if (RemainingScriptHooks* hk = hooks(c); hk && hk->type_obsolete) return push_bool(c, hk->type_obsolete(t, player->id));
 #if ALAMO_LUA_PLAYERS
@@ -1294,16 +1224,16 @@ constexpr std::string_view kHardPointTypes[] = {
 int tf_subscription(Call& c, int op, const char* name) {
     int32_t type = -1;
     if (op != 2) {
-        if (c.nargs != 1) return script_error(c, "%s -- invalid number of paramters. Expected 1, got %d.", name, c.nargs);  // [H] text
-        if (!c.is_string(1)) return script_error(c, "%s -- invalid type for parameter 1. Expected string", name);
+        if (c.nargs != 1) return c.script_error_stop("%s -- invalid number of paramters. Expected 1, got %d.", name, c.nargs);  // [H] text
+        if (!c.is_string(1)) return c.script_error_stop("%s -- invalid type for parameter 1. Expected string", name);
         for (size_t i = 0; i < std::size(kHardPointTypes); ++i)
             if (iequal(kHardPointTypes[i], c.string(1))) type = static_cast<int32_t>(i);
-        if (type < 0) return script_error(c, "%s -- unknown hard point type %s", name, std::string(c.string(1)).c_str());
-        if (type < 5 || type > 10) return script_error(c, "%s -- %s is not a weapon hard point type", name, std::string(c.string(1)).c_str());
+        if (type < 0) return c.script_error_stop("%s -- unknown hard point type %s", name, std::string(c.string(1)).c_str());
+        if (type < 5 || type > 10) return c.script_error_stop("%s -- %s is not a weapon hard point type", name, std::string(c.string(1)).c_str());
     }
     AiScriptHost* h = ai(c);
     if (h && h->tf_opportunity_fire_subscription(c.self->id, op, type) != 0)
-        script_warning(c, "Add_Opportunity_Fire_Event_Subscription -- %s %s", std::string(c.string(1)).c_str(),
+        c.script_warning("Add_Opportunity_Fire_Event_Subscription -- %s %s", std::string(c.string(1)).c_str(),
                        op == 0 ? "is already subscribed" : "is not subscribed");  // [H] the remove warning says "Add_..."
     return 0;
 }
@@ -1321,15 +1251,15 @@ int push_target_object(Call& c, int i) {
 // Can_Garrison(host) (§2.5): true when some unit can garrison it (each unit through the object binding, which applies
 // the host / mask / capacity rules).
 int m_tf_can_garrison(Call& c) {
-    if (c.nargs != 1) return script_error(c, "TaskForce::Can_Garrison -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (c.nargs != 1) return c.script_error_stop("TaskForce::Can_Garrison -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     const AiArg a = ai_arg(c, 1);
     if (!a.present || (!a.object && a.target < 0))
-        return script_error(c, "TaskForce::Can_Garrison -- invalid type for parameter 1. Expected game object or AI target.");
+        return c.script_error_stop("TaskForce::Can_Garrison -- invalid type for parameter 1. Expected game object or AI target.");
     const int top = lua_gettop(c.L);
     const int arg = push_target_object(c, 1);
     if (lua_isnil(c.L, arg)) {
         lua_settop(c.L, top);
-        return script_error(c, "TaskForce::Can_Garrison -- target is already dead");
+        return c.script_error_stop("TaskForce::Can_Garrison -- target is already dead");
     }
     bool any = false;
     for (const ObjectHandle u : tf_units(c, c.self->id))
@@ -1356,11 +1286,11 @@ int m_tf_leave_garrison(Call& c) {
 // TaskForceClass.Get_AI_Power_Vs_Unit(target) (§2.12): tactical only; the AI host (sum of P_u x weight minus
 // P_target), else [port] the same with weight 1 from type data.
 int m_tf_get_ai_power_vs_unit(Call& c) {
-    if (store(c)->mode() == objects::ModeKind::Galactic) return script_error(c, "Get_AI_Power_Vs_Unit -- only valid in tactical mode");
-    if (c.nargs != 1) return script_error(c, "Get_AI_Power_Vs_Unit -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (store(c)->mode() == objects::ModeKind::Galactic) return c.script_error_stop("Get_AI_Power_Vs_Unit -- only valid in tactical mode");
+    if (c.nargs != 1) return c.script_error_stop("Get_AI_Power_Vs_Unit -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     const AiArg other = ai_arg(c, 1);
     if (!other.present || (!other.object && other.target < 0))
-        return script_error(c, "Get_AI_Power_Vs_Unit -- invalid type for parameter 1. Expected object or ai target.");
+        return c.script_error_stop("Get_AI_Power_Vs_Unit -- invalid type for parameter 1. Expected object or ai target.");
     AiArg self;
     self.present = true;
     self.task_force = c.self->id;
@@ -1395,8 +1325,8 @@ int m_tf_set_single_ability_autofire(Call& c) {
 // name or a type name. Every unit with UNIT_AI whose type matches gets the override.
 int m_tf_set_targeting_stickiness(Call& c) {
     constexpr const char* kName = "Set_Targeting_Stickiness_Time_Threshold";
-    if (c.nargs != 1 && c.nargs != 2) return script_error(c, "%s - invalid number of parameters. Expected 1 or 2, got %d.", kName, c.nargs);
-    if (!c.is_number(1)) return script_error(c, "%s - invalid type for parameter 1. Expected string.", kName);  // [H] text
+    if (c.nargs != 1 && c.nargs != 2) return c.script_error_stop("%s - invalid number of parameters. Expected 1 or 2, got %d.", kName, c.nargs);
+    if (!c.is_number(1)) return c.script_error_stop("%s - invalid type for parameter 1. Expected string.", kName);  // [H] text
     const objects::GameObjectTypes* ty = types(c);
     uint64_t mask = ~uint64_t{0};
     TypeIndex only = objects::kNone;
@@ -1405,7 +1335,7 @@ int m_tf_set_targeting_stickiness(Call& c) {
         std::string tn;
         if (m) mask = static_cast<uint64_t>(*m);
         else if ((only = type_arg(c, 2, tn)) == objects::kNone || !valid_type(c, only))
-            return script_error(c, "%s -- invalid type for parameter 2. Expected string.", kName);
+            return c.script_error_stop("%s -- invalid type for parameter 2. Expected string.", kName);
     }
     const float seconds = static_cast<float>(c.number(1));
     static const objects::BehaviorTypeId kUnitAi = objects::behavior_type_id("UNIT_AI");
@@ -1425,15 +1355,15 @@ int32_t tf_owner(Call& c, const std::vector<ObjectHandle>& units) { return units
 // nearest live top-level enemy of the TF player with Is_Valid_Target and a CategoryMask bit of the mask, measured from
 // the TF position (the mean of its units [port]); [port] no fog test. Nothing when none.
 int m_tf_find_closest_enemy(Call& c) {
-    if (c.nargs > 1) return script_error(c, "Find_Closest_Enemy - Invalid number of parameters - expected 1 or 2, got %d.", c.nargs);  // [H] text
+    if (c.nargs > 1) return c.script_error_stop("Find_Closest_Enemy - Invalid number of parameters - expected 1 or 2, got %d.", c.nargs);  // [H] text
     const objects::GameObjectTypes* ty = types(c);
     objects::ObjectStore* st = store(c);
     if (!ty || !st) return 0;
     uint64_t mask = ~uint64_t{0};
     if (c.nargs == 1) {
-        if (!c.is_string(1)) return script_error(c, "Find_Closest_Enemy - Invalid type for parameter 1. Expected string.");
+        if (!c.is_string(1)) return c.script_error_stop("Find_Closest_Enemy - Invalid type for parameter 1. Expected string.");
         const auto m = ty->enums().get(objects::EnumId::GameObjectCategory).convert(c.string(1));
-        if (!m) return script_error(c, "Find_Closest_Enemy - unknown category %s", std::string(c.string(1)).c_str());
+        if (!m) return c.script_error_stop("Find_Closest_Enemy - unknown category %s", std::string(c.string(1)).c_str());
         mask = static_cast<uint64_t>(*m);
     }
     const std::vector<ObjectHandle> units = tf_units(c, c.self->id);
@@ -1474,23 +1404,23 @@ int m_tf_find_closest_enemy(Call& c) {
 // otherwise a warning and nothing.
 int m_tf_bombing_run(Call& c) {
     constexpr const char* kName = "LandTaskForceClass::Bombing_Run";
-    if (c.nargs != 1) return script_error(c, "%s -- invalid number of parameters. Expected 1, got %d.", kName, c.nargs);
+    if (c.nargs != 1) return c.script_error_stop("%s -- invalid number of parameters. Expected 1, got %d.", kName, c.nargs);
     const AiArg a = ai_arg(c, 1);
     if (!c.userdata(1, detail::cls_game_object()) && !c.userdata(1, cls_target()))
-        return script_error(c, "%s -- invalid type for parameter 1. Exepcted game objecdt or AI target", kName);  // [H] text
+        return c.script_error_stop("%s -- invalid type for parameter 1. Exepcted game objecdt or AI target", kName);  // [H] text
     Vec3 pos{};
-    if (!position_arg(c, 1, pos)) return script_warning(c, "%s -- target is already dead", kName);
+    if (!position_arg(c, 1, pos)) return c.script_warning("%s -- target is already dead", kName);
     if (AiTacticalScriptHost* t = ai_tactical(c)) {
         const int32_t s = t->tf_bombing_run(c.self->id, a, AiPoint{});
         if (s != -2) return push_ai_status(c, s);
     }
     RemainingScriptHooks* hk = hooks(c);
-    if (!(hk && hk->bombing_run)) return script_warning(c, "%s -- No bombing run available", kName);
+    if (!(hk && hk->bombing_run)) return c.script_warning("%s -- No bombing run available", kName);
     const int32_t player = tf_owner(c, tf_units(c, c.self->id));
     if (!hk->bombing_run(player, pos)) {
         if (hk->bombing_run_available && hk->bombing_run_available(player))
-            return script_warning(c, "%s -- Target position is within an invalid area. Aborting.", kName);
-        return script_warning(c, "%s -- No bombing run available", kName);
+            return c.script_warning("%s -- Target position is within an invalid area. Aborting.", kName);
+        return c.script_warning("%s -- No bombing run available", kName);
     }
     Ud u;  // BombingBlockStatus over the player's run (bind_objects.cpp m_block_is_finished / m_block_result)
     u.cls = cls_blocking();
@@ -1503,9 +1433,9 @@ int m_tf_bombing_run(Call& c) {
 // nothing; failures are silent.
 int m_tf_fire_orbital_bombardment(Call& c) {
     constexpr const char* kName = "LandTaskForceClass::Fire_Orbital_Bombardment";
-    if (c.nargs != 1) return script_error(c, "%s -- invalid number of parameters. Expected 1, got %d.", kName, c.nargs);
+    if (c.nargs != 1) return c.script_error_stop("%s -- invalid number of parameters. Expected 1, got %d.", kName, c.nargs);
     Vec3 pos{};
-    if (!position_arg(c, 1, pos)) return script_error(c, "%s -- could not extract a position from parameter 1.", kName);
+    if (!position_arg(c, 1, pos)) return c.script_error_stop("%s -- could not extract a position from parameter 1.", kName);
     if (AiTacticalScriptHost* t = ai_tactical(c)) {
         AiPoint pt;
         pt.present = true;
@@ -1520,25 +1450,25 @@ int m_tf_fire_orbital_bombardment(Call& c) {
 
 // Refit_To_Definition(planet, n) (§2.12, AI_GALACTIC.md 2.4): the AI host's refit; returns its status.
 int m_tf_refit_to_definition(Call& c) {
-    if (c.nargs != 2) return script_error(c, "Refit_To_Definition: Invalid number of parameters. Expected 2, got %d.", c.nargs);
+    if (c.nargs != 2) return c.script_error_stop("Refit_To_Definition: Invalid number of parameters. Expected 2, got %d.", c.nargs);
     const Ud* planet = c.userdata(1, detail::cls_game_object());
     if (!planet || !detail::object_alive(*c.vm, *planet))
-        return script_error(c, "Refit_To_Definition: Invalid type for parameter 1. Expected planet.");
-    if (!c.is_number(2)) return script_error(c, "Instantiate_Force: Invalid type for parameter 2. Expected number.");  // [H] text
+        return c.script_error_stop("Refit_To_Definition: Invalid type for parameter 1. Expected planet.");
+    if (!c.is_number(2)) return c.script_error_stop("Instantiate_Force: Invalid type for parameter 2. Expected number.");  // [H] text
     AiScriptHost* h = ai(c);
     const int32_t s = h ? h->tf_refit(c.self->id, detail::object_handle(*planet), c.number(2)) : -1;
-    if (s == -3) return script_error(c, "Refit_To_Definition: the task force definition does not use percentages");
+    if (s == -3) return c.script_error_stop("Refit_To_Definition: the task force definition does not use percentages");
     return push_ai_status(c, s);
 }
 
 // FindTarget.Best_Of(taskforce, targets, perception) (§2.12): the entry with the highest perception value > 0 (the
 // host evaluates); non-object entries and dead objects: warning, skipped. Nothing when none.
 int m_best_of(Call& c) {
-    if (c.nargs != 3) return script_error(c, "Find_Best_Of -- invalid number of parameters. Expected 3, got %d.", c.nargs);
+    if (c.nargs != 3) return c.script_error_stop("Find_Best_Of -- invalid number of parameters. Expected 3, got %d.", c.nargs);
     const AiArg tf = ai_arg(c, 1);
-    if (tf.task_force < 0) return script_error(c, "Find_Best_Of -- invalid type for parameter 1. Expected taskforce.");
-    if (!is_table(c, 2)) return script_error(c, "Find_Best_Of -- invalid type for parameter 2. Expected table of targets.");
-    if (!c.is_string(3)) return script_error(c, "Find_Best_Of -- unrecognized perception function");
+    if (tf.task_force < 0) return c.script_error_stop("Find_Best_Of -- invalid type for parameter 1. Expected taskforce.");
+    if (!is_table(c, 2)) return c.script_error_stop("Find_Best_Of -- invalid type for parameter 2. Expected table of targets.");
+    if (!c.is_string(3)) return c.script_error_stop("Find_Best_Of -- unrecognized perception function");
     const std::string perception(c.string(3));
     std::vector<AiArg> targets;
     std::vector<int> index;
@@ -1556,10 +1486,10 @@ int m_best_of(Call& c) {
                 a.present = true;
                 a.object = detail::object_handle(*ud);
             } else {
-                script_warning(c, "Find_Best_Of -- target %d is dead", k);
+                c.script_warning("Find_Best_Of -- target %d is dead", k);
             }
         } else {
-            script_warning(c, "Find_Best_Of -- invalid type for target %d", k);
+            c.script_warning("Find_Best_Of -- invalid type for target %d", k);
         }
         lua_pop(c.L, 1);
         if (a.present) {
@@ -1576,13 +1506,7 @@ int m_best_of(Call& c) {
 
 // ================================================================ LuaScriptWrapper
 
-ScriptWrapperHost* script_host(lua_State* L) {
-    lua_pushstring(L, kScriptWrapperHostKey);
-    lua_rawget(L, LUA_REGISTRYINDEX);
-    void* p = lua_type(L, -1) == LUA_TLIGHTUSERDATA ? lua_touserdata(L, -1) : nullptr;
-    lua_pop(L, 1);
-    return static_cast<ScriptWrapperHost*>(p);
-}
+ScriptWrapperHost* script_host(lua_State* L) { return detail::registry_ptr<ScriptWrapperHost>(L, kScriptWrapperHostKey); }
 LuaVm* target_vm(Call& c) {
     ScriptWrapperHost* h = script_host(c.L);
     LuaVm* vm = h ? h->script_vm(c.self->id) : nullptr;
@@ -1669,8 +1593,8 @@ LuaVm::Impl* impl_of(LuaVm& vm);
 int m_script_is_valid(Call& c) { return push_bool(c, target_vm(c) != nullptr); }
 
 int m_script_get_variable(Call& c) {
-    if (c.nargs != 1) return script_error(c, "LuaScriptWrapper::Get_Variable -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return script_error(c, "LuaScriptWrapper::Get_Variable -- invalid type for parameter 1. Expected string.");
+    if (c.nargs != 1) return c.script_error_stop("LuaScriptWrapper::Get_Variable -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("LuaScriptWrapper::Get_Variable -- invalid type for parameter 1. Expected string.");
     LuaVm* vm = target_vm(c);
     LuaVm::Impl* ti = vm ? impl_of(*vm) : nullptr;
     if (!ti) return push_nil(c);
@@ -1683,8 +1607,8 @@ int m_script_get_variable(Call& c) {
     return 1;
 }
 int m_script_set_variable(Call& c) {
-    if (c.nargs != 2) return script_error(c, "LuaScriptWrapper::Set_Variable -- invalid number of parameters. Expected 2, got %d.", c.nargs);
-    if (!c.is_string(1)) return script_error(c, "LuaScriptWrapper::Set_Variable -- invalid type for parameter 1. Expected string.");
+    if (c.nargs != 2) return c.script_error_stop("LuaScriptWrapper::Set_Variable -- invalid number of parameters. Expected 2, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("LuaScriptWrapper::Set_Variable -- invalid type for parameter 1. Expected string.");
     LuaVm* vm = target_vm(c);
     if (!vm) return 0;
     lua_State* T = vm->state();
@@ -1700,8 +1624,8 @@ int m_script_set_variable(Call& c) {
 // Call_Function(name, args...) -> the function's results (copied back); nothing when it is missing or fails (the
 // error is logged in the calling VM).
 int m_script_call_function(Call& c) {
-    if (c.nargs < 1) return script_error(c, "LuaScriptWrapper::Call_Function -- invalid number of parameters. Expected at least 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return script_error(c, "LuaScriptWrapper::Call_Function -- invalid type for parameter 1. Expected string.");
+    if (c.nargs < 1) return c.script_error_stop("LuaScriptWrapper::Call_Function -- invalid number of parameters. Expected at least 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("LuaScriptWrapper::Call_Function -- invalid type for parameter 1. Expected string.");
     LuaVm* vm = target_vm(c);
     LuaVm::Impl* ti = vm ? impl_of(*vm) : nullptr;
     if (!ti) return 0;
@@ -1711,13 +1635,13 @@ int m_script_call_function(Call& c) {
     lua_rawget(T, LUA_GLOBALSINDEX);
     if (lua_type(T, -1) != LUA_TFUNCTION) {
         lua_settop(T, top);
-        return script_error(c, "LuaScriptWrapper::Call_Function -- %s is not a function", std::string(c.string(1)).c_str());
+        return c.script_error_stop("LuaScriptWrapper::Call_Function -- %s is not a function", std::string(c.string(1)).c_str());
     }
     for (int i = 2; i <= c.nargs; ++i) copy_value(c.L, *c.vm, c.idx(i), T, *ti, 0);
     if (lua_pcall(T, c.nargs - 1, LUA_MULTRET, 0) != 0) {
         const std::string msg = lua_tostring(T, -1) ? lua_tostring(T, -1) : "error";
         lua_settop(T, top);
-        return script_error(c, "LuaScriptWrapper::Call_Function -- %s", msg.c_str());
+        return c.script_error_stop("LuaScriptWrapper::Call_Function -- %s", msg.c_str());
     }
     const int nres = lua_gettop(T) - top;
     for (int i = 1; i <= nres; ++i) copy_value(T, *ti, top + i, c.L, *c.vm, 0);
@@ -1836,9 +1760,7 @@ bool detail::call_object_method(Call& c, ObjectHandle unit, const char* name, in
     const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, -1));
     bool result = false;
     if (ud && detail::object_alive(*c.vm, *ud)) {
-        char err[256];
-        err[0] = 0;
-        Call sub{c.L, c.vm, ud, first, nargs, err, sizeof err};
+        Call sub{c.L, c.vm, ud, first, nargs};
         const int n = s.fn(sub);
         if (n > 0) result = lua_toboolean(c.L, top + 2) != 0;
     }
@@ -1968,19 +1890,11 @@ GlobalValueStore& process_global_values() {
 }
 
 void attach_global_values(LuaVm& vm, GlobalValueStore* s) {
-    lua_State* L = vm.state();
-    lua_pushstring(L, kGlobalValueStoreKey);
-    if (s) lua_pushlightuserdata(L, s);
-    else lua_pushnil(L);
-    lua_rawset(L, LUA_REGISTRYINDEX);
+    detail::set_registry_ptr(vm.state(), kGlobalValueStoreKey, s);
 }
 
 void attach_script_wrapper_host(LuaVm& vm, ScriptWrapperHost* host) {
-    lua_State* L = vm.state();
-    lua_pushstring(L, kScriptWrapperHostKey);
-    if (host) lua_pushlightuserdata(L, host);
-    else lua_pushnil(L);
-    lua_rawset(L, LUA_REGISTRYINDEX);
+    detail::set_registry_ptr(vm.state(), kScriptWrapperHostKey, host);
 }
 
 void set_script_wrapper_global(LuaVm& vm, std::string_view name, int32_t id) {

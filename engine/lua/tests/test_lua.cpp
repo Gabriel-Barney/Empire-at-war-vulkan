@@ -533,10 +533,9 @@ static void test_objects() {
     const objects::ObjectHandle t4 = store.create(sp);
     CHECK(t4.slot() == t2.slot());
     CHECK(run(vm, "v3 = victim.Is_Valid() and 1 or 0") == "" && gnum(vm, "v3") == 0.0);
-    vm.sweep_dead_wrappers();
     CHECK(run(vm, "c = table.getn(Find_All_Objects_Of_Type(tt))") == "" && gnum(vm, "c") == 3.0);
-    // A table keyed by the dead wrapper keeps it (still a dead wrapper after the sweep); the live
-    // object in the reused slot gets its own wrapper.
+    // A table keyed by the dead wrapper keeps it (still a dead wrapper); the live object in the reused slot gets its
+    // own wrapper.
     CHECK(run(vm, "dk = {} dk[victim] = 1 dead_keys = 0 for k in pairs(dk) do if not k.Is_Valid() then "
                   "dead_keys = dead_keys + 1 end end newest = Find_All_Objects_Of_Type(tt)[1] "
                   "fresh = (dk[newest] == nil) and 1 or 0") == "");

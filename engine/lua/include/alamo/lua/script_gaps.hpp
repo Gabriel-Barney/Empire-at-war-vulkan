@@ -82,12 +82,10 @@ struct TacticalScriptHooks {
     CinematicTransports* transports = nullptr;
     // Teleport (Start_Cinematic_Space_Retreat line-up, 0x3a8f90): store + movement + trees. Unset: store only.
     std::function<void(objects::ObjectHandle unit, Vec3 position, Vec3 facing)> teleport;
-    // Locomotor vtable +0x2a8: hyperspace out after `delay_frames` (sets the in-end-cinematic flag obj +0x3c9).
-    // Unset: the line-up happens, nobody jumps (logged).
-    std::function<void(objects::ObjectHandle unit, int32_t delay_frames)> hyperspace_out;
-    // L1 final: the same locomotor call with its keep_parent_link flag (L1_S4_REMAINING §3.4): Hyperspace_Away([bool =
-    // true]) -> (unit, 0, bool); Start_Cinematic_Space_Retreat -> (unit, delay, false). False = not such a unit. When set
-    // it is used instead of hyperspace_out; unset, Hyperspace_Away keeps its Lua order on the direct path.
+    // Locomotor vtable +0x2a8: hyperspace out after `delay_frames` (sets the in-end-cinematic flag obj +0x3c9), with
+    // its keep_parent_link flag (L1 final, L1_S4_REMAINING §3.4): Hyperspace_Away([bool = true]) -> (unit, 0, bool);
+    // Start_Cinematic_Space_Retreat -> (unit, delay, false). False = not such a unit. Unset: Hyperspace_Away keeps its
+    // Lua order on the direct path; the space retreat line-up happens, nobody jumps (logged).
     std::function<bool(objects::ObjectHandle unit, int32_t delay_frames, bool keep_parent_link)> hyperspace_out_link;
     // story t12: Resume_Hyperspace_In() (0x543570) clears the reinforcement hyperspace hold 0x140b27d5f (LINK_TACTICAL
     // P9 == 2, L1_S4_REMAINING §3.4). Unset: only the presentation event is recorded.

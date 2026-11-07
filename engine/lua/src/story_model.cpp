@@ -141,7 +141,6 @@ bool list_has(const std::vector<std::string>& list, std::string_view name) {
 
 // Event parameter (from XML or Lua) against a pushed parameter (generic rule).
 bool param_matches(const StoryParam& want, const StoryParam& got) {
-    if (want.kind != StoryParam::Kind::Text) return got.kind == want.kind && got.id == want.id;
     if (iequal(trim(want.text), trim(got.text))) return true;
     double a = 0, b = 0;
     return parse_number(want.text, a) && parse_number(got.text, b) && a == b;
@@ -856,18 +855,8 @@ bool StoryModel::evaluate(uint32_t p, uint32_t e, std::string_view type, const S
     const StoryEventDef& def = plots_[p].events[e];
     StoryEventState& st = plots_[p].state[e];
     const auto& ep = def.event_params;
-    // Player (or host-made object) parameter values [port]: compared by id through the generic rule. Lua's
-    // Set_Event_Parameter stores objects and types as their type name (bind_story.cpp, story t02), so those take the
-    // type's own rule below like XML text.
-    bool lua_values = false;
-    for (const StoryParam& q : ep) lua_values = lua_values || q.kind != StoryParam::Kind::Text;
-    if (lua_values) {
-        for (size_t i = 0; i < ep.size(); ++i) {
-            if (ep[i].empty()) continue;
-            if (i >= n.params.size() || !param_matches(ep[i], n.params[i])) return false;
-        }
-        return true;
-    }
+    // Lua's Set_Event_Parameter stores objects and types as their type name (bind_story.cpp, story t02), so those take
+    // the type's own rule below like XML text.
     if (is_single_object_name(type)) {
         const std::vector<std::string> names = name_list(text_at(ep, 0));
         size_t idx = names.size();
@@ -1500,7 +1489,7 @@ void put_param(ByteWriter& w, const StoryParam& p) {
 }
 bool get_param(ByteReader& r, StoryParam& p) {
     const uint8_t k = r.u8();
-    if (!r.ok() || k > static_cast<uint8_t>(StoryParam::Kind::Player)) return false;
+    if (!r.ok() || k != static_cast<uint8_t>(StoryParam::Kind::Text)) return false;  // cu14 t03: only text is produced
     p.kind = static_cast<StoryParam::Kind>(k);
     if (!get_str(r, p.text)) return false;
     p.id = r.i32();

@@ -33,8 +33,8 @@
 //   * GlobalValueStore (below) - the session-wide GlobalValue table for VMs without an AI host;
 //   * ScriptWrapperHost (below) - the VMs a LuaScriptWrapper refers to.
 // Error discipline: as script_gaps.hpp ("SCRIPT ERROR: ..." / "SCRIPT WARNING: ..." messages, nil result) where the
-// original logs; Call::fail (a Lua error) for the argument errors LUA_API.md lists as raising helpers [port: the
-// same choice the other families made for these helpers].
+// original logs; the argument errors LUA_API.md lists as raising helpers are script errors too
+// (Call::script_error_stop, no Lua error: q6 t11, the rule of every family).
 #pragma once
 #include <cstdint>
 #include <functional>

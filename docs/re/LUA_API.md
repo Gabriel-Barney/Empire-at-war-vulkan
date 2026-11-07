@@ -1730,8 +1730,8 @@ Both are object scripts, which are mod-only (PHASE4 decision 2026-11-04).
     - the flag-less `script_error()` (bind_objects, bind_fog, bind_script_gaps, bind_script_remaining);
     - `script_error_nil` (bind_ai_tactical).
 
-    Today there are about 316 `fail()` sites: ai 19, ai_tactical 22, engine 19, objects 104, players 87,
-    presentation 40, story 23, script_remaining 2.
+    Before q6 t11 there were about 316 `fail()` sites (ai 19, ai_tactical 22, engine 19, objects 104, players 87,
+    presentation 40, story 23, script_remaining 2); none is left and `Call::fail` is gone (cu14 t01).
   - **Warning**: log only, then return what the warning table says (nothing, a value, or skip and continue).
   - **Silent**: dead wrapper (nothing), `Is_Valid` (false), and the nil lookups.
 - Returning one `nil` instead of zero results is equivalent for every Lua caller except `select('#', …)` and table
@@ -1744,10 +1744,10 @@ Both are object scripts, which are mod-only (PHASE4 decision 2026-11-04).
 
 ### Port status (q6 t11, 2026-11-04)
 
-- Every binding family reports errors through `Call::script_error_stop` (the family helpers `script_error` of
-  bind_objects / bind_fog / bind_script_gaps / bind_script_remaining / bind_ai_tactical call it or set the flag the same
-  way; `script_error_nil` is gone). Warnings go through `Call::script_warning` or the family `script_warning`, which set
-  no flag. No binding calls `Call::fail` any more (kept in vm_internal.hpp, unused).
+- Every binding family reports errors through `Call::script_error_stop` (`script_error_nil` is gone; the family
+  helpers `script_error` / `script_warning` of bind_objects / bind_fog / bind_script_gaps / bind_script_remaining /
+  bind_ai_tactical were folded into the `Call` methods by cu14 t06). Warnings go through `Call::script_warning`, which
+  sets no flag. No binding calls `Call::fail` any more (cu14 t01, 2026-11-07: removed, with its `Call::err` buffer).
 - Mode-gate text: the generic "<name> -- this command is only supported in tactical modes" / "... in galactic mode",
   except the bindings with their own recovered text (bindings.cpp `kGateTexts`: Find_Nearest, Find_Nearest_Space_Field,
   Are_On_Opposite_Sides_Of_Shield, Spawn_Special_Weapon, Create_Cinematic_Transport, Start_Cinematic_Space_Retreat,

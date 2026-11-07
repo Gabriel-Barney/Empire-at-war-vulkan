@@ -507,13 +507,7 @@ PresentationLog& detail::presentation_of(lua_State* L) {
 }
 
 void attach_presentation(LuaVm& vm, PresentationLog* log) {
-    lua_State* L = vm.state();
-    lua_pushstring(L, kLogKey);
-    if (log)
-        lua_pushlightuserdata(L, log);
-    else
-        lua_pushnil(L);
-    lua_rawset(L, LUA_REGISTRYINDEX);
+    detail::set_registry_ptr(vm.state(), kLogKey, log);
 }
 
 PresentationLog& presentation(LuaVm& vm) { return detail::presentation_of(vm.state()); }

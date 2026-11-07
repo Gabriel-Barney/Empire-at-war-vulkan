@@ -235,7 +235,6 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
         k.engines_online = [bt, bid](objects::ObjectHandle u) { return bt->engines_online(bid(u)); };
         k.ground_height = [bt](float x, float y) { return bt->ground_height(x, y); };
         k.teleport = [bt, md, bid](objects::ObjectHandle u, Vec3 p, Vec3 f) { bt->teleport(*md, bid(u), p, f); };
-        k.hyperspace_out = [bt, bid](objects::ObjectHandle u, int32_t delay) { bt->hyperspace_out(bid(u), delay, false); };
         k.hyperspace_out_link = [bt, bid](objects::ObjectHandle u, int32_t delay, bool keep) { return bt->hyperspace_out(bid(u), delay, keep); };
         k.retreat_increment_frames = [bt](int32_t player) { return bt->retreat_increment_frames(player); };
         k.spawn = [bt, md](const objects::SpawnParams& p) {
