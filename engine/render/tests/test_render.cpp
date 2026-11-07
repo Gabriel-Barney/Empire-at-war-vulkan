@@ -73,9 +73,7 @@ void test_layouts() {
         CHECK(render::assets_layout_for(l) == (c.skinned ? assets::VertexLayout::Skinned : assets::VertexLayout::Static));
         CHECK(render::vertex_tables_agree(l));
         // Lower-case spelling is accepted too.
-        std::string lc = c.name;
-        for (char& ch : lc) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        CHECK(render::vertex_layout_for(lc) == c.expect);
+        CHECK(render::vertex_layout_for(alamo::ascii_lower(c.name)) == c.expect);
         render::VertexInputDesc vin;
         CHECK(render::build_vertex_input(l, {}, vin));
         CHECK(vin.binding.stride == 64 && vin.attributes.size() == 6);
@@ -805,7 +803,7 @@ void test_cloud_slots() {
 
 void test_png() {
     const uint8_t iend[] = {'I', 'E', 'N', 'D'};
-    CHECK(render::crc32(iend) == 0xAE426082u);
+    CHECK(alamo::crc32(iend, sizeof iend) == 0xAE426082u);
     const char* wiki = "Wikipedia";
     CHECK(render::adler32({reinterpret_cast<const uint8_t*>(wiki), 9}) == 0x11E60398u);
     std::vector<uint8_t> px(3 * 2 * 4);
@@ -822,7 +820,7 @@ void test_png() {
         const std::span<const uint8_t> typed(f.data() + pos + 4, len + 4);
         const size_t c = pos + 8 + len;
         const uint32_t crc = (uint32_t(f[c]) << 24) | (uint32_t(f[c + 1]) << 16) | (uint32_t(f[c + 2]) << 8) | f[c + 3];
-        CHECK(render::crc32(typed) == crc);
+        CHECK(alamo::crc32(typed.data(), typed.size()) == crc);
         if (!std::memcmp(f.data() + pos + 4, "IDAT", 4)) idat.assign(f.begin() + static_cast<std::ptrdiff_t>(pos + 8),
                                                                    f.begin() + static_cast<std::ptrdiff_t>(pos + 8 + len));
         if (!std::memcmp(f.data() + pos + 4, "IEND", 4)) saw_iend = true;

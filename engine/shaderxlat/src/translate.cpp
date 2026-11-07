@@ -51,6 +51,8 @@
 #include <cstring>
 #include <map>
 
+#include "alamo/core/hash.hpp"
+
 namespace alamo::shaderxlat {
 
 namespace {
@@ -1447,11 +1449,8 @@ struct Emitter {
 }  // namespace
 
 uint64_t TranslateOptions::key() const {
-    uint64_t h = 0xcbf29ce484222325ull;
-    auto mix = [&](uint8_t b) {
-        h ^= b;
-        h *= 0x100000001b3ull;
-    };
+    uint64_t h = alamo::kFnv1a64Offset;
+    auto mix = [&](uint8_t b) { h = alamo::fnv1a64(std::span<const uint8_t>(&b, 1), h); };
     for (TextureDim d : sampler_dims) mix(static_cast<uint8_t>(d));
     mix(static_cast<uint8_t>(projected_stages & 0xFF));
     mix(static_cast<uint8_t>(projected_stages >> 8));

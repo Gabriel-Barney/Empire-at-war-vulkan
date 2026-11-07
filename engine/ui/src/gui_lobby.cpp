@@ -4,35 +4,13 @@
 #include <cmath>
 #include <cstdio>
 
+#include "alamo/core/hash.hpp"
+#include "ui_strings.hpp"
+
 namespace alamo::ui {
 
 namespace {
 
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const auto lo = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
-        if (lo(a[i]) != lo(b[i])) return false;
-    }
-    return true;
-}
-bool istarts(std::string_view s, std::string_view p) { return s.size() >= p.size() && iequal(s.substr(0, p.size()), p); }
-
-std::u32string ascii32(std::string_view s) {
-    std::u32string o;
-    for (char c : s) o.push_back(static_cast<char32_t>(static_cast<unsigned char>(c)));
-    return o;
-}
-std::u32string num32(int64_t v) {
-    char b[32];
-    std::snprintf(b, sizeof b, "%lld", static_cast<long long>(v));
-    return ascii32(b);
-}
-std::string id_n(const char* fmt, int32_t n) {
-    char b[48];
-    std::snprintf(b, sizeof b, fmt, n);
-    return b;
-}
 // Trailing slot / row digit of a control id ("IDC_PLAYER_FACTION_3" -> 3), -1 if none.
 int32_t trailing_index(std::string_view id) {
     size_t i = id.size();
@@ -138,7 +116,7 @@ GuiDialog* LobbyScreens::go(const char* name) {
     if (!gui_) return nullptr;
     const std::string t = top();
     for (const char* n : kLobbyDialogs)
-        if (iequal(t, n)) gui_->close(t);
+        if (iequals(t, n)) gui_->close(t);
     return gui_->open(name);
 }
 
@@ -465,17 +443,17 @@ void LobbyScreens::join_selected(GuiDialog& d, std::vector<LobbyEvent>& out) {
 void LobbyScreens::on_click(const GuiEvent& e, std::vector<LobbyEvent>& out) {
     using K = LobbyEvent::Kind;
     const std::string_view n = e.dialog, c = e.control;
-    auto is = [&](std::string_view id) { return iequal(c, id); };
+    auto is = [&](std::string_view id) { return iequals(c, id); };
     GuiDialog* d = gui_->find(n);
     if (!d) return;
     for (const ColumnButton& col : kColumns)
-        if (is(col.id) && (iequal(n, dlg::kLanLobby) || iequal(n, dlg::kInternetLobby))) {
+        if (is(col.id) && (iequals(n, dlg::kLanLobby) || iequals(n, dlg::kInternetLobby))) {
             LobbyEvent s = ev(K::SortGames);
             s.value = col.column;
             out.push_back(s);
             return;
         }
-    if (iequal(n, dlg::kMultiplayer)) {
+    if (iequals(n, dlg::kMultiplayer)) {
         if (is("IDC_MULTIPLAYER_LAN_BUTTON")) {
             out.push_back(ev(K::EnterLanLobby));
             show_lan_lobby();
@@ -490,7 +468,7 @@ void LobbyScreens::on_click(const GuiEvent& e, std::vector<LobbyEvent>& out) {
         } else if (is("IDC_MENU_CREDITS")) {
             out.push_back(ev(K::ShowCredits));
         }
-    } else if (iequal(n, dlg::kLanLobby) || iequal(n, dlg::kInternetLobby)) {
+    } else if (iequals(n, dlg::kLanLobby) || iequals(n, dlg::kInternetLobby)) {
         if (is("IDC_LAN_HOST_GAME_BUTTON") || is("IDC_INTERNET_HOST_GAME_BUTTON")) out.push_back(ev(K::HostGame));
         else if (is("IDC_LAN_JOIN_GAME_BUTTON") || is("IDC_INTERNET_JOIN_GAME_BUTTON")) join_selected(*d, out);
         else if (is("IDC_SET_FILTER_BUTTON")) out.push_back(ev(K::OpenGameFilter));
@@ -507,22 +485,22 @@ void LobbyScreens::on_click(const GuiEvent& e, std::vector<LobbyEvent>& out) {
             show_multiplayer_menu();
         }
     }
-    if (iequal(n, dlg::kInternetHome) || iequal(n, dlg::kInternetLobby)) {
+    if (iequals(n, dlg::kInternetHome) || iequals(n, dlg::kInternetLobby)) {
         if (is("IDC_INTERNET_EXIT_BUTTON")) {
             out.push_back(ev(K::LeaveLobby));
             show_multiplayer_menu();
         } else if (is("IDC_INTERNET_HOME_BUTTON")) {
             out.push_back(ev(K::InternetHome));
-            if (!iequal(n, dlg::kInternetHome)) show_internet_home();
+            if (!iequals(n, dlg::kInternetHome)) show_internet_home();
         } else if (is("IDC_INTERNET_CUSTOM_MATCH_BUTTON")) {
             out.push_back(ev(K::CustomMatch));
-            if (!iequal(n, dlg::kInternetLobby)) show_internet_lobby();
+            if (!iequals(n, dlg::kInternetLobby)) show_internet_lobby();
         } else if (is("IDC_INTERNET_QUICK_MATCH_BUTTON")) out.push_back(ev(K::QuickMatch));
         else if (is("IDC_INTERNET_OPTIONS_BUTTON")) out.push_back(ev(K::InternetOptions));
         else if (is("IDC_INTERNET_BUDDIES_BUTTON")) out.push_back(ev(K::Buddies));
         else if (is("IDC_INTERNET_PLAYER_PROFILE_BUTTON")) out.push_back(ev(K::PlayerProfile));
         else if (is("IDC_INTERNET_COMMUNITY_BUTTON")) out.push_back(ev(K::Community));
-    } else if (iequal(n, dlg::kLanStaging) || iequal(n, dlg::kInternetStaging)) {
+    } else if (iequals(n, dlg::kLanStaging) || iequals(n, dlg::kInternetStaging)) {
         if (is("IDC_LAN_START_GAME_BUTTON") || is("IDC_INTERNET_START_GAME_BUTTON")) out.push_back(ev(K::StartGame));
         else if (is("IDC_LAN_CANCEL_BUTTON")) {
             out.push_back(ev(K::LeaveGame));
@@ -535,7 +513,7 @@ void LobbyScreens::on_click(const GuiEvent& e, std::vector<LobbyEvent>& out) {
         else if (is("IDC_INTERNET_BUDDIES_BUTTON")) out.push_back(ev(K::Buddies));
         else if (is("IDC_INTERNET_CONNECTION_TEST_BUTTON")) out.push_back(ev(K::TestConnections));
         else if (is("IDC_SELECT_CLAN_BUTTON")) out.push_back(ev(K::SelectClan));
-    } else if (iequal(n, dlg::kDirectConnect)) {
+    } else if (iequals(n, dlg::kDirectConnect)) {
         const GuiControl* ed = d->get("IDC_EDIT_IP");
         const std::u32string t = ed ? ed->text : std::u32string();
         if (is("IDC_ADD_IP_BUTTON") && !t.empty()) {
@@ -552,7 +530,7 @@ void LobbyScreens::on_click(const GuiEvent& e, std::vector<LobbyEvent>& out) {
         } else if (is("IDC_CANCEL_BUTTON")) {
             gui_->close(n);
         }
-    } else if (iequal(n, dlg::kPassword)) {
+    } else if (iequals(n, dlg::kPassword)) {
         if (is("IDC_OK")) {
             LobbyEvent x = ev(K::JoinGame);
             x.game = password_game_;
@@ -562,19 +540,19 @@ void LobbyScreens::on_click(const GuiEvent& e, std::vector<LobbyEvent>& out) {
         } else if (is("IDC_CANCEL_BUTTON")) {
             gui_->close(n);
         }
-    } else if (iequal(n, dlg::kConnect)) {
+    } else if (iequals(n, dlg::kConnect)) {
         if (is("IDC_LAN_CANCEL_BUTTON")) {
             gui_->close(n);
             out.push_back(ev(K::CancelConnect));
         }
-    } else if (iequal(n, dlg::kDisconnect)) {
+    } else if (iequals(n, dlg::kDisconnect)) {
         if (is("IDC_QUIT_GAME_BUTTON")) out.push_back(ev(K::QuitGame));
-        else if (istarts(c, "IDC_BUTTON_KICK_PLAYER")) {
+        else if (ascii_istarts_with(c, "IDC_BUTTON_KICK_PLAYER")) {
             LobbyEvent x = ev(K::KickPlayer);
             x.slot = trailing_index(c);
             out.push_back(x);
         }
-    } else if (iequal(n, dlg::kVote)) {
+    } else if (iequals(n, dlg::kVote)) {
         if (is("IDC_DIALOG_BOX_BUTTON_LEFT") || is("IDC_DIALOG_BOX_BUTTON_RIGHT")) {
             LobbyEvent x = ev(K::Vote);
             x.value = is("IDC_DIALOG_BOX_BUTTON_LEFT") ? 1 : 0;
@@ -590,8 +568,8 @@ void LobbyScreens::on_change(const GuiEvent& e, std::vector<LobbyEvent>& out) {
     const std::string_view n = e.dialog, c = e.control;
     GuiDialog* d = gui_->find(n);
     if (!d) return;
-    if (iequal(n, dlg::kLanLobby) || iequal(n, dlg::kInternetLobby)) {
-        if (iequal(c, "IDC_GAME_LIST")) {
+    if (iequals(n, dlg::kLanLobby) || iequals(n, dlg::kInternetLobby)) {
+        if (iequals(c, "IDC_GAME_LIST")) {
             if (e.kind == GuiEvent::Kind::DoubleClicked) {
                 join_selected(*d, out);
                 return;
@@ -603,43 +581,43 @@ void LobbyScreens::on_change(const GuiEvent& e, std::vector<LobbyEvent>& out) {
                 x.game = games_[static_cast<size_t>(e.value)].id;
                 out.push_back(std::move(x));
             }
-        } else if (iequal(c, "IDC_LAN_COLOR_SELECT") && e.kind == GuiEvent::Kind::SelectionChanged) {
+        } else if (iequals(c, "IDC_LAN_COLOR_SELECT") && e.kind == GuiEvent::Kind::SelectionChanged) {
             color_ = e.value;
             LobbyEvent x = ev(K::SetPlayerColor);
             x.value = e.value;
             out.push_back(x);
-        } else if (iequal(c, "IDC_ROOM_LIST") && e.kind == GuiEvent::Kind::SelectionChanged) {
+        } else if (iequals(c, "IDC_ROOM_LIST") && e.kind == GuiEvent::Kind::SelectionChanged) {
             room_ = e.value;
             LobbyEvent x = ev(K::SelectRoom);
             x.value = e.value;
             out.push_back(x);
         }
-    } else if ((iequal(n, dlg::kLanStaging) || iequal(n, dlg::kInternetStaging)) && e.kind == GuiEvent::Kind::SelectionChanged) {
+    } else if ((iequals(n, dlg::kLanStaging) || iequals(n, dlg::kInternetStaging)) && e.kind == GuiEvent::Kind::SelectionChanged) {
         const int32_t slot = trailing_index(c);
         LobbyEvent x;
         x.slot = slot;
         x.value = e.value;
-        if (iequal(c, "IDC_STAGING_MAP_LIST")) {
+        if (iequals(c, "IDC_STAGING_MAP_LIST")) {
             if (!staging_.host) return;
             staging_.map = e.value;
             x.kind = K::SelectMap;
             x.slot = -1;
-        } else if (istarts(c, "IDC_PLAYER_NAME_")) {
+        } else if (ascii_istarts_with(c, "IDC_PLAYER_NAME_")) {
             if (!staging_.host || slot < 0 || static_cast<size_t>(slot) >= staging_.slots.size() ||
                 staging_.slots[static_cast<size_t>(slot)].state == SlotState::Human)
                 return;
             x.kind = K::SetSlotState;  // items Open / Closed / AI = SlotState 0..2
-        } else if (istarts(c, "IDC_PLAYER_FACTION_") && slot_editable(slot)) {
+        } else if (ascii_istarts_with(c, "IDC_PLAYER_FACTION_") && slot_editable(slot)) {
             x.kind = K::SetSlotFaction;
-        } else if (istarts(c, "IDC_PLAYER_COLOR_") && slot_editable(slot)) {
+        } else if (ascii_istarts_with(c, "IDC_PLAYER_COLOR_") && slot_editable(slot)) {
             x.kind = K::SetSlotColor;
-        } else if (istarts(c, "IDC_PLAYER_TEAM_") && slot_editable(slot)) {
+        } else if (ascii_istarts_with(c, "IDC_PLAYER_TEAM_") && slot_editable(slot)) {
             x.kind = K::SetSlotTeam;
         } else {
             return;
         }
         out.push_back(x);
-    } else if (iequal(n, dlg::kDirectConnect) && iequal(c, "IDC_IP_LIST") && e.value >= 0 &&
+    } else if (iequals(n, dlg::kDirectConnect) && iequals(c, "IDC_IP_LIST") && e.value >= 0 &&
                static_cast<size_t>(e.value) < recent_ips_.size()) {
         d->set_text("IDC_EDIT_IP", recent_ips_[static_cast<size_t>(e.value)]);
         if (e.kind == GuiEvent::Kind::DoubleClicked) {
@@ -658,7 +636,7 @@ void LobbyScreens::on_submit(const GuiEvent& e, std::vector<LobbyEvent>& out) {
     if (!d) return;
     GuiControl* ed = d->get(c);
     const std::u32string t = !e.text.empty() ? e.text : (ed ? ed->text : std::u32string());
-    if (iequal(c, "IDC_LAN_CHAT_EDIT") || iequal(c, "IDC_INTERNET_CHAT_EDIT") || iequal(c, "IDC_DISCONNECT_CHAT_EDIT")) {
+    if (iequals(c, "IDC_LAN_CHAT_EDIT") || iequals(c, "IDC_INTERNET_CHAT_EDIT") || iequals(c, "IDC_DISCONNECT_CHAT_EDIT")) {
         if (t.empty()) return;
         LobbyEvent x = ev(K::Chat);
         x.text = t;
@@ -667,17 +645,17 @@ void LobbyScreens::on_submit(const GuiEvent& e, std::vector<LobbyEvent>& out) {
             ed->text.clear();
             ed->caret = 0;
         }
-    } else if (iequal(c, "IDC_LAN_NAME_EDIT")) {
+    } else if (iequals(c, "IDC_LAN_NAME_EDIT")) {
         local_name_ = t;
         LobbyEvent x = ev(K::SetPlayerName);
         x.text = t;
         out.push_back(std::move(x));
-    } else if (iequal(n, dlg::kPassword)) {
+    } else if (iequals(n, dlg::kPassword)) {
         GuiEvent b = e;
         b.kind = GuiEvent::Kind::Clicked;
         b.control = "IDC_OK";
         on_click(b, out);
-    } else if (iequal(n, dlg::kDirectConnect)) {
+    } else if (iequals(n, dlg::kDirectConnect)) {
         GuiEvent b = e;
         b.kind = GuiEvent::Kind::Clicked;
         b.control = "IDC_IP_CONNECT_BUTTON";
@@ -688,19 +666,19 @@ void LobbyScreens::on_submit(const GuiEvent& e, std::vector<LobbyEvent>& out) {
 void LobbyScreens::on_cancel(const GuiEvent& e, std::vector<LobbyEvent>& out) {
     using K = LobbyEvent::Kind;
     const std::string_view n = e.dialog;
-    if (iequal(n, dlg::kMultiplayer)) {
+    if (iequals(n, dlg::kMultiplayer)) {
         gui_->close(n);
         out.push_back(ev(K::BackToMainMenu));
-    } else if (iequal(n, dlg::kLanLobby) || iequal(n, dlg::kInternetLobby) || iequal(n, dlg::kInternetHome)) {
+    } else if (iequals(n, dlg::kLanLobby) || iequals(n, dlg::kInternetLobby) || iequals(n, dlg::kInternetHome)) {
         out.push_back(ev(K::LeaveLobby));
         show_multiplayer_menu();
-    } else if (iequal(n, dlg::kLanStaging) || iequal(n, dlg::kInternetStaging)) {
+    } else if (iequals(n, dlg::kLanStaging) || iequals(n, dlg::kInternetStaging)) {
         out.push_back(ev(K::LeaveGame));
         if (staging_.internet) show_internet_lobby();
         else show_lan_lobby();
-    } else if (iequal(n, dlg::kDirectConnect) || iequal(n, dlg::kPassword)) {
+    } else if (iequals(n, dlg::kDirectConnect) || iequals(n, dlg::kPassword)) {
         gui_->close(n);
-    } else if (iequal(n, dlg::kConnect)) {
+    } else if (iequals(n, dlg::kConnect)) {
         gui_->close(n);
         out.push_back(ev(K::CancelConnect));
     }
@@ -711,7 +689,7 @@ void LobbyScreens::update(std::span<const GuiEvent> events, std::vector<LobbyEve
     if (!gui_) return;
     for (const GuiEvent& e : events) {
         bool ours = false;
-        for (const char* n : kLobbyDialogs) ours = ours || iequal(e.dialog, n);
+        for (const char* n : kLobbyDialogs) ours = ours || iequals(e.dialog, n);
         if (!ours) continue;
         switch (e.kind) {
             case GuiEvent::Kind::Clicked: on_click(e, out); break;

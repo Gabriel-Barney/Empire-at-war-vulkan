@@ -1,33 +1,18 @@
 #include "alamo/ui/hud_panels.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
 #include "alamo/core/hash.hpp"
 #include "alamo/ui/hud_font.hpp"
+#include "ui_strings.hpp"
 
 namespace alamo::ui {
 
 namespace {
 
-std::u32string ascii32(std::string_view s) {
-    std::u32string o;
-    for (char c : s) o.push_back(static_cast<char32_t>(static_cast<unsigned char>(c)));
-    return o;
-}
-std::u32string num32(int64_t v) {
-    char b[32];
-    std::snprintf(b, sizeof b, "%lld", static_cast<long long>(v));
-    return ascii32(b);
-}
-std::string fmt(const char* f, int a) {
-    char b[48];
-    std::snprintf(b, sizeof b, f, a);
-    return b;
-}
 std::string fmt2(const char* f, int a, int b2) {
     char b[48];
     std::snprintf(b, sizeof b, f, a, b2);
@@ -50,14 +35,8 @@ bool has_art(const CommandBarComponent& c) {
 
 // Index of the first Icon_Alternate_Texture_Name entry of `c` that starts with `prefix` (ASCII case-insensitive), -1 none.
 int32_t alternate_with_prefix(const CommandBarComponent& c, std::string_view prefix) {
-    for (size_t i = 0; i < c.icon_alternate_texture.size(); ++i) {
-        const std::string& t = c.icon_alternate_texture[i];
-        if (t.size() < prefix.size()) continue;
-        bool same = true;
-        for (size_t k = 0; k < prefix.size() && same; ++k)
-            same = std::tolower(static_cast<unsigned char>(t[k])) == std::tolower(static_cast<unsigned char>(prefix[k]));
-        if (same) return static_cast<int32_t>(i);
-    }
+    for (size_t i = 0; i < c.icon_alternate_texture.size(); ++i)
+        if (ascii_istarts_with(c.icon_alternate_texture[i], prefix)) return static_cast<int32_t>(i);
     return -1;
 }
 
@@ -146,11 +125,6 @@ void EncyclopediaPanel::update(int32_t component, uint32_t object, double now) {
 }
 
 Vec2f EncyclopediaPanel::hint_anchor(const HudLayout& layout, const HudCanvas& cv, bool zoomed) const {
-    auto ieq = [](std::string_view x, std::string_view y) {
-        return x.size() == y.size() && std::equal(x.begin(), x.end(), y.begin(), [](char p, char q) {
-                   return std::tolower(static_cast<unsigned char>(p)) == std::tolower(static_cast<unsigned char>(q));
-               });
-    };
     Vec2f at{-0.5f * cv.width + 65.0f, -0.5f * cv.height + 309.0f};  // [port] fallback
     bool found = false;
     const std::vector<uint32_t> shells = layout.shells();
@@ -159,7 +133,7 @@ Vec2f EncyclopediaPanel::hint_anchor(const HudLayout& layout, const HudCanvas& c
             if (!layout.shell_active(sh)) continue;
             const Vec2f off = layout.shell_offset(sh);
             for (const ShellBone& b : layout.shell_bones(sh))
-                if (ieq(b.name, name)) {
+                if (ascii_iequals(b.name, name)) {
                     at = {b.x + off.x, b.y + off.y};
                     found = true;
                     break;
@@ -691,10 +665,10 @@ void BlackMarketPanel::fallback_layout() {
     put("market_title01", -170.0f, 195.0f);
     for (int k = 0; k < 5; ++k) {
         const float y = 140.0f - 62.0f * static_cast<float>(k);
-        put(fmt("market_%02d", k), -200.0f, y);
-        put(fmt("market_title%02d", 4 + 2 * k), -150.0f, y + 9.0f);
-        put(fmt("market_title%02d", 5 + 2 * k), -150.0f, y - 9.0f);
-        put(fmt("market_tech_level%02d", k), 170.0f, y);
+        put(id_n("market_%02d", k), -200.0f, y);
+        put(id_n("market_title%02d", 4 + 2 * k), -150.0f, y + 9.0f);
+        put(id_n("market_title%02d", 5 + 2 * k), -150.0f, y - 9.0f);
+        put(id_n("market_tech_level%02d", k), 170.0f, y);
     }
     put("market_title02", -200.0f, -185.0f);
     put("market_title03", 150.0f, -185.0f);
@@ -709,20 +683,20 @@ void BlackMarketPanel::build(const BlackMarketFrame& f) {
         add_text_slot("market_title01", f.subtitle);
         int32_t hovered = -1;
         for (size_t k = 0; k < f.items.size() && k < 5; ++k)
-            if (buttons_.hover() >= 0 && buttons_.hover() == find(fmt("market_%02d", static_cast<int>(k)))) hovered = static_cast<int32_t>(k);
+            if (buttons_.hover() >= 0 && buttons_.hover() == find(id_n("market_%02d", static_cast<int>(k)))) hovered = static_cast<int32_t>(k);
         for (size_t k = 0; k < f.items.size() && k < 5; ++k) {
             const BlackMarketItem& it = f.items[k];
             const int ki = static_cast<int>(k);
             PanelSlot b;
-            b.component = find(fmt("market_%02d", ki));
+            b.component = find(id_n("market_%02d", ki));
             b.icon = it.icon;
             b.disabled = !it.enabled;
             b.id = it.item;
             b.value = ki;
             slots_.push_back(b);
-            add_text_slot(fmt("market_title%02d", 4 + 2 * ki).c_str(), it.name);
-            add_text_slot(fmt("market_title%02d", 5 + 2 * ki).c_str(), it.cost >= 0 ? num32(it.cost) : std::u32string());
-            const int32_t tc = it.tech_icon.empty() ? -1 : find(fmt("market_tech_level%02d", ki));
+            add_text_slot(id_n("market_title%02d", 4 + 2 * ki).c_str(), it.name);
+            add_text_slot(id_n("market_title%02d", 5 + 2 * ki).c_str(), it.cost >= 0 ? num32(it.cost) : std::u32string());
+            const int32_t tc = it.tech_icon.empty() ? -1 : find(id_n("market_tech_level%02d", ki));
             const int32_t alt = tc >= 0 ? alternate_with_prefix((*table_)[static_cast<size_t>(tc)], it.tech_icon) : -1;
             if (alt >= 0) {
                 PanelSlot t;
@@ -760,9 +734,9 @@ void SlicePanel::fallback_layout() {
     put("market_title01", -170.0f, 195.0f);
     for (int k = 0; k < kVisibleRows; ++k) {
         const float y = 140.0f - 62.0f * static_cast<float>(k);
-        put(fmt("market_%02d", k), -200.0f, y);
-        put(fmt("market_title%02d", 4 + 2 * k), -150.0f, y + 9.0f);
-        put(fmt("market_title%02d", 5 + 2 * k), -150.0f, y - 9.0f);
+        put(id_n("market_%02d", k), -200.0f, y);
+        put(id_n("market_title%02d", 4 + 2 * k), -150.0f, y + 9.0f);
+        put(id_n("market_title%02d", 5 + 2 * k), -150.0f, y - 9.0f);
     }
     put("market_title02", -200.0f, -185.0f);
     put("market_title03", 150.0f, -185.0f);
@@ -787,8 +761,8 @@ void SlicePanel::build(const SliceFrame& f) {
         const SliceRow* hovered = nullptr;
         for (int32_t k = 0; k < kVisibleRows; ++k) {
             const int32_t row = first_ + k;
-            const std::string pad = fmt("market_%02d", k);
-            const std::string name = fmt("market_title%02d", 4 + 2 * k), price = fmt("market_title%02d", 5 + 2 * k);
+            const std::string pad = id_n("market_%02d", k);
+            const std::string name = id_n("market_title%02d", 4 + 2 * k), price = id_n("market_title%02d", 5 + 2 * k);
             if (row >= rows_) {  // unused rows: blank texts, no button
                 add_text_slot(name, {});
                 add_text_slot(price, {});
@@ -840,7 +814,7 @@ void SabotagePanel::fallback_layout() {
             const float x = -150.0f + 200.0f * static_cast<float>(c), y = 120.0f - 62.0f * static_cast<float>(r);
             put(fmt2("bm_%02d0%d", r, c), x, y);
             put(fmt2("bm_title_%d0%d", r, c), x + 50.0f, y - 9.0f);
-            put(fmt("bm_title_40%d", r * 2 + c + 2), x + 50.0f, y + 9.0f);
+            put(id_n("bm_title_40%d", r * 2 + c + 2), x + 50.0f, y + 9.0f);
         }
     put("bm_close", 175.0f, -225.0f);
 }
@@ -863,7 +837,7 @@ void SabotagePanel::build(const SabotageFrame& f) {
             b.value = static_cast<int32_t>(k);
             slots_.push_back(b);
             add_text_slot(fmt2("bm_title_%d0%d", r, c), t.cost >= 0 ? num32(t.cost) : std::u32string());
-            add_text_slot(fmt("bm_title_40%d", static_cast<int>(k) + 2), t.name);
+            add_text_slot(id_n("bm_title_40%d", static_cast<int>(k) + 2), t.name);
         }
         add_close("bm_close");
         draw_slots(f);
@@ -894,8 +868,8 @@ void CorruptionPanel::fallback_layout() {
         put("corrupt_button_icon_" + x1, x, 120.0f);
         put("corrupt_title_" + x1, x + 40.0f, 130.0f);
         put("corrupt_cost_" + x1, x + 40.0f, 112.0f);
-        for (int n = 0; n < 5; ++n) put(fmt("corrupt_text%02d", n) + x1, x - 20.0f, 70.0f - 16.0f * static_cast<float>(n));
-        for (int n = 0; n < 8; ++n) put(fmt("corrupt_icon_%02d", n) + x1, x - 20.0f + 26.0f * static_cast<float>(n % 4), -40.0f - 26.0f * static_cast<float>(n / 4));
+        for (int n = 0; n < 5; ++n) put(id_n("corrupt_text%02d", n) + x1, x - 20.0f, 70.0f - 16.0f * static_cast<float>(n));
+        for (int n = 0; n < 8; ++n) put(id_n("corrupt_icon_%02d", n) + x1, x - 20.0f + 26.0f * static_cast<float>(n % 4), -40.0f - 26.0f * static_cast<float>(n / 4));
     }
     put("corrupt_close", 175.0f, -225.0f);
 }
@@ -921,10 +895,10 @@ void CorruptionPanel::build(const CorruptionFrame& f) {
             slots_.push_back(b);
             add_text_slot("corrupt_title_" + x1, o.title);
             add_text_slot("corrupt_cost_" + x1, o.cost >= 0 ? num32(o.cost) : std::u32string());
-            for (size_t n = 0; n < o.lines.size() && n < 5; ++n) add_text_slot(fmt("corrupt_text%02d", static_cast<int>(n)) + x1, o.lines[n]);
+            for (size_t n = 0; n < o.lines.size() && n < 5; ++n) add_text_slot(id_n("corrupt_text%02d", static_cast<int>(n)) + x1, o.lines[n]);
             for (size_t n = 0; n < o.requirements.size() && n < 8; ++n) {
                 PanelSlot r;
-                r.component = find(fmt("corrupt_icon_%02d", static_cast<int>(n)) + x1);
+                r.component = find(id_n("corrupt_icon_%02d", static_cast<int>(n)) + x1);
                 r.icon = o.requirements[n];
                 r.value = kRoleDeco;
                 slots_.push_back(r);
@@ -949,7 +923,7 @@ void CorruptionPanel::update_input(const RoutedInput& routed, bool shift, bool c
 // ==== Hack =========================================================================================================
 void HackPanel::fallback_layout() {
     put("hack_title01", -150.0f, 200.0f);
-    for (int n = 0; n < 7; ++n) put(fmt("hack_text_%02d", n), -150.0f, 160.0f - 18.0f * static_cast<float>(n));
+    for (int n = 0; n < 7; ++n) put(id_n("hack_text_%02d", n), -150.0f, 160.0f - 18.0f * static_cast<float>(n));
     put("hack_cost", 120.0f, -60.0f);
     put("hack_hack", 0.0f, -110.0f);
     put("hack_close", 175.0f, -160.0f);
@@ -961,7 +935,7 @@ void HackPanel::build(const HackFrame& f) {
     planet_ = f.planet;
     if (open_) {
         add_text_slot("hack_title01", f.title);
-        for (size_t n = 0; n < f.lines.size() && n < 7; ++n) add_text_slot(fmt("hack_text_%02d", static_cast<int>(n)), f.lines[n]);
+        for (size_t n = 0; n < f.lines.size() && n < 7; ++n) add_text_slot(id_n("hack_text_%02d", static_cast<int>(n)), f.lines[n]);
         add_text_slot("hack_cost", f.cost);
         PanelSlot h;
         h.component = find("hack_hack");

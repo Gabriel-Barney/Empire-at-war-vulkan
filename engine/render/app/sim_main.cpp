@@ -188,13 +188,10 @@ bool load_world(const SimOptions& opt, World& w) {
         std::fprintf(stderr, "--map %s needs --game <corruption dir> or ALAMO_FOC_DATA\n", opt.map.c_str());
         return false;
     }
-    vfs::VfsConfig cfg;  // mounted exactly as alamo_headless does
-    cfg.foc_root = root;
-    vfs::parse_command_line(opt.game_args, cfg);
     std::string err;
-    w.files = vfs::Vfs::create(cfg, &err);
+    w.files = vfs::mount_game(root, opt.game_args, &err);  // mounted exactly as alamo_headless does
     if (!w.files) {
-        std::fprintf(stderr, "VFS: %s\n", err.c_str());
+        std::fprintf(stderr, "%s\n", err.c_str());
         return false;
     }
     const auto t0 = Clock::now();

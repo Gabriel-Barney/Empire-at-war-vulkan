@@ -126,12 +126,9 @@ std::unique_ptr<render::GalacticWorld> load_world(const GalOptions& opt) {
         std::fprintf(stderr, "--campaign %s needs --game <corruption dir> or ALAMO_FOC_DATA\n", opt.campaign.c_str());
         return nullptr;
     }
-    vfs::VfsConfig cfg;  // mounted exactly as alamo_headless does
-    cfg.foc_root = root;
-    vfs::parse_command_line(opt.game_args, cfg);
-    auto files = vfs::Vfs::create(cfg, &err);
+    auto files = vfs::mount_game(root, opt.game_args, &err);  // mounted exactly as alamo_headless does
     if (!files) {
-        std::fprintf(stderr, "VFS: %s\n", err.c_str());
+        std::fprintf(stderr, "%s\n", err.c_str());
         return nullptr;
     }
     const auto t0 = Clock::now();

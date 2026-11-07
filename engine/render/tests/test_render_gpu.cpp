@@ -2539,8 +2539,7 @@ int run_gpu(const std::string& src_dir) {
                             if (v.attachment_visible(a)) std::printf(" %s", lay->attach_model[a].c_str());
                         std::printf("\n");
                         auto lower_sorted = [](std::vector<std::string> x) {
-                            for (auto& s : x)
-                                for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                            for (auto& s : x) alamo::ascii_lower_in_place(s);
                             std::sort(x.begin(), x.end());
                             return x;
                         };
@@ -3097,8 +3096,7 @@ int run_gpu(const std::string& src_dir) {
                             const bool fow_was = scene.world().fow_enabled();
                             scene.set_fow_enabled(false);
                             for (const terrain::ResolvedPlacement& p : scene.placements().placements) {
-                                std::string tn = p.type_name;
-                                for (char& ch : tn) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+                                const std::string tn = alamo::ascii_upper(p.type_name);
                                 const Want* w = nullptr;
                                 for (const Want& x : wants)
                                     if (tn == x.type && std::string(ds.map) == x.map) w = &x;
@@ -3137,8 +3135,7 @@ int run_gpu(const std::string& src_dir) {
                                         c0 = std::min(c0, xx);
                                         c1 = std::max(c1, xx);
                                     }
-                                std::string name = std::string("render_space_") + tn + ".png";
-                                for (char& ch : name) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                                const std::string name = alamo::ascii_lower(std::string("render_space_") + tn + ".png");
                                 std::vector<uint8_t> prgba(pv, pv + npx * 4);
                                 for (size_t i = 3; i < prgba.size(); i += 4) prgba[i] = 255;
                                 CHECK(render::write_png_rgba(src_dir + "/logs/" + name, 1280, 720, prgba));
@@ -3183,9 +3180,7 @@ int run_gpu(const std::string& src_dir) {
                             // default pitch / yaw at distance 4500 so it lies inside the main far plane / fade range.
                             for (size_t pi = 0; pi < scene.placements().placements.size(); ++pi) {
                                 const terrain::ResolvedPlacement& p = scene.placements().placements[pi];
-                                std::string tn = p.type_name;
-                                for (char& ch : tn) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
-                                if (tn != "DEATH_STAR_CHUNKS") continue;
+                                if (alamo::ascii_upper(p.type_name) != "DEATH_STAR_CHUNKS") continue;
                                 bool in_main = false, in_bg = false;
                                 for (const render::Instance& s : scene.instances())
                                     in_main = in_main || std::memcmp(&s.transform, &p.transform, sizeof p.transform) == 0;

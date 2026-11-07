@@ -341,6 +341,27 @@ int main() {
         }
     }
 
+    // ================= CU2 t10: mount_game == foc_root + parse_command_line + create =================
+    {
+        std::string merr;
+        CHECK(alamo::vfs::mount_game(u8(T / "no such dir"), {}, &merr) == nullptr);
+        CHECK(merr.rfind("VFS: FoC root is not a directory", 0) == 0);
+        const std::vector<std::string> margs = {"MODPATH=Mods\\ModA", "FALLBACKPATH=", "unknown"};
+        VfsConfig mc;
+        mc.foc_root = u8(FOC);
+        alamo::vfs::parse_command_line(margs, mc);
+        auto ref = Vfs::create(mc, &err);
+        auto got = alamo::vfs::mount_game(u8(FOC), margs, &merr);
+        CHECK(ref != nullptr && got != nullptr);
+        if (ref && got) {
+            CHECK(got->mod_dirs() == ref->mod_dirs());
+            CHECK(got->eaw_root() == ref->eaw_root() && !got->eaw_root().empty());  // auto-detected sibling GameData
+            CHECK(got->mounts().size() == ref->mounts().size());
+        }
+        auto no_eaw = alamo::vfs::mount_game(u8(FOC), {}, &merr, std::string());
+        CHECK(no_eaw != nullptr && no_eaw->eaw_root().empty());
+    }
+
     // ================= Scenario 3: no EaW (eaw_root = "") and no MEGs =================
     {
         VfsConfig c3;

@@ -6,6 +6,7 @@
 #include <tuple>
 #include <utility>
 
+#include "alamo/core/hash.hpp"
 #include "alamo/materials/register_file.hpp"
 #include "alamo/materials/translated.hpp"
 #include "alamo/shaderxlat/bytecode.hpp"
@@ -16,13 +17,6 @@ namespace alamo::materials {
 
 namespace {
 
-std::string upper_ascii(std::string_view s) {
-    std::string r(s);
-    for (char& c : r)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return r;
-}
-
 // "Data\Art\Shaders\Terrain\TerrainBump.fxo" -> {"TERRAINBUMP", ".FXO"}.
 std::pair<std::string, std::string> split_name(std::string_view path) {
     const size_t slash = path.find_last_of("\\/");
@@ -30,10 +24,10 @@ std::pair<std::string, std::string> split_name(std::string_view path) {
     std::string ext;
     const size_t dot = path.find_last_of('.');
     if (dot != std::string_view::npos) {
-        ext = upper_ascii(path.substr(dot));
+        ext = ascii_upper(path.substr(dot));
         path = path.substr(0, dot);
     }
-    return {upper_ascii(path), ext};
+    return {ascii_upper(path), ext};
 }
 
 bool translate_only(const std::vector<uint8_t>& bytecode, const shaderxlat::TranslateOptions& options, std::string* err) {
@@ -93,10 +87,7 @@ size_t EffectAudit::count(ShaderIssueKind k) const {
 }
 
 std::string shader_path_key(std::string_view path) {
-    std::string r = upper_ascii(path);
-    for (char& c : r)
-        if (c == '/') c = '\\';
-    return r;
+    return alamo::normalize_name(path);  // upper case, '/' -> '\\'
 }
 
 std::vector<ShaderIssue> effect_load_issues(const EffectLibrary& lib, std::string_view effect, const MaterialEffect& m,

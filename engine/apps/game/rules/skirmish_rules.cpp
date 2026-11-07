@@ -2,9 +2,9 @@
 #include "alamo/game/skirmish_rules.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cstddef>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/galactic/galactic_rules.hpp"
@@ -16,24 +16,6 @@
 namespace alamo::game {
 
 namespace {
-
-std::string upper(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return s;
-}
-
-bool iequal(std::string_view a, std::string_view b) {
-    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
-               return std::toupper(static_cast<unsigned char>(x)) == std::toupper(static_cast<unsigned char>(y));
-           });
-}
-
-std::string_view trim(std::string_view s) {
-    const auto ws = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
-    while (!s.empty() && ws(s.front())) s.remove_prefix(1);
-    while (!s.empty() && ws(s.back())) s.remove_suffix(1);
-    return s;
-}
 
 // Comma / whitespace separated names (the list/string field form).
 std::vector<std::string> split_names(std::string_view v) {
@@ -96,15 +78,15 @@ SkirmishForceTable load_skirmish_forces(const FileProvider& files) {
         const data::XmlDocument doc = data::XmlDocument::parse(bytes, "FactionFiles.xml");
         if (!doc.ok()) return out;
         for (const data::XmlNode n : doc.root().children())
-            if (iequal(n.name(), "File")) list.emplace_back(n.text_trimmed());
+            if (ascii_iequals(n.name(), "File")) list.emplace_back(n.text_trimmed());
     }
     for (const std::string& f : list) {
         if (!files.read("Data\\XML\\" + f, bytes)) continue;
         const data::XmlDocument doc = data::XmlDocument::parse(bytes, f);
         if (!doc.ok()) continue;
         for (const data::XmlNode n : doc.root().children()) {
-            if (!iequal(n.name(), "Faction")) continue;
-            const std::string key = upper(std::string(trim(n.attribute("Name", ""))));
+            if (!ascii_iequals(n.name(), "Faction")) continue;
+            const std::string key = ascii_upper(ascii_trim(n.attribute("Name", "")));
             if (key.empty()) continue;
             std::vector<std::string> space = split_names(n.child_text("Space_Skirmish_AI_Default_Forces"));
             std::vector<std::string> land = split_names(n.child_text("Land_Skirmish_AI_Default_Forces"));
@@ -120,11 +102,11 @@ SkirmishForceTable load_skirmish_forces(const FileProvider& files) {
 #ifdef ALAMO_GAME_RULES_HAVE_AI
 std::string resolve_ai_type(const std::string& faction, const std::map<std::string, std::string>& basic_ai,
                             const std::vector<std::string>* campaign_control, const ai::AiDefinitions* defs) {
-    const auto it = basic_ai.find(upper(std::string(trim(faction))));
+    const auto it = basic_ai.find(ascii_upper(ascii_trim(faction)));
     if (it == basic_ai.end()) return {};
     std::string t = campaign_control ? ai::campaign_ai_type(*campaign_control, basic_ai, faction, false)
-                                                       : std::string(trim(it->second));
-    if (iequal(t, "Human")) t.clear();
+                                                       : std::string(ascii_trim(it->second));
+    if (ascii_iequals(t, "Human")) t.clear();
     if (!t.empty() && defs && !defs->find_player(t)) t.clear();  // "Unrecognized AI player type": no AI
     return t;
 }
@@ -156,7 +138,7 @@ std::vector<uint32_t> skirmish_data_force_types(const SkirmishForceData& d, cons
         const galactic::UnitKind k = rules.types[t].kind;
         return land ? k == galactic::UnitKind::GroundUnit : k == galactic::UnitKind::SpaceUnit || k == galactic::UnitKind::Squadron;
     };
-    if (const auto it = d.forces.find(upper(std::string(trim(faction)))); it != d.forces.end())
+    if (const auto it = d.forces.find(ascii_upper(ascii_trim(faction))); it != d.forces.end())
         for (const std::string& n : land ? it->second.land : it->second.space) {
             const uint32_t t = rules.find_type(n);
             if (t != galactic::kNoIndex && fits(t)) list.push_back(t);
@@ -205,7 +187,7 @@ std::vector<uint32_t> skirmish_buy_list(const galactic::GalacticRules& rules, co
         in_mp_list.assign(n, 0);
         for (uint32_t t = 0; t < n; ++t)
             for (const std::string_view tok : types.get_list(t, "Tactical_Buildable_Objects_Multiplayer")) {
-                const objects::TypeIndex x = types.resolve_name(trim(tok));  // faction row headers resolve to no type
+                const objects::TypeIndex x = types.resolve_name(ascii_trim(tok));  // faction row headers resolve to no type
                 if (x != objects::kNone && x < n) in_mp_list[x] = 1;
             }
     }
@@ -230,7 +212,7 @@ std::string skirmish_map_planet_type(const galactic::GalacticRules& rules, std::
     std::string stem(map);
     if (const size_t s = stem.find_last_of("\\/"); s != std::string::npos) stem = stem.substr(s + 1);
     if (const size_t dot = stem.find_last_of('.'); dot != std::string::npos) stem = stem.substr(0, dot);
-    stem = upper(stem);
+    ascii_upper_in_place(stem);
     for (const std::string_view prefix : {std::string_view("_MP_SPACE_"), std::string_view("_MP_LAND_")}) {
         if (stem.size() <= prefix.size() || stem.compare(0, prefix.size(), prefix) != 0) continue;
         const uint32_t t = rules.find_type(std::string_view(stem).substr(prefix.size()));

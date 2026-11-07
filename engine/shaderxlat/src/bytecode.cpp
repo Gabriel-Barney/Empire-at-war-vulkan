@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "alamo/core/ascii.hpp"
+
 namespace alamo::shaderxlat {
 
 namespace {
@@ -649,8 +651,7 @@ std::string disassemble(const Program& p, const Instr& in) {
         if (in.dst.type == reg::kSampler) {
             name = in.tex_dim == TextureDim::Cube ? "dcl_cube" : in.tex_dim == TextureDim::Volume ? "dcl_volume" : "dcl_2d";
         } else if (p.is_vs() || p.major >= 3) {
-            std::string u = usage_name(in.usage);
-            for (char& c : u) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+            const std::string u = ascii_lower(usage_name(in.usage));
             name = "dcl_" + u + (in.usage_index ? std::to_string(in.usage_index) : std::string());
         }
     }

@@ -97,13 +97,6 @@ bool finite(float f) { return std::isfinite(f); }
 
 float length3(const Vec3& v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
 
-std::string upper_ascii(std::string_view s) {
-    std::string u(s);
-    for (char& c : u)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return u;
-}
-
 }  // namespace
 
 // ------------------------------------------------------------------------------------------- types
@@ -243,12 +236,12 @@ void SnapshotTypeTable::build(const GameObjectTypes& types, objects::ModeKind mo
     }
     by_name_.clear();
     by_name_.reserve(info_.size());
-    for (TypeIndex t = 0; t < info_.size(); ++t) by_name_.emplace_back(upper_ascii(info_[t].name), t);
+    for (TypeIndex t = 0; t < info_.size(); ++t) by_name_.emplace_back(ascii_upper(info_[t].name), t);
     std::stable_sort(by_name_.begin(), by_name_.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 }
 
 TypeIndex SnapshotTypeTable::find(std::string_view name) const {
-    const std::string key = upper_ascii(name);
+    const std::string key = ascii_upper(name);
     const auto it = std::lower_bound(by_name_.begin(), by_name_.end(), key, [](const auto& e, const std::string& k) { return e.first < k; });
     return it != by_name_.end() && it->first == key ? it->second : objects::kNone;
 }

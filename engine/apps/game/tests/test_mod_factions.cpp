@@ -8,7 +8,6 @@
 //   * with ALAMO_FOC_DATA: the shipped factions start from their Space_ / Land_Skirmish_AI_Default_Forces and the shipped
 //     campaigns' AI_Player_Control pairs are read, as retail (modc t17).
 #include <algorithm>
-#include <cctype>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -17,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/game/game_data.hpp"
 
 using namespace alamo;
@@ -34,11 +34,6 @@ static int g_fail = 0;
 namespace {
 
 using Names = std::vector<std::string>;
-
-std::string upper(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return s;
-}
 
 // A moving hyperspace ship / a ground company / a squadron of `faction` costing `cost`, plus `extra` tags.
 std::string ship(const char* name, const char* faction, int cost, const std::string& extra = "", int tech = 1, int speed = 2) {
@@ -387,7 +382,7 @@ void test_shipped_data() {
     CHECK(!d.mod_layer);
     for (const galactic::FactionRules& f : d.rules.factions) {
         if (!f.is_playable) continue;
-        const auto it = d.skirmish_forces.find(upper(f.name));
+        const auto it = d.skirmish_forces.find(ascii_upper(f.name));
         CHECK(it != d.skirmish_forces.end());
         if (it == d.skirmish_forces.end()) continue;
         const Names fleet = game::default_skirmish_fleet(d, f.name), ground = game::default_skirmish_ground(d, f.name);
@@ -416,7 +411,7 @@ void test_shipped_data() {
     for (const galactic::FactionRules& f : d.rules.factions) {
         CHECK(game::resolve_ai_type(f.name, d.basic_ai, nullptr, defs) == old_table(f.name));
         for (const data::CampaignDef& c : d.db.campaigns()) {
-            std::string want = d.basic_ai.count(upper(f.name)) ? ai::campaign_ai_type(c.ai_player_control, d.basic_ai, f.name, false) : std::string();
+            std::string want = d.basic_ai.count(ascii_upper(f.name)) ? ai::campaign_ai_type(c.ai_player_control, d.basic_ai, f.name, false) : std::string();
             if (defs && !want.empty() && !defs->find_player(want)) want.clear();
             if (game::resolve_ai_type(f.name, d.basic_ai, &c.ai_player_control, defs) != want) {
                 std::printf("FAIL campaign %s faction %s\n", c.name.c_str(), f.name.c_str());

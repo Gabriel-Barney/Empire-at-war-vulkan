@@ -14,13 +14,6 @@ namespace alamo::ui {
 
 namespace {
 
-std::string upper(std::string_view s) {
-    std::string o(s);
-    for (char& c : o)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return o;
-}
-
 std::vector<std::string> names(std::string_view text) {
     std::vector<std::string> out;
     for (std::string_view t : data::split_list(text)) out.emplace_back(t);
@@ -150,7 +143,7 @@ uint32_t rd32(const uint8_t* p) {
 }  // namespace
 
 std::string_view CommandBarComponent::raw_value(std::string_view tag) const {
-    const auto it = raw.find(upper(tag));
+    const auto it = raw.find(ascii_upper(tag));
     return it == raw.end() ? std::string_view{} : std::string_view(it->second);
 }
 
@@ -165,12 +158,12 @@ size_t ComponentTable::parse(const data::XmlNode& root) {
         CommandBarComponent c;
         c.name = std::string(name);
         for (data::XmlNode f : e.children()) {
-            const std::string tag = upper(f.name());
+            const std::string tag = ascii_upper(f.name());
             const std::string_view text = f.text_trimmed();
             c.raw[tag] = std::string(text);
             apply_field(c, tag, text);
         }
-        const std::string key = upper(c.name);
+        const std::string key = ascii_upper(c.name);
         const auto it = index_.find(key);
         if (it != index_.end()) {
             items_[it->second] = std::move(c);
@@ -214,7 +207,7 @@ bool ComponentTable::load(const FileProvider& files, std::string* error) {
 }
 
 int32_t ComponentTable::find(std::string_view name) const {
-    const auto it = index_.find(upper(data::trim(name)));
+    const auto it = index_.find(ascii_upper(data::trim(name)));
     return it == index_.end() ? -1 : static_cast<int32_t>(it->second);
 }
 
@@ -248,7 +241,7 @@ std::string atlas_key(std::string_view n) {
     if (slash != std::string_view::npos) n = n.substr(slash + 1);
     const size_t dot = n.find('.');
     if (dot != std::string_view::npos) n = n.substr(0, dot);
-    return upper(n);
+    return ascii_upper(n);
 }
 
 bool TextureAtlas::parse(std::span<const uint8_t> bytes, std::string* error) {
@@ -495,12 +488,12 @@ std::u16string pseudo_localize(std::u16string_view s) {
 }
 
 std::string master_text_path(std::string_view language) {
-    return "Data\\Text\\MasterTextFile_" + upper(language) + ".DAT";
+    return "Data\\Text\\MasterTextFile_" + ascii_upper(language) + ".DAT";
 }
 
 bool load_master_text(const FileProvider& files, std::string_view language, TextDatabase& out, std::string* log) {
     std::vector<uint8_t> bytes;
-    std::string lang = upper(language.empty() ? std::string_view("ENGLISH") : language);
+    std::string lang = ascii_upper(language.empty() ? std::string_view("ENGLISH") : language);
     if (!files.read(master_text_path(lang), bytes)) {
         if (log) *log += "No " + lang + " MasterTextFile exists. Falling back to ENGLISH\n";
         lang = "ENGLISH";
@@ -619,13 +612,13 @@ void HudLayout::update(const HudCanvas& canvas, const ComponentTable& table) {
     std::map<std::string, std::pair<uint32_t, const ShellBone*>> bone_index;  // lookup only
     for (const auto& [idx, shell] : shells_) {
         if (idx >= table.size() || !shell.active) continue;
-        for (const ShellBone& b : shell.bones) bone_index.emplace(upper(b.name), std::make_pair(idx, &b));
+        for (const ShellBone& b : shell.bones) bone_index.emplace(ascii_upper(b.name), std::make_pair(idx, &b));
     }
     for (uint32_t i = 0; i < table.size(); ++i) {
         ComponentPlacement& p = placements_[i];
         const CommandBarComponent& c = table[i];
         if (c.type == ComponentType::Shell) continue;
-        const auto it = c.no_shell ? bone_index.end() : bone_index.find(upper(c.name));
+        const auto it = c.no_shell ? bone_index.end() : bone_index.find(ascii_upper(c.name));
         if (it != bone_index.end()) {
             const Vec2f off = shells_[it->second.first].offset;
             const ShellBone& b = *it->second.second;

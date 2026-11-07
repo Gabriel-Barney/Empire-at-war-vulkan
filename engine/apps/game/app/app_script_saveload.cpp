@@ -70,7 +70,7 @@ bool stop(App& a, const std::string& step, const std::string& why) {
 
 bool top_is(App& a, std::string_view dialog) {
     const ui::GuiDialog* d = a.ui_.gui.top();
-    return d && iequal(d->name(), dialog);
+    return d && ascii_iequals(d->name(), dialog);
 }
 const ui::GuiControl* control(App& a, std::string_view dialog, std::string_view id) {
     ui::GuiDialog* d = a.ui_.gui.find(dialog);
@@ -222,7 +222,7 @@ void select_save(std::vector<ScriptStep>& s, const char* dialog, const char* nam
     s.push_back(step_wait(std::string(name) + " selected", [dialog, name](App& a) {
         const ui::GuiControl* c = control(a, dialog, kList);
         if (!c || c->selected != list_row(a, dialog, name)) return stop(a, dialog, std::string("selection is not on ") + name);
-        if (iequal(dialog, kSave)) {  // the Save dialog puts the selected save's name into the name field
+        if (ascii_iequals(dialog, kSave)) {  // the Save dialog puts the selected save's name into the name field
             const ui::GuiControl* e = control(a, kSave, kEdit);
             if (!e || e->text != ui::utf8_to_utf32(name)) fail(a, "Save dialog", std::string("selecting ") + name + " did not put its name in the name field");
         }

@@ -565,13 +565,10 @@ int main(int argc, char** argv) {
     // ---- data (before the window, so a bad path fails fast)
     std::unique_ptr<vfs::Vfs> files;
     if (!opt.clear) {
-        vfs::VfsConfig cfg;  // mounted exactly as alamo_headless does
-        cfg.foc_root = opt.game;
-        vfs::parse_command_line(opt.game_args, cfg);
         std::string err;
-        files = vfs::Vfs::create(cfg, &err);
+        files = vfs::mount_game(opt.game, opt.game_args, &err);  // mounted exactly as alamo_headless does
         if (!files) {
-            std::fprintf(stderr, "VFS: %s\n", err.c_str());
+            std::fprintf(stderr, "%s\n", err.c_str());
             return 1;
         }
         std::printf("VFS: %zu MEGs mounted, EaW root '%s'\n", files->mounts().size(), files->eaw_root().c_str());

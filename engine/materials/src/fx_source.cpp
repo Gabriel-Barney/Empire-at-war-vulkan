@@ -5,14 +5,11 @@
 #include "alamo/materials/fx_source.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
-#include <functional>
 #include <set>
-#include <thread>
 
+#include "alamo/core/atomic_file.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
 
@@ -129,35 +126,11 @@ std::string getenv_str(const char* n) {
     return (r > 0 && r < sizeof(buf)) ? std::string(buf, r) : std::string();
 }
 
-bool read_file(const std::filesystem::path& path, std::vector<uint8_t>& out) {
-    out.clear();
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return false;
-    LARGE_INTEGER size{};
-    bool ok = GetFileSizeEx(h, &size) && size.QuadPart >= 16 && static_cast<uint64_t>(size.QuadPart) <= kMaxFile;
-    if (ok) {
-        out.resize(static_cast<size_t>(size.QuadPart));
-        DWORD got = 0;
-        ok = ReadFile(h, out.data(), static_cast<DWORD>(out.size()), &got, nullptr) && got == out.size();
-    }
-    CloseHandle(h);
-    return ok;
-}
-
-bool replace_file(const std::filesystem::path& from, const std::filesystem::path& to) {
-    for (int attempt = 0; attempt < 16; ++attempt) {
-        if (MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING)) return true;
-        Sleep(1);  // another process may hold the target open briefly
-    }
-    return false;
-}
-
 }  // namespace
 
 std::string FxSource::key() const {
     // Length-prefixed fields, so ("ab","c") and ("a","bc") differ.
-    uint64_t a = 0xcbf29ce484222325ull, b = 0x84222325cbf29ce4ull;
+    uint64_t a = alamo::kFnv1a64Offset, b = 0x84222325cbf29ce4ull;  // b: a second, independent seed
     auto field = [&](const void* p, size_t n) {
         const uint64_t len = n;
         a = alamo::fnv1a64(&len, sizeof len, a);
@@ -237,7 +210,10 @@ std::filesystem::path FxCache::default_directory() {
 bool FxCache::load(const std::string& key, FxCacheEntry& out) const {
     out = FxCacheEntry{};
     std::vector<uint8_t> b;
-    if (key.empty() || !read_file(alamo::long_path(dir_ / (key + ".afx")), b) || b.size() < 24) return false;
+    // read_host_file opens with FILE_SHARE_DELETE (never blocks a concurrent replace) and applies long_path.
+    // The old local reader also rejected files under 16 bytes; the 24-byte check below covers that.
+    if (key.empty() || !alamo::read_host_file(dir_ / (key + ".afx"), b) || b.size() < 24 || b.size() > kMaxFile)
+        return false;
     const uint64_t want = alamo::fnv1a64(b.data(), b.size() - 8);
     uint64_t got = 0;
     for (int i = 0; i < 8; ++i) got |= static_cast<uint64_t>(b[b.size() - 8 + static_cast<size_t>(i)]) << (8 * i);
@@ -272,28 +248,14 @@ bool FxCache::store(const std::string& key, const FxCacheEntry& entry) const {
     const uint64_t sum = alamo::fnv1a64(b.data(), b.size());
     for (int i = 0; i < 8; ++i) b.push_back(static_cast<uint8_t>(sum >> (8 * i)));
 
-    static std::atomic<uint64_t> counter{0};
-    const uint64_t tid = std::hash<std::thread::id>{}(std::this_thread::get_id());
-    char suffix[96];
-    std::snprintf(suffix, sizeof(suffix), ".tmp.%lu.%llx.%llu", static_cast<unsigned long>(GetCurrentProcessId()),
-                  static_cast<unsigned long long>(tid), static_cast<unsigned long long>(counter.fetch_add(1)));
-    const std::filesystem::path final_path = dir / (key + ".afx");
-    const std::filesystem::path tmp = dir / (key + ".afx" + suffix);
-    {
-        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-        if (!f) return false;
-        f.write(reinterpret_cast<const char*>(b.data()), static_cast<std::streamsize>(b.size()));
-        if (!f) {
-            f.close();
-            std::filesystem::remove(tmp, ec);
-            return false;
-        }
+    const alamo::AtomicWriteResult r = alamo::write_file_atomic(dir / (key + ".afx"), b);  // 16 tries, 1 ms apart
+    if (r == alamo::AtomicWriteResult::ReplaceFailed) {
+        // Lost a race against another writer of the same key (CU2 t11: same policy as ShaderCache; this
+        // returned false before). The key covers every source byte, so the other entry is equivalent.
+        FxCacheEntry other;
+        return load(key, other);
     }
-    if (!replace_file(tmp, final_path)) {
-        std::filesystem::remove(tmp, ec);
-        return false;
-    }
-    return true;
+    return r == alamo::AtomicWriteResult::Ok;
 }
 
 }  // namespace alamo::materials

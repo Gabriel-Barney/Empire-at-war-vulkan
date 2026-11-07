@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/terrain/ted.hpp"
 
@@ -849,10 +850,7 @@ bool parse_ted(std::span<const uint8_t> bytes, MapData& out, std::string* error,
 
 std::string map_path(std::string_view name) {
     std::string n(name);
-    std::string up = n;
-    for (char& ch : up)
-        if (ch >= 'a' && ch <= 'z') ch = static_cast<char>(ch - 'a' + 'A');
-    const bool has_ext = up.size() > 4 && up.compare(up.size() - 4, 4, ".TED") == 0;
+    const bool has_ext = n.size() > 4 && ascii_iends_with(n, ".TED");
     if (!has_ext) n += ".TED";
     if (n.find_first_of("\\/") == std::string::npos) n = "DATA\\ART\\MAPS\\" + n;
     return alamo::normalize_path(n);

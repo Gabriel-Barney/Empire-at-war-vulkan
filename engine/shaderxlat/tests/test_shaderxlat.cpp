@@ -727,7 +727,7 @@ void test_cache(bool deep) {
     size_t tmp = 0;
     std::error_code lec;
     for (const auto& de : alamo::list_directory(dir, lec))
-        if (de.string().find(".tmp.") != std::string::npos) ++tmp;
+        if (de.extension() == ".tmp") ++tmp;  // write_file_atomic temp names end in .tmp
     CHECK(!lec);
     CHECK(tmp == 0);
     std::printf("  concurrent stores (8 threads): %d failures, %zu leftover temp files\n", failures.load(), tmp);
@@ -756,7 +756,7 @@ void test_cache(bool deep) {
             }
         size_t tmp2 = 0;
         for (const auto& de : alamo::list_directory(dir, lec))
-            if (de.string().find(".tmp.") != std::string::npos) ++tmp2;
+            if (de.extension() == ".tmp") ++tmp2;
         std::printf("  4 writer processes: %d failed, %d/240 entries readable, shared entry ok: %s, %zu temp files\n", rc_bad.load(),
                     found, cache.load(k, got) && got.spirv == e.spirv ? "yes" : "no", tmp2);
         CHECK(rc_bad.load() == 0 && found == 240 && tmp2 == 0);

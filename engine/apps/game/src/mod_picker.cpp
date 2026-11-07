@@ -8,6 +8,7 @@
 #include <iterator>
 #include <set>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/game/mod_check.hpp"
 #include "alamo/vfs/steam_workshop.hpp"
 
@@ -29,15 +30,6 @@ std::vector<fs::path> mod_folders(const fs::path& dir, bool digits_only) {
     }
     std::sort(out.begin(), out.end(), [](const fs::path& a, const fs::path& b) { return a.filename().string() < b.filename().string(); });
     return out;
-}
-
-bool ieq_prefix(std::string_view s, std::string_view p) {
-    if (s.size() < p.size()) return false;
-    for (size_t i = 0; i < p.size(); ++i) {
-        const char a = s[i] >= 'a' && s[i] <= 'z' ? static_cast<char>(s[i] - 32) : s[i];
-        if (a != p[i]) return false;
-    }
-    return true;
 }
 
 void append_utf8(std::string& out, uint32_t cp) {
@@ -188,7 +180,7 @@ std::vector<InstalledMod> list_installed_mods(const std::string& game, std::span
     return out;
 }
 
-bool is_mod_arg(std::string_view arg) { return ieq_prefix(arg, "MODPATH=") || ieq_prefix(arg, "STEAMMOD="); }
+bool is_mod_arg(std::string_view arg) { return ascii_istarts_with(arg, "MODPATH=") || ascii_istarts_with(arg, "STEAMMOD="); }
 
 std::vector<std::string> relaunch_args(std::span<const std::string> args, std::span<const std::string> mod_args) {
     std::vector<std::string> out;

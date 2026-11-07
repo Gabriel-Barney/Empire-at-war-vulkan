@@ -10,6 +10,7 @@
 #include <set>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/hash.hpp"
 
 #include <windows.h>
 
@@ -25,12 +26,6 @@ std::string getenv_str(const char* n) {
 
 std::wstring quoted(const std::filesystem::path& p) {
     return L"\"" + p.wstring() + L"\"";
-}
-
-std::string upper_ascii(std::string s) {
-    for (char& c : s)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return s;
 }
 
 // Runs `cmd` with stdout + stderr going to `log`; the exit code, or -1 when it cannot start / times out.
@@ -65,11 +60,7 @@ int run_process(const std::wstring& cmd, const std::filesystem::path& cwd, const
 }
 
 // Upper case, '/' -> '\\' (the same length as the input).
-std::string fold_path(std::string s) {
-    for (char& c : s)
-        if (c == '/') c = '\\';
-    return upper_ascii(std::move(s));
-}
+std::string fold_path(std::string_view s) { return alamo::normalize_name(s); }
 
 // Removes every occurrence of folder `prefix` (case and separator insensitive) from `s` (temporary folder
 // names in fxc's log).
@@ -177,7 +168,7 @@ bool compile_fx_source(const FxSource& src, const std::filesystem::path& fxc, Fx
 std::vector<std::string> fx_source_paths(const EffectLibrary& lib, std::span<const ShaderFileEntry> shader_files) {
     std::set<std::string> names;  // upper-case base names that have some .fx
     for (const ShaderFileEntry& f : shader_files) {
-        const std::string up = upper_ascii(f.path);
+        const std::string up = ascii_upper(f.path);
         if (up.size() < 4 || up.compare(up.size() - 3, 3, ".FX") != 0) continue;
         const size_t slash = up.find_last_of("\\/");
         names.insert(up.substr(slash == std::string::npos ? 0 : slash + 1));

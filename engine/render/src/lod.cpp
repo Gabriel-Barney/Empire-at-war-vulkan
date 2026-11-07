@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 
+#include "alamo/core/ascii.hpp"
+
 namespace alamo::render {
 
 int max_lod(std::span<const assets::MeshInfo> meshes) {
@@ -20,37 +22,18 @@ int choose_lod(int max_lod_index, float detail) {
 
 int mesh_alt_index(std::string_view n) {
     for (size_t i = 0; i + 5 <= n.size(); ++i) {
-        if (n[i] == '_' && std::toupper(static_cast<unsigned char>(n[i + 1])) == 'A' &&
-            std::toupper(static_cast<unsigned char>(n[i + 2])) == 'L' &&
-            std::toupper(static_cast<unsigned char>(n[i + 3])) == 'T' && std::isdigit(static_cast<unsigned char>(n[i + 4])))
+        if (n[i] == '_' && ascii_to_upper(n[i + 1]) == 'A' && ascii_to_upper(n[i + 2]) == 'L' &&
+            ascii_to_upper(n[i + 3]) == 'T' && std::isdigit(static_cast<unsigned char>(n[i + 4])))
             return n[i + 4] - '0';
     }
     return -1;
 }
 
-namespace {
-// Case-insensitive substring; `w` upper-case.
-bool contains_upper(std::string_view n, std::string_view w) {
-    for (size_t i = 0; i + w.size() <= n.size(); ++i) {
-        bool eq = true;
-        for (size_t j = 0; j < w.size() && eq; ++j) eq = std::toupper(static_cast<unsigned char>(n[i + j])) == w[j];
-        if (eq) return true;
-    }
-    return false;
-}
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) return false;
-    return true;
-}
-}  // namespace
-
 bool is_state_mesh(std::string_view n) {
-    return contains_upper(n, "STEALTH") || contains_upper(n, "BUILDUP") || contains_upper(n, "CHARGED");
+    return ascii_icontains(n, "STEALTH") || ascii_icontains(n, "BUILDUP") || ascii_icontains(n, "CHARGED");
 }
 
-bool fallback_damage_decal_rule(std::string_view n) { return contains_upper(n, "_BLAST"); }
+bool fallback_damage_decal_rule(std::string_view n) { return ascii_icontains(n, "_BLAST"); }
 
 bool default_hidden_mesh_rule(std::string_view n) { return fallback_damage_decal_rule(n) || is_state_mesh(n); }
 
@@ -59,7 +42,7 @@ std::vector<uint8_t> hidden_mesh_mask(const assets::ModelAsset& model, std::span
     for (size_t i = 0; i < model.meshes.size(); ++i) {
         const std::string& n = model.meshes[i].name;
         bool h = model.meshes[i].hidden || is_state_mesh(n);
-        for (const std::string& d : decals) h = h || iequal(n, d);
+        for (const std::string& d : decals) h = h || ascii_iequals(n, d);
         mask[i] = h ? 1 : 0;
     }
     return mask;
@@ -76,7 +59,7 @@ uint32_t set_hardpoint_destroyed(std::vector<uint8_t>& mask, const assets::Model
     uint32_t changed = 0;
     if (mask.size() < model.meshes.size()) mask.resize(model.meshes.size(), 0);
     for (size_t i = 0; i < model.meshes.size(); ++i) {
-        if (decal.empty() || !iequal(model.meshes[i].name, decal)) continue;
+        if (decal.empty() || !ascii_iequals(model.meshes[i].name, decal)) continue;
         const uint8_t v = destroyed ? 0 : 1;
         changed += mask[i] != v ? 1u : 0u;
         mask[i] = v;

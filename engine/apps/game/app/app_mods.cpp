@@ -6,20 +6,11 @@
 // parent, as the report says) and quits, since the data, text and GUI are loaded once per process.
 #include "game_app.hpp"
 #include "game_display.hpp"
+#include "alamo/core/hash.hpp"  // normalize_name
 #include "alamo/vfs/steam_workshop.hpp"
 
 namespace alamo_game_app {
 namespace {
-
-// A mod argument's value compared as a folder: '/' == '\\', any case.
-std::string arg_key(std::string_view a) {
-    std::string k(a);
-    for (char& c : k) {
-        if (c == '/') c = '\\';
-        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    }
-    return k;
-}
 
 std::vector<std::string> mod_args_of(const std::vector<std::string>& args) {
     std::vector<std::string> out;
@@ -36,7 +27,8 @@ void App::init_mod_picker(ui::MenuProviders& mp) {
     std::printf("mods: %zu installed (%zu Steam libraries)\n", installed_mods_.size(), workshop_libraries_.size());
     // The active row: the first mod argument of this run (a stacked submod comes first), else the base game.
     const std::vector<std::string> active = mod_args_of(opt_.game_args);
-    const std::string active_key = active.empty() ? std::string() : arg_key(active.front());
+    // A mod argument's value compared as a folder: '/' == '\\', any case (normalize_name).
+    const std::string active_key = active.empty() ? std::string() : normalize_name(active.front());
     mp.mods = [this, active_key] {
         // Labels: the mod's name and where it is installed; the id (workshop item / folder) only when two mods share a
         // name (several Thrawn's Revenge versions) - the report's "Starts with:" line names it for every row.
@@ -54,7 +46,7 @@ void App::init_mod_picker(ui::MenuProviders& mp) {
             if (m.name != m.id && names[m.name] > 1) label += "  [" + m.id + "]";
             label += m.workshop ? "  (Workshop)" : "  (Mods)";
             e.label = ui::utf8_to_utf32(label);
-            e.active = !active_key.empty() && arg_key(m.arg) == active_key;
+            e.active = !active_key.empty() && normalize_name(m.arg) == active_key;
             rows.push_back(std::move(e));
         }
         return rows;

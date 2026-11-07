@@ -137,7 +137,7 @@ bool App::init() {
         ui::SkirmishPreview pv;
         const size_t slash = m.map.find_last_of(std::string_view("\\/"));
         std::string stem = m.map.substr(slash == std::string::npos ? 0 : slash + 1);
-        if (stem.size() > 4 && iequal(stem.substr(stem.size() - 4), ".ted")) stem.resize(stem.size() - 4);
+        if (stem.size() > 4 && ascii_iequals(stem.substr(stem.size() - 4), ".ted")) stem.resize(stem.size() - 4);
         SkirmishMapPreview file;
         if (data_.files) file = read_skirmish_map_preview(*data_.files, m.map, m.space);
         if (data_.files)

@@ -15,13 +15,6 @@
 namespace alamo::materials {
 namespace {
 
-std::string upper(std::string_view s) {
-    std::string o(s);
-    for (char& c : o)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return o;
-}
-
 struct PhaseInfo { RenderPhase p; const char* name; const char* file; };
 constexpr PhaseInfo kPhases[] = {
     {RenderPhase::Opaque, "Opaque", "Data\\Art\\Shaders\\Engine\\PhaseOpaque.fxo"},
@@ -49,14 +42,10 @@ uint32_t blob_id(std::span<const uint8_t> b) {
     return register_program_id(alamo::fnv1a64(b.data(), b.size()));
 }
 
-bool contains_ci(std::string_view hay, std::string_view needle) {
-    return upper(hay).find(upper(needle)) != std::string::npos;
-}
-
 // Lookup that answers LIGHT_SCALE with a fixed value (fade probing) and nothing else.
 ParamLookup light_scale_lookup(float w) {
     return [w](const fx::Parameter& p, std::span<float> out) {
-        if (upper(p.type.semantic) != "LIGHT_SCALE" || out.size() < 4) return false;
+        if (!ascii_iequals(p.type.semantic, "LIGHT_SCALE") || out.size() < 4) return false;
         out[0] = out[1] = out[2] = 1.0f;
         out[3] = w;
         return true;
@@ -73,9 +62,8 @@ int eval_state_int(const fx::Effect& e, const fx::State& s, const ParamLookup& l
 }  // namespace
 
 RenderPhase render_phase_from_name(std::string_view s) {
-    const std::string u = upper(s);
     for (const auto& p : kPhases)
-        if (u == upper(p.name)) return p.p;
+        if (ascii_iequals(s, p.name)) return p.p;
     return RenderPhase::None;
 }
 const char* render_phase_name(RenderPhase p) {
@@ -90,13 +78,13 @@ const char* phase_effect_file(RenderPhase p) {
 }
 
 TechniqueLod technique_lod_from_string(std::string_view lod, std::string_view name) {
-    const std::string u = upper(lod);
+    const std::string u = ascii_upper(lod);
     if (u == "DX9") return TechniqueLod::DX9;
     if (u == "DX8ATI") return TechniqueLod::DX8ATI;
     if (u == "DX8") return TechniqueLod::DX8;
     if (u == "FIXEDFUNCTION") return TechniqueLod::FixedFunction;
     if (u == "FF") return TechniqueLod::FF;
-    if (upper(name) == "MAX_VIEWPORT") return TechniqueLod::MaxViewport;
+    if (ascii_iequals(name, "MAX_VIEWPORT")) return TechniqueLod::MaxViewport;
     return TechniqueLod::Unknown;
 }
 int pick_best_technique(const fx::Effect& e) {
@@ -136,11 +124,11 @@ ResolvedPass resolve_pass(const fx::Effect& e, int technique, int pass_index, co
         const fx::StateClass c = fx::stateInfo(s.operation).cls;
         if (c != fx::StateClass::Sampler && c != fx::StateClass::SetSampler) only_samplers = false;
     }
-    r.restore_only = pass_index > 0 && (only_samplers || contains_ci(pass.name, "cleanup"));
+    r.restore_only = pass_index > 0 && (only_samplers || ascii_icontains(pass.name, "cleanup"));
     // RENDER.md 2.1: a pass annotated AlamoCleanup = true is excluded from the draw passes; the
     // annotation, when present, overrides the heuristic.
     for (const auto& a : pass.annotations)
-        if (upper(a.type.name) == "ALAMOCLEANUP" && !a.value.words.empty()) r.restore_only = a.value.words[0] != 0;
+        if (ascii_iequals(a.type.name, "ALAMOCLEANUP") && !a.value.words.empty()) r.restore_only = a.value.words[0] != 0;
     r.fixed_function = !st.has_vertex_shader && !st.has_pixel_shader;
     const bool mixed = st.has_vertex_shader != st.has_pixel_shader;
 
@@ -360,7 +348,7 @@ std::string effect_base_name(std::string_view n) {
     if (slash != std::string_view::npos) n = n.substr(slash + 1);
     const size_t dot = n.find_last_of('.');
     if (dot != std::string_view::npos) n = n.substr(0, dot);
-    return upper(n);
+    return ascii_upper(n);
 }
 
 EffectRemap normalize_remap(const EffectRemap& in) {
@@ -394,14 +382,8 @@ void EffectLibrary::set_missing_effect_remap(EffectRemap remap) {
 bool host_path_under(std::string_view host, std::string_view dir) {
     while (!dir.empty() && (dir.back() == '\\' || dir.back() == '/')) dir.remove_suffix(1);
     if (dir.empty() || host.size() <= dir.size() + 1) return false;
-    auto fold = [](char c) {
-        if (c == '/') return '\\';
-        if (c >= 'a' && c <= 'z') return static_cast<char>(c - 'a' + 'A');
-        return c;
-    };
-    for (size_t i = 0; i < dir.size(); ++i)
-        if (fold(host[i]) != fold(dir[i])) return false;
-    return fold(host[dir.size()]) == '\\';
+    const char sep = host[dir.size()];
+    return alamo::iequals(host.substr(0, dir.size()), dir) && (sep == '\\' || sep == '/');  // case and '/' == '\\' folded
 }
 
 namespace {
@@ -415,12 +397,12 @@ std::vector<std::string> effect_candidates(std::string_view effect, std::string_
     const size_t dot = base.find_last_of('.');
     const size_t slash = base.find_last_of("\\/");
     if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) {
-        own_ext = upper(base.substr(dot));
+        own_ext = ascii_upper(base.substr(dot));
         base = base.substr(0, dot);
     }
     std::vector<std::string> cands;
     if (slash != std::string::npos) {
-        if (own_ext.empty() || own_ext == upper(std::string(ext))) cands.push_back(n);
+        if (own_ext.empty() || ascii_iequals(own_ext, ext)) cands.push_back(n);
         cands.push_back(base + std::string(ext));
     } else {
         for (const char* dir : {"Data\\Art\\Shaders\\", "Data\\Art\\Shaders\\Engine\\", "Data\\Art\\Shaders\\Terrain\\"})
@@ -581,7 +563,7 @@ std::optional<MaterialEffect> EffectLibrary::load_parsed(std::string_view name_o
         if (slash != std::string_view::npos) n = n.substr(slash + 1);
         const size_t dot = n.find_last_of('.');
         if (dot != std::string_view::npos) n = n.substr(0, dot);
-        m.name = upper(n);
+        m.name = ascii_upper(n);
         m.path = std::string(name_or_path);
     }
     m.effect = e;
@@ -836,7 +818,7 @@ MaterialEffect EffectLibrary::load_or_default(std::string_view effect, std::stri
         if (slash != std::string_view::npos) n = n.substr(slash + 1);
         const size_t dot = n.find_last_of('.');
         if (dot != std::string_view::npos) n = n.substr(0, dot);
-        d.name = upper(n);
+        d.name = ascii_upper(n);
         d.path = *found;
         d.fallback = EffectFallback::Failed;
     } else {

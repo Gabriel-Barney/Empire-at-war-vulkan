@@ -15,14 +15,8 @@ namespace alamo::assets {
 
 namespace {
 
-std::string lower(std::string_view s) {
-    std::string o(s);
-    for (char& c : o) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return o;
-}
-
 int lod_of(std::string_view name) {
-    const std::string l = lower(name);
+    const std::string l = ascii_lower(name);
     const auto p = l.rfind("_lod");
     if (p == std::string::npos || p + 4 >= l.size()) return -1;
     int v = 0;
@@ -102,7 +96,7 @@ std::uint32_t submesh_flags(const alo::Mesh& mesh, const alo::SubMesh& sm, const
     std::uint32_t f = 0;
     if (mesh.hidden) f |= kSubmeshHidden;
     if (mesh.collision_enabled) f |= kSubmeshCollisionMesh;
-    const std::string sh = lower(sm.material.shader);
+    const std::string sh = ascii_lower(sm.material.shader);
     if (sh.find("collision") != std::string::npos) f |= kSubmeshCollisionShader;
     if (sh.find("shadowvolume") != std::string::npos) f |= kSubmeshShadowVolume;
     if (sh == "aldefault.fx" || sh == "default.fx") f |= kSubmeshProxyShader;

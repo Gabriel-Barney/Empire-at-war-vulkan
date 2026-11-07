@@ -617,8 +617,7 @@ std::vector<PosedSubmesh> pose_submeshes(const assets::ModelAsset& m, std::span<
 
 bool exported_by_alo2gltf(const assets::ModelAsset& m, const assets::Submesh& sm) {
     if (sm.index_count == 0 || m.meshes[sm.mesh].hidden) return false;
-    std::string sh = sm.material.effect;
-    for (char& c : sh) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string sh = alamo::ascii_lower(sm.material.effect);
     return sh.find("shadow") == std::string::npos && sh.find("collision") == std::string::npos;
 }
 

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
 
 namespace alamo::game {
@@ -47,13 +48,6 @@ int32_t atoi_sv(std::string_view s) {
     return static_cast<int32_t>(std::clamp<int64_t>(v, INT32_MIN, INT32_MAX));
 }
 
-std::string upper(std::string_view s) {
-    std::string u(s);
-    for (char& c : u)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return u;
-}
-
 // Keyword table 0xa2a1d0 (§2.6): argument kinds 0 none, 1 one integer, 3 one string token, 4 four integers.
 enum class Arg : uint8_t { None, Int, String, Int4 };
 struct Keyword {
@@ -86,7 +80,7 @@ bool parse_story_script(std::string_view all, int32_t chapter, StoryScript& out)
         out.lines.push_back(std::move(l));
     };
     for (std::string_view word = tk.next(); !word.empty(); word = tk.next()) {
-        const std::string cmd = upper(word);
+        const std::string cmd = ascii_upper(word);
         const Keyword* kw = nullptr;
         for (const Keyword& k : kKeywords)
             if (cmd == k.name) kw = &k;
@@ -147,7 +141,7 @@ bool parse_story_script(std::string_view all, int32_t chapter, StoryScript& out)
 bool story_script_valid(std::string_view all) {
     Tokens tk(all);
     for (std::string_view word = tk.next(); !word.empty(); word = tk.next()) {
-        const std::string cmd = upper(word);
+        const std::string cmd = ascii_upper(word);
         const Keyword* kw = nullptr;
         for (const Keyword& k : kKeywords)
             if (cmd == k.name) kw = &k;

@@ -14,10 +14,10 @@ int32_t App::galactic_faction_icon(const galactic::GalacticSim& g, int32_t playe
     if (fi >= g.rules().factions.size()) return -1;
     const std::string_view n = g.rules().factions[fi].name;
     // [name-ok-begin: retail hard-code, GALAXY_MAP_PRESENTATION.md §1.4 0x3d18f0 (emblem index by faction name)]
-    if (iequal(n, "Rebel")) return 0;
-    if (iequal(n, "Empire")) return 1;
-    if (iequal(n, "Pirate") || iequal(n, "Pirates")) return 2;
-    if (iequal(n, "Underworld")) return 3;
+    if (ascii_iequals(n, "Rebel")) return 0;
+    if (ascii_iequals(n, "Empire")) return 1;
+    if (ascii_iequals(n, "Pirate") || ascii_iequals(n, "Pirates")) return 2;
+    if (ascii_iequals(n, "Underworld")) return 3;
     // [name-ok-end]
     return 4;
 }

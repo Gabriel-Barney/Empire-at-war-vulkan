@@ -1,13 +1,13 @@
 // alamo_render - ability beams, renderer side (docs/re/ABILITY_VISUALS.md 4.1 draw 0x37fa50): Engine\PrimAdditive batches per
 // texture in the Transparent bucket. The CPU side (animation, geometry) is in beams.cpp.
 #include <algorithm>
-#include <cctype>
 #include <cstring>
 #include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/render/beams.hpp"
 #include "alamo/render/renderer.hpp"
@@ -27,14 +27,6 @@ struct Renderer::BeamRenderState {
     rhi::Buffer vb[4];                      // per frame-ring slot: vertices then 32-bit indices
     VkDeviceSize vb_size[4] = {};
 };
-
-namespace {
-std::string lower(std::string_view s) {
-    std::string o(s);
-    for (char& c : o) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return o;
-}
-}  // namespace
 
 bool Renderer::init_beams(const TextureSource& textures, const LightningLibrary* lightning) {
     if (!ctx_ || !desc_.effects) return false;
@@ -106,7 +98,7 @@ void Renderer::draw_beams(rhi::Frame& frame, VkCommandBuffer cmd, const ViewMatr
     };
     std::vector<Ready> ready;
     for (const BeamGeometry::Batch& batch : bs.geo.batches) {
-        const std::string key = lower(batch.texture);
+        const std::string key = ascii_lower(batch.texture);
         auto it = bs.tex.find(key);
         if (it == bs.tex.end()) {
             GpuTexture t;

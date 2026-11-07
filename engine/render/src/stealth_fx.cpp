@@ -1,23 +1,18 @@
 #include "alamo/render/stealth_fx.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <string>
+
+#include "alamo/core/ascii.hpp"
 
 namespace alamo::render {
 
 namespace {
 
-std::string upper_name(const std::string& s) {
-    std::string u(s);
-    for (char& c : u) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return u;
-}
-
 // Hardpoint model file name -> mesh name: upper-cased, cut at ".ALO" (path components dropped).
 std::string attach_mesh_name(const std::string& model_file) {
-    std::string u = upper_name(model_file);
+    std::string u = ascii_upper(model_file);
     const size_t slash = u.find_last_of("/\\");
     if (slash != std::string::npos) u.erase(0, slash + 1);
     const size_t dot = u.find(".ALO");
@@ -77,13 +72,13 @@ uint32_t hide_hardpoint_meshes(const assets::ModelAsset& model, const HardpointL
         const std::string want = attach_mesh_name(file);
         if (want.empty()) continue;
         for (size_t i = 0; i < model.meshes.size() && i < mask.size(); ++i)
-            if (mask[i] == 0 && upper_name(model.meshes[i].name) == want) {
+            if (mask[i] == 0 && ascii_upper(model.meshes[i].name) == want) {
                 mask[i] = 1;
                 ++n;
             }
         for (size_t p = 0; p < model.proxies.size() && p < layout.proxies; ++p) {
             const size_t sub = layout.proxy_index(static_cast<uint32_t>(p));
-            if (sub < mask.size() && mask[sub] == 0 && upper_name(model.proxies[p].name) == want) {
+            if (sub < mask.size() && mask[sub] == 0 && ascii_upper(model.proxies[p].name) == want) {
                 mask[sub] = 1;
                 ++n;
             }

@@ -147,6 +147,15 @@ private:
 // UTF-8/ASCII or UTF-16LE with BOM). Exposed for tests/diagnostics.
 std::vector<std::string> parse_megafiles_xml(std::span<const uint8_t> bytes);
 
+// The host apps' common mount (CU2 t10): cfg.foc_root = foc_root, then parse_command_line(game_args) (its result is
+// ignored, as every host did: switches with an empty value are skipped, the rest apply), then Vfs::create. eaw_root is
+// VfsConfig::eaw_root, set before the switches are parsed: nullopt = auto-detect (<foc_root>\..\GameData), "" = no EaW,
+// else that folder. Which hosts pass an explicit EaW tier (the ALAMO_EAW_DATA environment route of the galactic AI and
+// save runs) stays each caller's decision: it changes which AI definitions load (ai.goals CRC). On failure returns
+// nullptr and sets *err to "VFS: <reason>". Hosts that must act on a bad switch call parse_command_line themselves.
+std::unique_ptr<Vfs> mount_game(std::string_view foc_root, std::span<const std::string> game_args, std::string* err = nullptr,
+                                std::optional<std::string> eaw_root = std::nullopt);
+
 // Glob used by Vfs::list on normalised paths (case-insensitive, '/' == '\\').
 bool path_glob_match(std::string_view pattern, std::string_view path);
 

@@ -4,34 +4,13 @@
 #include <cmath>
 #include <cstdio>
 
+#include "alamo/core/hash.hpp"
+#include "ui_strings.hpp"
+
 namespace alamo::ui {
 
 namespace {
 
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const auto lo = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
-        if (lo(a[i]) != lo(b[i])) return false;
-    }
-    return true;
-}
-bool istarts(std::string_view s, std::string_view p) { return s.size() >= p.size() && iequal(s.substr(0, p.size()), p); }
-std::u32string ascii32(std::string_view s) {
-    std::u32string o;
-    for (char c : s) o.push_back(static_cast<char32_t>(static_cast<unsigned char>(c)));
-    return o;
-}
-std::u32string num32(int64_t v) {
-    char b[32];
-    std::snprintf(b, sizeof b, "%lld", static_cast<long long>(v));
-    return ascii32(b);
-}
-std::string id_n(const char* fmt, int32_t n) {
-    char b[48];
-    std::snprintf(b, sizeof b, fmt, n);
-    return b;
-}
 std::string id_nn(const char* fmt, int32_t a, int32_t b2) {
     char b[48];
     std::snprintf(b, sizeof b, fmt, a, b2);
@@ -54,8 +33,8 @@ constexpr const char* kTabs[4] = {"IDC_DROID_LOG_RADIO", "IDC_DATA_CHART_RADIO",
 // The tech tree dialogs are matched by the IDD_TECH_TREE_ prefix (FoC's Tech_Tree_Dialog_Name values) and, for any other
 // name a faction gives, as the open info dialog (InfoScreens::info_dialog).
 bool is_info_dialog(std::string_view n) {
-    return iequal(n, dlg::kDroidLog) || iequal(n, dlg::kDataChart) || istarts(n, "IDD_TECH_TREE_") ||
-           istarts(n, "IDD_SUMMARY_SCREEN_");
+    return iequals(n, dlg::kDroidLog) || iequals(n, dlg::kDataChart) || ascii_istarts_with(n, "IDD_TECH_TREE_") ||
+           ascii_istarts_with(n, "IDD_SUMMARY_SCREEN_");
 }
 
 }  // namespace
@@ -210,12 +189,12 @@ std::string InfoScreens::info_dialog() const { return info_open_; }
 
 // modc t20: the open info dialog counts too (a mod's Tech_Tree_Dialog_Name need not start with IDD_TECH_TREE_).
 bool InfoScreens::info_dialog(std::string_view n) const {
-    return is_info_dialog(n) || (!info_open_.empty() && iequal(n, info_open_));
+    return is_info_dialog(n) || (!info_open_.empty() && iequals(n, info_open_));
 }
 
 GuiDialog* InfoScreens::go_info(const std::string& name) {
     if (!gui_ || name.empty()) return nullptr;
-    if (!info_open_.empty() && !iequal(info_open_, name)) gui_->close(info_open_);
+    if (!info_open_.empty() && !iequals(info_open_, name)) gui_->close(info_open_);
     GuiDialog* d = gui_->open(name);
     info_open_ = d ? name : std::string();
     return d;
@@ -280,7 +259,7 @@ void InfoScreens::fill_tech(GuiDialog& d) {
     for (size_t i = 0; i < d.size(); ++i) {
         GuiControl& c = d[i];
         const std::string_view id = c.id();
-        if (!istarts(id, "IDC_TECHTREE_")) continue;
+        if (!ascii_istarts_with(id, "IDC_TECHTREE_")) continue;
         TechTreeItem it;
         const bool has = tech_.item && tech_.item(id.substr(13), it) && !it.icon.empty();
         c.visible = has;
@@ -392,7 +371,7 @@ size_t InfoScreens::build_overlay(HudDrawList& dl) const {
     const std::vector<std::string> names = gui_->open_names();
     uint32_t layer = 0;
     for (size_t k = 0; k < names.size(); ++k)
-        if (iequal(names[k], info_open_)) layer = static_cast<uint32_t>(std::min<size_t>(k, 11));
+        if (iequals(names[k], info_open_)) layer = static_cast<uint32_t>(std::min<size_t>(k, 11));
     const std::vector<ChartSeries>& s = chart_mode_ == 0 ? chart_.economy : chart_mode_ == 1 ? chart_.military : chart_.planets;
     float mx = 0.0f;
     size_t n = 0;
@@ -427,10 +406,10 @@ size_t InfoScreens::build_overlay(HudDrawList& dl) const {
 // ---- events ---------------------------------------------------------------------------------------------------------
 void InfoScreens::on_click(const GuiEvent& e, std::vector<ScreenAction>& out) {
     const std::string_view n = e.dialog, c = e.control;
-    auto is = [&](std::string_view id) { return iequal(c, id); };
+    auto is = [&](std::string_view id) { return iequals(c, id); };
     GuiDialog* d = gui_->find(n);
     if (!d) return;
-    if (iequal(n, dlg::kBuyUnits)) {
+    if (iequals(n, dlg::kBuyUnits)) {
         const GuiControl* l = d->get("IDC_SKIRMISH_BUY_FORCES_LISTBOX");
         const BuyUnitEntry* u = l && l->selected >= 0 && static_cast<size_t>(l->selected) < buy_.units.size()
                                     ? &buy_.units[static_cast<size_t>(l->selected)]
@@ -448,7 +427,7 @@ void InfoScreens::on_click(const GuiEvent& e, std::vector<ScreenAction>& out) {
             gui_->close(n);
             out.push_back(act(ScreenAction::Kind::BuyUnitsBack));
         }
-    } else if (iequal(n, dlg::kStory)) {
+    } else if (iequals(n, dlg::kStory)) {
         ScreenAction a;
         if (is("IDC_STORY_DIALOG_ACCEPT")) a.kind = ScreenAction::Kind::StoryAccepted;
         else if (is("IDC_STORY_DIALOG_CANCEL")) a.kind = ScreenAction::Kind::StoryCancelled;
@@ -457,7 +436,7 @@ void InfoScreens::on_click(const GuiEvent& e, std::vector<ScreenAction>& out) {
         a.tag = story_tag_;
         gui_->close(n);
         out.push_back(std::move(a));
-    } else if (iequal(n, dlg::kStorySummary)) {
+    } else if (iequals(n, dlg::kStorySummary)) {
         if (is("IDC_SUMMARY_DIALOG_CLOSE_BUTTON")) {
             gui_->close(n);
             out.push_back(act(ScreenAction::Kind::StorySummaryClosed));
@@ -469,7 +448,7 @@ void InfoScreens::on_click(const GuiEvent& e, std::vector<ScreenAction>& out) {
             out.push_back(act(ScreenAction::Kind::InfoClosed));
         } else if (is("IDC_BUTTON_PLANETARY")) {
             out.push_back(act(ScreenAction::Kind::SummaryPlanetary));
-        } else if (istarts(c, "IDC_BUTTON_")) {
+        } else if (ascii_istarts_with(c, "IDC_BUTTON_")) {
             ScreenAction a = act(ScreenAction::Kind::SummarySort);
             a.tag = std::string(c);
             out.push_back(std::move(a));
@@ -481,10 +460,10 @@ void InfoScreens::on_click(const GuiEvent& e, std::vector<ScreenAction>& out) {
 
 void InfoScreens::on_change(const GuiEvent& e, std::vector<ScreenAction>& out) {
     const std::string_view n = e.dialog, c = e.control;
-    auto is = [&](std::string_view id) { return iequal(c, id); };
+    auto is = [&](std::string_view id) { return iequals(c, id); };
     GuiDialog* d = gui_->find(n);
     if (!d) return;
-    if (iequal(n, dlg::kBuyUnits) && is("IDC_SKIRMISH_BUY_FORCES_LISTBOX")) {
+    if (iequals(n, dlg::kBuyUnits) && is("IDC_SKIRMISH_BUY_FORCES_LISTBOX")) {
         if (e.kind == GuiEvent::Kind::DoubleClicked && e.value >= 0 && static_cast<size_t>(e.value) < buy_.units.size() &&
             buy_.units[static_cast<size_t>(e.value)].can_buy) {
             ScreenAction a = act(ScreenAction::Kind::BuyUnit);
@@ -494,7 +473,7 @@ void InfoScreens::on_change(const GuiEvent& e, std::vector<ScreenAction>& out) {
         fill_buy(*d);
         return;
     }
-    if (iequal(n, dlg::kStorySummary)) {
+    if (iequals(n, dlg::kStorySummary)) {
         if (is("IDC_GOAL_LIST") && e.kind == GuiEvent::Kind::SelectionChanged && e.value >= 0) {
             ScreenAction a = act(ScreenAction::Kind::StorySummaryGoal);
             a.button = e.value;
@@ -564,15 +543,15 @@ void InfoScreens::update(std::span<const GuiEvent> events, std::vector<ScreenAct
             case GuiEvent::Kind::DoubleClicked:
             case GuiEvent::Kind::ValueChanged: on_change(e, out); break;
             case GuiEvent::Kind::Cancel:
-                if (iequal(e.dialog, dlg::kBuyUnits)) {
+                if (iequals(e.dialog, dlg::kBuyUnits)) {
                     gui_->close(e.dialog);
                     out.push_back(act(ScreenAction::Kind::BuyUnitsBack));
-                } else if (iequal(e.dialog, dlg::kStory)) {
+                } else if (iequals(e.dialog, dlg::kStory)) {
                     ScreenAction a = act(ScreenAction::Kind::StoryClosed);
                     a.tag = story_tag_;
                     gui_->close(e.dialog);
                     out.push_back(std::move(a));
-                } else if (iequal(e.dialog, dlg::kStorySummary)) {
+                } else if (iequals(e.dialog, dlg::kStorySummary)) {
                     gui_->close(e.dialog);
                     out.push_back(act(ScreenAction::Kind::StorySummaryClosed));
                 } else if (info_dialog(e.dialog)) {

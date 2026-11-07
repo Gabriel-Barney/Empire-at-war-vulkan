@@ -7,6 +7,7 @@
 #include <cstring>
 #include <string_view>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
 
@@ -14,19 +15,10 @@ namespace alamo::render {
 
 namespace {
 
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const auto ca = static_cast<unsigned char>(a[i]), cb = static_cast<unsigned char>(b[i]);
-        if (std::tolower(ca) != std::tolower(cb)) return false;
-    }
-    return true;
-}
-
 // Trimmed text of the first child named `tag` (case-insensitive), "" when absent.
 std::string_view child_text_ci(const data::XmlNode& n, std::string_view tag) {
     for (data::XmlNode c = n.first_child(); c; c = c.next_sibling())
-        if (iequals(c.name(), tag)) return c.text_trimmed();
+        if (ascii_iequals(c.name(), tag)) return c.text_trimmed();
     return {};
 }
 
@@ -254,7 +246,7 @@ LightningLibrary LightningLibrary::builtin() {
 
 void LightningLibrary::add(LightningStyle s) {
     for (LightningStyle& e : styles_)
-        if (iequals(e.name, s.name)) {
+        if (ascii_iequals(e.name, s.name)) {
             e = std::move(s);
             return;
         }
@@ -266,7 +258,7 @@ bool LightningLibrary::load(std::span<const uint8_t> xml) {
         data::XmlDocument::parse(xml, "LightningEffectTypes.xml");
     if (!doc.ok()) return false;
     for (data::XmlNode e = doc.root().first_child(); e; e = e.next_sibling()) {
-        if (!iequals(e.name(), "LightningEffect")) continue;
+        if (!ascii_iequals(e.name(), "LightningEffect")) continue;
         LightningStyle s = parse_lightning(e);
         if (!s.name.empty()) add(std::move(s));
     }
@@ -275,7 +267,7 @@ bool LightningLibrary::load(std::span<const uint8_t> xml) {
 
 const LightningStyle* LightningLibrary::find(std::string_view name) const {
     for (const LightningStyle& s : styles_)
-        if (iequals(s.name, name)) return &s;
+        if (ascii_iequals(s.name, name)) return &s;
     return nullptr;
 }
 
@@ -434,7 +426,7 @@ void BeamGeometry::build(std::span<const BeamDraw> draws, const ViewMatrices& vi
     std::vector<Group> groups;
     auto group = [&](std::string_view tex) -> std::vector<uint32_t>& {
         for (Group& g : groups)
-            if (iequals(g.texture, tex)) return g.idx;
+            if (ascii_iequals(g.texture, tex)) return g.idx;
         groups.push_back({std::string(tex), {}});
         return groups.back().idx;
     };

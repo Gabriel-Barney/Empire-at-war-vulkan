@@ -17,6 +17,7 @@
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
 #include "alamo/ai/ai_definitions.hpp"
 #include "alamo/ai/perception_equations.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"
@@ -413,13 +414,10 @@ bool foc_load(Session& s, const MapRunOptions& opt, std::vector<std::string>& di
         skipped = true;
         return false;
     }
-    vfs::VfsConfig vcfg;
-    vcfg.foc_root = root;
-    vfs::parse_command_line(opt.game_args, vcfg);
     std::string err;
-    std::unique_ptr<vfs::Vfs> v = vfs::Vfs::create(vcfg, &err);
+    std::unique_ptr<vfs::Vfs> v = vfs::mount_game(root, opt.game_args, &err);
     if (!v) {
-        diag.push_back("VFS: " + err);
+        diag.push_back(err);
         return false;
     }
     vfs::Vfs* vp = v.get();
@@ -479,12 +477,6 @@ bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>&
     // markers, REMAINING_GAPS §3.2). t50: foc-land is a skirmish on _MP_LAND_UTAPAU (explicit faction pads and Player_N_Spawn_Point_Marker).
     s.map = opt.map.empty() ? std::string(!land ? "_MP_SPACE_KUAT" : land_skirmish ? "_MP_LAND_UTAPAU" : "_Land_Planet_Utapau_01") : opt.map;
     return true;
-}
-
-bool iequal(std::string_view a, std::string_view b) {
-    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
-               return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
-           });
 }
 
 std::string trimmed(std::string_view v) {
@@ -591,7 +583,7 @@ bool skirmish_host_session(Session& s, const MapRunOptions& opt, std::vector<std
     for (int32_t p = 0; p < 2; ++p) {
         galactic::PlayerSetup& ps = s.setup.players[static_cast<size_t>(p)];
         const std::string& faction = s.rules.factions[ps.faction].name;
-        if (!o.human.empty() && iequal(faction, o.human)) {
+        if (!o.human.empty() && alamo::ascii_iequals(faction, o.human)) {
             ps.human = true;
             ps.ai = false;
             s.human = p;

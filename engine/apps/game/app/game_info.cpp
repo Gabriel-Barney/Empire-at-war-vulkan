@@ -1,12 +1,12 @@
 #include "game_info.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <iterator>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/game/story_script.hpp"
@@ -60,11 +60,6 @@ std::string icon_of(std::span<const ui::HudTypeInfo> hud_types, objects::TypeInd
 std::vector<std::string> ability_icons(const GameData& d, objects::TypeIndex t) {
     const objects::ObjectTypeDatabase& raw = d.types.raw();
     const objects::FieldColumns& fc = raw.fields();
-    auto ieq = [](std::string_view a, std::string_view b) {
-        return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
-                   return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
-               });
-    };
     std::vector<uint8_t> slots;
     std::vector<std::string> out;
     for (const objects::FieldIndex sub : d.types.get_sub_objects(t, "Unit_Abilities_Data")) {
@@ -72,9 +67,9 @@ std::vector<std::string> ability_icons(const GameData& d, objects::TypeIndex t) 
         std::string alternate;
         for (objects::FieldIndex f = sub + 1; f < fc.size() && fc.depth[f] > fc.depth[sub]; ++f) {
             if (fc.parent[f] != sub) continue;
-            if (ieq(raw.tag_name(f), "Type")) {
+            if (ascii_iequals(raw.tag_name(f), "Type")) {
                 for (const std::string& w : words(fc.text[f])) type = tactical::abilities::ability_type_from_name(w);
-            } else if (ieq(raw.tag_name(f), "Alternate_Icon_Name")) {
+            } else if (ascii_iequals(raw.tag_name(f), "Alternate_Icon_Name")) {
                 for (const std::string& w : words(fc.text[f])) alternate = w;
             }
         }
@@ -206,8 +201,8 @@ ui::DataChartInfo Holocron::chart(const galactic::GalacticSim& g, const GameData
         const uint32_t f = g.players()[static_cast<size_t>(p)].faction;
         std::u32string name = u32("Player " + std::to_string(p));
         if (f < d.rules.factions.size()) {
-            std::string key = "TEXT_FACTION_" + d.rules.factions[f].name;  // the lookup is case-sensitive (GALACTIC_DIALOGS §2.7)
-            for (char& ch : key) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            // The lookup is case-sensitive (GALACTIC_DIALOGS §2.7).
+            const std::string key = ascii_upper("TEXT_FACTION_" + d.rules.factions[f].name);
             const std::u16string* t = text.find(key);
             name = t ? ui::utf16_to_utf32(*t) : u32(d.rules.factions[f].name);
         }
@@ -408,8 +403,7 @@ std::vector<ui::StoryDialogInfo> new_story_dialogs(const GameSession& s, const S
             md.popup = e.popup;
             md.sfx = e.sfx;
             const std::string& pn = e.plot_name;
-            md.random_plot = pn.size() >= 11 && std::equal(pn.begin(), pn.begin() + 11, "random_plot",
-                                                           [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == b; });
+            md.random_plot = ascii_istarts_with(pn, "random_plot");
             md.dialog = e.dialog;
             md.tag = e.tag;
             md.chapter = e.chapter;

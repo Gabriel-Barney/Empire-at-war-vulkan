@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "alamo/assets/model.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/render/particles/particle_attach.hpp"
@@ -93,6 +94,20 @@ static void test_names_pools() {
     CHECK(p.base == "P_X" && p.alt == -1);
     CHECK(texture_base_name("C:\\PROJECTS\\Art\\p_particle_master.tga") == "P_PARTICLE_MASTER.TGA");
     CHECK(texture_base_name("p_asteroids.dds") == "P_ASTEROIDS.DDS");
+    // System cache key (CU2 t03): upper + one trailing .ALO cut; the directory is kept and '/' is not rewritten.
+    CHECK(system_key("p_smoke.alo") == "P_SMOKE" && system_key("P_SMOKE") == "P_SMOKE" && system_key(".alo") == ".ALO");
+    CHECK(system_key("p_smoke.alo.alo") == "P_SMOKE.ALO");
+    CHECK(system_key("Data\\Art\\Models\\p_smoke.ALO") == "DATA\\ART\\MODELS\\P_SMOKE");
+    CHECK(system_key("fx/p_smoke.alo") == "FX/P_SMOKE");
+    {
+        // A path-qualified get() keeps its own key: it does not hit the entry of the bare name.
+        ParticleLibrary lib;
+        auto sys = std::make_shared<SystemDef>();
+        sys->name = "SYN_KEY";
+        lib.add(sys);
+        CHECK(lib.get("syn_key.alo") == sys && lib.get("SYN_KEY") == sys);
+        CHECK(!lib.get("Data\\Art\\Models\\SYN_KEY.ALO") && lib.stats().missing == 1);
+    }
 
     EmitterDef e = basic_emitter(100, 2.0f);
     CHECK(emitter_pool(e) == 200);           // rate x lifetime
@@ -352,6 +367,19 @@ static void test_attach() {
     render::Instance in;
     in.model = &m;
     in.transform.m[0][3] = 100.0f;
+    {
+        // static_key = FNV-1a 64 (offset basis ^ salt) over the model uid then the transform bytes, | 1 (CU2 t09: the
+        // hand-rolled loop it replaced, kept here as the reference so the keys do not change).
+        uint64_t h = 0xcbf29ce484222325ull ^ 77u;
+        auto mix = [&](const void* p, size_t n) {
+            const auto* b = static_cast<const uint8_t*>(p);
+            for (size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 0x100000001b3ull;
+        };
+        const uint64_t uid = m.uid;
+        mix(&uid, sizeof uid);
+        mix(&in.transform, sizeof in.transform);
+        CHECK(ProxyAttachments::static_key(in, 77u) == (h | 1ull));
+    }
     at.begin();
     at.sync(5, in);
     at.end();
@@ -482,9 +510,7 @@ static void scan_corpus(const char* what, const std::string& root, bool eaw, uin
         if (!v->read(mp, b) || !assets::build_model(b, mp, m)) continue;
         for (const assets::Proxy& p : m.proxies) {
             ++proxies;
-            std::string up = p.name;
-            for (char& c : up) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-            if (lib.get(up)) ++exact;
+            if (lib.get(ascii_upper(p.name))) ++exact;
             else if (lib.get(parse_proxy_name(p.name).base)) ++stripped;
             else ++none;
         }

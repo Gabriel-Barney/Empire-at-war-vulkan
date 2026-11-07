@@ -62,12 +62,9 @@ int economy_run(const MapRunOptions& opt, const std::string& data_dir) {
             std::fprintf(stderr, "--economy needs --game <corruption dir>, --data <dir> or ALAMO_FOC_DATA\n");
             return 2;
         }
-        vfs::VfsConfig vcfg;
-        vcfg.foc_root = root;
-        vfs::parse_command_line(opt.game_args, vcfg);
-        files = vfs::Vfs::create(vcfg, &err);
+        files = vfs::mount_game(root, opt.game_args, &err);
         if (!files) {
-            std::fprintf(stderr, "VFS: %s\n", err.c_str());
+            std::fprintf(stderr, "%s\n", err.c_str());
             return 2;
         }
     }
@@ -149,12 +146,9 @@ int story_run(const MapRunOptions& opt, const std::string& data_dir, const std::
             std::fprintf(stderr, "--story needs --game <corruption dir>, --data <dir> or ALAMO_FOC_DATA\n");
             return 2;
         }
-        vfs::VfsConfig vcfg;
-        vcfg.foc_root = root;
-        vfs::parse_command_line(opt.game_args, vcfg);
-        files = vfs::Vfs::create(vcfg, &err);
+        files = vfs::mount_game(root, opt.game_args, &err);
         if (!files) {
-            std::fprintf(stderr, "VFS: %s\n", err.c_str());
+            std::fprintf(stderr, "%s\n", err.c_str());
             return 2;
         }
     }
@@ -276,13 +270,10 @@ int map_run(const MapRunOptions& opt) {
         std::fprintf(stderr, "--map needs --game <corruption dir> or ALAMO_FOC_DATA\n");
         return 2;
     }
-    vfs::VfsConfig vcfg;
-    vcfg.foc_root = root;
-    vfs::parse_command_line(opt.game_args, vcfg);
     std::string err;
-    auto files = vfs::Vfs::create(vcfg, &err);
+    auto files = vfs::mount_game(root, opt.game_args, &err);
     if (!files) {
-        std::fprintf(stderr, "VFS: %s\n", err.c_str());
+        std::fprintf(stderr, "%s\n", err.c_str());
         return 2;
     }
     auto t0 = std::chrono::steady_clock::now();

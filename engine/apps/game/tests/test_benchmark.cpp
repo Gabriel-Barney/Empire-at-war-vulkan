@@ -225,6 +225,10 @@ void test_report() {
     r.error = "line\nbreak";
     const std::string f = bench_report_json(r);
     CHECK(f.find("\"error\": \"line\\u000abreak\"") != std::string::npos);
+    // CU2 t12 (src/json_text.hpp, shared with the mod check): valid UTF-8 passes through, a byte that does not start a valid
+    // UTF-8 sequence is written as its Latin-1 character, so the report stays valid JSON.
+    r.error = "caf\xc3\xa9 \xe9";
+    CHECK(bench_report_json(r).find("\"error\": \"caf\xc3\xa9 \\u00e9\"") != std::string::npos);
 }
 
 // bm2: scenario files in alamo_game (benchmark_scenario.hpp): flags, settings, the headless refusal, the make and the

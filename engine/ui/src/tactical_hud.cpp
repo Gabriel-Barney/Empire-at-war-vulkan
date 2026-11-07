@@ -7,21 +7,17 @@
 #include <map>
 #include <string>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/ui/gui_dialog.hpp"
 #include "alamo/ui/hud_font.hpp"
 #include "alamo/ui/picking.hpp"
+#include "ui_strings.hpp"
 
 namespace alamo::ui {
 
 namespace {
 constexpr Rgba8 kPanelBack{12, 18, 28, 190}, kPanelEdge{150, 170, 190, 230};
 constexpr Vec2f kSlotFallback{40, 40};
-
-std::u32string ascii32(std::string_view s) {
-    std::u32string o;
-    for (char c : s) o.push_back(static_cast<char32_t>(static_cast<unsigned char>(c)));
-    return o;
-}
 
 // A rectangle outline of 2-unit lines plus a translucent fill (the [port] stand-in frame).
 void dot(HudDrawList& dl, uint32_t layer, Vec2f c, float half, Rgba8 color) {
@@ -184,12 +180,7 @@ void TacticalHud::init(const ComponentTable& table, const TextureAtlas& atlas, F
         mark(i);
     for (uint32_t i = 0; i < table.size(); ++i) {
         const std::string& n = table[i].name;
-        auto starts = [&](std::string_view p) {
-            if (n.size() < p.size()) return false;
-            for (size_t k = 0; k < p.size(); ++k)
-                if (std::tolower(static_cast<unsigned char>(n[k])) != p[k]) return false;
-            return true;
-        };
+        auto starts = [&](std::string_view p) { return ascii_istarts_with(n, p); };  // p: lower-case prefixes
         if (starts("st_") || starts("tooltip_") || starts("encyclopedia_") || starts("generic_flytext") ||
             starts("reinforcement_window"))
             dynamic_[i] = 1;

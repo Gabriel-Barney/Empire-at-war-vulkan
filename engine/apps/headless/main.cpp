@@ -1176,13 +1176,10 @@ static int headless_main(int argc, char** argv) {
     // Game data through the VFS (real install) or a loose folder (extracted text).
     std::unique_ptr<alamo::FileProvider> provider;
     if (!opt.game_dir.empty()) {
-        alamo::vfs::VfsConfig cfg;
-        cfg.foc_root = opt.game_dir;
-        alamo::vfs::parse_command_line(opt.game_args, cfg);
         std::string err;
-        auto v = alamo::vfs::Vfs::create(cfg, &err);
+        auto v = alamo::vfs::mount_game(opt.game_dir, opt.game_args, &err);
         if (!v) {
-            std::fprintf(stderr, "VFS: %s\n", err.c_str());
+            std::fprintf(stderr, "%s\n", err.c_str());
             return 1;
         }
         if (!opt.quiet) std::printf("%s\n", v->describe().c_str());

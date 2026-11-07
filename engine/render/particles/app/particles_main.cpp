@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "alamo/assets/asset_cache.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/render/particles/particle_attach.hpp"
@@ -220,11 +221,6 @@ struct Gpu {
     }
 };
 
-std::string upper(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return s;
-}
-
 // ------------------------------------------------------------------------------------------- dump
 void dump_system(const SystemDef& s) {
     std::printf("%s: leave_particles %d, %zu emitters\n", s.name.c_str(), s.leave_particles ? 1 : 0, s.emitters.size());
@@ -290,7 +286,7 @@ int run_showcase(const Opt& opt) {
             for (const std::string& p : files->list("Data\\Art\\Models\\*.alo")) {
                 std::vector<uint8_t> b;
                 if (!files->read(p, b) || !is_particle_file(b)) continue;
-                std::string n = upper(p.substr(p.find_last_of("\\/") + 1));
+                std::string n = ascii_upper(p.substr(p.find_last_of("\\/") + 1));
                 n.resize(n.size() - 4);
                 all.push_back(n);
             }

@@ -6,6 +6,7 @@
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/ui/hud_font.hpp"
+#include "ui_strings.hpp"
 
 namespace alamo::ui {
 
@@ -34,12 +35,6 @@ Rgba8 with_alpha(Rgba8 c, float a) {
 Rgba8 mul(Rgba8 a, Rgba8 b) {
     auto m = [](uint8_t x, uint8_t y) { return static_cast<uint8_t>((static_cast<uint32_t>(x) * y + 127u) / 255u); };
     return {m(a.r, b.r), m(a.g, b.g), m(a.b, b.b), m(a.a, b.a)};
-}
-
-std::u32string ascii32(std::string_view s) {
-    std::u32string o;
-    for (char c : s) o.push_back(static_cast<char32_t>(static_cast<unsigned char>(c)));
-    return o;
 }
 
 }  // namespace

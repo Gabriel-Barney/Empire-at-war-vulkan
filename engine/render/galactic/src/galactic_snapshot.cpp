@@ -8,6 +8,7 @@
 
 #include "alamo/core/hash.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/objects/game_object_types.hpp"
@@ -24,22 +25,8 @@ using objects::ObjectHandle;
 using objects::ObjectId;
 using objects::TypeIndex;
 
-std::string trim(std::string_view s) {
-    size_t b = 0, e = s.size();
-    while (b < e && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
-    while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) --e;
-    return std::string(s.substr(b, e - b));
-}
-
 bool yes(std::string_view v) {
     return !v.empty() && (v[0] == 'y' || v[0] == 'Y' || v[0] == 't' || v[0] == 'T' || v == "1");
-}
-
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) return false;
-    return true;
 }
 
 }  // namespace
@@ -53,16 +40,16 @@ void GalacticTypeTable::build(const GameObjectTypes& types) {
         GalacticTypeInfo& ti = info_[t];
         ti.name = std::string(raw.types().name[t]);
         ti.name_crc = raw.types().name_crc[t];
-        ti.model = trim(type_text(types, t, "Galactic_Model_Name"));
-        ti.destroyed_model = trim(type_text(types, t, "Destroyed_Galactic_Model_Name"));
-        ti.fleet_override = trim(type_text(types, t, "Galactic_Fleet_Override_Model_Name"));
+        ti.model = data::trim(type_text(types, t, "Galactic_Model_Name"));
+        ti.destroyed_model = data::trim(type_text(types, t, "Destroyed_Galactic_Model_Name"));
+        ti.fleet_override = data::trim(type_text(types, t, "Galactic_Fleet_Override_Model_Name"));
         const float sf = types.get_float(t, "Scale_Factor");
         ti.scale = std::isfinite(sf) && sf > 0.0f ? sf : 1.0f;
         const float lb = types.get_float(t, "LOD_Bias");
         ti.lod_bias = std::isfinite(lb) && lb >= 0.0f ? lb : kDefaultLodBias;
-        ti.in_background = yes(trim(type_text(types, t, "In_Background")));
-        ti.loop_idle = yes(trim(type_text(types, t, "Loop_Idle_Anim_00")));
-        const std::string rate = trim(type_text(types, t, "Idle_Anim_00_Rate_Mod"));
+        ti.in_background = yes(data::trim(type_text(types, t, "In_Background")));
+        ti.loop_idle = yes(data::trim(type_text(types, t, "Loop_Idle_Anim_00")));
+        const std::string rate(data::trim(type_text(types, t, "Idle_Anim_00_Rate_Mod")));
         if (!rate.empty()) {
             const float r = std::strtof(rate.c_str(), nullptr);
             ti.idle_rate = std::isfinite(r) && r >= 0.0f ? r : 1.0f;
@@ -107,7 +94,7 @@ std::vector<FactionColor> load_faction_colors(const FileProvider& files) {
     if (!list.ok()) return out;
     for (data::XmlNode f : list.root().children("File")) {
         std::vector<uint8_t> fb;
-        const std::string name = trim(f.text_trimmed());
+        const std::string name(data::trim(f.text_trimmed()));
         if (name.empty() || !files.read("Data\\XML\\" + name, fb)) continue;
         const data::XmlDocument doc = data::XmlDocument::parse(fb, name);
         if (!doc.ok()) continue;
@@ -130,7 +117,7 @@ std::vector<FactionColor> load_faction_colors(const FileProvider& files) {
 
 bool faction_map_color(std::span<const FactionColor> table, std::string_view name, materials::float4& out) {
     for (const FactionColor& f : table)
-        if (iequal(f.name, name)) {
+        if (ascii_iequals(f.name, name)) {
             if (!f.has_color) return false;
             out = f.color;
             return true;
@@ -140,7 +127,7 @@ bool faction_map_color(std::span<const FactionColor> table, std::string_view nam
 
 bool faction_text_color(std::span<const FactionColor> table, std::string_view name, materials::float4& out) {
     for (const FactionColor& f : table)
-        if (iequal(f.name, name)) {
+        if (ascii_iequals(f.name, name)) {
             if (f.has_display_font) out = f.display_font;
             else if (f.has_color) out = f.color;
             else return false;
@@ -169,7 +156,7 @@ GalacticPalette make_galactic_palette(const galactic::GalacticSim& sim, std::spa
         const bool neutral = fi < rules.factions.size() && rules.factions[fi].is_neutral;
         materials::float4 c = mp.color[p % kMpPaletteSize];
         for (const FactionColor& f : factions)
-            if (iequal(f.name, fname)) {
+            if (ascii_iequals(f.name, fname)) {
                 if (neutral) c = f.no_colorization;
                 else if (f.has_color) c = f.color;
                 break;

@@ -70,12 +70,9 @@ int battle_run(const MapRunOptions& opt, const std::string& data_dir, const Batt
             std::fprintf(stderr, "--battles needs --game <corruption dir>, --data <dir> or ALAMO_FOC_DATA\n");
             return 2;
         }
-        vfs::VfsConfig vcfg;
-        vcfg.foc_root = root;
-        vfs::parse_command_line(opt.game_args, vcfg);
-        files = vfs::Vfs::create(vcfg, &err);
+        files = vfs::mount_game(root, opt.game_args, &err);
         if (!files) {
-            std::fprintf(stderr, "VFS: %s\n", err.c_str());
+            std::fprintf(stderr, "%s\n", err.c_str());
             return 2;
         }
     }

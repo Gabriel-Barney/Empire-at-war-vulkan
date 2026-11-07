@@ -1,10 +1,10 @@
 #include "alamo/render/galactic/galactic_session.hpp"
 
-#include <cctype>
 #include <filesystem>
 #include <fstream>
 
 #include "alamo/commands/command.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/sim_crc.hpp"
 
 namespace alamo::render {
@@ -105,19 +105,8 @@ uint64_t GalacticSession::state_hash() const {
 }
 
 namespace {
-bool same_name(std::string_view a, std::string_view b) {
-    auto trimmed = [](std::string_view v) {
-        while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.remove_prefix(1);
-        while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.remove_suffix(1);
-        return v;
-    };
-    a = trimmed(a);
-    b = trimmed(b);
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) return false;
-    return true;
-}
+// Faction name vs Good_Side_Name / Evil_Side_Name: case-insensitive, surrounding blanks ignored.
+bool same_name(std::string_view a, std::string_view b) { return ascii_iequals(ascii_trim(a), ascii_trim(b)); }
 }  // namespace
 
 GalacticViewOptions galactic_view_options(const galactic::GalacticSim& sim, std::string_view evil_side_name) {

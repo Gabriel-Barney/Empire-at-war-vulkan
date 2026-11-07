@@ -177,15 +177,6 @@ fx::Effect make_effect(std::vector<fx::State> states, std::vector<fx::Parameter>
     return e;
 }
 
-uint64_t ref_fnv(const void* d, size_t n) {
-    uint64_t h = 0xcbf29ce484222325ull;
-    for (size_t i = 0; i < n; ++i) {
-        h ^= static_cast<const uint8_t*>(d)[i];
-        h *= 0x100000001b3ull;
-    }
-    return h;
-}
-
 // ------------------------------------------------------------------ unit tests
 void test_layouts() {
     CHECK(sizeof(FrameCB) == 992);
@@ -223,7 +214,7 @@ void test_defaults_and_keys() {
     // hashing: FNV-1a over the bytes, independent of instance and stable
     PsoKey k2 = k;
     CHECK(hash(k) == hash(k2));
-    CHECK(hash(k) == ref_fnv(&k, sizeof k));
+    CHECK(hash(k) == alamo::fnv1a64(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&k), sizeof k)));
     CHECK(std::hash<PsoKey>{}(k) == static_cast<size_t>(hash(k)));
     k2.cull = CullMode::None;
     CHECK(hash(k) != hash(k2));

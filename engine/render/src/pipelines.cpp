@@ -8,6 +8,7 @@
 #include <cstring>
 #include <fstream>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/jobs/job_system.hpp"
@@ -25,10 +26,7 @@ std::string effect_key(std::string_view n) {
     if (slash != std::string_view::npos) n = n.substr(slash + 1);
     const size_t dot = n.find_last_of('.');
     if (dot != std::string_view::npos) n = n.substr(0, dot);
-    std::string k(n);
-    for (char& c : k)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return k;
+    return ascii_upper(n);
 }
 
 materials::LoadOptions EffectCache::default_options() {

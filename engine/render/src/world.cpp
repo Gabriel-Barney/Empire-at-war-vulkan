@@ -1,10 +1,10 @@
 #include "alamo/render/world.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstring>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/render/convert.hpp"
 #include "render_internal.hpp"
@@ -33,11 +33,6 @@ bool patch_outside(const Mat4& vp, const assets::Aabb& b) {
 }
 
 std::vector<float> vec4(const std::array<float, 4>& a) { return {a[0], a[1], a[2], a[3]}; }
-
-std::string lower(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return s;
-}
 
 const materials::ResolvedPass* first_draw_pass(const materials::MaterialEffect* e) {
     if (!e) return nullptr;
@@ -109,9 +104,9 @@ WorldRenderer::~WorldRenderer() { shutdown(); }
 
 int WorldRenderer::add_texture(const std::string& name, assets::TextureRole role) {
     if (name.empty()) return -1;
-    const std::string key = lower(name);
+    const std::string key = ascii_lower(name);
     for (size_t i = 0; i < textures_.size(); ++i)
-        if (lower(textures_[i].name) == key && textures_[i].role == role) return static_cast<int>(i);
+        if (ascii_lower(textures_[i].name) == key && textures_[i].role == role) return static_cast<int>(i);
     GpuTexture t;
     t.name = name;
     t.role = role;

@@ -1,26 +1,19 @@
 #include "alamo/ui/galactic_hud.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <string>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/ui/gui_dialog.hpp"
 #include "alamo/ui/hud_font.hpp"
 #include "alamo/ui/hud_radar.hpp"
+#include "ui_strings.hpp"
 
 namespace alamo::ui {
 
 namespace {
-
-std::u32string num32(int64_t v) {
-    char b[32];
-    std::snprintf(b, sizeof b, "%lld", static_cast<long long>(v));
-    std::u32string o;
-    for (const char* p = b; *p; ++p) o.push_back(static_cast<char32_t>(*p));
-    return o;
-}
 
 // Credits symbol + space before HUD credit amounts: '$' is drawn as the credits sign by the EmpireAtWar fonts.
 constexpr const char32_t* kCreditsPrefix = U"$ ";
@@ -1265,9 +1258,7 @@ void GalacticHud::build_day_pips(const GalacticHudFrame& f) {
         const auto sc = static_cast<uint32_t>(shell);
         const Vec2f off = layout_.shell_offset(sc);
         for (const ShellBone& b : layout_.shell_bones(sc))
-            if (b.name.size() == name.size() && std::equal(b.name.begin(), b.name.end(), name.begin(), [](char x, char y) {
-                    return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
-                })) {
+            if (ascii_iequals(b.name, name)) {
                 out = {b.x + off.x, b.y + off.y};
                 return true;
             }

@@ -1,10 +1,10 @@
 // alamo_render - terrain decorations and fog of war on the GPU (docs/re/DECORATIONS.md; CPU side in
 // engine/terrain decorations.hpp / fow.hpp). See world.hpp for what draws where.
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstring>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/render/convert.hpp"
 #include "alamo/render/world.hpp"
@@ -380,13 +380,8 @@ bool WorldRenderer::build_dynamic(const rhi::Frame& frame, std::vector<DecoDraw>
     };
     auto tex_of = [&](const std::string& name) {
         if (name.empty()) return -1;
-        std::string k = name;
-        for (char& c : k) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        for (int t : slot_textures_) {
-            std::string n = textures_[static_cast<size_t>(t)].name;
-            for (char& c : n) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (n == k) return t;
-        }
+        for (int t : slot_textures_)
+            if (ascii_iequals(textures_[static_cast<size_t>(t)].name, name)) return t;
         return -1;
     };
     // Type 2: dynamic tracks.

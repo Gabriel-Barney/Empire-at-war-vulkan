@@ -2,6 +2,7 @@
 #include "save_run.hpp"
 #include "crc_out.hpp"
 
+#include <optional>
 #include <algorithm>
 #include <cinttypes>
 #include <cstdio>
@@ -524,14 +525,12 @@ public:
         root_ = game_dir.empty() ? env_text("ALAMO_FOC_DATA") : game_dir;
         if (root_.empty()) return 0;
         args_ = game_args;
-        vfs::VfsConfig vcfg;
-        vcfg.foc_root = root_;
+        std::optional<std::string> eaw_root;  // nullopt = auto-detect
         if (game_dir.empty()) {  // as ai_run.cpp: the EaW tier from ALAMO_EAW_DATA on the environment route
             const std::string eaw = env_text("ALAMO_EAW_DATA");
-            if (!eaw.empty()) vcfg.eaw_root = eaw;
+            if (!eaw.empty()) eaw_root = eaw;
         }
-        vfs::parse_command_line(args_, vcfg);
-        files_ = vfs::Vfs::create(vcfg, &err);
+        files_ = vfs::mount_game(root_, args_, &err, eaw_root);
         if (!files_) return -1;
         std::vector<std::string> diag;
         if (!db_.load(*files_, {}, &diag) || !raw_.load(*files_, &diag) || !types_.build(raw_, files_.get(), &diag) ||

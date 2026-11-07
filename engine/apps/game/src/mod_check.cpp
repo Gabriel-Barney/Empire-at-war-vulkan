@@ -20,6 +20,7 @@
 #include "alamo/objects/field_schema.hpp"
 #include "alamo/vfs/steam_workshop.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "json_text.hpp"  // the JSON string escaper, shared with benchmark.cpp
 #ifdef ALAMO_GAME_HAVE_MATERIALS
 #include "alamo/assets/model.hpp"
 #include "alamo/materials/effect_audit.hpp"
@@ -113,15 +114,6 @@ void check_campaigns(const GameData& d, ModCheckReport& r) {
     }
 }
 
-std::string upper(std::string_view in) {
-    std::string s(in);
-    for (char& c : s) {
-        if (c == '/') c = '\\';
-        else if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    }
-    return s;
-}
-
 using MissingMap = std::map<std::string, MissingFile>;  // by path: sorted, deterministic
 
 // True when `path` resolves to a file of a mod folder (the VFS mod layer).
@@ -152,7 +144,7 @@ void check_list_files(const GameData& d, MissingMap& m) {
         for (data::XmlNode f : doc.root().children("File")) {
             const std::string_view name = f.text_trimmed();
             if (name.empty()) continue;
-            std::string path = upper(std::string("Data\\XML\\") + std::string(name));
+            std::string path = normalize_name(std::string("Data\\XML\\") + std::string(name));
             if (!d.files->exists(path)) note_missing(m, std::move(path), list, in_mod);
         }
     }
@@ -173,7 +165,7 @@ void check_models(const GameData& d, MissingMap& m) {
             const std::string_view tag = db.tag_name(fi);
             const auto* hit = std::find_if(std::begin(kTags), std::end(kTags), [&](std::string_view k) { return iequals(k, tag); });
             if (hit == std::end(kTags)) continue;
-            std::string path = upper(std::string("Data\\Art\\Models\\") + std::string(f.text[fi]));
+            std::string path = normalize_name(std::string("Data\\Art\\Models\\") + std::string(f.text[fi]));
             if (present.count(path)) continue;
             bool found = d.files->exists(path);
             if (!found && path.find('.', path.rfind('\\')) == std::string::npos) found = d.files->exists(path + ".ALO");
@@ -265,13 +257,6 @@ void walk_text_elements(data::XmlNode n, std::vector<std::pair<data::XmlNode, da
     }
 }
 
-std::string lower(std::string_view in) {
-    std::string s(in);
-    for (char& c : s)
-        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-    return s;
-}
-
 // The Data\XML files of a database in load order, each once.
 std::vector<std::string> database_files(const GameData& d, const XmlDatabase& db) {
     std::vector<std::string> out;
@@ -288,7 +273,7 @@ std::vector<std::string> database_files(const GameData& d, const XmlDatabase& db
         const std::string_view name = f.text_trimmed();
         if (name.empty()) continue;
         std::string path = "Data\\XML\\" + std::string(name);
-        if (seen.insert(upper(path)).second) out.push_back(std::move(path));
+        if (seen.insert(normalize_name(path)).second) out.push_back(std::move(path));
     }
     return out;
 }
@@ -297,8 +282,8 @@ void check_database_tags(const GameData& d, const XmlDatabase& db, ModCheckRepor
     std::set<std::string, std::less<>> known;
     for (const objects::FieldSchema& row : objects::field_schema())
         for (const std::string_view o : db.owners)
-            if (iequals(row.owner, o)) known.insert(lower(row.tag));
-    for (const std::string_view t : db.port_tags) known.insert(lower(t));
+            if (iequals(row.owner, o)) known.insert(ascii_lower(row.tag));
+    for (const std::string_view t : db.port_tags) known.insert(ascii_lower(t));
     struct Seen {
         UnknownXmlTag u;
         std::set<std::string> entries;
@@ -325,7 +310,7 @@ void check_database_tags(const GameData& d, const XmlDatabase& db, ModCheckRepor
         {
             for (const auto& [e, c] : checked) {
                 const std::string entry = path + "#" + std::to_string(e.index());
-                std::string key = lower(c.name());
+                std::string key = ascii_lower(c.name());
                 if (known.count(key)) continue;
                 Seen& s = unknown[std::move(key)];
                 if (s.u.occurrences++ == 0) {
@@ -374,7 +359,7 @@ void check_xml_tags(const GameData& d, ModCheckReport& r) {
 // ---- modc t21: shaders ----
 // "DATA\ART\SHADERS\TERRAIN\X.FX" -> "terrain"; ...\ENGINE\... -> "engine"; else "models".
 [[maybe_unused]] std::string_view shader_drawn_by(std::string_view path) {
-    const std::string p = upper(path);
+    const std::string p = normalize_name(path);
     if (p.find("\\SHADERS\\TERRAIN\\") != std::string::npos) return "terrain";
     if (p.find("\\SHADERS\\ENGINE\\") != std::string::npos) return "engine";
     return "models";
@@ -386,7 +371,7 @@ void check_xml_tags(const GameData& d, ModCheckReport& r) {
     if (slash != std::string_view::npos) name.remove_prefix(slash + 1);
     const size_t dot = name.rfind('.');
     if (dot != std::string_view::npos) name = name.substr(0, dot);
-    return upper(name);
+    return normalize_name(name);
 }
 
 #ifdef ALAMO_GAME_HAVE_MATERIALS
@@ -401,9 +386,9 @@ std::vector<std::string> object_type_models(const GameData& d) {
         if (t.first_definition[i] != i) continue;
         for (objects::FieldIndex fi = t.field_begin[i]; fi < t.field_end[i]; ++fi) {
             if (f.depth[fi] != 1 || f.text[fi].empty()) continue;
-            const std::string tag = upper(db.tag_name(fi));
+            const std::string tag = normalize_name(db.tag_name(fi));
             if (tag.size() < kSuffix.size() || tag.compare(tag.size() - kSuffix.size(), kSuffix.size(), kSuffix) != 0) continue;
-            std::string path = upper(std::string("Data\\Art\\Models\\") + std::string(f.text[fi]));
+            std::string path = normalize_name(std::string("Data\\Art\\Models\\") + std::string(f.text[fi]));
             if (path.find('.', path.rfind('\\')) == std::string::npos) path += ".ALO";
             if (path.size() < 4 || path.compare(path.size() - 4, 4, ".ALO") != 0) continue;
             if (d.files->exists(path)) paths.insert(std::move(path));
@@ -721,7 +706,7 @@ void scan_requires(std::string_view src, const std::string& path, std::map<std::
         std::string_view name = src.substr(i, end - i);
         const size_t sep = name.find_last_of("/\\");
         if (sep != std::string_view::npos) name.remove_prefix(sep + 1);
-        required_by.emplace(upper(name), path);
+        required_by.emplace(normalize_name(name), path);
     }
 }
 
@@ -752,8 +737,7 @@ std::map<std::string, std::string> xml_script_names(const GameData& d, const std
         if (found.size() == wanted.size()) break;
         if (!d.files->read(path, bytes)) continue;
         std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-        for (char& c : text)
-            if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+        ascii_upper_in_place(text);
         for (const std::string_view tag : kScriptNameTags) {
             const std::string open = "<" + std::string(tag);
             for (size_t at = text.find(open); at != std::string::npos; at = text.find(open, at + 1)) {
@@ -1153,51 +1137,6 @@ std::string format_mod_report(const ModCheckReport& r, bool verbose) {
 
 namespace {
 
-// Length of the valid UTF-8 sequence at s[i] (1-4), or 0 when the bytes there are not one.
-size_t utf8_length(std::string_view s, size_t i) {
-    const auto b = [&](size_t k) { return static_cast<unsigned char>(s[k]); };
-    const unsigned char c = b(i);
-    size_t n = 0;
-    uint32_t cp = 0;
-    if (c < 0x80) return 1;
-    if (c >= 0xC2 && c <= 0xDF) n = 2, cp = c & 0x1Fu;
-    else if (c >= 0xE0 && c <= 0xEF) n = 3, cp = c & 0x0Fu;
-    else if (c >= 0xF0 && c <= 0xF4) n = 4, cp = c & 0x07u;
-    else return 0;
-    if (i + n > s.size()) return 0;
-    for (size_t k = 1; k < n; ++k) {
-        if ((b(i + k) & 0xC0u) != 0x80u) return 0;
-        cp = (cp << 6) | (b(i + k) & 0x3Fu);
-    }
-    if ((n == 3 && (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF))) || (n == 4 && (cp < 0x10000 || cp > 0x10FFFF))) return 0;
-    return n;
-}
-
-// A JSON string. Mod data and file names are not always UTF-8 (a mod's XML in a Windows code page): a byte that does not
-// start a valid UTF-8 sequence is written as the Latin-1 character of that value, so the output is always valid JSON.
-void json_str(std::string& o, std::string_view s) {
-    o.push_back('"');
-    for (size_t i = 0; i < s.size();) {
-        const char c = s[i];
-        const auto u = static_cast<unsigned char>(c);
-        const size_t n = utf8_length(s, i);
-        if (c == '"' || c == '\\') {
-            o.push_back('\\');
-            o.push_back(c);
-        } else if (u < 0x20 || n == 0) {
-            char buf[8];
-            std::snprintf(buf, sizeof buf, "\\u%04x", static_cast<unsigned>(u));
-            o += buf;
-        } else {
-            o.append(s.substr(i, n));
-            i += n;
-            continue;
-        }
-        ++i;
-    }
-    o.push_back('"');
-}
-
 // Minimal writer: objects and arrays with comma handling, two-space indent, keys in call order.
 class Json {
 public:
@@ -1215,13 +1154,13 @@ public:
     }
     void key(std::string_view k) {
         sep();
-        json_str(out, k);
+        json_text::json_str(out, k);
         out += ": ";
         pending_value_ = true;
     }
     void str(std::string_view v) {
         sep();
-        json_str(out, v);
+        json_text::json_str(out, v);
     }
     void num(uint64_t v) {
         sep();

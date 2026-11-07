@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/ui/hud_font.hpp"
@@ -12,12 +13,8 @@ namespace alamo::ui {
 
 namespace {
 
-std::string upper(std::string_view s) {
-    std::string o(data::trim(s));
-    for (char& c : o)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return o;
-}
+// Trimmed (data::trim), then ASCII upper case.
+std::string upper(std::string_view s) { return ascii_upper(data::trim(s)); }
 
 void dot(HudDrawList& dl, uint32_t layer, Vec2f c, float half, Rgba8 color) {
     HudQuad q;

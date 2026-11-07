@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "json_text.hpp"
+
 namespace alamo::game {
 
 const char* bench_mode_name(BenchMode m) {
@@ -51,24 +53,6 @@ bool parse_u64(const std::string& s, uint64_t& out) {
     if (s.empty() || s.find_first_not_of("0123456789") != std::string::npos || s.size() > 18) return false;
     out = std::strtoull(s.c_str(), nullptr, 10);
     return true;
-}
-
-void json_string(std::string& o, std::string_view s) {
-    o.push_back('"');
-    for (const char c : s) {
-        const auto u = static_cast<unsigned char>(c);
-        if (c == '"' || c == '\\') {
-            o.push_back('\\');
-            o.push_back(c);
-        } else if (u < 0x20) {
-            char buf[8];
-            std::snprintf(buf, sizeof buf, "\\u%04x", static_cast<unsigned>(u));
-            o += buf;
-        } else {
-            o.push_back(c);
-        }
-    }
-    o.push_back('"');
 }
 
 std::string num(double v) {
@@ -183,7 +167,7 @@ std::string bench_report_json(const BenchReport& r) {
         o += "  \"";
         o += k;
         o += "\": ";
-        json_string(o, v);
+        json_text::json_str(o, v);
         o += ",\n";
     };
     auto val = [&](const char* k, const std::string& v) {
@@ -233,14 +217,14 @@ std::string bench_report_json(const BenchReport& r) {
     std::string gpu = "{";
     for (size_t k = 0; k < r.gpu_ms.size(); ++k) {
         if (k) gpu += ", ";
-        json_string(gpu, r.gpu_ms[k].first);
+        json_text::json_str(gpu, r.gpu_ms[k].first);
         gpu += ": " + stats_json(r.gpu_ms[k].second);
     }
     val("gpu_ms", gpu + "}");
     o += "  \"autopilot\": [";
     for (size_t k = 0; k < r.autopilot.size(); ++k) {
         if (k) o += ", ";
-        json_string(o, r.autopilot[k]);
+        json_text::json_str(o, r.autopilot[k]);
     }
     o += "]\n}\n";
     return o;

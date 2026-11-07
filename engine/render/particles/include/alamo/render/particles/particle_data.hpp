@@ -155,6 +155,11 @@ struct ProxyName {
 };
 ProxyName parse_proxy_name(std::string_view name);
 
+// Cache key of a system name: ASCII upper-cased, one trailing ".ALO" cut ("p_smoke.alo" -> "P_SMOKE"). A directory is
+// kept and '/' is not rewritten, so ParticleLibrary::get("Data\Art\Models\P_SMOKE.ALO") does not share the "P_SMOKE"
+// entry (CU2 t03: get's key unchanged); load_system cuts the directory itself before calling this for SystemDef::name.
+std::string system_key(std::string_view name);
+
 // Case-insensitive cache of systems by name ("P_SMOKE" / "p_smoke.alo"): one load per name, misses cached (134 shipped
 // proxies name nothing, B.3). Reads Data\Art\Models\<NAME>.ALO through the FileProvider. Thread-safe.
 class ParticleLibrary {

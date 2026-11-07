@@ -600,4 +600,16 @@ const std::vector<std::string>& Vfs::mod_dirs() const { return impl_->mod_dirs; 
 const std::vector<std::string>& Vfs::warnings() const { return impl_->warnings; }
 const std::string& Vfs::eaw_root() const { return impl_->eaw_root; }
 
+std::unique_ptr<Vfs> mount_game(std::string_view foc_root, std::span<const std::string> game_args, std::string* err,
+                                std::optional<std::string> eaw_root) {
+    VfsConfig cfg;
+    cfg.foc_root = std::string(foc_root);
+    cfg.eaw_root = std::move(eaw_root);
+    parse_command_line(game_args, cfg);
+    std::string e;
+    std::unique_ptr<Vfs> v = Vfs::create(cfg, &e);
+    if (!v && err) *err = "VFS: " + e;
+    return v;
+}
+
 }  // namespace alamo::vfs

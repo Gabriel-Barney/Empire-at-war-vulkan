@@ -2,11 +2,11 @@
 #include "alamo/render/galactic/planet_portrait.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <vector>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/render/camera.hpp"
 #include "alamo/render/sim_view.hpp"
 #include "alamo/rhi/context.hpp"
@@ -15,19 +15,8 @@
 namespace alamo::render {
 
 namespace {
-std::string upper_of(std::string_view s) {
-    std::string o(s);
-    for (char& c : o) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return o;
-}
 // The type name of a portrait name, or `name` itself when it is already a bare type name.
 std::string_view type_of(std::string_view name) { return is_planet_portrait_name(name) ? planet_portrait_type(name) : name; }
-bool iprefix(std::string_view s, std::string_view p) {
-    if (s.size() < p.size()) return false;
-    for (size_t i = 0; i < p.size(); ++i)
-        if (std::tolower(static_cast<unsigned char>(s[i])) != std::tolower(static_cast<unsigned char>(p[i]))) return false;
-    return true;
-}
 constexpr float kPortraitPitch = 0.34906585f;  // 20 degrees down [port]
 constexpr float kPortraitFill = 0.9f;          // bounding sphere diameter / frame height [port]
 constexpr float kLightYawOffset = -0.7853982f;  // sun 45 degrees round from the camera [port]
@@ -50,7 +39,7 @@ void straight_alpha(std::vector<uint8_t>& px) {
 }  // namespace
 
 bool is_planet_portrait_name(std::string_view name) {
-    return iprefix(name, kPlanetPortraitPrefix) && name.size() > kPlanetPortraitPrefix.size();
+    return ascii_istarts_with(name, kPlanetPortraitPrefix) && name.size() > kPlanetPortraitPrefix.size();
 }
 std::string planet_portrait_name(std::string_view planet_type) { return std::string(kPlanetPortraitPrefix) + std::string(planet_type); }
 std::string_view planet_portrait_type(std::string_view name) {
@@ -64,14 +53,14 @@ PlanetPortraits::PlanetPortraits(Renderer& r, rhi::Allocator& alloc, rhi::FrameR
 PlanetPortraits::~PlanetPortraits() { destroy(); }
 
 const PlanetPortraits::Job* PlanetPortraits::find(std::string_view name) const {
-    auto it = jobs_.find(upper_of(type_of(name)));
+    auto it = jobs_.find(ascii_upper(type_of(name)));
     return it == jobs_.end() ? nullptr : it->second.get();
 }
 
 std::shared_ptr<const assets::TextureAsset> PlanetPortraits::texture(std::string_view name) {
     const std::string_view t = type_of(name);
     if (t.empty()) return nullptr;
-    auto [it, inserted] = jobs_.try_emplace(upper_of(t));
+    auto [it, inserted] = jobs_.try_emplace(ascii_upper(t));
     if (inserted) {
         it->second = std::make_unique<Job>();
         it->second->type = std::string(t);

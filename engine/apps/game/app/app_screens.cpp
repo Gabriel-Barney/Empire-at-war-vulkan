@@ -199,7 +199,7 @@ void App::show_battle_end(bool dialog) {
     if (const size_t w = log.find("winner "); w != std::string::npos) {
         const size_t e = log.find(',', w);
         winner = log.substr(w + 7, e == std::string::npos ? std::string::npos : e - w - 7);
-        info.victory = iequal(winner, local_faction());
+        info.victory = ascii_iequals(winner, local_faction());
     }
     // L1/S4 wave 1 (SCRIPT_GAPS.md 4.2): the local player lost a battle that ran a tactical plot set -> STORY_MISSION_LOST
     // to the galactic story, name = that plots file (the shipped Param1 values) [inferred: the original's "monitor

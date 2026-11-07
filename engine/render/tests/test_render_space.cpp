@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "alamo/assets/asset_cache.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/parallel.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/data/game_database.hpp"
@@ -141,11 +142,6 @@ static void write_png(const std::string& path, uint32_t w, uint32_t h, std::vect
     CHECK(render::write_png_rgba(path, w, h, rgba));
 }
 
-static std::string upper(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return s;
-}
-
 static const char* bucket_name(render::PhaseBucket b) {
     switch (b) {
     case render::PhaseBucket::Terrain: return "Terrain";
@@ -168,7 +164,7 @@ static std::string stem_lower(const std::string& path) {
     if (slash != std::string::npos) s = s.substr(slash + 1);
     const size_t dot = s.find_last_of('.');
     if (dot != std::string::npos) s = s.substr(0, dot);
-    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    alamo::ascii_lower_in_place(s);
     return s;
 }
 
@@ -221,7 +217,7 @@ static void check_nebula_vs(render::Renderer& rr, const render::Instance& in, co
     const render::GpuModel& gm = *in.model;
     const render::GpuSubmesh* gs = nullptr;
     for (const render::GpuSubmesh& s : gm.submeshes)
-        if (upper(s.effect_name) == "NEBULA") gs = &s;
+        if (alamo::ascii_upper(s.effect_name) == "NEBULA") gs = &s;
     CHECK(gs && !gs->passes.empty());
     if (!gs || gs->passes.empty()) return;
     const render::GpuPass& gp = gs->passes.front();
@@ -324,7 +320,7 @@ static void space_map_order(Gpu& g, render::Renderer& rr, Offscreen& o, vfs::Vfs
     for (size_t i = 0; i < sky.size(); ++i) {
         if (!sky[i].model || !sky[i].model->asset) continue;
         print_model("background", sky[i], 1);
-        if (upper(sky[i].model->asset->name).find("W_PLANET_") != std::string::npos) planets.push_back(i);
+        if (alamo::ascii_upper(sky[i].model->asset->name).find("W_PLANET_") != std::string::npos) planets.push_back(i);
     }
     std::vector<render::Instance> nebulae, others;  // main scene: Nebula.fx props / everything else
     {
@@ -332,7 +328,7 @@ static void space_map_order(Gpu& g, render::Renderer& rr, Offscreen& o, vfs::Vfs
         for (const render::Instance& in : main) {
             if (!in.model || !in.model->asset) continue;
             bool nebula = false;
-            for (const render::GpuSubmesh& s : in.model->submeshes) nebula = nebula || upper(s.effect_name) == "NEBULA";
+            for (const render::GpuSubmesh& s : in.model->submeshes) nebula = nebula || alamo::ascii_upper(s.effect_name) == "NEBULA";
             (nebula ? nebulae : others).push_back(in);
             if (std::find(seen.begin(), seen.end(), in.model) != seen.end()) continue;
             seen.push_back(in.model);

@@ -1,13 +1,13 @@
 ﻿#include "alamo/game/game_data.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <map>
 #include <optional>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/sim/save_session.hpp"
@@ -68,11 +68,6 @@ bool load_common(GameData& out, std::string* err) {
     return true;
 }
 
-std::string upper(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return s;
-}
-
 void load_faction_skirmish_data(GameData& out) {
     out.skirmish_forces = load_skirmish_forces(*out.files);
 #ifdef ALAMO_GAME_HAVE_GALACTIC_AI
@@ -89,15 +84,8 @@ uint32_t neutral_faction(const galactic::GalacticRules& rules) {
 }  // namespace
 
 bool load_game_data(const std::string& root, const std::vector<std::string>& args, GameData& out, std::string* err) {
-    vfs::VfsConfig cfg;  // mounted exactly as alamo_headless does
-    cfg.foc_root = root;
-    vfs::parse_command_line(args, cfg);
-    std::string e;
-    std::unique_ptr<vfs::Vfs> v = vfs::Vfs::create(cfg, &e);
-    if (!v) {
-        if (err) *err = "VFS: " + e;
-        return false;
-    }
+    std::unique_ptr<vfs::Vfs> v = vfs::mount_game(root, args, err);  // mounted exactly as alamo_headless does
+    if (!v) return false;
     out.root = root;
     out.args = args;
     out.mod_layer = !v->mod_dirs().empty();
@@ -288,7 +276,7 @@ std::vector<std::string> list_maps(const GameData& data, const char* glob) {
         std::string stem = p;
         if (const size_t s = stem.find_last_of("\\/"); s != std::string::npos) stem = stem.substr(s + 1);
         if (const size_t d = stem.find_last_of('.'); d != std::string::npos) stem = stem.substr(0, d);
-        stem = upper(stem);
+        ascii_upper_in_place(stem);
         if (std::find(out.begin(), out.end(), stem) != out.end()) continue;
         if (!map_file_usable(*data.vfs, p)) continue;
         out.push_back(stem);

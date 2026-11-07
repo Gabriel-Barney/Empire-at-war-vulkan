@@ -1,6 +1,5 @@
 // Test inputs: synthetic asm programs and the real-install corpus (FXO -> bytecode through the VFS).
 #include <algorithm>
-#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -12,6 +11,7 @@
 #include "test_common.hpp"
 
 #ifdef ALAMO_SHADERXLAT_HAVE_VFS
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/meg/meg.h"
 #include "alamo/vfs/vfs.hpp"
@@ -650,8 +650,7 @@ void collect_mod_sm3(const std::string& root, std::map<std::string, Blob>& out, 
         std::sort(files.begin(), files.end());
         std::vector<std::pair<std::string, std::vector<uint8_t>>> sources;
         for (const fs::path& f : files) {
-            std::string ext = f.extension().string();
-            for (char& ch : ext) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            const std::string ext = alamo::ascii_upper(f.extension().string());
             if (ext == ".FXO") {
                 std::vector<uint8_t> bytes;
                 if (alamo::read_host_file(f, bytes)) sources.emplace_back(f.stem().string(), std::move(bytes));

@@ -2,7 +2,6 @@
 // (app_script_saveload.cpp) are declared in app_script.hpp.
 #include "app_script.hpp"
 
-#include <cctype>
 
 namespace alamo_game_app {
 
@@ -1193,7 +1192,7 @@ void App::make_script() {
         s.push_back(step_click_control(ui::kPortModsDialog, "IDC_CANCEL_BUTTON"));
         s.push_back(step_wait("main menu again", [](App& a) {
             const ui::GuiDialog* d = a.ui_.gui.top();
-            return d && iequal(d->name(), "IDD_MAIN_MENU_DIALOG");
+            return d && ascii_iequals(d->name(), "IDD_MAIN_MENU_DIALOG");
         }, 120));
         // OI host: the attract demo behind the main menu (MAIN_MENU_BACKGROUND.md; started here as the menu-open path would,
         // scripted runs never start it on their own): its battle world is drawn under the menu (world draws > 0, no
@@ -1406,16 +1405,12 @@ void App::make_script() {
             const std::string want = env_or_empty("ALAMO_SMOKE_BUY_TYPE");
             const std::vector<ui::BuyUnitEntry>& u = a.buy_.units;
             for (size_t i = 0; i < u.size(); ++i)
-                if (!want.empty() && iequal(u[i].type, want)) return i;
+                if (!want.empty() && ascii_iequals(u[i].type, want)) return i;
             if (!space_buy) return size_t{0};
             for (size_t i = 0; i < u.size(); ++i)
                 if (u[i].type == kSmokeSkirmishBuyType) return i;
-            const auto upper_name = [](std::string n) {
-                for (char& c : n) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-                return n;
-            };
             for (size_t i = 0; i < u.size(); ++i)
-                if (upper_name(u[i].type).find("_CORVETTE") != std::string::npos) return i;
+                if (ascii_upper(u[i].type).find("_CORVETTE") != std::string::npos) return i;
             for (size_t i = 0; i < u.size(); ++i) {
                 const uint32_t t = a.data_.rules.find_type(u[i].type);
                 if (t != galactic::kNoIndex && !a.data_.rules.types[t].build_initially_locked) return i;
@@ -1493,11 +1488,11 @@ void App::make_script() {
         if (!want.empty()) {
             const ui::CampaignMenu menu = ui::build_campaign_menu(data_.db);
             for (size_t i = 0; i < menu.custom.size() && *custom_row < 0; ++i)
-                if (iequal(menu.custom[i].set, want)) *custom_row = static_cast<int64_t>(i);
+                if (ascii_iequals(menu.custom[i].set, want)) *custom_row = static_cast<int64_t>(i);
             for (size_t i = 0; i < menu.story.size() && *custom_row < 0 && *story_row < 0; ++i) {
-                if (iequal(menu.story[i].set, want)) *story_row = static_cast<int64_t>(i);
+                if (ascii_iequals(menu.story[i].set, want)) *story_row = static_cast<int64_t>(i);
                 for (size_t j = 0; j < menu.story[i].factions.size() && *story_row < 0; ++j)
-                    if (iequal(menu.story[i].factions[j].campaign, want)) *story_row = static_cast<int64_t>(i), story_faction = j;
+                    if (ascii_iequals(menu.story[i].factions[j].campaign, want)) *story_row = static_cast<int64_t>(i), story_faction = j;
                 if (*story_row >= 0 && story_faction < menu.story[i].factions.size()) story_choice = menu.story[i].factions[story_faction];
             }
             if (*custom_row < 0 && *story_row < 0)

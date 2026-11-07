@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -11,6 +10,7 @@
 #include "alamo/assets/asset_cache.hpp"
 #include "alamo/assets/model.hpp"
 #include "alamo/assets/vertex_layout.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/render/sim_snapshot.hpp"
 
@@ -20,20 +20,6 @@ namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
 static_assert(sizeof(assets::StaticVertex) == 64, "StaticVertex is the 64-byte alD3dVertNU2C record");
-
-std::string upper(std::string_view s) {
-    std::string u(s);
-    for (char& c : u) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return u;
-}
-
-std::string trim(std::string s) {
-    const auto ws = [](unsigned char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
-    size_t a = 0, b = s.size();
-    while (a < b && ws(static_cast<unsigned char>(s[a]))) ++a;
-    while (b > a && ws(static_cast<unsigned char>(s[b - 1]))) --b;
-    return s.substr(a, b - a);
-}
 
 // Up to `n` floats separated by commas / whitespace; returns how many parsed.
 size_t parse_float_list(std::string_view text, float* out, size_t n) {
@@ -209,7 +195,7 @@ std::string primitive_model_name(GalacticPrimitive kind, uint32_t rgba) {
 }
 
 bool parse_primitive_model_name(std::string_view name, GalacticPrimitive& kind, uint32_t& rgba) {
-    const std::string u = upper(name);
+    const std::string u = ascii_upper(name);
     const std::string_view prefix = "ALAMO_GAL_";
     if (u.size() < prefix.size() || u.compare(0, prefix.size(), prefix) != 0) return false;
     for (uint8_t k = 0; k < static_cast<uint8_t>(GalacticPrimitive::Count); ++k) {
@@ -406,7 +392,7 @@ const GpuModel* GalacticModels::model(const std::string& name) {
     uint32_t rgba = 0;
     if (parse_primitive_model_name(name, kind, rgba)) return primitive(kind, rgba);
     if (!streamer_) return nullptr;
-    auto [it, inserted] = by_name_.try_emplace(upper(name), 0u);
+    auto [it, inserted] = by_name_.try_emplace(ascii_upper(name), 0u);
     if (inserted) {
         it->second = streamer_->request(name);
         handles_.push_back(it->second);
@@ -416,7 +402,7 @@ const GpuModel* GalacticModels::model(const std::string& name) {
 
 bool GalacticModels::model_failed(const std::string& name) {
     if (!streamer_) return false;
-    const auto it = by_name_.find(upper(name));
+    const auto it = by_name_.find(ascii_upper(name));
     return it != by_name_.end() && streamer_->state(it->second) == ModelStreamer::State::Failed;
 }
 
@@ -445,7 +431,7 @@ const GpuModel* GalacticModels::resident(Prim& p) {
 
 const GpuModel* GalacticModels::line(const std::string& texture, uint32_t rgba) {
     (void)rgba;  // tinted per instance (Instance::light_scale)
-    auto [it, inserted] = lines_.try_emplace(upper(texture));
+    auto [it, inserted] = lines_.try_emplace(ascii_upper(texture));
     if (inserted) {
         it->second = std::make_unique<Prim>();
         std::string err;
@@ -462,7 +448,7 @@ const GpuModel* GalacticModels::line(const std::string& texture, uint32_t rgba) 
 
 std::shared_ptr<const assets::AnimationClip> GalacticModels::idle_clip(const std::string& model) {
     if (!cache_ || !files_ || model.empty()) return nullptr;
-    const std::string key = upper(model);
+    const std::string key = ascii_upper(model);
     auto [it, inserted] = clips_.try_emplace(key);
     if (!inserted) return it->second;
     // "<model stem>_IDLE_00" (w_planet_urban01.alo -> W_PLANET_URBAN01_IDLE_00.ALA), existence checked first so
@@ -525,7 +511,7 @@ RouteLineStyle load_route_line_style(const FileProvider& files) {
     for (data::XmlNode n : doc.root().children("TradeRouteLine")) {
         if (!line) line = n;  // first entry, unless one is called Default
         std::string nm(n.attribute("Name"));
-        if (upper(nm) == "DEFAULT") {
+        if (ascii_iequals(nm, "DEFAULT")) {
             line = n;
             break;
         }
@@ -542,11 +528,11 @@ RouteLineStyle load_route_line_style(const FileProvider& files) {
             const float v = std::strtof(w.c_str(), nullptr);
             if (std::isfinite(v) && v >= 0.0f) r.width = v;
         }
-        const std::string mode = trim(std::string(f.child_text("Render_Mode")));
-        if (!mode.empty()) r.render_mode = upper(mode);
-        const std::string tex = trim(std::string(f.child_text("Texture")));
+        const std::string mode(ascii_trim(f.child_text("Render_Mode")));
+        if (!mode.empty()) r.render_mode = ascii_upper(mode);
+        const std::string tex(ascii_trim(f.child_text("Texture")));
         if (!tex.empty()) r.texture = tex;
-        const std::string spark = trim(std::string(f.child_text("Spark_Texture")));
+        const std::string spark(ascii_trim(f.child_text("Spark_Texture")));
         if (!spark.empty()) r.spark = spark;
         s.settings[route_settings_index(f.attribute("Name"))] = r;
     }
@@ -586,7 +572,7 @@ uint32_t RouteLineStyle::index(RouteClass c) {
 }
 
 uint32_t route_settings_index(std::string_view name) {
-    const std::string n = upper(trim(std::string(name)));
+    const std::string n = ascii_upper(ascii_trim(name));
     if (n == "ENEMY") return kRouteEnemy;
     if (n == "ALLY") return kRouteAlly;
     if (n == "GOOD") return kRouteGood;
@@ -636,7 +622,7 @@ CorruptionPathSettings load_corruption_path_settings(const FileProvider& files) 
     const data::XmlDocument doc = data::XmlDocument::parse(bytes, "GameConstants.xml");
     if (!doc.ok()) return s;
     const data::XmlNode root = doc.root();
-    const std::string tex = trim(std::string(root.child_text("Fleet_Hyperspace_Band_Texture_Name")));
+    const std::string tex(ascii_trim(root.child_text("Fleet_Hyperspace_Band_Texture_Name")));
     if (!tex.empty()) s.texture = tex;
     float v[4] = {0, 0, 0, 0};
     if (parse_float_list(root.child_text("Corruption_Path_Width"), v, 1) == 1 && std::isfinite(v[0]) && v[0] >= 0.0f) s.width = v[0];
@@ -1070,8 +1056,8 @@ GalacticCorruptionSettings load_galactic_corruption_settings(const FileProvider&
     const data::XmlDocument doc = data::XmlDocument::parse(bytes, "GameConstants.xml");
     if (!doc.ok()) return s;
     const data::XmlNode root = doc.root();
-    const std::string pn = trim(std::string(root.child_text("Corruption_Particle_Name")));
-    const std::string ln = trim(std::string(root.child_text("Corruption_Particle_Line_Name")));
+    const std::string pn(ascii_trim(root.child_text("Corruption_Particle_Name")));
+    const std::string ln(ascii_trim(root.child_text("Corruption_Particle_Line_Name")));
     if (!pn.empty()) s.planet_particle = pn;
     if (!ln.empty()) s.line_particle = ln;
     float b[2] = {0, 0};

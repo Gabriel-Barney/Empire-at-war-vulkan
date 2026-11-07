@@ -7,6 +7,7 @@
 #include <exception>
 
 #include "alamo/assets/model.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/formats/alo.hpp"
 #include "alamo/formats/particle.hpp"
@@ -14,12 +15,6 @@
 namespace alamo::render::particles {
 
 namespace {
-
-std::string upper(std::string_view s) {
-    std::string u(s);
-    for (char& c : u) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return u;
-}
 
 Shape to_shape(const particle::SpawnShape& s) {
     Shape o;
@@ -122,7 +117,7 @@ bool EmitterDef::sorted() const {
 
 std::string texture_base_name(std::string_view name) {
     const size_t p = name.find_last_of("\\/");
-    return upper(p == std::string_view::npos ? name : name.substr(p + 1));
+    return ascii_upper(p == std::string_view::npos ? name : name.substr(p + 1));
 }
 
 uint32_t emitter_pool(const EmitterDef& e) {
@@ -199,11 +194,8 @@ bool load_system(std::span<const uint8_t> bytes, std::string_view name, SystemDe
         }
         const particle::ParticleSystem& ps = f.particles;
         SystemDef s;
-        std::string n = upper(name);
-        const size_t slash = n.find_last_of("\\/");
-        if (slash != std::string::npos) n = n.substr(slash + 1);
-        if (n.size() > 4 && n.compare(n.size() - 4, 4, ".ALO") == 0) n.resize(n.size() - 4);
-        s.name = n;
+        const size_t slash = name.find_last_of("\\/");  // the directory is cut here, not in system_key
+        s.name = system_key(slash == std::string_view::npos ? name : name.substr(slash + 1));
         s.leave_particles = ps.leave_particles != 0;
         s.emitters.reserve(ps.emitters.size());
         for (size_t i = 0; i < ps.emitters.size(); ++i) {
@@ -285,7 +277,7 @@ bool load_system(std::span<const uint8_t> bytes, std::string_view name, SystemDe
 
 ProxyName parse_proxy_name(std::string_view name) {
     ProxyName p;
-    const std::string u = upper(name);
+    const std::string u = ascii_upper(name);
     auto index_after = [&](const char* tag, size_t& at) {
         at = u.find(tag);
         if (at == std::string::npos) return -1;
@@ -306,9 +298,14 @@ ProxyName parse_proxy_name(std::string_view name) {
     return p;
 }
 
-SystemPtr ParticleLibrary::get(std::string_view name) {
-    std::string key = upper(name);
+std::string system_key(std::string_view name) {
+    std::string key = ascii_upper(name);
     if (key.size() > 4 && key.compare(key.size() - 4, 4, ".ALO") == 0) key.resize(key.size() - 4);
+    return key;
+}
+
+SystemPtr ParticleLibrary::get(std::string_view name) {
+    const std::string key = system_key(name);
     {
         std::lock_guard<std::mutex> l(mutex_);
         const auto it = cache_.find(key);
@@ -344,7 +341,7 @@ SystemPtr ParticleLibrary::get(std::string_view name) {
 void ParticleLibrary::add(SystemPtr system) {
     if (!system) return;
     std::lock_guard<std::mutex> l(mutex_);
-    cache_[upper(system->name)] = std::move(system);
+    cache_[ascii_upper(system->name)] = std::move(system);
 }
 
 ParticleLibrary::Stats ParticleLibrary::stats() const {

@@ -2,6 +2,7 @@
 #include "ai_run.hpp"
 #include "crc_out.hpp"
 
+#include <optional>
 #include <algorithm>
 #include <chrono>
 #include <cinttypes>
@@ -121,21 +122,19 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         std::printf("--galactic-ai: no --game <corruption dir> and ALAMO_FOC_DATA unset: skipped\n");
         return 0;
     }
-    vfs::VfsConfig vcfg;
-    vcfg.foc_root = root;
     // Text-only data (extracted/foc_data_text.zip unzipped) has no sibling GameData to auto-detect, so the EaW tier would be
     // missing and the AI definitions (ai.goals CRC: the EaW-only Ewok / intervention / sandbox sets) would differ from the
     // goldens, which come from a full install. ALAMO_EAW_DATA (a folder with Data\XML: the install's GameData, or
     // eaw_data_text.zip unzipped) names the EaW tier explicitly. Only on the environment route; --game decides for itself.
+    std::optional<std::string> eaw_root;  // nullopt = auto-detect
     if (opt.game_dir.empty()) {
         const std::string eaw = env_text("ALAMO_EAW_DATA");
-        if (!eaw.empty()) vcfg.eaw_root = eaw;
+        if (!eaw.empty()) eaw_root = eaw;
     }
-    vfs::parse_command_line(opt.game_args, vcfg);
     std::string err;
-    std::unique_ptr<vfs::Vfs> files = vfs::Vfs::create(vcfg, &err);
+    std::unique_ptr<vfs::Vfs> files = vfs::mount_game(root, opt.game_args, &err, eaw_root);
     if (!files) {
-        std::fprintf(stderr, "VFS: %s\n", err.c_str());
+        std::fprintf(stderr, "%s\n", err.c_str());
         return 2;
     }
     std::vector<std::string> diag;
