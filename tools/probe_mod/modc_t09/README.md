@@ -8,7 +8,7 @@ text, sound, how the AI plays). Nothing here drives the game for you and nothing
 | Mod | Workshop id | What it is |
 |---|---|---|
 | EAW-Remake (Empire at War Remake) | 1770851727 | Total conversion by its own team: Rebel / Empire / Underworld + Hutts and minor factions, own MEGs and shaders |
-| New Jedi Order / Yuuzhan Vong mod | 2858787558 | Era mod: New_Republic, Galactic_Empire, Vong and ~45 minor factions, loose XML, story files with their own root tag |
+| Star Wars: Age of Legends (New Jedi Order era) | 2858787558 | Era mod: New_Republic, Galactic_Empire, Vong and ~45 minor factions, loose XML, story files with their own root tag |
 
 ## How to start
 
@@ -30,23 +30,25 @@ before reporting it.
 ## What to look at (each mod, about 20 minutes)
 
 1. **Main menu** (2 min): the mod's menu background, fonts and text (no raw `TEXT_...` keys), music. The Mods dialog row
-   says "(running)" for this mod.
+   says "(running)" for this mod. Known (modc t34): on the Remake the hidden smoke saw "Single Player" drawn as a heading
+   with no button, and its click did nothing; on Age of Legends the skirmish setup's Land / Space list did not offer
+   Space. Say what the original shows there, and whether Single Player / Space work when you click them.
 2. **Space skirmish** (5 min): Skirmish > Space, any map of the mod (the Remake's own maps are on the Custom tab too),
    you vs one AI. Look at: the buy screen (only the mod's units, sensible costs), ship models and textures (missing =
    invisible or pink / green), engine glows and shields, weapons firing, the AI building and attacking within a few
    minutes, no freeze or crash.
 3. **Land skirmish** (5 min): Skirmish > Land, any map. Look at: starting units, terrain, infantry / vehicle models and
    animations, build pads, the AI capturing pads and attacking.
-4. **Galactic conquest** (8 min): Remake: "GC Mini Web Way" (any faction). Vong mod: a "Balance Point" sandbox (New
+4. **Galactic conquest** (8 min): Remake: "GC Mini Web Way" (any faction). Age of Legends: a "Balance Point" sandbox (New
    Republic or Vong). Look at: the galaxy map (planets, trade routes, icons), planet info, building and moving a fleet,
    the AI factions taking turns (planets changing owner after a few minutes at normal speed), one space battle (fight it
    or auto-resolve), the story / event pop-ups.
 
-Known from the headless runs (`docs/MODS.md` §9), so not worth reporting again: the Vong mod's 95 story scripts are
+Known from the headless runs (`docs/MODS.md` §9), so not worth reporting again: Age of Legends' 95 story scripts are
 32-bit bytecode (they do not run in the original either), two of its AI scripts start with a UTF-8 BOM (same), its
 `Try_Weapon_Switch` / unknown filter Lua errors are in the mod's own scripts; the Remake's land factions have no
 `Land_Skirmish_AI_Default_Forces`, so the port starts them with their three cheapest units ([port] fallback, the original
-places nothing); Remake space battles on maps with very large asteroid fields run slowly in the port (about 40 ms a sim
+places nothing); Remake space battles on maps with very large asteroid fields run slowly in the port (about 26 ms a sim
 tick headless, modc t33): say how slow it feels, but it is known.
 
 ## Where to report
