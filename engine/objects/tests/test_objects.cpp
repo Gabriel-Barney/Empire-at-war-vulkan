@@ -51,7 +51,7 @@ static int g_fail = 0;
 
 static void test_schema() {
     const auto rows = field_schema();
-    CHECK(rows.size() == 2918);  // 1675 + 1224 + 14 + 5 rows in docs/re/xml_field_tables.md
+    CHECK(rows.size() == 2984);  // 1675 + 1224 + 14 + 5 rows in docs/re/xml_field_tables.md, + 66 of modc t25
     const uint32_t ms = find_field_schema("max_speed");
     CHECK(ms != kNoSchema && rows[ms].code == 0x8 && rows[ms].kind() == FieldKind::Float && rows[ms].offset == 0x37c);
     const uint32_t dummy = find_field_schema("Is_Dummy");

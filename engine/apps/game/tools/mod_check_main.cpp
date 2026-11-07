@@ -1,12 +1,14 @@
 // alamo_mod_check - Q5 / modc t05 mod load report (alamo/game/mod_check.hpp): loads the data as alamo_game does and
 // reports files, loader steps, content counts, campaign maps, missing files, unknown XML tags, Lua compile / load errors
-// and unbound engine calls; optionally the machine-readable summary (docs/MODS.md §5.1).
+// unbound engine calls and shader issues; optionally the machine-readable summary (docs/MODS.md §5.1).
 //
 //   alamo_mod_check [--game DIR] [MODPATH=..] [STEAMMOD=..] [FALLBACKPATH=..] [--out FILE] [--json FILE|-] [--verbose]
 //                   [--no-campaigns] [--no-lua] [--no-lua-run] [--no-files] [--no-xml-tags] [--no-submod]
+//                   [--no-shaders] [--no-dxc]
 //   --game defaults to ALAMO_FOC_DATA. --json - writes the JSON to stdout instead of the text report.
 //   STEAMMOD=<id> is found in the Steam library folders (alamo/vfs/steam_workshop.hpp); the workshop items of the same
 //   folders and <game>\Mods\* are the parents the submod check considers (modc t16).
+//   --no-shaders skips the effect audit (modc t21); --no-dxc keeps it to translation (no runtime DXC compile).
 //   Exit 0: no errors (warnings allowed), 1: errors, 2: usage.
 //   Example (a Steam workshop mod):
 //     alamo_mod_check --game "...\corruption" STEAMMOD=1125571106 --json report.json
@@ -24,7 +26,7 @@ int usage() {
     std::fprintf(stderr,
                  "usage: alamo_mod_check [--game DIR] [MODPATH=..] [STEAMMOD=..] [FALLBACKPATH=..] [--out FILE] [--json FILE|-]\n"
                  "                       [--verbose] [--no-campaigns] [--no-lua] [--no-lua-run] [--no-files] [--no-xml-tags]\n"
-                 "                       [--no-submod]\n");
+                 "                       [--no-submod] [--no-shaders] [--no-dxc]\n");
     return 2;
 }
 
@@ -59,6 +61,8 @@ int main(int argc, char** argv) {
         else if (a == "--no-files") opt.files = false;
         else if (a == "--no-xml-tags") opt.xml_tags = false;
         else if (a == "--no-submod") opt.submod = false;
+        else if (a == "--no-shaders") opt.shaders = false;
+        else if (a == "--no-dxc") opt.shader_compile = false;
         else if (a.find('=') != std::string::npos) args.push_back(a);  // MODPATH= etc.
         else return usage();
     }

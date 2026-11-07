@@ -164,7 +164,7 @@ Nothing crashes and nothing is skipped silently: every case except the first is 
 (kind, effect, path, `in_mod`, detail). Up front: `materials::audit_effects()` / `alamo_effect_audit <FoC dir> [MODPATH=..]
 [--no-dxc] [--json FILE|-]` (JSON schema `alamo.effect_audit` v1: counts + `issues`). At run time:
 `render::EffectCache::issues()` and `Renderer::shader_issues()` (adds translation failures); each issue is also logged
-once. The load report shows them through modc t21.
+once. The load report lists them too (`== shaders`, JSON `shaders`, §5; modc t21).
 
 **Installed mods** (2026-11-06, base FoC + 64Patch / Patch / Patch2 = 82 effects; workshop folder
 `F:\SteamLibrary\steamapps\workshop\content\32470`; the other 8 items ship no shaders). "Differs" = same path as a base
@@ -208,23 +208,24 @@ from a mod's name. Two levels:
 | A Lua script does not compile (also: a UTF-8 BOM at its start, which the original does not skip: `re/MODC_LOADER.md` §2) | `LuaScript Error in <name>.lua!`, script does not run | Listed with the compiler message | Warning | **Q6 stack** (`alamo_mod_check` compiles every `Data\Scripts\**.lua`) |
 | A script calls an engine function the port does not bind, or reads a value that fails | Script error, the script stops | The load report runs the main chunk of every entry script (not `Library\`) once in its own VM and lists the errors, and lists the engine globals / methods the scripts call that the port registers as unbound stubs (static scan). Later failures show up in session runs (`alamo_headless --story` / `--galactic-ai`) | Warning | **main** (modc t05) |
 | XML that is not well-formed | Its own reader is lenient; element names may start with a digit (`<181st>`: `re/MODC_LOADER.md` §3) | Digit-led names parse as elements (probe); other recoveries (`<?xml ...>` without `?`, mismatched close tags, a `<` that starts no markup) keep the file and are listed as loader diagnostics | Warning | **main** (engine/data `xml.cpp`; digit-led names: modc t14) |
+| A script's main chunk fails on a `require` of a script no layer has | Stock Lua 5.0.2 `require` raises "could not load package": the chunk stops there and the script does not load (`re/MODC_LOADER.md` §6) | Listed with the missing name and what loads the script (below); a mod's own script under a by-name root that nothing names is an unused-script lead instead | Warning; lead: Info (not counted) | **main** (modc t24) |
 | A script's main chunk fails after reading a `GlobalValue` another script sets during the session | Runs: the setter ran first | Listed apart as session-dependent, with the key and the setting script (below) | Info (not counted) | **modc t12** |
-| An XML tag the port does not read | Ignored | Per database (object types, factions, campaigns, trade routes, hard points, GameConstants, SFX / music / speech events, Audio.xml, tactical cameras, movies, difficulty adjustments, lightning effects, targeting priority sets, mouse pointers): tags that neither the original's table for that class nor the port's loader reads, per tag with counts (below) | Warning | **main** (modc t05 object types, t15 the others) |
+| An XML tag the port does not read | Ignored | Per database (object types, factions, campaigns, trade routes, hard points, GameConstants, SFX / music / speech events, Audio.xml, tactical cameras, movies, difficulty adjustments, lightning effects, targeting priority sets, mouse pointers, command bar components, RadarMap.xml): tags that neither the original's table for that class nor the port's loader reads, per tag with counts (below) | Warning | **main** (modc t05 object types, t15 the others) |
 | A submod checked without its parent | Its lists name the parent's XML files: skipped, hundreds of missing files | Listed as missing files as before, plus a submod hint naming the installed mod that has them (below) | Info (not counted) | **modc t16** |
 | A mod `.fxo` replaces or adds an effect | Loaded | Loaded and translated like a shipped effect (§4.1) | — | **main** (modc t11) |
-| An effect only a mod ships as `.fx` source, or a `.fx` beside a `.fxo` | Compiled by D3DX | `.fx` only: green default under its name; with a `.fxo`: the `.fxo` (§4.1, `source_only` / `source_shadowed`) | Warning | **main** (modc t11); in the report: **modc t21**; compile: **modc t23** |
-| An effect's best technique uses shader model 3 | Drawn (SM3 hardware) | Next drawable technique (`technique_skipped`), else unlit (`unsupported_pass`) | Warning | **main** (modc t11); report **modc t21**; SM3: **modc t22** |
-| An effect fails to load, has no technique, or a pass fails translation | Green default / validation failure | Green default (`load_failed`, `no_technique`) or unlit (`translate_failed`) | Warning | **main** (modc t11); report **modc t21** |
+| An effect only a mod ships as `.fx` source, or a `.fx` beside a `.fxo` | Compiled by D3DX | `.fx` only: green default under its name; with a `.fxo`: the `.fxo` (§4.1, `source_only` / `source_shadowed`) | Warning | **main** (modc t11); in the report: **main** (modc t21); compile: **modc t23** |
+| An effect's best technique uses shader model 3 | Drawn (SM3 hardware) | Next drawable technique (`technique_skipped`), else unlit (`unsupported_pass`) | Warning | **main** (modc t11); report **main** (modc t21); SM3: **modc t22** |
+| An effect fails to load, has no technique, or a pass fails translation | Green default / validation failure | Green default (`load_failed`, `no_technique`) or unlit (`translate_failed`) | Warning | **main** (modc t11); report **main** (modc t21) |
 
 The report: `alamo_mod_check [--game DIR] [MODPATH=..] [STEAMMOD=..] [FALLBACKPATH=..] [--out FILE] [--json FILE|-] [--verbose]
-[--no-campaigns] [--no-lua] [--no-lua-run] [--no-files] [--no-xml-tags] [--no-submod]` loads the data exactly as
+[--no-campaigns] [--no-lua] [--no-lua-run] [--no-files] [--no-xml-tags] [--no-submod] [--no-shaders] [--no-dxc]` loads the data exactly as
 `alamo_game` does and prints files (VFS layers, warnings, per-folder new / replaced counts), loader steps, content counts,
 campaign checks, missing files, unknown XML tags, Lua compile errors, main-chunk errors (and the session-dependent ones
-apart), unbound engine calls and the submod hint, then `== result: OK|ERRORS, N errors, M warnings`
+apart, and the unused-script leads), unbound engine calls, shader issues and the submod hint, then `== result: OK|ERRORS, N errors, M warnings`
 (**main**, `engine/apps/game/src/mod_check.cpp`; exit 0 without errors, 1 with, 2 usage). Each finding of the missing
 files, XML tags and Lua sections is marked `[mod]` when it comes from a file in a mod folder: base FoC itself has some (49
-missing cinematic models; 72 unread tags: 56 object type tags, 8 GameConstants, 3 hard point, 2 faction, 2 campaign, 1
-tactical camera), so a mod's own problems are the marked ones. `--json` writes the summary below (`-`: to stdout instead
+missing cinematic models; 73 unread tags: 56 object type tags, 8 GameConstants, 3 hard point, 1 faction, 2 campaign, 1
+tactical camera, 2 command bar; none of them read by the original, modc t25), so a mod's own problems are the marked ones. `--json` writes the summary below (`-`: to stdout instead
 of the text). **modc t08** shows that summary in the game's mod picker.
 
 A main-chunk error is a lead, not proof: the script runs with no session (no players or objects). Session state another
@@ -237,14 +238,41 @@ Thrawn's Revenge's `ModContentLoader` reads `GlobalValue.Get("MOD_ID")`, which i
 `Base_Definitions`: 77 of TR's 80 main-chunk errors (Fall of the Republic: 107 of 111) are session-dependent; the 3 left
 are `require` targets TR does not ship. A key no script sets stays an error.
 
+A `require` of a script no layer has (modc t24): retail's stock Lua 5.0.2 `require` raises "could not load package"
+there, so the chunk stops and the script does not load, as in the port (`re/MODC_LOADER.md` §6). Whether that matters
+depends on whether the game loads the script, so each such run error carries the missing name and what loads the
+script (`named_by`), checked in this order: a root the original enumerates or whose loading is not traced (the AI
+folders, Evaluators, Interventions: stays a warning), a script of the same path in the game without the mods, a literal
+`require` of its name in another script, an XML element that names scripts (`Lua_Script` of object types and story
+plots, `GalacticFreeStoreScript` / `SpaceFreeStoreScript` / `LandFreeStoreScript`, `Game_Scoring_Script_Name`, any
+file under `Data\XML`). A mod's own script under GameObject, Story, FreeStore or Miscellaneous that none of these names
+never runs in retail either: it is listed as an **unused-script lead** (info, `lua.unused_scripts`). Thrawn's Revenge:
+all 3 (`GameScoring_old.lua` beside the `GameScoring` that GameConstants names, `Targeting.lua`,
+`ObjectScript_MicroJump.lua`) are leads, so TR has 0 main-chunk warnings left.
+
+Shader issues (modc t21): the report runs `materials::audit_effects` like `alamo_effect_audit` (§4.1; with the runtime
+DXC when it loads, `--no-dxc` translation only, `--no-shaders` off) and lists every issue as a warning with its kind,
+effect, path, `[mod]` and detail, and what draws the effect: `terrain` (a `Shaders\Terrain\` effect the terrain
+renderer picks by name), `engine` (`Shaders\Engine\` or a device-init engine effect such as `AlamoEngine`), else
+`models` with how many object type models (every `*Model_Name` tag of the first definitions, `.alo` found) name it in
+a material and the first one. The models are only read when an issue is a `models` effect (none in base FoC).
+
 Unread XML tags (modc t15): for the object types, the field tables and sub-object elements as before; for the other
 databases the port loads (`kXmlDatabases` in `mod_check.cpp`: where each one's entries are, the list file's `<File>`
 entries or one file, and the entry element), a direct child of an entry counts as read when the original's descriptor
 table for that class has a row for it (`docs/re/xml_field_tables.md` through `objects::field_schema()`, by segment owner)
 or the port's loader reads it although no row lists it (named per database with the loader: hard point `Type`,
 GameConstants `Ships_Per_Stack`, Audio.xml `Ambient_Map_Sounds`, tactical camera `MinHeightAboveTerrain`, and every
-speech event tag, whose class has no table in the doc). Not checked: CommandBarComponent (its table misses 48 tags base
-FoC uses) and nested databases (RadarMap.xml).
+speech event tag, whose class has no table in the doc). Since modc t25 also CommandBarComponents (every child of the
+root is a component, as the original's `Parse_Database_Entry` reads it) and RadarMap.xml, which the original walks as a
+whole: no element path is checked, a known tag is read at any depth, an element without text is only a container, and
+`Passability_Color_Settings`, `Color` and `Radar_Map_Event` are the walker's own names (`re/xml_field_tables.md`, the
+"modc t25" sections, which also added the 59 command bar rows `field_tables.py` had missed). Tags match
+case-insensitively in the original (the vanilla misspelling `Icon_ALternate_Texture_Name` is read). Of base FoC's 16
+non-object tags that no table had, only `Faction` `Text_ID` is read; the other 15 (8 GameConstants, `Faction`
+`Space_Retreat_Flight_Increment`, `Campaign` `Good_` / `Evil_Victory_Conditions`, 3 `HardPoint` `*_Hardpoint`,
+`TacticalCamera` `Location_Height_Smooth_Time`) and the command bar's `Mega_Texture_Name` / `Disabled_Darken` are not
+read by the original either, so they stay listed.
 
 Submods (modc t16): when a mod's own list files (`Data\XML\*Files.xml`) name XML files that no layer has, the report
 looks for them in every installed mod outside the stack: the workshop items of the Steam library folders (the same
@@ -259,7 +287,7 @@ mod's name. On the workshop mods installed here (2026-11-06): 3643661236, 380396
 come out as submods of 1125571106 (241 / 259 / 212 missing list entries, 241 / 259 / 207 of them in TR), and load
 with 0 errors stacked on it; 2858787558's 18 missing list entries are in no installed mod.
 
-### 5.1 The machine-readable summary (`alamo.mod_report`, version 2)
+### 5.1 The machine-readable summary (`alamo.mod_report`, version 3)
 
 One JSON object, UTF-8 (bytes of the data that are not UTF-8 are written as the Latin-1 character of that value), keys in
 the order below, every list complete. A new key may be added in a later version of the same number; a key is never
@@ -267,7 +295,7 @@ removed or changed in meaning without raising `version`. Paths are game-relative
 
 | Key | Type | Meaning |
 |---|---|---|
-| `schema`, `version` | string, number | `"alamo.mod_report"`, `2` |
+| `schema`, `version` | string, number | `"alamo.mod_report"`, `3` |
 | `result` | string | `"ok"` (no errors) or `"errors"` |
 | `errors`, `warnings` | number | as the text report's result line (levels in the table above) |
 | `game`, `args` | string, [string] | the FoC folder and the VFS command line as given |
@@ -277,8 +305,9 @@ removed or changed in meaning without raising `version`. Paths are game-relative
 | `content` | object | `campaigns`, `planets`, `trade_routes`, `object_types`, `factions`, `ai` (bool: AI data loaded), `ai_plans`, `tactical_space_plans`, `tactical_land_plans`, `official_maps`, `custom_maps` |
 | `campaigns` | object | `checked`, `without_planets` [campaign name] (warnings: menu entries that cannot be started; when it lists every checked campaign, one error), `skipped_rows` (number of skipped rows over all campaigns), `warnings` [one line per message with its campaigns] |
 | `missing_files` | [object] | `path`, `referenced_by` (the first naming list file, or `"<type> (<tag>)"`), `references`, `in_mod`; sorted by path |
-| `unknown_xml_tags` | [object] | `database` (`"object types"`, `"factions"`, `"campaigns"`, `"trade routes"`, `"hard points"`, `"game constants"`, `"sfx events"`, `"music events"`, `"speech events"`, `"audio"`, `"tactical cameras"`, `"movies"`, `"difficulty adjustments"`, `"lightning effects"`, `"targeting priority sets"`, `"mouse pointers"`), `tag` (first spelling), `occurrences`, `types` (distinct entries using it), `first_file` (as listed, not upper-cased), `in_mod`; most occurrences first, then by database and tag |
-| `lua` | object | `scripts` (compiled), `compile_errors` [{`path`, `error`, `in_mod`}], `chunks_run` (entry scripts run), `run_errors` [{`path`, `error`, `in_mod`}] (not session-dependent), `session_errors` [{`path`, `error`, `in_mod`, `global_value` (the unset key read), `set_by` (the first script setting it)}] (info), `unbound_calls` [{`name`, `kind` (`"global"` / `"method"`), `call_sites`, `scripts`}] |
+| `unknown_xml_tags` | [object] | `database` (`"object types"`, `"factions"`, `"campaigns"`, `"trade routes"`, `"hard points"`, `"game constants"`, `"sfx events"`, `"music events"`, `"speech events"`, `"audio"`, `"tactical cameras"`, `"movies"`, `"difficulty adjustments"`, `"lightning effects"`, `"targeting priority sets"`, `"mouse pointers"`, `"command bar components"`, `"radar map"`), `tag` (first spelling), `occurrences`, `types` (distinct entries using it), `first_file` (as listed, not upper-cased), `in_mod`; most occurrences first, then by database and tag |
+| `lua` | object | `scripts` (compiled), `compile_errors` [{`path`, `error`, `in_mod`}], `chunks_run` (entry scripts run), `run_errors` [{`path`, `error`, `in_mod`, `missing_require` (the script name of a `require` that found no file, `""` for other errors), `named_by` (with `missing_require`: what loads the script: `"<xml file> (<TAG>)"`, `"require in <script>"`, `"base script"`, `"script root <root>"`)}] (not session-dependent), `session_errors` [{`path`, `error`, `in_mod`, `global_value` (the unset key read), `set_by` (the first script setting it)}] (info), `unused_scripts` [as `run_errors`, `named_by` `""`] (info: unused-script leads), `unbound_calls` [{`name`, `kind` (`"global"` / `"method"`), `call_sites`, `scripts`}] |
+| `shaders` | object | `checked` (bool: the effect audit ran), `effects`, `mod_effects`, `loaded`, `translated_passes`, `translated_ok`, `compiled` (bool: the runtime DXC compiled the passes) as `alamo.effect_audit` (§4.1), `models_read` (object type models read for the cross-reference), `issues` [{`kind` (§4.1 issue kinds), `effect` (upper-case base name), `path`, `in_mod`, `detail`, `drawn_by` (`"models"`, `"terrain"`, `"engine"`), `models` (with `"models"`: object type models whose materials name the effect), `first_model`}] (warnings), by effect then kind |
 | `submod` | object | `likely` (bool: stack it on `parents[0]`), `missing_list_entries` (XML files the mod's own lists name that no layer has; 0: no hint), `parents` [{`id` (workshop id or `Mods` folder name), `kind` (`"workshop"` / `"local"`), `path` (host folder), `arg` (`"STEAMMOD=<id>"` / `"MODPATH=Mods\<name>"`), `provides` (of the missing list entries), `mentioned` (its id is in the mod's `modinfo.json`)}] (most `provides` first, at most 5), `stacked_args` [string] (when likely: `args` then the parent's `arg`) |
 | `check_errors` | [string] | a check that threw (errors) |
 
@@ -289,6 +318,18 @@ removed or changed in meaning without raising `version`. Paths are game-relative
 Version 2 (modc t12, t15, t16, 2026-11-06): `run_errors` no longer holds the session-dependent errors (now in
 `session_errors`), so `warnings` no longer counts them; `unknown_xml_tags` covers the other databases and has
 `database`; `submod` is new; a campaign without planets is a warning unless no campaign has planets (then one error).
+
+Version 3 (modc t21, t24, 2026-11-07): `shaders` is new and its issues count as warnings; `run_errors` entries have
+`missing_require` and `named_by`, and the unused-script leads moved from `run_errors` to `lua.unused_scripts` (not
+counted). Readers of version 2 keys need no change. `unknown_xml_tags` also covers `"command bar components"` and
+`"radar map"` (modc t25).
+
+Installed mods, 2026-11-07 (base FoC at F:): shader issues per item as in §4.1; `Planet_Deathstar` (1770851727,
+`technique_skipped`) is named by 1 object type model (`EMPIRE_DEATH_STAR.ALO`), `MeshFresnelGlow` (2858787558,
+`unsupported_pass`) by none, `_TerrainRenderBump` is a terrain effect and `AlamoEngine` an engine effect. Missing-require
+run errors: Thrawn's Revenge 3 and Fall of the Republic 4 are all unused-script leads (0 left as warnings); 3622043265
+keeps 2 (`InstantAction_*_Tech.lua`, named by `Templates_Instant_Action.xml`, `require("eawx-std/class")` which that copy
+does not ship) and has 3 leads.
 
 ## 6. Port rules that apply only when a mod layer is loaded
 

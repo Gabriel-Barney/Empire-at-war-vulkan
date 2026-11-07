@@ -94,7 +94,7 @@ void test_mod(const std::string& foc) {
         // The machine-readable summary.
         const std::string js = alamo::game::format_mod_report_json(r);
         CHECK(contains(js, "\"schema\": \"alamo.mod_report\""));
-        CHECK(contains(js, "\"version\": 2"));
+        CHECK(contains(js, "\"version\": 3"));
         CHECK(contains(js, "\"result\": \"ok\""));
         CHECK(contains(js, "\"errors\": 0"));
         CHECK(contains(js, "\"added\": 5"));
@@ -106,6 +106,9 @@ void test_mod(const std::string& foc) {
         CHECK(contains(js, "\"compile_errors\": []"));
         CHECK(contains(js, "\"run_errors\": []"));
         CHECK(contains(js, "\"session_errors\": []"));
+        CHECK(contains(js, "\"unused_scripts\": []"));  // modc t24
+        CHECK(contains(js, "\"shaders\": {"));           // modc t21: the fixture ships no effect
+        CHECK(r.shaders.checked && r.shaders.effects == 0 && r.shaders.issues.empty());
         CHECK(contains(js, "\"likely\": false"));
         CHECK(contains(js, "\"chunks_run\": 2"));
         if (g_fail) std::fputs(js.c_str(), stdout);
