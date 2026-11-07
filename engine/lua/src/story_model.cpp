@@ -339,9 +339,12 @@ std::vector<uint32_t> table_order(const std::vector<uint32_t>& keys, std::vector
 
 uint32_t StoryModel::add_plot(std::string_view plot_name, std::string_view xml, bool active, std::string_view lua_script,
                               std::string* err) {
+    // modc t06: the root element's name is not checked (STORY.md §2.1 note; the original's XML databases read the
+    // root's children whatever the root is called, OBJECT_TYPES.md §0 item 2). A mod ships its story and plot files
+    // with another root tag.
     const data::XmlDocument doc = data::XmlDocument::parse(xml, std::string(plot_name));
-    if (!doc.ok() || !iequal(doc.root().name(), "Story")) {
-        if (err) *err = std::string(plot_name) + ": not a <Story> file";
+    if (!doc.ok()) {
+        if (err) *err = std::string(plot_name) + ": not a well-formed <Story> file";
         return kNone;
     }
     StoryPlot plot;
@@ -487,8 +490,8 @@ bool StoryModel::load_plots(const FileProvider& files, std::string_view plots_fi
         return false;
     }
     const data::XmlDocument doc = data::XmlDocument::parse(bytes, path);
-    if (!doc.ok() || !iequal(doc.root().name(), "Story_Mode_Plots")) {
-        if (err) *err = path + ": not a <Story_Mode_Plots> file";
+    if (!doc.ok()) {  // modc t06: any root name (see add_plot)
+        if (err) *err = path + ": not a well-formed <Story_Mode_Plots> file";
         return false;
     }
     std::string pending_script;

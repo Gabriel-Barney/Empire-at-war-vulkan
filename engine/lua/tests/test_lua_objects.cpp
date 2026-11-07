@@ -273,6 +273,16 @@ static void test_find(const Db& db) {
           last_message_has(vm, "Find_Nearest - unknown game object type, properties mask or catefory NoSuchThing."));
     CHECK(run(vm, "Find_Nearest()") == "" && last_message_has(vm, "Expected between 1 and 4, got 0."));
     CHECK(run(vm, "Find_Nearest(5)") == "" && last_message_has(vm, "invalid type for parameter 1; expected game object"));
+    // modc t06: a nil filter (a mod's category helper returning nil) is not a filter, the player is then read at slot 2;
+    // a non-player there is a null player (no player filter), a non-bool flag keeps true. No error in any of these.
+    {
+        const size_t before = vm.messages().size();
+        CHECK(run(vm, "n14 = Find_Nearest(t1, nil, p1, false).Get_Object_ID() "  // slot 2 is nil: null player, all players
+                      "n15 = Find_Nearest(t1, nil, nil, true).Get_Object_ID() "
+                      "n16 = Find_Nearest(t1, 'Infantry', 7, 'x').Get_Object_ID()") == "");
+        CHECK(gnum(vm, "n14") == 3.0 && gnum(vm, "n15") == 3.0 && gnum(vm, "n16") == 2.0);
+        CHECK(vm.messages().size() == before);
+    }
     // Bridge relation hook: "allied or self" = not an enemy. Nothing is p1's enemy -> p2's tank is a friend of p1.
     s.bridge.is_enemy = [](int32_t, int32_t) { return false; };
     CHECK(run(vm, "n9 = Find_Nearest(t1, p1, true).Get_Object_ID() n13 = tostring(Find_Nearest(t1, p1, false))") == "" &&

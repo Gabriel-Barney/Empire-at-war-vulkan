@@ -399,6 +399,19 @@ static void test_plots_file() {
     CHECK(sub.load_plots(dp2, "Conquests\\Sub\\Story_Plots_S.xml", &err));
     CHECK(sub.plot_count() == 2 && sub.find_plot("Conquests\\Sub\\S1.xml") == 0 &&
           sub.find_plot("Nowhere/B.xml") == 1 && sub.find_plot("S1.xml") == 0xFFFFFFFFu);
+    // modc t06: the root element's name is not checked, for the plots file and for the story file (a mod uses another
+    // root tag for both).
+    write_file(root / "Data/XML/Story_Plots_R.xml",
+               "<Mod_Files><Lua_Script>Script_R</Lua_Script><Active_Plot>R.xml</Active_Plot></Mod_Files>");
+    write_file(root / "Data/XML/R.xml", "<Mod_Files><Event Name=\"R1\"><Event_Type>STORY_ELAPSED</Event_Type>"
+                                        "<Event_Param1>0</Event_Param1></Event></Mod_Files>");
+    DirectoryProvider dp3(root.string());
+    StoryModel other_root;
+    CHECK(other_root.load_plots(dp3, "Story_Plots_R.xml", &err));
+    CHECK(other_root.plot_count() == 1 && other_root.plot(0).lua_script == "Script_R" && other_root.plot(0).active);
+    other_root.update(0, 0);
+    other_root.update(1, 1.0 / 30.0);
+    CHECK(fired_names(other_root) == "R1,");
     fs::remove_all(root, ec);
 }
 

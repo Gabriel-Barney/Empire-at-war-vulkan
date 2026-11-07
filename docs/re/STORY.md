@@ -189,7 +189,9 @@ take a tag in Reward_Param1 and remove or complete the newest holocron record wi
 
 ### 2.1 Story_Plots file (`0x329aa0`) [H]
 
-Children of `<Story_Mode_Plots>` are read in order:
+Children of `<Story_Mode_Plots>` are read in order. The root's name is not checked, here or in the plot (`<Story>`)
+file [M: like the other XML databases (OBJECT_TYPES.md §0 item 2); a released mod, workshop 2858787558, names the root
+of every plots and story file `AoL_mod_files`, 562 files; modc t06]:
 
 - `<Lua_Script>X</Lua_Script>` stores X as the pending script.
 - Any other tag with text creates a plot from `Data\XML\<text>`. **active = (tag name is exactly `Active_Plot`)**,

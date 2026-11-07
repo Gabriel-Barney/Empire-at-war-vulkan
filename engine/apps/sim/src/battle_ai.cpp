@@ -1043,7 +1043,10 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 const float range = std::max(u->range, 100.0f);
                 // s78f t10: as the human path (TacticalBattle::exec_attack, FIGHTER_FLYING §4.11 B 1 / B 3): a fighter's move
                 // names the target as its object block; in range nobody moves and the formation is still replaced.
-                const objects::ObjectId fobj = is_fighter(u->id) ? t->id : objects::kNoObjectId;
+                // modc t06: with a TEAM container target `t` is null; the block is the human path's (the squadron
+                // container itself, else the picked member).
+                const objects::ObjectId block = ct && b_->movement_->fighter_squad(ct->id) ? ct->id : tu->id;
+                const objects::ObjectId fobj = is_fighter(u->id) ? block : objects::kNoObjectId;
                 if (d > 0.8f * range) {
                     const float k = (d - 0.7f * range) / d;
                     move_unit(u->id, up.x + dx * k, up.y + dy * k, mv::kThreatOff, 0, fobj);

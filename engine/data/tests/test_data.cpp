@@ -271,6 +271,59 @@ static void write_file(const fs::path& p, const std::string& s) {
     std::ofstream(p, std::ios::binary) << s;
 }
 
+// modc t06: planet columns through Variant_Of_Existing_Type (OBJECT_TYPES.md §3.3 / §3.4). The template is in a later
+// file (any definition order), a two-step chain, a variant's own tags win, its <Behavior> replaces the list (last one
+// wins), an empty tag is a no-op, a missing parent or a cycle keeps only the element's own tags.
+static void test_planet_variants() {
+    const fs::path tmp = fs::temp_directory_path() / "alamo_data_planet_variants";
+    fs::remove_all(tmp);
+    const fs::path x = tmp / "Data" / "XML";
+    write_file(x / "GAMECONSTANTS.XML", "<GameConstants/>");
+    write_file(x / "TRADEROUTEFILES.XML", "<Trade_Route_Files/>");
+    write_file(x / "CAMPAIGNFILES.XML", "<Campaign_Files/>");
+    write_file(x / "GAMEOBJECTFILES.XML",
+               "<Game_Object_Files><File>Planets.xml</File><File>Templates.xml</File></Game_Object_Files>");
+    write_file(x / "PLANETS.XML",
+               "<Mod_Planets>"
+               "<Planet Name=\"A\"><Variant_Of_Existing_Type>TEMPLATE_PLANET</Variant_Of_Existing_Type>"
+               "<Galactic_Position>1,2,3</Galactic_Position><Max_Space_Base></Max_Space_Base></Planet>"
+               "<Planet Name=\"B\"><Variant_Of_Existing_Type>Rich_Template</Variant_Of_Existing_Type>"
+               "<Planet_Credit_Value>7</Planet_Credit_Value></Planet>"
+               "<Planet Name=\"C\"><Variant_Of_Existing_Type>Template_Planet</Variant_Of_Existing_Type>"
+               "<Behavior>PLANET</Behavior><Behavior>IDLE</Behavior></Planet>"
+               "<Planet Name=\"D\"><Variant_Of_Existing_Type>No_Such_Type</Variant_Of_Existing_Type>"
+               "<Behavior>PLANET</Behavior></Planet>"
+               "<Planet Name=\"E\"><Variant_Of_Existing_Type>E</Variant_Of_Existing_Type><Planet_Credit_Value>3</Planet_Credit_Value></Planet>"
+               "</Mod_Planets>");
+    write_file(x / "TEMPLATES.XML",
+               "<Planets>"
+               "<Planet Name=\"Template_Planet\"><Behavior>SELECTABLE, PLANET, PRODUCTION</Behavior>"
+               "<Planet_Credit_Value>40</Planet_Credit_Value><Max_Space_Base>5</Max_Space_Base><Max_Ground_Base>4</Max_Ground_Base>"
+               "<Always_Instantiate_Galactic>Yes</Always_Instantiate_Galactic></Planet>"
+               "<Planet Name=\"Rich_Template\"><Variant_Of_Existing_Type>Template_Planet</Variant_Of_Existing_Type>"
+               "<Planet_Credit_Value>90</Planet_Credit_Value><Max_Ground_Base>2</Max_Ground_Base></Planet>"
+               "</Planets>");
+    DirectoryProvider dp(path_to_utf8(tmp));
+    std::vector<std::string> diag;
+    GameDatabase db;
+    const bool loaded = db.load(dp, {}, &diag);
+    if (!loaded)
+        for (const std::string& s : diag) std::printf("  diag: %s\n", s.c_str());
+    CHECK(loaded);
+    const PlanetTypes& p = db.planets();
+    const uint32_t a = p.find("A"), b = p.find("B"), c = p.find("C"), d = p.find("D"), e = p.find("E");
+    CHECK(a != kInvalidPlanet && b != kInvalidPlanet && c != kInvalidPlanet && d != kInvalidPlanet && e != kInvalidPlanet);
+    CHECK(p.flags[a] == (kPlanetAlwaysInstantiate | kPlanetHasPlanetBehavior) && p.credit_value[a] == 40);
+    CHECK(p.max_space_base[a] == 5 && p.max_ground_base[a] == 4 && p.position[a].y == 2.0f);  // empty tag: no-op
+    CHECK(p.behaviors[a] == (std::vector<std::string>{"SELECTABLE", "PLANET", "PRODUCTION"}));
+    CHECK(p.credit_value[b] == 7 && p.max_ground_base[b] == 2 && p.max_space_base[b] == 5);  // two-step chain
+    CHECK((p.flags[b] & kPlanetHasPlanetBehavior) && (p.flags[c] & kPlanetAlwaysInstantiate));
+    CHECK(p.behaviors[c] == std::vector<std::string>{"IDLE"} && !(p.flags[c] & kPlanetHasPlanetBehavior));
+    CHECK(p.flags[d] == kPlanetHasPlanetBehavior && p.credit_value[d] == 0);  // missing parent: own tags
+    CHECK(p.flags[e] == 0 && p.credit_value[e] == 3);                         // cycle: own tags
+    fs::remove_all(tmp);
+}
+
 static void test_database_synthetic() {
     // list_file_crc: standard CRC-32 over the name as written (trimmed), case kept.
     CHECK(list_file_crc("123456789") == 0xCBF43926u);
@@ -756,6 +809,7 @@ int main() {
     test_xml_robustness();
     test_values();
     test_database_synthetic();
+    test_planet_variants();
     test_database_install_layout();
 
     const std::string foc = env_or("ALAMO_FOC_DATA", "/home/claude/data/foc");

@@ -435,3 +435,48 @@ Each needs either a data-driven replacement or a `docs/re/` citation showing the
 | Shader issues in `alamo_mod_check` and `alamo.mod_report` | modc t21 |
 | Shader model 3 in shaderxlat | modc t22 |
 | `.fx` source compilation (prebuild / cached) | modc t23 |
+
+## 9. Second mod (modc t06)
+
+The proof that the loader is not shaped around Thrawn's Revenge: two other installed workshop mods, checked headless on
+2026-11-06 (MSVC Release, `alamo_mod_check`, `alamo_headless`). Gabriel's in-game run is **modc t09**
+(`tools/probe_mod/modc_t09/README.md`).
+
+**Picks.** Of the workshop items on this PC (`steamapps\workshop\content\32470`), 1125571106 / 3622043265 are Thrawn's
+Revenge, 1976399102 is Fall of the Republic (same team and script framework as TR, so it proves little), 3830298393 has no
+`Data\`, and every local `Mods\` folder is a TR submod. That left:
+
+| Mod (named from its own data; neither has a `modinfo.json`) | Id | Why |
+|---|---|---|
+| EAW-Remake (`<Info Name="EAW-Remake">` in its MEG lists) | 1770851727 | Total conversion by another team: 21 GB, own MEGs replacing base ones (`Config.meg`, `Shaders.meg`, `Maps.meg`), 93 own effects, 10,031 types, 30 factions, `Basic_AI` skirmish AI |
+| New Jedi Order / Yuuzhan Vong era mod (`NJO.jpg`, `Vong.ico`) | 2858787558 | Mostly loose XML, 13,449 types, 50 factions, 169 campaigns, its own root tags and a planet template; no TR framework |
+
+Neither is small; no small non-TR mod is installed. The fixture mod (`testdata/mod_fixture`, modc t07) stands in for one.
+
+**Results** (final binary; times are wall clock on this PC):
+
+| Check | EAW-Remake 1770851727 | Vong mod 2858787558 |
+|---|---|---|
+| Load report | OK, 0 errors, 187 warnings; 23 campaigns (8 menu-only), 694 planet types, 93/93 effects compiled, 0 Lua compile errors | OK, 0 errors, 1337 warnings; 169 campaigns, 455 planet types, 88 effects, 97 scripts do not compile (95 copied 32-bit bytecode, 2 with a UTF-8 BOM: the original rejects both), 18 listed XML files missing |
+| Space skirmish, 3000 ticks | OK: 106 orders, 185 decisions, 0 Lua errors, but slow (133 s: about 40 ms a tick, `tac.movement` 25 ms, on the mod's Geonosis map with its huge asteroid obstacles; **modc t33**) | OK: 3.4 s, 59 orders, 132 decisions, 23 Lua errors (the mod's own scripts: `Try_Weapon_Switch` undefined, an unknown `FindAllObjectsOfType` filter) |
+| Land skirmish `_MP_LAND_UTAPAU`, 3000 ticks | OK: 1.1 s, 60 orders, 34 decisions, 0 Lua errors (no `Land_Skirmish_AI_Default_Forces`: the [port] cheapest-units fallback) | OK: 5.7 s, 72 orders, 185 decisions, 0 Lua errors |
+| Galactic AI, 9000 ticks, `--story --scoring --object-scripts` | `GC_Mini_Web_Way_Imperial`: OK, 34 s, 131 planets, 12 AI players, 157 decisions, 43 orders, 1 owner change, 828 story events, 0 Lua errors | `Sandbox_Balance_New_Republic`: OK, 22 s, 77 planets, 17 players (10 are `None` in the campaign's own `AI_Player_Control`), 384 decisions, 165 orders, 0 Lua errors |
+
+**General gaps found and fixed** (none names a mod; base-FoC goldens unchanged):
+
+- `Find_Nearest` raised "invalid type for parameter 2" for a non-player in its player slot (a mod's free store passes the
+  nil from a category helper). Now it converts like `Find_All_Objects_Of_Type`'s player arguments: no player filter, a
+  non-bool keeps the default (`LUA_API.md`, [M]). Remake space: 58 errors before, 0 after.
+- Battle AI attack with a TEAM-container target and a fighter attacker dereferenced a null object (crash after 8 s in Vong
+  space, 110 s in Remake space). The fighter block is now the container itself, as the human path
+  (`TacticalBattle::exec_attack`) does.
+- The story and plot loaders checked the root element's name (`Story`, `Story_Mode_Plots`); the Vong mod uses its own root
+  tag in 562 files and its campaigns failed to start. The original reads children only (`STORY.md` §2.1, [M]).
+- The planet table ignored `Variant_Of_Existing_Type`: all 434 of the Vong mod's planets are variants of one template
+  planet, so none had a `PLANET` behaviour, no planet object was created and the mod's AI script spun in
+  `while true do for _ in pairs(empty) ... end end`, which never yields (the original hangs on that loop too, but it has the
+  planets). Planet columns now resolve the chain by the OBJECT_TYPES §3.3 / §3.4 rules (`test_planet_variants`).
+
+**Open** (new `modc` task): **t33** space-skirmish movement cost on maps with very large obstacles (Remake Geonosis,
+about 40 ms a tick). The Lua C sources are built without frame pointers in sanitizer builds, so crash stacks stop inside
+Lua (debugging aid only, not filed).

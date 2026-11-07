@@ -1248,6 +1248,9 @@ type name 0x407c00), but only one optional string, in argument 2; failure → er
 - Argument 2 is the filter only if it is a string; otherwise the player is looked for at index 2. The player
   (PlayerWrapper) and the bool (LuaBool 0x140a157b0, default **true**) are read **only when both slots exist**
   (`player_index + 1 < nargs`): `Find_Nearest(obj, "Infantry", player)` ignores the player.
+  A value in the player slot that is not a PlayerWrapper converts to a null player (no player filter, as the "null
+  player wrappers" of Find_All_Objects_Of_Type), and a non-bool in the bool slot keeps the default: the function has
+  no error string for either slot (table above) [M; modc t06, a mod's `Find_Nearest(obj, nil, owner, true)`].
 - Candidates: for each player Q in player-list index order, skipping Q whose faction is `Is_Neutral`, and, with a
   player P, keeping only Q with `(relation(Q, P) == 0) == friendly_bool` (0x2823e0: allied / self = true): the
   objects of Q in the tactical perception grid list (0x140b31900 +0x88[Q], UNIT_AI objects only,

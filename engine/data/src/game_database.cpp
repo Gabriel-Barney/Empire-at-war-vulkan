@@ -235,28 +235,71 @@ void GameDatabase::load_game_objects(const FileProvider& provider, bool& ok) {
             p.by_crc_[crc].push_back(row);  // find() returns the first matching row
             p.element.push_back(e);
             p.duplicate.push_back(dup ? uint8_t{1} : uint8_t{0});
-
-            Vec3 pos{};
-            if (XmlNode gp = e.child("Galactic_Position")) {
-                if (const auto v = parse_vec3(gp.text())) pos = *v;
-                else warn(where(gp) + ": planet '" + std::string(name) + "' has a bad Galactic_Position");
-            }
-            p.position.push_back(pos);
-            uint32_t flags = 0;
-            if (parse_bool_or(e.child_text("In_Background"), false)) flags |= kPlanetInBackground;
-            if (parse_bool_or(e.child_text("Always_Instantiate_Galactic"), false)) flags |= kPlanetAlwaysInstantiate;
-            // Q1: graph membership is "has a PLANET behaviour slot", from <Behavior>.
-            std::vector<std::string> beh;
-            for (XmlNode bn : e.children("Behavior"))
-                for (std::string_view tok : split_list(bn.text())) beh.emplace_back(tok);
-            for (const std::string& tok : beh)
-                if (iequals(tok, "PLANET")) flags |= kPlanetHasPlanetBehavior;
-            p.behaviors.push_back(std::move(beh));
-            p.flags.push_back(flags);
-            p.credit_value.push_back(parse_int_or(e.child_text("Planet_Credit_Value"), 0));
-            p.max_space_base.push_back(parse_int_or(e.child_text("Max_Space_Base"), 0));
-            p.max_ground_base.push_back(parse_int_or(e.child_text("Max_Ground_Base"), 0));
         }
+    }
+
+    // The planet columns, after every file is read: a <Variant_Of_Existing_Type> planet takes each field it does not
+    // set from its resolved parent (OBJECT_TYPES.md §3.3: scalars from the child when it has the tag; a variant's
+    // <Behavior> replaces the parent's list, its last occurrence wins; an empty tag is a no-op). The parent is the first
+    // definition of the name, in any file (§3.4); a missing parent or a cycle leaves the element's own tags only.
+    // modc t06: a mod defines every planet as a variant of one template planet; before, none of them was a planet.
+    // Base FoC / EaW define no planet variant.
+    PlanetTypes& p = planets_;
+    for (uint32_t row = 0; row < p.name.size(); ++row) {
+        std::vector<XmlNode> chain{p.element[row]};  // the element, then its parents
+        for (int depth = 0; depth < 16; ++depth) {
+            const std::string_view parent = trim(chain.back().child_text("Variant_Of_Existing_Type"));
+            if (parent.empty()) break;
+            const GameObjectRecord* rec = find_game_object(parent);
+            if (!rec || std::find(chain.begin(), chain.end(), rec->element) != chain.end()) {
+                chain.resize(1);  // unresolved: own tags only
+                break;
+            }
+            chain.push_back(rec->element);
+        }
+        // The nearest element of the chain with a non-empty <tag>.
+        auto field = [&](std::string_view tag) -> XmlNode {
+            for (const XmlNode& n : chain)
+                for (XmlNode c : n.children(tag))
+                    if (!c.text_trimmed().empty()) return c;
+            return XmlNode{};
+        };
+        Vec3 pos{};
+        if (XmlNode gp = field("Galactic_Position")) {
+            if (const auto v = parse_vec3(gp.text())) pos = *v;
+            else warn(where(gp) + ": planet '" + p.name[row] + "' has a bad Galactic_Position");
+        }
+        p.position.push_back(pos);
+        auto text = [&](std::string_view tag) {
+            const XmlNode n = field(tag);
+            return n ? n.text_trimmed() : std::string_view{};
+        };
+        uint32_t flags = 0;
+        if (parse_bool_or(text("In_Background"), false)) flags |= kPlanetInBackground;
+        if (parse_bool_or(text("Always_Instantiate_Galactic"), false)) flags |= kPlanetAlwaysInstantiate;
+        // Q1: graph membership is "has a PLANET behaviour slot", from <Behavior>. A plain type appends every occurrence
+        // (§4.4); in a variant the last non-empty one replaces the parent's list.
+        std::vector<std::string> beh;
+        for (const XmlNode& n : chain) {
+            const bool variant = !trim(n.child_text("Variant_Of_Existing_Type")).empty() && chain.size() > 1;
+            std::vector<std::string> own;
+            for (XmlNode bn : n.children("Behavior")) {
+                if (bn.text_trimmed().empty()) continue;
+                if (variant) own.clear();
+                for (std::string_view tok : split_list(bn.text())) own.emplace_back(tok);
+            }
+            if (!own.empty()) {
+                beh = std::move(own);
+                break;
+            }
+        }
+        for (const std::string& tok : beh)
+            if (iequals(tok, "PLANET")) flags |= kPlanetHasPlanetBehavior;
+        p.behaviors.push_back(std::move(beh));
+        p.flags.push_back(flags);
+        p.credit_value.push_back(parse_int_or(text("Planet_Credit_Value"), 0));
+        p.max_space_base.push_back(parse_int_or(text("Max_Space_Base"), 0));
+        p.max_ground_base.push_back(parse_int_or(text("Max_Ground_Base"), 0));
     }
 }
 

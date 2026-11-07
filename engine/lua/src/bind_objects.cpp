@@ -776,7 +776,7 @@ int m_get_all_planets(Call& c) {
 //     target's object / the task force's first live unit, excluded from the candidates [port for a task force]).
 //   * Argument 2 is the filter only when it is a string (parse_filter_string; unknown -> error, nothing returned);
 //     the player (PlayerWrapper) and the bool are read only when BOTH slots exist, so (obj, "Infantry", player) and
-//     (obj, player) ignore the player. Wrong types in those slots: error [inferred].
+//     (obj, player) ignore the player. Wrong types in those slots: no player / default bool, no error (modc t06, [M]).
 //   * Candidates [H]: the objects of each player in player order (owner id ascending), skipping players whose faction
 //     Is_Neutral and, with a player P, keeping only players whose "allied or self" relation to P equals the bool; per
 //     player the UNIT_AI objects (the perception grid list) newest first. Each must not be dying (+0x3A0 bit 0x40;
@@ -810,16 +810,19 @@ int g_find_nearest(Call& c) {
                                 std::string(c.string(2)).c_str());
         player_index = 3;
     }
+    // modc t06: the player slot converts like Find_All_Objects_Of_Type's player arguments (LUA_API "No filter at
+    // all"): anything but a PlayerWrapper is a null player = no player filter (and no fog test); a bool slot that is
+    // not a bool keeps the default true. The original has no error string for these slots (LUA_API error table,
+    // 0x69e7c0) [M]. Seen in a mod free store: Find_Nearest(object, Get_Guard_Targets(object), owner, true) where
+    // the category helper returns nil for some units.
     bool have_player = false, friendly = true;
     int32_t player = -1;
     if (player_index + 1 <= c.nargs) {
-        const Ud* p = player_arg(c, player_index);
-        if (!p) return script_error(c, "Find_Nearest - invalid type for parameter %d.", player_index);  // [inferred]
-        if (!is_bool(c, player_index + 1))
-            return script_error(c, "Find_Nearest - invalid type for parameter %d.", player_index + 1);  // [inferred]
-        have_player = true;
-        player = p->id;
-        friendly = to_bool(c, player_index + 1);
+        if (const Ud* p = player_arg(c, player_index)) {
+            have_player = true;
+            player = p->id;
+        }
+        if (is_bool(c, player_index + 1)) friendly = to_bool(c, player_index + 1);
     }
     const objects::GameObjectTypes* ty = types(c);
     if (!ty) return push_nil(c);
