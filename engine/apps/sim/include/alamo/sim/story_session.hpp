@@ -269,7 +269,7 @@ struct StoryBattleStart {
 //   Destroyed          STORY_TACTICAL_DESTROY (Destroy: Param1 type names, empty = any; Param3 count) + a named
 //                      hero (or a team carrying one) STORY_DEFEAT_HERO
 //   HardpointDestroyed STORY_ATTACK_HARDPOINT (name = the hardpoint's name; filter owner = the attacker's: `other`
-//                      object or `player`)  [S9 CombatSystem::hardpoint_events / AbilitySystem hardpoint_destroyed]
+//                      object or `player`)  [S9 CombatSystem::hardpoint_events / AbilitySystem hardpoint_offline]
 //   Reinforced         STORY_REINFORCE        UnitArrived  STORY_UNIT_ARRIVED     FullStop  STORY_FULL_STOP
 //   Garrisoned         STORY_GARRISON_UNIT    HeroCaptured STORY_CAPTURE_HERO
 //   StructureCaptured  STORY_CAPTURE_STRUCTURE (generic rule, Param1 = type name)

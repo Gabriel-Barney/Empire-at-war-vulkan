@@ -143,9 +143,6 @@ public:
     // Call on the sim thread between updates. Players that get an AI this way need a T7 controller from the host.
     bool set_ai_type(int32_t player, std::string_view type, int32_t difficulty, std::vector<std::string>* diagnostics = nullptr);
     std::string ai_type(int32_t player) const;  // the player's AIPlayerType name ("" = no AI)
-    // Suspend_AI / galactic pause (TheAI gate).
-    void set_suspended(bool suspended);
-    void set_galactic_paused(bool paused);
     // Story requests: the story session's LuaPlayerWorld (StorySession::player_world()) is drained every frame
     // like the AI's own: GiveDesireBonus, Purge_Goals, Budget.Flush_Category and Suspend_AI reach the galactic AI.
     // Null detaches. The world must outlive this object (or be detached first).

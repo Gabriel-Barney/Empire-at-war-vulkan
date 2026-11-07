@@ -38,10 +38,9 @@ void AiContext::service(int64_t now, bool enabled, bool auto_resolve_busy) {
             c->next = now + stagger_offset(stagger_slot_, stagger_slots_, c->period());
         goal_clock.next = now + stagger_offset(stagger_slot_, stagger_slots_, planning_clock.period());
     }
-    if (perception_clock.due(now)) {
+    if (perception_clock.due(now)) {  // Perception service: only the reschedule in both modes (AI_GALACTIC §2)
         perception_clock.reschedule(now);
         ++service_counts[0];
-        services_->perception_service(now);
     }
     if (goal_clock.due(now)) {
         goal_clock.reschedule(now);

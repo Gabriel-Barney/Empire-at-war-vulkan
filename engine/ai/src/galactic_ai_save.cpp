@@ -46,7 +46,9 @@ using save::get_vec;
 using save::put_vec;
 
 namespace {
-constexpr uint32_t kWorldVersion = 3;  // 2: pristine pooled VMs by reference; 3: AI player types (q6 t07)
+// 2: pristine pooled VMs by reference; 3: AI player types (q6 t07); 4 (cu12 t14): the status records' orders_out byte
+// removed (never set or read).
+constexpr uint32_t kWorldVersion = 4;
 // 2: logic frame, player conflict stamps, conflict observer (q6 t03); 3: leaf cache keyed by (leaf, instance, system player,
 // parameter set) with each entry's parameters, the 0xE visible flags and the last seen surface units (q6 t18)
 constexpr uint32_t kResolverVersion = 3;
@@ -609,7 +611,6 @@ void GalacticAiWorld::write(ByteWriter& w) const {
         w.u32(s.dest);
         w.u8(s.mode);
         w.i64(s.started);
-        w.boolean(s.orders_out);
         w.u8(static_cast<uint8_t>(s.op));
         w.f64(s.amount);
     }
@@ -955,7 +956,6 @@ bool GalacticAiWorld::read(ByteReader& r) {
             s.dest = r.u32();
             s.mode = r.u8();
             s.started = r.i64();
-            s.orders_out = r.boolean();
             const uint8_t op = r.u8();
             s.amount = r.f64();
             if (kind > static_cast<uint8_t>(StatusKind::BudgetWait) || result > static_cast<uint8_t>(lua::AiStatusResult::False) ||
@@ -1150,11 +1150,8 @@ bool GalacticAiWorld::read(ByteReader& r) {
                 if (!read_vm_image(img, *e.vm)) return false;
             } else {  // tests without Lua state: the evaluator loaded fresh as on first use
                 if (!m.files) return false;
-                std::vector<uint8_t> bytes;
-                const std::string path = "Data\\Scripts\\Evaluators\\" + e.name + ".lua";
                 std::string err;
-                if (!m.files->read(path, bytes)) return false;
-                e.vm = m.runtime->make_vm(e.name, std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()), path, &err);
+                e.vm = m.runtime->make_vm_from_file(*m.files, e.name, "Data\\Scripts\\Evaluators\\" + e.name + ".lua", &err);
                 if (!e.vm) return false;
             }
             m.rebind_vm(*e.vm, -1, true);

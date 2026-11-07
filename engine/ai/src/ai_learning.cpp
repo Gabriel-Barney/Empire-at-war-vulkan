@@ -55,17 +55,13 @@ int32_t LearningSystem::recent_plan_failures(uint32_t plan, int32_t target, int6
     return failures(recent_plan_, {plan, target}, now);
 }
 
-double LearningSystem::goal_type_success_ratio(uint32_t goal_type) const {
-    const auto it = type_.find(goal_type);
-    if (it == type_.end() || it->second.attempts == 0) return 1.0;
+double LearningSystem::ratio(const std::map<uint32_t, Counter>& m, uint32_t k) {
+    const auto it = m.find(k);
+    if (it == m.end() || it->second.attempts == 0) return 1.0;
     return static_cast<double>(it->second.successes) / static_cast<double>(it->second.attempts);
 }
 
-double LearningSystem::plan_success_ratio(uint32_t plan) const {
-    const auto it = plan_.find(plan);
-    if (it == plan_.end() || it->second.attempts == 0) return 1.0;
-    return static_cast<double>(it->second.successes) / static_cast<double>(it->second.attempts);
-}
+double LearningSystem::plan_success_ratio(uint32_t plan) const { return ratio(plan_, plan); }
 
 void LearningSystem::record_survival(uint32_t type_name_crc, bool survived) {
     Counter& c = survival_[type_name_crc];
@@ -73,11 +69,7 @@ void LearningSystem::record_survival(uint32_t type_name_crc, bool survived) {
     if (survived) ++c.successes;
 }
 
-double LearningSystem::survival_ratio(uint32_t type_name_crc) const {
-    const auto it = survival_.find(type_name_crc);
-    if (it == survival_.end() || it->second.attempts == 0) return 1.0;
-    return static_cast<double>(it->second.successes) / static_cast<double>(it->second.attempts);
-}
+double LearningSystem::survival_ratio(uint32_t type_name_crc) const { return ratio(survival_, type_name_crc); }
 
 void LearningSystem::prune(int64_t now) {
     for (auto* m : {&recent_goal_, &recent_activation_, &recent_plan_})

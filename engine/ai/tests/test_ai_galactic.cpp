@@ -86,7 +86,6 @@ static void test_cadence() {
         std::vector<std::string> trace;
         void first_service(int64_t) override { trace.push_back("first"); }
         void template_init(int64_t) override { trace.push_back("tinit"); }
-        void perception_service(int64_t n) override { trace.push_back("P" + std::to_string(n)); }
         void planning_service(int64_t n) override { trace.push_back("L" + std::to_string(n)); }
         void execution_service(int64_t n) override { trace.push_back("E" + std::to_string(n)); }
         void templates_changed(int64_t) override {}
@@ -125,16 +124,16 @@ static void test_cadence() {
     ctx.goals.init(defs, {}, &hooks, &ctx.learning, &ctx.templates, &rng, {});
     ctx.attach(&stub, [](const std::string&, double&) { return false; });
     for (int64_t f = 1; f <= 600; ++f) ctx.service(f, true, false);
-    CHECK(stub.trace.size() >= 3 && stub.trace[0] == "first" && stub.trace[1] == "tinit" && stub.trace[2] == "P1");
+    CHECK(stub.trace.size() >= 3 && stub.trace[0] == "first" && stub.trace[1] == "tinit" && stub.trace[2] == "L1");
     CHECK(ctx.service_counts[0] == 2);    // perception: frames 1, 301
     CHECK(ctx.service_counts[1] == 600);  // goal: every frame
     CHECK(ctx.service_counts[2] == 200);  // planning: every 3 frames
     CHECK(ctx.service_counts[3] == 200);  // execution
     CHECK(ctx.service_counts[4] == 2);    // learning
     CHECK(ctx.service_counts[5] == 600);  // template
-    // Order inside a frame: P before L before E on frame 1.
+    // Order inside a frame: L before E on frame 1 (the perception service only reschedules: service_counts[0]).
     const auto pos = [&](const std::string& s) { return std::find(stub.trace.begin(), stub.trace.end(), s) - stub.trace.begin(); };
-    CHECK(pos("P1") < pos("L1") && pos("L1") < pos("E1"));
+    CHECK(pos("L1") < pos("E1"));
     // Disabled: nothing runs, except galactic Planning while auto-resolve is busy.
     const auto before = ctx.service_counts;
     ctx.service(601, false, false);
@@ -3709,8 +3708,8 @@ static void test_budget_reset_on_template_switch() {
         const std::vector<float> even = {1.0f, 1.0f}, skew = {3.0f, 1.0f};
         b.init(even, 1000.0f);
         b.reweight(skew);
-        if (reset) b.request_reset();
-        CHECK(b.reset_requested() == reset);
+        if (reset) b.mark_reset();
+        CHECK(b.reset_pending() == reset);
     };
     AiBudget plain, flagged;
     run(false, plain);
@@ -3721,7 +3720,7 @@ static void test_budget_reset_on_template_switch() {
         AiBudget back;
         back.reset(2);
         ByteReader r(w.bytes());
-        CHECK(back.read(r) && back.reset_requested());
+        CHECK(back.read(r) && back.reset_pending());
         StateHasher ha, hb, hp;
         flagged.hash(ha);
         back.hash(hb);
@@ -3734,15 +3733,15 @@ static void test_budget_reset_on_template_switch() {
                 static_cast<double>(plain.pool(1)), static_cast<double>(flagged.pool(0)), static_cast<double>(flagged.pool(1)));
     CHECK(plain.pool(0) == 575.0f && plain.pool(1) == 525.0f);
     CHECK(flagged.pool(0) == 825.0f && flagged.pool(1) == 275.0f);
-    CHECK(!flagged.reset_requested() && !plain.reset_requested());  // the tick clears it
+    CHECK(!flagged.reset_pending() && !plain.reset_pending());  // the tick clears it
     flagged.tick(0.0f, 45.0f, 1100.0f);  // the next tick starts from P = A again and has no reset: the unflagged result
     CHECK(flagged.pool(0) == 575.0f && flagged.pool(1) == 525.0f);
     AiBudget again;  // init clears a pending flag
     again.reset(2);
-    again.request_reset();
+    again.mark_reset();
     const std::vector<float> even = {1.0f, 1.0f};
     again.init(even, 10.0f);
-    CHECK(!again.reset_requested());
+    CHECK(!again.reset_pending());
 
     // In a world: Syn_Rich (priority 3, trigger Is_Rich) turns on once the AI credits drop below 5500 (6000 at the start; the
     // Barracks plan spends) -> a template switch -> the flag is set until the next fiscal tick. The control world (Is_Rich
@@ -3761,8 +3760,8 @@ static void test_budget_reset_on_template_switch() {
                 if (log[seen].text.rfind("templates", 0) == 0) ++switches;
             const AiContext* c = pw.world->context(0);
             if (!c) continue;
-            if (c->budget.reset_requested() && set_at < 0) set_at = f;
-            if (set_at >= 0 && !c->budget.reset_requested()) cleared_at = f;
+            if (c->budget.reset_pending() && set_at < 0) set_at = f;
+            if (set_at >= 0 && !c->budget.reset_pending()) cleared_at = f;
         }
         std::printf("budget reset flag: %s world, %d template decisions, flag set at frame %d, cleared at %d\n",
                     rich ? "switching" : "control", switches, set_at, cleared_at);

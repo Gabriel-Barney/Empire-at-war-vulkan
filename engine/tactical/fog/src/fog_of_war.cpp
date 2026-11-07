@@ -1,10 +1,10 @@
 #include "alamo/tactical/fog/fog_of_war.hpp"
 
 #include <algorithm>
-#include <climits>
 #include <cmath>
 
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/tactical/category_reduce.hpp"
 
 namespace alamo::tactical::fog {
 
@@ -110,31 +110,11 @@ bool FogOfWar::allied(int32_t p, int32_t owner) const {
 void FogOfWar::reduce_player_list(int32_t player) {
     const std::vector<RevealEntry>& list = player_list_[static_cast<size_t>(player)];
     // Categories ascending (std::map order); MostExtreme within one (strictly larger |v| replaces); sum in order.
-    float total = 0.0f;
-    bool seeded = false;
-    int32_t prev = INT32_MIN;
-    bool have_prev = false;
-    for (;;) {
-        bool found = false;
-        int32_t cat = 0;
-        for (const RevealEntry& e : list)
-            if ((!have_prev || e.category > prev) && (!found || e.category < cat)) {
-                cat = e.category;
-                found = true;
-            }
-        if (!found) break;
-        bool first = true;
-        float best = 0.0f;
-        for (const RevealEntry& e : list) {
-            if (e.category != cat) continue;
-            if (first || std::fabs(e.value) > std::fabs(best)) best = e.value;
-            first = false;
-        }
-        total = seeded ? total + best : best;
-        seeded = true;
-        prev = cat;
-        have_prev = true;
-    }
+    const float total = reduce_by_category(
+        [&](auto&& f) {
+            for (const RevealEntry& e : list) f(e.category, e.value);
+        },
+        [](float v, float best) { return std::fabs(v) > std::fabs(best); });
     player_bonus_[static_cast<size_t>(player)] = total;
 }
 

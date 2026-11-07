@@ -467,8 +467,6 @@ public:
     void fire_done(ObjectId shooter, const combat::HardpointDesc* hardpoint, uint32_t frame) override;
     float lucky_shot(ObjectId source, ObjectId victim, int32_t& hardpoint, Vec3 impact, bool has_impact) override;
     bool damage_listener(ObjectId victim, ObjectId source, int32_t projectile_desc, uint32_t frame, SimRng* rng) override;
-    void hardpoint_destroyed(ObjectId owner, uint32_t index, combat::HardpointKind kind, bool last_of_kind,
-                             uint32_t frame) override;  // = hardpoint_offline(..., destroyed = true, ...)
     // Set_System_Online (0x384d00) ability side, HARDPOINT_DISABLED.md §9: offline (destroyed or disabled) / online.
     void hardpoint_offline(ObjectId owner, uint32_t index, combat::HardpointKind kind, bool last_of_kind, bool destroyed,
                            uint32_t frame) override;

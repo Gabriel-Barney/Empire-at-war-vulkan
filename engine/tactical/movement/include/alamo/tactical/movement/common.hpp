@@ -86,11 +86,6 @@ inline V2 cell_center(int32_t x, int32_t y) {
     return {static_cast<float>(x) * kCellSize, static_cast<float>(y) * kCellSize};
 }
 
-// ---- mode speed multipliers (Object_Max_Speed_Multiplier_*, §3.4) ---------------------------
-inline constexpr float kGalacticSpeedMultiplier = 5.0f;
-inline constexpr float kLandSpeedMultiplier = 1.56f;
-inline constexpr float kSpaceSpeedMultiplier = 1.2f;
-
 // "No facing requested" (move parameter block +0x18 = 1e18, §6.1).
 inline constexpr float kNoFacing = 1e18f;
 

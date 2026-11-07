@@ -1490,7 +1490,9 @@ static void test_fighter_space() {
     CHECK(distance(sys.view(1).pos, {2030.0f, 0.0f}) < 1e-3f);
     // Attack target: the next move is Moving (0x1B) at order time [port, S7 t12: the target fed then may be the old order's]
     // and turns into Directed_Combat (0x1E) on its first fighter frame (§2 step 6).
-    CHECK(sys.set_attack_target(1, true, {0.0f, 0.0f}, 0.0f));
+    FighterTarget pt;
+    pt.point = true;  // a point target at the origin
+    CHECK(sys.set_fighter_target(1, pt));
     sys.move(o, rng, fr + 30);
     CHECK(sys.view(1).loco_state == LocoState::FighterMoving);
     sys.tick(fr + 30, rng);

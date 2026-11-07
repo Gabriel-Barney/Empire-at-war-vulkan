@@ -17,18 +17,15 @@
 // w = 1 / (float)p - 1 (float); p must be in (0, 1]. FindTarget with only 3 arguments: w = 0 and
 // (port) max range 0 = no limit (the original reads an uninitialised value) [H].
 //
-// Candidate filters, in order [H unless tagged]: Applies(flags) -> evaluation (failed evaluations
-// skipped) -> range (maxRange > 0 and squared 3-D distance target -> origin > maxRange^2) ->
-// (Reachable_Target only) reachability of targets that have a reachability object (land regions):
-// cost == 1e18 skipped. PROVISIONAL [M]: the reachability test is placed after the evaluation
-// (the order matters only for evaluations that draw, i.e. the perception '#' operator).
-//
+// Candidate filters, in order (A1_READINGS §5) [H]: Applies(flags) -> (Reachable_Target only, with a
+// source) reachability of targets that have a reachability object (land regions): cost == 1e18
+// skipped -> evaluation (failed evaluations skipped) -> range (maxRange > 0 and squared 3-D distance
+// target -> origin > maxRange^2). A filtered target is never evaluated, so it makes no '#' draws.
+// The live filter loop is in TacticalAiWorld (tactical_ai.cpp, FindTarget).
 // Return kinds: FindTarget -> GameObjectWrapper for a unit target, AITargetLocationWrapper for a
 // region; Reachable_Target -> always AITargetLocationWrapper (or nil).
 #pragma once
 #include <cstdint>
-#include <functional>
-#include <optional>
 #include <span>
 #include <vector>
 
@@ -57,18 +54,5 @@ TargetPick select_target(std::span<const ScoredTarget> candidates_in_list_order,
 enum class FindTargetReturn : uint8_t { Nil = 0, GameObject = 1, TargetLocation = 2 };
 FindTargetReturn find_target_return_kind(const TacticalTarget* picked);
 FindTargetReturn reachable_target_return_kind(const TacticalTarget* picked);
-
-// Filters + scoring pipeline over the target list (list order). Every callback is optional except
-// `score` (returns nullopt when the evaluation fails).
-struct CandidateFilter {
-    std::function<bool(const TacticalTarget&)> applies;          // Applies(flags, aiPlayer)
-    std::function<std::optional<double>(const TacticalTarget&)> score;
-    std::function<Vec3f(const TacticalTarget&)> position;        // target position (slot 13); default t.position
-    float max_range = 0.0f;                                      // > 0 enables the range test
-    Vec3f origin;                                                // task-force position / Reachable_Target source
-    std::function<double(const TacticalTarget&)> reachability;   // cost (kUnreachable = skip); only called
-                                                                 // for targets with has_reachability()
-};
-void collect_candidates(std::span<const TacticalTarget> targets, const CandidateFilter& f, std::vector<ScoredTarget>& out);
 
 }  // namespace alamo::ai::tactical

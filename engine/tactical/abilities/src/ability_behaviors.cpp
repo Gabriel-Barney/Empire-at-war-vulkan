@@ -12,6 +12,7 @@
 
 #include "alamo/core/dmath.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
+#include "alamo/tactical/category_reduce.hpp"
 
 namespace alamo::tactical::abilities {
 
@@ -291,31 +292,13 @@ bool AbilitySystem::set_targeting_priorities(ObjectId id, std::string_view set_n
 }
 
 float AbilitySystem::player_reduce(int32_t player, uint8_t list) const {
-    // max-then-sum over stacking categories in ascending order (0x33fb70), allocation-free.
-    float total = 0.0f;
-    bool have_last = false;
-    int32_t last = 0;
-    for (;;) {
-        bool found = false;
-        int32_t cat = 0;
-        for (const PlayerEntry& e : player_entries_)
-            if (e.player == player && e.list == list && (!have_last || e.category > last) && (!found || e.category < cat)) {
-                cat = e.category;
-                found = true;
-            }
-        if (!found) break;
-        bool first = true;
-        float mx = 0.0f;
-        for (const PlayerEntry& e : player_entries_)
-            if (e.player == player && e.list == list && e.category == cat && (first || e.value > mx)) {
-                mx = e.value;
-                first = false;
-            }
-        total = total + mx;
-        last = cat;
-        have_last = true;
-    }
-    return total;
+    // max-then-sum over stacking categories in ascending order (0x33fb70), allocation-free; the sum starts at 0.0f.
+    return reduce_by_category(
+        [&](auto&& f) {
+            for (const PlayerEntry& e : player_entries_)
+                if (e.player == player && e.list == list) f(e.category, e.value);
+        },
+        [](float v, float best) { return v > best; }, false);
 }
 
 float AbilitySystem::player_list(int32_t player, PlayerList l) const { return player_reduce(player, static_cast<uint8_t>(l)); }

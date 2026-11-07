@@ -247,11 +247,7 @@ void TacticalPerceptionGrid::remove_entry(uint32_t ei) {
     e.projected = false;
 }
 
-bool TacticalPerceptionGrid::register_object(const PerceptionWorld& w, int32_t id, uint32_t frame) {
-    return register_object(w, id, frame, static_cast<int32_t>(frame + cfg_.reprojection_frames));  // [port] legacy
-}
-
-bool TacticalPerceptionGrid::register_object(const PerceptionWorld& w, int32_t id, uint32_t /*frame*/, int32_t check_stamp) {
+bool TacticalPerceptionGrid::register_object(const PerceptionWorld& w, int32_t id, int32_t check_stamp) {
     if (!valid() || objects_.count(id)) return false;
     const PerceptionObject* o = w.object(id);
     if (!o || !o->has_unit_ai) return false;
@@ -451,28 +447,25 @@ bool TacticalPerceptionGrid::owner_passes(const PerceptionWorld& w, const Percep
     return q.ally ? allied : !allied;
 }
 
+template <class Fn>
+void TacticalPerceptionGrid::visit_cell_entries(uint32_t cell, int32_t self, bool memory_while_fogged, Fn&& fn) const {
+    for (const uint32_t ei : live_[cell])
+        if (!fogged_for(entries_[ei].object, self)) fn(entries_[ei]);
+    if (self < 0 || static_cast<uint32_t>(self) >= players_) return;
+    for (const uint32_t ei : memory_[static_cast<size_t>(self)][cell])
+        if (fogged_for(entries_[ei].object, self) == memory_while_fogged) fn(entries_[ei]);
+}
+
 float TacticalPerceptionGrid::cell_force(const PerceptionWorld& w, uint32_t cell, const GridQuery& q) const {
     if (!valid() || cell >= cell_count() || (q.category & category_union_) == 0) return 0.0f;
     float sum = 0.0f;
-    auto term = [&](const Entry& e) {
+    // Memory entries [H] quirk (open item 3a): counted again while NOT fogged (the live entries' test).
+    visit_cell_entries(cell, q.self, false, [&](const Entry& e) {
         const PerceptionObject* o = w.object(e.object);
         if (!o || !owner_passes(w, *o, q)) return;
         const float power = entry_power_now(w, *o, e);
         sum += power / e.area * cell_w_ * cell_h_ * (1.0f - (1.0f - o->health) * q.attenuator);
-    };
-    for (const uint32_t ei : live_[cell]) {
-        const Entry& e = entries_[ei];
-        if (fogged_for(e.object, q.self)) continue;
-        term(e);
-    }
-    if (q.self >= 0 && static_cast<uint32_t>(q.self) < players_) {
-        for (const uint32_t ei : memory_[static_cast<size_t>(q.self)][cell]) {
-            const Entry& e = entries_[ei];
-            const bool fogged = fogged_for(e.object, q.self);
-            if (q.memory_counted_when_not_fogged ? fogged : !fogged) continue;  // [M] quirk (open item 3a)
-            term(e);
-        }
-    }
+    });
     return sum;
 }
 
@@ -494,20 +487,11 @@ float TacticalPerceptionGrid::cell_concentration(const PerceptionWorld& w, uint3
         return t ? t->combat_power : 0.0f;
     };
     float sum = 0.0f;
-    for (const uint32_t ei : live_[cell]) {
-        const Entry& e = entries_[ei];
-        if (e.center_cell != static_cast<int32_t>(cell) || fogged_for(e.object, q.self)) continue;
+    visit_cell_entries(cell, q.self, true, [&](const Entry& e) {  // memory only while fogged
+        if (e.center_cell != static_cast<int32_t>(cell)) return;
         const PerceptionObject* o = w.object(e.object);
         if (o && owner_passes(w, *o, all)) sum += power(*o);
-    }
-    if (q.self >= 0 && static_cast<uint32_t>(q.self) < players_) {
-        for (const uint32_t ei : memory_[static_cast<size_t>(q.self)][cell]) {
-            const Entry& e = entries_[ei];
-            if (e.center_cell != static_cast<int32_t>(cell) || !fogged_for(e.object, q.self)) continue;
-            const PerceptionObject* o = w.object(e.object);
-            if (o && owner_passes(w, *o, all)) sum += power(*o);
-        }
-    }
+    });
     return sum;
 }
 
@@ -533,11 +517,7 @@ uint64_t TacticalPerceptionGrid::cells_bitfield(const PerceptionWorld& w, std::s
     };
     for (const uint32_t cell : cells) {
         if (cell >= cell_count()) continue;
-        for (const uint32_t ei : live_[cell])
-            if (!fogged_for(entries_[ei].object, q.self)) test(entries_[ei]);
-        if (q.self >= 0 && static_cast<uint32_t>(q.self) < players_)
-            for (const uint32_t ei : memory_[static_cast<size_t>(q.self)][cell])
-                if (fogged_for(entries_[ei].object, q.self)) test(entries_[ei]);
+        visit_cell_entries(cell, q.self, true, test);  // memory only while fogged
     }
     return bits;
 }

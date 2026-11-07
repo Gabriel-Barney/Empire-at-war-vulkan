@@ -118,12 +118,7 @@ float MovementSystem::fform_unit_speed(ObjectId key) {
     for (const ObjectId m : fform_members(key))
         if (const Unit* u = unit_ptr(m)) {
             float v = u->lp.max_speed;
-            if (squad) {  // s78l t01: the container's own Max_Speed is in the minimum too (set_team)
-                const float mult = cfg_.mode == MoveMode::Land ? cfg_.constants.land_speed_multiplier : cfg_.constants.space_speed_multiplier;
-                float b = team_base_speed(*u);
-                if (u->team_max >= 0.0f) b = std::min(b, u->team_max * mult);
-                v = b * u->team_factor;
-            }
+            if (squad) v = team_base_speed(*u) * u->team_factor;  // s78l t01: the container's own Max_Speed included
             s = s < 0.0f ? v : std::min(s, v);
         }
     return s;
@@ -215,13 +210,7 @@ void MovementSystem::fform_order(const MoveOrder& order, const std::vector<uint3
 
 void MovementSystem::fighter_new_order(const MoveOrder& order, uint32_t frame) {
     if (cfg_.mode != MoveMode::Space) return;
-    std::vector<uint32_t> idx;
-    for (const ObjectId id : order.units) {
-        const int32_t i = find(id);
-        if (i < 0 || std::find(idx.begin(), idx.end(), static_cast<uint32_t>(i)) != idx.end()) continue;
-        idx.push_back(static_cast<uint32_t>(i));
-    }
-    fform_order(order, idx, frame);
+    fform_order(order, order_indices(order), frame);
 }
 
 // The waypoint-queue move (MOVEMENT §6.2, 0x2a8240): a fighter whose formation exists hands the block to it (once per

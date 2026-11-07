@@ -176,8 +176,8 @@ MovementSystem::DeployResult MovementSystem::deploy(ObjectId id, bool on, uint32
 }
 
 LocoState MovementSystem::deploy_state(ObjectId id) const {
-    const int32_t i = find(id);
-    return i < 0 ? LocoState::None : units_[static_cast<size_t>(i)].deploy;
+    const Unit* u = unit_ptr(id);
+    return u ? u->deploy : LocoState::None;
 }
 
 std::vector<MovementSystem::DeployEvent> MovementSystem::take_deploy_events() {
@@ -187,11 +187,10 @@ std::vector<MovementSystem::DeployEvent> MovementSystem::take_deploy_events() {
 }
 
 bool MovementSystem::snap_yaw(ObjectId id, float yaw_deg) {
-    const int32_t i = find(id);
-    if (i < 0) return false;
-    Unit& u = units_[static_cast<size_t>(i)];
-    u.m.yaw = wrap_deg(yaw_deg);
-    if (is_fighter(u)) u.fs.b.o.yaw = fighter_wrap360(yaw_deg);
+    Unit* u = unit_ptr(id);
+    if (!u) return false;
+    u->m.yaw = wrap_deg(yaw_deg);
+    if (is_fighter(*u)) u->fs.b.o.yaw = fighter_wrap360(yaw_deg);
     return true;
 }
 

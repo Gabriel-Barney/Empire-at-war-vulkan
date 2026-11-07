@@ -27,6 +27,10 @@
 #include "alamo/core/parallel.hpp"
 #include "alamo/lua/lua_vm.hpp"
 
+namespace alamo::lua {
+class AiScriptHost;
+}
+
 namespace alamo::ai {
 
 // Reads the plan-definition globals of a VM after Base_Definitions (Category, TaskForce, IgnoreTarget, ...).
@@ -56,6 +60,10 @@ public:
     // A fresh VM running `chunk` (a whole script file) with `name`; prepare() applied first.
     std::unique_ptr<lua::LuaVm> make_vm(const std::string& name, const std::string& chunk, const std::string& chunk_name,
                                         std::string* err);
+    // Reads `path` from `files` and runs it with make_vm (chunk name = the path; counted only when the file was read).
+    // Null when the file is missing (`*found` = false, `err` untouched) or the chunk fails (`err` set).
+    std::unique_ptr<lua::LuaVm> make_vm_from_file(const FileProvider& files, const std::string& name, const std::string& path,
+                                                  std::string* err, bool* found = nullptr);
 
     // ---- N1 save / load (GalacticAiWorld::write / read drive these) ----
     size_t plan_count() const { return entries_.size(); }
@@ -158,5 +166,15 @@ std::vector<std::string> list_plan_files(const std::function<std::vector<std::st
 // the "SCRIPT ERROR: ..." lines the bindings log without unwinding (LuaVm::messages(), e.g. Move_To(nil)), each as
 // `prefix` + line, appended to `out` (thread errors first, then the messages in order). Diagnostics only.
 void append_script_errors(const lua::LuaVm& vm, const std::string& prefix, std::vector<std::string>& out);
+
+// Free-store script bootstrap of both modes (the AIPlayerType's FreeStoreScript): Data\Scripts\FreeStore\<script>.lua
+// through make_vm_from_file, attach_ai_host(host, script_id), Base_Definitions(), the FreeStore global (`galactic`),
+// PlayerObject = player, LastService = LastUnitService = 0, then `before_thread` (may be empty; the tactical mode reads
+// ServiceRate / UnitServiceRate there), then create_thread("main"), in that order. Null when the file is missing or
+// the chunk fails, with one diagnostic (`diagnostics` may be null).
+std::unique_ptr<lua::LuaVm> start_free_store_vm(PlanScriptRuntime& runtime, const FileProvider& files, const std::string& script,
+                                                lua::AiScriptHost* host, int32_t script_id, bool galactic, int32_t player,
+                                                const std::function<void(lua::LuaVm&)>& before_thread,
+                                                std::vector<std::string>* diagnostics);
 
 }  // namespace alamo::ai

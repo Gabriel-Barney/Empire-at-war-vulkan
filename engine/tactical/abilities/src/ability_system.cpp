@@ -1814,10 +1814,6 @@ bool AbilitySystem::damage_listener(ObjectId victim, ObjectId source, int32_t pr
     return false;
 }
 
-void AbilitySystem::hardpoint_destroyed(ObjectId owner, uint32_t index, HardpointKind kind, bool last, uint32_t frame) {
-    hardpoint_offline(owner, index, kind, last, true, frame);
-}
-
 void AbilitySystem::set_type_special_enabled(int32_t player, uint32_t desc, uint32_t crc, bool on) {
     for (TypeOverride& t : type_overrides_)
         if (t.player == player && t.desc == desc && t.crc == crc) {

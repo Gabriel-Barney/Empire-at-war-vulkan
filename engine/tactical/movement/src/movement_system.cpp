@@ -78,7 +78,7 @@ int32_t MovementSystem::find(ObjectId id) const {
 
 void MovementSystem::configure(Unit& u) const {
     const MovementConstants& k = cfg_.constants;
-    const float mult = cfg_.mode == MoveMode::Land ? k.land_speed_multiplier : k.space_speed_multiplier;
+    const float mult = mode_mult();
     // S10-int: host speed factor (MOVEMENT 3.4 items 4/5/7: Mod_Multiplier Speed x Engines_Disabled x (1 + list 5);
     // 0 = immobilised). Acceleration / deceleration scale with the effective speed (3.4). x 1 is exact, so a
     // factor of 1 keeps every value bit-identical.
@@ -151,48 +151,46 @@ std::vector<ObjectId> MovementSystem::unit_ids() const {
 
 UnitView MovementSystem::view(ObjectId id) const {
     UnitView v;
-    const int32_t i = find(id);
-    if (i < 0) return v;
-    const Unit& u = units_[static_cast<size_t>(i)];
+    const Unit* u = unit_ptr(id);
+    if (!u) return v;
     v.id = id;
-    v.pos = u.m.pos;
-    v.z = u.z;
-    v.yaw = u.m.yaw;
-    v.speed = u.m.speed;
-    v.max_speed = loco_max_speed(u);  // S10-int; S7 t14: the jetpack's Alternate_Max_Speed in its airborne kind
-    v.has_goal = u.has_goal;
-    v.arrived = u.arrived;
-    v.failed = u.failed;
-    v.pushed = u.pushed;  // a1k t03
-    v.goal = u.goal;
-    v.replans = u.replans;
-    v.space_fallback = u.fallback;
-    v.start_frame = u.start_frame;  // OI tactical
-    v.formation_speed = u.formation_speed;
-    v.team_speed = u.team_cap;  // s78k t03
-    v.arrival_turn = u.aturn != LocoState::None;  // s78l t02
-    v.turn_clip = u.tclip;
-    v.arrival_turn_ended = u.aturn_ended;
-    v.large_hover_index = u.large_hover_index;
-    v.jiggle = u.jiggle;
-    v.locomotor = u.d.locomotor;  // §4.3-4.7
-    v.secondary_locomotor = u.on_secondary;  // S7 t06
-    v.loco_state = u.sm.state;
-    v.anim = u.sm.anim.id;
-    v.airborne = u.sm.airborne;
+    v.pos = u->m.pos;
+    v.z = u->z;
+    v.yaw = u->m.yaw;
+    v.speed = u->m.speed;
+    v.max_speed = loco_max_speed(*u);  // S10-int; S7 t14: the jetpack's Alternate_Max_Speed in its airborne kind
+    v.has_goal = u->has_goal;
+    v.arrived = u->arrived;
+    v.failed = u->failed;
+    v.pushed = u->pushed;  // a1k t03
+    v.goal = u->goal;
+    v.replans = u->replans;
+    v.space_fallback = u->fallback;
+    v.start_frame = u->start_frame;  // OI tactical
+    v.formation_speed = u->formation_speed;
+    v.team_speed = u->team_cap;  // s78k t03
+    v.arrival_turn = u->aturn != LocoState::None;  // s78l t02
+    v.arrival_turn_ended = u->aturn_ended;
+    v.large_hover_index = u->large_hover_index;
+    v.jiggle = u->jiggle;
+    v.locomotor = u->d.locomotor;  // §4.3-4.7
+    v.secondary_locomotor = u->on_secondary;  // S7 t06
+    v.loco_state = u->sm.state;
+    v.anim = u->sm.anim.id;
+    v.airborne = u->sm.airborne;
     attitude(id, v.roll, v.pitch);
-    if (is_fighter(u)) v.fighter_phase = u.fs.phase;
-    v.deploy_state = u.deploy;  // S8 t11
-    v.deploy_clip = u.dclip;
-    v.turret_elevation = u.tcur[1];  // S8 t24
-    v.turret_yaw = u.tcur[2];
-    if (u.d.turret && u.taim) {  // s78f t03: the aim state (0x386170 equality: negatives wrapped by +360, within 0.0001)
-        const bool dep = u.deploy == LocoState::WalkDeploying || u.deploy == LocoState::WalkDeployed;
-        const float ext = dep ? u.d.turret_deployed_extent : u.d.turret_extent;
+    if (is_fighter(*u)) v.fighter_phase = u->fs.phase;
+    v.deploy_state = u->deploy;  // S8 t11
+    v.deploy_clip = u->dclip;
+    v.turret_elevation = u->tcur[1];  // S8 t24
+    v.turret_yaw = u->tcur[2];
+    if (u->d.turret && u->taim) {  // s78f t03: the aim state (0x386170 equality: negatives wrapped by +360, within 0.0001)
+        const bool dep = u->deploy == LocoState::WalkDeploying || u->deploy == LocoState::WalkDeployed;
+        const float ext = dep ? u->d.turret_deployed_extent : u->d.turret_extent;
         const auto w = [](float a) { return a < 0.0f ? a + 360.0f : a; };
         bool eq = true;
-        for (size_t k = 0; k < 3; ++k) eq = eq && std::fabs(w(u.tcur[k]) - w(u.ttgt[k])) <= 0.0001f;
-        v.turret_aim = std::fabs(u.ttgt[2]) > ext ? int8_t{-2} : eq ? int8_t{1} : int8_t{0};  // s78f t08: -2 cannot aim
+        for (size_t k = 0; k < 3; ++k) eq = eq && std::fabs(w(u->tcur[k]) - w(u->ttgt[k])) <= 0.0001f;
+        v.turret_aim = std::fabs(u->ttgt[2]) > ext ? int8_t{-2} : eq ? int8_t{1} : int8_t{0};  // s78f t08: -2 cannot aim
     }
     return v;
 }
@@ -200,34 +198,33 @@ UnitView MovementSystem::view(ObjectId id) const {
 bool MovementSystem::attitude(ObjectId id, float& roll_deg, float& pitch_deg) const {
     roll_deg = 0.0f;
     pitch_deg = 0.0f;
-    const int32_t i = find(id);
-    if (i < 0) return false;
-    const Unit& u = units_[static_cast<size_t>(i)];
-    if (is_fighter(u)) {  // FIGHTER_FLYING §1.1
-        roll_deg = fighter_wrap180(u.fs.b.o.roll);
-        pitch_deg = fighter_wrap180(u.fs.b.o.pitch);
+    const Unit* u = unit_ptr(id);
+    if (!u) return false;
+    if (is_fighter(*u)) {  // FIGHTER_FLYING §1.1
+        roll_deg = fighter_wrap180(u->fs.b.o.roll);
+        pitch_deg = fighter_wrap180(u->fs.b.o.pitch);
     } else {
-        roll_deg = u.sm.lean;  // bike lean / flying roll O +0x84 (0 for the other locomotors)
-        if (u.d.locomotor == LocomotorKind::Flying) pitch_deg = u.sm.pitch;  // flying pitch O +0x88 (§6.3)
+        roll_deg = u->sm.lean;  // bike lean / flying roll O +0x84 (0 for the other locomotors)
+        if (u->d.locomotor == LocomotorKind::Flying) pitch_deg = u->sm.pitch;  // flying pitch O +0x88 (§6.3)
     }
     return true;
 }
 
 std::span<const V2> MovementSystem::land_path(ObjectId id) const {
-    const int32_t i = find(id);
-    if (i < 0) return {};
-    return units_[static_cast<size_t>(i)].m.path;
+    const Unit* u = unit_ptr(id);
+    if (!u) return {};
+    return u->m.path;
 }
 
 std::span<const SpaceWaypoint> MovementSystem::space_path(ObjectId id) const {
-    const int32_t i = find(id);
-    if (i < 0) return {};
-    return units_[static_cast<size_t>(i)].wps;
+    const Unit* u = unit_ptr(id);
+    if (!u) return {};
+    return u->wps;
 }
 
 uint32_t MovementSystem::mask_of(ObjectId id) const {
-    const int32_t i = find(id);
-    return i < 0 ? 0u : units_[static_cast<size_t>(i)].lp.mask;
+    const Unit* u = unit_ptr(id);
+    return u ? u->lp.mask : 0u;
 }
 
 void MovementSystem::update_tree(const Unit& u) {
@@ -277,13 +274,7 @@ V2 MovementSystem::pick_land_slot(const Unit& u, V2 p, std::vector<uint64_t>& ta
 }
 
 void MovementSystem::move(const MoveOrder& order, SimRng& rng, uint32_t frame) {
-    std::vector<uint32_t> idx;
-    for (ObjectId id : order.units) {
-        const int32_t i = find(id);
-        if (i < 0) continue;
-        if (std::find(idx.begin(), idx.end(), static_cast<uint32_t>(i)) != idx.end()) continue;
-        idx.push_back(static_cast<uint32_t>(i));
-    }
+    std::vector<uint32_t> idx = order_indices(order);
     if (!fform_internal_) fform_waypoint(order, idx);  // s78f t02: fighters with a formation append the block instead
     if (idx.empty()) return;
     if (order.switch_locomotor)  // MOVEMENT §6.2: multi-locomotor units swap first (others ignore the bit)
@@ -474,35 +465,34 @@ void MovementSystem::move_space(const MoveOrder& order, const std::vector<uint32
 void MovementSystem::stop(std::span<const ObjectId> ids) {
     fform_stop(ids);  // S7 t37 / s78f t02: Stop drops the fighter formations
     for (ObjectId id : ids) {
-        const int32_t i = find(id);
-        if (i < 0) continue;
-        Unit& u = units_[static_cast<size_t>(i)];
-        if (is_air(u) && u.d.locomotor == LocomotorKind::LandBomber) continue;  // §4.6 [port]: a bombing pass runs out
-        u.has_goal = false;
-        u.need_path = false;
-        u.m.path.clear();
-        u.m.next = 0;
-        u.m.speed = 0.0f;
-        u.m.state = LocoState::WalkStopped;
-        end_push(u);  // a1k t03 [port]: a stop ends a pushed move
-        u.following = false;
-        arrival_reset(u);  // s78l t02
-        u.wps.clear();
-        if (cfg_.mode == MoveMode::Space) park_space(u, u.path_start);
-        switch (u.d.locomotor) {  // §4.3-4.7 [port]: where a stop leaves the special locomotors
-            case LocomotorKind::Jetpack: u.sm.state = u.sm.airborne ? LocoState::WalkEndMove : LocoState::WalkStopped; break;
+        Unit* u = unit_ptr(id);
+        if (!u) continue;
+        if (is_air(*u) && u->d.locomotor == LocomotorKind::LandBomber) continue;  // §4.6 [port]: a bombing pass runs out
+        u->has_goal = false;
+        u->need_path = false;
+        u->m.path.clear();
+        u->m.next = 0;
+        u->m.speed = 0.0f;
+        u->m.state = LocoState::WalkStopped;
+        end_push(*u);  // a1k t03 [port]: a stop ends a pushed move
+        u->following = false;
+        arrival_reset(*u);  // s78l t02
+        u->wps.clear();
+        if (cfg_.mode == MoveMode::Space) park_space(*u, u->path_start);
+        switch (u->d.locomotor) {  // §4.3-4.7 [port]: where a stop leaves the special locomotors
+            case LocomotorKind::Jetpack: u->sm.state = u->sm.airborne ? LocoState::WalkEndMove : LocoState::WalkStopped; break;
             case LocomotorKind::Flying:
-                u.sm.state = LocoState::FlyNoPath;
-                u.sm.idle_frames = 0;
-                u.sm.dest = u.m.pos;
+                u->sm.state = LocoState::FlyNoPath;
+                u->sm.idle_frames = 0;
+                u->sm.dest = u->m.pos;
                 break;
-            case LocomotorKind::Bike: u.sm.state = LocoState::BikePreStopped; break;
+            case LocomotorKind::Bike: u->sm.state = LocoState::BikePreStopped; break;
             case LocomotorKind::Fighter:
-                u.goal = u.m.pos;
-                if (is_fighter(u)) {
-                    fighter_stop(u);
+                u->goal = u->m.pos;
+                if (is_fighter(*u)) {
+                    fighter_stop(*u);
                 } else {
-                    u.sm.state = LocoState::FighterIdle;
+                    u->sm.state = LocoState::FighterIdle;
                 }
                 break;
             default: break;
@@ -512,52 +502,51 @@ void MovementSystem::stop(std::span<const ObjectId> ids) {
 
 // L1 systems: Teleport (0x3a8f90): stop, place, re-register (collision tree / stationary space track).
 bool MovementSystem::teleport(ObjectId id, V2 pos, float z, float yaw_deg, uint32_t frame) {
-    const int32_t i = find(id);
-    if (i < 0) return false;
-    Unit& u = units_[static_cast<size_t>(i)];
-    u.has_goal = false;
-    u.need_path = false;
-    u.arrived = false;
-    u.m.path.clear();
-    u.m.next = 0;
-    u.m.speed = 0.0f;
-    u.m.state = LocoState::WalkStopped;
-    u.following = false;
-    arrival_reset(u);  // s78l t02
-    u.wps.clear();
-    u.blocked_frames = 0;
-    u.hold_until = 0;
-    u.nudge_frames = 0;
-    end_push(u);  // a1k t03 [port]: a teleport ends a pushed move
-    u.m.pos = pos;
-    u.m.yaw = wrap_deg(yaw_deg);
-    u.z = z;
-    if (u.d.locomotor != LocomotorKind::Default) {  // §4.3-4.7: idle where placed
-        u.sm.anim = AnimPlay{};
-        u.sm.dest = pos;
-        u.goal = pos;
-        if (u.d.locomotor == LocomotorKind::Jetpack) {
-            u.sm.state = LocoState::WalkStopped;
-            u.sm.airborne = false;
-        } else if (u.d.locomotor == LocomotorKind::Flying) {
-            u.sm.state = LocoState::FlyNoPath;
-            u.sm.idle_frames = 0;
-        } else if (u.d.locomotor == LocomotorKind::Bike) {
-            u.sm.state = LocoState::BikeStopped;
-        } else if (u.d.locomotor == LocomotorKind::Fighter) {
-            u.sm.state = LocoState::FighterIdle;
-            if (is_fighter(u)) {  // [port] placed at rest: V = 0, D = P, path dropped
-                u.fs.b.p = {pos.x, pos.y, z};
-                u.fs.b.v = F3{};
-                u.fs.b.o.yaw = fighter_wrap360(yaw_deg);
-                u.fs.dest = u.fs.b.p;
-                u.fs.idx = 0;
-                u.fs.hold = 0;
+    Unit* u = unit_ptr(id);
+    if (!u) return false;
+    u->has_goal = false;
+    u->need_path = false;
+    u->arrived = false;
+    u->m.path.clear();
+    u->m.next = 0;
+    u->m.speed = 0.0f;
+    u->m.state = LocoState::WalkStopped;
+    u->following = false;
+    arrival_reset(*u);  // s78l t02
+    u->wps.clear();
+    u->blocked_frames = 0;
+    u->hold_until = 0;
+    u->nudge_frames = 0;
+    end_push(*u);  // a1k t03 [port]: a teleport ends a pushed move
+    u->m.pos = pos;
+    u->m.yaw = wrap_deg(yaw_deg);
+    u->z = z;
+    if (u->d.locomotor != LocomotorKind::Default) {  // §4.3-4.7: idle where placed
+        u->sm.anim = AnimPlay{};
+        u->sm.dest = pos;
+        u->goal = pos;
+        if (u->d.locomotor == LocomotorKind::Jetpack) {
+            u->sm.state = LocoState::WalkStopped;
+            u->sm.airborne = false;
+        } else if (u->d.locomotor == LocomotorKind::Flying) {
+            u->sm.state = LocoState::FlyNoPath;
+            u->sm.idle_frames = 0;
+        } else if (u->d.locomotor == LocomotorKind::Bike) {
+            u->sm.state = LocoState::BikeStopped;
+        } else if (u->d.locomotor == LocomotorKind::Fighter) {
+            u->sm.state = LocoState::FighterIdle;
+            if (is_fighter(*u)) {  // [port] placed at rest: V = 0, D = P, path dropped
+                u->fs.b.p = {pos.x, pos.y, z};
+                u->fs.b.v = F3{};
+                u->fs.b.o.yaw = fighter_wrap360(yaw_deg);
+                u->fs.dest = u->fs.b.p;
+                u->fs.idx = 0;
+                u->fs.hold = 0;
             }
         }
     }
-    if (cfg_.mode == MoveMode::Land) update_tree(u);
-    else park_space(u, frame);
+    if (cfg_.mode == MoveMode::Land) update_tree(*u);
+    else park_space(*u, frame);
     return true;
 }
 
@@ -581,9 +570,9 @@ void MovementSystem::tick(uint32_t frame, SimRng& rng, const ParallelFor& pf) {
 }
 
 bool MovementSystem::set_owner(ObjectId id, int32_t owner) {
-    const int32_t i = find(id);
-    if (i < 0) return false;
-    units_[static_cast<size_t>(i)].d.owner = owner;
+    Unit* u = unit_ptr(id);
+    if (!u) return false;
+    u->d.owner = owner;
     return true;
 }
 
@@ -646,10 +635,10 @@ void MovementSystem::fill_air_request(const Unit& u, uint32_t frame, SpaceReques
 }
 
 bool MovementSystem::air_request(ObjectId id, uint32_t frame, SpaceRequest& out) const {
-    const int32_t i = find(id);
-    if (i < 0 || !is_air(units_[static_cast<size_t>(i)])) return false;
+    const Unit* u = unit_ptr(id);
+    if (!u || !is_air(*u)) return false;
     out = SpaceRequest{};
-    fill_air_request(units_[static_cast<size_t>(i)], frame, out);
+    fill_air_request(*u, frame, out);
     return true;
 }
 
@@ -871,8 +860,8 @@ void MovementSystem::drive_collisions(uint32_t frame) {
             const tactical::Aabb box{{mid.x - half, mid.y - half, -1.0f}, {mid.x + half, mid.y + half, 1.0f}};
             uint32_t n = 0;
             for (EntityHandle h : tree_.query_aabb(box, QueryFilter{}, qctx_)) {
-                const int32_t i = find(static_cast<ObjectId>(h));
-                if (i >= 0 && ground_collider(units_[static_cast<size_t>(i)])) ++n;
+                const Unit* o = unit_ptr(static_cast<ObjectId>(h));
+                if (o && ground_collider(*o)) ++n;
             }
             return n;
         },
@@ -1125,10 +1114,9 @@ bool MovementSystem::push_spot(const Unit& b, V2 dir, V2& out) const {
     std::vector<Avoid> avoid;
     for (const CollisionObject& c : coll_.list()) {
         if (c.kind != CollisionKind::MovingVsStopped || c.b != b.d.id) continue;
-        const int32_t i = find(c.a);
-        if (i < 0) continue;
-        const Unit& m = units_[static_cast<size_t>(i)];
-        if (m.m.next < m.m.path.size()) avoid.push_back({&m, hard_y_extent(m.d) + r + 4.0f});
+        const Unit* m = unit_ptr(c.a);
+        if (!m) continue;
+        if (m->m.next < m->m.path.size()) avoid.push_back({m, hard_y_extent(m->d) + r + 4.0f});
     }
     // Orientation (0x20acd0): yaw in degrees in [0, 360), then radians as the search reads it.
     float yaw_deg = 0.0f;
@@ -1545,13 +1533,12 @@ void MovementSystem::register_crc(CrcRegistry& registry, const std::string& name
 
 // ---------------------------------------------------------------- S10-int: speed factor
 bool MovementSystem::set_speed_factor(ObjectId id, float factor) {
-    const int32_t i = find(id);
-    if (i < 0) return false;
-    Unit& u = units_[static_cast<size_t>(i)];
+    Unit* u = unit_ptr(id);
+    if (!u) return false;
     if (!(factor >= 0.0f)) factor = 0.0f;  // NaN / negative -> stopped
-    if (u.speed_factor == factor) return true;
-    u.speed_factor = factor;
-    configure(u);
+    if (u->speed_factor == factor) return true;
+    u->speed_factor = factor;
+    configure(*u);
     return true;
 }
 
@@ -1772,22 +1759,22 @@ bool MovementSystem::forced_spot(const Unit& u, V2 d, V2& out) const {
 
 // ---------------------------------------------------------------- s78k t03: team locomotor
 bool MovementSystem::set_team(ObjectId id, ObjectId team, float container_factor, float container_max_speed) {
-    const int32_t i = find(id);
-    if (i < 0) return false;
-    Unit& u = units_[static_cast<size_t>(i)];
+    Unit* u = unit_ptr(id);
+    if (!u) return false;
     if (!(container_factor >= 0.0f)) container_factor = 0.0f;  // NaN / negative -> stopped
-    u.team = team < 0 ? -1 : team;
-    u.team_factor = u.team < 0 ? 1.0f : container_factor;
-    u.team_max = u.team < 0 || !(container_max_speed >= 0.0f) ? -1.0f : container_max_speed;  // s78l t01
+    u->team = team < 0 ? -1 : team;
+    u->team_factor = u->team < 0 ? 1.0f : container_factor;
+    u->team_max = u->team < 0 || !(container_max_speed >= 0.0f) ? -1.0f : container_max_speed;  // s78l t01
     return true;
 }
 
 float MovementSystem::team_base_speed(const Unit& u) const {
     // 0x4049e0: the members' raw Max_Speed (+0x37c), not their own speed overrides or factors; x the mode multiplier as
-    // configure() applies it, so a team of one type with factor-1 members gets exactly their lp.max_speed.
-    const MovementConstants& k = cfg_.constants;
-    const float mult = cfg_.mode == MoveMode::Land ? k.land_speed_multiplier : k.space_speed_multiplier;
-    return std::max(u.d.max_speed, 0.0f) * mult;
+    // configure() applies it, so a team of one type with factor-1 members gets exactly their lp.max_speed. s78l t01: the
+    // container's own Max_Speed (set_team) caps it: min(b, team_max x mult).
+    const float mult = mode_mult();
+    const float b = std::max(u.d.max_speed, 0.0f) * mult;
+    return u.team_max >= 0.0f ? std::min(b, u.team_max * mult) : b;
 }
 
 void MovementSystem::team_caps() {
@@ -1795,13 +1782,10 @@ void MovementSystem::team_caps() {
     // min(container Max_Speed, min over its members of their raw Max_Speed (0x4049e0)) x the mode multiplier x the
     // container's own factors (here: set_team's container factor). Sorted (team, minimum) pairs built serially in units_
     // order (no hashed container); a min is order-independent anyway.
-    const MovementConstants& k = cfg_.constants;
-    const float mult = cfg_.mode == MoveMode::Land ? k.land_speed_multiplier : k.space_speed_multiplier;
     std::vector<std::pair<ObjectId, float>> mins;
     for (const Unit& u : units_) {
         if (u.team < 0) continue;
-        float b = team_base_speed(u);
-        if (u.team_max >= 0.0f) b = std::min(b, u.team_max * mult);  // the container's own Max_Speed
+        const float b = team_base_speed(u);  // the container's own Max_Speed included
         auto it = std::lower_bound(mins.begin(), mins.end(), u.team,
                                    [](const std::pair<ObjectId, float>& e, ObjectId t) { return e.first < t; });
         if (it == mins.end() || it->first != u.team) mins.insert(it, {u.team, b});
@@ -1817,24 +1801,23 @@ void MovementSystem::team_caps() {
 }
 
 float MovementSystem::speed_factor(ObjectId id) const {
-    const int32_t i = find(id);
-    return i < 0 ? 1.0f : units_[static_cast<size_t>(i)].speed_factor;
+    const Unit* u = unit_ptr(id);
+    return u ? u->speed_factor : 1.0f;
 }
 
 bool MovementSystem::set_speed_override(ObjectId id, float speed) {
-    const int32_t i = find(id);
-    if (i < 0) return false;
-    Unit& u = units_[static_cast<size_t>(i)];
+    Unit* u = unit_ptr(id);
+    if (!u) return false;
     if (!(speed >= 0.0f)) speed = -1.0f;  // negative / NaN -> cleared
-    if (u.speed_override == speed) return true;
-    u.speed_override = speed;
-    configure(u);
+    if (u->speed_override == speed) return true;
+    u->speed_override = speed;
+    configure(*u);
     return true;
 }
 
 float MovementSystem::speed_override(ObjectId id) const {
-    const int32_t i = find(id);
-    return i < 0 ? -1.0f : units_[static_cast<size_t>(i)].speed_override;
+    const Unit* u = unit_ptr(id);
+    return u ? u->speed_override : -1.0f;
 }
 
 void MovementSystem::hash_speed(StateHasher& h) const {
@@ -1864,6 +1847,22 @@ void MovementSystem::register_speed_crc(CrcRegistry& registry, const std::string
 MovementSystem::Unit* MovementSystem::unit_ptr(ObjectId id) {
     const int32_t i = find(id);
     return i < 0 ? nullptr : &units_[static_cast<size_t>(i)];
+}
+
+const MovementSystem::Unit* MovementSystem::unit_ptr(ObjectId id) const {
+    const int32_t i = find(id);
+    return i < 0 ? nullptr : &units_[static_cast<size_t>(i)];
+}
+
+// The units_ indices of an order's known units, in order.units order, each once.
+std::vector<uint32_t> MovementSystem::order_indices(const MoveOrder& order) const {
+    std::vector<uint32_t> idx;
+    for (const ObjectId id : order.units) {
+        const int32_t i = find(id);
+        if (i < 0 || std::find(idx.begin(), idx.end(), static_cast<uint32_t>(i)) != idx.end()) continue;
+        idx.push_back(static_cast<uint32_t>(i));
+    }
+    return idx;
 }
 
 FighterSquad* MovementSystem::squad_ptr(ObjectId id) {
@@ -1904,19 +1903,11 @@ FighterTarget* MovementSystem::ftarget_slot(Unit& u) {
     return c ? &c->target : &u.fs.target;
 }
 
-// "The formation of (C's pack, else the own pack) has an attack target" (0x41a2e0). [port] fallback: the legacy point
-// target of set_attack_target (the leader's for a squadron).
+// "The formation of (C's pack, else the own pack) has an attack target" (0x41a2e0): the target of set_fighter_target.
 bool MovementSystem::ftarget_get(Unit& u, FighterTarget& out) {
     const FighterTarget* t = ftarget_slot(u);
-    if (t->set()) {
-        out = *t;
-        return true;
-    }
-    const Unit& l = fleader(u);
-    if (!l.sm.has_target) return false;
-    out = FighterTarget{};
-    out.point = true;
-    out.pos = {l.sm.target.x, l.sm.target.y, l.sm.target_z};
+    if (!t->set()) return false;
+    out = *t;
     return true;
 }
 
@@ -1972,12 +1963,6 @@ void MovementSystem::freset_path(Unit& u) {
 void MovementSystem::fleave(FighterCellGrid& g, Unit& u, bool dogfight) {
     if (FighterSquad* c = fsquad(u)) g.leave(c->id, dogfight ? c->dog : c->park);
     else g.leave(u.d.id, dogfight ? u.fs.dog : u.fs.park);
-}
-
-bool MovementSystem::fjoin(FighterCellGrid& g, Unit& u, FighterCell cell, bool dogfight) {
-    const FighterAlliedFn allied = [this](int32_t a, int32_t b) { return fallied(a, b); };
-    if (FighterSquad* c = fsquad(u)) return g.join(c->id, u.d.owner, cell, dogfight ? c->dog : c->park, allied);
-    return g.join(u.d.id, u.d.owner, cell, dogfight ? u.fs.dog : u.fs.park, allied);
 }
 
 // [port] estimates of the team list's formation error E (+0x88) and spread S (+0x8c), whose writers are untraced:
@@ -2764,24 +2749,10 @@ bool MovementSystem::fighter_dead_stop(ObjectId id) {
     return true;
 }
 
-void MovementSystem::build_fighter_grids() {
-    fgrids_ = FighterCellGrids{};
-    if (space_.has_box()) fgrids_.build(space_.box_min(), space_.box_max());
-    for (Unit& u : units_) {
-        u.fs.dog = FighterCell{};
-        u.fs.park = FighterCell{};
-    }
-    for (FighterSquad& s : squads_) {
-        s.dog = FighterCell{};
-        s.park = FighterCell{};
-    }
-}
-
 const FighterState* MovementSystem::fighter_state(ObjectId id) const {
-    const int32_t i = find(id);
-    if (i < 0) return nullptr;
-    const Unit& u = units_[static_cast<size_t>(i)];
-    return u.d.locomotor == LocomotorKind::Fighter ? &u.fs : nullptr;
+    const Unit* u = unit_ptr(id);
+    if (!u) return nullptr;
+    return u->d.locomotor == LocomotorKind::Fighter ? &u->fs : nullptr;
 }
 
 FighterState* MovementSystem::fighter_state(ObjectId id) {

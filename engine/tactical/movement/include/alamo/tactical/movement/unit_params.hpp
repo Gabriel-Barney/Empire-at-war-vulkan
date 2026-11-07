@@ -99,13 +99,13 @@ struct UnitDesc {
     float turret_rest_delay = 2.0f;           // Turret_Rotate_To_Rest_Delay_Sec (+0x5cc, ctor default 2.0 s)
 };
 
-// Fills the type-derived members (id / position / yaw are left to the caller). `model_radius`
-// (> 0) is used when the type has no Custom_Soft_Footprint_Radius; otherwise a default by
-// UnitCollisionClass applies (infantry 6, bike 10, vehicle 20, large 40, giant 80, other 15) [L].
+// Fills the type-derived members (id / position / yaw are left to the caller). Without a
+// Custom_Soft_Footprint_Radius the radius is a default by UnitCollisionClass (infantry 6, bike 10,
+// vehicle 20, large 40, giant 80, other 15) [L].
 // REMAINING_GAPS §4.2-4.7 fields are filled too, except UnitDesc::locomotor, which stays Default: the host opts in
 // with locomotor_kind_from_type(types, type_index, mode) (special_locomotors.hpp), so existing hosts keep their
 // behaviour (and synced draws) until they route the kind. The Uses_Multiple_Locomotors fields are filled too; they act
 // only when the host asks for the swap (use_secondary_locomotor / MoveOrder::switch_locomotor).
-UnitDesc unit_desc_from_type(const objects::GameObjectTypes& types, uint32_t type_index, float model_radius = 0.0f);
+UnitDesc unit_desc_from_type(const objects::GameObjectTypes& types, uint32_t type_index);
 
 }  // namespace alamo::tactical::movement

@@ -129,10 +129,9 @@ struct TacticalAiObject {
     bool valid_target = true;
     bool hero_clash = false;  // obj +0x3b4 [port: no hero clashes yet, always false; kept so it can be wired]
     // UnitAI data-pack re-projection stamp (+0x20, A1_READINGS §14): UnitAiStamps::reprojection_check drawn by the host
-    // when the UNIT_AI object was created (draw_unit_ai_stamps). kNoReprojectionStamp: the host does not carry it, the
-    // grid uses its [port] legacy registration + 300.
-    static constexpr int32_t kNoReprojectionStamp = INT32_MIN;
-    int32_t reprojection_stamp = kNoReprojectionStamp;
+    // when the UNIT_AI object was created (draw_unit_ai_stamps). Every host draws it; the default 0 (a stamp at or
+    // before the first service) makes the first check run at the object's first service, as a drawn stamp does.
+    int32_t reprojection_stamp = 0;
 };
 
 // One entry of a player's reinforcement pool (campaign: units in orbit = the battle's reserves; skirmish: the
@@ -417,7 +416,6 @@ public:
     // the job's wait function (empty when nothing is left running): call it before the job system goes away. Call
     // after end_battle(), right before destroying the world: no script may run afterwards. Owner thread of the VMs.
     std::function<void()> release_scripts();
-    void set_suspended(bool suspended);
     // S7 t26 (AI_TACTICAL §7.3.3 item 2) - object signal 0xb "a new order replaces this unit's order", raised by the host
     // when it executes an order on `object_id` (A1_READINGS §33.3: task-force movement collectors, unit Move_To /
     // Attack_Move, MoveToObject, attack orders, ...): the Activate_Ability blocks waiting on the unit (or its team
