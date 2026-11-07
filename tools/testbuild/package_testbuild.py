@@ -1,11 +1,12 @@
 """Packs a test build zip for Gabriel: alamo_game + alamo_mod_check from a Release build tree, the launchers in
-tools/testbuild/launchers (Forces of Corruption and Thrawn's Revenge) and tools/testbuild/CHANGES.txt.
+tools/testbuild/launchers (Play.cmd for Forces of Corruption, Play_Mod.cmd for any installed mod) and
+tools/testbuild/CHANGES.txt.
 
 Usage (from the project root; tools/testbuild/package_testbuild.cmd wraps it):
   python -I tools/testbuild/package_testbuild.py [--build-dir build-msvc] [--name NAME] [--smoke] [--allow-dirty]
 
   --name         zip name without .zip (default alamo-testbuild-<today>, then -<today>b, c, ... if taken)
-  --smoke        before zipping, run the Thrawn's Revenge mod check and skirmish smoke through the staged launchers
+  --smoke        before zipping, run the Thrawn's Revenge mod check and skirmish smoke through the staged Play_Mod.cmd
                  (needs Forces of Corruption, Thrawn's Revenge and a GPU); a failure stops the packaging
   --allow-dirty  package even when engine/ has uncommitted edits (the zip's BUILD_INFO.txt says so)
 
@@ -26,7 +27,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 HERE = ROOT / "tools" / "testbuild"
 BINARIES = ["alamo_game.exe", "alamo_mod_check.exe", "avcodec-62.dll", "avformat-62.dll", "avutil-60.dll",
             "dxcompiler.dll", "dxil.dll", "COPYING.LGPLv2.1"]
-LAUNCHERS = ["Play.cmd", "Play_ThrawnsRevenge.cmd", "Check_ThrawnsRevenge.cmd", "tr_paths.cmd"]
+LAUNCHERS = ["Play.cmd", "Play_Mod.cmd", "find_game.cmd", "launcher.ps1"]
+SMOKE_MOD = "1125571106"  # Thrawn's Revenge (Steam workshop), the mod the smoke plays
 
 
 def git(*args):
@@ -63,22 +65,22 @@ def run_cmd(script, args=(), env=None):
 
 
 def smoke(stage, out_dir):
-    """Mod check + TR skirmish smoke through the staged launchers. Returns an error text or ''."""
+    """Mod check + TR skirmish smoke through the staged Play_Mod.cmd. Returns an error text or ''."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    find = run_cmd(stage / "tr_paths.cmd")
-    if find.returncode != 0:
-        return "tr_paths.cmd: " + (find.stdout + find.stderr).strip()
+    run_dir = stage / "mod_runs" / ("ws" + SMOKE_MOD)
     env = dict(os.environ, ALAMO_NO_NOTEPAD="1")
-    check = run_cmd(stage / "Check_ThrawnsRevenge.cmd", env=env)
-    report = stage / "mod_check_tr.txt"
+    check = run_cmd(stage / "Play_Mod.cmd", ["C" + SMOKE_MOD], env=env)
+    report = run_dir / "mod_check.txt"
     print(check.stdout.strip())
     if "Exit code 0." not in check.stdout or not report.exists():
         return "mod check failed: see " + str(report)
-    run = run_cmd(stage / "Play_ThrawnsRevenge.cmd", ["--smoke", "skirmish", "--png-dir", str(out_dir), "--hidden"])
-    log = stage / "alamo_game_tr_log.txt"
+    env["ALAMO_ARGS"] = '--smoke skirmish --png-dir "%s" --hidden' % out_dir
+    run = run_cmd(stage / "Play_Mod.cmd", [SMOKE_MOD], env=env)
+    log = run_dir / "log.txt"
     text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
     if run.returncode != 0 or "smoke skirmish: OK" not in text:
-        return "TR skirmish smoke failed (exit %d): see %s" % (run.returncode, log)
+        return "TR skirmish smoke failed (exit %d): see %s
+%s" % (run.returncode, log, run.stdout.strip())
     print("TR skirmish smoke: OK (shots in %s)" % out_dir)
     return ""
 
