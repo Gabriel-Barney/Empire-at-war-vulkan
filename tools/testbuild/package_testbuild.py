@@ -79,8 +79,7 @@ def smoke(stage, out_dir):
     log = run_dir / "log.txt"
     text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
     if run.returncode != 0 or "smoke skirmish: OK" not in text:
-        return "TR skirmish smoke failed (exit %d): see %s
-%s" % (run.returncode, log, run.stdout.strip())
+        return "TR skirmish smoke failed (exit %d): see %s\n%s" % (run.returncode, log, run.stdout.strip())
     print("TR skirmish smoke: OK (shots in %s)" % out_dir)
     return ""
 
