@@ -86,9 +86,9 @@ struct GameData {
     };
     std::vector<LoadStage> stages;
     std::vector<std::string> args;  // N1 / t09: the VFS command line the data was loaded with (save descriptors)
-    // modc t03: a MODPATH= / STEAMMOD= layer is mounted (Vfs::mod_dirs non-empty). Keys the [port] rules that apply only
-    // to mods (docs/MODS.md §6): campaign AI_Player_Control pairs, no base-game skirmish lists. Synthetic data: false
-    // (tests set it to stand for a mod).
+    // modc t03: a MODPATH= / STEAMMOD= layer is mounted (Vfs::mod_dirs non-empty), for the [port] rules that apply only
+    // to mods (docs/MODS.md §6). Synthetic data: false (tests set it to stand for a mod). modc t17: the skirmish forces and
+    // the campaign AI types no longer read it.
     bool mod_layer = false;
     // N1 / t09: sim::fingerprint_types of `types`, computed on first use (saves / loads only; one process-wide cache).
     uint64_t types_fingerprint() const;
@@ -106,8 +106,9 @@ bool load_game_data_dir(const std::string& dir, GameData& out, std::string* err 
 // Skirmish galaxy (see the file comment). Players: 0 = human (`human_faction`), 1 = AI (`ai_faction`), 2 = the first
 // neutral faction, then the native-owner faction (GalacticRules::native_owner_faction). An empty faction name is the
 // default slot faction (default_skirmish_faction). `units_human` / `units_ai` = type names of the starting fleets (unknown names are skipped);
-// empty = the faction's default fleet (default_skirmish_fleet). `planet_type` = a planet type name ("" = the first of
-// Kuat / Coruscant / any PLANET type). False + err when a faction or every unit is unknown.
+// empty = the faction's default fleet (default_skirmish_fleet). `planet_type` = a planet type name ("" =
+// skirmish_galaxy_planet(rules, "", land): the first PLANET type that forbids no unit; GameSession passes the map's planet,
+// modc t19). False + err when a faction or every unit is unknown.
 // Land skirmish (land = true): the AI's ground forces hold planet 1's surface (no space units, so no space conflict);
 // the human's ground forces ride a fleet (one space unit + the ground units launched at session start) that hops to
 // planet 1 and invades on arrival (the session submits the Invade order): the land battle on the chosen land map.
@@ -134,14 +135,13 @@ std::string default_skirmish_faction(const galactic::GalacticRules& rules, bool 
 // `s` with its empty slot factions replaced by default_skirmish_faction.
 SkirmishSetup resolve_skirmish_factions(const galactic::GalacticRules& rules, SkirmishSetup s);
 // q6 t08: the default forces make_skirmish_galaxy uses, as type names the data defines (skirmish_rules.hpp
-// skirmish_default_forces with the alamo_game options: base-game lists unless data.mod_layer, hyperspace leader):
-//   base-game list, no mod layer      default_skirmish_fleet / _ground(faction), unchanged (names unknown to the data are
-//                                     kept; the galaxy skips them). [port] MODS.md §6; replacement modc t17.
-//   other factions                    the faction's Space_ / Land_Skirmish_AI_Default_Forces (SKIRMISH_SETUP §2 step 4),
+// skirmish_default_forces with the alamo_game option hyperspace leader). modc t17: every faction alike, base FoC included
+// (FoC: two squadrons of fighters in space, two infantry squads on land, as retail):
+//   every faction                     the faction's Space_ / Land_Skirmish_AI_Default_Forces (SKIRMISH_SETUP §2 step 4),
 //                                     names the data does not define, and types the galaxy cannot hold (space: not a
 //                                     SpaceUnit / Squadron kind; land: not a GroundUnit kind), dropped. [port] none left: up
 //                                     to three of the faction's buildable units (data_fallback_forces).
-//   space, other factions             [port] the port hosts a skirmish as a galactic hop, so the fleet needs a hyperspace
+//   space                             [port] the port hosts a skirmish as a galactic hop, so the fleet needs a hyperspace
 //                                     member: the first one moves to the front; without one the faction's cheapest buildable
 //                                     hyperspace ship that holds the list's non-hyperspace squadrons (else the cheapest) is
 //                                     put in front. Retail places these squadrons directly at the map's spawn markers.
@@ -155,8 +155,8 @@ std::vector<std::string> default_skirmish_ground(const GameData& data, const std
 std::vector<std::string> data_fallback_forces(const GameData& data, const std::string& faction, bool land);
 inline constexpr PlanetIndex kSkirmishHumanPlanet = 2, kSkirmishBattlePlanet = 1;
 
-// Space skirmish maps of the data (Data\Art\Maps\_MP_SPACE_*.ted through the VFS), sorted, "_MP_SPACE_KUAT" first
-// when present (the A1 skirmish golden's map). Empty without a VFS. [port] Both lists leave out a map whose loose file (through
+// Space skirmish maps of the data (Data\Art\Maps\_MP_SPACE_*.ted through the VFS), sorted by name (modc t19: no map
+// is moved to the front). Empty without a VFS. [port] Both lists leave out a map whose loose file (through
 // the normal lookup) is empty or cannot be sized (Thrawn's Revenge ships a 0-byte _MP_SPACE_KUAT.ted); MEG entries are kept,
 // so vanilla lists are unchanged.
 std::vector<std::string> skirmish_space_maps(const GameData& data);

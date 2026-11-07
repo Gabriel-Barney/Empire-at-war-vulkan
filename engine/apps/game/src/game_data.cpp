@@ -153,9 +153,7 @@ std::vector<std::string> data_fallback_forces(const GameData& data, const std::s
 
 namespace {
 std::vector<std::string> game_default_forces(const GameData& data, const std::string& faction, bool land) {
-    SkirmishForceOptions o;
-    o.base_game_lists = !data.mod_layer;  // [port, docs/MODS.md §6] base-FoC sessions keep their lists
-    return skirmish_default_forces({data.rules, data.types, data.skirmish_forces}, faction, land, o);
+    return skirmish_default_forces({data.rules, data.types, data.skirmish_forces}, faction, land);
 }
 }  // namespace
 
@@ -201,10 +199,7 @@ bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& setup, gala
     }
     uint32_t planet = galactic::kNoIndex;
     if (!s.planet_type.empty()) planet = rules.find_type(s.planet_type);
-    for (const char* n : {"Kuat", "Coruscant"})
-        if (planet == galactic::kNoIndex) planet = rules.find_type(n);
-    for (uint32_t t = 0; t < rules.types.size() && planet == galactic::kNoIndex; ++t)
-        if (rules.types[t].kind == galactic::UnitKind::Planet) planet = t;
+    if (planet == galactic::kNoIndex) planet = skirmish_galaxy_planet(rules, {}, s.land);  // modc t19: from the data
     if (planet == galactic::kNoIndex) {
         if (err) *err = "skirmish: no planet type";
         return false;
@@ -306,9 +301,7 @@ std::vector<std::string> list_maps(const GameData& data, const char* glob) {
 std::vector<std::string> skirmish_land_maps(const GameData& data) { return list_maps(data, "Data\\Art\\Maps\\_MP_LAND_*.ted"); }
 
 std::vector<std::string> skirmish_space_maps(const GameData& data) {
-    std::vector<std::string> out = list_maps(data, "Data\\Art\\Maps\\_MP_SPACE_*.ted");
-    if (const auto it = std::find(out.begin(), out.end(), "_MP_SPACE_KUAT"); it != out.end()) std::rotate(out.begin(), it, it + 1);
-    return out;
+    return list_maps(data, "Data\\Art\\Maps\\_MP_SPACE_*.ted");
 }
 
 namespace {

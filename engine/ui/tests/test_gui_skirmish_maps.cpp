@@ -184,11 +184,11 @@ void test_skirmish_maps() {
     rig.game_type(false);
     CHECK(selected_of(rig.env.gui) == 6);
 
-    // Space type: only the space maps; nothing remembered for Space yet, so Kuat.
+    // Space type: only the space maps; nothing remembered for Space yet, so row 0 (UI.md 9.7; modc t19: no map by name).
     rig.game_type(true);
-    CHECK(rig.fe.skirmish_space_type() && items_of(rig.env.gui) == official_space && selected_of(rig.env.gui) == 1);
+    CHECK(rig.fe.skirmish_space_type() && items_of(rig.env.gui) == official_space && selected_of(rig.env.gui) == 0);
     CHECK(rig.fe.skirmish_map_row("_mp_space_kuat") == 1 && rig.fe.skirmish_map_row("_MP_LAND_ENDOR") == -1 && rig.fe.skirmish_map_row("nope") == -1);
-    CHECK(rig.start() == "_MP_SPACE_KUAT");
+    CHECK(rig.start() == "_MP_SPACE_ABC");
 
     // UI.md 9.5: the map follows the list selection, not Start. Pick a row on each type without starting; after switching away
     // and back the row picked is selected again.
@@ -212,20 +212,20 @@ void test_skirmish_maps() {
     rig.select(2);
     CHECK(rig.start() == "Data/Art/Maps/Short_Two.ted");
     CHECK(rig.fe.skirmish_map_row("Data/Art/Maps/Short_Two.ted") == 2 && rig.fe.skirmish_map_row("_MP_LAND_ENDOR") == -1);
-    // Space type on the Custom tab: the one custom space map; no Kuat.
+    // Space type on the Custom tab: the one custom space map.
     rig.game_type(true);
     CHECK(items_of(rig.env.gui) == (std::vector<std::u32string>{U"CSPACE"}) && selected_of(rig.env.gui) == 0);
     CHECK(rig.start() == "DATA\\CUSTOMMAPS\\CSPACE.TED");
-    // Back to Official: Space's remembered map is the custom one, not listed here, so Kuat (which is remembered then).
+    // Back to Official: Space's remembered map is the custom one, not listed here, so row 0 (which is remembered then).
     rig.click(kStaging, "IDC_SELECT_OFFICIAL_MAPS");
-    CHECK(!rig.fe.skirmish_custom_tab() && items_of(rig.env.gui) == official_space && selected_of(rig.env.gui) == 1);
+    CHECK(!rig.fe.skirmish_custom_tab() && items_of(rig.env.gui) == official_space && selected_of(rig.env.gui) == 0);
 
     // Closing and reopening the dialog: the Official tab again, on the game type selected last (Space), with its remembered map.
     rig.click(kStaging, "IDC_CANCEL_BUTTON");
     CHECK(rig.fe.top() == kSingle);
     rig.click(kSingle, "IDC_SKIRMISH_GAMES_BUTTON");
     CHECK(rig.fe.top() == kStaging && !rig.fe.skirmish_custom_tab() && rig.fe.skirmish_space_type() && items_of(rig.env.gui) == official_space &&
-          selected_of(rig.env.gui) == 1);
+          selected_of(rig.env.gui) == 0);
     CHECK(rig.control("IDC_GAME_TYPE_LIST")->selected == 1);
     rig.select(0);
     // The type is remembered when it is selected, not when a game is started: switch to Land and leave without Start.

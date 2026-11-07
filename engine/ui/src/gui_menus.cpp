@@ -606,8 +606,8 @@ std::u32string FrontEnd::skirmish_row_text(const SkirmishMapInfo& m) const {
 
 // The rows of the active tab and game type (UI.md 9.4: a space map is listed under Space, the others under Land), each by
 // row text case-insensitively, ties by map id. The selection is the map selected last for that game type when it is listed
-// (UI.md 9.5 / 9.7), else _MP_SPACE_KUAT on the Space type [port: keeps the smoke runs on Kuat], else row 0. The row
-// selected becomes the map remembered for the type.
+// (UI.md 9.5 / 9.7), else row 0 (as retail's 0xfb950; modc t19: no map is preferred by name). The row selected becomes the
+// map remembered for the type.
 void FrontEnd::fill_skirmish_maps(GuiDialog& d) {
     struct Row {
         size_t index;
@@ -628,17 +628,15 @@ void FrontEnd::fill_skirmish_maps(GuiDialog& d) {
     map_view_.clear();
     std::vector<std::u32string> items;
     int32_t sel = rows.empty() ? -1 : 0;
-    int32_t kuat = -1, last = -1;
+    int32_t last = -1;
     const std::string& last_map = last_map_[space_type_ ? 1 : 0];
     for (size_t r = 0; r < rows.size(); ++r) {
         const SkirmishMapInfo& m = maps_[rows[r].index];
         map_view_.push_back(rows[r].index);
         items.push_back(std::move(rows[r].text));
-        if (kuat < 0 && space_type_ && iequal(m.map, "_MP_SPACE_KUAT")) kuat = static_cast<int32_t>(r);
         if (last < 0 && !last_map.empty() && iequal(m.map, last_map)) last = static_cast<int32_t>(r);
     }
     if (last >= 0) sel = last;
-    else if (kuat >= 0) sel = kuat;
     d.set_items("IDC_STAGING_MAP_LIST", std::move(items), sel);
     if (sel >= 0) last_map_[space_type_ ? 1 : 0] = maps_[map_view_[static_cast<size_t>(sel)]].map;
     fill_skirmish_preview(d);

@@ -27,6 +27,8 @@ is the short version of the same list). Status of the follow-up tasks lives on t
 way), 8 are test scenarios / synthetic data of the headless test host or port limits that are not faction rules, and 12 are
 port rules whose replacement moves a base-FoC golden or lives in presentation code; those 12 are new roadmap tasks
 (modc t17-t20). Base-FoC CRC goldens: unchanged.
+Later (2026-11-06): modc t17 / t19 fixed #13, #15, #16, #29 and the map part of #36; they moved the three game smoke goldens
+(Gabriel approved).
 
 Legend: **F** fixed in t03 (data-driven, base FoC unchanged), **R** kept: retail hard-code, **T** kept: test host / synthetic
 data / limit, **P** kept: port rule, follow-up task.
@@ -47,10 +49,10 @@ data / limit, **P** kept: port rule, follow-up task.
 | 10 | `apps/game/src/game_session.cpp` attract demo | AI sides `find_faction("Rebel")`, `("Underworld")` | **F** faction indices 0 and 6, as 0x22f10 sets players 0 and 6 (GALAXY_MAP_PRESENTATION.md §6, MAIN_MENU_BACKGROUND.md step 6) |
 | 11 | `ai/src/galactic_seed.cpp` (provisional seed) | default neutral = "Neutral", corruption = "Underworld", extra player "Neutral" | **F** `seed_options_from_factions(files)`: `Is_Neutral` / `Benefits_From_Corruption` from FactionFiles.xml; `alamo_headless` and the test pass it |
 | 12 | `galactic/include/alamo/galactic/economy.hpp` | `good_side_name = "REBEL"` default | **F** empty default; `Good_Side_Name` comes from GameConstants (FoC and TR set it) |
-| 13 | `apps/game/rules/skirmish_rules.cpp` `default_skirmish_fleet / _ground(faction)` | the [port] base-game unit lists themselves (Star_Destroyer, ...) | **P** kept for base FoC only (game_smoke_skirmish / _land hold them). Retail starts from `Space_ / Land_Skirmish_AI_Default_Forces` (SKIRMISH_SETUP §2 step 4). **modc t17** |
+| 13 | `apps/game/rules/skirmish_rules.cpp` `default_skirmish_fleet / _ground(faction)` | the [port] base-game unit lists themselves (Star_Destroyer, ...) | **F** (modc t17, 2026-11-06) lists removed; every faction starts from its `Space_ / Land_Skirmish_AI_Default_Forces` (SKIRMISH_SETUP §2 step 4), else the [port] fallback. game_smoke goldens regenerated |
 | 14 | `apps/game/src/game_session.cpp` `attract_demo_script` | Demo_Attract_Controller.lua emulated in C++: `Find_Player("Empire" / "Rebel" / "Underworld")`, ten excluded type names, the zone names | **P** a shipped data script hard-coded; run the real script through the object-script host instead. **modc t18** |
-| 15 | `apps/game/src/game_data.cpp` `make_skirmish_galaxy` | skirmish galaxy planet type `Kuat`, then `Coruscant` | **P** not in the executable; deliberate (a map's own planet may forbid the setup). Moves game smoke goldens. **modc t19** |
-| 16 | `apps/game/src/game_data.cpp` `skirmish_space_maps` | `_MP_SPACE_KUAT` first | **P** with #15 (UI default selection). **modc t19** |
+| 15 | `apps/game/src/game_data.cpp` `make_skirmish_galaxy` | skirmish galaxy planet type `Kuat`, then `Coruscant` | **F** (modc t19) `skirmish_galaxy_planet`: the map's own planet type when it forbids no unit (and has a surface for land), else the first such PLANET type; game smoke goldens regenerated |
+| 16 | `apps/game/src/game_data.cpp` `skirmish_space_maps` | `_MP_SPACE_KUAT` first | **F** (modc t19) sorted by name, no map moved to the front |
 | 17 | `galactic/src/conflicts.cpp` `map_faction_index` | battle map faction index by name (Rebel 0, Empire 1, Pirates 2, Underworld 4, Hutts 5) | **R** table 0x140b30568 (L1_S4_REMAINING.md, BATTLE_TRANSITIONS.md "defender faction index"); strings in the executable |
 | 18 | `galactic/src/special_systems.cpp` `faction_pairing` | hero ability target pairing by name | **R** 0x48d900 (P4_SIM_SYSTEMS.md §1.2 step 1) |
 | 19 | `galactic/src/visibility.cpp` `faction_default_visibility` | Good_Default for "Rebel" / "Underworld" | **R** 0x3fa490 (GALACTIC_REVEAL_CORRUPTION.md "Baseline") |
@@ -63,7 +65,7 @@ data / limit, **P** kept: port rule, follow-up task.
 | 26 | `apps/headless/save_run.cpp` | synthetic save-test galaxy (Empire / Underworld / Neutral) | **T** synthetic test data |
 | 27 | `apps/headless/ai_run.cpp`, `map_run.cpp`, `save_run.cpp` | default campaigns `Sandbox_Heart_Of_The_Maw_Underworld`, `Full_Story_Campaign_Underworld` | **T** test-host defaults without `--map`; any campaign by name |
 | 28 | `apps/headless/main.cpp` record stream, `commands` `SchedulerConfig::max_players = 8` | scheduler defaults | **T** defaults of the synthetic hosts; real sessions set it from the setup (sim_host.cpp) |
-| 29 | `apps/game/src/game_session.cpp` campaign AI | FoC campaigns' `AI_Player_Control` pairs ignored (base game) | **P** (part of #7) retail reads the pairs; reading them for base FoC moves game_smoke_campaign. **modc t17** |
+| 29 | `apps/game/src/game_session.cpp` campaign AI | FoC campaigns' `AI_Player_Control` pairs ignored (base game) | **F** (modc t17) the pairs are read for base FoC too (`resolve_ai_type`, AI_GALACTIC §1.2); game_smoke_campaign regenerated |
 
 ### Presentation (engine/apps/game/app, ui, render: MODS.md §1 rule 1 applies, the t04 lint does not scan them)
 
@@ -75,7 +77,7 @@ data / limit, **P** kept: port rule, follow-up task.
 | 33 | `apps/game/app/app_session.cpp` attract | `human_faction = "Rebel"`, `ai_faction = "Underworld"` | **P** no effect since #10 (the sides are indices); drop. **modc t20** |
 | 34 | `apps/game/app/game_info.cpp` | tech tree / black market faction by name | **P** **modc t20** |
 | 35 | `apps/game/app/game_ui.cpp` `set_faction` | GUI shell alternate by faction name | **P** **modc t20** |
-| 36 | `ui/include/alamo/ui/gui_menus.hpp`, `ui/src/gui_menus.cpp` | skirmish faction list `{"Rebel", "Empire", "Underworld"}`; `_MP_SPACE_KUAT` default map row | **P** list the data's `Is_Playable` factions; map with #15. **modc t20**, **t19** |
+| 36 | `ui/include/alamo/ui/gui_menus.hpp`, `ui/src/gui_menus.cpp` | skirmish faction list `{"Rebel", "Empire", "Underworld"}`; `_MP_SPACE_KUAT` default map row (**F** modc t19: remembered map, else row 0, UI.md 9.7) | **P** list the data's `Is_Playable` factions; map with #15. **modc t20**; map **F** t19 |
 | 37 | `apps/game/app/game_render.hpp`, `render/galactic` `galactic_view_options` | `Evil_Side_Name` default "EMPIRE" (GameConstants overrides) | **P** **modc t20** |
 | 38 | `render/galactic/src/galactic_session.cpp`, `render/src/lighting.cpp` | synthetic demo galaxy factions and colours; built-in Kuat environment when no map | **T** renderer demo / no-data fallbacks (real data reads `Factions.xml` colours, R2 t01) |
 
