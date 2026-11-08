@@ -18,6 +18,9 @@ namespace alamo::sim {
 namespace {
 
 constexpr uint32_t kChunkVersion = 1;  // envelope version of every host chunk (sub-systems version their own bytes)
+// "frame" chunk version (chunk header and its leading u32). 2 (cu9f t01): GalacticMode::write_state no longer carries the
+// pre-S3 income cadence (u32 interval, u64 next income frame, u64 income events); a version-1 save is refused.
+constexpr uint32_t kFrameChunkVersion = 2;
 constexpr uint32_t kMaxCount = 1u << 24;
 
 // Host chunk names in save / load order (a story session adds its four after "globals").
@@ -105,7 +108,7 @@ bool SimHost::save_allowed(std::string* why) const {
 
 // ---------------------------------------------------------------------------------------- host chunks
 void SimHost::write_frame(ByteWriter& w) const {
-    w.u32(kChunkVersion);
+    w.u32(kFrameChunkVersion);
     w.u64(frame_).u64(batch_crc_).u64(applied_).u64(rejected_);
     const auto depth = static_cast<uint32_t>(modes_.depth());
     w.u32(depth);
@@ -116,7 +119,7 @@ void SimHost::write_frame(ByteWriter& w) const {
 }
 
 bool SimHost::read_frame(ByteReader& r) {
-    if (r.u32() != kChunkVersion) return false;
+    if (r.u32() != kFrameChunkVersion) return false;
     const uint64_t frame = r.u64(), batch = r.u64(), applied = r.u64(), rejected = r.u64();
     const uint32_t depth = r.u32();
     const auto have = static_cast<uint32_t>(modes_.depth());
@@ -424,7 +427,7 @@ bool SimHost::save(SaveFile& out, std::string* err) const {
         else if (n == "rng") random_.write(w);
         else if (n == "commands") pipeline_->write(w);
         else if (n == "globals") write_globals(w);
-        add(name, kChunkVersion, w);
+        add(name, n == "frame" ? kFrameChunkVersion : kChunkVersion, w);
         if (n == "objects" && has_tactical_mode()) {
             ByteWriter sw;
             write_spatial(sw);
@@ -491,7 +494,7 @@ void SimHost::read_chunks(const SaveFile& in, LoadReport& rep) {
         const SaveParticipant* part = nullptr;
         for (const SaveParticipant& p : participants_)
             if (p.name == name) part = &p;
-        const uint32_t version = part ? part->version : kChunkVersion;
+        const uint32_t version = part ? part->version : name == "frame" ? kFrameChunkVersion : kChunkVersion;
         bool ok = c->version == version;
         if (ok) {
             ByteReader r(c->data);
@@ -554,7 +557,7 @@ bool SimHost::load(const SaveFile& in, std::string* err, LoadReport* report) {
     // TAKEN DURING A BATTLE"): pass 1 restores the bottom modes and the systems' own state, the participants rebuild the
     // upper modes, pass 2 reads everything.
     uint32_t saved_depth = 0;
-    if (const SaveChunk* fc = in.find("frame"); fc && fc->version == kChunkVersion) {
+    if (const SaveChunk* fc = in.find("frame"); fc && fc->version == kFrameChunkVersion) {
         ByteReader r(fc->data);
         (void)r.u32();
         for (int i = 0; i < 4; ++i) (void)r.u64();

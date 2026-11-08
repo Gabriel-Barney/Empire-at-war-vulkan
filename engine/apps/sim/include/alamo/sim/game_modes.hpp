@@ -171,8 +171,8 @@ public:
     ~GalacticMode() override;
     void tick(const ModeTickContext& ctx) override;
     void hash(StateHasher& h) const override;
-    // N1: + income cadence and the pause counter (restored without re-pushing GalacticSim pauses: the sim's own pause
-    // state is in its "galactic.state" chunk).
+    // N1: + the pause counter (restored without re-pushing GalacticSim pauses: the sim's own pause state is in its
+    // "galactic.state" chunk). cu9f t01: the pre-S3 income cadence is no longer hashed or saved (frame chunk version 2).
     void write_state(ByteWriter& w) const override;
     bool read_state(ByteReader& r) override;
 
@@ -190,12 +190,6 @@ public:
     bool paused() const override;
 
 private:
-    // cu9 t14: the pre-S3 income stand-in's state. Nothing changes it any more (GalacticSim owns the fiscal cycle), but
-    // hash() and the "frame" save chunk still carry it: dropping it moves every galactic golden and the frame-chunk
-    // layout, so it goes with the next intended golden regeneration (roadmap follow-up).
-    uint32_t income_interval_ = 1350;
-    uint64_t next_income_frame_ = 0;
-    uint64_t income_events_ = 0;
     uint32_t pause_count_ = 0;
     std::unique_ptr<galactic::GalacticSim> sim_;
 };
