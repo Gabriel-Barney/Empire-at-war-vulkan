@@ -441,6 +441,16 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 }
                 break;
             }
+            case ta::AbilityEventKind::Lured: {
+                // cu8f t06 (CU8F_T04_T06_RE §3.1): the lured unit's coordinator move toward the lure owner - an attack-move
+                // with the owner (or its team) as the goal object, so the ordered attack the ability issued stays.
+                Unit* u = unit_by_id(e.id);
+                if (u && u->alive && !u->retreated && u->movable && bt_rng_) {
+                    const objects::ObjectId ids[] = {e.id};
+                    exec_move(mode, ids, e.point.x, e.point.y, *bt_rng_, mv::kNoFacing, true, 0, false, e.target);
+                }
+                break;
+            }
             case ta::AbilityEventKind::StopOrder: {
                 Unit* u = unit_by_id(e.id);
                 if (u && u->alive && u->movable && movement_) {
@@ -564,6 +574,17 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                     if (!h) continue;
                     if (bt_adopt_built(mode, h, sp.owner, 1.0f, bt_rng_, false, ci) == 0xFFFFFFFFu) store.destroy(h);
                 }
+                break;
+            }
+            case ta::SpawnPurpose::LureEffect: {
+                // cu8f t06 (CU8F_T04_T06_RE §3.1): the LURE record's Particle_Effect at the owner (a prop, one object id);
+                // the ability system raises RemoveSilently for it at the deactivation.
+                const ta::UnitAbilityRecord* r = abilities_->record(q.source, ta::kLure);
+                if (!r || r->particle_effect.empty()) break;
+                const objects::TypeIndex t = catalog_->types().raw().find(r->particle_effect);
+                if (t == objects::kNone || t >= catalog_->types().size()) break;
+                const objects::ObjectHandle h = spawn_prop(mode, static_cast<int32_t>(t), oi_sv(q.position), oi_sv(q.facing), q.owner);
+                if (h) abilities_->bind_spawn(q.serial, store.id(h));
                 break;
             }
             case ta::SpawnPurpose::StationUpgrade: hg_station_upgrade(mode, q); break;  // STATION_HANGARS_SOUND Â§1.2

@@ -333,7 +333,9 @@ struct InfectionDesc {
     float seconds_to_infect = 0.0f;    // Seconds_To_Infect: consecutive time in range before a neighbour is infected
     float duration_secs = 0.0f;        // Duration_Of_Infection (<= 0: no expiry)
     float damage_per_second = 0.0f;    // Damage_Per_Second
-    uint64_t category_mask = 0;        // Infection_CategoryMask (0 = every category [M])
+    // Infection_CategoryMask: the spread's victim filter (candidate type CategoryMask & mask != 0, so 0 spreads to
+    // nothing); a direct Causes_Infection hit is not filtered (cu8f t06, CU8F_T04_T06_RE §3.5 [H]).
+    uint64_t category_mask = 0;
 };
 
 // S8 t10 (LOB_SOLVER §5.1 "Garrison fire bones in detail"): one gun bone FP_0<i>_ALT<a> / FP_<i>_ALT<a> of a garrison host
@@ -1176,6 +1178,10 @@ public:
     // are no-ops without the behaviour (the Lua behaviour switch 0x393570 ignores a missing behaviour).
     bool infection_attached(ObjectId id) const;
     uint32_t infection_suspend_count(ObjectId id) const;
+    // cu8f t06: the pack's frames left (0 without the behaviour) and a unit's spread counter as a candidate (-1 = never
+    // counted).
+    int32_t infection_frames_left(ObjectId id) const;
+    int32_t infection_spread_count(ObjectId id) const;
     void suspend_infection(ObjectId id);
     void resume_infection(ObjectId id, uint32_t frame);
     // Laser defense (0x716230): detonate projectile i (serial order index) at its position (area
@@ -1488,11 +1494,13 @@ private:
         uint8_t infect_attached = 0;
         uint32_t infect_suspend = 0;           // suspend counter (+0x3c)
         int32_t infect_desc = -1;              // UnitDesc whose InfectionDesc drives it (-1 none: flag only)
-        int32_t infect_player = -1;            // the infecting player (spread targets its enemies [L])
+        int32_t infect_player = -1;            // the infecting player
         ObjectId infect_source = kNoObject;    // the infecting unit (damage source)
-        uint32_t infect_end = 0;               // expiry frame (Duration_Of_Infection; 0 = none)
-        uint32_t infect_next_damage = 0;       // next Damage_Per_Second frame
-        std::vector<std::pair<ObjectId, uint32_t>> infect_exposure;  // neighbours in range: (id, first frame), id order
+        int32_t infect_left = 0;               // cu8f t06: infection pack +8, frames left (int(FPS x Duration) at infect)
+        // cu8f t06 (CU8F_T04_T06_RE §3.5): the spread's per-candidate consecutive-frame counter on the candidate's TD
+        // (+0x114 last counted frame, 0xFFFFFFFF = never; +0x118 count). Hashed once set.
+        uint32_t infect_seen = 0xFFFFFFFFu;
+        int32_t infect_count = 0;
         // ---- OI abilities (hash_extended) ----
         int32_t priority_override = -1;  // Lua Set_Targeting_Priorities (data pack +0x160)
         float stickiness = 0.0f;         // cu8f t04a: TD +0x158 stickiness threshold (< 0: the type's value)
@@ -1788,7 +1796,7 @@ private:
     float unit_max_energy(const Unit& u) const;
     void burning_service(Unit& u, uint32_t frame);
     // refix t02: INFECTION update (0x636ae0) of one unit, and attaching / resuming the behaviour on a victim.
-    void infection_service(Unit& u, uint32_t frame);
+    void infection_service(Unit& u, uint32_t frame, SimRng& rng);
     void infect(Unit& v, int32_t desc, int32_t player, ObjectId source, uint32_t frame);
     void converted_decay(Unit& u, uint32_t frame, SimRng& rng);
     SimRng* listener_rng() const { return tick_rng_ ? tick_rng_ : bound_rng_; }
@@ -1835,7 +1843,6 @@ private:
     bool effect_match(const Unit& v, uint64_t mask, const std::vector<int32_t>* types) const;
     void effect_victims(int32_t owner, bool enemies, Vec3 center, float radius, std::vector<Unit*>& out);
     std::vector<Unit*> effect_scratch_;
-    std::vector<std::pair<ObjectId, uint32_t>> infect_scratch_;  // refix t02: infection_service exposure scratch
     void record_damage(const DamageRequest& r, const Unit& v, const Unit* src, int32_t hp, const DamageResult& out,
                        uint32_t frame);
     std::vector<uint32_t> emitters_;  // unit indices with emitter_radius > 0 (ascending id), phase F scratch

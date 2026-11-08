@@ -309,11 +309,16 @@ bool TacticalBattle::sw_fire_lobbing_at(const TacticalMode& mode, objects::Objec
 }
 
 bool TacticalBattle::special_weapons_allowed(int32_t player) const {
-    // campaign: no per-player rule (0x527620); skirmish: the player's special-weapon hard-point flag (HARDPOINT_DISABLED §4).
-    if (cfg_.skirmish && combat_ && !combat_->special_weapon_hp_enabled(player)) return false;
+    // SpecialWeaponsAllowed (0x527620): false once the battle planet is destroyed. cu8f t06 (CU8F_T04_T06_RE §3.3 [H]): the
+    // Enable_Special_Weapons list (+0x1e0): empty -> allowed in a campaign battle, refused in a skirmish; non-empty -> the
+    // AND of its entries and the special-weapon hard-point flag +0x2f0 (HARDPOINT_DISABLED §4).
     if (l1_planet_destroyed_) return false;
     const PlanetIndex p = req_.info.planet;
-    return !(p < galaxy_->planets().size() && galaxy_->planets()[p].destroyed);
+    if (p < galaxy_->planets().size() && galaxy_->planets()[p].destroyed) return false;
+    bool all = true;
+    const uint32_t n = abilities_ ? abilities_->player_gate(player, tactical::abilities::PlayerGate::SpecialWeapons, all) : 0u;
+    if (n == 0) return !cfg_.skirmish;
+    return all && (!combat_ || combat_->special_weapon_hp_enabled(player));
 }
 
 int32_t TacticalBattle::tsw_state(objects::ObjectId tsw) const { return l1_sw_.tsw_state(tsw); }

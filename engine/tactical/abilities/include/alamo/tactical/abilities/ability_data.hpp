@@ -38,15 +38,21 @@ struct UnitAbilityRecord {
     float effective_radius = 0.0f;       // Effective_Radius
     float recharge_seconds = 0.0f;       // Recharge_Seconds
     float expiration_seconds = 0.0f;     // Expiration_Seconds (<= 0: no active phase)
-    // Parsed, not yet read (cu8 t05, open parity item): LURE pulsed effect (ABILITIES_HARDPOINTS §2.2 table, +0x2c..+0x34).
+    // LURE pulses (cu8f t06, CU8F_T04_T06_RE §3.1 [H]): every int(FPS x Pulse_Frequency_Secs) frames up to
+    // Max_Number_Of_Pulses, then the behaviour suspends (AbilitySystem lure service).
+    // Is_Pulsing (+0x2c) is parsed but has no reader in the original ([M]: LURE always pulses; the tag is even
+    // registered as a float), so nothing reads it here either.
     bool is_pulsing = false;
-    float pulse_frequency_secs = 0.0f;
-    int32_t max_pulses = 0;
+    float pulse_frequency_secs = 0.0f;  // Pulse_Frequency_Secs (+0x30)
+    int32_t max_pulses = 0;             // Max_Number_Of_Pulses (+0x34)
     std::string alternate_icon_name;         // Alternate_Icon_Name: button art instead of the type's (GUI only, t42)
     std::string gui_activated_ability_name;  // special ability this forwards to (2.5)
     uint32_t gui_name_crc = 0;               // name_crc of it (+0x88)
     std::string spawned_object_type;
-    int32_t max_spawned_objects = 0;  // parsed, not yet read (cu8 t05; spawn cap, reader not in docs/re)
+    // Max_Num_Spawned_Objects (+0xa0, cu8f t06, CU8F_T04_T06_RE §3.2 [H]): DEPLOY_TROOPERS only - Can_Activate(38) is
+    // false while the unit's live deployed squads reach it. [port] -1 = tag absent: no cap (the record ctor's default
+    // was not read [L]; every vanilla DEPLOY_TROOPERS user sets 2).
+    int32_t max_spawned_objects = -1;
     float bomb_countdown_seconds = 0.0f;
     float area_effect_decal_distance = 0.0f;
     std::vector<std::string> projectile_override_names;  // Projectile_Types_Override
@@ -62,7 +68,9 @@ struct UnitAbilityRecord {
     // ---- OI abilities ----
     int32_t spawned_type = -1;        // Spawned_Object_Type as a host TypeIndex (resolver.object_type), -1 unknown
     int32_t spawned_projectile = -1;  // ... as a ProjectileDesc index when it is a projectile type (resolver.projectile)
-    std::vector<int32_t> target_types;  // Target_Types (LURE); parsed, not yet read (cu8 t05, with the LURE pulses above)
+    // Target_Types (+0x38, host TypeIndex, XML order; -1 unknown): read only by the LURE pulse (exact type match,
+    // cu8f t06, CU8F_T04_T06_RE §3.1).
+    std::vector<int32_t> target_types;
     // REMAINING_GAPS §5.2: Owner_Attachment_Bone (+0x110), DEPLOY_TROOPERS spawn bones in list order (comma lists and
     // repeated tags both append).
     std::vector<std::string> owner_attachment_bones;
@@ -119,8 +127,9 @@ struct SpecialAbilityDesc {
     // Battlefield_Modifier (§2.3.11)
     float fow_reveal_multiplier = 1.0f, reinforcement_time_multiplier = 1.0f, stealth_duration_multiplier = 1.0f,
           capture_time_multiplier = 1.0f, reinforcement_deploy_multiplier = 1.0f;
-    // Parsed, not yet read (cu8 t05, open parity item): the Battlefield_Modifier bool lists +0x191..+0x193 (player tactical
-    // data lists, AND-combined; Enable_Special_Weapons +0x1e0 gates the super weapons, SCRIPT_GAPS §2 [M names]).
+    // Enable_Bombing_Runs (+0x191) / Enable_Special_Weapons (+0x192) / Enable_Planetary_Bombardment (+0x193) (cu8f t06,
+    // CU8F_T04_T06_RE §3.3 [H]): the apply pushes a `true` entry (keyed by this source) onto each affected player's bool
+    // list (AbilitySystem::player_gate), the remove deletes them; Reverse_Application_Logic swaps the two.
     bool enable_bombing_runs = false, enable_bombardment = false, enable_special_weapons = false;
     // Force_Healing (§2.3.1)
     float heal_range = 0.0f, heal_percent = 0.0f, heal_amount = 0.0f, heal_interval = 0.0f;
@@ -154,11 +163,12 @@ struct SpecialAbilityDesc {
     float health_per_victim = 0.0f;
     // Super_Laser (§2.3.9)
     int32_t fire_frame = 0;
-    // Parsed, not yet read (cu8 t05, open parity item): Face_Target turn, Firing_Cone gate and the Fire_Continuation
-    // no-target branch (TACTICAL_GAPS §2.3.9 [M], ABILITIES_HARDPOINTS update 0x715450, ABILITY_VISUALS beam end).
-    // Of these four floats only fire_delay is read; Turn_Rate belongs to the Face_Target turn.
+    // cu8f t06 (CU8F_T04_T06_RE §3.4 [H]; ctor defaults Turn_Rate 10, Firing_Cone 45): Face_Target with
+    // TACTICAL_SUPER_WEAPON turns the owner's yaw toward the target by at most Turn_Rate degrees per update (<= 0: the
+    // type's turn rate) and starts the attack clip once |yaw error| <= Firing_Cone (>= 90 reads as 0.01); Fire_Continuation:
+    // after the target is dropped the beam runs until now + int(FPS x value) with no damage.
     bool face_target = false;
-    float turn_rate = 0.0f, firing_cone = 0.0f, fire_delay = 0.0f, fire_continuation = 0.0f;
+    float turn_rate = 10.0f, firing_cone = 45.0f, fire_delay = 0.0f, fire_continuation = 0.0f;
     // Drain_Life / Leech_Shields / Blast / Corrupt_Systems / Flame thrower (§2.3.10, §2.3.12)
     float damage_per_second = 0.0f;       // Damage_Per_Second / Shield_Damage_Per_Second / Shield_Drain_Per_Second
     float charging_time = 0.0f;           // Charging_Time_In_Seconds / Charge_Up_Seconds
@@ -169,7 +179,9 @@ struct SpecialAbilityDesc {
     // Infection (refix t02; Damage_Per_Second above, Duration_Of_Infection -> duration_secs)
     float distance_to_infect = 0.0f;      // Distance_To_Infect
     float seconds_to_infect = 0.0f;       // Seconds_To_Infect
-    uint64_t infection_categories = 0;    // Infection_CategoryMask; parsed, not yet read (cu8 t05: victim filter, no doc rule)
+    // Infection_CategoryMask (cu8f t06, CU8F_T04_T06_RE §3.5 [H]): the spread's victim filter only (candidate type
+    // CategoryMask & mask != 0; 0 = nothing catches it by proximity); a direct Causes_Infection hit is not filtered.
+    uint64_t infection_categories = 0;
     // Enable_Ability / Cancel_Special
     uint32_t ability_name_crc = 0;        // Ability_Name / Special_Ability_Name
     // Permanent_Weapon_Swap
@@ -212,6 +224,9 @@ struct AbilityObjectDesc {
     float bribe_modifier_uncorrupted = 1.0f;  // Bribe_Modifier_On_Uncorrupted_Planets (+0x23e0) [inferred default 1]
     float friendly_damage_amount = 0.0f;      // Friendly_Damage_Amount (+0x23ec): > 0 cannot be bribed
     bool proximity_mine = false;              // has the PROXIMITY_MINE behaviour (0x55): cannot be bribed
+    // cu8f t06 (CU8F_T04_T06_RE §3.4): has TACTICAL_SUPER_WEAPON (0x2c, slot +0x35e) - a Face_Target Super_Laser turns
+    // through it; without it the attack clip starts at the apply.
+    bool tactical_super_weapon = false;
 };
 
 struct AbilityData {

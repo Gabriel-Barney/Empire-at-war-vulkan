@@ -2535,7 +2535,8 @@ void test_gaps_eject_thief() {
 
 void test_gaps_deploy_troopers() {
     // §5.2: member i of the spawned type's company at Owner_Attachment_Bone i; bones the model lacks are skipped (their
-    // member index too); N = members - deployed (+0x40); no draws; Max_Num_Spawned_Objects unread.
+    // member index too); N = members - deployed (+0x40); no draws. Max_Num_Spawned_Objects 9 does not bind here
+    // (cu8f t06: test_cu8f_deploy_cap).
     OiWorld w;
     AbilityObjectDesc a;
     UnitAbilityRecord dt = rec(kDeployTroopers, 0.0f, 20.0f);
@@ -4037,11 +4038,14 @@ void test_infection() {
     w.add(1, igd, 0, {-1000, 0, 0});
     w.add(10, trd, 1, {0, 0, 0});    // A: hit by the projectile
     w.add(11, trd, 1, {50, 0, 0});   // B: in range of A
-    w.add(12, tkd, 1, {0, 30, 0});   // in range, not in the category mask
-    w.add(13, trd, 0, {0, -40, 0});  // in range, the infecting player's own
+    w.add(12, tkd, 1, {0, 30, 0});   // in range, not in Infection_CategoryMask (the spread's only filter on type)
+    w.add(13, trd, 0, {0, -40, 0});  // in range, the infecting player's own: spreading covers every player
     w.add(14, trd, 1, {200, 0, 0});  // out of range (150 from B)
-    w.add(15, trd, 1, {0, 60, 0});   // D: in range of A (78 from B), leaves for one frame
+    w.add(15, trd, 1, {0, 60, 0});   // D: in range of A only (78 from B), leaves for one frame
     auto infected = [&w](ObjectId id) { return (w.sys->flags(id) & kUnitInfected) != 0; };
+    auto tick_to = [&w](uint32_t f) {  // tick until frame f has been ticked
+        while (w.frame <= f) w.tick();
+    };
     ProjectileLaunch l;
     l.shooter = 1;
     l.owner = 0;
@@ -4051,40 +4055,56 @@ void test_infection() {
     CHECK(w.sys->launch_projectile(l, w.frame));
     for (int i = 0; i < 20 && !w.sys->infection_attached(10); ++i) w.tick();
     CHECK(w.sys->infection_attached(10) && infected(10) && w.sys->infection_suspend_count(10) == 0);
-    const float h0 = w.sys->health(10);
-    const float hb0 = w.sys->health(11);  // the spawn health (difficulty / faction scaled)
-    const uint32_t fa = w.frame - 1;  // the frame of the hit
-    for (int i = 0; i < 30; ++i) w.tick();  // fa + 1 .. fa + 30
+    // Frames left = int(FPS x Duration_Of_Infection) = 150 at the hit, - 1 per service: s0 = A's first service frame.
+    const uint32_t fa = w.frame - 1;
+    const int32_t left0 = w.sys->infection_frames_left(10);
+    CHECK(left0 == 150 || left0 == 149);
+    const uint32_t s0 = left0 == 149 ? fa : fa + 1;
+    tick_to(s0);
+    CHECK(w.sys->infection_frames_left(10) == 149);
+    CHECK(w.sys->infection_spread_count(11) == 0 && w.sys->infection_spread_count(15) == 0);
+    CHECK(w.sys->infection_spread_count(12) == -1 && w.sys->infection_spread_count(14) == -1);  // filtered, never counted
+    const float ha = w.sys->health(10);
+    // The coughing draw: one synced Get_Int(0, 4) per serviced infection on frames with frame % 60 == 0.
+    uint64_t expect_draws = 0;
+    const uint64_t d0 = w.rng.draws();
+    for (uint32_t f = s0 + 1; f <= s0 + 29; ++f) {
+        if (f % 60u == 0u) ++expect_draws;
+        w.tick();
+    }
+    CHECK(w.rng.draws() - d0 == expect_draws);
+    // Damage_Per_Second / FPS on every service frame (s0 + 1 .. s0 + 29: 29 frames).
+    CHECK(std::abs(w.sys->health(10) - (ha - 29.0f * (2.0f / 30.0f))) < 1e-3f);
     w.move(15, {0, 300, 0});
-    w.tick();  // fa + 31: D out of range, forgotten
+    tick_to(s0 + 30);  // D out of range for one frame: its consecutive count restarts
     w.move(15, {0, 60, 0});
-    for (int i = 0; i < 27; ++i) w.tick();  // fa + 32 .. fa + 58
-    CHECK(!infected(11) && !infected(15));
-    w.tick();
-    w.tick();  // fa + 60: B has been in range for 60 consecutive frames (fa + 1 .. fa + 60)
-    CHECK(w.frame - 1 == fa + 60);
-    CHECK(infected(11) && w.sys->infection_attached(11) && !infected(15));
-    CHECK(!w.sys->infection_attached(12) && !w.sys->infection_attached(13) && !w.sys->infection_attached(14));
-    for (int i = 0; i < 30; ++i) w.tick();  // fa + 61 .. fa + 90
+    tick_to(s0 + 59);
+    CHECK(w.sys->infection_spread_count(11) == 59 && w.sys->infection_spread_count(15) == 28);
+    CHECK(!infected(11) && !infected(13) && !infected(15));
+    tick_to(s0 + 60);  // count 60 >= FPS x Seconds_To_Infect: B and the infector's own unit 13 are infected
+    CHECK(infected(11) && w.sys->infection_attached(11) && infected(13) && !infected(15));
+    // full duration; B (id 11) was serviced before A this frame (the per-unit walk runs in descending slot order)
+    CHECK(w.sys->infection_spread_count(11) == 0 && w.sys->infection_frames_left(11) == 150);
+    CHECK(!w.sys->infection_attached(12) && !w.sys->infection_attached(14));
+    tick_to(s0 + 90);
     CHECK(!infected(15));
-    w.tick();  // fa + 91: D, counted again from fa + 32
+    tick_to(s0 + 91);  // D, counted again from s0 + 31
     CHECK(infected(15));
-    // Damage_Per_Second: 2 at fa + 30, + 60, + 90 on A; B (infected at fa + 60) once at fa + 90.
-    CHECK_EQ(w.sys->health(10), h0 - 6.0f);
-    CHECK_EQ(w.sys->health(11), hb0 - 2.0f);
-    // Expiry: Duration_Of_Infection 5 s -> A suspends at fa + 150 (flag cleared, no more damage).
-    for (int i = 0; i < 58; ++i) w.tick();  // .. fa + 149
-    CHECK(infected(10));
-    w.tick();  // fa + 150
+    // Expiry: A's frames left reach 0 at its service on s0 + 149 -> suspended (flag cleared, no more damage).
+    tick_to(s0 + 148);
+    CHECK(infected(10) && w.sys->infection_frames_left(10) == 1);
+    tick_to(s0 + 149);
     CHECK(!infected(10) && w.sys->infection_attached(10) && w.sys->infection_suspend_count(10) == 1);
     const float h1 = w.sys->health(10);
-    // A suspended is a spread candidate again: D (60 away, active until fa + 241) resumes it after 60 frames
-    // (fa + 151 .. fa + 210); B expires at fa + 210 itself before it would.
-    for (int i = 0; i < 59; ++i) w.tick();  // .. fa + 209
-    CHECK(!infected(10) && w.sys->health(10) == h1 && infected(11));
-    w.tick();  // fa + 210
-    CHECK(infected(10) && w.sys->infection_suspend_count(10) == 0 && !infected(11) && w.sys->infection_suspend_count(11) == 1);
-    // vfunc +0xc0 / +0xb8 through the API: counter +1 / -1 (floored), the flag follows counter 0.
+    tick_to(s0 + 150);
+    CHECK(w.sys->health(10) == h1);
+    // A suspended is a spread candidate again (B, 13 and D are in range): resumed after 60 counted frames, with a full
+    // pack again.
+    for (int i = 0; i < 80 && !infected(10); ++i) w.tick();
+    CHECK(infected(10) && w.sys->infection_suspend_count(10) == 0 && w.frame - 1 <= s0 + 211);
+    CHECK(w.sys->infection_frames_left(10) >= 149);
+    // vfunc +0xc0 / +0xb8 through the API: counter +1 / -1 (floored), the flag follows counter 0; the pack is kept.
+    const int32_t keep = w.sys->infection_frames_left(10);
     w.sys->suspend_infection(10);
     w.sys->suspend_infection(10);
     CHECK(w.sys->infection_suspend_count(10) == 2 && !infected(10));
@@ -4092,20 +4112,21 @@ void test_infection() {
     CHECK(w.sys->infection_suspend_count(10) == 1 && !infected(10));
     w.sys->resume_infection(10, w.frame);
     w.sys->resume_infection(10, w.frame);
-    CHECK(w.sys->infection_suspend_count(10) == 0 && infected(10));
+    CHECK(w.sys->infection_suspend_count(10) == 0 && infected(10) && w.sys->infection_frames_left(10) == keep);
     w.sys->suspend_infection(12);  // no behaviour: nothing
     CHECK(!w.sys->infection_attached(12) && w.sys->infection_suspend_count(12) == 0);
-    // Save round trip (the infection state and its exposure lists).
+    // Save round trip (the packs and the spread counters).
     {
         ByteWriter a;
         w.sys->write(a);
-        const uint64_t d0 = battle_digest(*w.sys, *w.ab, w.rng);
+        const uint64_t dg = battle_digest(*w.sys, *w.ab, w.rng);
         ByteReader r(a.bytes());
         CHECK(w.sys->read(r));
         ByteWriter b;
         w.sys->write(b);
-        CHECK(a.bytes() == b.bytes() && battle_digest(*w.sys, *w.ab, w.rng) == d0);
+        CHECK(a.bytes() == b.bytes() && battle_digest(*w.sys, *w.ab, w.rng) == dg);
         CHECK(infected(10) && w.sys->infection_suspend_count(11) == 1 && w.sys->infection_attached(15));
+        CHECK(w.sys->infection_frames_left(10) == keep);
     }
     // Die: the active INFECTION remaps the key to 20; a suspended one does not.
     w.sys->kill_unit(10, 1, kKindNormal, w.frame);
@@ -4117,6 +4138,31 @@ void test_infection() {
     CHECK(w.sys->infection_attached(14) && infected(14) && w.sys->infection_suspend_count(14) == 0);
     w.sys->set_flag(14, kUnitInfected, false);
     CHECK(w.sys->infection_attached(14) && !infected(14) && w.sys->infection_suspend_count(14) == 1);
+    // A direct Causes_Infection hit is not filtered by Infection_CategoryMask: the tank (category 2) is infected.
+    l.target = 12;
+    l.from = {-100, 30, 0};
+    CHECK(w.sys->launch_projectile(l, w.frame));
+    for (int i = 0; i < 20 && !w.sys->infection_attached(12); ++i) w.tick();
+    CHECK(w.sys->infection_attached(12) && w.sys->infection_suspend_count(12) == 0);
+    // Infection_CategoryMask 0: the spread takes nobody (CategoryMask & 0 == 0).
+    {
+        World z;
+        z.cd.projectiles = {inf};
+        UnitDesc g0 = ig;
+        g0.infection.category_mask = 0;
+        const uint32_t gd = push(z.cd, z.ad, g0, AbilityObjectDesc{});
+        const uint32_t td = push(z.cd, z.ad, trooper, AbilityObjectDesc{});
+        z.make();
+        z.add(1, gd, 0, {-1000, 0, 0});
+        z.add(10, td, 1, {0, 0, 0});
+        z.add(11, td, 1, {20, 0, 0});
+        ProjectileLaunch zl = l;
+        zl.target = 10;
+        zl.from = {-100, 0, 0};
+        CHECK(z.sys->launch_projectile(zl, z.frame));
+        for (int i = 0; i < 100; ++i) z.tick();
+        CHECK(z.sys->infection_attached(10) && !z.sys->infection_attached(11) && z.sys->infection_spread_count(11) == -1);
+    }
 }
 
 // S8 t10 (b)(c) (LOB_SOLVER §3.5 "Facing at apply", "MARKER removal") and S8 t11 (DEPLOY through the Walk locomotor host).
@@ -4449,6 +4495,419 @@ void test_bribe_hack_accept() {
     CHECK(hack({}, {9}, kCatInfantry, 9) == 0);  // categories hit, then excluded
 }
 
+// ================================================================================================
+// cu8f t06 (CU8F_T04_T06_RE §3): the parsed-unread ability fields
+// ================================================================================================
+
+void test_cu8f_parse_defaults() {
+    // Super_Laser ctor defaults Turn_Rate 10 / Firing_Cone 45; an absent Max_Num_Spawned_Objects is -1 (no cap, [port]);
+    // Is_Pulsing / Target_Types / Particle_Effect parsed; Enable_* flags parsed.
+    const data::XmlDocument doc = data::XmlDocument::parse(
+        "<R>"
+        "<Unit_Ability><Type>LURE</Type><Is_Pulsing>Yes</Is_Pulsing><Pulse_Frequency_Secs>0.5</Pulse_Frequency_Secs>"
+        "<Max_Number_Of_Pulses>40</Max_Number_Of_Pulses><Effective_Radius>350</Effective_Radius>"
+        "<Target_Types>T_Fighter, T_Bomber</Target_Types><Particle_Effect>Lure_FX</Particle_Effect></Unit_Ability>"
+        "<Unit_Ability><Type>DEPLOY_TROOPERS</Type><Max_Num_Spawned_Objects>2</Max_Num_Spawned_Objects></Unit_Ability>"
+        "<Unit_Ability><Type>DEPLOY_TROOPERS</Type></Unit_Ability>"
+        "<Super_Laser_Ability Name=\"SL\"><Activation_Style>User_Input</Activation_Style><Face_Target>Yes</Face_Target>"
+        "<Fire_Continuation>1.5</Fire_Continuation></Super_Laser_Ability>"
+        "<Super_Laser_Ability Name=\"SL2\"><Turn_Rate>0</Turn_Rate><Firing_Cone>90</Firing_Cone></Super_Laser_Ability>"
+        "<Battlefield_Modifier_Ability Name=\"BM\"><Enable_Bombing_Runs>Yes</Enable_Bombing_Runs>"
+        "<Enable_Special_Weapons>Yes</Enable_Special_Weapons><Enable_Planetary_Bombardment>Yes</Enable_Planetary_Bombardment>"
+        "<Reverse_Application_Logic>Yes</Reverse_Application_Logic></Battlefield_Modifier_Ability>"
+        "</R>",
+        "cu8f.xml");
+    AbilityResolvers r;
+    r.object_type = [](std::string_view n) { return iequals(n, "T_Fighter") ? 7 : iequals(n, "T_Bomber") ? 9 : -1; };
+    std::vector<data::XmlNode> e;
+    for (data::XmlNode c = doc.root().first_child(); c; c = c.next_sibling()) e.push_back(c);
+    CHECK(e.size() == 6);
+    if (e.size() != 6) return;
+    UnitAbilityRecord lure, cap, nocap;
+    CHECK(parse_unit_ability(e[0], lure, r) && parse_unit_ability(e[1], cap, r) && parse_unit_ability(e[2], nocap, r));
+    CHECK(lure.type == kLure && lure.is_pulsing && lure.pulse_frequency_secs == 0.5f && lure.max_pulses == 40);
+    CHECK(lure.target_types == std::vector<int32_t>({7, 9}) && lure.particle_effect == "Lure_FX" && lure.effective_radius == 350.0f);
+    CHECK(cap.max_spawned_objects == 2 && nocap.max_spawned_objects == -1);
+    const SpecialAbilityDesc sl = parse_special_ability(e[3], r, nullptr);
+    CHECK(sl.cls == SpecialClass::SuperLaser && sl.face_target && sl.turn_rate == 10.0f && sl.firing_cone == 45.0f &&
+          sl.fire_continuation == 1.5f);
+    const SpecialAbilityDesc sl2 = parse_special_ability(e[4], r, nullptr);
+    CHECK(sl2.turn_rate == 0.0f && sl2.firing_cone == 90.0f && !sl2.face_target);
+    const SpecialAbilityDesc bm = parse_special_ability(e[5], r, nullptr);
+    CHECK(bm.cls == SpecialClass::BattlefieldModifier && bm.enable_bombing_runs && bm.enable_special_weapons &&
+          bm.enable_bombardment && bm.reverse_logic);
+}
+
+void test_cu8f_lure() {
+    // §3.1: LURE every frame while on; activation resets the count and makes the next service pulse; a pulse every
+    // int(FPS x Pulse_Frequency_Secs) frames up to Max_Number_Of_Pulses, then it suspends. Each pulse: per Target_Types
+    // entry, the objects of exactly that type within the 3-D Effective_Radius, ascending id; a team member stands for its
+    // container; enemies only; each is ordered to attack the lure plus a move toward it (Lured). Is_Pulsing is not read.
+    OiWorld w;
+    AbilityObjectDesc la;
+    UnitAbilityRecord lr = rec(kLure, 16.0f, 0.0f);
+    lr.effective_radius = 350.0f;
+    lr.pulse_frequency_secs = 0.5f;
+    lr.max_pulses = 3;
+    lr.target_types = {7, 9};
+    lr.particle_effect = "Lure_FX";
+    lr.is_pulsing = false;  // unread: the lure pulses all the same
+    la.unit_abilities = {lr};
+    UnitDesc lure = oi_unit("AWing", 100.0f);
+    lure.object_type = 5;
+    const uint32_t ld = push(w.cd, w.ad, lure, la);
+    UnitDesc t7 = oi_unit("Fighter7", 100.0f);
+    t7.object_type = 7;
+    UnitDesc t8 = t7;
+    t8.name = "Other8";
+    t8.object_type = 8;
+    UnitDesc t9 = t7;
+    t9.name = "Bomber9";
+    t9.object_type = 9;
+    const uint32_t d7 = push(w.cd, w.ad, t7, AbilityObjectDesc{});
+    const uint32_t d8 = push(w.cd, w.ad, t8, AbilityObjectDesc{});
+    const uint32_t d9 = push(w.cd, w.ad, t9, AbilityObjectDesc{});
+    AbilityObjectDesc sq;
+    sq.name = "Bomber_Squad";
+    const uint32_t sqd = push_container(w.cd, w.ad, sq);
+    w.make();
+    w.sys->set_enemy(0, 2, false);  // player 2 is allied to 0
+    w.sys->set_enemy(2, 0, false);
+    w.add(1, ld, 0, {0, 0, 0});
+    w.add(2, d7, 1, {100, 0, 0});    // type 7, enemy, in range
+    w.add(3, d9, 1, {0, 200, 100});  // type 9, 3-D 224
+    w.add(4, d7, 1, {300, 0, 200});  // 3-D 361 > 350 (XY 300): out
+    w.add(5, d8, 1, {50, 0, 0});     // not a target type
+    w.add(6, d7, 0, {60, 0, 0});     // own
+    w.add(7, d7, 2, {70, 0, 0});     // ally
+    w.add(21, d9, 1, {150, 0, 0}, {1, 0, 0}, 25);
+    w.add(22, d9, 1, {150, 20, 0}, {1, 0, 0}, 25);
+    const ObjectId mem[] = {21, 22};
+    CHECK(w.ab->add_container(25, sqd, 1, mem, w.frame, &w.rng));
+    const ObjectId one[] = {1};
+    const uint32_t f0 = w.frame;
+    CHECK(w.ab->set_unit_ability_mode(one, kLure, true, w.frame) == 1 && w.ab->lure_running(1));
+    CHECK(w.ab->lure_pulses(1) == 0 && w.ab->lure_next(1) == f0);
+    // Particle_Effect: one object, the owner is in no team.
+    const std::span<const SpawnRequest> q = w.ab->spawn_requests();
+    CHECK(q.size() == 1);
+    if (q.size() == 1) {
+        CHECK(q[0].purpose == SpawnPurpose::LureEffect && q[0].source == 1 && q[0].owner == 0);
+        CHECK(w.ab->bind_spawn(q[0].serial, 90));
+    }
+    CHECK(w.ab->lure_effect(1) == 90);
+    w.collect();
+    w.tick();  // f0: the first pulse
+    CHECK(w.ab->lure_pulses(1) == 1 && w.ab->lure_next(1) == f0 + 15);
+    CHECK(w.count(AbilityEventKind::Lured, 2) == 1 && w.count(AbilityEventKind::Lured, 3) == 1);
+    CHECK(w.count(AbilityEventKind::Lured, 21) == 1 && w.count(AbilityEventKind::Lured, 22) == 1);  // the team, member by member
+    for (ObjectId id : {4, 5, 6, 7, 25}) CHECK(w.count(AbilityEventKind::Lured, id) == 0);
+    if (const AbilityEvent* e = w.last(AbilityEventKind::Lured, 2)) CHECK(e->target == 1 && e->point.x == 0.0f && e->type == kLure);
+    CHECK(w.sys->current_target(21) == 1);  // the team took the ordered attack on the lure
+    // Save round trip mid-run.
+    {
+        const std::vector<uint8_t> a = ability_bytes(*w.ab);
+        const uint64_t dg = battle_digest(*w.sys, *w.ab, w.rng);
+        ByteReader rd(a);
+        CHECK(w.ab->read(rd));
+        CHECK(ability_bytes(*w.ab) == a && battle_digest(*w.sys, *w.ab, w.rng) == dg);
+        CHECK(w.ab->lure_running(1) && w.ab->lure_pulses(1) == 1 && w.ab->lure_next(1) == f0 + 15 && w.ab->lure_effect(1) == 90);
+    }
+    while (w.frame < f0 + 15) w.tick();
+    CHECK(w.ab->lure_pulses(1) == 1);
+    w.tick();  // f0 + 15: the second pulse; the team already targets the lure (skipped), the singles are pulled again
+    CHECK(w.ab->lure_pulses(1) == 2 && w.count(AbilityEventKind::Lured, 21) == 1);
+    while (w.frame <= f0 + 30) w.tick();
+    CHECK(w.ab->lure_pulses(1) == 3 && w.ab->lure_running(1));
+    while (w.frame <= f0 + 45) w.tick();  // count == Max_Number_Of_Pulses: suspend
+    CHECK(!w.ab->lure_running(1) && w.ab->lure_pulses(1) == 3);
+    CHECK(w.ab->is_active(1, kLure));  // the ability slot runs on to Expiration_Seconds [M]
+    const size_t lured = w.count(AbilityEventKind::Lured);
+    for (int i = 0; i < 30; ++i) w.tick();
+    CHECK(w.count(AbilityEventKind::Lured) == lured);
+    // Off: the effect object goes (RemoveSilently).
+    CHECK(w.ab->set_unit_ability_mode(one, kLure, false, w.frame) == 1);
+    w.collect();
+    CHECK(w.count(AbilityEventKind::RemoveSilently, 90) == 1 && w.ab->lure_effect(1) == kNoObject);
+    // A lure team: only the first member spawns the effect; the member's death removes it.
+    OiWorld t;
+    AbilityObjectDesc ma;
+    ma.unit_abilities = {lr};
+    const uint32_t md = push(t.cd, t.ad, lure, ma);
+    AbilityObjectDesc ls;
+    ls.name = "Lure_Squad";
+    ls.unit_abilities = {lr};
+    const uint32_t lsd = push_container(t.cd, t.ad, ls);
+    t.make();
+    t.add(31, md, 0, {0, 0, 0}, {1, 0, 0}, 35);
+    t.add(32, md, 0, {0, 20, 0}, {1, 0, 0}, 35);
+    const ObjectId lm[] = {31, 32}, lsq[] = {35};
+    CHECK(t.ab->add_container(35, lsd, 0, lm, t.frame, &t.rng));
+    CHECK(t.ab->set_unit_ability_mode(lsq, kLure, true, t.frame) >= 1 && t.ab->lure_running(31) && t.ab->lure_running(32));
+    size_t fx = 0;
+    for (const SpawnRequest& s : t.ab->spawn_requests())
+        if (s.purpose == SpawnPurpose::LureEffect) {
+            ++fx;
+            CHECK(s.source == 31);
+            CHECK(t.ab->bind_spawn(s.serial, 95));
+        }
+    CHECK(fx == 1 && t.ab->lure_effect(31) == 95 && t.ab->lure_effect(32) == kNoObject);
+    t.collect();
+    t.sys->kill_unit(31, kNoObject, kKindNormal, t.frame);
+    t.collect();
+    CHECK(t.count(AbilityEventKind::RemoveSilently, 95) == 1 && !t.ab->lure_running(31));
+}
+
+void test_cu8f_deploy_cap() {
+    // §3.2: Max_Num_Spawned_Objects caps the live deployed squads per unit (Can_Activate 38 and the activation); a squad
+    // that is gone frees its slot. One squad per deploy.
+    OiWorld w;
+    AbilityObjectDesc a;
+    UnitAbilityRecord dt = rec(kDeployTroopers, 0.0f, 20.0f);
+    dt.spawned_object_type = "Squad";
+    dt.spawned_type = 7;
+    dt.max_spawned_objects = 2;
+    dt.owner_attachment_bones = {"B_0", "B_1"};
+    a.unit_abilities = {dt};
+    const uint32_t ud = push(w.cd, w.ad, oi_unit("AT_AT", 1000.0f), a);
+    const uint32_t td = push(w.cd, w.ad, oi_unit("Trooper", 10.0f), AbilityObjectDesc{});
+    w.make(GameMode::Land);
+    AbilityHost h;
+    h.company_members = [](int32_t type, std::vector<int32_t>& m) {
+        if (type != 7) return false;
+        m = {100, 101, 102, 103, 104, 105};
+        return true;
+    };
+    h.bone_position = [](ObjectId, std::string_view bone, Vec3& p) {
+        p = Vec3{bone == "B_0" ? 10.0f : 30.0f, 5.0f, 0.0f};
+        return 1;
+    };
+    w.ab->set_host(std::move(h));
+    w.add(1, ud, 0, {0, 0, 0});
+    const ObjectId one[] = {1};
+    ObjectId next_id = 50;
+    auto deploy = [&]() {
+        CHECK(w.ab->set_unit_ability_mode(one, kDeployTroopers, true, w.frame) == 1);
+        std::vector<SpawnRequest> q(w.ab->spawn_requests().begin(), w.ab->spawn_requests().end());
+        CHECK(q.size() == 2);
+        CHECK(w.ab->trooper_squads(1) == static_cast<int32_t>(next_id == 50 ? 1 : 2));  // a pending squad counts
+        for (const SpawnRequest& r : q) {
+            w.add(next_id, td, 0, r.position);
+            CHECK(w.ab->bind_spawn(r.serial, next_id));
+            ++next_id;
+        }
+        w.collect();
+        CHECK(w.ab->force_recharge(1, kDeployTroopers, 0.0f));
+    };
+    CHECK(w.ab->trooper_squads(1) == 0 && w.ab->can_activate(1, kDeployTroopers, false, false, w.frame));
+    deploy();  // squad 0: 50, 51
+    CHECK(w.ab->trooper_squads(1) == 1 && w.ab->can_activate(1, kDeployTroopers, false, false, w.frame));
+    deploy();  // squad 1: 52, 53
+    CHECK(w.ab->trooper_squads(1) == 2 && !w.ab->can_activate(1, kDeployTroopers, false, false, w.frame));
+    CHECK(w.ab->set_unit_ability_mode(one, kDeployTroopers, true, w.frame) == 0 && w.ab->spawn_requests().empty());
+    w.sys->kill_unit(50, kNoObject, kKindNormal, w.frame);
+    w.tick();
+    CHECK(w.ab->trooper_squads(1) == 2);  // 51 keeps squad 0 alive
+    w.sys->kill_unit(51, kNoObject, kKindNormal, w.frame);
+    w.tick();
+    CHECK(w.ab->trooper_squads(1) == 1 && w.ab->can_activate(1, kDeployTroopers, false, false, w.frame));
+    // Save round trip (squad numbers, squads formed).
+    {
+        const std::vector<uint8_t> b = ability_bytes(*w.ab);
+        ByteReader rd(b);
+        CHECK(w.ab->read(rd) && ability_bytes(*w.ab) == b && w.ab->trooper_squads(1) == 1);
+    }
+    // No cap (-1, the absent tag): never refused for the count.
+    OiWorld v;
+    AbilityObjectDesc va = a;
+    va.unit_abilities[0].max_spawned_objects = -1;
+    const uint32_t vd = push(v.cd, v.ad, oi_unit("AT_AT", 1000.0f), va);
+    v.make(GameMode::Land);
+    AbilityHost hv;
+    hv.company_members = [](int32_t, std::vector<int32_t>& m) {
+        m = {100, 101, 102, 103, 104, 105, 106, 107};
+        return true;
+    };
+    hv.bone_position = [](ObjectId, std::string_view, Vec3& p) {
+        p = Vec3{10.0f, 0.0f, 0.0f};
+        return 1;
+    };
+    v.ab->set_host(std::move(hv));
+    v.add(1, vd, 0, {0, 0, 0});
+    for (int i = 0; i < 3; ++i) {
+        CHECK(v.ab->can_activate(1, kDeployTroopers, false, false, v.frame));
+        CHECK(v.ab->set_unit_ability_mode(one, kDeployTroopers, true, v.frame) == 1 && v.ab->spawn_requests().size() == 2);
+        v.collect();
+        CHECK(v.ab->force_recharge(1, kDeployTroopers, 0.0f));
+    }
+}
+
+void test_cu8f_enable_gates() {
+    // §3.3: Battlefield_Modifier Enable_* push one `true` entry per affected player (keyed by the source) on apply and
+    // remove them by source; Reverse_Application_Logic swaps the two; Apply_To_All_Allies covers the allies. The Lua
+    // Disable_* entry is one keyed entry. A gate is the AND of its list (the host adds the empty-list rule).
+    OiWorld w;
+    SpecialAbilityDesc bm = oi_special("Enable", SpecialClass::BattlefieldModifier, ActivationStyle::SpaceAutomatic);
+    bm.enable_bombing_runs = true;
+    bm.enable_special_weapons = true;
+    bm.apply_to_all_allies = true;
+    const uint32_t bs = add_special(w.ad, bm);
+    SpecialAbilityDesc rv = oi_special("Reverse", SpecialClass::BattlefieldModifier, ActivationStyle::SpaceAutomatic);
+    rv.enable_bombardment = true;
+    rv.reverse_logic = true;
+    const uint32_t rs = add_special(w.ad, rv);
+    AbilityObjectDesc ha, ra;
+    ha.specials = {bs};
+    ra.specials = {rs};
+    const uint32_t hd = push(w.cd, w.ad, oi_unit("Comm_Array", 100.0f), ha);
+    const uint32_t rd = push(w.cd, w.ad, oi_unit("Reverse_Array", 100.0f), ra);
+    w.make();
+    w.sys->set_enemy(0, 2, false);  // player 2 is allied to 0
+    w.sys->set_enemy(2, 0, false);
+    auto gate = [&w](int32_t p, PlayerGate g, bool& all) { return w.ab->player_gate(p, g, all); };
+    bool all = false;
+    CHECK(gate(0, PlayerGate::BombingRuns, all) == 0 && all);
+    w.add(1, hd, 0, {0, 0, 0});
+    CHECK(gate(0, PlayerGate::BombingRuns, all) == 1 && all);
+    CHECK(gate(2, PlayerGate::BombingRuns, all) == 1 && all);  // the ally
+    CHECK(gate(1, PlayerGate::BombingRuns, all) == 0);
+    CHECK(gate(0, PlayerGate::SpecialWeapons, all) == 1 && all && gate(0, PlayerGate::Bombardment, all) == 0);
+    // the Lua entry: AND with the modifier's
+    w.ab->set_player_gate_entry(0, PlayerGate::BombingRuns, 0x1234u, false);
+    CHECK(gate(0, PlayerGate::BombingRuns, all) == 2 && !all);
+    w.ab->set_player_gate_entry(0, PlayerGate::BombingRuns, 0x1234u, true);  // replaced, not appended
+    CHECK(gate(0, PlayerGate::BombingRuns, all) == 2 && all);
+    w.ab->set_player_gate_entry(0, PlayerGate::BombingRuns, 0x1234u, false);
+    // Save round trip with the gate entries.
+    {
+        const std::vector<uint8_t> b = ability_bytes(*w.ab);
+        ByteReader r(b);
+        CHECK(w.ab->read(r) && ability_bytes(*w.ab) == b);
+        CHECK(gate(0, PlayerGate::BombingRuns, all) == 2 && !all);
+    }
+    // the source goes: its entries go, the Lua entry stays
+    w.sys->kill_unit(1, kNoObject, kKindNormal, w.frame);
+    CHECK(gate(0, PlayerGate::BombingRuns, all) == 1 && !all);
+    CHECK(gate(2, PlayerGate::BombingRuns, all) == 0 && gate(0, PlayerGate::SpecialWeapons, all) == 0);
+    // Reverse_Application_Logic: nothing on apply, the entry on remove (the owner only: no Apply_To_All_Allies)
+    w.add(2, rd, 0, {0, 0, 0});
+    CHECK(gate(0, PlayerGate::Bombardment, all) == 0);
+    w.sys->kill_unit(2, kNoObject, kKindNormal, w.frame);
+    CHECK(gate(0, PlayerGate::Bombardment, all) == 1 && all && gate(2, PlayerGate::Bombardment, all) == 0);
+}
+
+void test_cu8f_super_laser() {
+    // §3.4: Face_Target on a TACTICAL_SUPER_WEAPON: yaw-only turn clamped to +-Turn_Rate per step, the clip (and the
+    // firing) waits for |dyaw| <= Firing_Cone, then the turning stops. Firing_Cone >= 90 reads as 0.01. Fire_Continuation:
+    // the beam stays int(FPS x value) frames after the target is gone, no damage. Without TSW / Face_Target: no turn.
+    struct Run {
+        OiWorld w;
+        SnapLog snaps;
+        uint32_t sl = 0;
+    };
+    auto build = [](Run& r, bool tsw, float rate, float cone, float cont) {
+        OiWorld& w = r.w;
+        SpecialAbilityDesc s = oi_special("SuperLaser", SpecialClass::SuperLaser, ActivationStyle::UserInput);
+        s.max_range = 5000.0f;
+        s.face_target = true;
+        s.turn_rate = rate;
+        s.firing_cone = cone;
+        s.fire_continuation = cont;
+        s.damage_per_frame = 5.0f;
+        const uint32_t ss = add_special(w.ad, s);
+        r.sl = w.ad.specials[ss].name_crc;
+        AbilityObjectDesc a;
+        a.unit_abilities = {oi_gui(kSuperLaser, 10.0f, 30.0f, "SuperLaser")};
+        a.specials = {ss};
+        a.tactical_super_weapon = tsw;
+        UnitDesc ud = oi_unit("Eclipse", 10000.0f, 50.0f, kCatCapital);
+        ud.turn_rate = 2.0f;
+        const uint32_t ed = push(w.cd, w.ad, ud, a);
+        const uint32_t td = push(w.cd, w.ad, oi_unit("Target", 1e6f, 10.0f, kCatCapital), AbilityObjectDesc{});
+        w.make();
+        snap_host(w, r.snaps);
+        w.add(1, ed, 0, {0, 0, 0}, {1, 0, 0});
+        w.add(2, td, 1, {0, 1000, 0});  // yaw 90
+        const ObjectId one[] = {1};
+        CHECK(w.ab->targeted_ability(one, kSuperLaser, 2, -1, w.frame) == 1);
+    };
+    auto yaw_of = [](OiWorld& w) {
+        const Vec3 f = w.sys->facing(1);
+        return dmath::atan2(f.y, f.x) * (180.0f / dmath::kPiF);
+    };
+    {  // TSW, rate 10, cone 25: 10 degrees a step; fires once within 25 of the target (at 70); then no more turning
+        Run r;
+        build(r, true, 10.0f, 25.0f, 0.0f);
+        OiWorld& w = r.w;
+        float last = 0.0f;
+        bool fired = false;
+        for (int i = 0; i < 30 && !fired; ++i) {
+            w.tick();
+            const float y = yaw_of(w);
+            CHECK(y - last <= 10.0f + 1e-3f);
+            fired = w.sys->health(2) < 1e6f;
+            if (!fired) CHECK(90.0f - y > 25.0f);
+            last = y;
+        }
+        CHECK(fired && std::abs(last - 70.0f) < 1e-3f && !r.snaps.calls.empty());
+        for (int i = 0; i < 5; ++i) w.tick();
+        CHECK(std::abs(yaw_of(w) - last) < 1e-4f);  // inside the cone: the turning stopped
+        CHECK(w.ab->special_applied(1, r.sl));
+    }
+    {  // cone 90 -> 0.01: the first step (5 degrees) is not enough; it fires only when facing the target
+        Run r;
+        build(r, true, 5.0f, 90.0f, 0.0f);
+        OiWorld& w = r.w;
+        for (int i = 0; i < 5; ++i) w.tick();
+        CHECK(w.sys->health(2) == 1e6f);
+        for (int i = 0; i < 20; ++i) w.tick();
+        CHECK(w.sys->health(2) < 1e6f && std::abs(yaw_of(w) - 90.0f) < 0.01f);
+    }
+    {  // Turn_Rate <= 0: the type's turn rate (Max_Rate_Of_Turn x the mode multiplier)
+        Run r;
+        build(r, true, 0.0f, 20.0f, 0.0f);
+        OiWorld& w = r.w;
+        const float per = 2.0f * w.sys->config().turn_multiplier_space;  // Max_Rate_Of_Turn 2
+        for (int i = 0; i < 3 && yaw_of(w) == 0.0f; ++i) w.tick();  // the first update (the apply tick may come first)
+        CHECK(per > 0.0f && std::abs(yaw_of(w) - per) < 1e-3f);
+        w.tick();
+        CHECK(std::abs(yaw_of(w) - 2.0f * per) < 1e-3f);
+    }
+    {  // not a TACTICAL_SUPER_WEAPON: no turn, the clip at once, fires off-cone
+        Run r;
+        build(r, false, 10.0f, 20.0f, 0.0f);
+        OiWorld& w = r.w;
+        for (int i = 0; i < 3; ++i) w.tick();
+        CHECK(yaw_of(w) == 0.0f && w.sys->health(2) < 1e6f && r.snaps.calls.empty());
+    }
+    {  // Fire_Continuation 1 s: the target dies after the shot; the special stays 30 frames (beam, no damage), then ends
+        Run r;
+        build(r, false, 10.0f, 20.0f, 1.0f);
+        OiWorld& w = r.w;
+        for (int i = 0; i < 3; ++i) w.tick();
+        CHECK(w.sys->health(2) < 1e6f);
+        w.sys->kill_unit(2, kNoObject, kKindNormal, w.frame);
+        const uint32_t fk = w.frame;
+        w.tick();
+        CHECK(w.ab->special_applied(1, r.sl));
+        while (w.frame < fk + 30) {
+            w.tick();
+            CHECK(w.ab->special_applied(1, r.sl));
+        }
+        w.tick();  // fk + 30: the continuation is over
+        CHECK(!w.ab->special_applied(1, r.sl));
+    }
+    {  // no continuation: the special ends when the target is gone
+        Run r;
+        build(r, false, 10.0f, 20.0f, 0.0f);
+        OiWorld& w = r.w;
+        for (int i = 0; i < 3; ++i) w.tick();
+        w.sys->kill_unit(2, kNoObject, kKindNormal, w.frame);
+        w.tick();
+        CHECK(!w.ab->special_applied(1, r.sl));
+    }
+}
+
 int main(int argc, char** argv) {
     const char* golden = nullptr;
     const char* write_golden = nullptr;
@@ -4506,6 +4965,11 @@ int main(int argc, char** argv) {
     // REMAINING_GAPS §5
     test_gaps_eject_thief();
     test_gaps_deploy_troopers();
+    test_cu8f_parse_defaults();
+    test_cu8f_lure();
+    test_cu8f_deploy_cap();
+    test_cu8f_enable_gates();
+    test_cu8f_super_laser();
     test_gaps_jet_pack();
     test_gaps_stun_release();
     test_gaps_blast();

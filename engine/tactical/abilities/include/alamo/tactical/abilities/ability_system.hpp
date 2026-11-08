@@ -112,6 +112,11 @@ enum class AbilityEventKind : uint8_t {
     // s78l t05 (TACTICAL_COMBAT §5.4.1): Tactical_Bribe apply refused for too few credits - the "cannot" event (ability
     // +0x1b8); `id` the user, `target` the target. No conversion, no recharge [M: whether the order is consumed].
     BribeRefused,
+    // cu8f t06 (CU8F_T04_T06_RE §3.1, LURE victim 0x62b270): `id` (a unit, or each live member of a lured team that is not
+    // movement-locked) accepted the lure's ordered attack on `target` (the lure owner; the combat order is already
+    // issued) and joins a new movement coordinator moving (type 3) toward it: the host runs an attack-move to `point` (the
+    // owner's position) with `target` as the goal object, keeping the attack order.
+    Lured,
 };
 
 struct AbilityEvent {
@@ -144,6 +149,11 @@ enum class SpawnPurpose : uint8_t {
     // -> 2D announcement (own / ally / enemy) -> remove the upgrade object silently. Hull, shields, cooldowns and
     // hangar counts are not carried over.
     StationUpgrade,
+    // cu8f t06 (CU8F_T04_T06_RE §3.1, LURE activate 0x62b190 -> 0x62af80): the LURE record's Particle_Effect at the owner
+    // (position, facing, owner's player), once per team: for an owner outside a team or the first member of its team.
+    // `object_type` -1 (the host resolves record(source, LURE)->particle_effect); bind_spawn() records the object, and
+    // the LURE deactivation (or the owner's death [port]) raises RemoveSilently for it.
+    LureEffect,
 };
 struct SpawnRequest {
     uint32_t serial = 0;
@@ -159,6 +169,8 @@ struct SpawnRequest {
     // at `position` (the bone) with the owner's facing, runs locomotor vf +0x200, plays anim 0x5f (0 when missing),
     // attaches it at that bone of `source` (0x38d320), sets obj +0x3a2 |= 2, then calls bind_spawn (trooper list).
     int32_t bone = -1;
+    // Troopers (cu8f t06): the deploying unit's squad number (one squad per DEPLOY_TROOPERS spawn, CU8F_T04_T06_RE §3.2).
+    int32_t squad = -1;
 };
 
 // OI abilities: host queries (all optional; unset ones use the documented fallbacks). Called from the serial tick
@@ -248,6 +260,15 @@ enum class PlayerList : uint8_t {
     StealthDuration = 1,      // +0x268: m - 1 (stealth apply, max-then-sum)
     CaptureTime = 2,          // +0x188 -> +0x288: m - 1
     ReinforcementDeploy = 3,  // +0x18c -> +0x2a8: m - 1
+};
+
+// cu8f t06 (CU8F_T04_T06_RE §3.3 [H]): the per-player tactical bool lists the Battlefield_Modifier Enable_* fields write
+// (each gate is the AND of its list's values; the caller decides what an empty list means: allowed in a campaign battle,
+// disallowed in a skirmish). Values are the stored list numbers (after PlayerList's 0..3).
+enum class PlayerGate : uint8_t {
+    BombingRuns = 4,     // +0x1c8: Enable_Bombing_Runs; Lua PlayerWrapper.Disable_Bombing_Run (0x527550)
+    SpecialWeapons = 5,  // +0x1e0: Enable_Special_Weapons (0x527620)
+    Bombardment = 6,     // +0x250: Enable_Planetary_Bombardment; Lua Disable_Orbital_Bombardment (0x5275a0)
 };
 
 class AbilitySystem final : public combat::CombatHooks {
@@ -421,6 +442,21 @@ public:
     bool set_targeting_priorities(ObjectId id, std::string_view set_name);
     // Battlefield_Modifier player lists (max-then-sum over stacking categories, ascending; 0 when empty).
     float player_list(int32_t player, PlayerList l) const;
+    // cu8f t06: the entries of `player`'s list `g` - returns their count (0 = empty) and their AND in `all` (true when
+    // empty). Entries: Battlefield_Modifier Enable_* sources (true, keyed by object + ability) and the Lua entry below.
+    uint32_t player_gate(int32_t player, PlayerGate g, bool& all) const;
+    // Lua PlayerWrapper.Disable_Bombing_Run / Disable_Orbital_Bombardment: one entry per (player, list, key), replaced by
+    // every call, value `allowed` (the Lua bool negated [M high]). No object source.
+    void set_player_gate_entry(int32_t player, PlayerGate g, uint32_t key, bool allowed);
+    // cu8f t06 (CU8F_T04_T06_RE §3.2): live DEPLOY_TROOPERS squads of `id` (deploy pack +0x58: the squads list count; a
+    // squad leaves it once none of its troopers is left in the battle [port: still a combat unit, or still requested]).
+    int32_t trooper_squads(ObjectId id) const;
+    // cu8f t06 (CU8F_T04_T06_RE §3.1): the LURE behaviour of `id` - running (not suspended), pulses made, next pulse frame,
+    // the bound Particle_Effect object (kNoObject: none).
+    bool lure_running(ObjectId id) const;
+    int32_t lure_pulses(ObjectId id) const;
+    uint32_t lure_next(ObjectId id) const;
+    ObjectId lure_effect(ObjectId id) const;
     // Weatherproof (§7.4): weather-affected = no entry for the player (every Weatherproof entry is false). cu8 t01: the
     // battle gates the land weather sight and accuracy factors on it (CombatHooks::weather_affected).
     bool weather_affected(int32_t player) const override;
@@ -566,6 +602,13 @@ private:
         // ---- REMAINING_GAPS §5 ----
         int32_t troopers_deployed = 0;  // §5.2 DEPLOY_TROOPERS behaviour data +0x40
         std::vector<ObjectId> troopers; // §5.2 trooper list +0x10 (bound ids)
+        // ---- cu8f t06 ----
+        std::vector<int32_t> trooper_squads;  // squad number of each trooper (parallel to `troopers`, CU8F §3.2)
+        int32_t squads_formed = 0;            // squad numbers handed out (one per DEPLOY_TROOPERS spawn)
+        uint8_t lure_on = 0;                  // LURE behaviour running (suspend counter 0; CU8F §3.1)
+        int32_t lure_pulses = 0;              // LureDataPack +8: pulses made
+        uint32_t lure_next = 0;               // LureDataPack +0xc: next pulse frame
+        ObjectId lure_effect = kNoObject;     // LureDataPack +0x18: the Particle_Effect object
         // ---- OI follow-up t01 (§4.14 [port]): the clip the ability system last started in the owner's primary slot, on
         // sim frames (no playing clock is read). anim_type -1 = none (no play yet, or none with clip data).
         int32_t anim_type = -1;
@@ -713,6 +756,19 @@ private:
     void h_behavior(Obj& o, uint32_t t, bool on, uint32_t frame);
     void behaviors_service(Obj& o, uint32_t frame);  // HUNT, SELF_DESTRUCT, CONFUSE expiry
     void hunt_decide(Obj& o, uint32_t frame);
+    // cu8f t06 (CU8F_T04_T06_RE §3.1 / §3.2): LURE activate / deactivate / service / pulse / victim, the live squad count.
+    void lure_activate(Obj& o, uint32_t frame);
+    void lure_deactivate(Obj& o, uint32_t frame);
+    void lure_service(Obj& o, uint32_t frame);
+    void lure_pulse(Obj& o, const UnitAbilityRecord& r, uint32_t frame);
+    void lure_victim(Obj& o, ObjectId v, uint32_t frame);
+    int32_t live_squads(const Obj& o) const;
+    // cu8f t06 (§3.3): the Enable_* entries of a Battlefield_Modifier source (push = apply, else delete by source).
+    void gate_entries(const Obj& src, const SpecialAbilityDesc& s, bool push);
+    // cu8f t06 (§3.4): one Turn_Toward yaw step of the owner toward `target` (rate <= 0: the type's turn rate) and the
+    // Firing_Cone test.
+    void super_laser_turn(Obj& o, const SpecialAbilityDesc& s, ObjectId target);
+    bool super_laser_in_cone(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const;
     void confuse(Obj& v, float secs, uint32_t frame);
     void mines_update(uint32_t frame);
     // special-ability class bodies (ability_classes.cpp)

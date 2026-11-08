@@ -327,6 +327,10 @@ bool AbilitySystem::can(const Obj& o, uint32_t t, bool check_recharge, bool chec
             if (o.combat_unit && combat_->live_hardpoints(id, HardpointKind::FighterBay) == 0) return false;
             if (host_.squadron_deploy_ready && !host_.squadron_deploy_ready(id)) return false;
             break;
+        case kDeployTroopers:  // cu8f t06 (0x58f840, CU8F_T04_T06_RE §3.2): live deployed squads < Max_Num_Spawned_Objects
+            if (const UnitAbilityRecord* r = record_of(o, t); r && r->max_spawned_objects >= 0 && live_squads(o) >= r->max_spawned_objects)
+                return false;
+            break;
         default: break;
     }
     return true;
@@ -1939,6 +1943,7 @@ void AbilitySystem::unit_dying(ObjectId id, uint32_t frame) {
         if (sp.applied) remove_special(*o, sp, frame);
     if (o->interdicting) interdict(*o, false, frame);
     o->stealthed = 0;
+    if (o->lure_on || o->lure_effect != kNoObject) lure_deactivate(*o, frame);  // cu8f t06 [port]: the effect goes with it
     o->dead = 1;
 }
 
@@ -2056,6 +2061,17 @@ void AbilitySystem::hash(StateHasher& h) const {
             h.i32(o.troopers_deployed);
             h.u32(static_cast<uint32_t>(o.troopers.size()));
             for (ObjectId t : o.troopers) h.i32(t);
+            // cu8f t06: the squad numbers (CU8F_T04_T06_RE §3.2)
+            h.i32(o.squads_formed);
+            for (const int32_t q : o.trooper_squads) h.i32(q);
+        }
+        // cu8f t06: the LURE data pack, only once used (keeps lure-less digests)
+        if (o.lure_on != 0 || o.lure_pulses != 0 || o.lure_effect != kNoObject) {
+            h.u32(0x4552554Cu);  // "LURE"
+            h.u8(o.lure_on);
+            h.i32(o.lure_pulses);
+            h.u32(o.lure_next);
+            h.i32(o.lure_effect);
         }
         // OI follow-up t01 / t04: the animation record and the lock pairs, only once set (keeps record-less digests)
         if (o.anim_type >= 0 || o.lock_flags != 0) {

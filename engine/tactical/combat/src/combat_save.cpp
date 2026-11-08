@@ -56,8 +56,9 @@ constexpr uint32_t kCombatSaveVersion = 13;  // 2: refix t02 INFECTION state, re
                                              // fire-bone cycle index; 9: S8 t26 fire-at-position order; 10: s78f t03
                                              // targeting state + its target, s78f t04 lobbing turret angles; 11:
                                              // s78g t06 damage_team; 12: s78h t03 squad_seen dropped (no squad rule
-                                             // on a member); 13: cu8f t04a stickiness threshold TD +0x158.
-                                             // Only the current version is read (cu6).
+                                             // on a member); 13: cu8f t04a stickiness threshold TD +0x158,
+                                             // cu8f t06 INFECTION frames left + spread counters. Only the current
+                                             // version is read (cu6).
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 
@@ -138,8 +139,7 @@ void CombatSystem::write(ByteWriter& w) const {
         w.f32(u.lob_tpitch).f32(u.lob_tyaw).u8(u.tstate).i32(u.ttarget);  // s78f t04 / t03
         // refix t02: INFECTION behaviour
         w.u8(u.infect_attached).u32(u.infect_suspend).i32(u.infect_desc).i32(u.infect_player).i32(u.infect_source);
-        w.u32(u.infect_end).u32(u.infect_next_damage).u32(static_cast<uint32_t>(u.infect_exposure.size()));
-        for (const auto& [id, f] : u.infect_exposure) w.i32(id).u32(f);
+        w.i32(u.infect_left).u32(u.infect_seen).i32(u.infect_count);  // v13 (cu8f t06)
         u.mods.write(w);
         // caches
         for (const float v : u.mod_r) w.f32(v);
@@ -336,17 +336,12 @@ bool CombatSystem::read(ByteReader& r) {
         u.infect_desc = r.i32();
         u.infect_player = r.i32();
         u.infect_source = r.i32();
-        u.infect_end = r.u32();
-        u.infect_next_damage = r.u32();
-        uint32_t nx = 0;
-        if (!r.count(nx, 8) || u.infect_attached > 1 || u.infect_desc < -1 ||
+        u.infect_left = r.i32();  // cu8f t06
+        u.infect_seen = r.u32();
+        u.infect_count = r.i32();
+        if (!r.ok() || u.infect_attached > 1 || u.infect_desc < -1 ||
             (u.infect_desc >= 0 && static_cast<uint32_t>(u.infect_desc) >= unit_descs))
             return false;
-        u.infect_exposure.resize(nx);
-        for (auto& [id, f] : u.infect_exposure) {
-            id = r.i32();
-            f = r.u32();
-        }
         if (!r.ok() || !u.mods.read(r)) return false;
         for (float& v : u.mod_r) v = r.f32();
         u.mod_ver = r.u32();

@@ -3070,7 +3070,7 @@ void test_save_rejects() {
     bad = saved;
     put_u32_at(bad, 0, 99);
     CHECK(rejected(bad));
-    for (const uint32_t v : {11u, 14u}) {  // the version before the oldest read (12: s78h t03) and after (13: cu8f t04a)
+    for (const uint32_t v : {12u, 14u}) {  // only the current version (13: cu8f t04a / t06) is read (cu6)
         bad = saved;
         put_u32_at(bad, 0, v);
         CHECK(rejected(bad));
