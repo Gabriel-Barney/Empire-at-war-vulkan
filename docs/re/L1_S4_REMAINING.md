@@ -913,7 +913,9 @@ group move (0x2a7b80) entry → exit, target := marker. Allied with the local pl
 entry i; when no bombers remain: kill every DUMMY_DESTROY_AFTER_BOMBING_RUN (0x66) object of that
 player, ready := now + interval, available := 0, in progress := 0 [M: LandBomber removes itself at the
 exit]. Save: manager chunk 5 (micro 0 enabled, 1 mode, 2 +0x10, 3 +0x14, 6 count), record chunk 4
-(0x4958c0), type saved by CRC. UI query 0x4950f0 (frames until available).
+(0x4958c0), type saved by CRC. UI query 0x4950f0: the **frame** the run is available again (absolute, not a
+count; −1 without a record; in progress: now + interval + remaining flight) and the HUD dial 0x495250 built on it
+(HUD_GAPS §9.3, corrected cu9g t01).
 
 Lua: `LandTaskForceClass.Bombing_Run` §2.10; `PlayerWrapper.Disable_Bombing_Run(bool)` (0x601aa0, bound)
 pushes the bool with no expiry into tactical list +0x1c8 under key 0x1407ff8a8 (0x3a8cb0) [M: whether

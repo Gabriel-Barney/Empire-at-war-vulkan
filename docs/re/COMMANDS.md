@@ -159,7 +159,7 @@ parentheses where it was read directly. Otherwise the payload comes from Execute
 | 58 | SetAbilityAutofire | S | list7, 7-bit ability type, 1-bit (0x4b3790) | autofire toggle per unit | H |
 | 25 | SpecialWeaponFire | S | id32 weapon, P, 1-bit "at position", then q1–q3 or id32 target (0x40a2d0) | fire a special weapon | H |
 | 38 | TacticalSuperWeapon | S | id32 weapon, 2-bit op (0x5d6c60) | op 1 / 2 on the superweapon behaviour. Only if the object's owner is the issuer | H |
-| 28 | BombingRun | S | q1–q3 point (pack 0x524650) | bombing run on a point (BombingRunManager, mode +0x38) | H |
+| 28 | BombingRun | S | q1–q3 point (pack 0x524650, unpack 0x524590) | bombing run on a point (BombingRunManager, mode +0x38). Execute 0x5246d0: point round trip (§3.2), then start 0x492d60 when the target test 0x494540 passes for the issuer; no result. Sent only by the land HUD targeting click (HUD_GAPS §9.6-9.7); Lua `Bombing_Run` starts directly | H |
 | 54 | PlanetaryBombard | S | q1–q3 point | orbital bombard (PlanetaryBombardManager, mode +0x40) | M |
 | 12 | Reinforce | S | id32 unit (or type ref, see note), q1–q3 drop point (0x403c10) | reinforcement drop in land (mode type 1) or space (2). The validity check runs inside Execute | H |
 | 33 | TacticalBuild | S | id32 build pad, 16-bit type index, P (0x5d7820) | build on a pad | H |

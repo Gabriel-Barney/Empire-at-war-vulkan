@@ -68,8 +68,8 @@ skipped when the "present this frame" test fails or the interface is hidden (byt
 | 3 | mode vf21 | 3D world incl. selection circles (Transparent bucket), post chain, bloom | H |
 | 4 | 0x13d030 | depth clear | H |
 | 5a | 0x3dda70 | galactic only: per-planet label groups (name, value, icons) with zoom-driven alpha (§1.6) | H |
-| 5b | 0x302620 | per-object HUD groups kept in a map (+0x2018): queue up to 10 components each (brackets, bars, icons); tactical HUD modes only (HUD mode +0x211c: 1 galactic, 2 land, 3 space), not while hidden | M |
-| 5c | 0x300c00 | mode-specific HUD build: galactic 0x311380, land 0x318720, space 0x312b90; then drag-object list and the hover target | M |
+| 5b | 0x302620 | per-object HUD groups kept in a map (+0x2018): queue up to 10 components each (brackets, bars, icons); tactical HUD modes only (HUD mode +0x211c: 1 galactic, 2 space, 3 land; corrected cu9g t01, HUD_GAPS §9.0), not while hidden | M |
+| 5c | 0x300c00 | mode-specific HUD build: galactic 0x311380, space 0x318720, land 0x312b90 (corrected cu9g t01, HUD_GAPS §9.0); then drag-object list and the hover target | M |
 | 5d | 0x302520 | pause/"objective" shells (two component lists) | L |
 | 5e | 0x2fce50 | tactical only: marker at a projected world point (component 0x210) | L |
 | 5f | 0x301190 | tactical: selected-unit panel layout (grid of selection buttons with full/left/centre/right border pieces, column count from global 0x140b16a4c) | M |
