@@ -3540,18 +3540,20 @@ void CombatSystem::infect(Unit& v, int32_t desc, int32_t player, ObjectId source
 }
 
 void CombatSystem::infection_service(Unit& u, uint32_t frame, SimRng& rng) {
-    // INFECTION service (vf6 0x636e80, interval 1), cu8f t06 (CU8F_T04_T06_RE §3.5 [H]). [port] a parameterless behaviour
-    // (flag only: spawned / set infected) is not serviced.
-    if (!u.infect_attached || u.infect_suspend != 0 || u.infect_desc < 0 || (u.flags & kUnitDead)) return;
+    // INFECTION service (vf6 0x636e80, interval 1), cu8f t06 (CU8F_T04_T06_RE §3.5 [H]). cu8g t05: a parameterless
+    // behaviour (flag only: spawned / set infected, no infector pack) is serviced too, as the pack it has: frames left 0
+    // (no Duration_Of_Infection written; the pack ctor's value [L] taken as 0), so its first service makes the frame % 60
+    // draw like any other and then suspends it (expiry) before any damage or spread.
+    if (!u.infect_attached || u.infect_suspend != 0 || (u.flags & kUnitDead)) return;
     if (u.flags & kUnitGarrisoned) return;  // nothing while garrisoned (+0x3a7)
     // Coughing SFX: on frames with frame % 60 == 0 one synced Get_Int(0, 4), the sound on 0 (presentation).
     if (frame % 60u == 0u) (void)rng.range_int(0, 4);
-    const InfectionDesc& in = data_->units[static_cast<size_t>(u.infect_desc)].infection;
     // Frames left -= 1; at <= 0 the behaviour suspends itself (the cure: expiry) and its particle goes.
-    if (--u.infect_left <= 0) {
-        suspend_infection(u.id);
+    if (--u.infect_left <= 0 || u.infect_desc < 0) {  // an empty pack: no DPS, no mask (nothing to damage or spread)
+        if (u.infect_left <= 0) suspend_infection(u.id);
         return;
     }
+    const InfectionDesc& in = data_->units[static_cast<size_t>(u.infect_desc)].infection;
     DamageRequest r;  // Take_Damage(kind 0x14, DPS / FPS) every frame
     r.victim = u.id;
     r.amount = in.damage_per_second / static_cast<float>(cfg_.fps);
@@ -3561,9 +3563,9 @@ void CombatSystem::infection_service(Unit& u, uint32_t frame, SimRng& rng) {
     // Spread 0x636ae0 (the mask's only reader): every player in index order (allies and the infector's own included), that
     // player's objects within Distance_To_Infect (XY) of the infected unit ([port] ascending id for the radius query).
     // A candidate counts when its TD +0x114 != NOW and it passes 0x6cc790: not this unit, not dying / removed, not a
-    // projectile, has a locomotor, not garrisoned, and its type CategoryMask & Infection_CategoryMask != 0 ([port] obj
-    // +0x2a0 non-null is not modelled). Actively infected: its counter := 0. Else the consecutive-frame counter (+0x118
-    // += 1 when +0x114 = NOW - 1, else 0; +0x114 := NOW); at count >= FPS x Seconds_To_Infect it is infected with a copy
+    // projectile, has a locomotor, has a model (obj +0x2a0 non-null; cu8g t05: UnitDesc::has_model), not garrisoned, and
+    // its type CategoryMask & Infection_CategoryMask != 0. Actively infected: its counter := 0. Else the consecutive-frame
+    // counter (+0x118 += 1 when +0x114 = NOW - 1, else 0; +0x114 := NOW); at count >= FPS x Seconds_To_Infect it is infected with a copy
     // of this pack (duration full) and its counter := 0.
     const float r2 = in.distance_to_infect * in.distance_to_infect;
     const float need = static_cast<float>(cfg_.fps) * in.seconds_to_infect;
@@ -3573,7 +3575,7 @@ void CombatSystem::infection_service(Unit& u, uint32_t frame, SimRng& rng) {
             if (c.owner != p || &c == &u || c.infect_seen == frame) continue;
             if (c.flags & (kUnitDead | kUnitGarrisoned)) continue;
             const UnitDesc& cd = desc_of(c);
-            if (!cd.has_locomotor || (cd.category_mask & in.category_mask) == 0) continue;
+            if (!cd.has_locomotor || !cd.has_model || (cd.category_mask & in.category_mask) == 0) continue;
             if (distance2_xy(u.pos, c.pos) > r2) continue;
             if (c.infect_attached && c.infect_suspend == 0) {
                 c.infect_count = 0;

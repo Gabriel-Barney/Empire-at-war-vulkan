@@ -434,6 +434,11 @@ struct UnitDesc {
     float ranged_target_z_adjust = 0.0f;          // Ranged_Target_Z_Adjust
     float converted_die_time = 0.0f;              // Converted_To_Enemy_Die_Time_Seconds
     bool has_locomotor = true;                    // jamming victims need a locomotor
+    // cu8g t05: the object has a model (obj +0x2a0, the ModelClass made from the mode's model at creation; never made when
+    // the type names none, MOVEMENT §2 / SPACE_AVOIDANCE). Battle host: the type names a model for the battle's mode
+    // (Land_Model_Name / Space_Model_Name) [port: named, the file is not checked]; true without model data. Read by the
+    // INFECTION spread candidate test 0x6cc790 (CU8F_T04_T06_RE §3.5).
+    bool has_model = true;
     bool deploys = false;                         // Deploys (type +0xd1): the death-clone deploy remap (S9 t04)
     InfectionDesc infection;                      // refix t02: this type's Infection_Ability (the infector's side)
     // HUD repair cursor (HUD_GAPS §1.4): the object has behaviour 0x5C DUMMY_STAR_BASE (behaviour slot obj +0x38e =

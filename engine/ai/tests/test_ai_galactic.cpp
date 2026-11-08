@@ -4045,9 +4045,27 @@ static void test_free_store_world() {
 // cu8f t04b (CU8F_T04_T06_RE §2.2 step 4): the free-store auto-land of an AI ground unit sitting in an orbiting fleet runs
 // only while the unit's Prefer_Ground_Over_Space is true (the default); false (Lua Set_Prefer_Ground_Over_Space) keeps it
 // in orbit. The infantry starts on P0's surface and is launched into an orbit fleet there before the AI runs.
+// cu8g t04 (§2.2 step 3): only a unit with TRANSPORT lands: here the infantry's Company_Transport_Unit (a synthetic
+// TRANSPORT type); without one (transport false) it stays in orbit. The detach (op 2) is logged before the land (op 5).
 static void test_prefer_ground_auto_land() {
-    for (const bool prefer : {true, false}) {
-        ParityWorld pw(false, {"MagicSpace"}, [](gal::GalacticSetup& s) { s.forces.push_back({0, 0, tInfantry}); });
+    struct Case {
+        bool prefer, transport;
+    };
+    for (const Case c : {Case{true, true}, Case{false, true}, Case{true, false}}) {
+        const bool prefer = c.prefer;
+        const bool expect = c.prefer && c.transport;
+        ParityWorld pw(false, {"MagicSpace"}, [](gal::GalacticSetup& s) { s.forces.push_back({0, 0, tInfantry}); },
+                       [&c](gal::GalacticRules& r) {
+                           if (!c.transport) return;
+                           gal::TypeInfo tr;
+                           tr.name = "SynTransport";
+                           tr.kind = gal::UnitKind::SpaceUnit;
+                           tr.transport_behavior = true;
+                           tr.hyperspace = true;
+                           tr.hyperspace_speed = 1.5f;
+                           r.types[tInfantry].company_transport = static_cast<uint32_t>(r.types.size());
+                           r.types.push_back(tr);
+                       });
         gal::GalacticSim& sim = *pw.sim;
         const objects::ObjectStore& st = *pw.store;
         objects::ObjectHandle inf{};
@@ -4067,11 +4085,15 @@ static void test_prefer_ground_auto_land() {
         bool landed = false;
         for (const objects::ObjectHandle u : sim.planets()[0].surface) landed = landed || u == inf;
         const std::string key = "auto-land " + std::to_string(st.id(inf)) + " ";
-        bool logged = false;
-        for (const AiDecision& d : pw.world->decision_log()) logged = logged || d.text.find(key) != std::string::npos;
-        std::printf("prefer ground %d: infantry %s, auto-land %s\n", prefer ? 1 : 0, landed ? "landed" : "in orbit",
-                    logged ? "logged" : "not logged");
-        CHECK(landed == prefer && logged == prefer);
+        const std::string dkey = "auto-land detach " + std::to_string(st.id(inf)) + " ";
+        bool logged = false, detach_first = false;
+        for (const AiDecision& d : pw.world->decision_log()) {
+            if (!logged && d.text.find(dkey) != std::string::npos) detach_first = true;
+            logged = logged || d.text.find(key) != std::string::npos;
+        }
+        std::printf("prefer ground %d, transport %d: infantry %s, auto-land %s\n", prefer ? 1 : 0, c.transport ? 1 : 0,
+                    landed ? "landed" : "in orbit", logged ? "logged" : "not logged");
+        CHECK(landed == expect && logged == expect && detach_first == expect);
     }
 }
 

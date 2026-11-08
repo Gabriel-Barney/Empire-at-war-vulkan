@@ -171,6 +171,10 @@ struct SpawnRequest {
     int32_t bone = -1;
     // Troopers (cu8f t06): the deploying unit's squad number (one squad per DEPLOY_TROOPERS spawn, CU8F_T04_T06_RE §3.2).
     int32_t squad = -1;
+    // LureEffect (cu8g t05): the lure was deactivated before the host bound the effect. The original creates the effect
+    // inside the activation, so its deactivation always kills it; here the object exists only after this tick's host
+    // pass, so bind_spawn refuses a cancelled request and the host removes the new object silently (it keeps its id).
+    bool cancelled = false;
 };
 
 // OI abilities: host queries (all optional; unset ones use the documented fallbacks). Called from the serial tick
@@ -765,6 +769,9 @@ private:
     int32_t live_squads(const Obj& o) const;
     // cu8f t06 (§3.3): the Enable_* entries of a Battlefield_Modifier source (push = apply, else delete by source).
     void gate_entries(const Obj& src, const SpecialAbilityDesc& s, bool push);
+    // cu8g t05 (§3.3): every entry of a Battlefield_Modifier source (reveal list, float lists, Enable_* lists): push =
+    // apply, else delete by source; Reverse_Application_Logic swaps which of apply / remove pushes (the caller's choice).
+    void modifier_entries(const Obj& src, uint32_t desc, const SpecialAbilityDesc& s, bool push);
     // cu8f t06 (§3.4): one Turn_Toward yaw step of the owner toward `target` (rate <= 0: the type's turn rate) and the
     // Firing_Cone test.
     void super_laser_turn(Obj& o, const SpecialAbilityDesc& s, ObjectId target);

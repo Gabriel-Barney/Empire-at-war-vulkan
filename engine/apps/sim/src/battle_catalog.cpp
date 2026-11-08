@@ -600,6 +600,9 @@ void BattleCatalog::s9_unit_fields(uint32_t t, tc::UnitDesc& u, BuildState& s) c
         ty.get_string(t, "Ranged_Target_Z_Adjust").empty() ? 6.0f : ty.get_float(t, "Ranged_Target_Z_Adjust");
     u.converted_die_time = ty.get_float(t, "Converted_To_Enemy_Die_Time_Seconds");
     u.has_locomotor = ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Locomotor);
+    // cu8g t05 (obj +0x2a0, the infection spread candidate test): a model is named for the battle's mode.
+    if (s.model_mode >= 0)
+        u.has_model = !ascii_trim(ty.get_string(t, s.model_mode == 1 ? "Space_Model_Name" : "Land_Model_Name")).empty();
     // Death_Clone: (key name, type) pairs (S9_DEATH_CLONE_SHIELDS.md §1.4): the static tDamageType enum first, else
     // 0x18 + the name's index in GameConstants Damage_Types (e.g. Damage_Disruptor_Hand). S9 t04.
     const auto clones = ty.get_list(t, "Death_Clone");

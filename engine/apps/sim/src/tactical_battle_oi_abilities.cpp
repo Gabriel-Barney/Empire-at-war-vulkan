@@ -584,7 +584,8 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 const objects::TypeIndex t = catalog_->types().raw().find(r->particle_effect);
                 if (t == objects::kNone || t >= catalog_->types().size()) break;
                 const objects::ObjectHandle h = spawn_prop(mode, static_cast<int32_t>(t), oi_sv(q.position), oi_sv(q.facing), q.owner);
-                if (h) abilities_->bind_spawn(q.serial, store.id(h));
+                // cu8g t05: not bound (the lure went off, or its owner is gone, before this pass): removed at once.
+                if (h && !abilities_->bind_spawn(q.serial, store.id(h))) remove_silently.push_back(store.id(h));
                 break;
             }
             case ta::SpawnPurpose::StationUpgrade: hg_station_upgrade(mode, q); break;  // STATION_HANGARS_SOUND Â§1.2

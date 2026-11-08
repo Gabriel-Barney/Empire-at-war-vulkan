@@ -193,6 +193,29 @@ std::string fog_bm_types() {
     return t;
 }
 
+// cu8g t05 (CU8F_T04_T06_RE §3.3): Battlefield_Modifier gates. The Empire's star base carries S10_Gate_On (Space_Automatic,
+// Enable_Special_Weapons and Enable_Bombing_Runs); every frigate and corvette (both sides) carries S10_Gate_Rev
+// (Reverse_Application_Logic, Enable_Special_Weapons, Reinforcement_Time_Multiplier 2.0: the comm array's
+// Slower_Reinforcements shape), which pushes its entries only when it is removed.
+std::string gate_types() {
+    std::string t = kTypes;
+    auto insert_after = [&t](const std::string& at, const std::string& what) {
+        const size_t p = t.find(at);
+        if (p != std::string::npos) t.insert(p + at.size(), what);
+    };
+    insert_after("<StarBase Name=\"S10_Star_Base_1\">",
+                 "<Abilities SubObjectList=\"Yes\"><Battlefield_Modifier_Ability Name=\"S10_Gate_On\">"
+                 "<Activation_Style>Space_Automatic</Activation_Style><Enable_Special_Weapons>Yes</Enable_Special_Weapons>"
+                 "<Enable_Bombing_Runs>Yes</Enable_Bombing_Runs><Stacking_Category>0</Stacking_Category>"
+                 "</Battlefield_Modifier_Ability></Abilities>");
+    insert_after("<SpaceUnit Name=\"S10_Frigate\">",
+                 "<Abilities SubObjectList=\"Yes\"><Battlefield_Modifier_Ability Name=\"S10_Gate_Rev\">"
+                 "<Activation_Style>Space_Automatic</Activation_Style><Enable_Special_Weapons>Yes</Enable_Special_Weapons>"
+                 "<Reinforcement_Time_Multiplier>2.0</Reinforcement_Time_Multiplier><Reverse_Application_Logic>Yes</Reverse_Application_Logic>"
+                 "<Stacking_Category>0</Stacking_Category></Battlefield_Modifier_Ability></Abilities>");
+    return t;
+}
+
 // R3 anim test data: the same types plus corpse / removal fields and a frigate death clone.
 std::string anim_types() {
     std::string t = kTypes;
@@ -535,9 +558,11 @@ std::string bomb_types() {
 std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = false, bool bm = false, bool prod = false,
                                 bool obstacle = false, bool team = false, bool fog_bm = false, bool fighters = false,
                                 bool fog_setup = false, bool bomb = false, bool landing = false, bool sprint = false,
-                                bool convert = false, bool hack = false, bool vland = false, bool presence = false) {
+                                bool convert = false, bool hack = false, bool vland = false, bool presence = false,
+                                bool gate = false) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / (presence ? "alamo_sim_battle_tests_presence"  // s78l t03
+    d->root = fs::temp_directory_path() / (gate ? "alamo_sim_battle_tests_gate"  // cu8g t05
+                                           : presence ? "alamo_sim_battle_tests_presence"  // s78l t03
                                            : vland       ? "alamo_sim_battle_tests_vehicle_landing"  // s78l t04
                                            : hack      ? "alamo_sim_battle_tests_team_hack"  // s78l t04
                                            : convert     ? "alamo_sim_battle_tests_team_convert"  // s78k t04
@@ -560,7 +585,8 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", presence ? presence_types()  // s78l t03
+    write_file(x / "S10Types.xml", gate ? gate_types()  // cu8g t05
+                                   : presence ? presence_types()  // s78l t03
                                    : vland ? vehicle_landing_types()  // s78l t04
                                    : hack ? hack_types()  // s78l t04
                                    : convert ? convert_types()  // s78k t04
@@ -4382,6 +4408,96 @@ void test_station_production() {
 }
 // --- end hangars ---
 
+// cu8g t05 (CU8F_T04_T06_RE §3.3 [H]): TacticalBattle::player_gate_allows / special_weapons_allowed on the S10 space
+// battle (gate data), campaign and skirmish. At battle frame 3: the Empire (0) has its star base's S10_Gate_On entries
+// (allowed in both modes); the Underworld (1) has only reverse sources alive (no entry: allowed in a campaign battle,
+// refused in a skirmish); bombardment has no entry for anyone (empty list rule); the reverse float list
+// (Reinforcement_Time_Multiplier) is empty for both players (the old "reverse -> enemies" reading gave the Empire 1.0).
+// The Lua Disable_Orbital_Bombardment entry is ANDed (false refuses even in a campaign battle; true allows even in a
+// skirmish). Then an Underworld frigate dies: its reverse remove pushes the Underworld's Enable_Special_Weapons entry
+// (allowed in both modes) and its reinforcement-time entry (2.0 - 1 = 1.0), for the owner only.
+struct GateRun {
+    bool seen = false, sw0 = false, sw1 = false, br0 = false, br1 = false, bd0 = false, bd_off = true, bd_on = false;
+    bool killed = false, sw1_after = false;
+    float rt0 = -1.0f, rt1 = -1.0f, rt0_after = -1.0f, rt1_after = -1.0f;
+};
+GateRun run_gate(const Data& d, bool skirmish) {
+    GateRun out;
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d, false));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 300;
+    opt.battle.order_interval = 0;  // no stand-in orders
+    opt.battle.skirmish = skirmish;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    const auto frigate = static_cast<objects::TypeIndex>(type_of(d, "S10_Frigate"));
+    using tactical::abilities::PlayerGate;
+    using tactical::abilities::PlayerList;
+    for (uint64_t t = 0; t < 3000 && !out.seen; ++t) {
+        host.tick_once();
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->frame() != 3) continue;
+        out.seen = true;
+        out.sw0 = b->special_weapons_allowed(0);
+        out.sw1 = b->special_weapons_allowed(1);
+        out.br0 = b->player_gate_allows(0, PlayerGate::BombingRuns);
+        out.br1 = b->player_gate_allows(1, PlayerGate::BombingRuns);
+        out.bd0 = b->player_gate_allows(0, PlayerGate::Bombardment);
+        out.rt0 = b->abilities().player_list(0, PlayerList::ReinforcementTime);
+        out.rt1 = b->abilities().player_list(1, PlayerList::ReinforcementTime);
+        b->set_bombardment_disabled(0, true);
+        out.bd_off = b->player_gate_allows(0, PlayerGate::Bombardment);
+        b->set_bombardment_disabled(0, false);
+        out.bd_on = b->player_gate_allows(0, PlayerGate::Bombardment);
+        for (const objects::ObjectHandle h : tm->primary().owned_by(1))
+            if (tm->primary().alive(h) && tm->primary().type(h) == frigate) {
+                out.killed = b->script_damage(*tm, tm->primary().id(h), 1.0e9f, false);
+                break;
+            }
+        out.sw1_after = b->special_weapons_allowed(1);
+        out.rt0_after = b->abilities().player_list(0, PlayerList::ReinforcementTime);
+        out.rt1_after = b->abilities().player_list(1, PlayerList::ReinforcementTime);
+    }
+    return out;
+}
+
+void test_battlefield_modifier_gates() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+                       false, false, true);
+    for (const bool skirmish : {false, true}) {
+        const GateRun r = run_gate(*d, skirmish);
+        std::printf("  %s: frame 3 seen %d; special weapons E %d U %d, bombing runs E %d U %d, bombardment E %d (Lua off %d, on %d); "
+                    "reinforcement time E %.2f U %.2f; U frigate killed %d -> special weapons U %d, reinforcement time E %.2f U %.2f\n",
+                    skirmish ? "skirmish" : "campaign", r.seen, r.sw0, r.sw1, r.br0, r.br1, r.bd0, r.bd_off, r.bd_on,
+                    static_cast<double>(r.rt0), static_cast<double>(r.rt1), r.killed, r.sw1_after, static_cast<double>(r.rt0_after),
+                    static_cast<double>(r.rt1_after));
+        CHECK(r.seen && r.killed);
+        CHECK(r.sw0 && r.br0);                                // the star base's entries: allowed in both modes
+        CHECK(r.sw1 == !skirmish && r.br1 == !skirmish);      // empty lists: campaign yes, skirmish no
+        CHECK(r.bd0 == !skirmish && !r.bd_off && r.bd_on);    // empty, then the Lua entry alone (false, then true)
+        CHECK(r.rt0 == 0.0f && r.rt1 == 0.0f);                // reverse: nothing while the sources live
+        CHECK(r.sw1_after && r.rt1_after == 1.0f && r.rt0_after == 0.0f);  // the dead frigate's remove pushed, owner only
+    }
+}
+
 // --- OI host: BattleAi orders without AI players (empty definitions; the battle's stand-in off) ---
 //   * MoveToObject (Lua Move_To(object)): the mover's attack order is cleared and it moves to the target's position; a
 //     missing target is a silent no-op; foreign movers are refused;
@@ -7755,6 +7871,8 @@ int main(int argc, char** argv) {
     }
     std::printf("skirmish station production: Production at the star base, upgrade object, station upgrade\n");
     test_station_production();
+    std::printf("cu8g t05: Battlefield_Modifier gates at the battle (skirmish vs campaign, empty list, apply / remove / reverse)\n");
+    test_battlefield_modifier_gates();
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
     std::printf("OI host: BattleAi MoveToObject, hijack_unit, AI Change_Owner\n");
     test_battle_ai_orders(*d);
