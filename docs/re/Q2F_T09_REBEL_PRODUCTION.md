@@ -137,6 +137,6 @@ What this means for the failing metrics:
    14+10) picks tank busters where retail picks infantry squads, and the port builds one unit at a time at one planet
    where retail queues at three planets at once. That is the `build_mix` gap (22 infantry vs 2).
 
-Next steps (engine/ai/galactic; not done here because the opt3 lane holds a claim on that area):
+Next steps (engine/ai/galactic, each a behaviour change with golden regeneration; roadmap q2f t09):
 the task-force sufficiency test against retail's (docs/re/AI_GALACTIC, "Task force"), the ground unit pick for
 Conquer_Opponent against Tatooine's defenders (contrast / IgnoreTarget scores), and per-planet parallel production.
