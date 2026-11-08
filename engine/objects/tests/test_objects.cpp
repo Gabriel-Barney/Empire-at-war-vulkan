@@ -82,6 +82,9 @@ static void test_schema() {
           behavior_type_id("EXPLOSION") == 0x20 && behavior_type_id("DUMMY_GROUND_BASE") == 0x5B &&
           behavior_type_id("DUMMY_UPGRADE") == beh::DummyUpgrade &&
           behavior_type_id("DUMMY_DESTROY_AFTER_PLANETARY_BOMBARD") == 0x69 && behavior_type_id("Selectable") == 0x02);
+    CHECK(behavior_type_id("DISABLE_FORCE_ABILITIES") == beh::DisableForceAbilities && beh::DisableForceAbilities == 0x52 &&
+          behavior_type_id("HOLSTER_WEAPON") == beh::HolsterWeapon && beh::HolsterWeapon == 0x4E &&
+          behavior_type_id("TACTICAL_SUPER_WEAPON") == beh::TacticalSuperWeapon);  // cu8f t02 / t07
     CHECK(behavior_type_id("NOT_A_BEHAVIOR") == kNoBehavior && behavior_type_name(0x1F).empty() &&
           behavior_type_name(0x2C) == "TACTICAL_SUPER_WEAPON");
     CHECK(is_behavior_list_tag("spacebehavior") && !is_behavior_list_tag("Behaviors"));

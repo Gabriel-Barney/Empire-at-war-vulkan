@@ -24,12 +24,15 @@
 //   * engines_online(id)    - ENGINE hardpoint repaired to full (EnginesOnline): idle on.
 //   * timed_disable(id)     - a timed engine disable (§3.3: Take_Damage, energy-pool projectile): moving off, idle off.
 //                             The timer expiry does not call audio. Called by TacticalBattle::disable_engines (the L1
-//                             timed-disable entry point) for engine-loop units; the energy-pool source itself (0x56c230)
-//                             is not traced in docs/re, so nothing calls disable_engines from combat yet.
-//   * suppress(id) / unsuppress(id) - 0x392410 / 0x393970 (land only in vanilla): both off then blocked / unblocked.
-//                             NOT WIRED (cu8 t04, roadmap cu8f): the callers (§3.4, 0x635xxx land behaviours) are [L], and
-//                             the port runs engine loops for SimpleSpace units only. The land transform caller (0x3a9910)
-//                             is land-only too and has no entry point here.
+//                             timed-disable entry point) and TacticalBattle::energy_drain_engines (cu8f t02: the energy-pool
+//                             absorb 0x56c230 in Take_Damage, CombatHooks::engines_drained) for engine-loop units.
+//   * suppress(id) / unsuppress(id) - 0x392410 / 0x393970: both off then blocked / unblocked. Their only callers are the
+//                             land HOLSTER_WEAPON behaviour (0x4E, lightsaber heroes: start suppressed, holster start ->
+//                             suppress with each loop's own fade, draw complete -> unsuppress) and Saber_Throw's throw /
+//                             catch (suppress, fade 0) (CU8F_T01_T02_T07_RE.md §2.2 / §2.3). NOT WIRED: the port runs
+//                             engine loops for SimpleSpace units only (no land Walk-locomotor loops) and has no
+//                             HOLSTER_WEAPON behaviour, so there is no caller yet (roadmap follow-up of cu8f t02). The
+//                             0x392410 fade argument (0 / -1 = the event's own) is not modelled here.
 //   * remove(id)            - death or removal: forget the object, no request.
 //   * after the tick: requests() to the audio side, then clear_requests().
 #pragma once

@@ -3279,6 +3279,10 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
         }
     }
     out.energy_absorbed = energy_taken;
+    // cu8f t02 (CU8F_T01_T02_T07_RE.md §2.4): any positive absorption ("drained" is not "reached 0") with
+    // Projectile_Disables_Engines_When_Power_Drained disables the victim's engines for the projectile's duration.
+    if (energy_taken > 0.0f && pd->disables_engines_when_drained && hooks_)
+        hooks_->engines_drained(v.id, pd->disable_engines_duration, frame);
     float hx;
     if (sf != 0.0f) {
         hx = (sx - absorbed - energy_taken) / sf * hf;  // back to raw, then hull-armor space

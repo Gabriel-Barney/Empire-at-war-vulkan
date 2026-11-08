@@ -391,7 +391,9 @@ timer, not a combat test.
   (CD +0x108, `Depleted_Shield_Disable_Time`) and the nebula lockout (CD +0x104).
 - **The only writer of CD +0x110** is the behaviour update 0x636260, which is the `Disable_Force_Abilities_Range`
   emitter (type +0x53c, read as a float here although xml_field_tables lists the tag as int [M]). Every update it queries objects within that 3-D range of the emitter that
-  are not owned by the emitter's owner (GOM query 0x2a9ff0 mode 2 [M: "other owners"]). For each object that is
+  are not owned by the emitter's owner (GOM query 0x2a9ff0; corrected 2026-11-07, CU8F_T01_T02_T07_RE.md §3.1: the
+  first argument is the behaviour filter 0x02 SELECTABLE, not a "mode 2", and only objects that carry the
+  DISABLE_FORCE_ABILITIES behaviour emit, so `Rebel_Mobile_Shield_Generator` below does not). For each object that is
   alive (+0x3a0 bits 0x40, 0x80 and 0x02 clear), not a projectile (+0x33a = −1), has a model and a type, and owns at
   least one unit ability whose info-table entry has the **F (Force power)** column set (0x3986b0 × 0x43fa30 over
   types 0..0x4c), it stamps CD +0x110 := NOW.

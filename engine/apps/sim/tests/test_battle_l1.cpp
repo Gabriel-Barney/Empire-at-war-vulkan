@@ -379,6 +379,9 @@ Run run(const Data& d, int32_t workers, int follow = 0) {
             // Engines: 2 s timed disable on an Empire frigate.
             CHECK(b->disable_engines(slowed, 2.0f));
             out.engines_off = b->engines_online(slowed) == 0;
+            // cu8f t07 (CU8F_T01_T02_T07_RE.md §3.2): in space the owner of a TACTICAL_SUPER_WEAPON (the Underworld's
+            // L1_Death_Star) cannot retreat; the Empire can.
+            CHECK(b->retreat_prevented(1) && !b->retreat_prevented(0));
             CHECK(b->engines_online(weapon) == -1);
             // Teleport the frigate (store, movement, combat).
             CHECK(b->teleport(*tm, slowed, Vec3{-1000.0f, -2000.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f}));

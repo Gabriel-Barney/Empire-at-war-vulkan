@@ -254,6 +254,8 @@ int32_t BattleCatalog::projectile(uint32_t t, BuildState& s) const {
         p.ion_stun_shot_rate_reduction = ty.get_float(t, "Projectile_Ion_Stun_Shot_Rate_Reduction_Percent");
         p.energy_per_shot = ty.get_float(t, "Projectile_Energy_Per_Shot");
         p.does_energy_damage = ty.get_bool(t, "Projectile_Does_Energy_Damage");
+        p.disables_engines_when_drained = ty.get_bool(t, "Projectile_Disables_Engines_When_Power_Drained");  // cu8f t02
+        p.disable_engines_duration = ty.get_float(t, "Projectile_Disable_Engines_Duration");
         // --- OI abilities: detonation effects 0x4cb070 (TACTICAL_GAPS §1.10) ---
         p.ion_stun_stack_duration = ty.get_bool(t, "Projectile_Ion_Stun_Stack_Duration");
         p.ion_stun_radius = ty.get_float(t, "Projectile_Ion_Stun_Radius");

@@ -773,7 +773,8 @@ bool AbilitySystem::enabled(int32_t player, const SpecialAbilityDesc& s) const {
 }
 
 bool AbilitySystem::activate_by_name(Obj& o, uint32_t crc, ObjectId target, int32_t hp, uint32_t frame, uint8_t trigger) {
-    // SAP_Activate_By_Name (0x37b8a0): allowed in mode, enabled, apply.
+    // SAP_Activate_By_Name (0x37b8a0): allowed in mode, enabled, apply. cu8f t01: nothing while SAP +0x28 is set.
+    if (o.sap_disabled) return false;
     SpecialState* sp = special_by_crc(o, crc);
     if (!sp) return false;
     const SpecialAbilityDesc& s = data_->specials[sp->desc];
@@ -1215,7 +1216,8 @@ void AbilitySystem::update_special(Obj& o, SpecialState& sp, uint32_t frame) {
 }
 
 void AbilitySystem::sap_update(Obj& o, uint32_t frame) {
-    // 0x37da80: Abilities in list order; due ones updated, then rescheduled.
+    // 0x37da80: Abilities in list order; due ones updated, then rescheduled. cu8f t01: nothing while SAP +0x28 is set.
+    if (o.sap_disabled) return;
     for (SpecialState& sp : o.specials) {
         if (o.dead) return;
         const SpecialAbilityDesc& s = data_->specials[sp.desc];
@@ -1247,7 +1249,8 @@ void AbilitySystem::try_pending(Obj& o, uint32_t frame) {
 }
 
 void AbilitySystem::apply_automatic(Obj& o, uint32_t frame) {
-    // Automatic styles on unit add (3.1 event triggers) [M]; target = self.
+    // Automatic styles on unit add (3.1 event triggers) [M]; target = self. cu8f t01: none while SAP +0x28 is set.
+    if (o.sap_disabled) return;
     for (SpecialState& sp : o.specials) {
         const SpecialAbilityDesc& s = data_->specials[sp.desc];
         if (!style_automatic(s.style) || !allowed(s) || !enabled(o, s)) continue;
@@ -1592,8 +1595,55 @@ void AbilitySystem::set_locomotor_busy(ObjectId id, bool busy) {
     if (Obj* o = obj(id)) o->locomotor_busy = busy ? 1 : 0;
     combat_->set_flag(id, combat::kUnitLocomotorBusy, busy);
 }
-void AbilitySystem::set_abilities_disabled(ObjectId id, bool off) {
-    if (Obj* o = obj(id)) o->sap_disabled = off ? 1 : 0;
+void AbilitySystem::set_abilities_disabled(ObjectId id, bool off, uint32_t frame) {
+    // cu8f t01 (CU8F_T01_T02_T07_RE.md §1.2): SAP_Disable_All 0x37b9e0 / SAP_Enable_All 0x37d7f0.
+    Obj* o = obj(id);
+    if (!o || o->sap_disabled == (off ? 1 : 0)) return;
+    const auto automatic = [](ActivationStyle st) {
+        const auto v = static_cast<uint8_t>(st);
+        return (v >= 1 && v <= 5) || st == ActivationStyle::SkirmishAutomatic;
+    };
+    if (off) {
+        // Every enabled, mode-allowed special of an automatic style, list order: Cancel (remove-all, reason 2) on the
+        // owner, then its due-frame entry is dropped. [port] the register keeps the target for the Restore (restore);
+        // the due frame is left as it is (the enable re-staggers every interval special that is enabled then).
+        for (size_t i = 0; i < o->specials.size(); ++i) {
+            SpecialState& sp = o->specials[i];
+            const SpecialAbilityDesc& s = data_->specials[sp.desc];
+            if (!allowed(s) || !enabled(*o, s) || !automatic(s.style) || !sp.applied) continue;
+            const ObjectId was = sp.target != kNoObject ? sp.target : o->id;
+            remove_special(*o, sp, frame);
+            o = obj(id);  // remove_special never adds or erases objects; re-read for clarity
+            if (!o) return;
+            o->specials[i].restore = was;
+        }
+        o->sap_disabled = 1;
+        return;
+    }
+    o->sap_disabled = 0;  // first (the restores below go through the normal, now ungated, apply)
+    for (size_t i = 0; i < o->specials.size(); ++i) {
+        SpecialState& sp = o->specials[i];
+        const SpecialAbilityDesc& s = data_->specials[sp.desc];
+        if (!allowed(s) || !enabled(*o, s)) continue;
+        if (const int32_t iv = interval_of(s); iv > 0) {  // the SAP-init stagger (§4.3): one synced draw
+            const auto now = static_cast<int32_t>(frame);
+            sp.due = rng_ ? static_cast<uint32_t>(rng_->range_int(now, now + iv)) : frame;
+        }
+        const ObjectId t = sp.restore;
+        if (t == kNoObject) continue;
+        sp.restore = kNoObject;
+        // Restore 0x48e9e0: re-apply (slot 30) on a still-live registered target.
+        const Obj* to = obj(t);
+        const bool live = to && !to->dead && (!to->combat_unit || alive_unit(t));
+        if (!live || o->dead) continue;
+        apply(*o, sp, t, -1, frame);
+        o = obj(id);
+        if (!o) return;
+    }
+}
+bool AbilitySystem::abilities_disabled(ObjectId id) const {
+    const Obj* o = obj(id);
+    return o && o->sap_disabled != 0;
 }
 void AbilitySystem::set_corrupted(ObjectId id, bool on) {
     if (Obj* o = obj(id)) o->corrupted = on ? 1 : 0;
@@ -1778,7 +1828,7 @@ float AbilitySystem::lucky_shot(ObjectId source, ObjectId victim, int32_t& hardp
 bool AbilitySystem::damage_listener(ObjectId victim, ObjectId source, int32_t projectile_desc, uint32_t frame, SimRng* rng) {
     // 4.6: style Take_Damage abilities of the victim, list order; the first that applies cancels.
     Obj* o = obj(victim);
-    if (!o || o->specials.empty() || projectile_desc < 0 || !rng) return false;
+    if (!o || o->sap_disabled || o->specials.empty() || projectile_desc < 0 || !rng) return false;  // cu8f t01: SAP +0x28
     const combat::ProjectileDesc& pd = combat_->data().projectiles[static_cast<size_t>(projectile_desc)];
     for (SpecialState& sp : o->specials) {
         const SpecialAbilityDesc& s = data_->specials[sp.desc];
@@ -1983,6 +2033,10 @@ void AbilitySystem::hash(StateHasher& h) const {
             h.f32(sp.point.z);
             h.u32(static_cast<uint32_t>(sp.victims.size()));
             for (ObjectId v : sp.victims) h.i32(v);
+            if (sp.restore != kNoObject) {  // cu8f t01: only while a cancelled effect waits (keeps the old digests)
+                h.u32(0x52535452u);  // "RSTR"
+                h.i32(sp.restore);
+            }
         }
         // OI abilities: object state
         h.u32(o.heal_due);
