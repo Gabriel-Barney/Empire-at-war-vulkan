@@ -858,6 +858,18 @@ static void test_ai_stage_flood() {
         v.benefits_from_corruption = true;
         CHECK(ai_stage_flood(g, v, T, 2) == (L{B}));
     }
+    {  // a2l t03 level 4 "keep all" (A2L_T03_RE_ANSWERS Q3): a dangerous unheld target cuts the line; level 3 keeps the
+       // larger run [C, D], level 4 the union of the neighbours' runs in neighbour order.
+        galactic::PlayerView v = view_of({B, C, D});
+        v.dangerous = galactic::Bitset(5);
+        v.dangerous.set(T, true);
+        CHECK(ai_stage_flood(g, v, T, 3) == (L{C, D}));
+        CHECK(ai_stage_flood(g, v, T, 4) == (L{B, C, D}));
+        v.dangerous.set(T, false);  // T passes: B's run crosses it and holds everything, the union is the same list
+        CHECK(ai_stage_flood(g, v, T, 4) == ai_stage_flood(g, v, T, 3));
+        const galactic::PlayerView h = view_of({T, A, D, B});  // a held target: one BFS, keep-all changes nothing
+        CHECK(ai_stage_flood(g, h, T, 4) == ai_stage_flood(g, h, T, 3));
+    }
     {  // Fog: an AI player (not human) never enters an unrevealed planet (B is marked visited and skipped).
         galactic::PlayerView v = view_of({A, C});
         v.has_ai_system = true;

@@ -49,11 +49,13 @@ std::vector<PlanetIndex> ai_reach_flood(const galactic::PlanetGraph& graph, cons
 //   * otherwise one BFS from each neighbour of the target in edge order (ascending planet index) that is not yet
 //     visited and passes, with the visited marks shared; a neighbour that fails is marked visited. The run with
 //     strictly the most held planets is kept (the first wins ties). The target itself is not marked first.
+//     Level 4 ("keep all", A2L_T03_RE_ANSWERS Q3) [H]: every run appends instead, so the list is the union of the
+//     neighbours' runs in neighbour order. Only slot 5 and the ETA of level-4 goals read it; slot 6 / the stage at
+//     level 4 is the target itself.
 // BFS: the start is marked visited; each popped planet that is held is emitted; its unvisited neighbours (edge order)
 // are marked visited and queued when they pass. Pass (0x3f2400): an AI mover (has_ai_system, not human) needs the
 // planet revealed; then passable for the player (0x3f2510) -> flag 2, or corrupted with Benefits_From_Corruption, or
-// not dangerous; impassable -> flag 3 and (not dangerous or corrupted with the benefit). [M] the level-4 "keep all"
-// flag of the flood is not modelled (the stage at level 4 is the target itself and never reads the list).
+// not dangerous; impassable -> flag 3 and (not dangerous or corrupted with the benefit).
 // Node order (0x3f1c10): the GOM planet list = FindPlanet.Get_All_Planets order. `rank[p]` = p's position in that
 // order (sized to the graph); adjacency is walked in ascending rank. Empty rank = ascending planet index.
 std::vector<PlanetIndex> ai_stage_flood(const galactic::PlanetGraph& graph, const galactic::PlayerView& view,

@@ -86,11 +86,19 @@ std::vector<PlanetIndex> ai_stage_flood(const galactic::PlanetGraph& graph, cons
         bfs(target, best);
         return best;
     }
+    // Level 4 "keep all" (0x665160 -> 0x3f12e0 parameter 6 -> BFS parameter 7, A2L_T03_RE_ANSWERS Q3.1) [H]: every
+    // neighbour's BFS appends into the one output list (the visited marks are shared, so each planet once): the union in
+    // neighbour order instead of the largest run.
+    const bool keep_all = m == 4;
     std::vector<PlanetIndex> run;
     for (const PlanetIndex nb : adj[target]) {
         if (visited[nb]) continue;
         if (!passes(nb)) {
             visited[nb] = 1;
+            continue;
+        }
+        if (keep_all) {
+            bfs(nb, best);
             continue;
         }
         run.clear();
