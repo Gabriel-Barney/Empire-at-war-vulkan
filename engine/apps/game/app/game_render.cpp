@@ -374,8 +374,12 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
     scene_->set_objects_enabled(false);  // the battle's objects replace the placements
     scene_->set_runtime_decals_enabled(!space_);
     std::string e;
-    if (!scene_->load(*data.files, map, gpu.resolver.get(), jobs::make_parallel_for(*gpu.js), &e) ||
-        !scene_->start(gpu.renderer, *gpu.streamer, *gpu.cache, {}, &e)) {
+    bool ok = scene_->load(*data.files, map, gpu.resolver.get(), jobs::make_parallel_for(*gpu.js), &e);
+    // cu8g t02 (CU8G_T02_ENV_PICK_RE §1 / §2): the battle's environment (the map-load pick; a loaded save: the map's start
+    // index) before start(), which applies its lighting, clouds and skydomes.
+    env_wanted_ = b->environment_index();
+    if (ok) scene_->set_environment(env_wanted_);
+    if (!ok || !scene_->start(gpu.renderer, *gpu.streamer, *gpu.cache, {}, &e)) {
         if (err) *err = "battle map " + map + ": " + e;
         scene_.reset();
         return false;
@@ -404,9 +408,8 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
         return false;
     }
     prender_.set_sort_range(render::MapScene::kFar);
-    // cu8f t05 (CU8F_T03_T05_RE §2.2): the scene wind at map load (land: the active environment's, space: zero). The port
-    // has no host for Set_New_Environment / the typed environment pick yet (the Lua call is only recorded), so this is
-    // the only write.
+    // cu8f t05 (CU8F_T03_T05_RE §2.2): the scene wind at map load (land: the active environment's, space: zero); cu8g t03:
+    // rewritten by apply_environment after Set_New_Environment.
     prender_.set_wind(scene_->scene_wind());
     pattach_ = std::make_unique<render::particles::ProxyAttachments>(*pworld_, *plib_);
 #endif
@@ -619,9 +622,11 @@ void BattleView::capture(const GameSession& session) {
     const sim::SimHost& host = session.host();
     auto snap = std::make_shared<render::SimSnapshot>();
     const ParallelFor pf = jobs::make_parallel_for(*gpu_->js);
-    if (const sim::TacticalBattle* b = session.battle())  // S8 t31: every tick's cues, also when no snapshot is made
+    if (const sim::TacticalBattle* b = session.battle()) {  // S8 t31: every tick's cues, also when no snapshot is made
         if (const sim::TacticalMode* tm = host.modes().top_tactical())
             track_lob_chargeups(lob_chargeups_, tsw_cues(b->special_weapon_events(), tm->primary()));
+        env_wanted_ = b->environment_index();  // cu8g t03: Set_New_Environment (applied by prepare)
+    }
     if (!render::capture_snapshot(host, table_, *snap, pf)) return;
     if (const sim::TacticalBattle* b = session.battle()) {
         render::apply_battle_state(*b, *snap, &table_, &beam_styles_);  // R5: + the ability beam records
@@ -746,11 +751,24 @@ void BattleView::prepare(GpuCore& gpu, float alpha) {
         jam_models_.build(gpu.renderer, jam_tex, frame_, ground, main);
     }
     if (scene_) {
+        apply_environment();  // cu8g t03: before update(), which re-applies it on the GPU side
         scene_->update(gpu.renderer, *gpu.streamer);
         if (p.curr) scene_->set_sim_tick(p.curr->tick);
         sky.assign(scene_->sky().begin(), scene_->sky().end());
     }
     sky.insert(sky.end(), bg_.begin(), bg_.end());
+}
+
+// cu8g t03 (CU8G_T02_ENV_PICK_RE §5): the battle's environment changed (Set_New_Environment): lighting / fog / bloom /
+// shadow colour and land clouds through MapScene (GPU side on its next update; the skydomes stay), the particle wind from
+// the new environment (land; space stays zero).
+// use_scene() hands the new lighting to the renderer each frame as well.
+void BattleView::apply_environment() {
+    if (!scene_ || env_wanted_ == scene_->environment_index()) return;
+    if (!scene_->set_environment(env_wanted_)) return;
+#ifdef ALAMO_PARTICLES_HAVE_SIM
+    if (prender_.initialized()) prender_.set_wind(scene_->scene_wind());
+#endif
 }
 
 // R5 fog of war: the latest snapshot's copy of the local player's grid (an empty input disables the world's fog).

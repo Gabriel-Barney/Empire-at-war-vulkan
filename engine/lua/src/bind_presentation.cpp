@@ -6,7 +6,8 @@
 // Argument contracts and messages: docs/re/LUA_API.md "Binding map" (the original's own strings).
 // Behaviour the docs do not give is marked [inferred].
 // Exception (story t12): Resume_Hyperspace_In also clears the host's reinforcement hold through
-// TacticalScriptHooks::resume_hyperspace_in (script_gaps.hpp) when a tactical host installed it.
+// TacticalScriptHooks::resume_hyperspace_in (script_gaps.hpp) when a tactical host installed it; likewise (cu8g t03)
+// Set_New_Environment changes the mode's environment through TacticalScriptHooks::set_new_environment.
 #include <string>
 
 #include "alamo/lua/object_bridge.hpp"
@@ -335,9 +336,15 @@ int g_set_cinematic_environment(Call& c) {
     return 0;
 }
 
-// No contract strings, no shipped call sites: recorded as is. [inferred]
+// Set_New_Environment(int) (0x5448a0; LUA_API.md contract strings; no shipped call sites): recorded, then (cu8g t03)
+// the tactical host's TacticalScriptHooks::set_new_environment with the int argument (the mode clamps it,
+// CU8F_T03_T05_RE §2.2). [port] the number is truncated toward zero like every int argument (detail::to_int).
 int g_set_new_environment(Call& c) {
+    if (!c.has(1)) return c.script_error_stop("LuaSetNewEnvironment -- Expected int parameter 1");
+    if (!c.is_number(1)) return c.script_error_stop("LuaSetNewEnvironment -- invalid type for parameter 1. Expected int.");
     record(c, PresentationOp::SetNewEnvironment);
+    if (ObjectBridge* b = c.vm->owner ? attached_object_bridge(*c.vm->owner) : nullptr; b && b->tactical && b->tactical->set_new_environment)
+        b->tactical->set_new_environment(detail::to_int(c.number(1)));
     return 0;
 }
 

@@ -519,6 +519,7 @@ void test_weather() {
     WeatherSystem w;
     SimRng rng(77u), ref(77u);
     w.start(data.find("Rain_Test"), &data, 100, rng);
+    ref.range_float(3.0f, 10.0f);  // cu8g t02 (CU8G_T02_ENV_PICK_RE §4): the start draws twice, the second timer stays
     const float len0 = ref.range_float(3.0f, 10.0f) * 30.0f;
     CHECK(w.active() && w.type() == WeatherType::Clear && w.phase_index() == 0 && rng == ref);
     CHECK_EQ(w.accuracy_modifier(7), 1.0f);  // I <= 0.5: the CLEAR block

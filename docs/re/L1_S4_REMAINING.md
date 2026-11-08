@@ -537,6 +537,8 @@ type, intensity +0x448 := `Emitter_Intensity`, transition flag +0x454 := 0, weat
 Duration) × FPS frames; environment lightning (record +0x138) := `Lightning_Intensity`; fog-plane alpha
 (record +0xfc, when the record has a fog plane +0xf8) := `Fog_Plane_Interpolation_Alpha`; emitter
 intensity := `Emitter_Intensity`. The `emitter_name` particle is added to the scene.
+**Correction (2026-11-08, CU8G_T02_ENV_PICK_RE §4):** a (re-)init with phases runs the start phase **twice** (2 synced
+draws; the second timer stays); only the advance / `Force_Weather` costs one.
 
 **Service** (0x46a0c0, from land-mode service 0x3bb440 when land mode +0x328 ≠ 0):
 1. Return unless re-init (force 0) reports a scenario and a current phase.

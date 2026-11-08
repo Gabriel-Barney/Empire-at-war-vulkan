@@ -231,6 +231,10 @@ private:
     GpuCore* gpu_ = nullptr;
     const objects::GameObjectTypes* types_ = nullptr;  // S8 t31: the lobbing XML tags
     std::vector<TswCue> lob_chargeups_;               // S8 t31: track_lob_chargeups (battle_fx.hpp)
+    // cu8g t03: the battle's active environment at the last capture (TacticalBattle::environment_index); prepare()
+    // re-applies it on the scene (MapScene::set_environment) and the particle wind when it changed.
+    uint32_t env_wanted_ = 0;
+    void apply_environment();
     bool space_ = true;
     bool blocking_models_ = false;
     int32_t local_ = 0;

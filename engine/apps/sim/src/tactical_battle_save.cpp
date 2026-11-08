@@ -226,6 +226,12 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
                 state_io(restore, *this);
                 return false;
             }
+            // cu8g t02 (CU8G_T02_ENV_PICK_RE §2): the environment is not saved; a loaded battle shows the map's start
+            // environment (mini 25 through vf25's clamp), without a draw. [port] The saved weather state is kept and counts
+            // as bound to it (no restart at the next land tick); retail's forced weather rebinds on load (2 + 2 synced
+            // draws and one advance [M]) are not modelled.
+            if (!set_environment(static_cast<int32_t>(map_.environments.start_index))) env_index_ = 0;
+            l1_weather_env_ = env_index_;
             // The combat hooks' tick context (the synced RNG + the global frame of the last battle tick) is used by
             // command-phase hooks before the next battle tick: as in the saving run.
             resume_tick_context();

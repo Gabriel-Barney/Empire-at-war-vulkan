@@ -178,7 +178,10 @@ void CSUpdate(uint3 gid : SV_GroupID, uint3 lid : SV_GroupThreadID) {
     p.pos_age.w += dt;
     if ((d.flags.x & kFWeather) != 0u) {
         if (p.pos_age.w >= p.vel_life.w) p.pos_age.w = fmod(p.pos_age.w, p.vel_life.w);
+        // Weather step (CU8G_T02_ENV_PICK_RE §6, 0x163a90): u = v (+ inherit factor x E) (+ wind x 5); position += u x dt;
+        // the stored velocity v is not changed. E = the emitter's velocity (vel_d.xyz), refreshed per update.
         float3 v = p.vel_life.xyz;
+        if (d.motion.z != 0.0) v = e.vel_d.xyz * d.motion.z + v;  // inherit velocity (0x43 / 0x28; off in vanilla)
         if ((d.flags.x & kFWind) != 0u) v += FC.wind.xyz * 5.0;  // weather: velocity + wind x 5 (B.4)
         p.pos_age.xyz += v * dt;
         Particles[idx] = p;
@@ -248,7 +251,8 @@ void CSSpawn(uint3 tid : SV_DispatchThreadID) {
     if (!local_space) {
         pos = xform_point(m, pos);
         vel = xform_dir(m, vel);
-        if (d.motion.z != 0.0) vel += e.vel_d.xyz * d.motion.z;  // inherit velocity
+        // Inherit velocity; weather particles add it per step instead (CSUpdate), never into the stored velocity.
+        if (d.motion.z != 0.0 && (d.flags.x & kFWeather) == 0u) vel += e.vel_d.xyz * d.motion.z;
     }
     // Pre-age (back-filled event): closed-form constant-acceleration step.
     const float t = r.pre_age;

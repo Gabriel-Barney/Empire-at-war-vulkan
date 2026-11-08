@@ -383,15 +383,35 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   the start environment's `Environment::wind_vector()` (`2C` · (cos w, sin w, 0), w = `2B` degrees), space = (0, 0, 0);
   no per-frame re-apply. The GPU update already matched §2.3 (wind-affected: velocity += wind · 0.5 · dt; weather
   particles step with velocity + 5 · wind). [port] a land map without environments gets the record ctor default (0°,
-  2.0). ⬜ Open: (1) `Set_New_Environment` and the typed random environment pick (vf25 / vf27) have no host in the port
-  (the Lua call is only recorded, `bind_presentation.cpp`), so the wind is never rewritten after map load; wire it when a
-  host applies environment changes (lighting, fog, clouds, sky too). (2) **Map-load environment pick not ported**: retail
-  picks the active environment at every normal map load (land and space) with one **synced** `int(0, n − 1)` when the map
-  has more than one environment, skipping a record named `Cinematic` (next one, wrapping to 0); a base-map reload keeps
-  the stored index (§2.2). The port always uses the stored start index (mini `25`): render `MapScene`, and the sim's
-  weather start (`TacticalBattle::l1_weather_tick`). Not ported here because the draw's position in the synced stream is
-  not traced (before or after the map's own load draws, e.g. `Map_Load_Spawn_Table`, and whether the land-mode creation
-  call 0x3b81b0 draws too); porting it moves every battle golden on a map with several environments and needs the
-  chosen index in the battle save (state version) and passed to the render host. (3) The `+0x10dc / +0x10e0` inherit term
-  of the weather-particle step (§2.3, [M]) is not in the port's shader. Env mini `13` = weather type is recorded in
-  TERRAIN_WATER_POST §5.2 (`Environment::field_13`); nothing in the port reads it yet.
+  2.0). Open items (1) ~~`Set_New_Environment` and the typed pick have no host~~, (2) ~~map-load environment pick not
+  ported~~ and (3) ~~weather-particle inherit term~~: all done in cu8g t02 / t03 (below). Env mini `13` = weather type is
+  recorded in TERRAIN_WATER_POST §5.2 (`Environment::field_13`); cu8g t03's typed pick reads it.
+- 🟡 **PARTLY DONE** · CU8G t02 / t03 (2026-11-08, environment pick and changes, spec `docs/re/CU8G_T02_ENV_PICK_RE.md`):
+  **t02** `TacticalBattle::setup` picks the active environment right after `bt_map_load` (chunk-0x102 objects and their
+  spawn-table draws) and before every post-load step (pad restore, skirmish base, starbase / structures / start forces):
+  `pick_environment` = 0x277030, one synced `int(0, n − 1)` when n ≠ 1, a record named exactly `Cinematic`
+  (case-sensitive) -> the next one wrapping to 0, no re-check; land and space (`_MP_SPACE_KUAT` draws once and always
+  ends on `Environment 1`). No draw at mode creation. The index (`env_index_`) is **not saved and not hashed** (its only
+  logic effect is the land weather restart, visible in the weather state and the RNG on the next land tick); no state
+  version bump. The weather (re)start (`WeatherSystem::start`) now runs the start phase's draw **twice** (§4; the second
+  timer stays, one `PhaseStarted` event); the advance / `Force_Weather` keeps one. alamo_game's `BattleView` sets the
+  battle's index on `MapScene` before `start()`, so lighting, clouds, wind and skydomes are the picked environment's.
+  **t03** Lua `Set_New_Environment(int)` checks its LUA_API contract strings, records, and calls
+  `TacticalScriptHooks::set_new_environment` (story VMs and AI VMs) -> `TacticalBattle::set_environment` = vf25: clamp to
+  [0, n − 1], no draw. Land weather: `l1_weather_tick` compares the active index with the one it started for; a change
+  restarts the weather on the next service with the new environment's scenario (2 draws with phases; none / no phases ->
+  off and the all-1 accuracy row); the same index re-inits nothing. Space: index only. Render: `MapScene::set_environment`
+  after `start()` re-applies lighting (lights, SH, ambient, fog, bloom, shadow colour, clear colour) and on land the clouds
+  (new `WorldRenderer::set_clouds`: scale / velocity at once, a different texture uploaded and swapped in once resident);
+  the load-time skydomes stay (their lighting fields are kept); `scene_wind()` follows (land; space zero) and
+  `BattleView` rewrites `ParticleRenderer::set_wind`. Typed pick (vf27, no caller in retail or the port):
+  `set_environment_of_weather_type(type, rng)`: the records whose `13` == type (type ≤ 4), m = 1 -> it, m ≥ 2 -> one synced
+  `int(0, m − 1)`, no Cinematic skip; m = 0 / type > 4 -> `pick_environment`. Weather particles (§6): the weather step adds
+  `inherit_velocity_factor · E` (emitter velocity) when `inherit_velocity` is set, before the wind term, without changing
+  the stored velocity; the spawn-time inherit add is skipped for weather particles (off in all vanilla weather emitters).
+  [port] choices: a battle save load takes the map's start index (vf25 clamp, no draw) and keeps the saved weather state
+  as bound to it (no restart); retail's forced weather rebinds on load (2 + 2 draws and an advance [M]) are not modelled.
+  A map without environments (synthetic) never draws and ignores Set_New_Environment (retail: the default record, n = 1).
+  An environment without a cloud texture keeps the drawn one. `alamo_render --sim` has no battle and keeps the map's
+  start environment. ⬜ Open: Gabriel's probes P1 (draw order), P2 (save reload shows the start environment), P3 (Kuat)
+  of CU8G_T02_ENV_PICK_RE §7.
