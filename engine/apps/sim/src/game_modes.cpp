@@ -103,9 +103,7 @@ bool GameMode::read_state(ByteReader& r) {
 
 // ------------------------------------------------------------------------------------ GalacticMode
 GalacticMode::GalacticMode(const objects::GameObjectTypes& types, objects::IdCounter& ids)
-    : GameMode(ModeKind::Galactic, types, ids) {
-    next_income_frame_ = income_interval_;
-}
+    : GameMode(ModeKind::Galactic, types, ids) {}
 
 GalacticMode::~GalacticMode() = default;
 
@@ -145,24 +143,20 @@ void GalacticMode::tick(const ModeTickContext& ctx) {
         trace(ctx, "galactic.end");
         return;
     }
-    // No GalacticSim attached (tests only): the common tick FIRST in galactic mode (MAIN_LOOP.md §3.2), nothing else.
-    // cu9 t14: the pre-S3 income stand-in is gone (GalacticSim owns the fiscal cycle); income_interval_ /
-    // next_income_frame_ / income_events_ stay as hashed and saved constants until the next golden regeneration.
+    // No GalacticSim attached (tests only): the common tick FIRST in galactic mode (MAIN_LOOP.md §3.2), nothing else
+    // (cu9 t14 / cu9f t01: the pre-S3 income stand-in and its hashed / saved state are gone; GalacticSim owns the fiscal cycle).
     common_tick(ctx);
     trace(ctx, "galactic.end");
 }
 
 void GalacticMode::hash(StateHasher& h) const {
     GameMode::hash(h);
-    h.u32(income_interval_);
-    h.u64(next_income_frame_);
-    h.u64(income_events_);
     h.u32(pause_count_);
 }
 
 void GalacticMode::write_state(ByteWriter& w) const {
     GameMode::write_state(w);
-    w.u32(income_interval_).u64(next_income_frame_).u64(income_events_).u32(pause_count_).boolean(sim_ != nullptr);
+    w.u32(pause_count_).boolean(sim_ != nullptr);
 }
 
 bool GalacticMode::read_state(ByteReader& r) {
@@ -170,16 +164,11 @@ bool GalacticMode::read_state(ByteReader& r) {
     constexpr size_t kGameModeStateBytes = 1 + 8 + 8 + 8 + 1 + 1;  // GameMode::write_state
     ByteReader probe = r;
     (void)probe.raw(kGameModeStateBytes);
-    const uint32_t interval = probe.u32();
-    const uint64_t next_income = probe.u64(), events = probe.u64();
     const uint32_t pauses = probe.u32();
     const bool has_sim = probe.boolean();
-    if (!probe.ok() || interval == 0 || has_sim != (sim_ != nullptr)) return false;
+    if (!probe.ok() || has_sim != (sim_ != nullptr)) return false;
     if (!GameMode::read_state(r)) return false;
     r = probe;
-    income_interval_ = interval;
-    next_income_frame_ = next_income;
-    income_events_ = events;
     pause_count_ = pauses;  // not re-pushed into the GalacticSim (its pause state is its own chunk)
     return true;
 }
