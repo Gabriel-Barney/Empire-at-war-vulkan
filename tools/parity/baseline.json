@@ -1,5 +1,5 @@
 {
- "commit": "506bc545",
+ "commit": "b4da58e1",
  "scenarios": {
   "geonosis_skirmish": {
    "references": [
@@ -48,6 +48,7 @@
   },
   "hotm_galactic": {
    "references": [
+    "20261108-170824-galactic-vanilla-lua",
     "20261030-061228-galactic-vanilla-lua",
     "20261027-101057-galactic-vanilla"
    ],
@@ -84,7 +85,7 @@
     "diag.rng_draws_total": "INFO",
     "econ.credits_at_13500[Empire]": "PASS",
     "econ.credits_at_13500[Rebel]": "FAIL",
-    "econ.credits_at_13500[Underworld]": "FAIL",
+    "econ.credits_at_13500[Underworld]": "PASS",
     "econ.credits_at_4500[Empire]": "PASS",
     "econ.credits_at_4500[Rebel]": "PASS",
     "econ.credits_at_4500[Underworld]": "FAIL",
@@ -106,7 +107,7 @@
     "econ.income_cycle1[Underworld]": "FAIL",
     "econ.income_mean[Empire]": "PASS",
     "econ.income_mean[Rebel]": "PASS",
-    "econ.income_mean[Underworld]": "FAIL",
+    "econ.income_mean[Underworld]": "PASS",
     "outcome.captures[Empire]": "PASS",
     "outcome.captures[Rebel]": "PASS",
     "outcome.captures[Underworld]": "PASS",
@@ -121,6 +122,7 @@
     "travel.hop_ticks[Rebel:KASHYYYK->FELUCIA]": "PASS",
     "travel.hop_ticks[Rebel:KASHYYYK->KUAT]": "PASS",
     "travel.hop_ticks[Rebel:KASHYYYK->NALHUTTA]": "FAIL",
+    "travel.hop_ticks[Rebel:KUAT->CORELLIA]": "PASS",
     "travel.hop_ticks[Rebel:KUAT->KASHYYYK]": "PASS",
     "travel.hop_ticks[Rebel:MONCALIMARI->SHOLA]": "PASS",
     "travel.hop_ticks[Rebel:NABOO->SHOLA]": "FAIL",
@@ -161,12 +163,12 @@
      "INFO": 1
     },
     "income": {
-     "FAIL": 7,
-     "PASS": 18
+     "FAIL": 5,
+     "PASS": 20
     },
     "timing": {
      "FAIL": 8,
-     "PASS": 37
+     "PASS": 38
     }
    }
   }

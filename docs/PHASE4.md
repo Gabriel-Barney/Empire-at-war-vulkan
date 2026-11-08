@@ -329,6 +329,13 @@ regressions; all 13 new FAILs come from the narrower envelope, among them `ai.fl
 `ai.fleet_targets[Rebel]` overlap 0.23 (retail shuttles Shola / Naboo), `ai.build_mix[Rebel]` 0.44 (retail builds 22
 infantry squads, the port 2). `ai.build_count[Rebel]` is 40 vs retail 50 (PASS, tol 12.5).
 
+**2026-11-08 (q2f t10): `hotm_galactic` uses 3 retail runs again.** The fixed Lua probe's rerun
+`20261108-170824-galactic-vanilla-lua` is clean (no record gaps, retail AI undisturbed) and was added. `baseline.json`
+re-recorded at `b4da58e1` (engine = dev `432b502e`, after a2l): 0 regressions against dev's baseline (`506bc545`),
+2 improved (`econ.credits_at_13500[Underworld]`, `econ.income_mean[Underworld]`). Note: `ai.build_count[Rebel]` is 19
+vs retail 50..51 at this engine (it was 40 at `03940b96`; already FAIL in the `506bc545` baseline), Rebel fleet
+departures 16 vs 55..63. Findings for q2f t09: `docs/re/Q2F_T09_REBEL_PRODUCTION.md`, "2026-11-08 rerun".
+
 | scenario | timing | income | AI choices | battle outcomes | damage |
 |---|---|---|---|---|---|
 | `hotm_galactic` (2 retail runs) at `207ba0b8` (q4hf t04 + q2f t08) | 46 PASS / 8 FAIL | 15 / 10 | 13 / 3 (1 N/A) | 7 / 0 | - |
