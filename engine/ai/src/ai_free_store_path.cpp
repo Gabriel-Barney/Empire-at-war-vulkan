@@ -113,6 +113,20 @@ bool free_store_path_passes(int32_t sum, float threshold) {
     return static_cast<float>(high * 100u) <= threshold;
 }
 
+double ai_reach_path_cost(std::span<const uint32_t> hop_weights, size_t path_size, int level) {
+    int32_t sum = -1;
+    if (path_size > 0) {
+        const size_t end = level == 4 ? (path_size >= 2 ? path_size - 2 : 0) : path_size - 1;
+        const size_t count = std::min<size_t>({size_t{1000}, end, hop_weights.size()});
+        uint32_t s = 0;  // int32 wrapping add, done in uint32
+        for (size_t i = 0; i < count; ++i) s += hop_weights[i];
+        sum = static_cast<int32_t>(s);
+    }
+    const bool strict = level == 0 || level == 2 || level == 3 || level == 4 || level == 6;
+    if (!free_store_path_passes(sum, strict ? 1e-4f : 1e18f)) return kReachNone;
+    return static_cast<double>(static_cast<uint32_t>(sum) & 0xFFFFu) / 10.0;
+}
+
 int32_t orbit_owner(bool has_starbase, int32_t planet_owner, std::span<const OrbitFleet> orbit) {
     if (has_starbase) return planet_owner;
     for (const OrbitFleet& f : orbit)

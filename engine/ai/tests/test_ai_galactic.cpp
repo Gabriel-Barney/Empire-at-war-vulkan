@@ -3868,6 +3868,26 @@ static void test_free_store_path_rules() {
     CHECK(free_store_path_sum(std::vector<uint32_t>{0u, 0u}, 2) == 0 && free_store_path_passes(0));  // src == dst
     std::vector<uint32_t> long_path(1500, 1u);
     CHECK(free_store_path_sum(long_path, 1500) == 1000);  // at most 1000 hops summed
+    // a2l t03: Reachable_Target's slot 7 (0x663810, A2L_T03_RE_ANSWERS Q1.2) per level.
+    {
+        const std::vector<uint32_t> free2{gal::pack_edge_weight(0u, 7u), 0u};  // A -> B, no node cost, hop 7
+        const std::vector<uint32_t> cost2{gal::pack_edge_weight(1u, 7u), 0u};  // node cost 1 on the destination
+        const std::vector<uint32_t> cost3{gal::pack_edge_weight(0u, 5u), gal::pack_edge_weight(1u, 7u), 0u};
+        for (const int lv : {0, 2, 3, 6}) {
+            CHECK(ai_reach_path_cost(free2, 2, lv) == 0.7);
+            CHECK(ai_reach_path_cost(cost2, 2, lv) == kReachNone && ai_reach_path_cost(cost3, 3, lv) == kReachNone);
+            CHECK(ai_reach_path_cost({}, 0, lv) == kReachNone);  // no path
+        }
+        // Level 4 does not count the final hop: the destination's node cost is ignored.
+        CHECK(ai_reach_path_cost(cost2, 2, 4) == 0.0 && ai_reach_path_cost(cost3, 3, 4) == 0.5);
+        const std::vector<uint32_t> cost3b{gal::pack_edge_weight(1u, 5u), gal::pack_edge_weight(0u, 7u), 0u};
+        CHECK(ai_reach_path_cost(cost3b, 3, 4) == kReachNone && ai_reach_path_cost({}, 0, 4) == kReachNone);
+        // Levels 1, 5, 10 (and the unloaded 7 to 9) accept every path, an empty one included.
+        for (const int lv : {1, 5, 7, 8, 9, 10}) {
+            CHECK(ai_reach_path_cost(cost2, 2, lv) == 0.7 && ai_reach_path_cost(cost3, 3, lv) == 1.2);
+            CHECK(ai_reach_path_cost({}, 0, lv) < kReachNone);
+        }
+    }
     // 0x3f9270.
     const OrbitFleet tr{1, true}, other{2, false}, mine{0, false};
     CHECK(orbit_owner(true, 5, std::vector<OrbitFleet>{mine}) == 5);
@@ -4035,11 +4055,37 @@ static void test_free_store_world() {
     const uint64_t d0 = pw.rng->synced().draws();
     CHECK(world.reachable_target(0, "One", "Friendly", "Friendly_Only", 1.0) == 0);  // ties keep the first, no draw
     CHECK(pw.rng->synced().draws() == d0);
-    CHECK(world.reachable_target(0, "One", "Neutral", "Friendly_Only", 0.1) == -1);  // unowned: not reachable
-    CHECK(world.reachable_target(0, "One", "Neutral", "Enemy_Destination", 0.1) == 2);
-    CHECK(pw.rng->synced().draws() == d0);  // one candidate: no draw
     const int32_t pick = world.reachable_target(0, "One", "Friendly", "Friendly_Only", 0.1);
     CHECK((pick == 0 || pick == 1) && pw.rng->synced().draws() == d0 + 1);  // two candidates, p < 1: one draw
+    // a2l t03 (A2L_T03_RE_ANSWERS Q1): without argument 6 there is no reachability test (the player-level flood above is
+    // not read), so an unowned planet is a Friendly_Only candidate; with a source the candidate's slot 7 from the
+    // source's planet decides: P3 (the neutral frigate's node cost) and P7 (the starbase) fail the zero-cost path test
+    // from P0 at Friendly_Only, and pass at Any (threshold 1e18).
+    CHECK(world.reachable_target(0, "One", "Neutral", "Friendly_Only", 1.0) == 2);
+    CHECK(world.reachable_target(0, "One", "Enemy", "Friendly_Only", 1.0) == 6);
+    auto slot7 = [&](PlanetIndex from, PlanetIndex to, int level) {
+        if (from == to) return 0.0;
+        std::vector<PlanetIndex> path;
+        std::vector<uint32_t> wts;
+        world.path_finder(0)->get_path(from, to, path, &wts);
+        return ai_reach_path_cost(wts, path.size(), level);
+    };
+    CHECK(slot7(0, 3, 0) == kReachNone && slot7(0, 7, 0) == kReachNone && slot7(0, 1, 0) < kReachNone);
+    auto first_pass = [&](std::initializer_list<PlanetIndex> cands, PlanetIndex from, int level) -> int32_t {
+        for (const PlanetIndex c : cands)
+            if (slot7(from, c, level) < kReachNone) return static_cast<int32_t>(c);
+        return -1;
+    };
+    CHECK(world.reachable_target(0, "One", "Neutral", "Friendly_Only", 1.0, 0) == first_pass({2, 3, 4, 5}, 0, 0));
+    CHECK(world.reachable_target(0, "One", "Neutral", "Friendly_Only", 1.0, 0) != 3);
+    CHECK(world.reachable_target(0, "One", "Enemy", "Friendly_Only", 1.0, 0) == first_pass({6, 7}, 0, 0));
+    CHECK(world.reachable_target(0, "One", "Enemy", "Friendly_Only", 1.0, 0) != 7);
+    CHECK(world.reachable_target(0, "One", "Enemy", "Any", 1.0, 0) == 6);
+    CHECK(world.reachable_target(0, "One", "Friendly", "Friendly_Only", 1.0, 1) == 0);  // P1 -> P0 is free; P1 itself is 0
+    CHECK(world.reachable_target(0, "One", "Friendly", "Friendly_Only", 1.0, 99) == -1);  // no source planet: 1e18 for all
+    // Argument 7: the 3-D distance from the source planet, after Evaluate.
+    CHECK(world.reachable_target(0, "One", "Friendly", "Any", 1.0, 1, 1.0) == 1);
+    CHECK(pw.rng->synced().draws() == d0 + 1);
 }
 
 // cu8f t04b (CU8F_T04_T06_RE §2.2 step 4): the free-store auto-land of an AI ground unit sitting in an orbiting fleet runs
@@ -5405,7 +5451,8 @@ static void test_foc_data() {
         CHECK(world.reach_planets(pi, 5).size() >= r0.size());
         for (const char* fn : {"Space_Priority_Defense_Score", "Low_Space_Defense_Score", "Ground_Priority_Defense_Score", "One"}) {
             const int32_t t = world.reachable_target(pi, fn, "Friendly", "Friendly_Only", 0.1);
-            CHECK(t == -1 || std::find(r0.begin(), r0.end(), static_cast<PlanetIndex>(t)) != r0.end());
+            // a2l t03: no argument 6, so no reachability test; the Friendly application alone keeps it held.
+            CHECK(t == -1 || gal::PlayerView::bit(view.held_by_ally, static_cast<PlanetIndex>(t), false));
         }
         uint32_t pairs = 0, pass = 0, blocked = 0;
         std::vector<PlanetIndex> path;

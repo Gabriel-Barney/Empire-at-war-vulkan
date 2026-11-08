@@ -64,6 +64,16 @@ int32_t free_store_path_sum(std::span<const uint32_t> hop_weights, size_t path_s
 // 0x6913a0 with the move's threshold (field +0x60 read as a float; mode 0 -> 0.0f).
 bool free_store_path_passes(int32_t sum, float threshold = 0.0f);
 
+// a2l t03: PlanetReachabilityClass slot 7 (0x663810, A2L_T03_RE_ANSWERS Q1.2) [H] on an AI all-pairs path from the
+// source planet to the target, `path_size` planets long with `hop_weights`, at AI level `level`. The path is accepted by
+// 0x6913a0 when float(((uint32)S >> 16) x 100) <= the level's threshold, S = the wrapping int32 sum of the hop weights
+// [0, min(1000, path_size - 1)) (empty path: -1), or [0, path_size - 2) at level 4 (the final hop is not counted):
+//   levels 0, 2, 3, 4, 6: 1e-4; levels 1, 5, 10: 1e18 (always accepted, even without a path);
+//   levels 7, 8, 9: GameConstants 0x140b16d7c / d80 / d84 [port: not loaded; 1e18, L: no galactic caller passes them].
+// Accepted: (low 16 bits of S) / 10; rejected: kReachNone. The source == target case (0) is the caller's.
+inline constexpr double kReachNone = 1e18;
+double ai_reach_path_cost(std::span<const uint32_t> hop_weights, size_t path_size, int level);
+
 // 0x3f9270: with a starbase, the planet's owner; else the owner of the first orbiting fleet (arrival order) whose
 // transient test 0x3a9760 is false, or the first one's owner when all pass it; kNoPlayer (-1) when no fleet orbits.
 // `orbit` = (owner, transient) per orbiting fleet with fleet state < 3, in orbit order.

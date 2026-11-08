@@ -1801,23 +1801,38 @@ int32_t GalacticAiWorld::Impl::find_target(int32_t script, const lua::AiFindTarg
     const uint32_t flags = parse_application_flags(r.application, &ok);
     Reachability reach = Reachability::Any;
     if (!r.reachability.empty()) parse_reachability(r.reachability, reach);
-    const int m = std::min(5, static_cast<int>(reach));
-    // Reachable_Target's filter (FIXPASS_GALACTIC §1.1): the source-planet list of the level (the reachability flood
-    // 0x665160 -> 0x3f12e0 under the level's request flags, cached up to 10 x FPS frames). Friendly_Only keeps only
-    // planets held by the player or an ally (flag 4 clear, §1.4).
-    std::vector<uint8_t> keep;
-    if (!r.reachability.empty()) {
-        keep.assign(sim.planets().size(), 0);
-        for (const PlanetIndex k : pa->source_planets(m))
-            if (k < keep.size()) keep[k] = 1;
-    }
+    // Reachable_Target (0x698360, A2L_T03_RE_ANSWERS Q1.1) [H]: the reachability test runs only when argument 6 gives a
+    // source; it is the candidate's slot 7 (0x663810, Q1.2) from the source's planet at the level of argument 4, and a
+    // result of 1e18 skips the candidate. No argument 6: no reachability test (slot 5 / the player-level flood are not
+    // read). A source that resolves to no planet (an object in transit) gives 1e18 for every candidate. Plain FindTarget
+    // has neither.
+    const bool reachable = !r.reachability.empty();
+    const bool have_source = reachable && r.relative.present;
+    const PlanetIndex source = have_source ? planet_arg(r.relative) : kInvalidPlanet;
+    const AiPathFinder* finder = have_source && valid_planet(source) ? ensure_path_finder(player) : nullptr;
+    auto slot7 = [&](PlanetIndex t) -> double {
+        if (!valid_planet(source) || !finder || !finder->created()) return kReachNone;
+        if (source == t) return 0.0;
+        std::vector<PlanetIndex> path;
+        std::vector<uint32_t> wts;
+        finder->get_path(source, t, path, &wts);
+        return ai_reach_path_cost(wts, path.size(), static_cast<int>(reach));
+    };
+    // Range test (argument 7, Q1.1 step 4): 3-D distance^2 from the candidate to the source position, after Evaluate.
+    // [M] the source object's position is taken as its planet's.
+    const double range = have_source && r.max_distance > 0.0 ? r.max_distance : 0.0;
     std::vector<int32_t> cand;
     std::vector<double> value;
     for (uint32_t t = 0; t < sim.planets().size(); ++t) {  // the target list order (planet order)
         if (!applies(player, static_cast<int32_t>(t), flags)) continue;
-        if (!keep.empty() && !keep[t]) continue;
+        if (have_source && slot7(static_cast<PlanetIndex>(t)) >= kReachNone) continue;
         double v = 0.0;
         if (!evaluate(player, pa->ctx.opponent, r.perception, static_cast<int32_t>(t), v)) continue;
+        if (range > 0.0 && valid_planet(source)) {
+            const Vec3 a = sim.planets()[t].position, b = sim.planets()[source].position;
+            const double dx = static_cast<double>(a.x) - b.x, dy = static_cast<double>(a.y) - b.y, dz = static_cast<double>(a.z) - b.z;
+            if (dx * dx + dy * dy + dz * dz > range * range) continue;
+        }
         cand.push_back(static_cast<int32_t>(t));
         value.push_back(v);
     }
@@ -2364,7 +2379,8 @@ void GalacticAiWorld::set_free_store_owner(objects::ObjectHandle unit, int32_t p
 }
 
 int32_t GalacticAiWorld::reachable_target(int32_t player, std::string_view perception, std::string_view application,
-                                          std::string_view reachability, double probability) {
+                                          std::string_view reachability, double probability, PlanetIndex source,
+                                          double max_distance) {
     if (!impl_->player_ai(player)) return -1;
     lua::AiFindTargetRequest r;
     r.source.present = true;
@@ -2373,6 +2389,11 @@ int32_t GalacticAiWorld::reachable_target(int32_t player, std::string_view perce
     r.application = std::string(application);
     r.reachability = std::string(reachability);
     r.probability = probability;
+    if (source != kInvalidPlanet) {
+        r.relative.present = true;
+        r.relative.target = static_cast<int32_t>(source);
+    }
+    r.max_distance = max_distance;
     return impl_->find_target(kFreeStoreScriptBase + player, r);
 }
 
