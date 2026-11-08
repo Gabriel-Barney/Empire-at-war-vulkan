@@ -908,3 +908,19 @@ max(25 ms, 4 x median)):
 
 (Averages of two runs; `load_ms` as min-max.) A cold pipeline cache costs the nebula scene 32 first-use hitches against 1 warm and adds roughly 50-250 ms to the load (a wide range at this noise); the water scene
 shows none either way at this size. The cold/warm rows are also noisy.
+
+## Game scenes timed sim-only (bm2c t02, 2026-11-08)
+
+`alamo_headless --bench tests/benchmark/<scene>.abench --runs 2 --warmup 1` (docs/PHASE4.md "BM2c"), MSVC Release, Ryzen 7 7800X3D,
+15 workers (machine default), the version-2 scenes regenerated on dev that day. **Not idle: other lanes were building and testing, other
+processes took 92-97 % of the CPU during the timed runs, every result is flagged noisy and none is a baseline.** All runs matched the
+scenes' fingerprints (the rendered runs' CRC logs).
+
+| Scene | Ticks | Median tick | p99 | Worst | Mean | Load per run | Wall per timed run | Biggest zones |
+|---|---|---|---|---|---|---|---|---|
+| `space_battle_game` | 1800 | 1.89 ms | 54 ms | 205 ms | 4.3 ms | 0.65-0.75 s | 5.8-9.8 s | T5.battles / tac.ai 30 %, tac.ai.perception 24 % |
+| `nebula_battle` | 1800 | 1.76 ms | 29 ms | 90 ms | 3.4 ms | 0.57-0.60 s | 5.8-6.6 s | tac.movement 49 %, T5.battles / tac.ai 18 % |
+| `water_battle` | 1800 | 3.19 ms | 87 ms | 510 ms | 5.7 ms | 0.78-0.80 s | 5.8-14.6 s | T5.battles / tac.ai 35 %, tac.ai.perception 29 % |
+
+The medians sit near the rendered runs' `sim_ms` in BM3's table (1.0 / 1.0 / 2.9 ms, also noisy); the p99 and worst ticks here are the
+busy machine. Rerun on a quiet PC before using any of it as a reference.

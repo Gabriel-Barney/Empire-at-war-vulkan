@@ -28,6 +28,7 @@ namespace alamo::game {
 struct BenchNewSave {
     std::string out;                  // --bench-new-save FILE ("" = not requested)
     std::string map;                  // --bench-map (a _MP_SPACE_* or _MP_LAND_* skirmish map)
+    // [name-ok: the benchmark command line's default factions (any faction name is accepted), recorded in the scenes' make lines]
     std::string human = "Empire", ai = "Rebel";  // --bench-human / --bench-ai
     uint32_t scale = 1;               // --bench-scale N: the default forces of both sides repeated N times (1..16)
     uint64_t save_after = 300;        // --bench-save-after T: ticks after the battle started
