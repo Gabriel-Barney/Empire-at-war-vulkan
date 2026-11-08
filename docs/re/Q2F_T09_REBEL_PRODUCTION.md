@@ -110,3 +110,33 @@ task-force unit types) and Conquer_Pirate's `PFAIL`. It must show:
    frame 559);
 3. every Conquer_Pirate start and production failure, with target, for both AI players;
 4. that the plans run at all under the mod (`lua.plans` verdict `loaded: N plan scripts` with N ≥ 1).
+
+## 2026-11-08 rerun (`20261108-170824-galactic-vanilla-lua`, q2f t10) against the port at dev 03940b96
+
+The fixed kit ran clean: no seq gaps, no probe errors, 10 galactic cycles with 240 perception rows, and retail's own
+AI undisturbed (the run is a q4h `hotm_galactic` reference). The plan records it kept are thin: 12 `PSTART`, 11
+`PBLOCK` / `PDONE`, all before about t=420 s, `units=0` in every `PBLOCK` (the task force was already released into
+the queue when `BlockOnCommand` returned), and one Rebel `Conquer_Pirate` `PSTART` (t=184, target not readable) with no
+end. They do not name the plan behind later production; the production queue (`production.q2q`) does.
+
+Rebel production after frame 3000, retail vs port (port: `alamo_headless --ai-log`, seed of the q4h scenario):
+
+| Window | Retail | Port |
+|---|---|---|
+| Shola attack | 3 Y-wings at MonCalimari, starts 5565 / 5968 / 6371; Shola taken at 7498 | 9 Y-wings at MonCalimari, 4190 .. 7631 (same ~403-frame cadence, Conquer_Pirate @Shola from 4135 / 5550); Shola taken at 8214 |
+| After Shola | 18 infantry squads + 5 tank busters, 9549 .. 12157, built in parallel at Naboo, MonCalimari and Kamino (Kamino cost 1) | 9 tank busters at Kamino one after another (9302 .. 12991, ~465 frames apart), 2 light tanks at Naboo; 1 infantry squad |
+
+What this means for the failing metrics:
+
+1. **Y-wing count and Shola timing.** The port's Conquer_Pirate @Shola starts producing ~1400 frames earlier and keeps
+   asking for Y-wings until its force is large enough (9), where retail's goes with 3. The port's "force sufficient"
+   test (enemy contrast vs task-force power) asks for more than retail's for the same Shola defenders. That is what
+   delays the port's Shola capture (8214 vs 7498) and its Shola / Naboo shuttling, which is most of the
+   `fleet_departures` (30 vs 71) and `fleet_targets` gap.
+2. **Infantry vs tank busters after Shola.** The port's Conquer_Opponent ground force (@Tatooine from 9253, GroundForce
+   14+10) picks tank busters where retail picks infantry squads, and the port builds one unit at a time at one planet
+   where retail queues at three planets at once. That is the `build_mix` gap (22 infantry vs 2).
+
+Next steps (engine/ai/galactic; not done here because the opt3 lane holds a claim on that area):
+the task-force sufficiency test against retail's (docs/re/AI_GALACTIC, "Task force"), the ground unit pick for
+Conquer_Opponent against Tatooine's defenders (contrast / IgnoreTarget scores), and per-planet parallel production.
