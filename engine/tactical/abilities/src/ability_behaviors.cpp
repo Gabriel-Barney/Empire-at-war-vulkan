@@ -87,11 +87,12 @@ bool AbilitySystem::bind_spawn(uint32_t serial, ObjectId id) {
             o->trooper_squads.push_back(r.squad);  // cu8f t06: its squad (CU8F_T04_T06_RE §3.2)
             return true;
         }
-    // cu8f t06 (CU8F_T04_T06_RE §3.1): the LURE Particle_Effect object (LureDataPack +0x18).
+    // cu8f t06 (CU8F_T04_T06_RE §3.1): the LURE Particle_Effect object (LureDataPack +0x18). cu8g t05: false (not bound:
+    // the host removes it silently) when the lure was deactivated since the request, or its owner is gone.
     for (const SpawnRequest& r : spawns_)
         if (r.serial == serial && r.purpose == SpawnPurpose::LureEffect) {
             Obj* o = obj(r.source);
-            if (!o) return false;
+            if (!o || r.cancelled || o->dead) return false;
             o->lure_effect = id;
             return true;
         }
@@ -362,6 +363,44 @@ void AbilitySystem::gate_entries(const Obj& src, const SpecialAbilityDesc& s, bo
     }
 }
 
+void AbilitySystem::modifier_entries(const Obj& src, uint32_t desc, const SpecialAbilityDesc& s, bool push) {
+    // Battlefield_Modifier apply 0x6f02c0 (push) / remove 0x6f13b0 (delete by source); cu8g t05 (CU8F_T04_T06_RE §3.3 [H]):
+    // Reverse_Application_Logic swaps the two (the caller passes push = !reverse on apply, reverse on remove), and the
+    // affected players are always the owner, or every player allied with it (index order) with Apply_To_All_Allies
+    // (0x6f1130; the earlier "reverse -> the enemies" reading [M] is gone). Per player, permanent append inserts keyed by
+    // the source: the reveal list +0x1f8 (FOW §5.2) and the float lists, then the Enable_* gate lists (gate_entries).
+    const auto np = static_cast<int32_t>(combat_->player_count());
+    const uint64_t key = (static_cast<uint64_t>(desc) << 32) | static_cast<uint32_t>(src.id);
+    if (!push) {
+        if (host_.fow_reveal_remove && s.fow_reveal_multiplier != 1.0f)
+            for (int32_t p = 0; p < np; ++p) host_.fow_reveal_remove(p, key);
+        player_entries_.erase(std::remove_if(player_entries_.begin(), player_entries_.end(),
+                                             [&](const PlayerEntry& e) {
+                                                 return e.list < static_cast<uint8_t>(PlayerGate::BombingRuns) && e.source == src.id &&
+                                                        e.crc == s.name_crc;
+                                             }),
+                              player_entries_.end());
+        gate_entries(src, s, false);
+        return;
+    }
+    for (int32_t p = 0; p < np; ++p) {
+        if (p != src.owner && !(s.apply_to_all_allies && allied(src.owner, p))) continue;
+        if (s.fow_reveal_multiplier != 1.0f && host_.fow_reveal_add)  // list +0x1f8 <- m - 1 (FOW §5.2)
+            host_.fow_reveal_add(p, s.stacking_category, key, s.fow_reveal_multiplier);
+        auto put = [&](PlayerList l, float m) {
+            if (m == 1.0f) return;
+            player_entries_.push_back(PlayerEntry{p, static_cast<uint8_t>(l), s.stacking_category, m - 1.0f, src.id, s.name_crc});
+        };
+        // +0x230 holds round(F x m) - F frames (F = the reinforcement-time constant, unknown here): kept as m - 1, the
+        // host scales its own timer [port].
+        put(PlayerList::ReinforcementTime, s.reinforcement_time_multiplier);
+        put(PlayerList::StealthDuration, s.stealth_duration_multiplier);
+        put(PlayerList::CaptureTime, s.capture_time_multiplier);
+        put(PlayerList::ReinforcementDeploy, s.reinforcement_deploy_multiplier);
+    }
+    gate_entries(src, s, true);
+}
+
 bool AbilitySystem::weather_affected(int32_t player) const {
     // player +0x410: empty or the AND of the values; every Weatherproof entry is false (§7.4).
     for (const SourceEntry& e : source_entries_)
@@ -433,29 +472,11 @@ void AbilitySystem::aura_on(Obj& src, SpecialState& sp, uint32_t frame) {
             for (Obj& t : objs_)  // ascending id
                 if (aura_target(src, s, t)) aura_give(src, s, t.id);
             break;
-        case SpecialClass::BattlefieldModifier: {
-            // 0x6f10b0 -> 0x6f02c0 (tactical modes): players = the owner, or every ally with Apply_To_All_Allies;
-            // Reverse_Application_Logic -> the enemies [M]. Per player, permanent append inserts keyed by the source.
-            const uint64_t key = (static_cast<uint64_t>(sp.desc) << 32) | static_cast<uint32_t>(src.id);
-            for (int32_t p = 0; p < np; ++p) {
-                const bool take = s.reverse_logic ? enemy(src.owner, p) : (p == src.owner || (s.apply_to_all_allies && allied(src.owner, p)));
-                if (!take) continue;
-                if (s.fow_reveal_multiplier != 1.0f && host_.fow_reveal_add)  // list +0x1f8 <- m - 1 (FOW §5.2)
-                    host_.fow_reveal_add(p, s.stacking_category, key, s.fow_reveal_multiplier);
-                auto put = [&](PlayerList l, float m) {
-                    if (m == 1.0f) return;
-                    player_entries_.push_back(PlayerEntry{p, static_cast<uint8_t>(l), s.stacking_category, m - 1.0f, src.id, s.name_crc});
-                };
-                // +0x230 holds round(F x m) - F frames (F = the reinforcement-time constant, unknown here): kept as m - 1,
-                // the host scales its own timer [port].
-                put(PlayerList::ReinforcementTime, s.reinforcement_time_multiplier);
-                put(PlayerList::StealthDuration, s.stealth_duration_multiplier);
-                put(PlayerList::CaptureTime, s.capture_time_multiplier);
-                put(PlayerList::ReinforcementDeploy, s.reinforcement_deploy_multiplier);
-            }
-            gate_entries(src, s, !s.reverse_logic);  // cu8f t06: Reverse_Application_Logic swaps apply and remove (§3.3)
+        case SpecialClass::BattlefieldModifier:
+            // 0x6f10b0 (apply): cu8g t05 (CU8F_T04_T06_RE §3.3 [H]): Reverse_Application_Logic swaps apply and remove, for
+            // the float lists and the reveal list as for the Enable_* gate lists (cu8f t06).
+            modifier_entries(src, sp.desc, s, !s.reverse_logic);
             break;
-        }
         case SpecialClass::BasePower:  // 0x6efaf0: every player allied to the source (owner included), keyed by it
             for (int32_t p = 0; p < np; ++p)
                 if (allied(src.owner, p)) combat_->add_base_power(p, src.id);
@@ -497,19 +518,10 @@ void AbilitySystem::aura_off(Obj& src, SpecialState& sp, uint32_t frame) {
                 }
             }
             break;
-        case SpecialClass::BattlefieldModifier: {
-            const uint64_t key = (static_cast<uint64_t>(sp.desc) << 32) | static_cast<uint32_t>(src.id);
-            if (host_.fow_reveal_remove && s.fow_reveal_multiplier != 1.0f)
-                for (int32_t p = 0; p < np; ++p) host_.fow_reveal_remove(p, key);
-            player_entries_.erase(std::remove_if(player_entries_.begin(), player_entries_.end(),
-                                                 [&](const PlayerEntry& e) {
-                                                     return e.list < static_cast<uint8_t>(PlayerGate::BombingRuns) &&
-                                                            e.source == src.id && e.crc == s.name_crc;
-                                                 }),
-                                  player_entries_.end());
-            gate_entries(src, s, s.reverse_logic);  // cu8f t06: with Reverse_Application_Logic the remove pushes (§3.3)
+        case SpecialClass::BattlefieldModifier:
+            // 0x6f17d0 (remove); with Reverse_Application_Logic it pushes (cu8g t05, §3.3).
+            modifier_entries(src, sp.desc, s, s.reverse_logic);
             break;
-        }
         case SpecialClass::BasePower:  // 0x6eff70
             for (int32_t p = 0; p < np; ++p) combat_->remove_base_power(p, src.id);
             break;
@@ -860,6 +872,9 @@ void AbilitySystem::lure_deactivate(Obj& o, uint32_t frame) {
         event(AbilityEventKind::RemoveSilently, kLure, o.lure_effect, o.id, frame);
         o.lure_effect = kNoObject;
     }
+    // cu8g t05: an effect requested this tick and not bound yet goes too (bind_spawn refuses it, the host removes it).
+    for (SpawnRequest& r : spawns_)
+        if (r.purpose == SpawnPurpose::LureEffect && r.source == o.id) r.cancelled = true;
 }
 
 void AbilitySystem::lure_service(Obj& o, uint32_t frame) {

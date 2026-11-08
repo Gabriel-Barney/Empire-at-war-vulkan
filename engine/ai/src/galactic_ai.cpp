@@ -1737,28 +1737,50 @@ void GalacticAiWorld::Impl::step_free_store_moves(int32_t player) {
     fs_moves.erase(std::remove_if(fs_moves.begin(), fs_moves.end(), [](const FreeStoreMove& m) { return m.done; }), fs_moves.end());
 }
 
-// Free-store unit hook 0x68fde0 step 2 (AI_GALACTIC Â§2.8) [H; port: once per execution service]: AI players land
-// their free ground units that are safe, not in transit, in a stationary fleet at their own planet with a surface,
-// under Max_Ground_Forces_On_Planet. A2 galactic: FleetManagement land (op 5). cu8f t04b (CU8F_T04_T06_RE §2.2 step 4):
-// only units whose Prefer_Ground_Over_Space is true (GalacticSim::prefer_ground_over_space; the default, and always
-// for a unit without UNIT_AI).
+// Free-store unit hook 0x68fde0 step 2 (AI_GALACTIC §2.8) [H; port: once per execution service]. cu8g t04
+// (CU8F_T04_T06_RE §2.2 [H]): the gate in the original's order, for each free-store unit U:
+//   1. the store's player is not human;
+//   2. Is_Unit_Safe (unit_safe) and not Is_Unit_In_Transit (unit_in_transit: no planet = no parent or a moving fleet,
+//      which also covers a hyperspace destination; or a pending free-store move);
+//   3. U has TRANSPORT and sits in a fleet F. [port] The sim carries a ground company in the fleet itself where the
+//      original carries its Company_Transport_Unit, so "U has TRANSPORT" = U is a ground unit whose travel type
+//      (GalacticSim::travel_type: the company's transport, else its own type) has the TRANSPORT behaviour. A TRANSPORT
+//      unit that is not a ground unit (a hero ship carrying its team) is not a candidate: the port's op 5 lands ground
+//      units only and would refuse it;
+//   4. Prefer_Ground_Over_Space (cu8f t04b; true by default and for a unit without UNIT_AI);
+//   5. F orbits a planet P with fewer ground forces than Max_Ground_Forces_On_Planet (0x3f9530: surface_forces) and an
+//      accessible surface (0x375220: a destroyed planet has none).
+// Then two FleetManagement events for U's owner: op 2 (detach U from F at P: a fleet of its own; nothing when it is
+// already alone), then op 5 (land U on P). The port's former extra conditions: "fleet not moving" is step 2's transit
+// test; "planet not in battle" is gone (not in the spec; a hostile fleet in orbit makes a ground unit unsafe, unit_safe's
+// [L] reading). [port] "P owned by the player" stays: the port's op 5 lands only on the issuer's own planet (no invasion
+// through op 5), so the original's outcome at a foreign planet is not modelled and nothing is built there (no detach
+// either). Nothing is built while the galaxy is paused: both ops are refused then (NotAllowed).
 void GalacticAiWorld::Impl::auto_land_free_units(int32_t player) {
     if (player < 0 || static_cast<size_t>(player) >= sim.players().size() || sim.players()[static_cast<size_t>(player)].human) return;
+    if (sim.paused()) return;
     const auto& rules = sim.rules();
     for (const ObjectHandle u : free_units(player)) {
+        if (!store.alive(u) || !unit_safe(u) || unit_in_transit(u)) continue;  // 2
         const gal::TypeInfo* ti = type_info(store.type(u));
-        if (!ti || !ground_kind(ti->kind)) continue;
+        const gal::TypeInfo* tt = type_info(sim.travel_type(u));
+        if (!ti || !ground_kind(ti->kind) || !tt || !tt->transport_behavior) continue;  // 3: TRANSPORT
         const uint32_t f = fleet_of_unit(u);
-        if (f == gal::kNoFleet || sim.fleets()[f].moving || unit_in_transit(u) || !unit_safe(u)) continue;
-        if (!sim.prefer_ground_over_space(u)) continue;  // cu8f t04b: stays in orbit
-        const PlanetIndex p = sim.fleets()[f].planet;
+        if (f == gal::kNoFleet) continue;  // 3: in a fleet
+        if (!sim.prefer_ground_over_space(u)) continue;  // 4 (cu8f t04b): stays in orbit
+        const PlanetIndex p = sim.fleets()[f].planet;  // 5
         if (!valid_planet(p)) continue;
-        const gal::PlanetState& ps = sim.planets()[p];
-        if (ps.owner != player || ps.in_battle) continue;
-        if (!sim.surface_accessible(p)) continue;  // 0x375220: a destroyed planet has no surface
-        if (static_cast<int32_t>(ps.surface.size()) >= rules.constants.max_ground_forces_on_planet) continue;
-        fleet_op(player, gal::kFleetLand, static_cast<uint32_t>(store.id(ps.object)), static_cast<uint32_t>(store.id(sim.fleets()[f].object)),
-                 static_cast<uint32_t>(store.id(u)), "auto-land " + std::to_string(store.id(u)) + " at " + planet_name(p));
+        if (sim.surface_forces(p) >= rules.constants.max_ground_forces_on_planet) continue;
+        if (!sim.surface_accessible(p)) continue;
+        if (sim.planets()[p].owner != player) continue;  // [port] the port's op 5 refuses a foreign planet
+        const uint32_t pid = static_cast<uint32_t>(store.id(sim.planets()[p].object));
+        const uint32_t uid = static_cast<uint32_t>(store.id(u));
+        fleet_op(player, gal::kFleetDetach, pid, static_cast<uint32_t>(store.id(sim.fleets()[f].object)), uid,
+                 "auto-land detach " + std::to_string(uid) + " at " + planet_name(p));
+        const uint32_t g = fleet_of_unit(u);  // op 2 made U a fleet of its own (or it already was alone)
+        if (g == gal::kNoFleet) continue;
+        fleet_op(player, gal::kFleetLand, pid, static_cast<uint32_t>(store.id(sim.fleets()[g].object)), uid,
+                 "auto-land " + std::to_string(uid) + " at " + planet_name(p));
     }
 }
 

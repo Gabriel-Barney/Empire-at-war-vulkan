@@ -4163,6 +4163,38 @@ void test_infection() {
         for (int i = 0; i < 100; ++i) z.tick();
         CHECK(z.sys->infection_attached(10) && !z.sys->infection_attached(11) && z.sys->infection_spread_count(11) == -1);
     }
+    // cu8g t05: a candidate without a model (obj +0x2a0 null: UnitDesc::has_model false) is never counted; a parameterless
+    // infection (the flag only: no pack, frames left 0) is serviced and expires at its first service (suspended).
+    {
+        World z;
+        z.cd.projectiles = {inf};
+        UnitDesc bare = trooper;
+        bare.name = "NoModel";
+        bare.has_model = false;
+        const uint32_t gd = push(z.cd, z.ad, ig, AbilityObjectDesc{});
+        const uint32_t td = push(z.cd, z.ad, trooper, AbilityObjectDesc{});
+        const uint32_t bd = push(z.cd, z.ad, bare, AbilityObjectDesc{});
+        z.make();
+        z.add(1, gd, 0, {-1000, 0, 0});
+        z.add(10, td, 1, {0, 0, 0});
+        z.add(11, bd, 1, {20, 0, 0});    // in range, no model
+        z.add(12, td, 1, {0, 30, 0});    // in range, a model: counted (off the projectile's path)
+        z.add(13, td, 1, {500, 500, 0});  // far away: the parameterless one
+        ProjectileLaunch zl = l;
+        zl.target = 10;
+        zl.from = {-100, 0, 0};
+        CHECK(z.sys->launch_projectile(zl, z.frame));
+        for (int i = 0; i < 20 && !z.sys->infection_attached(10); ++i) z.tick();
+        CHECK(z.sys->infection_attached(10));
+        for (int i = 0; i < 10; ++i) z.tick();
+        CHECK(z.sys->infection_spread_count(11) == -1 && z.sys->infection_spread_count(12) > 0);
+        z.sys->set_flag(13, kUnitInfected, true);
+        CHECK(z.sys->infection_attached(13) && (z.sys->flags(13) & kUnitInfected) != 0 && z.sys->infection_frames_left(13) == 0);
+        const float h13 = z.sys->health(13);
+        z.tick();
+        CHECK(z.sys->infection_attached(13) && (z.sys->flags(13) & kUnitInfected) == 0 && z.sys->infection_suspend_count(13) == 1);
+        CHECK(z.sys->health(13) == h13);
+    }
 }
 
 // S8 t10 (b)(c) (LOB_SOLVER §3.5 "Facing at apply", "MARKER removal") and S8 t11 (DEPLOY through the Walk locomotor host).
@@ -4656,6 +4688,24 @@ void test_cu8f_lure() {
     t.sys->kill_unit(31, kNoObject, kKindNormal, t.frame);
     t.collect();
     CHECK(t.count(AbilityEventKind::RemoveSilently, 95) == 1 && !t.ab->lure_running(31));
+    // cu8g t05: switched off (or its owner gone) before the host bound the effect: bind_spawn refuses it (the host then
+    // removes the new object silently) and the lure keeps no effect.
+    for (const bool kill : {false, true}) {
+        OiWorld u;
+        const uint32_t ud = push(u.cd, u.ad, lure, la);
+        u.make();
+        u.add(1, ud, 0, {0, 0, 0});
+        CHECK(u.ab->set_unit_ability_mode(one, kLure, true, u.frame) == 1);
+        if (kill) u.sys->kill_unit(1, kNoObject, kKindNormal, u.frame);
+        else CHECK(u.ab->set_unit_ability_mode(one, kLure, false, u.frame) == 1);
+        size_t n = 0;
+        for (const SpawnRequest& s : u.ab->spawn_requests())
+            if (s.purpose == SpawnPurpose::LureEffect) {
+                ++n;
+                CHECK(s.cancelled && !u.ab->bind_spawn(s.serial, 97));
+            }
+        CHECK(n == 1 && u.ab->lure_effect(1) == kNoObject && !u.ab->lure_running(1));
+    }
 }
 
 void test_cu8f_deploy_cap() {
@@ -4755,6 +4805,7 @@ void test_cu8f_enable_gates() {
     SpecialAbilityDesc rv = oi_special("Reverse", SpecialClass::BattlefieldModifier, ActivationStyle::SpaceAutomatic);
     rv.enable_bombardment = true;
     rv.reverse_logic = true;
+    rv.reinforcement_time_multiplier = 2.0f;  // cu8g t05: the float lists swap too (Slower_Reinforcements)
     const uint32_t rs = add_special(w.ad, rv);
     AbilityObjectDesc ha, ra;
     ha.specials = {bs};
@@ -4792,8 +4843,11 @@ void test_cu8f_enable_gates() {
     // Reverse_Application_Logic: nothing on apply, the entry on remove (the owner only: no Apply_To_All_Allies)
     w.add(2, rd, 0, {0, 0, 0});
     CHECK(gate(0, PlayerGate::Bombardment, all) == 0);
+    // cu8g t05 (§3.3): the float lists follow the same swap, for the owner (not the enemies): nothing while it lives.
+    CHECK(w.ab->player_list(0, PlayerList::ReinforcementTime) == 0.0f && w.ab->player_list(1, PlayerList::ReinforcementTime) == 0.0f);
     w.sys->kill_unit(2, kNoObject, kKindNormal, w.frame);
     CHECK(gate(0, PlayerGate::Bombardment, all) == 1 && all && gate(2, PlayerGate::Bombardment, all) == 0);
+    CHECK(w.ab->player_list(0, PlayerList::ReinforcementTime) == 1.0f && w.ab->player_list(1, PlayerList::ReinforcementTime) == 0.0f);
 }
 
 void test_cu8f_super_laser() {
