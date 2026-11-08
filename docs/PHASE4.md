@@ -313,9 +313,9 @@ of the two runs are identical.
 ## Q4 parity baseline (q4h t02, 2026-11-07; re-recorded after a2k t10 / t11, q4hf t01)
 
 Measured with the Q4 harness (`tools/parity/`, README there: metrics, tolerances and their reasons, grading). The table is
-the current `tools/parity/baseline.json`, recorded at **`207ba0b8`** (q4hf t02 / t04 merged with dev's q2f t08, which grades
-`hotm_galactic` against 2 retail runs; alamo_headless MSVC Release, 4 workers; 0 regressions against dev's `acb3547a`
-recording); before that `4b6aa69d` (q4hf t02 / t04, 3 retail runs), dev `79576620` (a2k t10 + t11)
+the current `tools/parity/baseline.json`, recorded at **`dc141745`** (q4hf t02 / t04 merged with dev's q2f t08, which grades
+`hotm_galactic` against 2 retail runs, and cu8j t01-t03; alamo_headless MSVC Release, 4 workers; 0 regressions against
+dev's `acb3547a` and cu8j's `a956c954` recordings; `hotm_galactic` is the same as at `207ba0b8`); before that `4b6aa69d` (q4hf t02 / t04, 3 retail runs), dev `79576620` (a2k t10 + t11)
 and dev `3629d4cf`, before the a2k galactic-AI merge (row "q4h t02" below; the harness has more timing metrics since). Re-record it, like a golden, when an intended behaviour change moves a metric. The confirm, AI
 and Q4 groups are judged against these numbers. Reference runs: the Q2 traces in the main checkout's
 `tools/probe_mod/q2_traces/out/`.
@@ -338,6 +338,7 @@ infantry squads, the port 2). `ai.build_count[Rebel]` is 40 vs retail 50 (PASS, 
 | `hotm_galactic` at the a2k merge (`9064172d`) | 34 / 8 | 21 / 4 | 16 / 0 (1 N/A) | 7 / 0 | - |
 | `hotm_galactic`, q4h t02 (`3629d4cf`) | 15 / 5 | 22 / 3 | 11 / 5 (1 N/A) | 7 / 0 | - |
 | retail leave-one-out, same tolerances, at `4b6aa69d` (before t04: timing 90 / 17) | 121 / 12 | 46 / 14 | 30 / 10 | 19 / 2 | - |
+| `geonosis_skirmish` (1 retail run) at `dc141745` (q4hf t02 + cu8j) | - | 3 / 3 | 0 / 5 (1 N/A) | 2 / 3 | 2 / 1 |
 | `geonosis_skirmish` (1 retail run) at `4b6aa69d` (q4hf t02 damage hook) | - | 3 / 3 | 0 / 5 (1 N/A) | 4 / 1 | 2 / 1 |
 | `geonosis_skirmish` at `79576620` | - | 3 / 3 | 0 / 5 (1 N/A) | 3 / 2 | 3 N/A |
 
@@ -357,7 +358,9 @@ q4hf t02 (skirmish damage hook): the skirmish host writes its tactical battle as
 `engine/apps/headless/tactical_trace.hpp`), reduced by the retail reader. `combat.damage_taken`: Rebel 308 hull lost vs
 retail 325 (PASS, 25%), Empire 0 vs 0 (PASS); `combat.first_shot_frame` 2450 vs 3953 (FAIL: the port's Rebel AI attacks
 about 50 s earlier, as its early X-wing build already suggested). `outcome.units_final[Rebel]` 41 vs 35 is now within
-tolerance (already PASS on dev `03940b96` before this change, so moved by a behaviour change after `79576620`).
+tolerance (already PASS on dev `03940b96` before this change, so moved by a behaviour change after `79576620`). After cu8j t01-t03 (formation
+composition / adopt draws, `dc141745`): Rebel hull lost 339 vs 325 (PASS), first shot 2150 vs 3953 (FAIL),
+`outcome.units_final[Rebel]` 44 vs 35 and `units_lost[Empire]` 8 vs 0 FAIL (the AI fight moves with the draws).
 
 a2k t10 (Add_Credits AI notify, `docs/re/A2K_T10_CREDIT_NOTIFY_RE.md`): `econ.credits_at_9000[Rebel]` 3106 -> 867 (retail
 650..1143, now PASS; the Rebel spends the Shola capture bonus within ~170 ticks). Still FAIL: `credits_at_4500[Rebel]` 1186
