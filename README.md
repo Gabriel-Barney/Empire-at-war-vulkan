@@ -29,7 +29,8 @@ on top. The goal is the game you already own, running on an engine that uses a m
 original game cannot be loaded; all three are out of scope by design.
 
 **Forks are welcome.** If you want something this project leaves out, such as multiplayer, another platform or a
-feature of your own, you are more than welcome to fork it and add whatever features and systems you like.
+feature of your own, you are more than welcome to fork it and add whatever features and systems you like. The code is
+released under the [MIT License](LICENSE).
 
 > **Status (2026-11-08):** active development, playable end to end through its own host, `alamo_game`.
 > Simulation, renderer, Lua layer, AI, UI, story and save/load are in place, and **Thrawn's Revenge loads and plays**
@@ -348,3 +349,8 @@ Good starting points: [`docs/README.md`](docs/README.md) (index of every documen
 *Star Wars* and *Empire at War* are trademarks of their respective owners. This is an unofficial fan project, not
 affiliated with or endorsed by Lucasfilm, Disney, Petroglyph or any other rights holder. You must own a legitimate copy
 of the game to use it. This repository contains no game assets and no original code.
+
+The project's own code and documentation are released under the [MIT License](LICENSE). The license does not cover the
+game, its assets or its trademarks. Third-party libraries keep their own licenses: Lua 5.0.2 (MIT), miniaudio (public
+domain or MIT No Attribution), Vulkan Memory Allocator (MIT), Vulkan-Headers (Apache 2.0 or MIT), DXC (LLVM Release License and
+MIT; the prebuilt `dxil.dll` is under Microsoft's own license terms) and FFmpeg's Bink decoder (LGPL 2.1 or later, loaded as separate DLLs that ship with their license text).
