@@ -69,6 +69,19 @@ Every manager entry point returns early while the byte is 1, so the object uses 
   space battle with Home One against an enemy hero with an aura (e.g. Combat_Bonus) and observe the aura end and
   the hero's unit-ability buttons grey out; the log lines "is CANCELLING" / "is RESTORING" mark the two calls.
   Which events trigger a Combat_Automatic apply with which target object is [L] (0x37b580 style 2 contexts).
+- **Probe run (cu8g t09b, 2026-11-08, run `tools/probe_mod/cu8g_probes/out/20261108-065026-abil`, Claude drove the
+  game).** Kuat space skirmish: a human Accuser (TRACTOR_BEAM) and an AI Corellian corvette 700 units away. AI Home
+  One, with `Akbar_Cancel_Special_Ability` un-commented in the probe mod, was spawned 1001 units from the Accuser at
+  frame 810.
+  - Base phase (from frame 510): the beam activated at once (ready 0, active 1), and the corvette was under it.
+  - Cancel phase (frames 810..1560): the beam stayed active and the corvette stayed under it in all 244 polls. All 26
+    further activation calls returned ok with ready 0. **No cancel was seen on the Accuser.** Either the
+    Combat_Automatic apply did not fire on it, or a disable does not end an effect that is already active [L which].
+  - **The game crashed** (APPCRASH, c0000005 at `StarWarsG.exe`+0x7107c8, 06:56:58) at about the end of the cancel
+    phase. That is where the probe despawns Home One (frame 1560; the last record is frame 1542, and the scan runs
+    every 4 s), so the restore timing was not measured [M that the despawn caused the crash].
+  - The same script also armed in the main-menu background battle, which has an AI Rebel (instance EB7500 in the
+    report). Ignore that instance: the beam was never ready there.
 
 ## 2. t02: engine-loop suppression (0x392410 / 0x393970)
 

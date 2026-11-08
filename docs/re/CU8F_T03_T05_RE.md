@@ -143,6 +143,32 @@ can really be −1 in a campaign battle. Probe: a mod copy of a planet with `Lan
 `Loading map %s for level %d base`) or the failure. Then repeat with an MP map whose `05` is patched to 1, which
 should then be picked.
 
+**Probe result (cu8g t08, 2026-11-08, kit `tools/probe_mod/cu8g_probes`, Claude drove the game).** Probe campaign
+"CU8G PROBE: MISSING MAPS", human Rebel. Jabiim (Empire) had `Land_Tactical_Map` emptied, Thyferra (Empire) had
+`Space_Tactical_Map` emptied, both with `Terrain` Temperate.
+- **No matching map** (runs `out/20261108-062513-maps-miss` for land, `out/20261108-063245-maps-miss` for space):
+  the invasion of Jabiim and the space attack on Thyferra both show their battle load screen ("Land Battle at Jabiim" /
+  "Space Battle at Thyferra"). The loading bar fills and then **the game stays on that screen**: Begin, Enter and Esc
+  do nothing for 3.5 and 3 minutes, and no tactical script starts (no free-store record from the battle). The galactic
+  heartbeat stops when the battle starts. The process stays responsive (about 0.3 of a core). There was no error box,
+  no crash, no auto-resolve and no return to the galaxy. Both runs were ended with taskkill. So retail does not recover
+  from the missing fallback map (§1.4): it hangs on the load screen [H for the observed behaviour]. The port
+  auto-resolves a campaign battle whose map does not load (`campaign_battles.cpp`, "battle auto-resolved"). That is
+  the [port] safe stand-in for the hang, and it stays.
+- **Faction-patched MP map** (`_MP_LAND_CU8G_ALDERAAN.TED`: `_MP_LAND_ALDERAAN.TED` with mini `05` changed from 3 to
+  1, custom flag `0B` still 0). In the mod folder (`Mods\CU8GProbe\Data\Art\Maps`, run `out/20261108-063750-maps-hit`)
+  it is **not** picked, and Jabiim hangs as above. Loose in the game's `corruption\Data\Art\Maps` (`--map-loose`, run
+  `out/20261108-064259-maps-hit-loose`), **a land battle loads** at Jabiim, on green terrain whose minimap has the water
+  along the right edge like the "(2) Alderaan at War" skirmish preview (screenshots in the run folder). The file's
+  location was the only difference between the two runs, so the loose copy was picked [H that it loads; M that the map
+  shown is that copy, because the probe's tactical script recorded nothing in that battle]. This confirms §1.3 / §1.5:
+  the query matches mini `05` against the defender's faction index (Empire = 1). It also fits §1.1: a mod-layer map
+  joins only list B, and only with custom flag 1. The port's `build_map_candidates` does the same, so no port change.
+  Not tested: a mod-folder map with `0B` = 1.
+- Kit caveat: the space-battle records in all three reports (Kamino backdrop, a Tartan, Rebel and Underworld AIs, mode
+  Space) come from the **main-menu background battle**, not from the probe battles. The free-store hook arms in any
+  tactical scene that has an AI player.
+
 ---
 
 ## 2. t05: scene wind for particles

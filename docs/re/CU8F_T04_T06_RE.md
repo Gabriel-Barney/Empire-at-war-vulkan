@@ -77,6 +77,13 @@ Lua. Run B: a probe script calls `Set_Targeting_Stickiness_Time_Threshold(-1)` o
 5 s). Observe whether the frigate switches away from the dying corvette. Expected: A switches (threshold 0), B keeps the
 corvette. If A and B behave the same, the spawn default is the XML value after all.
 
+**Result (cu8g t07, 2026-11-08, run `tools/probe_mod/cu8g_probes/out/20261108-061915-stick`, Claude drove the game):
+CONFIRMED.** Kuat space skirmish, human Rebel Nebulon-B F against an AI Tartan V, with a TIE bomber N dropped 361 units
+from F once V's time till dead was ≤ 4 s (V hull still 1.0). Arm A (no Lua call) switched to N in 2 of 2 trials (6 and
+21 frames after N appeared). Arm B (`Set_Targeting_Stickiness_Time_Threshold(-1)`) and arm C (1000) kept V until it died
+in 2 of 2 trials each. So §1.3 holds in game [H]: the spawn default is 0.0, and -1 means the type's XML value. The port
+rule of cu8f t04a stays, and the foc-station cap seeds (cu8g t06) are not a stickiness-default artefact.
+
 ---
 
 ## 2. t04b: `Set_Prefer_Ground_Over_Space` (UNIT_AI pack +0x39)
@@ -143,6 +150,14 @@ count +0x48, 16-byte entries, type pointer at +8), +0x60 the resolved `Particle_
 - `Target_Types` has no other reader found [M].
 - Probe (optional, for the `Is_Pulsing` claim): a mod copy of a Skipray with `Is_Pulsing` No; enemies of the listed types
   inside the radius must still be pulled in repeatedly every 0.5 s.
+- **Probe run (cu8g t09a, 2026-11-08, run `cu8g_probes/out/20261108-065026-abil`): INCONCLUSIVE.** Dagobah land
+  skirmish, human Empire against AI Rebel. Trial 1 spawned the patched Canderous tank (`Is_Pulsing` No), the T2-B decoy
+  and three AT-STs at frame 450. The lure script's last record is at frame 492, before the first divert (510) and
+  before any `Activate_Ability`. The battle ran on for 3:40 with no further records and no `APIERR`, so a retail engine
+  call stopped the script silently (the A2I lesson: a failed engine read kills a retail Lua script and `pcall` cannot
+  catch it). The `Is_Pulsing` claim stays [M]. Kit fix before a rerun: find the call that fails in the poll after
+  frame 492, where the third AT-ST had just targeted L (candidates: `C8_TargetRole` on a victim that targets L,
+  `Is_Ability_Active` / `Is_Ability_Ready` on LURE).
 
 ### 3.2 `Max_Num_Spawned_Objects` (+0xa0): DEPLOY_TROOPERS (unit ability 38) only [H]
 Readers: DEPLOY_TROOPERS behaviour activate vf23 0x58f6a0 and the cap test 0x58f840 (used by `Can_Activate` 0x39b480 case
