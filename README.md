@@ -1,3 +1,10 @@
+> **AI-assisted development.** This project is built with heavy use of AI coding agents (Anthropic's Claude, through
+> Claude Code). Most of the engine code, tests, tools and documentation, including the behaviour specs in `docs/re/`,
+> were written by AI agents working under the direction of the project's maintainer, who sets the goals, makes the
+> design decisions, runs the in-game checks against the original game and decides what lands. Every change goes through
+> the same build, test and determinism gates, but expect mistakes, and treat the specs as reconstructions rather than
+> authoritative documentation of the original game.
+
 # Empire at War: Vulkan
 
 A clean-room C++20 rewrite of the *Star Wars: Empire at War: Forces of Corruption* engine (Petroglyph's "Alamo").
