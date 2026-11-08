@@ -307,6 +307,35 @@ bool GalacticAiWorld::Impl::move_fleet(int32_t player, uint32_t fleet, PlanetInd
            cmd::RejectReason::None;
 }
 
+double GalacticAiWorld::Impl::sync_eta(int32_t player, ObjectHandle u, PlanetIndex from, PlanetIndex to) {
+    // 0x648e80 (Q2F_T09_RE_ANSWERS Q2.4) [H code; M units]: distance = the AI all-pairs path length (0x690f10 on the
+    // player's matrix, 0x691370) from the unit's planet; speed = s x f x FPS x m with s the unit type's hyperspace speed
+    // (a company with none: its transport's [port]), f the faction's speed multiplier and m the mode speed scale, read as
+    // the fleet speed multiplier as in the build-market travel term [M]. Fails without a planet, path or speed.
+    if (!valid_planet(from) || !valid_planet(to)) return -1.0;
+    if (from == to) return 0.0;
+    const AiPathFinder* finder = ensure_path_finder(player);
+    if (!finder || !finder->created()) return -1.0;
+    std::vector<PlanetIndex> path;
+    std::vector<uint32_t> wts;
+    finder->get_path(from, to, path, &wts);
+    if (path.size() < 2) return -1.0;
+    const uint32_t type = store.type(u);
+    const gal::TypeInfo* ti = type_info(type);
+    float hs = ti ? ti->hyperspace_speed : 0.0f;
+    if (!(hs > 0.0f)) {
+        const gal::TypeInfo* tt = type_info(travel_type_of(type));
+        hs = tt ? tt->hyperspace_speed : 0.0f;
+    }
+    const auto players = sim.players();
+    const auto& rules = sim.rules();
+    const uint32_t fi = player >= 0 && static_cast<size_t>(player) < players.size() ? players[static_cast<size_t>(player)].faction : gal::kNoIndex;
+    const float fs = (fi < rules.factions.size() ? rules.factions[fi].hyperspace_speed_factor : 1.0f) * sim.fleet_speed_multiplier();
+    const double speed = static_cast<double>(hs) * static_cast<double>(fs) * kAiFps;
+    if (!(speed > 0.0)) return -1.0;
+    return ai_path_length(wts, path.size()) / speed;
+}
+
 // The galactic path finder's node order (0x3f1c10 = the GOM planet list, FindPlanet.Get_All_Planets order: newest
 // object first, ObjectStore::objects_newest_first) as a rank per planet row: descending object id (ids grow with
 // creation; planet objects are never replaced). Rows without a live object go last in row order.
@@ -424,7 +453,7 @@ void GalacticAiWorld::Impl::tf_set_flag(int32_t tf, lua::AiTfFlag flag, bool val
     }
 }
 
-int32_t GalacticAiWorld::Impl::tf_produce_force(int32_t tf, const lua::AiArg& stage, bool) {
+int32_t GalacticAiWorld::Impl::tf_produce_force(int32_t tf, const lua::AiArg& stage, bool sync) {
     const auto it = tfs.find(tf);
     if (it == tfs.end() || !it->second.alive) return -1;
     TaskForceRec& t = it->second;
@@ -436,13 +465,21 @@ int32_t GalacticAiWorld::Impl::tf_produce_force(int32_t tf, const lua::AiArg& st
     if (stage.target >= 0) sp = static_cast<PlanetIndex>(stage.target);
     else if (stage.object) sp = sim.planet_of(stage.object);
     t.stage = valid_planet(sp) ? static_cast<int32_t>(sp) : -1;
+    // q2f t09: the second argument is the sync flag (BT +0xda, Q2F_T09_RE_ANSWERS Q1.5) [H].
+    t.sync = sync;
+    t.sync_started = false;
+    t.sync_left = -1.0;
+    t.sync_frame = now;
+    t.sync_units.clear();
+    t.sync_etas.clear();
     create_build_tasks(t);
     // AIBuildTask WAIT_FOR_FREESTORE_ALLOC -> PRE_PATH_SEPERATE (0x64aec0, A2K_T08_RE_ANSWERS Q2.3) [H]: a claimed
     // free-store unit (the TF's units before any build finished) in a fleet of more than one object is split into a
     // fleet of its own (op 2, then op 0) before it paths to the stage, so the gather never carries foreign units.
     // [port] Done once here for the units in a stationary fleet; one in transit keeps its fleet. A unit that cannot jump
     // by itself stays in its fleet (free_store_move's rule). No destination: PRODUCTION_FINISHED, no split.
-    if (t.stage >= 0) {
+    // With the sync flag the split waits for the unit's departure (WAIT_FOR_SYNC_MOVE: no split and no move yet, Q2.1).
+    if (t.stage >= 0 && !t.sync) {
         const std::vector<ObjectHandle> claimed = t.units;
         for (const ObjectHandle u : claimed) {
             if (!store.alive(u) || !unit_jumps(u)) continue;
@@ -1279,6 +1316,51 @@ bool GalacticAiWorld::Impl::step_status(StatusRec& s) {
             const auto stage = static_cast<PlanetIndex>(tf.stage);
             bool all_there = true;
             std::vector<ObjectHandle> drop;
+            // q2f t09 synchronized gather (WAIT_FOR_SYNC_MOVE 0x18 -> SYNC_MOVE_COUNTDOWN 0x19, Q2F_T09_RE_ANSWERS Q2.4)
+            // [H code; M units]: the barrier holds until every build is done (above) and no unit is in transit; then
+            // each unit not at the stage gets its own ETA (a failing ETA is that task's Production_Failed: the unit
+            // leaves the TF [port]), the countdown starts at the largest one and drops by the elapsed seconds on each
+            // pass. A unit is held while the countdown is above its ETA; it departs (split, launch, path) at or below.
+            std::vector<ObjectHandle> held;
+            if (tf.sync) {
+                if (!tf.sync_started) {
+                    for (const ObjectHandle u : tf.units) {
+                        const gal::TypeInfo* uti = type_info(store.type(u));
+                        if (uti && structure_kind(uti->kind)) continue;
+                        if (planet_of_unit(u) == kInvalidPlanet) return false;  // in transit: not every task is waiting
+                    }
+                    tf.sync_started = true;
+                    tf.sync_frame = now;
+                    tf.sync_left = -1.0;
+                    for (const ObjectHandle u : tf.units) {
+                        const gal::TypeInfo* uti = type_info(store.type(u));
+                        if (uti && structure_kind(uti->kind)) continue;
+                        const PlanetIndex at = planet_of_unit(u);
+                        if (at == stage) continue;
+                        const double e = sync_eta(tf.player, u, at, stage);
+                        if (e < 0.0) {
+                            drop.push_back(u);
+                            continue;
+                        }
+                        tf.sync_units.push_back(u);
+                        tf.sync_etas.push_back(e);
+                        if (e > tf.sync_left) tf.sync_left = e;  // 0x64c1b0: raised only by a strictly larger ETA
+                    }
+                    if (!drop.empty()) {
+                        for (const ObjectHandle d : drop) tf_release_unit(tf.id, d);
+                        decide(tf.player, "tf " + tf.name + " sync move: " + std::to_string(drop.size()) + " units without a path");
+                        drop.clear();
+                    }
+                    if (!tf.sync_units.empty())
+                        decide(tf.player, "tf " + tf.name + " sync move to " + planet_name(stage) + " countdown " + std::to_string(tf.sync_left));
+                } else {
+                    tf.sync_left -= static_cast<double>(now - tf.sync_frame) / kAiFps;
+                    tf.sync_frame = now;
+                }
+                for (size_t i = 0; i < tf.sync_units.size(); ++i)
+                    if (store.alive(tf.sync_units[i]) && tf.sync_left > tf.sync_etas[i]) held.push_back(tf.sync_units[i]);
+            }
+            auto is_held = [&held](ObjectHandle u) { return std::find(held.begin(), held.end(), u) != held.end(); };
             // Pickups: ground units on a surface without a TF hyperspace fleet in orbit get one sent to them
             // (first idle TF fleet, planet order) [port: AIBuildTask TRANSPORTS_TO_ORBIT / PATHING_DEST].
             std::vector<uint32_t> busy;
@@ -1286,7 +1368,7 @@ bool GalacticAiWorld::Impl::step_status(StatusRec& s) {
                 std::vector<PlanetIndex> pickup;
                 for (const ObjectHandle u : tf.units) {
                     const PlanetIndex at = planet_of_unit(u);
-                    if (at == kInvalidPlanet || at == stage || !on_surface(u)) continue;
+                    if (at == kInvalidPlanet || at == stage || !on_surface(u) || is_held(u)) continue;
                     const gal::TypeInfo* uti = type_info(store.type(u));
                     if (uti && structure_kind(uti->kind)) continue;
                     const uint32_t here = movable_tf_fleet_at(tf, at);
@@ -1320,8 +1402,17 @@ bool GalacticAiWorld::Impl::step_status(StatusRec& s) {
                 const PlanetIndex at = planet_of_unit(u);
                 if (at == stage) continue;
                 all_there = false;
-                if (at == kInvalidPlanet) continue;  // in transit
+                if (at == kInvalidPlanet || is_held(u)) continue;  // in transit, or waiting for its sync departure
                 const uint32_t f = fleet_of_unit(u);
+                if (tf.sync && f != gal::kNoFleet && movable_fleet(f) && !sim.fleets()[f].moving && sim.fleets()[f].contents.size() > 1 &&
+                    unit_jumps(u) && std::find(busy.begin(), busy.end(), f) == busy.end()) {
+                    // Sync departure from a shared fleet: PRE_PATH_SEPERATE (op 2, then op 0) first; it paths next pass.
+                    fleet_op(tf.player, gal::kFleetDetach, static_cast<uint32_t>(store.id(sim.planets()[at].object)),
+                             static_cast<uint32_t>(store.id(sim.fleets()[f].object)), static_cast<uint32_t>(store.id(u)),
+                             "split " + std::to_string(store.id(u)) + " at " + planet_name(at));
+                    busy.push_back(f);
+                    continue;
+                }
                 if (f == gal::kNoFleet || !movable_fleet(f)) {
                     if (f == gal::kNoFleet && movable_tf_fleet_at(tf, at) != gal::kNoFleet) {
                         launch_and_form(tf.player, at, u, movable_tf_fleet_at(tf, at));
@@ -2474,6 +2565,10 @@ void GalacticAiWorld::hash(StateHasher& h) const {
         h.i32(id);
         h.i32(t.stage);
         h.i32(t.area);
+        if (t.sync) {  // q2f t09: only a sync gather adds its countdown (other task forces hash as before)
+            h.boolean(t.sync_started);
+            h.f64(t.sync_left);
+        }
         h.u32(static_cast<uint32_t>(t.units.size()));
         for (const ObjectHandle u : t.units) h.i32(w.store.id(u));
     }

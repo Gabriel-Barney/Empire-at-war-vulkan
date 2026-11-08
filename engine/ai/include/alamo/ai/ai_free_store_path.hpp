@@ -75,6 +75,10 @@ bool free_store_path_passes(int32_t sum, float threshold = 0.0f);
 // Accepted: (low 16 bits of S) / 10; rejected: kReachNone. The source == target case (0) is the caller's.
 inline constexpr double kReachNone = 1e18;
 double ai_reach_path_cost(std::span<const uint32_t> hop_weights, size_t path_size, int level);
+// 0x691370 (Q2F_T09_RE_ANSWERS Q2.4 step 3) [H]: the length of an all-pairs path, (low 16 bits of the wrapping sum of
+// the hop weights [0, min(1000, path_size - 1))) / 10, in world units (trade-route hops already shortened). Empty path:
+// -1 (the sum's start), so (0xFFFF) / 10.
+double ai_path_length(std::span<const uint32_t> hop_weights, size_t path_size);
 
 // 0x3f9270: with a starbase, the planet's owner; else the owner of the first orbiting fleet (arrival order) whose
 // transient test 0x3a9760 is false, or the first one's owner when all pass it; kNoPlayer (-1) when no fleet orbits.

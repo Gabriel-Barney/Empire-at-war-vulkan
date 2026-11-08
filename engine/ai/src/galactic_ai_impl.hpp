@@ -66,6 +66,16 @@ struct TaskForceRec {
     // TF +0x100, the Setup A stage copied at instantiation and returned by Get_Stage (-1 = null: a goal without a target).
     int32_t stage = -1;
     int32_t area = -1;
+    // q2f t09 (Q2F_T09_RE_ANSWERS Q2.4 / Q2.6) [H code; M units]: Produce_Force(stage, true) sets every build task's
+    // sync flag (BT +0xda). The gather then holds every unit until all are on the free store, each unit's ETA to the
+    // stage is computed once (+0xdc), the TF countdown starts at the largest one (+0xe0, initial -1) and drops by the
+    // elapsed seconds; a unit departs when the countdown is at or below its own ETA, so all arrive together.
+    bool sync = false;
+    bool sync_started = false;
+    double sync_left = -1.0;              // +0xe0, seconds
+    int64_t sync_frame = 0;               // AI frame of the last countdown update
+    std::vector<ObjectHandle> sync_units;  // units with an ETA, in TF member order
+    std::vector<double> sync_etas;         // +0xdc per unit, seconds
     bool had_units = false;
     bool no_units_sent = false;
     bool alive = true;
@@ -381,6 +391,8 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     cmd::RejectReason order(int32_t player, const cmd::EventData& ev, const std::string& what);
     cmd::RejectReason note_order(int32_t player, cmd::RejectReason r, const std::string& what);
     bool move_fleet(int32_t player, uint32_t fleet, PlanetIndex to);
+    // Own ETA of a synchronized move (0x648e80, Q2F_T09_RE_ANSWERS Q2.4) in seconds; < 0 = fails (Production_Failed).
+    double sync_eta(int32_t player, ObjectHandle u, PlanetIndex from, PlanetIndex to);
     cmd::RejectReason fleet_op(int32_t player, gal::FleetOp op, uint32_t target, uint32_t fleet, uint32_t unit, const std::string& what);
     bool launch_and_form(int32_t player, PlanetIndex p, ObjectHandle unit, uint32_t fleet);
     // REMAINING_GAPS §6.2 / AI_GALACTIC_2 §2.3: the AI path class of a produced unit's delivery (2, 3 with the task
