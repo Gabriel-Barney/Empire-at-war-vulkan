@@ -37,12 +37,12 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
 #include "alamo/test/support.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
 #ifdef ALAMO_AI_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
 #endif
 #ifdef ALAMO_AI_HAVE_JOBS
 #include "alamo/jobs/job_system.hpp"
-#include "alamo/test/thread_parallel_for.hpp"
 #endif
 
 using namespace alamo;
@@ -992,21 +992,7 @@ static void test_path_finder_determinism() {
 
 // ---- real data -----------------------------------------------------------------------------------
 
-static std::string env_or(const char* name, const char* fallback) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out = fallback;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        if (*v) out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return (v && *v) ? std::string(v) : std::string(fallback);
-#endif
-}
+using ::alamo::test::env_or;  // alamo/test/support.hpp
 
 // q6: galactic seed roles (make_force_type_lookup) follow galactic::galactic_unit_kind. Synthetic types: a mod tag takes
 // its DUMMY_* behaviour's role; the seed's vanilla tags keep their rule (a vanilla-unclassified tag ignores the behaviour).

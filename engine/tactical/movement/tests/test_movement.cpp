@@ -20,6 +20,7 @@
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/tactical/movement/movement_system.hpp"
 #include "alamo/test/support.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
 
 #ifdef ALAMO_MOVEMENT_HAVE_TERRAIN
 #include <filesystem>
@@ -36,7 +37,6 @@
 #include "alamo/objects/object_types.hpp"
 #include "alamo/tactical/movement/ted_grid.hpp"
 #include "alamo/vfs/vfs.hpp"
-#include "alamo/test/thread_parallel_for.hpp"
 #define MOVEMENT_REAL_DATA 1
 #endif
 

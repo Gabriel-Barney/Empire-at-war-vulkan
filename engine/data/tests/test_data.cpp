@@ -604,21 +604,7 @@ static void test_database_install_layout() {
 // ------------------------------------------------------------------------------------------
 // Integration over the real data
 
-static std::string env_or(const char* name, const char* fallback) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out = fallback;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        if (*v) out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return (v && *v) ? std::string(v) : std::string(fallback);
-#endif
-}
+using ::alamo::test::env_or;  // alamo/test/support.hpp
 
 struct TreeStats {
     size_t files = 0, bytes = 0, nodes = 0, recovered = 0, fatal = 0;
