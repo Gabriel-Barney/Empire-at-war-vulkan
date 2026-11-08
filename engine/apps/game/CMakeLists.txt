@@ -288,6 +288,14 @@ function(alamo_game_add_exe)
                    -P ${PROJECT_SOURCE_DIR}/engine/apps/game/bench_scenario_check.cmake)
   set_tests_properties(alamo_game_bench_scenario PROPERTIES TIMEOUT 1800 FIXTURES_REQUIRED alamo_game_smoke_saveload_run)
   alamo_label_slow(alamo_game_bench_scenario)
+  # bm2c t03: the same on a TAA recipe (testdata/bench_orbit_taa.abench: bm-high, run at 640x360; run b redraws every 3rd
+  # settled frame): a fixed-frames scenario with TAA gives identical PNGs in both runs (bench_scenario_check.cmake -DTAA=1).
+  add_test(NAME alamo_game_bench_scenario_taa
+           COMMAND ${CMAKE_COMMAND} -DGAME=$<TARGET_FILE:alamo_game> -DSAVE=${_smoke_out}/saveload_saves/smoke_battle.alsv
+                   -DRECIPE=${_dir}/testdata/bench_orbit_taa.abench -DOUT=${_bench_out}/scenario_taa -DTAA=1
+                   -P ${PROJECT_SOURCE_DIR}/engine/apps/game/bench_scenario_check.cmake)
+  set_tests_properties(alamo_game_bench_scenario_taa PROPERTIES TIMEOUT 1800 FIXTURES_REQUIRED alamo_game_smoke_saveload_run)
+  alamo_label_slow(alamo_game_bench_scenario_taa)
   # bm3: the committed rendered scenes (tests/benchmark/*.abench with `host game`): each runs 120 ticks hidden and its fingerprint
   # matches (bench_scene_check.cmake; skipped without ALAMO_FOC_DATA). One entry per scene, each with its own output folder.
   foreach(_scene space_battle_game nebula_battle water_battle)

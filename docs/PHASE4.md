@@ -212,62 +212,6 @@ headless refusal, report keys), `alamo_game_bench_scenario_headless` (no data: a
 match, 120 counted frames, GPU scopes, identical PNGs in both runs, the camera moved (first and last PNG differ), and a changed
 pinned file refused.
 
-## Q4 parity baseline (q4h t02, 2026-11-07; re-recorded after a2k t10 / t11, q4hf t01)
-
-Measured with the Q4 harness (`tools/parity/`, README there: metrics, tolerances and their reasons, grading). The table is
-the current `tools/parity/baseline.json`, recorded at **dev `79576620`** (a2k t10 + t11, alamo_headless MSVC Release, 4
-workers); the first recording was dev `3629d4cf`, before the a2k galactic-AI merge (row "q4h t02" below; the harness has
-more timing metrics since). Re-record it, like a golden, when an intended behaviour change moves a metric. The confirm, AI
-and Q4 groups are judged against these numbers. Reference runs: the Q2 traces in the main checkout's
-`tools/probe_mod/q2_traces/out/`.
-
-| scenario | timing | income | AI choices | battle outcomes | damage |
-|---|---|---|---|---|---|
-| `hotm_galactic` (3 retail runs) at `79576620` | 36 PASS / 8 FAIL | 20 / 5 | 16 / 0 (1 N/A) | 7 / 0 | - |
-| `hotm_galactic` at the a2k merge (`9064172d`) | 34 / 8 | 21 / 4 | 16 / 0 (1 N/A) | 7 / 0 | - |
-| `hotm_galactic`, q4h t02 (`3629d4cf`) | 15 / 5 | 22 / 3 | 11 / 5 (1 N/A) | 7 / 0 | - |
-| retail leave-one-out, same tolerances | 90 / 17 | 46 / 14 | 30 / 10 | 19 / 2 | - |
-| `geonosis_skirmish` (1 retail run), unchanged | - | 3 / 3 | 0 / 5 (1 N/A) | 2 / 3 | 3 N/A |
-
-a2k t10 (Add_Credits AI notify, `docs/re/A2K_T10_CREDIT_NOTIFY_RE.md`): `econ.credits_at_9000[Rebel]` 3106 -> 867 (retail
-650..1143, now PASS; the Rebel spends the Shola capture bonus within ~170 ticks). Still FAIL: `credits_at_4500[Rebel]` 1186
-(retail 677..825), `credits_at_9000[Underworld]` 324 (retail 2462..2849; plan choice / trajectory, saboteur question open,
-a2k t05). New FAIL: `credits_at_13500[Rebel]` 1169 (retail 23..899) and `income_mean[Rebel]` 812 (retail 713..736): the
-port's Rebel holds both Shola and a MonCalimari mining facility, a combination neither retail run had. Also
-`build.ticks[UNDERWORLD_MERC_SQUAD@NALHUTTA]` FAIL -> PASS. The bullets below describe the q4h t02 run.
-
-The leave-one-out row grades each retail run like the port against the other two: the three HotM runs (same seed 0,
-no input) already differ from tick 140 on, so a port FAIL in an AI-driven metric has to be read against that row.
-
-Differences outside tolerance (port vs retail):
-
-- **Timing, galactic.** Fiscal cycles: all 10 exact. Builds: 8 of 10 type/planet pairs within 5% (mining facility,
-  palace, barracks, factories, turbolaser towers: port 600 / 720 / 1440, retail 602 / 722 / 1442, i.e. retail items
-  leave the queue 2 ticks after start + frames); `CORELLIAN_GUNBOAT@NABOO` 432 vs 458-482 and
-  `UNDERWORLD_SABOTEUR_TEAM@NALHUTTA` 540 vs 602 are shorter in the port (engine/galactic production build-time
-  modifiers). Hops: all 7 Rebel routes within 3 ticks (e.g. Shola -> Nal Hutta 160 vs 161, Kamino -> The Maw 277 vs 279);
-  3 Underworld routes off (Nal Hutta -> Shola 160 vs retail 80 / 89 / 107, Felucia -> Kashyyyk 68 vs 104, Kashyyyk -> Kuat
-  28 vs 44): the port's Underworld fleets move at Rebel speed where retail is faster on some hops and slower on others
-  (engine/galactic hyperspace speed: corruption bonus, fleet composition).
-- **Income, galactic.** The idle Empire matches exactly (667.5 per cycle, 15,002.5 / 17,005 / 19,007.5 at ticks 4500 /
-  9000 / 13500). Underworld first payment 2105 vs 2150-2240, Underworld ends at 0 credits (retail 176-312), Rebel mean
-  payment 817 vs 713-736 (engine/galactic income + engine/ai spending).
-- **AI choices, galactic.** Rebel queues 11 items (retail 32-50), type overlap 0.22 (retail runs among themselves 0.30):
-  the q2f t09 gap (no infantry, tank busters, Y-wings). Underworld production is within tolerance (23 items, overlap 0.54),
-  but its fleets leave first at tick 1963 (retail 110) and make 13 departures (retail 37-56), target overlap 0.19 (engine/ai
-  galactic plans). First builds within 4 ticks of retail (Rebel 87 vs 89, Underworld 68 vs 64).
-- **Battle outcomes, galactic.** Final owners within the retail outcomes (4/4/4); 2 owner changes (retail 0-1).
-- **Skirmish (Geonosis, idle Empire vs Rebel AI).** The idle human's credits match to 0.02 (6299.7 / 6599.4 / 6899.1). The
-  port's Empire gains 7 TIE fighters and 4 TIE bombers it never builds (retail: none; engine/apps skirmish host or starbase
-  spawns) and loses 3 units (retail 0: the Rebel AI attacks earlier). The Rebel AI builds X-wings early (frame 600, retail
-  1800), 38 items (retail 25), no mineral extractors (retail 5), balance 2750 / 100 / 400 vs 226 / 1256 / 2112 at frames
-  1800 / 3600 / 5400 (engine/ai tactical production).
-
-Gaps: skirmish damage and first shot have no port side (missing hook: a tactical `--trace-out` in
-`engine/apps/headless/skirmish_run.cpp`; retail: 325 hull lost by the Rebel, first projectile at frame 3953); no retail
-battle-outcome trace (hands-off galactic runs stop when a tactical battle starts); one retail skirmish run only (no spread);
-galactic object counts by type are not comparable (members vs companies).
-
 ### BM3 - stress scenes, load scenes and reports (2026-11-06, group bm3)
 
 **The scenes** (`tests/benchmark/`; every one is a committed scenario: `.abench` + `.alsv` + `.acmd` + `.crc`, none carries a
@@ -339,6 +283,88 @@ console. See `PERFORMANCE.md` for the figures on the reference PC.
 `alamo_headless_bench_galactic_late*` and `alamo_headless_bench_land_battle*` (slow, FoC data: CRCs of 1 / 4 / N workers equal the 0-worker
 run), `alamo_game_bench_scene_<name>` (slow, FoC data, `bench_scene_check.cmake`: 120 hidden ticks per rendered scene, fingerprint match,
 report keys).
+
+### BM2c - sim-only timing of game scenes, TAA scenario run (2026-11-08, group bm2c)
+
+**Sim-only timing of a `host game` scene** (t02). Port choice: `alamo_headless --bench` runs it, linked with the render-free
+`alamo_game_core` (`engine/apps/headless/bench_game.cpp`, compiled with `ALAMO_HEADLESS_HAVE_GAME_CORE` when that target exists;
+wired in `engine/apps/CMakeLists.txt` after `add_subdirectory(game)`), instead of a new sim-only mode in `alamo_game`: the BM1 runner
+(warm-up / timed runs, worker count, fingerprint and run-to-run checks, OPT1 zones, `--crc-out` / `--golden`, `--bench-baseline`, the
+`alamo-bench-result` JSON) applies unchanged, so a game scene's result has exactly BM1's shape (`tool alamo_headless`, `mode sim-only`,
+`scenario.session` e.g. `game.skirmish '...' seed 1 map _MP_SPACE_KUAT`) and `tools/benchmark/compare_results.py` compares it like a
+headless one. `open_game_save_source` reads the save once and loads the game data once (`--game`, else `ALAMO_FOC_DATA`; skipped
+without; the save's VFS arguments unless given); each run builds a fresh `GameSession` with its own job system from the save
+(`GameSession::spec_from_save` + `start_from_save`, the path of `load_game` and of alamo_game's presentation on/off check) with the
+scenario's orders as the replay, and each timed tick is one `GameSession::tick`. The fingerprint is the CRC log of the rendered run that
+made the scene, so a matching sim-only run did the rendered run's sim work (the check also compares its final CRC with the manifest's
+`final_crc`). An `alamo_headless` built without `alamo_game_core` still refuses a game scene with the reason.
+`alamo_headless --bench tests/benchmark/space_battle_game.abench [--runs R] [--bench-json F]`.
+
+**TAA scenario run** (t03). `engine/apps/game/testdata/bench_orbit_taa.abench` is `bench_orbit.abench` on `bm-high` (TAA Medium);
+`bench_scenario_check.cmake -DTAA=1` makes it from the saveload smoke's battle save and runs it twice at 640x360, run b with
+`--bench-redraw-every 3` (BM2b): both reports say `taa: true`, run b reports the forced redraws and as many TAA discards, and the PNGs
+of the two runs are identical.
+
+**Tests**: `alamo_headless_bench_game_<scene>` for `space_battle_game`, `nebula_battle`, `water_battle` (slow, FoC data,
+`headless/check_bench_game.cmake`: one full-length timed run, exit 0, BM1 JSON keys, every tick timed, final CRC = the manifest's);
+`alamo_headless_bench_space_battle_game*` (slow, FoC data: the worker-count check, 0 / 1 / 4 / 16 / machine default);
+`alamo_game_bench_scenario_taa` (slow, FoC data).
+
+## Q4 parity baseline (q4h t02, 2026-11-07; re-recorded after a2k t10 / t11, q4hf t01)
+
+Measured with the Q4 harness (`tools/parity/`, README there: metrics, tolerances and their reasons, grading). The table is
+the current `tools/parity/baseline.json`, recorded at **dev `79576620`** (a2k t10 + t11, alamo_headless MSVC Release, 4
+workers); the first recording was dev `3629d4cf`, before the a2k galactic-AI merge (row "q4h t02" below; the harness has
+more timing metrics since). Re-record it, like a golden, when an intended behaviour change moves a metric. The confirm, AI
+and Q4 groups are judged against these numbers. Reference runs: the Q2 traces in the main checkout's
+`tools/probe_mod/q2_traces/out/`.
+
+| scenario | timing | income | AI choices | battle outcomes | damage |
+|---|---|---|---|---|---|
+| `hotm_galactic` (3 retail runs) at `79576620` | 36 PASS / 8 FAIL | 20 / 5 | 16 / 0 (1 N/A) | 7 / 0 | - |
+| `hotm_galactic` at the a2k merge (`9064172d`) | 34 / 8 | 21 / 4 | 16 / 0 (1 N/A) | 7 / 0 | - |
+| `hotm_galactic`, q4h t02 (`3629d4cf`) | 15 / 5 | 22 / 3 | 11 / 5 (1 N/A) | 7 / 0 | - |
+| retail leave-one-out, same tolerances | 90 / 17 | 46 / 14 | 30 / 10 | 19 / 2 | - |
+| `geonosis_skirmish` (1 retail run), unchanged | - | 3 / 3 | 0 / 5 (1 N/A) | 2 / 3 | 3 N/A |
+
+a2k t10 (Add_Credits AI notify, `docs/re/A2K_T10_CREDIT_NOTIFY_RE.md`): `econ.credits_at_9000[Rebel]` 3106 -> 867 (retail
+650..1143, now PASS; the Rebel spends the Shola capture bonus within ~170 ticks). Still FAIL: `credits_at_4500[Rebel]` 1186
+(retail 677..825), `credits_at_9000[Underworld]` 324 (retail 2462..2849; plan choice / trajectory, saboteur question open,
+a2k t05). New FAIL: `credits_at_13500[Rebel]` 1169 (retail 23..899) and `income_mean[Rebel]` 812 (retail 713..736): the
+port's Rebel holds both Shola and a MonCalimari mining facility, a combination neither retail run had. Also
+`build.ticks[UNDERWORLD_MERC_SQUAD@NALHUTTA]` FAIL -> PASS. The bullets below describe the q4h t02 run.
+
+The leave-one-out row grades each retail run like the port against the other two: the three HotM runs (same seed 0,
+no input) already differ from tick 140 on, so a port FAIL in an AI-driven metric has to be read against that row.
+
+Differences outside tolerance (port vs retail):
+
+- **Timing, galactic.** Fiscal cycles: all 10 exact. Builds: 8 of 10 type/planet pairs within 5% (mining facility,
+  palace, barracks, factories, turbolaser towers: port 600 / 720 / 1440, retail 602 / 722 / 1442, i.e. retail items
+  leave the queue 2 ticks after start + frames); `CORELLIAN_GUNBOAT@NABOO` 432 vs 458-482 and
+  `UNDERWORLD_SABOTEUR_TEAM@NALHUTTA` 540 vs 602 are shorter in the port (engine/galactic production build-time
+  modifiers). Hops: all 7 Rebel routes within 3 ticks (e.g. Shola -> Nal Hutta 160 vs 161, Kamino -> The Maw 277 vs 279);
+  3 Underworld routes off (Nal Hutta -> Shola 160 vs retail 80 / 89 / 107, Felucia -> Kashyyyk 68 vs 104, Kashyyyk -> Kuat
+  28 vs 44): the port's Underworld fleets move at Rebel speed where retail is faster on some hops and slower on others
+  (engine/galactic hyperspace speed: corruption bonus, fleet composition).
+- **Income, galactic.** The idle Empire matches exactly (667.5 per cycle, 15,002.5 / 17,005 / 19,007.5 at ticks 4500 /
+  9000 / 13500). Underworld first payment 2105 vs 2150-2240, Underworld ends at 0 credits (retail 176-312), Rebel mean
+  payment 817 vs 713-736 (engine/galactic income + engine/ai spending).
+- **AI choices, galactic.** Rebel queues 11 items (retail 32-50), type overlap 0.22 (retail runs among themselves 0.30):
+  the q2f t09 gap (no infantry, tank busters, Y-wings). Underworld production is within tolerance (23 items, overlap 0.54),
+  but its fleets leave first at tick 1963 (retail 110) and make 13 departures (retail 37-56), target overlap 0.19 (engine/ai
+  galactic plans). First builds within 4 ticks of retail (Rebel 87 vs 89, Underworld 68 vs 64).
+- **Battle outcomes, galactic.** Final owners within the retail outcomes (4/4/4); 2 owner changes (retail 0-1).
+- **Skirmish (Geonosis, idle Empire vs Rebel AI).** The idle human's credits match to 0.02 (6299.7 / 6599.4 / 6899.1). The
+  port's Empire gains 7 TIE fighters and 4 TIE bombers it never builds (retail: none; engine/apps skirmish host or starbase
+  spawns) and loses 3 units (retail 0: the Rebel AI attacks earlier). The Rebel AI builds X-wings early (frame 600, retail
+  1800), 38 items (retail 25), no mineral extractors (retail 5), balance 2750 / 100 / 400 vs 226 / 1256 / 2112 at frames
+  1800 / 3600 / 5400 (engine/ai tactical production).
+
+Gaps: skirmish damage and first shot have no port side (missing hook: a tactical `--trace-out` in
+`engine/apps/headless/skirmish_run.cpp`; retail: 325 hull lost by the Rebel, first projectile at frame 3953); no retail
+battle-outcome trace (hands-off galactic runs stop when a tactical battle starts); one retail skirmish run only (no spread);
+galactic object counts by type are not comparable (members vs companies).
 
 ## Port choices and per-step notes (tracked on the roadmap)
 
