@@ -24,7 +24,9 @@
 #include "map_run.hpp"
 
 // `ai_log`: write every battle's AI decision log + Lua errors (first run) to this file ("" = none).
-int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std::string& ai_log = {});
+// `trace_out` (q4hf t02): the first run's tactical battle as a Q2TRACE 1 state trace (tactical_trace.hpp; "" = none).
+int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std::string& ai_log = {},
+                    const std::string& trace_out = {});
 
 // --- N1 stage 2 (owner: n2-host): the same battle as a save session (save_run.cpp, --save-session skirmish) ---
 // skirmish_save_load loads the data of `kind` (synthetic | foc | foc-land | foc-land-campaign, as above; map "" = the default) once;

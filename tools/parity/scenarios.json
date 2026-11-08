@@ -23,15 +23,11 @@
    "human": "Empire",
    "ticks": 5400,
    "frames": [600, 1200, 1800, 2400, 3000, 3600, 4200, 4800, 5400],
-   "workers": 4,
-   "gaps": {
-    "combat.damage_taken": "missing port hook: the skirmish host prints no per-object health (a tactical --trace-out in engine/apps/headless/skirmish_run.cpp, like port_trace.hpp does for galactic runs)",
-    "combat.first_shot_frame": "missing port hook: the space skirmish host prints no shot count or first-shot frame (same tactical trace)"
-   }
+   "workers": 4
   }
  },
  "tolerances": {
-  "travel.hop_ticks": {"abs": 3, "rel": 0.03, "nearest": true, "why": "keyed by faction and route; a hop takes its fleet's speed (the units' Hyperspace_Speed, the Underworld corruption bonus), so one route has several durations in retail (Underworld Nal Hutta -> Shola: 89 and 107 ticks) and each port hop must lie within tolerance of some retail hop of that route. A hop is timed from the first moved sample to the first parked sample (same rule on both sides); retail hops of one route and fleet differ by up to 6 ticks (Rebel Kamino -> Shola 221 / 227, Mon Calamari -> Shola 74 / 80), so 3%, at least 3 ticks; a wrong speed multiplier shows as 100+ ticks (tools/probe_mod/g1_hops/README.md)"},
+  "travel.hop_ticks": {"abs": 3, "rel": 0.03, "nearest": true, "why": "keyed by faction and route; a hop takes its fleet's speed (the units' Hyperspace_Speed, the Underworld corruption bonus), so one route has several durations in retail (Underworld Nal Hutta -> Shola: 89 and 107 ticks) and each port hop must lie within tolerance of some retail hop of that route. A leg is timed from the last sample at its start planet to the first sample at its end planet, a trip passing a planet centre is split there (same rule on both sides, q4hf t04); retail hops of one route and fleet differ by up to 6 ticks (Rebel Kamino -> Shola 221 / 227, Mon Calamari -> Shola 74 / 80), so 3%, at least 3 ticks; a wrong speed multiplier shows as 100+ ticks (tools/probe_mod/g1_hops/README.md)"},
   "build.ticks": {"abs": 3, "rel": 0.05, "why": "the shortest completed build per type and planet: retail from its queue start to leaving the queue (production.q2q: items finish 2 ticks after start + frames), the port from the AI build order to the new object in its state trace. The retail runs themselves differ by 5% on one planet (mining facility at Mon Calamari 686 vs 722 ticks, Y-wings 344 vs 362: a build-time modifier present in one run only), so 5%, at least 3 ticks"},
   "econ.cycle_tick": {"abs": 0, "why": "the fiscal period is data (45 s = 1350 frames) and the first payment rule is known (q2f t02): exact; a retail cycle seen across missed samples is a window and the port tick must fall inside it"},
   "econ.income_cycle1": {"abs": 1, "rel": 0.01, "why": "the first payment comes before AI ownership or structure choices can differ much: planet incomes, starting structures and corruption are data; 1% covers f32 credit arithmetic"},

@@ -1,6 +1,7 @@
 // alamo_headless --skirmish-ai (A1 stage 2): see skirmish_run.hpp.
 #include "skirmish_run.hpp"
 #include "crc_out.hpp"
+#include "tactical_trace.hpp"  // q4hf t02: --trace-out
 
 #include <algorithm>
 #include <chrono>
@@ -756,7 +757,7 @@ void add_galactic_context([[maybe_unused]] const Session& s, [[maybe_unused]] co
 
 }  // namespace
 
-int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std::string& ai_log) {
+int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std::string& ai_log, const std::string& trace_out) {
     Session s;
     std::vector<std::string> diag;
     bool skipped = false;
@@ -819,12 +820,32 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     };
     constexpr uint32_t kBattleFrames = 30 * 480;  // [port] the 15-min battle limit (S10)
     std::string log_text;
-    auto run_one = [&](int32_t workers, Out& out) -> bool {
+    auto run_one = [&](int32_t workers, Out& out, bool write_trace = false) -> bool {
         jobs::JobSystem js(jobs::JobSystemConfig{workers});
         sim::SimConfig cfg;
         cfg.seed = opt.seed;
         cfg.players = 4;
         cfg.object_scripts = opt.object_scripts;  // q6
+        // q4hf t02: the tactical state trace reads the battle after each tick (never writes it); the first run only.
+        PortTacticalTrace trace;
+        if (write_trace && !trace_out.empty()) {
+            std::string sides;
+            for (size_t p = 0; p < 2 && p < s.setup.players.size(); ++p) {
+                const galactic::PlayerSetup& ps = s.setup.players[p];
+                const std::string f = ps.faction < s.rules.factions.size() ? s.rules.factions[ps.faction].name : std::string("?");
+                sides += (p ? " vs " : "") + (ps.human ? "human " + f + " idle" : "AI " + f);
+            }
+            const std::vector<std::pair<std::string, std::string>> meta = {
+                {"reader", "alamo_headless"}, {"scenario", "skirmish"}, {"game", "foc"},
+                {"skirmish", std::string(s.land ? "land" : "space") + " 2 players, " + sides}, {"map", foc ? s.map : std::string("synthetic")},
+                {"label", "alamo_headless --skirmish-ai " + kind}, {"mode_type", s.land ? "1" : "2"},
+                {"target_ticks", std::to_string(max_ticks)}};
+            std::string terr;
+            if (!trace.open(trace_out, meta, cfg.seed, terr)) {
+                std::fprintf(stderr, "skirmish-ai: %s\n", terr.c_str());
+                return false;
+            }
+        }
         sim::SimHost host(s.types, js, cfg);
         if (opt.object_scripts) {  // q6: game-object scripts, and the GameScoring script that sets the mod's GlobalValues
             host.set_object_script_files(s.files.get());
@@ -945,11 +966,29 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
                     }
                 }
                 if (opt.object_scripts && (bs.frames == 1 || bs.frames % 600 == 0)) script_state = battle_state_text(t + 1, host, *gs, *tb);
+                if (trace.is_open())  // q4hf t02
+                    if (const sim::TacticalMode* tmode = host.tactical()) {
+                        const sim::GameMode* top = host.modes().top();
+                        PortTacticalTrace::Sample ts;
+                        ts.global_frame = host.frame();
+                        ts.mode_type = top ? static_cast<uint32_t>(top->kind()) : 2u;
+                        ts.rng_state = host.random().synced().state();
+                        ts.stack_depth = static_cast<uint32_t>(host.modes().depth());
+                        trace.sample(*tmode, *tb, *gs, ts);
+                    }
             }
             if (battles.battles_fought() > 0 && !battles.battle() && host.modes().depth() == 1) {
                 ++t;
                 break;
             }
+        }
+        if (trace.is_open()) {
+            std::string terr;
+            if (!trace.finish(t < max_ticks ? "mode_changed" : "ticks_reached", terr)) {
+                std::fprintf(stderr, "skirmish-ai: %s\n", terr.c_str());
+                return false;
+            }
+            std::printf("wrote %s\n", trace_out.c_str());
         }
         out.crc = host.crc_log();
         out.ticks = t;
@@ -1022,7 +1061,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     };
     Out first;
     const auto counts = jobs::determinism_worker_counts();
-    if (!run_one(opt.check_workers ? counts.front() : opt.workers, first)) {
+    if (!run_one(opt.check_workers ? counts.front() : opt.workers, first, true)) {
         std::fprintf(stderr, "skirmish-ai: run failed\n");
         return 1;
     }
@@ -1230,7 +1269,7 @@ bool skirmish_save_start(const SkirmishSaveData& d, sim::SimHost& host, bool ani
 }
 // --- end N1 stage 2 ---
 #else
-int skirmish_ai_run(const MapRunOptions&, const std::string&, const std::string&) {
+int skirmish_ai_run(const MapRunOptions&, const std::string&, const std::string&, const std::string&) {
     std::fprintf(stderr, "--skirmish-ai: this build has no tactical AI (engine/ai/tactical + engine/lua)\n");
     return 2;
 }
