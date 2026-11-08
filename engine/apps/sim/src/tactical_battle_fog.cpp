@@ -192,32 +192,8 @@ void TacticalBattle::fog_footprint_samples(const objects::ObjectStore& store, ob
 
 void TacticalBattle::fog_decay() {
     if (!fog_on_) return;
-    fog_overrun();  // common tick step 3 (OI fog)
+    // Common tick step 3, the overrun reveal (FOG_OF_WAR §3.3), runs only in the networked game types: not ported (CU7).
     fog_.decay_step(frame_);  // step 4
-}
-
-// OI fog: overrun reveal (FOG_OF_WAR §3.3, 0x364920). A = sum of AI_Combat_Power over the record attacker's (+4) live
-// battle objects, B = the defender's (+8), unit order [port: the 0x40 / 0x80 / 0x02 flags and the "counting types"
-// filter are not modelled; garrisoned units count as contained]. The library gates game type / cadence / time. Game types
-// 1 / 2 / 4 are the networked ones (FOG_OF_WAR §3.3 [H]): campaign (0) and local skirmish (3) never run it, and
-// multiplayer is out of scope, so the default fog_game_type 0 is the port's only case.
-void TacticalBattle::fog_overrun() {
-    const int32_t gt = cfg_.fog_game_type;
-    if (!cfg_.fog_overrun || !(gt == 1 || gt == 2 || gt == 4) || frame_ % 15u != 0 || !fog_mode_) return;
-    const objects::ObjectStore& store = fog_mode_->primary();
-    const objects::GameObjectTypes& types = catalog_->types();
-    const int32_t p4 = req_.info.attacker, p8 = req_.info.defender;
-    float power4 = 0.0f, power8 = 0.0f;
-    for (const Unit& u : units_) {
-        if (!u.alive || u.retreated || !store.alive(u.h)) continue;
-        if (garrison_.garrisoned(u.id)) continue;
-        const objects::TypeIndex t = store.type(u.h);
-        if (t >= types.size()) continue;
-        const int32_t o = store.owner(u.h);
-        if (o == p4) power4 += types.get_float(t, "AI_Combat_Power");
-        else if (o == p8) power8 += types.get_float(t, "AI_Combat_Power");
-    }
-    fog_.service_overrun(frame_, gt, cfg_.fog_overrun, p4, power4, p8, power8);
 }
 
 // REVEAL services (object-service step): live units in ascending id; dead / retreated ones leave (vf15), garrisoned

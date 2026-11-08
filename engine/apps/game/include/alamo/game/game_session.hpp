@@ -98,7 +98,8 @@ inline constexpr uint16_t kBattleChoiceSubtype = 0x4243;  // "BC"
 commands::EventData battle_choice_event(galactic::BattleChoice choice);
 // P4 host: the retreat dialog's Autoresolve (IDC_AUTORESOLVE in a tactical battle; retail drives the sim from the GUI
 // without a command, docs/re/P4_SIM_SYSTEMS.md §9.3, so the port wraps it in this port event, one byte, for replays).
-// The auto-resolve dialog's Withdraw is the original Withdrawl event (COMMANDS.md id 49, no payload, §9.2). The story
+// The auto-resolve dialog's Withdraw is the original Withdrawl event (COMMANDS.md id 49, no payload, §9.2); retail shows
+// that dialog only in multiplayer, so the port has no dialog for it (GameSession::withdraw has no UI caller). The story
 // summary's Abandon is dead in retail (§9.1): no command. See GameSession::port_event.
 inline constexpr uint16_t kTacticalAutoResolveSubtype = 0x5441;  // "TA"
 commands::EventData tactical_auto_resolve_event();

@@ -175,13 +175,8 @@ void App::handle_screen_actions(const std::vector<ui::ScreenAction>& acts) {
                 summary_entry_ = 0;    // the tab's first row
                 open_story_summary();  // refill
                 break;
-            // P4 host: both answers go through the command stream; their results come at the command phase
-            // (GameSession::port_event). The auto-resolve dialog stays until its result (galactic_screens). The story
-            // summary's Abandon is permanently disabled (P4_SIM_SYSTEMS §9.1).
-            case K::Withdraw:
-                if (session_ && session_->withdraw()) ++withdraws_;
-                std::printf("auto-resolve: withdraw requested\n");
-                break;
+            // P4 host: the answer goes through the command stream; its result comes at the command phase
+            // (GameSession::port_event). The story summary's Abandon is permanently disabled (P4_SIM_SYSTEMS §9.1).
             case K::AutoResolve:  // the retreat dialog's Autoresolve (tactical)
                 if (session_ && session_->auto_resolve_battle()) ++tactical_auto_resolves_;
                 std::printf("battle: auto-resolve requested\n");

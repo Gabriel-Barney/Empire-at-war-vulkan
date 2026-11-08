@@ -1,5 +1,5 @@
 // G0-3 command pipeline: scheduler + apply handler + event bus + recorder/replayer + CRC hook.
-// The one path for all orders (player UI, AI, script, network, replay).
+// The one path for all orders (player UI, AI, script, replay).
 //
 // begin_tick(T) is THE command point of a sim tick: call it first in tick T, before any system
 // update (provisional until docs/re/MAIN_LOOP.md / COMMANDS.md say where the original applies them).
@@ -9,16 +9,15 @@
 //   3. CRC hook: crc_hook(bytes, size) over the canonical batch bytes (encode_batch), every tick,
 //      also for empty batches - Q1 registers this with its per-tick CRC;
 //   4. append the batch to the recording (if recording);
-//   5. serially, in batch order: FrameSync first retunes the scheduler's MaxAhead (§4.3), then
-//      handler(cmd) resolves ids and applies; a CommandResult (diagnostic only, see events.hpp) is
-//      posted to the event bus in the same order.
+//   5. serially, in batch order: handler(cmd) resolves ids and applies; a CommandResult (diagnostic
+//      only, see events.hpp) is posted to the event bus in the same order.
 // The handler must follow the original's rules (COMMANDS.md §6.2): resolve ids at execution, treat
 // missing/dying targets as a silent no-op, act on the issuer's current selection where the event says
 // so (selection is synced sim state set by Select/SelectAll/ControlGroup), and depend only on the
 // event fields + sim state (never on the local player).
 //
 // AI and Lua do not use the queue (COMMANDS.md §5): they build the same EventData and call
-// execute_direct() inside their own tick slot. That runs the handler at once - no delay, no network, no
+// execute_direct() inside their own tick slot. That runs the handler at once - no delay, no
 // recording, no batch CRC (their effects are covered by the state CRC; they replay by re-running).
 // Events are not delivered here; the host calls events().deliver() at its chosen point.
 #pragma once
@@ -59,8 +58,8 @@ public:
     // N1 replay from a save: call after read() restored this pipeline from the save `loaded` (instead
     // of building a pipeline from rec->config). Checks that `rec` continues this state, then replays it
     // as replay_from(rec) does:
-    //   * same scheduler mode, turn, max_players and late policy as the loaded scheduler (they decide
-    //     how inserts are aligned / accepted; delay and max_ahead only stamp live orders);
+    //   * same max_players as the loaded scheduler (it decides which inserts are accepted; delay only
+    //     stamps live orders);
     //   * a stream with from_save: from_save == loaded and config.first_tick == scheduler().next_tick();
     //   * a stream without (a full recording of the run): config.first_tick <= next_tick(); its batches
     //     before next_tick() are skipped.
@@ -73,9 +72,7 @@ public:
 
     // Local human orders (and tools that record streams). Refused with NotAllowed while replaying.
     SubmitResult submit(uint8_t player, CommandSource source, CommandPayload payload);
-    // Network peers (arrival order). Refused with NotAllowed while replaying.
-    SubmitResult receive(Command cmd);
-    // AI / Lua direct path: runs the handler now for 	ick (the current tick). Returns the handler's
+    // AI / Lua direct path: runs the handler now for `tick` (the current tick). Returns the handler's
     // reason; non-scheduled types return NotScheduled without running.
     RejectReason execute_direct(uint64_t tick, uint8_t player, CommandSource source, const EventData& event);
 
@@ -83,7 +80,7 @@ public:
     const CommandBatch& begin_tick(uint64_t tick);
 
     // N1 save / load (contract: alamo/core/save_file.hpp). Saved: the scheduler (CommandScheduler::write:
-    // config as retuned, now / next drain tick, queued commands for future ticks, per-player sequence and
+    // config, now / next drain tick, queued commands for future ticks, per-player sequence and
     // drained-sequence state) and the event bus's undelivered events (EventBus::write). Not saved (host
     // wiring): handler, CRC hook, recording / replay attachment, the last drained batch (valid only until
     // the next begin_tick), event subscribers. Layout: u32 version | scheduler | event bus.

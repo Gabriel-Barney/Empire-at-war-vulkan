@@ -49,11 +49,11 @@ std::vector<uint8_t> CommandRecording::to_bytes() const {
     wire::put(out, from_save ? kStreamFromSave : uint16_t{0});
     wire::put(out, config.delay);
     wire::put(out, config.max_players);
-    wire::put(out, static_cast<uint8_t>(config.late));
-    wire::put(out, static_cast<uint8_t>(config.mode));
+    wire::put(out, kSchedLateByte);
+    wire::put(out, kSchedModeByte);
     wire::put(out, uint8_t{0});
-    wire::put(out, config.turn);
-    wire::put(out, config.max_ahead);
+    wire::put(out, kSchedTurn);
+    wire::put(out, kSchedMaxAhead);
     wire::put(out, seed);
     wire::put(out, config.first_tick);
     wire::put(out, end_tick);
@@ -86,8 +86,8 @@ bool CommandRecording::from_bytes(std::span<const uint8_t> bytes, CommandRecordi
     const uint8_t late = r.get<uint8_t>();
     const uint8_t mode = r.get<uint8_t>();
     r.get<uint8_t>();
-    rec.config.turn = r.get<uint32_t>();
-    rec.config.max_ahead = r.get<uint32_t>();
+    const uint32_t turn = r.get<uint32_t>();
+    const uint32_t max_ahead = r.get<uint32_t>();
     rec.seed = r.get<uint64_t>();
     rec.config.first_tick = r.get<uint64_t>();
     rec.end_tick = r.get<uint64_t>();
@@ -99,11 +99,10 @@ bool CommandRecording::from_bytes(std::span<const uint8_t> bytes, CommandRecordi
     }
     const uint32_t nmeta = r.get<uint32_t>();
     if (!r.ok()) return fail(err, "truncated header");
-    if (rec.config.delay < 1 || rec.config.max_players < 1 || rec.config.max_players > kMaxPlayerSlots || late > 1 ||
-        mode > 1 || rec.config.turn < 1)
+    if (rec.config.delay < 1 || rec.config.max_players < 1 || rec.config.max_players > kMaxPlayerSlots)
         return fail(err, "bad scheduler config in header");
-    rec.config.late = static_cast<LatePolicy>(late);
-    rec.config.mode = static_cast<ScheduleMode>(mode);
+    if (late != kSchedLateByte || mode != kSchedModeByte || turn != kSchedTurn || max_ahead != kSchedMaxAhead)
+        return fail(err, "lockstep / network scheduler config in header (not supported)");
     ByteReader mr(bytes.subspan(r.pos()));  // the meta strings (ByteWriter::str layout)
     for (uint32_t i = 0; i < nmeta; ++i) {
         std::string k = mr.str();

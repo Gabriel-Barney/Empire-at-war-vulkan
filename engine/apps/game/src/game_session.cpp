@@ -529,8 +529,9 @@ bool GameSession::auto_resolving() const {
     return c && (c->attacker == local_player_ || c->defender == local_player_);
 }
 
-// --- P4 host: the auto-resolve dialog's Withdraw and the retreat dialog's Autoresolve, both through the command stream
-// (recorded, replayed, drained at the command phase like battle_choice_event) ---
+// --- P4 host: Withdraw (retail's multiplayer-only auto-resolve dialog; no UI caller in the port) and the retreat
+// dialog's Autoresolve, both through the command stream (recorded, replayed, drained at the command phase like
+// battle_choice_event) ---
 bool GameSession::withdraw() { return host_ && submit(commands::EventData(commands::EventType::Withdrawl)).ok(); }
 
 commands::EventData tactical_auto_resolve_event() {

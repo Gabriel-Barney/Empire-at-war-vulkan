@@ -1,7 +1,7 @@
 // alamo_ui_colour_arrows_tests (p4ui t03, CPU): colour combos draw the item text in the item colour (docs/re/UI.md
 // §3.7.1: no filled box, glyph through the control font, centred / left-justified field text, trailing characters
-// dropped when too wide), the lobby's one-glyph colour items, the tech-tree arrow art, icon tints, the battle-end
-// arrows and the fleet summary dividers (§3.7.2).
+// dropped when too wide), the tech-tree arrow art, icon tints, the battle-end arrows and the fleet summary dividers
+// (§3.7.2).
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -12,7 +12,6 @@
 #include "alamo/data/xml.hpp"
 #include "alamo/ui/gui_dialog.hpp"
 #include "alamo/ui/gui_info_screens.hpp"
-#include "alamo/ui/gui_lobby.hpp"
 #include "alamo/ui/gui_resource.hpp"
 #include "alamo/ui/gui_screens.hpp"
 #include "alamo/ui/hud_font.hpp"
@@ -25,7 +24,8 @@ using ::alamo::test::g_fail;
 
 namespace {
 
-// Trimmed copies of the shipped dialogs (same ids), plus two plain test combos in the LAN lobby.
+// Trimmed copies of the shipped dialogs (same ids), plus two plain test combos in the LAN lobby one (only a host for the
+// generic combo / list box draw tests; the lobby screens themselves were removed with multiplayer).
 const char* kRc = R"RC(
 IDD_LAN_LOBBY_DIALOG DIALOGEX 0, 0, 955, 701
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP
@@ -286,47 +286,6 @@ void test_combo_field_text() {
     }
 }
 
-void test_lobby_glyph_items() {
-    Fix f;
-    LobbyScreens lob;
-    lob.init(f.gui);
-    // Without palette values the combos keep their text items.
-    StagingState st;
-    st.host = true;
-    st.colors = {U"Red", U"Blue", U"Green"};
-    st.factions = {U"Rebel", U"Empire"};
-    st.teams = {U"1"};
-    st.maps = {U"Kuat"};
-    st.map = 0;
-    StagingSlot ai;
-    ai.state = SlotState::AI;
-    ai.color = 1;
-    st.slots = {ai};
-    CHECK(lob.show_staging(st));
-    GuiDialog* s = f.gui.find(dlg::kLanStaging);
-    CHECK(s && s->get("IDC_PLAYER_COLOR_0")->items.size() == 3 && s->get("IDC_PLAYER_COLOR_0")->items[0] == U"Red" &&
-          s->get("IDC_PLAYER_COLOR_0")->item_colors.empty());
-    // With values: one U+25A0 per palette entry, the selection stays the colour index.
-    st.color_values = {kRed, kBlue, kGreen};
-    CHECK(lob.show_staging(st));
-    s = f.gui.find(dlg::kLanStaging);
-    const GuiControl* pc = s ? s->get("IDC_PLAYER_COLOR_0") : nullptr;
-    CHECK(pc && pc->items.size() == 3 && pc->items[0] == U"■" && pc->items[1] == U"■" && pc->items[2] == U"■" &&
-          pc->selected == 1 && pc->item_colors.size() == 3 && pc->item_colors[1] == kBlue);
-    // LAN lobby colour select: U+2588.
-    lob.set_colors({U"Red", U"Blue"}, 1, {kRed, kBlue});
-    lob.show_lan_lobby();
-    const GuiDialog* l = f.gui.find(dlg::kLanLobby);
-    const GuiControl* lc = l ? l->get("IDC_LAN_COLOR_SELECT") : nullptr;
-    CHECK(lc && lc->items.size() == 2 && lc->items[0] == U"█" && lc->selected == 1 && lc->item_colors.size() == 2);
-    lob.set_colors({U"Red", U"Blue", U"Green"}, 2, {kRed, kBlue, kGreen});  // refresh while open
-    lc = f.gui.find(dlg::kLanLobby)->get("IDC_LAN_COLOR_SELECT");
-    CHECK(lc->items.size() == 3 && lc->items[2] == U"█" && lc->selected == 2);
-    lob.set_colors({U"Red", U"Blue"}, 0);  // no values: text items again
-    lc = f.gui.find(dlg::kLanLobby)->get("IDC_LAN_COLOR_SELECT");
-    CHECK(lc->items.size() == 2 && lc->items[0] == U"Red" && lc->item_colors.empty());
-}
-
 void test_tech_tree_arrows() {
     Fix f;
     InfoScreens is;
@@ -412,7 +371,6 @@ int main() {
     test_colour_combo_text();
     test_list_box_colours();
     test_combo_field_text();
-    test_lobby_glyph_items();
     test_tech_tree_arrows();
     test_battle_end_arrows();
     test_fleet_dividers();

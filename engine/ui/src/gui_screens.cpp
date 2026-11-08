@@ -73,7 +73,6 @@ const char* screen_action_name(ScreenAction::Kind k) {
         case ScreenAction::Kind::SendChat: return "SendChat";
         case ScreenAction::Kind::ChatClosed: return "ChatClosed";
         case ScreenAction::Kind::PlanetInfoClosed: return "PlanetInfoClosed";
-        case ScreenAction::Kind::Withdraw: return "Withdraw";
         case ScreenAction::Kind::MapSelected: return "MapSelected";
         case ScreenAction::Kind::MapSelectCancelled: return "MapSelectCancelled";
         case ScreenAction::Kind::BuyUnit: return "BuyUnit";
@@ -115,8 +114,7 @@ void GameScreens::close(std::string_view dialog) {
 
 void GameScreens::close_all() {
     if (!gui_) return;
-    for (const char* n : {dlg::kBattleEnd, dlg::kCampaignScore, dlg::kRetreat, dlg::kChat, dlg::kPlanetInfo,
-                          dlg::kAutoResolve, dlg::kSelectMap})
+    for (const char* n : {dlg::kBattleEnd, dlg::kCampaignScore, dlg::kRetreat, dlg::kChat, dlg::kPlanetInfo, dlg::kSelectMap})
         gui_->close(n);
     if (!msg_dialog_.empty()) close(std::string(msg_dialog_));
 }
@@ -320,7 +318,7 @@ bool GameScreens::show_campaign_score(const CampaignScoreInfo& info) {
     return true;
 }
 
-// ---- retreat / chat / planet info / auto-resolve ----------------------------------------------------------
+// ---- retreat / chat / planet info -------------------------------------------------------------------------
 bool GameScreens::show_retreat_confirm() {
     GuiDialog* d = open(dlg::kRetreat);
     if (!d) return false;
@@ -387,28 +385,6 @@ bool GameScreens::show_planet_info(const PlanetInfoData& p) {
     return true;
 }
 
-bool GameScreens::show_auto_resolve(const AutoResolveInfo& info) {
-    GuiDialog* d = open(dlg::kAutoResolve);
-    if (!d) return false;
-    d->set_items("IDC_INVADING_FORCES_LIST", info.local_side ? info.invaders : std::vector<std::u32string>{}, -1);
-    d->set_items("IDC_DEFENDING_FORCES_LIST", info.local_side ? info.defenders : std::vector<std::u32string>{}, -1);
-    d->enable("IDC_WITHDRAW_BUTTON", info.local_side);  // P4_SIM_SYSTEMS §9.2 enable rule
-    d->set_image("IDC_INVADERL_ICON", info.invader_icon);
-    d->set_image("IDC_DEFENDER_ICON", info.defender_icon);
-    d->show("IDC_INVADERL_ICON", !info.invader_icon.empty());
-    d->show("IDC_DEFENDER_ICON", !info.defender_icon.empty());
-    d->show("IDC_ADVANCED_RESOLVE_INFO", false);  // [port] advanced info not modelled
-    set_auto_resolve_progress(0.0f, 0.0f);
-    return true;
-}
-
-void GameScreens::set_auto_resolve_progress(float invader, float defender) {
-    GuiDialog* d = gui_ ? gui_->find(dlg::kAutoResolve) : nullptr;
-    if (!d) return;
-    d->set_value("IDC_AUTO_RESOLVE_PROGRESS_INVADER", static_cast<int32_t>(std::lround(std::clamp(invader, 0.0f, 1.0f) * 100.0f)));
-    d->set_value("IDC_AUTO_RESOLVE_PROGRESS_DEFENDER", static_cast<int32_t>(std::lround(std::clamp(defender, 0.0f, 1.0f) * 100.0f)));
-}
-
 // ---- select map -------------------------------------------------------------------------------------------
 bool GameScreens::show_select_map(std::span<const SkirmishMapInfo> maps) {
     GuiDialog* d = open(dlg::kSelectMap);
@@ -471,9 +447,6 @@ void GameScreens::on_click(const GuiEvent& e, std::vector<ScreenAction>& out, st
             a.object = planet_info_;
             out.push_back(std::move(a));
         }
-    } else if (iequals(n, dlg::kAutoResolve)) {
-        const GuiControl* w = d ? d->get("IDC_WITHDRAW_BUTTON") : nullptr;
-        if (is("IDC_WITHDRAW_BUTTON") && (!w || w->enabled)) out.push_back(act(ScreenAction::Kind::Withdraw));
     } else if (iequals(n, dlg::kSelectMap) && d) {
         if (is("IDC_LOAD_MAP_BUTTON")) {
             const GuiControl* l = d->get("IDC_SAVED_MAPS_LIST");
@@ -513,7 +486,7 @@ void GameScreens::on_cancel(const GuiEvent& e, std::vector<ScreenAction>& out) {
         gui_->close(n);
         out.push_back(act(ScreenAction::Kind::MapSelectCancelled));
     }
-    // Battle end, campaign score and auto-resolve ignore Esc (the player must choose) [port].
+    // Battle end and campaign score ignore Esc (the player must choose) [port].
 }
 
 void GameScreens::update(std::span<const GuiEvent> events, std::vector<ScreenAction>& out,

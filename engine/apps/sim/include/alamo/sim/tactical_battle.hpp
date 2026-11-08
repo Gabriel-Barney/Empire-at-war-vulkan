@@ -123,10 +123,7 @@ struct BattleConfig {
     float presence_relaxation_seconds = 3.0f;
     // Fog of war (docs/re/FOG_OF_WAR.md; owner: fog agent). Not in the frame CRC, never draws RNG.
     bool fog = true;
-    // OI fog: overrun reveal (FOG_OF_WAR §3.3) inputs: game type (mode +0xc; only the multiplayer types 1, 2, 4
-    // reveal; [port] 0 = campaign / single-player, never) and the mode's overrun-enabled byte (+0x2cf).
-    int32_t fog_game_type = 0;
-    bool fog_overrun = true;
+    // The overrun reveal (FOG_OF_WAR §3.3) runs only in the multiplayer game types: not ported (CU7).
     // --- integration fixes (alamo_game): [port] true = the units of human players (GalacticSim::players()[p].human)
     // take orders only from commands (TacticalBattle::order_*): the stand-in orders (issue_orders, BattleAi's
     // stand-in) skip them. Default false: headless sims / goldens let the stand-in drive the "human" side too. ---
@@ -1082,7 +1079,7 @@ public:
     // storm SPACE_OBSTACLE objects), decay at the start of tick() (common-tick step 4), REVEAL units serviced
     // after the combat events (object-service step; dead / retreated / garrisoned units undone, every shot flashes
     // the shooter for the target's owner), battle scale (land: the defender by the attacker's Modifies_Reveal_Range
-    // objects; space: the attacker by the defender's), overrun reveal before the decay (BattleConfig::fog_game_type),
+    // objects; space: the attacker by the defender's), no overrun reveal (multiplayer only, not ported),
     // land setup phase when SetupPhaseEnabled. Null when fog is off or the battle is not set up.
     tactical::fog::FogOfWar* fog() { return fog_on_ ? &fog_ : nullptr; }
     const tactical::fog::FogOfWar* fog() const { return fog_on_ ? &fog_ : nullptr; }
@@ -1543,7 +1540,6 @@ private:
     std::vector<tactical::fog::PreventionCircle> fog_prevention_circles() const;       // OI fog
     void fog_footprint_samples(const objects::ObjectStore& store, objects::ObjectHandle h, float* xy) const;  // FOWF t02
     void fog_service_sources(const objects::ObjectStore& store);                       // OI fog
-    void fog_overrun();                                                                // OI fog
     tactical::fog::FogOfWar fog_;
     TacticalMode* fog_mode_ = nullptr;
     bool fog_on_ = false;

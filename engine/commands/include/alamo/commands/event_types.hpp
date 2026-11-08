@@ -7,15 +7,16 @@
 // (COMMANDS.md §1.1 says 56 classes / 52 scheduled; its payload table and the 54 factories give the
 // 54 ids above - the two extra classes have no type id and cannot appear on the wire.)
 //
-// Each type's payload is a list of fields (wire order). Field kinds:
+// Each type's payload is a list of fields (the original's wire order). Field kinds
+// (widths are the original's bit-packed network wire, which is not ported - CU7; they bound valid values):
 //   Bits n     unsigned n-bit value (n <= 32)
 //   Id         32-bit object id (kNoObject = 0x3FFFFF = none; OBJECT_RUNTIME.md id space)
-//   Player     player id, P bits on the wire (P is a WireConfig parameter: unknown, COMMANDS.md §10)
+//   Player     player id (PlayerList index)
 //   Quant i    float quantized with table entry i (§3.2); stored as the integer code
 //   List n     n-bit element count, then that many Id
 //   CountedIds Id list whose count is the value of an earlier Bits field (SetUnitAbilityMode)
-//   Str/WStr   narrow / wide string            [port: 16-bit length + 8/16-bit units; layout unknown]
-//   Opaque     byte blob                       [port: 16-bit byte count + bytes; SpecialAbility kinds]
+//   Str/WStr   narrow / wide string
+//   Opaque     byte blob (SpecialAbility kinds)
 // A field with cond >= 0 is present only when field `cond` == cond_value (ControlGroup's 'add',
 // SpecialWeaponFire's position/target branch).
 #pragma once
@@ -26,9 +27,6 @@
 
 namespace alamo::commands {
 
-inline constexpr unsigned kEventTypeBits = 6;
-inline constexpr unsigned kFrameBits = 26;
-inline constexpr unsigned kPacketCountBits = 5;  // events per packet <= 31
 inline constexpr uint8_t kMaxOriginalEventType = 58;
 inline constexpr uint8_t kMaxEventType = 63;  // 6-bit ids; 59..62 unused, 63 = port extension
 inline constexpr uint32_t kNoObject = 0x3FFFFF;

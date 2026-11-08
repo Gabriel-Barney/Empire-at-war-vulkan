@@ -303,8 +303,9 @@ void test_skirmish_preview() {
           !bare.control("IDC_SCENARIO_DESCRIPTION_TEXT_BOX")->visible && bare.control("IDC_SCENARIO_DESCRIPTION_TEXT_BOX")->text.empty());
 }
 
-// p4uia t01 / t02, p4uis t03: IDC_PLAYER_COLOR_n of the used slots hold the 9 palette entries as U+25A0 glyphs, the default colour
-// is the slot index, the colour clash rule runs in slot order (UI.md 9.7), and StartSkirmish carries the chosen indices.
+// p4uia t01 / t02, p4uis t03: IDC_PLAYER_COLOR_n of the used slots hold the 9 palette entries as U+25A0 glyphs (drawn as text in
+// the entry's colour, no filled box: UI.md 3.7.1), the default colour is the slot index, the colour clash rule runs in slot order
+// (UI.md 9.7), and StartSkirmish carries the chosen indices.
 void test_skirmish_colours() {
     Rig rig({map_row("_MP_LAND_X", "", 2, false, false)});
     rig.open_staging();
@@ -314,6 +315,23 @@ void test_skirmish_colours() {
         CHECK(c->item_colors == palette9() && c->selected == slot && rig.fe.skirmish_colour(slot) == slot);
     }
     CHECK(!rig.control("IDC_PLAYER_COLOR_2")->visible && rig.fe.skirmish_colour(2) == -1);
+    {  // UI.md 3.7.1: the selected glyph is drawn as text in its palette colour, with no filled box behind it (no preview
+       // here, so no start marker can carry a palette colour)
+        Rig flat({map_row("_MP_LAND_X", "", 2, false, false)}, true, false);
+        flat.open_staging();
+        HudDrawList dl;
+        flat.env.gui.build(dl, flat.env.now);
+        const Rgba8 c0 = palette9()[0], c1 = palette9()[1];
+        bool glyph0 = false, glyph1 = false, box = false;
+        for (uint32_t layer = 0; layer < kHudLayers; ++layer) {
+            for (const HudQuad& q : dl.items(layer, HudList::Text)) {
+                glyph0 = glyph0 || q.color == c0;
+                glyph1 = glyph1 || q.color == c1;
+            }
+            for (const HudQuad& q : dl.items(layer, HudList::Alpha)) box = box || q.color == c0 || q.color == c1;
+        }
+        CHECK(glyph0 && glyph1 && !box);
+    }
     auto colours = [&] {
         rig.acts.clear();
         rig.click(kStaging, "IDC_SKIRMISH_START_GAME_BUTTON");

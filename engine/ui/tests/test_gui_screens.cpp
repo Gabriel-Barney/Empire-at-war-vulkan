@@ -68,45 +68,10 @@ void test_real_data() {
     pi.name = U"Tatooine";
     pi.history = {U"Outer Rim desert world."};
     CHECK(gs.show_planet_info(pi));
-    AutoResolveInfo ar;
-    ar.invaders = {U"Star Destroyer"};
-    CHECK(gs.show_auto_resolve(ar));
-    gs.set_auto_resolve_progress(0.4f, 0.6f);
-    CHECK(gui.find(dlg::kAutoResolve)->get("IDC_AUTO_RESOLVE_PROGRESS_DEFENDER")->value == 60);
     const SkirmishMapInfo maps[1] = {{"_SPACE_PLANET_KUAT_01", U"Kuat", 2}};
     CHECK(gs.show_select_map(maps));
     std::printf("real screens: open %zu dialogs\n", gui.open_count());
     gs.close_all();
-    CHECK(gui.open_count() == 0);
-    // Multiplayer screens on the shipped script.
-    LobbyScreens lob;
-    lob.init(gui);
-    lob.show_multiplayer_menu();
-    CHECK(lob.top() == dlg::kMultiplayer);
-    lob.show_lan_lobby();
-    CHECK(lob.top() == dlg::kLanLobby);
-    StagingState st;
-    st.host = true;
-    st.slots.resize(9);
-    st.slots[0].state = SlotState::Human;
-    st.slots[0].local = true;
-    st.slots[0].name = U"Gabriel";
-    CHECK(lob.show_staging(st) && lob.top() == dlg::kLanStaging);
-    st.internet = true;
-    CHECK(lob.show_staging(st) && lob.top() == dlg::kInternetStaging);
-    lob.show_internet_home();
-    CHECK(lob.top() == dlg::kInternetHome);
-    lob.set_internet_stats(12, 3, 4);
-    lob.show_internet_lobby();
-    CHECK(lob.top() == dlg::kInternetLobby);
-    lob.show_direct_connect({U"192.168.1.20"});
-    lob.show_password_prompt("g");
-    lob.show_connecting();
-    const ConnectionRow rows[1] = {{U"Host", 0.5f, true}};
-    lob.show_disconnect(rows);
-    lob.show_vote({});
-    for (const char* n : {dlg::kDirectConnect, dlg::kPassword, dlg::kConnect, dlg::kDisconnect, dlg::kVote}) CHECK(gui.find(n) != nullptr);
-    lob.close_all();
     CHECK(gui.open_count() == 0);
     // P4 completion 2: the remaining screens on the shipped script.
     {
@@ -601,7 +566,6 @@ int main() {
     test_resolution_confirm();
     test_options_polish();
     test_advanced_video_port();
-    test_lobby();
     test_panels();
     test_encyclopedia_fade_anchor();
     test_camera_hotkeys();

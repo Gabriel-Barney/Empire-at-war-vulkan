@@ -120,8 +120,8 @@ struct GuiControl {
     int32_t value = 0, range_min = 0, range_max = 100;  // slider / progress
     std::vector<std::u32string> items; // list / combo
     // Per-item colours (list / combo): item k with a colour has its TEXT drawn flat in that colour (both gradient ends,
-    // control font; kept when the control is disabled) - UI.md §3.7.1. The multiplayer colour combos fill each item with
-    // one glyph (U+25A0 / U+2588), which the per-control font (IDC_PLAYER_COLOR_n: Arial Unicode MS 35, Stretch_Factor
+    // control font; kept when the control is disabled) - UI.md §3.7.1. The skirmish staging colour combos fill each item
+    // with one glyph (U+25A0), which the per-control font (IDC_PLAYER_COLOR_n: Arial Unicode MS 35, Stretch_Factor
     // 0.25) turns into a flat wide bar: the colour "swatch".
     std::vector<Rgba8> item_colors;
     // [port] per-item text colours (list): item k is drawn in item_text_colors[k] (flat, no font gradient) when that

@@ -48,9 +48,8 @@ add_library(alamo_ui_hud STATIC
   src/load_screen.cpp
   src/galactic_hud.cpp
   src/gui_script.cpp
-  # P4 completion: in-game screens, multiplayer screens (UI only), HUD panels (encyclopedia, heroes, FoC shells).
+  # P4 completion: in-game screens, HUD panels (encyclopedia, heroes, FoC shells).
   src/gui_screens.cpp
-  src/gui_lobby.cpp
   src/hud_panels.cpp
   # P4 completion 2: holocron / story / planet / buy-units screens, mouse cursor.
   src/gui_info_screens.cpp
@@ -113,7 +112,7 @@ endif()
 add_test(NAME alamo_ui_gui_tests COMMAND alamo_ui_gui_tests)
 set_tests_properties(alamo_ui_gui_tests PROPERTIES TIMEOUT 120)
 
-# P4 completion tests (CPU): in-game screens, advanced video, multiplayer screens (UI only), HUD panels, camera hotkeys;
+# P4 completion tests (CPU): in-game screens, advanced video, HUD panels, camera hotkeys;
 # real GUIDialogs.rc / CommandBarComponents through the VFS with ALAMO_FOC_DATA.
 add_executable(alamo_ui_screens_tests tests/test_gui_screens.cpp tests/test_gui_screens_a.cpp tests/test_gui_screens_b.cpp tests/test_gui_screens_c.cpp
   tests/test_gui_skirmish_maps.cpp)
@@ -125,8 +124,8 @@ endif()
 add_test(NAME alamo_ui_screens_tests COMMAND alamo_ui_screens_tests)
 set_tests_properties(alamo_ui_screens_tests PROPERTIES TIMEOUT 120)
 
-# p4ui t03 (CPU): colour combos draw item text in the item colour, lobby glyph items, tech-tree arrows / tints, battle-end
-# arrows, fleet summary dividers (docs/re/UI.md §3.7).
+# p4ui t03 (CPU): colour combos draw item text in the item colour, tech-tree arrows / tints, battle-end arrows, fleet
+# summary dividers (docs/re/UI.md §3.7).
 add_executable(alamo_ui_colour_arrows_tests tests/test_gui_colour_arrows.cpp)
 target_link_libraries(alamo_ui_colour_arrows_tests PRIVATE alamo_ui_hud alamo_data alamo_test_support)
 add_test(NAME alamo_ui_colour_arrows_tests COMMAND alamo_ui_colour_arrows_tests)

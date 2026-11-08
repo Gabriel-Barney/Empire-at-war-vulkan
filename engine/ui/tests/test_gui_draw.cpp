@@ -30,7 +30,6 @@
 #include "alamo/ui/galactic_hud.hpp"
 #include "alamo/ui/gui_dialog.hpp"
 #include "alamo/ui/gui_info_screens.hpp"
-#include "alamo/ui/gui_lobby.hpp"
 #include "alamo/ui/mouse_cursor.hpp"
 #include "alamo/ui/gui_menus.hpp"
 #include "alamo/ui/gui_resource.hpp"
@@ -427,46 +426,6 @@ void test_real(Gpu& g, const std::string& src_dir) {
         std::printf("real gui battle_end: dialog coverage %.1f%%\n", 100.0 * cov);
         CHECK(cov > 0.3);
         gs.close_all();
-    }
-    // LAN staging (multiplayer UI): host + AI + a joining player, map list, options.
-    {
-        gui.close_all();
-        ui::LobbyScreens lob;
-        lob.init(gui);
-        lob.show_multiplayer_menu();
-        ui::StagingState st;
-        st.host = true;
-        st.factions = {U"Rebel", U"Empire", U"Underworld"};
-        st.colors = {U"Red", U"Blue", U"Green", U"Yellow"};
-        st.color_values = {{200, 40, 30, 255}, {40, 90, 220, 255}, {40, 180, 60, 255}, {230, 200, 40, 255}};
-        st.teams = {U"1", U"2", U"3", U"4"};
-        st.maps = {U"Kuat (2)", U"Mon Calamari (4)", U"Hoth (2)", U"Coruscant (8)"};
-        st.map = 1;
-        st.options = {{U"Credits", U"10000"}, {U"Pop cap", U"20"}, {U"Heroes", U"On"}};
-        ui::StagingSlot me, ai, other, open;
-        me.state = ui::SlotState::Human;
-        me.name = U"Gabriel";
-        me.local = true;
-        me.faction = 1;
-        ai.state = ui::SlotState::AI;
-        ai.faction = 2;
-        ai.color = 1;
-        ai.team = 1;
-        other.state = ui::SlotState::Human;
-        other.name = U"Wedge";
-        other.accepted = true;
-        other.color = 2;
-        other.team = 1;
-        st.slots = {me, ai, other, open, open};
-        CHECK(lob.show_staging(st));
-        for (const char* l : {"Gabriel: hello", "Wedge: ready when you are"}) lob.add_chat(ui::utf8_to_utf32(l));
-        const std::vector<uint8_t> px = shoot("lan_staging", [&](double) {});
-        const ui::GuiRect r = gui.top()->rect();
-        const double cov = coverage(px, W, H, gui.canvas().canvas_to_pixel(r.min.x, r.max.y), gui.canvas().canvas_to_pixel(r.max.x, r.min.y));
-        std::printf("real gui lan_staging: dialog coverage %.1f%%\n", 100.0 * cov);
-        CHECK(cov > 0.3);
-        lob.close_all();
-        gui.set_backdrop({});
     }
     // [port: Gabriel] the camera and controls dialog over the options column.
     {

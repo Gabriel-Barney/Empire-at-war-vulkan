@@ -8,15 +8,15 @@
 // moment it is set: issuer, receivers and replays see bit-identical numbers (the original gets the
 // same by re-quantizing in Execute). Object references are 32-bit wire ids (kNoObject = none).
 //
-// Two serializations:
-//   * canonical v2 (this file; recordings): byte-aligned little-endian, no padding
+// Serialization: canonical v2 (recordings, saves, the batch CRC): byte-aligned little-endian, no padding
 //       command := u16 type | u8 player | u8 source | u32 sequence | u64 issue_tick | u64 scheduled_tick
 //                  | u32 payload_len | payload                                         (28-byte header)
 //       source byte: bits 0-6 CommandSource, bit 7 EventData::queued() [port: Gabriel, queueable actions]
 //       payload := for each present field, in wire order:
 //                  Bits/Id/Player/Quant -> u32 | List/CountedIds -> u32 count, u32 ids
 //                  Str/Opaque -> u32 len, bytes | WStr -> u32 len, u16 units
-//   * the original's bit-packed wire format (wire_codec.hpp; network / parity).
+// The original's bit-packed network wire format (COMMANDS.md §1.2) is not ported: multiplayer is out of
+// scope (docs/DECISIONS.md, CU7).
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -32,11 +32,12 @@ namespace alamo::commands {
 inline constexpr uint16_t kWireVersion = 2;  // canonical format (v1 = stage-1 typed orders, retired)
 inline constexpr size_t kCommandHeaderBytes = 28;
 // [port] PlayerList cap (the original keeps a vector with no fixed cap). 32 since Q6 (was 16): Thrawn's Revenge campaigns
-// have 22 players. The network wire format's player_bits (4) is separate and unchanged (multiplayer is out of scope).
+// have 22 players.
 inline constexpr uint8_t kMaxPlayerSlots = 32;
 inline constexpr uint32_t kMaxPayloadBytes = 1u << 20;  // decode guard
 
-// Who produced the order. Player/Network go through the scheduler; AI/Script use the direct path
+// Who produced the order. Player goes through the scheduler (Network: the original's peer source, kept as a
+// canonical value; multiplayer is not ported, CU7); AI/Script use the direct path
 // (CommandPipeline::execute_direct) like the original (COMMANDS.md §5).
 enum class CommandSource : uint8_t { Player = 0, AI = 1, Script = 2, Network = 3 };
 inline constexpr uint8_t kCommandSourceCount = 4;
@@ -81,13 +82,13 @@ public:
     bool present(size_t i) const;
     // Every present field fits its wire width (Bits/List counts/CountedIds count, Quant code range)
     // and every absent conditional field holds its default (0 / empty / kNoObject).
-    // Player fields are checked against WireConfig at pack time.
+    // Player fields are not range-checked here (the scheduler checks the issuing player).
     bool valid() const;
 
     // [port: Gabriel] Queueable unit actions (docs/PHASE4.md): true = the order runs after the units' current
     // orders instead of replacing them (shift+click). Not a payload field of the original: the canonical
     // format carries it as bit 7 of the header's source byte (kCommandQueuedBit; unqueued commands encode
-    // byte-identically to before), the bit-packed wire format only with WireConfig::port_queue_bit.
+    // byte-identically to before).
     bool queued() const noexcept { return queued_; }
     EventData& set_queued(bool q) noexcept {
         queued_ = q;

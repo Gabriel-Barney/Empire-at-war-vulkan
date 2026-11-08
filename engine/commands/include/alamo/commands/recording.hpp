@@ -7,6 +7,7 @@
 // STREAM FILE v2 (little-endian, no padding; v1 = stage-1 typed orders, no longer readable):
 //   u8[4] magic "ACMD" | u16 version (= kWireVersion) | u16 flags (0, or kStreamFromSave)
 //   u32 delay | u8 max_players | u8 late_policy | u8 mode | u8 reserved (0) | u32 turn | u32 max_ahead
+//     (late_policy / mode / turn / max_ahead: retired lockstep bytes, always 0 / 0 / 1 / 2 - scheduler.hpp)
 //   u64 seed | u64 first_tick | u64 end_tick (first tick NOT covered; 0 = unknown)
 //   [flags & kStreamFromSave: u64 save_tick | u64 save_digest]           (N1: the stream continues a save)
 //   u32 meta_count | meta_count x (u32 key_len | key | u32 value_len | value)
@@ -48,7 +49,7 @@ struct SavePoint {
 uint64_t save_digest(std::span<const uint8_t> encoded_save) noexcept;
 
 struct CommandRecording {
-    SchedulerConfig config;  // scheduler settings + first_tick of the recorded run (max_ahead: initial)
+    SchedulerConfig config;  // scheduler settings + first_tick of the recorded run
     uint64_t seed = 0;       // sim seed (owned by the host; stored for convenience)
     uint64_t end_tick = 0;   // first tick not covered by the recording (0 = unknown)
     std::optional<SavePoint> from_save;  // N1: set = the stream starts from this save, not from tick 0
@@ -68,11 +69,7 @@ struct CommandRecording {
     static bool load(const std::string& path, CommandRecording& out, std::string* err = nullptr);
 
     friend bool operator==(const CommandRecording& a, const CommandRecording& b) {
-        return a.config.delay == b.config.delay && a.config.max_players == b.config.max_players &&
-               a.config.late == b.config.late && a.config.first_tick == b.config.first_tick &&
-               a.config.mode == b.config.mode && a.config.turn == b.config.turn &&
-               a.config.max_ahead == b.config.max_ahead && a.seed == b.seed &&
-               a.end_tick == b.end_tick && a.from_save == b.from_save && a.meta == b.meta && a.batches == b.batches;
+        return a.config == b.config && a.seed == b.seed && a.end_tick == b.end_tick && a.from_save == b.from_save && a.meta == b.meta && a.batches == b.batches;
     }
 };
 
