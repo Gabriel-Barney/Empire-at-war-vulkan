@@ -178,8 +178,8 @@ void parse_class_fields(const data::XmlNode& e, SpecialAbilityDesc& s, const Abi
     s.health_per_victim = f_or(e, "Health_Per_Victim", 0.0f);
     s.fire_frame = i_or(e, "Fire_Frame", 0);
     s.face_target = b_or(e, "Face_Target", false);
-    s.turn_rate = f_or(e, "Turn_Rate", 0.0f);
-    s.firing_cone = f_or(e, "Firing_Cone", 0.0f);
+    s.turn_rate = f_or(e, "Turn_Rate", 10.0f);      // ctor 0x714e30 defaults (cu8f t06)
+    s.firing_cone = f_or(e, "Firing_Cone", 45.0f);
     s.fire_delay = f_or(e, "Fire_Delay", 0.0f);
     s.fire_continuation = f_or(e, "Fire_Continuation", 0.0f);
     s.damage_per_second = f_any(e, {"Damage_Per_Second", "Shield_Damage_Per_Second", "Shield_Drain_Per_Second"}, 0.0f);
@@ -299,14 +299,14 @@ bool parse_unit_ability(const data::XmlNode& e, UnitAbilityRecord& out, const Ab
     out.effective_radius = f_or(e, "Effective_Radius", 0.0f);
     out.recharge_seconds = f_or(e, "Recharge_Seconds", 0.0f);
     out.expiration_seconds = f_or(e, "Expiration_Seconds", 0.0f);
-    out.is_pulsing = b_or(e, "Is_Pulsing", false);
+    out.is_pulsing = b_or(e, "Is_Pulsing", false);  // no reader in the original [M] (cu8f t06): kept for the record only
     out.pulse_frequency_secs = f_or(e, "Pulse_Frequency_Secs", 0.0f);
     out.max_pulses = i_or(e, "Max_Number_Of_Pulses", 0);
     out.alternate_icon_name = s_or(e, "Alternate_Icon_Name");
     out.gui_activated_ability_name = s_or(e, "GUI_Activated_Ability_Name");
     out.gui_name_crc = out.gui_activated_ability_name.empty() ? 0u : name_crc(out.gui_activated_ability_name);
     out.spawned_object_type = s_or(e, "Spawned_Object_Type");
-    out.max_spawned_objects = i_or(e, "Max_Num_Spawned_Objects", 0);
+    out.max_spawned_objects = i_or(e, "Max_Num_Spawned_Objects", -1);  // [port] absent: no cap (cu8f t06)
     out.bomb_countdown_seconds = f_or(e, "Bomb_Countdown_Seconds", 0.0f);
     out.area_effect_decal_distance = f_or(e, "Area_Effect_Decal_Distance", 0.0f);
     for (data::XmlNode c : e.children("Projectile_Types_Override"))

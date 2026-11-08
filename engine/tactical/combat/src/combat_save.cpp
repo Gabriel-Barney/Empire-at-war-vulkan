@@ -47,7 +47,7 @@ using save_io::put_vec3;
 
 namespace {
 
-constexpr uint32_t kCombatSaveVersion = 12;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
+constexpr uint32_t kCombatSaveVersion = 13;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
                                              // 4: refixf t06 attack goal / weapon aim / order lock; 5: refixf t06 scan
                                              // target hardpoint (auto_hp); 6: a1g t03 damage event hull_lost; 7: S8 t04
                                              // grenade flight / sticky state; 8: S8 t06 stuck_offset in the parent's frame
@@ -55,7 +55,8 @@ constexpr uint32_t kCombatSaveVersion = 12;  // 2: refix t02 INFECTION state, re
                                              // fire-bone cycle index; 9: S8 t26 fire-at-position order; 10: s78f t03
                                              // targeting state + its target, s78f t04 lobbing turret angles; 11:
                                              // s78g t06 damage_team; 12: s78h t03 squad_seen dropped (no squad rule
-                                             // on a member)
+                                             // on a member); 13: cu8f t06 INFECTION frames left + spread counters
+                                             // (v12 still reads)
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 
@@ -135,8 +136,7 @@ void CombatSystem::write(ByteWriter& w) const {
         w.f32(u.lob_tpitch).f32(u.lob_tyaw).u8(u.tstate).i32(u.ttarget);  // s78f t04 / t03
         // refix t02: INFECTION behaviour
         w.u8(u.infect_attached).u32(u.infect_suspend).i32(u.infect_desc).i32(u.infect_player).i32(u.infect_source);
-        w.u32(u.infect_end).u32(u.infect_next_damage).u32(static_cast<uint32_t>(u.infect_exposure.size()));
-        for (const auto& [id, f] : u.infect_exposure) w.i32(id).u32(f);
+        w.i32(u.infect_left).u32(u.infect_seen).i32(u.infect_count);  // v13 (cu8f t06)
         u.mods.write(w);
         // caches
         for (const float v : u.mod_r) w.f32(v);
@@ -230,7 +230,8 @@ void CombatSystem::write(ByteWriter& w) const {
 }
 
 bool CombatSystem::read(ByteReader& r) {
-    if (r.u32() != kCombatSaveVersion || !r.ok()) return false;
+    const uint32_t version = r.u32();
+    if (!r.ok() || (version != kCombatSaveVersion && version != 12)) return false;
     const auto np = static_cast<uint32_t>(players_.size());
     const uint32_t c_players = r.u32(), c_units = r.u32(), c_hps = r.u32(), c_proj = r.u32(), c_ab = r.u32(),
                    c_prio = r.u32();
@@ -331,17 +332,26 @@ bool CombatSystem::read(ByteReader& r) {
         u.infect_desc = r.i32();
         u.infect_player = r.i32();
         u.infect_source = r.i32();
-        u.infect_end = r.u32();
-        u.infect_next_damage = r.u32();
-        uint32_t nx = 0;
-        if (!r.count(nx, 8) || u.infect_attached > 1 || u.infect_desc < -1 ||
+        if (version >= 13) {  // cu8f t06
+            u.infect_left = r.i32();
+            u.infect_seen = r.u32();
+            u.infect_count = r.i32();
+        } else {
+            // v12: expiry frame (0 = none), next damage frame and the per-infector exposure list. [port] frames left =
+            // expiry - the saved frame (no expiry: a large count); the exposure lists are dropped (counters restart).
+            const uint32_t end = r.u32();
+            (void)r.u32();
+            uint32_t nx = 0;
+            if (!r.count(nx, 8)) return false;
+            for (uint32_t k = 0; k < nx; ++k) {
+                (void)r.i32();
+                (void)r.u32();
+            }
+            u.infect_left = end == 0 ? 0x3FFFFFFF : (end > frame ? static_cast<int32_t>(end - frame) : 0);
+        }
+        if (!r.ok() || u.infect_attached > 1 || u.infect_desc < -1 ||
             (u.infect_desc >= 0 && static_cast<uint32_t>(u.infect_desc) >= unit_descs))
             return false;
-        u.infect_exposure.resize(nx);
-        for (auto& [id, f] : u.infect_exposure) {
-            id = r.i32();
-            f = r.u32();
-        }
         if (!r.ok() || !u.mods.read(r)) return false;
         for (float& v : u.mod_r) v = r.f32();
         u.mod_ver = r.u32();

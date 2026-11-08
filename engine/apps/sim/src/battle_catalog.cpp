@@ -714,6 +714,8 @@ ta::AbilityObjectDesc BattleCatalog::ability_desc(uint32_t t, BuildState& s) con
     d.bribe_modifier_uncorrupted = float_or("Bribe_Modifier_On_Uncorrupted_Planets", 1.0f);
     d.friendly_damage_amount = ty.get_float(t, "Friendly_Damage_Amount");
     d.proximity_mine = ty.has_behavior(t, objects::BehaviorSet::Union, objects::behavior_type_id("PROXIMITY_MINE"));
+    // cu8f t06 (CU8F_T04_T06_RE §3.4): the Face_Target Super_Laser turns through TACTICAL_SUPER_WEAPON
+    d.tactical_super_weapon = ty.has_behavior(t, objects::BehaviorSet::Union, objects::behavior_type_id("TACTICAL_SUPER_WEAPON"));
     // 0x3979d0 [port: the mode's FOW reveal range column; land for land battles is not distinguished here]
     if (ty.get_bool(t, "Target_Stealth_Units")) d.stealth_detection_range = ty.columns().space_fow_reveal_range[t];
     ta::AbilityResolvers r;

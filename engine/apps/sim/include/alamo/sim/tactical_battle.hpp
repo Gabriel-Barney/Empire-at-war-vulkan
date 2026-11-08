@@ -616,9 +616,10 @@ public:
     bool sw_begin_targeting(objects::ObjectId weapon);
     bool sw_fire_at_object(const TacticalMode& mode, objects::ObjectId weapon, objects::ObjectId target);
     bool sw_fire_lobbing_at(const TacticalMode& mode, objects::ObjectId weapon, Vec3 point);
-    // SpecialWeaponsAllowed (0x527620) for a campaign battle: false once the battle planet is destroyed (in the galaxy,
-    // or by this battle's TSW); the skirmish Enable_Special_Weapons rule does not apply to campaign battles. A skirmish
-    // battle (BattleConfig::skirmish) also needs CombatSystem::special_weapon_hp_enabled(player) (HARDPOINT_DISABLED §4).
+    // SpecialWeaponsAllowed (0x527620): false once the battle planet is destroyed (in the galaxy, or by this battle's TSW).
+    // cu8f t06: then the player's Enable_Special_Weapons list (AbilitySystem PlayerGate::SpecialWeapons): empty -> allowed
+    // in a campaign battle, refused in a skirmish (BattleConfig::skirmish); non-empty -> its AND and
+    // CombatSystem::special_weapon_hp_enabled(player) (HARDPOINT_DISABLED §4).
     bool special_weapons_allowed(int32_t player) const;
     int32_t tsw_state(objects::ObjectId tsw) const;                         // < 0: not a TSW
     bool tsw_fire(objects::ObjectId tsw);                                   // 0x42a200 incl. the planet checks
@@ -811,6 +812,10 @@ public:
     bool bombing_run_available(int32_t player) const;
     bool bombing_run_target_valid(int32_t player, Vec3 target) const;
     void set_bombing_run_disabled(int32_t player, bool disabled);  // Disable_Bombing_Run (tactical list +0x1c8)
+    // cu8f t06 (CU8F_T04_T06_RE §3.3): a player's tactical bool list gate (bombing runs 0x527550, bombardment 0x5275a0):
+    // the AND of the list (Battlefield_Modifier Enable_* entries, the Lua Disable_* entry); an empty list allows in a
+    // campaign battle and refuses in a skirmish (BattleConfig::skirmish).
+    bool player_gate_allows(int32_t player, tactical::abilities::PlayerGate g) const;
     // BombingBlockStatus: IsFinished = no bomber left; Result = undamaged / total ([port] bombers are not targets: 1).
     bool bombing_run_finished(int32_t player) const;
     float bombing_run_result(int32_t player) const;

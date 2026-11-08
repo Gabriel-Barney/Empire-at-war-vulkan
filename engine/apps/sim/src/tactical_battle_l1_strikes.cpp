@@ -257,29 +257,53 @@ bool TacticalBattle::bombing_run_target_valid(int32_t player, Vec3 target) const
     return true;
 }
 
+namespace {
+// cu8f t06: the key of the Lua Disable_Bombing_Run / Disable_Orbital_Bombardment entry (0x1407ff8a8 in the original) [port].
+constexpr uint32_t kLuaGateKey = 0x407ff8a8u;
+}  // namespace
+
+bool TacticalBattle::player_gate_allows(int32_t player, tactical::abilities::PlayerGate g) const {
+    // cu8f t06 (CU8F_T04_T06_RE §3.3 [H]): 0x527550 / 0x5275a0 - the AND of the player's list; empty = allowed except in a
+    // stand-alone skirmish (0x28afb0).
+    bool all = true;
+    const uint32_t n = abilities_ ? abilities_->player_gate(player, g, all) : 0u;
+    return n == 0 ? !cfg_.skirmish : all;
+}
+
 bool TacticalBattle::bombardment_available(int32_t player) const {
+    // [port] the service's list gate (0x52a110) is also applied here, so a Lua disable takes effect at once. cu8f t06: the
+    // record's `disabled` byte mirrors the Lua entry (kept for older saves, which have no list entry).
     for (const L1Bombard& r : l1_bombard_)
-        if (r.player == player) return r.enabled && r.available && !r.in_progress && !r.disabled;
+        if (r.player == player)
+            return r.enabled && r.available && !r.in_progress && !r.disabled &&
+                   player_gate_allows(player, tactical::abilities::PlayerGate::Bombardment);
     return false;
 }
 
 bool TacticalBattle::bombing_run_available(int32_t player) const {
     for (const L1BombingRun& r : l1_runs_)
-        if (r.player == player) return r.enabled && r.available && !r.in_progress && !r.disabled;
+        if (r.player == player)
+            return r.enabled && r.available && !r.in_progress && !r.disabled &&
+                   player_gate_allows(player, tactical::abilities::PlayerGate::BombingRuns);
     return false;
 }
 
 void TacticalBattle::set_bombardment_disabled(int32_t player, bool disabled) {
+    // Disable_Orbital_Bombardment: one keyed entry in tactical list +0x250, value = !disabled [M high] (cu8f t06).
     for (L1Bombard& r : l1_bombard_)
         if (r.player == player) r.disabled = disabled;
+    if (abilities_) abilities_->set_player_gate_entry(player, tactical::abilities::PlayerGate::Bombardment, kLuaGateKey, !disabled);
 }
 void TacticalBattle::remove_bombardment(int32_t player, bool removed) {
     for (L1Bombard& r : l1_bombard_)
         if (r.player == player) r.enabled = !removed;
 }
 void TacticalBattle::set_bombing_run_disabled(int32_t player, bool disabled) {
+    // Disable_Bombing_Run (0x601aa0): one keyed entry in tactical list +0x1c8 (the list Enable_Bombing_Runs writes), value
+    // = !disabled [M high] (cu8f t06, CU8F_T04_T06_RE §3.3).
     for (L1BombingRun& r : l1_runs_)
         if (r.player == player) r.disabled = disabled;
+    if (abilities_) abilities_->set_player_gate_entry(player, tactical::abilities::PlayerGate::BombingRuns, kLuaGateKey, !disabled);
 }
 
 bool TacticalBattle::bombing_run_finished(int32_t player) const {
@@ -388,7 +412,8 @@ void TacticalBattle::l1_strikes(TacticalMode& mode, SimRng& rng) {
     // Orbital bombardment (0x52a110).
     for (L1Bombard& r : l1_bombard_) {
         if (!r.in_progress) {
-            r.available = r.timer_only ? r.ready <= frame_ : (!r.disabled && r.ready <= frame_);
+            r.available = r.timer_only ? r.ready <= frame_
+                                       : (!r.disabled && player_gate_allows(r.player, tactical::abilities::PlayerGate::Bombardment) && r.ready <= frame_);
             continue;
         }
         const L1Faction& f = l1_factions_[r.faction];
@@ -445,7 +470,7 @@ void TacticalBattle::l1_strikes(TacticalMode& mode, SimRng& rng) {
     // Bombing runs (0x495dd0): bombers fly the path, bomb while within range of their marker, leave at the exit.
     for (L1BombingRun& r : l1_runs_) {
         if (!r.in_progress) {
-            r.available = !r.disabled && r.ready <= frame_;
+            r.available = !r.disabled && player_gate_allows(r.player, tactical::abilities::PlayerGate::BombingRuns) && r.ready <= frame_;
             continue;
         }
         for (L1Bomber& bm : r.bombers) {

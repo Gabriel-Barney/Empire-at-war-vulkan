@@ -3070,7 +3070,7 @@ void test_save_rejects() {
     bad = saved;
     put_u32_at(bad, 0, 99);
     CHECK(rejected(bad));
-    for (const uint32_t v : {11u, 13u}) {  // s78h t03: the version before (damage_team = 11; squad_seen dropped = 12) and after
+    for (const uint32_t v : {11u, 14u}) {  // s78h t03 / cu8f t06: before the oldest read version (12) and after (13)
         bad = saved;
         put_u32_at(bad, 0, v);
         CHECK(rejected(bad));

@@ -43,6 +43,21 @@ constexpr int32_t kAnimFlAttack = 0x28;                           // Force_Light
 
 int32_t frames_of(float secs, uint32_t fps) { return static_cast<int32_t>(static_cast<float>(fps) * secs); }
 
+// cu8f t06 (CU8F_T04_T06_RE §3.4): 0x20acd0 - the yaw of an XY direction in degrees, [0, 360); 0 when it is null.
+float yaw_deg_of(float dx, float dy) {
+    if (dx == 0.0f && dy == 0.0f) return 0.0f;
+    float a = dmath::atan2(dy, dx) * (180.0f / dmath::kPiF);
+    if (a < 0.0f) a += 360.0f;
+    if (a >= 360.0f) a -= 360.0f;
+    return a;
+}
+// 0x20af60's difference: wrapped to (-180, 180] (inputs in [0, 360)).
+float wrap_deg(float d) {
+    if (d > 180.0f) d -= 360.0f;
+    if (d <= -180.0f) d += 360.0f;
+    return d;
+}
+
 // |angle between the unit's facing and the direction to p| <= deg (XY), via cosines (no acos).
 bool facing_within(Vec3 f, Vec3 from, Vec3 p, float deg) {
     const float dx = p.x - from.x, dy = p.y - from.y;
@@ -166,6 +181,39 @@ void AbilitySystem::snap_face(Obj& o, ObjectId target) {
         dmath::sincos(yaw * (dmath::kPiF / 180.0f), s, c);
         combat_->set_facing(o.id, Vec3{c, s, 0.0f});
     }
+}
+
+void AbilitySystem::super_laser_turn(Obj& o, const SpecialAbilityDesc& s, ObjectId target) {
+    // cu8f t06 (CU8F_T04_T06_RE §3.4 [H]; TSW facing step 0x42b4e0 -> Turn_Toward 0x3abe40): yaw only, the error wrapped
+    // to (-180, 180] and clamped to +-rate degrees per step; rate <= 0 = the type's turn rate (0x372560: Max_Rate_Of_Turn x
+    // the mode multiplier). [port] the step runs in the Super_Laser update (the TSW service is not this system's) and the
+    // new yaw goes through the host's snap (as snap_face) plus the combat facing.
+    if (!o.combat_unit || !combat_->has_unit(o.id) || !alive_unit(target)) return;
+    const Vec3 a = combat_->position(o.id), b = combat_->position(target), f = combat_->facing(o.id);
+    const float own = yaw_deg_of(f.x, f.y);
+    float rate = s.turn_rate;
+    if (rate <= 0.0f) {
+        const combat::CombatConfig& cc = combat_->config();
+        rate = combat_->data().units[combat_->desc_index(o.id)].turn_rate *
+               (cc.mode == GameMode::Space ? cc.turn_multiplier_space : cc.turn_multiplier_land);
+    }
+    const float step = std::clamp(wrap_deg(yaw_deg_of(b.x - a.x, b.y - a.y) - own), -rate, rate);
+    if (!(step != 0.0f)) return;
+    const float yaw = own + step;
+    if (host_.snap_yaw) host_.snap_yaw(o.id, yaw);
+    float sn = 0.0f, cs = 1.0f;
+    dmath::sincos(yaw * (dmath::kPiF / 180.0f), sn, cs);
+    combat_->set_facing(o.id, Vec3{cs, sn, 0.0f});
+}
+
+bool AbilitySystem::super_laser_in_cone(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const {
+    // cu8f t06 (§3.4, update 0x715450): yaw to the target (0x20acd0, XY) against the owner's yaw (obj +0x8c), |wrapped
+    // difference| <= Firing_Cone; a cone of 90 or more reads as 0.01.
+    if (!alive_unit(target)) return false;
+    const Vec3 a = position(o), b = combat_->position(target);
+    const Vec3 f = o.combat_unit ? combat_->facing(o.id) : Vec3{1.0f, 0.0f, 0.0f};
+    const float cone = s.firing_cone >= 90.0f ? 0.01f : s.firing_cone;
+    return std::abs(wrap_deg(yaw_deg_of(b.x - a.x, b.y - a.y) - yaw_deg_of(f.x, f.y))) <= cone;
 }
 
 void AbilitySystem::lock_pair(Obj& o, uint8_t flag, bool lock, uint32_t frame) {
@@ -504,14 +552,25 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             return true;
         }
 
-        case C::SuperLaser: {  // 2.3.9
+        case C::SuperLaser: {  // 2.3.9; cu8f t06: apply 0x714fa0 (CU8F_T04_T06_RE §3.4)
             if (!alive_unit(target) || !range_ok(o, s, target) || !has(o, kSuperLaser)) return false;
             sp.applied = 1;
             sp.target = target;
-            sp.phase = 0;
-            sp.next = frame + static_cast<uint32_t>(std::max(0, frames_of(s.fire_delay, fps)));  // GMM frame + int(FPS x delay)
+            sp.next = frame + static_cast<uint32_t>(std::max(0, frames_of(s.fire_delay, fps)));  // SAP +0x304
+            sp.frames = -1;  // SAP +0x308: no continuation
             o.active[kSuperLaser] = 1;
             sync_combat(o);
+            // SuperLaser state: phase 0 = clip not started (+0x301 = 0), 1 = clip running, 2 = fired (+0x300); counter =
+            // the TSW "facing on" (+0x54); cooldown = the clip's start frame; frames = the continuation end (-1 none).
+            if (desc(o).tactical_super_weapon && s.face_target) {
+                sp.phase = 0;  // the TSW pack gets the target and Turn_Rate, facing on; the clip waits for the cone
+                sp.counter = 1;
+            } else {
+                sp.phase = 1;  // type 5 / Attack_Anim_Sub_Index at once
+                sp.counter = 0;
+                sp.cooldown = static_cast<int32_t>(frame);
+                play_anim(o, kAnimAttack, {}, static_cast<uint32_t>(std::max(0, s.anim_sub_index)), false, 1.0f, kAnimStay, frame);
+            }
             event(AbilityEventKind::EffectOn, kSuperLaser, o.id, target, frame);
             return true;
         }
@@ -1089,28 +1148,48 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
             return;
         }
 
-        case C::SuperLaser: {  // 2.3.9 update
-            if (!alive_unit(sp.target) || !range_ok(o, s, sp.target)) {
+        case C::SuperLaser: {  // 2.3.9 update 0x715450 (cu8f t06: CU8F_T04_T06_RE §3.4)
+            const bool running = o.cd.phase[kSuperLaser] == 1 && o.cd.counter[kSuperLaser] < o.cd.maximum[kSuperLaser];
+            const bool ended = !running && desc(o).countdown && o.cd.maximum[kSuperLaser] > 0;
+            // Fire_Continuation (vf13 0x7151c0, the target link dropped [M: the target is gone]): SAP +0x308 := NOW +
+            // int(FPS x Fire_Continuation). [port] taken when the update finds the target dead.
+            if (sp.frames < 0 && !alive_unit(sp.target)) {
+                sp.frames = static_cast<int32_t>(frame) + std::max(0, frames_of(s.fire_continuation, fps));
+                sp.counter = 0;  // the TSW target no longer resolves: no more turning
+            }
+            if (sp.frames >= 0) {
+                // No-target branch: not fired yet or 55 no longer active -> finish; fired and +0x308 <= NOW -> finish
+                // (+0x308 := -1); else the beam is drawn to the remembered point (presentation) - no damage.
+                if (sp.phase < 2 || ended || frame >= static_cast<uint32_t>(sp.frames)) {
+                    sp.frames = -1;
+                    remove_special(o, sp, frame);
+                }
+                return;
+            }
+            if (!range_ok(o, s, sp.target)) {  // [port] the target left range (TACTICAL_GAPS §2.3.9)
                 remove_special(o, sp, frame);
                 return;
             }
             if (sp.phase == 0) {
-                if (frame < sp.next) return;
-                sp.phase = 1;  // inside the firing cone: the attack animation starts
-                sp.next = frame;
+                // Face_Target with TACTICAL_SUPER_WEAPON: turn (while facing is on), then after Fire_Delay the cone gate.
+                if (sp.counter) super_laser_turn(o, s, sp.target);
+                if (frame < sp.next || !super_laser_in_cone(o, s, sp.target)) return;
+                sp.phase = 1;  // inside the cone: the attack clip starts (+0x301 := 1) and the turning stops
+                sp.counter = 0;
+                sp.cooldown = static_cast<int32_t>(frame);
                 // §4.14: type 5, index Attack_Anim_Sub_Index, one-shot (parks at its end)
                 play_anim(o, kAnimAttack, {}, static_cast<uint32_t>(std::max(0, s.anim_sub_index)), false, 1.0f, kAnimStay, frame);
             }
-            if (sp.phase == 1 &&
-                static_cast<float>(frame - sp.next) *
+            if (sp.phase == 1 && frame >= sp.next &&
+                static_cast<float>(frame - static_cast<uint32_t>(sp.cooldown)) *
                         clip_timing(o.id, kAnimAttack, {}, static_cast<uint32_t>(std::max(0, s.anim_sub_index))).rate >=
-                    static_cast<float>(s.fire_frame)) {  // Fire_Frame on the sub-index variant's clip (§4.13 / §4.14)
+                    static_cast<float>(s.fire_frame)) {  // after Fire_Delay, Fire_Frame on the sub-index clip (§4.13 / §4.14)
                 sp.phase = 2;
                 start_active(o, kSuperLaser);  // 55's active countdown
             }
             if (sp.phase == 2) {
-                const bool running = o.cd.phase[kSuperLaser] == 1 && o.cd.counter[kSuperLaser] < o.cd.maximum[kSuperLaser];
-                if (!running && desc(o).countdown && o.cd.maximum[kSuperLaser] > 0) {
+                const bool still = o.cd.phase[kSuperLaser] == 1 && o.cd.counter[kSuperLaser] < o.cd.maximum[kSuperLaser];
+                if (!still && desc(o).countdown && o.cd.maximum[kSuperLaser] > 0) {
                     remove_special(o, sp, frame);
                     return;
                 }

@@ -10,9 +10,12 @@
 //         active / autofire / behaviour bytes, the countdown (77 x counter, maximum, phase + last update), pending
 //         ability, host-fed stamps, state bytes, the ion / lucky shot slots, special-ability states (with their victim
 //         lists), OI behaviour state, the autofire map and the trooper list;
-//         then the animation record (i32 type, u32 start, f32 rate, f32 end, u8 loop / then) and the u8 lock pairs
-//   (only kAbilitySaveVersion reads; the v1 layout without that record is no longer accepted)
-//   u32 + spawn requests, mines, Battlefield_Modifier player entries, interdict / retreat / weatherproof entries,
+//         then the animation record (i32 type, u32 start, f32 rate, f32 end, u8 loop / then) and the u8 lock pairs;
+//         v4 (cu8f t06): u32 + trooper squad numbers, i32 squads formed, u8 LURE running, i32 pulses, u32 next pulse,
+//         i32 effect object
+//   (kAbilitySaveVersion and v3 read; v3 has no cu8f t06 fields: see read())
+//   u32 + spawn requests (v4: + i32 trooper squad), mines, Battlefield_Modifier player entries (cu8f t06: the Enable_*
+//   gate lists use list numbers 4..6, same layout), interdict / retreat / weatherproof entries,
 //   remote bombs, events, player overrides, type overrides; u32 + per-player black-market lists (not hashed, but read
 //   by the gates)
 // Rebuilt / not saved: the query scratch lists, the host query table (AbilityHost), the bound RNG, the fog callback.
@@ -39,7 +42,8 @@ using save_io::put_vec3;
 
 namespace {
 
-constexpr uint32_t kAbilitySaveVersion = 3;  // 2: OI follow-up animation record + lock pairs; 3: cu8 t02 stealth bonus gone
+constexpr uint32_t kAbilitySaveVersion = 4;  // 2: OI follow-up animation record + lock pairs; 3: cu8 t02 stealth bonus gone;
+                                             // 4: cu8f t06 trooper squads, LURE pack, spawn-request squad
 constexpr uint32_t kSpecialWeaponSaveVersion = 1;
 constexpr uint32_t kSpaceFieldSaveVersion = 1;
 
@@ -102,6 +106,9 @@ void AbilitySystem::write(ByteWriter& w) const {
         w.u32(o.confuse_end).i32(o.barrage_dummy).u8(o.pending_direct).i32(o.troopers_deployed);
         put_ids(w, o.troopers);
         w.i32(o.anim_type).u32(o.anim_start).f32(o.anim_rate).f32(o.anim_end).u8(o.anim_loop).u8(o.anim_then).u8(o.lock_flags);
+        w.u32(static_cast<uint32_t>(o.trooper_squads.size()));  // v4 (cu8f t06)
+        for (const int32_t q : o.trooper_squads) w.i32(q);
+        w.i32(o.squads_formed).u8(o.lure_on).i32(o.lure_pulses).u32(o.lure_next).i32(o.lure_effect);
     }
 
     w.u32(static_cast<uint32_t>(spawns_.size()));
@@ -109,7 +116,7 @@ void AbilitySystem::write(ByteWriter& w) const {
         w.u32(s.serial).u8(static_cast<uint8_t>(s.purpose)).i32(s.object_type);
         put_vec3(w, s.position);
         put_vec3(w, s.facing);
-        w.i32(s.owner).i32(s.source).i32(s.target).u8(s.ability_type).f32(s.fuse_seconds).i32(s.bone);
+        w.i32(s.owner).i32(s.source).i32(s.target).u8(s.ability_type).f32(s.fuse_seconds).i32(s.bone).i32(s.squad);
     }
     w.u32(static_cast<uint32_t>(mines_.size()));
     for (const Mine& m : mines_) {
@@ -142,7 +149,8 @@ void AbilitySystem::write(ByteWriter& w) const {
 
 bool AbilitySystem::read(ByteReader& r) {
     const uint32_t version = r.u32();
-    if (!r.ok() || version != kAbilitySaveVersion) return false;
+    if (!r.ok() || (version != kAbilitySaveVersion && version != 3)) return false;
+    const bool v4 = version >= 4;
     const uint32_t c_objects = r.u32(), c_specials = r.u32(), c_players = r.u32();
     if (!r.ok() || c_objects != data_->objects.size() || c_specials != data_->specials.size() ||
         c_players != combat_->player_count())
@@ -257,9 +265,39 @@ bool AbilitySystem::read(ByteReader& r) {
         o.anim_loop = r.u8();
         o.anim_then = r.u8();
         o.lock_flags = r.u8();
+        if (v4) {  // cu8f t06
+            uint32_t nq = 0;
+            if (!r.count(nq, 4)) return false;
+            o.trooper_squads.resize(nq);
+            for (int32_t& q : o.trooper_squads) q = r.i32();
+            o.squads_formed = r.i32();
+            o.lure_on = r.u8();
+            o.lure_pulses = r.i32();
+            o.lure_next = r.u32();
+            o.lure_effect = r.i32();
+            if (!r.ok() || o.trooper_squads.size() != o.troopers.size()) return false;
+        } else {
+            // v3: [port] the troopers deployed so far count as one squad; no LURE pack (the behaviour was not modelled).
+            o.trooper_squads.assign(o.troopers.size(), 0);
+            o.squads_formed = o.troopers_deployed > 0 ? 1 : 0;
+            // v3 Super_Laser state: phase 0 waited for Fire_Delay, the clip start was the class timer (`next`), no
+            // continuation. [port] phase 0 becomes the turning phase on a Face_Target TSW, else the clip phase from `next`.
+            for (SpecialState& sp : o.specials) {
+                const SpecialAbilityDesc& sd = data_->specials[sp.desc];
+                if (sd.cls != SpecialClass::SuperLaser || !sp.applied) continue;
+                sp.frames = -1;
+                if (sp.phase == 0 && desc(o).tactical_super_weapon && sd.face_target) {
+                    sp.counter = 1;
+                } else {
+                    if (sp.phase == 0) sp.phase = 1;
+                    sp.counter = 0;
+                    sp.cooldown = static_cast<int32_t>(sp.next);
+                }
+            }
+        }
     }
 
-    if (!r.count(n, 51)) return false;
+    if (!r.count(n, v4 ? 55u : 51u)) return false;
     std::vector<SpawnRequest> spawns(n);
     for (SpawnRequest& s : spawns) {
         s.serial = r.u32();
@@ -273,7 +311,8 @@ bool AbilitySystem::read(ByteReader& r) {
         s.ability_type = r.u8();
         s.fuse_seconds = r.f32();
         s.bone = r.i32();
-        if (!r.ok() || purpose > static_cast<uint8_t>(SpawnPurpose::StationUpgrade)) return false;
+        s.squad = v4 ? r.i32() : (purpose == static_cast<uint8_t>(SpawnPurpose::Troopers) ? 0 : -1);
+        if (!r.ok() || purpose > static_cast<uint8_t>(SpawnPurpose::LureEffect)) return false;
         s.purpose = static_cast<SpawnPurpose>(purpose);
     }
     if (!r.count(n, 38)) return false;
@@ -323,7 +362,7 @@ bool AbilitySystem::read(ByteReader& r) {
         e.frame = r.u32();
         e.point = get_vec3<Vec3>(r);
         e.value = r.i32();
-        if (!r.ok() || kind > static_cast<uint8_t>(AbilityEventKind::BribeRefused)) return false;
+        if (!r.ok() || kind > static_cast<uint8_t>(AbilityEventKind::Lured)) return false;
         e.kind = static_cast<AbilityEventKind>(kind);
     }
     if (!r.count(n, 9)) return false;
