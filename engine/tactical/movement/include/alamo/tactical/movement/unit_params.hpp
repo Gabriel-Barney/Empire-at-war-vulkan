@@ -52,6 +52,9 @@ struct UnitDesc {
     bool squashable_by_supercrusher = false;  // Is_Squashable_By_Supercrusher (+0x1a)
     // ---- REMAINING_GAPS §4.2-4.7 ----
     uint32_t space_layer_type = 0;      // raw Space_Layer (+0x16dc; 0 = None / unset): threat mode only then (§4.2)
+    // cu8j t01 (MOVEMENT §4.6.4, save version 13): Stationary_Space_Layer (+0x16e0), the space composition's role of an
+    // object that is not moving (when set).
+    uint32_t stationary_space_layer = 0;
     LocomotorKind locomotor = LocomotorKind::Default;  // special locomotors (§4.3-4.7); host: locomotor_kind_from_type
     float hover_offset = 0.0f;          // Hover_Offset (+0x1b68)
     float max_lift = 0.8f;              // Max_Lift (+0x3a0), raw

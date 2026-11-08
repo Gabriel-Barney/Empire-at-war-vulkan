@@ -304,7 +304,11 @@ objects::ObjectHandle TacticalBattle::script_spawn_company(TacticalMode& mode, c
     const auto pi = static_cast<uint32_t>(parts_.size());
     parts_.push_back(std::move(P));
     const size_t first_unit = units_.size(), first_container = containers_.size();
+    // cu8j t02 [M]: the script spawn path is not one of the adopt callers of MOVEMENT §4.7.2 / §4.7.3 (0x29f810 adopts
+    // nothing): deploy() skips the team helper's and the campaign spawn's adopts for it.
+    deploy_script_ = true;
     deploy(mode, pi, *bt_rng_);
+    deploy_script_ = false;
     // Â§10.4 step 7: a TEAM container stands at its chunk's centroid, on land snapped passable [port: for the first
     // member's movement class]; the members keep their spots.
     if (!space_ && movement_ && units_.size() > first_unit) {
@@ -455,7 +459,14 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 Unit* u = unit_by_id(e.id);
                 if (u && u->alive && u->movable && movement_) {
                     const std::vector<objects::ObjectId> ids{e.id};
-                    movement_->stop(ids);
+                    // cu8j t02 (MOVEMENT §4.7.2 / §4.7.5): the stop-and-hold 0x3a9880 leaves every coordinator and adopts
+                    // (one ctor draw through the 0x39bcb0 predicate); DEPLOY 0x3a1ce0 stops, then adopts.
+                    if (e.value == ta::kStopHold && bt_rng_) {
+                        (void)mv_adopt(mode, u->h, *bt_rng_, true);
+                    } else {
+                        movement_->stop(ids);
+                        if (e.value == ta::kStopAdopt && bt_rng_) (void)mv_adopt(mode, u->h, *bt_rng_);
+                    }
                 }
                 break;
             }

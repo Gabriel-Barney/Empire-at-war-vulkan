@@ -35,6 +35,8 @@ TOOLS = os.path.join(HERE, 'out', 'tools')
 FAILS = []
 
 COMMON = r'''
+-- retail Lua has no math library (s78g; no shipped script uses it): the probe must not need it
+math = nil
 Q2S = { t = 0, frame = 0, canary = {}, calls = {} }
 GetCurrentTime = setmetatable({ Frame = function() return Q2S.frame end }, { __call = function() return Q2S.t end })
 function require(name) end
@@ -50,7 +52,7 @@ Q2S_Players = { Empire = Q2S_Player("Empire", 1, 10000), Rebel = Q2S_Player("Reb
 	Underworld = Q2S_Player("Underworld", 6, 7000) }
 function Find_Player(name) return Q2S_Players[name] end
 function Q2S_Dump()
-	for i = 1, table.getn(Q2L_Records) do print(Q2L_Records[i]) end
+	for i = 1, Q2L_Count() do print(Q2L_Get(i)) end
 	io.write("READY\n")
 	io.flush()
 	io.read("*l")
@@ -128,10 +130,14 @@ Q2S_Dump()
 '''
 
 # One plan copy (whole file: the shipped part and the probe block). The chunk runs twice as a pooled script state may
-# run it again: the wrap must not stack. The thread produces one unit; Conquer_Pirate also gets a production failure.
+# run it again: the wraps must not stack. Then two plan runs with a release between them: PGBase Flush_G (vanilla:
+# every global table goes except the keep list) and Base_Definitions, then the engine attaches the next plan (task
+# force, PlayerObject, Target, Budget). Records from both runs must survive (the 2026-11-03 retail run lost them, and
+# the second run's thread died before the shipped code). Each thread produces one unit; Conquer_Pirate also gets a
+# production failure.
 PLAN = r'''
 function ScriptExit() Q2S.exits = (Q2S.exits or 0) + 1 end
-function BlockOnCommand(c) Q2S.t = Q2S.t + 20; Q2S.frame = Q2S.frame + 600 end
+function BlockOnCommand(c) Q2S.t = Q2S.t + 20; Q2S.frame = Q2S.frame + 600; Q2S.blocks = (Q2S.blocks or 0) + 1 end
 function Q2S_Named(n) return { Get_Name = function() return n end } end
 Q2S.units = {}
 Q2S.produced = 0
@@ -145,18 +151,41 @@ Q2S_Force = {
 	Set_Plan_Result = function(r) Q2S.result = r end,
 	Are_All_Units_On_Free_Store = function() return false end,
 	Get_Unit_Table = function() return Q2S.units end }
-ReserveForce = Q2S_Force
-MainForce = Q2S_Force
-PlayerObject = Q2S_Players.Rebel
-Target = { Get_Game_Object = function() return { Get_Type = function() return Q2S_Named("Kashyyyk") end } end }
+function Q2S_Attach()
+	ReserveForce = Q2S_Force
+	MainForce = Q2S_Force
+	PlayerObject = Q2S_Players.Rebel
+	Target = { Get_Game_Object = function() return { Get_Type = function() return Q2S_Named("Kashyyyk") end } end }
+	Budget = { Get_Spendable_Resources = function() return 1234.5 end, Get_Unallocated_Resources = function() return 50 end }
+end
+-- PGBase Flush_G (vanilla): delete every global table except the keep list (the harness keeps its own Q2S* state
+-- and io for the dump; retail has neither). GetCurrentTime is a table here but an engine object in retail, which
+-- Flush_G keeps (the shipped BlockOnCommand / Sleep call it in reused plan scripts).
+function Q2S_Flush_G()
+	local keep = { _LOADED = true, coroutine = true, string = true, LuaWrapperMetaTable = true, _G = true,
+		security = true, table = true, io = true, GetCurrentTime = true }
+	local dead = {}
+	for k, v in pairs(_G) do
+		if type(v) == "table" and not keep[k] and string.sub(k, 1, 3) ~= "Q2S" then
+			table.insert(dead, k)
+		end
+	end
+	for _, k in ipairs(dead) do _G[k] = nil end
+	Q2S.flushed = table.getn(dead)
+end
+Q2S_Attach()
 dofile(Q2S_SCRIPT)
 Definitions()
 dofile(Q2S_SCRIPT)
 Definitions()
 getfenv(0)[Q2S_TF .. "_Thread"]()
+Q2S_Flush_G()
+Definitions()
+Q2S_Attach()
+getfenv(0)[Q2S_TF .. "_Thread"]()
 if Q2S_TF == "MainForce" then MainForce_Production_Failed(MainForce, Q2S_Named("PIRATE_FIGHTER")) end
-print("RESULT " .. tostring(Q2S.result) .. " PRODUCED " .. Q2S.produced .. " EXITS " .. tostring(Q2S.exits or 0) ..
-	" CATEGORY " .. tostring(Category))
+print("RESULT " .. tostring(Q2S.result) .. " PRODUCED " .. Q2S.produced .. " BLOCKS " .. tostring(Q2S.blocks) ..
+	" EXITS " .. tostring(Q2S.exits or 0) .. " CATEGORY " .. tostring(Category) .. " FLUSHED " .. tostring(Q2S.flushed))
 Q2S_Dump()
 '''
 PLANS = [('BuildSpaceForcesPlan.lua', 'Build_Space_Forces', 'ReserveForce'),
@@ -201,13 +230,19 @@ def run_harness(lua, name, script_path, body):
             proc.close()
         except (OSError, ImportError) as e:
             print('  note  live scan unavailable: %s' % e)
-        p.stdin.write('\n')
-        p.stdin.flush()
+        try:
+            p.stdin.write('\n')
+            p.stdin.flush()
+        except OSError:  # the harness died after its last line (a Lua error): reported below
+            pass
     try:
         _out, err = p.communicate(timeout=30)
     except subprocess.TimeoutExpired:
         p.kill()
         _out, err = p.communicate()
+    except OSError:  # stdin already closed by a harness that died
+        p.wait(timeout=30)
+        err = p.stderr.read() if p.stderr else ''
     check(p.returncode == 0, '%s harness exit 0 %s' % (name, err.strip()[-300:] if err else ''))
     return lines, found
 
@@ -241,6 +276,7 @@ def main():
     check(kinds.get('PLAYER') == 33, 'galactic: 3 players x 11 cycles')
     check(kinds.get('PLANET') == 33 and kinds.get('PERCEPTION') == 66, 'galactic: planets and 2 AI x 3 planets x 11')
     check(kinds.get('ERR') == 1, 'galactic: failing equation reported once')
+    check(kinds.get('EVAL') == 5, 'galactic: EVAL once per equation in the first sample (%s)' % kinds.get('EVAL'))
     _u, rows, eqs, s = q2lua_reader.summarize([r[:5] for r in recs])
     check(eqs == ['Q2_Space_Total', 'Q2_Ground_Total', 'Q2_Has_Space_Force', 'Q2_Target_Player',
                   'Roaming_Empire_Fleet_Target'], 'galactic: perception columns %s' % eqs)
@@ -288,16 +324,32 @@ def main():
         pirate = tf == 'MainForce'
         check(len(recs) == len(raw) and recs and all(r[0] == 'P' for r in recs),
               '%s: records parse, src P (%d)' % (plan, len(recs)))
-        check(kinds.get('LOAD') == 1 and kinds.get('PSTART') == 1 and kinds.get('PDONE') == 1 and
-              kinds.get('PFAIL', 0) == (1 if pirate else 0), '%s: LOAD, one start and end, failures %s' % (plan, kinds))
-        check(any(ln == 'RESULT true PRODUCED 1 EXITS %d CATEGORY %s' % (1 if pirate else 0, plan) for ln in lines),
-              '%s: shipped thread and handlers ran once (%s)' % (plan, [ln for ln in lines if ln.startswith('RESULT')]))
+        check(kinds.get('LOAD') == 1 and kinds.get('PSTART') == 2 and kinds.get('PBLOCK') == 2 and
+              kinds.get('PDONE') == 2 and kinds.get('PFAIL', 0) == (1 if pirate else 0) and kinds.get('PEXIT', 0) ==
+              (1 if pirate else 0) and not kinds.get('ERR'),
+              '%s: LOAD, two runs across a Flush_G (start, block, done), failures %s' % (plan, kinds))
+        check(any(ln.startswith('RESULT true PRODUCED 2 BLOCKS 2 EXITS %d CATEGORY %s FLUSHED ' % (
+            1 if pirate else 0, plan)) and not ln.endswith('FLUSHED 0') for ln in lines),
+              '%s: shipped threads and handlers ran, Flush_G deleted tables (%s)' % (
+                  plan, [ln for ln in lines if ln.startswith('RESULT')]))
+        seqs = sorted(r[2] for r in recs)
+        check(seqs == list(range(1, len(seqs) + 1)) and len({r[1] for r in recs}) == 1,
+              '%s: one sid, no seq gaps (%s)' % (plan, seqs))
+        starts = [r[4] for r in recs if r[3] == 'PSTART']
+        check(len(starts) == 2 and 'n=1 prev=first' in starts[0] and 'n=2 prev=PDONE' in starts[1],
+              '%s: PSTART run numbers and prev %s' % (plan, starts))
+        block = [r[4] for r in recs if r[3] == 'PBLOCK']
+        check(block and ('plan=%s player=REBEL target=Kashyyyk n=1 k=1 ret=nil spend=1234.5 unalloc=50 cr=8000' % plan)
+              in block[0] and block[0].endswith('units=1 CORELLIAN_GUNBOAT'), '%s: PBLOCK text %s' % (plan, block))
         done = [r[4] for r in recs if r[3] == 'PDONE']
-        check(done and ('plan=%s player=REBEL target=Kashyyyk' % plan) in done[0] and
-              done[0].endswith('units=1 CORELLIAN_GUNBOAT'), '%s: PDONE text %s' % (plan, done))
+        check(len(done) == 2 and done[1].startswith('t=40 frame=1200 ') and
+              done[1].endswith('units=2 CORELLIAN_GUNBOAT CORELLIAN_GUNBOAT'),
+              '%s: PDONE after the second run %s' % (plan, done))
         if pirate:
             fail = [r[4] for r in recs if r[3] == 'PFAIL']
             check(fail and 'args=2 ? PIRATE_FIGHTER' in fail[0], '%s: PFAIL names the failed type %s' % (plan, fail))
+            ex = [r[4] for r in recs if r[3] == 'PEXIT']
+            check(ex and ' n=2 ' in ex[0], '%s: PEXIT from the failure handler %s' % (plan, ex))
         if found is not None:
             check(found == set(raw), '%s: live memory scan finds exactly the printed records' % plan)
 

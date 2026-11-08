@@ -1001,7 +1001,9 @@ bool AbilitySystem::apply(Obj& o, SpecialState& sp, ObjectId target, int32_t hp,
                 if (v.type == kAnimRevealBegin || v.type == kAnimRevealLoop) return true;
             }
             if (sp.applied) return false;
-            stop_order(o.id, frame);  // OI abilities: the apply stops the unit (animation 0x69, §2.3.10)
+            // OI abilities: the apply stops the unit (animation 0x69, §2.3.10); cu8j t02: Force Reveal begin 0x713a90 is a
+            // stop-and-hold 0x3a9880 (MOVEMENT §4.7.2): one ctor draw.
+            stop_order(o.id, frame, kStopHold);
             play_anim(o, kAnimRevealBegin, {}, 0, false, 1.0f, kAnimHoldLoop, frame);  // §4.14: Begin, then the Loop
             sp.frames = static_cast<int32_t>(static_cast<float>(cfg_.fps) * s.force_sight_duration);
             sp.applied = 1;

@@ -743,6 +743,10 @@ ta::AbilityObjectDesc BattleCatalog::ability_desc(uint32_t t, BuildState& s) con
         const objects::TypeIndex x = types->resolve_name(ascii_trim(name));
         return x == objects::kNone ? -1.0f : types->columns().max_speed[x];
     };
+    r.type_max_flight_distance = [types](std::string_view name) -> float {  // cu8j t03: Saber_Name's max travel base
+        const objects::TypeIndex x = types->resolve_name(ascii_trim(name));
+        return x == objects::kNone ? -1.0f : types->get_float(x, "Projectile_Max_Flight_Distance");
+    };
     r.armor = [this](std::string_view name) -> uint16_t { return damage_.armor_index(ascii_trim(name)); };
     // OI abilities: melee Damage_Type and the projectile test for Spawned_Object_Type (instant effects).
     r.damage = [this](std::string_view name) -> uint16_t { return damage_.damage_index(ascii_trim(name)); };

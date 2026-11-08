@@ -228,10 +228,10 @@ void TacticalBattle::hg_holster_attach(const Unit& u) {
 
 void TacticalBattle::hg_holster_service() {
     // Service 0x635750 (interval 1), ascending id. Engaged: a current attack target (0x397a40), a running Berserker (SAP
-    // +0x2cc), the current clip ATTACK / SPINMOVE, or a hero clash (+0x3b4) [port: no hero clashes yet]. cu8i t01
-    // (CU8F_T01_T02_T07_RE §2.6): a thrown saber is in flight from the throw up to and including its catch frame (the
-    // flight stand-in recorded by saber_throw); on the catch frame the service still sees it in flight, then the catch
-    // (0x635310) runs, so the held draw transition clears and the hum is unsuppressed on the next frame, as in retail.
+    // +0x2cc), the current clip ATTACK / SPINMOVE, or a hero clash (+0x3b4) [port: no hero clashes yet]. cu8j t03
+    // (CU8F_T01_T02_T07_RE §2.6 / §2.7): a thrown saber is in flight from the throw up to and including the ability's end
+    // (the stand-in scheduled by saber_schedule); on the end frame the service still sees it in flight, so the held draw
+    // transition clears and the hum is unsuppressed on the next frame, as in retail.
     if (!hg_mode_) return;
     const objects::ObjectStore& st = hg_mode_->primary();
     for (const Unit& u : units_) {
@@ -240,9 +240,11 @@ void TacticalBattle::hg_holster_service() {
         if (!ht) continue;
         const bool engaged = (combat_ && combat_->has_unit(u.id) && combat_->current_target(u.id) != tc::kNoObject) ||
                              (abilities_ && abilities_->is_active(u.id, ta::kBerserker)) || anim_engaged_clip(u.id);
-        const uint32_t catch_frame = engine_loops_.saber_catch_frame(u.id);
-        engine_loops_.holster_service(u.id, ht->desc, engaged, catch_frame != 0, frame_);
-        if (catch_frame != 0 && frame_ >= catch_frame) engine_loops_.saber_catch(u.id, frame_);
+        // cu8j t03: the scheduled throw, then the service (the saber in flight from the throw to the ability's end), then
+        // the catch snap (only a real catch) and the end.
+        engine_loops_.saber_service(u.id, frame_, true);
+        engine_loops_.holster_service(u.id, ht->desc, engaged, engine_loops_.saber_in_flight(u.id), frame_);
+        engine_loops_.saber_service(u.id, frame_, false);
     }
 }
 
@@ -368,6 +370,9 @@ objects::ObjectId TacticalBattle::hg_spawn(TacticalMode& mode, int32_t type, int
                 store.destroy(containers_[ci].h);
             } else {
                 abilities_->add_container(containers_[ci].id, desc_of(team_beh), owner, group, frame_, &rng);
+                // cu8j t02 (MOVEMENT §4.7.3): SpawnSquadron 0x593960 runs the team helper 0x2a5a60, which adopts the
+                // container (0x39bcb0, return 0x2a61d5): one ctor draw when it qualifies (space: a fighter member).
+                (void)mv_adopt(mode, containers_[ci].h, rng);
                 bound = containers_[ci].id;
             }
         } else if (!group.empty()) {

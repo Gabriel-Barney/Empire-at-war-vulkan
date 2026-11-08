@@ -17,7 +17,8 @@ Files written into the run dir:
   lua_reader.log       REC lines in the order found, SCAN stats, EXIT line
   lua_records.txt      every distinct record, sorted by (src, sid, seq)
   lua_perception.tsv   galactic PERCEPTION records: cycle, ai, planet, one column per equation
-  lua_summary.json     counts per kind, canary calls, errors, verdict per script
+  lua_summary.json     counts per kind, canary calls, errors, verdict per script, seq gaps per script instance
+                       (a gap means records were lost: the 2026-11-03 run lost plan records to PGBase Flush_G)
 """
 import argparse
 import json
@@ -57,6 +58,25 @@ def kv(text):
     return out
 
 
+def gaps(uniq):
+    """Missing seq numbers per (src, sid) between 1 and the highest seq found: ['P 0x1 2-8', ...]."""
+    seqs = {}
+    for src, sid, seq, _kind, _text in uniq:
+        seqs.setdefault((src, sid), set()).add(seq)
+    out = []
+    for (src, sid), have in sorted(seqs.items()):
+        missing = [s for s in range(1, max(have) + 1) if s not in have]
+        runs = []
+        for s in missing:
+            if runs and runs[-1][1] == s - 1:
+                runs[-1][1] = s
+            else:
+                runs.append([s, s])
+        if runs:
+            out.append('%s %s %s' % (src, sid, ','.join('%d' % a if a == b else '%d-%d' % (a, b) for a, b in runs)))
+    return out
+
+
 def summarize(records):
     """records: iterable of (src, sid, seq, kind, text) -> (sorted list, perception rows, equations, summary dict)."""
     uniq = sorted(set(records), key=lambda r: (r[0], r[1], r[2]))
@@ -74,7 +94,7 @@ def summarize(records):
             if k not in ('cycle', 'ai', 'planet') and k not in eqs:
                 eqs.append(k)
         rows.append((sid, seq, d))
-    summary = {'records': len(uniq), 'kinds': kinds, 'scripts': {}, 'errors': [], 'canary': []}
+    summary = {'records': len(uniq), 'kinds': kinds, 'scripts': {}, 'errors': [], 'canary': [], 'gaps': gaps(uniq)}
     for src, _sid, _seq, kind, text in uniq:
         if kind == 'ERR':
             summary['errors'].append('%s %s' % (src, text))
@@ -92,8 +112,10 @@ def summarize(records):
             else:
                 verdict = 'loaded (LOAD/DEF), but the state machine never entered Q2_State_Trace'
         elif src == 'P':
-            verdict = 'loaded: %d plan scripts; %d thread starts, %d ends, %d production failures' % (
-                k.get('LOAD', 0), k.get('PSTART', 0), k.get('PDONE', 0), k.get('PFAIL', 0))
+            verdict = ('loaded: %d plan scripts; %d thread starts, %d ends, %d production failures; '
+                       '%d blocks done, %d script exits, %d probe errors') % (
+                k.get('LOAD', 0), k.get('PSTART', 0), k.get('PDONE', 0), k.get('PFAIL', 0),
+                k.get('PBLOCK', 0), k.get('PEXIT', 0), k.get('ERR', 0))
         else:
             sampled = k.get('TSAMPLE', 0)
             verdict = 'loaded; %d samples, %d mode events, %d kills, %d built; service=%s thread=%s' % (
@@ -208,6 +230,7 @@ def run(a):
     s = write_outputs(a.run_dir, records)
     for src, v in sorted(s['scripts'].items()):
         log('VERDICT %s %s' % (src, v['verdict']))
+    log('GAPS %s' % ('; '.join(s['gaps']) if s['gaps'] else 'none'))
     return 0
 
 
@@ -238,6 +261,7 @@ def selftest(_a):
     check(s['scripts']['G']['verdict'].startswith('ran'), 'galactic verdict ran')
     check(s['scripts']['T']['verdict'].startswith('loaded'), 'scoring verdict loaded')
     check(len(s['canary']) == 1 and len(s['errors']) == 1, 'canary and error collected')
+    check(s['gaps'] == ['G 0x1a2b 1-6,8', 'P 0x77 1'], 'seq gaps reported per instance %s' % s['gaps'])
     _u, _r, _e, s0 = summarize([])
     check(s0['scripts']['G']['verdict'].startswith('no records'), 'empty run verdict')
     out = os.path.join(HERE, 'out', 'selftest', 'q2lua')
