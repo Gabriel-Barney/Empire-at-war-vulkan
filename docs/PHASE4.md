@@ -212,6 +212,104 @@ headless refusal, report keys), `alamo_game_bench_scenario_headless` (no data: a
 match, 120 counted frames, GPU scopes, identical PNGs in both runs, the camera moved (first and last PNG differ), and a changed
 pinned file refused.
 
+### BM3 - stress scenes, load scenes and reports (2026-11-06, group bm3)
+
+**The scenes** (`tests/benchmark/`; every one is a committed scenario: `.abench` + `.alsv` + `.acmd` + `.crc`, none carries a
+machine-specific path). Reference timings are in [`PERFORMANCE.md`](PERFORMANCE.md) ("Benchmark scenes").
+
+| Scene | Host | What it stresses | Made with | Length |
+|---|---|---|---|---|
+| `space_battle` (BM1) | headless | AI-vs-AI space battle, 4x fleets | `--skirmish-ai foc-fleet` | 1800 ticks |
+| `galactic_late` (t01) | headless | late-game galaxy, all AI: FoC `Sandbox_Equal_Footing_Underworld` (56 planets, 4 AI players), saved at tick 30000: galactic AI goal scoring, auto-resolved conflicts, story Lua | `--save-session galactic --campaign ... --battles auto --story` | 27000 ticks (15 game minutes) |
+| `land_battle` (t02) | headless | one large land battle (pathfinding, infantry, vehicles, tactical AI): `_MP_LAND_UTAPAU`, Empire vs Rebel, six times the `foc-land` company lists | `--skirmish-ai foc-land-army` (new kind, `kArmyScale` = 6) | 3600 ticks (2 game minutes) |
+| `space_battle_game` (bm2c t01) | game | rendered large space battle: `_MP_SPACE_KUAT`, an idle Empire fleet against the Rebel AI, x6, the camera circles the fight | `--bench-new-save` | 1800 ticks, 3600 frames (fixed, 2 per tick, `bm-high`) |
+| `nebula_battle` (t03) | game | explosions + nebula / asteroid overdraw: `_MP_SPACE_DAGOBAH`, x6, the camera flies into the nebula in front of the fight | `--bench-new-save` | same |
+| `water_battle` (t03) | game | water reflection / refraction + rain: `_MP_LAND_KAMINO` (60 % of the grid under water, reflection and refraction 1.0), x4 ground forces, low camera | `--bench-new-save` | same |
+
+The headless scenes run with `alamo_headless --bench tests/benchmark/<name>.abench` (BM1; `tools\benchmark\run_bench.cmd <name>`), the
+rendered ones with `alamo_game --hidden --bench-scenario tests/benchmark/<name>.abench` (BM2; add `--bench-report FILE`).
+
+**Why the rendered scenes are game-made.** `alamo_game` cannot load an `alamo_headless` harness save, and a game save of the attract
+demo cannot be made, so the rendered scenes start from a *skirmish session built by alamo_game's own `GameSession`*:
+`alamo_game --bench-new-save FILE --bench-map MAP [--bench-human F] [--bench-ai F] [--bench-scale N] [--bench-save-after T]
+[--bench-seed S]` (no window, no GPU: `benchmark_save.hpp`) starts the skirmish (the human side's default fleet or army repeated
+N times against the AI's, N 1..16), runs it until the battle is on the mode stack plus T ticks and writes the save. The human side takes
+no orders in a benchmark (it only defends; the AI side attacks and keeps reinforcing). The descriptor's game-data folder is cleared and
+the save has no wall-clock time, so the same arguments make the same bytes on any machine. `alamo_game --bench-maps` lists the
+official skirmish maps with what a scene needs to pick one (space / land, grid, water type / height / share of vertices under it,
+reflection and refraction settings, sky domes, weather, and the positions of placed nebula / cloud / field objects); `--bench-trace N`
+(a benchmark run) prints every Nth tick each owner's object count, centroid and bounding box, which is how the camera paths were
+aimed.
+
+**A game scenario's recipe is its manifest**: the committed `.abench` carries a `make` line (the `--bench-new-save` arguments minus the
+output) plus the format-2 keys (`host game`, `mode`, `preset`, `frames_per_tick`, `camera_anchor`, `camera ...`).
+
+**Regenerate** (after a save-format, sim-behaviour or game-data change: "scenario changed, not comparable", exit 3):
+`alamo_game --hidden --bench-regen tests/benchmark/<name>.abench` remakes the session from the `make` line, runs
+`--bench-make` on it and bumps `version` when the files changed (headless scenes: `tools\benchmark\regen_scenario.cmd <name>`).
+`tools\regen_goldens.cmd --bench-check` checks **every** scene (headless ones with `alamo_headless --bench --runs 1`, game ones with a
+120-tick hidden `alamo_game --bench-scenario` run) and `tools\regen_goldens.cmd --only bench` remakes the stale ones; never by hand.
+New scene: write the recipe (a manifest with `name`, `description`, the `make` line and the format-2 keys), run
+`alamo_game --hidden --bench-regen` on it (or `alamo_headless --bench-make`), commit the four files.
+
+**Rebaseline** (a result file is a baseline for one scenario version on one PC): after an intended speed change run
+`tools\benchmark\run_suite.cmd` on a quiet machine (nothing else building or testing; a run is flagged NOISY when the CPU was busy
+before it), keep the JSON files under `logs\bench_suite\`, and compare against the previous ones with
+`python tools\benchmark\compare_results.py BEFORE.json AFTER.json`. Record the new numbers in `PERFORMANCE.md` with the commit.
+Never record a noisy run as a baseline.
+
+**Result comparison** (t06; `tools/benchmark/compare_results.py`, self-test `test_compare_results.py`, ctest `alamo_bench_compare_tool`):
+reads an `alamo-bench-result` (headless) or `alamo_game_benchmark` (game) file pair and prints metric / before / after / change / verdict
+(`faster`, `SLOWER`, `same` within `--threshold` percent, default 3; headless also the biggest profiler zones; game also the GPU scopes,
+the load time and the hitch count). It **refuses** (exit 2) two files of different kinds, scenario name, version, save or fingerprint
+digest, a run that was not comparable with its scenario, and (game) a different mode / preset / size / frames per tick / tick count, each
+with its own override (`--allow-different-scenario`, `--allow-different-settings`); a different machine or build is only a note
+(`--allow-different-machine` silences it). A noisy run is marked and never counts for `--fail-slower PCT` (exit 4).
+
+**Load scenes and first-use hitches** (t04): a rendered run now reports `load_ms` (from the save's load start to the first measured
+tick: the load screen, warm-up frames and every pipeline / model / texture the first view waits for), `early_ms` (statistics of the
+first 300 counted frames) and `hitches` (counted frames over max(25 ms, 4 x the median): their count and the worst eight as
+`[frame index, ms]`). `tools\benchmark\run_suite.cmd --load` runs the rendered scenes in real time (`--benchmark realtime
+--bench-ticks 300`) with a cold cache (a fresh empty `--cache-dir`: pipelines and shaders compile during the run) and then a warm one
+(the same directory again); the pairs show the cold-cache hitches. In fixed-frames runs the clock waits for the renderer to settle, so
+hitches only show in real-time mode.
+
+**Noise** (t05; `tools\benchmark\run_suite.cmd [--repeats N] [--scenes a,b]`): each scene N times as separate processes; per headline
+metric the min / max / mean, spread ((max - min) / mean) and coefficient of variation go to `logs\bench_suite\suite.json` and the
+console. See `PERFORMANCE.md` for the figures on the reference PC.
+
+**Tests**: `alamo_game_benchmark_tests` (extended: report keys `load_ms` / `early_ms` / `hitches`, hitch detection, the
+`--bench-new-save` / `--bench-maps` flags), `alamo_bench_compare_tool` (compare tool on synthetic files, no data),
+`alamo_headless_bench_galactic_late*` and `alamo_headless_bench_land_battle*` (slow, FoC data: CRCs of 1 / 4 / N workers equal the 0-worker
+run), `alamo_game_bench_scene_<name>` (slow, FoC data, `bench_scene_check.cmake`: 120 hidden ticks per rendered scene, fingerprint match,
+report keys).
+
+### BM2c - sim-only timing of game scenes, TAA scenario run (2026-11-08, group bm2c)
+
+**Sim-only timing of a `host game` scene** (t02). Port choice: `alamo_headless --bench` runs it, linked with the render-free
+`alamo_game_core` (`engine/apps/headless/bench_game.cpp`, compiled with `ALAMO_HEADLESS_HAVE_GAME_CORE` when that target exists;
+wired in `engine/apps/CMakeLists.txt` after `add_subdirectory(game)`), instead of a new sim-only mode in `alamo_game`: the BM1 runner
+(warm-up / timed runs, worker count, fingerprint and run-to-run checks, OPT1 zones, `--crc-out` / `--golden`, `--bench-baseline`, the
+`alamo-bench-result` JSON) applies unchanged, so a game scene's result has exactly BM1's shape (`tool alamo_headless`, `mode sim-only`,
+`scenario.session` e.g. `game.skirmish '...' seed 1 map _MP_SPACE_KUAT`) and `tools/benchmark/compare_results.py` compares it like a
+headless one. `open_game_save_source` reads the save once and loads the game data once (`--game`, else `ALAMO_FOC_DATA`; skipped
+without; the save's VFS arguments unless given); each run builds a fresh `GameSession` with its own job system from the save
+(`GameSession::spec_from_save` + `start_from_save`, the path of `load_game` and of alamo_game's presentation on/off check) with the
+scenario's orders as the replay, and each timed tick is one `GameSession::tick`. The fingerprint is the CRC log of the rendered run that
+made the scene, so a matching sim-only run did the rendered run's sim work (the check also compares its final CRC with the manifest's
+`final_crc`). An `alamo_headless` built without `alamo_game_core` still refuses a game scene with the reason.
+`alamo_headless --bench tests/benchmark/space_battle_game.abench [--runs R] [--bench-json F]`.
+
+**TAA scenario run** (t03). `engine/apps/game/testdata/bench_orbit_taa.abench` is `bench_orbit.abench` on `bm-high` (TAA Medium);
+`bench_scenario_check.cmake -DTAA=1` makes it from the saveload smoke's battle save and runs it twice at 640x360, run b with
+`--bench-redraw-every 3` (BM2b): both reports say `taa: true`, run b reports the forced redraws and as many TAA discards, and the PNGs
+of the two runs are identical.
+
+**Tests**: `alamo_headless_bench_game_<scene>` for `space_battle_game`, `nebula_battle`, `water_battle` (slow, FoC data,
+`headless/check_bench_game.cmake`: one full-length timed run, exit 0, BM1 JSON keys, every tick timed, final CRC = the manifest's);
+`alamo_headless_bench_space_battle_game*` (slow, FoC data: the worker-count check, 0 / 1 / 4 / 16 / machine default);
+`alamo_game_bench_scenario_taa` (slow, FoC data).
+
 ## Q4 parity baseline (q4h t02, 2026-11-07; re-recorded after a2k t10 / t11, q4hf t01)
 
 Measured with the Q4 harness (`tools/parity/`, README there: metrics, tolerances and their reasons, grading). The table is
@@ -222,10 +320,21 @@ and dev `3629d4cf`, before the a2k galactic-AI merge (row "q4h t02" below; the h
 and Q4 groups are judged against these numbers. Reference runs: the Q2 traces in the main checkout's
 `tools/probe_mod/q2_traces/out/`.
 
+**2026-11-08 (q2f t08): `hotm_galactic` now uses 2 retail runs.** `20261103-152619-galactic-vanilla-lua` was dropped:
+its Lua plan hooks killed retail's own plan threads (`docs/re/LUA_SCRIPT_OUTPUT.md` §4), so its AI production and fleet
+moves were not retail behaviour, and it widened the AI envelopes (Rebel fleet departures 19..71). `baseline.json` was
+re-recorded at `acb3547a` (same engine code as dev `03940b96`). Graded against the old 3 runs the port had 0
+regressions; all 13 new FAILs come from the narrower envelope, among them `ai.fleet_departures[Rebel]` 30 vs 71,
+`ai.fleet_targets[Rebel]` overlap 0.23 (retail shuttles Shola / Naboo), `ai.build_mix[Rebel]` 0.44 (retail builds 22
+infantry squads, the port 2). `ai.build_count[Rebel]` is 40 vs retail 50 (PASS, tol 12.5).
+
 | scenario | timing | income | AI choices | battle outcomes | damage |
 |---|---|---|---|---|---|
+| `hotm_galactic` (2 retail runs), q4hf t04 hop segmentation + q2f t08 references: **current baseline** | 46 PASS / 8 FAIL | 15 / 10 | 13 / 3 (1 N/A) | 7 / 0 | - |
+| retail leave-one-out (2 runs, each against the other), current baseline | 59 / 1 | 20 / 0 (30 N/A) | 12 / 4 (18 N/A) | 14 / 0 | - |
 | `hotm_galactic` (3 retail runs) at `4b6aa69d` (q4hf t04 hop segmentation) | 53 PASS / 5 FAIL | 20 / 5 | 16 / 0 (1 N/A) | 7 / 0 | - |
-| `hotm_galactic` at `79576620` (old hop segmentation) | 36 / 8 | 20 / 5 | 16 / 0 (1 N/A) | 7 / 0 | - |
+| `hotm_galactic` (2 retail runs) at `acb3547a` (old hop segmentation) | 28 PASS / 11 FAIL | 15 / 10 | 13 / 3 (1 N/A) | 7 / 0 | - |
+| `hotm_galactic` (3 retail runs) at `79576620` (old hop segmentation) | 36 PASS / 8 FAIL | 20 / 5 | 16 / 0 (1 N/A) | 7 / 0 | - |
 | `hotm_galactic` at the a2k merge (`9064172d`) | 34 / 8 | 21 / 4 | 16 / 0 (1 N/A) | 7 / 0 | - |
 | `hotm_galactic`, q4h t02 (`3629d4cf`) | 15 / 5 | 22 / 3 | 11 / 5 (1 N/A) | 7 / 0 | - |
 | retail leave-one-out, same tolerances, at `4b6aa69d` (before t04: timing 90 / 17) | 121 / 12 | 46 / 14 | 30 / 10 | 19 / 2 | - |

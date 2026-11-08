@@ -458,6 +458,24 @@ if(_alamo_sim)
         COMMAND alamo_headless --bench ${_bm_scenario} --runs 1 --warmup 0 --quiet --bench-allow-changed
         TIMEOUT 1800 SLOW)
   endif()
+  # --- BM3 (owner: lane-bm3): the stress scenes' worker-count checks (same rule as above: the CRCs of 1/4/N workers match the
+  # 0-worker run; a stale fingerprint only prints "not comparable"; skipped without ALAMO_FOC_DATA) and the result comparison
+  # tool's self-test on synthetic files (tools/benchmark/compare_results.py; no game data). The rendered scenes (host game) are
+  # checked by alamo_game_bench_scene_* in apps/game/CMakeLists.txt. ---
+  foreach(_bm_name galactic_late land_battle)
+    if(EXISTS ${CMAKE_SOURCE_DIR}/tests/benchmark/${_bm_name}.abench)
+      alamo_add_worker_count_check(alamo_headless_bench_${_bm_name}
+          COMMAND alamo_headless --bench ${CMAKE_SOURCE_DIR}/tests/benchmark/${_bm_name}.abench --runs 1 --warmup 0 --quiet --bench-allow-changed
+          TIMEOUT 1800 SLOW)
+    endif()
+  endforeach()
+  find_program(ALAMO_BENCH_PYTHON NAMES python PATHS ${CMAKE_SOURCE_DIR}/toolchain/venv/Scripts NO_DEFAULT_PATH)
+  find_program(ALAMO_BENCH_PYTHON NAMES python python3)
+  if(ALAMO_BENCH_PYTHON)
+    add_test(NAME alamo_bench_compare_tool
+             COMMAND ${ALAMO_BENCH_PYTHON} -I ${CMAKE_SOURCE_DIR}/tools/benchmark/test_compare_results.py ${CMAKE_CURRENT_BINARY_DIR}/bench_compare)
+    set_tests_properties(alamo_bench_compare_tool PROPERTIES TIMEOUT 120)
+  endif()
   # --- end BM1 ---
 endif()
 
@@ -514,3 +532,29 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/game/CMakeLists.txt)
   add_subdirectory(game)
 endif()
 # --- end P host ---
+# --- bm2c t02 (owner: lane-bm2c): alamo_headless --bench times `host game` scenarios sim-only through the render-free
+# alamo_game_core (headless/bench_game.cpp; here because alamo_game_core is created by the add_subdirectory above).
+# alamo_headless_bench_game_<scene>: each committed rendered scene once, full length (check_bench_game.cmake: the run matches the
+# fingerprint made by the rendered run, BM1's result JSON, final CRC = the manifest's); alamo_headless_bench_space_battle_game*:
+# the worker-count check on the space scene (a stale fingerprint only prints "not comparable" there, as the headless scenes).
+# Skipped without ALAMO_FOC_DATA. ---
+if(TARGET alamo_headless AND TARGET alamo_game_core)
+  target_sources(alamo_headless PRIVATE headless/bench_game.cpp)
+  target_link_libraries(alamo_headless PRIVATE alamo_game_core)
+  target_compile_definitions(alamo_headless PRIVATE ALAMO_HEADLESS_HAVE_GAME_CORE=1)
+  foreach(_bm_scene space_battle_game nebula_battle water_battle)
+    if(EXISTS ${CMAKE_SOURCE_DIR}/tests/benchmark/${_bm_scene}.abench)
+      add_test(NAME alamo_headless_bench_game_${_bm_scene}
+               COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:alamo_headless> -DSCENE=${CMAKE_SOURCE_DIR}/tests/benchmark/${_bm_scene}.abench
+                       -DOUT=${CMAKE_CURRENT_BINARY_DIR}/bench_game/${_bm_scene} -P ${CMAKE_CURRENT_SOURCE_DIR}/headless/check_bench_game.cmake)
+      set_tests_properties(alamo_headless_bench_game_${_bm_scene} PROPERTIES TIMEOUT 900)
+      alamo_label_slow(alamo_headless_bench_game_${_bm_scene})
+    endif()
+  endforeach()
+  if(EXISTS ${CMAKE_SOURCE_DIR}/tests/benchmark/space_battle_game.abench)
+    alamo_add_worker_count_check(alamo_headless_bench_space_battle_game
+        COMMAND alamo_headless --bench ${CMAKE_SOURCE_DIR}/tests/benchmark/space_battle_game.abench --runs 1 --warmup 0 --quiet --bench-allow-changed
+        TIMEOUT 1800 SLOW)
+  endif()
+endif()
+# --- end bm2c t02 ---

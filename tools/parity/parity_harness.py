@@ -113,7 +113,9 @@ def default_refs():
     if env:
         return env
     here = os.path.join(REPO, KIT_REL, "out")
-    if os.path.isdir(here):
+    # Only a folder that holds a run counts: the kit's selftest makes out\selftest in every worktree it runs in, and
+    # that empty folder used to hide the main checkout's runs (the slow ctests then skipped with 77).
+    if os.path.isdir(here) and any(os.path.isfile(os.path.join(here, d, "trace.q2t")) for d in os.listdir(here)):
         return here
     try:
         common = subprocess.run(["git", "-C", REPO, "rev-parse", "--path-format=absolute", "--git-common-dir"],

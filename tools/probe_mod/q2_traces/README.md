@@ -59,13 +59,22 @@ Nor can it write a file: in retail 1.121 `_CustomScriptMessage`, `_ScriptMessage
   second, `TSAMPLE` plus a `TPLAYER faction= id= credits= tech= objects=` line per player (taken on those events and
   from a `Create_Thread` loop: retail never calls GameScoring's `GameService`). The original `GameService` would
   still run every 10th service.
-- AI plans (q2f t09, 2026-11-02): unchanged copies of the shipped `BuildSpaceForcesPlan.lua`,
-  `BuildGroundForcesPlan.lua` and `ConquerPiratePlan.lua` (from `extracted/foc_data_text.zip`) with a read-only block
-  appended that wraps the task-force thread: `PSTART` / `PDONE` records with galactic time, frame, plan, faction,
-  target and the task force's unit types, and for Conquer_Pirate a `PFAIL` record per production failure (the names
-  of the handler's arguments). Src `P`; plan scripts are pooled, so one sid covers several plan instances. It shows
-  which units retail's Build_Space_Forces / Build_Ground_Forces pick, when, and why Conquer_Pirate plans fail. A plain
-  `run_lua_probe.cmd` run collects them (`lua_records.txt`, lines `P ... PSTART|PDONE|PFAIL`).
+- AI plans (q2f t09 2026-11-02, rewritten in q2f t08 2026-11-08): unchanged copies of the shipped
+  `BuildSpaceForcesPlan.lua`, `BuildGroundForcesPlan.lua` and `ConquerPiratePlan.lua` (from
+  `extracted/foc_data_text.zip`) with a read-only block appended. Records (src `P`, one sid per pooled script
+  instance): `PSTART` when the task-force thread starts (`n` = run number in the instance, `prev` = how the previous
+  run ended; `none` = its thread was killed when the plan was released), `PBLOCK` after each `BlockOnCommand` returns
+  (after `Produce_Force`: the units just built), `PDONE` when the thread function returns, `PEXIT` on `ScriptExit`,
+  and for Conquer_Pirate `PFAIL` per production failure (the names of the handler's arguments). Each carries
+  galactic time, frame, plan, faction, target, the goal's budget (`spend=` / `unalloc=` from `Budget`), the player's
+  credits and the task force's unit types. It shows which units retail's Build_Space_Forces / Build_Ground_Forces
+  pick, when, and why Conquer_Pirate plans fail.
+  **The 2026-11-03 run's plan hooks broke the plans.** Releasing a pooled plan runs PGBase `Flush_G`, which deletes
+  every global table, the old probe's records table included; the next record then raised a Lua error that killed
+  the plan's thread before the shipped code ran (Rebel fleet departures 19 instead of retail's 71). The records now
+  live in a closure, and every probe step is in `pcall` (docs/re/LUA_SCRIPT_OUTPUT.md §4). The galactic and
+  GameScoring scripts no longer use the `math` library, which retail lacks (`math.floor` ended the galactic script at
+  its first `OnUpdate`). `selftest_lua.py` hides `math` and runs each plan twice across an emulated `Flush_G`.
 
 **Lua output channel (q2f t06, 2026-11-02).** The probe scripts keep every line as a Lua string
 `Q2L1|<G, T or P>|<sid>|<seq>|<KIND>|<text>|END` (G = galactic plot, T = GameScoring, P = AI plan hooks) in a table. `q2lua_reader.py`
@@ -179,11 +188,14 @@ How to read the result (`run_status.json` → `lua_canary` and `lua`):
 The `scoring` canary and verdict are about the GameScoring hook; in a galactic run it loads too, but only a skirmish
 (`run_skirmish.cmd -LuaProbe`, same clicks as step 4 above) gives it battle events. Optional.
 
-`lua.plans` (q2f t09) reads `loaded: N plan scripts; S thread starts, D ends, F production failures`. What it must
-show for q2f t09 (docs/re/Q2F_T09_REBEL_PRODUCTION.md): the Rebel's first `Build_Space_Forces` `PDONE` (unit types;
-the port picks a Marauder where retail's queue starts a Corellian gunboat at frame 109), the first
-`Build_Ground_Forces` `PSTART` / `PDONE` (retail's queue shows light tank, tank buster and infantry by frame 559), and
-every `Conquer_Pirate` start and failure with its target.
+`lua.plans` (q2f t09) reads `loaded: N plan scripts; S thread starts, D ends, F production failures; B blocks done,
+E script exits, R probe errors`. `lua_summary.json` `gaps` (and the `GAPS` line of `lua_reader.log`) must be empty:
+a gap means records were lost. What it must show for q2f t09 (docs/re/Q2F_T09_REBEL_PRODUCTION.md): the Rebel's
+first `Build_Space_Forces` `PBLOCK` (unit types; the port picks a Marauder where retail's queue starts a Corellian
+gunboat at frame 109), the first `Build_Ground_Forces` `PSTART` / `PBLOCK` (retail's queue shows light tank, tank
+buster and infantry by frame 559), and every `Conquer_Pirate` start and failure with its target. Check also that the
+Rebel's fleet departures and queue starts in `parity\parity_report.txt` are close to the run without plan hooks
+(71 / 50): if not, the probe still disturbs the AI.
 
 **Cleanup is automatic.** It runs at the end of every run, even after an error. If a window was closed
 early or the PC crashed, double-click `cleanup.cmd`. It is safe to run any number of times.

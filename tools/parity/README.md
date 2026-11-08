@@ -49,7 +49,7 @@ empty, so the harness reads the main checkout's copy (found with `git rev-parse 
 
 | scenario | reference runs | kit that makes one |
 |---|---|---|
-| `hotm_galactic` | `20261103-152619-galactic-vanilla-lua`, `20261030-061228-galactic-vanilla-lua` (reader 2: credits, production queues), `20261027-101057-galactic-vanilla` (reader 1: no credits or queues, so travel, fleets and outcomes only) | `run_lua_probe.cmd` (or `run_galactic.cmd`), Heart of the Maw, Empire, defaults; `-NonInteractive` drives the menus |
+| `hotm_galactic` | `20261030-061228-galactic-vanilla-lua` (reader 2: credits, production queues), `20261027-101057-galactic-vanilla` (reader 1: no credits or queues, so travel, fleets and outcomes only). `20261103-152619-galactic-vanilla-lua` was dropped on 2026-11-08 (q2f t08): its Lua plan hooks broke retail's own AI plans (`excluded_references` in `scenarios.json`) | `run_lua_probe.cmd` (or `run_galactic.cmd`), Heart of the Maw, Empire, defaults; `-NonInteractive` drives the menus |
 | `geonosis_skirmish` | `20261030-062751-skirmish-vanilla-lua` | `run_skirmish.cmd -LuaProbe`, (2) Battle Over Geonosis, Empire vs Medium AI Rebel, defaults |
 
 The G1 render captures (`tools\probe_mod\g1_capture\`) are image captures for the renderer, not behaviour, so the harness

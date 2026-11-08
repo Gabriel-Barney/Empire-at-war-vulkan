@@ -179,6 +179,17 @@ def bench_version(path: str) -> str:
     return "?"
 
 
+def bench_host(path: str) -> str:
+    """The manifest's `host` line: "headless" (alamo_headless --bench) or "game" (alamo_game, rendered; BM2/BM3)."""
+    try:
+        for line in open(path, encoding="utf-8").read().splitlines():
+            if line.startswith("host "):
+                return line.split()[1]
+    except OSError:
+        pass
+    return "headless"
+
+
 def bench_scenarios() -> list[str]:
     d = os.path.join(ROOT, BENCH_DIR)
     return sorted(f"{BENCH_DIR}/{n}" for n in os.listdir(d) if n.endswith(".abench")) if os.path.isdir(d) else []
@@ -189,6 +200,7 @@ def bench_step(build_dir: str, build_arg: str, check_only: bool, listing: bool, 
     scenarios found by a check-only pass are counted in the second result via summaries status 'stale'."""
     scenarios = bench_scenarios()
     exe = os.path.join(build_dir, "bin", "alamo_headless.exe")
+    game_exe = os.path.join(build_dir, "bin", "alamo_game.exe")
     print(f"benchmark scenarios ({len(scenarios)}):")
     for rel in scenarios:
         print(f"  {rel}")
@@ -202,6 +214,13 @@ def bench_step(build_dir: str, build_arg: str, check_only: bool, listing: bool, 
         print(f"{rel}:")
         path = os.path.join(ROOT, rel)
         v0 = bench_version(path)
+        is_game = bench_host(path) == "game"
+        if is_game and not check_only and not os.path.isfile(game_exe):  # the remake of a stale game scene needs alamo_game
+            failed += 1
+            print(f"  FAILED: {game_exe} not found (build first)")
+            continue
+        # A game scene is checked like any other: sim-only and full length by alamo_headless --bench (bm2c t02; no GPU, no window),
+        # remade by the rendered alamo_game --hidden --bench-regen. (alamo_game --bench-scenario also answers a stale scene with 3.)
         r = run([exe, "--bench", path, "--runs", "1", "--warmup", "0", "--quiet"], ROOT, env, logs)
         if r.returncode == 0:
             summaries.append(("unchanged", f"{rel}: scenario fingerprint unchanged (version {v0})"))
@@ -216,7 +235,10 @@ def bench_step(build_dir: str, build_arg: str, check_only: bool, listing: bool, 
             summaries.append(("stale", f"{rel}: STALE (version {v0}): {why}"))
             continue
         scen = os.path.splitext(os.path.basename(rel))[0]
-        rr = run([os.path.join(ROOT, "tools", "benchmark", "regen_scenario.cmd"), scen, build_arg], ROOT, env, logs)
+        if is_game:
+            rr = run([game_exe, "--hidden", "--bench-regen", path], ROOT, env, logs)
+        else:
+            rr = run([os.path.join(ROOT, "tools", "benchmark", "regen_scenario.cmd"), scen, build_arg], ROOT, env, logs)
         if rr.returncode != 0:
             failed += 1
             print(f"  FAILED: regen_scenario exit {rr.returncode}\n" + "\n".join("    " + l for l in (rr.stdout + rr.stderr).strip().splitlines()[-8:]))

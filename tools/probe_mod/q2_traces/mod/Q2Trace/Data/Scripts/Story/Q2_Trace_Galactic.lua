@@ -7,7 +7,7 @@
 -- It only reads state: no GameRandom, no spawning, no story events.
 --
 -- Output channel (docs/re/LUA_SCRIPT_OUTPUT.md): retail 1.121 writes no file for _CustomScriptMessage (its writer is an
--- empty function), so every line is kept as a Lua string "Q2L1|G|<sid>|<seq>|<KIND>|<text>|END" in Q2L_Records, and
+-- empty function), so every line is kept as a Lua string "Q2L1|G|<sid>|<seq>|<KIND>|<text>|END" in a table, and
 -- q2lua_reader.py finds them by a read-only scan of the game's memory. The one thing _CustomScriptMessage does in
 -- retail is DeleteFileA(<name>) on its first call for that name: the probe calls it once on the canary file the kit
 -- installs (Mods\Q2Trace\Q2Trace_Canary_Galactic.txt), so a missing canary after the run proves the script ran.
@@ -23,31 +23,38 @@ Q2_AI = { "Rebel", "Underworld" }
 Q2_EQUATIONS = { "Q2_Space_Total", "Q2_Ground_Total", "Q2_Has_Space_Force", "Q2_Target_Player",
 	"Roaming_Empire_Fleet_Target" }
 
-if Q2L_Records == nil then
-	Q2L_Records = {}
-	Q2L_Seq = 0
-	Q2L_Sid = string.gsub(tostring(Q2L_Records), "^table: ", "")
-	Q2L_Errors = {}
-end
-
--- One record. Text is kept printable, without '|', and short enough for one scan hit (400 bytes).
-function Q2L_Say(kind, text)
-	if Q2L_Seq >= Q2L_MAX then
-		return
+-- Records live in a table held only by these closures (q2f t08): PGBase Flush_G deletes every global table when a
+-- pooled script is released, and a global records table would go with it (the AI plan probe lost its records that
+-- way). Functions, strings and numbers survive. Retail has no math library: nothing here calls math.*, '#' or '%'.
+if Q2L_Say == nil then
+	local recs = {}
+	local seq = 0
+	local errs = {}
+	local sid = string.gsub(tostring(recs), "^table: ", "")
+	-- One record. Text is kept printable, without '|', and short enough for one scan hit (400 bytes).
+	function Q2L_Say(kind, text)
+		if seq >= Q2L_MAX then
+			return
+		end
+		seq = seq + 1
+		local s = string.gsub(tostring(text), "[^ -~]", "?")
+		s = string.gsub(s, "|", "/")
+		s = string.sub(s, 1, 320)
+		recs[seq] = Q2L_NEEDLE .. sid .. "|" .. seq .. "|" .. kind .. "|" .. s .. "|END"
 	end
-	Q2L_Seq = Q2L_Seq + 1
-	local s = string.gsub(tostring(text), "[^ -~]", "?")
-	s = string.gsub(s, "|", "/")
-	s = string.sub(s, 1, 320)
-	Q2L_Records[Q2L_Seq] = Q2L_NEEDLE .. Q2L_Sid .. "|" .. Q2L_Seq .. "|" .. kind .. "|" .. s .. "|END"
-end
-
--- Each distinct error once (pcall messages carry no frame, so repeats are dropped).
-function Q2L_Error(where, err)
-	local key = where .. " " .. tostring(err)
-	if Q2L_Errors[key] == nil then
-		Q2L_Errors[key] = true
-		Q2L_Say("ERR", key)
+	-- Each distinct error once (pcall messages carry no frame, so repeats are dropped).
+	function Q2L_Error(where, err)
+		local key = string.sub(where .. " " .. tostring(err), 1, 200)
+		if errs[key] == nil then
+			errs[key] = true
+			Q2L_Say("ERR", key)
+		end
+	end
+	function Q2L_Count()
+		return seq
+	end
+	function Q2L_Get(i)
+		return recs[i]
 	end
 end
 
@@ -76,7 +83,8 @@ function Definitions()
 	ServiceRate = 1
 	StoryModeEvents = {}
 	Define_State("Q2_State_Trace", Q2_State_Trace)
-	q2_last_cycle = -1
+	q2_cycle = -1
+	q2_next_t = 0
 	q2_samples = 0
 end
 
@@ -108,6 +116,11 @@ function Q2_Sample(t, cycle)
 		Q2L_Error("Get_All_Planets", planets)
 		return
 	end
+	-- In retail an equation that fails inside the engine returns nil (seen here as "nil") and sets the script's failed
+	-- flag, which ends the script after this service pass (docs/re/LUA_API.md "What an error does to the script").
+	-- The first sample names each equation in an EVAL record just before its first evaluation, so if the script stops,
+	-- the last EVAL names the equation that stopped it.
+	local first = (q2_samples == 1)
 	for _, planet in pairs(planets) do
 		local pname = Q2_Name(planet)
 		Q2L_Say("PLANET", "cycle=" .. cycle .. " planet=" .. pname .. " owner=" .. Q2_Owner(planet))
@@ -116,6 +129,9 @@ function Q2_Sample(t, cycle)
 			if p then
 				local vals = ""
 				for _, eq in ipairs(Q2_EQUATIONS) do
+					if first then
+						Q2L_Say("EVAL", "eq=" .. eq .. " ai=" .. ai .. " planet=" .. pname)
+					end
 					local okv, v = pcall(EvaluatePerception, eq, p, planet)
 					if okv then
 						vals = vals .. " " .. eq .. "=" .. tostring(v)
@@ -125,6 +141,7 @@ function Q2_Sample(t, cycle)
 					end
 				end
 				Q2L_Say("PERCEPTION", "cycle=" .. cycle .. " ai=" .. ai .. " planet=" .. pname .. vals)
+				first = false
 			end
 		end
 	end
@@ -135,13 +152,16 @@ function Q2_State_Trace(message)
 	if message == OnEnter then
 		Q2L_Say("ENTER", "time=" .. Q2L_Str(GetCurrentTime))
 	elseif message == OnUpdate then
-		local t = GetCurrentTime()
-		local cycle = math.floor(t / Q2_CYCLE_SECONDS)
-		if cycle ~= q2_last_cycle then
-			q2_last_cycle = cycle
+		local ok, t = pcall(GetCurrentTime)
+		if ok and type(t) == "number" and t >= q2_next_t then
+			-- cycle = floor(t / Q2_CYCLE_SECONDS) without the math library
+			while t >= q2_next_t do
+				q2_cycle = q2_cycle + 1
+				q2_next_t = q2_next_t + Q2_CYCLE_SECONDS
+			end
 			q2_samples = q2_samples + 1
-			local ok, err = pcall(Q2_Sample, t, cycle)
-			if not ok then
+			local ok2, err = pcall(Q2_Sample, t, q2_cycle)
+			if not ok2 then
 				Q2L_Error("Q2_Sample", err)
 			end
 		end
