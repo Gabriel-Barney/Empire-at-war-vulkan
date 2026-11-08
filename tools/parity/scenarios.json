@@ -5,10 +5,12 @@
    "kind": "galactic",
    "title": "Galactic Conquest, Heart of the Maw (Sandbox_Heart_Of_The_Maw_Empire), idle human Empire, Rebel and Underworld AI, seed 0, 13501 ticks (10 fiscal cycles)",
    "references": [
-    {"run": "20261103-152619-galactic-vanilla-lua", "note": "reader 2: credits, production queues, Lua plan records"},
     {"run": "20261030-061228-galactic-vanilla-lua", "note": "reader 2: credits, production queues"},
     {"run": "20261027-101057-galactic-vanilla", "note": "reader 1: no credits, no production queues (travel, fleets and outcomes only); 577 missed ticks"}
    ],
+   "excluded_references": {
+    "20261103-152619-galactic-vanilla-lua": "q2f t08 (2026-11-08): its Lua plan hooks killed retail's own plan threads (records table lost to PGBase Flush_G, docs/re/LUA_SCRIPT_OUTPUT.md section 4), so its AI production and fleet moves are not retail behaviour (Rebel fleet departures 19 vs 71). Replace it with a run of the fixed kit"
+   },
    "kit": "tools/probe_mod/q2_traces/run_lua_probe.cmd (or run_galactic.cmd; -NonInteractive drives the menus), README in that folder",
    "workers": 4
   },
