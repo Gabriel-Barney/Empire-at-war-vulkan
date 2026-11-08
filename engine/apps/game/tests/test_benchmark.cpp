@@ -7,8 +7,10 @@
 //   * bench_report_json: key order, escaping, CRC as 16 hex digits.
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <set>
 #include <string>
 #include <vector>
@@ -435,7 +437,40 @@ void test_bm3() {
     CHECK(check_bench_new_save(n).find("do not mix") != std::string::npos);
 }
 
-int main() {
+// bm2d t01: the exe on a scenario whose save does not load (the pinned bytes are fine, the format is not a save): "scenario changed,
+// not comparable", exit 3 (as alamo_headless --bench), so tools\regen_goldens.cmd remakes the scene. Needs the exe and a GPU/window.
+void test_stale_scene_exe(const std::string& exe) {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "alamo_game_benchmark_tests_stale_scene";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    const std::string scen = (dir / "old.abench").string();
+    write_file(scen, "ALAMO_BENCH 2\nname old\ndescription an older save format\nticks 40\nhost game\nmode realtime\npreset bm-smoke\n");
+    write_file(dir / "game.alsv", "not a save of this format");
+    std::string err, summary;
+    BenchmarkOptions o;
+    CHECK(load_bench_scenario_arg(std::vector<std::string>{"g", "--bench-make", scen, "--bench-save", (dir / "game.alsv").string()}, o, &err) == 1);
+    commands::CommandRecording rec;
+    rec.from_save = commands::SavePoint{300, 0x1234};
+    CHECK(write_game_scenario(scen, o.scenario_data.get(), (dir / "game.alsv").string(), rec, fake_log(300, 340, 0), 300, 40, o, &summary, &err));
+    const std::string out = (dir / "out.txt").string();
+    const std::string cmd = "\"\"" + exe + "\" --hidden --bench-scenario \"" + scen + "\" > \"" + out + "\" 2>&1\"";
+    const int rc = std::system(cmd.c_str());
+    std::ifstream in(out, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (rc != 3) std::printf("%s\n", text.c_str());
+    CHECK(rc == 3);
+    CHECK(text.find("scenario changed, not comparable") != std::string::npos);
+    fs::remove_all(dir, ec);
+}
+
+int main(int argc, char** argv) {
+    if (argc == 3 && std::string(argv[1]) == "--stale-exe") {  // the exe test: its own ctest entry (alamo_game_bench_stale_scene)
+        test_stale_scene_exe(argv[2]);
+        std::printf("alamo_game_benchmark_tests --stale-exe: %s\n", g_fail ? "FAILED" : "OK");
+        return g_fail ? 1 : 0;
+    }
     test_flags();
     test_presets();
     test_fixed_clock();

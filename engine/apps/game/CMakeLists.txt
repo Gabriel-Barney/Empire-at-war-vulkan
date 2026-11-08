@@ -196,6 +196,9 @@ function(alamo_game_add_exe)
     target_link_libraries(alamo_game PRIVATE user32)
   endif()
   alamo_shaderxlat_copy_dxc(alamo_game)
+  # bm2d t01: a scenario whose save does not load is "scenario changed, not comparable", exit 3 (needs a window and a GPU, data-free).
+  add_test(NAME alamo_game_bench_stale_scene COMMAND alamo_game_benchmark_tests --stale-exe $<TARGET_FILE:alamo_game>)
+  set_tests_properties(alamo_game_bench_stale_scene PROPERTIES TIMEOUT 120)
   # [port] video options helpers (game_display.cpp): mode list text, selection, options file, detail options mapping.
   add_executable(alamo_game_display_tests ${_dir}/tests/test_game_display.cpp ${_dir}/app/game_display.cpp)
   target_link_libraries(alamo_game_display_tests PRIVATE alamo_core alamo_render_sim alamo_ui_hud alamo_engine_flags alamo_test_support)
