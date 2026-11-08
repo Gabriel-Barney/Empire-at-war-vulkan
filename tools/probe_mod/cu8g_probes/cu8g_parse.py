@@ -75,6 +75,13 @@ def sec_status(recs):
                         'kind', 'p', 'sid', 'n', 'f'))))
             if r['kind'] == 'DONE':
                 out.append('   DONE f=%s %s' % (r.get('f'), r.get('apierr', '')))
+        # cu8g t10: where an armed script stopped: its last heartbeat and its last records by frame (ST = step trace)
+        if arm is not None and arm['kind'] == 'ARM' and not any(r['kind'] == 'DONE' for r in rs):
+            byf = sorted((r for r in rs if r.get('_f') is not None), key=lambda r: (r['_f'], num(r.get('n')) or 0))
+            hb = [r for r in byf if r['kind'] == 'HB']
+            out.append('   no DONE: last heartbeat f=%s; last records: %s' % (
+                hb[-1].get('f') if hb else None,
+                ' | '.join('%s f=%s %s' % (r['kind'], r.get('f'), r.get('s', '')) for r in byf[-6:])))
     return out
 
 
@@ -250,6 +257,8 @@ def sec_cancel(recs):
             t['acts'].append((r['_f'], r.get('ph'), r.get('call'), r.get('ready_before'), r.get('active_after')))
         elif r['kind'] == 'CRESTORED':
             t['restored'] = (int(num(r.get('after')) or 0), r.get('active'), r.get('wtb'))
+        elif r['kind'] == 'CKILL':
+            t['kill'] = r.get('res')
         elif r['kind'] == 'CUSER':
             t['user'] = '%s %s %s dTH %s' % (r.get('type'), r.get('id'), r.get('how'), r.get('dTH'))
     if not trials:
@@ -258,8 +267,8 @@ def sec_cancel(recs):
            'TRACTOR_BEAM flags tb = ready,active; wtb = victim Is_Under_Effects_Of_Ability; pull = T-W distance '
            'change per second (negative = pulled in).']
     for t in trials.values():
-        out.append('trial %s: Home_One %s' % (t['k'], t.get('user')))
-        for ph in ('base', 'cancel', 'restore'):
+        out.append('trial %s: Home_One %s; kill call %s' % (t['k'], t.get('user'), t.get('kill')))
+        for ph in ('base', 'cancel', 'kill', 'restore'):
             ps = [p for p in t['polls'] if p[1] == ph and p[2] is not None and p[0] is not None]
             if len(ps) >= 2 and ps[-1][0] > ps[0][0]:
                 pull = (ps[-1][2] - ps[0][2]) / ((ps[-1][0] - ps[0][0]) / FPS)
@@ -275,7 +284,8 @@ def sec_cancel(recs):
         if fr is not None:
             base = next((p[4] for p in t['polls'] if p[1] == 'cancel'), None)
             first = next((p for p in t['polls'] if p[0] is not None and p[0] >= fr and p[4] != base), None)
-        out.append('   restore: CRESTORED %s; first tb change after removal: %s' % (
+        out.append('   restore (frame %s = first poll with Home One dead): CRESTORED %s; first tb change after removal: %s' % (
+            fmt_f(fr),
             t.get('restored'), None if first is None else '%s at +%d' % (first[4], first[0] - fr)))
     out.append('VERDICT t09b: read by hand: the spec expects the cancel phase to block the activation (tb ready 0 '
                'or call refused, no pull) and the restore at +0..+3 frames (one poll). No block in the cancel '

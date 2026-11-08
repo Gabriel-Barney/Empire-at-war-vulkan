@@ -189,6 +189,22 @@ count +0x48, 16-byte entries, type pointer at +8), +0x60 the resolved `Particle_
   catch it). The `Is_Pulsing` claim stays [M]. Kit fix before a rerun: find the call that fails in the poll after
   frame 492, where the third AT-ST had just targeted L (candidates: `C8_TargetRole` on a victim that targets L,
   `Is_Ability_Active` / `Is_Ability_Ready` on LURE).
+- **Why the first run stopped (cu8g t10, run `20261108-073703-abil`, step trace):** the script died at frame 543, the
+  first `Activate_Ability` try. The kit's first argument form was `L.Activate_Ability("LURE")` with **no second
+  argument**. The step record before the next engine call (`Is_Ability_Active`) is the last record, and the free-store
+  heartbeat stops at the same frame. So a no-argument object `Activate_Ability` stops a retail Lua script silently [H for
+  this run; the shipped scripts always pass a bool or an object]. In the first run the records between frames 477 and
+  540 were not caught by the heap scan, so its "last record at 492" was a scan gap, not the stop. Frame 543 is
+  activation frame 450 + 93.
+- **Rerun (cu8g t10, 2026-11-08, run `cu8g_probes/out/20261108-074528-abil`, Claude drove the game): CONFIRMED.**
+  - Setup: same Dagobah land skirmish. `Activate_Ability("LURE", true)` activated at once in each of the three trials
+    (ready 1 → active 1).
+  - Every 42 frames the three AT-STs were ordered onto the T2-B decoy. While LURE was active (about 177 frames ≈ the
+    6 s `Expiration_Seconds`), all three went back to L 9 / 12 / 15 / 18 frames after each divert, i.e. at the next
+    15-frame pulse. After expiry none went back.
+  - The patched tank (`Is_Pulsing` No, trials 1 and 3) behaved exactly like the shipped captured tank (`Is_Pulsing`
+    Yes, trial 2): 12 of 15 diverted victims re-lured in each.
+  - So `Is_Pulsing` is not read and LURE always pulses [H]. The port keeps `Is_Pulsing` parsed and unread, as §3.1 says.
 
 ### 3.2 `Max_Num_Spawned_Objects` (+0xa0): DEPLOY_TROOPERS (unit ability 38) only [H]
 Readers: DEPLOY_TROOPERS behaviour activate vf23 0x58f6a0 and the cap test 0x58f840 (used by `Can_Activate` 0x39b480 case

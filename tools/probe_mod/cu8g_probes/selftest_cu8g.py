@@ -72,6 +72,7 @@ function NEWOBJ(tname, pos, player)
 	o.Attack_Target = function(t) o.target = t o.ordered = true end
 	o.Get_Distance = function(b) return DIST(o, b) end
 	o.Despawn = function() o.valid = false end
+	o.Take_Damage = function(n) o.valid = false end
 	o.Set_Targeting_Stickiness_Time_Threshold = function(v) o.sticky = v end
 	o.Activate_Ability = function(ab, arg) return ABILITY_ACTIVATE(o, ab, arg) end
 	o.Is_Ability_Ready = function(ab) return o.ability.ready and not o.blocked end

@@ -74,6 +74,13 @@ Records are strings `C8G|<KIND>|p=<probe>|sid=..|n=..|f=<frame>|...|END`. The pr
 only in the AI player named per session; the galactic part of t08 is a story script of the probe campaign. The
 runner scans the game's memory every 4 s and appends new records to `records.log`.
 
+Since cu8g t10, a probe with a human side (stick, lure, cancel) arms only when that side's player `Is_Human()`. So the
+main-menu background battle (two AI players) records `SKIP why=no_human_<faction>` and runs nothing.
+- Every armed script writes a heartbeat record `HB` every 30 frames.
+- In its first trial the lure probe also writes a step trace `ST`: one record before each engine call.
+- So the report shows where a script stopped when a failed engine call stopped it ("no DONE: last heartbeat ...").
+- The heap scan can miss a few records, so trust the heartbeat over "the last record".
+
 - **stick** (`cu8g_stick.lua`): per trial a human Nebulon-B frigate F (stickiness 5.0 s in XML), an AI Tartan corvette
   V 800 units away (no fire, no AI) and two human helper frigates ordered to attack V (they raise V's damage rate so
   its time-to-kill drops under 4 s while its hull is still above the 0.33 low-health threshold). When F targets V and
@@ -87,13 +94,18 @@ runner scans the game's memory every 4 s and appends new records to `records.log
   to 24 object types. A battle on the Alderaan copy shows Alderaan props and a box of about x 300..3540,
   y -165..3430.
 - **abil / lure** (`cu8g_lure.lua`): AI Canderous tank L, AI T2-B decoy D, three human AT-STs (a LURE Target_Type).
-  The AT-STs are ordered onto D, then L's LURE is activated, and every 40 frames the AT-STs are ordered onto D again.
+  The AT-STs are ordered onto D, then L's LURE is activated (`Activate_Ability("LURE", true)`; a call with no second
+  argument stops a retail script silently, so that form is tried last), and every 40 frames the AT-STs are ordered onto
+  D again.
   A pulsing lure pulls them back to L within one pulse (0.5 s) while the ability lasts (6 s). Trials: patched tank
   (`Is_Pulsing` No in the mod's copy of `Units_Land_Underworld_Canderous_Tank.xml`), the captured tank (shipped
   `Is_Pulsing` Yes, control), patched tank again. Recorded every 3 frames: each AT-ST's attack target.
 - **abil / cancel** (`cu8g_cancel.lua`): human Accuser T, AI Corellian corvette W 700 units away. Phase base: T's
   TRACTOR_BEAM on W. Phase cancel: AI Home One appears (the mod un-comments its `Akbar_Cancel_Special_Ability`
-  block); T tries the beam every 30 frames. Phase restore: Home One is despawned; T tries the beam every 3 frames.
+  block) and is ordered to attack T; at the phase start W is replaced by a fresh corvette, so the beam is off; T tries
+  the beam every 30 frames. Phase kill: Home One is made vulnerable and given `Take_Damage` until it dies (no
+  `Despawn`). Phase restore (from the first poll with Home One dead): T tries the beam every 3 frames. Removing Home
+  One while T's beam is still running crashes retail (c0000005 at +0x7107c8, twice), which is why W is swapped.
   Recorded every 3 frames: distance T-W, beam ready / active, W under the beam, T's ENERGY_WEAPON state.
 
 ## Results

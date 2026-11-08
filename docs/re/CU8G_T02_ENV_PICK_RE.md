@@ -220,7 +220,7 @@ not a weather emitter (`3D` 0) and uses the normal integrator.
 The normal integrators (0x1676a0, 0x166350) add the same f28·E term to the step velocity as well [M, not
 transcribed further].
 
-## 7. Probes (Gabriel; no game launched here) [L until run]
+## 7. Probes (P2 and P3 run 2026-11-08; P1 open)
 
 - **P1, draw order:** in a debugger, break on 0x1ffb40 / 0x1ffbb0 / 0x532480 / 0x5324d0 when rcx = 0x140a13e24, and
   log the return address and the LCG state during a battle load on `_MP_LAND_ENDOR` (n = 4). Do it once as a
@@ -236,6 +236,24 @@ transcribed further].
   - Expected [M]: Sunrise lighting, no rain after the reload.
 - **P3, Kuat:** many `_MP_SPACE_KUAT` loads always show `Environment 1` (never the Cinematic lighting).
 - **P4, typed pick:** not reachable in retail; nothing to probe.
+
+**Results (cu8g t10, 2026-11-08, Claude drove the retail game with the cu8g abil kit installed; no saves kept):**
+- **P2: as expected [H for what is visible].**
+  - Setup: skirmish "(6) Endor Xpress" (taken to be `_MP_LAND_ENDOR`, the only Endor land MP map [M]), human Empire
+    against an Easy AI Rebel.
+  - Load 1 opened clear and bright with short shadows. Load 2 opened in rain: rain streaks, darker light, the rain
+    weather icon at top right.
+  - Saved there (a temporary save `cu8g_p2_endor`, deleted afterwards) and loaded it at once. The reloaded battle had
+    **no rain** and no weather icon, with low-sun light and long shadows, which is `Sunrise_Clear` (start index 0). That
+    stayed so for 12 s after the load.
+  - So a save does not keep the picked environment: the reload shows the map's start environment (§2) [H for P2, M
+    for the cause].
+- **P3: consistent with §1 [M].** Four `_MP_SPACE_KUAT` skirmish loads (07:34, 07:42, 07:54, 07:55) showed the same
+  lighting every time: the same sun direction on the planet, the same nebula colour and the same station shading. If
+  the pick could land on `Cinematic`, about half the loads would look different. A screenshot cannot name the record,
+  so this only shows that the lighting never changes between loads.
+- **P1: not run.** It needs a debugger on the retail exe (breakpoints on the LCG draw functions), and the
+  project has none set up. It stays [L], moved to the follow-up group.
 
 ## 8. Port facts
 

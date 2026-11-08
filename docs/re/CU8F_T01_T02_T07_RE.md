@@ -82,6 +82,34 @@ Every manager entry point returns early while the byte is 1, so the object uses 
     every 4 s), so the restore timing was not measured [M that the despawn caused the crash].
   - The same script also armed in the main-menu background battle, which has an AI Rebel (instance EB7500 in the
     report). Ignore that instance: the beam was never ready there.
+- **Second run (cu8g t10, 2026-11-08 07:32, run `20261108-073231-abil`).** Home One was ordered to attack the
+  Accuser (an idle Home One may never be "in combat"). It was then killed with `Take_Damage` instead of despawned.
+  - The beam again stayed active through the whole cancel phase.
+  - The game crashed again at the kill (frame 1563): APPCRASH c0000005 at the **same address +0x7107c8**.
+  - That address lies inside the tractor-beam **Update** 0x710710..0x710880 (ABILITIES_HARDPOINTS §3.2).
+  - So the crash belongs to the removal of the Cancel user while the target's tractor beam is **active**, not to
+    `Despawn`. It happened twice: once by despawn, once by death [H for the repro and the address].
+  - Mechanism [M]: `SAP_Enable_All` runs Restore (vf +0x88), which re-applies effects to their live registered
+    targets. Tractor beam is a user-input unit ability, so `SAP_Disable_All` did not end the running beam (styles
+    1..5 / 12 only). The restore then re-applies an effect that is still running, and the beam's update reads a stale
+    entry.
+- **Third run (cu8g t10, 2026-11-08 07:41, run `20261108-073703-abil`): block and restore measured.** The kit now
+  replaces the corvette by a fresh one W2 at the start of the cancel phase, so the beam is off when Home One arrives
+  and dies. Two trials:
+  - **Cancel phase**, 750 frames each (810..1560 and 2238..2988): TRACTOR_BEAM `Is_Ability_Ready` stayed **0** in
+    every poll. That is well past the 20 s recharge, which ended at about 1410 / 2838. All 25 activation calls per
+    trial returned without activating (active 0). So the Combat_Automatic apply fires when Home One is in combat with
+    the Accuser, and the disabled byte refuses the unit ability [H].
+  - **Restore:** trial 1: Home One was alive at the poll of frame 1563 (the `Take_Damage` call). At the next poll (1566)
+    it was dead and TRACTOR_BEAM was ready again (ready 1). Trial 2: kill at 2991, dead and ready at 2994.
+    Activation succeeded on the next try (beam active on W2 by 1572 / 2997).
+  - So the manager is re-enabled on the removal frame, within the 3-frame poll [H at that resolution]. This matches
+    §1.2: enable on removal, then the re-stagger. No crash: the beam was not running at the removal.
+- **Port consequence:** keep the §1.4 rules (block on apply, enable on remove, measured above). The retail crash when
+  the user is removed during a running user-input effect on the target is not reproduced [port].
+  `AbilitySystem::set_abilities_disabled` (ability_system.cpp) restores only the automatic-style specials that its own
+  disable ended (`SpecialState::restore`), and unit abilities such as TRACTOR_BEAM are not in that list. So no code
+  change follows.
 
 ## 2. t02: engine-loop suppression (0x392410 / 0x393970)
 

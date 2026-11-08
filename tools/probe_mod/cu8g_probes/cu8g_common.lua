@@ -69,6 +69,14 @@ function C8_Rec(kind, fields)
 	end)
 end
 
+-- cu8g t10: step trace (one record before each engine call while C8.trace is on), to find a call that stops the
+-- script silently (a failed engine read sets the script's failed flag; pcall cannot catch it, a2i 2026-11-06).
+function C8_Step(what)
+	if C8.trace then
+		C8_Rec("ST", "s=" .. what)
+	end
+end
+
 function C8_ApiFail(tag, err)
 	if not C8_API_BAD[tag] then
 		C8_API_BAD[tag] = true
@@ -102,8 +110,10 @@ end
 -- Object id: Get_ID, else Get_Object_ID (LUA_API: the object method is not documented by a shipped call).
 function C8_Id(o)
 	local id = nil
+	C8_Step("id:Get_ID")
 	pcall(function() id = o.Get_ID() end)
 	if id == nil then
+		C8_Step("id:Get_Object_ID")
 		pcall(function() id = o.Get_Object_ID() end)
 	end
 	if id == nil then
@@ -114,6 +124,7 @@ end
 
 function C8_Type(o)
 	local n = "?"
+	C8_Step("Get_Type")
 	pcall(function() n = o.Get_Type().Get_Name() end)
 	return C8_Str(n)
 end
@@ -243,6 +254,7 @@ end
 -- The attack target of o: (class, id, type). class is "none", "err" or "obj".
 function C8_TargetOf(o)
 	local tg = nil
+	C8_Step("Get_Attack_Target")
 	local ok = pcall(function() tg = o.Get_Attack_Target() end)
 	if not ok then
 		return "err", "?", "?"
@@ -290,6 +302,22 @@ function C8_Arm()
 	C8.mode = C8_Str(mode)
 	C8.fac = C8_Str(fac)
 	local pr = C8_PROBES[mode]
+	-- cu8g t10: a probe with a human side arms only when that side is played by a human, so the main-menu background
+	-- battle (two AI players) never arms a kit.
+	local human_ok = true
+	if pr and pr.human then
+		human_ok = false
+		pcall(function() human_ok = Find_Player(pr.human).Is_Human() == true end)
+	end
+	if pr and not human_ok and C8.tries < 60 then
+		C8.pending = true
+		return
+	end
+	if pr and not human_ok then
+		C8_Rec("SKIP", "fac=" .. C8_Str(fac) .. "|mode=" .. C8_Str(mode) .. "|why=no_human_" .. C8_Str(pr.human) .. "|session=" ..
+			C8_Str(C8_CFG.session))
+		return
+	end
 	if pr and (pr.any_ai or fac == C8_CFG.ai_faction) and human ~= true and not C8_ARMED_ONCE then
 		C8_ARMED_ONCE = true
 		C8.on = true
@@ -336,6 +364,11 @@ function C8_Tick(src)
 		return
 	end
 	C8.f = F
+	-- cu8g t10: a heartbeat every 30 frames tells a stopped free-store service from a probe that stopped recording.
+	if C8.hb == nil or F - C8.hb >= 30 then
+		C8.hb = F
+		C8_Rec("HB", "src=" .. src)
+	end
 	local ok, err = pcall(C8.pr.tick, F)
 	if not ok then
 		C8_Rec("ERR", "where=tick|src=" .. src .. "|err=" .. string.sub(C8_Str(err), 1, 200))

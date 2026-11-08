@@ -209,5 +209,6 @@ function C8S_Tick(F)
 	end
 end
 
-C8_PROBES["Space"] = { name = "stick", tick = C8S_Tick, fast = true, quiet = true }
+C8_PROBES["Space"] = { name = "stick", tick = C8S_Tick, fast = true, quiet = true,
+	human = C8_CFG.stick and C8_CFG.stick.human_faction }
 -- ==== end of cu8g_stick.lua ====

@@ -65,6 +65,7 @@ end
 function C8L_Divert(t, F, why)
 	local s = ""
 	for i, v in ipairs(t.victims) do
+		C8_Step("divert:" .. i)
 		s = s .. C8_Call(v, "Attack_Target", function() v.Attack_Target(t.D) end) .. ";"
 	end
 	t.last_divert = F
@@ -72,14 +73,18 @@ function C8L_Divert(t, F, why)
 end
 
 function C8L_Activate(t, F)
-	local kinds = { "none", "bool", "object" }
+	-- cu8g t10: "none" first stopped the script (2026-11-08 07:37 run: no record after Activate_Ability("LURE") with no
+	-- argument, the failed-flag kill of a2i); the shipped scripts always pass a bool or an object, so "none" goes last.
+	local kinds = { "bool", "object", "none" }
 	t.act_n = t.act_n + 1
 	local kind = kinds[t.act_n]
 	if kind == nil then
 		return false
 	end
 	local ab = C8_CFG.lure.ability
+	C8_Step("act:ready")
 	local ready = C8_Flag(t.L, "Is_Ability_Ready", ab)
+	C8_Step("act:" .. kind)
 	local ok, err = pcall(function()
 		if kind == "none" then
 			return t.L.Activate_Ability(ab)
@@ -91,6 +96,7 @@ function C8L_Activate(t, F)
 	if not ok then
 		C8_ApiFail("Activate_Ability:" .. ab .. ":" .. kind, err)
 	end
+	C8_Step("act:active")
 	local active = C8_Flag(t.L, "Is_Ability_Active", ab)
 	C8_Rec("LACT", "k=" .. t.k .. "|arg=" .. kind .. "|call=" .. (ok and "ok" or "error") .. "|ready_before=" .. ready ..
 		"|active_after=" .. active .. "|ready_after=" .. C8_Flag(t.L, "Is_Ability_Ready", ab))
@@ -104,9 +110,11 @@ end
 function C8L_Poll(t, F)
 	local s = ""
 	for i, v in ipairs(t.victims) do
+		C8_Step("poll:target:" .. i)
 		s = s .. C8_TargetRole(v, nil, t.ids, t.types) .. ";"
 	end
 	local ab = C8_CFG.lure.ability
+	C8_Step("poll:flags")
 	C8_Rec("LP", "k=" .. t.k .. "|ph=" .. t.phase .. "|vt=" .. s .. "|act=" .. C8_Flag(t.L, "Is_Ability_Active", ab) ..
 		"|rdy=" .. C8_Flag(t.L, "Is_Ability_Ready", ab))
 end
@@ -125,6 +133,8 @@ function C8L_Tick(F)
 		return
 	end
 	local rel = F - t.f0
+	-- cu8g t10: trace every engine call of the first trial while the 2026-11-08 run stopped (rel 42..) and after
+	C8.trace = (t.k == 1 and rel >= 30 and rel <= 260)
 	if t.phase == "gap" then
 		if F - t.fend >= cfg.gap then
 			C8L.cur = nil
@@ -166,5 +176,6 @@ function C8L_Tick(F)
 	end
 end
 
-C8_PROBES["Land"] = { name = "lure", tick = C8L_Tick, fast = true, quiet = true }
+C8_PROBES["Land"] = { name = "lure", tick = C8L_Tick, fast = true, quiet = true,
+	human = C8_CFG.lure and C8_CFG.lure.human_faction }
 -- ==== end of cu8g_lure.lua ====
