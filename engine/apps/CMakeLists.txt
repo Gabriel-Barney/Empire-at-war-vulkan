@@ -262,7 +262,8 @@ if(_alamo_sim)
     # no income) and its object Attack_Move blocks never finished on a non-hostile target (A1_READINGS §33.2). Now the Rebel wins
     # at about frame 17100. a2k merge (2026-11-07): the galaxy build's queue-phase draws (a2k t04) shift the rng stream, and
     # with it seed 1 no longer ends in 30000 ticks; seeds 2-6 end with a Rebel win at 16678..28363. Pinned to seed 4 (16678);
-    # why seed 1 stalls is an open item on the roadmap (a2k follow-ups).
+    # why seed 1 stalls is an open item on the roadmap (a2k follow-ups). a2l t04: a terrain-blocked infantry standoff, not a
+    # port bug (A1_READINGS §41); on dev 03940b96 seed 1 ends (18496) but seed 2 does not and seed 4 ends at 28675.
     add_test(NAME alamo_headless_skirmish_ai_foc_land_end
              COMMAND alamo_headless --skirmish-ai foc-land --ticks 30000 --workers 4 --quiet --expect-battle-end --fail-on-lua-errors
                      --seed 4)
