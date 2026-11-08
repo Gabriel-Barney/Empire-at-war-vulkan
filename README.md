@@ -4,20 +4,23 @@ A clean-room C++20 rewrite of the *Star Wars: Empire at War: Forces of Corruptio
 The simulation is rebuilt from scratch as a headless, multithreaded, deterministic core, with a Vulkan 1.3 renderer
 on top. The goal is the game you already own, running on an engine that uses a modern PC.
 
-> **Status (2026-11-06):** active development, playable end to end through its own host, `alamo_game`.
-> Simulation, renderer, Lua layer, AI, UI, story and save/load are in place, and **Thrawn's Revenge now loads and plays
-> on `main`** (its skirmish, land and campaign smoke runs pass and its galactic AI plays). The work now is **parity**
-> (checking behaviour against the original, by behaviour within tolerance rather than bit for bit), the **mod
-> platform** (mod-agnostic loading, a mod load report, the Steam workshop resolver; a second mod is the next proof) and the
-> last **performance** item (the first tick of a battle). The newest recorded builds (2026-11-06) pass with **0 warnings
-> and 198 tests** on MSVC and on clang, and 58 under the sanitizer. Task tracking is the project roadmap, kept in its own
-> repository and not in this one (591 of 694 roadmap tasks done, 74 of 107 groups); results and notes per phase are in
+> **Status (2026-11-08):** active development, playable end to end through its own host, `alamo_game`.
+> Simulation, renderer, Lua layer, AI, UI, story and save/load are in place, and **Thrawn's Revenge loads and plays**
+> (its skirmish, land and campaign smoke runs pass and its galactic AI plays). A project-wide **clean-up pass** (CU1-CU18)
+> has finished: dead code removed, shared helpers moved into `core`, a shared test-support library, and original
+> behaviour that was ported but never called is now wired in. The work now is **parity** (a behavioural comparison
+> harness against recorded runs of the original is built and has a baseline; the galactic AI's Rebel production is the
+> biggest gap it shows), the **mod platform** (mod picker, load report, workshop resolver, shader model 3 and `.fx`
+> compilation are in; a second mod has been loaded, skirmished and run with the galactic AI) and the last
+> **performance** item (the first tick of a battle). The newest full builds (2026-11-08) pass with **0 warnings and
+> 230 tests** on MSVC and on clang, and 61 under the sanitizer. Task tracking is the project roadmap, kept in its own
+> repository and not in this one (881 of 976 roadmap tasks done, 117 of 143 groups); results and notes per phase are in
 > [`docs/PHASE2.md`](docs/PHASE2.md), [`docs/PHASE3.md`](docs/PHASE3.md) and [`docs/PHASE4.md`](docs/PHASE4.md), and every
 > document is indexed in [`docs/README.md`](docs/README.md).
 
 This repository contains **no game assets and no original code**. You need your own copy of the game (Steam:
 *Star Wars: Empire at War - Forces of Corruption*). Behaviour was recovered by studying the shipped binary and data
-and written up as specs in [`docs/re/`](docs/re/) (94 documents) before any engine code was written.
+and written up as specs in [`docs/re/`](docs/re/) (109 documents) before any engine code was written.
 
 **Contents:** [Goals](#goals) · [Features](#features) · [Performance](#performance) · [Architecture](#architecture) ·
 [Quality](#quality-and-process) · [Where the project is](#where-the-project-is) · [Building](#building-and-running) ·
@@ -73,7 +76,8 @@ networking.
   landing drops, weather, fog of war, construction pads, reinforcement, victory conditions.
 - **Story campaigns** with the original event system (shared flags, prerequisites, perpetual events), **linked story
   battles** that start from a galactic event, and corruption missions.
-- **Skirmish and galactic conquest**, plus the main-menu attract battle.
+- **Skirmish and galactic conquest**, including the original's Capture Control Points skirmish type, plus the
+  main-menu attract battle (the shipped attract script runs as it does in the original).
 - Behaviour comes from written specs ([`docs/re/`](docs/re/)): movement, combat, AI, fog of war, story, commands.
 
 ### AI and scripting
@@ -135,13 +139,17 @@ networking.
   `alamo_game --bench-scenario` renders the same run in real-time or fixed-frame mode with GPU timers, and a run whose CRCs
   differ is flagged "not comparable" instead of reported as a speedup. Reports are JSON and can be compared.
 - **Mod load report** (`alamo_mod_check`): for any mod folder or workshop id, lists loader diagnostics, missing files,
-  unread XML tags and scripts that error, with a machine-readable summary. A lint step fails the gate on a mod or faction
+  unread XML tags, shader issues and scripts that error, with a machine-readable summary. The same summary is shown by
+  the **mod picker** in the game's menus before a mod is launched. A lint step fails the gate on a mod or faction
   name written into engine code.
 - **Visual regression** checks (screenshot diffs against stored baselines) and a scheduled nightly gate.
 - Tools for the original formats: MEG archives, ALO/ALA models and animations, shaders.
 - **Parity tooling** (`tools/probe_mod/`, index in [`docs/PROBES.md`](docs/PROBES.md)): a read-only external recorder that
   samples the original game's state per tick, in-game probe mods for questions the binary alone cannot answer, and a
   compare script that runs the port on the same scenario and reports the first divergence per metric.
+- **Parity harness** (`tools/parity/`): replays recorded scenarios of the original in the port and grades travel and build
+  timings, income, AI choices, damage and battle outcomes against tolerances taken from several retail runs; the result is
+  kept as a baseline that is re-recorded, like a golden, when an intended behaviour change moves a metric.
 
 ---
 
@@ -214,7 +222,7 @@ worker count so the counts run side by side. Clang's logs equal MSVC's.
 - **Two compilers in the loop.** MSVC ships; clang 20 checks (extra warnings: `-Wconversion -Wshadow`) and provides a
   second compiler for determinism. Sim changes get both; threading changes also run under a clang sanitizer.
 - **Zero warnings** at MSVC `/W4 /permissive-` and clang `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
-- **198 tests** in the newest recorded builds (2026-11-06), on each of MSVC and clang (sanitizer build: 58 sim-module
+- **230 tests** in the newest full builds (2026-11-08), on each of MSVC and clang (sanitizer build: 61 sim-module
   tests), plus golden-file checks of whole battles and campaigns, each compared across worker counts. Goldens store a
   checkpoint every 64 ticks, so a behaviour change is a small diff. The full suite takes about 4 minutes on the
   development PC; slow tests carry a label so quick iteration can skip them.
@@ -226,14 +234,15 @@ worker count so the counts run side by side. Clang's logs equal MSVC's.
 - **Parallel agent workflow.** Work is split by roadmap group across agent sessions, each in its own git worktree, with
   claims so two sessions do not take the same group. **`dev` is the development branch** (GitHub's default); sessions land
   on it directly, and `main` is the released branch, updated from `dev` by a release pull request once the full gate
-  passes. The roadmap lives in its own repository so every session shares one copy.
+  passes (the current release pull request is open, waiting on a clean gate run). The roadmap lives in its own repository
+  so every session shares one copy.
 - **Clean-room.** Engine code is written from the specs in `docs/re/`, never from decompiled output, which is kept out of
   the engine tree.
 - **Project-local toolchain.** MSVC 14.51, Windows SDK, CMake, Ninja, DXC, LLVM and FFmpeg's Bink decoder live under
   `toolchain\` with pinned versions and hashes. Nothing is installed system-wide.
 - **Third-party code** in `engine/` is limited to approved dependencies: Vulkan-Headers, DXC, VMA, Lua 5.0.2 (vendored,
   original semantics), miniaudio and FFmpeg's Bink decoder (LGPL, dynamically linked).
-- About **380,000 lines** of C++ in `engine/` (tests included), across 21 modules.
+- About **387,000 lines** of C++ in `engine/` (tests included), across 21 modules plus a shared test-support library.
 
 ---
 
@@ -242,15 +251,16 @@ worker count so the counts run side by side. Clang's logs equal MSVC's.
 | Area | State |
 |---|---|
 | Simulation, renderer, Lua, AI, UI, save/load, story | **Done and playable**; remaining work is parity polish |
-| Performance (OPT1-OPT3) | **Mostly done**: p99 budget met everywhere. The first tick of a battle (setup) is still over 33.3 ms: land campaign 55, space 42, land skirmish 139 ms at 15 workers; a plan to shorten it is open |
+| Clean-up and production audit (CU1-CU18, PA) | **Done** (2026-11-08): dead code and bring-up guards removed, shared core and test helpers, each XML file read once, save helpers unified, ported-but-unwired original behaviour wired in (sabers, formations, bombing runs, income fields). Left: a few unwired sites (Saber_Throw as a real projectile, fleet placement at a campaign space start) and the skirmish bombing-run records |
+| Performance (OPT1-OPT3) | **Mostly done**: p99 budget met everywhere. The first tick of a battle (setup) is still over 33.3 ms. OPT3 t12 took about a fifth off the land skirmish's first tick (to 123-152 ms on a loaded PC) and fixed a mid-battle space spike; the land campaign (about 55 ms) and space (about 42 ms) first ticks did not move. The rest (building plan Lua VMs before the battle tick, warming the remaining models, serial setup) is group OPT3f |
 | Movement and combat parity | Ongoing, driven by in-game probes of the original (fighter formations, targeting, landing and unload facings, team speed and hand-over). Judged by behaviour within tolerance; tasks that only chase bit-exact agreement were dropped on 2026-11-06 |
-| Galactic AI parity (Q2 follow-ups, A2) | Ongoing: the AI's budget, goal, contrast and story-load rules now follow the original (in the Heart of the Maw scenario the Empire AI captures a planet, as the original does); the Rebel and Empire opening production still differs and is the first thing the parity check will measure |
+| Parity check against the original (Q4) | **Harness built** (`tools/parity/`) and a baseline recorded against several retail runs: in the Heart of the Maw galactic scenario battle outcomes all pass and most timing and income metrics pass. Open: the Rebel AI's production (it builds 9 Y-wings for the Shola attack where the original builds 3, and few infantry squads afterwards), the Nal Hutta - Kashyyyk hyperspace lane, which the port flies slower than the original, and the Geonosis skirmish, which still fails most AI and outcome metrics (the port's Rebel AI builds early and attacks about a minute early). The final Q4 run follows once these land |
+| Galactic AI parity (Q2 follow-ups, A2) | Ongoing: budget, goal, contrast, story-load and task-force rules follow the original; the Rebel production gap above is diagnosed and next; Underworld credits after the latest AI ports are being bisected |
 | Story campaigns end to end | Event system, linked tactical battles, victory handling and corruption missions in; one comparison against a recorded original mission remains |
 | Mod diagnostics (Q5) | Done |
-| Thrawn's Revenge (Q6) | **Merged into `main`** (2026-11-06): the mod loads with no loader diagnostics, its skirmish, land and campaign smoke runs pass, and its galactic AI plays. Left: Gabriel's retail probes for a few guessed rules, and a final re-check after the parity check |
-| Mod platform (MODC) | **Mostly done**: the loading contract (`docs/MODS.md`), an audit and lint for mod names in engine code, the mod load report, a `STEAMMOD=` resolver and a synthetic fixture mod in the tests are in. Left: proving a second mod, a mod picker in the game UI, shader model 3 translation and compiling mod `.fx` sources, and removing the last base-game names from presentation code |
-| Parity check against the original (Q4) | Next up: the comparison harness is built first, then run and compared against a baseline; small confirm items are fixed only where it flags a difference |
-| Benchmark (side goal) | BM1-BM3 done (scenarios, sim-only and rendered runs, stress scenes, reports); the in-game screen and a quiet-machine baseline are open |
+| Thrawn's Revenge (Q6) | **Plays** (merged 2026-11-06): the mod loads with no loader diagnostics, its skirmish, land and campaign smoke runs pass, and its galactic AI plays. Left: Gabriel's retail probes for a few guessed rules, and a final re-check after the parity check |
+| Mod platform (MODC) | **Mostly done** (24 of 34 tasks): the loading contract (`docs/MODS.md`), an audit and lint for mod and faction names in engine code (base-game names removed from sim and presentation code), the mod load report, a `STEAMMOD=` resolver, a mod picker in the game UI, shader model 3 translation, compiling mod `.fx` sources, and a synthetic fixture mod in the tests are in; a second workshop mod loads, starts a skirmish and runs a galactic-AI session. Left: Gabriel playing a second mod in game, the game's front end with mods other than Thrawn's Revenge, shader model 3 leftovers, an automatic `.fx` prebuild, and load-report and picker polish |
+| Benchmark (side goal) | BM1-BM3 and their follow-ups done (scenarios, sim-only and rendered runs, stress scenes, reports); the in-game screen (BM4) is open |
 | First-person and captain's view (side goals) | Planned |
 
 The detail, task by task, is on the project roadmap, which is kept in its own repository (not this one) and is the only place for status.
@@ -293,8 +303,8 @@ alamo_render.exe                    :: renderer test app
 
 | Path | What |
 |---|---|
-| `engine/` | The engine, one static library per module: `core`, `vfs`, `data`, `jobs`, `galactic`, `assets`, `rhi`, `materials`, `shaderxlat`, `terrain`, `render`, `objects`, `tactical`, `ai`, `lua`, `anim`, `commands`, `audio`, `video`, `ui`, `apps` |
-| `tools/` | MEG archive tool, format readers, shader tools, in-game probe kits and trace recorder (`probe_mod/`), benchmark runner (`benchmark/`), golden regeneration, worktree and landing scripts, analysis and parity-compare scripts, visual diff, lint and build-summary scripts |
+| `engine/` | The engine, one static library per module: `core`, `vfs`, `data`, `jobs`, `galactic`, `assets`, `rhi`, `materials`, `shaderxlat`, `terrain`, `render`, `objects`, `tactical`, `ai`, `lua`, `anim`, `commands`, `audio`, `video`, `ui`, `apps`, plus `test_support` (shared test helpers) |
+| `tools/` | MEG archive tool, format readers, shader tools, in-game probe kits and trace recorder (`probe_mod/`), benchmark runner (`benchmark/`), golden regeneration, worktree and landing scripts, analysis scripts, the parity harness (`parity/`), visual diff, lint and build-summary scripts |
 | `docs/` | All documentation, indexed in [`docs/README.md`](docs/README.md): decisions, build and test, performance, probes, phase results, behaviour specs recovered from the original (`docs/re/`), asset, format and shader specs |
 | `tests/` | Screenshot baselines for visual regression (`visual_baselines/`) and benchmark scenarios (`benchmark/`) |
 | `CLAUDE.md` | Working rules for contributors and agents |
