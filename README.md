@@ -25,6 +25,9 @@ A clean-room C++20 rewrite of the *Star Wars: Empire at War: Forces of Corruptio
 The simulation is rebuilt from scratch as a headless, multithreaded, deterministic core, with a Vulkan 1.3 renderer
 on top. The goal is the game you already own, running on an engine that uses a modern PC.
 
+**Windows (x64) only, single player only.** There is no multiplayer, no support for other platforms, and saves from the
+original game cannot be loaded; all three are out of scope by design.
+
 > **Status (2026-11-08):** active development, playable end to end through its own host, `alamo_game`.
 > Simulation, renderer, Lua layer, AI, UI, story and save/load are in place, and **Thrawn's Revenge loads and plays**
 > (its skirmish, land and campaign smoke runs pass and its galactic AI plays). A project-wide **clean-up pass** (CU1-CU18)
