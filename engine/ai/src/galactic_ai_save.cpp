@@ -49,8 +49,9 @@ using save::put_vec;
 namespace {
 // 2: pristine pooled VMs by reference; 3: AI player types (q6 t07); 4 (cu12 t14): the status records' orders_out byte
 // removed (never set or read); 5 (A2k t02): per-target stage lists; 6 (a2l t03): the per-frame reachability cache
-// removed (galactic blocked() reads the per-target lists), the task force's stage area (TF +0x100) after its stage.
-constexpr uint32_t kWorldVersion = 6;
+// removed (galactic blocked() reads the per-target lists), the task force's stage area (TF +0x100) after its stage;
+// 7 (q2f t09): the task force's sync gather state after its stage area.
+constexpr uint32_t kWorldVersion = 7;
 // 2: logic frame, player conflict stamps, conflict observer (q6 t03); 3: leaf cache keyed by (leaf, instance, system player,
 // parameter set) with each entry's parameters, the 0xE visible flags and the last seen surface units (q6 t18)
 constexpr uint32_t kResolverVersion = 3;
@@ -574,6 +575,12 @@ void GalacticAiWorld::write(ByteWriter& w) const {
         put_vec(w, t.builds);
         w.i32(t.stage);
         w.i32(t.area);
+        w.boolean(t.sync);
+        w.boolean(t.sync_started);
+        w.f64(t.sync_left);
+        w.i64(t.sync_frame);
+        put_handles(w, st, t.sync_units);
+        put_vec(w, t.sync_etas);
         w.boolean(t.had_units);
         w.boolean(t.no_units_sent);
         w.boolean(t.alive);
@@ -729,7 +736,8 @@ bool GalacticAiWorld::read(ByteReader& r) {
             if (!committed) rt.set_vms_created(before);
         }
     } guard{*m.runtime, m.runtime->vms_created()};
-    if (r.u32() != kWorldVersion || !r.ok()) return false;
+    const uint32_t version = r.u32();  // 6 is still read: its task forces have no sync gather state
+    if ((version != kWorldVersion && version != 6) || !r.ok()) return false;
     // ---- shape: the loader rebuilt the same session ----
     if (r.u32() != m.ai.size() || !r.ok()) return false;
     std::vector<uint8_t> present(m.ai.size());
@@ -915,6 +923,14 @@ bool GalacticAiWorld::read(ByteReader& r) {
                 return false;
             t.stage = r.i32();
             t.area = r.i32();
+            if (version >= 7) {
+                t.sync = r.boolean();
+                t.sync_started = r.boolean();
+                t.sync_left = r.f64();
+                t.sync_frame = r.i64();
+                if (!get_handles(r, st, t.sync_units) || !get_vec(r, t.sync_etas) || t.sync_etas.size() != t.sync_units.size())
+                    return false;
+            }
             t.had_units = r.boolean();
             t.no_units_sent = r.boolean();
             t.alive = r.boolean();

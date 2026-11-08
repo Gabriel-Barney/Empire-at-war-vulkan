@@ -144,3 +144,27 @@ Conquer_Opponent against Tatooine's defenders (contrast / IgnoreTarget scores), 
 The table above is the port at dev `03940b96`. At dev `432b502e` (after a2l t01-t03) the harness reads Rebel builds
 19 vs retail 50..51 and fleet departures 16 vs 55..63 (3 retail runs): the a2l changes cut Rebel production further,
 so measure again at the current dev before working on the items above.
+
+## 2026-11-08 diagnosis, second pass (RE answers `Q2F_T09_RE_ANSWERS.md`)
+
+- **Retail's Shola attack is most likely `Conquer_To_Reconnect`, not Conquer_Pirate [M].** The trace's hops: wave 1 =
+  17 one-unit fleets from Kamino, Yavin, Naboo and MonCalimari flying straight into Shola, departures staggered so all
+  arrive on tick 7161; wave 2 = 11 transports arriving 7465-7468; capture 7498; the arriving fleets are merged (7175,
+  7478). That is `SynchronizedAssemble` at stage = target, which only ContrastToReconnect (level 4) and LiftBlockadePlan
+  call. A Conquer_Pirate gather (level 2) stages at a held neighbour and cannot end on an enemy planet in mode 0.
+- **Why it starts at ~6941 in retail:** `Need_To_Reconnect_Islands` = ConnectsLargestIslands x First_Attack_Allowed x
+  (...). The port computes the same two Rebel islands ({Naboo}, {Kamino, MonCalimari, Yavin}) with Shola on the path;
+  `First_Attack_Allowed` = Game.Age > `Initial_Grace_Period` = 200 + 7 x planets (Normal) ~ 230 s = tick ~6900.
+- **Why the port never gets there:** its Conquer_Pirate @Shola is instantiated at tick 2798 (retail's PSTART: ~5518,
+  same net cost 1470 = 7 Y-wings) and takes Shola at 5970, before the grace period ends. Retail's Conquer_Pirate had
+  built only 3 of its 7 Y-wings when the reconnect wave took Shola. So the open difference is **when Conquer_Pirate
+  @Shola is proposed / funded** (`Should_Conquer_Pirate_Planet` = `Is_Good_Invasion_Target`; many terms), not the
+  gather. The extended probe kit (GOALPERC rows for Shola / Naboo, hooks on ContrastToReconnect, LiftBlockadePlan,
+  ConquerOpponentPlan, CrushPlan) gives the retail values.
+- **The synchronized gather is now ported** (docs/PHASE4.md, 2026-11-08 q2f t09); it does not change HotM seed 0 yet.
+- **The Rebel's 40 -> 19 build drop at dev 432b502e is seed noise**, not an a2l regression: over seeds 0-7 the mean
+  is 29.1 builds at 03940b96 and 27.0 at 432b502e. Seed 0 diverges at tick 348 through a2l t03 Q4's in-transit
+  candidate rule (an Underworld saboteur plan), and the run drifts from there. Parity checks of AI counts should
+  average several seeds.
+- After Shola the port's Rebel builds almost nothing: Conquer_Opponent @Tatooine fails its solve on the Offensive
+  budget (about 1174 available vs 1950-3360 needed), and CrushPlan exits at once on Normal by design.

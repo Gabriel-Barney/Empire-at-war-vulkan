@@ -336,6 +336,19 @@ re-recorded at `b4da58e1` (engine = dev `432b502e`, after a2l): 0 regressions ag
 vs retail 50..51 at this engine (it was 40 at `03940b96`; already FAIL in the `506bc545` baseline), Rebel fleet
 departures 16 vs 55..63. Findings for q2f t09: `docs/re/Q2F_T09_REBEL_PRODUCTION.md`, "2026-11-08 rerun".
 
+**2026-11-08 (q2f t09): synchronized free-store gather** (`docs/re/Q2F_T09_RE_ANSWERS.md` Q2; marked "q2f t09" in
+`engine/ai/src/galactic_ai.cpp`). `Produce_Force(stage, true)` (the shipped `SynchronizedAssemble`: ContrastToReconnect,
+LiftBlockadePlan) now holds every unit until the task force's builds are done and no unit is in transit, gives each unit
+not at the stage an ETA = all-pairs path length (0x691370) / (hyperspace speed x faction factor x fleet speed multiplier
+x FPS), starts the countdown at the largest ETA and departs a unit (split from a shared fleet first) when the countdown
+is at or below its ETA. [port] choices: the mode speed scale m is read as the fleet speed multiplier (as in the
+build-market travel term); a company without its own hyperspace speed uses its transport's; a unit whose ETA fails is
+released from the task force (retail: that build task's Production_Failed); the countdown drops by the frames elapsed
+since the last pass / 30. AI world save version 7 (6 still read; the countdown is hashed only for sync task forces).
+Golden: `galactic_ai_hotm_human_golden.txt` (a Lift_Blockade gather at Kashyyyk now departs staggered); HotM seed 0
+(q4h parity) is unchanged, since no Rebel plan there gathers with sync. Not ported: mode 0's refusal to end on an
+enemy-held planet (Q1.5), the arrival barrier before the merge (Q2.5).
+
 | scenario | timing | income | AI choices | battle outcomes | damage |
 |---|---|---|---|---|---|
 | `hotm_galactic` (2 retail runs) at `207ba0b8` (q4hf t04 + q2f t08) | 46 PASS / 8 FAIL | 15 / 10 | 13 / 3 (1 N/A) | 7 / 0 | - |

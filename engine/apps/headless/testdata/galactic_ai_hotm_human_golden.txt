@@ -1,5 +1,5 @@
 # galactic-ai campaign Sandbox_Heart_Of_The_Maw_Underworld battles auto seed 1 ticks 36000 human Rebel
-# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers 0: 36000 ticks (9942.7 ms), galactic frame 36000, decisions 646, orders 195 (rejected 0), conflicts 26, battles 0, planet owner changes 0, running plans 7, Lua errors 0, human p0: 12 commands, pipeline applied 210 rejected 1, planets: 0=4/12673 1=4/4465 2=0/0 3=0/0 4=0/0 5=4/5105, final CRC 4e0cb57817fcbef1
+# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers -1: 36000 ticks (7642.5 ms), galactic frame 36000, decisions 647, orders 195 (rejected 0), conflicts 26, battles 0, planet owner changes 0, running plans 7, Lua errors 0, human p0: 12 commands, pipeline applied 210 rejected 1, planets: 0=4/12673 1=4/4465 2=0/0 3=0/0 4=0/0 5=4/5105, final CRC ec2c62d0b219b2c0
 # t=60s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 3 crc 3cb5ff29582e49b9
 # t=120s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 4 conflicts 6 crc 610c563878d443ea
 # t=180s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 2 conflicts 6 crc 2d5c0f33c31e41ec
@@ -16,10 +16,10 @@
 # t=840s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 20 crc cffc4265b3af4afc
 # t=900s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 4 conflicts 20 crc 20b1fecd9ce1b36c
 # t=960s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 20 crc c595fb6e389d473d
-# t=1020s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 24 crc 3e96595ec17c21fb
-# t=1080s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 26 crc 964ae59599af5e72
-# t=1140s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 26 crc 4e8d82d1a98568b5
-# t=1200s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 26 crc 4e0cb57817fcbef1
+# t=1020s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 24 crc 9c4dc502eb6813b0
+# t=1080s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 26 crc e4d5c4678a32475f
+# t=1140s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 26 crc b3702f5e211eacde
+# t=1200s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 26 crc ec2c62d0b219b2c0
 1 p1 opponent 0
 1 p1 templates Basic_Empire_Default
 1 p2 opponent 0
@@ -579,19 +579,20 @@
 29187 p5 tf MainForce move to MonCalimari
 29187 p5 order move fleet 108 -> Yavin
 29248 p1 plan 115 LIFTBLOCKADEPLAN for Lift_Blockade @Kashyyyk MainForce(4+0) net 0 gross 8100 eta 0.0
-29248 p1 order split 54 at Kuat
+29248 p1 tf MainForce sync move to Kashyyyk countdown 1.904762
 29248 p1 order split 112 at Corellia
-29248 p1 order split 46 at Kashyyyk
-29248 p1 order split 52 at Kuat
-29248 p1 order move fleet 207 -> Kashyyyk
-29248 p1 order move fleet 208 -> Kashyyyk
-29248 p1 order move fleet 210 -> Kashyyyk
 29250 p5 order move fleet 108 -> MonCalimari
-29278 p1 order merge 46 at Kashyyyk
-29278 p1 order merge 52 at Kashyyyk
+29251 p1 order move fleet 207 -> Kashyyyk
+29278 p1 order split 54 at Kuat
+29281 p1 order move fleet 208 -> Kashyyyk
+29281 p1 order split 52 at Kuat
+29284 p1 order move fleet 209 -> Kashyyyk
 29298 p5 tf MainForce move to Naboo
 29298 p5 order move fleet 124 -> Naboo
-29302 p1 order merge 112 at Kashyyyk
+29305 p1 order merge 46 at Kashyyyk
+29311 p1 order merge 112 at Kashyyyk
+29311 p1 order merge 46 at Kashyyyk
+29314 p1 order merge 52 at Kashyyyk
 29325 p5 tf MainForce ability Underworld_Saboteur_Team 75 at MonCalimari not applied
 29332 p1 plan 115 LIFTBLOCKADEPLAN ended failure (released)
 29400 p5 tf MainForce ability Underworld_Saboteur_Team 123 at Naboo not applied

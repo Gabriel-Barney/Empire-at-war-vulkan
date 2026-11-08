@@ -108,6 +108,10 @@ std::vector<PlanetIndex> ai_stage_flood(const galactic::PlanetGraph& graph, cons
     return best;
 }
 
+double ai_path_length(std::span<const uint32_t> hop_weights, size_t path_size) {
+    return static_cast<double>(static_cast<uint32_t>(free_store_path_sum(hop_weights, path_size)) & 0xFFFFu) / 10.0;
+}
+
 int32_t free_store_path_sum(std::span<const uint32_t> hop_weights, size_t path_size) {
     if (path_size == 0) return -1;
     const size_t count = std::min<size_t>({size_t{1000}, path_size - 1, hop_weights.size()});

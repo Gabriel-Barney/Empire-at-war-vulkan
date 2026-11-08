@@ -3978,6 +3978,13 @@ static void test_free_store_path_rules() {
     CHECK(free_store_path_sum(std::vector<uint32_t>{0u, 0u}, 2) == 0 && free_store_path_passes(0));  // src == dst
     std::vector<uint32_t> long_path(1500, 1u);
     CHECK(free_store_path_sum(long_path, 1500) == 1000);  // at most 1000 hops summed
+    // q2f t09: the sync ETA's path length 0x691370 = (low 16 bits of the sum) / 10, node costs ignored.
+    {
+        const std::vector<uint32_t> len{gal::pack_edge_weight(0u, 2200u), gal::pack_edge_weight(3u, 730u), 0u};
+        CHECK(ai_path_length(len, 3) == 293.0);
+        CHECK(ai_path_length(std::vector<uint32_t>{0u, 0u}, 2) == 0.0);
+        CHECK(ai_path_length({}, 0) == static_cast<double>(0xFFFFu) / 10.0);  // empty path: the sum's start -1
+    }
     // a2l t03: Reachable_Target's slot 7 (0x663810, A2L_T03_RE_ANSWERS Q1.2) per level.
     {
         const std::vector<uint32_t> free2{gal::pack_edge_weight(0u, 7u), 0u};  // A -> B, no node cost, hop 7

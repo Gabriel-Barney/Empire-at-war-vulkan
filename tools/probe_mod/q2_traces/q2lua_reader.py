@@ -17,8 +17,12 @@ Files written into the run dir:
   lua_reader.log       REC lines in the order found, SCAN stats, EXIT line
   lua_records.txt      every distinct record, sorted by (src, sid, seq)
   lua_perception.tsv   galactic PERCEPTION records: cycle, ai, planet, one column per equation
+  lua_goal_perception.tsv  galactic GOALPERC records (Rebel goal equations vs Shola / Naboo; planet=none for the
+                       no-target Initial_Grace_Period), same layout; 'nil' = the evaluation failed
   lua_summary.json     counts per kind, canary calls, errors, verdict per script, seq gaps per script instance
-                       (a gap means records were lost: the 2026-11-03 run lost plan records to PGBase Flush_G)
+                       (a gap means records were lost: the 2026-11-03 run lost plan records to PGBase Flush_G), and
+                       `plans`: per 'player plan tf' the starts, stagings, blocks, first frame, targets, stages and the
+                       unit types its task force held (which plan built what)
 """
 import argparse
 import json
@@ -36,7 +40,8 @@ NEEDLE = b'Q2L1|'
 # a1mem.Proc.scan returns 400 bytes per hit: the scripts cap the text at 320 characters
 RECORD_RE = re.compile(rb'Q2L1\|([GTP])\|([0-9A-Fa-fx]{1,20})\|([0-9]{1,6})\|([A-Z]{1,12})\|([ -~]{0,330}?)\|END')
 SCRIPTS = {'G': 'galactic plot (Q2_Trace_Galactic.lua)', 'T': 'GameScoring hook',
-           'P': 'AI plan hooks (Scripts\\AI: Build_Space_Forces, Build_Ground_Forces, Conquer_Pirate)'}
+           'P': 'AI plan hooks (Scripts\\AI: Build_Space_Forces, Build_Ground_Forces, Conquer_Pirate, Conquer_Opponent, '
+                'Crush, Conquer_To_Reconnect, Lift_Blockade)'}
 
 
 def parse_hits(hits):
@@ -77,6 +82,52 @@ def gaps(uniq):
     return out
 
 
+def goal_rows(uniq):
+    """Galactic GOALPERC records (Rebel goal equations vs Shola / Naboo, planet=none for Initial_Grace_Period) ->
+    (rows [(sid, seq, kv dict)], equation columns in first-seen order). A value 'nil' is a failed evaluation."""
+    rows, eqs = [], []
+    for src, sid, seq, kind, text in uniq:
+        if src != 'G' or kind != 'GOALPERC':
+            continue
+        d = kv(text)
+        for k in d:
+            if k not in ('cycle', 'ai', 'planet', 'missing') and k not in eqs:
+                eqs.append(k)
+        rows.append((sid, seq, d))
+    return rows, eqs
+
+
+def plan_table(uniq):
+    """Plan hook records per 'player plan tf': starts, stagings, blocks, first frame, targets and stages seen, and per
+    unit type the most of it in one PBLOCK's unit list (what the task force held). Answers which plan built what."""
+    out = {}
+    for src, _sid, _seq, kind, text in uniq:
+        if src != 'P' or kind not in ('PSTART', 'PSTAGE', 'PBLOCK'):
+            continue
+        d = kv(text)
+        e = out.setdefault('%s %s %s' % (d.get('player', '?'), d.get('plan', '?'), d.get('tf', '?')), {
+            'starts': 0, 'stagings': 0, 'blocks': 0, 'first_frame': None, 'targets': [], 'stages': [], 'units': {}})
+        e[{'PSTART': 'starts', 'PSTAGE': 'stagings', 'PBLOCK': 'blocks'}[kind]] += 1
+        if d.get('frame', '?') != '?':
+            try:
+                f = int(float(d['frame']))
+                e['first_frame'] = f if e['first_frame'] is None else min(e['first_frame'], f)
+            except ValueError:
+                pass
+        if d.get('target') and d['target'] not in e['targets']:
+            e['targets'].append(d['target'])
+        if kind == 'PSTAGE' and d.get('stage') and d['stage'] not in e['stages']:
+            e['stages'].append(d['stage'])
+        i = text.find(' units=')
+        if kind == 'PBLOCK' and i >= 0:
+            have = {}
+            for t in text[i + 7:].split()[1:]:
+                have[t] = have.get(t, 0) + 1
+            for t, n in have.items():
+                e['units'][t] = max(e['units'].get(t, 0), n)
+    return out
+
+
 def summarize(records):
     """records: iterable of (src, sid, seq, kind, text) -> (sorted list, perception rows, equations, summary dict)."""
     uniq = sorted(set(records), key=lambda r: (r[0], r[1], r[2]))
@@ -94,7 +145,8 @@ def summarize(records):
             if k not in ('cycle', 'ai', 'planet') and k not in eqs:
                 eqs.append(k)
         rows.append((sid, seq, d))
-    summary = {'records': len(uniq), 'kinds': kinds, 'scripts': {}, 'errors': [], 'canary': [], 'gaps': gaps(uniq)}
+    summary = {'records': len(uniq), 'kinds': kinds, 'scripts': {}, 'errors': [], 'canary': [], 'gaps': gaps(uniq),
+               'plans': plan_table(uniq)}
     for src, _sid, _seq, kind, text in uniq:
         if kind == 'ERR':
             summary['errors'].append('%s %s' % (src, text))
@@ -106,16 +158,17 @@ def summarize(records):
             verdict = 'no records (script not loaded, or records not found in memory)'
         elif src == 'G':
             if k.get('PERCEPTION'):
-                verdict = 'ran: %d cycles, %d perception rows' % (k.get('CYCLE', 0), k['PERCEPTION'])
+                verdict = 'ran: %d cycles, %d perception rows, %d goal rows' % (
+                    k.get('CYCLE', 0), k['PERCEPTION'], k.get('GOALPERC', 0))
             elif k.get('ENTER') or k.get('CYCLE'):
                 verdict = 'ran, but no perception rows (see errors)'
             else:
                 verdict = 'loaded (LOAD/DEF), but the state machine never entered Q2_State_Trace'
         elif src == 'P':
             verdict = ('loaded: %d plan scripts; %d thread starts, %d ends, %d production failures; '
-                       '%d blocks done, %d script exits, %d probe errors') % (
+                       '%d stagings, %d blocks done, %d script exits, %d probe errors') % (
                 k.get('LOAD', 0), k.get('PSTART', 0), k.get('PDONE', 0), k.get('PFAIL', 0),
-                k.get('PBLOCK', 0), k.get('PEXIT', 0), k.get('ERR', 0))
+                k.get('PSTAGE', 0), k.get('PBLOCK', 0), k.get('PEXIT', 0), k.get('ERR', 0))
         else:
             sampled = k.get('TSAMPLE', 0)
             verdict = 'loaded; %d samples, %d mode events, %d kills, %d built; service=%s thread=%s' % (
@@ -136,6 +189,12 @@ def write_outputs(run_dir, records):
         for sid, seq, d in rows:
             f.write('\t'.join([sid, str(seq), d.get('cycle', ''), d.get('ai', ''), d.get('planet', '')] +
                               [d.get(e, '') for e in eqs]) + '\n')
+    grows, geqs = goal_rows(uniq)
+    with open(os.path.join(run_dir, 'lua_goal_perception.tsv'), 'w', encoding='ascii', newline='\n') as f:
+        f.write('\t'.join(['sid', 'seq', 'cycle', 'ai', 'planet'] + geqs) + '\n')
+        for sid, seq, d in grows:
+            f.write('\t'.join([sid, str(seq), d.get('cycle', ''), d.get('ai', ''), d.get('planet', '')] +
+                              [d.get(e, '') for e in geqs]) + '\n')
     with open(os.path.join(run_dir, 'lua_summary.json'), 'w', encoding='ascii', newline='\n') as f:
         json.dump(summary, f, indent=2, sort_keys=True)
         f.write('\n')
@@ -248,13 +307,31 @@ def selftest(_a):
             (0x5000, b'Q2L1|T|0x9|2|CANARY|file=Mods\\Q2Trace\\Q2Trace_Canary_Scoring.txt ok=true err=nil|END'),
             (0x6000, b'Q2L1|G|0x1a2b|8|PERC'),  # cut record (chunk end): ignored
             (0x7000, b'Q2L1|G|0x1a2b|9|ERR|EvaluatePerception Q2_Target_Player [string "?"]: bad|END'),
-            (0x8000, b'Q2L1|P|0x77|2|PSTART|t=3.4 frame=102 plan=Build_Space_Forces player=REBEL target=? units=0|END')]
+            (0x8000, b'Q2L1|P|0x77|2|PSTART|t=3.4 frame=102 plan=Build_Space_Forces player=REBEL target=? units=0|END'),
+            (0x9000, b'Q2L1|P|0x78|1|PSTAGE|t=18 frame=540 plan=Conquer_Opponent player=REBEL target=Shola tf=GroundForce'
+                     b' n=1 via=AssembleForce strongest=nil stage=Mon_Calamari stagestr=x spend=1 unalloc=0 cr=900'
+                     b' count=0 units=0|END'),
+            (0xa000, b'Q2L1|P|0x78|2|PBLOCK|t=19 frame=559 plan=Conquer_Opponent player=REBEL target=Shola tf=GroundForce'
+                     b' n=1 k=1 ret=boolean spend=1 unalloc=0 cr=900 count=3 units=3 REBEL_INFANTRY_SQUAD'
+                     b' REBEL_INFANTRY_SQUAD REBEL_LIGHT_TANK_BRIGADE|END'),
+            (0xb000, b'Q2L1|G|0x1a2b|10|GOALPERC|cycle=3 ai=Rebel planet=SHOLA Should_Conquer_Pirate_Planet=12.5'
+                     b' Need_To_Reconnect_Islands=nil|END')]
     p = parse_hits(hits)
-    check(len(p) == 6, 'parse: 6 full records, source text and cut record ignored (%d)' % len(p))
+    check(len(p) == 9, 'parse: 9 full records, source text and cut record ignored (%d)' % len(p))
     recs = [r[:5] for r in p]
     uniq, rows, eqs, s = summarize(recs)
-    check(len(uniq) == 5, 'dedup: 5 distinct records')
-    check(s['scripts']['P']['verdict'].startswith('loaded: 0 plan scripts; 1 thread starts'), 'plan hook verdict')
+    check(len(uniq) == 8, 'dedup: 8 distinct records')
+    grows, geqs = goal_rows(uniq)
+    check(len(grows) == 1 and grows[0][2].get('planet') == 'SHOLA' and grows[0][2].get('Need_To_Reconnect_Islands') ==
+          'nil' and geqs == ['Should_Conquer_Pirate_Planet', 'Need_To_Reconnect_Islands'], 'goal perception row parsed')
+    check('1 goal rows' in s['scripts']['G']['verdict'], 'galactic verdict counts goal rows')
+    check(s['scripts']['P']['verdict'].startswith('loaded: 0 plan scripts; 1 thread starts') and
+          '1 stagings, 1 blocks done' in s['scripts']['P']['verdict'], 'plan hook verdict')
+    co = s['plans'].get('REBEL Conquer_Opponent GroundForce', {})
+    check(co.get('stagings') == 1 and co.get('blocks') == 1 and co.get('first_frame') == 540 and
+          co.get('stages') == ['Mon_Calamari'] and co.get('targets') == ['Shola'] and
+          co.get('units') == {'REBEL_INFANTRY_SQUAD': 2, 'REBEL_LIGHT_TANK_BRIGADE': 1},
+          'plan table: stage, target and units per player / plan / task force %s' % co)
     check(rows and rows[0][2].get('planet') == 'Nal_Hutta' and rows[0][2].get('Q2_Space_Total') == '12.5',
           'perception row parsed')
     check(eqs == ['Q2_Space_Total', 'Q2_Target_Player'], 'equation columns in first-seen order')
@@ -275,7 +352,11 @@ def selftest(_a):
     with open(os.path.join(out, 'lua_perception.tsv'), encoding='ascii') as f:
         tsv = f.read().splitlines()
     check(len(tsv) == 2 and tsv[1].split('\t')[4] == 'Nal_Hutta', 'lua_perception.tsv written')
-    check(s2['records'] == 5, 'lua_summary.json written')
+    check(s2['records'] == 8 and 'REBEL Conquer_Opponent GroundForce' in s2['plans'], 'lua_summary.json written')
+    with open(os.path.join(out, 'lua_goal_perception.tsv'), encoding='ascii') as f:
+        gtsv = f.read().splitlines()
+    check(len(gtsv) == 2 and gtsv[1].split('\t')[4] == 'SHOLA' and gtsv[1].split('\t')[6] == 'nil',
+          'lua_goal_perception.tsv written')
     print('SELFTEST_Q2LUA ' + ('FAILED (%d)' % len(fails) if fails else 'OK'))
     return 1 if fails else 0
 
