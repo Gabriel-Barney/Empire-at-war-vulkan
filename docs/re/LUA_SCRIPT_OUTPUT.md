@@ -62,3 +62,41 @@ stop the calling script. The probes therefore call every binding inside `pcall`.
 Open until the next run: whether the mod's override of `Story_Plots_Sandbox_12U_Empire.xml` is picked up
 (canary `galactic`), whether the Q2_* equations from the mod's `AI_Equations_ExpansionGeneric_Galactic.xml` evaluate
 (`ERR` records vs the control column), and whether a GameScoring `Create_Thread` thread is serviced (`THREAD start`).
+
+## 4. Pooled scripts: probe state must survive `Flush_G` (q2f t08, 2026-11-08)
+
+Run `20261103-152619-galactic-vanilla-lua` (the Q2 probe with the AI plan hooks) showed what happens to a probe kept
+in **global tables** of a pooled script (AI plan scripts: `ScriptPoolCount`, default 1 instance):
+
+- Releasing a pooled script (end of a plan, or a binding error) kills its threads and runs PGBase `Flush_G()` and then
+  `Base_Definitions()` (OBJECT_SCRIPTS §2.3, AI_GALACTIC "Script pool"). Vanilla `Flush_G` deletes **every global table**
+  except `_LOADED`, `coroutine`, `string`, `LuaWrapperMetaTable`, `_G`, `security` and `table` (and the userdata that
+  are not pool-safe). Functions, numbers, strings and booleans stay. The chunk itself does not run again.
+- So the probe's global records table (`Q2L_Records`) was deleted at the first release, with the records in it. Its
+  number `Q2L_Seq` survived, so the next `Q2L_Say` raised `Q2L_Seq`, built the record string and then indexed the nil
+  table: a Lua runtime error. In a thread that kills **only that thread** (OBJECT_SCRIPTS §2.5), and the probe called
+  `Q2L_Say` before the shipped thread body, so the plan's task force never produced. [H: code path; the run's data
+  fits it]
+- What the run shows: one Build_Ground_Forces instance with records 1, 9 and 10 only (2-8 went with the deleted table;
+  9 and 10 were unreferenced strings the scan caught before the GC freed them), no `PDONE` at all, and retail's own
+  AI disturbed: Rebel fleet departures 19 (71 in the run without plan hooks, `20261030-061228`), Rebel production
+  32 queue starts (50). **That run is not a valid retail reference for AI production or fleet moves.**
+- The `math` library is missing too (no shipped script uses `math`; the free store has none, s78g). `math.floor` in
+  the galactic trace script raised an error at the first `OnUpdate`, which ended the story thread after `OnEnter`
+  (no perception rows), and `math.mod` in the GameScoring `GameService` wrapper stopped it after its first call.
+
+Rules for probe scripts (applied to `tools/probe_mod/q2_traces/mod` in q2f t08):
+1. Keep records in a table that only a function's closure holds (`local recs = {}` with `Q2L_Say` defined in the same
+   block, guarded by `if Q2L_Say == nil`). Keep counters and state in numbers, strings and booleans.
+2. Run every probe step inside `pcall`, and call the shipped functions outside it (a yield must not cross a pcall in
+   Lua 5.0). `pcall` does not catch a binding error (it sets the failed flag, LUA_API "What an error does to the
+   script"), so only use bindings that do not error on the values the probe passes.
+3. No `math`, no `#`, no `%`.
+4. Wrap library functions (`BlockOnCommand`, `ScriptExit`) once per instance (`if Q2P_Block == nil`), since
+   `require` does not run the library again; wraps of the script's own functions are redone each time its chunk runs.
+5. The reader reports missing seq numbers per instance (`lua_summary.json` `gaps`, the `GAPS` line in
+   `lua_reader.log`): a gap means records were lost.
+
+The a2f budget kit (`tools/probe_mod/a2f_budget/a2fb_core.lua`) keeps `A2FB_Records` / `A2FB_Errors` in global tables
+too. Its plan hook runs every record in `pcall`, so the plans themselves are not disturbed, but a pooled plan
+instance loses its records at its first release and records nothing after it. Not fixed here.
