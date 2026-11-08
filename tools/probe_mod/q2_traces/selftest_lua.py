@@ -10,10 +10,11 @@ ENTER, 11 cycles with players, planets and perception rows for both AI players, 
 Scoring: the probe part of mod\\...\\Miscellaneous\\GameScoring.lua (after its marker) runs on stub originals; one
 space mode with a thread, kills and a build. Checks the records, that the shipped handlers are still called and the
 shipped GameService still runs every 10th service.
-Plans: the five mod\\...\\AI\\*.lua hooks, each through two plan runs across an emulated PGBase Flush_G. Build_Space_Forces,
-Build_Ground_Forces and Conquer_Pirate call the thread directly; Conquer_Opponent (two threads) and Crush run as
-coroutines with PGBase's yielding BlockOnCommand / Sleep / ScriptExit (PSTAGE, per-task-force records, tf=? outside a
-thread). Then make_plan_hooks.py --check (the files match the generator; skipped without extracted\\foc_data_text.zip).
+Galactic also: GOALPERC rows (Rebel goal equations vs Shola / Naboo, Initial_Grace_Period without a target, nil = failed).
+Plans: the seven mod\\...\\AI\\*.lua hooks, each through two plan runs across an emulated PGBase Flush_G.
+Build_Space_Forces, Build_Ground_Forces and Conquer_Pirate call the thread directly; Conquer_Opponent,
+Conquer_To_Reconnect (two threads each), Crush and Lift_Blockade run as coroutines with PGBase's yielding
+BlockOnCommand / Sleep / ScriptExit (PSTAGE, per-task-force records, tf=? outside a thread). Then make_plan_hooks.py --check (the files match the generator; skipped without extracted\\foc_data_text.zip).
 Live memory: while lua50.exe still holds its records, q2lua_reader's parser over an a1mem scan of that process
 (ReadProcessMemory) must find exactly the records the script printed.
 Lua: tools\\probe_mod\\out\\tools\\lua50.exe (common\\lua50.py; built with the project MSVC at /Od on first use).
@@ -69,11 +70,19 @@ function Q2S_Planet(name, owner)
 		Get_Owner = function() return Q2S_Players[owner] end }
 end
 FindPlanet = { Get_All_Planets = function()
-	return { Q2S_Planet("Nal_Hutta", "Underworld"), Q2S_Planet("Coruscant", "Empire"), Q2S_Planet("Yavin", "Rebel") }
+	return { Q2S_Planet("Nal_Hutta", "Underworld"), Q2S_Planet("Coruscant", "Empire"), Q2S_Planet("Yavin", "Rebel"),
+		Q2S_Planet("Shola", "Underworld"), Q2S_Planet("Naboo", "Rebel") }
 end }
 function EvaluatePerception(eq, player, target)
 	if type(eq) ~= "string" or player == nil then error("Evaluate_Perception: Invalid parameter type") end
+	if eq == "Initial_Grace_Period" then
+		if target ~= nil then error("Initial_Grace_Period takes no target") end
+		return 200
+	end
+	if target == nil then error("Variable_Target unbound in " .. eq) end
 	if eq == "Q2_Target_Player" and target.Get_Type().Get_Name() == "Yavin" then error("bad equation") end
+	-- a failing leaf: retail's binding returns nothing (and flags the script)
+	if eq == "Need_To_Reconnect_Islands" and target.Get_Type().Get_Name() == "Naboo" then return end
 	return string.len(eq) + player.Get_ID()
 end
 -- PGStateMachine / PGStoryMode as shipped: Base_Definitions -> Definitions, PG_Story_Mode_Init, main -> Process_States
@@ -242,7 +251,11 @@ function AssembleForce(taskforce, stage_at_strongest_space)
 	if not stage then ScriptExit() end
 	BlockOnCommand(taskforce.Produce_Force(stage))
 end
-function SynchronizedAssemble(taskforce, s) AssembleForce(taskforce, s) end
+function SynchronizedAssemble(taskforce, stage_at_strongest_space)
+	if stage_at_strongest_space then stage = nil else stage = taskforce.Get_Stage() end
+	if not stage then ScriptExit() end
+	BlockOnCommand(taskforce.Produce_Force(stage, true))
+end
 function LandUnits(taskforce) BlockOnCommand(taskforce.Land_Units()) end
 function LaunchUnits(taskforce)
 	local block = taskforce.Launch_Units()
@@ -355,13 +368,22 @@ print("RESULT exits=" .. Q2S.exits .. " produced=" .. Q2S.produced .. " landsecu
 	" category=" .. tostring(Category) .. " flushed=" .. tostring(Q2S.flushed))
 Q2S_Dump()
 '''
-# (file, plan label, task forces, run 1 on the free store, expected kind counts, RESULT line)
+# (file, plan label, task forces, run 1 on the free store, expected kind counts, RESULT line, PSTAGE via, how run 1
+# ended: PSTART prev of run 2)
 PLANS2 = [('ConquerOpponentPlan.lua', 'Conquer_Opponent', ['SpaceForce', 'GroundForce'], False,
            {'LOAD': 1, 'PSTART': 4, 'PSTAGE': 2, 'PBLOCK': 11, 'PDONE': 2, 'PEXIT': 2, 'PFAIL': 1},
-           'RESULT exits=2 produced=4 landsecured=true category=Conquer_Opponent flushed='),
+           'RESULT exits=2 produced=4 landsecured=true category=Conquer_Opponent flushed=', 'AssembleForce', 'PDONE'),
           ('CrushPlan.lua', 'Crush', ['MainForce'], True,
            {'LOAD': 1, 'PSTART': 2, 'PSTAGE': 1, 'PBLOCK': 5, 'PEXIT': 3, 'PFAIL': 1},
-           'RESULT exits=3 produced=1 landsecured=false category=Conquer_Opponent flushed=')]
+           'RESULT exits=3 produced=1 landsecured=false category=Conquer_Opponent flushed=', 'AssembleForce', 'PEXIT'),
+          # both threads return (no ScriptExit): the space thread waits in Sleep until the ground force has landed
+          ('ContrastToReconnect.lua', 'Conquer_To_Reconnect', ['SpaceForce', 'GroundForce'], False,
+           {'LOAD': 1, 'PSTART': 4, 'PSTAGE': 2, 'PBLOCK': 7, 'PDONE': 4, 'PEXIT': 1, 'PFAIL': 1},
+           'RESULT exits=1 produced=4 landsecured=true category=Conquer_To_Reconnect flushed=', 'SynchronizedAssemble',
+           'PDONE'),
+          ('LiftBlockadePlan.lua', 'Lift_Blockade', ['MainForce'], True,
+           {'LOAD': 1, 'PSTART': 2, 'PSTAGE': 2, 'PBLOCK': 2, 'PEXIT': 3, 'PFAIL': 1},
+           'RESULT exits=3 produced=2 landsecured=nil category=Lift_Blockade flushed=', 'SynchronizedAssemble', 'PEXIT')]
 UNITS = {'SpaceForce': 'CORELLIAN_GUNBOAT', 'GroundForce': 'REBEL_INFANTRY_SQUAD', 'MainForce': 'REBEL_INFANTRY_SQUAD'}
 
 
@@ -446,9 +468,21 @@ def main():
     check(kinds.get('CANARY') == 1, 'galactic: CANARY record')
     check(kinds.get('CYCLE') == 11 and kinds.get('CYCLEEND') == 11, 'galactic: 11 cycles (0..10) (%s)' % kinds.get('CYCLE'))
     check(kinds.get('PLAYER') == 33, 'galactic: 3 players x 11 cycles')
-    check(kinds.get('PLANET') == 33 and kinds.get('PERCEPTION') == 66, 'galactic: planets and 2 AI x 3 planets x 11')
+    check(kinds.get('PLANET') == 55 and kinds.get('PERCEPTION') == 110, 'galactic: planets and 2 AI x 5 planets x 11')
     check(kinds.get('ERR') == 1, 'galactic: failing equation reported once')
-    check(kinds.get('EVAL') == 5, 'galactic: EVAL once per equation in the first sample (%s)' % kinds.get('EVAL'))
+    check(kinds.get('EVAL') == 10, 'galactic: EVAL once per equation (5 + 5 goal) in the first sample (%s)' %
+          kinds.get('EVAL'))
+    check(kinds.get('GOALPERC') == 33, 'galactic: GOALPERC Shola, Naboo and no-target rows x 11 (%s)' %
+          kinds.get('GOALPERC'))
+    grows, geqs = q2lua_reader.goal_rows([r[:5] for r in recs])
+    check(geqs == ['Should_Conquer_Pirate_Planet', 'Is_Good_Invasion_Target', 'Need_To_Reconnect_Islands',
+                   'First_Attack_Allowed', 'Initial_Grace_Period'], 'galactic: goal columns %s' % geqs)
+    last = {d.get('planet'): d for _sid, _seq, d in grows if d.get('cycle') == '10'}
+    check(last.get('SHOLA', {}).get('Should_Conquer_Pirate_Planet') == '28' and
+          last.get('SHOLA', {}).get('First_Attack_Allowed') == '20' and
+          last.get('NABOO', {}).get('Need_To_Reconnect_Islands') == 'nil' and
+          last.get('none', {}).get('Initial_Grace_Period') == '200' and all(d.get('ai') == 'Rebel' for d in last.values()),
+          'galactic: GOALPERC values (nil = failed evaluation) %s' % last)
     _u, rows, eqs, s = q2lua_reader.summarize([r[:5] for r in recs])
     check(eqs == ['Q2_Space_Total', 'Q2_Ground_Total', 'Q2_Has_Space_Force', 'Q2_Target_Player',
                   'Roaming_Empire_Fleet_Target'], 'galactic: perception columns %s' % eqs)
@@ -526,7 +560,7 @@ def main():
         if found is not None:
             check(found == set(raw), '%s: live memory scan finds exactly the printed records' % plan)
 
-    for fname, plan, tfs, free1, want, result in PLANS2:
+    for fname, plan, tfs, free1, want, result, via, prev2 in PLANS2:
         body = ('Q2S_TFS = { %s }\nQ2S_RUN1_FREE = %s\nQ2S_UNIT = { %s }\n' % (
             ', '.join(lua_str(t) for t in tfs), 'true' if free1 else 'false',
             ', '.join('%s = %s' % (t, lua_str(UNITS[t])) for t in tfs)) + PLAN2)
@@ -547,12 +581,12 @@ def main():
         check(d[0][1].get('tfs') == ','.join(tfs), '%s: LOAD names the task forces %s' % (plan, recs[0][4]))
         starts = [x for k, x in d if k == 'PSTART']
         check([(x.get('tf'), x.get('n'), x.get('prev')) for x in starts] ==
-              [(t, '1', 'first') for t in tfs] + [(t, '2', 'PEXIT' if len(tfs) == 1 else 'PDONE') for t in tfs] and
+              [(t, '1', 'first') for t in tfs] + [(t, '2', prev2) for t in tfs] and
               all(x.get('target') == 'Shola' and x.get('tname') == 'Shola_Obj' for x in starts),
               '%s: PSTART per task force, run numbers, prev, target %s' % (plan, [r[4] for r in recs if r[3] == 'PSTART']))
         stages = [x for k, x in d if k == 'PSTAGE']
-        check(sorted(x.get('tf') for x in stages) == sorted(tfs) and
-              all(x.get('stage') == 'Mon_Calamari' and x.get('via') == 'AssembleForce' and x.get('strongest') == 'nil'
+        check({x.get('tf') for x in stages} == set(tfs) and
+              all(x.get('stage') == 'Mon_Calamari' and x.get('via') == via and x.get('strongest') == 'nil'
                   and x.get('count') == '0' and x.get('stagestr', '').startswith('table:') for x in stages),
               '%s: PSTAGE per task force before Produce_Force %s' % (plan, [r[4] for r in recs if r[3] == 'PSTAGE']))
         blocks = [x for k, x in d if k == 'PBLOCK']

@@ -17,6 +17,8 @@ Files written into the run dir:
   lua_reader.log       REC lines in the order found, SCAN stats, EXIT line
   lua_records.txt      every distinct record, sorted by (src, sid, seq)
   lua_perception.tsv   galactic PERCEPTION records: cycle, ai, planet, one column per equation
+  lua_goal_perception.tsv  galactic GOALPERC records (Rebel goal equations vs Shola / Naboo; planet=none for the
+                       no-target Initial_Grace_Period), same layout; 'nil' = the evaluation failed
   lua_summary.json     counts per kind, canary calls, errors, verdict per script, seq gaps per script instance
                        (a gap means records were lost: the 2026-11-03 run lost plan records to PGBase Flush_G), and
                        `plans`: per 'player plan tf' the starts, stagings, blocks, first frame, targets, stages and the
@@ -39,7 +41,7 @@ NEEDLE = b'Q2L1|'
 RECORD_RE = re.compile(rb'Q2L1\|([GTP])\|([0-9A-Fa-fx]{1,20})\|([0-9]{1,6})\|([A-Z]{1,12})\|([ -~]{0,330}?)\|END')
 SCRIPTS = {'G': 'galactic plot (Q2_Trace_Galactic.lua)', 'T': 'GameScoring hook',
            'P': 'AI plan hooks (Scripts\\AI: Build_Space_Forces, Build_Ground_Forces, Conquer_Pirate, Conquer_Opponent, '
-                'Crush)'}
+                'Crush, Conquer_To_Reconnect, Lift_Blockade)'}
 
 
 def parse_hits(hits):
@@ -78,6 +80,21 @@ def gaps(uniq):
         if runs:
             out.append('%s %s %s' % (src, sid, ','.join('%d' % a if a == b else '%d-%d' % (a, b) for a, b in runs)))
     return out
+
+
+def goal_rows(uniq):
+    """Galactic GOALPERC records (Rebel goal equations vs Shola / Naboo, planet=none for Initial_Grace_Period) ->
+    (rows [(sid, seq, kv dict)], equation columns in first-seen order). A value 'nil' is a failed evaluation."""
+    rows, eqs = [], []
+    for src, sid, seq, kind, text in uniq:
+        if src != 'G' or kind != 'GOALPERC':
+            continue
+        d = kv(text)
+        for k in d:
+            if k not in ('cycle', 'ai', 'planet', 'missing') and k not in eqs:
+                eqs.append(k)
+        rows.append((sid, seq, d))
+    return rows, eqs
 
 
 def plan_table(uniq):
@@ -141,7 +158,8 @@ def summarize(records):
             verdict = 'no records (script not loaded, or records not found in memory)'
         elif src == 'G':
             if k.get('PERCEPTION'):
-                verdict = 'ran: %d cycles, %d perception rows' % (k.get('CYCLE', 0), k['PERCEPTION'])
+                verdict = 'ran: %d cycles, %d perception rows, %d goal rows' % (
+                    k.get('CYCLE', 0), k['PERCEPTION'], k.get('GOALPERC', 0))
             elif k.get('ENTER') or k.get('CYCLE'):
                 verdict = 'ran, but no perception rows (see errors)'
             else:
@@ -171,6 +189,12 @@ def write_outputs(run_dir, records):
         for sid, seq, d in rows:
             f.write('\t'.join([sid, str(seq), d.get('cycle', ''), d.get('ai', ''), d.get('planet', '')] +
                               [d.get(e, '') for e in eqs]) + '\n')
+    grows, geqs = goal_rows(uniq)
+    with open(os.path.join(run_dir, 'lua_goal_perception.tsv'), 'w', encoding='ascii', newline='\n') as f:
+        f.write('\t'.join(['sid', 'seq', 'cycle', 'ai', 'planet'] + geqs) + '\n')
+        for sid, seq, d in grows:
+            f.write('\t'.join([sid, str(seq), d.get('cycle', ''), d.get('ai', ''), d.get('planet', '')] +
+                              [d.get(e, '') for e in geqs]) + '\n')
     with open(os.path.join(run_dir, 'lua_summary.json'), 'w', encoding='ascii', newline='\n') as f:
         json.dump(summary, f, indent=2, sort_keys=True)
         f.write('\n')
@@ -289,12 +313,18 @@ def selftest(_a):
                      b' count=0 units=0|END'),
             (0xa000, b'Q2L1|P|0x78|2|PBLOCK|t=19 frame=559 plan=Conquer_Opponent player=REBEL target=Shola tf=GroundForce'
                      b' n=1 k=1 ret=boolean spend=1 unalloc=0 cr=900 count=3 units=3 REBEL_INFANTRY_SQUAD'
-                     b' REBEL_INFANTRY_SQUAD REBEL_LIGHT_TANK_BRIGADE|END')]
+                     b' REBEL_INFANTRY_SQUAD REBEL_LIGHT_TANK_BRIGADE|END'),
+            (0xb000, b'Q2L1|G|0x1a2b|10|GOALPERC|cycle=3 ai=Rebel planet=SHOLA Should_Conquer_Pirate_Planet=12.5'
+                     b' Need_To_Reconnect_Islands=nil|END')]
     p = parse_hits(hits)
-    check(len(p) == 8, 'parse: 8 full records, source text and cut record ignored (%d)' % len(p))
+    check(len(p) == 9, 'parse: 9 full records, source text and cut record ignored (%d)' % len(p))
     recs = [r[:5] for r in p]
     uniq, rows, eqs, s = summarize(recs)
-    check(len(uniq) == 7, 'dedup: 7 distinct records')
+    check(len(uniq) == 8, 'dedup: 8 distinct records')
+    grows, geqs = goal_rows(uniq)
+    check(len(grows) == 1 and grows[0][2].get('planet') == 'SHOLA' and grows[0][2].get('Need_To_Reconnect_Islands') ==
+          'nil' and geqs == ['Should_Conquer_Pirate_Planet', 'Need_To_Reconnect_Islands'], 'goal perception row parsed')
+    check('1 goal rows' in s['scripts']['G']['verdict'], 'galactic verdict counts goal rows')
     check(s['scripts']['P']['verdict'].startswith('loaded: 0 plan scripts; 1 thread starts') and
           '1 stagings, 1 blocks done' in s['scripts']['P']['verdict'], 'plan hook verdict')
     co = s['plans'].get('REBEL Conquer_Opponent GroundForce', {})
@@ -322,7 +352,11 @@ def selftest(_a):
     with open(os.path.join(out, 'lua_perception.tsv'), encoding='ascii') as f:
         tsv = f.read().splitlines()
     check(len(tsv) == 2 and tsv[1].split('\t')[4] == 'Nal_Hutta', 'lua_perception.tsv written')
-    check(s2['records'] == 7 and 'REBEL Conquer_Opponent GroundForce' in s2['plans'], 'lua_summary.json written')
+    check(s2['records'] == 8 and 'REBEL Conquer_Opponent GroundForce' in s2['plans'], 'lua_summary.json written')
+    with open(os.path.join(out, 'lua_goal_perception.tsv'), encoding='ascii') as f:
+        gtsv = f.read().splitlines()
+    check(len(gtsv) == 2 and gtsv[1].split('\t')[4] == 'SHOLA' and gtsv[1].split('\t')[6] == 'nil',
+          'lua_goal_perception.tsv written')
     print('SELFTEST_Q2LUA ' + ('FAILED (%d)' % len(fails) if fails else 'OK'))
     return 1 if fails else 0
 

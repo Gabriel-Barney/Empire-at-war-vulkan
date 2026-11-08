@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """make_plan_hooks.py - writes the Q2 kit's AI plan hooks (mod\\Q2Trace\\Data\\Scripts\\AI\\*.lua).
 
-  python -I make_plan_hooks.py            (re)write the five files
+  python -I make_plan_hooks.py            (re)write the seven files
   python -I make_plan_hooks.py --check    compare only; exit 1 when a file differs, 2 when the zip is missing
 
 Each file is the shipped script from extracted\\foc_data_text.zip (Data\\SCRIPTS\\AI\\<NAME>.LUA, CRLF -> LF, otherwise
@@ -31,6 +31,10 @@ PLANS = [
     ('ConquerOpponentPlan', 'Conquer_Opponent', ['SpaceForce', 'GroundForce']),
     # Category Conquer_Opponent too; labelled Crush so the records tell the two scripts apart
     ('CrushPlan', 'Crush', ['MainForce']),
+    # Category Conquer_To_Reconnect: two threads, both stage with SynchronizedAssemble (retail's Shola attack?)
+    ('ContrastToReconnect', 'Conquer_To_Reconnect', ['SpaceForce', 'GroundForce']),
+    # Category Lift_Blockade: SynchronizedAssemble, then Sleep(120) and ScriptExit
+    ('LiftBlockadePlan', 'Lift_Blockade', ['MainForce']),
 ]
 
 BLOCK = r'''-- Q2 reference traces (tools/probe_mod/q2_traces): AI plan probe (q2f t09, rewritten in q2f t08 2026-11-08, extended
