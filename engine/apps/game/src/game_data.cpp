@@ -313,6 +313,9 @@ SkirmishMapEntry read_map_entry(const FileProvider& files, const std::string& pa
     e.players = terrain::find_mini(md.info.raw, 0x02) ? md.info.counts[0] : 1u;
     e.custom = md.info.flag_0b == 1;
     e.name_key = md.info.name_key;
+    e.mode_tag = md.info.text_0a;  // UI.md 9.3: stored upper-cased
+    std::transform(e.mode_tag.begin(), e.mode_tag.end(), e.mode_tag.begin(),
+                   [](char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c; });
     return e;
 }
 }  // namespace

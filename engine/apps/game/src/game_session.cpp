@@ -223,6 +223,8 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
     bo.battle.end_hold_frames = spec_.battle_end_hold_frames;
     bo.battle.order_interval = spec_.battle_order_interval;
     bo.battle.skirmish = spec_.kind == SessionKind::Skirmish;  // SpecialWeaponsAllowed ANDs the hard-point flag
+    // ccpgt t02: the Capture Control Points game type (land maps only; SKIRMISH_SETUP §4.2).
+    bo.battle.control_point_domination = spec_.kind == SessionKind::Skirmish && spec_.skirmish.land && spec_.skirmish.control_points;
     bo.battle.skip_human_units = true;  // the human's units take orders only from commands (stand-ins skip them)
     sim::load_tactical_systems(*d.files, d.rules, &d.db.constants(), bo);  // Int-final: weather, retreat, strikes data
     if (d.vfs) {
@@ -881,6 +883,11 @@ struct OptionReader {
         return {};
     }
     bool boolean(const char* key) { return text(key) == "1"; }
+    bool has(const char* key) const {
+        for (const auto& [k, v] : d.options)
+            if (k == key) return true;
+        return false;
+    }
     int64_t integer(const char* key) {
         const std::string_view v = text(key);
         int64_t n = 0;
@@ -926,6 +933,7 @@ void GameSession::describe_session() {
         d.set_option("skirmish.ground_ai", join_names(s.ground_ai));
         d.set_option("skirmish.planet_type", s.planet_type);
         d.set_option("skirmish.land", flag(s.land));
+        if (s.control_points) d.set_option("skirmish.control_points", "1");  // ccpgt t02 (absent in older saves: off)
     }
     // What this build attached (a save from a build without the AI / story / animation is not this session).
     d.set_option("run.galactic_ai", flag(galactic_ai_running()));
@@ -1092,6 +1100,7 @@ bool GameSession::spec_from_save(const SaveFile& save, SessionSpec& out, std::st
         s.skirmish.ground_ai = split_names(o.text("skirmish.ground_ai"));
         s.skirmish.planet_type = std::string(o.text("skirmish.planet_type"));
         s.skirmish.land = o.boolean("skirmish.land");
+        s.skirmish.control_points = o.has("skirmish.control_points") && o.boolean("skirmish.control_points");
     }
     if (!o.missing.empty()) return fail("save option " + o.missing + " missing");
     out = std::move(s);

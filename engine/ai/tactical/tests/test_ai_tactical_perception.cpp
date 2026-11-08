@@ -888,6 +888,22 @@ static void test_lua_functions() {
     CHECK(!is_good_against(ct, "Empire_Tank", 0x2, 0x2));
     CHECK(is_good_against(ct, "Empire_Tank", 0x2, 0x3));  // max over the bits
     CHECK(!is_good_against(ct, "Rebel_Trooper", 0x1, 0x1));
+    // a2l t03 (A2L_T03_RE_ANSWERS Q6.4): the weight is 0x5f1f90 (ai_weight: the mean of the matching weights != 1.0), not
+    // the first match, and a row is selected by its exact key 1 << bit.
+    ct.rows[0].friendly.push_back({"Heavy", 0x4, 0.25f});
+    CHECK(!is_good_against(ct, "Empire_Tank", 0x2 | 0x4, 0x1));  // mean(1.5, 0.25) = 0.875 (first match: 1.5)
+    CHECK(is_good_against(ct, "Empire_Tank", 0x2, 0x1));
+    row.enemy = "Mixed";
+    row.enemy_mask = 0x8 | 0x10;  // not a single-bit key: no bit of the target selects it
+    row.friendly = {{"Vehicle", 0x2, 3.0f}};
+    ct.rows.push_back(row);
+    CHECK(!is_good_against(ct, "Empire_Tank", 0x2, 0x8));
+    galactic::ContrastTable typed;  // an exact type entry wins at once
+    row.enemy = "Infantry";
+    row.enemy_mask = 0x1;
+    row.friendly = {{"Vehicle", 0x2, 0.5f}, {"Empire_Tank", 0, 2.0f}};
+    typed.rows.push_back(row);
+    CHECK(is_good_against(typed, "Empire_Tank", 0x2, 0x1) && !is_good_against(typed, "Other_Tank", 0x2, 0x1));
     // Get_Most_Defended_Position: allied force of `player`, ties -> one Get_Float01 draw each
     PerceptionWorld lw = land_world();
     lw.objects.push_back(make_obj(1, 0, kTank, -570.0f, 570.0f, 100.0f, 10.0f));   // cell 0 only

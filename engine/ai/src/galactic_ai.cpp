@@ -324,17 +324,6 @@ std::span<const uint32_t> GalacticAiWorld::Impl::planet_node_rank() {
     return node_rank;
 }
 
-// [port] The stage of a task force whose goal has no target: the player's first planet (row order) with a starbase,
-// else its first planet. (A planet target uses PlayerAi::setup_stage, A2k t02.)
-PlanetIndex GalacticAiWorld::Impl::nearest_owned(int32_t player) const {
-    const auto planets = sim.planets();
-    for (size_t i = 0; i < planets.size(); ++i)
-        if (planets[i].is_planet && planets[i].owner == player && planets[i].starbase_level > 0) return static_cast<PlanetIndex>(i);
-    for (size_t i = 0; i < planets.size(); ++i)
-        if (planets[i].is_planet && planets[i].owner == player) return static_cast<PlanetIndex>(i);
-    return kInvalidPlanet;
-}
-
 // Lua _FindStageArea (FindStageAreaClass::Lua_Call 0x6990f0, A2K_T02_RE_ANSWERS Q1) [H]: the target's reachability slot 6
 // (0x664450) at the level = the task force's goal Reachability (0 = Friendly_only without a task force): the first planet
 // held by the player or an ally in the target's per-target flood list (PlayerAi::stage_of); level 4 -> the target, level
@@ -439,8 +428,14 @@ int32_t GalacticAiWorld::Impl::tf_produce_force(int32_t tf, const lua::AiArg& st
     const auto it = tfs.find(tf);
     if (it == tfs.end() || !it->second.alive) return -1;
     TaskForceRec& t = it->second;
-    const PlanetIndex sp = planet_arg(stage);
-    if (sp != kInvalidPlanet) t.stage = static_cast<int32_t>(sp);
+    // Destination (0x5fe240, A2L_T03_RE_ANSWERS Q5.3) [H]: the planet argument only (a planet object or a planet
+    // AITargetLocationWrapper); no argument -> null, whatever the TF's stage (TF +0x100 is not read), so nothing
+    // gathers and every build task's +0x98 is null. [port] a non-planet argument (a script error in retail) is treated
+    // as no destination.
+    PlanetIndex sp = kInvalidPlanet;
+    if (stage.target >= 0) sp = static_cast<PlanetIndex>(stage.target);
+    else if (stage.object) sp = sim.planet_of(stage.object);
+    t.stage = valid_planet(sp) ? static_cast<int32_t>(sp) : -1;
     create_build_tasks(t);
     // AIBuildTask WAIT_FOR_FREESTORE_ALLOC -> PRE_PATH_SEPERATE (0x64aec0, A2K_T08_RE_ANSWERS Q2.3) [H]: a claimed
     // free-store unit (the TF's units before any build finished) in a fleet of more than one object is split into a
@@ -475,7 +470,10 @@ void GalacticAiWorld::Impl::tf_release_forces(int32_t tf, double fraction) {
     TaskForceRec& t = it->second;
     const auto n = std::min(static_cast<size_t>(std::floor(fraction * static_cast<double>(t.units.size()) + 1e-9)), t.units.size());
     for (size_t i = 0; i < n; ++i) pp_unit_left(t.plan, t.units[i]);  // 0x5ff610 -> 0x6c27d0
+    const std::vector<ObjectHandle> left(t.units.begin(), t.units.begin() + static_cast<std::ptrdiff_t>(n));
+    const int32_t player = t.player;
     t.units.erase(t.units.begin(), t.units.begin() + static_cast<std::ptrdiff_t>(n));
+    for (const ObjectHandle u : left) free_store_admitted(player, u);  // re-admitted (Q7.1)
 }
 
 void GalacticAiWorld::Impl::tf_release_unit(int32_t tf, ObjectHandle unit) {
@@ -485,6 +483,7 @@ void GalacticAiWorld::Impl::tf_release_unit(int32_t tf, ObjectHandle unit) {
     if (std::find(u.begin(), u.end(), unit) == u.end()) return;
     pp_unit_left(it->second.plan, unit);  // 0x5ff610 -> 0x6c27d0
     u.erase(std::remove(u.begin(), u.end(), unit), u.end());
+    free_store_admitted(it->second.player, unit);  // re-admitted (Q7.1)
 }
 
 std::vector<ObjectHandle> GalacticAiWorld::Impl::tf_units(int32_t tf) {
@@ -569,20 +568,14 @@ void GalacticAiWorld::Impl::add_markup(int32_t target, double delta) {
 
 // ================================================================ PlayerAi
 
+// Slot 9 of the galactic goal system (0x6b84f0, A2L_T03_RE_ANSWERS Q2.1) [H]: an active goal is never blocked (the
+// caller, GoalSystem::skip, tests that first); a goal without a target is not blocked; otherwise it is blocked when
+// the target's slot 6 (link mask -1, no exclude / include list) at the goal type's level is null. That is stage_of:
+// the per-target flood from the target (or its passable neighbours), cached 10 x FPS sim frames per (target, level);
+// level 4 returns the target (never blocked); levels > 5 have no galactic answer (always blocked).
 bool PlayerAi::blocked(uint32_t goal_type, int32_t target) {
     if (target < 0) return false;
-    const int m = std::min(5, static_cast<int>(w->defs.goals[goal_type].reachability));
-    return !reachable(m, static_cast<PlanetIndex>(target));
-}
-
-bool PlayerAi::reachable(int mode, PlanetIndex target) {
-    if (reach_frame != w->now) {
-        reach_frame = w->now;
-        reach.assign(6, {});
-    }
-    std::vector<uint8_t>& r = reach[static_cast<size_t>(mode)];
-    if (r.empty()) flood(mode, &r);
-    return target < r.size() && r[target];
+    return stage_of(static_cast<PlanetIndex>(target), static_cast<int>(w->defs.goals[goal_type].reachability)) == kInvalidPlanet;
 }
 
 // The reachability flood 0x3f12e0 from the player's planets (row order) at AI level `mode` (FIXPASS_GALACTIC §1.4,
@@ -937,16 +930,15 @@ int32_t GalacticAiWorld::Impl::instantiate(PlayerAi& p, Goal& g) {
         tf.name = def.task_forces[i].name;
         // Stage (0x140b3a660, FreeStore Setup A through the target's reachability object, A2K_T08_RE_ANSWERS Q3.1) [H]:
         // PlayerAi::setup_stage at the goal's Reachability, the same rule and list as the solve; IgnoreTarget is not
-        // read. [port] A goal without a target keeps the player's first planet with a starbase (retail: null stage).
+        // read. Copied to TF +0x100 by the plan instantiation 0x5f7090 (A2L_T03_RE_ANSWERS Q5.1) [H]: a goal without a
+        // target has a null stage, so Get_Stage returns nil and the shipped AssembleForce / SynchronizedAssemble exit the
+        // plan. The Produce_Force destination (tf.stage) starts null.
         if (g.target >= 0) {
             const PlanetIndex st = p.setup_stage(static_cast<PlanetIndex>(g.target), static_cast<int>(defs.goals[g.type].reachability),
                                                  def.task_forces[i], stages);
-            tf.stage = st == kInvalidPlanet ? g.target : static_cast<int32_t>(st);
-        } else {
-            const PlanetIndex st = nearest_owned(p.player);
-            tf.stage = st == kInvalidPlanet ? g.target : static_cast<int32_t>(st);
+            tf.area = st == kInvalidPlanet ? g.target : static_cast<int32_t>(st);
         }
-        stages.push_back(tf.stage >= 0 ? static_cast<PlanetIndex>(tf.stage) : kInvalidPlanet);
+        stages.push_back(tf.area >= 0 ? static_cast<PlanetIndex>(tf.area) : kInvalidPlanet);
         for (const PpSelection& s : pp.sel) {
             if (s.tf != static_cast<int32_t>(i)) continue;
             if (s.unit) {
@@ -991,12 +983,15 @@ void GalacticAiWorld::Impl::end_plan(int32_t id, bool by_goal_system) {
         if (e && sim.pays_as_you_go(pi.player) && e->c + e->a > 0.0f) reclaim[pi.goal_key] = payg_reclaim(id, e->c + e->a);
     }
     end_plan_builds(id);
+    std::vector<ObjectHandle> left;  // re-admitted to the free store after the task forces are gone (Q7.1)
     for (const int32_t t : pi.tfs) {
         const auto tit = tfs.find(t);
         if (tit == tfs.end()) continue;
         for (const ObjectHandle u : tit->second.units) pp_unit_left(id, u);  // plan end 0x5f6a50 step 3 -> 0x6c27d0
+        left.insert(left.end(), tit->second.units.begin(), tit->second.units.end());
         tfs.erase(tit);
     }
+    for (const ObjectHandle u : left) free_store_admitted(pi.player, u);
     PlayerAi* pa = player_ai(pi.player);
     if (pa) {
         // [L, AI_GALACTIC_2 open item 6] a plan's exit removes its Block_Goal_Proposal entries.
@@ -1148,6 +1143,22 @@ uint32_t GalacticAiWorld::Impl::movable_tf_fleet_at(const TaskForceRec& tf, Plan
     return gal::kNoFleet;
 }
 
+// Galactic free-store admission (vf19 0x68ece0 -> 0x4d2c90 step 6, A2L_T01_RE_ANSWERS Q7.1 / Q7.2) [H]: a unit of the AI
+// player that is not a structure gets the store script's On_Unit_Added synchronously. It runs for the initial fill and
+// every later admission, including a unit a task force gives back (0x6c27d0: Release_Unit, Release_Forces, plan end).
+void GalacticAiWorld::Impl::free_store_admitted(int32_t player, ObjectHandle u) {
+    PlayerAi* pa = player_ai(player);
+    if (!pa || !pa->fs_vm || now <= 0 || !store.alive(u) || store.owner(u) != player || tf_owns(u)) return;
+    const gal::TypeInfo* ti = type_info(store.type(u));
+    if (!ti || structure_kind(ti->kind)) return;
+    lua::AiEventArg a;
+    a.kind = lua::AiEventArg::Object;
+    a.object = u;
+    std::string err;
+    if (!lua::call_global_function(*pa->fs_vm, "On_Unit_Added", {a}, &err) && !err.empty())
+        errors.push_back("free store " + std::to_string(player) + " On_Unit_Added: " + err);
+}
+
 void GalacticAiWorld::Impl::claim_units(int32_t player) {
     PlayerAi* pa = player_ai(player);
     if (!pa) return;
@@ -1196,16 +1207,7 @@ void GalacticAiWorld::Impl::claim_units(int32_t player) {
                         break;
                     }
         }
-        const gal::TypeInfo* ti = type_info(type);
-        if (!ti || structure_kind(ti->kind)) continue;
-        if (pa->fs_vm && now > 0) {  // On_Unit_Added (vf19), synchronous
-            lua::AiEventArg a;
-            a.kind = lua::AiEventArg::Object;
-            a.object = u;
-            std::string err;
-            if (!lua::call_global_function(*pa->fs_vm, "On_Unit_Added", {a}, &err) && !err.empty())
-                errors.push_back("free store " + std::to_string(player) + " On_Unit_Added: " + err);
-        }
+        free_store_admitted(player, u);
     }
     // Task forces that lost every unit (No_Units_Remaining, galactic code 7 [H]).
     std::vector<int32_t> empty;
@@ -1469,9 +1471,12 @@ int32_t GalacticAiWorld::Impl::tf_order(int32_t tf, lua::AiTfOrder kind, const l
             // P4 ai: every landed unit fires the Ground_Activated trigger (Lua_Land_Units 0x6cec80 -> 0x3a00b0 per landed
             // unit, P4_SIM_SYSTEMS Â§3.4: the HackSuperWeapon plan's hack). [port] At a planet the player does not own the
             // port lands nothing (no invasion here), but the units there still fire the trigger as the landing would.
+            // a2l t02: Land_Units refuses a planet whose surface is not accessible (0x375220: Planet_Surface_Accessible,
+            // destroyed -> false; STRATEGIC_GAPS 1.3 "Landing refusals are in the callers" [H]). Nothing lands there, so
+            // no Ground_Activated trigger fires (HotM: the Rebel slicer droids sent to The_Maw).
             std::vector<std::pair<ObjectHandle, PlanetIndex>> landed;
             for (auto& [p, units] : by_planet) {
-                if (!valid_planet(p)) continue;
+                if (!valid_planet(p) || !sim.surface_accessible(p)) continue;
                 if (sim.planets()[p].owner != t.player) {
                     for (const ObjectHandle u : units) landed.emplace_back(u, p);
                     continue;
@@ -1798,23 +1803,38 @@ int32_t GalacticAiWorld::Impl::find_target(int32_t script, const lua::AiFindTarg
     const uint32_t flags = parse_application_flags(r.application, &ok);
     Reachability reach = Reachability::Any;
     if (!r.reachability.empty()) parse_reachability(r.reachability, reach);
-    const int m = std::min(5, static_cast<int>(reach));
-    // Reachable_Target's filter (FIXPASS_GALACTIC §1.1): the source-planet list of the level (the reachability flood
-    // 0x665160 -> 0x3f12e0 under the level's request flags, cached up to 10 x FPS frames). Friendly_Only keeps only
-    // planets held by the player or an ally (flag 4 clear, §1.4).
-    std::vector<uint8_t> keep;
-    if (!r.reachability.empty()) {
-        keep.assign(sim.planets().size(), 0);
-        for (const PlanetIndex k : pa->source_planets(m))
-            if (k < keep.size()) keep[k] = 1;
-    }
+    // Reachable_Target (0x698360, A2L_T03_RE_ANSWERS Q1.1) [H]: the reachability test runs only when argument 6 gives a
+    // source; it is the candidate's slot 7 (0x663810, Q1.2) from the source's planet at the level of argument 4, and a
+    // result of 1e18 skips the candidate. No argument 6: no reachability test (slot 5 / the player-level flood are not
+    // read). A source that resolves to no planet (an object in transit) gives 1e18 for every candidate. Plain FindTarget
+    // has neither.
+    const bool reachable = !r.reachability.empty();
+    const bool have_source = reachable && r.relative.present;
+    const PlanetIndex source = have_source ? planet_arg(r.relative) : kInvalidPlanet;
+    const AiPathFinder* finder = have_source && valid_planet(source) ? ensure_path_finder(player) : nullptr;
+    auto slot7 = [&](PlanetIndex t) -> double {
+        if (!valid_planet(source) || !finder || !finder->created()) return kReachNone;
+        if (source == t) return 0.0;
+        std::vector<PlanetIndex> path;
+        std::vector<uint32_t> wts;
+        finder->get_path(source, t, path, &wts);
+        return ai_reach_path_cost(wts, path.size(), static_cast<int>(reach));
+    };
+    // Range test (argument 7, Q1.1 step 4): 3-D distance^2 from the candidate to the source position, after Evaluate.
+    // [M] the source object's position is taken as its planet's.
+    const double range = have_source && r.max_distance > 0.0 ? r.max_distance : 0.0;
     std::vector<int32_t> cand;
     std::vector<double> value;
     for (uint32_t t = 0; t < sim.planets().size(); ++t) {  // the target list order (planet order)
         if (!applies(player, static_cast<int32_t>(t), flags)) continue;
-        if (!keep.empty() && !keep[t]) continue;
+        if (have_source && slot7(static_cast<PlanetIndex>(t)) >= kReachNone) continue;
         double v = 0.0;
         if (!evaluate(player, pa->ctx.opponent, r.perception, static_cast<int32_t>(t), v)) continue;
+        if (range > 0.0 && valid_planet(source)) {
+            const Vec3 a = sim.planets()[t].position, b = sim.planets()[source].position;
+            const double dx = static_cast<double>(a.x) - b.x, dy = static_cast<double>(a.y) - b.y, dz = static_cast<double>(a.z) - b.z;
+            if (dx * dx + dy * dy + dz * dz > range * range) continue;
+        }
         cand.push_back(static_cast<int32_t>(t));
         value.push_back(v);
     }
@@ -2361,7 +2381,8 @@ void GalacticAiWorld::set_free_store_owner(objects::ObjectHandle unit, int32_t p
 }
 
 int32_t GalacticAiWorld::reachable_target(int32_t player, std::string_view perception, std::string_view application,
-                                          std::string_view reachability, double probability) {
+                                          std::string_view reachability, double probability, PlanetIndex source,
+                                          double max_distance) {
     if (!impl_->player_ai(player)) return -1;
     lua::AiFindTargetRequest r;
     r.source.present = true;
@@ -2370,7 +2391,18 @@ int32_t GalacticAiWorld::reachable_target(int32_t player, std::string_view perce
     r.application = std::string(application);
     r.reachability = std::string(reachability);
     r.probability = probability;
+    if (source != kInvalidPlanet) {
+        r.relative.present = true;
+        r.relative.target = static_cast<int32_t>(source);
+    }
+    r.max_distance = max_distance;
     return impl_->find_target(kFreeStoreScriptBase + player, r);
+}
+
+bool GalacticAiWorld::goal_blocked(int32_t player, std::string_view goal, int32_t target) {
+    PlayerAi* pa = impl_->player_ai(player);
+    const uint32_t g = impl_->defs.find_goal(goal);
+    return pa && g != kAiNone && pa->blocked(g, target);
 }
 
 std::vector<PlanetIndex> GalacticAiWorld::reach_planets(int32_t player, int level) {
@@ -2441,6 +2473,7 @@ void GalacticAiWorld::hash(StateHasher& h) const {
     for (const auto& [id, t] : w.tfs) {
         h.i32(id);
         h.i32(t.stage);
+        h.i32(t.area);
         h.u32(static_cast<uint32_t>(t.units.size()));
         for (const ObjectHandle u : t.units) h.i32(w.store.id(u));
     }

@@ -61,7 +61,11 @@ struct TaskForceRec {
     std::vector<uint32_t> wanted;          // types to produce (PotentialPlan selections without a free unit)
     std::vector<PlanetIndex> wanted_source;  // ETA source planet per wanted type (PP+0x180)
     std::vector<int32_t> builds;           // AIBuildTask ids (Produce_Force)
-    int32_t stage = -1;                    // target (planet) id
+    // a2l t03 (A2L_T03_RE_ANSWERS Q5) [H]: `stage` is the last Produce_Force destination (AIPlanetBuildTask +0x98: the
+    // planet argument only; -1 = none, so nothing gathers and the build planet is the selection's source); `area` is
+    // TF +0x100, the Setup A stage copied at instantiation and returned by Get_Stage (-1 = null: a goal without a target).
+    int32_t stage = -1;
+    int32_t area = -1;
     bool had_units = false;
     bool no_units_sent = false;
     bool alive = true;
@@ -371,6 +375,8 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     bool tf_owns(ObjectHandle u) const;
     std::vector<ObjectHandle> free_units(int32_t p) const;
     ObjectHandle free_store_supply(int32_t player, uint32_t type) const;  // 0x4d2bd0 (galactic_build.cpp)
+    bool resolve_claim(BuildTask& b);  // free-store service 0x4d5a70 for a claiming build task (galactic_build.cpp)
+    void free_store_admitted(int32_t player, ObjectHandle u);  // On_Unit_Added of an admission (galactic_ai.cpp)
     PlanetIndex planet_arg(const lua::AiArg& a) const;
     cmd::RejectReason order(int32_t player, const cmd::EventData& ev, const std::string& what);
     cmd::RejectReason note_order(int32_t player, cmd::RejectReason r, const std::string& what);
@@ -384,7 +390,6 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     // The AI's Is_Planet_Dangerous mask for `player` (GalacticPerception::fill_view on this frame's snapshot); empty
     // (= none) before the first perception update.
     gal::Bitset ai_dangerous(int32_t player) const;
-    PlanetIndex nearest_owned(int32_t player) const;
     // A2k t02: the path finder's node order as a rank per planet row (galactic_ai.cpp); rebuilt lazily (static data).
     std::vector<uint32_t> node_rank;
     std::span<const uint32_t> planet_node_rank();
@@ -485,7 +490,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     int32_t tf_produce_force(int32_t tf, const lua::AiArg& stage, bool) override;
     int32_t tf_get_stage(int32_t tf) override {
         const auto it = tfs.find(tf);
-        return it == tfs.end() ? -1 : it->second.stage;
+        return it == tfs.end() ? -1 : it->second.area;  // Get_Stage 0x5fda50: TF +0x100, nil when null
     }
     bool tf_all_on_free_store(int32_t tf) override;
     int32_t tf_order(int32_t tf, lua::AiTfOrder order, const lua::AiArg& arg) override;
@@ -571,9 +576,6 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     std::unique_ptr<lua::LuaVm> fs_vm;
     std::set<objects::ObjectId> known;
     std::vector<PendingBonus> bonuses;
-    // reachability cache (per frame, per AI mode 0..5)
-    int64_t reach_frame = -1;
-    std::vector<std::vector<uint8_t>> reach;
     // AI execution path finder (GALACTIC.md §4): created at first service, serviced by execution_service.
     AiPathFinder paths;
     PlayerAi(GalacticAiWorld::Impl* world, int32_t p, const AiPlayerTypeDef* t, int32_t d);
@@ -581,8 +583,9 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     // ---- GoalModeHooks ----
     uint32_t target_count() override { return static_cast<uint32_t>(w->sim.planets().size()); }
     bool applies(int32_t target, uint32_t flags) override { return w->applies(player, target, flags); }
+    // Galactic goal-system slot 9 (0x6b84f0, A2L_T03_RE_ANSWERS Q2) [H]: blocked when the target's slot 6 at the goal's
+    // level is null (stage_of: level 4 never, level > 5 always, else an empty per-target list, cached 10 s).
     bool blocked(uint32_t goal_type, int32_t target) override;
-    bool reachable(int mode, PlanetIndex target);
     // 0x665160 (AI_GALACTIC_3 §8): the reachability flood's planets for a level, flood output order, cached 10 s.
     struct SourceList {
         int64_t frame = -1;

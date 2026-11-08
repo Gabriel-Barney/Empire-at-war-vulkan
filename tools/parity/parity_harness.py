@@ -179,21 +179,152 @@ def galactic_credit_pass(trace_path, factions, sample_ticks):
     return dict(income), at
 
 
+STOP_SAMPLES = 3  # a fleet stops when its position holds for this many samples (one repeated sample mid-flight is not a stop)
+
+
+def fleet_tracks(trace_path):
+    """Galactic fleet positions per mode frame, {fleet id: [(mode frame, owner, x, y)]}, and planet positions {name: (x, y)},
+    from a Q2TRACE 1 file (retail or port). A mode frame sampled more than once (a paused galaxy) keeps its last sample."""
+    types, tracks, ppos = {}, collections.defaultdict(list), {}
+    with open(trace_path, "r", encoding="ascii") as fh:
+        for line in fh:
+            if line.startswith("T "):
+                p = line.split()
+                types[int(p[1])] = p[4]
+    objs, planets, mf = {}, set(), None
+
+    def close():
+        if mf is None:
+            return
+        for i, o in objs.items():
+            if o[1] == "GALACTIC_FLEET":
+                tr = tracks[i]
+                if tr and tr[-1][0] == mf:
+                    tr.pop()
+                tr.append((mf, o[0], o[2], o[3]))
+        for i in planets:
+            if i in objs:
+                ppos[objs[i][1]] = (objs[i][2], objs[i][3])
+    with open(trace_path, "r", encoding="ascii") as fh:
+        in_header = True
+        for line in fh:
+            p = line.split()
+            if not p:
+                continue
+            t = p[0]
+            if in_header:
+                in_header = t != "end_header"
+                continue
+            if t == "F":
+                close()
+                mf = int(p[3])
+            elif t == "O":
+                i = int(p[1])
+                if int(p[11]) & 2:
+                    objs.pop(i, None)
+                else:
+                    objs[i] = (int(p[2]), types.get(int(p[3]), "?"), q2.f32(p[4]), q2.f32(p[5]))
+            elif t == "X":
+                objs.pop(int(p[1]), None)
+            elif t == "G":
+                planets.add(int(p[1]))
+            elif t == "end":
+                break
+    close()
+    return dict(tracks), ppos
+
+
+def segment_fleet(track, ppos, stop_samples=STOP_SAMPLES):
+    """One fleet's track -> (trips, legs). A stop is a position held for `stop_samples` samples (or at either end of the
+    track: its first sample, or 2 samples at its end); a trip runs from the first moved sample after a stop to the first sample of the next stop, between the planets
+    nearest to the two stop positions. Fleets fly planet centre to planet centre, so a trip that passes a third planet's
+    centre is split there into legs: a waypoint is the sample nearest that centre when it lies within one sample step of
+    it (arrival and next departure as at a stop, below). trips: [(dep, owner, from, to, arr)], legs: the same per leg."""
+    def same(a, b):
+        return math.hypot(a[2] - b[2], a[3] - b[3]) <= q2.ORBIT_SNAP
+
+    def nearest(x, y):
+        return min(((math.hypot(x - a, y - b), n) for n, (a, b) in ppos.items()), default=(None, None))[1]
+    # Runs of equal positions: [start index, end index].
+    runs = []
+    for k, s in enumerate(track):
+        if runs and same(track[runs[-1][1]], s):
+            runs[-1][1] = k
+        else:
+            runs.append([k, k])
+    # The track's first sample is where the fleet was made; a fleet seen still for 2 samples when the trace ends has arrived.
+    stops = [r for j, r in enumerate(runs)
+             if r[1] - r[0] + 1 >= stop_samples or j == 0 or (j == len(runs) - 1 and r[1] > r[0])]
+    trips, legs = [], []
+    for a, b in zip(stops, stops[1:]):
+        last, first = track[a[1]], track[b[0]]
+        frm, to = nearest(last[2], last[3]), nearest(first[2], first[3])
+        if frm is None or frm == to:
+            continue
+        # Departure = the last sample at the planet: retail moves the fleet from its orbit slot to the planet centre on the
+        # departure tick, the port parks it at the centre (q4hf t04: the same rule both sides, no one-tick offset).
+        fx, fy = ppos[frm]
+        nxt = track[a[1] + 1]
+        dep = nxt[0] if math.hypot(nxt[2] - fx, nxt[3] - fy) <= q2.ORBIT_SNAP else last[0]
+        arr, own = first[0], first[1]
+        trips.append((dep, own, frm, to, arr))
+        moving = track[a[1] + 1:b[0]]
+        ways = []
+        for name, (px, py) in ppos.items():
+            if name in (frm, to) or not moving:
+                continue
+            d, k = min((math.hypot(s[2] - px, s[3] - py), k) for k, s in enumerate(moving))
+            step = max([math.hypot(moving[k][2] - moving[j][2], moving[k][3] - moving[j][3])
+                        for j in (k - 1, k + 1) if 0 <= j < len(moving)] or [0.0])
+            if d <= step:
+                # Retail shows a pass as one sample in the planet's orbit slot, then the centre (the next departure): the slot
+                # sample is the arrival, as at a stop (first sample in the slot). The port parks at the centre: a pass holds
+                # there for at most 2 samples. The next departure is the last sample at the centre, as after a stop.
+                dist = [math.hypot(moving[j][2] - px, moving[j][3] - py) for j in (k - 2, k - 1)] if k >= 2 else None
+                at = moving[k - 1][0] if dist and dist[1] > dist[0] else moving[k][0]
+                k2 = k
+                while k2 + 1 < len(moving) and same(moving[k2 + 1], moving[k]):
+                    k2 += 1
+                ways.append((at, moving[k2][0], name))
+        prev_t, prev_p = dep, frm
+        for wa, wd, wn in sorted(ways):
+            if wa > prev_t:
+                legs.append((prev_t, own, prev_p, wn, wa))
+                prev_t, prev_p = wd, wn
+        legs.append((prev_t, own, prev_p, to, arr))
+    return trips, legs
+
+
+def fleet_hops(trace_path, fac):
+    """(trips, legs) of every fleet of a galactic trace, owners mapped to factions by `fac` ({owner: faction})."""
+    tracks, ppos = fleet_tracks(trace_path)
+    trips, legs = [], []
+    for _, tr in sorted(tracks.items()):
+        t, lg = segment_fleet(tr, ppos)
+        trips += t
+        legs += lg
+    name = (lambda o: fac.get(o, "p%d" % o))
+    return ([(d, name(o), a, b, r) for d, o, a, b, r in sorted(trips)],
+            [(d, name(o), a, b, r) for d, o, a, b, r in sorted(legs)])
+
+
 def galactic_metrics(trace_path, queue_path=None, ai_log=None, sample_ticks=(4500, 9000, 13500)):
     """Metric values of one galactic run (retail trace or port state trace), {metric id: value}, plus notes."""
     m = q2.trace_metrics(trace_path)
     fac = m["factions"]
     out, notes = {}, []
-    # Travel: hop duration per route (departure = first moved sample, arrival = first parked sample; same rule both sides).
-    # Keyed by faction: the hop speed is the fleet's (its units' Hyperspace_Speed, the Underworld corruption bonus).
+    # Travel: leg duration per route (departure = first moved sample, arrival = first sample of a stop, a pass through a
+    # planet centre splits the trip; same rule both sides, q4hf t04). Keyed by faction: the hop speed is the fleet's (its
+    # units' Hyperspace_Speed, the Underworld corruption bonus).
+    trips, legs = fleet_hops(trace_path, fac)
     routes = collections.defaultdict(list)
-    for dep, f, a, b, arr in m["fleet_hops"] or []:
+    for dep, f, a, b, arr in legs:
         routes["%s:%s->%s" % (f, a, b)].append(arr - dep)
     for r, ds in routes.items():
         out["travel.hop_ticks[%s]" % r] = tuple(sorted(set(ds)))
-    # AI: fleet departures and their targets per faction (hops from positions on both sides).
+    # AI: fleet departures and their targets per faction: trips, stop to stop (the planet the fleet was sent to).
     hops = collections.defaultdict(list)
-    for dep, f, a, b, arr in m["fleet_hops"] or []:
+    for dep, f, a, b, arr in trips:
         hops[f].append((dep, b))
     for f in FACTIONS:
         hs = hops.get(f, [])
@@ -381,6 +512,10 @@ def skirmish_retail_metrics(trace_path, frames):
                 mf = int(p[3])
             elif t == "M":
                 meta[p[1]] = " ".join(p[2:])
+                # Port tactical traces (alamo_headless --skirmish-ai --trace-out, q4hf t02): the port's projectiles are not store
+                # objects, so the trace records the battle frame of the first shot instead of a PROJ_ object.
+                if p[1] == "first_shot_frame" and first_shot is None:
+                    first_shot = int(p[2])
             elif t == "O":
                 i = int(p[1])
                 own, name, hp = int(p[2]), types.get(int(p[3]), "?"), q2.f32(p[10])
@@ -657,7 +792,14 @@ def port_command(scen, exe, out_dir, ref_info):
     # scenario so the last frame's state is written.
     return [exe, "--skirmish-ai", "skirmish", "--map", scen["map"], "--human", scen["human"], "--ticks", str(scen["ticks"] + 1),
             "--workers", str(scen.get("workers", 4)), "--quiet", "--ai-log", os.path.join(out_dir, "port_ai.txt"),
-            "--crc-out", os.path.join(out_dir, "port.crc")]
+            "--crc-out", os.path.join(out_dir, "port.crc"), "--trace-out", os.path.join(out_dir, "port.q2t")]
+
+
+def skirmish_port_trace_metrics(trace_path, frames):
+    """Port skirmish host tactical trace (--trace-out, q4hf t02): the damage metrics, reduced by the retail reader (hull lost
+    per faction from the per-object health, the first shot). Units, credits and builds keep coming from the AI log."""
+    m, _, info = skirmish_retail_metrics(trace_path, frames)
+    return {k: v for k, v in m.items() if k.startswith("combat.")}, info
 
 
 def run_port(scen, exe, out_dir, ref_info, reuse):
@@ -676,6 +818,12 @@ def run_port(scen, exe, out_dir, ref_info, reuse):
         m, notes, info = galactic_metrics(os.path.join(out_dir, "port.q2t"), ai_log=os.path.join(out_dir, "port_ai.txt"))
     else:
         m, notes, info = skirmish_port_metrics(os.path.join(out_dir, "port_ai.txt"), set(scen["frames"]), scen["ticks"] + 1, text)
+        trace = os.path.join(out_dir, "port.q2t")
+        if os.path.exists(trace):
+            cm, _ = skirmish_port_trace_metrics(trace, set(scen["frames"]))
+            m.update(cm)
+        else:
+            notes.append("no port tactical trace (%s): combat.* has no port value" % trace)
     info["port_cmd"] = " ".join(os.path.basename(c) if i == 0 else c for i, c in enumerate(cmd))
     return m, notes, info
 
@@ -929,6 +1077,19 @@ def selftest():
     check(tolerance_for({"ai.build_mix": {"min_overlap": 0.5}, "ai": {"abs": 1}}, "ai.build_mix[Rebel]")["min_overlap"] == 0.5,
           "tolerance by family")
     check(tolerance_for({"econ.credits_at": {"rel": 0.1}}, "econ.credits_at_4500[Rebel]")["rel"] == 0.1, "tolerance by prefix")
+    # Hop segmentation (q4hf t04): a repeated sample mid-flight is not a stop, a pass through B's centre splits the trip.
+    pp = {"A": (0.0, 0.0), "B": (10.0, 0.0), "C": (20.0, 0.0)}
+    trk = ([(f, 1, 0.0, 5.0) for f in range(5)] + [(5, 1, 0.0, 0.0), (6, 1, 2.5, 0.0), (7, 1, 2.5, 0.0), (8, 1, 5.0, 0.0),
+           (9, 1, 7.5, 0.0), (10, 1, 10.0, 5.0), (11, 1, 10.0, 0.0), (12, 1, 12.5, 0.0), (13, 1, 15.0, 0.0), (14, 1, 17.5, 0.0)] +
+           [(f, 1, 20.0, 5.0) for f in range(15, 20)])
+    trips, legs = segment_fleet(trk, pp)
+    check(trips == [(5, 1, "A", "C", 15)], "retail-style trip A -> C, 5 -> 15 (%s)" % trips)
+    check(legs == [(5, 1, "A", "B", 10), (11, 1, "B", "C", 15)], "legs A -> B 5 -> 10, B -> C 11 -> 15 (%s)" % legs)
+    # Port style: parked at the centre, a 2-sample hold at B.
+    trk = ([(f, 1, 0.0, 0.0) for f in range(5)] + [(5, 1, 2.5, 0.0), (6, 1, 5.0, 0.0), (7, 1, 7.5, 0.0), (8, 1, 10.0, 0.0),
+           (9, 1, 10.0, 0.0), (10, 1, 12.5, 0.0), (11, 1, 15.0, 0.0), (12, 1, 17.5, 0.0)] + [(f, 1, 20.0, 0.0) for f in range(13, 18)])
+    trips, legs = segment_fleet(trk, pp)
+    check(legs == [(4, 1, "A", "B", 8), (9, 1, "B", "C", 13)], "port-style legs A -> B 4 -> 8, B -> C 9 -> 13 (%s)" % legs)
     tmp = tempfile.mkdtemp(prefix="parity_selftest_")
     try:
         # Galactic: the same fixture on both sides, then a slower hop, a smaller income and a late capture on the port side.
@@ -988,6 +1149,24 @@ def selftest():
         check(sm.get("outcome.units_lost[Empire]") == 2, "skirmish Empire lost 2 interceptors")
         check(sm.get("econ.credits_at_1800[Rebel]") == 900.0, "skirmish credits at 1800")
         check(sm.get("outcome.battle_ended") == 0, "skirmish battle still running")
+        # Skirmish port tactical trace (--trace-out, q4hf t02): hull lost per faction from the O lines, the first shot from the
+        # M first_shot_frame record; a dead unit (flag 2) and a neutral prop do not count.
+        st = os.path.join(tmp, "sk_port.q2t")
+        o = "O %d %d %d 00000000 00000000 00000000 00000000 00000000 00000000 %s %d 4194303 4194303 4194303 00000000 00000000\n"
+        with open(st, "w", encoding="ascii", newline="\n") as fh:
+            fh.write("Q2TRACE 1\nmeta scenario skirmish\nmeta skirmish space 2 players, human Empire idle vs AI Rebel\n"
+                     "seed 00000001 00000000 0\nend_header\nstart 2 2 0 00000001\n"
+                     "F 2 2 0 00000001 0 2 0\nK 2\n" + o % (5, 0, 0, _f(150.0), 0) + o % (6, 1, 1, _f(300.0), 0) +
+                     o % (7, 2, 2, _f(500.0), 0) +
+                     "F 3 2 1 00000001 0 2 0\nM first_shot_frame 1\n" + o % (5, 0, 0, _f(100.0), 0) + o % (7, 2, 2, _f(400.0), 0) +
+                     "F 4 2 2 00000001 0 2 0\n" + o % (5, 0, 0, _f(0.0), 2) + o % (6, 1, 1, _f(275.0), 0) +
+                     "T 0 0 0 TIE_FIGHTER\nT 1 0 0 REBEL_X-WING\nT 2 0 0 ASTEROID_FIELD\nE ticks_reached\nend\n")
+        cm, _ = skirmish_port_trace_metrics(st, {600})
+        check(cm.get("combat.damage_taken[Empire]") == 50.0, "port trace Empire hull lost 50 (%s)" % cm.get("combat.damage_taken[Empire]"))
+        check(cm.get("combat.damage_taken[Rebel]") == 25.0, "port trace Rebel hull lost 25 (%s)" % cm.get("combat.damage_taken[Rebel]"))
+        check(cm.get("combat.first_shot_frame") == 1, "port trace first shot at frame 1 (%s)" % cm.get("combat.first_shot_frame"))
+        check(set(cm) == {"combat.damage_taken[Empire]", "combat.damage_taken[Rebel]", "combat.first_shot_frame"},
+              "port trace gives the combat metrics only (%s)" % sorted(cm))
         # The scenario file parses and names a tolerance with a reason for every graded family it uses.
         sc = load_scenarios()
         for k, v in sc["tolerances"].items():

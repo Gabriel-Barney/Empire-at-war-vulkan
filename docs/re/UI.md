@@ -843,8 +843,12 @@ file name (§9.4).
   when the dialog opens) and refill the list.
 - Filter 0x47bf40, called with (game type, terrain −1 = any, faction −1 = any, base level 0, minimum players 2,
   custom flag, no exclusion list): an entry is listed when its kind is the game type's kind, players (+0xac) ≥ 2,
-  max base level (+0xb0) ≥ 0, and its custom flag (+0xb4) **equals** the Official / Custom choice. Game type 4 would
-  also need `CONTROL` in mini 0A and honour `Quickmatch_Map_Exclusion_List`; skirmish (2 / 3) does neither.
+  max base level (+0xb0) ≥ 0, and its custom flag (+0xb4) **equals** the Official / Custom choice. Game type 4
+  (ccpgt t01) adds one test: its mode tag (0x28a9c0, table 0x140a16df8: `CONTROL` for type 4, empty for 1–3) must occur
+  as a **substring** (wide `wcsstr`) of the entry's upper-cased mini 0A, so `control` / `Control` match and a longer tag
+  containing `CONTROL` would too. `Quickmatch_Map_Exclusion_List` is **not** honoured: the dialog passes "use exclusion
+  list" = 0 for every type, as does the only other caller (campaign 0x28fda0), so no caller of 0x47bf40 applies it [H].
+  Shipped result: 18 of the 24 land maps carry the tag (SKIRMISH_SETUP §4.2).
 - Rows in table order; each row's text is the entry's label (+0x40) when set, else the file name without directory
   and `.TED` (found case-insensitively), cut to 22 characters + `...` when longer than 25 (0xfb7e0). The list is then
   sorted (comparator 0x104510: a per-row integer first [M: the same for every row here], then the row text,
@@ -868,10 +872,13 @@ file name (§9.4).
 - [port] Entries are keyed by the logical path, so a mod-folder map whose name two mod dirs share is one entry (the
   VFS reads the earlier dir's file; the original lists two rows that load different files). The same logical path can
   sit in both lists; the custom flag decides which tab shows it, as in the original.
-- `IDC_GAME_TYPE_LIST` (p4uim t01): two rows, Land then Space (`TEXT_GAME_TYPE_TEAM_LAND` / `_TEAM_SPACE`), and the map
-  list shows only the rows of that type; a map's kind comes from mini 01 (never its name), each list is sorted by row text,
-  case-insensitively, ties by path. [port] The original's third row, Capture Control Points (game type 4, 9.7), is not
-  offered. The row selected when the dialog opens: 9.7 (p4uis t03).
+- `IDC_GAME_TYPE_LIST` (p4uim t01, ccpgt t02): three rows, Land, Space and Capture Control Points
+  (`TEXT_GAME_TYPE_TEAM_LAND` / `_TEAM_SPACE` / `_CAPTURE_CONTROL_POINTS`), ordered by their text case-insensitively
+  (LBS_SORT), and the map list shows only the rows of that type; a map's kind comes from mini 01 (never its name), each list
+  is sorted by row text, case-insensitively, ties by path. Capture Control Points lists the land maps whose upper-cased mini
+  0A contains `CONTROL` (9.4), shares the remembered map with Land, and starts the battle with the win condition 0x15
+  (SKIRMISH_SETUP §4.2); the port has no game-options dialog, so nothing else changes. The row selected when the dialog
+  opens: 9.7 (p4uis t03).
 - The map chosen last is remembered **per game type** (9.7): the selected row of the map list is stored for its type
   whenever it changes, and any refill (opening, tab switch, type switch) selects that map when the active tab lists it,
   else row 0, as the original (9.7; modc t19 dropped the port's Kuat-on-Space default).
@@ -929,7 +936,18 @@ file name (§9.4).
 - **Rows**: the open path (0xf1230) adds game types 2, 3, 4 to `IDC_GAME_TYPE_LIST` (LBS_SORT), each row's text from the
   key table at 0x140a11458 (`TEXT_GAME_TYPE_INVALID`, `_CAMPAIGN`, `_TEAM_LAND`, `_TEAM_SPACE`, `_CAPTURE_CONTROL_POINTS`)
   and its item data the type, then selects the row whose data is the current type (0x1c4840). Type 4 lists only land maps
-  with the `CONTROL` tag (9.4). The port offers types 2 and 3 only [port], see 9.5.
+  with the `CONTROL` tag (9.4). The port offers all three (ccpgt t02), see 9.5.
+- **What type 4 changes** (ccpgt t01) [H]: row text `TEXT_GAME_TYPE_CAPTURE_CONTROL_POINTS`; map kind 1 (land) with the
+  `CONTROL` filter (9.4); remembered map shared with Land (`LastInternetMapLand`, globals 0x140a7c2c8). Selecting a type
+  (0xf2690) stores it, resets only the win condition (0x4acf00(options, type, keep = 1): type 4 → 0x15, SKIRMISH_SETUP
+  §0) and refills the list. In the game-options dialog (opened from the staging dialog, 0xea8d0 / 0xeb1c0 / 0xeba10)
+  types 2 and 4 share the land win-condition table {0x12, 0x13, 0x14, 0x15} (0x140875d70) but 0x4ace40 offers type 2
+  only 0x12..0x14 and type 4 only 0x15, so `IDC_WIN_CONDITION_COMBO` has the single row
+  `TEXT_WIN_CONDITION_CONTROL_POINT_DOMINATION` and its handler stores 0x15; the options summary text (0xfcba0) shows the
+  same key. `IDC_PRE_BUILT_BASE` is forced on and disabled only for the HQ condition 0x14 (0x4aceb0), so it stays free
+  on type 4 (type 3 unchecks and disables it). No other test of type 4 was found in the staging or options dialogs
+  (every other type check there is `== 1` or `== 3`), so the remaining options behave as on Land [M: by absence].
+  0x15 is never offered on Land (2).
 - **Type on opening** = the player profile's `LastInternetGameType` + 1 when the stored value is 1..3 (types 2..4), else
   Land (2). The profile (`PlayerProfileClass`, constructor 0x202510) defaults `LastInternetGameType` to **1**, so a first
   opening with a fresh profile is on **Land**. Changing the game type stores type - 1 in the profile at once and saves it

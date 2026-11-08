@@ -41,12 +41,13 @@
 //   committed in ascending id; 2. Hermite playback in parallel; 3. serial commit (arrivals become
 //   stationary tracks, turn-to-face when a facing was ordered).
 // RNG (synced, sim thread): move() - queued orders (0x08): one start delay per unit in the order's unit
-// order (no new formation: no ctor draw [M]); plain land group moves (OI tactical, §1.6 / §4.2 step 3; cu8i t02):
-// one FormationClass ctor draw int(1, FPS) per new formation in formation order (CU8G_T02_ENV_PICK_RE §7 [H]: the
-// formation's next-check timer +0x1d8 := now + FPS + r), start = now + accumulated PathFrameDelay of the earlier
-// formations' members + (FPS + r) - 2 FPS, not before now (§1.6 [M] formula, port reading in docs/PHASE4.md). Space
-// moves draw nothing (the space formation ctor draws are a follow-up). The Load_Map-tail land pass (one ctor draw per
-// movable object without a coordinator) is the host's (formation_ctor_draw, has_coordinator). tick() (land, OI tactical, §3.5 step 6):
+// order (no new formation: no ctor draw [M]). cu8j t01 (MOVEMENT §4.6, correcting cu8i): every other move creates its
+// formations at the next coordinator update (coordinator_update, retail common tick step 10), not at the order: land
+// (§1.6 / §4.2) - one r' = int(0, PathFrameDelay_seed) per staggered seed, then one FormationClass ctor draw int(1, FPS)
+// per formation, both in formation order; space (§4.6.4) - one ctor draw per formation of the space composition. The
+// ctor's r only sets the next-check timer (+0x1d8 := now + FPS + r: the fighter formations' first check), never a start
+// frame. cu8j t02 (§4.7): adopt / stop_and_hold draw one ctor int(1, FPS) at once; a swap to the secondary locomotor
+// composes at the next update. The Load_Map-tail pass and the other adopt sites are the host's. tick() (land, OI tactical, §3.5 step 6):
 // formation jiggle, two Get_Float(-1, 1) per moving formation member with FormationRaggedness > 0 and
 // MaxJiggleDistance > 0, ascending id, before the parallel walk: offset += draw x speed fraction x
 // FormationRaggedness, clamped to +-MaxJiggleDistance per axis ([inferred]: k = 1, per axis).
@@ -166,6 +167,8 @@ struct MoveOrder {
 // 0x4160a0 / 0x4165f0); in this module the fighter formations read them (FIGHTER_FLYING §4.11). 0x04 player order: the
 // fighter formations' arrival pop and step 5 read it (the waypoint append adds it).
 inline constexpr int32_t kFormationFps = 30;  // FPS of the FormationClass ctor draw int(1, FPS) (cu8i t02)
+// cu8j t01: UnitView::start_frame of a unit whose order waits for its formation (the next coordinator_update).
+inline constexpr uint32_t kStartPending = 0xFFFFFFFFu;
 inline constexpr uint8_t kMoveFlagAttackMove = 0x01;
 inline constexpr uint8_t kMoveFlagGuardMove = 0x02;
 inline constexpr uint8_t kMoveFlagPlayerOrder = 0x04;
@@ -288,7 +291,35 @@ public:
     // formation the host creates outside move() (the Load_Map-tail GOM post-load pass, TacticalBattle); and whether a unit
     // already has a coordinator ([port]: an order or a formation; unknown ids have none).
     static int32_t formation_ctor_draw(SimRng& rng);
-    bool has_coordinator(ObjectId id) const;
+    bool has_coordinator(ObjectId id) const;  // cu8j: also while adopted or waiting for its composition
+    // ---- cu8j t01 / t02 (MOVEMENT §4.6 / §4.7): the movement coordinator update and the adopt ----
+    // A non-queued move() (and fighter_new_order, and a swap to the secondary locomotor) creates its formations at the
+    // next coordinator update (MovementCoordinatorSystem update 0x426eb0, common tick step 10), not at the order: the
+    // ordered units wait (start_frame kStartPending) until then. coordinator_update(frame, global_frame, rng) composes the
+    // waiting orders in creation order:
+    //   land  - the split made at the order [port: positions of the order frame]: for each formation whose seed has
+    //           PathFrameDelay > 0 one r' = int(0, PathFrameDelay), start = frame + acc + r' + 1, acc += PathFrameDelay
+    //           (0x43c1b0, acc per order); other formations start at frame, or at frame + 61 - global_frame when
+    //           global_frame <= 60 (the plan gate 2 FPS < now - F +0x1dc with F +0x1dc = 0 [M]); then one ctor draw
+    //           int(1, FPS) per formation (0x43e5b0);
+    //   space - the composition 0x5d58f0 (§4.6.4): candidates = the order's units still waiting (a squadron's fighters
+    //           as its container); seed = nearest the goal (strict <); one ctor draw per formation; a nonzero role
+    //           (Stationary_Space_Layer when not moving and set, else Space_Layer) is alone, a role-0 seed recruits by
+    //           the box / speed-ratio rule; each fighter formation of it gets its first check at frame + FPS + r; a seed
+    //           with max speed 0 stops the pass, the rest wait for the next update. Start = frame + the port's per-slot
+    //           offset (n x SpacePathfindFrameDelayDelta).
+    // Units that left the order (another order, stop, teleport, removal) drop out; a composition left empty draws
+    // nothing. By default tick() runs it first; a host that calls it at its own step-10 point sets
+    // set_deferred_composition(true).
+    void set_deferred_composition(bool on) { deferred_compose_ = on; }
+    void coordinator_update(uint32_t frame, uint64_t global_frame, SimRng& rng);
+    size_t pending_compositions() const { return pending_.size(); }
+    // The adopt 0x39bcb0 (§4.7.1) of a unit of this system, past the host's predicate (team member, locomotor kind,
+    // builder, hyperspace): a unit without a coordinator gets one holding it where it is (no motion; Unit::adopted) and
+    // the ctor draws int(1, FPS) at once. False, no draw: unknown, or it has a coordinator. stop_and_hold = 0x3a9880:
+    // stop, leave every coordinator, adopt (one draw for a known unit).
+    bool adopt(ObjectId id, SimRng& rng);
+    bool stop_and_hold(ObjectId id, SimRng& rng);
     // OI tactical (crush, §5.5): owner changes (Change_Owner) and the relation test (player +0x370 table == 1 [M];
     // default: different non-negative players are hostile). The test is called from the serial crush pass only.
     bool set_owner(ObjectId id, int32_t owner);
@@ -437,7 +468,8 @@ public:
     bool fighter_pop(ObjectId key);
     // s78f review (§4.11 B 1 "new group move"): a group move of `order.units` that moves nobody now (an attack order whose
     // fighters are already in range): each fighter formation is replaced by one holding the order's block, as move()
-    // does, in state 1 (the members' current paths stand for the plan [port]). No unit moves.
+    // does, in state 1 (the members' current paths stand for the plan [port]). No unit moves. cu8j t01: the group move's
+    // composition still runs at the next coordinator update (its ctor draws, the fighter formations' first check).
     void fighter_new_order(const MoveOrder& order, uint32_t frame);
     // s78f review: an object that is not a unit of this system (a station, a structure) is gone: blocks naming it are
     // converted / removed as at a unit's removal (listener 0x4f77e0, fform_removed).
@@ -532,7 +564,8 @@ public:
     //   active flag (version 2), fighter state + params), the collision
     //   layer, this tick's crush / despawn / fighter events (the host may read them after a load; crush and despawn
     //   are hashed), the squadrons (ascending id), the fighter cell grids, this tick's fighter events and the fighter
-    //   formations (s78f t02, version 10: ascending key, each block stack bottom first).
+    //   formations (s78f t02, version 10: ascending key, each block stack bottom first), the pending compositions and
+    //   the last serial (cu8j t01, version 13).
     // Not saved: MovementConfig (definitions), the hooks, the query scratch. read() returns false and leaves the system
     // unchanged on a version / mode / map mismatch, an invalid value (enum, order, count) or truncated data.
     // HyperspaceDepartures / EngineControl (hyperspace.hpp) have their own write / read for the battle host.
@@ -623,7 +656,25 @@ private:
         // FIGHTER_FLYING.md §2-§5 (space fighters)
         FighterState fs;
         FighterParams fp;
+        // cu8j t01 / t02 (save version 13): the PendingComposition serial this unit waits in (0 none) and the adopt's
+        // degenerate coordinator (MOVEMENT §4.7.1).
+        uint32_t pend = 0;
+        bool adopted = false;
     };
+    // cu8j t01 (MOVEMENT §4.6): an order's formations waiting for the coordinator update (creation order). Land: `forms`
+    // = the split's formations, seed first; space: forms[0] = the order's units in order and `offsets` their start
+    // offsets. `moves` false: fighter_new_order (nobody moves: draws and fighter timers only).
+    struct PendingComposition {
+        uint32_t serial = 0;
+        bool space = false;
+        bool moves = true;
+        V2 goal;
+        std::vector<std::vector<ObjectId>> forms;
+        std::vector<uint32_t> offsets;
+    };
+    uint32_t compose_register(bool space, bool moves, V2 goal);  // a new PendingComposition (pending_.back()); its serial
+    void compose_land(const PendingComposition& pc, uint32_t frame, uint64_t global_frame, SimRng& rng);
+    bool compose_space(const PendingComposition& pc, uint32_t frame, SimRng& rng);  // false: stopped, retry next update
     bool is_air(const Unit& u) const;           // land Jetpack / Flying / LandBomber
     void fill_air_request(const Unit& u, uint32_t frame, SpaceRequest& q) const;  // plan_land's request (no threat)
     static void special_idle(Unit& u);          // §4.3-4.7: the idle state of the active special locomotor
@@ -738,7 +789,8 @@ private:
     bool fform_hidden(ObjectId key, ObjectId object);    // FOW_Object_Hidden for the lead's owner, force 1
     float fform_unit_speed(ObjectId key);                // 0x41b2a0 (min member max speed)
     void fform_waypoint(const MoveOrder& order, std::vector<uint32_t>& idx);  // removes the appended fighters from idx
-    void fform_order(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame);
+    // cu8j t01: `serial` != 0 - the order composes at the next update, which sets the first check (frame + FPS + r)
+    void fform_order(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame, uint32_t serial);
     F3 fform_centre(const std::vector<ObjectId>& members);  // L (G 3 / I 9)
     bool fobject_moving(ObjectId id);                       // "G moving" (a current path, not complete)
     FighterCell fobject_cell(ObjectId id);                  // the object's dogfight cell (pack +0x1c4 / +0x1c8)
@@ -793,9 +845,9 @@ private:
     void update_tree(const Unit& u);
     V2 pick_land_slot(const Unit& u, V2 slot, std::vector<uint64_t>& taken) const;
     void move_land(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
-                   const std::vector<uint32_t>& delays, SimRng& rng);
+                   const std::vector<uint32_t>& delays, uint32_t serial);
     void move_space(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
-                    const std::vector<uint32_t>& delays);
+                    const std::vector<uint32_t>& delays, uint32_t serial);
     void park_space(Unit& u, uint32_t frame);
 
     MovementConfig cfg_;
@@ -824,6 +876,9 @@ private:
     std::vector<FighterEvent> fevents_;  // this tick
     std::vector<FighterFormation> fforms_;  // s78f t02: ascending key
     bool fform_internal_ = false;           // a plan / re-path of the formation tick (keeps the formation)
+    std::vector<PendingComposition> pending_;  // cu8j t01: creation order (saved, version 13)
+    uint32_t pend_serial_ = 0;                 // cu8j t01: the last PendingComposition serial (saved)
+    bool deferred_compose_ = false;            // cu8j t01: the host runs coordinator_update (not saved: host setup)
     FighterFormationHooks fhooks_;          // s78f t02 (not saved: the loader re-sets them)
     FlyingHooks fly_hooks_;  // FIGHTER_FLYING §6
     // S8 t11

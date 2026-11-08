@@ -98,19 +98,20 @@ std::optional<Vec3f> project_by_unit_range(const PerceptionWorld& w, const Perce
 
 bool is_good_against(const galactic::ContrastTable& contrast, std::string_view caller_type_name, uint64_t caller_categories,
                      uint64_t target_categories) {
-    bool any = false;
+    // A2L_T03_RE_ANSWERS Q6.4 [H]: per category bit of the target, 0x5f1f90(caller's type, global map, key = 1 << bit) =
+    // ContrastTable::ai_weight of the row whose enemy key is exactly that bit (an exact 64-bit hash-map key; no row ->
+    // 0). The maximum starts at 0 (float32); true iff it is > 1.0.
     float best = 0.0f;
     for (uint32_t b = 0; b < 64; ++b) {
         const uint64_t bit = uint64_t{1} << b;
         if (!(target_categories & bit)) continue;
         for (size_t j = 0; j < contrast.size(); ++j) {
-            if (!(contrast.rows[j].enemy_mask & bit)) continue;
-            const float v = contrast.contrast(j, caller_type_name, caller_categories);
-            if (!any || v > best) best = v;
-            any = true;
+            if (contrast.rows[j].enemy_mask != bit) continue;
+            best = std::max(best, contrast.ai_weight(j, caller_type_name, caller_categories));
+            break;  // one map entry per key
         }
     }
-    return any && best > 1.0f;
+    return best > 1.0f;
 }
 
 }  // namespace alamo::ai::tactical

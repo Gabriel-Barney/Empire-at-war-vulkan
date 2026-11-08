@@ -60,6 +60,9 @@ struct EconomyConstants {
     // (d = 1 -> _0, d >= 5 -> _4; A2K_T01_BUILD_COST_RE 2.1).
     std::array<float, 5> base_vs_tech{1.0f, 0.90f, 0.75f, 0.55f, 0.45f};
     int32_t max_ground_forces_on_planet = 10;      // Max_Ground_Forces_On_Planet (+0x10c8)
+    // a2l t03 (A2L_T03_RE_ANSWERS Q4.1): Health_Low_Percent_Threshold (+0x11b38; FoC 0.33, Thrawn's Revenge 0.50), the
+    // galactic free-store Setup A health floor.
+    float health_low_percent_threshold = 0.33f;
     float corruption_hyperspace_bonus = 1.5f;      // Corruption_Hyperspace_Bonus (+0x1213c)
     float political_control_change_seconds = 7.0f; // Political_Control_Change_Time_Seconds (+0x124)
     float influence_alignment_bonus = 0.5f;        // MaxInfluenceTransitionAlignmentBonus (+0x574)

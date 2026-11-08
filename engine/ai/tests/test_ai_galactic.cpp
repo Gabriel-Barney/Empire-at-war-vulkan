@@ -39,6 +39,7 @@
 #include "alamo/galactic/fleet_path.hpp"
 #include "alamo/lua/lua_vm.hpp"
 #include "alamo/lua/players.hpp"
+#include "alamo/lua/script_remaining.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
 #include "alamo/objects/object_types.hpp"  // A2k t06: ObjectTypeDatabase (mod-category type table)
@@ -2013,6 +2014,38 @@ end
 function MainForce_Thread() ScriptExit() end
 function EscortForce_Thread() ScriptExit() end
 )";
+// a2l t03 (A2L_T03_RE_ANSWERS Q5): Get_Stage of a goal without a target is nil; plain Produce_Force() has no
+// destination, so nothing gathers (the hero stays where it is although the TF's stage is P2).
+static const char* kPlanA2lNoTarget = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Build_Space_Forces"
+  IgnoreTarget = true
+  TaskForce = { { "MainForce", "DenyHeroAttach", "Frigate = 1" } }
+end
+function MainForce_Thread()
+  MainForce.Set_As_Goal_System_Removable(false)
+  if MainForce.Get_Stage() then GlobalValue.Set("a2l_nt_stage", 1) else GlobalValue.Set("a2l_nt_stage", 0) end
+  BlockOnCommand(MainForce.Produce_Force())
+  GlobalValue.Set("a2l_nt_done", 1)
+  MainForce.Set_Plan_Result(true)
+  ScriptExit()
+end
+)";
+static const char* kPlanA2lPlainProduce = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "MainForce", "DenyHeroAttach", "HeroShip = 1" } }
+end
+function MainForce_Thread()
+  MainForce.Set_As_Goal_System_Removable(false)
+  if MainForce.Get_Stage() then GlobalValue.Set("a2l_t_stage", 1) else GlobalValue.Set("a2l_t_stage", 0) end
+  BlockOnCommand(MainForce.Produce_Force())
+  GlobalValue.Set("a2l_t_done", 1)
+  ScriptExit()
+end
+)";
 
 struct ParityWorld {
     MemoryFiles files;
@@ -2046,6 +2079,8 @@ struct ParityWorld {
         files.add("Data\\Scripts\\AI\\MaskCorvette.lua", kPlanMaskCorvette);
         files.add("Data\\Scripts\\AI\\EscortOnly.lua", kPlanEscortOnly);
         files.add("Data\\Scripts\\AI\\MainEscort.lua", kPlanMainEscort);
+        files.add("Data\\Scripts\\AI\\A2lNoTarget.lua", kPlanA2lNoTarget);
+        files.add("Data\\Scripts\\AI\\A2lPlainProduce.lua", kPlanA2lPlainProduce);
         plan_files = list_plan_files([this](std::string_view glob) {
             const std::string g(glob);
             return files.list(g.substr(0, g.find('*')));
@@ -2263,6 +2298,17 @@ static void test_stage_and_setup_a() {
         CHECK(pw.world->stage_area(0, 3, 4) == 3 && pw.world->stage_area(0, 3, 6) == kInvalidPlanet);
         CHECK(pw.world->stage_area(0, 3, 0) == kInvalidPlanet && pw.world->stage_area(0, 1, 0) == 1);  // held target: itself
         CHECK(pw.world->stage_area(1, 3, 5) == kInvalidPlanet);  // not an AI player of this world
+        // a2l t03 (A2L_T03_RE_ANSWERS Q2): goal-system slot 9 = the target's slot 6 at the goal level is null.
+        // Conquer_Planet (level 2) at P3: no held planet behind P2 / P4 -> blocked; Build_Space_Forces (Any) at P3: P1 ->
+        // not blocked; Upgrade_Starbase (Friendly_Only) at the held P1: itself -> not blocked, at P3: not held -> blocked.
+        CHECK(pw.world->goal_blocked(0, "Conquer_Planet", 3) && !pw.world->goal_blocked(0, "Build_Space_Forces", 3));
+        CHECK(!pw.world->goal_blocked(0, "Upgrade_Starbase", 1) && pw.world->goal_blocked(0, "Upgrade_Starbase", 3));
+        CHECK(!pw.world->goal_blocked(0, "Conquer_Planet", 2));  // P2's neighbour P1 is held
+        CHECK(!pw.world->goal_blocked(0, "Conquer_Planet", -1) && !pw.world->goal_blocked(0, "No_Such_Goal", 3));
+        for (PlanetIndex t = 0; t < 8; ++t) {  // slot 9 is exactly "slot 6 is null"
+            CHECK(pw.world->goal_blocked(0, "Conquer_Planet", static_cast<int32_t>(t)) == (pw.world->stage_area(0, t, 2) == kInvalidPlanet));
+            CHECK(pw.world->goal_blocked(0, "Upgrade_Starbase", static_cast<int32_t>(t)) == (pw.world->stage_area(0, t, 0) == kInvalidPlanet));
+        }
         const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
         CHECK(ok && pw.has(s, pw.hero));  // the hero's path P0 -> P3 has no node cost: eligible
     }
@@ -2271,6 +2317,7 @@ static void test_stage_and_setup_a() {
         ParityWorld pw(false, {"HeroDeny"}, [](gal::GalacticSetup& s) { s.forces.push_back({0, 2, tInfantry}); });
         pw.run(2);
         CHECK(pw.world->stage_list(0, 3, 2) == (std::vector<PlanetIndex>{2, 1, 0}) && pw.world->stage_area(0, 3, 2) == 2);
+        CHECK(!pw.world->goal_blocked(0, "Conquer_Planet", 3));  // a2l t03: P3's neighbour P2 is held now
         const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
         CHECK(ok && pw.has(s, pw.hero));
     }
@@ -2283,6 +2330,69 @@ static void test_stage_and_setup_a() {
         std::printf("setup A: enemy frigate on the hero's path -> %s, hero %s\n", ok ? "solved" : "failed", pw.has(s, pw.hero) ? "yes" : "no");
         CHECK(!pw.has(s, pw.hero));
     }
+    {
+        // a2l t03 (A2L_T03_RE_ANSWERS Q4.1): a unit below GameConstants Health_Low_Percent_Threshold is dropped. The
+        // synthetic hero is at full hull (1.0): a floor of 0.33 keeps it, a floor above 1.0 drops it.
+        ParityWorld keep(false, {"HeroDeny"});
+        CHECK(keep.rules.constants.health_low_percent_threshold == 0.33f);
+        ParityWorld drop(false, {"HeroDeny"}, {}, [](gal::GalacticRules& r) { r.constants.health_low_percent_threshold = 1.5f; });
+        keep.run(2);
+        drop.run(2);
+        CHECK(keep.has(keep.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok), keep.hero));
+        CHECK(!drop.has(drop.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok), drop.hero));
+    }
+    {
+        // a2l t03 (Q4.3): a unit in hyperspace stays a candidate, keyed by its fleet's planet (the hop's source).
+        ParityWorld pw(false, {"HeroDeny"});
+        pw.run(2);
+        objects::ObjectHandle h;
+        for (const gal::FleetState& f : pw.sim->fleets())
+            if (f.alive && f.owner == 0)
+                for (const objects::ObjectHandle u : f.contents)
+                    if (pw.store->alive(u) && pw.store->type(u) == pw.hero) h = u;
+        CHECK(static_cast<bool>(h) && pw.world->free_store_move(0, h, 1));
+        bool moving = false;
+        for (int32_t fr = 3; fr < 600 && !moving; ++fr) {
+            pw.sim->update();
+            pw.world->update_player(0, fr, true, false);
+            for (const gal::FleetState& f : pw.sim->fleets())
+                if (f.alive && f.moving && std::find(f.contents.begin(), f.contents.end(), h) != f.contents.end()) moving = true;
+        }
+        CHECK(moving);
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
+        std::printf("setup A: hero in hyperspace -> %s, hero %s\n", ok ? "solved" : "failed", pw.has(s, pw.hero) ? "yes" : "no");
+        CHECK(ok && pw.has(s, pw.hero));
+    }
+}
+
+// a2l t03 (A2L_T03_RE_ANSWERS Q5): the stage of a goal without a target is null (Get_Stage nil), and Produce_Force()
+// without an argument has no destination even when the TF has a stage, so nothing gathers.
+static void test_null_stage_and_plain_produce() {
+    ParityWorld pw(false, {"A2lNoTarget", "A2lPlainProduce"}, own_p2);  // P2 held: Conquer_Planet @P3 stages at P2
+    lua::GlobalValueStore gv;
+    pw.world->set_global_values(&gv);
+    auto num = [&gv](const char* n) { const lua::AiGlobalValue v = gv.get(n); return v.kind == lua::AiGlobalValue::Number ? v.number : -1.0; };
+    auto hero_planet = [&pw]() -> int64_t {
+        for (const gal::FleetState& f : pw.sim->fleets())
+            if (f.alive)
+                for (const objects::ObjectHandle u : f.contents)
+                    if (pw.store->alive(u) && pw.store->type(u) == pw.hero) return f.moving ? -2 : static_cast<int64_t>(f.planet);
+        return -1;
+    };
+    int32_t frames = 0;
+    bool hero_moved = false;
+    for (int32_t f = 1; f <= 30 * 300 && (num("a2l_nt_done") < 0.0 || num("a2l_t_done") < 0.0 || frames < 30 * 20); ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+        if (num("a2l_t_done") >= 0.0) ++frames;  // keep running a while after the plain Produce_Force finished
+        hero_moved = hero_moved || hero_planet() != 0;
+    }
+    std::printf("null stage: no-target stage %.0f done %.0f; targeted stage %.0f done %.0f; hero moved %s\n", num("a2l_nt_stage"),
+                num("a2l_nt_done"), num("a2l_t_stage"), num("a2l_t_done"), hero_moved ? "yes" : "no");
+    CHECK(num("a2l_nt_stage") == 0.0 && num("a2l_nt_done") == 1.0);  // nil stage; Produce_Force() finishes in place
+    CHECK(num("a2l_t_stage") == 1.0 && num("a2l_t_done") == 1.0);    // a targeted TF has a stage ...
+    CHECK(!hero_moved);                                                // ... but plain Produce_Force() does not gather
+    pw.world->set_global_values(nullptr);
 }
 
 // OI2 ai: production-disabled types (story DISABLE_BUILDABLE, REMAINING_GAPS §1.5) are never picked by AI production -
@@ -3868,6 +3978,26 @@ static void test_free_store_path_rules() {
     CHECK(free_store_path_sum(std::vector<uint32_t>{0u, 0u}, 2) == 0 && free_store_path_passes(0));  // src == dst
     std::vector<uint32_t> long_path(1500, 1u);
     CHECK(free_store_path_sum(long_path, 1500) == 1000);  // at most 1000 hops summed
+    // a2l t03: Reachable_Target's slot 7 (0x663810, A2L_T03_RE_ANSWERS Q1.2) per level.
+    {
+        const std::vector<uint32_t> free2{gal::pack_edge_weight(0u, 7u), 0u};  // A -> B, no node cost, hop 7
+        const std::vector<uint32_t> cost2{gal::pack_edge_weight(1u, 7u), 0u};  // node cost 1 on the destination
+        const std::vector<uint32_t> cost3{gal::pack_edge_weight(0u, 5u), gal::pack_edge_weight(1u, 7u), 0u};
+        for (const int lv : {0, 2, 3, 6}) {
+            CHECK(ai_reach_path_cost(free2, 2, lv) == 0.7);
+            CHECK(ai_reach_path_cost(cost2, 2, lv) == kReachNone && ai_reach_path_cost(cost3, 3, lv) == kReachNone);
+            CHECK(ai_reach_path_cost({}, 0, lv) == kReachNone);  // no path
+        }
+        // Level 4 does not count the final hop: the destination's node cost is ignored.
+        CHECK(ai_reach_path_cost(cost2, 2, 4) == 0.0 && ai_reach_path_cost(cost3, 3, 4) == 0.5);
+        const std::vector<uint32_t> cost3b{gal::pack_edge_weight(1u, 5u), gal::pack_edge_weight(0u, 7u), 0u};
+        CHECK(ai_reach_path_cost(cost3b, 3, 4) == kReachNone && ai_reach_path_cost({}, 0, 4) == kReachNone);
+        // Levels 1, 5, 10 (and the unloaded 7 to 9) accept every path, an empty one included.
+        for (const int lv : {1, 5, 7, 8, 9, 10}) {
+            CHECK(ai_reach_path_cost(cost2, 2, lv) == 0.7 && ai_reach_path_cost(cost3, 3, lv) == 1.2);
+            CHECK(ai_reach_path_cost({}, 0, lv) < kReachNone);
+        }
+    }
     // 0x3f9270.
     const OrbitFleet tr{1, true}, other{2, false}, mine{0, false};
     CHECK(orbit_owner(true, 5, std::vector<OrbitFleet>{mine}) == 5);
@@ -4035,11 +4165,37 @@ static void test_free_store_world() {
     const uint64_t d0 = pw.rng->synced().draws();
     CHECK(world.reachable_target(0, "One", "Friendly", "Friendly_Only", 1.0) == 0);  // ties keep the first, no draw
     CHECK(pw.rng->synced().draws() == d0);
-    CHECK(world.reachable_target(0, "One", "Neutral", "Friendly_Only", 0.1) == -1);  // unowned: not reachable
-    CHECK(world.reachable_target(0, "One", "Neutral", "Enemy_Destination", 0.1) == 2);
-    CHECK(pw.rng->synced().draws() == d0);  // one candidate: no draw
     const int32_t pick = world.reachable_target(0, "One", "Friendly", "Friendly_Only", 0.1);
     CHECK((pick == 0 || pick == 1) && pw.rng->synced().draws() == d0 + 1);  // two candidates, p < 1: one draw
+    // a2l t03 (A2L_T03_RE_ANSWERS Q1): without argument 6 there is no reachability test (the player-level flood above is
+    // not read), so an unowned planet is a Friendly_Only candidate; with a source the candidate's slot 7 from the
+    // source's planet decides: P3 (the neutral frigate's node cost) and P7 (the starbase) fail the zero-cost path test
+    // from P0 at Friendly_Only, and pass at Any (threshold 1e18).
+    CHECK(world.reachable_target(0, "One", "Neutral", "Friendly_Only", 1.0) == 2);
+    CHECK(world.reachable_target(0, "One", "Enemy", "Friendly_Only", 1.0) == 6);
+    auto slot7 = [&](PlanetIndex from, PlanetIndex to, int level) {
+        if (from == to) return 0.0;
+        std::vector<PlanetIndex> path;
+        std::vector<uint32_t> wts;
+        world.path_finder(0)->get_path(from, to, path, &wts);
+        return ai_reach_path_cost(wts, path.size(), level);
+    };
+    CHECK(slot7(0, 3, 0) == kReachNone && slot7(0, 7, 0) == kReachNone && slot7(0, 1, 0) < kReachNone);
+    auto first_pass = [&](std::initializer_list<PlanetIndex> cands, PlanetIndex from, int level) -> int32_t {
+        for (const PlanetIndex c : cands)
+            if (slot7(from, c, level) < kReachNone) return static_cast<int32_t>(c);
+        return -1;
+    };
+    CHECK(world.reachable_target(0, "One", "Neutral", "Friendly_Only", 1.0, 0) == first_pass({2, 3, 4, 5}, 0, 0));
+    CHECK(world.reachable_target(0, "One", "Neutral", "Friendly_Only", 1.0, 0) != 3);
+    CHECK(world.reachable_target(0, "One", "Enemy", "Friendly_Only", 1.0, 0) == first_pass({6, 7}, 0, 0));
+    CHECK(world.reachable_target(0, "One", "Enemy", "Friendly_Only", 1.0, 0) != 7);
+    CHECK(world.reachable_target(0, "One", "Enemy", "Any", 1.0, 0) == 6);
+    CHECK(world.reachable_target(0, "One", "Friendly", "Friendly_Only", 1.0, 1) == 0);  // P1 -> P0 is free; P1 itself is 0
+    CHECK(world.reachable_target(0, "One", "Friendly", "Friendly_Only", 1.0, 99) == -1);  // no source planet: 1e18 for all
+    // Argument 7: the 3-D distance from the source planet, after Evaluate.
+    CHECK(world.reachable_target(0, "One", "Friendly", "Any", 1.0, 1, 1.0) == 1);
+    CHECK(pw.rng->synced().draws() == d0 + 1);
 }
 
 // cu8f t04b (CU8F_T04_T06_RE §2.2 step 4): the free-store auto-land of an AI ground unit sitting in an orbiting fleet runs
@@ -5405,7 +5561,8 @@ static void test_foc_data() {
         CHECK(world.reach_planets(pi, 5).size() >= r0.size());
         for (const char* fn : {"Space_Priority_Defense_Score", "Low_Space_Defense_Score", "Ground_Priority_Defense_Score", "One"}) {
             const int32_t t = world.reachable_target(pi, fn, "Friendly", "Friendly_Only", 0.1);
-            CHECK(t == -1 || std::find(r0.begin(), r0.end(), static_cast<PlanetIndex>(t)) != r0.end());
+            // a2l t03: no argument 6, so no reachability test; the Friendly application alone keeps it held.
+            CHECK(t == -1 || gal::PlayerView::bit(view.held_by_ally, static_cast<PlanetIndex>(t), false));
         }
         uint32_t pairs = 0, pass = 0, blocked = 0;
         std::vector<PlanetIndex> path;
@@ -5601,6 +5758,7 @@ int main(int argc, char** argv) {
     test_parity_rules();
     test_free_store_supply();
     test_stage_and_setup_a();
+    test_null_stage_and_plain_produce();
     test_production_disabled_and_delivery();
     test_ground_structure_slots();
     test_budget_fraction_before_init();

@@ -1,6 +1,7 @@
 // alamo_headless --skirmish-ai (A1 stage 2): see skirmish_run.hpp.
 #include "skirmish_run.hpp"
 #include "crc_out.hpp"
+#include "tactical_trace.hpp"  // q4hf t02: --trace-out
 
 #include <algorithm>
 #include <chrono>
@@ -434,9 +435,13 @@ bool foc_load(Session& s, const MapRunOptions& opt, std::vector<std::string>& di
 // BM1 t02: --skirmish-ai foc-fleet / --save-session skirmish --campaign foc-fleet, the foc space battle with both fleets this many
 // times over (the benchmark's large space battle, tests/benchmark/space_battle.abench).
 constexpr int kFleetScale = 4;
+// BM3 t02: --save-session skirmish --campaign foc-land-army, the foc-land skirmish with both sides' company lists this many times over
+// (the benchmark's large land battle, tests/benchmark/land_battle.abench).
+constexpr int kArmyScale = 6;
 
 // land: a land battle; land_skirmish (t50): that battle is a skirmish (an _MP_LAND_ map, MP_Default_Credits), else the campaign invasion.
-// fleet_scale (BM1 t02, kind foc-fleet): the space fleets of both sides repeated that many times (the benchmark's large space battle).
+// fleet_scale (BM1 t02, kind foc-fleet; BM3 t02, kind foc-land-army for the land lists): the starting forces of both sides repeated that many
+// times (the benchmark's large space and land battles).
 bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>& diag, bool& skipped, bool land, bool station = false,
                  bool land_skirmish = false, int fleet_scale = 1) {
     if (!foc_load(s, opt, diag, skipped)) return false;
@@ -445,10 +450,12 @@ bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>&
     if (land) {  // battle host: --skirmish-ai foc-land - Empire companies hold the planet, Rebel companies invade
         s.land = true;
         s.skirmish = land_skirmish;
-        for (const char* n : {"Imperial_Stormtrooper_Squad", "Imperial_Armor_Group", "Imperial_Heavy_Assault_Company", "Imperial_Anti_Infantry_Brigade"})
-            if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) emp.push_back(ty);
-        for (const char* n : {"Rebel_Infantry_Squad", "Rebel_Light_Tank_Brigade", "Rebel_Heavy_Tank_Brigade", "Rebel_Infantry_Squad"})
-            if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) reb.push_back(ty);
+        for (int i = 0; i < fleet_scale; ++i) {
+            for (const char* n : {"Imperial_Stormtrooper_Squad", "Imperial_Armor_Group", "Imperial_Heavy_Assault_Company", "Imperial_Anti_Infantry_Brigade"})
+                if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) emp.push_back(ty);
+            for (const char* n : {"Rebel_Infantry_Squad", "Rebel_Light_Tank_Brigade", "Rebel_Heavy_Tank_Brigade", "Rebel_Infantry_Squad"})
+                if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) reb.push_back(ty);
+        }
     } else if (station) {  // t41: --skirmish-ai foc-station - a Level 2 station and one escort hold against a far larger fleet
         s.skirmish = false;
         for (const char* n : {"Empire_Star_Base_2", "Tartan_Patrol_Cruiser"})
@@ -756,7 +763,7 @@ void add_galactic_context([[maybe_unused]] const Session& s, [[maybe_unused]] co
 
 }  // namespace
 
-int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std::string& ai_log) {
+int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std::string& ai_log, const std::string& trace_out) {
     Session s;
     std::vector<std::string> diag;
     bool skipped = false;
@@ -819,12 +826,32 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     };
     constexpr uint32_t kBattleFrames = 30 * 480;  // [port] the 15-min battle limit (S10)
     std::string log_text;
-    auto run_one = [&](int32_t workers, Out& out) -> bool {
+    auto run_one = [&](int32_t workers, Out& out, bool write_trace = false) -> bool {
         jobs::JobSystem js(jobs::JobSystemConfig{workers});
         sim::SimConfig cfg;
         cfg.seed = opt.seed;
         cfg.players = 4;
         cfg.object_scripts = opt.object_scripts;  // q6
+        // q4hf t02: the tactical state trace reads the battle after each tick (never writes it); the first run only.
+        PortTacticalTrace trace;
+        if (write_trace && !trace_out.empty()) {
+            std::string sides;
+            for (size_t p = 0; p < 2 && p < s.setup.players.size(); ++p) {
+                const galactic::PlayerSetup& ps = s.setup.players[p];
+                const std::string f = ps.faction < s.rules.factions.size() ? s.rules.factions[ps.faction].name : std::string("?");
+                sides += (p ? " vs " : "") + (ps.human ? "human " + f + " idle" : "AI " + f);
+            }
+            const std::vector<std::pair<std::string, std::string>> meta = {
+                {"reader", "alamo_headless"}, {"scenario", "skirmish"}, {"game", "foc"},
+                {"skirmish", std::string(s.land ? "land" : "space") + " 2 players, " + sides}, {"map", foc ? s.map : std::string("synthetic")},
+                {"label", "alamo_headless --skirmish-ai " + kind}, {"mode_type", s.land ? "1" : "2"},
+                {"target_ticks", std::to_string(max_ticks)}};
+            std::string terr;
+            if (!trace.open(trace_out, meta, cfg.seed, terr)) {
+                std::fprintf(stderr, "skirmish-ai: %s\n", terr.c_str());
+                return false;
+            }
+        }
         sim::SimHost host(s.types, js, cfg);
         if (opt.object_scripts) {  // q6: game-object scripts, and the GameScoring script that sets the mod's GlobalValues
             host.set_object_script_files(s.files.get());
@@ -839,6 +866,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         bo.battle.max_frames = s.map_host ? 0 : kBattleFrames;  // skai: a skirmish has no time limit (it ends at --ticks)
         bo.battle.skirmish = s.skirmish;
         bo.battle.skirmish_map = s.map_host;        // skai: team markers, income, skirmish victory
+        bo.battle.control_point_domination = s.map_host && s.land && opt.control_points;  // ccpgt t02
         bo.battle.skip_human_units = s.human >= 0;  // skai: the idle human gets no stand-in orders
         bo.tactical_ai = s.ai;
         sim::load_tactical_systems(*s.files, s.rules, &s.db.constants(), bo);  // Int-final: weather, retreat, strikes data
@@ -945,11 +973,29 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
                     }
                 }
                 if (opt.object_scripts && (bs.frames == 1 || bs.frames % 600 == 0)) script_state = battle_state_text(t + 1, host, *gs, *tb);
+                if (trace.is_open())  // q4hf t02
+                    if (const sim::TacticalMode* tmode = host.tactical()) {
+                        const sim::GameMode* top = host.modes().top();
+                        PortTacticalTrace::Sample ts;
+                        ts.global_frame = host.frame();
+                        ts.mode_type = top ? static_cast<uint32_t>(top->kind()) : 2u;
+                        ts.rng_state = host.random().synced().state();
+                        ts.stack_depth = static_cast<uint32_t>(host.modes().depth());
+                        trace.sample(*tmode, *tb, *gs, ts);
+                    }
             }
             if (battles.battles_fought() > 0 && !battles.battle() && host.modes().depth() == 1) {
                 ++t;
                 break;
             }
+        }
+        if (trace.is_open()) {
+            std::string terr;
+            if (!trace.finish(t < max_ticks ? "mode_changed" : "ticks_reached", terr)) {
+                std::fprintf(stderr, "skirmish-ai: %s\n", terr.c_str());
+                return false;
+            }
+            std::printf("wrote %s\n", trace_out.c_str());
         }
         out.crc = host.crc_log();
         out.ticks = t;
@@ -1022,7 +1068,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     };
     Out first;
     const auto counts = jobs::determinism_worker_counts();
-    if (!run_one(opt.check_workers ? counts.front() : opt.workers, first)) {
+    if (!run_one(opt.check_workers ? counts.front() : opt.workers, first, true)) {
         std::fprintf(stderr, "skirmish-ai: run failed\n");
         return 1;
     }
@@ -1105,17 +1151,18 @@ std::shared_ptr<SkirmishSaveData> skirmish_save_load(const std::string& kind, co
     Session& s = d->s;
     std::vector<std::string> diag;
     skipped = false;
-    const bool foc = kind == "foc" || kind == "foc-land" || kind == "foc-land-campaign" || kind == "foc-fleet";
+    const bool army = kind == "foc-land-army";  // BM3 t02: foc-land with the company lists repeated kArmyScale times
+    const bool foc = kind == "foc" || kind == "foc-land" || kind == "foc-land-campaign" || kind == "foc-fleet" || army;
     if (!foc && kind != "synthetic") {
-        err = "unknown skirmish '" + kind + "' (synthetic | foc | foc-fleet | foc-land | foc-land-campaign)";
+        err = "unknown skirmish '" + kind + "' (synthetic | foc | foc-fleet | foc-land | foc-land-army | foc-land-campaign)";
         return nullptr;
     }
     MapRunOptions mo;
     mo.game_dir = game_dir;
     mo.game_args = game_args;
     mo.map = map;
-    const bool ok = foc ? foc_session(s, mo, diag, skipped, kind == "foc-land" || kind == "foc-land-campaign", false, kind == "foc-land",
-                                      kind == "foc-fleet" ? kFleetScale : 1)
+    const bool ok = foc ? foc_session(s, mo, diag, skipped, kind == "foc-land" || kind == "foc-land-campaign" || army, false,
+                                      kind == "foc-land" || army, kind == "foc-fleet" ? kFleetScale : army ? kArmyScale : 1)
                         : synthetic_session(s, diag);
     if (skipped) {
         err = "ALAMO_FOC_DATA / --game not set";
@@ -1230,7 +1277,7 @@ bool skirmish_save_start(const SkirmishSaveData& d, sim::SimHost& host, bool ani
 }
 // --- end N1 stage 2 ---
 #else
-int skirmish_ai_run(const MapRunOptions&, const std::string&, const std::string&) {
+int skirmish_ai_run(const MapRunOptions&, const std::string&, const std::string&, const std::string&) {
     std::fprintf(stderr, "--skirmish-ai: this build has no tactical AI (engine/ai/tactical + engine/lua)\n");
     return 2;
 }

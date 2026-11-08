@@ -2801,3 +2801,38 @@ pusher's path test rejects; the next rings are 1, 2.8, 5.4, 8.8, ... units out u
    `kReplanAfterBlocked` frames ends where it is; a new move, stop or teleport of b ends it. While pushed, b takes no
    part in StoppedVsStopped collisions (its locomotor moves). Saved (movement save version bump); hashed only while a
    push is active.
+
+## 41. foc-land seed 1: an 18600-frame `Clear_Infantry` fight is a terrain-blocked standoff (a2l t04) [port observation]
+
+**Question.** a2k t14 found that in `--skirmish-ai foc-land --seed 1` (dev 9ab7d8bb) the Rebel's first `Clear_Infantry`
+task force (5 Rebel_Trooper_Team) blocked on `Attack_Move(Empire squad 811)` from frame 4674 to 23280. Combat rate or
+attack-move behaviour?
+
+**Trace (port, 9ab7d8bb, headless trace of positions, targets, shots, ground / object hits; not committed).**
+- Neither side moves from about frame 5000: the Empire's 8-10 `Squad_Stormtrooper` (teams 811 / 812, held by their own
+  `Clear_Infantry`) stand on a ledge at z 9.3 around (1720-1780, 4580-4660); the Rebel troopers stand below a cliff at
+  z −43.3 around (1780-1860, 4480-4720), 100-140 apart (XY), all in weapon range (140 / 150).
+- Both sides keep firing at their locked targets (about one shot per 33 frames each, `Projectile_Fire_Recharge_Seconds`
+  1.0), but most shots detonate on the terrain: the ledge troopers' shots hit the ledge top 20-30 units in front of
+  them, the Rebels' shots hit the cliff face (z −9..−4). Only troopers standing at the edge hit. Shots by XY distance,
+  frames 4674-23280: < 80 units 97 % hit; 100-159 units 211 hits in 4470 shots (4.7 %); frames 10500-20000, 100-119
+  units: 22 hits in 2407 shots.
+- Per hit 0.8-1.4 damage (blaster 2.0 / 3.0 × `Damage_Blaster_Hand`-vs-`Armor_Infantry` 1.3 × the 0.5 cover factor and
+  difficulty multipliers) against 40 / 48 health: not the limiting factor. No healing, no reinforcement: squad 811's
+  members only die (10 → 8 by frame 10500, then flat until 21000, when other Rebel units reached the ledge).
+- The block ends only by the target's death (§33.2: an object Attack_Move stays open after arrival while the target is
+  a valid, hostile, unfogged object), so the plan holds its units for the whole standoff.
+
+**Verdict: not a port bug.** The ground test of straight laser shots is retail behaviour (§37.4 [H]) and retail has no
+line-of-fire test before firing (TACTICAL_COMBAT §2.7 [M]), so a unit keeps shooting into a ridge. What is not proven
+is where the original's formation stops: the port's object attack-move moves the formation to the object's position
+and its 2D slots fall below the ledge; TACTICAL_COMBAT §2.8 "Stopping is not traced here [L]". Probe or RE item if
+this matters: does a land object Attack_Move formation in the original end at slots below a ledge (Utapau, Rebel base
+cliff) or climb to the target?
+
+**Later dev.** On 03940b96 (after cu8f / cu8g / cu8i rng-stream changes) seed 1 no longer reaches this standoff: the
+Rebel's first Secure_Contestable succeeds (refinery at frame 1509) and the battle ends at frame 18496 (Rebel win). Other
+seeds on 03940b96 (`--ticks 30000 --workers 4 --expect-battle-end`): 3 ends at 17827, 4 at 28675 (16678 when the test
+was pinned to it), 5 at 20486; seed 2 does not end, for another reason: from about frame 20000 the Rebel sits at 40000
+credits with its units in LANDSCOUT / SECUREBUILDPAD / CLEARVEHICLES plans and never attacks the Empire base (shots at
+100-119 units hit 96 %; no standoff). The test `alamo_headless_skirmish_ai_foc_land_end` stays pinned to `--seed 4`.

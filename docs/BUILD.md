@@ -67,6 +67,9 @@ Q4 parity baseline (q4h, 2026-11-07): `parity_harness_hotm_galactic` / `parity_h
 reference runs, else skipped with exit 77) grade the tree's `alamo_headless` against the original game by behaviour and fail only
 when a metric that passed in `tools/parity/baseline.json` fails now. An intended behaviour change that moves one: re-record the
 baseline (`tools\parity\README.md`) and say so in the commit, as for goldens; `parity_harness_selftest` is in the fast tier.
+
+BM3 (2026-11-06): `alamo_headless_bench_galactic_late*` and `alamo_headless_bench_land_battle*` are the same check on the two new headless scenes (slow); `alamo_game_bench_scene_<name>` runs each rendered scene for 120 hidden ticks (slow, FoC data, `engine/apps/game/bench_scene_check.cmake`); `alamo_bench_compare_tool` is the result comparison tool's self-test (no data). `tools\regen_goldens.cmd` checks and remakes `host game` scenarios too (`alamo_game --hidden --bench-scenario ... --bench-ticks 120`, remade with `alamo_game --hidden --bench-regen`; the tree needs `alamo_game.exe`). docs/PHASE4.md "BM3".
+bm2c t02 (2026-11-08): `alamo_headless_bench_space_battle_game*` is the same check on the game-made space scene, timed sim-only by `alamo_headless --bench` through `alamo_game_core` (slow); `alamo_headless_bench_game_<scene>` runs each rendered scene once sim-only (`engine/apps/headless/check_bench_game.cmake`). docs/PHASE4.md "BM2c".
 Not converted: `alamo_headless_skirmish_ai_synthetic` and the in-process loops in `engine/apps/sim/tests` stay as they are (short).
 
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)

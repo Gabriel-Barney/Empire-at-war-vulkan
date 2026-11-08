@@ -69,15 +69,18 @@ void GalacticAiWorld::Impl::create_build_tasks(TaskForceRec& tf) {
         const PlanetIndex stage = tf.stage >= 0 ? static_cast<PlanetIndex>(tf.stage) : kInvalidPlanet;
         const PlanetIndex source = i < tf.wanted_source.size() ? tf.wanted_source[i] : kInvalidPlanet;
         b.dest = valid_planet(stage) ? stage : source;
-        auto charge = [&] {
-            if (!pa || b.charged) return;
-            b.charge = cost_none(type);
-            pa->ctx.budget.spend(b.category, b.goal_key, b.charge);  // Allocate 0x691950 -> 0x6110e0
-            b.charged = true;
-        };
         builds.emplace(b.id, b);
         BuildTask& t = builds[b.id];
         tf.builds.push_back(t.id);
+        // [open] The charge is not kept on the task (t.charge stays 0), so PRODUCTION_END's paid(s += charge, 0x5f9f90
+        // [M]) adds nothing, as before a2l (the lambda wrote a local copy). Keeping it moved hotm_galactic's Rebel build
+        // count 36 -> 19 (retail 32..50); it waits for an RE read of +s.
+        auto charge = [&] {
+            if (t.charged) return;
+            const float ch = cost_none(type);
+            if (pa) pa->ctx.budget.spend(t.category, t.goal_key, ch);  // Allocate 0x691950 -> 0x6110e0
+            t.charged = true;  // also the market's "to be produced" marker (+0x7C)
+        };
         if (def.magic_plan) {
             // BUILD_TASK_LIST -> HIJACK_UNIT 0x648370 (AI_GALACTIC_3 §4.2-4.3) [H]. No charge: the Allocate needs the
             // AIPlanetBuildTask pointer, which magic tasks never get [M]. GalacticSim::magic_spawn (A2 galactic hook):
@@ -117,16 +120,13 @@ void GalacticAiWorld::Impl::create_build_tasks(TaskForceRec& tf) {
                 t.bid = -1.0;
             }
         } else if (def.allow_free_store_units) {
-            // The free store can supply the unit (0x4d2bd0) -> no charge [M: the unit joins the task force now].
-            const ObjectHandle take = free_store_supply(tf.player, type);
-            if (take) {
-                off_free_store(take);
-                tf.units.push_back(take);
-                tf.had_units = true;
-                finish_build(t);
-                continue;
-            }
-            charge();
+            // BUILD_TASK_LIST -> 0x4d2bd0 (A2L_T01_RE_ANSWERS Q7.4) [H]: the task claims every free-store entry of its
+            // type (reservations not read) and waits on the pending list uncharged and out of the market (+0x7C = 0);
+            // the free-store service decides the claims (service_build_tasks). No matching entry: charged at once.
+            // The port marks a claim as "Queued and not charged" (no other produced task is uncharged).
+            bool claimed = false;
+            for (const ObjectHandle u : free_units(tf.player)) claimed = claimed || store.type(u) == type;
+            if (!claimed) charge();
         } else {
             charge();
         }
@@ -139,9 +139,43 @@ void GalacticAiWorld::Impl::create_build_tasks(TaskForceRec& tf) {
     tf.wanted_source.clear();
 }
 
+// Free-store service 0x4d5a70 for a claiming task (A2L_T01_RE_ANSWERS Q7.4) [H]: vf+0xb0 = 0x690240 per claimed entry:
+// 2 (lapse) unless the entry's reservation +0x30 is the task's own PotentialPlan, else 0 (hand over) when the unit sits
+// at a planet and is not in transit, else 1 (wait). A handed-over unit joins the task force uncharged; when every claim
+// lapsed the task is charged (0x649070 -> 0x64ab50) and bids in the market. [port] the decision runs at the task's own
+// 3-frame poll, not the store's global 3-frame phase; claims raised by later admissions (0x4d2c90) are not modelled.
+// Returns true when the task left the Queued state (handed a unit).
+bool GalacticAiWorld::Impl::resolve_claim(BuildTask& b) {
+    const auto pit = plans.find(b.plan);
+    const int32_t pp = pit != plans.end() ? pit->second.pp : -1;
+    bool wait = false;
+    for (const ObjectHandle u : free_units(b.player)) {
+        if (store.type(u) != b.type) continue;
+        const auto r = unit_reserved.find(store.id(u));
+        if (pp < 0 || r == unit_reserved.end() || r->second != pp) continue;  // 2: the claim lapses
+        if (planet_of_unit(u) == kInvalidPlanet) {  // 1: in transit (0x68efb0)
+            wait = true;
+            continue;
+        }
+        const auto tit = tfs.find(b.tf);  // 0: 0x647df0 gives the unit to the task
+        off_free_store(u);
+        if (tit != tfs.end()) {
+            tit->second.units.push_back(u);
+            tit->second.had_units = true;
+        }
+        finish_build(b);
+        return true;
+    }
+    if (wait) return false;
+    // every claim lapsed: charged once (Allocate 0x691950 -> 0x6110e0); b.charge stays 0 (see create_build_tasks)
+    if (PlayerAi* pa = player_ai(b.player)) pa->ctx.budget.spend(b.category, b.goal_key, cost_none(b.type));
+    b.charged = true;
+    return false;
+}
+
 // 0x4d2bd0 (a1h t07): the first free-store unit of `type` at a planet. It does not read the entry's +0x30 owner
-// (A1_READINGS §28.5), so a unit another PotentialPlan reserved can be taken; that plan's validity test (0x6c45e0)
-// then fails at the next Commit.
+// (A1_READINGS §28.5): the claim covers reserved units too. Since a2l (A2L_T01_RE_ANSWERS Q7.4) the build task no
+// longer takes this unit; the free-store service hands over only a unit its own PotentialPlan reserved (resolve_claim).
 ObjectHandle GalacticAiWorld::Impl::free_store_supply(int32_t player, uint32_t type) const {
     for (const ObjectHandle u : free_units(player))
         if (store.type(u) == type && planet_of_unit(u) != kInvalidPlanet) return u;
@@ -375,18 +409,18 @@ void GalacticAiWorld::Impl::market_planet(PlanetIndex p) {
             //    the port also filters owner and state (a task of another player never names this owner's queue).
             for (const int32_t id : pending_builds) {
                 BuildTask& b = builds[id];
-                if (b.bid_planet != p || b.queue != qi || b.player != owner || b.state != BuildState::Queued) continue;
+                if (b.bid_planet != p || b.queue != qi || b.player != owner || b.state != BuildState::Queued || !b.charged) continue;
                 Q.tasks.push_back(id);
                 queue_time += queue_term(b, funds_time(b));
                 remove_pending(id);
                 break;
             }
             // 4. bid on every pending task of this owner and queue index with bid >= 0 and the AIBuildTask "to be
-            //    produced" flag (+0x7C; the port's pending tasks always have it: free-store supplies finish at once).
+            //    produced" flag (+0x7C; cleared while a free-store claim is pending: a Queued task not yet charged).
             //    Every refusal clears the task's choice when that choice is this planet (S3) [H].
             for (const int32_t id : pending_builds) {
                 BuildTask& b = builds[id];
-                if (b.queue != qi || b.player != owner || b.bid < 0.0 || b.state != BuildState::Queued) continue;
+                if (b.queue != qi || b.player != owner || b.bid < 0.0 || b.state != BuildState::Queued || !b.charged) continue;
                 const auto refuse = [&b, p] {
                     if (b.bid_planet == p) {
                         b.bid_planet = kInvalidPlanet;
@@ -503,6 +537,7 @@ void GalacticAiWorld::Impl::service_build_tasks(int32_t player) {
         if (b.state == BuildState::Queued) {
             if (now < b.next_poll) continue;
             b.next_poll = now + kPollFrames;
+            if (!b.charged && !b.bound && resolve_claim(b)) continue;
             // 0x2ac320 = the galactic population legality (AI_GALACTIC_3 §3.5) [H]: pop(T, 0) > max(capacity - used, 0)
             // fails the task; it applies to an AI only with AI_Uses_Galactic_Pop_Cap (never in shipped data), so a
             // task the market cannot place (e.g. a hero without a galactic cost) waits, like the original (no time-out).

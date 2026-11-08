@@ -161,6 +161,20 @@ void test_auto_resolve_basic() {
 void test_auto_resolve_rules() {
     const ContrastTable ct = make_contrast();
     AutoResolveConstants k;
+    {  // a2l t03 (A2L_T03_RE_ANSWERS Q6.3): the exchange of fire weighs with 0x5f1f90 (ai_weight), not the first match.
+        // A Fighter | Capital piece against the Fighter row: Fighter 1.0 matches first, Capital 0.5 is the only weight
+        // != 1.0 -> c = 0.5 (first match: 1.0). pc = 500 against R = 1000: a = 500 of the Fighter entry.
+        AutoResolveInput in;
+        in.space = true;
+        in.attacker = 0;
+        in.combatants = {unit(0, 1000.0f, kCatFighter | kCatCapital), unit(1, 1000.0f, kCatFighter)};
+        in.players = {{0, true, true}, {1, true, true}};
+        SimRng rng(5u);
+        const AutoResolveResult r = auto_resolve(in, ct, k, rng);
+        CHECK(ct.ai_weight(0, "Ship", kCatFighter | kCatCapital) == 0.5f && ct.contrast(0, "Ship", kCatFighter | kCatCapital) == 1.0f);
+        CHECK(r.valid && r.side_player[0] == 0 && r.vec[1][2] == 1000.0);
+        CHECK(r.rem[1][2] == 500.0 && r.rem[1][1] == 500.0);
+    }
     {  // degenerate space case: no power at all -> more combatants wins, the loser retreats, nothing dies
         AutoResolveInput in;
         in.space = true;

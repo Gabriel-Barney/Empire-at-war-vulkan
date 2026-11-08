@@ -59,20 +59,22 @@ does not read them.
 
 Both sides are reduced to the same metric ids. Galactic: the retail trace and production queues on one side, the port's
 `--trace-out` state trace (q2f t05) and its AI log on the other. Skirmish: the retail trace on one side, the skirmish host's
-AI log (state blocks every 600 battle frames: credits, units by type, pad contents) on the other.
+AI log (state blocks every 600 battle frames: credits, units by type, pad contents) and, for `combat.*`, its tactical
+`--trace-out` trace (q4hf t02, `engine/apps/headless/tactical_trace.hpp`: the same Q2TRACE 1 format, per-object owner / type /
+combat hull every tick, reduced by the same reader as the retail trace) on the other.
 
 | category | metric | galactic | skirmish |
 |---|---|---|---|
-| timing | `travel.hop_ticks[Faction:FROM->TO]` | every hop's duration, from fleet positions (same rule both sides) | - |
+| timing | `travel.hop_ticks[Faction:FROM->TO]` | every leg's duration, from fleet positions (same rule both sides, q4hf t04): a fleet stops when its position holds for 3 samples (one repeated retail sample mid-flight is not a stop); a trip that passes a planet's centre is split there; a leg runs from the last sample at its start planet (retail: the centre sample after the orbit slot; port: the last parked sample) to the first sample at its end planet | - |
 | timing | `build.ticks[TYPE@PLANET]` | shortest completed build: retail queue start to leaving the queue (uninterrupted items only), port build order to the new object | - |
 | timing | `econ.cycle_tick[k]` | fiscal cycle k | - |
 | income | `econ.income_cycle1[F]`, `econ.income_mean[F]` | payment on the first cycle frame, mean payment | - |
 | income | `econ.credits_at_T[F]` | balance at ticks 4500 / 9000 / 13500 | balance at frames 1800 / 3600 / 5400 |
 | AI choices | `ai.build_count[F]`, `ai.build_mix[F]`, `ai.first_build_tick[F]` | queued items (retail queue starts, port build orders incl. starbases) | units and structures gained between snapshots (`ai.first_build_frame`) |
-| AI choices | `ai.fleet_departures[F]`, `ai.fleet_targets[F]`, `ai.first_departure_tick[F]` | fleet hops by faction and target planet | - |
+| AI choices | `ai.fleet_departures[F]`, `ai.fleet_targets[F]`, `ai.first_departure_tick[F]` | fleet trips (stop to stop, not split at planets passed) by faction and target planet | - |
 | battle outcomes | `outcome.planets_final[F]`, `outcome.captures[F]`, `outcome.owner_changes` | planet owners at the end, captures | - |
 | battle outcomes | `outcome.units_final[F]`, `outcome.units_lost[F]`, `outcome.battle_ended` | - | units alive at the end, units lost, battle over before the limit |
-| damage | `combat.damage_taken[F]`, `combat.first_shot_frame` | - | retail only: hull lost per faction, first projectile (port: missing hook, below) |
+| damage | `combat.damage_taken[F]`, `combat.first_shot_frame` | - | hull lost per faction (health drops of live units between samples, same rule both sides), first projectile (retail: first `PROJ_` object; port: `M first_shot_frame`, the battle frame of the first shot, since its projectiles are not store objects) |
 | diagnostic | `diag.rng_draws_total` | synced-RNG draws over the run, never graded | - |
 
 ## Grading and tolerances
@@ -98,9 +100,6 @@ report ends with the same leave-one-out counts, so a port FAIL count can be read
 
 ## Gaps (what the port cannot be checked on yet)
 
-- **Skirmish damage and first shot**: the skirmish host prints no per-object health and no shot count for a space
-  battle. Missing hook: a tactical `--trace-out` in `engine/apps/headless/skirmish_run.cpp` (like `port_trace.hpp` for
-  galactic runs). Until then `combat.*` is N/A with the retail values shown.
 - **Galactic battles**: hands-off retail galactic runs end when a tactical battle starts (`mode_changed`), so there is no
   retail battle-outcome reference beyond planet owners. A retail auto-resolve or tactical battle trace needs a new kit run.
 - **Skirmish run-to-run spread**: one retail skirmish run only, so its tolerances are the fixed ones (no envelope).

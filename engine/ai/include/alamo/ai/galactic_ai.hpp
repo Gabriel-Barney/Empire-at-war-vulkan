@@ -200,6 +200,9 @@ public:
     // the RNG.
     std::vector<uint32_t> solve_potential_plan(int32_t player, std::string_view plan, std::string_view goal, int32_t target,
                                                bool* ok = nullptr, float* eta = nullptr);
+    // a2l t03, tests / diagnostics: the galactic goal system's slot 9 (blocked, A2L_T03_RE_ANSWERS Q2) for an AI player's
+    // (goal type, target planet); false for a non-AI player or an unknown goal type.
+    bool goal_blocked(int32_t player, std::string_view goal, int32_t target);
     // A2f t02, tests / diagnostics: the goal maintenance's production-time term (0x525200 stand-in [M]) of a running plan:
     // the largest time its unfinished build tasks still need (0 when none or no such plan).
     float plan_production_time(int32_t running) const;
@@ -213,8 +216,10 @@ public:
     // Free store (docs/re/FIXPASS_GALACTIC.md §1), tests / diagnostics. These act like the player's free-store script:
     //   free_store_move   = FreeStore.Move_Object(unit, planet): false when refused (§1.2); a true return with no
     //                       pending move means the move finished at once (already there, no path, orbit check);
-    //   reachable_target  = FindTarget.Reachable_Target(PlayerObject, perception, application, reachability, p): -1 for
-    //                       nil, else the planet; draws the synced RNG as the Lua call does (at most once);
+    //   reachable_target  = FindTarget.Reachable_Target(PlayerObject, perception, application, reachability, p
+    //                       [, source planet [, max distance]]): -1 for nil, else the planet; draws the synced RNG as the
+    //                       Lua call does (at most once); `source` = argument 6 as a planet target (kInvalidPlanet:
+    //                       none, so no reachability test, A2L_T03_RE_ANSWERS Q1);
     //   reach_planets     = the level's source-planet list (0x665160 -> reachability flood, cached 10 x FPS frames).
     bool free_store_move(int32_t player, objects::ObjectHandle unit, PlanetIndex dest);
     size_t pending_free_store_moves() const;
@@ -226,7 +231,8 @@ public:
     int32_t free_store_owner(objects::ObjectHandle unit) const;
     void set_free_store_owner(objects::ObjectHandle unit, int32_t pp);
     int32_t reachable_target(int32_t player, std::string_view perception, std::string_view application,
-                             std::string_view reachability, double probability);
+                             std::string_view reachability, double probability, PlanetIndex source = kInvalidPlanet,
+                             double max_distance = -1.0);
     std::vector<PlanetIndex> reach_planets(int32_t player, int level);
 
     // ---- AI execution path finder (GALACTIC.md §4, ai_path_finder.hpp) ----

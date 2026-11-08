@@ -55,6 +55,9 @@ the tactical AI's plan VMs, laying down map objects), already spread over the wo
 **55 ms** on the land campaign battle, **42 ms** in space and about **139 ms** on a land skirmish (was 75 / 57 / 193).
 Getting under 33.3 ms needs setup spread over several ticks or a sim-only model load. Every other tick is under about
 12 ms; the next worst are the battle-end tick (land 5.3 ms) and the second battle tick (first perception, 8-11 ms).
+OPT3 t12 (2026-11-08, golden-neutral) took about a fifth off the land skirmish's first tick and fixed a mid-battle space
+spike (75-130 -> 40-50 ms on a loaded PC); the land campaign and space first ticks did not move. The rest is open in
+roadmap group OPT3f (section "First battle tick and a space spike" below).
 
 ### What changed, and what each fix bought
 
@@ -806,6 +809,48 @@ VFS read, parse, render-vertex packing the sim does not need), and serial steps 
 per-object stamps in RNG order). Getting under 33.3 ms needs setup spread over several ticks or prepared before the battle (moves goldens),
 or a sim-only model load (positions, indices and skeleton only). The second battle tick (first perception, 8-11 ms) is unchanged.
 
+## First battle tick and a space spike (OPT3 t12, 2026-11-08)
+
+Golden-neutral by choice (Gabriel, 2026-11-08: speed-ups and pre-tick preparation only, no golden moves). Proof: the per-tick CRC
+logs of `foc-land` (default workers and W0), `foc-land-campaign` and `foc-station --seed 3` (default and W4) are byte-identical to
+the base commit 03940b9. The PC was fully loaded by other sessions throughout, so the parts were located with temporary
+thread-cycle counters (`QueryThreadCycleTime`, removed again) and the wall times below are an interleaved A/B of the base and the
+new build at W15 (3-5 runs each, same load). Expect lower absolute numbers on a quiet PC.
+
+| Tick (ms, W15, loaded PC) | base 03940b9 | OPT3 t12 |
+|---|---|---|
+| Space station seed 3, frame 9818 (one request's path plan) | 75-130 | 40-50 |
+| Land skirmish, first tick | 154-188 | 123-152 |
+| Land campaign, first battle tick | 59-71 | 59-94 (no change; noise) |
+| Space station, first battle tick | 48-56 | 45-56 (no change) |
+
+- **Space occupancy grid index.** At foc-station seed 3 battle frame 9785 (host frame 9818) one long space path request (many
+  tries) ran 501 million cycles, nearly all of it in `SpaceOccupancy::query_segment` walking every static and track per motion.
+  `SpaceOccupancy::build_index` now builds a uniform grid over the entries' boxes (radius + a 16-unit margin; cell at least 256
+  units, at most 64 cells per axis; CSR lists per kind) once per tick before the parallel planners. A query visits only the entries
+  in the cells its box (segment box + radius) touches, each once (in the cell (max(entry first x, query first x), max(entry first
+  y, query first y))), with the same per-entry tests: the OR of bits is unchanged. Every mutation and a load drop the index (full
+  scan until the next build); non-finite queries scan everything. The planner's visited set (`SpaceScratch::VisitTable`) is now
+  an open-addressing table cleared by a generation counter, replacing a `std::unordered_map` (probed only, never iterated, so no
+  result depends on it). That request: 501 -> 190 million cycles. Tests: `alamo_movement_tests` `test_space_index` (4,000 random
+  queries against the full scan, after mutations, a non-finite query; VisitTable growth, overwrite and clear).
+- **Skirmish structure stamps in parallel.** The land skirmish's `bt_place_forces` was about 178 million cycles on the sim thread,
+  165 of them in `land_obstacles_sync`: four base structures with Fine_Tune_Occupied_Passability, whose ~400 samples each fire a
+  ray against every collision triangle (up to 14,000). `PassabilityGrid::stamp(id, fp, pf)` now runs the samples' rays through the
+  battle's `ParallelFor` (one result per sample, collected in the serial sample order); `land_obstacles_sync` /
+  `land_obstacle_attach` / `bt_place_forces` take the battle's `pf`, also for structures built during the battle. Sim thread: 165 ->
+  about 19 million cycles (about 49 -> 5.5 ms wall on the loaded PC). Test: `test_grid`, `stamp` with a back-to-front `ParallelFor`
+  equals the serial stamps.
+- **Map battle model warm.** `CampaignBattles::start_map_battle` (skirmish and attract demo; called at session load, not in a tick)
+  calls `TacticalBattle::prepare_models`: the bones, avoid models and stamp extents of the forces' types, the map's placement types
+  and their pads' buildable / constructed types load through the host's `ParallelFor`. The catalog cache is a pure memo of the model
+  files, so nothing the battle computes can depend on it. It covers 63 of the land skirmish's ~130 model files; the rest are types
+  the setup only finds later (team-marker pads of the slot factions, base structures, production types).
+
+Still over 33.3 ms (group OPT3f): the land skirmish first tick (the remaining model loads, the table builds of the pad / production
+types, the tactical AI world constructor and plan load), the land campaign and space first battle ticks (plan VM load, about 20 ms
+wall), and the space frame-9818 request on a loaded PC.
+
 ## Benchmark scenario: first numbers (BM1, 2026-11-06)
 
 `alamo_headless --bench tests/benchmark/space_battle.abench` (docs/PHASE4.md "BM - repeatable benchmark"): the FoC `_MP_SPACE_KUAT`
@@ -867,3 +912,89 @@ mount 152-174 ms with one or two compiles, 33-42 ms when every source is in the 
 load the cache lookup reads the source and its includes and hashes them (well under 1 ms per `.fx`). Audit with the
 compiled sources: 1125571106 2.39 s, 3622043265 2.46 s, 1976399102 2.34 s (same passes as before; this run's times are
 about 0.9 s above the table's because of other load on the machine, not the sources).
+
+## Benchmark scenes: quiet-machine baseline (bm1f t04, 2026-11-08)
+
+The first baseline: the six committed scenes (`tests/benchmark/`, docs/PHASE4.md "BM3") at dev `6246c61e`, run with
+`tools\benchmark\run_suite.cmd --repeats 5` and `--load --repeats 3` on an **idle PC** (every other session paused, no builds or
+tests; the suite measured 0.1-8.6 % CPU busy before each run, all 45 runs unflagged). MSVC Release (clang ships nothing, so no clang
+timing), Ryzen 7 7800X3D (16 threads, sim-only runs use 15 workers), AMD Radeon RX 9070 XT, rendered scenes `bm-high` 1920x1080 fixed
+frames (2 per tick, TAA on), hidden window. Scenario versions: space_battle 11, land_battle 4, galactic_late 3, the three game scenes 5.
+This replaces BM3's 2026-11-06 table, which was taken with the CPU 95-100 % busy. Result JSON: `logs\bench_suite\2026-11-08_quiet\`
+and `logs\bench_suite\2026-11-08_quiet_load\` on the reference PC (logs are not tracked; compare a later run with
+`tools\benchmark\compare_results.py`).
+
+Medians of the 5 runs' median and p99; worst = the worst tick or frame of all 5 runs.
+
+| Scene | Ticks | Wall per run | Median | p99 | Worst | Ticks/s |
+|---|---|---|---|---|---|---|
+| `space_battle` (sim-only) | 1800 | 2.1-2.2 s | 0.86 ms tick | 2.32 ms | 15.7 ms | 1022 |
+| `galactic_late` (sim-only) | 27000 | 24.3-25.9 s | 0.59 ms tick | 4.04 ms | 21.3 ms | 1135 |
+| `land_battle` (sim-only) | 3600 | 9.5-9.6 s | 2.45 ms tick | 4.08 ms | 8.3 ms | 397 |
+| `space_battle_game` | 1800 (3600 frames) | 17.5-17.6 s | 3.23 ms frame (sim 1.62, GPU 0.74) | 6.60 ms (sim 4.32) | 87.4 ms (sim 19.6) | |
+| `nebula_battle` | 1800 (3600 frames) | 17.3-17.7 s | 3.34 ms frame (sim 1.59, GPU 0.79) | 7.22 ms (sim 5.72) | 52.7 ms (sim 27.8) | |
+| `water_battle` | 1800 (3600 frames) | 30.8-31.4 s | 6.46 ms frame (sim 2.88, GPU 1.16) | 9.67 ms (sim 3.73) | 12.6 ms (sim 5.0) | |
+
+The whole `--repeats 5` session took 578 s, the `--load --repeats 3` session 293 s. The rendered scenes are CPU-bound at this size (the
+GPU frame is a quarter or less of the wall frame). On a quiet machine `land_battle` is no longer the heaviest sim scene: 2.4 ms median
+against BM3's noisy 3.2-6.1 ms, with a 4.1 ms p99 against 93-147 ms.
+
+**Run-to-run noise** (5 runs, `run_suite` noise table: cv = coefficient of variation, spread = (max - min) / mean). A regression gate
+(LP5, deferred) should set its limits above these:
+
+| Scene | Metric | cv | spread |
+|---|---|---|---|
+| `space_battle` | median tick / p99 / ticks per s | 1.7 / 4.1 / 1.5 % | 4.4 / 10.1 / 3.7 % |
+| `galactic_late` | median tick / p99 / ticks per s | 3.7 / 2.2 / 2.8 % | 9.2 / 4.7 / 6.5 % |
+| `land_battle` | median tick / p99 / ticks per s | 0.8 / 0.7 / 0.4 % | 2.2 / 2.0 / 1.1 % |
+| `space_battle_game` | frame median / frame p99 / sim median / GPU frame median | 0.4 / 0.7 / 0.7 / 0.8 % | 0.9 / 2.2 / 1.6 / 2.3 % |
+| `nebula_battle` | frame median / frame p99 / sim median / GPU frame median | 1.8 / 0.6 / 0.4 / 0.3 % | 5.3 / 1.8 / 1.1 / 0.9 % |
+| `water_battle` | frame median / frame p99 / sim median / GPU frame median | 4.4 / 1.4 / 0.3 / 2.5 % | 13.2 / 4.0 / 0.9 / 7.2 % |
+
+So a median moves by up to about 4 % (cv) between quiet runs, `galactic_late` and `water_battle`'s frame median by up to 9-13 % from the
+fastest to the slowest of 5; the worst tick or frame is a single sample and not a gate metric (the game scenes' 50-90 ms worst frames are
+single frames, their p99 stays under 7.3 ms).
+
+**Map load, cold against warm cache** (`run_suite.cmd --load --repeats 3`: real time, 300 ticks, a fresh empty `--cache-dir` for the cold
+run, the same directory for the warm one; `load_ms` = save load start to first measured tick, hitches = counted frames over
+max(25 ms, 4 x median), averaged over the 3 runs):
+
+| Scene | Cache | `load_ms` (min-max) | First 300 frames: median / p99 | Hitches in the run |
+|---|---|---|---|---|
+| `nebula_battle` | cold | 477-488 ms | 2.1 / 4.6 ms | 3.0 |
+| `nebula_battle` | warm | 432-446 ms | 2.0 / 4.8 ms | 3.3 |
+| `space_battle_game` | cold | 503-523 ms | 1.9 / 5.9 ms | 3.3 |
+| `space_battle_game` | warm | 461-481 ms | 1.9 / 5.7 ms | 3.0 |
+| `water_battle` | cold | 744-756 ms | 4.9 / 9.8 ms | 0 |
+| `water_battle` | warm | 705-721 ms | 4.6 / 9.6 ms | 0 |
+
+A cold pipeline cache adds about 40-45 ms to each load; on a quiet machine it no longer causes first-use hitches (BM3's 32 cold nebula
+hitches were the busy machine), and the 3 hitches left in the space and nebula runs happen both cold and warm.
+
+**Visible against hidden window** (bm2b t02, same session): `alamo_game --benchmark realtime --bench-save smoke_battle.alsv
+--bench-preset bm-high --bench-ticks 300` (BM2a's run, the saveload smoke's battle save at dev `6246c61e`), once with `--hidden` and once
+with a visible window, CPU 13-14 % busy before each:
+
+| Window | Frames | Frame ms median / p99 / worst | Render ms median / p99 | Sim ms median / p99 | GPU frame median / p99 |
+|---|---|---|---|---|---|
+| hidden | 7156 | 1.31 / 2.68 / 15.3 | 1.28 / 2.04 | 0.71 / 2.26 | 0.54 / 0.66 |
+| visible | 7259 | 1.29 / 2.56 / 14.9 | 1.25 / 2.01 | 0.72 / 2.50 | 0.54 / 0.68 |
+
+A visible window presents as fast as a hidden one (within 2 %, inside the run-to-run noise above; Immediate present mode, no cap), so
+the hidden-window numbers of BM2a and the suite stand for a visible window too. Both match BM2a's 2026-11-06 row (1.28 / 2.65 / 21.3 ms).
+
+## Game scenes timed sim-only (bm2c t02, 2026-11-08)
+
+`alamo_headless --bench tests/benchmark/<scene>.abench --runs 2 --warmup 1` (docs/PHASE4.md "BM2c"), MSVC Release, Ryzen 7 7800X3D,
+15 workers (machine default), the version-2 scenes regenerated on dev that day. **Not idle: other lanes were building and testing, other
+processes took 92-97 % of the CPU during the timed runs, every result is flagged noisy and none is a baseline.** All runs matched the
+scenes' fingerprints (the rendered runs' CRC logs).
+
+| Scene | Ticks | Median tick | p99 | Worst | Mean | Load per run | Wall per timed run | Biggest zones |
+|---|---|---|---|---|---|---|---|---|
+| `space_battle_game` | 1800 | 1.89 ms | 54 ms | 205 ms | 4.3 ms | 0.65-0.75 s | 5.8-9.8 s | T5.battles / tac.ai 30 %, tac.ai.perception 24 % |
+| `nebula_battle` | 1800 | 1.76 ms | 29 ms | 90 ms | 3.4 ms | 0.57-0.60 s | 5.8-6.6 s | tac.movement 49 %, T5.battles / tac.ai 18 % |
+| `water_battle` | 1800 | 3.19 ms | 87 ms | 510 ms | 5.7 ms | 0.78-0.80 s | 5.8-14.6 s | T5.battles / tac.ai 35 %, tac.ai.perception 29 % |
+
+The medians sit near the rendered runs' `sim_ms` in BM3's 2026-11-06 table (1.0 / 1.0 / 2.9 ms, also noisy; the quiet baseline above has 1.6 / 1.6 / 2.9 ms); the p99 and worst ticks here are the
+busy machine. Rerun on a quiet PC before using any of it as a reference.

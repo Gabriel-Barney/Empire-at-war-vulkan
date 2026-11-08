@@ -151,6 +151,7 @@ void parse_class_fields(const data::XmlNode& e, SpecialAbilityDesc& s, const Abi
     if (r.type_max_speed) {
         const std::string_view saber = data::trim(e.child_text("Saber_Name"));
         if (!saber.empty()) s.saber_speed = std::max(0.0f, r.type_max_speed(saber));
+        if (!saber.empty() && r.type_max_flight_distance) s.saber_max_flight = std::max(0.0f, r.type_max_flight_distance(saber));
     }
     s.activation_time = f_or(e, "Activation_Time_In_Seconds", 0.0f);
     s.trigger_radius = f_or(e, "Trigger_Radius", 0.0f);
@@ -208,11 +209,20 @@ void parse_class_fields(const data::XmlNode& e, SpecialAbilityDesc& s, const Abi
 
 }  // namespace
 
-uint32_t saber_flight_frames(float dist, float speed, float catch_dist) {
-    if (!(speed > 0.0f)) return 0;
-    const float d = std::max(0.0f, dist);
-    const float out = std::ceil(d / speed), back = std::ceil(std::max(0.0f, d - catch_dist) / speed);
-    return std::max(1u, static_cast<uint32_t>(out + back));
+SaberFlight saber_flight(float out_dist, float back_dist, float max_travel, float speed, float catch_dist) {
+    SaberFlight f;
+    if (!(speed > 0.0f)) return f;
+    const float ltot = std::max(0.0f, out_dist) + std::max(0.0f, back_dist);
+    const float b = max_travel > 0.0f ? max_travel : 3.0e38f;
+    const float kc = std::floor(std::max(0.0f, ltot - catch_dist) / speed) + 1.0f;
+    if (speed * kc < std::min(ltot, b)) {
+        f.catch_step = static_cast<uint32_t>(kc);
+        f.end = f.catch_step + 11u;  // SWORD_CATCH finishes at the 10th advance after its play tick, seen by the next update
+        return f;
+    }
+    const float kd = std::min(std::ceil(ltot / speed), std::ceil(b / speed));
+    f.end = std::max(1u, static_cast<uint32_t>(kd));  // epsilon 0 [M]
+    return f;
 }
 
 // ---- OI abilities: CubicInterpolator ----

@@ -92,7 +92,7 @@ enum class AbilityEventKind : uint8_t {
     SpawnObject,
     // ---- OI abilities: host actions, in event order after the tick (the sim state is already changed) ----
     MoveOrder,      // move `id` to `point` (0x2a7b80: HUNT, JET_PACK, CONFUSE, BERSERKER, distract) - not an order cancel
-    StopOrder,      // stop `id` (0x426d50 / 0x39bcb0: DEPLOY, mines, melee holds)
+    StopOrder,      // stop `id` (0x426d50 / 0x39bcb0: DEPLOY, mines, melee holds); `value`: kStopPlain / kStopHold / kStopAdopt
     OwnerChanged,   // `id` now belongs to player `value` (Hack, Tactical_Bribe, convert): store / trees / movement
     Deployed,       // DEPLOY on (`value` 1) / off (0): the host's DeployedBehavior / model state
     MineTriggered,  // mine `id` (bound object, may be kNoObject) triggered at `point`: dies and detonates [M]
@@ -118,6 +118,12 @@ enum class AbilityEventKind : uint8_t {
     // owner's position) with `target` as the goal object, keeping the attack order.
     Lured,
 };
+
+// StopOrder `value` (cu8j t02, MOVEMENT §4.7.2 / §4.7.5): a plain stop; the stop-and-hold 0x3a9880 (leave every
+// coordinator, then the adopt 0x39bcb0: one FormationClass ctor draw); a stop followed by the adopt (DEPLOY 0x3a1ce0).
+inline constexpr int32_t kStopPlain = 0;
+inline constexpr int32_t kStopHold = 1;
+inline constexpr int32_t kStopAdopt = 2;
 
 struct AbilityEvent {
     AbilityEventKind kind = AbilityEventKind::Activated;
@@ -734,7 +740,7 @@ private:
     bool enemy(int32_t a, int32_t b) const { return combat_->is_enemy(a, b); }
     bool moving(const Obj& o) const;
     void move_order(ObjectId id, Vec3 p, uint32_t frame, uint8_t type = 0);  // type: the ability issuing it (event)
-    void stop_order(ObjectId id, uint32_t frame);
+    void stop_order(ObjectId id, uint32_t frame, int32_t hold = kStopPlain);
     void change_owner(Obj& o, int32_t owner, uint32_t frame);
     uint32_t request_spawn(SpawnRequest r);
     float max_health_and_shield(ObjectId id) const;
