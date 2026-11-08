@@ -55,6 +55,9 @@ the tactical AI's plan VMs, laying down map objects), already spread over the wo
 **55 ms** on the land campaign battle, **42 ms** in space and about **139 ms** on a land skirmish (was 75 / 57 / 193).
 Getting under 33.3 ms needs setup spread over several ticks or a sim-only model load. Every other tick is under about
 12 ms; the next worst are the battle-end tick (land 5.3 ms) and the second battle tick (first perception, 8-11 ms).
+OPT3 t12 (2026-11-08, golden-neutral) took about a fifth off the land skirmish's first tick and fixed a mid-battle space
+spike (75-130 -> 40-50 ms on a loaded PC); the land campaign and space first ticks did not move. The rest is open in
+roadmap group OPT3f (section "First battle tick and a space spike" below).
 
 ### What changed, and what each fix bought
 
@@ -805,6 +808,48 @@ wall, 250 ms of Lua thread time, mostly parsing the PG libraries in every plan V
 VFS read, parse, render-vertex packing the sim does not need), and serial steps such as the skirmish's `bt_place_forces` (about 25 ms,
 per-object stamps in RNG order). Getting under 33.3 ms needs setup spread over several ticks or prepared before the battle (moves goldens),
 or a sim-only model load (positions, indices and skeleton only). The second battle tick (first perception, 8-11 ms) is unchanged.
+
+## First battle tick and a space spike (OPT3 t12, 2026-11-08)
+
+Golden-neutral by choice (Gabriel, 2026-11-08: speed-ups and pre-tick preparation only, no golden moves). Proof: the per-tick CRC
+logs of `foc-land` (default workers and W0), `foc-land-campaign` and `foc-station --seed 3` (default and W4) are byte-identical to
+the base commit 03940b9. The PC was fully loaded by other sessions throughout, so the parts were located with temporary
+thread-cycle counters (`QueryThreadCycleTime`, removed again) and the wall times below are an interleaved A/B of the base and the
+new build at W15 (3-5 runs each, same load). Expect lower absolute numbers on a quiet PC.
+
+| Tick (ms, W15, loaded PC) | base 03940b9 | OPT3 t12 |
+|---|---|---|
+| Space station seed 3, frame 9818 (one request's path plan) | 75-130 | 40-50 |
+| Land skirmish, first tick | 154-188 | 123-152 |
+| Land campaign, first battle tick | 59-71 | 59-94 (no change; noise) |
+| Space station, first battle tick | 48-56 | 45-56 (no change) |
+
+- **Space occupancy grid index.** At foc-station seed 3 battle frame 9785 (host frame 9818) one long space path request (many
+  tries) ran 501 million cycles, nearly all of it in `SpaceOccupancy::query_segment` walking every static and track per motion.
+  `SpaceOccupancy::build_index` now builds a uniform grid over the entries' boxes (radius + a 16-unit margin; cell at least 256
+  units, at most 64 cells per axis; CSR lists per kind) once per tick before the parallel planners. A query visits only the entries
+  in the cells its box (segment box + radius) touches, each once (in the cell (max(entry first x, query first x), max(entry first
+  y, query first y))), with the same per-entry tests: the OR of bits is unchanged. Every mutation and a load drop the index (full
+  scan until the next build); non-finite queries scan everything. The planner's visited set (`SpaceScratch::VisitTable`) is now
+  an open-addressing table cleared by a generation counter, replacing a `std::unordered_map` (probed only, never iterated, so no
+  result depends on it). That request: 501 -> 190 million cycles. Tests: `alamo_movement_tests` `test_space_index` (4,000 random
+  queries against the full scan, after mutations, a non-finite query; VisitTable growth, overwrite and clear).
+- **Skirmish structure stamps in parallel.** The land skirmish's `bt_place_forces` was about 178 million cycles on the sim thread,
+  165 of them in `land_obstacles_sync`: four base structures with Fine_Tune_Occupied_Passability, whose ~400 samples each fire a
+  ray against every collision triangle (up to 14,000). `PassabilityGrid::stamp(id, fp, pf)` now runs the samples' rays through the
+  battle's `ParallelFor` (one result per sample, collected in the serial sample order); `land_obstacles_sync` /
+  `land_obstacle_attach` / `bt_place_forces` take the battle's `pf`, also for structures built during the battle. Sim thread: 165 ->
+  about 19 million cycles (about 49 -> 5.5 ms wall on the loaded PC). Test: `test_grid`, `stamp` with a back-to-front `ParallelFor`
+  equals the serial stamps.
+- **Map battle model warm.** `CampaignBattles::start_map_battle` (skirmish and attract demo; called at session load, not in a tick)
+  calls `TacticalBattle::prepare_models`: the bones, avoid models and stamp extents of the forces' types, the map's placement types
+  and their pads' buildable / constructed types load through the host's `ParallelFor`. The catalog cache is a pure memo of the model
+  files, so nothing the battle computes can depend on it. It covers 63 of the land skirmish's ~130 model files; the rest are types
+  the setup only finds later (team-marker pads of the slot factions, base structures, production types).
+
+Still over 33.3 ms (group OPT3f): the land skirmish first tick (the remaining model loads, the table builds of the pad / production
+types, the tactical AI world constructor and plan load), the land campaign and space first battle ticks (plan VM load, about 20 ms
+wall), and the space frame-9818 request on a loaded PC.
 
 ## Benchmark scenario: first numbers (BM1, 2026-11-06)
 
