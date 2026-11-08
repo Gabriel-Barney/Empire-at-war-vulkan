@@ -9,8 +9,8 @@
 //   lua world    the AI's own LuaPlayerWorld (Suspend_AI flag, per-player script state, pending requests) and the
 //                world's GlobalValue map
 //   players      per AI player (index order): AiContext (goals, templates, learning, budget, clocks), known objects,
-//                pending desire bonuses, reachability caches (per frame / 10 s source lists, the per-target 10 s stage
-//                lists), AiPathFinder, free-store VM
+//                pending desire bonuses, reachability caches (10 s source lists, the per-target 10 s stage lists),
+//                AiPathFinder, free-store VM
 //   plans        PlanInstance + its Lua VM; task forces; blocking statuses; PotentialPlans; build tasks, the pending
 //                list, the planet build queues, the market's per-frame delivery floods, free-store reservations and
 //                moves, PAYG reclaims
@@ -48,8 +48,9 @@ using save::put_vec;
 
 namespace {
 // 2: pristine pooled VMs by reference; 3: AI player types (q6 t07); 4 (cu12 t14): the status records' orders_out byte
-// removed (never set or read); 5 (A2k t02): per-target stage lists.
-constexpr uint32_t kWorldVersion = 5;
+// removed (never set or read); 5 (A2k t02): per-target stage lists; 6 (a2l t03): the per-frame reachability cache
+// removed (galactic blocked() reads the per-target lists).
+constexpr uint32_t kWorldVersion = 6;
 // 2: logic frame, player conflict stamps, conflict observer (q6 t03); 3: leaf cache keyed by (leaf, instance, system player,
 // parameter set) with each entry's parameters, the 0xE visible flags and the last seen surface units (q6 t18)
 constexpr uint32_t kResolverVersion = 3;
@@ -296,8 +297,6 @@ struct StagedPlayer {
     AiContext ctx{AiMode::Galactic};
     std::set<objects::ObjectId> known;
     std::vector<PendingBonus> bonuses;
-    int64_t reach_frame = -1;
-    std::vector<std::vector<uint8_t>> reach;
     AiPathFinder paths;
     std::array<PlayerAi::SourceList, 6> sources;
     std::vector<std::array<PlayerAi::SourceList, 6>> stage_lists;
@@ -525,9 +524,6 @@ void GalacticAiWorld::write(ByteWriter& w) const {
             w.f32(b.bonus);
             w.i64(b.deadline);
         }
-        w.i64(p.reach_frame);
-        w.u32(static_cast<uint32_t>(p.reach.size()));
-        for (const std::vector<uint8_t>& v : p.reach) put_vec(w, v);
         p.paths.write(w);
         for (const PlayerAi::SourceList& s : p.sources) {
             w.i64(s.frame);
@@ -830,11 +826,6 @@ bool GalacticAiWorld::read(ByteReader& r) {
             b.deadline = r.i64();
             if (b.goal_type >= goal_types) r.fail();
         }
-        sp.reach_frame = r.i64();
-        sp.reach.resize(save::count(r, 4));
-        if (!sp.reach.empty() && sp.reach.size() != 6) r.fail();
-        for (std::vector<uint8_t>& v : sp.reach)
-            if (!get_vec(r, v)) return false;
         if (!r.ok() || !sp.paths.read(r, m.sim.graph(), m.cfg.path_pf)) return false;
         for (PlayerAi::SourceList& s : sp.sources) {
             s.frame = r.i64();
@@ -1203,8 +1194,6 @@ bool GalacticAiWorld::read(ByteReader& r) {
         pa.ctx = std::move(sp.ctx);
         pa.known = std::move(sp.known);
         pa.bonuses = std::move(sp.bonuses);
-        pa.reach_frame = sp.reach_frame;
-        pa.reach = std::move(sp.reach);
         pa.paths = std::move(sp.paths);
         pa.paths.set_background(m.cfg.path_latency, m.cfg.background);  // OPT2 t02: this world's settings
         pa.sources = std::move(sp.sources);

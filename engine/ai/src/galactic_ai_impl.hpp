@@ -571,9 +571,6 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     std::unique_ptr<lua::LuaVm> fs_vm;
     std::set<objects::ObjectId> known;
     std::vector<PendingBonus> bonuses;
-    // reachability cache (per frame, per AI mode 0..5)
-    int64_t reach_frame = -1;
-    std::vector<std::vector<uint8_t>> reach;
     // AI execution path finder (GALACTIC.md §4): created at first service, serviced by execution_service.
     AiPathFinder paths;
     PlayerAi(GalacticAiWorld::Impl* world, int32_t p, const AiPlayerTypeDef* t, int32_t d);
@@ -581,8 +578,9 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     // ---- GoalModeHooks ----
     uint32_t target_count() override { return static_cast<uint32_t>(w->sim.planets().size()); }
     bool applies(int32_t target, uint32_t flags) override { return w->applies(player, target, flags); }
+    // Galactic goal-system slot 9 (0x6b84f0, A2L_T03_RE_ANSWERS Q2) [H]: blocked when the target's slot 6 at the goal's
+    // level is null (stage_of: level 4 never, level > 5 always, else an empty per-target list, cached 10 s).
     bool blocked(uint32_t goal_type, int32_t target) override;
-    bool reachable(int mode, PlanetIndex target);
     // 0x665160 (AI_GALACTIC_3 §8): the reachability flood's planets for a level, flood output order, cached 10 s.
     struct SourceList {
         int64_t frame = -1;

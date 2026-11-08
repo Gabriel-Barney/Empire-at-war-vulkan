@@ -2263,6 +2263,17 @@ static void test_stage_and_setup_a() {
         CHECK(pw.world->stage_area(0, 3, 4) == 3 && pw.world->stage_area(0, 3, 6) == kInvalidPlanet);
         CHECK(pw.world->stage_area(0, 3, 0) == kInvalidPlanet && pw.world->stage_area(0, 1, 0) == 1);  // held target: itself
         CHECK(pw.world->stage_area(1, 3, 5) == kInvalidPlanet);  // not an AI player of this world
+        // a2l t03 (A2L_T03_RE_ANSWERS Q2): goal-system slot 9 = the target's slot 6 at the goal level is null.
+        // Conquer_Planet (level 2) at P3: no held planet behind P2 / P4 -> blocked; Build_Space_Forces (Any) at P3: P1 ->
+        // not blocked; Upgrade_Starbase (Friendly_Only) at the held P1: itself -> not blocked, at P3: not held -> blocked.
+        CHECK(pw.world->goal_blocked(0, "Conquer_Planet", 3) && !pw.world->goal_blocked(0, "Build_Space_Forces", 3));
+        CHECK(!pw.world->goal_blocked(0, "Upgrade_Starbase", 1) && pw.world->goal_blocked(0, "Upgrade_Starbase", 3));
+        CHECK(!pw.world->goal_blocked(0, "Conquer_Planet", 2));  // P2's neighbour P1 is held
+        CHECK(!pw.world->goal_blocked(0, "Conquer_Planet", -1) && !pw.world->goal_blocked(0, "No_Such_Goal", 3));
+        for (PlanetIndex t = 0; t < 8; ++t) {  // slot 9 is exactly "slot 6 is null"
+            CHECK(pw.world->goal_blocked(0, "Conquer_Planet", static_cast<int32_t>(t)) == (pw.world->stage_area(0, t, 2) == kInvalidPlanet));
+            CHECK(pw.world->goal_blocked(0, "Upgrade_Starbase", static_cast<int32_t>(t)) == (pw.world->stage_area(0, t, 0) == kInvalidPlanet));
+        }
         const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
         CHECK(ok && pw.has(s, pw.hero));  // the hero's path P0 -> P3 has no node cost: eligible
     }
@@ -2271,6 +2282,7 @@ static void test_stage_and_setup_a() {
         ParityWorld pw(false, {"HeroDeny"}, [](gal::GalacticSetup& s) { s.forces.push_back({0, 2, tInfantry}); });
         pw.run(2);
         CHECK(pw.world->stage_list(0, 3, 2) == (std::vector<PlanetIndex>{2, 1, 0}) && pw.world->stage_area(0, 3, 2) == 2);
+        CHECK(!pw.world->goal_blocked(0, "Conquer_Planet", 3));  // a2l t03: P3's neighbour P2 is held now
         const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
         CHECK(ok && pw.has(s, pw.hero));
     }

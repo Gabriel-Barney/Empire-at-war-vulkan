@@ -569,20 +569,14 @@ void GalacticAiWorld::Impl::add_markup(int32_t target, double delta) {
 
 // ================================================================ PlayerAi
 
+// Slot 9 of the galactic goal system (0x6b84f0, A2L_T03_RE_ANSWERS Q2.1) [H]: an active goal is never blocked (the
+// caller, GoalSystem::skip, tests that first); a goal without a target is not blocked; otherwise it is blocked when
+// the target's slot 6 (link mask -1, no exclude / include list) at the goal type's level is null. That is stage_of:
+// the per-target flood from the target (or its passable neighbours), cached 10 x FPS sim frames per (target, level);
+// level 4 returns the target (never blocked); levels > 5 have no galactic answer (always blocked).
 bool PlayerAi::blocked(uint32_t goal_type, int32_t target) {
     if (target < 0) return false;
-    const int m = std::min(5, static_cast<int>(w->defs.goals[goal_type].reachability));
-    return !reachable(m, static_cast<PlanetIndex>(target));
-}
-
-bool PlayerAi::reachable(int mode, PlanetIndex target) {
-    if (reach_frame != w->now) {
-        reach_frame = w->now;
-        reach.assign(6, {});
-    }
-    std::vector<uint8_t>& r = reach[static_cast<size_t>(mode)];
-    if (r.empty()) flood(mode, &r);
-    return target < r.size() && r[target];
+    return stage_of(static_cast<PlanetIndex>(target), static_cast<int>(w->defs.goals[goal_type].reachability)) == kInvalidPlanet;
 }
 
 // The reachability flood 0x3f12e0 from the player's planets (row order) at AI level `mode` (FIXPASS_GALACTIC §1.4,
@@ -2395,6 +2389,12 @@ int32_t GalacticAiWorld::reachable_target(int32_t player, std::string_view perce
     }
     r.max_distance = max_distance;
     return impl_->find_target(kFreeStoreScriptBase + player, r);
+}
+
+bool GalacticAiWorld::goal_blocked(int32_t player, std::string_view goal, int32_t target) {
+    PlayerAi* pa = impl_->player_ai(player);
+    const uint32_t g = impl_->defs.find_goal(goal);
+    return pa && g != kAiNone && pa->blocked(g, target);
 }
 
 std::vector<PlanetIndex> GalacticAiWorld::reach_planets(int32_t player, int level) {
