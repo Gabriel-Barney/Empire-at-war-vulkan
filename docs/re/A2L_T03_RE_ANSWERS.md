@@ -186,8 +186,8 @@ an unheld target, return the union of the neighbour floods in neighbour order; d
 - A candidate is skipped when 0x396470(unit) < this value. 0x396470 is the hull fraction (0x396df0). When the object
   has hardpoints in its +0x2d0 list with flag (+0x20 → +0x4d == 1) and type +0xa8 set, the value is the min of the
   hull fraction and 0x396070 (the hardpoint health).
-- The health test runs only for candidates with PP +0x104 == 0 or entry +0x30 == 0. In other words, it does not run
-  for a unit this PotentialPlan already reserves while the plan is in its own reserve pass.
+- The health test runs only for candidates with PP +0x104 == 0 or entry +0x30 == 0. A candidate already reserved
+  (entry +0x30 set) skips the health test when PP +0x104 is set. What PP +0x104 means is not settled here.
 
 ### Q4.2 The "engaged" tests, in order [H]
 
