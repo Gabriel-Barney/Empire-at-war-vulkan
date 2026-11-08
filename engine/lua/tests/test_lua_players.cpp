@@ -190,6 +190,9 @@ struct Galaxy {
                   "<GroundInfantry Name=\"Crew_T\"><CategoryMask>Infantry</CategoryMask></GroundInfantry>\n"
                   "<HeroCompany Name=\"Smuggler_Team_T\"><Company_Units>Smuggler_T, Crew_T, Smuggler_T</Company_Units>"
                   "<Company_Transport_Unit>Frigate_T</Company_Transport_Unit></HeroCompany>\n"
+                  // cu8f t04b: a unit with UNIT_AI (Set_Prefer_Ground_Over_Space refuses objects without it).
+                  "<GroundInfantry Name=\"Ai_Trooper_T\"><Behavior>UNIT_AI</Behavior><CategoryMask>Infantry</CategoryMask>"
+                  "</GroundInfantry>\n"
                   "</R>");
         CHECK(raw.load(files));
         CHECK(types.build(raw));
@@ -840,6 +843,30 @@ void test_invade_local_player() {
 
 // L1/S4 wave 1: galactic containment, Assemble_Fleet, Change_Owner (GalacticSim::change_owner), Invade,
 // base waits / next base types, planet usability, heroes, Destroy_Contained_Objects, StringCompare.
+// cu8f t04b (CU8F_T04_T06_RE §2.1): Set_Prefer_Ground_Over_Space on a galactic object writes the GalacticSim's flag (default
+// true; the galactic AI's auto-land reads it); an object without UNIT_AI is refused (script error, nothing written).
+void test_prefer_ground_over_space() {
+    Galaxy g({{1, 2, "Ai_Trooper_T"}});
+    galactic::GalacticSim& sim = *g.sim;
+    objects::ObjectHandle at{}, tr{};
+    for (const objects::ObjectHandle u : sim.planets()[2].surface) {
+        if (g.store->type(u) == g.raw.find("Ai_Trooper_T")) at = u;
+        if (g.store->type(u) == g.raw.find("Trooper_T")) tr = u;
+    }
+    CHECK(static_cast<bool>(at) && static_cast<bool>(tr));
+    if (!at || !tr) return;
+    LuaVm vm(g.host());
+    attach_player_world(vm, &g.world);
+    vm.set_object_global("AT", at);
+    vm.set_object_global("Tr", tr);
+    CHECK(sim.prefer_ground_over_space(at) && sim.prefer_ground_over_space(tr));
+    CHECK(run(vm, "AT.Set_Prefer_Ground_Over_Space(false)") == "" && !sim.prefer_ground_over_space(at));
+    CHECK(run(vm, "AT.Set_Prefer_Ground_Over_Space(true)") == "" && sim.prefer_ground_over_space(at));
+    CHECK(run(vm, "AT.Set_Prefer_Ground_Over_Space(false)") == "" && !sim.prefer_ground_over_space(at));
+    run(vm, "Tr.Set_Prefer_Ground_Over_Space(false)");
+    CHECK(last_message_has(vm, "missing Unit_AI behavior") && sim.prefer_ground_over_space(tr));
+}
+
 void test_galactic_ops() {
     Galaxy g({{0, 0, "Frigate_T"}, {0, 0, "Hero_Ship_T"}, {1, 1, "Frigate_T"}});
     galactic::GalacticSim& sim = *g.sim;
@@ -1371,6 +1398,7 @@ int main() {
     test_sliceable_unlock();  // OI lua
     test_setup_players();
     test_galactic_ops();
+    test_prefer_ground_over_space();  // cu8f t04b
     const BindingCoverage cov = binding_coverage();
     std::printf("  coverage: globals implemented %u/%u, methods implemented %u/%u, RE call sites %llu/%llu\n",
                 cov.globals_implemented, cov.globals, cov.methods_implemented, cov.methods,

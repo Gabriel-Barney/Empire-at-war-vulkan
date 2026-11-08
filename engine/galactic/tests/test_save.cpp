@@ -592,6 +592,13 @@ void drive_synthetic(GalacticSim& s, ConflictManager& cm, const objects::ObjectS
             break;
         }
         case 15: s.set_galactic_stealth(s.planets()[rE].starbase, true); break;
+        case 16:  // cu8f t04b: Set_Prefer_Ground_Over_Space false on one unit (save v5)
+            for (ObjectHandle u : s.planets()[rA].surface)
+                if (st.alive(u)) {
+                    s.set_prefer_ground_over_space(u, false);
+                    break;
+                }
+            break;
         case 20: {
             const uint32_t f = idle_fleet(s, rC, pUnder);
             if (f != kNoFleet) s.move_fleet(pUnder, f, rB);
@@ -744,6 +751,27 @@ void test_queue_phases() {
         ids3.set_next(ids.next());
         ByteReader orr(older);
         CHECK(!o.read(orr));
+
+        // cu8f t04b: v5 adds the Prefer_Ground_Over_Space false ids at the end; a v4 image (no list) still loads with every
+        // unit preferring ground. The flag is saved and enters the hash only once a live unit has it false.
+        CHECK(bytes.size() >= 4 && bytes[0] == 5 && bytes[bytes.size() - 4] == 0 && bytes[bytes.size() - 1] == 0);
+        std::vector<uint8_t> v4(bytes.begin(), bytes.end() - 4);
+        v4[0] = 4;
+        ByteReader r4(v4);
+        CHECK(o.read(r4) && sim_bytes(o) == bytes);
+        ObjectHandle unit{};
+        for (const PlanetState& ps : s.planets())
+            for (ObjectHandle u : ps.surface)
+                if (!unit && store.alive(u)) unit = u;
+        CHECK(static_cast<bool>(unit) && s.prefer_ground_over_space(unit));
+        const uint64_t h0 = sim_hash(s);
+        s.set_prefer_ground_over_space(unit, false);
+        CHECK(!s.prefer_ground_over_space(unit) && sim_hash(s) != h0);
+        const std::vector<uint8_t> flagged = sim_bytes(s);
+        ByteReader rf(flagged);
+        CHECK(o.read(rf) && !o.prefer_ground_over_space(o.store().find(store.id(unit))) && sim_bytes(o) == flagged);
+        s.set_prefer_ground_over_space(unit, true);
+        CHECK(s.prefer_ground_over_space(unit) && sim_hash(s) == h0 && sim_bytes(s) == bytes);
     }
 }
 

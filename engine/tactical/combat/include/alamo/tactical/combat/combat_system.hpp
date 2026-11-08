@@ -376,7 +376,9 @@ struct UnitDesc {
     // the own weapon's distance branch takes the first entry whose mask hits the target's CategoryMask.
     std::vector<InaccuracyEntry> fire_inaccuracy;
     int32_t priority_set = -1;                  // Targeting_Priority_Set (index into CombatData)
-    float stickiness_threshold = 0.0f;          // Targeting_Stickiness_Time_Threshold (seconds)
+    // Targeting_Stickiness_Time_Threshold (seconds, type +0x528). cu8f t04a: read only through a unit's negative override
+    // (Unit::stickiness, TD +0x158) and written into it by a task-force release (reset_stickiness).
+    float stickiness_threshold = 0.0f;
     uint64_t category_mask = 0, property_flags = 0, attack_category_restrictions = 0;
     uint32_t space_layer = 0;  // Space_Layer (short-range attackers only)
     bool target_stealth_units = false;
@@ -1287,6 +1289,19 @@ public:
     // set (so overriding the head drives the squad). False for an unknown unit or index.
     bool set_priority_override(ObjectId id, int32_t set);
     int32_t priority_override(ObjectId id) const;
+    // cu8f t04a (CU8F_T04_T06_RE §1): the targeting stickiness threshold TD +0x158 (seconds). Spawn value 0.0 (not the
+    // type's value: in practice nothing is sticky until something writes it); a negative value means "the type's
+    // Targeting_Stickiness_Time_Threshold, read at every test". Writers: Lua Set_Targeting_Stickiness_Time_Threshold
+    // (set_stickiness_override, any value, no rescan) and a task-force release (reset_stickiness := the type's value:
+    // the first team member's type for a team owner, else the unit's own). False for an unknown unit. Saved, hashed in
+    // hash_extended when non-zero.
+    bool set_stickiness_override(ObjectId id, float seconds);
+    float stickiness_override(ObjectId id) const;  // 0 for an unknown unit
+    bool reset_stickiness(ObjectId id);
+    // The scan's keep test Is_Target_Sticky (§1.2) of `unit` against `target` at the current frame, and its time to kill
+    // of `target` (a TEAM container: the sum of its members'). False / 1e18 for unknown ids. Queries only.
+    bool target_sticky(ObjectId unit_id, ObjectId target) const;
+    float time_to_kill(ObjectId target) const;
     // OI abilities: the weapon index obj +0x324 (SWAP_WEAPONS flip, Permanent_Weapon_Swap := Weapon_Index). The
     // non-hardpoint weapon fires UnitDesc::weapon_projectiles[index]; [port] an index outside the list (or an empty
     // list) fires `weapon_projectile`. False for an unknown unit or a negative index.
@@ -1471,6 +1486,7 @@ private:
         std::vector<std::pair<ObjectId, uint32_t>> infect_exposure;  // neighbours in range: (id, first frame), id order
         // ---- OI abilities (hash_extended) ----
         int32_t priority_override = -1;  // Lua Set_Targeting_Priorities (data pack +0x160)
+        float stickiness = 0.0f;         // cu8f t04a: TD +0x158 stickiness threshold (< 0: the type's value)
         uint32_t stun_end = 0;           // STUNNABLE end frame (stunned while > frame)
         uint32_t invuln_end = 0;         // INVULNERABLE behaviour end frame
         uint32_t emitter_entries = 0;    // Add_Emitter registrations (multiset count)
@@ -1641,6 +1657,14 @@ private:
     void range_geometry(const Unit& t, Vec3 from, float& d, float& E) const;
     int32_t fired_weapon_projectile(const Unit& u) const;  // OI abilities: Projectile_Types[obj +0x324]
     bool sticky(const Unit& u, const Unit& target, uint32_t frame) const;
+    // cu8f t04a: time-to-dead 0x58ba40 of one unit (destroyable hard points' health when it has any, else the hull; +
+    // shield; / damage rate; 1e18 at rate 0) and the unit whose type gives an owner's type values (itself, or a TEAM
+    // owner's first live member; nullptr: a TEAM owner without one).
+    float time_to_dead(const Unit& t, uint32_t frame) const;
+    float time_to_kill(const Unit& t, uint32_t frame) const;  // a TEAM container: its live members' sum (none: 0)
+    const Unit* stickiness_type_unit(const Unit& u) const;
+    const Unit* first_team_member(uint32_t team) const;  // live, team_members_ order (ascending id); nullptr none
+    void rebuild_team_members();  // team_members_ from units_ (phase A, read)
     float damage_rate(const Unit& u, uint32_t frame) const;
 
     // targeting
@@ -1815,6 +1839,9 @@ private:
     std::vector<Hardpoint> flush_hps_;
     std::vector<std::pair<uint32_t, uint32_t>> leaders_;  // (team, unit index) scratch
     std::vector<std::pair<uint32_t, ObjectId>> team_heads_;  // OI tactical: (team, team_leader id), built in phase A
+    // cu8f t04a: (team, unit id) of every live unit with a team, sorted; built in phase A and on read (not saved: a pure
+    // function of the units; units that died or left since are skipped at read time).
+    std::vector<std::pair<uint32_t, ObjectId>> team_members_;
     std::vector<ObjectId> land_heads_;  // s78f t03: ground team heads (TeamTargeting), phase A scratch read in phase D
     // s78h t06: one TeamTargeting service per land team per tick at the team's container slot = the team's highest unit
     // index (head included), reached first in phase D's descending walk. Built in phase A, slot descending (ties: team).

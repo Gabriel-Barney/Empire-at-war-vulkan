@@ -154,6 +154,7 @@ void CombatSystem::reserve(uint32_t units, uint32_t projectiles, uint32_t candid
     attack_events_.reserve(units);  // s78f t08: at most one signal 0x1E per unit and tick
     leaders_.reserve(units);
     team_heads_.reserve(units);  // OI tactical
+    team_members_.reserve(units);  // cu8f t04a
     land_teams_.reserve(units);  // s78h t06
     serial_ctx_.reserve(std::max<uint32_t>(candidates_per_unit, units));
 }
@@ -915,22 +916,99 @@ float CombatSystem::damage_rate(const Unit& v, uint32_t frame) const {
     return sum / 5.0f;
 }
 
-bool CombatSystem::sticky(const Unit& u, const Unit& t, uint32_t frame) const {
-    // Is_Target_Sticky (0x569000) [M]: time-to-kill <= threshold. Health term: hull, or the sum of
-    // destroyable hardpoint health for all-hardpoints types; + 0x396420 (unknown, shield here [L]).
-    const float threshold = desc_of(u).stickiness_threshold;
-    if (!(threshold > 0.0f)) return false;
+void CombatSystem::rebuild_team_members() {
+    team_members_.clear();
+    for (const Unit& m : units_)
+        if (m.team != 0 && !(m.flags & kUnitDead)) team_members_.emplace_back(m.team, m.id);
+    std::sort(team_members_.begin(), team_members_.end());
+}
+
+const CombatSystem::Unit* CombatSystem::first_team_member(uint32_t team) const {
+    auto it = std::lower_bound(team_members_.begin(), team_members_.end(), std::make_pair(team, ObjectId{-1}));
+    for (; it != team_members_.end() && it->first == team; ++it)
+        if (const Unit* m = unit(it->second); live(m) && m->team == team) return m;
+    return nullptr;
+}
+
+const CombatSystem::Unit* CombatSystem::stickiness_type_unit(const Unit& u) const {
+    // cu8f t04a (CU8F_T04_T06_RE §1.1 / §1.2) [H]: an owner with TEAM reads the type of the first member of its team data,
+    // any other owner its own type. [port] A TEAM owner is a container that is itself a combat unit (live units carry its
+    // id as their team) or, on land, the team_leader member standing in for a container that is not a combat unit (it
+    // runs the team's TeamTargeting, land_team_head); "first member" = the team's first live unit in ascending id.
+    if (u.id >= 0) {
+        const auto key = static_cast<uint32_t>(u.id);
+        bool team = false;
+        auto it = std::lower_bound(team_members_.begin(), team_members_.end(), std::make_pair(key, ObjectId{-1}));
+        for (; it != team_members_.end() && it->first == key; ++it) {
+            const Unit* m = unit(it->second);
+            if (m == &u || !m || m->team != key) continue;
+            team = true;
+            if (live(m)) return m;
+        }
+        if (team) return nullptr;
+    }
+    if (cfg_.mode == GameMode::Land && u.team != 0 && u.team_leader && !team_head(u)) return first_team_member(u.team);
+    return &u;
+}
+
+float CombatSystem::time_to_dead(const Unit& t, uint32_t frame) const {
+    // cu8f t04a: 0x58ba40 [H] - health = the sum of max(0, health) of the destroyable hard points when the unit has any
+    // (destroyed ones count, at <= 0), else the hull; + shield (0x396420); / the damage rate; rate 0 -> 1e18. [port]
+    // Every combat unit has DAMAGE_TRACKING (damage_rate: the 5 s window).
     const float rate = damage_rate(t, frame);
-    if (!(rate > 0.0f)) return false;
-    float hp = t.health;
-    if (desc_of(t).destroy_when_all_hardpoints_destroyed && t.hp_count) {
-        hp = 0.0f;
-        for (uint32_t i = 0; i < t.hp_count; ++i) {
-            const Hardpoint& h = hps_[t.hp_begin + i];
-            if (!h.destroyed && data_->hardpoints[h.desc].destroyable) hp = hp + h.health;
+    if (!(rate > 0.0f)) return 1.0e18f;
+    float hp = 0.0f;
+    bool any = false;
+    for (uint32_t i = 0; i < t.hp_count; ++i) {
+        const Hardpoint& h = hps_[t.hp_begin + i];
+        if (!data_->hardpoints[h.desc].destroyable) continue;
+        any = true;
+        hp = hp + std::max(0.0f, h.health);
+    }
+    if (!any) hp = t.health;
+    return (hp + t.shield) / rate;
+}
+
+bool CombatSystem::sticky(const Unit& u, const Unit& t, uint32_t frame) const {
+    // cu8f t04a: Is_Target_Sticky 0x569000 (CU8F_T04_T06_RE §1.2) [H]. Threshold = the owner's TD +0x158 (spawn 0.0); only
+    // a negative value is replaced by the type's Targeting_Stickiness_Time_Threshold, read now (a TEAM owner: its first
+    // member's type; no member -> not sticky). Time to kill = the target's time-to-dead, or for a TEAM container target
+    // the sum of its live members' (team order; none: 0). Sticky <=> time to kill <= threshold. Both halves are pure, so
+    // the threshold is taken first [port: same result].
+    float threshold = u.stickiness;
+    if (threshold < 0.0f) {
+        const Unit* src = stickiness_type_unit(u);
+        if (!src) return false;
+        threshold = desc_of(*src).stickiness_threshold;
+    }
+    return time_to_kill(t, frame) <= threshold;
+}
+
+float CombatSystem::time_to_kill(const Unit& t, uint32_t frame) const {
+    float ttk = 0.0f;
+    bool container = false;
+    if (t.id >= 0) {  // [port] a container target exists only when the container is itself a combat unit
+        const auto key = static_cast<uint32_t>(t.id);
+        auto it = std::lower_bound(team_members_.begin(), team_members_.end(), std::make_pair(key, ObjectId{-1}));
+        for (; it != team_members_.end() && it->first == key; ++it) {
+            const Unit* m = unit(it->second);
+            if (m == &t || !m || m->team != key) continue;
+            container = true;
+            if (live(m)) ttk = ttk + time_to_dead(*m, frame);
         }
     }
-    return (hp + t.shield) / rate <= threshold;
+    return container ? ttk : time_to_dead(t, frame);
+}
+
+bool CombatSystem::target_sticky(ObjectId unit_id, ObjectId target) const {
+    const Unit* u = unit(unit_id);
+    const Unit* t = unit(target);
+    return u && t && sticky(*u, *t, frame_);
+}
+
+float CombatSystem::time_to_kill(ObjectId target) const {
+    const Unit* t = unit(target);
+    return t ? time_to_kill(*t, frame_) : 1.0e18f;
 }
 
 // ================================================================================================
@@ -3897,6 +3975,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
     team_heads_.clear();
     for (const auto& [team, index] : leaders_) team_heads_.emplace_back(team, units_[index].id);
     std::sort(team_heads_.begin(), team_heads_.end());
+    rebuild_team_members();  // cu8f t04a: team owners / container targets of the stickiness test
     // s78f t03: the heads of ground teams (TeamTargeting services in phase D), ascending id. A member keeps no target of
     // its own (TD +8 null, TACTICAL_COMBAT §3.1.1 "Team targeting copies"): one it picked before it became a member (its
     // head appeared later) is dropped here, since its scan no longer runs to replace it (s78f review).
@@ -4719,6 +4798,26 @@ int32_t CombatSystem::priority_override(ObjectId id) const {
     const Unit* u = unit(id);
     return u ? u->priority_override : -1;
 }
+bool CombatSystem::set_stickiness_override(ObjectId id, float seconds) {
+    // cu8f t04a: 0x568df0 from the Lua setters (CU8F_T04_T06_RE §1.1 writers 1 / 2): TD +0x158 := seconds, as given.
+    Unit* u = unit(id);
+    if (!u) return false;
+    u->stickiness = seconds;
+    return true;
+}
+float CombatSystem::stickiness_override(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? u->stickiness : 0.0f;
+}
+bool CombatSystem::reset_stickiness(ObjectId id) {
+    // cu8f t04a: the task-force release 0x5ff610 (§1.1 writer 3): TD +0x158 := type +0x528 of the unit's type, or of
+    // its first team member's type for a TEAM owner (its own type when it has no member left).
+    Unit* u = unit(id);
+    if (!u) return false;
+    const Unit* src = stickiness_type_unit(*u);
+    u->stickiness = desc_of(src ? *src : *u).stickiness_threshold;
+    return true;
+}
 
 int32_t CombatSystem::fired_weapon_projectile(const Unit& u) const {
     // OI abilities: obj +0x324 indexes the type's Projectile_Types list; [port] outside the list -> weapon_projectile.
@@ -4964,6 +5063,10 @@ void CombatSystem::hash_extended(StateHasher& h) const {
         h.f32(u.emitter_radius);
         // OI abilities
         h.i32(u.priority_override);
+        if (u.stickiness != 0.0f) {  // cu8f t04a: TD +0x158 stickiness threshold (format unchanged at the spawn 0.0)
+            h.u8(0x58);
+            h.f32(u.stickiness);
+        }
         h.u32(u.stun_end);
         h.u32(u.invuln_end);
         h.u32(u.emitter_entries);
