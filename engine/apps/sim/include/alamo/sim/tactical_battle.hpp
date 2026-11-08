@@ -142,6 +142,9 @@ struct BattleConfig {
     // both slots' team markers become their faction's objects, Income_Stream_Ability pays, the skirmish victory rules apply
     // (tactical_battle_skirmish.cpp). The attract demo's map battle leaves it off.
     bool skirmish_map = false;
+    // ccpgt t02 (SKIRMISH_SETUP §4.2): the Capture Control Points game type (4), land only: each player's win condition is 0x15
+    // CONTROL_POINT_DOMINATION instead of the map kind's default. Off: unchanged rules.
+    bool control_point_domination = false;
     // --- S4 garrisons / structure capture (owner: S4 agent; tactical_battle_garrison.cpp) ---
     // GameConstants Garrisoned_Max_Attack_Distance_Multiplier / Land_ / Space_Capture_Allowed_Countdown_Seconds (vanilla
     // values; used only when the catalog's GameConstants lack them: BattleCatalog::capture_countdown).
@@ -330,6 +333,12 @@ public:
     TacticalBattle(const BattleCatalog& catalog, const galactic::GalacticSim& galaxy, const galactic::ConflictRules& rules,
                    galactic::BattleRequest request, BattleConfig cfg = {}, const ParallelFor& pf = serial_for);
     ~TacticalBattle();
+    // OPT3 t12: loads, through `pf`, the catalog's model data (bones, avoid models, land stamp extents) of the types a map
+    // battle on `map` is likely to use: the forces' spawn types, the map's placement types and their pads' buildable /
+    // constructed types. Called before the battle's first tick (CampaignBattles::start_map_battle, at session load), so the
+    // setup finds them cached. The cache is a pure memo of the model files: nothing the battle computes depends on it.
+    static void prepare_models(const BattleCatalog& catalog, const galactic::GalacticSim& galaxy, const galactic::ConflictRules& rules,
+                               const galactic::BattleRequest& request, const terrain::MapData& map, const ParallelFor& pf);
     TacticalBattle(const TacticalBattle&) = delete;
     TacticalBattle& operator=(const TacticalBattle&) = delete;
 
@@ -666,6 +675,18 @@ public:
     bool victory_declared_silent() const { return vm_decl_.silent; }    // +0x15: no TEXT_WIN / LOSE_TACTICAL
     int32_t victory_countdown() const { return vm_countdown_; }
     size_t victory_queued() const { return vm_queue_.size(); }           // deferred {type, player} tests
+    // ccpgt t02 (SKIRMISH_SETUP §4.2): BattleConfig::control_point_domination registers only {0x15, player} records (the slot
+    // players on a skirmish map, else the attacker and the defender), so no other rule (elimination, retreat, base) can win.
+    // 0x15 is tested only by the domination timer: a completed capture transition of a relevant point (CAPTURE_POINT with
+    // Control_Point_Domination_Condition_Relevant) arms it for round(30 x Control_Point_Domination_Victory_Time_In_Secs) frames
+    // (GameConstants, 30 s) when every other relevant point is allied (relation 0) with the new owner and its faction is
+    // Is_Playable, else disarms it; each battle tick it counts down, at <= 0 it tests 0x15 for that player and disarms. E wins
+    // 0x15 when its faction is playable, at least one relevant point exists and every one is allied with E (any owner, no
+    // alive / Victory_Relevant test). The win then waits the record's 210-frame countdown. [port] the 30 / 15 / 5 s announcer
+    // lines are the host's (presentation): control_point_timer() = frames left (-1 not armed), control_point_leader() = the
+    // armed player (-1 none).
+    int32_t control_point_timer() const { return vm_cp_armed_ ? vm_cp_timer_ : -1; }
+    int32_t control_point_leader() const { return vm_cp_armed_ ? vm_cp_player_ : -1; }
     // --- end story t06 ---
     // Teleport (0x3a8f90): store, movement (stops the unit), combat, trees. False when the object is not alive.
     bool teleport(TacticalMode& mode, objects::ObjectId id, Vec3 position, Vec3 facing);
@@ -1262,9 +1283,9 @@ private:
                 uint32_t member_count = 0xFFFFFFFFu);
     void space_obstacles_sync(const TacticalMode& mode);  // refixf t02: SPACE_OBSTACLE units as space static entries
     // S8 t02 / S7 t13 (MOVEMENT §1.3 / §2.2): obstacle footprints of single objects under their object id (tactical_battle.cpp).
-    bool land_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h);   // LAND_OBSTACLE stamp; false: none
+    bool land_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h, const ParallelFor& pf = serial_for);   // LAND_OBSTACLE stamp; false: none
     bool space_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h);  // SPACE_OBSTACLE static entry
-    void land_obstacles_sync(const TacticalMode& mode);  // S8 t02: stamp new LAND_OBSTACLE objects, unstamp the gone
+    void land_obstacles_sync(const TacticalMode& mode, const ParallelFor& pf);  // S8 t02: stamp new LAND_OBSTACLE objects, unstamp the gone
     std::vector<uint8_t> land_obstacle_none_;  // S8 t02: per type, 1 = no footprint (no XML size, no model); derived, not saved
     Vec3 slot_position(uint8_t side, uint32_t passability_mask);
     Vec3 snap_passable(Vec3 p, uint32_t passability_mask, bool always) const;  // slot_position's box clamp + cell search
@@ -1329,6 +1350,13 @@ private:
     void vm_release(bool replay);                     // 0x3440a0
     void vm_sync_tsw();                               // TSW fire / state-13 holds -> raise / release
     bool vm_base_object(const objects::ObjectStore& st, objects::ObjectHandle h) const;
+    // ccpgt t02 (SKIRMISH_SETUP §4.2): the domination rule.
+    bool vm_cp_relevant(const objects::ObjectStore& st, objects::ObjectHandle h) const;  // CAPTURE_POINT + the type flag
+    // Every relevant point except `skip` allied with `player`; `any` = at least one relevant point (skip excluded).
+    bool vm_cp_all_allied(int32_t player, objects::ObjectId skip, bool& any) const;
+    bool vm_player_playable(int32_t player) const;
+    void vm_cp_capture(objects::ObjectId point, int32_t new_owner);  // 0x360d90, before the new owner is written
+    void vm_cp_disarm();
     void check_victory(TacticalMode& mode);
     // BT §3.1a item 1 (0x372230): Victory_Relevant, else Space_ / Land_Victory_Relevant of the type. Cached per type in
     // vr_cache_ (0 unknown, 1 no, 2 yes): a pure function of the type data and the mode, not saved.
@@ -1337,6 +1365,14 @@ private:
     float side_power(uint8_t side) const;
     int32_t side_player(uint8_t side) const { return side == 0 ? req_.info.defender : req_.info.attacker; }
     Unit* unit_by_id(objects::ObjectId id);
+    // cu8j t02 (MOVEMENT §4.7.1): the adopt 0x39bcb0 of object h - the predicate (not a TEAM member; the mode's locomotor
+    // kind, a TEAM_LOCOMOTOR container only when a member's locomotor admits; [port] builders and hyperspacing objects are
+    // not tested), then for a movement unit MovementSystem::adopt (no draw while it has a coordinator; `leave` first leaves
+    // every coordinator: stop_and_hold), for any other object one FormationClass ctor draw. True = one draw.
+    bool mv_adopt(const TacticalMode& mode, objects::ObjectHandle h, SimRng& rng, bool leave = false);
+    int8_t mv_adopt_kind(uint32_t type);  // per type and mode: 1 land, 2 space, 0 not admitted, -1 TEAM_LOCOMOTOR (cached)
+    std::vector<int8_t> adopt_kind_;      // cu8j t02: mv_adopt_kind cache (+1; 0 = not computed); derived, not saved
+    bool deploy_script_ = false;          // cu8j t02: deploy() for a script spawn (no team helper adopt; transient)
     // FIGHTER_FLYING §6.3.1: FlyingHooks::clearance type data per object (ClearanceInfoFn), cached per type.
     bool clearance_info(objects::ObjectId id, tactical::movement::ClearanceInfo& out);
     // SPACE_AVOIDANCE: the avoidance tree members (space battles), rebuilt from the committed store before the movement
@@ -1553,6 +1589,9 @@ private:
     std::vector<VmTracked> vm_tracked_;                    // last scan, ascending id
     uint32_t vm_tsw_seen_ = 0;                             // l1_sw_.victory_holds() at the last sync
     uint32_t vm_declared_frame_ = 0;                       // frame_ of the declaration (the countdown runs from the next tick)
+    bool vm_cp_armed_ = false;                             // ccpgt t02: mode +0x2b0..+0x2b8, the domination timer
+    int32_t vm_cp_timer_ = -1;
+    int32_t vm_cp_player_ = -1;
     std::vector<objects::ObjectId> vm_deaths_;             // transient: this tick's combat deaths in event order
     TacticalMode* vm_mode_ = nullptr;
     bool finished_ = false;
@@ -1751,7 +1790,7 @@ private:
     uint32_t bt_players_ = 0;            // the host's player count (valid map owner ids)
     void bt_map_prepass();                                  // setup: base-level filter + discard rule, map types -> tables
     void bt_map_load(TacticalMode& mode, SimRng& rng);      // setup: spawn the kept placements (spawn-table draws)
-    void bt_place_forces(TacticalMode& mode, SimRng& rng);  // setup: §3.2 steps 1-7 + the start-force deploys
+    void bt_place_forces(TacticalMode& mode, SimRng& rng, const ParallelFor& pf);  // setup: §3.2 steps 1-7 + the start-force deploys
     bool bt_owner_valid(int32_t owner) const;
     bool bt_owner_neutral(int32_t owner) const;  // owner's faction Is_Neutral
     // S7 t30 (TACTICAL_COMBAT §2.10): the start value of the relation table entry (row p, column q): 0 friendly, 1 enemy,

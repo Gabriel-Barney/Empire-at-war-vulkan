@@ -213,6 +213,9 @@ void TacticalBattle::s4_leave(TacticalMode& mode, objects::ObjectId unit, Vec3 a
         md.yaw_deg = 0.0f;
         movement_->add_unit(md);
     }
+    // cu8j t02 (MOVEMENT §4.7.2): the garrison leave 0x37a060 adopts the unit (0x39bcb0, return 0x37a369): one ctor draw
+    // when it qualifies (never a team member). [M: its place among the leave's other draws]
+    if (bt_rng_) (void)mv_adopt(mode, u->h, *bt_rng_);
 }
 
 void TacticalBattle::s4_apply(TacticalMode& mode) {
@@ -270,6 +273,7 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
         const std::vector<tg::CaptureEvent> caps(captures_->events().begin(), captures_->events().end());
         captures_->clear_events();
         for (const tg::CaptureEvent& c : caps) {
+            vm_cp_capture(c.point, c.new_owner);  // ccpgt t02: 0x360d90 runs before the owner is written
             s4_set_owner(mode, c.point, c.new_owner);
             story_captured_.push_back({c.point, c.old_owner, c.new_owner});
         }

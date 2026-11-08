@@ -77,6 +77,8 @@ BattleCatalog::BattleCatalog(const objects::GameObjectTypes& types, const FilePr
         land_health_mult_ = constants->get_float("Object_Max_Health_Multiplier_Land", land_health_mult_);
         land_capture_countdown_ = constants->get_float("Land_Capture_Allowed_Countdown_Seconds", land_capture_countdown_);
         space_capture_countdown_ = constants->get_float("Space_Capture_Allowed_Countdown_Seconds", space_capture_countdown_);
+        control_point_victory_seconds_ =
+            constants->get_float("Control_Point_Domination_Victory_Time_In_Secs", control_point_victory_seconds_);  // ccpgt t02
         garrisoned_range_mult_ = constants->get_float("Garrisoned_Max_Attack_Distance_Multiplier", garrisoned_range_mult_);
         use_reinforcement_points_ = constants->get_bool("Use_Reinforcement_Points", use_reinforcement_points_);  // a1h t06
         threat_decay_step_ = constants->get_float("AI_SpaceThreatDecayStep", threat_decay_step_);
@@ -740,6 +742,10 @@ ta::AbilityObjectDesc BattleCatalog::ability_desc(uint32_t t, BuildState& s) con
     r.type_max_speed = [types](std::string_view name) -> float {  // cu8i t01: Saber_Throw's Saber_Name speed
         const objects::TypeIndex x = types->resolve_name(ascii_trim(name));
         return x == objects::kNone ? -1.0f : types->columns().max_speed[x];
+    };
+    r.type_max_flight_distance = [types](std::string_view name) -> float {  // cu8j t03: Saber_Name's max travel base
+        const objects::TypeIndex x = types->resolve_name(ascii_trim(name));
+        return x == objects::kNone ? -1.0f : types->get_float(x, "Projectile_Max_Flight_Distance");
     };
     r.armor = [this](std::string_view name) -> uint16_t { return damage_.armor_index(ascii_trim(name)); };
     // OI abilities: melee Damage_Type and the projectile test for Spawned_Object_Type (instant effects).

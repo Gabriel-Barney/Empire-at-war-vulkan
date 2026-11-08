@@ -1,6 +1,8 @@
 // --- story t06: the tactical victory monitor (docs/re/BATTLE_TRANSITIONS.md §2.5 / §3.1a, SKIRMISH_SETUP.md §4,
 // TSW_PLANET_DESTROY.md §2 / §6; tactical_battle.hpp "story t06"). Serial code, no synced draws.
+// ccpgt t02: the Capture Control Points rule 0x15 and its domination timer (SKIRMISH_SETUP §4.2).
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 #include "alamo/objects/behaviors.hpp"
@@ -16,13 +18,23 @@ constexpr int32_t kStoryShortCountdown = 30;  // VICTORY with Reward_Param2 != 0
 constexpr int32_t kTswStoryCountdown = 30;    // TSW_PLANET_DESTROY §6 item 5 (b)
 constexpr uint8_t kSkirmishLandBase = 0x13;   // SKIRMISH_ALL_ENEMY_BASE_COMPONENTS_DESTROYED
 constexpr uint8_t kSkirmishStarbase = 0x16;   // SKIRMISH_SPACE_ENEMY_STARBASE_DESTROYED
+constexpr uint8_t kControlPointDomination = 0x15;  // CONTROL_POINT_DOMINATION (ccpgt t02)
 
 }  // namespace
 
 void TacticalBattle::vm_setup(TacticalMode& mode) {
     vm_mode_ = &mode;
     vm_records_.clear();
-    if (skirmish_map()) {
+    vm_cp_disarm();
+    if (cfg_.control_point_domination && !space_) {
+        // ccpgt t02 (SKIRMISH_SETUP §0 / §4.2): game type 4 forces the win condition 0x15, the only record of each player, so
+        // nothing else can win. Players: the skirmish slots on a skirmish map; [port] the attacker and the defender in the
+        // game's skirmish (a galactic hop battle).
+        int32_t ids[2] = {skirmish_map() ? skirmish_slot_player(0) : req_.info.defender, skirmish_map() ? skirmish_slot_player(1) : req_.info.attacker};
+        if (!skirmish_map() && ids[0] > ids[1]) std::swap(ids[0], ids[1]);
+        for (int32_t i = 0; i < 2; ++i)
+            if (ids[i] >= 0 && (i == 0 || ids[1] != ids[0])) vm_add_record(kControlPointDomination, ids[i], kRecordCountdown, false);
+    } else if (skirmish_map()) {
         // SKIRMISH_SETUP §2 step 4: one record per player with the option's win condition [port: the defaults, land 0x13 /
         // space 0x16 (MP_Default_Land / Space_Tactical_Win_Condition); only the two slot players].
         for (int32_t s = 0; s < 2; ++s)
@@ -44,6 +56,64 @@ void TacticalBattle::vm_setup(TacticalMode& mode) {
     }
     vm_scan(mode, vm_tracked_);  // the objects at the start: nothing has left a player yet
     vm_tsw_seen_ = l1_sw_.victory_holds();
+}
+
+bool TacticalBattle::vm_cp_relevant(const objects::ObjectStore& st, objects::ObjectHandle h) const {
+    static const objects::BehaviorTypeId kCapturePoint = objects::behavior_type_id("CAPTURE_POINT");
+    if (kCapturePoint == objects::kNoBehavior || !st.has_behavior(h, kCapturePoint)) return false;
+    const objects::GameObjectTypes& types = catalog_->types();
+    const auto t = static_cast<uint32_t>(st.type(h));
+    return t < types.size() && types.get_bool(t, "Control_Point_Domination_Condition_Relevant");
+}
+
+bool TacticalBattle::vm_cp_all_allied(int32_t player, objects::ObjectId skip, bool& any) const {
+    // §4.2: every CAPTURE_POINT object of the GOM whose type has the flag, any owner, no alive / Victory_Relevant / script test;
+    // allied = relation 0 (0x39a2c0), so a Neutral, Hostile or unowned point blocks.
+    any = false;
+    if (!vm_mode_) return false;
+    const objects::ObjectStore& st = vm_mode_->primary();
+    for (const objects::ObjectHandle h : st.all_objects()) {
+        if (st.id(h) == skip || !vm_cp_relevant(st, h)) continue;
+        any = true;
+        if (!bt_allied(player, st.owner(h))) return false;
+    }
+    return true;
+}
+
+bool TacticalBattle::vm_player_playable(int32_t player) const {
+    const auto& ps = galaxy_->players();
+    if (player < 0 || static_cast<size_t>(player) >= ps.size()) return false;
+    const uint32_t f = ps[static_cast<size_t>(player)].faction;
+    return f < galaxy_->rules().factions.size() && galaxy_->rules().factions[f].is_playable;
+}
+
+void TacticalBattle::vm_cp_disarm() {
+    vm_cp_armed_ = false;
+    vm_cp_timer_ = -1;
+    vm_cp_player_ = -1;
+}
+
+void TacticalBattle::vm_cp_capture(objects::ObjectId point, int32_t new_owner) {
+    // 0x360d90 (§4.2): a capture transition of a relevant point completed. Ignored unless some player has a 0x15 record.
+    if (!vm_mode_ || finished_) return;
+    if (std::none_of(vm_records_.begin(), vm_records_.end(), [](const VmRecord& r) { return r.type == kControlPointDomination; }))
+        return;
+    const objects::ObjectStore& st = vm_mode_->primary();
+    const objects::ObjectHandle h = st.find(point);
+    if (!st.exists(h) || !vm_cp_relevant(st, h)) return;
+    if (!vm_player_playable(new_owner)) {  // e.g. the point turns Neutral
+        vm_cp_disarm();
+        return;
+    }
+    bool any = false;
+    if (!vm_cp_all_allied(new_owner, point, any)) {  // the changing point itself is skipped: it becomes the new owner's
+        vm_cp_disarm();
+        return;
+    }
+    // Arm: round-half-away(FPS x Control_Point_Domination_Victory_Time_In_Secs) frames, 900 in FoC.
+    vm_cp_armed_ = true;
+    vm_cp_timer_ = static_cast<int32_t>(std::lround(30.0 * static_cast<double>(catalog_->control_point_victory_seconds())));
+    vm_cp_player_ = new_owner;
 }
 
 bool TacticalBattle::vm_base_object(const objects::ObjectStore& st, objects::ObjectHandle h) const {
@@ -128,6 +198,10 @@ bool TacticalBattle::vm_evaluate(uint8_t type, int32_t player) {
         case kSkirmishLandBase:
         case kSkirmishStarbase:
             return !vm_blocker(player, true);
+        case kControlPointDomination: {  // §4.2: playable, at least one relevant point, every one allied with E
+            bool any = false;
+            return vm_player_playable(player) && vm_cp_all_allied(player, objects::kNoObjectId, any) && any;
+        }
         default:
             return false;
     }
@@ -252,6 +326,13 @@ void TacticalBattle::check_victory(TacticalMode& mode) {
     vm_sync_tsw();
     // 0x344670: the countdown runs one frame per battle tick after the declaration's tick (stops at 0 [M]).
     if (vm_declared_ && frame_ > vm_declared_frame_ && vm_countdown_ > 0) --vm_countdown_;
+    // ccpgt t02 (§4.2, tactical tick 0x3639d0): the domination timer counts down; at <= 0 it tests 0x15 for the armed player
+    // (queued while held, as every test) and disarms. [M] +-1 frame against the capture service's order in the tick.
+    if (vm_cp_armed_ && --vm_cp_timer_ <= 0) {
+        const int32_t p = vm_cp_player_;
+        vm_cp_disarm();
+        vm_test(kControlPointDomination, p);
+    }
     // Victory-relevant objects that left their player since the last scan (0x2c0340 trigger points: removal / death / owner
     // change / retreat). [port] this tick's combat deaths first in death order, then the rest by ascending id.
     std::vector<VmTracked> now;

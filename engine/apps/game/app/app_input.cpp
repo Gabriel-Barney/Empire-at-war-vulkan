@@ -911,6 +911,7 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 if (s.skirmish.ai_faction.empty() || ascii_iequals(s.skirmish.ai_faction, s.skirmish.human_faction))  // [port] the AI needs a hostile faction
                     s.skirmish.ai_faction = game::default_skirmish_faction(data_.rules, true, s.skirmish.human_faction);
                 for (const int32_t c : a.colors) s.skirmish.colors.push_back(static_cast<uint8_t>(std::clamp(c, 0, 8)));
+                s.skirmish.control_points = a.game_type == ui::kSkirmishGameControl;  // ccpgt t02
                 s.seed = opt_.seed;
                 s.battle_max_frames = opt_.battle_max_frames;
                 s.battle_end_hold_frames = kBattleEndHoldFrames;

@@ -105,6 +105,8 @@ bool App::init() {
             i.name_key = e.name_key;
             i.custom = custom_tab;
             i.space = e.kind == 2;
+            // ccpgt t02 (UI.md 9.4): a land map whose upper-cased tag contains CONTROL is listed under Capture Control Points.
+            i.control = e.kind == 1 && e.mode_tag.find("CONTROL") != std::string::npos;
             map_rows.push_back(std::move(i));
         }
     }
@@ -415,24 +417,106 @@ int App::run() {
 
 using namespace alamo_game_app;
 
+// BM3: `--bench-new-save FILE ...` / `--bench-maps`: loads the game data and works on it without a window or a renderer.
+static int bench_new_main(const Options& opt) {
+    if (const std::string why = check_bench_new_save(opt.bench_new); !why.empty()) {
+        std::fprintf(stderr, "benchmark: %s\n", why.c_str());
+        return 2;
+    }
+    const std::string root = opt.game.empty() ? env_or_empty("ALAMO_FOC_DATA") : opt.game;
+    if (root.empty()) {
+        std::printf("alamo_game --bench-new-save: ALAMO_FOC_DATA / --game not set: skipped\n");
+        return 0;
+    }
+    GameData data;
+    std::string err;
+    if (!load_game_data(root, opt.game_args, data, &err)) {
+        std::fprintf(stderr, "game data: %s\n", err.c_str());
+        return 1;
+    }
+    if (opt.bench_new.maps) {
+        for (const std::string& line : bench_map_lines(data)) std::printf("%s\n", line.c_str());
+        return 0;
+    }
+    jobs::JobSystem js(jobs::JobSystemConfig{opt.workers});
+    std::string summary;
+    if (!make_bench_save(data, js, opt.bench_new, &summary, &err)) {
+        std::fprintf(stderr, "bench-new-save: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("bench-new-save: %s\n", summary.c_str());
+    return 0;
+}
+
+// bm3 --bench-regen MANIFEST: loads the game data, makes the scenario's session again from its make line (benchmark_save.hpp) and turns the
+// command line into `--bench-make MANIFEST --bench-save <the new save>` (the other flags stay). 0 = ready, else the exit code.
+static int bench_regen_prepare(const Options& opt, const std::vector<std::string>& args, const std::string& manifest, std::string& regen_save,
+                               std::vector<std::string>& scenario_args) {
+    const std::string root = opt.game.empty() ? env_or_empty("ALAMO_FOC_DATA") : opt.game;
+    if (root.empty()) {
+        std::fprintf(stderr, "alamo_game --bench-regen needs --game <corruption dir> or ALAMO_FOC_DATA\n");
+        return 2;
+    }
+    std::vector<std::string> game_args;
+    for (const std::string& a : args)
+        if (a.find('=') != std::string::npos && a.rfind("--", 0) != 0) game_args.push_back(a);
+    GameData data;
+    std::string err;
+    if (!load_game_data(root, game_args, data, &err)) {
+        std::fprintf(stderr, "game data: %s\n", err.c_str());
+        return 1;
+    }
+    jobs::JobSystem js(jobs::JobSystemConfig{opt.workers});
+    std::string summary;
+    if (!bench_regen_save(data, js, manifest, &regen_save, &summary, &err)) {
+        std::fprintf(stderr, "bench-regen: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("bench-regen: %s\n", summary.c_str());
+    scenario_args = {args.empty() ? std::string("alamo_game") : args[0], "--bench-make", manifest, "--bench-save", regen_save};
+    return 0;
+}
+
 int main(int argc, char** argv) {
     alamo::vfs::install_steam_workshop_lookup();  // modc t10: STEAMMOD= from the Steam library folders
     enable_dpi_awareness();  // before any window: sizes and the video modes in physical pixels
     Options opt;
     const std::vector<std::string> args(argv, argv + argc);
     opt.argv.assign(args.begin() + (argc > 0 ? 1 : 0), args.end());
+    std::string regen_save;  // bm3: --bench-regen S: the save made again from the scenario's make line (deleted at the end)
     {  // bm2: --bench-scenario / --bench-make FILE first; the flags below override what the file sets
         std::string serr;
-        if (load_bench_scenario_arg(args, opt.bench, &serr) < 0) {
+        std::vector<std::string> scenario_args = args;
+        for (size_t k = 1; k + 1 < args.size(); ++k)
+            if (args[k] == "--bench-regen") {  // bm3: made as `--bench-make S --bench-save <the remade save>`
+                if (const int rc = bench_regen_prepare(opt, args, args[k + 1], regen_save, scenario_args); rc != 0) return rc;
+                break;
+            }
+        if (load_bench_scenario_arg(scenario_args, opt.bench, &serr) < 0) {
             std::fprintf(stderr, "benchmark: %s\n", serr.c_str());
+            if (!regen_save.empty()) std::remove(regen_save.c_str());
             return 2;
         }
+        if (!regen_save.empty()) opt.bench.save = regen_save;
     }
     for (int i = 1; i < argc; ++i) {
         {  // BM2a: the benchmark flags (benchmark.hpp)
             size_t bi = static_cast<size_t>(i);
             std::string berr;
             const int br = parse_benchmark_arg(args, bi, opt.bench, &berr);
+            if (br < 0) {
+                std::fprintf(stderr, "%s\n", berr.c_str());
+                return usage();
+            }
+            if (br > 0) {
+                i = static_cast<int>(bi);
+                continue;
+            }
+        }
+        {  // BM3: --bench-new-save / --bench-maps and their options (benchmark_save.hpp)
+            size_t bi = static_cast<size_t>(i);
+            std::string berr;
+            const int br = parse_bench_new_arg(args, bi, opt.bench_new, &berr);
             if (br < 0) {
                 std::fprintf(stderr, "%s\n", berr.c_str());
                 return usage();
@@ -476,10 +560,11 @@ int main(int argc, char** argv) {
         else if (a == "--profile") opt.profile = true;
         else if (a == "--profile-out") opt.profile = true, opt.profile_out = next();
         else if (a == "--profile-budget") opt.profile_budget = std::strtod(next().c_str(), nullptr);
-        else if (a == "--bench-scenario" || a == "--bench-make") (void)next();  // bm2: read before this loop
+        else if (a == "--bench-scenario" || a == "--bench-make" || a == "--bench-regen") (void)next();  // bm2 / bm3: read before this loop
         else if (a.find('=') != std::string::npos) opt.game_args.push_back(a);
         else return usage();
     }
+    if (opt.bench_new.active()) return bench_new_main(opt);  // BM3: no window, no renderer
     if (opt.width == 0 || opt.height == 0) return usage();
     if (!opt.smoke.empty() && opt.smoke != "skirmish" && opt.smoke != "campaign" && opt.smoke != "land" && opt.smoke != "saveload") return usage();
     if (opt.bench.active()) {  // BM2a: no smoke script, intro, attract demo or frame-time overlay in a benchmark run
@@ -506,5 +591,7 @@ int main(int argc, char** argv) {
         if (opt.battle_max_frames == 27000) opt.battle_max_frames = opt.smoke == "campaign" ? 900u : 4800u;
     }
     App app(std::move(opt));
-    return app.run();
+    const int rc = app.run();
+    if (!regen_save.empty()) std::remove(regen_save.c_str());  // bm3: --bench-regen's temporary save
+    return rc;
 }

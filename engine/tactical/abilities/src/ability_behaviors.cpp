@@ -45,7 +45,10 @@ void AbilitySystem::move_order(ObjectId id, Vec3 p, uint32_t frame, uint8_t type
     events_.push_back(e);
 }
 
-void AbilitySystem::stop_order(ObjectId id, uint32_t frame) { event(AbilityEventKind::StopOrder, 0, id, kNoObject, frame); }
+void AbilitySystem::stop_order(ObjectId id, uint32_t frame, int32_t hold) {
+    event(AbilityEventKind::StopOrder, 0, id, kNoObject, frame);
+    events_.back().value = hold;
+}
 
 void AbilitySystem::change_owner(Obj& o, int32_t owner, uint32_t frame) {
     // 0x38e5a0 (Hack / Tactical_Bribe / convert): the object and, for a team member, its container.
@@ -568,7 +571,7 @@ void AbilitySystem::h_deploy(Obj& o, bool on, uint32_t frame) {
     // 0x3a1ce0 [H flow, M names]: the unit stops; on -> deploy (DeployedBehavior, host), off -> undeploy. No countdown.
     const bool ok = team_gates(o, kDeploy, frame);
     if (on && !ok) return;
-    stop_order(o.id, frame);
+    stop_order(o.id, frame, kStopAdopt);  // cu8j t02: 0x3a1ce0 adopts (return 0x3a1f81, MOVEMENT §4.7.2)
     if (host_.deploy) {
         // S8 t11 (MOVEMENT §3.2, AI_TACTICAL §7.3.3 item 3): 0x391260 calls the Walk locomotor's Deploy(on). The locomotor
         // owns the state (0x18 Deploying, clip, 0x19 Deployed; 0x1A Undeploying, clip, 0); the host reports each change

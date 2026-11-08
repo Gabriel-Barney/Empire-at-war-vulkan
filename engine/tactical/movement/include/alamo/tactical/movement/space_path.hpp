@@ -135,6 +135,12 @@ public:
     }
     // Static entries only (no time).
     uint32_t query_static(V2 a, V2 b, float radius) const;
+    // OPT3 t12: builds the uniform-grid index query_segment uses to visit only the entries near the query. Call it from one
+    // thread before parallel queries; every mutation drops it and query_segment falls back to the full scan. Each entry
+    // that can pass the per-entry test is visited exactly once, with the same test, and the result is an OR of bits, so the
+    // index changes no result. Derived state: never saved or hashed.
+    void build_index();
+    bool index_valid() const { return index_.valid; }
 
     void hash(StateHasher& h) const;
     // N1 stage 2 save / load (src/movement_save.cpp): everything (static entries and tracks by ascending id, box, look-
@@ -191,8 +197,20 @@ private:
         v.erase(it);
         return true;
     }
+    // OPT3 t12: uniform grid over the entries' boxes (statics: centre +- radius + margin; tracks: waypoint box +- radius +
+    // margin). Per kind, the entries overlapping each cell (CSR, entry index order) and each entry's first cell.
+    struct Index {
+        bool valid = false;
+        float ox = 0.0f, oy = 0.0f, inv_cell = 0.0f;
+        int32_t nx = 0, ny = 0;
+        std::vector<uint32_t> s_start, s_items, t_start, t_items;
+        std::vector<int32_t> s_c0, t_c0;  // per entry: first cell x, first cell y
+    };
+    // Cell range of [lo, hi] clamped to the grid (index_.nx / ny > 0).
+    void index_cells(V2 lo, V2 hi, int32_t& x0, int32_t& y0, int32_t& x1, int32_t& y1) const;
     IdVec<Static> statics_;
     IdVec<Track> tracks_;
+    Index index_;
     V2 box_min_, box_max_;
     bool has_box_ = false;
     uint32_t window_ = 45u * 90u;
@@ -246,7 +264,28 @@ struct SpaceScratch {
         float g;
         bool closed;
     };
-    std::unordered_map<uint64_t, Visit> visited;  // probed only, never iterated
+    // OPT3 t12: the visited states, an open-addressing table (probed only, never iterated, so the layout cannot change a
+    // result; it replaced a std::unordered_map whose per-node allocations and clear() were a large part of a long search).
+    class VisitTable {
+    public:
+        // Empties the table, sized for about `expected` keys (it still grows past that).
+        void clear(size_t expected);
+        Visit* find(uint64_t key);
+        void emplace(uint64_t key, Visit v);
+
+    private:
+        struct Slot {
+            uint64_t key = 0;
+            Visit v{0.0f, false};
+            uint32_t gen = 0;  // the slot is used when gen == gen_
+        };
+        size_t slot_of(uint64_t key) const;
+        void grow();
+        std::vector<Slot> slots_;
+        uint32_t gen_ = 0;
+        size_t count_ = 0;
+    };
+    VisitTable visited;
 };
 
 bool plan_space_path(const SpaceOccupancy& occ, const MovementConstants& k, const SpaceRequest& req, SpaceScratch& scratch,

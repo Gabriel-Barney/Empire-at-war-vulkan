@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
@@ -322,6 +323,21 @@ static void test_grid() {
         }
         const auto ea = ser.effective_values(), eb = par.effective_values();
         CHECK(same && std::equal(ea.begin(), ea.end(), eb.begin(), eb.end()));
+        // OPT3 t12: stamp() with a ParallelFor (the fine-tune samples' rays through it, here back to front) stamps the same
+        // cells as the serial stamp().
+        PassabilityGrid one;
+        one.init(32, 32);
+        one.set_base(8, 9, kPassSteep);
+        one.stamp(4, make_footprint({40.0f, 40.0f}, 0.0f, 30.0f, 30.0f, -15.0f, -15.0f, 0, 0, 1.0f, 0));
+        std::vector<uint32_t> counts_pf;
+        for (const auto& [id, f] : list) counts_pf.push_back(one.stamp(id, f, backwards));
+        bool same_pf = counts_pf == counts && ser.stamped_ids() == one.stamped_ids();
+        for (const ObjectId id : ser.stamped_ids()) {
+            const auto a = ser.stamp_cells(id), b = one.stamp_cells(id);
+            same_pf = same_pf && std::equal(a.begin(), a.end(), b.begin(), b.end());
+        }
+        const auto ec = one.effective_values();
+        CHECK(same_pf && std::equal(ea.begin(), ea.end(), ec.begin(), ec.end()));
     }
     // Rotated footprint: 60 x 10 at yaw 90 covers a vertical strip.
     ObstacleFootprint fp3 = make_footprint({300.0f, 300.0f}, 90.0f, 60.0f, 10.0f, 0.0f, -5.0f, 0, 0, 1.0f, 0);
@@ -1286,10 +1302,12 @@ static void test_push_search() {
         o.units = {1};
         o.destination = cell_center(55, 20);
         s.move(o, rng, 0);
+        s.coordinator_update(0, 0, rng);  // cu8j: each order composes at its own (next) coordinator update
         MoveOrder later;
         later.units = {2};
         later.destination = cell_center(30, 35);
         s.move(later, rng, 900);
+        s.coordinator_update(900, 900, rng);
         CHECK(s.view(2).has_goal && s.view(2).start_frame >= 900);
         uint32_t push_frame = 0, end_frame = 0;
         bool kept = true;
@@ -1401,6 +1419,95 @@ static void test_space() {
     CHECK(std::fabs(eval_space_path(turn, 5.0f).heading - 45.0f) < 1e-4f);
 }
 
+// OPT3 t12: SpaceOccupancy::build_index (query_segment visits only the entries near the query) answers every query as the
+// full scan does: random statics and tracks, random segments, layers, self ids and times, static / no static; a mutation
+// drops the index (full scan again) until the next build; a non-finite query scans everything.
+static void test_space_index() {
+    SimRng r(1234);
+    auto rf = [&r](float lo, float hi) { return r.range_float(lo, hi); };
+    SpaceOccupancy occ;
+    occ.set_box({-6000.0f, -6000.0f}, {6000.0f, 6000.0f});
+    for (int32_t i = 0; i < 40; ++i)
+        occ.add_static(-1 - i, {rf(-5000.0f, 5000.0f), rf(-5000.0f, 5000.0f)}, rf(20.0f, 600.0f),
+                       i % 3 == 0 ? (kSpaceStatic | kSpaceAsteroid) : kSpaceStatic);
+    for (int32_t i = 0; i < 30; ++i) {
+        std::vector<SpaceWaypoint> wps(static_cast<size_t>(r.range_int(1, 5)));
+        float t = 0.0f;
+        V2 p{rf(-5000.0f, 5000.0f), rf(-5000.0f, 5000.0f)};
+        for (SpaceWaypoint& w : wps) {
+            w.pos = p;
+            w.time = t;
+            p = p + V2{rf(-900.0f, 900.0f), rf(-900.0f, 900.0f)};
+            t += rf(10.0f, 200.0f);
+        }
+        occ.set_track(10 + i, i % 2 ? kLayerFrigate : kLayerCapital, rf(20.0f, 150.0f), static_cast<uint32_t>(r.range_int(0, 300)), wps);
+    }
+    auto compare = [&](const SpaceOccupancy& indexed, int32_t n) {
+        bool same = true;
+        int32_t hits = 0;
+        for (int32_t k = 0; k < n; ++k) {
+            const V2 a{rf(-6500.0f, 6500.0f), rf(-6500.0f, 6500.0f)};
+            const V2 b = k % 4 == 0 ? a : a + V2{rf(-2500.0f, 2500.0f), rf(-2500.0f, 2500.0f)};
+            const float t0 = rf(0.0f, 900.0f), t1 = t0 + rf(-50.0f, 300.0f), radius = rf(0.0f, 300.0f);
+            const uint32_t layer = k % 3 == 0 ? kLayerFrigate : (k % 3 == 1 ? kLayerCapital : (kLayerFrigate | kLayerCapital));
+            const ObjectId self = k % 5 == 0 ? static_cast<ObjectId>(10 + k % 30) : (k % 5 == 1 ? static_cast<ObjectId>(-1 - k % 40) : 999);
+            const bool with_static = k % 2 == 0;
+            const auto now = static_cast<uint32_t>(r.range_int(0, 600));
+            const uint32_t x = indexed.query_segment(a, b, t0, t1, radius, layer, self, with_static, now);
+            same = same && x == occ.query_segment(a, b, t0, t1, radius, layer, self, with_static, now);
+            hits += x != 0 ? 1 : 0;
+        }
+        return same && hits > n / 20;
+    };
+    CHECK(!occ.index_valid());
+    SpaceOccupancy ix = occ;
+    ix.build_index();
+    CHECK(ix.index_valid() && compare(ix, 4000));
+    // A mutation drops the index; queries stay right; the rebuild indexes the new entries.
+    ix.add_static(-100, {0.0f, 0.0f}, 300.0f, kSpaceStatic);
+    occ.add_static(-100, {0.0f, 0.0f}, 300.0f, kSpaceStatic);
+    CHECK(!ix.index_valid() && compare(ix, 500));
+    ix.build_index();
+    std::vector<SpaceWaypoint> w2(2);
+    w2[0].pos = {-4000.0f, 4000.0f};
+    w2[1].pos = {4000.0f, -4000.0f};
+    w2[1].time = 400.0f;
+    ix.clear_track(12);
+    occ.clear_track(12);
+    ix.set_track(77, kLayerFrigate, 80.0f, 50, w2);
+    occ.set_track(77, kLayerFrigate, 80.0f, 50, w2);
+    CHECK(!ix.index_valid());
+    ix.build_index();
+    CHECK(ix.index_valid() && compare(ix, 2000));
+    // Non-finite query: the full scan (no cell lookup).
+    const float inf = std::numeric_limits<float>::infinity();
+    CHECK(ix.query_segment({-inf, 0.0f}, {0.0f, 0.0f}, 0.0f, 10.0f, 10.0f, kLayerFrigate, 999, true, 0) ==
+          occ.query_segment({-inf, 0.0f}, {0.0f, 0.0f}, 0.0f, 10.0f, 10.0f, kLayerFrigate, 999, true, 0));
+    // An empty occupancy indexes to nothing.
+    SpaceOccupancy empty;
+    empty.build_index();
+    CHECK(empty.query_segment({0.0f, 0.0f}, {100.0f, 0.0f}, 0.0f, 10.0f, 50.0f, kLayerFrigate, 1, true, 0) == 0);
+
+    // SpaceScratch::VisitTable: find after emplace, overwrite, growth past the sized capacity, clear forgets everything.
+    SpaceScratch::VisitTable vt;
+    CHECK(vt.find(5) == nullptr);
+    bool ok = true;
+    for (uint32_t round = 0; round < 300; ++round) {
+        vt.clear(8);
+        const uint64_t base = static_cast<uint64_t>(round) * 1000003ull;
+        const uint32_t n = round % 7 == 0 ? 500u : 20u;  // some rounds grow the table
+        for (uint32_t i = 0; i < n; ++i) vt.emplace(base + i * 977ull, {static_cast<float>(i), i % 2 == 0});
+        vt.emplace(base, {-1.0f, true});  // overwrite
+        for (uint32_t i = 0; i < n; ++i) {
+            const SpaceScratch::Visit* v = vt.find(base + i * 977ull);
+            ok = ok && v && v->g == (i == 0 ? -1.0f : static_cast<float>(i)) && v->closed == (i == 0 || i % 2 == 0);
+        }
+        ok = ok && vt.find(base + 1) == nullptr && vt.find(base + 977ull * n) == nullptr;
+        if (round > 0) ok = ok && vt.find((static_cast<uint64_t>(round) - 1) * 1000003ull + 977ull) == nullptr;  // last round's
+    }
+    CHECK(ok);
+}
+
 static void build_space_scenario(MovementSystem& sys, uint32_t ships) {
     SpaceOccupancy& occ = sys.space();
     occ.set_box({-5000.0f, -5000.0f}, {5000.0f, 5000.0f});
@@ -1461,8 +1568,10 @@ static void test_space_group() {
 
 // ---------------------------------------------------------------- OI tactical (PHASE4 S7 open items)
 static void test_oi_land() {
-    // PathFrameDelay stagger (§1.6) with the FormationClass ctor draw (cu8i t02): two Solo formations; one synced
-    // int(1, 30) each, in formation order; start = now + accumulated PathFrameDelay + r - 30, not before now.
+    // PathFrameDelay stagger (§1.6) with the FormationClass ctor draw (cu8j t01, correcting cu8i t02): the order draws
+    // nothing; the next coordinator update draws r' = int(0, PathFrameDelay) per staggered formation (formation order),
+    // then one int(1, FPS) per formation. The plan gate is now + accumulated PathFrameDelay + r' - 2 FPS, so the first
+    // plan frame is now + acc + r' + 1; the ctor draw only sets the next-check timer.
     {
         MovementSystem sys{MovementConfig{}};
         PassabilityGrid g;
@@ -1480,23 +1589,52 @@ static void test_oi_land() {
         o.units = {1, 2};
         o.destination = cell_center(50, 20);
         sys.move(o, rng, 100);
-        const int32_t d1 = ref.range_int(1, 30), d2 = ref.range_int(1, 30);
-        CHECK(rng.draws() == ref.draws() && rng.state() == ref.state());  // exactly two int(1, FPS)
+        CHECK(rng.draws() == 0 && sys.pending_compositions() == 1);  // composed at the next coordinator update
+        CHECK(sys.view(1).start_frame == kStartPending && sys.has_coordinator(1) && sys.has_coordinator(2));
+        sys.coordinator_update(100, 100, rng);
         // Formation order = seed nearest the bucket centroid first (equal here: the earlier unit, id 1).
-        CHECK(d1 >= 1 && d1 <= 30 && d2 >= 1 && d2 <= 30);
-        CHECK(sys.view(1).start_frame == 100);  // 100 + 0 + d1 - 30 <= 100
-        CHECK(sys.view(2).start_frame == static_cast<uint32_t>(100 + 40 + d2 - 30));
+        const int32_t p1 = ref.range_int(0, 40), p2 = ref.range_int(0, 4);
+        const int32_t d1 = ref.range_int(1, 30), d2 = ref.range_int(1, 30);
+        CHECK(rng.draws() == ref.draws() && rng.state() == ref.state());  // two r', then two int(1, FPS)
+        CHECK(d1 >= 1 && d1 <= 30 && d2 >= 1 && d2 <= 30 && sys.pending_compositions() == 0);
+        CHECK(sys.view(1).start_frame == static_cast<uint32_t>(100 + p1 + 1));
+        CHECK(sys.view(2).start_frame == static_cast<uint32_t>(100 + 40 + p2 + 1));
         // Queued orders keep the per-unit delay (no stagger accumulator) and create no formation: no ctor draw.
         MoveOrder q = o;
         q.flags = kMoveFlagQueue;
         SimRng r2(5), r2ref(5);
         sys.move(q, r2, 200);
+        CHECK(sys.pending_compositions() == 0);
         CHECK(sys.view(1).start_frame == 200 + static_cast<uint32_t>(r2ref.range_int(0, 6)));
         CHECK(sys.view(2).start_frame == 200 + static_cast<uint32_t>(r2ref.range_int(0, 6)));
         CHECK(r2.draws() == r2ref.draws());
     }
-    // cu8i t02: the FormationClass ctor draw is one int(1, FPS); a unit with an order has a coordinator, others (and
-    // unknown ids) do not.
+    // cu8j t01 [M]: an unstaggered formation created at frame <= 2 FPS plans at frame 61 (F +0x1dc = 0); later, at once.
+    {
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g;
+        g.init(64, 64);
+        sys.set_grid(std::move(g));
+        CHECK(sys.add_unit(land_unit(1, cell_center(12, 10), 0, 1.0f, 6.0f, kUccInfantry)));
+        SimRng rng(3), ref(3);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(40, 10);
+        sys.move(o, rng, 10);
+        sys.coordinator_update(10, 10, rng);
+        ref.range_int(1, 30);
+        CHECK(sys.view(1).start_frame == 61 && rng.state() == ref.state() && rng.draws() == 1);
+        sys.move(o, rng, 70);
+        sys.coordinator_update(70, 70, rng);
+        CHECK(sys.view(1).start_frame == 70 && rng.draws() == 2);
+        // Global frame (the battle's) decides the gate, not the movement frame.
+        sys.move(o, rng, 5);
+        sys.coordinator_update(5, 200, rng);
+        CHECK(sys.view(1).start_frame == 5 && rng.draws() == 3);
+    }
+    // cu8i t02 / cu8j t02: the FormationClass ctor draw is one int(1, FPS); a unit with an order has a coordinator, others
+    // (and unknown ids) do not. Adopt (0x39bcb0) draws once for a coordinator-less unit and nothing for one with a
+    // coordinator; stop-and-hold (0x3a9880) leaves the coordinator first, so it always draws.
     {
         MovementSystem sys{MovementConfig{}};
         PassabilityGrid g;
@@ -1508,12 +1646,21 @@ static void test_oi_land() {
         MoveOrder o;
         o.units = {2};
         o.destination = cell_center(40, 10);
-        sys.move(o, rng, 0);
+        sys.move(o, rng, 100);
+        sys.coordinator_update(100, 100, rng);
         ref.range_int(1, 30);  // unit 2's formation
         CHECK(rng.state() == ref.state() && rng.draws() == ref.draws());
         CHECK(!sys.has_coordinator(1) && sys.has_coordinator(2) && !sys.has_coordinator(99));
         const int32_t r = MovementSystem::formation_ctor_draw(rng);
         CHECK(r == ref.range_int(1, 30) && r >= 1 && r <= 30 && rng.state() == ref.state());
+        CHECK(sys.adopt(1, rng) && sys.has_coordinator(1));
+        ref.range_int(1, 30);
+        CHECK(!sys.adopt(1, rng) && !sys.adopt(2, rng) && !sys.adopt(99, rng) && rng.state() == ref.state());
+        CHECK(sys.stop_and_hold(2, rng) && !sys.view(2).has_goal && sys.has_coordinator(2));
+        CHECK(sys.stop_and_hold(1, rng) && sys.has_coordinator(1));
+        ref.range_int(1, 30);
+        ref.range_int(1, 30);
+        CHECK(rng.state() == ref.state() && rng.draws() == ref.draws());
     }
     // Formation jiggle (§3.5 step 6): 2 synced draws per moving member per frame, offset clamped to MaxJiggleDistance;
     // members without FormationRaggedness draw nothing.
@@ -1532,6 +1679,7 @@ static void test_oi_land() {
         o.units = {1, 2};
         o.destination = cell_center(70, 20);
         sys.move(o, rng, 0);
+        sys.coordinator_update(0, 0, rng);  // the composition's draws (cu8j t01) before the jiggle count
         const uint64_t after_move = rng.draws();
         uint32_t moving_frames = 0;
         float max_off = 0.0f;
@@ -2150,7 +2298,9 @@ static CrcLog fighter_crc_run(const ParallelFor& pf) {
 // Golden digest of the fighter scenario (FIGHTER_FLYING 2026-10-29); MSVC and clang must both produce it. s78f t02: the
 // fighter 31's move now builds a fighter formation, hashed with the fighters ("FFOR"); without that section the digest is
 // still the 2026-10-29 value 0x5a7df50c208f33b1 (the motion is unchanged).
-static constexpr uint64_t kGoldenFighter = 0x083eba7df930d85bull;
+// cu8j t01 (2026-11-08): the fighter formations compose at the next coordinator update (one draw each, first check at
+// creation + 30 + r) and the hash gains the pending composition / adopt state.
+static constexpr uint64_t kGoldenFighter = 0x9ffd10b74bf0428bull;
 
 static void test_fighter_determinism() {
     const unsigned hw = std::max(2u, std::thread::hardware_concurrency());
@@ -2212,8 +2362,10 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // collision objects hashed, priority-ordered resolution; units act on their own check frames); space unchanged.
 // cu8i t02 (2026-11-08): land moved (the return move's formations draw the FormationClass ctor int(1, 30) and start at
 // now + acc + r - 30, not before now); space unchanged.
-static constexpr uint64_t kGoldenLand = 0x526e6dc2212e1903ull;
-static constexpr uint64_t kGoldenSpace = 0x243123bd32d07accull;
+// cu8j t01 (2026-11-08): both moved: the hash gains the units' pending composition / adopt state, the compositions (and
+// their draws) come at the next coordinator update, land orders before frame 61 plan at 61, space ships draw per formation.
+static constexpr uint64_t kGoldenLand = 0x6f15bccad0625e26ull;
+static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {
     const unsigned hw = std::max(2u, std::thread::hardware_concurrency());
@@ -2828,6 +2980,7 @@ int main() {
     test_land_group();
     test_push_search();
     test_space();
+    test_space_index();
     test_space_group();
     test_oi_land();  // OI tactical
     test_oi_space();

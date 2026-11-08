@@ -121,6 +121,9 @@ struct SkirmishSetup {
     // q6 t02 [port]: no starting forces and no "unknown unit" failure - the attract demo clears the forces anyway (every unit
     // comes from its map), and a mod's Underworld may have no default fleet (Thrawn's Revenge). Not saved (the demo is never).
     bool no_forces = false;
+    // ccpgt t02: the staging screen's Capture Control Points game type (4) on a land map: the battle's win condition is 0x15
+    // CONTROL_POINT_DOMINATION (sim::BattleConfig::control_point_domination, SKIRMISH_SETUP §4.2). Saved.
+    bool control_points = false;
 };
 bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic::GalacticSetup& out, std::string* err = nullptr);
 // modc t03 [port] (retail's lobby always names both slots): the faction of an unnamed skirmish slot. Human slot: the first
@@ -166,6 +169,7 @@ struct SkirmishMapEntry {
     uint32_t players = 1;  // mini 02, 1 when absent
     bool custom = false;   // mini 0B == 1: the Custom tab shows it, else the Official tab
     std::string name_key;  // mini 08 (UTF-8 text key), "" when absent
+    std::string mode_tag;  // ccpgt t02: mini 0A (the game-mode tag), upper-cased as retail stores it; "" when absent
     bool readable = false; // the file was read and its map-info chunk decoded
 };
 struct SkirmishMapCatalog {

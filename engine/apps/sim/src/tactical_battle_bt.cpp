@@ -119,6 +119,43 @@ void TacticalBattle::bt_force_split() {
 
 // ---- pad types (setup) -------------------------------------------------------------------------------------------
 
+void TacticalBattle::prepare_models(const BattleCatalog& catalog, const galactic::GalacticSim& galaxy, const galactic::ConflictRules& rules,
+                                    const galactic::BattleRequest& request, const terrain::MapData& map, const ParallelFor& pf) {
+    const objects::GameObjectTypes& types = catalog.types();
+    const bool space = request.info.kind == galactic::ConflictKind::Space;
+    std::vector<uint32_t> list;
+    auto use = [&](uint32_t t) {
+        if (t < types.size() && std::find(list.begin(), list.end(), t) == list.end()) list.push_back(t);
+    };
+    const objects::ObjectStore& gs = galaxy.store();
+    for (const galactic::BattleForces& f : request.forces)
+        for (const std::vector<objects::ObjectHandle>* hs : {&f.start, &f.reserve})
+            for (const objects::ObjectHandle h : *hs) {
+                if (!gs.alive(h)) continue;
+                const auto t = static_cast<uint32_t>(gs.type(h));
+                const galactic::ConflictTypeInfo& ti = rules.type(t);
+                use(t);
+                for (const auto& [mt, n] : ti.members) use(mt);
+            }
+    const TypeCrcIndex index(types);
+    for (const terrain::ObjectPlacement& pl : map.objects) {
+        const objects::TypeIndex t = index.find(pl.type_crc);
+        if (t == objects::kNone || t >= types.size()) continue;
+        use(static_cast<uint32_t>(t));
+        if (pad_behavior() == objects::kNoBehavior || !types.has_behavior(t, objects::BehaviorSet::Union, pad_behavior())) continue;
+        for (const char* tag : {"Tactical_Buildable_Objects_Multiplayer", "Tactical_Buildable_Objects_Campaign"})
+            for (const std::string_view tok : types.get_list(t, tag)) {
+                const objects::TypeIndex uc = types.raw().find(tok);
+                if (uc == objects::kNone || uc >= types.size()) continue;
+                use(static_cast<uint32_t>(uc));
+                const objects::TypeIndex ft = types.resolve_name(types.get_string(uc, "Tactical_Buildable_Constructed"));
+                if (ft != objects::kNone) use(static_cast<uint32_t>(ft));
+            }
+    }
+    catalog.preload(list, space,
+                    BattleCatalog::kPreloadBones | BattleCatalog::kPreloadAvoid | (space ? 0u : BattleCatalog::kPreloadExtents), pf);
+}
+
 void TacticalBattle::bt_add_pad_types(const terrain::MapData& map) {
     if (pad_behavior() == objects::kNoBehavior) return;
     const objects::GameObjectTypes& types = catalog_->types();
@@ -927,7 +964,7 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
 
 // ---- post-load placement of the galactic forces (REMAINING_GAPS §3.2, 0x2a1eb0) -------------------------------------
 
-void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
+void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng, const ParallelFor& pf) {
     const objects::GameObjectTypes& types = catalog_->types();
     const int32_t def = req_.info.defender, att = req_.info.attacker;
     auto flat = [this](Vec3 p) { return space_ ? Vec3{p.x, p.y, 0.0f} : p; };
@@ -1032,7 +1069,7 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
             if (parts_[i].unplaced) parts_[i].deployed = true;  // not spawned: never deployed later either
             else deploy(mode, i, rng);
         }
-    land_obstacles_sync(mode);  // S8 t02: the starbase / structures stamp on attach, before the start forces are placed
+    land_obstacles_sync(mode, pf);  // S8 t02: the starbase / structures stamp on attach, before the start forces are placed
     // 6 / 7. Facing slots and anchors: the first Defending Forces marker (position, facing); the attacker's entry marker =
     //    the farthest from the first non-attacker DUMMY_GROUND_STRUCTURE with a non-zero Reinforcement_Prevention_Radius
     //    [M: the 0x2a9ff0 filter], else the nearest to the first Defending Forces marker. Space: the attacker looks at the
@@ -1091,10 +1128,29 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
         const float len = dmath::sqrt(d.x * d.x + d.y * d.y);
         facing_[s] = len > 0.0f ? Vec3{d.x / len, d.y / len, 0.0f} : Vec3{s == 0 ? -1.0f : 1.0f, 0.0f, 0.0f};
     }
-    for (uint8_t side = 0; side < 2; ++side)
+    for (uint8_t side = 0; side < 2; ++side) {
+        // cu8j t02 (MOVEMENT §4.7.3): the campaign spawn 0x2a00b0 (one call per side [M]) registers each group whose first
+        // member's Ship_Class is 0..6 [inferred: the placement switch's unsigned bound] for the fleet placement 0x4fbb10
+        // (a team member maps to its container), which runs at its end in space: each placed object leaves its coordinator
+        // and is adopted again (0x426d50, 0x39bcb0): a second ctor draw. [port] The placement positions (Set_Capital /
+        // Lead / Screen / Transport_Ship_Formation) are not modelled; the draws are consecutive, so only their count
+        // matters, taken in registration order.
+        const bool placement = space_ && !cfg_.skirmish;
+        std::vector<objects::ObjectHandle> placed;
         for (uint32_t i = 0; i < parts_.size(); ++i)
-            if (!parts_[i].reserve && !parts_[i].starbase && !parts_[i].structure && !parts_[i].built && parts_[i].side == side)
+            if (!parts_[i].reserve && !parts_[i].starbase && !parts_[i].structure && !parts_[i].built && parts_[i].side == side) {
+                const size_t u0 = units_.size();
                 deploy(mode, i, rng);
+                if (!placement || units_.size() <= u0 || units_[u0].type >= types.size()) continue;
+                const int32_t sc = types.get_int(units_[u0].type, "Ship_Class");
+                if (sc < 0 || sc >= 7) continue;
+                for (size_t k = u0; k < units_.size(); ++k) {
+                    const objects::ObjectHandle h = units_[k].container != 0xFFFFFFFFu ? containers_[units_[k].container].h : units_[k].h;
+                    if (std::find(placed.begin(), placed.end(), h) == placed.end()) placed.push_back(h);
+                }
+            }
+        for (const objects::ObjectHandle h : placed) (void)mv_adopt(mode, h, rng, true);
+    }
 }
 
 // ---- build pads: attachment bone, kill list, persistence (REMAINING_GAPS §6.5) --------------------------------------

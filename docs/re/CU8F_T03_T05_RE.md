@@ -89,7 +89,7 @@ use exclusion list, need start positions).
   6. +0xb4 == the custom-flag argument (campaign: 0, so CustomMaps and mod-path maps are never campaign picks);
   7. if "need start positions": +0xb5 ≠ 0;
   8. if "use exclusion list": the upper-cased +0x00 contains none of the strings in 0x140b271c8 (count
-     0x140b271d0; the `Quickmatch_Map_Exclusion_List`, game type 4 only);
+     0x140b271d0; the `Quickmatch_Map_Exclusion_List`; ccpgt t01: no caller of 0x47bf40 sets the flag, UI.md 9.4);
   9. if the mode tag is non-empty: +0x80 contains it.
   Each match appends its index to the survivor list (and the entry to the out list when one is given). **If the
   preferred name is non-empty and equals +0x00 (same length, byte compare), the scan stops after adding it.**

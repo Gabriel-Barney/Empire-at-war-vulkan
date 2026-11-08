@@ -239,7 +239,11 @@ struct SkirmishMapInfo {
     uint32_t players = 0;   // player count for the "(N) " prefix, 0 = use max_players
     bool custom = false;    // Custom tab (true) or Official tab (false)
     bool space = false;     // a space map: listed under the Space game type, else under Land (p4uim t01)
+    // ccpgt t02 (UI.md 9.4 / 9.7): a land map whose game-mode tag (mini 0A) is CONTROL: also listed under Capture Control Points.
+    bool control = false;
 };
+// The skirmish game types of IDC_GAME_TYPE_LIST (UI.md 9.4 / 9.7: the retail item data).
+inline constexpr int32_t kSkirmishGameLand = 2, kSkirmishGameSpace = 3, kSkirmishGameControl = 4;
 // p4uim t03 (docs/re/UI.md section 9.6): what IDC_IMAGE shows for the selected map. `texture` is the image the host chose
 // (<stem>.tga, else the map's embedded image, else Generic_Space / Generic_Land.tga; "" = none); `starts` are the start
 // positions as 0..1 fractions of the image (x right, y down), drawn over it as the numbers 1..N when the map has them
@@ -281,6 +285,8 @@ struct MenuAction {
     std::vector<std::string> factions;
     // StartSkirmish (p4uia t02): the colour index (0..8, a GameConstants MP_Color_* entry) of each player, in player order.
     std::vector<int32_t> colors;
+    // StartSkirmish (ccpgt t02): the game type selected (kSkirmishGameLand / Space / Control).
+    int32_t game_type = kSkirmishGameLand;
     int32_t difficulty = 1;
     AudioVolumes audio;
     VideoSettings video;
@@ -365,9 +371,14 @@ public:
     int32_t skirmish_map_row(std::string_view map) const;
     // Which tab the skirmish staging list shows: false Official (the dialog's state when it opens), true Custom.
     bool skirmish_custom_tab() const { return custom_tab_; }
-    // p4uim t01: the game type IDC_GAME_TYPE_LIST selects (the list shows the maps of that type): true Space, false Land.
-    // A dialog opened for the first time starts on Land; later on the type selected last, remembered at once (UI.md 9.7).
-    bool skirmish_space_type() const { return space_type_; }
+    // p4uim t01: the game type IDC_GAME_TYPE_LIST selects (the list shows the maps of that type): true Space, false Land
+    // or Capture Control Points. A dialog opened for the first time starts on Land; later on the type selected last,
+    // remembered at once (UI.md 9.7).
+    bool skirmish_space_type() const { return game_type_ == kSkirmishGameSpace; }
+    // ccpgt t02: the selected game type (kSkirmishGameLand / Space / Control) and the IDC_GAME_TYPE_LIST row of `type`
+    // (the rows are sorted by their text, LBS_SORT, UI.md 9.7), -1 when not listed.
+    int32_t skirmish_game_type() const { return game_type_; }
+    int32_t skirmish_game_type_row(int32_t type) const;
     // p4uia t01: the colour index shown in skirmish slot `slot` (0..7), -1 when the slot is not shown.
     int32_t skirmish_colour(int32_t slot) const;
     // modc t08: the load report of picker row `id` (lines as the host formats them). Kept per id; shown when that row is
@@ -425,8 +436,10 @@ private:
     std::vector<SkirmishMapInfo> maps_;
     std::vector<size_t> map_view_;   // skirmish list rows -> index into maps_ (active tab, sorted)
     bool custom_tab_ = false;        // skirmish list: Custom tab active
-    bool space_type_ = false;        // skirmish list: Space game type (false Land); the type selected last (UI.md 9.7)
-    std::string last_map_[2];        // the map selected last per game type [0 land, 1 space] ("" = none yet; UI.md 9.5)
+    int32_t game_type_ = kSkirmishGameLand;  // skirmish list: the game type selected last (UI.md 9.7)
+    std::vector<int32_t> game_type_rows_;    // IDC_GAME_TYPE_LIST rows -> game type (sorted by row text)
+    // The map selected last [0 land, 1 space] ("" = none yet; UI.md 9.5 / 9.7: retail keeps one land key for types 2 and 4).
+    std::string last_map_[2];
     std::vector<Rgba8> colour_palette_;   // the host palette read when the skirmish dialog opened
     int32_t slot_colour_[8] = {0, 1, 2, 3, 4, 5, 6, 7};  // colour index of each skirmish slot (default = the slot index)
     std::string quit_action_;  // "exit" / "main"; N1 / t09: "overwrite" / "delete" (confirm_save_)

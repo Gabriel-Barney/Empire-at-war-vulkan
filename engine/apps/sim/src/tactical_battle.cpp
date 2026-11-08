@@ -532,6 +532,65 @@ TacticalBattle::Unit* TacticalBattle::unit_by_id(objects::ObjectId id) {
     return (it == units_.end() || it->id != id) ? nullptr : &*it;
 }
 
+// cu8j t02 (MOVEMENT §4.7.1 locomotor table): the active locomotor's vf +0x220 (admitted) and vf +0x238 (kind) by its
+// behaviour token, the mode's behaviour list first (as locomotor_kind_from_type). Walk / Bike / LandTeamInfantry /
+// LandTeamContainer: kind 1; SimpleSpace / Fighter / Flying / LandBomber: kind 2; JetPack: kind 1 [port: on the ground,
+// as spawned]; Team: kind 2 when a member admits (-1 here); Starship / Fleet / Simple and no locomotor: not admitted.
+int8_t TacticalBattle::mv_adopt_kind(uint32_t type) {
+    const objects::GameObjectTypes& types = catalog_->types();
+    if (type >= types.size()) return 0;
+    if (adopt_kind_.size() < types.size()) adopt_kind_.resize(types.size(), int8_t{0});
+    if (adopt_kind_[type] != 0) return static_cast<int8_t>(adopt_kind_[type] - 1);
+    int8_t k = 0;
+    bool found = false;
+    for (const std::string_view tag : {space_ ? std::string_view("SpaceBehavior") : std::string_view("LandBehavior"), std::string_view("Behavior")}) {
+        for (const std::string_view raw : types.get_list(type, tag)) {
+            const std::string_view t = ascii_trim(raw);
+            constexpr std::string_view kSuffix = "LOCOMOTOR";  // any *_LOCOMOTOR token is the locomotor slot
+            if (t.size() < kSuffix.size() || !ascii_iequals(t.substr(t.size() - kSuffix.size()), kSuffix)) continue;
+            if (ascii_iequals(t, "WALK_LOCOMOTOR") || ascii_iequals(t, "BIKE_LOCOMOTOR") || ascii_iequals(t, "JETPACK_LOCOMOTOR") ||
+                ascii_iequals(t, "LAND_TEAM_INFANTRY_LOCOMOTOR") || ascii_iequals(t, "LAND_TEAM_CONTAINER_LOCOMOTOR"))
+                k = 1;
+            else if (ascii_iequals(t, "SIMPLE_SPACE_LOCOMOTOR") || ascii_iequals(t, "FIGHTER_LOCOMOTOR") ||
+                     ascii_iequals(t, "FLYING_LOCOMOTOR") || ascii_iequals(t, "LANDBOMBER_LOCOMOTOR"))
+                k = 2;
+            else if (ascii_iequals(t, "TEAM_LOCOMOTOR"))
+                k = -1;
+            found = true;
+            break;
+        }
+        if (found) break;
+    }
+    adopt_kind_[type] = static_cast<int8_t>(k + 1);
+    return k;
+}
+
+bool TacticalBattle::mv_adopt(const TacticalMode& mode, objects::ObjectHandle h, SimRng& rng, bool leave) {
+    if (!movement_) return false;
+    const objects::ObjectStore& st = mode.primary();
+    if (!st.alive(h)) return false;
+    const objects::ObjectId id = st.id(h);
+    if (const Unit* u = unit_by_id(id); u && u->container != kNoContainer) return false;  // a TEAM member: never
+    int8_t kind = mv_adopt_kind(static_cast<uint32_t>(st.type(h)));
+    if (kind < 0) {  // TEAM_LOCOMOTOR (0x6305a0): vf +0x220 = any member's, vf +0x238 = 2
+        kind = 0;
+        for (size_t ci = 0; ci < containers_.size() && kind == 0; ++ci) {
+            if (containers_[ci].id != id) continue;
+            for (const Unit& m : units_)
+                if (m.container == ci && m.alive && !m.retreated && mv_adopt_kind(m.type) > 0) {
+                    kind = 2;
+                    break;
+                }
+        }
+    }
+    if (kind != (space_ ? 2 : 1)) return false;
+    if (movement_->has_unit(id)) return leave ? movement_->stop_and_hold(id, rng) : movement_->adopt(id, rng);
+    // [port] an object outside the movement system (a TEAM container, an inert map object) keeps no coordinator record:
+    // each adopt draws.
+    (void)mv::MovementSystem::formation_ctor_draw(rng);
+    return true;
+}
+
 bool TacticalBattle::select_all_entry(objects::ObjectId id, int32_t owner, std::vector<objects::ObjectId>& members) const {
     if (owner >= 0 && owner == retreating_player()) return false;  // the retreat coordinator's list [port: the whole side]
     if (garrison_holder_of(id) != objects::kNoObjectId) return false;  // garrisoned: parent = the host
@@ -695,6 +754,9 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     mv::MovementConfig mc;
     mc.mode = space_ ? mv::MoveMode::Space : mv::MoveMode::Land;
     movement_ = std::make_unique<mv::MovementSystem>(mc);
+    // cu8j t01 (MOVEMENT §4.6.2): the movement coordinator update runs at the end of the tick (TacticalBattle::tick), after
+    // the object services, as retail's common tick step 10; the movement tick does not run it.
+    movement_->set_deferred_composition(true);
     // OI tactical: crush hostility = the combat relation (player +0x370 table, MOVEMENT.md 5.5).
     movement_->set_hostility([this](int32_t a, int32_t b) { return combat_ && combat_->is_enemy(a, b); });
     // S8 t24 (MOVEMENT §3.2 "Turret recentre around deploy"): a Deploys unit's TURRET aims at its live current combat
@@ -895,27 +957,23 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     // chunk-0x102 objects and their spawn-table draws, before every post-load step (skirmish base / start forces, the
     // campaign starbase / structures). Not saved: a loaded battle's read_part(State) takes the map's start index instead.
     env_index_ = pick_environment(map_.environments, rng);
-    // cu8i t02 (CU8G_T02_ENV_PICK_RE §7 / §8 item 7): Load_Map's tail, after the pick (land): the deferred GOM post-load
-    // pass (0x2b4440 -> 0x3952e0 -> 0x39bcb0) puts each movable object without a movement coordinator into a new one,
-    // which creates a formation: one FormationClass ctor draw int(1, FPS) per object, in object order. Movable = the
-    // LOCOMOTOR behaviour (TacticalMode::movable), whatever the owner: the port's inert Is_Neutral map units count too
-    // (_MP_LAND_ENDOR: its one Land_Speeder, retail 1 draw). [port] the new formations hold no order and are not kept.
-    if (!space_) {
+    // cu8i t02 (CU8G_T02_ENV_PICK_RE §7 / §8 item 7): Load_Map's tail, after the pick: the deferred GOM post-load pass
+    // (0x2b4440 -> 0x3952e0 -> 0x39bcb0) puts each movable object without a movement coordinator into a new one, which
+    // creates a formation: one FormationClass ctor draw int(1, FPS) per object, in object order, whatever the owner: the
+    // port's inert Is_Neutral map units count too (_MP_LAND_ENDOR: its one Land_Speeder, retail 1 draw). cu8j t02
+    // (MOVEMENT §4.7.3): land and space alike, through the full adopt predicate (mv_adopt: the mode's locomotor kind).
+    {
         const objects::ObjectStore& st = mode.primary();
-        for (const objects::ObjectHandle h : st.all_objects()) {
-            if (!st.alive(h) || !mode.movable(h)) continue;
-            if (movement_ && movement_->has_coordinator(st.id(h))) continue;
-            mv::MovementSystem::formation_ctor_draw(rng);
-        }
+        for (const objects::ObjectHandle h : st.all_objects()) (void)mv_adopt(mode, h, rng);
     }
     bt_pad_restore(mode);        // §6.5: persistent pad children
     bt_skirmish_base(mode);      // t50: the land skirmish's pre-built base
     l1_setup(mode);            // L1 systems: special weapons / hyperspace / engines (before the deploys)
-    bt_place_forces(mode, rng);  // §3.2: starbase, structures, defender / attacker start forces
+    bt_place_forces(mode, rng, pf);  // §3.2: starbase, structures, defender / attacker start forces
     bt_landing_points(mode);     // §3.3: the attacker's map-owned reinforcement points
     mode.finish_load(pf);
     space_obstacles_sync(mode);  // refixf t02: the starbase / structures as space static entries (MOVEMENT §2.2)
-    land_obstacles_sync(mode);   // S8 t02: LAND_OBSTACLE objects spawned during the setup (MOVEMENT §1.3)
+    land_obstacles_sync(mode, pf);   // S8 t02: LAND_OBSTACLE objects spawned during the setup (MOVEMENT §1.3)
     bt_shield_stamps(mode);  // battle host: base-shield secondary occupants (land)
     fog_after_deploy(mode);  // fog of war: dense mask, battle scale (owner: fog agent)
     vm_setup(mode);          // story t06: victory monitor records (§2.5) and the start's victory-relevant objects
@@ -1175,8 +1233,22 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32
         }
 #endif
     }
-    for (size_t k = 0; k < groups.size(); ++k)  // OI abilities: + the container's SAP-init draws
+    // cu8j t02 (MOVEMENT §4.7.3): the team helper 0x2a5a60 adopts each chunk's container (0x39bcb0, one FormationClass
+    // ctor draw when it qualifies) right after creating it, before the next chunk: the adopt follows each container's
+    // creation draws. The skirmish company placer runs the helper only for a Create_Team first member (the port's space
+    // containers of other companies are not adopted); a script spawn [M: not a helper caller] adopts nothing.
+    const bool helper = cfg_.skirmish ? units_.size() > first && units_[first].type < types.size() &&
+                                            types.get_bool(units_[first].type, "Create_Team")
+                                      : true;
+    for (size_t k = 0; k < groups.size(); ++k) {  // OI abilities: + the container's SAP-init draws
         abilities_->add_container(containers_[c0 + k].id, desc_of(team_beh), P.owner, groups[k], frame_, &rng);
+        if (helper && !deploy_script_) (void)mv_adopt(mode, containers_[c0 + k].h, rng);
+    }
+    // cu8j t02: the campaign spawn 0x2a00b0 (start forces of a galactic battle) then adopts each member not in a team, one
+    // draw each (land vehicles, heroes, ...). Skirmish start forces and reinforcements do not.
+    if (!cfg_.skirmish && !P.reserve && !deploy_script_ && !range)
+        for (size_t i = first; i < units_.size(); ++i)
+            if (units_[i].container == kNoContainer) (void)mv_adopt(mode, units_[i].h, rng);
 }
 
 // refixf t02 (MOVEMENT §2.2 [H]): SpaceObstacleBehaviorClass inserts its object into the space occupancy as a static entry on
@@ -1239,17 +1311,17 @@ bool TacticalBattle::space_obstacle_attach(const TacticalMode& mode, objects::Ob
 // the behaviour through TacticalMode::spawn_death_clone's strip (Death_Clone_Is_Obstacle, MOVEMENT §1.3 [H]). Placement
 // stamps never stay under a placement id here: bt_map_load hands each to its object or unstamps it (skipped company,
 // no-spawn placeholder).
-void TacticalBattle::land_obstacles_sync(const TacticalMode& mode) {
+void TacticalBattle::land_obstacles_sync(const TacticalMode& mode, const ParallelFor& pf) {
     if (space_ || !movement_) return;
     const objects::ObjectStore& st = mode.primary();
     mv::PassabilityGrid& grid = movement_->grid();
     for (const mv::ObjectId id : grid.stamped_ids())
         if (id > 0 && !st.alive(st.find(id))) grid.unstamp(id);
     for (const objects::ObjectHandle h : st.behavior_table(objects::beh::LandObstacle).insertion)
-        if (st.alive(h) && !grid.stamped(st.id(h))) land_obstacle_attach(mode, h);
+        if (st.alive(h) && !grid.stamped(st.id(h))) land_obstacle_attach(mode, h, pf);
 }
 
-bool TacticalBattle::land_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h) {
+bool TacticalBattle::land_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h, const ParallelFor& pf) {
     const objects::ObjectStore& st = mode.primary();
     if (space_ || !movement_ || !st.alive(h)) return false;
     const objects::GameObjectTypes& types = catalog_->types();
@@ -1269,7 +1341,9 @@ bool TacticalBattle::land_obstacle_attach(const TacticalMode& mode, objects::Obj
     // S8 t13 (MOVEMENT §1.3 "proxy bits"): the bits come from the object's own live behaviours (0x397350), never the proxy.
     fp.bits = mv::land_obstacle_bits(static_cast<uint32_t>(types.get_mask(t, "OverridePassability")), true,
                                      st.has_behavior(h, kWallBehavior));
-    movement_->grid().stamp(st.id(h), fp);
+    // OPT3 t12: the Fine_Tune rays (a whole-mesh test per 10-unit sample; a skirmish base structure has ~400 samples on
+    // ~14k triangles) run through pf. The hook is const catalog data (as stamp_map_obstacles).
+    movement_->grid().stamp(st.id(h), fp, pf);
     return true;
 }
 
@@ -4094,11 +4168,15 @@ void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
             }
         if (e.kind == ta::AbilityEventKind::SpawnObject) spawn_ability_object(mode, e);  // fog follow-up: FOW_REVEAL_PING
         // cu8g t01 (CU8F_T01_T02_T07_RE.md §2.3): Saber_Throw's throw snaps the saber holstered (0x635450: suppress, fade 0).
-        // [port] at the apply (retail: at anim 0x6c's half). cu8i t01 (§2.6): the event's value is the flight stand-in (frames
-        // to the catch, AbilitySystem saber_flight_frames); hg_holster_service holds the draw while it flies and calls the
-        // catch (0x635310). value 0 = the activation failed (the forwarding path's Unhandled): nothing was thrown.
-        if (e.kind == ta::AbilityEventKind::Unhandled && e.type == ta::kSaberThrow && e.value > 0)
-            engine_loops_.saber_throw(e.id, frame_, static_cast<uint32_t>(e.value));
+        // cu8j t03 (§2.7 item 5, the stand-in): the throw comes kSaberThrowDelay frames after the apply (anim 0x6c's half
+        // [M]); the event's value is the flight (end | catch step << 16, frames after the throw, ta::saber_flight).
+        // hg_holster_service throws, holds the draw while the saber flies (to the ability's end), and snaps drawn only on
+        // a real catch. value 0 = the activation failed (the forwarding path's Unhandled): nothing was thrown.
+        if (e.kind == ta::AbilityEventKind::Unhandled && e.type == ta::kSaberThrow && e.value > 0) {
+            const auto v = static_cast<uint32_t>(e.value);
+            const uint32_t thrown = frame_ + ta::kSaberThrowDelay, k_c = v >> 16, end = v & 0xFFFFu;
+            engine_loops_.saber_schedule(e.id, thrown, k_c != 0 ? thrown + k_c : 0u, thrown + end);
+        }
         // S7 t15 A1 (ABILITIES_HARDPOINTS §2.6): every ability end raises signal 0x29, including the Remote_Bomb toss, which
         // ends at its Toss_Anim end (LOB_SOLVER §3.5 step 4, S8 t06).
         if (e.kind == ta::AbilityEventKind::Ended) ability_finished_.push_back(e.id);
@@ -4427,11 +4505,15 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     late_swap_back_signals();   // S7 t27: a jetpack swap back after the combat_pre loop raises signal 0x29 in this tick
     stats_.shots = combat_->stats().shots;
     stats_.hits = combat_->stats().hits;
+    // cu8j t01 (MOVEMENT §4.6.2): the movement coordinator update (retail common tick step 10, after the object services):
+    // this tick's new coordinators compose their formations (the FormationClass ctor draws, the land stagger draws).
+    // Orders given after it (the AI and story services of the host) compose at the next tick's.
+    movement_->coordinator_update(frame_, global_frame, rng);
     // 6. victory.
     check_victory(mode);  // story t06: the victory monitor (losses since the last tick, countdown, end)
     if (finished_ && !death_clones_.empty()) remove_death_clones(mode, true);  // refixf t04: the battle's clones end with it
     space_obstacles_sync(mode);  // refixf t02: this tick's new / dead / retreated SPACE_OBSTACLE units
-    land_obstacles_sync(mode);   // S8 t02: this tick's new / gone LAND_OBSTACLE objects
+    land_obstacles_sync(mode, pf);   // S8 t02: this tick's new / gone LAND_OBSTACLE objects
     hg_publish_engine_requests();  // engine loops: this tick's requests for the audio host
     profile::lap("tac.victory");
 }
@@ -4823,6 +4905,10 @@ void TacticalBattle::hash(StateHasher& h) const {
     h.i32(retreat_side_);
     h.u32(retreat_done_frame_);
     h.boolean(retreat_complete_);
+    if (vm_cp_armed_) {  // ccpgt t02: the domination timer (absent while not armed)
+        h.i32(vm_cp_timer_);
+        h.i32(vm_cp_player_);
+    }
     if (vm_declared_ || vm_hold_ != 0 || !vm_queue_.empty()) {  // story t06: the victory monitor (absent while idle)
         h.boolean(vm_declared_);
         h.u8(vm_decl_.type);
