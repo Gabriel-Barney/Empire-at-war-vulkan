@@ -12,7 +12,7 @@ namespace alamo::sim {
 
 namespace {
 
-constexpr uint32_t kBattleStateVersion = 8;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: q6 attacks on TEAM containers / s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save) (two branches); 8: both merged
+constexpr uint32_t kBattleStateVersion = 9;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: q6 attacks on TEAM containers / s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save) (two branches); 8: both merged; 9: ccpgt t02 domination timer
 constexpr uint32_t kBattlePartVersion = 1;
 
 // One module system in a part: presence flag + a section with its own write.
@@ -74,6 +74,7 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     // story t06: victory monitor
     a(b.vm_declared_, b.vm_decl_.type, b.vm_decl_.player, b.vm_decl_.countdown, b.vm_decl_.silent, b.vm_countdown_, b.vm_hold_);
     a(b.vm_queue_, b.vm_tsw_seen_, b.vm_declared_frame_);
+    a(b.vm_cp_armed_, b.vm_cp_timer_, b.vm_cp_player_);  // ccpgt t02 (state version 9)
     a.seq(b.vm_records_, [](auto& x, auto& r) { x(r.type, r.player, r.countdown, r.silent); });
     a.seq(b.vm_tracked_, [](auto& x, auto& t) { x(t.id, t.owner, t.base); });
     a(b.result_.winner, b.result_.victory, b.result_.retreated, b.result_.destroyed, b.result_.starbase_destroyed);
