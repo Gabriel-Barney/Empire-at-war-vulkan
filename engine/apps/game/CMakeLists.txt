@@ -217,8 +217,14 @@ function(alamo_game_add_exe)
   endif()
   set(_smoke_out ${CMAKE_BINARY_DIR}/smoke_out)
   file(MAKE_DIRECTORY ${_smoke_out})
+  # cu8g t02 (2026-11-08): the land smoke runs seed 2. With the map-load environment pick (one synced draw on its 2-environment
+  # map, docs/re/CU8G_T02_ENV_PICK_RE.md) seed 1's AI retreats before the forces meet; seeds 2-5 all reach combat.
   foreach(_k skirmish campaign land)
-    add_test(NAME alamo_game_smoke_${_k} COMMAND alamo_game --smoke ${_k} --hidden --audio null --png-dir ${_smoke_out})
+    set(_seed_args "")
+    if(_k STREQUAL "land")
+      set(_seed_args --seed 2)
+    endif()
+    add_test(NAME alamo_game_smoke_${_k} COMMAND alamo_game --smoke ${_k} --hidden --audio null ${_seed_args} --png-dir ${_smoke_out})
     set_tests_properties(alamo_game_smoke_${_k} PROPERTIES TIMEOUT 1800 FIXTURES_SETUP alamo_game_smoke_${_k}_run)
     add_test(NAME alamo_game_smoke_${_k}_golden
              COMMAND ${CMAKE_COMMAND} -DACTUAL=${_smoke_out}/game_smoke_${_k}
