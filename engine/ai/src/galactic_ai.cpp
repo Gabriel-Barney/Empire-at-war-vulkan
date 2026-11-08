@@ -470,7 +470,10 @@ void GalacticAiWorld::Impl::tf_release_forces(int32_t tf, double fraction) {
     TaskForceRec& t = it->second;
     const auto n = std::min(static_cast<size_t>(std::floor(fraction * static_cast<double>(t.units.size()) + 1e-9)), t.units.size());
     for (size_t i = 0; i < n; ++i) pp_unit_left(t.plan, t.units[i]);  // 0x5ff610 -> 0x6c27d0
+    const std::vector<ObjectHandle> left(t.units.begin(), t.units.begin() + static_cast<std::ptrdiff_t>(n));
+    const int32_t player = t.player;
     t.units.erase(t.units.begin(), t.units.begin() + static_cast<std::ptrdiff_t>(n));
+    for (const ObjectHandle u : left) free_store_admitted(player, u);  // re-admitted (Q7.1)
 }
 
 void GalacticAiWorld::Impl::tf_release_unit(int32_t tf, ObjectHandle unit) {
@@ -480,6 +483,7 @@ void GalacticAiWorld::Impl::tf_release_unit(int32_t tf, ObjectHandle unit) {
     if (std::find(u.begin(), u.end(), unit) == u.end()) return;
     pp_unit_left(it->second.plan, unit);  // 0x5ff610 -> 0x6c27d0
     u.erase(std::remove(u.begin(), u.end(), unit), u.end());
+    free_store_admitted(it->second.player, unit);  // re-admitted (Q7.1)
 }
 
 std::vector<ObjectHandle> GalacticAiWorld::Impl::tf_units(int32_t tf) {
@@ -979,12 +983,15 @@ void GalacticAiWorld::Impl::end_plan(int32_t id, bool by_goal_system) {
         if (e && sim.pays_as_you_go(pi.player) && e->c + e->a > 0.0f) reclaim[pi.goal_key] = payg_reclaim(id, e->c + e->a);
     }
     end_plan_builds(id);
+    std::vector<ObjectHandle> left;  // re-admitted to the free store after the task forces are gone (Q7.1)
     for (const int32_t t : pi.tfs) {
         const auto tit = tfs.find(t);
         if (tit == tfs.end()) continue;
         for (const ObjectHandle u : tit->second.units) pp_unit_left(id, u);  // plan end 0x5f6a50 step 3 -> 0x6c27d0
+        left.insert(left.end(), tit->second.units.begin(), tit->second.units.end());
         tfs.erase(tit);
     }
+    for (const ObjectHandle u : left) free_store_admitted(pi.player, u);
     PlayerAi* pa = player_ai(pi.player);
     if (pa) {
         // [L, AI_GALACTIC_2 open item 6] a plan's exit removes its Block_Goal_Proposal entries.
@@ -1136,6 +1143,22 @@ uint32_t GalacticAiWorld::Impl::movable_tf_fleet_at(const TaskForceRec& tf, Plan
     return gal::kNoFleet;
 }
 
+// Galactic free-store admission (vf19 0x68ece0 -> 0x4d2c90 step 6, A2L_T01_RE_ANSWERS Q7.1 / Q7.2) [H]: a unit of the AI
+// player that is not a structure gets the store script's On_Unit_Added synchronously. It runs for the initial fill and
+// every later admission, including a unit a task force gives back (0x6c27d0: Release_Unit, Release_Forces, plan end).
+void GalacticAiWorld::Impl::free_store_admitted(int32_t player, ObjectHandle u) {
+    PlayerAi* pa = player_ai(player);
+    if (!pa || !pa->fs_vm || now <= 0 || !store.alive(u) || store.owner(u) != player || tf_owns(u)) return;
+    const gal::TypeInfo* ti = type_info(store.type(u));
+    if (!ti || structure_kind(ti->kind)) return;
+    lua::AiEventArg a;
+    a.kind = lua::AiEventArg::Object;
+    a.object = u;
+    std::string err;
+    if (!lua::call_global_function(*pa->fs_vm, "On_Unit_Added", {a}, &err) && !err.empty())
+        errors.push_back("free store " + std::to_string(player) + " On_Unit_Added: " + err);
+}
+
 void GalacticAiWorld::Impl::claim_units(int32_t player) {
     PlayerAi* pa = player_ai(player);
     if (!pa) return;
@@ -1184,16 +1207,7 @@ void GalacticAiWorld::Impl::claim_units(int32_t player) {
                         break;
                     }
         }
-        const gal::TypeInfo* ti = type_info(type);
-        if (!ti || structure_kind(ti->kind)) continue;
-        if (pa->fs_vm && now > 0) {  // On_Unit_Added (vf19), synchronous
-            lua::AiEventArg a;
-            a.kind = lua::AiEventArg::Object;
-            a.object = u;
-            std::string err;
-            if (!lua::call_global_function(*pa->fs_vm, "On_Unit_Added", {a}, &err) && !err.empty())
-                errors.push_back("free store " + std::to_string(player) + " On_Unit_Added: " + err);
-        }
+        free_store_admitted(player, u);
     }
     // Task forces that lost every unit (No_Units_Remaining, galactic code 7 [H]).
     std::vector<int32_t> empty;

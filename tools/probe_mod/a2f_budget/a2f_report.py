@@ -472,9 +472,10 @@ def read_port_bud(path, player):
 def render_cycles(res, port_trace):
     L = ['', '== 8. Per fiscal cycle P / I, retail | port (a2j t04; P = category pool, I = income rate per second) ==']
     L.append('   port: %s (a2j_port.py run; A2G BUD rows of tools/analysis/a2g_trace_patch.py, ALAMO_A2G_TRACE=3)' % port_trace)
-    L.append('   retail P / I = the decoded BudgetFractionToBuild pool / rate (available / rate in section 1). Rows: the first')
-    L.append('   retail sample at or after each payment (pay = 1351 + 1350 k) and the last one before the next payment; the port')
-    L.append('   row is the last one at or before that frame.')
+    L.append('   retail P / I = the decoded BudgetFractionToBuild pool / rate (available / rate in section 1). Rows: per category')
+    L.append('   the first retail sample after each payment (pay = 1351 + 1350 k) whose decoded P differs from the last one before')
+    L.append('   the payment (the leaf caches P up to 5 s, so earlier samples still hold the pre-payment P; A2L_T01_RE_ANSWERS')
+    L.append('   Q9.2 / Q9.3), and the last one before the next payment; the port row is the last one at or before that frame.')
     for fac, d in res['factions'].items():
         if fac not in PORT_PLAYER:
             continue
@@ -507,10 +508,15 @@ def render_cycles(res, port_trace):
 
             cyc = [r for r in rows if pay <= r['f'] < nxt]
             for which in ('first', 'last'):
-                # per category the first (last) sample of the cycle that has it (SM samples carry OFF / INFRA only)
+                # per category the first refreshed (last) sample of the cycle that has it (SM samples carry OFF / INFRA
+                # only). Refreshed = decoded P differs from the last sample before the payment (Q9.3); none differs -> none.
                 picks = {}
                 for key, _n in PI_CATS:
                     lst = [r for r in cyc if has(r, key)]
+                    if which == 'first':
+                        before = [r for r in rows if r['f'] < pay and has(r, key)]
+                        old_p = before[-1]['pools'][key].get('avail') if before else None
+                        lst = [r for r in lst if old_p is None or r['pools'][key].get('avail') != old_p]
                     picks[key] = (lst[0] if which == 'first' else lst[-1]) if lst else None
                 ref = picks['INFRA'] or picks['OFF']
                 if ref is None:
