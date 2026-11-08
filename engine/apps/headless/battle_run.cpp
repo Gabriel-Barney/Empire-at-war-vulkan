@@ -61,6 +61,7 @@ int battle_run(const MapRunOptions& opt, const std::string& data_dir, const Batt
     }
 #endif
     std::unique_ptr<FileProvider> files;
+    const vfs::Vfs* vfs_files = nullptr;  // = files when it is a VFS (cu8f t03: map listing)
     std::string err;
     if (!data_dir.empty()) {
         files = std::make_unique<DirectoryProvider>(data_dir);
@@ -70,7 +71,9 @@ int battle_run(const MapRunOptions& opt, const std::string& data_dir, const Batt
             std::fprintf(stderr, "--battles needs --game <corruption dir>, --data <dir> or ALAMO_FOC_DATA\n");
             return 2;
         }
-        files = vfs::mount_game(root, opt.game_args, &err);
+        std::unique_ptr<vfs::Vfs> v = vfs::mount_game(root, opt.game_args, &err);
+        vfs_files = v.get();
+        files = std::move(v);
         if (!files) {
             std::fprintf(stderr, "%s\n", err.c_str());
             return 2;
@@ -120,6 +123,12 @@ int battle_run(const MapRunOptions& opt, const std::string& data_dir, const Batt
         bo.battle.retreat_ratio = bopt.retreat_ratio;
         bo.battle.max_frames = bopt.max_frames;
         sim::load_tactical_systems(*files, rules, &db.constants(), bo);  // Int-final: weather, retreat, strikes data
+        if (vfs_files) {
+            // cu8f t03: the random map picker's candidate table (CU8F_T03_T05_RE §1.1), built on the first pick [port].
+            bo.map_candidate_source = sim::map_candidate_source(*files, [v = vfs_files](std::string_view g, bool mod) {
+                return v->list(g, mod ? vfs::Vfs::kLayerMod : vfs::Vfs::kLayerBase | vfs::Vfs::kLayerMeg);
+            });
+        }
 #ifdef ALAMO_SIM_HAVE_ANIM
         std::unique_ptr<sim::SimAnimation> animation;
         if (anim) {

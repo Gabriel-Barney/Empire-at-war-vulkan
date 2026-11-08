@@ -211,8 +211,10 @@ it is 0), and every exit releases it (0x28c720). [H]
       `Data\Art\Maps\<name>`; otherwise ask the random map picker 0x47bf40 (object 0x140b311a8) with
       (2 + space, terrain index from the type's `Terrain` +0x848 — TEMPERATE 0, ARCTIC 1, DESERT 2,
       FOREST 3, SWAMP 4, VOLCANIC 5, URBAN 6, SPACE 7 —, defender faction index — Rebel 0, Empire 1,
-      Pirates 2, Underworld 4, Hutts 5, other 0 —, base level, 2) and store its answer back into
-      planet data +0x1e0, so the planet keeps the same map for later battles;
+      Pirates 2, Underworld 4, Hutts 5, other 0 —, base level, 2, preferred = planet data +0x1e0) and store its
+      answer back into planet data +0x1e0 every time, an empty one included. The stored name only stops the
+      picker's scan after it, so the planet does not simply keep its map (corrected 2026-11-07,
+      CU8F_T03_T05_RE §1.3 / §1.4; the defender faction is −1 only when the defender id is −1);
    3. a story override (`SET_TACTICAL_MAP` / `STORY_LOAD_TACTICAL_MAP`: string at 0x140b30450 land,
       0x140b30430 space) as `Data\Art\Maps\<name>`; it is consumed (cleared) [M];
    4. the conflict record's explicit map (+0x30) as `Data\Art\Maps\<name>`;

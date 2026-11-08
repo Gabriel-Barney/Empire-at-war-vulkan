@@ -3929,20 +3929,80 @@ void test_black_market_battle() {
 
 // --- battle host (BT pass): land lead / reserve split, HIJACK reserve, ResumeGame, map picker, pad command refusals ---
 void test_bt_pass(const Data& d) {
-    // Map picker (TACTICAL_GAPS §4.10, [port] deterministic pick).
+    // Map picker (CU8F_T03_T05_RE §1.3, cu8f t03; [port] deterministic draw).
     {
         using MC = CampaignBattleOptions::MapCandidate;
-        std::vector<MC> c(4);
-        c[0] = {"Land_A", false, 0, -1, 2, 5, false};
-        c[1] = {"Land_B", false, -1, 1, 2, 5, false};
-        c[2] = {"Land_C", false, 0, -1, 1, 5, false};  // 1 player: never
-        c[3] = {"Space_A", true, 7, -1, 2, 5, false};
+        std::vector<MC> c(7);
+        c[0] = {"Land_A", 1, 0, 1, 2, 5, 0};
+        c[1] = {"Land_B", 1, 0, 1, 4, 5, 0};
+        c[2] = {"Land_C", 1, 0, 1, 1, 5, 0};   // 1 player: never
+        c[3] = {"Land_D", 1, 0, 3, 8, 5, 0};   // faction 3 (every MP map): only for query faction -1
+        c[4] = {"Land_E", 1, 0, 1, 2, 5, 1};   // custom map: never a campaign pick
+        c[5] = {"Space_A", 2, 7, 1, 2, 5, 0};
+        c[6] = {"Land_F", -1, 0, 1, 2, 5, 0};  // no mini 01: matches nothing
         const std::string a = pick_random_map(c, false, 0, 1, 2);
         CHECK(a == "Land_A" || a == "Land_B");
         CHECK(pick_random_map(c, false, 0, 1, 2) == a);         // deterministic
         CHECK(pick_random_map(c, false, 3, 0, 2).empty());       // terrain 3, faction 0: no candidate
-        CHECK(pick_random_map(c, true, 7, 0, 1) == "Space_A");
-        CHECK(pick_random_map(c, false, 0, 0, 6).empty());       // base level above every max
+        CHECK(pick_random_map(c, true, 7, 1, 1) == "Space_A");   // one survivor: no draw
+        CHECK(pick_random_map(c, false, 0, 1, 6).empty());       // base level above every max
+        CHECK(pick_random_map(c, false, 0, 0, 2).empty());       // candidate faction is never a wildcard
+        CHECK(pick_random_map(c, false, 0, 3, 2) == "Land_D");
+        const std::string any = pick_random_map(c, false, 0, -1, 2);  // query faction -1: any faction
+        CHECK(any == "Land_A" || any == "Land_B" || any == "Land_D");
+        CHECK(pick_random_map(c, false, 0, 1, 2, "Land_A") == "Land_A");  // the scan stops after the preferred name
+        const std::string b = pick_random_map(c, false, 0, 1, 2, "Land_B");
+        CHECK(b == "Land_A" || b == "Land_B");
+        // Terrain bit 31: "not this terrain" (0xffffffff: any terrain).
+        CHECK(pick_random_map(c, true, static_cast<int32_t>(0x80000000u | 7u), 1, 1).empty());
+        CHECK(pick_random_map(c, true, static_cast<int32_t>(0x80000003u), 1, 1) == "Space_A");
+        CHECK(pick_random_map(c, true, -1, 1, 1) == "Space_A");
+        CHECK(pick_random_map(c, false, 7, 1, 2).empty());  // a plain index is never a wildcard
+        // The candidate fields come from the .ted's chunk 0 minis, retail defaults for absent ones (§1.2).
+        const auto ted0 = [](std::vector<terrain::RawMini> minis) {  // a file holding only the map-info chunk
+            terrain::ChunkWriter w;
+            w.mini_leaf(0, minis);
+            return w.take();
+        };
+        using terrain::mk_u32;
+        MC e;
+        CHECK(read_map_candidate(ted0({mk_u32(0x00, 513), mk_u32(0x01, 1), mk_u32(0x02, 6), mk_u32(0x03, 5), mk_u32(0x05, 3),
+                                       mk_u32(0x06, 4), terrain::mk_u8(0x0B, 0)}),
+                                 "DATA\\ART\\MAPS\\_MP_LAND_X.TED", e));
+        CHECK(e.name == "DATA\\ART\\MAPS\\_MP_LAND_X.TED" && e.map_type == 1 && e.players == 6 && e.max_base_level == 5 &&
+              e.faction == 3 && e.terrain == 4 && e.custom == 0);
+        CHECK(read_map_candidate(ted0({mk_u32(0x00, 513)}), "X", e));  // only the format: every default
+        CHECK(e.map_type == -1 && e.players == 1 && e.max_base_level == 1 && e.faction == 0 && e.terrain == 0 && e.custom == 0);
+        CHECK(!read_map_candidate(std::vector<uint8_t>{1, 2, 3}, "Y", e));
+        // The table: list A keeps every readable file, list B only custom-flag-1 files; a path already listed is skipped.
+        struct Mem final : FileProvider {
+            std::map<std::string, std::vector<uint8_t>> f;
+            bool read(std::string_view p, std::vector<uint8_t>& out) const override {
+                const auto it = f.find(std::string(p));
+                if (it == f.end()) return false;
+                out = it->second;
+                return true;
+            }
+            bool exists(std::string_view p) const override { return f.count(std::string(p)) != 0; }
+            std::string origin(std::string_view) const override { return {}; }
+        } mem;
+        mem.f["DATA\\ART\\MAPS\\A.TED"] = ted0({mk_u32(0x01, 1), mk_u32(0x02, 4)});
+        mem.f["DATA\\CUSTOMMAPS\\C0.TED"] = ted0({mk_u32(0x01, 1), mk_u32(0x02, 4)});  // custom flag 0: not in list B
+        mem.f["DATA\\CUSTOMMAPS\\C1.TED"] = ted0({mk_u32(0x01, 1), terrain::mk_u8(0x0B, 1)});
+        mem.f["DATA\\ART\\MAPS\\M.TED"] = ted0({mk_u32(0x01, 2), terrain::mk_u8(0x0B, 1)});  // a mod-only custom map
+        const MapLister lister = [](std::string_view g, bool mod) -> std::vector<std::string> {
+            if (mod) return {"DATA\\ART\\MAPS\\A.TED", "DATA\\ART\\MAPS\\M.TED"};
+            if (g.find("CustomMaps") != std::string_view::npos) return {"DATA\\CUSTOMMAPS\\C0.TED", "DATA\\CUSTOMMAPS\\C1.TED"};
+            return {"DATA\\ART\\MAPS\\A.TED", "DATA\\ART\\MAPS\\MISSING.TED"};
+        };
+        const std::vector<MC> t = build_map_candidates(mem, lister);
+        CHECK(t.size() == 3);
+        if (t.size() == 3) {
+            CHECK(t[0].name == "DATA\\ART\\MAPS\\A.TED" && t[0].players == 4 && t[0].custom == 0);
+            CHECK(t[1].name == "DATA\\CUSTOMMAPS\\C1.TED" && t[1].custom == 1);
+            CHECK(t[2].name == "DATA\\ART\\MAPS\\M.TED" && t[2].custom == 1 && t[2].map_type == 2);
+        }
+        CHECK(map_candidate_source(mem, lister)().size() == 3);
     }
     jobs::JobSystem js(jobs::JobSystemConfig{0});
     SimConfig cfg;

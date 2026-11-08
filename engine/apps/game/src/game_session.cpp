@@ -225,6 +225,12 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
     bo.battle.skirmish = spec_.kind == SessionKind::Skirmish;  // SpecialWeaponsAllowed ANDs the hard-point flag
     bo.battle.skip_human_units = true;  // the human's units take orders only from commands (stand-ins skip them)
     sim::load_tactical_systems(*d.files, d.rules, &d.db.constants(), bo);  // Int-final: weather, retreat, strikes data
+    if (d.vfs) {
+        // cu8f t03: the random map picker's candidate table (CU8F_T03_T05_RE §1.1), built on the first pick [port].
+        bo.map_candidate_source = sim::map_candidate_source(*d.files, [v = d.vfs](std::string_view g, bool mod) {
+            return v->list(g, mod ? vfs::Vfs::kLayerMod : vfs::Vfs::kLayerBase | vfs::Vfs::kLayerMeg);
+        });
+    }
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
     if (spec_.tactical_ai && d.ai && d.ai->tactical) {
         auto ts = std::make_shared<sim::TacticalAiSetup>(*d.ai->tactical);

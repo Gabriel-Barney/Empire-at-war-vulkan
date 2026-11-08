@@ -611,7 +611,7 @@ inside the pixel shader). [H] (0x183a30 operand decode, 0x1a2080, 0x277830)
 | `0F` | fog colour (+0xEC) | scene fog | (1,1,1) | H |
 | `10` | fog enable (+0xF8) | | 0 | H |
 | `11`,`12` | fog start/end (+0xE4/+0xE8, stored min/max) | | 1000 / 10000 | H |
-| `13` | int (+0x100), clamped ≥ 0 | reader not traced | 1 | L |
+| `13` | int (+0x100), clamped ≥ 0 | **weather type**: CLEAR 0, RAIN 1, SNOW 2, SANDSTORM 3, ASH 4; read by the typed random environment pick 0x2770e0 (land vf27, a synced pick among the environments of that type; no caller found) (CU8F_T03_T05_RE §2.2, 2026-11-07) | 1 | H |
 | `14` | name | | "Environment N" | H |
 | `15` | **clear colour** (+0x104) | frame/camera clear, reflection clear, sky-cube clear | (0.3,0.3,1.0) | H |
 | `17` | **stencil shadow colour** (+0x110) → scene +0x1E4 | §4.3 | (0.5,0.5,0.5) | H |

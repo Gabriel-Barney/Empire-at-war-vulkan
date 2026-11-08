@@ -404,6 +404,10 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
         return false;
     }
     prender_.set_sort_range(render::MapScene::kFar);
+    // cu8f t05 (CU8F_T03_T05_RE §2.2): the scene wind at map load (land: the active environment's, space: zero). The port
+    // has no host for Set_New_Environment / the typed environment pick yet (the Lua call is only recorded), so this is
+    // the only write.
+    prender_.set_wind(scene_->scene_wind());
     pattach_ = std::make_unique<render::particles::ProxyAttachments>(*pworld_, *plib_);
 #endif
     // R5: fog colours (GameConstants), land decorations (tracks, scorch marks).

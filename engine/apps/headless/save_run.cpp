@@ -638,6 +638,10 @@ public:
         bo.tactical_ai = tai_;
 #endif
         sim::load_tactical_systems(*files_, rules_, &db_.constants(), bo);
+        // cu8f t03: the random map picker's candidate table (CU8F_T03_T05_RE §1.1), built on the first pick [port].
+        bo.map_candidate_source = sim::map_candidate_source(*files_, [v = files_.get()](std::string_view g, bool mod) {
+            return v->list(g, mod ? vfs::Vfs::kLayerMod : vfs::Vfs::kLayerBase | vfs::Vfs::kLayerMeg);
+        });
 #ifdef ALAMO_SIM_HAVE_ANIM
         if (ho_.anim) {
             s->anim = std::make_unique<sim::SimAnimation>(types_, *files_);
