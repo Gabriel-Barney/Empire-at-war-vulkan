@@ -10,6 +10,10 @@ ENTER, 11 cycles with players, planets and perception rows for both AI players, 
 Scoring: the probe part of mod\\...\\Miscellaneous\\GameScoring.lua (after its marker) runs on stub originals; one
 space mode with a thread, kills and a build. Checks the records, that the shipped handlers are still called and the
 shipped GameService still runs every 10th service.
+Plans: the five mod\\...\\AI\\*.lua hooks, each through two plan runs across an emulated PGBase Flush_G. Build_Space_Forces,
+Build_Ground_Forces and Conquer_Pirate call the thread directly; Conquer_Opponent (two threads) and Crush run as
+coroutines with PGBase's yielding BlockOnCommand / Sleep / ScriptExit (PSTAGE, per-task-force records, tf=? outside a
+thread). Then make_plan_hooks.py --check (the files match the generator; skipped without extracted\\foc_data_text.zip).
 Live memory: while lua50.exe still holds its records, q2lua_reader's parser over an a1mem scan of that process
 (ReadProcessMemory) must find exactly the records the script printed.
 Lua: tools\\probe_mod\\out\\tools\\lua50.exe (common\\lua50.py; built with the project MSVC at /Od on first use).
@@ -150,12 +154,14 @@ Q2S_Force = {
 	end,
 	Set_Plan_Result = function(r) Q2S.result = r end,
 	Are_All_Units_On_Free_Store = function() return false end,
-	Get_Unit_Table = function() return Q2S.units end }
+	Get_Unit_Table = function() return Q2S.units end,
+	Get_Force_Count = function() return table.getn(Q2S.units) end }
 function Q2S_Attach()
 	ReserveForce = Q2S_Force
 	MainForce = Q2S_Force
 	PlayerObject = Q2S_Players.Rebel
-	Target = { Get_Game_Object = function() return { Get_Type = function() return Q2S_Named("Kashyyyk") end } end }
+	-- the goal's planet as a game object wrapper (AI_GALACTIC 1.9.4): Get_Type / Get_Name, no Get_Game_Object
+	Target = { Get_Type = function() return Q2S_Named("Kashyyyk") end, Get_Name = function() return "Kashyyyk_Obj" end }
 	Budget = { Get_Spendable_Resources = function() return 1234.5 end, Get_Unallocated_Resources = function() return 50 end }
 end
 -- PGBase Flush_G (vanilla): delete every global table except the keep list (the harness keeps its own Q2S* state
@@ -191,6 +197,172 @@ Q2S_Dump()
 PLANS = [('BuildSpaceForcesPlan.lua', 'Build_Space_Forces', 'ReserveForce'),
          ('BuildGroundForcesPlan.lua', 'Build_Ground_Forces', 'ReserveForce'),
          ('ConquerPiratePlan.lua', 'Conquer_Pirate', 'MainForce')]
+
+# Plans whose threads block, move and invade (Conquer_Opponent: two task-force threads in one plan; Crush). Here the
+# threads are real coroutines with the PGBase shapes of BlockOnCommand / Sleep / ScriptExit, resumed in creation order
+# once per Planning service (AI_GALACTIC 1.9.4): a probe pcall around a yield would fail ("attempt to yield across
+# metamethod/C-call boundary"), and Conquer_Opponent's two threads interleave, so each record must name its own task
+# force (GetThreadID -> task force). Two plan runs across an emulated Flush_G as above; run 2 (and Crush run 1) has
+# every unit on the free store, so AssembleForce stages it (PSTAGE). Then a production failure arrives outside the
+# threads (its ScriptExit records tf=?).
+PLAN2 = r'''
+Q2S.tid = -1
+Q2S.svc = 0
+Q2S.exits = 0
+Q2S.produced = 0
+Q2S.exitflag = false
+function GetThreadID() return Q2S.tid end
+function _ScriptExit() Q2S.exitflag = true end
+-- PGBase as shipped
+function ScriptExit()
+	_ScriptExit()
+	Q2S.exits = Q2S.exits + 1
+	if GetThreadID() >= 0 then
+		coroutine.yield(false)
+	end
+end
+function PumpEvents() coroutine.yield(true) end
+function BlockOnCommand(block, max_duration, alternate_break_func)
+	PumpEvents()
+	if not block then return nil end
+	repeat PumpEvents() until block.IsFinished() == true
+	return block.Result()
+end
+function Sleep(time)
+	local start = GetCurrentTime()
+	while GetCurrentTime() - start < time do PumpEvents() end
+end
+function DebugMessage() end
+function DifficultyBasedMinPause(d) return 2 end
+function GalacticAttackAllowed(d, n) return true end
+function EvaluatePerception(eq, player, target) return 1 end
+-- PGTaskForce as shipped (without its DebugMessage calls)
+function AssembleForce(taskforce, stage_at_strongest_space)
+	if stage_at_strongest_space then stage = nil else stage = taskforce.Get_Stage() end
+	if not stage then ScriptExit() end
+	BlockOnCommand(taskforce.Produce_Force(stage))
+end
+function SynchronizedAssemble(taskforce, s) AssembleForce(taskforce, s) end
+function LandUnits(taskforce) BlockOnCommand(taskforce.Land_Units()) end
+function LaunchUnits(taskforce)
+	local block = taskforce.Launch_Units()
+	if not block then return false end
+	BlockOnCommand(block)
+	return true
+end
+function Invade(taskforce)
+	local s = taskforce.Invade()
+	if s and BlockOnCommand(s) then
+		LandUnits(taskforce)
+		return true
+	end
+	return false
+end
+function FundBases(player, target) BlockOnCommand(Q2S_Block(1, true)) end
+function Q2S_Named(n) return { Get_Name = function() return n end } end
+function Q2S_Block(services, result)
+	local at = Q2S.svc + services
+	return { IsFinished = function() return Q2S.svc >= at end, Result = function() return result end }
+end
+-- Get_Stage gives an AI target location (Get_Game_Object -> the planet)
+Q2S_Stage = { Get_Game_Object = function() return { Get_Type = function() return Q2S_Named("Mon_Calamari") end } end }
+function Q2S_MakeForce(utype)
+	local f = {}
+	local units = {}
+	f.Set_As_Goal_System_Removable = function() end
+	f.Set_Plan_Result = function(r) Q2S.result = r end
+	f.Are_All_Units_On_Free_Store = function() return Q2S.free end
+	f.Produce_Force = function(stage)
+		Q2S.produced = Q2S.produced + 1
+		table.insert(units, { Get_Type = function() return Q2S_Named(utype) end })
+		return Q2S_Block(3, true)
+	end
+	f.Get_Unit_Table = function() return units end
+	f.Get_Force_Count = function() return table.getn(units) end
+	f.Get_Stage = function() return Q2S_Stage end
+	f.Move_To = function() return Q2S_Block(2, true) end
+	f.Land_Units = function() return Q2S_Block(1, true) end
+	f.Launch_Units = function() return Q2S_Block(1, true) end
+	f.Invade = function() return Q2S_Block(2, true) end
+	f.Release_Forces = function() end
+	f.Test_Target_Contrast = function() end
+	return f
+end
+function Q2S_Attach()
+	for _, tf in ipairs(Q2S_TFS) do
+		getfenv(0)[tf] = Q2S_MakeForce(Q2S_UNIT[tf])
+	end
+	Q2S_Players.Rebel.Get_Difficulty = function() return "Hard" end
+	PlayerObject = Q2S_Players.Rebel
+	Target = { Get_Type = function() return Q2S_Named("Shola") end, Get_Name = function() return "Shola_Obj" end }
+	AITarget = { Get_Game_Object = function() return Target end }
+	Budget = { Get_Spendable_Resources = function() return 1234.5 end, Get_Unallocated_Resources = function() return 50 end }
+end
+function Q2S_Flush_G()
+	local keep = { _LOADED = true, coroutine = true, string = true, LuaWrapperMetaTable = true, _G = true,
+		security = true, table = true, io = true, GetCurrentTime = true }
+	local dead = {}
+	for k, v in pairs(_G) do
+		if type(v) == "table" and not keep[k] and string.sub(k, 1, 3) ~= "Q2S" then
+			table.insert(dead, k)
+		end
+	end
+	for _, k in ipairs(dead) do _G[k] = nil end
+	Q2S.flushed = table.getn(dead)
+end
+-- One plan run: a coroutine per task force (ids 0, 1, ... again in every run), resumed in creation order once per
+-- service; true keeps a thread, false or a return ends it; ScriptExit's flag ends the pass and the plan.
+function Q2S_RunPlan()
+	Q2S.exitflag = false
+	local th = {}
+	for i, tf in ipairs(Q2S_TFS) do
+		th[i] = { id = i - 1, co = coroutine.create(getfenv(0)[tf .. "_Thread"]), alive = true }
+	end
+	for pass = 1, 2000 do
+		local live = false
+		for _, t in ipairs(th) do
+			if t.alive and not Q2S.exitflag then
+				Q2S.tid = t.id
+				local ok, v = coroutine.resume(t.co)
+				Q2S.tid = -1
+				if not ok then error("thread " .. t.id .. ": " .. tostring(v)) end
+				if v ~= true or coroutine.status(t.co) == "dead" then t.alive = false end
+			end
+			live = live or t.alive
+		end
+		if Q2S.exitflag or not live then return pass end
+		Q2S.svc = Q2S.svc + 1
+		Q2S.t = Q2S.t + 0.1
+		Q2S.frame = Q2S.frame + 3
+	end
+	error("plan did not end")
+end
+Q2S_Attach()
+dofile(Q2S_SCRIPT)
+Definitions()
+dofile(Q2S_SCRIPT)
+Definitions()
+Q2S.free = Q2S_RUN1_FREE
+Q2S_RunPlan()
+Q2S_Flush_G()
+Definitions()
+Q2S_Attach()
+Q2S.free = true
+Q2S_RunPlan()
+local last = Q2S_TFS[table.getn(Q2S_TFS)]
+getfenv(0)[last .. "_Production_Failed"](getfenv(0)[last], Q2S_Named("REBEL_INFANTRY_SQUAD"))
+print("RESULT exits=" .. Q2S.exits .. " produced=" .. Q2S.produced .. " landsecured=" .. tostring(LandSecured) ..
+	" category=" .. tostring(Category) .. " flushed=" .. tostring(Q2S.flushed))
+Q2S_Dump()
+'''
+# (file, plan label, task forces, run 1 on the free store, expected kind counts, RESULT line)
+PLANS2 = [('ConquerOpponentPlan.lua', 'Conquer_Opponent', ['SpaceForce', 'GroundForce'], False,
+           {'LOAD': 1, 'PSTART': 4, 'PSTAGE': 2, 'PBLOCK': 11, 'PDONE': 2, 'PEXIT': 2, 'PFAIL': 1},
+           'RESULT exits=2 produced=4 landsecured=true category=Conquer_Opponent flushed='),
+          ('CrushPlan.lua', 'Crush', ['MainForce'], True,
+           {'LOAD': 1, 'PSTART': 2, 'PSTAGE': 1, 'PBLOCK': 5, 'PEXIT': 3, 'PFAIL': 1},
+           'RESULT exits=3 produced=1 landsecured=false category=Conquer_Opponent flushed=')]
+UNITS = {'SpaceForce': 'CORELLIAN_GUNBOAT', 'GroundForce': 'REBEL_INFANTRY_SQUAD', 'MainForce': 'REBEL_INFANTRY_SQUAD'}
 
 
 def check(cond, what):
@@ -336,22 +508,76 @@ def main():
         check(seqs == list(range(1, len(seqs) + 1)) and len({r[1] for r in recs}) == 1,
               '%s: one sid, no seq gaps (%s)' % (plan, seqs))
         starts = [r[4] for r in recs if r[3] == 'PSTART']
-        check(len(starts) == 2 and 'n=1 prev=first' in starts[0] and 'n=2 prev=PDONE' in starts[1],
-              '%s: PSTART run numbers and prev %s' % (plan, starts))
+        check(len(starts) == 2 and 'target=Kashyyyk tf=%s n=1 prev=first tname=Kashyyyk_Obj ' % tf in starts[0] and
+              'n=2 prev=PDONE ' in starts[1], '%s: PSTART run numbers, prev, target %s' % (plan, starts))
         block = [r[4] for r in recs if r[3] == 'PBLOCK']
-        check(block and ('plan=%s player=REBEL target=Kashyyyk n=1 k=1 ret=nil spend=1234.5 unalloc=50 cr=8000' % plan)
-              in block[0] and block[0].endswith('units=1 CORELLIAN_GUNBOAT'), '%s: PBLOCK text %s' % (plan, block))
+        check(block and ('plan=%s player=REBEL target=Kashyyyk tf=%s n=1 k=1 ret=nil spend=1234.5 unalloc=50 cr=8000' % (
+            plan, tf)) in block[0] and block[0].endswith('count=1 units=1 CORELLIAN_GUNBOAT'),
+              '%s: PBLOCK text %s' % (plan, block))
         done = [r[4] for r in recs if r[3] == 'PDONE']
         check(len(done) == 2 and done[1].startswith('t=40 frame=1200 ') and
-              done[1].endswith('units=2 CORELLIAN_GUNBOAT CORELLIAN_GUNBOAT'),
+              done[1].endswith('count=2 units=2 CORELLIAN_GUNBOAT CORELLIAN_GUNBOAT'),
               '%s: PDONE after the second run %s' % (plan, done))
         if pirate:
             fail = [r[4] for r in recs if r[3] == 'PFAIL']
-            check(fail and 'args=2 ? PIRATE_FIGHTER' in fail[0], '%s: PFAIL names the failed type %s' % (plan, fail))
+            check(fail and 'args=2 tf PIRATE_FIGHTER' in fail[0], '%s: PFAIL names the failed type %s' % (plan, fail))
             ex = [r[4] for r in recs if r[3] == 'PEXIT']
             check(ex and ' n=2 ' in ex[0], '%s: PEXIT from the failure handler %s' % (plan, ex))
         if found is not None:
             check(found == set(raw), '%s: live memory scan finds exactly the printed records' % plan)
+
+    for fname, plan, tfs, free1, want, result in PLANS2:
+        body = ('Q2S_TFS = { %s }\nQ2S_RUN1_FREE = %s\nQ2S_UNIT = { %s }\n' % (
+            ', '.join(lua_str(t) for t in tfs), 'true' if free1 else 'false',
+            ', '.join('%s = %s' % (t, lua_str(UNITS[t])) for t in tfs)) + PLAN2)
+        lines, found = run_harness(lua, 'plan_' + plan, os.path.join(MOD, 'AI', fname), body)
+        recs, raw = records_of(lines)
+        kinds = {}
+        for r in recs:
+            kinds[r[3]] = kinds.get(r[3], 0) + 1
+        check(len(recs) == len(raw) and recs and all(r[0] == 'P' for r in recs),
+              '%s: records parse, src P (%d)' % (plan, len(recs)))
+        check(kinds == want, '%s: two threaded runs across a Flush_G, then a failure %s' % (plan, kinds))
+        check(any(ln.startswith(result) and not ln.endswith('flushed=0') for ln in lines),
+              '%s: shipped threads ran to their ends (%s)' % (plan, [ln for ln in lines if ln.startswith('RESULT')]))
+        seqs = sorted(r[2] for r in recs)
+        check(seqs == list(range(1, len(seqs) + 1)) and len({r[1] for r in recs}) == 1,
+              '%s: one sid, no seq gaps' % plan)
+        d = [(r[3], q2lua_reader.kv(r[4])) for r in recs]
+        check(d[0][1].get('tfs') == ','.join(tfs), '%s: LOAD names the task forces %s' % (plan, recs[0][4]))
+        starts = [x for k, x in d if k == 'PSTART']
+        check([(x.get('tf'), x.get('n'), x.get('prev')) for x in starts] ==
+              [(t, '1', 'first') for t in tfs] + [(t, '2', 'PEXIT' if len(tfs) == 1 else 'PDONE') for t in tfs] and
+              all(x.get('target') == 'Shola' and x.get('tname') == 'Shola_Obj' for x in starts),
+              '%s: PSTART per task force, run numbers, prev, target %s' % (plan, [r[4] for r in recs if r[3] == 'PSTART']))
+        stages = [x for k, x in d if k == 'PSTAGE']
+        check(sorted(x.get('tf') for x in stages) == sorted(tfs) and
+              all(x.get('stage') == 'Mon_Calamari' and x.get('via') == 'AssembleForce' and x.get('strongest') == 'nil'
+                  and x.get('count') == '0' and x.get('stagestr', '').startswith('table:') for x in stages),
+              '%s: PSTAGE per task force before Produce_Force %s' % (plan, [r[4] for r in recs if r[3] == 'PSTAGE']))
+        blocks = [x for k, x in d if k == 'PBLOCK']
+        check(blocks and all(x.get('tf') in tfs and x.get('count', '').isdigit() and int(x['count']) >= 1 and
+                             (' %s' % UNITS[x['tf']]) in r[4] for (k, x), r in zip(d, recs) if k == 'PBLOCK'),
+              '%s: every PBLOCK names its own task force, count and unit type' % plan)
+        if len(tfs) > 1:
+            first = [(x.get('tf'), x.get('k')) for x in blocks[:2]]
+            check(first == [('SpaceForce', '1'), ('GroundForce', '1')],
+                  '%s: interleaved threads keep their task force and k %s' % (plan, first))
+        fail = [r[4] for r in recs if r[3] == 'PFAIL']
+        check(fail and ' tf=%s ' % tfs[-1] in fail[0] and 'args=2 tf REBEL_INFANTRY_SQUAD' in fail[0],
+              '%s: PFAIL %s' % (plan, fail))
+        ex = [x for k, x in d if k == 'PEXIT']
+        check(ex and ex[-1].get('tf') == '?' and ex[-1].get('units') == '?' and
+              ex[-1].get('count') == ','.join('%s:1' % t for t in tfs) if len(tfs) > 1 else ex[-1].get('tf') == tfs[0],
+              '%s: PEXIT outside the threads %s' % (plan, [r[4] for r in recs if r[3] == 'PEXIT'][-1:]))
+        check(all(len(r) <= 400 for r in raw), '%s: every record fits one scan hit' % plan)
+        if found is not None:
+            check(found == set(raw), '%s: live memory scan finds exactly the printed records' % plan)
+
+    hooks = subprocess.run([sys.executable, '-I', os.path.join(HERE, 'make_plan_hooks.py'), '--check'],
+                           capture_output=True, text=True)
+    print('  note  ' + hooks.stdout.strip())
+    check(hooks.returncode in (0, 2), 'plan hooks match make_plan_hooks.py output (or the zip is absent)')
 
     print('SELFTEST_LUA ' + ('FAILED (%d)' % len(FAILS) if FAILS else 'OK'))
     return 1 if FAILS else 0

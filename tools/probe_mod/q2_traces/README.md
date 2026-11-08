@@ -69,6 +69,18 @@ Nor can it write a file: in retail 1.121 `_CustomScriptMessage`, `_ScriptMessage
   galactic time, frame, plan, faction, target, the goal's budget (`spend=` / `unalloc=` from `Budget`), the player's
   credits and the task force's unit types. It shows which units retail's Build_Space_Forces / Build_Ground_Forces
   pick, when, and why Conquer_Pirate plans fail.
+  **Extended 2026-11-08** (which plan builds the Rebel's post-Shola infantry): also `ConquerOpponentPlan.lua` (two
+  threads, `SpaceForce` and `GroundForce`) and `CrushPlan.lua` (`MainForce`; its category is Conquer_Opponent too, so
+  its records say `plan=Crush`). Every record now carries `target=` (`Target.Get_Type().Get_Name()`, the goal's planet;
+  `none` = no target; the old accessor read a method game objects do not have, hence the old `target=?`), `tf=` (the
+  task force; with two threads told apart by `GetThreadID()`, `tf=?` when unknown, and then `count=` lists every task
+  force) and `count=` (`<tf>.Get_Force_Count()`: `units=0` was all retail showed at PBLOCK). `PSTART` adds `tname=`
+  (`Target.Get_Name()`). New record `PSTAGE` when `AssembleForce` / `SynchronizedAssemble` is called, before it
+  produces: `via=`, `strongest=` (its second argument), `stage=` (planet of `<tf>.Get_Stage()`; `nil` = no stage, the
+  plan then exits) and `stagestr=` (`tostring` of it). `PFAIL` names the event's first argument `tf` (the task force,
+  which has no `Get_Name`). The five files are written by `make_plan_hooks.py` (shipped script + generated block);
+  edit the generator, not the files. `lua_summary.json` → `plans` sums them per `player plan tf`: starts, stagings,
+  blocks, first frame, targets, stages and the unit types the task force held.
   **The 2026-11-03 run's plan hooks broke the plans.** Releasing a pooled plan runs PGBase `Flush_G`, which deletes
   every global table, the old probe's records table included; the next record then raised a Lua error that killed
   the plan's thread before the shipped code ran (Rebel fleet departures 19 instead of retail's 71). The records now
@@ -188,8 +200,8 @@ How to read the result (`run_status.json` → `lua_canary` and `lua`):
 The `scoring` canary and verdict are about the GameScoring hook; in a galactic run it loads too, but only a skirmish
 (`run_skirmish.cmd -LuaProbe`, same clicks as step 4 above) gives it battle events. Optional.
 
-`lua.plans` (q2f t09) reads `loaded: N plan scripts; S thread starts, D ends, F production failures; B blocks done,
-E script exits, R probe errors`. `lua_summary.json` `gaps` (and the `GAPS` line of `lua_reader.log`) must be empty:
+`lua.plans` (q2f t09) reads `loaded: N plan scripts; S thread starts, D ends, F production failures; G stagings,
+B blocks done, E script exits, R probe errors`. `lua_summary.json` `gaps` (and the `GAPS` line of `lua_reader.log`) must be empty:
 a gap means records were lost. What it must show for q2f t09 (docs/re/Q2F_T09_REBEL_PRODUCTION.md): the Rebel's
 first `Build_Space_Forces` `PBLOCK` (unit types; the port picks a Marauder where retail's queue starts a Corellian
 gunboat at frame 109), the first `Build_Ground_Forces` `PSTART` / `PBLOCK` (retail's queue shows light tank, tank
@@ -314,10 +326,11 @@ It imports `analysis/q2_parity.py`, so keep that module's functions stable.
 | `reader\q2_layout.hpp` | every address and offset used, each with its `docs/re` source |
 | `reader\q2reader.cpp`, `reader\fake_game.cpp` | recorder; test target that lays out the same structures, including a real MSVC `unordered_map` |
 | `q2trace.py` | `validate` (rebuild state, recompute every digest, RNG draws per tick, fiscal cycles, credits, ownership), `to-q1`, `compare`, `selftest`, `selftest-fake`. Standard library only (project venv) |
-| `mod\Q2Trace\` | optional Lua probe (vanilla): plot Lua script, `Story_Plots_Sandbox_12U_Empire.xml` with its empty `Lua_Script` set, the galactic equation file plus 4 `Q2_*` equations, `Scripts\Miscellaneous\GameScoring.lua` (original + tactical probe), `Scripts\AI\` copies of three plan scripts (original + plan probe, q2f t09), and the two canary files |
+| `mod\Q2Trace\` | optional Lua probe (vanilla): plot Lua script, `Story_Plots_Sandbox_12U_Empire.xml` with its empty `Lua_Script` set, the galactic equation file plus 4 `Q2_*` equations, `Scripts\Miscellaneous\GameScoring.lua` (original + tactical probe), `Scripts\AI\` copies of five plan scripts (original + plan probe, q2f t09; Conquer_Opponent and Crush added 2026-11-08), and the two canary files |
+| `make_plan_hooks.py` | writes the five `Scripts\AI\` plan hooks from `extracted\foc_data_text.zip` (shipped script, CRLF → LF, + the generated probe block); `--check` compares only (`selftest_lua.py` runs it) |
 | `run_lua_probe.cmd` | `run_trace.ps1 -Scenario galactic -LuaProbe` |
 | `q2lua_reader.py` | `run` (started by the run: read-only memory scan for the probe's `Q2L1` records), `summarize` (rebuild the outputs from `lua_reader.log`), `selftest` |
-| `selftest_lua.py` | runs both probe scripts under stock Lua 5.0.2 (`tools\probe_mod\out\tools\lua50.exe`, built by `common\build_lua50.cmd`) with stubbed engine calls, and checks that a memory scan of that process finds every record |
+| `selftest_lua.py` | runs the probe scripts under stock Lua 5.0.2 (`tools\probe_mod\out\tools\lua50.exe`, built by `common\build_lua50.cmd`) with stubbed engine calls, and checks that a memory scan of that process finds every record. Conquer_Opponent and Crush run as real coroutines with PGBase's yielding `BlockOnCommand` / `Sleep` / `ScriptExit` (a probe `pcall` around a yield would fail; the two Conquer_Opponent threads interleave) |
 | `q2_ui.py`, `q2_scenes.json`, `refs\` | unattended menu driver (see "Unattended runs") |
 | `q2_profile.py` | `snapshot` / `restore` / `diff <run_dir>`: the player's registry settings and saved-games files |
 | `q2common.ps1` | shared paths, game detection, manifest, install |
