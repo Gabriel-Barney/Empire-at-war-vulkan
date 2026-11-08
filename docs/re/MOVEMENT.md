@@ -391,6 +391,7 @@ The build runs lazily from the query functions when the dirty flag `0x140a2bed8`
 
 **Start staggering** [H]:
 - In `0x43c1b0`, each formation's start frame = now + accumulated delay + a synced random offset − 2·fps. The delay accumulator grows by each member type's `PathFrameDelay` (+0x3D0). [M] for the exact formula.
+- The synced random draw is the **FormationClass ctor's** (`0x40d0d0`, every formation creation): `int(1, FPS)`, stored as the formation's next-check timer +0x1d8 := FPS + r + now (+0x1dc := now − 500) [H, CU8G_T02_ENV_PICK_RE §7 P1 results]. The port reads the offset above as +0x1d8 − now = FPS + r (start = now + acc + r − FPS, not before now; docs/PHASE4.md cu8i). The earlier "Get_Int(0, Max_Move_Frame_Delay)" reading of this draw was wrong; Max_Move_Frame_Delay is only the queued-order delay below.
 - With the queue/shift flag (§6.1), `0x41c1a0` gives each unit a synced random start delay in [0, **Max_Move_Frame_Delay = 6**] frames.
 - These draws consume the lockstep RNG, so their count and order must match.
 
@@ -1354,6 +1355,7 @@ Any of these may have readers that were not found. Parse them and treat them as 
 
 Both are 0xb8 bytes and are created per order by `0x426010`, appended in creation order. A coordinator owns a vector of `FormationClass` objects (0x290 bytes, ctor `0x40d0d0`, made by `0x4f6fb0`).
 - Each formation gets a global incrementing ID (`0x140a2bcf0`, stored at +0x288).
+- The ctor draws one synced `int(1, FPS)` (+0x1d8 := FPS + r + now, the next-check timer that 0x4192b0 / 0x410a60 gate on) [H, CU8G_T02_ENV_PICK_RE §7]. So every formation creation is one synced draw, including the Load_Map-tail GOM post-load pass (0x2b4440 → 0x3952e0 → 0x39bcb0), which gives each movable object without a coordinator a new one.
 - Members are added by `0x40e0f0` into the vector at +0x10. This writes the formation pointer into the member's locomotor data (+0x1f0).
 - Coordinators, formations and members are all **vectors in insertion order**.
 

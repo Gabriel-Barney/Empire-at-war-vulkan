@@ -1,6 +1,7 @@
 #include "alamo/tactical/abilities/ability_data.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <initializer_list>
 
 #include "alamo/core/hash.hpp"
@@ -146,6 +147,11 @@ void parse_class_fields(const data::XmlNode& e, SpecialAbilityDesc& s, const Abi
     s.berserker_damage = f_or(e, "Berserker_Damage", 0.0f);
     s.berserker_damage_range = f_or(e, "Berserker_Damage_Range", 0.0f);
     s.berserker_duration = f_or(e, "Berserker_Duration_In_Secs", 0.0f);
+    s.catch_dist = f_or(e, "Catch_Dist", 0.0f);  // cu8i t01: Saber_Throw
+    if (r.type_max_speed) {
+        const std::string_view saber = data::trim(e.child_text("Saber_Name"));
+        if (!saber.empty()) s.saber_speed = std::max(0.0f, r.type_max_speed(saber));
+    }
     s.activation_time = f_or(e, "Activation_Time_In_Seconds", 0.0f);
     s.trigger_radius = f_or(e, "Trigger_Radius", 0.0f);
     for (std::string_view tag : {"Mine_Type", "Object_Type", "Contamination_Object_Name"})
@@ -201,6 +207,13 @@ void parse_class_fields(const data::XmlNode& e, SpecialAbilityDesc& s, const Abi
 }
 
 }  // namespace
+
+uint32_t saber_flight_frames(float dist, float speed, float catch_dist) {
+    if (!(speed > 0.0f)) return 0;
+    const float d = std::max(0.0f, dist);
+    const float out = std::ceil(d / speed), back = std::ceil(std::max(0.0f, d - catch_dist) / speed);
+    return std::max(1u, static_cast<uint32_t>(out + back));
+}
 
 // ---- OI abilities: CubicInterpolator ----
 void CubicCurve::set(std::vector<std::pair<float, float>> pts) {

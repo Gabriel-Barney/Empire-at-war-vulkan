@@ -895,6 +895,19 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     // chunk-0x102 objects and their spawn-table draws, before every post-load step (skirmish base / start forces, the
     // campaign starbase / structures). Not saved: a loaded battle's read_part(State) takes the map's start index instead.
     env_index_ = pick_environment(map_.environments, rng);
+    // cu8i t02 (CU8G_T02_ENV_PICK_RE §7 / §8 item 7): Load_Map's tail, after the pick (land): the deferred GOM post-load
+    // pass (0x2b4440 -> 0x3952e0 -> 0x39bcb0) puts each movable object without a movement coordinator into a new one,
+    // which creates a formation: one FormationClass ctor draw int(1, FPS) per object, in object order. Movable = the
+    // LOCOMOTOR behaviour (TacticalMode::movable), whatever the owner: the port's inert Is_Neutral map units count too
+    // (_MP_LAND_ENDOR: its one Land_Speeder, retail 1 draw). [port] the new formations hold no order and are not kept.
+    if (!space_) {
+        const objects::ObjectStore& st = mode.primary();
+        for (const objects::ObjectHandle h : st.all_objects()) {
+            if (!st.alive(h) || !mode.movable(h)) continue;
+            if (movement_ && movement_->has_coordinator(st.id(h))) continue;
+            mv::MovementSystem::formation_ctor_draw(rng);
+        }
+    }
     bt_pad_restore(mode);        // §6.5: persistent pad children
     bt_skirmish_base(mode);      // t50: the land skirmish's pre-built base
     l1_setup(mode);            // L1 systems: special weapons / hyperspace / engines (before the deploys)
@@ -4081,8 +4094,11 @@ void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
             }
         if (e.kind == ta::AbilityEventKind::SpawnObject) spawn_ability_object(mode, e);  // fog follow-up: FOW_REVEAL_PING
         // cu8g t01 (CU8F_T01_T02_T07_RE.md §2.3): Saber_Throw's throw snaps the saber holstered (0x635450: suppress, fade 0).
-        // [port] at the apply (the throw at anim 0x6c's half and the catch 0x635310 need the thrown-saber phase, not modelled).
-        if (e.kind == ta::AbilityEventKind::Unhandled && e.type == ta::kSaberThrow) engine_loops_.saber_throw(e.id, frame_);
+        // [port] at the apply (retail: at anim 0x6c's half). cu8i t01 (§2.6): the event's value is the flight stand-in (frames
+        // to the catch, AbilitySystem saber_flight_frames); hg_holster_service holds the draw while it flies and calls the
+        // catch (0x635310). value 0 = the activation failed (the forwarding path's Unhandled): nothing was thrown.
+        if (e.kind == ta::AbilityEventKind::Unhandled && e.type == ta::kSaberThrow && e.value > 0)
+            engine_loops_.saber_throw(e.id, frame_, static_cast<uint32_t>(e.value));
         // S7 t15 A1 (ABILITIES_HARDPOINTS §2.6): every ability end raises signal 0x29, including the Remote_Bomb toss, which
         // ends at its Toss_Anim end (LOB_SOLVER §3.5 step 4, S8 t06).
         if (e.kind == ta::AbilityEventKind::Ended) ability_finished_.push_back(e.id);

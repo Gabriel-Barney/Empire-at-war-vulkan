@@ -70,6 +70,16 @@ void MovementSystem::rebuild_regions_if_dirty(const ParallelFor& pf) {
     for (Unit& u : units_) u.slot = regions_.mask_slot(u.lp.mask);
 }
 
+// cu8i t02 (CU8G_T02_ENV_PICK_RE §7 P1 results): FormationClass ctor 0x40d0d0, one synced int(1, FPS).
+int32_t MovementSystem::formation_ctor_draw(SimRng& rng) { return rng.range_int(1, kFormationFps); }
+
+bool MovementSystem::has_coordinator(ObjectId id) const {
+    // cu8i t02 [port]: a unit has a movement coordinator (retail locomotor pack +0x1f0 formation) while it has an order
+    // (a goal) or a formation; the coordinator-less rest is what 0x39bcb0 adopts at Load_Map's tail.
+    const Unit* u = unit_ptr(id);
+    return u && (u->has_goal || u->in_formation);
+}
+
 int32_t MovementSystem::find(ObjectId id) const {
     auto it = std::lower_bound(units_.begin(), units_.end(), id, [](const Unit& u, ObjectId v) { return u.d.id < v; });
     if (it == units_.end() || it->d.id != id) return -1;
@@ -331,9 +341,15 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
     for (const std::vector<uint32_t>& bucket : kmeans_buckets(mem, k.max_formation_area)) {
         for (const std::vector<uint32_t>& f : split_into_formations(mem, bucket, k, compatible, speed_ratio)) {
             // OI tactical: PathFrameDelay stagger (0x43c1b0) for group moves; queued moves keep the per-unit delay.
+            // cu8i t02 (CU8G_T02_ENV_PICK_RE §7 / §8 item 7; MOVEMENT §1.6 / §4.1): each new formation's FormationClass ctor
+            // draws int(1, FPS) (next-check timer +0x1d8 := now + FPS + r); §1.6's start = now + accumulated delay + that
+            // offset - 2 FPS = now + acc + r - FPS, not before now [port reading, docs/PHASE4.md]. A queued order adds a block
+            // to the existing formations [M]: no new formation, no ctor draw.
             uint32_t fstart = frame;
             if (!queued) {
-                fstart = frame + stagger_acc + static_cast<uint32_t>(rng.range_int(0, std::max(0, k.max_move_frame_delay)));
+                const int32_t r = formation_ctor_draw(rng);
+                const int64_t s = static_cast<int64_t>(frame) + stagger_acc + r - kFormationFps;
+                fstart = static_cast<uint32_t>(std::max<int64_t>(frame, s));
                 for (uint32_t m : f) stagger_acc += static_cast<uint32_t>(std::max(0, units_[idx[m]].d.path_frame_delay));
             }
             V2 c{};

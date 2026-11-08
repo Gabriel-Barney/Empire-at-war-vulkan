@@ -41,10 +41,12 @@
 //   committed in ascending id; 2. Hermite playback in parallel; 3. serial commit (arrivals become
 //   stationary tracks, turn-to-face when a facing was ordered).
 // RNG (synced, sim thread): move() - queued orders (0x08): one start delay per unit in the order's unit
-// order; plain group moves (OI tactical, §1.6 / §4.2 step 3): one stagger draw per formation in formation
-// order, start = now + accumulated PathFrameDelay of the earlier formations' members + Get_Int(0,
-// Max_Move_Frame_Delay) ([M] formula: the doc's "- 2 fps" is read as the re-plan gate stamp, so the
-// first plan happens at that frame; [inferred] draw range). tick() (land, OI tactical, §3.5 step 6):
+// order (no new formation: no ctor draw [M]); plain land group moves (OI tactical, §1.6 / §4.2 step 3; cu8i t02):
+// one FormationClass ctor draw int(1, FPS) per new formation in formation order (CU8G_T02_ENV_PICK_RE §7 [H]: the
+// formation's next-check timer +0x1d8 := now + FPS + r), start = now + accumulated PathFrameDelay of the earlier
+// formations' members + (FPS + r) - 2 FPS, not before now (§1.6 [M] formula, port reading in docs/PHASE4.md). Space
+// moves draw nothing (the space formation ctor draws are a follow-up). The Load_Map-tail land pass (one ctor draw per
+// movable object without a coordinator) is the host's (formation_ctor_draw, has_coordinator). tick() (land, OI tactical, §3.5 step 6):
 // formation jiggle, two Get_Float(-1, 1) per moving formation member with FormationRaggedness > 0 and
 // MaxJiggleDistance > 0, ascending id, before the parallel walk: offset += draw x speed fraction x
 // FormationRaggedness, clamped to +-MaxJiggleDistance per axis ([inferred]: k = 1, per axis).
@@ -163,6 +165,7 @@ struct MoveOrder {
 // 0x01 / 0x02 select the response chase range (Attack_Move_Response_Range / Guard_Chase_Range, else Idle_Chase_Range,
 // 0x4160a0 / 0x4165f0); in this module the fighter formations read them (FIGHTER_FLYING §4.11). 0x04 player order: the
 // fighter formations' arrival pop and step 5 read it (the waypoint append adds it).
+inline constexpr int32_t kFormationFps = 30;  // FPS of the FormationClass ctor draw int(1, FPS) (cu8i t02)
 inline constexpr uint8_t kMoveFlagAttackMove = 0x01;
 inline constexpr uint8_t kMoveFlagGuardMove = 0x02;
 inline constexpr uint8_t kMoveFlagPlayerOrder = 0x04;
@@ -281,6 +284,11 @@ public:
     // ---- orders
     void move(const MoveOrder& order, SimRng& rng, uint32_t frame);
     void stop(std::span<const ObjectId> ids);
+    // cu8i t02 (CU8G_T02_ENV_PICK_RE §7 / §8 item 7): FormationClass ctor 0x40d0d0, one synced int(1, FPS), for a
+    // formation the host creates outside move() (the Load_Map-tail GOM post-load pass, TacticalBattle); and whether a unit
+    // already has a coordinator ([port]: an order or a formation; unknown ids have none).
+    static int32_t formation_ctor_draw(SimRng& rng);
+    bool has_coordinator(ObjectId id) const;
     // OI tactical (crush, §5.5): owner changes (Change_Owner) and the relation test (player +0x370 table == 1 [M];
     // default: different non-negative players are hostile). The test is called from the serial crush pass only.
     bool set_owner(ObjectId id, int32_t owner);

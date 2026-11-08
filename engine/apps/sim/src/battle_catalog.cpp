@@ -737,6 +737,10 @@ ta::AbilityObjectDesc BattleCatalog::ability_desc(uint32_t t, BuildState& s) con
         const int32_t pt = type_or_none(name);
         return pt < 0 ? -1 : projectile(static_cast<uint32_t>(pt), s);
     };
+    r.type_max_speed = [types](std::string_view name) -> float {  // cu8i t01: Saber_Throw's Saber_Name speed
+        const objects::TypeIndex x = types->resolve_name(ascii_trim(name));
+        return x == objects::kNone ? -1.0f : types->columns().max_speed[x];
+    };
     r.armor = [this](std::string_view name) -> uint16_t { return damage_.armor_index(ascii_trim(name)); };
     // OI abilities: melee Damage_Type and the projectile test for Spawned_Object_Type (instant effects).
     r.damage = [this](std::string_view name) -> uint16_t { return damage_.damage_index(ascii_trim(name)); };

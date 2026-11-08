@@ -9,7 +9,8 @@
 // ContentsSystem (kContentsSaveVersion): u32 + lists (container, u32 + objects).
 // TacticalProduction (kProductionSaveVersion): u32 next order id; u32 + players (u32 + orders); u32 + completed orders.
 // EngineLoops (kEngineLoopsSaveVersion): u32 + objects (id, idle, moving, suppressed, holster, drawn, transition start /
-// end, last engaged); u32 + requests (id, loop, start, frame, op, fade).
+// end, last engaged, version 3: the thrown saber's catch frame); u32 + requests (id, loop, start, frame, op, fade). Version
+// 2 (no catch frame) is still read.
 #include <cstddef>
 #include <cstdint>
 #include <utility>
@@ -31,7 +32,7 @@ namespace {
 constexpr uint32_t kHangarSaveVersion = 1;
 constexpr uint32_t kContentsSaveVersion = 1;
 constexpr uint32_t kProductionSaveVersion = 1;
-constexpr uint32_t kEngineLoopsSaveVersion = 2;  // 2: cu8g t01 holster state per object, request op + fade
+constexpr uint32_t kEngineLoopsSaveVersion = 3;  // 2: cu8g t01 holster state per object, request op + fade; 3: cu8i t01 catch frame
 
 void put_order(ByteWriter& w, const BuildOrder& o) {
     w.u32(o.id).i32(o.player).i32(o.builder).i32(o.type).u32(o.total_frames).u32(o.frames_left).u32(o.issued);
@@ -236,6 +237,7 @@ void EngineLoops::write(ByteWriter& w) const {
     for (const Obj& o : objs_) {
         w.i32(o.id).u8(o.idle).u8(o.moving).u8(o.suppressed);
         w.u8(o.holster).u8(o.drawn).u32(o.t_start).u32(o.t_end).u32(o.last_engaged);  // version 2: cu8g t01 holster
+        w.u32(o.catch_frame);                                                          // version 3: cu8i t01
     }
     w.u32(static_cast<uint32_t>(requests_.size()));
     for (const EngineLoopRequest& q : requests_)
@@ -243,9 +245,10 @@ void EngineLoops::write(ByteWriter& w) const {
 }
 
 bool EngineLoops::read(ByteReader& r) {
-    if (r.u32() != kEngineLoopsSaveVersion || !r.ok()) return false;
+    const uint32_t version = r.u32();
+    if ((version != 2 && version != kEngineLoopsSaveVersion) || !r.ok()) return false;  // 2: no catch frame (none in flight)
     uint32_t n = 0;
-    if (!r.count(n, 21)) return false;
+    if (!r.count(n, version >= 3 ? 25u : 21u)) return false;
     std::vector<Obj> objs(n);
     for (size_t i = 0; i < objs.size(); ++i) {
         Obj& o = objs[i];
@@ -258,6 +261,7 @@ bool EngineLoops::read(ByteReader& r) {
         o.t_start = r.u32();
         o.t_end = r.u32();
         o.last_engaged = r.u32();
+        if (version >= 3) o.catch_frame = r.u32();
         if (!r.ok() || (i > 0 && o.id <= objs[i - 1].id)) return false;
     }
     if (!r.count(n, 15)) return false;

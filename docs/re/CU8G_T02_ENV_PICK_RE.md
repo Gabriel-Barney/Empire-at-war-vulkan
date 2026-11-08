@@ -328,3 +328,6 @@ transcribed further].
    - Its formation stagger uses `Get_Int(0, Max_Move_Frame_Delay)`.
    - The checked order elsewhere matches §3. Parity is checked by behaviour, so this is a port follow-up, not a
      failure.
+   - Ported in cu8i t02 (2026-11-08, land): the move split's formations draw `int(1, FPS)`, and the Load_Map tail draws
+     once per LOCOMOTOR object without a coordinator; the one object on `_MP_LAND_ENDOR` is its Is_Neutral
+     `Land_Speeder` (port count 1). Space formation draws are still open (docs/PHASE4.md cu8i).

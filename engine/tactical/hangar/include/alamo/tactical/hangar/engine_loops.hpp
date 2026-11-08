@@ -55,10 +55,16 @@
 //                             a transition [now, now + Holster_Transition_Time frames]; to drawn: DrawWeapon request,
 //                             drawn := 1; to holstered: HolsterWeapon request, drawn := 0 and, when
 //                             Holster_Disable_Engine_Loops, suppress(-1) (each loop's own fade-out).
-//   * saber_throw(id) / saber_catch(id) - Saber_Throw's throw (0x635450) / catch (0x635310): drawn := 0 / 1, both
-//                             suppress(fade 0) (the catch too: the hum stays off until a later draw transition completes).
+//   * saber_throw(id, frame, flight) / saber_catch(id) - Saber_Throw's throw (0x635450) / catch (0x635310): drawn := 0 / 1,
+//                             both suppress(fade 0) (the catch too: the hum stays off until a later draw transition completes).
+//                             cu8i t01 (§2.6): the throw also records the thrown saber's catch frame (frame + flight, the
+//                             AbilitySystem's flight stand-in; 0 = none) and the catch clears it. The host passes
+//                             saber_in_flight(id) to holster_service each frame up to and including the catch frame, then
+//                             calls saber_catch on that frame (retail: the held draw transition clears and the hum is
+//                             unsuppressed the frame after the catch).
 //   Frame counts: holster_frames(s, fps) = round-half-away(fps x s) (0x27c9a0 -> 0x22f9c0): 0.17 s -> 5, 15 s -> 450 at 30.
-//   Saved with the flags (save version 2): attached, drawn, transition start / end frames, last engaged frame.
+//   Saved with the flags (save version 3; 2 is still read): attached, drawn, transition start / end frames, last engaged
+//   frame, the thrown saber's catch frame (version 3, cu8i t01).
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -179,8 +185,18 @@ public:
             if (d.disable_engine_loops) suppress(*o, frame, -1.0f);
         }
     }
-    void saber_throw(combat::ObjectId id, uint32_t frame) { snap(id, false, frame); }  // 0x635450
-    void saber_catch(combat::ObjectId id, uint32_t frame) { snap(id, true, frame); }   // 0x635310
+    void saber_throw(combat::ObjectId id, uint32_t frame, uint32_t flight_frames = 0) {  // 0x635450
+        if (Obj* o = snap(id, false, frame)) o->catch_frame = flight_frames > 0 ? frame + flight_frames : 0u;
+    }
+    void saber_catch(combat::ObjectId id, uint32_t frame) {  // 0x635310
+        if (Obj* o = snap(id, true, frame)) o->catch_frame = 0;
+    }
+    // cu8i t01: the thrown saber's catch frame (0 = no saber in flight) and whether one is in flight.
+    uint32_t saber_catch_frame(combat::ObjectId id) const {
+        const Obj* o = find(id);
+        return o ? o->catch_frame : 0u;
+    }
+    bool saber_in_flight(combat::ObjectId id) const { return saber_catch_frame(id) != 0; }
 
     bool has_holster(combat::ObjectId id) const {
         const Obj* o = find(id);
@@ -225,6 +241,7 @@ private:
         // HOLSTER_WEAPON (behaviour +0x40 bone found, +0x50 drawn, +0x44 / +0x48 transition, +0x4c last engaged frame)
         uint8_t holster = 0, drawn = 0;
         uint32_t t_start = 0, t_end = 0, last_engaged = 0;
+        uint32_t catch_frame = 0;  // cu8i t01: Saber_Throw's catch frame while its saber flies (SAP +0x2e8 set); 0 = none
     };
     Obj* find_mut(combat::ObjectId id) {
         const auto it = lower(id);
@@ -244,11 +261,12 @@ private:
         push_op(o.id, EngineLoopOp::Unsuppress, frame);
         o.suppressed = 0;
     }
-    void snap(combat::ObjectId id, bool drawn, uint32_t frame) {
+    Obj* snap(combat::ObjectId id, bool drawn, uint32_t frame) {
         Obj* o = find_mut(id);
-        if (!o || !o->holster) return;
+        if (!o || !o->holster) return nullptr;
         o->drawn = drawn ? 1 : 0;  // bone to the drawn / holstered translation
         suppress(*o, frame, 0.0f);
+        return o;
     }
     void push_op(combat::ObjectId id, EngineLoopOp op, uint32_t frame) {
         EngineLoopRequest q;

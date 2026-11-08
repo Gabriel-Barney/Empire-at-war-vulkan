@@ -820,6 +820,12 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             start_recharge(o, s.cls == C::SaberThrow ? kSaberThrow : kCableAttack);
             if (s.cls == C::Cable && host_.cable_attack) host_.cable_attack(o.id, target, s.min_range, s.max_range);  // §6.5
             event(AbilityEventKind::Unhandled, sp.trigger, o.id, target, frame);
+            // cu8i t01 (CU8F_T01_T02_T07_RE §2.6): a saber throw carries its flight stand-in, frames until the catch
+            // (saber_flight_frames over the XY distance at the apply; >= 1). The host holds the holster draw while it flies.
+            // Audio only (HOLSTER_WEAPON): nothing here reads it back.
+            if (s.cls == C::SaberThrow)
+                events_.back().value = static_cast<int32_t>(
+                    std::max(1u, saber_flight_frames(combat::distance_xy(me, combat_->position(target)), s.saber_speed, s.catch_dist)));
             return true;
         }
 

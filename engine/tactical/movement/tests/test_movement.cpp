@@ -1461,8 +1461,8 @@ static void test_space_group() {
 
 // ---------------------------------------------------------------- OI tactical (PHASE4 S7 open items)
 static void test_oi_land() {
-    // PathFrameDelay stagger (§1.6): two Solo formations; one synced draw each, in formation order; the second starts
-    // after the first formation's accumulated PathFrameDelay.
+    // PathFrameDelay stagger (§1.6) with the FormationClass ctor draw (cu8i t02): two Solo formations; one synced
+    // int(1, 30) each, in formation order; start = now + accumulated PathFrameDelay + r - 30, not before now.
     {
         MovementSystem sys{MovementConfig{}};
         PassabilityGrid g;
@@ -1470,7 +1470,7 @@ static void test_oi_land() {
         sys.set_grid(std::move(g));
         UnitDesc a = land_unit(1, cell_center(10, 10), 0, 1.0f, 6.0f, kUccInfantry);
         a.grouping = kGroupingSolo;
-        a.path_frame_delay = 10;
+        a.path_frame_delay = 40;
         UnitDesc b = land_unit(2, cell_center(10, 30), 0, 1.0f, 6.0f, kUccInfantry);
         b.grouping = kGroupingSolo;
         b.path_frame_delay = 4;
@@ -1480,18 +1480,40 @@ static void test_oi_land() {
         o.units = {1, 2};
         o.destination = cell_center(50, 20);
         sys.move(o, rng, 100);
-        const uint32_t d1 = static_cast<uint32_t>(ref.range_int(0, 6)), d2 = static_cast<uint32_t>(ref.range_int(0, 6));
-        CHECK(rng.draws() == ref.draws());  // exactly two Get_Int(0, Max_Move_Frame_Delay)
+        const int32_t d1 = ref.range_int(1, 30), d2 = ref.range_int(1, 30);
+        CHECK(rng.draws() == ref.draws() && rng.state() == ref.state());  // exactly two int(1, FPS)
         // Formation order = seed nearest the bucket centroid first (equal here: the earlier unit, id 1).
-        CHECK(sys.view(1).start_frame == 100 + d1);
-        CHECK(sys.view(2).start_frame == 100 + 10 + d2);
-        // Queued orders keep the per-unit delay (no stagger accumulator).
+        CHECK(d1 >= 1 && d1 <= 30 && d2 >= 1 && d2 <= 30);
+        CHECK(sys.view(1).start_frame == 100);  // 100 + 0 + d1 - 30 <= 100
+        CHECK(sys.view(2).start_frame == static_cast<uint32_t>(100 + 40 + d2 - 30));
+        // Queued orders keep the per-unit delay (no stagger accumulator) and create no formation: no ctor draw.
         MoveOrder q = o;
         q.flags = kMoveFlagQueue;
         SimRng r2(5), r2ref(5);
         sys.move(q, r2, 200);
         CHECK(sys.view(1).start_frame == 200 + static_cast<uint32_t>(r2ref.range_int(0, 6)));
         CHECK(sys.view(2).start_frame == 200 + static_cast<uint32_t>(r2ref.range_int(0, 6)));
+        CHECK(r2.draws() == r2ref.draws());
+    }
+    // cu8i t02: the FormationClass ctor draw is one int(1, FPS); a unit with an order has a coordinator, others (and
+    // unknown ids) do not.
+    {
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g;
+        g.init(64, 64);
+        sys.set_grid(std::move(g));
+        CHECK(sys.add_unit(land_unit(1, cell_center(12, 10), 0, 1.0f, 6.0f, kUccInfantry)) &&
+              sys.add_unit(land_unit(2, cell_center(14, 10), 0, 1.0f, 6.0f, kUccInfantry)));
+        SimRng rng(11), ref(11);
+        MoveOrder o;
+        o.units = {2};
+        o.destination = cell_center(40, 10);
+        sys.move(o, rng, 0);
+        ref.range_int(1, 30);  // unit 2's formation
+        CHECK(rng.state() == ref.state() && rng.draws() == ref.draws());
+        CHECK(!sys.has_coordinator(1) && sys.has_coordinator(2) && !sys.has_coordinator(99));
+        const int32_t r = MovementSystem::formation_ctor_draw(rng);
+        CHECK(r == ref.range_int(1, 30) && r >= 1 && r <= 30 && rng.state() == ref.state());
     }
     // Formation jiggle (§3.5 step 6): 2 synced draws per moving member per frame, offset clamped to MaxJiggleDistance;
     // members without FormationRaggedness draw nothing.
@@ -2188,7 +2210,9 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // (PathFrameDelay stagger draws on the plain return move, hash adds jiggle / formation flag / crush events), space moved
 // (hash format; ops 5 / 6 and the doc's re-expansion list). S7 collision layer (2026-10-29): land moved (persistent
 // collision objects hashed, priority-ordered resolution; units act on their own check frames); space unchanged.
-static constexpr uint64_t kGoldenLand = 0x8077ca79b9713e8eull;
+// cu8i t02 (2026-11-08): land moved (the return move's formations draw the FormationClass ctor int(1, 30) and start at
+// now + acc + r - 30, not before now); space unchanged.
+static constexpr uint64_t kGoldenLand = 0x526e6dc2212e1903ull;
 static constexpr uint64_t kGoldenSpace = 0x243123bd32d07accull;
 
 static void test_determinism() {

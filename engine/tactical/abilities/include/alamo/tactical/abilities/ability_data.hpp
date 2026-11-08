@@ -136,6 +136,10 @@ struct SpecialAbilityDesc {
     bool single_target_heal = false;
     // Berserker (§2.3.2)
     float berserker_speed = 0.0f, berserker_damage = 0.0f, berserker_damage_range = 0.0f, berserker_duration = 0.0f;
+    // Saber_Throw (cu8i t01, CU8F_T01_T02_T07_RE §2.6): Catch_Dist (+0x180) and the Saber_Name projectile type's Max_Speed
+    // (per frame; 0 = unknown), for the thrown-saber flight stand-in (saber_flight_frames).
+    float catch_dist = 0.0f;
+    float saber_speed = 0.0f;
     // Proximity_Mines (§2.3.3) / Buzz_Droids / Summon / Spawn / Radioactive (Object_Type, Mine_Type, ...)
     float activation_time = 0.0f;         // Activation_Time_In_Seconds
     float trigger_radius = 0.0f;          // Trigger_Radius
@@ -244,7 +248,16 @@ struct AbilityResolvers {
     // type name is a projectile type (Spawned_Object_Type resolution; unset: names starting "Proj" [port]).
     std::function<uint16_t(std::string_view)> damage;
     std::function<bool(std::string_view)> is_projectile;
+    // cu8i t01: a type's Max_Speed by name (Saber_Throw's Saber_Name), without registering it as a ProjectileDesc; < 0
+    // unknown.
+    std::function<float(std::string_view)> type_max_speed;
 };
+
+// cu8i t01 (CU8F_T01_T02_T07_RE §2.6) [port stand-in]: frames from the throw to the catch of a thrown saber that flies at
+// `speed` (per frame) to a target `dist` away and back until it is within `catch_dist` of the thrower:
+// ceil(dist / speed) + ceil(max(dist - catch_dist, 0) / speed), at least 1. Luke (speed 8, Catch_Dist 15) at 150 units:
+// 36 (retail 35). speed <= 0: 0 (no flight).
+uint32_t saber_flight_frames(float dist, float speed, float catch_dist);
 
 // "WEAPON_DELAY_MULTIPLIER" / "Weapon_Delay" -> 1..12, 0 unknown (case-insensitive, suffix optional).
 uint8_t mod_kind_from_name(std::string_view name);

@@ -1937,7 +1937,8 @@ static CrcLog mixed_run(const ParallelFor& pf) {
 // land hash appends the collision objects; priority-ordered resolution). FIGHTER_FLYING §6 flying (2026-10-29): moved
 // (Hermite follower, attitude / altitude steps, D + dir x L loiter; flying units hash pitch, V, path index, target).
 // S7 t15 (2026-11-02): moved (the Has_Pre_Turn_Anim jetpack's take-off turn: band rates, one-shot clips, clip-end exit).
-static constexpr uint64_t kGoldenMixed = 0x1645f6a50ff73064ull;
+// cu8i t02 (2026-11-08): moved (land formations draw the FormationClass ctor int(1, 30); start now + acc + r - 30).
+static constexpr uint64_t kGoldenMixed = 0x6b3cbbce7f254be2ull;
 
 // ---------------------------------------------------------------- SPACE_AVOIDANCE (fighter avoidance hook rules)
 // A wall model: one collision mesh, the square x, z in [-50, 50] of the model plane y = 0 (two triangles).

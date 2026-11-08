@@ -591,6 +591,8 @@ void test_holster_weapon() {
 }
 
 // cu8g t01 (§2.3 Saber_Throw): throw = snap holstered + suppress(0); catch = snap drawn + suppress(0) too.
+void test_saber_throw_flight();  // cu8i t01
+
 void test_saber_throw() {
     using Op = EngineLoopOp;
     HolsterDesc luke;
@@ -626,6 +628,54 @@ void test_saber_throw() {
     CHECK(e.holster_drawn(1) && !e.suppressed(1));
     e.walk_service(1, true, 621);
     CHECK(e.moving_on(1));
+    test_saber_throw_flight();
+}
+
+// cu8i t01 (CU8F_T01_T02_T07_RE §2.6, `luke` run 2): Luke drawn, the saber thrown at 1512 (snap holstered + suppress), the
+// Service starts a draw at 1515 that the flight holds past its end (1520); the host's loop (hg_holster_service: service with
+// saber_in_flight up to and including the catch frame, then the catch) clears the transition and unsuppresses the frame
+// after the catch; the idle loop returns at the next walk service.
+void test_saber_throw_flight() {
+    using Op = EngineLoopOp;
+    HolsterDesc luke;
+    luke.transition_frames = 5;
+    luke.min_drawn_frames = 450;
+    luke.disable_engine_loops = true;
+    EngineLoops e(10.0f);
+    e.holster_attach(1, 1);
+    for (uint32_t f = 1500; f <= 1505; ++f) e.holster_service(1, luke, true, false, f);  // drawn 1500..1505
+    e.walk_service(1, false, 1506);
+    CHECK(e.holster_drawn(1) && !e.suppressed(1) && e.idle_on(1));
+    e.clear_requests();
+    e.saber_throw(1, 1512, 43);  // caught at 1555
+    CHECK(e.saber_catch_frame(1) == 1555 && e.saber_in_flight(1) && !e.holster_drawn(1) && e.suppressed(1));
+    CHECK(e.requests().size() == 1 && e.requests()[0].op == Op::Suppress && e.requests()[0].fade == 0.0f);
+    e.clear_requests();
+    auto host_frame = [&](uint32_t f) {  // hg_holster_service's order, then the walk service
+        const uint32_t c = e.saber_catch_frame(1);
+        e.holster_service(1, luke, true, c != 0, f);
+        if (c != 0 && f >= c) e.saber_catch(1, f);
+        e.walk_service(1, false, f);
+    };
+    uint32_t unsuppressed_at = 0, idle_at = 0, draws = 0, catches = 0;
+    for (uint32_t f = 1513; f <= 1560; ++f) {
+        host_frame(f);
+        for (const EngineLoopRequest& q : e.requests()) {
+            if (q.op == Op::DrawWeapon) ++draws;
+            if (q.op == Op::Suppress && q.frame == 1555) ++catches;
+            if (q.op == Op::Unsuppress && unsuppressed_at == 0) unsuppressed_at = q.frame;
+            if (q.op == Op::Loop && q.loop == EngineLoop::Idle && q.start && idle_at == 0) idle_at = q.frame;
+        }
+        e.clear_requests();
+        if (f == 1520 || f == 1554) CHECK(e.holster_transitioning(1) && e.suppressed(1));  // held while the saber flies
+    }
+    CHECK(draws == 1 && catches == 1 && unsuppressed_at == 1556 && idle_at == 1556);
+    CHECK(!e.saber_in_flight(1) && e.holster_drawn(1) && !e.holster_transitioning(1) && !e.suppressed(1) && e.idle_on(1));
+    // A thrown saber with no flight (0) records nothing; objects without the behaviour ignore the throw.
+    e.saber_throw(1, 1600, 0);
+    CHECK(!e.saber_in_flight(1));
+    e.saber_throw(2, 1600, 30);
+    CHECK(!e.saber_in_flight(2) && !e.has_holster(2));
 }
 
 // The same script twice gives the same hashed state and draws; a different script differs.
@@ -1527,11 +1577,13 @@ void test_contents_production_loops_save() {
     e.holster_attach(7, 3);
     e.holster_service(7, hd, true, false, 15);
     CHECK(!e.requests().empty() && e.holster_transitioning(7) && e.holster_drawn(7));
+    e.holster_attach(8, 3);  // cu8i t01 (version 3): a saber in flight, caught at 4 + 30
+    e.saber_throw(8, 4, 30);
     const std::vector<uint8_t> eb = bytes_of(e);
     ByteReader re(eb);
     CHECK(e2.read(re) && bytes_of(e2) == eb && e2.moving_on(5) && !e2.idle_on(3) && e2.requests().size() == e.requests().size());
     CHECK(e2.has_holster(7) && e2.holster_drawn(7) && e2.holster_transitioning(7) && e2.holster_last_engaged(7) == 15 &&
-          e2.suppressed(7));
+          e2.suppressed(7) && e2.saber_catch_frame(8) == 34 && e2.saber_in_flight(8) && !e2.saber_in_flight(7));
     bool same_requests = true;
     for (size_t i = 0; i < e.requests().size(); ++i) {
         const EngineLoopRequest &a = e.requests()[i], &b = e2.requests()[i];
@@ -1557,11 +1609,23 @@ void test_contents_production_loops_save() {
         ByteReader t(std::span<const uint8_t>(eb.data(), len));
         if (e3.read(t)) ++accepted;
     }
-    // version, 3 objects (21 bytes each), request count, then the first request's id and loop byte
+    // version, 4 objects (25 bytes each), request count, then the first request's id and loop byte
     bad = eb;
-    bad[4 + 4 + 63 + 4 + 4] = 9;
+    bad[4 + 4 + 100 + 4 + 4] = 9;
     ByteReader reb(bad);
     CHECK(accepted == 0 && !e3.read(reb) && bytes_of(e3) == e3_before);
+    // cu8i t01: version 2 (no catch frame) still reads, with no saber in flight; other versions do not.
+    for (const uint32_t version : {2u, 1u, 4u}) {
+        ByteWriter w2;
+        w2.u32(version).u32(1);
+        w2.i32(4).u8(0).u8(0).u8(1).u8(1).u8(1).u32(10).u32(15).u32(10);
+        w2.u32(0);
+        EngineLoops e4(10.0f);
+        ByteReader r4(w2.bytes());
+        const bool ok = e4.read(r4);
+        CHECK(ok == (version == 2));
+        if (ok) CHECK(e4.has_holster(4) && e4.holster_drawn(4) && e4.suppressed(4) && !e4.saber_in_flight(4));
+    }
 }
 
 }  // namespace

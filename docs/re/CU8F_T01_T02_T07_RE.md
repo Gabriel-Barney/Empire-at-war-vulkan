@@ -270,6 +270,9 @@ Claude drove the retail game. Kit: `tools/probe_mod/cu8h_probes/`, sessions `hum
     at the ability apply.
   - So the port's hum returns at the next boundary + 5 frames after a throw (about 8 frames), where the retail game
     waits for the catch (27–43 frames). This is audio only, outside the CRC (follow-up).
+  - cu8i t01 (2026-11-08): the port now holds the draw for a stand-in flight (out to the target and back to `Catch_Dist`
+    at the `Saber_Name` type's Max_Speed per frame) and calls the catch, so the hum returns the frame after the catch
+    (docs/PHASE4.md cu8i).
 
 ## 3. t07: the Disable_Force_Abilities_Range emitter and the space retreat fallback query
 
