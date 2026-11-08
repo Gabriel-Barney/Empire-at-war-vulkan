@@ -979,6 +979,9 @@ bool CampaignBattles::start_map_battle(galactic::BattleRequest r) {
                        " map: no map battle");
         return false;
     }
+    // OPT3 t12: the battle's model files load now (session load), not in its first tick's setup.
+    if (GalacticMode* g = host_->galactic_mode(); g && g->sim() && catalog_)
+        TacticalBattle::prepare_models(*catalog_, *g->sim(), *rules_, r, map, host_->parallel_for());
     pending_req_ = std::move(r);
     pending_map_ = std::move(map);
     pending_ = true;

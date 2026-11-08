@@ -119,6 +119,43 @@ void TacticalBattle::bt_force_split() {
 
 // ---- pad types (setup) -------------------------------------------------------------------------------------------
 
+void TacticalBattle::prepare_models(const BattleCatalog& catalog, const galactic::GalacticSim& galaxy, const galactic::ConflictRules& rules,
+                                    const galactic::BattleRequest& request, const terrain::MapData& map, const ParallelFor& pf) {
+    const objects::GameObjectTypes& types = catalog.types();
+    const bool space = request.info.kind == galactic::ConflictKind::Space;
+    std::vector<uint32_t> list;
+    auto use = [&](uint32_t t) {
+        if (t < types.size() && std::find(list.begin(), list.end(), t) == list.end()) list.push_back(t);
+    };
+    const objects::ObjectStore& gs = galaxy.store();
+    for (const galactic::BattleForces& f : request.forces)
+        for (const std::vector<objects::ObjectHandle>* hs : {&f.start, &f.reserve})
+            for (const objects::ObjectHandle h : *hs) {
+                if (!gs.alive(h)) continue;
+                const auto t = static_cast<uint32_t>(gs.type(h));
+                const galactic::ConflictTypeInfo& ti = rules.type(t);
+                use(t);
+                for (const auto& [mt, n] : ti.members) use(mt);
+            }
+    const TypeCrcIndex index(types);
+    for (const terrain::ObjectPlacement& pl : map.objects) {
+        const objects::TypeIndex t = index.find(pl.type_crc);
+        if (t == objects::kNone || t >= types.size()) continue;
+        use(static_cast<uint32_t>(t));
+        if (pad_behavior() == objects::kNoBehavior || !types.has_behavior(t, objects::BehaviorSet::Union, pad_behavior())) continue;
+        for (const char* tag : {"Tactical_Buildable_Objects_Multiplayer", "Tactical_Buildable_Objects_Campaign"})
+            for (const std::string_view tok : types.get_list(t, tag)) {
+                const objects::TypeIndex uc = types.raw().find(tok);
+                if (uc == objects::kNone || uc >= types.size()) continue;
+                use(static_cast<uint32_t>(uc));
+                const objects::TypeIndex ft = types.resolve_name(types.get_string(uc, "Tactical_Buildable_Constructed"));
+                if (ft != objects::kNone) use(static_cast<uint32_t>(ft));
+            }
+    }
+    catalog.preload(list, space,
+                    BattleCatalog::kPreloadBones | BattleCatalog::kPreloadAvoid | (space ? 0u : BattleCatalog::kPreloadExtents), pf);
+}
+
 void TacticalBattle::bt_add_pad_types(const terrain::MapData& map) {
     if (pad_behavior() == objects::kNoBehavior) return;
     const objects::GameObjectTypes& types = catalog_->types();
@@ -927,7 +964,7 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
 
 // ---- post-load placement of the galactic forces (REMAINING_GAPS §3.2, 0x2a1eb0) -------------------------------------
 
-void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
+void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng, const ParallelFor& pf) {
     const objects::GameObjectTypes& types = catalog_->types();
     const int32_t def = req_.info.defender, att = req_.info.attacker;
     auto flat = [this](Vec3 p) { return space_ ? Vec3{p.x, p.y, 0.0f} : p; };
@@ -1032,7 +1069,7 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
             if (parts_[i].unplaced) parts_[i].deployed = true;  // not spawned: never deployed later either
             else deploy(mode, i, rng);
         }
-    land_obstacles_sync(mode);  // S8 t02: the starbase / structures stamp on attach, before the start forces are placed
+    land_obstacles_sync(mode, pf);  // S8 t02: the starbase / structures stamp on attach, before the start forces are placed
     // 6 / 7. Facing slots and anchors: the first Defending Forces marker (position, facing); the attacker's entry marker =
     //    the farthest from the first non-attacker DUMMY_GROUND_STRUCTURE with a non-zero Reinforcement_Prevention_Radius
     //    [M: the 0x2a9ff0 filter], else the nearest to the first Defending Forces marker. Space: the attacker looks at the

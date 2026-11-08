@@ -330,6 +330,12 @@ public:
     TacticalBattle(const BattleCatalog& catalog, const galactic::GalacticSim& galaxy, const galactic::ConflictRules& rules,
                    galactic::BattleRequest request, BattleConfig cfg = {}, const ParallelFor& pf = serial_for);
     ~TacticalBattle();
+    // OPT3 t12: loads, through `pf`, the catalog's model data (bones, avoid models, land stamp extents) of the types a map
+    // battle on `map` is likely to use: the forces' spawn types, the map's placement types and their pads' buildable /
+    // constructed types. Called before the battle's first tick (CampaignBattles::start_map_battle, at session load), so the
+    // setup finds them cached. The cache is a pure memo of the model files: nothing the battle computes depends on it.
+    static void prepare_models(const BattleCatalog& catalog, const galactic::GalacticSim& galaxy, const galactic::ConflictRules& rules,
+                               const galactic::BattleRequest& request, const terrain::MapData& map, const ParallelFor& pf);
     TacticalBattle(const TacticalBattle&) = delete;
     TacticalBattle& operator=(const TacticalBattle&) = delete;
 
@@ -1262,9 +1268,9 @@ private:
                 uint32_t member_count = 0xFFFFFFFFu);
     void space_obstacles_sync(const TacticalMode& mode);  // refixf t02: SPACE_OBSTACLE units as space static entries
     // S8 t02 / S7 t13 (MOVEMENT §1.3 / §2.2): obstacle footprints of single objects under their object id (tactical_battle.cpp).
-    bool land_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h);   // LAND_OBSTACLE stamp; false: none
+    bool land_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h, const ParallelFor& pf = serial_for);   // LAND_OBSTACLE stamp; false: none
     bool space_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h);  // SPACE_OBSTACLE static entry
-    void land_obstacles_sync(const TacticalMode& mode);  // S8 t02: stamp new LAND_OBSTACLE objects, unstamp the gone
+    void land_obstacles_sync(const TacticalMode& mode, const ParallelFor& pf);  // S8 t02: stamp new LAND_OBSTACLE objects, unstamp the gone
     std::vector<uint8_t> land_obstacle_none_;  // S8 t02: per type, 1 = no footprint (no XML size, no model); derived, not saved
     Vec3 slot_position(uint8_t side, uint32_t passability_mask);
     Vec3 snap_passable(Vec3 p, uint32_t passability_mask, bool always) const;  // slot_position's box clamp + cell search
@@ -1751,7 +1757,7 @@ private:
     uint32_t bt_players_ = 0;            // the host's player count (valid map owner ids)
     void bt_map_prepass();                                  // setup: base-level filter + discard rule, map types -> tables
     void bt_map_load(TacticalMode& mode, SimRng& rng);      // setup: spawn the kept placements (spawn-table draws)
-    void bt_place_forces(TacticalMode& mode, SimRng& rng);  // setup: §3.2 steps 1-7 + the start-force deploys
+    void bt_place_forces(TacticalMode& mode, SimRng& rng, const ParallelFor& pf);  // setup: §3.2 steps 1-7 + the start-force deploys
     bool bt_owner_valid(int32_t owner) const;
     bool bt_owner_neutral(int32_t owner) const;  // owner's faction Is_Neutral
     // S7 t30 (TACTICAL_COMBAT §2.10): the start value of the relation table entry (row p, column q): 0 friendly, 1 enemy,

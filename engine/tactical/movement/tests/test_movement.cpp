@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
@@ -322,6 +323,21 @@ static void test_grid() {
         }
         const auto ea = ser.effective_values(), eb = par.effective_values();
         CHECK(same && std::equal(ea.begin(), ea.end(), eb.begin(), eb.end()));
+        // OPT3 t12: stamp() with a ParallelFor (the fine-tune samples' rays through it, here back to front) stamps the same
+        // cells as the serial stamp().
+        PassabilityGrid one;
+        one.init(32, 32);
+        one.set_base(8, 9, kPassSteep);
+        one.stamp(4, make_footprint({40.0f, 40.0f}, 0.0f, 30.0f, 30.0f, -15.0f, -15.0f, 0, 0, 1.0f, 0));
+        std::vector<uint32_t> counts_pf;
+        for (const auto& [id, f] : list) counts_pf.push_back(one.stamp(id, f, backwards));
+        bool same_pf = counts_pf == counts && ser.stamped_ids() == one.stamped_ids();
+        for (const ObjectId id : ser.stamped_ids()) {
+            const auto a = ser.stamp_cells(id), b = one.stamp_cells(id);
+            same_pf = same_pf && std::equal(a.begin(), a.end(), b.begin(), b.end());
+        }
+        const auto ec = one.effective_values();
+        CHECK(same_pf && std::equal(ea.begin(), ea.end(), ec.begin(), ec.end()));
     }
     // Rotated footprint: 60 x 10 at yaw 90 covers a vertical strip.
     ObstacleFootprint fp3 = make_footprint({300.0f, 300.0f}, 90.0f, 60.0f, 10.0f, 0.0f, -5.0f, 0, 0, 1.0f, 0);
@@ -1399,6 +1415,95 @@ static void test_space() {
     turn[1].heading = 90.0f;
     turn[1].time = 10.0f;
     CHECK(std::fabs(eval_space_path(turn, 5.0f).heading - 45.0f) < 1e-4f);
+}
+
+// OPT3 t12: SpaceOccupancy::build_index (query_segment visits only the entries near the query) answers every query as the
+// full scan does: random statics and tracks, random segments, layers, self ids and times, static / no static; a mutation
+// drops the index (full scan again) until the next build; a non-finite query scans everything.
+static void test_space_index() {
+    SimRng r(1234);
+    auto rf = [&r](float lo, float hi) { return r.range_float(lo, hi); };
+    SpaceOccupancy occ;
+    occ.set_box({-6000.0f, -6000.0f}, {6000.0f, 6000.0f});
+    for (int32_t i = 0; i < 40; ++i)
+        occ.add_static(-1 - i, {rf(-5000.0f, 5000.0f), rf(-5000.0f, 5000.0f)}, rf(20.0f, 600.0f),
+                       i % 3 == 0 ? (kSpaceStatic | kSpaceAsteroid) : kSpaceStatic);
+    for (int32_t i = 0; i < 30; ++i) {
+        std::vector<SpaceWaypoint> wps(static_cast<size_t>(r.range_int(1, 5)));
+        float t = 0.0f;
+        V2 p{rf(-5000.0f, 5000.0f), rf(-5000.0f, 5000.0f)};
+        for (SpaceWaypoint& w : wps) {
+            w.pos = p;
+            w.time = t;
+            p = p + V2{rf(-900.0f, 900.0f), rf(-900.0f, 900.0f)};
+            t += rf(10.0f, 200.0f);
+        }
+        occ.set_track(10 + i, i % 2 ? kLayerFrigate : kLayerCapital, rf(20.0f, 150.0f), static_cast<uint32_t>(r.range_int(0, 300)), wps);
+    }
+    auto compare = [&](const SpaceOccupancy& indexed, int32_t n) {
+        bool same = true;
+        int32_t hits = 0;
+        for (int32_t k = 0; k < n; ++k) {
+            const V2 a{rf(-6500.0f, 6500.0f), rf(-6500.0f, 6500.0f)};
+            const V2 b = k % 4 == 0 ? a : a + V2{rf(-2500.0f, 2500.0f), rf(-2500.0f, 2500.0f)};
+            const float t0 = rf(0.0f, 900.0f), t1 = t0 + rf(-50.0f, 300.0f), radius = rf(0.0f, 300.0f);
+            const uint32_t layer = k % 3 == 0 ? kLayerFrigate : (k % 3 == 1 ? kLayerCapital : (kLayerFrigate | kLayerCapital));
+            const ObjectId self = k % 5 == 0 ? static_cast<ObjectId>(10 + k % 30) : (k % 5 == 1 ? static_cast<ObjectId>(-1 - k % 40) : 999);
+            const bool with_static = k % 2 == 0;
+            const auto now = static_cast<uint32_t>(r.range_int(0, 600));
+            const uint32_t x = indexed.query_segment(a, b, t0, t1, radius, layer, self, with_static, now);
+            same = same && x == occ.query_segment(a, b, t0, t1, radius, layer, self, with_static, now);
+            hits += x != 0 ? 1 : 0;
+        }
+        return same && hits > n / 20;
+    };
+    CHECK(!occ.index_valid());
+    SpaceOccupancy ix = occ;
+    ix.build_index();
+    CHECK(ix.index_valid() && compare(ix, 4000));
+    // A mutation drops the index; queries stay right; the rebuild indexes the new entries.
+    ix.add_static(-100, {0.0f, 0.0f}, 300.0f, kSpaceStatic);
+    occ.add_static(-100, {0.0f, 0.0f}, 300.0f, kSpaceStatic);
+    CHECK(!ix.index_valid() && compare(ix, 500));
+    ix.build_index();
+    std::vector<SpaceWaypoint> w2(2);
+    w2[0].pos = {-4000.0f, 4000.0f};
+    w2[1].pos = {4000.0f, -4000.0f};
+    w2[1].time = 400.0f;
+    ix.clear_track(12);
+    occ.clear_track(12);
+    ix.set_track(77, kLayerFrigate, 80.0f, 50, w2);
+    occ.set_track(77, kLayerFrigate, 80.0f, 50, w2);
+    CHECK(!ix.index_valid());
+    ix.build_index();
+    CHECK(ix.index_valid() && compare(ix, 2000));
+    // Non-finite query: the full scan (no cell lookup).
+    const float inf = std::numeric_limits<float>::infinity();
+    CHECK(ix.query_segment({-inf, 0.0f}, {0.0f, 0.0f}, 0.0f, 10.0f, 10.0f, kLayerFrigate, 999, true, 0) ==
+          occ.query_segment({-inf, 0.0f}, {0.0f, 0.0f}, 0.0f, 10.0f, 10.0f, kLayerFrigate, 999, true, 0));
+    // An empty occupancy indexes to nothing.
+    SpaceOccupancy empty;
+    empty.build_index();
+    CHECK(empty.query_segment({0.0f, 0.0f}, {100.0f, 0.0f}, 0.0f, 10.0f, 50.0f, kLayerFrigate, 1, true, 0) == 0);
+
+    // SpaceScratch::VisitTable: find after emplace, overwrite, growth past the sized capacity, clear forgets everything.
+    SpaceScratch::VisitTable vt;
+    CHECK(vt.find(5) == nullptr);
+    bool ok = true;
+    for (uint32_t round = 0; round < 300; ++round) {
+        vt.clear(8);
+        const uint64_t base = static_cast<uint64_t>(round) * 1000003ull;
+        const uint32_t n = round % 7 == 0 ? 500u : 20u;  // some rounds grow the table
+        for (uint32_t i = 0; i < n; ++i) vt.emplace(base + i * 977ull, {static_cast<float>(i), i % 2 == 0});
+        vt.emplace(base, {-1.0f, true});  // overwrite
+        for (uint32_t i = 0; i < n; ++i) {
+            const SpaceScratch::Visit* v = vt.find(base + i * 977ull);
+            ok = ok && v && v->g == (i == 0 ? -1.0f : static_cast<float>(i)) && v->closed == (i == 0 || i % 2 == 0);
+        }
+        ok = ok && vt.find(base + 1) == nullptr && vt.find(base + 977ull * n) == nullptr;
+        if (round > 0) ok = ok && vt.find((static_cast<uint64_t>(round) - 1) * 1000003ull + 977ull) == nullptr;  // last round's
+    }
+    CHECK(ok);
 }
 
 static void build_space_scenario(MovementSystem& sys, uint32_t ships) {
@@ -2828,6 +2933,7 @@ int main() {
     test_land_group();
     test_push_search();
     test_space();
+    test_space_index();
     test_space_group();
     test_oi_land();  // OI tactical
     test_oi_space();

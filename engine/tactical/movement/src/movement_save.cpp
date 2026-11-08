@@ -656,6 +656,7 @@ bool SpaceOccupancy::read(ByteReader& r) {
     const bool has_box = r.boolean();
     const uint32_t window = r.u32();
     if (!r.ok()) return false;
+    index_.valid = false;  // OPT3 t12: rebuilt by the next build_index()
     statics_ = std::move(statics);
     tracks_ = std::move(tracks);
     box_min_ = mn;

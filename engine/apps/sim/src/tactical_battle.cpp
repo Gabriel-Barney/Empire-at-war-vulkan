@@ -911,11 +911,11 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     bt_pad_restore(mode);        // §6.5: persistent pad children
     bt_skirmish_base(mode);      // t50: the land skirmish's pre-built base
     l1_setup(mode);            // L1 systems: special weapons / hyperspace / engines (before the deploys)
-    bt_place_forces(mode, rng);  // §3.2: starbase, structures, defender / attacker start forces
+    bt_place_forces(mode, rng, pf);  // §3.2: starbase, structures, defender / attacker start forces
     bt_landing_points(mode);     // §3.3: the attacker's map-owned reinforcement points
     mode.finish_load(pf);
     space_obstacles_sync(mode);  // refixf t02: the starbase / structures as space static entries (MOVEMENT §2.2)
-    land_obstacles_sync(mode);   // S8 t02: LAND_OBSTACLE objects spawned during the setup (MOVEMENT §1.3)
+    land_obstacles_sync(mode, pf);   // S8 t02: LAND_OBSTACLE objects spawned during the setup (MOVEMENT §1.3)
     bt_shield_stamps(mode);  // battle host: base-shield secondary occupants (land)
     fog_after_deploy(mode);  // fog of war: dense mask, battle scale (owner: fog agent)
     vm_setup(mode);          // story t06: victory monitor records (§2.5) and the start's victory-relevant objects
@@ -1239,17 +1239,17 @@ bool TacticalBattle::space_obstacle_attach(const TacticalMode& mode, objects::Ob
 // the behaviour through TacticalMode::spawn_death_clone's strip (Death_Clone_Is_Obstacle, MOVEMENT §1.3 [H]). Placement
 // stamps never stay under a placement id here: bt_map_load hands each to its object or unstamps it (skipped company,
 // no-spawn placeholder).
-void TacticalBattle::land_obstacles_sync(const TacticalMode& mode) {
+void TacticalBattle::land_obstacles_sync(const TacticalMode& mode, const ParallelFor& pf) {
     if (space_ || !movement_) return;
     const objects::ObjectStore& st = mode.primary();
     mv::PassabilityGrid& grid = movement_->grid();
     for (const mv::ObjectId id : grid.stamped_ids())
         if (id > 0 && !st.alive(st.find(id))) grid.unstamp(id);
     for (const objects::ObjectHandle h : st.behavior_table(objects::beh::LandObstacle).insertion)
-        if (st.alive(h) && !grid.stamped(st.id(h))) land_obstacle_attach(mode, h);
+        if (st.alive(h) && !grid.stamped(st.id(h))) land_obstacle_attach(mode, h, pf);
 }
 
-bool TacticalBattle::land_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h) {
+bool TacticalBattle::land_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h, const ParallelFor& pf) {
     const objects::ObjectStore& st = mode.primary();
     if (space_ || !movement_ || !st.alive(h)) return false;
     const objects::GameObjectTypes& types = catalog_->types();
@@ -1269,7 +1269,9 @@ bool TacticalBattle::land_obstacle_attach(const TacticalMode& mode, objects::Obj
     // S8 t13 (MOVEMENT §1.3 "proxy bits"): the bits come from the object's own live behaviours (0x397350), never the proxy.
     fp.bits = mv::land_obstacle_bits(static_cast<uint32_t>(types.get_mask(t, "OverridePassability")), true,
                                      st.has_behavior(h, kWallBehavior));
-    movement_->grid().stamp(st.id(h), fp);
+    // OPT3 t12: the Fine_Tune rays (a whole-mesh test per 10-unit sample; a skirmish base structure has ~400 samples on
+    // ~14k triangles) run through pf. The hook is const catalog data (as stamp_map_obstacles).
+    movement_->grid().stamp(st.id(h), fp, pf);
     return true;
 }
 
@@ -4431,7 +4433,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     check_victory(mode);  // story t06: the victory monitor (losses since the last tick, countdown, end)
     if (finished_ && !death_clones_.empty()) remove_death_clones(mode, true);  // refixf t04: the battle's clones end with it
     space_obstacles_sync(mode);  // refixf t02: this tick's new / dead / retreated SPACE_OBSTACLE units
-    land_obstacles_sync(mode);   // S8 t02: this tick's new / gone LAND_OBSTACLE objects
+    land_obstacles_sync(mode, pf);   // S8 t02: this tick's new / gone LAND_OBSTACLE objects
     hg_publish_engine_requests();  // engine loops: this tick's requests for the audio host
     profile::lap("tac.victory");
 }

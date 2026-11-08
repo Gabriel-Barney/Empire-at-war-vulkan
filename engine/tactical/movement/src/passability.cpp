@@ -192,7 +192,7 @@ void PassabilityGrid::recompute_all() {
     ++version_;
 }
 
-void PassabilityGrid::sample_cells(const ObstacleFootprint& fp, std::vector<uint32_t>& out) const {
+void PassabilityGrid::sample_cells(const ObstacleFootprint& fp, std::vector<uint32_t>& out, const ParallelFor* pf) const {
     out.clear();
     // S8 t13 (MOVEMENT §1.3): a zero width or height (no XML size, no model) samples nothing.
     if (!(fp.width > 0.0f) || !(fp.height > 0.0f)) return;
@@ -201,21 +201,42 @@ void PassabilityGrid::sample_cells(const ObstacleFootprint& fp, std::vector<uint
     // Samples every 10 world units on both axes, both edges included (§1.3).
     const uint32_t nx = static_cast<uint32_t>(std::ceil(std::max(0.0f, fp.width) / 10.0f));
     const uint32_t ny = static_cast<uint32_t>(std::ceil(std::max(0.0f, fp.height) / 10.0f));
-    for (uint32_t j = 0; j <= ny; ++j) {
+    // Sample (i, j): its cell, or -1 when it is off the grid or the water rule drops it (Fine_Tune not yet applied).
+    auto sample = [&](uint32_t i, uint32_t j, V2& p) -> int64_t {
         const float ly = fp.y_offset + std::min(static_cast<float>(j) * 10.0f, fp.height);
-        for (uint32_t i = 0; i <= nx; ++i) {
-            const float lx = fp.x_offset + std::min(static_cast<float>(i) * 10.0f, fp.width);
-            const V2 p = fp.position + dir * lx + left * ly;
-            const int32_t cx = world_to_cell(p.x), cy = world_to_cell(p.y);
-            if (!in_range(cx, cy)) continue;
-            const size_t ci = idx(cx, cy);
-            // Water rule: a submerged low object does not block.
-            if (has_water_ && (base_[ci] & kPassWater) != 0 && !(water_height_ + 5.0f <= fp.terrain_z + fp.obstacle_height))
-                continue;
-            // OI tactical: Fine_Tune_Occupied_Passability - the sample's vertical ray must hit the collision mesh.
-            if (fp.fine_tune && !fp.fine_tune(p)) continue;
-            out.push_back(static_cast<uint32_t>(ci));
-        }
+        const float lx = fp.x_offset + std::min(static_cast<float>(i) * 10.0f, fp.width);
+        p = fp.position + dir * lx + left * ly;
+        const int32_t cx = world_to_cell(p.x), cy = world_to_cell(p.y);
+        if (!in_range(cx, cy)) return -1;
+        const size_t ci = idx(cx, cy);
+        // Water rule: a submerged low object does not block.
+        if (has_water_ && (base_[ci] & kPassWater) != 0 && !(water_height_ + 5.0f <= fp.terrain_z + fp.obstacle_height)) return -1;
+        return static_cast<int64_t>(ci);
+    };
+    const uint64_t total = (static_cast<uint64_t>(nx) + 1) * (static_cast<uint64_t>(ny) + 1);
+    if (pf && fp.fine_tune && total <= (uint64_t{1} << 24)) {
+        // OPT3 t12: the Fine_Tune rays through pf, one result per sample, collected in the serial loop's sample order.
+        const uint32_t row = nx + 1;
+        std::vector<int64_t> cell(static_cast<size_t>(total), -1);
+        (*pf)(static_cast<uint32_t>(total), 8, [&](uint32_t begin, uint32_t end) {
+            for (uint32_t k = begin; k < end; ++k) {
+                V2 p;
+                const int64_t c = sample(k % row, k / row, p);
+                if (c >= 0 && fp.fine_tune(p)) cell[k] = c;
+            }
+        });
+        for (const int64_t c : cell)
+            if (c >= 0) out.push_back(static_cast<uint32_t>(c));
+    } else {
+        for (uint32_t j = 0; j <= ny; ++j)
+            for (uint32_t i = 0; i <= nx; ++i) {
+                V2 p;
+                const int64_t c = sample(i, j, p);
+                if (c < 0) continue;
+                // OI tactical: Fine_Tune_Occupied_Passability - the sample's vertical ray must hit the collision mesh.
+                if (fp.fine_tune && !fp.fine_tune(p)) continue;
+                out.push_back(static_cast<uint32_t>(c));
+            }
     }
     std::sort(out.begin(), out.end());
     out.erase(std::unique(out.begin(), out.end()), out.end());
@@ -232,13 +253,13 @@ void PassabilityGrid::apply(const Stamp& s, int delta) {
     }
 }
 
-uint32_t PassabilityGrid::stamp(ObjectId id, const ObstacleFootprint& fp) {
+uint32_t PassabilityGrid::stamp(ObjectId id, const ObstacleFootprint& fp, const ParallelFor& pf) {
     unstamp(id);
     Stamp s;
     s.bits = fp.bits & 0x1FFu;
     if (w_ != 0 && h_ != 0) {  // S8 t09: an empty grid still records the (cell-less) stamp, as the header promises
         if (counts_.empty()) counts_.assign(base_.size(), std::array<uint16_t, 9>{});
-        sample_cells(fp, s.cells);
+        sample_cells(fp, s.cells, &pf);
         apply(s, 1);
     }
     const uint32_t n = static_cast<uint32_t>(s.cells.size());

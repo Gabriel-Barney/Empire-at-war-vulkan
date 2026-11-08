@@ -1353,6 +1353,7 @@ void MovementSystem::tick_space(uint32_t frame, const ParallelFor& pf) {
     for (uint32_t i = 0; i < units_.size(); ++i)
         if (units_[i].need_path && frame >= units_[i].start_frame) req.push_back(i);
     if (!req.empty()) {
+        space_.build_index();  // OPT3 t12: the parallel planners' occupancy queries visit only nearby entries
         std::vector<SpacePath> out(req.size());
         pf(static_cast<uint32_t>(req.size()), 1, [&](uint32_t b, uint32_t e) {
             SpaceScratch sc;
