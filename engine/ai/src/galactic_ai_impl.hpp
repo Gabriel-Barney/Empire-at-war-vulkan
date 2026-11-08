@@ -61,7 +61,11 @@ struct TaskForceRec {
     std::vector<uint32_t> wanted;          // types to produce (PotentialPlan selections without a free unit)
     std::vector<PlanetIndex> wanted_source;  // ETA source planet per wanted type (PP+0x180)
     std::vector<int32_t> builds;           // AIBuildTask ids (Produce_Force)
-    int32_t stage = -1;                    // target (planet) id
+    // a2l t03 (A2L_T03_RE_ANSWERS Q5) [H]: `stage` is the last Produce_Force destination (AIPlanetBuildTask +0x98: the
+    // planet argument only; -1 = none, so nothing gathers and the build planet is the selection's source); `area` is
+    // TF +0x100, the Setup A stage copied at instantiation and returned by Get_Stage (-1 = null: a goal without a target).
+    int32_t stage = -1;
+    int32_t area = -1;
     bool had_units = false;
     bool no_units_sent = false;
     bool alive = true;
@@ -384,7 +388,6 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     // The AI's Is_Planet_Dangerous mask for `player` (GalacticPerception::fill_view on this frame's snapshot); empty
     // (= none) before the first perception update.
     gal::Bitset ai_dangerous(int32_t player) const;
-    PlanetIndex nearest_owned(int32_t player) const;
     // A2k t02: the path finder's node order as a rank per planet row (galactic_ai.cpp); rebuilt lazily (static data).
     std::vector<uint32_t> node_rank;
     std::span<const uint32_t> planet_node_rank();
@@ -485,7 +488,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     int32_t tf_produce_force(int32_t tf, const lua::AiArg& stage, bool) override;
     int32_t tf_get_stage(int32_t tf) override {
         const auto it = tfs.find(tf);
-        return it == tfs.end() ? -1 : it->second.stage;
+        return it == tfs.end() ? -1 : it->second.area;  // Get_Stage 0x5fda50: TF +0x100, nil when null
     }
     bool tf_all_on_free_store(int32_t tf) override;
     int32_t tf_order(int32_t tf, lua::AiTfOrder order, const lua::AiArg& arg) override;

@@ -39,6 +39,7 @@
 #include "alamo/galactic/fleet_path.hpp"
 #include "alamo/lua/lua_vm.hpp"
 #include "alamo/lua/players.hpp"
+#include "alamo/lua/script_remaining.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
 #include "alamo/objects/object_types.hpp"  // A2k t06: ObjectTypeDatabase (mod-category type table)
@@ -2013,6 +2014,38 @@ end
 function MainForce_Thread() ScriptExit() end
 function EscortForce_Thread() ScriptExit() end
 )";
+// a2l t03 (A2L_T03_RE_ANSWERS Q5): Get_Stage of a goal without a target is nil; plain Produce_Force() has no
+// destination, so nothing gathers (the hero stays where it is although the TF's stage is P2).
+static const char* kPlanA2lNoTarget = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Build_Space_Forces"
+  IgnoreTarget = true
+  TaskForce = { { "MainForce", "DenyHeroAttach", "Frigate = 1" } }
+end
+function MainForce_Thread()
+  MainForce.Set_As_Goal_System_Removable(false)
+  if MainForce.Get_Stage() then GlobalValue.Set("a2l_nt_stage", 1) else GlobalValue.Set("a2l_nt_stage", 0) end
+  BlockOnCommand(MainForce.Produce_Force())
+  GlobalValue.Set("a2l_nt_done", 1)
+  MainForce.Set_Plan_Result(true)
+  ScriptExit()
+end
+)";
+static const char* kPlanA2lPlainProduce = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "MainForce", "DenyHeroAttach", "HeroShip = 1" } }
+end
+function MainForce_Thread()
+  MainForce.Set_As_Goal_System_Removable(false)
+  if MainForce.Get_Stage() then GlobalValue.Set("a2l_t_stage", 1) else GlobalValue.Set("a2l_t_stage", 0) end
+  BlockOnCommand(MainForce.Produce_Force())
+  GlobalValue.Set("a2l_t_done", 1)
+  ScriptExit()
+end
+)";
 
 struct ParityWorld {
     MemoryFiles files;
@@ -2046,6 +2079,8 @@ struct ParityWorld {
         files.add("Data\\Scripts\\AI\\MaskCorvette.lua", kPlanMaskCorvette);
         files.add("Data\\Scripts\\AI\\EscortOnly.lua", kPlanEscortOnly);
         files.add("Data\\Scripts\\AI\\MainEscort.lua", kPlanMainEscort);
+        files.add("Data\\Scripts\\AI\\A2lNoTarget.lua", kPlanA2lNoTarget);
+        files.add("Data\\Scripts\\AI\\A2lPlainProduce.lua", kPlanA2lPlainProduce);
         plan_files = list_plan_files([this](std::string_view glob) {
             const std::string g(glob);
             return files.list(g.substr(0, g.find('*')));
@@ -2328,6 +2363,36 @@ static void test_stage_and_setup_a() {
         std::printf("setup A: hero in hyperspace -> %s, hero %s\n", ok ? "solved" : "failed", pw.has(s, pw.hero) ? "yes" : "no");
         CHECK(ok && pw.has(s, pw.hero));
     }
+}
+
+// a2l t03 (A2L_T03_RE_ANSWERS Q5): the stage of a goal without a target is null (Get_Stage nil), and Produce_Force()
+// without an argument has no destination even when the TF has a stage, so nothing gathers.
+static void test_null_stage_and_plain_produce() {
+    ParityWorld pw(false, {"A2lNoTarget", "A2lPlainProduce"}, own_p2);  // P2 held: Conquer_Planet @P3 stages at P2
+    lua::GlobalValueStore gv;
+    pw.world->set_global_values(&gv);
+    auto num = [&gv](const char* n) { const lua::AiGlobalValue v = gv.get(n); return v.kind == lua::AiGlobalValue::Number ? v.number : -1.0; };
+    auto hero_planet = [&pw]() -> int64_t {
+        for (const gal::FleetState& f : pw.sim->fleets())
+            if (f.alive)
+                for (const objects::ObjectHandle u : f.contents)
+                    if (pw.store->alive(u) && pw.store->type(u) == pw.hero) return f.moving ? -2 : static_cast<int64_t>(f.planet);
+        return -1;
+    };
+    int32_t frames = 0;
+    bool hero_moved = false;
+    for (int32_t f = 1; f <= 30 * 300 && (num("a2l_nt_done") < 0.0 || num("a2l_t_done") < 0.0 || frames < 30 * 20); ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+        if (num("a2l_t_done") >= 0.0) ++frames;  // keep running a while after the plain Produce_Force finished
+        hero_moved = hero_moved || hero_planet() != 0;
+    }
+    std::printf("null stage: no-target stage %.0f done %.0f; targeted stage %.0f done %.0f; hero moved %s\n", num("a2l_nt_stage"),
+                num("a2l_nt_done"), num("a2l_t_stage"), num("a2l_t_done"), hero_moved ? "yes" : "no");
+    CHECK(num("a2l_nt_stage") == 0.0 && num("a2l_nt_done") == 1.0);  // nil stage; Produce_Force() finishes in place
+    CHECK(num("a2l_t_stage") == 1.0 && num("a2l_t_done") == 1.0);    // a targeted TF has a stage ...
+    CHECK(!hero_moved);                                                // ... but plain Produce_Force() does not gather
+    pw.world->set_global_values(nullptr);
 }
 
 // OI2 ai: production-disabled types (story DISABLE_BUILDABLE, REMAINING_GAPS §1.5) are never picked by AI production -
@@ -5693,6 +5758,7 @@ int main(int argc, char** argv) {
     test_parity_rules();
     test_free_store_supply();
     test_stage_and_setup_a();
+    test_null_stage_and_plain_produce();
     test_production_disabled_and_delivery();
     test_ground_structure_slots();
     test_budget_fraction_before_init();

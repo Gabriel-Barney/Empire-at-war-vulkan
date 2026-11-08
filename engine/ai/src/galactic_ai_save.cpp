@@ -49,7 +49,7 @@ using save::put_vec;
 namespace {
 // 2: pristine pooled VMs by reference; 3: AI player types (q6 t07); 4 (cu12 t14): the status records' orders_out byte
 // removed (never set or read); 5 (A2k t02): per-target stage lists; 6 (a2l t03): the per-frame reachability cache
-// removed (galactic blocked() reads the per-target lists).
+// removed (galactic blocked() reads the per-target lists), the task force's stage area (TF +0x100) after its stage.
 constexpr uint32_t kWorldVersion = 6;
 // 2: logic frame, player conflict stamps, conflict observer (q6 t03); 3: leaf cache keyed by (leaf, instance, system player,
 // parameter set) with each entry's parameters, the 0xE visible flags and the last seen surface units (q6 t18)
@@ -573,6 +573,7 @@ void GalacticAiWorld::write(ByteWriter& w) const {
         put_vec(w, t.wanted_source);
         put_vec(w, t.builds);
         w.i32(t.stage);
+        w.i32(t.area);
         w.boolean(t.had_units);
         w.boolean(t.no_units_sent);
         w.boolean(t.alive);
@@ -913,6 +914,7 @@ bool GalacticAiWorld::read(ByteReader& r) {
             if (!get_handles(r, st, t.units) || !get_vec(r, t.wanted) || !get_vec(r, t.wanted_source) || !get_vec(r, t.builds))
                 return false;
             t.stage = r.i32();
+            t.area = r.i32();
             t.had_units = r.boolean();
             t.no_units_sent = r.boolean();
             t.alive = r.boolean();

@@ -324,17 +324,6 @@ std::span<const uint32_t> GalacticAiWorld::Impl::planet_node_rank() {
     return node_rank;
 }
 
-// [port] The stage of a task force whose goal has no target: the player's first planet (row order) with a starbase,
-// else its first planet. (A planet target uses PlayerAi::setup_stage, A2k t02.)
-PlanetIndex GalacticAiWorld::Impl::nearest_owned(int32_t player) const {
-    const auto planets = sim.planets();
-    for (size_t i = 0; i < planets.size(); ++i)
-        if (planets[i].is_planet && planets[i].owner == player && planets[i].starbase_level > 0) return static_cast<PlanetIndex>(i);
-    for (size_t i = 0; i < planets.size(); ++i)
-        if (planets[i].is_planet && planets[i].owner == player) return static_cast<PlanetIndex>(i);
-    return kInvalidPlanet;
-}
-
 // Lua _FindStageArea (FindStageAreaClass::Lua_Call 0x6990f0, A2K_T02_RE_ANSWERS Q1) [H]: the target's reachability slot 6
 // (0x664450) at the level = the task force's goal Reachability (0 = Friendly_only without a task force): the first planet
 // held by the player or an ally in the target's per-target flood list (PlayerAi::stage_of); level 4 -> the target, level
@@ -439,8 +428,14 @@ int32_t GalacticAiWorld::Impl::tf_produce_force(int32_t tf, const lua::AiArg& st
     const auto it = tfs.find(tf);
     if (it == tfs.end() || !it->second.alive) return -1;
     TaskForceRec& t = it->second;
-    const PlanetIndex sp = planet_arg(stage);
-    if (sp != kInvalidPlanet) t.stage = static_cast<int32_t>(sp);
+    // Destination (0x5fe240, A2L_T03_RE_ANSWERS Q5.3) [H]: the planet argument only (a planet object or a planet
+    // AITargetLocationWrapper); no argument -> null, whatever the TF's stage (TF +0x100 is not read), so nothing
+    // gathers and every build task's +0x98 is null. [port] a non-planet argument (a script error in retail) is treated
+    // as no destination.
+    PlanetIndex sp = kInvalidPlanet;
+    if (stage.target >= 0) sp = static_cast<PlanetIndex>(stage.target);
+    else if (stage.object) sp = sim.planet_of(stage.object);
+    t.stage = valid_planet(sp) ? static_cast<int32_t>(sp) : -1;
     create_build_tasks(t);
     // AIBuildTask WAIT_FOR_FREESTORE_ALLOC -> PRE_PATH_SEPERATE (0x64aec0, A2K_T08_RE_ANSWERS Q2.3) [H]: a claimed
     // free-store unit (the TF's units before any build finished) in a fleet of more than one object is split into a
@@ -931,16 +926,15 @@ int32_t GalacticAiWorld::Impl::instantiate(PlayerAi& p, Goal& g) {
         tf.name = def.task_forces[i].name;
         // Stage (0x140b3a660, FreeStore Setup A through the target's reachability object, A2K_T08_RE_ANSWERS Q3.1) [H]:
         // PlayerAi::setup_stage at the goal's Reachability, the same rule and list as the solve; IgnoreTarget is not
-        // read. [port] A goal without a target keeps the player's first planet with a starbase (retail: null stage).
+        // read. Copied to TF +0x100 by the plan instantiation 0x5f7090 (A2L_T03_RE_ANSWERS Q5.1) [H]: a goal without a
+        // target has a null stage, so Get_Stage returns nil and the shipped AssembleForce / SynchronizedAssemble exit the
+        // plan. The Produce_Force destination (tf.stage) starts null.
         if (g.target >= 0) {
             const PlanetIndex st = p.setup_stage(static_cast<PlanetIndex>(g.target), static_cast<int>(defs.goals[g.type].reachability),
                                                  def.task_forces[i], stages);
-            tf.stage = st == kInvalidPlanet ? g.target : static_cast<int32_t>(st);
-        } else {
-            const PlanetIndex st = nearest_owned(p.player);
-            tf.stage = st == kInvalidPlanet ? g.target : static_cast<int32_t>(st);
+            tf.area = st == kInvalidPlanet ? g.target : static_cast<int32_t>(st);
         }
-        stages.push_back(tf.stage >= 0 ? static_cast<PlanetIndex>(tf.stage) : kInvalidPlanet);
+        stages.push_back(tf.area >= 0 ? static_cast<PlanetIndex>(tf.area) : kInvalidPlanet);
         for (const PpSelection& s : pp.sel) {
             if (s.tf != static_cast<int32_t>(i)) continue;
             if (s.unit) {
@@ -2465,6 +2459,7 @@ void GalacticAiWorld::hash(StateHasher& h) const {
     for (const auto& [id, t] : w.tfs) {
         h.i32(id);
         h.i32(t.stage);
+        h.i32(t.area);
         h.u32(static_cast<uint32_t>(t.units.size()));
         for (const ObjectHandle u : t.units) h.i32(w.store.id(u));
     }
