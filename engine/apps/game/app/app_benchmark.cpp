@@ -79,7 +79,9 @@ bool App::bench_start() {
     }
     if (!bench_scenario_start()) return true;  // bm2: the scenario's orders and the GPU timer (a failure is in the report)
     if (!load_save_file(opt_.bench.save, bench_replay())) {
-        bench_fail("the save " + opt_.bench.save + " did not load");
+        // A scenario's own save that no longer loads (older format) is a changed scenario, as in alamo_headless --bench.
+        bscen_.not_comparable = opt_.bench.scenario_data && !opt_.bench.make;
+        bench_fail(std::string(bscen_.not_comparable ? "scenario changed, not comparable: " : "") + "the save " + opt_.bench.save + " did not load");
         return true;  // init succeeded: run() writes the failed report
     }
     bench_.retry_boxes = retry_boxes_;

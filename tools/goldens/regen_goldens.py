@@ -190,9 +190,6 @@ def bench_host(path: str) -> str:
     return "headless"
 
 
-GAME_CHECK_TICKS = "120"  # a game scenario's check runs this many ticks (the fingerprint covers them) - seconds, not the 1-2 minutes of a run
-
-
 def bench_scenarios() -> list[str]:
     d = os.path.join(ROOT, BENCH_DIR)
     return sorted(f"{BENCH_DIR}/{n}" for n in os.listdir(d) if n.endswith(".abench")) if os.path.isdir(d) else []
@@ -218,14 +215,13 @@ def bench_step(build_dir: str, build_arg: str, check_only: bool, listing: bool, 
         path = os.path.join(ROOT, rel)
         v0 = bench_version(path)
         is_game = bench_host(path) == "game"
-        if is_game:  # BM3: a game scenario is checked by a short hidden alamo_game run (exit 3 = changed) and remade by its --bench-regen
-            if not os.path.isfile(game_exe):
-                failed += 1
-                print(f"  FAILED: {game_exe} not found (build first)")
-                continue
-            r = run([game_exe, "--hidden", "--bench-scenario", path, "--bench-ticks", GAME_CHECK_TICKS], ROOT, env, logs)
-        else:
-            r = run([exe, "--bench", path, "--runs", "1", "--warmup", "0", "--quiet"], ROOT, env, logs)
+        if is_game and not check_only and not os.path.isfile(game_exe):  # the remake of a stale game scene needs alamo_game
+            failed += 1
+            print(f"  FAILED: {game_exe} not found (build first)")
+            continue
+        # A game scene is checked like any other: sim-only and full length by alamo_headless --bench (bm2c t02; no GPU, no window),
+        # remade by the rendered alamo_game --hidden --bench-regen. (alamo_game --bench-scenario also answers a stale scene with 3.)
+        r = run([exe, "--bench", path, "--runs", "1", "--warmup", "0", "--quiet"], ROOT, env, logs)
         if r.returncode == 0:
             summaries.append(("unchanged", f"{rel}: scenario fingerprint unchanged (version {v0})"))
             continue
