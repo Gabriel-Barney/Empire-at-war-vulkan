@@ -874,10 +874,10 @@ void test_scene_environment_real() {
     CHECK(files != nullptr);
     if (!files) return;
     render::MapScene scene;
-    CHECK(scene.load(*files, "_LAND_PLANET_BYSS_KIDNAPPING", nullptr, serial_for, &err));
+    CHECK(scene.load(*files, "_MP_LAND_ENDOR", nullptr, serial_for, &err));  // 4 environments (CU8G_T02_ENV_PICK_RE §7)
     const std::vector<terrain::Environment>& envs = scene.map().environments.environments;
     std::printf("scene environment: %zu environments, start %u\n", envs.size(), scene.environment_index());
-    CHECK(!envs.empty() && !scene.space());
+    CHECK(envs.size() >= 2 && !scene.space());
     if (envs.empty()) return;
     const uint32_t n = static_cast<uint32_t>(envs.size());
     for (uint32_t i = 0; i < n; ++i) {

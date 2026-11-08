@@ -174,13 +174,15 @@ public:
     // Frame clear colour: the environment's (TEE 15) on land, black in space (SPACE_AND_OPEN.md 0 item 3).
     Float3 clear_color() const { return space_ ? Float3{0, 0, 0} : lighting_.clear_color; }
     Float3 scene_wind() const { return render::scene_wind(map_, env_index_); }  // cu8f t05 / cu8g t03: the active environment's
-    // ---- cu8g t03: environment changes (Set_New_Environment / typed pick, CU8F_T03_T05_RE §2.2) ----
+    // ---- cu8g t02 / t03: the battle's environment (CU8G_T02_ENV_PICK_RE §1 / §5) ----
     // Active environment index (load: the map's start index; then set_environment's) and its record (null: none).
     uint32_t environment_index() const { return env_index_; }
     const terrain::Environment* environment() const { return active_environment(map_, env_index_); }
-    // Makes environment `index` (clamped to n - 1) active: lighting() at once (lighting, fog, clear colour, skydome
-    // names); after start() the next update() re-applies it on the GPU side: Renderer::set_lighting, the land clouds
-    // (WorldRenderer::set_clouds: velocity, scale, texture) and the skydomes (re-requested, sky() rebuilt when ready).
+    // Makes environment `index` (clamped to n - 1) active. Before start(): the environment start() applies (the
+    // battle's map-load pick: lighting, clouds and its skydomes). After start() (Set_New_Environment / typed pick):
+    // lighting() at once and the next update() re-applies it on the GPU side: Renderer::set_lighting (lights, SH,
+    // ambient, fog, bloom, shadow colour, clear colour) and on land the clouds (WorldRenderer::set_clouds: velocity,
+    // scale, texture). The skydomes of the load-time environment stay (retail vf59 runs only at the post-load start).
     // scene_wind() follows the active environment (land; space stays zero) - the caller passes it to
     // ParticleRenderer::set_wind. False (nothing changes) without environments or for the active index.
     bool set_environment(uint32_t index);
@@ -277,7 +279,6 @@ private:
 
     bool load_impl(const FileProvider& files, std::string_view map, const GameTypeResolver* resolver, const ParallelFor& parallel,
                    std::string* error);
-    void request_sky(ModelStreamer& streamer, assets::AssetCache& cache);  // skydome models of lighting_ (start / env change)
     void lighting_from_environment();                                     // lighting_ from the active environment
     void clear_loaded();  // drops every CPU-side result of load() (failure path)
 
@@ -302,7 +303,6 @@ private:
     bool started_ = false;
     uint32_t env_index_ = 0;                          // cu8g t03: active environment
     bool env_dirty_ = false;                          // cu8g t03: GPU re-apply pending (next update())
-    assets::AssetCache* cache_ = nullptr;             // start()'s cache (space skydome idle clips on an env change)
     float sky_scale_[2] = {1, 1};                    // skydome type Scale_Factor (space)
     std::vector<Instance> bg_placements_;              // space: In_Background placement instances
     // Per type: render info (LOD_Bias, Damage_Decal names, No_Colorization_Color) - looked up by key only.

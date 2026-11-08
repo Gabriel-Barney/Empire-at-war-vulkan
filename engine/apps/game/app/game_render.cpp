@@ -374,8 +374,12 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
     scene_->set_objects_enabled(false);  // the battle's objects replace the placements
     scene_->set_runtime_decals_enabled(!space_);
     std::string e;
-    if (!scene_->load(*data.files, map, gpu.resolver.get(), jobs::make_parallel_for(*gpu.js), &e) ||
-        !scene_->start(gpu.renderer, *gpu.streamer, *gpu.cache, {}, &e)) {
+    bool ok = scene_->load(*data.files, map, gpu.resolver.get(), jobs::make_parallel_for(*gpu.js), &e);
+    // cu8g t02 (CU8G_T02_ENV_PICK_RE §1 / §2): the battle's environment (the map-load pick; a loaded save: the map's start
+    // index) before start(), which applies its lighting, clouds and skydomes.
+    env_wanted_ = b->environment_index();
+    if (ok) scene_->set_environment(env_wanted_);
+    if (!ok || !scene_->start(gpu.renderer, *gpu.streamer, *gpu.cache, {}, &e)) {
         if (err) *err = "battle map " + map + ": " + e;
         scene_.reset();
         return false;
@@ -383,11 +387,6 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
     ropt = render::RecordOptions{};
     ropt.threads = gpu.js->worker_count();
     scene_->apply(ropt);
-    // cu8g t03: the battle's active environment (a battle loaded from a save may already run another one than the map's
-    // start environment); the GPU side follows on the scene's first update().
-    env_known_ = b->environment_set();  // untouched battles keep the scene's start environment
-    env_wanted_ = b->environment_index();
-    if (env_known_) scene_->set_environment(env_wanted_);
     models_ = std::make_unique<render::StreamedSimModels>(table_, *gpu.streamer);
 #ifdef ALAMO_RENDER_HAVE_ANIM_DRIVER
     pose_fn_ = [this](objects::ObjectId id, const render::GpuModel& m) {
@@ -585,7 +584,6 @@ void BattleView::stop(GpuCore& gpu) {
     if (scene_) scene_->stop(gpu.renderer);
     gpu.renderer.set_world(nullptr);
     scene_.reset();
-    env_known_ = false;
     models_.reset();
     builder_.reset();
     buffer_.clear();
@@ -627,10 +625,7 @@ void BattleView::capture(const GameSession& session) {
     if (const sim::TacticalBattle* b = session.battle()) {  // S8 t31: every tick's cues, also when no snapshot is made
         if (const sim::TacticalMode* tm = host.modes().top_tactical())
             track_lob_chargeups(lob_chargeups_, tsw_cues(b->special_weapon_events(), tm->primary()));
-        if (b->environment_set()) {  // cu8g t03: Set_New_Environment ran (applied by prepare)
-            env_wanted_ = b->environment_index();
-            env_known_ = true;
-        }
+        env_wanted_ = b->environment_index();  // cu8g t03: Set_New_Environment (applied by prepare)
     }
     if (!render::capture_snapshot(host, table_, *snap, pf)) return;
     if (const sim::TacticalBattle* b = session.battle()) {
@@ -764,11 +759,12 @@ void BattleView::prepare(GpuCore& gpu, float alpha) {
     sky.insert(sky.end(), bg_.begin(), bg_.end());
 }
 
-// cu8g t03 (CU8F_T03_T05_RE §2.2): the battle's environment changed (Set_New_Environment): lighting / fog / clouds / sky
-// through MapScene (GPU side on its next update), the particle wind from the new environment (land; space stays zero).
+// cu8g t03 (CU8G_T02_ENV_PICK_RE §5): the battle's environment changed (Set_New_Environment): lighting / fog / bloom /
+// shadow colour and land clouds through MapScene (GPU side on its next update; the skydomes stay), the particle wind from
+// the new environment (land; space stays zero).
 // use_scene() hands the new lighting to the renderer each frame as well.
 void BattleView::apply_environment() {
-    if (!scene_ || !env_known_ || env_wanted_ == scene_->environment_index()) return;
+    if (!scene_ || env_wanted_ == scene_->environment_index()) return;
     if (!scene_->set_environment(env_wanted_)) return;
 #ifdef ALAMO_PARTICLES_HAVE_SIM
     if (prender_.initialized()) prender_.set_wind(scene_->scene_wind());

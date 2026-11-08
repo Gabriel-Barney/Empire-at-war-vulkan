@@ -234,7 +234,6 @@ private:
     // cu8g t03: the battle's active environment at the last capture (TacticalBattle::environment_index); prepare()
     // re-applies it on the scene (MapScene::set_environment) and the particle wind when it changed.
     uint32_t env_wanted_ = 0;
-    bool env_known_ = false;
     void apply_environment();
     bool space_ = true;
     bool blocking_models_ = false;

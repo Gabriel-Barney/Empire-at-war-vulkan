@@ -304,14 +304,26 @@ void MapScene::lighting_from_environment() {
     }
 }
 
-// cu8g t03 (CU8F_T03_T05_RE §2.2): mode vf25 on the render side. The CPU part now, the GPU part on the next update().
+// cu8g t03 (CU8G_T02_ENV_PICK_RE §5): mode vf25 on the render side. The CPU part now, the GPU part on the next update().
+// Before start() it only chooses the environment start() applies (the battle's map-load pick, t02: skydomes included).
+// After start() the skydome objects of the load-time environment stay (vf59 runs only at the post-load start), so the
+// sky fields of the lighting are kept.
 bool MapScene::set_environment(uint32_t index) {
     const size_t n = map_.environments.environments.size();
     if (n == 0) return false;
     const uint32_t i = index < n ? index : static_cast<uint32_t>(n - 1);
     if (i == env_index_) return false;
     env_index_ = i;
+    const Lighting before = lighting_;
     lighting_from_environment();
+    if (started_) {
+        for (int k = 0; k < 2; ++k) {
+            lighting_.skydome[k] = before.skydome[k];
+            lighting_.skydome_scale[k] = before.skydome_scale[k];
+            lighting_.skydome_angle[k][0] = before.skydome_angle[k][0];
+            lighting_.skydome_angle[k][1] = before.skydome_angle[k][1];
+        }
+    }
     env_dirty_ = started_;
     const terrain::Environment* env = environment();
     log::infof("render", "map: environment %u (%s) active", i, env ? env->name.c_str() : "");
@@ -501,7 +513,6 @@ bool MapScene::set_hardpoint_destroyed(size_t placement, std::string_view hardpo
 bool MapScene::start(Renderer& r, ModelStreamer& streamer, assets::AssetCache& cache, const WorldOptions& options,
                      std::string* error) {
     r.set_lighting(lighting_);
-    cache_ = &cache;
     env_dirty_ = false;
     if (space_) r.set_object_fade(kSpaceObjectFadeBegin, kSpaceObjectFadeEnd);
     else r.set_object_fade(kLandObjectFadeBegin, kLandObjectFadeEnd);
@@ -533,17 +544,8 @@ bool MapScene::start(Renderer& r, ModelStreamer& streamer, assets::AssetCache& c
         load_idle_anim(cache, models_[placement_model_[i]], ti ? *ti : TypeRenderInfo{}, placement_anim_[i]);
         stats_.background_animated += placement_anim_[i].clip ? 1u : 0u;
     }
-    sky_instances_.clear();
-    request_sky(streamer, cache);
-    finished_seen_ = UINT32_MAX;
-    ready_ = false;
-    instances_.clear();
-    return true;
-}
-
-// The environment skydomes (lighting_.skydome) on the streamer; update() replaces sky() once they are finished.
-void MapScene::request_sky(ModelStreamer& streamer, assets::AssetCache& cache) {
     sky_handles_.clear();
+    sky_instances_.clear();
     sky_done_ = false;
     sky_anim_[0] = sky_anim_[1] = IdleAnim{};
     for (int k = 0; k < 2; ++k) {
@@ -563,20 +565,17 @@ void MapScene::request_sky(ModelStreamer& streamer, assets::AssetCache& cache) {
             stats_.background_animated += sky_anim_[k].clip ? 1u : 0u;
         }
     }
+    finished_seen_ = UINT32_MAX;
+    ready_ = false;
+    instances_.clear();
+    return true;
 }
 
 void MapScene::update(Renderer& r, ModelStreamer& streamer) {
-    if (env_dirty_ && started_) {  // cu8g t03: re-apply the active environment (set_environment)
+    if (env_dirty_ && started_) {  // cu8g t03: re-apply the active environment (set_environment; RE §5)
         env_dirty_ = false;
-        r.set_lighting(lighting_);  // lighting, fog, clear colour
-        if (!space_) world_.set_clouds(terrain::effective_clouds(map_, environment()));  // no terrain in space: no clouds
-        if (space_) {  // the old domes' poses live in sky_anim_, which request_sky resets: drop them now
-            for (int k = 0; k < 2; ++k)
-                if (sky_anim_[k].clip && stats_.background_animated > 0) --stats_.background_animated;
-            sky_instances_.clear();
-            background_ = bg_placements_;
-        }
-        if (cache_) request_sky(streamer, *cache_);  // land: the old (static) domes stay in sky() until the new ones are finished
+        r.set_lighting(lighting_);  // light record, SH, ambient, fog, bloom, shadow colour, clear colour
+        if (!space_) world_.set_clouds(terrain::effective_clouds(map_, environment()));  // land 0x3bbed0; space: lighting only
     }
     world_.make_resident();
     // Instances of every ready model (rebuilt when the number of finished models changes).

@@ -724,8 +724,9 @@ void test_land(const Data& d) {
 struct EnvRun {
     CrcLog crc;
     uint64_t trace = 0;
-    bool fought = false, start_on = false, start_index0 = false, off_after_1 = false, sight_clear = false;
-    bool restarted = false, saved = false, clamped = false, typed = false, untouched_unset = false;
+    bool fought = false, start_on = false, picked_ok = false, off_after_1 = false, sight_clear = false;
+    bool restarted = false, saved = false, kept = false, clamped = false, typed = false;
+    uint32_t picked = 0;
 };
 
 terrain::MapData env_map() {
@@ -800,9 +801,11 @@ EnvRun run_env(const Data& d, int32_t workers) {
         const uint32_t f = b->frame();
         last_frame = f;
         if (f == 1) {
-            out.start_on = b->weather().active();
-            out.start_index0 = b->environment_index() == 0;
-            out.untouched_unset = !b->environment_set();
+            // cu8g t02: the map-load pick over 4 records (3 = "Cinematic" -> 0); the weather follows the picked one
+            // (Rain_Test on 0 / 2, none on 1 "Clear").
+            out.picked = b->environment_index();
+            out.picked_ok = out.picked < 3;
+            out.start_on = b->weather().active() == (out.picked != 1);
             const objects::ObjectStore& st = tm->primary();
             for (const objects::ObjectHandle h : st.owned_by(1))
                 if (st.alive(h) && b->combat().has_unit(st.id(h))) {
@@ -810,7 +813,7 @@ EnvRun run_env(const Data& d, int32_t workers) {
                     break;
                 }
         }
-        if (f == 60) CHECK(b->set_environment(1) && b->environment_index() == 1 && b->weather().active());  // until the next service
+        if (f == 60) CHECK(b->set_environment(1) && b->environment_index() == 1 && b->weather().active() == (out.picked != 1));  // until the next service
         if (f == 61) {
             out.off_after_1 = !b->weather().active();
             out.sight_clear = unit != objects::kNoObjectId && b->weather_sight_modifier(unit) == 1.0f;
@@ -826,20 +829,27 @@ EnvRun run_env(const Data& d, int32_t workers) {
             const bool ok = b->read_part(TacticalBattle::SavePart::State, r);
             StateHasher h1;
             b->hash(h1);
-            out.saved = ok && h0.digest() == h1.digest() && b->environment_index() == 2 && b->environment_set();
+            // cu8g t02: the index is not saved; a load takes the map's start index (0) without a draw, the saved
+            // weather stays (bound to it: no restart at the next tick).
+            out.saved = ok && h0.digest() == h1.digest() && b->environment_index() == 0;
+        }
+        if (f == 151) {
+            bool started = false;
+            for (const tactical::combat::WeatherEvent& e : b->weather().events())
+                started = started || e.kind == tactical::combat::WeatherEvent::Kind::Started;
+            out.kept = b->environment_index() == 0 && b->weather().active() && !started;
         }
         if (f == 180) out.clamped = b->set_environment(99) && b->environment_index() == 3 && b->set_environment(-5) && b->environment_index() == 0;
-        if (f == 240) {
-            std::vector<uint32_t> counts;
-            auto last = [&counts](uint32_t n) {
-                counts.push_back(n);
-                return n - 1;
-            };
-            bool ok = b->set_environment_of_weather_type(1, last) && b->environment_index() == 2;  // rain: {0, 2}, draw 1
-            ok = ok && b->set_environment_of_weather_type(0, last) && b->environment_index() == 1;  // clear: {1}, no draw
-            ok = ok && b->set_environment_of_weather_type(7, last) && b->environment_index() == 0;  // vf26: 3 = Cinematic -> 0
-            ok = ok && b->set_environment_of_weather_type(3, [](uint32_t) { return 1u; }) && b->environment_index() == 1;  // none -> vf26
-            out.typed = ok && counts == std::vector<uint32_t>({2u, 4u});
+        if (f == 240) {  // vf27 on a scratch stream (the draws are checked against a copy)
+            SimRng r(0x1234u), ref(0x1234u);
+            const uint32_t k1 = ref.range_int(0, 1) == 0 ? 0u : 2u;  // rain (type 1): {0, 2}, one int(0, 1)
+            bool ok = b->set_environment_of_weather_type(1, r) && b->environment_index() == k1 && r == ref;
+            ok = ok && b->set_environment_of_weather_type(0, r) && b->environment_index() == 1 && r == ref;  // clear: {1}, no draw
+            const int32_t k3 = ref.range_int(0, 3);  // type 7 > 4: vf26 over all 4, 3 = Cinematic -> 0
+            ok = ok && b->set_environment_of_weather_type(7, r) && b->environment_index() == (k3 == 3 ? 0u : static_cast<uint32_t>(k3)) && r == ref;
+            const int32_t k4 = ref.range_int(0, 3);  // type 3: no record -> vf26
+            ok = ok && b->set_environment_of_weather_type(3, r) && b->environment_index() == (k4 == 3 ? 0u : static_cast<uint32_t>(k4)) && r == ref;
+            out.typed = ok;
         }
         trace.u32(f);
         trace.u32(b->environment_index());
@@ -852,14 +862,48 @@ EnvRun run_env(const Data& d, int32_t workers) {
     return out;
 }
 
+// cu8g t02: 0x277030 on its own (CU8G_T02_ENV_PICK_RE §1).
+void test_environment_pick() {
+    auto set = [](std::initializer_list<const char*> names) {
+        terrain::EnvironmentSet e;
+        for (const char* n : names) {
+            terrain::Environment r;
+            r.name = n;
+            e.environments.push_back(r);
+        }
+        return e;
+    };
+    SimRng r(99u), ref(99u);
+    CHECK(TacticalBattle::pick_environment(set({}), r) == 0 && r == ref);             // [port] n = 0: no draw
+    CHECK(TacticalBattle::pick_environment(set({"Cinematic"}), r) == 0 && r == ref);  // n = 1: no draw, no skip
+    bool all_ok = true, saw0 = false, saw1 = false;
+    for (int i = 0; i < 64; ++i) {
+        // Kuat: ("Environment 1", "Cinematic") always ends on 0, one draw each.
+        all_ok = all_ok && TacticalBattle::pick_environment(set({"Environment 1", "Cinematic"}), r) == 0;
+        ref.range_int(0, 1);
+        all_ok = all_ok && r == ref;
+        // Case-sensitive: "cinematic" is an ordinary record.
+        const uint32_t k = TacticalBattle::pick_environment(set({"A", "cinematic"}), r);
+        all_ok = all_ok && k == static_cast<uint32_t>(ref.range_int(0, 1)) && r == ref;
+        saw0 = saw0 || k == 0;
+        saw1 = saw1 || k == 1;
+        // No re-check: a Cinematic after a Cinematic is taken.
+        const int32_t d = ref.range_int(0, 2);
+        const uint32_t want = d == 0 ? 1u : 2u;
+        all_ok = all_ok && TacticalBattle::pick_environment(set({"Cinematic", "Cinematic", "B"}), r) == want && r == ref;
+    }
+    std::printf("  environment pick: ok %d both %d\n", all_ok, saw0 && saw1);
+    CHECK(all_ok && saw0 && saw1);
+}
+
 void test_environment(const Data& d) {
     const EnvRun a = run_env(d, 0);
-    std::printf("  environment: fought %d start on %d index0 %d unset %d; off after 1 %d sight 1 %d; restarted %d; save %d; clamp %d; "
-                "typed %d; trace %016" PRIx64 "\n",
-                a.fought, a.start_on, a.start_index0, a.untouched_unset, a.off_after_1, a.sight_clear, a.restarted, a.saved, a.clamped,
-                a.typed, a.trace);
-    CHECK(a.fought && a.start_on && a.start_index0 && a.untouched_unset);
-    CHECK(a.off_after_1 && a.sight_clear && a.restarted && a.saved && a.clamped && a.typed);
+    std::printf("  environment: fought %d picked %u (ok %d) start on %d; off after 1 %d sight 1 %d; restarted %d; save %d kept %d; "
+                "clamp %d; typed %d; trace %016" PRIx64 "\n",
+                a.fought, a.picked, a.picked_ok, a.start_on, a.off_after_1, a.sight_clear, a.restarted, a.saved, a.kept,
+                a.clamped, a.typed, a.trace);
+    CHECK(a.fought && a.picked_ok && a.start_on);
+    CHECK(a.off_after_1 && a.sight_clear && a.restarted && a.saved && a.kept && a.clamped && a.typed);
     const EnvRun w = run_env(d, 4);
     CHECK(!first_divergence(a.crc, w.crc).diverged && a.trace == w.trace);
 }
@@ -1836,7 +1880,8 @@ int main(int argc, char** argv) {
     test_tsw_follow(*d);
     test_tsw_lost(*d);
     test_land(*d);
-    test_environment(*d);  // cu8g t03
+    test_environment_pick();  // cu8g t02
+    test_environment(*d);     // cu8g t02 / t03
     test_pads(*d);  // Int-final
     test_persist(*d);  // q6: persisted tactical built objects
     test_jet(*d);   // S7 t10 / t14

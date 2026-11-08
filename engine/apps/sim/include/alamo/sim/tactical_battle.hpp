@@ -765,32 +765,38 @@ public:
         std::vector<int32_t> bombardment_distribution{0, 3, 1, 2, 3, 2, 0, 1, 2, 1, 3, 0, 1, 2, 0, 3, 0, 2, 1, 3, 3, 2, 1, 0};
     };
     void set_l1_constants(L1Constants c) { l1_k_ = std::move(c); }
-    // Tactical weather (land; tactical::combat::WeatherSystem, L1_S4_REMAINING §3.2): scenario = the map's start
-    // environment Weather effect name (TEE mini 29) [M], looked up in the data set here (load_weather_data); started
-    // at the first battle tick (one synced draw), serviced at the start of each tick (before the fog decay); the
-    // accuracy row feeds CombatSystem::set_weather_accuracy. Force_Weather = force_weather (one advance, one draw).
+    // Tactical weather (land; tactical::combat::WeatherSystem, L1_S4_REMAINING §3.2): scenario = the active
+    // environment's Weather effect name (TEE mini 29; cu8g t02: the map-load pick), looked up in the data set here
+    // (load_weather_data); started at the first battle tick (two synced draws, CU8G_T02_ENV_PICK_RE §4), serviced at the
+    // start of each tick (before the fog decay); the accuracy row feeds CombatSystem::set_weather_accuracy.
+    // Force_Weather = force_weather (one advance, one draw).
     void set_weather_data(std::shared_ptr<const tactical::combat::WeatherData> d) { l1_weather_data_ = std::move(d); }
     const tactical::combat::WeatherSystem& weather() const { return l1_weather_; }
     bool force_weather(SimRng& rng);
     // Sight factor of a battle object (Weather_Category of its type; 1.0 without weather): the fog's Land_FOW_Reveal_Range
     // x weather factor (FOG_OF_WAR §3.1.1; owner: fog agent). Weather FowDirty events this tick: weather().events().
     float weather_sight_modifier(objects::ObjectId id) const;
-    // cu8g t03 (CU8F_T03_T05_RE §2.2, L1_S4_REMAINING §3.2): the mode's active environment (index into the map's
-    // EnvironmentSet; RtsScene +0xa0). Starts as the map's start index (mini 25) [port: the map-load random pick vf26 is
-    // not ported, PHASE4.md cu8f t05 open item 2]. set_environment = mode vf25 (Lua Set_New_Environment): index :=
-    // clamp(index, 0, n - 1); false (nothing changes) when the map has no environments [port]. Land: the weather's
-    // re-init on its next service (l1_weather_tick) sees the changed index and restarts with the new environment's
-    // scenario (none -> weather off); an unchanged index re-inits nothing. Space: the index only (no weather). The render
-    // host reads environment_index() and re-applies lighting / fog / clouds / sky / land wind (render::MapScene).
-    uint32_t environment_index() const { return env_set_ ? env_index_ : map_.environments.start_index; }
-    bool environment_set() const { return env_set_; }  // a set_environment ran (else: the map's start environment)
+    // cu8g t02 / t03 (CU8G_T02_ENV_PICK_RE): the mode's active environment (index into the map's EnvironmentSet;
+    // RtsScene +0xa0). setup() picks it after the map objects (bt_map_load: chunk 0x102 and its spawn-table draws) and
+    // before every post-load step (pick_environment: one synced int(0, n - 1) when n != 1, "Cinematic" -> the next
+    // record). Not saved: a loaded battle takes the map's start index (mini 25, clamped) without a draw (§2).
+    // set_environment = mode vf25 (Lua Set_New_Environment): index := clamp(index, 0, n - 1), no draw; false (nothing
+    // changes) when the map has no environments [port]. Land: the weather's re-init on its next service
+    // (l1_weather_tick) sees the changed index and restarts with the new environment's scenario (2 synced draws when it
+    // has phases; none -> weather off); an unchanged index re-inits nothing. Space: the index only (no weather). The
+    // render host reads environment_index() and re-applies lighting / fog / bloom / shadow colour and land clouds / wind
+    // (render::MapScene; the skydomes stay). Not hashed: its only game-logic effect is the land weather restart, which
+    // the weather state and the RNG show on the next land tick.
+    uint32_t environment_index() const { return env_index_; }
     bool set_environment(int32_t index);
     // Mode vf27 (0x2770e0, "random environment of a weather type"; no caller found in retail or the port): type <= 4 ->
-    // a uniform pick among the environments whose mini 13 (Environment::field_13) equals type, in index order; none, or
-    // type > 4 -> as vf26 (a pick over all n, a record named "Cinematic" -> the next one wrapping to 0). The draw is the
-    // caller's `pick(count)` (must return 0 .. count - 1; not called for count 1): [RE open] the stream (retail: "synced")
-    // and the exact draw form are not traced, so no RNG is wired here. False when the map has no environments.
-    bool set_environment_of_weather_type(uint32_t type, const std::function<uint32_t(uint32_t count)>& pick);
+    // the environments whose mini 13 (Environment::field_13) equals type, in index order; m = 1 -> that one, m >= 2 ->
+    // one synced int(0, m - 1) (no "Cinematic" skip); m = 0 or type > 4 -> pick_environment over all n. False when the
+    // map has no environments.
+    bool set_environment_of_weather_type(uint32_t type, SimRng& rng);
+    // 0x277030 (§1): n == 0 / 1 -> 0 without a draw; else i = synced int(0, n - 1), a record named exactly "Cinematic"
+    // (case-sensitive) -> i + 1 wrapping to 0, no re-check.
+    static uint32_t pick_environment(const terrain::EnvironmentSet& envs, SimRng& rng);
     // Damage statistics (L1_S4_REMAINING §2.4): DAMAGE_TRACKING objects accumulate the applied damage of the tick's
     // CombatSystem::damage_events (after multipliers [M]); every 30 frames (the behaviour interval, first service at
     // registration [port]) rate = FPS x accumulated / interval. TEAM containers sum their members. -1 = not alive.
@@ -1608,9 +1614,8 @@ private:
     tactical::combat::WeatherSystem l1_weather_;
     std::shared_ptr<const tactical::combat::WeatherData> l1_weather_data_;
     bool l1_weather_started_ = false;
-    uint32_t l1_weather_env_ = 0;  // cu8g t03: the environment index the weather was (re)initialised for
-    bool env_set_ = false;         // cu8g t03: set_environment ran (env_index_ replaces the map's start index)
-    uint32_t env_index_ = 0;
+    uint32_t l1_weather_env_ = 0;  // cu8g t03: the environment index the weather was (re)initialised for (not saved)
+    uint32_t env_index_ = 0;       // cu8g t02: the active environment (not saved; see environment_index)
     bool fog_weather_dirty_ = false;  // Int-final: a weather FowDirty event not yet seen by fog_service
     void l1_weather_note_fow();       // Int-final: FowDirty in weather().events() -> fog_weather_dirty_
     struct L1Tracker {

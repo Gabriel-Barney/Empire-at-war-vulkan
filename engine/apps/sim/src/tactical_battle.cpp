@@ -894,6 +894,10 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     retreat_allowed_frame_ = static_cast<uint32_t>((space_ ? rules_->space_retreat_allowed : rules_->land_retreat_allowed) * 30.0f);
     fog_begin(mode, players);  // fog of war: grids (owner: fog agent)
     bt_map_load(mode, rng);      // REMAINING_GAPS §3.1: map objects in map order (Map_Load_Spawn_Table draws)
+    // cu8g t02 (CU8G_T02_ENV_PICK_RE §1 / §3 step 7): the environment pick, the map loader's last synced draw - after the
+    // chunk-0x102 objects and their spawn-table draws, before every post-load step (skirmish base / start forces, the
+    // campaign starbase / structures). Not saved: a loaded battle's read_part(State) takes the map's start index instead.
+    env_index_ = pick_environment(map_.environments, rng);
     bt_pad_restore(mode);        // §6.5: persistent pad children
     bt_skirmish_base(mode);      // t50: the land skirmish's pre-built base
     l1_setup(mode);            // L1 systems: special weapons / hyperspace / engines (before the deploys)

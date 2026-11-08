@@ -139,14 +139,21 @@ void WeatherSystem::start(const WeatherScenario* scenario, const WeatherData* da
     transition_ = false;
     events_.push_back({WeatherEvent::Kind::Started, 0, frame});
     start_phase(frame, rng);
+    // cu8g t02 (CU8G_T02_ENV_PICK_RE §4): 0x468a50 runs the start phase 0x468980 a second time after the emitter swap; its
+    // synced draw replaces the phase timer (the phase values are the same; one PhaseStarted event).
+    phase_timer(frame, rng);
+}
+
+void WeatherSystem::phase_timer(uint32_t frame, SimRng& rng) {
+    // 0x468980: timer length = synced float(0.3 x Duration, Duration) x FPS frames.
+    const float d = static_cast<float>(scenario_->phases[current_].duration);
+    timer_start_ = frame;
+    timer_length_ = rng.range_float(0.3f * d, d) * static_cast<float>(kFps);
 }
 
 void WeatherSystem::start_phase(uint32_t frame, SimRng& rng) {
-    // 0x468980: timer length = synced float(0.3 x Duration, Duration) x FPS frames.
     const WeatherPhase& p = scenario_->phases[current_];
-    const float d = static_cast<float>(p.duration);
-    timer_start_ = frame;
-    timer_length_ = rng.range_float(0.3f * d, d) * static_cast<float>(kFps);
+    phase_timer(frame, rng);
     lightning_ = p.lightning_intensity;
     fog_alpha_ = p.fog_alpha;
     intensity_ = p.emitter_intensity;
