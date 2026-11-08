@@ -19,7 +19,7 @@
 #include "alamo/data/xml_list.hpp"
 #include "alamo/objects/coverage.hpp"
 #include "alamo/objects/field_schema.hpp"
-#include "alamo/vfs/steam_workshop.hpp"
+#include "alamo/game/mod_picker.hpp"  // mod_folders, workshop_content_dir (cu9 t03)
 #include "alamo/vfs/vfs.hpp"
 #include "json_text.hpp"  // the JSON string escaper, shared with benchmark.cpp
 #ifdef ALAMO_GAME_HAVE_MATERIALS
@@ -476,21 +476,6 @@ bool same_folder(const fs::path& a, const std::string& b) {
     return fs::equivalent(a, fs::path(b), ec) && !ec;
 }
 
-// Sub-folders of `dir` that hold a Data folder, sorted by name (deterministic, whatever the directory order).
-std::vector<fs::path> mod_folders_in(const fs::path& dir, bool digits_only) {
-    std::vector<fs::path> out;
-    std::error_code ec;
-    if (!fs::is_directory(dir, ec)) return out;
-    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-        if (!it->is_directory(ec)) continue;
-        const std::string name = it->path().filename().string();
-        if (digits_only && (name.empty() || name.find_first_not_of("0123456789") != std::string::npos)) continue;
-        if (fs::is_directory(it->path() / "Data", ec)) out.push_back(it->path());
-    }
-    std::sort(out.begin(), out.end());
-    return out;
-}
-
 // How many of `paths` the candidate's own files have: a Vfs with the candidate as its only tree (its loose Data, the
 // MEGs its MegaFiles.xml / Patch*.meg name; no EaW, no FoC), so every hit is the candidate's.
 uint32_t provided_by(const fs::path& candidate, const std::vector<std::string>& paths) {
@@ -546,10 +531,9 @@ void check_submod(const ModCheckReport& base, const ModCheckOptions& o, SubmodHi
     };
     std::set<std::string> seen_items;  // a workshop id found in an earlier library wins (find_workshop_item order)
     for (const std::string& lib : o.workshop_libraries)
-        for (const fs::path& item :
-             mod_folders_in(fs::path(lib) / "steamapps" / "workshop" / "content" / std::string(vfs::kFocSteamAppId), true))
+        for (const fs::path& item : mod_folders(workshop_content_dir(lib), true))  // mod_picker.hpp (cu9 t03)
             if (seen_items.insert(item.filename().string()).second) consider(item, true);
-    for (const fs::path& local : mod_folders_in(fs::path(base.game) / "Mods", false)) consider(local, false);
+    for (const fs::path& local : mod_folders(fs::path(base.game) / "Mods", false)) consider(local, false);
     std::sort(cands.begin(), cands.end(), [](const ModParentCandidate& a, const ModParentCandidate& b) {
         if (a.provides != b.provides) return a.provides > b.provides;
         if (a.mentioned != b.mentioned) return a.mentioned;

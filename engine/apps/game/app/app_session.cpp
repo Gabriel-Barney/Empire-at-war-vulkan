@@ -100,7 +100,7 @@ void App::stop_attract() {
 // that hull (attract_mode.hpp demo_shot_yaw_deg: playtest 3 t14, hulls were seen nose-on), pitch 35, the tactical zoom stays.
 // Presentation only (wall time).
 void App::demo_camera() {
-    const sim::TacticalBattle* b = session_ ? session_->battle() : nullptr;
+    const sim::TacticalBattle* b = battle();
     if (!b || !bview_.active()) return;
     const std::vector<render::SnapshotObject>& objs = bview_.frame().objects;
     const render::SnapshotObject* target = nullptr;
@@ -422,7 +422,7 @@ void App::shutdown() {
 }
 
 std::string App::local_faction() const {
-    const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr;
+    const galactic::GalacticSim* g = galaxy();
     if (!g) return {};
     const int32_t p = local_player();
     if (p < 0 || static_cast<size_t>(p) >= g->players().size()) return {};

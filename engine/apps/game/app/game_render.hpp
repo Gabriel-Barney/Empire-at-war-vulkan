@@ -142,7 +142,6 @@ private:
     // galactic_corruption_effects are synced by key every frame (each Particle type's Galactic_Model_Name).
     render::GalacticCorruptionSettings corruption_;
     std::vector<render::GalacticCorruptionEffect> corruption_fx_;
-    uint32_t corruption_live_ = 0;
     double last_frame_s_ = -1.0;
 #ifdef ALAMO_PARTICLES_HAVE_SIM
     std::unique_ptr<render::particles::ParticleWorld> pworld_;
@@ -150,9 +149,6 @@ private:
     render::particles::ParticleRenderer prender_;
     std::unique_ptr<render::particles::ProxyAttachments> pattach_;
 #endif
-
-public:
-    uint32_t corruption_effects() const { return corruption_live_; }  // effects synced by the last prepare()
 };
 
 // ---- battle -------------------------------------------------------------------------------------------------
@@ -218,7 +214,6 @@ public:
     bool spawn_move_ack(std::string_view type, ui::Vec3 p, float scale, bool normal);
     // The nearest live normal move ack to `p` (no radius) is removed silently (hidden, no linger). False when none.
     bool kill_nearest_move_ack(ui::Vec3 p);
-    uint32_t move_acks_spawned() const { return acks_spawned_; }
 
     std::vector<render::Instance> main, sky;
     render::RecordOptions ropt;
@@ -268,7 +263,6 @@ private:
         bool normal = false;
     };
     std::vector<MoveAckFx> acks_;
-    uint32_t acks_spawned_ = 0;
     std::vector<ui::SelectionBlob> blobs_;
     render::GpuModel blob_model_;
     bool blob_ok_ = false;

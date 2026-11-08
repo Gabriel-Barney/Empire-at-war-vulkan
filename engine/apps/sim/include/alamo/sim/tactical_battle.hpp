@@ -112,8 +112,7 @@ struct BattleConfig {
     uint32_t end_hold_frames = 0;
     float space_spacing = 250.0f;      // [port] formation spacing (world units)
     float land_spacing = 40.0f;
-    // S10-int
-    bool particles = true;                    // spawn sim PARTICLE objects (R4 B.1 layer 1)
+    // S10-int (cu9 t13: sim PARTICLE objects are always spawned, R4 B.1 layer 1; the `particles` switch is gone)
     uint32_t particle_default_lifetime = 30;  // [port] frames when Particle_Lifetime_Frames is unset / <= 0
     uint32_t dummy_lifetime = 900;            // [port] a Dummy_Barrage_Target is removed after this many frames at most
     float walk_speed_ratio = 0.5f;            // [port M] WALKMOVE below this x max speed (global 0x140b16d04 unknown)
@@ -148,7 +147,7 @@ struct BattleConfig {
     // values; used only when the catalog's GameConstants lack them: BattleCatalog::capture_countdown).
     float garrisoned_range_multiplier = 1.5f;
     float land_capture_countdown = 30.0f, space_capture_countdown = 30.0f;
-    bool garrisons = true;  // garrison holders / occupants / capture points registered (false: no S4 battle state)
+    // cu9 t13: garrison holders / occupants / capture points are always registered (the `garrisons` switch is gone).
     // --- end S4 ---
 };
 
@@ -846,7 +845,9 @@ public:
     // BombingBlockStatus: IsFinished = no bomber left; Result = undamaged / total ([port] bombers are not targets: 1).
     bool bombing_run_finished(int32_t player) const;
     float bombing_run_result(int32_t player) const;
-    uint32_t bombing_run_frames_until_available(int32_t player) const;  // UI query 0x4950f0
+    // UI query 0x4950f0: frames until the player's next bombing run is ready (0 = ready). cu9 t17: kept for the tactical
+    // HUD's bombing-run button (no HUD caller yet; test_battle_l1 covers it).
+    uint32_t bombing_run_frames_until_available(int32_t player) const;
     const L1Constants& l1_constants() const { return l1_k_; }
     // --- end L1 systems ---
 
@@ -1178,8 +1179,8 @@ public:
     //   Hangar     HangarSystem, ContentsSystem, TacticalProduction, EngineLoops (absent ones: a flag)
     //   Fog        FogOfWar (nothing without engine/tactical/fog)
     //   Damage     DamageTrackingStore (nothing without engine/ai)
-    // Every module system part is written through write_if_saveable: a system without write / read writes nothing and
-    // its part fails to read ("pending"). read_part() returns false (State: unchanged) on bad data.
+    // Every module system is written through write_system / read_system (save_session.hpp; a system without write /
+    // read is a build error, cu9 t16). read_part() returns false (State: unchanged) on bad data.
     enum class SavePart : uint8_t { State, Movement, Combat, Abilities, Garrison, Hangar, Fog, Damage, Count };
     static const char* save_part_name(SavePart p);  // "battle.state", "battle.movement", ...
     void write_part(SavePart p, ByteWriter& w) const;
@@ -1470,7 +1471,8 @@ private:
     std::unique_ptr<BattleTables> tables_;
     std::vector<uint32_t> types_used_;  // every type spawned in this battle, first-use order
     std::vector<uint32_t> descs_;       // CombatData::units index per types_used_ entry
-    std::unique_ptr<BattleCatalog::BattleBuild> tables_build_;  // OPT3 t09: constructor / setup's table build (q6 t12: kept for script_add_types)
+    // OPT3 t09: constructor / setup's table build (q6 t12: kept for script_add_types). Never null after the constructor.
+    std::unique_ptr<BattleCatalog::BattleBuild> tables_build_;
     void tables_extend();  // tables_ / descs_ := the build of types_used_ (only the appended types are built)
     std::unique_ptr<tactical::movement::MovementSystem> movement_;
     std::vector<tactical::movement::ClearanceInfo> clr_types_;  // §6.3.1: per type (derived from type / model data)

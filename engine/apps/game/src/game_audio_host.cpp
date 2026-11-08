@@ -201,16 +201,6 @@ void GameAudioHost::unit_response(const objects::GameObjectTypes& types, objects
     if (game_->unit_response(object, sounds(types, type), order_of(kind, group), position_of(object), group)) ++stats_.responses;
 }
 
-void GameAudioHost::battle_reset() {
-    last_serial_ = 0;
-    have_serial_ = false;
-    spawned_.clear();
-    moving_.clear();
-    inaudible_.clear();
-    upgrades_seen_ = 0;
-    retreating_player_ = -1;
-}
-
 void GameAudioHost::battle_end(bool won, std::string_view enemy_faction) {
     if (!game_) return;
     audio::BattleResult r;
@@ -419,11 +409,6 @@ void GameAudioHost::music(MusicScene scene, std::string_view faction, bool space
     }
 }
 
-void GameAudioHost::set_object_positions(std::vector<std::pair<uint64_t, Vec3>> positions) {
-    positions_.clear();
-    for (const auto& [id, p] : positions) positions_[id] = p;
-}
-
 void GameAudioHost::set_listener(const Vec3& eye, const Vec3& look_at, bool cinematic) {
     if (!game_) return;
     Vec3 f{look_at.x - eye.x, look_at.y - eye.y, look_at.z - eye.z};
@@ -511,25 +496,12 @@ void GameAudioHost::movie_ended() { movie_music_on_ = movie_halted_ = false; }
 void GameAudioHost::unit_response(const objects::GameObjectTypes&, objects::TypeIndex, uint64_t, UnitResponse, bool, int32_t) {}
 void GameAudioHost::battle_tick(const sim::TacticalBattle&, const objects::ObjectStore&, const objects::GameObjectTypes&, int32_t,
                                 const std::function<bool(objects::ObjectId)>&) {}
-void GameAudioHost::battle_reset() {  // same bookkeeping as with audio (nothing reads it here)
-    last_serial_ = 0;
-    have_serial_ = false;
-    spawned_.clear();
-    moving_.clear();
-    inaudible_.clear();
-    upgrades_seen_ = 0;
-    retreating_player_ = -1;
-}
 void GameAudioHost::battle_end(bool, std::string_view) {}
 void GameAudioHost::tsw_audio(std::span<const TswCue>, const objects::GameObjectTypes&) {}
 void GameAudioHost::sim_tick() {}
 void GameAudioHost::music(MusicScene scene, std::string_view, bool, std::string_view) {
     if (scene != scene_) pending_played_ = false;
     scene_ = scene;
-}
-void GameAudioHost::set_object_positions(std::vector<std::pair<uint64_t, Vec3>> positions) {
-    positions_.clear();
-    for (const auto& [id, p] : positions) positions_[id] = p;
 }
 void GameAudioHost::set_listener(const Vec3&, const Vec3&, bool) {}
 void GameAudioHost::set_flags(bool modal, bool gui_only, bool attract) {  // same bookkeeping as with audio
@@ -546,6 +518,22 @@ void GameAudioHost::update(double) {}
 void GameAudioHost::apply_presentation(const std::vector<lua::PresentationEvent>&, uint32_t*) {}
 
 #endif
+
+// Shared by both builds (cu9 t09): the same bookkeeping with and without engine/audio (nothing reads it without).
+void GameAudioHost::battle_reset() {
+    last_serial_ = 0;
+    have_serial_ = false;
+    spawned_.clear();
+    moving_.clear();
+    inaudible_.clear();
+    upgrades_seen_ = 0;
+    retreating_player_ = -1;
+}
+
+void GameAudioHost::set_object_positions(std::vector<std::pair<uint64_t, Vec3>> positions) {
+    positions_.clear();
+    for (const auto& [id, p] : positions) positions_[id] = p;
+}
 
 std::vector<std::string> GameAudioHost::take_speech_done() {
     std::vector<std::string> v;

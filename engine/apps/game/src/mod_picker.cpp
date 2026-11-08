@@ -13,10 +13,8 @@
 #include "alamo/vfs/steam_workshop.hpp"
 
 namespace alamo::game {
-namespace {
 namespace fs = std::filesystem;
 
-// Sub-folders of `dir` that have a Data folder, by name (byte order); `digits_only`: workshop item folders only.
 std::vector<fs::path> mod_folders(const fs::path& dir, bool digits_only) {
     std::vector<fs::path> out;
     std::error_code ec;
@@ -31,6 +29,12 @@ std::vector<fs::path> mod_folders(const fs::path& dir, bool digits_only) {
     std::sort(out.begin(), out.end(), [](const fs::path& a, const fs::path& b) { return a.filename().string() < b.filename().string(); });
     return out;
 }
+
+fs::path workshop_content_dir(std::string_view library) {
+    return fs::path(library) / "steamapps" / "workshop" / "content" / std::string(vfs::kFocSteamAppId);
+}
+
+namespace {
 
 void append_utf8(std::string& out, uint32_t cp) {
     if (cp < 0x80) {
@@ -152,7 +156,7 @@ std::vector<InstalledMod> list_installed_mods(const std::string& game, std::span
     std::set<std::string> seen;
     std::vector<InstalledMod> workshop;
     for (const std::string& lib : workshop_libraries)
-        for (const fs::path& item : mod_folders(fs::path(lib) / "steamapps" / "workshop" / "content" / std::string(vfs::kFocSteamAppId), true)) {
+        for (const fs::path& item : mod_folders(workshop_content_dir(lib), true)) {
             InstalledMod m;
             m.id = item.filename().string();
             if (!seen.insert(m.id).second) continue;  // the first library wins (find_workshop_item order)

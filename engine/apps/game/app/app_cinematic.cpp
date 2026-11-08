@@ -105,7 +105,7 @@ void App::cinematic_reset() {
 void App::cinematic_step() {
     cine_.letterbox.update(dt_);
     if (!cine_.shot.active()) return;
-    const sim::TacticalBattle* b = session_ ? session_->battle() : nullptr;
+    const sim::TacticalBattle* b = battle();
     if (!b || !bview_.active()) {
         cinematic_reset();
         return;
@@ -121,7 +121,7 @@ void App::cinematic_step() {
 // story t13: after the frame's Lua ops (lua_presentation) - the hand-over timer on the battle frame, the scripts' lock
 // (Lock_Controls on, cinematic camera or mode on) for the P11 block, the bars' slide. No battle: nothing held.
 void App::linked_ui_step() {
-    const sim::TacticalBattle* b = session_ ? session_->battle() : nullptr;
+    const sim::TacticalBattle* b = battle();
     if (!b) {
         linked_ui_.reset();
         return;

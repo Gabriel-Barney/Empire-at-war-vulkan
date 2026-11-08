@@ -341,7 +341,7 @@ void follow_fields(A& a, F& f) {
 
 void BattleAi::write(ByteWriter& w) const {
     w.u32(kBattleAiSaveVersion);
-    put_section(w, [this](ByteWriter& sub) { write_if_saveable(*world_, sub); });
+    put_section(w, [this](ByteWriter& sub) { write_system(*world_, sub); });
     save_io::Out o(w);
     o(ai_side_, stale_, executed_, opp_prev_, unit_ai_stamps_);
     o.seq(follows_, [](save_io::Out& a, const ObjectFollow& f) { follow_fields(a, f); });
@@ -363,7 +363,7 @@ bool BattleAi::read(ByteReader& r) {
     const std::map<objects::ObjectId, int32_t> stamps_before = unit_ai_stamps_;
     unit_ai_stamps_ = std::move(stamps);  // before relink(): its fill() must find every listed object stamped (no draws)
     ByteReader wr(world);
-    if (!read_if_saveable(*world_, wr) || !wr.ok() || !wr.done()) {
+    if (!read_system(*world_, wr) || !wr.ok() || !wr.done()) {
         unit_ai_stamps_ = stamps_before;
         return false;
     }

@@ -79,7 +79,6 @@ void TacticalBattle::s4_owner_changed(TacticalMode& mode, objects::ObjectId id, 
 bool TacticalBattle::s4_placement(TacticalMode& mode, objects::TypeIndex t, const objects::SpawnParams& sp, float health,
                                   objects::ObjectHandle* spawned) {
     if (spawned) *spawned = objects::ObjectHandle{};
-    if (!cfg_.garrisons) return false;
     const objects::GameObjectTypes& types = catalog_->types();
     tg::CapturePointDesc cd;
     tg::HolderDesc hd;
@@ -141,7 +140,6 @@ bool TacticalBattle::s4_board(TacticalMode& mode, objects::ObjectId unit, object
 }
 
 void TacticalBattle::s4_register(TacticalMode& mode, const Unit& u) {
-    if (!cfg_.garrisons) return;
     const objects::GameObjectTypes& types = catalog_->types();
     const int32_t owner = mode.primary().owner(u.h);
     tg::HolderDesc hd;

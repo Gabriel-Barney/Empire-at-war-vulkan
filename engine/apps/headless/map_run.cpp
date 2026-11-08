@@ -113,14 +113,19 @@ int economy_run(const MapRunOptions& opt, const std::string& data_dir) {
     }
     bool ok = true;
     if (opt.check_workers) {
-        const auto counts = jobs::determinism_worker_counts();
-        for (size_t i = 1; i < counts.size(); ++i) {
-            CrcLog other;
-            run_one(counts[i], other);
-            const auto d = first_divergence(first, other);
-            std::printf("  workers %d vs %d: %s\n", counts.front(), counts[i], d.message.c_str());
-            if (d.diverged) ok = false;
-        }
+        const int32_t w0 = jobs::determinism_worker_counts().front();
+        ok = jobs::check_worker_counts(
+            first,
+            [&](int32_t w) {
+                CrcLog other;
+                run_one(w, other);
+                return other;
+            },
+            [](const CrcLog& l) -> const CrcLog& { return l; },
+            [&](int32_t w, const CrcLog&, const CrcDivergence& d) {
+                std::printf("  workers %d vs %d: %s\n", w0, w, d.message.c_str());
+                return true;
+            });
     }
     first.comments = {"economy campaign " + name + " seed " + std::to_string(opt.seed) + " ticks " + std::to_string(opt.ticks)};
     if (!opt.crc_out.empty() && alamo_headless::save_crc_log(first, opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
@@ -222,16 +227,24 @@ int story_run(const MapRunOptions& opt, const std::string& data_dir, const std::
     }
     bool ok = true;
     if (opt.check_workers) {
-        const auto counts = jobs::determinism_worker_counts();
-        for (size_t i = 1; i < counts.size(); ++i) {
-            std::string l2;
-            CrcLog c2;
-            run_one(counts[i], l2, c2);
-            const auto d = first_divergence(crc, c2);
-            std::printf("  workers %d vs %d: CRC %s, story log %s\n", counts.front(), counts[i], d.message.c_str(),
-                        l2 == log ? "identical" : "DIFFERS");
-            if (d.diverged || l2 != log) ok = false;
-        }
+        struct StoryOut {
+            std::string text;
+            CrcLog crc_log;
+        };
+        const int32_t w0 = jobs::determinism_worker_counts().front();
+        ok = jobs::check_worker_counts(
+            StoryOut{log, crc},
+            [&](int32_t w) {
+                StoryOut o;
+                run_one(w, o.text, o.crc_log);
+                return o;
+            },
+            [](const StoryOut& o) -> const CrcLog& { return o.crc_log; },
+            [&](int32_t w, const StoryOut& o, const CrcDivergence& d) {
+                std::printf("  workers %d vs %d: CRC %s, story log %s\n", w0, w, d.message.c_str(),
+                            o.text == log ? "identical" : "DIFFERS");
+                return o.text == log;
+            });
     }
     crc.comments = {header};
     if (!story_out.empty()) {
@@ -331,17 +344,20 @@ int map_run(const MapRunOptions& opt) {
 
     bool ok = true;
     if (opt.check_workers) {
-        const auto counts = alamo::jobs::determinism_worker_counts();
-        for (size_t i = 1; i < counts.size(); ++i) {
-            sim::MapRunSpec o = spec;
-            o.workers = counts[i];
-            o.record = nullptr;
-            const sim::MapRunResult r = sim::run_map(types, map, index, o);
-            print_run(r, o.workers, false);
-            const auto d = first_divergence(first.log, r.log);
-            std::printf("  workers %d vs %d: %s\n", counts.front(), counts[i], d.message.c_str());
-            if (d.diverged) ok = false;
-        }
+        ok = alamo::jobs::check_worker_counts(
+            first,
+            [&](int32_t w) {
+                sim::MapRunSpec o = spec;
+                o.workers = w;
+                o.record = nullptr;
+                return sim::run_map(types, map, index, o);
+            },
+            [](const sim::MapRunResult& r) -> const CrcLog& { return r.log; },
+            [&](int32_t w, const sim::MapRunResult& r, const CrcDivergence& d) {
+                print_run(r, w, false);
+                std::printf("  workers %d vs %d: %s\n", spec.workers, w, d.message.c_str());
+                return true;
+            });
     }
     first.log.comments = {"map " + opt.map + " seed " + std::to_string(opt.replay.empty() ? opt.seed : replay.seed) +
                           " ticks " + std::to_string(first.ticks) +

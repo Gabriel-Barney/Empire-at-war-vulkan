@@ -77,7 +77,7 @@ void App::open_buy_units(const SessionSpec& spec) {
         e.type = ti.name;
         e.name = type_label(data_, ui_.text, t);
         e.cost = ti.build_cost;
-        e.icon = t < ui_.hud_types.size() ? ui_.hud_types[t].icon_name : std::string();
+        e.icon = type_icon(t);
         buy_.units.push_back(std::move(e));
     }
     std::printf("skirmish buy list: %zu rows (%s, %s)%s\n", buy_.units.size(), spec.skirmish.human_faction.c_str(), land ? "land" : "space",
@@ -210,14 +210,7 @@ void App::show_battle_end(bool dialog) {
     const game::BattleKillCount kills = game::count_battle_kills(dead, local_player());  // t41: campaign score, final tick included
     tally_.kills += kills.kills;
     tally_.losses += kills.losses;
-    for (const auto& [owner, types] : game::tally_battle_losses(dead))
-        for (const auto& [t, n] : types) {
-            ui::BattleEndUnit u;
-            u.name = type_label(data_, ui_.text, t);
-            u.icon = t < ui_.hud_types.size() ? ui_.hud_types[t].icon_name : std::string();
-            u.count = n;
-            (owner == local_player() ? info.your_losses : info.enemy_losses).push_back(std::move(u));
-        }
+    add_loss_rows(info, game::tally_battle_losses(dead), local_player());
     info.can_save_replay = false;  // N1
     if (!dialog) return;  // story t13: a linked battle's skip - the story and score bookkeeping above, no screen, no music
     // Battle-end win / lose music, mode 16 (STRATEGIC_GAPS §7.4); a lost battle names the winner as the enemy faction.
@@ -231,7 +224,7 @@ void App::show_battle_end(bool dialog) {
 // credit values, the lost named heroes' icons (5 per side) and the combat efficiency. Playtest 2 t13: time, bounty and
 // efficiency come from game::summarize_auto_resolve (battle_summary.hpp; display-only [M] rules, no sim state touched).
 void App::show_auto_resolve_end(const galactic::ConflictLogEntry& e) {
-    const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr;
+    const galactic::GalacticSim* g = galaxy();
     if (!g) return;
     const int32_t me = local_player();
     ui::BattleEndInfo info;
@@ -241,7 +234,7 @@ void App::show_auto_resolve_end(const galactic::ConflictLogEntry& e) {
     const game::BountyTable bounty_table = game::load_bounty_table(data_.db.constants(), data_.types);
     std::vector<game::ArUnitRecord> records;
     records.reserve(auto_units_.size());
-    std::map<int32_t, std::map<objects::TypeIndex, uint32_t>> lost;
+    game::BattleLosses lost;
     for (const AutoUnit& u : auto_units_) {
         const uint32_t t = static_cast<uint32_t>(u.type);
         const bool gone = !g->store().alive(u.h);
@@ -254,21 +247,14 @@ void App::show_auto_resolve_end(const galactic::ConflictLogEntry& e) {
         if (!gone) continue;
         if (is_named_hero(*g, t)) {
             std::vector<std::string>& heroes = u.owner == me ? info.your_heroes : info.enemy_heroes;
-            const std::string icon = t < ui_.hud_types.size() ? ui_.hud_types[t].icon_name : std::string();
+            const std::string icon = type_icon(t);
             if (!icon.empty() && heroes.size() < 5) heroes.push_back(icon);
         }
         if (r.cost <= 0) continue;  // §3.1: types costing 0 are not listed
         ++lost[u.owner][u.type];
     }
     auto_units_.clear();
-    for (const auto& [owner, types] : lost)
-        for (const auto& [t, n] : types) {
-            ui::BattleEndUnit u;
-            u.name = type_label(data_, ui_.text, t);
-            u.icon = t < ui_.hud_types.size() ? ui_.hud_types[t].icon_name : std::string();
-            u.count = n;
-            (owner == me ? info.your_losses : info.enemy_losses).push_back(std::move(u));
-        }
+    add_loss_rows(info, lost, me);
     const game::ArSummary sum = game::summarize_auto_resolve(records, me, info.victory);
     info.battle_seconds = sum.battle_seconds;
     info.bounty = sum.bounty;
@@ -292,6 +278,17 @@ void App::show_auto_resolve_end(const galactic::ConflictLogEntry& e) {
                 attacker ? e.attacker_losses : e.defender_losses, attacker ? e.defender_losses : e.attacker_losses);
 }
 
+void App::add_loss_rows(ui::BattleEndInfo& info, const game::BattleLosses& lost, int32_t me) const {
+    for (const auto& [owner, types] : lost)
+        for (const auto& [t, n] : types) {
+            ui::BattleEndUnit u;
+            u.name = type_label(data_, ui_.text, t);
+            u.icon = type_icon(t);
+            u.count = n;
+            (owner == me ? info.your_losses : info.enemy_losses).push_back(std::move(u));
+        }
+}
+
 std::u32string App::txt(std::string_view id, std::u32string_view fallback) const {
     if (const std::u16string* s = ui_.text.find(id)) return ui::utf16_to_utf32(*s);
     return std::u32string(fallback);
@@ -299,7 +296,7 @@ std::u32string App::txt(std::string_view id, std::u32string_view fallback) const
 
 // [port] the faction's Text_ID (Factions.xml <Text_ID>; modc t20: read, not built from the name), else its name.
 std::u32string App::faction_label(int32_t player) const {
-    const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr;
+    const galactic::GalacticSim* g = galaxy();
     if (!g || player < 0 || static_cast<size_t>(player) >= g->players().size()) return {};
     const uint32_t f = g->players()[static_cast<size_t>(player)].faction;
     if (f >= g->rules().factions.size()) return {};
@@ -436,7 +433,7 @@ void App::answer_battle_prompt(bool auto_resolve) {
     }
     const bool ar = auto_resolve && !prompt_.story_pending;
     const galactic::BattleChoice c = ar ? galactic::BattleChoice::AutoResolve : galactic::BattleChoice::Fight;
-    const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr;
+    const galactic::GalacticSim* g = galaxy();
     const galactic::ConflictInfo* head = session_ ? session_->conflict_head() : nullptr;
     const bool sent = session_ && session_->choose_battle(c);
     if (sent && !ar && head) open_battle_load(head->planet, head->kind == galactic::ConflictKind::Space);  // QA t11
@@ -458,7 +455,7 @@ void App::open_battle_prompt(const galactic::GalacticSim& g, const galactic::Con
     prompt_.story_pending = session_->autoresolve_locked(c.planet);
     const int32_t me = local_player();
     const int32_t enemy = c.attacker == me ? c.defender : c.attacker;
-    auto icon = [this](uint32_t t) { return t < ui_.hud_types.size() ? ui_.hud_types[t].icon_name : std::string(); };
+    auto icon = [this](uint32_t t) { return type_icon(t); };
     const uint32_t per = static_cast<uint32_t>(std::max(1, data_.db.constants().get_int("Ships_Per_Stack", 5)));
     const std::vector<objects::ObjectHandle> mine = conflict_units(g, c, me), theirs = conflict_units(g, c, enemy);
     prompt_.left = battle_force_summary(g, mine, icon, per);
@@ -531,7 +528,7 @@ void App::update_radar() {
     if (!bview_.active()) return;
     // Space asteroid fields (RadarMap.xml Space_Asteroid_Field_Color): the battle's SpaceFieldIndex, read once per battle.
     if (!radar_fields_built_) {
-        if (const sim::TacticalBattle* b = session_ ? session_->battle() : nullptr) {
+        if (const sim::TacticalBattle* b = battle()) {
             radar_fields_built_ = true;
             if (bview_.space()) radar_fields_ = radar_asteroid_fields(b->space_fields().fields());
             radar_fields_dirty_ = !radar_fields_.empty();
@@ -570,7 +567,7 @@ void App::update_radar() {
 // the mission holocron; IDD_STORY_DIALOG only for random-plot offers), the battle prompt (§1), auto-resolve results (§3)
 // and the campaign end (campaign score).
 void App::galactic_screens() {
-    const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr;
+    const galactic::GalacticSim* g = galaxy();
     if (!g) return;
     holo_.sample(*g);
     std::vector<StoryMovie> movies;
@@ -639,7 +636,7 @@ void App::galactic_screens() {
 }
 
 void App::show_campaign_end(bool victory) {
-    const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr;
+    const galactic::GalacticSim* g = galaxy();
     if (!g) return;
     campaign_over_ = true;
     if (!screens_.show_campaign_score(campaign_score(*session_, *g, ui_.text, victory, tally_))) notes_.push_back("campaign score dialog missing");
@@ -649,7 +646,7 @@ void App::show_campaign_end(bool victory) {
 // The holocron (IDD_DROID_LOG / DATA_CHART / TECH_TREE_* / SUMMARY_SCREEN_*): every page's data from the galaxy, then
 // the page; switching pages inside keeps the data (InfoScreens).
 void App::open_holocron(ui::InfoPage page) {
-    const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr;
+    const galactic::GalacticSim* g = galaxy();
     if (!g) return;
     info_.set_droid_log(holo_.droid_log(*session_, data_, ui_.text));
     info_.set_data_chart(holo_.chart(*g, data_, ui_.text));
@@ -745,7 +742,7 @@ void App::build_encyclopedia(ui::HudDrawList& dl, const ui::HudCanvas& canvas) {
     ui::EncyclopediaEntry e = encyclopedia_entry(data_, ui_.text, ui_.hud_types, shown_type);
     // GRC 2 / REMAINING_GAPS §6.3: a planet's income row only with the local player's CreditIncome visibility.
     if (screen_ == Screen::Galactic)
-        if (const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr)
+        if (const galactic::GalacticSim* g = galaxy())
             if (const PlanetIndex pi = planet_index(*g, shown); pi != kInvalidPlanet &&
                 !g->can_see_planet_info(local_player(), pi, galactic::GalacticSim::PlanetInfo::CreditIncome))
                 std::erase_if(e.rows, [](const ui::EncyclopediaRow& r) { return r.left == U"Income"; });
@@ -782,7 +779,7 @@ void App::update_cursor(ui::HudDrawList& dl) {
         // A running pick: the targeted-ability cursor (valid on a hit object / any ground point) or the landing-point one.
         if (!c.over_ui && bview_.active()) {
             const sim::TacticalMode* tm = session_ ? session_->host().modes().top_tactical() : nullptr;
-            const sim::TacticalBattle* tb = session_ ? session_->battle() : nullptr;
+            const sim::TacticalBattle* tb = battle();
             if (targeting_.active() && tm && tb) {
                 bool hit_friendly = false;
                 if (targeting_.target_kind() == ui::TargetKind::Object) {
@@ -833,13 +830,13 @@ void App::build_panels(std::vector<ui::HudDrawList>& lists) {
             if (o.owner == local_player() && o.type < data_.types.size() && data_.types.get_bool(o.type, "Is_Named_Hero") && heroes.size() < 11) {
                 ui::HeroEntry e;
                 e.object = static_cast<uint32_t>(o.id);
-                e.icon = o.type < ui_.hud_types.size() ? ui_.hud_types[o.type].icon_name : std::string();
+                e.icon = type_icon(o.type);
                 e.health = o.health_fraction;
                 e.selected = std::binary_search(orders_.selection().begin(), orders_.selection().end(), static_cast<uint32_t>(o.id));
                 // FIXPASS_GALACTIC §2.3: container = the hero's team container (AbilitySystem team membership); none ->
                 // kNoObject (a double click then selects every object of the hero's type).
                 e.container = commands::kNoObject;
-                if (const sim::TacticalBattle* b = session_ ? session_->battle() : nullptr)
+                if (const sim::TacticalBattle* b = battle())
                     if (const tactical::combat::ObjectId c = b->abilities().container_of(static_cast<tactical::combat::ObjectId>(o.id));
                         c != tactical::combat::kNoObject)
                         e.container = static_cast<uint32_t>(c);
@@ -850,11 +847,11 @@ void App::build_panels(std::vector<ui::HudDrawList>& lists) {
     // HUD_GAPS §3.2: the galactic roster (good set) every frame - the local player's named heroes on the map, then the
     // ones being built / awaiting respawn, max 11.
     if (screen_ == Screen::Galactic)
-        if (const galactic::GalacticSim* gs = session_ ? session_->galaxy() : nullptr) {
+        if (const galactic::GalacticSim* gs = galaxy()) {
             const std::vector<uint32_t> sel = orders_.selection();
             galactic_heroes_ = galactic_hero_entries(
                 *gs, local_player(),
-                [this](uint32_t t) { return t < ui_.hud_types.size() ? ui_.hud_types[t].icon_name : std::string(); }, sel, 11,
+                [this](uint32_t t) { return type_icon(t); }, sel, 11,
                 [this](uint32_t t) { return t < data_.types.size() ? data_.types.get_int(static_cast<objects::TypeIndex>(t), "Ranking_In_Category") : 0; });
             heroes = galactic_heroes_;
             for (ui::HeroEntry& e : heroes)
@@ -875,7 +872,7 @@ void App::build_panels(std::vector<ui::HudDrawList>& lists) {
     // GalacticSim getters (game_info.cpp special_panel).
     const uint32_t kind = panel_kind();
     const SpecialDialog* dlg = session_ ? session_->special_dialog() : nullptr;
-    const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr;
+    const galactic::GalacticSim* g = galaxy();
     PlanetIndex pi = kInvalidPlanet;
     uint32_t planet_id = commands::kNoObject, hero_id = 0;
     if (g && kind) {

@@ -42,7 +42,7 @@ SimHost::SimHost(const objects::GameObjectTypes& types, jobs::JobSystem& js, Sim
     }
     make_pipeline(cfg_.scheduler);
     register_crc();
-    recorder_ = std::make_unique<jobs::CrcRecorder>(js, registry_, cfg_.parallel_crc);
+    make_recorder();
 }
 
 void SimHost::make_pipeline(const cmd::SchedulerConfig& cfg) {
@@ -121,7 +121,7 @@ GameMode& SimHost::start_game(ModeKind kind) {
             frame_ = 0;
             batch_crc_ = 0;
             make_pipeline(cfg_.scheduler);
-            recorder_ = std::make_unique<jobs::CrcRecorder>(*js_, registry_, cfg_.parallel_crc);
+            make_recorder();
             for (auto& s : selection_) s.clear();
             for (auto& pg : groups_)  // P host: control groups
                 for (auto& g : pg) g.clear();
@@ -615,12 +615,8 @@ uint64_t SimHost::run_fast(uint64_t ticks) {
 
 bool SimHost::loop_iteration(uint32_t now_ms) {
     pacing_.set_stopped(modes_.empty());
-    const uint64_t f0 = frame_;
-    const bool ticked = pacing_.pace(now_ms) && tick_once();
-    // R1: d = (frame_now - F0) x 30 / 1000 (0.03 per tick, as the original).
-    const double d = static_cast<double>(frame_ - f0) * static_cast<double>(kSimTicksPerSecond) / 1000.0;
-    if (GameMode* t = modes_.top()) t->per_frame_update(d);
-    return ticked;
+    // [port] no per-frame mode update (vtable +0xb8, R1 d = 0.03 per tick): no mode overrides it (cu9 t15).
+    return pacing_.pace(now_ms) && tick_once();
 }
 
 uint64_t SimHost::run_realtime(uint64_t ticks, const std::function<uint32_t()>& now_ms,

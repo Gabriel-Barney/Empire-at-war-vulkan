@@ -145,15 +145,10 @@ void GalacticMode::tick(const ModeTickContext& ctx) {
         trace(ctx, "galactic.end");
         return;
     }
-    // Common tick FIRST in galactic mode (MAIN_LOOP.md §3.2).
+    // No GalacticSim attached (tests only): the common tick FIRST in galactic mode (MAIN_LOOP.md §3.2), nothing else.
+    // cu9 t14: the pre-S3 income stand-in is gone (GalacticSim owns the fiscal cycle); income_interval_ /
+    // next_income_frame_ / income_events_ stay as hashed and saved constants until the next golden regeneration.
     common_tick(ctx);
-    // Cinematic manager step [stub]; income when the mode frame reaches the next income frame.
-    if (frame_ >= next_income_frame_) {
-        ++income_events_;
-        next_income_frame_ += income_interval_;
-        trace(ctx, "galactic.income");
-    }
-    // Per-planet synced random value, HUD message, victory events [stubs: S3 owns planets].
     trace(ctx, "galactic.end");
 }
 
@@ -361,7 +356,7 @@ void TacticalMode::tick(const ModeTickContext& ctx) {
     // from start-of-tick positions.
     plan_motion(ctx);
     trace(ctx, "tactical.motion_plan");
-    // 4. Land: weather + hero clash.
+    // 4. Land: weather + hero clash (LandMode::mode_specific; the weather itself runs in TacticalBattle).
     mode_specific(ctx);
     // 5. Tactical frame counter. 6. Victory-monitor event 0x11 per player [stub].
     ++tactical_frame_;
@@ -574,8 +569,8 @@ bool TacticalMode::read_state(ByteReader& r) {
 }
 
 void LandMode::mode_specific(const ModeTickContext& ctx) {
-    // Weather system (draws from the synced RNG in the original) and hero-clash manager [stubs:
-    // no draws until the weather system exists, so the RNG stream stays the original's].
+    // Trace step only (cu9 t15): the land weather service runs in the battle (TacticalBattle::l1_weather_tick, before
+    // the common tick, with its synced draws); hero clashes are not modelled yet.
     trace(ctx, "land.weather");
 }
 

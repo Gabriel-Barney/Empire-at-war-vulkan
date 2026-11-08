@@ -565,15 +565,19 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
     }
     bool ok = true;
     if (opt.check_workers) {
-        const auto counts = jobs::determinism_worker_counts();
-        for (size_t i = 1; i < counts.size(); ++i) {
-            Out o;
-            run_one(counts[i], o, false);
-            const auto d = first_divergence(first.crc, o.crc);
-            std::printf("  workers %d vs %d: CRC %s, AI log %s\n", counts.front(), counts[i], d.message.c_str(),
-                        o.ai_text == first.ai_text ? "identical" : "DIFFERS");
-            if (d.diverged || o.ai_text != first.ai_text) ok = false;
-        }
+        ok = jobs::check_worker_counts(
+            first,
+            [&](int32_t w) {
+                Out o;
+                run_one(w, o, false);
+                return o;
+            },
+            [](const Out& o) -> const CrcLog& { return o.crc; },
+            [&](int32_t w, const Out& o, const CrcDivergence& d) {
+                std::printf("  workers %d vs %d: CRC %s, AI log %s\n", w0, w, d.message.c_str(),
+                            o.ai_text == first.ai_text ? "identical" : "DIFFERS");
+                return o.ai_text == first.ai_text;
+            });
     }
     const std::string header = "# galactic-ai campaign " + name + " battles " + aopt.battles + " seed " + std::to_string(opt.seed) +
                                " ticks " + std::to_string(opt.ticks) + (aopt.human.empty() ? "" : " human " + aopt.human) + "\n# " +

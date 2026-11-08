@@ -180,15 +180,19 @@ int battle_run(const MapRunOptions& opt, const std::string& data_dir, const Batt
     }
     bool ok = true;
     if (opt.check_workers) {
-        const auto counts = jobs::determinism_worker_counts();
-        for (size_t i = 1; i < counts.size(); ++i) {
-            Out o;
-            run_one(counts[i], o, false);
-            const auto d = first_divergence(first.crc, o.crc);
-            std::printf("  workers %d vs %d: CRC %s, conflict/battle log %s\n", counts.front(), counts[i], d.message.c_str(),
-                        o.text == first.text ? "identical" : "DIFFERS");
-            if (d.diverged || o.text != first.text) ok = false;
-        }
+        ok = jobs::check_worker_counts(
+            first,
+            [&](int32_t w) {
+                Out o;
+                run_one(w, o, false);
+                return o;
+            },
+            [](const Out& o) -> const CrcLog& { return o.crc; },
+            [&](int32_t w, const Out& o, const CrcDivergence& d) {
+                std::printf("  workers %d vs %d: CRC %s, conflict/battle log %s\n", w0, w, d.message.c_str(),
+                            o.text == first.text ? "identical" : "DIFFERS");
+                return o.text == first.text;
+            });
     }
     first.crc.comments = {"battles campaign " + name + " mode " + bopt.mode + " seed " + std::to_string(opt.seed) + " ticks " +
                           std::to_string(opt.ticks) + " aggressor " + std::to_string(bopt.aggressor_period)};

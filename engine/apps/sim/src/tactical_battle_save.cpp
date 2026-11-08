@@ -15,24 +15,18 @@ namespace {
 constexpr uint32_t kBattleStateVersion = 8;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: q6 attacks on TEAM containers / s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save) (two branches); 8: both merged
 constexpr uint32_t kBattlePartVersion = 1;
 
-// One module system in a part: presence flag + a section with its own write (nothing when it has no write / read).
+// One module system in a part: presence flag + a section with its own write.
 template <class T>
 void put_system(ByteWriter& w, const T* s) {
     w.boolean(s != nullptr);
-    if (s) put_section(w, [s](ByteWriter& sub) { write_if_saveable(*s, sub); });
+    if (s) put_section(w, [s](ByteWriter& sub) { write_system(*s, sub); });
 }
 
 template <class T>
 bool get_system(ByteReader& r, T* s) {
     const bool has = r.boolean();
     if (!r.ok() || has != (s != nullptr)) return false;
-    return !s || get_section(r, [s](ByteReader& sub) { return read_if_saveable(*s, sub); });
-}
-
-// A part loads only when every system in it has write / read (a pending one fails the part before anything is read).
-template <class... T>
-constexpr bool all_saveable(const T*...) {
-    return (SaveableSystem<T> && ...);
+    return !s || get_section(r, [s](ByteReader& sub) { return read_system(*s, sub); });
 }
 
 }  // namespace
@@ -238,36 +232,32 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
             return true;
         }
         case SavePart::Movement:
-            if (!all_saveable(movement_.get(), &l1_jumps_, &l1_engines_)) return false;
             return get_system(r, movement_.get()) && get_system(r, &l1_jumps_) && get_system(r, &l1_engines_) && r.done();
         case SavePart::Combat:
-            if (!all_saveable(combat_.get(), &l1_weather_)) return false;
             l1_weather_.set_data(l1_weather_data_.get());  // the saved scenario resolves in it (weather starts on the first service)
             if (!(get_system(r, combat_.get()) && get_system(r, &l1_weather_) && r.done())) return false;
             attach_rocket_terrain();  // refixf t01: the host terrain is not part of the save
             share_groups_sync();  // derived, not saved (State and Movement are read before Combat)
             return true;
         case SavePart::Abilities:
-            if (!all_saveable(abilities_.get(), &l1_sw_, &l1_fields_)) return false;
             return get_system(r, abilities_.get()) && get_system(r, &l1_sw_) && get_system(r, &l1_fields_) && r.done();
         case SavePart::Garrison: {
             const bool has = r.boolean();
-            if (!has || !all_saveable(&garrison_, captures_.get())) return false;
+            if (!has) return false;
             return get_system(r, &garrison_) && get_system(r, captures_.get()) && r.done();
         }
         case SavePart::Hangar:
-            if (!all_saveable(hangars_.get(), contents_.get(), production_.get(), &engine_loops_)) return false;
             return get_system(r, hangars_.get()) && get_system(r, contents_.get()) && get_system(r, production_.get()) &&
                    get_system(r, &engine_loops_) && r.done();
         case SavePart::Fog: {
             const bool has = r.boolean();
-            if (!has || !all_saveable(&fog_)) return false;
+            if (!has) return false;
             return get_system(r, &fog_) && r.done();
         }
         case SavePart::Damage: {
             const bool has = r.boolean();
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
-            if (!has || !all_saveable(&damage_tracking_)) return false;
+            if (!has) return false;
             return get_system(r, &damage_tracking_) && r.done();
 #else
             return r.ok() && !has && r.done();

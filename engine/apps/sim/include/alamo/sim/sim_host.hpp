@@ -104,7 +104,6 @@ struct SimConfig {
     uint32_t free_seed = 0x12345678u;                           // free RNG (never sim state)
     uint32_t players = 8;                                       // PlayerList size (<= kMaxPlayers); see session_players
     commands::SchedulerConfig scheduler = commands::SchedulerConfig::single_player();
-    bool parallel_crc = true;                                   // CRC hashers on the job system
     bool story_crc = false;                                     // register the "story" CRC system (S4)
     // q6: game-object Lua scripts (object_scripts.hpp, docs/re/OBJECT_SCRIPTS.md). Off by default: the attach and the
     // first-pump draws change the synced stream, so sessions without it keep their CRC streams and goldens.
@@ -385,6 +384,8 @@ private:
     std::array<PlayerController, kMaxPlayers> controllers_;
     CrcRegistry registry_;
     std::unique_ptr<jobs::CrcRecorder> recorder_;
+    // cu9 t13: a fresh recorder (CRC hashers on the job system; the old parallel_crc switch was never off).
+    void make_recorder() { recorder_ = std::make_unique<jobs::CrcRecorder>(*js_, registry_, true); }
     std::vector<std::string>* trace_ = nullptr;
     ModeUpdateHook after_mode_update_;  // S10
     ModeUpdateHook object_anim_;        // S10-int

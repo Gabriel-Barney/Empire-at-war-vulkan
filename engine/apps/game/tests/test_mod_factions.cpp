@@ -1,10 +1,11 @@
 // alamo_game_mod_faction_tests (q6 t08): AI player types and default skirmish forces for factions the port does not
-// hard-code (game_data.hpp resolve_ai_type / default_skirmish_fleet / default_skirmish_ground / data_fallback_forces);
+// hard-code (game_data.hpp resolve_ai_type / default_skirmish_fleet / default_skirmish_ground; skirmish_rules.hpp
+// data_fallback_forces);
 // q6: the skirmish buy-units list (skirmish_rules.hpp skirmish_buy_list) on synthetic, shipped and Thrawn's Revenge data.
 //   * synthetic data in its own temp folder: an Empire with Basic_AI BasicEmpire, a Rebel a mod redefined (GenericAI),
 //     mod factions with and without Space_ / Land_Skirmish_AI_Default_Forces, a campaign's AI_Player_Control pairs;
-//     modc t03: with and without a mod layer (GameData::mod_layer), no rule keyed on a faction's name;
-//     modc t17: the same forces and campaign AI types with and without a mod layer; modc t19: the skirmish galaxy planet;
+//     modc t03: no rule keyed on a faction's name; modc t17: the same forces and campaign AI types for stock and mod
+//     factions (cu9 t01: GameData::mod_layer removed, nothing read it); modc t19: the skirmish galaxy planet;
 //   * with ALAMO_FOC_DATA: the shipped factions start from their Space_ / Land_Skirmish_AI_Default_Forces and the shipped
 //     campaigns' AI_Player_Control pairs are read, as retail (modc t17).
 #include <algorithm>
@@ -150,8 +151,6 @@ void test_synthetic() {
     CHECK(game::load_game_data_dir(root.string(), d, &err));
     if (!err.empty()) std::printf("load: %s\n", err.c_str());
 
-    CHECK(!d.mod_layer);  // synthetic data: no mod layer
-
     // Forces as read from the faction files (last list wins, names as written).
     const auto chiss = d.skirmish_forces.find("CHISS");
     CHECK(chiss != d.skirmish_forces.end());
@@ -179,7 +178,7 @@ void test_synthetic() {
     CHECK(game::resolve_ai_type("Rebel", d.basic_ai, nullptr, &defs).empty());  // GenericAI undefined: no AI
     CHECK(game::resolve_ai_type("Pirates", d.basic_ai, nullptr, &defs).empty());
     CHECK(game::resolve_ai_type("Neutral", d.basic_ai, nullptr, &defs).empty());
-    // Campaign: the AI_Player_Control pairs for every faction (no pair = no AI), with or without a mod layer (modc t17).
+    // Campaign: the AI_Player_Control pairs for every faction (no pair = no AI), stock or mod (modc t17).
     const data::CampaignDef* c = d.db.find_campaign("MF_GC");
     CHECK(c != nullptr);
     if (c) {
@@ -194,13 +193,9 @@ void test_synthetic() {
     }
 #endif
 
-    // modc t17: no built-in lists. Empire has no default forces in the data: the [port] fallback, with or without a mod layer.
-    for (const bool mod : {false, true}) {
-        d.mod_layer = mod;
-        CHECK((game::default_skirmish_fleet(d, "Empire") == Names{"Star_Destroyer"}));
-        CHECK((game::default_skirmish_ground(d, "Empire") == Names{"Imperial_Stormtrooper_Squad"}));
-    }
-    d.mod_layer = false;
+    // modc t17: no built-in lists. Empire has no default forces in the data: the [port] fallback.
+    CHECK((game::default_skirmish_fleet(d, "Empire") == Names{"Star_Destroyer"}));
+    CHECK((game::default_skirmish_ground(d, "Empire") == Names{"Imperial_Stormtrooper_Squad"}));
 
     // modc t19: the skirmish galaxy planet from the data (no planet by name).
     {
@@ -224,12 +219,12 @@ void test_synthetic() {
     CHECK((game::default_skirmish_fleet(d, "Chiss") == Names{"MF_Frigate", "MF_Squadron", "MF_Squadron"}));
     CHECK((game::default_skirmish_ground(d, "Chiss") == Names{"MF_Trooper_Company"}));
     // Yevetha: placeholder list -> the fallback (cheapest two + median; heroes, locked, free, non-hyperspace left out).
-    CHECK((game::data_fallback_forces(d, "Yevetha", false) == Names{"Y_A", "Y_B", "Y_D"}));
+    CHECK((game::data_fallback_forces(d.rules, d.types, "Yevetha", false) == Names{"Y_A", "Y_B", "Y_D"}));
     CHECK((game::default_skirmish_fleet(d, "Yevetha") == Names{"Y_A", "Y_B", "Y_D"}));
     CHECK((game::default_skirmish_ground(d, "Yevetha") == Names{"Y_G2", "Y_G1"}));  // its land list names a ship: dropped
     // Rebel: no list in the data, none of the base-game names defined, no affiliated type.
     CHECK(game::default_skirmish_fleet(d, "Rebel").empty());
-    CHECK(game::data_fallback_forces(d, "Nobody", true).empty());
+    CHECK(game::data_fallback_forces(d.rules, d.types, "Nobody", true).empty());
 
     // The skirmish galaxy for two mod factions (space and land).
     game::SkirmishSetup s;
@@ -370,7 +365,6 @@ void test_shipped_data() {
     game::GameData d;
     std::string err;
     CHECK(game::load_game_data(foc, {}, d, &err));
-    CHECK(!d.mod_layer);
     for (const galactic::FactionRules& f : d.rules.factions) {
         if (!f.is_playable) continue;
         const auto it = d.skirmish_forces.find(ascii_upper(f.name));

@@ -597,7 +597,7 @@ bool auto_resolve_run(const game::GameData& data, const game::SessionSpec& spec,
         if (!chose && s.battle_choice_pending()) chose = s.choose_battle(galactic::BattleChoice::AutoResolve);
         if (s.auto_resolving() && !saw_running) {  // the dialog's Withdraw while the auto-resolve runs
             saw_running = true;
-            CHECK(s.can_withdraw());  // the Withdraw enable rule: the human is a side of the head conflict
+            CHECK(s.local_in_head_conflict());  // the Withdraw enable rule: the human is a side of the head conflict
             CHECK(s.withdraw());
         }
         CHECK(!s.in_battle());
@@ -1903,7 +1903,7 @@ void save_load_test(const game::GameData& data, game::SessionSpec spec) {
         CHECK(p.start(nullptr, nullptr, nullptr));
         sim::SaveParticipant part;
         part.name = "pending_test";
-        part.write = [](ByteWriter&) {};  // a system whose save has not landed (write_if_saveable writes nothing)
+        part.write = [](ByteWriter&) {};  // a participant that writes nothing (the LoadReport / check_save path)
         part.read = [](ByteReader&) { return false; };
         p.host().add_save_participant(std::move(part));
         p.tick();

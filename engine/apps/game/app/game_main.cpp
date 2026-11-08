@@ -90,8 +90,10 @@ bool App::init() {
     // Menus: skirmish maps from the data, audio volumes from the host.
     ui::MenuProviders mp;
     // Skirmish maps (UI.md section 9, p4ui t06): the catalog of Data\Art\Maps, Data\CustomMaps and the mod folders' maps, read once;
-    // the front end filters the rows of the Official / Custom tab. Without a single catalog row (a data folder with no MP maps
-    // or no VFS) the old name lists stand in: space maps (Kuat first), then land maps.
+    // the front end filters the rows of the Official / Custom tab. Without a single catalog row the name lists stand in:
+    // space maps, then land maps, each sorted by name (game_data.hpp; modc t19: no map moved to the front). cu9 t05: kept,
+    // because list_maps sees every VFS layer while the catalog's official list sees only the base and MEG layers, so a data
+    // set whose MP maps have no decodable header there still gets rows.
     skirmish_catalog_ = std::make_shared<const SkirmishMapCatalog>(build_skirmish_map_catalog(data_));
     std::vector<ui::SkirmishMapInfo> map_rows;
     for (const bool custom_tab : {false, true}) {

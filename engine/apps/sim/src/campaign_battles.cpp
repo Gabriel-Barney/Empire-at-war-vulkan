@@ -264,8 +264,8 @@ bool CampaignBattles::attach(std::vector<std::string>* diag) {
     // N1 (owner: n1-host): the conflict manager and the between-battle state save with the session.
     SaveParticipant conflicts;
     conflicts.name = "galactic.conflicts";
-    conflicts.write = [this](ByteWriter& w) { write_if_saveable(*cm_, w); };
-    conflicts.read = [this](ByteReader& r) { return read_if_saveable(*cm_, r); };
+    conflicts.write = [this](ByteWriter& w) { write_system(*cm_, w); };
+    conflicts.read = [this](ByteReader& r) { return read_system(*cm_, r); };
     host_->add_save_participant(std::move(conflicts));
     SaveParticipant state;
     state.name = "battles";
@@ -525,12 +525,12 @@ void CampaignBattles::write_battle_level(ByteWriter& w) const {
 #ifdef ALAMO_SIM_HAVE_STORY
     w.boolean(true);
     w.boolean(story_bridge_ != nullptr);
-    if (story_bridge_) put_section(w, [this](ByteWriter& sub) { write_if_saveable(*story_bridge_, sub); });
-    put_section(w, [this](ByteWriter& sub) { write_if_saveable(story_transports_, sub); });
+    if (story_bridge_) put_section(w, [this](ByteWriter& sub) { write_system(*story_bridge_, sub); });
+    put_section(w, [this](ByteWriter& sub) { write_system(story_transports_, sub); });
     o(story_motion_, story_base_ids_);
 #ifdef ALAMO_LUA_HAVE_FOG
     w.boolean(true).u32(story_fog_.epoch);
-    put_section(w, [this](ByteWriter& sub) { write_if_saveable(story_fog_.cells, sub); });
+    put_section(w, [this](ByteWriter& sub) { write_system(story_fog_.cells, sub); });
 #else
     w.boolean(false);
 #endif
@@ -575,18 +575,18 @@ bool CampaignBattles::read_battle_level(ByteReader& r) {
     lua::CinematicTransports tr;
     {
         ByteReader tr_r(transports);
-        if (!read_if_saveable(tr, tr_r) || !tr_r.done()) return false;
+        if (!read_system(tr, tr_r) || !tr_r.done()) return false;
     }
 #ifdef ALAMO_LUA_HAVE_FOG
     lua::FogScriptCells fc;
     {
         ByteReader fc_r(cells);
-        if (!read_if_saveable(fc, fc_r) || !fc_r.done()) return false;
+        if (!read_system(fc, fc_r) || !fc_r.done()) return false;
     }
 #endif
     if (story_bridge_) {  // read in place: the tactical story VMs hold this bridge
         ByteReader br(bridge);
-        if (!read_if_saveable(*story_bridge_, br) || !br.done()) return false;
+        if (!read_system(*story_bridge_, br) || !br.done()) return false;
     }
     story_transports_ = std::move(tr);
     story_motion_ = std::move(motion);

@@ -134,8 +134,8 @@ public:
     void post_tick() {
         if (!paused()) ++frame_;
     }
-    // Per-frame (render-rate) update (vtable +0xb8); d = 0.03 per tick done this iteration, else 0.
-    virtual void per_frame_update(double d) { last_frame_delta_ = d; }
+    // [port] The per-frame (render-rate) update (vtable +0xb8; d = 0.03 per tick done this iteration, else 0) has no
+    // override in the port, so neither the hook nor its d is modelled (cu9 t15).
 
     // Mode-level sim state for the CRC (frames, counters, orders); stores are hashed separately.
     virtual void hash(StateHasher& h) const;
@@ -163,7 +163,6 @@ protected:
     uint64_t fow_updates_ = 0;
     bool paused_ = false;
     bool suspended_ = false;
-    double last_frame_delta_ = 0.0;
 };
 
 class GalacticMode final : public GameMode {
@@ -189,12 +188,11 @@ public:
     void pop_pause();
     // a1j t05: 0x4b2360 is also true while the story block holds (GalacticSim::paused(), A1_READINGS §31.7).
     bool paused() const override;
-    // Income: every income_interval mode frames (GALACTIC_ECONOMY.md fiscal cycle; S3 owns the
-    // amounts). Counted here so the cadence is in the CRC.
-    void set_income_interval(uint32_t frames) { income_interval_ = frames ? frames : 1; }
-    uint64_t income_events() const { return income_events_; }
 
 private:
+    // cu9 t14: the pre-S3 income stand-in's state. Nothing changes it any more (GalacticSim owns the fiscal cycle), but
+    // hash() and the "frame" save chunk still carry it: dropping it moves every galactic golden and the frame-chunk
+    // layout, so it goes with the next intended golden regeneration (roadmap follow-up).
     uint32_t income_interval_ = 1350;
     uint64_t next_income_frame_ = 0;
     uint64_t income_events_ = 0;

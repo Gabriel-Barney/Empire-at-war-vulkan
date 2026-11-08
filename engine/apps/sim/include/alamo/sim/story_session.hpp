@@ -524,7 +524,7 @@ public:
     void write_players(ByteWriter& w) const;
     bool read_players(ByteReader& r);
     // "story.presentation" (N1 stage 2): the lua::PresentationLog shared by the story VMs (open / finished blocks the
-    // VMs wait on, presentation state, undrained events); its write / read through write_if_saveable.
+    // VMs wait on, presentation state, undrained events); its write / read through write_system.
     void write_presentation(ByteWriter& w) const;
     bool read_presentation(ByteReader& r);
 

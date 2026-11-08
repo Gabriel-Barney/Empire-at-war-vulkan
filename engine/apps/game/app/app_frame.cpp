@@ -48,8 +48,8 @@ bool App::render_frame() {
     bool ok = true;
     draw_stats_ = {};
     const bool galactic = screen_ == Screen::Galactic && gview_.attached();
-    const bool battle = (screen_ == Screen::Battle || screen_ == Screen::BattleLoad || (screen_ == Screen::Menu && demo_session())) && bview_.active();
-    const int world_view = galactic ? 1 : battle ? 2 : 0;
+    const bool battle_view = (screen_ == Screen::Battle || screen_ == Screen::BattleLoad || (screen_ == Screen::Menu && demo_session())) && bview_.active();
+    const int world_view = galactic ? 1 : battle_view ? 2 : 0;
     if (world_view != world_view_) gpu_.renderer.reset_taa_history();
     world_view_ = world_view;
     apply_aa_options(gview_.ropt, video_profile_.anti_alias);  // the Anti-Aliasing list (t11)
@@ -77,7 +77,7 @@ bool App::render_frame() {
         gview_.use_scene(gpu_);
         ok = gpu_.renderer.render(*f, cmd, pt, ui::to_view_matrices(cp, w, h), gview_.main, render::DrawMode::Lit, gro, &draw_stats_,
                                   nullptr, gview_.background);
-    } else if (battle) {
+    } else if (battle_view) {
         // story t13: no selection circles while a linked battle's P11 input block holds (UI.md §1.3, flag 0x140a28c91).
         if (screen_ == Screen::Battle && !cinematic_hides_hud() && !linked_ui_.input_blocked())
             bview_.set_selection_blobs(ui_.tactical_hud.selection_blobs());  // last HUD build's circles (one frame behind)
@@ -132,7 +132,7 @@ bool App::render_frame() {
             shells = &ui_.galactic_shells;
             layout = &ui_.galactic_hud.layout();
         }
-    } else if (screen_ == Screen::Battle && battle && !cinematic_hides_hud()) {  // refixf t05: no HUD during the cinematic
+    } else if (screen_ == Screen::Battle && battle_view && !cinematic_hides_hud()) {  // refixf t05: no HUD during the cinematic
         build_tactical_hud();
         hud_list = ui_.tactical_hud.draw_list();
         canvas = &ui_.tactical_hud.canvas();
@@ -160,11 +160,11 @@ bool App::render_frame() {
     // Panels (hero roster, black market, sabotage, corruption, hack) on top of the HUD list; their shells draw at the
     // HUD's ShellModels step.
     std::vector<ui::HudDrawList> panel_lists;
-    const bool battle_hud = screen_ == Screen::Battle && battle && !cinematic_hides_hud();
+    const bool battle_hud = screen_ == Screen::Battle && battle_view && !cinematic_hides_hud();
     if (galactic || battle_hud) build_panels(panel_lists);
     for (const ui::HudDrawList& pl : panel_lists) merge_lists(hud_list, pl);
     if ((galactic || battle_hud) && !bench_active()) build_encyclopedia(hud_list, *canvas);  // BM2a: no tooltips
-    if (battle) draw_letterbox(dialogs, *canvas, w, h);  // refixf t05: cinematic letterbox, over the world, under the dialogs
+    if (battle_view) draw_letterbox(dialogs, *canvas, w, h);  // refixf t05: cinematic letterbox, over the world, under the dialogs
     // OI host: the attract demo world under the menu. GuiManager's backdrop paints an opaque black fill under the
     // MenuBack_overlay quad, which would hide the world: left out while the demo is drawn [port: until engine/ui draws the
     // overlay alone - stretched to the window, straight alpha - over a world, MAIN_MENU_BACKGROUND.md §6.4].
@@ -172,7 +172,7 @@ bool App::render_frame() {
     // 86 % transparent) stays over the demo for as long as the menu shows: one quad stretched to the window, straight
     // alpha, under the dialogs, without the backdrop's black fill.
     std::string backdrop;
-    if (battle && screen_ == Screen::Menu) {
+    if (battle_view && screen_ == Screen::Menu) {
         backdrop = ui_.gui.backdrop();
         ui_.gui.set_backdrop({});
         if (const ui::GuiImage img = ui_.gui.image(backdrop); img.valid) {
@@ -207,7 +207,7 @@ bool App::render_frame() {
         }
     }
     // Playtest QA D1: the end-of-battle hold ends in a fade to black over its last 2 s [port]
-    if (const sim::TacticalBattle* hb = session_ ? session_->battle() : nullptr; hb && hb->end_hold_active()) {
+    if (const sim::TacticalBattle* hb = battle(); hb && hb->end_hold_active()) {
         const float fade = 1.0f - std::min(static_cast<float>(hb->end_hold_frames_left()) / 60.0f, 1.0f);
         ui::HudQuad q;
         q.min = canvas->pixel_to_canvas(0.0f, static_cast<float>(h));

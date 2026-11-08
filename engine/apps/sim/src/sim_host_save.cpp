@@ -176,7 +176,7 @@ void SimHost::write_spatial(ByteWriter& w) const {
     for (uint32_t i = depth; i-- > 0;) {
         const auto* tm = dynamic_cast<const TacticalMode*>(&modes_.at(i));
         w.boolean(tm != nullptr);
-        if (tm) put_section(w, [tm](ByteWriter& sub) { write_if_saveable(tm->trees(), sub); });
+        if (tm) put_section(w, [tm](ByteWriter& sub) { write_system(tm->trees(), sub); });
     }
 }
 
@@ -187,7 +187,7 @@ bool SimHost::read_spatial(ByteReader& r) {
     for (uint32_t i = depth; i-- > 0;) {
         auto* tm = dynamic_cast<TacticalMode*>(&modes_.at(i));
         if (r.boolean() != (tm != nullptr) || !r.ok()) return false;
-        if (tm && !get_section(r, [tm](ByteReader& sub) { return read_if_saveable(tm->trees(), sub); })) return false;
+        if (tm && !get_section(r, [tm](ByteReader& sub) { return read_system(tm->trees(), sub); })) return false;
     }
     return r.ok() && r.done();
 }
@@ -594,7 +594,7 @@ bool SimHost::load(const SaveFile& in, std::string* err, LoadReport* report) {
                                                               std::to_string(in.tick);
     if (!rep.ok()) return finish(false);
     // The CRC log restarts at the loaded frame: the next tick first records the loaded state (tick_once).
-    recorder_ = std::make_unique<jobs::CrcRecorder>(*js_, registry_, cfg_.parallel_crc);
+    make_recorder();
     if (story_) story_->set_command_pipeline(pipeline_.get());
     return finish(true);
 }

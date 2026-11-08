@@ -33,7 +33,7 @@ std::vector<objects::ObjectHandle> App::special_units(const galactic::GalacticSi
 // SpecialAbility kind 1 (activate) at the selected planet by the g_special_ability row's hero (GalacticHud rows from
 // special_units); hero_id 0 = the first of them. False when none / refused.
 bool App::activate_special_here(uint32_t hero_id) {
-    const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr;
+    const galactic::GalacticSim* g = galaxy();
     if (!g) return false;
     const objects::ObjectStore& st = g->store();
     for (const objects::ObjectHandle h : special_units(*g, planet_index(*g, selected_planet_)))
@@ -310,7 +310,7 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
                 // A planet fleet button selects its fleet; the land-forces button names the planet: select the planet
                 // (no fleet selection).
                 bool planet = false;
-                if (const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr; g && a.ids.size() == 1)
+                if (const galactic::GalacticSim* g = galaxy(); g && a.ids.size() == 1)
                     for (const galactic::PlanetState& ps : g->planets())
                         if (g->store().alive(ps.object) && static_cast<uint32_t>(g->store().id(ps.object)) == a.ids.front()) planet = true;
                 if (planet) {
@@ -330,7 +330,7 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
             case ui::HudAction::Kind::PlanetInfo: {  // GALACTIC_DIALOGS §9: the organiser's planet_info button -> IDD_PLANET_INFO
                 // Single instance: a click while it is open does nothing (the first planet is kept). No pause, no §6.3 gates.
                 if (screens_.planet_info_open()) break;
-                const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr;
+                const galactic::GalacticSim* g = galaxy();
                 const PlanetIndex row = g ? planet_index(*g, a.unit) : kInvalidPlanet;
                 if (row == kInvalidPlanet) break;
                 ui::PlanetInfoData d = planet_info_data(*g, row);
@@ -375,7 +375,7 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
             }
             case ui::HudAction::Kind::HeroFocusPlanet:  // §2.2 galactic single click: centre on the hero's planet, select it
             case ui::HudAction::Kind::HeroZoomPlanet: {  // §2.2 double click: zoom in (state 0 / 2) / out (1 / 3)
-                const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr;
+                const galactic::GalacticSim* g = galaxy();
                 if (!g || screen_ != Screen::Galactic || a.ids.empty() || story_controls_locked()) break;
                 const PlanetIndex pi = planet_index(*g, a.ids.front());
                 if (pi == kInvalidPlanet) break;

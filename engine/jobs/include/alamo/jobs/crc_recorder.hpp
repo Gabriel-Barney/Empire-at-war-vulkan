@@ -94,4 +94,21 @@ WorkerCountReport check_worker_counts(Run&& run, const std::vector<int32_t>& cou
     return rep;
 }
 
+// The same check for runs whose result is more than a CrcLog (cu9 t18: alamo_headless's --check-workers modes, which
+// also compare their own logs / text). `first` is the first count's result, run by the caller (it may print or fail on
+// its own); `run(workers)` returns a result of the same type for every further count, `log_of(result)` its CrcLog, and
+// `report(workers, result, divergence)` prints what the caller wants and returns whether the extra data matches `first`
+// (the divergence is the CRC log's against first's). True when every further count matched (CRC and extra data).
+template <class Result, class Run, class LogOf, class Report>
+bool check_worker_counts(const Result& first, Run&& run, LogOf&& log_of, Report&& report,
+                         const std::vector<int32_t>& counts = determinism_worker_counts()) {
+    bool ok = true;
+    for (size_t i = 1; i < counts.size(); ++i) {
+        const Result r = run(counts[i]);
+        const CrcDivergence d = first_divergence(log_of(first), log_of(r));
+        if (!report(counts[i], r, d) || d.diverged) ok = false;
+    }
+    return ok;
+}
+
 }  // namespace alamo::jobs

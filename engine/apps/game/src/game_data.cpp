@@ -88,7 +88,6 @@ bool load_game_data(const std::string& root, const std::vector<std::string>& arg
     if (!v) return false;
     out.root = root;
     out.args = args;
-    out.mod_layer = !v->mod_dirs().empty();
     out.vfs = v.get();
     out.files = std::move(v);
     if (!load_common(out, err)) return false;
@@ -133,10 +132,6 @@ bool load_game_data_dir(const std::string& dir, GameData& out, std::string* err)
     out.vfs = nullptr;
     out.files = std::make_unique<DirectoryProvider>(dir);
     return load_common(out, err);
-}
-
-std::vector<std::string> data_fallback_forces(const GameData& data, const std::string& faction, bool land) {
-    return game::data_fallback_forces(data.rules, data.types, faction, land);
 }
 
 namespace {

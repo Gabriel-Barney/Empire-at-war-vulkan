@@ -23,7 +23,7 @@
 #include "alamo/lua/script_save.hpp"       // q6 t19: story.lua v4 script blocks
 #include "alamo/lua/story_model.hpp"
 #include "alamo/objects/game_object_types.hpp"
-#include "alamo/sim/save_session.hpp"  // N1: write_if_saveable
+#include "alamo/sim/save_session.hpp"  // N1: write_system
 #if defined(ALAMO_LUA_PLAYERS)
 #include "alamo/lua/players.hpp"
 #endif
@@ -2222,7 +2222,7 @@ void StorySession::write(ByteWriter& w) const {
         w.boolean(p.has_position).f64(p.x).f64(p.y).f64(p.z);
     }
     w.boolean(t.own_bridge != nullptr);
-    if (t.own_bridge) put_section(w, [&t](ByteWriter& sub) { write_if_saveable(*t.own_bridge, sub); });
+    if (t.own_bridge) put_section(w, [&t](ByteWriter& sub) { write_system(*t.own_bridge, sub); });
 }
 
 bool StorySession::read(ByteReader& r) {
@@ -2394,7 +2394,7 @@ bool StorySession::read(ByteReader& r) {
     }
     if (tactical_ && has_own) {  // read in place: the tactical VMs hold this bridge
         ByteReader br(own_bridge);
-        if (!read_if_saveable(*tactical_->own_bridge, br) || !br.done()) return false;
+        if (!read_system(*tactical_->own_bridge, br) || !br.done()) return false;
     }
     if (tactical_) {
         tactical_->start_frame = tac_start;
@@ -2535,14 +2535,13 @@ bool StorySession::read_scripts(ByteReader& r) {
     return true;
 }
 
-// The shared families: through their own write / read once engine/lua has them (save_session.hpp
-// write_if_saveable); until then "pending" (nothing written, read false).
-void StorySession::write_bridge(ByteWriter& w) const { write_if_saveable(lua_->bridge, w); }
-bool StorySession::read_bridge(ByteReader& r) { return read_if_saveable(lua_->bridge, r); }
+// The shared families: through their own write / read (save_session.hpp write_system / read_system).
+void StorySession::write_bridge(ByteWriter& w) const { write_system(lua_->bridge, w); }
+bool StorySession::read_bridge(ByteReader& r) { return read_system(lua_->bridge, r); }
 
 void StorySession::write_players(ByteWriter& w) const {
 #if defined(ALAMO_LUA_PLAYERS)
-    write_if_saveable(lua_->players, w);
+    write_system(lua_->players, w);
 #else
     (void)w;  // no players family: nothing to save
 #endif
@@ -2550,13 +2549,13 @@ void StorySession::write_players(ByteWriter& w) const {
 
 bool StorySession::read_players(ByteReader& r) {
 #if defined(ALAMO_LUA_PLAYERS)
-    return read_if_saveable(lua_->players, r);
+    return read_system(lua_->players, r);
 #else
     return r.done();
 #endif
 }
 
-void StorySession::write_presentation(ByteWriter& w) const { write_if_saveable(lua_->presentation, w); }  // N1 stage 2
-bool StorySession::read_presentation(ByteReader& r) { return read_if_saveable(lua_->presentation, r); }
+void StorySession::write_presentation(ByteWriter& w) const { write_system(lua_->presentation, w); }  // N1 stage 2
+bool StorySession::read_presentation(ByteReader& r) { return read_system(lua_->presentation, r); }
 
 }  // namespace alamo::sim

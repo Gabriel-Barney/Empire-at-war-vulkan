@@ -73,8 +73,7 @@ struct GameData {
     std::map<std::string, std::string> basic_ai;
     // q6 t08: Faction Space_ / Land_Skirmish_AI_Default_Forces (SKIRMISH_SETUP §2 step 4) as written, per upper-case faction
     // name (FactionFiles.xml order; the last definition with a list wins, as alamo_headless's skirmish host).
-    using SkirmishForces = game::SkirmishForces;  // skirmish_rules.hpp load_skirmish_forces
-    SkirmishForceTable skirmish_forces;
+    SkirmishForceTable skirmish_forces;  // skirmish_rules.hpp load_skirmish_forces
     std::vector<std::string> diagnostics;
     // Q5: one record per loader step, in load order; the step's diagnostics are diagnostics[first_diag, + diag_count).
     // ms is wall clock (reports only, never read by the sim).
@@ -86,10 +85,6 @@ struct GameData {
     };
     std::vector<LoadStage> stages;
     std::vector<std::string> args;  // N1 / t09: the VFS command line the data was loaded with (save descriptors)
-    // modc t03: a MODPATH= / STEAMMOD= layer is mounted (Vfs::mod_dirs non-empty), for the [port] rules that apply only
-    // to mods (docs/MODS.md §6). Synthetic data: false (tests set it to stand for a mod). modc t17: the skirmish forces and
-    // the campaign AI types no longer read it.
-    bool mod_layer = false;
     // N1 / t09: sim::fingerprint_types of `types`, computed on first use (saves / loads only; one process-wide cache).
     uint64_t types_fingerprint() const;
 
@@ -147,12 +142,6 @@ SkirmishSetup resolve_skirmish_factions(const galactic::GalacticRules& rules, Sk
 //                                     put in front. Retail places these squadrons directly at the map's spawn markers.
 std::vector<std::string> default_skirmish_fleet(const GameData& data, const std::string& faction);
 std::vector<std::string> default_skirmish_ground(const GameData& data, const std::string& faction);
-// q6 t08 [port] (no RE rule: retail places nothing without a default force list): the faction's buildable units of one
-// mode - land: GroundUnit types, space: hyperspace SpaceUnit types with Max_Speed > 0 (no stations) - with
-// Build_Cost_Credits > 0, Tech_Level >= 1, Affiliation naming the faction, no Required_Planets, no build limit of 0, not a
-// hero, not cinematic-only, not a company / squadron member and not Build_Initially_Locked; ordered by (build cost, name).
-// Returns the two cheapest and the median one (distinct, in that order), fewer when there are fewer.
-std::vector<std::string> data_fallback_forces(const GameData& data, const std::string& faction, bool land);
 inline constexpr PlanetIndex kSkirmishHumanPlanet = 2, kSkirmishBattlePlanet = 1;
 
 // Space skirmish maps of the data (Data\Art\Maps\_MP_SPACE_*.ted through the VFS), sorted by name (modc t19: no map

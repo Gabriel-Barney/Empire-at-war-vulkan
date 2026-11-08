@@ -701,6 +701,13 @@ public:
     bool reticle_orders(const ui::OrderContext& ctx, std::vector<commands::EventData>& cmds);
     bool present_settled() const;
     int32_t local_player() const { return session_ ? session_->local_player() : 0; }
+    // cu9 t11: the session's galaxy / running tactical battle, nullptr without a session.
+    const galactic::GalacticSim* galaxy() const { return session_ ? session_->galaxy() : nullptr; }
+    const sim::TacticalBattle* battle() const { return session_ ? session_->battle() : nullptr; }
+    // cu9 t08: the HUD icon of type `t` ("" when out of range), and the battle-end dialog's loss rows (owner -> type -> count;
+    // `me`'s rows to your_losses, every other owner's to enemy_losses), shared by the tactical and auto-resolve ends.
+    std::string type_icon(size_t t) const { return t < ui_.hud_types.size() ? ui_.hud_types[t].icon_name : std::string(); }
+    void add_loss_rows(ui::BattleEndInfo& info, const game::BattleLosses& lost, int32_t me) const;
     std::string local_faction() const;
     bool crc_check();
     void make_script();

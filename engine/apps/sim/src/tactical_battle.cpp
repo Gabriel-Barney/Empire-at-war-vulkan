@@ -470,12 +470,9 @@ TacticalBattle::~TacticalBattle() = default;
 
 void TacticalBattle::tables_extend() {
     // OPT3 t09: setup appends types several times; each step builds only the new ones (BattleCatalog::extend_battle) instead
-    // of rebuilding every type from the start. Same tables and descriptor indices either way.
-    if (tables_build_) {
-        catalog_->extend_battle(*tables_build_, types_used_, descs_);
-        return;
-    }
-    tables_ = std::make_unique<BattleTables>(catalog_->build_battle(types_used_, descs_, space_));
+    // of rebuilding every type from the start. Same tables and descriptor indices either way. cu9 t12: the constructor
+    // always makes the build and keeps it for the battle's life, so there is no full-rebuild fallback.
+    catalog_->extend_battle(*tables_build_, types_used_, descs_);
 }
 
 // N1 stage 2 (tactical_battle_save.cpp): after a load, the combat hooks get the tick context of the saving run's last
@@ -651,7 +648,7 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
         mode.primary().set_interval_config(ic);
     }
     // --- end OI objects ---
-    if (tables_build_) tables_build_->pf = pf;  // OPT3 t09
+    tables_build_->pf = pf;  // OPT3 t09
     bt_rng_ = &rng;            // battle host: pad objects join the battle with their add_unit draws
     bt_players_ = players;
     bt_map_prepass();          // REMAINING_GAPS §3.1: base-level filter + branched-map discard; map types -> tables
@@ -3923,7 +3920,7 @@ void TacticalBattle::drive_animation(objects::ObjectStore& store, SimRng& rng, u
 
 void TacticalBattle::spawn_particle(TacticalMode& mode, int32_t type, Vec3 pos, int32_t owner) {
     // R4 B.1 layer 1: a PARTICLE GameObject (consumes an id), removed at frame + Particle_Lifetime_Frames.
-    if (!cfg_.particles || type < 0 || static_cast<size_t>(type) >= catalog_->types().size()) return;
+    if (type < 0 || static_cast<size_t>(type) >= catalog_->types().size()) return;
     objects::SpawnParams sp;
     sp.type = static_cast<objects::TypeIndex>(type);
     sp.owner = owner;

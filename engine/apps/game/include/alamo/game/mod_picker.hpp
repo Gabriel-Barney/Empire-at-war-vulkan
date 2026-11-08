@@ -13,6 +13,7 @@
 //                         only on its command line)
 // No faction or mod name is known here (docs/MODS.md §1).
 #pragma once
+#include <filesystem>
 #include <span>
 #include <string>
 #include <string_view>
@@ -29,6 +30,13 @@ struct InstalledMod {
     std::string name;       // modinfo.json "name" (UTF-8), else `id`
     std::string arg;        // "STEAMMOD=<id>" or "MODPATH=Mods\<id>"
 };
+
+// Sub-folders of `dir` that have a Data folder, by name (byte order); `digits_only`: workshop item folders only. An entry
+// that cannot be read is skipped and the scan goes on. Shared by list_installed_mods and the load report's submod search
+// (cu9 t03).
+std::vector<std::filesystem::path> mod_folders(const std::filesystem::path& dir, bool digits_only);
+// <library>\steamapps\workshop\content\<FoC app id>: where a Steam library keeps its FoC workshop items.
+std::filesystem::path workshop_content_dir(std::string_view library);
 
 // See the file comment. Order: workshop items by id, then Mods folders by name (byte order), each id once.
 std::vector<InstalledMod> list_installed_mods(const std::string& game, std::span<const std::string> workshop_libraries);

@@ -40,11 +40,12 @@ ScriptStep step_wait(std::string name, std::function<bool(App&)> cond, uint32_t 
     return {std::move(name), [cond = std::move(cond)](App& a, ui::InputFrame&) { return cond(a); }, timeout};
 }
 
-ScriptStep step_click_control(std::string dialog, std::string control) {
+// Clicks a control of `dialog` once it is the top dialog: at its centre, or (`first_row`) 6 px above its bottom edge in
+// canvas units, the first row of a list (the skirmish staging game type list: row 0 = Land). cu9 t07: one body for both.
+ScriptStep step_click_in(std::string name, std::string dialog, std::string control, bool first_row) {
     auto st = std::make_shared<ClickState>();
-    std::string name = "click " + dialog + "/" + control;
     auto px = std::make_shared<std::pair<int32_t, int32_t>>(0, 0);
-    return {name, [st, px, dialog, control](App& a, ui::InputFrame& f) {
+    return {std::move(name), [st, px, dialog, control, first_row](App& a, ui::InputFrame& f) {
                 if (st->phase > 0) return click_at(*st, f, px->first, px->second, ui::Button::Left);  // the dialog may close on release
                 ui::GuiDialog* d = a.ui_.gui.find(dialog);
                 if (!d || d != a.ui_.gui.top()) return false;  // wait for the dialog
@@ -55,33 +56,22 @@ ScriptStep step_click_control(std::string dialog, std::string control) {
                     return true;
                 }
                 const ui::GuiRect r = d->control_rect(static_cast<size_t>(i));
-                const ui::Vec2f p = a.ui_.gui.canvas().canvas_to_pixel(0.5f * (r.min.x + r.max.x), 0.5f * (r.min.y + r.max.y));
+                const float y = first_row ? r.max.y - 6.0f : 0.5f * (r.min.y + r.max.y);
+                const ui::Vec2f p = a.ui_.gui.canvas().canvas_to_pixel(0.5f * (r.min.x + r.max.x), y);
                 *px = {static_cast<int32_t>(p.x), static_cast<int32_t>(p.y)};
                 return click_at(*st, f, px->first, px->second, ui::Button::Left);
             },
             600};
 }
 
-// Clicks the first row of a list (the skirmish staging game type list: row 0 = Land).
+ScriptStep step_click_control(std::string dialog, std::string control) {
+    std::string name = "click " + dialog + "/" + control;
+    return step_click_in(std::move(name), std::move(dialog), std::move(control), false);
+}
+
 ScriptStep step_click_first_row(std::string dialog, std::string control) {
-    auto st = std::make_shared<ClickState>();
-    auto px = std::make_shared<std::pair<int32_t, int32_t>>(0, 0);
-    return {"click first row of " + dialog + "/" + control, [st, px, dialog, control](App& a, ui::InputFrame& f) {
-                if (st->phase > 0) return click_at(*st, f, px->first, px->second, ui::Button::Left);
-                ui::GuiDialog* d = a.ui_.gui.find(dialog);
-                if (!d || d != a.ui_.gui.top()) return false;
-                const int32_t i = d->find(control);
-                if (i < 0) {
-                    std::fprintf(stderr, "script: %s has no %s\n", dialog.c_str(), control.c_str());
-                    a.script_failed_ = true;
-                    return true;
-                }
-                const ui::GuiRect r = d->control_rect(static_cast<size_t>(i));
-                const ui::Vec2f p = a.ui_.gui.canvas().canvas_to_pixel(0.5f * (r.min.x + r.max.x), r.max.y - 6.0f);
-                *px = {static_cast<int32_t>(p.x), static_cast<int32_t>(p.y)};
-                return click_at(*st, f, px->first, px->second, ui::Button::Left);
-            },
-            600};
+    std::string name = "click first row of " + dialog + "/" + control;
+    return step_click_in(std::move(name), std::move(dialog), std::move(control), true);
 }
 
 // Selects list row `row` like a player: click the first row (selects + focuses the list), then Down until it is reached.

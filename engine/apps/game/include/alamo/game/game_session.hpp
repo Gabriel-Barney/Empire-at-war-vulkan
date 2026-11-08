@@ -200,6 +200,10 @@ public:
     // is being auto-resolved (ConflictManager AutoRunning), `conflict` its head.
     bool battle_choice_pending() const;
     const galactic::ConflictInfo* conflict_head() const;
+    // The local player is the head conflict's attacker or defender: battle_choice_pending and auto_resolving add the
+    // conflict state; on its own it is the Withdraw enable rule (cu9 t04: was can_withdraw; no Withdraw button yet, the
+    // dialog is multiplayer-only in retail).
+    bool local_in_head_conflict() const;
     bool choose_battle(galactic::BattleChoice choice);
     // GALACTIC_DIALOGS §1.4: the story lock (DISABLE / RESTRICT_AUTORESOLVE, StorySession::autoresolve_locked) forbids
     // auto-resolving a battle at `planet`: the prompt offers Begin only. False without a running story.
@@ -214,10 +218,9 @@ public:
     // P4 host requests (commands; true when submitted). Their results come at the command phase (port_event):
     // withdraw = Withdrawl 49 -> ConflictManager::set_retreating(issuer), result ignored (P4_SIM_SYSTEMS §9.2);
     // auto_resolve_battle = the tactical IDC_AUTORESOLVE -> CampaignBattles::auto_resolve_battle(issuer) (§9.3).
-    // can_withdraw: the Withdraw enable rule (the local player is the head conflict's attacker or defender).
+    // Withdraw's enable rule is local_in_head_conflict.
     bool withdraw();
     bool auto_resolve_battle();
-    bool can_withdraw() const;
     const PortEventStats& port_stats() const { return port_stats_; }
     // L1/S4 wave 1: a local UI notification for the story (story_ui.hpp) as a command; GameSession::port_event hands it
     // to StorySession::notify_ui with the issuing player at the command phase. False without a story session or when
@@ -258,7 +261,6 @@ public:
     // the shot runs). Pacing only (30 ticks/s, wins over fast mode): [port] the parity options stay with the story lock,
     // because the shot is presentation (input can skip it) and must not reach a CRC.
     void set_presentation_rate_lock(bool on);
-    bool presentation_rate_lock() const { return pres_lock_; }
     // OI host: single-player fast mode (the HUD's b_fast_forward / b_fast_forward_t; MAIN_LOOP.md §1.5: 120 ticks/s,
     // the cinematic lock wins). Wall-clock pacing only (FrameSynchronizer::set_fast), mirrored into the Lua presentation
     // state (PresentationLog::set_fast_forward); Lua Cancel_Fast_Forward ends it at the next tick; a pause / resume

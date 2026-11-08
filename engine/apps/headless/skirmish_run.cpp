@@ -1030,13 +1030,19 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     if (!ai_log.empty()) std::ofstream(fs::path(ai_log), std::ios::binary) << log_text;
     bool good = true;
     if (opt.check_workers)
-        for (size_t i = 1; i < counts.size(); ++i) {
-            Out other;
-            run_one(counts[i], other);
-            const auto dv = first_divergence(first.crc, other.crc);
-            std::printf("  workers %d vs %d: %s\n", counts.front(), counts[i], dv.message.c_str());
-            if (dv.diverged) good = false;
-        }
+        good = jobs::check_worker_counts(
+            first,
+            [&](int32_t w) {
+                Out other;
+                run_one(w, other);
+                return other;
+            },
+            [](const Out& o) -> const CrcLog& { return o.crc; },
+            [&](int32_t w, const Out&, const CrcDivergence& dv) {
+                std::printf("  workers %d vs %d: %s\n", counts.front(), w, dv.message.c_str());
+                return true;
+            },
+            counts);
     // t48: shipped scripts against the port: a Lua error here is a port bug until shown otherwise. a1j t07: any kind with
     // --fail-on-lua-errors.
     if ((kind == "foc-station" || opt.fail_on_lua_errors) && first.lua_errors != 0) {

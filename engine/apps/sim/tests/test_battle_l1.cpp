@@ -529,6 +529,8 @@ struct LandRun {
     bool fought = false, weather_on = false, weather_advanced = false, forced = false, rain_sight = false;
     bool bombard_started = false, bombard_hit = false, bombard_reset = false;
     bool run_started = false, bombers_flew = false, run_done = false, refused_unavailable = false;
+    // cu9 t17: the HUD cooldown query (bombing_run_frames_until_available, 0x4950f0) when the run starts / ends.
+    uint32_t run_wait_at_start = 1, run_wait_after = 0;
 };
 
 LandRun run_land(const Data& d, int32_t workers) {
@@ -630,10 +632,14 @@ LandRun run_land(const Data& d, int32_t workers) {
         if (out.bombard_hit && !out.bombard_reset && !b->bombardment_available(1) && bombard_end_ready == 0) bombard_end_ready = f;
         if (out.bombard_hit && b->bombardment_available(1) && f > 120) out.bombard_reset = true;
         if (!out.run_started && out.bombard_hit && b->bombing_run_available(1)) {
+            out.run_wait_at_start = b->bombing_run_frames_until_available(1);
             out.run_started = b->start_bombing_run(*tm, 1, target);
         }
         if (out.run_started && !b->bombing_run_finished(1)) out.bombers_flew = true;
-        if (out.bombers_flew && b->bombing_run_finished(1)) out.run_done = true;
+        if (out.bombers_flew && !out.run_done && b->bombing_run_finished(1)) {
+            out.run_done = true;
+            out.run_wait_after = b->bombing_run_frames_until_available(1);
+        }
         trace.u32(f);
         trace.u32(b->weather().phase_index());
         trace.f32(b->weather().intensity());
@@ -712,6 +718,9 @@ void test_land(const Data& d) {
     CHECK(a.fought && a.weather_on && a.weather_advanced && a.forced && a.rain_sight);
     CHECK(a.refused_unavailable && a.bombard_started && a.bombard_hit && a.bombard_reset);
     CHECK(a.run_started && a.bombers_flew && a.run_done);
+    // Available = no wait; a finished run waits its interval again (ready := end frame + interval).
+    std::printf("  bombing run wait: %u at start, %u after the run\n", a.run_wait_at_start, a.run_wait_after);
+    CHECK(a.run_wait_at_start == 0 && a.run_wait_after > 0);
     const LandRun w = run_land(d, 4);
     CHECK(!first_divergence(a.crc, w.crc).diverged && a.trace == w.trace);
 }

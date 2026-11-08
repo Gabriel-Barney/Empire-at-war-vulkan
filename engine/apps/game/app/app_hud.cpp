@@ -45,7 +45,7 @@ ui::Rgba8 App::faction_rgba(const galactic::GalacticSim& g, int32_t player, bool
 // lowest Ranking_In_Category wins. [port] the hero filter state is not fed to the host yet (off); transports'
 // cargo is already in the fleet contents.
 std::string App::representative_icon(std::span<const objects::ObjectHandle> units, bool hero_filter) const {
-    const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr;
+    const galactic::GalacticSim* g = galaxy();
     if (!g) return {};
     const objects::ObjectStore& st = g->store();
     objects::TypeIndex best = objects::kNone, hero = objects::kNone;
@@ -76,7 +76,7 @@ std::string App::representative_icon(std::span<const objects::ObjectHandle> unit
 void App::planet_icons(const galactic::GalacticSim& g, PlanetIndex row, ui::GalacticPlanetInfo& out) const {
     const objects::ObjectStore& st = g.store();
     const galactic::PlanetState& ps = g.planets()[row];
-    auto icon = [this](objects::TypeIndex t) { return t < ui_.hud_types.size() ? ui_.hud_types[t].icon_name : std::string(); };
+    auto icon = [this](objects::TypeIndex t) { return type_icon(t); };
     auto is_hero = [this](objects::TypeIndex t) { return t < ui_.hud_types.size() && ui_.hud_types[t].is_hero; };
     // GRC 2 / REMAINING_GAPS §6.3 (can_see_planet_info for the local player): other players' forces show only as far as
     // the planet's visibility allows - fleet stacks with FleetPresence (one stack per owner unless NumFleets), their
@@ -341,7 +341,7 @@ void App::end_load_intro_frame() {
 
 void App::build_galactic_hud(ui::GalacticHudFrame& f, std::vector<ui::GalacticPlanetInfo>& planets) {
     const uint32_t w = targets_.width, h = targets_.height;
-    const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr;
+    const galactic::GalacticSim* g = galaxy();
     f.view = ui::make_view(gview_.camera_params(w, h), w, h);
     planets.clear();
     for (const render::GalacticPlanetSnap& p : gview_.frame().planets) {
@@ -578,7 +578,7 @@ void App::build_galactic_hud(ui::GalacticHudFrame& f, std::vector<ui::GalacticPl
     };
     // OI host: g_special_ability rows = the local player's Ground_Activated special-ability units at the planet.
     f.providers.special_abilities = [this](uint32_t planet, std::vector<ui::GalacticSpecialAbility>& out) {
-        const galactic::GalacticSim* gs = session_ ? session_->galaxy() : nullptr;
+        const galactic::GalacticSim* gs = galaxy();
         if (!gs) return;
         const objects::ObjectStore& st = gs->store();
         for (const objects::ObjectHandle h : special_units(*gs, planet_index(*gs, planet))) {
@@ -600,7 +600,7 @@ void App::build_tactical_hud() {
     hf.world.land = !bview_.space();
     hf.world.local_player = local_player();
     // UI.md selection circle: the owner faction's Land_ / Space_Mode_Selection_Blob_Material_Name (modc t20: by data).
-    if (const galactic::GalacticSim* gs = session_ ? session_->galaxy() : nullptr)
+    if (const galactic::GalacticSim* gs = galaxy())
         hf.world.selection_material = [gs](int32_t owner, bool land, bool) {
             if (owner < 0 || static_cast<size_t>(owner) >= gs->players().size()) return std::string();
             const uint32_t f = gs->players()[static_cast<size_t>(owner)].faction;
@@ -614,7 +614,7 @@ void App::build_tactical_hud() {
         hf.map_max_x = tm->bounds().max.x;
         hf.map_max_y = tm->bounds().max.y;
     }
-    if (const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr) {
+    if (const galactic::GalacticSim* g = galaxy()) {
         hf.credits = static_cast<int64_t>(g->credits(local_player()));
         // ui ask 7: the battle's planet, tech level and population (used / space unit cap).
         hf.tech = g->players()[static_cast<size_t>(local_player())].tech_level;
@@ -654,7 +654,7 @@ void App::build_tactical_hud() {
     // ui asks 3 / 4: the bracket radius from the model's bounding sphere x scale; one unit icon per squadron / unit.
     ui::hud_units_from_frame(bview_.frame(), sel, {}, 0, [this](objects::TypeIndex t) { return bview_.type_radius(t); }, units);
     tactical_hover(hf, units);
-    if (const sim::TacticalBattle* b = session_ ? session_->battle() : nullptr) {
+    if (const sim::TacticalBattle* b = battle()) {
         std::vector<ui::UnitIconLink> icons;  // QA U7: one marker per squadron, at its centre
         for (const sim::TacticalBattle::IconLink& l : b->icon_links())
             icons.push_back({static_cast<uint32_t>(l.unit), static_cast<uint32_t>(l.squad)});
@@ -674,7 +674,7 @@ void App::build_tactical_hud() {
         const auto it = std::lower_bound(objs.begin(), objs.end(), id, [](const render::SnapshotObject& x, objects::ObjectId v) { return x.id < v; });
         return it != objs.end() && it->id == id ? &*it : nullptr;
     };
-    if (const sim::TacticalBattle* b = session_ ? session_->battle() : nullptr)
+    if (const sim::TacticalBattle* b = battle())
         for (const uint32_t id : sel) {
             const auto q = b->queued_orders(static_cast<objects::ObjectId>(id));
             const render::SnapshotObject* o = obj_of(static_cast<objects::ObjectId>(id));
@@ -706,7 +706,7 @@ void App::build_tactical_hud() {
     // [port] A plain move draws no line (playtest video R1: with a whole fleet selected, one 3 px dotted line per fighter
     // covered the battle and read as laser fire); the original's waypoint line belongs to the Alt-queued path (UI.md 1.5).
     waypoints_.clear();
-    if (const sim::TacticalBattle* b = session_ ? session_->battle() : nullptr)
+    if (const sim::TacticalBattle* b = battle())
         for (const uint32_t id : sel) {
             const auto oid = static_cast<objects::ObjectId>(id);
             const render::SnapshotObject* o = obj_of(oid);
@@ -745,7 +745,7 @@ void App::build_tactical_hud() {
     // screen centre, where they took the right clicks meant for the world (Thrawn's Revenge land smoke: a select-all
     // holding the Rebel barracks, the camera on an enemy). A builder in front of the camera is drawn as before.
     build_opts_.clear();
-    if (const sim::TacticalBattle* b = session_ ? session_->battle() : nullptr; b && tm && b->production_enabled()) {
+    if (const sim::TacticalBattle* b = battle(); b && tm && b->production_enabled()) {
         const objects::ObjectStore& st = tm->primary();
         for (const uint32_t id : orders_.selection()) {
             if (id > 0x7FFFFFFFu) continue;
@@ -796,7 +796,7 @@ void App::build_tactical_hud() {
     };
 #ifdef ALAMO_UI_HAVE_ABILITIES
     // Command bar ability buttons (special_button_NN) of the selection: S9 read-only queries between ticks.
-    if (const sim::TacticalBattle* b = session_ ? session_->battle() : nullptr)
+    if (const sim::TacticalBattle* b = battle())
         hf.providers.abilities = ui::s9_ability_provider(b->abilities(), [b] { return b->frame(); });
 #endif
     hf.hardpoints = hud_hardpoints_;
@@ -805,7 +805,7 @@ void App::build_tactical_hud() {
     // HUD_GAPS §5: order buttons from the local player's own selected units; story / Lua Lock_Controls disables all.
     {
         std::vector<OrderUnitState> st;
-        const sim::TacticalBattle* b = session_ ? session_->battle() : nullptr;
+        const sim::TacticalBattle* b = battle();
         for (const uint32_t id : sel) {
             const render::SnapshotObject* o = obj_of(static_cast<objects::ObjectId>(id));
             if (!o) continue;
@@ -867,7 +867,7 @@ void App::tactical_hover(ui::TacticalHudFrame& hf, std::vector<ui::HudUnit>& uni
     for (ui::HudUnit& u : units) u.hovered = hover != 0 && u.id == hover;
     hud_hardpoints_.clear();
     hud_hp_refs_.clear();
-    const sim::TacticalBattle* b = session_ ? session_->battle() : nullptr;
+    const sim::TacticalBattle* b = battle();
     if (!b || hover == 0 || !bview_.space()) return;
     const tactical::combat::CombatSystem& cs = b->combat();
     const auto id = static_cast<tactical::combat::ObjectId>(hover);
@@ -964,7 +964,7 @@ bool App::reticle_orders(const ui::OrderContext& ctx, std::vector<commands::Even
 
 // HUD_GAPS §1.4: OR of CombatSystem::can_repair_hardpoints over the local player's selected units.
 bool App::selection_can_repair() const {
-    const sim::TacticalBattle* b = session_ ? session_->battle() : nullptr;
+    const sim::TacticalBattle* b = battle();
     if (!b) return false;
     for (const uint32_t u : orders_.selection()) {
         const auto uid = static_cast<tactical::combat::ObjectId>(u);

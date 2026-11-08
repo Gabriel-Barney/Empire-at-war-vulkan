@@ -373,8 +373,8 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
             // N1 / t09: the galactic AI's chunk, as alamo_headless save_run registers it.
             sim::SaveParticipant ai_part;
             ai_part.name = "ai";
-            ai_part.write = [w](ByteWriter& bw) { sim::write_if_saveable(*w, bw); };
-            ai_part.read = [w](ByteReader& br) { return sim::read_if_saveable(*w, br); };
+            ai_part.write = [w](ByteWriter& bw) { sim::write_system(*w, bw); };
+            ai_part.read = [w](ByteReader& br) { return sim::read_system(*w, br); };
             host_->add_save_participant(std::move(ai_part));
         }
     }
@@ -494,10 +494,14 @@ const galactic::ConflictInfo* GameSession::conflict_head() const {
     return nullptr;
 }
 
-bool GameSession::battle_choice_pending() const {
-    if (!battles_ || battles_->conflicts().state() != galactic::ConflictState::Vote || choice_sent_) return false;
+bool GameSession::local_in_head_conflict() const {
     const galactic::ConflictInfo* c = conflict_head();
     return c && (c->attacker == local_player_ || c->defender == local_player_);
+}
+
+bool GameSession::battle_choice_pending() const {
+    if (!battles_ || battles_->conflicts().state() != galactic::ConflictState::Vote || choice_sent_) return false;
+    return local_in_head_conflict();
 }
 
 bool GameSession::choose_battle(galactic::BattleChoice choice) {
@@ -531,8 +535,7 @@ bool GameSession::autoresolve_locked(PlanetIndex planet) const {
 
 bool GameSession::auto_resolving() const {
     if (!battles_ || battles_->conflicts().state() != galactic::ConflictState::AutoRunning) return false;
-    const galactic::ConflictInfo* c = conflict_head();
-    return c && (c->attacker == local_player_ || c->defender == local_player_);
+    return local_in_head_conflict();
 }
 
 // --- P4 host: Withdraw (retail's multiplayer-only auto-resolve dialog; no UI caller in the port) and the retreat
@@ -548,11 +551,6 @@ bool GameSession::auto_resolve_battle() { return host_ && submit(tactical_auto_r
 // L1/S4 wave 1: story UI notification through the command stream (port_event applies it).
 bool GameSession::notify_story_ui(const sim::StoryUiNotification& n) {
     return host_ && host_->story() && submit(story_ui_event(n)).ok();
-}
-
-bool GameSession::can_withdraw() const {
-    const galactic::ConflictInfo* c = conflict_head();
-    return c && (c->attacker == local_player_ || c->defender == local_player_);
 }
 
 // --- P4 host: galactic special abilities (SpecialAbility 13) and their dialogs ---
@@ -997,8 +995,8 @@ std::string GameSession::check_save() {
     if (!host_->save(f, &err)) {
         why = err.empty() ? std::string("the save failed") : err;
     } else {
-        // save_file.hpp contract: every real chunk starts with its u32 version, so an empty chunk is a system whose
-        // save has not landed (write_if_saveable wrote nothing): its read fails, the save could not be loaded.
+        // save_file.hpp contract: every real chunk starts with its u32 version, so an empty chunk is a participant that
+        // wrote nothing (a host-added SaveParticipant with an empty writer): its read fails, the save could not be loaded.
         for (const SaveChunk& c : f.chunks())
             if (c.data.empty()) {
                 why = c.name + ": pending (this system cannot be saved yet)";

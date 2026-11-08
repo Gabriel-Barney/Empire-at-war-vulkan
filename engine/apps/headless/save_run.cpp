@@ -698,8 +698,8 @@ public:
         // N1: the galactic AI's chunk (GalacticAiWorld::write / read; pending while those are stubs).
         sim::SaveParticipant ai_part;
         ai_part.name = "ai";
-        ai_part.write = [sp](ByteWriter& w) { sim::write_if_saveable(*sp->world, w); };
-        ai_part.read = [sp](ByteReader& r) { return sim::read_if_saveable(*sp->world, r); };
+        ai_part.write = [sp](ByteWriter& w) { sim::write_system(*sp->world, w); };
+        ai_part.read = [sp](ByteReader& r) { return sim::read_system(*sp->world, r); };
         host.add_save_participant(std::move(ai_part));
         sim::SessionDescriptor d;
         d.kind = "galactic";
