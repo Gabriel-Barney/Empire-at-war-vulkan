@@ -42,6 +42,7 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
 #include "alamo/objects/object_types.hpp"  // A2k t06: ObjectTypeDatabase (mod-category type table)
+#include "alamo/test/support.hpp"
 #include "../src/galactic_goal_time.hpp"
 #include "../src/galactic_slots.hpp"
 #ifdef ALAMO_AI_HAVE_VFS
@@ -55,15 +56,8 @@ using namespace alamo;
 using namespace alamo::ai;
 namespace gal = alamo::galactic;
 
-static int g_fail = 0, g_checks = 0;
-#define CHECK(c)                                                                  \
-    do {                                                                          \
-        ++g_checks;                                                               \
-        if (!(c)) {                                                               \
-            ++g_fail;                                                             \
-            std::printf("FAILED %s:%d: %s\n", __FILE__, __LINE__, #c);            \
-        }                                                                         \
-    } while (0)
+using ::alamo::test::g_checks;
+using ::alamo::test::g_fail;
 
 static bool g_write_golden = false;
 
@@ -5146,24 +5140,10 @@ static void test_ai_type_switch() {
 // ================================================================ FoC data
 
 #ifdef ALAMO_AI_HAVE_VFS
-static std::string env(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 static void test_foc_data() {
-    const std::string root = env("ALAMO_FOC_DATA");
+    const std::string root = env_or_empty("ALAMO_FOC_DATA");
     std::error_code ec;
     if (root.empty() || !std::filesystem::is_directory(path_from_utf8(root) / "Data", ec)) {
         std::printf("FoC data: ALAMO_FOC_DATA not set: skipped\n");
@@ -5402,7 +5382,7 @@ static void test_foc_data() {
 
 // N1 save / load on the shipped scripts (HotM, as test_foc_data).
 static void test_save_foc() {
-    const std::string root = env("ALAMO_FOC_DATA");
+    const std::string root = env_or_empty("ALAMO_FOC_DATA");
     std::error_code ec;
     if (root.empty() || !std::filesystem::is_directory(path_from_utf8(root) / "Data", ec)) {
         std::printf("N1 save FoC: ALAMO_FOC_DATA not set: skipped\n");

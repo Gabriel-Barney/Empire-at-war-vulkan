@@ -27,6 +27,7 @@
 #include "alamo/ui/input.hpp"
 #include "alamo/ui/picking.hpp"
 #include "alamo/ui/tactical_hud.hpp"
+#include "alamo/test/support.hpp"
 #include "hud_test_data.hpp"
 #ifdef ALAMO_UI_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
@@ -35,14 +36,7 @@
 using namespace alamo;
 using namespace alamo::ui;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
@@ -1139,7 +1133,6 @@ void test_tactical_hud() {
     }
     CHECK(digest != 0);
 }
-
 
 // OI 2026-10-28: planet panel texts, credits separator, Game Paused banner (Resume -> HudAction::ResumeGame) and the
 // Mission Objectives box.

@@ -59,7 +59,7 @@ endif()
 
 # Data-free: synthetic skirmish through GameSession (human orders routed into the battle, battle end, record/replay CRC).
 add_executable(alamo_game_session_tests tests/test_game_session.cpp)
-target_link_libraries(alamo_game_session_tests PRIVATE alamo_core alamo_game_core)
+target_link_libraries(alamo_game_session_tests PRIVATE alamo_core alamo_game_core alamo_test_support)
 add_test(NAME alamo_game_session_tests COMMAND alamo_game_session_tests)
 set_tests_properties(alamo_game_session_tests PROPERTIES TIMEOUT 600)
 
@@ -67,7 +67,7 @@ set_tests_properties(alamo_game_session_tests PROPERTIES TIMEOUT 600)
 # at tick T, loaded by a fresh process (this exe --child) through the menus' load path: per-tick CRC == the uninterrupted
 # run from T on; load + replay in process; another seed refused; animation-on saves load or are refused at the check.
 add_executable(alamo_game_save_tests tests/test_game_save.cpp)
-target_link_libraries(alamo_game_save_tests PRIVATE alamo_core alamo_game_core)
+target_link_libraries(alamo_game_save_tests PRIVATE alamo_core alamo_game_core alamo_test_support)
 add_test(NAME alamo_game_save_tests COMMAND alamo_game_save_tests)
 set_tests_properties(alamo_game_save_tests PROPERTIES TIMEOUT 1200)
 alamo_label_slow(alamo_game_save_tests)
@@ -75,27 +75,27 @@ alamo_label_slow(alamo_game_save_tests)
 # p4ui t06 (UI.md section 9): the skirmish map catalog (official / custom / mod-folder maps) on a fake install in its own temp
 # folder; with ALAMO_FOC_DATA also the shipped data (24 land + 24 space official rows, no custom).
 add_executable(alamo_game_skirmish_maps_tests tests/test_skirmish_maps.cpp)
-target_link_libraries(alamo_game_skirmish_maps_tests PRIVATE alamo_core alamo_game_core)
+target_link_libraries(alamo_game_skirmish_maps_tests PRIVATE alamo_core alamo_game_core alamo_test_support)
 add_test(NAME alamo_game_skirmish_maps_tests COMMAND alamo_game_skirmish_maps_tests)
 set_tests_properties(alamo_game_skirmish_maps_tests PROPERTIES TIMEOUT 120)
 
 # Playtest 2 t13: auto-resolve results screen figures (battle time, bounty, efficiency): pure rules data-free, bounty data
 # on the FoC data (ALAMO_FOC_DATA, skipped without).
 add_executable(alamo_game_battle_summary_tests tests/test_battle_summary.cpp)
-target_link_libraries(alamo_game_battle_summary_tests PRIVATE alamo_core alamo_game_core)
+target_link_libraries(alamo_game_battle_summary_tests PRIVATE alamo_core alamo_game_core alamo_test_support)
 add_test(NAME alamo_game_battle_summary_tests COMMAND alamo_game_battle_summary_tests)
 set_tests_properties(alamo_game_battle_summary_tests PROPERTIES TIMEOUT 600)
 
 # BM2a data-free: the benchmark mode's options / flags, presets, fixed-frames clock, frame-time statistics and JSON report
 # (benchmark.hpp; the exe side is app/app_benchmark.cpp, checked by alamo_game_bench_* below).
 add_executable(alamo_game_benchmark_tests tests/test_benchmark.cpp)
-target_link_libraries(alamo_game_benchmark_tests PRIVATE alamo_core alamo_game_core)
+target_link_libraries(alamo_game_benchmark_tests PRIVATE alamo_core alamo_game_core alamo_test_support)
 add_test(NAME alamo_game_benchmark_tests COMMAND alamo_game_benchmark_tests)
 set_tests_properties(alamo_game_benchmark_tests PROPERTIES TIMEOUT 60)
 
 # Data-free: GameAudioHost movie music (modes 14 / 17, Halt_Game_Music) on a synthetic audio tree and the null backend.
 add_executable(alamo_game_audio_host_tests tests/test_game_audio_host.cpp)
-target_link_libraries(alamo_game_audio_host_tests PRIVATE alamo_core alamo_game_core)
+target_link_libraries(alamo_game_audio_host_tests PRIVATE alamo_core alamo_game_core alamo_test_support)
 add_test(NAME alamo_game_audio_host_tests COMMAND alamo_game_audio_host_tests)
 set_tests_properties(alamo_game_audio_host_tests PROPERTIES TIMEOUT 120)
 
@@ -103,7 +103,7 @@ set_tests_properties(alamo_game_audio_host_tests PROPERTIES TIMEOUT 120)
 # with hand-built model collision data: mesh hit, box-but-not-mesh miss, Mouse_Collide_Override_Sphere_Radius, nearest hit.
 if(TARGET alamo_ui)
   add_executable(alamo_game_world_pick_tests tests/test_world_pick.cpp)
-  target_link_libraries(alamo_game_world_pick_tests PRIVATE alamo_core alamo_game_core)
+  target_link_libraries(alamo_game_world_pick_tests PRIVATE alamo_core alamo_game_core alamo_test_support)
   add_test(NAME alamo_game_world_pick_tests COMMAND alamo_game_world_pick_tests)
   set_tests_properties(alamo_game_world_pick_tests PROPERTIES TIMEOUT 120)
 endif()
@@ -111,7 +111,7 @@ endif()
 # Data-free (refix t06, refixf t05): the tactical super weapon's presentation cues (battle_fx.hpp), the cinematic camera
 # (TSW firing shot, explosion shake, letterbox; TSW_PLANET_DESTROY.md §11) and GameAudioHost::tsw_audio on a synthetic type set / audio tree with the null backend.
 add_executable(alamo_game_battle_fx_tests tests/test_battle_fx.cpp)
-target_link_libraries(alamo_game_battle_fx_tests PRIVATE alamo_core alamo_game_core)
+target_link_libraries(alamo_game_battle_fx_tests PRIVATE alamo_core alamo_game_core alamo_test_support)
 add_test(NAME alamo_game_battle_fx_tests COMMAND alamo_game_battle_fx_tests)
 set_tests_properties(alamo_game_battle_fx_tests PROPERTIES TIMEOUT 120)
 
@@ -127,14 +127,14 @@ endif()
 add_executable(alamo_session_run tools/session_run_main.cpp)
 target_link_libraries(alamo_session_run PRIVATE alamo_core alamo_game_core)
 add_executable(alamo_game_mod_check_tests tests/test_mod_check.cpp)
-target_link_libraries(alamo_game_mod_check_tests PRIVATE alamo_core alamo_game_core)
+target_link_libraries(alamo_game_mod_check_tests PRIVATE alamo_core alamo_game_core alamo_test_support)
 add_test(NAME alamo_game_mod_check_tests COMMAND alamo_game_mod_check_tests)
 set_tests_properties(alamo_game_mod_check_tests PROPERTIES TIMEOUT 300)
 # modc t07: the synthetic mod of testdata/mod_fixture (a new faction, unit, planet, campaign and a Lua override) through
 # the real MODPATH= route, no game data; read only (no fixture path shared with any other test). The second entry runs the
 # exe itself and checks its JSON summary (docs/MODS.md section 5.1).
 add_executable(alamo_game_mod_fixture_tests tests/test_mod_fixture.cpp)
-target_link_libraries(alamo_game_mod_fixture_tests PRIVATE alamo_core alamo_game_core)
+target_link_libraries(alamo_game_mod_fixture_tests PRIVATE alamo_core alamo_game_core alamo_test_support)
 add_test(NAME alamo_game_mod_fixture_tests COMMAND alamo_game_mod_fixture_tests ${CMAKE_CURRENT_SOURCE_DIR}/testdata/mod_fixture)
 set_tests_properties(alamo_game_mod_fixture_tests PROPERTIES TIMEOUT 120)
 add_test(NAME alamo_mod_check_fixture
@@ -146,14 +146,14 @@ set_tests_properties(alamo_mod_check_fixture PROPERTIES TIMEOUT 120
 # modc t08: the mod picker's data side (mod_picker.hpp) on the same read-only fixture; its modinfo.json decoding cases write
 # to their own temp folder (%TEMP%lamo_mod_picker_tests, no other test uses it).
 add_executable(alamo_game_mod_picker_tests tests/test_mod_picker.cpp)
-target_link_libraries(alamo_game_mod_picker_tests PRIVATE alamo_core alamo_game_core)
+target_link_libraries(alamo_game_mod_picker_tests PRIVATE alamo_core alamo_game_core alamo_test_support)
 add_test(NAME alamo_game_mod_picker_tests COMMAND alamo_game_mod_picker_tests ${CMAKE_CURRENT_SOURCE_DIR}/testdata/mod_fixture)
 set_tests_properties(alamo_game_mod_picker_tests PROPERTIES TIMEOUT 120)
 
 # q6 t08: AI player types (Basic_AI / AI_Player_Control) and default skirmish forces for mod factions on synthetic data in its
 # own temp folder; with ALAMO_FOC_DATA also the shipped factions (they resolve as the port's hard-coded tables).
 add_executable(alamo_game_mod_faction_tests tests/test_mod_factions.cpp)
-target_link_libraries(alamo_game_mod_faction_tests PRIVATE alamo_core alamo_game_core)
+target_link_libraries(alamo_game_mod_faction_tests PRIVATE alamo_core alamo_game_core alamo_test_support)
 add_test(NAME alamo_game_mod_faction_tests COMMAND alamo_game_mod_faction_tests)
 set_tests_properties(alamo_game_mod_faction_tests PROPERTIES TIMEOUT 300)
 
@@ -197,7 +197,7 @@ function(alamo_game_add_exe)
   alamo_shaderxlat_copy_dxc(alamo_game)
   # [port] video options helpers (game_display.cpp): mode list text, selection, options file, detail options mapping.
   add_executable(alamo_game_display_tests ${_dir}/tests/test_game_display.cpp ${_dir}/app/game_display.cpp)
-  target_link_libraries(alamo_game_display_tests PRIVATE alamo_core alamo_render_sim alamo_ui_hud alamo_engine_flags)
+  target_link_libraries(alamo_game_display_tests PRIVATE alamo_core alamo_render_sim alamo_ui_hud alamo_engine_flags alamo_test_support)
   if(WIN32)
     target_link_libraries(alamo_game_display_tests PRIVATE user32)
   endif()

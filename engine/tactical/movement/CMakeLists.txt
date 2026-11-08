@@ -42,7 +42,7 @@ if("terrain" IN_LIST ALAMO_ENGINE_MODULES AND EXISTS ${PROJECT_SOURCE_DIR}/engin
 endif()
 
 add_executable(alamo_tactical_movement_tests tests/test_movement.cpp)
-target_link_libraries(alamo_tactical_movement_tests PRIVATE alamo_tactical_movement Threads::Threads)
+target_link_libraries(alamo_tactical_movement_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
 # Real-data tests (ALAMO_FOC_DATA): every shipped land / space map through the VFS.
 if("vfs" IN_LIST ALAMO_ENGINE_MODULES AND "terrain" IN_LIST ALAMO_ENGINE_MODULES)
   target_link_libraries(alamo_tactical_movement_tests PRIVATE alamo_vfs)
@@ -53,19 +53,19 @@ set_tests_properties(alamo_tactical_movement_tests PROPERTIES TIMEOUT 900)
 
 # REMAINING_GAPS 4.1-4.7: corridor squeeze, threat mode, special locomotors.
 add_executable(alamo_tactical_movement_gaps_tests tests/test_movement_gaps.cpp)
-target_link_libraries(alamo_tactical_movement_gaps_tests PRIVATE alamo_tactical_movement Threads::Threads)
+target_link_libraries(alamo_tactical_movement_gaps_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
 add_test(NAME alamo_tactical_movement_gaps_tests COMMAND alamo_tactical_movement_gaps_tests)
 set_tests_properties(alamo_tactical_movement_gaps_tests PROPERTIES TIMEOUT 300)
 
 # L1 systems: hyperspace departures, engine control, teleport (hyperspace.hpp, MovementSystem::teleport).
 add_executable(alamo_tactical_hyperspace_tests tests/test_hyperspace.cpp)
-target_link_libraries(alamo_tactical_hyperspace_tests PRIVATE alamo_tactical_movement)
+target_link_libraries(alamo_tactical_hyperspace_tests PRIVATE alamo_tactical_movement alamo_test_support)
 add_test(NAME alamo_tactical_hyperspace_tests COMMAND alamo_tactical_hyperspace_tests)
 set_tests_properties(alamo_tactical_hyperspace_tests PROPERTIES TIMEOUT 120)
 
 # N1 stage 2: save / load mid-battle (MovementSystem, grid stamps, occupancy, collision layer, fighter grids,
 # hyperspace departures, engine control): resumed runs must match the uninterrupted run tick for tick.
 add_executable(alamo_tactical_movement_save_tests tests/test_movement_save.cpp)
-target_link_libraries(alamo_tactical_movement_save_tests PRIVATE alamo_tactical_movement Threads::Threads)
+target_link_libraries(alamo_tactical_movement_save_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
 add_test(NAME alamo_tactical_movement_save_tests COMMAND alamo_tactical_movement_save_tests)
 set_tests_properties(alamo_tactical_movement_save_tests PROPERTIES TIMEOUT 600)

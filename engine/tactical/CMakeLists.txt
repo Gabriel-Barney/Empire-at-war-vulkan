@@ -10,13 +10,13 @@ target_include_directories(alamo_tactical PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc
 target_link_libraries(alamo_tactical PUBLIC alamo_core)
 
 add_executable(alamo_tactical_tests tests/test_tactical.cpp)
-target_link_libraries(alamo_tactical_tests PRIVATE alamo_tactical Threads::Threads)
+target_link_libraries(alamo_tactical_tests PRIVATE alamo_tactical alamo_test_support)
 add_test(NAME alamo_tactical_tests COMMAND alamo_tactical_tests)
 set_tests_properties(alamo_tactical_tests PROPERTIES TIMEOUT 300)
 
 # N1 stage 2: SpatialTree / TreeSet save + load (entry set saved, shape rebuilt) against the saving tree.
 add_executable(alamo_tactical_tree_save_tests tests/test_tree_save.cpp)
-target_link_libraries(alamo_tactical_tree_save_tests PRIVATE alamo_tactical)
+target_link_libraries(alamo_tactical_tree_save_tests PRIVATE alamo_tactical alamo_test_support)
 add_test(NAME alamo_tactical_tree_save_tests COMMAND alamo_tactical_tree_save_tests)
 set_tests_properties(alamo_tactical_tree_save_tests PROPERTIES TIMEOUT 300)
 

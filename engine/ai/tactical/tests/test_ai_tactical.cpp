@@ -19,7 +19,7 @@
 #include <thread>
 #include <vector>
 
-#include "thread_parallel_for.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
 #include "alamo/ai/tactical/applies.hpp"
 #include "alamo/ai/tactical/constants.hpp"
 #include "alamo/ai/tactical/damage_tracking.hpp"
@@ -33,6 +33,7 @@
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/test/support.hpp"
 
 #if defined(ALAMO_AI_TACTICAL_HAVE_DATA) && defined(ALAMO_AI_TACTICAL_HAVE_TERRAIN)
 #include "alamo/data/game_database.hpp"
@@ -45,17 +46,10 @@ using namespace alamo;
 using namespace alamo::ai::tactical;
 namespace econ = ::alamo::galactic::econ;
 
-static int g_fail = 0;
-#define CHECK(c)                                                         \
-    do {                                                                 \
-        if (!(c)) {                                                      \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);     \
-            ++g_fail;                                                    \
-        }                                                                \
-    } while (0)
+using ::alamo::test::g_fail;
 
 static ParallelFor make_thread_pf(unsigned threads) {
-    return ::alamo::ai::tactical::testing::make_thread_parallel_for(threads);  // persistent pool, thread_parallel_for.hpp
+    return ::alamo::test::make_thread_parallel_for(threads);  // persistent pool, alamo/test/thread_parallel_for.hpp
 }
 
 static TargetObjectInfo obj(int32_t id, bool land, bool space_rep, bool space_own, bool dead = false) {
@@ -636,7 +630,6 @@ static void test_scenario(const char* golden, const char* write_golden) {
         }
     }
 }
-
 
 #ifdef AI_TACTICAL_REAL_DATA
 static void test_real_data() {

@@ -19,6 +19,6 @@ target_link_libraries(alamo_tactical_garrison PUBLIC alamo_objects alamo_core al
                                               PRIVATE alamo_tactical)  # save_io.hpp
 
 add_executable(alamo_tactical_garrison_tests tests/test_garrison.cpp)
-target_link_libraries(alamo_tactical_garrison_tests PRIVATE alamo_tactical_garrison)
+target_link_libraries(alamo_tactical_garrison_tests PRIVATE alamo_tactical_garrison alamo_test_support)
 add_test(NAME alamo_tactical_garrison_tests COMMAND alamo_tactical_garrison_tests)
 set_tests_properties(alamo_tactical_garrison_tests PROPERTIES TIMEOUT 300)

@@ -14,6 +14,7 @@
 #include "alamo/core/galaxy.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/parallel.hpp"
+#include "alamo/test/support.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -24,14 +25,7 @@
 #include <windows.h>
 #include <winioctl.h>
 
-static int g_fail = 0;
-#define CHECK(c)                                                       \
-    do {                                                               \
-        if (!(c)) {                                                    \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);   \
-            ++g_fail;                                                  \
-        }                                                              \
-    } while (0)
+using ::alamo::test::g_fail;
 
 // Turns the empty directory `link` into a junction (IO_REPARSE_TAG_MOUNT_POINT) to `target` with
 // FSCTL_SET_REPARSE_POINT. Junctions need no privilege (unlike symlinks).

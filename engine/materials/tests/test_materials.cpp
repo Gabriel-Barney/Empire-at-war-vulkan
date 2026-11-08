@@ -32,6 +32,7 @@
 #include "alamo/materials/programs.hpp"
 #include "alamo/materials/pso.hpp"
 #include "alamo/materials/register_file.hpp"
+#include "alamo/test/support.hpp"
 #include "fx2_reader.hpp"
 #include "fx_compile.hpp"
 #ifdef ALAMO_MATERIALS_HAVE_VFS
@@ -41,14 +42,7 @@
 using namespace alamo;
 using namespace alamo::materials;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 

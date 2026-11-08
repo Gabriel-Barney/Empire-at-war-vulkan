@@ -534,10 +534,7 @@ const std::vector<HardCase>& vkd3d_hard_cases() {
 
 // ---------------------------------------------------------------- real install
 namespace {
-std::string env(const char* n) {
-    const char* v = std::getenv(n);
-    return v ? std::string(v) : std::string();
-}
+using ::alamo::test::env_or_empty;
 
 #ifdef ALAMO_SHADERXLAT_HAVE_VFS
 bool is_shader_object(const std::vector<uint8_t>& d) {
@@ -705,13 +702,13 @@ std::vector<Blob> corpus_blobs(std::string* note) {
     std::vector<Blob> out;
     std::string n;
 #ifdef ALAMO_SHADERXLAT_HAVE_VFS
-    const std::string foc = env("ALAMO_FOC_DATA"), eaw = env("ALAMO_EAW_DATA");
+    const std::string foc = env_or_empty("ALAMO_FOC_DATA"), eaw = env_or_empty("ALAMO_EAW_DATA");
     std::map<std::string, Blob> m;
     if (!foc.empty()) collect_game(foc, "foc", m, n);
     if (!eaw.empty()) collect_game(eaw, "eaw", m, n);
     // modc t22: the shader model 3 programs installed workshop mods ship (ALAMO_WORKSHOP_DIR, else the
     // workshop folder of the Steam library ALAMO_FOC_DATA is in).
-    std::string ws = env("ALAMO_WORKSHOP_DIR");
+    std::string ws = env_or_empty("ALAMO_WORKSHOP_DIR");
     const size_t at = foc.find("\\steamapps\\common\\");
     if (ws.empty() && at != std::string::npos) ws = foc.substr(0, at) + "\\steamapps\\workshop\\content\\32470";
     if (!ws.empty()) collect_mod_sm3(ws, m, n);

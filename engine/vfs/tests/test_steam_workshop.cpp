@@ -12,25 +12,16 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/vfs/steam_workshop.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
 
 namespace fs = std::filesystem;
 namespace av = alamo::vfs;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
-void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 std::string u8(const fs::path& p) {
     std::string s = alamo::path_to_utf8(p);

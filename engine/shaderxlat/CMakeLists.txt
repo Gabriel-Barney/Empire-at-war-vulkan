@@ -62,7 +62,7 @@ target_link_libraries(alamo_shaderxlat_checked PUBLIC alamo_core)
 target_compile_definitions(alamo_shaderxlat_checked PUBLIC ${_xlat_checked_defs})
 
 add_executable(alamo_shaderxlat_tests tests/test_shaderxlat.cpp tests/mini_asm.cpp tests/corpus.cpp tests/gpu_diff.cpp)
-target_link_libraries(alamo_shaderxlat_tests PRIVATE alamo_shaderxlat_checked alamo_fx2)
+target_link_libraries(alamo_shaderxlat_tests PRIVATE alamo_shaderxlat_checked alamo_fx2 alamo_test_support)
 target_include_directories(alamo_shaderxlat_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 target_compile_definitions(alamo_shaderxlat_tests PRIVATE
   "ALAMO_SHADERXLAT_GOLDEN_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/golden\"")

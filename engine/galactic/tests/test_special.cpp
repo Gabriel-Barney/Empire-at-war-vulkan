@@ -28,22 +28,15 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
 #include "foc_data.hpp"
-#include "thread_parallel_for.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::galactic;
 using commands::RejectReason;
 
-static int g_fail = 0;
-static int g_checks = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        ++g_checks;                                                  \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
+using ::alamo::test::g_checks;
 
 namespace {
 
@@ -1100,7 +1093,7 @@ std::vector<std::pair<unsigned, ParallelFor>> worker_configs() {
     std::vector<std::pair<unsigned, ParallelFor>> v;
     v.push_back({0u, ParallelFor(serial_for)});
     const unsigned hw = std::max(2u, std::thread::hardware_concurrency());
-    for (unsigned n : {1u, 4u, hw}) v.push_back({n, testing::make_thread_parallel_for(n)});
+    for (unsigned n : {1u, 4u, hw}) v.push_back({n, ::alamo::test::make_thread_parallel_for(n)});
     return v;
 }
 
@@ -1185,21 +1178,7 @@ void test_determinism() {
 
 // ---- 4. FoC data ------------------------------------------------------------------------------------------------------
 
-std::string env_or(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 const SpecialAbilityDef* find_ability(const GalacticRules& r, uint32_t type, SpecialAbilityClass cls) {
     for (uint32_t a : r.special.type(type).abilities)
@@ -1208,7 +1187,7 @@ const SpecialAbilityDef* find_ability(const GalacticRules& r, uint32_t type, Spe
 }
 
 void test_foc() {
-    const std::string root = env_or("ALAMO_FOC_DATA");
+    const std::string root = env_or_empty("ALAMO_FOC_DATA");
     std::string how;
     std::unique_ptr<FileProvider> provider = testing::open_foc_data(root, how);
     if (!provider) {

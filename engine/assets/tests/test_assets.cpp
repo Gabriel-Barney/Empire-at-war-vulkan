@@ -30,6 +30,7 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/formats/alo.hpp"
+#include "alamo/test/support.hpp"
 #include "mini_json.hpp"
 
 #if defined(ALAMO_ASSETS_HAVE_VFS)
@@ -39,14 +40,7 @@
 using namespace alamo::assets;
 using Bytes = std::vector<std::uint8_t>;
 
-static int g_fail = 0;
-#define CHECK(x)                                                                    \
-    do {                                                                            \
-        if (!(x)) {                                                                 \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #x);                \
-            ++g_fail;                                                               \
-        }                                                                           \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 

@@ -54,6 +54,8 @@
 #include "alamo/render/renderer.hpp"
 #include "alamo/rhi/rhi.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
+#include "alamo/render/test/gpu.hpp"
 
 // Counting global allocator (Q3: build() / render() allocate nothing per frame in steady state). Counts only while
 // g_count_allocs is set; every thread (job-system workers included).
@@ -77,14 +79,7 @@ using render::Mat3x4;
 
 namespace test_render_t {
 
-inline int g_failures = 0;
-#define CHECK(c)                                                              \
-    do {                                                                      \
-        if (!(c)) {                                                           \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);          \
-            ++g_failures;                                                     \
-        }                                                                     \
-    } while (0)
+using ::alamo::test::g_fail;
 
 inline bool near_eq(float a, float b, float eps = 1e-4f) { return std::fabs(a - b) <= eps; }
 
@@ -106,43 +101,11 @@ inline assets::MeshInfo mesh(const char* name, int lod, bool hidden = false) {
 
 // ------------------------------------------------------------------------------------------- GPU
 
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
+struct Gpu : render::test::GpuCore {
     render::Renderer renderer;
 };
 
-struct Offscreen {
-    rhi::Image color, depth;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        rhi::ImageDesc dd = cd;
-        dd.format = rhi::Format::D32F;
-        dd.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        return g.alloc.create_image(cd, color) && g.alloc.create_image(dd, depth) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                     rhi::MemoryUsage::Readback, readback);
-    }
-    void destroy(Gpu& g) {
-        g.alloc.destroy(color);
-        g.alloc.destroy(depth);
-        g.alloc.destroy(readback);
-    }
-    const uint8_t* px(uint32_t x, uint32_t y) const {
-        return static_cast<const uint8_t*>(readback.mapped()) + (static_cast<size_t>(y) * w + x) * 4;
-    }
-};
+using Offscreen = render::test::OffscreenWithDepth;  // alamo/render/offscreen.hpp
 
 const float kClear[4] = {0.0f, 0.0f, 0.25f, 1.0f};  // (0, 0, 64, 255)
 // Most MeshBumpColorize/MeshGloss* triangles of all ships in the install (alamo_render --sweep).

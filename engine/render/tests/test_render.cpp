@@ -1014,9 +1014,9 @@ int main() {
     test_world();
     test_type_resolution();
     test_cloud_slots();
-    std::printf("cpu: %s\n", g_failures ? "FAILED" : "ok");
+    std::printf("cpu: %s\n", g_fail ? "FAILED" : "ok");
     const int gpu = run_gpu(ALAMO_RENDER_SOURCE_DIR);
-    if (gpu) ++g_failures;
-    std::printf("%s (%d failures)\n", g_failures ? "FAILED" : "PASSED", g_failures);
-    return g_failures ? 1 : 0;
+    if (gpu) ++g_fail;
+    std::printf("%s (%d failures)\n", g_fail ? "FAILED" : "PASSED", g_fail);
+    return g_fail ? 1 : 0;
 }

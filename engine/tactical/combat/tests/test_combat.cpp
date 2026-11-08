@@ -30,7 +30,8 @@
 #include "alamo/objects/enums.hpp"
 #include "alamo/tactical/combat/combat_system.hpp"
 #include "alamo/tactical/combat/weather.hpp"
-#include "thread_parallel_for.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_COMBAT_TESTS_HAVE_MOVEMENT
 #include "alamo/tactical/movement/passability.hpp"
 #endif
@@ -69,14 +70,7 @@ namespace {
 
 using alamo::tactical::Vec3;  // hides alamo::Vec3 (galaxy.hpp) inside this namespace
 
-int g_fail = 0;
-#define CHECK(c)                                                         \
-    do {                                                                 \
-        if (!(c)) {                                                      \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);     \
-            ++g_fail;                                                    \
-        }                                                                \
-    } while (0)
+using ::alamo::test::g_fail;
 #define CHECK_F(a, b)                                                                                     \
     do {                                                                                                  \
         const float va_ = (a), vb_ = (b);                                                                 \
@@ -1772,7 +1766,7 @@ void test_fog_filter() {
         t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
         t.w.add(2, t.capital, 1, Vec3{500, 0, 0});
         t.w.add(3, t.fighter, 1, Vec3{200, 0, 0});
-        t.w.tick(alamo::tactical::testing::make_thread_parallel_for(4));
+        t.w.tick(alamo::test::make_thread_parallel_for(4));
         CHECK(t.w.sys->auto_target(1) == 2);
         t.w.sys->set_hooks(nullptr);
     }
@@ -2909,7 +2903,7 @@ void test_battle(const char* golden, const char* write_golden) {
     const unsigned hw = std::max(2u, std::thread::hardware_concurrency());
     for (unsigned threads : {1u, 4u, hw}) {
         Battle b;
-        const CrcLog par = b.run(kTicks, alamo::tactical::testing::make_thread_parallel_for(threads));
+        const CrcLog par = b.run(kTicks, alamo::test::make_thread_parallel_for(threads));
         const CrcDivergence dv = first_divergence(serial, par);
         if (dv.diverged) std::printf("threads %u: %s\n", threads, dv.message.c_str());
         CHECK(!dv.diverged);
@@ -3022,7 +3016,7 @@ void test_save_load() {
     CHECK(a.w.sys->modifier(11, ModList::FireRate) == b.w.sys->modifier(11, ModList::FireRate));
 
     // Both continue (the loaded one on 4 threads): identical state every tick.
-    const ParallelFor pf4 = alamo::tactical::testing::make_thread_parallel_for(4);
+    const ParallelFor pf4 = alamo::test::make_thread_parallel_for(4);
     uint32_t diverged = 0, shots = 0, deaths = 0;
     for (uint32_t i = 0; i < kAfter; ++i) {
         const uint32_t f = a.w.frame;
@@ -3738,8 +3732,8 @@ void test_rocket_flight_system() {
     }
     {  // worker counts: identical rocket state, hashes and draws every tick (shield re-plans included)
         RocketWorld s(GameMode::Space, false, true), p4(GameMode::Space, false, true), p8(GameMode::Space, false, true);
-        const ParallelFor pf4 = alamo::tactical::testing::make_thread_parallel_for(4);
-        const ParallelFor pf8 = alamo::tactical::testing::make_thread_parallel_for(8);
+        const ParallelFor pf4 = alamo::test::make_thread_parallel_for(4);
+        const ParallelFor pf8 = alamo::test::make_thread_parallel_for(8);
         uint32_t diverged = 0;
         for (int i = 0; i < 300; ++i) {
             s.w.tick();
@@ -3773,7 +3767,7 @@ void test_rocket_flight_system() {
         b.w.frame = a.w.frame;
         CHECK(combat_bytes(*b.w.sys) == saved);
         CHECK(combat_digest(*a.w.sys, a.w.rng) == combat_digest(*b.w.sys, b.w.rng));
-        const ParallelFor pf4 = alamo::tactical::testing::make_thread_parallel_for(4);
+        const ParallelFor pf4 = alamo::test::make_thread_parallel_for(4);
         uint32_t diverged = 0;
         for (int i = 0; i < 300; ++i) {
             a.w.tick();
@@ -4037,7 +4031,6 @@ struct SuspendWorld {
         return 0;
     }
 };
-
 
 void test_weapon_suspend_elapse() {
     SuspendWorld a;

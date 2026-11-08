@@ -12,6 +12,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/game/game_audio_host.hpp"
 #include "alamo/game/game_data.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_GAME_HAVE_AUDIO
 #include "alamo/audio/audio_system.hpp"
 #endif
@@ -19,14 +20,7 @@
 using namespace alamo;
 using namespace alamo::game;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 

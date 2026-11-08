@@ -51,6 +51,7 @@
 #include "alamo/ui/camera.hpp"
 #include "alamo/ui/input.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "app_common.hpp"  // engine/render/app (CU4 t03)
 #ifdef ALAMO_RENDER_GALACTIC_UI_INPUT
 #include "alamo/ui/window_input.hpp"
 #endif
@@ -61,6 +62,8 @@ namespace {
 
 using namespace alamo;
 using Clock = std::chrono::steady_clock;
+using render_app::env_or_empty;  // app_common.hpp
+using render_app::Offscreen;
 
 struct GalOptions {
     bool run = false, check = false, hidden = false, overview = false, select = false;
@@ -80,21 +83,6 @@ struct GalOptions {
     rhi::PresentMode mode = rhi::PresentMode::Fifo;
 };
 
-std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
 
 int usage() {
     std::fprintf(stderr,
@@ -152,40 +140,6 @@ ui::UiConstants ui_constants(const render::GalacticWorld& w) {
     return doc.ok() ? ui::parse_ui_constants(doc.root()) : ui::UiConstants{};
 }
 
-struct Offscreen {
-    rhi::Image color;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool bgra = false;
-    bool create(rhi::Allocator& a, uint32_t width, uint32_t height, VkFormat fmt) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        if (fmt == VK_FORMAT_B8G8R8A8_UNORM) cd.format = rhi::Format::BGRA8;
-        else if (fmt == VK_FORMAT_R8G8B8A8_UNORM) cd.format = rhi::Format::RGBA8;
-        else return false;
-        bgra = fmt == VK_FORMAT_B8G8R8A8_UNORM;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        cd.name = "galactic.offscreen";
-        return a.create_image(cd, color) &&
-               a.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, rhi::MemoryUsage::Readback, readback);
-    }
-    void destroy(rhi::Allocator& a) {
-        if (color) a.destroy(color);
-        if (readback) a.destroy(readback);
-    }
-    bool write_png(const std::string& path) const {
-        const auto* px = static_cast<const uint8_t*>(readback.mapped());
-        std::vector<uint8_t> rgba(px, px + static_cast<size_t>(w) * h * 4);
-        if (bgra)
-            for (size_t i = 0; i < rgba.size(); i += 4) std::swap(rgba[i], rgba[i + 2]);
-        for (size_t i = 3; i < rgba.size(); i += 4) rgba[i] = 255;
-        return render::write_png_rgba(path, w, h, rgba);
-    }
-};
 
 // Everything the render side owns. Never writes the sim: capture() reads it through its const interface.
 class GalacticRender {
@@ -209,8 +163,8 @@ public:
         if (!world_.synthetic) {
             effects_ = std::make_unique<render::EffectCache>(world_.files.get());
             rd.effects = effects_.get();
-            rd.pipeline_cache_dir = opt_.cache_dir.empty() ? render::default_pipeline_cache_dir() : path_from_utf8(opt_.cache_dir);
-            if (!opt_.cache_dir.empty()) rd.shader_cache_dir = path_from_utf8(opt_.cache_dir) / "shaders";
+            rd.pipeline_cache_dir = render_app::cache_dir_of(opt_.cache_dir);
+            rd.shader_cache_dir = render_app::shader_cache_of(opt_.cache_dir);
         } else {
             rd.translated = false;
         }
@@ -383,7 +337,7 @@ public:
 
     bool capture_png(const std::string& path, VkFormat fmt, uint32_t w, uint32_t h, render::InterpMode mode) {
         Offscreen o;
-        if (!o.create(alloc, w, h, fmt)) {
+        if (!o.create(alloc, w, h, fmt, "galactic.offscreen")) {
             std::fprintf(stderr, "--png: offscreen target for format %d failed\n", static_cast<int>(fmt));
             return false;
         }
@@ -522,7 +476,7 @@ int run_check(const GalOptions& opt, render::GalacticWorld& world) {
         jobs::JobSystem js(jobs::JobSystemConfig{opt.workers});
         GalacticRender r(ctx, world, js, opt);
         Offscreen o;
-        bool ok = r.init(VK_FORMAT_R8G8B8A8_UNORM) && o.create(r.alloc, opt.width, opt.height, VK_FORMAT_R8G8B8A8_UNORM);
+        bool ok = r.init(VK_FORMAT_R8G8B8A8_UNORM) && o.create(r.alloc, opt.width, opt.height, VK_FORMAT_R8G8B8A8_UNORM, "galactic.offscreen");
         if (ok) {
             render::GalacticSession s(world.types, js, world.rules, world.setup, spec);
             ok = s.ok();

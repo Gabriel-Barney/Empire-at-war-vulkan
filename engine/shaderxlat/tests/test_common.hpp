@@ -7,17 +7,11 @@
 
 #include "alamo/shaderxlat/bytecode.hpp"
 #include "alamo/shaderxlat/translate.hpp"
+#include "alamo/test/support.hpp"
 
 namespace alamo::shaderxlat::test {
 
-extern int g_fail;
-#define CHECK(cond)                                                                       \
-    do {                                                                                  \
-        if (!(cond)) {                                                                    \
-            ++::alamo::shaderxlat::test::g_fail;                                          \
-            std::printf("CHECK failed: %s (%s:%d)\n", #cond, __FILE__, __LINE__);         \
-        }                                                                                 \
-    } while (0)
+using ::alamo::test::g_fail;  // CHECK: alamo/test/support.hpp
 
 // One shader program under test: synthetic (asm text) or from the installed game.
 struct Blob {

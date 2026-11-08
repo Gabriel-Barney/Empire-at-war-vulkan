@@ -34,6 +34,7 @@
 #include "alamo/ui/hud_panels.hpp"
 #include "alamo/ui/hud_abilities.hpp"
 #include "alamo/ui/targeting.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_UI_HAVE_ABILITIES
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
@@ -45,14 +46,7 @@
 using namespace alamo;
 using namespace alamo::ui;
 
-inline int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace test_gui_screens_t {
 

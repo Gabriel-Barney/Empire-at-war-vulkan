@@ -22,7 +22,7 @@ if(TARGET alamo_objects)
 endif()
 
 add_executable(alamo_anim_tests tests/test_anim.cpp)
-target_link_libraries(alamo_anim_tests PRIVATE alamo_anim alamo_formats Threads::Threads)
+target_link_libraries(alamo_anim_tests PRIVATE alamo_anim alamo_formats Threads::Threads alamo_test_support)
 target_compile_definitions(alamo_anim_tests PRIVATE "ALAMO_ANIM_LOG_DIR=\"${PROJECT_SOURCE_DIR}/logs\"")
 if(TARGET alamo_jobs)
   target_link_libraries(alamo_anim_tests PRIVATE alamo_jobs)

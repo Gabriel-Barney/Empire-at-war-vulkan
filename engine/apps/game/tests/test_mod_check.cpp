@@ -9,25 +9,16 @@
 #include <vector>
 
 #include "alamo/game/mod_check.hpp"
+#include "alamo/test/support.hpp"
 
 namespace fs = std::filesystem;
 using alamo::game::ModCheckReport;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
-void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 bool has(const std::vector<std::string>& v, const std::string& needle) {
     for (const auto& s : v)

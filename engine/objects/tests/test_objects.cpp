@@ -29,6 +29,7 @@
 #include "alamo/objects/object_store.hpp"
 #include "alamo/objects/type_fields.hpp"
 #include "alamo/objects/object_types.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_OBJECTS_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
 #endif
@@ -40,14 +41,7 @@ using namespace alamo;
 using namespace alamo::objects;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 static void test_schema() {
     const auto rows = field_schema();
@@ -118,10 +112,7 @@ static void test_classify() {
           shape_of("") == ValueShape::Empty && shape_of("a = b") == ValueShape::Text);
 }
 
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 // Every element below a file root, once per walk: must equal types + fields (nothing dropped).
 static size_t elements_below_roots(const ObjectTypeDatabase& db) {
@@ -260,7 +251,6 @@ static void test_loader_synthetic() {
     CHECK(none.type_count() == 0 && none.find("x") == kNone && none.get_text(0, "x") == std::nullopt);
     remove_all_long(root, ec);
 }
-
 
 static void test_converters() {
     CHECK(c_atoi("  -12abc") == -12 && c_atoi("+7") == 7 && c_atoi("x") == 0 && c_atoi("") == 0);

@@ -18,20 +18,14 @@
 #include "alamo/core/bytes.hpp"
 #include "alamo/tactical/spatial_tree.hpp"
 #include "alamo/tactical/tree_set.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::tactical;
 
 namespace {
 
-int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 // splitmix64 (test data only).
 struct Rng {

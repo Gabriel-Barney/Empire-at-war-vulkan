@@ -23,6 +23,7 @@
 #include "alamo/ui/hud_input.hpp"
 #include "alamo/ui/load_screen.hpp"
 #include "alamo/ui/picking.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_UI_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
 #endif
@@ -34,14 +35,7 @@
 using namespace alamo;
 using namespace alamo::ui;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 

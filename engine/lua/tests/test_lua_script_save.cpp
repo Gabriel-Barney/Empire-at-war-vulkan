@@ -27,6 +27,7 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
 #include "alamo/objects/object_types.hpp"
+#include "alamo/test/support.hpp"
 
 #include <lauxlib.h>
 #include <lua.h>
@@ -35,14 +36,7 @@ using namespace alamo;
 using namespace alamo::lua;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 static std::string run(LuaVm& vm, const std::string& code) {
     std::string err;
@@ -74,10 +68,7 @@ static bool restore(LuaVm& vm, const std::vector<uint8_t>& b, ScriptLoad mode, s
     ByteReader r(b);
     return read_script_block(r, vm, mode, err) && r.done();
 }
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 // A store with three troopers (ids 1..3). Own temp folder (parallel ctest: no shared fixture with test_lua_save).
 struct World {

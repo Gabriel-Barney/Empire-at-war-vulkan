@@ -76,13 +76,13 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
     endif()
     # --- end A1 ---
     add_executable(alamo_sim_battle_tests sim/tests/test_battles.cpp)
-    target_link_libraries(alamo_sim_battle_tests PRIVATE alamo_sim alamo_vfs)
+    target_link_libraries(alamo_sim_battle_tests PRIVATE alamo_sim alamo_vfs alamo_test_support)
     target_compile_definitions(alamo_sim_battle_tests PRIVATE "ALAMO_SIM_TESTDATA=\"${CMAKE_CURRENT_SOURCE_DIR}/sim/testdata\"")
     add_test(NAME alamo_sim_battle_tests COMMAND alamo_sim_battle_tests)
     set_tests_properties(alamo_sim_battle_tests PROPERTIES TIMEOUT 900)
     # --- L1 systems (owner: tactical-systems agent): special weapons / TSW / hyperspace / engines in a campaign battle ---
     add_executable(alamo_sim_l1_tests sim/tests/test_battle_l1.cpp)
-    target_link_libraries(alamo_sim_l1_tests PRIVATE alamo_sim alamo_vfs)
+    target_link_libraries(alamo_sim_l1_tests PRIVATE alamo_sim alamo_vfs alamo_test_support)
     target_compile_definitions(alamo_sim_l1_tests PRIVATE "ALAMO_SIM_TESTDATA=\"${CMAKE_CURRENT_SOURCE_DIR}/sim/testdata\"")
     add_test(NAME alamo_sim_l1_tests COMMAND alamo_sim_l1_tests)
     set_tests_properties(alamo_sim_l1_tests PROPERTIES TIMEOUT 600)
@@ -93,13 +93,13 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
   # recorded command stream at 0/1/4/N workers + checked-in golden (no game data needed), and the
   # real FoC space / land maps when ALAMO_FOC_DATA is set (skipped otherwise).
   add_executable(alamo_sim_tests sim/tests/test_sim.cpp)
-  target_link_libraries(alamo_sim_tests PRIVATE alamo_sim alamo_vfs)
+  target_link_libraries(alamo_sim_tests PRIVATE alamo_sim alamo_vfs alamo_test_support)
   target_compile_definitions(alamo_sim_tests PRIVATE "ALAMO_SIM_TESTDATA=\"${CMAKE_CURRENT_SOURCE_DIR}/sim/testdata\"")
   add_test(NAME alamo_sim_tests COMMAND alamo_sim_tests)
   set_tests_properties(alamo_sim_tests PROPERTIES TIMEOUT 600)
   # BM1: the benchmark scenario manifest, tick statistics, comparison rule and result JSON (no game data).
   add_executable(alamo_sim_bench_tests sim/tests/test_bench.cpp)
-  target_link_libraries(alamo_sim_bench_tests PRIVATE alamo_sim)
+  target_link_libraries(alamo_sim_bench_tests PRIVATE alamo_sim alamo_test_support)
   add_test(NAME alamo_sim_bench_tests COMMAND alamo_sim_bench_tests)
   set_tests_properties(alamo_sim_bench_tests PROPERTIES TIMEOUT 120)
 endif()

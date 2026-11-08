@@ -26,6 +26,7 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
 #include "alamo/objects/object_types.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_LUA_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
 #endif
@@ -38,14 +39,7 @@ using namespace alamo;
 using namespace alamo::lua;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 #ifndef ALAMO_LUA_LOG_DIR
 #define ALAMO_LUA_LOG_DIR "logs"
@@ -89,10 +83,7 @@ static double gnum(LuaVm& vm, const char* name) {
     return d;
 }
 
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 static void write_log(const std::string& name, const std::string& text) {
     std::error_code ec;
@@ -595,21 +586,7 @@ static void test_static_scan() {
 // ------------------------------------------------------------------------------------------
 // Shipped scripts (ALAMO_FOC_DATA / ALAMO_EAW_DATA).
 
-static std::string env(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 static bool has_script_ext(const std::string& p) {
     auto lower = p;
@@ -631,7 +608,7 @@ static void list_loose(const fs::path& dir, const std::string& rel, std::vector<
 }
 
 static void test_shipped_scripts(const char* var, const char* game) {
-    const std::string root = env(var);
+    const std::string root = env_or_empty(var);
     if (root.empty()) {
         std::printf("  %s unset: shipped %s scripts skipped\n", var, game);
         return;

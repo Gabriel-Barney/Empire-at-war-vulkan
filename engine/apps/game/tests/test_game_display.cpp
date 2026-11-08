@@ -12,20 +12,14 @@
 
 #include "../app/game_display.hpp"
 #include "alamo/render/renderer.hpp"
+#include "alamo/test/support.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
 namespace {
-int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 using namespace alamo;
 using game::DisplayMode;

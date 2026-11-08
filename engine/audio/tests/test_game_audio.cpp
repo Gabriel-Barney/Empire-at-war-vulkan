@@ -40,18 +40,12 @@
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::audio;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
@@ -1170,10 +1164,7 @@ void test_determinism() {
 
 // ------------------------------------------------------------------ real data
 
-std::string env(const char* name) {
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-}
+using ::alamo::test::env_or_empty;
 
 void test_real(const std::string& game, const std::string& root, bool is_eaw) {
     vfs::VfsConfig vc;
@@ -1457,7 +1448,7 @@ int main() {
     std::printf("lua bridge: lua module not configured, skipped\n");
 #endif
     test_determinism();
-    const std::string foc = env("ALAMO_FOC_DATA"), eaw = env("ALAMO_EAW_DATA");
+    const std::string foc = env_or_empty("ALAMO_FOC_DATA"), eaw = env_or_empty("ALAMO_EAW_DATA");
     if (foc.empty() && eaw.empty()) std::printf("real data: ALAMO_FOC_DATA / ALAMO_EAW_DATA not set, skipped\n");
     if (!foc.empty()) test_real("foc", foc, false);
     if (!eaw.empty()) test_real("eaw", eaw, true);

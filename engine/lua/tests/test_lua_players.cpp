@@ -20,6 +20,7 @@
 
 #include "alamo/lua/bindings.hpp"
 #include "alamo/lua/lua_vm.hpp"
+#include "alamo/test/support.hpp"
 
 #if defined(ALAMO_LUA_PLAYERS)
 #include "alamo/ai/ai_path_finder.hpp"
@@ -44,14 +45,7 @@
 using namespace alamo;
 using namespace alamo::lua;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 #if defined(ALAMO_LUA_PLAYERS)
 

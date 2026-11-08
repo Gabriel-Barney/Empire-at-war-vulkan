@@ -19,6 +19,7 @@
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/tactical/movement/movement_system.hpp"
+#include "alamo/test/support.hpp"
 
 #ifdef ALAMO_MOVEMENT_HAVE_TERRAIN
 #include <filesystem>
@@ -35,42 +36,16 @@
 #include "alamo/objects/object_types.hpp"
 #include "alamo/tactical/movement/ted_grid.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
 #define MOVEMENT_REAL_DATA 1
 #endif
 
 using namespace alamo;
 using namespace alamo::tactical::movement;
 
-static int g_fail = 0;
-#define CHECK(c)                                                              \
-    do {                                                                      \
-        if (!(c)) {                                                           \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);          \
-            ++g_fail;                                                         \
-        }                                                                     \
-    } while (0)
+using ::alamo::test::g_fail;
 
-static ParallelFor make_thread_pf(unsigned threads) {
-    return [threads](uint32_t count, uint32_t grain, const RangeFn& fn) {
-        if (count == 0) return;
-        const uint32_t gr = std::max<uint32_t>(1, grain);
-        const uint32_t chunks = (count + gr - 1) / gr;
-        std::atomic<uint32_t> next{0};
-        auto worker = [&] {
-            for (;;) {
-                const uint32_t c = next.fetch_add(1);
-                if (c >= chunks) break;
-                const uint32_t b = c * gr;
-                fn(b, std::min(count, b + gr));
-            }
-        };
-        const unsigned extra = std::min<unsigned>(std::max(1u, threads), chunks) - 1;
-        std::vector<std::thread> ts;
-        for (unsigned t = 0; t < extra; ++t) ts.emplace_back(worker);
-        worker();
-        for (auto& t : ts) t.join();
-    };
-}
+static ParallelFor make_thread_pf(unsigned threads) { return ::alamo::test::make_thread_parallel_for(threads); }
 
 // ---------------------------------------------------------------- helpers
 static PassabilityGrid random_maze(uint32_t w, uint32_t h, uint32_t seed, int32_t wall_pct) {

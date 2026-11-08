@@ -21,6 +21,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/rhi/rhi.hpp"
+#include "alamo/test/support.hpp"
 
 #ifdef ALAMO_RHI_HAVE_SHADERS
 #include "bl_ps.h"
@@ -37,14 +38,7 @@
 using namespace alamo;
 using namespace alamo::rhi;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 

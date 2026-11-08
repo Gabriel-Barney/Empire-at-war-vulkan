@@ -166,7 +166,7 @@ add_dependencies(alamo_render alamo_render_gamma_shaders)
 # Halton / jitter / history rules (CPU) + the resolve on the GPU (empty scene, validation required when available) and,
 # with ALAMO_FOC_DATA, a land map under a slowly moving camera, TAA off vs on -> logs\render_taa_*.png.
 add_executable(alamo_render_taa_tests tests/test_render_taa.cpp)
-target_link_libraries(alamo_render_taa_tests PRIVATE alamo_core alamo_render)
+target_link_libraries(alamo_render_taa_tests PRIVATE alamo_core alamo_render alamo_render_test_support)
 target_compile_definitions(alamo_render_taa_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
 alamo_shaderxlat_copy_dxc(alamo_render_taa_tests)
 add_test(NAME alamo_render_taa_tests COMMAND alamo_render_taa_tests)
@@ -174,7 +174,7 @@ set_tests_properties(alamo_render_taa_tests PROPERTIES TIMEOUT 900 ENVIRONMENT "
 
 # Soft shadows must not darken the unshadowed frame (playtest 3); real data: _MP_LAND_ENDOR shadows off / hard / soft.
 add_executable(alamo_render_shadow_tests tests/test_render_shadow.cpp)
-target_link_libraries(alamo_render_shadow_tests PRIVATE alamo_core alamo_render)
+target_link_libraries(alamo_render_shadow_tests PRIVATE alamo_core alamo_render alamo_render_test_support)
 target_compile_definitions(alamo_render_shadow_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
 alamo_shaderxlat_copy_dxc(alamo_render_shadow_tests)
 add_test(NAME alamo_render_shadow_tests COMMAND alamo_render_shadow_tests)
@@ -188,6 +188,8 @@ set_target_properties(alamo_render_app PROPERTIES OUTPUT_NAME alamo_render)
 # when MSVC pulls formats' COMDATs first (LNK2005; same workaround as alamo_headless).
 target_link_libraries(alamo_render_app PRIVATE alamo_core alamo_render)
 target_compile_definitions(alamo_render_app PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
+# app/app_common.hpp: helpers shared by main.cpp and the sim / galactic / particles sub-mains (CU4 t03).
+target_include_directories(alamo_render_app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/app)
 if(WIN32)
   target_link_libraries(alamo_render_app PRIVATE user32)
 endif()
@@ -199,8 +201,14 @@ add_test(NAME alamo_render_app_sync COMMAND alamo_render_app --clear --frame-gra
 set_tests_properties(alamo_render_app_sync PROPERTIES TIMEOUT 120 ENVIRONMENT "VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true")
 
 # ---------------------------------------------------------------- tests
+# CU4 t02: header-only GPU test scaffolding (GpuCore, GpuOffscreen over alamo/render/offscreen.hpp) for the render-side
+# test exes here, in galactic/ and particles/ and in engine/ui; brings alamo_test_support (CHECK, env helpers).
+add_library(alamo_render_test_support INTERFACE)
+target_include_directories(alamo_render_test_support INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/test_support/include)
+target_link_libraries(alamo_render_test_support INTERFACE alamo_test_support)
+
 add_executable(alamo_render_tests tests/test_render.cpp tests/test_render_gpu.cpp)
-target_link_libraries(alamo_render_tests PRIVATE alamo_render)
+target_link_libraries(alamo_render_tests PRIVATE alamo_render alamo_render_test_support)
 target_compile_definitions(alamo_render_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
 # CPU checks always; GPU checks skip cleanly without a Vulkan 1.3 device. The test sets
 # VK_LAYER_PATH (toolchain\vvl\bin) itself and then requires validation with 0 messages.
@@ -210,7 +218,7 @@ set_tests_properties(alamo_render_tests PROPERTIES TIMEOUT 600)
 
 # Space background scene order on real data (planets vs nebula domes, SPACE_AND_OPEN.md D.7 3); PNGs to logs\.
 add_executable(alamo_render_space_tests tests/test_render_space.cpp)
-target_link_libraries(alamo_render_space_tests PRIVATE alamo_render)
+target_link_libraries(alamo_render_space_tests PRIVATE alamo_render alamo_render_test_support)
 target_compile_definitions(alamo_render_space_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
 alamo_shaderxlat_copy_dxc(alamo_render_space_tests)
 add_test(NAME alamo_render_space_tests COMMAND alamo_render_space_tests)
@@ -238,7 +246,7 @@ function(alamo_render_add_sim_targets)
   target_compile_definitions(alamo_render_app PRIVATE ALAMO_RENDER_HAVE_SIM=1)
 
   add_executable(alamo_render_sim_tests ${_dir}/tests/test_render_sim.cpp)
-  target_link_libraries(alamo_render_sim_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags)  # core first: see alamo_render_app
+  target_link_libraries(alamo_render_sim_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags alamo_render_test_support)  # core first: see alamo_render_app
   target_compile_definitions(alamo_render_sim_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
   add_test(NAME alamo_render_sim_tests COMMAND alamo_render_sim_tests)
   set_tests_properties(alamo_render_sim_tests PROPERTIES TIMEOUT 900)
@@ -253,7 +261,7 @@ function(alamo_render_add_sim_targets)
   # Phase 4 R3 / R4 / R5 render-side additions: fog of war from the sim's grids, runtime decals / unit tracks, _ALT swap,
   # per-bone clip visibility, HideWhenFogged fade. PNGs (real data) go to the build directory.
   add_executable(alamo_render_r5_tests ${_dir}/tests/test_render_r5.cpp)
-  target_link_libraries(alamo_render_r5_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags)
+  target_link_libraries(alamo_render_r5_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags alamo_render_test_support)
   target_compile_definitions(alamo_render_r5_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\""
                              "ALAMO_R5_OUT_DIR=\"${CMAKE_BINARY_DIR}\"")
   if(TARGET alamo_tactical_fog)
@@ -271,7 +279,7 @@ function(alamo_render_add_sim_targets)
   # Phase 4 R5 t04 ability beams (beams.hpp / sim_beams.hpp): ribbon / dot / lightning geometry, animation, snapshot records
   # from a real battle's abilities; GPU draw with Engine\PrimAdditive when ALAMO_FOC_DATA is set (validation required).
   add_executable(alamo_render_beams_tests ${_dir}/tests/test_render_beams.cpp)
-  target_link_libraries(alamo_render_beams_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags)
+  target_link_libraries(alamo_render_beams_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags alamo_render_test_support)
   target_compile_definitions(alamo_render_beams_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
   alamo_shaderxlat_copy_dxc(alamo_render_beams_tests)
   add_test(NAME alamo_render_beams_tests COMMAND alamo_render_beams_tests)
@@ -279,7 +287,7 @@ function(alamo_render_add_sim_targets)
 
   # Phase 4 R5 t05 sensor jamming visual (jam_fx.hpp): blob visibility rule / model / instance, snapshot jamming digest, interpolation.
   add_executable(alamo_render_jam_tests ${_dir}/tests/test_render_jam.cpp)
-  target_link_libraries(alamo_render_jam_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags)
+  target_link_libraries(alamo_render_jam_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags alamo_test_support)
   add_test(NAME alamo_render_jam_tests COMMAND alamo_render_jam_tests)
   set_tests_properties(alamo_render_jam_tests PROPERTIES TIMEOUT 300)
 endfunction()

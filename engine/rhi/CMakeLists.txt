@@ -67,7 +67,7 @@ else()
 endif()
 
 add_executable(alamo_rhi_tests tests/test_rhi.cpp)
-target_link_libraries(alamo_rhi_tests PRIVATE alamo_rhi)
+target_link_libraries(alamo_rhi_tests PRIVATE alamo_rhi alamo_test_support)
 if(_rhi_have_dxc)
   add_dependencies(alamo_rhi_tests alamo_rhi_test_shaders)
   target_include_directories(alamo_rhi_tests PRIVATE ${_rhi_shader_out})

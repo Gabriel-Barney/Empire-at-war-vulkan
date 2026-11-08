@@ -22,6 +22,7 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/terrain/terrain.hpp"
+#include "alamo/test/support.hpp"
 
 #if defined(ALAMO_TERRAIN_HAVE_DATA)
 #include "alamo/data/game_database.hpp"
@@ -32,14 +33,7 @@
 
 using namespace alamo::terrain;
 
-static int g_fail = 0;
-#define CHECK(x)                                                                    \
-    do {                                                                            \
-        if (!(x)) {                                                                 \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #x);                \
-            ++g_fail;                                                               \
-        }                                                                           \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 

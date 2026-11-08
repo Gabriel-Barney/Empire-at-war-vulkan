@@ -1,12 +1,14 @@
-// Minimal std::thread-backed alamo::ParallelFor for the ai_tactical tests (the real backend lives in engine/jobs).
-// A persistent pool of `threads - 1` workers plus the calling thread; chunks of `grain` indices are claimed
-// atomically, so which thread runs which chunk varies run to run - results must not. A call made from inside a
-// running body (nested) runs serially on that thread.
+// The engine tests' std::thread-backed alamo::ParallelFor (CU4 t04 / t05: one copy for every module; the real backend
+// lives in engine/jobs). A persistent pool of `threads - 1` workers plus the calling thread; chunks of `grain` indices
+// are claimed atomically, so which thread runs which chunk varies run to run - results must not (the 1 / 4 / N-thread
+// CRC tests check it). A call made from inside a running body (nested) runs serially on that thread.
 //
-// The caller waits only for chunks that a thread has claimed, never for a worker to wake up. Floyd-Warshall makes one
-// call per k (about 9300 over the shipped maps), and the old per-call std::thread spawn + join waited for every new
-// thread to get a time slice: at 100% CPU (other sessions' builds) the 2 s test ran past ctest's 600 s timeout
-// (2026-11-03). A worker that wakes after the last chunk was claimed finds nothing left and goes back to sleep.
+// Chosen from the three module copies (galactic, tactical, ai/tactical, 2026-11-07): the ai/tactical one. The caller
+// waits only for chunks that a thread has claimed, never for a worker to wake up. Floyd-Warshall makes one call per k
+// (about 9300 over the shipped maps), and a pool that waits for every worker to report back (the galactic / tactical
+// copies), like the older per-call std::thread spawn + join, waits for each worker to get a time slice: at 100% CPU
+// (other sessions' builds) the 2 s test ran past ctest's 600 s timeout (2026-11-03). A worker that wakes after the last
+// chunk was claimed finds nothing left and goes back to sleep. Calls from different outside threads take turns.
 #pragma once
 #include <algorithm>
 #include <atomic>
@@ -19,7 +21,7 @@
 
 #include "alamo/core/parallel.hpp"
 
-namespace alamo::ai::tactical::testing {
+namespace alamo::test {
 
 class ThreadPoolFor {
 public:
@@ -120,4 +122,4 @@ inline ParallelFor make_thread_parallel_for(unsigned threads) {
     return [pool](uint32_t count, uint32_t grain, const RangeFn& fn) { pool->run(count, grain, fn); };
 }
 
-}  // namespace alamo::ai::tactical::testing
+}  // namespace alamo::test

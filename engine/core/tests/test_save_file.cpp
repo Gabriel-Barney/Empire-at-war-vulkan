@@ -10,15 +10,9 @@
 #include "alamo/core/compress.hpp"
 #include "alamo/core/save_file.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/test/support.hpp"
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 static void test_byte_helpers() {
     alamo::ByteWriter w;

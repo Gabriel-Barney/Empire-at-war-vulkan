@@ -26,6 +26,8 @@
 #include "alamo/tactical/movement/hyperspace.hpp"
 #include "alamo/tactical/movement/movement_system.hpp"
 #include "alamo/tactical/movement/special_locomotors.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::tactical;
@@ -33,36 +35,9 @@ using namespace alamo::tactical::movement;
 
 namespace {
 
-int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
-ParallelFor make_thread_pf(unsigned threads) {
-    return [threads](uint32_t count, uint32_t grain, const RangeFn& fn) {
-        if (count == 0) return;
-        const uint32_t gr = std::max<uint32_t>(1, grain);
-        const uint32_t chunks = (count + gr - 1) / gr;
-        std::atomic<uint32_t> next{0};
-        auto worker = [&] {
-            for (;;) {
-                const uint32_t c = next.fetch_add(1);
-                if (c >= chunks) break;
-                const uint32_t b = c * gr;
-                fn(b, std::min(count, b + gr));
-            }
-        };
-        const unsigned extra = std::min<unsigned>(std::max(1u, threads), chunks) - 1;
-        std::vector<std::thread> ts;
-        for (unsigned t = 0; t < extra; ++t) ts.emplace_back(worker);
-        worker();
-        for (auto& t : ts) t.join();
-    };
-}
+ParallelFor make_thread_pf(unsigned threads) { return ::alamo::test::make_thread_parallel_for(threads); }
 
 using Bytes = std::vector<uint8_t>;
 

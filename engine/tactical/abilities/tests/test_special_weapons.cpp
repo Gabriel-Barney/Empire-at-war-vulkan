@@ -13,7 +13,7 @@
 #include "alamo/tactical/abilities/space_fields.hpp"
 #include "alamo/tactical/combat/weather.hpp"
 #include "alamo/tactical/abilities/special_weapons.hpp"
-#include "thread_parallel_for.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::tactical;
@@ -23,14 +23,7 @@ using alamo::tactical::Vec3;
 
 namespace {
 
-int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 #define CHECK_EQ(a, b)                                                                                  \
     do {                                                                                                \
         const double va_ = static_cast<double>(a), vb_ = static_cast<double>(b);                        \

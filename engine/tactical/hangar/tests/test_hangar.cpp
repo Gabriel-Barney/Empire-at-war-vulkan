@@ -21,6 +21,7 @@
 #include "alamo/tactical/hangar/contents.hpp"
 #include "alamo/tactical/hangar/engine_loops.hpp"
 #include "alamo/tactical/hangar/hangar_system.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_HANGAR_TESTS_HAVE_DATA
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/objects/game_object_types.hpp"
@@ -36,14 +37,7 @@ namespace ta = alamo::tactical::abilities;
 
 namespace {
 
-int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 bool near(float a, float b) { return a - b < 0.01f && b - a < 0.01f; }
 bool near3(Vec3 a, Vec3 b) { return near(a.x, b.x) && near(a.y, b.y) && near(a.z, b.z); }

@@ -14,18 +14,12 @@
 #include "alamo/ui/input.hpp"
 #include "alamo/ui/orders.hpp"
 #include "alamo/ui/picking.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::ui;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 

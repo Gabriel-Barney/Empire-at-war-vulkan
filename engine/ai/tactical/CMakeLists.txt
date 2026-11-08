@@ -52,7 +52,7 @@ if(TARGET alamo_ai_lua)
                                                        alamo_commands alamo_data alamo_engine_flags PRIVATE alamo_lua_vm
                                                        alamo_ai_save_io)
   add_executable(alamo_ai_tactical_world_tests tests/test_ai_tactical_world.cpp)
-  target_link_libraries(alamo_ai_tactical_world_tests PRIVATE alamo_ai_tactical_world Threads::Threads)
+  target_link_libraries(alamo_ai_tactical_world_tests PRIVATE alamo_ai_tactical_world Threads::Threads alamo_test_support)
   target_compile_definitions(alamo_ai_tactical_world_tests PRIVATE
                              "ALAMO_AI_TACTICAL_GOLDEN_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/golden\"")
   add_test(NAME alamo_ai_tactical_world_tests COMMAND alamo_ai_tactical_world_tests)
@@ -62,11 +62,11 @@ endif()
 # A1 t01 settled readings (docs/re/A1_READINGS.md 6, 9, 13-15): nFow rounding, UnitAI data-pack stamps and the first
 # re-projection check, destroyed objects' memory entries, free-store land / space admission and service timing.
 add_executable(alamo_ai_tactical_readings_tests tests/test_ai_tactical_readings.cpp)
-target_link_libraries(alamo_ai_tactical_readings_tests PRIVATE alamo_ai_tactical)
+target_link_libraries(alamo_ai_tactical_readings_tests PRIVATE alamo_ai_tactical alamo_test_support)
 add_test(NAME alamo_ai_tactical_readings_tests COMMAND alamo_ai_tactical_readings_tests)
 
 add_executable(alamo_ai_tactical_tests tests/test_ai_tactical.cpp)
-target_link_libraries(alamo_ai_tactical_tests PRIVATE alamo_ai_tactical Threads::Threads)
+target_link_libraries(alamo_ai_tactical_tests PRIVATE alamo_ai_tactical alamo_test_support)
 # Real data (ALAMO_FOC_DATA): every shipped map's hint zones / space grid through the VFS.
 if("vfs" IN_LIST ALAMO_ENGINE_MODULES AND "terrain" IN_LIST ALAMO_ENGINE_MODULES)
   target_link_libraries(alamo_ai_tactical_tests PRIVATE alamo_vfs)
@@ -81,7 +81,7 @@ set_tests_properties(alamo_ai_tactical_tests PROPERTIES TIMEOUT 600)
 # fog memory, Lua-facing functions, scenario CRC golden (1 / 4 / N threads; MSVC writes it, clang
 # must match) and, with ALAMO_FOC_DATA, the shipped tactical perceptual equations.
 add_executable(alamo_ai_tactical_perception_tests tests/test_ai_tactical_perception.cpp)
-target_link_libraries(alamo_ai_tactical_perception_tests PRIVATE alamo_ai_tactical Threads::Threads)
+target_link_libraries(alamo_ai_tactical_perception_tests PRIVATE alamo_ai_tactical alamo_test_support)
 if(TARGET alamo_vfs)
   target_link_libraries(alamo_ai_tactical_perception_tests PRIVATE alamo_vfs)
   target_compile_definitions(alamo_ai_tactical_perception_tests PRIVATE ALAMO_AI_TACTICAL_HAVE_VFS=1)

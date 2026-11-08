@@ -64,6 +64,7 @@
 #include "alamo/render/ted.hpp"
 #include "alamo/rhi/rhi.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "app_common.hpp"  // engine/render/app (CU4 t03)
 
 using namespace alamo;
 using Clock = std::chrono::steady_clock;
@@ -172,13 +173,9 @@ struct DepthTarget {
     }
 };
 
-std::filesystem::path cache_dir_of(const Options& o) {
-    return o.cache_dir.empty() ? render::default_pipeline_cache_dir() : alamo::path_from_utf8(o.cache_dir);
-}
-// Shader (track B) cache: <--cache-dir>\shaders when --cache-dir is given, else shaderxlat's default.
-std::filesystem::path shader_cache_of(const Options& o) {
-    return o.cache_dir.empty() ? std::filesystem::path() : alamo::path_from_utf8(o.cache_dir) / "shaders";
-}
+// Pipeline / shader (track B) caches of --cache-dir: app_common.hpp.
+std::filesystem::path cache_dir_of(const Options& o) { return render_app::cache_dir_of(o.cache_dir); }
+std::filesystem::path shader_cache_of(const Options& o) { return render_app::shader_cache_of(o.cache_dir); }
 
 // Scene lighting: --env map (start environment), else the built-in Kuat space (or Endor land) record.
 render::Lighting scene_lighting(const Options& o, const FileProvider* files, bool& ok) {

@@ -12,21 +12,14 @@
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/tactical/fog/fog_of_war.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo::tactical::fog;
 
 namespace {
 
-int g_fail = 0;
-int g_checks = 0;
-#define CHECK(c)                                                                \
-    do {                                                                        \
-        ++g_checks;                                                             \
-        if (!(c)) {                                                             \
-            ++g_fail;                                                           \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);           \
-        }                                                                       \
-    } while (0)
+using ::alamo::test::g_fail;
+using ::alamo::test::g_checks;
 
 // 20 x 20 land grid (cell 15) over [0, 300]^2: centre of (col, row).
 float cx_of(int32_t col) { return 15.0f * static_cast<float>(col) + 7.5f; }

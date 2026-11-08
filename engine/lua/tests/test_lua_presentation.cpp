@@ -22,6 +22,7 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
 #include "alamo/objects/object_types.hpp"
+#include "alamo/test/support.hpp"
 #include "vm_internal.hpp"  // the per-family binding tables (duplicate check)
 
 #include <lua.h>
@@ -30,14 +31,7 @@ using namespace alamo;
 using namespace alamo::lua;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 // q6 t11 (docs/re/LUA_API.md "Binding error model across all bindings"): a binding error does not unwind; it logs
 // "SCRIPT ERROR: ..." and sets the script's stop flag. run() reports those lines as its result (a Lua error as before)

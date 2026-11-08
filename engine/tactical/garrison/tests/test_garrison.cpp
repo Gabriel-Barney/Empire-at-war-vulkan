@@ -20,6 +20,7 @@
 #include "alamo/tactical/garrison/capture.hpp"
 #include "alamo/tactical/garrison/garrison.hpp"
 #include "alamo/tactical/garrison/garrison_types.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::tactical::garrison;
@@ -27,16 +28,8 @@ namespace fs = std::filesystem;
 
 namespace {
 
-int g_fail = 0;
-int g_checks = 0;
-#define CHECK(c)                                                      \
-    do {                                                              \
-        ++g_checks;                                                   \
-        if (!(c)) {                                                   \
-            ++g_fail;                                                 \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-        }                                                             \
-    } while (0)
+using ::alamo::test::g_fail;
+using ::alamo::test::g_checks;
 
 constexpr uint64_t kInf = 1, kVeh = 2;
 
@@ -544,10 +537,7 @@ void test_capture_save() {
                 saved.size(), a.c.events().size());
 }
 
-void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 void test_types() {
     const fs::path root = fs::temp_directory_path() / "alamo_tactical_garrison_tests";

@@ -43,6 +43,8 @@
 #include "alamo/ui/load_screen.hpp"
 #include "alamo/ui/picking.hpp"
 #include "alamo/ui/render_bridge.hpp"
+#include "alamo/test/support.hpp"
+#include "alamo/render/test/gpu.hpp"
 #ifdef ALAMO_UI_HAVE_VFS
 #include <cstdlib>
 
@@ -55,50 +57,15 @@
 
 using namespace alamo;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
+struct Gpu : render::test::GpuCore {
     ui::HudRenderer hud;
 };
 
-struct Offscreen {
-    rhi::Image color, depth;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        rhi::ImageDesc dd = cd;
-        dd.format = rhi::Format::D32F;
-        dd.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        return g.alloc.create_image(cd, color) && g.alloc.create_image(dd, depth) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                     rhi::MemoryUsage::Readback, readback);
-    }
-    void destroy(Gpu& g) {
-        g.alloc.destroy(color);
-        g.alloc.destroy(depth);
-        g.alloc.destroy(readback);
-    }
-};
+using Offscreen = render::test::OffscreenWithDepth;  // alamo/render/offscreen.hpp
 
 // One frame: the renderer clears / renders an empty world (post chain included), then the HUD pass draws `hud` and the
 // dialog list at the Dialogs step. `settle` repeats the frame until shell pipelines are ready. Returns RGBA pixels.

@@ -24,8 +24,7 @@ target_link_libraries(alamo_tactical_combat PUBLIC alamo_tactical alamo_core ala
 # allocation count, modifier-aggregation micro-benchmark (printed). Data checks use ALAMO_FOC_DATA.
 # Regenerate the golden: alamo_tactical_combat_tests --write-golden <file>.
 add_executable(alamo_tactical_combat_tests tests/test_combat.cpp)
-target_link_libraries(alamo_tactical_combat_tests PRIVATE alamo_tactical_combat alamo_data alamo_objects Threads::Threads)
-target_include_directories(alamo_tactical_combat_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../tests)
+target_link_libraries(alamo_tactical_combat_tests PRIVATE alamo_tactical_combat alamo_data alamo_objects alamo_test_support)
 # FoC data through the VFS (Data\XML lives in Config.meg in the shipped game).
 if(TARGET alamo_vfs)
   target_link_libraries(alamo_tactical_combat_tests PRIVATE alamo_vfs)

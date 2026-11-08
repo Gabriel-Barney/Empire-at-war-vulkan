@@ -59,7 +59,7 @@ if(TARGET alamo_lua)
 endif()
 
 add_executable(alamo_audio_tests tests/test_audio.cpp)
-target_link_libraries(alamo_audio_tests PRIVATE alamo_audio)
+target_link_libraries(alamo_audio_tests PRIVATE alamo_audio alamo_test_support)
 # Coverage reports (XML fields, sample resolution, decode sample) go to <project>/logs/audio_*.txt.
 target_compile_definitions(alamo_audio_tests PRIVATE "ALAMO_AUDIO_LOG_DIR=\"${PROJECT_SOURCE_DIR}/logs\"")
 add_test(NAME alamo_audio_tests COMMAND alamo_audio_tests)
@@ -67,7 +67,7 @@ set_tests_properties(alamo_audio_tests PROPERTIES TIMEOUT 300)
 
 # Game-host layer: ambience (weather / map), conversations, GameAudio event hooks, Lua bridge via GameAudio.
 add_executable(alamo_audio_game_tests tests/test_game_audio.cpp)
-target_link_libraries(alamo_audio_game_tests PRIVATE alamo_audio)
+target_link_libraries(alamo_audio_game_tests PRIVATE alamo_audio alamo_test_support)
 target_compile_definitions(alamo_audio_game_tests PRIVATE "ALAMO_AUDIO_LOG_DIR=\"${PROJECT_SOURCE_DIR}/logs\"")
 add_test(NAME alamo_audio_game_tests COMMAND alamo_audio_game_tests)
 set_tests_properties(alamo_audio_game_tests PROPERTIES TIMEOUT 300)

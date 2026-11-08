@@ -18,18 +18,12 @@
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/galactic/special_systems.hpp"
 #include "alamo/objects/game_object_types.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::galactic;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 

@@ -13,19 +13,13 @@
 #include "alamo/galactic/cadence.hpp"
 #include "alamo/galactic/fleet_path.hpp"
 #include "alamo/galactic/planet_graph.hpp"
-#include "thread_parallel_for.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::galactic;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
@@ -173,7 +167,7 @@ void test_graph_build() {
         p.nonplanet_prob = 0.05f;
         const GalaxyMap gm = random_galaxy(r, p);
         const PlanetGraph s = PlanetGraph::build(gm);
-        const PlanetGraph pp = PlanetGraph::build(gm, {}, testing::make_thread_parallel_for(4));
+        const PlanetGraph pp = PlanetGraph::build(gm, {}, ::alamo::test::make_thread_parallel_for(4));
         CHECK(s.fingerprint() == pp.fingerprint());
         for (uint32_t a = 0; a < s.size(); ++a)
             for (uint32_t e = s.edge_begin(a); e < s.edge_end(a); ++e) {
@@ -829,7 +823,7 @@ uint32_t random_size(Rng& r) {
 
 void test_all_pairs_equivalence() {
     Rng r(0xA11);
-    const ParallelFor threaded = testing::make_thread_parallel_for(4);
+    const ParallelFor threaded = ::alamo::test::make_thread_parallel_for(4);
     int raw_graphs = 0, geo_graphs = 0, mismatches = 0, path_fail = 0, eligible = 0, fallback = 0, wrapped = 0;
     int par_ref_checked = 0;
     uint64_t entries = 0;
@@ -1038,7 +1032,7 @@ void test_cache() {
     CHECK(!cache.update(g2, in));
     cache.invalidate();
     cache.set_fast_min_planets(0);
-    CHECK(cache.update(g2, in, testing::make_thread_parallel_for(3)));
+    CHECK(cache.update(g2, in, ::alamo::test::make_thread_parallel_for(3)));
     CHECK(cache.last_method() == AllPairsMethod::Fast);
     reference_all_pairs(g2, in, ref);
     CHECK(cache.matrices() == ref);

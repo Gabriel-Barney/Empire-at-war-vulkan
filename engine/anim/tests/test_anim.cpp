@@ -36,6 +36,7 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_ANIM_HAVE_JOBS
 #include "alamo/jobs/job_system.hpp"
 #endif
@@ -48,14 +49,7 @@ using alamo::SimRng;
 
 namespace {
 
-int g_fail = 0;
-#define CHECK(c)                                                                  \
-    do {                                                                          \
-        if (!(c)) {                                                               \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);              \
-            ++g_fail;                                                             \
-        }                                                                         \
-    } while (0)
+using ::alamo::test::g_fail;
 
 // ---- synthetic data -----------------------------------------------------------------------------------
 
@@ -1686,7 +1680,6 @@ void test_death_plan() {
         CHECK(plan_death(nullptr, keep, 1, rng).lifetime == 30 + 7 && rng.state() == st);
     }
 }
-
 
 // s78l t03 (TACTICAL_COMBAT slot 47 "s78l t03"): idle records, the moving gate, the presence idle type, IDLE-only service.
 void test_idle_records() {

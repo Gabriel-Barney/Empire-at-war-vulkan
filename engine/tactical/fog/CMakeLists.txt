@@ -17,13 +17,13 @@ target_link_libraries(alamo_tactical_fog PUBLIC alamo_core alamo_engine_flags PR
 # independence (shuffled source order -> identical hash). Real FoC data (GameConstants, maps) is exercised by
 # alamo_sim_battle_tests (engine/apps/sim) when ALAMO_FOC_DATA is set.
 add_executable(alamo_tactical_fog_tests tests/test_fog.cpp)
-target_link_libraries(alamo_tactical_fog_tests PRIVATE alamo_tactical_fog)
+target_link_libraries(alamo_tactical_fog_tests PRIVATE alamo_tactical_fog alamo_test_support)
 add_test(NAME alamo_tactical_fog_tests COMMAND alamo_tactical_fog_tests)
 set_tests_properties(alamo_tactical_fog_tests PROPERTIES TIMEOUT 300)
 
 # N1 stage 2: save / load mid-battle (reveal sources, decay mid-fade, Lua reveal / undo, Reveal_All, dense mask, setup
 # phase): a loaded fog continues identically to the uninterrupted one.
 add_executable(alamo_tactical_fog_save_tests tests/test_fog_save.cpp)
-target_link_libraries(alamo_tactical_fog_save_tests PRIVATE alamo_tactical_fog)
+target_link_libraries(alamo_tactical_fog_save_tests PRIVATE alamo_tactical_fog alamo_test_support)
 add_test(NAME alamo_tactical_fog_save_tests COMMAND alamo_tactical_fog_save_tests)
 set_tests_properties(alamo_tactical_fog_save_tests PROPERTIES TIMEOUT 300)

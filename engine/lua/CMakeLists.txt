@@ -285,7 +285,7 @@ target_include_directories(alamo_lua PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(alamo_lua PUBLIC alamo_objects alamo_core alamo_engine_flags PRIVATE alamo_lua_vm)
 
 add_executable(alamo_lua_tests tests/test_lua.cpp)
-target_link_libraries(alamo_lua_tests PRIVATE alamo_lua alamo_lua_vm Threads::Threads)
+target_link_libraries(alamo_lua_tests PRIVATE alamo_lua alamo_lua_vm Threads::Threads alamo_test_support)
 # Binding coverage / script compile reports go to <project>/logs/lua_*.txt.
 target_compile_definitions(alamo_lua_tests PRIVATE "ALAMO_LUA_LOG_DIR=\"${PROJECT_SOURCE_DIR}/logs\"")
 if(TARGET alamo_vfs)
@@ -298,7 +298,7 @@ set_tests_properties(alamo_lua_tests PROPERTIES TIMEOUT 120)
 # One test exe per binding family (L1 stage 2): tests/test_lua_<family>.cpp.
 foreach(_fam objects players story presentation tactical script_gaps fog script_remaining save gc script_save)
   add_executable(alamo_lua_${_fam}_tests tests/test_lua_${_fam}.cpp)
-  target_link_libraries(alamo_lua_${_fam}_tests PRIVATE alamo_lua alamo_lua_vm Threads::Threads)
+  target_link_libraries(alamo_lua_${_fam}_tests PRIVATE alamo_lua alamo_lua_vm Threads::Threads alamo_test_support)
   target_include_directories(alamo_lua_${_fam}_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   if(TARGET alamo_vfs)
     target_link_libraries(alamo_lua_${_fam}_tests PRIVATE alamo_vfs)

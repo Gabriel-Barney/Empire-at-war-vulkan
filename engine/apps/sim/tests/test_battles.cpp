@@ -47,6 +47,7 @@
 #include "alamo/tactical/movement/ted_grid.hpp"  // S7 t07: SPACE_OBSTACLE footprints
 #include "alamo/vfs/vfs.hpp"
 #include "alamo/tactical/garrison/garrison_types.hpp"  // S4
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_SIM_HAVE_ANIM
 #include "alamo/sim/sim_anim.hpp"
 #endif
@@ -55,22 +56,12 @@ using namespace alamo;
 using namespace alamo::sim;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
+using ::alamo::test::g_fail;
 static bool g_regen = false;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace {
 
-void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 const char* kTypes = R"(<S10>
  <Planet Name="S10_A"><Behavior>PLANET</Behavior><Terrain>Temperate</Terrain><Planet_Credit_Value>10</Planet_Credit_Value></Planet>
@@ -2621,21 +2612,7 @@ void test_s4_battle(const Data& d) {
 // --- end S4 ---
 #endif
 
-std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 // Fog of war in battles (owner: fog agent; docs/re/FOG_OF_WAR.md): units with REVEAL reveal for their side, the
 // human sees part of the map and enemy units hidden / shown over time, the AI player is never fogged (force 0),
@@ -3535,7 +3512,6 @@ void test_attack_idle_clip_order() {
     CHECK(ran);
     animation.detach(host);
 }
-
 
 // s78l t03 (TACTICAL_COMBAT slot 47 "s78l t03"): IMPOSING_PRESENCE writes idle records (presence trooper id -> frames)
 // into the IDLE pack of the other troopers in range, on the interval-30 schedule; the default idle type then picks

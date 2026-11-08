@@ -27,27 +27,18 @@
 #include "alamo/sim/campaign_battles.hpp"
 #include "alamo/sim/sim_host.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::sim;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
+using ::alamo::test::g_fail;
 static bool g_regen = false;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace {
 
-void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 const char* kTypes = R"(<L1>
  <Planet Name="S10_A"><Behavior>PLANET</Behavior><Terrain>Temperate</Terrain><Planet_Credit_Value>10</Planet_Credit_Value></Planet>
@@ -1420,21 +1411,7 @@ void test_persist(const Data& d) {
     CHECK(k.fought && !k.restored && k.built && k.added_ok && k.filtered_ok && k.after == k.expect_after);
 }
 
-std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 // ---- s78f t05: command 25 SpecialWeaponFire (TACTICAL_COMBAT §3.1.1 "Fire-at-position order", LOB_SOLVER §9) ----
 // The Empire defends S10_B with a lobbing superweapon (LOBBING_SUPERWEAPON + TURRET + WEAPON, a grenade projectile,

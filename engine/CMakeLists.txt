@@ -7,6 +7,7 @@
 #   jobs      - job system / thread pool + deterministic fixed-step tick
 #   galactic  - planet graph, re-entrant A* fleet pathing, AI all-pairs (FW reference + parallel)
 #   apps      - alamo_headless host (+ Phase 3 viewer)
+#   test_support - header-only CHECK harness, env / data-root / file helpers and ParallelFor pool for the test exes
 # Phase 3 (Vulkan 1.3 renderer):
 #   assets    - ALO/ALA/texture loading into GPU-ready CPU data (no Vulkan)
 #   rhi       - Vulkan 1.3 backend: runtime vulkan-1 loader, device, swapchain, memory, sync
@@ -123,6 +124,9 @@ function(alamo_add_worker_count_check name)
   endforeach()
   set(${name}_CRC ${_crc} PARENT_SCOPE)
 endfunction()
+
+# Header-only test support (CU4). Not in ALAMO_ENGINE_MODULES (a cached list), so existing build trees get it too.
+add_subdirectory(test_support)
 
 foreach(m core vfs data jobs galactic objects anim commands tactical lua ai assets rhi shaderxlat materials terrain render ui audio video apps)
   if(m IN_LIST ALAMO_ENGINE_MODULES AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${m}/CMakeLists.txt)

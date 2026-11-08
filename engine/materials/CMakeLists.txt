@@ -136,7 +136,7 @@ endif()
 
 # ---------------------------------------------------------------- tests
 add_executable(alamo_materials_tests tests/test_materials.cpp)
-target_link_libraries(alamo_materials_tests PRIVATE alamo_materials alamo_fxbuild)
+target_link_libraries(alamo_materials_tests PRIVATE alamo_materials alamo_fxbuild alamo_test_support)
 if(TARGET alamo_vfs)
   target_link_libraries(alamo_materials_tests PRIVATE alamo_vfs)
   target_compile_definitions(alamo_materials_tests PRIVATE ALAMO_MATERIALS_HAVE_VFS=1)

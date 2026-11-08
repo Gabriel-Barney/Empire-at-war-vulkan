@@ -36,25 +36,20 @@
 #include "alamo/galactic/planet_graph.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_AI_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
 #endif
 #ifdef ALAMO_AI_HAVE_JOBS
 #include "alamo/jobs/job_system.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
 #endif
 
 using namespace alamo;
 using namespace alamo::ai;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 // ---- equation language --------------------------------------------------------------------------
 
@@ -628,24 +623,7 @@ static RunDigest run_synthetic(uint32_t planets, uint32_t ais, uint32_t frames, 
     return d;
 }
 
-static ParallelFor thread_pf(uint32_t threads) {
-    return [threads](uint32_t count, uint32_t grain, const RangeFn& fn) {
-        if (count == 0) return;
-        const uint32_t g = grain ? grain : 1;
-        const uint32_t chunks = (count + g - 1) / g;
-        std::vector<std::thread> pool;
-        for (uint32_t t = 0; t < threads; ++t) {
-            pool.emplace_back([&, t] {
-                for (uint32_t c = t; c < chunks; c += threads) {
-                    const uint32_t b = c * g;
-                    const uint32_t e = b + g < count ? b + g : count;
-                    fn(b, e);
-                }
-            });
-        }
-        for (auto& th : pool) th.join();
-    };
-}
+static ParallelFor thread_pf(uint32_t threads) { return ::alamo::test::make_thread_parallel_for(threads); }
 
 static std::string golden_text(const RunDigest& d) {
     char buf[160];

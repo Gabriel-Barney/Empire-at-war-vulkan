@@ -34,7 +34,7 @@ if(TARGET alamo_galactic_sim)
 endif()
 
 add_executable(alamo_ai_tests tests/test_ai.cpp)
-target_link_libraries(alamo_ai_tests PRIVATE alamo_ai alamo_objects Threads::Threads)
+target_link_libraries(alamo_ai_tests PRIVATE alamo_ai alamo_objects Threads::Threads alamo_test_support)
 # Coverage reports for the shipped equations go to <project>/logs/ai_perception_coverage_<game>.txt.
 target_compile_definitions(alamo_ai_tests PRIVATE "ALAMO_AI_LOG_DIR=\"${PROJECT_SOURCE_DIR}/logs\""
                                                   "ALAMO_AI_GOLDEN_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/golden\"")
@@ -66,7 +66,7 @@ if(TARGET alamo_lua AND TARGET alamo_lua_vm AND TARGET alamo_galactic_sim)
   target_link_libraries(alamo_ai_galactic PUBLIC alamo_ai_lua alamo_ai alamo_galactic_sim alamo_lua alamo_objects
                                                  alamo_commands alamo_data alamo_engine_flags PRIVATE alamo_lua_vm)
   add_executable(alamo_ai_galactic_tests tests/test_ai_galactic.cpp)
-  target_link_libraries(alamo_ai_galactic_tests PRIVATE alamo_ai_galactic Threads::Threads)
+  target_link_libraries(alamo_ai_galactic_tests PRIVATE alamo_ai_galactic Threads::Threads alamo_test_support)
   target_compile_definitions(alamo_ai_galactic_tests PRIVATE
                              "ALAMO_AI_GOLDEN_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/golden\""
                              "ALAMO_AI_LOG_DIR=\"${PROJECT_SOURCE_DIR}/logs\"")

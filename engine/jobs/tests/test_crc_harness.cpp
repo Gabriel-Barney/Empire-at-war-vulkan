@@ -11,18 +11,12 @@
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/jobs/jobs.hpp"
+#include "alamo/test/support.hpp"
 
 namespace dm = alamo::dmath;
 using namespace alamo::jobs;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 

@@ -10,17 +10,11 @@
 #include "alamo/sim/bench_json.hpp"
 #include "alamo/sim/bench_scenario.hpp"
 #include "alamo/sim/bench_stats.hpp"
+#include "alamo/test/support.hpp"
 
 namespace bench = alamo::sim::bench;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 static bool near(double a, double b) { return std::fabs(a - b) < 1e-9; }
 

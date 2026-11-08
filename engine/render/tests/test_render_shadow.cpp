@@ -32,50 +32,18 @@
 #include "alamo/render/world.hpp"
 #include "alamo/rhi/rhi.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
+#include "alamo/render/test/gpu.hpp"
 
 using namespace alamo;
 
 namespace {
 
-int g_failures = 0;
-#define CHECK(cond)                                                              \
-    do {                                                                         \
-        if (!(cond)) {                                                           \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);          \
-            ++g_failures;                                                        \
-        }                                                                        \
-    } while (0)
+using ::alamo::test::g_fail;
 
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
-};
+using Gpu = render::test::GpuCore;
 
-struct Offscreen {
-    rhi::Image color;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        return g.alloc.create_image(cd, color) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, rhi::MemoryUsage::Readback,
-                                     readback);
-    }
-    void destroy(Gpu& g) {
-        if (color) g.alloc.destroy(color);
-        if (readback) g.alloc.destroy(readback);
-    }
-    const uint8_t* data() const { return static_cast<const uint8_t*>(readback.mapped()); }
-};
+using Offscreen = render::test::OffscreenColorOnly;  // alamo/render/offscreen.hpp
 
 bool frame(Gpu& g, render::Renderer& r, Offscreen& o, const render::ViewMatrices& vm, std::span<const render::Instance> inst,
            const render::RecordOptions& ro, render::DrawStats& st, const float (&clear)[4], std::span<const render::Instance> sky = {},
@@ -347,6 +315,6 @@ int run_gpu(const std::string& src_dir) {
 
 int main() {
     run_gpu(ALAMO_RENDER_SOURCE_DIR);
-    std::printf("%s (%d failures)\n", g_failures ? "FAILED" : "PASSED", g_failures);
-    return g_failures ? 1 : 0;
+    std::printf("%s (%d failures)\n", g_fail ? "FAILED" : "PASSED", g_fail);
+    return g_fail ? 1 : 0;
 }

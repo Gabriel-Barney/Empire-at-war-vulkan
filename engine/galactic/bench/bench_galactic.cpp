@@ -12,7 +12,7 @@
 #include "alamo/galactic/all_pairs.hpp"
 #include "alamo/galactic/fleet_path.hpp"
 #include "alamo/galactic/planet_graph.hpp"
-#include "thread_parallel_for.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
 
 using namespace alamo;
 using namespace alamo::galactic;
@@ -73,7 +73,7 @@ double time_ms(F&& f, int min_reps, double min_total_ms) {
 int main(int argc, char** argv) {
     const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
     const unsigned threads = argc > 1 ? static_cast<unsigned>(std::max(1, std::atoi(argv[1]))) : hw;
-    const ParallelFor par = testing::make_thread_parallel_for(threads);
+    const ParallelFor par = ::alamo::test::make_thread_parallel_for(threads);
     std::printf("hardware_concurrency = %u, bench threads = %u\n", hw, threads);
     std::printf("times are best-of-N wall clock, ms. 'fast' columns run only when the fast path is eligible\n");
     std::printf("(no uint32 wrap possible); 'auto' = compute_all_pairs (fast iff eligible && N >= %u).\n\n",

@@ -16,7 +16,7 @@ target_include_directories(alamo_objects PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/incl
 target_link_libraries(alamo_objects PUBLIC alamo_data alamo_core alamo_engine_flags)
 
 add_executable(alamo_objects_tests tests/test_objects.cpp)
-target_link_libraries(alamo_objects_tests PRIVATE alamo_objects Threads::Threads)
+target_link_libraries(alamo_objects_tests PRIVATE alamo_objects Threads::Threads alamo_test_support)
 # Coverage reports for real data go to <build dir>/logs/objects_coverage_<game>.txt (per build tree, so
 # two builds' ctests running at once never share the file; the test prints the path).
 target_compile_definitions(alamo_objects_tests PRIVATE "ALAMO_OBJECTS_LOG_DIR=\"${CMAKE_BINARY_DIR}/logs\"")

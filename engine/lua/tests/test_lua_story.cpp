@@ -21,6 +21,7 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
 #include "alamo/objects/object_types.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_LUA_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
 #endif
@@ -31,14 +32,7 @@ using namespace alamo;
 using namespace alamo::lua;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 static std::string run(LuaVm& vm, const std::string& code) {
     std::string err;
@@ -67,10 +61,7 @@ static uint64_t digest(const StoryModel& m) {
     return h.digest();
 }
 
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 // ------------------------------------------------------------------------------------------
 // Synthetic plot: every firing rule with a hand-computed order.
@@ -1167,24 +1158,10 @@ static void test_coverage() {
 // ------------------------------------------------------------------------------------------
 // Shipped FoC campaigns (ALAMO_FOC_DATA).
 
-static std::string env(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 static void test_foc_campaigns() {
-    const std::string root = env("ALAMO_FOC_DATA");
+    const std::string root = env_or_empty("ALAMO_FOC_DATA");
     if (root.empty()) {
         std::printf("  ALAMO_FOC_DATA unset: shipped campaign plots skipped\n");
         return;
@@ -1339,7 +1316,7 @@ static void test_unknown_prereq() {
 // printed. Thrawn_Empire's Empire set has the two `Unlock_Wayland` warnings (a data error in the mod, see above).
 static void test_tr_campaign_plots() {
 #ifdef ALAMO_LUA_HAVE_VFS
-    const std::string foc = env("ALAMO_FOC_DATA");
+    const std::string foc = env_or_empty("ALAMO_FOC_DATA");
     const size_t at = foc.find("\\steamapps\\common\\");
     const std::string tr = at == std::string::npos ? std::string() : foc.substr(0, at) + "\\steamapps\\workshop\\content\\32470\\1125571106";
     if (tr.empty() || !fs::exists(path_from_utf8(tr + "\\Data\\XML\\GameObjectFiles.xml"))) {

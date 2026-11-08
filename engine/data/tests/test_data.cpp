@@ -19,6 +19,7 @@
 #include "alamo/data/game_database.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_DATA_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
 #endif
@@ -27,14 +28,7 @@ using namespace alamo;
 using namespace alamo::data;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 static bool has_warning(const XmlDocument& d, uint32_t line, std::string_view needle) {
     for (const auto& w : d.diagnostics())
@@ -194,7 +188,6 @@ static void test_xml_recovery() {
     }
 }
 
-
 // Every prefix and a set of deterministic byte mutations of a tricky document must parse
 // without crashing (run under ASan/UBSan in CI to catch out-of-bounds reads).
 static void test_xml_robustness() {
@@ -284,10 +277,7 @@ static void test_values() {
     CHECK(!parse_pair("Rebel"));
 }
 
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 // modc t06: planet columns through Variant_Of_Existing_Type (OBJECT_TYPES.md §3.3 / §3.4). The template is in a later
 // file (any definition order), a two-step chain, a variant's own tags win, its <Behavior> replaces the list (last one

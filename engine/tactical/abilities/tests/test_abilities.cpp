@@ -27,7 +27,8 @@
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
-#include "thread_parallel_for.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_ABILITIES_TESTS_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
 #endif
@@ -63,14 +64,7 @@ using alamo::tactical::Vec3;
 using alamo::tactical::combat::ObjectId;
 using alamo::tactical::combat::kNoObject;
 
-int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 #define CHECK_EQ(a, b)                                                                                              \
     do {                                                                                                            \
         const double va_ = static_cast<double>(a), vb_ = static_cast<double>(b);                                    \
@@ -3150,7 +3144,7 @@ void test_battle(const char* golden, const char* write_golden) {
     const unsigned hw = std::max(2u, std::thread::hardware_concurrency());
     for (unsigned threads : {1u, 4u, hw}) {
         Battle b;
-        const CrcLog par = b.run(kTicks, alamo::tactical::testing::make_thread_parallel_for(threads));
+        const CrcLog par = b.run(kTicks, alamo::test::make_thread_parallel_for(threads));
         const CrcDivergence dv = first_divergence(serial, par);
         if (dv.diverged) std::printf("threads %u: %s\n", threads, dv.message.c_str());
         CHECK(!dv.diverged);
@@ -3266,7 +3260,7 @@ void test_save_load_battle() {
     CHECK(battle_digest(*a.w.sys, *a.w.ab, a.w.rng) == battle_digest(*b.w.sys, *b.w.ab, b.w.rng));
     CHECK(a.registry.capture(a.w.frame).combined == b.registry.capture(b.w.frame).combined);
 
-    const ParallelFor pf4 = alamo::tactical::testing::make_thread_parallel_for(4);
+    const ParallelFor pf4 = alamo::test::make_thread_parallel_for(4);
     uint32_t diverged = 0, events = 0, activations = 0;
     for (uint32_t i = 0; i < kAfter; ++i) {
         const uint32_t f = a.w.frame;

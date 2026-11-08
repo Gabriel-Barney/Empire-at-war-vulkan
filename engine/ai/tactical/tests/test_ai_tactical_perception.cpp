@@ -23,7 +23,7 @@
 
 #include "alamo/ai/ai_budget.hpp"
 #include "alamo/ai/ai_types.hpp"
-#include "thread_parallel_for.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
 #include "alamo/ai/perception_equations.hpp"
 #include "alamo/ai/tactical/perception_cache.hpp"
 #include "alamo/ai/tactical/perception_lua.hpp"
@@ -37,6 +37,7 @@
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/objects/enums.hpp"  // A2k t06
+#include "alamo/test/support.hpp"
 
 #if defined(ALAMO_AI_TACTICAL_HAVE_VFS)
 #include "alamo/vfs/vfs.hpp"
@@ -46,19 +47,12 @@ using namespace alamo;
 using namespace alamo::ai;
 using namespace alamo::ai::tactical;
 
-static int g_fail = 0;
-#define CHECK(c)                                                         \
-    do {                                                                 \
-        if (!(c)) {                                                      \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);     \
-            ++g_fail;                                                    \
-        }                                                                \
-    } while (0)
+using ::alamo::test::g_fail;
 
 static bool near_eq(double a, double b, double eps = 1e-4) { return std::fabs(a - b) <= eps * std::max(1.0, std::fabs(b)); }
 
 static ParallelFor make_thread_pf(unsigned threads) {
-    return ::alamo::ai::tactical::testing::make_thread_parallel_for(threads);  // persistent pool, thread_parallel_for.hpp
+    return ::alamo::test::make_thread_parallel_for(threads);  // persistent pool, alamo/test/thread_parallel_for.hpp
 }
 
 // Test category table (the default resolver is the objects module's GameObjectCategoryType).

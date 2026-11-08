@@ -42,34 +42,15 @@
 #include "alamo/render/sim_view.hpp"
 #include "alamo/rhi/rhi.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
+#include "alamo/render/test/gpu.hpp"
 
 using namespace alamo;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
-static std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 static bool near(float a, float b, float eps = 1e-4f) { return std::fabs(a - b) <= eps; }
 
@@ -956,35 +937,11 @@ static void test_fleets_and_selection(const render::GalacticWorld& w) {
 }
 
 // ------------------------------------------------------------------------------------------- GPU
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
+struct Gpu : render::test::GpuCore {
     render::Renderer renderer;
 };
 
-struct Offscreen {
-    rhi::Image color;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        return g.alloc.create_image(cd, color) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, rhi::MemoryUsage::Readback, readback);
-    }
-    void destroy(Gpu& g) {
-        g.alloc.destroy(color);
-        g.alloc.destroy(readback);
-    }
-};
+using Offscreen = render::test::OffscreenColorOnly;  // alamo/render/offscreen.hpp
 
 static void test_gpu(const render::GalacticWorld& w, const std::string& src_dir) {
     const bool strict = render::setup_validation_env(src_dir);

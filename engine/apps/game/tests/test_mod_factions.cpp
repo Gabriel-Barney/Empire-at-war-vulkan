@@ -18,18 +18,12 @@
 
 #include "alamo/core/ascii.hpp"
 #include "alamo/game/game_data.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
@@ -122,10 +116,7 @@ const char* kFactions2 = R"(<Factions>
 </Factions>
 )";
 
-void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 fs::path make_data() {
     const fs::path root = fs::temp_directory_path() / "alamo_game_mod_faction_tests";

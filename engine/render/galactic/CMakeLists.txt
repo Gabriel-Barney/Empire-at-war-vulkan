@@ -31,7 +31,7 @@ function(alamo_render_add_galactic_targets)
 
   add_executable(alamo_render_galactic_tests ${_dir}/tests/test_render_galactic.cpp)
   # alamo_core first: see alamo_render_app (formats' inline ByteReader vs core's, LNK2005).
-  target_link_libraries(alamo_render_galactic_tests PRIVATE alamo_core alamo_render_galactic alamo_vfs alamo_engine_flags)
+  target_link_libraries(alamo_render_galactic_tests PRIVATE alamo_core alamo_render_galactic alamo_vfs alamo_engine_flags alamo_render_test_support)
   target_compile_definitions(alamo_render_galactic_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
   alamo_shaderxlat_copy_dxc(alamo_render_galactic_tests)
   add_test(NAME alamo_render_galactic_tests COMMAND alamo_render_galactic_tests)

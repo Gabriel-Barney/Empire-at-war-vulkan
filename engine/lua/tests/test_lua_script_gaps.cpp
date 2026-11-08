@@ -22,6 +22,7 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
 #include "alamo/objects/object_types.hpp"
+#include "alamo/test/support.hpp"
 #include "vm_internal.hpp"
 
 #include <lua.h>
@@ -30,14 +31,7 @@ using namespace alamo;
 using namespace alamo::lua;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 static std::string run(LuaVm& vm, const std::string& code) {
     std::string err;
@@ -71,10 +65,7 @@ static double gnum(LuaVm& vm, const char* name) {
 static bool last_message_has(LuaVm& vm, const char* text) {
     return !vm.messages().empty() && vm.messages().back().find(text) != std::string::npos;
 }
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 struct Db {
     fs::path root;

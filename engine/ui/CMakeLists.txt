@@ -78,7 +78,7 @@ if(WIN32)
 endif()
 
 add_executable(alamo_ui_hud_tests tests/test_hud.cpp tests/test_hud_stage2.cpp)
-target_link_libraries(alamo_ui_hud_tests PRIVATE alamo_ui_hud alamo_data)
+target_link_libraries(alamo_ui_hud_tests PRIVATE alamo_ui_hud alamo_data alamo_test_support)
 target_compile_definitions(alamo_ui_hud_tests PRIVATE "ALAMO_UI_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
 if(TARGET alamo_assets)
   target_compile_definitions(alamo_ui_hud_tests PRIVATE ALAMO_UI_HAVE_ASSETS=1)
@@ -100,7 +100,7 @@ endif()
 # P4 GUI tests (CPU): dialog script / ids / skin parsing, controls, focus, modal routing, menus, load screens, galactic
 # HUD, Lua GUI ops; real GUIDialogs.rc / Resource.h / GUIDialogs.xml / campaigns through the VFS with ALAMO_FOC_DATA.
 add_executable(alamo_ui_gui_tests tests/test_gui.cpp)
-target_link_libraries(alamo_ui_gui_tests PRIVATE alamo_ui_hud alamo_data)
+target_link_libraries(alamo_ui_gui_tests PRIVATE alamo_ui_hud alamo_data alamo_test_support)
 target_compile_definitions(alamo_ui_gui_tests PRIVATE "ALAMO_UI_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
 if(TARGET alamo_vfs)
   target_link_libraries(alamo_ui_gui_tests PRIVATE alamo_vfs)
@@ -117,7 +117,7 @@ set_tests_properties(alamo_ui_gui_tests PROPERTIES TIMEOUT 120)
 # real GUIDialogs.rc / CommandBarComponents through the VFS with ALAMO_FOC_DATA.
 add_executable(alamo_ui_screens_tests tests/test_gui_screens.cpp tests/test_gui_screens_a.cpp tests/test_gui_screens_b.cpp tests/test_gui_screens_c.cpp
   tests/test_gui_skirmish_maps.cpp)
-target_link_libraries(alamo_ui_screens_tests PRIVATE alamo_ui_hud alamo_data)
+target_link_libraries(alamo_ui_screens_tests PRIVATE alamo_ui_hud alamo_data alamo_test_support)
 if(TARGET alamo_vfs)
   target_link_libraries(alamo_ui_screens_tests PRIVATE alamo_vfs)
   target_compile_definitions(alamo_ui_screens_tests PRIVATE ALAMO_UI_HAVE_VFS=1)
@@ -128,7 +128,7 @@ set_tests_properties(alamo_ui_screens_tests PROPERTIES TIMEOUT 120)
 # p4ui t03 (CPU): colour combos draw item text in the item colour, lobby glyph items, tech-tree arrows / tints, battle-end
 # arrows, fleet summary dividers (docs/re/UI.md §3.7).
 add_executable(alamo_ui_colour_arrows_tests tests/test_gui_colour_arrows.cpp)
-target_link_libraries(alamo_ui_colour_arrows_tests PRIVATE alamo_ui_hud alamo_data)
+target_link_libraries(alamo_ui_colour_arrows_tests PRIVATE alamo_ui_hud alamo_data alamo_test_support)
 add_test(NAME alamo_ui_colour_arrows_tests COMMAND alamo_ui_colour_arrows_tests)
 set_tests_properties(alamo_ui_colour_arrows_tests PROPERTIES TIMEOUT 120)
 
@@ -167,7 +167,7 @@ if(TARGET alamo_render AND TARGET alamo_rhi)
 
   add_executable(alamo_ui_draw_tests tests/test_hud_draw.cpp)
   # alamo_core first: tools/formats' inline ByteReader vs core's (see alamo_render_app).
-  target_link_libraries(alamo_ui_draw_tests PRIVATE alamo_core alamo_ui_draw alamo_engine_flags)
+  target_link_libraries(alamo_ui_draw_tests PRIVATE alamo_core alamo_ui_draw alamo_engine_flags alamo_render_test_support)
   target_compile_definitions(alamo_ui_draw_tests PRIVATE "ALAMO_UI_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
   if(TARGET alamo_objects)  # hud_sim_bridge.hpp (header-only) needs the object-store headers of sim_snapshot.hpp
     target_link_libraries(alamo_ui_draw_tests PRIVATE alamo_objects)
@@ -186,7 +186,7 @@ if(TARGET alamo_render AND TARGET alamo_rhi)
   # P4 GUI frames on the GPU: main menu, campaign selection, load screen, galactic HUD (synthetic, and real data with
   # ALAMO_FOC_DATA) -> logs/ui_gui_*.png, 0 validation messages.
   add_executable(alamo_ui_gui_draw_tests tests/test_gui_draw.cpp)
-  target_link_libraries(alamo_ui_gui_draw_tests PRIVATE alamo_core alamo_ui_draw alamo_data alamo_engine_flags)
+  target_link_libraries(alamo_ui_gui_draw_tests PRIVATE alamo_core alamo_ui_draw alamo_data alamo_engine_flags alamo_render_test_support)
   target_compile_definitions(alamo_ui_gui_draw_tests PRIVATE "ALAMO_UI_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
   if(TARGET alamo_vfs AND TARGET alamo_jobs)
     target_link_libraries(alamo_ui_gui_draw_tests PRIVATE alamo_vfs alamo_jobs)
@@ -200,14 +200,14 @@ if(TARGET alamo_render AND TARGET alamo_rhi)
 endif()
 
 add_executable(alamo_ui_tests tests/test_ui.cpp)
-target_link_libraries(alamo_ui_tests PRIVATE alamo_ui alamo_data)
+target_link_libraries(alamo_ui_tests PRIVATE alamo_ui alamo_data alamo_test_support)
 add_test(NAME alamo_ui_tests COMMAND alamo_ui_tests)
 set_tests_properties(alamo_ui_tests PROPERTIES TIMEOUT 60)
 
 # CameraParams must give the renderer's exact view (render_bridge.hpp); checked when render is configured.
 if(TARGET alamo_render)
   add_executable(alamo_ui_render_bridge_tests tests/test_render_bridge.cpp)
-  target_link_libraries(alamo_ui_render_bridge_tests PRIVATE alamo_ui alamo_render)
+  target_link_libraries(alamo_ui_render_bridge_tests PRIVATE alamo_ui alamo_render alamo_test_support)
   if(TARGET alamo_ui_rhi)
     target_link_libraries(alamo_ui_render_bridge_tests PRIVATE alamo_ui_rhi)
   endif()
@@ -217,7 +217,7 @@ endif()
 
 # p4ui t04 (CPU, synthetic data): which fleet fills which of the three organiser panes (docs/re/UI.md §7).
 add_executable(alamo_ui_organizer_tests tests/test_gui_organizer.cpp)
-target_link_libraries(alamo_ui_organizer_tests PRIVATE alamo_ui_hud alamo_data)
+target_link_libraries(alamo_ui_organizer_tests PRIVATE alamo_ui_hud alamo_data alamo_test_support)
 if(TARGET alamo_vfs)
   target_link_libraries(alamo_ui_organizer_tests PRIVATE alamo_vfs)
   target_compile_definitions(alamo_ui_organizer_tests PRIVATE ALAMO_UI_HAVE_VFS=1)

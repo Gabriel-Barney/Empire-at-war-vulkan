@@ -25,7 +25,7 @@ if(TARGET alamo_data)
 endif()
 
 add_executable(alamo_terrain_tests tests/test_terrain.cpp)
-target_link_libraries(alamo_terrain_tests PRIVATE alamo_terrain)
+target_link_libraries(alamo_terrain_tests PRIVATE alamo_terrain alamo_test_support)
 # Real-data tests (ALAMO_FOC_DATA): maps from maps.meg through the VFS, object types from the game
 # database, patches built on the job system. Only the test links these.
 if(TARGET alamo_vfs AND TARGET alamo_data AND TARGET alamo_jobs)

@@ -16,18 +16,12 @@
 #include "alamo/objects/object_types.hpp"
 #include "alamo/sim/game_modes.hpp"
 #include "alamo/tactical/movement/space_avoid.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 namespace mv = alamo::tactical::movement;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
