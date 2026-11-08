@@ -93,6 +93,14 @@ enum class EventType : uint8_t {
     PortExtension = 63,
 };
 
+// FleetManagement (id 8) payload field "op" (Bits 4): the galactic fleet operations (AI_GALACTIC_2 §5.4, STRATEGIC_GAPS 1.7,
+// executor 0x5af260; rules per op: galactic campaign.hpp). Shared by the sim (engine/galactic), the AI and the galactic HUD.
+// The values are command payload bytes: changing one changes the command stream and its CRCs.
+enum FleetOp : uint8_t {
+    kFleetForm = 0, kFleetJoin = 1, kFleetDetach = 2, kFleetMerge = 3, kFleetLaunch = 4, kFleetLand = 5,
+    kFleetMoveNew = 6, kFleetMoveNewFlag = 7, kFleetSlot = 8
+};
+
 enum class FieldKind : uint8_t { Bits, Id, Player, Quant, List, CountedIds, Str, WStr, Opaque };
 
 struct FieldDef {

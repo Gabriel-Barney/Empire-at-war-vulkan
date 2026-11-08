@@ -221,7 +221,7 @@ void test_foreign_orbit() {
     CHECK(e.drag("q2_0001", "q1_0001", &valid).empty() && !valid);
     CHECK(e.drag("q2_0001", "q1_fleet", &valid).empty() && !valid);
     const std::vector<commands::EventData> o = e.drag("q2_0001", "q3_0001", &valid);
-    CHECK(valid && o.size() == 1 && o[0] == fleet_management_event(903, 901, 9011, 3));
+    CHECK(valid && o.size() == 1 && o[0] == fleet_management_event(commands::kFleetMerge, 903, 901, 9011));
     // A lone foreign fleet: pane 0 only, the other panes empty.
     e.build({make_fleet(906, 0, true, 1)}, false);
     CHECK(e.filled(0) == 1 && e.filled(1) == 0 && e.filled(2) == 0 && !e.hud.draggable(e.id("q1_0001")));
@@ -286,7 +286,7 @@ void test_stacks() {
     bool valid = false;
     e.build({make_fleet(902, 1, false, 1), g}, true);
     const std::vector<commands::EventData> o = e.drag("q1_0001", "q2_0001", &valid);
-    CHECK(valid && o.size() == 1 && o[0] == fleet_management_event(902, 901, 9101, 3));
+    CHECK(valid && o.size() == 1 && o[0] == fleet_management_event(commands::kFleetMerge, 902, 901, 9101));
 }
 
 // UI.md §7.3: empty pads show only while dragging; a drop on an empty pane makes a new fleet in that slot, on a pad of an
@@ -298,19 +298,19 @@ void test_empty_pads() {
     // Drag unit 9011 (fleet 901, pane 1) onto the empty pane 2: detach into a new fleet in slot 2.
     bool valid = false;
     std::vector<commands::EventData> o = e.drag("q2_0001", "q3_0001", &valid);
-    commands::EventData want = fleet_management_event(100, 901, 9011, 2);
+    commands::EventData want = fleet_management_event(commands::kFleetDetach, 100, 901, 9011);
     want.set("b", 2u);
     CHECK(valid && o.size() == 1 && o[0] == want);
     // The empty pads are gone again after the drop.
     CHECK(e.hidden("q3_0001") && e.hidden("q1_0003"));
     // A drop on an empty pad of an occupied pane merges into that pane's fleet; of its own fleet it does nothing.
     o = e.drag("q2_0001", "q1_0003", &valid);
-    CHECK(valid && o.size() == 1 && o[0] == fleet_management_event(900, 901, 9011, 3));
+    CHECK(valid && o.size() == 1 && o[0] == fleet_management_event(commands::kFleetMerge, 900, 901, 9011));
     o = e.drag("q1_0001", "q1_0003", &valid);
     CHECK(!valid && o.empty());
     // The whole fleet (its header) dropped on an empty pane changes its slot (op 8).
     o = e.drag("q2_fleet", "q3_0002", &valid);
-    CHECK(valid && o.size() == 1 && o[0] == fleet_management_event(100, 901, commands::kNoObject, 8, 2));
+    CHECK(valid && o.size() == 1 && o[0] == fleet_management_event(commands::kFleetSlot, 100, 901, commands::kNoObject, commands::kNoObject, 2));
     // A foreign pane is no target, empty pads included.
     e.build({make_fleet(906, 0, true, 1), make_fleet(901, 1, false, 1)}, false);
     o = e.drag("q2_0001", "q1_0002", &valid);

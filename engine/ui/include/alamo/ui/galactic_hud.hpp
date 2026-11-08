@@ -269,14 +269,8 @@ struct GalacticHudFrame {
 // FleetManagement ops per AI_GALACTIC.md / AI_GALACTIC_2.md §5.4 (op names [M]): 0 form fleet, 2 detach, 3 merge,
 // 4 launch, 5 land. [port] payload use: target = destination fleet / planet, fleet = source fleet (kNoObject = none /
 // new), unit = the dragged unit (kNoObject = the whole fleet).
-// Same values as galactic::FleetOp (campaign.hpp; ui does not link galactic). They are command payload bytes: changing one
-// changes the command stream and its CRCs.
-namespace fleet_op {
-inline constexpr uint8_t kDetach = 2, kMerge = 3, kLaunch = 4, kLand = 5, kMoveNew = 6, kSlot = 8;
-}
-// a = the extra id (payload +0x54: ops 6 / 7 destination planet).
-commands::EventData fleet_management_event(uint32_t target, uint32_t fleet, uint32_t unit, uint8_t op, uint8_t slot = 0,
-                                           uint32_t a = 0);
+// The op codes and the event come from engine/commands (commands::FleetOp, commands::fleet_management_event), shared
+// with the galactic sim.
 
 // Drop rules [port]: a press on a draggable pad that moves more than 4 pixels starts a drag (the pad's icon follows the
 // cursor on layer 12); the release decides:

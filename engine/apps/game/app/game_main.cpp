@@ -254,7 +254,6 @@ bool App::init() {
     // P4 screens / panels / cursor / radar / hotkeys.
     screens_.init(ui_.gui);
     info_.init(ui_.gui);
-    orders_.set_keyboard_orders(false);  // keyboard orders come from HotkeyDispatcher (the 153-slot table)
     {
         std::vector<uint8_t> xml;
         if (data_.files->read("Data\\XML\\MousePointers.xml", xml)) {
@@ -289,14 +288,13 @@ bool App::init() {
             }
         }
         ency_.init(ui_.components, ui_.atlas, *ui_.fonts, &ui_.text);
-        ency_cfg_.delay_tooltips = gameplay_.delay_tooltips;
-        ency_.set_config(ency_cfg_);
         std::vector<std::string> names;
         for (ui::HudPanel* p : panels()) {
             p->init(ui_.components, ui_.atlas, *ui_.fonts, &ui_.text);
             p->set_sfx_hook([this](std::string_view ev, int32_t) { audio_.ui(ev); });
             for (const std::string& n : p->shell_names()) names.push_back(n);
         }
+        apply_tooltip_config();  // encyclopedia, both HUDs and the panels (after the panels' init)
         std::vector<std::string> missing;
         panel_shells_.load(ui_.components, [this](std::string_view n) { return gpu_.cache->model(n); }, names, &missing);
         const render::TextureSource tex = [this](std::string_view n, assets::TextureRole role) { return gpu_.cache->texture(n, role); };

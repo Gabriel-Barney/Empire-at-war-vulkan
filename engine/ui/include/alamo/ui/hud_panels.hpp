@@ -1,6 +1,6 @@
 // P4 HUD panels (docs/re/UI.md Â§2.2 shells, Â§2.3 tooltips / encyclopedia, CommandBarComponents.xml): the encyclopedia
 // pop-up, the hero roster and the FoC black-market / sabotage / corruption shells. Same host API as the galactic HUD:
-// plain data in (a frame struct), a HudDrawList + hit boxes out, clicks -> commands::EventData / HudAction out. Nothing
+// plain data in (a frame struct), a HudDrawList + hit boxes out, clicks -> HudAction out. Nothing
 // here reads or writes sim state.
 //
 // Data (CommandBarComponents.xml):
@@ -174,12 +174,6 @@ public:
     // Shell clicks of this frame -> `actions`. `wheel` = the frame's wheel notches (InputFrame::wheel), read by SlicePanel only.
     virtual void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
                               float wheel = 0.0f) = 0;
-    // Legacy signature with the unused EventData out parameter; engine/apps still calls it (cu13 t05 open item: call the
-    // virtual through the HudPanel pointer there, then delete this).
-    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>&,
-                      std::vector<HudAction>* actions = nullptr, float wheel = 0.0f) {
-        update_input(routed, shift, ctrl, now, actions, wheel);
-    }
 
     const HudDrawList& draw_list() const { return dl_; }
     const std::vector<HudHitBox>& hit_boxes() const { return hits_; }
@@ -277,7 +271,6 @@ public:
     void build(const HeroPanelFrame& f);
     void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
                       float wheel = 0.0f) override;
-    using HudPanel::update_input;  // the legacy overload
     uint32_t hover_hero() const;        // hovered good slot's hero object (0 = none)
     int32_t hover_component() const;    // its slot component (-1 = none)
 
@@ -312,7 +305,6 @@ public:
     void build(const BlackMarketFrame& f);
     void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
                       float wheel = 0.0f) override;
-    using HudPanel::update_input;  // the legacy overload
 
 private:
     void fallback_layout() override;
@@ -351,7 +343,6 @@ public:
     // is over one of the panel's components.
     void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
                       float wheel = 0.0f) override;
-    using HudPanel::update_input;  // the legacy overload
     int32_t first_row() const { return first_; }
 
 private:
@@ -380,7 +371,6 @@ public:
     void build(const SabotageFrame& f);
     void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
                       float wheel = 0.0f) override;
-    using HudPanel::update_input;  // the legacy overload
 
 private:
     void fallback_layout() override;
@@ -409,7 +399,6 @@ public:
     void build(const CorruptionFrame& f);
     void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
                       float wheel = 0.0f) override;
-    using HudPanel::update_input;  // the legacy overload
 
 private:
     void fallback_layout() override;
@@ -433,7 +422,6 @@ public:
     void build(const HackFrame& f);
     void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
                       float wheel = 0.0f) override;
-    using HudPanel::update_input;  // the legacy overload
 
 private:
     void fallback_layout() override;
