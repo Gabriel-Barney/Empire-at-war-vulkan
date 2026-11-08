@@ -14,7 +14,6 @@ namespace alamo::data {
 
 namespace {
 
-constexpr std::string_view kXmlDir = "Data\\XML\\";
 constexpr std::string_view kConstantsPath = "Data\\XML\\GameConstants.xml";
 constexpr std::string_view kGameObjectList = "Data\\XML\\GameObjectFiles.xml";
 constexpr std::string_view kTradeRouteList = "Data\\XML\\TradeRouteFiles.xml";
@@ -46,6 +45,46 @@ bool same_content(const CampaignDef& a, const CampaignDef& b) {
     for (size_t i = 0; i < a.raw.size(); ++i)
         if (!iequals(a.raw[i].first, b.raw[i].first) || a.raw[i].second != b.raw[i].second) return false;
     return true;
+}
+
+using WarnFn = std::function<void(std::string)>;
+
+// A TradeRouteFiles / CampaignFiles entry and the provider its file falls back to (extra campaign lists only).
+struct OrderedEntry {
+    ListedXmlEntry list;
+    const FileProvider* fallback = nullptr;
+};
+using CrcOrderedList = std::map<uint32_t, OrderedEntry>;  // key: list_file_crc of the entry name
+
+// cu5 t05 (Q13): the entries are de-duplicated by list_file_crc and parsed in ascending CRC order; an entry whose CRC
+// is already taken collapses into the first one listed (warned when `report`; the extra campaign lists do not).
+void add_crc_ordered(CrcOrderedList& ordered, ListedXmlEntry en, const FileProvider* fallback, std::string_view list_path,
+                     bool report, const WarnFn& warn) {
+    const uint32_t key = list_file_crc(en.name);
+    if (const auto it = ordered.find(key); it != ordered.end()) {
+        if (report)
+            warn(std::string(list_path) + ": '" + en.name + "' collapses with '" + it->second.list.name +
+                 "' (same name CRC); loaded once");
+        return;
+    }
+    ordered.emplace(key, OrderedEntry{std::move(en), fallback});
+}
+
+// cu5 t05 (Q13): last wins with whole-object replacement. A new name is appended (and indexed in `by_crc`); a repeated
+// name replaces the earlier definition in its slot, counting the definitions, with the duplicate warning.
+template <class Def>
+void upsert_last_wins(std::vector<Def>& defs, std::unordered_map<uint32_t, std::vector<uint32_t>>& by_crc, Def d,
+                      const XmlNode& element, std::string_view kind, const WarnFn& warn) {
+    const uint32_t idx = find_by_crc(by_crc, d.name, [&defs](uint32_t k) { return std::string_view(defs[k].name); });
+    if (idx == kInvalidPlanet) {
+        by_crc[d.name_crc].push_back(static_cast<uint32_t>(defs.size()));
+        defs.push_back(std::move(d));
+        return;
+    }
+    warn(where(element) + ": duplicate " + std::string(kind) + " '" + d.name + "' replaces the earlier definition (" +
+         (same_content(defs[idx], d) ? "identical content" : "CONTENT DIFFERS") + ")");
+    d.definitions = defs[idx].definitions + 1;
+    defs[idx] = std::move(d);  // last wins, no field merge
 }
 
 }  // namespace
@@ -168,22 +207,13 @@ const XmlDocument* GameDatabase::load_file(const FileProvider& provider, const F
 }
 
 // Every <File> entry in list order (duplicates kept; GameObjectFiles.xml parses them twice).
-std::vector<GameDatabase::ListEntry> GameDatabase::read_list(const FileProvider& provider, std::string_view list_path,
-                                                             bool& ok) {
-    std::vector<ListEntry> out;
+std::vector<ListedXmlEntry> GameDatabase::read_list(const FileProvider& provider, std::string_view list_path, bool& ok) {
     const XmlDocument* doc = load_file(provider, nullptr, list_path, true);
     if (!doc) {
         ok = false;
-        return out;
+        return {};
     }
-    for (XmlNode f : doc->root().children("File")) {
-        const std::string_view name = f.text_trimmed();
-        if (name.empty()) continue;
-        std::string path(kXmlDir);
-        path += name;
-        out.push_back({std::string(name), std::move(path)});
-    }
-    return out;
+    return listed_xml_entries(*doc);
 }
 
 void GameDatabase::load_constants(const FileProvider& provider, bool& ok) {
@@ -206,9 +236,9 @@ void GameDatabase::load_constants(const FileProvider& provider, bool& ok) {
 
 void GameDatabase::load_game_objects(const FileProvider& provider, bool& ok) {
     // Q13: list order, a file listed twice is parsed twice (its objects become duplicates).
-    const std::vector<ListEntry> list = read_list(provider, kGameObjectList, ok);
+    const std::vector<ListedXmlEntry> list = read_list(provider, kGameObjectList, ok);
     std::unordered_set<std::string> listed;
-    for (const ListEntry& en : list) {
+    for (const ListedXmlEntry& en : list) {
         if (!listed.insert(normalize_path(en.path)).second)
             warn(std::string(kGameObjectList) + ": '" + en.name + "' listed twice; parsed twice");
         const XmlDocument* doc = load_file(provider, nullptr, en.path, false);
@@ -304,18 +334,13 @@ void GameDatabase::load_game_objects(const FileProvider& provider, bool& ok) {
 }
 
 void GameDatabase::load_trade_routes(const FileProvider& provider, bool& ok) {
+    const WarnFn warn_fn = [this](std::string m) { warn(std::move(m)); };
     // Q13: de-duplicated and parsed in ascending CRC order of the listed name.
-    std::map<uint32_t, ListEntry> ordered;
-    for (ListEntry& en : read_list(provider, kTradeRouteList, ok)) {
-        const uint32_t key = list_file_crc(en.name);
-        if (const auto it = ordered.find(key); it != ordered.end()) {
-            warn(std::string(kTradeRouteList) + ": '" + en.name + "' collapses with '" + it->second.name +
-                 "' (same name CRC); loaded once");
-            continue;
-        }
-        ordered.emplace(key, std::move(en));
-    }
-    for (const auto& [key, en] : ordered) {
+    CrcOrderedList ordered;
+    for (ListedXmlEntry& en : read_list(provider, kTradeRouteList, ok))
+        add_crc_ordered(ordered, std::move(en), nullptr, kTradeRouteList, true, warn_fn);
+    for (const auto& [key, oe] : ordered) {
+        const ListedXmlEntry& en = oe.list;
         const XmlDocument* doc = load_file(provider, nullptr, en.path, false);
         if (!doc) continue;
         for (XmlNode e : doc->root().children("TradeRoute")) {
@@ -343,39 +368,17 @@ void GameDatabase::load_trade_routes(const FileProvider& provider, bool& ok) {
                 else if (iequals(tag, "Credit_Gain_Factor")) num(r.credit_gain_factor);
                 else if (iequals(tag, "Visible_Line_Name")) r.visible_line_name = std::string(v);
             }
-            const uint32_t idx =
-                find_by_crc(route_by_crc_, name, [this](uint32_t k) { return std::string_view(routes_[k].name); });
-            if (idx == kInvalidPlanet) {
-                route_by_crc_[r.name_crc].push_back(static_cast<uint32_t>(routes_.size()));
-                routes_.push_back(std::move(r));
-                continue;
-            }
-            warn(where(e) + ": duplicate trade route '" + std::string(name) + "' replaces the earlier definition (" +
-                 (same_content(routes_[idx], r) ? "identical content" : "CONTENT DIFFERS") + ")");
-            r.definitions = routes_[idx].definitions + 1;
-            routes_[idx] = std::move(r);  // last wins, no field merge
+            upsert_last_wins(routes_, route_by_crc_, std::move(r), e, "trade route", warn_fn);
         }
     }
 }
 
 void GameDatabase::load_campaigns(const FileProvider& provider, const LoadOptions& options, bool& ok) {
-    struct Entry {
-        ListEntry list;
-        const FileProvider* fallback;
-    };
+    const WarnFn warn_fn = [this](std::string m) { warn(std::move(m)); };
     // Q13: de-duplicated and parsed in ascending CRC order of the listed name.
-    std::map<uint32_t, Entry> ordered;
-    auto add = [&](ListEntry en, const FileProvider* fallback, bool report) {
-        const uint32_t key = list_file_crc(en.name);
-        if (const auto it = ordered.find(key); it != ordered.end()) {
-            if (report)
-                warn(std::string(kCampaignList) + ": '" + en.name + "' collapses with '" + it->second.list.name +
-                     "' (same name CRC); loaded once");
-            return;
-        }
-        ordered.emplace(key, Entry{std::move(en), fallback});
-    };
-    for (ListEntry& en : read_list(provider, kCampaignList, ok)) add(std::move(en), nullptr, true);
+    CrcOrderedList ordered;
+    for (ListedXmlEntry& en : read_list(provider, kCampaignList, ok))
+        add_crc_ordered(ordered, std::move(en), nullptr, kCampaignList, true, warn_fn);
     if (options.merge_campaign_lists) {
         for (const LoadOptions::ExtraList& extra : options.extra_campaign_lists) {
             const FileProvider& lp = extra.provider ? *extra.provider : provider;
@@ -393,14 +396,8 @@ void GameDatabase::load_campaigns(const FileProvider& provider, const LoadOption
             for (const XmlDiagnostic& d : f.doc->diagnostics()) warn(d.to_string());
             const XmlDocument* doc = f.doc.get();
             files_.push_back(std::move(f));  // not indexed: its path may shadow the primary list
-            if (!doc->ok()) continue;
-            for (XmlNode fe : doc->root().children("File")) {
-                const std::string_view name = fe.text_trimmed();
-                if (name.empty()) continue;
-                std::string path(kXmlDir);
-                path += name;
-                add(ListEntry{std::string(name), std::move(path)}, extra.provider, false);
-            }
+            for (ListedXmlEntry& en : listed_xml_entries(*doc))
+                add_crc_ordered(ordered, std::move(en), extra.provider, kCampaignList, false, warn_fn);
         }
     }
 
@@ -442,17 +439,7 @@ void GameDatabase::load_campaigns(const FileProvider& provider, const LoadOption
                 else if (iequals(tag, "Starting_Tech_Level")) c.starting_tech_level.emplace_back(v);
                 else if (iequals(tag, "Max_Tech_Level")) c.max_tech_level.emplace_back(v);
             }
-            const uint32_t idx =
-                find_by_crc(campaign_by_crc_, name, [this](uint32_t k) { return std::string_view(campaigns_[k].name); });
-            if (idx == kInvalidPlanet) {
-                campaign_by_crc_[c.name_crc].push_back(static_cast<uint32_t>(campaigns_.size()));
-                campaigns_.push_back(std::move(c));
-                continue;
-            }
-            warn(where(e) + ": duplicate campaign '" + std::string(name) + "' replaces the earlier definition (" +
-                 (same_content(campaigns_[idx], c) ? "identical content" : "CONTENT DIFFERS") + ")");
-            c.definitions = campaigns_[idx].definitions + 1;
-            campaigns_[idx] = std::move(c);  // last wins, no field merge
+            upsert_last_wins(campaigns_, campaign_by_crc_, std::move(c), e, "campaign", warn_fn);
         }
     }
 }

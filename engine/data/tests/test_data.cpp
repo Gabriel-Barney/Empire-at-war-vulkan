@@ -19,6 +19,7 @@
 #include "alamo/data/game_database.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
+#include "alamo/data/xml_list.hpp"
 #include "alamo/test/support.hpp"
 #ifdef ALAMO_DATA_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
@@ -795,6 +796,75 @@ static void integration_merge(const DataSource& foc, const DataSource& eaw) {
     CHECK(db.find_campaign("Full_Story_Campaign_Empire") != nullptr);
 }
 
+// cu5 t02: the <File> list helper keeps list order and duplicates; empty entries, missing and unparsable files follow
+// the options.
+namespace {
+class MapProvider final : public FileProvider {
+public:
+    std::map<std::string, std::string> files;
+    bool read(std::string_view path, std::vector<uint8_t>& out) const override {
+        const auto it = files.find(std::string(path));
+        if (it == files.end()) return false;
+        out.assign(it->second.begin(), it->second.end());
+        return true;
+    }
+    bool exists(std::string_view path) const override { return files.count(std::string(path)) != 0; }
+    std::string origin(std::string_view path) const override { return std::string(path); }
+};
+}  // namespace
+
+static void test_listed_xml() {
+    MapProvider p;
+    p.files["Data\\XML\\L.xml"] =
+        "<L><File> B.xml </File><File></File><File>A.xml</File><Other>C.xml</Other><File>Gone.xml</File>"
+        "<file>B.xml</file><File>Bad.xml</File></L>";
+    p.files["Data\\XML\\A.xml"] = "<A><X Name=\"a\"/></A>";
+    p.files["Data\\XML\\B.xml"] = "<B><X Name=\"b\"/></B>";
+    p.files["Data\\XML\\C.xml"] = "<C/>";
+    p.files["Data\\XML\\Bad.xml"] = "";
+    ListStatus st = ListStatus::Missing;
+    const std::vector<ListedXmlEntry> e = read_listed_xml_entries(p, "Data\\XML\\L.xml", {}, &st);
+    CHECK(st == ListStatus::Ok);
+    CHECK(e.size() == 5);
+    if (e.size() == 5) {
+        CHECK(e[0].name == "B.xml" && e[0].path == "Data\\XML\\B.xml");
+        CHECK(e[1].name == "A.xml" && e[2].name == "Gone.xml" && e[3].name == "B.xml" && e[4].name == "Bad.xml");
+        CHECK(e[0].line == 1);
+    }
+    ListedXmlOptions keep;
+    keep.keep_empty_entries = true;
+    keep.entry_tag = {};
+    const std::vector<ListedXmlEntry> all = read_listed_xml_entries(p, "Data\\XML\\L.xml", keep);
+    CHECK(all.size() == 7 && all[1].path == kListedXmlDir && all[3].name == "C.xml");
+
+    std::string order;
+    CHECK(for_each_listed_xml(p, "Data\\XML\\L.xml", [&](ListedXmlFile& f) {
+              order += f.doc->root().name();
+              CHECK(f.doc->file() == f.entry.path);
+          }) == ListStatus::Ok);
+    CHECK(order == "BAB");  // missing and unparsable files skipped, the duplicate visited twice
+    ListedXmlOptions visit;
+    visit.visit_missing = true;
+    visit.visit_unparsable = true;
+    visit.name_docs_by_entry = true;
+    order.clear();
+    for_each_listed_xml(p, "Data\\XML\\L.xml", [&](ListedXmlFile& f) {
+        order += !f.doc ? "-" : f.doc->ok() ? std::string(f.doc->root().name()) : std::string("!");
+        if (f.doc) CHECK(f.doc->file() == f.entry.name);
+    }, visit);
+    CHECK(order == "BA-B!");
+    size_t bytes = 0, missing = 0;
+    for_each_listed_file(p, "Data\\XML\\L.xml", [&](const ListedXmlEntry&, const std::vector<uint8_t>* b) {
+        if (b) bytes += b->size();
+        else ++missing;
+    }, visit);
+    CHECK(missing == 1 && bytes == p.files["Data\\XML\\B.xml"].size() * 2 + p.files["Data\\XML\\A.xml"].size());
+
+    CHECK(for_each_listed_xml(p, "Data\\XML\\None.xml", [](ListedXmlFile&) { CHECK(false); }) == ListStatus::Missing);
+    p.files["Data\\XML\\Empty.xml"] = "   ";
+    CHECK(for_each_listed_xml(p, "Data\\XML\\Empty.xml", [](ListedXmlFile&) { CHECK(false); }) == ListStatus::Unparsable);
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // keep output if a check aborts the process
     log::set_min_level(log::Level::Error);  // loaders warn a lot by design; tests read diagnostics
@@ -805,6 +875,7 @@ int main() {
     test_database_synthetic();
     test_planet_variants();
     test_database_install_layout();
+    test_listed_xml();
 
     const std::string foc = env_or("ALAMO_FOC_DATA", "/home/claude/data/foc");
     const std::string eaw = env_or("ALAMO_EAW_DATA", "/home/claude/data/eaw");
