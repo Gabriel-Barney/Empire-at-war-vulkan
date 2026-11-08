@@ -191,7 +191,9 @@ def trace_metrics(path, factions_override=None, max_tick=None):
         new_objs.clear()
         pp = planet_pos()
         own = {objs[i][1]: objs[i][0] for i in planets if i in objs}
-        if owners_initial is None:
+        # Initial owners come from the first frame that has planets (a run sampled from tick 0 has only the galaxy art
+        # model at tick 0; taking that empty map turned every tick-1 owner into a "change").
+        if owners_initial is None and own:
             owners_initial = dict(own)
             owners_now.update(own)
         for name, o in sorted(own.items()):
@@ -288,9 +290,14 @@ def trace_metrics(path, factions_override=None, max_tick=None):
                 objs[i] = ent
                 if i not in seen:
                     seen.add(i)
-                    if first_obj_tick is None:
+                    # The start tick is that of the first object that is not art / fleet / particles: a run sampled
+                    # from tick 0 sees the galaxy art model a tick before the starting forces, which then all looked
+                    # like production.
+                    if any(x in ent[1] for x in NOT_PRODUCTION):
+                        pass
+                    elif first_obj_tick is None:
                         first_obj_tick = mframe
-                    elif mframe > first_obj_tick and not any(x in ent[1] for x in NOT_PRODUCTION):
+                    elif mframe > first_obj_tick:
                         new_objs.append((mframe, i))
             elif t == "X":
                 objs.pop(int(p[1]), None)
@@ -307,16 +314,23 @@ def trace_metrics(path, factions_override=None, max_tick=None):
     if factions_override:
         m["factions"] = dict(factions_override)
     else:
-        by_owner = collections.defaultdict(list)
-        # objects of the first sample with objects: rebuild cheaply from 'seen' is not possible, use the counts.
-        first = min(object_counts) if object_counts else None
-        if first is not None:
-            for (own, name), n in object_counts[first].items():
+        # Objects of the first sample that names at least two factions (rebuilding from 'seen' is not possible, use
+        # the counts). A run sampled from tick 0 (20261108-170824) has a tick-0 sample holding only the galaxy art
+        # model, which names nobody; the first sample with objects then left every player unnamed.
+        first = None
+        for tk in sorted(object_counts):
+            by_owner = collections.defaultdict(list)
+            for (own, name), n in object_counts[tk].items():
                 by_owner[own].extend([name] * n)
-        for own, names in by_owner.items():
-            f = faction_of_types(names)
-            if f and f not in m["factions"].values():
-                m["factions"][own] = f
+            named = {}
+            for own, names in by_owner.items():
+                f = faction_of_types(names)
+                if f and f not in named.values():
+                    named[own] = f
+            if len(named) >= 2:
+                first = tk
+                m["factions"].update(named)
+                break
     fac = faction
     m["scenario"] = {"campaign": meta.get("campaign") or meta.get("skirmish") or meta.get("label"),
                      "seed": header.get("seed", [None])[0], "ticks": mframe, "first_tick_with_objects": first_obj_tick,

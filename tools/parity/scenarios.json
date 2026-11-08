@@ -5,6 +5,7 @@
    "kind": "galactic",
    "title": "Galactic Conquest, Heart of the Maw (Sandbox_Heart_Of_The_Maw_Empire), idle human Empire, Rebel and Underworld AI, seed 0, 13501 ticks (10 fiscal cycles)",
    "references": [
+    {"run": "20261108-170824-galactic-vanilla-lua", "note": "reader 2: credits, production queues, Lua plan records (fixed kit, q2f t10)"},
     {"run": "20261030-061228-galactic-vanilla-lua", "note": "reader 2: credits, production queues"},
     {"run": "20261027-101057-galactic-vanilla", "note": "reader 1: no credits, no production queues (travel, fleets and outcomes only); 577 missed ticks"}
    ],

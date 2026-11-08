@@ -1,5 +1,5 @@
 {
- "commit": "acb3547a",
+ "commit": "40aece00",
  "scenarios": {
   "geonosis_skirmish": {
    "references": [
@@ -47,6 +47,7 @@
   },
   "hotm_galactic": {
    "references": [
+    "20261108-170824-galactic-vanilla-lua",
     "20261030-061228-galactic-vanilla-lua",
     "20261027-101057-galactic-vanilla"
    ],
@@ -86,7 +87,7 @@
     "diag.rng_draws_total": "INFO",
     "econ.credits_at_13500[Empire]": "PASS",
     "econ.credits_at_13500[Rebel]": "FAIL",
-    "econ.credits_at_13500[Underworld]": "FAIL",
+    "econ.credits_at_13500[Underworld]": "PASS",
     "econ.credits_at_4500[Empire]": "PASS",
     "econ.credits_at_4500[Rebel]": "FAIL",
     "econ.credits_at_4500[Underworld]": "FAIL",
@@ -118,6 +119,7 @@
     "outcome.planets_final[Underworld]": "PASS",
     "travel.hop_ticks[Rebel:CORELLIA->TATOOINE]": "FAIL",
     "travel.hop_ticks[Rebel:KAMINO->SHOLA]": "PASS",
+    "travel.hop_ticks[Rebel:KUAT->CORELLIA]": "PASS",
     "travel.hop_ticks[Rebel:KUAT->KASHYYYK]": "PASS",
     "travel.hop_ticks[Rebel:MONCALIMARI->SHOLA]": "PASS",
     "travel.hop_ticks[Rebel:NABOO->SHOLA]": "PASS",
@@ -154,12 +156,12 @@
      "INFO": 1
     },
     "income": {
-     "FAIL": 10,
-     "PASS": 15
+     "FAIL": 9,
+     "PASS": 16
     },
     "timing": {
      "FAIL": 11,
-     "PASS": 28
+     "PASS": 29
     }
    }
   }
