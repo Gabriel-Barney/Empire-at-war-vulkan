@@ -56,7 +56,8 @@
 //       [--human FACTION [--human-script FILE]]: that faction is a scripted human (fixed recorded command stream).
 //       [--ai-type FACTION=TYPE ...]: that faction's AI player type from the start instead of the campaign's AI_Player_Control
 //       (q6 t07 [port] test knob: as a SWITCH_CONTROL story reward at frame 0, e.g. Thrawn's Revenge's INITIALIZE_AI types).
-//       [--trace-out FILE]: per-tick Q2TRACE 1 state trace (port_trace.hpp) for tools/probe_mod/q2_traces/q2trace.py.
+//       [--trace-out FILE]: per-tick Q2TRACE 1 state trace (port_trace.hpp) for tools/probe_mod/q2_traces/q2trace.py; with
+//       --skirmish-ai (q4hf t02) the tactical battle's trace (tactical_trace.hpp: owner / type / hull per object, first shot).
 //       [--story]: also run the campaign's story plot sets, as the retail sandbox does (q2f t03).
 //       [--ai-latency F] [--no-ai-stagger] (also --skirmish-ai): OPT2 t02 / t01 parity knobs - the AI path recompute latency
 //       (default 15 frames, 0 = the original timing) and every AI player planning on the same frames (the original).
@@ -202,7 +203,7 @@ struct Options {
     std::string ai_log, ai_golden;
     std::string ai_human, ai_human_script;  // A2 galactic: --human FACTION [--human-script FILE]
     std::vector<std::string> ai_types;      // q6 t07: --ai-type FACTION=TYPE (repeatable)
-    std::string trace_out;                  // q2f t05: --trace-out FILE (Q2TRACE 1 state trace, galactic AI runs)
+    std::string trace_out;                  // q2f t05: --trace-out FILE (Q2TRACE 1 state trace, galactic AI runs; q4hf t02: --skirmish-ai)
     int64_t ai_latency = -1;                // OPT2 t02: --ai-latency F (galactic / tactical AI path recomputes)
     bool ai_stagger = true;                 // OPT2 t01: --no-ai-stagger
     bool pp_streams = true;                 // OPT2 t10: --no-pp-streams
@@ -1087,7 +1088,7 @@ static int headless_main(int argc, char** argv) {
             m.human = opt.ai_human;  // skai: --skirmish-ai skirmish --human FACTION
             m.ai_factions = opt.skirmish_factions;  // q6 t02
             m.fail_on_lua_errors = opt.fail_on_lua_errors;
-            return skirmish_ai_run(m, opt.skirmish_ai, opt.ai_log);
+            return skirmish_ai_run(m, opt.skirmish_ai, opt.ai_log, opt.trace_out);  // q4hf t02: --trace-out
         }
         if (opt.story && !(opt.economy && opt.galactic_ai)) {
             if (!opt.ticks_set && opt.frames_set) m.ticks = opt.frames;

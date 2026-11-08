@@ -1117,7 +1117,7 @@ end
 -- Read-only: it calls no GameRandom, spawns nothing, gives no orders and changes no scoring state.
 --
 -- Output channel (docs/re/LUA_SCRIPT_OUTPUT.md): retail 1.121 writes no file for _CustomScriptMessage, so every line
--- is kept as a Lua string "Q2L1|T|<sid>|<seq>|<KIND>|<text>|END" in Q2L_Records, found by q2lua_reader.py (read-only
+-- is kept as a Lua string "Q2L1|T|<sid>|<seq>|<KIND>|<text>|END" in a table, found by q2lua_reader.py (read-only
 -- memory scan). The first _CustomScriptMessage call deletes the canary file Mods\Q2Trace\Q2Trace_Canary_Scoring.txt
 -- (retail DeleteFileA on first use of a name), which proves the script ran even without the scan.
 -- Kinds:
@@ -1139,34 +1139,43 @@ Q2L_CANARY = "Mods\\Q2Trace\\Q2Trace_Canary_Scoring.txt"
 Q2L_MAX = 20000
 Q2T_FACTIONS = { "Empire", "Rebel", "Underworld", "Pirates" }
 
-if Q2L_Records == nil then
-	Q2L_Records = {}
-	Q2L_Seq = 0
-	Q2L_Sid = string.gsub(tostring(Q2L_Records), "^table: ", "")
-	Q2L_Errors = {}
+-- Records live in a table held only by these closures (q2f t08): PGBase Flush_G deletes every global table when a
+-- pooled script is released (GameScoring is not pooled, ScriptPoolCount = 0, but the AI plan probe lost its records
+-- that way). Retail has no math library: nothing here calls math.*, '#' or '%' (the GameService wrapper used math.mod,
+-- which stopped it after its first call in the 2026-11-03 run).
+if Q2L_Say == nil then
+	local recs = {}
+	local seq = 0
+	local errs = {}
+	local sid = string.gsub(tostring(recs), "^table: ", "")
+	function Q2L_Say(kind, text)
+		if seq >= Q2L_MAX then
+			return
+		end
+		seq = seq + 1
+		local s = string.gsub(tostring(text), "[^ -~]", "?")
+		s = string.gsub(s, "|", "/")
+		s = string.sub(s, 1, 320)
+		recs[seq] = Q2L_NEEDLE .. sid .. "|" .. seq .. "|" .. kind .. "|" .. s .. "|END"
+	end
+	function Q2L_Error(where, err)
+		local key = string.sub(where .. " " .. tostring(err), 1, 200)
+		if errs[key] == nil then
+			errs[key] = true
+			Q2L_Say("ERR", key)
+		end
+	end
+	function Q2L_Count()
+		return seq
+	end
+	function Q2L_Get(i)
+		return recs[i]
+	end
 end
 Q2T_Services = 0
+Q2T_Since_Orig = 0
 Q2T_LastSample = -1000
 Q2T_Mode = 0
-
-function Q2L_Say(kind, text)
-	if Q2L_Seq >= Q2L_MAX then
-		return
-	end
-	Q2L_Seq = Q2L_Seq + 1
-	local s = string.gsub(tostring(text), "[^ -~]", "?")
-	s = string.gsub(s, "|", "/")
-	s = string.sub(s, 1, 320)
-	Q2L_Records[Q2L_Seq] = Q2L_NEEDLE .. Q2L_Sid .. "|" .. Q2L_Seq .. "|" .. kind .. "|" .. s .. "|END"
-end
-
-function Q2L_Error(where, err)
-	local key = where .. " " .. tostring(err)
-	if Q2L_Errors[key] == nil then
-		Q2L_Errors[key] = true
-		Q2L_Say("ERR", key)
-	end
-end
 
 function Q2L_Str(f)
 	local ok, v = pcall(f)
@@ -1255,7 +1264,9 @@ function GameService()
 		Q2L_Say("SERVICE", "first GameService call lframe=" .. Q2T_Frame())
 	end
 	Q2T_MaybeSample("service")
-	if math.mod(Q2T_Services, 10) == 0 and Q2T_Orig_GameService then
+	Q2T_Since_Orig = Q2T_Since_Orig + 1
+	if Q2T_Since_Orig >= 10 and Q2T_Orig_GameService then
+		Q2T_Since_Orig = 0
 		Q2T_Orig_GameService()
 	end
 end

@@ -281,11 +281,14 @@ int bench_run(const BenchOptions& opt) {
         return 1;
     }
     std::printf("bench: scenario %s version %u: %s\n", sc.name.c_str(), sc.version, sc.description.c_str());
-    if (sc.host == bench::Host::Game) {  // BM2: an alamo_game save (game.campaign / game.skirmish), not a headless harness
-        std::fprintf(stderr, "bench: %s was made by alamo_game (host game): run it with alamo_game --bench-scenario %s\n", sc.name.c_str(),
-                     opt.scenario.c_str());
+    const bool game_host = sc.host == bench::Host::Game;  // BM2: an alamo_game save (game.campaign / game.skirmish)
+#ifndef ALAMO_HEADLESS_HAVE_GAME_CORE
+    if (game_host) {  // bm2c t02: timed sim-only through alamo_game_core (bench_game.cpp), not built into this exe
+        std::fprintf(stderr, "bench: %s was made by alamo_game (host game) and this alamo_headless has no alamo_game_core: run it with "
+                     "alamo_game --bench-scenario %s\n", sc.name.c_str(), opt.scenario.c_str());
         return 2;
     }
+#endif
     if (!bench::verify_files(sc, &err)) return not_comparable(opt, err);
     CrcLog fingerprint;
     if (!CrcLog::load(sc.resolve(sc.fingerprint), fingerprint, &err) || fingerprint.records.empty()) {
@@ -299,7 +302,12 @@ int bench_run(const BenchOptions& opt) {
         return 1;
     }
     std::unique_ptr<SaveSessionSource> src;
+#ifdef ALAMO_HEADLESS_HAVE_GAME_CORE
+    const int opened = game_host ? open_game_save_source(sc.resolve(sc.save), opt.game_dir, opt.game_args, src, err)
+                                 : open_save_source(sc.resolve(sc.save), opt.game_dir, opt.game_args, src, err);
+#else
     const int opened = open_save_source(sc.resolve(sc.save), opt.game_dir, opt.game_args, src, err);
+#endif
     if (opened == 0) {
         std::printf("bench: %s: %s: skipped\n", sc.name.c_str(), err.c_str());
         return 0;

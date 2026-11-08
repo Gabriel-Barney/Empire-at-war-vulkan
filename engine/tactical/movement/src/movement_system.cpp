@@ -76,8 +76,175 @@ int32_t MovementSystem::formation_ctor_draw(SimRng& rng) { return rng.range_int(
 bool MovementSystem::has_coordinator(ObjectId id) const {
     // cu8i t02 [port]: a unit has a movement coordinator (retail locomotor pack +0x1f0 formation) while it has an order
     // (a goal) or a formation; the coordinator-less rest is what 0x39bcb0 adopts at Load_Map's tail.
+    // cu8j: also while it waits for its order's composition (pend) or holds in an adopt's coordinator (adopted).
     const Unit* u = unit_ptr(id);
-    return u && (u->has_goal || u->in_formation);
+    return u && (u->has_goal || u->in_formation || u->adopted || u->pend != 0);
+}
+
+// ---------------------------------------------------------------- cu8j t01 / t02: coordinator update, adopt
+uint32_t MovementSystem::compose_register(bool space, bool moves, V2 goal) {
+    if (++pend_serial_ == 0) pend_serial_ = 1;  // 0 = none (a wrap after 2^32 orders)
+    PendingComposition pc;
+    pc.serial = pend_serial_;
+    pc.space = space;
+    pc.moves = moves;
+    pc.goal = goal;
+    pending_.push_back(std::move(pc));
+    return pend_serial_;
+}
+
+// MOVEMENT §4.6.2: the coordinators in creation order; a space composition stopped by a seed without speed stays.
+void MovementSystem::coordinator_update(uint32_t frame, uint64_t global_frame, SimRng& rng) {
+    if (pending_.empty()) return;
+    std::vector<PendingComposition> work;
+    work.swap(pending_);
+    std::vector<PendingComposition> keep;
+    for (const PendingComposition& pc : work) {
+        if (!pc.space) {
+            compose_land(pc, frame, global_frame, rng);
+        } else if (!compose_space(pc, frame, rng)) {
+            keep.push_back(pc);
+        }
+    }
+    // Nothing composes while the update runs, so `pending_` is still empty here [port: no re-entry].
+    pending_ = std::move(keep);
+}
+
+// Land: 0x43c1b0 (the stagger draws r', descriptor order) then 0x43e5b0 (one ctor draw per descriptor), §1.6 / §4.6.1.
+void MovementSystem::compose_land(const PendingComposition& pc, uint32_t frame, uint64_t global_frame, SimRng& rng) {
+    std::vector<std::vector<Unit*>> forms;
+    for (const std::vector<ObjectId>& f : pc.forms) {
+        std::vector<Unit*> v;
+        for (const ObjectId id : f)
+            if (Unit* u = unit_ptr(id); u && u->pend == pc.serial) v.push_back(u);
+        if (!v.empty()) forms.push_back(std::move(v));  // [port] a seed that left: the next member seeds
+    }
+    if (forms.empty()) return;
+    // Unstaggered: F +0x1dc = 0, so the plan waits for 2 FPS < now: frame 61 when created at frame <= 60 [M].
+    const uint32_t gate = global_frame <= 2u * kFormationFps ? frame + static_cast<uint32_t>(2u * kFormationFps + 1u - global_frame) : frame;
+    std::vector<uint32_t> start(forms.size(), gate);
+    uint32_t acc = 0;
+    for (size_t i = 0; i < forms.size(); ++i) {
+        const int32_t pfd = forms[i].front()->d.path_frame_delay;
+        if (pfd <= 0) continue;  // [port] a negative PathFrameDelay draws nothing (vanilla: 0 or 4)
+        const int32_t r = rng.range_int(0, pfd);
+        // F +0x1dc = now + acc + r' - 2 FPS: the first plan frame is the first frame > now + acc + r'.
+        start[i] = frame + acc + static_cast<uint32_t>(r) + 1u;
+        acc += static_cast<uint32_t>(pfd);
+    }
+    for (size_t i = 0; i < forms.size(); ++i) {
+        (void)formation_ctor_draw(rng);  // the next-check timer; no land reader in the port
+        for (Unit* u : forms[i]) {
+            u->start_frame = start[i];
+            u->pend = 0;
+        }
+    }
+}
+
+// Space: 0x5d58f0 (§4.6.4). Candidates in the order's unit order, a squadron's fighters as its container (key).
+bool MovementSystem::compose_space(const PendingComposition& pc, uint32_t frame, SimRng& rng) {
+    struct Cand {
+        ObjectId key = -1;
+        std::vector<std::pair<Unit*, uint32_t>> units;  // (unit, start offset)
+        V2 pos;
+        float ex = 0.0f, ey = 0.0f;
+        uint32_t role = 0;
+        float vmax = 0.0f, vmin = 0.0f;
+    };
+    std::vector<Cand> cands;
+    const std::vector<ObjectId> none;
+    const std::vector<ObjectId>& ids = pc.forms.empty() ? none : pc.forms[0];
+    for (size_t i = 0; i < ids.size(); ++i) {
+        Unit* u = unit_ptr(ids[i]);
+        if (!u || u->pend != pc.serial) continue;
+        const uint32_t off = i < pc.offsets.size() ? pc.offsets[i] : 0u;
+        const bool squad = is_fighter(*u) && u->fs.squad >= 0 && squad_ptr(u->fs.squad) != nullptr;
+        const ObjectId key = squad ? u->fs.squad : u->d.id;
+        auto it = std::find_if(cands.begin(), cands.end(), [key](const Cand& c) { return c.key == key; });
+        if (it != cands.end()) {
+            it->units.emplace_back(u, off);
+            continue;
+        }
+        Cand c;
+        c.key = key;
+        c.units.emplace_back(u, off);
+        F3 p{};
+        if (fobject_pos(key, p)) c.pos = {p.x, p.y};
+        else c.pos = u->m.pos;
+        // [M: which extent] the hard extents (Custom_Hard_X/YExtent x Scale_Factor), else the radius; a squadron: its
+        // first fighter's [port].
+        c.ex = u->d.hard_x > 0.0f ? u->d.hard_x : u->d.radius;
+        c.ey = u->d.hard_y > 0.0f ? u->d.hard_y : u->d.radius;
+        // Get_Space_Layer 0x397900(seed, 0): Stationary_Space_Layer when not moving and set, else Space_Layer; a squadron
+        // container (TEAM, no layer) is role 0. [port] moving = following a space path; no multi-locomotor space unit.
+        if (!squad) c.role = !u->following && u->d.stationary_space_layer != 0 ? u->d.stationary_space_layer : u->d.space_layer_type;
+        c.vmax = squad ? fform_unit_speed(key) : u->lp.max_speed;
+        c.vmin = u->d.min_speed * mode_mult() * u->speed_factor;  // 0x3728f0: Min_Speed x the multipliers
+        cands.push_back(std::move(c));
+    }
+    const auto finish = [&](const Cand& c, int32_t r) {
+        for (const auto& [u, off] : c.units) {
+            if (pc.moves || u->start_frame == kStartPending) u->start_frame = frame + off;  // [port] a superseded move starts
+            u->pend = 0;
+            if (is_fighter(*u)) {  // FIGHTER_FLYING §4.11: the formation's first 0x4192b0 / 0x410a60 check
+                FighterFormation* f = fform_ptr(fkey(*u));
+                if (f && f->next == kStartPending) f->next = frame + static_cast<uint32_t>(kFormationFps + r);
+            }
+        }
+    };
+    while (!cands.empty()) {
+        size_t si = 0;
+        float bd = 3.0e38f;
+        for (size_t i = 0; i < cands.size(); ++i) {
+            const float d = length_sq(cands[i].pos - pc.goal);
+            if (d < bd) {
+                bd = d;
+                si = i;
+            }
+        }
+        if (!(cands[si].vmax > 0.0f)) return false;  // no speed: the pass stops, the rest waits for the next update
+        const Cand seed = std::move(cands[si]);
+        cands.erase(cands.begin() + static_cast<std::ptrdiff_t>(si));
+        const int32_t r = formation_ctor_draw(rng);  // 0x4f6fb0: the new formation
+        finish(seed, r);
+        if (seed.role != 0) continue;  // a ship with a role: one formation per ship
+        // Role 0 (fighters, squadron containers, objects without a layer): recruit in candidate order. [port] never
+        // locked (0x39ad40); every space locomotor is kind 2.
+        const float reach = 0.33f * length(pc.goal - seed.pos);
+        for (size_t i = 0; i < cands.size();) {
+            const Cand& c = cands[i];
+            const float dx = std::fabs(c.pos.x - seed.pos.x), dy = std::fabs(c.pos.y - seed.pos.y);
+            const bool box = dx <= std::max(2.0f * seed.ex, reach) + c.ex && dy <= std::max(2.0f * seed.ey, reach) + c.ey;
+            const bool ok = box && c.role == 0 && c.vmax != 0.0f && seed.vmax != 0.0f && c.vmin / seed.vmax <= 0.9f &&
+                            seed.vmin / c.vmax <= 0.9f;
+            if (ok) {
+                finish(c, r);
+                cands.erase(cands.begin() + static_cast<std::ptrdiff_t>(i));
+            } else {
+                ++i;
+            }
+        }
+    }
+    return true;
+}
+
+bool MovementSystem::adopt(ObjectId id, SimRng& rng) {
+    Unit* u = unit_ptr(id);
+    if (!u || has_coordinator(id)) return false;
+    u->adopted = true;  // Issue_Degenerate_Move: a move to its own position, so it holds there [port: no motion]
+    (void)formation_ctor_draw(rng);
+    return true;
+}
+
+bool MovementSystem::stop_and_hold(ObjectId id, SimRng& rng) {
+    if (!unit_ptr(id)) return false;
+    const ObjectId one[] = {id};
+    stop(one);
+    Unit* u = unit_ptr(id);
+    u->adopted = false;  // 0x426d50: it leaves every coordinator
+    u->in_formation = false;
+    u->pend = 0;
+    return adopt(id, rng);
 }
 
 int32_t MovementSystem::find(ObjectId id) const {
@@ -290,15 +457,27 @@ void MovementSystem::move(const MoveOrder& order, SimRng& rng, uint32_t frame) {
     if (order.switch_locomotor)  // MOVEMENT §6.2: multi-locomotor units swap first (others ignore the bit)
         for (uint32_t i : idx) swap_locomotor(units_[i], true);
     std::vector<uint32_t> delays(idx.size(), 0);
-    if (order.flags & kMoveFlagQueue)
+    const bool queued = (order.flags & kMoveFlagQueue) != 0;
+    if (queued)
         for (uint32_t& dl : delays) dl = static_cast<uint32_t>(rng.range_int(0, cfg_.constants.max_move_frame_delay));
-    if (cfg_.mode == MoveMode::Land) move_land(order, idx, frame, delays, rng);
-    else move_space(order, idx, frame, delays);
-    if (!fform_internal_) fform_order(order, idx, frame);  // s78f t02: a new formation holding the order's block
+    // cu8j t01 (MOVEMENT §4.6.2): a new coordinator whose formations come at the next coordinator update. Not for a queued
+    // order (it adds a block to the existing formations [M]) or the formation tick's own re-paths (fform_internal_).
+    uint32_t serial = 0;
+    if (!queued && !fform_internal_) {
+        V2 goal = order.destination;
+        if (cfg_.mode == MoveMode::Space && space_.has_box()) {
+            goal.x = std::clamp(goal.x, space_.box_min().x, space_.box_max().x);
+            goal.y = std::clamp(goal.y, space_.box_min().y, space_.box_max().y);
+        }
+        serial = compose_register(cfg_.mode == MoveMode::Space, true, goal);
+    }
+    if (cfg_.mode == MoveMode::Land) move_land(order, idx, frame, delays, serial);
+    else move_space(order, idx, frame, delays, serial);
+    if (!fform_internal_) fform_order(order, idx, frame, serial);  // s78f t02: a new formation holding the order's block
 }
 
 void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
-                               const std::vector<uint32_t>& delays, SimRng& rng) {
+                               const std::vector<uint32_t>& delays, uint32_t serial) {
     rebuild_regions_if_dirty();
     const MovementConstants& k = cfg_.constants;
     std::vector<FormationMember> mem;
@@ -328,8 +507,7 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
         return ca == cb;
     };
     std::vector<uint64_t> taken;
-    const bool queued = (order.flags & kMoveFlagQueue) != 0;
-    uint32_t stagger_acc = 0;  // OI tactical: accumulated PathFrameDelay (§1.6)
+    PendingComposition* pc = serial != 0 ? &pending_.back() : nullptr;
     // P1 double-click (0x80): speed-band recruitment; LargeHover formations indexed fastest-first (0x439360).
     const bool dbl = (order.flags & kMoveFlagDoubleClick) != 0;
     const float speed_ratio = dbl ? k.double_click_move_max_speed_ratio : 0.0f;
@@ -340,17 +518,13 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
     group_c = group_c * (1.0f / static_cast<float>(mem.size()));
     for (const std::vector<uint32_t>& bucket : kmeans_buckets(mem, k.max_formation_area)) {
         for (const std::vector<uint32_t>& f : split_into_formations(mem, bucket, k, compatible, speed_ratio)) {
-            // OI tactical: PathFrameDelay stagger (0x43c1b0) for group moves; queued moves keep the per-unit delay.
-            // cu8i t02 (CU8G_T02_ENV_PICK_RE §7 / §8 item 7; MOVEMENT §1.6 / §4.1): each new formation's FormationClass ctor
-            // draws int(1, FPS) (next-check timer +0x1d8 := now + FPS + r); §1.6's start = now + accumulated delay + that
-            // offset - 2 FPS = now + acc + r - FPS, not before now [port reading, docs/PHASE4.md]. A queued order adds a block
-            // to the existing formations [M]: no new formation, no ctor draw.
-            uint32_t fstart = frame;
-            if (!queued) {
-                const int32_t r = formation_ctor_draw(rng);
-                const int64_t s = static_cast<int64_t>(frame) + stagger_acc + r - kFormationFps;
-                fstart = static_cast<uint32_t>(std::max<int64_t>(frame, s));
-                for (uint32_t m : f) stagger_acc += static_cast<uint32_t>(std::max(0, units_[idx[m]].d.path_frame_delay));
+            // cu8j t01 (MOVEMENT §1.6 / §4.6, correcting cu8i): the formation, its PathFrameDelay stagger (0x43c1b0) and
+            // its FormationClass ctor draw come at the next coordinator update (compose_land); [port] the split itself is
+            // made here, with the order frame's positions. A queued order adds a block to the existing formations [M]:
+            // no new formation, no draw, the per-unit delays.
+            if (pc) {
+                pc->forms.emplace_back();
+                for (uint32_t m : f) pc->forms.back().push_back(units_[idx[m]].d.id);  // seed first
             }
             V2 c{};
             float fspeed = kInf;
@@ -381,7 +555,11 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
                 u.final_facing = order.final_facing_deg;
                 u.forced = (order.flags & kMoveFlagSkipValidation) != 0;
                 arrival_reset(u);  // s78l t02: the arrival turn state too
-                u.start_frame = queued ? frame + delays[s.member] : fstart;
+                u.start_frame = pc ? kStartPending : frame + delays[s.member];
+                if (pc) {
+                    u.pend = serial;
+                    u.adopted = false;  // cu8j t02: it leaves the adopt's coordinator for the order's
+                }
                 u.formation_speed = f.size() > 1 ? fspeed : kInf;
                 u.in_formation = f.size() > 1;  // OI tactical
                 u.jiggle = V2{};
@@ -425,8 +603,13 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
 }
 
 void MovementSystem::move_space(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
-                                const std::vector<uint32_t>& delays) {
+                                const std::vector<uint32_t>& delays, uint32_t serial) {
     const MovementConstants& k = cfg_.constants;
+    // cu8j t01 (MOVEMENT §4.6.4): the order's units wait for the space composition at the next coordinator update, which
+    // draws the formations' ctor int(1, FPS) and starts each unit at the update frame + its offset below. [port] The
+    // port's k-means / slot layout still picks the destinations, here at the order.
+    PendingComposition* pc = serial != 0 ? &pending_.back() : nullptr;
+    if (pc) pc->forms.assign(1, {});
     std::vector<FormationMember> mem;
     for (uint32_t i : idx) {
         const Unit& u = units_[i];
@@ -469,7 +652,14 @@ void MovementSystem::move_space(const MoveOrder& order, const std::vector<uint32
                 u.failed = false;
                 u.turning = false;
                 u.facing = order.facing_deg;
-                u.start_frame = frame + delays[s.member] + n * k.space_pathfind_frame_delay_delta;
+                const uint32_t offset = delays[s.member] + n * k.space_pathfind_frame_delay_delta;
+                u.start_frame = pc ? kStartPending : frame + offset;
+                if (pc) {
+                    pc->forms[0].push_back(u.d.id);
+                    pc->offsets.push_back(offset);
+                    u.pend = serial;
+                    u.adopted = false;
+                }
                 u.threat = order.threat_threshold;  // §4.2
                 if (u.d.locomotor == LocomotorKind::Fighter) fighter_order(u);  // FIGHTER_FLYING §2 step 6
                 ++n;
@@ -486,6 +676,8 @@ void MovementSystem::stop(std::span<const ObjectId> ids) {
         if (is_air(*u) && u->d.locomotor == LocomotorKind::LandBomber) continue;  // §4.6 [port]: a bombing pass runs out
         u->has_goal = false;
         u->need_path = false;
+        u->pend = 0;  // cu8j t01 [port]: a stop leaves a composition still waiting
+        if (u->start_frame == kStartPending) u->start_frame = 0;
         u->m.path.clear();
         u->m.next = 0;
         u->m.speed = 0.0f;
@@ -523,6 +715,8 @@ bool MovementSystem::teleport(ObjectId id, V2 pos, float z, float yaw_deg, uint3
     u->has_goal = false;
     u->need_path = false;
     u->arrived = false;
+    u->pend = 0;  // cu8j t01 [port]: the order is dropped, so is its waiting composition
+    if (u->start_frame == kStartPending) u->start_frame = 0;
     u->m.path.clear();
     u->m.next = 0;
     u->m.speed = 0.0f;
@@ -578,6 +772,7 @@ void MovementSystem::tick(uint32_t frame, SimRng& rng, const ParallelFor& pf) {
         u.aturn_ended = u.aturn_end_pending;
         u.aturn_end_pending = false;
     }
+    if (!deferred_compose_) coordinator_update(frame, frame, rng);  // cu8j t01: a host without its own step-10 call
     if (cfg_.mode == MoveMode::Land) tick_land(frame, rng, pf);  // jiggle draws (see header)
     else {
         fform_tick(frame, rng);  // s78f t02: the fighter formations' step (plan, arrival, 0x4192b0, 0x410a60)
@@ -1490,6 +1685,8 @@ void MovementSystem::hash_units(StateHasher& h) const {
         h.f32(u.goal.x);
         h.f32(u.goal.y);
         h.u32(u.start_frame);
+        h.u32(u.pend);            // cu8j t01
+        h.boolean(u.adopted);     // cu8j t02
         h.u32(u.blocked_frames);
         h.u32(u.replans);
         h.u32(u.waits);
@@ -1972,9 +2169,12 @@ bool MovementSystem::fpath_open(Unit& u) {
 void MovementSystem::freset_path(Unit& u) {
     u.wps.clear();
     u.following = false;
+    u.fs.idx = 0;
+    // cu8j t01 (MOVEMENT §4.6): an order waiting for its composition has not reached the locomotor yet (retail: the
+    // formation's Set_Move comes at the next coordinator update, after this reset), so its goal stays.
+    if (u.start_frame == kStartPending) return;
     u.need_path = false;
     u.has_goal = false;
-    u.fs.idx = 0;
 }
 
 void MovementSystem::fleave(FighterCellGrid& g, Unit& u, bool dogfight) {

@@ -1,0 +1,77 @@
+# bm2c t02: a committed rendered benchmark scene (tests/benchmark/<name>.abench, host game) timed sim-only by alamo_headless --bench.
+#   cmake -DEXE=<alamo_headless> -DSCENE=<.abench> -DOUT=<dir> -P check_bench_game.cmake
+# One timed run, no warm-up, the scene's full length: exit 0 (the run matched the scene's fingerprint, which is the CRC log of
+# the rendered alamo_game run that made it, so the sim-only run did the rendered run's sim work); the result JSON has BM1's
+# shape (alamo-bench-result, sim-only, no rendering), every scene tick was timed, and the run's final CRC is the manifest's
+# final_crc (the rendered run's). A scene whose save / fingerprint no longer matches the sim exits 3 ("scenario changed, not
+# comparable"): remake it with alamo_game --hidden --bench-regen (tools\regen_goldens.cmd --only bench).
+# Skipped (exit 0) without the scene file or the game data (ALAMO_FOC_DATA).
+cmake_minimum_required(VERSION 3.20)
+foreach(v EXE SCENE OUT)
+  if(NOT DEFINED ${v})
+    message(FATAL_ERROR "check_bench_game.cmake: -D${v}= is required")
+  endif()
+endforeach()
+if(NOT EXISTS "${SCENE}")
+  message(STATUS "bench game sim-only: ${SCENE} missing: skipped")
+  return()
+endif()
+if(NOT DEFINED ENV{ALAMO_FOC_DATA} OR "$ENV{ALAMO_FOC_DATA}" STREQUAL "")
+  message(STATUS "bench game sim-only: ALAMO_FOC_DATA not set: skipped")
+  return()
+endif()
+file(REMOVE_RECURSE "${OUT}")
+file(MAKE_DIRECTORY "${OUT}")
+execute_process(COMMAND "${EXE}" --bench "${SCENE}" --runs 1 --warmup 0 --quiet --bench-json "${OUT}/result.json"
+                RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+file(WRITE "${OUT}/stdout.txt" "${out}")
+file(WRITE "${OUT}/stderr.txt" "${err}")
+get_filename_component(scene_file "${SCENE}" NAME)
+get_filename_component(scene_name "${SCENE}" NAME_WE)
+if(rc EQUAL 3)
+  message(FATAL_ERROR "bench game sim-only ${scene_file}: scenario changed, not comparable (exit 3): remake it (alamo_game --hidden --bench-regen)\n${out}")
+elseif(NOT rc EQUAL 0)
+  message(FATAL_ERROR "bench game sim-only ${scene_file}: exit ${rc}\n${out}\n${err}")
+endif()
+string(FIND "${out}" ": skipped" skipped)
+if(NOT skipped EQUAL -1)
+  message(STATUS "bench game sim-only ${scene_file}: skipped by alamo_headless\n${out}")
+  return()
+endif()
+
+# The manifest's ticks and final CRC (the rendered run's).
+file(STRINGS "${SCENE}" ticks_line REGEX "^ticks ")
+file(STRINGS "${SCENE}" crc_line REGEX "^final_crc ")
+string(REPLACE "ticks " "" want_ticks "${ticks_line}")
+string(REPLACE "final_crc " "" want_crc "${crc_line}")
+
+file(READ "${OUT}/result.json" r)
+function(field out_var)
+  string(JSON v ERROR_VARIABLE e GET "${r}" ${ARGN})
+  if(e)
+    message(FATAL_ERROR "bench game sim-only ${scene_file}: the result lacks ${ARGN} (${e}):\n${r}")
+  endif()
+  set(${out_var} "${v}" PARENT_SCOPE)
+endfunction()
+field(format format)
+field(mode mode)
+field(name scenario name)
+field(fp_ok fingerprint ok)
+field(comparable comparable)
+field(rendering settings rendering)
+field(ticks summary ticks)
+field(run_crc runs 0 final_crc)
+field(median summary median_ms)
+field(zone0 zones 0 name)
+if(NOT format STREQUAL "alamo-bench-result" OR NOT mode STREQUAL "sim-only" OR NOT name STREQUAL scene_name OR NOT fp_ok STREQUAL "ON"
+   OR NOT comparable STREQUAL "ON" OR NOT rendering STREQUAL "OFF")
+  message(FATAL_ERROR "bench game sim-only ${scene_file}: format ${format}, mode ${mode}, scenario ${name}, fingerprint ok ${fp_ok}, "
+                      "comparable ${comparable}, rendering ${rendering}\n${r}")
+endif()
+if(NOT ticks EQUAL want_ticks OR median LESS_EQUAL 0)
+  message(FATAL_ERROR "bench game sim-only ${scene_file}: ${ticks} timed ticks (scene ${want_ticks}), median ${median} ms\n${r}")
+endif()
+if(NOT run_crc STREQUAL want_crc)
+  message(FATAL_ERROR "bench game sim-only ${scene_file}: final CRC ${run_crc}, the rendered run's (manifest final_crc) ${want_crc}")
+endif()
+message(STATUS "bench game sim-only ${scene_file}: OK (${ticks} ticks, median ${median} ms, final CRC ${run_crc} = the rendered run's, top zone ${zone0})")

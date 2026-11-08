@@ -1343,6 +1343,14 @@ private:
     float side_power(uint8_t side) const;
     int32_t side_player(uint8_t side) const { return side == 0 ? req_.info.defender : req_.info.attacker; }
     Unit* unit_by_id(objects::ObjectId id);
+    // cu8j t02 (MOVEMENT §4.7.1): the adopt 0x39bcb0 of object h - the predicate (not a TEAM member; the mode's locomotor
+    // kind, a TEAM_LOCOMOTOR container only when a member's locomotor admits; [port] builders and hyperspacing objects are
+    // not tested), then for a movement unit MovementSystem::adopt (no draw while it has a coordinator; `leave` first leaves
+    // every coordinator: stop_and_hold), for any other object one FormationClass ctor draw. True = one draw.
+    bool mv_adopt(const TacticalMode& mode, objects::ObjectHandle h, SimRng& rng, bool leave = false);
+    int8_t mv_adopt_kind(uint32_t type);  // per type and mode: 1 land, 2 space, 0 not admitted, -1 TEAM_LOCOMOTOR (cached)
+    std::vector<int8_t> adopt_kind_;      // cu8j t02: mv_adopt_kind cache (+1; 0 = not computed); derived, not saved
+    bool deploy_script_ = false;          // cu8j t02: deploy() for a script spawn (no team helper adopt; transient)
     // FIGHTER_FLYING §6.3.1: FlyingHooks::clearance type data per object (ClearanceInfoFn), cached per type.
     bool clearance_info(objects::ObjectId id, tactical::movement::ClearanceInfo& out);
     // SPACE_AVOIDANCE: the avoidance tree members (space battles), rebuilt from the committed store before the movement

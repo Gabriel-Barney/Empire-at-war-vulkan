@@ -17,6 +17,9 @@
 //       --crc-out writes the first run's CRC log; --golden compares every run's log with a CRC log (exit 1 on a difference:
 //       the OPT3 t07 worker-count check, alamo_add_worker_count_check). Runs must also agree with each other (exit 1).
 //       Without the game data the scenario needs: "skipped", exit 0.
+//       bm2c t02: a `host game` scenario (made by alamo_game --bench-make) runs the same way through alamo_game_core's
+//       GameSession (open_game_save_source below): its fingerprint is the rendered run's CRC log, so a match proves the
+//       sim-only run did the rendered run's sim work.
 //   --bench-make SCENARIO.abench --save-session KIND [--campaign C] [--map M] [--battles B] [--story] [--seed S]
 //           --bench-save-at T [--save-when W] --ticks K [--workers N] [--bench-every N] [--bench-desc TEXT]
 //       Makes (or remakes) a scenario: builds the session as --save-session does, runs it to the save point, saves
@@ -29,6 +32,7 @@
 //       tools/benchmark/regen_scenario.cmd).
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -55,3 +59,11 @@ struct BenchOptions {
 
 int bench_run(const BenchOptions& opt);
 int bench_make(const BenchOptions& opt);
+
+// bm2c t02 (bench_game.cpp, only with alamo_game_core: ALAMO_HEADLESS_HAVE_GAME_CORE): the source of a `host game` scenario's
+// save (alamo_game --bench-make / --bench-regen), so --bench times it sim-only like a headless one. Each load builds a fresh
+// GameSession from the save (GameSession::spec_from_save + start_from_save, as alamo_game loads it) with its own job system;
+// each tick is one GameSession::tick. Game data: game_dir, else ALAMO_FOC_DATA (0 = skipped when neither is set); VFS
+// arguments: game_args, else the save's. 1 = opened, -1 = error (err).
+int open_game_save_source(const std::string& save_path, const std::string& game_dir, const std::vector<std::string>& game_args,
+                          std::unique_ptr<SaveSessionSource>& out, std::string& err);

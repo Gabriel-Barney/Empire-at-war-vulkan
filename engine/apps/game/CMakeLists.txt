@@ -26,6 +26,7 @@ add_library(alamo_game_core STATIC
   src/mod_picker.cpp
   src/benchmark.cpp
   src/benchmark_scenario.cpp
+  src/benchmark_save.cpp
 )
 target_include_directories(alamo_game_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(alamo_game_core PUBLIC alamo_sim alamo_vfs alamo_data alamo_core alamo_engine_flags)
@@ -195,6 +196,9 @@ function(alamo_game_add_exe)
     target_link_libraries(alamo_game PRIVATE user32)
   endif()
   alamo_shaderxlat_copy_dxc(alamo_game)
+  # bm2d t01: a scenario whose save does not load is "scenario changed, not comparable", exit 3 (needs a window and a GPU, data-free).
+  add_test(NAME alamo_game_bench_stale_scene COMMAND alamo_game_benchmark_tests --stale-exe $<TARGET_FILE:alamo_game>)
+  set_tests_properties(alamo_game_bench_stale_scene PROPERTIES TIMEOUT 120)
   # [port] video options helpers (game_display.cpp): mode list text, selection, options file, detail options mapping.
   add_executable(alamo_game_display_tests ${_dir}/tests/test_game_display.cpp ${_dir}/app/game_display.cpp)
   target_link_libraries(alamo_game_display_tests PRIVATE alamo_core alamo_render_sim alamo_ui_hud alamo_engine_flags alamo_test_support)
@@ -287,6 +291,25 @@ function(alamo_game_add_exe)
                    -P ${PROJECT_SOURCE_DIR}/engine/apps/game/bench_scenario_check.cmake)
   set_tests_properties(alamo_game_bench_scenario PROPERTIES TIMEOUT 1800 FIXTURES_REQUIRED alamo_game_smoke_saveload_run)
   alamo_label_slow(alamo_game_bench_scenario)
+  # bm2c t03: the same on a TAA recipe (testdata/bench_orbit_taa.abench: bm-high, run at 640x360; run b redraws every 3rd
+  # settled frame): a fixed-frames scenario with TAA gives identical PNGs in both runs (bench_scenario_check.cmake -DTAA=1).
+  add_test(NAME alamo_game_bench_scenario_taa
+           COMMAND ${CMAKE_COMMAND} -DGAME=$<TARGET_FILE:alamo_game> -DSAVE=${_smoke_out}/saveload_saves/smoke_battle.alsv
+                   -DRECIPE=${_dir}/testdata/bench_orbit_taa.abench -DOUT=${_bench_out}/scenario_taa -DTAA=1
+                   -P ${PROJECT_SOURCE_DIR}/engine/apps/game/bench_scenario_check.cmake)
+  set_tests_properties(alamo_game_bench_scenario_taa PROPERTIES TIMEOUT 1800 FIXTURES_REQUIRED alamo_game_smoke_saveload_run)
+  alamo_label_slow(alamo_game_bench_scenario_taa)
+  # bm3: the committed rendered scenes (tests/benchmark/*.abench with `host game`): each runs 120 ticks hidden and its fingerprint
+  # matches (bench_scene_check.cmake; skipped without ALAMO_FOC_DATA). One entry per scene, each with its own output folder.
+  foreach(_scene space_battle_game nebula_battle water_battle)
+    if(EXISTS ${PROJECT_SOURCE_DIR}/tests/benchmark/${_scene}.abench)
+      add_test(NAME alamo_game_bench_scene_${_scene}
+               COMMAND ${CMAKE_COMMAND} -DGAME=$<TARGET_FILE:alamo_game> -DSCENE=${PROJECT_SOURCE_DIR}/tests/benchmark/${_scene}.abench
+                       -DOUT=${CMAKE_BINARY_DIR}/smoke_out/bench/scene_${_scene} -P ${PROJECT_SOURCE_DIR}/engine/apps/game/bench_scene_check.cmake)
+      set_tests_properties(alamo_game_bench_scene_${_scene} PROPERTIES TIMEOUT 600)
+      alamo_label_slow(alamo_game_bench_scene_${_scene})
+    endif()
+  endforeach()
   # bm2 (no data, no window): BM1's headless scenario is refused with the reason (its save is an alamo_headless harness
   # session, not an alamo_game session) before anything loads.
   add_test(NAME alamo_game_bench_scenario_headless

@@ -1128,10 +1128,29 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng, const Para
         const float len = dmath::sqrt(d.x * d.x + d.y * d.y);
         facing_[s] = len > 0.0f ? Vec3{d.x / len, d.y / len, 0.0f} : Vec3{s == 0 ? -1.0f : 1.0f, 0.0f, 0.0f};
     }
-    for (uint8_t side = 0; side < 2; ++side)
+    for (uint8_t side = 0; side < 2; ++side) {
+        // cu8j t02 (MOVEMENT §4.7.3): the campaign spawn 0x2a00b0 (one call per side [M]) registers each group whose first
+        // member's Ship_Class is 0..6 [inferred: the placement switch's unsigned bound] for the fleet placement 0x4fbb10
+        // (a team member maps to its container), which runs at its end in space: each placed object leaves its coordinator
+        // and is adopted again (0x426d50, 0x39bcb0): a second ctor draw. [port] The placement positions (Set_Capital /
+        // Lead / Screen / Transport_Ship_Formation) are not modelled; the draws are consecutive, so only their count
+        // matters, taken in registration order.
+        const bool placement = space_ && !cfg_.skirmish;
+        std::vector<objects::ObjectHandle> placed;
         for (uint32_t i = 0; i < parts_.size(); ++i)
-            if (!parts_[i].reserve && !parts_[i].starbase && !parts_[i].structure && !parts_[i].built && parts_[i].side == side)
+            if (!parts_[i].reserve && !parts_[i].starbase && !parts_[i].structure && !parts_[i].built && parts_[i].side == side) {
+                const size_t u0 = units_.size();
                 deploy(mode, i, rng);
+                if (!placement || units_.size() <= u0 || units_[u0].type >= types.size()) continue;
+                const int32_t sc = types.get_int(units_[u0].type, "Ship_Class");
+                if (sc < 0 || sc >= 7) continue;
+                for (size_t k = u0; k < units_.size(); ++k) {
+                    const objects::ObjectHandle h = units_[k].container != 0xFFFFFFFFu ? containers_[units_[k].container].h : units_[k].h;
+                    if (std::find(placed.begin(), placed.end(), h) == placed.end()) placed.push_back(h);
+                }
+            }
+        for (const objects::ObjectHandle h : placed) (void)mv_adopt(mode, h, rng, true);
+    }
 }
 
 // ---- build pads: attachment bone, kill list, persistence (REMAINING_GAPS §6.5) --------------------------------------
