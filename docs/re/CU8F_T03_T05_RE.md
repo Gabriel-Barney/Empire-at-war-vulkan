@@ -114,7 +114,9 @@ map included. After that, BATTLE_TRANSITIONS §2.1 steps 1.3–1.5 apply: story 
   `Planet_Surface_Accessible` No or space-only), plus `Galaxy_Core_Art_Model`. So vanilla never reaches it in
   normal play.
 - Even when it runs, players ≥ 2 leaves only 46 `_MP_*` maps (22 land, 24 space; `_MP_LAND_DATHOMIR` and
-  `_MP_LAND_UTAPAU` have player count 1), and all of them have faction 3. With a defender
+  `_MP_LAND_UTAPAU` have player count 1), and all of them have faction 3. Correction (cu8g probe kit, 2026-11-08,
+  unverified in game): the copies of `_MP_LAND_DATHOMIR` / `_MP_LAND_UTAPAU` in corruption `Patch2.meg`, which win
+  over the base archives, have player counts 4 and 6, so they are candidates too (still faction 3). With a defender
   (faction 0/1/2/4/5) nothing matches, so the result is empty. A space battle at a planet whose `Terrain` is not
   `Space` also finds nothing: every space map has terrain 7.
 - Mods that ship planets without tactical maps fall into the same filter. A map is a campaign candidate only if
