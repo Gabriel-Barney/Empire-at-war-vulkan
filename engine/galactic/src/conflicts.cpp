@@ -164,54 +164,42 @@ bool load_conflict_rules(const FileProvider& provider, const data::GameDatabase&
     // Factions (FactionFiles.xml list order; matched to GalacticRules by name).
     out.factions.assign(galactic.factions.size(), ConflictFactionInfo{});
     for (size_t f = 0; f < galactic.factions.size(); ++f) out.factions[f].map_faction = map_faction_index(galactic.factions[f].name);
-    std::vector<uint8_t> bytes;
-    if (provider.read("Data\\XML\\FactionFiles.xml", bytes)) {
-        const data::XmlDocument list = data::XmlDocument::parse(bytes, "FactionFiles.xml");
-        for (data::XmlNode file : list.root().children("File")) {
-            const std::string path = "Data\\XML\\" + std::string(file.text_trimmed());
-            std::vector<uint8_t> fb;
-            if (!provider.read(path, fb)) {
-                note(diag, "conflicts: " + path + " not found");
-                continue;
+    // cu5 t01: every <Faction> definition in list order (duplicates included) from the one FactionFiles.xml parse
+    // (galactic_rules.cpp load_factions); a later definition's fields override, as when the XML was read here.
+    for (const FactionRules& fr : galactic.factions) {
+        const uint32_t fi = galactic.find_faction(fr.name);
+        if (fi >= out.factions.size()) continue;
+        ConflictFactionInfo& ci = out.factions[fi];
+        auto num = [&fr](const char* tag, float fallback) {
+            const std::string_view v = fr.xml_text(tag);
+            return v.empty() ? fallback : static_cast<float>(objects::c_atof(v));
+        };
+        ci.space_unit_cap = num("Space_Tactical_Unit_Cap", ci.space_unit_cap);
+        ci.space_retreat_countdown = num("Space_Retreat_Countdown_Seconds", ci.space_retreat_countdown);
+        ci.land_retreat_countdown = num("Land_Retreat_Countdown_Seconds", ci.land_retreat_countdown);
+        ci.space_retreat_damage_mod = num("Space_Retreat_Units_Damaged_Mod_Factor", ci.space_retreat_damage_mod);
+        ci.land_retreat_damage_mod = num("Land_Retreat_Units_Damaged_Mod_Factor", ci.land_retreat_damage_mod);
+        {  // t50: "players, cap, players, cap, ..." (numbers separated by commas / blanks)
+            const std::string_view curve = fr.xml_text("Land_Skirmish_Unit_Cap_By_Player_Count");
+            std::vector<float> v;
+            size_t at = 0;
+            const auto sep = [](char ch) { return ch == ',' || ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'; };
+            while (at < curve.size()) {
+                while (at < curve.size() && sep(curve[at])) ++at;
+                size_t end = at;
+                while (end < curve.size() && !sep(curve[end])) ++end;
+                if (end > at) v.push_back(static_cast<float>(objects::c_atof(curve.substr(at, end - at))));
+                at = end;
             }
-            const data::XmlDocument doc = data::XmlDocument::parse(fb, path);
-            for (data::XmlNode n : doc.root().children("Faction")) {
-                const uint32_t fi = galactic.find_faction(n.attribute("Name"));
-                if (fi >= out.factions.size()) continue;
-                ConflictFactionInfo& ci = out.factions[fi];
-                auto num = [&n](const char* tag, float fallback) {
-                    const std::string_view v = n.child_text(tag);
-                    return v.empty() ? fallback : static_cast<float>(objects::c_atof(v));
-                };
-                ci.space_unit_cap = num("Space_Tactical_Unit_Cap", ci.space_unit_cap);
-                ci.space_retreat_countdown = num("Space_Retreat_Countdown_Seconds", ci.space_retreat_countdown);
-                ci.land_retreat_countdown = num("Land_Retreat_Countdown_Seconds", ci.land_retreat_countdown);
-                ci.space_retreat_damage_mod = num("Space_Retreat_Units_Damaged_Mod_Factor", ci.space_retreat_damage_mod);
-                ci.land_retreat_damage_mod = num("Land_Retreat_Units_Damaged_Mod_Factor", ci.land_retreat_damage_mod);
-                {  // t50: "players, cap, players, cap, ..." (numbers separated by commas / blanks)
-                    const std::string_view curve = n.child_text("Land_Skirmish_Unit_Cap_By_Player_Count");
-                    std::vector<float> v;
-                    size_t at = 0;
-                    const auto sep = [](char ch) { return ch == ',' || ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'; };
-                    while (at < curve.size()) {
-                        while (at < curve.size() && sep(curve[at])) ++at;
-                        size_t end = at;
-                        while (end < curve.size() && !sep(curve[end])) ++end;
-                        if (end > at) v.push_back(static_cast<float>(objects::c_atof(curve.substr(at, end - at))));
-                        at = end;
-                    }
-                    ci.land_skirmish_unit_cap.clear();
-                    for (size_t k = 0; k + 1 < v.size(); k += 2) ci.land_skirmish_unit_cap.emplace_back(v[k], v[k + 1]);
-                }
-            }
+            ci.land_skirmish_unit_cap.clear();
+            for (size_t k = 0; k + 1 < v.size(); k += 2) ci.land_skirmish_unit_cap.emplace_back(v[k], v[k + 1]);
         }
-    } else {
-        note(diag, "conflicts: FactionFiles.xml not found (default unit caps)");
     }
+    if (galactic.factions.empty()) note(diag, "conflicts: no factions in the galactic rules (default unit caps)");
 
     // AI contrast table.
     bool ok = true;
-    bytes.clear();
+    std::vector<uint8_t> bytes;
     if (provider.read("Data\\Scripts\\Library\\PGAICommands.lua", bytes)) {
         const std::string_view src(reinterpret_cast<const char*>(bytes.data()), bytes.size());
         if (!out.contrast.parse_lua(src, category_mask, diag)) ok = false;

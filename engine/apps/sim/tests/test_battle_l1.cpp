@@ -305,8 +305,8 @@ Run run(const Data& d, int32_t workers, int follow = 0) {
     opt.conflict.human_choice = galactic::BattleChoice::Fight;
     opt.battle.max_frames = 6000;
     opt.battle.order_interval = 0;  // no stand-in orders: the sides stay at their anchors (12000 apart)
-    opt.retreat_increment_frames = load_retreat_increments(*d.files, d.rules);
-    opt.retreat_flight_increments = load_retreat_flight_increments(*d.files, d.rules);
+    opt.retreat_increment_frames = load_retreat_increments(d.rules);
+    opt.retreat_flight_increments = load_retreat_flight_increments(d.rules);
     CampaignBattles battles(host, crules, *d.catalog,
                             [](const std::string& name, terrain::MapData& m) {
                                 if (name != "L1_Space_B") return false;
@@ -547,7 +547,7 @@ LandRun run_land(const Data& d, int32_t workers) {
     opt.battle.fog = false;
     opt.l1_constants.min_bombard_interval = opt.l1_constants.max_bombard_interval = 3.0f;
     opt.l1_constants.min_bombing_run_interval = opt.l1_constants.max_bombing_run_interval = 3.0f;
-    opt.l1_factions = load_l1_factions(*d.files, d.rules);
+    opt.l1_factions = load_l1_factions(d.rules);
     auto wd = std::make_shared<tactical::combat::WeatherData>();
     CHECK(tactical::combat::load_weather_data(*d.files, *wd));
     opt.weather = wd;
@@ -1645,7 +1645,7 @@ void test_foc() {
     std::vector<std::string> diag;
     CHECK(db.load(*files, {}, &diag) && raw.load(*files) && types.build(raw, files.get(), &diag));
     CHECK(galactic::load_galactic_rules(*files, db, types, rules, &diag));
-    const std::vector<int32_t> inc = load_retreat_increments(*files, rules);
+    const std::vector<int32_t> inc = load_retreat_increments(rules);
     int32_t ones = 0;
     for (int32_t v : inc) ones += v == 1 ? 1 : 0;
     const uint32_t rebel = rules.find_faction("Rebel"), empire = rules.find_faction("Empire");

@@ -113,10 +113,12 @@ LightningStyle parse_lightning(const data::XmlNode& e) {
 
 // ------------------------------------------------------------------------------------------------ constants / styles
 bool parse_beam_constants(std::span<const uint8_t> xml, BeamConstants& out) {
-    const data::XmlDocument doc =
-        data::XmlDocument::parse(xml, "GameConstants.xml");
-    if (!doc.ok()) return false;
-    const data::XmlNode root = doc.root();
+    const data::XmlDocument doc = data::XmlDocument::parse(xml, "GameConstants.xml");
+    return parse_beam_constants(doc.root(), out);
+}
+
+bool parse_beam_constants(const data::XmlNode& root, BeamConstants& out) {
+    if (!root) return false;
     auto read = [&](std::string_view prefix, BeamConstants::Set& s) {
         const std::string p(prefix);
         s.width = parse_f(child_text_ci(root, p + "_Width"), s.width);

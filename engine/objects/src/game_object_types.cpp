@@ -5,6 +5,7 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/data/values.hpp"
+#include "alamo/data/xml_list.hpp"
 
 namespace alamo::objects {
 
@@ -627,29 +628,24 @@ void GameObjectTypes::after_pass() {
 }
 
 void GameObjectTypes::load_registries(const FileProvider& provider) {
+    // cu5 t02: the shared list walk. Every child element of the list's root is an entry (not only <File>), in list
+    // order; the listed documents stay alive in registry_docs_ (the tables keep views into them).
+    data::ListedXmlOptions list_options;
+    list_options.entry_tag = {};
+    list_options.visit_missing = true;
+    list_options.visit_unparsable = true;
     auto load_list = [&](std::string_view list, auto&& per_element) {
-        std::vector<uint8_t> bytes;
-        if (!provider.read(list, bytes)) return false;
-        auto doc = std::make_unique<data::XmlDocument>(data::XmlDocument::parse(bytes, std::string(list)));
-        if (!doc->ok()) return false;
-        const data::XmlDocument* ld = doc.get();
-        registry_docs_.push_back(std::move(doc));
-        for (data::XmlNode e = ld->root().first_child(); e; e = e.next_sibling()) {
-            const std::string_view name = data::trim(e.text());
-            if (name.empty()) continue;
-            std::string path = "Data\\XML\\";
-            path += name;
-            if (!provider.read(path, bytes)) {
-                warn("unable to open XML file '" + path + "' (skipped)");
-                continue;
+        const data::ListStatus st = data::for_each_listed_xml(provider, list, [&](data::ListedXmlFile& file) {
+            if (!file.doc) {
+                warn("unable to open XML file '" + file.entry.path + "' (skipped)");
+                return;
             }
-            auto fd = std::make_unique<data::XmlDocument>(data::XmlDocument::parse(bytes, path));
-            const data::XmlDocument* d = fd.get();
-            registry_docs_.push_back(std::move(fd));
-            if (!d->ok()) continue;
+            const data::XmlDocument* d = file.doc.get();
+            registry_docs_.push_back(std::move(file.doc));
+            if (!d->ok()) return;
             for (data::XmlNode n = d->root().first_child(); n; n = n.next_sibling()) per_element(n);
-        }
-        return true;
+        }, list_options);
+        return st == data::ListStatus::Ok;
     };
     // Last text of a direct child (scalars: last occurrence wins).
     auto last_child_text = [](data::XmlNode n, std::string_view tag) {

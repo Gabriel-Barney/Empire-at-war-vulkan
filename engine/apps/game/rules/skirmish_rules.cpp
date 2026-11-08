@@ -6,7 +6,6 @@
 
 #include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
-#include "alamo/data/xml.hpp"
 #include "alamo/galactic/galactic_rules.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #ifdef ALAMO_GAME_RULES_HAVE_AI
@@ -69,32 +68,17 @@ std::vector<uint32_t> fallback_types(const galactic::GalacticRules& rules, const
 
 }  // namespace
 
-SkirmishForceTable load_skirmish_forces(const FileProvider& files) {
+SkirmishForceTable load_skirmish_forces(const std::vector<galactic::FactionRules>& factions) {
     SkirmishForceTable out;
-    std::vector<uint8_t> bytes;
-    if (!files.read("Data\\XML\\FactionFiles.xml", bytes)) return out;
-    std::vector<std::string> list;
-    {
-        const data::XmlDocument doc = data::XmlDocument::parse(bytes, "FactionFiles.xml");
-        if (!doc.ok()) return out;
-        for (const data::XmlNode n : doc.root().children())
-            if (ascii_iequals(n.name(), "File")) list.emplace_back(n.text_trimmed());
-    }
-    for (const std::string& f : list) {
-        if (!files.read("Data\\XML\\" + f, bytes)) continue;
-        const data::XmlDocument doc = data::XmlDocument::parse(bytes, f);
-        if (!doc.ok()) continue;
-        for (const data::XmlNode n : doc.root().children()) {
-            if (!ascii_iequals(n.name(), "Faction")) continue;
-            const std::string key = ascii_upper(ascii_trim(n.attribute("Name", "")));
-            if (key.empty()) continue;
-            std::vector<std::string> space = split_names(n.child_text("Space_Skirmish_AI_Default_Forces"));
-            std::vector<std::string> land = split_names(n.child_text("Land_Skirmish_AI_Default_Forces"));
-            if (space.empty() && land.empty()) continue;
-            SkirmishForces& e = out[key];
-            if (!space.empty()) e.space = std::move(space);
-            if (!land.empty()) e.land = std::move(land);
-        }
+    for (const galactic::FactionRules& f : factions) {
+        const std::string key = ascii_upper(ascii_trim(f.name));
+        if (key.empty()) continue;
+        std::vector<std::string> space = split_names(f.xml_text("Space_Skirmish_AI_Default_Forces"));
+        std::vector<std::string> land = split_names(f.xml_text("Land_Skirmish_AI_Default_Forces"));
+        if (space.empty() && land.empty()) continue;
+        SkirmishForces& e = out[key];
+        if (!space.empty()) e.space = std::move(space);
+        if (!land.empty()) e.land = std::move(land);
     }
     return out;
 }

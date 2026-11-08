@@ -30,19 +30,23 @@ data::XmlDocument read_xml(const FileProvider& files, const char* path) {
     return data::XmlDocument::parse(bytes, path);
 }
 
-ui::UiConstants ui_constants(const FileProvider& files) {
-    const data::XmlDocument doc = read_xml(files, "Data\\XML\\GameConstants.xml");
-    return doc.ok() ? ui::parse_ui_constants(doc.root()) : ui::UiConstants{};
+// cu5 t03: every GameConstants reader of alamo_game takes the <GameConstants> root GameData already parsed
+// (GameDatabase::constants().element, null when the file is missing or has no root): GameConstants.xml is read once.
+const data::XmlNode& game_constants(const GameData& gd) { return gd.db.constants().element; }
+
+ui::UiConstants ui_constants(const GameData& gd) {
+    const data::XmlNode& root = game_constants(gd);
+    return root ? ui::parse_ui_constants(root) : ui::UiConstants{};
 }
 
 // --- OI render: R2 galactic light record (STRATEGIC_GAPS §6.1: GameConstants Galactic_Zoom_*_Light_*), read once per
-// file provider (frame thread only) ---
-const render::GalacticLightSettings& galactic_light_settings(const FileProvider* files) {
-    static const FileProvider* loaded_for = nullptr;
+// game data (frame thread only) ---
+const render::GalacticLightSettings& galactic_light_settings(const GameData* gd) {
+    static const GameData* loaded_for = nullptr;
     static render::GalacticLightSettings settings;
-    if (files && files != loaded_for) {
-        settings = render::load_galactic_light_settings(*files);
-        loaded_for = files;
+    if (gd && gd != loaded_for) {
+        settings = render::load_galactic_light_settings(game_constants(*gd));
+        loaded_for = gd;
     }
     return settings;
 }
@@ -145,19 +149,19 @@ void GalacticView::init(GpuCore& gpu, const GameData& data, std::vector<render::
     colors_ = std::move(colors);
     style_ = style;
     // FIXPASS_GALACTIC §3: the corruption path settings (GameConstants; the evil side name is in the galactic rules).
-    corruption_path_ = render::load_corruption_path_settings(*data.files);
+    corruption_path_ = render::load_corruption_path_settings(game_constants(data));
     types_.build(data.types);
     models_ = std::make_unique<render::GalacticModels>(gpu.renderer, gpu.streamer.get(), gpu.cache.get(), data.files.get());
     portrait_models_ = std::make_unique<render::GalacticModels>(gpu.renderer, gpu.streamer.get(), gpu.cache.get(), data.files.get());
     portraits_ = std::make_unique<render::PlanetPortraits>(gpu.renderer, gpu.alloc, gpu.ring, *portrait_models_, types_);
-    portraits_->set_lighting(render::galactic_lighting(galactic_light_settings(data.files.get()), 1.0f));
+    portraits_->set_lighting(render::galactic_lighting(galactic_light_settings(&data), 1.0f));
     ropt.threads = gpu.js->worker_count();
     ropt.space = true;     // background list = the galactic background scene
     ropt.galactic = true;  // no bloom / heat
     ropt.shadows = false;
-    const ui::UiConstants uc = ui_constants(*data.files);
+    const ui::UiConstants uc = ui_constants(data);
     camera_ = ui::GalacticCameraController(uc.galactic, uc.strategic);
-    corruption_ = render::load_galactic_corruption_settings(*data.files);
+    corruption_ = render::load_galactic_corruption_settings(game_constants(data));
 #ifdef ALAMO_PARTICLES_HAVE_SIM
     pworld_ = std::make_unique<render::particles::ParticleWorld>(1u << 18);  // [port] capacity: corruption smoke only
     plib_ = std::make_unique<render::particles::ParticleLibrary>(data.files.get());
@@ -257,7 +261,7 @@ void GalacticView::use_scene(GpuCore& gpu) {
     // --- OI render: the galactic light record from GameConstants; R2 t03: the planet-zoom lerp (STRATEGIC_GAPS §6.1,
     // 0x3c3bf0: intensity -> Galactic_Zoom_Light_Level, angles -> Galactic_Zoom_In_Light_Angle over GMC_ZoomTime of wall
     // time, linear in the progress) follows the camera's zoom blend: 0 zoomed out, p zooming in, 1 - p zooming out. ---
-    gpu.renderer.set_lighting(render::galactic_lighting(galactic_light_settings(gpu.data && gpu.data->files ? gpu.data->files.get() : nullptr),
+    gpu.renderer.set_lighting(render::galactic_lighting(galactic_light_settings(gpu.data && gpu.data->files ? gpu.data : nullptr),
                                                         camera_.zoom_blend()));
     // --- end OI render ---
     gpu.renderer.set_object_fade(-1.0f, -1.0f);  // SPACE_AND_OPEN.md B.8: no distance fade on the galactic map
@@ -404,9 +408,8 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
 #endif
     // R5: fog colours (GameConstants), land decorations (tracks, scorch marks).
     {
-        std::vector<uint8_t> gc;
         render::FogColors fc;
-        if (data.files->read("Data\\XML\\GameConstants.xml", gc)) render::parse_fog_colors(gc, fc);
+        render::parse_fog_colors(game_constants(data), fc);
         fog_.set_colors(fc);
     }
     // --- R3/R5 render: decorations on every map (space: no terrain - only spin-away explosions) ---
@@ -417,11 +420,10 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
     // --- R5 render: ability beams (ABILITY_VISUALS 2 / 4): GameConstants fallbacks, LightningEffectTypes, per-special styles ---
     {
         render::BeamConstants beam_gc;
-        std::vector<uint8_t> xml;
-        if (data.files->read("Data\\XML\\GameConstants.xml", xml)) render::parse_beam_constants(xml, beam_gc);
+        render::parse_beam_constants(game_constants(data), beam_gc);
         beam_styles_.build(data.types, beam_gc);
         render::LightningLibrary lightning = render::LightningLibrary::builtin();
-        xml.clear();
+        std::vector<uint8_t> xml;
         if (data.files->read("Data\\XML\\LightningEffectTypes.xml", xml)) lightning.load(xml);
         const render::TextureSource beam_tex = [&gpu](std::string_view n, assets::TextureRole role) { return gpu.cache->texture(n, role); };
         beams_on_ = gpu.renderer.init_beams(beam_tex, &lightning);
@@ -430,8 +432,7 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
     // --- end R5 render ---
     // Laser projectiles (Projectile_Custom_Render 1 / 2, PROJECTILE_NEBULA_DRAW.md 1): procedural beams / kites.
     {
-        std::vector<uint8_t> xml;
-        if (data.files->read("Data\\XML\\GameConstants.xml", xml)) render::parse_laser_constants(xml, laser_k_);
+        render::parse_laser_constants(game_constants(data), laser_k_);
         if (!gpu.renderer.init_lasers([&gpu](std::string_view n, assets::TextureRole role) { return gpu.cache->texture(n, role); }))
             std::fprintf(stderr, "battle: laser projectiles not drawn (PrimAdditive / textures unavailable)\n");
     }
@@ -446,7 +447,7 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
         const data::XmlDocument doc = read_xml(*data.files, "Data\\XML\\TacticalCameras.xml");
         if (doc.ok()) ui::parse_tactical_cameras(doc.root(), cams);
         const ui::TacticalCameraConstants* c = ui::find_camera(cams, space_ ? "Space_Mode" : "Land_Mode");
-        const ui::UiConstants uc = ui_constants(*data.files);
+        const ui::UiConstants uc = ui_constants(data);
         camera_ = ui::TacticalCameraController(c ? *c : (space_ ? ui::space_mode_defaults() : ui::land_mode_defaults()), uc.tactical);
         const tactical::Aabb& bb = tm->bounds();
         if (bb.max.x - bb.min.x < 1.0e5f) camera_.set_bounds({bb.min.x, bb.min.y, bb.max.x, bb.max.y});

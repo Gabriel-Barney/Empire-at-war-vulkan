@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "alamo/data/xml.hpp"
+#include "alamo/galactic/economy.hpp"  // FactionRules
 
 namespace alamo::ai {
 
@@ -484,32 +485,13 @@ std::string ai_player_control_type(const std::vector<std::string>& pairs, std::s
     return {};
 }
 
-std::map<std::string, std::string> load_faction_basic_ai(const FileProvider& files) {
+std::map<std::string, std::string> load_faction_basic_ai(const std::vector<galactic::FactionRules>& factions) {
     std::map<std::string, std::string> out;
-    std::vector<uint8_t> bytes;
-    auto parse = [&bytes](const std::string& name) {
-        return data::XmlDocument::parse(bytes, name);
-    };
-    if (!files.read("Data\\XML\\FactionFiles.xml", bytes)) return out;
-    std::vector<std::string> list;
-    {
-        const data::XmlDocument doc = parse("FactionFiles.xml");
-        if (!doc.ok()) return out;
-        for (const data::XmlNode n : doc.root().children())
-            if (ai_iequal(n.name(), "File")) list.emplace_back(n.text_trimmed());
-    }
-    for (const std::string& f : list) {
-        const std::string path = "Data\\XML\\" + f;
-        if (!files.read(path, bytes)) continue;
-        const data::XmlDocument doc = parse(f);
-        if (!doc.ok()) continue;
-        for (const data::XmlNode n : doc.root().children()) {
-            if (!ai_iequal(n.name(), "Faction")) continue;
-            const std::string key = ai_upper_copy(ai_trim(n.attribute("Name", "")));
-            if (key.empty() || out.count(key)) continue;
-            const std::string_view b = ai_trim(n.child_text("Basic_AI"));
-            if (!b.empty()) out.emplace(key, std::string(b));
-        }
+    for (const galactic::FactionRules& f : factions) {
+        const std::string key = ai_upper_copy(ai_trim(f.name));
+        if (key.empty() || out.count(key)) continue;
+        const std::string_view b = ai_trim(f.basic_ai);
+        if (!b.empty()) out.emplace(key, std::string(b));
     }
     return out;
 }

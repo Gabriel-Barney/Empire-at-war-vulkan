@@ -574,8 +574,8 @@ bool skirmish_host_session(Session& s, const MapRunOptions& opt, std::vector<std
     }
     const float credits = static_cast<float>(std::max(0, s.db.constants().get_int("MP_Default_Credits", 0)));
     s.setup = make_galaxy(s, planet, {}, {}, credits, slots);
-    auto basic_ai = std::make_shared<const std::map<std::string, std::string>>(ai::load_faction_basic_ai(*s.files));
-    const game::SkirmishForceTable force_table = game::load_skirmish_forces(*s.files);
+    auto basic_ai = std::make_shared<const std::map<std::string, std::string>>(ai::load_faction_basic_ai(s.rules.factions));
+    const game::SkirmishForceTable force_table = game::load_skirmish_forces(s.rules.factions);
     for (int32_t p = 0; p < 2; ++p) {
         galactic::PlayerSetup& ps = s.setup.players[static_cast<size_t>(p)];
         const std::string& faction = s.rules.factions[ps.faction].name;

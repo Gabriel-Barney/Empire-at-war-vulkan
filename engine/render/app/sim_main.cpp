@@ -324,8 +324,8 @@ public:
         scene_->apply(ropt);
         // Laser projectiles (Projectile_Custom_Render 1 / 2): procedural beams / kites, GameConstants Z scale factors.
         {
-            std::vector<uint8_t> gc;
-            if (world_.files->read("Data\\XML\\GameConstants.xml", gc)) render::parse_laser_constants(gc, laser_k_);
+            // cu5 t04: the <GameConstants> root the game database parsed, not a second read of the file.
+            if (world_.gdb) render::parse_laser_constants(world_.gdb->constants().element, laser_k_);
             if (!renderer.init_lasers([this](std::string_view n, assets::TextureRole r) { return cache_->texture(n, r); }))
                 std::fprintf(stderr, "warning: laser projectiles not drawn (PrimAdditive / textures unavailable)\n");
         }

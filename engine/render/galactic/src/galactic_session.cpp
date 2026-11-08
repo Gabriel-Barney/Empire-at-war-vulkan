@@ -310,7 +310,7 @@ std::unique_ptr<GalacticWorld> load_galactic_world(std::unique_ptr<FileProvider>
     }
     w->faction_colors = load_faction_colors(*w->files);
     w->route_style = load_route_line_style(*w->files);
-    w->corruption_path = load_corruption_path_settings(*w->files);
+    w->corruption_path = load_corruption_path_settings(w->gdb->constants().element);  // cu5 t04: the parsed GameConstants
     return w;
 }
 

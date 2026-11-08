@@ -16,6 +16,7 @@
 
 #include "alamo/core/hash.hpp"
 #include "alamo/data/xml.hpp"
+#include "alamo/data/xml_list.hpp"
 #include "alamo/objects/coverage.hpp"
 #include "alamo/objects/field_schema.hpp"
 #include "alamo/vfs/steam_workshop.hpp"
@@ -140,11 +141,8 @@ void check_list_files(const GameData& d, MissingMap& m) {
         if (!d.files->read(list, bytes)) continue;
         const bool in_mod = in_mod_layer(*d.vfs, list);
         const data::XmlDocument doc = data::XmlDocument::parse(bytes, list);
-        if (!doc.ok()) continue;
-        for (data::XmlNode f : doc.root().children("File")) {
-            const std::string_view name = f.text_trimmed();
-            if (name.empty()) continue;
-            std::string path = normalize_name(std::string("Data\\XML\\") + std::string(name));
+        for (const data::ListedXmlEntry& en : data::listed_xml_entries(doc)) {  // cu5 t02 (none when !doc.ok())
+            std::string path = normalize_name(en.path);
             if (!d.files->exists(path)) note_missing(m, std::move(path), list, in_mod);
         }
     }
@@ -267,14 +265,9 @@ std::vector<std::string> database_files(const GameData& d, const XmlDatabase& db
     std::vector<uint8_t> bytes;
     if (!d.files->read("Data\\XML\\" + std::string(db.list), bytes)) return out;
     const data::XmlDocument doc = data::XmlDocument::parse(bytes, std::string(db.list));
-    if (!doc.ok()) return out;
     std::set<std::string> seen;
-    for (data::XmlNode f : doc.root().children("File")) {
-        const std::string_view name = f.text_trimmed();
-        if (name.empty()) continue;
-        std::string path = "Data\\XML\\" + std::string(name);
-        if (seen.insert(normalize_name(path)).second) out.push_back(std::move(path));
-    }
+    for (data::ListedXmlEntry& en : data::listed_xml_entries(doc))  // cu5 t02 (none when !doc.ok())
+        if (seen.insert(normalize_name(en.path)).second) out.push_back(std::move(en.path));
     return out;
 }
 

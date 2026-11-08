@@ -23,6 +23,10 @@
 #include "alamo/ai/galactic_perception.hpp"
 #include "alamo/core/galaxy.hpp"
 
+namespace alamo::galactic {
+struct FactionRules;
+}
+
 namespace alamo::data {
 struct CampaignDef;
 }
@@ -67,10 +71,10 @@ struct CampaignSeedOptions {
     std::string neutral_faction = "(no neutral faction)";
     bool fog = true;  // false: GalacticSnapshot::fog_disabled and planet_auto_reveal
 };
-// The options of a campaign seed from Data\XML\FactionFiles.xml and the files it names (list order; the first
-// definition of a name counts, as ai::load_faction_basic_ai): Is_Neutral, Benefits_From_Corruption and the first
-// Is_Neutral faction, names compared case-insensitively. No FactionFiles.xml: the defaults above.
-CampaignSeedOptions seed_options_from_factions(const FileProvider& files);
+// The options of a campaign seed from the faction definitions (galactic::load_factions: Data\XML\FactionFiles.xml and
+// the files it names, list order; the first definition of a name counts): Is_Neutral, Benefits_From_Corruption and the
+// first Is_Neutral faction, names compared case-insensitively. No factions: the defaults above.
+CampaignSeedOptions seed_options_from_factions(const std::vector<galactic::FactionRules>& factions);
 
 struct CampaignSeed {
     GalacticSnapshot snapshot;

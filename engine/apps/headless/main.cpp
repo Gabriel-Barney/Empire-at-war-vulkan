@@ -133,6 +133,7 @@
 #include "alamo/galactic/all_pairs.hpp"
 #include "alamo/galactic/cadence.hpp"
 #include "alamo/galactic/fleet_path.hpp"
+#include "alamo/galactic/galactic_rules.hpp"  // cu5 t01: load_factions (campaign seed options)
 #include "alamo/galactic/planet_graph.hpp"
 #include "alamo/jobs/jobs.hpp"
 #include "alamo/objects/game_object_types.hpp"
@@ -1221,7 +1222,8 @@ static int headless_main(int argc, char** argv) {
     const bool have_types = odb.load(*provider) && types.build(odb, provider.get());
     const alamo::ai::ForceTypeLookup lookup = alamo::ai::make_force_type_lookup(types);
     // modc t03: Is_Neutral / Benefits_From_Corruption from FactionFiles.xml (FoC: Neutral / Underworld, as before).
-    const alamo::ai::CampaignSeedOptions seed_options = alamo::ai::seed_options_from_factions(*provider);
+    const alamo::ai::CampaignSeedOptions seed_options =
+        alamo::ai::seed_options_from_factions(alamo::galactic::load_factions(*provider));
     int rc = 0;
     for (const auto& name : names) {
         std::vector<std::string> mdiag;

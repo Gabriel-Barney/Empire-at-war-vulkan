@@ -10,7 +10,7 @@
 #include "alamo/core/ascii.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/data/game_database.hpp"
-#include "alamo/data/xml.hpp"
+#include "alamo/galactic/economy.hpp"  // FactionRules (cu5 t01)
 #ifdef ALAMO_AI_HAVE_GALACTIC_SIM
 #include "alamo/galactic/galactic_rules.hpp"  // q6: galactic_unit_kind (the galactic role rule)
 #endif
@@ -146,34 +146,17 @@ ForceTypeLookup make_force_type_lookup(const objects::GameObjectTypes& types) {
     return [&types](std::string_view name) { return force_type_of(types, types.resolve_name(name)); };
 }
 
-CampaignSeedOptions seed_options_from_factions(const FileProvider& files) {
+CampaignSeedOptions seed_options_from_factions(const std::vector<galactic::FactionRules>& factions) {
     CampaignSeedOptions o;
     auto neutral = std::make_shared<std::vector<std::string>>();
     auto corrupt = std::make_shared<std::vector<std::string>>();
     std::vector<std::string> seen;
-    std::vector<uint8_t> bytes;
-    const auto parse = [&bytes](const std::string& name) {
-        return data::XmlDocument::parse(bytes, name);
-    };
-    std::vector<std::string> list;
-    if (files.read("Data\\XML\\FactionFiles.xml", bytes)) {
-        const data::XmlDocument doc = parse("FactionFiles.xml");
-        if (doc.ok())
-            for (const data::XmlNode n : doc.root().children())
-                if (ascii_iequals(n.name(), "File")) list.emplace_back(n.text_trimmed());
-    }
-    for (const std::string& f : list) {
-        if (!files.read("Data\\XML\\" + f, bytes)) continue;
-        const data::XmlDocument doc = parse(f);
-        if (!doc.ok()) continue;
-        for (const data::XmlNode n : doc.root().children()) {
-            if (!ascii_iequals(n.name(), "Faction")) continue;
-            const std::string name(ascii_trim(n.attribute("Name", "")));
-            if (name.empty() || std::any_of(seen.begin(), seen.end(), [&](const std::string& x) { return ascii_iequals(x, name); })) continue;
-            seen.push_back(name);
-            if (objects::parse_type_bool(n.child_text("Is_Neutral"))) neutral->push_back(name);
-            if (objects::parse_type_bool(n.child_text("Benefits_From_Corruption"))) corrupt->push_back(name);
-        }
+    for (const galactic::FactionRules& f : factions) {
+        const std::string name(ascii_trim(f.name));
+        if (name.empty() || std::any_of(seen.begin(), seen.end(), [&](const std::string& x) { return ascii_iequals(x, name); })) continue;
+        seen.push_back(name);
+        if (f.is_neutral) neutral->push_back(name);
+        if (f.benefits_from_corruption) corrupt->push_back(name);
     }
     const auto in = [](const std::shared_ptr<std::vector<std::string>>& v) {
         return [v](std::string_view name) {

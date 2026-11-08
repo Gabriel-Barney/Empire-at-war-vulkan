@@ -112,7 +112,10 @@ static void test_r2_records() {
     const render::RouteLineSettings& neutral = s.settings[render::kRouteNeutral];
     CHECK(near(neutral.zoomed_out.x, 0.5f) && near(neutral.width, 0.0f) && neutral.render_mode == "ALPHA");
     CHECK(near(s.color(render::RouteClass::Enemy).x, 225 / 255.0f) && near(s.width(render::RouteClass::Corrupt), 3.0f));  // built-in
-    const render::GalacticLightSettings ls = render::load_galactic_light_settings(mf);
+    std::vector<uint8_t> gc_bytes;  // cu5 t04: the loaders take the parsed <GameConstants> root
+    CHECK(mf.read("Data\\XML\\GameConstants.xml", gc_bytes));
+    const data::XmlDocument gc_doc = data::XmlDocument::parse(gc_bytes, "GameConstants.xml");
+    const render::GalacticLightSettings ls = render::load_galactic_light_settings(gc_doc.root());
     CHECK(near(ls.out_yaw_deg, 90.0f) && near(ls.out_elevation_deg, 30.0f) && near(ls.in_yaw_deg, 180.0f) && near(ls.zoom_light_level, 0.8f));
     const render::Lighting out = render::galactic_lighting(ls, 0.0f), in = render::galactic_lighting(ls, 1.0f);
     const assets::Float3 d = render::light_direction(90.0f * 3.14159265f / 180.0f, 30.0f * 3.14159265f / 180.0f);
@@ -154,7 +157,7 @@ static void test_r2_records() {
         CHECK(render::faction_text_color(tab, "Neutral", c) && near(c.x, 128 / 255.0f));
         CHECK(!render::faction_map_color(tab, "Hutts", c) && !render::faction_text_color(tab, "", c));
     }
-    const render::GalacticCorruptionSettings cs = render::load_galactic_corruption_settings(mf);
+    const render::GalacticCorruptionSettings cs = render::load_galactic_corruption_settings(gc_doc.root());
     CHECK(cs.planet_particle == "Light_Galactic_Corruption_Particles" && cs.line_particle == "Galactic_Corruption_Line_Particles" &&
           near(cs.brightness[0], 0.25f) && near(cs.brightness[1], 0.75f));
     const render::Lighting def = render::galactic_lighting();
@@ -1203,7 +1206,7 @@ static void test_planet_portrait(const std::string& src_dir) {
         types.build(w->types);
         render::GalacticModels models(g.renderer, streamer.get(), cache.get(), w->files.get());
         render::PlanetPortraits portraits(g.renderer, g.alloc, g.ring, models, types);
-        portraits.set_lighting(render::galactic_lighting(render::load_galactic_light_settings(*w->files), 1.0f));
+        portraits.set_lighting(render::galactic_lighting(render::load_galactic_light_settings(w->gdb->constants().element), 1.0f));
         const std::string name = render::planet_portrait_name("Kuat");
         CHECK(render::is_planet_portrait_name(name) && render::planet_portrait_type(name) == "Kuat" &&
               !render::is_planet_portrait_name("planet_portrait:") && !render::is_planet_portrait_name("load_overlay.tga"));

@@ -6,6 +6,7 @@
 #include "alamo/data/game_database.hpp"
 #include "alamo/core/ascii.hpp"
 #include "alamo/data/xml.hpp"
+#include "alamo/data/xml_list.hpp"
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/objects/enums.hpp"
 #include "alamo/objects/game_object_types.hpp"
@@ -245,15 +246,20 @@ EconomyConstants load_economy_constants(const data::GameDatabase& db) {
 
 std::vector<FactionRules> load_factions(const FileProvider& provider, std::vector<std::string>* diagnostics) {
     std::vector<FactionRules> out;
-    auto list = read_xml(provider, "Data\\XML\\FactionFiles.xml", diagnostics);
-    if (!list) return out;
-    for (data::XmlNode f : list->root().children("File")) {
-        const std::string path = "Data\\XML\\" + std::string(f.text_trimmed());
-        auto doc = read_xml(provider, path, diagnostics);
-        if (!doc) continue;
-        for (data::XmlNode n : doc->root().children("Faction")) {
+    constexpr std::string_view kList = "Data\\XML\\FactionFiles.xml";
+    data::ListedXmlOptions opt;  // every entry is opened (an empty one fails to), each failure noted
+    opt.keep_empty_entries = true;
+    opt.visit_missing = true;
+    opt.visit_unparsable = true;
+    const data::ListStatus st = data::for_each_listed_xml(provider, kList, [&](data::ListedXmlFile& file) {
+        if (!file.doc || !file.doc->ok()) {
+            note(diagnostics, (file.doc ? "galactic: unparsable " : "galactic: unable to open ") + file.entry.path);
+            return;
+        }
+        for (data::XmlNode n : file.doc->root().children("Faction")) {
             FactionRules r;
             r.name = std::string(n.attribute("Name"));
+            for (data::XmlNode c : n.children()) r.xml_fields.emplace_back(c.name(), c.text_trimmed());
             r.is_neutral = objects::parse_type_bool(n.child_text("Is_Neutral"));
             r.can_control_planets = objects::parse_type_bool(n.child_text("Can_Control_Planets"));
             r.is_playable = objects::parse_type_bool(n.child_text("Is_Playable"));
@@ -298,7 +304,9 @@ std::vector<FactionRules> load_factions(const FileProvider& provider, std::vecto
             r.enemies = names(n.child_text("Enemies"));
             out.push_back(std::move(r));
         }
-    }
+    }, opt);
+    if (st == data::ListStatus::Missing) note(diagnostics, "galactic: unable to open " + std::string(kList));
+    if (st == data::ListStatus::Unparsable) note(diagnostics, "galactic: unparsable " + std::string(kList));
     return out;
 }
 

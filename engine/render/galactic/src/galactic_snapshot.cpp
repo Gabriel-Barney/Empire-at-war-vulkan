@@ -10,6 +10,7 @@
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
+#include "alamo/data/xml_list.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/type_fields.hpp"
@@ -86,17 +87,10 @@ bool parse_color_bytes(std::string_view text, materials::float4& out) {
 
 std::vector<FactionColor> load_faction_colors(const FileProvider& files) {
     std::vector<FactionColor> out;
-    std::vector<uint8_t> bytes;
-    if (!files.read("Data\\XML\\FactionFiles.xml", bytes)) return out;
-    const data::XmlDocument list = data::XmlDocument::parse(bytes, "FactionFiles.xml");
-    if (!list.ok()) return out;
-    for (data::XmlNode f : list.root().children("File")) {
-        std::vector<uint8_t> fb;
-        const std::string name(data::trim(f.text_trimmed()));
-        if (name.empty() || !files.read("Data\\XML\\" + name, fb)) continue;
-        const data::XmlDocument doc = data::XmlDocument::parse(fb, name);
-        if (!doc.ok()) continue;
-        for (data::XmlNode n : doc.root().children("Faction")) {
+    data::ListedXmlOptions lo;  // cu5 t02: the shared list walk (list order; empty, missing, unparsable files skipped)
+    lo.name_docs_by_entry = true;
+    data::for_each_listed_xml(files, "Data\\XML\\FactionFiles.xml", [&](data::ListedXmlFile& file) {
+        for (data::XmlNode n : file.doc->root().children("Faction")) {
             FactionColor c;
             c.name = std::string(n.attribute("Name"));
             c.neutral = yes(n.child_text("Is_Neutral"));
@@ -109,7 +103,7 @@ std::vector<FactionColor> load_faction_colors(const FileProvider& files) {
             c.display_font.w = 1.0f;
             out.push_back(std::move(c));
         }
-    }
+    }, lo);
     return out;
 }
 

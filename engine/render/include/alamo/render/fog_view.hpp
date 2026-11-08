@@ -29,6 +29,10 @@
 
 #include "alamo/terrain/fow.hpp"
 
+namespace alamo::data {
+class XmlNode;
+}
+
 namespace alamo::render {
 
 class WorldRenderer;
@@ -79,6 +83,8 @@ struct FogColors {
 };
 // Reads the four colours from GameConstants.xml text (missing / malformed tags keep `out`'s values). False without a root.
 bool parse_fog_colors(std::span<const uint8_t> game_constants_xml, FogColors& out);
+// cu5 t04: the same from the parsed <GameConstants> root (GameDatabase::constants().element); false for a null root.
+bool parse_fog_colors(const data::XmlNode& game_constants_root, FogColors& out);
 // The palette the renderer uses for a frame: space -> (kSpaceFowVisible, space_fog), or with the reinforcement overlay
 // palette 3 (kSpaceFowVisible, space_reinforce_fog); land setup phase -> (kLandFowVisible, setup_fog); land ->
 // (kLandFowVisible, land_fog).

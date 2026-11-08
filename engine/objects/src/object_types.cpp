@@ -5,12 +5,12 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/data/values.hpp"
+#include "alamo/data/xml_list.hpp"
 
 namespace alamo::objects {
 
 namespace {
 
-constexpr std::string_view kXmlDir = "Data\\XML\\";
 constexpr std::string_view kVariantTag = "Variant_Of_Existing_Type";
 
 bool is_digit(char c) { return c >= '0' && c <= '9'; }
@@ -150,12 +150,10 @@ bool ObjectTypeDatabase::load(const FileProvider& provider, std::vector<std::str
     }
 
     std::unordered_map<std::string, uint32_t> file_by_path;  // normalize_path -> files_ index (lookup only)
-    for (data::XmlNode entry : list.root().children("File")) {
-        const std::string_view listed = data::trim(entry.text());
-        if (listed.empty()) continue;
+    for (const data::ListedXmlEntry& entry : data::listed_xml_entries(list)) {  // cu5 t02: list order, duplicates kept
+        const std::string_view listed = entry.name;
         ++stats_.list_entries;
-        std::string path(kXmlDir);
-        path += listed;
+        const std::string& path = entry.path;
         const std::string key = normalize_path(path);
         uint32_t fi;
         if (const auto it = file_by_path.find(key); it != file_by_path.end()) {

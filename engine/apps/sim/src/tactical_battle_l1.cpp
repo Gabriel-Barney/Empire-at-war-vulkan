@@ -881,40 +881,22 @@ void TacticalBattle::l1_hash(StateHasher& h) const {
 }
 
 // ---- CampaignBattles helper: Space_Retreat_Unit_Increment_Wait_Frames per faction (FactionFiles.xml) ----
-std::vector<int32_t> load_retreat_increments(const FileProvider& provider, const galactic::GalacticRules& rules) {
+std::vector<int32_t> load_retreat_increments(const galactic::GalacticRules& rules) {
     std::vector<int32_t> out(rules.factions.size(), 0);  // [port] unset = 0 (the hook's documented default)
-    std::vector<uint8_t> bytes;
-    if (!provider.read("Data\\XML\\FactionFiles.xml", bytes)) return out;
-    const data::XmlDocument list = data::XmlDocument::parse(bytes, "FactionFiles.xml");
-    for (data::XmlNode file : list.root().children("File")) {
-        std::vector<uint8_t> fb;
-        const std::string path = "Data\\XML\\" + std::string(file.text_trimmed());
-        if (!provider.read(path, fb)) continue;
-        const data::XmlDocument doc = data::XmlDocument::parse(fb, path);
-        for (data::XmlNode n : doc.root().children("Faction")) {
-            const uint32_t fi = rules.find_faction(n.attribute("Name"));
-            const std::string_view v = n.child_text("Space_Retreat_Unit_Increment_Wait_Frames");
-            if (fi < out.size() && !v.empty()) out[fi] = objects::c_atoi(v);
-        }
+    for (const galactic::FactionRules& f : rules.factions) {  // every definition, list order
+        const uint32_t fi = rules.find_faction(f.name);
+        const std::string_view v = f.xml_text("Space_Retreat_Unit_Increment_Wait_Frames");
+        if (fi < out.size() && !v.empty()) out[fi] = objects::c_atoi(v);
     }
     return out;
 }
 
-std::vector<float> load_retreat_flight_increments(const FileProvider& provider, const galactic::GalacticRules& rules) {
+std::vector<float> load_retreat_flight_increments(const galactic::GalacticRules& rules) {
     std::vector<float> out(rules.factions.size(), 500.0f);  // [port] unset = 500 (the shipped value)
-    std::vector<uint8_t> bytes;
-    if (!provider.read("Data\\XML\\FactionFiles.xml", bytes)) return out;
-    const data::XmlDocument list = data::XmlDocument::parse(bytes, "FactionFiles.xml");
-    for (data::XmlNode file : list.root().children("File")) {
-        std::vector<uint8_t> fb;
-        const std::string path = "Data\\XML\\" + std::string(file.text_trimmed());
-        if (!provider.read(path, fb)) continue;
-        const data::XmlDocument doc = data::XmlDocument::parse(fb, path);
-        for (data::XmlNode n : doc.root().children("Faction")) {
-            const uint32_t fi = rules.find_faction(n.attribute("Name"));
-            const std::string_view v = n.child_text("Space_Retreat_Flight_Move_Increment");
-            if (fi < out.size() && !v.empty()) out[fi] = static_cast<float>(objects::c_atof(v));
-        }
+    for (const galactic::FactionRules& f : rules.factions) {  // every definition, list order
+        const uint32_t fi = rules.find_faction(f.name);
+        const std::string_view v = f.xml_text("Space_Retreat_Flight_Move_Increment");
+        if (fi < out.size() && !v.empty()) out[fi] = static_cast<float>(objects::c_atof(v));
     }
     return out;
 }

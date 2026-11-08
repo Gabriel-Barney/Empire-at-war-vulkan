@@ -53,10 +53,12 @@ terrain::FowGridDesc fog_grid_desc(const FogFrameInput& in) {
 }
 
 bool parse_fog_colors(std::span<const uint8_t> xml, FogColors& out) {
-    const data::XmlDocument doc =
-        data::XmlDocument::parse(xml, "GameConstants.xml");
-    if (!doc.ok()) return false;
-    const data::XmlNode root = doc.root();
+    const data::XmlDocument doc = data::XmlDocument::parse(xml, "GameConstants.xml");
+    return parse_fog_colors(doc.root(), out);
+}
+
+bool parse_fog_colors(const data::XmlNode& root, FogColors& out) {
+    if (!root) return false;
     auto color = [&](std::string_view tag, uint32_t& v) {
         const data::XmlNode n = root.child(tag);
         if (!n) return;

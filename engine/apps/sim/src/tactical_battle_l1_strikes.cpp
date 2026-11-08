@@ -92,29 +92,20 @@ TacticalBattle::L1Constants load_l1_constants(const data::GameConstants& gc) {
     return k;
 }
 
-std::vector<TacticalBattle::L1Faction> load_l1_factions(const FileProvider& provider, const galactic::GalacticRules& rules) {
+std::vector<TacticalBattle::L1Faction> load_l1_factions(const galactic::GalacticRules& rules) {
     std::vector<TacticalBattle::L1Faction> out(rules.factions.size());
-    std::vector<uint8_t> bytes;
-    if (!provider.read("Data\\XML\\FactionFiles.xml", bytes)) return out;
-    const data::XmlDocument list = data::XmlDocument::parse(bytes, "FactionFiles.xml");
-    for (data::XmlNode file : list.root().children("File")) {
-        std::vector<uint8_t> fb;
-        const std::string path = "Data\\XML\\" + std::string(file.text_trimmed());
-        if (!provider.read(path, fb)) continue;
-        const data::XmlDocument doc = data::XmlDocument::parse(fb, path);
-        for (data::XmlNode n : doc.root().children("Faction")) {
-            const uint32_t fi = rules.find_faction(n.attribute("Name"));
-            if (fi >= out.size()) continue;
-            TacticalBattle::L1Faction& f = out[fi];
-            if (auto v = n.child_text("Bombardment_Required_Orbital_Ships"); !v.empty()) f.bombard_ships = split_names(v);
-            if (auto v = n.child_text("Bombardment_Projectile"); !v.empty()) f.bombard_projectiles = split_names(v);
-            if (auto v = n.child_text("Bombardment_Particle"); !v.empty()) f.bombard_particles = split_names(v);
-            if (auto v = n.child_text("Bombardment_Number_Of_Salvos"); !v.empty()) f.salvos = objects::c_atoi(v);
-            if (auto v = n.child_text("Bombardment_Shots_Per_Salvo"); !v.empty()) f.shots_per_salvo = objects::c_atoi(v);
-            if (auto v = n.child_text("Bombardment_Shot_Delay"); !v.empty()) f.shot_delay = static_cast<float>(objects::c_atof(v));
-            if (auto v = n.child_text("Bombardment_Salvo_Delay"); !v.empty()) f.salvo_delay = static_cast<float>(objects::c_atof(v));
-            if (auto v = n.child_text("Bombardment_Initial_Delay"); !v.empty()) f.initial_delay = static_cast<float>(objects::c_atof(v));
-        }
+    for (const galactic::FactionRules& n : rules.factions) {  // every definition, list order (cu5 t01)
+        const uint32_t fi = rules.find_faction(n.name);
+        if (fi >= out.size()) continue;
+        TacticalBattle::L1Faction& f = out[fi];
+        if (auto v = n.xml_text("Bombardment_Required_Orbital_Ships"); !v.empty()) f.bombard_ships = split_names(v);
+        if (auto v = n.xml_text("Bombardment_Projectile"); !v.empty()) f.bombard_projectiles = split_names(v);
+        if (auto v = n.xml_text("Bombardment_Particle"); !v.empty()) f.bombard_particles = split_names(v);
+        if (auto v = n.xml_text("Bombardment_Number_Of_Salvos"); !v.empty()) f.salvos = objects::c_atoi(v);
+        if (auto v = n.xml_text("Bombardment_Shots_Per_Salvo"); !v.empty()) f.shots_per_salvo = objects::c_atoi(v);
+        if (auto v = n.xml_text("Bombardment_Shot_Delay"); !v.empty()) f.shot_delay = static_cast<float>(objects::c_atof(v));
+        if (auto v = n.xml_text("Bombardment_Salvo_Delay"); !v.empty()) f.salvo_delay = static_cast<float>(objects::c_atof(v));
+        if (auto v = n.xml_text("Bombardment_Initial_Delay"); !v.empty()) f.initial_delay = static_cast<float>(objects::c_atof(v));
     }
     return out;
 }

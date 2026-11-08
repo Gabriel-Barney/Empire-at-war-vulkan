@@ -15,8 +15,10 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/galaxy.hpp"  // Vec3
 #include "alamo/core/sim_rng.hpp"
 
@@ -123,6 +125,16 @@ struct FactionRules {
     std::string text_id, tech_tree_dialog, tech_level_icon;
     // Land_ / Space_Mode_Selection_Blob_Material_Name (+0x2818 / +0x2840; UI.md selection circle's faction default).
     std::string land_selection_blob, space_selection_blob;
+    // cu5 t01: every child element of this <Faction> definition, (tag, trimmed text) in document order. The loaders of
+    // the other faction tags (Basic_AI map, campaign seed options, skirmish default forces, retreat and bombardment
+    // data, conflict unit caps) read them here instead of parsing FactionFiles.xml again. Not saved, not in the CRC.
+    std::vector<std::pair<std::string, std::string>> xml_fields;
+    // Trimmed text of the first child element named `tag` (case-insensitive), "" if none (XmlNode::child_text).
+    std::string_view xml_text(std::string_view tag) const {
+        for (const auto& [k, v] : xml_fields)
+            if (ascii_iequals(k, tag)) return v;
+        return {};
+    }
 };
 
 // DifficultyAdjustments.xml entry (AI players only). No adjustment = the internal all-1.0 one [H].

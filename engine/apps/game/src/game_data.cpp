@@ -69,9 +69,9 @@ bool load_common(GameData& out, std::string* err) {
 }
 
 void load_faction_skirmish_data(GameData& out) {
-    out.skirmish_forces = load_skirmish_forces(*out.files);
+    out.skirmish_forces = load_skirmish_forces(out.rules.factions);  // cu5 t01: the galactic rules' faction parse
 #ifdef ALAMO_GAME_HAVE_GALACTIC_AI
-    out.basic_ai = ai::load_faction_basic_ai(*out.files);
+    out.basic_ai = ai::load_faction_basic_ai(out.rules.factions);
 #endif
 }
 

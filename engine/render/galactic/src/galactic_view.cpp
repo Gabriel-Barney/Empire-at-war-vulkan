@@ -615,13 +615,9 @@ float path_factor(const GalacticPlanetSnap& p) {
 }
 }  // namespace
 
-CorruptionPathSettings load_corruption_path_settings(const FileProvider& files) {
+CorruptionPathSettings load_corruption_path_settings(const data::XmlNode& root) {
     CorruptionPathSettings s;
-    std::vector<uint8_t> bytes;
-    if (!files.read("Data\\XML\\GameConstants.xml", bytes)) return s;
-    const data::XmlDocument doc = data::XmlDocument::parse(bytes, "GameConstants.xml");
-    if (!doc.ok()) return s;
-    const data::XmlNode root = doc.root();
+    if (!root) return s;
     const std::string tex(ascii_trim(root.child_text("Fleet_Hyperspace_Band_Texture_Name")));
     if (!tex.empty()) s.texture = tex;
     float v[4] = {0, 0, 0, 0};
@@ -1028,13 +1024,9 @@ const GpuModel* owner_model(GalacticModelSource& models, const std::string& name
 }
 }  // namespace
 
-GalacticLightSettings load_galactic_light_settings(const FileProvider& files) {
+GalacticLightSettings load_galactic_light_settings(const data::XmlNode& root) {
     GalacticLightSettings s;
-    std::vector<uint8_t> bytes;
-    if (!files.read("Data\\XML\\GameConstants.xml", bytes)) return s;
-    const data::XmlDocument doc = data::XmlDocument::parse(bytes, "GameConstants.xml");
-    if (!doc.ok()) return s;
-    const data::XmlNode root = doc.root();
+    if (!root) return s;
     auto angles = [&](std::string_view tag, float& yaw, float& elev) {
         float v[3] = {0, 0, 0};
         if (parse_float_list(root.child_text(tag), v, 3) == 3 && std::isfinite(v[1]) && std::isfinite(v[2])) {
@@ -1049,13 +1041,9 @@ GalacticLightSettings load_galactic_light_settings(const FileProvider& files) {
     return s;
 }
 
-GalacticCorruptionSettings load_galactic_corruption_settings(const FileProvider& files) {
+GalacticCorruptionSettings load_galactic_corruption_settings(const data::XmlNode& root) {
     GalacticCorruptionSettings s;
-    std::vector<uint8_t> bytes;
-    if (!files.read("Data\\XML\\GameConstants.xml", bytes)) return s;
-    const data::XmlDocument doc = data::XmlDocument::parse(bytes, "GameConstants.xml");
-    if (!doc.ok()) return s;
-    const data::XmlNode root = doc.root();
+    if (!root) return s;
     const std::string pn(ascii_trim(root.child_text("Corruption_Particle_Name")));
     const std::string ln(ascii_trim(root.child_text("Corruption_Particle_Line_Name")));
     if (!pn.empty()) s.planet_particle = pn;

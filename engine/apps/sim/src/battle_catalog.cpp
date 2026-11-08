@@ -14,6 +14,7 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/data/xml.hpp"
+#include "alamo/data/xml_list.hpp"
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/type_fields.hpp"
@@ -53,12 +54,13 @@ tc::HardpointKind hardpoint_kind(std::string_view type) {
     return tc::HardpointKind::DummyArt;
 }
 
-std::unique_ptr<data::XmlDocument> read_doc(const FileProvider& files, const std::string& path) {
-    std::vector<uint8_t> bytes;
-    if (!files.read(path, bytes)) return nullptr;
-    auto doc = std::make_unique<data::XmlDocument>(data::XmlDocument::parse(bytes, path));
-    if (!doc->ok()) return nullptr;
-    return doc;
+// cu5 t02: every <File> entry is opened (an empty one fails to); a missing or unparsable file is noted as not found.
+data::ListedXmlOptions battle_list_options() {
+    data::ListedXmlOptions o;
+    o.keep_empty_entries = true;
+    o.visit_missing = true;
+    o.visit_unparsable = true;
+    return o;
 }
 
 uint8_t clamp_count(size_t n) { return static_cast<uint8_t>(std::min<size_t>(n, 255)); }
@@ -147,19 +149,12 @@ ta::AbilityConfig BattleCatalog::ability_config(bool space, bool skirmish) const
 }
 
 void BattleCatalog::load_hardpoints(const FileProvider& files, std::vector<std::string>* diag) {
-    auto list = read_doc(files, "Data\\XML\\HardPointDataFiles.xml");
-    if (!list) {
-        note(diag, "battle: HardPointDataFiles.xml not found");
-        return;
-    }
-    for (data::XmlNode f : list->root().children("File")) {
-        const std::string path = "Data\\XML\\" + std::string(f.text_trimmed());
-        auto doc = read_doc(files, path);
-        if (!doc) {
-            note(diag, "battle: " + path + " not found");
-            continue;
+    const data::ListStatus st = data::for_each_listed_xml(files, "Data\\XML\\HardPointDataFiles.xml", [&](data::ListedXmlFile& file) {
+        if (!file.doc || !file.doc->ok()) {
+            note(diag, "battle: " + file.entry.path + " not found");
+            return;
         }
-        for (data::XmlNode hp : doc->root().children("HardPoint")) {
+        for (data::XmlNode hp : file.doc->root().children("HardPoint")) {
             Tags tags;
             const std::string_view variant = hp.child_text("Variant_Of_Existing_Type");
             if (!variant.empty()) {
@@ -181,30 +176,25 @@ void BattleCatalog::load_hardpoints(const FileProvider& files, std::vector<std::
             }
             hardpoints_[ascii_upper(hp.attribute("Name"))] = std::move(tags);  // last definition wins
         }
-    }
+    }, battle_list_options());
+    if (st != data::ListStatus::Ok) note(diag, "battle: HardPointDataFiles.xml not found");
 }
 
 void BattleCatalog::load_priority_sets(const FileProvider& files, std::vector<std::string>* diag) {
-    auto list = read_doc(files, "Data\\XML\\TargetingPrioritySetFiles.xml");
-    if (!list) {
-        note(diag, "battle: TargetingPrioritySetFiles.xml not found");
-        return;
-    }
     const objects::GameObjectTypes& types = *types_;
     const tc::TypeResolver resolve = [&types](std::string_view name) -> int32_t {
         const objects::TypeIndex t = types.resolve_name(name);
         return t == objects::kNone ? -1 : static_cast<int32_t>(t);
     };
-    for (data::XmlNode f : list->root().children("File")) {
-        const std::string path = "Data\\XML\\" + std::string(f.text_trimmed());
-        auto doc = read_doc(files, path);
-        if (!doc) {
-            note(diag, "battle: " + path + " not found");
-            continue;
+    const data::ListStatus st = data::for_each_listed_xml(files, "Data\\XML\\TargetingPrioritySetFiles.xml", [&](data::ListedXmlFile& file) {
+        if (!file.doc || !file.doc->ok()) {
+            note(diag, "battle: " + file.entry.path + " not found");
+            return;
         }
-        std::vector<tc::PrioritySet> sets = tc::load_priority_sets(doc->root(), types.enums(), resolve, nullptr);
+        std::vector<tc::PrioritySet> sets = tc::load_priority_sets(file.doc->root(), types.enums(), resolve, nullptr);
         for (tc::PrioritySet& s : sets) priority_sets_.push_back(std::move(s));
-    }
+    }, battle_list_options());
+    if (st != data::ListStatus::Ok) note(diag, "battle: TargetingPrioritySetFiles.xml not found");
 }
 
 int32_t BattleCatalog::type_or_none(std::string_view name) const {

@@ -17,6 +17,7 @@
 #include "alamo/core/log.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/data/values.hpp"
+#include "alamo/data/xml_list.hpp"
 
 namespace alamo::render {
 
@@ -122,13 +123,6 @@ std::vector<std::string> split_names(std::string_view s) {
     }
     return out;
 }
-
-bool load_xml(const FileProvider& files, std::string_view path, data::XmlDocument& doc) {
-    std::vector<uint8_t> bytes;
-    if (!files.read(path, bytes)) return false;
-    doc = data::XmlDocument::parse(bytes, std::string(path));
-    return doc.ok();
-}
 }  // namespace
 
 MpPalette default_mp_palette() {
@@ -150,39 +144,36 @@ MpPalette GameTypeResolver::palette() const {
 bool GameTypeResolver::load_render_xml(const FileProvider& files) {
     hardpoint_defs_.clear();
     hardpoints_loaded_ = false;
-    data::XmlDocument list;
-    if (load_xml(files, "Data\\XML\\HardPointDataFiles.xml", list)) {
-        hardpoints_loaded_ = true;
-        for (data::XmlNode f : list.root().children("File")) {
-            data::XmlDocument doc;
-            if (!load_xml(files, "Data\\XML\\" + std::string(f.text_trimmed()), doc)) {
-                log::warnf("render", "hardpoint file %s missing", std::string(f.text_trimmed()).c_str());
-                continue;
-            }
-            for (data::XmlNode hp : doc.root().children()) {
-                const std::string_view name = hp.attribute("Name");
-                if (name.empty()) continue;
-                if (hardpoint_defs_.find(ascii_upper(name)) == hardpoint_defs_.end())  // first definition wins
-                    hardpoint_defs_.emplace(ascii_upper(name), parse_hardpoint(hp));
-            }
+    // cu5 t02: the shared list walk (list order; every entry is opened, an empty one fails to).
+    data::ListedXmlOptions lo;
+    lo.keep_empty_entries = true;
+    lo.visit_missing = true;
+    lo.visit_unparsable = true;
+    hardpoints_loaded_ = data::for_each_listed_xml(files, "Data\\XML\\HardPointDataFiles.xml", [&](data::ListedXmlFile& file) {
+        if (!file.doc || !file.doc->ok()) {
+            log::warnf("render", "hardpoint file %s missing", file.entry.name.c_str());
+            return;
         }
-    }
+        for (data::XmlNode hp : file.doc->root().children()) {
+            const std::string_view name = hp.attribute("Name");
+            if (name.empty()) continue;
+            if (hardpoint_defs_.find(ascii_upper(name)) == hardpoint_defs_.end())  // first definition wins
+                hardpoint_defs_.emplace(ascii_upper(name), parse_hardpoint(hp));
+        }
+    }, lo) == data::ListStatus::Ok;
     factions_.clear();
-    data::XmlDocument flist;
-    if (load_xml(files, "Data\\XML\\FactionFiles.xml", flist)) {
-        for (data::XmlNode f : flist.root().children("File")) {
-            data::XmlDocument doc;
-            if (!load_xml(files, "Data\\XML\\" + std::string(f.text_trimmed()), doc)) continue;
-            for (data::XmlNode fa : doc.root().children("Faction")) {
-                Faction x;
-                x.name = std::string(fa.attribute("Name"));
-                const std::string_view n = fa.child_text("Is_Neutral");
-                x.neutral = data::parse_flag_char(n);
-                parse_rgb(fa.child_text("No_Colorization_Color"), x.no_colorization);
-                factions_.push_back(std::move(x));
-            }
+    data::ListedXmlOptions fo;
+    fo.keep_empty_entries = true;
+    data::for_each_listed_xml(files, "Data\\XML\\FactionFiles.xml", [&](data::ListedXmlFile& file) {
+        for (data::XmlNode fa : file.doc->root().children("Faction")) {
+            Faction x;
+            x.name = std::string(fa.attribute("Name"));
+            const std::string_view n = fa.child_text("Is_Neutral");
+            x.neutral = data::parse_flag_char(n);
+            parse_rgb(fa.child_text("No_Colorization_Color"), x.no_colorization);
+            factions_.push_back(std::move(x));
         }
-    }
+    }, fo);
     return hardpoints_loaded_;
 }
 

@@ -131,13 +131,15 @@ std::unique_ptr<render::GalacticWorld> load_world(const GalOptions& opt) {
     return w;
 }
 
+// cu5 t04: the <GameConstants> root the world's game database parsed (null for the synthetic world, which has none),
+// shared by every GameConstants reader here instead of each reading the file again.
+data::XmlNode game_constants(const render::GalacticWorld& w) { return w.gdb ? w.gdb->constants().element : data::XmlNode{}; }
+
 // GameConstants (GMC_*, scroll speeds) for the galactic camera; vanilla defaults without data.
 ui::UiConstants ui_constants(const render::GalacticWorld& w) {
     if (w.synthetic) return {};
-    std::vector<uint8_t> bytes;
-    if (!w.files->read("Data\\XML\\GameConstants.xml", bytes)) return {};
-    const data::XmlDocument doc = data::XmlDocument::parse(bytes, "GameConstants.xml");
-    return doc.ok() ? ui::parse_ui_constants(doc.root()) : ui::UiConstants{};
+    const data::XmlNode root = game_constants(w);
+    return root ? ui::parse_ui_constants(root) : ui::UiConstants{};
 }
 
 
@@ -174,7 +176,7 @@ public:
         }
         renderer.set_frame_ring(&ring);
         // R2: the galactic light record (GameConstants Galactic_Zoom_*_Light_*; FoC defaults for the synthetic world).
-        if (world_.files) light_ = render::load_galactic_light_settings(*world_.files);
+        if (world_.files) light_ = render::load_galactic_light_settings(game_constants(world_));
         renderer.set_lighting(render::galactic_lighting(light_));  // per frame: prepare() follows the camera's zoom blend
         renderer.set_object_fade(-1.0f, -1.0f);  // galactic: no distance fade (SPACE_AND_OPEN.md B.8)
         types.build(world_.types);

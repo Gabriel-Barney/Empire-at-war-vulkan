@@ -564,7 +564,7 @@ public:
         const data::CampaignDef* cdef = db_.find_campaign(campaign_);
         const std::vector<std::string> no_pairs;
         const std::vector<std::string>& control = cdef ? cdef->ai_player_control : no_pairs;
-        const std::map<std::string, std::string> basic_ai = ai::load_faction_basic_ai(*files_);
+        const std::map<std::string, std::string> basic_ai = ai::load_faction_basic_ai(rules_.factions);
         ai_types_.assign(setup_.players.size(), std::string());
         for (size_t p = 0; p < setup_.players.size(); ++p) {
             galactic::PlayerSetup& ps = setup_.players[p];

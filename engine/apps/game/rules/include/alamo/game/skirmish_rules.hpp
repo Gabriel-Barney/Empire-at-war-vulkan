@@ -19,6 +19,7 @@ class FileProvider;
 }
 namespace alamo::galactic {
 struct GalacticRules;
+struct FactionRules;
 }
 namespace alamo::objects {
 class GameObjectTypes;
@@ -32,12 +33,13 @@ class AiDefinitions;
 namespace alamo::game {
 
 // Faction Space_ / Land_Skirmish_AI_Default_Forces as written, per upper-case trimmed faction name (FactionFiles.xml
-// order; per list, the last definition that has one wins).
+// order; per list, the last definition that has one wins). cu5 t01: from the faction definitions galactic::load_factions
+// parsed (FactionRules::xml_fields), not a second read of the XML.
 struct SkirmishForces {
     std::vector<std::string> space, land;
 };
 using SkirmishForceTable = std::map<std::string, SkirmishForces>;
-SkirmishForceTable load_skirmish_forces(const FileProvider& files);
+SkirmishForceTable load_skirmish_forces(const std::vector<galactic::FactionRules>& factions);
 
 #ifdef ALAMO_GAME_RULES_HAVE_AI
 // The AIPlayerType a non-human player of `faction` gets ("" = no AI; AI_GALACTIC §1.2). `basic_ai`: upper-case faction

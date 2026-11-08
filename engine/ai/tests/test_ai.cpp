@@ -33,6 +33,10 @@
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/all_pairs.hpp"
+#include "alamo/galactic/economy.hpp"  // FactionRules
+#ifdef ALAMO_AI_HAVE_GALACTIC_SIM
+#include "alamo/galactic/galactic_rules.hpp"  // cu5 t01: load_factions for the seed options
+#endif
 #include "alamo/galactic/planet_graph.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
@@ -1168,7 +1172,11 @@ static void real_data(const std::string& root, const char* label, bool foc) {
         CHECK(differ == 0);
     }
     const ForceTypeLookup lookup = make_force_type_lookup(types);
-    const CampaignSeedOptions seed_options = seed_options_from_factions(*v);
+#ifdef ALAMO_AI_HAVE_GALACTIC_SIM
+    const CampaignSeedOptions seed_options = seed_options_from_factions(galactic::load_factions(*v));
+#else
+    const CampaignSeedOptions seed_options = seed_options_from_factions({});
+#endif
     uint32_t campaigns = 0, with_values = 0, unknown_forces = 0;
     for (const data::CampaignDef& c : db.campaigns()) {
         const GalaxyMap map = data::build_galaxy_map(db, c.name);

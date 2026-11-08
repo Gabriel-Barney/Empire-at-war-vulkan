@@ -18,6 +18,10 @@
 
 #include "alamo/render/camera.hpp"
 
+namespace alamo::data {
+class XmlNode;
+}
+
 namespace alamo::render {
 
 enum class LaserKind : uint8_t { Beam = 1, Kite = 2 };
@@ -29,6 +33,8 @@ struct LaserConstants {
 };
 // Reads the two factors from GameConstants.xml bytes (missing tags keep `out`'s values). False: not parseable.
 bool parse_laser_constants(std::span<const uint8_t> xml, LaserConstants& out);
+// cu5 t04: the same from the parsed <GameConstants> root (GameDatabase::constants().element); false for a null root.
+bool parse_laser_constants(const data::XmlNode& game_constants_root, LaserConstants& out);
 
 // One projectile of the frame. `position` = the projectile (render object origin), `direction` = its flight direction
 // (the render object's local +Y, normalised), `length` = Projectile_Length x Scale_Factor, `width` = Projectile_Width.

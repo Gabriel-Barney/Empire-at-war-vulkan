@@ -9,6 +9,7 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
+#include "alamo/data/xml_list.hpp"
 
 namespace alamo::ui {
 
@@ -177,32 +178,28 @@ size_t ComponentTable::parse(const data::XmlNode& root) {
 }
 
 bool ComponentTable::load(const FileProvider& files, std::string* error) {
-    std::vector<uint8_t> bytes;
-    if (!files.read("Data\\XML\\CommandBarComponentFiles.xml", bytes)) {
-        if (error) *error = "CommandBarComponentFiles.xml not found";
+    // cu5 t02: the shared list walk (list order, empty entries skipped, missing / unparsable files reported).
+    data::ListedXmlOptions lo;
+    lo.visit_missing = true;
+    lo.visit_unparsable = true;
+    lo.name_docs_by_entry = true;
+    std::string listed_errors;
+    const data::ListStatus st = data::for_each_listed_xml(files, "Data\\XML\\CommandBarComponentFiles.xml", [&](data::ListedXmlFile& file) {
+        if (!file.doc) {
+            listed_errors += "missing " + file.entry.path + "; ";
+            return;
+        }
+        if (!file.doc->ok()) {
+            listed_errors += "unreadable " + file.entry.path + "; ";
+            return;
+        }
+        parse(file.doc->root());
+    }, lo);
+    if (st != data::ListStatus::Ok) {
+        if (error) *error = st == data::ListStatus::Missing ? "CommandBarComponentFiles.xml not found" : "CommandBarComponentFiles.xml: no root";
         return false;
     }
-    const data::XmlDocument list = data::XmlDocument::parse(bytes, "CommandBarComponentFiles.xml");
-    if (!list.ok()) {
-        if (error) *error = "CommandBarComponentFiles.xml: no root";
-        return false;
-    }
-    for (data::XmlNode f : list.root().children("File")) {
-        const std::string name(f.text_trimmed());
-        if (name.empty()) continue;
-        std::vector<uint8_t> xb;
-        const std::string path = "Data\\XML\\" + name;
-        if (!files.read(path, xb)) {
-            if (error) *error += "missing " + path + "; ";
-            continue;
-        }
-        const data::XmlDocument doc = data::XmlDocument::parse(xb, name);
-        if (!doc.ok()) {
-            if (error) *error += "unreadable " + path + "; ";
-            continue;
-        }
-        parse(doc.root());
-    }
+    if (error) *error += listed_errors;
     return true;
 }
 

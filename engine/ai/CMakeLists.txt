@@ -47,6 +47,11 @@ if(TARGET alamo_jobs)
   target_link_libraries(alamo_ai_tests PRIVATE alamo_jobs)
   target_compile_definitions(alamo_ai_tests PRIVATE ALAMO_AI_HAVE_JOBS=1)
 endif()
+# cu5 t01: the seed options come from galactic::load_factions (alamo_galactic_sim).
+if(TARGET alamo_galactic_sim)
+  target_link_libraries(alamo_ai_tests PRIVATE alamo_galactic_sim)
+  target_compile_definitions(alamo_ai_tests PRIVATE ALAMO_AI_HAVE_GALACTIC_SIM=1)
+endif()
 add_test(NAME alamo_ai_tests COMMAND alamo_ai_tests)
 set_tests_properties(alamo_ai_tests PROPERTIES TIMEOUT 120)
 # q6: galactic seed roles over Thrawn's Revenge (skips without the mod next to the Steam FoC install / ALAMO_TR_DATA).

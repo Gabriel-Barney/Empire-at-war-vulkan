@@ -1878,9 +1878,9 @@ void CampaignBattles::l1_transport_step(const lua::CinematicStep& st) {
 // --- Int-final: the hosts' tactical-systems data (campaign_battles.hpp load_tactical_systems) ---
 void load_tactical_systems(const FileProvider& provider, const galactic::GalacticRules& rules, const data::GameConstants* constants,
                            CampaignBattleOptions& opt) {
-    opt.retreat_increment_frames = load_retreat_increments(provider, rules);
-    opt.retreat_flight_increments = load_retreat_flight_increments(provider, rules);
-    opt.l1_factions = load_l1_factions(provider, rules);
+    opt.retreat_increment_frames = load_retreat_increments(rules);
+    opt.retreat_flight_increments = load_retreat_flight_increments(rules);
+    opt.l1_factions = load_l1_factions(rules);
     if (constants) opt.l1_constants = load_l1_constants(*constants);
     auto wd = std::make_shared<tactical::combat::WeatherData>();
     opt.weather = (tactical::combat::load_weather_data(provider, *wd) && !wd->scenarios.empty()) ? std::move(wd) : nullptr;

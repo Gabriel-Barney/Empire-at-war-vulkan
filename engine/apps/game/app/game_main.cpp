@@ -273,13 +273,11 @@ bool App::init() {
         }
         std::string e;
         radar_settings_.load(*data_.files, &e);
-        // HUD_GAPS §1.5: the hard-point reticle textures (GameConstants) and their stand-alone DDS pages.
-        if (data_.files->read("Data\\XML\\GameConstants.xml", xml)) {
-            const data::XmlDocument gc = data::XmlDocument::parse(xml, "GameConstants.xml");
-            if (gc.ok()) {
-                reticles_.parse(gc.root());
-                ency_cfg_ = ui::tooltip_config_from(gc.root());  // HUD_GAPS §2.2 delays / fade / min display
-            }
+        // HUD_GAPS §1.5: the hard-point reticle textures (GameConstants) and their stand-alone DDS pages. cu5 t03: the
+        // <GameConstants> root GameData parsed (GameDatabase::constants().element), not a second read of the file.
+        if (const data::XmlNode& gc = data_.db.constants().element) {
+            reticles_.parse(gc);
+            ency_cfg_ = ui::tooltip_config_from(gc);  // HUD_GAPS §2.2 delays / fade / min display
         }
         hud_images_ = [this](std::string_view t) { return ui_.pages.resolve(t); };
         if (const char* dbg = std::getenv("ALAMO_HUD_HIT_DEBUG")) {

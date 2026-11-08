@@ -41,6 +41,7 @@
 
 #include "alamo/assets/skeleton.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/data/xml.hpp"
 #include "alamo/render/galactic/galactic_snapshot.hpp"
 #include "alamo/render/lighting.hpp"
 #include "alamo/render/renderer.hpp"
@@ -197,7 +198,9 @@ struct CorruptionPathSettings {
     Vec3 offset{0, 0, 0};                             // Corruption_Path_Offset
     float neighbour_distance = 100.0f;                // MaximumFleetMovementDistance (0x3ef2d0 A* neighbour)
 };
-CorruptionPathSettings load_corruption_path_settings(const FileProvider& files);
+// cu5 t04: from the parsed <GameConstants> root (GameDatabase::constants().element; null = the defaults above), so the
+// host reads GameConstants.xml once for every settings record.
+CorruptionPathSettings load_corruption_path_settings(const data::XmlNode& game_constants_root);
 // One path line (galactic_corruption_paths): owned by planet row `owner`, towards row `other`; rgba = the tinted colour
 // (channel = (int)(c x f), alpha 255).
 struct CorruptionPathLine {
@@ -330,7 +333,7 @@ struct GalacticCorruptionSettings {
     std::string line_particle = "Galactic_Corruption_Line_Particles";
     float brightness[2] = {0.3f, 1.0f};
 };
-GalacticCorruptionSettings load_galactic_corruption_settings(const FileProvider& files);
+GalacticCorruptionSettings load_galactic_corruption_settings(const data::XmlNode& game_constants_root);  // cu5 t04
 // One corruption effect to keep alive this frame (the host syncs it as a particle effect by `key`, from the Particle
 // type `type`'s Galactic_Model_Name).
 struct GalacticCorruptionEffect {
@@ -368,8 +371,9 @@ struct GalacticLightSettings {
     float zoom_light_level = 0.5f;                          // Galactic_Zoom_Light_Level
     float intensity = 0.5f;                                 // the record's sun intensity
 };
-// GameConstants.xml values (missing / malformed tags keep the FoC defaults above).
-GalacticLightSettings load_galactic_light_settings(const FileProvider& files);
+// GameConstants.xml values (missing / malformed tags keep the FoC defaults above). cu5 t04: from the parsed
+// <GameConstants> root (GameDatabase::constants().element; null = the defaults).
+GalacticLightSettings load_galactic_light_settings(const data::XmlNode& game_constants_root);
 // The record at planet-zoom fraction `zoom` (0 = zoomed out, 1 = zoomed in; clamped); black clear colour, no fog.
 Lighting galactic_lighting(const GalacticLightSettings& s, float zoom = 0.0f);
 Lighting galactic_lighting();  // FoC defaults, zoomed out
