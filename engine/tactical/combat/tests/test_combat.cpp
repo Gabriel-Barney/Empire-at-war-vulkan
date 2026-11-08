@@ -3103,7 +3103,7 @@ void test_save_rejects() {
 // a negative override reads the type's Targeting_Stickiness_Time_Threshold at every test (a TEAM owner: its first member's
 // type); a task-force release writes the type's value. Time to kill = the destroyable hard points' health when the target
 // has any (destroyed ones at 0), else the hull, + shield, / the damage rate (1e18 at rate 0); a TEAM container target sums
-// its members'. Sticky <=> time to kill <= threshold. Saved (combat v13; a v12 save reads 0.0), hashed when non-zero.
+// its members'. Sticky <=> time to kill <= threshold. Saved (combat v13; only the current version is read), hashed when non-zero.
 void add_member(World& w, ObjectId id, uint32_t desc, int32_t owner, Vec3 p, uint32_t team) {
     UnitSpawn s;
     s.id = id;
@@ -3247,7 +3247,7 @@ void test_stickiness_override() {
         CHECK(a0.digest() != a1.digest());
     }
 
-    // Save: write -> read -> write identical, the values restored; a v12 image (no field) reads the spawn value 0.0.
+    // Save: write -> read -> write identical, the values restored; a v12 image (no field) is refused (cu6).
     {
         CHECK(w.sys->set_stickiness_override(1, 2.5f));
         const std::vector<uint8_t> bytes = combat_bytes(*w.sys);
@@ -3283,8 +3283,7 @@ void test_stickiness_override() {
             b.data = w.data;
             b.make(cfg);
             ByteReader rd(img);
-            CHECK(b.sys->read(rd) && b.sys->stickiness_override(1) == 0.0f);
-            CHECK(o.sys->set_stickiness_override(1, 0.0f) && combat_bytes(*b.sys) == combat_bytes(*o.sys));
+            CHECK(!b.sys->read(rd));
         }
     }
 }

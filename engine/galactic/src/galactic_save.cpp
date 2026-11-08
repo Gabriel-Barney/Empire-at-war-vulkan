@@ -46,10 +46,9 @@ namespace {
 
 // v2 (story t11): + i32 victory hold; v3 (q6, AI_GALACTIC_TOKENS §9.4): + PlanetState::built_objects; v4 (A2k t04 /
 // t01): + i32 x 2 build queue phases per planet, - the two PlanetState build bonus floats (the production modifiers are
-// derived, GalacticSim::production_bonus); v5 (cu8f t04b): + the Prefer_Ground_Over_Space false ids. v4 and v5 are
-// read (a v4 save: every unit prefers ground, the default).
+// derived, GalacticSim::production_bonus); v5 (cu8f t04b): + the Prefer_Ground_Over_Space false ids. Only the current
+// version is read.
 constexpr uint32_t kGalacticSaveVersion = 5;
-constexpr uint32_t kGalacticSaveOldest = 4;
 constexpr uint32_t kConflictSaveVersion = 3;  // v2: BattleRequest::linked (story t10); v3: BattleRequest::sandbox (q6)
 
 void put_handle(ByteWriter& w, const objects::ObjectStore& s, ObjectHandle h) {
@@ -237,7 +236,7 @@ void GalacticSim::write(ByteWriter& w) const {
 bool GalacticSim::read(ByteReader& r) {
     const objects::ObjectStore& st = *store_;
     const uint32_t version = r.u32();
-    if (!r.ok() || version < kGalacticSaveOldest || version > kGalacticSaveVersion) return false;
+    if (version != kGalacticSaveVersion || !r.ok()) return false;
     const uint32_t rows = r.u32(), routes = r.u32(), types = r.u32(), np = r.u32();
     if (!r.ok() || rows != planets_.size() || routes != map_.routes.size() || types != rules_->types.size() ||
         np != players_.size())
@@ -499,15 +498,13 @@ bool GalacticSim::read(ByteReader& r) {
         e.object = r.i32();
         e.value = r.i32();
     }
-    std::vector<int32_t> ground_shy;  // cu8f t04b (v5; a v4 save has none)
-    if (version >= 5) {
-        uint32_t ng = 0;
-        if (!r.count(ng, 4)) return false;
-        ground_shy.resize(ng);
-        for (int32_t& id : ground_shy) id = r.i32();
-        for (size_t i = 1; i < ground_shy.size(); ++i)
-            if (ground_shy[i] <= ground_shy[i - 1]) return false;  // ascending, unique
-    }
+    std::vector<int32_t> ground_shy;  // cu8f t04b (v5)
+    uint32_t ng = 0;
+    if (!r.count(ng, 4)) return false;
+    ground_shy.resize(ng);
+    for (int32_t& id : ground_shy) id = r.i32();
+    for (size_t i = 1; i < ground_shy.size(); ++i)
+        if (ground_shy[i] <= ground_shy[i - 1]) return false;  // ascending, unique
     if (!r.ok() || !r.done()) return false;
 
     // ---- commit ----

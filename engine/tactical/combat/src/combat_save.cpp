@@ -56,9 +56,8 @@ constexpr uint32_t kCombatSaveVersion = 13;  // 2: refix t02 INFECTION state, re
                                              // fire-bone cycle index; 9: S8 t26 fire-at-position order; 10: s78f t03
                                              // targeting state + its target, s78f t04 lobbing turret angles; 11:
                                              // s78g t06 damage_team; 12: s78h t03 squad_seen dropped (no squad rule
-                                             // on a member); 13: cu8f t04a stickiness threshold TD +0x158 (a v12
-                                             // save reads 0.0, the spawn value)
-constexpr uint32_t kCombatSaveOldest = 12;
+                                             // on a member); 13: cu8f t04a stickiness threshold TD +0x158.
+                                             // Only the current version is read (cu6).
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 
@@ -235,7 +234,7 @@ void CombatSystem::write(ByteWriter& w) const {
 
 bool CombatSystem::read(ByteReader& r) {
     const uint32_t version = r.u32();
-    if (!r.ok() || version < kCombatSaveOldest || version > kCombatSaveVersion) return false;
+    if (version != kCombatSaveVersion || !r.ok()) return false;
     const auto np = static_cast<uint32_t>(players_.size());
     const uint32_t c_players = r.u32(), c_units = r.u32(), c_hps = r.u32(), c_proj = r.u32(), c_ab = r.u32(),
                    c_prio = r.u32();
@@ -314,7 +313,7 @@ bool CombatSystem::read(ByteReader& r) {
         u.emitter_entries = r.u32();
         u.weapon_index = r.i32();
         u.acquired = r.u8();
-        u.stickiness = version >= 13 ? r.f32() : 0.0f;  // cu8f t04a
+        u.stickiness = r.f32();  // cu8f t04a
         u.goal_target = r.i32();  // refixf t06
         u.goal_hp = r.i32();
         u.aim_target = r.i32();

@@ -752,13 +752,13 @@ void test_queue_phases() {
         ByteReader orr(older);
         CHECK(!o.read(orr));
 
-        // cu8f t04b: v5 adds the Prefer_Ground_Over_Space false ids at the end; a v4 image (no list) still loads with every
-        // unit preferring ground. The flag is saved and enters the hash only once a live unit has it false.
+        // cu8f t04b: v5 adds the Prefer_Ground_Over_Space false ids at the end; a v4 image is refused (only the current
+        // version is read, cu6). The flag is saved and enters the hash only once a live unit has it false.
         CHECK(bytes.size() >= 4 && bytes[0] == 5 && bytes[bytes.size() - 4] == 0 && bytes[bytes.size() - 1] == 0);
         std::vector<uint8_t> v4(bytes.begin(), bytes.end() - 4);
         v4[0] = 4;
         ByteReader r4(v4);
-        CHECK(o.read(r4) && sim_bytes(o) == bytes);
+        CHECK(!o.read(r4));
         ObjectHandle unit{};
         for (const PlanetState& ps : s.planets())
             for (ObjectHandle u : ps.surface)
