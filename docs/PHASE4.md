@@ -313,9 +313,9 @@ of the two runs are identical.
 ## Q4 parity baseline (q4h t02, 2026-11-07; re-recorded after a2k t10 / t11, q4hf t01)
 
 Measured with the Q4 harness (`tools/parity/`, README there: metrics, tolerances and their reasons, grading). The table is
-the current `tools/parity/baseline.json`, recorded at **`4b6aa69d`** (q4hf t02 / t04 on dev `7cec60cb`, alamo_headless MSVC
-Release, 4 workers; the binary was built in the shared confirm worktree, which also held fowf t01's uncommitted land
-fog / AI edits in engine/apps/sim: no effect on these space and galactic runs); before that dev `79576620` (a2k t10 + t11)
+the current `tools/parity/baseline.json`, recorded at **`207ba0b8`** (q4hf t02 / t04 merged with dev's q2f t08, which grades
+`hotm_galactic` against 2 retail runs; alamo_headless MSVC Release, 4 workers; 0 regressions against dev's `acb3547a`
+recording); before that `4b6aa69d` (q4hf t02 / t04, 3 retail runs), dev `79576620` (a2k t10 + t11)
 and dev `3629d4cf`, before the a2k galactic-AI merge (row "q4h t02" below; the harness has more timing metrics since). Re-record it, like a golden, when an intended behaviour change moves a metric. The confirm, AI
 and Q4 groups are judged against these numbers. Reference runs: the Q2 traces in the main checkout's
 `tools/probe_mod/q2_traces/out/`.
@@ -330,8 +330,8 @@ infantry squads, the port 2). `ai.build_count[Rebel]` is 40 vs retail 50 (PASS, 
 
 | scenario | timing | income | AI choices | battle outcomes | damage |
 |---|---|---|---|---|---|
-| `hotm_galactic` (2 retail runs), q4hf t04 hop segmentation + q2f t08 references: **current baseline** | 46 PASS / 8 FAIL | 15 / 10 | 13 / 3 (1 N/A) | 7 / 0 | - |
-| retail leave-one-out (2 runs, each against the other), current baseline | 59 / 1 | 20 / 0 (30 N/A) | 12 / 4 (18 N/A) | 14 / 0 | - |
+| `hotm_galactic` (2 retail runs) at `207ba0b8` (q4hf t04 + q2f t08) | 46 PASS / 8 FAIL | 15 / 10 | 13 / 3 (1 N/A) | 7 / 0 | - |
+| retail leave-one-out (2 runs, each against the other) at `207ba0b8` | 59 / 1 | 20 / 0 (30 N/A) | 12 / 4 (18 N/A) | 14 / 0 | - |
 | `hotm_galactic` (3 retail runs) at `4b6aa69d` (q4hf t04 hop segmentation) | 53 PASS / 5 FAIL | 20 / 5 | 16 / 0 (1 N/A) | 7 / 0 | - |
 | `hotm_galactic` (2 retail runs) at `acb3547a` (old hop segmentation) | 28 PASS / 11 FAIL | 15 / 10 | 13 / 3 (1 N/A) | 7 / 0 | - |
 | `hotm_galactic` (3 retail runs) at `79576620` (old hop segmentation) | 36 PASS / 8 FAIL | 20 / 5 | 16 / 0 (1 N/A) | 7 / 0 | - |
