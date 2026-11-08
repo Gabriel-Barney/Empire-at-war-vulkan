@@ -158,4 +158,10 @@ EventData retreat(bool request);
 EventData port_extension(uint16_t subtype, std::span<const uint8_t> data);
 }  // namespace ev
 
+// FleetManagement (id 8): target / fleet / unit as the op needs them (galactic campaign.hpp), `a` = the extra id (+0x54:
+// ops 6 / 7 destination planet, op 8 arrival planet), `slot` = +0x5C (op 8). The defaults are the fields' own defaults
+// (kNoObject / 0), so leaving them out gives the same payload. The galactic sim, the AI and the galactic HUD all use this.
+EventData fleet_management_event(FleetOp op, ObjectId target, ObjectId fleet, ObjectId unit, ObjectId a = kNoObject,
+                                 uint32_t slot = 0);
+
 }  // namespace alamo::commands

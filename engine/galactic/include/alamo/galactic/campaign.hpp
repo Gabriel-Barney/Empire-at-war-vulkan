@@ -350,14 +350,11 @@ inline constexpr RejectReason kRejectPopulationCap = RejectReason::FirstCustom;
 //   Ops 0 / 2 / 4 / 6 / 7 (a new fleet) take the slot to give it in `b` (0..kOrbitSlots-1; kNoObject = the first free
 //   one; a taken slot is ignored). For ops 6 / 7 it is the slot at the destination `a`.
 inline constexpr int32_t kOrbitSlots = 3;  // fleet slots per owner above a planet (g_planet_fleet slot 0..2)
-enum FleetOp : uint8_t {
-    kFleetForm = 0, kFleetJoin = 1, kFleetDetach = 2, kFleetMerge = 3, kFleetLaunch = 4, kFleetLand = 5,
-    kFleetMoveNew = 6, kFleetMoveNewFlag = 7, kFleetSlot = 8
-};
-commands::EventData fleet_management_event(FleetOp op, uint32_t target, uint32_t fleet, uint32_t unit);
-// With the extra id (+0x54, payload "a": ops 6 / 7 destination planet) and the slot (+0x5C, op 8).
-commands::EventData fleet_management_event(FleetOp op, uint32_t target, uint32_t fleet, uint32_t unit, uint32_t a,
-                                           uint32_t slot = 0);
+// The op codes and the event builder live in engine/commands (event_types.hpp FleetOp, command.hpp
+// fleet_management_event), shared with the galactic HUD; re-exported here.
+using commands::FleetOp;
+using enum commands::FleetOp;
+using commands::fleet_management_event;
 
 // ---- S10 battle transitions hook (docs/re/BATTLE_TRANSITIONS.md; implemented by conflicts.hpp) ----------------
 // Installed with GalacticSim::set_conflict_hooks (null = the S3 behaviour: no conflicts queued, Invade refused

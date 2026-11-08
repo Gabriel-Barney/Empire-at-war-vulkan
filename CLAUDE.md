@@ -66,7 +66,7 @@ A change to `engine/core` public headers or the top-level CMake goes through the
 `engine-module` agents remain for narrow side tasks. Definitions live in `.claude/agents/`.
 - Worktrees (2026-11-06): `tools\new_worktree.cmd <name> [--base origin/dev]` creates `.claude\worktrees\<name>` on `claude/<name>`
   from `origin/dev` (default since 2026-11-06), with junctions to `Data`, `extracted`, `toolchain` and `roadmap-store`, and syncs
-  the roadmap. Use ONE build tree per worktree (`build_agent.cmd msvc wt "<modules>"` gives `build-wt-msvc`). After the branch is
+  the roadmap. Use ONE build tree per worktree (`build_agent.cmd msvc "<modules>"` gives `build-wt-msvc`: the tree name defaults to `wt` since 2026-11-08). After the branch is
   on `dev`, `tools\clean_worktrees.cmd` (dry run; `--apply --only <name>`; `--trees` for idle build trees) removes merged (into
   `origin/dev` or `origin/main`), clean, pushed, idle worktrees, unlinking junctions first. Engine: `tools/worktree/worktree_tool.py` (`--selftest`).
 - Claims (2026-11-06): `python roadmap-store/roadmap_store.py claim <group> --by <session>` before starting a group (24 h, `release` when

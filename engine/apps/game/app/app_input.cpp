@@ -589,14 +589,9 @@ void App::galactic_input() {
             static_cast<size_t>(e.component) < ui_.components.size() &&
             ui_.galactic_hud.buttons().visual(static_cast<uint32_t>(e.component)) != ui::ButtonVisual::Disabled)
             story_ui_.click_gui(ui_.components[static_cast<size_t>(e.component)].name);
+    // The galactic shell panels (the hero panel is tactical: input in the tactical update below). Only SlicePanel reads the wheel.
     for (ui::HudPanel* p : panels())
-        if (p->open()) {
-            if (p == &market_) market_.update_input(routed_, input_.shift(), input_.ctrl(), now_s_, cmds, &acts);
-            else if (p == &slice_) slice_.update_input(routed_, input_.shift(), input_.ctrl(), now_s_, cmds, &acts, input_.wheel());
-            else if (p == &sabotage_) sabotage_.update_input(routed_, input_.shift(), input_.ctrl(), now_s_, cmds, &acts);
-            else if (p == &corruption_) corruption_.update_input(routed_, input_.shift(), input_.ctrl(), now_s_, cmds, &acts);
-            else if (p == &hack_) hack_.update_input(routed_, input_.shift(), input_.ctrl(), now_s_, cmds, &acts);
-        }
+        if (p != &hero_panel_ && p->open()) p->update_input(routed_, input_.shift(), input_.ctrl(), now_s_, &acts, input_.wheel());
     for (const ui::HotkeyEvent& e : hk) {
         // FIXPASS_GALACTIC §4.2 (capture C2): the advisor key (Numpad -) opens the Droid Log, as the dome and "?" do.
         if (e.slot == ui::hk::kHolocron || e.slot == ui::hk::kDroidAdvisor) open_holocron(ui::InfoPage::DroidLog);
@@ -733,7 +728,7 @@ void App::battle_input() {
                 static_cast<size_t>(e.component) < ui_.components.size() &&
                 ui_.tactical_hud.buttons().visual(static_cast<uint32_t>(e.component)) != ui::ButtonVisual::Disabled)
                 story_ui_.click_gui(ui_.components[static_cast<size_t>(e.component)].name);
-    if (hero_panel_.open()) hero_panel_.update_input(routed_, input_.shift(), input_.ctrl(), now_s_, cmds, &acts);
+    if (hero_panel_.open()) hero_panel_.update_input(routed_, input_.shift(), input_.ctrl(), now_s_, &acts);
     handle_hud_actions(acts);
     voice.resize(cmds.size(), 1);
     route_commands(cmds, voice);
@@ -773,6 +768,14 @@ ui::CameraTuning App::option_tuning(ui::CameraTuning t) const {
 void App::apply_camera_tuning() {
     gview_.camera().set_tuning(option_tuning(gview_.camera().tuning()));
     if (bview_.active()) bview_.camera().set_tuning(option_tuning(bview_.camera().tuning()));
+}
+void App::apply_tooltip_config() {
+    ency_cfg_.delay_tooltips = gameplay_.delay_tooltips;  // IDC_DELAY_TOOLTIPS -> Long_Encyclopedia_Delay
+    ency_.set_config(ency_cfg_);
+    // The same GameConstants delays (Tooltip_Delay, ...) for the component tooltips of both HUDs and the shell panels.
+    ui_.galactic_hud.set_tooltip_config(ency_cfg_);
+    ui_.tactical_hud.set_tooltip_config(ency_cfg_);
+    for (ui::HudPanel* p : panels()) p->set_tooltip_config(ency_cfg_);
 }
 void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
     using K = ui::MenuAction::Kind;
@@ -823,8 +826,7 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 break;
             case K::ApplyGameplay:  // HUD_GAPS §2.2: IDC_DELAY_TOOLTIPS -> Long_Encyclopedia_Delay
                 gameplay_ = a.gameplay;
-                ency_cfg_.delay_tooltips = gameplay_.delay_tooltips;
-                ency_.set_config(ency_cfg_);
+                apply_tooltip_config();
                 apply_camera_tuning();  // P1_CAMERA_INPUT.md §3.1 mouse / scroll options
                 break;
             case K::SaveGame: save_game_as(a.save); break;          // N1 / t09

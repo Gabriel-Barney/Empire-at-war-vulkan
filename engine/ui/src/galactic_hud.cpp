@@ -834,13 +834,6 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
 }
 
 // ---- fleet drag and drop ----------------------------------------------------------------------------------------
-commands::EventData fleet_management_event(uint32_t target, uint32_t fleet, uint32_t unit, uint8_t op, uint8_t slot, uint32_t a) {
-    commands::EventData e(commands::EventType::FleetManagement);
-    e.set("target", target).set("fleet", fleet).set("unit", unit).set("op", op).set("slot", slot);
-    if (a != 0) e.set("a", a);
-    return e;
-}
-
 // The slot a new fleet should take (payload `b`, galactic campaign.hpp "kFleetSlot").
 static commands::EventData with_slot_request(commands::EventData e, int32_t slot) {
     if (slot >= 0) e.set("b", static_cast<uint32_t>(slot));
@@ -859,19 +852,19 @@ bool GalacticHud::slot_drop(const StackHit& sh, std::vector<commands::EventData>
     if (sh.planet == home) {
         if (!empty) {
             if (sh.enemy || sh.fleet == drag_.fleet) return false;
-            if (out) out->push_back(land ? fleet_management_event(sh.fleet, kNone, unit, fleet_op::kLaunch)
-                                         : fleet_management_event(sh.fleet, drag_.fleet, unit, fleet_op::kMerge));
+            if (out) out->push_back(land ? fleet_management_event(commands::kFleetLaunch, sh.fleet, kNone, unit)
+                                         : fleet_management_event(commands::kFleetMerge, sh.fleet, drag_.fleet, unit));
             return true;
         }
         if (!land && drag_.unit == 0) {  // re-slot the whole fleet
-            if (out) out->push_back(fleet_management_event(home, drag_.fleet, kNone, fleet_op::kSlot, static_cast<uint8_t>(sh.slot)));
+            if (out) out->push_back(fleet_management_event(commands::kFleetSlot, home, drag_.fleet, kNone, kNone, static_cast<uint8_t>(sh.slot)));
             return true;
         }
         if (out) {
             // The unit becomes a new fleet in that slot: detach from its fleet, or launch from the surface (op 6 with the
             // destination = its own planet); the slot rides in the payload's `b` and the sim gives it to the new fleet.
-            out->push_back(with_slot_request(land ? fleet_management_event(home, kNone, unit, fleet_op::kMoveNew, 0, home)
-                                                  : fleet_management_event(home, drag_.fleet, unit, fleet_op::kDetach),
+            out->push_back(with_slot_request(land ? fleet_management_event(commands::kFleetMoveNew, home, kNone, unit, home)
+                                                  : fleet_management_event(commands::kFleetDetach, home, drag_.fleet, unit),
                                              sh.slot));
         }
         return true;
@@ -882,11 +875,11 @@ bool GalacticHud::slot_drop(const StackHit& sh, std::vector<commands::EventData>
         // an enemy fleet's slot is no choice.
         const bool choose = sh.slot >= 0 && (empty || !sh.enemy);
         if (land || drag_.unit != 0) {  // the unit becomes a new fleet that moves (op 6; `b` = its slot at the destination)
-            commands::EventData e = fleet_management_event(home, land ? kNone : drag_.fleet, unit, fleet_op::kMoveNew, 0, sh.planet);
+            commands::EventData e = fleet_management_event(commands::kFleetMoveNew, home, land ? kNone : drag_.fleet, unit, sh.planet);
             out->push_back(choose ? with_slot_request(std::move(e), sh.slot) : std::move(e));
         } else {
             if (choose)  // op 8 with a destination planet: the slot it takes on arrival, ahead of the move order
-                out->push_back(fleet_management_event(home, drag_.fleet, kNone, fleet_op::kSlot, static_cast<uint8_t>(sh.slot), sh.planet));
+                out->push_back(fleet_management_event(commands::kFleetSlot, home, drag_.fleet, kNone, sh.planet, static_cast<uint8_t>(sh.slot)));
             out->push_back(commands::ev::move_object_to_object(drag_.fleet, sh.planet));
         }
     }
@@ -1031,12 +1024,12 @@ bool GalacticHud::drop(std::vector<commands::EventData>* out) {
         if (over->empty && over->fleet == 0)  // an empty pane k: a new fleet in slot k (UI.md §7.2, §7.3)
             return selected_id_ != 0 && slot_drop(pane_hit(*over), out);
         if (over->fleet == drag_.fleet) return false;
-        if (from_fleet) return emit(fleet_management_event(over->fleet, drag_.fleet, unit, fleet_op::kMerge));
-        return emit(fleet_management_event(over->fleet, kNone, unit, fleet_op::kLaunch));
+        if (from_fleet) return emit(fleet_management_event(commands::kFleetMerge, over->fleet, drag_.fleet, unit));
+        return emit(fleet_management_event(commands::kFleetLaunch, over->fleet, kNone, unit));
     }
     if (over) {  // onto the land forces (a map fleet: only at the selected planet)
         if (from_fleet && selected_id_ != 0 && (drag_.planet == 0 || drag_.planet == selected_id_))
-            return emit(fleet_management_event(selected_id_, drag_.fleet, unit, fleet_op::kLand));
+            return emit(fleet_management_event(commands::kFleetLand, selected_id_, drag_.fleet, unit));
         return false;
     }
     if (drag_.over_component >= 0 && drag_.over_component == planet_fleet_) {  // onto a fleet slot
@@ -1051,7 +1044,7 @@ bool GalacticHud::drop(std::vector<commands::EventData>* out) {
         if (planet != (drag_.planet != 0 ? drag_.planet : selected_id_)) return emit(commands::ev::move_object_to_object(drag_.fleet, planet));
         return false;
     }
-    if (drag_.unit != 0 && selected_id_ != 0) return emit(fleet_management_event(selected_id_, kNone, drag_.unit, fleet_op::kDetach));
+    if (drag_.unit != 0 && selected_id_ != 0) return emit(fleet_management_event(commands::kFleetDetach, selected_id_, kNone, drag_.unit));
     return false;
 }
 

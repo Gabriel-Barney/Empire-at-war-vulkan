@@ -477,7 +477,6 @@ void App::session_started(const std::vector<std::string>& diag) {
     if (const galactic::GalacticSim* vg = session_->galaxy(); vg && spec.kind == SessionKind::Campaign)
         victory_rules_ = galactic::load_victory_rules(data_.db, vg->map().campaign_name, vg->map());
     orders_ = ui::OrderTranslator{};
-    orders_.set_keyboard_orders(false);  // keyboard orders come from HotkeyDispatcher
     orders_.set_selection({});
     last_submit_frame_ = 0;
     hotkeys_.set_paused(false);  // OI host: a new session starts unpaused (the Pause hotkey's first press pauses)

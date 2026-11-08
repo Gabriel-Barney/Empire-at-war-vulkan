@@ -32,6 +32,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/sim/battle_catalog.hpp"
+#include "alamo/sim/l1_loaders.hpp"  // WF1b t01: the L1 loaders (alamo_sim_battle)
 #include "alamo/sim/sim_host.hpp"
 #include "alamo/sim/tactical_battle.hpp"
 #include "alamo/terrain/ted.hpp"
@@ -435,14 +436,8 @@ private:
 #endif
 };
 
-// --- L1 systems: Space_Retreat_Unit_Increment_Wait_Frames of every faction (FactionFiles.xml list, by GalacticRules
-// faction index; unset = 0) for CampaignBattleOptions::retreat_increment_frames. tactical_battle_l1.cpp. cu5 t01: the
-// faction loaders read the definitions `rules` holds (FactionRules::xml_fields, list order, a later definition's
-// non-empty tag wins), not FactionFiles.xml again. ---
-std::vector<int32_t> load_retreat_increments(const galactic::GalacticRules& rules);
-std::vector<float> load_retreat_flight_increments(const galactic::GalacticRules& rules);  // unset = 500 [port]
-TacticalBattle::L1Constants load_l1_constants(const data::GameConstants& constants);  // missing tags keep the defaults
-std::vector<TacticalBattle::L1Faction> load_l1_factions(const galactic::GalacticRules& rules);
+// --- L1 systems: the faction / GameConstants loaders (load_retreat_increments, load_retreat_flight_increments,
+// load_l1_constants, load_l1_factions) are in l1_loaders.hpp (alamo_sim_battle, WF1b t01). ---
 // Int-final: every tactical-systems loader above in one call (retreat increments, flight increments, L1 factions, L1
 // constants, weather tables) into `opt`; what the hosts (alamo_headless / alamo_game) call before CampaignBattles.
 // `constants` null = the shipped defaults. Weather: null when WeatherScenarios.xml has no scenario.

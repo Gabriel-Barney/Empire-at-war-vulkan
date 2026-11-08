@@ -11,12 +11,6 @@
 
 namespace alamo::galactic {
 
-commands::EventData fleet_management_event(FleetOp op, uint32_t target, uint32_t fleet, uint32_t unit) {
-    commands::EventData e(commands::EventType::FleetManagement);
-    e.set("target", target).set("fleet", fleet).set("unit", unit).set("op", static_cast<uint32_t>(op));
-    return e;
-}
-
 // ---- income ticks --------------------------------------------------------------------------------------------
 
 uint32_t GalacticSim::add_income_hook(IncomeHook hook) {

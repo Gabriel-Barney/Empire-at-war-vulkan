@@ -356,48 +356,47 @@ void test_panels() {
     heroes.build(hf);
     CHECK(heroes.open() && heroes.active_shell() == env.table.find("good_hero_frame") && heroes.hit_boxes().size() == 2 &&
           heroes.slots().size() == 4);
-    std::vector<commands::EventData> cmds;
     std::vector<HudAction> acts;
     // FIXPASS_GALACTIC Â§2.2 galactic: left -> HeroFocusPlanet {hero, {planet}}; double -> + HeroZoomPlanet; right: nothing.
-    env.click(heroes, "hero_slot_good01", cmds, acts, Button::Left, 1.0);
+    env.click(heroes, "hero_slot_good01", acts, Button::Left, 1.0);
     CHECK(acts.size() == 1 && acts[0].kind == HudAction::Kind::HeroFocusPlanet && acts[0].unit == 4002 &&
-          acts[0].ids == std::vector<uint32_t>{7002} && cmds.empty());
+          acts[0].ids == std::vector<uint32_t>{7002});
     acts.clear();
-    env.click(heroes, "hero_slot_good01", cmds, acts, Button::Left, 1.3);
+    env.click(heroes, "hero_slot_good01", acts, Button::Left, 1.3);
     CHECK(acts.size() == 2 && acts[0].kind == HudAction::Kind::HeroFocusPlanet &&
           acts[1].kind == HudAction::Kind::HeroZoomPlanet && acts[1].ids == std::vector<uint32_t>{7002});
     acts.clear();
-    env.click(heroes, "hero_slot_good01", cmds, acts, Button::Left, 1.5);  // third click: a new single
+    env.click(heroes, "hero_slot_good01", acts, Button::Left, 1.5);  // third click: a new single
     CHECK(acts.size() == 1 && acts[0].kind == HudAction::Kind::HeroFocusPlanet);
     acts.clear();
-    env.click(heroes, "hero_slot_good00", cmds, acts, Button::Left, 3.0);
-    env.click(heroes, "hero_slot_good00", cmds, acts, Button::Left, 3.7);  // too slow: two singles
+    env.click(heroes, "hero_slot_good00", acts, Button::Left, 3.0);
+    env.click(heroes, "hero_slot_good00", acts, Button::Left, 3.7);  // too slow: two singles
     CHECK(acts.size() == 2 && acts[0].kind == HudAction::Kind::HeroFocusPlanet && acts[1].kind == HudAction::Kind::HeroFocusPlanet &&
           acts[1].unit == 4001);
     acts.clear();
-    env.click(heroes, "hero_slot_good00", cmds, acts, Button::Right, 5.0);
+    env.click(heroes, "hero_slot_good00", acts, Button::Right, 5.0);
     CHECK(acts.empty());
     hs[0].planet = commands::kNoObject;  // hyperspace
     hs[1].object = 0;                    // building / respawning
     heroes.build(hf);
-    env.click(heroes, "hero_slot_good00", cmds, acts, Button::Left, 7.0);
-    env.click(heroes, "hero_slot_good01", cmds, acts, Button::Left, 9.0);
+    env.click(heroes, "hero_slot_good00", acts, Button::Left, 7.0);
+    env.click(heroes, "hero_slot_good01", acts, Button::Left, 9.0);
     CHECK(acts.empty());
     // Â§2.3 tactical: left -> HeroSelect; double -> + HeroSelectGroup {container} / {} (by type).
     hs[0].planet = 7001;
     hs[1].object = 4002;
     hf.tactical = true;
     heroes.build(hf);
-    env.click(heroes, "hero_slot_good01", cmds, acts, Button::Left, 11.0);
+    env.click(heroes, "hero_slot_good01", acts, Button::Left, 11.0);
     CHECK(acts.size() == 1 && acts[0].kind == HudAction::Kind::HeroSelect && acts[0].unit == 4002 &&
           acts[0].ids == std::vector<uint32_t>{4002});
     acts.clear();
-    env.click(heroes, "hero_slot_good01", cmds, acts, Button::Left, 11.2);
+    env.click(heroes, "hero_slot_good01", acts, Button::Left, 11.2);
     CHECK(acts.size() == 2 && acts[1].kind == HudAction::Kind::HeroSelectGroup && acts[1].unit == 4002 &&
           acts[1].ids == std::vector<uint32_t>{5002});
     acts.clear();
-    env.click(heroes, "hero_slot_good00", cmds, acts, Button::Left, 13.0);
-    env.click(heroes, "hero_slot_good00", cmds, acts, Button::Left, 13.2);
+    env.click(heroes, "hero_slot_good00", acts, Button::Left, 13.0);
+    env.click(heroes, "hero_slot_good00", acts, Button::Left, 13.2);
     CHECK(acts.size() == 3 && acts[2].kind == HudAction::Kind::HeroSelectGroup && acts[2].unit == 4001 && acts[2].ids.empty());
     acts.clear();
     // Hover: the good slot's hero for the encyclopedia.
@@ -411,8 +410,8 @@ void test_panels() {
     hf.good = false;
     heroes.build(hf);
     CHECK(heroes.active_shell() == env.table.find("evil_hero_frame") && heroes.hit_boxes().size() == 1);  // only evil00 exists
-    env.click(heroes, "hero_slot_evil00", cmds, acts, Button::Left, 20.0);
-    env.click(heroes, "hero_slot_evil00", cmds, acts, Button::Left, 20.1);
+    env.click(heroes, "hero_slot_evil00", acts, Button::Left, 20.0);
+    env.click(heroes, "hero_slot_evil00", acts, Button::Left, 20.1);
     CHECK(acts.empty() && heroes.hover_hero() == 0);  // Â§2.1: enemy slots have no callbacks
     hf.open = false;
     heroes.build(hf);
@@ -440,9 +439,9 @@ void test_panels() {
         }
     CHECK(tech_alt0 == 1 && tech_slots == 1);
     acts.clear();
-    env.click(bm, "market_01", cmds, acts);  // disabled: swallowed
-    env.click(bm, "market_00", cmds, acts);
-    CHECK(cmds.empty() && acts.size() == 1 && acts[0].kind == HudAction::Kind::BlackMarketBuy && acts[0].unit == 301 &&
+    env.click(bm, "market_01", acts);  // disabled: swallowed
+    env.click(bm, "market_00", acts);
+    CHECK(acts.size() == 1 && acts[0].kind == HudAction::Kind::BlackMarketBuy && acts[0].unit == 301 &&
           acts[0].value == 0 && acts[0].ids == std::vector<uint32_t>{555});
     acts.clear();
     // hovering item 0 shows its description / cost on market_title02 / 03 at the next build
@@ -451,10 +450,10 @@ void test_panels() {
     for (const PanelSlot& s : bm.slots())
         if (s.component == env.table.find("market_title02")) desc = s.text == U"Hits harder.";
     CHECK(desc);
-    env.click(bm, "market_close", cmds, acts);
-    env.click(bm, "market_00", cmds, acts, Button::Right);
+    env.click(bm, "market_close", acts);
+    env.click(bm, "market_00", acts, Button::Right);
     CHECK(acts.size() == 2 && acts[0].kind == HudAction::Kind::PanelClose && acts[0].name == "market_frame" &&
-          acts[1].kind == HudAction::Kind::PanelClose && cmds.empty());
+          acts[1].kind == HudAction::Kind::PanelClose);
     // Slice dialog (market_frame stand-in): 7 rows, 5 visible; row click -> SliceSelect{type, {planet, slicer}, row};
     // unaffordable row swallowed; the wheel over the panel scrolls; hovered row shows "Chance n%"; close -> PanelClose.
     {
@@ -473,9 +472,9 @@ void test_panels() {
         sp.build(sf2);
         CHECK(sp.open() && sp.active_shell() == env.table.find("market_frame") && sp.first_row() == 0);
         acts.clear();
-        env.click(sp, "market_01", cmds, acts);  // unaffordable: swallowed
-        env.click(sp, "market_00", cmds, acts);
-        CHECK(cmds.empty() && acts.size() == 1 && acts[0].kind == HudAction::Kind::SliceSelect && acts[0].unit == 500 &&
+        env.click(sp, "market_01", acts);  // unaffordable: swallowed
+        env.click(sp, "market_00", acts);
+        CHECK(acts.size() == 1 && acts[0].kind == HudAction::Kind::SliceSelect && acts[0].unit == 500 &&
               acts[0].value == 0 && acts[0].ids == (std::vector<uint32_t>{557, 9001}));
         sp.build(sf2);  // market_00 hovered: its chance on market_title02
         bool chance = false;
@@ -489,14 +488,14 @@ void test_panels() {
         sp.build(sf2);
         CHECK(sp.first_row() == 2);
         acts.clear();
-        env.click(sp, "market_00", cmds, acts);
+        env.click(sp, "market_00", acts);
         CHECK(acts.size() == 1 && acts[0].unit == 502 && acts[0].value == 2);
         wheel.hover_component = -1;  // not over the panel: ignored
         sp.update_input(wheel, false, false, 2.1, &acts, 1.0f);
         CHECK(sp.first_row() == 2);
         acts.clear();
-        env.click(sp, "market_close", cmds, acts);
-        CHECK(acts.size() == 1 && acts[0].kind == HudAction::Kind::PanelClose && acts[0].name == "market_frame" && cmds.empty());
+        env.click(sp, "market_close", acts);
+        CHECK(acts.size() == 1 && acts[0].kind == HudAction::Kind::PanelClose && acts[0].name == "market_frame");
         sf2.open = false;  // reopening starts at the first row
         sp.build(sf2);
         sf2.open = true;
@@ -513,7 +512,7 @@ void test_panels() {
     sf.targets = tg;
     sab.build(sf);
     acts.clear();
-    env.click(sab, "bm_0001", cmds, acts);
+    env.click(sab, "bm_0001", acts);
     CHECK(acts.size() == 1 && acts[0].kind == HudAction::Kind::SabotageTarget && acts[0].unit == 8002 && acts[0].ids == std::vector<uint32_t>{556});
     CorruptionPanel cor;
     CHECK(cor.init(env.table, env.atlas, env.fonts));
@@ -531,11 +530,11 @@ void test_panels() {
     cf.options = opts;
     cor.build(cf);
     acts.clear();
-    env.click(cor, "corrupt_button_icon_a", cmds, acts);
-    env.click(cor, "corrupt_button_icon_b", cmds, acts);
+    env.click(cor, "corrupt_button_icon_a", acts);
+    env.click(cor, "corrupt_button_icon_b", acts);
     CHECK(acts.size() == 1 && acts[0].kind == HudAction::Kind::CorruptionChoice && acts[0].unit == 557 && acts[0].value == 1);
     // A component of another panel is not owned.
-    CHECK(!cor.owns(env.table.find("market_00")) && cmds.empty());
+    CHECK(!cor.owns(env.table.find("market_00")));
 }
 
 // ---- P4 completion 2: remaining screens ---------------------------------------------------------------------------------

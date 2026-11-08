@@ -159,9 +159,6 @@ public:
     std::optional<uint32_t> take_planet_zoom() { return std::exchange(planet_zoom_, std::nullopt); }
     // Galactic left click on nothing: besides Select{}, the host clears its planet selection (when not zoomed in).
     bool take_planet_deselect() { return std::exchange(planet_deselect_, false); }
-    // No-op, kept only until engine/apps drops its two calls (app_session.cpp, game_main.cpp): the translator has no keyboard
-    // orders any more.
-    void set_keyboard_orders(bool) {}
 
 private:
     void emit_select(std::vector<uint32_t> ids);

@@ -432,6 +432,8 @@ public:
     bool live_input() const { return opt_.smoke.empty() && !opt_.hidden && !opt_.bench.active(); }
     ui::CameraTuning option_tuning(ui::CameraTuning t) const;
     void apply_camera_tuning();
+    // ency_cfg_ (GameConstants + IDC_DELAY_TOOLTIPS) to the encyclopedia, the galactic / tactical HUDs and the shell panels.
+    void apply_tooltip_config();
     uint64_t reinforce_drops_ = 0;
     // Information screens fed from the sim (game_info.hpp): holocron history, story cursor, campaign tallies.
     Holocron holo_;

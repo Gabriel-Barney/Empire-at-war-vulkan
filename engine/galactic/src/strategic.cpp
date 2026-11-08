@@ -17,13 +17,6 @@ bool contains(const std::vector<uint32_t>& v, uint32_t x) { return std::find(v.b
 
 }  // namespace
 
-commands::EventData fleet_management_event(FleetOp op, uint32_t target, uint32_t fleet, uint32_t unit, uint32_t a,
-                                           uint32_t slot) {
-    commands::EventData e = fleet_management_event(op, target, fleet, unit);
-    e.set("a", a).set("slot", slot);
-    return e;
-}
-
 // ---- SG 2.1 ----------------------------------------------------------------------------------------------------------
 
 float GalacticSim::fleet_speed_multiplier() const {

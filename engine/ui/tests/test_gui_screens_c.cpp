@@ -112,12 +112,11 @@ void test_anim_hack_drag() {
     hf.lines = {U"Disable the shield generator"};
     hf.cost = U"500";
     hp.build(hf);
-    std::vector<commands::EventData> cmds;
     std::vector<HudAction> acts;
-    env.click(hp, "hack_hack", cmds, acts);
-    env.click(hp, "hack_close", cmds, acts);
+    env.click(hp, "hack_hack", acts);
+    env.click(hp, "hack_close", acts);
     CHECK(acts.size() == 2 && acts[0].kind == HudAction::Kind::HackConfirm && acts[0].unit == 9001 && acts[0].ids == std::vector<uint32_t>{600} &&
-          acts[1].kind == HudAction::Kind::PanelClose && acts[1].name == "hack_shell" && cmds.empty());
+          acts[1].kind == HudAction::Kind::PanelClose && acts[1].name == "hack_shell");
 
     // Fleet drag and drop on the galactic HUD.
     ComponentTable ft;
@@ -189,7 +188,7 @@ void test_anim_hack_drag() {
     };
     // unit 902 of fleet 900 onto fleet 950's pad -> merge (op 3) {target 950, fleet 900, unit 902}
     std::vector<commands::EventData> o = drag("q1_0002", center_px("q2_0001"), ft.find("q2_0001"));
-    CHECK(o.size() == 1 && o[0] == fleet_management_event(950, 900, 902, 3));
+    CHECK(o.size() == 1 && o[0] == fleet_management_event(commands::kFleetMerge, 950, 900, 902));
     // fleet 900 header onto the other planet -> MoveObjectToObject(900, 101)
     float sx = 0, sy = 0;
     CHECK(project(gf.view, planets[1].position, sx, sy));
@@ -205,10 +204,10 @@ void test_anim_hack_drag() {
     o = drag("q1_0001", center_px("b_play_pause"), ft.find("b_play_pause"));
     CHECK(!drag_valid && o.empty());
     o = drag("land_fleet_00", center_px("q1_0001"), ft.find("q1_0001"));
-    CHECK(o.size() == 1 && o[0] == fleet_management_event(900, commands::kNoObject, 701, 4));
+    CHECK(o.size() == 1 && o[0] == fleet_management_event(commands::kFleetLaunch, 900, commands::kNoObject, 701));
     // unit into empty space -> detach (op 2) into a new fleet at the selected planet
     o = drag("q1_0001", {1000, 10}, -1);
-    CHECK(o.size() == 1 && o[0] == fleet_management_event(100, commands::kNoObject, 901, 2));
+    CHECK(o.size() == 1 && o[0] == fleet_management_event(commands::kFleetDetach, 100, commands::kNoObject, 901));
     // a short press (no drag) still clicks: GalacticSelect
     std::vector<HudAction> ga;
     std::vector<commands::EventData> co;
@@ -420,7 +419,7 @@ void test_anim_hack_drag() {
         // 1. Whole fleet onto an empty slot of its planet -> op 8 {planet, fleet, slot}; it is drawn there, the other stays.
         bool valid = false;
         std::vector<commands::EventData> so = drag_map(slot_px(0, 0), slot_px(0, 2), &valid);
-        CHECK(valid && so.size() == 1 && so[0] == fleet_management_event(100, 960, kNone, 8, 2));
+        CHECK(valid && so.size() == 1 && so[0] == fleet_management_event(commands::kFleetSlot, 100, 960, kNone, commands::kNoObject, 2));
         CHECK(fleet_at(0, 0) == 960 && fleet_at(0, 2) == 0);  // the HUD keeps no slot state: nothing moved yet
         a.slot = 2;                                            // the sim applied op 8; the host feeds the new slot
         planets[0].stacks = {a, b2};
@@ -428,18 +427,18 @@ void test_anim_hack_drag() {
         CHECK(fleet_at(0, 2) == 960 && fleet_at(0, 1) == 961 && fleet_at(0, 0) == 0);
         // 2. Onto another own fleet's slot at the same planet -> merge (op 3) {target, source, all}.
         so = drag_map(slot_px(0, 2), slot_px(0, 1), &valid);
-        CHECK(valid && so.size() == 1 && so[0] == fleet_management_event(961, 960, kNone, 3));
+        CHECK(valid && so.size() == 1 && so[0] == fleet_management_event(commands::kFleetMerge, 961, 960, kNone));
         // 3. Onto an empty slot of another planet -> op 8 {planet, fleet, slot, a = destination} (the slot it takes on
         //    arrival), then MoveObjectToObject {fleet, planet}.
         so = drag_map(slot_px(0, 2), slot_px(1, 1), &valid);
-        CHECK(valid && so.size() == 2 && so[0] == fleet_management_event(100, 960, kNone, 8, 1, 101) &&
+        CHECK(valid && so.size() == 2 && so[0] == fleet_management_event(commands::kFleetSlot, 100, 960, kNone, 101, 1) &&
               so[1] == commands::ev::move_object_to_object(960, 101));
         // 4. An organiser unit onto an empty slot of its planet -> detach (op 2); the new fleet takes that slot (not the
         //    first free one).
         planets[0].stacks = {b2};  // 961 in slot 1; 0 and 2 free
         hud.build(gf);
         so = drag("q1_0002", slot_px(0, 2), gpf);
-        CHECK(so.size() == 1 && so[0] == fleet_management_event(100, 900, 902, 2).set("b", 2u));  // the sim gives the slot
+        CHECK(so.size() == 1 && so[0] == fleet_management_event(commands::kFleetDetach, 100, 900, 902).set("b", 2u));  // the sim gives the slot
         GalacticPlanetStack c = a;
         c.fleet = 905;
         c.slot = 2;
@@ -448,7 +447,7 @@ void test_anim_hack_drag() {
         CHECK(fleet_at(0, 2) == 905 && fleet_at(0, 1) == 961 && fleet_at(0, 0) == 0);
         // 5. A land unit onto the empty slot -> op 6 {planet, unit, a = planet} (launched as a new fleet).
         so = drag("land_fleet_00", slot_px(0, 0), gpf);
-        CHECK(so.size() == 1 && so[0] == fleet_management_event(100, kNone, 701, 6, 0, 100).set("b", 0u));
+        CHECK(so.size() == 1 && so[0] == fleet_management_event(commands::kFleetMoveNew, 100, kNone, 701, 100).set("b", 0u));
         // 6. An enemy fleet's slot at the same planet: no drop.
         GalacticPlanetStack foe = a;
         foe.fleet = 990;

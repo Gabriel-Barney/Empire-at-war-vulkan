@@ -1,10 +1,19 @@
 # S5 / G0 game host library: mode stack (galactic / land / space), main loop + pacing, command
 # handlers, map spawning, per-tick CRC. Integrates objects, commands, tactical, terrain, jobs.
+# WF1b t01: three static libraries along the header layers (docs/status/apps-sim-split-plan.md), so lanes own a target:
+#   alamo_sim_base     game modes, pacing, SimHost (+ save), session, map spawn, scenario, object scripts, bench, story, anim
+#   alamo_sim_battle   battle catalog, TacticalBattle (tactical_battle*.cpp, the L1 loaders), BattleAi   -> base
+#   alamo_sim_campaign CampaignBattles (+ its tactical AI hookup)                                        -> battle
+# alamo_sim (alias alamo::sim) is the INTERFACE aggregate of all of them: consumers link it unchanged. alamo_sim_config
+# carries the include directory and the ALAMO_SIM_HAVE_* definitions, PUBLIC as before, so every sim source and consumer
+# sees the same set.
 set(_alamo_sim OFF)
 if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND TARGET alamo_terrain AND TARGET alamo_jobs
    AND TARGET alamo_galactic_sim)
   set(_alamo_sim ON)
-  add_library(alamo_sim STATIC
+  add_library(alamo_sim_config INTERFACE)
+  target_include_directories(alamo_sim_config INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/sim/include)
+  add_library(alamo_sim_base STATIC
     sim/src/pacing.cpp
     sim/src/game_modes.cpp
     sim/src/sim_host.cpp
@@ -16,70 +25,104 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
     sim/src/bench_scenario.cpp  # BM1: benchmark scenario manifest (alamo_headless --bench; alamo_game in BM2)
     sim/src/bench_stats.cpp     # BM1: tick statistics, result comparison, result JSON (shared with BM2)
   )
+  target_link_libraries(alamo_sim_base PUBLIC alamo_sim_config alamo_objects alamo_commands alamo_tactical alamo_terrain alamo_jobs
+                                              alamo_galactic_sim alamo_core alamo_engine_flags)
+  if(TARGET alamo_tactical_movement)  # TacticalMode::obstacle_of (game_modes.cpp: space avoidance obstacles)
+    target_link_libraries(alamo_sim_base PUBLIC alamo_tactical_movement)
+  endif()
+  set(_alamo_sim_libs alamo_sim_base)
+  add_library(alamo_sim INTERFACE)
   add_library(alamo::sim ALIAS alamo_sim)
-  target_include_directories(alamo_sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sim/include)
-  target_link_libraries(alamo_sim PUBLIC alamo_objects alamo_commands alamo_tactical alamo_terrain alamo_jobs
-                                         alamo_galactic_sim alamo_core alamo_engine_flags)
+  target_link_libraries(alamo_sim INTERFACE alamo_sim_base)
   # S4 story & campaign events: engine/lua's StoryModel + one LuaVm per plot script (lua.h for
   # ServiceRate / LastService). Without engine/lua the session never starts (story_session_none.cpp).
   if(TARGET alamo_lua AND TARGET alamo_lua_vm)
-    target_sources(alamo_sim PRIVATE sim/src/story_session.cpp)
-    target_link_libraries(alamo_sim PUBLIC alamo_lua PRIVATE alamo_lua_vm)
-    target_compile_definitions(alamo_sim PUBLIC ALAMO_SIM_HAVE_STORY=1)
+    target_sources(alamo_sim_base PRIVATE sim/src/story_session.cpp)
+    target_link_libraries(alamo_sim_base PUBLIC alamo_lua)
+    target_compile_definitions(alamo_sim_config INTERFACE ALAMO_SIM_HAVE_STORY=1)
   else()
-    target_sources(alamo_sim PRIVATE sim/src/story_session_none.cpp)
+    target_sources(alamo_sim_base PRIVATE sim/src/story_session_none.cpp)
   endif()
 
   # S10-int / R3: sim-owned animation (SimAnimation, T5.anim) when engine/anim is configured.
   if(TARGET alamo_anim)
-    target_sources(alamo_sim PRIVATE sim/src/sim_anim.cpp)
-    target_link_libraries(alamo_sim PUBLIC alamo_anim)
-    target_compile_definitions(alamo_sim PUBLIC ALAMO_SIM_HAVE_ANIM=1)
+    target_sources(alamo_sim_base PRIVATE sim/src/sim_anim.cpp)
+    target_link_libraries(alamo_sim_base PUBLIC alamo_anim)
+    target_compile_definitions(alamo_sim_config INTERFACE ALAMO_SIM_HAVE_ANIM=1)
   endif()
 
   # S10 battle transitions (docs/re/BATTLE_TRANSITIONS.md): tactical battles of galactic conflicts on
   # MovementSystem (S7) + CombatSystem (S8): battle_catalog / tactical_battle / campaign_battles.
   # S10-int: the battles run combat through the S9 AbilitySystem (abilities required).
   if(TARGET alamo_tactical_movement AND TARGET alamo_tactical_combat AND TARGET alamo_tactical_abilities)
-    target_sources(alamo_sim PRIVATE sim/src/battle_catalog.cpp sim/src/tactical_battle.cpp sim/src/campaign_battles.cpp)
-    target_link_libraries(alamo_sim PUBLIC alamo_tactical_movement alamo_tactical_combat alamo_tactical_abilities PRIVATE alamo_data)
-    target_compile_definitions(alamo_sim PUBLIC ALAMO_SIM_HAVE_BATTLES=1)
-    # Fog of war (tactical_battle_fog.cpp) and S4 garrisons + structure capture (tactical_battle_garrison.cpp).
-    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_fog.cpp sim/src/tactical_battle_garrison.cpp)
-    target_link_libraries(alamo_sim PUBLIC alamo_tactical_fog alamo_tactical_garrison)
-    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_l1.cpp sim/src/tactical_battle_l1_strikes.cpp)  # L1 systems (owner: tactical-systems agent)
-    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_pads.cpp)  # Int-final: build pads (L1_S4_REMAINING §3.6)
-    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_bt.cpp)    # battle host: BT setup / transition rules, pad units
-    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_skirmish.cpp)  # skai: skirmish map battles (income)
-    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_victory.cpp)   # story t06: the tactical victory monitor (BT §3.1a)
-    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_oi_abilities.cpp)  # OI abilities: ability host side (owner: abilities agent)
-    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_save.cpp)  # N1 stage 2 (owner: n2-host): battle save / load
-    # Hangars / station upgrade / engine-loop requests (docs/re/STATION_HANGARS_SOUND.md): engine/tactical/hangar.
-    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_hangar.cpp)
-    target_link_libraries(alamo_sim PUBLIC alamo_tactical_hangar)
-    # battle host: model data (bounds for the LAND_OBSTACLE stamps, hard-point bones) from the ALO files when engine/assets
-    # is configured; without it (or without the model files) the catalog keeps its data-only fallbacks.
-    if(TARGET alamo_assets)
-      target_link_libraries(alamo_sim PRIVATE alamo_assets)
-      target_compile_definitions(alamo_sim PRIVATE ALAMO_SIM_HAVE_ASSETS=1)
-    endif()
+    add_library(alamo_sim_battle STATIC
+      sim/src/battle_catalog.cpp
+      sim/src/tactical_battle.cpp
+      # Fog of war (tactical_battle_fog.cpp) and S4 garrisons + structure capture (tactical_battle_garrison.cpp).
+      sim/src/tactical_battle_fog.cpp
+      sim/src/tactical_battle_garrison.cpp
+      sim/src/tactical_battle_l1.cpp sim/src/tactical_battle_l1_strikes.cpp  # L1 systems (owner: tactical-systems agent)
+      sim/src/tactical_battle_pads.cpp       # Int-final: build pads (L1_S4_REMAINING §3.6)
+      sim/src/tactical_battle_bt.cpp         # battle host: BT setup / transition rules, pad units
+      sim/src/tactical_battle_skirmish.cpp   # skai: skirmish map battles (income)
+      sim/src/tactical_battle_victory.cpp    # story t06: the tactical victory monitor (BT §3.1a)
+      sim/src/tactical_battle_oi_abilities.cpp  # OI abilities: ability host side (owner: abilities agent)
+      sim/src/tactical_battle_save.cpp       # N1 stage 2 (owner: n2-host): battle save / load
+      # Hangars / station upgrade / engine-loop requests (docs/re/STATION_HANGARS_SOUND.md): engine/tactical/hangar.
+      sim/src/tactical_battle_hangar.cpp
+    )
+    target_link_libraries(alamo_sim_battle PUBLIC alamo_sim_base alamo_tactical_movement alamo_tactical_combat
+                                                  alamo_tactical_abilities alamo_tactical_fog alamo_tactical_garrison
+                                                  alamo_tactical_hangar)
+    target_compile_definitions(alamo_sim_config INTERFACE ALAMO_SIM_HAVE_BATTLES=1)
+    add_library(alamo_sim_campaign STATIC sim/src/campaign_battles.cpp)
+    target_link_libraries(alamo_sim_campaign PUBLIC alamo_sim_battle)
+    list(APPEND _alamo_sim_libs alamo_sim_battle alamo_sim_campaign)
+    target_link_libraries(alamo_sim INTERFACE alamo_sim_campaign)
     # A1 hooks: DAMAGE_TRACKING store per battle, land campaign-battle credit transfer.
     if(TARGET alamo_ai_tactical)
-      target_link_libraries(alamo_sim PUBLIC alamo_ai_tactical)
-      target_compile_definitions(alamo_sim PUBLIC ALAMO_SIM_HAVE_AI_TACTICAL=1)
+      target_link_libraries(alamo_sim_battle PUBLIC alamo_ai_tactical)
+      target_compile_definitions(alamo_sim_config INTERFACE ALAMO_SIM_HAVE_AI_TACTICAL=1)
     endif()
     # --- A1 stage 2 (owner: A1 agent): opt-in tactical AI in battles (battle_ai.hpp, campaign_battles_ai.cpp) ---
     if(TARGET alamo_ai_tactical_world)
-      target_sources(alamo_sim PRIVATE sim/src/battle_ai.cpp sim/src/campaign_battles_ai.cpp)
-      target_link_libraries(alamo_sim PUBLIC alamo_ai_tactical_world)
-      target_compile_definitions(alamo_sim PUBLIC ALAMO_SIM_HAVE_TACTICAL_AI=1)
+      target_sources(alamo_sim_battle PRIVATE sim/src/battle_ai.cpp)
+      target_sources(alamo_sim_campaign PRIVATE sim/src/campaign_battles_ai.cpp)
+      target_link_libraries(alamo_sim_battle PUBLIC alamo_ai_tactical_world)
+      target_compile_definitions(alamo_sim_config INTERFACE ALAMO_SIM_HAVE_TACTICAL_AI=1)
     endif()
     # --- end A1 ---
-    add_executable(alamo_sim_battle_tests sim/tests/test_battles.cpp)
-    target_link_libraries(alamo_sim_battle_tests PRIVATE alamo_sim alamo_vfs alamo_test_support)
-    target_compile_definitions(alamo_sim_battle_tests PRIVATE "ALAMO_SIM_TESTDATA=\"${CMAKE_CURRENT_SOURCE_DIR}/sim/testdata\"")
-    add_test(NAME alamo_sim_battle_tests COMMAND alamo_sim_battle_tests)
-    set_tests_properties(alamo_sim_battle_tests PROPERTIES TIMEOUT 900)
+  endif()
+  # Private dependencies: every sim library gets the whole set the single alamo_sim had, so the split changes no include
+  # path or definition a source sees. battle host: model data (bounds for the LAND_OBSTACLE stamps, hard-point bones)
+  # from the ALO files when engine/assets is configured; without it (or without the model files) the catalog keeps its
+  # data-only fallbacks.
+  foreach(_lib IN LISTS _alamo_sim_libs)
+    if(TARGET alamo_lua AND TARGET alamo_lua_vm)
+      target_link_libraries(${_lib} PRIVATE alamo_lua_vm)
+    endif()
+    if(TARGET alamo_sim_battle)
+      target_link_libraries(${_lib} PRIVATE alamo_data)
+      if(TARGET alamo_assets)
+        target_link_libraries(${_lib} PRIVATE alamo_assets)
+        target_compile_definitions(${_lib} PRIVATE ALAMO_SIM_HAVE_ASSETS=1)
+      endif()
+    endif()
+  endforeach()
+
+  if(TARGET alamo_sim_battle)
+    # Battle tests (WF1b t01: test_battles.cpp split by theme, one exe each; shared fixture sim/tests/battle_test_fixture.hpp).
+    foreach(_t alamo_sim_battle_tests:test_battles alamo_sim_battle_story_tests:test_battles_story
+               alamo_sim_battle_ai_tests:test_battles_ai alamo_sim_battle_fighter_tests:test_battles_fighters)
+      string(REPLACE ":" ";" _t "${_t}")
+      list(GET _t 0 _exe)
+      list(GET _t 1 _src)
+      add_executable(${_exe} sim/tests/${_src}.cpp)
+      target_link_libraries(${_exe} PRIVATE alamo_sim alamo_vfs alamo_test_support)
+      target_compile_definitions(${_exe} PRIVATE "ALAMO_SIM_TESTDATA=\"${CMAKE_CURRENT_SOURCE_DIR}/sim/testdata\"")
+      add_test(NAME ${_exe} COMMAND ${_exe})
+      set_tests_properties(${_exe} PROPERTIES TIMEOUT 900)
+    endforeach()
     # --- L1 systems (owner: tactical-systems agent): special weapons / TSW / hyperspace / engines in a campaign battle ---
     add_executable(alamo_sim_l1_tests sim/tests/test_battle_l1.cpp)
     target_link_libraries(alamo_sim_l1_tests PRIVATE alamo_sim alamo_vfs alamo_test_support)
