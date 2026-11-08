@@ -25,6 +25,7 @@ UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti) {
     d.space_layer = layer != 0 ? static_cast<uint32_t>(layer) : static_cast<uint32_t>(kLayerFrigate);
     d.layer_z = t.get_float(ti, "Layer_Z_Adjust");
     d.space_layer_type = static_cast<uint32_t>(layer);  // §4.2: threat mode needs 0
+    d.stationary_space_layer = static_cast<uint32_t>(t.get_int(ti, "Stationary_Space_Layer"));  // cu8j t01 (§4.6.4)
     // REMAINING_GAPS §4.3-4.7: special-locomotor fields (the kind itself is the host's opt-in, see the header).
     d.hover_offset = t.get_float(ti, "Hover_Offset");
     d.max_lift = t.get_float(ti, "Max_Lift");

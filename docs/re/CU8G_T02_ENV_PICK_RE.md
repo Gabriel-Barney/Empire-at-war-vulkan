@@ -298,6 +298,8 @@ transcribed further].
     0x2a1eb0 also contains formation-ctor draws.
   - MOVEMENT §1.6's "synced random offset" in a formation's start frame is this ctor draw. Its range is `int(1, FPS)`
     [H, decompile and trace]; the port's movement takes `Get_Int(0, Max_Move_Frame_Delay)` [inferred] (follow-up).
+    **Corrected in cu8j (2026-11-08):** the ctor's r only sets the next-check timer +0x1d8; the start offset is a
+    separate `int(0, PathFrameDelay)` drawn in `0x43c1b0` for `PathFrameDelay` seeds only (MOVEMENT §1.6, §4.6.3).
 - **Verdict:** the §3 order holds in every traced load:
   - [seed, skirmish only] → chunk `0x102` → exactly one pick when n ≠ 1 → post-load → first tick;
   - first-tick weather restart = 2 floats exactly when the picked record has a weather scenario (`Noon_Rain`);
@@ -331,3 +333,5 @@ transcribed further].
    - Ported in cu8i t02 (2026-11-08, land): the move split's formations draw `int(1, FPS)`, and the Load_Map tail draws
      once per LOCOMOTOR object without a coordinator; the one object on `_MP_LAND_ENDOR` is its Is_Neutral
      `Land_Speeder` (port count 1). Space formation draws are still open (docs/PHASE4.md cu8i).
+   - cu8j (2026-11-08): every creation path, the timing (coordinator update, not the order) and the space composition
+     are in MOVEMENT §4.6 / §4.7, with a trace plan for the [M] counts (§4.7.6).

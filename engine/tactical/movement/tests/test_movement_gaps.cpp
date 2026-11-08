@@ -456,6 +456,7 @@ static void test_jetpack() {
     o.units = {1};
     o.destination = cell_center(70, 40);
     sys.move(o, rng, 0);
+    sys.coordinator_update(0, 0, rng);  // cu8j t01: the composition draws at the next coordinator update
     const SimRng before = rng;
     std::vector<uint8_t> states;
     std::vector<int32_t> anims;
@@ -508,6 +509,7 @@ static void test_flying() {
     o.units = {1};
     o.destination = cell_center(60, 60);
     sys.move(o, rng, 0);
+    sys.coordinator_update(0, 0, rng);  // cu8j t01: the composition draws at the next coordinator update
     uint32_t arrive = 0, reissues = 0, last_reissue = 0, min_gap = 100000;
     LocoState prev = LocoState::None;
     const uint64_t draws0 = rng.draws();
@@ -569,6 +571,7 @@ static void test_flying() {
     walk.units = {2};
     walk.destination = cell_center(80, 60);
     s2.move(walk, rng, 0);
+    s2.coordinator_update(0, 0, rng);  // cu8j t01: the composition draws at the next coordinator update
     const uint64_t draws2 = rng.draws();
     float near_end = 1e9f;
     for (uint32_t f = 0; f < 1500; ++f) {
@@ -701,7 +704,7 @@ static void test_flying_clearance() {
         oj.units = {2};
         oj.destination = {900.0f, 600.0f};
         sys.move(oj, rng, 0);
-        for (uint32_t f = 0; f < 30; ++f) sys.tick(f, rng);
+        for (uint32_t f = 0; f < 91; ++f) sys.tick(f, rng);  // cu8j t01 [M]: an order at frame 0 plans at frame 61
         const UnitView jv = sys.view(2);
         CHECK(jv.loco_state == LocoState::WalkMoving && jv.airborne);
         CHECK(q({100.0f, 600.0f}, {900.0f, 600.0f}, 10.0f) == 80.0f + jv.z);  // jetpack: (0 + 40) x 2 + z
@@ -847,6 +850,7 @@ static void test_multi_locomotor() {
     j2.destination = cell_center(20, 60);
     j2.switch_locomotor = true;
     sys.move(j2, rng, f);
+    sys.coordinator_update(f, f, rng);  // cu8j: the orders' and the swap's compositions draw here, not in flight
     UnitView v = sys.view(1);
     CHECK(v.locomotor == LocomotorKind::Jetpack && v.secondary_locomotor && v.has_goal && v.loco_state == LocoState::None &&
           v.max_speed == 2.5f * mult);
@@ -1222,7 +1226,7 @@ static void test_jetpack_orders() {
         CHECK(sys.view(1).secondary_locomotor && sys.view(1).loco_state == LocoState::WalkStopped);
         sys.tick(1, rng);
         CHECK(!sys.view(1).secondary_locomotor && sys.view(1).locomotor == LocomotorKind::Default &&
-              sys.view(1).pos == cell_center(10, 10) && rng.draws() == 0);
+              sys.view(1).pos == cell_center(10, 10) && rng.draws() == 1);  // cu8j t02: the swap's composition
     }
     {  // re-issue: a walking formation member keeps its goal alone and flies there
         MovementSystem sys{MovementConfig{}};
@@ -1503,8 +1507,15 @@ static void test_fighter_guard() {
     sys.move(g, rng, 0);
     const FighterFormation* fg = sys.fighter_formation(1);
     CHECK(fg && fg->blocks.size() == 1 && fg->blocks[0].kind == kFighterBlockObject && fg->blocks[0].object == 2 &&
-          fg->blocks[0].flags == kMoveFlagGuardMove && fg->follow && fg->next == kFighterGuardInterval &&
+          fg->blocks[0].flags == kMoveFlagGuardMove && fg->follow && fg->next == kStartPending &&
           fg->state == kFormationMoving && fg->speed == -1.0f);
+    {  // cu8j t01: the composition (next coordinator update) draws int(1, FPS); the first check is F + 30 + r
+        SimRng ref = rng;
+        sys.coordinator_update(0, 0, rng);
+        const int32_t r = ref.range_int(1, kFormationFps);
+        fg = sys.fighter_formation(1);
+        CHECK(fg && fg->next == static_cast<uint32_t>(kFormationFps + r) && rng.state() == ref.state());
+    }
     MoveOrder mc;
     mc.units = {2};
     mc.destination = {1500.0f, 0.0f};
@@ -1887,7 +1898,8 @@ static void test_fighter_formation_stack() {
                 limit ? 1 : 0, prepop ? 1 : 0, kept_near ? 1 : 0, leash_pop ? 1 : 0, hidden_pop ? 1 : 0, c3 ? 1 : 0,
                 arrived_first ? 1 : 0, wp_frame, rearrived ? 1 : 0, arrived_pop ? 1 : 0, arrived_pop_frame, follow_ok, follow_runs, follow_rearrived, station_pop ? 1 : 0,
                 new_order ? 1 : 0);
-    CHECK(queued && not_moved && saved && popped && pop_frame <= 5u + kFighterGuardInterval + 1u && flew);
+    // cu8j t01: the guard's formation is composed at frame 0, its first check at 0 + 30 + int(1, 30) <= 60.
+    CHECK(queued && not_moved && saved && popped && pop_frame <= 2u * kFighterGuardInterval + 1u && flew);
     CHECK(arrived_first && arrived_pop && arrived_pop_frame <= wp_frame + kFighterGuardInterval + 1u);
     CHECK(follow_runs > 0 && follow_ok == follow_runs);
     CHECK(station_pop && new_order);
@@ -1938,7 +1950,9 @@ static CrcLog mixed_run(const ParallelFor& pf) {
 // (Hermite follower, attitude / altitude steps, D + dir x L loiter; flying units hash pitch, V, path index, target).
 // S7 t15 (2026-11-02): moved (the Has_Pre_Turn_Anim jetpack's take-off turn: band rates, one-shot clips, clip-end exit).
 // cu8i t02 (2026-11-08): moved (land formations draw the FormationClass ctor int(1, 30); start now + acc + r - 30).
-static constexpr uint64_t kGoldenMixed = 0x6b3cbbce7f254be2ull;
+// cu8j t01 / t02 (2026-11-08): compositions at the next coordinator update (draws, start frames, the jetpack swap's draw)
+// and the hash's pending composition / adopt state.
+static constexpr uint64_t kGoldenMixed = 0x1f923da0fa12c9f2ull;
 
 // ---------------------------------------------------------------- SPACE_AVOIDANCE (fighter avoidance hook rules)
 // A wall model: one collision mesh, the square x, z in [-50, 50] of the model plane y = 0 (two triangles).
@@ -2346,16 +2360,16 @@ static void test_team_cap() {
     MoveOrder o;
     o.units = {2};
     o.destination = cell_center(60, 30);
-    sys.move(o, rng, 0);
+    sys.move(o, rng, 100);  // cu8j t01 [M]: after frame 60, so the plan is not gated to frame 61
     float top = 0.0f;
-    for (uint32_t f = 1; f < 40; ++f) {
+    for (uint32_t f = 101; f < 140; ++f) {
         sys.tick(f, rng);
         top = std::max(top, sys.view(2).speed);
     }
     const float cap = (1.0f * mult) * 1.5f;
     CHECK(sys.view(1).team_speed == cap && sys.view(2).team_speed == cap && top == cap);
     CHECK(sys.set_team(2, -1, 1.0f));
-    for (uint32_t f = 40; f < 60; ++f) {
+    for (uint32_t f = 140; f < 160; ++f) {
         sys.tick(f, rng);
         top = std::max(top, sys.view(2).speed);
     }
@@ -2448,9 +2462,9 @@ static void test_team_speed_exact() {
         MoveOrder o;
         o.units = {2};
         o.destination = cell_center(60, 30);
-        sys.move(o, rng, 0);
+        sys.move(o, rng, 100);  // cu8j t01 [M]: after frame 60, so the plan is not gated to frame 61
         float top = 0.0f;
-        for (uint32_t f = 1; f < 40; ++f) {
+        for (uint32_t f = 101; f < 140; ++f) {
             sys.tick(f, rng);
             top = std::max(top, sys.view(2).speed);
         }

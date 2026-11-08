@@ -389,10 +389,30 @@ The build runs lazily from the query functions when the dirty flag `0x140a2bed8`
 
 **No global per-tick cap on land path requests was found.** The only hard budget is the dynamic quota of §1.5. [M]
 
-**Start staggering** [H]:
-- In `0x43c1b0`, each formation's start frame = now + accumulated delay + a synced random offset − 2·fps. The delay accumulator grows by each member type's `PathFrameDelay` (+0x3D0). [M] for the exact formula.
-- The synced random draw is the **FormationClass ctor's** (`0x40d0d0`, every formation creation): `int(1, FPS)`, stored as the formation's next-check timer +0x1d8 := FPS + r + now (+0x1dc := now − 500) [H, CU8G_T02_ENV_PICK_RE §7 P1 results]. The port reads the offset above as +0x1d8 − now = FPS + r (start = now + acc + r − FPS, not before now; docs/PHASE4.md cu8i). The earlier "Get_Int(0, Max_Move_Frame_Delay)" reading of this draw was wrong; Max_Move_Frame_Delay is only the queued-order delay below.
-- With the queue/shift flag (§6.1), `0x41c1a0` gives each unit a synced random start delay in [0, **Max_Move_Frame_Delay = 6**] frames.
+**Start staggering** [H] (corrected in cu8j, 2026-11-08, from 0x43c1b0 / 0x43e5b0 / 0x41c1a0; §4.6):
+- In `0x43c1b0` (land split, coordinator vf12 → composition, §4.6.1), for each formation seed whose type has
+  `PathFrameDelay` (+0x3d0) ≠ 0 (and the caller's stagger flag, 1 from 0x43e5b0): r' = synced `int(0,
+  PathFrameDelay_seed)` (call 0x43c8b9: edx = 0, r8d = the seed type's +0x3d0), descriptor +0x1cc := now + acc + r' −
+  2·FPS, then acc += the seed type's `PathFrameDelay`. acc starts at 0 per split. A seed whose type has
+  `PathFrameDelay` 0 draws nothing and leaves descriptor +0x1cc = 0 (0x40d660 zeroes it). In FoC only `Snowspeeder` and
+  `Lancet_Air_Artillery` set `PathFrameDelay` (4).
+- The formation made from the descriptor gets F +0x1dc := descriptor +0x1cc, overwriting the ctor's now − 500.
+  F +0x1dc (FormationData +0x1cc) is the **last plan frame**: plan `0x41c1a0` path-plans only when
+  2·FPS < now − F +0x1dc (and on a failed plan with param_2 > 1 sets F +0x1dc := now). So a staggered formation
+  first plans at the first frame > creation frame + acc + r'; an unstaggered land formation plans at once when it is
+  created after frame 60, **and waits until frame 61 when it is created at frame ≤ 60** [M: consequence of the gate;
+  no trace].
+- The **FormationClass ctor draw** (`0x40d0d0`, `int(1, FPS)`, one per formation creation, §4.1) is a different
+  draw. Its r is used only by the next-check timer F +0x1d8 := now + FPS + r (§4.6.3), never by the start frame.
+  **Correction:** the cu8i reading "start = now + acc + (FPS + r) − 2·FPS" (docs/PHASE4.md cu8i t02, and this
+  section until cu8j) mixed the two; the start offset is r' above, drawn only for `PathFrameDelay` seeds.
+- Draw order of one land split: all r' draws (descriptor order, inside 0x43c1b0), then one ctor draw per
+  descriptor in descriptor order (0x43e5b0). Both happen at the coordinator update (common tick step 10, §4.6.2),
+  not when the order is given.
+- The queued-order delay is drawn in plan `0x41c1a0`, not at the order: per member, synced `int(0,
+  Max_Move_Frame_Delay = 6)` (GC 0x140b16d38) when the top block has flag 0x08, the member's pack speed is 0, it is
+  not a team, and (member count = 1, or land with skip-formup and F +0x9c clear); stored to the member's path
+  +0x54 := now + r.
 - These draws consume the lockstep RNG, so their count and order must match.
 
 **Re-plan gate:** a coordinator re-plans when (frame − last plan) > 2 × logic fps, i.e. at most every 60 frames. [M]
@@ -768,8 +788,9 @@ passes it and skips the call when the mode has none.
      `0x438b40` → `0x4f6b60`) and **`Coordinator::Move_To(B)` (`0x4f8200`) re-issues the order**.
 
    So the saved order **is re-issued**: the unit continues its current move (or holds its position when it had no
-   coordinator) alone in a coordinator of its own. Any RNG drawn by that `Move_To` (formation stagger, §1.6) is drawn
-   here [M: whether a one-unit `Move_To` draws was not traced]. This happens even when the name is empty.
+   coordinator) alone in a coordinator of its own. `Move_To` itself draws nothing: the unit's new formation, and its
+   one FormationClass ctor draw, come at the next coordinator update (§4.7.4, cu8j) [H]. This happens even when the
+   name is empty.
 5. Build the new locomotor with the behaviour factory (`0x4c3520`). It refuses names of length 0 or ≥ 256 and names
    that match no table row, and returns null. **Null → return**: no other change. An empty
    `Secondary_Locomotor_Name` therefore never swaps, but step 4 has already split the unit off with its order.
@@ -1356,6 +1377,7 @@ Any of these may have readers that were not found. Parse them and treat them as 
 Both are 0xb8 bytes and are created per order by `0x426010`, appended in creation order. A coordinator owns a vector of `FormationClass` objects (0x290 bytes, ctor `0x40d0d0`, made by `0x4f6fb0`).
 - Each formation gets a global incrementing ID (`0x140a2bcf0`, stored at +0x288).
 - The ctor draws one synced `int(1, FPS)` (+0x1d8 := FPS + r + now, the next-check timer that 0x4192b0 / 0x410a60 gate on) [H, CU8G_T02_ENV_PICK_RE §7]. So every formation creation is one synced draw, including the Load_Map-tail GOM post-load pass (0x2b4440 → 0x3952e0 → 0x39bcb0), which gives each movable object without a coordinator a new one.
+- The ctor has one caller, the factory `0x4f6fb0`, which has five callers: the land and space composition passes, `Issue_Degenerate_Move`, `Split_From_Formation` and the coordinator load. **A group move creates its formations at the next coordinator update, not at the order** (§4.6, cu8j 2026-11-08).
 - Members are added by `0x40e0f0` into the vector at +0x10. This writes the formation pointer into the member's locomotor data (+0x1f0).
 - Coordinators, formations and members are all **vectors in insertion order**.
 
@@ -1445,7 +1467,12 @@ Both are 0xb8 bytes and are created per order by `0x426010`, appended in creatio
 - Land formations skip formup when **ShouldSkipLandFormup = true** (vanilla) and formation +0x9c is clear (`0x41c1a0`). In vanilla, land groups therefore start without waiting.
 - FormationFormupWaitType (`0x5dddc0`): WaitForAll 0, WaitForFront 1, WaitNone 2. Neither it nor MaxLandFormationFormupFrames (240) was found being read. [L]
 
-**Space formations:** `Set_Capital_Ship_Formation` `0x4fca30`, `Set_Screen_Formation` `0x4fdfb0`, `Set_Lead_Formation` `0x4fd5b0` and `Set_Transport_Ship_Formation` `0x4fea10` (sole caller `0x4fbb10`), and `Merge_Formation` `0x41fa90` / `Split_From_Formation` `0x4f84e0`, were **not read**. The debug strings show that space groups lay out capital, screen, lead and transport roles. `Squadron_Formation_Error_Tolerance` is unread. Gap, §8.
+**Space formations:** see §4.6 (cu8j, 2026-11-08). The space composition pass makes one formation per ship with a
+nonzero `Space_Layer` role and one per recruited group of role-0 objects (fighters, squadron containers).
+`Set_Capital_Ship_Formation` `0x4fca30`, `Set_Lead_Formation` `0x4fd5b0`, `Set_Screen_Formation` `0x4fdfb0` and
+`Set_Transport_Ship_Formation` `0x4fea10` (sole caller `0x4fbb10`) are **not** formation functions: they are the
+campaign fleet placement at a space battle's start, which re-adopts each placed object (§4.7). `Merge_Formation`
+`0x41fa90` creates nothing. `Squadron_Formation_Error_Tolerance` is still unread.
 
 ### 4.5 Formation constants (vanilla)
 
@@ -1464,6 +1491,249 @@ Both are 0xb8 bytes and are created per order by `0x426010`, appended in creatio
 | DoubleClickMoveMaxSpeedRatio | 1.25 |
 | Solo_Attack_Range | 60 |
 | Short_Range_Attack_Formation_Coefficient | 1.6 |
+
+### 4.6 When formations are created; space formations (cu8j t01, 2026-11-08) [H unless tagged]
+Read from the factory `0x4f6fb0` and its callers, the coordinator vtables (base `0x87b278`, land `0x86b080`, space
+`0x8a6520`), the system update `0x426eb0`, `0x4f8080`, `0x5d58f0`, `0x43e5b0`, `0x43c1b0`, `0x41c1a0`, `0x4192b0`,
+`0x410a60`. F = the FormationClass, FPS = 30, now = the global frame (0x140b0a320).
+
+#### 4.6.1 Every FormationClass creation
+The ctor `0x40d0d0` has one caller, the factory `0x4f6fb0`; the factory has five callers. Each creation is **one**
+synced `int(1, FPS)` (the ctor's call 0x40d11a, return 0x40d11f; factory → ctor return 0x4f6fd4).
+
+| Creator | Return into it | When | Formations made |
+|---|---|---|---|
+| land composition `0x43e5b0` (land vf12) | 0x43e712 | coordinator update, when +0xa8 = 1 (§4.6.2) | one per split descriptor (§4.2, §1.6) |
+| space composition `0x5d58f0` (space vf12) | 0x5d5c19 | same | one per ship with a role, one per role-0 group (§4.6.4) |
+| `Issue_Degenerate_Move` `0x4f7360` | 0x4f738a | at once; only via vf8 (land `0x43b470`, space `0x5d2030` = vf3 add, then `0x4f7360`), only from the adopt `0x39bcb0` (§4.7) | one holding every object of the coordinator: move type 1 to their centroid (+0x40..+0x48), Set_Move, +0xa8 := 0, `0x419ee0` |
+| `Split_From_Formation` `0x4f84e0` | 0x4f8518 | at once | one, in the same coordinator, for the split object |
+| coordinator load `0x4f7530` (from `0x426690`) | 0x4f7708 | save load | one per saved formation (port saves are its own: no parity need) |
+
+- `Split_From_Formation` is reached through `0x424850`, which acts only when the object's pack +0x1f0 is that
+  formation. Callers of `0x424850`: `0x38a350` (ability activation, e.g. MISSILE_SHIELD with ability +0x10c set and
+  lock count 0), `0x3a8e50` (movement lock counter), `0x42d0f0` / `0x42d2a0` (combat target splits), `0x4f6470`,
+  `0x575710` (Divert), Lua `0x58d930` / `0x58e370` / `0x58dd10` / `0x58e8e0` [H for the list, M for the meanings].
+- `Merge_Formation` `0x41fa90` (from space vf10 `0x5d1dd0` and vf9 `0x5d68c0`) moves members and creates nothing.
+
+#### 4.6.2 When: the coordinator update, not the order
+- `MovementCoordinatorSystem` update `0x426eb0` runs at common tick `0x3639d0` step 10, after the GOM service
+  (MAIN_LOOP §1.2). Per coordinator, in vector (creation) order: vf5 (+0x28) service; vf9 against the later
+  coordinators; empty coordinators deleted; `0x4f8670`.
+- vf5 (base `0x4f8080`; space `0x5d51e0` calls it, then its own stagger): vf10, then repeat until the call returns
+  true: +0xa8 = 0 → vf11 (`0x4f80c0`, formation steps `0x422b70`); +0xa8 = 1 → vf12 (composition).
+- vf3 add (`0x4f6b60`; land `0x438b40` and space `0x5cf420` reach it) sets +0xa8 := 1. vf4 remove (`0x4f7d30`,
+  space `0x5d5130`) does not.
+- Group move `0x2a7b80` (§6.2): `0x426010` (new, empty coordinator), per admitted unit `0x426d50` + vf3, then
+  `Move_To` `0x4f8200`, which only re-targets the coordinator's **existing** formations (none yet). About 35 other
+  callers of `0x426010` follow the same pattern (vf3 adds, then `0x4f8200`).
+- So the ctor draws of an order come at the **next step 10 after the order**:
+  - player commands (executed before the tick: T2, or main-loop step 10 in SP; MAIN_LOOP §1.1) → the same frame;
+  - Lua object scripts run during the GOM service → the same tick;
+  - AI (T7) and story (T9) orders, issued after step 10 → the next tick [M: from the MAIN_LOOP §1.2 order].
+- Draw order: coordinators in creation order; inside one, in composition order. Draws of other systems that run
+  between the order and step 10 (object services: animation variants, weapons, …) come **before** them.
+
+#### 4.6.3 What the ctor's r does
+- Ctor: F +0x1d8 := now + FPS + r (r = `int(1, FPS)`), F +0x1dc := now − 500.
+- F +0x1d8 is the **next-check timer** shared by:
+  - `0x4192b0` (state 1: guard follow / path copy / re-path, FIGHTER_FLYING §4.11 A and G 2): no members → return;
+    frame < F +0x1d8 → return; then F +0x1d8 := int(float(FPS) + float(frame));
+  - `0x410a60` (states 3 / 4: the arrived re-check): runs when F +0x1d8 ≤ now, then F +0x1d8 := now +
+    int(FPS + 0.5);
+  - writer `0x419f20` (F +0x1d8 := now), whose only caller is Walk `0x61f510` (land).
+- So a new formation's first check runs at its first service with frame ≥ creation frame + 30 + r (31 to 60 frames
+  after creation), then every 30 frames. Land and space alike; for fighters it is the port's FighterFormation `next`.
+- r is used nowhere else. The start / plan frame is F +0x1dc (§1.6): the ctor's now − 500 lets the first plan
+  through at once; the land split overwrites it; the space composition and the other creators keep it.
+
+#### 4.6.4 Space composition `0x5d58f0` (space vf12; log "Service_State_Composition_Changed, FID: %u, COID: %d")
+1. Candidates = the coordinator's objects not already in a formation (`0x4f7260`), in object order. The goal point
+   is computed once, from the first candidate (`0x583150` on the order block +0x40).
+2. While candidates remain:
+   1. Seed = the remaining candidate nearest the goal (strict <: ties keep the earlier one).
+   2. Seed without a type (`0x3973b0`), without a locomotor, or with max speed (`0x370f00`) 0 → **return 1 without
+      clearing +0xa8**: the pass runs again at the next update (with the objects not yet in a formation) [M for the
+      re-run's effect on the formations already made].
+   3. Remove the seed. Role = `Get_Space_Layer` `0x397900(seed, 0)`: `Stationary_Space_Layer` (+0x16e0) when the
+      object is not moving and that value is ≠ 0, else `Space_Layer` (+0x16dc); 4 when `Uses_Multiple_Locomotors`
+      (+0x74) and the locomotor's vf +0x240 is true and vf +0x238 = 2.
+   4. **`0x4f6fb0`: new formation, one ctor draw.** Add the seed (`0x40e0f0`), set the formation kind (locomotor
+      vf +0x238), `Set_Move` with a block variant chosen by the coordinator's move type (+0x64).
+   5. Move type ≠ 4:
+      - **role 0** (fighters, squadron containers, anything without a layer): append to the role-0 list. Unless the
+        seed is locked (`0x39ad40`), recruit, in candidate order, every remaining candidate with all of: the same
+        locomotor vf +0x238; |dx| ≤ max(2 × seed extent x, 0.33 × |seed → goal|) + candidate extent x, and the same
+        for y (z unlimited, 1e18) [M: which extent]; role 0; max speed ≠ 0; min speed(candidate) / max
+        speed(seed) ≤ 0.9 and min speed(seed) / max speed(candidate) ≤ 0.9 (min speed `0x3728f0` = `Min_Speed` ×
+        the multipliers). Recruits join the formation and leave the candidates. No draw;
+      - **roles 1 Capital, 0x20 SuperCapital, 2 Frigate, 4 Corvette:** append to that role's list. **One formation
+        per ship.**
+3. After the loop: unless flag 2 or +0x9d, each role-0 formation gets a vf +0x38 check, then Push `0x41fd30`. Then
+   `0x5d4730` on the capital, frigate, corvette and supercapital lists, in that order (a group goal per role through
+   `0x5cff60` / `0x5d2060` / `0x5d2a60`, per-ship timed-path starts offset by GC `0x140b16bfc` per ship, and an
+   immediate formation step `0x422b70`; no synced draw found [M]). +0xa8 := 0, return 0.
+4. **Draws:** exactly one ctor draw per formation, in seed order (nearest the goal first, roles interleaved). Plan
+   `0x41c1a0` draws only for queued blocks (§1.6). The state-3 float draw in `0x423070` needs
+   `ShouldUseSpaceIdleMovement` (GC 0x140b16d51), false in FoC.
+- Count for one space group move: (admitted objects with a role) + (role-0 groups). A selected squadron is one
+  object, its container (the group move replaces team members by the container, §6.2); squadrons ordered together
+  usually merge into one role-0 formation [M: depends on the box and speed rule above].
+
+#### 4.6.5 What the port needs (t01)
+Port today (`engine/tactical/movement/src/movement_system.cpp`): `move_space` uses the land k-means and
+`split_into_formations` and draws nothing; `fform_order` makes one FighterFormation per key (squadron container or
+lone fighter) per order with `f.next = frame + 30`; `move_land` draws `formation_ctor_draw` per non-queued formation
+**at the order**, with start = now + acc + r − 30 (cu8i).
+1. Draw `int(1, FPS)` once per formation creation, at the movement coordinator update (retail common tick step 10,
+   after the object services), coordinators in creation order, not inside `move()`. Same for land.
+2. Space split: one formation (one draw) per admitted ship whose role (`Stationary_Space_Layer` when stopped and
+   ≠ 0, else `Space_Layer`; 4 for a multi-locomotor kind-2 unit) is nonzero; role-0 objects grouped by the §4.6.4
+   seed / recruit rule, one draw per group; seeds nearest the goal of the first candidate first.
+3. Fighter formations: `f.next` = creation frame + 30 + r (the same r), then + 30 per check. The same timer gates the
+   state-1 re-path / guard check and the arrived re-check of every formation.
+4. Land start (§1.6): the plan gate is F +0x1dc = now + acc + r' − 60, r' = `int(0, PathFrameDelay_seed)` drawn only
+   for seeds with `PathFrameDelay` ≠ 0, before the ctor draws; with no `PathFrameDelay` the formation plans at once,
+   except that one created at frame ≤ 60 waits until frame 61 [M]. Replace the cu8i "start = now + acc + r − 30".
+5. A seed with no locomotor or max speed 0 stops the space pass; it is retried every update (no draw for it).
+6. Goldens move (space ones and the benchmark scenario; land too when the draw moves from the order to step 10).
+
+### 4.7 Formation creations outside a move order (cu8j t02, 2026-11-08) [H unless tagged]
+
+#### 4.7.1 The adopt `0x39bcb0(obj)`: one draw, at once
+Returns without doing anything unless every check passes:
+1. the mode has a coordinator system (mode vf +0x228) and mode vf +0xf8 is false;
+2. the object's parent (+0x2b0) does not have TEAM (+0x348): **team members are never adopted**, only their
+   container;
+3. with a LOCOMOTOR (+0x333): its vf +0x238 = the mode kind (1 land, 2 space);
+4. admission `0x425e30`: a locomotor with vf +0x220 true; not (vf +0x228 and the parent's locomotor vf +0x230); land
+   with its own TEAM: needs vf +0x230; space: `0x39b1a0` (the object is a team member) false; not a
+   TACTICAL_BUILD_OBJECTS (0x29, +0x35b) builder with `0x42e3b0` / `0x42e3d0` non-null; not in vf +0x2b0 states (4,
+   5, 0x28, 0x2b, 0x2c: hyperspace);
+5. no coordinator holds it yet (`0x426140` / `0x4f72e0`).
+
+Then `0x426010` (new coordinator) and vf8 (call 0x39bd9c, return 0x39bda0) → `Issue_Degenerate_Move`: **one
+formation, one ctor draw, immediately** (a degenerate move to the object's own position: it holds there).
+
+Locomotor answers (vtable slots read with the exe):
+
+| Locomotor | vf +0x220 | vf +0x228 | vf +0x230 | vf +0x238 |
+|---|---|---|---|---|
+| Walk, Bike | true | false | false | 1 |
+| LandTeamInfantry | true | **true** | false | 1 |
+| LandTeamContainer | true | false | **true** | 1 |
+| SimpleSpace, Fighter, Flying, LandBomber | true | false | false | 2 |
+| Team (`TEAM_LOCOMOTOR`, `0x6305a0`) | true iff any member's is true | false | false | 2 |
+| JetPack | true | false | false | by state |
+| Starship, Fleet, Simple (`LocomotorBehaviorClass`) | false | false | false | −1 |
+
+So in vanilla every unit with a locomotor qualifies except team members, builders, hyperspacing objects and objects
+already in a coordinator; land team containers qualify through LandTeamContainer; a `Team` container qualifies only
+in space (kind 2).
+
+#### 4.7.2 Callers of `0x39bcb0` (return address into each caller, for traces)
+
+| Caller | Return | What |
+|---|---|---|
+| campaign spawn `0x2a00b0` | 0x2a1bcd | per member not in a team (§4.7.3) |
+| team spawn helper `0x2a5a60` | 0x2a61d5 | per team container (§4.7.3) |
+| garrison leave `0x37a060` | 0x37a369 | |
+| ability activation `0x38a350` | 0x38a96c | |
+| GOM post-load `0x3952e0` | 0x395421 | per object, Load_Map tail (CU8G_T02_ENV_PICK_RE §7) |
+| DEPLOY `0x3a1ce0` | 0x3a1f81 | |
+| movement lock counter `0x3a8e50` | 0x3a8e9a | |
+| stop and hold `0x3a9880` | (below) | |
+| container eject `0x3abb80` | 0x3abdf8 | |
+| StopMovement `0x4261f0` | 0x4265ce | only with type +0x3d4 (`MoveAttackWhileStopped`, unused in FoC XML) |
+| SpecialAbility `0x48ce70` | 0x48cecb | |
+| fleet placement `0x4fca30` / `0x4fd5b0` / `0x4fdfb0` / `0x4fea10` | 0x4fd0a3 / 0x4fdb3d / 0x4fe59d / 0x4fefc5 | per placed object (§4.7.3) |
+| SpaceRetreatCoordinator vf15 `0x532ee0` | 0x533017 | |
+| Fighter locomotor hyperspace finish `0x5c9d40` | 0x5c9e62 | |
+| Landing vf6 `0x630fe0` | 0x63107f | |
+
+**Stop and hold `0x3a9880(obj)`** (with a LOCOMOTOR): locomotor vf +0x138(vf +0x188()), then leave every
+coordinator (`0x426d50`) and adopt (`0x39bcb0`): **one draw**. It is the "stop here" of many ability activations
+(e.g. `0x713a90`, Force Reveal begin: stop, then play anim 0x69) and other callers: `0x3a4070`, `0x443733`,
+`0x4446e1`, `0x58f7a6`, `0x5b07c0`, `0x5b09c8`, `0x630b52`, `0x635ee0` / `0x635f60` / `0x635fc0` / `0x636030`,
+`0x6cc640`, `0x6f3800`, `0x700860`, `0x712600`, `0x719c90`, `0x71a50d`, `0x71adfa`, `0x71c430`, `0x71ce68`,
+`0x71d370` [H for the list, M for what each caller is]. The port has none of these draws.
+
+#### 4.7.3 Unit creation paths
+- **`0x29f810` (create object) adopts nothing** [H]. Exception: an ability that starts active goes through
+  `0x3a82a0` → `0x38a350`, which can adopt or split [M].
+- **Load_Map tail** (`0x2b4440` → `0x3952e0`): every object, in GOM order, through the full predicate; land and
+  space alike [H code]. Traced: one draw on `_MP_LAND_ENDOR` (an Is_Neutral `Land_Speeder`, cu8i), none at Kashyyyk
+  (CU8G §7). Skirmish starting forces and the campaign spawn come later, so it does not cover them.
+- **Team spawn helper `0x2a5a60`:** splits the members into chunks of `Max_Squad_Size` (type +0x1e44, default 10).
+  Per chunk: create the container (type `Create_Team_Type` +0x1e58, else `Team`: CONTAINERS.XML, behaviours TEAM,
+  SELECTABLE, UNIT_AI, TEAM_LOCOMOTOR) through `0x29f810`, position it, `0x2b3670`, `0x3a82a0`, in space the fleet
+  placement positions, then **`0x39bcb0(container)`: one draw per qualifying container**, before the next chunk.
+  Callers (return into each): skirmish company placer `0x29e960` (0x29ecb5), campaign `0x2a00b0` (0x2a1b51),
+  garrison grouping `0x2a5790` (0x2a5a02), reinforcements `0x2bf2d0` (0x2bf743, 0x2bfc2f), REPLENISH_WINGMEN
+  `0x3a2970` (0x3a2c80), SpawnIndigenousUnits `0x531eb0` (0x5320d4), SpawnSquadron / hangar `0x593960` (0x5940be),
+  `0x595a30` (0x595cf9).
+- **Skirmish starting forces** (`0x2a4fc0` → company placer `0x29e960`): the company's units are created first; the
+  helper runs only when the first member's type has `Create_Team` (+0x67). In FoC that is infantry companies,
+  indigenous units, slaves, some heroes (R2-D2, C-3PO, the field commanders) and fighter squadrons. **One draw per
+  container chunk**, after that company's creation draws. Units of other companies (vehicles, ships) are not adopted
+  and draw nothing until their first order.
+- **Campaign spawn `0x2a00b0`** (only caller `0x2a1eb0`, called twice). Per group:
+  1. when `Create_Team`, or always in space: the helper (container draws); when the first member's `Ship_Class`
+     (+0x650) < 7, register for fleet placement (`0x4fc7e0`, which maps a team member to its container);
+  2. each member not in a team (`0x39b1a0` false) → `0x39bcb0`: one draw each (land vehicles, heroes, …);
+  3. at the end, space only: fleet placement `0x4fbb10`. By `Ship_Class` (the first member's, for a container) the
+     `Set_Capital / Lead / Screen / Transport_Ship_Formation` functions place each registered object, then
+     `0x426d50` (it leaves its degenerate coordinator, which is deleted empty at the next update) and `0x39bcb0`:
+     **a second draw per placed object**. The hyperspace-in (vf +0x290(0)) comes after.
+  - So a space battle's start takes about two ctor draws per company with `Ship_Class` 0..6 and one per other
+    company [M: the Kashyyyk trace has 101 draws under `0x2a1eb0` that were not split by creator]. Jabiim (land):
+    `0x2a1eb0` drew nothing (the attackers were in the reinforcement pool).
+- **Reinforcements** (`0x2bf2d0`, hyperspace / landing): the helper, one draw per qualifying container; the landing
+  and the fighter hyperspace finish adopt again (`0x630fe0`, `0x5c9d40`) [M: order relative to the helper].
+
+#### 4.7.4 Jetpack swap re-issue and the hold (`0x3a9910`, §3.1.1 step 4)
+- To the secondary only: the unit leaves every coordinator, a new coordinator is made (`0x426010`), the unit is added
+  (vf3 → +0xa8 := 1) and `Move_To(B)` re-issues the saved order, or a position move to its own position when it had
+  no coordinator (the hold). Move_To makes no formation.
+- The formation comes at the **next coordinator update** (the land composition `0x43e5b0`): **one ctor draw** (plus
+  r' when the type has `PathFrameDelay`, which no vanilla jetpack unit has). The JET_PACK ability (`0x3a38d0`) calls
+  the swap during the object service, so the draw comes at step 10 of the same tick.
+- The swap back to the primary makes no coordinator and no draw. The coordinator the unit left is not recomposed
+  (vf4 does not set +0xa8).
+
+#### 4.7.5 What the port needs (t02)
+1. One `int(1, FPS)` per adopt (the §4.7.1 predicate), **at once**, at: each team container right after its chunk
+   is created (skirmish starting forces with `Create_Team`, reinforcements, REPLENISH_WINGMEN, indigenous spawns,
+   hangar squadron spawns); the campaign spawn (per non-team member, per container, and again per placed object in
+   space); the Load_Map tail pass (land done in cu8i; space too); stop-and-hold `0x3a9880` in the ability activations
+   that call it; DEPLOY, garrison leave, container eject, landing, fighter hyperspace finish, space retreat, lock
+   counter.
+2. The jetpack swap to the secondary: one draw at the next movement update (step 10), not at the swap.
+3. Team spawn order: retail creates each chunk's container and adopts it before the next chunk. The port's helper
+   (`tactical_battle.cpp`) creates the containers after all members, in chunk order: the draws must interleave as
+   retail's.
+4. Keep the predicate: never team members, land `Team` containers (kind 2), builders, hyperspacing objects, or
+   objects already in a coordinator.
+
+#### 4.7.6 Trace plan for Gabriel (settles the [M] counts; optional)
+Kit: `tools/probe_mod/cu8h_probes/` (`run_cu8h_trace.cmd`, `cu8h_dbg.py`; README there). No game change is needed.
+Each ctor draw is one or more HIT lines (one per LCG step of the `int` draw) whose `stack=` (RVAs in hex without
+`0x`, first entry = the PC inside the draw primitive) continues `40d11f,4f6fd4,`: the return inside the ctor, then
+inside the factory. The next RVA names the creator: `43e712` land composition, `5d5c19` space composition, `4f738a`
+degenerate (then the vf8 return `39bda0` and the adopt caller's return from §4.7.2), `4f8518` split, `4f7708` load.
+1. **Kashyyyk space load** (the cu8h galactic space battle): `run_cu8h_trace.cmd --label kashyyyk
+   --stop-mode-frame 120`; press Enter just before the battle starts. Expected under `0x2a1eb0`: one degenerate draw
+   per container (adopt return 0x2a61d5) and one per placed object (0x4fd0a3 / 0x4fdb3d / 0x4fe59d / 0x4fefc5).
+2. **Skirmish land load** (`_MP_LAND_ENDOR`, as cu8h t01): one draw per `Create_Team` chunk under `0x2a4fc0`
+   (adopt return 0x2a61d5), after that company's creation draws.
+3. **Space group move** (skirmish space battle, `--arm-file`, arm just before the order): select one capital ship,
+   one frigate and two fighter squadrons and give one move. Expected at step 10 of that frame (stack through
+   `0x426eb0` and 0x5d5c19): 2 draws for the ships plus 1 per role-0 group (1 when the squadrons merge).
+4. **Jetpack** (land skirmish, a Rocketeer company): activate JET_PACK while moving. Expected: one draw through
+   0x43e712 in the same frame, after that frame's object-service draws.
+
+To list them: `python -c "import sys;[print(l.split(' mf=')[1].split()[0],k[3:7]) for l in open(sys.argv[1]) for k in [l.split('stack=')[-1].split()[0].split(',')] if k[1:3]==['40d11f','4f6fd4']]" <trace log>`
+prints the mode frame and the four RVAs after the factory for each hit (an `int` draw whose rejection loop stepped
+the LCG more than once prints once per step, with the same stack).
 
 ---
 
@@ -1725,7 +1995,7 @@ passability check on the way (§3.5 step 4).
 
 **MoveToObject:** no coordinator. Each unit (the listed ones, or the whole selection when the count is 0) gets `0x39f580(unit, target)` directly.
 
-**StopMovement:** the selection, copied in list order, is passed to `MovementCoordinatorSystem` `0x4261f0`, which removes the units from their coordinators and stops their locomotors. [M] for the stop details.
+**StopMovement:** the selection, copied in list order, is passed to `MovementCoordinatorSystem` `0x4261f0` (cu8j, 2026-11-08) [H]. For each object: vf4 remove on every coordinator; then, in land or for a space object whose role (`0x397900(obj, 1)`) is 0, restart the locomotor and, only when the type has +0x3d4 (`MoveAttackWhileStopped`, in no FoC XML), adopt it (`0x39bcb0`, §4.7: one ctor draw at once); a space object with a nonzero role instead gets a self-move through the group move `0x2a7b80` (a new coordinator; its formation and ctor draw come at the next coordinator update, §4.6.2).
 
 ### 6.3 Target death, attack-move, guard
 
@@ -1770,7 +2040,7 @@ passability check on the way (§3.5 step 4).
 | Dynamic pathfinder | `0x673b10`, `0x675240`, `0x67a0d0`, `0x67a3d0`, `0x679740`, `0x67cef0` |
 | Space planner | `0x59a900`, `0x59d4a0`, `0x596d40`, `0x599170`, `0x599380`, `0x597dc0`, `0x59caa0`, `0x59e5b0`, retries `0x417520` |
 | Locomotors | factory `0x4c3520`, Walk vf6 `0x61e930`, speed `0x61ccd0`, move `0x620820`, conform `0x42bb40`, SimpleSpace vf6 `0x626420`, Fighter vf6 `0x5cb830`, speed getters `0x371160` / `0x376990` / `0x372fe0` / `0x372560` |
-| Formations | `0x43e5b0`, `0x43c1b0`, `0x43aac0`, `0x41a740`, `0x41ece0`, `0x411980`, `0x42d440` |
+| Formations | `0x43e5b0`, `0x43c1b0`, `0x43aac0`, `0x41a740`, `0x41ece0`, `0x411980`, `0x42d440`; creation (cu8j): ctor `0x40d0d0`, factory `0x4f6fb0`, `0x426eb0`, `0x4f8080`, space vf12 `0x5d58f0`, `0x5d4730`, `0x4f7360`, `0x4f84e0`, `0x4f7530`, adopt `0x39bcb0`, `0x425e30`, `0x3a9880`, `0x2a5a60`, `0x29e960`, `0x2a00b0`, `0x4fbb10`, `0x4261f0` |
 | Collision | `0x508170`, `0x50a780`, `0x683790`, `0x686500`, `0x684f90`; crush `0x629fa0` |
 | Orders | §6.1 table, `0x2a7b80`, `0x2a8240`, `0x4f8200` |
 
@@ -1790,7 +2060,7 @@ passability check on the way (§3.5 step 4).
    - team slot threshold `0x140a4431c`.
 6. Whether land ground units ever use the lattice planner of §2.1 (its land branches exist).
 7. Formation speed computation; formup wait styles; `MaxLandFormationFormupFrames`.
-8. Space formation layouts (`0x4fca30`, `0x4fdfb0`, `0x4fd5b0`, `0x4fea10`), `Merge_Formation`, `Split_From_Formation`, `Squadron_Formation_Error_Tolerance`.
+8. ~~Space formations, `Merge_Formation`, `Split_From_Formation`~~ (cu8j: §4.6, §4.7). Still open: the fleet placement geometry of `0x4fca30` / `0x4fdfb0` / `0x4fd5b0` / `0x4fea10` (only their adopt draws are read), `Squadron_Formation_Error_Tolerance`, the space pass re-run after a max-speed-0 seed (§4.6.4).
 9. MovingVsMoving resolution (`0x677650…0x6814f0`), (push and return: resolved, §5.4 / A1_READINGS §40), `TerrainCollisionClass` trigger, footprint field semantics. (The collision **priority sort** of §5.4 is resolved: ascending priority = crowd − age, crowd = 5 × objects in a 160 × 160 box; TACTICAL_GAPS.md §6.7.)
 10. Bike, Flying, JetPack and LandBomber locomotors, LocomotorCommon `0x5070b0` (the shared turn core that reads `Min_Speed_Fraction_For_Turn` +0x3ac), `Stopped_Rate_Of_Turn` (+0x3b0) readers, fighter attack runs and team slot geometry `0x62d620`.
 11. Hyperspace: the camera-dependence of arrival staggering, `Hyperspace_Speed` readers, `Cinematic_Hyperspace_In` / `Resume_Hyperspace_In`.

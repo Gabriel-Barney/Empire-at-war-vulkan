@@ -4962,6 +4962,25 @@ void test_cu8f_super_laser() {
     }
 }
 
+// cu8j t03 (CU8F_T01_T02_T07_RE §2.7 item 4): the jitter-free saber flight stand-in. Luke (v 8, Catch_Dist 15, MFD 250):
+// at 150 units the max travel (250 + R + dz, here 275) stops the saber before it gets back: no catch, end 35 (retail run 1:
+// 35); at 120 units it gets back: caught at step 29, the ability ends 11 frames later (40; retail 43 with the jitter).
+void test_cu8j_saber_flight() {
+    SaberFlight f = saber_flight(150.0f, 150.0f, 275.0f, 8.0f, 15.0f);
+    CHECK(f.catch_step == 0 && f.end == 35);
+    f = saber_flight(120.0f, 120.0f, 275.0f, 8.0f, 15.0f);
+    CHECK(f.catch_step == 29 && f.end == 40);
+    f = saber_flight(120.0f, 120.0f, 0.0f, 8.0f, 15.0f);  // no max travel: the same catch
+    CHECK(f.catch_step == 29 && f.end == 40);
+    f = saber_flight(400.0f, 400.0f, 0.0f, 8.0f, 15.0f);  // unlimited: always caught
+    CHECK(f.catch_step == 99 && f.end == 110);
+    f = saber_flight(5.0f, 5.0f, 275.0f, 8.0f, 15.0f);  // within Catch_Dist at once: caught at the first step
+    CHECK(f.catch_step == 1 && f.end == 12);
+    f = saber_flight(150.0f, 150.0f, 275.0f, 0.0f, 15.0f);  // unknown speed: no flight
+    CHECK(f.catch_step == 0 && f.end == 0);
+    CHECK(kSaberThrowDelay == 7);
+}
+
 int main(int argc, char** argv) {
     const char* golden = nullptr;
     const char* write_golden = nullptr;
@@ -5035,6 +5054,7 @@ int main(int argc, char** argv) {
     test_oi_anim_gates_and_locks();
     test_bribe_hack_accept();
     test_cu8f_abilities_disabled();
+    test_cu8j_saber_flight();
     test_battle(golden, write_golden);
     test_allocations();
     test_save_load_battle();  // N1 stage 2

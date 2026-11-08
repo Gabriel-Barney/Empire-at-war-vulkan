@@ -1,5 +1,5 @@
 {
- "commit": "acb3547a",
+ "commit": "a956c954",
  "scenarios": {
   "geonosis_skirmish": {
    "references": [
@@ -24,7 +24,7 @@
     "outcome.battle_ended": "PASS",
     "outcome.units_final[Empire]": "FAIL",
     "outcome.units_final[Rebel]": "FAIL",
-    "outcome.units_lost[Empire]": "PASS",
+    "outcome.units_lost[Empire]": "FAIL",
     "outcome.units_lost[Rebel]": "PASS"
    },
    "summary": {
@@ -33,8 +33,8 @@
      "N/A": 1
     },
     "battle outcomes": {
-     "FAIL": 2,
-     "PASS": 3
+     "FAIL": 3,
+     "PASS": 2
     },
     "damage": {
      "N/A": 3

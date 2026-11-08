@@ -55,16 +55,18 @@
 //                             a transition [now, now + Holster_Transition_Time frames]; to drawn: DrawWeapon request,
 //                             drawn := 1; to holstered: HolsterWeapon request, drawn := 0 and, when
 //                             Holster_Disable_Engine_Loops, suppress(-1) (each loop's own fade-out).
-//   * saber_throw(id, frame, flight) / saber_catch(id) - Saber_Throw's throw (0x635450) / catch (0x635310): drawn := 0 / 1,
+//   * saber_throw(id, frame) / saber_catch(id) - Saber_Throw's throw (0x635450) / catch (0x635310): drawn := 0 / 1,
 //                             both suppress(fade 0) (the catch too: the hum stays off until a later draw transition completes).
-//                             cu8i t01 (§2.6): the throw also records the thrown saber's catch frame (frame + flight, the
-//                             AbilitySystem's flight stand-in; 0 = none) and the catch clears it. The host passes
-//                             saber_in_flight(id) to holster_service each frame up to and including the catch frame, then
-//                             calls saber_catch on that frame (retail: the held draw transition clears and the hum is
-//                             unsuppressed the frame after the catch).
+//   * saber_schedule(id, throw, catch, end) - cu8j t03 (CU8F_T01_T02_T07_RE §2.7 item 4, the jitter-free stand-in): the
+//                             thrown saber's frames (absolute; catch 0 = no catch). saber_service runs them around the
+//                             host's holster_service each frame: before it, the throw (snap holstered) at the throw frame;
+//                             the saber is in flight (SAP +0x2e8 set) from the throw up to and including the end frame (the
+//                             ability's end, not the catch); after it, the catch snap (drawn) on the catch frame only when
+//                             there is a catch, and the end clears the flight. So the held draw transition clears and the
+//                             hum is unsuppressed the frame after the end (retail §2.6: "catch" = the end).
 //   Frame counts: holster_frames(s, fps) = round-half-away(fps x s) (0x27c9a0 -> 0x22f9c0): 0.17 s -> 5, 15 s -> 450 at 30.
-//   Saved with the flags (save version 3; 2 is still read): attached, drawn, transition start / end frames, last engaged
-//   frame, the thrown saber's catch frame (version 3, cu8i t01).
+//   Saved with the flags (save version 4; 2 and 3 are still read): attached, drawn, transition start / end frames, last
+//   engaged frame, the thrown saber's throw / catch / end frames (version 4, cu8j t03; version 3 had the cu8i catch frame).
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -185,18 +187,53 @@ public:
             if (d.disable_engine_loops) suppress(*o, frame, -1.0f);
         }
     }
-    void saber_throw(combat::ObjectId id, uint32_t frame, uint32_t flight_frames = 0) {  // 0x635450
-        if (Obj* o = snap(id, false, frame)) o->catch_frame = flight_frames > 0 ? frame + flight_frames : 0u;
+    void saber_throw(combat::ObjectId id, uint32_t frame) { (void)snap(id, false, frame); }  // 0x635450
+    void saber_catch(combat::ObjectId id, uint32_t frame) { (void)snap(id, true, frame); }   // 0x635310
+    // cu8j t03: schedule a thrown saber (absolute frames; catch_frame 0 = it dies on its way back, no catch; end_frame >=
+    // throw_frame). Only for an object with a holster (the snaps need it). A new schedule replaces a pending one.
+    void saber_schedule(combat::ObjectId id, uint32_t throw_frame, uint32_t catch_frame, uint32_t end_frame) {
+        Obj* o = find_mut(id);
+        if (!o || !o->holster) return;
+        o->throw_frame = std::max(1u, throw_frame);
+        o->catch_frame = catch_frame;
+        o->end_frame = std::max(o->throw_frame, end_frame);
     }
-    void saber_catch(combat::ObjectId id, uint32_t frame) {  // 0x635310
-        if (Obj* o = snap(id, true, frame)) o->catch_frame = 0;
+    // The host's per-frame saber steps around holster_service(id, ..., saber_in_flight(id), frame): before = true runs a
+    // due throw; before = false runs the catch snap on the catch frame and the end on the end frame.
+    void saber_service(combat::ObjectId id, uint32_t frame, bool before) {
+        Obj* o = find_mut(id);
+        if (!o || o->end_frame == 0) return;
+        if (before) {
+            if (o->throw_frame != 0 && frame >= o->throw_frame) {
+                o->throw_frame = 0;
+                saber_throw(id, frame);
+            }
+            return;
+        }
+        if (o->throw_frame != 0) return;
+        if (o->catch_frame != 0 && frame >= o->catch_frame) {
+            o->catch_frame = 0;
+            saber_catch(id, frame);
+        }
+        if (frame >= o->end_frame) o->end_frame = 0;
     }
-    // cu8i t01: the thrown saber's catch frame (0 = no saber in flight) and whether one is in flight.
-    uint32_t saber_catch_frame(combat::ObjectId id) const {
+    uint32_t saber_throw_frame(combat::ObjectId id) const {  // 0 = none pending
+        const Obj* o = find(id);
+        return o ? o->throw_frame : 0u;
+    }
+    uint32_t saber_catch_frame(combat::ObjectId id) const {  // 0 = no catch pending
         const Obj* o = find(id);
         return o ? o->catch_frame : 0u;
     }
-    bool saber_in_flight(combat::ObjectId id) const { return saber_catch_frame(id) != 0; }
+    uint32_t saber_end_frame(combat::ObjectId id) const {  // 0 = no saber thrown or scheduled
+        const Obj* o = find(id);
+        return o ? o->end_frame : 0u;
+    }
+    // Thrown (SAP +0x2e8 set): from the throw up to and including the end frame.
+    bool saber_in_flight(combat::ObjectId id) const {
+        const Obj* o = find(id);
+        return o && o->end_frame != 0 && o->throw_frame == 0;
+    }
 
     bool has_holster(combat::ObjectId id) const {
         const Obj* o = find(id);
@@ -241,7 +278,9 @@ private:
         // HOLSTER_WEAPON (behaviour +0x40 bone found, +0x50 drawn, +0x44 / +0x48 transition, +0x4c last engaged frame)
         uint8_t holster = 0, drawn = 0;
         uint32_t t_start = 0, t_end = 0, last_engaged = 0;
-        uint32_t catch_frame = 0;  // cu8i t01: Saber_Throw's catch frame while its saber flies (SAP +0x2e8 set); 0 = none
+        // cu8j t03: Saber_Throw's pending throw frame (0 = thrown or none), catch frame (0 = none pending) and end frame
+        // (0 = no saber).
+        uint32_t throw_frame = 0, catch_frame = 0, end_frame = 0;
     };
     Obj* find_mut(combat::ObjectId id) {
         const auto it = lower(id);

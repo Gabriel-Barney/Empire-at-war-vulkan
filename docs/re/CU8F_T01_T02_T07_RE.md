@@ -169,7 +169,7 @@ Behaviour state: +0x40 bone index (−1 = none), +0x44 transition start frame, +
   := 0, and if drawn and `Holster_Disable_Engine_Loops`: **unsuppress**.
 - **After unsuppress** nothing restarts the hum at once: the land locomotor (Walk 0x61e930 etc.) turns idle or
   moving 0 → 1 at its next service (STATION_HANGARS_SOUND §3.3, its moving test [M]).
-- **Saber_Throw** (`Luke_Saber_Throw`, update 0x7141f0, land only): at the throw (anim 0x6c past half its frames [M: 0x395550 / 0x395570 read as frame / count]) it spawns
+- **Saber_Throw** (`Luke_Saber_Throw`, update 0x7141f0, land only; the whole flight in §2.7): at the throw (anim 0x6c past half its frames: frame > 18 of 37 [H, cu8j]) it spawns
   the saber projectile (SAP +0x2e8 := its id) and calls 0x635450: bone to holstered, suppress(0), drawn := 0. At
   the catch (anim 0x6d, saber back within range) it plays 0x6e and calls 0x635310: bone to drawn, suppress(0),
   drawn := 1. 0x635310 **suppresses although it sets drawn**, so after a catch the hum stays off until a later
@@ -261,7 +261,9 @@ Claude drove the retail game. Kit: `tools/probe_mod/cu8h_probes/`, sessions `hum
   - The §2.3 [M] case, "hum stays off after a catch until a later draw transition", needs a flight with no engaged
     boundary. It was not seen [M].
   - Throw to catch took 35 frames (target at about 150 units), 43 frames (about 120 units, moving) and about 27
-    frames (`hum` run).
+    frames (`hum` run). The `hum` figure counts from the draw start (2115), not the throw, which was not logged; §2.7
+    (cu8j) explains 35 and 43 and puts the `hum` throw near 2107. "Catch" here is the ability's end (SAP +0x2e8
+    cleared), which comes 11 frames after a real catch, or when the saber dies on its way back.
   - The second autofire throw against the first target never came: after the catch Luke was in melee, inside the
     20-unit minimum range.
 - **Port.**
@@ -273,6 +275,117 @@ Claude drove the retail game. Kit: `tools/probe_mod/cu8h_probes/`, sessions `hum
   - cu8i t01 (2026-11-08): the port now holds the draw for a stand-in flight (out to the target and back to `Catch_Dist`
     at the `Saber_Name` type's Max_Speed per frame) and calls the catch, so the hum returns the frame after the catch
     (docs/PHASE4.md cu8i).
+
+### 2.7 The thrown saber's flight (cu8j t03, 2026-11-08) [H unless tagged]
+Read from the Saber_Throw ability (vftable 0x8cc020: activation 0x713ff0, update vf4 0x7141f0, end vf15 0x714620),
+Spawn_Projectile 0x54ade0, the LIGHT_SABER projectile step 0x4cf460, its path plan 0x4c8910, the leg builder
+0x4c9990 and the move / expiry 0x4c7050 (S9_DEATH_CLONE_SHIELDS §2.4 has the spline and leg code), the animation
+advance 0x2650f0 and Luke's clips (`RI_SKYWALKER_SWORD_*_00.ALA` in corruption `Models.meg`). Luke = the owner, v =
+the saber's speed, F0 = the throw tick.
+
+**1. Activation** (0x713ff0, after its checks): face the target, SAP +0x2e4 := the target's id, SAP
++0x2d8..+0x2e0 := the target point **at activation** (0x398440: position + `Ranged_Target_Z_Adjust`), 0x3a9840(0x35),
+0x63f060(1), play anim 0x6c SWORD_THROW (index 0xffff, one-shot, blend 0.1, **speed 3.0**). Luke's clips have one
+variant each, so the 0xffff index draws nothing.
+
+**2. The update 0x7141f0** (land only; Luke's behaviour step, which runs before his animation advance in the object
+service, OBJECT_RUNTIME §5.3), by Luke's current clip:
+- **0x6c SWORD_THROW** (37 frames, speed 3: +3 frames per tick, a play call's own tick adds 0): saber not thrown
+  (SAP +0x2e8 = 0x3fffff) and frame > (float)(37 / 2) = 18 → **throw**: spawn `Saber_Name` (0x54ade0: shooter Luke,
+  target the SAP +0x2e4 object, fire-at point SAP +0x2d8, max travel override = the saber's
+  `Projectile_Max_Flight_Distance`), SAP +0x2e8 := its id, play 0x6f (SWORDSPIN) on it, HolsterWeapon snap holstered
+  0x635450 (§2.3). Spawn failure → end the ability. The throw comes 7 or 8 ticks after the activation (frame 21, or
+  18 + float error) [M]. When the clip is finished (state 2, frame clamped to 37 − 2 = 35, 5 ticks after the throw)
+  → play 0x6d SWORD_CONTROL (looped, speed 1).
+- **0x6d SWORD_CONTROL**: if the saber is gone (SAP +0x2e8 = 0x3fffff, id not found, or object flags & 0x42) →
+  **end now** (vf15). Else if the 3D distance Luke → saber < `Catch_Dist` (ability +0x180; Luke 15) → play 0x6e
+  SWORD_CATCH (one-shot, blend 0.1, speed 3) and HolsterWeapon snap drawn 0x635310. Otherwise wait.
+- **0x6e SWORD_CATCH** (30 frames, speed 3): when finished (frame ≥ 28: the 10th advance after the play tick) → end.
+- Any other clip → nothing.
+- **End** (vf15 0x714620): SAP +0x2e8 := 0x3fffff (the "catch" the cu8h `luke` runs logged), then the shared end.
+
+**3. The saber projectile** (`Lukes_Light_Saber`: category 8 LIGHT_SABER, `Max_Speed` 8, `Max_Rate_Of_Turn` 3,
+`Projectile_Max_Flight_Distance` 250, `Projectile_Damage` 13, `Projectile_Stun_Radius` 23, `Damage_Lightsaber`; no
+curve fields, so CD = `Projectile_Rocket_Curve_Distance` default 50 and CO = `Projectile_Rocket_Curve_Offset`
+default 30; `Explode_When_Reached_Target_Radius` and `Projectile_Target_Point_On_Terrain` default No; defaults read
+in the type ctor 0x367250 / flag block 0x367100 at type +0x10):
+- **Speed** v = 0x370f00(type, 0) = `Max_Speed` = 8 per tick (no mode multiplier for category 8).
+- **Max travel** pack +0x6c = 250 + the target's radius (0x397780; plus its container's when the target is a team
+  member) + |fire-at z − spawn z|.
+- **Not serviced on its spawn tick** (objects created during the store loop wait until the next frame; the step also
+  requires creation frame +0x60 < now). Step k (k ≥ 1) runs at tick F0 + k. Newer objects are serviced first, so the
+  saber steps **before** Luke's update in the same tick [M: list direction, OBJECT_RUNTIME §6].
+- **Path plan 0x4c8910** (first step, pack +0x30 null): pack +0x54 := 250 (read only with the Explode flag: unused);
+  new spline; append P0 (the saber's spawn position); **leg 1** 0x4c9990(P0 → T, amp 1.0, lenScale 1.1, land mode 1,
+  groundEnd No, plainEnd yes): n1 = ceil(|T − P0| / 55) points, jitter amplitude 30, the last point (T) plain;
+  **leg 2** 0x4c9990(T → L, amp 0.3, lenScale 1.1, mode 1, groundEnd yes, plainEnd yes), L = Luke's position +
+  `Ranged_Target_Z_Adjust` (7) **at the saber's first step**: n2 = ceil(|L − T| / 55) points, amplitude 9, the last
+  point dropped to the ground under Luke; Build(10); s := 0. T is the activation-time target point: **a target that
+  moves later does not bend the path**.
+- **Synced draws** of the plan (S9 §2.4.5): two `Get_Float` (θ, then a) per jittered point inside the shrunk
+  heightmap box: 2 × (n1 − 1) + 2 × (n2 − 1), leg by leg, at tick F0 + 1. At 120 or 150 units: n1 = n2 = 3, **8
+  draws**. The projectile's creation (0x29f810) may draw too [M].
+- **Each step** (0x4cf460): s += v; sample the spline at s; past the end (s ≥ total length Ltot) → expire where it
+  is (detonation effects, destroyed). Else turn toward the point, move there (no sweep and no direct hit for
+  category 8), travelled += v, and **detonate when travelled ≥ +0x6c**. Then **area damage**: every object of a
+  player hostile to the saber's owner (0x2a9ff0 query, then 0x39a450 [M: "hostile"]), alive (flags & 0x42 clear, not bit 7), not a
+  projectile, with a model, within `Projectile_Stun_Radius` (23, 3D) of the saber → Take_Damage 0x3a9e30(victim,
+  kind pack +0x70, amount pack +0x64 (`Projectile_Damage` 13), source the saber) — **every step**, with no
+  once-per-victim memory.
+
+**4. Throw-to-end frames.** With Ltot the spline length (about |T − P0| + |L − T| plus the jitter detour):
+- the saber dies at step k_d = min(ceil(Ltot / v), ceil(+0x6c / v)) [H];
+- a catch needs a step k_c < k_d whose position is within `Catch_Dist` of Luke, and Luke in 0x6d (from F0 + 6);
+  with Luke standing at L: k_c = floor((Ltot − Catch_Dist) / v) + 1 [H for the rule; the distance along the last
+  leg is approximate];
+- **catch:** end = F0 + k_c + 11 (catch seen in tick F0 + k_c, 0x6e finishes at the 10th advance after its play
+  tick, seen by the next update) [M: from the service order above];
+- **no catch:** end = F0 + k_d + ε, ε = 0 when Luke's update in the same tick already sees the dying saber (flags
+  0x42), 1 otherwise [inferred].
+- **The retail numbers** (§2.6), both explained [inferred: R, Δz and the jitter were not measured]:
+  - 150 units, static target (run 1): Ltot ≈ 300 > +0x6c ≈ 250 + R + Δz, so the saber detonates on its way back,
+    still about 20 or more units from Luke: no catch, end = F0 + ceil(+0x6c / 8) + ε = F0 + 35 when +0x6c is in
+    (264, 280] (R(`Rebel_Trooper`) + Δz ≈ 14 to 30). The `hum` run (same geometry, throw frame not logged) ends at
+    2142, which puts its throw near 2107.
+  - ~120 units, target moving (run 2): Ltot ≈ 240 + e, and the saber gets back before its max travel, so Luke
+    catches it: 43 = k_c + 11 → k_c = 32 → Ltot in [263, 271), i.e. a detour e ≈ 23 to 31 units over 2 × 120 (the
+    two jittered leg-1 points are offset up to 30 units each; d itself is ±10, Luke's position at 1509 was not
+    logged) [inferred].
+  - A farther throw can therefore be **shorter**: once 2d − `Catch_Dist` reaches about the max travel (d ≳ 135 to
+    145 units) the saber never gets back and the ability ends when it dies, about 35 frames after the throw whatever
+    the distance; nearer, it ends 11 frames after the catch.
+- **The port's stand-in** ceil(d / v) + ceil(max(d − Catch_Dist, 0) / v) (cu8i) gives 36 and 29. It differs from
+  retail in kind: no max-travel death (so no "never comes back" case), no 11-frame catch animation, no jitter, and the
+  throw at the apply instead of 7 to 8 frames later. Without a projectile, the closest jitter-free stand-in is: Ltot
+  = |T − P0| + |L − T| (3D, T at the apply, L = the thrower), B = MFD + R(target) + |T.z − P0.z|; k_c =
+  floor((Ltot − Catch_Dist) / v) + 1; if v·k_c < min(Ltot, B): frames = k_c + 11, else frames = min(ceil(Ltot / v),
+  ceil(B / v)) (+ ε); counted from the throw, which comes 7 to 8 frames after the apply. It gives 35 for 150 units
+  (B ≈ 275) and 40 for 120 (retail 43: the jitter detour is missing).
+
+**5. Not audio only.** The thrown saber is a sim object: it takes synced draws (the path jitter, §3 above) and damages
+every hostile object within 23 units of it on every step of its flight. The port spawns nothing (docs/PHASE4.md
+cu8i), so Saber_Throw deals **no damage** in the port and the RNG stream is short by those draws.
+
+**What the port needs (t03):**
+1. Spawn the `Saber_Name` projectile at the throw (anim 0x6c past half, 7 to 8 frames after the apply), owned by
+   the thrower, fire-at point = the target point recorded at the apply, speed `Max_Speed`, max travel = MFD + the
+   target's radius + |Δz|; first step on the next frame.
+2. Plan its path at its first step with the existing rocket code (`engine/tactical/combat/src/rocket.cpp`:
+   `rocket_leg` = 0x4c9990, the spline build and sample): leg 1 P0 → T (amp 1.0, lenScale 1.1, land mode, no ground
+   end, plain end), leg 2 T → the thrower's target point (amp 0.3, lenScale 1.1, land mode, ground end, plain end),
+   Build(10). Draws in that order.
+3. Step it as category 8: sample / expire at the path end, move, travelled ≥ max travel → detonate; no sweep; then
+   the 23-unit area damage (`Projectile_Damage`, `Damage_Type`) to hostile objects every step.
+4. Thrower state machine: SWORD_THROW → SWORD_CONTROL (wait: saber gone → end; within `Catch_Dist` (3D) → play
+   SWORD_CATCH and snap drawn) → SWORD_CATCH finished → end (clear the in-flight id). Feed `EngineLoops` from it:
+   `saber_in_flight` from the throw to the end (not to the catch), `saber_catch` (0x635310) only when a catch happens;
+   a saber that dies on its way back ends the ability with no snap (run 1: the held draw transition completed the
+   frame after the end).
+5. If the projectile is not ported, replace `saber_flight_frames` by the §4 jitter-free stand-in and move the throw
+   7 to 8 frames after the apply.
+6. Confirm with one trace (needs Gabriel; optional): the cu8h `luke` session with the memory watcher also logging
+   the saber object's position and travelled (pack +0x5c) per frame and the target's radius, to fix ε and the
+   catch constant.
 
 ## 3. t07: the Disable_Force_Abilities_Range emitter and the space retreat fallback query
 
@@ -342,6 +455,11 @@ HUD 0x2ded90), after the interdict / `Retreat_Prevention` list check finds no bl
 | 0x6355c0 / 0x635180 / 0x635750 / 0x635950 | HolsterWeapon initialise / placed / service / interpolate |
 | 0x635310 / 0x635450 | HolsterWeapon snap drawn / snap holstered (Saber_Throw) |
 | 0x7141f0 | Saber_Throw update |
+| 0x713ff0 / 0x714620 | Saber_Throw activation / end (vf15, clears SAP +0x2e8); vftable 0x8cc020 |
+| 0x4cf460 / 0x4c8910 | LIGHT_SABER projectile step / its path plan (out to the target, back to the owner) |
+| 0x4c9990 / 0x4c7050 / 0x54ade0 | jittered leg / move and expiry / Spawn_Projectile (S9_DEATH_CLONE_SHIELDS §2.4) |
+| 0x2650f0 / 0x3a92f0 | animation advance (one-shot clamp at count − 2, state 2) / Play_Animation |
+| 0x367250 / 0x367100 | GameObjectType ctor / its flag block at type +0x10 (defaults of +0x7e / +0x7f) |
 | 0x56c230 / 0x56c1b0 | `EnergyPool::Absorb` / energy setter |
 | 0x5545a0 / 0x422040 | `Locomotor_Set_Engines` / stop current move [M] |
 | 0x636260 | DisableForceAbilities service |

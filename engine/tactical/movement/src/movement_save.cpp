@@ -36,7 +36,7 @@ constexpr uint32_t kFighterGridSaveVersion = 1;
 constexpr uint32_t kFighterGridsSaveVersion = 1;
 constexpr uint32_t kDeparturesSaveVersion = 1;
 constexpr uint32_t kEnginesSaveVersion = 1;
-constexpr uint32_t kMovementSaveVersion = 12;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate; 7: S8 t24 turret params (UnitDesc) + TURRET state (Unit); 8: S7 t37 fighter object goal blocks (FighterGuard), FighterSquad::guard_follow; 9: a1k t03 pushed move (Unit::pushed / push_path / push_next / push_blocked), MovementStats::pushes / push_failures, UnitDesc::hard_x / hard_y; 10: s78f t02 fighter formation block stacks (FighterFormation replaces FighterGuard), FighterParams / FighterSquad chase ranges, FighterSquad::speed_cap dropped; 11: s78k t01 UnitDesc::stopped_turn_rate / movement_directions, Unit::forced (land straight move); 12: s78l t02 UnitDesc::rotation_animation_speed, the Walk arrival turn state (Unit::aturn / aturn_rate / tclip / tclip_start / tclip_speed / aturn_ended / aturn_end_pending)
+constexpr uint32_t kMovementSaveVersion = 13;  // 13: cu8j t01 / t02 UnitDesc::stationary_space_layer, Unit::pend / adopted, the pending compositions + last serial; 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate; 7: S8 t24 turret params (UnitDesc) + TURRET state (Unit); 8: S7 t37 fighter object goal blocks (FighterGuard), FighterSquad::guard_follow; 9: a1k t03 pushed move (Unit::pushed / push_path / push_next / push_blocked), MovementStats::pushes / push_failures, UnitDesc::hard_x / hard_y; 10: s78f t02 fighter formation block stacks (FighterFormation replaces FighterGuard), FighterParams / FighterSquad chase ranges, FighterSquad::speed_cap dropped; 11: s78k t01 UnitDesc::stopped_turn_rate / movement_directions, Unit::forced (land straight move); 12: s78l t02 UnitDesc::rotation_animation_speed, the Walk arrival turn state (Unit::aturn / aturn_rate / tclip / tclip_start / tclip_speed / aturn_ended / aturn_end_pending)
 
 // ---- enum validation (switches without default: -Wswitch flags a new enumerator here) ---------------------------
 bool valid_loco_state(uint8_t v) {
@@ -299,6 +299,7 @@ void io_desc(IO& io, D& d) {  // UnitDesc
     io.f32(d.stopped_turn_rate);  // s78k t01 (version 11)
     io.i32(d.movement_directions);
     io.f32(d.rotation_animation_speed);  // s78l t02 (version 12)
+    io.u32(d.stationary_space_layer);  // cu8j t01 (version 13)
 }
 
 template <class IO, class T>
@@ -460,6 +461,8 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.f32(u.fp.min_follow_distance);
     io.f32(u.fp.attack_range);
     io_chase(io, u.fp.chase);  // s78f t02 (version 10)
+    io.u32(u.pend);  // cu8j t01 (version 13)
+    io.b(u.adopted);
 }
 
 template <class IO, class C>
@@ -922,6 +925,15 @@ void MovementSystem::write(ByteWriter& w) const {
         w.u32(static_cast<uint32_t>(g.blocks.size()));
         for (const FighterBlock& b : g.blocks) io_block(out, b);
     }
+    w.u32(pend_serial_);  // cu8j t01 (version 13): the pending compositions, creation order
+    w.u32(static_cast<uint32_t>(pending_.size()));
+    for (const PendingComposition& pc : pending_) {
+        w.u32(pc.serial).boolean(pc.space).boolean(pc.moves).f32(pc.goal.x).f32(pc.goal.y);
+        w.u32(static_cast<uint32_t>(pc.forms.size()));
+        for (const std::vector<ObjectId>& f : pc.forms) out.ids(f);
+        w.u32(static_cast<uint32_t>(pc.offsets.size()));
+        for (const uint32_t o : pc.offsets) w.u32(o);
+    }
 }
 
 bool MovementSystem::read(ByteReader& r) {
@@ -991,6 +1003,26 @@ bool MovementSystem::read(ByteReader& r) {
                 return false;
         }
     }
+    const uint32_t pend_serial = r.u32();  // cu8j t01 (version 13)
+    if (!r.count(n, 22)) return false;
+    std::vector<PendingComposition> pending(n);
+    for (uint32_t k = 0; k < n; ++k) {
+        PendingComposition& pc = pending[k];
+        pc.serial = r.u32();
+        pc.space = r.boolean();
+        pc.moves = r.boolean();
+        pc.goal.x = r.f32();
+        pc.goal.y = r.f32();
+        uint32_t nf = 0;
+        if (!r.count(nf, 4)) return false;
+        pc.forms.resize(nf);
+        for (std::vector<ObjectId>& f : pc.forms) in.ids(f);
+        uint32_t no = 0;
+        if (!r.count(no, 4)) return false;
+        pc.offsets.resize(no);
+        for (uint32_t& o : pc.offsets) o = r.u32();
+        if (!r.ok() || pc.serial == 0 || (k > 0 && pc.serial <= pending[k - 1].serial)) return false;
+    }
     if (!r.ok()) return false;
     // Squadron membership both ways (members are fighter units naming their squadron; a unit naming a squadron is in
     // it): the fighter code relies on it.
@@ -1028,6 +1060,8 @@ bool MovementSystem::read(ByteReader& r) {
     fevents_ = std::move(fevents);
     fforms_ = std::move(fforms);
     fform_internal_ = false;
+    pending_ = std::move(pending);
+    pend_serial_ = pend_serial;
     // The region map is a cache of the grid's effective values (rebuilt, see the header); the rebuild also re-derives
     // every unit's mask slot.
     regions_ = RegionMap{};

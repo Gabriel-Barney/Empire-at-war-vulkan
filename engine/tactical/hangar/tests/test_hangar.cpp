@@ -5,6 +5,7 @@
 // abilities module (Starbase_Upgrade_Ability service -> StationUpgrade + RemoveSilently -> complete_station_upgrade);
 // engine loop requests; a repeat determinism check; and FoC data (ALAMO_FOC_DATA: an Empire station upgraded
 // mid-battle, a Star Destroyer launching and replacing squadrons).
+#include <array>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -591,7 +592,7 @@ void test_holster_weapon() {
 }
 
 // cu8g t01 (§2.3 Saber_Throw): throw = snap holstered + suppress(0); catch = snap drawn + suppress(0) too.
-void test_saber_throw_flight();  // cu8i t01
+void test_saber_throw_flight();  // cu8i t01 / cu8j t03
 
 void test_saber_throw() {
     using Op = EngineLoopOp;
@@ -631,11 +632,13 @@ void test_saber_throw() {
     test_saber_throw_flight();
 }
 
-// cu8i t01 (CU8F_T01_T02_T07_RE §2.6, `luke` run 2): Luke drawn, the saber thrown at 1512 (snap holstered + suppress), the
-// Service starts a draw at 1515 that the flight holds past its end (1520); the host's loop (hg_holster_service: service with
-// saber_in_flight up to and including the catch frame, then the catch) clears the transition and unsuppresses the frame
-// after the catch; the idle loop returns at the next walk service.
-void test_saber_throw_flight() {
+// cu8j t03 (CU8F_T01_T02_T07_RE §2.6 / §2.7, `luke` run 2): Luke drawn, the ability applied at 1505, the saber thrown 7
+// frames later (1512: snap holstered + suppress); the Service starts a draw at 1515 that the flight holds past its end
+// (1520). Caught at step 32 (1544: snap drawn + suppress), the ability ends 11 frames later (1555); the host's loop
+// (hg_holster_service: saber_service before, holster_service with saber_in_flight, saber_service after) clears the
+// transition and unsuppresses the frame after the END, not the catch; the idle loop returns at the next walk service.
+// Run 1 (no catch: the saber dies on its way back): no catch snap, the same return the frame after the end.
+static void run_saber_flight(bool caught) {
     using Op = EngineLoopOp;
     HolsterDesc luke;
     luke.transition_frames = 5;
@@ -647,35 +650,42 @@ void test_saber_throw_flight() {
     e.walk_service(1, false, 1506);
     CHECK(e.holster_drawn(1) && !e.suppressed(1) && e.idle_on(1));
     e.clear_requests();
-    e.saber_throw(1, 1512, 43);  // caught at 1555
-    CHECK(e.saber_catch_frame(1) == 1555 && e.saber_in_flight(1) && !e.holster_drawn(1) && e.suppressed(1));
-    CHECK(e.requests().size() == 1 && e.requests()[0].op == Op::Suppress && e.requests()[0].fade == 0.0f);
-    e.clear_requests();
+    e.saber_schedule(1, 1512, caught ? 1544u : 0u, 1555);
+    CHECK(!e.saber_in_flight(1) && e.saber_throw_frame(1) == 1512 && e.saber_end_frame(1) == 1555 && e.requests().empty());
     auto host_frame = [&](uint32_t f) {  // hg_holster_service's order, then the walk service
-        const uint32_t c = e.saber_catch_frame(1);
-        e.holster_service(1, luke, true, c != 0, f);
-        if (c != 0 && f >= c) e.saber_catch(1, f);
+        e.saber_service(1, f, true);
+        e.holster_service(1, luke, true, e.saber_in_flight(1), f);
+        e.saber_service(1, f, false);
         e.walk_service(1, false, f);
     };
-    uint32_t unsuppressed_at = 0, idle_at = 0, draws = 0, catches = 0;
-    for (uint32_t f = 1513; f <= 1560; ++f) {
+    uint32_t unsuppressed_at = 0, idle_at = 0, draws = 0, throws = 0, catches = 0;
+    for (uint32_t f = 1507; f <= 1560; ++f) {
         host_frame(f);
         for (const EngineLoopRequest& q : e.requests()) {
             if (q.op == Op::DrawWeapon) ++draws;
-            if (q.op == Op::Suppress && q.frame == 1555) ++catches;
+            if (q.op == Op::Suppress && q.frame == 1512) ++throws;
+            if (q.op == Op::Suppress && q.frame == 1544) ++catches;
             if (q.op == Op::Unsuppress && unsuppressed_at == 0) unsuppressed_at = q.frame;
             if (q.op == Op::Loop && q.loop == EngineLoop::Idle && q.start && idle_at == 0) idle_at = q.frame;
         }
         e.clear_requests();
+        if (f == 1511) CHECK(!e.saber_in_flight(1) && e.holster_drawn(1));  // before the throw
+        if (f == 1512) CHECK(e.saber_in_flight(1) && !e.holster_drawn(1) && e.suppressed(1));
         if (f == 1520 || f == 1554) CHECK(e.holster_transitioning(1) && e.suppressed(1));  // held while the saber flies
+        if (f == 1550) CHECK(e.saber_in_flight(1));                                           // in flight past the catch
+        if (f == 1555) CHECK(!e.saber_in_flight(1));
     }
-    CHECK(draws == 1 && catches == 1 && unsuppressed_at == 1556 && idle_at == 1556);
+    CHECK(draws == 1 && throws == 1 && catches == (caught ? 1u : 0u) && unsuppressed_at == 1556 && idle_at == 1556);
     CHECK(!e.saber_in_flight(1) && e.holster_drawn(1) && !e.holster_transitioning(1) && !e.suppressed(1) && e.idle_on(1));
-    // A thrown saber with no flight (0) records nothing; objects without the behaviour ignore the throw.
-    e.saber_throw(1, 1600, 0);
-    CHECK(!e.saber_in_flight(1));
-    e.saber_throw(2, 1600, 30);
-    CHECK(!e.saber_in_flight(2) && !e.has_holster(2));
+    // Objects without the behaviour ignore the schedule.
+    e.saber_schedule(2, 1600, 0, 1630);
+    CHECK(!e.saber_in_flight(2) && e.saber_end_frame(2) == 0 && !e.has_holster(2));
+}
+
+void test_saber_throw_flight() {
+    run_saber_flight(true);
+    run_saber_flight(false);
+    // The stand-in (ta::saber_flight) is checked in the abilities tests; save round trip below (scripted saves).
 }
 
 // The same script twice gives the same hashed state and draws; a different script differs.
@@ -1577,13 +1587,14 @@ void test_contents_production_loops_save() {
     e.holster_attach(7, 3);
     e.holster_service(7, hd, true, false, 15);
     CHECK(!e.requests().empty() && e.holster_transitioning(7) && e.holster_drawn(7));
-    e.holster_attach(8, 3);  // cu8i t01 (version 3): a saber in flight, caught at 4 + 30
-    e.saber_throw(8, 4, 30);
+    e.holster_attach(8, 3);  // cu8j t03 (version 4): a saber in flight (thrown at 4), caught at 30, ending at 34
+    e.saber_schedule(8, 4, 30, 34);
+    e.saber_service(8, 4, true);
     const std::vector<uint8_t> eb = bytes_of(e);
     ByteReader re(eb);
     CHECK(e2.read(re) && bytes_of(e2) == eb && e2.moving_on(5) && !e2.idle_on(3) && e2.requests().size() == e.requests().size());
     CHECK(e2.has_holster(7) && e2.holster_drawn(7) && e2.holster_transitioning(7) && e2.holster_last_engaged(7) == 15 &&
-          e2.suppressed(7) && e2.saber_catch_frame(8) == 34 && e2.saber_in_flight(8) && !e2.saber_in_flight(7));
+          e2.suppressed(7) && e2.saber_catch_frame(8) == 30 && e2.saber_end_frame(8) == 34 && e2.saber_in_flight(8) && !e2.saber_in_flight(7));
     bool same_requests = true;
     for (size_t i = 0; i < e.requests().size(); ++i) {
         const EngineLoopRequest &a = e.requests()[i], &b = e2.requests()[i];
@@ -1609,22 +1620,36 @@ void test_contents_production_loops_save() {
         ByteReader t(std::span<const uint8_t>(eb.data(), len));
         if (e3.read(t)) ++accepted;
     }
-    // version, 4 objects (25 bytes each), request count, then the first request's id and loop byte
+    // version, 4 objects (33 bytes each), request count, then the first request's id and loop byte
     bad = eb;
-    bad[4 + 4 + 100 + 4 + 4] = 9;
+    bad[4 + 4 + 132 + 4 + 4] = 9;
     ByteReader reb(bad);
     CHECK(accepted == 0 && !e3.read(reb) && bytes_of(e3) == e3_before);
-    // cu8i t01: version 2 (no catch frame) still reads, with no saber in flight; other versions do not.
-    for (const uint32_t version : {2u, 1u, 4u}) {
+    // cu8i t01: version 2 (no catch frame) still reads, with no saber in flight; cu8j t03: version 3 (the catch frame 40:
+    // in flight up to it, which is also the end) too; other versions do not.
+    for (const uint32_t version : {2u, 3u, 1u, 5u}) {
         ByteWriter w2;
         w2.u32(version).u32(1);
         w2.i32(4).u8(0).u8(0).u8(1).u8(1).u8(1).u32(10).u32(15).u32(10);
+        if (version == 3) w2.u32(40);
         w2.u32(0);
         EngineLoops e4(10.0f);
         ByteReader r4(w2.bytes());
         const bool ok = e4.read(r4);
-        CHECK(ok == (version == 2));
-        if (ok) CHECK(e4.has_holster(4) && e4.holster_drawn(4) && e4.suppressed(4) && !e4.saber_in_flight(4));
+        CHECK(ok == (version == 2 || version == 3));
+        if (ok) CHECK(e4.has_holster(4) && e4.holster_drawn(4) && e4.suppressed(4) && e4.saber_in_flight(4) == (version == 3));
+        if (ok && version == 3) CHECK(e4.saber_catch_frame(4) == 40 && e4.saber_end_frame(4) == 40);
+    }
+    {  // version 4: an end frame before the throw, or a throw / catch without an end, is refused
+        for (const std::array<uint32_t, 3> t : {std::array<uint32_t, 3>{50, 0, 40}, std::array<uint32_t, 3>{50, 60, 0}}) {
+            ByteWriter w2;
+            w2.u32(4).u32(1);
+            w2.i32(4).u8(0).u8(0).u8(1).u8(1).u8(1).u32(10).u32(15).u32(10).u32(t[0]).u32(t[1]).u32(t[2]);
+            w2.u32(0);
+            EngineLoops e4(10.0f);
+            ByteReader r4(w2.bytes());
+            CHECK(!e4.read(r4));
+        }
     }
 }
 
