@@ -9,7 +9,7 @@
 #include "alamo/data/xml.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/type_fields.hpp"
-#include "alamo/sim/campaign_battles.hpp"
+#include "alamo/sim/l1_loaders.hpp"
 #include "alamo/sim/tactical_battle.hpp"
 #ifdef ALAMO_SIM_HAVE_ANIM
 #include "alamo/sim/sim_anim.hpp"
