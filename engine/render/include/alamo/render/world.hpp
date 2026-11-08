@@ -180,6 +180,16 @@ public:
     void update(float dt);
     // Environment skydome objects for the sky cube (instances at the origin with their skydome transform).
     void set_sky(std::span<const Instance> sky);
+    // cu8g t03: the clouds of a new environment (Set_New_Environment, TERRAIN_WATER_POST §5.3 step 4): scale and
+    // velocity at once (the offset keeps accumulating); a different texture is uploaded through the init() texture
+    // source and swapped in by make_resident() once its upload is done (new bindless slot, terrain texture sets
+    // rewritten; the old texture keeps drawing until then and stays owned until shutdown). Before init(): scale and
+    // velocity only.
+    void set_clouds(const terrain::CloudParams& clouds);
+    float cloud_scale() const { return cloud_scale_; }
+    float cloud_velocity_x() const { return cloud_vel_[0]; }
+    float cloud_velocity_y() const { return cloud_vel_[1]; }
+    const std::string* cloud_texture_name() const;  // the drawn (or pending) cloud texture, null = none
     const WorldStats& stats() const { return stats_; }
     // Switch between the batched and the reference (unbatched) terrain / water draws (WorldOptions::batch_draws).
     void set_batch_draws(bool batched) { options_.batch_draws = batched; }
@@ -273,6 +283,8 @@ private:
     MaterialGpu materials_[terrain::kMaterialSlots];
     std::vector<GpuTexture> textures_;
     int cloud_texture_ = -1;
+    int pending_cloud_ = -1;  // cu8g t03: set_clouds' texture while its upload is in flight
+    void swap_pending_cloud();
     std::shared_ptr<const materials::MaterialEffect> terrain_fx_;
     const materials::ResolvedPass* terrain_pass_ = nullptr;
     // Water.

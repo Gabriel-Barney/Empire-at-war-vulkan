@@ -383,6 +383,11 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
     ropt = render::RecordOptions{};
     ropt.threads = gpu.js->worker_count();
     scene_->apply(ropt);
+    // cu8g t03: the battle's active environment (a battle loaded from a save may already run another one than the map's
+    // start environment); the GPU side follows on the scene's first update().
+    env_known_ = b->environment_set();  // untouched battles keep the scene's start environment
+    env_wanted_ = b->environment_index();
+    if (env_known_) scene_->set_environment(env_wanted_);
     models_ = std::make_unique<render::StreamedSimModels>(table_, *gpu.streamer);
 #ifdef ALAMO_RENDER_HAVE_ANIM_DRIVER
     pose_fn_ = [this](objects::ObjectId id, const render::GpuModel& m) {
@@ -404,9 +409,8 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
         return false;
     }
     prender_.set_sort_range(render::MapScene::kFar);
-    // cu8f t05 (CU8F_T03_T05_RE §2.2): the scene wind at map load (land: the active environment's, space: zero). The port
-    // has no host for Set_New_Environment / the typed environment pick yet (the Lua call is only recorded), so this is
-    // the only write.
+    // cu8f t05 (CU8F_T03_T05_RE §2.2): the scene wind at map load (land: the active environment's, space: zero); cu8g t03:
+    // rewritten by apply_environment after Set_New_Environment.
     prender_.set_wind(scene_->scene_wind());
     pattach_ = std::make_unique<render::particles::ProxyAttachments>(*pworld_, *plib_);
 #endif
@@ -581,6 +585,7 @@ void BattleView::stop(GpuCore& gpu) {
     if (scene_) scene_->stop(gpu.renderer);
     gpu.renderer.set_world(nullptr);
     scene_.reset();
+    env_known_ = false;
     models_.reset();
     builder_.reset();
     buffer_.clear();
@@ -619,9 +624,14 @@ void BattleView::capture(const GameSession& session) {
     const sim::SimHost& host = session.host();
     auto snap = std::make_shared<render::SimSnapshot>();
     const ParallelFor pf = jobs::make_parallel_for(*gpu_->js);
-    if (const sim::TacticalBattle* b = session.battle())  // S8 t31: every tick's cues, also when no snapshot is made
+    if (const sim::TacticalBattle* b = session.battle()) {  // S8 t31: every tick's cues, also when no snapshot is made
         if (const sim::TacticalMode* tm = host.modes().top_tactical())
             track_lob_chargeups(lob_chargeups_, tsw_cues(b->special_weapon_events(), tm->primary()));
+        if (b->environment_set()) {  // cu8g t03: Set_New_Environment ran (applied by prepare)
+            env_wanted_ = b->environment_index();
+            env_known_ = true;
+        }
+    }
     if (!render::capture_snapshot(host, table_, *snap, pf)) return;
     if (const sim::TacticalBattle* b = session.battle()) {
         render::apply_battle_state(*b, *snap, &table_, &beam_styles_);  // R5: + the ability beam records
@@ -746,11 +756,23 @@ void BattleView::prepare(GpuCore& gpu, float alpha) {
         jam_models_.build(gpu.renderer, jam_tex, frame_, ground, main);
     }
     if (scene_) {
+        apply_environment();  // cu8g t03: before update(), which re-applies it on the GPU side
         scene_->update(gpu.renderer, *gpu.streamer);
         if (p.curr) scene_->set_sim_tick(p.curr->tick);
         sky.assign(scene_->sky().begin(), scene_->sky().end());
     }
     sky.insert(sky.end(), bg_.begin(), bg_.end());
+}
+
+// cu8g t03 (CU8F_T03_T05_RE §2.2): the battle's environment changed (Set_New_Environment): lighting / fog / clouds / sky
+// through MapScene (GPU side on its next update), the particle wind from the new environment (land; space stays zero).
+// use_scene() hands the new lighting to the renderer each frame as well.
+void BattleView::apply_environment() {
+    if (!scene_ || !env_known_ || env_wanted_ == scene_->environment_index()) return;
+    if (!scene_->set_environment(env_wanted_)) return;
+#ifdef ALAMO_PARTICLES_HAVE_SIM
+    if (prender_.initialized()) prender_.set_wind(scene_->scene_wind());
+#endif
 }
 
 // R5 fog of war: the latest snapshot's copy of the local player's grid (an empty input disables the world's fog).

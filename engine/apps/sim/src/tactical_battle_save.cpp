@@ -12,7 +12,7 @@ namespace alamo::sim {
 
 namespace {
 
-constexpr uint32_t kBattleStateVersion = 8;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: q6 attacks on TEAM containers / s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save) (two branches); 8: both merged
+constexpr uint32_t kBattleStateVersion = 9;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: q6 attacks on TEAM containers / s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save) (two branches); 8: both merged; 9: cu8g t03 active environment (env index, set flag, weather env)
 constexpr uint32_t kBattlePartVersion = 1;
 
 // One module system in a part: presence flag + a section with its own write (nothing when it has no write / read).
@@ -103,6 +103,7 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     a(b.fog_pings_, b.fog_on_, b.fog_global_active_, b.fog_global_render_);
     // L1 systems
     a(b.l1_desc_cache_, b.l1_in_asteroid_, b.l1_weather_started_, b.fog_weather_dirty_);
+    a(b.l1_weather_env_, b.env_set_, b.env_index_);  // cu8g t03: active environment (state version 9)
     a.seq(b.l1_trackers_, [](auto& x, auto& t) { x(t.id, t.acc, t.rate, t.next); });
     a(b.l1_final_blow_);
     a.seq(b.l1_bombard_, [](auto& x, auto& s) {

@@ -823,6 +823,77 @@ void test_scene_wind() {
     m.terrain.present = false;  // space: never written
     w = render::scene_wind(m);
     CHECK(w.x == 0.0f && w.y == 0.0f && w.z == 0.0f);
+    // cu8g t03: the wind of the environment Set_New_Environment made active (index form; clamped to n - 1), space zero.
+    m.terrain.present = true;
+    m.environments.start_index = 0;
+    w = render::scene_wind(m, 1);
+    CHECK(std::fabs(w.x) < 1e-4f && near_eq(w.y, 10.0f));
+    w = render::scene_wind(m, 0);
+    CHECK(near_eq(w.x, 7.0f) && std::fabs(w.y) < 1e-4f);
+    w = render::scene_wind(m, 9);  // clamped to the last environment
+    CHECK(std::fabs(w.x) < 1e-4f && near_eq(w.y, 10.0f));
+    CHECK(render::active_environment(m, 9) == &m.environments.environments[1] && render::active_environment(m, 0) == &m.environments.environments[0]);
+    m.terrain.present = false;
+    w = render::scene_wind(m, 1);
+    CHECK(w.x == 0.0f && w.y == 0.0f && w.z == 0.0f);
+    terrain::MapData none;
+    CHECK(render::active_environment(none, 0) == nullptr);
+    none.terrain.present = true;
+    w = render::scene_wind(none, 3);  // land without environments: the record ctor default
+    CHECK(near_eq(w.x, 2.0f) && w.z == 0.0f);
+    // A scene without a map has no environment to switch to.
+    render::MapScene empty;
+    CHECK(!empty.set_environment(1) && empty.environment_index() == 0 && empty.environment() == nullptr);
+    // WorldRenderer::set_clouds before init: scale / velocity only (the offset keeps accumulating from there).
+    render::WorldRenderer world;
+    world.update(1.0f);  // default velocity (5, 5)
+    terrain::CloudParams cp;
+    cp.scale = 800.0f;
+    cp.velocity[0] = 1.0f;
+    cp.velocity[1] = -2.0f;
+    cp.texture = "W_Clouds01.tga";
+    world.set_clouds(cp);
+    world.update(1.0f);
+    CHECK(near_eq(world.cloud_scale(), 800.0f) && near_eq(world.cloud_velocity_x(), 1.0f) && near_eq(world.cloud_velocity_y(), -2.0f));
+    CHECK(near_eq(world.cloud_offset_x(), 6.0f) && near_eq(world.cloud_offset_y(), 3.0f) && world.cloud_texture_name() == nullptr);
+}
+
+// cu8g t03 (real data): MapScene::set_environment before start() switches the active environment of a loaded land map:
+// lighting(), environment() and scene_wind() follow it; out of range clamps; the same index changes nothing.
+void test_scene_environment_real() {
+    const char* data = std::getenv("ALAMO_FOC_DATA");
+    const std::string root = data ? data : "";
+    if (root.empty()) {
+        std::printf("scene environment: ALAMO_FOC_DATA not set, skipped\n");
+        return;
+    }
+    vfs::VfsConfig cfg;
+    cfg.foc_root = root;
+    std::string err;
+    auto files = vfs::Vfs::create(cfg, &err);
+    CHECK(files != nullptr);
+    if (!files) return;
+    render::MapScene scene;
+    CHECK(scene.load(*files, "_LAND_PLANET_BYSS_KIDNAPPING", nullptr, serial_for, &err));
+    const std::vector<terrain::Environment>& envs = scene.map().environments.environments;
+    std::printf("scene environment: %zu environments, start %u\n", envs.size(), scene.environment_index());
+    CHECK(!envs.empty() && !scene.space());
+    if (envs.empty()) return;
+    const uint32_t n = static_cast<uint32_t>(envs.size());
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint32_t before = scene.environment_index();
+        CHECK(scene.set_environment(i) == (i != before));
+        CHECK(scene.environment_index() == i && scene.environment() == &envs[i]);
+        CHECK(!scene.set_environment(i));  // already active
+        const std::array<float, 3> wv = envs[i].wind_vector();
+        const Float3 w = scene.scene_wind();
+        CHECK(near_eq(w.x, wv[0]) && near_eq(w.y, wv[1]) && w.z == 0.0f);
+        const render::Lighting l = render::Lighting::from_environment(envs[i], false);
+        CHECK(near_eq(scene.lighting().sun.intensity, l.sun.intensity) && near_eq(scene.lighting().fog_start, l.fog_start) &&
+              scene.lighting().fog_enabled == l.fog_enabled && scene.lighting().skydome[0] == l.skydome[0]);
+    }
+    scene.set_environment(n + 5);
+    CHECK(scene.environment_index() == n - 1);
 }
 
 void test_png() {
@@ -1039,6 +1110,7 @@ int main() {
     test_type_resolution();
     test_cloud_slots();
     test_scene_wind();
+    test_scene_environment_real();
     std::printf("cpu: %s\n", g_fail ? "FAILED" : "ok");
     const int gpu = run_gpu(ALAMO_RENDER_SOURCE_DIR);
     if (gpu) ++g_fail;

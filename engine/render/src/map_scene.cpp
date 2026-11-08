@@ -286,6 +286,36 @@ void MapScene::clear_loaded() {
     files_ = nullptr;
     space_ = false;
     masks_dirty_ = false;
+    env_index_ = 0;
+    env_dirty_ = false;
+}
+
+// lighting_ from the active environment; without one the mode's default (land / space).
+void MapScene::lighting_from_environment() {
+    const terrain::Environment* env = environment();
+    // Space too: the main scene keeps the environment's fill lights (SPACE_AND_OPEN.md 0 item 2); the renderer
+    // zeroes them for the background scene only (RecordOptions::space).
+    if (env) lighting_ = Lighting::from_environment(*env, false);
+    else if (space_) {
+        lighting_ = Lighting::space_default();
+        lighting_.space = false;
+    } else {
+        lighting_ = Lighting::land_default();
+    }
+}
+
+// cu8g t03 (CU8F_T03_T05_RE §2.2): mode vf25 on the render side. The CPU part now, the GPU part on the next update().
+bool MapScene::set_environment(uint32_t index) {
+    const size_t n = map_.environments.environments.size();
+    if (n == 0) return false;
+    const uint32_t i = index < n ? index : static_cast<uint32_t>(n - 1);
+    if (i == env_index_) return false;
+    env_index_ = i;
+    lighting_from_environment();
+    env_dirty_ = started_;
+    const terrain::Environment* env = environment();
+    log::infof("render", "map: environment %u (%s) active", i, env ? env->name.c_str() : "");
+    return true;
 }
 
 bool MapScene::load(const FileProvider& files, std::string_view map, const GameTypeResolver* resolver, const ParallelFor& parallel,
@@ -397,16 +427,10 @@ bool MapScene::load_impl(const FileProvider& files, std::string_view map, const 
         placement_model_.push_back(it->second);
     }
     stats_.distinct_models = static_cast<uint32_t>(models_.size());
-    const terrain::Environment* env = map_.environments.start();
-    // Space too: the main scene keeps the environment's fill lights (SPACE_AND_OPEN.md 0 item 2); the renderer
-    // zeroes them for the background scene only (RecordOptions::space).
-    if (env) lighting_ = Lighting::from_environment(*env, false);
-    else if (space_) {
-        lighting_ = Lighting::space_default();
-        lighting_.space = false;
-    } else {
-        lighting_ = Lighting::land_default();
-    }
+    // The start environment (EnvironmentSet::start(): an out-of-range start index falls back to 0).
+    env_index_ = map_.environments.start_index < map_.environments.environments.size() ? map_.environments.start_index : 0u;
+    env_dirty_ = false;
+    lighting_from_environment();
     // Fog (SPACE_AND_OPEN.md B.1 [H]): the active environment's fog always wins; the 0x100/2 scene-fog block
     // is overwritten on every environment apply, so it is ignored here.
     log::infof("render", "map %s: fog from the start environment (%s, %.0f..%.0f)", std::string(map).c_str(),
@@ -477,9 +501,11 @@ bool MapScene::set_hardpoint_destroyed(size_t placement, std::string_view hardpo
 bool MapScene::start(Renderer& r, ModelStreamer& streamer, assets::AssetCache& cache, const WorldOptions& options,
                      std::string* error) {
     r.set_lighting(lighting_);
+    cache_ = &cache;
+    env_dirty_ = false;
     if (space_) r.set_object_fade(kSpaceObjectFadeBegin, kSpaceObjectFadeEnd);
     else r.set_object_fade(kLandObjectFadeBegin, kLandObjectFadeEnd);
-    terrain::CloudParams clouds = terrain::effective_clouds(map_, map_.environments.start());
+    terrain::CloudParams clouds = terrain::effective_clouds(map_, environment());
     if (space_) clouds.texture.clear();  // no terrain: no cloud shadows
     const TextureSource tex = [&cache](std::string_view n, assets::TextureRole role) { return cache.texture(n, role); };
     WorldOptions wo = options;
@@ -507,8 +533,17 @@ bool MapScene::start(Renderer& r, ModelStreamer& streamer, assets::AssetCache& c
         load_idle_anim(cache, models_[placement_model_[i]], ti ? *ti : TypeRenderInfo{}, placement_anim_[i]);
         stats_.background_animated += placement_anim_[i].clip ? 1u : 0u;
     }
-    sky_handles_.clear();
     sky_instances_.clear();
+    request_sky(streamer, cache);
+    finished_seen_ = UINT32_MAX;
+    ready_ = false;
+    instances_.clear();
+    return true;
+}
+
+// The environment skydomes (lighting_.skydome) on the streamer; update() replaces sky() once they are finished.
+void MapScene::request_sky(ModelStreamer& streamer, assets::AssetCache& cache) {
+    sky_handles_.clear();
     sky_done_ = false;
     sky_anim_[0] = sky_anim_[1] = IdleAnim{};
     for (int k = 0; k < 2; ++k) {
@@ -528,14 +563,21 @@ bool MapScene::start(Renderer& r, ModelStreamer& streamer, assets::AssetCache& c
             stats_.background_animated += sky_anim_[k].clip ? 1u : 0u;
         }
     }
-    finished_seen_ = UINT32_MAX;
-    ready_ = false;
-    instances_.clear();
-    return true;
 }
 
 void MapScene::update(Renderer& r, ModelStreamer& streamer) {
-    (void)r;
+    if (env_dirty_ && started_) {  // cu8g t03: re-apply the active environment (set_environment)
+        env_dirty_ = false;
+        r.set_lighting(lighting_);  // lighting, fog, clear colour
+        if (!space_) world_.set_clouds(terrain::effective_clouds(map_, environment()));  // no terrain in space: no clouds
+        if (space_) {  // the old domes' poses live in sky_anim_, which request_sky resets: drop them now
+            for (int k = 0; k < 2; ++k)
+                if (sky_anim_[k].clip && stats_.background_animated > 0) --stats_.background_animated;
+            sky_instances_.clear();
+            background_ = bg_placements_;
+        }
+        if (cache_) request_sky(streamer, *cache_);  // land: the old (static) domes stay in sky() until the new ones are finished
+    }
     world_.make_resident();
     // Instances of every ready model (rebuilt when the number of finished models changes).
     uint32_t finished = 0, ready = 0, failed = 0;
@@ -837,11 +879,21 @@ OrbitCamera MapScene::tactical_camera(float aspect, float distance_override) con
     cam.radius = dist;
     return cam;
 }
-Float3 scene_wind(const terrain::MapData& map) {
+namespace {
+Float3 wind_of(const terrain::MapData& map, const terrain::Environment* env) {
     if (map.is_space()) return {0, 0, 0};  // space mode's environment changes never write the wind (§2.2)
-    const terrain::Environment* env = map.environments.start();
     const std::array<float, 3> w = env ? env->wind_vector() : terrain::Environment{}.wind_vector();
     return {w[0], w[1], w[2]};
+}
+}  // namespace
+
+Float3 scene_wind(const terrain::MapData& map) { return wind_of(map, map.environments.start()); }
+Float3 scene_wind(const terrain::MapData& map, uint32_t env_index) { return wind_of(map, active_environment(map, env_index)); }
+
+const terrain::Environment* active_environment(const terrain::MapData& map, uint32_t index) {
+    const std::vector<terrain::Environment>& e = map.environments.environments;
+    if (e.empty()) return nullptr;
+    return &e[index < e.size() ? index : e.size() - 1];
 }
 
 }  // namespace alamo::render

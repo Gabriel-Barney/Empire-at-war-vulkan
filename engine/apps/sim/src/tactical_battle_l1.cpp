@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/dmath.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/objects/game_object_types.hpp"
@@ -654,14 +655,26 @@ void TacticalBattle::l1_tsw_debris(TacticalMode& mode, const ta::SpecialWeaponEv
 // ---- tactical weather (land; L1_S4_REMAINING §3.2) ----
 void TacticalBattle::l1_weather_tick(SimRng& rng) {
     if (space_ || !l1_weather_data_) return;
-    if (!l1_weather_started_) {  // the first service's re-init starts the map environment's scenario
+    const uint32_t env_now = environment_index();
+    if (!l1_weather_started_ || l1_weather_env_ != env_now) {
+        // Re-init (0x468a50): the first service starts the active environment's scenario; cu8g t03: a changed
+        // environment index (Set_New_Environment) restarts the weather with the new environment's scenario, and a
+        // missing scenario / no phases turns it off (§3.2). An unchanged index re-inits nothing.
+        const bool restart = l1_weather_started_;
         l1_weather_started_ = true;
+        l1_weather_env_ = env_now;
         const terrain::EnvironmentSet& env = map_.environments;
         std::string name;
-        if (env.start_index < env.environments.size()) name = env.environments[env.start_index].weather_effect;
+        if (env_now < env.environments.size()) name = env.environments[env_now].weather_effect;
         const tactical::combat::WeatherScenario* sc = l1_weather_data_->find(name);
-        if (!sc) return;
-        l1_weather_.start(sc, l1_weather_data_.get(), frame_, rng);
+        if (restart) {
+            l1_weather_note_fow();  // events raised between ticks reach the fog before start() clears them
+            l1_weather_.start(sc, l1_weather_data_.get(), frame_, rng);  // null / no phases: weather off, no draw
+            combat_->set_weather_accuracy(l1_weather_.accuracy_row());   // off: the all-1 row
+        } else {
+            if (!sc) return;
+            l1_weather_.start(sc, l1_weather_data_.get(), frame_, rng);
+        }
         l1_used_ = true;
     } else {
         l1_weather_note_fow();  // Int-final: events raised between ticks (Force_Weather) reach the fog first
@@ -677,6 +690,40 @@ void TacticalBattle::l1_weather_tick(SimRng& rng) {
 void TacticalBattle::l1_weather_note_fow() {
     for (const tactical::combat::WeatherEvent& e : l1_weather_.events())
         if (e.kind == tactical::combat::WeatherEvent::Kind::FowDirty) fog_weather_dirty_ = true;
+}
+
+// cu8g t03: mode vf25 (0x276ff0): index := clamp(arg, 0, n - 1). The weather follows on its next service.
+bool TacticalBattle::set_environment(int32_t index) {
+    const size_t n = map_.environments.environments.size();
+    if (n == 0) return false;  // [port] retail's clamp to n - 1 = -1 is not modelled: nothing changes
+    const int32_t hi = static_cast<int32_t>(std::min<size_t>(n - 1, 0x7fffffff));
+    env_index_ = static_cast<uint32_t>(std::clamp(index, 0, hi));
+    env_set_ = true;
+    return true;
+}
+
+// cu8g t03: mode vf27 (0x2770e0) with the draw left to the caller (see the header: RNG stream not traced).
+bool TacticalBattle::set_environment_of_weather_type(uint32_t type, const std::function<uint32_t(uint32_t count)>& pick) {
+    const std::vector<terrain::Environment>& envs = map_.environments.environments;
+    const uint32_t n = static_cast<uint32_t>(envs.size());
+    if (n == 0) return false;
+    auto draw = [&pick](uint32_t count) -> uint32_t {
+        if (count <= 1 || !pick) return 0;
+        const uint32_t k = pick(count);
+        return k < count ? k : count - 1;
+    };
+    std::vector<uint32_t> typed;
+    if (type <= 4)
+        for (uint32_t i = 0; i < n; ++i)
+            if (envs[i].field_13 == type) typed.push_back(i);
+    uint32_t index = 0;
+    if (!typed.empty()) {
+        index = typed[draw(static_cast<uint32_t>(typed.size()))];
+    } else {  // as vf26 (0x277030): a pick over all, "Cinematic" -> the next record (wrapping)
+        index = draw(n);
+        if (ascii_iequals(envs[index].name, "Cinematic")) index = (index + 1) % n;
+    }
+    return set_environment(static_cast<int32_t>(index));
 }
 
 bool TacticalBattle::force_weather(SimRng& rng) {
@@ -884,6 +931,12 @@ void TacticalBattle::l1_hash(StateHasher& h) const {
         }
     }
     l1_weather_.hash(h);
+    // cu8g t03: the active environment once a script changed it (drives the land weather re-init; untouched battles
+    // keep their bytes).
+    if (env_set_) {
+        h.u32(env_index_);
+        h.u32(l1_weather_env_);
+    }
     h.u32(static_cast<uint32_t>(l1_bombard_.size()));
     for (const L1Bombard& r : l1_bombard_) {
         h.i32(r.player);

@@ -18,7 +18,9 @@
 #include "alamo/lua/ai_bridge.hpp"  // reset_script_threads
 #include "alamo/lua/bindings.hpp"
 #include "alamo/lua/lua_vm.hpp"
+#include "alamo/lua/object_bridge.hpp"
 #include "alamo/lua/presentation.hpp"
+#include "alamo/lua/script_gaps.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
 #include "alamo/objects/object_types.hpp"
@@ -206,6 +208,32 @@ static void test_object_effects() {
     CHECK(contains(run(vm, "trooper.Cinematic_Hyperspace_In('x')"), "Cinematic_Hyperspace_In -- invalid type for parameter 1. Expected number."));
     CHECK(contains(run(vm, "trooper.In_End_Cinematic()"), "GameObjectWrapper::Lua_Is_In_End_Cinematic -- Missing required boolean parameter."));
     CHECK(contains(run(vm, "trooper.Show_Emitter('x')"), "Show_Emitter -- invalid number of parameters. Expected 2, got 1."));
+}
+
+// cu8g t03: Set_New_Environment(int) - LUA_API.md contract strings; recorded, then the tactical host's
+// TacticalScriptHooks::set_new_environment with the truncated int (the mode clamps).
+static void test_set_new_environment() {
+    World w;
+    LuaHost h = w.host();
+    LuaVm vm(h);
+    PresentationLog log;
+    attach_presentation(vm, &log);
+    CHECK(contains(run(vm, "Set_New_Environment()"), "LuaSetNewEnvironment -- Expected int parameter 1"));
+    CHECK(contains(run(vm, "Set_New_Environment('x')"), "LuaSetNewEnvironment -- invalid type for parameter 1. Expected int."));
+    CHECK(log.events().empty());
+    CHECK(run(vm, "Set_New_Environment(1)") == "");  // no host: recorded only
+    CHECK(log.events().size() == 1 && log.events()[0].op == PresentationOp::SetNewEnvironment &&
+          log.events()[0].args.size() == 1 && log.events()[0].args[0].number == 1.0);
+    ObjectBridge bridge;
+    TacticalScriptHooks hooks;
+    std::vector<int32_t> got;
+    hooks.set_new_environment = [&got](int32_t i) { got.push_back(i); };
+    bridge.tactical = &hooks;
+    attach_object_bridge(vm, &bridge);
+    CHECK(run(vm, "Set_New_Environment(2) Set_New_Environment(3.9) Set_New_Environment(-1)") == "");
+    CHECK(got == std::vector<int32_t>({2, 3, -1}) && log.events().size() == 4);
+    CHECK(contains(run(vm, "Set_New_Environment(true)"), "Expected int.") && got.size() == 3);  // refused: no hook call
+    attach_object_bridge(vm, nullptr);
 }
 
 static void test_argument_contracts() {
@@ -547,6 +575,7 @@ static void test_save_load() {
 int main() {
     test_registry();
     test_argument_contracts();
+    test_set_new_environment();
     test_object_effects();
     test_cinematic_sequence();
     test_private_log_and_digest();

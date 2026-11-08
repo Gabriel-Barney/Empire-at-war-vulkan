@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "alamo/core/bytes.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/data/game_database.hpp"
@@ -714,6 +715,155 @@ void test_land(const Data& d) {
     const LandRun w = run_land(d, 4);
     CHECK(!first_divergence(a.crc, w.crc).diverged && a.trace == w.trace);
 }
+// ---- cu8g t03: Set_New_Environment / the typed environment pick (CU8F_T03_T05_RE §2.2, L1_S4_REMAINING §3.2) ----
+// A land map with four environments (0 Rain_Test rain, 1 no scenario CLEAR, 2 Rain_Test rain, 3 "Cinematic" snow). The
+// battle starts on the map's start index 0 (weather on). Frame 60: set_environment(1) -> the next service turns the weather
+// off; frame 120: set_environment(2) -> restarted at phase 0; frame 150: save / load of the battle state keeps the index
+// (hash unchanged); frame 180: set_environment(99) clamps to 3, -5 to 0; frame 240: the typed pick with a fake draw.
+// 0 / 4 workers identical.
+struct EnvRun {
+    CrcLog crc;
+    uint64_t trace = 0;
+    bool fought = false, start_on = false, start_index0 = false, off_after_1 = false, sight_clear = false;
+    bool restarted = false, saved = false, clamped = false, typed = false, untouched_unset = false;
+};
+
+terrain::MapData env_map() {
+    terrain::MapData m = land_map();
+    terrain::Environment clear, rain2, cine;
+    clear.name = "Clear";
+    clear.field_13 = 0;
+    rain2.name = "Rain2";
+    rain2.weather_effect = "Rain_Test";
+    cine.name = "Cinematic";
+    cine.field_13 = 2;
+    m.environments.environments.push_back(clear);
+    m.environments.environments.push_back(rain2);
+    m.environments.environments.push_back(cine);
+    return m;
+}
+
+EnvRun run_env(const Data& d, int32_t workers) {
+    EnvRun out;
+    jobs::JobSystem js(jobs::JobSystemConfig{workers});
+    SimConfig cfg;
+    cfg.seed = 11;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSetup s = make_setup(d);
+    const uint32_t sq = type_of(d, "S10_Squad"), fr = type_of(d, "S10_Frigate"), bs = type_of(d, "L1_Bomber_Squadron");
+    s.forces = {{0, 1, sq}, {1, 2, fr}, {1, 2, bs}, {1, 2, sq}, {1, 2, sq}};  // run_land's forces
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(s));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    opt.battle.order_interval = 0;
+    opt.battle.fog = false;
+    opt.l1_factions = load_l1_factions(d.rules);
+    auto wd = std::make_shared<tactical::combat::WeatherData>();
+    CHECK(tactical::combat::load_weather_data(*d.files, *wd));
+    opt.weather = wd;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "L1_Land_B") return false;
+                                m = env_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    bool invaded = false;
+    StateHasher trace;
+    objects::ObjectId unit = objects::kNoObjectId;
+    uint32_t last_frame = 0;
+    for (uint64_t t = 0; t < 6000 && last_frame < 260; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) {
+                CHECK(gs->invade(1, 1, {}) == commands::RejectReason::None);
+                invaded = true;
+            }
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->finished()) continue;
+        out.fought = true;
+        const uint32_t f = b->frame();
+        last_frame = f;
+        if (f == 1) {
+            out.start_on = b->weather().active();
+            out.start_index0 = b->environment_index() == 0;
+            out.untouched_unset = !b->environment_set();
+            const objects::ObjectStore& st = tm->primary();
+            for (const objects::ObjectHandle h : st.owned_by(1))
+                if (st.alive(h) && b->combat().has_unit(st.id(h))) {
+                    unit = st.id(h);
+                    break;
+                }
+        }
+        if (f == 60) CHECK(b->set_environment(1) && b->environment_index() == 1 && b->weather().active());  // until the next service
+        if (f == 61) {
+            out.off_after_1 = !b->weather().active();
+            out.sight_clear = unit != objects::kNoObjectId && b->weather_sight_modifier(unit) == 1.0f;
+        }
+        if (f == 120) CHECK(b->set_environment(2));
+        if (f == 121) out.restarted = b->weather().active() && b->weather().phase_index() == 0 && b->environment_index() == 2;
+        if (f == 150) {
+            StateHasher h0;
+            b->hash(h0);
+            ByteWriter w;
+            b->write_part(TacticalBattle::SavePart::State, w);
+            ByteReader r(w.bytes());
+            const bool ok = b->read_part(TacticalBattle::SavePart::State, r);
+            StateHasher h1;
+            b->hash(h1);
+            out.saved = ok && h0.digest() == h1.digest() && b->environment_index() == 2 && b->environment_set();
+        }
+        if (f == 180) out.clamped = b->set_environment(99) && b->environment_index() == 3 && b->set_environment(-5) && b->environment_index() == 0;
+        if (f == 240) {
+            std::vector<uint32_t> counts;
+            auto last = [&counts](uint32_t n) {
+                counts.push_back(n);
+                return n - 1;
+            };
+            bool ok = b->set_environment_of_weather_type(1, last) && b->environment_index() == 2;  // rain: {0, 2}, draw 1
+            ok = ok && b->set_environment_of_weather_type(0, last) && b->environment_index() == 1;  // clear: {1}, no draw
+            ok = ok && b->set_environment_of_weather_type(7, last) && b->environment_index() == 0;  // vf26: 3 = Cinematic -> 0
+            ok = ok && b->set_environment_of_weather_type(3, [](uint32_t) { return 1u; }) && b->environment_index() == 1;  // none -> vf26
+            out.typed = ok && counts == std::vector<uint32_t>({2u, 4u});
+        }
+        trace.u32(f);
+        trace.u32(b->environment_index());
+        trace.boolean(b->weather().active());
+        trace.u32(b->weather().phase_index());
+        trace.f32(b->weather().intensity());
+    }
+    out.trace = trace.digest();
+    out.crc = host.crc_log();
+    return out;
+}
+
+void test_environment(const Data& d) {
+    const EnvRun a = run_env(d, 0);
+    std::printf("  environment: fought %d start on %d index0 %d unset %d; off after 1 %d sight 1 %d; restarted %d; save %d; clamp %d; "
+                "typed %d; trace %016" PRIx64 "\n",
+                a.fought, a.start_on, a.start_index0, a.untouched_unset, a.off_after_1, a.sight_clear, a.restarted, a.saved, a.clamped,
+                a.typed, a.trace);
+    CHECK(a.fought && a.start_on && a.start_index0 && a.untouched_unset);
+    CHECK(a.off_after_1 && a.sight_clear && a.restarted && a.saved && a.clamped && a.typed);
+    const EnvRun w = run_env(d, 4);
+    CHECK(!first_divergence(a.crc, w.crc).diverged && a.trace == w.trace);
+}
+
 // ---- S7 t10 / t14: the MoveToPosition switch-locomotor bit through order_move, weapons suspended on the jetpack ----
 // (MOVEMENT §3.1.1 step 6 / §6.2) A Uses_Multiple_Locomotors trooper (WALK primary, JETPACK secondary, a blaster) is ordered
 // with the switch bit next to an enemy trooper: it swaps, flies and lands, then swaps back to WALK. While on the jetpack
@@ -1686,6 +1836,7 @@ int main(int argc, char** argv) {
     test_tsw_follow(*d);
     test_tsw_lost(*d);
     test_land(*d);
+    test_environment(*d);  // cu8g t03
     test_pads(*d);  // Int-final
     test_persist(*d);  // q6: persisted tactical built objects
     test_jet(*d);   // S7 t10 / t14

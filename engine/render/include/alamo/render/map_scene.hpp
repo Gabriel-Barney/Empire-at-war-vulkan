@@ -131,7 +131,14 @@ struct MapSceneStats {
 // world units per second; a land map without environments: the record ctor default (0 deg, 2.0) [port]. Space: (0, 0, 0)
 // (space mode never writes it). Set once at map load; nothing re-applies it per frame, and neither weather phases nor
 // Set_Cinematic_Environment change it. Presentation only (CRT cos / sin; the sim never reads it).
+// cu8g t03: rewritten after Set_New_Environment / the typed environment pick (land only): the two-argument form is the
+// wind of environment `env_index` (clamped like the active environment, see active_environment).
 Float3 scene_wind(const terrain::MapData& map);
+Float3 scene_wind(const terrain::MapData& map, uint32_t env_index);
+// cu8g t03: the map's environment `index` clamped to n - 1 (null without environments) - the active environment of a
+// scene whose index came from the sim (TacticalBattle::environment_index; the mode itself clamps, this guards a stale
+// or out-of-range start index the way EnvironmentSet::start() does).
+const terrain::Environment* active_environment(const terrain::MapData& map, uint32_t index);
 
 // Land maps: terrain + water + decorations (map tracks, decals; per-frame dynamic tracks and shadow blobs) + fog
 // of war. Space maps (SpaceMapDesc, SPACE_AND_OPEN.md A): no terrain; placements of In_Background types and the
@@ -166,7 +173,17 @@ public:
     bool space() const { return space_; }
     // Frame clear colour: the environment's (TEE 15) on land, black in space (SPACE_AND_OPEN.md 0 item 3).
     Float3 clear_color() const { return space_ ? Float3{0, 0, 0} : lighting_.clear_color; }
-    Float3 scene_wind() const { return render::scene_wind(map_); }  // cu8f t05: see the free function above
+    Float3 scene_wind() const { return render::scene_wind(map_, env_index_); }  // cu8f t05 / cu8g t03: the active environment's
+    // ---- cu8g t03: environment changes (Set_New_Environment / typed pick, CU8F_T03_T05_RE §2.2) ----
+    // Active environment index (load: the map's start index; then set_environment's) and its record (null: none).
+    uint32_t environment_index() const { return env_index_; }
+    const terrain::Environment* environment() const { return active_environment(map_, env_index_); }
+    // Makes environment `index` (clamped to n - 1) active: lighting() at once (lighting, fog, clear colour, skydome
+    // names); after start() the next update() re-applies it on the GPU side: Renderer::set_lighting, the land clouds
+    // (WorldRenderer::set_clouds: velocity, scale, texture) and the skydomes (re-requested, sky() rebuilt when ready).
+    // scene_wind() follows the active environment (land; space stays zero) - the caller passes it to
+    // ParticleRenderer::set_wind. False (nothing changes) without environments or for the active index.
+    bool set_environment(uint32_t index);
     // RecordOptions for this map (space flag).
     void apply(RecordOptions& o) const { o.space = space_; }
 
@@ -260,6 +277,8 @@ private:
 
     bool load_impl(const FileProvider& files, std::string_view map, const GameTypeResolver* resolver, const ParallelFor& parallel,
                    std::string* error);
+    void request_sky(ModelStreamer& streamer, assets::AssetCache& cache);  // skydome models of lighting_ (start / env change)
+    void lighting_from_environment();                                     // lighting_ from the active environment
     void clear_loaded();  // drops every CPU-side result of load() (failure path)
 
     terrain::MapData map_;
@@ -281,7 +300,10 @@ private:
     std::vector<terrain::DynamicTrackParams> track_fx_;
     terrain::FowGrid fow_;
     bool started_ = false;
-    float sky_scale_[2] = {1, 1};                     // skydome type Scale_Factor (space)
+    uint32_t env_index_ = 0;                          // cu8g t03: active environment
+    bool env_dirty_ = false;                          // cu8g t03: GPU re-apply pending (next update())
+    assets::AssetCache* cache_ = nullptr;             // start()'s cache (space skydome idle clips on an env change)
+    float sky_scale_[2] = {1, 1};                    // skydome type Scale_Factor (space)
     std::vector<Instance> bg_placements_;              // space: In_Background placement instances
     // Per type: render info (LOD_Bias, Damage_Decal names, No_Colorization_Color) - looked up by key only.
     std::unordered_map<uint32_t, TypeRenderInfo> type_info_;

@@ -6717,10 +6717,10 @@ void test_landing_drop(bool timed, uint32_t destroy_at = 0) {
             b->write_part(TacticalBattle::SavePart::State, w);
             ByteReader r(w.bytes());
             CHECK(b->read_part(TacticalBattle::SavePart::State, r));
-            // s78f t02 / q6: battle state version 8 (the two version-7 branches merged: FighterFormationRecord::pushed dropped
-            // and the q6 TEAM-container attacks): 7 and 9 are refused.
+            // cu8g t03: battle state version 9 (the active environment; before: s78f t02 / q6 version 8): 8 and 10 are
+            // refused (only the current version is read).
             std::vector<uint8_t> stale(w.bytes().begin(), w.bytes().end());
-            for (const uint32_t v : {7u, 9u}) {
+            for (const uint32_t v : {8u, 10u}) {
                 for (size_t k = 0; k < 4; ++k) stale[k] = static_cast<uint8_t>(v >> (8 * k));
                 ByteReader rs(stale);
                 CHECK(!b->read_part(TacticalBattle::SavePart::State, rs));

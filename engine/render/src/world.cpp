@@ -320,6 +320,7 @@ bool WorldRenderer::create_targets() {
 }
 
 bool WorldRenderer::make_resident() {
+    swap_pending_cloud();  // cu8g t03
     if (resident_ || !r_) return resident_;
     uint32_t pending = 0;
     for (const rhi::UploadTicket& t : tickets_) pending += r_->up_->ready(t) ? 0u : 1u;
@@ -391,6 +392,60 @@ void WorldRenderer::set_sky(std::span<const Instance> sky) {
     sky_dirty_ = true;
 }
 
+const std::string* WorldRenderer::cloud_texture_name() const {
+    const int t = pending_cloud_ >= 0 ? pending_cloud_ : cloud_texture_;
+    return t >= 0 && static_cast<size_t>(t) < textures_.size() ? &textures_[static_cast<size_t>(t)].name : nullptr;
+}
+
+void WorldRenderer::set_clouds(const terrain::CloudParams& clouds) {
+    cloud_scale_ = clouds.scale;
+    cloud_vel_[0] = clouds.velocity[0];
+    cloud_vel_[1] = clouds.velocity[1];
+    if (!r_ || clouds.texture.empty()) return;  // [port] an environment without a cloud texture keeps the drawn one
+    const std::string* now = cloud_texture_name();
+    if (now && ascii_lower(*now) == ascii_lower(clouds.texture)) return;
+    const int t = add_texture(clouds.texture, assets::TextureRole::Color);
+    if (t < 0) return;
+    if (t == cloud_texture_) {  // back to the drawn texture while another one was pending
+        pending_cloud_ = -1;
+        return;
+    }
+    GpuTexture& g = textures_[static_cast<size_t>(t)];
+    if (!g.image) {  // a texture the world did not have yet: upload it as init() does
+        std::shared_ptr<const assets::TextureAsset> a = textures_src_ ? textures_src_(g.name, g.role) : nullptr;
+        assets::TextureAsset fb;
+        if (!a) {
+            fb = assets::make_fallback_texture(g.role);
+            g.fallback = true;
+            log::warnf("render", "world: cloud texture %s not found, using a fallback", g.name.c_str());
+        }
+        if (!r_->upload_texture(g, a ? *a : fb)) {
+            log::warnf("render", "world: cloud texture %s upload failed; clouds unchanged", g.name.c_str());
+            return;
+        }
+        tickets_.push_back(g.ticket);
+    }
+    pending_cloud_ = t;
+}
+
+// The pending cloud texture replaces the drawn one once its upload is done (called by make_resident every frame).
+void WorldRenderer::swap_pending_cloud() {
+    if (pending_cloud_ < 0 || !resident_ || !r_) return;
+    GpuTexture& g = textures_[static_cast<size_t>(pending_cloud_)];
+    if (!g.image || !r_->up_->ready(g.ticket)) return;
+    g.resident = true;
+    if (cloud_texture_ >= 0 && cloud_slot_ != 0) {
+        r_->release_texture(cloud_slot_, nullptr);  // the old image stays in textures_ (destroyed at shutdown)
+        GpuTexture& old = textures_[static_cast<size_t>(cloud_texture_)];
+        if (old.slot == cloud_slot_) old.slot = 0;
+    }
+    cloud_texture_ = pending_cloud_;
+    pending_cloud_ = -1;
+    cloud_slot_ = r_->allocate_texture_slot(g.image.view, "world CLOUD_TEXTURE");  // 0 (white) when full
+    if (g.slot == 0) g.slot = cloud_slot_;
+    tex_sets_tp_ = nullptr;  // the batched terrain path writes new texture sets (CLOUD_TEXTURE) on its next draw
+}
+
 void WorldRenderer::shutdown() {
     if (!r_) return;
     rhi::Allocator& a = *r_->alloc_;
@@ -427,6 +482,7 @@ void WorldRenderer::shutdown() {
         r_->release_texture(cloud_slot_, &textures_[static_cast<size_t>(cloud_texture_)].image);  // deferred like model textures
     cloud_slot_ = 0;
     cloud_texture_ = -1;
+    pending_cloud_ = -1;
     for (int ti : slot_textures_) {
         GpuTexture& t = textures_[static_cast<size_t>(ti)];
         if (t.slot != 0 && t.image) r_->release_texture(t.slot, &t.image);
