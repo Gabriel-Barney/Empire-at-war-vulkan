@@ -466,6 +466,12 @@ GALACTIC_ECONOMY.md §7 items and the other requested data:
 ## Known limits
 
 - **Exe build:** only FoC Steam x64 1.121 (`sha256 07daee…`). Any other build is refused.
+- **Game exits at once (2026-11-08):** if no window appears, `ui_status.json` stays `waiting_window` and the Lua reader
+  ends with `no_game`, StarWarsG.exe quit right after launch (exit code 0, no crash log). Seen when Steam's
+  `HKCU\Software\Valve\Steam\ActiveProcess` `pid` names an old Steam process: steam_api then reports
+  `SteamAPI_IsSteamRunning() failed` (OutputDebugString only) and the game ends. Compare that pid with the running
+  `steam.exe`; restarting Steam (`steam.exe -shutdown`, then start it) fixes it. `steam -applaunch 32470` is no
+  workaround: it starts base EaW (`GameData`), not FoC.
 - **Sampling:** the reader polls about every 1 ms, at above-normal priority in its own process. A tick it
   misses leaves a gap in `global_frame`; the RNG draw count across the gap is still recovered. Torn samples are
   flagged and left out of `reference.crc`. The first real run missed 4% of ticks under heavy machine load, in

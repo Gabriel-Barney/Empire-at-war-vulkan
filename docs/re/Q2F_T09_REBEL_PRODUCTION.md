@@ -168,3 +168,34 @@ so measure again at the current dev before working on the items above.
   average several seeds.
 - After Shola the port's Rebel builds almost nothing: Conquer_Opponent @Tatooine fails its solve on the Offensive
   budget (about 1174 available vs 1950-3360 needed), and CrushPlan exits at once on Normal by design.
+
+## 2026-11-08 t11 retail run (`20261108-183748-galactic-vanilla-lua`, extended probe kit)
+
+Clean run: 10 cycles, 30 GOALPERC rows, 16 plan scripts loaded, no probe errors, 72 Rebel fleet departures.
+
+- **Rebel goal values for Shola** (`Should_Conquer_Pirate_Planet` = `Is_Good_Invasion_Target`, same value in every
+  row): 0.173 in cycle 0, 2.255 in cycles 1-5, 17.58 from cycle 6 on. The jump comes with `First_Attack_Allowed` 0 -> 1
+  and `Need_To_Reconnect_Islands` 0 -> 15 (`Initial_Grace_Period` 228 s, then 235 s). Naboo: 11.1 -> 12.7 -> 13.3, reconnect 0.
+- **Plan starts (PSTART, t x 30 = tick):** Conquer_Pirate @Shola at tick 5518 (unalloc 1470, credits 1314). It
+  never finishes its first block. Conquer_To_Reconnect @Shola (Space + Ground force, both staged at Shola by
+  `SynchronizedAssemble`) at 6925 with nothing to buy (unalloc 0): 11 ships incl. HOME_ONE and SUNDERED_HEART, then
+  11 + 7 ground units. Space force done at 7639; Shola changes owner at 7498. So the Shola attack is
+  Conquer_To_Reconnect [H], confirming the second-pass reading. Later: Crush @Tatooine at 8533 / 12541 exits at once;
+  Conquer_Opponent @Tatooine at 9241 / 9817 / 12778.
+- **Why retail's Conquer_Pirate starts late: money.** Rebel Build_Space_Forces 55 -> 598 (net 1350), Build_Ground_Forces
+  97 -> 1228 and 1486 -> 3769 (627 each). Credits: 8000 at 87, 4080 at 1351, 594 at 2701, **39 at 3769-4051**,
+  1314 at 5518. The 4000-credit `R_Galactic_Turbolaser_Tower_Defenses` at Yavin starts at tick 1225.
+- **Port at dev f88d6c1d** (HotM seed 0, Empire human): Build_Space_Forces at 42 builds a
+  `Marauder_Missile_Cruiser` (net 1800), Build_Turbolasers @Yavin at 122 (queued 182), Build_Ground_Forces only at
+  919, Conquer_Pirate @Shola at 2798 (17 + 7 Y-wings, net 1470), all 24 units at 5724, invasion at 5968.
+- **Retail is not one-way here.** Early Rebel production in the four retail runs of this campaign and seed: 10-30,
+  11-08 17:08 and 11-08 18:37 are identical (gunboat at 109, light tank 140, tank buster 156, turbolaser 1225). The
+  11-03 run (kit with the Flush_G bug, dropped from the references in t08) builds the turbolaser at 140 and Y-wings
+  from 1659, like the port, and takes no planet. So "turbolaser first, then an early Conquer_Pirate" is a path
+  retail can also take. It is not on its own a port bug.
+- **The stable first difference:** all four retail runs build a `Corellian_Gunboat` (1350) as the first Rebel
+  Build_Space_Forces unit at Naboo (tick 109); the port builds a `Marauder_Missile_Cruiser` (1800, tick 105). Both are
+  tech 1, `Build_Initially_Locked`, star base 2, and match the TF's `Corvette` / `Frigate` / `Capital` (0..4) slots, so
+  buildability is not the cause: it is the PotentialPlan solver's unit score (engine/ai/src/galactic_pp.cpp; the 450
+  credits it saves may be part of what puts Build_Ground_Forces ahead of the turbolaser in retail [L]). Next step for t09:
+  the Build_Space_Forces solve at tick 42 (scores per candidate type, synced draws), against the RE of the solver.
