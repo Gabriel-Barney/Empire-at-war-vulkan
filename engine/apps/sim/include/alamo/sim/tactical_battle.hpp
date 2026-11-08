@@ -1806,9 +1806,23 @@ private:
     void hg_ability_host(tactical::abilities::AbilityHost& h);  // oi_install(): DEPLOY_SQUAD hooks
     int32_t hg_tech(int32_t player) const;
     bool hg_engine_unit(const Unit& u) const;    // SimpleSpace engine-loop unit
-    void hg_adopt(const Unit& u, SimRng& rng);   // after add_unit: engine mode enter, add_carrier
+    bool hg_walk_engine_unit(const Unit& u) const;  // cu8g t01: land Walk-locomotor engine-loop unit
+    void hg_adopt(const Unit& u, SimRng& rng);   // after add_unit: holster attach, engine mode enter, add_carrier
     void hg_unit_removed(objects::ObjectId id);  // death / silent kill / retreat / container removal
     void hg_engine_service();                    // tick(): after the movement commit
+    // cu8g t01 HOLSTER_WEAPON (CU8F_T01_T02_T07_RE.md §2.3; EngineLoops holds the state): per-type data (lazy, derived,
+    // not saved), the attach at adopt, the per-frame service (tick(): after the hangar services), the Saber_Throw throw.
+    struct HgHolsterType {
+        uint8_t known = 0, has_bone_name = 0;
+        tactical::hangar::HolsterDesc desc;
+        std::string bone;
+    };
+    const HgHolsterType* hg_holster_type(objects::TypeIndex t);
+    void hg_holster_attach(const Unit& u);
+    void hg_holster_service();
+    bool anim_engaged_clip(objects::ObjectId id) const;  // tactical_battle.cpp: current clip ATTACK (5) / SPINMOVE (0x68)
+    std::vector<HgHolsterType> hg_holster_types_;
+    const TacticalMode* hg_mode_ = nullptr;  // set by hg_setup (before the map load)
     void hg_tick(TacticalMode& mode, SimRng& rng);  // tick(): after the combat tick and its events
     void hg_station_upgrade(TacticalMode& mode, const tactical::abilities::SpawnRequest& q);
     void hg_publish_engine_requests();           // tick() end

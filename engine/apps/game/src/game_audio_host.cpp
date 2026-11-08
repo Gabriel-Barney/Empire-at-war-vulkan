@@ -257,10 +257,29 @@ void GameAudioHost::battle_tick(const sim::TacticalBattle& battle, const objects
         game_->object_moving(static_cast<uint64_t>(id), moving);
     }
     // §3.3 engine-loop requests of the tick (TacticalBattle::engine_loop_requests, hangar::EngineLoops): mode enter,
-    // locomotor services, engines offline / online - start = fade-in, stop = fade-out.
+    // locomotor services, engines offline / online - start = fade-in, stop = fade-out. cu8g t01: HOLSTER_WEAPON / Saber_Throw
+    // suppress (0x392410: every engine loop stopped with the request's fade, < 0 = the event's own) / unsuppress (0x393970)
+    // and the draw / holster SFX attached to the hero.
     for (const tactical::hangar::EngineLoopRequest& r : battle.engine_loop_requests()) {
-        if (r.loop == tactical::hangar::EngineLoop::Idle) game_->set_engine_idle_loop(static_cast<uint64_t>(r.id), r.start);
-        else game_->set_engine_moving_loop(static_cast<uint64_t>(r.id), r.start);
+        using Op = tactical::hangar::EngineLoopOp;
+        const auto id = static_cast<uint64_t>(r.id);
+        switch (r.op) {
+            case Op::Loop:
+                if (r.loop == tactical::hangar::EngineLoop::Idle) game_->set_engine_idle_loop(id, r.start);
+                else game_->set_engine_moving_loop(id, r.start);
+                break;
+            case Op::Suppress: game_->suppress_engine_audio(id, r.fade); break;
+            case Op::Unsuppress: game_->clear_engine_audio_suppression(id); break;
+            case Op::DrawWeapon:
+            case Op::HolsterWeapon: {
+                const objects::ObjectHandle h = handle_of(r.id);
+                if (!store.alive(h)) break;
+                const std::string_view ev =
+                    types.get_string(store.type(h), r.op == Op::DrawWeapon ? "SFXEvent_Draw_Weapon" : "SFXEvent_Holster_Weapon");
+                if (!ev.empty()) game_->object_sfx(id, ev, store.position(h));
+                break;
+            }
+        }
         ++stats_.engine_loop_requests;
     }
     // HARDPOINT_DISABLED.md §9.1: engines back online (an ENGINE hardpoint repaired): idle on (GameAudio::engines_online).
