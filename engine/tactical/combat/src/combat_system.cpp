@@ -757,6 +757,11 @@ Vec3 CombatSystem::target_point(ObjectId id) const {
     return u ? lob_target_point(*u) : Vec3{};
 }
 
+float CombatSystem::target_radius(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? desc_of(*u).radius : 0.0f;
+}
+
 bool CombatSystem::lob_solution(uint32_t projectile, Vec3 from, Vec3 to, LobSolution* out) const {
     if (projectile >= data_->projectiles.size()) return false;
     const ProjectileDesc& pd = data_->projectiles[projectile];

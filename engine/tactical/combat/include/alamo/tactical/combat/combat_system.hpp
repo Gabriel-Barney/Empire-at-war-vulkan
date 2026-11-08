@@ -1130,6 +1130,8 @@ public:
     bool lob_solution(uint32_t projectile, Vec3 from, Vec3 to, LobSolution* out = nullptr) const;
     // 0x398440: the unit's position + its type's Ranged_Target_Z_Adjust (z); the origin for an unknown id.
     Vec3 target_point(ObjectId id) const;
+    // cu8j t03: the unit's target radius (UnitDesc::radius, as the projectile max travel reads it); 0 for an unknown id.
+    float target_radius(ObjectId id) const;
     // refixf t01: land rocket terrain (heightmap h(x, y) and its extent box, S9_DEATH_CLONE_SHIELDS.md §2.4.4 mode 1,
     // §2.4.6 ground points). Read in the serial commit phase only; S8 t04: also the land grenade ground test (LOB_SOLVER
     // §6.2). Unset [port]: flat ground at z 0, no box.

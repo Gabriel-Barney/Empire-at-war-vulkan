@@ -60,8 +60,14 @@ bool MovementSystem::swap_locomotor(Unit& u, bool secondary) {
     u.on_secondary = secondary;
     if (secondary) {
         // Step 4, before the locomotor changes: the unit leaves its coordinator and Move_To re-issues its current order
-        // block to it alone (no coordinator: a move to its own position, i.e. hold). [port] no stagger draw for the
-        // one-unit Move_To ([M] in the spec); a pending start frame is kept.
+        // block to it alone (no coordinator: a move to its own position, i.e. hold). cu8j t02 (MOVEMENT §4.7.4): the new
+        // coordinator's formation comes at the next coordinator update (compose_land: one ctor draw, plus r' with a
+        // PathFrameDelay); the re-issued order waits for it.
+        const uint32_t serial = compose_register(false, true, u.goal);
+        pending_.back().forms.assign(1, {u.d.id});
+        u.pend = serial;
+        u.adopted = false;
+        if (u.has_goal) u.start_frame = kStartPending;
         u.in_formation = false;
         u.jiggle = V2{};
         u.formation_speed = 3.0e38f;  // alone

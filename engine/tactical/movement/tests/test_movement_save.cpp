@@ -924,7 +924,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 11);  // 11: before the s78l t02 arrival turn state (12)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 13);
+    put_u32(bad, 0, 12);  // 12: before the cu8j t01 / t02 pending compositions (13)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 14);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode

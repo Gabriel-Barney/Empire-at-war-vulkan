@@ -140,6 +140,7 @@ struct SpecialAbilityDesc {
     // (per frame; 0 = unknown), for the thrown-saber flight stand-in (saber_flight_frames).
     float catch_dist = 0.0f;
     float saber_speed = 0.0f;
+    float saber_max_flight = 0.0f;  // cu8j t03: the Saber_Name type's Projectile_Max_Flight_Distance (0 = unknown)
     // Proximity_Mines (§2.3.3) / Buzz_Droids / Summon / Spawn / Radioactive (Object_Type, Mine_Type, ...)
     float activation_time = 0.0f;         // Activation_Time_In_Seconds
     float trigger_radius = 0.0f;          // Trigger_Radius
@@ -251,13 +252,24 @@ struct AbilityResolvers {
     // cu8i t01: a type's Max_Speed by name (Saber_Throw's Saber_Name), without registering it as a ProjectileDesc; < 0
     // unknown.
     std::function<float(std::string_view)> type_max_speed;
+    // cu8j t03: a type's Projectile_Max_Flight_Distance by name (Saber_Throw's Saber_Name); < 0 unknown.
+    std::function<float(std::string_view)> type_max_flight_distance;
 };
 
-// cu8i t01 (CU8F_T01_T02_T07_RE §2.6) [port stand-in]: frames from the throw to the catch of a thrown saber that flies at
-// `speed` (per frame) to a target `dist` away and back until it is within `catch_dist` of the thrower:
-// ceil(dist / speed) + ceil(max(dist - catch_dist, 0) / speed), at least 1. Luke (speed 8, Catch_Dist 15) at 150 units:
-// 36 (retail 35). speed <= 0: 0 (no flight).
-uint32_t saber_flight_frames(float dist, float speed, float catch_dist);
+// cu8j t03 (CU8F_T01_T02_T07_RE §2.7 item 4) [port stand-in for the LIGHT_SABER projectile, no path jitter]: the thrown
+// saber's frames counted from the throw. Ltot = |T - P0| + |L - T| (3D: T the target point at the apply, P0 the spawn
+// point, L the thrower), B = max travel = MFD + R(target) + |T.z - P0.z| (MFD <= 0: no limit), v = speed per frame:
+// k_c = floor((Ltot - catch_dist) / v) + 1; v k_c < min(Ltot, B): caught at step k_c, the ability ends 11 frames later
+// (SWORD_CATCH, 30 frames at speed 3); else no catch: the saber dies at min(ceil(Ltot / v), ceil(B / v)) and the ability
+// ends then (epsilon 0 [M]). Luke (v 8, Catch_Dist 15, MFD 250): 150 units, B 275 -> no catch, end 35 (retail 35); 120
+// units -> catch 29, end 40 (retail 43, the jitter detour). v <= 0: no flight (end 0).
+struct SaberFlight {
+    uint32_t catch_step = 0;  // 0 = no catch
+    uint32_t end = 0;         // the ability's end (SAP +0x2e8 cleared), frames after the throw; 0 = no flight
+};
+SaberFlight saber_flight(float out_dist, float back_dist, float max_travel, float speed, float catch_dist);
+// cu8j t03 [M]: the throw (anim 0x6c SWORD_THROW past its half, +3 frames a tick) comes 7 (or 8) frames after the apply.
+inline constexpr uint32_t kSaberThrowDelay = 7;
 
 // "WEAPON_DELAY_MULTIPLIER" / "Weapon_Delay" -> 1..12, 0 unknown (case-insensitive, suffix optional).
 uint8_t mod_kind_from_name(std::string_view name);
