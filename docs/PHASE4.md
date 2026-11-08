@@ -215,19 +215,40 @@ pinned file refused.
 ## Q4 parity baseline (q4h t02, 2026-11-07; re-recorded after a2k t10 / t11, q4hf t01)
 
 Measured with the Q4 harness (`tools/parity/`, README there: metrics, tolerances and their reasons, grading). The table is
-the current `tools/parity/baseline.json`, recorded at **dev `79576620`** (a2k t10 + t11, alamo_headless MSVC Release, 4
-workers); the first recording was dev `3629d4cf`, before the a2k galactic-AI merge (row "q4h t02" below; the harness has
-more timing metrics since). Re-record it, like a golden, when an intended behaviour change moves a metric. The confirm, AI
+the current `tools/parity/baseline.json`, recorded at **`4b6aa69d`** (q4hf t02 / t04 on dev `7cec60cb`, alamo_headless MSVC
+Release, 4 workers; the binary was built in the shared confirm worktree, which also held fowf t01's uncommitted land
+fog / AI edits in engine/apps/sim: no effect on these space and galactic runs); before that dev `79576620` (a2k t10 + t11)
+and dev `3629d4cf`, before the a2k galactic-AI merge (row "q4h t02" below; the harness has more timing metrics since). Re-record it, like a golden, when an intended behaviour change moves a metric. The confirm, AI
 and Q4 groups are judged against these numbers. Reference runs: the Q2 traces in the main checkout's
 `tools/probe_mod/q2_traces/out/`.
 
 | scenario | timing | income | AI choices | battle outcomes | damage |
 |---|---|---|---|---|---|
-| `hotm_galactic` (3 retail runs) at `79576620` | 36 PASS / 8 FAIL | 20 / 5 | 16 / 0 (1 N/A) | 7 / 0 | - |
+| `hotm_galactic` (3 retail runs) at `4b6aa69d` (q4hf t04 hop segmentation) | 53 PASS / 5 FAIL | 20 / 5 | 16 / 0 (1 N/A) | 7 / 0 | - |
+| `hotm_galactic` at `79576620` (old hop segmentation) | 36 / 8 | 20 / 5 | 16 / 0 (1 N/A) | 7 / 0 | - |
 | `hotm_galactic` at the a2k merge (`9064172d`) | 34 / 8 | 21 / 4 | 16 / 0 (1 N/A) | 7 / 0 | - |
 | `hotm_galactic`, q4h t02 (`3629d4cf`) | 15 / 5 | 22 / 3 | 11 / 5 (1 N/A) | 7 / 0 | - |
-| retail leave-one-out, same tolerances | 90 / 17 | 46 / 14 | 30 / 10 | 19 / 2 | - |
-| `geonosis_skirmish` (1 retail run), unchanged | - | 3 / 3 | 0 / 5 (1 N/A) | 2 / 3 | 3 N/A |
+| retail leave-one-out, same tolerances, at `4b6aa69d` (before t04: timing 90 / 17) | 121 / 12 | 46 / 14 | 30 / 10 | 19 / 2 | - |
+| `geonosis_skirmish` (1 retail run) at `4b6aa69d` (q4hf t02 damage hook) | - | 3 / 3 | 0 / 5 (1 N/A) | 4 / 1 | 2 / 1 |
+| `geonosis_skirmish` at `79576620` | - | 3 / 3 | 0 / 5 (1 N/A) | 3 / 2 | 3 N/A |
+
+q4hf t04 (harness hop segmentation, `tools/parity/README.md` "Metrics"): a stop needs 3 equal samples, so one repeated
+retail sample mid-flight no longer ends a hop (retail The Maw -> Kashyyyk 122 was the tail of a 162-tick leg, Yavin ->
+The Maw 29 the tail of a 62-tick one); a trip through a planet centre is split into legs (port Nal Hutta -> The Maw 133 =
+Nal Hutta -> Kashyyyk + Kashyyyk -> The Maw); a leg runs from the last sample at its start planet to the first at its end
+planet on both sides (retail orbit slot / port centre, so no one-tick offset). Travel is now 40 of 41 legs PASS, nearly
+all exact. The one FAIL is real: Underworld Nal Hutta -> Kashyyyk 25 vs retail 21 in all 3 runs (the port's fleet flies
+that lane at 2.62 per tick, retail at 3.15; engine/galactic hyperspace speed). The earlier lead "the port's Underworld
+fleets move at Rebel speed" (bullet below) does not hold: those three off routes were segmentation artifacts and match
+now. The other 4 timing FAILs are builds: `REBEL_INFANTRY_SQUAD` at Kamino / Naboo 276 / 240 vs 140 / 116,
+`REBEL_TANK_BUSTER_SQUAD@NABOO` 342 vs 173, `UNDERWORLD_DISRUPTOR_MERC_SQUAD@FELUCIA` 878 vs 242 (one retail run each).
+Fleet departures and targets now count trips (stop to stop), still 16 / 0.
+
+q4hf t02 (skirmish damage hook): the skirmish host writes its tactical battle as a Q2TRACE 1 trace (`--trace-out`,
+`engine/apps/headless/tactical_trace.hpp`), reduced by the retail reader. `combat.damage_taken`: Rebel 308 hull lost vs
+retail 325 (PASS, 25%), Empire 0 vs 0 (PASS); `combat.first_shot_frame` 2450 vs 3953 (FAIL: the port's Rebel AI attacks
+about 50 s earlier, as its early X-wing build already suggested). `outcome.units_final[Rebel]` 41 vs 35 is now within
+tolerance (already PASS on dev `03940b96` before this change, so moved by a behaviour change after `79576620`).
 
 a2k t10 (Add_Credits AI notify, `docs/re/A2K_T10_CREDIT_NOTIFY_RE.md`): `econ.credits_at_9000[Rebel]` 3106 -> 867 (retail
 650..1143, now PASS; the Rebel spends the Shola capture bonus within ~170 ticks). Still FAIL: `credits_at_4500[Rebel]` 1186
@@ -263,8 +284,7 @@ Differences outside tolerance (port vs retail):
   1800), 38 items (retail 25), no mineral extractors (retail 5), balance 2750 / 100 / 400 vs 226 / 1256 / 2112 at frames
   1800 / 3600 / 5400 (engine/ai tactical production).
 
-Gaps: skirmish damage and first shot have no port side (missing hook: a tactical `--trace-out` in
-`engine/apps/headless/skirmish_run.cpp`; retail: 325 hull lost by the Rebel, first projectile at frame 3953); no retail
+Gaps: the skirmish damage hook exists since q4hf t02 (above); no retail
 battle-outcome trace (hands-off galactic runs stop when a tactical battle starts); one retail skirmish run only (no spread);
 galactic object counts by type are not comparable (members vs companies).
 
