@@ -247,8 +247,9 @@ output) plus the format-2 keys (`host game`, `mode`, `preset`, `frames_per_tick`
 **Regenerate** (after a save-format, sim-behaviour or game-data change: "scenario changed, not comparable", exit 3):
 `alamo_game --hidden --bench-regen tests/benchmark/<name>.abench` remakes the session from the `make` line, runs
 `--bench-make` on it and bumps `version` when the files changed (headless scenes: `tools\benchmark\regen_scenario.cmd <name>`).
-`tools\regen_goldens.cmd --bench-check` checks **every** scene (headless ones with `alamo_headless --bench --runs 1`, game ones with a
-120-tick hidden `alamo_game --bench-scenario` run) and `tools\regen_goldens.cmd --only bench` remakes the stale ones; never by hand.
+`tools\regen_goldens.cmd --bench-check` checks **every** scene with `alamo_headless --bench --runs 1 --warmup 0` (game ones sim-only
+since bm2d t02; a game scene whose save no longer loads exits 3, not comparable, bm2d t01) and `tools\regen_goldens.cmd --only bench`
+remakes the stale ones (game ones with `alamo_game --hidden --bench-regen`); never by hand.
 New scene: write the recipe (a manifest with `name`, `description`, the `make` line and the format-2 keys), run
 `alamo_game --hidden --bench-regen` on it (or `alamo_headless --bench-make`), commit the four files.
 

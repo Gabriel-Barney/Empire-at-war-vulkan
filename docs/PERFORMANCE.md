@@ -913,46 +913,75 @@ load the cache lookup reads the source and its includes and hashes them (well un
 compiled sources: 1125571106 2.39 s, 3622043265 2.46 s, 1976399102 2.34 s (same passes as before; this run's times are
 about 0.9 s above the table's because of other load on the machine, not the sources).
 
-## Benchmark scenes (BM3, 2026-11-06)
+## Benchmark scenes: quiet-machine baseline (bm1f t04, 2026-11-08)
 
-Six committed scenes (`tests/benchmark/`, docs/PHASE4.md "BM3"), run with `tools\benchmark\run_suite.cmd --repeats 2` and, for the
-map-load pairs, `--load --repeats 2` (MSVC Release, Ryzen 7 7800X3D, 16 threads, AMD Radeon RX 9070 XT, `bm-high` 1920x1080, hidden
-window). **Every number below was taken while other lanes were building and testing on the same PC (the CPU read 95-100 % busy at times,
-5-20 % at best), so each is flagged noisy and none is a baseline.** They show that the scenes run, how long they take, and the order of
-magnitude; the quiet-machine baseline and the run-to-run noise limits are open on the roadmap (group `bm3`, t05 and t08).
+The first baseline: the six committed scenes (`tests/benchmark/`, docs/PHASE4.md "BM3") at dev `6246c61e`, run with
+`tools\benchmark\run_suite.cmd --repeats 5` and `--load --repeats 3` on an **idle PC** (every other session paused, no builds or
+tests; the suite measured 0.1-8.6 % CPU busy before each run, all 45 runs unflagged). MSVC Release (clang ships nothing, so no clang
+timing), Ryzen 7 7800X3D (16 threads, sim-only runs use 15 workers), AMD Radeon RX 9070 XT, rendered scenes `bm-high` 1920x1080 fixed
+frames (2 per tick, TAA on), hidden window. Scenario versions: space_battle 11, land_battle 4, galactic_late 3, the three game scenes 5.
+This replaces BM3's 2026-11-06 table, which was taken with the CPU 95-100 % busy. Result JSON: `logs\bench_suite\2026-11-08_quiet\`
+and `logs\bench_suite\2026-11-08_quiet_load\` on the reference PC (logs are not tracked; compare a later run with
+`tools\benchmark\compare_results.py`).
 
-| Scene | Ticks | Wall per run (2 runs) | Median tick / frame | p99 | Notes |
-|---|---|---|---|---|---|
-| `space_battle` (sim-only) | 1800 | 2.0 s | 0.80 ms tick | 2.1 ms | 4x fleets, 2 runs within 0.3 % of each other |
-| `galactic_late` (sim-only) | 27000 | 18-36 s | 0.58-0.70 ms tick | 1.7-6.3 ms | 56 planets, 4 AI players; 820-1190 ticks/s |
-| `land_battle` (sim-only) | 3600 | 27-82 s | 3.2-6.1 ms tick | 93-147 ms | six times the land company lists: the heaviest sim scene |
-| `space_battle_game` | 1800 (3600 frames) | 17 s | 3.4 ms frame (sim 1.0 ms, GPU 0.74 ms) | 5.4-5.7 ms | CPU-bound at this size: the GPU frame is a fifth of the wall frame |
-| `nebula_battle` | 1800 (3600 frames) | 17 s | 3.2 ms frame (sim 1.0 ms, GPU 0.68 ms) | 6.7-7.2 ms | |
-| `water_battle` | 1800 (3600 frames) | 32 s | 7.4 ms frame (sim 2.9 ms, GPU 1.0 ms) | 11.1-11.3 ms | the heaviest rendered scene (4x ground forces on a map with water) |
+Medians of the 5 runs' median and p99; worst = the worst tick or frame of all 5 runs.
 
-The whole set takes about 2.5 minutes of run time (the planning target was 1-2 minutes per scene and 10 in total, so the scenes can be
-lengthened with `ticks` in the recipe when a lane needs more samples; do that with `alamo_game --hidden --bench-regen`, which bumps the version).
+| Scene | Ticks | Wall per run | Median | p99 | Worst | Ticks/s |
+|---|---|---|---|---|---|---|
+| `space_battle` (sim-only) | 1800 | 2.1-2.2 s | 0.86 ms tick | 2.32 ms | 15.7 ms | 1022 |
+| `galactic_late` (sim-only) | 27000 | 24.3-25.9 s | 0.59 ms tick | 4.04 ms | 21.3 ms | 1135 |
+| `land_battle` (sim-only) | 3600 | 9.5-9.6 s | 2.45 ms tick | 4.08 ms | 8.3 ms | 397 |
+| `space_battle_game` | 1800 (3600 frames) | 17.5-17.6 s | 3.23 ms frame (sim 1.62, GPU 0.74) | 6.60 ms (sim 4.32) | 87.4 ms (sim 19.6) | |
+| `nebula_battle` | 1800 (3600 frames) | 17.3-17.7 s | 3.34 ms frame (sim 1.59, GPU 0.79) | 7.22 ms (sim 5.72) | 52.7 ms (sim 27.8) | |
+| `water_battle` | 1800 (3600 frames) | 30.8-31.4 s | 6.46 ms frame (sim 2.88, GPU 1.16) | 9.67 ms (sim 3.73) | 12.6 ms (sim 5.0) | |
 
-**Run-to-run spread** (2 runs, noisy): the rendered scenes' median frame time differed by 1-3 % between runs (nebula 1.1 %, space 2.8 %,
-water 4.7 %), the p99 by 1-7 %. The sim-only scenes with a busy machine spread much more (galactic median 18 %, land median 64 %, p99
-45-115 %); `space_battle` stayed within 0.3 % because it ran for only 2 s between other lanes' builds. These are the numbers a quiet
-machine must beat before LP5 sets its limits.
+The whole `--repeats 5` session took 578 s, the `--load --repeats 3` session 293 s. The rendered scenes are CPU-bound at this size (the
+GPU frame is a quarter or less of the wall frame). On a quiet machine `land_battle` is no longer the heaviest sim scene: 2.4 ms median
+against BM3's noisy 3.2-6.1 ms, with a 4.1 ms p99 against 93-147 ms.
 
-**Map load, cold against warm cache** (`run_suite.cmd --load --repeats 2`: real time, 300 ticks, a fresh empty `--cache-dir` for the cold
+**Run-to-run noise** (5 runs, `run_suite` noise table: cv = coefficient of variation, spread = (max - min) / mean). A regression gate
+(LP5, deferred) should set its limits above these:
+
+| Scene | Metric | cv | spread |
+|---|---|---|---|
+| `space_battle` | median tick / p99 / ticks per s | 1.7 / 4.1 / 1.5 % | 4.4 / 10.1 / 3.7 % |
+| `galactic_late` | median tick / p99 / ticks per s | 3.7 / 2.2 / 2.8 % | 9.2 / 4.7 / 6.5 % |
+| `land_battle` | median tick / p99 / ticks per s | 0.8 / 0.7 / 0.4 % | 2.2 / 2.0 / 1.1 % |
+| `space_battle_game` | frame median / frame p99 / sim median / GPU frame median | 0.4 / 0.7 / 0.7 / 0.8 % | 0.9 / 2.2 / 1.6 / 2.3 % |
+| `nebula_battle` | frame median / frame p99 / sim median / GPU frame median | 1.8 / 0.6 / 0.4 / 0.3 % | 5.3 / 1.8 / 1.1 / 0.9 % |
+| `water_battle` | frame median / frame p99 / sim median / GPU frame median | 4.4 / 1.4 / 0.3 / 2.5 % | 13.2 / 4.0 / 0.9 / 7.2 % |
+
+So a median moves by up to about 4 % (cv) between quiet runs, `galactic_late` and `water_battle`'s frame median by up to 9-13 % from the
+fastest to the slowest of 5; the worst tick or frame is a single sample and not a gate metric (the game scenes' 50-90 ms worst frames are
+single frames, their p99 stays under 7.3 ms).
+
+**Map load, cold against warm cache** (`run_suite.cmd --load --repeats 3`: real time, 300 ticks, a fresh empty `--cache-dir` for the cold
 run, the same directory for the warm one; `load_ms` = save load start to first measured tick, hitches = counted frames over
-max(25 ms, 4 x median)):
+max(25 ms, 4 x median), averaged over the 3 runs):
 
-| Scene | Cache | `load_ms` | First 300 frames: median / p99 | Hitches in the run |
+| Scene | Cache | `load_ms` (min-max) | First 300 frames: median / p99 | Hitches in the run |
 |---|---|---|---|---|
-| `nebula_battle` | cold | 533-1396 ms | 4.4 / 73.3 ms | 32 |
-| `nebula_battle` | warm | 477-631 ms | 2.4 / 4.1 ms | 1 |
-| `space_battle_game` | cold | 620-814 ms | 3.6 / 7.2 ms | 9 |
-| `space_battle_game` | warm | 529-557 ms | 2.7 / 5.3 ms | 2.5 |
-| `water_battle` | cold | 857-897 ms | 6.7 / 14.3 ms | 0 |
-| `water_battle` | warm | 790-819 ms | 6.3 / 13.8 ms | 0 |
+| `nebula_battle` | cold | 477-488 ms | 2.1 / 4.6 ms | 3.0 |
+| `nebula_battle` | warm | 432-446 ms | 2.0 / 4.8 ms | 3.3 |
+| `space_battle_game` | cold | 503-523 ms | 1.9 / 5.9 ms | 3.3 |
+| `space_battle_game` | warm | 461-481 ms | 1.9 / 5.7 ms | 3.0 |
+| `water_battle` | cold | 744-756 ms | 4.9 / 9.8 ms | 0 |
+| `water_battle` | warm | 705-721 ms | 4.6 / 9.6 ms | 0 |
 
-(Averages of two runs; `load_ms` as min-max.) A cold pipeline cache costs the nebula scene 32 first-use hitches against 1 warm and adds roughly 50-250 ms to the load (a wide range at this noise); the water scene
-shows none either way at this size. The cold/warm rows are also noisy.
+A cold pipeline cache adds about 40-45 ms to each load; on a quiet machine it no longer causes first-use hitches (BM3's 32 cold nebula
+hitches were the busy machine), and the 3 hitches left in the space and nebula runs happen both cold and warm.
+
+**Visible against hidden window** (bm2b t02, same session): `alamo_game --benchmark realtime --bench-save smoke_battle.alsv
+--bench-preset bm-high --bench-ticks 300` (BM2a's run, the saveload smoke's battle save at dev `6246c61e`), once with `--hidden` and once
+with a visible window, CPU 13-14 % busy before each:
+
+| Window | Frames | Frame ms median / p99 / worst | Render ms median / p99 | Sim ms median / p99 | GPU frame median / p99 |
+|---|---|---|---|---|---|
+| hidden | 7156 | 1.31 / 2.68 / 15.3 | 1.28 / 2.04 | 0.71 / 2.26 | 0.54 / 0.66 |
+| visible | 7259 | 1.29 / 2.56 / 14.9 | 1.25 / 2.01 | 0.72 / 2.50 | 0.54 / 0.68 |
+
+A visible window presents as fast as a hidden one (within 2 %, inside the run-to-run noise above; Immediate present mode, no cap), so
+the hidden-window numbers of BM2a and the suite stand for a visible window too. Both match BM2a's 2026-11-06 row (1.28 / 2.65 / 21.3 ms).
 
 ## Game scenes timed sim-only (bm2c t02, 2026-11-08)
 
@@ -967,5 +996,5 @@ scenes' fingerprints (the rendered runs' CRC logs).
 | `nebula_battle` | 1800 | 1.76 ms | 29 ms | 90 ms | 3.4 ms | 0.57-0.60 s | 5.8-6.6 s | tac.movement 49 %, T5.battles / tac.ai 18 % |
 | `water_battle` | 1800 | 3.19 ms | 87 ms | 510 ms | 5.7 ms | 0.78-0.80 s | 5.8-14.6 s | T5.battles / tac.ai 35 %, tac.ai.perception 29 % |
 
-The medians sit near the rendered runs' `sim_ms` in BM3's table (1.0 / 1.0 / 2.9 ms, also noisy); the p99 and worst ticks here are the
+The medians sit near the rendered runs' `sim_ms` in BM3's 2026-11-06 table (1.0 / 1.0 / 2.9 ms, also noisy; the quiet baseline above has 1.6 / 1.6 / 2.9 ms); the p99 and worst ticks here are the
 busy machine. Rerun on a quiet PC before using any of it as a reference.
