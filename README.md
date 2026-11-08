@@ -28,6 +28,9 @@ on top. The goal is the game you already own, running on an engine that uses a m
 **Windows (x64) only, single player only.** There is no multiplayer, no support for other platforms, and saves from the
 original game cannot be loaded; all three are out of scope by design.
 
+**Forks are welcome.** If you want something this project leaves out, such as multiplayer, another platform or a
+feature of your own, you are more than welcome to fork it and add whatever features and systems you like.
+
 > **Status (2026-11-08):** active development, playable end to end through its own host, `alamo_game`.
 > Simulation, renderer, Lua layer, AI, UI, story and save/load are in place, and **Thrawn's Revenge loads and plays**
 > (its skirmish, land and campaign smoke runs pass and its galactic AI plays). A project-wide **clean-up pass** (CU1-CU18)
