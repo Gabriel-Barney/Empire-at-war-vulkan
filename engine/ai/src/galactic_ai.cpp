@@ -1469,9 +1469,12 @@ int32_t GalacticAiWorld::Impl::tf_order(int32_t tf, lua::AiTfOrder kind, const l
             // P4 ai: every landed unit fires the Ground_Activated trigger (Lua_Land_Units 0x6cec80 -> 0x3a00b0 per landed
             // unit, P4_SIM_SYSTEMS Â§3.4: the HackSuperWeapon plan's hack). [port] At a planet the player does not own the
             // port lands nothing (no invasion here), but the units there still fire the trigger as the landing would.
+            // a2l t02: Land_Units refuses a planet whose surface is not accessible (0x375220: Planet_Surface_Accessible,
+            // destroyed -> false; STRATEGIC_GAPS 1.3 "Landing refusals are in the callers" [H]). Nothing lands there, so
+            // no Ground_Activated trigger fires (HotM: the Rebel slicer droids sent to The_Maw).
             std::vector<std::pair<ObjectHandle, PlanetIndex>> landed;
             for (auto& [p, units] : by_planet) {
-                if (!valid_planet(p)) continue;
+                if (!valid_planet(p) || !sim.surface_accessible(p)) continue;
                 if (sim.planets()[p].owner != t.player) {
                     for (const ObjectHandle u : units) landed.emplace_back(u, p);
                     continue;
