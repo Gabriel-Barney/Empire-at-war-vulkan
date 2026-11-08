@@ -793,6 +793,8 @@ void App::update_cursor(ui::HudDrawList& dl) {
                 c.targeting = ui::ability_pick_cursor(targeting_.target_kind(), targeting_.ability_type(), bview_.space(), hit_friendly);
             } else if (reinforce_unit_ != 0) {
                 c.targeting = ui::CursorContext::Targeting::Reinforcement;
+            } else if (bombing_targeting_) {
+                c.targeting = ui::CursorContext::Targeting::BombingRun;  // POINTER_BOMBING_RUN_TARGET (HUD_GAPS §9.5)
             }
         }
         // HUD_GAPS §1.4: the repair cursor over an own / allied damaged hard point not being repaired, when the selection

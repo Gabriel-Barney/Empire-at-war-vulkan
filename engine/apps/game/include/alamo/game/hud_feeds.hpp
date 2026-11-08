@@ -5,6 +5,9 @@
 //                        (pips hidden) without a cycle length.
 //   order_buttons        §5: c_button00..05 enable inputs from the local player's OWN selected units (attack behaviour,
 //                        locomotor); controls locked (story LOCK_CONTROLS / Lua Lock_Controls) disables all.
+//   bombing_run_button   §9.2 / §9.3 (cu9g): the land b_special_weapon button: disabled := controls locked or the run not
+//                        available; dial = the 0x495250 cooldown fraction (0 shown as a full dial, none when ready).
+//   bombing_run_style    §9.4 / §9.5: the faction's Bombing_Run_Shadow_Blob_Material_Name and Bombing_Run_Blob_Size.
 //   hardpoint_type_name  §1.5: HardPointType name of a combat HardpointKind (the reticle texture table key).
 //   hardpoint_world      §1.3: a hard point's unit-local attachment offset (x forward, y left, z up) in world space.
 //   galactic_hero_entries §3.2: the galactic hero roster of a player - named heroes with an Icon_Name on the map (one
@@ -46,6 +49,18 @@ struct OrderUnitState {
     bool can_move = false;    // locomotor
 };
 ui::HudOrderButtons order_buttons(std::span<const OrderUnitState> selection, int32_t local_player, bool controls_locked);
+
+// HUD_GAPS §9.2: `land` = a land battle (else the button is not driven); ready = !controls_locked && available
+// (TacticalBattle::bombing_run_available); `fraction` = TacticalBattle::bombing_run_cooldown_fraction. Not ready:
+// dial = fraction, a 0 shown as 1.0 (§9.3 rule 4: a skirmish before its first run is disabled with a full dial); ready:
+// no dial [port, §9.9 item 1].
+ui::HudBombingRunButton bombing_run_button(bool land, bool controls_locked, bool available, float fraction);
+
+struct BombingRunStyle {
+    std::string blob_material;   // Bombing_Run_Shadow_Blob_Material_Name ("" = no blob: targeting stays on without one)
+    float blob_size = 100.0f;    // Bombing_Run_Blob_Size: the square's full side (DECORATIONS §3.2)
+};
+BombingRunStyle bombing_run_style(const galactic::FactionRules& faction);
 
 const char* hardpoint_type_name(uint8_t kind);
 ui::Vec3 hardpoint_world(ui::Vec3 position, ui::Vec3 facing, ui::Vec3 offset);

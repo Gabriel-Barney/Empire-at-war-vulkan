@@ -82,6 +82,7 @@ bool App::render_frame() {
         if (screen_ == Screen::Battle && !cinematic_hides_hud() && !linked_ui_.input_blocked())
             bview_.set_selection_blobs(ui_.tactical_hud.selection_blobs());  // last HUD build's circles (one frame behind)
         else bview_.set_selection_blobs({});  // load screen / attract demo: no selection
+        bview_.set_bombing_blob(screen_ == Screen::Battle && bombing_targeting_ ? bombing_blob_ : std::nullopt);
         const auto prep0 = Clock::now();
         bview_.prepare(gpu_, render_alpha());
         ft_.prepare += static_cast<float>(ms_since(prep0));

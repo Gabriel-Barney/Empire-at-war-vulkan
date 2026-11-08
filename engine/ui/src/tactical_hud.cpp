@@ -158,6 +158,7 @@ void TacticalHud::init(const ComponentTable& table, const TextureAtlas& atlas, F
     if (pop_text_ < 0) pop_text_ = table.find("Text_Pop_Cap");
     shell_ = table.find("i_main_skirmish");
     retreat_ = table.find("b_retreat");
+    special_weapon_ = table.find("b_special_weapon");
     for (int i = 0; i < 6; ++i) order_button_[i] = find_fmt(table, "c_button%02d", i);
     pause_ = table.find("b_play_pause_t");
     pause_g_ = table.find("b_play_pause");
@@ -447,6 +448,7 @@ void TacticalHud::build(const TacticalHudFrame& frame, std::span<const HudUnit> 
             set_text(pop_text_, {});
         }
         apply_order_buttons(frame.order_buttons);
+        apply_bombing_run_button(frame.bombing_run);
         build_buttons(frame);
         // C2 (FIXPASS_GALACTIC §4.2): the name's line is centred on the bone (250, 745 vs bone 252, 744). Drawn here because the
         // generic button text hangs a Max_Text_Width block below its anchor, half a line low (QA D12 on the galactic strip).
@@ -925,6 +927,20 @@ void TacticalHud::apply_order_buttons(const HudOrderButtons& s) {
         r.hidden = r.script_visible == 0;
         r.disabled = r.script_enabled >= 0 ? r.script_enabled == 0 : !order_button_enabled(k, s);
     }
+}
+
+// HUD_GAPS §9.2: the land bombing-run button (0x312570): never hidden, disabled := !ready, alternate icon 3, tooltip 3,
+// the cooldown on the Build_Texture_Name dial. Lua GUI_Component_Visibility / _Enable (mods) override like the order buttons.
+void TacticalHud::apply_bombing_run_button(const HudBombingRunButton& s) {
+    if (!s.present || special_weapon_ < 0) return;
+    const auto ci = static_cast<uint32_t>(special_weapon_);
+    const CommandBarComponent& c = (*table_)[ci];
+    ButtonRuntime& r = buttons_.state(ci);
+    r.hidden = r.script_visible == 0;
+    r.disabled = r.script_enabled >= 0 ? r.script_enabled == 0 : s.disabled;
+    if (c.icon_alternate_texture.size() > 3) r.icon_override = c.icon_alternate_texture[3];
+    r.tooltip_index = c.tooltip_text.size() > 3 ? 3 : -1;
+    r.build_fill = s.dial < 0.0f ? -1.0f : std::clamp(s.dial, 0.0f, 1.0f) * 100.0f;
 }
 
 void TacticalHud::build_buttons(const TacticalHudFrame& f) {

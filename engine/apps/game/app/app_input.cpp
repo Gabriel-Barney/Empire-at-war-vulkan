@@ -341,9 +341,13 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
             case ui::HudAction::Kind::BeginReinforcement:  // the drop point is the next left click in the world
                 reinforce_unit_ = a.unit;
                 targeting_.cancel();  // one modal pick at a time
+                bombing_end(false);
                 break;
             case ui::HudAction::Kind::BeginAbilityTargeting:  // the target is the next world click (TargetingController)
-                if (screen_ == Screen::Battle && targeting_.begin(a)) reinforce_unit_ = 0;
+                if (screen_ == Screen::Battle && targeting_.begin(a)) {
+                    reinforce_unit_ = 0;
+                    bombing_end(false);
+                }
                 break;
             case ui::HudAction::Kind::TacticalBuy:  // Build_NN: Production {type_index, location = builder}
                 if (screen_ == Screen::Battle && a.unit != 0 && a.value >= 0)
@@ -424,6 +428,12 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
                     orders_.arm_move_toggle(ascii_iequals(a.name, "c_button01")   ? ui::MoveToggle::AttackMove
                                             : ascii_iequals(a.name, "c_button03") ? ui::MoveToggle::Waypoint
                                                                            : ui::MoveToggle::GuardMove);
+                    break;
+                }
+                // cu9g t03 (HUD_GAPS §9.4): the land b_special_weapon = the bombing-run button (0x346a80 -> 0x2e7950); a disabled
+                // button never reaches here (HudButtons swallows the click). Space: the superweapon button is not modelled.
+                if (screen_ == Screen::Battle && !bview_.space() && ascii_iequals(a.name, "b_special_weapon") && a.button == ui::Button::Left) {
+                    bombing_toggle();
                     break;
                 }
                 if (a.name == "advanced_planetary") {  // GALACTIC_DIALOGS §4: "Base Layout" enters / leaves the planet map
@@ -654,6 +664,66 @@ void App::battle_input() {
             drop_click = true;
         }
     }
+    // cu9g t03 (HUD_GAPS §9.4 - §9.6): land bombing-run targeting. Not ready any more: ends silently. While on: the blob under
+    // the cursor (green valid / red invalid), left-up on a valid point sends command 28 + the Incoming SFX and ends, on an
+    // invalid one the GUI negative SFX and targeting stays on; right-up cancels (and still reaches the world as an order).
+    // The left click is consumed either way and the drag-select box does not start (orders_ is skipped while on).
+    bool bombing_click = false;
+    bombing_blob_.reset();
+    if (bombing_targeting_ && (bview_.space() || !bombing_run_ready())) bombing_end(false);
+    if (bombing_targeting_ && !world_blocked) {
+        const sim::TacticalBattle* tb = battle();
+        ui::Vec3 gp{};
+        bool have = false;
+        if (tb && ctx.ground_height) {
+            const tactical::Ray ray = ui::pixel_ray(ctx.view, input_.mouse_x(), input_.mouse_y());
+            float gh = 0.0f;
+            for (int i = 0; i < 4; ++i) {  // the terrain is not flat: re-intersect at the height found
+                have = ui::ray_plane_z(ray, gh, gp);
+                if (!have) break;
+                gh = ctx.ground_height(gp.x, gp.y);
+            }
+            if (have) gp.z = gh;
+        }
+        const int32_t me_player = local_player();
+        const bool valid = have && tb->bombing_run_target_valid(me_player, {gp.x, gp.y, gp.z});
+        if (input_.button(ui::Button::Right).click && !input_.button(ui::Button::Right).in_double_press) {
+            bombing_end(true);
+            ++bombing_cancels_;
+        } else if (input_.button(ui::Button::Left).click) {
+            bombing_click = true;
+            if (valid) {
+                commands::EventData ev(commands::EventType::BombingRun);
+                ev.set_f("x", gp.x).set_f("y", gp.y).set_f("z", gp.z);
+                cmds.push_back(std::move(ev));
+                ++bombing_commands_;
+                if (const objects::TypeIndex bt = tb->bombing_run_bomber_type(me_player); bt != objects::kNone)
+                    audio_.ui(data_.types.get_string(bt, "SFXEvent_Bomb_Run_Incoming"));
+                bombing_end(false);
+            } else if (have) {
+                audio_.negative_feedback();
+                ++bombing_invalid_clicks_;
+            }
+        }
+        const galactic::GalacticSim* g = galaxy();
+        if (bombing_targeting_ && have && g && me_player >= 0 && static_cast<size_t>(me_player) < g->players().size()) {
+            const uint32_t fi = g->players()[static_cast<size_t>(me_player)].faction;
+            if (fi < g->rules().factions.size()) {
+                const BombingRunStyle style = bombing_run_style(g->rules().factions[fi]);
+                if (!style.blob_material.empty()) {
+                    render::JamBlob b;
+                    b.center = {gp.x, gp.y, gp.z};
+                    b.half_size = 0.5f * style.blob_size;  // Bombing_Run_Blob_Size is the full side (DECORATIONS §3.2)
+                    b.material = style.blob_material;
+                    b.color[0] = valid ? 0.0f : 1.0f;  // [M] green valid, red invalid (HUD_GAPS §9.5; probe item 2)
+                    b.color[1] = valid ? 1.0f : 0.0f;
+                    b.color[2] = 0.0f;
+                    b.color[3] = 1.0f;
+                    bombing_blob_ = std::move(b);
+                }
+            }
+        }
+    }
     // Int-final: the space reinforcement overlay (R5 fog palette 3) while a space drop point is being picked.
     bview_.set_space_reinforcement_overlay(bview_.space() && reinforce_unit_ != 0);
     // Targeted-ability pick (TargetingController, before the order translator: a frame whose click it used is not an
@@ -667,7 +737,7 @@ void App::battle_input() {
             cmds.push_back(std::move(o.event));
         }
     }
-    if (!drop_click && !targeted && !world_blocked) orders_.update(input_, ui_.bindings, ctx);
+    if (!drop_click && !targeted && !world_blocked && !bombing_click && !bombing_targeting_) orders_.update(input_, ui_.bindings, ctx);
     // Orders carry their queued flag (shift: queueable actions) into the command stream; voice per command (UiOrder::voice).
     std::vector<uint8_t> voice(cmds.size(), 1);
     for (ui::UiOrder& o : orders_.take_orders()) {
@@ -715,6 +785,7 @@ void App::battle_input() {
         if (e.slot == ui::hk::kAttackMove) orders_.arm_move_toggle(ui::MoveToggle::AttackMove);
         else if (e.slot == ui::hk::kGuard) orders_.arm_move_toggle(ui::MoveToggle::GuardMove);
         else if (e.slot == ui::hk::kWaypoint) orders_.arm_move_toggle(ui::MoveToggle::Waypoint);
+        else if (e.slot == ui::hk::kSuperWeapon && !bview_.space() && bombing_run_ready()) bombing_toggle();  // 0x63f00 case 0x16 (land)
         else if (e.slot == ui::hk::kDroidAdvisor) open_holocron(ui::InfoPage::DroidLog);  // capture C2 (no galaxy in a skirmish: nothing)
     }
     std::vector<ui::HudAction> acts;
@@ -737,6 +808,36 @@ void App::battle_input() {
 // P1_DOUBLE_CLICK_MOVE.md §2.3 (`0x418b0`): the particle by priority attack > guard > double > normal (a double first kills
 // the nearest live normal ack silently), scaled GUI_Move_Acknowledge_Scale_Land / _Space; the radar ping
 // Default_Attack_Click / Default_Click, a double removing the playing Default_Click and playing Default_Double_Click.
+// cu9g t03 (HUD_GAPS §9.2): the land HUD's `ready`: controls not locked and the local bombing run available.
+bool App::bombing_run_ready() const {
+    const sim::TacticalBattle* b = battle();
+    return b && !story_controls_locked() && b->bombing_run_available(local_player());
+}
+
+// 0x2e7950 (cancel = 0): off -> on plays the bomber type's SFXEvent_Bomb_Run_Select_Target; on -> off plays the local faction's
+// SFXEvent_Bombing_Run_Cancelled.
+void App::bombing_toggle() {
+    if (bombing_targeting_) {
+        bombing_end(true);
+        ++bombing_cancels_;
+        return;
+    }
+    const sim::TacticalBattle* b = battle();
+    if (!b) return;
+    bombing_targeting_ = true;
+    reinforce_unit_ = 0;  // one modal pick at a time
+    targeting_.cancel();
+    if (const objects::TypeIndex bt = b->bombing_run_bomber_type(local_player()); bt != objects::kNone)
+        audio_.ui(data_.types.get_string(bt, "SFXEvent_Bomb_Run_Select_Target"));
+}
+
+void App::bombing_end(bool cancel_sfx) {
+    if (!bombing_targeting_) return;
+    bombing_targeting_ = false;
+    bombing_blob_.reset();
+    if (cancel_sfx) audio_.faction_sfx("SFXEvent_Bombing_Run_Cancelled");
+}
+
 void App::move_ack(const ui::MoveAck& a) {
     ++move_acks_;
     if (a.kill_nearest_move_ack() && bview_.kill_nearest_move_ack(a.point)) ++move_ack_kills_;

@@ -747,6 +747,13 @@ void BattleView::prepare(GpuCore& gpu, float alpha) {
         }
         jam_models_.build(gpu.renderer, jam_tex, frame_, ground, main);
     }
+    // cu9g (HUD_GAPS §9.5): the bombing-run targeting blob at the ground point under the cursor (land only; green / red).
+    if (scene_ && bombing_blob_ && !space_) {
+        const render::TextureSource blob_tex = [&gpu](std::string_view n, assets::TextureRole role) { return gpu.cache->texture(n, role); };
+        const terrain::MapData* map = &scene_->map();
+        const std::function<float(float, float)> ground = [map](float x, float y) { return map->terrain.sample_height(x, y); };
+        jam_models_.build_blobs(gpu.renderer, blob_tex, std::span<const render::JamBlob>(&*bombing_blob_, 1), ground, main);
+    }
     if (scene_) {
         apply_environment();  // cu8g t03: before update(), which re-applies it on the GPU side
         scene_->update(gpu.renderer, *gpu.streamer);

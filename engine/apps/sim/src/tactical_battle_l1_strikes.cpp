@@ -316,10 +316,50 @@ float TacticalBattle::bombing_run_result(int32_t player) const {
         if (r.player == player) return r.total ? 1.0f : 0.0f;  // [port] bombers cannot be shot down here
     return 0.0f;
 }
+// 0x4950f0 (HUD_GAPS §9.3): the absolute frame the player's bombing run is available again; -1 = no record / disabled.
+// Available and not in progress: now; not in progress: the ready frame; in progress: now + interval + int(F) with F the
+// largest remaining flight (distance to the exit along the path / per-frame speed) over the live bombers. cu9g t02.
+int64_t TacticalBattle::l1_bombing_run_ready_frame(const L1BombingRun& r) const {
+    if (!r.enabled) return -1;
+    const int64_t now = static_cast<int64_t>(frame_);
+    if (!r.in_progress) return r.available ? now : static_cast<int64_t>(r.ready);
+    float longest = 0.0f;
+    for (const L1Bomber& bm : r.bombers) {
+        if (!(bm.speed > 0.0f)) continue;
+        const float left = (bm.exit.x - bm.pos.x) * bm.dir.x + (bm.exit.y - bm.pos.y) * bm.dir.y;
+        longest = std::max(longest, left / bm.speed);
+    }
+    return now + static_cast<int64_t>(r.interval) + static_cast<int64_t>(longest);
+}
+
 uint32_t TacticalBattle::bombing_run_frames_until_available(int32_t player) const {
     for (const L1BombingRun& r : l1_runs_)
-        if (r.player == player) return r.ready > frame_ ? r.ready - frame_ : 0u;
+        if (r.player == player) {
+            const int64_t ready = l1_bombing_run_ready_frame(r);
+            return ready > static_cast<int64_t>(frame_) ? static_cast<uint32_t>(ready - static_cast<int64_t>(frame_)) : 0u;
+        }
     return 0u;
+}
+
+// 0x495250 (HUD_GAPS §9.3): the cooldown dial of the bombing-run button, 0..1. No record / disabled / the tactical gate
+// closed: 0; ready (R <= now): 1; R <= last start or now <= last start: 0; else (now - S) / (R - S). The caller shows 0
+// as a full dial. Const, presentation only: the sim never reads it back.
+float TacticalBattle::bombing_run_cooldown_fraction(int32_t player) const {
+    for (const L1BombingRun& r : l1_runs_) {
+        if (r.player != player) continue;
+        if (!r.enabled || !player_gate_allows(player, tactical::abilities::PlayerGate::BombingRuns)) return 0.0f;
+        const int64_t now = static_cast<int64_t>(frame_), ready = l1_bombing_run_ready_frame(r), start = static_cast<int64_t>(r.last_start);
+        if (now >= ready) return 1.0f;
+        if (ready <= start || r.last_start == 0xFFFFFFFFu || now <= start) return 0.0f;
+        return static_cast<float>(now - start) / static_cast<float>(ready - start);
+    }
+    return 0.0f;
+}
+
+objects::TypeIndex TacticalBattle::bombing_run_bomber_type(int32_t player) const {
+    for (const L1BombingRun& r : l1_runs_)
+        if (r.player == player && r.enabled && r.bomber_type >= 0) return static_cast<objects::TypeIndex>(r.bomber_type);
+    return objects::kNone;
 }
 
 // ---- start ----

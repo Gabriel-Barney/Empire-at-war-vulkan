@@ -14,6 +14,7 @@
 #include <future>
 #include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
@@ -422,6 +423,14 @@ public:
     uint64_t video_applies_ = 0;
     bool menu_dialog_open() const;  // the in-game menu or one of its option / save / load / quit dialogs is open
     uint32_t reinforce_unit_ = 0;       // reinforcement chosen on the pad, waiting for its drop point (0 = none)
+    // cu9g t03 (HUD_GAPS §9.4 - §9.6): the land bombing-run targeting state (HUD +0x20b2): toggled by the b_special_weapon
+    // click and the super-weapon hotkey; the world's next left click on a valid point sends command 28.
+    bool bombing_targeting_ = false;
+    std::optional<render::JamBlob> bombing_blob_;  // the green / red terrain blob under the cursor while targeting
+    uint64_t bombing_commands_ = 0, bombing_cancels_ = 0, bombing_invalid_clicks_ = 0;
+    bool bombing_run_ready() const;  // 0x312570's `ready`: controls not locked and the local run available
+    void bombing_toggle();           // 0x2e7950 (cancel = 0): start (Select_Target SFX) or cancel (Cancelled SFX)
+    void bombing_end(bool cancel_sfx);
     // P1 move acknowledgement (P1_DOUBLE_CLICK_MOVE.md §2.3): GameConstants values by ui::AckEffect / ui::AckRadar index.
     std::array<std::string, 4> ack_fx_{};
     std::array<std::string, 3> ack_radar_{};

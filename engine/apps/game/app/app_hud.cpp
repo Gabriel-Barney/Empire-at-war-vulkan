@@ -817,6 +817,10 @@ void App::build_tactical_hud() {
         }
         hf.order_buttons = order_buttons(st, local_player(), story_controls_locked());
     }
+    // cu9g t03 (HUD_GAPS §9): the land b_special_weapon = the bombing-run button (disabled, icon 3, tooltip 3, cooldown dial).
+    if (const sim::TacticalBattle* tb = battle())
+        hf.bombing_run = bombing_run_button(!bview_.space(), story_controls_locked(), tb->bombing_run_available(local_player()),
+                                            tb->bombing_run_cooldown_fraction(local_player()));
     hud_units_ = units;
     // FIXPASS_GALACTIC §4.2: the advisor *_LOOP Bink in Movie_tactical (the HUD's own component), only while it plays.
     hf.advisor_page = advisor_loop_shown() ? static_cast<int32_t>(kAdvisorPage) : -1;

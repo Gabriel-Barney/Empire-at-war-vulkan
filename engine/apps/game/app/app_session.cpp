@@ -529,6 +529,8 @@ void App::begin_battle() {
     const sim::TacticalBattle* b = session_->battle();
     ++battles_seen_;
     reinforce_unit_ = 0;  // no drop point pending from an earlier battle
+    bombing_targeting_ = false;  // nor a bombing-run pick
+    bombing_blob_.reset();
     targeting_.cancel();  // nor a targeted ability
     // L1/S4 wave 1: the battle's tactical plots (loaded by CampaignBattles at the tactical push) for STORY_MISSION_LOST;
     // battle-screen story notifications go to that plot set (story_ui_step / battle_input).

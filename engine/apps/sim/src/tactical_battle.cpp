@@ -4557,6 +4557,20 @@ cmd::RejectReason TacticalBattle::handle_command(TacticalMode& mode, uint8_t pla
         }
         return R::None;
     }
+    // cu9g t02 (HUD_GAPS §9.7, command 28 execute 0x5246d0): land only (no bombing-run manager in space). The point is the
+    // dequantized wire value (the original's q1..q3 round trip); a valid target starts the run (0x492d60). No RNG.
+    // Outcomes: no record / space -> NotAllowed, invalid point -> InvalidPosition (both silent in the original),
+    // valid point but the run is not available -> AbilityNotReady (the original logs it and plays the GUI error SFX for
+    // the local issuer; the app does that from this reason).
+    if (t == T::BombingRun) {
+        if (space_ || !l1_mode_) return R::NotAllowed;
+        const bool has_record = std::any_of(l1_runs_.begin(), l1_runs_.end(), [&](const L1BombingRun& r) { return r.player == static_cast<int32_t>(player) && r.enabled; });
+        if (!has_record) return R::NotAllowed;
+        const Vec3 at{ev.f("x"), ev.f("y"), ev.f("z")};
+        if (!bombing_run_target_valid(static_cast<int32_t>(player), at)) return R::InvalidPosition;
+        if (!bombing_run_available(static_cast<int32_t>(player))) return R::AbilityNotReady;
+        return start_bombing_run(mode, static_cast<int32_t>(player), at) ? R::None : R::NotAllowed;
+    }
     if (t != T::SetUnitAbilityMode && t != T::TacticalSpecialAbility && t != T::TacticalSpecialAbilityWithDummyTarget &&
         t != T::SetAbilityAutofire)
         return R::Unhandled;

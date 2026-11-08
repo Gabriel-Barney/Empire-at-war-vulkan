@@ -557,52 +557,59 @@ Toggle **0x2e7950(HUD, cancel)**, HUD +0x20b2 = targeting flag, +0x20c0 = target
 - Command 28 has one sender, the HUD click of §9.6. Lua `LandTaskForceClass.Bombing_Run` (L1_S4_REMAINING §2.10)
   calls the start 0x492d60 directly and the AI perception reads 0x494410; neither goes through the command.
 
-### 9.8 What the port needs (t02 / t03)
-Port state at dev 7c6ea635: `TacticalBattle` has `start_bombing_run`, `bombing_run_available`,
+### 9.8 What the port needs (t02 / t03) - done 2026-11-08 (cu9g)
+Port state before cu9g (dev 7c6ea635): `TacticalBattle` had `start_bombing_run`, `bombing_run_available`,
 `bombing_run_target_valid`, `bombing_run_frames_until_available` (`engine/apps/sim/src/tactical_battle_l1_strikes.cpp`;
 start checks validity and availability, no RNG). The command codec has `BombingRun = 28` with a q1..q3 point
 (`engine/commands/src/event_types.cpp` `kPoint`); `EventData::f` returns the dequantized value, which is the
-original's round trip, and dequantize snaps |v| below one step to 0, which covers the |z| rule. `ui::Pointer::
-BombingRunTarget` and the cursor's `Targeting::BombingRun` exist (`engine/ui/include/alamo/ui/mouse_cursor.hpp`);
-`engine/render/include/alamo/render/jam_fx.hpp` already draws a ShadowBlobMaterials blob. `TacticalBattle::
-handle_command` has no case for 28, so the command is Unhandled.
+original's round trip (dequantize snaps |v| below one step to 0, which covers the |z| rule). `ui::Pointer::
+BombingRunTarget` and the cursor's `Targeting::BombingRun` existed; `render/jam_fx.hpp` already drew a
+ShadowBlobMaterials blob.
 
-**t02 (sim)**
-- [ ] `TacticalBattle::handle_command`: `T::BombingRun` → land only (space has no manager: nothing happens); P =
-  (`f("x")`, `f("y")`, `f("z")`); if `bombing_run_target_valid(player, P)` → `start_bombing_run(mode, player, P)`.
-  Outcomes: invalid point or no record → silent (a reject reason is fine, nothing else happens); valid but not
-  available → a distinct reason, so the app can play the GUI negative SFX for a local issuer (presentation only).
-- [ ] Human path: the campaign battle's tactical command hook (`campaign_battles.cpp`, `set_tactical_command_hook`)
-  already forwards to `handle_command`. `BattleAi::execute` (AI direct commands) needs no case: AI and Lua start runs
-  directly, as in the original.
-- [ ] Test: command 28 through the command pipeline starts the run exactly as a direct `start_bombing_run` at the
-  execute frame would; a fogged / prevention-radius point and a not-ready run change nothing.
-- [ ] `bombing_run_frames_until_available` deviates while a run is in progress: the port returns 0 (its ready frame is
-  the old one); the original gives interval + remaining flight (§9.3). For the HUD, expose the 0x495250 fraction (or
-  0x4950f0's frame together with the last start; the port keeps it in `L1BombingRun::last_start`), port-side as a
-  const query: the HUD reads it, the sim never reads it back. The port's bombers fly straight at a fixed per-frame
-  speed, so the remaining flight is the distance to the exit along the path / speed, max over the live bombers.
-- [ ] Goldens: only if a recorded run issues command 28 (none expected).
-- [ ] Gap, not in t02 unless the coordinator adds it: the skirmish records (0x493d50 skirmish branch, L1_S4_REMAINING
-  §3.7) are not modelled; `l1_strikes_setup` builds only the campaign attacker's record, so in a port skirmish the
-  button would always be disabled. Original skirmish record: every player whose faction has `Is_Playable` and a
-  skirmish land bomber: enabled, available, interval = int(FPS × `Max_Bombing_Run_Interval_Seconds`), ready = now +
-  interval, last start −1; usable only once the gate list allows it (`Enable_Bombing_Runs` from the
-  `RL_Bombing_Run_Use_Upgrade`-type upgrades) and the lobby bit of §9.2 is set.
+**t02 (sim) - done**
+- [x] `TacticalBattle::handle_command` case `T::BombingRun` (`tactical_battle.cpp`): land only; P = (`f("x")`, `f("y")`,
+  `f("z")`). Results: space / no enabled record -> `NotAllowed`; invalid point (fog force 1, base shield, prevention
+  radius) -> `InvalidPosition`; valid but not available (run in progress, cooldown, gate closed) -> `AbilityNotReady`
+  (the original logs it and plays the GUI negative SFX for a local issuer); else `start_bombing_run` -> `None`. The
+  original is silent for the first two; the reasons are port-side labels, nothing else happens. No RNG.
+- [x] Human path: the campaign tactical command hook forwards to `handle_command`; AI and Lua start runs directly.
+- [x] Test (`test_battle_l1.cpp`, `test_land`): command 28 at the frame the direct call would run gives the same CRC log
+  and trace as the direct `start_bombing_run`; a second command while the run flies is `AbilityNotReady`; the defender
+  (no record) is `NotAllowed`; 0 / 4 workers identical.
+- [x] Queries (const, presentation only; `l1_bombing_run_ready_frame` = 0x4950f0): `bombing_run_frames_until_available`
+  = that absolute frame minus now (0 = ready; a run in progress: interval + the longest remaining flight, i.e. the
+  distance to the exit along the path / per-frame speed over the live bombers, truncated); `bombing_run_cooldown_fraction`
+  = 0x495250 (§9.3 rules 1-5; the multiplayer early-out is not modelled); `bombing_run_bomber_type`.
+- [x] Goldens: none changed (no recorded run issues command 28).
+- Gap, not done: skirmish records (the 0x493d50 skirmish branch, L1_S4_REMAINING §3.7) are not modelled;
+  `l1_strikes_setup` builds only the campaign attacker's record, so in a port skirmish the button is always disabled
+  with a full dial. Original skirmish record: every player whose faction has `Is_Playable` and a skirmish land bomber:
+  enabled, available, interval = int(FPS x `Max_Bombing_Run_Interval_Seconds`), ready = now + interval, last start -1;
+  usable only once the gate list allows it (`Enable_Bombing_Runs` from the `RL_Bombing_Run_Use_Upgrade`-type
+  upgrades) and the lobby bit of §9.2 is set. Follow-up group cu9h.
 
-**t03 (HUD)**
-- [ ] `b_special_weapon` in land: never hidden; disabled = controls locked or not `bombing_run_available(local)`;
-  alternate icon 3, tooltip index 3 (`TEXT_TOOLTIP_BOMBRUN_BUTTON`).
-- [ ] Dial: `build_fill` = 100 × (ready ? 1 : (f == 0 ? 1 : f)), f per §9.3. The port's ability buttons hide a complete
-  dial (`tactical_hud.cpp`, recharge ≥ 1 → no dial); until §9.9 item 1 is settled pick one rule and mark it [port].
-- [ ] Targeting state lives in the HUD / app, not the sim: toggle on click and Ctrl+W (Select_Target SFX on entry);
-  `POINTER_BOMBING_RUN_TARGET` while not over the HUD; green / red blob (`Bombing_Run_Shadow_Blob_Material_Name`,
-  side `Bombing_Run_Blob_Size`) at the ground point under the cursor, validity from the sim's const
-  `bombing_run_target_valid`; left-up on a valid point → command 28 + Incoming SFX + end; invalid → GUI negative SFX,
-  stay; right-up → cancel SFX + end, and the right-click still reaches the world; not ready → silent end; second
-  click / Ctrl+W → cancel SFX + end.
-- [ ] Feed test (hud_feeds) for enable, icon, tooltip and dial; update the visual baselines only if the button's look
-  changes.
+**t03 (HUD) - done**
+- [x] `b_special_weapon` in land (`ui::TacticalHud::apply_bombing_run_button`, fed by `game::bombing_run_button`): never
+  hidden (a mod's Lua GUI_Component_Visibility / _Enable override it like the order buttons); disabled = controls locked
+  or `!bombing_run_available(local)`; icon = `Icon_Alternate_Texture_Name[3]` (set as the icon override, so the faction
+  index does not pick it), tooltip index 3. In space the component is left alone.
+- [x] Dial: `build_fill` = 100 x fraction while not ready, a fraction of 0 shown as 1.0 (full); [port] while ready no
+  dial is drawn (as the ability buttons; §9.9 item 1 stays a probe question).
+- [x] Targeting lives in the app (`App::bombing_targeting_`, `app_input.cpp`): toggled by the `b_special_weapon` click
+  and the super-weapon hotkey (slot 22, land, only when ready), Select_Target SFX (bomber type) on entry; `POINTER_
+  BOMBING_RUN_TARGET` while the cursor is not over the HUD; green / red blob at the ground point under the cursor
+  (faction `Bombing_Run_Shadow_Blob_Material_Name`, side `Bombing_Run_Blob_Size`; `JamBlobModels::build_blobs`),
+  validity from the sim's const `bombing_run_target_valid`; left-up on a valid point: command 28 + Incoming SFX + end;
+  invalid point: GUI negative SFX, stays on; right-up: faction `SFXEvent_Bombing_Run_Cancelled` + end, the right click
+  still reaches the world; not ready: silent end; second click / hotkey: Cancelled SFX + end. The left click is
+  consumed and orders are skipped while on (no drag-select box). The ground point is the ray hit re-intersected at the
+  terrain height (4 passes) [port]. Not modelled: the cancel by the start of a HUD component drag (0x346de0).
+- [x] Feed tests: `test_game_session.cpp` (`hud_feeds_test`: `bombing_run_button`, `bombing_run_style`) and
+  `engine/ui/tests/test_hud_stage2.cpp` (`test_bombing_run_button`: enable, icon 3, tooltip 3, dial, space untouched).
+- [ ] Visual baselines (`tests/visual_baselines`): not refreshed. On 2026-11-08 the smoke PNGs of dev already differ from the
+  2026-11-04 baselines in most shots (attract camera, campaign screens, ...), so a `toolsisualisual_check.cmd update`
+  would store unrelated drift; refresh them in one pass when the baselines are next reviewed. The button's change (icon 3,
+  full dial while disabled) shows only in land shots.
 
 ### 9.9 Open items (game probes; not run)
 1. [L] Dial at 1.0: complete `i_button_build` overlay or nothing? Probe: campaign land battle with bombers in orbit;

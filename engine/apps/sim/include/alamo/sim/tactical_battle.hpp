@@ -845,9 +845,14 @@ public:
     // BombingBlockStatus: IsFinished = no bomber left; Result = undamaged / total ([port] bombers are not targets: 1).
     bool bombing_run_finished(int32_t player) const;
     float bombing_run_result(int32_t player) const;
-    // UI query 0x4950f0: frames until the player's next bombing run is ready (0 = ready). cu9 t17: kept for the tactical
-    // HUD's bombing-run button (no HUD caller yet; test_battle_l1 covers it).
+    // UI queries (HUD_GAPS §9.3, cu9g t02; const, presentation only - the sim never reads them back):
+    // frames_until_available = 0x4950f0's frame minus now (0 = ready; a run in progress: interval + the longest remaining
+    // flight); cooldown_fraction = 0x495250's dial fraction 0..1 (1 = ready, 0 = shown as a full dial by the caller).
     uint32_t bombing_run_frames_until_available(int32_t player) const;
+    float bombing_run_cooldown_fraction(int32_t player) const;
+    // The player's bomber type (Land_Bomber_Type of the first Ship_Class 1 bomber in orbit; objects::kNone = no record):
+    // the HUD plays its SFXEvent_Bomb_Run_Select_Target / _Incoming (HUD_GAPS §9.4, §9.6).
+    objects::TypeIndex bombing_run_bomber_type(int32_t player) const;
     const L1Constants& l1_constants() const { return l1_k_; }
     // --- end L1 systems ---
 
@@ -1657,6 +1662,7 @@ private:
     };
     std::vector<L1Bombard> l1_bombard_;
     std::vector<L1BombingRun> l1_runs_;
+    int64_t l1_bombing_run_ready_frame(const L1BombingRun& r) const;  // 0x4950f0 absolute frame, -1 = disabled
     std::vector<std::pair<int32_t, int32_t>> l1_extra_projectiles_;  // (type, CombatData projectile) appended for strikes
     void l1_strikes_setup(TacticalMode& mode);  // setup(): records
     void l1_strikes(TacticalMode& mode, SimRng& rng);  // tick after consume_events

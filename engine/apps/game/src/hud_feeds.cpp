@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "alamo/galactic/economy.hpp"
+#include "alamo/objects/type_fields.hpp"
 
 namespace alamo::game {
 
@@ -27,6 +28,23 @@ ui::HudOrderButtons order_buttons(std::span<const OrderUnitState> selection, int
         b.can_move = b.can_move || u.can_move;
     }
     return b;
+}
+
+ui::HudBombingRunButton bombing_run_button(bool land, bool controls_locked, bool available, float fraction) {
+    ui::HudBombingRunButton b;
+    if (!land) return b;
+    b.present = true;
+    const bool ready = !controls_locked && available;
+    b.disabled = !ready;
+    if (!ready) b.dial = fraction > 0.0f ? std::min(fraction, 1.0f) : 1.0f;
+    return b;
+}
+
+BombingRunStyle bombing_run_style(const galactic::FactionRules& faction) {
+    BombingRunStyle s;
+    s.blob_material = std::string(faction.xml_text("Bombing_Run_Shadow_Blob_Material_Name"));
+    if (const std::string_view v = faction.xml_text("Bombing_Run_Blob_Size"); !v.empty()) s.blob_size = static_cast<float>(objects::c_atof(v));
+    return s;
 }
 
 const char* hardpoint_type_name(uint8_t kind) {

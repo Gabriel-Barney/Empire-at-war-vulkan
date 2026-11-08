@@ -531,9 +531,16 @@ struct LandRun {
     bool run_started = false, bombers_flew = false, run_done = false, refused_unavailable = false;
     // cu9 t17: the HUD cooldown query (bombing_run_frames_until_available, 0x4950f0) when the run starts / ends.
     uint32_t run_wait_at_start = 1, run_wait_after = 0;
+    // cu9g t02: the dial fraction (bombing_run_cooldown_fraction, 0x495250) and command 28 outcomes.
+    float dial_before = -1.0f, dial_at_start = -1.0f, dial_after = -1.0f;
+    uint32_t wait_in_run = 0;
+    bool dial_in_run_ok = true, dial_in_run_partial = false;
+    bool cmd_none_for_defender = false, cmd_in_progress_refused = false, cmd_bad_point_refused = false;
 };
 
-LandRun run_land(const Data& d, int32_t workers) {
+// via_command: the run is started by command 28 BombingRun through TacticalBattle::handle_command (cu9g t02) instead of
+// the direct start_bombing_run call; both must give the same CRC log.
+LandRun run_land(const Data& d, int32_t workers, bool via_command = false) {
     LandRun out;
     jobs::JobSystem js(jobs::JobSystemConfig{workers});
     SimConfig cfg;
@@ -633,12 +640,31 @@ LandRun run_land(const Data& d, int32_t workers) {
         if (out.bombard_hit && b->bombardment_available(1) && f > 120) out.bombard_reset = true;
         if (!out.run_started && out.bombard_hit && b->bombing_run_available(1)) {
             out.run_wait_at_start = b->bombing_run_frames_until_available(1);
-            out.run_started = b->start_bombing_run(*tm, 1, target);
+            out.dial_before = b->bombing_run_cooldown_fraction(1);
+            // The wire point is quantized (q1..q3): both variants start at the dequantized point, as the original's execute does.
+            commands::EventData ev(commands::EventType::BombingRun);
+            ev.set_f("x", target.x).set_f("y", target.y).set_f("z", target.z);
+            const Vec3 wire{ev.f("x"), ev.f("y"), ev.f("z")};
+            if (via_command) {
+                out.cmd_none_for_defender = b->handle_command(*tm, 0, ev, host.random().synced()) == commands::RejectReason::NotAllowed;
+                out.run_started = b->handle_command(*tm, 1, ev, host.random().synced()) == commands::RejectReason::None;
+                out.cmd_in_progress_refused = b->handle_command(*tm, 1, ev, host.random().synced()) == commands::RejectReason::AbilityNotReady;
+            } else {
+                out.run_started = b->start_bombing_run(*tm, 1, wire);
+            }
+            out.dial_at_start = b->bombing_run_cooldown_fraction(1);
+        }
+        if (out.run_started && !out.run_done) {
+            const float dial = b->bombing_run_cooldown_fraction(1);
+            if (dial < 0.0f || dial > 1.0f) out.dial_in_run_ok = false;
+            if (dial > 0.0f && dial < 1.0f) out.dial_in_run_partial = true;
+            out.wait_in_run = std::max(out.wait_in_run, b->bombing_run_frames_until_available(1));
         }
         if (out.run_started && !b->bombing_run_finished(1)) out.bombers_flew = true;
         if (out.bombers_flew && !out.run_done && b->bombing_run_finished(1)) {
             out.run_done = true;
             out.run_wait_after = b->bombing_run_frames_until_available(1);
+            out.dial_after = b->bombing_run_cooldown_fraction(1);
         }
         trace.u32(f);
         trace.u32(b->weather().phase_index());
@@ -723,6 +749,19 @@ void test_land(const Data& d) {
     CHECK(a.run_wait_at_start == 0 && a.run_wait_after > 0);
     const LandRun w = run_land(d, 4);
     CHECK(!first_divergence(a.crc, w.crc).diverged && a.trace == w.trace);
+    // cu9g t02 (HUD_GAPS §9.3): the dial is full when ready, 0 on the start frame, partial during the run (the run
+    // waits its interval, 3 s = 90 frames, plus the remaining flight), and just after the run starts a new sweep from 0.
+    std::printf("  bombing run dial: before %.3f at start %.3f after %.3f; longest wait in run %u\n", static_cast<double>(a.dial_before),
+                static_cast<double>(a.dial_at_start), static_cast<double>(a.dial_after), a.wait_in_run);
+    CHECK(a.dial_before == 1.0f && a.dial_at_start == 0.0f);
+    CHECK(a.dial_in_run_ok && a.dial_in_run_partial && a.wait_in_run >= 90);
+    CHECK(a.dial_after >= 0.0f && a.dial_after < 1.0f);
+    // Command 28 starts the run exactly as the direct call at the same frame; a second one while it runs is refused
+    // AbilityNotReady (the app plays the error SFX), the defender has no record (NotAllowed).
+    const LandRun c = run_land(d, 0, true);
+    CHECK(c.run_started && c.bombers_flew && c.run_done);
+    CHECK(c.cmd_none_for_defender && c.cmd_in_progress_refused);
+    CHECK(!first_divergence(a.crc, c.crc).diverged && a.trace == c.trace);
 }
 // ---- cu8g t03: Set_New_Environment / the typed environment pick (CU8F_T03_T05_RE §2.2, L1_S4_REMAINING §3.2) ----
 // A land map with four environments (0 Rain_Test rain, 1 no scenario CLEAR, 2 Rain_Test rain, 3 "Cinematic" snow). The

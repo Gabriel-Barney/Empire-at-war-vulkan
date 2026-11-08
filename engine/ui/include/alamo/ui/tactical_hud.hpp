@@ -187,6 +187,17 @@ struct HudOrderButtons {
 };
 bool order_button_enabled(uint32_t button, const HudOrderButtons& s);  // button 0..5 = c_button00..05
 
+// Land b_special_weapon = the bombing-run button (HUD_GAPS §9.1 - §9.3, cu9g t03). Never hidden in land, only disabled
+// every frame (controls locked, no bombing-run record, run not available); alternate icon 3, tooltip 3
+// (TEXT_TOOLTIP_BOMBRUN_BUTTON); the Build_Texture_Name dial is the cooldown. `present` false (space, no tactical HUD
+// feed): the component keeps its data state (the space superweapon button is not modelled here).
+struct HudBombingRunButton {
+    bool present = false;       // a land battle: the HUD drives the button
+    bool disabled = true;       // !ready (0x312570)
+    float dial = -1.0f;         // 0..1 radial dial (Build_Texture_Name); < 0: none. [port] none when ready (the 0x495250 value
+                                // 1.0 draws nothing, as the ability buttons; HUD_GAPS §9.9 item 1 is a probe question)
+};
+
 struct TacticalHudFrame {
     WorldHudContext world;          // canvas is filled by TacticalHud
     // Radar mapping: world rectangle shown by the radar (the map's playable box).
@@ -244,6 +255,7 @@ struct TacticalHudFrame {
     bool paused = false;
     std::span<const HudOrderQueue> order_queues;
     HudOrderButtons order_buttons;  // c_button00..05 enable state (HUD_GAPS §5)
+    HudBombingRunButton bombing_run;  // b_special_weapon in land (HUD_GAPS §9)
     // [port: Gabriel, original screenshot] Game Paused banner (pause_shell: yellow TEXT_GAME_PAUSED bar at the top
     // centre, red TEXT_BUTTON_RESUME_GAME button under it - a click emits HudAction::ResumeGame) while `paused`.
     bool pause_banner = true;
@@ -321,6 +333,7 @@ private:
     void build_skeleton(const TacticalHudFrame& f);
     void build_markers(const TacticalHudFrame& f, std::span<const HudUnit> units);
     void apply_order_buttons(const HudOrderButtons& s);
+    void apply_bombing_run_button(const HudBombingRunButton& s);
     void build_pause_banner(const TacticalHudFrame& f);
     void build_objectives(const TacticalHudFrame& f);
     int32_t font_of(int32_t component, float fallback_points) const;
@@ -370,6 +383,7 @@ private:
     std::vector<uint8_t> dynamic_;  // per component: drawn by a panel (not by build_buttons)
     int32_t radar_ = -1, radar_blip_ = -1, credits_ = -1, shell_ = -1, retreat_ = -1;
     int32_t order_button_[6] = {-1, -1, -1, -1, -1, -1};  // c_button00..05
+    int32_t special_weapon_ = -1;                         // b_special_weapon (land: the bombing-run button)
     int32_t planet_text_ = -1, tech_text_ = -1, pop_text_ = -1, movie_ = -1;
     int32_t pause_ = -1, pause_g_ = -1;  // [port: Gabriel] b_play_pause_t / b_play_pause
     bool paused_ = false;

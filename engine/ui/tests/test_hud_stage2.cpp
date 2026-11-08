@@ -889,6 +889,46 @@ void test_order_buttons() {
     CHECK2(!shown(2) && shown(3) && !enabled(3) && enabled(4) && hud.stats().buttons == 5);
 }
 
+// HUD_GAPS §9.2 (cu9g t03): b_special_weapon in land is the bombing-run button: never hidden, disabled from the feed,
+// alternate icon 3, tooltip 3, the cooldown on the Build_Texture_Name dial; a frame without the land feed leaves it alone.
+void test_bombing_run_button() {
+    const std::string xml =
+        "<CommandBarComponents><CommandBarComponent Name=\"b_special_weapon\"><Type>Button</Type><Disabled>True</Disabled>"
+        "<Blank_Texture_Name>i_button_back_new.tga</Blank_Texture_Name>"
+        "<Icon_Alternate_Texture_Name>ion.tga, hyper.tga, turret.tga, i_button_command_bar_bombing_run.tga</Icon_Alternate_Texture_Name>"
+        "<Disabled_Texture_Name>i_button_disabled.tga</Disabled_Texture_Name><Build_Texture_Name>i_button_build.tga</Build_Texture_Name>"
+        "<Tooltip_Text>A, B, C, TEXT_TOOLTIP_BOMBRUN_BUTTON, E</Tooltip_Text></CommandBarComponent></CommandBarComponents>";
+    ComponentTable t;
+    const data::XmlDocument doc = data::XmlDocument::parse(std::string_view(xml), "bomb.xml");
+    CHECK2(doc.ok());
+    t.parse(doc.root());
+    const TextureAtlas atlas = stage2_atlas();
+    auto box = make_box_rasterizer();
+    FontCache fonts(*box);
+    TacticalHud hud;
+    hud.init(t, atlas, fonts);
+    hud.resize(1024, 768);
+    TacticalHudFrame fr;
+    fr.world.view = top_view2(1024, 768);
+    const auto ci = static_cast<uint32_t>(t.find("b_special_weapon"));
+    // No land feed (space): the component keeps its data state (Disabled True), no dial.
+    hud.build(fr, {}, {});
+    const ButtonRuntime* r = hud.buttons().find_state(ci);
+    CHECK2(!r || (r->disabled && r->build_fill < 0.0f && r->icon_override.empty()));
+    // Land, ready: enabled, icon 3, tooltip 3, no dial.
+    fr.bombing_run.present = true;
+    fr.bombing_run.disabled = false;
+    hud.build(fr, {}, {});
+    r = hud.buttons().find_state(ci);
+    CHECK2(r && !r->hidden && !r->disabled && r->icon_override == "i_button_command_bar_bombing_run.tga" && r->tooltip_index == 3 && r->build_fill < 0.0f);
+    // Cooldown: disabled with the dial (fraction x 100).
+    fr.bombing_run.disabled = true;
+    fr.bombing_run.dial = 0.25f;
+    hud.build(fr, {}, {});
+    r = hud.buttons().find_state(ci);
+    CHECK2(r && !r->hidden && r->disabled && r->build_fill == 25.0f);
+}
+
 // Drag-select box (Playtest 3): drawn from the drag threshold on, over exactly the bounds box_select uses on release.
 void test_drag_box() {
     ComponentTable t;
@@ -1309,6 +1349,7 @@ int run_stage2_tests() {
     test_markers();
     test_tactical_stage2();
     test_order_buttons();
+    test_bombing_run_button();
     test_drag_box();
     return g_fail2;
 }

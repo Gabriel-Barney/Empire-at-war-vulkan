@@ -133,8 +133,14 @@ Instance jam_blob_instance(const GpuModel& model, const JamBlob& blob) {
 
 uint32_t JamBlobModels::build(Renderer& renderer, const TextureSource& textures, const InterpolatedFrame& frame,
                               const std::function<float(float, float)>& ground, std::vector<Instance>& out) {
+    const std::vector<JamBlob> blobs = jam_blobs(frame);
+    return build_blobs(renderer, textures, blobs, ground, out);
+}
+
+uint32_t JamBlobModels::build_blobs(Renderer& renderer, const TextureSource& textures, std::span<const JamBlob> list,
+                                    const std::function<float(float, float)>& ground, std::vector<Instance>& out) {
     uint32_t n = 0;
-    for (JamBlob& b : jam_blobs(frame)) {
+    for (JamBlob b : list) {
         const std::string key = model_key(b.material, b.color);
         auto it = models_.find(key);
         if (it == models_.end()) {

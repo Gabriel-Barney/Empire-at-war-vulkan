@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -201,6 +202,8 @@ public:
     // P2 selection circles of this frame (TacticalHud::selection_blobs): flat blob instances in the main list (land: at
     // the terrain height under the unit). Set before prepare().
     void set_selection_blobs(std::span<const ui::SelectionBlob> blobs) { blobs_.assign(blobs.begin(), blobs.end()); }
+    // cu9g t03: the bombing-run targeting blob of this frame (HUD_GAPS §9.5; nullopt = none). Set before prepare().
+    void set_bombing_blob(const std::optional<render::JamBlob>& blob) { bombing_blob_ = blob; }
     const render::FogRenderer& fog() const { return fog_; }
     // --- R3/R5 render ---
     // Space reinforcement overlay (palette 3 + W_Space_Reinforce_FOW_Grid): on while the local player picks a space
@@ -266,6 +269,7 @@ private:
     std::vector<ui::SelectionBlob> blobs_;
     render::GpuModel blob_model_;
     bool blob_ok_ = false;
+    std::optional<render::JamBlob> bombing_blob_;  // cu9g t03: the land bombing-run targeting blob (drawn through jam_models_)
     render::JamBlobModels jam_models_;  // R5 sensor jamming radius blobs (one model per material + colour)
     render::BeamStyleTable beam_styles_;  // R5 ability beams: per-special styles over the GameConstants fallbacks (ABILITY_VISUALS 4.2)
     render::BeamBoneFn beam_bone_;        // bone world positions (HP_trac_bone, hardpoint / muzzle bones)

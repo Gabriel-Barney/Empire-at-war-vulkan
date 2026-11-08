@@ -1629,6 +1629,26 @@ void hud_feeds_test(const game::GameData& data, const game::SessionSpec& spec) {
     const game::OrderUnitState e[] = {enemy_both};
     const ui::HudOrderButtons b4 = game::order_buttons(e, 0, false);
     CHECK(!b4.can_attack && !b4.can_move);
+    // cu9g §9.2 / §9.3: the land bombing-run button. Space: not driven. Ready: enabled, no dial. Controls locked or not
+    // available: disabled; the dial shows the cooldown fraction, a 0 as a full dial (skirmish before its first run).
+    const ui::HudBombingRunButton sp = game::bombing_run_button(false, false, true, 0.5f);
+    CHECK(!sp.present);
+    const ui::HudBombingRunButton rd = game::bombing_run_button(true, false, true, 1.0f);
+    CHECK(rd.present && !rd.disabled && rd.dial < 0.0f);
+    const ui::HudBombingRunButton lk = game::bombing_run_button(true, true, true, 1.0f);
+    CHECK(lk.present && lk.disabled && lk.dial == 1.0f);
+    const ui::HudBombingRunButton cd = game::bombing_run_button(true, false, false, 0.25f);
+    CHECK(cd.present && cd.disabled && cd.dial == 0.25f);
+    const ui::HudBombingRunButton fresh = game::bombing_run_button(true, false, false, 0.0f);
+    CHECK(fresh.disabled && fresh.dial == 1.0f);
+    {
+        galactic::FactionRules fr;
+        fr.xml_fields = {{"Bombing_Run_Shadow_Blob_Material_Name", "Bombing_Run_Empire"}, {"Bombing_Run_Blob_Size", "100.0"}};
+        const game::BombingRunStyle st = game::bombing_run_style(fr);
+        CHECK(st.blob_material == "Bombing_Run_Empire" && st.blob_size == 100.0f);
+        const game::BombingRunStyle none = game::bombing_run_style(galactic::FactionRules{});
+        CHECK(none.blob_material.empty() && none.blob_size == 100.0f);
+    }
     // §1: HardPointType names (reticle table keys) and the yaw-rotated attachment point.
     CHECK(std::string(game::hardpoint_type_name(0)) == "HARD_POINT_ENGINE" && std::string(game::hardpoint_type_name(5)) == "HARD_POINT_WEAPON_LASER");
     CHECK(std::string(game::hardpoint_type_name(12)) == "HARD_POINT_DUMMY_ART" && std::string(game::hardpoint_type_name(13)).empty());
