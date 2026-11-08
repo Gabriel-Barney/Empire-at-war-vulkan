@@ -220,6 +220,7 @@ EconomyConstants load_economy_constants(const data::GameDatabase& db) {
         c.base_vs_tech[static_cast<size_t>(i)] = g.get_float(
             "Production_Speed_Mod_Base_Vs_Tech_" + std::to_string(i), c.base_vs_tech[static_cast<size_t>(i)]);
     c.max_ground_forces_on_planet = g.get_int("Max_Ground_Forces_On_Planet", c.max_ground_forces_on_planet);
+    c.health_low_percent_threshold = g.get_float("Health_Low_Percent_Threshold", c.health_low_percent_threshold);  // a2l t03
     c.corruption_hyperspace_bonus = g.get_float("Corruption_Hyperspace_Bonus", c.corruption_hyperspace_bonus);
     c.political_control_change_seconds =
         g.get_float("Political_Control_Change_Time_Seconds", c.political_control_change_seconds);

@@ -2295,6 +2295,39 @@ static void test_stage_and_setup_a() {
         std::printf("setup A: enemy frigate on the hero's path -> %s, hero %s\n", ok ? "solved" : "failed", pw.has(s, pw.hero) ? "yes" : "no");
         CHECK(!pw.has(s, pw.hero));
     }
+    {
+        // a2l t03 (A2L_T03_RE_ANSWERS Q4.1): a unit below GameConstants Health_Low_Percent_Threshold is dropped. The
+        // synthetic hero is at full hull (1.0): a floor of 0.33 keeps it, a floor above 1.0 drops it.
+        ParityWorld keep(false, {"HeroDeny"});
+        CHECK(keep.rules.constants.health_low_percent_threshold == 0.33f);
+        ParityWorld drop(false, {"HeroDeny"}, {}, [](gal::GalacticRules& r) { r.constants.health_low_percent_threshold = 1.5f; });
+        keep.run(2);
+        drop.run(2);
+        CHECK(keep.has(keep.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok), keep.hero));
+        CHECK(!drop.has(drop.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok), drop.hero));
+    }
+    {
+        // a2l t03 (Q4.3): a unit in hyperspace stays a candidate, keyed by its fleet's planet (the hop's source).
+        ParityWorld pw(false, {"HeroDeny"});
+        pw.run(2);
+        objects::ObjectHandle h;
+        for (const gal::FleetState& f : pw.sim->fleets())
+            if (f.alive && f.owner == 0)
+                for (const objects::ObjectHandle u : f.contents)
+                    if (pw.store->alive(u) && pw.store->type(u) == pw.hero) h = u;
+        CHECK(static_cast<bool>(h) && pw.world->free_store_move(0, h, 1));
+        bool moving = false;
+        for (int32_t fr = 3; fr < 600 && !moving; ++fr) {
+            pw.sim->update();
+            pw.world->update_player(0, fr, true, false);
+            for (const gal::FleetState& f : pw.sim->fleets())
+                if (f.alive && f.moving && std::find(f.contents.begin(), f.contents.end(), h) != f.contents.end()) moving = true;
+        }
+        CHECK(moving);
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
+        std::printf("setup A: hero in hyperspace -> %s, hero %s\n", ok ? "solved" : "failed", pw.has(s, pw.hero) ? "yes" : "no");
+        CHECK(ok && pw.has(s, pw.hero));
+    }
 }
 
 // OI2 ai: production-disabled types (story DISABLE_BUILDABLE, REMAINING_GAPS §1.5) are never picked by AI production -

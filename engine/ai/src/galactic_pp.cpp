@@ -314,10 +314,20 @@ public:
     //   * else the unit's planet must be revealed (Is_Planet_Revealed 0x3fa420), else the unit is dropped;
     //   * per stage c = stage_cost (0 at the stage; else the AI all-pairs path unit planet -> stage when every planet
     //     after the start has node cost 0, c = (low 16 bits of the hop-weight sum) / 10; else none);
-    //   * key = (sum of finite c^2 + sum of 2-D distance^2 unit planet -> stage) / TFs when any c was finite; a unit
-    //     with no finite c is dropped.
-    // [port] Not modelled: the health threshold, the engaged / battle-pending / moving / behaviour / attach tests
-    // (open item 5 of A2K_T02_RE_ANSWERS); units in transit (no planet) are dropped.
+    //   * key = (sum of finite c^2 + sum of 2-D distance^2 unit -> stage) / TFs when any c was finite; a unit with no
+    //     finite c is dropped.
+    // a2l t03 (A2L_T03_RE_ANSWERS Q4):
+    //   * health [H]: a candidate whose hull fraction (0x396470) is below GameConstants Health_Low_Percent_Threshold is
+    //     dropped. The test runs for candidates with PP +0x104 == 0 or entry +0x30 == 0, i.e. every candidate left by
+    //     the reservation test above. [port] the galactic store keeps no hardpoint health, so the min with 0x396070 is
+    //     the hull fraction itself;
+    //   * in transit [H rule; M field]: retail keeps a unit whose fleet is in hyperspace, keyed by the fleet's planet
+    //     (FleetDataPack +0x50): taken as the hop's source planet (FleetState::from), with the fleet's own position for
+    //     the 2-D distance term;
+    //   * the "engaged" clauses (dogfight cell, special-weapon recharge) are tactical state and pass for every galactic
+    //     unit [M]; not modelled.
+    // [port] Not modelled (open item, needs RE: the galactic meaning of obj +0x210 (+8 / +0x34), +0x3A7, +0x3B4, the
+    // lock 0x39ad40 and the attach test +0x35B -> 0x42e3b0 / 0x42e3d0): the moving / building / lock / attach tests.
     void setup_a() override {
         p_.stages.assign(p_.def.task_forces.size(), p_.tplanet());
         if (p_.has_target()) {
@@ -330,12 +340,22 @@ public:
         }
         if (!(p_.def.allow_free_store_units && !p_.def.magic_plan)) return;
         const auto& planets = p_.w.sim.planets();
+        const float health_floor = p_.w.sim.rules().constants.health_low_percent_threshold;
+        const int path_level = p_.has_target() && p_.w.defs.goals[p_.goal_type].reachability == Reachability::SingleHopDisconnected ? 4 : 3;
         for (const ObjectHandle u : p_.w.free_units(p_.player)) {
             const objects::ObjectId id = p_.w.store.id(u);
             // A candidate needs PP+0x104 == 0 (the first solve) or +0x30 == 0 (A1_READINGS §28.5).
             if (!p_.first_solve && p_.w.unit_reserved.count(id) != 0) continue;
-            const PlanetIndex at = p_.w.planet_of_unit(u);
-            if (at == kInvalidPlanet) continue;  // moving / in transit
+            if (static_cast<float>(p_.hull_fraction(u)) < health_floor) continue;  // Health_Low_Percent_Threshold
+            PlanetIndex at = p_.w.planet_of_unit(u);
+            Vec3 pos = at != kInvalidPlanet ? planets[at].position : Vec3{};
+            if (at == kInvalidPlanet) {  // in transit: the fleet's planet (the hop's source) [M]
+                const uint32_t fl = p_.w.fleet_of_unit(u);
+                if (fl == gal::kNoFleet || !p_.w.sim.fleets()[fl].moving) continue;
+                at = p_.w.sim.fleets()[fl].from;
+                pos = p_.w.sim.fleets()[fl].position;
+                if (!p_.w.valid_planet(at)) continue;
+            }
             const gal::TypeInfo* x = p_.ti(p_.w.store.type(u));
             if (!x || structure_kind(x->kind)) continue;
             FsUnit f;
@@ -347,13 +367,13 @@ public:
                 bool finite = false;
                 for (const PlanetIndex st : p_.stages) {
                     if (st == kInvalidPlanet) continue;
-                    const double c = stage_cost(at, st);
+                    const double c = stage_cost(at, st, path_level);
                     if (c >= 0.0) {
                         sum += c * c;
                         finite = true;
                     }
-                    const double dx = static_cast<double>(planets[at].position.x) - planets[st].position.x;
-                    const double dy = static_cast<double>(planets[at].position.y) - planets[st].position.y;
+                    const double dx = static_cast<double>(pos.x) - planets[st].position.x;
+                    const double dy = static_cast<double>(pos.y) - planets[st].position.y;
                     sum += dx * dx + dy * dy;
                 }
                 if (!finite) continue;  // galactic: no finite stage cost -> not eligible
@@ -363,10 +383,10 @@ public:
             p_.units.push_back(f);
         }
     }
-    // Stage reachability slot 7 (0x663810, mode 3; mode 4 for a Reachability-4 goal is taken as the same rule [M]) from
-    // the unit's planet: 0 at the stage; the zero-node-cost all-pairs path length (low 16 bits of the hop sum / 10) with
-    // threshold 1e-4 (0x6913a0); -1 = none (1e18).
-    double stage_cost(PlanetIndex from, PlanetIndex stage) const {
+    // Stage reachability slot 7 (0x663810, A2L_T03_RE_ANSWERS Q1.2) from the unit's planet at level 3, or 4 for a
+    // Reachability-4 goal (Q4.3; level 4 does not count the final hop): 0 at the stage; else ai_reach_path_cost on the
+    // player's all-pairs path (threshold 1e-4); -1 = none (1e18).
+    double stage_cost(PlanetIndex from, PlanetIndex stage, int level) const {
         if (from == stage) return 0.0;
         const AiPathFinder* f = p_.w.ensure_path_finder(p_.player);  // 0x690f10 on the player's matrix (lazy 0x524c10)
         if (!f || !f->created()) return -1.0;
@@ -374,9 +394,8 @@ public:
         std::vector<uint32_t> wts;
         f->get_path(from, stage, path, &wts);
         if (path.size() < 2) return -1.0;
-        const int32_t s = free_store_path_sum(wts, path.size());
-        if (!free_store_path_passes(s, 1e-4f)) return -1.0;
-        return static_cast<double>(static_cast<uint32_t>(s) & 0xFFFFu) / 10.0;
+        const double c = ai_reach_path_cost(wts, path.size(), level);
+        return c >= kReachNone ? -1.0 : c;
     }
     float score(uint32_t i) override {  // 0x728560 [H]
         PpRec& r = p_.recs[i];
