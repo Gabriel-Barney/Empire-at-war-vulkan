@@ -89,16 +89,24 @@ t699) and no human planet is taken. **a2f t05 stays open.**
   with 2.
 - **O5.** The human Empire's final credits in the HotM trace are now 19465 vs retail 19675 (equal before).
 
-## Retail probe (prepared, not yet run)
+## Retail probe runs
+
+**2026-11-03 (`20261103-152619-galactic-vanilla-lua`): not a valid reference for production.** The plan hooks of
+that kit lost their records table to PGBase `Flush_G` at the first plan release, and the next record's Lua error
+killed the plan threads (LUA_SCRIPT_OUTPUT §4). Retail's own AI built less: Rebel departures 19 and 32 queue starts
+(15 Y-wings), against 71 / 50 in the run without plan hooks. The retail queue above (2026-10-30 run) still stands;
+the 11-03 queue and departure numbers do not. The kit was fixed in q2f t08 (2026-11-08).
+
+## Retail probe (fixed 2026-11-08, q2f t08)
 
 `tools/probe_mod/q2_traces`, `run_lua_probe.cmd` (README "Lua probe run"): the mod now also carries unchanged copies
 of `BuildSpaceForcesPlan.lua`, `BuildGroundForcesPlan.lua` and `ConquerPiratePlan.lua` with a read-only block that
-records `PSTART` / `PDONE` (time, frame, plan, faction, target, task-force unit types) and Conquer_Pirate's
-`PFAIL`. It must show:
+records `PSTART` / `PBLOCK` / `PDONE` / `PEXIT` (time, frame, plan, faction, target, the goal's budget, credits,
+task-force unit types) and Conquer_Pirate's `PFAIL`. It must show:
 
-1. the Rebel's first Build_Space_Forces `PDONE` and its unit types (port: Marauder; retail's queue suggests a
+1. the Rebel's first Build_Space_Forces `PBLOCK` and its unit types (port: Marauder; retail's queue suggests a
    Corellian gunboat at frame 109);
-2. the first Build_Ground_Forces `PSTART` / `PDONE` and units (retail queue: light tank, tank buster, infantry by
+2. the first Build_Ground_Forces `PSTART` / `PBLOCK` and units (retail queue: light tank, tank buster, infantry by
    frame 559);
 3. every Conquer_Pirate start and production failure, with target, for both AI players;
 4. that the plans run at all under the mod (`lua.plans` verdict `loaded: N plan scripts` with N ≥ 1).

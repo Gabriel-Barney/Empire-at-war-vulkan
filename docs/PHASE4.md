@@ -319,8 +319,17 @@ more timing metrics since). Re-record it, like a golden, when an intended behavi
 and Q4 groups are judged against these numbers. Reference runs: the Q2 traces in the main checkout's
 `tools/probe_mod/q2_traces/out/`.
 
+**2026-11-08 (q2f t08): `hotm_galactic` now uses 2 retail runs.** `20261103-152619-galactic-vanilla-lua` was dropped:
+its Lua plan hooks killed retail's own plan threads (`docs/re/LUA_SCRIPT_OUTPUT.md` §4), so its AI production and fleet
+moves were not retail behaviour, and it widened the AI envelopes (Rebel fleet departures 19..71). `baseline.json` was
+re-recorded at `acb3547a` (same engine code as dev `03940b96`). Graded against the old 3 runs the port had 0
+regressions; all 13 new FAILs come from the narrower envelope, among them `ai.fleet_departures[Rebel]` 30 vs 71,
+`ai.fleet_targets[Rebel]` overlap 0.23 (retail shuttles Shola / Naboo), `ai.build_mix[Rebel]` 0.44 (retail builds 22
+infantry squads, the port 2). `ai.build_count[Rebel]` is 40 vs retail 50 (PASS, tol 12.5).
+
 | scenario | timing | income | AI choices | battle outcomes | damage |
 |---|---|---|---|---|---|
+| `hotm_galactic` (2 retail runs) at `acb3547a` | 28 PASS / 11 FAIL | 15 / 10 | 13 / 3 (1 N/A) | 7 / 0 | - |
 | `hotm_galactic` (3 retail runs) at `79576620` | 36 PASS / 8 FAIL | 20 / 5 | 16 / 0 (1 N/A) | 7 / 0 | - |
 | `hotm_galactic` at the a2k merge (`9064172d`) | 34 / 8 | 21 / 4 | 16 / 0 (1 N/A) | 7 / 0 | - |
 | `hotm_galactic`, q4h t02 (`3629d4cf`) | 15 / 5 | 22 / 3 | 11 / 5 (1 N/A) | 7 / 0 | - |
