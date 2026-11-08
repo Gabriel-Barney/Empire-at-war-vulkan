@@ -220,6 +220,56 @@ Behaviour state: +0x40 bone index (−1 = none), +0x44 transition start frame, +
   holstered; draw SFX at the first 15-frame boundary after a target appears; hum starts within ~5 frames + one
   locomotor service; holster SFX and hum fade-out 450 frames after the last engaged frame. For Saber_Throw:
   whether Luke's hum returns right after the catch (the [M] above). A memory reader would watch obj +0x3b9.
+  Run in cu8h t02 (§2.6).
+
+### 2.6 Probe results (cu8h t02, 2026-11-08) [H for what was read]
+Claude drove the retail game. Kit: `tools/probe_mod/cu8h_probes/`, sessions `hum` and `luke`.
+- **Setup.** A land skirmish on `_MP_LAND_DAGOBAH`, human Empire against the AI Rebel. A free-store script spawned the
+  heroes for the idle human player in an open square, all units invulnerable.
+- **What was read.** A read-only memory watcher polled each hero every 2 ms (about 16 reads per frame) and logged:
+  - obj +0x3b4..+0x3b9;
+  - the HOLSTER_WEAPON behaviour's bone / start / end / last-engaged / drawn fields;
+  - SAP (obj +0x100) +0x2e8, the thrown-saber id (0x3fffff = none).
+- **Frames.** Frames are mode frames. The Lua frames of the orders are the same clock.
+- **Vader (`hum`):**
+  - Mode frame 311: starts suppressed, +0x3b9 = 1, drawn 0, bone 10.
+  - 900: a Rebel trooper spawned and `Attack_Target` ordered.
+  - 915: draw transition 915–920 (5 frames), at the first 15-frame boundary after the order.
+  - 920: +0x3b9 → 0 at the transition end.
+  - 922: idle loop on (+0x3b5); 990: moving loop on (+0x3b6 instead of +0x3b5).
+  - Last engaged stamp: every 15 frames until 1200, when the target was removed.
+  - **1650 = 1200 + 450:** holster transition 1650–1655. +0x3b9 → 1 and +0x3b6 → 0 at the holster **start**.
+  - All as §2.3.
+- **Luke, saber thrown while holstered (`luke` run 1; the `hum` run shows the same at 2115 / 2143):**
+  - 453: target spawned 150 units away.
+  - 462: autofire threw the saber, +0x2e8 := the saber id. Luke was still holstered and +0x3b9 stayed 1.
+  - 465: the Service (engaged) started a draw, 465–470. The interpolation then stood still while the saber was in
+    flight (start / end stayed set past 470).
+  - 497: catch, +0x2e8 back to 0x3fffff.
+  - 498: the transition cleared and +0x3b9 → 0. 499: idle loop on.
+  - Holster at 2100 = 1650 + 450.
+- **Luke, saber thrown while drawn (`luke` run 2):** a second target 120 units away, `Activate_Ability("SABER_THROW")`
+  at 1509.
+  - 1512: drawn 0, +0x3b9 → 1, +0x3b6 → 0, saber in flight. This is 0x635450's snap + suppress.
+  - 1515: the Service (engaged) started a draw, 1515–1520, blocked by the flight.
+  - 1555: catch.
+  - 1556: transition cleared, +0x3b9 → 0. 1557: idle loop on.
+- **Answer to §2.5.**
+  - The hum is off for the whole flight. It returns **one frame after the catch** whenever the Service saw the hero
+    engaged at a 15-frame boundary during the flight, which is always the case while he has an attack target. The
+    held draw transition completes on the first frame without a saber in flight.
+  - The §2.3 [M] case, "hum stays off after a catch until a later draw transition", needs a flight with no engaged
+    boundary. It was not seen [M].
+  - Throw to catch took 35 frames (target at about 150 units), 43 frames (about 120 units, moving) and about 27
+    frames (`hum` run).
+  - The second autofire throw against the first target never came: after the catch Luke was in melee, inside the
+    20-unit minimum range.
+- **Port.**
+  - `hangar::EngineLoops` matches all of this when it is given `saber_in_flight`.
+  - The host passes `false` and never calls `saber_catch`, because there is no thrown-saber phase. The throw snap runs
+    at the ability apply.
+  - So the port's hum returns at the next boundary + 5 frames after a throw (about 8 frames), where the retail game
+    waits for the catch (27–43 frames). This is audio only, outside the CRC (follow-up).
 
 ## 3. t07: the Disable_Force_Abilities_Range emitter and the space retreat fallback query
 

@@ -220,7 +220,7 @@ not a weather emitter (`3D` 0) and uses the normal integrator.
 The normal integrators (0x1676a0, 0x166350) add the same f28·E term to the step velocity as well [M, not
 transcribed further].
 
-## 7. Probes (P2 and P3 run 2026-11-08; P1 open)
+## 7. Probes (P2 and P3 run 2026-11-08 in cu8g t10; P1 run 2026-11-08 in cu8h t01)
 
 - **P1, draw order:** in a debugger, break on 0x1ffb40 / 0x1ffbb0 / 0x532480 / 0x5324d0 when rcx = 0x140a13e24, and
   log the return address and the LCG state during a battle load on `_MP_LAND_ENDOR` (n = 4). Do it once as a
@@ -252,8 +252,57 @@ transcribed further].
   lighting every time: the same sun direction on the planet, the same nebula colour and the same station shading. If
   the pick could land on `Cinematic`, about half the loads would look different. A screenshot cannot name the record,
   so this only shows that the lighting never changes between loads.
-- **P1: not run.** It needs a debugger on the retail exe (breakpoints on the LCG draw functions), and the
-  project has none set up. It stays [L], moved to the follow-up group.
+- **P1: not run in cu8g t10** (no debugger then); run in cu8h t01, results below.
+
+**P1 results (cu8h t01, 2026-11-08, Claude drove the retail game; kit `tools/probe_mod/cu8h_probes/`):**
+- **Tool.** `cu8h_dbg.py` attaches as a debugger (Windows debug API, Python ctypes, nothing installed) and sets a
+  hardware **write watchpoint on the LCG state** (0x140a13e24 + the ASLR slide) on every thread, instead of code
+  breakpoints on the four draw functions. One write = one LCG step. Each hit logs the return address, a 24-frame stack,
+  the state before / after and the mode / frame. `cu8h_dbg_parse.py` assigns each hit to a load phase by the functions on
+  its stack (the exe's `.pdata`, chained entries resolved) and checks A (the pick comes after every chunk-`0x102` draw),
+  B (the pick is one `int(0, n − 1)` and its replay gives the index), C (no post-load draw before the pick) and D (the
+  first-tick weather draws). The game ran unmodified apart from the probe campaign below. Every run detached cleanly.
+- **Loads traced** (from Begin to mode frame 120):
+  - three skirmish loads of `_MP_LAND_ENDOR` ("(6) Endor Xpress", human Empire against an Easy AI Rebel);
+  - one galactic land battle on the same map: probe campaign "CU8H PROBE: ENDOR GALACTIC", with Jabiim's
+    `Land_Tactical_Map` patched to `_MP_LAND_ENDOR.ted` and Rebel infantry invading;
+  - one galactic space battle at Kashyyyk (`_Space_Planet_Kashyyyk_01.ted`, Heart of the Maw campaign).
+
+| Load | Seed | Chunk `0x102` draws | Pick | Then, load thread | Post-load (main thread) | First tick |
+|---|---|---|---|---|---|---|
+| Skirmish 1 | Start_Game 0x28e890 ← Load_Map 0x56480 ← LoadingThread | 2857 | 1 int → 1 `Noon_Clear` | 1 int (formation, below) | skirmish 0xeed80 → 0x295cf0 object creations (≈135–148 draws via 0x29f810), then starting forces 0x2a4fc0 (414) | no weather draw |
+| Skirmish 2 | same | 2864 | 1 int → 0 `Sunrise_Clear` | 1 int (formation) | same (414) | no weather draw |
+| Skirmish 3 | same | 2864 | 1 int → 3 `Noon_Rain` | 1 int (formation) | same (416) | **2 floats** from 0x468980 ← 0x468a50 ← 0x46a0c0 ← land tick 0x3bb440 at mode frame 0, before the common tick 0x3639d0; a 3rd from 0x46a0c0 at mode frame 111 |
+| Galactic land (Jabiim) | **none** (galactic stream) | 2873 | 1 int → 0 `Sunrise_Clear` | 1 int (formation) | **none** before the first tick (0x2a1eb0 drew nothing) | no weather draw; 1 float from 0x3a6b80 (← 0x2be76b ← common tick) |
+| Galactic space (Kashyyyk) | none | 42 | **none** (the map has one environment record, n = 1) | — | 101 from 0x2a1eb0 (fleet / station creation, with formation draws) | common tick |
+
+  - Load paths: skirmish `Load_Map` ← 0x92940 (LoadingThread); galactic `Load_Map` ← 0x290920 ← 0x929e8.
+  - Chunk-`0x102` sites, as §3 step 6 says: 0x4c3000 / 0x1341e0 / 0x62dd40 / 0x550ed0 and the behaviour-attach
+    stagger 0x3a4820, under 0x3a0930 ← 0x2b0a20 ← 0x35f970 ← LandMode vf13 0x3b8950 ← 0x3b8cd0.
+  - The pick was always the hit right after the last chunk-`0x102` draw. It returned into 0x277030, called from
+    0x3bbcd0 inside 0x3b8cd0.
+  - The picked indices match what the screen showed: skirmish 1 bright noon, skirmish 2 long sunrise shadows,
+    skirmish 3 rain.
+  - No skydome draw (vf+0x2a0 / 0x3bc1c0) was seen [H for these loads].
+  - Before the seed, the menu's background battle draws on the same stream (skirmish loads only).
+- **New: one formation draw at `Load_Map`'s tail [H].** In all four land loads, exactly one more `int` follows the
+  pick on the load thread:
+  - Stack: `Load_Map` (return 0x56cf5, after the mode load) → 0x1fe7c0 → 0x2b4440 → 0x3952e0 → 0x39bcb0 →
+    LandMovementCoordinator vf8 0x43b470 → 0x4f7360 → 0x4f6fb0 → **FormationClass ctor 0x40d0d0**.
+  - 0x1fe7c0 flushes the deferred calls. One of them is 0x2b4440, the GOM post-load pass: for each object, 0x3952e0
+    finishes it (owner fix-ups, behaviour vf+0x58, …). It ends in 0x39bcb0, which puts a movable object that has no
+    movement coordinator into a new one; that creates a formation.
+  - The FormationClass ctor draws **`int(1, FPS)`** (synced): +0x1d8 := FPS + r + now, +0x1dc := now − 500.
+  - Exactly one object qualified in each load [M which one].
+  - So §3 step 8 is not draw-free on land: there is one formation-ctor draw per such object. The space post-load
+    0x2a1eb0 also contains formation-ctor draws.
+  - MOVEMENT §1.6's "synced random offset" in a formation's start frame is this ctor draw. Its range is `int(1, FPS)`
+    [H, decompile and trace]; the port's movement takes `Get_Int(0, Max_Move_Frame_Delay)` [inferred] (follow-up).
+- **Verdict:** the §3 order holds in every traced load:
+  - [seed, skirmish only] → chunk `0x102` → exactly one pick when n ≠ 1 → post-load → first tick;
+  - first-tick weather restart = 2 floats exactly when the picked record has a weather scenario (`Noon_Rain`);
+  - no pick before chunk `0x102`, and none when n = 1;
+  - additions: the Load_Map-tail formation draw, and the skirmish 0x295cf0 creations ahead of the starting forces.
 
 ## 8. Port facts
 
@@ -272,3 +321,10 @@ transcribed further].
    applies).
 6. Weather particles: u = v + (`43` ? `28`·E : 0) + (`31` ? 5·W : 0); position += u·d; v unchanged. Presentation
    only.
+7. (cu8h t01, §7 P1 results) Each FormationClass creation draws one synced `int(1, FPS)`, including the
+   creations at `Load_Map`'s tail after the pick: the GOM post-load pass puts each movable object that has no
+   coordinator into a new one, which is one draw per formation; one draw on `_MP_LAND_ENDOR`.
+   - The port's land load draws nothing between the pick and the post-load steps.
+   - Its formation stagger uses `Get_Int(0, Max_Move_Frame_Delay)`.
+   - The checked order elsewhere matches §3. Parity is checked by behaviour, so this is a port follow-up, not a
+     failure.
