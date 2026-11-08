@@ -140,3 +140,7 @@ What this means for the failing metrics:
 Next steps (engine/ai/galactic, each a behaviour change with golden regeneration; roadmap q2f t09):
 the task-force sufficiency test against retail's (docs/re/AI_GALACTIC, "Task force"), the ground unit pick for
 Conquer_Opponent against Tatooine's defenders (contrast / IgnoreTarget scores), and per-planet parallel production.
+
+The table above is the port at dev `03940b96`. At dev `432b502e` (after a2l t01-t03) the harness reads Rebel builds
+19 vs retail 50..51 and fleet departures 16 vs 55..63 (3 retail runs): the a2l changes cut Rebel production further,
+so measure again at the current dev before working on the items above.
