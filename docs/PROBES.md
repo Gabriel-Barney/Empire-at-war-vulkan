@@ -11,6 +11,7 @@ roadmap (`roadmap-store/`). Probes need the original game and Gabriel's go-ahead
 | `a1_tactical/` | A1 t02 free-store timing and A1 t04 landing-point ownership (tactical AI) | `re/AI_TACTICAL.md`, `re/A1_READINGS.md` |
 | `a2f_budget/` | a2f t07 / a2g t01: AI budget reset flag +0x74, pre-Init Infrastructure pool and template state at Heart of the Maw start; a2k t05 (`run_a2f_sab.cmd`, short run): the Underworld saboteur, DeploySaboteur stage / results, free-store return (Q5, H1 / H2) | `re/A2F_T07_BUDGET_PROBE.md`, `re/A2G_T01_RESET_FLAG_PROBE.md`, `re/A2K_T08_RE_ANSWERS.md` §5 |
 | `a1h_assemble_fleet/` | a1h t09: does `Assemble_Fleet` launch ground units from a planet's surface? | `re/A1_READINGS.md` |
+| `cu8g_probes/` | cu8g t07: targeting stickiness spawn default (`run_cu8g_stick.cmd`); t08: missing fallback maps, campaign without a matching map / with a faction-patched MP map (`run_cu8g_maps_miss.cmd`, `run_cu8g_maps_hit.cmd`); t09 (optional): LURE `Is_Pulsing` No and Cancel_Special_Ability restore timing (`run_cu8g_abil.cmd`) | `re/CU8F_T04_T06_RE.md` §1.5 / §3.1, `re/CU8F_T03_T05_RE.md` §1.7, `re/CU8F_T01_T02_T07_RE.md` §1 |
 | `fixpass_capture/` | Screenshot checklist for the galactic fix pass (no mod files) | `re/FIXPASS_GALACTIC.md` §4–5 |
 | `fow_regrow/` | fowf t06: fog regrow window and top-edge circle shift | `re/FOG_OF_WAR.md` §9 item 8 |
 | `g1_capture/` | G1 in-game render capture (DXVK, apitrace; RenderDoc is out of scope) | `re/RENDER.md` §7.2 / §7.3 |
