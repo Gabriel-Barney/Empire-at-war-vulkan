@@ -55,9 +55,9 @@ std::optional<Vec3f> project_by_unit_range(const PerceptionWorld& w, const Perce
 // t48: `unit` null = a live object the snapshot does not list (no weapon data): R = 0, from `unit_pos`.
 std::optional<Vec3f> project_by_unit_range(const PerceptionWorld& w, const PerceptionObject* unit, const Vec3f& unit_pos, const Vec3f& pos);
 
-// ---- unit.Is_Good_Against(x) (0x57bb60) [H; M: per-bit key] -------------------------------------------
-// For every category bit of x's type (low to high), the contrast-table weight of the caller's type
-// against the rows whose enemy category is that bit; true iff the maximum is > 1.0.
+// ---- unit.Is_Good_Against(x) (0x57bb60) [H, A2L_T03_RE_ANSWERS Q6.4] ----------------------------------
+// For every category bit of x's type (low to high), the AI weight 0x5f1f90 (ContrastTable::ai_weight) of the
+// caller's type in the row whose enemy key is exactly that bit (no row: 0); true iff the maximum is > 1.0.
 bool is_good_against(const galactic::ContrastTable& contrast, std::string_view caller_type_name, uint64_t caller_categories,
                      uint64_t target_categories);
 

@@ -259,7 +259,8 @@ AutoResolveResult auto_resolve(const AutoResolveInput& in, const ContrastTable& 
         for (size_t j = 0; j < K; ++j) {
             const double Rj = R[2 + j];
             if (!(Rj > 0.0)) continue;
-            const float c = ct.contrast(j, p.name, p.categories);
+            // 0x5f1f90 keyed by row j's enemy category mask (A2L_T03_RE_ANSWERS Q6.3) [H]: ContrastTable::ai_weight.
+            const float c = ct.ai_weight(j, p.name, p.categories);
             if (!(c > 0.0f)) continue;
             const double pc = static_cast<double>(pw) * static_cast<double>(c);
             const double m = std::max(Rj, pc);
