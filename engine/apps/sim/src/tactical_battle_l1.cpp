@@ -411,7 +411,10 @@ bool TacticalBattle::disable_engines(objects::ObjectId id, float seconds) {
 void TacticalBattle::energy_drain_engines(objects::ObjectId id, float seconds) {
     // cu8f t02 (CU8F_T01_T02_T07_RE.md §2.4), after EnergyPool::Absorb took energy > 0: 1. with a locomotor,
     // Locomotor_Set_Engines(destroyed 0, t) (EngineControl::disable keeps the 0x5545a0 gate and the max expiry), then the
-    // current move stops (0x422040); 2. signal 0x16 [port: not modelled]; 3. moving loop off, then idle loop off.
+    // current move stops (0x422040); 2. signal 0x16; 3. moving loop off, then idle loop off.
+    // cu8g t01 [port]: 0x422040 keeps the move when its last waypoint has flag 0x10 [M meaning]; the port's paths carry no
+    // waypoint flags, so the move always stops. Signal 0x16 is the EngineControl::disable EngineEvent::Off (raised when the
+    // engines were on; nothing in the port subscribes to it); the original's repeat on engines already off is not raised.
     const Unit* u = unit_by_id(id);
     if (!u || !u->alive || u->retreated) return;
     if (engines_online(id) >= 0) {

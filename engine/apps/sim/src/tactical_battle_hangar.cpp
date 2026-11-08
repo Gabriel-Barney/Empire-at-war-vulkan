@@ -18,7 +18,8 @@
 //    (selection / control groups, announcement).
 //  * Engine loops: mode_enter at creation, locomotor_service every SimpleSpace service (not fighters / squadrons),
 //    engines offline / online from the ability events, remove on death / removal; the tick's requests are published
-//    for the audio host (engine_loop_requests()).
+//    for the audio host (engine_loop_requests()). cu8g t01: land Walk-locomotor units get mode enter and walk_service;
+//    HOLSTER_WEAPON heroes are attached before their mode enter and serviced every frame after the hangar services.
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -123,7 +124,7 @@ void TacticalBattle::hg_add_types() {
 }
 
 void TacticalBattle::hg_setup(TacticalMode& mode) {
-    (void)mode;
+    hg_mode_ = &mode;  // cu8g t01: the HOLSTER_WEAPON attach of map-load objects runs before l1_setup
     const objects::GameObjectTypes& types = catalog_->types();
     engine_loops_.set_space_idle_movement_speed(catalog_->space_idle_movement_speed());
     hg_tech_bonus_.assign(bt_players_, 0);
@@ -189,8 +190,61 @@ bool TacticalBattle::hg_engine_unit(const Unit& u) const {
     return rules_->type(parts_[u.participant].type).members.empty();
 }
 
+bool TacticalBattle::hg_walk_engine_unit(const Unit& u) const {
+    // cu8g t01 (§3.3 last row): the land Walk locomotor (LocomotorKind::Default on land) calls the same switch.
+    if (space_ || !u.movable || !movement_ || !movement_->has_unit(u.id)) return false;
+    return movement_->view(u.id).locomotor == mv::LocomotorKind::Default;
+}
+
+const TacticalBattle::HgHolsterType* TacticalBattle::hg_holster_type(objects::TypeIndex t) {
+    const objects::GameObjectTypes& types = catalog_->types();
+    if (t >= types.size()) return nullptr;
+    if (hg_holster_types_.size() != types.size()) hg_holster_types_.resize(types.size());
+    HgHolsterType& h = hg_holster_types_[t];
+    if (!h.known) {
+        h.known = 1;
+        constexpr uint32_t kFps = 30;
+        h.desc.transition_frames = th::holster_frames(types.get_float(t, "Holster_Transition_Time_In_Secs"), kFps);
+        h.desc.min_drawn_frames = th::holster_frames(types.get_float(t, "Holster_Minimum_Drawn_Time_In_Secs"), kFps);
+        h.desc.disable_engine_loops = types.get_bool(t, "Holster_Disable_Engine_Loops");
+        h.bone = std::string(hg_trim(types.get_string(t, "Holster_Weapon_Bone_Name")));
+        h.has_bone_name = h.bone.empty() ? 0 : 1;
+    }
+    return &h;
+}
+
+void TacticalBattle::hg_holster_attach(const Unit& u) {
+    // Initialise (0x6355c0) / placed (0x635180): only for an object that carries HOLSTER_WEAPON in its current behaviour
+    // list and whose model has Holster_Weapon_Bone_Name (BattleCatalog model data); else the behaviour does nothing.
+    if (!hg_mode_) return;
+    const objects::ObjectStore& st = hg_mode_->primary();
+    if (!st.alive(u.h) || !st.has_behavior(u.h, objects::beh::HolsterWeapon)) return;
+    const HgHolsterType* ht = hg_holster_type(st.type(u.h));
+    if (!ht || !ht->has_bone_name) return;
+    Vec3 unused{};
+    if (model_bone_point(st, u.h, ht->bone, unused) <= 0) return;
+    engine_loops_.holster_attach(u.id, frame_);
+}
+
+void TacticalBattle::hg_holster_service() {
+    // Service 0x635750 (interval 1), ascending id. Engaged: a current attack target (0x397a40), a running Berserker (SAP
+    // +0x2cc), the current clip ATTACK / SPINMOVE, or a hero clash (+0x3b4) [port: no hero clashes yet]. The thrown saber
+    // is never in flight [port: Saber_Throw's projectile phase is not modelled].
+    if (!hg_mode_) return;
+    const objects::ObjectStore& st = hg_mode_->primary();
+    for (const Unit& u : units_) {
+        if (!u.alive || u.retreated || !engine_loops_.has_holster(u.id) || !st.alive(u.h)) continue;
+        const HgHolsterType* ht = hg_holster_type(st.type(u.h));
+        if (!ht) continue;
+        const bool engaged = (combat_ && combat_->has_unit(u.id) && combat_->current_target(u.id) != tc::kNoObject) ||
+                             (abilities_ && abilities_->is_active(u.id, ta::kBerserker)) || anim_engaged_clip(u.id);
+        engine_loops_.holster_service(u.id, ht->desc, engaged, false, frame_);
+    }
+}
+
 void TacticalBattle::hg_adopt(const Unit& u, SimRng& rng) {
-    if (hg_engine_unit(u)) engine_loops_.mode_enter(u.id, frame_);
+    hg_holster_attach(u);  // cu8g t01: before mode enter, so a holster hero starts suppressed (no hum)
+    if (hg_engine_unit(u) || hg_walk_engine_unit(u)) engine_loops_.mode_enter(u.id, frame_);
     if (!hangars_ || u.type >= hangar_desc_.size() || hangar_desc_[u.type] < 0) return;
     if (hangars_->add_carrier(u.id, static_cast<uint32_t>(hangar_desc_[u.type]), frame_, &rng)) hg_used_ = true;
 }
@@ -218,8 +272,14 @@ void TacticalBattle::hg_unit_removed(objects::ObjectId id) {
 
 void TacticalBattle::hg_engine_service() {
     for (const Unit& u : units_) {
-        if (!u.alive || u.retreated || !hg_engine_unit(u)) continue;
-        engine_loops_.locomotor_service(u.id, movement_->view(u.id).speed, l1_jumps_.departing(u.id), frame_);
+        if (!u.alive || u.retreated) continue;
+        if (hg_engine_unit(u)) {
+            engine_loops_.locomotor_service(u.id, movement_->view(u.id).speed, l1_jumps_.departing(u.id), frame_);
+        } else if (hg_walk_engine_unit(u)) {
+            // cu8g t01 [port]: the Walk "moving" test is untraced (§3.3 [M]); an order in progress or speed, as kUnitMoving.
+            const mv::UnitView v = movement_->view(u.id);
+            engine_loops_.walk_service(u.id, v.has_goal || v.speed > 0.0f, frame_);
+        }
     }
 }
 
