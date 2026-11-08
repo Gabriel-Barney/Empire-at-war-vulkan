@@ -8,7 +8,8 @@
 // u32 + launch requests; u32 + events.
 // ContentsSystem (kContentsSaveVersion): u32 + lists (container, u32 + objects).
 // TacticalProduction (kProductionSaveVersion): u32 next order id; u32 + players (u32 + orders); u32 + completed orders.
-// EngineLoops (kEngineLoopsSaveVersion): u32 + objects (id, idle, moving, suppressed); u32 + requests.
+// EngineLoops (kEngineLoopsSaveVersion): u32 + objects (id, idle, moving, suppressed, holster, drawn, transition start /
+// end, last engaged); u32 + requests (id, loop, start, frame, op, fade).
 #include <cstddef>
 #include <cstdint>
 #include <utility>
@@ -30,7 +31,7 @@ namespace {
 constexpr uint32_t kHangarSaveVersion = 1;
 constexpr uint32_t kContentsSaveVersion = 1;
 constexpr uint32_t kProductionSaveVersion = 1;
-constexpr uint32_t kEngineLoopsSaveVersion = 1;
+constexpr uint32_t kEngineLoopsSaveVersion = 2;  // 2: cu8g t01 holster state per object, request op + fade
 
 void put_order(ByteWriter& w, const BuildOrder& o) {
     w.u32(o.id).i32(o.player).i32(o.builder).i32(o.type).u32(o.total_frames).u32(o.frames_left).u32(o.issued);
@@ -232,15 +233,19 @@ bool TacticalProduction::read(ByteReader& r) {
 void EngineLoops::write(ByteWriter& w) const {
     w.u32(kEngineLoopsSaveVersion);
     w.u32(static_cast<uint32_t>(objs_.size()));
-    for (const Obj& o : objs_) w.i32(o.id).u8(o.idle).u8(o.moving).u8(o.suppressed);
+    for (const Obj& o : objs_) {
+        w.i32(o.id).u8(o.idle).u8(o.moving).u8(o.suppressed);
+        w.u8(o.holster).u8(o.drawn).u32(o.t_start).u32(o.t_end).u32(o.last_engaged);  // version 2: cu8g t01 holster
+    }
     w.u32(static_cast<uint32_t>(requests_.size()));
-    for (const EngineLoopRequest& q : requests_) w.i32(q.id).u8(static_cast<uint8_t>(q.loop)).boolean(q.start).u32(q.frame);
+    for (const EngineLoopRequest& q : requests_)
+        w.i32(q.id).u8(static_cast<uint8_t>(q.loop)).boolean(q.start).u32(q.frame).u8(static_cast<uint8_t>(q.op)).f32(q.fade);
 }
 
 bool EngineLoops::read(ByteReader& r) {
     if (r.u32() != kEngineLoopsSaveVersion || !r.ok()) return false;
     uint32_t n = 0;
-    if (!r.count(n, 7)) return false;
+    if (!r.count(n, 21)) return false;
     std::vector<Obj> objs(n);
     for (size_t i = 0; i < objs.size(); ++i) {
         Obj& o = objs[i];
@@ -248,17 +253,26 @@ bool EngineLoops::read(ByteReader& r) {
         o.idle = r.u8();
         o.moving = r.u8();
         o.suppressed = r.u8();
+        o.holster = r.u8();
+        o.drawn = r.u8();
+        o.t_start = r.u32();
+        o.t_end = r.u32();
+        o.last_engaged = r.u32();
         if (!r.ok() || (i > 0 && o.id <= objs[i - 1].id)) return false;
     }
-    if (!r.count(n, 10)) return false;
+    if (!r.count(n, 15)) return false;
     std::vector<EngineLoopRequest> requests(n);
     for (EngineLoopRequest& q : requests) {
         q.id = r.i32();
         const uint8_t loop = r.u8();
         q.start = r.boolean();
         q.frame = r.u32();
-        if (!r.ok() || loop > static_cast<uint8_t>(EngineLoop::Moving)) return false;
+        const uint8_t op = r.u8();
+        q.fade = r.f32();
+        if (!r.ok() || loop > static_cast<uint8_t>(EngineLoop::Moving) || op > static_cast<uint8_t>(EngineLoopOp::HolsterWeapon))
+            return false;
         q.loop = static_cast<EngineLoop>(loop);
+        q.op = static_cast<EngineLoopOp>(op);
     }
     if (!r.ok() || !r.done()) return false;
     objs_ = std::move(objs);

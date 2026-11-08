@@ -449,7 +449,7 @@ void test_engine_loops() {
         const auto got = e.requests();
         bool ok = got.size() == want.size();
         for (size_t i = 0; ok && i < got.size(); ++i)
-            ok = got[i].id == want[i].id && got[i].loop == want[i].loop && got[i].start == want[i].start;
+            ok = got[i].id == want[i].id && got[i].loop == want[i].loop && got[i].start == want[i].start && got[i].op == want[i].op;
         CHECK(ok);
         e.clear_requests();
     };
@@ -476,16 +476,156 @@ void test_engine_loops() {
     expect({{5, L::Idle, false, 10}});
     e.engines_online(5, 11);
     expect({{5, L::Idle, true, 11}});
-    e.suppress(5, 12);
-    expect({{5, L::Idle, false, 12}});
+    // cu8g t01: suppress = one Suppress request with the fade (the audio side stops every loop), flags off, blocked.
+    e.suppress(5, 12, 0.0f);
+    CHECK(e.requests().size() == 1 && e.requests()[0].fade == 0.0f);
+    expect({{5, L::Idle, false, 12, EngineLoopOp::Suppress}});
+    CHECK(!e.idle_on(5) && e.suppressed(5));
     e.locomotor_service(5, 20.0f, false, 13);
     expect({});
-    e.unsuppress(5);
+    e.unsuppress(5, 14);  // restarts nothing
+    expect({{5, L::Idle, false, 14, EngineLoopOp::Unsuppress}});
     e.locomotor_service(5, 20.0f, false, 14);
     expect({{5, L::Moving, true, 14}});
     CHECK(e.moving_on(5) && !e.idle_on(5));
     e.remove(5);
     CHECK(!e.moving_on(5) && e.requests().empty());
+    // Land Walk service: the same switch, moving call first.
+    e.walk_service(6, true, 15);
+    expect({{6, L::Moving, true, 15}});
+    e.walk_service(6, false, 16);
+    expect({{6, L::Moving, false, 16}, {6, L::Idle, true, 16}});
+}
+
+// cu8g t01 (CU8F_T01_T02_T07_RE.md §2.3): HOLSTER_WEAPON.
+void test_holster_weapon() {
+    using Op = EngineLoopOp;
+    using L = EngineLoop;
+    CHECK(holster_frames(0.17f, 30) == 5 && holster_frames(15.0f, 30) == 450 && holster_frames(0.2f, 30) == 6 &&
+          holster_frames(0.5f, 30) == 15 && holster_frames(-1.0f, 30) == 0 && holster_frames(0.05f, 30) == 2);
+    HolsterDesc vader;
+    vader.transition_frames = holster_frames(0.17f, 30);
+    vader.min_drawn_frames = holster_frames(15.0f, 30);
+    vader.disable_engine_loops = true;
+    EngineLoops e(10.0f);
+    std::vector<EngineLoopRequest> log;
+    auto take = [&] {
+        log.assign(e.requests().begin(), e.requests().end());
+        e.clear_requests();
+    };
+    auto has = [&](Op op) {
+        for (const EngineLoopRequest& q : log)
+            if (q.op == op) return true;
+        return false;
+    };
+    // Initialise before mode enter: suppressed with fade 0, the mode-enter idle-on is skipped (no hum).
+    e.holster_attach(1, 1);
+    e.mode_enter(1, 1);
+    take();
+    CHECK(log.size() == 1 && log[0].op == Op::Suppress && log[0].fade == 0.0f && log[0].id == 1);
+    CHECK(e.has_holster(1) && !e.holster_drawn(1) && e.suppressed(1) && !e.idle_on(1));
+    // Not engaged: nothing at any frame; engaged off the 15-frame cadence: nothing either.
+    for (uint32_t f = 2; f <= 31; ++f) e.holster_service(1, vader, f == 16 || f == 29, false, f);
+    take();
+    CHECK(log.empty() && !e.holster_drawn(1) && e.holster_last_engaged(1) == 0);
+    // Engaged on frame 45 (45 % 15 == 0): draw transition [45, 50], DrawWeapon, still suppressed.
+    e.holster_service(1, vader, true, false, 45);
+    take();
+    CHECK(log.size() == 1 && log[0].op == Op::DrawWeapon && e.holster_drawn(1) && e.holster_transitioning(1) && e.suppressed(1));
+    CHECK(e.holster_last_engaged(1) == 45);
+    for (uint32_t f = 46; f <= 49; ++f) e.holster_service(1, vader, false, false, f);
+    take();
+    CHECK(log.empty() && e.suppressed(1) && e.holster_transitioning(1));
+    // Transition end (frame 50 >= end): unsuppress; nothing restarts the hum until the Walk service.
+    e.holster_service(1, vader, false, false, 50);
+    take();
+    CHECK(log.size() == 1 && log[0].op == Op::Unsuppress && !e.suppressed(1) && !e.holster_transitioning(1) && !e.idle_on(1));
+    e.walk_service(1, false, 51);
+    take();
+    CHECK(log.size() == 1 && log[0].op == Op::Loop && log[0].loop == L::Idle && log[0].start && e.idle_on(1));
+    // Minimum drawn time: not engaged after 45 -> stays drawn while frame < 45 + 450 = 495; holsters at 495.
+    for (uint32_t f = 52; f < 495; ++f) e.holster_service(1, vader, false, false, f);
+    take();
+    CHECK(log.empty() && e.holster_drawn(1));
+    e.holster_service(1, vader, false, false, 495);
+    take();
+    // Holster start: HolsterWeapon, then suppress with each loop's own fade (-1).
+    CHECK(log.size() == 2 && log[0].op == Op::HolsterWeapon && log[1].op == Op::Suppress && log[1].fade < 0.0f);
+    CHECK(!e.holster_drawn(1) && e.suppressed(1) && !e.idle_on(1) && e.holster_transitioning(1));
+    // The holster transition completes without an unsuppress.
+    for (uint32_t f = 496; f <= 505; ++f) e.holster_service(1, vader, false, false, f);
+    take();
+    CHECK(log.empty() && e.suppressed(1) && !e.holster_transitioning(1));
+    // An engaged frame inside the window keeps it drawn: engaged at 510, not at 525 .. 945, holsters at 960.
+    e.holster_service(1, vader, true, false, 510);
+    for (uint32_t f = 511; f <= 959; ++f) e.holster_service(1, vader, false, false, f);
+    take();
+    CHECK(e.holster_drawn(1) && has(Op::DrawWeapon) && has(Op::Unsuppress) && !has(Op::HolsterWeapon));
+    e.holster_service(1, vader, false, false, 960);
+    take();
+    CHECK(!e.holster_drawn(1) && has(Op::HolsterWeapon));
+    // Without Holster_Disable_Engine_Loops: holster start / draw end leave the suppression alone.
+    HolsterDesc quiet = vader;
+    quiet.disable_engine_loops = false;
+    e.holster_attach(2, 1000);
+    e.holster_service(2, quiet, true, false, 1005);
+    for (uint32_t f = 1006; f <= 1010; ++f) e.holster_service(2, quiet, false, false, f);
+    take();
+    CHECK(e.holster_drawn(2) && e.suppressed(2) && !has(Op::Unsuppress));
+    // A thrown saber in flight holds the interpolation: the draw end (and its unsuppress) waits for the catch.
+    e.holster_attach(3, 1100);
+    e.holster_service(3, vader, true, false, 1110);
+    for (uint32_t f = 1111; f <= 1130; ++f) e.holster_service(3, vader, true, true, f);
+    take();
+    CHECK(e.holster_transitioning(3) && e.suppressed(3));
+    e.holster_service(3, vader, true, false, 1131);
+    take();
+    CHECK(!e.holster_transitioning(3) && !e.suppressed(3) && has(Op::Unsuppress));
+    // Objects without the behaviour (no bone): the service and the Saber_Throw entry points do nothing.
+    e.walk_service(4, false, 1200);
+    take();
+    e.holster_service(4, vader, true, false, 1215);
+    e.saber_throw(4, 1216);
+    e.saber_catch(4, 1217);
+    CHECK(e.requests().empty() && !e.has_holster(4) && e.idle_on(4));
+}
+
+// cu8g t01 (§2.3 Saber_Throw): throw = snap holstered + suppress(0); catch = snap drawn + suppress(0) too.
+void test_saber_throw() {
+    using Op = EngineLoopOp;
+    HolsterDesc luke;
+    luke.transition_frames = 5;
+    luke.min_drawn_frames = 450;
+    luke.disable_engine_loops = true;
+    EngineLoops e(10.0f);
+    e.holster_attach(1, 1);
+    e.holster_service(1, luke, true, false, 15);
+    for (uint32_t f = 16; f <= 20; ++f) e.holster_service(1, luke, true, false, f);
+    e.walk_service(1, false, 21);
+    CHECK(e.holster_drawn(1) && !e.suppressed(1) && e.idle_on(1));
+    e.clear_requests();
+    e.saber_throw(1, 22);
+    CHECK(e.requests().size() == 1 && e.requests()[0].op == Op::Suppress && e.requests()[0].fade == 0.0f);
+    CHECK(!e.holster_drawn(1) && e.suppressed(1) && !e.idle_on(1));
+    e.clear_requests();
+    e.walk_service(1, false, 23);  // suppressed: no hum
+    CHECK(e.requests().empty());
+    // The catch suppresses although it sets drawn: the hum stays off; with drawn == want no draw transition starts.
+    e.saber_catch(1, 25);
+    CHECK(e.requests().size() == 1 && e.requests()[0].op == Op::Suppress && e.requests()[0].fade == 0.0f);
+    CHECK(e.holster_drawn(1) && e.suppressed(1));
+    e.clear_requests();
+    for (uint32_t f = 26; f <= 120; ++f) e.holster_service(1, luke, true, false, f);
+    e.walk_service(1, false, 121);
+    CHECK(e.requests().empty() && e.suppressed(1));
+    // Holster (after the minimum drawn time) then a new draw: the hum returns at that draw's end.
+    for (uint32_t f = 121; f <= 600; ++f) e.holster_service(1, luke, false, false, f);
+    CHECK(!e.holster_drawn(1));
+    e.clear_requests();
+    for (uint32_t f = 601; f <= 620; ++f) e.holster_service(1, luke, true, false, f);
+    CHECK(e.holster_drawn(1) && !e.suppressed(1));
+    e.walk_service(1, true, 621);
+    CHECK(e.moving_on(1));
 }
 
 // The same script twice gives the same hashed state and draws; a different script differs.
@@ -1378,18 +1518,37 @@ void test_contents_production_loops_save() {
     e.mode_enter(5, 1);
     e.locomotor_service(5, 20.0f, false, 2);
     e.mode_enter(3, 2);
-    e.suppress(3, 3);
-    CHECK(!e.requests().empty());
+    e.suppress(3, 3, 0.25f);
+    // cu8g t01: a holster hero mid draw transition (version 2: holster state, request op / fade)
+    HolsterDesc hd;
+    hd.transition_frames = 5;
+    hd.min_drawn_frames = 450;
+    hd.disable_engine_loops = true;
+    e.holster_attach(7, 3);
+    e.holster_service(7, hd, true, false, 15);
+    CHECK(!e.requests().empty() && e.holster_transitioning(7) && e.holster_drawn(7));
     const std::vector<uint8_t> eb = bytes_of(e);
     ByteReader re(eb);
     CHECK(e2.read(re) && bytes_of(e2) == eb && e2.moving_on(5) && !e2.idle_on(3) && e2.requests().size() == e.requests().size());
+    CHECK(e2.has_holster(7) && e2.holster_drawn(7) && e2.holster_transitioning(7) && e2.holster_last_engaged(7) == 15 &&
+          e2.suppressed(7));
+    bool same_requests = true;
+    for (size_t i = 0; i < e.requests().size(); ++i) {
+        const EngineLoopRequest &a = e.requests()[i], &b = e2.requests()[i];
+        same_requests = same_requests && a.id == b.id && a.op == b.op && a.loop == b.loop && a.start == b.start &&
+                        a.frame == b.frame && a.fade == b.fade;
+    }
+    CHECK(same_requests);
     for (EngineLoops* l : {&e, &e2}) {
         l->clear_requests();
         l->locomotor_service(5, 0.0f, false, 4);
-        l->unsuppress(3);
+        l->unsuppress(3, 4);
         l->locomotor_service(3, 20.0f, false, 5);
+        for (uint32_t f = 16; f <= 20; ++f) l->holster_service(7, hd, true, false, f);  // the draw completes at 20
+        l->walk_service(7, false, 21);
     }
     CHECK(bytes_of(e) == bytes_of(e2) && e.moving_on(3) && e2.moving_on(3) && e2.idle_on(5));
+    CHECK(!e2.suppressed(7) && e2.idle_on(7) && !e2.holster_transitioning(7));
     EngineLoops e3(10.0f);
     e3.mode_enter(9, 0);
     const std::vector<uint8_t> e3_before = bytes_of(e3);
@@ -1398,9 +1557,9 @@ void test_contents_production_loops_save() {
         ByteReader t(std::span<const uint8_t>(eb.data(), len));
         if (e3.read(t)) ++accepted;
     }
-    // version, 2 objects (7 bytes each), request count, then the first request's id and loop byte
+    // version, 3 objects (21 bytes each), request count, then the first request's id and loop byte
     bad = eb;
-    bad[4 + 4 + 14 + 4 + 4] = 9;
+    bad[4 + 4 + 63 + 4 + 4] = 9;
     ByteReader reb(bad);
     CHECK(accepted == 0 && !e3.read(reb) && bytes_of(e3) == e3_before);
 }
@@ -1416,6 +1575,8 @@ int main() {
     test_tech_community_pending();
     test_carrier_death();
     test_engine_loops();
+    test_holster_weapon();  // cu8g t01
+    test_saber_throw();     // cu8g t01
     test_determinism();
     test_station_upgrade_abilities();
     test_contents_production();

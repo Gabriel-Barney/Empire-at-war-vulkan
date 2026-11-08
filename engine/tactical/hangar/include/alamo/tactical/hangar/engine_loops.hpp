@@ -19,6 +19,10 @@
 //                             capitals, transports; NOT fighters, squadrons or other locomotors) after the motion
 //                             step: moving := speed >= 1.1 x SpaceIdleMovementSpeed, then idle := speed below it.
 //                             In a hyperspace state (arrival / departure / scripted) nothing changes.
+//   * walk_service(id, moving) - cu8g t01: every land Walk locomotor service (0x61e930, §3.3 last row), the same switch
+//                             (moving call first) on the host's moving test [port: §3.3 leaves the Walk test untraced [M];
+//                             the host passes "order in progress or speed > 0"]. Bike / LandTeamInfantry / JetPack / the
+//                             tactical super weapon are not wired.
 //   * engines_offline(id)   - last ENGINE hardpoint destroyed / station-upgrade disable (AbilityEventKind::
 //                             EnginesOffline): moving off, idle off.
 //   * engines_online(id)    - ENGINE hardpoint repaired to full (EnginesOnline): idle on.
@@ -26,17 +30,38 @@
 //                             The timer expiry does not call audio. Called by TacticalBattle::disable_engines (the L1
 //                             timed-disable entry point) and TacticalBattle::energy_drain_engines (cu8f t02: the energy-pool
 //                             absorb 0x56c230 in Take_Damage, CombatHooks::engines_drained) for engine-loop units.
-//   * suppress(id) / unsuppress(id) - 0x392410 / 0x393970: both off then blocked / unblocked. Their only callers are the
-//                             land HOLSTER_WEAPON behaviour (0x4E, lightsaber heroes: start suppressed, holster start ->
-//                             suppress with each loop's own fade, draw complete -> unsuppress) and Saber_Throw's throw /
-//                             catch (suppress, fade 0) (CU8F_T01_T02_T07_RE.md §2.2 / §2.3). NOT WIRED: the port runs
-//                             engine loops for SimpleSpace units only (no land Walk-locomotor loops) and has no
-//                             HOLSTER_WEAPON behaviour, so there is no caller yet (roadmap follow-up of cu8f t02). The
-//                             0x392410 fade argument (0 / -1 = the event's own) is not modelled here.
-//   * remove(id)            - death or removal: forget the object, no request.
+//   * suppress(id, fade) / unsuppress(id) - 0x392410 / 0x393970: suppress clears both flags, blocks the switch (+0x3B9)
+//                             and emits one Suppress request carrying `fade` (seconds; < 0 = each loop's own
+//                             Loop_Fade_Out_Seconds): the audio side stops the moving, idle AND cinematic-focus loops whatever
+//                             the flags say (GameAudio::suppress_engine_audio). unsuppress unblocks and emits an Unsuppress
+//                             request (GameAudio::clear_engine_audio_suppression); it restarts nothing - the next locomotor
+//                             service or mode enter does. Their only callers are the HOLSTER_WEAPON behaviour below and
+//                             Saber_Throw (CU8F_T01_T02_T07_RE.md §2.2 / §2.3), wired since cu8g t01.
+//   * remove(id)            - death or removal: forget the object (and its holster state), no request.
 //   * after the tick: requests() to the audio side, then clear_requests().
+//
+// HOLSTER_WEAPON (behaviour 0x4E, HolsterWeaponBehaviorClass; CU8F_T01_T02_T07_RE.md §2.3), land lightsaber heroes. Sim
+// state only (the bone motion is presentation); it decides the engine-loop (lightsaber hum) suppression and the draw /
+// holster SFX requests. Like the loop flags it never feeds back into sim logic and is not part of any CRC.
+//   * holster_attach(id)    - initialise (0x6355c0) / the map-load "placed" broadcast (0x635180), for an object whose
+//                             behaviour found its bone [port: the host's test]: drawn := 0, transition cleared,
+//                             suppress(fade 0) whatever Holster_Disable_Engine_Loops says. Call BEFORE mode_enter: the hero
+//                             starts suppressed, so the mode-enter idle-on is skipped and no hum plays until the saber is drawn.
+//   * holster_service(id, desc, engaged, saber_in_flight) - every frame (Service 0x635750, interval 1): first the
+//                             interpolation step (0x635950: while a transition is set and no thrown saber is in flight; at
+//                             now >= end the transition clears and, when drawn and Holster_Disable_Engine_Loops,
+//                             unsuppress). Then on frame % 15 == 0 only: engaged -> last-engaged := now, want drawn; else
+//                             want = drawn && now < last-engaged + Holster_Minimum_Drawn_Time frames. want != drawn starts
+//                             a transition [now, now + Holster_Transition_Time frames]; to drawn: DrawWeapon request,
+//                             drawn := 1; to holstered: HolsterWeapon request, drawn := 0 and, when
+//                             Holster_Disable_Engine_Loops, suppress(-1) (each loop's own fade-out).
+//   * saber_throw(id) / saber_catch(id) - Saber_Throw's throw (0x635450) / catch (0x635310): drawn := 0 / 1, both
+//                             suppress(fade 0) (the catch too: the hum stays off until a later draw transition completes).
+//   Frame counts: holster_frames(s, fps) = round-half-away(fps x s) (0x27c9a0 -> 0x22f9c0): 0.17 s -> 5, 15 s -> 450 at 30.
+//   Saved with the flags (save version 2): attached, drawn, transition start / end frames, last engaged frame.
 #pragma once
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -52,12 +77,35 @@ namespace alamo::tactical::hangar {
 
 enum class EngineLoop : uint8_t { Idle, Moving };
 
+// What a request asks the audio side for. Loop: start / stop `loop` (the original engine-loop requests); Suppress /
+// Unsuppress: 0x392410 / 0x393970; DrawWeapon / HolsterWeapon: play the type's SFXEvent_Draw_Weapon /
+// SFXEvent_Holster_Weapon attached to the object (HOLSTER_WEAPON transition start).
+enum class EngineLoopOp : uint8_t { Loop, Suppress, Unsuppress, DrawWeapon, HolsterWeapon };
+
 struct EngineLoopRequest {
     combat::ObjectId id = combat::kNoObject;
-    EngineLoop loop = EngineLoop::Idle;
-    bool start = false;  // true: start with fade-in; false: stop with fade-out
+    EngineLoop loop = EngineLoop::Idle;  // Loop only
+    bool start = false;                  // Loop only: true: start with fade-in; false: stop with fade-out
     uint32_t frame = 0;
+    EngineLoopOp op = EngineLoopOp::Loop;
+    float fade = -1.0f;  // Suppress only: stop fade in seconds; < 0 = each loop's own Loop_Fade_Out_Seconds
 };
+
+// HOLSTER_WEAPON type data (HeroUnit fields, xml_field_tables), in frames. Configuration: the host passes it on each
+// service; not saved.
+struct HolsterDesc {
+    uint32_t transition_frames = 0;     // holster_frames(Holster_Transition_Time_In_Secs)
+    uint32_t min_drawn_frames = 0;      // holster_frames(Holster_Minimum_Drawn_Time_In_Secs)
+    bool disable_engine_loops = false;  // Holster_Disable_Engine_Loops (+0xe2)
+};
+
+// frames(s) = round-half-away(fps x s) (0x27c9a0 -> 0x22f9c0); negative / NaN -> 0.
+inline uint32_t holster_frames(float seconds, uint32_t fps) {
+    const float f = static_cast<float>(fps) * seconds;
+    return f > 0.0f ? static_cast<uint32_t>(std::lround(f)) : 0u;
+}
+
+inline constexpr uint32_t kHolsterDecisionInterval = 15;  // the draw / holster decision runs on frame % 15 == 0
 
 class EngineLoops {
 public:
@@ -80,20 +128,79 @@ public:
         set(o, EngineLoop::Moving, moving, frame);  // moving call first
         set(o, EngineLoop::Idle, !moving, frame);
     }
+    void walk_service(combat::ObjectId id, bool moving, uint32_t frame) {
+        Obj& o = get(id);
+        set(o, EngineLoop::Moving, moving, frame);  // moving call first
+        set(o, EngineLoop::Idle, !moving, frame);
+    }
     void engines_offline(combat::ObjectId id, uint32_t frame) { both_off(id, frame); }
     void timed_disable(combat::ObjectId id, uint32_t frame) { both_off(id, frame); }
     void engines_online(combat::ObjectId id, uint32_t frame) { set(get(id), EngineLoop::Idle, true, frame); }
-    void suppress(combat::ObjectId id, uint32_t frame) {
-        Obj& o = get(id);
-        if (o.moving) push(o.id, EngineLoop::Moving, false, frame);
-        if (o.idle) push(o.id, EngineLoop::Idle, false, frame);
-        o.moving = o.idle = 0;
-        o.suppressed = 1;
-    }
-    void unsuppress(combat::ObjectId id) { get(id).suppressed = 0; }
+    void suppress(combat::ObjectId id, uint32_t frame, float fade = -1.0f) { suppress(get(id), frame, fade); }
+    void unsuppress(combat::ObjectId id, uint32_t frame) { unsuppress(get(id), frame); }
     void remove(combat::ObjectId id) {
         const auto it = lower(id);
         if (it != objs_.end() && it->id == id) objs_.erase(it);
+    }
+
+    // ---- HOLSTER_WEAPON (see the header comment) ----
+    void holster_attach(combat::ObjectId id, uint32_t frame) {
+        Obj& o = get(id);
+        o.holster = 1;
+        o.drawn = 0;  // bone snapped to the holstered translation
+        o.t_start = o.t_end = 0;
+        suppress(o, frame, 0.0f);  // not gated by Holster_Disable_Engine_Loops
+    }
+    void holster_service(combat::ObjectId id, const HolsterDesc& d, bool engaged, bool saber_in_flight, uint32_t frame) {
+        Obj* o = find_mut(id);
+        if (!o || !o->holster) return;
+        // Interpolation step (0x635950): the bone lerp is presentation; the end clears the transition.
+        if ((o->t_start != 0 || o->t_end != 0) && !saber_in_flight && frame >= o->t_end) {
+            o->t_start = o->t_end = 0;
+            if (o->drawn && d.disable_engine_loops) unsuppress(*o, frame);
+        }
+        if (frame % kHolsterDecisionInterval != 0) return;
+        bool want = false;
+        if (engaged) {
+            o->last_engaged = frame;
+            want = true;
+        } else {
+            want = o->drawn != 0 && frame < o->last_engaged + d.min_drawn_frames;
+        }
+        if (want == (o->drawn != 0)) return;
+        o->t_start = frame;
+        o->t_end = frame + d.transition_frames;
+        if (want) {
+            push_op(o->id, EngineLoopOp::DrawWeapon, frame);
+            o->drawn = 1;
+        } else {
+            push_op(o->id, EngineLoopOp::HolsterWeapon, frame);
+            o->drawn = 0;
+            if (d.disable_engine_loops) suppress(*o, frame, -1.0f);
+        }
+    }
+    void saber_throw(combat::ObjectId id, uint32_t frame) { snap(id, false, frame); }  // 0x635450
+    void saber_catch(combat::ObjectId id, uint32_t frame) { snap(id, true, frame); }   // 0x635310
+
+    bool has_holster(combat::ObjectId id) const {
+        const Obj* o = find(id);
+        return o && o->holster;
+    }
+    bool holster_drawn(combat::ObjectId id) const {
+        const Obj* o = find(id);
+        return o && o->drawn;
+    }
+    bool holster_transitioning(combat::ObjectId id) const {
+        const Obj* o = find(id);
+        return o && (o->t_start != 0 || o->t_end != 0);
+    }
+    uint32_t holster_last_engaged(combat::ObjectId id) const {
+        const Obj* o = find(id);
+        return o ? o->last_engaged : 0u;
+    }
+    bool suppressed(combat::ObjectId id) const {
+        const Obj* o = find(id);
+        return o && o->suppressed;
     }
 
     bool idle_on(combat::ObjectId id) const {
@@ -106,8 +213,8 @@ public:
     }
     std::span<const EngineLoopRequest> requests() const { return requests_; }
     void clear_requests() { requests_.clear(); }
-    // N1 stage 2 (save_file.hpp contract, hangar_save.cpp): the per-object flags (ascending id) and the pending
-    // requests, so a loaded battle restarts no loop twice. The threshold is configuration (not saved).
+    // N1 stage 2 (save_file.hpp contract, hangar_save.cpp): the per-object flags and holster state (ascending id) and the
+    // pending requests, so a loaded battle restarts no loop twice. The threshold is configuration (not saved).
     void write(ByteWriter& w) const;
     bool read(ByteReader& r);
 
@@ -115,7 +222,41 @@ private:
     struct Obj {
         combat::ObjectId id = combat::kNoObject;
         uint8_t idle = 0, moving = 0, suppressed = 0;
+        // HOLSTER_WEAPON (behaviour +0x40 bone found, +0x50 drawn, +0x44 / +0x48 transition, +0x4c last engaged frame)
+        uint8_t holster = 0, drawn = 0;
+        uint32_t t_start = 0, t_end = 0, last_engaged = 0;
     };
+    Obj* find_mut(combat::ObjectId id) {
+        const auto it = lower(id);
+        return (it != objs_.end() && it->id == id) ? &*it : nullptr;
+    }
+    void suppress(Obj& o, uint32_t frame, float fade) {  // 0x392410
+        EngineLoopRequest q;
+        q.id = o.id;
+        q.frame = frame;
+        q.op = EngineLoopOp::Suppress;
+        q.fade = fade;
+        requests_.push_back(q);
+        o.moving = o.idle = 0;
+        o.suppressed = 1;
+    }
+    void unsuppress(Obj& o, uint32_t frame) {  // 0x393970: restarts nothing
+        push_op(o.id, EngineLoopOp::Unsuppress, frame);
+        o.suppressed = 0;
+    }
+    void snap(combat::ObjectId id, bool drawn, uint32_t frame) {
+        Obj* o = find_mut(id);
+        if (!o || !o->holster) return;
+        o->drawn = drawn ? 1 : 0;  // bone to the drawn / holstered translation
+        suppress(*o, frame, 0.0f);
+    }
+    void push_op(combat::ObjectId id, EngineLoopOp op, uint32_t frame) {
+        EngineLoopRequest q;
+        q.id = id;
+        q.frame = frame;
+        q.op = op;
+        requests_.push_back(q);
+    }
     std::vector<Obj>::iterator lower(combat::ObjectId id) {
         return std::lower_bound(objs_.begin(), objs_.end(), id, [](const Obj& a, combat::ObjectId v) { return a.id < v; });
     }

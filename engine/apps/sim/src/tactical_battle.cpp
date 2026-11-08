@@ -3808,6 +3808,20 @@ void TacticalBattle::play_turn_clip_events(SimRng& rng, uint64_t gframe) {
 #endif
 }
 
+bool TacticalBattle::anim_engaged_clip(objects::ObjectId id) const {
+    // cu8g t01 (CU8F_T01_T02_T07_RE.md §2.3): HOLSTER_WEAPON's "engaged" clip test - the current animation type is ATTACK
+    // (5) or SPINMOVE (0x68). Without the animation service: false.
+#ifdef ALAMO_SIM_HAVE_ANIM
+    const anim::AnimWorld* w = hooks_ ? hooks_->world() : nullptr;
+    if (!w || !w->contains(id)) return false;
+    const int32_t t = w->current_type(id);
+    return t == static_cast<int32_t>(anim::kAnimAttack) || t == static_cast<int32_t>(anim::kAnimSpinMove);
+#else
+    (void)id;
+    return false;
+#endif
+}
+
 void TacticalBattle::drive_animation(objects::ObjectStore& store, SimRng& rng, uint64_t gframe) {
 #ifdef ALAMO_SIM_HAVE_ANIM
     // R3 anim: WalkLocomotor (0x61f840, A.7 walk / move / turn rows) and the idle behaviour (0x62e570) for battle
@@ -4065,6 +4079,9 @@ void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
                 engine_loops_.engines_online(e.id, frame_);  // §3.3: idle loop on
             }
         if (e.kind == ta::AbilityEventKind::SpawnObject) spawn_ability_object(mode, e);  // fog follow-up: FOW_REVEAL_PING
+        // cu8g t01 (CU8F_T01_T02_T07_RE.md §2.3): Saber_Throw's throw snaps the saber holstered (0x635450: suppress, fade 0).
+        // [port] at the apply (the throw at anim 0x6c's half and the catch 0x635310 need the thrown-saber phase, not modelled).
+        if (e.kind == ta::AbilityEventKind::Unhandled && e.type == ta::kSaberThrow) engine_loops_.saber_throw(e.id, frame_);
         // S7 t15 A1 (ABILITIES_HARDPOINTS §2.6): every ability end raises signal 0x29, including the Remote_Bomb toss, which
         // ends at its Toss_Anim end (LOB_SOLVER §3.5 step 4, S8 t06).
         if (e.kind == ta::AbilityEventKind::Ended) ability_finished_.push_back(e.id);
@@ -4375,6 +4392,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     oi_respawn_due(mode);  // OI abilities: Tactical_Respawn creations due this frame
     profile::lap("tac.events");
     hg_tick(mode, rng);    // hangars: SPAWN_SQUADRON services and the launches they request
+    hg_holster_service();  // cu8g t01: HOLSTER_WEAPON (engine-loop suppression, draw / holster SFX requests)
     l1_weapons(mode, rng);  // L1 systems: special-weapon volleys, TSW state machines
     profile::lap("tac.services");
     expire_objects(mode);
