@@ -98,5 +98,6 @@ Rules for probe scripts (applied to `tools/probe_mod/q2_traces/mod` in q2f t08):
    `lua_reader.log`): a gap means records were lost.
 
 The a2f budget kit (`tools/probe_mod/a2f_budget/a2fb_core.lua`) keeps `A2FB_Records` / `A2FB_Errors` in global tables
-too. Its plan hook runs every record in `pcall`, so the plans themselves are not disturbed, but a pooled plan
-instance loses its records at its first release and records nothing after it. Not fixed here.
+too, and its plan samples read the generated global tables `A2FB_SPEC` / `A2FB_COMMON`. Its plan hook runs every
+record in `pcall`, so the plans themselves are not disturbed, but a pooled plan instance loses its records at its first
+release and records nothing after it. Not fixed here (flagged on a2k t05, the pending run that uses the kit).
