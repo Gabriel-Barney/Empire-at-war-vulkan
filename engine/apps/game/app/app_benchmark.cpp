@@ -23,6 +23,7 @@
 //   At the end: the report (stdout and --bench-report), the CRC log (--bench-crc-out) and, unless --bench-no-verify, the
 //   presentation on/off check (crc_check: the save replayed with the run's recorded commands gives the same CRC log).
 #include <filesystem>
+#include <map>
 
 #include "game_app.hpp"
 
@@ -144,6 +145,36 @@ void App::bench_step_sim() {
     }
 }
 
+// BM3 --bench-trace N: every Nth measured tick one line per owner of the drawn battle's objects (count, centroid and the box they
+// span, world units). Scene authoring only: where the fleets are, so a camera path can frame the fight.
+void App::bench_trace() {
+    if (opt_.bench.trace_every == 0 || !bench_measuring() || !bench_.ticked || !bview_.active()) return;
+    const uint64_t ran = bench_fixed() ? bench_.clock.ticks() : bench_.rt_ticks;
+    if (ran % opt_.bench.trace_every != 0) return;
+    struct Acc {
+        uint32_t n = 0;
+        double c[3] = {0, 0, 0};
+        float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+    };
+    std::map<int32_t, Acc> by_owner;
+    for (const render::SnapshotObject& o : bview_.frame().objects) {
+        if (o.owner < 0 || (o.flags & render::kSnapDrawable) == 0) continue;
+        Acc& a = by_owner[o.owner];
+        const float p[3] = {o.position.x, o.position.y, o.position.z};
+        ++a.n;
+        for (int k = 0; k < 3; ++k) {
+            a.c[k] += static_cast<double>(p[k]);
+            a.lo[k] = std::min(a.lo[k], p[k]);
+            a.hi[k] = std::max(a.hi[k], p[k]);
+        }
+    }
+    for (const auto& [owner, a] : by_owner)
+        std::printf("trace: tick %" PRIu64 " (run %" PRIu64 ") owner %d: %u objects, centroid %.0f %.0f %.0f, box %.0f..%.0f x %.0f..%.0f x %.0f..%.0f\n",
+                    session_->host().frame(), ran, owner, a.n, a.c[0] / a.n, a.c[1] / a.n, a.c[2] / a.n, static_cast<double>(a.lo[0]),
+                    static_cast<double>(a.hi[0]), static_cast<double>(a.lo[1]), static_cast<double>(a.hi[1]), static_cast<double>(a.lo[2]),
+                    static_cast<double>(a.hi[2]));
+}
+
 void App::bench_autopilot() {
     if (!session_ || bench_done()) return;
     const auto note = [this](const std::string& what) {
@@ -215,6 +246,7 @@ void App::bench_frame_end() {
             // the first jitter point.
             if (bench_fixed()) gpu_.renderer.reset_taa_history();
             b.t_start = b.t_progress = Clock::now();
+            b.load_ms = ms_since(b.t_load);
             std::printf("benchmark: measuring from tick %" PRIu64 " (%s) after %" PRIu64 " warm-up frames, %.1f s\n", b.start_tick,
                         screen_name(screen_), b.warmup_frames, ms_since(b.t_load) / 1000.0);
         } else if (ms_since(b.t_load) > kSettleLimitMs) {
@@ -247,6 +279,7 @@ void App::bench_frame_end() {
         if (!counted) ++b.excluded;
     }
     b.counted = counted;
+    bench_trace();  // BM3
     bench_gpu_counted(counted);  // bm2: this frame's GPU timer scopes count only when the frame does
     if (counted) b.t_progress = Clock::now();
     else if (ms_since(b.t_progress) > kStallLimitMs) bench_fail("no measured frame for 60 s at tick " + std::to_string(session_->host().frame()));
@@ -290,6 +323,8 @@ int App::bench_finish() {
     r.frame_ms = frame_time_stats(b.frame_ms);
     r.render_ms = frame_time_stats(b.render_ms);
     r.sim_ms = frame_time_stats(b.sim_ms);
+    r.load_ms = b.load_ms;  // bm3
+    bench_hitches(b.frame_ms, r);
     r.screen = screen_name(screen_);
     r.autopilot = b.autopilot;
     if (session_) {
