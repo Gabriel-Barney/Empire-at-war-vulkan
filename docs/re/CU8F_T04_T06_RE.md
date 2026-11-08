@@ -84,6 +84,37 @@ from F once V's time till dead was ≤ 4 s (V hull still 1.0). Arm A (no Lua cal
 in 2 of 2 trials each. So §1.3 holds in game [H]: the spawn default is 0.0, and -1 means the type's XML value. The port
 rule of cu8f t04a stays, and the foc-station cap seeds (cu8g t06) are not a stickiness-default artefact.
 
+### 1.6 cu8g t06: the foc-station seeds that reach the cap (2026-11-08, headless, no retail run)
+On dev `b5d6d2d0` (`alamo_headless --skirmish-ai foc-station --seed N --ticks 20000 --expect-battle-end`), seeds 1–5, 7
+and 8 end: Rebel win, frames 10106 / 13380 / 11358 / 14073 / 11043 / 12294 / 9990. Seeds 2 and 8 reached the cap when
+t06 was written (after cu8f t04a) but end on this dev, after later changes. Only **seed 6** reaches the 14400-frame cap, with the station at 742 / 3300 hull at frame 13800.
+It is a slow battle, not a stall. A temporary per-unit target dump (not committed) shows:
+- Both of the Rebels' Tech 3 `Calamari_Cruiser`s leave the fight at about frame 700. They go to the neutral
+  `N_Remote_Sensor_Pod` (object 93, at (-5298, 5293), about 6000 units from the Rebel start). They are sent by the
+  repeated `Destroy_Unit` / `Destroy_Unit_Minimal` plans on that pod (plans 5, 13, 21 and 25 between frames 200 and 1877).
+- They capture the pod at about frame 6600. They return at full health and only fire on the station from frame
+  ~11400. That is about 10700 frames out of the fight.
+- In the meantime the frigates fight the TIE screen and the Tartan, and the station drops from 3300 to 1444 by frame
+  9600. Between frames 9600 and 11400 only 1–2 Rebel ships still have a target.
+- The cruisers' speed is right: 1.8 units per frame = `Max_Speed` 1.5 × `Object_Max_Speed_Multiplier_Space` 1.2
+  (MOVEMENT §3.4).
+- Every seed makes this sensor-pod trip (9–13 plans on object 93 per seed; seed 8 sends three cruisers). Which seeds
+  end before the cap depends on how fast the station falls without them.
+
+The cruisers are picked by the documented solver rules, not by a port shortcut:
+- In space, TechTree (tech / 5 × 2 = 1.2 for a Calamari, 0.8 for an Assault Frigate, 0 for a Nebulon-B) runs next to
+  a FreeStore distance score of at most 1 (AI_GALACTIC_3 §1.2 [H], AI_TACTICAL §7.7.2).
+- A 1-to-20-unit `Destroy_Unit_Minimal` task force against a target with no `AI_Combat_Power` fills only its team
+  minimum, so the highest-tech free unit wins however far away it is.
+
+So no port gap was found. The 14400-frame limit is the port's test cap (`skirmish_run.cpp` `kBattleFrames` [port]), and
+the ctest outcome entry runs seed 1. The two [M] links that would change this if retail differs are:
+1. whether the space Destroy_Unit goals target the neutral capturable pod at all (AI_TACTICAL §3.3 `Applies`);
+2. the tactical FreeStore key when no stage cost is finite: 2-D distance² to the goal target (AI_GALACTIC_3 §1.2).
+
+A retail check would be a Kuat space skirmish against the Rebel AI that watches which units go to the corner sensor
+pod. It is not needed for the port and is not scheduled.
+
 ---
 
 ## 2. t04b: `Set_Prefer_Ground_Over_Space` (UNIT_AI pack +0x39)
