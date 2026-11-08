@@ -678,6 +678,11 @@ public:
     int32_t engines_online(objects::ObjectId id) const;
     // Locomotor_Set_Engines: disable for `seconds` (< 0 indefinitely); enable_engines = repair (not after destruction).
     bool disable_engines(objects::ObjectId id, float seconds);
+    // cu8f t02 (CU8F_T01_T02_T07_RE.md §2.4): the energy-pool path (CombatHooks::engines_drained, inside Take_Damage). With
+    // a locomotor: the timed disable (as disable_engines: expiry = max(old, now + int(30 t)), only while the engines are on
+    // or a timed disable runs) and the current move stopped; then the moving, then the idle engine loop off (engine-loop
+    // units). [port] the stop does not check the last waypoint's flag 0x10 [M]; signal 0x16 is not modelled.
+    void energy_drain_engines(objects::ObjectId id, float seconds);
     bool enable_engines(objects::ObjectId id);
     // max(terrain height, water height) at (x, y) on land maps; space: -3e38 (no ground).
     float ground_height(float x, float y) const;
@@ -1025,7 +1030,8 @@ public:
     // Retreat coordinator request (§3.4 vf9): false when not a participant, not yet allowed, already retreating or
     // (cu8 t01) prevented by an interdict / Retreat_Prevention entry.
     bool request_retreat(int32_t player);
-    // cu8 t01: the ability check of the request (AbilitySystem::retreat_blocked, TACTICAL_GAPS §1.5).
+    // cu8 t01: the ability check of the request (AbilitySystem::retreat_blocked, TACTICAL_GAPS §1.5); cu8f t07: in space
+    // also while the player owns a live TACTICAL_SUPER_WEAPON battle unit (CU8F_T01_T02_T07_RE.md §3.2).
     bool retreat_prevented(int32_t player) const;
     // --- OI host: the retreating player while a retreat countdown runs (-1 none / done). The mode's unit-response
     // "excluded set" (AUDIO.md §3.3, STRATEGIC_GAPS §7.4 [M]): that player's units give no unit responses. ---
@@ -1551,10 +1557,10 @@ private:
     void l1_setup(TacticalMode& mode);                       // setup(): the world callbacks
     void l1_register(TacticalMode& mode, objects::ObjectHandle h, int32_t type);  // deploy / adopt_object
     void l1_motion(TacticalMode& mode, SimRng& rng);         // tick step 4 (after the movement commit)
-    // cu8 t02 (TACTICAL_GAPS §2.3.1a): the Disable_Force_Abilities_Range emitters stamp the Force-disable timer of every
-    // live battle unit of another owner within that 3-D range that owns an F-flag unit ability. [port] every frame (the
-    // behaviour's update interval is not in docs/re; with Force_Ability_Disable_Time 0.0 per-frame stamping gives the
-    // documented "holds while the victim stays in range"). After the movement commit, before the combat tick.
+    // cu8 t02 / cu8f t07 (TACTICAL_GAPS §2.3.1a, CU8F_T01_T02_T07_RE.md §3.1): every object carrying DISABLE_FORCE_ABILITIES
+    // (0x52, interval 1: every frame) with Disable_Force_Abilities_Range r > 0 stamps the Force-disable timer of every live
+    // SELECTABLE battle unit of another owner within 3-D distance < r that owns an F-flag unit ability. After the movement
+    // commit, before the combat tick.
     void l1_force_disable(const TacticalMode& mode);
     std::vector<float> force_disable_range_;  // per type (Disable_Force_Abilities_Range), filled on first use
     void l1_weapons(TacticalMode& mode, SimRng& rng);        // tick after consume_events

@@ -188,7 +188,7 @@ bool AbilitySystem::autofire_on(ObjectId id, uint8_t type) const {
 
 void AbilitySystem::autofire_driver(Obj& o, ObjectId target, uint32_t frame) {
     // Issue_Auto_Target (0x38d730) for a targeting-acquired target -> 0x37d280 (no explicit ability) [H].
-    if (o.dead || o.pending_type >= 0 || !cfg_.abilities_enabled || !alive_unit(target)) return;
+    if (o.dead || o.sap_disabled || o.pending_type >= 0 || !cfg_.abilities_enabled || !alive_unit(target)) return;  // cu8f t01
     std::array<uint16_t, 32> cand{};
     std::array<uint8_t, 32> cand_type{};
     uint32_t n = 0;

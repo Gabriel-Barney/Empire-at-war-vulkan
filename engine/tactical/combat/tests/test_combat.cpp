@@ -6147,6 +6147,70 @@ void test_charge_up_slew() {
 
 }  // namespace
 
+void test_energy_drain_engines() {
+    // cu8f t02 (CU8F_T01_T02_T07_RE.md §2.4): after the shield steps, EnergyPool::Absorb takes min(E, x) from the pool of a
+    // projectile with Projectile_Does_Energy_Damage; ANY positive absorption with Projectile_Disables_Engines_When_Power_
+    // Drained calls CombatHooks::engines_drained(victim, Projectile_Disable_Engines_Duration). Shields absorb first.
+    struct DrainHooks final : CombatHooks {
+        std::vector<std::pair<ObjectId, float>> calls;
+        void engines_drained(ObjectId id, float seconds, uint32_t) override { calls.emplace_back(id, seconds); }
+    };
+    World w;
+    DrainHooks hk;
+    ProjectileDesc ion;
+    ion.name = "Proj_Ion";
+    ion.max_speed = 10.0f;
+    ion.does_energy_damage = true;
+    ion.disables_engines_when_drained = true;
+    ion.disable_engines_duration = 20.0f;
+    ion.does_shield_damage = false;  // the shield does not absorb it
+    w.data.projectiles.push_back(ion);
+    ProjectileDesc plain = ion;  // energy damage without the engine flag
+    plain.name = "Proj_Energy";
+    plain.disables_engines_when_drained = false;
+    w.data.projectiles.push_back(plain);
+    ProjectileDesc shield = ion;  // also does shield damage: the shield absorbs first
+    shield.name = "Proj_Ion_Shield";
+    shield.does_shield_damage = true;
+    w.data.projectiles.push_back(shield);
+    UnitDesc d;
+    d.tactical_health = 1000.0f;
+    d.energy_capacity = 100.0f;
+    d.shield_points = 50.0f;
+    const uint32_t ud = push_unit(w.data, d);
+    w.make();
+    w.sys->set_hooks(&hk);
+    w.add(1, ud, 1, alamo::tactical::Vec3{});
+    w.sys->set_shield(1, 50.0f);
+    auto hit = [&](int32_t proj, float amount) {
+        DamageRequest r;
+        r.victim = 1;
+        r.amount = amount;
+        r.kind = kKindNormal;
+        r.damage_type = kNoTypeId;
+        r.source_is_projectile = true;
+        r.projectile_desc = proj;
+        return w.sys->take_damage(r, w.frame);
+    };
+    DamageResult res = hit(1, 30.0f);  // energy, no engine flag
+    CHECK_F(res.energy_absorbed, 30.0f);
+    CHECK(hk.calls.empty());
+    res = hit(2, 40.0f);  // the shield (50) takes all of it: nothing reaches the pool
+    CHECK_F(res.absorbed, 40.0f);
+    CHECK_F(res.energy_absorbed, 0.0f);
+    CHECK(hk.calls.empty());
+    res = hit(0, 10.0f);  // any positive absorption, the pool far from empty
+    CHECK_F(res.energy_absorbed, 10.0f);
+    CHECK(hk.calls.size() == 1 && hk.calls[0].first == 1 && hk.calls[0].second == 20.0f);
+    res = hit(0, 500.0f);  // takes the last 60
+    CHECK_F(res.energy_absorbed, 60.0f);
+    CHECK(hk.calls.size() == 2);
+    res = hit(0, 10.0f);  // empty pool: no absorption, no call
+    CHECK_F(res.energy_absorbed, 0.0f);
+    CHECK(hk.calls.size() == 2);
+    w.sys->set_hooks(nullptr);
+}
+
 int main(int argc, char** argv) {
     const char* golden = nullptr;
     const char* write_golden = nullptr;
@@ -6225,6 +6289,7 @@ int main(int argc, char** argv) {
     test_team_handover_and_damage();  // s78g t06
     test_squad_value();               // s78h t03
     test_convert_team();              // s78h t04
+    test_energy_drain_engines();      // cu8f t02
     test_team_container_slot();       // s78h t06
     test_team_head_alone();           // s78i t03
     test_convert_container_unit();    // s78i t04

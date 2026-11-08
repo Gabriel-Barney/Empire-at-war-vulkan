@@ -39,7 +39,8 @@ using save_io::put_vec3;
 
 namespace {
 
-constexpr uint32_t kAbilitySaveVersion = 3;  // 2: OI follow-up animation record + lock pairs; 3: cu8 t02 stealth bonus gone
+// 2: OI follow-up animation record + lock pairs; 3: cu8 t02 stealth bonus gone; 4: cu8f t01 special restore target
+constexpr uint32_t kAbilitySaveVersion = 4;
 constexpr uint32_t kSpecialWeaponSaveVersion = 1;
 constexpr uint32_t kSpaceFieldSaveVersion = 1;
 
@@ -93,6 +94,7 @@ void AbilitySystem::write(ByteWriter& w) const {
             w.u8(sp.aura).f32(sp.radius).f32(sp.value);
             put_vec3(w, sp.point);
             put_ids(w, sp.victims);
+            w.i32(sp.restore);
         }
         w.u32(o.heal_due);
         w.u32(static_cast<uint32_t>(o.autofire_map.size()));
@@ -229,6 +231,7 @@ bool AbilitySystem::read(ByteReader& r) {
             sp.value = r.f32();
             sp.point = get_vec3<Vec3>(r);
             if (!r.ok() || sp.desc >= c_specials || !get_ids(r, sp.victims)) return false;
+            sp.restore = r.i32();
         }
         o.heal_due = r.u32();
         uint32_t na = 0;

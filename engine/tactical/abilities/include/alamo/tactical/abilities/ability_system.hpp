@@ -350,8 +350,16 @@ public:
     // CombatHooks: shields neither absorb nor count as up during the ion-storm lockout (0x549ac0).
     bool ion_storm_shields_down(ObjectId victim, uint32_t frame) const override;
     void set_locomotor_busy(ObjectId id, bool busy);      // also the combat flag (no ion stun)
-    // SAP +0x28 (gate 5). NOT WIRED (cu8 t02, roadmap cu8f): its writer is not in docs/re (RE task), so no host calls it.
-    void set_abilities_disabled(ObjectId id, bool off);
+    // SAP +0x28, "special abilities disabled" (CU8F_T01_T02_T07_RE.md §1). Its only writer is the Cancel_Special_Ability
+    // class (apply: disable the target, remove: enable it); public for tests / hosts. While set, every manager entry point
+    // returns early (SAP update, activate-by-name, autofire driver / style-9 fallback, Take_Damage listeners, automatic
+    // applies) and gate 5 refuses every unit ability. Set (0x37b9e0, no-op when already set): each enabled, mode-allowed
+    // special of an automatic style (1..5, 12) is cancelled on its live target (remembered for the restore). Clear
+    // (0x37d7f0, no-op when clear): byte first, then per enabled, mode-allowed special in list order: interval > 0 -> one
+    // synced Get_Int(now, now + interval) due frame (the bound RNG; none bound: due = now), then a cancelled effect is
+    // re-applied to its target when that is still live.
+    void set_abilities_disabled(ObjectId id, bool off, uint32_t frame = 0);
+    bool abilities_disabled(ObjectId id) const;
     void set_corrupted(ObjectId id, bool on);             // CORRUPT_SYSTEMS behaviour on the victim
     void set_weapons_disabled(ObjectId id, bool off);     // obj +0x3a0 bit 0x10
     void set_garrison_count(ObjectId id, int32_t n);
@@ -511,7 +519,10 @@ private:
         float radius = 0.0f;  // wave radius / sweep angle
         float value = 0.0f;   // stored damage D
         Vec3 point;           // target point
-        std::vector<ObjectId> victims;  // per-cast id list (waves, lightning, drain)
+        std::vector<ObjectId> victims;  // per-cast id list (waves, lightning, drain; Cancel_Special: the disabled targets)
+        // cu8f t01: the target an abilities-disabled cancel removed this effect from (Restore re-applies it there on
+        // enable); kNoObject = nothing to restore. Hashed and saved only when set.
+        ObjectId restore = kNoObject;
     };
     struct Obj {
         ObjectId id = kNoObject;

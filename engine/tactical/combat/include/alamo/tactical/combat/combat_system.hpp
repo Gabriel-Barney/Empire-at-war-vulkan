@@ -195,6 +195,9 @@ struct ProjectileDesc {
     // Energy pool (4.7) [H]
     float energy_per_shot = 0.0f;           // Projectile_Energy_Per_Shot
     bool does_energy_damage = false;        // Projectile_Does_Energy_Damage
+    // cu8f t02 (CU8F_T01_T02_T07_RE.md §2.4): any energy absorbed from the victim's pool -> CombatHooks::engines_drained.
+    bool disables_engines_when_drained = false;  // Projectile_Disables_Engines_When_Power_Drained
+    float disable_engines_duration = 0.0f;       // Projectile_Disable_Engines_Duration (seconds)
     // Saber/redirect listeners (TACTICAL_COMBAT 3.8) [M]
     float redirect_chance_modifier = 1.0f;  // Projectile_Redirect_Chance_Modifier
     float block_chance_modifier = 1.0f;     // Projectile_Block_Chance_Modifier
@@ -684,6 +687,12 @@ public:
     // cu8 t01 (L1_S4_REMAINING §3.2, TACTICAL_GAPS §7.4): `player` is weather-affected (no Weatherproof entry). The land
     // weather accuracy factor applies only to shooters of such players. Called from the fire step (serial). Default: yes.
     virtual bool weather_affected(int32_t /*player*/) const { return true; }
+    // cu8f t02 (CU8F_T01_T02_T07_RE.md §2.4, EnergyPool::Absorb 0x56c230): a projectile with Projectile_Does_Energy_Damage
+    // and Projectile_Disables_Engines_When_Power_Drained took energy > 0 from `victim`'s pool (Take_Damage step 15, after
+    // the shield steps). The host disables the engines for `seconds` (Locomotor_Set_Engines(destroyed 0, t): expiry =
+    // max(old, now + int(FPS x t))), stops the current move and turns the moving, then the idle engine loop off. Called
+    // from Take_Damage (serial phases / host calls). Default: nothing.
+    virtual void engines_drained(ObjectId /*victim*/, float /*seconds*/, uint32_t /*frame*/) {}
     // OI abilities: a detonation effect / stun on `id` (serial phases, after the combat-side state changed).
     virtual void unit_effect(ObjectId /*id*/, UnitEffect /*effect*/, int32_t /*player*/, Vec3 /*point*/, uint32_t /*frame*/) {}
     // ---- s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states, slots 47 / 48 and team copies") ----

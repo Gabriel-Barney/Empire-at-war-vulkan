@@ -403,6 +403,23 @@ bool TacticalBattle::disable_engines(objects::ObjectId id, float seconds) {
     return true;
 }
 
+void TacticalBattle::energy_drain_engines(objects::ObjectId id, float seconds) {
+    // cu8f t02 (CU8F_T01_T02_T07_RE.md §2.4), after EnergyPool::Absorb took energy > 0: 1. with a locomotor,
+    // Locomotor_Set_Engines(destroyed 0, t) (EngineControl::disable keeps the 0x5545a0 gate and the max expiry), then the
+    // current move stops (0x422040); 2. signal 0x16 [port: not modelled]; 3. moving loop off, then idle loop off.
+    const Unit* u = unit_by_id(id);
+    if (!u || !u->alive || u->retreated) return;
+    if (engines_online(id) >= 0) {
+        l1_engines_.disable(id, seconds, frame_);
+        l1_used_ = true;
+        if (u->movable && movement_ && movement_->has_unit(id)) {
+            const std::vector<objects::ObjectId> ids{id};
+            movement_->stop(ids);
+        }
+    }
+    if (hg_engine_unit(*u)) engine_loops_.timed_disable(id, frame_);
+}
+
 bool TacticalBattle::enable_engines(objects::ObjectId id) {
     if (engines_online(id) < 0) return false;
     l1_engines_.enable(id, frame_);
@@ -483,18 +500,26 @@ void TacticalBattle::l1_force_disable(const TacticalMode& mode) {
         for (objects::TypeIndex t = 0; t < types.size(); ++t)
             force_disable_range_[t] = types.get_float(t, "Disable_Force_Abilities_Range");  // read as a float [M]
     }
+    // cu8f t07 (CU8F_T01_T02_T07_RE.md §3.1): DisableForceAbilitiesBehaviorClass (0x52) Service 0x636260, interval 1, so
+    // every frame. Only objects that carry DISABLE_FORCE_ABILITIES in their current mode's list emit (FoC: Ysalamiri_Tree,
+    // Underworld_Ysalamiri_Cage, land only; Rebel_Mobile_Shield_Generator's range tag is dead data). Query 0x2a9ff0:
+    // SELECTABLE objects of every player but the emitter's owner (allies and neutral included), 3-D distance² < r².
+    // Victim stamp CD +0x110 := now when it has a Force (F column) unit ability; nothing ever clears it (gate 3 / 0x380b10
+    // ends the lockout passively).
     const objects::ObjectStore& st = mode.primary();
     for (const objects::ObjectHandle e : st.all_objects()) {  // emitters, store order
         const objects::TypeIndex et = st.type(e);
         if (!st.alive(e) || et >= force_disable_range_.size() || !(force_disable_range_[et] > 0.0f)) continue;
+        if (!st.has_behavior(e, objects::beh::DisableForceAbilities)) continue;
         const float r = force_disable_range_[et];
         const Vec3 ep = st.position(e);
         const int32_t owner = st.owner(e);
         for (const Unit& u : units_) {  // ascending id; the stamp is order-independent
             if (!u.alive || u.retreated || !st.alive(u.h) || st.owner(u.h) == owner) continue;
+            if (!st.has_behavior(u.h, objects::beh::Selectable)) continue;
             const Vec3 p = st.position(u.h);
             const float dx = p.x - ep.x, dy = p.y - ep.y, dz = p.z - ep.z;
-            if (dx * dx + dy * dy + dz * dz > r * r) continue;
+            if (!(dx * dx + dy * dy + dz * dz < r * r)) continue;
             if (abilities_->has_force_ability(u.id)) abilities_->set_force_disabled(u.id, frame_);
         }
     }

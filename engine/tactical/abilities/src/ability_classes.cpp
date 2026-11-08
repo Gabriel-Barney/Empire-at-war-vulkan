@@ -211,6 +211,11 @@ bool AbilitySystem::class_accepts(const Obj& o, const SpecialAbilityDesc& s, Obj
             return foe && combat_->data().units[combat_->desc_index(target)].has_locomotor && target_filter(s, target);
         case C::TacticalBribe: return bribe_accepts(o, target);  // 0x5b0f70: never the filter (§5.4.1)
         case C::Repair: return live && !dummy && allied(o.owner, combat_->owner(target)) && target_filter(s, target);  // [inferred]
+        case C::CancelSpecial: {  // cu8f t01, 0x6f4060: the target has a SAP and is not friendly (enemy or neutral; self and
+            // allies refused). No range or type filter. [port] "has a SAP" = an object of this system that is not dead.
+            const Obj* t = obj(target);
+            return t && !t->dead && !allied(o.owner, t->owner);
+        }
         // 0x712770 (Proximity_Mines, Buzz_Droids, Corrupt_Systems, Summon, Radioactive): the MARKER dummy point object
         // [port: or a live target / none - positions come with the command-57 dummy].
         case C::ProximityMines:
@@ -770,10 +775,19 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             event(AbilityEventKind::EffectOn, sp.trigger, o.id, kNoObject, frame);
             return true;
 
-        case C::CancelSpecial:  // cancels another named special of the owner [M]
-            for (SpecialState& q : o.specials)
-                if (&q != &sp && q.applied && data_->specials[q.desc].name_crc == s.ability_name_crc) remove_special(o, q, frame);
+        case C::CancelSpecial: {
+            // cu8f t01 (CU8F_T01_T02_T07_RE.md §1.2): CancelSpecialAbilityClass apply 0x6f3fc0 - its own accepts-target
+            // first (refused: nothing), then SAP_Disable_All on the TARGET's manager, Begin_Effect (the target joins the
+            // user's register: sp.victims) and the activation presentation (EffectOn).
+            // (Objects are never added or erased inside this call chain, so `o` / `sp` stay valid.)
+            if (!class_accepts(o, s, target, frame)) return false;
+            set_abilities_disabled(target, true, frame);
+            if (std::find(sp.victims.begin(), sp.victims.end(), target) == sp.victims.end()) sp.victims.push_back(target);
+            sp.applied = 1;
+            sp.target = target;
+            event(AbilityEventKind::EffectOn, sp.trigger, o.id, target, frame);
             return true;
+        }
 
         default: return false;
     }
@@ -1307,6 +1321,12 @@ void AbilitySystem::class_remove(Obj& o, SpecialState& sp, uint32_t frame) {
         case C::Weatherproof:
         case C::RetreatPrevention:
         case C::EnableAbility: aura_off(o, sp, frame); return;
+        case C::CancelSpecial: {  // cu8f t01: remove 0x6f40c0 - SAP_Enable_All on each disabled target, then End_Effect
+            std::vector<ObjectId> v;
+            v.swap(sp.victims);
+            for (const ObjectId t : v) set_abilities_disabled(t, false, frame);
+            break;
+        }
         case C::SuperLaser:
             o.active[kSuperLaser] = 0;
             start_recharge(o, kSuperLaser);  // recharge at the end (0x42fb70, §1.11)

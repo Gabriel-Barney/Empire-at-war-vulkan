@@ -4291,6 +4291,85 @@ BribeRun oi_bribe(const AbilityObjectDesc& target, int32_t target_owner, uint64_
     return out;
 }
 
+void test_cu8f_abilities_disabled() {
+    // cu8f t01 (CU8F_T01_T02_T07_RE.md §1): Cancel_Special_Ability disables the TARGET's special-ability manager (SAP +0x28)
+    // on apply and enables it on remove; set cancels the target's automatic effects, clear re-staggers interval specials
+    // with one synced draw each (list order) and restores the cancelled effects; every entry point and gate 5 are blocked.
+    OiWorld w;
+    const uint32_t cs = add_special(w.ad, oi_special("Cancel", SpecialClass::CancelSpecial, ActivationStyle::UserInput));
+    SpecialAbilityDesc aura = oi_special("Aura", SpecialClass::CombatBonus, ActivationStyle::SpaceAutomatic);
+    aura.bonus[static_cast<size_t>(ModList::Damage)] = 0.25f;
+    const uint32_t as = add_special(w.ad, aura);
+    const uint32_t ld = add_special(w.ad, oi_special("LD", SpecialClass::LaserDefense, ActivationStyle::UserInput));  // interval 1
+    const uint32_t eq = add_special(w.ad, oi_special("EQ", SpecialClass::Earthquake, ActivationStyle::SpecialAttack));  // interval 3
+    AbilityObjectDesc user;
+    user.unit_abilities = {oi_gui(kTargetedHack, 0.0f, 0.0f, "Cancel")};
+    user.specials = {cs};
+    const uint32_t ud = push(w.cd, w.ad, oi_unit("User", 100.0f), user);
+    AbilityObjectDesc hero;
+    hero.unit_abilities = {rec(kSprint, 2.0f, 4.0f)};
+    hero.specials = {as, ld, eq};
+    const uint32_t hd = push(w.cd, w.ad, oi_unit("Hero", 100.0f), hero);
+    w.make();
+    w.add(1, ud, 0, {0, 0, 0});
+    w.add(2, hd, 1, {300, 0, 0});
+    w.add(3, hd, 0, {-300, 0, 0});  // the user's own side: refused (friendly)
+    const uint32_t cancel = name_crc("Cancel");
+    CHECK_EQ(w.sys->modifier(2, ModList::Damage), 0.25f);
+    CHECK(!w.ab->abilities_disabled(2) && w.ab->can_activate(2, kSprint, true, true, w.frame));
+    const ObjectId users[] = {1};
+    CHECK(w.ab->targeted_ability(users, kTargetedHack, 3, -1, w.frame) == 0);  // accepts-target 0x6f4060: not friendly
+    CHECK(w.ab->targeted_ability(users, kTargetedHack, 2, -1, w.frame) == 1);
+    w.tick();
+    CHECK(w.ab->special_applied(1, cancel) && w.ab->special_target(1, cancel) == 2);
+    CHECK(w.ab->abilities_disabled(2) && !w.ab->abilities_disabled(1) && !w.ab->abilities_disabled(3));
+    CHECK_EQ(w.sys->modifier(2, ModList::Damage), 0.0f);           // the automatic aura was cancelled
+    CHECK(!w.ab->can_activate(2, kSprint, true, true, w.frame));   // gate 5
+    const ObjectId two[] = {2};
+    CHECK(w.ab->set_unit_ability_mode(two, kSprint, true, w.frame) == 0);
+    for (int i = 0; i < 5; ++i) w.tick();
+    CHECK(w.ab->abilities_disabled(2) && w.sys->modifier(2, ModList::Damage) == 0.0f);
+    // A second set is a no-op; a direct clear (the remove's SAP_Enable_All) makes one synced draw per interval special,
+    // list order (LD: Get_Int(now, now + 1), EQ: Get_Int(now, now + 3); the aura has interval 0), then restores the aura.
+    w.ab->set_abilities_disabled(2, true, w.frame);
+    SimRng pred = w.rng;
+    const auto now = static_cast<int32_t>(w.frame);
+    pred.range_int(now, now + 1);
+    pred.range_int(now, now + 3);
+    {  // save / load while the restore waits (version 4 carries the restore target)
+        ByteWriter bw;
+        w.ab->write(bw);
+        ByteReader br(bw.bytes());
+        CHECK(w.ab->read(br));
+    }
+    w.ab->set_abilities_disabled(2, false, w.frame);
+    CHECK(w.rng.state() == pred.state());
+    CHECK(!w.ab->abilities_disabled(2) && w.ab->can_activate(2, kSprint, true, true, w.frame));
+    CHECK_EQ(w.sys->modifier(2, ModList::Damage), 0.25f);
+    w.ab->set_abilities_disabled(2, false, w.frame);  // already clear: no draw
+    CHECK(w.rng.state() == pred.state());
+    // The user's death removes the Cancel effect: SAP_Enable_All on its target.
+    w.ab->set_abilities_disabled(2, true, w.frame);
+    CHECK_EQ(w.sys->modifier(2, ModList::Damage), 0.0f);
+    w.sys->kill_unit(1, kNoObject, kKindNormal, w.frame);
+    CHECK(!w.ab->abilities_disabled(2) && w.sys->modifier(2, ModList::Damage) == 0.25f);
+
+    // cu8f t07: the Force-disable lockout (gate 3 / 0x380b10) with Force_Ability_Disable_Time 0.0 at 30 FPS: locked on the
+    // stamp frame and the two after it, usable again on the 3rd frame after the last stamp.
+    OiWorld f;
+    AbilityObjectDesc jedi;
+    jedi.unit_abilities = {rec(kForceSight, 0.0f, 0.0f)};
+    const uint32_t jd = push(f.cd, f.ad, oi_unit("Jedi", 100.0f), jedi);
+    f.make(GameMode::Land);
+    f.add(1, jd, 0, {0, 0, 0});
+    CHECK(f.ab->has_force_ability(1));
+    const uint32_t s = 100;
+    f.ab->set_force_disabled(1, s);
+    CHECK(!f.ab->can_activate(1, kForceSight, true, true, s));
+    CHECK(!f.ab->can_activate(1, kForceSight, true, true, s + 2));
+    CHECK(f.ab->can_activate(1, kForceSight, true, true, s + 3));
+}
+
 void test_bribe_hack_accept() {
     constexpr uint64_t kCatInfantry = 16;
     {  // no filter tags, no cost data ([port] free): an enemy infantry is bribed at once
@@ -4437,6 +4516,7 @@ int main(int argc, char** argv) {
     test_oi_anim_timings();
     test_oi_anim_gates_and_locks();
     test_bribe_hack_accept();
+    test_cu8f_abilities_disabled();
     test_battle(golden, write_golden);
     test_allocations();
     test_save_load_battle();  // N1 stage 2

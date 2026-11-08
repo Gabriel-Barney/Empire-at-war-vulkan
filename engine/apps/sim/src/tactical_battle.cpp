@@ -271,6 +271,8 @@ public:
     void ion_stunned(tc::ObjectId id, uint32_t frame) override { a_->ion_stunned(id, frame); }
     bool ion_storm_shields_down(tc::ObjectId id, uint32_t frame) const override { return a_->ion_storm_shields_down(id, frame); }  // L1 systems
     bool weather_affected(int32_t player) const override { return a_->weather_affected(player); }  // cu8 t01 (Weatherproof)
+    // cu8f t02: energy-pool engine disable (ion projectiles, CU8F_T01_T02_T07_RE.md §2.4).
+    void engines_drained(tc::ObjectId id, float seconds, uint32_t /*frame*/) override { b_->energy_drain_engines(id, seconds); }
     void units_removed() override { a_->units_removed(); }
     // OI abilities: detonation effects / land stuns (TACTICAL_GAPS §1.10)
     void unit_effect(tc::ObjectId id, tc::UnitEffect e, int32_t player, tactical::Vec3 p, uint32_t frame) override {
@@ -2782,9 +2784,24 @@ void TacticalBattle::hash_queues(StateHasher& h) const {
 
 bool TacticalBattle::retreat_prevented(int32_t player) const {
     // cu8 t01 (TACTICAL_GAPS §1.5, BATTLE_TRANSITIONS §3.4 request check): an interdict / Retreat_Prevention entry that
-    // targets the player refuses the request (0x282750 space / 0x2825e0 land). [L, not ported] the space test's fallback
-    // object query (0x2a9ff0, category 0x2c).
-    return abilities_ && abilities_->retreat_blocked(player);
+    // targets the player refuses the request (0x282750 space / 0x2825e0 land).
+    if (abilities_ && abilities_->retreat_blocked(player)) return true;
+    // cu8f t07 (CU8F_T01_T02_T07_RE.md §3.2): space only, the fallback query 0x2a9ff0 - behaviour 0x2C
+    // TACTICAL_SUPER_WEAPON in the requesting player's own object list, no distance or hostility test: a player who owns
+    // such an object in the battle (FoC: Death_Star, Death_Star_II) cannot retreat (reason 6). Land has no such query.
+    // [port] live (not dead, not retreated) battle units, current owner.
+    if (!space_ || !combat_) return false;
+    for (const Unit& u : units_) {
+        if (!u.alive || u.retreated || !bt_is_super_weapon(u.type)) continue;
+        int32_t owner = -1;
+        if (combat_->has_unit(u.id)) {
+            owner = combat_->owner(u.id);
+        } else if (l1_mode_ && l1_mode_->primary().alive(u.h)) {
+            owner = l1_mode_->primary().owner(u.h);
+        }
+        if (owner == player) return true;
+    }
+    return false;
 }
 
 bool TacticalBattle::request_retreat(int32_t player) {
