@@ -130,9 +130,14 @@ python roadmap-store/roadmap_store.py release <group> [--by <session>] [--force]
 - `batch` prints up to N groups that are open, have every `after` group finished, are not claimed by another session, do not have
   status `gab`, `probe` or `spec` (or preset `gab`), and whose `touches` overlap neither each other nor the touches of a live claim.
   Order: status `next` first, then stage, box and group order. Two paths overlap when they are equal or one is a folder of the
-  other (`render` and `render/particles`). A leading `engine/` is ignored, and `apps/sim` counts as `apps`, so `apps`,
-  `engine/apps` and `apps/sim` overlap each other and everything under `apps`. A group with no `mod` and no `touches` never
-  conflicts. `--by <session>` stops that session's own claims from blocking it.
+  other (`render` and `render/particles`). A leading `engine/` is ignored, and a bare `apps/sim` counts as `apps`, so `apps`,
+  `engine/apps` and `apps/sim` overlap each other and everything under `apps`. Since WF1b (2026-11-08) `engine/apps/sim` is three
+  libraries (`alamo_sim_base`, `alamo_sim_battle`, `alamo_sim_campaign`), and a file below it counts as `apps/sim/<target>/<stem>`
+  (`apps/sim/src/tactical_battle_bt.cpp` -> `apps/sim/battle/tactical_battle_bt`; a header and its source are one stem; tests ->
+  `apps/sim/tests/<stem>`; target by name prefix, `SIM_TARGET_PREFIXES` in `roadmap_store.py`). So lanes that list the sim files
+  they edit run side by side, a target name (`apps/sim/battle`) overlaps each of its files, and a group whose `mod` says only
+  `apps/sim` still blocks all of apps: give apps/sim groups file-level `touches` (`claim --touches`, or `update` the field).
+  A group with no `mod` and no `touches` never conflicts. `--by <session>` stops that session's own claims from blocking it.
 - Coordinator flow: `batch N`, then each agent runs `claim <group> --by <its name>` before it edits anything; a refused claim means
   take the next group from a fresh `batch`.
 - The page shows a "claimed by X" badge on groups with a live claim and keeps them out of the "Start here" suggestions (it reads
