@@ -84,6 +84,8 @@ public:
     // GameConstants Land_ / Space_Capture_Allowed_Countdown_Seconds, Garrisoned_Max_Attack_Distance_Multiplier
     // (REMAINING_GAPS §3.3); < 0 = not read (the battle keeps its config value).
     float capture_countdown(bool space) const { return space ? space_capture_countdown_ : land_capture_countdown_; }
+    // ccpgt t02 (SKIRMISH_SETUP §4.2): GameConstants Control_Point_Domination_Victory_Time_In_Secs (GC+0x11b30; 30 when unset).
+    float control_point_victory_seconds() const { return control_point_victory_seconds_; }
     float garrisoned_range_multiplier() const { return garrisoned_range_mult_; }
     bool use_reinforcement_points() const { return use_reinforcement_points_; }  // Use_Reinforcement_Points (GC +0x118a0; land drops)
     float threat_decay_step() const { return threat_decay_step_; }  // AI_SpaceThreatDecayStep (DAMAGE_TRACKING)
@@ -223,6 +225,7 @@ private:
     float space_health_mult_ = 1.5f, land_health_mult_ = 1.0f;
     float space_idle_speed_ = 0.0f;
     float land_capture_countdown_ = -1.0f, space_capture_countdown_ = -1.0f, garrisoned_range_mult_ = -1.0f;
+    float control_point_victory_seconds_ = 30.0f;
     bool use_reinforcement_points_ = true;
     float threat_decay_step_ = 0.05f;
     float engines_disabled_speed_ = 0.4f;

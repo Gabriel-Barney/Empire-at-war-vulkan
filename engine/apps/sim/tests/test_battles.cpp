@@ -1854,6 +1854,100 @@ void test_map_owners(const Data& d) {
     CHECK(invaded && checked);
 }
 
+// ccpgt t02 (SKIRMISH_SETUP §4.2): the Capture Control Points rule on the S10 land invasion (Underworld player 0 attacks,
+// Empire player 1 defends). S4_Post is CAPTURE_POINT with Control_Point_Domination_Condition_Relevant; the one post (Neutral)
+// stands where the attackers gather, so both sides fight over it and the attackers hold it once the defenders are dead. Each
+// completed capture by a playable owner arms the domination timer at 900 frames (30 s, no GameConstants entry; the only
+// relevant point is the changing one, so "every other point allied" holds), a transition to Neutral disarms it; at <= 0 it
+// tests 0x15 and the battle ends 210 frames later with the attacker winning 0x15. The defenders' elimination (0xb in a
+// normal battle) wins nothing. Without BattleConfig::control_point_domination the timer never arms.
+void test_control_point_domination(const Data& d, bool domination) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSetup setup = make_setup(d, true);
+    std::swap(setup.players[0], setup.players[1]);
+    for (galactic::StartingForce& f : setup.forces) f.player = f.player == 0 ? 1 : f.player == 1 ? 0 : f.player;
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(setup));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 4000;
+    opt.battle.land_capture_countdown = 0.0f;  // the fixture has no Land_Capture_Allowed_Countdown_Seconds
+    opt.battle.control_point_domination = domination;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                auto place = [&m](const char* type, float x, float y, uint32_t raw) {
+                                    terrain::ObjectPlacement p;
+                                    p.type_crc = name_crc(type);
+                                    p.owner = raw;
+                                    p.position[0] = x;
+                                    p.position[1] = y;
+                                    m.objects.push_back(p);
+                                };
+                                place("Defending Forces Position", 900.0f, 900.0f, 2);
+                                place("Attacker Entry Position", 300.0f, 300.0f, 2);
+                                place("S4_Post", 480.0f, 540.0f, 2);  // Neutral, where the attackers gather
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 0) up.push_back(h);
+    CHECK(gs->launch_units(0, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 0);
+    if (!uf.empty()) CHECK(gs->move_fleet(0, uf[0], 1) == commands::RejectReason::None);
+    bool invaded = false, ended = false;
+    int32_t armed_timer = -1, armed_leader = -1, declared_type = -1, winner = -9, prev_timer = -1;
+    uint32_t armed_frame = 0, declared_frame = 0, end_frame = 0, arms = 0;
+    bool had_battle = false;
+    for (uint64_t t = 0; t < 8000 && !ended; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 0);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(0, 1, {}) == commands::RejectReason::None;
+        }
+        const TacticalBattle* b = battles.battle();
+        if (!b) {
+            ended = had_battle;  // the battle is removed in the tick it finishes (the declared player wins)
+            continue;
+        }
+        had_battle = true;
+        end_frame = b->frame();
+        if (const int32_t tm = b->control_point_timer(); tm >= 0 && (prev_timer < 0 || tm > prev_timer)) {  // (re)armed
+            ++arms;
+            armed_timer = tm;
+            armed_leader = b->control_point_leader();
+            armed_frame = b->frame();
+        }
+        prev_timer = b->control_point_timer();
+        if (declared_type < 0 && b->victory_declared()) {
+            declared_type = b->victory_declared_type();
+            winner = b->victory_declared_player();
+            declared_frame = b->frame();
+        }
+    }
+    std::printf("  control points (%s): %u arms, last at frame %u timer %d leader %d, declared 0x%x at %u, end %u winner %d\n",
+                domination ? "on" : "off", arms, armed_frame, armed_timer, armed_leader, static_cast<unsigned>(declared_type & 0xff),
+                declared_frame, end_frame, winner);
+    CHECK(invaded);
+    if (!domination) {
+        CHECK(armed_timer < 0);
+        return;
+    }
+    // The last arming (about 900 frames left: the capture service and the countdown share the tick) is the attacker's, the
+    // 0x15 test passes when it runs out, and the record's 210-frame countdown ends the battle.
+    CHECK(arms >= 1 && armed_leader == 0 && armed_timer > 890 && armed_timer <= 900);
+    CHECK(declared_type == 0x15 && declared_frame >= armed_frame + 890 && declared_frame <= armed_frame + 901);
+    CHECK(ended && winner == 0 && end_frame >= declared_frame + 205 && end_frame <= declared_frame + 212);
+}
+
 // Campaign galaxy (build_campaign_setup of S10_GC): players Empire 0 (human), Underworld 1, Neutral 2 and the Hostile
 // player 3 the setup adds. `drop_hostile` removes it again (the galaxy before the change).
 galactic::GalacticSetup campaign_setup(const Data& d, bool drop_hostile) {
@@ -2725,6 +2819,9 @@ int main(int argc, char** argv) {
         auto dmo = make_data(false, false, true);
         test_map_owners(*dmo);
         test_campaign_hostile(*dmo);
+        std::printf("ccpgt t02: Capture Control Points (0x15 domination timer)\n");
+        test_control_point_domination(*dmo, true);
+        test_control_point_domination(*dmo, false);
     }
     std::printf("skirmish station production: Production at the star base, upgrade object, station upgrade\n");
     test_station_production();

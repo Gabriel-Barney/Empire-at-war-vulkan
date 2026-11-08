@@ -4905,6 +4905,10 @@ void TacticalBattle::hash(StateHasher& h) const {
     h.i32(retreat_side_);
     h.u32(retreat_done_frame_);
     h.boolean(retreat_complete_);
+    if (vm_cp_armed_) {  // ccpgt t02: the domination timer (absent while not armed)
+        h.i32(vm_cp_timer_);
+        h.i32(vm_cp_player_);
+    }
     if (vm_declared_ || vm_hold_ != 0 || !vm_queue_.empty()) {  // story t06: the victory monitor (absent while idle)
         h.boolean(vm_declared_);
         h.u8(vm_decl_.type);

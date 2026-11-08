@@ -105,6 +105,8 @@ bool App::init() {
             i.name_key = e.name_key;
             i.custom = custom_tab;
             i.space = e.kind == 2;
+            // ccpgt t02 (UI.md 9.4): a land map whose upper-cased tag contains CONTROL is listed under Capture Control Points.
+            i.control = e.kind == 1 && e.mode_tag.find("CONTROL") != std::string::npos;
             map_rows.push_back(std::move(i));
         }
     }

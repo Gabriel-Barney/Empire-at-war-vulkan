@@ -866,6 +866,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         bo.battle.max_frames = s.map_host ? 0 : kBattleFrames;  // skai: a skirmish has no time limit (it ends at --ticks)
         bo.battle.skirmish = s.skirmish;
         bo.battle.skirmish_map = s.map_host;        // skai: team markers, income, skirmish victory
+        bo.battle.control_point_domination = s.map_host && s.land && opt.control_points;  // ccpgt t02
         bo.battle.skip_human_units = s.human >= 0;  // skai: the idle human gets no stand-in orders
         bo.tactical_ai = s.ai;
         sim::load_tactical_systems(*s.files, s.rules, &s.db.constants(), bo);  // Int-final: weather, retreat, strikes data

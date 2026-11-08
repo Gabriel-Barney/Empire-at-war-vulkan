@@ -1419,7 +1419,10 @@ void App::make_script() {
     };
     if (opt_.smoke == "land") {  // land skirmish: the first land map of the list (rows after the space maps)
         s.push_back(step_click_control("IDD_SINGLE_PLAYER_GAMES_MENU_DIALOG", "IDC_SKIRMISH_GAMES_BUTTON"));
-        s.push_back(step_click_first_row("IDD_SKIRMISH_STAGING_DIALOG", "IDC_GAME_TYPE_LIST"));  // p4uim t01: the Land game type
+        // p4uim t01: the Land game type (ccpgt t02: its row, the rows are sorted by text).
+        s.push_back(step_select_row("IDD_SKIRMISH_STAGING_DIALOG", "IDC_GAME_TYPE_LIST", [](App& a) {
+            return static_cast<size_t>(std::max<int32_t>(a.ui_.front.skirmish_game_type_row(ui::kSkirmishGameLand), 0));
+        }));
         s.push_back(step_wait("land game type listed", [](App& a) { return !a.ui_.front.skirmish_space_type(); }, 60));
         s.push_back(step_select_row("IDD_SKIRMISH_STAGING_DIALOG", "IDC_STAGING_MAP_LIST", [](App& a) {
             // The first land map by name (the old list's first land row): its row in the staging list as the front end sorted it;
@@ -1438,8 +1441,11 @@ void App::make_script() {
         s.push_back(step_wait("land skirmish over", [](App& a) { return a.session_ && a.skirmish_ended_ && a.screen_ == Screen::Menu; }, 20000));
     } else if (opt_.smoke == "skirmish") {
         s.push_back(step_click_control("IDD_SINGLE_PLAYER_GAMES_MENU_DIALOG", "IDC_SKIRMISH_GAMES_BUTTON"));
-        // The dialog opens on Land (UI.md 9.7): select the Space game type (row 1); the run starts on its row 0 (modc t19).
-        s.push_back(step_select_row("IDD_SKIRMISH_STAGING_DIALOG", "IDC_GAME_TYPE_LIST", [](App&) { return size_t{1}; }));
+        // The dialog opens on Land (UI.md 9.7): select the Space game type (its row; ccpgt t02: the rows are sorted by text); the
+        // run starts on its row 0 (modc t19).
+        s.push_back(step_select_row("IDD_SKIRMISH_STAGING_DIALOG", "IDC_GAME_TYPE_LIST", [](App& a) {
+            return static_cast<size_t>(std::max<int32_t>(a.ui_.front.skirmish_game_type_row(ui::kSkirmishGameSpace), 0));
+        }));
         s.push_back(step_wait("space game type listed", [](App& a) { return a.ui_.front.skirmish_space_type(); }, 60));
         s.push_back(step_shot("game_skirmish_staging.png"));
         s.push_back(step_click_control("IDD_SKIRMISH_STAGING_DIALOG", "IDC_SKIRMISH_START_GAME_BUTTON"));

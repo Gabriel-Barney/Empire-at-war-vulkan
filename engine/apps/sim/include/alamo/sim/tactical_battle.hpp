@@ -142,6 +142,9 @@ struct BattleConfig {
     // both slots' team markers become their faction's objects, Income_Stream_Ability pays, the skirmish victory rules apply
     // (tactical_battle_skirmish.cpp). The attract demo's map battle leaves it off.
     bool skirmish_map = false;
+    // ccpgt t02 (SKIRMISH_SETUP §4.2): the Capture Control Points game type (4), land only: each player's win condition is 0x15
+    // CONTROL_POINT_DOMINATION instead of the map kind's default. Off: unchanged rules.
+    bool control_point_domination = false;
     // --- S4 garrisons / structure capture (owner: S4 agent; tactical_battle_garrison.cpp) ---
     // GameConstants Garrisoned_Max_Attack_Distance_Multiplier / Land_ / Space_Capture_Allowed_Countdown_Seconds (vanilla
     // values; used only when the catalog's GameConstants lack them: BattleCatalog::capture_countdown).
@@ -672,6 +675,18 @@ public:
     bool victory_declared_silent() const { return vm_decl_.silent; }    // +0x15: no TEXT_WIN / LOSE_TACTICAL
     int32_t victory_countdown() const { return vm_countdown_; }
     size_t victory_queued() const { return vm_queue_.size(); }           // deferred {type, player} tests
+    // ccpgt t02 (SKIRMISH_SETUP §4.2): BattleConfig::control_point_domination registers only {0x15, player} records (the slot
+    // players on a skirmish map, else the attacker and the defender), so no other rule (elimination, retreat, base) can win.
+    // 0x15 is tested only by the domination timer: a completed capture transition of a relevant point (CAPTURE_POINT with
+    // Control_Point_Domination_Condition_Relevant) arms it for round(30 x Control_Point_Domination_Victory_Time_In_Secs) frames
+    // (GameConstants, 30 s) when every other relevant point is allied (relation 0) with the new owner and its faction is
+    // Is_Playable, else disarms it; each battle tick it counts down, at <= 0 it tests 0x15 for that player and disarms. E wins
+    // 0x15 when its faction is playable, at least one relevant point exists and every one is allied with E (any owner, no
+    // alive / Victory_Relevant test). The win then waits the record's 210-frame countdown. [port] the 30 / 15 / 5 s announcer
+    // lines are the host's (presentation): control_point_timer() = frames left (-1 not armed), control_point_leader() = the
+    // armed player (-1 none).
+    int32_t control_point_timer() const { return vm_cp_armed_ ? vm_cp_timer_ : -1; }
+    int32_t control_point_leader() const { return vm_cp_armed_ ? vm_cp_player_ : -1; }
     // --- end story t06 ---
     // Teleport (0x3a8f90): store, movement (stops the unit), combat, trees. False when the object is not alive.
     bool teleport(TacticalMode& mode, objects::ObjectId id, Vec3 position, Vec3 facing);
@@ -1335,6 +1350,13 @@ private:
     void vm_release(bool replay);                     // 0x3440a0
     void vm_sync_tsw();                               // TSW fire / state-13 holds -> raise / release
     bool vm_base_object(const objects::ObjectStore& st, objects::ObjectHandle h) const;
+    // ccpgt t02 (SKIRMISH_SETUP §4.2): the domination rule.
+    bool vm_cp_relevant(const objects::ObjectStore& st, objects::ObjectHandle h) const;  // CAPTURE_POINT + the type flag
+    // Every relevant point except `skip` allied with `player`; `any` = at least one relevant point (skip excluded).
+    bool vm_cp_all_allied(int32_t player, objects::ObjectId skip, bool& any) const;
+    bool vm_player_playable(int32_t player) const;
+    void vm_cp_capture(objects::ObjectId point, int32_t new_owner);  // 0x360d90, before the new owner is written
+    void vm_cp_disarm();
     void check_victory(TacticalMode& mode);
     // BT §3.1a item 1 (0x372230): Victory_Relevant, else Space_ / Land_Victory_Relevant of the type. Cached per type in
     // vr_cache_ (0 unknown, 1 no, 2 yes): a pure function of the type data and the mode, not saved.
@@ -1567,6 +1589,9 @@ private:
     std::vector<VmTracked> vm_tracked_;                    // last scan, ascending id
     uint32_t vm_tsw_seen_ = 0;                             // l1_sw_.victory_holds() at the last sync
     uint32_t vm_declared_frame_ = 0;                       // frame_ of the declaration (the countdown runs from the next tick)
+    bool vm_cp_armed_ = false;                             // ccpgt t02: mode +0x2b0..+0x2b8, the domination timer
+    int32_t vm_cp_timer_ = -1;
+    int32_t vm_cp_player_ = -1;
     std::vector<objects::ObjectId> vm_deaths_;             // transient: this tick's combat deaths in event order
     TacticalMode* vm_mode_ = nullptr;
     bool finished_ = false;

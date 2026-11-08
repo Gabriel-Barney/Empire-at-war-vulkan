@@ -397,7 +397,8 @@ inline std::string s4_types() {
                 "<Capture_Point_Transition_Time_Seconds>10.0</Capture_Point_Transition_Time_Seconds><Victory_Relevant>No</Victory_Relevant>"
                 "</SecondaryStructure>\n"
                 " <Marker Name=\"S4_Post\"><Behavior>CAPTURE_POINT</Behavior><Capture_Point_Radius>300</Capture_Point_Radius>"
-                "<Capture_Point_Transition_Time_Seconds>1.0</Capture_Point_Transition_Time_Seconds></Marker>\n"
+                "<Capture_Point_Transition_Time_Seconds>1.0</Capture_Point_Transition_Time_Seconds>"
+                "<Control_Point_Domination_Condition_Relevant>Yes</Control_Point_Domination_Condition_Relevant></Marker>\n"  // ccpgt t02
                 // S10 map owners: a landing reinforcement point (REMAINING_GAPS §3.3 probe 2026-10-29)
                 " <Marker Name=\"S4_RPoint\"><Behavior>CAPTURE_POINT, REINFORCEMENT_POINT</Behavior><Capture_Point_Radius>100</Capture_Point_Radius>"
                 "<Capture_Point_Transition_Time_Seconds>1.0</Capture_Point_Transition_Time_Seconds></Marker>\n"

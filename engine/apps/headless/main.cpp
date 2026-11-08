@@ -75,6 +75,8 @@
 //       its Space_ / Land_Skirmish_AI_Default_Forces (else the cheapest buildable units, [port]).
 //       A1 stage 2: AI-vs-AI space skirmish fought by the tactical AI in an S10 battle (skirmish_run.hpp); foc-land: a land skirmish (t50), foc-land-campaign: the campaign-rules land invasion.
 //       [--fail-on-lua-errors]: fail on any tactical AI Lua error (foc-station always does; a1j t07).
+//       [--control-points]: foc-land / skirmish on a land map (ccpgt t02): the Capture Control Points game type, each slot's win
+//       condition 0x15 CONTROL_POINT_DOMINATION (SKIRMISH_SETUP §4.2) instead of 0x13.
 //       Prints and writes the fired-event log (frame, plot set:sequence, plot, event, type, params,
 //       reward, cause) with the game-side trigger stream, and per-tick CRCs incl. "story". Campaign
 //       default Full_Story_Campaign_Underworld.
@@ -192,6 +194,7 @@ struct Options {
     bool story = false;
     bool scoring = false;  // q6 t06: --scoring
     bool object_scripts = false;  // q6: --object-scripts
+    bool control_points = false;  // ccpgt t02: --control-points
     std::string story_out, story_golden;
     // S10 battle transitions (battle_run.hpp): --battles auto|fight|fight-all
     std::string battles;
@@ -894,6 +897,7 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--story") opt.story = true;
         else if (a == "--scoring") opt.scoring = true;  // q6 t06
         else if (a == "--object-scripts") opt.object_scripts = true;  // q6
+        else if (a == "--control-points") opt.control_points = true;  // ccpgt t02
         else if (a == "--story-out") opt.story_out = next();
         else if (a == "--story-golden") opt.story_golden = next();
         else if (a == "--battles") opt.battles = next();  // S10
@@ -1088,6 +1092,7 @@ static int headless_main(int argc, char** argv) {
             m.human = opt.ai_human;  // skai: --skirmish-ai skirmish --human FACTION
             m.ai_factions = opt.skirmish_factions;  // q6 t02
             m.fail_on_lua_errors = opt.fail_on_lua_errors;
+            m.control_points = opt.control_points;  // ccpgt t02
             return skirmish_ai_run(m, opt.skirmish_ai, opt.ai_log, opt.trace_out);  // q4hf t02: --trace-out
         }
         if (opt.story && !(opt.economy && opt.galactic_ai)) {
