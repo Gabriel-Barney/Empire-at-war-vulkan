@@ -448,8 +448,7 @@ struct PanelEnv {
     }
     // Click the centre of `component`'s hit box through the panel.
     template <class Panel>
-    void click(Panel& p, std::string_view name, std::vector<commands::EventData>& cmds, std::vector<HudAction>& acts,
-               Button b = Button::Left, double now = 1.0) {
+    void click(Panel& p, std::string_view name, std::vector<HudAction>& acts, Button b = Button::Left, double now = 1.0) {
         const int32_t ci = table.find(name);
         const HudHitBox* hb = nullptr;
         for (const HudHitBox& h : p.hit_boxes())
@@ -462,7 +461,7 @@ struct PanelEnv {
         ri.hover_component = ci;
         ri.hud = {{HudPointerEvent::Kind::Press, b, ci, 0, 0}, {HudPointerEvent::Kind::Release, b, ci, 0, 0},
                   {HudPointerEvent::Kind::Click, b, ci, 0, 0}};
-        p.update_input(ri, false, false, now, cmds, &acts);
+        p.update_input(ri, false, false, now, &acts);
     }
 };
 

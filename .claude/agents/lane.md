@@ -29,7 +29,7 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
    Windows x64 only; no multiplayer, original-game saves or RenderDoc. Stay inside the group's task list; leftovers go in a
    follow-up group (step 8), not in extra edits.
 6. **Build in your own tree** (one tree per worktree; never share `build-msvc` or another lane's tree). From PowerShell:
-   `& .\build_agent.cmd --% msvc wt "core;<modules and their dependencies>"` gives `build-wt-msvc` and runs the fast tier
+   `& .\build_agent.cmd --% msvc wt "core;<modules and their dependencies>"` gives `build-wt-msvc` (`wt` is the default tree and may be left out) and runs the fast tier
    (`ctest -LE slow`); pass a regex as 4th argument for specific tests (slow ones included) or `all`. Never put `>` after `--%`.
    Read the summary it prints (`tools\lint\build_summary.py`), not the whole log; zero warnings at MSVC `/W4` and clang.
    - Sim code (everything in `engine/` except render, audio, video, UI): also `& .\build_agent.cmd --% clang wt "<modules>"`

@@ -37,11 +37,14 @@ Order of work: the plan sorts by stage (`lanes.order`), then box (`nodes.order`)
 as Ready, and in the "Start here" panel, while it is open and every group in its `after` is finished; otherwise it shows
 "After …". So when a group really has to wait for another, say so in `after`, not only in `eta.note`. Put only hard
 prerequisites there: a group that merely benefits from another stays Ready. The "Needs Gabriel" panel lists open groups
-with preset or status `gab`, plus groups with an open task whose text starts with "Gabriel" or contains "ask Gabriel".
+with preset or status `gab`, plus groups with an open task that needs Gabriel: its text starts with "Gabriel" or
+contains "ask Gabriel", or it has `"g": true`. Inside a group's task list each such open task carries a pink
+"Needs Gabriel" tag (Gabriel, 2026-11-08), so put `"g": true` on any task only Gabriel can do (launching the game,
+a playtest, a release merge) whose text does not start with "Gabriel:".
 
-`tasks` is a map: `{ "t03": { "t": "text", "s": "todo|done|oos", "o": 3 } }`. `s` is `todo`, `done` (drawn struck
-through) or `oos` (out of scope). `o` is the display order. Keys never change, so two sessions changing different
-tasks of one group merge without conflict.
+`tasks` is a map: `{ "t03": { "t": "text", "s": "todo|done|oos", "o": 3, "g": true } }`. `s` is `todo`, `done` (drawn struck
+through) or `oos` (out of scope). `o` is the display order. `g` (optional) marks a task that needs Gabriel. Keys never
+change, so two sessions changing different tasks of one group merge without conflict.
 
 `eta` is the estimated completion: `{ "target": "2026-11-05", "effort": "~2 days", "note": "what it waits on" }`
 (shown on open groups only). The project-wide projection under the build line is computed by the page on every

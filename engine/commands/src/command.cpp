@@ -316,4 +316,10 @@ EventData port_extension(uint16_t subtype, std::span<const uint8_t> data) {
 }
 }  // namespace ev
 
+EventData fleet_management_event(FleetOp op, ObjectId target, ObjectId fleet, ObjectId unit, ObjectId a, uint32_t slot) {
+    EventData e(EventType::FleetManagement);
+    e.set("target", target).set("fleet", fleet).set("unit", unit).set("op", static_cast<uint32_t>(op)).set("slot", slot).set("a", a);
+    return e;
+}
+
 }  // namespace alamo::commands
