@@ -219,10 +219,12 @@ function(alamo_game_add_exe)
   file(MAKE_DIRECTORY ${_smoke_out})
   # cu8g t02 (2026-11-08): the land smoke runs seed 2. With the map-load environment pick (one synced draw on its 2-environment
   # map, docs/re/CU8G_T02_ENV_PICK_RE.md) seed 1's AI retreats before the forces meet; seeds 2-5 all reach combat.
+  # cu8i t02 (2026-11-08): seed 3. With the FormationClass ctor draws (one per land formation and the Load_Map-tail pass)
+  # seeds 1, 2 and 6 retreat before the forces meet; seeds 3-5 reach combat.
   foreach(_k skirmish campaign land)
     set(_seed_args "")
     if(_k STREQUAL "land")
-      set(_seed_args --seed 2)
+      set(_seed_args --seed 3)
     endif()
     add_test(NAME alamo_game_smoke_${_k} COMMAND alamo_game --smoke ${_k} --hidden --audio null ${_seed_args} --png-dir ${_smoke_out})
     set_tests_properties(alamo_game_smoke_${_k} PROPERTIES TIMEOUT 1800 FIXTURES_SETUP alamo_game_smoke_${_k}_run)
