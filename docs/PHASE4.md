@@ -352,3 +352,43 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   from the battle save and two from the galactic save draw identical PNGs and write identical CRC logs; two real-time runs from the galactic save report frame times and the same CRC). Left for BM2 (group bm2): the scenario file as
   the source of `BenchmarkOptions` and of the recording, the tick-driven camera path, GPU timer scopes and the image-match
   check.
+- 🟡 **PARTLY DONE** · CU8F t03 (2026-11-07, random map picker, `docs/re/CU8F_T03_T05_RE.md` §1): the campaign picker 0x47bf40
+  runs on the candidate table of every `.ted` map (`sim::build_map_candidates`, campaign_battles.hpp): list A
+  `Data\Art\Maps\*.TED` of the FoC-loose and MEG layers (every readable file), list B `Data\CustomMaps\*.TED` of those layers
+  and `Data\Art\Maps\*.TED` of the mod layer (custom flag `0B` = 1 only); fields from chunk 0 (`01` type, `06` terrain, `05`
+  faction, `02` players, `03` max base level, `0B` custom) with the retail defaults (type −1, terrain 0, faction 0, players
+  1, max base level 1, custom 0). The filter, the preferred-name stop and the store-back (an empty answer too) follow §1.3 /
+  §1.4 (galactic `ConflictManager::choose_map`; query faction −1 only for defender id −1). Hosts wired: alamo_game
+  (`GameSession`, any session with a VFS), alamo_headless `--ai`, `--battles` (VFS only, not `--data`), save runs.
+  [port] choices: (1) the table is built **on the first pick**, not at boot (`CampaignBattleOptions::map_candidate_source`):
+  same table (the files do not change in a game) without reading ~330 MB of maps at every session start; (2) table order =
+  `Vfs::list`'s sorted logical-path order per listing (retail: the finder's loose-then-archive order); entries are keyed by
+  logical path, so a mod copy of an official map is one entry (retail lists it twice under two names, the second only
+  when its `0B` = 1, which the campaign never picks); an unreadable file or one without chunk 0 gives no entry (it could
+  never match: type −1); (3) **RNG**: retail draws `int(0, n − 1)` on the free, QPC-seeded RNG; the port draws the same
+  `int(0, n − 1)` (no draw for n = 1) on a local `SimRng` seeded with FNV-1a over (space, terrain, faction, base level,
+  preferred name, n). Neither session stream is used: the synced one is not drawn by retail here, and the port's free
+  stream must never feed the sim (sim_rng.hpp) and its draw count depends on the presentation attached (SimAnimation), so
+  a replay with and without rendering could pick differently. Retail's choice is noise, so any deterministic choice
+  among the survivors is behaviour-equivalent (§1.6). The game type 4 parts (mode tag `CONTROL`, quickmatch exclusion
+  list, start-position need) are not modelled: the campaign query never sets them. ⬜ Open: what the loader does with
+  the missing fallback maps `_Desert_L5_01.ted` / `_Space_Temperate1.ted` (in neither FoC nor EaW `maps.meg`) is not
+  traced (§1.4); the port keeps BT §2.1 steps 1.3–1.5 unchanged (a missing map refuses the battle, which is then
+  auto-resolved [port]). Probe §1.7 (mod planet without a tactical map) not run.
+- 🟡 **PARTLY DONE** · CU8F t05 (2026-11-07, scene wind, `docs/re/CU8F_T03_T05_RE.md` §2): `render::scene_wind(map)`
+  (map_scene.hpp) feeds `ParticleRenderer::set_wind` at map load in alamo_game's battle view and `alamo_render --sim`: land =
+  the start environment's `Environment::wind_vector()` (`2C` · (cos w, sin w, 0), w = `2B` degrees), space = (0, 0, 0);
+  no per-frame re-apply. The GPU update already matched §2.3 (wind-affected: velocity += wind · 0.5 · dt; weather
+  particles step with velocity + 5 · wind). [port] a land map without environments gets the record ctor default (0°,
+  2.0). ⬜ Open: (1) `Set_New_Environment` and the typed random environment pick (vf25 / vf27) have no host in the port
+  (the Lua call is only recorded, `bind_presentation.cpp`), so the wind is never rewritten after map load; wire it when a
+  host applies environment changes (lighting, fog, clouds, sky too). (2) **Map-load environment pick not ported**: retail
+  picks the active environment at every normal map load (land and space) with one **synced** `int(0, n − 1)` when the map
+  has more than one environment, skipping a record named `Cinematic` (next one, wrapping to 0); a base-map reload keeps
+  the stored index (§2.2). The port always uses the stored start index (mini `25`): render `MapScene`, and the sim's
+  weather start (`TacticalBattle::l1_weather_tick`). Not ported here because the draw's position in the synced stream is
+  not traced (before or after the map's own load draws, e.g. `Map_Load_Spawn_Table`, and whether the land-mode creation
+  call 0x3b81b0 draws too); porting it moves every battle golden on a map with several environments and needs the
+  chosen index in the battle save (state version) and passed to the render host. (3) The `+0x10dc / +0x10e0` inherit term
+  of the weather-particle step (§2.3, [M]) is not in the port's shader. Env mini `13` = weather type is recorded in
+  TERRAIN_WATER_POST §5.2 (`Environment::field_13`); nothing in the port reads it yet.

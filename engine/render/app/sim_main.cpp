@@ -362,6 +362,7 @@ public:
             return false;
         }
         prender_.set_sort_range(zfar_);
+        if (scene_) prender_.set_wind(scene_->scene_wind());  // cu8f t05: map-load scene wind (space / no scene: zero)
         renderer.set_scene_hook(&prender_);
         pattach_ = std::make_unique<render::particles::ProxyAttachments>(*pworld_, *plib_);
         popt_.detail = opt_.particle_detail;

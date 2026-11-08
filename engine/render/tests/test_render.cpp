@@ -801,6 +801,30 @@ void test_cloud_slots() {
     CHECK(render::Renderer::cloud_texture_slots(p, none) == 0x2);
 }
 
+// cu8f t05 (CU8F_T03_T05_RE §2.1 / §2.2): the particle scene wind. Land = speed x (cos w, sin w, 0) of the start
+// environment (0 deg = +X, 90 deg = +Y); no environment = the ctor default (0 deg, 2.0); space = zero.
+void test_scene_wind() {
+    terrain::MapData m;
+    m.terrain.present = true;  // land
+    Float3 w = render::scene_wind(m);
+    CHECK(near_eq(w.x, 2.0f) && near_eq(w.y, 0.0f) && w.z == 0.0f);
+    terrain::Environment a, b;
+    a.wind_direction_deg = 0.0f;
+    a.wind_speed = 7.0f;
+    b.wind_direction_deg = 90.0f;
+    b.wind_speed = 10.0f;
+    m.environments.environments = {a, b};
+    m.environments.start_index = 1;
+    w = render::scene_wind(m);
+    CHECK(std::fabs(w.x) < 1e-4f && near_eq(w.y, 10.0f) && w.z == 0.0f);
+    m.environments.start_index = 0;
+    w = render::scene_wind(m);
+    CHECK(near_eq(w.x, 7.0f) && std::fabs(w.y) < 1e-4f);
+    m.terrain.present = false;  // space: never written
+    w = render::scene_wind(m);
+    CHECK(w.x == 0.0f && w.y == 0.0f && w.z == 0.0f);
+}
+
 void test_png() {
     const uint8_t iend[] = {'I', 'E', 'N', 'D'};
     CHECK(alamo::crc32(iend, sizeof iend) == 0xAE426082u);
@@ -1014,6 +1038,7 @@ int main() {
     test_world();
     test_type_resolution();
     test_cloud_slots();
+    test_scene_wind();
     std::printf("cpu: %s\n", g_fail ? "FAILED" : "ok");
     const int gpu = run_gpu(ALAMO_RENDER_SOURCE_DIR);
     if (gpu) ++g_fail;

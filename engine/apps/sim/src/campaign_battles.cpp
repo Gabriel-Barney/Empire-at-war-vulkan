@@ -157,10 +157,15 @@ bool CampaignBattles::attach(std::vector<std::string>* diag) {
 #endif
         return locked ? galactic::BattleChoice::Fight : cm_->config().human_choice;
     };
-    if (!opt_.map_candidates.empty())  // BT §2.1 random map picker (TACTICAL_GAPS §4.10, [port] deterministic pick)
-        cm_->pick_map = [this](bool space, int32_t terrain, int32_t faction, int32_t base_level) {
-            return pick_random_map(opt_.map_candidates, space, terrain, faction, base_level);
-        };
+    // BT §2.1 random map picker (CU8F_T03_T05_RE §1.3, cu8f t03): installed always, so the planet's stored pick is written
+    // back as retail does; without a table (no source, no list) every pick is "".
+    cm_->pick_map = [this](bool space, int32_t terrain, int32_t faction, int32_t base_level, const std::string& preferred) {
+        if (opt_.map_candidate_source) {  // [port] built on the first pick (campaign_battles.hpp map_candidate_source)
+            if (opt_.map_candidates.empty()) opt_.map_candidates = opt_.map_candidate_source();
+            opt_.map_candidate_source = nullptr;
+        }
+        return pick_random_map(opt_.map_candidates, space, terrain, faction, base_level, preferred);
+    };
     // --- end battle host ---
     host_->set_after_mode_update([this](SimHost& h) { hook(h); });
     CrcRegistry& reg = host_->crc_registry();
@@ -614,21 +619,80 @@ commands::RejectReason CampaignBattles::resume_game(uint8_t player, const comman
     return commands::RejectReason::None;
 }
 
-std::string pick_random_map(const std::vector<CampaignBattleOptions::MapCandidate>& candidates, bool space, int32_t terrain, int32_t faction,
-                            int32_t base_level) {
+std::string pick_random_map(const std::vector<CampaignBattleOptions::MapCandidate>& candidates, bool space, int32_t terrain,
+                            int32_t faction, int32_t base_level, std::string_view preferred) {
+    // CU8F_T03_T05_RE §1.3 (cu8f t03): the campaign's filter, table order; the scan stops after the preferred name.
+    const int32_t map_type = space ? 2 : 1;
+    const uint32_t tq = static_cast<uint32_t>(terrain);
+    const bool not_terrain = (tq & 0x80000000u) != 0;  // query bit 31: "not this terrain" (0xffffffff = any)
+    const uint32_t tv = tq & 0x7FFFFFFFu;
     std::vector<const CampaignBattleOptions::MapCandidate*> m;
-    for (const CampaignBattleOptions::MapCandidate& c : candidates)
-        if (c.space == space && (c.terrain < 0 || c.terrain == terrain) && (c.faction < 0 || c.faction == faction) &&
-            c.max_base_level >= base_level && c.players >= 2 && !c.excluded)
-            m.push_back(&c);
+    for (const CampaignBattleOptions::MapCandidate& c : candidates) {
+        if (c.map_type != map_type) continue;
+        if ((static_cast<uint32_t>(c.terrain) == (not_terrain ? tv : tq)) == not_terrain) continue;
+        if (faction != -1 && c.faction != faction) continue;
+        if (base_level > c.max_base_level || c.players < 2 || c.custom != 0) continue;
+        m.push_back(&c);
+        if (!preferred.empty() && c.name == preferred) break;
+    }
     if (m.empty()) return {};
-    uint32_t h = 2166136261u;  // FNV-1a over the query
-    for (const int32_t v : {space ? 1 : 0, terrain, faction, base_level, static_cast<int32_t>(m.size())})
+    if (m.size() == 1) return m.front()->name;  // retail: no draw for n = 1
+    uint32_t h = 2166136261u;  // [port] FNV-1a seed of the local generator (campaign_battles.hpp)
+    const auto mix = [&h](uint32_t v) {
         for (int i = 0; i < 4; ++i) {
-            h ^= (static_cast<uint32_t>(v) >> (8 * i)) & 0xFFu;
+            h ^= (v >> (8 * i)) & 0xFFu;
             h *= 16777619u;
         }
-    return m[h % static_cast<uint32_t>(m.size())]->name;
+    };
+    for (const int32_t v : {space ? 1 : 0, terrain, faction, base_level}) mix(static_cast<uint32_t>(v));
+    for (const char ch : preferred) mix(static_cast<uint8_t>(ch));
+    mix(static_cast<uint32_t>(m.size()));
+    SimRng rng(h);
+    return m[static_cast<size_t>(rng.range_int(0, static_cast<int32_t>(m.size()) - 1))]->name;
+}
+
+bool read_map_candidate(std::span<const uint8_t> ted, std::string name, CampaignBattleOptions::MapCandidate& out) {
+    terrain::ParseOptions opt;
+    opt.environments_only = true;  // chunk 0 (plus the environment set); a malformed later chunk leaves chunk 0 usable
+    terrain::MapData md;
+    terrain::parse_ted(ted, md, nullptr, opt);
+    if (!md.info.present) return false;
+    const std::vector<terrain::RawMini>& raw = md.info.raw;
+    const auto u32_or = [&raw](uint8_t id, uint32_t value, uint32_t fallback) { return terrain::find_mini(raw, id) ? value : fallback; };
+    out = CampaignBattleOptions::MapCandidate{};
+    out.name = std::move(name);
+    // §1.2 defaults for an absent mini: type -1, terrain 0, faction 0, players 1, max base level 1, custom 0.
+    out.map_type = static_cast<int32_t>(u32_or(0x01, md.info.map_type, 0xFFFFFFFFu));
+    out.players = static_cast<int32_t>(u32_or(0x02, md.info.counts[0], 1));
+    out.max_base_level = static_cast<int32_t>(u32_or(0x03, md.info.counts[1], 1));
+    out.faction = static_cast<int32_t>(u32_or(0x05, md.info.counts[3], 0));
+    out.terrain = static_cast<int32_t>(u32_or(0x06, md.info.counts[4], 0));
+    out.custom = md.info.flag_0b;  // 0 when absent
+    return true;
+}
+
+std::vector<CampaignBattleOptions::MapCandidate> build_map_candidates(const FileProvider& files, const MapLister& list) {
+    std::vector<CampaignBattleOptions::MapCandidate> out;
+    if (!list) return out;
+    std::vector<uint8_t> bytes;
+    const auto add = [&](const std::string& path, bool custom_list) {
+        for (const CampaignBattleOptions::MapCandidate& c : out)
+            if (c.name == path) return;  // 0x47c8b0: a name already in the table is skipped
+        bytes.clear();
+        CampaignBattleOptions::MapCandidate c;
+        if (!files.read(path, bytes) || !read_map_candidate(bytes, path, c)) return;
+        if (custom_list && c.custom != 1) return;  // list B keeps custom maps only
+        out.push_back(std::move(c));
+    };
+    for (const std::string& p : list("Data\\Art\\Maps\\*.TED", false)) add(p, false);    // list A
+    for (const std::string& p : list("Data\\CustomMaps\\*.TED", false)) add(p, true);   // list B: CustomMaps
+    for (const std::string& p : list("Data\\Art\\Maps\\*.TED", true)) add(p, true);     // list B: the mod paths
+    return out;
+}
+
+std::function<std::vector<CampaignBattleOptions::MapCandidate>()> map_candidate_source(const FileProvider& files, MapLister list) {
+    const FileProvider* f = &files;
+    return [f, l = std::move(list)] { return build_map_candidates(*f, l); };
 }
 // --- end battle host ---
 

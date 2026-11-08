@@ -1117,15 +1117,19 @@ already entered orbit (0x4338d0, slot −2), so ground units usually just go up 
 - `Destroyed_Space_Tactical_Map` (planet type +0x6b0): only ctor / dtor / copy (0x2c4370 / 0x2c5b30 /
   0x36c000); no gameplay reader [M]. Corruption maps come through §4.8.
 - Picker table 0x140b311a8, built at boot (0x47cb40) from `Data\Art\Maps\*.TED`, `Data\CustomMaps\*.TED` and the
-  mod paths; per map (0x47b030) a 0xf0-byte entry: +0x00 name, +0x80 path, +0xa0 kind (1 land, 2 space), +0xa4
-  terrain, +0xa8 faction, +0xac player count, +0xb0 max base level [M], +0xb4 / +0xb5 flags.
-- Query from 0x28fda0 (kind, terrain, faction, base level, 2, planet map, 0, 0, 0, 0): kind and terrain equal
-  (terrain bit 31 = any), faction equal or −1, +0xb0 ≥ base level, +0xac ≥ 2, +0xb4 = 0. Game type 4 adds a
+  mod paths; per map (0x47b030) a 0xf0-byte entry: +0x00 path (the picker's answer), +0x80 mode tag (mini `0A`,
+  upper-cased), +0xa0 kind (1 land, 2 space), +0xa4 terrain, +0xa8 faction, +0xac player count, +0xb0 max base level
+  [M], +0xb4 custom flag / +0xb5 has start positions. Fields come from the file's chunk 0 minis (CU8F_T03_T05_RE §1.2,
+  corrected 2026-11-07: the entry has no separate path field at +0x80).
+- Query from 0x28fda0 (kind, terrain, faction, base level, 2, planet map, 0, 0, 0, 0): kind equal; terrain equal when
+  the query's bit 31 is clear, **not equal** to (terrain & 0x7fffffff) when it is set (so 0xffffffff = any; corrected
+  2026-11-07 per CU8F_T03_T05_RE §1.3, earlier read as "bit 31 = any"); query faction −1 or equal (−1 only when the
+  defender id is −1; a candidate value is never a wildcard), +0xb0 ≥ base level, +0xac ≥ 2, +0xb4 = 0. Game type 4 adds a
   `CONTROL` path filter and `Quickmatch_Map_Exclusion_List` (GC +0x119c0). Matches in table order; a matching
   preferred name stops collection after it. Result = one `int(0, n − 1)` from the **free RNG** (QPC-seeded);
-  no match → empty entry.
-- **The original pick is not deterministic.** Port: a seeded deterministic choice; parity only needs a valid
-  map, which is then stored on the planet. TR gives 1386 planets fixed `Land/Space_Tactical_Map`, so the
+  no match → empty entry. The answer is stored on the planet every time, an empty one included (CU8F_T03_T05_RE §1.4).
+- **The original pick is not deterministic.** Port: a seeded deterministic choice (docs/PHASE4.md, cu8f t03); parity
+  only needs a valid map. TR gives 1386 planets fixed `Land/Space_Tactical_Map`, so the
   picker is rare there.
 
 ### 4.11 Pending-dialog command path (item 11) [H MP, M SP, L state 1]

@@ -323,6 +323,10 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         bo.conflict.fight_ai_battles = aopt.battles == "fight-all";
         bo.tactical = aopt.battles != "auto";
         sim::load_tactical_systems(*files, rules, &db.constants(), bo);  // Int-final: weather, retreat, strikes data
+        // cu8f t03: the random map picker's candidate table (CU8F_T03_T05_RE §1.1), built on the first pick [port].
+        bo.map_candidate_source = sim::map_candidate_source(*files, [v = files.get()](std::string_view g, bool mod) {
+            return v->list(g, mod ? vfs::Vfs::kLayerMod : vfs::Vfs::kLayerBase | vfs::Vfs::kLayerMeg);
+        });
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
         // --- A2 hook: the AI's galactic budget categories for the A1 land-battle credit transfer ---
         std::vector<std::vector<ai::tactical::TacticalBudgetCategory>> budget_rows(gs->players().size());

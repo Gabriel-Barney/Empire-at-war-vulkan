@@ -126,6 +126,13 @@ struct MapSceneStats {
     uint32_t health_not_full = 0;
 };
 
+// cu8f t05 (CU8F_T03_T05_RE §2): the scene wind the particles read (alScene +0x1ac; ParticleRenderer::set_wind). Land:
+// the active (start) environment's Environment::wind_vector() = 2C x (cos w, sin w, 0), w = 2B degrees (0 = +X, 90 = +Y),
+// world units per second; a land map without environments: the record ctor default (0 deg, 2.0) [port]. Space: (0, 0, 0)
+// (space mode never writes it). Set once at map load; nothing re-applies it per frame, and neither weather phases nor
+// Set_Cinematic_Environment change it. Presentation only (CRT cos / sin; the sim never reads it).
+Float3 scene_wind(const terrain::MapData& map);
+
 // Land maps: terrain + water + decorations (map tracks, decals; per-frame dynamic tracks and shadow blobs) + fog
 // of war. Space maps (SpaceMapDesc, SPACE_AND_OPEN.md A): no terrain; placements of In_Background types and the
 // environment skydomes (at the origin, type Scale_Factor, TEE 1D/1F and 1E/20 angles) form the background scene
@@ -159,6 +166,7 @@ public:
     bool space() const { return space_; }
     // Frame clear colour: the environment's (TEE 15) on land, black in space (SPACE_AND_OPEN.md 0 item 3).
     Float3 clear_color() const { return space_ ? Float3{0, 0, 0} : lighting_.clear_color; }
+    Float3 scene_wind() const { return render::scene_wind(map_); }  // cu8f t05: see the free function above
     // RecordOptions for this map (space flag).
     void apply(RecordOptions& o) const { o.space = space_; }
 

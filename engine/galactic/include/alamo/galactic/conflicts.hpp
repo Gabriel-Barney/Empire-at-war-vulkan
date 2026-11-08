@@ -211,9 +211,12 @@ public:
     std::function<bool(const BattleRequest&)> start_battle;
     // Raises (true) / releases (false) one level of the galactic pause. Absent: GalacticSim push/pop_pause.
     std::function<void(bool)> pause;
-    // Random map picker 0x47bf40 (space, terrain index, defender map-faction index, base level). Empty
-    // answer = fallback map. Absent: fallback map.
-    std::function<std::string(bool space, int32_t terrain, int32_t faction, int32_t base_level)> pick_map;
+    // Random map picker 0x47bf40 (space, terrain index, defender map-faction index or -1 when the defender id is -1,
+    // base level, preferred = the planet's stored pick +0x1e0; CU8F_T03_T05_RE §1.3). Called whenever the planet type names
+    // no map; its answer is stored back on the planet every time, an empty one included (§1.4). Empty answer = fallback
+    // map. Absent: no candidates (empty answer, stored back).
+    std::function<std::string(bool space, int32_t terrain, int32_t faction, int32_t base_level, const std::string& preferred)>
+        pick_map;
     // OI galactic: the auto-resolve survival roll (STRATEGIC_GAPS 1.1, 0x60a140 -> learning writer 0x58a9a0): once per
     // combatant of a written-back auto-resolve, combatant order, with its owner, galactic store type (the callee applies
     // the company-leader substitution) and whether it survived. Absent: nothing. The host wires it to

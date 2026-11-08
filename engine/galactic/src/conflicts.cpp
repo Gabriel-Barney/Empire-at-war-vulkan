@@ -990,12 +990,15 @@ std::string ConflictManager::choose_map(const ConflictInfo& head, int32_t base_l
     *ok = true;
     const bool space = head.kind == ConflictKind::Space;
     const PlanetState& p = sim_->planets()[head.planet];
-    std::string name = head.planet < planet_map_.size() ? planet_map_[head.planet] : std::string();
+    std::string name;
     const ConflictTypeInfo& pt = rules_->type(p.type);
     const std::string& field = space ? pt.space_map : pt.land_map;
     if (!field.empty()) {
         name = field;
-    } else if (name.empty()) {
+    } else {
+        // BT §2.1 step 1.2 (CU8F_T03_T05_RE §1.3 / §1.4, cu8f t03): the picker runs every time the planet type names no
+        // map; the stored pick (planet data +0x1e0) is only its preferred name (the scan stops after it), and the answer is
+        // stored back every time, an empty one included (a miss clears the earlier pick).
         if (pt.terrain < 0) {
             *ok = false;  // unknown Terrain: the start fails
             return {};
@@ -1003,7 +1006,9 @@ std::string ConflictManager::choose_map(const ConflictInfo& head, int32_t base_l
         const uint32_t f = head.defender >= 0 && static_cast<size_t>(head.defender) < sim_->players().size()
                                ? sim_->players()[static_cast<size_t>(head.defender)].faction
                                : kNoIndex;
-        if (pick_map) name = pick_map(space, pt.terrain, rules_->faction(f).map_faction, base_level);
+        const int32_t faction = head.defender == -1 ? -1 : rules_->faction(f).map_faction;  // -1 only for defender id -1
+        const std::string preferred = head.planet < planet_map_.size() ? planet_map_[head.planet] : std::string();
+        if (pick_map) name = pick_map(space, pt.terrain, faction, base_level, preferred);
         if (head.planet < planet_map_.size()) planet_map_[head.planet] = name;
     }
     if (!head.map.empty()) name = head.map;

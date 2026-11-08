@@ -837,4 +837,11 @@ OrbitCamera MapScene::tactical_camera(float aspect, float distance_override) con
     cam.radius = dist;
     return cam;
 }
+Float3 scene_wind(const terrain::MapData& map) {
+    if (map.is_space()) return {0, 0, 0};  // space mode's environment changes never write the wind (§2.2)
+    const terrain::Environment* env = map.environments.start();
+    const std::array<float, 3> w = env ? env->wind_vector() : terrain::Environment{}.wind_vector();
+    return {w[0], w[1], w[2]};
+}
+
 }  // namespace alamo::render

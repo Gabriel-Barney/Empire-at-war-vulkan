@@ -605,6 +605,57 @@ void test_human_fight() {
     CHECK(!w.sim.planets()[rB].in_battle);
 }
 
+// cu8f t03 (CU8F_T03_T05_RE §1.3 / §1.4): the picker runs whenever the planet type names no map, with the planet's stored
+// pick as the preferred name and the defender's map faction; its answer is stored back every time, an empty one included.
+void test_map_picker_store() {
+    World w({{pEmpire, rA, tFrigate}, {pEmpire, rB, tFrigate}, {pEmpire, rB, tCorvette}, {pUnder, rC, tFrigate}}, true);
+    w.cm->config().human_choice = BattleChoice::Fight;
+    struct Call {
+        bool space;
+        int32_t terrain, faction, base_level;
+        std::string preferred;
+    };
+    std::vector<Call> calls;
+    std::vector<std::string> answers = {"PICK_A", "", "PICK_B"};
+    w.cm->pick_map = [&](bool space, int32_t terrain, int32_t faction, int32_t base_level, const std::string& preferred) {
+        calls.push_back({space, terrain, faction, base_level, preferred});
+        return calls.size() <= answers.size() ? answers[calls.size() - 1] : std::string();
+    };
+    BattleRequest got;
+    w.cm->start_battle = [&](const BattleRequest& r) {
+        got = r;
+        return true;
+    };
+    w.arrive_at_b();
+    CHECK(w.cm->battle_active() && calls.size() == 1);
+    if (calls.size() != 1 || got.forces.size() != 2 || got.forces[1].start.empty()) return;
+    const uint32_t ef = w.sim.players()[static_cast<size_t>(pEmpire)].faction;
+    CHECK(calls[0].space && calls[0].terrain == 0 && calls[0].preferred.empty());
+    CHECK(calls[0].faction == w.crules.faction(ef).map_faction);
+    CHECK(got.map == "PICK_A");
+    BattleResult res;
+    res.winner = pEmpire;
+    res.destroyed = {got.forces[1].start[0]};
+    w.cm->finish_battle(res);
+    CHECK(!w.cm->battle_active());
+    // Second battle at B: the stored pick is the preferred name; the empty answer gives the fallback map and is stored.
+    ConflictManager::LinkedBattle lb;
+    lb.kind = ConflictKind::Space;
+    lb.planet = rB;
+    lb.attacker = pUnder;
+    lb.defender = pEmpire;
+    CHECK(w.cm->start_linked(lb));
+    CHECK(calls.size() == 2 && got.map == "_Space_Temperate1.ted");
+    if (calls.size() == 2) CHECK(calls[1].preferred == "PICK_A");
+    BattleResult res2;
+    res2.winner = pEmpire;
+    w.cm->finish_battle(res2);
+    CHECK(w.cm->start_linked(lb));
+    CHECK(calls.size() == 3 && got.map == "PICK_B");
+    if (calls.size() == 3) CHECK(calls[2].preferred.empty());  // the miss cleared the earlier pick
+    std::printf("map picker: preferred = the stored pick, answer stored back (empty included), fallback on a miss\n");
+}
+
 void test_human_retreat_after_battle() {
     // The attacker loses with survivors left in reserve: its fleet retreats (OI galactic, TACTICAL_GAPS 4.5: nobody
     // controls an orbit or holds a base, so the nearest neutral-owned planet wins: A (60) - C is Underworld's).
@@ -1264,6 +1315,7 @@ int main() {
     std::printf("human fight\n");
     test_overrun_strength();
     test_human_fight();
+    test_map_picker_store();
     test_human_retreat_after_battle();
     std::printf("pending choice\n");
     test_pending_choice();

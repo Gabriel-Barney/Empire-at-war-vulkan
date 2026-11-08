@@ -26,6 +26,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
@@ -76,20 +77,24 @@ struct CampaignBattleOptions {
     // --- battle host (BT pass): S10 seams the session fills (all optional; unset = unchanged behaviour) ---
     // (a1j t05: the BT §1.4 step 2 story block is no longer a seam: attach() always installs the gate, which reads
     // GalacticSim::story_block(), A1_READINGS §31.7.)
-    // BT §2.1 / TACTICAL_GAPS §4.10 random map picker 0x47bf40: the candidate maps (Data\Art\Maps\*.TED, CustomMaps, mod
-    // paths: name, kind, terrain, faction, player count, max base level, flags). Empty = no picker (fallback maps).
-    // NOT WIRED yet (cu8 t07, roadmap cu8f): no host builds the list, because which TED fields give the entry's terrain,
-    // faction, player count and max base level (0x47b030) is not in docs/re (RE task).
+    // BT §2.1 random map picker 0x47bf40 (CU8F_T03_T05_RE §1, cu8f t03): the candidate table 0x47cb40, one entry per .ted
+    // file (build_map_candidates below), described by the file's own map-info chunk 0. Defaults = the retail values for an
+    // absent mini (§1.2).
     struct MapCandidate {
-        std::string name;
-        bool space = false;
-        int32_t terrain = -1;       // TEMPERATE 0 .. URBAN 6, SPACE 7; -1 = any (retail terrain bit 31)
-        int32_t faction = -1;       // random-map faction index; -1 = any
-        int32_t players = 2;        // +0xac
-        int32_t max_base_level = 5; // +0xb0 [M]
-        bool excluded = false;      // +0xb4
+        std::string name;            // +0x00 the logical path, e.g. "DATA\ART\MAPS\_MP_LAND_HOTH.TED" (the picker's answer)
+        int32_t map_type = -1;       // +0xa0 mini 01: 1 land, 2 space; -1 (absent) matches nothing
+        int32_t terrain = 0;         // +0xa4 mini 06: TEMPERATE 0 .. URBAN 6, SPACE 7 (never a wildcard)
+        int32_t faction = 0;         // +0xa8 mini 05: random-map faction index (3 on every MP map; never a wildcard)
+        int32_t players = 1;         // +0xac mini 02: player count
+        int32_t max_base_level = 1;  // +0xb0 mini 03 [M for the name]
+        uint8_t custom = 0;          // +0xb4 mini 0B: custom-map flag (the campaign query keeps 0 only)
     };
     std::vector<MapCandidate> map_candidates;
+    // [port] (cu8f t03) the table is built on the first pick instead of at boot (retail 0x47cb40 is called once at boot and
+    // never rebuilt; the files do not change during a game, so the table is the same): set by the hosts to
+    // map_candidate_source (below), it saves reading every map file (~330 MB of FoC maps.meg) at each session start. Used
+    // once when set, then cleared; map_candidates (when non-empty) is used as is. Neither set: the picker answers "".
+    std::function<std::vector<MapCandidate>()> map_candidate_source;
     // Object removal feed (0x3a8380, STRATEGIC_GAPS §1.1 survival learning): called at each battle end, before the mode
     // pops, once per TacticalBattle::removals() record (deaths in event order, then the survivors). Hosts connect it to
     // GalacticAiWorld::record_object_removal (which filters AI owners / UNIT_AI / TRANSPORT). Unset: nothing.
@@ -451,13 +456,32 @@ inline constexpr uint32_t kSpecialAbilityCorrupt = 6;
 commands::EventData corruption_command(uint32_t defiler_id, uint32_t planet_id, int8_t type);
 bool read_corruption_command(const commands::EventData& ev, uint32_t& defiler_id, uint32_t& planet_id, int8_t& type);
 
-// battle host: the random map picker 0x47bf40 over `candidates` (TACTICAL_GAPS §4.10): kind and terrain equal (candidate
-// terrain -1 = any), faction equal or candidate -1, max base level >= base_level, players >= 2, not excluded; matches in
-// list order. Retail picks one with int(0, n - 1) on the FREE (QPC-seeded) RNG - not deterministic. [port] the pick is
-// index = FNV-1a(space, terrain, faction, base_level, n) mod n: deterministic, no synced draw (the answer is stored on
-// the planet by ConflictManager, so parity only needs a valid map). "" when nothing matches.
-std::string pick_random_map(const std::vector<CampaignBattleOptions::MapCandidate>& candidates, bool space, int32_t terrain, int32_t faction,
-                            int32_t base_level);
+// The random map picker 0x47bf40 as the campaign calls it (CU8F_T03_T05_RE §1.3, cu8f t03): game type 2, so map type =
+// 1 land / 2 space, no mode tag, min players 2, custom flag 0, no exclusion list, no start-position need. A candidate is a
+// survivor when (in table order): map_type matches; terrain matches (query bit 31 clear: candidate terrain == terrain; bit
+// 31 set: candidate terrain != terrain & 0x7fffffff, so 0xffffffff = any); faction == -1 or candidate faction == faction;
+// base_level <= max_base_level; players >= 2; custom == 0. The scan stops after a survivor whose name equals a non-empty
+// `preferred` (byte compare). "" when nothing survives; the one survivor without a draw when n = 1.
+// Retail draws int(0, n - 1) on the FREE RNG (QPC-seeded at boot). [port] The draw is the same int(0, n - 1) on a local
+// SimRng seeded with FNV-1a over (space, terrain, faction, base_level, preferred, n): deterministic, neither session
+// stream (the synced one is not drawn in retail; the port's free stream is presentation-only and its draw count depends
+// on the presentation attached, CLAUDE.md rule 3). Retail's draw is unseeded noise, so any fixed choice is behaviour-equivalent.
+std::string pick_random_map(const std::vector<CampaignBattleOptions::MapCandidate>& candidates, bool space, int32_t terrain,
+                            int32_t faction, int32_t base_level, std::string_view preferred = {});
+// One table entry from a .ted file (top chunk 0's minis, §1.2; later chunks are not trusted). False when the file has no
+// readable map-info chunk ([port]: no entry; it could never be picked, its map type would be -1).
+bool read_map_candidate(std::span<const uint8_t> ted, std::string name, CampaignBattleOptions::MapCandidate& out);
+// The VFS listing the table needs: logical paths matching `glob` (normalised, sorted), over the FoC-loose and MEG layers
+// (mod_layer false) or over the mod search list's Data trees (true). Hosts wrap vfs::Vfs::list.
+using MapLister = std::function<std::vector<std::string>(std::string_view glob, bool mod_layer)>;
+// The candidate table 0x47cb40 (§1.1): every Data\Art\Maps\*.TED of the FoC-loose and MEG layers (list A, every readable
+// file), then Data\CustomMaps\*.TED of those layers and Data\Art\Maps\*.TED of the mod layer (list B, only entries with
+// custom flag 1). Files are read through the normal lookup (`files`: mod > loose > MEG). A path already in the table is
+// skipped (0x47c8b0). [port] Order: Vfs::list's sorted path order within each listing (retail: the finder's loose-then-
+// archive order); list B's mod-layer paths share list A's logical names, so a mod copy of an official map is one entry.
+std::vector<CampaignBattleOptions::MapCandidate> build_map_candidates(const FileProvider& files, const MapLister& list);
+// CampaignBattleOptions::map_candidate_source over `files` / `list` (both must outlive the battles).
+std::function<std::vector<CampaignBattleOptions::MapCandidate>()> map_candidate_source(const FileProvider& files, MapLister list);
 
 struct CampaignAggressor {    uint32_t period = 600;  // galactic frames between moves per player
     void operator()(SimHost& host, uint8_t player, uint64_t frame) const;
