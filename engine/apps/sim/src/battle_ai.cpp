@@ -1619,6 +1619,15 @@ void BattleAi::unit_released(int32_t player, int32_t object_id, ai::tactical::Ta
 void BattleAi::unit_left_task_force(int32_t object_id) {
     if (b_->finished_ || !b_->combat_ || object_id < 0) return;
     if (b_->combat_->priority_override(object_id) >= 0) b_->combat_->set_priority_override(object_id, -1);
+    // cu8f t04a (CU8F_T04_T06_RE §1.1 writer 3, 0x5ff610): the stickiness threshold := the type's value, the unit first,
+    // then each TEAM member (store order [port: the team list]; each member's own type).
+    tc::CombatSystem& cs = *b_->combat_;
+    if (cs.has_unit(object_id)) cs.reset_stickiness(object_id);
+    const objects::ObjectStore& st = mode_->primary();
+    const objects::ObjectHandle h = st.find(static_cast<objects::ObjectId>(object_id));
+    if (!st.exists(h) || !st.has_behavior(h, objects::beh::Team)) return;
+    for (const objects::ObjectHandle m : st.all_objects())
+        if (st.alive(m) && st.container(m) == h && cs.has_unit(st.id(m))) cs.reset_stickiness(st.id(m));
 }
 
 // S7 t15 A1: the tick's signal 0x29 list (TacticalBattle::ability_finished_events).

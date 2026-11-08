@@ -104,12 +104,9 @@ struct RemainingScriptHooks {
     std::function<bool(objects::ObjectHandle holder)> can_garrison_fire;
     // ---- combat (tactical combat system) ----
     // (cu8 t08: Enable_Behavior needs no hook: it drives the store's behaviour disable counter directly, §2.6.)
-    // Set_Targeting_Stickiness_Time_Threshold (TACTICAL_COMBAT.md 2.5: the Lua override +0x158). Kept in the state too.
-    // NOT WIRED yet (no host assigns it; roadmap cu8f): the combat system has no per-unit stickiness override.
-    std::function<void(objects::ObjectHandle unit, float seconds)> set_stickiness;
-    // Lua_Set_Prefer_Ground_Over_Space (UNIT_AI). NOT WIRED yet (no host assigns it; roadmap cu8f): the reader is not in
-    // docs/re. Kept in the state too.
-    std::function<void(objects::ObjectHandle unit, bool prefer_ground)> set_prefer_ground;
+    // (cu8f t04: Set_Targeting_Stickiness_Time_Threshold needs no hook: it writes the battle's CombatSystem through
+    // ObjectBridge::abilities (set_stickiness_override, TD +0x158); Set_Prefer_Ground_Over_Space writes the player
+    // world's GalacticSim (set_prefer_ground_over_space), read by the galactic AI's auto-land. CU8F_T04_T06_RE.md.)
     // Every projectile type the unit can fire (weapon and hard points, the combat system's order). Unset: the data
     // fallback [port] = the type's Projectile_Types (hard point data is not in GameObjectTypes).
     std::function<std::vector<objects::TypeIndex>(objects::ObjectHandle unit)> projectile_types;
@@ -158,8 +155,9 @@ inline constexpr int32_t kBlockBombingRun = 5;
 struct RemainingObjectState {
     bool dynamic_lod = true;              // Enable_Dynamic_LOD (model +0x198, default on: RENDER.md)
     bool build_pad_locked = false;        // Lock_Build_Pad_Contents
-    int8_t prefer_ground = -1;            // Set_Prefer_Ground_Over_Space; -1 = never set
-    float stickiness = -1.0f;             // Set_Targeting_Stickiness_Time_Threshold; < 0 = the type's value
+    int8_t prefer_ground = -1;            // Set_Prefer_Ground_Over_Space; -1 = never set (record only)
+    float stickiness = -1.0f;             // last Set_Targeting_Stickiness_Time_Threshold value; record only (the live
+                                          // threshold is the combat system's, spawn 0.0)
     std::map<int32_t, bool> behaviors;    // Enable_Behavior calls (behaviour id -> last state; the effect is the store's counter)
     bool diverted = false;                // Divert: move flag 0x40 on the current move (§2.3)
     Vec3 divert_goal{};                   // the goal reported right after the diversion move

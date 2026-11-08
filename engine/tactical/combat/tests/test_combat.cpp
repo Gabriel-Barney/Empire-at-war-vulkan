@@ -3070,7 +3070,7 @@ void test_save_rejects() {
     bad = saved;
     put_u32_at(bad, 0, 99);
     CHECK(rejected(bad));
-    for (const uint32_t v : {11u, 13u}) {  // s78h t03: the version before (damage_team = 11; squad_seen dropped = 12) and after
+    for (const uint32_t v : {11u, 14u}) {  // the version before the oldest read (12: s78h t03) and after (13: cu8f t04a)
         bad = saved;
         put_u32_at(bad, 0, v);
         CHECK(rejected(bad));
@@ -3097,6 +3097,196 @@ void test_save_rejects() {
     ByteReader ok(saved);
     CHECK(c.w.sys->read(ok));  // and the intact bytes still load
     CHECK(combat_bytes(*c.w.sys) == saved);
+}
+
+// cu8f t04a (CU8F_T04_T06_RE §1): the targeting stickiness threshold TD +0x158. Spawn value 0.0 (not the type's value);
+// a negative override reads the type's Targeting_Stickiness_Time_Threshold at every test (a TEAM owner: its first member's
+// type); a task-force release writes the type's value. Time to kill = the destroyable hard points' health when the target
+// has any (destroyed ones at 0), else the hull, + shield, / the damage rate (1e18 at rate 0); a TEAM container target sums
+// its members'. Sticky <=> time to kill <= threshold. Saved (combat v13; a v12 save reads 0.0), hashed when non-zero.
+void add_member(World& w, ObjectId id, uint32_t desc, int32_t owner, Vec3 p, uint32_t team) {
+    UnitSpawn s;
+    s.id = id;
+    s.desc = desc;
+    s.owner = owner;
+    s.position = p;
+    s.team = team;
+    CHECK(w.sys->add_unit(s, w.frame, w.rng));
+    TreeMembership m;
+    m.owner = owner;
+    CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(p, w.data.units[desc].radius), 1u, m));
+}
+
+bool near_rel(float a, float b) { return std::fabs(a - b) <= 1e-5f * std::fabs(b); }
+
+void test_stickiness_override() {
+    World w;
+    HardpointDesc gen;
+    gen.name = "HP_Gen";
+    gen.name_crc = name_crc(gen.name);
+    gen.kind = HardpointKind::ShieldGenerator;
+    gen.health = 10.0f;
+    gen.destroyable = gen.targetable = true;
+    w.data.hardpoints.push_back(gen);
+    UnitDesc a;
+    a.name = "Sticky5";
+    a.tactical_health = 100.0f;
+    a.radius = 10.0f;
+    a.stickiness_threshold = 5.0f;
+    const uint32_t d5 = push_unit(w.data, a);
+    a.name = "Sticky025";
+    a.stickiness_threshold = 0.25f;
+    const uint32_t d025 = push_unit(w.data, a);
+    a.name = "Never";
+    a.stickiness_threshold = -1.0f;
+    const uint32_t dneg = push_unit(w.data, a);
+    UnitDesc t;
+    t.name = "Target";
+    t.tactical_health = 100.0f;
+    t.radius = 10.0f;
+    const uint32_t dt = push_unit(w.data, t);
+    t.name = "Gunship";
+    t.tactical_health = 1000.0f;
+    t.hardpoints = {0};
+    const uint32_t dh = push_unit(w.data, t);
+    CombatConfig cfg;
+    cfg.hardpoint_health_multiplier = 1.0f;
+    w.make(cfg);
+    w.add(1, d5, 0, Vec3{0, 0, 0});
+    w.add(2, dt, 1, Vec3{500, 0, 0});
+    w.add(3, dh, 1, Vec3{600, 0, 0});
+    w.add(4, d025, 0, Vec3{0, 100, 0});
+    w.add(5, dneg, 0, Vec3{0, -100, 0});
+    add_member(w, 10, dt, 1, Vec3{500, 300, 0}, 0);   // a TEAM container that is itself a combat unit
+    add_member(w, 11, dt, 1, Vec3{500, 320, 0}, 10);  // its members
+    add_member(w, 12, dt, 1, Vec3{500, 340, 0}, 10);
+    add_member(w, 20, d025, 0, Vec3{0, 300, 0}, 0);   // an attacking container (own type 0.25 s)
+    add_member(w, 21, d5, 0, Vec3{0, 320, 0}, 20);    // its first member (5 s)
+    w.tick();  // phase A: the team member list
+
+    // Spawn value 0.0, not the type's 5 s; no damage yet: time to kill 1e18 (rate 0), sticky only for a threshold >= 1e18.
+    CHECK(w.sys->stickiness_override(1) == 0.0f && w.sys->stickiness_override(99) == 0.0f);
+    CHECK(w.sys->time_to_kill(2) == 1.0e18f && !w.sys->target_sticky(1, 2));
+    CHECK(w.sys->set_stickiness_override(1, 1.0e30f) && w.sys->target_sticky(1, 2));
+    CHECK(!w.sys->set_stickiness_override(99, 1.0f) && !w.sys->target_sticky(99, 2) && !w.sys->target_sticky(1, 99));
+
+    // 90 hull damage: rate = 90 / 5 per second, time to kill = hull / rate (~0.56 s).
+    DamageRequest d;
+    d.victim = 2;
+    d.amount = 90.0f;
+    const DamageResult r2 = w.sys->take_damage(d, w.frame);
+    w.tick();
+    const float ttk2 = w.sys->time_to_kill(2);
+    std::printf("stickiness: target hull %.3f, tracked %.3f, time to kill %.4f s\n", static_cast<double>(w.sys->health(2)),
+                static_cast<double>(r2.absorbed + r2.to_hull), static_cast<double>(ttk2));
+    CHECK(near_rel(ttk2, (w.sys->health(2) + w.sys->shield(2)) / ((r2.absorbed + r2.to_hull) / 5.0f)));
+    CHECK(ttk2 > 0.25f && ttk2 < 5.0f);  // between the two type values below
+    const auto sticky_at = [&w](ObjectId u, float v, ObjectId target) {
+        CHECK(w.sys->set_stickiness_override(u, v));
+        return w.sys->target_sticky(u, target);
+    };
+    CHECK(!sticky_at(1, 0.0f, 2));  // the spawn value: nothing with a positive time to kill is sticky
+    CHECK(sticky_at(1, ttk2 * 1.5f, 2) && !sticky_at(1, ttk2 * 0.5f, 2) && sticky_at(1, ttk2, 2));
+    // A negative override reads the type's value at every test: 5 s sticky, 0.25 s not, a negative type value never.
+    CHECK(sticky_at(1, -1.0f, 2) && !sticky_at(4, -2.0f, 2) && !sticky_at(5, -1.0f, 2));
+    CHECK(w.sys->stickiness_override(1) == -1.0f);
+    // TEAM owner: the first member's type (5 s), not the container's own (0.25 s).
+    CHECK(sticky_at(20, -1.0f, 2) && !sticky_at(21, 0.25f, 2));
+    // Task-force release: the type's value (a TEAM owner: its first member's type).
+    CHECK(w.sys->reset_stickiness(1) && w.sys->stickiness_override(1) == 5.0f);
+    CHECK(w.sys->reset_stickiness(4) && w.sys->stickiness_override(4) == 0.25f);
+    CHECK(w.sys->reset_stickiness(5) && w.sys->stickiness_override(5) == -1.0f && !w.sys->target_sticky(5, 2));
+    CHECK(w.sys->reset_stickiness(20) && w.sys->stickiness_override(20) == 5.0f);
+    CHECK(!w.sys->reset_stickiness(99));
+
+    // Destroyable hard points: their health (not the hull's) whenever the target has any.
+    DamageRequest h;
+    h.victim = 3;
+    h.amount = 900.0f;
+    const DamageResult r3 = w.sys->take_damage(h, w.frame);
+    w.tick();
+    const float ttk3 = w.sys->time_to_kill(3);
+    const float rate3 = (r3.absorbed + r3.to_hull) / 5.0f;
+    std::printf("stickiness: gunship hull %.1f, hard point %.1f, time to kill %.4f s (hull would give %.4f s)\n",
+                static_cast<double>(w.sys->health(3)), static_cast<double>(w.sys->hardpoint_health(3, 0)),
+                static_cast<double>(ttk3), static_cast<double>(w.sys->health(3) / rate3));
+    CHECK(near_rel(ttk3, (std::max(0.0f, w.sys->hardpoint_health(3, 0)) + w.sys->shield(3)) / rate3));
+    CHECK(ttk3 < w.sys->health(3) / rate3);
+    CHECK(!sticky_at(1, 0.0f, 3));
+    DamageRequest k;  // the only destroyable hard point destroyed: health sum 0 -> time to kill 0, sticky at 0.0
+    k.victim = 3;
+    k.amount = 1000.0f;
+    k.hardpoint = 0;
+    w.sys->take_damage(k, w.frame);
+    w.tick();
+    CHECK(w.sys->alive(3) && w.sys->hardpoint_health(3, 0) <= 0.0f && w.sys->time_to_kill(3) == 0.0f);
+    CHECK(sticky_at(1, 0.0f, 3));
+
+    // A TEAM container target: the sum of its members' own times (ascending id), not its own.
+    DamageRequest m1;
+    m1.victim = 11;
+    m1.amount = 90.0f;
+    m1.no_team = true;  // the member itself
+    w.sys->take_damage(m1, w.frame);
+    m1.victim = 12;
+    m1.amount = 50.0f;
+    w.sys->take_damage(m1, w.frame);
+    w.tick();
+    const float t11 = w.sys->time_to_kill(11), t12 = w.sys->time_to_kill(12);
+    CHECK(t11 > 0.0f && t11 < t12 && t12 < 1.0e17f);
+    CHECK(w.sys->time_to_kill(10) == t11 + t12);
+    CHECK(sticky_at(1, t11 + t12, 10) && !sticky_at(1, t12, 10));
+
+    // Hash: the field enters hash_extended only when non-zero.
+    {
+        StateHasher a0, a1;
+        CHECK(w.sys->set_stickiness_override(4, 0.0f));
+        w.sys->hash_extended(a0);
+        CHECK(w.sys->set_stickiness_override(4, 0.25f));
+        w.sys->hash_extended(a1);
+        CHECK(a0.digest() != a1.digest());
+    }
+
+    // Save: write -> read -> write identical, the values restored; a v12 image (no field) reads the spawn value 0.0.
+    {
+        CHECK(w.sys->set_stickiness_override(1, 2.5f));
+        const std::vector<uint8_t> bytes = combat_bytes(*w.sys);
+        World b;
+        b.data = w.data;
+        b.make(cfg);
+        ByteReader rd(bytes);
+        CHECK(b.sys->read(rd));
+        CHECK(b.sys->stickiness_override(1) == 2.5f && b.sys->stickiness_override(4) == 0.25f &&
+              b.sys->stickiness_override(5) == -1.0f && combat_bytes(*b.sys) == bytes);
+    }
+    {
+        World o;
+        o.data = w.data;
+        o.make(cfg);
+        o.add(1, d5, 0, Vec3{0, 0, 0});
+        o.tick();
+        const float mark = 1234.5f;  // a pattern found once in the image
+        CHECK(o.sys->set_stickiness_override(1, mark));
+        std::vector<uint8_t> img = combat_bytes(*o.sys);
+        uint32_t bits = 0;
+        std::memcpy(&bits, &mark, 4);
+        const uint8_t pat[4] = {static_cast<uint8_t>(bits), static_cast<uint8_t>(bits >> 8), static_cast<uint8_t>(bits >> 16),
+                                static_cast<uint8_t>(bits >> 24)};
+        std::vector<size_t> at;
+        for (size_t i = 0; i + 4 <= img.size(); ++i)
+            if (std::memcmp(&img[i], pat, 4) == 0) at.push_back(i);
+        CHECK(at.size() == 1u && img[0] == 13u);
+        if (at.size() == 1u) {
+            img.erase(img.begin() + static_cast<std::ptrdiff_t>(at[0]), img.begin() + static_cast<std::ptrdiff_t>(at[0]) + 4);
+            img[0] = 12;
+            World b;
+            b.data = w.data;
+            b.make(cfg);
+            ByteReader rd(img);
+            CHECK(b.sys->read(rd) && b.sys->stickiness_override(1) == 0.0f);
+            CHECK(o.sys->set_stickiness_override(1, 0.0f) && combat_bytes(*b.sys) == combat_bytes(*o.sys));
+        }
+    }
 }
 
 void test_weather_save() {
@@ -6263,6 +6453,7 @@ int main(int argc, char** argv) {
     test_allocations();
     test_save_load();  // N1 stage 2
     test_save_rejects();
+    test_stickiness_override();  // cu8f t04a
     test_weather_save();
     test_rocket_spline();  // refixf t01
     test_rocket_leg();

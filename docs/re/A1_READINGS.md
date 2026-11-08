@@ -2598,6 +2598,11 @@ BUSYTACTICALFREESTORE.LUA).
   (`ScriptObjectState::targeting_priorities`, objects outside the combat model); `BattleAi` clears the combat override
   (`CombatSystem::set_priority_override(id, -1)`; hard points share the unit's set there). [port] The stickiness
   threshold has no combat-side override, so there is nothing to reset for it.
+  **Correction (cu8f t04, 2026-11-07):** the last sentence is wrong. The release writes the type's
+  `Targeting_Stickiness_Time_Threshold` into the unit's TD +0x158 and each TEAM member's (`CU8F_T04_T06_RE.md` §1.1
+  writer 3), and that field (spawn value 0.0, not the type's) is what `Is_Target_Sticky` reads. The port now has the
+  override (`CombatSystem` `Unit::stickiness`) and `BattleAi::unit_left_task_force` resets it
+  (`CombatSystem::reset_stickiness`).
 - No save-format change (no saved field added; tactical AI save version stays 8).
 - Test: `alamo_ai_tactical_world_tests` `test_replan_and_priority_lifetime` (variant 9): a sweep plan collects
   `"Corvette"` and must never get a frigate; every unit that carried a plan's set gets `unit_left_task_force` and its

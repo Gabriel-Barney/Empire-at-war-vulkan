@@ -4042,6 +4042,39 @@ static void test_free_store_world() {
     CHECK((pick == 0 || pick == 1) && pw.rng->synced().draws() == d0 + 1);  // two candidates, p < 1: one draw
 }
 
+// cu8f t04b (CU8F_T04_T06_RE §2.2 step 4): the free-store auto-land of an AI ground unit sitting in an orbiting fleet runs
+// only while the unit's Prefer_Ground_Over_Space is true (the default); false (Lua Set_Prefer_Ground_Over_Space) keeps it
+// in orbit. The infantry starts on P0's surface and is launched into an orbit fleet there before the AI runs.
+static void test_prefer_ground_auto_land() {
+    for (const bool prefer : {true, false}) {
+        ParityWorld pw(false, {"MagicSpace"}, [](gal::GalacticSetup& s) { s.forces.push_back({0, 0, tInfantry}); });
+        gal::GalacticSim& sim = *pw.sim;
+        const objects::ObjectStore& st = *pw.store;
+        objects::ObjectHandle inf{};
+        for (const objects::ObjectHandle u : sim.planets()[0].surface)
+            if (!inf && st.alive(u) && st.type(u) == tInfantry) inf = u;
+        CHECK(static_cast<bool>(inf));
+        if (!inf) continue;
+        const objects::ObjectHandle one[] = {inf};
+        CHECK(sim.launch_units(0, 0, one) == commands::RejectReason::None);
+        bool in_orbit = false;
+        for (const gal::FleetState& f : sim.fleets())
+            if (f.alive && f.planet == 0 && std::find(f.contents.begin(), f.contents.end(), inf) != f.contents.end()) in_orbit = true;
+        CHECK(in_orbit);
+        CHECK(sim.prefer_ground_over_space(inf));  // default true
+        sim.set_prefer_ground_over_space(inf, prefer);
+        pw.run(30 * 20);
+        bool landed = false;
+        for (const objects::ObjectHandle u : sim.planets()[0].surface) landed = landed || u == inf;
+        const std::string key = "auto-land " + std::to_string(st.id(inf)) + " ";
+        bool logged = false;
+        for (const AiDecision& d : pw.world->decision_log()) logged = logged || d.text.find(key) != std::string::npos;
+        std::printf("prefer ground %d: infantry %s, auto-land %s\n", prefer ? 1 : 0, landed ? "landed" : "in orbit",
+                    logged ? "logged" : "not logged");
+        CHECK(landed == prefer && logged == prefer);
+    }
+}
+
 // ================================================================ P4 ai: Underworld special systems
 //
 // A synthetic Underworld AI against a passive Empire, with the four shipped Underworld hero plans (their Lua verbatim,
@@ -5563,6 +5596,7 @@ int main(int argc, char** argv) {
     test_budget_reset_on_template_switch();  // a2g F2
     test_free_store_path_rules();
     test_free_store_world();
+    test_prefer_ground_auto_land();  // cu8f t04b
     test_underworld_special();
     test_save_synthetic();
     test_planet_type_is_type();

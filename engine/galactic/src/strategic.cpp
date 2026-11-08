@@ -293,6 +293,21 @@ void GalacticSim::set_galactic_stealth(ObjectHandle object, bool on) {
     if (!on && has) stealthed_.erase(it);
 }
 
+void GalacticSim::set_prefer_ground_over_space(ObjectHandle object, bool on) {
+    if (!store_->exists(object)) return;
+    const int32_t id = static_cast<int32_t>(store_->id(object));
+    const auto it = std::lower_bound(ground_shy_.begin(), ground_shy_.end(), id);
+    const bool has = it != ground_shy_.end() && *it == id;
+    if (!on && !has) ground_shy_.insert(it, id);
+    if (on && has) ground_shy_.erase(it);
+}
+
+bool GalacticSim::prefer_ground_over_space(ObjectHandle object) const {
+    if (!store_->exists(object)) return true;
+    const int32_t id = static_cast<int32_t>(store_->id(object));
+    return !std::binary_search(ground_shy_.begin(), ground_shy_.end(), id);
+}
+
 bool GalacticSim::galactic_stealth(ObjectHandle object) const {
     if (!store_->exists(object)) return false;
     const int32_t id = static_cast<int32_t>(store_->id(object));
@@ -523,6 +538,8 @@ bool GalacticSim::oi_state_default() const {
     if (!claims_.empty() || linked_battle_pending_ || victory_hold_ != 0) return false;
     for (int32_t id : stealthed_)
         if (store_->alive(store_->find(static_cast<objects::ObjectId>(id)))) return false;
+    for (int32_t id : ground_shy_)  // cu8f t04b
+        if (store_->alive(store_->find(static_cast<objects::ObjectId>(id)))) return false;
     for (const PlayerState& p : players_)
         if (p.max_tech_level != 5 || !p.built.empty()) return false;
     return true;
@@ -546,6 +563,16 @@ void GalacticSim::hash_oi(StateHasher& h) const {
     if (victory_hold_ != 0) {  // story t11 (only once used, so older captures keep their CRC)
         h.u32(0x56484C44u);  // "VHLD"
         h.i32(victory_hold_);
+    }
+    {  // cu8f t04b: live units with Prefer_Ground_Over_Space false (only once used, so older captures keep their CRC)
+        uint32_t shy = 0;
+        for (int32_t id : ground_shy_) shy += store_->alive(store_->find(static_cast<objects::ObjectId>(id))) ? 1u : 0u;
+        if (shy != 0) {
+            h.u32(0x50474F53u);  // "PGOS"
+            h.u32(shy);
+            for (int32_t id : ground_shy_)
+                if (store_->alive(store_->find(static_cast<objects::ObjectId>(id)))) h.i32(id);
+        }
     }
     for (const PlayerState& p : players_) {
         h.i32(p.max_tech_level);

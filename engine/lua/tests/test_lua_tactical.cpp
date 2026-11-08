@@ -436,6 +436,15 @@ static void test_abilities(const Db& db) {
     CHECK(run(vm, "TF.Set_Targeting_Priorities('Capital_Attack', 'Ship')") == "" && w.combat->priority_override(ship) == 0);
     CHECK(run(vm, "TF.Set_Targeting_Priorities('Fighter_Attack', 'Hauler')") == "" && w.combat->priority_override(ship) == 0);
     CHECK(run(vm, "s.Set_Targeting_Priorities('No_Such_Set')") == "" && w.combat->priority_override(ship) == -1);
+    // cu8f t04a (CU8F_T04_T06_RE §1.1): Set_Targeting_Stickiness_Time_Threshold writes the combat threshold TD +0x158 (spawn
+    // 0.0) as given, negative included (= the type's value); a task-force release puts the type's value back.
+    CHECK(w.combat->stickiness_override(ship) == 0.0f && w.combat->stickiness_override(target) == 0.0f);
+    CHECK(run(vm, "s.Set_Targeting_Stickiness_Time_Threshold(2.5)") == "" && w.combat->stickiness_override(ship) == 2.5f);
+    CHECK(run(vm, "t.Set_Targeting_Stickiness_Time_Threshold(-1)") == "" && w.combat->stickiness_override(target) == -1.0f);
+    CHECK(w.combat->stickiness_override(ship) == 2.5f && w.combat->stickiness_override(hauler) == 0.0f);
+    CHECK(run_stop(vm, "s.Set_Targeting_Stickiness_Time_Threshold(2, 3)").find("Expected 1, got 2") != std::string::npos &&
+          w.combat->stickiness_override(ship) == 2.5f);
+    CHECK(w.combat->reset_stickiness(ship) && w.combat->stickiness_override(ship) == w.cd.units[0].stickiness_threshold);
     // S7 t15 A1 / S7 t26 (AI_TACTICAL §7.3.3 item 1): the host learns which units answered true (a block: one
     // AbilityBlockStatus count each). SPOILER_LOCK is a "never" family: false even when it turned on; TRACTOR_BEAM (object
     // target) is true when the pending ability was stored.

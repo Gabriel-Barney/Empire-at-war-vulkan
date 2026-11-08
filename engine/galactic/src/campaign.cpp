@@ -226,6 +226,7 @@ bool GalacticSim::start(const GalacticSetup& setup, std::vector<std::string>* di
     fleet_by_slot_.clear();
     planet_by_slot_.clear();
     stealthed_.clear();  // OI galactic
+    ground_shy_.clear();  // cu8f t04b
     slot_choices_ = false;
     claims_.clear();
     victory_hold_ = 0;  // story t11

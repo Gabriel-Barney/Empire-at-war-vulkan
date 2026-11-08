@@ -1739,7 +1739,9 @@ void GalacticAiWorld::Impl::step_free_store_moves(int32_t player) {
 
 // Free-store unit hook 0x68fde0 step 2 (AI_GALACTIC Â§2.8) [H; port: once per execution service]: AI players land
 // their free ground units that are safe, not in transit, in a stationary fleet at their own planet with a surface,
-// under Max_Ground_Forces_On_Planet. A2 galactic: FleetManagement land (op 5).
+// under Max_Ground_Forces_On_Planet. A2 galactic: FleetManagement land (op 5). cu8f t04b (CU8F_T04_T06_RE §2.2 step 4):
+// only units whose Prefer_Ground_Over_Space is true (GalacticSim::prefer_ground_over_space; the default, and always
+// for a unit without UNIT_AI).
 void GalacticAiWorld::Impl::auto_land_free_units(int32_t player) {
     if (player < 0 || static_cast<size_t>(player) >= sim.players().size() || sim.players()[static_cast<size_t>(player)].human) return;
     const auto& rules = sim.rules();
@@ -1748,6 +1750,7 @@ void GalacticAiWorld::Impl::auto_land_free_units(int32_t player) {
         if (!ti || !ground_kind(ti->kind)) continue;
         const uint32_t f = fleet_of_unit(u);
         if (f == gal::kNoFleet || sim.fleets()[f].moving || unit_in_transit(u) || !unit_safe(u)) continue;
+        if (!sim.prefer_ground_over_space(u)) continue;  // cu8f t04b: stays in orbit
         const PlanetIndex p = sim.fleets()[f].planet;
         if (!valid_planet(p)) continue;
         const gal::PlanetState& ps = sim.planets()[p];

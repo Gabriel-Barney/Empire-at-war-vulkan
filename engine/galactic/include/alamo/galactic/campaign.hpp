@@ -941,6 +941,12 @@ public:
     // cargo stealthed).
     void set_galactic_stealth(ObjectHandle object, bool on);
     bool galactic_stealth(ObjectHandle object) const;  // the byte
+    // cu8f t04b (CU8F_T04_T06_RE §2): Lua Set_Prefer_Ground_Over_Space, the UNIT_AI data pack byte +0x39 (default true;
+    // the setter refuses objects without UNIT_AI, so they always read true). Its only reader is the galactic AI free
+    // store's auto-land of AI transports in an orbiting fleet: false keeps the unit in orbit. Kept as the ids set to
+    // false; saved (v5); hashed in the "OIG1" tail once a live unit is false.
+    void set_prefer_ground_over_space(ObjectHandle object, bool on);
+    bool prefer_ground_over_space(ObjectHandle object) const;
     bool hidden(ObjectHandle object) const;
     // DetectHeroAbility service (SG 2.2) for one detector: candidates = stealthed objects in the detector's planet orbit,
     // then its surface (list orders); a non-allied candidate is discovered when not (detector generic and candidate
@@ -1180,6 +1186,7 @@ private:
     InstallmentHook installment_hook_;
     // OI galactic (hashed in the "OIG1" tail once non-default)
     std::vector<int32_t> stealthed_;      // ObjectIds with the galactic stealth byte set, ascending
+    std::vector<int32_t> ground_shy_;     // cu8f t04b: ObjectIds with Prefer_Ground_Over_Space false, ascending
     std::vector<VictoryClaim> claims_;    // declaration order
     int32_t victory_hold_ = 0;            // story t11: galactic monitor hold (+0x5c)
     // GRC reveal / corruption transitions (src/reveal.cpp; hashed in the "RVC1" tail once non-default)

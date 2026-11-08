@@ -31,6 +31,9 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "vm_internal.hpp"
 
+#if ALAMO_LUA_HAVE_ABILITIES
+#include "alamo/tactical/abilities/ability_system.hpp"  // cu8f t04a: the battle's CombatSystem
+#endif
 #if ALAMO_LUA_PLAYERS
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/lua/players.hpp"
@@ -1083,13 +1086,36 @@ int m_set_prefer_ground_over_space(Call& c) {
         return c.script_error_stop("%s -- Object invalid or missing Unit_AI behavior.", kName);
     const bool on = to_bool(c, 1);
     if (RemainingObjectState* s = edit_state(c, c.self->id)) s->prefer_ground = on ? 1 : 0;
-    if (RemainingScriptHooks* hk = hooks(c); hk && hk->set_prefer_ground) hk->set_prefer_ground(self_object(c), on);
+#if ALAMO_LUA_PLAYERS
+    // cu8f t04b (CU8F_T04_T06_RE §2.1): UNIT_AI pack +0x39 := on. The galactic objects' flag lives in the GalacticSim of
+    // the player world (its only reader is the galactic AI free store's auto-land); objects of another store (a
+    // tactical battle) keep only the record above [port: tactical code never reads it].
+    LuaPlayerWorld* w = players(c);
+    if (galactic::GalacticSim* sim = w ? w->galactic() : nullptr; sim && &sim->store() == store(c))
+        sim->set_prefer_ground_over_space(self_object(c), on);
+#endif
     return 0;
 }
 
+// cu8f t04a (CU8F_T04_T06_RE §1.1 writers 1 / 2): the threshold, narrowed to float and unchecked, goes to the object's
+// own targeting data and, when it has TEAM, to every member's (store order [port: the team list]). Combat units of the
+// battle: CombatSystem::set_stickiness_override (TD +0x158). The family state records the value on the addressed object.
 void set_stickiness(Call& c, ObjectHandle u, float seconds) {
     if (RemainingObjectState* s = edit_state(c, store(c)->id(u))) s->stickiness = seconds;
-    if (RemainingScriptHooks* hk = hooks(c); hk && hk->set_stickiness) hk->set_stickiness(u, seconds);
+#if ALAMO_LUA_HAVE_ABILITIES
+    ObjectBridge* b = bridge(c);
+    if (!b || !b->abilities) return;
+    tactical::combat::CombatSystem& cs = b->abilities->combat();
+    const objects::ObjectStore* st = store(c);
+    auto write = [&cs, st, seconds](ObjectHandle h) {
+        const ObjectId id = st->id(h);
+        if (cs.has_unit(id)) cs.set_stickiness_override(id, seconds);
+    };
+    write(u);
+    if (st->has_behavior(u, objects::beh::Team))
+        for (const ObjectHandle m : st->all_objects())
+            if (st->alive(m) && st->container(m) == u) write(m);
+#endif
 }
 int m_set_targeting_stickiness(Call& c) {
     constexpr const char* kName = "GameObjectWrapper::Set_Targeting_Stickiness_Time_Threshold";

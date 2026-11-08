@@ -21,6 +21,7 @@
 //   this tick's outputs: deaths, hardpoint events, smoke, damage, hit, shot, survivor events
 //   6 x u64 stats
 // Rebuilt on read, not saved: per-unit candidate lists and sweep results (phase C / E scratch, written before read),
+// the team member list (cu8f t04a, from the units),
 // emitter / leader / effect scratch, query contexts, the diminishing-firepower spline (from the config), the rocket
 // splines' polyline tables (plan-time scratch) and the rocket terrain (host-attached).
 //
@@ -47,7 +48,7 @@ using save_io::put_vec3;
 
 namespace {
 
-constexpr uint32_t kCombatSaveVersion = 12;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
+constexpr uint32_t kCombatSaveVersion = 13;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
                                              // 4: refixf t06 attack goal / weapon aim / order lock; 5: refixf t06 scan
                                              // target hardpoint (auto_hp); 6: a1g t03 damage event hull_lost; 7: S8 t04
                                              // grenade flight / sticky state; 8: S8 t06 stuck_offset in the parent's frame
@@ -55,7 +56,9 @@ constexpr uint32_t kCombatSaveVersion = 12;  // 2: refix t02 INFECTION state, re
                                              // fire-bone cycle index; 9: S8 t26 fire-at-position order; 10: s78f t03
                                              // targeting state + its target, s78f t04 lobbing turret angles; 11:
                                              // s78g t06 damage_team; 12: s78h t03 squad_seen dropped (no squad rule
-                                             // on a member)
+                                             // on a member); 13: cu8f t04a stickiness threshold TD +0x158 (a v12
+                                             // save reads 0.0, the spawn value)
+constexpr uint32_t kCombatSaveOldest = 12;
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 
@@ -128,6 +131,7 @@ void CombatSystem::write(ByteWriter& w) const {
         // OI abilities
         w.i32(u.priority_override).u32(u.stun_end).u32(u.invuln_end).u32(u.emitter_entries).i32(u.weapon_index);
         w.u8(u.acquired);
+        w.f32(u.stickiness);  // cu8f t04a (v13)
         w.i32(u.goal_target).i32(u.goal_hp).i32(u.aim_target).i32(u.aim_hp).u8(u.locked).i32(u.auto_hp);  // refixf t06
         w.u32(u.weapon_last).u32(u.weapon_bone);  // S7 t15 A2 / S8 t06 B4
         put_vec3(w, u.lob_point);  // S8 t26 fire-at-position order
@@ -230,7 +234,8 @@ void CombatSystem::write(ByteWriter& w) const {
 }
 
 bool CombatSystem::read(ByteReader& r) {
-    if (r.u32() != kCombatSaveVersion || !r.ok()) return false;
+    const uint32_t version = r.u32();
+    if (!r.ok() || version < kCombatSaveOldest || version > kCombatSaveVersion) return false;
     const auto np = static_cast<uint32_t>(players_.size());
     const uint32_t c_players = r.u32(), c_units = r.u32(), c_hps = r.u32(), c_proj = r.u32(), c_ab = r.u32(),
                    c_prio = r.u32();
@@ -309,6 +314,7 @@ bool CombatSystem::read(ByteReader& r) {
         u.emitter_entries = r.u32();
         u.weapon_index = r.i32();
         u.acquired = r.u8();
+        u.stickiness = version >= 13 ? r.f32() : 0.0f;  // cu8f t04a
         u.goal_target = r.i32();  // refixf t06
         u.goal_hp = r.i32();
         u.aim_target = r.i32();
@@ -617,6 +623,7 @@ bool CombatSystem::read(ByteReader& r) {
     effect_scratch_.clear();
     leaders_.clear();
     flush_hps_.clear();
+    rebuild_team_members();  // cu8f t04a: derived from the units (phase A rebuilds it every tick)
     return true;
 }
 

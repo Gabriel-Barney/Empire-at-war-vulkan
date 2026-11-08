@@ -339,6 +339,9 @@ These apply in `Scan_Player` and again in `Validate_Current_Target` (0x567c50).
     pending ability. Neither one handles attack orders.
 - **Sticky** (0x569000): a target is sticky when its estimated time-to-kill is at most the threshold.
   - The threshold is the Lua override (+0x158) or the type's `Targeting_Stickiness_Time_Threshold` (+0x528).
+    **Correction (cu8f, 2026-11-07) [H]:** +0x158 starts at 0.0 and is used as is unless it is negative; only then the
+    type's value is read. Writers: the Lua setters and a task-force release. Team owners, team targets and the
+    hardpoint rule: `CU8F_T04_T06_RE.md` §1.
   - Time-to-kill = (current health, or the sum of destroyable-hardpoint health, plus 0x396420) / the damage
     rate from `DamageTrackingBehavior` (0x58ba40, +0xc).
 - **Auto targets** are issued through 0x38d730. `Set_Target` (0x569160) and `Replace_Target_Ref` (0x569310)
