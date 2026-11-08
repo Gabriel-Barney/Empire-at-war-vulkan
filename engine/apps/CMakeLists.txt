@@ -201,7 +201,7 @@ if(_alamo_sim)
   # --- end A2 ---
   # --- A1 stage 2 (owner: A1 agent): --skirmish-ai synthetic|foc (headless/skirmish_run.cpp). Goldens: regenerate
   # after an intended change with the same command and --crc-out <golden path> (MSVC); clang must match. ---
-  target_sources(alamo_headless PRIVATE headless/skirmish_run.cpp)
+  target_sources(alamo_headless PRIVATE headless/skirmish_run.cpp headless/tactical_trace.cpp)
   target_link_libraries(alamo_headless PRIVATE alamo_game_rules)  # q6 t03: AI types, default forces, map planet type
   if(TARGET alamo_ai_tactical_world)
     add_test(NAME alamo_headless_skirmish_ai_synthetic
@@ -218,6 +218,23 @@ if(_alamo_sim)
              COMMAND alamo_headless --skirmish-ai skirmish --map _MP_SPACE_GEONOSIS --human Empire --seed 1103945700 --ticks 900 --workers 4 --quiet)
     set_tests_properties(alamo_headless_skirmish_ai_geonosis PROPERTIES TIMEOUT 1200)
     alamo_label_slow(alamo_headless_skirmish_ai_geonosis)
+    # q4hf t02: --trace-out on the skirmish host (headless/tactical_trace.hpp), the tactical Q2TRACE 1 trace the Q4 parity harness
+    # reads for combat.damage_taken / combat.first_shot_frame. The synthetic battle with --check-workers against its golden (the
+    # trace changes no CRC), then q2trace.py validate and the first-shot / damage records (headless/check_tactical_trace.cmake).
+    find_program(ALAMO_PYTHON NAMES python PATHS ${CMAKE_SOURCE_DIR}/toolchain/venv/Scripts NO_DEFAULT_PATH)
+    find_program(ALAMO_PYTHON NAMES python python3)
+    if(NOT ALAMO_PYTHON)
+      set(ALAMO_PYTHON "")
+    endif()
+    add_test(NAME alamo_headless_skirmish_trace
+             COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:alamo_headless>
+                     -DTRACE=${CMAKE_CURRENT_BINARY_DIR}/q4hf_tactical_trace/synthetic.q2t -DPY=${ALAMO_PYTHON}
+                     -DGOLDEN=${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/skirmish_ai_synthetic_golden.crc
+                     -DQ2TRACE=${CMAKE_SOURCE_DIR}/tools/probe_mod/q2_traces/q2trace.py
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/headless/check_tactical_trace.cmake)
+    # Both synthetic runs write their data to the one %TEMP%\alamo_a1_skirmish_ai folder: never at the same time (ctest -j).
+    set_tests_properties(alamo_headless_skirmish_trace PROPERTIES TIMEOUT 1200)
+    set_tests_properties(alamo_headless_skirmish_trace alamo_headless_skirmish_ai_synthetic PROPERTIES RESOURCE_LOCK alamo_a1_skirmish_ai)
     # q6 t02: the skirmish host's slots from the data (--ai FACTION[,FACTION]): Underworld (AI_Player_Underworld, its Space_ /
     # Land_Skirmish_AI_Default_Forces) in slot 0 of a space skirmish, and as the AI beside an idle human Empire on land; no Lua errors.
     # Skipped (exit 0) without ALAMO_FOC_DATA.
