@@ -1,7 +1,7 @@
 # P4 ai synthetic Underworld special systems: per-frame CRC (every 300th frame + last), decisions
-frame 300 374a0ee305d9ecc4
-frame 600 9b07a503f9a5fcf8
-frame 900 e9816a248c02dd2d
+frame 300 f0ffa315f279a909
+frame 600 3d90f9e33acb0ca2
+frame 900 462c443132e96927
 frame 1200 758119b37bf599a3
 frame 1500 7033a138669d6427
 frame 1800 4674a18317cfd9e7
@@ -29,12 +29,12 @@ frame 8100 6bd681b5c388a32a
 frame 8400 3a0d7104bf730ecb
 frame 8700 3fd3e090ee4388ce
 frame 9000 b15e2a4ebda81c2a
-frame 9300 6bfe560be15eb795
-frame 9600 54fc6d12649e1586
-frame 9900 3e262d57201a988c
-frame 10200 ce4ad11ce1140d92
+frame 9300 8a34d89fa0f781c9
+frame 9600 0a0f64d17ab39129
+frame 9900 f50c0a0586028c16
+frame 10200 1af58e54d20355bf
 frame 10500 4cd62629db007e67
-frame 10800 38458062cb30ac77
+frame 10800 6facf218000ff49b
 frame 11100 8b50541a83aeb1ed
 frame 11400 528809bfd388ae4f
 frame 11700 fe3a3d689152887b
