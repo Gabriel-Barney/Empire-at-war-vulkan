@@ -386,15 +386,19 @@ if(_alamo_sim)
     # arrival: a fleet no longer merges without a requested slot) the all-AI hotm session fights no tactical battle in
     # 54000 ticks for seeds 2-7 (its only one was the saboteur-merged fleet's Kashyyyk attack at 376), nor do HotM
     # Rebel / Empire, Gateways, Equal Footing or Clusters; Sandbox_Rim_Worlds_Underworld (seed 7) has one running at 757.
+    # a2l (2026-11-08): t03 Q5 (a goal without a target has no stage, Produce_Force() has no destination) removed the
+    # Build_Space_Forces stage move that made the Rim Worlds battle; no Underworld sandbox fights one in 20000 ticks now.
+    # Both tests moved to Sandbox_Origin_Empire (seed 7): the battle save lands at 1580, the before-battle save at 600
+    # runs that battle after the load.
     add_test(NAME alamo_headless_save_galactic_battle
-             COMMAND alamo_headless --save-session galactic --campaign Sandbox_Rim_Worlds_Underworld --battles fight-all --story
+             COMMAND alamo_headless --save-session galactic --campaign Sandbox_Origin_Empire --battles fight-all --story
                      --save-when battle --save-check --save-at 600 ${CMAKE_CURRENT_BINARY_DIR}/n2_save_galactic_battle.alsv
                      --ticks 900 --workers 4 --quiet)
     # a2k t13 (2026-11-07): the before-battle save moved from hotm (no battle after its load any more) to the same Rim Worlds
     # session: saved at galactic frame 600, the battle starts at 757 after the load (the galactic frame stops there while
     # it runs), and the in-process / fresh-process / replay loads stay identical through it to tick 2400.
     add_test(NAME alamo_headless_save_galactic_before_battle
-             COMMAND alamo_headless --save-session galactic --campaign Sandbox_Rim_Worlds_Underworld --battles fight-all --story
+             COMMAND alamo_headless --save-session galactic --campaign Sandbox_Origin_Empire --battles fight-all --story
                      --save-when galactic --save-check --save-at 600 ${CMAKE_CURRENT_BINARY_DIR}/n2_save_galactic_before_battle.alsv
                      --ticks 1800 --workers 4 --quiet)
     # OPT3 t04: the land skirmish saved with a land path recompute in flight (tactical AI, 15-frame latency).
