@@ -356,6 +356,21 @@ the next pass. HotM Empire-human seeds 0-11: Shola taken by tick 13501 in 7 of 1
 Rebel space build is a Marauder, via the early Conquer_Pirate); seeds 3 / 4 at 7626 / 7647 (retail 7498). Golden
 `galactic_ai_hotm_human_golden.txt` regenerated (the Kuat split and move on one tick); q4h parity 0 regressions.
 
+**2026-11-09 (a2m t02): Move_To moves the task force's FleetObject only** (`docs/re/A2L_T01_RE_ANSWERS.md` Q8,
+`docs/re/A2K_T08_RE_ANSWERS.md` Q2.3; marked "a2m t02" in `engine/ai/src/galactic_ai.cpp`). A task force keeps a
+FleetObject (TF +0x120, `TaskForceRec::fleet`): Add_Force elects the added unit's parent fleet while it is null [H]; a
+MovementBlockStatus holds that one fleet, so members in other fleets stay where they are (still counted). Produce_Force
+launches a surface member at the stage into orbit (TRANSPORTS_TO_ORBIT, [H state; M name]) and merges into the FleetObject
+when it is stationary at the stage. [port] choices: the election is re-checked lazily when Move_To runs (no signal hooks);
+the FleetObject is re-elected when it is dead or holds no member any more (the [M] reading of signal 0x1b; without it the
+Underworld shared home fleet was moved instead of the hero's split fleet). AI world save version 8 (6..8 read). HotM
+Empire-human seed 0: Rebel `credits_at_13500` 1890 -> 805 and `build_count` 19 -> 23 (both PASS now); Shola is taken at
+5970 (retail 7498 / 8214), so the Rebel `Remove_Corruption @Shola` plan flies Han Solo's Millennium Falcon (Hyperspace_Speed
+2.0) Naboo -> Shola in 70 ticks, a leg retail never flies (retail launches the Falcon at Naboo at 6293..7261 and keeps it
+there), hence `travel.hop_ticks[Rebel:NABOO->SHOLA]` FAIL; new FAIL `credits_at_13500[Empire]` 18797.5 vs 19007.5 (an
+Underworld sabotage at Corellia at 10851 now succeeds). Goldens: `ai_galactic_synthetic_crc.txt`, `ai_underworld_crc.txt`,
+`galactic_ai_hotm_golden.txt`, `galactic_ai_hotm_human_golden.txt`.
+
 **2026-11-08 (q4hf t03): more retail references.** `geonosis_skirmish` now has 3 retail runs (`20261108-204213-skirmish-vanilla-lua`,
 `20261108-203639-skirmish-vanilla` added), so its tolerances use the run-to-run envelope; `hotm_galactic` has a 4th run,
 `20261108-204711-galactic-vanilla-lua` (40 cycles, cut at the scenario's `max_tick` 13501; its two auto-resolved Tatooine

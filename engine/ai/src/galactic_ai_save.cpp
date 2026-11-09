@@ -50,8 +50,9 @@ namespace {
 // 2: pristine pooled VMs by reference; 3: AI player types (q6 t07); 4 (cu12 t14): the status records' orders_out byte
 // removed (never set or read); 5 (A2k t02): per-target stage lists; 6 (a2l t03): the per-frame reachability cache
 // removed (galactic blocked() reads the per-target lists), the task force's stage area (TF +0x100) after its stage;
-// 7 (q2f t09): the task force's sync gather state after its stage area.
-constexpr uint32_t kWorldVersion = 7;
+// 7 (q2f t09): the task force's sync gather state after its stage area; 8 (a2m t02): the task force's FleetObject (TF
+// +0x120) after its sync state, the MoveTo status's fleet after its mode.
+constexpr uint32_t kWorldVersion = 8;
 // 2: logic frame, player conflict stamps, conflict observer (q6 t03); 3: leaf cache keyed by (leaf, instance, system player,
 // parameter set) with each entry's parameters, the 0xE visible flags and the last seen surface units (q6 t18)
 constexpr uint32_t kResolverVersion = 3;
@@ -581,6 +582,7 @@ void GalacticAiWorld::write(ByteWriter& w) const {
         w.i64(t.sync_frame);
         put_handles(w, st, t.sync_units);
         put_vec(w, t.sync_etas);
+        w.u32(t.fleet);
         w.boolean(t.had_units);
         w.boolean(t.no_units_sent);
         w.boolean(t.alive);
@@ -596,6 +598,7 @@ void GalacticAiWorld::write(ByteWriter& w) const {
         w.u8(static_cast<uint8_t>(s.result));
         w.u32(s.dest);
         w.u8(s.mode);
+        w.u32(s.fleet);
         w.i64(s.started);
         w.u8(static_cast<uint8_t>(s.op));
         w.f64(s.amount);
@@ -736,8 +739,10 @@ bool GalacticAiWorld::read(ByteReader& r) {
             if (!committed) rt.set_vms_created(before);
         }
     } guard{*m.runtime, m.runtime->vms_created()};
-    const uint32_t version = r.u32();  // 6 is still read: its task forces have no sync gather state
-    if ((version != kWorldVersion && version != 6) || !r.ok()) return false;
+    // 6 and 7 are still read: a version-6 task force has no sync gather state; before 8 there is no FleetObject (elected
+    // again on first use) and a MoveTo status takes its task force's FleetObject at its next step.
+    const uint32_t version = r.u32();
+    if (version < 6 || version > kWorldVersion || !r.ok()) return false;
     // ---- shape: the loader rebuilt the same session ----
     if (r.u32() != m.ai.size() || !r.ok()) return false;
     std::vector<uint8_t> present(m.ai.size());
@@ -931,6 +936,9 @@ bool GalacticAiWorld::read(ByteReader& r) {
                 if (!get_handles(r, st, t.sync_units) || !get_vec(r, t.sync_etas) || t.sync_etas.size() != t.sync_units.size())
                     return false;
             }
+            if (version >= 8) {
+                t.fleet = r.u32();  // checked against the fleets where it is read (tf_fleet_object)
+            }
             t.had_units = r.boolean();
             t.no_units_sent = r.boolean();
             t.alive = r.boolean();
@@ -955,6 +963,9 @@ bool GalacticAiWorld::read(ByteReader& r) {
             const uint8_t result = r.u8();
             s.dest = r.u32();
             s.mode = r.u8();
+            if (version >= 8) {
+                s.fleet = r.u32();  // checked against the fleets where it is read (the MoveTo step)
+            }
             s.started = r.i64();
             const uint8_t op = r.u8();
             s.amount = r.f64();

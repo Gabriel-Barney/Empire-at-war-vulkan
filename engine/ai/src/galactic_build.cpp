@@ -103,7 +103,7 @@ void GalacticAiWorld::Impl::create_build_tasks(TaskForceRec& tf) {
                 }
                 launch_and_form(tf.player, at, o, unit_jumps(o) ? kAloneFleet : gal::kNoFleet);
             }
-            tf.units.push_back(o);  // galactic: 0x6498f0 hands the unit to the task -> FINISHED
+            tf_join(tf, o);  // galactic: 0x6498f0 hands the unit to the task -> FINISHED
             tf.had_units = true;
             finish_build(t);
             continue;
@@ -160,7 +160,7 @@ bool GalacticAiWorld::Impl::resolve_claim(BuildTask& b) {
         const auto tit = tfs.find(b.tf);  // 0: 0x647df0 gives the unit to the task
         off_free_store(u);
         if (tit != tfs.end()) {
-            tit->second.units.push_back(u);
+            tf_join(tit->second, u);
             tit->second.had_units = true;
         }
         finish_build(b);

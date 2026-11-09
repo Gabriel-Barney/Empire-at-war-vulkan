@@ -2047,6 +2047,24 @@ function MainForce_Thread()
 end
 )";
 
+// a2m t02 (A2L_T01_RE_ANSWERS Q8): a task force whose two members sit in two fleets; Move_To moves only the FleetObject.
+static const char* kPlanA2mMoveTo = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "MainForce", "DenyHeroAttach", "HeroShip = 1", "Frigate = 1" } }
+end
+function MainForce_Thread()
+  MainForce.Set_As_Goal_System_Removable(false)
+  GlobalValue.Set("a2m_count0", MainForce.Get_Force_Count())
+  local block = MainForce.Move_To(Target)
+  if block then GlobalValue.Set("a2m_block", 1) else GlobalValue.Set("a2m_block", 0) end
+  BlockOnCommand(block)
+  GlobalValue.Set("a2m_count1", MainForce.Get_Force_Count())
+  GlobalValue.Set("a2m_done", 1)
+  ScriptExit()
+end
+)";
 struct ParityWorld {
     MemoryFiles files;
     AiDefinitions defs;
@@ -2081,6 +2099,7 @@ struct ParityWorld {
         files.add("Data\\Scripts\\AI\\MainEscort.lua", kPlanMainEscort);
         files.add("Data\\Scripts\\AI\\A2lNoTarget.lua", kPlanA2lNoTarget);
         files.add("Data\\Scripts\\AI\\A2lPlainProduce.lua", kPlanA2lPlainProduce);
+        files.add("Data\\Scripts\\AI\\A2mMoveTo.lua", kPlanA2mMoveTo);
         plan_files = list_plan_files([this](std::string_view glob) {
             const std::string g(glob);
             return files.list(g.substr(0, g.find('*')));
@@ -2392,6 +2411,40 @@ static void test_null_stage_and_plain_produce() {
     CHECK(num("a2l_nt_stage") == 0.0 && num("a2l_nt_done") == 1.0);  // nil stage; Produce_Force() finishes in place
     CHECK(num("a2l_t_stage") == 1.0 && num("a2l_t_done") == 1.0);    // a targeted TF has a stage ...
     CHECK(!hero_moved);                                                // ... but plain Produce_Force() does not gather
+    pw.world->set_global_values(nullptr);
+}
+
+// a2m t02 (A2L_T01_RE_ANSWERS Q8.1 / Q8.2) [H]: Move_To moves the task force's FleetObject only (the parent fleet of
+// the first member added, TF +0x120); a member in another fleet stays where it is and is still counted.
+static void test_move_to_fleet_object() {
+    // The Empire's frigate starts at P1 instead of P0: the hero (P0) and the frigate (P1) are in two fleets.
+    ParityWorld pw(false, {"A2mMoveTo"}, [](gal::GalacticSetup& s) {
+        for (gal::StartingForce& f : s.forces)
+            if (f.player == 0 && f.type == tFrigate) f.planet = 1;
+    });
+    lua::GlobalValueStore gv;
+    pw.world->set_global_values(&gv);
+    auto num = [&gv](const char* n) { const lua::AiGlobalValue v = gv.get(n); return v.kind == lua::AiGlobalValue::Number ? v.number : -1.0; };
+    auto where = [&pw](uint32_t type) -> int64_t {  // the planet of the Empire's unit of this type; -2 in transit
+        for (const gal::FleetState& f : pw.sim->fleets())
+            if (f.alive && f.owner == 0)
+                for (const objects::ObjectHandle u : f.contents)
+                    if (pw.store->alive(u) && pw.store->type(u) == type) return f.moving ? -2 : static_cast<int64_t>(f.planet);
+        return -1;
+    };
+    CHECK(where(pw.hero) == 0 && where(tFrigate) == 1);
+    bool hero_left = false, frigate_left = false;
+    for (int32_t f = 1; f <= 30 * 300 && num("a2m_done") < 0.0; ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+        hero_left = hero_left || where(pw.hero) != 0;
+        frigate_left = frigate_left || where(tFrigate) != 1;
+    }
+    std::printf("move_to fleet object: block %.0f, members %.0f -> %.0f, hero moved %s, frigate moved %s\n", num("a2m_block"),
+                num("a2m_count0"), num("a2m_count1"), hero_left ? "yes" : "no", frigate_left ? "yes" : "no");
+    CHECK(num("a2m_done") == 1.0 && num("a2m_block") == 1.0);
+    CHECK(num("a2m_count0") == 2.0 && num("a2m_count1") == 2.0);  // the member left behind is still in the task force
+    CHECK(hero_left != frigate_left);                              // exactly one fleet moved
     pw.world->set_global_values(nullptr);
 }
 
@@ -5766,6 +5819,7 @@ int main(int argc, char** argv) {
     test_free_store_supply();
     test_stage_and_setup_a();
     test_null_stage_and_plain_produce();
+    test_move_to_fleet_object();
     test_production_disabled_and_delivery();
     test_ground_structure_slots();
     test_budget_fraction_before_init();

@@ -1,25 +1,25 @@
 # galactic-ai campaign Sandbox_Heart_Of_The_Maw_Underworld battles auto seed 1 ticks 36000 human Rebel
-# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers 0: 36000 ticks (6422.0 ms), galactic frame 36000, decisions 647, orders 195 (rejected 0), conflicts 26, battles 0, planet owner changes 0, running plans 7, Lua errors 0, human p0: 12 commands, pipeline applied 210 rejected 1, planets: 0=4/12673 1=4/4465 2=0/0 3=0/0 4=0/0 5=4/5105, final CRC ec2c62d0b219b2c0
-# t=60s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 3 crc 3cb5ff29582e49b9
-# t=120s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 4 conflicts 6 crc 610c563878d443ea
-# t=180s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 2 conflicts 6 crc 2d5c0f33c31e41ec
-# t=240s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 7 crc 8fa3224554b5d6a6
-# t=300s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 4 conflicts 7 crc c87ad5c720cd0907
-# t=360s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 12 crc 10bff973230b03e0
-# t=420s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 14 crc 622abfb46be43b59
-# t=480s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 14 crc 4cc75e590325f34f
-# t=540s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 14 crc b6ee891b1be18f4c
-# t=600s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 14 crc a796539d931bd09d
-# t=660s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 9 conflicts 16 crc 7774945ec89babd6
-# t=720s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 19 crc eacf1b56dc843614
-# t=780s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 4 conflicts 20 crc 5c3cddbbfa61cf47
-# t=840s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 20 crc cffc4265b3af4afc
-# t=900s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 4 conflicts 20 crc 20b1fecd9ce1b36c
-# t=960s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 20 crc c595fb6e389d473d
-# t=1020s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 24 crc 9c4dc502eb6813b0
-# t=1080s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 26 crc e4d5c4678a32475f
-# t=1140s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 26 crc b3702f5e211eacde
-# t=1200s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 26 crc ec2c62d0b219b2c0
+# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers 0: 36000 ticks (11654.5 ms), galactic frame 36000, decisions 656, orders 200 (rejected 0), conflicts 26, battles 0, planet owner changes 0, running plans 5, Lua errors 0, human p0: 12 commands, pipeline applied 215 rejected 1, planets: 0=4/12673 1=4/4465 2=0/0 3=0/0 4=0/0 5=4/6202, final CRC 4b83a46618360e8e
+# t=60s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 3 crc 6a8c7b97636f1cd3
+# t=120s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 4 conflicts 6 crc e50122f522685747
+# t=180s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 2 conflicts 6 crc 033f33e16ff3099f
+# t=240s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 7 crc 57a7acf126023bc7
+# t=300s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 4 conflicts 7 crc a146907fab8d882a
+# t=360s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 12 crc b8175b70ee67373a
+# t=420s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 14 crc 013bbdd0e5f4ddfb
+# t=480s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 14 crc 30cde808e3f3ce56
+# t=540s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 14 crc a7212af3bb7b279f
+# t=600s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 14 crc 8de87c9cc2c4514a
+# t=660s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 9 conflicts 16 crc 59421bb3d52f132d
+# t=720s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 19 crc 8f88eb7787cbb89f
+# t=780s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 4 conflicts 20 crc 6769f9e8d1af1adb
+# t=840s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 20 crc 01376ef0933277bd
+# t=900s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 4 conflicts 20 crc c13b8824eb74b3be
+# t=960s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 20 crc 69cbc5e9c539b64c
+# t=1020s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 24 crc d3098c509b5df4c8
+# t=1080s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 26 crc 543579f2e646ddd6
+# t=1140s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 26 crc 68c116e7d1bb8dac
+# t=1200s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 26 crc 4b83a46618360e8e
 1 p1 opponent 0
 1 p1 templates Basic_Empire_Default
 1 p2 opponent 0
@@ -241,9 +241,9 @@
 6903 p5 order move fleet 145 -> The_Maw
 6903 p5 order move fleet 146 -> The_Maw
 6903 p5 order move fleet 147 -> The_Maw
+6903 p5 order merge 84 at The_Maw
 6903 p5 order merge 85 at The_Maw
 6903 p5 order merge 87 at The_Maw
-6903 p5 order merge 86 at The_Maw
 6928 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
 6930 p5 order build U_Ground_Vehicle_Factory at Shola
 6936 p1 order build Imperial_Light_Scout_Squad at Corellia
@@ -252,7 +252,7 @@
 7092 p5 order merge 78 at The_Maw
 7092 p5 order merge 77 at The_Maw
 7098 p5 tf MainForce move to Yavin
-7098 p5 order move fleet 142 -> Yavin
+7098 p5 order move fleet 83 -> Yavin
 7145 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
 7213 p5 plan 51 UNRESTRICTEDGRABSPACE ended success (released)
 7906 p1 plan 49 BUILDGROUNDFORCESPLAN ended success
@@ -364,15 +364,17 @@
 12195 p5 plan 70 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
 12210 p5 plan 67 BUILDGROUNDFORCESPLAN ended success
 12266 p5 plan 72 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @NalHutta BaseForce(0+1) net 2400 gross 2400 eta 28.0
-12266 p5 plan 73 CONQUEROPPONENTPLAN for Conquer_Opponent @Yavin SpaceForce(4+0) GroundForce(4+1) net 1400 gross 15090 eta 16.0
+12266 p5 plan 73 CONQUEROPPONENTPLAN for Conquer_Opponent @Yavin SpaceForce(4+0) GroundForce(4+1) net 1400 gross 10890 eta 16.0
 12267 p5 build task 76 U_Ground_Vehicle_Factory for BaseForce at NalHutta
-12267 p5 order split 86 at Yavin
+12267 p5 order split 84 at Yavin
+12267 p5 order split 77 at Yavin
+12267 p5 order split 91 at Yavin
 12267 p5 order split 87 at Yavin
 12267 p5 build task 77 MAL_Rocket_Vehicle_Company for GroundForce
 12267 p5 order move fleet 173 -> The_Maw
 12267 p5 order move fleet 174 -> The_Maw
-12267 p5 order move fleet 142 -> The_Maw
-12267 p5 order move fleet 76 -> The_Maw
+12267 p5 order move fleet 175 -> The_Maw
+12267 p5 order move fleet 176 -> The_Maw
 12282 p5 tf MainForce move to Kashyyyk
 12282 p5 order move fleet 108 -> Kashyyyk
 12283 p5 order build U_Ground_Vehicle_Factory at NalHutta
@@ -381,15 +383,15 @@
 12301 p1 build task 79 Imperial_Stormtrooper_Squad for ReserveForce
 12301 p1 build task 80 Imperial_Heavy_Scout_Squad for ReserveForce
 12301 p1 build task 81 Imperial_Stormtrooper_Squad for ReserveForce
-12321 p5 order merge 85 at The_Maw
 12324 p5 order build MAL_Rocket_Vehicle_Company at Shola
+12330 p5 order merge 77 at The_Maw
+12330 p5 order merge 91 at The_Maw
 12353 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
 12361 p1 order build Imperial_Anti_Infantry_Brigade at Tatooine
 12361 p1 order build Imperial_Stormtrooper_Squad at Corellia
 12363 p5 order merge 87 at The_Maw
-12408 p5 order merge 110 at The_Maw
-12414 p5 tf SpaceForce move to Yavin
-12414 p5 order move fleet 173 -> Yavin
+12369 p5 tf SpaceForce move to Yavin
+12369 p5 order move fleet 173 -> Yavin
 12450 p5 tf MainForce ability Underworld_Saboteur_Team 75 at Kashyyyk not applied
 12750 p5 plan 71 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
 13105 p1 order build Imperial_Heavy_Scout_Squad at Tatooine
@@ -581,12 +583,12 @@
 29248 p1 plan 115 LIFTBLOCKADEPLAN for Lift_Blockade @Kashyyyk MainForce(4+0) net 0 gross 8100 eta 0.0
 29248 p1 tf MainForce sync move to Kashyyyk countdown 1.904762
 29248 p1 order split 112 at Corellia
-29248 p1 order move fleet 207 -> Kashyyyk
+29248 p1 order move fleet 209 -> Kashyyyk
 29250 p5 order move fleet 108 -> MonCalimari
 29278 p1 order split 54 at Kuat
-29278 p1 order move fleet 208 -> Kashyyyk
+29278 p1 order move fleet 210 -> Kashyyyk
 29278 p1 order split 52 at Kuat
-29278 p1 order move fleet 209 -> Kashyyyk
+29278 p1 order move fleet 211 -> Kashyyyk
 29298 p5 tf MainForce move to Naboo
 29298 p5 order move fleet 124 -> Naboo
 29302 p1 order merge 46 at Kashyyyk
@@ -603,16 +605,20 @@
 29820 p5 order move fleet 108 -> The_Maw
 29835 p5 plan 112 BUILDSPACEFORCESPLAN ended success
 29955 p5 plan 117 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(1+0) net 0 gross 1000 eta 0.0
-29955 p5 plan 118 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+1) net 1400 gross 1400 eta 5.3
-29955 p5 build task 120 MAL_Rocket_Vehicle_Company for ReserveForce
+29955 p5 plan 118 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+3) net 1770 gross 1770 eta 16.0
+29955 p5 build task 120 Underworld_MDU_Company for ReserveForce
+29955 p5 build task 121 Underworld_Merc_Squad for ReserveForce
+29955 p5 build task 122 Underworld_Disruptor_Merc_Squad for ReserveForce
 29955 p5 order move fleet 124 -> Shola
 29958 p5 tf MainForce move to MonCalimari
 29958 p5 order move fleet 108 -> Yavin
+30015 p5 order build Underworld_Merc_Squad at NalHutta
 30021 p5 order move fleet 108 -> MonCalimari
 30057 p5 tf MainForce move to Naboo
 30057 p5 order move fleet 124 -> Naboo
 30096 p5 tf MainForce ability Underworld_Saboteur_Team 75 at MonCalimari not applied
 30159 p5 tf MainForce ability Underworld_Saboteur_Team 123 at Naboo not applied
+30170 p5 order build Underworld_Disruptor_Merc_Squad at NalHutta
 30396 p5 plan 116 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
 30459 p5 plan 117 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
 30491 p5 plan 119 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
@@ -640,29 +646,32 @@
 32310 p5 tf MainForce ability Underworld_Saboteur_Team 75 at Kashyyyk not applied
 32423 p1 templates Basic_Empire_Default Tech_Upgrade
 32566 p1 plan 123 BUILDBASESHIELDPLAN for Build_Base_Shield @Kashyyyk StructureForce(0+1) net 2000 gross 2000 eta 48.0
-32596 p1 build task 121 E_Ground_Base_Shield for StructureForce at Kashyyyk
+32596 p1 build task 123 E_Ground_Base_Shield for StructureForce at Kashyyyk
 32610 p5 plan 122 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
 32627 p1 order build E_Ground_Base_Shield at Kashyyyk
-32648 p5 plan 124 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 2400 gross 2400 eta 13.8
-32649 p5 build task 122 Interceptor4_Frigate for ReserveForce
-32689 p5 order build Interceptor4_Frigate at Felucia
-33111 p5 plan 124 BUILDSPACEFORCESPLAN ended success
+32648 p5 plan 124 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1400 gross 1400 eta 4.8
+32649 p5 build task 124 Crusader_Gunship for ReserveForce
+32689 p5 order build Crusader_Gunship at Felucia
+32841 p5 plan 124 BUILDSPACEFORCESPLAN ended success
+34006 p5 plan 125 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1400 gross 1400 eta 4.8
+34008 p5 build task 125 Crusader_Gunship for ReserveForce
+34053 p5 order build Crusader_Gunship at Felucia
+34203 p5 plan 125 BUILDSPACEFORCESPLAN ended success
 35146 p1 plan 78 BUILDGROUNDFORCESPLAN ended failure (released)
 35146 p1 plan 123 BUILDBASESHIELDPLAN ended failure (released)
-35233 p1 plan 125 EMPIREADVANCETECHPLAN for Advance_Tech_Empire @global TechForce(0+1) net 6000 gross 6000 eta 160.0
+35233 p1 plan 126 EMPIREADVANCETECHPLAN for Advance_Tech_Empire @global TechForce(0+1) net 6000 gross 6000 eta 160.0
 35233 p1 plan 7 PATHBONUSFORDISTANTTARGETS ended failure (released)
-35263 p1 build task 123 DS_Superlaser_Core for TechForce
+35263 p1 build task 126 DS_Superlaser_Core for TechForce
 35304 p1 order build DS_Superlaser_Core at Kuat
-35320 p1 plan 126 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-35320 p1 plan 126 FLUSHMAJORITEMBUDGET ended failure
-35364 p5 plan 127 UPGRADESTARBASEPLAN for Upgrade_Starbase @Felucia BaseForce(0+1) net 5800 gross 5800 eta 30.0
-35364 p5 plan 128 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 2400 gross 2400 eta 13.8
-35364 p5 build task 124 Underworld_Star_Base_4 for BaseForce at Felucia
-35364 p5 build task 125 Interceptor4_Frigate for ReserveForce
-35386 p5 order build Underworld_Star_Base_4 at Felucia
+35320 p1 plan 127 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+35320 p1 plan 127 FLUSHMAJORITEMBUDGET ended failure
+35364 p5 plan 128 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1400 gross 1400 eta 4.8
+35364 p5 build task 127 Crusader_Gunship for ReserveForce
 35407 p1 plan 129 PATHBONUSFORDISTANTTARGETS for Distant_System_Path_Bonus @global EmptyForce(0+0) net 0 gross 0 eta 0.0
+35417 p5 order build Crusader_Gunship at Felucia
 35494 p1 plan 130 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 35494 p1 plan 130 FLUSHMAJORITEMBUDGET ended failure
+35568 p5 plan 128 BUILDSPACEFORCESPLAN ended success
 35667 p1 plan 131 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 35668 p1 plan 131 FLUSHMAJORITEMBUDGET ended failure
 35840 p1 plan 132 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
@@ -685,7 +694,7 @@ conflict tick 1481 gframe 1480 space Yavin Underworld vs Rebel: dropped
 conflict tick 1989 gframe 1988 space Kashyyyk Underworld vs Empire: dropped
 conflict tick 2673 gframe 2672 space Kashyyyk Underworld vs Empire: dropped
 conflict tick 2779 gframe 2778 space Shola Rebel vs Underworld: auto-resolved, winner Underworld, loser Rebel, retreat Rebel, losses att 8 def 0, draws 12
-conflict tick 7192 gframe 7191 space Yavin Underworld vs Rebel: auto-resolved, winner Underworld, loser Rebel, retreat -, losses att 4 def 1, draws 7
+conflict tick 7192 gframe 7191 space Yavin Underworld vs Rebel: auto-resolved, winner Underworld, loser Rebel, retreat -, losses att 2 def 1, draws 7
 conflict tick 9079 gframe 9078 space Shola Rebel vs Underworld: auto-resolved, winner Underworld, loser Rebel, retreat -, losses att 2 def 1, draws 2
 conflict tick 9777 gframe 9776 space MonCalimari Underworld vs Rebel: dropped
 conflict tick 9940 gframe 9939 space Naboo Underworld vs Rebel: dropped

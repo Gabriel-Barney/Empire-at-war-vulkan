@@ -543,7 +543,7 @@ bool GalacticAiWorld::Impl::tf_collect_free_units(int32_t tf, uint64_t /*categor
     if (it == tfs.end()) return false;
     for (const ObjectHandle u : free_units(it->second.player)) {
         off_free_store(u);
-        it->second.units.push_back(u);
+        tf_join(it->second, u);
     }
     if (!it->second.units.empty()) it->second.had_units = true;
     return true;
@@ -981,7 +981,7 @@ int32_t GalacticAiWorld::Impl::instantiate(PlayerAi& p, Goal& g) {
             if (s.unit) {
                 if (store.alive(s.unit) && store.owner(s.unit) == p.player && !tf_owns(s.unit)) {
                     off_free_store(s.unit);
-                    tf.units.push_back(s.unit);
+                    tf_join(tf, s.unit);
                 }
             } else {
                 tf.wanted.push_back(s.type);
@@ -1151,6 +1151,40 @@ void GalacticAiWorld::Impl::prune_tf(TaskForceRec& tf) {
             u.end());
 }
 
+// Add_Force 0x6cd1a0 (A2L_T01_RE_ANSWERS Q8.2 step 1) [H]: the unit joins the member list (add order); while TF +0x120
+// is null it becomes the unit's parent fleet, when that parent is a fleet. Later adds do not change it.
+void GalacticAiWorld::Impl::tf_join(TaskForceRec& tf, ObjectHandle u) {
+    tf.units.push_back(u);
+    if (tf.fleet != gal::kNoFleet) return;
+    const uint32_t f = fleet_of_unit(u);
+    if (f != gal::kNoFleet && sim.fleets()[f].alive && !sim.fleets()[f].contents.empty()) tf.fleet = f;
+}
+
+// TF +0x120 as Move_To reads it (Q8.2 step 2) [H; M on 0x1b]: a fleet that is gone (destroyed, merged away or emptied:
+// signal 0x10, or "being removed") is dropped and the FleetObject is re-elected as the parent fleet of the first member
+// (member order) that is in a live fleet; none -> null. [M] The members' container-change signal 0x1b (TF vf+0x188,
+// A2L_T01_RE_ANSWERS open item 2) re-elects the same way when the FleetObject no longer holds any member: a claimed unit
+// split out of a shared fleet by PRE_PATH_SEPERATE (A2K_T08_RE_ANSWERS Q2.3), or launched from the surface by its build
+// task, takes its new fleet with it, so Move_To never moves the shared fleet it left. [port] Evaluated lazily where the
+// FleetObject is read, not on the signals.
+uint32_t GalacticAiWorld::Impl::tf_fleet_object(TaskForceRec& tf) {
+    const auto fleets = sim.fleets();
+    auto live = [&fleets](uint32_t f) { return f < fleets.size() && fleets[f].alive && !fleets[f].contents.empty(); };
+    if (live(tf.fleet))
+        for (const ObjectHandle u : tf.units)
+            if (store.alive(u) && fleet_of_unit(u) == tf.fleet) return tf.fleet;
+    tf.fleet = gal::kNoFleet;
+    for (const ObjectHandle u : tf.units) {
+        if (!store.alive(u)) continue;
+        const uint32_t f = fleet_of_unit(u);
+        if (live(f)) {
+            tf.fleet = f;
+            break;
+        }
+    }
+    return tf.fleet;
+}
+
 std::vector<uint32_t> GalacticAiWorld::Impl::tf_fleets(const TaskForceRec& tf) const {
     std::vector<uint32_t> out;
     for (const ObjectHandle u : tf.units) {
@@ -1228,7 +1262,7 @@ void GalacticAiWorld::Impl::claim_units(int32_t player) {
             if (PlayerAi* owner = player_ai(match->player)) owner->ctx.budget.paid(match->category, match->goal_key, match->charge);
             finish_build(*match);
             if (tit != tfs.end()) {
-                tit->second.units.push_back(u);  // PRODUCTION_END -> JOIN_TASK_FORCE
+                tf_join(tit->second, u);  // PRODUCTION_END -> JOIN_TASK_FORCE
                 tit->second.had_units = true;
                 continue;
             }
@@ -1400,7 +1434,20 @@ bool GalacticAiWorld::Impl::step_status(StatusRec& s) {
                 const gal::TypeInfo* uti = type_info(store.type(u));
                 if (uti && structure_kind(uti->kind)) continue;  // starbases / structures stay where built
                 const PlanetIndex at = planet_of_unit(u);
-                if (at == stage) continue;
+                if (at == stage) {
+                    // a2m t02: (galactic) TRANSPORTS_TO_ORBIT at the stage (A2K_T08_RE_ANSWERS Q2.3 step 4) [H state; M
+                    // name]: a member on the stage's surface (a claimed free-store unit: GROUND_UNIT_PRODUCTION) goes up
+                    // into a fleet before READY_TO_MERGE, so the task force gets a FleetObject for Move_To (Q8.2, [M] the
+                    // member's 0x1b). [port] Launch (op 4), then form (op 0) into the FleetObject when it orbits the stage,
+                    // else a fleet of its own (a unit with its own transport) or the orbit fleet, as a built unit does
+                    // (galactic_build.cpp); the merge below then joins it. Not while the stage is blockaded (0x3fa370).
+                    if (on_surface(u) && uti && ground_kind(uti->kind) && !sim.ai_blockaded(stage)) {
+                        const uint32_t fo = tf_fleet_object(tf);
+                        const bool fo_here = fo != gal::kNoFleet && !sim.fleets()[fo].moving && sim.fleets()[fo].planet == stage;
+                        launch_and_form(tf.player, stage, u, fo_here ? fo : (unit_jumps(u) ? kAloneFleet : gal::kNoFleet));
+                    }
+                    continue;
+                }
                 all_there = false;
                 if (at == kInvalidPlanet || is_held(u)) continue;  // in transit, or waiting for its sync departure
                 const uint32_t f = fleet_of_unit(u);
@@ -1441,10 +1488,14 @@ bool GalacticAiWorld::Impl::step_status(StatusRec& s) {
             }
             // READY_TO_MERGE -> DO_TASK_FORCE_MERGE / JOIN_TASK_FORCE (A2K_T08_RE_ANSWERS Q2.3 step 4) [H: only fleets
             // holding TF members merge, op 3 into the TF fleet]: at the stage each member's stationary fleet merges into
-            // the fleet of the first member there (member order). Arrival no longer merges (GalacticSim::arrive, Q1), so
-            // this is what keeps the gathered force one fleet for Move_To. [port] Unit-wise, like Form_Units.
+            // the TF FleetObject when it orbits the stage (a2m t02, Q8.3), else into the fleet of the first member there
+            // (member order). Arrival no longer merges (GalacticSim::arrive, Q1), so this is what keeps the gathered force
+            // one fleet for Move_To. [port] Unit-wise, like Form_Units.
             {
                 uint32_t dst = gal::kNoFleet;
+                if (const uint32_t fo = tf_fleet_object(tf);
+                    fo != gal::kNoFleet && !sim.fleets()[fo].moving && sim.fleets()[fo].planet == stage)
+                    dst = fo;
                 for (const ObjectHandle u : tf.units) {
                     const uint32_t f = fleet_of_unit(u);
                     if (f == gal::kNoFleet || sim.fleets()[f].moving || sim.fleets()[f].planet != stage) continue;
@@ -1462,66 +1513,42 @@ bool GalacticAiWorld::Impl::step_status(StatusRec& s) {
             return false;  // [H] no time-out in the build FSM
         }
         case StatusKind::MoveTo: {
+            // MovementBlockStatus of Move_To (0x6af230 / 0x6aedc0, A2L_T01_RE_ANSWERS Q8.1, A2K_T08_RE_ANSWERS Q2.1) [H]:
+            // it holds the single fleet chosen at the order (block +0x48) and moves only that fleet, hop by hop; it
+            // neither launches nor walks the members, so members in other fleets are left behind. Done when the fleet
+            // is at the destination. [port] the fleet gone (signal 0x10) fails the move; no battle there is still waited
+            // for (as before).
             if (tit == tfs.end()) return finish(false);
             if (sim.paused()) return false;
             TaskForceRec& tf = tit->second;
             prune_tf(tf);
             if (tf.units.empty()) return finish(false);
-            {
-                std::vector<ObjectHandle> drop;
-                for (const ObjectHandle u : tf.units) {
-                    const gal::TypeInfo* uti = type_info(store.type(u));
-                    if (uti && structure_kind(uti->kind)) continue;
-                    const PlanetIndex at = planet_of_unit(u);
-                    if (at == kInvalidPlanet || at == s.dest) continue;
-                    const uint32_t f = fleet_of_unit(u);
-                    if (f != gal::kNoFleet && movable_fleet(f)) continue;
-                    if (f == gal::kNoFleet && movable_tf_fleet_at(tf, at) != gal::kNoFleet) {
-                        launch_and_form(tf.player, at, u, movable_tf_fleet_at(tf, at));
-                    } else if (f == gal::kNoFleet && unit_jumps(u)) {
-                        launch_and_form(tf.player, at, u, kAloneFleet);
-                    } else {
-                        drop.push_back(u);
-                    }
+            if (s.fleet == gal::kNoFleet) s.fleet = tf_fleet_object(tf);  // a status from a save before version 8
+            const uint32_t f = s.fleet;
+            if (f >= sim.fleets().size() || !sim.fleets()[f].alive || sim.fleets()[f].contents.empty()) return finish(false);
+            const gal::FleetState& fs = sim.fleets()[f];
+            if (fs.moving) return false;
+            if (fs.planet == s.dest) return sim.planets()[s.dest].in_battle ? false : finish(true);
+            if (!movable_fleet(f)) return finish(false);
+            gal::PathScratch scratch;
+            std::vector<PlanetIndex> path;
+            const gal::PlayerView view = sim.player_view(tf.player);
+            const gal::PathRequest req = gal::PathRequest::for_fleet_move_mode(fs.planet, s.dest, s.mode);
+            if (!gal::find_fleet_path(sim.graph(), view, req, scratch, path) || path.size() < 2) {
+                const gal::PathRequest any = gal::PathRequest::for_fleet_move_mode(fs.planet, s.dest, 5);
+                if (!gal::find_fleet_path(sim.graph(), view, any, scratch, path) || path.size() < 2) {
+                    decide(tf.player, "tf " + tf.name + " no path " + planet_name(fs.planet) + " -> " + planet_name(s.dest));
+                    return finish(false);
                 }
-                for (const ObjectHandle d : drop) tf_release_unit(tf.id, d);
-                if (tf.units.empty()) return finish(false);
             }
-            bool arrived = true;
-            for (const uint32_t f : tf_fleets(tf)) {
-                const gal::FleetState& fs = sim.fleets()[f];
-                if (fs.moving) {
-                    arrived = false;
-                    continue;
-                }
-                if (fs.planet == s.dest || !movable_fleet(f)) continue;
-                arrived = false;
-                gal::PathScratch scratch;
-                std::vector<PlanetIndex> path;
-                const gal::PlayerView view = sim.player_view(tf.player);
-                const gal::PathRequest req = gal::PathRequest::for_fleet_move_mode(fs.planet, s.dest, s.mode);
-                if (!gal::find_fleet_path(sim.graph(), view, req, scratch, path) || path.size() < 2) {
-                    const gal::PathRequest any = gal::PathRequest::for_fleet_move_mode(fs.planet, s.dest, 5);
-                    if (!gal::find_fleet_path(sim.graph(), view, any, scratch, path) || path.size() < 2) {
-                        decide(tf.player, "tf " + tf.name + " no path " + planet_name(fs.planet) + " -> " + planet_name(s.dest));
-                        return finish(false);
-                    }
-                }
-                const PlanetIndex hop = path[1];
-                if (hop != s.dest && s.mode < 2) {
-                    bool hostile_orbit = false;
-                    for (const uint32_t o : sim.planets()[hop].orbit)
-                        hostile_orbit = hostile_orbit || (sim.fleets()[o].alive && sim.is_hostile(tf.player, sim.fleets()[o].owner));
-                    if (hostile_orbit) return finish(false);
-                }
-                if (!move_fleet(tf.player, f, hop)) return finish(false);
+            const PlanetIndex hop = path[1];
+            if (hop != s.dest && s.mode < 2) {
+                bool hostile_orbit = false;
+                for (const uint32_t o : sim.planets()[hop].orbit)
+                    hostile_orbit = hostile_orbit || (sim.fleets()[o].alive && sim.is_hostile(tf.player, sim.fleets()[o].owner));
+                if (hostile_orbit) return finish(false);
             }
-            for (const ObjectHandle u : tf.units) {
-                const gal::TypeInfo* uti = type_info(store.type(u));
-                if (uti && structure_kind(uti->kind)) continue;
-                if (planet_of_unit(u) != s.dest) arrived = false;
-            }
-            if (arrived && !sim.planets()[s.dest].in_battle) return finish(true);
+            if (!move_fleet(tf.player, f, hop)) return finish(false);
             return false;
         }
         case StatusKind::Invade: {
@@ -1546,11 +1573,21 @@ int32_t GalacticAiWorld::Impl::tf_order(int32_t tf, lua::AiTfOrder kind, const l
     switch (kind) {
         case lua::AiTfOrder::MoveTo:
         case lua::AiTfOrder::Raid: {
+            // Move_To 0x6cf370 (A2L_T01_RE_ANSWERS Q8.1, A2K_T08_RE_ANSWERS Q2.1) [H]: nil when TF +0x120 is null / gone or
+            // the TF has no units ("No units in TaskForce %s, or no FleetObject"), when the fleet is not at a planet, or
+            // when the argument is not a planet target. Otherwise one MovementBlockStatus moves that single fleet with
+            // everything in it; members in other fleets stay where they are (still in the TF).
             const PlanetIndex dest = planet_arg(arg);
-            if (!valid_planet(dest) || t.units.empty()) return -1;
+            const uint32_t fleet = tf_fleet_object(t);
+            if (fleet == gal::kNoFleet || t.units.empty()) {
+                decide(t.player, "tf " + t.name + " move: no units, or no FleetObject");
+                return -1;
+            }
+            if (sim.fleets()[fleet].moving || !valid_planet(dest)) return -1;
             const int32_t id = new_status(plan, tf, StatusKind::MoveTo);
             StatusRec& s = statuses[id];
             s.dest = dest;
+            s.fleet = fleet;
             const auto pit = plans.find(plan);
             s.mode = pit != plans.end() && pit->second.goal_type < defs.goals.size()
                          ? static_cast<uint8_t>(std::min(5, static_cast<int>(defs.goals[pit->second.goal_type].reachability)))
@@ -1951,7 +1988,7 @@ bool GalacticAiWorld::Impl::tf_add_unit(int32_t tf, ObjectHandle unit) {
     if (it == tfs.end() || !it->second.alive || !store.alive(unit) || store.owner(unit) != it->second.player || tf_owns(unit))
         return false;
     off_free_store(unit);
-    it->second.units.push_back(unit);
+    tf_join(it->second, unit);
     it->second.had_units = true;
     return true;
 }
@@ -2574,6 +2611,7 @@ void GalacticAiWorld::hash(StateHasher& h) const {
         h.i32(id);
         h.i32(t.stage);
         h.i32(t.area);
+        h.u32(t.fleet);  // a2m t02: TF +0x120
         if (t.sync) {  // q2f t09: only a sync gather adds its countdown (other task forces hash as before)
             h.boolean(t.sync_started);
             h.f64(t.sync_left);
