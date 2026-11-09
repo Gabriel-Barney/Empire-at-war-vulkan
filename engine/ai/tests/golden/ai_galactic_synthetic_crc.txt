@@ -1,24 +1,24 @@
 # A2 synthetic AI-vs-AI campaign: per-frame CRC (every 150th frame + last), decisions
-frame 150 3bdef7b77c0efa41
-frame 300 c999d67b4add316c
-frame 450 d76e20bacd0d0975
-frame 600 f14e9033c897eeb4
-frame 750 b25207beb65dfa41
-frame 900 175c1eec7e0ec517
-frame 1050 a1af73da96a79819
-frame 1200 d8dbdc9a2cbaba36
-frame 1350 b8ebe4c64e1a6b10
-frame 1500 87167d9a303504f2
-frame 1650 820d504e49cc61aa
-frame 1800 89aec86679f82b07
-frame 1950 af358b4a1d6c5c8f
-frame 2100 99c4364e6b7b501d
-frame 2250 00b59824b0cf5522
-frame 2400 997b921cd02bbbeb
-frame 2550 2f2c54c6630026a8
-frame 2700 1f6a5fe94623661d
-frame 2850 d63a355ebd45997d
-frame 3000 92bea434a82b4302
+frame 150 5e692194d7ac070d
+frame 300 ea6c71e0fc1549f4
+frame 450 ee64f3a658e286d5
+frame 600 41b3f2edc7c22e77
+frame 750 2e210dda6ba74a2f
+frame 900 44397c17d075679b
+frame 1050 aef8f49c8ff9a302
+frame 1200 d762050c50fc1937
+frame 1350 5e67eeea62b3b1fb
+frame 1500 afbefc715798081e
+frame 1650 74c5d56f7e4ebcca
+frame 1800 a785420024c7fa9d
+frame 1950 49cb70236dbc1782
+frame 2100 366d16d5458056e2
+frame 2250 8534de9ee6f1b61b
+frame 2400 7374374a80552b9d
+frame 2550 fc763445afd22475
+frame 2700 eac2a2ce3975419b
+frame 2850 787b6d1a3bbe7c8a
+frame 3000 d98d299988be98c5
 frame 3150 a739212570e59005
 frame 3300 a2627e858efcf862
 frame 3450 8dce16bf9528cebf
@@ -26,8 +26,8 @@ frame 3600 23e4870315b59f72
 frame 3750 1c405de62c0e04a8
 frame 3900 e3d08bdada99bcf9
 frame 4050 298f2fbcd14312ad
-frame 4200 d53364a9fd7e2270
-frame 4350 6f2d836c0ee78676
+frame 4200 d6606e1a865fb431
+frame 4350 76db2f10552f91f6
 frame 4500 3656fb35d4fd9c54
 frame 4650 b994d882edd639f8
 frame 4800 26c033d9b51b6f10
@@ -35,8 +35,8 @@ frame 4950 422c6489afbc2b3a
 frame 5100 1ca147f46808ef35
 frame 5250 685fe5a41ada0111
 frame 5400 384b8b88bb0c4704
-frame 5550 f8e1870c7e268bd0
-frame 5700 46ecd97bc2f8043d
+frame 5550 cf9985404c1c1994
+frame 5700 7acd6e15658d46cd
 frame 5850 3761523a5ece6ed3
 frame 6000 a8f2fccfcda72ca0
 frame 6150 c4aa9d109a8aca24
@@ -44,16 +44,16 @@ frame 6300 49b9e485c5a4ab79
 frame 6450 d915e5259433203d
 frame 6600 c776e623f1eb70d0
 frame 6750 8a52671f26d8afc5
-frame 6900 1001e192f27502a5
-frame 7050 1818c171466e0fb2
-frame 7200 2deb281a910014fb
-frame 7350 962a0683859b26a2
-frame 7500 dac6bff44269a04a
-frame 7650 e0c34b76410864d5
+frame 6900 df5f5d670f35751c
+frame 7050 6742ccda627e96b3
+frame 7200 0bf502cb5f6d2b87
+frame 7350 fe4ae6640fd08ac7
+frame 7500 733161cf4cd59d08
+frame 7650 8bf863da95eeacf5
 frame 7800 f0106f55b81669b9
 frame 7950 2d064a03e3d6064f
 frame 8100 007e43bf38649a2c
-frame 8250 6ddd6c673341c154
+frame 8250 14608e38f55d9eab
 frame 8400 8b69f9a9fe278384
 frame 8550 a94267d3c108bdc5
 frame 8700 519e2d535c19b8a4
@@ -71,7 +71,7 @@ frame 10350 d084b976dd2a5dca
 frame 10500 45175220462b285b
 frame 10650 091c0aba4cf237c8
 frame 10800 d701fb214cdbe81c
-frame 10950 a62ebe76db7d6e5e
+frame 10950 99d71530d479351c
 frame 11100 9ee389ee8a97435b
 frame 11250 2f28384d3f159e84
 frame 11400 7f9e83471c76b184
@@ -107,9 +107,9 @@ frame 15750 6d7e2a5ea6aa3e5e
 frame 15900 90705f4f8675d222
 frame 16050 c99b02b7a3646cf3
 frame 16200 6912ac3cc5921c8b
-frame 16350 c3b5e8836b460af4
-frame 16500 06b9102d3d2db9f8
-frame 16650 706f6394e45598a7
+frame 16350 e9af5e826e028f0d
+frame 16500 b2332f52de35b664
+frame 16650 103c1027b17704ca
 frame 16800 eb1ba5e9e662c3c2
 frame 16950 3fb55529bcf3d351
 frame 17100 90e1c335b74acfc9
@@ -125,8 +125,8 @@ frame 18450 f7f520a84f526f43
 frame 18600 10e04062b966bf44
 frame 18750 a9d5f9370e1e31b3
 frame 18900 89b82357489694bd
-frame 19050 847d5f76dc888ed6
-frame 19200 10de071cd76eeebf
+frame 19050 b94471a30306a28b
+frame 19200 d12a00ca5009bcdb
 frame 19350 d25145087669d1ba
 frame 19500 63a6c3f4ce67610a
 frame 19650 20b040460acfd247
@@ -134,8 +134,8 @@ frame 19800 97a238dab2743ef0
 frame 19950 790ae53036055c0a
 frame 20100 25ba0a13df53cc17
 frame 20250 f5ce160ec5b00e77
-frame 20400 72e6e3429efb2c9c
-frame 20550 eed223fa8a02aee3
+frame 20400 13fd7715e0347113
+frame 20550 87178898824f271e
 frame 20700 e7f73087c6c2effc
 frame 20850 386eaa701e1c8e47
 frame 21000 585805d07364fe50
@@ -170,8 +170,8 @@ frame 25200 f843e89b21b9a174
 frame 25350 a541650f87d16a31
 frame 25500 a9589b8df8d868b5
 frame 25650 adb2b6bc8383f58e
-frame 25800 88c91d91b05e39e2
-frame 25950 834782448c696214
+frame 25800 f555bd439640b079
+frame 25950 c31c29ce0446bf91
 frame 26100 f9373ee68ae85699
 frame 26250 94f26b3086b6da61
 frame 26400 54ac90cf2c8c93cc
@@ -328,6 +328,7 @@ frames 27000 planets E=8 R=0 N=0 credits E=480 R=503 orders 167 rejected 0 confl
 2855 p1 order launch 57 at P7
 2855 p1 order form 57 alone
 2858 p1 order move fleet 58 -> P4
+2887 p0 tf SpaceForce no units remaining (0 uncounted)
 2890 p0 plan 15 CONQUER ended failure
 2891 p1 tf SpaceForce move to P3
 2891 p1 order move fleet 52 -> P3
@@ -337,6 +338,7 @@ frames 27000 planets E=8 R=0 N=0 credits E=480 R=503 orders 167 rejected 0 confl
 2899 p0 order merge 13 at P3
 2966 p1 order move fleet 51 -> P4
 2989 p0 plan 14 BUILDSPACE ended success
+3026 p1 tf SpaceForce no units remaining (0 uncounted)
 3029 p1 plan 13 CONQUER ended failure
 3031 p0 tf SpaceForce move to P4
 3031 p0 order move fleet 59 -> P4
@@ -348,6 +350,7 @@ frames 27000 planets E=8 R=0 N=0 credits E=480 R=503 orders 167 rejected 0 confl
 3211 p0 tf GroundForce move to P4
 3211 p0 order move fleet 55 -> P3
 3382 p0 order move fleet 55 -> P4
+3421 p0 tf SpaceForce no units remaining (0 uncounted)
 3422 p1 tf SpaceForce move to P3
 3422 p1 order move fleet 61 -> P3
 3424 p0 plan 16 CONQUER ended failure
@@ -362,6 +365,7 @@ frames 27000 planets E=8 R=0 N=0 credits E=480 R=503 orders 167 rejected 0 confl
 3677 p1 tf GroundForce move to P3
 3677 p1 order move fleet 58 -> P3
 3724 p0 order merge 19 at P3
+3815 p1 tf SpaceForce no units remaining (0 uncounted)
 3817 p0 tf SpaceForce move to P4
 3817 p0 order move fleet 63 -> P4
 3818 p1 plan 17 CONQUER ended failure
@@ -416,6 +420,7 @@ frames 27000 planets E=8 R=0 N=0 credits E=480 R=503 orders 167 rejected 0 confl
 7552 p0 order merge 72 at P6
 7555 p0 tf SpaceForce move to P7
 7555 p0 order move fleet 63 -> P7
+7684 p0 tf SpaceForce no units remaining (0 uncounted)
 7687 p0 plan 23 CONQUER ended failure
 8111 p0 plan 24 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 7.2
 8113 p0 build task 24 Corvette for ReserveForce
