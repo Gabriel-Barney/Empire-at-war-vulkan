@@ -48,20 +48,21 @@ uint32_t radial_wipe(const HudQuad& q, float fill, HudVertex (&out)[11]) {
         out[3] = corner(q, 0, 1);
         return 4;
     }
+    // cu9h t03: the fan covers the last `fill` % of the clock, i.e. from (100 - fill) % clockwise to 12 o'clock.
     constexpr float kTwoPi = 6.28318530717958647692f;
-    const float sweep = fill / 100.0f * kTwoPi;
+    const float gone = 100.0f - fill;  // the part already wiped away, from 12 o'clock clockwise
     uint32_t n = 0;
     out[n++] = corner(q, 0.5f, 0.5f);
-    out[n++] = corner(q, 0.5f, 0.0f);
+    float tx = 0, ty = 0;
+    border_point(gone / 100.0f * kTwoPi, tx, ty);
+    out[n++] = corner(q, tx, ty);
     // Boundaries at 45-degree steps: exact corner / edge-midpoint positions (no trig rounding).
     static constexpr float kB[7][2] = {{1, 0}, {1, 0.5f}, {1, 1}, {0.5f, 1}, {0, 1}, {0, 0.5f}, {0, 0}};
     for (uint32_t b = 1; b <= 7; ++b) {
         // b * 12.5 % expressed in fill units avoids comparing angles in floating point.
-        if (static_cast<float>(b) * 12.5f < fill) out[n++] = corner(q, kB[b - 1][0], kB[b - 1][1]);
+        if (static_cast<float>(b) * 12.5f > gone) out[n++] = corner(q, kB[b - 1][0], kB[b - 1][1]);
     }
-    float tx = 0, ty = 0;
-    border_point(sweep, tx, ty);
-    out[n++] = corner(q, tx, ty);
+    out[n++] = corner(q, 0.5f, 0.0f);
     return n;
 }
 

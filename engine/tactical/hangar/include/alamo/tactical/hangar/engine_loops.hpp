@@ -198,6 +198,16 @@ public:
         o->catch_frame = catch_frame;
         o->end_frame = std::max(o->throw_frame, end_frame);
     }
+    // cu8k t01: the real thrown saber's end is known only when the thrower sees it gone or catches it: the host schedules
+    // with end_frame = kSaberOpenEnd and resolves it then (catch_frame 0 = no catch; the snap drawn runs on that frame's
+    // saber_service(after), the end on the end frame).
+    static constexpr uint32_t kSaberOpenEnd = 0xFFFFFFFFu;
+    void saber_resolve(combat::ObjectId id, uint32_t catch_frame, uint32_t end_frame) {
+        Obj* o = find_mut(id);
+        if (!o || o->end_frame == 0) return;
+        o->catch_frame = catch_frame;
+        o->end_frame = std::max(1u, end_frame);
+    }
     // The host's per-frame saber steps around holster_service(id, ..., saber_in_flight(id), frame): before = true runs a
     // due throw; before = false runs the catch snap on the catch frame and the end on the end frame.
     void saber_service(combat::ObjectId id, uint32_t frame, bool before) {

@@ -215,12 +215,16 @@ Vec2f HudButtons::draw(HudDrawList& dl, const TextureAtlas& atlas, FontCache* fo
         if (const std::string* fl = pick(c.flash_texture, alt))
             if ((static_cast<int64_t>(std::floor(now / 0.25)) % 2) == 0)
                 add_atlas_quad(dl, layer, HudList::Alpha, atlas, *fl, center, {}, c.scale, base);
-    // Build / recharge dials (radial wipe lists).
+    // Build / recharge dials (radial wipe lists). cu9h t03 (CU9H_T02_BOMBING_HUD_RUN item 1b): a dial at value v leaves the
+    // first v % clockwise from 12 o'clock uncovered and draws the texture over the rest, so the wipe gets 100 - v (v = 100:
+    // nothing drawn).
     if (const std::string* bt = pick(c.build_texture, 0)) {
         if (r.build_fill >= 0.0f)
-            add_atlas_quad(dl, layer, HudList::Alpha, atlas, *bt, offset_down(center, c.build_dial_offset), {}, c.scale, base, {}, std::clamp(r.build_fill, 0.0f, 100.0f));
+            add_atlas_quad(dl, layer, HudList::Alpha, atlas, *bt, offset_down(center, c.build_dial_offset), {}, c.scale, base, {},
+                           100.0f - std::clamp(r.build_fill, 0.0f, 100.0f));
         if (r.build_fill2 >= 0.0f)
-            add_atlas_quad(dl, layer, HudList::Additive, atlas, *bt, offset_down(center, c.build_dial2_offset), {}, c.scale, base, {}, std::clamp(r.build_fill2, 0.0f, 100.0f));
+            add_atlas_quad(dl, layer, HudList::Additive, atlas, *bt, offset_down(center, c.build_dial2_offset), {}, c.scale, base, {},
+                           100.0f - std::clamp(r.build_fill2, 0.0f, 100.0f));
     }
     if (r.overlay)
         if (const std::string* ov = pick(c.overlay_texture, 0))

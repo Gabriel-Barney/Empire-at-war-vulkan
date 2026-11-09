@@ -998,6 +998,21 @@ struct ProjectileLaunch {
     bool toss = false;
 };
 
+// cu8k t01 (CU8F_T01_T02_T07_RE.md §2.7 items 1-3): Saber_Throw's thrown saber, a category-8 LIGHT_SABER projectile.
+// Spawned at `from` (the throw), owned by the thrower; FireAtPosition = `fire_at` (the target point recorded at the
+// activation: a target that moves later does not bend the path); MaxTravelDistance = Projectile_Max_Flight_Distance +
+// the target's radius + |fire_at.z - from.z|. First step on the next frame: the two-leg spline plan (P0 -> T, T -> the
+// thrower's target point at that step), then one Max_Speed step along it per frame with no sweep and the
+// Projectile_Stun_Radius area damage to hostile units every step.
+struct SaberLaunch {
+    ObjectId thrower = kNoObject;  // shooter and the return leg's end
+    int32_t owner = -1;
+    uint32_t projectile = 0;       // ProjectileDesc index (the Saber_Name type)
+    Vec3 from;
+    Vec3 fire_at;
+    ObjectId target = kNoObject;   // its radius joins the max travel (0 when gone)
+};
+
 struct CombatStats {  // diagnostics (not hashed)
     uint64_t scans = 0, shots = 0, hits = 0, expired = 0, deaths = 0, resweeps = 0;
 };
@@ -1125,6 +1140,10 @@ public:
     // target's position + its Ranged_Target_Z_Adjust, or `point`) on the solver's arc and speed, the yaw from the led aim;
     // no solution -> nothing is spawned, false.
     bool launch_projectile(const ProjectileLaunch& l, uint32_t frame);
+    // cu8k t01: spawn a thrown saber (SaberLaunch); returns its serial, 0 when the projectile index is invalid.
+    uint32_t launch_saber(const SaberLaunch& l, uint32_t frame);
+    // cu8k t01: the saber's position while it flies (alive); false once it expired / detonated or for an unknown serial.
+    bool saber_position(uint32_t serial, Vec3& out) const;
     // S8 t04 (LOB_SOLVER §2, §3): the lob solver for ProjectileDesc `projectile` (category 3 only; G = gravity x lob
     // mod, Can_Lob_Slower) from `from` to `to`; false = no arc (or not a grenade). `out` may be null.
     bool lob_solution(uint32_t projectile, Vec3 from, Vec3 to, LobSolution* out = nullptr) const;
@@ -1573,7 +1592,7 @@ private:
         // OI abilities: BOMB timer (seconds; < 0 none), hashed when set. Without `lob` the shot sits where it was placed
         // (armed bomb); a tossed grenade (ProjectileLaunch::toss) flies with it running.
         float fuse = -1.0f;
-        uint8_t rocket = 0;  // refixf t01: spline rocket (state in rockets_, same serial); hashed in hash_extended
+        uint8_t rocket = 0;  // refixf t01: spline rocket (state in rockets_, same serial); hashed in hash_extended. cu8k t01: 2 = thrown saber
     };
     // refixf t01: spline-rocket flight state, one per Projectile with rocket != 0, serial order (S9 §2.4.1 pack fields).
     struct Rocket {
@@ -1585,6 +1604,7 @@ private:
         Vec3 launch;          // +0x80
         Vec3 last_vel;        // +0x98
         RocketSpline path;
+        ObjectId thrower = kNoObject;  // cu8k t01: a thrown saber's thrower (the return leg's end)
     };
     struct RocketNext {  // phase E output per projectile: the next spline point N (sample at s + speed)
         Vec3 n;
@@ -1794,6 +1814,7 @@ private:
     bool shield_away(const Projectile& p, Vec3& away) const;
     // refixf t01: one flight step of a spline rocket (0x4cfc40, §2.4.2), serial commit phase.
     void rocket_step(uint32_t i, uint32_t frame, SimRng& rng);
+    void saber_step(uint32_t i, uint32_t frame, SimRng& rng);  // cu8k t01: rocket == 2
     bool spline_rocket(const ProjectileDesc& pd) const;
     void add_rocket(const Projectile& p, Vec3 fire_at, Vec3 launch);
     Rocket* find_rocket(uint32_t serial);

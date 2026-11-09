@@ -135,7 +135,7 @@ const char* kFactions = R"(<Factions>
  <Faction Name="Empire"><Is_Playable>Yes</Is_Playable><Basic_AI>BasicEmpire</Basic_AI><Can_Control_Planets>Yes</Can_Control_Planets>
   <Space_Tactical_Unit_Cap>20</Space_Tactical_Unit_Cap><Space_Retreat_Unit_Increment_Wait_Frames>3</Space_Retreat_Unit_Increment_Wait_Frames></Faction>
  <Faction Name="Underworld"><Is_Playable>Yes</Is_Playable><Basic_AI>AI_Player_Underworld</Basic_AI><Can_Control_Planets>Yes</Can_Control_Planets>
-  <Space_Tactical_Unit_Cap>20</Space_Tactical_Unit_Cap>
+  <Space_Tactical_Unit_Cap>20</Space_Tactical_Unit_Cap><Skirmish_Land_Bomber> L1_Bomber </Skirmish_Land_Bomber>
   <Bombardment_Required_Orbital_Ships> S10_Frigate </Bombardment_Required_Orbital_Ships><Bombardment_Projectile> L1_Bombard_Proj </Bombardment_Projectile>
   <Bombardment_Number_Of_Salvos> 2 </Bombardment_Number_Of_Salvos><Bombardment_Shots_Per_Salvo> 3 </Bombardment_Shots_Per_Salvo>
   <Bombardment_Shot_Delay> 0.2 </Bombardment_Shot_Delay><Bombardment_Salvo_Delay> 1 </Bombardment_Salvo_Delay><Bombardment_Initial_Delay> 1.0 </Bombardment_Initial_Delay></Faction>
@@ -1364,6 +1364,12 @@ struct PadRun {
     // q6 t19 (SKIRMISH_SETUP §3.1): a finished land build is a pool entry (key >= kBuiltReserveKeyBase, no galactic
     // counterpart); in a skirmish a type without a Company_Transport_Unit (S10_Squad) cannot be dropped and stays pooled.
     bool pool_added = false, pool_drop_refused = false;
+    // cu9h t01 (HUD_GAPS §9.8): the skirmish bombing-run records at the first battle frame, per player: bomber type (-1 = no
+    // record), frames until available, dial; any player available.
+    std::vector<int32_t> run_type;
+    std::vector<uint32_t> run_wait;
+    std::vector<float> run_dial;
+    bool run_available = false;
     float sight_clear = -1.0f, sight_rain = -1.0f;
     bool fog_on = false;
     CrcLog crc;
@@ -1425,6 +1431,13 @@ PadRun run_pads(const Data& d, int32_t workers, bool skirmish = false) {
         objects::ObjectStore& st = tm->primary();
         const uint32_t f = b->frame();
         if (f == 1) {
+            for (int32_t p = 0; p < 4; ++p) {
+                const objects::TypeIndex bt = b->bombing_run_bomber_type(p);
+                out.run_type.push_back(bt == objects::kNone ? -1 : static_cast<int32_t>(bt));
+                out.run_wait.push_back(b->bombing_run_frames_until_available(p));
+                out.run_dial.push_back(b->bombing_run_cooldown_fraction(p));
+                out.run_available = out.run_available || b->bombing_run_available(p);
+            }
             objects::SpawnParams sp;
             sp.type = static_cast<objects::TypeIndex>(type_of(d, "L1_Build_Pad"));
             sp.owner = 1;
@@ -1512,6 +1525,24 @@ void test_pads(const Data& d) {
     std::printf("  pads q6 t19: built pool entry %d/%d, skirmish drop without a transport refused %d\n", a.pool_added, k.pool_added,
                 k.pool_drop_refused);
     CHECK(a.pool_added && k.pool_added && k.pool_drop_refused);
+    // cu9h t01: a land skirmish gives every player of a playable faction with a Skirmish_Land_Bomber an enabled record (here
+    // the Underworld players: L1_Bomber); the Empire (no skirmish bomber) and Neutral (not playable) get none. Interval =
+    // int(30 x Max_Bombing_Run_Interval_Seconds 120) = 3600, ready = setup frame + 3600, last start -1: dial 0 (shown full).
+    // The empty gate list refuses runs in a skirmish, so nobody is available. The campaign battle keeps the attacker-only
+    // rule (no bomber in orbit here: no record).
+    const int32_t bomber = static_cast<int32_t>(type_of(d, "L1_Bomber"));
+    int32_t with = 0;
+    for (size_t p = 0; p < k.run_type.size(); ++p) {
+        std::printf("  skirmish bombing run p%zu: type %d wait %u dial %.2f\n", p, k.run_type[p], k.run_wait[p], static_cast<double>(k.run_dial[p]));
+        if (k.run_type[p] < 0) continue;
+        ++with;
+        CHECK(k.run_type[p] == bomber);
+        CHECK(k.run_wait[p] >= 3598u && k.run_wait[p] <= 3600u);
+        CHECK(k.run_dial[p] == 0.0f);
+    }
+    CHECK(k.run_type.size() == 4u && with >= 1 && with < 4);
+    CHECK(!k.run_available);
+    for (const int32_t t : a.run_type) CHECK(t < 0);
 }
 // --- end Int-final ---
 

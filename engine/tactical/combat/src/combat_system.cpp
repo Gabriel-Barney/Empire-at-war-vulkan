@@ -2642,6 +2642,8 @@ void CombatSystem::sweep(uint32_t pi, QueryContext& ctx) {
     if (p.alive && p.spawn_frame < frame_ && !placed && !p.stuck) {
         if (p.lob) {
             best = sweep_segment(p, lob_next(p, frame_) - p.pos, ctx);  // S8 t04: P -> N(t) (LOB_SOLVER §6.2 step 3)
+        } else if (p.rocket == 2) {
+            rocket_next_[pi].ok = 0;  // cu8k t01: a thrown saber never sweeps (category 8: no direct hit)
         } else if (p.rocket) {
             // refixf t01: a planned spline rocket sweeps P -> N, N = the path sampled at s + speed (§2.4.2 steps 2 / 5;
             // read-only here, the commit phase advances s). An unplanned one (first flight step) is planned and swept in
@@ -3787,6 +3789,125 @@ void CombatSystem::rocket_step(uint32_t i, uint32_t frame, SimRng& rng) {
     if (expire) expire_projectile(i, frame);
 }
 
+// ---- cu8k t01: the thrown saber (CU8F_T01_T02_T07_RE.md §2.7 item 3) ----
+
+uint32_t CombatSystem::launch_saber(const SaberLaunch& l, uint32_t frame) {
+    if (l.projectile >= data_->projectiles.size()) return 0;
+    const ProjectileDesc& pd = data_->projectiles[l.projectile];
+    Projectile p;
+    p.serial = next_serial_++;
+    p.desc = l.projectile;
+    p.shooter = l.thrower;
+    p.owner = l.owner;
+    p.target = l.target;
+    p.pos = l.from;
+    const Vec3 d = l.fire_at - l.from;
+    const float dist = dmath::sqrt(dot(d, d));
+    p.dir = dist > 0.0f ? d * (1.0f / dist) : Vec3{1.0f, 0.0f, 0.0f};
+    p.speed = pd.max_speed;  // 0x370f00(type, 0): Max_Speed, no mode multiplier for category 8
+    p.spawn_frame = frame;
+    p.damage = pd.damage;
+    p.damage_type = pd.damage_type;
+    p.kind = pd.damage_kind;
+    // Pack +0x6c: the max-travel override (Projectile_Max_Flight_Distance) + the target's radius (0x397780) + |dz|.
+    const Unit* t = unit(l.target);
+    const float radius = t ? desc_of(*t).radius : 0.0f;
+    p.max_travel = pd.max_flight_distance + radius + abs_f(l.fire_at.z - l.from.z);
+    p.rocket = 2;
+    Rocket rk;
+    rk.serial = p.serial;
+    rk.fire_at = l.fire_at;
+    rk.launch = l.from;
+    rk.budget = pd.max_flight_distance;  // pack +0x54 := 250 (read only with Explode_When_Reached_Target_Radius)
+    rk.thrower = l.thrower;
+    rockets_.push_back(std::move(rk));  // serials only grow: rockets_ stays in serial order
+    projectiles_.push_back(p);
+    ++stats_.shots;
+    return p.serial;
+}
+
+bool CombatSystem::saber_position(uint32_t serial, Vec3& out) const {
+    const auto it = std::lower_bound(projectiles_.begin(), projectiles_.end(), serial,
+                                     [](const Projectile& p, uint32_t v) { return p.serial < v; });
+    if (it == projectiles_.end() || it->serial != serial || !it->alive || it->rocket != 2) return false;
+    out = it->pos;
+    return true;
+}
+
+void CombatSystem::saber_step(uint32_t i, uint32_t frame, SimRng& rng) {
+    // LIGHT_SABER step 0x4cf460 (§2.7 item 3) [H unless tagged]. Serial commit phase, projectile serial order: the plan's
+    // jitter draws come at this projectile's place in the stream on its first step.
+    Rocket* rk = find_rocket(projectiles_[i].serial);
+    if (!rk) {  // [port] cannot happen (spawn / read keep rockets_ in step with the projectiles)
+        projectiles_[i].alive = 0;
+        return;
+    }
+    const ProjectileDesc& pd = data_->projectiles[projectiles_[i].desc];
+    RocketParams rp;
+    rp.curve_distance = pd.rocket_curve_distance;
+    rp.curve_offset = pd.rocket_curve_offset;
+    rp.max_flight_distance = pd.max_flight_distance;
+    RocketContext ctx;
+    ctx.params = &rp;
+    ctx.terrain = &rocket_terrain_;
+    ctx.rng = &rng;
+    ctx.launch = rk->launch;
+    const Vec3 P = projectiles_[i].pos;
+    if (rk->planned == 0) {
+        // Path plan 0x4c8910 (first step): P0 = the spawn position; leg 1 P0 -> T (amp 1.0, length scale 1.1, land mode,
+        // no ground end, plain end), leg 2 T -> L (amp 0.3, 1.1, land mode, ground end, plain end) with L = the thrower's
+        // position + Ranged_Target_Z_Adjust at this step [port: the spawn point when the thrower is gone]; Build(10).
+        const Unit* th = unit(rk->thrower);
+        const Vec3 L = live(th) ? lob_target_point(*th) : rk->launch;
+        rk->path.clear();
+        rk->path.append(P);
+        rocket_leg(rk->path, P, rk->fire_at, 1.0f, 1.1f, 1, false, true, ctx);
+        rocket_leg(rk->path, rk->fire_at, L, 0.3f, 1.1f, 1, true, true, ctx);
+        rk->path.build(10);
+        rk->planned = 1;
+        rk->s = 0.0f;
+    }
+    rk->s = rk->s + projectiles_[i].speed;
+    Vec3 N;
+    if (!rk->path.sample(rk->s, N)) {  // past the path's end: expire where it is
+        expire_projectile(i, frame);
+        return;
+    }
+    Projectile& p = projectiles_[i];
+    p.dir = turn_toward(p.dir, N - P, projectile_turn_rate(pd));
+    rk->last_vel = (N - P) * (1.0f / static_cast<float>(cfg_.fps));
+    p.pos = N;
+    p.travelled = p.travelled + p.speed;
+    const bool detonate = p.max_travel > 0.0f && p.travelled >= p.max_travel;
+    // Area damage every step: every live unit of a player hostile to the saber's owner within Projectile_Stun_Radius (3D)
+    // takes Projectile_Damage of the saber's damage type, the saber's thrower as the source; no once-per-victim memory.
+    // [port] ascending unit id (the original's 0x2a9ff0 query order is not read); [M] also on the detonation step.
+    const float R = pd.stun_radius;
+    if (R > 0.0f && p.damage > 0.0f) {
+        const Projectile pc = p;  // damage may kill: no reference into projectiles_ / units_ is held across it
+        const float R2 = R * R;
+        std::vector<ObjectId> victims;
+        for (const Unit& v : units_) {
+            if (!live(&v) || !is_enemy(pc.owner, v.owner)) continue;
+            const Vec3 dv = v.pos - pc.pos;
+            if (dot(dv, dv) <= R2) victims.push_back(v.id);
+        }
+        for (const ObjectId vid : victims) {
+            if (!live(unit(vid))) continue;
+            DamageRequest r;
+            r.victim = vid;
+            r.amount = pc.damage;
+            r.damage_type = pc.damage_type;
+            r.kind = pc.kind;
+            r.source = pc.shooter;
+            r.source_is_projectile = true;
+            r.projectile_desc = static_cast<int32_t>(pc.desc);
+            apply_or_queue(r, 0.0f, frame);
+        }
+    }
+    if (detonate) expire_projectile(i, frame);
+}
+
 // ---- S8 t04: grenade flight (docs/re/LOB_SOLVER.md §6, ProjectileBehavior category 3 0x4ceea0) ----
 
 Vec3 CombatSystem::lob_next(const Projectile& p, uint32_t frame) const {
@@ -4148,6 +4269,10 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         if (!(units_[i].flags & kUnitDead) && units_[i].emitter_radius > 0.0f && units_[i].emitter_entries > 0) emitters_.push_back(i);
     for (uint32_t i = 0; i < np; ++i) {
         if (!projectiles_[i].alive || projectiles_[i].spawn_frame >= frame) continue;
+        if (projectiles_[i].rocket == 2) {  // cu8k t01: thrown saber (category 8 step 0x4cf460)
+            saber_step(i, frame, rng);
+            continue;
+        }
         if (projectiles_[i].rocket) {  // refixf t01: spline rocket (0x4cfc40)
             rocket_step(i, frame, rng);
             continue;
@@ -5192,6 +5317,7 @@ void CombatSystem::hash_extended(StateHasher& h) const {
                 h.f32(sg.length);
             }
             h.f32(rk->path.total());
+            if (p.rocket == 2) h.i32(rk->thrower);  // cu8k t01
         }
     }
     // OI abilities: base-power entries, hardpoint repair lists (insertion order).

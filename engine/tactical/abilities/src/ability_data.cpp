@@ -152,6 +152,7 @@ void parse_class_fields(const data::XmlNode& e, SpecialAbilityDesc& s, const Abi
         const std::string_view saber = data::trim(e.child_text("Saber_Name"));
         if (!saber.empty()) s.saber_speed = std::max(0.0f, r.type_max_speed(saber));
         if (!saber.empty() && r.type_max_flight_distance) s.saber_max_flight = std::max(0.0f, r.type_max_flight_distance(saber));
+        if (!saber.empty() && r.projectile) s.saber_projectile = r.projectile(saber);  // cu8k t01: the thrown saber's desc
     }
     s.activation_time = f_or(e, "Activation_Time_In_Seconds", 0.0f);
     s.trigger_radius = f_or(e, "Trigger_Radius", 0.0f);

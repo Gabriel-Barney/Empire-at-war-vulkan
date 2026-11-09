@@ -147,7 +147,8 @@ Debugger armed at mf 576, stopped by `--stop-after-frames 1500` at mf 2076 (2341
   records of another script). Records n 44..48 (A's Move_To) were also missed while the script was alive, so the
   scanner drops records under the debugger; the missing C walk is what places the death before trial C. If A's
   call had only failed a silent gate (0x39bbd0 / 0x39b480 return 0, no error), the script would have gone on to C.
-- Why a position kills it is not settled (run 3, identical except for the marker targets, ran through). RE of the binding (0x570580 → 0x570a50, JET_PACK = ability 0x11): the
+- Why a position kills it: **not through the binding** (cu8k t10, "Which check ends the script" below: a live
+  `PositionWrapper` passes every JET_PACK check). Run 3, identical except for the marker targets, ran through. RE of the binding (0x570580 → 0x570a50, JET_PACK = ability 0x11): the
   target check 0x4990b0 accepts `AITargetLocationWrapper`, `GameObjectWrapper`, a task force and `PositionWrapper`
   (it copies x, y, z from the wrapper); the next step, 0x397d90(object, 0x11), returns the unit-ability record and a
   null gives the script error "object does not seem to have valid ability data"; any script error (0x248190) sets
@@ -159,6 +160,76 @@ Debugger armed at mf 576, stopped by `--stop-after-frames 1500` at mf 2076 (2341
   `Create_Generic_Object` (fallback `Generic_Marker_Land`), as `STORY_UNDERWORLD_ACTI_M02_SPACE.LUA` spawns one and
   the story scripts target one; a trial whose marker is missing is skipped; each activation's `before` record carries
   `Has_Ability` / `Is_Ability_Ready` / `Is_Ability_Active`.
+
+### Which check ends the script (cu8k t10, RE of 0x570580 → 0x570a50, 2026-11-09)
+
+Order of the checks in 0x570a50 [H]. "Error" = 0x248190: it sets the script's error flag, the binding returns no
+value, and the whole script is ended at the end of the service pass (LUA_API "What an error does to the script"),
+so `pcall` does not help. "Warning" = 0x248620: no flag, the script goes on.
+1. Wrapper without an object → silent false (nil).
+2. Argument count ≠ 2 → **error** "invalid number of parameters. Expected 2". A Lua `nil` is a present argument, so
+   `Activate_Ability("X")` errors and `Activate_Ability("X", nil)` does not (it fails later, by kind).
+3. Argument 1 not a string → **error**; unknown ability name → **error**.
+4. The unit lacks the ability (0x3986b0) → **warning** "Object %s does not have ability %s", nil.
+5. Not ready (0x39bbd0) or `Can_Activate` (0x39b480(obj, t, 1)) false → **silent** nil. The argument is not looked at
+   yet, so a bad argument costs nothing while the ability recharges.
+6. Signal 0xb for the ids of AI_TACTICAL §7.3.3, then the per-ability argument check (second switch) below.
+
+**JET_PACK (0x11)** [H]: 0x4990b0(argument 2, out position, no facing). It accepts, in this order:
+`GameObjectWrapper` whose object is alive (0x5791e0 non-null; position obj +0x78..+0x80), `AITargetLocationWrapper`
+with a target (its vf+0x68 position), a task force (its vf+0x170 position) and `PositionWrapper` (x, y, z at
++0x28..+0x30). Anything else (bool, nil, number, string, a dead object's wrapper, an AI target without a target)
+returns false → **error** "invalid type for parameter 2. Ability JET_PACK expects a target position."
+- **Run 1 (`true`) dies here**: the bool is not one of the four classes, so the "expects a target position" error
+  ends the script. The ability was ready (the call reached the argument check; run 3 had `ready=1` at the same
+  timing), which is why the error fired.
+- **A `Create_Position` result passes.** `Create_Position` returns a `PositionWrapper` (0x541c00 → 0x60eba0, class id
+  0x140a44290), 0x4990b0 copies its x, y, z and returns true. The rest of case 0x11 never looks at the argument
+  again: 0x397d90(unit, 0x11) depends only on the unit (non-null for the Dark Trooper, as run 3 shows); the command
+  (43, mode on, target id 0x3FFFFF) carries only the copied point, also for a marker target (0x4990b0 gets no
+  facing pointer, so no object id is kept). A marker and a position at the same x, y give the same command; only z
+  differs (marker: its ground z; `Create_Position`: the kit's site z 16.55). No later step dereferences the target as
+  an object, and the execute (0x430270) and the return-value test (locomotor vf+0x300) do not call Lua.
+- **So run 2's death is not the binding's.** Had A's call reached the binding with a live `PositionWrapper`, the
+  command would have run and stopped A's walk at ~mf 586 as in run 3; A walked on to mf 785. So either the value
+  that reached `Activate_Ability` was not a `PositionWrapper` (a nil or a number gives the same "expects a target
+  position" error), or the script died in the kit's own code before the call [M: the run-2 kit was overwritten by
+  run 3's and is not in git; its records past Lua frame 573 were lost].
+
+**Per ability: the argument kinds that work** (second switch of 0x570a50, ids decimal; ability names OBJECT_TYPES
+§9.1.4) [H]:
+
+| ids | argument 2 must be | otherwise |
+|---|---|---|
+| 1 3 7 9 11 29 32 33 39 40 43 48 52 54 56 60 62 63 65 68 69 70 | a bool (its value = mode on / off) | error "expects a bool" |
+| 2 DEPLOY | a bool; equal to the current deployed state → silent nil | error "expects a bool" |
+| 6 HUNT, 10 LURE, 12 AVOID_DANGER | a bool, **value ignored** (mode always on); the command goes to the unit, or to its team container when the unit is a team member (obj +0x348 ≠ −1) | error "expects a bool" |
+| 14 23 24 25 35 36 38 44 46 49 57 61 72 | anything (not read) | - |
+| 5 26 28 42, 17 JET_PACK, 50 67 71 73 74 | a position source for 0x4990b0: live object, AI target with a target, task force, `PositionWrapper` | error "expects a target position" |
+| 13 15 16 18 20 21 22 27 30 31 34 37 41 45 51 53 55 58 59 64 66, 19 | a `GameObjectWrapper` or `AITargetLocationWrapper` (no position, no task force) | wrong class: error "expects a target object"; dead object / AI target without object: **warning** "target object is already dead", nil |
+| 4 HARASS, 8 AFTERBURNER, 47 FIRE_LOBBING_SUPERWEAPON, 75 DEPLOY_SQUAD, 76 | - | error "unsupported unit ability" |
+
+After the argument check, the object-target ids and 50 67 71 73 74 also error ("not hooked up to special ability
+logic") when the type's `GUI_Activated_Ability_Name` does not match, and JET_PACK errors when 0x397d90 finds no
+ability record. Correction: ABILITIES_HARDPOINTS §2.9 and AI_TACTICAL §7.3.3 listed 6 / 10 / 12 as "optional target";
+they need a bool (CU8F_T04_T06's `("LURE", true)` runs agree).
+
+**What the port needs** (`engine/lua/src/bind_objects.cpp` `activate_ability`, dev at this writing):
+1. Keep the retail order: name checks (error), not the unit's ability (warning, nil), not ready / `Can_Activate`
+   (silent nil), and only then the argument kind. Today the port checks the argument first and answers nil.
+2. A wrong argument kind for the ability (rows above) must be a **script error that ends the script**
+   (`Call::script_error_stop`), not `push_nil`: a bool or a dead object for JET_PACK and the other position ids; a
+   non-bool for the toggle ids, DEPLOY and 6 / 10 / 12; a position, task force or bool for the object ids. A dead
+   object for the object ids and 19 stays a warning with nil.
+3. Argument count ≠ 2 (including the one-argument `Activate_Ability("NAME")` and the no-argument form on a tactical
+   object) is an error that ends the script; today the port activates (no name: the type's first ability). The
+   galactic form (0x570670) is separate and unchanged.
+4. 6 / 10 / 12: the bool's value is ignored (mode on) and the command targets the team container for a team member;
+   the port's `OptionalTarget` family uses the bool as on / off and takes an object.
+5. Ids 4, 8, 47, 75, 76: error ("unsupported").
+6. JET_PACK with a `PositionWrapper` is right as it is (accepted, same as a marker at that point). A task-force
+   argument gives the task force's own position (vf+0x170) in retail; the port's `position_arg` uses its first live
+   unit [M: what vf+0x170 returns was not read].
 
 ## Luke saber run (CU8F §2.7 item 6, cu8k t05 run of 2026-11-09): **settled**
 

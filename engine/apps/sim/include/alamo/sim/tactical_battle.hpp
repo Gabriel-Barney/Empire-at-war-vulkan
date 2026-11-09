@@ -781,6 +781,9 @@ public:
         float max_bombing_run_interval = 120.0f, min_bombing_run_interval = 120.0f;
         int32_t bombing_run_reduction_per_squadron = 0;
         float max_bombard_interval = 260.0f, min_bombard_interval = 260.0f;
+        // cu9h t01: the skirmish "special weapons" option (0x140b154bc & 4, HUD_GAPS §9.2) gates skirmish bombing runs. [port] no
+        // lobby: GameConstants MP_Default_Allow_SuperWeapons (shipped yes).
+        bool skirmish_superweapons = true;
         Vec3 bombardment_offset{0.0f, 0.0f, 600.0f};
         std::vector<int32_t> bombardment_distribution{0, 3, 1, 2, 3, 2, 0, 1, 2, 1, 3, 0, 1, 2, 0, 3, 0, 2, 1, 3, 3, 2, 1, 0};
     };
@@ -844,6 +847,8 @@ public:
         std::vector<std::string> bombard_particles;    // Bombardment_Particle (one per salvo; the last repeats)
         int32_t salvos = 0, shots_per_salvo = 0;       // Bombardment_Number_Of_Salvos / _Shots_Per_Salvo
         float shot_delay = 0.0f, salvo_delay = 0.0f, initial_delay = 0.0f;  // seconds
+        bool playable = false;                         // cu9h t01: Is_Playable (+0x20a8)
+        std::string skirmish_land_bomber;              // cu9h t01: Skirmish_Land_Bomber (the skirmish bombing-run bomber type)
     };
     void set_l1_factions(std::vector<L1Faction> f) { l1_factions_ = std::move(f); }
     // Campaign: only the battle attacker [M: battle-record slot 1] gets a record, enabled when one of its orbit fleets
@@ -1891,6 +1896,23 @@ private:
     const HgHolsterType* hg_holster_type(objects::TypeIndex t);
     void hg_holster_attach(const Unit& u);
     void hg_holster_service();
+    // cu8k t01 (CU8F_T01_T02_T07_RE.md §2.7 items 1-4): Saber_Throw's thrower machine. The apply records the target point
+    // T (event point); kSaberThrowDelay frames later the throw spawns the Saber_Name projectile (CombatSystem::
+    // launch_saber); from the throw + 6 (SWORD_CONTROL) the thrower ends the ability as soon as the saber is gone, or
+    // catches it within Catch_Dist (3D) and ends 11 frames later (SWORD_CATCH). Serviced after the combat tick (the saber
+    // steps before the thrower's update, as retail's service order: epsilon 0) and before hg_holster_service, which runs
+    // the EngineLoops throw / catch snaps. Saved in the battle state (version 10).
+    struct SaberThrowState {
+        objects::ObjectId thrower = objects::kNoObjectId, target = objects::kNoObjectId;
+        Vec3 aim;                       // T: the target point at the apply
+        uint32_t throw_frame = 0;       // the throw (spawn) frame
+        uint32_t serial = 0;            // the saber projectile, 0 = not thrown yet
+        int32_t projectile = -1;        // its ProjectileDesc
+        float catch_dist = 0.0f;
+        uint32_t end_frame = 0;         // 0 = still flying / waiting; set at the catch (catch + 11)
+    };
+    std::vector<SaberThrowState> sabers_;  // apply order
+    void saber_throw_service(TacticalMode& mode);
     bool anim_engaged_clip(objects::ObjectId id) const;  // tactical_battle.cpp: current clip ATTACK (5) / SPINMOVE (0x68)
     std::vector<HgHolsterType> hg_holster_types_;
     const TacticalMode* hg_mode_ = nullptr;  // set by hg_setup (before the map load)

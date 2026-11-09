@@ -1638,7 +1638,7 @@ in space (kind 2).
 | team spawn helper `0x2a5a60` | 0x2a61d5 | per team container (§4.7.3) |
 | garrison leave `0x37a060` | 0x37a369 | |
 | ability activation `0x38a350` | 0x38a96c | |
-| GOM post-load `0x3952e0` | 0x395421 | per object, Load_Map tail (CU8G_T02_ENV_PICK_RE §7) |
+| GOM post-load finish `0x3952e0` (from the Load_Map tail `0x2b4440`, return 0x2b44a7; load thread) | 0x395421 | per object, Load_Map tail (CU8G_T02_ENV_PICK_RE §7); `_MP_LAND_ENDOR`: the neutral Land_Speeder only, not the starting forces (CU8K_T02_T06_RE §1.1) |
 | DEPLOY `0x3a1ce0` | 0x3a1f81 | |
 | movement lock counter `0x3a8e50` | 0x3a8e9a | |
 | stop and hold `0x3a9880` | (below) | |
@@ -1655,7 +1655,9 @@ coordinator (`0x426d50`) and adopt (`0x39bcb0`): **one draw**. It is the "stop h
 (e.g. `0x713a90`, Force Reveal begin: stop, then play anim 0x69) and other callers: `0x3a4070`, `0x443733`,
 `0x4446e1`, `0x58f7a6`, `0x5b07c0`, `0x5b09c8`, `0x630b52`, `0x635ee0` / `0x635f60` / `0x635fc0` / `0x636030`,
 `0x6cc640`, `0x6f3800`, `0x700860`, `0x712600`, `0x719c90`, `0x71a50d`, `0x71adfa`, `0x71c430`, `0x71ce68`,
-`0x71d370` [H for the list, M for what each caller is]. The port has none of these draws.
+`0x71d370` [H for the list]. Some entries are return addresses; each caller's class, ability and situation, and the
+other adopt sites: CU8K_T02_T06_RE §2 / §3 (the draw only happens when the stopped object passes the predicate, so
+squad members draw nothing). The port has none of these draws.
 
 #### 4.7.3 Unit creation paths
 - **`0x29f810` (create object) adopts nothing** [H]. Exception: an ability that starts active goes through
@@ -1667,25 +1669,42 @@ coordinator (`0x426d50`) and adopt (`0x39bcb0`): **one draw**. It is the "stop h
   Per chunk: create the container (type `Create_Team_Type` +0x1e58, else `Team`: CONTAINERS.XML, behaviours TEAM,
   SELECTABLE, UNIT_AI, TEAM_LOCOMOTOR) through `0x29f810`, position it, `0x2b3670`, `0x3a82a0`, in space the fleet
   placement positions, then **`0x39bcb0(container)`: one draw per qualifying container**, before the next chunk.
+  (cu8k t06: in space only. A land team container already owns a coordinator from its locomotor init `0x5abac0`, so
+  the adopt draws nothing; it composes at the next step 10 instead: `docs/re/CU8K_T02_T06_RE.md` §4 rules 1 and 4.)
   Callers (return into each): skirmish company placer `0x29e960` (0x29ecb5), campaign `0x2a00b0` (0x2a1b51),
   garrison grouping `0x2a5790` (0x2a5a02), reinforcements `0x2bf2d0` (0x2bf743, 0x2bfc2f), REPLENISH_WINGMEN
   `0x3a2970` (0x3a2c80), SpawnIndigenousUnits `0x531eb0` (0x5320d4), SpawnSquadron / hangar `0x593960` (0x5940be),
   `0x595a30` (0x595cf9).
 - **Skirmish starting forces** (`0x2a4fc0` → company placer `0x29e960`): the company's units are created first; the
   helper runs only when the first member's type has `Create_Team` (+0x67). In FoC that is infantry companies,
-  indigenous units, slaves, some heroes (R2-D2, C-3PO, the field commanders) and fighter squadrons. **One draw per
-  container chunk**, after that company's creation draws. Units of other companies (vehicles, ships) are not adopted
-  and draw nothing until their first order.
+  indigenous units, slaves, some heroes (R2-D2, C-3PO, the field commanders) and fighter squadrons. **Land: no draw
+  at creation** [H, traced 2026-11-09]: a land container's `LandTeamContainer` locomotor init (`0x5abac0`) already gave
+  it a coordinator of its own (`0x426010`, vf3, Move_To its own position, no formation), so the helper's adopt fails
+  the predicate's check 5; the container composes at the next coordinator update instead: **one land-composition draw
+  per container at gf 1, step 10**, in creation order, after that tick's object services (then the containers
+  spawned during gf 1, e.g. indigenous). **Space** [M, untraced]: squadron (`Team`) containers do not register
+  themselves, so the helper's adopt draws at once, one per container after its creation draws; `SimpleSpace` ships
+  register themselves (`0x625090`) and compose at gf 1. Other units (land vehicles, heroes outside a team) are not
+  adopted and draw nothing until their first order. Details: CU8K_T02_T06_RE §1.
 - **Campaign spawn `0x2a00b0`** (only caller `0x2a1eb0`, called twice). Per group:
   1. when `Create_Team`, or always in space: the helper (container draws); when the first member's `Ship_Class`
      (+0x650) < 7, register for fleet placement (`0x4fc7e0`, which maps a team member to its container);
   2. each member not in a team (`0x39b1a0` false) → `0x39bcb0`: one draw each (land vehicles, heroes, …);
-  3. at the end, space only: fleet placement `0x4fbb10`. By `Ship_Class` (the first member's, for a container) the
-     `Set_Capital / Lead / Screen / Transport_Ship_Formation` functions place each registered object, then
-     `0x426d50` (it leaves its degenerate coordinator, which is deleted empty at the next update) and `0x39bcb0`:
-     **a second draw per placed object**. The hyperspace-in (vf +0x290(0)) comes after.
-  - So a space battle's start takes about two ctor draws per company with `Ship_Class` 0..6 and one per other
-    company [M: the Kashyyyk trace has 101 draws under `0x2a1eb0` that were not split by creator]. Jabiim (land):
+  3. at the end, space only: fleet placement `0x4fbb10` (CU8K_T03_T08_T09_RE §1), per entry marker. By `Ship_Class`
+     (the first member's, for a container): `capital` (5) → `Set_Capital_Ship_Formation` `0x4fca30` (the grid
+     core); `corvette` / `frigate` (3, 4) → `Set_Screen_Formation` `0x4fdfb0`; `fighter` / `bomber` (0, 1) →
+     `Set_Lead_Formation` `0x4fd5b0`; `transport` (2) → `Set_Transport_Ship_Formation` `0x4fea10`; `super` (6) → the
+     grid with zero spacing (at the marker); without capitals the first non-empty class becomes the grid core. Each
+     placed object: `0x426d50` (it leaves its degenerate coordinator, deleted empty at the next update) and
+     `0x39bcb0`: **a second draw per placed object**, in placement order (supers, core, screen, leads, transports).
+     No other synced draw in the placement.
+  4. after all markers, only for the attacker with the arrival cinematic on: the hyperspace-in, LOCOMOTOR vf +0x290(0)
+     per registered object in registration order. For a **team container** (`TeamLocomotor` `0x62f800`) it leaves
+     the coordinator and takes the movement lock (`0x3a8e50`, count 0 → 1), which adopts: **a third draw per team
+     container** (return 0x3a8e9a ← 0x62f856 ← 0x4fc34b); ships (SimpleSpace `0x6251d0`) draw nothing here.
+  - So a space battle's start (attacker) takes one helper draw per container, one placement draw per placed object
+    and one lock draw per container: Kashyyyk 8 = 3 per X-wing squadron + 1 per ship (traced). Each arrival's end
+    (about 150 frames later) gives one more space composition per ship and per container. Jabiim (land):
     `0x2a1eb0` drew nothing (the attackers were in the reinforcement pool).
 - **Reinforcements** (`0x2bf2d0`, hyperspace / landing): the helper, one draw per qualifying container; the landing
   and the fighter hyperspace finish adopt again (`0x630fe0`, `0x5c9d40`) [M: order relative to the helper].
@@ -1699,6 +1718,10 @@ coordinator (`0x426d50`) and adopt (`0x39bcb0`): **one draw**. It is the "stop h
   the swap during the object service, so the draw comes at step 10 of the same tick.
 - The swap back to the primary makes no coordinator and no draw. The coordinator the unit left is not recomposed
   (vf4 does not set +0xa8).
+- **Confirmed by the 2026-11-09 run** (CU8K_T04_COORDINATOR_TRACES, item 4 run 3): each JET_PACK activation gives
+  exactly one land-composition ctor draw (0x43e712) at the coordinator update of the first frame in which the unit no
+  longer runs its Walk locomotor, after that frame's object-service draws, for a moving and a standing unit alike;
+  the flight, the landing and the swap back draw nothing.
 
 #### 4.7.5 What the port needs (t02)
 1. One `int(1, FPS)` per adopt (the §4.7.1 predicate), **at once**, at: each team container right after its chunk
@@ -1706,7 +1729,8 @@ coordinator (`0x426d50`) and adopt (`0x39bcb0`): **one draw**. It is the "stop h
    hangar squadron spawns); the campaign spawn (per non-team member, per container, and again per placed object in
    space); the Load_Map tail pass (land done in cu8i; space too); stop-and-hold `0x3a9880` in the ability activations
    that call it; DEPLOY, garrison leave, container eject, landing, fighter hyperspace finish, space retreat, lock
-   counter.
+   counter. (cu8k t06: the land part of the team-container adopt is superseded: land team containers draw at the
+   next step 10 after their creation, not at the adopt; `docs/re/CU8K_T02_T06_RE.md` §4 rules 1, 2 and 4.)
 2. The jetpack swap to the secondary: one draw at the next movement update (step 10), not at the swap.
 3. Team spawn order: retail creates each chunk's container and adopts it before the next chunk. The port's helper
    (`tactical_battle.cpp`) creates the containers after all members, in chunk order: the draws must interleave as
@@ -1717,7 +1741,11 @@ coordinator (`0x426d50`) and adopt (`0x39bcb0`): **one draw**. It is the "stop h
 #### 4.7.6 Trace plan for Gabriel (settles the [M] counts; optional)
 Run 2026-11-09 (`CU8K_T04_COORDINATOR_TRACES.md`): item 2 differs (one degenerate draw through an adopt returning at
 0x395421, then 18 land-composition draws at the first coordinator update, gf 1; no 0x2a61d5 / 0x2a4fc0 in any stack);
-item 3 with two fighter squadrons gives 1 space-composition draw as expected; items 1, 4 and item 3 with ships not run.
+item 3 with two fighter squadrons gives 1 space-composition draw as expected. All four items are now run, results in
+`CU8K_T04_COORDINATOR_TRACES.md`: item 1 settled with one addition (a lock-counter draw per team container at the
+end of the fleet placement, below); item 3 with a capital ship, a frigate and two X-wing squadrons gave 4 draws (the
+squadrons stayed two role-0 groups: CU8K_T03_T08_T09_RE §3, the recruit box test [M]); item 4 settled as expected
+(§4.7.4).
 
 Kit: `tools/probe_mod/cu8h_probes/` (`run_cu8h_trace.cmd`, `cu8h_dbg.py`; README there). No game change is needed.
 Each ctor draw is one or more HIT lines (one per LCG step of the `int` draw) whose `stack=` (RVAs in hex without
@@ -1727,13 +1755,24 @@ degenerate (then the vf8 return `39bda0` and the adopt caller's return from §4.
 1. **Kashyyyk space load** (the cu8h galactic space battle): `run_cu8h_trace.cmd --label kashyyyk
    --stop-mode-frame 120`; press Enter just before the battle starts. Expected under `0x2a1eb0`: one degenerate draw
    per container (adopt return 0x2a61d5) and one per placed object (0x4fd0a3 / 0x4fdb3d / 0x4fe59d / 0x4fefc5).
+   **Run 2026-11-09: as expected, plus one draw per team container through the movement lock counter (0x3a8e9a ←
+   `TeamLocomotor` vf82 0x62f856 ← 0x4fc34b) after all placement draws** (§4.7.3 campaign spawn step 4). Capital →
+   0x4fd0a3 (`Set_Capital_Ship_Formation`), frigate → 0x4fe59d (`Set_Screen_Formation`), the two squadrons →
+   0x4fdb3d (`Set_Lead_Formation`).
 2. **Skirmish land load** (`_MP_LAND_ENDOR`, as cu8h t01): one draw per `Create_Team` chunk under `0x2a4fc0`
-   (adopt return 0x2a61d5), after that company's creation draws.
+   (adopt return 0x2a61d5), after that company's creation draws. **Run 2026-11-09: differs, explained**
+   (CU8K_T02_T06_RE §1): the one degenerate draw (0x395421) is the Load_Map-tail pass (the neutral Land_Speeder);
+   land containers register themselves at creation, so the helper's adopt draws nothing and each container composes
+   at gf 1 step 10 (0x43e712). The trace has **12** compositions at gf 1 (10 starting containers, then 2 indigenous
+   ones spawned in gf 1) and 2 more after each later indigenous spawn (gf 22, 25, 29): CU8K_T04's "18" is the total
+   to mode frame 120.
 3. **Space group move** (skirmish space battle, `--arm-file`, arm just before the order): select one capital ship,
    one frigate and two fighter squadrons and give one move. Expected at step 10 of that frame (stack through
    `0x426eb0` and 0x5d5c19): 2 draws for the ships plus 1 per role-0 group (1 when the squadrons merge).
 4. **Jetpack** (land skirmish, a Rocketeer company): activate JET_PACK while moving. Expected: one draw through
-   0x43e712 in the same frame, after that frame's object-service draws.
+   0x43e712 in the same frame, after that frame's object-service draws. **Run 2026-11-09 (Dark_Trooper_PhaseII,
+   marker targets): confirmed**: one land-composition draw at the coordinator update of the first frame without the
+   Walk locomotor, moving or standing; none from the flight or the swap back (§4.7.4).
 
 To list them: `python -c "import sys;[print(l.split(' mf=')[1].split()[0],k[3:7]) for l in open(sys.argv[1]) for k in [l.split('stack=')[-1].split()[0].split(',')] if k[1:3]==['40d11f','4f6fd4']]" <trace log>`
 prints the mode frame and the four RVAs after the factory for each hit (an `int` draw whose rejection loop stepped

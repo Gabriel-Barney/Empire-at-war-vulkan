@@ -89,12 +89,14 @@ inline uint32_t pack_rgba(Rgba8 c) {
            (static_cast<uint32_t>(c.a) << 24);
 }
 
-// Radial "clock wipe" (§2.5 list 2/3): fill 100 (or more) -> the plain quad (4 vertices); otherwise a fan from
-// the centre over the swept part, starting at 12 o'clock and running clockwise [port: start / direction], with
-// one perimeter vertex per 45-degree boundary passed (the corners and edge midpoints of the quad) plus the start
-// and end points: 3 + (45-degree boundaries strictly inside the sweep) vertices for 0 < fill < 100, i.e. 3 at
-// 0..12.5 % up to 10 near 100 % - the vertex count shrinks by one per 12.5 %; fill <= 0 returns 0 (nothing
-// drawn). Writes up to 10 vertices (centre first) and returns the count; triangles are (0, i, i + 1).
+// Radial "clock wipe" (§2.5 list 2/3): fill 100 (or more) -> the plain quad (4 vertices); otherwise a fan over the
+// last `fill` % of the clock: from (100 - fill) % clockwise from 12 o'clock round to 12 o'clock (cu9h t03: the retail
+// bombing-run dial at value v shows the first v % clockwise from 12 o'clock uncovered and the rest under the texture, and
+// UI.md §2.5 says the fan loses one vertex per 12.5 % of the dial value; the dial callers pass 100 - value). One
+// perimeter vertex per 45-degree boundary passed (the corners and edge midpoints of the quad) plus the start and end
+// points: 3 + (45-degree boundaries strictly inside the sweep) vertices for 0 < fill < 100, i.e. 3 at 0..12.5 % up to
+// 10 near 100 %; fill <= 0 returns 0 (nothing drawn). Writes up to 10 vertices (centre first) and returns the count;
+// triangles are (0, i, i + 1), clockwise.
 uint32_t radial_wipe(const HudQuad& q, float fill, HudVertex (&out)[11]);
 
 class HudDrawList {

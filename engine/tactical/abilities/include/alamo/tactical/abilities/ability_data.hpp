@@ -141,6 +141,7 @@ struct SpecialAbilityDesc {
     float catch_dist = 0.0f;
     float saber_speed = 0.0f;
     float saber_max_flight = 0.0f;  // cu8j t03: the Saber_Name type's Projectile_Max_Flight_Distance (0 = unknown)
+    int32_t saber_projectile = -1;  // cu8k t01: the Saber_Name type's ProjectileDesc (the thrown saber), -1 unknown
     // Proximity_Mines (§2.3.3) / Buzz_Droids / Summon / Spawn / Radioactive (Object_Type, Mine_Type, ...)
     float activation_time = 0.0f;         // Activation_Time_In_Seconds
     float trigger_radius = 0.0f;          // Trigger_Radius
@@ -269,6 +270,7 @@ struct SaberFlight {
 };
 SaberFlight saber_flight(float out_dist, float back_dist, float max_travel, float speed, float catch_dist);
 // cu8j t03 [M]: the throw (anim 0x6c SWORD_THROW past its half, +3 frames a tick) comes 7 (or 8) frames after the apply.
+// cu8k t01: also the delay of the real throw (the host spawns the Saber_Name projectile then).
 inline constexpr uint32_t kSaberThrowDelay = 7;
 
 // "WEAPON_DELAY_MULTIPLIER" / "Weapon_Delay" -> 1..12, 0 unknown (case-insensitive, suffix optional).

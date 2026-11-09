@@ -1347,6 +1347,18 @@ bool AbilitySystem::is_active(ObjectId id, uint8_t type) const {
     const Obj* o = obj(id);
     return o && active_state(*o, type);
 }
+bool AbilitySystem::saber_params(ObjectId id, int32_t& projectile, float& catch_dist) const {
+    const Obj* o = obj(id);
+    if (!o) return false;
+    for (const SpecialState& sp : o->specials) {
+        const SpecialAbilityDesc& s = data_->specials[sp.desc];
+        if (s.cls != SpecialClass::SaberThrow) continue;
+        projectile = s.saber_projectile;
+        catch_dist = s.catch_dist;
+        return true;
+    }
+    return false;
+}
 bool AbilitySystem::can_activate(ObjectId id, uint8_t type, bool check_recharge, bool check_nebula, uint32_t frame) const {
     const Obj* o = obj(id);
     return o && can(*o, type, check_recharge, check_nebula, frame) && bm_ok(*o, type);  // P4 tactical: BM gate

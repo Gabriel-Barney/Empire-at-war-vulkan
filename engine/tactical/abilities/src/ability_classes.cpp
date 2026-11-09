@@ -820,17 +820,13 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             start_recharge(o, s.cls == C::SaberThrow ? kSaberThrow : kCableAttack);
             if (s.cls == C::Cable && host_.cable_attack) host_.cable_attack(o.id, target, s.min_range, s.max_range);  // §6.5
             event(AbilityEventKind::Unhandled, sp.trigger, o.id, target, frame);
-            // cu8j t03 (CU8F_T01_T02_T07_RE §2.7 item 5, the fallback): a saber throw carries the jitter-free flight
-            // stand-in (saber_flight) for the host's HOLSTER_WEAPON state: value = end | catch step << 16, frames after the
-            // throw (which the host makes kSaberThrowDelay frames after this apply); >= 1. T = the target point at the
-            // apply (0x398440), [port] P0 = L = the thrower's position. Audio only: the projectile (its 23-unit area damage
-            // and path draws) is not spawned [port, follow-up].
+            // cu8k t01 (CU8F_T01_T02_T07_RE §2.7 item 1): a saber throw records the target point at the apply (0x398440:
+            // position + Ranged_Target_Z_Adjust) in the event's point and value 1; the host throws the Saber_Name
+            // projectile kSaberThrowDelay frames later (SWORD_THROW past its half) and runs the thrower's
+            // SWORD_CONTROL / SWORD_CATCH machine from the projectile (TacticalBattle saber service).
             if (s.cls == C::SaberThrow) {
-                const Vec3 t = combat_->target_point(target);
-                const float d = combat::distance3(me, t);
-                const float b = s.saber_max_flight > 0.0f ? s.saber_max_flight + combat_->target_radius(target) + std::fabs(t.z - me.z) : 0.0f;
-                const SaberFlight f = saber_flight(d, d, b, s.saber_speed, s.catch_dist);
-                events_.back().value = static_cast<int32_t>(std::max(1u, f.end) | (f.catch_step << 16));
+                events_.back().point = combat_->target_point(target);
+                events_.back().value = 1;
             }
             return true;
         }

@@ -332,6 +332,8 @@ public:
     std::span<const ObjectId> members_of(ObjectId container) const;
     bool has_ability(ObjectId id, uint8_t type) const;
     bool is_active(ObjectId id, uint8_t type) const;  // Is_Unit_Ability_Active (0x39b950)
+    // cu8k t01: the object's Saber_Throw data - the Saber_Name projectile (-1 none) and Catch_Dist; false without one.
+    bool saber_params(ObjectId id, int32_t& projectile, float& catch_dist) const;
     bool can_activate(ObjectId id, uint8_t type, bool check_recharge, bool check_nebula, uint32_t frame) const;
     bool is_ready(ObjectId id, uint8_t type, uint32_t frame) const;  // Lua Is_Ability_Ready
     bool is_autofire(ObjectId id, uint8_t type) const;

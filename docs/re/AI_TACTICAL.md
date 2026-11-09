@@ -523,7 +523,9 @@ retail posts it from the death / removal signal (before the plan runs again).
   otherwise it returns **nil**.
 - 0x570a50 returns false (so nil, no block) for every gate refusal: no object, argument count ≠ 2, name not a
   string / unknown, the unit lacks the ability (0x3986b0), not ready (0x39bbd0), `Can_Activate` (0x39b480(obj, t, 1))
-  fails, wrong argument type, "not hooked up to special ability logic", dead target object.
+  fails, wrong argument type, "not hooked up to special ability logic", dead target object. Of these, the count,
+  name, argument-type and "not hooked up" refusals are script errors that also end the script (cu8k t10,
+  CU8K_T04_COORDINATOR_TRACES "Which check ends the script"); a dead target object is a warning.
 - After the gates it builds and executes the command at once. Its return value then depends on the ability family
   (case lists from the second switch, decimal ids of ABILITIES_HARDPOINTS §2.1):
 
@@ -535,7 +537,7 @@ retail posts it from the death / removal signal (before the plan runs again).
 | 50 67 71 73 74 (position) | 57-style: spawns `Dummy_Barrage_Target` at the position (0x29f810), then 0x429da0 / 0x429960 | **always** once executed |
 | 1 3 7 9 11 29 32 33 39 40 43 48 52 54 56 60 62 63 65 68 69 70 (none / bool) | 43 | **never** (nil even on success) |
 | 14 23 24 25 35 36 38 44 46 49 57 61 72 | 43 with **no** position (zeroed) | never |
-| 5 26 28 42 (position), 6 10 12 (optional target), 19 (object) | 43 | never |
+| 5 26 28 42 (position), 6 10 12 (a bool, value ignored; corrected cu8k t10), 19 (object) | 43 | never |
 
   Correction for ABILITIES_HARDPOINTS §2.9 (applied there 2026-11-02): the "target position (command 57,
   `Dummy_Barrage_Target`)" row is ids 50, 67, 71, 73, 74, not 14, 23, … 72; those take command 43 with no

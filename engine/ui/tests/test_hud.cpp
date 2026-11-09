@@ -381,9 +381,12 @@ void test_draw_list() {
     const float fills[] = {0.0f, 5.0f, 12.5f, 13.0f, 25.0f, 50.0f, 99.0f, 100.0f};
     const uint32_t want[] = {0, 3, 3, 4, 4, 6, 10, 4};
     for (size_t i = 0; i < 8; ++i) CHECK(radial_wipe(q, fills[i], v) == want[i]);
-    // 50 %: fan centre, top-centre start, corners/midpoints, ends at bottom-centre.
-    CHECK(radial_wipe(q, 50.0f, v) == 6 && near(v[0].x, 5) && near(v[0].y, 5) && near(v[1].x, 5) && near(v[1].y, 10) &&
-          near(v[5].x, 5) && near(v[5].y, 0));
+    // 50 %: fan centre, bottom-centre start, corners/midpoints, ends at top-centre (cu9h t03: the last half of the clock).
+    CHECK(radial_wipe(q, 50.0f, v) == 6 && near(v[0].x, 5) && near(v[0].y, 5) && near(v[1].x, 5) && near(v[1].y, 0) &&
+          near(v[2].x, 0) && near(v[2].y, 0) && near(v[5].x, 5) && near(v[5].y, 10));
+    // 25 %: from 9 o'clock (left-centre) over the top-left corner to 12 o'clock.
+    CHECK(radial_wipe(q, 25.0f, v) == 4 && near(v[1].x, 0) && near(v[1].y, 5) && near(v[2].x, 0) && near(v[2].y, 10) &&
+          near(v[3].x, 5) && near(v[3].y, 10));
     // Batching by page, order kept; the list gives the effect (STRATEGIC_GAPS §7.2).
     HudDrawList dl;
     HudQuad a = q, b = q, c = q;

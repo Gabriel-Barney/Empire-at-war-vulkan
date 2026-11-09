@@ -639,3 +639,30 @@ clockwise sector = dial %); 2 green (0,1,0,1) / red (1,0,0,1) as read; 3 the dis
 | 0x524560 / 0x5247a0 / 0x524590 / 0x524650 / 0x5246d0 | BombingRunEventClass ctor / set point / unpack / pack / execute |
 | 0x492340 | PlayerBombingRunClass default record (ready −1, interval 3600, last start −1) |
 | 0x28b080 | HUD mode from the game mode type (§9.0) |
+
+### 9.11 Dial while the run is in progress (cu9h t04) [H unless tagged]
+Read from 0x312570 (dial feed), 0x495250 and 0x4950f0; checked against the 17 RUN_IN_PROGRESS samples of the cu9h t02
+retail run (CU9H_T02_BOMBING_HUD_RUN.md). §9.3 already holds the rule; this spells it out for the in-progress state.
+- The button is disabled (in progress fails 0x494410), so 0x312570 feeds dial = 0x495250(manager, local player),
+  a 0 shown as 1.0. Nothing is special-cased for the run: the same rules 1-5 apply with R from 0x4950f0's
+  in-progress branch.
+- Record fields (stride 0x78 at manager +0x20; now = mode frame, manager +8 → +0x10): +0x28 in progress, +0xc last
+  start S (= the run's start frame, written by the start 0x492d60), +8 interval I, +0x38 / +0x40 the run's bomber list
+  / count. The ready frame +4 is not read while in progress (it is written at the run's end: end + I).
+- R = now + I + int(F), F = the largest (remaining locomotor path length 0x5c5530 from the bomber's position) /
+  (effective max speed 0x370f00) over the listed bombers that have a current path (0x5569b0) and speed > 0; F is a
+  float max starting at 0.0 and truncated once (int). No bomber with a path → F = 0.
+- **dial = (now − S) / (R − S) = (now − S) / ((now − S) + I + int(F))**, float division of the two integers.
+  - On the start frame (now = S): rule 4 → 0 → shown **full** (1.0) for one frame (retail sample mf 3603: dial 100).
+  - Afterwards it **runs up** from about 0: with the bombers flying the path at constant speed, (now − S) + F stays
+    ≈ the run's total flight time T, so the dial is ≈ (now − S) / (T + I), a straight ramp with the same slope as the
+    following cooldown; at the run's end (ready := end + I, S unchanged) it continues without a jump. The dark sector
+    of §9.9 item 1b grows clockwise through the run and the cooldown.
+  - Retail check: run mf 3603..3928 (T = 325), I = 1800: every in-progress sample mf 3604..3922 equals
+    100 × (now − 3603) / 2125 to the integer (mf 3604: 0, 3625: 1, 3795: 9, 3922: 15); the first cooldown sample is 15.
+    [M] Whether the component stores the percentage truncated or rounded cannot be told from these samples.
+- **Port rule:** nothing new. `TacticalBattle::bombing_run_cooldown_fraction` already implements it
+  (`l1_bombing_run_ready_frame`: in progress → now + interval + int(longest remaining flight), F = distance to the exit
+  along the path / per-frame speed over the live bombers), and `game::bombing_run_button` shows it while disabled. The
+  port's F uses the straight path to the exit instead of 0x5c5530's remaining path length [M: equal on the straight
+  edge-to-edge run path]. Visual check left: the drawn sector during the run.

@@ -30,5 +30,9 @@ Side observations:
 - [port] Compare the drawn cooldown dial with item 1b (direction clockwise from 12 o'clock, dark part = `dial`%) and the
   dial during RUN_IN_PROGRESS (retail draws one; check the port's `bombing_run_button` feed for the in-progress state).
 - [RE] The dial value while the run is in progress (`dial_expected=-` in the kit: the §9.3 formula does not cover it).
+  **Answered (cu9h t04, HUD_GAPS §9.11):** the same 0x495250 rule with R = now + interval + int(longest remaining
+  flight): dial = (now − start) / ((now − start) + interval + int(F)), a ramp that runs up from the start (full on the
+  start frame only) and continues into the cooldown without a jump; all 17 in-progress samples here equal
+  100 × (mf − 3603) / 2125. The port already computes it; the kit's `expected_dial` could use it.
 </content>
 </invoke>

@@ -294,9 +294,21 @@ service, OBJECT_RUNTIME §5.3), by Luke's current clip:
   (SAP +0x2e8 = 0x3fffff) and frame > (float)(37 / 2) = 18 → **throw**: spawn `Saber_Name` (0x54ade0: shooter Luke,
   target the SAP +0x2e4 object, fire-at point SAP +0x2d8, max travel override = the saber's
   `Projectile_Max_Flight_Distance`), SAP +0x2e8 := its id, play 0x6f (SWORDSPIN) on it, HolsterWeapon snap holstered
-  0x635450 (§2.3). Spawn failure → end the ability. The throw comes 7 or 8 ticks after the activation (frame 21, or
-  18 + float error) [M]. When the clip is finished (state 2, frame clamped to 37 − 2 = 35, 5 ticks after the throw)
+  0x635450 (§2.3). Spawn failure → end the ability. The throw comes **7 or 8 ticks after the activation**, decided
+  by float error (cu8k t13 RE, below) [H]. When the clip is finished (state 2, frame clamped to 37 − 2 = 35, 5 ticks after the throw)
   → play 0x6d SWORD_CONTROL (looped, speed 1).
+- **Throw tick (cu8k t13, 0x2650f0 / 0x265280 / 0x265560 / 0x3a92f0) [H]:** the play (0x265560, called by 0x3a92f0
+  with t = (float)NOW / (float)FPS, NOW = the global logic frame 0x140b0a320, FPS 30) sets frame := 0 and the model's
+  last time +0x148 := t, so the advance of the activation tick n0 adds 0 whichever side of it the play runs. Each
+  later advance (object service, after Luke's update) does frame := (fps × (t − last)) × speed + frame in float32,
+  fps = the clip's 30.0 (`RI_SKYWALKER_SWORD_THROW_00.ALA`), speed 3.0, t(n) = fl(fl(n) / 30). Luke's update in tick
+  n0 + k sees the frame after k − 1 advances and throws when it is > 18.0f (strict). Six increments of "3" sum to
+  18 ± a few ulps: the throw is at **n0 + 7 when that float32 sum exceeds 18.0f, else at n0 + 8** (frame ≈ 21). It
+  depends on the absolute NOW: over NOW = 0..119999, 36 % of activation frames give 7 and 64 % give 8 (e.g. n0 = 454
+  → 8, 1503 → 7, 1504 → 8). Throw 1 of the cu8k `luke` run (spawn mf = gf 462, activation seen by mf 455) fits n0 =
+  454 → 462. [M] Throw 2 (CU8K "Luke saber run": F0 read as 1511, activation in gf 1501..1505) cannot land on 1511
+  (1503 → 1510, 1504 → 1512), so its F0 is 1510 or 1512 within the watcher's one-frame read skew. Port: the same
+  float32 sum on the port's NOW (global frame, not mode frame) to choose 7 or 8.
 - **0x6d SWORD_CONTROL**: if the saber is gone (SAP +0x2e8 = 0x3fffff, id not found, or object flags & 0x42) →
   **end now** (vf15). Else if the 3D distance Luke → saber < `Catch_Dist` (ability +0x180; Luke 15) → play 0x6e
   SWORD_CATCH (one-shot, blend 0.1, speed 3) and HolsterWeapon snap drawn 0x635310. Otherwise wait.
@@ -324,7 +336,17 @@ in the type ctor 0x367250 / flag block 0x367100 at type +0x10):
   moves later does not bend the path**.
 - **Synced draws** of the plan (S9 §2.4.5): two `Get_Float` (θ, then a) per jittered point inside the shrunk
   heightmap box: 2 × (n1 − 1) + 2 × (n2 − 1), leg by leg, at tick F0 + 1. At 120 or 150 units: n1 = n2 = 3, **8
-  draws**. The projectile's creation (0x29f810) may draw too [M].
+  draws**. Nothing earlier draws for this throw (cu8k t13) [H for the paths, data as listed]: the possible synced
+  draws of `Spawn_Projectile` 0x54ade0 and its create, in order, are (1) a muzzle point between two bones (3 floats;
+  the throw request sets one bone, `Holster_Weapon_Bone_Name` `b_saber`, the second stays −1) or a garrison fire point
+  (1 int; Luke is not garrisoned); (2) the aim 0x54a270 (category 8): `Fires_Forward` (absent for Luke) or a target
+  `Target_Bones` pick (1 int when n ≥ 2; `Rebel_Trooper` has none); (3) inaccuracy 0x549f80 (TACTICAL_COMBAT
+  §3.1.2): Luke has no `Targeting_Fire_Inaccuracy_Fixed_Radius`, no `_Override` in his unit abilities and
+  `Infantry, 0.0` in `Targeting_Fire_Inaccuracy`, so no draw; (4) the create 0x29f810 → Init_From_Type: no hardpoints,
+  no unit abilities, behaviours PROJECTILE and HIDE_WHEN_FOGGED (interval 1: no stagger draw), the model
+  `RI_saber_spin.ALO` has no idle clip (only `RI_SABER_SPIN_SWORDSPIN_00`), so 0x3a4820 draws no start frame;
+  `Projectile_Object_Creation_Particle` unset [M: +0x1a80 as its resolved type], so no second object; (5) the
+  SWORDSPIN play on the saber (one variant: no draw). A target with `Target_Bones` (AT-AT) adds one int at (2).
 - **Each step** (0x4cf460): s += v; sample the spline at s; past the end (s ≥ total length Ltot) → expire where it
   is (detonation effects, destroyed). Else turn toward the point, move there (no sweep and no direct hit for
   category 8), travelled += v, and **detonate when travelled ≥ +0x6c**. Then **area damage**: every object of a

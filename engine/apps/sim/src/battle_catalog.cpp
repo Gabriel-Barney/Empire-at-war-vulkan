@@ -247,6 +247,13 @@ int32_t BattleCatalog::projectile(uint32_t t, BuildState& s) const {
         p.rocket_straight_distance = ty.get_float(t, "Projectile_Rocket_Straight_Distance");
         p.rocket_curve_distance = ty.get_float(t, "Projectile_Rocket_Curve_Distance");
         p.rocket_curve_offset = ty.get_float(t, "Projectile_Rocket_Curve_Offset");
+        // cu8k t01 (CU8F_T01_T02_T07_RE §2.7 item 3): the type ctor 0x367250 defaults CD = 50 and CO = 30; the thrown
+        // saber (LIGHT_SABER, no curve fields in vanilla) plans its path with them. [port] applied to category 8 only and
+        // when the read value is 0 (an explicit 0 is not told apart): every vanilla ROCKET / MPTL_ROCKET sets both fields.
+        if (p.category == tc::ProjectileCategory::LightSaber) {
+            if (p.rocket_curve_distance == 0.0f) p.rocket_curve_distance = 50.0f;
+            if (p.rocket_curve_offset == 0.0f) p.rocket_curve_offset = 30.0f;
+        }
         p.target_point_on_terrain = ty.get_bool(t, "Projectile_Target_Point_On_Terrain");
         p.explode_when_reached_target_radius = ty.get_bool(t, "Explode_When_Reached_Target_Radius");
         p.damage_delay_secs = ty.get_float(t, "Projectile_Damage_Delay_Secs");

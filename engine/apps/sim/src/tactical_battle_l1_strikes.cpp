@@ -55,6 +55,11 @@ TacticalBattle::L1Constants load_l1_constants(const data::GameConstants& gc) {
         static_cast<int32_t>(gc.get_float("Bombing_Run_Reduction_Per_Squadron_Percent", static_cast<float>(k.bombing_run_reduction_per_squadron)));
     k.max_bombard_interval = gc.get_float("Max_Bombard_Interval_Seconds", k.max_bombard_interval);
     k.min_bombard_interval = gc.get_float("Min_Bombard_Interval_Seconds", k.min_bombard_interval);
+    if (const auto v = gc.get("MP_Default_Allow_SuperWeapons")) {  // cu9h t01: the skirmish special-weapons option default
+        const std::string_view t = ascii_trim(*v);
+        if (ascii_iequals(t, "yes") || ascii_iequals(t, "true") || t == "1") k.skirmish_superweapons = true;
+        else if (ascii_iequals(t, "no") || ascii_iequals(t, "false") || t == "0") k.skirmish_superweapons = false;
+    }
     // battle host: Bombardment_Offset ("0 0 600": x y z) and Bombardment_Distribution (comma / space list of ints) from the
     // data; a missing tag or a malformed / empty value keeps the shipped default.
     auto numbers = [](std::string_view s) {
@@ -98,6 +103,8 @@ std::vector<TacticalBattle::L1Faction> load_l1_factions(const galactic::Galactic
         const uint32_t fi = rules.find_faction(n.name);
         if (fi >= out.size()) continue;
         TacticalBattle::L1Faction& f = out[fi];
+        f.playable = n.is_playable;
+        f.skirmish_land_bomber = std::string(n.xml_text("Skirmish_Land_Bomber"));
         if (auto v = n.xml_text("Bombardment_Required_Orbital_Ships"); !v.empty()) f.bombard_ships = split_names(v);
         if (auto v = n.xml_text("Bombardment_Projectile"); !v.empty()) f.bombard_projectiles = split_names(v);
         if (auto v = n.xml_text("Bombardment_Particle"); !v.empty()) f.bombard_particles = split_names(v);
@@ -156,6 +163,32 @@ void TacticalBattle::l1_strikes_setup(TacticalMode& mode) {
     l1_bombard_.clear();
     l1_runs_.clear();
     if (space_) return;
+    const uint32_t fps = 30;
+    if (cfg_.skirmish) {
+        // cu9h t01 (0x493d50 skirmish branch, L1_S4_REMAINING §3.7, HUD_GAPS §9.8): every player, in index order, whose
+        // faction has Is_Playable and a Skirmish_Land_Bomber gets an enabled, available record: interval = int(FPS x
+        // Max_Bombing_Run_Interval_Seconds), ready = now + interval, last start -1. The service then keeps `available` from
+        // the gate list (empty = refused in a skirmish: an Enable_Bombing_Runs upgrade opens it) and the ready frame.
+        const objects::GameObjectTypes& types = catalog_->types();
+        const auto& players = galaxy_->players();
+        for (size_t p = 0; p < players.size(); ++p) {
+            const uint32_t fi = players[p].faction;
+            if (fi >= l1_factions_.size() || !l1_factions_[fi].playable || l1_factions_[fi].skirmish_land_bomber.empty()) continue;
+            const objects::TypeIndex bt = types.resolve_name(l1_factions_[fi].skirmish_land_bomber);
+            if (bt == objects::kNone || bt >= types.size()) continue;
+            L1BombingRun r;
+            r.player = static_cast<int32_t>(p);
+            r.enabled = true;
+            r.available = true;
+            r.bomber_type = static_cast<int32_t>(bt);
+            r.interval = static_cast<uint32_t>(static_cast<float>(fps) * l1_k_.max_bombing_run_interval);
+            r.ready = frame_ + r.interval;
+            r.last_start = 0xFFFFFFFFu;
+            l1_runs_.push_back(r);
+        }
+        if (!l1_runs_.empty()) l1_used_ = true;
+        return;
+    }
     const int32_t player = req_.info.attacker;  // battle record [1] [M]
     if (player < 0 || static_cast<size_t>(player) >= galaxy_->players().size()) return;
     const uint32_t faction = galaxy_->players()[static_cast<size_t>(player)].faction;
@@ -175,7 +208,6 @@ void TacticalBattle::l1_strikes_setup(TacticalMode& mode) {
             }
         }
     }
-    const uint32_t fps = 30;
     // Orbital bombardment (0x5284b0): a required-ship type in orbit (ship count irrelevant).
     if (faction < l1_factions_.size()) {
         const L1Faction& f = l1_factions_[faction];
@@ -281,6 +313,8 @@ bool TacticalBattle::bombardment_available(int32_t player) const {
 }
 
 bool TacticalBattle::bombing_run_available(int32_t player) const {
+    // 0x494410: in a skirmish only with the special-weapons option (cu9h t01).
+    if (cfg_.skirmish && !l1_k_.skirmish_superweapons) return false;
     for (const L1BombingRun& r : l1_runs_)
         if (r.player == player)
             return r.enabled && r.available && !r.in_progress && !r.disabled &&

@@ -4168,14 +4168,21 @@ void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
             }
         if (e.kind == ta::AbilityEventKind::SpawnObject) spawn_ability_object(mode, e);  // fog follow-up: FOW_REVEAL_PING
         // cu8g t01 (CU8F_T01_T02_T07_RE.md §2.3): Saber_Throw's throw snaps the saber holstered (0x635450: suppress, fade 0).
-        // cu8j t03 (§2.7 item 5, the stand-in): the throw comes kSaberThrowDelay frames after the apply (anim 0x6c's half
-        // [M]); the event's value is the flight (end | catch step << 16, frames after the throw, ta::saber_flight).
-        // hg_holster_service throws, holds the draw while the saber flies (to the ability's end), and snaps drawn only on
-        // a real catch. value 0 = the activation failed (the forwarding path's Unhandled): nothing was thrown.
+        // cu8k t01 (§2.7 items 1-4): the apply records T (e.point); the throw comes kSaberThrowDelay frames later (anim 0x6c
+        // past its half [M]) and spawns the Saber_Name projectile (saber_throw_service); hg_holster_service snaps the saber
+        // holstered at the throw, holds the draw while it flies (to the ability's end, resolved by the machine) and snaps
+        // drawn only on a real catch. value 0 = the activation failed (the forwarding path's Unhandled): nothing thrown.
         if (e.kind == ta::AbilityEventKind::Unhandled && e.type == ta::kSaberThrow && e.value > 0) {
-            const auto v = static_cast<uint32_t>(e.value);
-            const uint32_t thrown = frame_ + ta::kSaberThrowDelay, k_c = v >> 16, end = v & 0xFFFFu;
-            engine_loops_.saber_schedule(e.id, thrown, k_c != 0 ? thrown + k_c : 0u, thrown + end);
+            SaberThrowState st;
+            st.thrower = e.id;
+            st.target = e.target;
+            st.aim = Vec3{e.point.x, e.point.y, e.point.z};
+            st.throw_frame = frame_ + ta::kSaberThrowDelay;
+            if (abilities_) abilities_->saber_params(e.id, st.projectile, st.catch_dist);
+            sabers_.erase(std::remove_if(sabers_.begin(), sabers_.end(), [&](const SaberThrowState& x) { return x.thrower == e.id; }),
+                          sabers_.end());  // a new throw replaces a pending one (as saber_schedule)
+            sabers_.push_back(st);
+            engine_loops_.saber_schedule(e.id, st.throw_frame, 0u, tactical::hangar::EngineLoops::kSaberOpenEnd);
         }
         // S7 t15 A1 (ABILITIES_HARDPOINTS §2.6): every ability end raises signal 0x29, including the Remote_Bomb toss, which
         // ends at its Toss_Anim end (LOB_SOLVER §3.5 step 4, S8 t06).
@@ -4487,6 +4494,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     oi_respawn_due(mode);  // OI abilities: Tactical_Respawn creations due this frame
     profile::lap("tac.events");
     hg_tick(mode, rng);    // hangars: SPAWN_SQUADRON services and the launches they request
+    saber_throw_service(mode);  // cu8k t01: Saber_Throw throws / SWORD_CONTROL / SWORD_CATCH (after the saber's step)
     hg_holster_service();  // cu8g t01: HOLSTER_WEAPON (engine-loop suppression, draw / holster SFX requests)
     l1_weapons(mode, rng);  // L1 systems: special-weapon volleys, TSW state machines
     profile::lap("tac.services");

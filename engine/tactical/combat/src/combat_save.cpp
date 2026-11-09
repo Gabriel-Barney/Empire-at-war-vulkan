@@ -48,7 +48,7 @@ using save_io::put_vec3;
 
 namespace {
 
-constexpr uint32_t kCombatSaveVersion = 13;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
+constexpr uint32_t kCombatSaveVersion = 14;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
                                              // 4: refixf t06 attack goal / weapon aim / order lock; 5: refixf t06 scan
                                              // target hardpoint (auto_hp); 6: a1g t03 damage event hull_lost; 7: S8 t04
                                              // grenade flight / sticky state; 8: S8 t06 stuck_offset in the parent's frame
@@ -57,7 +57,8 @@ constexpr uint32_t kCombatSaveVersion = 13;  // 2: refix t02 INFECTION state, re
                                              // targeting state + its target, s78f t04 lobbing turret angles; 11:
                                              // s78g t06 damage_team; 12: s78h t03 squad_seen dropped (no squad rule
                                              // on a member); 13: cu8f t04a stickiness threshold TD +0x158,
-                                             // cu8f t06 INFECTION frames left + spread counters. Only the current
+                                             // cu8f t06 INFECTION frames left + spread counters; 14: cu8k t01 thrown
+                                             // sabers (projectile rocket 2, rocket state thrower). Only the current
                                              // version is read (cu6).
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
@@ -181,6 +182,7 @@ void CombatSystem::write(ByteWriter& w) const {
             w.f32(sg.length);
         }
         w.f32(rk.path.total());
+        w.i32(rk.thrower);  // cu8k t01 (version 14)
     }
 
     w.u32(static_cast<uint32_t>(delayed_.size()));
@@ -417,10 +419,10 @@ bool CombatSystem::read(ByteReader& r) {
         p.launch = get_vec3<Vec3>(r);
         p.lob_dir = get_vec3<Vec3>(r);
         p.stuck_offset = get_vec3<Vec3>(r);
-        if (!r.ok() || p.desc >= proj_descs || p.rocket > 1 || p.lob > 1 || p.stuck > 1) return false;
+        if (!r.ok() || p.desc >= proj_descs || p.rocket > 2 || p.lob > 1 || p.stuck > 1) return false;
     }
     // refixf t01: rocket states, exactly one per rocket-flagged projectile, in the same (serial) order.
-    if (!r.count(n, 61)) return false;
+    if (!r.count(n, 65)) return false;  // cu8k t01: + thrower
     std::vector<Rocket> rockets(n);
     {
         size_t j = 0;
@@ -444,6 +446,7 @@ bool CombatSystem::read(ByteReader& r) {
                 sg.length = r.f32();
             }
             const float total = r.f32();
+            rk.thrower = r.i32();  // cu8k t01 (version 14)
             if (!r.ok() || rk.planned > 1) return false;
             rk.path.restore(std::move(pts), std::move(segs), total);
             while (j < projectiles.size() && !projectiles[j].rocket) ++j;

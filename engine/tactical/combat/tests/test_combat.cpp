@@ -868,6 +868,117 @@ struct LobWorld {
     }
 };
 
+// cu8k t01 (CU8F_T01_T02_T07_RE.md §2.7 item 3): a thrown saber (category 8, Max_Speed 8, MFD 250, Projectile_Damage 13,
+// Projectile_Stun_Radius 23). Thrower at the origin (Ranged_Target_Z_Adjust 7), target 150 units east (radius 5.25,
+// as Rebel_Trooper): max travel = 250 + 5.25 + |7 - 7| = 255.25, so the saber dies at step ceil(255.25 / 8) = 32, on its
+// way back. Not stepped on its spawn frame; the first step plans the two jittered legs (n1 = n2 = ceil(150 / 55) = 3:
+// 2 x 2 + 2 x 2 = 8 Get_Float draws); every step damages every hostile unit within 23 (3D), no once-per-victim memory;
+// friends are spared; no sweep (a hostile on the line takes no direct hit).
+void test_saber_projectile() {
+    World w;
+    ProjectileDesc sd;
+    sd.name = "Lukes_Light_Saber";
+    sd.category = ProjectileCategory::LightSaber;
+    sd.max_speed = 8.0f;
+    sd.max_flight_distance = 250.0f;
+    sd.damage = 13.0f;
+    sd.stun_radius = 23.0f;
+    sd.rocket_curve_distance = 50.0f;  // the type ctor defaults (the catalog fills them for LIGHT_SABER)
+    sd.rocket_curve_offset = 30.0f;
+    w.data.projectiles.push_back(sd);
+    UnitDesc luke;
+    luke.tactical_health = 1000.0f;
+    luke.ranged_target_z_adjust = 7.0f;
+    const uint32_t lt = push_unit(w.data, luke);
+    UnitDesc trooper;
+    trooper.tactical_health = 1000.0f;
+    trooper.radius = 5.25f;
+    trooper.ranged_target_z_adjust = 7.0f;
+    const uint32_t tt = push_unit(w.data, trooper);
+    CombatConfig cfg;
+    cfg.mode = GameMode::Land;
+    cfg.inaccuracy_enabled = false;
+    w.make(cfg);
+    w.add(1, lt, 0, Vec3{0, 0, 0});
+    w.add(2, tt, 1, Vec3{150, 0, 0});    // the target
+    w.add(3, tt, 1, Vec3{140, 12, 0});   // a hostile near the turn
+    w.add(4, tt, 0, Vec3{145, -10, 0});  // a friend near the turn
+    w.add(5, tt, 1, Vec3{1000, 1000, 0});  // far away
+    SaberLaunch l;
+    l.thrower = 1;
+    l.owner = 0;
+    l.projectile = 0;
+    l.from = w.sys->target_point(1);
+    l.fire_at = w.sys->target_point(2);
+    l.target = 2;
+    CHECK(l.from.z == 7.0f && l.fire_at.x == 150.0f && l.fire_at.z == 7.0f);
+    l.projectile = 9;
+    CHECK(w.sys->launch_saber(l, w.frame) == 0u);  // invalid projectile index
+    l.projectile = 0;
+    const uint32_t f0 = w.frame;
+    const uint32_t serial = w.sys->launch_saber(l, f0);
+    CHECK(serial != 0u);
+    CHECK(w.sys->projectile(0).max_travel == 255.25f && w.sys->projectile(0).speed == 8.0f);
+    Vec3 p;
+    w.tick();  // spawn frame: not stepped
+    CHECK(w.sys->saber_position(serial, p) && same(p, l.from));
+    const uint64_t d0 = w.rng.draws();
+    w.tick();  // first step: the plan (8 draws), then s = 8
+    CHECK(w.rng.draws() - d0 >= 8u);
+    CHECK(w.sys->saber_position(serial, p) && !same(p, l.from) && w.sys->projectile(0).travelled == 8.0f);
+    uint32_t died = 0;
+    for (int i = 0; i < 60 && !died; ++i) {
+        w.tick();
+        if (!w.sys->saber_position(serial, p)) died = w.frame - 1;
+    }
+    CHECK(died == f0 + 32u);
+    const float h0 = w.sys->health(5);  // the untouched start health (the far unit)
+    const float lost2 = h0 - w.sys->health(2), lost3 = h0 - w.sys->health(3);
+    CHECK(lost2 >= 26.0f && std::fmod(lost2, 13.0f) == 0.0f);  // several steps within 23 of the target
+    CHECK(lost3 >= 13.0f && std::fmod(lost3, 13.0f) == 0.0f);
+    CHECK(w.sys->health(4) == h0 && w.sys->health(1) == h0);
+    CHECK(w.sys->stats().hits == 0u);  // no direct hit
+    // Same flight with a different RNG seed: still dies at the max travel (the jitter changes the path, not the limit).
+    {
+        World w2;
+        w2.data = w.data;
+        for (int k = 0; k < 5; ++k) (void)w2.rng.range_float(0.0f, 1.0f);  // another stream position: other jitter
+        w2.make(cfg);
+        w2.add(1, lt, 0, Vec3{0, 0, 0});
+        w2.add(2, tt, 1, Vec3{150, 0, 0});
+        const uint32_t s2 = w2.sys->launch_saber(l, w2.frame);
+        const uint32_t g0 = w2.frame;
+        uint32_t d2 = 0;
+        for (int i = 0; i < 60 && !d2; ++i) {
+            w2.tick();
+            if (!w2.sys->saber_position(s2, p)) d2 = w2.frame - 1;
+        }
+        CHECK(d2 == g0 + 32u);
+    }
+    // A near target (40 units): the path (about 80 + jitter) ends before the max travel: the saber expires at the path's
+    // end, within a few units of the thrower's target point.
+    {
+        World w3;
+        w3.data = w.data;
+        w3.make(cfg);
+        w3.add(1, lt, 0, Vec3{0, 0, 0});
+        w3.add(2, tt, 1, Vec3{40, 0, 0});
+        SaberLaunch l3 = l;
+        l3.fire_at = w3.sys->target_point(2);
+        const uint32_t s3 = w3.sys->launch_saber(l3, w3.frame);
+        const uint32_t g0 = w3.frame;
+        Vec3 last = l3.from;
+        uint32_t d3 = 0;
+        for (int i = 0; i < 60 && !d3; ++i) {
+            w3.tick();
+            if (!w3.sys->saber_position(s3, p)) d3 = w3.frame - 1;
+            else last = p;
+        }
+        CHECK(d3 > g0 + 8u && d3 < g0 + 20u);
+        CHECK(std::fabs(last.x) < 16.0f && std::fabs(last.y) < 16.0f);
+    }
+}
+
 void test_lob_targeting() {
     // Slot 44 (§3.1): the solve from the attacker to the target + Ranged_Target_Z_Adjust; the scan box / attack range is
     // v^2 / G x (1 + list 8) = 550 - Targeting_Max_Attack_Distance (100) is not used. Slot 45 is unchanged.
@@ -3070,7 +3181,7 @@ void test_save_rejects() {
     bad = saved;
     put_u32_at(bad, 0, 99);
     CHECK(rejected(bad));
-    for (const uint32_t v : {12u, 14u}) {  // only the current version (13: cu8f t04a / t06) is read (cu6)
+    for (const uint32_t v : {13u, 15u}) {  // only the current version (14: cu8k t01 saber thrower) is read (cu6)
         bad = saved;
         put_u32_at(bad, 0, v);
         CHECK(rejected(bad));
@@ -3275,10 +3386,10 @@ void test_stickiness_override() {
         std::vector<size_t> at;
         for (size_t i = 0; i + 4 <= img.size(); ++i)
             if (std::memcmp(&img[i], pat, 4) == 0) at.push_back(i);
-        CHECK(at.size() == 1u && img[0] == 13u);
+        CHECK(at.size() == 1u && img[0] == 14u);
         if (at.size() == 1u) {
             img.erase(img.begin() + static_cast<std::ptrdiff_t>(at[0]), img.begin() + static_cast<std::ptrdiff_t>(at[0]) + 4);
-            img[0] = 12;
+            img[0] = 13;
             World b;
             b.data = w.data;
             b.make(cfg);
@@ -6426,6 +6537,7 @@ int main(int argc, char** argv) {
     test_circular_lead();  // OI tactical
     test_lob_solver();
     test_lob_targeting();
+    test_saber_projectile();  // cu8k t01
     test_lob_weapon_flight();
     test_lob_ground_and_expiry();
     test_lob_sticky();

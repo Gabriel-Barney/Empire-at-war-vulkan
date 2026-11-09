@@ -12,7 +12,7 @@ namespace alamo::sim {
 
 namespace {
 
-constexpr uint32_t kBattleStateVersion = 9;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: q6 attacks on TEAM containers / s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save) (two branches); 8: both merged; 9: ccpgt t02 domination timer
+constexpr uint32_t kBattleStateVersion = 10;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: q6 attacks on TEAM containers / s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save) (two branches); 8: both merged; 9: ccpgt t02 domination timer; 10: cu8k t01 Saber_Throw thrower machines
 constexpr uint32_t kBattlePartVersion = 1;
 
 // One module system in a part: presence flag + a section with its own write.
@@ -135,6 +135,8 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     a(b.hg_launches_, b.hg_used_);
     // S7 t22: fighter formations
     a.seq(b.fformations_, [](auto& x, auto& f) { x(f.key, f.flags, f.goal, f.goal_object); });  // s78f t02: no `pushed` (v6)
+    // cu8k t01: Saber_Throw thrower machines (state version 10)
+    a.seq(b.sabers_, [](auto& x, auto& t) { x(t.thrower, t.target, t.aim, t.throw_frame, t.serial, t.projectile, t.catch_dist, t.end_frame); });
 }
 
 void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {

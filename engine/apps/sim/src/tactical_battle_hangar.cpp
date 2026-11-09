@@ -226,6 +226,59 @@ void TacticalBattle::hg_holster_attach(const Unit& u) {
     engine_loops_.holster_attach(u.id, frame_);
 }
 
+void TacticalBattle::saber_throw_service(TacticalMode& mode) {
+    // cu8k t01 (CU8F_T01_T02_T07_RE.md §2.7 items 1, 2, 4): the throw at SWORD_THROW's half (kSaberThrowDelay [M]); from the
+    // throw + 6 SWORD_CONTROL: the saber gone (expired / detonated) -> the ability ends now; within Catch_Dist (3D, the
+    // thrower's position to the saber's) -> SWORD_CATCH (snap drawn now) and the end 11 frames later. A thrower that is
+    // gone drops its record (the saber flies on as a projectile).
+    if (sabers_.empty()) return;
+    const objects::ObjectStore& st = mode.primary();
+    size_t w = 0;
+    for (size_t k = 0; k < sabers_.size(); ++k) {
+        SaberThrowState& s = sabers_[k];
+        const Unit* u = unit_by_id(s.thrower);
+        bool keep = u && u->alive && !u->retreated && st.alive(u->h) && combat_ && combat_->has_unit(s.thrower);
+        if (keep && s.serial == 0) {
+            if (frame_ >= s.throw_frame) {
+                // Spawn_Projectile 0x54ade0: shooter the thrower, target the recorded object, fire-at point T, max travel =
+                // the Saber_Name type's Projectile_Max_Flight_Distance (+ radius + |dz|). [port] spawned at the thrower's
+                // target point (position + Ranged_Target_Z_Adjust): retail's spawn point is about 19 units off (a bone).
+                tc::SaberLaunch l;
+                l.thrower = s.thrower;
+                l.owner = combat_->owner(s.thrower);
+                l.projectile = s.projectile >= 0 ? static_cast<uint32_t>(s.projectile) : 0xFFFFFFFFu;
+                l.from = combat_->target_point(s.thrower);
+                l.fire_at = tactical::Vec3{s.aim.x, s.aim.y, s.aim.z};
+                l.target = s.target;
+                s.serial = s.projectile >= 0 ? combat_->launch_saber(l, frame_) : 0u;
+                if (s.serial == 0) {  // spawn failure: the ability ends
+                    engine_loops_.saber_resolve(s.thrower, 0u, frame_);
+                    keep = false;
+                }
+            }
+        } else if (keep && s.end_frame != 0) {
+            keep = frame_ < s.end_frame;
+        } else if (keep && frame_ >= s.throw_frame + 6) {
+            tactical::Vec3 sp;
+            if (!combat_->saber_position(s.serial, sp)) {  // gone: end now (epsilon 0: the saber stepped before)
+                engine_loops_.saber_resolve(s.thrower, 0u, frame_);
+                keep = false;
+            } else {
+                const tactical::Vec3 me = combat_->position(s.thrower);
+                const float dx = sp.x - me.x, dy = sp.y - me.y, dz = sp.z - me.z;
+                if (s.catch_dist > 0.0f && dx * dx + dy * dy + dz * dz < s.catch_dist * s.catch_dist) {
+                    s.end_frame = frame_ + 11u;  // SWORD_CATCH (30 frames at speed 3) finishes at the 10th advance after its play
+                    engine_loops_.saber_resolve(s.thrower, frame_, s.end_frame);
+                }
+            }
+        }
+        if (!keep) continue;
+        if (w != k) sabers_[w] = sabers_[k];
+        ++w;
+    }
+    sabers_.resize(w);
+}
+
 void TacticalBattle::hg_holster_service() {
     // Service 0x635750 (interval 1), ascending id. Engaged: a current attack target (0x397a40), a running Berserker (SAP
     // +0x2cc), the current clip ATTACK / SPINMOVE, or a hero clash (+0x3b4) [port: no hero clashes yet]. cu8j t03

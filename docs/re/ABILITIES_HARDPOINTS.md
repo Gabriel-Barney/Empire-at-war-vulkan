@@ -435,7 +435,7 @@ which list goes with which error message]:
 | target **position** (command 57 style, spawns `Dummy_Barrage_Target`) | 50, 67, 71, 73, 74 |
 | command 43 with the position zeroed (no position) | 14, 23, 24, 25, 35, 36, 38, 44, 46, 49, 57, 61, 72 |
 | position via command 43 | 5, 26, 28, 42 |
-| special | 6/10/12 (HUNT, LURE, AVOID_DANGER: optional target), 17 JET_PACK (position), 19 (object) |
+| special | 6/10/12 (HUNT, LURE, AVOID_DANGER: a bool, value ignored, mode on; corrected cu8k t10, CU8K_T04_COORDINATOR_TRACES "Which check ends the script"), 17 JET_PACK (position), 19 (object) |
 
 Correction (S7 t26 RE, 2026-11-02) [H]: the command-57 position row is ids 50, 67, 71, 73, 74; ids 14, 23, … 72
 were listed there before but take command 43 with no position. Which families return an `AbilityBlockStatus`
