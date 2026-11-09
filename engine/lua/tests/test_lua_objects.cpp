@@ -796,7 +796,7 @@ static void test_dead_handles(const Db& db) {
     CHECK(run(vm, "r = 1 r = victim.Attack_Target(t1) rn = r == nil and 1 or 0") == "" && gnum(vm, "rn") == 1.0 && !vm.exit_requested());
     // q6 t11: a dead caller is silent in most methods (nothing returned, no message, no stop); the WarnNothing ones log
     // "SCRIPT WARNING: GameObjectWrapper::<m> -- this object is dead!" and go on.
-    for (const char* m : {"Get_Position()", "Hide(true)", "Get_Hull()", "Is_Category('Infantry')", "Activate_Ability('SPRINT')"}) {
+    for (const char* m : {"Get_Position()", "Hide(true)", "Get_Hull()", "Is_Category('Infantry')", "Activate_Ability('SPRINT', true)"}) {
         const size_t m0 = vm.messages().size();
         CHECK(run(vm, std::string("nr = (function(...) return arg.n end)(victim.") + m + ")") == "" && gnum(vm, "nr") == 0.0 &&
               vm.messages().size() == m0 && !vm.exit_requested());
@@ -889,18 +889,25 @@ static void test_orders(const Db& db) {
     CHECK(std::fabs(rec.cmds.back().payload.f("angle") - 90.0f) < 0.1f);
     CHECK(contains(run_stop(vm, "t1.Turn_To_Face()"), "Turn_To_Face -- invalid number of parameters. Expected 1, got 0."));
     // Abilities: SetUnitAbilityMode / SetAbilityAutofire on the direct path.
-    CHECK(run(vm, "t1.Activate_Ability('SPRINT') act = t1.Is_Ability_Active('SPRINT') and 1 or 0 rdy = t1.Is_Ability_Ready('SPRINT') and 1 or 0") == "");
+    CHECK(run(vm, "t1.Activate_Ability('SPRINT', true) act = t1.Is_Ability_Active('SPRINT') and 1 or 0 rdy = t1.Is_Ability_Ready('SPRINT') and 1 or 0") == "");
     {
         const commands::EventData& e = rec.cmds.back().payload;
         CHECK(e.type() == EventType::SetUnitAbilityMode && e.u("ability") == 40 && e.u("on") == 1 && e.u("count") == 1 &&
               e.ids("units") == std::vector<uint32_t>{1} && e.u("object") == commands::kNoObject);
     }
     CHECK(gnum(vm, "act") == 1.0 && gnum(vm, "rdy") == 0.0);
-    CHECK(run(vm, "t1.Activate_Ability('STEALTH', tank) t1.Activate_Ability('SPRINT', false) act2 = t1.Is_Ability_Active('SPRINT') and 1 or 0") == "");
-    CHECK(rec.cmds[rec.cmds.size() - 2].payload.u("ability") == 48 && rec.cmds[rec.cmds.size() - 2].payload.u("object") == 3);
+    CHECK(run(vm, "t1.Activate_Ability('STEALTH', true) t1.Activate_Ability('SPRINT', false) act2 = t1.Is_Ability_Active('SPRINT') and 1 or 0") == "");
+    CHECK(rec.cmds[rec.cmds.size() - 2].payload.u("ability") == 48 && rec.cmds[rec.cmds.size() - 2].payload.u("object") == commands::kNoObject);
     CHECK(rec.cmds.back().payload.u("on") == 0 && gnum(vm, "act2") == 0.0);
     const size_t before = rec.cmds.size();
-    CHECK(run(vm, "nb = t1.Activate_Ability('JET_PACK') nf = nb.IsFinished() and 1 or 0") == "" && rec.cmds.size() == before);  // not owned: no-op
+    // cu8l t04 (CU8K_T04_COORDINATOR_TRACES "Which check ends the script"): on the stage-2 path too, a count other than 2,
+    // an unknown name and a wrong argument kind (STEALTH takes a bool) are script errors; nothing is issued.
+    CHECK(contains(run_stop(vm, "t1.Activate_Ability('SPRINT')"), "invalid number of parameters.  Expected 2, got 1."));
+    CHECK(contains(run_stop(vm, "t1.Activate_Ability('NOT_AN_ABILITY', true)"), "unknown ability NOT_AN_ABILITY."));
+    CHECK(contains(run_stop(vm, "t1.Activate_Ability('STEALTH', tank)"), "Ability STEALTH expects a bool."));
+    CHECK(rec.cmds.size() == before);
+    CHECK(run(vm, "nb = t1.Activate_Ability('JET_PACK', tank) nf = nb.IsFinished() and 1 or 0") == "" && rec.cmds.size() == before);  // not owned: no-op
+    CHECK(last_message_has(vm, "SCRIPT WARNING: GameObjectWrapper::Activate_Ability -- Object ") && !vm.exit_requested());
     CHECK(run(vm, "t1.Set_Single_Ability_Autofire('STEALTH', true) af = t1.Is_Ability_Autofire('STEALTH') and 1 or 0") == "");
     CHECK(rec.cmds.back().payload.type() == EventType::SetAbilityAutofire && rec.cmds.back().payload.u("ability") == 48 &&
           gnum(vm, "af") == 1.0);

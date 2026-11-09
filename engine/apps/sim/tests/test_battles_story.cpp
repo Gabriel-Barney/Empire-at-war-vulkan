@@ -786,7 +786,7 @@ void test_story_battle(const Data& d) {
                "function main() while true do\n"
                "  if not done then local f = Find_First_Object('S10_Frigate')\n"
                "    if f then local h = f.Get_Hull() if h > 0 and h <= 1 then Story_Event('TAC_SCRIPT') end\n"
-               "      f.Activate_Ability('POWER_TO_WEAPONS') done = true end\n"
+               "      f.Activate_Ability('POWER_TO_WEAPONS', true) done = true end\n"
                "  elseif waits < 3 then waits = waits + 1\n"
                "  elseif not revealed then local f = Find_First_Object('S10_Frigate') local p = Find_Player('Empire')\n"
                "    if f and p then cells = FogOfWar.Reveal(p, f, 20000) revealed = true\n"

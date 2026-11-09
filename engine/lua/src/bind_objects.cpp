@@ -1236,17 +1236,25 @@ int m_set_single_ability_autofire(Call& c) {
     return 0;
 }
 
-// Activate_Ability argument families (S7 t32: AI_TACTICAL §7.3.3 part 6, ABILITIES_HARDPOINTS §2.9 "Argument handling per
-// family", the corrected lists) [H]. Only the S9 path of Activate_Ability uses it: built with ALAMO_LUA_HAVE_ABILITIES only
-// (no unused function in builds without engine/tactical).
-#if ALAMO_LUA_HAVE_ABILITIES
-enum class AbilityArg : uint8_t { Toggle, Object, DummyPosition, ModeOn, ModePosition, JetPack, TargetedInvulnerability, OptionalTarget };
+// Activate_Ability argument families: the second switch of 0x570a50 (S7 t32: AI_TACTICAL §7.3.3 part 6; cu8l t04: the
+// argument kinds per id, CU8K_T04_COORDINATOR_TRACES "Which check ends the script", table "Per ability") [H].
+//   Toggle         1 3 7 9 11 29 32 33 39 40 43 48 52 54 56 60 62 63 65 68 69 70, 2 DEPLOY (and ids the table does not
+//                  list [inferred]): a bool, its value = mode on / off;
+//   ModeOnTeam     6 HUNT, 10 LURE, 12 AVOID_DANGER: a bool, value ignored (mode on), to the unit's team container;
+//   ModeOn         14 23 24 25 35 36 38 44 46 49 57 61 72: anything (not read);
+//   ModePosition   5 26 28 42, JetPack 17, DummyPosition 50 67 71 73 74: a position source (live object, AI target with a
+//                  target, task force, PositionWrapper);
+//   Object         13 15 ... 66, TargetedInvulnerability 19: a GameObjectWrapper or AITargetLocationWrapper;
+//   Unsupported    4 HARASS, 8 AFTERBURNER, 47 FIRE_LOBBING_SUPERWEAPON, 75 DEPLOY_SQUAD, 76: always an error.
+// Used by both the S9 path and the stage-2 path of Activate_Ability.
+enum class AbilityArg : uint8_t { Toggle, Object, DummyPosition, ModeOn, ModePosition, JetPack, TargetedInvulnerability, ModeOnTeam, Unsupported };
 AbilityArg ability_arg_family(uint8_t t) {
     static constexpr uint8_t kObject[] = {13, 15, 16, 18, 20, 21, 22, 27, 30, 31, 34, 37, 41, 45, 51, 53, 55, 58, 59, 64, 66};
     static constexpr uint8_t kDummy[] = {50, 67, 71, 73, 74};
     static constexpr uint8_t kModeOn[] = {14, 23, 24, 25, 35, 36, 38, 44, 46, 49, 57, 61, 72};
     static constexpr uint8_t kModePosition[] = {5, 26, 28, 42};
-    static constexpr uint8_t kOptional[] = {6, 10, 12};
+    static constexpr uint8_t kModeOnTeam[] = {6, 10, 12};
+    static constexpr uint8_t kUnsupported[] = {4, 8, 47, 75, 76};
     if (t == 17) return AbilityArg::JetPack;
     if (t == 19) return AbilityArg::TargetedInvulnerability;
     for (const uint8_t x : kObject)
@@ -1257,10 +1265,77 @@ AbilityArg ability_arg_family(uint8_t t) {
         if (x == t) return AbilityArg::ModeOn;
     for (const uint8_t x : kModePosition)
         if (x == t) return AbilityArg::ModePosition;
-    for (const uint8_t x : kOptional)
-        if (x == t) return AbilityArg::OptionalTarget;
-    return AbilityArg::Toggle;  // the none / bool list, DEPLOY, and types the table does not list [inferred]
+    for (const uint8_t x : kModeOnTeam)
+        if (x == t) return AbilityArg::ModeOnTeam;
+    for (const uint8_t x : kUnsupported)
+        if (x == t) return AbilityArg::Unsupported;
+    return AbilityArg::Toggle;  // the bool list, DEPLOY, and types the table does not list [inferred]
 }
+// cu8l t04: argument 2 read for `family`. Wrong = the kind the ability does not take (a script error once the gates have
+// passed); DeadTarget = an object-target id given a dead object or an AI target without an object (a warning, nil).
+enum class AbilityArgCheck : uint8_t { Ok, Wrong, DeadTarget };
+struct AbilityArgValue {
+    bool on = true;                           // Toggle: the bool; every other family: mode on
+    ObjectId target = objects::kNoObjectId;   // the object argument (object ids, 19; a position family given an object)
+    Vec3 p{};
+    bool has_point = false;
+};
+AbilityArgCheck ability_argument(Call& c, AbilityArg family, AbilityArgValue& out) {
+    switch (family) {
+        case AbilityArg::Toggle:
+        case AbilityArg::ModeOnTeam:
+            if (!is_bool(c, 2)) return AbilityArgCheck::Wrong;
+            out.on = family == AbilityArg::Toggle ? to_bool(c, 2) : true;  // 6 / 10 / 12: the value is ignored
+            return AbilityArgCheck::Ok;
+        case AbilityArg::ModeOn:
+            return AbilityArgCheck::Ok;
+        case AbilityArg::Object:
+        case AbilityArg::TargetedInvulnerability: {
+            if (const Ud* o = c.userdata(2, detail::cls_game_object())) {
+                if (!detail::object_alive(*c.vm, *o)) return AbilityArgCheck::DeadTarget;
+                const ObjectHandle h = detail::object_handle(*o);
+                out.target = store(c)->id(h);
+                out.p = store(c)->position(h);
+                out.has_point = true;
+                return AbilityArgCheck::Ok;
+            }
+            const detail::AiTargetArg t = detail::ai_target_arg(c, 2);
+            if (!t.is_target) return AbilityArgCheck::Wrong;  // a position, a task force, a bool, nil, ...
+            if (t.dead || !t.object) return AbilityArgCheck::DeadTarget;
+            out.target = store(c)->id(t.object);
+            out.p = t.position;
+            out.has_point = true;
+            return AbilityArgCheck::Ok;
+        }
+        case AbilityArg::DummyPosition:
+        case AbilityArg::JetPack:
+        case AbilityArg::ModePosition: {
+            ObjectHandle th{};
+            if (position_arg(c, 2, out.p, &th) != PosArg::Ok) return AbilityArgCheck::Wrong;  // a dead object too
+            if (th) out.target = store(c)->id(th);
+            out.has_point = true;
+            return AbilityArgCheck::Ok;
+        }
+        case AbilityArg::Unsupported:
+            break;
+    }
+    return AbilityArgCheck::Wrong;
+}
+// The script error for a wrong argument kind / an unsupported id (0x248190: the script ends; no value).
+int ability_argument_error(Call& c, AbilityArg family, const std::string& name) {
+    if (family == AbilityArg::Unsupported)
+        return c.script_error_stop("GameObjectWrapper::Activate_Ability -- unsupported unit ability %s.", name.c_str());
+    const char* want = (family == AbilityArg::Toggle || family == AbilityArg::ModeOnTeam) ? "a bool"
+                       : (family == AbilityArg::Object || family == AbilityArg::TargetedInvulnerability) ? "a target object"
+                                                                                                         : "a target position";
+    return c.script_error_stop("GameObjectWrapper::Activate_Ability -- invalid type for parameter 2.  Ability %s expects %s.",
+                               name.c_str(), want);
+}
+int ability_dead_target(Call& c) {
+    c.script_warning("GameObjectWrapper::Activate_Ability -- target object is already dead.");
+    return push_nil(c);
+}
+#if ALAMO_LUA_HAVE_ABILITIES
 // S7 t31 (§7.3.3 item 1): the ids whose Activate_Ability raises signal 0xb on the unit and each TEAM member before executing.
 bool ability_raises_order_replaced(uint8_t t) {
     static constexpr uint8_t kIds[] = {2,  3,  5,  6,  13, 15, 16, 17, 18, 20, 21, 22, 27, 31, 32, 34, 37, 38,
@@ -1283,21 +1358,27 @@ AbilityBlockRule ability_block_rule(uint8_t t) {
 }
 #endif
 
-// Activate_Ability([name], [on | target object | target position]) -> BlockingStatus.
+// Activate_Ability(name, on | target object | target position) -> BlockingStatus.
+// cu8l t04 (CU8K_T04_COORDINATOR_TRACES "Which check ends the script", LUA_API Activate_Ability row) [H], the checks of
+// 0x570a50 in order: argument count != 2 (a Lua nil counts as present) -> script error; argument 1 not a string or an
+// unknown name -> script error; the unit lacks the ability -> warning "Object %s does not have ability %s", nil; not ready
+// / Can_Activate false -> nil without reading the argument; then argument 2 by family (ability_arg_family): a wrong kind,
+// or an unsupported id (4 8 47 75 76), is a script error (the script ends at the end of the service pass; no value);
+// a dead target object of an object id is a warning, nil. Script errors use Call::script_error_stop.
 // With the S9 ability system (executed at once, §2.9; S7 t32 dispatch, AI_TACTICAL §7.3.3 part 6): toggle family ->
-// SetUnitAbilityMode(t, on); object family -> command 40 (targeted_ability; no live target object: nothing);
-// 50 67 71 73 74 -> a Dummy_Barrage_Target at the position (spawn_ability_target; an object argument gives its position
-// [M]), then the command-40 path on it [without the hook: the event below]; 14 23 ... 72 -> 43 mode on, the argument
-// ignored; 5 26 28 42 and the optional-target ids -> 43 mode on (target object if any); 17 JET_PACK -> 43 with the
-// position [port: the AbilitySystem takes the point as a Dummy_Barrage_Target object, h_jet_pack reads its position];
-// 19 TARGETED_INVULNERABILITY -> 43 mode on with the target object (not command 40).
-// Otherwise: SetUnitAbilityMode on the direct path (COMMANDS.md §2.2 / §5). No name: the type's first unit
-// ability [inferred]. An ability the unit does not have is a no-op [inferred].
+// SetUnitAbilityMode(t, on); object family -> command 40 (targeted_ability); 50 67 71 73 74 -> a Dummy_Barrage_Target at
+// the position (spawn_ability_target; an object argument gives its position [M]), then the command-40 path on it [without
+// the hook: the event below]; 14 23 ... 72 -> 43 mode on, the argument ignored; 5 26 28 42 -> 43 mode on (target object
+// if any); 6 10 12 -> 43 mode on for the team container (or the unit); 17 JET_PACK -> 43 with the position [port: the
+// AbilitySystem takes the point as a Dummy_Barrage_Target object, h_jet_pack reads its position]; 19
+// TARGETED_INVULNERABILITY -> 43 mode on with the target object (not command 40).
+// Otherwise: SetUnitAbilityMode on the direct path (COMMANDS.md §2.2 / §5).
 // S7 t15 A1 (MOVEMENT §3.1.1 step 6, ABILITIES_HARDPOINTS §2.6): on the S9 path the BlockingStatus is an AbilityBlockStatus
 // (pending count 1, push_ability_block) that finishes on the unit's next signal 0x29 ("unit ability finished"), 0xb (a new
 // order replaces its order, ObjectBridge::order_replaced) or its death / removal (0x10); no timeout. S7 t26 (AI_TACTICAL
-// §7.3.3 items 1-2): the block exists only when 0x570a50 answers true (ability_block_rule); a gate refusal (unknown name,
-// not the unit's, dead target argument, DEPLOY already in the requested state) and the "never" families answer nil.
+// §7.3.3 items 1-2): the block exists only when 0x570a50 answers true (ability_block_rule); a gate refusal (not the
+// unit's, not ready, dead target argument, DEPLOY already in the requested state) and the "never" families answer nil;
+// the script errors (cu8l t04) answer nothing.
 // *activated (task-force Activate_Ability, bind_ai.cpp): that true result (the task force counts the unit; the others get
 // Unit_Ability_Finished queued at once).
 int push_ability_block(Call& c, ObjectId object) {
@@ -1316,53 +1397,42 @@ int activate_ability(Call& c, bool* activated) {
     // P4 lua: in a galactic script the Ground_Activated hero trigger (Activate_Ability_Galactic 0x570670,
     // P4_SIM_SYSTEMS 6.1) through the players family; returns nothing (L1P4_LUA_GAPS 1.2 item 4).
     if (detail::galactic_activate_ability(c)) return 0;
+    // cu8l t04: the count and name checks (errors; the port's earlier no-name / one-argument forms are gone).
+    if (c.nargs != 2)
+        return c.script_error_stop("GameObjectWrapper::Activate_Ability -- invalid number of parameters.  Expected 2, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("GameObjectWrapper::Activate_Ability -- invalid type for ability 1.  Expected string.");
+    const std::string name(c.string(1));
+    const uint8_t id = ability_param(c, 1);
+    if (id == 0) return c.script_error_stop("GameObjectWrapper::Activate_Ability -- unknown ability %s.", name.c_str());
     const ObjectHandle self = self_object(c);
-    uint8_t id = 0;
-    if (c.has(1) && c.is_string(1)) {
-        id = ability_param(c, 1);
-    } else if (!c.has(1)) {
-        const std::vector<uint8_t> list = type_abilities(c, store(c)->type(self));
-        if (!list.empty()) id = list.front();
-    } else {
-        return c.script_error_stop("GameObjectWrapper::Activate_Ability -- invalid type for parameter 1. Expected string.");  // [inferred]
-    }
-    bool on = true;
-    ObjectId target = objects::kNoObjectId;
-    Vec3 p{};
-    bool has_point = false;
-    if (c.has(2)) {
-        if (is_bool(c, 2)) {
-            on = to_bool(c, 2);
-        } else {
-            ObjectHandle th{};
-            const PosArg pa = position_arg(c, 2, p, &th);
-#if ALAMO_LUA_HAVE_ABILITIES
-            // S7 t32: 14 23 ... 72 do not read the argument (any value, even a dead object).
-            if (pa != PosArg::Ok && !(id != 0 && ability_arg_family(id) == AbilityArg::ModeOn)) return push_nil(c);
-#else
-            if (pa != PosArg::Ok) return push_nil(c);  // dead target: no-op, nil (S7 t26: 0x570a50 false)
-#endif
-            if (pa == PosArg::Ok) {
-                if (th) target = store(c)->id(th);
-                has_point = true;
-            }
-        }
-    }
+    auto lacks_ability = [&c, &self, &name] {
+        const std::string type(object_type_name(c, self));
+        c.script_warning("GameObjectWrapper::Activate_Ability -- Object %s does not have ability %s.", type.c_str(), name.c_str());
+    };
+    const AbilityArg family = ability_arg_family(id);
+    AbilityArgValue arg;
 #if ALAMO_LUA_HAVE_ABILITIES
     if (ab::AbilitySystem* a = ability_system(c, c.self->id)) {
-        if (id == 0 || !a->has_ability(c.self->id, id)) return push_nil(c);  // S7 t26: a gate refusal answers nil
-        // S7 t26 (§7.3.3 item 1): DEPLOY executes only when the requested state differs from the current one; equal -> nil.
-        if (id == ab::kDeploy && a->is_active(c.self->id, id) == on) return push_nil(c);
-        const AbilityArg family = ability_arg_family(id);
-        // S7 t32: the argument each family needs (ABILITIES_HARDPOINTS §2.9 "Argument handling per family"): the object
-        // ids and 19 an object, the position ids (5 26 28 42, 17, 50 67 71 73 74) a position; else 0x570a50 is false (nil).
-        if ((family == AbilityArg::Object || family == AbilityArg::TargetedInvulnerability) && target == objects::kNoObjectId)
+        if (!a->has_ability(c.self->id, id)) {  // 0x3986b0: a warning, nil
+            lacks_ability();
             return push_nil(c);
-        if ((family == AbilityArg::DummyPosition || family == AbilityArg::JetPack || family == AbilityArg::ModePosition) && !has_point)
-            return push_nil(c);
+        }
         const uint32_t frame = ability_frame(c);
         const ObjectId users[] = {c.self->id};
         const bool gates = a->is_ready(c.self->id, id, frame) && a->can_activate(c.self->id, id, true, true, frame);
+        // cu8l t04: the argument is read only after the readiness gates (0x39bbd0, 0x39b480): a gate refusal answers nil
+        // whatever the argument. [port] DEPLOY keeps the S7 t26 exception (it executes past the gates), so its argument
+        // is always checked. An argument that passes is executed as before even when the gates refuse (the S9 command
+        // refuses it itself).
+        const bool checked = gates || id == ab::kDeploy;
+        const AbilityArgCheck kind = ability_argument(c, family, arg);
+        if (kind != AbilityArgCheck::Ok) {
+            if (!checked) return push_nil(c);
+            if (kind == AbilityArgCheck::DeadTarget) return ability_dead_target(c);
+            return ability_argument_error(c, family, name);
+        }
+        // S7 t26 (§7.3.3 item 1): DEPLOY executes only when the requested state differs from the current one; equal -> nil.
+        if (id == ab::kDeploy && a->is_active(c.self->id, id) == arg.on) return push_nil(c);
         // S7 t31 (§7.3.3 item 1): after the gates, before executing, the listed ids raise signal 0xb on the unit and on each
         // member of its TEAM (0x220ed0); the block subscribes afterwards, so it never sees this one.
         if (ability_raises_order_replaced(id) && (id == ab::kDeploy || gates)) {
@@ -1384,31 +1454,40 @@ int activate_ability(Call& c, bool* activated) {
         uint32_t accepted = 0;
         switch (family) {
             case AbilityArg::Object:
-                accepted = a->targeted_ability(users, id, target, -1, frame);
+                accepted = a->targeted_ability(users, id, arg.target, -1, frame);
                 break;
             case AbilityArg::DummyPosition:
             case AbilityArg::JetPack: {
                 const ObjectBridge* b = bridge(c);
                 if (b && b->spawn_ability_target) {
-                    const ObjectId dummy = b->spawn_ability_target(p, store(c)->owner(self));
+                    const ObjectId dummy = b->spawn_ability_target(arg.p, store(c)->owner(self));
                     if (dummy == objects::kNoObjectId) break;
                     accepted = family == AbilityArg::JetPack ? a->set_unit_ability_mode(users, id, true, frame, dummy)
                                                              : a->targeted_ability(users, id, dummy, -1, frame);
                     break;
                 }
                 if (activated) *activated = true;  // [port] the event path: accepted by the pipeline
-                return issue_and_block(c, ev_ability_mode(c.self->id, id, true, target, p));
+                return issue_and_block(c, ev_ability_mode(c.self->id, id, true, arg.target, arg.p));
             }
             case AbilityArg::ModeOn:  // the argument ignored: mode on, no position, no target
                 accepted = a->set_unit_ability_mode(users, id, true, frame);
                 break;
+            case AbilityArg::ModeOnTeam: {
+                // cu8l t04: 6 / 10 / 12 always switch the mode on, on the unit's team container when it is a team member
+                // (obj +0x348 != -1), else on the unit; no target.
+                const ObjectId team = a->container_of(c.self->id);
+                const ObjectId to[] = {team != objects::kNoObjectId ? team : c.self->id};
+                accepted = a->set_unit_ability_mode(to, id, true, frame);
+                break;
+            }
             case AbilityArg::ModePosition:
             case AbilityArg::TargetedInvulnerability:  // 43 mode on with the object (its position + id)
-                accepted = a->set_unit_ability_mode(users, id, true, frame, target);
+                accepted = a->set_unit_ability_mode(users, id, true, frame, arg.target);
                 break;
             case AbilityArg::Toggle:
-            case AbilityArg::OptionalTarget:
-                accepted = a->set_unit_ability_mode(users, id, on, frame, target);
+                accepted = a->set_unit_ability_mode(users, id, arg.on, frame);
+                break;
+            case AbilityArg::Unsupported:  // refused by ability_argument above
                 break;
         }
         // S7 t26 (§7.3.3 item 1): whether 0x570a50 answers true (a block; the task force counts the unit) depends on the
@@ -1426,14 +1505,21 @@ int activate_ability(Call& c, bool* activated) {
         if (activated) *activated = block;
         return block ? push_ability_block(c, c.self->id) : push_nil(c);
     }
-#else
-    (void)has_point;
 #endif
-    if (id == 0 || !has_ability(c, self, id)) return push_block(c, c.self->id, 0);
+    // Stage-2 path (no S9 system for the unit): ownership is the type's list (warning; the port keeps its finished
+    // block), no readiness gate, then the cu8l t04 argument checks. [port] 6 / 10 / 12 go to the unit itself here (no TEAM
+    // membership without the S9 system).
+    if (!has_ability(c, self, id)) {
+        lacks_ability();
+        return push_block(c, c.self->id, 0);
+    }
     if (!black_market_ok(c, self, id)) return push_block(c, c.self->id, 0);  // P4 lua: BM gate (0x570a50)
-    if (ScriptObjectState* s = edit_self(c)) s->abilities[id].active = on;
+    const AbilityArgCheck kind = ability_argument(c, family, arg);
+    if (kind == AbilityArgCheck::DeadTarget) return ability_dead_target(c);
+    if (kind != AbilityArgCheck::Ok) return ability_argument_error(c, family, name);
+    if (ScriptObjectState* s = edit_self(c)) s->abilities[id].active = arg.on;
     if (activated) *activated = true;
-    return issue_and_block(c, ev_ability_mode(c.self->id, id, on, target, p));
+    return issue_and_block(c, ev_ability_mode(c.self->id, id, arg.on, arg.target, arg.p));
 }
 int m_activate_ability(Call& c) { return activate_ability(c, nullptr); }
 

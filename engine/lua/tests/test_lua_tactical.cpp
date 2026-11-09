@@ -215,7 +215,7 @@ static void test_no_systems(const Db& db) {
     host.types = &db.types;
     LuaVm vm(host);
     attach_object_bridge(vm, &bridge);
-    CHECK(run(vm, "s = Find_First_Object('Ship') s.Activate_Ability('DEFEND') a = s.Is_Ability_Active('DEFEND') "
+    CHECK(run(vm, "s = Find_First_Object('Ship') s.Activate_Ability('DEFEND', true) a = s.Is_Ability_Active('DEFEND') "
                   "s.Force_Ability_Recharge('DEFEND') s.Force_Ability_Recharge('DEFEND', 2) s.Reset_Ability_Counter('DEFEND') "
                   "e = s.Are_Engines_Online() u = s.Is_Under_Effects_Of_Ability('TRACTOR_BEAM') "
                   "x, y, z = s.Get_Bone_Position('Root').Get_XYZ() b = s.Play_Animation('Attack', false)") == "");
@@ -316,7 +316,19 @@ struct AbilityWorld {
         hauler.radius = 20.0f;
         hauler.hardpoints = {0};
         push(hauler, ab::AbilityObjectDesc{});
-        combat = std::make_unique<cb::CombatSystem>(cd, cb::CombatConfig{}, std::vector<cb::PlayerInfo>{cb::PlayerInfo{}, cb::PlayerInfo{}});
+        // cu8l t04: a squad member (desc 3) with HUNT / AVOID_DANGER (Activate_Ability ids 6 / 12) and AFTERBURNER
+        // (8, unsupported by Activate_Ability); its team container uses desc 4 (no abilities of its own).
+        cb::UnitDesc squaddie;
+        squaddie.name = "Squaddie";
+        squaddie.tactical_health = 100.0f;
+        squaddie.radius = 5.0f;
+        ab::AbilityObjectDesc qa;
+        qa.unit_abilities = {rec(ab::kHunt, 0.0f, 0.0f), rec(ab::kAvoidDanger, 0.0f, 0.0f), rec(ab::kAfterburner, 0.0f, 0.0f)};
+        push(squaddie, qa);
+        cb::UnitDesc team;
+        team.name = "Squad_Team";
+        push(team, ab::AbilityObjectDesc{});
+        combat =std::make_unique<cb::CombatSystem>(cd, cb::CombatConfig{}, std::vector<cb::PlayerInfo>{cb::PlayerInfo{}, cb::PlayerInfo{}});
         abilities = std::make_unique<ab::AbilitySystem>(*combat, ad, ab::AbilityConfig{});
         combat->bind_rng(&rng);
     }
@@ -367,7 +379,7 @@ static void test_abilities(const Db& db) {
     vm.set_frame(999);  // the ability frame comes from the hook, not the VM
     CHECK(run(vm, "s = Find_First_Object('Ship') t = Find_First_Object('Target_Ship') h = Find_First_Object('Hauler') "
                   "has_d = s.Has_Ability('DEFEND') has_t = s.Has_Ability('TURBO') rdy = s.Is_Ability_Ready('DEFEND') "
-                  "s.Activate_Ability('DEFEND') act = s.Is_Ability_Active('defend') eff = s.Is_Under_Effects_Of_Ability('ION_CANNON_SHOT') == false "
+                  "s.Activate_Ability('DEFEND', true) act = s.Is_Ability_Active('defend') eff = s.Is_Under_Effects_Of_Ability('ION_CANNON_SHOT') == false "
                   "tr = t.Is_Under_Effects_Of_Ability('TRACTOR_BEAM')") == "");
     CHECK(gtrue(vm, "has_d") && !gtrue(vm, "has_t") && gtrue(vm, "rdy") && gtrue(vm, "act") && gtrue(vm, "eff") && !gtrue(vm, "tr"));
     CHECK(a.is_active(ship, ab::kDefend) && a.countdown_maximum(ship, ab::kDefend) == 450);
@@ -458,7 +470,7 @@ static void test_abilities(const Db& db) {
     // success; an ability the unit lacks nil; DEPLOY nil when already in the requested state, else a block; the
     // Dummy_Barrage_Target ids (BUZZ_DROIDS) a block once the gates pass.
     a.force_recharge(ship, ab::kSpoilerLock, 0.0f);
-    CHECK(run(vm, "n1 = s.Activate_Ability('SPOILER_LOCK', true) n2 = s.Activate_Ability('TURBO') "
+    CHECK(run(vm, "n1 = s.Activate_Ability('SPOILER_LOCK', true) n2 = s.Activate_Ability('TURBO', true) "
                   "n3 = s.Activate_Ability('DEPLOY', false) d1 = s.Activate_Ability('DEPLOY', true) "
                   "bz = s.Activate_Ability('BUZZ_DROIDS', Create_Position(10, 20, 0))") == "");
     std::printf("  activate ability blocks: n1 %d n2 %d n3 %d d1 %d bz %d\n", gnil(vm, "n1"), gnil(vm, "n2"), gnil(vm, "n3"),
@@ -530,6 +542,120 @@ static void test_abilities(const Db& db) {
     CHECK(vm.errors().empty());
     std::printf("  abilities: S9 AbilitySystem bindings OK\n");
 }
+
+// cu8l t04 (CU8K_T04_COORDINATOR_TRACES "Which check ends the script", LUA_API Activate_Ability row): the checks of
+// 0x570a50 in order - count, name (script errors), not the unit's ability (warning, nil), not ready (nil, the argument
+// not read), then the argument kind per ability id (script error; a dead target object of an object id: warning, nil);
+// ids 6 / 10 / 12 always switch the mode on, on the team container; ids 4 8 47 75 76 are unsupported (script error).
+static void test_activate_ability_checks(const Db& db) {
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Space, objects::StoreKind::Primary, db.types, &ids);
+    const objects::ObjectId ship = store.id(make(store, db.t("Ship"), 0, {0, 0, 0}));
+    const objects::ObjectId target = store.id(make(store, db.t("Target_Ship"), 1, {300, 0, 0}));
+    const objects::ObjectHandle doomed_h = make(store, db.t("Target_Ship"), 1, {350, 0, 0});
+    const objects::ObjectId doomed = store.id(doomed_h);
+    const objects::ObjectId m1 = store.id(make(store, db.t("Hauler"), 0, {0, 100, 0}));
+    const objects::ObjectId m2 = store.id(make(store, db.t("Hauler"), 0, {0, 110, 0}));
+    const objects::ObjectId team = store.id(make(store, db.t("Hauler"), 0, {0, 105, 0}));
+    const objects::ObjectId lone = store.id(make(store, db.t("Hauler"), 0, {0, 200, 0}));
+    AbilityWorld w;
+    w.add(ship, 0, 0, {0, 0, 0});
+    w.add(target, 1, 1, {300, 0, 0});
+    w.add(doomed, 1, 1, {350, 0, 0});
+    w.add(m1, 3, 0, {0, 100, 0});
+    w.add(m2, 3, 0, {0, 110, 0});
+    const objects::ObjectId members[] = {m1, m2};
+    CHECK(w.abilities->add_container(team, 4, 0, members, w.frame));
+    w.add(lone, 3, 0, {0, 200, 0});
+    ab::AbilitySystem& a = *w.abilities;
+    CHECK(a.container_of(m1) == team && a.container_of(lone) == objects::kNoObjectId);
+    ObjectBridge bridge;
+    bridge.abilities = &a;
+    bridge.ability_frame = [&w] { return w.frame; };
+    int dummies = 0;
+    bridge.spawn_ability_target = [&](Vec3, int32_t) {
+        ++dummies;
+        return target;
+    };
+    LuaHost host;
+    host.store = &store;
+    host.types = &db.types;
+    LuaVm vm(host);
+    attach_object_bridge(vm, &bridge);
+    vm.set_object_global("S", store.find(ship));
+    vm.set_object_global("T", store.find(target));
+    vm.set_object_global("D", doomed_h);
+    vm.set_object_global("M1", store.find(m1));
+    vm.set_object_global("M2", store.find(m2));
+    vm.set_object_global("L", store.find(lone));
+    auto has = [](const std::string& s, const char* what) { return s.find(what) != std::string::npos; };
+    auto said = [&vm](const char* text) {
+        size_t n = 0;
+        for (const std::string& m : vm.messages()) n += m.find(text) != std::string::npos ? 1u : 0u;
+        return n;
+    };
+    // 1. Argument count != 2 is a script error (the one-argument and no-argument forms too; a nil counts as present).
+    CHECK(has(run_stop(vm, "S.Activate_Ability('SPOILER_LOCK')"), "invalid number of parameters.  Expected 2, got 1."));
+    CHECK(has(run_stop(vm, "S.Activate_Ability()"), "Expected 2, got 0."));
+    CHECK(has(run_stop(vm, "S.Activate_Ability('SPOILER_LOCK', true, 1)"), "Expected 2, got 3."));
+    CHECK(!a.is_active(ship, ab::kSpoilerLock));
+    CHECK(has(run_stop(vm, "S.Activate_Ability('SPOILER_LOCK', nil)"), "Ability SPOILER_LOCK expects a bool."));
+    // 2. Argument 1: not a string / an unknown name.
+    CHECK(has(run_stop(vm, "S.Activate_Ability(5, true)"), "invalid type for ability 1.  Expected string."));
+    CHECK(has(run_stop(vm, "S.Activate_Ability('NO_SUCH_ABILITY', true)"), "unknown ability NO_SUCH_ABILITY."));
+    // 3. Not the unit's ability: a warning, nil, the script goes on (the argument is not looked at).
+    CHECK(run_stop(vm, "w1 = S.Activate_Ability('HUNT', T)") == "" && gnil(vm, "w1") && !vm.exit_requested());
+    CHECK(said("SCRIPT WARNING: GameObjectWrapper::Activate_Ability -- Object Ship does not have ability HUNT.") == 1);
+    // 4. The argument kind per id, gates passed: a script error, nothing executed.
+    CHECK(has(run_stop(vm, "S.Activate_Ability('SPOILER_LOCK', T)"), "Ability SPOILER_LOCK expects a bool."));
+    CHECK(has(run_stop(vm, "S.Activate_Ability('SPOILER_LOCK', 1)"), "Ability SPOILER_LOCK expects a bool."));
+    CHECK(has(run_stop(vm, "S.Activate_Ability('DEPLOY', T)"), "Ability DEPLOY expects a bool."));
+    CHECK(!a.is_active(ship, ab::kSpoilerLock) && !a.is_active(ship, ab::kDeploy));
+    CHECK(has(run_stop(vm, "S.Activate_Ability('TRACTOR_BEAM', true)"), "Ability TRACTOR_BEAM expects a target object."));
+    CHECK(has(run_stop(vm, "S.Activate_Ability('TRACTOR_BEAM', Create_Position(300, 0, 0))"), "expects a target object."));
+    CHECK(a.pending_type(ship) == -1);
+    CHECK(has(run_stop(vm, "S.Activate_Ability('BUZZ_DROIDS', true)"), "Ability BUZZ_DROIDS expects a target position."));
+    CHECK(has(run_stop(vm, "S.Activate_Ability('BUZZ_DROIDS', 'x')"), "expects a target position."));
+    CHECK(dummies == 0);
+    // 14 23 ... 72 (HARMONIC_BOMB 35) do not read the argument.
+    CHECK(run_stop(vm, "S.Activate_Ability('HARMONIC_BOMB', 'anything')") == "");
+    // A dead target: the object ids warn and answer nil (the script goes on); the position ids error.
+    CHECK(store.destroy(doomed_h));
+    const std::string dead = run_stop(vm, "d1 = S.Activate_Ability('TRACTOR_BEAM', D)");
+    if (!dead.empty()) std::printf("  dead target: %s\n", dead.c_str());
+    CHECK(dead.empty() && gnil(vm, "d1") && a.pending_type(ship) == -1);
+    CHECK(said("SCRIPT WARNING: GameObjectWrapper::Activate_Ability -- target object is already dead.") == 1);
+    CHECK(has(run_stop(vm, "S.Activate_Ability('BUZZ_DROIDS', D)"), "Ability BUZZ_DROIDS expects a target position."));
+    // 5. Not ready: nil without reading the argument (no error for a wrong kind).
+    CHECK(a.force_recharge(ship, ab::kTractorBeam, 5.0f) && !a.is_ready(ship, ab::kTractorBeam, w.frame));
+    CHECK(run_stop(vm, "n1 = S.Activate_Ability('TRACTOR_BEAM', true)") == "" && gnil(vm, "n1"));
+    // The right kinds still work.
+    CHECK(run_stop(vm, "S.Activate_Ability('SPOILER_LOCK', true)") == "" && a.is_active(ship, ab::kSpoilerLock));
+    CHECK(run_stop(vm, "bz = S.Activate_Ability('BUZZ_DROIDS', T)") == "" && dummies == 1 && !gnil(vm, "bz"));
+    // 6. Unsupported ids (4 8 47 75 76): a script error.
+    CHECK(has(run_stop(vm, "M1.Activate_Ability('AFTERBURNER', true)"), "unsupported unit ability AFTERBURNER."));
+    // 7. 6 / 10 / 12: a bool only; its value is ignored (mode on); a team member's command goes to its team container,
+    // which forwards it to every member.
+    CHECK(has(run_stop(vm, "M1.Activate_Ability('HUNT', T)"), "Ability HUNT expects a bool."));
+    CHECK(has(run_stop(vm, "M1.Activate_Ability('HUNT', Create_Position(0, 0, 0))"), "Ability HUNT expects a bool."));
+    CHECK(!a.is_active(m1, ab::kHunt) && !a.is_active(m2, ab::kHunt));
+    CHECK(run_stop(vm, "h1 = M1.Activate_Ability('HUNT', false)") == "" && gnil(vm, "h1"));
+    std::printf("  activate ability 6/10/12: HUNT(false) on member 1 -> member 1 %d, member 2 %d\n", a.is_active(m1, ab::kHunt) ? 1 : 0,
+                a.is_active(m2, ab::kHunt) ? 1 : 0);
+    CHECK(a.is_active(m1, ab::kHunt) && a.is_active(m2, ab::kHunt) && !a.is_active(lone, ab::kHunt));
+    CHECK(run_stop(vm, "L.Activate_Ability('AVOID_DANGER', false)") == "" && a.is_active(lone, ab::kAvoidDanger) &&
+          !a.is_active(m1, ab::kAvoidDanger));
+    // 8. Task-force Activate_Ability runs each unit's checks (0x5f9890 -> 0x570a50).
+    TfAi ai;
+    ai.units = {store.find(ship)};
+    attach_ai_host(vm, &ai, 1);
+    set_task_force_global(vm, "TF", 3, AiTaskForceKind::Space);
+    CHECK(has(run_stop(vm, "TF.Activate_Ability('SPOILER_LOCK')"), "Expected 2, got 1."));
+    CHECK(ai.activated.size() == 1 && !ai.activated[0].second);
+    attach_ai_host(vm, nullptr, -1);
+    CHECK(vm.errors().empty());
+    std::printf("  activate ability checks: count / name / kind errors, warnings, 6/10/12, unsupported OK\n");
+}
 #endif
 
 #if ALAMO_LUA_HAVE_ANIM
@@ -598,6 +724,7 @@ int main() {
     test_no_systems(db);
 #if ALAMO_LUA_HAVE_ABILITIES
     test_abilities(db);
+    test_activate_ability_checks(db);
 #else
     std::printf("  abilities: built without engine/tactical/abilities, skipped\n");
 #endif

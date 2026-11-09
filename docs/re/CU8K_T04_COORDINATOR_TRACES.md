@@ -215,6 +215,8 @@ ability record. Correction: ABILITIES_HARDPOINTS §2.9 and AI_TACTICAL §7.3.3 l
 they need a bool (CU8F_T04_T06's `("LURE", true)` runs agree).
 
 **What the port needs** (`engine/lua/src/bind_objects.cpp` `activate_ability`, dev at this writing):
+Done in cu8l t04 (2026-11-09): items 1-5 (item 1 with the port's DEPLOY exception: its argument is checked even when
+the gates refuse); on the stage-2 path (no S9 system) the same checks, 6 / 10 / 12 there stay on the unit. Item 6 unchanged.
 1. Keep the retail order: name checks (error), not the unit's ability (warning, nil), not ready / `Can_Activate`
    (silent nil), and only then the argument kind. Today the port checks the argument first and answers nil.
 2. A wrong argument kind for the ability (rows above) must be a **script error that ends the script**

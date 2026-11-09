@@ -1135,12 +1135,12 @@ uint64_t special_session() {
     attach_object_bridge(tvm, &tbridge);
     attach_player_world(tvm, &g.world);
     tvm.set_object_global("T", ts);
-    CHECK(run(tvm, "T.Activate_Ability('STEALTH') a1 = T.Is_Ability_Active('STEALTH') T.Activate_Ability('SPRINT') "
+    CHECK(run(tvm, "T.Activate_Ability('STEALTH', true) a1 = T.Is_Ability_Active('STEALTH') T.Activate_Ability('SPRINT', true) "
                    "a2 = T.Is_Ability_Active('SPRINT')") == "");
     CHECK(!gtrue(tvm, "a1") && gtrue(tvm, "a2"));
     CHECK(sim.bm_give_item(1, "Stealth_Item"));
     CHECK(run(vm, "r3 = S.Is_Ability_Ready('STEALTH')") == "" && gtrue(vm, "r3"));
-    CHECK(run(tvm, "T.Activate_Ability('STEALTH') a3 = T.Is_Ability_Active('STEALTH')") == "" && gtrue(tvm, "a3"));
+    CHECK(run(tvm, "T.Activate_Ability('STEALTH', true) a3 = T.Is_Ability_Active('STEALTH')") == "" && gtrue(tvm, "a3"));
 
     // Galactic Activate_Ability -> ground_activated_trigger; returns nothing (L1P4_LUA_GAPS 1.2). The halt ability must
     // be bought: nothing yet.
