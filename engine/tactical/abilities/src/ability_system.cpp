@@ -804,15 +804,52 @@ bool AbilitySystem::target_filter(const SpecialAbilityDesc& s, ObjectId target) 
     return true;
 }
 
-bool AbilitySystem::in_range(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const {
-    // Target_In_Range (0x48d820) [M]: Activation_Min/Max_Range when given (XY), else the unit's
-    // attack range + target radius. A container is in range when any live member is [port].
-    const Vec3 tp = combat_->position(target);
-    const float tr = combat_->data().units[combat_->desc_index(target)].radius;
+bool AbilitySystem::in_range(const Obj& o, const SpecialAbilityDesc& s, ObjectId target, ObjectId container) const {
+    // s78m t08: Target_In_Range (0x48d820, slot 44) and not Must_Close_Range (0x48e100, slot 46), TACTICAL_COMBAT §5.4.2:
+    // the weapon range test (TACTICAL_GAPS §3.1) with the ability's ranges swapped in, from the user's position P_U.
+    // In range <=> d <= R + E (XY, float, non-strict; d = 0 passes): R = Activation_Max_Range when > 0, else the user's
+    // max attack range (with its modifiers); E = the target's footprint half-extent along the line of sight (the
+    // LAND_OBSTACLE aim walk: sqrt(200)). The user's own radius is not in it. Too close <=> r > 0 and d <= r + E: r =
+    // Activation_Min_Range when > 0, else the user's Targeting_Min_Attack_Distance, and then a team-member target is
+    // retested against the live member of its container nearest P_U ([M] ties: list order). `container` (Tactical_Bribe
+    // apply 0x5b07c0, a land squad container T from the host): in range when T (R + 10, no footprint term) OR the target
+    // is; too close only when T ([port] E = 0: the members' joint-box half-extent is [M]) AND the target are. [port] The
+    // grenade-weapon lob solve and the melee redirect (container targets only) are not modelled. A container user
+    // passes when any live member does [port].
+    Vec3 tpos{};
+    const bool has_t = container != kNoObject && host_.land_squad_container && host_.land_squad_container(container, tpos);
+    const Obj* x = obj(target);
+    const Obj* xc = x && x->container != kNoObject ? obj(x->container) : nullptr;
     auto check = [&](ObjectId u) {
-        const float d = combat::distance_xy(combat_->position(u), tp);
-        if (s.max_range > 0.0f) return d >= s.min_range && d <= s.max_range;
-        return d <= combat_->attack_range(u) + tr;
+        const Vec3 pu = combat_->position(u);
+        const float R = s.max_range > 0.0f ? s.max_range : combat_->attack_range(u);
+        const float r = s.min_range > 0.0f ? s.min_range : combat_->min_attack_distance(u);
+        float d = 0.0f, E = 0.0f;
+        (void)combat_->range_geometry_of(target, pu, d, E);
+        bool in_max = d <= R + E;
+        bool too_close = false;
+        if (r > 0.0f) {
+            ObjectId xm = kNoObject;
+            if (!(s.min_range > 0.0f) && xc) {  // the weapon min range: the container's member nearest P_U
+                float best = 0.0f;
+                for (ObjectId m : xc->members) {
+                    if (!alive_unit(m)) continue;
+                    const float dm = combat::distance_xy(pu, combat_->position(m));
+                    if (xm == kNoObject || dm < best) {
+                        xm = m;
+                        best = dm;
+                    }
+                }
+            }
+            if (xm != kNoObject && xm != target) (void)combat_->range_geometry_of(xm, pu, d, E);
+            too_close = d <= r + E;
+        }
+        if (has_t) {  // T first: in range of T or of X; too close to T and to X
+            const float dt = combat::distance_xy(pu, tpos);
+            in_max = dt <= R + 10.0f || in_max;
+            too_close = too_close && dt <= r;
+        }
+        return in_max && !too_close;
     };
     if (o.combat_unit) return check(o.id);
     for (ObjectId m : o.members)

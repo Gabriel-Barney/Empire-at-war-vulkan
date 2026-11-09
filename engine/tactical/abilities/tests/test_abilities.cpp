@@ -4527,6 +4527,150 @@ void test_bribe_hack_accept() {
     CHECK(hack({}, {9}, kCatInfantry, 9) == 0);  // categories hit, then excluded
 }
 
+// s78m t08 (TACTICAL_COMBAT §5.4.2): Tactical_Bribe's range. Tyber (Activation_Max_Range 100, radius 8: not in the formula)
+// walks `path` (one position per tick); the target X (id 2, Custom_Hard X / Y extents, facing +x) stands at `xp`. With
+// `squad` X is a member of container 25 (a second member, id 3, at `mate`); with `hook` the host reports 25 as a land
+// squad container at `tp`. Returns the path index of the tick that converted X, -1 when none did.
+struct BribeRangeCase {
+    std::vector<Vec3> path;
+    Vec3 xp{0, 0, 0}, tp{0, 0, 0}, mate{900, 900, 0};
+    float ex = 3.0f, ey = 3.0f, min_range = 0.0f, user_min = 0.0f;
+    bool squad = false, hook = false;
+};
+int bribe_range_tick(const BribeRangeCase& c) {
+    OiWorld w;
+    SpecialAbilityDesc b = oi_special("Bribe", SpecialClass::TacticalBribe, ActivationStyle::UserInput);
+    b.applicable_categories = 0;
+    b.max_range = 100.0f;
+    b.min_range = c.min_range;
+    const uint32_t bs = add_special(w.ad, b);
+    AbilityObjectDesc a;
+    a.unit_abilities = {oi_gui(kTacticalBribe, 0.0f, 10.0f, "Bribe")};
+    a.specials = {bs};
+    UnitDesc tu = oi_unit("Tyber", 100.0f, 8.0f);
+    tu.min_attack_distance = c.user_min;
+    const uint32_t ad = push(w.cd, w.ad, tu, a);
+    UnitDesc xu = oi_unit("Squad_Stormtrooper", 100.0f, 5.0f, 16);
+    xu.hard_x_extent = c.ex;
+    xu.hard_y_extent = c.ey;
+    const uint32_t xd = push(w.cd, w.ad, xu, AbilityObjectDesc{});
+    AbilityObjectDesc sq;
+    sq.name = "Stormtrooper_Team";
+    const uint32_t sqd = push_container(w.cd, w.ad, sq);
+    w.make(GameMode::Land);
+    if (c.hook) {
+        AbilityHost h;
+        const Vec3 tp = c.tp;
+        h.land_squad_container = [tp](ObjectId id, Vec3& pos) {
+            if (id != 25) return false;
+            pos = tp;
+            return true;
+        };
+        w.ab->set_host(std::move(h));
+    }
+    w.add(1, ad, 0, c.path.front());
+    const ObjectId team = c.squad ? ObjectId{25} : kNoObject;
+    w.add(2, xd, 1, c.xp, {1, 0, 0}, team);
+    if (c.squad) {
+        w.add(3, xd, 1, c.mate, {1, 0, 0}, team);
+        const ObjectId mem[] = {2, 3};
+        CHECK(w.ab->add_container(25, sqd, 1, mem, w.frame, &w.rng));
+    }
+    const ObjectId one[] = {1};
+    CHECK(w.ab->targeted_ability(one, kTacticalBribe, 2, -1, w.frame) == 1);
+    for (size_t i = 0; i < c.path.size(); ++i) {
+        w.move(1, c.path[i]);
+        w.tick();
+        if (w.sys->owner(2) == 0) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+void test_bribe_range() {
+    auto at = [](float x, float y) { return std::vector<Vec3>{Vec3{x, y, 0.0f}}; };
+    {  // a single unit: 100 + its X extent along its facing, 100 + its Y extent across it (non-strict, XY only)
+        BribeRangeCase c;
+        c.ex = 4.0f;
+        c.ey = 2.0f;
+        c.path = at(-104.0f, 0.0f);
+        CHECK(bribe_range_tick(c) == 0);
+        c.path = at(-104.5f, 0.0f);
+        CHECK(bribe_range_tick(c) == -1);
+        c.path = at(0.0f, 102.0f);
+        CHECK(bribe_range_tick(c) == 0);
+        c.path = at(0.0f, 102.5f);
+        CHECK(bribe_range_tick(c) == -1);
+        c.path = {Vec3{-104.0f, 0.0f, 500.0f}};  // z is ignored
+        CHECK(bribe_range_tick(c) == 0);
+    }
+    BribeRangeCase sq;  // Stormtrooper_Team: Custom_Hard_X/YExtent 2.0 x Scale_Factor 1.5 = 3.0 per member
+    sq.squad = true;
+    sq.hook = true;
+    {  // T and X at one point: the container test, <= 110 (+10, no footprint term)
+        sq.path = at(-110.0f, 0.0f);
+        CHECK(bribe_range_tick(sq) == 0);
+        sq.path = at(-110.5f, 0.0f);
+        CHECK(bribe_range_tick(sq) == -1);
+    }
+    {  // T far away: the member alone, <= 103
+        sq.tp = Vec3{500.0f, 0.0f, 0.0f};
+        sq.path = at(-103.0f, 0.0f);
+        CHECK(bribe_range_tick(sq) == 0);
+        sq.path = at(-103.5f, 0.0f);
+        CHECK(bribe_range_tick(sq) == -1);
+        sq.hook = false;  // no land squad container from the host: the member alone
+        sq.tp = Vec3{0.0f, 0.0f, 0.0f};
+        sq.path = at(-104.0f, 0.0f);
+        CHECK(bribe_range_tick(sq) == -1);
+        sq.hook = true;
+    }
+    {  // retail run s78m t06 trial 2 (S78M_T06_BRIBE_RUN Q6): T and X at (4010, 1200), Tyber on y = 1200 at centre
+       // distances 113.5, 111.9, 110.4, 108.8: converted at 108.8 (the T test); the X test alone (103) not yet
+        sq.xp = sq.tp = Vec3{4010.0f, 1200.0f, 0.0f};
+        sq.mate = Vec3{4030.0f, 1210.0f, 0.0f};
+        for (float d : {113.5f, 111.9f, 110.4f, 108.8f, 107.2f, 105.7f, 104.1f, 102.5f})
+            sq.path.push_back(Vec3{4010.0f - d, 1200.0f, 0.0f});
+        sq.path.erase(sq.path.begin());  // drop the earlier single position
+        CHECK(bribe_range_tick(sq) == 3);
+        sq.hook = false;
+        CHECK(bribe_range_tick(sq) == 7);
+        sq.hook = true;
+    }
+    {  // Activation_Min_Range 20: too close only when both T (d <= 20, [port] E 0) and X (d <= 20 + 3) are
+        BribeRangeCase m;
+        m.squad = true;
+        m.hook = true;
+        m.min_range = 20.0f;
+        m.tp = Vec3{10.0f, 0.0f, 0.0f};
+        m.path = at(-21.0f, 0.0f);  // X 21 (too close), T 31 (not): converted
+        CHECK(bribe_range_tick(m) == 0);
+        m.tp = Vec3{0.0f, 0.0f, 0.0f};
+        m.path = at(-19.0f, 0.0f);  // both too close: refused, the order stays
+        CHECK(bribe_range_tick(m) == -1);
+        m.squad = m.hook = false;  // a single unit: d <= 20 + E
+        m.path = at(-23.0f, 0.0f);
+        CHECK(bribe_range_tick(m) == -1);
+        m.path = at(-23.5f, 0.0f);
+        CHECK(bribe_range_tick(m) == 0);
+    }
+    {  // Activation_Min_Range 0: the user's Targeting_Min_Attack_Distance; a member is retested against the live member
+       // of its container nearest the user
+        BribeRangeCase u;
+        u.user_min = 30.0f;
+        u.path = at(-33.0f, 0.0f);
+        CHECK(bribe_range_tick(u) == -1);
+        u.path = at(-33.5f, 0.0f);
+        CHECK(bribe_range_tick(u) == 0);
+        u.squad = true;
+        u.xp = Vec3{50.0f, 0.0f, 0.0f};
+        u.mate = Vec3{-10.0f, 0.0f, 0.0f};
+        u.path = at(-30.0f, 0.0f);  // X at 80 (not too close), the nearest member at 20 (too close): refused
+        CHECK(bribe_range_tick(u) == -1);
+        u.mate = Vec3{0.0f, 300.0f, 0.0f};
+        CHECK(bribe_range_tick(u) == 0);
+    }
+}
+
 // ================================================================================================
 // cu8f t06 (CU8F_T04_T06_RE §3): the parsed-unread ability fields
 // ================================================================================================
@@ -5095,6 +5239,7 @@ int main(int argc, char** argv) {
     test_oi_anim_timings();
     test_oi_anim_gates_and_locks();
     test_bribe_hack_accept();
+    test_bribe_range();  // s78m t08
     test_cu8f_abilities_disabled();
     test_cu8j_saber_flight();
     test_battle(golden, write_golden);

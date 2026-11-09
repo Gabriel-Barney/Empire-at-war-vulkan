@@ -336,9 +336,10 @@ bool AbilitySystem::bribe_accepts(const Obj& o, ObjectId target) const {
     return true;
 }
 
-bool AbilitySystem::range_ok(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const {
+bool AbilitySystem::range_ok(const Obj& o, const SpecialAbilityDesc& s, ObjectId target, bool with_container) const {
     if (target == kNoObject || target == o.id || !combat_->has_unit(target)) return true;
-    return in_range(o, s, target);
+    const Obj* x = with_container ? obj(target) : nullptr;
+    return in_range(o, s, target, x ? x->container : kNoObject);
 }
 
 // ================================================================================================
@@ -642,11 +643,13 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
         case C::Hack:
         case C::Repair:
         case C::TacticalBribe: {  // the acting member (Team_Member_With_Ability) faces the target; animation 0x5a
-            if (!alive_unit(target) || !range_ok(o, s, target)) return false;
+            // s78m t08: Tactical_Bribe's range (0x5b07c0, TACTICAL_COMBAT §5.4.2) for a squad member X with container T:
+            // in range of T (R + 10) or of X, too close only to both; else X alone.
+            if (!alive_unit(target) || !range_ok(o, s, target, s.cls == C::TacticalBribe)) return false;
             if (s.cls == C::TacticalBribe) {
-                // 0x5b07c0 (TACTICAL_COMBAT §5.4.1): range (above; [port] on the target only, Must_Close_Range not
-                // modelled), the accept, then the credits: too few (or cost <= 0) -> the "cannot" event and return 1
-                // without converting [M: whether the order is consumed]; else break both stealth states, pay, convert.
+                // 0x5b07c0 (TACTICAL_COMBAT §5.4.1): range (above), the accept, then the credits: too few (or cost <= 0)
+                // -> the "cannot" event and return 1 without converting (the order is used up, S78M_T06 Q7); else
+                // break both stealth states, pay, convert.
                 if (!bribe_accepts(o, target)) return false;
                 const float cost = bribe_cost(o, target);  // -1: no cost data [port], free
                 if (cost >= 0.0f && (!(cost > 0.0f) || (host_.pay_credits && !host_.pay_credits(o.owner, cost)))) {

@@ -211,6 +211,19 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
         const auto p = req_.info.planet;
         return galaxy_ && p != kInvalidPlanet && static_cast<size_t>(p) < galaxy_->planets().size() && galaxy_->corrupted(p);
     };
+    // s78m t08 (TACTICAL_COMBAT §5.4.2): Tactical_Bribe's container test (R + 10) takes a land squad container (TEAM with
+    // a LAND_TEAM_CONTAINER locomotor) at its store position, the one bt_team_positions keeps for movement.
+    h.land_squad_container = [this, st = &mode.primary()](tc::ObjectId id, tactical::Vec3& pos) {
+        if (space_) return false;
+        for (const Container& c : containers_) {
+            if (c.id != id) continue;
+            if (!c.team || c.removed || !st->alive(c.h) || !mv_self_registers(static_cast<uint32_t>(st->type(c.h)))) return false;
+            const Vec3 p = st->position(c.h);
+            pos = tactical::Vec3{p.x, p.y, p.z};
+            return true;
+        }
+        return false;
+    };
     hg_ability_host(h);  // hangars: DEPLOY_SQUAD gate / handler (HangarSystem::deploy_ready / deploy_squad)
     abilities_->set_host(std::move(h));
 }

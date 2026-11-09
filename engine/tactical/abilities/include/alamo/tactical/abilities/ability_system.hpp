@@ -269,6 +269,10 @@ struct AbilityHost {
     // The bribe payment: false when `player`'s credits (player +0x70) are below `cost` (nothing changes), else deducts
     // `cost` and returns true. Unset: [port] bribes are free.
     std::function<bool(int32_t player, float cost)> pay_credits;
+    // s78m t08 (TACTICAL_COMBAT §5.4.2 step 5 and "Where P_T is"): `container` is a land squad team container (TEAM with
+    // a LAND_TEAM_CONTAINER locomotor: vf +0x230 true, moving or not): writes its position (the one movement uses) and
+    // returns true. Unset / false: [port] Tactical_Bribe's container test (R + 10) is skipped and the member alone counts.
+    std::function<bool(ObjectId container, Vec3& pos)> land_squad_container;
 };
 
 // OI abilities: the per-player tactical lists Battlefield_Modifier writes (§2.3.11) besides the reveal range.
@@ -721,7 +725,9 @@ private:
     // s78l t05: Tactical_Bribe accept (0x5b0f70) and cost (0x5b0ec0; -1 = no cost data, [port] free).
     bool bribe_accepts(const Obj& o, ObjectId target) const;
     float bribe_cost(const Obj& o, ObjectId target) const;
-    bool in_range(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const;
+    // s78m t08 (TACTICAL_COMBAT §5.4.2): Target_In_Range and not Must_Close_Range; `container` = the target's team
+    // container for Tactical_Bribe's container-or-member rule (kNoObject: the target alone).
+    bool in_range(const Obj& o, const SpecialAbilityDesc& s, ObjectId target, ObjectId container = kNoObject) const;
     bool apply(Obj& o, SpecialState& sp, ObjectId target, int32_t hp, uint32_t frame);
     void update_special(Obj& o, SpecialState& sp, uint32_t frame);
     void remove_special(Obj& o, SpecialState& sp, uint32_t frame);
@@ -803,7 +809,7 @@ private:
     ObjectId remote_bomb_range_target(ObjectId target) const;
     bool remote_bomb_toss(Obj& o, const SpecialAbilityDesc& s, ObjectId target, uint32_t frame);
     Vec3 remote_bomb_launch(Obj& o, const SpecialAbilityDesc& s, ObjectId target);
-    bool range_ok(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const;
+    bool range_ok(const Obj& o, const SpecialAbilityDesc& s, ObjectId target, bool with_container = false) const;
     void heal_pass(Obj& o, const SpecialAbilityDesc& s, uint32_t frame);
     uint32_t wave_victims(Obj& o, SpecialState& sp, float radius, std::vector<ObjectId>& out);
     // OI t03: an animation's timing on sim frames (§4.13). rate = clip frames per sim frame at speed 1 (clip fps / 30,

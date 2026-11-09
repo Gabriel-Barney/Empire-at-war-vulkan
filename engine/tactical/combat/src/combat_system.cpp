@@ -439,6 +439,14 @@ bool CombatSystem::inside_min_range(ObjectId attacker, ObjectId target) const {
     range_geometry(*t, a->pos, d, E);
     return d <= mn + E;
 }
+bool CombatSystem::range_geometry_of(ObjectId target, Vec3 from, float& d, float& E) const {
+    d = 0.0f;
+    E = 0.0f;
+    const Unit* t = unit(target);
+    if (!t) return false;
+    range_geometry(*t, from, d, E);
+    return true;
+}
 ObjectId CombatSystem::ordered_target(ObjectId id) const {
     const Unit* u = unit(id);
     return u ? u->ordered_target : kNoObject;

@@ -1078,6 +1078,10 @@ public:
     float min_attack_distance(ObjectId id) const;
     // Slot 45 "inside min range" (TACTICAL_GAPS §3.1): types with a min distance only; false for unknown ids.
     bool inside_min_range(ObjectId attacker, ObjectId target) const;
+    // s78m t08 (TACTICAL_COMBAT §5.4.2 slot 43 steps 2 / 5, the ability range): the XY distance `d` from `from` to the
+    // target's aim point and the target term `E` of the weapon range test (footprint half-extent along the line of sight,
+    // or the LAND_OBSTACLE aim walk with sqrt(200)). False (d = E = 0) for an unknown id.
+    bool range_geometry_of(ObjectId target, Vec3 from, float& d, float& E) const;
 
     // ---- S9: hooks and ability-facing API ----
     void set_hooks(CombatHooks* hooks) { hooks_ = hooks; }
