@@ -741,7 +741,7 @@ object init 0x3989a0 := 0, and the MISSILE_SHIELD inline +/− in 0x38a350)** [H
 - *Move orders, coordinator level:* `Coordinator::Move_To` (0x4f8200) returns without doing anything when **any**
   member is locked (the whole order is dropped for every member). (Before that it also does nothing when, in space,
   the order's target object (block +0x28) is a TEAM member, or for type 3 with no target.) Coordinator remove-unit (vf+0x20 0x4f7d30, also via the
-  space override 0x5d5130) **refuses a locked unit** unless obj +0x3a0 bit 0x02 is set [M: dying]. Coordinator add
+  space override 0x5d5130) **refuses a locked unit** unless obj +0x3a0 bit 0x02 is set (destroyed / removed by `Detach` 0x3a8380; TACTICAL_COMBAT §5.4.3). Coordinator add
   (0x4f6b60 via 0x438b40) refuses a unit that some coordinator already holds (0x397260 → 0x426140).
 - *Group move* (0x2a7b80, every player move event and most AI moves): has no lock test, but for a locked unit the
   leave-old-coordinator step is refused, so the add to the new coordinator is refused too: **the locked unit is left

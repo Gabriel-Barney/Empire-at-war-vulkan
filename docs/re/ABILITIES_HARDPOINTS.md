@@ -549,7 +549,8 @@ Vanilla: 9 users (Star Destroyer, Executor, Piett, satellite…), `Activation_Ma
 `Target_Speed_Decrease_Percent` 0.75–0.98, `Stacking_Category` 0 or 2, applicable to transports/corvettes/
 frigates (+capital for some) and named heroes (Millennium Falcon…), `Excluded_Unit_Types` Buzz_Droids.
 - **Accepts target** (vfunc +0x28, 0x710540): enemy (0x39a450), passes the applicable filter, target
-  locomotor not busy, layer check when either side has obj +0x3b4 set, owner passes `Can_Activate(30)` (needs
+  locomotor not busy, the hero-clash pairing rule 0x39a540 when either side has obj +0x3b4 (in a hero clash) set
+  (TACTICAL_COMBAT §5.4.3), owner passes `Can_Activate(30)` (needs
   a live tractor hardpoint), target not in the nebula lockout, target has a model.
 - **Apply** (0x710130): allowed (§3.1) and in range → remove the effect from any previous target →
   register → `Set_Unit_Ability_Active(owner, 30, on)` → **target speed modifier** (0x710280) → beam visual.
@@ -788,9 +789,9 @@ In order:
 1. obj +0x3a0 |= 0x40 (dying), health := 0, 0x392160; record the killer's player byte (obj +0x330, also on the
    team container).
 2. Missile-shield / jammer emitter removal (§4.3).
-3. Signal **0x25** (object died). Transport/fleet/garrison notifications; the object linked through obj +0x150
-   (the container link of TACTICAL §3.6 step 1) dies recursively with the same arguments [M on which side of the
-   link].
+3. Signal **0x25** (object died). Transport/fleet/garrison notifications (a dying build-pad content notifies its pad,
+   0x42e6d0); when the dying object is a build pad, its content (pad pack obj +0x150: the finished object +0x10, else
+   the under-construction one +8) dies recursively with the same arguments (TACTICAL_COMBAT §5.4.3).
 4. Battle statistics entry (type, owner) appended to the game mode's list.
 5. Animation states reset; **hardpoints destroyed** (§1.3).
 6. Hero death → special-ability manager event (0x48eb10).

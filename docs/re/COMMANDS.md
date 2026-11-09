@@ -211,8 +211,8 @@ type (0x407db0), depending on a GMM flag (0x28afb0) [M].
    - it has PROXIMITY_MINE (0x55, slot +0x387).
 4. Each survivor → 0x2BD2F0(GOM, id, issuer) → insert 0x2BD360, the same insert as `Select`:
    - already selected → nothing;
-   - a TEAM member is replaced by its container (obj +0x2B0 with TEAM), an attached object by its parent record
-     (obj +0x150: +0x10, else +8) [M: name];
+   - a TEAM member is replaced by its container (obj +0x2B0 with TEAM), a build pad by its content (pad pack
+     obj +0x150: the finished object +0x10, else the under-construction one +8; TACTICAL_COMBAT §5.4.3);
    - the object enters the issuer's selection only if its SelectionDataPack flag is set (obj +0xB0 → +0x38, 0x39B070):
      default 1 (pack ctor 0x55BE30), cleared by `Set_Selectable(false)` (0x580530, which also deselects the object and
      its TEAM members) and while a landing transport carries it (0x644330 / 0x6438A0);

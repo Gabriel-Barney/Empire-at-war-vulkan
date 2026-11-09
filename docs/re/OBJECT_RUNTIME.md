@@ -177,7 +177,7 @@ Confidence: **[H]** read in the code and cross-checked, **[M]** read in the code
 | +0x3A0 & 0x02 | dead/removed. Set by Detach 0x3a8380. Tested everywhere: `Get_Parent_Object` returns nil for such a parent; the store CRC skips it; Destroy returns early | H |
 | +0x3A0 & 0x04 | "marked for death by child mode": a tactical counterpart died (§2.5) | H |
 | +0x3A0 & 0x08 | skips the service pre-step when the type has +0x69 set | L |
-| +0x3A0 & 0x40 / 0x80 | set together by a create flag; 0x40 selects the `*_Dead` collidability (death clone per STRUCTS.md) | M |
+| +0x3A0 & 0x40 / 0x80 | 0x40 = dying / dead (set by `Die` 0x39bdb0; selects the `*_Dead` collidability); 0x80 = death clone, set together with 0x40 only when the death-clone spawner 0x29f270 creates the clone (create flag). Neither is ever cleared (TACTICAL_COMBAT §5.4.3) | H |
 | +0x39E | "registered in the serviced list" | H |
 | +0x3A1 & 1 | needs the late update (0x3ac530) during service | M |
 | +0x3A5 | "unlink from stores on flush" (constructor sets 1) | M |

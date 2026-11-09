@@ -1815,7 +1815,7 @@ For each registered mover, **in registration-list order**:
    - it is self;
    - neither side has a locomotor;
    - either side has flag +0x3a7;
-   - one side is attached to the other (object +0x150);
+   - one side is the build pad holding the other (pad pack object +0x150: +8 or +0x10 is the other side);
    - a collision already exists for the pair (`0x5c7900`);
    - the UnitCollisionClass rules below say no.
 6. **UnitCollisionClass rules** (enum `0x5e1110`; −1 None, 0 Landing Transport, 1 Build Pad, 2 Low Obstacle, 3 Medium Obstacle, 4 High Obstacle, 5 Infantry, 6 Bike, 7 Vehicle, 8 Large Vehicle, 9 Giant Vehicle):

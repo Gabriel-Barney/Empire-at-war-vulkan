@@ -1986,10 +1986,11 @@ order, not nearest along the segment. The port should sort by segment fraction, 
    the GOM radius query 0x2a8fb0 on that player's tree at the projectile position, taken in query order. A
    victim must pass 0x395c10:
    - its type category (+0x1648) matches `..._Targets_Category_Mask` (+0x1f28);
-   - obj +0x3a2 bit 3 is clear;
+   - obj +0x3a2 bit 3 (0x08, taken over by a vehicle thief, §5.4.3) is clear;
    - slot byte +0x387 is −1;
    - type +0x23ec ≤ 0 and type +0x13 = 0;
-   - obj +0x150 is null or both its +8 and +0x10 are null [M meaning].
+   - obj +0x150 is null or both its +8 and +0x10 are null (not a build pad holding an under-construction or built
+     object; §5.4.3).
    **There is no mode gate** and no test of the victim's team.
 3. **Per victim (0x4ca2f0):**
    - **Skip** when the victim's owner already is the new owner. After the first member of a team converts, the
@@ -2430,6 +2431,7 @@ and ascending-category summation are kept.
 - **Manager:** `SpecialAbilityManagerClass` (0x865c20) is the signal hub.
 - **Auras** (CombatBonus and the like) are **event-driven**: they apply and remove on unit add, remove and
   mode signals. **No radius scan and no periodic recheck** was found [M]. The modifier semantics are in §4.3.
+  CombatBonus's target test runs the applicable filter 0x48e290 like any targeted ability (§5.4.3 item 4).
 - About 92 ability classes exist (SUBSYSTEMS.md "abilities"). Only CombatBonus, BattlefieldModifier, tractor
   beam and the reduce-production pair were read in this pass.
 
@@ -2449,8 +2451,9 @@ A null X → false. With no filter tags at all the filter accepts nothing.
 
 **Hack accept (0x6fd610):** U and X non-null; X is an **enemy** of U's owner (0x39a450(X, U owner): X's owner, or
 for an object with behaviour slot 3 its parent's owner, and the player relation "enemy" 0x2824f0 of the relation
-table, §2.10); **0x48e290 passes**; X has a model (+0x2a0); when U or X has the layer byte +0x3b4 = 1, 0x39a540 must
-pass (the same layer rule as the tractor beam). Nothing else: no alive / dying test, no unit-kind test, no range.
+table, §2.10); **0x48e290 passes**; X has a model (+0x2a0); when U or X has the hero-clash byte +0x3b4 = 1, 0x39a540
+must pass (the hero-clash pairing rule shared with the tractor beam and about 15 other accepts; §5.4.3, not a layer
+test). Nothing else: no alive / dying test, no unit-kind test, no range.
 `R2D2_Hack_Ability` (empty `Applicable_Unit_Categories`, a 14-turret `Applicable_Unit_Types` list) therefore accepts
 exactly the enemy objects of those 14 types (step 1 of the filter), and nothing else.
 
@@ -2458,16 +2461,19 @@ exactly the enemy objects of those 14 types (step 1 of the filter), and nothing 
 `Tyber_Tactical_Bribe` without them is fine). It accepts when all hold:
 1. U, X non-null; X has a model;
 2. X is an enemy of U's owner (0x39a450, as above);
-3. X flag +0x3a2 & 0x04 clear [M: the "converted" flag of ABILITIES_HARDPOINTS §6, obj +0x3a2 bit 4];
+3. X flag +0x3a2 & 0x04 clear (the "converted by a convert projectile" flag, ABILITIES_HARDPOINTS §4.10; §5.4.3);
 4. T = X's team container when X is a team member (0x39b1a0: parent obj +0x2b0 with a TEAM slot), else X;
 5. cost 0x5b0ec0(U, T) > 0: c = T type `Tactical_Bribe_Cost` (+0x2358, int); c ≤ 1 → 0 → **reject**; else c ×
    U type `Bribe_Modifier_On_Corrupted_Planets` (+0x23e4) when the current battle's planet (0x28a890 → +0xb8 →
    +0x2f4 ≠ −1) is corrupted, else × `Bribe_Modifier_On_Uncorrupted_Planets` (+0x23e0) [M: +0x2f4 as the
-   corruption field]; so a unit with no `Tactical_Bribe_Cost` can never be bribed [M: the type default was assumed ≤ 1, not read];
-6. 0x395c10(T, all categories): T's `CategoryMask` ≠ 0, T +0x3a2 & 0x08 clear, T has no PROXIMITY_MINE behaviour
-   (slot 0x55, obj +0x387 = −1), T type `Friendly_Damage_Amount` (+0x23ec) ≤ 0, T type **`Is_Named_Hero` (+0x13)
-   false** (heroes excluded), and T's link block obj +0x150 null or both its pointers null [M: what that block is];
-7. X flags +0x3a0: 0x40 (dead / death clone), 0x80 and 0x02 [M names] all clear.
+   corruption field]; so a unit with no `Tactical_Bribe_Cost` can never be bribed (the type default is 0: type
+   constructor 0x367250 [H], §5.4.3);
+6. 0x395c10(T, all categories): T's `CategoryMask` ≠ 0, T +0x3a2 & 0x08 clear (not a vehicle taken over by a
+   vehicle thief, §5.4.3), T has no PROXIMITY_MINE behaviour (slot 0x55, obj +0x387 = −1), T type
+   `Friendly_Damage_Amount` (+0x23ec) ≤ 0, T type **`Is_Named_Hero` (+0x13) false** (heroes excluded), and T's
+   obj +0x150 null or both its pointers null (+0x150 is the build-pad data pack: T is not a build pad holding an
+   under-construction or built object, §5.4.3);
+7. X flags +0x3a0: 0x40 (dying / dead), 0x80 (death clone) and 0x02 (destroyed / removed) all clear (§5.4.3).
 No range and no owner-credit test here. Apply 0x5b07c0 adds them: range = `Target_In_Range` 0x48d820 on T or on X
 (either) and `Must_Close_Range` 0x48e100 false; then the accept above; then credits: when the owner's credits
 (player +0x70) < cost or cost ≤ 0 → play the "cannot" event (ability +0x1b8) and **return 1 without converting**
@@ -2479,7 +2485,7 @@ owner change (TACTICAL_GAPS §2: 0x38e5a0). Hack's apply 0x7013d0 likewise runs 
 *Port spec:*
 - `target_filter`: type list first (listed → accept), then categories (empty mask → reject), then excluded types.
   Do not reject up front because the categories tag is empty.
-- Hack: enemy + `target_filter` + has a model (+ layer rule); range only in the apply / command path
+- Hack: enemy + `target_filter` + has a model (+ the hero-clash rule of §5.4.3); range only in the apply / command path
   (`Activation_Min_Range` / `Activation_Max_Range` through `Target_In_Range`).
 - Bribe: **do not call `target_filter`**. Enemy; not already converted; work on the team container for a member;
   bribe cost = `Tactical_Bribe_Cost` of the container (or unit) × the user's corrupted / uncorrupted modifier,
@@ -2582,6 +2588,110 @@ ability's min range); `Must_Close_Range` itself never moves anything.
 - Bribe apply: X a squad member → in range when T **or** X passes; too close only when both are.
 - No `Activation_Max_Range`: R = the user's max attack range (with its modifiers), same E.
 - Grenade-weapon users: the lob solve replaces the ability range (LOB_SOLVER).
+
+#### 5.4.3 Bribe / Hack corners (s78m t05, 2026-11-09) [H unless tagged]
+Read from the decompiled code; vtable slots read from the retail FoC exe's bytes. Settles the [M] tags of §5.4.1.
+`Must_Close_Range`, the container-or-member range and the refused bribe using up the order are §5.4.1 / §5.4.2.
+
+**1. Object +0x150 is the build-pad data pack** (`TacticalBuildObjectsDataPackClass`, L1_S4_REMAINING §3.6), not a
+general link block.
+- Allocated only by the lazy creator 0x390f70 (0x30 bytes, constructor 0x561270 zeroes the pointers), which is
+  called only by the TACTICAL_BUILD_OBJECTS behaviour's attach 0x42db20 (it also clears +8 / +0x10). The object
+  constructor 0x388b60 zeroes +0x150, so every object that is not a build pad keeps it null.
+- The two pointers are the pad's contents: **+8 = the under-construction object** (set by the build start 0x42dbd0),
+  **+0x10 = the finished object** (set by the completion 0x42d8b0). When a content object dies, `Die` notifies its
+  parent pad (0x42e6d0), which clears the slot holding it (and the lock byte +0x2c with +0x10).
+- Other readers, for the same meaning: `Die` (0x39bdb0) kills the pad's content (+0x10, else +8) with the pad;
+  selecting a pad selects its content (COMMANDS §2.4.1); the land collision pair filter (0x508170) skips a pad
+  and its own content; Lua `Get_Build_Pad_Contents` / `Lock_Build_Pad_Contents`; capture-point control.
+- So 0x395c10's last test means **"T is not a build pad that holds a turret / structure, finished or under
+  construction"**. An empty pad passes. No shipped type has both TACTICAL_BUILD_OBJECTS and a `Tactical_Bribe_Cost`
+  > 1 (FoC XML, 2026-11-09), so in vanilla the cost test already rejects every pad; the rule only matters for mods.
+
+**2. Object flags +0x3a0** (whole-byte writers: the constructors 0x388720 / 0x388b60 from a default byte, the copy
+0x472560; no code clears 0x02, 0x40 or 0x80):
+- **0x02 = destroyed / removed:** set only by `Detach` 0x3a8380, which `Destroy_Object` 0x2a64f0 and the GOM's
+  removal / reset paths call (OBJECT_RUNTIME §2.2); it also raises signal 0x10. Set after the death sequence or on
+  any despawn.
+- **0x40 = dying / dead:** set by `Die` 0x39bdb0 (ABILITIES_HARDPOINTS §4.9).
+- **0x80 = death clone:** set, **together with 0x40**, only when an object is created as a death clone: the death
+  clone spawner 0x29f270 (`Create_Object` with its last argument 1; the constructor 0x388b60 ORs 0xc0 for that
+  argument, and 0x29f270 ORs 0xc0 again). Readers use it to keep clones out of AI, abilities and collision (MOVEMENT
+  §1.3 `IsDeathCloneObstacle`). Since a clone always also has 0x40, `0x40 clear` already implies `0x80 clear`.
+- So Bribe's step 7 is "X is alive and not being removed": not dying, not a death clone, not destroyed.
+
+**3. Hack's "layer" rule is the hero-clash pairing rule.** Obj +0x3b4 is the hero-clash byte (A1_READINGS §33.2.1,
+table row 5): `MeleeHeroClashClass` 0x6ac780 / `ActionDrivenHeroClashClass` 0x6ab200 set it to 1 on the duelling
+heroes (and on a hero's TEAM container) when a clash starts; the clash's end clears it. 0x39a540(U, X):
+1. X null, or U +0x3b4 = 0, or X +0x3b4 = 0 → **false**;
+2. M = the mode's hero-clash manager (mode vf +0x210; `HeroClashManagerClass`, vtable 0x89a3b0); none → false;
+3. C = the first clash in M's list (+8) whose "involves" test (clash vf +0x18) is true for U (0x56c720); none →
+   false. "Involves" is: melee clash 0x6ac920, U is one of its two heroes (+0x18, +0x20); action-driven clash
+   0x6ab490, U is its +0x48 object or in its object vector (+0x30..+0x38);
+4. the answer is C's "involves" test for X.
+The callers (Hack 0x6fd610, tractor beam 0x710540, about 15 other ability accepts 0x6eef00..0x717b50, and hardpoint
+fire 0x3825b0 / 0x385190) only call it when U or X has +0x3b4 = 1. Combined rule: **when either side is in a hero
+clash, the action is allowed only if both are in the same clash**; with no clash on either side it does not apply.
+For Hack (R2-D2 against turrets, which never clash) it could only stop a hack while R2-D2 himself is in a clash,
+and no shipped clash involves him (FoC HEROCLASH.XML: Vader / Obi-Wan, Obi-Wan / Boba Fett, Boba Fett / Han Solo /
+Chewbacca), so in vanilla it never refuses a hack.
+
+**4. Aura targets (CombatBonus) do use the filter.** `CombatBonusAbilityClass` (vtable 0x8c5c68): its apply vf30
+0x6f42d0 first calls its own accept (vf +0x28 = 0x6f4bf0) and returns false when it refuses; the accept, in order:
+1. U and X non-null; **0x48e290(ability, X) passes** (the same filter as Hack, §5.4.1). With neither
+   `Applicable_Unit_Categories` nor `Applicable_Unit_Types` it accepts nothing, and the validate 0x6f4ff0 warns
+   "...otherwise this ability won't affect any units at all" (it does not patch a default in);
+2. owner: when ability +0x1c0 is null, X allied with U's owner (0x39a230, own player included; there is **no
+   `Apply_To_All_Allies` test** here); when +0x1c0 is set, X's owner's faction (player +0x68) must equal it and the
+   ally test is skipped [M: +0x1c0 is `Specific_Faction`, the only extra tag in shipped CombatBonus XML: two props
+   in PROPS_GENERIC buffing Rebel / Empire `LandHero` units];
+3. X's type is neither U type's `Unique_Ground_Unit` (+0x1b60) nor `Unique_Space_Unit` (+0x1b50) (TACTICAL_GAPS
+   §4.2.2);
+4. then it makes sure X has a targeting data pack (0x390fc0) and returns true.
+All 130 shipped `Combat_Bonus_Ability` entries name a non-empty filter, so the no-filter case never occurs in vanilla.
+How the manager picks the candidate units it offers on unit add was not traced [M]. `EnhanceDefenseAbilityClass`
+(0x8c7130) is **not** a unit aura: its accept slot is the constant-false stub 0x13b7d0, and its apply 0x6fa920
+requires a null target and inserts one permanent entry (value `Enhancement_Percentage` +0x178, keyed by +0x17c)
+into a per-player table for the owner, or every allied player when +0x180 is set [M: what reads that table]. No
+filter is involved.
+
+**5. Smaller items.**
+- **+0x3a2 & 0x04 = converted by a convert projectile:** the only writer is the convert per-victim step 0x4ca2f0
+  (§3.5 "Convert and its team rule": the victim, or the container and every member). Bribe (0x5b07c0) and Hack do not
+  set it (they only change the owner, 0x38e5a0), so bribed / hacked units do not decay (ABILITIES_HARDPOINTS
+  §4.10). Never cleared.
+- **+0x3a2 & 0x08 = taken over by a vehicle thief:** the only writer is the vehicle-thief boarding step 0x63fae0
+  (after the owner change to the thief's owner; it also sets +0x3a1 & 0x10). Never cleared. Bribe (step 6, on T) and
+  the convert projectile refuse such vehicles.
+- **`Tactical_Bribe_Cost` default = 0:** the type constructor 0x367250 writes the 8 bytes at +0x2354 as 1, so
+  +0x2354 = 1 and +0x2358 = 0 (agrees with OBJECT_TYPES). A unit without the tag costs 0 and is never bribable.
+- **Hack range:** Hack's apply 0x7013d0 picks the acting member for a team user (vf +0x58) but calls the accept and
+  `Target_In_Range` / `Must_Close_Range` with the original user U and the target X itself: there is no
+  container substitution for the target (unlike Bribe's T-or-X rule, §5.4.2).
+
+***Port spec:***
+- **Build pad (item 1):** Bribe (on T) and the convert projectile (on the victim) refuse a target that is a build
+  pad currently holding an under-construction or finished object; an empty pad and every non-pad pass. *Port must
+  change `bribe_accepts` (step 6, the "+0x150 not modelled" note)*: ask the host whether T is an occupied build pad.
+  No vanilla effect (no bribable pad), so low priority.
+- **Flags (item 2):** refuse a target that is dying / dead, a death clone, or destroyed / being removed. *Port's
+  current rule is right* as long as the port's `dead` covers all three (a death clone counts as dead, a despawned
+  object is gone or dead); 0x80 never appears without 0x40.
+- **Stolen vehicle (item 5):** *port must change* `bribe_accepts` step 6 (and the convert victim test) to refuse a
+  T that a vehicle thief has taken over, once the port's vehicle-thief boarding sets such a flag (permanent).
+- **Hack hero-clash rule (item 3):** if user or target is in a hero clash, the hack is allowed only when both are in
+  the same clash. *Port's current rule is right* while the port has no hero clashes (the rule never fires); add it
+  (shared with the tractor beam, the other enemy-target accepts and hardpoint fire) when hero clashes are ported.
+  It is not a layer (land / space / air) test.
+- **Aura targets (item 4):** *port must change `aura_target`*: drop the "no filter given = every unit" shortcut and
+  always run `target_filter` (no filter → no unit); owner test = allied with the source's owner (own player
+  included), not "owner only unless `Apply_To_All_Allies`"; with `Specific_Faction` set, instead require the target
+  owner's faction to equal it (no ally test); refuse targets whose type is the source type's `Unique_Ground_Unit` /
+  `Unique_Space_Unit`. The no-filter change has no vanilla effect; the ally change does (allied players' units get
+  the bonus). *`EnhanceDefense` should not go through `aura_target` at all*: it is a per-player entry (owner, or all
+  allies with +0x180), not a per-unit modifier.
+- **Bribe cost default (item 5):** an absent `Tactical_Bribe_Cost` is 0 (unbribable). *Port's current rule is
+  right* for real data; its `-1 = no cost data` host fallback is a port convenience, not retail.
 
 ---
 
