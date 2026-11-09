@@ -168,6 +168,17 @@ Polled tests (0x344710, per mode tick; a player whose faction is not `Is_Playabl
 | 10 Cycles_Elapsed | fiscal cycles (galactic mode +0x370) > threshold (galactic only) |
 | 3, 6, 7 | **not polled**: event-driven, below |
 
+> **Correction 2026-11-09 (q6 t15, `Q6_T15_RETAIL_RUN.md`) [H]:** "per mode tick" is wrong. 0 / 1 / 4 / 5 / 9 are tested
+> only when a planet's owner changes (0x3fb040, every player in PlayerList order, first pass wins; a planet's first
+> owner set tests nothing). 10 is tested at each week rollover, 8 every 30 frames (0x4b2ef0) and 2 in Add_Credits
+> 0x27f370. Setup 0x289a90 gives each non-neutral player outside the `Starting_Active_Player` faction the AI list
+> **plus an implicit type 1** (countdown 30, no filter) when that list is non-empty. In type 1, a planet does not block
+> when its owner and P are both AI-controlled non-humans (+0x360 set, +0x62 = 0). In multiplayer galactic (0x35f6b0),
+> non-human owners never block and an AI P never passes. So the original's only galactic "elimination" is this: an AI
+> wins at an owner change that leaves no human enemy with a planet. It counts planets only, and has no latch and no
+> per-tick check. Retail: a human who owns nothing goes on while no planet changes owner (ELIM A, C), and loses when
+> its last planet goes (ELIM B).
+
 Event-driven super-weapon victories (all go through 0x343b90, which logs "VICTORY - Victory type %d…" and starts a
 countdown in frames):
 

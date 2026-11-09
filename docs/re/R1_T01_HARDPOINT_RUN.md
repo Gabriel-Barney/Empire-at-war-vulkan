@@ -293,3 +293,45 @@ Lua: `Take_Damage(5000, "HP_Star_Destroyer_Engines")` ok, explosion +1, `Get_Hul
   A port script engine need not copy the termination; the effect of the call itself is unmeasured.
 - **Status: DONE.** Open leftovers (not blocking): the turret-model question (V1) by eye, the one unexplained script
   silence of run 20261109-050430, and `--lua-camera` untested.
+
+## r1b t08 runs 20261109-074400 and 20261109-075829 (`--profile short --lua-camera`)
+
+Kit `tools/probe_mod/r1_hardpoint/`, Kuat space skirmish, Empire (human) vs Easy Rebel AI, driven by Claude (computer use,
+window 3840x2160). Both PLAN records: `profile=short|lua_camera=true|turn=false`. Screenshots (half resolution) and a
+`NOTE.txt` per run are in `out/<run>/screenshots/`.
+
+**Lua results (both runs, the same as t07):** FL, ML, MR, ENG `HP_KILLED`, `Get_Hull` 1.000 -> 0.893 -> 0.786 -> 0.679 ->
+0.580 (the exact shares 0.107, 0.107, 0.107, 0.099); FL spawns `Hardpoint_Breakoff_Star_Dest_Weapon_FL`, every kill one
+`Large_Explosion_Space_Empire`. No ERR / APIERR records.
+
+**`--lua-camera` works (new, high confidence).** The hook calls `Point_Camera_At(ship A position)` at each pre-message
+(`CAM ... res=true err=nil` at frames 2250, 4053, 5853, 7653, 9453 in both runs). In run 1 the camera was already framed on
+ship A by hand, so nothing could be seen. In run 2 the camera was left on the space station at the start
+(`00_start_view.png`); by the FL pre-message (frame 2250) the view had jumped to ship A with no input from the driver. Later
+calls re-centre ship A at the zoom the driver had set (the view jumped back after a manual pan). So `Point_Camera_At` from a
+free-store (story) script moves the tactical camera; the s78 note that it "did not move" does not hold for this call form
+(position argument, hook running in the human player's free store). Port: `Point_Camera_At` must move the camera too.
+
+**Bogus name `HP_NO_SUCH`: the same result for the third time.** Run 1: the `KILL` record survived the heap scan (n=511,
+`res=ok`, hull 0.5802 / shield 0.4501 unchanged in that frame), the `fast` poll n=513 in the same frame, then nothing for
+the following ~7000 frames (battle time 9:30 at the quit) and no `BOGUS_DONE` message. Run 2: n=510..512 lost, n=513 in
+the same frame, nothing later. So `Take_Damage(n, "<no such hardpoint>")` returns, and retail ends the script at the end of
+that update (`SCRIPT_STOPPED_AFTER_CALL`). Parser fix: when the `KILL` record of a bogus-name stage survives, the verdict
+used to be taken from same-frame polls (`NO_MATCH_NO_EFFECT`); it now reads `SCRIPT_STOPPED_AFTER_CALL` when no record in a
+later frame exists (`r1_parse.py`, bogus_name branch; `selftest_r1.py` still OK).
+
+**The unexplained silence of run 20261109-050430 (frame 9693) did not come back.** Both runs wrote records up to frame 9900
+without a gap before the bogus call, as did runs -052935 and -055324. Four clean runs against one silent one: it points at a
+lost scan (the reader), not at an engine time limit for the script. Not worth another run.
+
+**V1 turret models (by eye, low-medium confidence).** Run 2, close zoom by hand after the FL kill (`30_close_before_ML.png`):
+the FL scorch decal is a large dark patch mid-ship on the upper hull, and a raised block with blue lights is still drawn
+under it (no hole, no missing geometry). That fits the port's rule (the `Model_To_Attach` turret model stays, plus a loose
+breakoff copy) but the block could be hull superstructure rather than `EV_StarDestroyer_HP00_L-F`; no frame shows the
+loose breakoff copy drifting off. The hull model did not change. Mid zoom (run 1, `00_before` vs `99_final_after_bogus`):
+scorch patches at the kill sites, the turret-like shapes there are dark but not clearly gone.
+
+**t08 conclusion:** `--lua-camera` answered (it works, and the kit can frame ship A by itself from now on); the bogus-name
+result is confirmed a third time; the silence of run -050430 was not reproduced. V1 for turrets stays "by eye, not settled":
+it needs a fixed close side view of one turret before and after its kill (camera rotation is not available in this
+skirmish), or a render-side comparison in the port.

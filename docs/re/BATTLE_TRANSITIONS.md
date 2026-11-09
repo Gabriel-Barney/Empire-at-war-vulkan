@@ -677,7 +677,8 @@ declared; +0x24 countdown; +0x28 declared record (copy); +0x58 last frame seen; 
   the 210-frame end countdown.
 
 **Open items:** writer of 0x140b303c1; the +0x79 end-wait callbacks 0x140b30720 / 0x140b30718; the galactic-only
-gate (0x35f6b0 argument); whether a hero death (Tyber) is caught by the plot before any 0xb test of the
+gate (0x35f6b0 argument; 2026-11-09: 0x35f6b0 = multiplayer game type 1 / 2 / 4, so the gate only stops an AI player in
+multiplayer galactic; galactic triggers: STRATEGIC_GAPS §1.4 correction); whether a hero death (Tyber) is caught by the plot before any 0xb test of the
 Empire — with the hold up it is only queued, so the plot's VICTORY decides [M].
 
 ### 3.2 Planet write-back — 0x2bff60(winner) [H]

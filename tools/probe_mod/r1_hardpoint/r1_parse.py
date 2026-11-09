@@ -295,8 +295,13 @@ def analyse(recs):
             sh_fast = ship(fast[0], tag)[2] if fast else None
             sh_drop = (sh0 - sh_fast) if (sh0 is not None and sh_fast is not None) else None
             masked = h0 is not None and h0 <= hp_before + 0.005
+            # The KILL record can survive the heap scan (run 20261109-074400) while the script still ends at the end of
+            # that update: no record in any later frame means the same-frame polls cannot show an effect.
+            later_f = [r for r in mine if r['f'] is not None and k['f'] is not None and r['f'] > k['f']]
             if s1 == 'dead':
                 v = 'SHIP_DIED'
+            elif not later_f:
+                v = 'SCRIPT_STOPPED_AFTER_CALL'
             elif (drop is not None and drop > 0.02) or (sh_drop is not None and sh_drop > 0.05):
                 v = 'NO_MATCH_HIT_SHIP'
             elif masked and (sh0 is None or sh0 <= 0.05):
