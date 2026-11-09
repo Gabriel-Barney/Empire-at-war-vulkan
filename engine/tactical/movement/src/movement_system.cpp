@@ -126,7 +126,10 @@ void MovementSystem::compose_land(const PendingComposition& pc, uint32_t frame, 
     uint32_t acc = 0;
     for (size_t i = 0; i < forms.size(); ++i) {
         const int32_t pfd = forms[i].front()->d.path_frame_delay;
-        if (pfd <= 0) continue;  // [port] a negative PathFrameDelay draws nothing (vanilla: 0 or 4)
+        // cu8l t01: a birth coordinator (hold_from_birth: moves false) is the team container's own formation, and no
+        // vanilla container type has PathFrameDelay (CU8K_T02_T06_RE §1.3): no r'. [port] Its members' PathFrameDelay is
+        // not read for it.
+        if (pfd <= 0 || !pc.moves) continue;  // [port] a negative PathFrameDelay draws nothing (vanilla: 0 or 4)
         const int32_t r = rng.range_int(0, pfd);
         // F +0x1dc = now + acc + r' - 2 FPS: the first plan frame is the first frame > now + acc + r'.
         start[i] = frame + acc + static_cast<uint32_t>(r) + 1u;
@@ -135,7 +138,7 @@ void MovementSystem::compose_land(const PendingComposition& pc, uint32_t frame, 
     for (size_t i = 0; i < forms.size(); ++i) {
         (void)formation_ctor_draw(rng);  // the next-check timer; no land reader in the port
         for (Unit* u : forms[i]) {
-            u->start_frame = start[i];
+            if (pc.moves) u->start_frame = start[i];  // a birth hold has no order to start
             u->pend = 0;
         }
     }
@@ -233,6 +236,23 @@ bool MovementSystem::adopt(ObjectId id, SimRng& rng) {
     if (!u || has_coordinator(id)) return false;
     u->adopted = true;  // Issue_Degenerate_Move: a move to its own position, so it holds there [port: no motion]
     (void)formation_ctor_draw(rng);
+    return true;
+}
+
+bool MovementSystem::hold_from_birth(std::span<const ObjectId> ids) {
+    std::vector<ObjectId> held;
+    for (const ObjectId id : ids)
+        if (unit_ptr(id)) held.push_back(id);
+    if (held.empty()) return false;
+    const uint32_t serial = compose_register(cfg_.mode == MoveMode::Space, false, unit_ptr(held.front())->m.pos);
+    PendingComposition& pc = pending_.back();
+    pc.offsets.assign(held.size(), 0u);
+    for (const ObjectId id : held) {
+        Unit* u = unit_ptr(id);
+        u->pend = serial;
+        u->adopted = false;
+    }
+    pc.forms.assign(1, std::move(held));
     return true;
 }
 

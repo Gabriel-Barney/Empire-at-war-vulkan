@@ -536,33 +536,44 @@ TacticalBattle::Unit* TacticalBattle::unit_by_id(objects::ObjectId id) {
 // behaviour token, the mode's behaviour list first (as locomotor_kind_from_type). Walk / Bike / LandTeamInfantry /
 // LandTeamContainer: kind 1; SimpleSpace / Fighter / Flying / LandBomber: kind 2; JetPack: kind 1 [port: on the ground,
 // as spawned]; Team: kind 2 when a member admits (-1 here); Starship / Fleet / Simple and no locomotor: not admitted.
+std::string_view TacticalBattle::mv_locomotor_token(uint32_t type) const {
+    const objects::GameObjectTypes& types = catalog_->types();
+    if (type >= types.size()) return {};
+    for (const std::string_view tag : {space_ ? std::string_view("SpaceBehavior") : std::string_view("LandBehavior"), std::string_view("Behavior")}) {
+        for (const std::string_view raw : types.get_list(type, tag)) {
+            const std::string_view t = ascii_trim(raw);
+            constexpr std::string_view kSuffix = "LOCOMOTOR";  // any *_LOCOMOTOR token is the locomotor slot
+            if (t.size() >= kSuffix.size() && ascii_iequals(t.substr(t.size() - kSuffix.size()), kSuffix)) return t;
+        }
+    }
+    return {};
+}
+
 int8_t TacticalBattle::mv_adopt_kind(uint32_t type) {
     const objects::GameObjectTypes& types = catalog_->types();
     if (type >= types.size()) return 0;
     if (adopt_kind_.size() < types.size()) adopt_kind_.resize(types.size(), int8_t{0});
     if (adopt_kind_[type] != 0) return static_cast<int8_t>(adopt_kind_[type] - 1);
     int8_t k = 0;
-    bool found = false;
-    for (const std::string_view tag : {space_ ? std::string_view("SpaceBehavior") : std::string_view("LandBehavior"), std::string_view("Behavior")}) {
-        for (const std::string_view raw : types.get_list(type, tag)) {
-            const std::string_view t = ascii_trim(raw);
-            constexpr std::string_view kSuffix = "LOCOMOTOR";  // any *_LOCOMOTOR token is the locomotor slot
-            if (t.size() < kSuffix.size() || !ascii_iequals(t.substr(t.size() - kSuffix.size()), kSuffix)) continue;
-            if (ascii_iequals(t, "WALK_LOCOMOTOR") || ascii_iequals(t, "BIKE_LOCOMOTOR") || ascii_iequals(t, "JETPACK_LOCOMOTOR") ||
-                ascii_iequals(t, "LAND_TEAM_INFANTRY_LOCOMOTOR") || ascii_iequals(t, "LAND_TEAM_CONTAINER_LOCOMOTOR"))
-                k = 1;
-            else if (ascii_iequals(t, "SIMPLE_SPACE_LOCOMOTOR") || ascii_iequals(t, "FIGHTER_LOCOMOTOR") ||
-                     ascii_iequals(t, "FLYING_LOCOMOTOR") || ascii_iequals(t, "LANDBOMBER_LOCOMOTOR"))
-                k = 2;
-            else if (ascii_iequals(t, "TEAM_LOCOMOTOR"))
-                k = -1;
-            found = true;
-            break;
-        }
-        if (found) break;
-    }
+    const std::string_view t = mv_locomotor_token(type);
+    if (ascii_iequals(t, "WALK_LOCOMOTOR") || ascii_iequals(t, "BIKE_LOCOMOTOR") || ascii_iequals(t, "JETPACK_LOCOMOTOR") ||
+        ascii_iequals(t, "LAND_TEAM_INFANTRY_LOCOMOTOR") || ascii_iequals(t, "LAND_TEAM_CONTAINER_LOCOMOTOR"))
+        k = 1;
+    else if (ascii_iequals(t, "SIMPLE_SPACE_LOCOMOTOR") || ascii_iequals(t, "FIGHTER_LOCOMOTOR") ||
+             ascii_iequals(t, "FLYING_LOCOMOTOR") || ascii_iequals(t, "LANDBOMBER_LOCOMOTOR"))
+        k = 2;
+    else if (ascii_iequals(t, "TEAM_LOCOMOTOR"))
+        k = -1;
     adopt_kind_[type] = static_cast<int8_t>(k + 1);
     return k;
+}
+
+// cu8l t01 (CU8K_T02_T06_RE §1.2 / §1.5 / §4 rule 1): the locomotors whose behaviour init (vf9, run by the behaviour
+// attach 0x38cb30 at creation) registers the object itself - a new coordinator holding a Move_To its own position:
+// LandTeamContainer (0x5abac0) on land, SimpleSpace (0x625090) in space.
+bool TacticalBattle::mv_self_registers(uint32_t type) const {
+    const std::string_view t = mv_locomotor_token(type);
+    return ascii_iequals(t, space_ ? std::string_view("SIMPLE_SPACE_LOCOMOTOR") : std::string_view("LAND_TEAM_CONTAINER_LOCOMOTOR"));
 }
 
 bool TacticalBattle::mv_adopt(const TacticalMode& mode, objects::ObjectHandle h, SimRng& rng, bool leave) {
@@ -1197,6 +1208,12 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32
             containers_.push_back(ct);
             ++stats_.containers;
             bt_used_ = true;
+            // cu8l t01 (CU8K_T02_T06_RE §1.2, §4 rules 1 / 4): a land team container's LandTeamContainer locomotor
+            // registers it at creation (0x5abac0: its own coordinator, Move_To its own position, no formation): no draw
+            // now; the coordinator composes at the next step 10 (one int(1, FPS), coordinator creation order) unless an
+            // order takes the members first. [port] The members stand in for the container in the movement system; a
+            // container without a movable member composes nothing.
+            if (!space_ && movement_ && mv_self_registers(team_obj)) (void)movement_->hold_from_birth(groups.back());
         }
     }
     // 3. combat / ability units (hardpoint draws, HardPoints order), then the containers.
@@ -1237,13 +1254,26 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32
     // ctor draw when it qualifies) right after creating it, before the next chunk: the adopt follows each container's
     // creation draws. The skirmish company placer runs the helper only for a Create_Team first member (the port's space
     // containers of other companies are not adopted); a script spawn [M: not a helper caller] adopts nothing.
+    // cu8l t01 (CU8K_T02_T06_RE §4 rule 4): it draws only in space (TeamLocomotor squadrons); a land container already
+    // sits in the coordinator its locomotor made (above), so the predicate's check 5 fails: no draw.
     const bool helper = cfg_.skirmish ? units_.size() > first && units_[first].type < types.size() &&
                                             types.get_bool(units_[first].type, "Create_Team")
                                       : true;
     for (size_t k = 0; k < groups.size(); ++k) {  // OI abilities: + the container's SAP-init draws
         abilities_->add_container(containers_[c0 + k].id, desc_of(team_beh), P.owner, groups[k], frame_, &rng);
-        if (helper && !deploy_script_) (void)mv_adopt(mode, containers_[c0 + k].h, rng);
+        if (space_ && helper && !deploy_script_) (void)mv_adopt(mode, containers_[c0 + k].h, rng);
     }
+    // cu8l t01 (CU8K_T02_T06_RE §1.5, §4 rules 1 / 3) [port interim rule, untraced: the space skirmish trace is still
+    // missing]: a ship whose locomotor is SimpleSpace registers itself at creation like a land container (0x625090): no
+    // draw now, one space composition (0x5d58f0) at the next step 10, in unit order. [port] Not for the campaign start
+    // forces (their fleet placement leaves and re-adopts every placed object; ported with it in cu8l t03) and not for a
+    // SimpleSpace team member [L: whether its own registration survives joining the team is not read].
+    if (space_ && movement_ && (cfg_.skirmish || P.reserve || deploy_script_ || range))
+        for (size_t i = first; i < units_.size(); ++i)
+            if (units_[i].container == kNoContainer && units_[i].movable && mv_self_registers(units_[i].type)) {
+                const objects::ObjectId one[] = {units_[i].id};
+                (void)movement_->hold_from_birth(one);
+            }
     // cu8j t02: the campaign spawn 0x2a00b0 (start forces of a galactic battle) then adopts each member not in a team, one
     // draw each (land vehicles, heroes, ...). Skirmish start forces and reinforcements do not.
     if (!cfg_.skirmish && !P.reserve && !deploy_script_ && !range)

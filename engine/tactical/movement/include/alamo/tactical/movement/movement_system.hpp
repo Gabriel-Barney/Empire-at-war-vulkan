@@ -320,6 +320,14 @@ public:
     // stop, leave every coordinator, adopt (one draw for a known unit).
     bool adopt(ObjectId id, SimRng& rng);
     bool stop_and_hold(ObjectId id, SimRng& rng);
+    // cu8l t01 (CU8K_T02_T06_RE §1.2 / §4 rule 1): a self-registering locomotor's init (LandTeamContainer 0x5abac0,
+    // SimpleSpace 0x625090) gives the new object its own coordinator holding a Move_To its own position: no formation and
+    // no draw now. The coordinator composes at the next coordinator_update: land - one ctor draw int(1, FPS), no stagger
+    // draw (no vanilla team container type has PathFrameDelay) and no start-frame change; space - the 0x5d58f0
+    // composition (one draw per formation). `ids` = the object's units in this system (a land team container: its
+    // members, one formation). Units that leave it first (another order, stop, teleport, removal) drop out; left empty it
+    // composes nothing. False, nothing registered: no id is a unit of this system.
+    bool hold_from_birth(std::span<const ObjectId> ids);
     // OI tactical (crush, §5.5): owner changes (Change_Owner) and the relation test (player +0x370 table == 1 [M];
     // default: different non-negative players are hostile). The test is called from the serial crush pass only.
     bool set_owner(ObjectId id, int32_t owner);

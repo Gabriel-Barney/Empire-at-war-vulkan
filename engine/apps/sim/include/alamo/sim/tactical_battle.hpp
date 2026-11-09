@@ -1376,6 +1376,8 @@ private:
     // every coordinator: stop_and_hold), for any other object one FormationClass ctor draw. True = one draw.
     bool mv_adopt(const TacticalMode& mode, objects::ObjectHandle h, SimRng& rng, bool leave = false);
     int8_t mv_adopt_kind(uint32_t type);  // per type and mode: 1 land, 2 space, 0 not admitted, -1 TEAM_LOCOMOTOR (cached)
+    std::string_view mv_locomotor_token(uint32_t type) const;  // the mode's active *_LOCOMOTOR behaviour token (empty: none)
+    bool mv_self_registers(uint32_t type) const;  // cu8l t01: LandTeamContainer (land) / SimpleSpace (space) locomotor
     std::vector<int8_t> adopt_kind_;      // cu8j t02: mv_adopt_kind cache (+1; 0 = not computed); derived, not saved
     bool deploy_script_ = false;          // cu8j t02: deploy() for a script spawn (no team helper adopt; transient)
     // FIGHTER_FLYING §6.3.1: FlyingHooks::clearance type data per object (ClearanceInfoFn), cached per type.

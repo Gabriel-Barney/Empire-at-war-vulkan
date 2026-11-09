@@ -1662,6 +1662,74 @@ static void test_oi_land() {
         ref.range_int(1, 30);
         CHECK(rng.state() == ref.state() && rng.draws() == ref.draws());
     }
+    // cu8l t01 (CU8K_T02_T06_RE §4 rules 1 / 4): a land team container's own coordinator from birth (hold_from_birth with
+    // its members): no draw at registration, the adopt then finds a coordinator; at the next coordinator update one
+    // int(1, FPS) per held container, in registration order, no r' (even with a member PathFrameDelay) and no start
+    // change; a container whose members were ordered first composes nothing (the order's own composition draws).
+    {
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g;
+        g.init(64, 64);
+        sys.set_grid(std::move(g));
+        for (int32_t i = 1; i <= 6; ++i) {
+            UnitDesc d = land_unit(i, cell_center(10 + 2 * i, 10), 0, 1.0f, 6.0f, kUccInfantry);
+            d.path_frame_delay = 4;
+            d.team_member = true;
+            CHECK(sys.add_unit(d));
+        }
+        SimRng rng(21), ref(21);
+        const ObjectId c1[] = {1, 2}, c2[] = {3, 4, 99}, c3[] = {5, 6}, none[] = {98};
+        CHECK(sys.hold_from_birth(c1) && sys.hold_from_birth(c2) && sys.hold_from_birth(c3) && !sys.hold_from_birth(none));
+        CHECK(rng.draws() == 0 && sys.pending_compositions() == 3 && sys.has_coordinator(1) && sys.has_coordinator(4));
+        CHECK(!sys.adopt(1, rng) && rng.draws() == 0);
+        const uint32_t s1 = sys.view(1).start_frame;
+        const ObjectId stop2[] = {3, 4};  // container 2 leaves its birth coordinator first (a stop): it composes nothing
+        sys.stop(stop2);
+        sys.coordinator_update(1, 1, rng);
+        ref.range_int(1, 30);  // container 1
+        ref.range_int(1, 30);  // container 3
+        CHECK(rng.state() == ref.state() && rng.draws() == ref.draws() && sys.pending_compositions() == 0);
+        CHECK(sys.view(1).start_frame == s1 && !sys.view(1).has_goal && !sys.has_coordinator(1) && !sys.has_coordinator(5));
+    }
+    {  // an order before the update: the birth coordinator composes nothing, the order's own composition draws as alone.
+        const auto run = [](bool born) {
+            MovementSystem sys{MovementConfig{}};
+            PassabilityGrid g;
+            g.init(64, 64);
+            sys.set_grid(std::move(g));
+            for (int32_t i = 1; i <= 2; ++i) CHECK(sys.add_unit(land_unit(i, cell_center(10 + 2 * i, 10), 0, 1.0f, 6.0f, kUccInfantry)));
+            const ObjectId c[] = {1, 2};
+            if (born) CHECK(sys.hold_from_birth(c));
+            SimRng rng(9);
+            MoveOrder o;
+            o.units = {1, 2};
+            o.destination = cell_center(40, 40);
+            sys.move(o, rng, 1);
+            sys.coordinator_update(1, 1, rng);
+            CHECK(sys.pending_compositions() == 0 && sys.view(1).start_frame != kStartPending);
+            return rng.state();
+        };
+        CHECK(run(true) == run(false));
+    }
+    {  // space: a SimpleSpace ship's birth coordinator is one space composition (one draw), its start untouched.
+        MovementConfig cfg;
+        cfg.mode = MoveMode::Space;
+        MovementSystem sys{cfg};
+        UnitDesc d;
+        d.id = 7;
+        d.pos = {100.0f, 100.0f};
+        d.max_speed = 2.0f;
+        d.radius = 20.0f;
+        CHECK(sys.add_unit(d));
+        SimRng rng(5), ref(5);
+        const ObjectId one[] = {7};
+        CHECK(sys.hold_from_birth(one) && rng.draws() == 0 && sys.has_coordinator(7));
+        const uint32_t s0 = sys.view(7).start_frame;
+        sys.coordinator_update(1, 1, rng);
+        ref.range_int(1, 30);
+        CHECK(rng.state() == ref.state() && rng.draws() == ref.draws() && sys.pending_compositions() == 0);
+        CHECK(sys.view(7).start_frame == s0 && !sys.has_coordinator(7));
+    }
     // Formation jiggle (§3.5 step 6): 2 synced draws per moving member per frame, offset clamped to MaxJiggleDistance;
     // members without FormationRaggedness draw nothing.
     {
