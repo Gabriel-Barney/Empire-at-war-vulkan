@@ -995,8 +995,14 @@ void AbilitySystem::h_behavior(Obj& o, uint32_t t, bool on, uint32_t frame) {
     // Toggle_Behavior_Ability 0x3a4070 (§6.6): on -> Enable (starting the countdown when the counter reaches 0), off ->
     // Disable, then recharge. HUNT / LURE are M = 1: Is_Active is the slot byte the caller writes afterwards.
     const UnitAbilityRecord* r = record_of(o, t);
+    // cu8l t02 (CU8K_T02_T06_RE §2 rows 0x3a4138 / 0x3a41e6, rule 5): every toggle but HUNT on and SELF_DESTRUCT stops and
+    // holds the unit (0x3a9880: one draw when it is not a squad member) before the behaviour's activate / deactivate; turning
+    // a running behaviour off (0x4c3700; not HUNT) holds it a second time. [M] after the port's already-on / already-off
+    // returns; [port] DEPLOY_TROOPERS is never running here (its state machine finishes in the toggle).
+    const bool hold = t != kSelfDestruct && !(t == kHunt && on);
     if (on) {
         if (o.behavior[t]) return;
+        if (hold) stop_order(o.id, frame, kStopHold);
         o.behavior[t] = 1;
         if (r && r->expiration_seconds > 0.0f) start_active(o, t);
         if (t == kHunt) o.hunt_due = frame;  // a re-enabled HUNT is due at once [M: its attach due frame is past]
@@ -1004,7 +1010,7 @@ void AbilitySystem::h_behavior(Obj& o, uint32_t t, bool on, uint32_t frame) {
         if (t == kSelfDestruct) {
             o.self_destruct = 1;
             if (r && r->stop_when_activated) {  // vf23 0x630950: stop + lock only with Stop_When_Activated (§28.9)
-                stop_order(o.id, frame);
+                stop_order(o.id, frame, kStopHold);  // cu8l t02: a stop-and-hold (0x630b78, CU8K_T02_T06_RE §2)
                 lock_pair(o, kLockSelfDestruct, true, frame);
             }
         }
@@ -1012,12 +1018,20 @@ void AbilitySystem::h_behavior(Obj& o, uint32_t t, bool on, uint32_t frame) {
         if (t == kDeployTroopers && r) {
             // DEPLOY_TROOPERS state machine 0x591a90: [port] the owner's anim 0x5e and the release state 5 (LANDING 0x1e)
             // are not timed here - state 4 (spawn, 0x590730) runs at once, then the behaviour is done and recharges.
+            // cu8l t02 (CU8K_T02_T06_RE §2 row 0x58f7b0): the activate 0x58f6a0 stops and holds the unit at the deploy's
+            // start (fewer than the maximum out: Can_Activate passed): a second draw after the toggle's. Its lock then
+            // finds the unit in the adopt's coordinator (no draw) and is released in this same call.
+            stop_order(o.id, frame, kStopHold);
             deploy_troopers(o, *r, frame);
             o.behavior[t] = 0;
             start_recharge(o, t);
         }
     } else {
         if (!o.behavior[t]) return;
+        if (hold) {
+            stop_order(o.id, frame, kStopHold);
+            if (t == kLure && o.lure_on) stop_order(o.id, frame, kStopHold);  // the running behaviour: 0x3a41e6
+        }
         o.behavior[t] = 0;
         if (t == kSelfDestruct) {
             o.self_destruct = 0;

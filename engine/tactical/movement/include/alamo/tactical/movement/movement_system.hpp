@@ -320,6 +320,20 @@ public:
     // stop, leave every coordinator, adopt (one draw for a known unit).
     bool adopt(ObjectId id, SimRng& rng);
     bool stop_and_hold(ObjectId id, SimRng& rng);
+    // cu8l t02 (CU8K_T02_T06_RE §2 / §3, A1_READINGS §28.9): the coordinator-system stop 0x4261f0 per unit - stop and leave
+    // every coordinator, no draw (stop_and_hold = this + adopt). False: unknown unit.
+    bool stop_and_leave(ObjectId id);
+    // cu8l t02 (CU8K_T02_T06_RE §3 "movement lock", rule 6; A1_READINGS §28.8 step 2): the first movement lock's
+    // Split_From_Formation 0x4f84e0 - a unit in a formation (a member of a formation of > 1 unit, or running a composed
+    // move; not waiting for its composition, not an adopt's hold) gets a formation of its own: one ctor draw int(1, FPS)
+    // at once, it keeps its current move and stays in the coordinator. False, no draw: unknown or in no formation (the
+    // host then runs the adopt predicate).
+    bool split_from_formation(ObjectId id, SimRng& rng);
+    // cu8l t02 [port]: where a unit stands for the first lock - None (no coordinator: the adopt may take it), NoFormation (in
+    // a coordinator without a formation of its own: waiting for its composition or held by an adopt), Formation (the split
+    // applies). Unknown ids: None.
+    enum class CoordinatorHold : uint8_t { None, NoFormation, Formation };
+    CoordinatorHold coordinator_hold(ObjectId id) const;
     // cu8l t01 (CU8K_T02_T06_RE §1.2 / §4 rule 1): a self-registering locomotor's init (LandTeamContainer 0x5abac0,
     // SimpleSpace 0x625090) gives the new object its own coordinator holding a Move_To its own position: no formation and
     // no draw now. The coordinator composes at the next coordinator_update: land - one ctor draw int(1, FPS), no stagger

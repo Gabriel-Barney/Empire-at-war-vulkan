@@ -256,15 +256,42 @@ bool MovementSystem::hold_from_birth(std::span<const ObjectId> ids) {
     return true;
 }
 
-bool MovementSystem::stop_and_hold(ObjectId id, SimRng& rng) {
+bool MovementSystem::stop_and_leave(ObjectId id) {
     if (!unit_ptr(id)) return false;
     const ObjectId one[] = {id};
     stop(one);
     Unit* u = unit_ptr(id);
     u->adopted = false;  // 0x426d50: it leaves every coordinator
     u->in_formation = false;
+    u->formation_speed = kInf;
     u->pend = 0;
+    return true;
+}
+
+bool MovementSystem::stop_and_hold(ObjectId id, SimRng& rng) {
+    if (!stop_and_leave(id)) return false;
     return adopt(id, rng);
+}
+
+MovementSystem::CoordinatorHold MovementSystem::coordinator_hold(ObjectId id) const {
+    const Unit* u = unit_ptr(id);
+    // cu8l t02 [port]: "in a formation" = a member of a formation of > 1 unit, or a unit whose composed move (not waiting
+    // for its composition, not an adopt's degenerate hold) is still running. A unit waiting for its composition or held
+    // by an adopt is in a coordinator without a formation of its own.
+    if (!u) return CoordinatorHold::None;
+    if (u->adopted || u->pend != 0) return CoordinatorHold::NoFormation;
+    if (u->in_formation || u->has_goal) return CoordinatorHold::Formation;
+    return CoordinatorHold::None;
+}
+
+bool MovementSystem::split_from_formation(ObjectId id, SimRng& rng) {
+    if (coordinator_hold(id) != CoordinatorHold::Formation) return false;
+    Unit* u = unit_ptr(id);
+    (void)formation_ctor_draw(rng);  // 0x4f84e0: the new formation (ctor return 0x4f8518)
+    u->in_formation = false;         // alone now; it keeps its current move (the copied move list)
+    u->formation_speed = kInf;
+    u->adopted = true;               // [port] still in the coordinator once the move ends
+    return true;
 }
 
 int32_t MovementSystem::find(ObjectId id) const {

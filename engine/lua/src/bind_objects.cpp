@@ -2095,6 +2095,8 @@ void script_lock(Call& c, ObjectHandle h) {
         return;
     }
     if (ScriptObjectState* s = edit_state(c, id)) s->orders_locked = true;
+    // cu8l t02 (CU8K_T02_T06_RE §3 rule 6): the counter went 0 -> 1 (nothing held the unit): the first lock's split / adopt.
+    if (const ObjectBridge* b = bridge(c); b && b->tactical && b->tactical->movement_first_lock) b->tactical->movement_first_lock(h);
 }
 // 0x3a8e50(h, 0) for the script when locked, else the "is not locked" warning. [port] With no script share the
 // ability's share is released (one counter in the original); a Divert's forced move has no count to release.

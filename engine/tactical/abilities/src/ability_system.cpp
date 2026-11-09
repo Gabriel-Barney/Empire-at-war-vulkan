@@ -466,7 +466,9 @@ void AbilitySystem::handler(Obj& o, uint32_t t, bool on, uint32_t frame, ObjectI
             return;
         case kMissileShield:
             if (on) {
-                stop_order(o.id, frame);  // 0x4261f0 always, then the lock with Disable_Movement (A1_READINGS §28.9)
+                // 0x4261f0 always, then the lock with Disable_Movement (A1_READINGS §28.9). cu8l t02: 0x4261f0 leaves every
+                // coordinator (kStopLeave), so the first lock adopts: one draw (CU8K_T02_T06_RE §3 rule 6).
+                stop_order(o.id, frame, kStopLeave);
                 if (rec && rec->disable_movement) immobilize(o, +1, frame);
                 start_active(o, t);
             } else {
@@ -669,7 +671,7 @@ void AbilitySystem::interdict(Obj& o, bool on, uint32_t frame) {
         if (o.gravity_well_destroyed) return;
         start_active(o, kInterdict);
         if (rec && rec->disable_movement) {  // stop (0x4261f0), then lock: the lock alone freezes nothing (§28.9)
-            stop_order(o.id, frame);
+            stop_order(o.id, frame, kStopLeave);  // cu8l t02: 0x4261f0 leaves every coordinator; the first lock adopts
             immobilize(o, +1, frame);
         }
         event(AbilityEventKind::InterdictOn, kInterdict, o.id, kNoObject, frame);

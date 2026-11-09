@@ -515,6 +515,10 @@ public:
     // Registered per bridge owner `key` (an empty fn removes it; the battle outlives its AI / story bridges).
     void set_script_movement_lock(const void* key, std::function<bool(objects::ObjectId)> fn);
     bool script_movement_locked(objects::ObjectId id) const;  // the bridges' shares only
+    // cu8l t02 (CU8K_T02_T06_RE §3 rule 6): a Lua Lock_Current_Orders that took the obj +0x3a8 counter 0 -> 1 (the bridge's
+    // script share, lua::TacticalScriptHooks::movement_first_lock): the first lock's split / adopt (at most one draw of
+    // the battle's synced RNG, at the call).
+    void script_first_lock(TacticalMode& mode, objects::ObjectId id);
     // --- end human order API ---
 
     // --- P host (owner: game host agent): human reinforcements ---
@@ -1376,6 +1380,9 @@ private:
     // every coordinator: stop_and_hold), for any other object one FormationClass ctor draw. True = one draw.
     bool mv_adopt(const TacticalMode& mode, objects::ObjectHandle h, SimRng& rng, bool leave = false);
     int8_t mv_adopt_kind(uint32_t type);  // per type and mode: 1 land, 2 space, 0 not admitted, -1 TEAM_LOCOMOTOR (cached)
+    // cu8l t02 (CU8K_T02_T06_RE §3 rule 6): the first movement lock's split / adopt of a unit or TEAM container (no
+    // draw for a squad member, or an object in a coordinator without a formation). True = one draw.
+    bool mv_first_lock(const TacticalMode& mode, objects::ObjectId id, SimRng& rng);
     std::string_view mv_locomotor_token(uint32_t type) const;  // the mode's active *_LOCOMOTOR behaviour token (empty: none)
     bool mv_self_registers(uint32_t type) const;  // cu8l t01: LandTeamContainer (land) / SimpleSpace (space) locomotor
     std::vector<int8_t> adopt_kind_;      // cu8j t02: mv_adopt_kind cache (+1; 0 = not computed); derived, not saved
@@ -1570,6 +1577,7 @@ private:
     void s4_cancel(std::span<const objects::ObjectId> ids);  // a new move order replaces a pending enter
     void s4_set_owner(TacticalMode& mode, objects::ObjectId id, int32_t owner);
     void s4_leave(TacticalMode& mode, objects::ObjectId unit, Vec3 at);
+    void s4_hold(TacticalMode& mode, objects::ObjectId holder);  // cu8l t02: a garrison host's stop-and-hold
     void s4_apply(TacticalMode& mode);  // garrison / capture events -> movement, combat, store, owners, story feeds
     commands::RejectReason s4_command(TacticalMode& mode, uint8_t player, const commands::EventData& ev, SimRng& rng);
     void s4_hash(StateHasher& h) const;

@@ -82,6 +82,9 @@ struct TacticalScriptHooks {
     CinematicTransports* transports = nullptr;
     // Teleport (Start_Cinematic_Space_Retreat line-up, 0x3a8f90): store + movement + trees. Unset: store only.
     std::function<void(objects::ObjectHandle unit, Vec3 position, Vec3 facing)> teleport;
+    // cu8l t02 (CU8K_T02_T06_RE §3 rule 6): Lock_Current_Orders took the movement lock counter 0 -> 1 on `unit` (0x3a8e50's
+    // first lock: the split from its formation or the adopt, at most one synced draw). Unset: no draw.
+    std::function<void(objects::ObjectHandle unit)> movement_first_lock;
     // Locomotor vtable +0x2a8: hyperspace out after `delay_frames` (sets the in-end-cinematic flag obj +0x3c9), with
     // its keep_parent_link flag (L1 final, L1_S4_REMAINING §3.4): Hyperspace_Away([bool = true]) -> (unit, 0, bool);
     // Start_Cinematic_Space_Retreat -> (unit, delay, false). False = not such a unit. Unset: Hyperspace_Away keeps its

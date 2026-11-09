@@ -602,6 +602,44 @@ bool TacticalBattle::mv_adopt(const TacticalMode& mode, objects::ObjectHandle h,
     return true;
 }
 
+// cu8l t02 (CU8K_T02_T06_RE §3 "movement lock", rule 6; A1_READINGS §28.8): the first lock 0x3a8e50 (counter 0 -> 1). An
+// object in a formation is split off (0x4f84e0: one draw; the adopt then finds it in a coordinator: no second draw [M]);
+// one in a coordinator without a formation draws nothing; one without a coordinator is adopted (0x39bcb0 predicate: one
+// draw when admitted). [port] A TEAM member draws nothing (its container holds the formation); a TEAM container is read
+// from its members (the movement system's units): any of them waiting for a composition or held by an adopt -> no draw,
+// any in a formation -> the split's draw, else the container's adopt.
+bool TacticalBattle::mv_first_lock(const TacticalMode& mode, objects::ObjectId id, SimRng& rng) {
+    using Hold = mv::MovementSystem::CoordinatorHold;
+    if (!movement_ || finished_) return false;
+    if (const Unit* u = unit_by_id(id)) {
+        if (!u->alive || u->retreated || u->container != kNoContainer) return false;
+        if (u->movable && movement_->split_from_formation(id, rng)) return true;
+        if (u->movable && movement_->coordinator_hold(id) != Hold::None) return false;
+        return mv_adopt(mode, u->h, rng);
+    }
+    for (size_t ci = 0; ci < containers_.size(); ++ci) {
+        if (containers_[ci].id != id || containers_[ci].removed) continue;
+        Hold hold = Hold::None;
+        for (const Unit& m : units_)
+            if (m.container == ci && m.alive && !m.retreated && m.movable) {
+                const Hold mh = movement_->coordinator_hold(m.id);
+                if (mh == Hold::NoFormation) hold = Hold::NoFormation;
+                else if (mh == Hold::Formation && hold == Hold::None) hold = Hold::Formation;
+            }
+        if (hold == Hold::NoFormation) return false;
+        if (hold == Hold::Formation) {
+            (void)mv::MovementSystem::formation_ctor_draw(rng);  // the container's split
+            return true;
+        }
+        return mv_adopt(mode, containers_[ci].h, rng);
+    }
+    return false;
+}
+
+void TacticalBattle::script_first_lock(TacticalMode& mode, objects::ObjectId id) {
+    if (bt_rng_) (void)mv_first_lock(mode, id, *bt_rng_);
+}
+
 bool TacticalBattle::select_all_entry(objects::ObjectId id, int32_t owner, std::vector<objects::ObjectId>& members) const {
     if (owner >= 0 && owner == retreating_player()) return false;  // the retreat coordinator's list [port: the whole side]
     if (garrison_holder_of(id) != objects::kNoObjectId) return false;  // garrisoned: parent = the host
@@ -1253,15 +1291,17 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32
     // cu8j t02 (MOVEMENT §4.7.3): the team helper 0x2a5a60 adopts each chunk's container (0x39bcb0, one FormationClass
     // ctor draw when it qualifies) right after creating it, before the next chunk: the adopt follows each container's
     // creation draws. The skirmish company placer runs the helper only for a Create_Team first member (the port's space
-    // containers of other companies are not adopted); a script spawn [M: not a helper caller] adopts nothing.
+    // containers of other companies are not adopted).
     // cu8l t01 (CU8K_T02_T06_RE §4 rule 4): it draws only in space (TeamLocomotor squadrons); a land container already
     // sits in the coordinator its locomotor made (above), so the predicate's check 5 fails: no draw.
-    const bool helper = cfg_.skirmish ? units_.size() > first && units_[first].type < types.size() &&
-                                            types.get_bool(units_[first].type, "Create_Team")
-                                      : true;
+    // cu8l t02 (CU8K_T02_T06_RE §3 row 0x6a1f90, rule 8): Lua Spawn_Unit's company path runs the same placer 0x29e960 and
+    // helper, so a script-spawned space container adopts at once too (with the placer's Create_Team condition [M]).
+    const bool helper = (cfg_.skirmish || deploy_script_) ? units_.size() > first && units_[first].type < types.size() &&
+                                                                types.get_bool(units_[first].type, "Create_Team")
+                                                          : true;
     for (size_t k = 0; k < groups.size(); ++k) {  // OI abilities: + the container's SAP-init draws
         abilities_->add_container(containers_[c0 + k].id, desc_of(team_beh), P.owner, groups[k], frame_, &rng);
-        if (space_ && helper && !deploy_script_) (void)mv_adopt(mode, containers_[c0 + k].h, rng);
+        if (space_ && helper) (void)mv_adopt(mode, containers_[c0 + k].h, rng);
     }
     // cu8l t01 (CU8K_T02_T06_RE §1.5, §4 rules 1 / 3) [port interim rule, untraced: the space skirmish trace is still
     // missing]: a ship whose locomotor is SimpleSpace registers itself at creation like a land container (0x625090): no

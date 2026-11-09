@@ -240,6 +240,13 @@ objects::ObjectId TacticalBattle::oi_spawn_unit(TacticalMode& mode, int32_t type
         md.owner = owner;
         movement_->add_unit(md);
         u->movable = true;
+        // cu8l t02 (CU8K_T02_T06_RE §3 rows 0x6a1f90 / 0x6a1d20, rules 1 / 8): a SimpleSpace ship created on its own (Lua
+        // Spawn_Unit's single path 0x2bfdd0, ability spawns, respawns, survivors) registers itself at creation (0x625090):
+        // no draw now, one space composition at the next step 10. [port] Land team containers are never made here.
+        if (space_ && mv_self_registers(ut)) {
+            const objects::ObjectId one[] = {id};
+            (void)movement_->hold_from_birth(one);
+        }
     }
     return id;
 }
@@ -460,16 +467,31 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 if (u && u->alive && u->movable && movement_) {
                     const std::vector<objects::ObjectId> ids{e.id};
                     // cu8j t02 (MOVEMENT §4.7.2 / §4.7.5): the stop-and-hold 0x3a9880 leaves every coordinator and adopts
-                    // (one ctor draw through the 0x39bcb0 predicate); DEPLOY 0x3a1ce0 stops, then adopts.
+                    // (one ctor draw through the 0x39bcb0 predicate); DEPLOY 0x3a1ce0 stops, then adopts. cu8l t02: the
+                    // coordinator-system stop 0x4261f0 (kStopLeave) leaves every coordinator without the adopt.
                     if (e.value == ta::kStopHold && bt_rng_) {
                         (void)mv_adopt(mode, u->h, *bt_rng_, true);
+                    } else if (e.value == ta::kStopLeave) {
+                        (void)movement_->stop_and_leave(e.id);
                     } else {
                         movement_->stop(ids);
                         if (e.value == ta::kStopAdopt && bt_rng_) (void)mv_adopt(mode, u->h, *bt_rng_);
                     }
+                } else if (!u && e.value == ta::kStopHold && bt_rng_) {
+                    // cu8l t02 (CU8K_T02_T06_RE §3 row 0x48cecb): a TEAM container (the Hack / Repair release of a squad
+                    // member, a bribed team) adopts through the predicate: outside the movement system it draws once.
+                    // [port] Its members' movement is not changed.
+                    for (const Container& ct : containers_)
+                        if (ct.id == e.id && !ct.removed) {
+                            (void)mv_adopt(mode, ct.h, *bt_rng_, true);
+                            break;
+                        }
                 }
                 break;
             }
+            case ta::AbilityEventKind::Immobilised:  // cu8l t02 (CU8K_T02_T06_RE §3, rule 6): the first movement lock
+                if (bt_rng_ && !script_movement_locked(e.id) && !landing_locked(e.id)) (void)mv_first_lock(mode, e.id, *bt_rng_);
+                break;
             case ta::AbilityEventKind::MarkerTossed: {
                 // S8 t10 (LOB_SOLVER Â§3.5 "MARKER removal"): the toss kills its ground-point MARKER (Dummy_Barrage_Target)
                 // with an ordinary Destroy_Object, spawned bomb or not. [port] removed here, after the ability pass.

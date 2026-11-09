@@ -70,7 +70,9 @@ enum class AbilityEventKind : uint8_t {
     Unhandled,       // type or special class without behaviour in this module (host / later work)
     TargetIssued,    // command 40/57 accepted for this user: attack order + pending ability
     PendingFired,    // the pending targeted ability applied (target in range)
-    Immobilised,     // Disable_Movement counter 0 -> 1 (host stops the unit)
+    // Disable_Movement counter 0 -> 1. cu8l t02: the host runs the first lock's split / adopt (0x3a8e50, MovementSystem::
+    // split_from_formation, else the adopt) when no other share of the counter (script, landing) holds the unit.
+    Immobilised,
     Released,        // ... 1 -> 0
     InterdictOn,     // story event Interdict_Activated
     InterdictOff,
@@ -92,7 +94,9 @@ enum class AbilityEventKind : uint8_t {
     SpawnObject,
     // ---- OI abilities: host actions, in event order after the tick (the sim state is already changed) ----
     MoveOrder,      // move `id` to `point` (0x2a7b80: HUNT, JET_PACK, CONFUSE, BERSERKER, distract) - not an order cancel
-    StopOrder,      // stop `id` (0x426d50 / 0x39bcb0: DEPLOY, mines, melee holds); `value`: kStopPlain / kStopHold / kStopAdopt
+    // stop `id` (0x426d50 / 0x39bcb0: DEPLOY, mines, melee holds); `value`: kStopPlain / kStopHold / kStopAdopt /
+    // kStopLeave. cu8l t02: `id` may be a TEAM container (kStopHold: the Hack / Repair release of a squad member's team).
+    StopOrder,
     OwnerChanged,   // `id` now belongs to player `value` (Hack, Tactical_Bribe, convert): store / trees / movement
     Deployed,       // DEPLOY on (`value` 1) / off (0): the host's DeployedBehavior / model state
     MineTriggered,  // mine `id` (bound object, may be kNoObject) triggered at `point`: dies and detonates [M]
@@ -124,6 +128,9 @@ enum class AbilityEventKind : uint8_t {
 inline constexpr int32_t kStopPlain = 0;
 inline constexpr int32_t kStopHold = 1;
 inline constexpr int32_t kStopAdopt = 2;
+// cu8l t02 (A1_READINGS §28.9 "Stop"): the coordinator-system stop 0x4261f0 (INTERDICT / MISSILE_SHIELD with
+// Disable_Movement): stop and leave every coordinator, no adopt (so the first lock that follows adopts: one draw).
+inline constexpr int32_t kStopLeave = 3;
 
 struct AbilityEvent {
     AbilityEventKind kind = AbilityEventKind::Activated;

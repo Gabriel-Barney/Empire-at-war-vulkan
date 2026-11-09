@@ -1730,6 +1730,40 @@ static void test_oi_land() {
         CHECK(rng.state() == ref.state() && rng.draws() == ref.draws() && sys.pending_compositions() == 0);
         CHECK(sys.view(7).start_frame == s0 && !sys.has_coordinator(7));
     }
+    // cu8l t02 (CU8K_T02_T06_RE §3 rule 6, A1_READINGS §28.8 / §28.9): the first lock's split and the coordinator-system
+    // stop. A composed group move: each member is in a formation, the split draws one int(1, FPS) and leaves the unit
+    // alone with its move (still in a coordinator: no second split); waiting for the composition or held by an adopt: no
+    // formation, no draw; stop_and_leave drops every coordinator without a draw.
+    {
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g;
+        g.init(64, 64);
+        sys.set_grid(std::move(g));
+        for (int32_t i = 1; i <= 3; ++i) CHECK(sys.add_unit(land_unit(i, cell_center(10 + 2 * i, 10), 0, 1.0f, 6.0f, kUccInfantry)));
+        using Hold = MovementSystem::CoordinatorHold;
+        SimRng rng(31), ref(31);
+        MoveOrder o;
+        o.units = {1, 2};
+        o.destination = cell_center(40, 40);
+        sys.move(o, rng, 100);
+        CHECK(sys.coordinator_hold(1) == Hold::NoFormation && sys.coordinator_hold(3) == Hold::None);
+        CHECK(sys.coordinator_hold(99) == Hold::None);
+        CHECK(!sys.split_from_formation(1, rng) && rng.draws() == 0);  // waiting for its composition
+        sys.coordinator_update(100, 100, rng);
+        ref.range_int(1, 30);  // the order's formation
+        CHECK(sys.coordinator_hold(1) == Hold::Formation && sys.view(1).has_goal);
+        CHECK(sys.split_from_formation(1, rng));
+        ref.range_int(1, 30);  // the split's formation
+        CHECK(rng.state() == ref.state() && rng.draws() == ref.draws());
+        CHECK(sys.view(1).has_goal && sys.has_coordinator(1) && sys.coordinator_hold(1) == Hold::NoFormation);
+        CHECK(!sys.split_from_formation(1, rng) && !sys.adopt(1, rng) && rng.draws() == ref.draws());
+        CHECK(!sys.split_from_formation(3, rng) && sys.adopt(3, rng));  // no formation: the adopt draws
+        ref.range_int(1, 30);
+        CHECK(sys.coordinator_hold(3) == Hold::NoFormation && !sys.split_from_formation(3, rng));
+        CHECK(sys.stop_and_leave(2) && !sys.view(2).has_goal && !sys.has_coordinator(2) && !sys.stop_and_leave(99));
+        CHECK(sys.stop_and_leave(3) && !sys.has_coordinator(3));
+        CHECK(rng.state() == ref.state() && rng.draws() == ref.draws());
+    }
     // Formation jiggle (§3.5 step 6): 2 synced draws per moving member per frame, offset clamped to MaxJiggleDistance;
     // members without FormationRaggedness draw nothing.
     {

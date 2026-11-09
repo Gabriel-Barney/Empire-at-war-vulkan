@@ -214,8 +214,19 @@ void TacticalBattle::s4_leave(TacticalMode& mode, objects::ObjectId unit, Vec3 a
         movement_->add_unit(md);
     }
     // cu8j t02 (MOVEMENT §4.7.2): the garrison leave 0x37a060 adopts the unit (0x39bcb0, return 0x37a369): one ctor draw
-    // when it qualifies (never a team member). [M: its place among the leave's other draws]
+    // when it qualifies (never a team member). [M: its place among the leave's other draws] cu8l t02 (CU8K_T02_T06_RE §3
+    // rows 0x3abdf8 / 0x37a369, rule 7): the exit's reposition 0x3abb80 and the leave both adopt; [L] one draw is kept (the
+    // second adopt would find the unit in the first one's coordinator when the leave runs after the reposition).
     if (bt_rng_) (void)mv_adopt(mode, u->h, *bt_rng_);
+}
+
+// cu8l t02 (CU8K_T02_T06_RE §2, rule 5): the garrison host's stop-and-hold (GarrisonVehicle / GarrisonHoverTransport vf28
+// at a unit's reservation, vf29 when it ends [M], the approach 0x443700 in range): one draw through the adopt predicate
+// for a movable host with a land locomotor; a structure (no locomotor) or a dead host: nothing.
+void TacticalBattle::s4_hold(TacticalMode& mode, objects::ObjectId holder) {
+    const Unit* h = unit_by_id(holder);
+    if (!bt_rng_ || !movement_ || !h || !h->alive || h->retreated || !h->movable || !movement_->has_unit(holder)) return;
+    (void)mv_adopt(mode, h->h, *bt_rng_, true);
 }
 
 void TacticalBattle::s4_apply(TacticalMode& mode) {
@@ -227,11 +238,22 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
             case tg::GarrisonEventKind::EnterStarted: {  // the host stops the unit at the approach point
                 const objects::ObjectId one[] = {e.unit};
                 movement_->stop(one);
+                // cu8l t02 (CU8K_T02_T06_RE §2 row 0x443780, rule 5): in range with room, the approach 0x443700 stops and
+                // holds the HOST (a garrison vehicle / hover transport: one draw; a structure has no locomotor: none).
+                s4_hold(mode, e.holder);
                 break;
             }
             case tg::GarrisonEventKind::Entered: {
                 Unit* u = unit_by_id(e.unit);
                 if (!u) break;
+                // cu8l t02 (CU8K_T02_T06_RE §2 row 0x44474f, §3 row 0x3abdf8, rule 5): the entry 0x4446b0 moves the unit
+                // into the host (the eject / reposition 0x3abb80: leave, move, adopt) and then stops and holds it: two
+                // draws for a unit that is not a squad member. [M] then the host's reservation ends (vf29: its hold).
+                if (bt_rng_ && u->alive && u->movable && movement_->has_unit(e.unit)) {
+                    (void)mv_adopt(mode, u->h, *bt_rng_, true);
+                    (void)mv_adopt(mode, u->h, *bt_rng_, true);
+                }
+                s4_hold(mode, e.holder);
                 movement_->remove_unit(e.unit);
                 store.set_position(u->h, e.position);
                 mode.trees().update(static_cast<tactical::EntityHandle>(e.unit), mode.bounds_of(u->h));
@@ -266,7 +288,9 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
                 unit_gone(mode, *u);
                 break;
             }
-            case tg::GarrisonEventKind::OrderDropped: break;
+            case tg::GarrisonEventKind::OrderDropped:  // cu8l t02 [M]: the host's reservation ends (vf29: its hold)
+                s4_hold(mode, e.holder);
+                break;
         }
     }
     if (captures_) {
@@ -383,7 +407,11 @@ cmd::RejectReason TacticalBattle::order_garrison(TacticalMode& mode, uint8_t pla
     const Vec3 a = garrison_.approach_point(holder, store.position(hh), store.facing(hh));
     exec_move(mode, ids, a.x, a.y, rng, mv::kNoFacing, false);  // group move to the approach point (cancels older ones)
     uint32_t n = 0;
-    for (const objects::ObjectId id : ids) n += garrison_.order_enter(id, holder) ? 1u : 0u;
+    for (const objects::ObjectId id : ids)
+        if (garrison_.order_enter(id, holder)) {
+            ++n;
+            s4_hold(mode, holder);  // cu8l t02 (CU8K_T02_T06_RE §2 rows 0x635efb / 0x635f7b): the reservation's host hold
+        }
     return n > 0 ? R::None : R::InvalidTarget;  // hostile host
 }
 

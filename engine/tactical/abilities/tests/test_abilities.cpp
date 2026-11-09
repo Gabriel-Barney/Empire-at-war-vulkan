@@ -4708,6 +4708,47 @@ void test_cu8f_lure() {
     }
 }
 
+void test_cu8l_stop_hold() {
+    // cu8l t02 (CU8K_T02_T06_RE §2 rows 0x3a4138 / 0x3a41e6, rules 5 / 6): the behaviour toggle stops and holds the unit
+    // (StopOrder kStopHold) on every LURE toggle and on HUNT off, not on HUNT on; turning a running LURE off holds it a
+    // second time. MISSILE_SHIELD with Disable_Movement uses the coordinator-system stop (kStopLeave) and then the first
+    // lock (Immobilised, which the host turns into the split / adopt).
+    OiWorld w;
+    AbilityObjectDesc a;
+    UnitAbilityRecord lr = rec(kLure, 16.0f, 0.0f);
+    lr.pulse_frequency_secs = 0.5f;
+    lr.max_pulses = 3;
+    UnitAbilityRecord ms = rec(kMissileShield, 10.0f, 0.0f);
+    ms.disable_movement = true;
+    a.unit_abilities = {lr, rec(kHunt, 0.0f, 0.0f), ms};
+    const uint32_t d = push(w.cd, w.ad, oi_unit("Holder", 100.0f), a);
+    w.make();
+    w.add(1, d, 0, {0, 0, 0});
+    const ObjectId one[] = {1};
+    const auto stops = [&w](int32_t value) {
+        size_t n = 0;
+        for (const AbilityEvent& e : w.log)
+            if (e.kind == AbilityEventKind::StopOrder && e.id == 1 && e.value == value) ++n;
+        return n;
+    };
+    CHECK(w.ab->set_unit_ability_mode(one, kLure, true, w.frame) == 1 && w.ab->lure_running(1));
+    w.collect();
+    CHECK(stops(kStopHold) == 1);
+    CHECK(w.ab->set_unit_ability_mode(one, kLure, false, w.frame) == 1 && !w.ab->lure_running(1));
+    w.collect();
+    CHECK(stops(kStopHold) == 3);  // off + the running behaviour's second hold
+    CHECK(w.ab->set_unit_ability_mode(one, kHunt, true, w.frame) == 1);
+    w.collect();
+    CHECK(stops(kStopHold) == 3);  // HUNT on: none
+    CHECK(w.ab->set_unit_ability_mode(one, kHunt, false, w.frame) == 1);
+    w.collect();
+    CHECK(stops(kStopHold) == 4);  // HUNT off: one
+    CHECK(w.ab->set_unit_ability_mode(one, kMissileShield, true, w.frame) == 1);
+    w.collect();
+    CHECK(stops(kStopLeave) == 1 && stops(kStopHold) == 4 && w.count(AbilityEventKind::Immobilised, 1) == 1);
+    if (const AbilityEvent* e = w.last(AbilityEventKind::StopOrder, 1)) CHECK(e->value == kStopLeave);
+}
+
 void test_cu8f_deploy_cap() {
     // §3.2: Max_Num_Spawned_Objects caps the live deployed squads per unit (Can_Activate 38 and the activation); a squad
     // that is gone frees its slot. One squad per deploy.
@@ -5041,6 +5082,7 @@ int main(int argc, char** argv) {
     test_cu8f_parse_defaults();
     test_cu8f_lure();
     test_cu8f_deploy_cap();
+    test_cu8l_stop_hold();  // cu8l t02
     test_cu8f_enable_gates();
     test_cu8f_super_laser();
     test_gaps_jet_pack();

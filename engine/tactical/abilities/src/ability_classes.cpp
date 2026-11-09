@@ -388,7 +388,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
         case C::ProximityMines: {  // 2.3.3 apply 0x71a4d0 + spawn 0x71a650
             if (target != kNoObject && combat_->has_unit(target) && !range_ok(o, s, target)) return false;
             const Vec3 at = (target != kNoObject && combat_->has_unit(target)) ? combat_->position(target) : me;
-            stop_order(o.id, frame);
+            stop_order(o.id, frame, kStopHold);  // cu8l t02: stop-and-hold 0x3a9880 (0x71a517, CU8K_T02_T06_RE §2)
             start_recharge(o, kProximityMines);
             for (ObjectId m : o.members)
                 if (Obj* mo = obj(m)) start_recharge(*mo, kProximityMines);
@@ -458,7 +458,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             // pending order is not retried) and nothing is thrown [M on the meaning; the port applies the flow as read].
             if (desc(o).countdown && o.cd.counter[kStickyBomb] > 0) return true;
             snap_face(o, target);  // S8 t10: yaw snapped to the target's raw position
-            stop_order(o.id, frame);
+            stop_order(o.id, frame, kStopHold);  // cu8l t02: stop-and-hold 0x3a9880 (0x7009de, CU8K_T02_T06_RE §2)
             lock_pair(o, kLockGrenade, true, frame);  // stop, lock (0x3a8e50 1; A1_READINGS §28.9)
             sp.applied = 1;
             sp.target = target;
@@ -584,7 +584,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             if (!alive_unit(target) || !range_ok(o, s, target)) return false;
             if (s.charging_time > 0.0f && combat::distance_xy(me, combat_->position(target)) > s.targets_radius) return false;
             lightning_targets(o, s, target, sp.victims);
-            stop_order(o.id, frame);
+            stop_order(o.id, frame, kStopHold);  // cu8l t02: stop-and-hold 0x3a9880 (0x71ae72, CU8K_T02_T06_RE §2)
             sp.applied = 1;
             sp.target = target;
             sp.counter = frames_of(s.duration_secs, fps);
@@ -657,6 +657,10 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
                 if (o.stealthed) break_stealth(o, frame);
                 if (Obj* x = obj(target))
                     if (x->stealthed) break_stealth(*x, frame);
+                // cu8l t02 (CU8K_T02_T06_RE §2 rows 0x5b0962 / 0x5b096a): the stop-and-holds of the user, then the target
+                // (one draw each when not a squad member).
+                stop_order(o.id, frame, kStopHold);
+                stop_order(target, frame, kStopHold);
             }
             sp.applied = 1;
             sp.target = target;
@@ -667,7 +671,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             }
             sp.next = frame + len;
             start_recharge(o, s.cls == C::Hack ? kTargetedHack : (s.cls == C::Repair ? kTargetedRepair : kTacticalBribe));
-            stop_order(o.id, frame);
+            if (s.cls != C::TacticalBribe) stop_order(o.id, frame);  // the bribe's user is already held (above)
             event(AbilityEventKind::EffectOn, sp.trigger, o.id, target, frame);
             if (s.cls == C::TacticalBribe) class_update(o, sp, frame);  // changes the owner at once
             return true;
@@ -712,6 +716,8 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             if (!alive_unit(target) || !range_ok(o, s, target)) return false;
             Obj* v = obj(target);
             if (!v) return false;
+            // cu8l t02: stop-and-hold 0x3a9880 (0x71d40f, CU8K_T02_T06_RE §2) when the target is not corrupted yet
+            if (!v->corrupted) stop_order(o.id, frame, kStopHold);
             v->corrupted = 1;
             sp.applied = 1;
             sp.target = target;
@@ -726,6 +732,10 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
         case C::Spawn:
         case C::Radioactive: {  // create Object_Type (one id) after Creation_Delay / Spray_Time / Activation_Time
             if (target != kNoObject && combat_->has_unit(target) && !range_ok(o, s, target)) return false;
+            // cu8l t02 (CU8K_T02_T06_RE §2 rows 0x71c4b2 / 0x71ce72 / 0x712727): Buzz_Droids, Summon and Radioactive_
+            // Contaminate stop and hold the user (one draw when not a squad member). [port] Radioactive's hold is at the
+            // apply (retail: when the throw starts, anim 0x70); the generic Spawn class has none.
+            if (s.cls != C::Spawn) stop_order(o.id, frame, kStopHold);
             sp.applied = 1;
             sp.point = (target != kNoObject && combat_->has_unit(target)) ? combat_->position(target) : me;
             const float delay = s.cls == C::BuzzDroids ? s.activation_time : s.creation_delay;
@@ -769,7 +779,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             // the target. No toss and no recharge yet (class_update). [port] Without a target object the bomb is placed at the
             // unit at the toss.
             if (has_target) snap_face(o, target);
-            stop_order(o.id, frame);
+            stop_order(o.id, frame, kStopHold);  // cu8l t02: stop-and-hold 0x3a9880 (0x719db2, CU8K_T02_T06_RE §2)
             lock_pair(o, kLockRemoteBomb, true, frame);
             if (o.combat_unit) combat_->set_flag(o.id, combat::kUnitTargetingSuspended, true);  // S8 t25: TARGETING disabled
             sp.applied = 1;
@@ -802,6 +812,9 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
 
         case C::Infection: {  // throws Infection_Projectile (Causes_Infection: combat attaches INFECTION on the hit, refix t02)
             if (!alive_unit(target) || !range_ok(o, s, target) || s.projectile < 0) return false;
+            // cu8l t02 (CU8K_T02_T06_RE §2 row 0x6cc6eb): stop-and-hold the user (IG-88: one draw). [port] its movement
+            // lock is not modelled (no release traced); after the hold it would draw nothing.
+            stop_order(o.id, frame, kStopHold);
             combat::ProjectileLaunch l;
             l.shooter = o.combat_unit ? o.id : kNoObject;
             l.owner = o.owner;
@@ -1305,8 +1318,15 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                     combat_->set_health(sp.target, combat_->max_health(sp.target));  // [M] the repair effect
                 } else if (Obj* t = obj(sp.target)) {
                     change_owner(*t, o.owner, frame);
+                    // cu8l t02 (CU8K_T02_T06_RE §2 row 0x5b0c8a): the bribe holds the bribed object after the owner change
+                    // [M: or its team container]
+                    if (s.cls == C::TacticalBribe) stop_order(sp.target, frame, kStopHold);
                 }
             }
+            // cu8l t02 (CU8K_T02_T06_RE §3 row 0x48cecb, rule 7): Hack / Repair release the user at their end (0x48ce70:
+            // leave the coordinator, adopt): the user, or its team container for a squad member (one draw). [port] a
+            // stop-and-hold (the user has stood still since the apply's stop).
+            if (s.cls != C::TacticalBribe) stop_order(o.container != kNoObject ? o.container : o.id, frame, kStopHold);
             remove_special(o, sp, frame);
             return;
         }

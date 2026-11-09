@@ -1868,6 +1868,9 @@ void CampaignBattles::l1_hooks(SimHost& host) {
     k.teleport = [this, h, id_of](objects::ObjectHandle u, Vec3 p, Vec3 f) {
         if (TacticalMode* tm = h->tactical(); battle_ && tm) battle_->teleport(*tm, id_of(u), p, f);
     };
+    k.movement_first_lock = [this, h, id_of](objects::ObjectHandle u) {  // cu8l t02: Lock_Current_Orders' first lock
+        if (TacticalMode* tm = h->tactical(); battle_ && tm) battle_->script_first_lock(*tm, id_of(u));
+    };
     k.retreat_increment_frames = [this](int32_t player) { return battle_ ? battle_->retreat_increment_frames(player) : 0; };
     k.set_new_environment = [this](int32_t index) { if (battle_) battle_->set_environment(index); };  // cu8g t03
     // Script spawns through the mode; special weapons / TSWs among them join the L1 systems (Spawn_Special_Weapon).

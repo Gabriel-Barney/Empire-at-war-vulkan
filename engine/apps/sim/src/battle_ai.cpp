@@ -235,6 +235,7 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
         k.engines_online = [bt, bid](objects::ObjectHandle u) { return bt->engines_online(bid(u)); };
         k.ground_height = [bt](float x, float y) { return bt->ground_height(x, y); };
         k.teleport = [bt, md, bid](objects::ObjectHandle u, Vec3 p, Vec3 f) { bt->teleport(*md, bid(u), p, f); };
+        k.movement_first_lock = [bt, md, bid](objects::ObjectHandle u) { bt->script_first_lock(*md, bid(u)); };  // cu8l t02
         k.hyperspace_out_link = [bt, bid](objects::ObjectHandle u, int32_t delay, bool keep) { return bt->hyperspace_out(bid(u), delay, keep); };
         k.retreat_increment_frames = [bt](int32_t player) { return bt->retreat_increment_frames(player); };
         k.set_new_environment = [bt](int32_t index) { bt->set_environment(index); };  // cu8g t03
