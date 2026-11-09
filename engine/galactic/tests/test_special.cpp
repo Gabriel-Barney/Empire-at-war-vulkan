@@ -893,6 +893,36 @@ void test_slicer() {
         CHECK(s.credits(pReb) == (k == 3 ? c0 - 100.0f : c0));
         CHECK(s.respawns_pending(rB).size() == 1 && s.respawns_pending(rB)[0].due == due_after(s.frame(), k == 1 ? 2.0f * r : r));
     }
+    {  // a2m t15 (REMAINING_GAPS 1.3 steps 2, 4, 6, 8; A2M_T08_T10_T14_RE t14.5) draw counts of the applies that slice nothing.
+        // A gate failure (own planet: the accept; no candidates at max tech) makes no draw; an AI with no affordable
+        // entry draws R only (the lists exist, tech <= 4), no pick, no despawn; without respawn lists it makes no draw.
+        for (int variant = 0; variant < 4; ++variant) {
+            World w;
+            GalacticSim& s = w.sim;
+            const uint32_t ab = add_slicer(w, 0.0f);
+            if (variant == 3) {
+                w.rules.special.abilities[ab].slice_min_respawn.clear();
+                w.rules.special.abilities[ab].slice_max_respawn.clear();
+            }
+            PlanetIndex at = rB;
+            if (variant == 0) at = rC;  // the Rebel's own planet
+            if (variant == 1) {  // every candidate taken, tech at max: the recursion stops with a message
+                s.unlock_type(pReb, tFrigate, 2);
+                s.unlock_type(pReb, tDS2, 2);
+                while (s.raise_tech_level(pReb)) {}
+            }
+            if (variant >= 2) s.add_credits(pReb, 50.0f - s.credits(pReb), false);  // both entries (100 / 400) too dear
+            const ObjectHandle sl = s.spawn_unit(pReb, at, tMerc);
+            const std::vector<uint32_t> unlocked = s.players()[pReb].unlocked_types;
+            const float c0 = s.credits(pReb);
+            SimRng expect = w.rng;
+            if (variant == 2) (void)expect.inline_range_float(20.0f, 20.0f);  // R at tech 1, drawn even with Min == Max
+            CHECK(!s.ground_activated_trigger(sl, at));
+            std::printf("slicer variant %d: draws %s, alive %d\n", variant, w.rng == expect ? "as expected" : "DIFFER",
+                        w.store.alive(sl) ? 1 : 0);
+            CHECK(w.rng == expect && w.store.alive(sl) && s.credits(pReb) == c0 && s.players()[pReb].unlocked_types == unlocked);
+        }
+    }
     {  // Human slicer (Underworld): the dialog (SpecialDialog, other_player = kind 2), then command kind 2.
         World w(true);
         GalacticSim& s = w.sim;

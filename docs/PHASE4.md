@@ -408,6 +408,20 @@ orders one hop at a time) and the free store refuses a unit in transit (`free_st
 of the generic-hero saboteur exit at frame 248 (A2M t10.5); a saboteur-only TF still exits only when the saboteur itself
 leaves. HotM seed 0: CRC unchanged.
 
+**2026-11-09 (a2m t11): Underworld proposal cadence, measured** (HotM Empire-human seed 0, port after t09 / t10). The
+Underworld goal pass scores 151..158 candidates (Rebel 157..165); `need` = ceil(E / 150) = 2, so after the first pass
+(quota = cap 4: 6 players - 1 human) every pass takes ceil(E / 2) = 76..78 frames: passes end at 42, 119, 195, 272, 348,
+424, 501, 577, 654, ... Retail's Underworld plan records (52, 103, 250, 397, 544, 691, 847, 1006, 1171, 1333, 1495; all
+frame = 1 mod 3, the planning pump where the plan's Lua first runs; the port logs at the commit) fit 51-frame first
+passes (E about 153 at quota 3 = cap with 6..8 counted players) and then quota 1 (147..165 frames, E about the port's).
+Open [RE]: what Goal Service 0x6cacd0 counts as `evalsLastPass` (which candidates, which pass, where it is reset), the
+first-pass quota, and the player count of the cap; not ported.
+
+**2026-11-09 (a2m t15): slicer draws checked.** `apply_slicer` / `slice_execute` already follow REMAINING_GAPS 1.3
+steps 2-8 and t14.5: gate failures draw nothing; an AI with no affordable entry draws R only (lists present, tech <= 4,
+also when Min == Max) and keeps the droids; the AI pick draws once for one or more affordable entries. FindTarget
+(`find_target_pick`) draws only with two or more positive scores (t14.3). New draw-count test in `test_special.cpp`.
+
 **2026-11-08 (q4hf t03): more retail references.** `geonosis_skirmish` now has 3 retail runs (`20261108-204213-skirmish-vanilla-lua`,
 `20261108-203639-skirmish-vanilla` added), so its tolerances use the run-to-run envelope; `hotm_galactic` has a 4th run,
 `20261108-204711-galactic-vanilla-lua` (40 cycles, cut at the scenario's `max_tick` 13501; its two auto-resolved Tatooine
