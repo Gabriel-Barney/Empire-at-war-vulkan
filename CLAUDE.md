@@ -23,7 +23,7 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
 | `logs/` | Build/test logs written by `build_msvc.cmd` |
 
 ## Platform and compilers (Gabriel, 2026-10-27; full record in `docs/DECISIONS.md`)
-- **Windows x64 only.** Multiplayer, loading the original game's save files and RenderDoc are out of scope. Parity with the original is checked by behaviour, not by matching its CRC / hashes bit for bit; the port's own determinism rule 3 is unchanged.
+- **Windows x64 only.** Multiplayer, loading the original game's save files and RenderDoc are out of scope. Parity with the original is checked by behaviour, not by matching its CRC / hashes bit for bit; the port's own determinism rule 3 is unchanged. Same outcome, own method (Gabriel, 2026-11-09, "Parity tiers" in `docs/DECISIONS.md`): rules, data / Lua handling and feel match retail exactly; random-driven outcomes match retail's distribution over many seeds; internals (including random-number draw order) are the port's choice, recorded as `[port]` entries.
 - **Two compilers: MSVC (ships) and clang (checks).** Every change: MSVC build + tests. Sim code (everything in `engine/` except render, audio, video and UI): also the clang build + tests, including the CRC selfchecks. `engine/jobs` or other threading code: also `build_asan.cmd`. Details and sanitizer limits: `docs/BUILD.md`.
 - Shaders are compiled by DXC (`toolchain\dxc`) to SPIR-V; the C++ compiler choice doesn't affect them.
 
