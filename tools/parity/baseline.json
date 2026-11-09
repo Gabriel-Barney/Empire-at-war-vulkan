@@ -1,5 +1,5 @@
 {
- "commit": "d3237074",
+ "commit": "190c4e80",
  "scenarios": {
   "geonosis_skirmish": {
    "references": [
@@ -78,17 +78,19 @@
     "build.ticks[REBEL_GROUND_MINING_FACILITY@MONCALIMARI]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@NABOO]": "PASS",
     "build.ticks[REBEL_INFANTRY_SQUAD@KAMINO]": "PASS",
+    "build.ticks[REBEL_TANK_BUSTER_SQUAD@KAMINO]": "PASS",
     "build.ticks[REBEL_TANK_BUSTER_SQUAD@NABOO]": "PASS",
     "build.ticks[R_GALACTIC_TURBOLASER_TOWER_DEFENSES@YAVIN]": "PASS",
     "build.ticks[R_GROUND_BARRACKS@NABOO]": "PASS",
     "build.ticks[R_GROUND_BARRACKS@SHOLA]": "PASS",
     "build.ticks[UNDERWORLD_DISRUPTOR_MERC_SQUAD@NALHUTTA]": "PASS",
+    "build.ticks[UNDERWORLD_SABOTEUR_TEAM@NALHUTTA]": "PASS",
     "build.ticks[U_GROUND_PALACE@FELUCIA]": "PASS",
     "build.ticks[U_GROUND_PALACE@SHOLA]": "PASS",
     "build.ticks[Y-WING_SQUADRON@MONCALIMARI]": "PASS",
     "diag.rng_draws_total": "INFO",
-    "econ.credits_at_13500[Empire]": "PASS",
-    "econ.credits_at_13500[Rebel]": "FAIL",
+    "econ.credits_at_13500[Empire]": "FAIL",
+    "econ.credits_at_13500[Rebel]": "PASS",
     "econ.credits_at_13500[Underworld]": "PASS",
     "econ.credits_at_4500[Empire]": "PASS",
     "econ.credits_at_4500[Rebel]": "PASS",
@@ -125,17 +127,17 @@
     "travel.hop_ticks[Rebel:KAMINO->MONCALIMARI]": "PASS",
     "travel.hop_ticks[Rebel:KASHYYYK->FELUCIA]": "PASS",
     "travel.hop_ticks[Rebel:KASHYYYK->KUAT]": "PASS",
-    "travel.hop_ticks[Rebel:KASHYYYK->NALHUTTA]": "FAIL",
     "travel.hop_ticks[Rebel:KUAT->CORELLIA]": "PASS",
     "travel.hop_ticks[Rebel:KUAT->KASHYYYK]": "PASS",
     "travel.hop_ticks[Rebel:MONCALIMARI->SHOLA]": "PASS",
     "travel.hop_ticks[Rebel:NABOO->SHOLA]": "FAIL",
     "travel.hop_ticks[Rebel:NABOO->TATOOINE]": "PASS",
     "travel.hop_ticks[Rebel:NALHUTTA->KASHYYYK]": "FAIL",
+    "travel.hop_ticks[Rebel:SHOLA->NABOO]": "PASS",
     "travel.hop_ticks[Rebel:SHOLA->NALHUTTA]": "PASS",
-    "travel.hop_ticks[Rebel:SHOLA->THE_MAW]": "PASS",
     "travel.hop_ticks[Rebel:TATOOINE->CORELLIA]": "PASS",
     "travel.hop_ticks[Underworld:CORELLIA->KUAT]": "PASS",
+    "travel.hop_ticks[Underworld:CORELLIA->TATOOINE]": "PASS",
     "travel.hop_ticks[Underworld:KASHYYYK->KUAT]": "PASS",
     "travel.hop_ticks[Underworld:KASHYYYK->THE_MAW]": "FAIL",
     "travel.hop_ticks[Underworld:KUAT->CORELLIA]": "PASS",
@@ -171,8 +173,8 @@
      "PASS": 20
     },
     "timing": {
-     "FAIL": 6,
-     "PASS": 42
+     "FAIL": 5,
+     "PASS": 45
     }
    }
   }
