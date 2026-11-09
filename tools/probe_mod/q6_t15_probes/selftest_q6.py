@@ -386,7 +386,9 @@ def run_model(runner, mod, model, rng):
     t = runner.run('%s_story' % model, 'MODEL = "%s"\nDRAW = 0.37' % model, [timing, STORY_DRIVER])
     recs += runner.records(t)
     story_text = t
-    ends = {'A': None, 'B': 55.0 if model == 'port' else None, 'C': 0.5}
+    # D / E: the RE reading (end about 1.5 s after the event; the plot starts at t = 1.17) in 'port', no end in 'alt'.
+    ends = {'A': None, 'B': 55.0 if model == 'port' else None, 'C': 0.5,
+            'D': 23.0 if model == 'port' else None, 'E': 43.0 if model == 'port' else None}
     for m, end in ends.items():
         elim = read(os.path.join(sdir, 'Story', 'Q6_Story_Elim_%s.lua' % m))
         hdr = 'END_T = %s' % ('nil' if end is None else repr(end))
@@ -442,13 +444,17 @@ def main():
     tr_recs = runner.records(runner.run('tr_land', '', [TR_STUB_FREESTORE, hook, TR_DRIVER]))
     rng = random.Random(20261104)
     expect = {
-        'port': {1: ['ANSWER A (own nothing all game): RAN_TO_END', 'ANSWER B (owned once, then nothing): STOPPED'],
+        'port': {1: ['ANSWER A (own nothing all game): RAN_TO_END', 'ANSWER B (owned once, then nothing): STOPPED',
+                     'ANSWER D (AI gains a planet while the human owns nothing): STOPPED',
+                     'ANSWER E (fleet, then no planet): STOPPED', 'after the AIGIVE event'],
                  2: ['ANSWER bound: hi = ServiceRate', 'ANSWER vanilla objects run their Lua_Script: YES'],
                  3: ['ANSWER: Cycle2 period'],
                  4: ['ANSWER: MAIN (f=', 'Begin0 state entered'],
                  5: ['the CC survived'],
                  6: ['spawned for you: Darth_Vader', 'spawned for you: Eclipse_Super_Star_Destroyer']},
-        'alt': {1: ['ANSWER B (owned once, then nothing): RAN_TO_END'],
+        'alt': {1: ['ANSWER B (owned once, then nothing): RAN_TO_END',
+                    'ANSWER D (AI gains a planet while the human owns nothing): RAN_TO_END',
+                    'ANSWER E (fleet, then no planet): RAN_TO_END'],
                 2: ['ANSWER bound: hi = 1'],
                 4: ['BEFORE main\'s first resume', 'Begin0 state NEVER entered']},
     }

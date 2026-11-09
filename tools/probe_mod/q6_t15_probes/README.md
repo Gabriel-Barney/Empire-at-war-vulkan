@@ -49,6 +49,12 @@ nothing at the start.
   - at 50 s, "...took Abregado Rae back. You own nothing again" appears;
   - then watch until the 170 s message, or until the campaign ends.
 - **"Q6 PROBE: ELIM C (CONTROL)"**: expected to end at once (the Rebel wins). This is the control.
+- q6 t25 (optional, run 2026-11-09):
+  - **"Q6 PROBE: ELIM D (AI GAINS A PLANET)"**: you own nothing; at 20 s the script gives the neutral Abregado Rae to
+    the Rebel.
+  - **"Q6 PROBE: ELIM E (FLEET, NO PLANET)"**: a Star Destroyer at Tatooine (the start force does not give the planet);
+    the script gives you Tatooine at 10 s and makes it neutral at 40 s.
+  - In both, watch until the 170 s message or the end. Each logs a heartbeat every second for 15 s after its event.
 
 For each campaign, write down whether it ended, when (seconds after the start, or seconds after the "took it back"
 line for B), and what the screen showed. Take a screenshot of any defeat or end screen. Then quit to the main menu.

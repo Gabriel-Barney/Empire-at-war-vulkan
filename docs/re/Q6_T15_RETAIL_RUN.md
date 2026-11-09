@@ -57,9 +57,25 @@ Port consequences (the latch is not the original's mechanism):
   would end at once in retail [M, TR scripts not read].
 - `player_eliminated` counts live units; the original does not.
 
-Probe that would confirm the two inferred halves (not run): ELIM D, the human owns nothing and the script moves one
-neutral planet to the Rebel at t + 20 s (expected: the AI wins about 1 s later). ELIM E, the human owns a fleet and one
-planet, and the script takes the planet (expected: ends, so units do not count).
+The two inferred halves were confirmed by q6 t25 (ELIM D and E, next section).
+
+## q6 t25: ELIM D and E (2026-11-09)
+
+Same kit, two new campaigns (`q6_story_elim.lua` modes D and E). After its event each campaign logs a heartbeat every
+second for 15 s, so the end time is known to about 1 s. Sessions `out/20261109-082854-vanilla/` (D, plus a first E build
+that failed its premise) and `out/20261109-083445-vanilla/` (E).
+
+| Run | Setup | Retail | Reading |
+|---|---|---|---|
+| ELIM D | human owns nothing; the script gives the neutral Abregado Rae to the Rebel at t = 21.97 s | `AIGIVE` and a heartbeat in that frame, then no further heartbeat (the next was due 1 s later); credits, then "Defeat!" (`elim_d_credits.png`, `elim_d_defeat.png`) | an owner change while the human owns nothing ends the campaign within 1 s: the AI's implicit `Opponent_Controls_No_Planets` (countdown 30 frames) [H] |
+| ELIM E | Star Destroyer at Tatooine; the script gives Tatooine to the human at t = 12.13 s and makes it neutral at t = 41.23 s | heartbeats ran on to t = 45.53 s with the fleet alive (`objs=2`, `owned=0`), then credits and "Defeat!" (`elim_e_credits.png`, `elim_e_defeat.png`) | **units do not count**: a human with a fleet but no planet loses [H] |
+| first E build | Star Destroyer as the only start force at Tatooine | `owned=0` at START (a start fleet does **not** give the planet), `objs=2`; `Change_Owner(Neutral)` on the already neutral Tatooine at t = 31.6 s ended nothing; ran 70 s until the driver quit | a `Change_Owner` to the same owner is no owner change; a human with only a fleet, and no owner change anywhere, goes on (as ELIM A) [M] |
+
+**Open (timing, [M]):** D ended at most 1.0 s after its owner change, but E ran for 4.3 to 5.3 s after its take-back
+(ELIM B: "within 5 s", with 5 s heartbeats). Both are owner changes that leave the human without a planet, and both should
+end through the same 30-frame countdown. What adds the extra ~4 s when the planet goes to Neutral rather than to an AI is
+not known: for example the Neutral change taking a different path in 0x3fb040, a later test, or the Defeat path for the
+human. It only matters for when the end screen appears, not for whether it does.
 
 ## Open
 

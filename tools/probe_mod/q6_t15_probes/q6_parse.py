@@ -77,7 +77,7 @@ def seq(kv):
 
 # ---- 1 EliminationLatch ------------------------------------------------------------------------------------------
 def sec1(recs):
-    L = ['== 1. EliminationLatch (campaigns Q6 PROBE: ELIM A / B / C; plus TR GCMenu by eye) ==']
+    L = ['== 1. EliminationLatch (campaigns Q6 PROBE: ELIM A .. E; plus TR GCMenu by eye) ==']
     runs = collections.OrderedDict()
     for k, kv in by(recs, 'elim'):
         runs.setdefault((kv.get('mode', '?'), kv.get('sid', '?')), []).append((k, kv))
@@ -91,15 +91,17 @@ def sec1(recs):
         done = next((kv for k, kv in rs if k == 'DONE'), None)
         give = next((kv for k, kv in rs if k == 'GIVE'), None)
         take = next((kv for k, kv in rs if k == 'TAKE'), None)
+        aigive = next((kv for k, kv in rs if k == 'AIGIVE'), None)
         L.append('  run %s (sid %s): %d records, %d heartbeats' % (mode, sid, len(rs), len(hbs)))
         if start:
             L.append('    START t=%s human=%s owned=%s objs=%s owners: %s' % (
                 start.get('t'), start.get('human'), start.get('owned'), start.get('objs'),
                 ' '.join('%s=%s' % (p, start.get(p, '?')) for p in ('Tatooine', 'Byss', 'Abregado_Rae', 'Jabiim'))))
-        for name, r in (('GIVE', give), ('TAKE', take)):
+        for name, r in (('GIVE', give), ('TAKE', take), ('AIGIVE', aigive)):
             if r:
-                L.append('    %s t=%s ok=%s owned after=%s Abregado_Rae=%s %s' % (
-                    name, r.get('t'), r.get('ok'), r.get('owned'), r.get('Abregado_Rae'),
+                L.append('    %s t=%s ok=%s owned after=%s objs=%s Abregado_Rae=%s Tatooine=%s %s' % (
+                    name, r.get('t'), r.get('ok'), r.get('owned'), r.get('objs'), r.get('Abregado_Rae'),
+                    r.get('Tatooine'),
                     ('err=' + r.get('err')) if r.get('ok') != 'true' else ''))
         last = hbs[-1] if hbs else None
         premise = start is not None and start.get('owned') == '0'
@@ -110,16 +112,21 @@ def sec1(recs):
             v = 'STOPPED'
             L.append('    no DONE: last heartbeat dt=%s s (t=%s). The campaign ended (or was quit) after that;'
                      ' check the note of what the screen showed.' % (last.get('dt'), last.get('t')))
+            ev = aigive or (take if mode == 'E' else None)
+            if ev and num(ev.get('t')) is not None and num(last.get('t')) is not None:
+                L.append('    last heartbeat %.2f s after the %s event (heartbeat every 1 s for 15 s after it)' % (
+                    num(last.get('t')) - num(ev.get('t')), 'AIGIVE' if aigive else 'TAKE'))
         else:
             v = 'NO_HEARTBEAT'
             L.append('    no heartbeat: the plot thread never ran a loop (campaign ended at once?)')
         if not premise and start is not None:
-            L.append('    PREMISE FAILED: the human owned %s planet(s) at START (Home_Location gave a planet?)'
-                     % start.get('owned'))
+            L.append('    PREMISE FAILED: the human owned %s planet(s) at START (expected 0)' % start.get('owned'))
         ans[mode] = v if premise or start is None else v + '_BUT_PREMISE_FAILED'
     L.append('  ANSWER A (own nothing all game): %s' % ans.get('A', 'NOT RUN'))
     L.append('  ANSWER B (owned once, then nothing): %s' % ans.get('B', 'NOT RUN'))
     L.append('  ANSWER C (control, opponent rule): %s' % ans.get('C', 'NOT RUN (no records: expected if it ended at once)'))
+    L.append('  ANSWER D (AI gains a planet while the human owns nothing): %s' % ans.get('D', 'NOT RUN'))
+    L.append('  ANSWER E (fleet, then no planet): %s' % ans.get('E', 'NOT RUN'))
     L.append('  Reading: A RAN_TO_END and B RAN_TO_END = the original never eliminates (the latch is harmless for A but the'
              ' port ends B, which the original does not); B STOPPED a few s after TAKE = the original eliminates a player'
              ' that owned something (the latch matches); A STOPPED = the original eliminates even a player that never'

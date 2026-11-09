@@ -55,7 +55,8 @@ STEPS = {
  B) Galactic Conquest > "Q6 PROBE: ELIM A (OWN NOTHING)" > EMPIRE > Start. Click nothing for 3 minutes (until "170 s
     passed" or the campaign ends by itself). Note what happened and when (screenshot of any end screen). Quit.
  C) Same for "Q6 PROBE: ELIM B (OWN, THEN LOSE)" (Abregado Rae is yours from 20 s to 50 s) and
-    "Q6 PROBE: ELIM C (CONTROL)" (expected to end at once).
+    "Q6 PROBE: ELIM C (CONTROL)" (expected to end at once). Optional (q6 t25): "Q6 PROBE: ELIM D (AI GAINS A PLANET)"
+    and "Q6 PROBE: ELIM E (FLEET, NO PLANET)", the same way.
  D) Skirmish > LAND, map Geonosis: slot 1 you EMPIRE team 1, slot 2 AI REBEL team 2, all other slots closed. Start.
     No orders. About 5 s in: "selection test set (land) is next to your units". Press Ctrl+A, take a screenshot of the
     whole screen (selection brackets + the selected-units panel). After "tactical part done" (2 min) press Ctrl+A again,
