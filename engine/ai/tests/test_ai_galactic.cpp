@@ -2096,6 +2096,24 @@ function MainForce_Thread()
   ScriptExit()
 end
 )";
+// a2m t10 (A2M_T08_T10_T14_RE t10.3): No_Units_Remaining on each member loss that leaves no counted entry. The handler
+// counts the events and the thread keeps the plan alive.
+static const char* kPlanA2mNur = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "MainForce", "DenyHeroAttach", "HeroShip = 1", "Infantry = 1" } }
+end
+function MainForce_Thread()
+  MainForce.Set_As_Goal_System_Removable(false)
+  GlobalValue.Set("a2m_n_started", MainForce.Get_Force_Count())
+  while true do Sleep(1) end
+end
+function MainForce_No_Units_Remaining()
+  NurCount = (NurCount or 0) + 1
+  GlobalValue.Set("a2m_nur", NurCount)
+end
+)";
 struct ParityWorld {
     MemoryFiles files;
     AiDefinitions defs;
@@ -2132,6 +2150,7 @@ struct ParityWorld {
         files.add("Data\\Scripts\\AI\\A2lPlainProduce.lua", kPlanA2lPlainProduce);
         files.add("Data\\Scripts\\AI\\A2mMoveTo.lua", kPlanA2mMoveTo);
         files.add("Data\\Scripts\\AI\\A2mLand.lua", kPlanA2mLand);
+        files.add("Data\\Scripts\\AI\\A2mNur.lua", kPlanA2mNur);
         plan_files = list_plan_files([this](std::string_view glob) {
             const std::string g(glob);
             return files.list(g.substr(0, g.find('*')));
@@ -2557,6 +2576,53 @@ static void test_land_units_owner_rule() {
     CHECK(open.home_landed > 0);                                       // friendly P0: landed
     CHECK(open.end_in_fleet && open.end_planet != 0 && open.end_planet >= 0);  // the target (not the Empire's): not landed
     CHECK(full.home_status && full.home_landed == 0);                  // count 0 == max 0: nothing lands
+}
+
+// a2m t10 (A2M_T08_T10_T14_RE t10.3 / t10.8) [H]: the TF base handler raises No_Units_Remaining on every member loss
+// that leaves no counted entry (not a named / generic hero, not a space special weapon, no lobbing superweapon). The hero
+// left alone after the infantry dies gets the event (the old "every unit lost" rule did not raise it); the hero's own
+// loss raises it again.
+static void test_no_units_remaining_counted_entries() {
+    ParityWorld pw(false, {"A2mNur"}, [](gal::GalacticSetup& s) {
+        for (gal::StartingForce& f : s.forces)
+            if (f.player == 0 && f.type == tInfantry) f.planet = 0;  // with the hero at P0
+    });
+    lua::GlobalValueStore gv;
+    pw.world->set_global_values(&gv);
+    auto num = [&gv](const char* n) { const lua::AiGlobalValue v = gv.get(n); return v.kind == lua::AiGlobalValue::Number ? v.number : -1.0; };
+    objects::ObjectHandle inf, hero;
+    for (const objects::ObjectHandle u : pw.sim->planets()[0].surface)
+        if (pw.store->type(u) == tInfantry) inf = u;
+    CHECK(static_cast<bool>(inf));
+    int32_t f = 1;
+    auto step = [&](int32_t frames) {
+        for (const int32_t e = f + frames; f < e; ++f) {
+            pw.sim->update();
+            pw.world->update_player(0, f, true, false);
+        }
+    };
+    while (f <= 30 * 120 && num("a2m_n_started") < 0.0) step(1);
+    const double started = num("a2m_n_started");
+    for (objects::ObjectId id = 0; !hero && id < 4096; ++id) {  // the hero ship: the other member, by type
+        const objects::ObjectHandle h = pw.store->find(id);
+        if (h && pw.store->alive(h) && pw.store->type(h) == pw.hero && pw.store->owner(h) == 0) hero = h;
+    }
+    CHECK(static_cast<bool>(hero));
+    step(30);
+    const double before = num("a2m_nur");
+    CHECK(pw.sim->destroy_object(inf));
+    step(10);
+    const double after_inf = num("a2m_nur");
+    CHECK(pw.sim->destroy_object(hero));
+    step(10);
+    const double after_hero = num("a2m_nur");
+    bool logged = false;
+    for (const AiDecision& d : pw.world->decision_log())
+        logged = logged || d.text.find("MainForce no units remaining (1 uncounted)") != std::string::npos;
+    std::printf("no units remaining: started with %.0f units, events before %.0f, after infantry %.0f, after hero %.0f, logged %d\n",
+                started, before, after_inf, after_hero, logged ? 1 : 0);
+    CHECK(started == 2.0 && before < 0.0 && after_inf == 1.0 && after_hero == 2.0 && logged);
+    pw.world->set_global_values(nullptr);
 }
 
 // OI2 ai: production-disabled types (story DISABLE_BUILDABLE, REMAINING_GAPS §1.5) are never picked by AI production -
@@ -5963,6 +6029,7 @@ int main(int argc, char** argv) {
     test_null_stage_and_plain_produce();
     test_move_to_fleet_object();
     test_land_units_owner_rule();
+    test_no_units_remaining_counted_entries();
     test_production_disabled_and_delivery();
     test_ground_structure_slots();
     test_budget_fraction_before_init();

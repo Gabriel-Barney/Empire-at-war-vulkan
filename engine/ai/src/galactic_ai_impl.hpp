@@ -477,6 +477,13 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
         return it == tfs.end() ? -1 : it->second.plan;
     }
     void prune_tf(TaskForceRec& tf);
+    // a2m t10 (A2M_T08_T10_T14_RE t10.3 / t10.8, AI_TACTICAL §7.3.3 item 4) [H]: a member lost to signal 0x10 / 0x1a
+    // queues its task force here (prune_tf); drain_lost_members raises No_Units_Remaining for each queued TF whose entry
+    // vector (TF +0x60: members, wanted types, builds in progress) holds no counted type. Drained within the frame
+    // (update_player), so it never crosses a save.
+    bool counted_entry_type(uint32_t type) const;
+    void drain_lost_members();
+    std::vector<int32_t> lost_tfs;
     // a2m t02 (A2L_T01_RE_ANSWERS Q8.2): Add_Force 0x6cd1a0 (append the unit; elect the FleetObject from its parent
     // fleet while TF +0x120 is null) and the FleetObject itself (re-elected when null, dead or holding no member).
     void tf_join(TaskForceRec& tf, ObjectHandle u);

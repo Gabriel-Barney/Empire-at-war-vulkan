@@ -398,6 +398,16 @@ times spf in float, widened; `TimeSinceConversion` / `GroundConflict` / `SpaceCo
 `TimeSinceSpace/GroundDefender/Attacker` leaves still divide by 30 (not covered by t08). HotM seed 0: the Underworld
 saboteur desire timing moves the RNG, so verdicts shift both ways (total FAIL 15 -> 15; see the a2m baseline commit).
 
+**2026-11-09 (a2m t10): No_Units_Remaining entry rule** (`A2M_T08_T10_T14_RE.md` t10.3 / t10.8 [H]). A member lost to
+0x10 / 0x1a (`prune_tf`) queues its task force; `drain_lost_members` raises event 7 unless a remaining entry (members,
+wanted types, Queued / Producing builds) has a type that is not a named / generic hero, not a space special weapon and has
+no Land LOBBING_SUPERWEAPON, on every such loss. [port] raised at the drain in the same frame (execution service sweep or
+end of `update_player`), not inside the simulation step; the member's entry type is its own type. Already as retail: a
+plan's end leaves the fleet's hop in progress (`end_plan` drops the Move_To status without stopping the fleet; Move_To
+orders one hop at a time) and the free store refuses a unit in transit (`free_store_move`). [L] open: the retail sender
+of the generic-hero saboteur exit at frame 248 (A2M t10.5); a saboteur-only TF still exits only when the saboteur itself
+leaves. HotM seed 0: CRC unchanged.
+
 **2026-11-08 (q4hf t03): more retail references.** `geonosis_skirmish` now has 3 retail runs (`20261108-204213-skirmish-vanilla-lua`,
 `20261108-203639-skirmish-vanilla` added), so its tolerances use the run-to-run envelope; `hotm_galactic` has a 4th run,
 `20261108-204711-galactic-vanilla-lua` (40 cycles, cut at the scenario's `max_tick` 13501; its two auto-resolved Tatooine

@@ -78,6 +78,7 @@ struct GalacticAiTypeInfo {
     bool transport_behavior = false;   // a TRANSPORT behaviour (behaviour 5: company transports, IG-2000): not buildable
     bool generic_hero = false;         // Is_Generic_Hero (+0x14, §2.1)
     bool special_weapon_space = false; // Is_Special_Weapon_In_Space (+0x1E, §2.1)
+    bool lobbing_superweapon = false;  // LOBBING_SUPERWEAPON (0x37) in the Land behaviour set (0x370320(type, 0x37, 1))
     // Structure mask +0x1658: Garrison_Category (a company: its members' OR, OBJECT_TYPES §6.2), else
     // Space_Or_Garrison_Category [port: the original keeps the tag written last]; 0 = unset (galactic_ai_structure_mask
     // reads it as Capital).

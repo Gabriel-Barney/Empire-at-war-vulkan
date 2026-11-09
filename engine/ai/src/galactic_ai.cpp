@@ -1153,8 +1153,54 @@ int32_t GalacticAiWorld::Impl::new_status(int32_t plan, int32_t tf, StatusKind k
 
 void GalacticAiWorld::Impl::prune_tf(TaskForceRec& tf) {
     auto& u = tf.units;
+    const size_t before = u.size();
     u.erase(std::remove_if(u.begin(), u.end(), [this, &tf](ObjectHandle h) { return !store.alive(h) || store.owner(h) != tf.player; }),
             u.end());
+    // a2m t10: a member removed (0x10) or no longer the player's (0x1a) reached the TF base handler 0x5fe5d0.
+    if (u.size() < before && std::find(lost_tfs.begin(), lost_tfs.end(), tf.id) == lost_tfs.end()) lost_tfs.push_back(tf.id);
+}
+
+// a2m t10 (A2M_T08_T10_T14_RE t10.3) [H]: an entry counts as a real unit when its type is not Is_Named_Hero (+0x13), not
+// Is_Generic_Hero (+0x14), not Is_Special_Weapon_In_Space (+0x1e) and has no Land LOBBING_SUPERWEAPON (0x37).
+bool GalacticAiWorld::Impl::counted_entry_type(uint32_t type) const {
+    if (type >= tinfo.size()) return true;
+    const GalacticAiTypeInfo& t = tinfo[type];
+    return !t.hero && !t.generic_hero && !t.special_weapon_space && !t.lobbing_superweapon;
+}
+
+// a2m t10 (A2M_T08_T10_T14_RE t10.3 / t10.8) [H]: after the member's removal (vf +0x188 erases the first TF +0x60 entry
+// of its company type), the base handler 0x5fe5d0 raises event 7 No_Units_Remaining unless a remaining entry has a
+// counted type; it runs on every such signal, so a TF left with only heroes / special weapons gets the event again on each
+// further loss. The TF +0x60 entries are the plan solve's planned units (0x66fb30 -> 0x5f9fd0), so the port reads them
+// as the members (their company type: the member object's own type [port]), the wanted types not yet given build tasks
+// and the build tasks still Queued / Producing. [port] Raised at the drain within the frame of the prune that saw the
+// loss (the execution service's claim_units sweep, or a binding's prune), not inside the simulation step. [L] Retail's
+// other senders (a fleet object the TF still listens to, A2M t10.5: the saboteur exit at frame 248) are not modelled.
+void GalacticAiWorld::Impl::drain_lost_members() {
+    while (!lost_tfs.empty()) {
+        const int32_t id = lost_tfs.front();
+        lost_tfs.erase(lost_tfs.begin());
+        const auto it = tfs.find(id);
+        if (it == tfs.end()) continue;
+        TaskForceRec& tf = it->second;
+        const auto pit = plans.find(tf.plan);
+        if (pit == plans.end() || pit->second.ended) continue;
+        prune_tf(tf);
+        bool counted = false;
+        for (const ObjectHandle u : tf.units) counted = counted || counted_entry_type(store.type(u));
+        for (const uint32_t ty : tf.wanted) counted = counted || counted_entry_type(ty);
+        for (const int32_t b : tf.builds) {
+            const auto bit = builds.find(b);
+            counted = counted || (bit != builds.end() &&
+                                  (bit->second.state == BuildState::Queued || bit->second.state == BuildState::Producing) &&
+                                  counted_entry_type(bit->second.type));
+        }
+        if (counted) continue;
+        if (tf.units.empty()) tf.no_units_sent = true;  // the empty-TF sweep in claim_units does not raise it again
+        decide(tf.player, "tf " + tf.name + " no units remaining (" + std::to_string(tf.units.size()) + " uncounted)");
+        const TaskForceRec copy = tf;
+        tf_event(copy, PlanEvent::NoUnitsRemaining, {});
+    }
 }
 
 // Add_Force 0x6cd1a0 (A2L_T01_RE_ANSWERS Q8.2 step 1) [H]: the unit joins the member list (add order); while TF +0x120
@@ -1285,11 +1331,15 @@ void GalacticAiWorld::Impl::claim_units(int32_t player) {
         }
         free_store_admitted(player, u);
     }
-    // Task forces that lost every unit (No_Units_Remaining, galactic code 7 [H]).
+    // Task forces that lost every unit (No_Units_Remaining, galactic code 7 [H]). a2m t10: a TF with a member loss queued
+    // in lost_tfs is decided by drain_lost_members instead (the counted-entry rule); this sweep keeps the empty TFs whose
+    // members left by release (Release_Unit / Release_Forces).
+    drain_lost_members();
     std::vector<int32_t> empty;
     for (auto& [id, tf] : tfs) {
         if (tf.player != player) continue;
         prune_tf(tf);
+        if (std::find(lost_tfs.begin(), lost_tfs.end(), id) != lost_tfs.end()) continue;
         bool pending = false;
         for (const int32_t b : tf.builds) {
             const auto bit = builds.find(b);
@@ -1307,6 +1357,7 @@ void GalacticAiWorld::Impl::claim_units(int32_t player) {
             tf_event(copy, PlanEvent::NoUnitsRemaining, {});
         }
     }
+    drain_lost_members();
 }
 
 void GalacticAiWorld::Impl::service_statuses(int32_t player) {
@@ -2442,10 +2493,12 @@ void GalacticAiWorld::update_player(int32_t player, int64_t now, bool galactic_o
         }
         w.gate.suspend(suspended);
     }
+    w.drain_lost_members();  // a2m t10: losses seen outside a service (bindings, queries) of the previous call
     PlayerAi* pa = w.player_ai(player);
     if (!pa || !galactic_on_top) return;
     const bool enabled = w.gate.enabled(AiMode::Galactic) && !w.sim.paused();
     pa->ctx.service(now, enabled, auto_resolve_busy);
+    w.drain_lost_members();
 }
 
 std::vector<GalacticAiWorld::TacticalBudgetRow> GalacticAiWorld::tactical_budget_rows(int32_t player) const {
@@ -2813,6 +2866,7 @@ std::vector<GalacticAiTypeInfo> make_galactic_ai_type_info(const objects::GameOb
         o.transport_behavior = types.behavior_count(ti, "TRANSPORT") > 0;
         o.generic_hero = types.get_bool(ti, "Is_Generic_Hero");
         o.special_weapon_space = types.get_bool(ti, "Is_Special_Weapon_In_Space");
+        o.lobbing_superweapon = types.has_behavior(ti, objects::BehaviorSet::Land, objects::BehaviorTypeId{0x37});
         o.garrison_mask = types.get_mask(ti, "Garrison_Category");  // +0x1658 (A2I_TOKENS_RE §2.1)
         if (o.garrison_mask == 0) o.garrison_mask = types.get_mask(ti, "Space_Or_Garrison_Category");
         o.lua_script = std::string(ai_trim(types.get_string(ti, "Lua_Script")));
