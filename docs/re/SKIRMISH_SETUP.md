@@ -574,3 +574,7 @@ drops or vehicles count apart), and does retail pre-empt those plans for an atta
 `tools/probe_mod/q2_traces/run_skirmish_land_attack.cmd` (Utapau, idle Empire vs Rebel Medium, 36000 ticks), read with
 `analysis/land_attack.py`. Port run to compare: `alamo_headless --skirmish-ai skirmish --map _MP_LAND_UTAPAU --human EMPIRE
 --ticks 36000`.
+
+Answered by the retail runs of 2026-11-08 (skai t06): `SKAI_T06_LAND_RUNS.md` (retail does not take the base in 36000 frames:
+the Command Center survives; pre-built base of 9 structures per slot; default forces on the last TEAM_tt spawn marker; the AI
+pays production at enqueue and pad builds at UC creation; Neutral pads change owner 150 frames after the first unit arrives).

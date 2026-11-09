@@ -11,40 +11,65 @@
 --
 -- Output (docs/re/LUA_SCRIPT_OUTPUT.md): retail 1.121 writes no file, so every line is kept as a Lua string
 --   A2FB + 1 + |<channel S, F or P>|<sid>|<seq>|<KIND>|<text>|END
--- in A2FB_Records; a2f_run.py finds them by a read-only scan of the game's memory. The needle is built by
--- concatenation so the script source never contains it. _CustomScriptMessage is called once on the channel's canary
--- file (DeleteFileA on first use): a missing canary after the run proves the script loaded.
+-- in a table held only by the closure of A2FB_Say; a2f_run.py finds them by a read-only scan of the game's memory. The
+-- needle is built by concatenation so the script source never contains it. _CustomScriptMessage is called once on the
+-- channel's canary file (DeleteFileA on first use): a missing canary after the run proves the script loaded.
+--
+-- a2k t05 (q2f t08 rule, docs/re/LUA_SCRIPT_OUTPUT.md section 4): AI plan scripts are POOLED. Releasing a plan instance
+-- runs PGBase Flush_G, which deletes every global TABLE (functions, strings, numbers and booleans stay; the chunk does
+-- not run again). The kit used to keep its records / errors in the global tables A2FB_Records / A2FB_Errors and read
+-- the generated global tables A2FB_SPEC / A2FB_COMMON, so after a plan instance's first release its next record raised
+-- a Lua error, and the plan hook's unprotected A2FB_Error call then killed the plan's thread before the shipped code
+-- ran. Now the record and error tables, and references to A2FB_SPEC / A2FB_COMMON as they were at load, live only in
+-- the closure below (A2FB_Get / A2FB_Spec / A2FB_Common read them); A2FB_Seq and A2FB_Sid stay plain globals (a number
+-- and a string survive Flush_G). Defined once per script instance (guard A2FB_Say == nil).
 
 A2FB_NEEDLE = "A2FB" .. "1|"
 if A2FB_MAX == nil then
 	A2FB_MAX = 8000
 end
 
-if A2FB_Records == nil then
-	A2FB_Records = {}
+if A2FB_Say == nil then
+	local recs = {}
+	local errs = {}
+	local spec = A2FB_SPEC
+	local common = A2FB_COMMON
 	A2FB_Seq = 0
-	A2FB_Sid = string.gsub(tostring(A2FB_Records), "^table: ", "")
-	A2FB_Errors = {}
-end
+	A2FB_Sid = string.gsub(tostring(recs), "^table: ", "")
 
--- One record. Text is printable ASCII without '|' and at most 320 bytes (one scan hit is 400 bytes).
-function A2FB_Say(kind, text)
-	if A2FB_Seq >= A2FB_MAX then
-		return
+	-- One record. Text is printable ASCII without '|' and at most 320 bytes (one scan hit is 400 bytes).
+	function A2FB_Say(kind, text)
+		if A2FB_Seq >= A2FB_MAX then
+			return
+		end
+		A2FB_Seq = A2FB_Seq + 1
+		local s = string.gsub(tostring(text), "[^ -~]", "?")
+		s = string.gsub(s, "|", "/")
+		s = string.sub(s, 1, 320)
+		recs[A2FB_Seq] = A2FB_NEEDLE .. A2FB_CH .. "|" .. A2FB_Sid .. "|" .. A2FB_Seq .. "|" .. kind .. "|" .. s .. "|END"
 	end
-	A2FB_Seq = A2FB_Seq + 1
-	local s = string.gsub(tostring(text), "[^ -~]", "?")
-	s = string.gsub(s, "|", "/")
-	s = string.sub(s, 1, 320)
-	A2FB_Records[A2FB_Seq] = A2FB_NEEDLE .. A2FB_CH .. "|" .. A2FB_Sid .. "|" .. A2FB_Seq .. "|" .. kind .. "|" .. s .. "|END"
-end
 
--- Each distinct error once.
-function A2FB_Error(where, err)
-	local key = where .. " " .. tostring(err)
-	if A2FB_Errors[key] == nil then
-		A2FB_Errors[key] = true
-		A2FB_Say("ERR", key)
+	-- Each distinct error once.
+	function A2FB_Error(where, err)
+		local key = string.sub(where .. " " .. tostring(err), 1, 200)
+		if errs[key] == nil then
+			errs[key] = true
+			A2FB_Say("ERR", key)
+		end
+	end
+
+	-- Record i (nil when not written); the selftest reads the records through it.
+	function A2FB_Get(i)
+		return recs[i]
+	end
+
+	-- The generated evaluation tables as they were when the script loaded (Flush_G cannot reach these references).
+	function A2FB_Spec()
+		return spec
+	end
+
+	function A2FB_Common()
+		return common
 	end
 end
 
@@ -186,12 +211,12 @@ function A2FB_Sample(tag, p, full)
 		end)
 	end
 	head = head .. " cr=" .. cr
-	local spec = A2FB_SPEC[fac]
+	local spec = A2FB_Spec()[fac]
 	if spec == nil or human == "true" then
 		return
 	end
 	if A2FB_MODEQ then
-		A2FB_Rec("SM", function() return head .. A2FB_Join(A2FB_COMMON, p) .. A2FB_Join(spec.small, p) end)
+		A2FB_Rec("SM", function() return head .. A2FB_Join(A2FB_Common(), p) .. A2FB_Join(spec.small, p) end)
 		if full then
 			A2FB_Rec("BF", function() return head .. A2FB_Join(spec.full, p) end)
 		end

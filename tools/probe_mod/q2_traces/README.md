@@ -159,18 +159,23 @@ campaign starts as a child of its galaxy (mode stack 2): it starts when the batt
 2. Double-click **`run_story.cmd`** in `tools\probe_mod\q2_traces\`. It rebuilds `q2reader.exe` (needs `toolchain\`), then
    launches the game **windowed** at 1920x1080. Leave the black command window open.
 3. In the game: Esc through the intro movies, then **Single Player** → **Campaigns** (Forces of Corruption) →
-   **Underworld** → difficulty **Normal** → **Start**. Esc through the opening movie. The campaign starts its first
-   mission at once: the Kessel land battle (Tyber Zann's escape, `STORY_UNDERWORLD_M01_LAND.XML`).
-4. When the battle has loaded (the intro cinematic plays), click nothing and press no keys. Without orders Tyber stays in
-   his cell, so the mission does not finish: the trace stops after 10 minutes of game time and the game closes by itself.
-   If a dialog asks something, do not answer it.
+   **Underworld** → difficulty **Medium** (the only choice offered) → **Start**. Esc through the opening movie. The
+   campaign starts its first mission at once: the Kessel land battle (Tyber Zann's escape, `STORY_UNDERWORLD_M01_LAND.XML`).
+4. When the battle has loaded (the intro cinematic plays), click nothing and press no keys, **not even Esc**: the
+   battle's own intro cinematic must play out. An Esc there runs the mission's `Story_Handle_Esc` and changes the sim on
+   that frame (2026-11-08 runs: cleanup at battle frame 129 and 248, identical before), so the run is no longer
+   hands-off. Without orders Tyber stays in his cell, so the mission does not finish: the trace stops after 10 minutes
+   of game time and the game closes by itself. If a dialog asks something, do not answer it. Keep the game window in
+   front: the game pauses when it loses focus (the 2026-11-08 22:41 run stopped at frame 1286).
 5. The command window ends with `done: exit <n>` (0 = complete). Send back
    `tools\probe_mod\q2_traces\out\<yyyymmdd-hhmmss>-story-vanilla\` (zipped): `trace.q2t`, `summary.json`,
    `run_status.json`, `cleanup.log`.
 
 If the window was closed early or the PC crashed, double-click `cleanup.cmd`. What the trace is compared with: the port's
 Full_Story_Campaign_Underworld linked Kessel battle over the same ticks (RNG draw counts, object counts by type and owner,
-the intro spawns of the M01 Lua, the victory monitor staying held: `story` t04 on the roadmap).
+the intro spawns of the M01 Lua, the victory monitor staying held: `story` t04 on the roadmap). Read a run with
+`analysis\story_battle.py out\<run> [--port-trace port.q2t]`; the first run and its comparison with the port:
+`docs/re/STORY_T04_KESSEL_RUN.md`.
 
 ### Lua probe run (q2f t06): steps for Gabriel
 

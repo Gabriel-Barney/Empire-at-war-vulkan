@@ -434,7 +434,7 @@ for frame = 0, (A2_FRAMES or 55000) do
 end
 A2_OUT:write("SERVICES " .. services .. "\n")
 A2_OUT:write("STATE " .. tostring(CurrentState) .. "\n")
-for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Records[i] .. "\n") end
+for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Get(i) .. "\n") end
 A2_OUT:close()
 '''
 
@@ -577,7 +577,7 @@ FreeStoreService()
 A2_T = 18
 if not A2_FAILED then FreeStoreService() end
 A2_OUT:write("ORIG_CALLS " .. A2_OUT_CALLS .. "\n")
-for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Records[i] .. "\n") end
+for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Get(i) .. "\n") end
 A2_OUT:close()
 '''
 
@@ -613,7 +613,7 @@ A2_TYPE = { Get_Name = function() return "E_GROUND_HEAVY_VEHICLE_FACTORY" end }
 A2_T = 14
 if %s_Production_Failed ~= nil then %s_Production_Failed(%s, A2_TYPE) end
 A2_OUT:write("PLAN_RAN " .. tostring(A2_RAN) .. " EXIT " .. tostring(A2_EXIT) .. " FLUSHED " .. tostring(A2_FLUSHED) .. "\n")
-for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Records[i] .. "\n") end
+for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Get(i) .. "\n") end
 A2_OUT:close()
 '''
 
@@ -932,7 +932,7 @@ for frame = 0, (A2_FRAMES or 3600) do
 end
 A2_OUT:write("SERVICES " .. services .. "\n")
 A2_OUT:write("STATE " .. tostring(CurrentState) .. "\n")
-for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Records[i] .. "\n") end
+for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Get(i) .. "\n") end
 A2_OUT:close()
 '''
 
@@ -1021,7 +1021,7 @@ Galactic_Production_End_Event(tat, obj)
 local n = 0
 for _, v in pairs(GalacticBuildStatsTable) do n = n + 1 end
 A2_OUT:write("SHIPPED_STATS " .. n .. "\n")
-for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Records[i] .. "\n") end
+for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Get(i) .. "\n") end
 A2_OUT:close()
 '''
 
@@ -1096,7 +1096,8 @@ def a2j_report_test(out, perc_records, scoring_records):
                     r'\s+f=  110 EMPIRE\s+TATOOINE\s+s TIE_FIGHTER_SQUADRON\s+cr=13000', sec7) is not None, sec7[:1800])
     sec8 = txt[txt.find('== 8.'):]
     check('report a2j: per-cycle P / I has retail and port values (OFF P port 1111.50, I port 2.50)',
-          re.search(r'\n\s+1\s+1351\s+f\s+\d+\s+\S+\|\s*1111\.50\s+\S+\|\s*2\.50', sec8) is not None and
+          # a2l t01 (Q9.3): the 'f' row needs a refreshed P; the model run's P never changes, so only the 'l' row exists
+          re.search(r'\n\s+1\s+1351\s+[fl]\s+\d+\s+\S+\|\s*1111\.50\s+\S+\|\s*2\.50', sec8) is not None and
           'f1351 +667.5' in sec8, sec8[:1500])
     pt = open(os.path.join(rd, 'perception.tsv')).read().splitlines()
     check('report a2j: perception.tsv has retail and port columns', len(pt) > 40 and 'port_SCP' in pt[0], str(len(pt)))
@@ -1159,12 +1160,12 @@ for frame = A2_F0, A2_F0 + 3000 do
 end
 A2_OUT:write("RESUMES " .. resumes .. "\n")
 for i = 1, table.getn(A2_LOG) do A2_OUT:write("LOG " .. A2_LOG[i] .. "\n") end
-if A2FB_Seq ~= nil then for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Records[i] .. "\n") end end
+if A2FB_Seq ~= nil then for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Get(i) .. "\n") end end
 A2_OUT:close()
 '''
 
 
-def sab_plan_run(lua, lib, out, types, z, name, setup, hooked=True):
+def sab_plan_run(lua, lib, out, types, z, name, setup, hooked=True, driver=None):
     names = {i.filename.upper(): i for i in z.infolist()}
     orig = zread(z, names, 'DATA/SCRIPTS/AI/AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR.LUA')
     body = build_a2f_mod.plan_lua(orig, 'AI_Plan_Underworld_DeploySaboteur', 'MainForce_Thread') if hooked else orig
@@ -1175,7 +1176,7 @@ def sab_plan_run(lua, lib, out, types, z, name, setup, hooked=True):
         f.write(prelude(outfile, types, no_debug=False))
         f.write(body + '\n')
         f.write(setup)
-        f.write(SAB_PLAN_DRIVER)
+        f.write(driver or SAB_PLAN_DRIVER)
     rc, text = lua_run(lua, script, env)
     o = open(outfile).read() if os.path.exists(outfile) else ''
     return rc, text, o
@@ -1231,6 +1232,108 @@ def sab_plan_tests(lua, lib, out, types, z):
                                 r'tgtc=false blk=1\|', o) is not None and '|PMOVS|' not in o and 'LOG Move_To' not in o,
                   o[-1200:])
     return recs
+
+
+# a2k t05 (LUA_SCRIPT_OUTPUT.md section 4): a pooled plan instance is released between two runs. The engine kills the
+# thread, runs PGBase Flush_G (the real one: every global TABLE goes, A2FB_SPEC / A2FB_COMMON and the old
+# A2FB_Records / A2FB_Errors included) and Base_Definitions, then sets the plan globals again for the next run. The
+# model engine's own state (A2_* tables, the ThreadValue / GetEvent / GlobalValue stubs, the output file) stands for
+# engine-side state, so it is set aside around Flush_G.
+SAB_FLUSH_DRIVER = r'''
+Base_Definitions()
+function A2_FR() return tonumber(string.format("%d", A2_T * 30 + 0.5)) end
+A2_LOG = {}
+local function log(s) table.insert(A2_LOG, s .. " @" .. A2_FR()) end
+A2_CORRUPT = {}
+local function planet(n)
+	return { planet = n, Get_Type = function() return { Get_Name = function() return string.upper(n) end } end,
+		Is_Corrupted = function() return A2_CORRUPT[n] == true end }
+end
+local function block(done, result)
+	return { IsFinished = function() return A2_FR() >= done end, Result = function() return result end }
+end
+local function engine_setup()
+	PlayerObject = A2_PLAYERS["Underworld"]
+	Budget = { Get_Spendable_Resources = function() return 0 end, Get_Unallocated_Resources = function() return 1000 end }
+	Target = planet("Naboo")
+	MainForce = {
+		Get_Stage = function() return planet("Felucia") end,
+		Produce_Force = function(st) log("Produce_Force " .. st.Get_Type().Get_Name()) return block(A2_PROD_DONE, true) end,
+		Move_To = function(t) log("Move_To " .. t.Get_Type().Get_Name()) return block(A2_MOVE_DONE, false) end,
+		Activate_Ability = function() log("Activate_Ability") A2_CORRUPT["Naboo"] = true end,
+		Get_Goal_Type_Name = function() return "Corrupt_Planet" end,
+		Set_Plan_Result = function(r) log("Set_Plan_Result " .. tostring(r)) end,
+		Get_Force_Count = function() return 1 end,
+	}
+end
+_ScriptExit = function() log("ScriptExit") A2_EXIT = true end
+GetThreadID = function() return 0 end
+A2_RESUMES = 0
+local function run_thread(f0)
+	A2_CORRUPT = {}
+	A2_PROD_DONE = f0 + 120
+	A2_MOVE_DONE = f0 + 420
+	local co = coroutine.create(MainForce_Thread)
+	for frame = f0, f0 + 3000 do
+		A2_T = frame / 30
+		A2_CUR = co
+		local ok, v = coroutine.resume(co)
+		A2_RESUMES = A2_RESUMES + 1
+		if not ok then A2_OUT:write("THREAD_ERROR " .. tostring(v) .. "\n") return end
+		if coroutine.status(co) == "dead" then return end
+	end
+end
+local function release()
+	local keep = {}
+	for k, v in pairs(_G) do
+		if (type(v) == "table" or type(v) == "userdata") and (string.find(k, "^A2_") or k == "ThreadValue" or
+				k == "GetEvent" or k == "GlobalValue") then
+			keep[k] = v
+		end
+	end
+	for k, _ in pairs(keep) do _G[k] = nil end
+	Flush_G()
+	for k, v in pairs(keep) do _G[k] = v end
+	Base_Definitions()
+end
+engine_setup()
+run_thread(3480)
+local seq1 = A2FB_Seq
+release()
+A2_OUT:write("AFTER_FLUSH spec=" .. type(A2FB_SPEC) .. " common=" .. type(A2FB_COMMON) .. " seq=" .. tostring(A2FB_Seq) ..
+	" before=" .. tostring(seq1) .. "\n")
+engine_setup()
+run_thread(9000)
+A2_OUT:write("RESUMES " .. A2_RESUMES .. "\n")
+for i = 1, table.getn(A2_LOG) do A2_OUT:write("LOG " .. A2_LOG[i] .. "\n") end
+for i = 1, A2FB_Seq do A2_OUT:write(tostring(A2FB_Get(i)) .. "\n") end
+A2_OUT:close()
+'''
+
+
+def sab_flush_test(lua, lib, out, types, z):
+    """A2FB records and samples survive the release (Flush_G) of a pooled plan instance; the second run is recorded."""
+    rc, text, o = sab_plan_run(lua, lib, out, types, z, 'flush', '', driver=SAB_FLUSH_DRIVER)
+    recs = [ln.split('|') for ln in o.splitlines() if ln.startswith('A2FB1|')]
+    seqs = [int(r[3]) for r in recs]
+    check('sab plan flush: Flush_G ran (A2FB_SPEC / A2FB_COMMON deleted), no THREAD_ERROR, no failed flag',
+          rc == 0 and 'AFTER_FLUSH spec=nil common=nil' in o and 'THREAD_ERROR' not in o and 'SCRIPT_FAILED' not in o
+          and 'RESUMES' in o, (text + o)[:900])
+    check('sab plan flush: records 1..N of one sid, none lost at the release (the old global table lost them)',
+          bool(recs) and seqs == list(range(1, len(recs) + 1)) and len({r[2] for r in recs}) == 1 and
+          'nil' not in o.splitlines(), str(seqs[:60]))
+    run2 = [r for r in recs if ' n=2 ' in r[5] + ' ']
+    kinds2 = [r[4] for r in run2]
+    check('sab plan flush: second run recorded after the release (PSTART n=2 prev=PRET, PSTAGE, PPROD, PMOVS, PMOVE, '
+          'PRET)', any(r[4] == 'PSTART' and ' n=2 prev=PRET ' in r[5] for r in recs) and
+          all(k in kinds2 for k in ('PSTAGE', 'PPROD', 'PMOVS', 'PMOVE', 'PRET')), str(kinds2) + o[-900:])
+    sm = [r for r in recs if r[4] == 'SM' and 'tag=PS ' in r[5]]
+    check('sab plan flush: the start sample of the second run still evaluates (A2FB_SPEC kept by the closure)',
+          len(sm) == 2 and 'f=9000 ' in sm[1][5] and 'B1ALL=' in sm[1][5], str([r[5][:120] for r in sm]))
+    log = [ln for ln in o.splitlines() if ln.startswith('LOG ')]
+    check('sab plan flush: the shipped plan ran both times (Produce_Force, Move_To, Set_Plan_Result true x 2)',
+          sum(1 for ln in log if ln.startswith('LOG Produce_Force FELUCIA')) == 2 and
+          sum(1 for ln in log if ln.startswith('LOG Set_Plan_Result true')) == 2, str(log))
 
 
 # Channel U under the model engine: two Underworld saboteurs (the starting one at NalHutta, in a fleet that is in
@@ -1375,7 +1478,7 @@ local r = On_Unit_Service(A2_S[1])
 On_Unit_Service(tank)
 A2_OUT:write("CALLS svc=" .. A2_CALLS.svc .. " added=" .. A2_CALLS.added .. " unit=" .. A2_CALLS.unit ..
 	" same=" .. tostring(A2_LAST_ADDED == tank and A2_LAST_UNIT == tank) .. " ret=" .. tostring(r) .. "\n")
-for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Records[i] .. "\n") end
+for i = 1, A2FB_Seq do A2_OUT:write(A2FB_Get(i) .. "\n") end
 A2_OUT:close()
 '''
 
@@ -1509,6 +1612,7 @@ def main():
         # a2k t05: the saboteur run
         lua_syntax(lua, os.path.join(out, 'mod_saboteur'), out)
         plan_recs = sab_plan_tests(lua, lib, out, types, z)
+        sab_flush_test(lua, lib, out, types, z)
         u_path = sab_u_tests(lua, lib, out, types)
         fs_path = sab_fs_tests(lua, lib, out, types)
         sab_story_test(lua, lib, out, types)

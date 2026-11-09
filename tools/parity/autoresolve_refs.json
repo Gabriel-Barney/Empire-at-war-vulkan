@@ -1,0 +1,60 @@
+{
+ "about": "Retail auto-resolve battle outcomes (q4hf t03), reduced from a Q2 kit run of the original game. Not graded yet: the harness has no battle-level check (tools/parity/README.md, Gaps). Forces are the store objects under the planet (planet -> fleet / transport -> members) on the last sample before the battle; losses are the objects flagged dead or gone when the result was applied, cross-checked with the result screens (autoresolve_*_result.jpg in the run folder). A company is a transport (GALLOFREE_TRANSPORT, IMPERIAL_LANDING_CRAFT, IMPERIAL_ATAT_BARGE) and its members; a squadron is a GALACTIC_SQUADRON and its fighters. Players: 0 Rebel (AI), 1 Empire (human, idle), 6 Underworld (AI). gf = global frame, tick = mode frame (galactic ticks done).",
+ "run": "20261108-204711-galactic-vanilla-lua",
+ "scenario": "Sandbox_Heart_Of_The_Maw_Empire, human Empire, Medium, seed 0, 40 cycles; hands-off up to the first battle the human had to answer",
+ "battles": [
+  {
+   "id": "tatooine_space_day16",
+   "planet": "TATOOINE",
+   "kind": "space",
+   "attacker": "Rebel",
+   "defender": "Empire",
+   "human_choice": "auto_resolve",
+   "arrival": {"tick": 21094, "gf": 22116, "note": "Rebel fleet 836 enters Tatooine (Naboo gather, departed tick 20981)"},
+   "battle_prompt": {"tick": 21094, "gf": 22117, "note": "galaxy paused (P 1); no mode tick passes during the battle"},
+   "result_applied": {"gf": 22374},
+   "galaxy_resumed": {"gf": 22744},
+   "winner": "Rebel",
+   "forces": {
+    "Rebel": {"capital": {"HOME_ONE": 1, "SUNDERED_HEART": 1, "ALLIANCE_ASSAULT_FRIGATE": 2, "CORELLIAN_CORVETTE": 2, "CORELLIAN_GUNBOAT": 2},
+              "squadrons": {"X-WING x5": 2, "Y-WING x3": 1, "ROGUE squadron (WEDGE_XWING_ROGUE + ROGUE_2/4/7/10/11_XWING)": 1}},
+    "Empire": {"capital": {"TARTAN_PATROL_CRUISER": 1}, "squadrons": {"TIE_DEFENDER x3": 1},
+               "starbase": "Space Station Level 1 (result screen only: the starbase is not a store object in the galactic trace)"}
+   },
+   "losses": {
+    "Rebel": {"ALLIANCE_ASSAULT_FRIGATE": 1},
+    "Empire": {"TARTAN_PATROL_CRUISER": 1, "TIE_DEFENDER squadron (3)": 1, "starbase": "Space Station Level 1 destroyed (screen)"}
+   },
+   "screen": "Your losses: Space Station Level 1, TIE Defender Squadron, Tartan Patrol Cruiser. Enemy losses: Assault Frigate Mk II. Battle time 00:00:00",
+   "owner_change": null
+  },
+  {
+   "id": "tatooine_land_day16",
+   "planet": "TATOOINE",
+   "kind": "land",
+   "attacker": "Rebel",
+   "defender": "Empire",
+   "human_choice": "auto_resolve",
+   "arrival": {"tick": 21349, "gf": 22999, "note": "Rebel transport fleet 1459 enters Tatooine; Rebel fleet 836 holds orbit since the space battle"},
+   "battle_prompt": {"tick": 21353, "gf": 23004},
+   "result_applied": {"gf": 23367},
+   "galaxy_resumed": {"gf": 23763},
+   "winner": "Rebel",
+   "forces": {
+    "Rebel": {"companies": {"infantry (SQUAD_REBEL_TROOPER x15)": 20, "Plex (SQUAD_PLEX_SOLDIER x6)": 9, "MPTL (MPTL x2 + MPTL_SPOTTER x2)": 2, "T2-B (T2B_TANK x5)": 2}},
+    "Empire": {"companies": {"stormtroopers (SQUAD_STORMTROOPER x18)": 1, "TIE_CRAWLER x5 (screen: TIE Mauler)": 2, "AT_AT_WALKER x1": 1},
+               "structures": {"E_GROUND_BARRACKS": 1, "E_GROUND_LIGHT_VEHICLE_FACTORY": 1}}
+   },
+   "losses": {
+    "Rebel": {"infantry companies": 10, "Plex companies": 7, "MPTL companies": 2},
+    "Empire": {"all companies": 4, "E_GROUND_BARRACKS": 1, "E_GROUND_LIGHT_VEHICLE_FACTORY": 1}
+   },
+   "survivors": {"Rebel": {"infantry companies": 10, "Plex companies": 2, "T2-B companies": 2}, "Empire": {}},
+   "screen": "Your losses: AT-AT Walker, Barracks, Light Factory, Stormtroopers, TIE Mauler x2. Enemy losses: Infantry Platoon x10, MPTL Artillery x2, Plex Soldiers x7. Battle time 00:00:00",
+   "owner_change": {"tick": 21355, "gf": 23764, "from": "Empire", "to": "Rebel"}
+  }
+ ],
+ "other_owner_changes": [
+  {"tick": 7498, "planet": "SHOLA", "from": "Underworld", "to": "Rebel", "note": "AI vs AI, resolved by the game without a prompt (inside the hotm_galactic window, graded by outcome.*)"}
+ ]
+}

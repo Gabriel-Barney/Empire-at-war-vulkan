@@ -84,18 +84,20 @@ function A2FB_SabPost(k, r)
 	end)
 end
 
-A2FB_Block_Orig = BlockOnCommand
-if A2FB_Block_Orig ~= nil then
+-- Wrapped once per script instance (PGBase is a library: require does not run it again; LUA_SCRIPT_OUTPUT.md section 4
+-- rule 4). The wrapper's state is numbers only, which survive the Flush_G of a plan release.
+if A2FB_Block_Orig == nil and BlockOnCommand ~= nil then
+	A2FB_Block_Orig = BlockOnCommand
 	function BlockOnCommand(block, max_duration, alternate_break_func)
 		local okp, k = pcall(A2FB_SabPre, block)
 		if not okp then
-			A2FB_Error("SabPre", k)
+			pcall(A2FB_Error, "SabPre", k)
 			k = -1
 		end
 		local r = A2FB_Block_Orig(block, max_duration, alternate_break_func)
 		local ok2, err2 = pcall(A2FB_SabPost, k, r)
 		if not ok2 then
-			A2FB_Error("SabPost", err2)
+			pcall(A2FB_Error, "SabPost", err2)
 		end
 		return r
 	end

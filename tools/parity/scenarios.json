@@ -7,8 +7,10 @@
    "references": [
     {"run": "20261108-170824-galactic-vanilla-lua", "note": "reader 2: credits, production queues, Lua plan records (fixed kit, q2f t10)"},
     {"run": "20261030-061228-galactic-vanilla-lua", "note": "reader 2: credits, production queues"},
-    {"run": "20261027-101057-galactic-vanilla", "note": "reader 1: no credits, no production queues (travel, fleets and outcomes only); 577 missed ticks"}
+    {"run": "20261027-101057-galactic-vanilla", "note": "reader 1: no credits, no production queues (travel, fleets and outcomes only); 577 missed ticks"},
+    {"run": "20261108-204711-galactic-vanilla-lua", "note": "q4hf t03: reader 2, fixed kit; 40 cycles, hands-off until the two Tatooine battles on day 16 (tick 21094, answered with Auto-resolve: autoresolve_refs.json), graded up to max_tick only"}
    ],
+   "max_tick": 13501,
    "excluded_references": {
     "20261103-152619-galactic-vanilla-lua": "q2f t08 (2026-11-08): its Lua plan hooks killed retail's own plan threads (records table lost to PGBase Flush_G, docs/re/LUA_SCRIPT_OUTPUT.md section 4), so its AI production and fleet moves are not retail behaviour (Rebel fleet departures 19 vs 71). Replace it with a run of the fixed kit"
    },
@@ -19,7 +21,9 @@
    "kind": "skirmish",
    "title": "Space skirmish, (2) Battle Over Geonosis (_MP_SPACE_GEONOSIS), idle human Empire vs Rebel AI (Medium), 6000 credits, 5400 ticks",
    "references": [
-    {"run": "20261030-062751-skirmish-vanilla-lua", "note": "seeded 0x41ccdfe4 (the port host uses its own seed); every tick sampled"}
+    {"run": "20261030-062751-skirmish-vanilla-lua", "note": "seeded 0x41ccdfe4 (the port host uses its own seed); every tick sampled"},
+    {"run": "20261108-204213-skirmish-vanilla-lua", "note": "q4hf t03 second Lua-probe run (run-to-run spread); every tick sampled"},
+    {"run": "20261108-203639-skirmish-vanilla", "note": "q4hf t03 third sample, same scenario without the Lua probe; every tick sampled"}
    ],
    "kit": "tools/probe_mod/q2_traces/run_skirmish.cmd -LuaProbe (-NonInteractive drives the menus), README in that folder",
    "map": "_MP_SPACE_GEONOSIS",

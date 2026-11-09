@@ -314,7 +314,7 @@ of the two runs are identical.
 ## Q4 parity baseline (q4h t02, 2026-11-07; re-recorded after a2k t10 / t11, q4hf t01)
 
 Measured with the Q4 harness (`tools/parity/`, README there: metrics, tolerances and their reasons, grading). The table is
-the current `tools/parity/baseline.json`, recorded at **`dc141745`** (q4hf t02 / t04 merged with dev's q2f t08, which grades
+the current `tools/parity/baseline.json`, recorded at **`d3237074`** (q4hf t03, below); before that **`dc141745`** (q4hf t02 / t04 merged with dev's q2f t08, which grades
 `hotm_galactic` against 2 retail runs, and cu8j t01-t03; alamo_headless MSVC Release, 4 workers; 0 regressions against
 dev's `acb3547a` and cu8j's `a956c954` recordings; `hotm_galactic` is the same as at `207ba0b8`); before that `4b6aa69d` (q4hf t02 / t04, 3 retail runs), dev `79576620` (a2k t10 + t11)
 and dev `3629d4cf`, before the a2k galactic-AI merge (row "q4h t02" below; the harness has more timing metrics since). Re-record it, like a golden, when an intended behaviour change moves a metric. The confirm, AI
@@ -356,8 +356,24 @@ the next pass. HotM Empire-human seeds 0-11: Shola taken by tick 13501 in 7 of 1
 Rebel space build is a Marauder, via the early Conquer_Pirate); seeds 3 / 4 at 7626 / 7647 (retail 7498). Golden
 `galactic_ai_hotm_human_golden.txt` regenerated (the Kuat split and move on one tick); q4h parity 0 regressions.
 
+**2026-11-08 (q4hf t03): more retail references.** `geonosis_skirmish` now has 3 retail runs (`20261108-204213-skirmish-vanilla-lua`,
+`20261108-203639-skirmish-vanilla` added), so its tolerances use the run-to-run envelope; `hotm_galactic` has a 4th run,
+`20261108-204711-galactic-vanilla-lua` (40 cycles, cut at the scenario's `max_tick` 13501; its two auto-resolved Tatooine
+battles at tick 21094 are in `tools/parity/autoresolve_refs.json`, not graded yet). `baseline.json` re-recorded at
+`d3237074` (port verdicts unchanged; only the envelopes moved). Skirmish FAIL -> PASS: `combat.first_shot_frame` (port
+2150, retail 1885..3953) and `econ.credits_at_3600[Rebel]` (50 vs 508..1996). Galactic FAIL -> PASS: `ai.build_count[Rebel]`
+19 vs 23..51, `ai.build_mix[Rebel]` 0.52 (floor 0.43), `build.ticks[REBEL_INFANTRY_SQUAD@KAMINO]` and
+`build.ticks[REBEL_TANK_BUSTER_SQUAD@NABOO]`: the new run's Rebel builds take twice as long (infantry 278 / 242 vs 140 /
+116, tank busters 344 vs 173) and it queues 23 items vs 50 / 51, so these PASSes come from that run alone (difficulty or a
+build-time modifier not recorded in the run). The q2_parity reader now takes a planet's first sight and the tick-1 setup
+as initial owners (that run's tick-0 sample shows CORELLIA alone, which had made 12 planets look captured).
+
 | scenario | timing | income | AI choices | battle outcomes | damage |
 |---|---|---|---|---|---|
+| `hotm_galactic` (4 retail runs) at `d3237074` (q4hf t03) | 42 PASS / 6 FAIL | 20 / 5 | 14 / 2 (1 N/A) | 7 / 0 | - |
+| retail leave-one-out (4 runs, each against the other 3) at `d3237074` | 228 / 3 | 81 / 4 (15 N/A) | 52 / 4 (12 N/A) | 28 / 0 | - |
+| `geonosis_skirmish` (3 retail runs) at `d3237074` (q4hf t03) | - | 4 / 2 | 0 / 5 (1 N/A) | 2 / 3 | 3 / 0 |
+| retail leave-one-out (3 runs, each against the other 2) at `d3237074` | - | 15 / 3 | 14 / 1 | 15 / 0 | 7 / 2 |
 | `hotm_galactic` (2 retail runs) at `207ba0b8` (q4hf t04 + q2f t08) | 46 PASS / 8 FAIL | 15 / 10 | 13 / 3 (1 N/A) | 7 / 0 | - |
 | retail leave-one-out (2 runs, each against the other) at `207ba0b8` | 59 / 1 | 20 / 0 (30 N/A) | 12 / 4 (18 N/A) | 14 / 0 | - |
 | `hotm_galactic` (3 retail runs) at `4b6aa69d` (q4hf t04 hop segmentation) | 53 PASS / 5 FAIL | 20 / 5 | 16 / 0 (1 N/A) | 7 / 0 | - |

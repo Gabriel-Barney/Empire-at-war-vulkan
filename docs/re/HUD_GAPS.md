@@ -611,7 +611,11 @@ ShadowBlobMaterials blob.
   would store unrelated drift; refresh them in one pass when the baselines are next reviewed. The button's change (icon 3,
   full dial while disabled) shows only in land shots.
 
-### 9.9 Open items (game probes; not run)
+### 9.9 Open items (game probes; run 2026-11-09)
+Answered by the cu9h t02 retail run (`CU9H_T02_BOMBING_HUD_RUN.md`): 1 nothing is drawn when ready (cooldown: dark
+clockwise sector = dial %); 2 green (0,1,0,1) / red (1,0,0,1) as read; 3 the disabled click does not run the callback;
+4 the writer is `world_mouse_move` 0x2ee40.
+
 1. [L] Dial at 1.0: complete `i_button_build` overlay or nothing? Probe: campaign land battle with bombers in orbit;
    screenshot the button during the cooldown and when ready.
 2. [M] Blob colours (green valid / red invalid): same battle, hover a fogged point and an open point while targeting.

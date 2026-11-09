@@ -1,9 +1,11 @@
 {
- "commit": "b4da58e1",
+ "commit": "d3237074",
  "scenarios": {
   "geonosis_skirmish": {
    "references": [
-    "20261030-062751-skirmish-vanilla-lua"
+    "20261030-062751-skirmish-vanilla-lua",
+    "20261108-204213-skirmish-vanilla-lua",
+    "20261108-203639-skirmish-vanilla"
    ],
    "status": {
     "ai.build_count[Empire]": "FAIL",
@@ -14,11 +16,11 @@
     "ai.first_build_frame[Rebel]": "FAIL",
     "combat.damage_taken[Empire]": "PASS",
     "combat.damage_taken[Rebel]": "PASS",
-    "combat.first_shot_frame": "FAIL",
+    "combat.first_shot_frame": "PASS",
     "econ.credits_at_1800[Empire]": "PASS",
     "econ.credits_at_1800[Rebel]": "FAIL",
     "econ.credits_at_3600[Empire]": "PASS",
-    "econ.credits_at_3600[Rebel]": "FAIL",
+    "econ.credits_at_3600[Rebel]": "PASS",
     "econ.credits_at_5400[Empire]": "PASS",
     "econ.credits_at_5400[Rebel]": "FAIL",
     "outcome.battle_ended": "PASS",
@@ -37,12 +39,11 @@
      "PASS": 2
     },
     "damage": {
-     "FAIL": 1,
-     "PASS": 2
+     "PASS": 3
     },
     "income": {
-     "FAIL": 3,
-     "PASS": 3
+     "FAIL": 2,
+     "PASS": 4
     }
    }
   },
@@ -50,14 +51,15 @@
    "references": [
     "20261108-170824-galactic-vanilla-lua",
     "20261030-061228-galactic-vanilla-lua",
-    "20261027-101057-galactic-vanilla"
+    "20261027-101057-galactic-vanilla",
+    "20261108-204711-galactic-vanilla-lua"
    ],
    "status": {
     "ai.build_count[Empire]": "PASS",
-    "ai.build_count[Rebel]": "FAIL",
+    "ai.build_count[Rebel]": "PASS",
     "ai.build_count[Underworld]": "PASS",
     "ai.build_mix[Empire]": "PASS",
-    "ai.build_mix[Rebel]": "FAIL",
+    "ai.build_mix[Rebel]": "PASS",
     "ai.build_mix[Underworld]": "PASS",
     "ai.first_build_tick[Rebel]": "PASS",
     "ai.first_build_tick[Underworld]": "PASS",
@@ -70,15 +72,17 @@
     "ai.fleet_targets[Empire]": "PASS",
     "ai.fleet_targets[Rebel]": "FAIL",
     "ai.fleet_targets[Underworld]": "PASS",
+    "build.ticks[CRUSADER_GUNSHIP@FELUCIA]": "PASS",
     "build.ticks[DESTROYER_DROID_COMPANY@NALHUTTA]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@KAMINO]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@MONCALIMARI]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@NABOO]": "PASS",
-    "build.ticks[REBEL_INFANTRY_SQUAD@KAMINO]": "FAIL",
-    "build.ticks[REBEL_TANK_BUSTER_SQUAD@NABOO]": "FAIL",
+    "build.ticks[REBEL_INFANTRY_SQUAD@KAMINO]": "PASS",
+    "build.ticks[REBEL_TANK_BUSTER_SQUAD@NABOO]": "PASS",
     "build.ticks[R_GALACTIC_TURBOLASER_TOWER_DEFENSES@YAVIN]": "PASS",
     "build.ticks[R_GROUND_BARRACKS@NABOO]": "PASS",
     "build.ticks[R_GROUND_BARRACKS@SHOLA]": "PASS",
+    "build.ticks[UNDERWORLD_DISRUPTOR_MERC_SQUAD@NALHUTTA]": "PASS",
     "build.ticks[U_GROUND_PALACE@FELUCIA]": "PASS",
     "build.ticks[U_GROUND_PALACE@SHOLA]": "PASS",
     "build.ticks[Y-WING_SQUADRON@MONCALIMARI]": "PASS",
@@ -152,9 +156,9 @@
    },
    "summary": {
     "AI choices": {
-     "FAIL": 4,
+     "FAIL": 2,
      "N/A": 1,
-     "PASS": 12
+     "PASS": 14
     },
     "battle outcomes": {
      "PASS": 7
@@ -167,8 +171,8 @@
      "PASS": 20
     },
     "timing": {
-     "FAIL": 8,
-     "PASS": 38
+     "FAIL": 6,
+     "PASS": 42
     }
    }
   }

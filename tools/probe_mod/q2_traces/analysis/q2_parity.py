@@ -197,6 +197,11 @@ def trace_metrics(path, factions_override=None, max_tick=None):
             owners_initial = dict(own)
             owners_now.update(own)
         for name, o in sorted(own.items()):
+            # q4hf t03: a run whose tick-0 sample holds one planet only (20261108-204711: CORELLIA with a placeholder
+            # owner) gets the rest at tick 1. A planet's first sight, and the setup on tick 1, are initial owners.
+            if owners_initial is not None and (name not in owners_now or tick <= 1):
+                owners_initial[name] = o
+                owners_now[name] = o
             if owners_now.get(name) != o:
                 owner_changes.append((tick, name, owners_now.get(name), o))
                 owners_now[name] = o

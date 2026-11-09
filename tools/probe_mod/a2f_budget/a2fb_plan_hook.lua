@@ -108,29 +108,33 @@ function A2FB_Caller()
 	return " by=" .. tostring(info.name) .. " line=" .. tostring(info.currentline)
 end
 
+-- a2k t05: the error path is in pcall too (A2FB_Error outside pcall was what killed the plan's thread after a release
+-- wiped the kit's global tables, a2fb_core.lua). The thread wrap is redone each time this chunk runs, around the
+-- function the shipped part above just defined; Flush_G keeps functions, so the wrap stays across releases.
 A2FB_Thread_Orig = @@THREAD@@
 function @@THREAD@@(...)
 	local ok, err = pcall(A2FB_PlanStart)
 	if not ok then
-		A2FB_Error("PlanStart", err)
+		pcall(A2FB_Error, "PlanStart", err)
 	end
 	local r = { A2FB_Thread_Orig(unpack(arg)) }
 	local ok2, err2 = pcall(A2FB_PlanEnd, "PRET", "")
 	if not ok2 then
-		A2FB_Error("PlanRet", err2)
+		pcall(A2FB_Error, "PlanRet", err2)
 	end
 	return unpack(r)
 end
 
 -- ScriptExit (PGBase): _ScriptExit() and, inside a thread, coroutine.yield(false). The wrapper records first and then
--- calls the original as a tail call (no pcall around it: a yield must not cross a pcall in Lua 5.0).
-A2FB_Exit_Orig = ScriptExit
-if A2FB_Exit_Orig ~= nil then
+-- calls the original as a tail call (no pcall around it: a yield must not cross a pcall in Lua 5.0). A library
+-- function: wrapped once per script instance (require does not run PGBase again; LUA_SCRIPT_OUTPUT.md section 4 rule 4).
+if A2FB_Exit_Orig == nil and ScriptExit ~= nil then
+	A2FB_Exit_Orig = ScriptExit
 	function ScriptExit()
 		local by = A2FB_Caller()
 		local ok, err = pcall(A2FB_PlanEnd, "PEXIT", by)
 		if not ok then
-			A2FB_Error("PlanExit", err)
+			pcall(A2FB_Error, "PlanExit", err)
 		end
 		return A2FB_Exit_Orig()
 	end
@@ -150,7 +154,7 @@ if A2FB_Fail_Orig ~= nil then
 			A2FB_PlanEnd("PFAIL", " args=" .. table.getn(arg) .. names)
 		end)
 		if not ok then
-			A2FB_Error("PlanFail", err)
+			pcall(A2FB_Error, "PlanFail", err)
 		end
 		return A2FB_Fail_Orig(unpack(arg))
 	end

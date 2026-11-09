@@ -1715,6 +1715,10 @@ coordinator (`0x426d50`) and adopt (`0x39bcb0`): **one draw**. It is the "stop h
    objects already in a coordinator.
 
 #### 4.7.6 Trace plan for Gabriel (settles the [M] counts; optional)
+Run 2026-11-09 (`CU8K_T04_COORDINATOR_TRACES.md`): item 2 differs (one degenerate draw through an adopt returning at
+0x395421, then 18 land-composition draws at the first coordinator update, gf 1; no 0x2a61d5 / 0x2a4fc0 in any stack);
+item 3 with two fighter squadrons gives 1 space-composition draw as expected; items 1, 4 and item 3 with ships not run.
+
 Kit: `tools/probe_mod/cu8h_probes/` (`run_cu8h_trace.cmd`, `cu8h_dbg.py`; README there). No game change is needed.
 Each ctor draw is one or more HIT lines (one per LCG step of the `int` draw) whose `stack=` (RVAs in hex without
 `0x`, first entry = the PC inside the draw primitive) continues `40d11f,4f6fd4,`: the return inside the ctor, then

@@ -43,14 +43,16 @@ toolchain\venv\Scripts\python.exe -I tools\parity\parity_harness.py run --write-
 
 The reference runs are the Q2 traces of the original game (Steam FoC 1.121), made by the Q2 kit
 (`tools\probe_mod\q2_traces\README.md`). They live in the kit's ignored `out\` folder. In a git worktree that folder is
-empty, so the harness reads the main checkout's copy (found with `git rev-parse --git-common-dir`); `--refs DIR` or
-`ALAMO_Q2_TRACES` points elsewhere. Travel timings come from these traces as well: the G1 hop probe
+empty, so the harness reads the main checkout's copy (found with `git rev-parse --git-common-dir`); a run missing from a
+worktree's own `out\` (a worktree whose kit recorded new runs) is looked up in the main checkout's next. `--refs DIR` or
+`ALAMO_Q2_TRACES` points elsewhere (that folder only). A scenario's `max_tick` cuts every galactic reference run at that
+tick, so a run that went on longer (or with human input later) still grades the same window. Travel timings come from these traces as well: the G1 hop probe
 (`tools\probe_mod\g1_hops\`) measured the retail hops from the same galactic trace.
 
 | scenario | reference runs | kit that makes one |
 |---|---|---|
-| `hotm_galactic` | `20261030-061228-galactic-vanilla-lua` (reader 2: credits, production queues), `20261027-101057-galactic-vanilla` (reader 1: no credits or queues, so travel, fleets and outcomes only). `20261103-152619-galactic-vanilla-lua` was dropped on 2026-11-08 (q2f t08): its Lua plan hooks broke retail's own AI plans (`excluded_references` in `scenarios.json`) | `run_lua_probe.cmd` (or `run_galactic.cmd`), Heart of the Maw, Empire, defaults; `-NonInteractive` drives the menus |
-| `geonosis_skirmish` | `20261030-062751-skirmish-vanilla-lua` | `run_skirmish.cmd -LuaProbe`, (2) Battle Over Geonosis, Empire vs Medium AI Rebel, defaults |
+| `hotm_galactic` | `20261108-170824-galactic-vanilla-lua`, `20261030-061228-galactic-vanilla-lua` (reader 2: credits, production queues), `20261027-101057-galactic-vanilla` (reader 1: no credits or queues, so travel, fleets and outcomes only), `20261108-204711-galactic-vanilla-lua` (q4hf t03: 40 cycles, two auto-resolved battles at tick 21094; graded up to `max_tick` 13501). `20261103-152619-galactic-vanilla-lua` was dropped on 2026-11-08 (q2f t08): its Lua plan hooks broke retail's own AI plans (`excluded_references` in `scenarios.json`) | `run_lua_probe.cmd` (or `run_galactic.cmd`), Heart of the Maw, Empire, defaults; `-NonInteractive` drives the menus |
+| `geonosis_skirmish` | `20261030-062751-skirmish-vanilla-lua`, `20261108-204213-skirmish-vanilla-lua` (q4hf t03), `20261108-203639-skirmish-vanilla` (q4hf t03, same scenario without the Lua probe) | `run_skirmish.cmd -LuaProbe`, (2) Battle Over Geonosis, Empire vs Medium AI Rebel, defaults |
 
 The G1 render captures (`tools\probe_mod\g1_capture\`) are image captures for the renderer, not behaviour, so the harness
 does not read them.
@@ -100,8 +102,12 @@ report ends with the same leave-one-out counts, so a port FAIL count can be read
 
 ## Gaps (what the port cannot be checked on yet)
 
-- **Galactic battles**: hands-off retail galactic runs end when a tactical battle starts (`mode_changed`), so there is no
-  retail battle-outcome reference beyond planet owners. A retail auto-resolve or tactical battle trace needs a new kit run.
-- **Skirmish run-to-run spread**: one retail skirmish run only, so its tolerances are the fixed ones (no envelope).
+- **Galactic battles**: graded by planet owners only. `autoresolve_refs.json` holds the retail auto-resolve outcomes of
+  `20261108-204711-galactic-vanilla-lua` (Tatooine, tick 21094: a space and a land battle the human Empire answered with
+  Auto-resolve; forces, losses by company, owner change), beyond `max_tick`; no check reads it yet.
 - **Object counts by type** (galactic) are not compared: the retail store lists company and fleet members, the port's
   galactic store the companies (`BOBA_FETT` vs `BOBA_FETT_TEAM`).
+- **Story battles**: `20261108-234224-story-vanilla` (story t04, Kessel UM01 linked land battle, 18000 frames) is not a
+  scenario yet. The port's `--galactic-ai --trace-out` writes the galactic store only, not the battle's objects, so only
+  synced-RNG draws and the battle end would compare; `docs/re/STORY_T04_KESSEL_RUN.md` §2-§4 (comparison by hand with
+  `tools/probe_mod/q2_traces/analysis/story_battle.py`, and what a `story_kessel` scenario needs).

@@ -89,6 +89,21 @@ Q4.2, why retail's Naboo got the starting saboteur). How to run it: section 10. 
   story script shows "saboteur run recorded" at frame 1410.
 * report section 9 and `saboteur.tsv`. Selftest: 197 checks.
 
+**a2k t05 fix (2026-11-08): plan records survive a pool release.** AI plan scripts are pooled; releasing an instance
+(every plan end) runs PGBase `Flush_G`, which deletes every global table (`docs/re/LUA_SCRIPT_OUTPUT.md` section 4).
+The kit kept `A2FB_Records` / `A2FB_Errors` and read `A2FB_SPEC` / `A2FB_COMMON` as globals, so at the next start of a
+released instance `A2FB_Say` raised, and the wrapper's unprotected `A2FB_Error` then raised again (`A2FB_Errors` was
+nil): **that killed the plan's task-force thread before the shipped code ran.** So, contrary to the earlier note, the
+hooked plans WERE disturbed in every run before this fix (20261105-*, 20261106-040725, 20261106-074145): the second and
+later runs of each pooled instance of the 12 hooked plans did nothing (the "bare PSTART lines with no sample" of run
+040725 are the orphaned PSTART strings of those runs, caught by the scan before the GC freed them). Treat those runs'
+AI production / credits after each hooked plan's first end as disturbed. Now the record and error tables and the
+references to the spec tables live in a closure (`a2fb_core.lua`, read through `A2FB_Get` / `A2FB_Spec` /
+`A2FB_Common`), every error path in the plan wrappers is in `pcall`, and `ScriptExit` / `BlockOnCommand` are wrapped once
+per instance. The selftest runs the real DeploySaboteur thread, the real PGBase `Flush_G` + `Base_Definitions` (a
+release) and the thread again (`sab plan flush`, 5 checks; with the old Lua it fails with `attempt to index global
+'A2FB_Errors'`). Selftest: 202 checks.
+
 ## 1. What it records
 
 Retail 1.121 writes no Lua output files, so the probe Lua keeps its records as strings
@@ -238,7 +253,7 @@ leaves the watcher (the flag and the raw budget block) unchanged.
 
 ## 7. Offline self-test
 
-`toolchain\venv\Scripts\python.exe -I selftest_a2f.py [--lua PATH] [--out DIR]`. 197 checks since a2k t05 (140 in a2j, 101 in a2i, 83 in a2h, 55 until a2g).
+`toolchain\venv\Scripts\python.exe -I selftest_a2f.py [--lua PATH] [--out DIR]`. 202 checks since the a2k t05 pool-release fix (197 at a2k t05, 140 in a2j, 101 in a2i, 83 in a2h, 55 until a2g).
 a2k t05 adds: the saboteur spec (the shipped DeploySaboteur thread and handler, AssembleForce's global `stage`, the reads
 the shipped free store and AI scripts make themselves, the saboteur type, HotM's planets and starting saboteur, the two
 desire functions, Enemy-only goals, closures without Variable_Human or `#`); the `--saboteur` / `--no-sab-desire` builds;
@@ -399,7 +414,7 @@ story on (the campaign's own story plots, as always), frames 0..1400 (about 47 s
 
 **Run it (Gabriel, Steam running, FoC closed).**
 1. Offline check: `toolchain\venv\Scripts\python.exe -I tools\probe_mod\a2f_budget\selftest_a2f.py` ends with
-   `A2F SELFTEST OK (197 checks, 0 failed)` (the Lua checks need `lua50.exe`, section 7).
+   `A2F SELFTEST OK (202 checks, 0 failed)` (the Lua checks need `lua50.exe`, section 7).
 2. Double-click `tools\probe_mod\a2f_budget\run_a2f_sab.cmd`. It opens its own console window (`start`), so the recorder
    does not depend on the shell that launched it. From a Claude session start it detached, for example
    `Start-Process -FilePath "<repo>\tools\probe_mod\a2f_budget\run_a2f_sab.cmd"` (PowerShell), never in a Claude terminal

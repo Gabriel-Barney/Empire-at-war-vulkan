@@ -117,16 +117,27 @@ def default_refs():
     # that empty folder used to hide the main checkout's runs (the slow ctests then skipped with 77).
     if os.path.isdir(here) and any(os.path.isfile(os.path.join(here, d, "trace.q2t")) for d in os.listdir(here)):
         return here
+    main = main_checkout_refs()
+    return main if main and os.path.isdir(main) else here
+
+
+def main_checkout_refs():
+    """The main checkout's copy of the Q2 kit's out folder (None when not found)."""
     try:
         common = subprocess.run(["git", "-C", REPO, "rev-parse", "--path-format=absolute", "--git-common-dir"],
                                 capture_output=True, text=True, check=False).stdout.strip()
     except OSError:
         common = ""
-    if common:
-        main = os.path.join(os.path.dirname(common), KIT_REL, "out")
-        if os.path.isdir(main):
-            return main
-    return here
+    return os.path.join(os.path.dirname(common), KIT_REL, "out") if common else None
+
+
+def refs_search(a):
+    """(folder, fallback folders) for resolve_refs: --refs / ALAMO_Q2_TRACES alone, else the default folder and then the
+    main checkout's (a worktree whose kit recorded new runs holds those only; the older ones stay in the main checkout)."""
+    if a.refs or os.environ.get("ALAMO_Q2_TRACES"):
+        return a.refs or default_refs(), ()
+    first, main = default_refs(), main_checkout_refs()
+    return first, tuple(d for d in (main,) if d and os.path.normcase(os.path.abspath(d)) != os.path.normcase(os.path.abspath(first)))
 
 
 def default_port_exe():
@@ -138,9 +149,10 @@ def default_port_exe():
 
 
 # ---- metric extraction: galactic ----------------------------------------------------------------------------------------
-def galactic_credit_pass(trace_path, factions, sample_ticks):
+def galactic_credit_pass(trace_path, factions, sample_ticks, max_tick=None):
     """Credits per faction after each frame: the income paid on each fiscal-cycle frame (credits after that frame minus
-    credits after the previous sampled frame; the trace shows no spending on cycle frames) and credits at sample ticks."""
+    credits after the previous sampled frame; the trace shows no spending on cycle frames) and credits at sample ticks.
+    max_tick: read mode frames up to this one only."""
     players, before, income = {}, {}, collections.defaultdict(list)
     at = {}
     last_cycle, cycle_frame = None, None
@@ -164,6 +176,9 @@ def galactic_credit_pass(trace_path, factions, sample_ticks):
                     close_frame()
                 before = dict(players)
                 mf = int(p[3])
+                if max_tick is not None and mf > max_tick:
+                    mf = None
+                    break
                 if len(p) >= 11:
                     cyc = int(p[10])
                     if last_cycle is not None and cyc != last_cycle:
@@ -182,9 +197,10 @@ def galactic_credit_pass(trace_path, factions, sample_ticks):
 STOP_SAMPLES = 3  # a fleet stops when its position holds for this many samples (one repeated sample mid-flight is not a stop)
 
 
-def fleet_tracks(trace_path):
+def fleet_tracks(trace_path, max_tick=None):
     """Galactic fleet positions per mode frame, {fleet id: [(mode frame, owner, x, y)]}, and planet positions {name: (x, y)},
-    from a Q2TRACE 1 file (retail or port). A mode frame sampled more than once (a paused galaxy) keeps its last sample."""
+    from a Q2TRACE 1 file (retail or port). A mode frame sampled more than once (a paused galaxy) keeps its last sample.
+    max_tick: read mode frames up to this one only."""
     types, tracks, ppos = {}, collections.defaultdict(list), {}
     with open(trace_path, "r", encoding="ascii") as fh:
         for line in fh:
@@ -218,6 +234,9 @@ def fleet_tracks(trace_path):
             if t == "F":
                 close()
                 mf = int(p[3])
+                if max_tick is not None and mf > max_tick:
+                    mf = None
+                    break
             elif t == "O":
                 i = int(p[1])
                 if int(p[11]) & 2:
@@ -295,9 +314,9 @@ def segment_fleet(track, ppos, stop_samples=STOP_SAMPLES):
     return trips, legs
 
 
-def fleet_hops(trace_path, fac):
+def fleet_hops(trace_path, fac, max_tick=None):
     """(trips, legs) of every fleet of a galactic trace, owners mapped to factions by `fac` ({owner: faction})."""
-    tracks, ppos = fleet_tracks(trace_path)
+    tracks, ppos = fleet_tracks(trace_path, max_tick)
     trips, legs = [], []
     for _, tr in sorted(tracks.items()):
         t, lg = segment_fleet(tr, ppos)
@@ -308,15 +327,16 @@ def fleet_hops(trace_path, fac):
             [(d, name(o), a, b, r) for d, o, a, b, r in sorted(legs)])
 
 
-def galactic_metrics(trace_path, queue_path=None, ai_log=None, sample_ticks=(4500, 9000, 13500)):
-    """Metric values of one galactic run (retail trace or port state trace), {metric id: value}, plus notes."""
-    m = q2.trace_metrics(trace_path)
+def galactic_metrics(trace_path, queue_path=None, ai_log=None, sample_ticks=(4500, 9000, 13500), max_tick=None):
+    """Metric values of one galactic run (retail trace or port state trace), {metric id: value}, plus notes. max_tick: only
+    the mode frames up to this one (a reference run that went on longer than the scenario, q4hf t03)."""
+    m = q2.trace_metrics(trace_path, max_tick=max_tick)
     fac = m["factions"]
     out, notes = {}, []
     # Travel: leg duration per route (departure = first moved sample, arrival = first sample of a stop, a pass through a
     # planet centre splits the trip; same rule both sides, q4hf t04). Keyed by faction: the hop speed is the fleet's (its
     # units' Hyperspace_Speed, the Underworld corruption bonus).
-    trips, legs = fleet_hops(trace_path, fac)
+    trips, legs = fleet_hops(trace_path, fac, max_tick)
     routes = collections.defaultdict(list)
     for dep, f, a, b, arr in legs:
         routes["%s:%s->%s" % (f, a, b)].append(arr - dep)
@@ -338,7 +358,7 @@ def galactic_metrics(trace_path, queue_path=None, ai_log=None, sample_ticks=(450
         for k, (lo, hi) in enumerate(fc["cycle_windows"], 1):
             out["econ.cycle_tick[%d]" % k] = (lo, hi) if lo != hi else hi
     # Income: per-cycle payment and credits at sample ticks.
-    income, at = galactic_credit_pass(trace_path, fac, sample_ticks)
+    income, at = galactic_credit_pass(trace_path, fac, sample_ticks, max_tick)
     for f, xs in income.items():
         if xs:
             out["econ.income_cycle1[%s]" % f] = xs[0]
@@ -352,7 +372,7 @@ def galactic_metrics(trace_path, queue_path=None, ai_log=None, sample_ticks=(450
     builds = None
     durations = collections.defaultdict(list)
     if queue_path and os.path.exists(queue_path):
-        q2.queue_metrics(queue_path, m)
+        q2.queue_metrics(queue_path, m, max_tick)
         builds = [(e["start"], e["faction"], e["type"]) for e in m["queue_entries"]]
         # An item leaves the queue when its object is created (the created-id field stays unset in the retail queues), so
         # done = the last frame listed + 1. Only items that ran uninterrupted to the end count: no restart (a stalled item
@@ -760,12 +780,14 @@ def load_scenarios():
     return load_json(os.path.join(HERE, "scenarios.json"))
 
 
-def resolve_refs(scen, refs_dir):
-    """[(run name, run dir)] of the scenario's reference runs present under refs_dir, plus the missing ones."""
+def resolve_refs(scen, refs_dir, fallback=()):
+    """[(run name, run dir)] of the scenario's reference runs present under refs_dir (else the first fallback folder that
+    holds the run), plus the missing ones."""
     have, missing = [], []
     for r in scen["references"]:
-        d = os.path.join(refs_dir, r["run"])
-        if os.path.exists(os.path.join(d, "trace.q2t")):
+        d = next((os.path.join(b, r["run"]) for b in (refs_dir,) + tuple(fallback)
+                  if os.path.exists(os.path.join(b, r["run"], "trace.q2t"))), None)
+        if d:
             have.append((r["run"], d))
         else:
             missing.append(r["run"])
@@ -775,7 +797,7 @@ def resolve_refs(scen, refs_dir):
 def retail_metrics(scen, run_dir):
     trace = os.path.join(run_dir, "trace.q2t")
     if scen["kind"] == "galactic":
-        return galactic_metrics(trace, os.path.join(run_dir, "production.q2q"))
+        return galactic_metrics(trace, os.path.join(run_dir, "production.q2q"), max_tick=scen.get("max_tick"))
     return skirmish_retail_metrics(trace, set(scen["frames"]))
 
 
@@ -848,7 +870,7 @@ def check_baseline(baseline, scen_id, results):
 
 def cmd_run(a):
     scens = load_scenarios()
-    refs_dir = a.refs or default_refs()
+    refs_dir, fallback = refs_search(a)
     ids = a.scenario or list(scens["scenarios"])
     exe = a.port_exe or default_port_exe()
     commit = a.commit or git_head()
@@ -864,7 +886,7 @@ def cmd_run(a):
         if scen is None:
             print("unknown scenario %s (have %s)" % (sid, ", ".join(scens["scenarios"])))
             return 2
-        have, missing = resolve_refs(scen, refs_dir)
+        have, missing = resolve_refs(scen, refs_dir, fallback)
         if not have:
             print("SKIP %s: no reference run under %s (missing %s; kit: %s)" % (sid, refs_dir, ", ".join(missing), scen["kit"]))
             continue
@@ -944,10 +966,10 @@ def leave_one_out(scen, tols, runs):
 
 def cmd_retail(a):
     scens = load_scenarios()
-    refs_dir = a.refs or default_refs()
+    refs_dir, fallback = refs_search(a)
     for sid in a.scenario or list(scens["scenarios"]):
         scen = scens["scenarios"][sid]
-        have, missing = resolve_refs(scen, refs_dir)
+        have, missing = resolve_refs(scen, refs_dir, fallback)
         print("== %s: %d run(s)%s" % (sid, len(have), "; missing %s" % ", ".join(missing) if missing else ""))
         runs = [(n, retail_metrics(scen, d)[0]) for n, d in have]
         if len(runs) < 2:
@@ -979,10 +1001,10 @@ def cmd_retail(a):
 
 def cmd_list(a):
     scens = load_scenarios()
-    refs_dir = a.refs or default_refs()
+    refs_dir, fallback = refs_search(a)
     print("reference folder: %s" % refs_dir)
     for sid, scen in scens["scenarios"].items():
-        have, missing = resolve_refs(scen, refs_dir)
+        have, missing = resolve_refs(scen, refs_dir, fallback)
         print("%s (%s): %s" % (sid, scen["kind"], scen.get("title", "")))
         for r in scen["references"]:
             print("  %-42s %s  %s" % (r["run"], "present" if r["run"] in [n for n, _ in have] else "MISSING", r.get("note", "")))
