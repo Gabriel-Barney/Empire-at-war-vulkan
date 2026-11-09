@@ -341,6 +341,41 @@ def watcher_and_report_tests(out, parsed):
           ul[0]['price'] == 700.0, str(ul))
 
 
+# a2m t13: every distinct list raw of run 20261108-212955 (slice_watch.jsonl, old watcher: all ok=false or empty) and
+# what the fixed decode_raw() makes of it. Rows 2-3 were read through a stale player address at the mode change.
+REAL_RAWS = (
+    ('00000000000000000000000000000000d8592bb2f77f0000', ('dv', 0, 0)),                 # empty list (all players, f3)
+    ('ca03683f6a61d83e742f373300b810401d64bbbe45ee483f', (None, None, None)),           # stale address: floats
+    ('f7ffff3e5eab08406161583ec303e8bedab35d3f8184ee3f', (None, None, None)),
+    ('0000803f22a111b24825f53100000000d1b3dd320000803f', (None, None, None)),
+    ('000080b3000080b300008028000000000000803f00000033', (None, None, None)),
+    ('b00076d3710100000b00000014000000d8592bb2f77f0000', ('dv', 0x171d37600b0, 11)),    # REBEL unlocked at f1
+    ('404e95c971010000010000000a000000d8592bb2f77f0000', ('dv', 0x171c9954e40, 1)),     # REBEL locked
+    ('605895c971010000010000000a000000d8592bb2f77f0000', ('dv', 0x171c9955860, 1)),     # EMPIRE unlocked
+    ('b00076d3710100000c00000014000000d8592bb2f77f0000', ('dv', 0x171d37600b0, 12)),    # slice f349
+    ('b00076d3710100000d00000014000000d8592bb2f77f0000', ('dv', 0x171d37600b0, 13)),    # slice f3185
+    ('b00076d3710100000e00000014000000d8592bb2f77f0000', ('dv', 0x171d37600b0, 14)),    # slice f6271
+    ('b00076d3710100000f00000014000000d8592bb2f77f0000', ('dv', 0x171d37600b0, 15)),    # slice f9200
+    ('10952ed571010000010000000a000000d8592bb2f77f0000', ('dv', 0x171d52e9510, 1)),     # UNDERWORLD unlocked f11087
+    ('b00076d3710100001000000014000000d8592bb2f77f0000', ('dv', 0x171d37600b0, 16)),    # slice f11950
+)
+
+
+def decode_tests():
+    """No Lua needed: the fixed decoder on the real run's raw bytes, and the watcher naming entries from them."""
+    bad = [(raw, slice_watch.decode_raw(bytes.fromhex(raw)), exp) for raw, exp in REAL_RAWS
+           if slice_watch.decode_raw(bytes.fromhex(raw)) != exp]
+    check('decode_raw: all %d list raws of run 20261108-212955 (counts 11..16, stale reads rejected)' % len(REAL_RAWS),
+          not bad, str(bad))
+    p = FakeProc()
+    data = 0x171d37600b0
+    p.put(data, b''.join(struct.pack('<Q', t) for t in (0x500000, 0x500100, 0x500200)))
+    w = slice_watch.Watcher(p, FakeGame(p), open(os.devnull, 'w'))
+    ok, names = w.decode_list(bytes.fromhex('b00076d3710100000300000014000000d8592bb2f77f0000'))
+    check('watcher: a retail-layout DynamicVector raw is named entry by entry (type_name of each T*)',
+          ok and names == ['R_GROUND_LIGHT_VEHICLE_FACTORY', 'REBEL_X_WING_SQUADRON', 'BTL_Y_WING_SQUADRON'], str((ok, names)))
+
+
 def build_tests(out):
     mod = os.path.join(out, 'mod', make_slice_mod.MOD_NAME)
     make_slice_mod.build(mod)
@@ -371,6 +406,7 @@ def main():
         print('extracted/foc_data_text.zip not found: cannot self-test')
         return 1
     build_tests(out)
+    decode_tests()
     lua = a.lua
     if not lua:
         import lua50

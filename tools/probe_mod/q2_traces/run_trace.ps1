@@ -15,17 +15,25 @@ Q2 reference traces: one recorded run of the original game (FoC Steam x64 1.121)
                        lua_records.txt / lua_perception.tsv / lua_summary.json; run_status.json -> lua_canary / lua
   -Days 10 -Ticks 5400 -KeyEvery 300
   -WaitSessionMin 20   time allowed for menus + loading before the trace starts
-  -TimeoutMin 30       hard limit for the traced part
+  -TimeoutMin 30       hard limit for the traced part; 0 = no limit: the trace waits as long as the game process lives
+                       (run_story.cmd: a paused game, e.g. after a focus loss, only delays the run)
   -NonInteractive      no prompts, no "press a key"; result in out\<run>\run_status.json and the exit code.
                        Also drives the menus (q2_ui.py) up to the start of the galaxy / battle, unless -NoDrive
   -Drive / -NoDrive    force the menu driver on / off (default: on with -NonInteractive)
   -DryRun              print every action, change nothing, start nothing
-  -NoLaunch            do not start the game (attach to one started by hand, e.g. through Steam)
+  -NoLaunch            do not start the game (attach to one started by hand, e.g. through Steam). The run writes
+                       out\launch_game.cmd (and out\<run>\launch_game.cmd): this run's game arguments through
+                       ..\common\launch_foc.py. Start it with  cmd /c <that file>  (a StarWarsG.exe started plainly from
+                       a Claude shell, or since 2026-11-09 through explorer.exe, exits at once; launch_foc.py starts it
+                       under the debug API and detaches at the first debug event, and the game runs on)
   -GameRoot <dir>      game folder (default: detected from Steam)
   -Label <text>        free text stored in the trace header (e.g. the skirmish map picked)
 
 The reader closes the game when the trace is complete (or on timeout). Cleanup (cleanup.ps1) ALWAYS runs at
-the end, also after errors or Ctrl+C; if this window itself is killed, run cleanup.cmd.
+the end, also after errors or Ctrl+C; if this window itself is killed, run cleanup.cmd. summary.json is written after
+the cleanup on every path that reaches it (state "summarizing" in run_status.json: q2trace.py validate + to-q1 take
+about 1.5 min for an 18000-frame trace); when validate cannot write it, a partial summary.json ("partial": true) is
+built from reader_status.json. The console output is also in out\<run>\run_trace.log.
 
 Exit codes: 0 complete trace, 10 partial trace (stopped early: see reason), 20 preflight failed (nothing
 changed), 30 no trace (reader failed / no session), 40 cleanup left something (see cleanup.log).
@@ -60,7 +68,13 @@ function Save-Status { if (-not $DryRun) { Write-Q2Json $statusPath ([pscustomob
 function Fail([int]$Code, [string]$Msg) { $status.errors += $Msg; $status.exit_code = $Code; $status.state = 'failed'; Write-Q2 "ERROR: $Msg"; Save-Status; exit $Code }
 
 # ---------------------------------------------------------------- preflight (changes nothing)
-if (-not $DryRun) { New-Item -ItemType Directory -Force -Path $runDir | Out-Null }
+$latestLauncher = Join-Path $Q2Out 'launch_game.cmd'
+if (-not $DryRun) {
+    New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+    try { Start-Transcript -LiteralPath (Join-Path $runDir 'run_trace.log') -Append | Out-Null } catch { }
+    # a launcher left by an earlier -NoLaunch run must not start the game with that run's arguments
+    if (Test-Path -LiteralPath $latestLauncher) { Remove-Item -LiteralPath $latestLauncher -Force -ErrorAction SilentlyContinue }
+}
 $root = Find-Q2GameRoot $GameRoot
 if (-not $root) { Fail 20 "game not found (pass -GameRoot <folder containing corruption\StarWarsG.exe>)" }
 $exe = Join-Path $root 'corruption\StarWarsG.exe'
@@ -107,7 +121,9 @@ $dayFrames = Get-Q2DayFrames $modDir
 $trace = Join-Path $runDir 'trace.q2t'
 $readerStatus = Join-Path $runDir 'reader_status.json'
 $waitSec = [int]($WaitSessionMin * 60)
-$timeoutSec = [int](($WaitSessionMin + $TimeoutMin) * 60)
+$noLimit = ($TimeoutMin -le 0)
+# no limit: the reader's own clock still needs a value; 7 days stands for "while the game lives" (it ends at game exit)
+$timeoutSec = $(if ($noLimit) { 7 * 24 * 3600 } else { [int](($WaitSessionMin + $TimeoutMin) * 60) })
 $readerArgs = @('--out', $trace, '--status', $readerStatus, '--dump', (Join-Path $runDir 'playerlist_dump.txt'), '--scenario', $Scenario, '--key-every', $KeyEvery,
                 '--queues', (Join-Path $runDir 'production.q2q'),
                 '--wait-process-sec', $(if ($NoLaunch) { $waitSec } else { 180 }), '--wait-session-sec', $waitSec,
@@ -136,7 +152,9 @@ Write-Q2 "driver  $(if ($useDriver) { 'q2_ui.py drive ' + $Scenario } else { 'of
 $status.game_folder_before = $folderBefore
 if ($DryRun) {
     if ($LuaProbe) { $dm = New-Q2Manifest $runId $root $runDir; Install-Q2Mod -GameRoot $root -ManifestPath '' -Manifest $dm -DryRun }
-    Write-Q2 "dry run: would start the reader, launch the game, wait up to $([int]($WaitSessionMin + $TimeoutMin)) min, then run cleanup.ps1 -RunDir $runDir"
+    $limit = $(if ($noLimit) { 'as long as the game runs' } else { "up to $([int]($WaitSessionMin + $TimeoutMin)) min" })
+    $launch = $(if ($NoLaunch) { "write $latestLauncher (start it with cmd /c; it runs common\launch_foc.py)" } else { 'launch the game' })
+    Write-Q2 "dry run: would start the reader, $launch, wait $limit, then run cleanup.ps1 -RunDir $runDir and write summary.json"
     exit 0
 }
 
@@ -148,10 +166,58 @@ $readerProc = $null
 $readerExit = $null
 $driverProc = $null
 $uiStatus = Join-Path $runDir 'ui_status.json'
+$summary = Join-Path $runDir 'summary.json'
+$q1 = Join-Path $runDir 'reference.crc'
+$summaryWritten = $false
+# summary.json on every path that reaches the finally block (also Ctrl+C and run errors): q2trace.py validate + to-q1,
+# else a partial summary from reader_status.json (storyb t09: a reader timeout or a stopped run must not lose it)
+function Write-RunSummary {
+    if ($script:summaryWritten) { return }
+    $script:summaryWritten = $true
+    $status.state = 'summarizing'
+    $status.note = 'q2trace.py validate + to-q1 run now (about 1.5 min for an 18000-frame trace); state "done" follows'
+    Save-Status
+    if ((Test-Path -LiteralPath $trace) -and (Get-Item -LiteralPath $trace).Length -gt 0) {
+        $status.trace = $trace
+        Write-Q2 "summary: q2trace.py validate + to-q1 of $trace (about 1.5 min for 18000 frames)"
+        try {
+            & $Q2Python -I (Join-Path $Q2Kit 'q2trace.py') validate $trace --json $summary
+            $status.validate_exit = $LASTEXITCODE
+            & $Q2Python -I (Join-Path $Q2Kit 'q2trace.py') to-q1 $trace $q1
+            $status.to_q1_exit = $LASTEXITCODE
+            if (Test-Path -LiteralPath $q1) { $status.q1 = $q1 }
+        } catch { $status.errors += "summary error: $_" }
+    }
+    if (-not (Test-Path -LiteralPath $summary)) {
+        $rs = Read-Q2Json $readerStatus
+        $why = $(if (-not $status.trace) { 'no trace written' } else { "q2trace.py validate wrote no summary (exit $($status.validate_exit))" })
+        $part = [ordered]@{ partial = $true; end_reason = $(if ($rs) { $rs.reason } else { 'reader_status_missing' })
+                            frames = $(if ($rs) { $rs.frames_sampled } else { 0 }); last_frame = $(if ($rs) { $rs.last_global_frame } else { $null })
+                            mode_frame = $(if ($rs) { $rs.mode_frame } else { $null }); trace = $status.trace
+                            errors = @($why); reader = $rs }
+        Write-Q2Json $summary ([pscustomobject]$part)
+        $status.summary_partial = $true
+        Write-Q2 "summary: partial summary.json written ($why)"
+    }
+    $status.summary = $summary
+    $status.Remove('note')
+    $status.state = 'summarized'; Save-Status
+}
 & $Q2Python -I (Join-Path $Q2Kit 'q2_profile.py') snapshot $runDir
 if ($LASTEXITCODE -ne 0) { Fail 20 'profile snapshot failed (nothing changed yet)' }
 try {
     if ($LuaProbe) { Install-Q2Mod -GameRoot $root -ManifestPath $manifestPath -Manifest $manifest }
+    if ($NoLaunch) {
+        # the game command line of this run through common\launch_foc.py (CreateProcess under the debug API, detached
+        # at the first debug event): the route that keeps the game alive when started from a Claude shell (2026-11-09)
+        $launchFoc = Join-Path (Split-Path -Parent $Q2Kit) 'common\launch_foc.py'
+        $launchLine = "`"$Q2Python`" -I `"$launchFoc`" --no-windowed --game-root `"$root`" $($gameArgs -join ' ')"
+        $launcherText = "@echo off`r`nrem q2 run $runId`: start FoC with this run's arguments (cmd /c <this file>; prints the game pid)`r`n" +
+                        "$launchLine`r`n"
+        foreach ($p in @((Join-Path $runDir 'launch_game.cmd'), $latestLauncher)) { [IO.File]::WriteAllText($p, $launcherText, (New-Object Text.ASCIIEncoding)) }
+        $status.launcher = $latestLauncher
+        Write-Q2 "launch  cmd /c `"$latestLauncher`"   (= $launchLine)"
+    }
     $status.state = 'running'; Save-Status
     $quoted = $readerArgs | ForEach-Object { $s = [string]$_; if ($s -match '[\s"]') { '"' + $s.Replace('"', '\"') + '"' } else { $s } }
     $readerProc = Start-Process -FilePath $reader -ArgumentList ($quoted -join ' ') -PassThru -WindowStyle Hidden
@@ -181,8 +247,10 @@ try {
     $steps = Join-Path $Q2Kit 'README.md'
     Write-Q2 "now drive the menus: README.md section 'UI steps' ($Scenario). Do NOT click inside the battle/galaxy once it runs."
     if (-not $NonInteractive) { Write-Host "`n  Follow the '$Scenario' UI steps in $steps. This window waits on its own.`n" }
-    $deadline = (Get-Date).AddSeconds($timeoutSec + 120)
+    $deadline = $(if ($noLimit) { [datetime]::MaxValue } else { (Get-Date).AddSeconds($timeoutSec + 120) })
     $driverDone = $false
+    $lastFrames = -1; $lastAdvance = Get-Date; $lastStallMsg = [datetime]::MinValue; $stallFrom = $null
+    $status.stalls = @()
     while (-not $readerProc.HasExited) {
         Start-Sleep -Seconds 5
         if ($driverProc -and -not $driverDone -and $driverProc.HasExited) {
@@ -199,6 +267,29 @@ try {
         }
         $rs = Read-Q2Json $readerStatus
         if ($rs) {
+            # storyb t09: FoC pauses when its window loses focus; the trace then gets no frame. Say so (and keep a
+            # record), but never stop: the run goes on when the game is in front again.
+            $now = Get-Date
+            if ($rs.state -eq 'tracing' -and $rs.frames_sampled -eq $lastFrames) {
+                $stalled = ($now - $lastAdvance).TotalSeconds
+                if ($stalled -ge 20) {
+                    if (-not $stallFrom) { $stallFrom = [ordered]@{ frame = $rs.mode_frame; at = $lastAdvance.ToString('HH:mm:ss') } }
+                    $status.stalled_sec = [int]$stalled
+                    if (($now - $lastStallMsg).TotalSeconds -ge 60) {
+                        $lastStallMsg = $now
+                        Write-Q2 ("no new frame for {0} s at mode frame {1}: the game is paused (FoC pauses when its window loses focus). Bring the game window to the front; the run waits." -f [int]$stalled, $rs.mode_frame)
+                    }
+                }
+            } else {
+                if ($stallFrom) {
+                    $stallFrom.seconds = [int]($now - $lastAdvance).TotalSeconds
+                    $status.stalls += [pscustomobject]$stallFrom
+                    Write-Q2 "frames advance again after $($stallFrom.seconds) s"
+                    $stallFrom = $null
+                }
+                $status.Remove('stalled_sec')
+                $lastFrames = $rs.frames_sampled; $lastAdvance = $now
+            }
             $status.reader = $rs; Save-Status
             Write-Q2 ("reader: {0} frames={1} mode_frame={2} cycles={3} pause={4}" -f $rs.state, $rs.frames_sampled, $rs.mode_frame, $rs.cycles_done, $rs.galactic_pause)
         }
@@ -211,6 +302,7 @@ try {
     Write-Q2 "ERROR: $_"
 } finally {
     Write-Q2 'cleanup (always)'
+    $status.state = 'cleanup'; Save-Status
     if ($driverProc -and -not $driverProc.HasExited) { Stop-Process -Id $driverProc.Id -Force -ErrorAction SilentlyContinue }
     if ($LuaProbe -and (Test-Path -LiteralPath (Join-Path $root "corruption\Mods\$Q2ModName"))) {
         $status.lua_canary = Get-Q2CanaryState $root
@@ -228,6 +320,11 @@ try {
     $status.game_folder_after = Get-Q2GameFolderState $root
     if ($status.game_folder_after.summary -ne $folderBefore.summary) { $status.errors += "game folder changed during the run (not by this kit): $($status.game_folder_after.summary)" }
     if (-not $status.ui -and (Test-Path -LiteralPath $uiStatus)) { $status.ui = Read-Q2Json $uiStatus }
+    if ($stallFrom) { $stallFrom.seconds = [int]((Get-Date) - $lastAdvance).TotalSeconds; $status.stalls += [pscustomobject]$stallFrom }
+    $status.reader = Read-Q2Json $readerStatus
+    $status.reader_exit = $readerExit
+    $status.reason = $(if ($status.reader) { $status.reader.reason } else { 'reader_status_missing' })
+    try { Write-RunSummary } catch { $status.errors += "summary error: $_"; Write-Q2 "ERROR (summary): $_" }
 }
 
 # ---------------------------------------------------------------- post-process
@@ -235,15 +332,6 @@ $rs = Read-Q2Json $readerStatus
 $status.reader = $rs
 $status.reader_exit = $readerExit
 $status.reason = $(if ($rs) { $rs.reason } else { 'reader_status_missing' })
-if ((Test-Path -LiteralPath $trace) -and (Get-Item -LiteralPath $trace).Length -gt 0) {
-    $status.trace = $trace
-    $summary = Join-Path $runDir 'summary.json'
-    $q1 = Join-Path $runDir 'reference.crc'
-    & $Q2Python -I (Join-Path $Q2Kit 'q2trace.py') validate $trace --json $summary
-    $status.validate_exit = $LASTEXITCODE
-    & $Q2Python -I (Join-Path $Q2Kit 'q2trace.py') to-q1 $trace $q1
-    $status.summary = $summary; $status.q1 = $q1
-}
 if ($LuaProbe) {
     # rebuilds the outputs from lua_reader.log, also when cleanup had to stop the reader before it wrote them
     & $Q2Python -I (Join-Path $Q2Kit 'q2lua_reader.py') summarize --run-dir $runDir | Out-Null

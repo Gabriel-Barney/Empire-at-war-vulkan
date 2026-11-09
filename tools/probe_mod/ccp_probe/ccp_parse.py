@@ -45,6 +45,9 @@ RELEVANT = ('REINFORCEMENT_POINT', 'REINFORCEMENT_POINT_PLUS1_CAP', 'REINFORCEME
             'REINFORCEMENT_POINT_PLUS3_CAP', 'REINFORCEMENT_POINT_PLUS4_CAP', 'REINFORCEMENT_POINT_PLUS5_CAP',
             'REINFORCEMENT_POINT_PLUS10_CAP')
 VICTORY_0x15 = 0x15
+MAX_PLAYER_ID = 15      # valid player ids are small; anything else is a freed-object read
+PLAYABLE = ('EMPIRE', 'REBEL', 'UNDERWORLD')
+PORT_ARM_TIMER = 899      # 900 armed in the capture service, decremented by check_victory in the same tick
 
 
 def tok(line):
@@ -83,6 +86,8 @@ def owners_of(s):
     for item in (s or '').split(','):
         if ':' in item:
             k, v = item.split(':', 1)
+            if v != 'x' and not (v.isdigit() and int(v) <= MAX_PLAYER_ID):
+                continue   # garbage read at the battle teardown (run 20261109-045610: -17891602): not an owner
             out[k] = v
     return out
 
@@ -177,6 +182,61 @@ def lua_players(m, lua):
     return sorted(set(human)), fac
 
 
+def port_cp_capture(owners, obj, new_owner, playable):
+    """The port's vm_cp_capture (tactical_battle_garrison.cpp:276 / tactical_battle_victory.cpp:96-119) on the owner map
+    {point: owner id} before the write: returns (armed, timer, player) right after the capture tick. A new owner that is
+    not playable (Neutral) disarms; the changing point is skipped in the 'every other relevant point is allied' test
+    (allied = same player id here: a 1 v 1 skirmish); all allied (vacuously true for a single point) arms 900 -> 899 in
+    the same tick; anything else disarms."""
+    if not playable(new_owner):
+        return (0, -1, -1)
+    if all(o == new_owner for k, o in owners.items() if k != obj):
+        return (1, PORT_ARM_TIMER, new_owner)
+    return (0, -1, -1)
+
+
+def multi_point(m, res, rel_ids, decl):
+    """Ownership timeline of the relevant points and the arm state after every capture, observed vs the port rule
+    replayed on the observed capture sequence (ccpgu t04). Only for maps with two or more relevant points."""
+    pts = [p for p in res['points'] if p['relevant']]
+    if len(pts) < 2:
+        return None
+
+    def fac(i):
+        return m['players'].get(i, {}).get('faction', '?')
+
+    def playable(i):
+        return fac(i) in PLAYABLE
+
+    owners = {p['obj']: p['start_owner'] for p in pts}
+    hops = {p['obj']: [p['start_owner']] for p in pts}
+    rows = []
+    first = res['captures'][0]['frame'] if res['captures'] else None
+    for c in res['captures']:
+        pred = port_cp_capture(owners, c['obj'], c['to'], playable)
+        owners[c['obj']] = c['to']
+        hops[c['obj']].append(c['to'])
+        obs = (c['armed'], c['timer'] if c['armed'] == 1 else -1, c['cpp'] if c['armed'] == 1 else -1)
+        ok = obs[0] == pred[0] and (pred[0] == 0 or (obs[1] == pred[1] and obs[2] == pred[2]))
+        rows.append({'frame': c['frame'], 'dt': c['frame'] - first, 'obj': c['obj'], 'from': c['from'], 'to': c['to'],
+                     'from_faction': fac(c['from']), 'to_faction': fac(c['to']), 'observed': obs, 'port': pred,
+                     'verdict': 'MATCH' if ok else 'DIFF'})
+    # enemy takeovers: a playable owner replaced by another playable one, with or without Neutral between
+    enemy, via_neutral, direct = 0, 0, 0
+    for seq in hops.values():
+        for i in range(len(seq) - 1):
+            a, b = seq[i], seq[i + 1]
+            if playable(a) and not playable(b) and i + 2 < len(seq) and playable(seq[i + 2]) and seq[i + 2] != a:
+                enemy += 1
+                via_neutral += 1
+            elif playable(a) and playable(b) and a != b:
+                enemy += 1
+                direct += 1
+    return {'points': [{'obj': p['obj'], 'start_owner': p['start_owner'], 'start_faction': p['start_faction']} for p in pts],
+            'captures': rows, 'enemy_takeovers': enemy, 'via_neutral': via_neutral, 'direct': direct,
+            'all_match': all(r['verdict'] == 'MATCH' for r in rows) if rows else None}
+
+
 def analyse_mode(m, lua=()):
     res = {'n': m['n'], 'human': [i for i, p in m['players'].items() if p['human']], 'notes': [], 'human_src': 'reader'}
     if not res['human']:
@@ -206,7 +266,7 @@ def analyse_mode(m, lua=()):
             for k, v in no.items():
                 if k in rel_ids and po.get(k) is not None and po.get(k) != v:
                     captures.append({'frame': s['frame'], 'stamp': s.get('stamp'), 'obj': k, 'from': num(po[k]),
-                                     'to': num(v)})
+                                     'to': num(v), 'armed': s['armed'], 'timer': s['timer'], 'cpp': s['cpp']})
             if s['armed'] == 1 and prev['armed'] != 1:
                 arms.append(s)
             if prev['armed'] == 1 and s['armed'] != 1:
@@ -219,6 +279,7 @@ def analyse_mode(m, lua=()):
     res['captures'] = captures
     res['arms'] = [(a['frame'], a['timer'], a['cpp']) for a in arms]
     res['disarms'] = [d['frame'] for d in disarms]
+    res['multi'] = multi_point(m, res, rel_ids, decl)
     res['mon_ok'] = (m['mon'] or {}).get('ok') == '1'
     res['cpv'] = (m['cpv'] or {}).get('raw')
     res['gaps'] = m['gaps']
@@ -294,6 +355,31 @@ def analyse_mode(m, lua=()):
     return res
 
 
+def multi_lines(mp, res):
+    L = ['  MULTI-POINT (%d relevant points; port = SKIRMISH_SETUP 4.2 replayed on the observed captures):' % len(mp['points'])]
+    for p in mp['points']:
+        L.append('    point %-7s starts %s (%s)' % (p['obj'], p['start_owner'], p['start_faction']))
+    L.append('    %-7s %7s %-8s %-26s %-22s %-22s %s' % ('frame', 'dt', 'point', 'owner change', 'retail armed/timer/pl',
+                                                      'port armed/timer/pl', 'verdict'))
+    for r in mp['captures']:
+        L.append('    %-7s %+7d %-8s %-26s %-22s %-22s %s' % (
+            r['frame'], r['dt'], r['obj'], '%s(%s) -> %s(%s)' % (r['from'], r['from_faction'], r['to'], r['to_faction']),
+            '/'.join(str(x) for x in r['observed']), '/'.join(str(x) for x in r['port']), r['verdict']))
+    if not mp['captures']:
+        L.append('    no owner change of a relevant point was recorded')
+    L.append('    arms (frame, timer@arm, player): %s; disarms (frames): %s' % (res['arms'], res['disarms']))
+    L.append('    enemy takeovers: %d (via Neutral %d, direct %d; port: always via Neutral, 4.2)' % (
+        mp['enemy_takeovers'], mp['via_neutral'], mp['direct']))
+    fr = res.get('frames')
+    if fr and mp['captures']:
+        last = mp['captures'][-1]
+        L.append('    last capture at %s; declaration at %s (%s frames after it; port 899)' % (
+            last['frame'], fr['D'], None if fr['D'] is None else fr['D'] - last['frame']))
+    L.append('    RESULT multi-point rule vs port: %s' % (
+        'every capture MATCH' if mp['all_match'] else 'DIFF present' if mp['all_match'] is False else 'no capture'))
+    return L
+
+
 def report(meta, modes, lua, cfg):
     L = ['ccpgu t02 Capture Control Points probe report', '=' * 46, '']
     g = meta.get('GAME', {})
@@ -356,6 +442,9 @@ def report(meta, modes, lua, cfg):
                 L.append('    visible end: the frame counter stopped at %s (%+d vs the countdown-zero tick %s; -1 = the battle'
                          ' ended inside that tick, before its counter write)' % (
                              fr['stall_after_D'], fr['stall_after_D'] - fr['E'], fr['E']))
+        mp = res.get('multi')
+        if mp:
+            L += multi_lines(mp, res)
         for nte in res['notes']:
             L.append('    NOTE: ' + nte)
     # Lua
@@ -477,6 +566,43 @@ def synth_retail(path):
         f.write('\n'.join(L) + '\n')
 
 
+def synth_steal(path, via_neutral=True, arm_after_first=False):
+    """Bothawui-like two-point battle, 'steal' scenario in the port model: Rebel (1) takes point 100 at 460 (the other
+    point is Neutral: no arm), Empire (0) takes point 200 at 462 (100 is the Rebels': no arm), Empire retakes 100 at
+    1500 (Rebel -> Neutral at 1480 disarms nothing, then Neutral -> Empire arms 899), declaration at 2399, end at 2609.
+    via_neutral=False: the takeover is direct Rebel -> Empire. arm_after_first: a deviation, the first capture arms."""
+    n = 1
+    L = ['CCPREADER 1 scan_sec=5 poll_sec=0.002 map=_MP_LAND_BOTHAWUI human=Empire',
+         'MODE n=1 ptr=0x2 type=1 game_type=3 stack=1 frame=0 gframe=0 t=55.4',
+         'PL n=1 id=0 index=0 faction=EMPIRE human=1 neutral=0', 'PL n=1 id=1 index=1 faction=REBEL human=0 neutral=0',
+         'PL n=1 id=3 index=3 faction=NEUTRAL human=0 neutral=1', 'MON n=1 frame=0 ptr=0x100 ok=1 back=0x2',
+         'POINT n=1 frame=0 obj=100 addr=0x10 type=REINFORCEMENT_POINT relevant=1 owner=3 owner_faction=NEUTRAL x=1 y=2',
+         'POINT n=1 frame=0 obj=200 addr=0x20 type=REINFORCEMENT_POINT relevant=1 owner=3 owner_faction=NEUTRAL x=5 y=6']
+
+    def st(f, armed, timer, cpp, decl, cd, dtype, dplayer, o100, o200):
+        return ('ST n=1 frame=%d armed=%d timer=%d cpp=%d decl=%d cd=%d dtype=%d dplayer=%d dcd=%d hold=0 owners=100:%d,200:%d'
+                % (f, armed, timer, cpp, decl, cd, dtype, dplayer, cd if decl else 0, o100, o200))
+    L.append(st(0, 0, -1, -1, 0, 0, 0, 0, 3, 3))
+    if arm_after_first:
+        L.append(st(460, 1, 899, 1, 0, 0, 0, 0, 1, 3))
+    else:
+        L.append(st(460, 0, -1, -1, 0, 0, 0, 0, 1, 3))
+    L.append(st(462, 0, -1, -1, 0, 0, 0, 0, 1, 0))
+    if via_neutral:
+        L.append(st(1480, 0, -1, -1, 0, 0, 0, 0, 3, 0))
+    C = 1500
+    L.append(st(C, 1, 899, 0, 0, 0, 0, 0, 0, 0))
+    for f in range(C + 1, C + 899):
+        L.append(st(f, 1, 899 - (f - C), 0, 0, 0, 0, 0, 0, 0))
+    D = C + 899
+    for k in range(0, 211):
+        L.append(st(D + k, 0, -1, -1, 1, 210 - k, 0x15, 0, 0, 0))
+    L += ['STALL n=1 frame=%d sec=1.5' % (D + 209), 'MODE_END n=1 last_frame=%d why=mode_changed' % (D + 209),
+          'EXIT reason=game_exited modes=1 scans=3 records=0']
+    with open(path, 'w') as f:
+        f.write('\n'.join(L) + '\n')
+
+
 def selftest():
     fails = []
 
@@ -523,6 +649,39 @@ def selftest():
                   b and {k: v['verdict'] for k, v in b['compare'].items()}))
         check(b and any(p['type'] == 'REINFORCEMENT_POINT_REBEL' and p['start_faction'] == 'REBEL' for p in b['points']),
               'retail shape: point factions relabelled from Lua')
+        # two-point 'steal' scenario in the port model (ccpgu t04)
+        synth_steal(tmp)
+        meta, modes, lua = load(tmp)
+        text, out = report(meta, modes, lua, None)
+        b = out['battles'][0]
+        mp = b.get('multi')
+        check(mp is not None and len(mp['points']) == 2 and len(mp['captures']) == 4,
+              'multi-point: 2 points, 4 owner changes (%s)' % (mp and len(mp['captures'])))
+        check(mp and mp['all_match'] and mp['enemy_takeovers'] == 1 and mp['via_neutral'] == 1 and mp['direct'] == 0,
+              'multi-point: port rule MATCH on every capture, one takeover via Neutral (%s)' % (
+                  mp and [(r['frame'], r['verdict']) for r in mp['captures']]))
+        check(b['frames']['C'] == 1500 and b['frames']['D'] == 2399 and b['frames']['E'] == 2609 and
+              b['compare']['capture_to_zero']['verdict'] == 'MATCH', 'multi-point: C 1500 / D 2399 / E 2609 MATCH')
+        check('MULTI-POINT (2 relevant points' in text and 'RESULT multi-point rule vs port: every capture MATCH' in text,
+              'multi-point report lines')
+        synth_steal(tmp, via_neutral=False)
+        meta, modes, lua = load(tmp)
+        mp = report(meta, modes, lua, None)[1]['battles'][0]['multi']
+        check(mp['direct'] == 1 and mp['via_neutral'] == 0, 'multi-point: a direct takeover is counted as direct')
+        synth_steal(tmp, arm_after_first=True)
+        meta, modes, lua = load(tmp)
+        text, out = report(meta, modes, lua, None)
+        mp = out['battles'][0]['multi']
+        check(mp['all_match'] is False and 'DIFF present' in text, 'multi-point: an arm on a not-allied capture is a DIFF')
+        # teardown garbage owners after the end are not captures
+        synth_steal(tmp)
+        with open(tmp, 'a') as f:
+            f.write('ST n=1 frame=3000 armed=0 timer=-1 cpp=-1 decl=1 cd=0 dtype=21 dplayer=0 dcd=210 hold=0 '
+                    'owners=100:-17891602,200:-17891602' + chr(10))
+        meta, modes, lua = load(tmp)
+        text, out = report(meta, modes, lua, None)
+        mp = out['battles'][0]['multi']
+        check(len(mp['captures']) == 4 and 'last capture at 1500' in text, 'garbage owner values are not owner changes')
         # no capture at all
         synth(tmp, C=10 ** 6, test_after=0, zero_after=0, lua=False)
         meta, modes, lua = load(tmp)

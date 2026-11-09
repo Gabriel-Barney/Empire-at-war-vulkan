@@ -2,7 +2,7 @@
 """cu8h_dbg.py - synced-draw tracer for the running retail game (roadmap group cu8h, t01; CU8G_T02_ENV_PICK_RE sec. 7 P1).
 
   cu8h_dbg.py --out LOG [--pid N | --wait-process-sec 600] [--arm-file PATH | --arm-now] [--stop-file PATH]
-              [--stop-mode-frame 90] [--max-hits 300000] [--state-rva 0xa13e24 | --state-addr 0xADDR]
+              [--stop-mode-frame 90] [--stop-after-frames N] [--max-hits 300000] [--state-rva 0xa13e24 | --state-addr 0xADDR]
               [--frames 24] [--allow-unknown-exe]
 
 A small project-local debugger (Windows debug API through ctypes, nothing installed). It attaches to StarWarsG.exe,
@@ -18,7 +18,9 @@ Arming (the main-menu background battle draws all the time, so the watchpoint is
   --arm-now          arm at once;
   --arm-file PATH    arm when PATH exists, disarm when it is removed (touch it just before Start / Begin).
 Stopping: game exit; --stop-file PATH appears; --max-hits; or --stop-mode-frame N: a tactical mode (type 1 / 2)
-that was not the current mode when the watchpoint was armed reaches mode frame N (default 90 = 3 s of battle).
+that was not the current mode when the watchpoint was armed reaches mode frame N (default 90 = 3 s of battle);
+or --stop-after-frames N: the mode that was current when it armed is N mode frames past its frame at arming (for a
+trace armed inside a battle, e.g. just before an order; 0 = off).
 On a stop the watchpoint is cleared in every thread (inside a debug event, all threads frozen), then
 DebugActiveProcessStop detaches; DebugSetProcessKillOnExit(FALSE) keeps the game alive if this script dies.
 
@@ -159,11 +161,17 @@ class Ctx:
 
 
 class Log:
+    """Buffered, but flushed at least once a second and on every non-HIT line, so the file shows progress."""
     def __init__(self, path):
         self.f = open(path, 'w', buffering=1 << 16)
+        self.last = time.monotonic()
 
     def __call__(self, line):
         self.f.write(line + '\n')
+        now = time.monotonic()
+        if not line.startswith('HIT ') or now - self.last >= 1.0:
+            self.f.flush()
+            self.last = now
 
     def close(self):
         self.f.flush()
@@ -191,6 +199,7 @@ class Tracer:
         self.hits = 0
         self.prev_state = None
         self.arm_mode = None
+        self.arm_mf = None
         self.ctx = Ctx()
         self.ctx2 = Ctx()
         self.ev = ctypes.create_string_buffer(512)
@@ -259,6 +268,7 @@ class Tracer:
         if on:
             m = self.mode()
             self.arm_mode = m[2]
+            self.arm_mf = m[3]
             self.prev_state = self.u32(self.state_addr)
         self.log('%s %s' % ('ARM' if on else 'DISARM', kv(why=why, threads=ok, failed=bad, t='%.3f' % time.time(),
                                                             state='%08x' % (self.prev_state or 0))))
@@ -319,6 +329,10 @@ class Tracer:
         if self.a.stop_mode_frame and mt in (1, 2) and cur and cur != self.arm_mode and mf is not None \
                 and mf >= self.a.stop_mode_frame:
             self.stop_why = 'mode_frame_%d' % mf
+        after = getattr(self.a, 'stop_after_frames', 0)
+        if after and cur and cur == self.arm_mode and self.arm_mf is not None and mf is not None \
+                and mf >= self.arm_mf + after:
+            self.stop_why = 'after_frames_%d' % (mf - self.arm_mf)
 
     # main loop
     def attach(self):
@@ -588,6 +602,7 @@ def main():
     ap.add_argument('--arm-now', action='store_true')
     ap.add_argument('--stop-file')
     ap.add_argument('--stop-mode-frame', type=int, default=90)
+    ap.add_argument('--stop-after-frames', type=int, default=0)
     ap.add_argument('--max-hits', type=int, default=300000)
     ap.add_argument('--state-rva', type=lambda s: int(s, 0), default=STATE_RVA)
     ap.add_argument('--state-addr', type=lambda s: int(s, 0))
@@ -605,7 +620,7 @@ def main():
         ap.error('give --arm-now or --arm-file')
     log = Log(a.out)
     log('CU8HDBG 1 ' + kv(t=time.strftime('%Y-%m-%dT%H:%M:%S'), state_rva='%x' % a.state_rva,
-                          stop_mode_frame=a.stop_mode_frame))
+                          stop_mode_frame=a.stop_mode_frame, stop_after_frames=a.stop_after_frames))
     if a.pid is None:
         a.pid = find_game(a, log)
         if a.pid is None:

@@ -176,6 +176,19 @@ slot, `03` f32 **health fraction** (corrected 2026-10-27; earlier "scale" was wr
 [M] for the rest. Props (trees, rocks) are ordinary objects; there is no separate prop list. Endor: 1514
 objects.
 
+**Object chunks after `0x459` (2026-11-09, storyb).** Seen orders in the 212 FoC maps (`maps.meg`, 128 977 objects):
+`454,459` (121 399), `454,459,46E` (2615), `454,459,476` (2222), `454,459,46E,482` (1955), `454,459,482` (773),
+`454,459,482,476` (13). The GOM loader 0x2b0a20 hands both to a holder object on the game
+object: `0x46E` → obj +0x1b8, `0x482` → obj +0x1c0, both through the holder's vf +8 (Load), for map and save loads
+alike [H].
+- **`0x482` = the object's hint (marker) name** [H]. Always one leaf child chunk `0` holding one mini `01`: the
+  NUL-terminated name (2741 hints in 155 maps; `UM01_A_Crimelord_Unleashed.TED`: 154 of 677 objects, e.g.
+  `falcongear1`, `droidintnode`). Lua `Find_Hint(type, name)` (0x6a2ab0) walks the GOM object list, keeps objects
+  whose type (0x3973b0: the object's own, or its team / company parent's) is the asked type, and compares the name
+  with the string at holder +8 (an MSVC `std::string`) by `_stricmp` (case-insensitive); the first match in list
+  order wins. Without a name it returns the first object of the type.
+- **`0x46E`**: one leaf child `0` with mini `01` = 1 byte (all 87 in UM01 are 0). Meaning not read [L].
+
 **`03` correction (2026-10-27, RE agent).** `03` is the object's current health divided by its maximum
 tactical health, not a scale. The writer (0x3a5ad0) stores health (object +0x5c) / Get_Max_Tactical_Health
 (0x3727a0: type Tactical_Health × difficulty factor). The placement parser (0x39ce40) copies the 4 bytes raw

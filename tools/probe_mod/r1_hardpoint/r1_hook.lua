@@ -21,6 +21,7 @@
 -- heap scan. f = GetCurrentTime() * 30 rounded. Lua 5.0: no '#', no math library, table.getn.
 
 R1_LOG = {}
+R1_LOG2 = {}
 R1_N = 0
 R1_SID = string.sub((string.gsub(tostring(R1_LOG), "[^%w]", "")), -6)
 R1 = { on = false, done = false, f = -1, tries = 0, pending = false, old_rate = nil, fac = "?", mode = "?",
@@ -59,7 +60,11 @@ function R1_Rec(kind, fields)
 		if f then
 			fs = tostring(f)
 		end
-		R1_LOG[R1_N] = "R1P|" .. kind .. "|sid=" .. R1_SID .. "|n=" .. R1_N .. "|f=" .. fs .. "|" .. body .. "|END"
+		local base = "R1P|" .. kind .. "|sid=" .. R1_SID .. "|n=" .. R1_N .. "|f=" .. fs .. "|" .. body
+		R1_LOG[R1_N] = base .. "|END"
+		-- A second copy with different text (equal strings are one object in Lua), kept in another allocation: the heap
+		-- scan lost single records in the r1b t07 runs (the parser merges the copies by sid + n).
+		R1_LOG2[R1_N] = base .. "|dup=1|END"
 	end)
 end
 
@@ -253,6 +258,8 @@ end
 function R1_Damage(tag, amount, arg, label)
 	local o = R1.ships[tag]
 	local res = "dead"
+	R1_Rec("CALL", "label=" .. label .. "|ship=" .. tag .. "|amount=" .. R1_Num(amount, "%.0f") .. "|arg=" .. R1_Str(arg) ..
+		"|valid=" .. tostring(R1_Valid(o)) .. "|" .. R1_ShipState("A"))
 	if R1_Valid(o) then
 		local ok, err = pcall(function()
 			if arg == nil or arg == "" then
@@ -273,6 +280,40 @@ function R1_Damage(tag, amount, arg, label)
 	return res
 end
 
+-- Optional (R1_CFG.lua_camera): centre the camera on ship A. Point_Camera_At from a free-store script did not move
+-- the camera in the s78 run, so this is a trial; every call is pcall'd and recorded (CAM). The driver frames by hand.
+function R1_Camera(s)
+	if not R1_CFG.lua_camera then
+		return
+	end
+	local o = R1.ships.A
+	if not R1_Valid(o) then
+		return
+	end
+	local ok, err = pcall(function() Point_Camera_At(o.Get_Position()) end)
+	R1_Rec("CAM", "stage=" .. s.key .. "|view=" .. R1_Str(s.view) .. "|res=" .. tostring(ok) .. "|err=" ..
+		string.sub(R1_Str(err), 1, 100))
+end
+
+-- Optional (R1_CFG.turn_dy): order ship A to move to (x, y + turn_dy) so that it faces away from a camera in the south
+-- (stern view without rotating the camera). Trial: pcall'd, recorded (TURN); the polls' xy show whether it moved.
+function R1_Turn(F)
+	if R1_CFG.turn_dy == nil then
+		return
+	end
+	local o = R1.ships.A
+	if not R1_Valid(o) then
+		return
+	end
+	local pos = R1_Pos(R1_CFG.site.x + (R1_CFG.turn_dx or 0), R1_CFG.site.y + R1_CFG.turn_dy, R1_CFG.site.z)
+	local ok, err = false, "nopos"
+	if pos then
+		ok, err = pcall(function() o.Move_To(pos) end)
+	end
+	R1_Rec("TURN", "res=" .. tostring(ok) .. "|dy=" .. R1_Num(R1_CFG.turn_dy, "%.0f") .. "|err=" ..
+		string.sub(R1_Str(err), 1, 100) .. "|" .. R1_ShipState("A"))
+end
+
 function R1_StageTimes(i)
 	local kill = R1_CFG.first_kill + (i - 1) * R1_CFG.period
 	return kill - R1_CFG.pre, kill
@@ -285,7 +326,8 @@ function R1_Tick(F)
 		R1_Say("TEXT_R1P_ARMED")
 		R1_Rec("PLAN", "site=" .. R1_Num(cfg.site.x, "%.0f") .. "," .. R1_Num(cfg.site.y, "%.0f") .. "|b_dy=" ..
 			R1_Num(cfg.b_dy, "%.0f") .. "|stages=" .. table.getn(cfg.stages) .. "|first_kill=" .. cfg.first_kill ..
-			"|period=" .. cfg.period)
+			"|period=" .. cfg.period .. "|profile=" .. R1_Str(cfg.profile) .. "|lua_camera=" .. tostring(cfg.lua_camera) ..
+			"|turn=" .. tostring(cfg.turn_dy ~= nil))
 	end
 	if R1.phase == "wait_spawn" then
 		if F >= cfg.spawn_frame then
@@ -294,12 +336,17 @@ function R1_Tick(F)
 			R1_Poll(F, "spawn")
 			R1_Say("TEXT_R1P_SPAWNED")
 			R1.phase = "stages"
+			R1.turn_at = F + 30
 			R1.stage = 1
 			R1.said_pre = false
 			R1.killed = false
 		end
 		return
 	elseif R1.phase == "stages" then
+		if R1.turn_at and F >= R1.turn_at then
+			R1.turn_at = nil
+			R1_Turn(F)
+		end
 		local s = cfg.stages[R1.stage]
 		if s == nil then
 			R1.phase = "tail"
@@ -313,6 +360,7 @@ function R1_Tick(F)
 					"|hp=" .. tostring(s.hp) .. "|arg=" .. R1_Str(s.arg) .. "|alt=" .. R1_Str(s.alt) .. "|amount=" ..
 					R1_Num(s.amount, "%.0f") .. "|t_kill=" .. t_kill .. "|mode=" .. R1.name_mode)
 				R1_Poll(F, "pre")
+				R1_Camera(s)
 			end
 			if not R1.killed and F >= t_kill then
 				R1.killed = true
@@ -334,6 +382,7 @@ function R1_Tick(F)
 				if R1.stage == 1 then
 					R1.fl = { hull = R1_Get(R1.ships.A, "Get_Hull"), c = R1_CountN(cfg.stages[1].breakoff or ""), f = F }
 				end
+				-- The CALL record is written before the call: a CALL without a KILL after it shows a script stopped in the call.
 				R1_Damage(s.ship, amount, arg, s.key)
 				R1_Say("TEXT_R1P_" .. s.key .. "_DONE")
 				R1.fast_until = F + cfg.fast
@@ -356,7 +405,11 @@ function R1_Tick(F)
 				R1_Rec("MODE", "mode=" .. R1.name_mode .. "|prop=" .. tostring(R1.fl.c) .. ">" .. tostring(c) .. "|drop=" ..
 					R1_Num(drop) .. "|valid=" .. tostring(R1_Valid(R1.ships.A)))
 			end
-			if R1.killed and F >= t_kill + cfg.period - cfg.pre then
+			local wait_end = cfg.period - cfg.pre
+			if s.final then
+				wait_end = 450   -- the last step: 15 s of polls after the call, then the tail
+			end
+			if R1.killed and F >= t_kill + wait_end then
 				R1_Poll(F, "end")
 				R1_Rec("SEND", "st=" .. R1.stage .. "|key=" .. s.key)
 				R1.stage = R1.stage + 1

@@ -1,5 +1,32 @@
 # R1 hardpoint probe (roadmap r1 t01, "Provisional hardpoint-destroyed rule")
 
+## r1b t07: the SHORT rerun (default profile `short`; the original 7-stage run is `--profile full`)
+
+What the first run (2026-11-08, `out/20261108-235419`) left open: side views of the FL and ML/MR kills, a stern view of
+the engine fire, and what retail does with a name that does not exist. The `short` profile (about 6 minutes of battle):
+
+| Time | Stage | Call on ship A | Camera (by hand) |
+|---|---|---|---|
+| 0:10 | spawn A and B | | |
+| 1:30 | FL | `Take_Damage(5000, "HP_Star_Destroyer_Weapon_FL")` | SIDE view of the left hull edge, bow end |
+| 2:30 | ML | `..., "HP_Star_Destroyer_Weapon_ML"` | SIDE view of the left edge, mid-ship |
+| 3:30 | MR | `..., "HP_Star_Destroyer_Weapon_MR"` | SIDE view of the right edge, mid-ship |
+| 4:30 | ENG | `..., "HP_Star_Destroyer_Engines"` | STERN view (engine glow and fire) |
+| 5:30 | BOGUS | `Take_Damage(1000 + 1.1 x shield, "HP_NO_SUCH")` | any; LAST step |
+
+- Each kill is announced 15 s ahead. `R1 PROBE:` messages are the clock.
+- The BOGUS step is last because retail may stop the Lua script inside that call. The hook writes its `DONE` record
+  first, and a `CALL` record before every `Take_Damage`: a `CALL` with no `KILL` after it means the script stopped there
+  (`lua_bogus_name = SCRIPT_STOPPED_AT_CALL`). If the script survives, `TEXT_R1P_BOGUS_DONE` shows.
+- ML and MR have no breakoff prop: only `Get_Hull` (and the screenshots) show them.
+- `report.json` `answers` now holds `kill_ml`, `kill_mr`, `kill_eng`, `kill_shld`, `kill_trac` and `lua_bogus_name` next to
+  the old keys (mapped values such as `KILLS_THE_HARDPOINT`). A step that never ran is `NOT_RUN`, never a "no match" value.
+- Camera: `--lua-camera` makes the hook call `Point_Camera_At(A position)` at each pre-message (record `CAM`). It is a
+  trial: the s78 run saw no effect from a free-store script. Rotation is by hand: Ctrl + middle-drag turns the view around
+  the screen centre (P1 of `p1_camera_input`, land; unchecked in space), middle-click resets the angle.
+- BOGUS verdicts: `SCRIPT_STOPPED_AT_CALL`, `NO_MATCH_HIT_SHIP` (hull or shield fell as for a normal hit),
+  `NO_MATCH_UNSEEN_BY_LUA` (shield already 0 and the hull masked by the hardpoint fraction), `NO_MATCH_NO_EFFECT`.
+
 ## The question
 
 The port draws a destroyed hardpoint with the B.10 rule (`docs/re/SPACE_AND_OPEN.md` §B.10,
@@ -196,7 +223,7 @@ The **ANSWERS** list at the end of the report uses these values:
 | `r1_cleanup.py` / `cleanup_r1.cmd` | Deletes `Mods\R1HardpointProbe`, but only when `R1_PROBE_MARKER.txt` is in it. That folder is the only thing the probe installs |
 | `selftest_r1.py` | Offline check: build and Lua 5.0 compile; the hook under a stubbed hardpoint engine in two lookup variants plus a no-human run; the parser, also on shuffled records; the model sheet |
 
-Offline check: `toolchain\venv\Scripts\python.exe -I tools\probe_mod\r1_hardpoint\selftest_r1.py` (ends with
+Offline check (both profiles, a stop-at-bogus-name variant, and the 2026-11-08 run's records when present): `toolchain\venv\Scripts\python.exe -I tools\probe_mod\r1_hardpoint\selftest_r1.py` (ends with
 `R1 SELFTEST OK`).
 
 ## Known limits

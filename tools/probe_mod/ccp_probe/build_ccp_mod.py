@@ -42,15 +42,26 @@ SIDES = {
     'EMPIRE': ('Empire', 'REBEL', [('Imperial_Stormtrooper_Squad', 2), ('AT_AT_Walker', 1)]),
     'REBEL': ('Rebel', 'EMPIRE', [('Rebel_Infantry_Squad', 2), ('T4B_Tank', 1)]),
 }
+# The AI side's capturers for the "steal" scenario (ccpgu t04): AI faction -> (type, squads).
+AI_SQUADS = {'REBEL': ('Rebel_Infantry_Squad', 2), 'EMPIRE': ('Imperial_Stormtrooper_Squad', 2)}
 PLAYERS = ('Empire', 'Rebel', 'Neutral')
+SCENARIOS = ('all', 'sequential', 'steal')   # see ccp_hook.lua CCP_BuildPlan
+DEFAULT_STAGGER_SEC = 20.0
+DEFAULT_STEAL_SEC = 30.0
 
 
-def config(game, map_name, human, spawn=True, invulnerable=True, session='?'):
+def config(game, map_name, human, spawn=True, invulnerable=True, session='?', scenario='all',
+           stagger_sec=DEFAULT_STAGGER_SEC, steal_sec=DEFAULT_STEAL_SEC):
     hname, ai, squads = SIDES[human.upper()]
+    if scenario not in SCENARIOS:
+        raise SystemExit('unknown scenario %r (one of %s)' % (scenario, ', '.join(SCENARIOS)))
+    ai_t, ai_n = AI_SQUADS[ai]
     cfg = {'session': session, 'map': map_name.upper(), 'human': hname, 'human_faction': human.upper(), 'ai': ai,
            'enum_frame': ENUM_FRAME, 'start_frame': START_FRAME, 'stop_frame': STOP_FRAME, 'hb_frames': 90,
            'spawn': bool(spawn), 'invulnerable': bool(invulnerable), 'relevant': list(ccp_maps.RELEVANT),
            'fixed': list(ccp_maps.FIXED), 'squads': [{'type': t, 'n': n} for t, n in squads], 'players': list(PLAYERS),
+           'ai_squads': [{'type': ai_t, 'n': ai_n}], 'scenario': scenario,
+           'stagger_frames': int(round(stagger_sec * 30)), 'steal_frames': int(round(steal_sec * 30)),
            'expected': None, 'note': ''}
     try:
         flags = ccp_maps.marker_flags()
@@ -86,6 +97,11 @@ def lua_config(cfg):
          '\trelevant = { %s },' % ', '.join(lua_str(t) for t in cfg['relevant']),
          '\tfixed = { %s },' % ', '.join(lua_str(t) for t in cfg['fixed']),
          '\tsquads = { %s },' % ', '.join('{ type = %s, n = %d }' % (lua_str(s['type']), s['n']) for s in cfg['squads']),
+         '\tai_squads = { %s },' % ', '.join('{ type = %s, n = %d }' % (lua_str(s['type']), s['n'])
+                                          for s in cfg['ai_squads']),
+         '\tscenario = %s,' % lua_str(cfg['scenario']),
+         '\tstagger_frames = %d,' % cfg['stagger_frames'],
+         '\tsteal_frames = %d,' % cfg['steal_frames'],
          '\tplayers = { %s },' % ', '.join(lua_str(p) for p in cfg['players']),
          '}', '']
     return '\n'.join(L)
@@ -97,8 +113,8 @@ def freestore_text(game, cfg, source_zip=None):
 
 
 def build(game, out, source_zip=None, map_name=DEFAULT_MAP, human=DEFAULT_HUMAN, config_out=None, spawn=True,
-          invulnerable=True, session='?'):
-    cfg = config(game, map_name, human, spawn, invulnerable, session)
+          invulnerable=True, session='?', scenario='all', stagger_sec=DEFAULT_STAGGER_SEC, steal_sec=DEFAULT_STEAL_SEC):
+    cfg = config(game, map_name, human, spawn, invulnerable, session, scenario, stagger_sec, steal_sec)
     if os.path.exists(out):
         if not os.path.exists(os.path.join(out, MARKER)):
             raise SystemExit('refusing to overwrite %s: not a CCP probe folder' % out)
@@ -129,11 +145,16 @@ def main():
     ap.add_argument('--human', default=DEFAULT_HUMAN, choices=sorted(SIDES))
     ap.add_argument('--no-spawn', action='store_true')
     ap.add_argument('--no-invulnerable', action='store_true')
+    ap.add_argument('--scenario', default='all', choices=SCENARIOS,
+                    help='all: capturers on every point at once (t02); sequential: one point every --stagger-sec; '
+                         'steal: the AI takes point 1 first, the human takes the rest, then retakes point 1 (t04)')
+    ap.add_argument('--stagger-sec', type=float, default=DEFAULT_STAGGER_SEC)
+    ap.add_argument('--steal-sec', type=float, default=DEFAULT_STEAL_SEC)
     ap.add_argument('--config-out')
     ap.add_argument('--session', default='manual')
     a = ap.parse_args()
     build(a.game, a.out or os.path.join(a.game, 'corruption', 'Mods', MOD_NAME), a.source_zip, a.map, a.human,
-          a.config_out, not a.no_spawn, not a.no_invulnerable, a.session)
+          a.config_out, not a.no_spawn, not a.no_invulnerable, a.session, a.scenario, a.stagger_sec, a.steal_sec)
     return 0
 
 

@@ -11,7 +11,19 @@ Sessions (one mod folder, Mods\\CU8HProbe, rebuilt for each session; MODPATH=Mod
             invasion loads the same map as the skirmish half through the campaign path (no reseed, 0x2a1eb0 after the
             pick). Files: CampaignFiles.xml, CU8H_Probe_Campaigns.xml, Planets.xml, texts. The synced draws are traced by
             cu8h_dbg.py (a debugger), not by the mod.
-  luke      t02 rerun of the Saber_Throw half: as hum without Vader (HUM below, LUKE overrides).
+  luke      t02 rerun of the Saber_Throw half: as hum without Vader (HUM below, LUKE overrides). cu8k t05 (CU8F sec. 2.7
+            item 6) reruns it with cu8h_run.py's watcher also logging the thrown saber (position, travelled, max travel).
+  kashyyyk  cu8k t05 (MOVEMENT sec. 4.7.6 items 1 and 3): campaign "CU8K PROBE: KASHYYYK SPACE" with Corellia (human
+            Rebel fleet: Calamari_Cruiser, Nebulon_B_Frigate, two Rebel_X-Wing_Squadron) and Kashyyyk (Empire:
+            Empire_Star_Base_2; no AI, no fleet), route Corellia_Kashyyyk. Moving the fleet to Kashyyyk starts a
+            galactic space battle on _Space_Planet_Kashyyyk_01.ted (the campaign spawn 0x2a1eb0 path). Files:
+            CampaignFiles.xml, CU8K_Probe_Campaigns.xml, texts. The draws are traced by cu8h_dbg.py.
+  jetpack   cu8k t05 (MOVEMENT sec. 4.7.6 item 4, sec. 4.7.4): land skirmish _MP_LAND_DAGOBAH, human EMPIRE vs AI REBEL.
+            The AI Rebel free store spawns three Dark_Trooper_PhaseII (JET_PACK, secondary JETPACK_LOCOMOTOR) for the
+            human, records C8G|DBGARM| (cu8h_run.py then arms the debugger), and 8 s later runs three trials: A moves
+            and activates JET_PACK while moving (the swap re-issues the move), B activates it standing (the hold), C
+            moves and activates it with a position (as the shipped scripts do); then C8G|DBGSTOP|. Files:
+            BusyTacticalFreeStore.lua (shipped + C8_CFG + ../cu8g_probes/cu8g_common.lua + cu8k_jetpack.lua), texts.
   hum       t02 (CU8F_T01_T02_T07_RE sec. 2.5): land skirmish _MP_LAND_DAGOBAH, human EMPIRE vs AI REBEL. The AI Rebel free
             store spawns Darth_Vader for the human Empire in an open spot, leaves him idle, gives him a target, removes
             it, waits past the 15 s minimum drawn time; then Luke_Skywalker_Jedi (also for the human player) with
@@ -37,7 +49,7 @@ import build_cu8g_mod as g  # noqa: E402  (Source, land_site, lua_value, crlf, w
 
 MOD_NAME = 'CU8HProbe'
 MARKER = 'CU8H_PROBE_MARKER.txt'
-SESSIONS = ('galendor', 'hum', 'luke')
+SESSIONS = ('galendor', 'hum', 'luke', 'kashyyyk', 'jetpack')
 DEFAULT_GAME = g.DEFAULT_GAME
 LAND_MAP = '_MP_LAND_DAGOBAH'
 ENDOR_MAP = '_MP_LAND_ENDOR.ted'
@@ -61,6 +73,18 @@ HUM = {
 # 20 s after.
 LUKE = dict(HUM, luke_only=True, luke_idle=150, luke_fallback=15, luke_second=1050, luke_second_dy=120.0,
             luke_second_throw=5, luke_watch=1500, luke_after=600)
+# session jetpack (cu8k t05, MOVEMENT sec. 4.7.6 item 4): three Dark_Trooper_PhaseII 120 units apart at the site, spawned
+# at 10 s; DBGARM 1 s later; trial A 8 s after DBGARM (the arm file reaches the debugger about 100 frames late; move
+# 350 units east, JET_PACK to that goal 15 frames later), trial B 3 s later (JET_PACK standing, to a point 300 units
+# east), trial C 3 s later (move, then JET_PACK at a point 300 units east); DBGSTOP 7 s after C. JET_PACK targets are
+# marker objects ('target', fallback 'target_fallback') spawned with the units, as in the shipped scripts: a bool
+# (run 1) and a Create_Position target (rerun, 2026-11-09 06:29) both ended the probe script at the activation.
+JET = {
+    'human_faction': 'Empire', 'unit': 'Dark_Trooper_PhaseII', 'ability': 'JET_PACK',
+    'start_frame': 300, 'arm_after': 30, 'arm_lead': 240, 'spacing_y': 120.0, 'move_dx': 350.0, 'jet_delay': 15,
+    'jump_dx': 300.0, 'trial_gap': 90, 'after': 210, 'end_after': 60, 'poll_every': 15,
+    'target': 'Story_Trigger_Zone', 'target_fallback': 'Generic_Marker_Land',
+}
 
 TEXTS = {
     'galendor': [
@@ -72,6 +96,16 @@ TEXTS = {
         ('TEXT_CU8H_HUM_WAIT', 'CU8H PROBE: saber-throw probe armed. Give no orders; Luke appears at 10 s.'),
         ('TEXT_CU8H_HUM_LUKE', 'CU8H PROBE: Luke saber-throw part running. Give no orders.'),
         ('TEXT_CU8H_HUM_DONE', 'CU8H PROBE: lightsaber probe done. Quit the battle and the game.'),
+    ],
+    'kashyyyk': [
+        ('TEXT_CU8K_CAMP_NAME', 'CU8K PROBE: KASHYYYK SPACE'),
+        ('TEXT_CU8K_CAMP_DESC', 'cu8k t05 probe. Play the REBEL. Move the fleet at Corellia to Kashyyyk and choose '
+                                'Begin. The battle loads _Space_Planet_Kashyyyk_01. Never save.'),
+    ],
+    'jetpack': [
+        ('TEXT_CU8K_JET_WAIT', 'CU8K PROBE: jetpack probe armed. Give no orders; three Dark Troopers appear at 10 s.'),
+        ('TEXT_CU8K_JET_ARM', 'CU8K PROBE: debugger arming; the jetpack trials start in 8 s. Give no orders.'),
+        ('TEXT_CU8K_JET_DONE', 'CU8K PROBE: jetpack probe done. Quit the battle and the game.'),
     ],
     'hum': [
         ('TEXT_CU8H_HUM_WAIT', 'CU8H PROBE: lightsaber probe armed. Give no orders; Vader appears at 10 s.'),
@@ -134,6 +168,59 @@ CAMPAIGN = r'''<?xml version="1.0"?>
 '''
 
 
+CAMPAIGN_KASHYYYK = r'''<?xml version="1.0"?>
+<Campaigns>
+	<!-- cu8k t05 probe (tools/probe_mod/cu8h_probes, session kashyyyk) -->
+	<Campaign Name="CU8K_Probe_Kashyyyk">
+		<Campaign_Set> CU8K_Probe_Kashyyyk_Set </Campaign_Set>
+		<Sort_Order>0</Sort_Order>
+		<Text_ID> TEXT_CU8K_CAMP_NAME </Text_ID>
+		<Description_Text> TEXT_CU8K_CAMP_DESC </Description_Text>
+		<Camera_Shift_X> 0.0 </Camera_Shift_X>
+		<Camera_Shift_Y> 0.0 </Camera_Shift_Y>
+		<Camera_Distance> 1200.0 </Camera_Distance>
+		<Locations>
+				Galaxy_Core_Art_Model,
+				Corellia,
+				Kashyyyk
+		</Locations>
+		<Trade_Routes>
+				Corellia_Kashyyyk
+		</Trade_Routes>
+		<Home_Location> Rebel, Corellia </Home_Location>
+		<Home_Location> Empire, Kashyyyk </Home_Location>
+		<Starting_Active_Player> Rebel </Starting_Active_Player>
+		<AI_Player_Control> Empire, None </AI_Player_Control>
+		<AI_Player_Control> Underworld, None </AI_Player_Control>
+		<AI_Player_Control> Pirates, None </AI_Player_Control>
+		<Human_Victory_Conditions>
+				Galactic_All_Planets_Controlled
+		</Human_Victory_Conditions>
+		<AI_Victory_Conditions>
+				Galactic_All_Planets_Controlled
+		</AI_Victory_Conditions>
+		<Markup_Filename>Empire, DefaultGalacticHints </Markup_Filename>
+		<Markup_Filename>Pirates, DefaultGalacticHints </Markup_Filename>
+		<Markup_Filename>Rebel, DefaultGalacticHints </Markup_Filename>
+		<Markup_Filename>Underworld, DefaultGalacticHints </Markup_Filename>
+		<Supports_Custom_Settings>False</Supports_Custom_Settings>
+		<Show_Completed_Tab>False</Show_Completed_Tab>
+		<Starting_Credits> Rebel, 0 </Starting_Credits>
+		<Starting_Tech_Level> Rebel, 1 </Starting_Tech_Level>
+		<Max_Tech_Level> Rebel, 1 </Max_Tech_Level>
+		<Starting_Credits> Empire, 0 </Starting_Credits>
+		<Starting_Tech_Level> Empire, 1 </Starting_Tech_Level>
+		<Max_Tech_Level> Empire, 1 </Max_Tech_Level>
+		<Starting_Forces> Rebel, Corellia, Calamari_Cruiser </Starting_Forces>
+		<Starting_Forces> Rebel, Corellia, Nebulon_B_Frigate </Starting_Forces>
+		<Starting_Forces> Rebel, Corellia, Rebel_X-Wing_Squadron </Starting_Forces>
+		<Starting_Forces> Rebel, Corellia, Rebel_X-Wing_Squadron </Starting_Forces>
+		<Starting_Forces> Empire, Kashyyyk, Empire_Star_Base_2 </Starting_Forces>
+	</Campaign>
+</Campaigns>
+'''
+
+
 def prepare(out, label):
     if os.path.exists(out):
         if not os.path.exists(os.path.join(out, MARKER)):
@@ -152,11 +239,11 @@ def lua_config(cfg):
     return '-- generated by build_cu8h_mod.py (session %s)\nC8_CFG = %s\n' % (cfg['session'], g.lua_value(cfg, ''))
 
 
-def freestore(src, cfg):
+def freestore(src, cfg, hook='cu8h_hum.lua'):
     shipped, fs_src = src.need(g.FREESTORE)
     text = shipped.decode('latin-1').replace('\r\n', '\n').rstrip('\n')
     tail = (lua_config(cfg) + '\n' + kit_text(os.path.join(PROBE_MOD, 'cu8g_probes', 'cu8g_common.lua')) + '\n' +
-            kit_text(os.path.join(HERE, 'cu8h_hum.lua')))
+            kit_text(os.path.join(HERE, hook)))
     return g.crlf(text + '\n\n' + tail), fs_src
 
 
@@ -187,6 +274,18 @@ def build(session, game, out, source_zip=None, no_text=False):
         put('Data\\XML\\CU8H_Probe_Campaigns.xml', g.crlf(CAMPAIGN))
         put('Data\\XML\\Planets.xml', patch_planets(src.need(g.PLANETS)[0]))
         cfg.update({'map': 'campaign CU8H_Probe_Endor (Jabiim land map %s)' % ENDOR_MAP})
+    elif session == 'kashyyyk':
+        cf = src.need(g.CAMPAIGNFILES)[0].decode('latin-1')
+        i = cf.index('</Campaign_Files>')
+        put('Data\\XML\\CampaignFiles.xml', (cf[:i] + '\t<File>CU8K_Probe_Campaigns.xml</File>\r\n' + cf[i:]).encode('latin-1'))
+        put('Data\\XML\\CU8K_Probe_Campaigns.xml', g.crlf(CAMPAIGN_KASHYYYK))
+        cfg.update({'map': 'campaign CU8K_Probe_Kashyyyk (Kashyyyk space map _Space_Planet_Kashyyyk_01.ted)'})
+    elif session == 'jetpack':
+        site, note = g.land_site(game, LAND_MAP) if not src.zip else (dict(g.LAND_FALLBACK_SITE), 'fallback (offline)')
+        cfg.update({'ai_faction': 'REBEL', 'map': LAND_MAP, 'jet': dict(JET, site=site), 'site_note': note})
+        fs, fs_src = freestore(src, cfg, 'cu8k_jetpack.lua')
+        put('Data\\Scripts\\FreeStore\\BusyTacticalFreeStore.lua', fs)
+        cfg['freestore_source'] = fs_src
     else:
         site, note = g.land_site(game, LAND_MAP) if not src.zip else (dict(g.LAND_FALLBACK_SITE), 'fallback (offline)')
         cfg.update({'ai_faction': 'REBEL', 'map': LAND_MAP, 'hum': dict(LUKE if session == 'luke' else HUM, site=site), 'site_note': note})

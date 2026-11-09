@@ -594,7 +594,9 @@ container contribution through 0x4160a0 can also accept).
     range (> 0).
   - Melee units (`Targeting_Max_Attack_Distance` ≤ `Melee_Cutoff_Range`, 0x372210) against a team container:
     redo against the member nearest the attacker (0x404fc0).
-  - E without LAND_OBSTACLE (obj +0x346 = 0xFF): +10 for a moving team (locomotor vf +0x230); otherwise the
+  - E without LAND_OBSTACLE (obj +0x346 = 0xFF): +10 for a target with TEAM whose locomotor vf +0x230 is true,
+    i.e. **every land squad container, moving or not** (vf +0x230 is a class constant, MOVEMENT §4.7.1;
+    TACTICAL_COMBAT §5.4.2, s78m t07); otherwise the
     target footprint half-extent along the line of sight: |dot(target facing, direction)| > 0.7071 → X extent
     (0x396a30), else Y extent (0x396b70); each = `Custom_Hard_X/YExtent` × type +0x658 (deployed variants when
     deployed), fallback |model bbox max x/y| × +0x658. With a hardpoint argument: 0x397780 (team radius, else

@@ -5,6 +5,12 @@ write the report, then remove the mod and restore the profile (always, also afte
 
   ccp_run.py [--game DIR] [--map _MP_LAND_KAMINO] [--human EMPIRE] [--non-interactive] [--no-launch]
              [--no-preset] [--no-profile] [--no-spawn] [--no-invulnerable] [--wait-start-sec N] [--scan-sec S]
+             [--scenario all|sequential|steal] [--stagger-sec S] [--steal-sec S]
+
+  --scenario         multi-point maps (ccpgu t04, e.g. --map _MP_LAND_BOTHAWUI): 'all' (default) puts the human's
+                     capturers on every point at once; 'sequential' one point every --stagger-sec (20); 'steal' lets
+                     the AI's capturers take point 1 first, the human takes the other points, then --steal-sec (30)
+                     later the AI's units are despawned and the human takes point 1 from the AI
 
   --non-interactive  never waits for a key; prints progress, ends with CCP_RUN_DONE exit=<n>
   --no-launch        install + start the reader only; start the game yourself, from the corruption folder:
@@ -72,9 +78,22 @@ def map_label(map_name):
     return map_name.upper().replace('_MP_LAND_', '').capitalize()
 
 
-def steps_text(map_name, human, preset, ai):
+SCENARIO_TEXT = {
+    'all': ('About 5 s in, troopers and an AT-AT appear on every control point; ~10 s later the points are yours, 30 s\n'
+            '    after the last capture the victory text shows, ~7 s later the battle ends.'),
+    'sequential': ('About 5 s in, troopers and an AT-AT appear on point 1, 20 s later on point 2 (and so on). Each point\n'
+                   '    is yours 10 s after its units appear; 30 s after the LAST capture the victory text shows, ~7 s\n'
+                   '    later the battle ends. About 90 s of battle.'),
+    'steal': ('About 5 s in, Rebel troopers appear on point 1 and Empire troopers on the other points: point 1 turns\n'
+              '    Rebel, the others Empire. At ~35 s the Rebel troopers vanish and Empire troopers appear on point 1; it\n'
+              '    turns Neutral, then Empire; 30 s later the victory text shows, ~7 s later the battle ends. About\n'
+              '    100 s of battle.'),
+}
+
+
+def steps_text(map_name, human, preset, ai, scenario='all'):
     bar = '=' * 110
-    pick = ('already preset: the setup screen should open on CAPTURE CONTROL POINTS with %s selected; check both'
+    pick = ('already preset: the setup screen should open on CAPTURE CONTROL POINTS (retail label "Land Control") with %s selected; check both'
             % map_label(map_name)) if preset else (
         'in the game-type list (the box with LAND / SPACE / CAPTURE CONTROL POINTS rows, top left of the setup screen) '
         'click CAPTURE CONTROL POINTS, then pick %s in the map list' % map_label(map_name))
@@ -85,12 +104,12 @@ def steps_text(map_name, human, preset, ai):
  1) Main menu > Single Player > Skirmish. Game type and map: %s.
     Slot 1 (you): %s, team 1. Slot 2: AI (any difficulty) %s, team 2. Every other slot CLOSED. Defaults otherwise.
     Start the battle.
- 2) Give NO orders, click nothing on the map. 5 s in, the probe spawns your troopers and a walker on the
-    control point; they capture it (10 s), the 30 s domination timer runs, the victory text shows, ~7 s later the
-    battle ends. About 60 s of battle in all (phase "ended" in reader_status.json).
+ 2) Give NO orders, click nothing on the map. Scenario %s:
+    %s
+    (phase "ended" in reader_status.json).
  3) On the end screen: continue / quit to the main menu, then quit the game. The run ends and cleans up by itself.
 %s
-''' % (bar, build_ccp_mod.MOD_NAME, pick, human.upper(), ai, bar)
+''' % (bar, build_ccp_mod.MOD_NAME, pick, human.upper(), ai, scenario, SCENARIO_TEXT[scenario], bar)
 
 
 def restore_stale(out_root):
@@ -118,6 +137,9 @@ def main():
     ap.add_argument('--no-profile', action='store_true')
     ap.add_argument('--no-spawn', action='store_true')
     ap.add_argument('--no-invulnerable', action='store_true')
+    ap.add_argument('--scenario', default='all', choices=build_ccp_mod.SCENARIOS)
+    ap.add_argument('--stagger-sec', type=float, default=build_ccp_mod.DEFAULT_STAGGER_SEC)
+    ap.add_argument('--steal-sec', type=float, default=build_ccp_mod.DEFAULT_STEAL_SEC)
     ap.add_argument('--wait-start-sec', type=float, default=900)
     ap.add_argument('--scan-sec', type=float, default=5.0)
     ap.add_argument('--source-game', help=argparse.SUPPRESS)  # offline test: read shipped files here, install in --game
@@ -147,7 +169,7 @@ def main():
     with open(os.path.join(out_root, 'latest.txt'), 'w') as f:
         f.write(run_dir + '\n')
     mod = os.path.join(corr, 'Mods', build_ccp_mod.MOD_NAME)
-    info = {'game': a.game, 'mod': mod, 'map': a.map, 'human': a.human, 'started': time.time(),
+    info = {'game': a.game, 'mod': mod, 'map': a.map, 'human': a.human, 'scenario': a.scenario, 'started': time.time(),
             'modpath': MODPATH, 'launch': [exe] + WINDOWED + [MODPATH]}
     reader_log = os.path.join(run_dir, 'reader.log')
     cfg_path = os.path.join(run_dir, 'ccp_config.json')
@@ -169,7 +191,7 @@ def main():
                 say('profile preset: %s' % info['preset'])
         src = a.source_game or a.game
         _p, cfg = build_ccp_mod.build(src, mod, None, a.map, a.human, cfg_path, not a.no_spawn, not a.no_invulnerable,
-                                      os.path.basename(run_dir))
+                                      os.path.basename(run_dir), a.scenario, a.stagger_sec, a.steal_sec)
         exp = cfg.get('expected') or {}
         info['expected_points'] = len(exp.get('relevant', [])) if exp else None
         if exp and not exp.get('control'):
@@ -178,7 +200,7 @@ def main():
             [sys.executable, '-I', os.path.join(HERE, 'ccp_reader.py'), '--out', reader_log, '--config', cfg_path,
              '--status', status_path, '--wait-process-sec', str(int(a.wait_start_sec)), '--scan-sec', str(a.scan_sec)],
             stdout=open(os.path.join(run_dir, 'reader_stdout.txt'), 'w'), stderr=subprocess.STDOUT)
-        say(steps_text(a.map, a.human, preset, cfg['ai']))
+        say(steps_text(a.map, a.human, preset, cfg['ai'], a.scenario))
         say('run folder:', run_dir)
         t0 = time.time()
         if a.no_launch and not a.non_interactive:

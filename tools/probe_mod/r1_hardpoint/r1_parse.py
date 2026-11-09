@@ -38,6 +38,10 @@ PORT = {
     'DEATH': 'port CombatSystem kills every live destroyable hardpoint at owner death (combat_system.cpp:3038, '
              'HP_Take_Damage kind 6): one breakoff prop per live hardpoint that has one',
     'LOWER': 'port: no effect (same Lua path); retail lookup case rule unknown',
+    'ML': 'same Lua path as FL (no breakoff prop: only Get_Hull can show it)',
+    'MR': 'same Lua path as FL (no breakoff prop: only Get_Hull can show it)',
+    'BOGUS': 'port: Take_Damage(n, unknown name) is a no-op in battles; retail unknown (hit the hull, nothing, or the '
+             'Lua script stops)',
     'COLL': 'port: no effect (same Lua path); retail: does the Lua name also match Collision_Mesh (TACTICAL_COMBAT 2.9 '
             'lookup 0x394d40 is by Collision_Mesh for weapon hits)?',
 }
@@ -90,6 +94,7 @@ def parse_line(text):
 def load(path):
     recs = []
     seen = set()
+    seen_n = set()
     with open(path, encoding='ascii', errors='replace') as f:
         for line in f:
             for m in REC_RE.finditer(line):
@@ -99,6 +104,10 @@ def load(path):
                 seen.add(t)
                 r = parse_line(t)
                 if r:
+                    key = (r.get('sid'), r['n'])
+                    if r['n'] is not None and key in seen_n:
+                        continue          # the dup=1 copy of a record already read
+                    seen_n.add(key)
                     recs.append(r)
     return recs
 
@@ -161,6 +170,11 @@ def analyse(recs):
     out = {'sid': sid, 'armed': bool(arm), 'stages': [], 'apierr': [], 'errors': [], 'done': None, 'mode': None}
     lines = ['R1 hardpoint probe report', '=' * 26, 'records: %d total, %d in the armed script (sid %s)' % (
         len(recs), len(mine), sid)]
+    ns = {r['n'] for r in mine if r['n'] is not None}
+    out['missing_n'] = [i for i in range(1, max(ns) + 1) if i not in ns] if ns else []
+    if out['missing_n']:
+        lines.append('records lost by the heap scan (hook counter n missing between 1 and %d): %s' % (
+            max(ns), ','.join(str(i) for i in out['missing_n'][:40])))
     for s, k, fac in others:
         lines.append('  other script %s: %s fac=%s' % (s, k, fac))
     if not arm:
@@ -184,7 +198,7 @@ def analyse(recs):
     killed = set()
     killed_by_ship = {}
     coupling = None
-    cfg_stages = {s['key']: s for s in B.STAGES}
+    cfg_stages = B.STAGE_DEFS
     for st in stage_recs:
         n = st.get('st')
         key = st.get('key')
@@ -193,9 +207,58 @@ def analyse(recs):
         in_st = [r for r in mine if r.get('st') == n and r['rk'] == 'P']
         before = [r for r in in_st if r.get('why') == 'before']
         kill = [r for r in mine if r['rk'] == 'KILL' and r.get('label') == key]
+        call = [r for r in mine if r['rk'] == 'CALL' and r.get('label') == key]
+        if call and not kill:
+            # The Take_Damage call was made (CALL record) but never returned to the hook: retail stopped the script.
+            out['stages'].append({'st': n, 'key': key, 'kind': 'bogus_name', 'arg': call[-1].get('arg'),
+                                  'verdict': 'SCRIPT_STOPPED_AT_CALL', 'f_kill': call[-1]['f']})
+            lines.append('\nStage %s %s (ship %s, bogus_name): Take_Damage(%s, "%s") was called at frame %s and did NOT '
+                         'return: the Lua script stopped inside the call' % (n, key, tag, call[-1].get('amount'),
+                                                                           call[-1].get('arg'), call[-1]['f']))
+            lines.append('  VERDICT %s SCRIPT_STOPPED_AT_CALL' % key)
+            lines.append('  port: ' + PORT.get(key, ''))
+            continue
+        later = [r for r in mine if (r['n'] or 0) > (before[-1]['n'] or 0)] if before else []
+        if before and not kill and not call and later:
+            # The kill call is not in the records (CALL / KILL lost between the poll before and the polls after), yet the
+            # script kept writing: it survived the call. Hull / shield effects only show in polls of later frames.
+            lp = [r for r in later if r['rk'] == 'P']
+            lf = [r for r in lp if r['f'] is not None and r['f'] > (before[-1]['f'] or 0)]
+            h0 = ship(before[-1], tag)[1]
+            sh0 = ship(before[-1], tag)[2]
+            _s, h1, sh1 = ship((lf or lp)[-1], tag) if lp else ('?', None, None)
+            out['stages'].append({'st': n, 'key': key, 'kind': cs.get('kind'), 'verdict': 'SCRIPT_STOPPED_AFTER_CALL'
+                                  if not lf else 'CALL_NOT_RECORDED_SCRIPT_SURVIVED', 'f_kill': before[-1]['f'],
+                                  'records_after': len(later), 'later_frames': bool(lf), 'hull_before': h0, 'hull_after': h1,
+                                  'shield_before': sh0, 'shield_after': sh1})
+            if lf:
+                lines.append('\nStage %s %s: the CALL / KILL records are missing, but %d later records in later frames exist: '
+                             'the script SURVIVED the call. Get_Hull %s -> %s, Get_Shield %s -> %s' % (
+                                 n, key, len(later), fmt(h0), fmt(h1), fmt(sh0), fmt(sh1)))
+            else:
+                lines.append('\nStage %s %s: SCRIPT_STOPPED_AFTER_CALL. The kill call RETURNED (record n=%s was written after '
+                             'it, same frame %s) and nothing was written in any later frame: retail ended the script at the '
+                             'end of that update. The records written around the call (CALL / KILL / SAY) are missing '
+                             '(the script state is freed when the script ends). Get_Hull %s -> %s, Get_Shield %s -> %s in '
+                             'that frame: no effect can show' % (n, key, max(r['n'] for r in later), before[-1]['f'],
+                                                                fmt(h0), fmt(h1), fmt(sh0), fmt(sh1)))
+            continue
+        if before and not kill and not call:
+            # Old records (no CALL record): the stage's 'before' poll is the last thing the script wrote, i.e. the script
+            # stopped at the kill call itself (the 2026-11-08 COLL case).
+            out['stages'].append({'st': n, 'key': key, 'kind': cs.get('kind'), 'verdict': 'NO_MATCH_SCRIPT_STOPPED',
+                                  'f_kill': before[-1]['f']})
+            lines.append('\nStage %s %s: the kill call was reached (frame %s) and the script wrote nothing after it '
+                         '(NO_MATCH_SCRIPT_STOPPED, inferred: no CALL record in these records)' % (n, key, before[-1]['f']))
+            continue
         if not before or not kill:
-            out['stages'].append({'st': n, 'key': key, 'verdict': 'NOT_RUN'})
-            lines.append('\nStage %s %s: NOT RUN (no kill record; did the script stop? last frame above)' % (n, key))
+            # Never ran (no kill call reached: the script stopped earlier, or the battle was left): NOT_RUN, never a
+            # "no match" answer.
+            last_f = max([r['f'] for r in mine if r['f'] is not None] or [None])
+            reason = 'no kill call reached: the last record of the script is at frame %s, the kill was due at frame %s' % (
+                last_f, st.get('t_kill'))
+            out['stages'].append({'st': n, 'key': key, 'verdict': 'NOT_RUN', 'reason': reason})
+            lines.append('\nStage %s %s: NOT RUN (%s)' % (n, key, reason))
             continue
         b, k = before[-1], kill[-1]
         after = [r for r in in_st if r['n'] > k['n'] and r.get('why') != 'pre']
@@ -224,6 +287,23 @@ def analyse(recs):
                 v += '+DEAD_ONES_AGAIN'
             res.update(verdict=v, expected=got, dead_again=dead_again,
                        death_clone=inc.get(B.CFG['death_clone'], 0))
+        elif cs.get('kind') == 'bogus_name':
+            # A name that exists nowhere. Evidence that the damage still reached the ship: Get_Hull fell, or Get_Shield
+            # fell at the first fast poll (Get_Hull = min(hull, hardpoint fraction) hides a hull hit while the hull is
+            # above the fraction, so the shield is the second witness).
+            hp_before = 1.0 - sum(B.HARDPOINTS[i][1] for i in killed_by_ship.get(tag, ())) / TOTAL_HP
+            sh_fast = ship(fast[0], tag)[2] if fast else None
+            sh_drop = (sh0 - sh_fast) if (sh0 is not None and sh_fast is not None) else None
+            masked = h0 is not None and h0 <= hp_before + 0.005
+            if s1 == 'dead':
+                v = 'SHIP_DIED'
+            elif (drop is not None and drop > 0.02) or (sh_drop is not None and sh_drop > 0.05):
+                v = 'NO_MATCH_HIT_SHIP'
+            elif masked and (sh0 is None or sh0 <= 0.05):
+                v = 'NO_MATCH_UNSEEN_BY_LUA'
+            else:
+                v = 'NO_MATCH_NO_EFFECT'
+            res.update(verdict=v, drop=drop, shield_drop=sh_drop, masked=masked)
         else:
             prop = boff is not None and inc.get(boff, 0) >= 1
             # Get_Hull = min(hull, hardpoint fraction) only with the coupling (type +0xa8); a hardpoint without a breakoff
@@ -263,6 +343,10 @@ def analyse(recs):
                 ', '.join('%s +%d' % (a, c) for a, c in res['expected'].items()) or 'none'))
             lines.append('  already-dead ones (expect +0): %s; death clone +%d' % (
                 ', '.join('%s +%d' % (a, c) for a, c in res['dead_again'].items()) or 'none', res['death_clone']))
+        elif cs.get('kind') == 'bogus_name':
+            lines.append('  expects nothing (the name does not exist); Get_Hull drop %s, Get_Shield drop %s%s' % (
+                fmt(res.get('drop')), fmt(res.get('shield_drop')), ' (hull masked by the hardpoint fraction)' if
+                res.get('masked') else ''))
         else:
             lines.append('  expects %s (index %s, share %.3f of the hardpoint health, breakoff %s)' % (
                 B.HARDPOINTS[hp][0], hp, share, boff or '-'))
@@ -277,7 +361,8 @@ def analyse(recs):
     def ans(label, key, mapping):
         s = by.get(key)
         v = s['verdict'] if s else 'NOT_RUN'
-        lines.append('  %-22s %s' % (label, mapping.get(v, v)))
+        v = mapping.get(v, v)
+        lines.append('  %-22s %s' % (label, v))
         return v
     out['answers'] = {
         'lua_type_name': ans('lua_type_name', 'FL', {'HP_KILLED': 'KILLS_THE_HARDPOINT', 'HULL_HIT': 'HITS_THE_HULL'}),
@@ -286,8 +371,9 @@ def analyse(recs):
                                                                   'HULL_HIT': 'NO_MATCH_HULL_HIT'}),
         'owner_death': ans('owner_death', 'DEATH', {}),
     }
-    for key in ('ENG', 'SHLD', 'TRAC'):
-        ans('kill_' + key.lower(), key, {})
+    out['answers']['lua_bogus_name'] = ans('lua_bogus_name', 'BOGUS', {})
+    for key in ('ML', 'MR', 'ENG', 'SHLD', 'TRAC'):
+        out['answers']['kill_' + key.lower()] = ans('kill_' + key.lower(), key, {})
     if out['apierr']:
         lines.append('\nAPI errors: ' + '; '.join(out['apierr']))
     if out['errors']:

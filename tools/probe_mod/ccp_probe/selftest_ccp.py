@@ -42,6 +42,7 @@ H_F = 0
 H_SHIPPED_FSS = 0
 H_SHIPPED_OUS = 0
 H_INV = 0
+H_DESPAWN = 0
 function GetCurrentTime() return H_F / 30 end
 function Get_Game_Mode() return H_MODE end
 function H_Player(fac, id, human)
@@ -67,6 +68,7 @@ function H_Obj(id, owner, x, y)
 		p.Get_XYZ = function() return x, y, 0 end
 		return p
 	end
+	o.Despawn = function() H_DESPAWN = H_DESPAWN + 1 end
 	o.Make_Invulnerable = function(b)
 		if type(b) ~= "boolean" then error("Make_Invulnerable expects a boolean") end
 		H_INV = H_INV + 1
@@ -104,6 +106,10 @@ H_PLAYERS["NEUTRAL"] = H_Player("NEUTRAL", 3, false)
 for i = 1, table.getn(H_TYPE_NAMES) do H_TYPES[string.upper(H_TYPE_NAMES[i])] = true end
 H_PT = H_Obj(82036, H_PLAYERS["NEUTRAL"], 3453.5, 2791.4)
 H_POINTS["REINFORCEMENT_POINT"] = { H_PT }
+if H_TWO then
+	H_PT2 = H_Obj(82037, H_PLAYERS["NEUTRAL"], 1200, 900)
+	H_POINTS["REINFORCEMENT_POINT"] = { H_PT, H_PT2 }
+end
 H_POINTS["REINFORCEMENT_POINT_REBEL"] = { H_Obj(77, H_PLAYERS["REBEL"], 100, 100) }
 Base_Definitions()
 PlayerObject = H_Player(H_AI_FAC, 0, false)
@@ -111,11 +117,12 @@ H_RATE_ARMED = nil
 for F = 0, H_FRAMES, 3 do
 	H_F = F
 	if F == 600 then H_PT.owner = H_PLAYERS["EMPIRE"] end
+	if H_TWO and F == 900 then H_PT2.owner = H_PLAYERS["EMPIRE"] end
 	FreeStoreService()
 	On_Unit_Service(nil)
 	if F == 300 then H_RATE_ARMED = ServiceRate end
 end
-print("H_STATE spawns=" .. H_SPAWNS .. " inv=" .. H_INV .. " shipped_fss=" .. H_SHIPPED_FSS .. " shipped_ous=" ..
+print("H_STATE spawns=" .. H_SPAWNS .. " despawn=" .. H_DESPAWN .. " inv=" .. H_INV .. " shipped_fss=" .. H_SHIPPED_FSS .. " shipped_ous=" ..
 	H_SHIPPED_OUS .. " rate_at_300=" .. tostring(H_RATE_ARMED) .. " base=" .. tostring(H_BASE))
 for i = 1, CCP_N do print(CCP_LOG[i]) end
 '''
@@ -127,13 +134,13 @@ def check(c, what, fails):
         fails.append(what)
 
 
-def run_lua(lua, work, tag, cfg, ai_fac='REBEL', empire_human=True, frames=1200):
-    names = list(cfg['relevant']) + list(cfg['fixed']) + [s['type'] for s in cfg['squads']]
+def run_lua(lua, work, tag, cfg, ai_fac='REBEL', empire_human=True, frames=1200, two=False):
+    names = list(cfg['relevant']) + list(cfg['fixed']) + [s['type'] for s in cfg['squads'] + cfg['ai_squads']]
     path = os.path.join(work, 'harness_%s.lua' % tag)
     with open(path, 'w', encoding='ascii', newline='\n') as f:
         f.write(STUBS)
-        f.write('H_MODE = "Land"\nH_AI_FAC = "%s"\nH_EMPIRE_HUMAN = %s\nH_FRAMES = %d\n' % (
-            ai_fac, 'true' if empire_human else 'false', frames))
+        f.write('H_MODE = "Land"\nH_AI_FAC = "%s"\nH_EMPIRE_HUMAN = %s\nH_FRAMES = %d\nH_TWO = %s\n' % (
+            ai_fac, 'true' if empire_human else 'false', frames, 'true' if two else 'false'))
         f.write('H_TYPE_NAMES = { %s }\n' % ', '.join('"%s"' % n for n in names))
         f.write(build_ccp_mod.lua_config(cfg) + '\n')
         f.write(open(build_ccp_mod.HOOK, encoding='ascii').read())
@@ -190,6 +197,38 @@ def main():
                   'ServiceRate 0.05 while armed, shipped bodies skipped, Base_Definitions chained (%s)' % state, fails)
             check(all(r.startswith('CCP1|') and r.endswith('|END') for r in recs), 'records are CCP1|...|END', fails)
             check(all(len(r) <= 400 for r in recs), 'records fit the reader regex length', fails)
+            check(any(e.get('scenario') == 'all' for e in k.get('PLAN', [])), 'PLAN scenario all (default)', fails)
+            # 1a2. multi-point scenarios (ccpgu t04): two points, 600 / 900 are the capture frames of the driver
+            for sc in ('all', 'sequential', 'steal'):
+                scfg = build_ccp_mod.config('<no game>', '_MP_LAND_BOTHAWUI', 'EMPIRE', session='selftest', scenario=sc,
+                                            stagger_sec=20, steal_sec=30)
+                rc, recs, state, text = run_lua(lua, work, 'two_' + sc, scfg, frames=2400, two=True)
+                k = kinds(recs)
+                sp = k.get('SPAWN', [])
+                by = {}
+                for s in sp:
+                    by.setdefault((s.get('pt'), s.get('side')), []).append(int(s['f']))
+                s0 = scfg['start_frame']
+                check(rc == 0 and not k.get('ERR') and not k.get('APIERR') and len(k.get('ENUM', [])) == 1 and
+                      k['ENUM'][0].get('points') == '2', '%s: ran, 2 points enumerated' % sc, fails)
+                if sc == 'all':
+                    ok = (len(sp) == 6 and all(s.get('side') == 'human' and s.get('owner') == 'EMPIRE:1' for s in sp) and
+                          all(f - s0 < 10 for v in by.values() for f in v) and 'despawn=0' in state)
+                elif sc == 'sequential':
+                    f1 = min(by[('82036', 'human')])
+                    f2 = min(by[('82037', 'human')])
+                    ok = (len(sp) == 6 and 590 <= f2 - f1 <= 610 and f1 - s0 < 10 and 'despawn=0' in state)
+                else:
+                    ai1 = by.get(('82036', 'ai'), [])
+                    hu1 = by.get(('82036', 'human'), [])
+                    hu2 = by.get(('82037', 'human'), [])
+                    ok = (len(ai1) == 2 and len(hu2) == 3 and len(hu1) == 3 and min(hu1) - min(ai1) >= 900 + 60 and
+                          min(hu2) - s0 < 10 and 'despawn=4' in state and
+                          all(s.get('owner') == 'REBEL:0' for s in sp if s.get('side') == 'ai') and
+                          len(k.get('DESPAWN', [])) == 1 and k['DESPAWN'][0].get('objs') == '4')
+                check(ok, '%s: spawn schedule (%s; %s)' % (sc, sorted((a, b, len(v)) for (a, b), v in by.items()), state),
+                      fails)
+                check(any(e.get('scenario') == sc for e in k.get('PLAN', [])), '%s: PLAN record' % sc, fails)
             # 1b. main-menu background battle: no human Empire
             rc, recs, state, _ = run_lua(lua, work, 'menu', cfg, empire_human=False, frames=900)
             k = kinds(recs)
@@ -227,6 +266,8 @@ def main():
             for side, (_h, _ai, squads) in build_ccp_mod.SIDES.items():
                 for t, _n in squads:
                     check(t.upper() in names, 'type %s (%s side) exists in the FoC XML' % (t, side), fails)
+            for ai_fac, (t, _n) in build_ccp_mod.AI_SQUADS.items():
+                check(t.upper() in names, 'type %s (AI %s capturers) exists in the FoC XML' % (t, ai_fac), fails)
             for t in ccp_maps.RELEVANT + ccp_maps.FIXED:
                 check(t.upper() in names, 'marker type %s exists' % t, fails)
             flags = ccp_maps.marker_flags(ZIP)
@@ -263,6 +304,14 @@ def main():
               'preset: game type 3 (= type 4) and the land map (%s)' % wrote, fails)
         txt = ccp_run.steps_text('_MP_LAND_KAMINO', 'EMPIRE', True, 'REBEL')
         check('Kamino' in txt and 'CAPTURE CONTROL POINTS' in txt and 'REBEL' in txt, 'steps text', fails)
+        txt = ccp_run.steps_text('_MP_LAND_BOTHAWUI', 'EMPIRE', True, 'REBEL', 'steal')
+        check('Bothawui' in txt and 'Scenario steal' in txt, 'steps text, steal scenario', fails)
+        check(all(sc in ccp_run.SCENARIO_TEXT for sc in build_ccp_mod.SCENARIOS), 'a steps text for every scenario', fails)
+        for sc, sec in (('sequential', 20), ('steal', 30)):
+            c = build_ccp_mod.config('<no game>', '_MP_LAND_BOTHAWUI', 'EMPIRE', scenario=sc, stagger_sec=sec, steal_sec=sec)
+            lt = build_ccp_mod.lua_config(c)
+            check('scenario = "%s"' % sc in lt and 'stagger_frames = %d' % (sec * 30) in lt and 'ai_squads = {' in lt,
+                  'lua config carries the %s scenario' % sc, fails)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     print('CCP SELFTEST %s' % ('OK' if not fails else 'FAILED (%d)' % len(fails)))

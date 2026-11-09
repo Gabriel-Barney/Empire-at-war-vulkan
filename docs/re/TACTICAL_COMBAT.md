@@ -2471,7 +2471,7 @@ exactly the enemy objects of those 14 types (step 1 of the filter), and nothing 
 No range and no owner-credit test here. Apply 0x5b07c0 adds them: range = `Target_In_Range` 0x48d820 on T or on X
 (either) and `Must_Close_Range` 0x48e100 false; then the accept above; then credits: when the owner's credits
 (player +0x70) < cost or cost ≤ 0 → play the "cannot" event (ability +0x1b8) and **return 1 without converting**
-[M: whether that consumes the order]; else break both objects' stealth-type state (0x3a9880 on U and X),
+(this uses up the order: retail run s78m t06 Q7, `S78M_T06_BRIBE_RUN.md` [H]); else break both objects' stealth-type state (0x3a9880 on U and X),
 credits −= cost, play the event at ability +0x1a8, start the recharge (0x3a9840(U, 0x3b)), then the effect and the
 owner change (TACTICAL_GAPS §2: 0x38e5a0). Hack's apply 0x7013d0 likewise runs the accept, then 0x48d820 /
 0x48e100.
@@ -2485,6 +2485,103 @@ owner change (TACTICAL_GAPS §2: 0x38e5a0). Hack's apply 0x7013d0 likewise runs 
   bribe cost = `Tactical_Bribe_Cost` of the container (or unit) × the user's corrupted / uncorrupted modifier,
   must be > 0 (cost ≤ 1 rejects); not a named hero, `Friendly_Damage_Amount` ≤ 0, no PROXIMITY_MINE behaviour,
   non-zero `CategoryMask`; not dead. Range and credits are checked at apply; too few credits: no conversion.
+  The range formula is §5.4.2.
+
+#### 5.4.2 Ability range: `Target_In_Range` 0x48d820 / `Must_Close_Range` 0x48e100 (s78m t07, 2026-11-09) [H unless tagged]
+Read from the decompiled code and, for the vtable slots, from the retail exe's bytes. Covers every ability that calls
+the pair (Bribe, Hack, Grenade_Attack, Remote_Bomb, tractor beam and about 20 more, LOB_SOLVER §3.4-3.5).
+
+**The two wrappers.** Both take (ability A, user U, target X, hardpoint h). U null → `Target_In_Range` false,
+`Must_Close_Range` true; X null → true / false. Otherwise they **temporarily write A as U's pending ability**
+(targeting data TD = U +0xf0: +0x148 := X, +0x150 := A +0x38, the ability name CRC), call U's TARGETING behaviour
+(slot 9; through 0x567350 / 0x568340, false when U has no TARGETING) and restore both fields:
+- `Target_In_Range` → TARGETING vf +0x160 = slot 44 0x567b40 "in max range";
+- `Must_Close_Range` → vf +0x168 = slot 45 0x5688c0 → slot 46 0x5683a0 **"inside min range"**. The name in
+  ABILITIES_HARDPOINTS §2.9 is misleading: true means **too close**; it never moves the unit (below).
+So an ability's range is the weapon range test of TACTICAL_GAPS §3.1 with the ability's ranges swapped in.
+
+**Slot 44** (U's position P_U = U +0x78): when U's current weapon projectile (slot 42, weapon set U +0x324) has
+`Projectile_Category` 3 (grenade), the answer is the lob solver (LOB_SOLVER §3.1) and **the ability's range is not
+used at all**. Otherwise slot 43 0x5673b0(P_U, X, h, offset 0):
+1. **Melee redirect:** h = 0, U's `Targeting_Max_Attack_Distance` (type +0x500) ≤ `Melee_Cutoff_Range` (51.0) and X
+   has TEAM (obj +0x348 ≠ −1) → redo with X := the member of X nearest P_U (0x404fc0). Not taken for Tyber (90.0).
+2. Aim point Q = X +0x78 (with h: the hardpoint position 0x396ce0). d = Q − P_U, **XY only** (z ignored).
+3. R = slot 40 (`Get_Max_Attack_Range`), then the **override**: TD +0x148 (= X here) and TD +0x150 ≠ 0 and U has a
+   special-ability pack (U +0x100); the pending target's container-or-self (obj +0x2b0 when set) equals X's
+   container-or-self; A is found by CRC in U's type ability list (0x37bd50: type +0x1a98..+0x1aa0, entry +0x38);
+   A vf +0xd8 > 0 → **R = A vf +0xd8**. For `TacticalBribeAbilityClass` (vtable 0x8a3c08) vf +0xd8 = 0x5b0ea0 returns
+   A +0x17c = `Activation_Max_Range`; vf +0xd0 = 0x5b0eb0 returns A +0x178 = `Activation_Min_Range`. (When the pending
+   target differs from X, Q moves by (pending target − X) and the pending target replaces X; never the case in the
+   wrappers, which store X itself.) With `Activation_Max_Range` 0 the unit's weapon range stays.
+4. d = 0 → **true**.
+5. E, the target term:
+   - X has no LAND_OBSTACLE (X +0x346 = 0xFF) **and X has TEAM (behaviour 0x16) and a locomotor whose vf +0x230 is
+     true** → **R + 10**, no footprint term. vf +0x230 is a class constant (MOVEMENT §4.7.1; bytes read 2026-11-09):
+     `LandTeamContainerLocomotorBehaviorClass` 0x8a3630 → 0x17dc70 `mov al,1`; Walk 0x8ad798 and LandTeamInfantry
+     0x8af8d0 → 0x13b7d0 `xor al,al`. So **every land squad container gets exactly +10, moving or not**; the label
+     "moving team" in TACTICAL_GAPS §3.1 is wrong.
+   - Else no LAND_OBSTACLE: f = X's facing (cos, sin of the yaw X +0x8c in degrees, 0x41c000); u = (P_U − Q)
+     normalised (fast inverse square root 0x5f375a86, two Newton steps); |f·u| > 0.7071 → E = X extent (0x396a30),
+     else E = Y extent (0x396b70): `Custom_Hard_X/YExtent` × `Scale_Factor` (deployed variants when deployed), else
+     |model bbox max| × `Scale_Factor`, 0 without a model (TACTICAL_GAPS §3.1, A1j t04). With h: 0x397780.
+   - X with LAND_OBSTACLE (structures): Q steps back toward U in 20-unit passability cells while the cell holds X,
+     snaps to the cell grid, E = √200 (TACTICAL_GAPS §3.1).
+6. **In range ⇔ sqrtf(dx² + dy²) ≤ R + E** (float, not squared, non-strict).
+
+**Slot 46** (inside min range), same frame: r = U's `Targeting_Min_Attack_Distance` (slot 41 0x566eb0, type +0x504),
+**overridden by A vf +0xd0 (`Activation_Min_Range`) only when that is > 0** (same pending match as above). Melee
+redirect as step 1. Without the override, a target that is a team member is retested against the member of its
+container nearest P_U. r ≤ 0 → **false**; d = 0 on all three axes → true; else too close ⇔ d ≤ r + E, E = the X / Y extent as above
+(no +10 rule here: for a land squad container 0x396a30 / 0x396b70 take the members' joint box (0x404450) [M: which
+half-extent]) or the LAND_OBSTACLE step-back. Consequence [H]: **an ability with `Activation_Min_Range` 0 inherits the
+user's weapon min range** (e.g. a unit with `Targeting_Min_Attack_Distance` > 0 cannot use it closer than that + E).
+Tyber has neither, so his bribe is never too close [M: the type default of +0x504 is 0, not read].
+
+**Bribe apply 0x5b07c0, range part** (h = 0 in all four calls). X a team member (0x39b1a0: X +0x2b0 = T has TEAM):
+- refused (return 0, the order stays pending) unless `Target_In_Range(T)` **or** `Target_In_Range(X)`;
+- refused when `Must_Close_Range(T)` **and** `Must_Close_Range(X)` (T first; X only when T is too close).
+Otherwise (X not a team member, or a container itself): `Target_In_Range(X)` and not `Must_Close_Range(X)`.
+Then the accept, cost and credits of §5.4.1.
+
+**Bribe range in numbers** (Tyber: `Activation_Max_Range` 100.0, `Activation_Min_Range` 0.0, DEFAULT projectile):
+- a stormtrooper squad member X (`Squad_Stormtrooper`: `Custom_Hard_X/YExtent` 2.0 × `Scale_Factor` 1.5, both
+  inherited from `Stormtrooper`) whose container T = `Stormtrooper_Team` (TEAM + LAND_TEAM_CONTAINER_LOCOMOTOR):
+  **in range ⇔ |P_U − P_T|xy ≤ 110 or |P_U − P_X|xy ≤ 103**;
+- a single unit X: |P_U − P_X|xy ≤ 100 + its X / Y extent along the line of sight;
+- the user's own radius or footprint is **not** in the formula, and nothing walks the member list (no "nearest member"
+  rule, except the melee redirect).
+- Check against retail run s78m t06 trial 2 (`S78M_T06_BRIBE_RUN.md` Q6): T and X both at (4010, 1200), Tyber on
+  y = 1200 at 1.567 per frame: centre distance 113.5 (f 2262), 111.9, 110.4, 108.8 (f 2265, conversion seen). The
+  T test first passes at f 2265 (108.8 ≤ 110 < 110.4): the conversion lands on the predicted frame with no lag
+  [H]; the X test alone (103) would have fired near f 2270. The run's other candidates (user radius 111.4, both
+  radii 115.9, nearest member 114.2) are ruled out by the code, not by the run.
+- **Where P_T is** [H for the gate, M for the rest]: the TEAM service 0x405b10 moves the container to the centre of
+  its members' joint box **only when the container's locomotor vf +0x230 is false**, so a land squad container is
+  never re-centred on its members; its position is its own LAND_TEAM_CONTAINER locomotor's (the run: a standing
+  squad's container stayed on its spawn point, the target member's position). For a moving squad, where that point
+  sits relative to the members was not traced [M]; the port must use the same container position it uses for
+  movement.
+
+**Retry and movement.** The order (command 40, ABILITIES_HARDPOINTS §2.9) stores the pending ability; every
+targeting service (one per frame) runs 0x565de0 first, which calls the apply until it returns true, so the bribe
+fires on the **first frame** the test passes. The walk is the attack order's formation movement: its stop test
+(FIGHTER_FLYING §4.10 E, `c` via 0x40edd0, once per second) calls the same slot 43 / 46 against the order object,
+with the pending override active (R = `Activation_Max_Range`), so for a squad member it would stop Tyber at ≤ 103 from
+the member; the T test (110) fires first for a standing squad. After the conversion the pending fields are cleared
+and Tyber brakes (retail stopped at 101.8) [M: the stop after the conversion was not traced]. Staging (§2.8,
+"Staging and movement") is the only path that moves a unit **away** because of a min range (it reads the pending
+ability's min range); `Must_Close_Range` itself never moves anything.
+
+*Port spec (s78m t08):*
+- `in_range(user, A, X)` with `Activation_Max_Range` > 0: R = `Activation_Max_Range`; XY centre distance user → X;
+  E = 10 when X is a land squad container, else X's orientation-dependent footprint half-extent (the weapon-range
+  E of TACTICAL_GAPS §3.1, A1j t04), √200 rule for LAND_OBSTACLE targets; `d ≤ R + E` in float. Do not add the
+  user's radius; do not loop over members.
+- Min range: `Activation_Min_Range` > 0 → too close ⇔ d ≤ min + E; else fall back to the user's
+  `Targeting_Min_Attack_Distance` (> 0) with the nearest-member retest. Not `d >= min` on bare centres.
+- Bribe apply: X a squad member → in range when T **or** X passes; too close only when both are.
+- No `Activation_Max_Range`: R = the user's max attack range (with its modifiers), same E.
+- Grenade-weapon users: the lob solve replaces the ability range (LOB_SOLVER).
 
 ---
 

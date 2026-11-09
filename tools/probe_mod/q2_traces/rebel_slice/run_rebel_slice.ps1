@@ -11,6 +11,11 @@ slice_watch.py (read-only, hidden) -> run_trace.ps1 -Scenario galactic -Mod cust
 after N fiscal cycles; its cleanup restores the profile) -> wait for both readers -> remove Mods\Q2RebelSlice (always,
 also after errors) -> slice_report.py.
 Menus by hand: Galactic Conquest > Heart of the Maw > Empire > Medium, defaults; then hands off (README "UI steps").
+-NoLaunch (the route that works from a Claude shell): run_trace.ps1 writes q2_traces\out\launch_game.cmd with this run's
+game arguments; start it with  cmd /c <that file>. It runs ..\..\common\launch_foc.py (CreateProcess under the debug API,
+detached at the first debug event); a StarWarsG.exe started plainly or through explorer.exe from a Claude shell exits at
+once. a2m t13 (2026-11-09): slice_watch.py names the unlocked types (DynamicVector decode); confirmed by the rerun
+20261109-055936 (docs/re/A2M_T07_REBEL_SLICE_RUN.md §7).
 Output: tools\probe_mod\q2_traces\out\<ts>-rebel-slice\ (lua_records.txt, slice_watch.jsonl, slice_report.txt,
 slice_plans.tsv, rebel_slice_status.json; trace_dir in the status names the q2 trace folder). rebel_slice\out\latest.txt
 names the folder. Exit: 0 report written, 20 preflight failed (nothing changed), 30 no records, 40 mod folder left.
@@ -68,6 +73,10 @@ if ($DryRun) { Write-Q2 'dry run: nothing built, started or changed'; exit 0 }
 $latest = Join-Path $Here 'out\latest.txt'
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $latest) | Out-Null
 Set-Content -LiteralPath $latest -Value $runDir -Encoding ascii
+# -NoLaunch: run_trace.ps1 writes q2_traces\out\launch_game.cmd (MODPATH=Mods\Q2RebelSlice WINDOWED ...) once the mod is
+# built; an older one (another run's arguments) must not be started in between
+$launcher = Join-Path $Q2Out 'launch_game.cmd'
+if (Test-Path -LiteralPath $launcher) { Remove-Item -LiteralPath $launcher -Force -ErrorAction SilentlyContinue }
 
 # ---------------------------------------------------------------- run (the mod is always removed)
 $t0 = Get-Date
@@ -80,6 +89,7 @@ try {
     $watchProc = Start-Process -FilePath $Q2Python -ArgumentList ($watchArgs -join ' ') -PassThru -WindowStyle Hidden
     Write-Q2 "lua reader pid $($luaProc.Id), slice watcher pid $($watchProc.Id)"
     Write-Host ''
+    if ($NoLaunch) { Write-Host "  Start the game when $launcher exists: cmd /c `"$launcher`" (common\launch_foc.py)" }
     Write-Host '  In the game: Galactic Conquest > Heart of the Maw > Empire > Medium (defaults) > Start. Close the'
     Write-Host '  objectives popup, then hands off. Answer a battle prompt with Auto-Resolve within 60 s.'
     Write-Host "  The game closes itself after $Days fiscal cycles (about $([int]($Days * 45 / 60) + 1) min of galaxy time)."

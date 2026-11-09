@@ -155,3 +155,20 @@ selftests, the cleanup marker rule and the profile preset (fake writer). Ends wi
   (two points) exercises the full test.
 - `Spawn_Unit` on a marker and `Make_Invulnerable(true)` on its results follow shipped story scripts; a failing engine
   call would stop the retail script silently (the `HB` records then stop).
+
+## ccpgu t04: multi-point run (Bothawui, 2 points)
+
+Same kit, `--map _MP_LAND_BOTHAWUI` (CONTROL map, two `Reinforcement_Point`s, both raw owner 3 = Neutral, `findings_maps.md`)
+with a `--scenario`:
+
+| scenario | what the hook does | what it shows |
+|---|---|---|
+| `all` (default) | the human's capturers on every point at once | t02 behaviour |
+| `sequential` (`--stagger-sec 20`) | point 1 at 5 s, point 2 `stagger` later | first capture does not arm (another point is Neutral), the last one arms |
+| `steal` (`--steal-sec 30`) | the AI's infantry takes point 1, the human takes the other points; `steal` s later the AI units are despawned and the human takes point 1 | a capture with a not-allied point disarms; Rebel -> Neutral -> Empire; the last capture arms and the win follows 899 + 210 - 1 frames later |
+
+`ccp_parse.py` adds a `MULTI-POINT` block per battle: per-point owner changes with the frame (and the offset to the
+first change), retail armed / timer / player after each capture beside the port rule replayed on the observed captures
+(`port_cp_capture`: a Neutral new owner disarms; arm only when every other relevant point is the new owner's), the count
+of enemy takeovers via Neutral vs direct, and the last-capture-to-declaration distance. The usual C / A / T / D / E table
+and the `RESULT capture -> end` line refer to the last arm.

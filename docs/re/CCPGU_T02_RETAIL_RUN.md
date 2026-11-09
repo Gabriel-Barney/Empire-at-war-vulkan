@@ -40,3 +40,27 @@ was the human Empire. The port does the same: `tactical_battle_bt.cpp:740-766` (
 
 - Multi-point arm test (the "every other relevant point allied" rule) not exercised: Kamino has one point.
   Bothawui (2 points) would cover it.
+
+## ccpgu t04: multi-point run, Bothawui (run 20261109-045610)
+
+Kit `tools/probe_mod/ccp_probe/` with `--map _MP_LAND_BOTHAWUI --scenario steal`; Empire human vs AI Rebel, no orders.
+Two neutral `Reinforcement_Point`s (obj 69364 at 2332,1310; obj 69363 at 1642,2420). The hook put invulnerable Rebel
+infantry on 69363 and Empire troopers + AT-AT on 69364 at frame 150, despawned the Rebel units at 1050 and put Empire
+troopers on 69363 at 1110. Owner changes (mode ticks), retail armed / timer / player after each, against the port rule
+(`vm_cp_capture`: Neutral new owner disarms; arm only if every other relevant point is the new owner's) replayed on them:
+
+| tick | point | change | retail armed/timer/player | port | verdict |
+|---|---|---|---|---|---|
+| 452 | 69364 | Neutral -> Empire | 0/-1/-1 (69363 still Neutral) | 0/-1/-1 | MATCH |
+| 453 | 69363 | Neutral -> Rebel | 0/-1/-1 | 0/-1/-1 | MATCH |
+| 1413 | 69363 | Rebel -> Neutral | 0/-1/-1 | 0/-1/-1 | MATCH |
+| 1921 | 69363 | Neutral -> Empire | 1/899/0 | 1/899/0 | MATCH |
+
+The enemy takeover went through Neutral (1 via Neutral, 0 direct), as §4.2 says. Declaration {0x15, Empire} at tick 2820 =
+last capture + 899, countdown 210, countdown 0 / battle end at 3030 = C + 1109 (frame counter stops at 3029).
+
+**Verdict [H]:** the multi-point rule matches the port: a capture while another relevant point is not the capturer's
+(Neutral or enemy) does not arm; Rebel -> Neutral -> Empire; the capture that completes the set arms 899 and the win comes
+1109 frames later. Two further reader rows at the teardown (owners read as -17891602 after the mode ended) are garbage
+and are ignored by `ccp_parse.py` (owner ids above 15 are not owners). Report: `out/20261109-045610/report.txt`
+(re-parsed after the parser fix).

@@ -88,9 +88,13 @@ tag), so the XML value is right and the formula is the gap.
 - [RE] `Target_In_Range` 0x48d820 / `Must_Close_Range` 0x48e100 with `Activation_Max_Range` set: the exact XY test
   (user radius, target radius, both, or member-wise for a team container) and the pending-ability retry cadence.
   Record it in `TACTICAL_COMBAT.md` §5.4.1 and mark the Q7 [M] there as confirmed (s78m t06).
+  **Done (s78m t07, 2026-11-09): `TACTICAL_COMBAT.md` §5.4.2.** Squad member X with container T: in range when
+  |Tyber − T|xy ≤ 100 + 10 (every land squad container) or |Tyber − X|xy ≤ 100 + X's footprint half-extent (3.0);
+  no user radius, no member loop. It predicts the trial 2 conversion at f 2265 exactly.
 - [port] Bribe range: `in_range` (`ability_system.cpp:805-814`) gets the radius term from the RE task; the bribe
   apply (`ability_classes.cpp:645-647`) tests T or X; the walk-to-range uses the same test. Unit test: Tyber 111 from
   a trooper's centre converts, 117 does not (adjust to the RE result). Regenerate goldens if they move.
 - [probe] Only if the RE leaves it open: a static range ladder. Squad spawned with the target member's centre at
   104 / 108 / 112 / 116 / 120 from a ready Tyber, once targeting the nearest member and once the farthest; record whether he converts without
   walking. Needs Gabriel.
+  **Not needed (s78m t07):** the code fixes the formula and the t06 run already matches it to the frame.

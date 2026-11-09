@@ -4,7 +4,7 @@
 up (always, also after an error or Ctrl+C).
 
   r1_run.py [--game DIR] [--non-interactive] [--no-launch] [--windowed] [--dry-run] [--wait-start-sec N]
-            [--scan-sec S] [--report-only RECORDS.log]
+            [--scan-sec S] [--report-only RECORDS.log] [--profile short|full] [--lua-camera]
 
   --no-launch        install and scan only; start the game yourself with the printed command line
   --windowed         launch with WINDOWED SCREENWIDTH=1920 SCREENHEIGHT=1080 (computer-use driven run)
@@ -46,8 +46,39 @@ MODPATH = ['MODPATH=Mods\\' + build_r1_mod.MOD_NAME]
 NEEDLE = b'R1P|'
 RECORD_RE = re.compile(rb'R1P\|[A-Z0-9_]+\|[ -~]{0,800}?\|END')
 
-STEPS = r'''
- R1 HARDPOINT probe (about 10 minutes in the battle). Full notes: tools\probe_mod\r1_hardpoint\README.md
+STEPS_SHORT = r'''
+ R1 HARDPOINT probe, SHORT rerun (r1b t07; about 6 minutes in the battle). Full notes: tools\probe_mod\r1_hardpoint\README.md
+ 1) Single Player > Skirmish > SPACE, map KUAT. Slot 1 (you): EMPIRE, team 1. Slot 2: AI (Easy) REBEL, team 2.
+    Every other slot CLOSED. Default credits and settings. Start.
+ 2) Give NO orders (moving / rotating the camera is fine; never pause, never change the speed, never save).
+    0:10 two Star Destroyers (yours) appear in the empty corner: {minimap}
+    Frame ship A (it fills about 2/3 of the screen) before the first kill at 1:30.
+ 3) One kill per minute, each announced 15 s ahead by an "R1 PROBE:" message. Camera for each:
+    1:30 A front-left turret    SIDE view of the left hull edge, near the bow
+    2:30 A mid-left turret      SIDE view of the left hull edge, mid-ship
+    3:30 A mid-right turret     SIDE view of the right hull edge, mid-ship
+    4:30 A engines              STERN view (behind the ship, engine glow and fire)
+    5:30 A bogus name HP_NO_SUCH, the LAST step; the script may stop here (that is an answer).
+    After each kill: screenshot at +2 s, zooms at +10 s and +40 s.
+ 4) After the last step, wait 20 s, take the last shots, Esc > Quit (main menu), quit the game. The run ends by itself
+    and cleans up. R1_RUN_DONE exit=<n> is the last line.
+'''
+
+STEPS_TAIL = r'''
+ R1 HARDPOINT probe, TAIL rerun (engine stern view + bogus name; about 3 minutes in the battle).
+ 1) Single Player > Skirmish > SPACE, map KUAT. Slot 1 (you): EMPIRE, team 1. Slot 2: AI (Easy) REBEL, team 2.
+    Every other slot CLOSED. Default credits and settings. Start.
+ 2) Give NO orders. 0:10 two Star Destroyers (yours) appear: {minimap}
+    0:11 the hook orders ship A to move NORTH (3000 units) so that it turns its stern to a camera in the south.
+    Frame A from the SOUTH at a zoom where the stern face and the engine glow are visible (click its blip, zoom with the
+    wheel). Take a BEFORE shot of the stern at about 0:50.
+ 3) 1:00 A engines die (announced at 0:45). Screenshots at +2 s, +10 s, +40 s: engine glow, fire.
+ 4) 1:45 LAST step: bogus name HP_NO_SUCH (announced at 1:30). The script may stop. Wait 20 s, last shots.
+ 5) Esc > Quit, quit the game. The run ends by itself. R1_RUN_DONE exit=<n> is the last line.
+'''
+
+STEPS_FULL = r'''
+ R1 HARDPOINT probe, FULL run (about 10 minutes in the battle). Full notes: tools\probe_mod\r1_hardpoint\README.md
  1) Single Player > Skirmish > SPACE, map KUAT. Slot 1 (you): EMPIRE, team 1. Slot 2: AI (Easy) REBEL, team 2.
     Every other slot CLOSED. Default credits and settings. Start.
  2) Give NO orders (moving the camera is fine; never pause, never change the speed, never save).
@@ -61,6 +92,12 @@ STEPS = r'''
 '''
 
 
+def build_mod(a, dest, source_zip=None):
+    """The one place that builds the mod from the command line options (--profile, --lua-camera); selftest_r1 checks it."""
+    return build_r1_mod.build(a.game, dest, source_zip, no_text=bool(source_zip), profile=a.profile,
+                              lua_camera=a.lua_camera)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--game', default=build_r1_mod.DEFAULT_GAME)
@@ -68,6 +105,9 @@ def main():
     ap.add_argument('--no-launch', action='store_true')
     ap.add_argument('--windowed', action='store_true')
     ap.add_argument('--dry-run', action='store_true')
+    ap.add_argument('--profile', choices=sorted(build_r1_mod.PROFILES), default=build_r1_mod.DEFAULT_PROFILE,
+                    help='short (default, r1b t07 rerun) or full (the original 7-stage run)')
+    ap.add_argument('--lua-camera', action='store_true', help='the hook tries Point_Camera_At(ship A) at each pre-message')
     ap.add_argument('--wait-start-sec', type=float, default=900)
     ap.add_argument('--scan-sec', type=float, default=4.0)
     ap.add_argument('--report-only')
@@ -83,15 +123,16 @@ def main():
     exe = os.path.join(corr, 'StarWarsG.exe')
     out_root = os.path.join(HERE, 'out')
     run_dir = os.path.join(out_root, datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
+    steps = {'short': STEPS_SHORT, 'tail': STEPS_TAIL}.get(a.profile, STEPS_FULL)
     cmdline = ' '.join(['StarWarsG.exe'] + (WINDOWED if a.windowed else []) + MODPATH)
     if a.dry_run:
         os.makedirs(run_dir, exist_ok=True)
         mod = os.path.join(run_dir, 'dryrun_mod', build_r1_mod.MOD_NAME)
-        cfg = build_r1_mod.build(a.game, mod, a.source_zip, no_text=bool(a.source_zip))
+        cfg = build_mod(a, mod, a.source_zip)
         with open(os.path.join(run_dir, 'config.json'), 'w') as f:
             json.dump(cfg, f, indent=1)
         say('DRY RUN: built %s (%d files); site: %s' % (mod, len(cfg['files']), cfg['site_note']))
-        say('\n' + '=' * 110 + STEPS.format(minimap=cfg['minimap']) + '=' * 110)
+        say('\n' + '=' * 110 + steps.format(minimap=cfg['minimap']) + '=' * 110)
         say('Command line (in %s): %s' % (corr, cmdline))
         say('R1_RUN_DONE exit=0')
         return 0
@@ -115,11 +156,11 @@ def main():
     set_state(run_dir, state='installing', run_dir=run_dir)
     try:
         r1_cleanup.cleanup(a.game, os.path.join(run_dir, 'cleanup.log'))  # stale folder from a crashed run
-        cfg = build_r1_mod.build(a.game, os.path.join(corr, 'Mods', build_r1_mod.MOD_NAME))
+        cfg = build_mod(a, os.path.join(corr, 'Mods', build_r1_mod.MOD_NAME))
         with open(os.path.join(run_dir, 'config.json'), 'w') as f:
             json.dump(cfg, f, indent=1)
         info['site'] = cfg.get('site_note')
-        say('\n' + '=' * 110 + STEPS.format(minimap=cfg['minimap']) + '=' * 110)
+        say('\n' + '=' * 110 + steps.format(minimap=cfg['minimap']) + '=' * 110)
         t0 = time.time()
         if not a.no_launch:
             subprocess.Popen([exe] + (WINDOWED if a.windowed else []) + MODPATH, cwd=corr)
@@ -143,6 +184,7 @@ def main():
             while proc.alive():
                 new, st = scan_once(proc, NEEDLE, RECORD_RE, seen, log)
                 info['scans'] += 1
+                info['unreadable_chunks'] = info.get('unreadable_chunks', 0) + st.get('unreadable', 0)
                 if new:
                     say('  +%d records (%d total, %.0f MB scanned)' % (new, len(seen), st['bytes'] / 1e6))
                 time.sleep(a.scan_sec)

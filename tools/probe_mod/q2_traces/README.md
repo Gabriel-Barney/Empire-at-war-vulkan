@@ -156,26 +156,57 @@ campaign starts as a child of its galaxy (mode stack 2): it starts when the batt
 (`reason battle_ended`, a complete trace) or after 18000 ticks (10 min of game time). Nothing is installed in the game folder.
 
 1. Start Steam. Close the game if it is running.
-2. Double-click **`run_story.cmd`** in `tools\probe_mod\q2_traces\`. It rebuilds `q2reader.exe` (needs `toolchain\`), then
-   launches the game **windowed** at 1920x1080. Leave the black command window open.
+2. Double-click **`run_story.cmd`** in `tools\probe_mod\q2_traces\`. It reopens itself in its own console window,
+   rebuilds `q2reader.exe` (needs `toolchain\`), then launches the game **windowed** at 1920x1080. Leave that window open.
+   From a Claude shell: `cmd /c run_story.cmd -NoLaunch`, wait for `out\launch_game.cmd` (the run deletes an old one
+   first and writes it with this run's arguments), then `cmd /c <full path of out\launch_game.cmd>`. It runs
+   `toolchain\venv\Scripts\python.exe -I tools\probe_mod\common\launch_foc.py [MODPATH=...]`: CreateProcess with
+   DEBUG_ONLY_THIS_PROCESS and DebugActiveProcessStop at the first (CREATE_PROCESS) debug event, so the game runs on
+   detached and prints its pid. A StarWarsG.exe started plainly from a Claude shell exits at once, and since 2026-11-09 a
+   `.cmd` started through `Start-Process explorer.exe` dies silently too (storyb t09 / a2m t13 runs used launch_foc.py).
 3. In the game: Esc through the intro movies, then **Single Player** → **Campaigns** (Forces of Corruption) →
-   **Underworld** → difficulty **Medium** (the only choice offered) → **Start**. Esc through the opening movie. The
-   campaign starts its first mission at once: the Kessel land battle (Tyber Zann's escape, `STORY_UNDERWORLD_M01_LAND.XML`).
-4. When the battle has loaded (the intro cinematic plays), click nothing and press no keys, **not even Esc**: the
-   battle's own intro cinematic must play out. An Esc there runs the mission's `Story_Handle_Esc` and changes the sim on
-   that frame (2026-11-08 runs: cleanup at battle frame 129 and 248, identical before), so the run is no longer
-   hands-off. Without orders Tyber stays in his cell, so the mission does not finish: the trace stops after 10 minutes
-   of game time and the game closes by itself. If a dialog asks something, do not answer it. Keep the game window in
-   front: the game pauses when it loses focus (the 2026-11-08 22:41 run stopped at frame 1286).
-5. The command window ends with `done: exit <n>` (0 = complete). Send back
+   **Underworld** → difficulty **Medium** (the only choice offered) → **Start**. Esc through the opening movie (before the
+   battle's load screen this is allowed). The campaign starts its first mission at once: the Kessel land battle (Tyber
+   Zann's escape, `STORY_UNDERWORLD_M01_LAND.XML`).
+4. From the battle's load screen on, click nothing and press no keys, **not even Esc**: the battle's own intro
+   cinematic must play out. An Esc there runs the mission's `Story_Handle_Esc` and changes the sim on that frame
+   (2026-11-08 runs: cleanup at battle frame 129 and 248, identical before), so the run is no longer hands-off (storyb
+   t09 is the rerun without it). Without orders Tyber stays in his cell, so the mission does not finish: the trace stops
+   after 18000 battle frames (10 minutes of game time, about 11 min wall) and the game closes by itself. If a dialog
+   asks something, do not answer it. Keep the game window in front: the game pauses when it loses focus. Since storyb
+   t09 the run has no time limit while the game runs (`-TimeoutMin 0`): a pause only delays it (the console prints
+   `no new frame for N s ...`; `run_status.json` → `stalled_sec`, `stalls`), it does not end it as on 2026-11-08 22:41
+   (reader timeout after 60 min, paused at frame 1286).
+5. After the game closed, the run cleans up and then summarises (`run_status.json` `state`: `cleanup` → `summarizing`,
+   about 1.5 min → `summarized` → `done`). The window ends with `done: exit <n>` (0 = complete) and
+   `Q2 story run finished`. summary.json is written on every exit path that reaches the cleanup (Ctrl+C included);
+   if validate cannot write it, a partial one (`"partial": true`) is built from `reader_status.json`. Send back
    `tools\probe_mod\q2_traces\out\<yyyymmdd-hhmmss>-story-vanilla\` (zipped): `trace.q2t`, `summary.json`,
-   `run_status.json`, `cleanup.log`.
+   `run_status.json`, `run_trace.log`, `cleanup.log`.
+
+If the window itself was killed before the summary: `toolchain\venv\Scripts\python.exe -I tools\probe_mod\q2_traces\q2trace.py
+validate <run>\trace.q2t --json <run>\summary.json` (a trace cut mid-line by a killed reader validates too: the cut frame is
+dropped and noted).
 
 If the window was closed early or the PC crashed, double-click `cleanup.cmd`. What the trace is compared with: the port's
 Full_Story_Campaign_Underworld linked Kessel battle over the same ticks (RNG draw counts, object counts by type and owner,
 the intro spawns of the M01 Lua, the victory monitor staying held: `story` t04 on the roadmap). Read a run with
 `analysis\story_battle.py out\<run> [--port-trace port.q2t]`; the first run and its comparison with the port:
 `docs/re/STORY_T04_KESSEL_RUN.md`.
+
+### Rebel slice run (a2m t07 / t13)
+
+`run_rebel_slice.cmd` (details in `rebel_slice\run_rebel_slice.ps1`): Heart of the Maw, human Empire, Medium, hands-off
+for 12 fiscal cycles, with the Rebel `Advance_Tech_Rebel` plan hooked (`Mods\Q2RebelSlice`) and the Rebel credits / tech /
+unlocked-type list watched in memory (`slice_watch.py`). It reopens itself in its own window. From a Claude shell:
+`cmd /c run_rebel_slice.cmd -NoLaunch`, then, once `out\launch_game.cmd` exists (it holds `MODPATH=Mods\Q2RebelSlice`),
+`cmd /c <full path of out\launch_game.cmd>` (`common\launch_foc.py`, see "Story mission run" step 2). Menus: Galactic Conquest → Heart of the Maw → Empire →
+Medium, defaults → Start, close the objectives dialog, then hands off (a battle prompt: Auto-Resolve within 60 s). The
+game closes itself after 12 cycles (about 10 min wall). `rebel_slice\out\latest.txt` names the run folder; the report is
+`slice_report.txt` (rebuild: `python -I rebel_slice\slice_report.py --run-dir <run> --trace-dir <its -galactic-custom
+trace folder>`). Since a2m t13 the watcher names the unlocked types (`slice_watch.jsonl` `list` events: `added` holds
+type names, `ok` true); `rebel_slice\selftest_slice.py` checks the decoder on the raw list bytes of run 20261108-212955,
+and the rerun 20261109-055936 named all five slices (`docs/re/A2M_T07_REBEL_SLICE_RUN.md` §7).
 
 ### Lua probe run (q2f t06): steps for Gabriel
 

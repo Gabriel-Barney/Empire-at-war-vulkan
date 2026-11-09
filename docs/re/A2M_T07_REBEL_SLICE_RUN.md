@@ -108,6 +108,9 @@ Differences:
 ## 6. Proposed follow-ups
 
 1. Rerun the kit with the fixed watcher (any campaign) to get type names; the inferred types in section 2 then become confirmed.
+   a2m t13 (2026-11-09): the fix is in the kit; replayed offline on this run's `slice_watch.jsonl`, `decode_raw()` gives
+   Rebel unlocked 11 → 12 (f349), 13 (f3185), 14 (f6271), 15 (f9200), 16 (f11950) and rejects the stale-address reads
+   (`selftest_slice.py`, 24 checks). The rerun needs the game (`tools/probe_mod/q2_traces/README.md` "Rebel slice run").
 2. RE / probe the unexplained run 11, Nal Hutta at tech 3 with 2230 credits and no slice: the ability "ready" gate (0x37be10), the
    0x48d5a0 block, and whether Land_Units fires 0x3a00b0 at an occupied enemy planet. This joins a2m t04's "Land_Units 0x6cec80 at an enemy
    planet with an accessible surface".
@@ -115,3 +118,54 @@ Differences:
 4. Port check: the port's Rebel `Can_Afford_Steal_Tech` inputs (NetIncomeUnnormalized) after tick 8326. This probably follows from t03's
    Shola capture.
 5. RE: whether R (step 4) is drawn when Min = Max, or for an AI with no affordable entry; then align `apply_slicer`.
+
+## 7. a2m t13 rerun with the fixed watcher (2026-11-09)
+
+Run `tools/probe_mod/q2_traces/out/20261109-055936-rebel-slice` with its q2 trace `out/20261109-055937-galactic-custom`
+(`run_rebel_slice.cmd -NoLaunch`, game started with `tools/probe_mod/common/launch_foc.py MODPATH=Mods\Q2RebelSlice`).
+Same setup as §1: Heart of the Maw, human Empire, Medium, defaults; story objectives dialog closed, then no input for
+12 fiscal cycles; no battle prompt; the game closed itself (`cycles_reached`, exit 0; trace 17028 samples, 0 missed,
+0 torn, digests all OK). Report exit 0, 0 probe errors. Every watcher `list` event has `ok` true.
+
+**Same run as §1.** The 12 plan runs have the same start, production, move and landing frames, the same targets and
+the same Lua credits as the 2026-11-08 run. The q2 trace has every RNG state on the same mode frame as
+`20261108-212956-galactic-custom` (6426 distinct states, offset 0). The one exception is the first sample: the reader
+started at a different point of the load. So a hands-off Heart of the Maw game is reproducible run to run, and §1 to §4
+hold unchanged. The watcher sees two slices one frame later than before (f350 / f11951 against f349 / f11950). That is
+its polling, not the game: the Lua `PLANDPRE` frames are the same.
+
+**The slices, named** (Rebel unlocked list, `slice_report.txt` §2):
+
+| run | frame | target | price | type added | tech |
+|---|---|---|---|---|---|
+| 1 | 350 | Nal Hutta (U) | 700 | ALLIANCE_ASSAULT_FRIGATE | 2 |
+| 3 | 3185 | Kuat (E) | 700 | GROUND_INFILTRATOR_FACILITY | 2 |
+| 5 | 6271 | Kuat (E) | 700 | REBEL_HEAVY_TANK_BRIGADE | 2 -> 3 |
+| 7 | 9200 | Nal Hutta (U) | 900 | GALLOFREE_HTT_COMPANY | 3 |
+| 9 | 11951 | Kuat (E) | 1000 | A_WING_SQUADRON | 3 |
+
+This confirms the §2 inference: the three tech-2 entries (Ground_Infiltrator_Facility, Alliance_Assault_Frigate,
+Rebel_Heavy_Tank_Brigade) went first, in the order Frigate, Infiltrator, Heavy Tank. Run 5 took the last of them and
+raised the tech to 3. Run 9's 1000-credit entry is the A-Wing, not the Speeder.
+
+Other lists:
+- Rebel unlocked list at the start (f0-f1, 11 entries): CORELLIAN_GUNBOAT, MARAUDER_MISSILE_CRUISER, NEBULON_B_FRIGATE,
+  GROUND_ION_CANNON, REBEL_ORBITAL_LONG_RANGE_SCANNER, R_GROUND_BASE_SHIELD, R_GALACTIC_TURBOLASER_TOWER_DEFENSES,
+  R_GROUND_LIGHT_VEHICLE_FACTORY, R_GROUND_HEAVY_VEHICLE_FACTORY, Y-WING_SQUADRON, REBEL_X-WING_SQUADRON.
+- Rebel locked list: Z95_HEADHUNTER_REBEL_SQUADRON.
+- Empire unlocked: E_GROUND_RESEARCH_FACILITY.
+- Underworld unlocked: NEBULON_B_UNDERWORLD at f11087 (not a slice: there is no Underworld slice plan in this run).
+
+Run 11 (Nal Hutta, tech 3, 2230 credits, no slice) repeats exactly, so it is deterministic. With the A-Wing taken, the
+tech-3 entries left at that point were Calamari_Cruiser and Rebel_Speeder_Wing. §6 item 2 stays open.
+
+**a2m t13: DONE.** The rerun named every slice type and confirmed the inferred ones. Follow-ups §6 items 2-5 are
+unchanged.
+
+Kept in the main checkout's `tools/probe_mod/q2_traces/out/` (`out/` is not in git). Copy:
+- `20261109-055936-rebel-slice/`: every file (`slice_report.txt`, `slice_plans.tsv`, `slice_watch.jsonl`,
+  `slice_live.json`, `lua_records.txt`, `lua_reader.log`, `lua_summary.json`, `lua_perception.tsv`,
+  `lua_goal_perception.tsv`, `rebel_slice_status.json`).
+- `20261109-055937-galactic-custom/`: `trace.q2t`, `summary.json`, `reference.crc`, `production.q2q`, `run_status.json`,
+  `reader_status.json`, `run_trace.log`, `manifest.json`, `cleanup.log`, `playerlist_dump.txt`. Do not copy
+  `profile_backup/` or `launch_game.cmd`.

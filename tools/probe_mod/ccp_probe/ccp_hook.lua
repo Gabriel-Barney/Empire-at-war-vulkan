@@ -27,14 +27,15 @@ CCP_LOG = {}
 CCP_N = 0
 CCP_SID = string.sub((string.gsub(tostring(CCP_LOG), "[^%w]", "")), -6)
 CCP = { on = false, done = false, f = -1, tries = 0, pending = false, old_rate = nil, armed_once = false,
-	enumerated = false, spawned = false, points = {}, human = nil, all_since = nil, hb = nil, step = "-" }
+	enumerated = false, spawned = false, points = {}, human = nil, ai = nil, plan = {}, plan_i = 1, all_since = nil, hb = nil, step = "-" }
 CCP_API_BAD = {}
 CCP_MAX_RECORDS = 4000
 
 if CCP_CFG == nil then
 	CCP_CFG = { session = "?", map = "?", human = "Empire", ai = "REBEL", enum_frame = 30, start_frame = 150,
 		stop_frame = 54000, hb_frames = 90, spawn = true, invulnerable = true,
-		relevant = { "Reinforcement_Point" }, fixed = {}, squads = {}, players = { "Empire", "Rebel", "Neutral" } }
+		relevant = { "Reinforcement_Point" }, fixed = {}, squads = {}, ai_squads = {}, scenario = "all",
+		stagger_frames = 600, steal_frames = 900, players = { "Empire", "Rebel", "Neutral" } }
 end
 
 function CCP_Str(v)
@@ -189,20 +190,20 @@ function CCP_Enumerate()
 	CCP_Rec("ENUM", "relevant=" .. rel .. "|fixed=" .. fix .. "|points=" .. table.getn(CCP.points))
 end
 
-function CCP_SpawnOne(pt, tname, k)
+function CCP_SpawnOne(pt, tname, k, owner, side)
 	CCP_Step("type:" .. tname)
 	local ty = nil
 	pcall(function() ty = Find_Object_Type(tname) end)
 	if ty == nil then
-		CCP_Rec("SPAWN", "pt=" .. pt.id .. "|type=" .. CCP_Str(tname) .. "|k=" .. k .. "|ok=0|why=no_type")
+		CCP_Rec("SPAWN", "pt=" .. pt.id .. "|side=" .. side .. "|type=" .. CCP_Str(tname) .. "|k=" .. k .. "|ok=0|why=no_type")
 		return
 	end
 	CCP_Step("spawn:" .. tname)
 	local r = nil
-	local ok, err = pcall(function() r = Spawn_Unit(ty, pt.obj, CCP.human) end)
+	local ok, err = pcall(function() r = Spawn_Unit(ty, pt.obj, owner) end)
 	if not ok then
 		CCP_ApiFail("Spawn_Unit:" .. tname, err)
-		CCP_Rec("SPAWN", "pt=" .. pt.id .. "|type=" .. CCP_Str(tname) .. "|k=" .. k .. "|ok=0|why=error")
+		CCP_Rec("SPAWN", "pt=" .. pt.id .. "|side=" .. side .. "|type=" .. CCP_Str(tname) .. "|k=" .. k .. "|ok=0|why=error")
 		return
 	end
 	local objs, inv, first = 0, 0, nil
@@ -211,6 +212,7 @@ function CCP_SpawnOne(pt, tname, k)
 			local o = r[j]
 			if CCP_Valid(o) then
 				objs = objs + 1
+				table.insert(pt[side], o)
 				if first == nil then
 					first = o
 				end
@@ -225,6 +227,7 @@ function CCP_SpawnOne(pt, tname, k)
 	elseif CCP_Valid(r) then
 		objs = 1
 		first = r
+		table.insert(pt[side], r)
 		if CCP_CFG.invulnerable and pcall(function() r.Make_Invulnerable(true) end) then
 			inv = 1
 		end
@@ -233,8 +236,79 @@ function CCP_SpawnOne(pt, tname, k)
 	if first then
 		where = CCP_XY(first)
 	end
-	CCP_Rec("SPAWN", "pt=" .. pt.id .. "|type=" .. CCP_Str(tname) .. "|k=" .. k .. "|ok=" .. (objs > 0 and "1" or "0") ..
+	CCP_Rec("SPAWN", "pt=" .. pt.id .. "|side=" .. side .. "|type=" .. CCP_Str(tname) .. "|k=" .. k .. "|ok=" .. (objs > 0 and "1" or "0") ..
 		"|objs=" .. objs .. "|inv=" .. inv .. "|owner=" .. (first and CCP_Owner(first) or "?") .. "|xy=" .. where)
+end
+
+-- Multi-point scenarios (ccpgu t04), all built from the same two actions (spawn capturers, despawn the AI's):
+--   all        every point gets the human's capturers at start_frame (t02, single-point maps)
+--   sequential the points get them one after the other, stagger_frames apart (point 1 first): the first capture finds
+--              another relevant point still Neutral (port: disarm), the last one arms the timer
+--   steal      the AI's capturers take point 1 at start_frame while the human takes every other point; steal_frames
+--              later the AI's units are despawned and the human's capturers take point 1 from the AI (the capture
+--              passes through Neutral, 4.2): shows a not-allied capture disarming and the final capture arming
+function CCP_BuildPlan()
+	local sc = CCP_CFG.scenario or "all"
+	local n = table.getn(CCP.points)
+	local s0 = CCP_CFG.start_frame or 150
+	local pl = {}
+	if sc == "sequential" then
+		for i = 1, n do
+			table.insert(pl, { f = s0 + (i - 1) * (CCP_CFG.stagger_frames or 600), act = "human", pt = i })
+		end
+	elseif sc == "steal" then
+		if n > 0 then
+			table.insert(pl, { f = s0, act = "ai", pt = 1 })
+		end
+		for i = 2, n do
+			table.insert(pl, { f = s0, act = "human", pt = i })
+		end
+		if n > 0 then
+			table.insert(pl, { f = s0 + (CCP_CFG.steal_frames or 900), act = "despawn", pt = 1 })
+			table.insert(pl, { f = s0 + (CCP_CFG.steal_frames or 900) + 60, act = "human", pt = 1 })
+		end
+	else
+		sc = "all"
+		for i = 1, n do
+			table.insert(pl, { f = s0, act = "human", pt = i })
+		end
+	end
+	CCP.plan = pl
+	CCP.plan_i = 1
+	CCP_Rec("PLAN", "scenario=" .. CCP_Str(sc) .. "|steps=" .. table.getn(pl) .. "|points=" .. n .. "|stagger=" ..
+		(CCP_CFG.stagger_frames or 600) .. "|steal=" .. (CCP_CFG.steal_frames or 900))
+end
+
+function CCP_SpawnSide(pt, side)
+	local owner, sq = CCP.human, CCP_CFG.squads or {}
+	if side == "ai" then
+		owner, sq = CCP.ai, CCP_CFG.ai_squads or {}
+	end
+	if owner == nil then
+		CCP_Rec("NOSPAWN", "why=no_" .. side .. "_player|pt=" .. pt.id)
+		return
+	end
+	for s = 1, table.getn(sq) do
+		for k = 1, (sq[s].n or 1) do
+			CCP_SpawnOne(pt, sq[s].type, k, owner, side)
+		end
+	end
+end
+
+function CCP_Despawn(pt, side)
+	CCP_Step("despawn:" .. pt.id)
+	local n, ok = 0, 0
+	for j = 1, table.getn(pt[side]) do
+		local o = pt[side][j]
+		if CCP_Valid(o) then
+			n = n + 1
+			if pcall(function() o.Despawn() end) then
+				ok = ok + 1
+			end
+		end
+	end
+	pt[side] = {}
+	CCP_Rec("DESPAWN", "pt=" .. pt.id .. "|side=" .. side .. "|objs=" .. n .. "|ok=" .. ok)
 end
 
 function CCP_Spawn()
@@ -248,17 +322,29 @@ function CCP_Spawn()
 		return
 	end
 	for i = 1, table.getn(CCP.points) do
-		local pt = CCP.points[i]
-		if CCP_Valid(pt.obj) then
-			local sq = CCP_CFG.squads or {}
-			for s = 1, table.getn(sq) do
-				for k = 1, (sq[s].n or 1) do
-					CCP_SpawnOne(pt, sq[s].type, k)
-				end
+		CCP.points[i].human = {}
+		CCP.points[i].ai = {}
+	end
+	CCP_BuildPlan()
+end
+
+-- Runs the plan steps that are due (every service, in order).
+function CCP_RunPlan(F)
+	while CCP.plan_i <= table.getn(CCP.plan) and CCP.plan[CCP.plan_i].f <= F do
+		local st = CCP.plan[CCP.plan_i]
+		CCP.plan_i = CCP.plan_i + 1
+		local pt = CCP.points[st.pt]
+		if pt and CCP_Valid(pt.obj) then
+			if st.act == "despawn" then
+				CCP_Despawn(pt, "ai")
+			else
+				CCP_SpawnSide(pt, st.act)
 			end
 		end
+		if CCP.plan_i > table.getn(CCP.plan) then
+			CCP_Rec("SPAWNED", "points=" .. table.getn(CCP.points) .. "|steps=" .. table.getn(CCP.plan))
+		end
 	end
-	CCP_Rec("SPAWNED", "points=" .. table.getn(CCP.points))
 end
 
 function CCP_Watch(F)
@@ -318,6 +404,9 @@ function CCP_Run(F)
 	if CCP.enumerated and not CCP.spawned and F >= (CCP_CFG.start_frame or 150) then
 		CCP_Spawn()
 	end
+	if CCP.spawned then
+		CCP_RunPlan(F)
+	end
 	CCP_Watch(F)
 	if F >= (CCP_CFG.stop_frame or 54000) then
 		CCP_Finish("stop_frame")
@@ -360,6 +449,7 @@ function CCP_Arm()
 	CCP.armed_once = true
 	CCP.on = true
 	CCP.human = hp
+	CCP.ai = PlayerObject
 	CCP.old_rate = ServiceRate
 	ServiceRate = 0.05
 	local hid = "?"

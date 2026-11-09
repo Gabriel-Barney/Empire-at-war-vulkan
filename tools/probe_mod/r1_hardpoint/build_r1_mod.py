@@ -60,11 +60,15 @@ HARDPOINTS = [
 # its hardpoint (the hook decides at kill + decide frames); hp = the hardpoint index the stage expects to die (None: none
 # / owner death). amount: A stages 5000 (a full 2000-point shield still lets >= 1000 through; a miss leaves the hull
 # alive); B tests: base + 1.1 x the shield points left (Get_Shield, fraction x shield_points), so a miss costs ~1000 hull.
-STAGES = [
+STAGE_DEFS = {d['key']: d for d in [
     {'key': 'FL', 'ship': 'A', 'amount': 5000.0, 'arg': 'HP_Star_Destroyer_Weapon_FL', 'alt': 'HP_F-L_COLL', 'hp': 0,
-     'kind': 'type_name'},
+     'kind': 'type_name', 'view': 'side'},
+    {'key': 'ML', 'ship': 'A', 'amount': 5000.0, 'arg': 'HP_Star_Destroyer_Weapon_ML', 'alt': 'HP_M-L_COLL', 'hp': 4,
+     'kind': 'type_name', 'view': 'side'},
+    {'key': 'MR', 'ship': 'A', 'amount': 5000.0, 'arg': 'HP_Star_Destroyer_Weapon_MR', 'alt': 'HP_M-R_COLL', 'hp': 5,
+     'kind': 'type_name', 'view': 'side'},
     {'key': 'ENG', 'ship': 'A', 'amount': 5000.0, 'arg': 'HP_Star_Destroyer_Engines', 'alt': 'HP_E_COLL', 'hp': 7,
-     'kind': 'type_name'},
+     'kind': 'type_name', 'view': 'stern'},
     {'key': 'SHLD', 'ship': 'A', 'amount': 5000.0, 'arg': 'HP_Star_Destroyer_Shield_Generator', 'alt': 'HP_M-C_COLL',
      'hp': 6, 'kind': 'type_name'},
     {'key': 'TRAC', 'ship': 'A', 'amount': 5000.0, 'arg': 'HP_Star_Destroyer_Tractor_Beam', 'alt': 'HP_trac_bone',
@@ -74,7 +78,29 @@ STAGES = [
      'kind': 'lower_case'},
     {'key': 'COLL', 'ship': 'B', 'amount': 1000.0, 'shield_scaled': True, 'arg': 'HP_F-R_COLL', 'hp': 1,
      'kind': 'collision_mesh'},
-]
+    # The bogus name: a hardpoint name that does not exist. Retail may kill the Lua script on the call (it is run LAST,
+    # the hook writes its DONE record first). A miss costs ~1000 hull (shield_scaled), so the ship survives it.
+    {'key': 'BOGUS', 'ship': 'A', 'amount': 1000.0, 'shield_scaled': True, 'arg': 'HP_NO_SUCH', 'hp': None,
+     'kind': 'bogus_name', 'final': True},
+]}
+
+# Profiles: 'short' is the r1b t07 rerun (about 6 minutes of battle), 'full' is the original r1 t01 run (9 minutes).
+PROFILES = {
+    'short': {'stages': ['FL', 'ML', 'MR', 'ENG', 'BOGUS'],
+              'cfg': {'first_kill': 2700, 'period': 1800, 'pre': 450, 'tail': 450}},   # 1:30, then every minute
+    # 'tail': only the open points of the 2026-11-09 run: ENG with a stern view, then the bogus name. Ship A is ordered to
+    # move north (turn_dy) so a camera in the south sees its stern. Both kills early (1:00, 1:45).
+    'tail': {'stages': ['ENG', 'BOGUS'],
+             'cfg': {'first_kill': 1800, 'period': 1350, 'pre': 450, 'tail': 300, 'turn_dy': 3000.0}},
+    'full': {'stages': ['FL', 'ENG', 'SHLD', 'TRAC', 'DEATH', 'LOWER', 'COLL'], 'cfg': {}},
+}
+DEFAULT_PROFILE = 'short'
+STAGES = [STAGE_DEFS[k] for k in PROFILES[DEFAULT_PROFILE]['stages']]   # default profile (kept for the selftest)
+
+
+def stages_for(profile):
+    return [STAGE_DEFS[k] for k in PROFILES[profile]['stages']]
+
 
 CFG = {
     'session': 'r1',
@@ -93,6 +119,7 @@ CFG = {
     'fast': 90,                 # poll every service (3 frames) for 90 frames after a kill
     'slow': 30,                 # otherwise every 30 frames
     'tail': 450,                # after the last stage
+    'lua_camera': False,        # --lua-camera: the hook calls Point_Camera_At(ship A) at each pre-message (unproven)
 }
 
 TEXTS = [
@@ -101,8 +128,15 @@ TEXTS = [
                          'the BEFORE shots. First kill at 2:00.'),
     ('TEXT_R1P_FL_PRE', 'R1 PROBE: in 10 s, kill 1: ship A FRONT-LEFT turbolaser (HP_..._Weapon_FL).'),
     ('TEXT_R1P_FL_DONE', 'R1 PROBE: kill 1 done (A front-left turret). Take the AFTER shots now.'),
-    ('TEXT_R1P_ENG_PRE', 'R1 PROBE: in 10 s, kill 2: ship A ENGINES (stern).'),
-    ('TEXT_R1P_ENG_DONE', 'R1 PROBE: kill 2 done (A engines). Take the AFTER shots of the stern now.'),
+    ('TEXT_R1P_ENG_PRE', 'R1 PROBE: in 10 s, kill 4: ship A ENGINES (stern view).'),
+    ('TEXT_R1P_ENG_DONE', 'R1 PROBE: kill 4 done (A engines). Take the AFTER shots of the stern now.'),
+    ('TEXT_R1P_ML_PRE', 'R1 PROBE: in 10 s, kill 2: ship A MID-LEFT turret (side view of the left hull edge).'),
+    ('TEXT_R1P_ML_DONE', 'R1 PROBE: kill 2 done (A mid-left). Take the AFTER shots now.'),
+    ('TEXT_R1P_MR_PRE', 'R1 PROBE: in 10 s, kill 3: ship A MID-RIGHT turret (side view of the right hull edge).'),
+    ('TEXT_R1P_MR_DONE', 'R1 PROBE: kill 3 done (A mid-right). Take the AFTER shots now.'),
+    ('TEXT_R1P_BOGUS_PRE', 'R1 PROBE: in 10 s, LAST step: ship A gets a bogus name HP_NO_SUCH. The script may stop; '
+                           'take the last shots, then quit.'),
+    ('TEXT_R1P_BOGUS_DONE', 'R1 PROBE: bogus-name step done and the script is still running. Esc > Quit.'),
     ('TEXT_R1P_SHLD_PRE', 'R1 PROBE: in 10 s, kill 3: ship A SHIELD GENERATOR (domes on the bridge tower).'),
     ('TEXT_R1P_SHLD_DONE', 'R1 PROBE: kill 3 done (A shield generator). Take the AFTER shots of the tower now.'),
     ('TEXT_R1P_TRAC_PRE', 'R1 PROBE: in 10 s, kill 4: ship A TRACTOR BEAM.'),
@@ -239,16 +273,19 @@ def lua_value(v, indent='\t'):
     raise TypeError(type(v))
 
 
-def config(site, note, hint):
+def config(site, note, hint, profile=DEFAULT_PROFILE, lua_camera=False):
     cfg = dict(CFG)
+    cfg.update(PROFILES[profile]['cfg'])
+    cfg['profile'] = profile
+    cfg['lua_camera'] = bool(lua_camera)
     cfg['site'] = site
     cfg['site_note'] = note
     cfg['minimap'] = hint
     cfg['hardpoints'] = [{'name': n, 'health': h, 'breakoff': b or ''} for n, h, b in HARDPOINTS]
     cfg['counted'] = [{'name': n, 'short': k} for n, k in counted()]
     cfg['stages'] = [dict(s, arg=s['arg'] or '', alt=s.get('alt', ''), shield_scaled=s.get('shield_scaled', False),
-                          hp=-1 if s['hp'] is None else s['hp'],
-                          breakoff=(HARDPOINTS[s['hp']][2] or '') if s['hp'] is not None else '') for s in STAGES]
+                          hp=-1 if s['hp'] is None else s['hp'], view=s.get('view', ''), final=s.get('final', False),
+                          breakoff=(HARDPOINTS[s['hp']][2] or '') if s['hp'] is not None else '') for s in stages_for(profile)]
     return cfg
 
 
@@ -276,11 +313,11 @@ def texts_dat(src, pairs):
     return dat_bytes(base + list(pairs))
 
 
-def build(game, out, source_zip=None, no_text=False):
+def build(game, out, source_zip=None, no_text=False, profile=DEFAULT_PROFILE, lua_camera=False):
     """Build Mods\\R1HardpointProbe into `out` (shipped files from `game` or the zip). Returns the config dict."""
     src = Source(game, source_zip)
     site, note, info = space_site(src, SPACE_MAP)
-    cfg = config(site, note, minimap_hint(site, info, CFG['b_dy']))
+    cfg = config(site, note, minimap_hint(site, info, CFG['b_dy']), profile, lua_camera)
     prepare(out)
     files = []
 
@@ -305,9 +342,11 @@ def main():
     ap.add_argument('--source-zip')
     ap.add_argument('--no-text', action='store_true')
     ap.add_argument('--config-out')
+    ap.add_argument('--profile', choices=sorted(PROFILES), default=DEFAULT_PROFILE)
+    ap.add_argument('--lua-camera', action='store_true')
     a = ap.parse_args()
     out = a.out or os.path.join(a.game, 'corruption', 'Mods', MOD_NAME)
-    cfg = build(a.game, out, a.source_zip, a.no_text)
+    cfg = build(a.game, out, a.source_zip, a.no_text, a.profile, a.lua_camera)
     if a.config_out:
         with open(a.config_out, 'w') as f:
             json.dump(cfg, f, indent=1)

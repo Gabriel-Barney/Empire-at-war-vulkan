@@ -30,6 +30,7 @@ import lua50  # noqa: E402
 import build_cu8h_mod as B  # noqa: E402
 import cu8h_dbg_parse as P  # noqa: E402
 import cu8h_run as R  # noqa: E402
+import cu8h_sites as S  # noqa: E402
 
 
 def synthetic_trace(path):
@@ -81,6 +82,70 @@ def synthetic_watch(run_dir):
     open(os.path.join(run_dir, 'records.log'), 'w').write(
         'C8G|HSPAWN|p=hum|sid=1|n=1|f=300|role=L|type=Luke_Skywalker_Jedi|how=generic|id=1|at=0,0|END\n'
         'C8G|HP|p=hum|sid=1|n=2|f=456|L=obj:REBEL_TROOPER;|END\n')
+
+
+def synthetic_story_trace(path):
+    """A story-like trace for cu8h_sites.py: menu-battle draws (space mode A), the seed, galactic draws (mode G), the
+    land battle (mode B): load draws at mf 0 on a load thread, 3 draws in mf 1, then 2 per frame from one call site
+    and 1 every 3rd frame from another up to mf 300, plus formation-ctor draws (one with a rejected try)."""
+    lines = ['CU8HDBG 1 t=selftest state_rva=a13e24 stop_mode_frame=18010', 'ATTACH pid=1 base=0 state=0',
+             'ARM why=arm_file threads=1 failed=0 t=0 state=0']
+    n = [0]
+    st = [0x12345678]
+
+    def hit(stack, mode, mt, mf, steps='1', tid='1', state=None):
+        n[0] += 1
+        st[0] = state if state is not None else P.lcg(st[0])
+        lines.append('HIT n=%d tid=%s rip=%x state=%08x steps=%s dr6=1 mt=%d st=1 mode=%s mf=%d gf=%d stack=%s' % (
+            n[0], tid, stack[0], st[0], steps, mt, mode, mf, mf, ','.join('%x' % r for r in stack)))
+
+    for i in range(5):
+        hit([0x1ffbd2, 0x3825b0, 0x3639d0], 'a0', 2, 1000 + i)
+    hit([0x28ea14, 0x56480], 'a0', 2, 1005, steps='seed', state=0)
+    for _ in range(7):
+        hit([0x1ffb8d, 0x2a1eb0], 'c0', 0, 1)
+    for _ in range(11):
+        hit([0x1ffb8d, 0x134307, 0x3a097c, 0x2b164d, 0x3603a0], 'b0', 1, 0, tid='9')
+    # one ctor draw with a rejected try: find states whose int(1, 30) value is > 29, then <= 29
+    while (((P.lcg(st[0]) >> 10) & 0x7FFF) & 31) <= 29:
+        st[0] = P.lcg(st[0])
+    ctor = [0x1ffb8d, 0x40d11f, 0x4f6fd4, 0x4f738a, 0x43b502, 0x39bda0, 0x395421, 0x2b44a7]
+    hit(ctor, 'b0', 1, 0, tid='9')    # rejected
+    hit(ctor, 'b0', 1, 0, tid='9')    # accepted or not: the next draw starts after the next accepted try
+    while (((st[0] >> 10) & 0x7FFF) & 31) > 29:
+        hit(ctor, 'b0', 1, 0, tid='9')
+    for _ in range(3):
+        hit([0x1ffb8d, 0x3a94f9, 0x62d0c9, 0x62cf90], 'b0', 1, 1)
+    for mf in range(2, 301):
+        hit([0x1ffbd2, 0x62c8aa, 0x62d007, 0x62cdaf], 'b0', 1, mf)
+        hit([0x1ffbd2, 0x62c8aa, 0x62d007, 0x62cdaf], 'b0', 1, mf)
+        if mf % 3 == 0:
+            hit([0x1ffb8d, 0x3a94f9, 0x62d0c9, 0x62cf90], 'b0', 1, mf)
+    land = [0x1ffb8d, 0x40d11f, 0x4f6fd4, 0x43e712, 0x4f80a8, 0x426f28, 0x363c83]
+    while (((P.lcg(st[0]) >> 10) & 0x7FFF) & 31) > 29:
+        st[0] = P.lcg(st[0])
+    hit(land, 'b0', 1, 300)
+    hit(land, 'b0', 1, 300)
+    lines += ['STOP why=mode_frame_300 hits=%d' % n[0], 'DETACH ok=1 err=0']
+    open(path, 'w').write('\n'.join(lines) + '\n')
+
+
+def synthetic_saber_watch(run_dir):
+    """Luke throws at mf 462 (saber id 0x10f8a = 69514), the saber flies 3 frames and dies; the ability ends 1 frame
+    later. Max travel 280 = 250 + R 20 + |aim z 17 - spawn z 7|."""
+    def st(mf, saber='3fffff'):
+        return ('0.0 ST id=1 type=LUKE_SKYWALKER_JEDI mf=%d gf=%d aim=150.000,0.000,17.000 b3b9=1 drawn=0 saber=%s '
+                'sap_tgt=7' % (mf, mf, saber))
+    w = ['0.0 MODE ptr=1 type=1 mf=0 gf=0', '0.0 HERO id=1 type=LUKE_SKYWALKER_JEDI addr=1 owner=0 mf=10 gf=10', st(10),
+         st(462, '10f8a'), '0.0 SABER id=69514 type=LUKES_LIGHT_SABER addr=99 mf=462 gf=462 sap_tgt=7 aim=150,0,17',
+         '0.0 TARGET id=7 type=REBEL_TROOPER mf=462 gf=462 pos=150.000,0.000,10.000']
+    for k, mf in enumerate((462, 463, 464, 465)):
+        w.append('0.0 SB id=69514 mf=%d gf=%d x=%.3f y=0.000 z=7.000 flags=%s trav=%.3f maxt=280.000 dmg=13.000 ptgt=7 '
+                 'hx=0.000 hy=0.000 hz=0.000 d=%.3f' % (mf, mf, 8.0 * k, '42' if mf == 465 else '0', 8.0 * k,
+                                                         8.0 * k))
+    w += ['0.0 SBGONE id=69514 mf=466 gf=466 why=id_changed', st(467)]
+    open(os.path.join(run_dir, 'watch.log'), 'w').write('\n'.join(w) + '\n')
+    open(os.path.join(run_dir, 'records.log'), 'w').write('')
 
 
 def main():
@@ -143,6 +208,33 @@ def main():
                 fails.append('watch report: missing "%s"' % want)
         if not any(f.startswith('watch report') for f in fails):
             print('cu8h_run.py report ok')
+        # 5. call-site report (storyb / cu8k)
+        spath = os.path.join(work, 'story', 'trace.log')
+        os.makedirs(os.path.dirname(spath))
+        synthetic_story_trace(spath)
+        text = S.report(spath, None, os.path.join(work, 'story', 'sites.txt'))
+        for want in ('M2 mode=b0 mt=1 st=1 mf=0..300', '<- battle mode', 'cum=7 ', 'mf   256-1800  steps=107 ',
+                     'steps/frame=2.378', '62c8aa in 62c8aa', 'steps=90 ', 'frame gaps (gap:count) 1:44',
+                     '1  M2 creator=degenerate adopt=gom_postload(395421)', '2  M2 creator=land_composition'):
+            if want not in text:
+                fails.append('sites report: missing "%s"' % want)
+        if not any(f.startswith('sites report') for f in fails):
+            print('cu8h_sites.py ok (load split, windows, call sites, formation-ctor draws)')
+        # 6. thrown-saber report and trace summaries
+        rd = os.path.join(work, 'saber')
+        os.makedirs(os.path.join(rd, 'trace1-test'))
+        synthetic_saber_watch(rd)
+        shutil.copy(spath, os.path.join(rd, 'trace1-test', 'trace.log'))
+        shutil.copy(os.path.join(work, 'story', 'sites.txt'), os.path.join(rd, 'trace1-test', 'sites.txt'))
+        text, _n = R.report(rd)
+        for want in ('saber id=69514 (10f8a) type=LUKES_LIGHT_SABER', 'R = max travel - 250 - |aim z - spawn z| = '
+                     '280.000 - 250 - 10.000 = 20.000', 'SAP +0x2e8 set mf=462, cleared (ability end) mf=467',
+                     'flagged dead mf=465', 'object gone mf=466', 'end - flagged dead = 2, end - gone = 1', '== trace trace1-test ==',
+                     '2  M2 creator=land_composition'):
+            if want not in text:
+                fails.append('saber / trace report: missing "%s"' % want)
+        if not any(f.startswith('saber / trace') for f in fails):
+            print('cu8h_run.py saber and trace summaries ok')
     finally:
         if a.keep:
             print('kept', work)
