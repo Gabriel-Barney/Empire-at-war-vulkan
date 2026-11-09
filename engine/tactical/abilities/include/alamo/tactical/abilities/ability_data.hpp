@@ -233,6 +233,10 @@ struct AbilityObjectDesc {
     // cu8f t06 (CU8F_T04_T06_RE §3.4): has TACTICAL_SUPER_WEAPON (0x2c, slot +0x35e) - a Face_Target Super_Laser turns
     // through it; without it the attack clip starts at the apply.
     bool tactical_super_weapon = false;
+    // s78m t05 (TACTICAL_COMBAT §5.4.3 item 4): Unique_Ground_Unit (type +0x1b60) / Unique_Space_Unit (+0x1b50) as host
+    // TypeIndex, -1 none. A Combat_Bonus aura of this type never applies to units of those types.
+    int32_t unique_ground_type = -1;
+    int32_t unique_space_type = -1;
 };
 
 struct AbilityData {

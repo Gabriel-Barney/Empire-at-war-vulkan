@@ -2141,6 +2141,72 @@ void test_oi_auras() {
     CHECK(!p.sys->has_base_power(0));
 }
 
+void test_s78m_aura_accept() {
+    // s78m t05 (TACTICAL_COMBAT §5.4.3 item 4): the Combat_Bonus accept 0x6f4bf0 always runs the filter 0x48e290 (no
+    // filter tags: no unit; a listed type passes with an empty categories mask), takes every unit allied with the source's
+    // owner (0x39a230: own player included, a neutral relation is not allied; Apply_To_All_Allies is not read), and
+    // refuses the source type's Unique_Ground_Unit / Unique_Space_Unit types.
+    auto build = [](OiWorld& x) {  // descs: 0 Hero (the source), 1 Ship, 2 Other, 3 Unique
+        SpecialAbilityDesc typed = oi_special("Typed", SpecialClass::CombatBonus, ActivationStyle::SpaceAutomatic);
+        typed.applicable_categories = 0;
+        typed.applicable_types = {11, 13};
+        typed.bonus[static_cast<size_t>(ModList::Damage)] = 0.25f;
+        const uint32_t ts = add_special(x.ad, typed);
+        SpecialAbilityDesc none = oi_special("None", SpecialClass::CombatBonus, ActivationStyle::SpaceAutomatic);
+        none.applicable_categories = 0;  // no filter tags at all
+        none.bonus[static_cast<size_t>(ModList::MaxSpeed)] = 0.5f;
+        const uint32_t ns = add_special(x.ad, none);
+        AbilityObjectDesc hero;
+        hero.specials = {ts, ns};
+        hero.unique_space_type = 13;
+        const char* const names[] = {"Hero", "Ship", "Other", "Unique"};
+        for (int32_t i = 0; i < 4; ++i) {
+            UnitDesc u = oi_unit(names[i], 100.0f);
+            u.object_type = 10 + i;
+            push(x.cd, x.ad, u, i == 0 ? hero : AbilityObjectDesc{});
+        }
+        // players: 0 the source, 1 enemy, 2 ally, 3 neutral (not an enemy in the combat table, relation 2 for the accept)
+        x.make(GameMode::Space, std::vector<PlayerInfo>(4));
+    };
+    const uint32_t hd = 0, sd = 1, od = 2, ud = 3;
+    OiWorld w;
+    build(w);
+    AbilityHost h;
+    h.allied_players = [](int32_t a, int32_t b) { return a == b || (a == 0 && b == 2) || (a == 2 && b == 0); };
+    w.ab->set_host(std::move(h));
+    for (int32_t p : {2, 3}) {
+        w.sys->set_enemy(0, p, false);
+        w.sys->set_enemy(p, 0, false);
+    }
+    w.add(1, sd, 0, {0, 0, 0});    // own, listed type (empty categories): accepted
+    w.add(2, od, 0, {50, 0, 0});   // own, unlisted type, empty categories: refused
+    w.add(3, sd, 2, {100, 0, 0});  // allied player: accepted without Apply_To_All_Allies
+    w.add(4, hd, 0, {150, 0, 0});  // the source
+    w.add(5, sd, 1, {200, 0, 0});  // enemy: refused
+    w.add(6, sd, 3, {250, 0, 0});  // neutral: refused
+    w.add(7, ud, 0, {300, 0, 0});  // listed, own, but the source's Unique_Space_Unit: refused
+    w.add(8, sd, 2, {350, 0, 0});  // allied, added after the source (apply on unit add)
+    CHECK_EQ(w.sys->modifier(1, ModList::Damage), 0.25f);
+    CHECK_EQ(w.sys->modifier(2, ModList::Damage), 0.0f);
+    CHECK_EQ(w.sys->modifier(3, ModList::Damage), 0.25f);
+    CHECK_EQ(w.sys->modifier(4, ModList::Damage), 0.0f);  // the source's own type is not listed
+    CHECK_EQ(w.sys->modifier(5, ModList::Damage), 0.0f);
+    CHECK_EQ(w.sys->modifier(6, ModList::Damage), 0.0f);
+    CHECK_EQ(w.sys->modifier(7, ModList::Damage), 0.0f);
+    CHECK_EQ(w.sys->modifier(8, ModList::Damage), 0.25f);
+    for (ObjectId id = 1; id <= 8; ++id) CHECK_EQ(w.sys->modifier(id, ModList::MaxSpeed), 0.0f);  // no filter: no unit
+    // Without the host's relation hook the accept falls back to "not an enemy": the neutral player's unit then passes.
+    OiWorld f;
+    build(f);
+    f.sys->set_enemy(0, 3, false);
+    f.sys->set_enemy(3, 0, false);
+    f.add(1, hd, 0, {0, 0, 0});
+    f.add(2, sd, 3, {50, 0, 0});
+    f.add(3, sd, 1, {100, 0, 0});
+    CHECK_EQ(f.sys->modifier(2, ModList::Damage), 0.25f);
+    CHECK_EQ(f.sys->modifier(3, ModList::Damage), 0.0f);
+}
+
 void test_oi_repair_priorities() {
     // §1.12: each repairer pays Repair_Cost_Per_Frame and adds Repair_Amount_Per_Frame per frame, list order; one who
     // cannot pay is dropped; full health clears the list.
@@ -5215,6 +5281,7 @@ int main(int argc, char** argv) {
     test_oi_mines();
     test_oi_death_draws();
     test_oi_auras();
+    test_s78m_aura_accept();
     test_oi_repair_priorities();
     test_hardpoint_online_effects();
     test_oi_detonations();

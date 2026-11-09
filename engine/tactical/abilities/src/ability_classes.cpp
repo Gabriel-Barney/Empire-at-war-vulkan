@@ -235,7 +235,8 @@ bool AbilitySystem::class_accepts(const Obj& o, const SpecialAbilityDesc& s, Obj
     const bool foe = live && !dummy && enemy(o.owner, combat_->owner(target));
     switch (s.cls) {
         // 0x6eef00 (Arc_Sweep, Concentrate_Fire, Generic_Attack) and the other enemy-target classes: enemy, applicable
-        // filter (0x48e290) [port: the model / layer tests are not modelled].
+        // filter (0x48e290) [port: the model test and the hero-clash pairing rule 0x39a540 (TACTICAL_COMBAT §5.4.3 item
+        // 3; not a layer test) are not modelled].
         case C::ArcSweep:
         case C::GenericAttack:
         case C::EatAttack:
@@ -246,8 +247,9 @@ bool AbilitySystem::class_accepts(const Obj& o, const SpecialAbilityDesc& s, Obj
         case C::DrainLife:
         case C::LeechShields:
         case C::SuperLaser:
-        // Hack 0x6fd610 (TACTICAL_COMBAT §5.4.1): enemy of the user's owner, the filter, a model (+ the layer rule); no
-        // alive / kind / range test [port: "has a model" stands as a live, targetable combat unit; no layer rule].
+        // Hack 0x6fd610 (TACTICAL_COMBAT §5.4.1): enemy of the user's owner, the filter, a model (+ the hero-clash pairing
+        // rule, §5.4.3 item 3: when either side is in a hero clash both must be in the same one); no alive / kind / range
+        // test [port: "has a model" stands as a live, targetable combat unit; no hero clashes yet, so no pairing rule].
         case C::Hack:
         case C::VehicleThief:
         case C::Infection:
@@ -305,15 +307,15 @@ float AbilitySystem::bribe_cost(const Obj& o, ObjectId target) const {
 
 bool AbilitySystem::bribe_accepts(const Obj& o, ObjectId target) const {
     // TacticalBribeAbilityClass +0x28 (0x5b0f70, TACTICAL_COMBAT §5.4.1). The Applicable_* / Excluded_* tags are never read.
-    // 1. a target with a model [port: a combat unit known here]; 7. not dead / a death clone (+0x3a0 & 0x40) [port: alive;
-    //    the 0x80 / 0x02 bits [M] are not modelled].
+    // 1. a target with a model [port: a combat unit known here]; 7. +0x3a0 bits 0x40 (dying / dead), 0x80 (death clone,
+    //    always with 0x40) and 0x02 (destroyed / removed) clear (§5.4.3 item 2) [port: alive covers all three].
     if (target == kNoObject || target == o.id || !combat_->has_unit(target) || !alive_unit(target)) return false;
     const Obj* x = obj(target);
     if (!x || x->dead) return false;
     // 2. an enemy of the user's owner (0x39a450: the target's owner, a team member's through its container [port: the
     //    combat owner, which change_owner keeps equal to the container's]).
     if (!enemy(o.owner, combat_->owner(target))) return false;
-    // 3. not already converted (+0x3a2 & 0x04 [M]: the converted flag).
+    // 3. not already converted by a convert projectile (+0x3a2 & 0x04, §5.4.3 item 5; bribe / hack never set it).
     if (combat_->flags(target) & combat::kUnitConverted) return false;
     // 4. T = the team container of a member (0x39b1a0), else the target.
     const Obj* t = x->container != kNoObject ? obj(x->container) : nullptr;
@@ -325,7 +327,9 @@ bool AbilitySystem::bribe_accepts(const Obj& o, ObjectId target) const {
     if (cost >= 0.0f && !(cost > 0.0f)) return false;
     // 6. 0x395c10(T, all categories): CategoryMask != 0 ([inferred] a container desc with mask 0 uses the member's), no
     //    PROXIMITY_MINE, Friendly_Damage_Amount <= 0, not Is_Named_Hero ([inferred] the member's flag counts too).
-    //    [port] T +0x3a2 & 0x08 and the link block +0x150 ([M]) are not modelled.
+    //    [port] not modelled (§5.4.3 items 1 and 5): T +0x3a2 & 0x08 (a vehicle taken over by a vehicle thief) and T
+    //    +0x150, the build-pad data pack (T is a build pad holding an under-construction or finished object; no vanilla
+    //    effect: no shipped pad has a Tactical_Bribe_Cost > 1).
     uint64_t mask = td.category_mask;
     if (mask == 0 && t != x) mask = xd.category_mask;
     if (mask == 0) mask = combat_->data().units[combat_->desc_index(target)].category_mask;

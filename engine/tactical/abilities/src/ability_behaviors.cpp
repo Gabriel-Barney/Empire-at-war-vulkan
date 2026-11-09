@@ -430,17 +430,33 @@ bool AbilitySystem::spread_out(ObjectId id) const {
 
 bool AbilitySystem::aura_target(const Obj& src, const SpecialAbilityDesc& s, const Obj& t) const {
     if (!t.combat_unit || t.dead || !alive_unit(t.id)) return false;
-    if (t.owner != src.owner && !(s.apply_to_all_allies && allied(src.owner, t.owner))) return false;
-    // Applicable_Unit_Types, then _Categories, then Excluded_Unit_Types (0x48e290, TACTICAL_COMBAT §5.4.1). No filter
-    // given = every unit [inferred] (the aura path; the plain filter accepts nothing then), still minus the excluded
-    // types - the step-3 test of the same order, as no type is listed.
-    if (s.applicable_categories == 0 && s.applicable_types.empty()) {
-        const int32_t ot = combat_->data().units[combat_->desc_index(t.id)].object_type;
-        for (int32_t x : s.excluded_types)
-            if (x >= 0 && x == ot) return false;
-        return true;
+    if (s.cls != SpecialClass::CombatBonus) {
+        // EnhanceDefense [port]: kept as a per-unit aura on the owner's units (all allies with Apply_To_All_Allies), every
+        // unit when no filter is given. Retail (TACTICAL_COMBAT §5.4.3 item 4) has no unit accept (constant-false stub):
+        // its apply inserts one per-player entry for the owner / every ally (+0x180), whose reader is unknown [M].
+        if (t.owner != src.owner && !(s.apply_to_all_allies && allied(src.owner, t.owner))) return false;
+        if (s.applicable_categories == 0 && s.applicable_types.empty()) {
+            const int32_t ot = combat_->data().units[combat_->desc_index(t.id)].object_type;
+            for (int32_t x : s.excluded_types)
+                if (x >= 0 && x == ot) return false;
+            return true;
+        }
+        return target_filter(s, t.id);
     }
-    return target_filter(s, t.id);
+    // s78m t05: CombatBonusAbilityClass accept vf +0x28 (0x6f4bf0, TACTICAL_COMBAT §5.4.3 item 4), in order:
+    // 1. the target filter 0x48e290 always runs (§5.4.1: types, then categories - an empty mask rejects, then excluded
+    //    types); with no filter tags the aura affects no unit.
+    if (!target_filter(s, t.id)) return false;
+    // 2. the target is allied with the source's owner (0x39a230: relation == 0, own player included; a neutral player is
+    //    not allied). Apply_To_All_Allies is not read here. [port] Specific_Faction (+0x1c0 [M]: then the target owner's
+    //    faction must equal it, no ally test) is not modelled.
+    if (!(host_.allied_players ? host_.allied_players(src.owner, t.owner) : allied(src.owner, t.owner))) return false;
+    // 3. the target's type is neither the source type's Unique_Ground_Unit (+0x1b60) nor Unique_Space_Unit (+0x1b50).
+    const AbilityObjectDesc& sd = data_->objects[src.desc];
+    const int32_t ot = combat_->data().units[combat_->desc_index(t.id)].object_type;
+    if (ot >= 0 && (ot == sd.unique_ground_type || ot == sd.unique_space_type)) return false;
+    // 4. (the targeting data pack is created on demand in the port)
+    return true;
 }
 
 void AbilitySystem::aura_give(const Obj& src, const SpecialAbilityDesc& s, ObjectId target) {

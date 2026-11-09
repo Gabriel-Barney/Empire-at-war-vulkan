@@ -224,6 +224,8 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
         }
         return false;
     };
+    // s78m t05 (TACTICAL_COMBAT §5.4.3 item 4): the Combat_Bonus accept's ally test 0x39a230 (relation 0; neutral is not).
+    h.allied_players = [this](int32_t a, int32_t b) { return bt_allied(a, b); };
     hg_ability_host(h);  // hangars: DEPLOY_SQUAD gate / handler (HangarSystem::deploy_ready / deploy_squad)
     abilities_->set_host(std::move(h));
 }

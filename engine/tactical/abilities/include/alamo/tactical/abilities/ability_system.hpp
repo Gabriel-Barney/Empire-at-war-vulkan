@@ -273,6 +273,10 @@ struct AbilityHost {
     // a LAND_TEAM_CONTAINER locomotor: vf +0x230 true, moving or not): writes its position (the one movement uses) and
     // returns true. Unset / false: [port] Tactical_Bribe's container test (R + 10) is skipped and the member alone counts.
     std::function<bool(ObjectId container, Vec3& pos)> land_squad_container;
+    // s78m t05 (TACTICAL_COMBAT §5.4.3 item 4, AI_TACTICAL §7.5.1): 0x39a230 - player `b` is allied with player `a`
+    // (relation a -> b == 0: own player included, a neutral relation 2 is not). Read by the Combat_Bonus accept. Unset:
+    // [port] not enemies in the combat relation table (`allied`).
+    std::function<bool(int32_t a, int32_t b)> allied_players;
 };
 
 // OI abilities: the per-player tactical lists Battlefield_Modifier writes (§2.3.11) besides the reveal range.
