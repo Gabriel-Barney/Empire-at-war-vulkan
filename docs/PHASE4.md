@@ -348,6 +348,13 @@ since the last pass / 30. AI world save version 7 (6 still read; the countdown i
 Golden: `galactic_ai_hotm_human_golden.txt` (a Lift_Blockade gather at Kashyyyk now departs staggered); HotM seed 0
 (q4h parity) is unchanged, since no Rebel plan there gathers with sync. Not ported: mode 0's refusal to end on an
 enemy-held planet (Q1.5), the arrival barrier before the merge (Q2.5).
+2026-11-08 follow-up (q2f t09): a sync departure from a shared fleet used to mark the fleet busy after one split, so one
+unit per fleet left per AI pass (3 ticks) and a wave landed in up to five groups, each auto-resolved and lost alone. Now
+every unit due on a pass splits (PRE_PATH_SEPERATE runs op 2 / op 0 directly, Q2.2) and its own fleet is pathed on the
+same pass; [port] when the split has not taken effect yet (AI latency pipeline) the fleet stays busy and the unit paths on
+the next pass. HotM Empire-human seeds 0-11: Shola taken by tick 13501 in 7 of 12 (before: the 2 seeds whose first
+Rebel space build is a Marauder, via the early Conquer_Pirate); seeds 3 / 4 at 7626 / 7647 (retail 7498). Golden
+`galactic_ai_hotm_human_golden.txt` regenerated (the Kuat split and move on one tick); q4h parity 0 regressions.
 
 | scenario | timing | income | AI choices | battle outcomes | damage |
 |---|---|---|---|---|---|

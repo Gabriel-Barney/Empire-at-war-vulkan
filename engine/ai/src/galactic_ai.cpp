@@ -1406,11 +1406,20 @@ bool GalacticAiWorld::Impl::step_status(StatusRec& s) {
                 const uint32_t f = fleet_of_unit(u);
                 if (tf.sync && f != gal::kNoFleet && movable_fleet(f) && !sim.fleets()[f].moving && sim.fleets()[f].contents.size() > 1 &&
                     unit_jumps(u) && std::find(busy.begin(), busy.end(), f) == busy.end()) {
-                    // Sync departure from a shared fleet: PRE_PATH_SEPERATE (op 2, then op 0) first; it paths next pass.
+                    // Sync departure from a shared fleet: PRE_PATH_SEPERATE (Q2F_T09_RE_ANSWERS Q2.2) [H]: op 2 (detach) and op 0
+                    // (form) run directly, then the unit's own fleet paths. Every task's countdown update runs in the same
+                    // service, so all units due at one planet split and leave on the same frame (wave 1: all MonCalimari units
+                    // on 7088) and the shared fleet takes further splits on this pass. A split that has not taken effect yet
+                    // (orders through the AI latency pipeline) leaves the fleet busy: the unit paths on the next pass [port].
                     fleet_op(tf.player, gal::kFleetDetach, static_cast<uint32_t>(store.id(sim.planets()[at].object)),
                              static_cast<uint32_t>(store.id(sim.fleets()[f].object)), static_cast<uint32_t>(store.id(u)),
                              "split " + std::to_string(store.id(u)) + " at " + planet_name(at));
-                    busy.push_back(f);
+                    const uint32_t own = fleet_of_unit(u);
+                    if (own == f || own == gal::kNoFleet) {
+                        busy.push_back(f);
+                    } else if (movable_fleet(own) && !sim.fleets()[own].moving) {
+                        if (!move_fleet(tf.player, own, stage)) return finish(false);  // pathing to the destination failed
+                    }
                     continue;
                 }
                 if (f == gal::kNoFleet || !movable_fleet(f)) {

@@ -199,3 +199,26 @@ Clean run: 10 cycles, 30 GOALPERC rows, 16 plan scripts loaded, no probe errors,
   buildability is not the cause: it is the PotentialPlan solver's unit score (engine/ai/src/galactic_pp.cpp; the 450
   credits it saves may be part of what puts Build_Ground_Forces ahead of the turbolaser in retail [L]). Next step for t09:
   the Build_Space_Forces solve at tick 42 (scores per candidate type, synced draws), against the RE of the solver.
+
+## 2026-11-08 t09: the first-space-unit difference is draw noise; the reconnect wave arrived piecemeal
+
+- **Gunboat vs Marauder is not a scoring bug.** Build_Space_Forces is `IgnoreTarget`, so the Contrast score of every
+  candidate is one synced float in [0, AI_Combat_Power / 500] (Marauder 1400, Gunboat 1350, Corvette 1250 are nearly
+  tied), and the port's synced draws already differ from retail at tick 1 (130 vs 86 draws). Port HotM Empire-human
+  seeds 0-11: Gunboat 7, Marauder 3 (seeds 0, 6, 10), Corvette 2. On the gunboat / corvette seeds the Rebel funds
+  Build_Ground_Forces at 122 like retail's 97, Conquer_Pirate @Shola starts at 3987-5550 (retail 5518) and
+  Conquer_To_Reconnect @Shola at 7074-8443 (retail 6925). Seed 0 (the q4h parity seed) is a Marauder seed.
+- **Why the port's reconnect then failed:** the synchronized gather sent only one unit per shared fleet per AI pass
+  (the fleet was marked busy after one split), so a planet's units left 3 ticks apart and the wave landed in up to five
+  groups (seed 3: conflicts at Shola 7313 / 7316 / 7319 / 7322 / 7325), each auto-resolved and lost alone. Retail lands
+  all 17 on 7161. Fixed (docs/PHASE4.md, q2f t09 follow-up): seed 3 now takes Shola at 7626, seed 4 at 7647, and 7 of 12
+  seeds take it by 13501 (before: 2). The wave still lands in two groups 3-4 ticks apart (seed 3: 7310 / 7313; cause not
+  traced) [open].
+- **Still open:** in the other 5 seeds the reconnect solve wants units built (GroundForce 17+4, SpaceForce 19+8 ...),
+  so `Are_All_Units_On_Free_Store()` is false and the thread only produces. Retail's reconnect had nothing to buy. The
+  port's Shola is held more strongly: Rebel view at 6860 (seed 1) ground total 2722 / space 8275 (with structures),
+  units 1962 ground (two MAL_Rocket_Vehicle_Companies, mercs) and 2025 space (Interceptor4, StarViper, Skipray); retail's
+  members-only leaf `GroundTotalUnnormalized` is 322 -> 772 over cycles 0-5, space 3275. The port's Underworld builds
+  MAL companies at Shola through Build_Ground_Forces (1474, 2993, 5566); retail's Underworld queued an MDU company there
+  that stalled on installments for ~1300 ticks (1538-2827). Next: the Underworld's Build_Ground_Forces pick and the
+  pay-as-you-go stall against retail.
