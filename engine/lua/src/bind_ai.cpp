@@ -166,18 +166,27 @@ int m_tf_unblock_goal_proposal(Call& c) {
     if (AiScriptHost* h = host_of(c.L)) h->tf_set_flag(c.self->id, AiTfFlag::BlockGoalProposal, false);
     return 0;
 }
+// 0x5fe240 (a2m t05, A2M_T04_RE_ANSWERS Q4.1) [H]: a Lua nil counts as a present argument. Argument 1, when present,
+// must be a game object or an AI target that resolves to a planet; anything else (nil, a bool, a number, a non-planet
+// object) is the script error below: no status, no build tasks, the script stops. Argument 2, when present, must be a
+// bool (the sync flag; the exe's message has the "Prioduce" typo). So argument 1 cannot be skipped.
 int m_tf_produce_force(Call& c) {
-    AiScriptHost* h = host_of(c.L);
-    if (!h) return push_nil(c);
+    static constexpr const char* kNotPlanet = "TaskForceClass::Produce_Force -- Expected a planet object for parameter 1";
     AiArg stage;
     bool sync = false;
-    for (int i = 1; i <= c.nargs; ++i) {
-        if (is_bool(c, i))
-            sync = to_bool(c, i);
-        else if (lua_type(c.L, c.idx(i)) == LUA_TUSERDATA)
-            stage = arg(c, i);
+    if (c.nargs >= 1) {
+        stage = arg(c, 1);
+        if (!stage.present || (stage.target < 0 && !stage.object)) return c.script_error_stop(kNotPlanet);
     }
-    return push_status(c, h->tf_produce_force(c.self->id, stage, sync));
+    if (c.nargs >= 2) {
+        if (!is_bool(c, 2)) return c.script_error_stop("TaskForceClass::Prioduce_Force -- invalid type for parameter 2.  Expected bool");
+        sync = to_bool(c, 2);
+    }
+    AiScriptHost* h = host_of(c.L);
+    if (!h) return push_nil(c);
+    const int32_t status = h->tf_produce_force(c.self->id, stage, sync);
+    if (status == kAiNotAPlanet) return c.script_error_stop(kNotPlanet);
+    return push_status(c, status);
 }
 int m_tf_get_stage(Call& c) {
     AiScriptHost* h = host_of(c.L);

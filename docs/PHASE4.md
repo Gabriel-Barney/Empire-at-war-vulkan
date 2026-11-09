@@ -371,6 +371,25 @@ there), hence `travel.hop_ticks[Rebel:NABOO->SHOLA]` FAIL; new FAIL `credits_at_
 Underworld sabotage at Corellia at 10851 now succeeds). Goldens: `ai_galactic_synthetic_crc.txt`, `ai_underworld_crc.txt`,
 `galactic_ai_hotm_golden.txt`, `galactic_ai_hotm_human_golden.txt`.
 
+**2026-11-09 (a2m t05 / t01): the t04 answers** (`docs/re/A2M_T04_RE_ANSWERS.md`; marked "a2m t05" in `engine/ai/src`).
+FreeStore Setup A: reservation, health (hull fraction alone, clamped [0, 1]: no galactic hardpoint health [M]), then the
+stage key, whose planet is needed only with a target and a visible unit; a unit in a moving fleet takes the move's final
+destination (`FleetState::path.back()`, FleetDataPack +0x50) [H]; the tactical-only exclusions never fire [M]. [port] the
+distance term keeps the fleet's position (retail: the unit's own, stale, position; open item 1). Production Setup C and
+the ETA: revealed + the can-build gate (whose step 24 is the only surface rule), no `surface_accessible` veto; Setup C's
+queue time is the planet production's current item remaining time in the first solve and the AIPlanetBuildQueue time in
+the re-solves. Reach levels 7 / 8 / 9 use GameConstants Low_ / Medium_ / High_Threat_Reachability_Tolerance (1000 /
+3000 / 5000), other levels 0.0. `Produce_Force`: argument 1 present and not a planet (nil included) or argument 2 present
+and not a bool is a script error; no argument in galactic clears the PP's Test_Target_Contrast (inert until 0x6c47c0 is
+ported). Budget: no budget call at PRODUCTION_END, no stored charge, the committed spend s += cost(T, none) at production
+start. `Land_Units`: the FleetObject's contents from the last member down; a ground-kind member (the port's transport)
+lands only when the planet's ground owner is the player or an ally, otherwise fires its Ground_Activated ability; the
+max-ground-forces test is `==`; a FleetObject in transit returns the status without action. HotM Empire-human seed 0:
+Setup A, reach levels, Produce_Force, the budget and Land_Units change no decision; the Setup C / ETA change alone gives
+the parity numbers in the a2m baseline commit (Underworld builds Interceptor4_Frigate at The_Maw, order at tick 97, retail
+queue start 88; Build_Ground_Forces at 1434, retail about 1500; Underworld `credits_at_4500` 374 -> 877 PASS; Rebel
+`build_count` 23 -> 9 and `credits_at_4500` 538 -> 1595 FAIL: the Rebels no longer start Conquer_Pirate at Shola).
+
 **2026-11-08 (q4hf t03): more retail references.** `geonosis_skirmish` now has 3 retail runs (`20261108-204213-skirmish-vanilla-lua`,
 `20261108-203639-skirmish-vanilla` added), so its tolerances use the run-to-run envelope; `hotm_galactic` has a 4th run,
 `20261108-204711-galactic-vanilla-lua` (40 cycles, cut at the scenario's `max_tick` 13501; its two auto-resolved Tatooine

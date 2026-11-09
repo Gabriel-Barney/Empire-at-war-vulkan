@@ -2065,6 +2065,37 @@ function MainForce_Thread()
   ScriptExit()
 end
 )";
+// a2m t05 (A2M_T04_RE_ANSWERS Q6): Land_Units lands a transport only at a planet whose ground owner is the player or an
+// ally; elsewhere it fires Ground_Activated abilities only. The infantry launches at the Empire's P0, lands back there,
+// launches again, flies with the hero to the target and is not landed there.
+static const char* kPlanA2mLand = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "MainForce", "DenyHeroAttach", "HeroShip = 1", "Infantry = 1" } }
+end
+function MainForce_Thread()
+  MainForce.Set_As_Goal_System_Removable(false)
+  BlockOnCommand(MainForce.Launch_Units())
+  Sleep(2)
+  GlobalValue.Set("a2m_l_launched", 1)
+  local st = MainForce.Land_Units()
+  if st then GlobalValue.Set("a2m_l_home", 1) else GlobalValue.Set("a2m_l_home", 0) end
+  BlockOnCommand(st)
+  Sleep(2)
+  GlobalValue.Set("a2m_l_landed", 1)
+  BlockOnCommand(MainForce.Launch_Units())
+  Sleep(2)
+  BlockOnCommand(MainForce.Move_To(Target))
+  Sleep(2)
+  local st2 = MainForce.Land_Units()
+  if st2 then GlobalValue.Set("a2m_l_away", 1) else GlobalValue.Set("a2m_l_away", 0) end
+  BlockOnCommand(st2)
+  Sleep(2)
+  GlobalValue.Set("a2m_l_done", 1)
+  ScriptExit()
+end
+)";
 struct ParityWorld {
     MemoryFiles files;
     AiDefinitions defs;
@@ -2100,6 +2131,7 @@ struct ParityWorld {
         files.add("Data\\Scripts\\AI\\A2lNoTarget.lua", kPlanA2lNoTarget);
         files.add("Data\\Scripts\\AI\\A2lPlainProduce.lua", kPlanA2lPlainProduce);
         files.add("Data\\Scripts\\AI\\A2mMoveTo.lua", kPlanA2mMoveTo);
+        files.add("Data\\Scripts\\AI\\A2mLand.lua", kPlanA2mLand);
         plan_files = list_plan_files([this](std::string_view glob) {
             const std::string g(glob);
             return files.list(g.substr(0, g.find('*')));
@@ -2361,7 +2393,8 @@ static void test_stage_and_setup_a() {
         CHECK(!drop.has(drop.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok), drop.hero));
     }
     {
-        // a2l t03 (Q4.3): a unit in hyperspace stays a candidate, keyed by its fleet's planet (the hop's source).
+        // a2l t03 (Q4.3): a unit in hyperspace stays a candidate; a2m t05 (A2M_T04_RE_ANSWERS Q1.3): keyed by its fleet's
+        // FleetDataPack +0x50, the move's final destination.
         ParityWorld pw(false, {"HeroDeny"});
         pw.run(2);
         objects::ObjectHandle h;
@@ -2446,6 +2479,60 @@ static void test_move_to_fleet_object() {
     CHECK(num("a2m_count0") == 2.0 && num("a2m_count1") == 2.0);  // the member left behind is still in the task force
     CHECK(hero_left != frigate_left);                              // exactly one fleet moved
     pw.world->set_global_values(nullptr);
+}
+
+// a2m t05 (A2M_T04_RE_ANSWERS Q6) [H]: Land_Units lands a transport (port: a ground-kind fleet member) at the player's
+// own planet, refuses to land it anywhere else, and with the surface count == Max_Ground_Forces_On_Planet lands nothing
+// (The over-full case, count > max, passes Land_Units' == test, but the sim's land order then refuses the unit, so it
+// is not observable end to end.)
+static void test_land_units_owner_rule() {
+    struct Result {
+        bool home_status = false, away_status = false, done = false;
+        int64_t home_landed = 0;   // frames the infantry spent on P0's surface after the first launch
+        int64_t end_planet = -1;   // the infantry's planet at the end (fleet at a planet)
+        bool end_in_fleet = false;
+    };
+    const auto run_case = [](int32_t max_forces) {
+        Result r;
+        ParityWorld pw(false, {"A2mLand"},
+                       [](gal::GalacticSetup& s) {
+                           for (gal::StartingForce& f : s.forces)
+                               if (f.player == 0 && f.type == tInfantry) f.planet = 0;  // with the hero at P0
+                       },
+                       [max_forces](gal::GalacticRules& rr) { rr.constants.max_ground_forces_on_planet = max_forces; });
+        lua::GlobalValueStore gv;
+        pw.world->set_global_values(&gv);
+        auto num = [&gv](const char* n) { const lua::AiGlobalValue v = gv.get(n); return v.kind == lua::AiGlobalValue::Number ? v.number : -1.0; };
+        objects::ObjectHandle inf;
+        for (const objects::ObjectHandle u : pw.sim->planets()[0].surface)
+            if (pw.store->type(u) == tInfantry) inf = u;
+        CHECK(static_cast<bool>(inf));
+        for (int32_t f = 1; f <= 30 * 400 && num("a2m_l_done") < 0.0; ++f) {
+            pw.sim->update();
+            pw.world->update_player(0, f, true, false);
+            if (num("a2m_l_launched") >= 0.0 && num("a2m_l_landed") < 0.0) {
+                const auto& surf = pw.sim->planets()[0].surface;
+                r.home_landed += std::find(surf.begin(), surf.end(), inf) != surf.end() ? 1 : 0;
+            }
+        }
+        r.home_status = num("a2m_l_home") == 1.0;
+        r.away_status = num("a2m_l_away") == 1.0;
+        r.done = num("a2m_l_done") == 1.0;
+        const uint32_t fl = pw.sim->fleet_containing(inf);
+        r.end_in_fleet = fl != gal::kNoFleet && !pw.sim->fleets()[fl].moving;
+        r.end_planet = r.end_in_fleet ? static_cast<int64_t>(pw.sim->fleets()[fl].planet) : -1;
+        pw.world->set_global_values(nullptr);
+        return r;
+    };
+    // P0's surface holds nothing else of the Empire's ground forces once the infantry launched: count 0.
+    const Result open = run_case(10), full = run_case(0);
+    std::printf("land units: open home %d landed %lld away %d end planet %lld in fleet %d; full landed %lld\n",
+                open.home_status ? 1 : 0, static_cast<long long>(open.home_landed), open.away_status ? 1 : 0,
+                static_cast<long long>(open.end_planet), open.end_in_fleet ? 1 : 0, static_cast<long long>(full.home_landed));
+    CHECK(open.done && open.home_status && open.away_status);
+    CHECK(open.home_landed > 0);                                       // friendly P0: landed
+    CHECK(open.end_in_fleet && open.end_planet != 0 && open.end_planet >= 0);  // the target (not the Empire's): not landed
+    CHECK(full.home_status && full.home_landed == 0);                  // count 0 == max 0: nothing lands
 }
 
 // OI2 ai: production-disabled types (story DISABLE_BUILDABLE, REMAINING_GAPS §1.5) are never picked by AI production -
@@ -2660,6 +2747,19 @@ static void test_production_unbuildable() {
         fs.run(2);
         const std::vector<uint32_t> f = fs.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok, &eta);
         CHECK(ok && fs.has(f, fs.hero));
+    }
+    {
+        // a2m t05 (A2M_T04_RE_ANSWERS Q2): Production Setup C 0x664210 and the ETA 0x6639f0 have no surface test of their
+        // own; the can-build gate's step 24 lets a space unit through at a planet without an accessible surface (the
+        // retail Interceptor4_Frigate at The_Maw). Every planet type surface-inaccessible: the Corvette is still produced.
+        ParityWorld pw(false, {"HeroDeny"}, no_hero, [](gal::GalacticRules& r) {
+            for (gal::TypeInfo& t : r.types) t.surface_accessible = false;
+        });
+        pw.run(2);
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok, &eta);
+        std::printf("unbuildable: no accessible surface anywhere -> %s, corvette %s, eta %.1f\n", ok ? "solved" : "failed",
+                    pw.has(s, tCorvette) ? "yes" : "no", static_cast<double>(eta));
+        CHECK(ok && pw.has(s, tCorvette) && eta > 0.0f);
     }
     {
         // Build_Initially_Locked (TIE_Fighter_Squadron in HotM): vetoed until unlocked; with the hero gone too the solve fails.
@@ -4052,10 +4152,27 @@ static void test_free_store_path_rules() {
         CHECK(ai_reach_path_cost(cost2, 2, 4) == 0.0 && ai_reach_path_cost(cost3, 3, 4) == 0.5);
         const std::vector<uint32_t> cost3b{gal::pack_edge_weight(1u, 5u), gal::pack_edge_weight(0u, 7u), 0u};
         CHECK(ai_reach_path_cost(cost3b, 3, 4) == kReachNone && ai_reach_path_cost({}, 0, 4) == kReachNone);
-        // Levels 1, 5, 10 (and the unloaded 7 to 9) accept every path, an empty one included.
-        for (const int lv : {1, 5, 7, 8, 9, 10}) {
+        // Levels 1, 5, 10 accept every path, an empty one included.
+        for (const int lv : {1, 5, 10}) {
             CHECK(ai_reach_path_cost(cost2, 2, lv) == 0.7 && ai_reach_path_cost(cost3, 3, lv) == 1.2);
             CHECK(ai_reach_path_cost({}, 0, lv) < kReachNone);
+        }
+        // a2m t05 (A2M_T04_RE_ANSWERS Q3): levels 7 / 8 / 9 accept float((S >> 16) x 100) <= 1000 / 3000 / 5000
+        // (GameConstants Low_ / Medium_ / High_Threat_Reachability_Tolerance); an empty path (S = -1) is rejected.
+        const auto node = [](uint32_t c) { return std::vector<uint32_t>{gal::pack_edge_weight(c, 7u), 0u}; };
+        for (const int lv : {7, 8, 9}) {
+            CHECK(ai_reach_path_cost(cost2, 2, lv) == 0.7 && ai_reach_path_cost(cost3, 3, lv) == 1.2);
+            CHECK(ai_reach_path_cost({}, 0, lv) == kReachNone);
+        }
+        CHECK(ai_reach_path_cost(node(10), 2, 7) == 0.7 && ai_reach_path_cost(node(11), 2, 7) == kReachNone);
+        CHECK(ai_reach_path_cost(node(30), 2, 8) == 0.7 && ai_reach_path_cost(node(31), 2, 8) == kReachNone);
+        CHECK(ai_reach_path_cost(node(50), 2, 9) == 0.7 && ai_reach_path_cost(node(51), 2, 9) == kReachNone);
+        const std::array<float, 3> tr{500.0f, 3000.0f, 5000.0f};  // Thrawn's-Revenge-style override of the low level
+        CHECK(ai_reach_path_cost(node(5), 2, 7, tr) == 0.7 && ai_reach_path_cost(node(6), 2, 7, tr) == kReachNone);
+        // Any other level has threshold 0.0: only a path without node costs passes.
+        for (const int lv : {-1, 11, 40}) {
+            CHECK(ai_reach_path_cost(free2, 2, lv) == 0.7);
+            CHECK(ai_reach_path_cost(cost2, 2, lv) == kReachNone && ai_reach_path_cost({}, 0, lv) == kReachNone);
         }
     }
     // 0x3f9270.
@@ -5820,6 +5937,7 @@ int main(int argc, char** argv) {
     test_stage_and_setup_a();
     test_null_stage_and_plain_produce();
     test_move_to_fleet_object();
+    test_land_units_owner_rule();
     test_production_disabled_and_delivery();
     test_ground_structure_slots();
     test_budget_fraction_before_init();

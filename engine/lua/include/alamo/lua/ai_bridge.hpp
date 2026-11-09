@@ -45,6 +45,7 @@ struct AiArg {
 };
 
 enum class AiStatusResult : uint8_t { Nil = 0, True = 1, False = 2 };
+inline constexpr int32_t kAiNotAPlanet = -2;  // tf_produce_force: the stage argument is not a planet
 
 // TaskForce orders returning a blocking status (or nil): GalacticTaskForceClass + TaskForceClass.
 enum class AiTfOrder : uint8_t { MoveTo, LandUnits, LaunchUnits, Invade, FormUnits, Raid, ForceTestSpaceConflict, ActivateAbility };
@@ -81,7 +82,9 @@ public:
     virtual bool tf_valid(int32_t tf) = 0;
     virtual int32_t tf_force_count(int32_t tf) = 0;
     virtual void tf_set_flag(int32_t tf, AiTfFlag flag, bool value) = 0;
-    // Produce_Force([stage], [synchronized]) -> status id (-1 = nil).
+    // Produce_Force([stage], [synchronized]) -> status id (-1 = nil). `stage.present` is false only with no argument (the
+    // binding raises the script error for nil / non-wrapper values). kAiNotAPlanet: the argument resolved to no planet,
+    // so the binding raises "Expected a planet object for parameter 1" (a2m t05, A2M_T04_RE_ANSWERS Q4.1).
     virtual int32_t tf_produce_force(int32_t tf, const AiArg& stage, bool synchronized) = 0;
     virtual int32_t tf_get_stage(int32_t tf) = 0;  // target id, -1 = nil
     virtual bool tf_all_on_free_store(int32_t tf) = 0;

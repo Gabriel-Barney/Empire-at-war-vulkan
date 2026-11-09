@@ -102,8 +102,7 @@ struct BuildTask {
     double bid = kPpInfinite;
     int64_t created = 0;
     int64_t next_poll = 0;              // PRODUCTION_QUEUED polls every 3 frames
-    bool charged = false;
-    float charge = 0.0f;
+    bool charged = false;               // BT +0xd0 (no charge amount is stored, A2M_T04_RE_ANSWERS Q5.2)
     int32_t queue_id = -1;              // global counter 0x140a436b4 at production start
     PlanetIndex producing_at = kInvalidPlanet;
     int32_t queue_entries_before = 0;   // the sim queue's entries of this type/player when production started

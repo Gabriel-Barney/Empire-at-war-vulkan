@@ -459,11 +459,17 @@ int32_t GalacticAiWorld::Impl::tf_produce_force(int32_t tf, const lua::AiArg& st
     TaskForceRec& t = it->second;
     // Destination (0x5fe240, A2L_T03_RE_ANSWERS Q5.3) [H]: the planet argument only (a planet object or a planet
     // AITargetLocationWrapper); no argument -> null, whatever the TF's stage (TF +0x100 is not read), so nothing
-    // gathers and every build task's +0x98 is null. [port] a non-planet argument (a script error in retail) is treated
-    // as no destination.
+    // gathers and every build task's +0x98 is null.
+    // a2m t05 (A2M_T04_RE_ANSWERS Q4) [H]: an argument that is not a planet is a script error (kAiNotAPlanet: nothing
+    // created); with no argument in galactic mode the PotentialPlan's +0x4d Test_Target_Contrast is cleared.
     PlanetIndex sp = kInvalidPlanet;
-    if (stage.target >= 0) sp = static_cast<PlanetIndex>(stage.target);
-    else if (stage.object) sp = sim.planet_of(stage.object);
+    if (stage.present) {
+        if (stage.target >= 0) sp = static_cast<PlanetIndex>(stage.target);
+        else if (stage.object) sp = sim.planet_of(stage.object);  // a planet object's row; any other object: none
+        if (!valid_planet(sp)) return lua::kAiNotAPlanet;
+    } else if (const auto pit = plans.find(t.plan); pit != plans.end()) {
+        pit->second.test_contrast = false;  // inert until the running-plan contrast re-test 0x6c47c0 is ported
+    }
     t.stage = valid_planet(sp) ? static_cast<int32_t>(sp) : -1;
     // q2f t09: the second argument is the sync flag (BT +0xda, Q2F_T09_RE_ANSWERS Q1.5) [H].
     t.sync = sync;
@@ -941,7 +947,7 @@ int32_t GalacticAiWorld::Impl::instantiate(PlayerAi& p, Goal& g) {
     pi.category = defs.goals[g.type].category;
     pi.target = g.target;
     pi.pp = g.pp_handle;
-    pi.test_contrast = pp.contrast_ok;
+    pi.test_contrast = true;  // PP +0x4d: the PP ctor 0x6be9c0 writes 1 (A2M_T04_RE_ANSWERS Q4.3) [H]
     pi.target_owner = g.target >= 0 ? sim.planets()[static_cast<size_t>(g.target)].owner : -1;
     lua::attach_ai_host(*vm, this, pi.id);
     lua::attach_markup_host(*vm, this);
@@ -1259,8 +1265,7 @@ void GalacticAiWorld::Impl::claim_units(int32_t player) {
                 q.current_queue_id = -1;
                 q.current_type = gal::kNoIndex;
             }
-            if (PlayerAi* owner = player_ai(match->player)) owner->ctx.budget.paid(match->category, match->goal_key, match->charge);
-            finish_build(*match);
+            finish_build(*match);  // a2m t05: PRODUCTION_END makes no budget call (0x5f9f90 is a TF type counter, Q5.1)
             if (tit != tfs.end()) {
                 tf_join(tit->second, u);  // PRODUCTION_END -> JOIN_TASK_FORCE
                 tit->second.had_units = true;
@@ -1596,42 +1601,68 @@ int32_t GalacticAiWorld::Impl::tf_order(int32_t tf, lua::AiTfOrder kind, const l
             return id;
         }
         case lua::AiTfOrder::LandUnits: {
-            // Land_Units 0x6cec80: ground units land directly; transports detach (op 2) then land (op 5); up to
-            // Max_Ground_Forces_On_Planet (Â§5.4). A2 galactic: FleetManagement land (op 5) per unit, onto the player's
-            // own planet [port: the sim carries ground units in fleets directly, so there is no transport to detach].
-            std::map<PlanetIndex, std::vector<ObjectHandle>> by_planet;
-            for (const ObjectHandle u : t.units) {
+            // Land_Units 0x6cec80 (a2m t05, A2M_T04_RE_ANSWERS Q6) [H]:
+            //   1. the elected FleetObject (TF +0x120) and at least one unit, else the warning and nil;
+            //   2. X = the fleet's orbit planet (retail does not null-check: a fleet in transit would crash; the port
+            //      returns the status and logs it, open item 5);
+            //   3. the status; 4. a surface that is not accessible (0x375220) -> nothing else happens;
+            //   5. X's surface count (0x3f9530, any owner) == Max_Ground_Forces_On_Planet -> nothing (the test is ==, so
+            //      an over-full surface still proceeds);
+            //   6. the fleet's contents from the last index down, stopping when the count == the maximum: a transport
+            //      lands (op 2 + op 5) only when X's ground owner is the player or an ally; otherwise the first cargo unit
+            //      with a ready Ground_Activated ability that accepts X fires it (0x3a00b0); a non-transport fires its
+            //      own. No landing, invasion or battle at an enemy, neutral or unowned planet. The walk stops when the
+            //      FleetObject is gone.
+            // [port] The sim carries ground companies in fleets directly: a ground-kind member is the transport and its
+            // own cargo (the land order is op 5 alone, no transport to detach). 0x398670 + 0x3a00b0 are one
+            // GalacticSim::ground_activated_trigger call (it applies the ability's style / ready / accept / black-market
+            // gates and fires nothing for a unit without such an ability).
+            const uint32_t fleet = tf_fleet_object(t);
+            if (fleet == gal::kNoFleet || t.units.empty()) {
+                decide(t.player, "GalacticTaskForceClass::Lua_Land_Units -- No units in TaskForce " + t.name + ", or no FleetObject");
+                return -1;
+            }
+            const int32_t id = new_status(plan, tf, StatusKind::Done);
+            const PlanetIndex x = sim.fleets()[fleet].moving ? kInvalidPlanet : sim.fleets()[fleet].planet;
+            if (!valid_planet(x)) {
+                decide(t.player, "tf " + t.name + " land: FleetObject not in orbit (retail would dereference null)");
+                return id;
+            }
+            if (!sim.surface_accessible(x)) return id;
+            const int32_t max_forces = sim.rules().constants.max_ground_forces_on_planet;
+            int32_t count = 0;
+            for (const ObjectHandle s : sim.planets()[x].surface) count += store.alive(s) ? 1 : 0;
+            if (count == max_forces) return id;
+            // 0x39a2c0(X, player, 1): X's ground owner D+0x74 is the player or an ally (no owner -> false).
+            const int32_t ground_owner = sim.planets()[x].owner;
+            bool friendly = false;
+            if (ground_owner >= 0) {
+                const gal::Relation rel = sim.relation(t.player, ground_owner);
+                friendly = rel == gal::Relation::Self || rel == gal::Relation::Ally;
+            }
+            const std::vector<ObjectHandle> contents = sim.fleets()[fleet].contents;  // count read once
+            std::vector<std::pair<ObjectHandle, PlanetIndex>> fire;
+            for (size_t i = contents.size(); i-- > 0;) {
+                if (count == max_forces) break;
+                const ObjectHandle u = contents[i];
+                if (!store.alive(u)) continue;
                 const gal::TypeInfo* ti = type_info(store.type(u));
-                const uint32_t f = fleet_of_unit(u);
-                if (ti && ground_kind(ti->kind) && f != gal::kNoFleet && !sim.fleets()[f].moving) by_planet[sim.fleets()[f].planet].push_back(u);
-            }
-            // P4 ai: every landed unit fires the Ground_Activated trigger (Lua_Land_Units 0x6cec80 -> 0x3a00b0 per landed
-            // unit, P4_SIM_SYSTEMS Â§3.4: the HackSuperWeapon plan's hack). [port] At a planet the player does not own the
-            // port lands nothing (no invasion here), but the units there still fire the trigger as the landing would.
-            // a2l t02: Land_Units refuses a planet whose surface is not accessible (0x375220: Planet_Surface_Accessible,
-            // destroyed -> false; STRATEGIC_GAPS 1.3 "Landing refusals are in the callers" [H]). Nothing lands there, so
-            // no Ground_Activated trigger fires (HotM: the Rebel slicer droids sent to The_Maw).
-            std::vector<std::pair<ObjectHandle, PlanetIndex>> landed;
-            for (auto& [p, units] : by_planet) {
-                if (!valid_planet(p) || !sim.surface_accessible(p)) continue;
-                if (sim.planets()[p].owner != t.player) {
-                    for (const ObjectHandle u : units) landed.emplace_back(u, p);
-                    continue;
-                }
-                const auto room = static_cast<size_t>(std::max<int64_t>(
-                    0, static_cast<int64_t>(sim.rules().constants.max_ground_forces_on_planet) - static_cast<int64_t>(sim.planets()[p].surface.size())));
-                if (units.size() > room) units.resize(room);
-                for (const ObjectHandle u : units) {
+                const bool transport = ti && ground_kind(ti->kind);
+                if (transport && friendly) {
                     const uint32_t f = fleet_of_unit(u);
-                    if (f == gal::kNoFleet) continue;
-                    if (fleet_op(t.player, gal::kFleetLand, static_cast<uint32_t>(store.id(sim.planets()[p].object)),
+                    if (f != gal::kNoFleet &&
+                        fleet_op(t.player, gal::kFleetLand, static_cast<uint32_t>(store.id(sim.planets()[x].object)),
                                  static_cast<uint32_t>(store.id(sim.fleets()[f].object)), static_cast<uint32_t>(store.id(u)),
-                                 "land " + std::to_string(store.id(u)) + " at " + planet_name(p)) == cmd::RejectReason::None)
-                        landed.emplace_back(u, p);
+                                 "land " + std::to_string(store.id(u)) + " at " + planet_name(x)) == cmd::RejectReason::None)
+                        ++count;  // the land order may apply later (AI pipeline): count it now
+                } else {
+                    fire.emplace_back(u, x);
+                    ground_trigger(t, fire);  // in walk order: an apply may draw (respawn time) or remove the unit
+                    fire.clear();
                 }
+                if (fleet >= sim.fleets().size() || !sim.fleets()[fleet].alive || sim.fleets()[fleet].contents.empty()) break;
             }
-            ground_trigger(t, landed);
-            return new_status(plan, tf, StatusKind::Done);
+            return id;
         }
         case lua::AiTfOrder::LaunchUnits: {
             // Launch_Units 0x6cf070: launch (op 4) then form a fleet (op 0); aborts if blockaded [H].
@@ -1955,7 +1986,7 @@ int32_t GalacticAiWorld::Impl::find_target(int32_t script, const lua::AiFindTarg
         std::vector<PlanetIndex> path;
         std::vector<uint32_t> wts;
         finder->get_path(source, t, path, &wts);
-        return ai_reach_path_cost(wts, path.size(), static_cast<int>(reach));
+        return ai_reach_path_cost(wts, path.size(), static_cast<int>(reach), sim.rules().constants.threat_reachability_tolerance);
     };
     // Range test (argument 7, Q1.1 step 4): 3-D distance^2 from the candidate to the source position, after Evaluate.
     // [M] the source object's position is taken as its planet's.

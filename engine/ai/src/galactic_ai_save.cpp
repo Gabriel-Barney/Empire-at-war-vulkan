@@ -645,7 +645,7 @@ void GalacticAiWorld::write(ByteWriter& w) const {
         w.i64(b.created);
         w.i64(b.next_poll);
         w.boolean(b.charged);
-        w.f32(b.charge);
+        w.f32(0.0f);  // former BuildTask::charge (always 0; dropped in a2m t05), kept so version 8 saves still read
         w.i32(b.queue_id);
         w.u32(b.producing_at);
         w.i32(b.queue_entries_before);
@@ -1035,7 +1035,7 @@ bool GalacticAiWorld::read(ByteReader& r) {
             b.created = r.i64();
             b.next_poll = r.i64();
             b.charged = r.boolean();
-            b.charge = r.f32();
+            (void)r.f32();  // former BuildTask::charge
             b.queue_id = r.i32();
             b.producing_at = r.u32();
             b.queue_entries_before = r.i32();
