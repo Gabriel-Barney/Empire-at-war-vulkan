@@ -30,6 +30,7 @@ add_library(alamo_tactical_movement STATIC
   src/fighter_formation.cpp   # s78f t02: fighter formation block stacks (FIGHTER_FLYING 4.11)
   src/space_avoid.cpp         # SPACE_AVOIDANCE: avoidance tree members + precise model test (FighterAvoidFn rules)
   src/movement_save.cpp       # N1 stage 2: save / load of the battle movement state
+  src/fleet_placement.cpp     # cu8l t03: campaign space fleet placement layout (CU8K_T03_T08_T09_RE 1)
 )
 add_library(alamo::tactical_movement ALIAS alamo_tactical_movement)
 target_include_directories(alamo_tactical_movement PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -62,6 +63,12 @@ add_executable(alamo_tactical_hyperspace_tests tests/test_hyperspace.cpp)
 target_link_libraries(alamo_tactical_hyperspace_tests PRIVATE alamo_tactical_movement alamo_test_support)
 add_test(NAME alamo_tactical_hyperspace_tests COMMAND alamo_tactical_hyperspace_tests)
 set_tests_properties(alamo_tactical_hyperspace_tests PROPERTIES TIMEOUT 120)
+
+# cu8l t03: the campaign space fleet placement layout (fleet_placement.hpp): lists, grid / ring / row offsets, members.
+add_executable(alamo_tactical_fleet_placement_tests tests/test_fleet_placement.cpp)
+target_link_libraries(alamo_tactical_fleet_placement_tests PRIVATE alamo_tactical_movement alamo_test_support)
+add_test(NAME alamo_tactical_fleet_placement_tests COMMAND alamo_tactical_fleet_placement_tests)
+set_tests_properties(alamo_tactical_fleet_placement_tests PROPERTIES TIMEOUT 60)
 
 # N1 stage 2: save / load mid-battle (MovementSystem, grid stamps, occupancy, collision layer, fighter grids,
 # hyperspace departures, engine control): resumed runs must match the uninterrupted run tick for tick.

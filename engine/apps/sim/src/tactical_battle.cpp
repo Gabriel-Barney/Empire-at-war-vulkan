@@ -808,6 +808,8 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     movement_->set_deferred_composition(true);
     // OI tactical: crush hostility = the combat relation (player +0x370 table, MOVEMENT.md 5.5).
     movement_->set_hostility([this](int32_t a, int32_t b) { return combat_ && combat_->is_enemy(a, b); });
+    // cu8l t03 (CU8K_T03_T08_T09_RE §1.10 rule 1): the movement lock of the start fleet's hyperspace arrival (arrivals_).
+    movement_->set_locked_fn([this](mv::ObjectId key) { return arrival_locked(key); });
     // S8 t24 (MOVEMENT §3.2 "Turret recentre around deploy"): a Deploys unit's TURRET aims at its live current combat
     // target (0x632050 [inferred: whenever the unit has one]); the raw position, no z adjust [inferred].
     movement_->set_turret_aim_fn([this](objects::ObjectId id, float& x, float& y, float& z) {
@@ -1305,10 +1307,12 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32
     }
     // cu8l t01 (CU8K_T02_T06_RE §1.5, §4 rules 1 / 3) [port interim rule, untraced: the space skirmish trace is still
     // missing]: a ship whose locomotor is SimpleSpace registers itself at creation like a land container (0x625090): no
-    // draw now, one space composition (0x5d58f0) at the next step 10, in unit order. [port] Not for the campaign start
-    // forces (their fleet placement leaves and re-adopts every placed object; ported with it in cu8l t03) and not for a
-    // SimpleSpace team member [L: whether its own registration survives joining the team is not read].
-    if (space_ && movement_ && (cfg_.skirmish || P.reserve || deploy_script_ || range))
+    // draw now, one space composition (0x5d58f0) at the next step 10, in unit order. [port] Not for a SimpleSpace team
+    // member [L: whether its own registration survives joining the team is not read]. cu8l t03: the campaign start forces
+    // too - the fleet placement then teleports (the pending composition empties: no draw) and re-adopts every placed
+    // object, so only an unplaced ship composes; and the campaign spawn's adopt below finds it in that coordinator (no
+    // draw: retail traced no 0x2a1bcd adopt for the Kashyyyk ships).
+    if (space_ && movement_)
         for (size_t i = first; i < units_.size(); ++i)
             if (units_[i].container == kNoContainer && units_[i].movable && mv_self_registers(units_[i].type)) {
                 const objects::ObjectId one[] = {units_[i].id};
@@ -4504,6 +4508,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
         if (const Unit* u = unit_by_id(id)) bt_kill_silently(mode, u->h);
     oi_crush_.assign(movement_->crush_events().begin(), movement_->crush_events().end());  // OI tactical
     l1_motion(mode, rng);  // L1 systems: hyperspace jumps, engine re-enables
+    arrival_service(mode, rng);  // cu8l t03: the start fleet's hyperspace arrivals (timer draws, finishes)
     l1_force_disable(mode);  // cu8 t02: Disable_Force_Abilities_Range emitters (Force-disable stamps)
     hg_engine_service();   // engine loops: SimpleSpace locomotor services (moving first, then idle)
     bt_team_positions(mode);  // battle host: TEAM containers at their members' box centre (A1_READINGS §29.4)

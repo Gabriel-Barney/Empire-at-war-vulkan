@@ -60,6 +60,11 @@ TacticalBattle::L1Constants load_l1_constants(const data::GameConstants& gc) {
         if (ascii_iequals(t, "yes") || ascii_iequals(t, "true") || t == "1") k.skirmish_superweapons = true;
         else if (ascii_iequals(t, "no") || ascii_iequals(t, "false") || t == "0") k.skirmish_superweapons = false;
     }
+    if (const auto v = gc.get("In_Game_Cinematics")) {  // cu8l t03: a gate of the start fleet's hyperspace arrival
+        const std::string_view t = ascii_trim(*v);
+        if (ascii_iequals(t, "yes") || ascii_iequals(t, "true") || t == "1") k.in_game_cinematics = true;
+        else if (ascii_iequals(t, "no") || ascii_iequals(t, "false") || t == "0") k.in_game_cinematics = false;
+    }
     // battle host: Bombardment_Offset ("0 0 600": x y z) and Bombardment_Distribution (comma / space list of ints) from the
     // data; a missing tag or a malformed / empty value keeps the shipped default.
     auto numbers = [](std::string_view s) {

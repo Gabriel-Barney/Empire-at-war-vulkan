@@ -923,6 +923,149 @@ void test_fighter_fog_toggle() {
 }
 
 
+// cu8l t03 (CU8K_T03_T08_T09_RE §1.2 - §1.9): campaign space fleet placement and the attacker's arrival. The fighter data
+// with Ship_Class on the ships (frigate 4 / corvette 3, fighter 0), Squadron_Offsets on the squadron, SIMPLE_SPACE ships,
+// a TEAM_LOCOMOTOR team type and a frigate hold (Squadron_Capacity: the attacker's squadron travels with its fleet); both
+// sides bring a TIE squadron. Each side's start objects (ships and the squadron
+// container; not the members, not the star base) are placed around its marker; the attacker's squadron container takes
+// the lock adopt, its ships and fighters arrive (no draw) and compose once their arrival ends.
+void test_fleet_placement_campaign() {
+    namespace mv = tactical::movement;
+    auto d0 = make_data(false, false, false, false, false, false, false, false, true);
+    std::string t;
+    {
+        std::ifstream in(d0->root / "Data/XML/S10Types.xml", std::ios::binary);
+        t.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    auto insert_after = [&t](const std::string& at, const std::string& what) {
+        const size_t p = t.find(at);
+        CHECK(p != std::string::npos);
+        if (p != std::string::npos) t.insert(p + at.size(), what);
+    };
+    insert_after("<SpaceUnit Name=\"S10_Frigate\">", "<Ship_Class>frigate</Ship_Class><Squadron_Capacity>1</Squadron_Capacity>");
+    insert_after("<SpaceUnit Name=\"S10_Corvette\">", "<Ship_Class>corvette</Ship_Class>");
+    insert_after("<SpaceUnit Name=\"S10_TIE\">", "<Ship_Class>fighter</Ship_Class>");
+    insert_after("<Squadron Name=\"S10_TIE_Squadron\">", "<Squadron_Offsets>0, 0, 0, 40, -30, 0, -40, -30, 0</Squadron_Offsets>");
+    insert_after("<Team Name=\"Team\">", "<SpaceBehavior>TEAM_LOCOMOTOR</SpaceBehavior>");
+    {
+        const std::string from = "<SpaceBehavior>STARSHIP_LOCOMOTOR</SpaceBehavior>";  // the frigate's (the first one)
+        const size_t p = t.find(from);
+        CHECK(p != std::string::npos);
+        if (p != std::string::npos) t.replace(p, from.size(), "<SpaceBehavior>SIMPLE_SPACE_LOCOMOTOR</SpaceBehavior>");
+    }
+    write_file(d0->root / "Data/XML/S10Types.xml", t);
+    auto d = std::make_unique<Data>();
+    d->root = d0->root;
+    d->files = std::make_unique<DirectoryProvider>(path_to_utf8(d->root));
+    std::vector<std::string> diag;
+    CHECK(d->db.load(*d->files, {}, &diag));
+    CHECK(d->raw.load(*d->files));
+    CHECK(d->types.build(d->raw, d->files.get(), &diag));
+    CHECK(galactic::load_galactic_rules(*d->files, d->db, d->types, d->rules, &diag));
+    CHECK(galactic::load_conflict_rules(*d->files, d->db, d->types, d->rules, d->crules, &diag));
+    d->catalog = std::make_unique<BattleCatalog>(d->types, d->files.get(), &d->db.constants(), &diag);
+    const objects::TypeIndex fr = d->types.resolve_name("S10_Frigate"), co = d->types.resolve_name("S10_Corvette"),
+                             tie = d->types.resolve_name("S10_TIE");
+    CHECK(d->types.get_int(fr, "Ship_Class") == 4 && d->types.get_int(co, "Ship_Class") == 3 && d->types.get_int(tie, "Ship_Class") == 0);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSetup gsetup = make_setup(*d, false);
+    // Within the space unit cap (6) on both sides, so nothing waits as a reserve: the defender's frigate, corvette, star
+    // base and squadron; the attacker's frigate, squadron and two corvettes.
+    const uint32_t sb = type_of(*d, "S10_Star_Base_1"), sq = type_of(*d, "S10_TIE_Squadron");
+    gsetup.forces = {{0, 1, fr}, {0, 1, co}, {0, 1, sb}, {0, 1, sq}, {1, 2, fr}, {1, 2, sq}, {1, 2, co}, {1, 2, co}};
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, gsetup);
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 600;
+    opt.battle.order_interval = 0;  // no stand-in orders
+    const mv::V2 def_at{1500.0f, 0.0f}, att_at{-1500.0f, 0.0f};
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [&](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                auto place = [&m](const char* type, mv::V2 at, float yaw) {
+                                    terrain::ObjectPlacement p;
+                                    p.type_crc = name_crc(type);
+                                    p.owner = 2;
+                                    p.position[0] = at.x;
+                                    p.position[1] = at.y;
+                                    p.rotation_deg[2] = yaw;
+                                    m.objects.push_back(p);
+                                };
+                                place("Defending Forces Position", def_at, 270.0f);  // facing -x (Rz(yaw) . (0, -1))
+                                place("Attacker Entry Position", att_at, 90.0f);     // facing +x
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    for (const uint32_t f : uf) CHECK(gs->move_fleet(1, f, 1) == commands::RejectReason::None);
+    bool checked = false;
+    uint32_t start_frame = 0, ends_frame = 0;
+    for (uint64_t k = 0; k < 4000; ++k) {
+        host.tick_once();
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) {
+            if (checked) break;
+            continue;
+        }
+        const BattleStats& s = b->stats();
+        if (!checked) {
+            checked = true;
+            start_frame = b->frame();
+            const objects::ObjectStore& st = tm->primary();
+            uint32_t near_own = 0, ships = 0, fighters = 0, faced = 0;
+            bool def_grid = true;
+            for (const objects::ObjectHandle h : st.all_objects()) {
+                if (!st.alive(h)) continue;
+                const objects::TypeIndex ty = st.type(h);
+                if (ty != fr && ty != co && ty != tie) continue;
+                const bool def = st.owner(h) == 0;
+                const mv::V2 at = def ? def_at : att_at;
+                const Vec3 p = st.position(h), f = st.facing(h);
+                const float dx = p.x - at.x, dy = p.y - at.y;
+                if (dx * dx + dy * dy < 1200.0f * 1200.0f) ++near_own;
+                if (std::fabs(f.x - (def ? -1.0f : 1.0f)) < 1.0e-3f && std::fabs(f.y) < 1.0e-3f) ++faced;
+                if (ty == tie) ++fighters;
+                else ++ships;
+                // The defender's core: one row of two (radius 60 / 30 boxes, Sx = 120) across the marker's facing.
+                if (def && ty == fr) def_grid = def_grid && std::fabs(p.x - 1500.0f) < 0.5f && std::fabs(p.y + 60.0f) < 0.5f;
+                if (def && ty == co) def_grid = def_grid && std::fabs(p.x - 1500.0f) < 0.5f && std::fabs(p.y - 60.0f) < 0.5f;
+            }
+            // Defender: frigate + corvette (the L1 core) + its squadron container (an L3 lead); attacker: frigate + two
+            // corvettes + its squadron container. Members are not registered; the star base has no Ship_Class.
+            std::printf("  fleet placement at frame %u: placed %u adopts %u lock adopts %u arrivals %u; ships %u fighters %u, %u near"
+                        " their marker, %u facing it\n",
+                        start_frame, s.fleet_placed, s.fleet_adopts, s.fleet_lock_adopts, s.fleet_arrivals, ships, fighters, near_own, faced);
+            CHECK(s.fleet_placed == 3 + 4);
+            CHECK(s.fleet_adopts >= 1 && s.fleet_adopts <= s.fleet_placed);
+            CHECK(s.fleet_lock_adopts == 1);
+            CHECK(s.fleet_arrivals == 3 + 3);  // the attacker's ships and its squadron's fighters
+            CHECK(ships == 5 && fighters == 6 && near_own == ships + fighters && faced == ships + fighters);
+            CHECK(def_grid);
+            CHECK(b->arrivals_pending() > 0);
+        }
+        if (b->arrivals_pending() == 0) {
+            ends_frame = b->frame();
+            // Every ship outside a team composes at its end; the squadron once its fighters are done.
+            std::printf("  fleet arrival: the last arrival ended at frame %u, compositions %u\n", ends_frame, s.fleet_arrival_ends);
+            CHECK(s.fleet_arrival_ends == 3 + 1);
+            break;
+        }
+    }
+    CHECK(checked);
+    // [port] f = 0.5: the timer is int(1, 4) + 10 after the second frame and the arrival ends once it passes 149.
+    CHECK(ends_frame >= start_frame + 130 && ends_frame <= start_frame + 145);
+}
+
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     g_temp_prefix = "alamo_sim_battle_fighter_tests";
@@ -942,6 +1085,8 @@ int main(int argc, char** argv) {
     test_fighter_station_dies();
     std::printf("S7 t22: a fogged formation goal toggles Idle <-> Directed_Combat\n");
     test_fighter_fog_toggle();
+    std::printf("cu8l t03: campaign space fleet placement (markers, adopts) and the attacker's arrival\n");
+    test_fleet_placement_campaign();
     if (g_fail) {
         std::printf("%d check(s) FAILED\n", g_fail);
         return 1;

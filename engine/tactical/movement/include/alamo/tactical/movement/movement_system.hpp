@@ -342,6 +342,12 @@ public:
     // members, one formation). Units that leave it first (another order, stop, teleport, removal) drop out; left empty it
     // composes nothing. False, nothing registered: no id is a unit of this system.
     bool hold_from_birth(std::span<const ObjectId> ids);
+    // cu8l t03 (CU8K_T03_T08_T09_RE §1.10, §3 item 1, §4 item 6): "movement locked" 0x39ad40 rule 1 (the lock count obj
+    // +0x3a8 > 0), asked by the space composition 0x5d58f0 for a seed candidate (key = a squadron's container id, else the
+    // unit id): a locked seed still gets its own formation (one draw) but recruits nobody; candidates are not tested. The
+    // host keeps the counts (the start fleet's hyperspace arrival). Unset: nothing is locked. Not saved (host state).
+    using LockedFn = std::function<bool(ObjectId key)>;
+    void set_locked_fn(LockedFn fn) { locked_ = std::move(fn); }
     // OI tactical (crush, §5.5): owner changes (Change_Owner) and the relation test (player +0x370 table == 1 [M];
     // default: different non-negative players are hostile). The test is called from the serial crush pass only.
     bool set_owner(ObjectId id, int32_t owner);
@@ -885,6 +891,7 @@ private:
     CollisionLayer coll_;  // S7: persistent land collision objects (hashed)
     MovementStats stats_;
     HostileFn hostile_;              // OI tactical
+    LockedFn locked_;                // cu8l t03: the space composition's seed lock (host)
     std::vector<CrushEvent> crush_;  // OI tactical: this tick
     OwnerThreatFn threat_;           // REMAINING_GAPS §4.2
     AnimLengthFn anim_len_;          // §4.3-4.7

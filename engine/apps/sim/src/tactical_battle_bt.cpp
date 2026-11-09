@@ -1129,28 +1129,279 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng, const Para
         facing_[s] = len > 0.0f ? Vec3{d.x / len, d.y / len, 0.0f} : Vec3{s == 0 ? -1.0f : 1.0f, 0.0f, 0.0f};
     }
     for (uint8_t side = 0; side < 2; ++side) {
-        // cu8j t02 (MOVEMENT §4.7.3): the campaign spawn 0x2a00b0 (one call per side [M]) registers each group whose first
-        // member's Ship_Class is 0..6 [inferred: the placement switch's unsigned bound] for the fleet placement 0x4fbb10
-        // (a team member maps to its container), which runs at its end in space: each placed object leaves its coordinator
-        // and is adopted again (0x426d50, 0x39bcb0): a second ctor draw. [port] The placement positions (Set_Capital /
-        // Lead / Screen / Transport_Ship_Formation) are not modelled; the draws are consecutive, so only their count
-        // matters, taken in registration order.
+        // cu8l t03 (CU8K_T03_T08_T09_RE §1.1, §4 item 1; replaces cu8j's count-only second adopt): the campaign spawn
+        // 0x2a00b0 (one call per side: the defender, then the attacker) registers, per galactic unit that spawned
+        // something (group k, k := k + 1 wrapping at the side's marker count), each unit it creates whose own Ship_Class
+        // is 0..6 (the unit made from the galactic object itself: not in the Super category) as itself (before the team
+        // helper: placement skips it as a team member), then the first chunk's TEAM container when its first member's
+        // Ship_Class is 0..6 (later chunks are neither registered nor placed). In space the fleet placement 0x4fbb10
+        // runs at the end: the defender on the DEFENDING FORCES markers, the attacker on the ATTACKER ENTRY markers
+        // (map order [M]).
         const bool placement = space_ && !cfg_.skirmish;
-        std::vector<objects::ObjectHandle> placed;
+        const std::vector<size_t>& marks = side == 0 ? dm : am;
+        std::vector<FleetEntry> reg;
+        uint32_t group = 0;
         for (uint32_t i = 0; i < parts_.size(); ++i)
             if (!parts_[i].reserve && !parts_[i].starbase && !parts_[i].structure && !parts_[i].built && parts_[i].side == side) {
-                const size_t u0 = units_.size();
+                const size_t u0 = units_.size(), c0 = containers_.size();
                 deploy(mode, i, rng);
-                if (!placement || units_.size() <= u0 || units_[u0].type >= types.size()) continue;
-                const int32_t sc = types.get_int(units_[u0].type, "Ship_Class");
-                if (sc < 0 || sc >= 7) continue;
+                if (!placement || units_.size() <= u0) continue;
+                const uint32_t g = group;
+                group = marks.empty() || group + 1 < marks.size() ? group + 1 : 0u;
+                const bool team = !rules_->type(parts_[i].type).members.empty();
                 for (size_t k = u0; k < units_.size(); ++k) {
-                    const objects::ObjectHandle h = units_[k].container != 0xFFFFFFFFu ? containers_[units_[k].container].h : units_[k].h;
-                    if (std::find(placed.begin(), placed.end(), h) == placed.end()) placed.push_back(h);
+                    const uint32_t t = units_[k].type;
+                    if (t >= types.size()) continue;
+                    const int32_t sc = types.get_int(t, "Ship_Class");
+                    if (sc < 0 || sc > 6) continue;
+                    if (!team && (types.get_mask(t, "CategoryMask") & 0x40u) != 0) continue;  // CategoryMask Super [M]
+                    FleetEntry e;
+                    e.unit = static_cast<uint32_t>(k);
+                    e.group = g;
+                    reg.push_back(e);
+                }
+                if (containers_.size() > c0 && units_[u0].container == c0 && units_[u0].type < types.size()) {
+                    const int32_t sc = types.get_int(units_[u0].type, "Ship_Class");  // the head of the member list
+                    if (sc >= 0 && sc <= 6) {
+                        FleetEntry e;
+                        e.container = static_cast<uint32_t>(c0);
+                        e.group = g;
+                        reg.push_back(e);
+                    }
                 }
             }
-        for (const objects::ObjectHandle h : placed) (void)mv_adopt(mode, h, rng, true);
+        if (!placement) continue;
+        bt_fleet_placement(mode, rng, reg, marks);
+        // §1.9: the attacker's call (arrival flag 1 in space), with In_Game_Cinematics and 0x140b27d5e: the vf82 pass.
+        // [port] 0x140b27d5e (the story link's arrival option, P9 != 0) is taken as on in every battle: the Kashyyyk run
+        // (no linked battle) held it, so its start value is 1 [M], and the one link that clears it (P9 = 0: the
+        // _EXEC_DEMO campaign) cannot be told from that start value by the port's LinkedPresentation.
+        if (side == 1 && l1_k_.in_game_cinematics) bt_fleet_arrival(mode, rng, reg);
     }
+}
+
+// cu8l t03 (CU8K_T03_T08_T09_RE §1.3): the cull-box half extents. [M] The type's model bounds (Space_Model_Name, else the
+// other models) x Scale_Factor in the object's frame - hx along the facing (the model's -Y nose), hy across it; [port]
+// without model data the movement radius both ways.
+mv::fleet::HalfBox TacticalBattle::fleet_box(uint32_t type) const {
+    mv::fleet::HalfBox b;
+    const objects::GameObjectTypes& types = catalog_->types();
+    if (type >= types.size()) return b;
+    float sf = types.columns().scale_factor[type];
+    if (!(sf > 0.0f)) sf = 1.0f;
+    if (const BattleCatalog::ModelInfo* mi = catalog_->model_info(type, true, true); mi && mi->has_bounds) {
+        b.hx = 0.5f * (mi->max[1] - mi->min[1]) * sf;
+        b.hy = 0.5f * (mi->max[0] - mi->min[0]) * sf;
+        return b;
+    }
+    const mv::UnitDesc d = mv::unit_desc_from_type(types, type);
+    b.hx = b.hy = d.radius;
+    return b;
+}
+
+// Squadron_Offsets (type +0x998: one "x, y, z" per line, list order), as (x, y).
+std::vector<mv::V2> TacticalBattle::fleet_offsets(uint32_t type) const {
+    std::vector<mv::V2> out;
+    const objects::GameObjectTypes& types = catalog_->types();
+    if (type >= types.size()) return out;
+    const std::span<const std::string_view> toks = types.get_list(type, "Squadron_Offsets");
+    for (size_t i = 0; i + 1 < toks.size(); i += 3) {
+        const std::string xs(ascii_trim(toks[i])), ys(ascii_trim(toks[i + 1]));
+        out.push_back(mv::V2{static_cast<float>(std::strtod(xs.c_str(), nullptr)), static_cast<float>(std::strtod(ys.c_str(), nullptr))});
+    }
+    return out;
+}
+
+// cu8l t03 (CU8K_T03_T08_T09_RE §1.2 - §1.8, §4 items 2 / 3): per anchor (the side's markers in order) its group's
+// registered objects in registration order - team members skipped, a container classed by its first member - laid out by
+// mv::fleet::place_group; then per placed object in placement order: orientation := the marker's, teleport to the new
+// position (own z), leave its coordinator and adopt (one int(1, FPS) when the predicate admits it: mv_adopt with leave),
+// and a TEAM container's members to container + Rot(yaw) . offset with the marker's orientation (no draw).
+void TacticalBattle::bt_fleet_placement(TacticalMode& mode, SimRng& rng, const std::vector<FleetEntry>& reg,
+                                        const std::vector<size_t>& markers) {
+    objects::ObjectStore& st = mode.primary();
+    const objects::GameObjectTypes& types = catalog_->types();
+    for (size_t a = 0; a < markers.size(); ++a) {
+        const MapMarker& mk = bt_markers_[markers[a]];
+        std::vector<mv::fleet::FleetObject> objs;
+        std::vector<FleetEntry> refs;
+        std::vector<std::vector<uint32_t>> members;  // per object: the live members (units_ indices), member order
+        for (const FleetEntry& e : reg) {
+            if (e.group != a) continue;
+            mv::fleet::FleetObject o;
+            std::vector<uint32_t> mem;
+            if (e.unit != 0xFFFFFFFFu) {
+                const Unit& u = units_[e.unit];
+                if (u.container != 0xFFFFFFFFu || !u.alive || !st.alive(u.h)) continue;  // 0x39b1a0: team members skipped
+                o.ship_class = types.get_int(u.type, "Ship_Class");
+                o.box = fleet_box(u.type);
+            } else {
+                const Container& ct = containers_[e.container];
+                if (ct.removed || !st.alive(ct.h)) continue;
+                for (uint32_t k = 0; k < units_.size(); ++k)
+                    if (units_[k].container == e.container && units_[k].alive && st.alive(units_[k].h)) mem.push_back(k);
+                if (mem.empty()) continue;
+                o.team = true;
+                o.ship_class = types.get_int(units_[mem.front()].type, "Ship_Class");  // 0x4ec820: the first member's
+                for (const uint32_t k : mem) o.members.push_back(fleet_box(units_[k].type));
+                o.offsets_team = fleet_offsets(ct.type);          // team +0x50: Create_Team_Type, else the company type
+                o.offsets_company = fleet_offsets(ct.squad_type); // team +0x58: the company type
+                o.units_team = ct.type < types.size() ? static_cast<uint32_t>(types.get_list(ct.type, "Squadron_Units").size()) : 0u;
+                o.units_company =
+                    ct.squad_type < types.size() ? static_cast<uint32_t>(types.get_list(ct.squad_type, "Squadron_Units").size()) : 0u;
+            }
+            objs.push_back(std::move(o));
+            refs.push_back(e);
+            members.push_back(std::move(mem));
+        }
+        if (objs.empty()) continue;
+        Vec3 face = mk.facing;
+        if (face.x == 0.0f && face.y == 0.0f) face = Vec3{1.0f, 0.0f, 0.0f};
+        const float yaw = mv::norm_deg(mv::heading_deg(mv::V2{face.x, face.y}));  // the anchor's yaw (+0x8c) [M: 0..360]
+        const std::vector<mv::fleet::Placed> placed = mv::fleet::place_group(objs, mv::V2{mk.pos.x, mk.pos.y}, yaw);
+        for (const mv::fleet::Placed& p : placed) {
+            const FleetEntry& e = refs[p.index];
+            if (e.unit != 0xFFFFFFFFu) {
+                const Unit& u = units_[e.unit];
+                const Vec3 at{p.pos.x, p.pos.y, st.position(u.h).z};
+                (void)teleport(mode, u.id, at, face);
+                ++stats_.fleet_placed;
+                if (mv_adopt(mode, u.h, rng, true)) ++stats_.fleet_adopts;
+                continue;
+            }
+            const Container& ct = containers_[e.container];
+            st.set_position(ct.h, Vec3{p.pos.x, p.pos.y, st.position(ct.h).z});
+            st.set_facing(ct.h, face);
+            ++stats_.fleet_placed;
+            if (mv_adopt(mode, ct.h, rng, true)) ++stats_.fleet_adopts;
+            const std::vector<uint32_t>& mem = members[p.index];
+            for (size_t j = 0; j < mem.size() && j < p.members.size(); ++j) {
+                const Unit& m = units_[mem[j]];
+                (void)teleport(mode, m.id, Vec3{p.members[j].x, p.members[j].y, st.position(m.h).z}, face);
+            }
+        }
+        bt_used_ = true;
+    }
+}
+
+// cu8l t03 (CU8K_T03_T08_T09_RE §1.9, §4 items 4 / 5): after every group is placed, per registration entry in registration
+// order (placed or not), the object's LOCOMOTOR vf82(0): TeamLocomotor 0x62f800 (a TEAM container) leaves its coordinator
+// and takes the movement lock - the first +1 splits and adopts: one int(1, FPS) - and calls every member's vf82 (Fighter
+// 0x5cb020 / SimpleSpace: the hyperspace arrival, no draw); SimpleSpace 0x6251d0 (a ship) leaves its coordinator and
+// starts the arrival (state 5, lock +1 [port: from here]), no draw; Fighter 0x5cb020: the arrival, no lock, no draw;
+// Starship / Fleet / plain: nothing. The arrivals then run in arrival_service.
+void TacticalBattle::bt_fleet_arrival(TacticalMode& mode, SimRng& rng, const std::vector<FleetEntry>& reg) {
+    const objects::ObjectStore& st = mode.primary();
+    auto token_is = [this](uint32_t type, std::string_view want) { return ascii_iequals(mv_locomotor_token(type), want); };
+    auto has_rec = [this](objects::ObjectId id, uint32_t container) {
+        return std::any_of(arrivals_.begin(), arrivals_.end(),
+                           [&](const ArrivalRec& r) { return r.id == id && r.container == container; });
+    };
+    // A unit's vf82(0): SimpleSpace / Fighter start the arrival; a ship outside a team composes at its finish.
+    auto arrive = [&](const Unit& u) {
+        if (!u.alive || u.retreated || !st.alive(u.h)) return;
+        const bool ship = token_is(u.type, "SIMPLE_SPACE_LOCOMOTOR");
+        if (!ship && !token_is(u.type, "FIGHTER_LOCOMOTOR")) return;
+        if (ship && movement_ && u.movable) (void)movement_->stop_and_leave(u.id);  // suspend, leave the coordinator
+        if (has_rec(u.id, 0xFFFFFFFFu)) return;
+        ArrivalRec r;
+        r.id = u.id;
+        r.timer = kArrivalState5;
+        r.composes = ship && u.container == 0xFFFFFFFFu;
+        arrivals_.push_back(r);
+        ++stats_.fleet_arrivals;
+    };
+    for (const FleetEntry& e : reg) {
+        if (e.unit != 0xFFFFFFFFu) {
+            arrive(units_[e.unit]);
+            continue;
+        }
+        const Container& ct = containers_[e.container];
+        if (ct.removed || !st.alive(ct.h) || !token_is(static_cast<uint32_t>(st.type(ct.h)), "TEAM_LOCOMOTOR")) continue;
+        // 0x62f800: leave; lock 0 -> 1 (0x3a8e50): split from any formation and adopt (the container is outside the
+        // movement system: one draw when the predicate admits it).
+        if (mv_adopt(mode, ct.h, rng, true)) ++stats_.fleet_lock_adopts;
+        if (!has_rec(ct.id, e.container)) {
+            ArrivalRec r;
+            r.id = ct.id;
+            r.container = e.container;
+            r.composes = true;
+            arrivals_.push_back(r);
+        }
+        for (const Unit& m : units_)
+            if (m.container == e.container) arrive(m);
+    }
+    // Serviced in object order (ascending id): units first, then the containers.
+    std::stable_sort(arrivals_.begin(), arrivals_.end(), [](const ArrivalRec& x, const ArrivalRec& y) {
+        const bool cx = x.container != 0xFFFFFFFFu, cy = y.container != 0xFFFFFFFFu;
+        return cx != cy ? !cx : x.id < y.id;
+    });
+}
+
+bool TacticalBattle::arrival_locked(objects::ObjectId key) const {
+    for (const ArrivalRec& r : arrivals_)
+        if (r.id == key && (r.container != 0xFFFFFFFFu || r.composes)) return true;
+    return false;
+}
+
+// cu8l t03: the arrival timers (L1_S4_REMAINING §3.4 "Hyperspace in", CU8K_T03_T08_T09_RE §1.9 "What follows"). [port] f
+// (the arrival distance's place between the min / max of all arrivals) is 0.5, the value for equal distances: the
+// arrival start points (vf +0x2a0) are not modelled. The hyperspace hold (P9 = 2) freezes the timers after the first
+// frame's draw [M]. A ship outside a team finishes with a new coordinator holding where it is (hold_from_birth: one space
+// composition at this tick's step 10; [port] an order the unit took meanwhile keeps running); a squadron container once
+// none of its members' records is left (finished or gone): the same for its live members (one composition).
+void TacticalBattle::arrival_service(TacticalMode& mode, SimRng& rng) {
+    if (arrivals_.empty()) return;
+    const objects::ObjectStore& st = mode.primary();
+    const bool held = arrival_held();
+    constexpr float kF = 0.5f;
+    const int32_t steps = 5 * static_cast<int32_t>(4.0f * kF);
+    std::vector<ArrivalRec> keep;
+    keep.reserve(arrivals_.size());
+    std::vector<objects::ObjectId> one;
+    for (ArrivalRec& r : arrivals_) {
+        if (r.container != 0xFFFFFFFFu) {
+            keep.push_back(r);
+            continue;
+        }
+        const Unit* u = unit_by_id(r.id);
+        if (!u || !u->alive || u->retreated || !st.alive(u->h)) continue;
+        if (r.timer == kArrivalState5) {
+            r.timer = kArrivalState4;
+        } else if (r.timer == kArrivalState4) {
+            r.timer = std::clamp(rng.range_int(1, 4) + steps, 0, 24);
+        } else if (!held && ++r.timer > 149) {
+            if (r.composes && movement_ && u->movable) {
+                one.assign(1, r.id);
+                if (movement_->hold_from_birth(one)) ++stats_.fleet_arrival_ends;
+            }
+            continue;
+        }
+        keep.push_back(r);
+    }
+    arrivals_.swap(keep);
+    keep.clear();
+    for (const ArrivalRec& r : arrivals_) {
+        if (r.container == 0xFFFFFFFFu) {
+            keep.push_back(r);
+            continue;
+        }
+        bool waiting = false, any = false;
+        std::vector<objects::ObjectId> live;
+        for (const Unit& m : units_) {
+            if (m.container != r.container || !m.alive || m.retreated) continue;
+            any = true;
+            if (m.movable) live.push_back(m.id);
+            for (const ArrivalRec& x : arrivals_)
+                waiting = waiting || (x.container == 0xFFFFFFFFu && x.id == m.id);
+        }
+        if (waiting) {
+            keep.push_back(r);
+            continue;
+        }
+        if (any && movement_ && !live.empty() && movement_->hold_from_birth(live)) ++stats_.fleet_arrival_ends;  // 0x630390: lock -1, new coordinator
+    }
+    arrivals_.swap(keep);
 }
 
 // ---- build pads: attachment bone, kill list, persistence (REMAINING_GAPS §6.5) --------------------------------------

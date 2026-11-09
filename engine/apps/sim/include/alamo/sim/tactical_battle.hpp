@@ -74,6 +74,7 @@
 #include "alamo/sim/game_modes.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
 #include "alamo/tactical/combat/combat_system.hpp"
+#include "alamo/tactical/movement/fleet_placement.hpp"  // cu8l t03
 #include "alamo/tactical/movement/movement_system.hpp"
 #include "alamo/tactical/movement/space_avoid.hpp"  // SPACE_AVOIDANCE (fighter avoidance members)
 #include "alamo/tactical/abilities/space_fields.hpp"     // L1 systems
@@ -164,6 +165,9 @@ struct BattleStats {
     // t50 (land skirmish): pads of the two slots, pads that started built, structures started on a pad during the battle.
     uint32_t skirmish_pads = 0, skirmish_prebuilt = 0, pad_builds = 0;
     uint32_t pad_restored = 0;  // §9.4 persisted pad children recreated at setup
+    // cu8l t03: the campaign space fleet placement (objects placed, their adopt draws), the vf82 pass's TEAM-container lock
+    // adopt draws, the arrivals started and the arrival ends that registered a new coordinator.
+    uint32_t fleet_placed = 0, fleet_adopts = 0, fleet_lock_adopts = 0, fleet_arrivals = 0, fleet_arrival_ends = 0;
 };
 
 // A render-side attachment reported by the sim (Damaged_Smoke_Asset_Name at 75 % / 50 %).
@@ -788,6 +792,9 @@ public:
         // cu9h t01: the skirmish "special weapons" option (0x140b154bc & 4, HUD_GAPS §9.2) gates skirmish bombing runs. [port] no
         // lobby: GameConstants MP_Default_Allow_SuperWeapons (shipped yes).
         bool skirmish_superweapons = true;
+        // cu8l t03 (CU8K_T03_T08_T09_RE §1.9): GameConstants In_Game_Cinematics (GC 0x140b16dd2; shipped True), one of the
+        // three gates of the start fleet's hyperspace arrival.
+        bool in_game_cinematics = true;
         Vec3 bombardment_offset{0.0f, 0.0f, 600.0f};
         std::vector<int32_t> bombardment_distribution{0, 3, 1, 2, 3, 2, 0, 1, 2, 1, 3, 0, 1, 2, 0, 3, 0, 2, 1, 3, 3, 2, 1, 0};
     };
@@ -1043,6 +1050,8 @@ public:
     const galactic::BattleResult& result() const { return result_; }
     const galactic::BattleRequest& request() const { return req_; }
     const BattleStats& stats() const { return stats_; }
+    // cu8l t03: the attacker's hyperspace arrivals still running (records; a squadron container counts until its members end).
+    size_t arrivals_pending() const { return arrivals_.size(); }
     // HARDPOINT_DISABLED.md §9.1 (presentation): units whose engines came back online this tick (EnginesOnline: an ENGINE
     // hardpoint repaired to max) - the host restarts their SFXEvent_Engine_Idle_Loop. Not hashed.
     const std::vector<objects::ObjectId>& engines_restarted() const { return engines_restarted_; }
@@ -1922,6 +1931,36 @@ private:
         uint32_t end_frame = 0;         // 0 = still flying / waiting; set at the catch (catch + 11)
     };
     std::vector<SaberThrowState> sabers_;  // apply order
+    // --- cu8l t03: the campaign space fleet placement 0x4fbb10 and the start fleet's hyperspace arrival
+    // (CU8K_T03_T08_T09_RE §1, §4; tactical_battle_bt.cpp) ---
+    struct FleetEntry {      // a registration (object, group) of the campaign spawn 0x2a00b0 (0x4fc7e0)
+        uint32_t unit = 0xFFFFFFFFu;       // index into units_ (a unit registered as itself), else
+        uint32_t container = 0xFFFFFFFFu;  // index into containers_ (the first chunk's TEAM container)
+        uint32_t group = 0;                // group k: anchor k mod (marker count)
+    };
+    void bt_fleet_placement(TacticalMode& mode, SimRng& rng, const std::vector<FleetEntry>& reg, const std::vector<size_t>& markers);
+    void bt_fleet_arrival(TacticalMode& mode, SimRng& rng, const std::vector<FleetEntry>& reg);
+    tactical::movement::fleet::HalfBox fleet_box(uint32_t type) const;            // cull-box half extents [M: model bounds]
+    std::vector<tactical::movement::V2> fleet_offsets(uint32_t type) const;       // Squadron_Offsets (x, y)
+    // The start fleet's hyperspace arrival (§1.9, L1_S4_REMAINING §3.4 "Hyperspace in") [port stand-in: the units are not
+    // moved, hidden or suspended; only the timer, its synced draw, the movement lock and the end's new coordinator are
+    // modelled]. Unit record (container = none): timer kArrivalState5 (the vf82 call: the first service turns it to
+    // state 4), kArrivalState4 (state 4's first frame: timer := clamp(int(1, 4) + 5 trunc(4 f), 0, 24), one synced draw),
+    // then += 1 per frame unless the hyperspace hold is on; > 149: the finish. `composes`: a ship outside a team (its finish
+    // 0x624dc0: lock released, a new coordinator holding its position - one space composition at the next step 10).
+    // Container record: the TEAM container's lock (taken by the placement's vf82 0x62f800), released once none of its
+    // members' records is left (0x630390: a new coordinator - one composition). Ascending id per kind.
+    struct ArrivalRec {
+        objects::ObjectId id = objects::kNoObjectId;
+        uint32_t container = 0xFFFFFFFFu;  // containers_ index of a container record
+        int32_t timer = 0;
+        bool composes = false;
+    };
+    static constexpr int32_t kArrivalState5 = -2, kArrivalState4 = -1;
+    std::vector<ArrivalRec> arrivals_;  // saved (battle state version 11)
+    void arrival_service(TacticalMode& mode, SimRng& rng);  // tick: after the L1 motion services, before step 10
+    bool arrival_locked(objects::ObjectId key) const;        // MovementSystem::set_locked_fn
+    uint32_t state_io_version_ = 0;  // the battle state version state_io reads (0: the current one)
     void saber_throw_service(TacticalMode& mode);
     bool anim_engaged_clip(objects::ObjectId id) const;  // tactical_battle.cpp: current clip ATTACK (5) / SPINMOVE (0x68)
     std::vector<HgHolsterType> hg_holster_types_;

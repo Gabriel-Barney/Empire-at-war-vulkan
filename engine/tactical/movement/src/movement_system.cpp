@@ -211,8 +211,10 @@ bool MovementSystem::compose_space(const PendingComposition& pc, uint32_t frame,
         const int32_t r = formation_ctor_draw(rng);  // 0x4f6fb0: the new formation
         finish(seed, r);
         if (seed.role != 0) continue;  // a ship with a role: one formation per ship
-        // Role 0 (fighters, squadron containers, objects without a layer): recruit in candidate order. [port] never
-        // locked (0x39ad40); every space locomotor is kind 2.
+        // cu8l t03 (CU8K_T03_T08_T09_RE §3 item 1): a locked seed (0x39ad40) recruits nobody; candidates are not tested.
+        if (locked_ && locked_(seed.key)) continue;
+        // Role 0 (fighters, squadron containers, objects without a layer): recruit in candidate order. [port] every space
+        // locomotor is kind 2.
         const float reach = 0.33f * length(pc.goal - seed.pos);
         for (size_t i = 0; i < cands.size();) {
             const Cand& c = cands[i];
