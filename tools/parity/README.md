@@ -8,10 +8,11 @@ copied. Standard library only.
 
 | file | what |
 |---|---|
-| `parity_harness.py` | `run`, `retail`, `list`, `selftest` (below) |
+| `parity_harness.py` | `run` (single run, or `--seeds N`: distribution mode), `retail`, `list`, `add-refs`, `selftest` (below) |
 | `scenarios.json` | the scenarios (reference runs, port command, kit) and every tolerance with its reason |
-| `baseline.json` | per-metric verdicts of the last recorded run (dev commit inside); the regression check of the slow ctests |
-| `CMakeLists.txt` | ctest `parity_harness_selftest` (fast tier) and `parity_harness_<scenario>` (label `slow`) |
+| `baseline.json` | per-metric verdicts of the last recorded single run (dev commit inside); the regression check of `parity_harness_<scenario>` |
+| `baseline_seeds.json` | the same for the distribution mode (`--seeds`); the regression check of `parity_harness_<scenario>_seeds` |
+| `CMakeLists.txt` | ctest `parity_harness_selftest` (fast tier), `parity_harness_<scenario>` and `parity_harness_<scenario>_seeds` (label `slow`) |
 | `out\` | reports and port runs (ignored by git) |
 
 ## Use
@@ -19,6 +20,8 @@ copied. Standard library only.
 ```
 toolchain\venv\Scripts\python.exe -I tools\parity\parity_harness.py run [--scenario hotm_galactic] [--port-exe build-msvc\bin\alamo_headless.exe]
 toolchain\venv\Scripts\python.exe -I tools\parity\parity_harness.py run --check-baseline tools\parity\baseline.json
+toolchain\venv\Scripts\python.exe -I tools\parity\parity_harness.py run --seeds 10 [--jobs 4] [--seed-base S] --check-baseline tools\parity\baseline_seeds.json
+toolchain\venv\Scripts\python.exe -I tools\parity\parity_harness.py add-refs --scenario geonosis_skirmish <run> [<run> ...] [--note TEXT]
 toolchain\venv\Scripts\python.exe -I tools\parity\parity_harness.py retail      (the retail runs against each other)
 toolchain\venv\Scripts\python.exe -I tools\parity\parity_harness.py list        (reference runs present on this machine)
 toolchain\venv\Scripts\python.exe -I tools\parity\parity_harness.py selftest
@@ -38,6 +41,54 @@ behaviour change moves a metric that passed in the baseline, re-record it, like 
 ```
 toolchain\venv\Scripts\python.exe -I tools\parity\parity_harness.py run --write-baseline tools\parity\baseline.json --commit <dev commit>
 ```
+
+## Distribution mode (`--seeds`, parity tier 2)
+
+`docs/DECISIONS.md` "Parity tiers" (Gabriel, 2026-11-09): what randomness drives (AI decisions, battle and auto-resolve
+outcomes) must match retail's *distribution* over many seeds, and one seed's outcome moving is not by itself a failure.
+The single-run mode grades one port run against the retail envelope, so a change of draw order that moves one seed's
+battle looks like a regression (geonosis_skirmish `outcome.units_lost[Empire]` after cu8j: port 8, retail 0..0). With
+`--seeds N` the harness runs the port once per seed (`out\<scenario>\seeds\seed_<s>\`, `--jobs` at a time, default 4;
+seeds from the single run's seed: galactic 0..N-1, skirmish 1..N) and grades each metric over all seeds against all
+retail runs. The settings and their reasons are `distribution` in `scenarios.json` (a scenario may override them):
+
+- **scalar**: PASS when `|mean(port) - mean(retail)| <= tol + z * se`, `se = sqrt(sd_port^2 / n_port + sd_retail^2 /
+  n_retail)` (z 2). `tol` is the metric's own `abs` / `rel` (rel of the retail mean). A side with one value takes the
+  other side's spread (one retail run: a prediction interval around the port's mean), so the mode works while only one
+  retail run exists, but it is weak then;
+- **spread**: graded once both sides have `spread_min_runs` (5) values: each standard deviation at most `spread_factor`
+  (3) times the other, plus `tol`. Below that the report says "spread not graded";
+- **type mixes** (`ai.build_mix`, `ai.fleet_targets`): overlap of the mean mixes (count per type averaged over the runs),
+  same threshold and `retail_floor` as the single mode;
+- **multi-modal and window values** (`travel.hop_ticks`, a retail `econ.cycle_tick` window): no mean; each seed is graded
+  like a single run against all retail runs and the metric passes when `seed_min_share` (0.8) of the seeds do. One seed
+  flying a fleet mix retail never built is an AI choice; a wrong speed moves every seed;
+- a metric missing in some runs (no departure, a reader 1 trace without credits) is graded on the runs that have it;
+  the report says "seen in k/n";
+- INFO and N/A as in the single mode. Each line gives port and retail mean +- sd, n, min..max, the allowed difference and
+  the spread ratio.
+
+The report goes to `out\<scenario>\seeds\report.txt` / `report.json` (mode, seeds and settings inside). `--check-baseline`
+needs a baseline of the same mode (`baseline_seeds.json`; a single-run baseline is refused with exit 2). The slow ctests
+`parity_harness_<scenario>_seeds` run `--seeds 10 --jobs 4 --check-baseline baseline_seeds.json` (about 25 s per
+scenario on this PC); re-record after an intended behaviour change, like the single baseline:
+
+```
+toolchain\venv\Scripts\python.exe -I tools\parity\parity_harness.py run --seeds 10 --write-baseline tools\parity\baseline_seeds.json
+```
+
+First recording (2026-11-09, dev 89510fb6, 10 seeds): hotm_galactic FAIL 19 / PASS 100 (12 of them `travel.hop_ticks`
+routes that fail in most seeds, e.g. Rebel Naboo -> Shola 70 / 94 vs retail 88..96, the same as seed 0 in the single
+mode; `outcome.planets_final` Rebel 4.6 vs 5 and Underworld 3.4 vs 3: the port loses Rebel planets in 4 of 10 seeds,
+which seed 0 alone does not show); geonosis_skirmish FAIL 9 / PASS 10 (`outcome.units_lost[Empire]` 1.7 +- 3.1 vs 0
+PASSES: seed noise, not the regression the single mode reported).
+
+**More retail runs.** The means are only as good as the retail sample, and spreads are not graded below 5 runs a side
+(today: hotm_galactic 4, geonosis_skirmish 3). `tools\probe_mod\parity_refs\` (Gabriel runs it: several hands-off Q2
+runs per scenario in one sitting) records more and writes an `add_refs.cmd`; `add-refs` appends runs to a scenario's
+`references` in `scenarios.json` (each run's `trace.q2t` must exist under the reference folder unless `--no-check`; a run
+already listed or in `excluded_references` is skipped; the file keeps its layout). Check new runs with `retail`
+(leave-one-out) and re-record both baselines.
 
 ## Reference runs and where they come from
 

@@ -744,6 +744,140 @@ def compare(scen, tols, retail_runs, port, gaps=None):
     return results
 
 
+# ---- distribution mode (parity tier 2, docs/DECISIONS.md "Parity tiers") --------------------------------------------------
+DIST_DEFAULTS = {"seeds": 10, "z": 2.0, "spread_factor": 3.0, "spread_min_runs": 5, "seed_min_share": 0.8}
+
+
+def dist_config(scens, scen):
+    """Distribution settings: DIST_DEFAULTS, then scenarios.json "distribution", then the scenario's own "distribution"."""
+    cfg = dict(DIST_DEFAULTS)
+    cfg.update({k: v for k, v in (scens.get("distribution") or {}).items() if k != "why"})
+    cfg.update({k: v for k, v in (scen.get("distribution") or {}).items() if k != "why"})
+    return cfg
+
+
+def describe(xs):
+    """n, mean, sample standard deviation (0 below 2 values), min, max of a list of numbers."""
+    n = len(xs)
+    mean = sum(xs) / n
+    sd = statistics.stdev(xs) if n >= 2 else 0.0
+    return {"n": n, "mean": mean, "sd": sd, "min": min(xs), "max": max(xs)}
+
+
+def mean_mix(mixes):
+    """The mean of several type mixes (Counters): per type, the count summed over the runs divided by the runs."""
+    tot = collections.Counter()
+    for m in mixes:
+        tot.update(m)
+    return collections.Counter({k: v / len(mixes) for k, v in tot.items()})
+
+
+def grade_dist(metric_id, retail_vals, port_vals, tol, cfg, note=None):
+    """One metric over several runs per side: retail_vals = one value per retail run, port_vals = one per port seed (None
+    where that run has no value). Scalars: the means must agree within tol + z * standard error, and (with at least
+    spread_min_runs values on both sides) the spreads within spread_factor of each other (plus tol). Type mixes: overlap of
+    the mean mixes. Windows and multi-modal values (tuples, `nearest`): pooled over the runs and graded like one run."""
+    cat = CATEGORY.get(metric_id.split(".", 1)[0], "other")
+    rv = [v for v in retail_vals if v is not None]
+    pv = [v for v in port_vals if v is not None]
+    res = {"metric": metric_id, "category": cat, "status": None, "mode": "distribution", "tolerance": None, "detail": "",
+           "retail_runs": len(rv), "port_runs": len(pv), "retail_total": len(retail_vals), "port_total": len(port_vals)}
+    seen = "seen in %d/%d retail runs, %d/%d port seeds" % (len(rv), len(retail_vals), len(pv), len(port_vals))
+    if tol is None or tol.get("info"):
+        res["status"] = "INFO"
+        nums = [x for v in pv for x in (scalar_values(v) if not isinstance(v, collections.Counter) else [])]
+        rnums = [x for v in rv for x in (scalar_values(v) if not isinstance(v, collections.Counter) else [])]
+        res["detail"] = "port %s, retail %s; not graded" % (
+            "%.6g+-%.3g" % (describe(nums)["mean"], describe(nums)["sd"]) if nums else "-",
+            "%.6g+-%.3g" % (describe(rnums)["mean"], describe(rnums)["sd"]) if rnums else "-")
+        return res
+    if not rv or not pv:
+        res["status"] = "N/A"
+        res["detail"] = "no %s value%s; %s" % ("retail" if not rv else "port", " (%s)" % note if note else "", seen)
+        return res
+    if any(isinstance(v, collections.Counter) for v in rv + pv):
+        thr = float(tol.get("min_overlap", 1.0))
+        pair = [overlap(rv[i], rv[j]) for i in range(len(rv)) for j in range(i + 1, len(rv))]
+        if tol.get("retail_floor") and pair:
+            thr = min(thr, round(min(pair), 3))
+        mr, mp = mean_mix(rv), mean_mix(pv)
+        ov = overlap(mp, mr)
+        res.update(tolerance={"min_overlap": thr}, score=round(ov, 3), status="PASS" if ov >= thr else "FAIL",
+                   retail={"mean_mix": {k: round(v, 3) for k, v in sorted(mr.items())}},
+                   port={"mean_mix": {k: round(v, 3) for k, v in sorted(mp.items())}})
+        res["detail"] = "mean-mix overlap %.2f (need >= %.2f); items per run port %.1f, retail %.1f; %s" % (
+            ov, thr, sum(mp.values()), sum(mr.values()), seen)
+        return res
+    if tol.get("nearest") or any(isinstance(v, (tuple, list)) for v in rv + pv):
+        # Multi-modal (one route, several fleet speeds) and window values have no mean: each seed is graded like a single
+        # run against all retail runs, and the metric passes when at least seed_min_share of the seeds pass (a fleet mix
+        # that only some seeds build is an AI choice, tier 2; a wrong speed moves every seed).
+        per = [grade(metric_id, rv, v, tol) for v in pv]
+        ok = sum(1 for g in per if g["status"] == "PASS")
+        need = float(cfg.get("seed_min_share", DIST_DEFAULTS["seed_min_share"]))
+        worst = max(per, key=lambda g: abs(g.get("diff", 0.0)) - float(g.get("tolerance") or 0.0))
+        pooled = sorted(set(x for v in pv for x in scalar_values(v)))
+        res.update(mode="per-seed", tolerance=worst.get("tolerance"), share=round(ok / len(per), 3),
+                   retail=sorted(set(x for v in rv for x in scalar_values(v))), port=pooled,
+                   status="PASS" if ok >= need * len(per) - 1e-9 else "FAIL")
+        res["detail"] = "%d/%d seeds within tolerance (need %.0f%%); port values %s; worst seed: %s" % (
+            ok, len(per), 100 * need, ", ".join("%g" % x for x in pooled), worst["detail"])
+        return res
+    r, p = describe([float(v) for v in rv]), describe([float(v) for v in pv])
+    a, rel = float(tol.get("abs", 0.0)), float(tol.get("rel", 0.0))
+    t = max(a, rel * abs(r["mean"]))
+    # Standard error of the difference of the means. With one value on a side its spread is unknown: assume the other
+    # side's (the same distribution is the hypothesis being tested), which turns the check into a prediction interval.
+    sr = r["sd"] if r["n"] >= 2 else p["sd"]
+    sp = p["sd"] if p["n"] >= 2 else r["sd"]
+    se = math.sqrt(sp * sp / p["n"] + sr * sr / r["n"])
+    z = float(cfg.get("z", 2.0))
+    allowed = t + z * se
+    diff = p["mean"] - r["mean"]
+    mean_ok = abs(diff) <= allowed + 1e-9
+    k = int(cfg.get("spread_min_runs", 5))
+    f = float(cfg.get("spread_factor", 3.0))
+    spread_graded = r["n"] >= k and p["n"] >= k
+    spread_ok = (not spread_graded) or (p["sd"] <= f * r["sd"] + t + 1e-9 and r["sd"] <= f * p["sd"] + t + 1e-9)
+    res.update(retail=r, port=p, tolerance=round(t, 3), diff=round(diff, 3), allowed=round(allowed, 3),
+               spread_graded=spread_graded, status="PASS" if mean_ok and spread_ok else "FAIL")
+    why = [] if mean_ok else ["mean"]
+    if not spread_ok:
+        why.append("spread")
+    def sd_txt(d):
+        return "+-%.3g" % d["sd"] if d["n"] >= 2 else ""
+    res["detail"] = "port %.6g%s (%d seeds, %g..%g), retail %.6g%s (%d run%s, %g..%g); mean diff %+.4g, allowed %.4g " \
+                    "(tol %g + %g*se %.3g); spread %s%s%s" % (
+                        p["mean"], sd_txt(p), p["n"], p["min"], p["max"], r["mean"], sd_txt(r), r["n"],
+                        "" if r["n"] == 1 else "s", r["min"], r["max"], diff,
+                        allowed, t, z, se,
+                        ("sd ratio %s, need within x%g" % ("%.2f" % (p["sd"] / r["sd"]) if r["sd"] > 0 else
+                                                           ("1" if p["sd"] == 0 else "inf"), f)) if spread_graded else
+                        "not graded (fewer than %d runs on a side)" % k,
+                        "; FAIL on %s" % " and ".join(why) if why else "",
+                        "; %s" % seen if len(rv) < len(retail_vals) or len(pv) < len(port_vals) else "")
+    return res
+
+
+def compare_dist(scen, tols, retail_runs, port_runs, cfg, gaps=None):
+    """retail_runs: [(name, metrics)], port_runs: [(seed, metrics)]. Graded results sorted by category and id."""
+    gaps = gaps or {}
+    ids = set()
+    for _, mm in list(retail_runs) + list(port_runs):
+        ids |= set(mm)
+    results = []
+    for mid in sorted(ids):
+        fam = family(mid)
+        rv = [mm.get(mid) for _, mm in retail_runs]
+        pv = [mm.get(mid) for _, mm in port_runs]
+        if fam in ("travel.hop_ticks", "build.ticks") and (all(v is None for v in pv) or all(v is None for v in rv)):
+            continue
+        results.append(grade_dist(mid, rv, pv, tolerance_for(tols, mid), cfg, gaps.get(mid) or gaps.get(fam)))
+    order = {"timing": 0, "income": 1, "AI choices": 2, "battle outcomes": 3, "damage": 4, "diagnostic": 5}
+    results.sort(key=lambda x: (order.get(x["category"], 9), x["metric"]))
+    return results
+
+
 def summarize(results):
     s = collections.OrderedDict()
     for r in results:
@@ -752,8 +886,9 @@ def summarize(results):
     return {k: dict(v) for k, v in s.items()}
 
 
-def render(scen_id, scen, results, info, refs_used, commit):
+def render(scen_id, scen, results, info, refs_used, commit, mode=None):
     lines = ["Q4 parity harness: %s (%s)" % (scen_id, scen.get("title", "")),
+             "  mode: %s" % (mode or "single port run against the retail envelope"),
              "  port commit: %s" % (commit or "?"),
              "  reference runs: %s" % ", ".join(refs_used),
              "  port: %s" % info.get("port_cmd", "?"), ""]
@@ -801,20 +936,45 @@ def retail_metrics(scen, run_dir):
     return skirmish_retail_metrics(trace, set(scen["frames"]))
 
 
-def port_command(scen, exe, out_dir, ref_info):
+def default_seed(scen, ref_info):
+    """The port seed of the single-run mode: galactic, the reference run's (retail starts from seed 0 on the menu path);
+    skirmish, none (the host's default, 1: retail seeds a skirmish itself, tools/probe_mod/q2_traces/README.md)."""
+    if scen["kind"] == "galactic":
+        return int(ref_info.get("seed") or "0", 16)
+    return None
+
+
+def port_command(scen, exe, out_dir, ref_info, seed=None):
+    """seed None: the single-run mode's seed (default_seed)."""
+    if seed is None:
+        seed = default_seed(scen, ref_info)
+    seed_args = ["--seed", str(seed)] if seed is not None else []
     if scen["kind"] == "galactic":
         campaign = ref_info["campaign"]
         human = campaign.rsplit("_", 1)[-1]
-        seed = int(ref_info.get("seed") or "0", 16)
-        return [exe, "--economy", "--galactic-ai", "--campaign", campaign, "--human", human, "--seed", str(seed),
+        return [exe, "--economy", "--galactic-ai", "--campaign", campaign, "--human", human] + seed_args + [
                 "--ticks", str(ref_info["ticks"]), "--workers", str(scen.get("workers", 4)), "--quiet", "--story",
                 "--crc-out", os.path.join(out_dir, "port.crc"), "--ai-log", os.path.join(out_dir, "port_ai.txt"),
                 "--trace-out", os.path.join(out_dir, "port.q2t")]
     # The host logs its state on battle frame 0 and every 600 frames, frame f at host tick f + 1: one tick more than the
     # scenario so the last frame's state is written.
-    return [exe, "--skirmish-ai", "skirmish", "--map", scen["map"], "--human", scen["human"], "--ticks", str(scen["ticks"] + 1),
+    return [exe, "--skirmish-ai", "skirmish", "--map", scen["map"], "--human", scen["human"], "--ticks", str(scen["ticks"] + 1)
+            ] + seed_args + [
             "--workers", str(scen.get("workers", 4)), "--quiet", "--ai-log", os.path.join(out_dir, "port_ai.txt"),
             "--crc-out", os.path.join(out_dir, "port.crc"), "--trace-out", os.path.join(out_dir, "port.q2t")]
+
+
+def seed_list(scen, ref_info, cfg, count=None, base=None):
+    """The port seeds of the distribution mode: `count` seeds from `base` (default: the single-run seed, else 1), so the
+    single run's seed is always the first."""
+    n = int(count if count is not None else cfg.get("seeds", DIST_DEFAULTS["seeds"]))
+    if base is None:
+        base = cfg.get("seed_base")
+    if base is None:
+        base = default_seed(scen, ref_info)
+    if base is None:
+        base = 1
+    return [int(base) + k for k in range(n)]
 
 
 def skirmish_port_trace_metrics(trace_path, frames):
@@ -824,9 +984,9 @@ def skirmish_port_trace_metrics(trace_path, frames):
     return {k: v for k, v in m.items() if k.startswith("combat.")}, info
 
 
-def run_port(scen, exe, out_dir, ref_info, reuse):
+def run_port(scen, exe, out_dir, ref_info, reuse, seed=None):
     os.makedirs(out_dir, exist_ok=True)
-    cmd = port_command(scen, exe, out_dir, ref_info)
+    cmd = port_command(scen, exe, out_dir, ref_info, seed)
     log = os.path.join(out_dir, "port_run.txt")
     if not (reuse and os.path.exists(log) and os.path.exists(os.path.join(out_dir, "port_ai.txt"))):
         r = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -848,6 +1008,29 @@ def run_port(scen, exe, out_dir, ref_info, reuse):
             notes.append("no port tactical trace (%s): combat.* has no port value" % trace)
     info["port_cmd"] = " ".join(os.path.basename(c) if i == 0 else c for i, c in enumerate(cmd))
     return m, notes, info
+
+
+def seed_range(seeds):
+    return ("%d..%d" % (seeds[0], seeds[-1])) if seeds == list(range(seeds[0], seeds[0] + len(seeds))) else \
+        ", ".join(str(s) for s in seeds)
+
+
+def run_port_seeds(scen, exe, out_dir, ref_info, reuse, seeds, jobs=None):
+    """The port run once per seed (out_dir/seed_<s>), `jobs` at a time (separate processes, separate folders). Returns
+    ([(seed, metrics)] in seed order, notes, info of the first seed)."""
+    import concurrent.futures
+    jobs = max(1, int(jobs or min(4, len(seeds))))
+
+    def one(s):
+        return run_port(scen, exe, os.path.join(out_dir, "seed_%d" % s), ref_info, reuse, s)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
+        done = list(ex.map(one, seeds))
+    notes = []
+    for s, (_, nn, _) in zip(seeds, done):
+        notes += ["seed %d: %s" % (s, n) for n in nn]
+    info = dict(done[0][2])
+    info["port_cmd"] = "%s (seeds %s)" % (info.get("port_cmd"), seed_range(seeds))
+    return [(s, m) for s, (m, _, _) in zip(seeds, done)], notes, info
 
 
 def git_head():
@@ -874,12 +1057,20 @@ def cmd_run(a):
     ids = a.scenario or list(scens["scenarios"])
     exe = a.port_exe or default_port_exe()
     commit = a.commit or git_head()
+    seeds_mode = bool(getattr(a, "seeds", None))
+    mode = "distribution" if seeds_mode else "single"
     baseline = load_json(a.check_baseline) if a.check_baseline else None
+    if baseline is not None and baseline.get("mode", "single") != mode:
+        print("ERROR: baseline %s is a %s-mode baseline, this is a %s-mode run (single: baseline.json, --seeds: "
+              "baseline_seeds.json)" % (a.check_baseline, baseline.get("mode", "single"), mode))
+        return 2
     new_base = {"commit": commit, "scenarios": {}}
     if a.write_baseline and os.path.exists(a.write_baseline):
         new_base = load_json(a.write_baseline)
         new_base["commit"] = commit
         new_base.setdefault("scenarios", {})
+    if seeds_mode:
+        new_base["mode"] = mode
     rc, ran = 0, 0
     for sid in ids:
         scen = scens["scenarios"].get(sid)
@@ -907,16 +1098,38 @@ def cmd_run(a):
             notes += ["%s: %s" % (name, n) for n in nn]
             ref_info = ref_info or info
         out_dir = os.path.join(a.out or os.path.join(HERE, "out"), sid)
-        try:
-            pm, pn, pinfo = run_port(scen, exe, out_dir, ref_info, a.reuse_port)
-        except RuntimeError as e:
-            print("ERROR %s: %s" % (sid, e))
-            return 2
-        notes += ["port: %s" % n for n in pn]
-        results = compare(scen, scens["tolerances"], retail, pm, scen.get("gaps"))
-        info = {"port_cmd": pinfo.get("port_cmd"), "notes": notes}
-        text = render(sid, scen, results, info, [n for n, _ in have], commit)
-        loo = leave_one_out(scen, scens["tolerances"], retail)
+        extra = {}
+        if seeds_mode:
+            cfg = dist_config(scens, scen)
+            seeds = seed_list(scen, ref_info, cfg, a.seeds, a.seed_base)
+            out_dir = os.path.join(out_dir, "seeds")
+            try:
+                port_runs, pn, pinfo = run_port_seeds(scen, exe, out_dir, ref_info, a.reuse_port, seeds, a.jobs)
+            except RuntimeError as e:
+                print("ERROR %s: %s" % (sid, e))
+                return 2
+            notes += ["port: %s" % n for n in pn]
+            results = compare_dist(scen, scens["tolerances"], retail, port_runs, cfg, scen.get("gaps"))
+            info = {"port_cmd": pinfo.get("port_cmd"), "notes": notes}
+            text = render(sid, scen, results, info, [n for n, _ in have], commit,
+                          mode="distribution over %d port seeds (%s) and %d retail runs; z %g, spread factor %g, spread "
+                               "graded from %d runs a side" % (len(seeds), seed_range(seeds), len(retail), cfg["z"],
+                                                                cfg["spread_factor"], cfg["spread_min_runs"]))
+            if len(retail) < 2:
+                text += ("only one retail run: the retail spread is taken to be the port's (a prediction interval); "
+                         "capture more with tools/probe_mod/parity_refs\n")
+            extra = {"mode": "distribution", "seeds": seeds, "distribution": cfg}
+        else:
+            try:
+                pm, pn, pinfo = run_port(scen, exe, out_dir, ref_info, a.reuse_port)
+            except RuntimeError as e:
+                print("ERROR %s: %s" % (sid, e))
+                return 2
+            notes += ["port: %s" % n for n in pn]
+            results = compare(scen, scens["tolerances"], retail, pm, scen.get("gaps"))
+            info = {"port_cmd": pinfo.get("port_cmd"), "notes": notes}
+            text = render(sid, scen, results, info, [n for n, _ in have], commit)
+        loo = None if seeds_mode else leave_one_out(scen, scens["tolerances"], retail)
         if loo:
             text += ("retail leave-one-out (each retail run graded like the port against the other %d, same tolerances; the port "
                      "is graded against all %d, a wider envelope): %s\n" % (len(retail) - 1, len(retail), "; ".join(
@@ -937,13 +1150,14 @@ def cmd_run(a):
         os.makedirs(out_dir, exist_ok=True)
         with open(os.path.join(out_dir, "report.txt"), "w", encoding="utf-8", newline="\n") as fh:
             fh.write(text)
-        write_json(os.path.join(out_dir, "report.json"), {"scenario": sid, "commit": commit, "references": [n for n, _ in have],
-                                                          "missing_references": missing, "notes": notes, "results": results,
-                                                          "summary": summarize(results)})
+        write_json(os.path.join(out_dir, "report.json"), dict({"scenario": sid, "commit": commit, "references": [n for n, _ in have],
+                                                               "missing_references": missing, "notes": notes, "results": results,
+                                                               "summary": summarize(results)}, **extra))
         print(text, end="")
         print("wrote %s" % os.path.join(out_dir, "report.txt"))
-        new_base["scenarios"][sid] = {"references": [n for n, _ in have], "summary": summarize(results),
-                                      "status": {r["metric"]: r["status"] for r in results}}
+        new_base["scenarios"][sid] = dict({"references": [n for n, _ in have], "summary": summarize(results),
+                                           "status": {r["metric"]: r["status"] for r in results}},
+                                          **({"seeds": extra["seeds"]} if seeds_mode else {}))
         ran += 1
     if ran == 0:
         return SKIP
@@ -1009,6 +1223,81 @@ def cmd_list(a):
         for r in scen["references"]:
             print("  %-42s %s  %s" % (r["run"], "present" if r["run"] in [n for n, _ in have] else "MISSING", r.get("note", "")))
         print("  kit: %s" % scen["kit"])
+        print("  %d of %d present; distribution mode (--seeds) %s" % (
+            len(have), len(scen["references"]), "compares spreads too" if len(have) >= dist_config(scens, scen)["spread_min_runs"]
+            else "grades means only (spread needs %d retail runs)" % dist_config(scens, scen)["spread_min_runs"]))
+    return 0
+
+
+def _list_span(text, start):
+    """(index of '[', index of its matching ']') of the first JSON list at or after `start`, strings skipped."""
+    i = text.index("[", start)
+    depth, k, in_str = 0, i, False
+    while k < len(text):
+        c = text[k]
+        if in_str:
+            if c == "\\":
+                k += 1
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c in "[{":
+            depth += 1
+        elif c in "]}":
+            depth -= 1
+            if depth == 0:
+                return i, k
+        k += 1
+    raise ValueError("unbalanced list")
+
+
+def add_refs(path, sid, runs, note):
+    """Append reference runs to a scenario of scenarios.json, keeping the file's hand layout (one run per line).
+    Returns the runs added (ones already listed are left out)."""
+    with open(path, "r", encoding="utf-8") as fh:
+        text = fh.read()
+    data = json.loads(text)
+    scen = data["scenarios"].get(sid)
+    if scen is None:
+        raise ValueError("unknown scenario %s" % sid)
+    have = {r["run"] for r in scen["references"]} | set((scen.get("excluded_references") or {}))
+    new = [r for r in dict.fromkeys(runs) if r not in have]
+    if not new:
+        return []
+    at = text.index('"references"', text.index('"%s": {' % sid, text.index('"scenarios"')))
+    lo, hi = _list_span(text, at)
+    body = text[lo + 1:hi].rstrip()
+    line_start = text.rfind("\n", 0, at) + 1
+    indent = " " * (at - line_start + 1)
+    items = ",\n".join(indent + json.dumps({"run": r, "note": note}) for r in new)
+    close_indent = text[text.rfind("\n", 0, hi) + 1:hi]
+    if body.strip():
+        out = text[:lo + 1] + body + ",\n" + items + "\n" + close_indent + text[hi:]
+    else:
+        out = text[:lo + 1] + "\n" + items + "\n" + " " * (at - line_start) + text[hi:]
+    check = json.loads(out)
+    if [r["run"] for r in check["scenarios"][sid]["references"]] != [r["run"] for r in scen["references"]] + new:
+        raise ValueError("add-refs: edit check failed")
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(out)
+    return new
+
+
+def cmd_add_refs(a):
+    path = a.scenarios_file or os.path.join(HERE, "scenarios.json")
+    if not a.no_check:
+        refs_dir, fallback = refs_search(a)
+        absent = [r for r in a.runs if not any(os.path.exists(os.path.join(b, r, "trace.q2t")) for b in (refs_dir,) + fallback)]
+        if absent:
+            print("ERROR: no trace.q2t for %s under %s (--no-check to add them anyway)" % (", ".join(absent), refs_dir))
+            return 2
+    try:
+        new = add_refs(path, a.scenario, a.runs, a.note)
+    except ValueError as e:
+        print("ERROR: %s" % e)
+        return 2
+    print("added %d reference run(s) to %s in %s: %s" % (len(new), a.scenario, path, ", ".join(new) or "-"))
     return 0
 
 
@@ -1065,6 +1354,85 @@ def _galactic_fixture(path, hop_len=26, income=667.5, new_obj_at=40, capture_at=
         Q += ["E frames_reached", "end"]
         with open(queue_path, "w", encoding="ascii", newline="\n") as fh:
             fh.write("\n".join(Q) + "\n")
+
+
+def selftest_distribution(check, tmp):
+    C = collections.Counter
+    cfg = dict(DIST_DEFAULTS)
+    t = {"abs": 2}
+    retail = [48, 52, 50, 55, 45, 50]
+    g = grade_dist("outcome.units_lost[Rebel]", retail, [49, 51, 50, 53, 47, 50, 52, 48, 50, 50], t, cfg)
+    check(g["status"] == "PASS" and g["spread_graded"], "dist: same distribution passes, spread graded (%s)" % g["detail"])
+    g = grade_dist("outcome.units_lost[Rebel]", retail, [70, 72, 69, 71, 70, 73, 68, 70, 71, 69], t, cfg)
+    check(g["status"] == "FAIL" and "mean" in g["detail"], "dist: shifted mean fails (%s)" % g["detail"])
+    wide = [20, 80, 30, 70, 50, 10, 90, 40, 60, 50]
+    g = grade_dist("outcome.units_lost[Rebel]", retail, wide, t, cfg)
+    check(g["status"] == "FAIL" and "FAIL on spread" in g["detail"], "dist: same mean, 7x the spread fails (%s)" % g["detail"])
+    g = grade_dist("outcome.units_lost[Rebel]", [50, 54], wide, t, cfg)
+    check(g["status"] == "PASS" and not g["spread_graded"], "dist: spread not graded below spread_min_runs (%s)" % g["detail"])
+    tight = [49, 51, 50, 52, 48, 50, 51, 49, 50, 50]
+    g = grade_dist("outcome.units_lost[Rebel]", [52], tight, t, cfg)
+    check(g["status"] == "PASS", "dist: one retail run inside the port's prediction interval (%s)" % g["detail"])
+    g = grade_dist("outcome.units_lost[Rebel]", [60], tight, t, cfg)
+    check(g["status"] == "FAIL", "dist: one retail run outside the port's prediction interval (%s)" % g["detail"])
+    # The geonosis case after cu8j: one seed losing 8 units against retail's 0 is seed noise, not a regression.
+    g = grade_dist("outcome.units_lost[Empire]", [0, 0, 1], [8, 0, 2, 1, 0, 3, 0, 1, 0, 2], t, cfg)
+    check(g["status"] == "PASS", "dist: one outlying seed does not fail the mean (%s)" % g["detail"])
+    g = grade_dist("outcome.units_lost[Empire]", [0, 0, 1], [8, 9, 7, 8, 10, 8, 9, 6, 8, 7], t, cfg)
+    check(g["status"] == "FAIL", "dist: every seed far off fails (%s)" % g["detail"])
+    g = grade_dist("outcome.units_lost[Empire]", [0, None, 1], [None] * 4, t, cfg)
+    check(g["status"] == "N/A" and "2/3 retail" in g["detail"], "dist: no port value is N/A (%s)" % g["detail"])
+    g = grade_dist("diag.rng_draws_total", [10, 12], [99, 98], {"info": True}, cfg)
+    check(g["status"] == "INFO", "dist: info metric not graded")
+    mixes = [C(a=2, b=2), C(a=4)]
+    g = grade_dist("ai.build_mix[Rebel]", mixes, [C(a=3, b=1), C(a=3, b=1)], {"min_overlap": 0.7}, cfg)
+    check(g["status"] == "PASS" and g["score"] == 1.0, "dist: equal mean mixes overlap 1.0 (%s)" % g["detail"])
+    g = grade_dist("ai.build_mix[Rebel]", mixes, [C(c=4)] * 3, {"min_overlap": 0.5, "retail_floor": True}, cfg)
+    check(g["status"] == "FAIL", "dist: disjoint mean mixes fail (%s)" % g["detail"])
+    tn = {"abs": 2, "nearest": True}
+    g = grade_dist("travel.hop_ticks[A->B]", [(89, 107), (107,)], [(90,), (106,), (98,)], tn, cfg)
+    check(g["status"] == "FAIL" and g["mode"] == "per-seed" and g["share"] == 0.667,
+          "dist: hop 98 between modes in 1 of 3 seeds fails at 80%% (%s)" % g["detail"])
+    g = grade_dist("travel.hop_ticks[A->B]", [(89, 107), (107,)], [(90,), (106, 89), (106,)], tn, cfg)
+    check(g["status"] == "PASS", "dist: hops near the retail modes pass (%s)" % g["detail"])
+    g = grade_dist("travel.hop_ticks[A->B]", [(89, 107)], [(107,)] * 9 + [(140,)], tn, cfg)
+    check(g["status"] == "PASS" and g["share"] == 0.9, "dist: one seed's odd hop is not a failure (%s)" % g["detail"])
+    g = grade_dist("travel.hop_ticks[A->B]", [(89, 107)], [(120,)] * 10, tn, cfg)
+    check(g["status"] == "FAIL" and g["share"] == 0.0, "dist: a hop wrong in every seed fails (%s)" % g["detail"])
+    g = grade_dist("econ.cycle_tick[1]", [(1350, 1353), 1351], [1351, 1351], {"abs": 0}, cfg)
+    check(g["status"] == "PASS", "dist: window metric graded per seed (%s)" % g["detail"])
+    rr = [("r1", {"travel.hop_ticks[A->B]": (10,), "outcome.units_lost[Rebel]": 3}),
+          ("r2", {"outcome.units_lost[Rebel]": 4})]
+    pr = [(0, {"travel.hop_ticks[A->C]": (12,), "outcome.units_lost[Rebel]": 3}), (1, {"outcome.units_lost[Rebel]": 5})]
+    res = {r["metric"]: r for r in compare_dist({}, {"outcome": {"abs": 2}, "travel": {"abs": 1}}, rr, pr, cfg)}
+    check(set(res) == {"outcome.units_lost[Rebel]"}, "dist: a route seen on one side only is not graded (%s)" % sorted(res))
+    check(res["outcome.units_lost[Rebel]"]["status"] == "PASS", "dist: compare_dist grades the shared metric")
+    # Seeds: the single run's seed first (galactic: the reference run's, skirmish: 1); settings merge scenario over file.
+    check(seed_list({"kind": "galactic"}, {"seed": "00000000"}, cfg) == list(range(10)), "seeds: galactic 0..9")
+    check(seed_list({"kind": "skirmish"}, {}, cfg, 3) == [1, 2, 3], "seeds: skirmish 1..3")
+    check(seed_list({"kind": "skirmish"}, {}, cfg, 2, 40) == [40, 41], "seeds: --seed-base")
+    dc = dist_config({"distribution": {"z": 3.0, "why": "x"}}, {"distribution": {"seeds": 6}})
+    check(dc["z"] == 3.0 and dc["seeds"] == 6 and dc["spread_factor"] == DIST_DEFAULTS["spread_factor"] and "why" not in dc,
+          "dist settings merge (%s)" % dc)
+    check(seed_range([3, 4, 5]) == "3..5" and seed_range([1, 5]) == "1, 5", "seed range text")
+    # add-refs keeps the hand layout and appends after the last reference.
+    sp = os.path.join(tmp, "scenarios.json")
+    shutil.copyfile(os.path.join(HERE, "scenarios.json"), sp)
+    before = load_json(sp)
+    n0 = len(before["scenarios"]["geonosis_skirmish"]["references"])
+    added = add_refs(sp, "geonosis_skirmish", ["20991231-000000-skirmish-vanilla-lua", before["scenarios"]["geonosis_skirmish"]
+                                               ["references"][0]["run"]], "selftest")
+    after = load_json(sp)
+    refs = after["scenarios"]["geonosis_skirmish"]["references"]
+    check(added == ["20991231-000000-skirmish-vanilla-lua"] and len(refs) == n0 + 1 and refs[-1]["note"] == "selftest",
+          "add-refs appends a new run once (%s)" % added)
+    check(after["scenarios"]["hotm_galactic"] == before["scenarios"]["hotm_galactic"] and
+          after["tolerances"] == before["tolerances"], "add-refs leaves the rest of the file as it was")
+    with open(sp, "r", encoding="utf-8") as fh:
+        check('    {"run": "20991231-000000-skirmish-vanilla-lua", "note": "selftest"}\n   ]' in fh.read(),
+              "add-refs writes one run per line at the list's indent")
+    check(add_refs(sp, "hotm_galactic", ["20261103-152619-galactic-vanilla-lua"], "x") == [],
+          "add-refs skips an excluded reference")
 
 
 def selftest():
@@ -1193,6 +1561,8 @@ def selftest():
         sc = load_scenarios()
         for k, v in sc["tolerances"].items():
             check(bool(v.get("why")), "tolerance %s has a reason" % k)
+        check(bool((sc.get("distribution") or {}).get("why")) and set(DIST_DEFAULTS) <= set(sc["distribution"]),
+              "scenarios.json distribution settings complete, with a reason")
         for sid, s in sc["scenarios"].items():
             check(bool(s.get("references")) and bool(s.get("kit")), "scenario %s has references and a kit" % sid)
         # No reference runs -> skip code.
@@ -1205,6 +1575,18 @@ def selftest():
         with contextlib.redirect_stdout(io.StringIO()):
             rc = cmd_run(ns)
         check(rc == SKIP, "no reference runs -> exit %d (got %s)" % (SKIP, rc))
+        # Distribution mode (parity tier 2): per-metric means and spreads over port seeds and retail runs.
+        selftest_distribution(check, tmp)
+        ns.seeds, ns.seed_base, ns.jobs = 3, None, None
+        ns.check_baseline = os.path.join(tmp, "single_base.json")
+        write_json(ns.check_baseline, {"commit": "x", "scenarios": {}})
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = cmd_run(ns)
+        check(rc == 2, "a single-run baseline in --seeds mode is an error (got %s)" % rc)
+        ns.check_baseline = None
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = cmd_run(ns)
+        check(rc == SKIP, "--seeds without reference runs -> exit %d (got %s)" % (SKIP, rc))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("selftest %s (%d failures)" % ("OK" if not fails else "FAILED", len(fails)))
@@ -1223,11 +1605,22 @@ def main(argv=None):
     r.add_argument("--check-baseline", help="fail only on metrics that passed in this baseline JSON")
     r.add_argument("--write-baseline", help="write the per-metric verdicts of this run to this JSON")
     r.add_argument("--commit", help="commit id to record (default: git HEAD)")
+    r.add_argument("--seeds", type=int, help="distribution mode (parity tier 2): run the port over this many seeds and "
+                                             "compare per-metric means and spreads with the retail runs'")
+    r.add_argument("--seed-base", type=int, help="first port seed of --seeds (default: the single run's seed, else 1)")
+    r.add_argument("--jobs", type=int, help="port runs at a time in --seeds mode (default: min(4, seeds))")
     t = sub.add_parser("retail")
     t.add_argument("--scenario", action="append")
     t.add_argument("--refs")
     li = sub.add_parser("list")
     li.add_argument("--refs")
+    ad = sub.add_parser("add-refs", help="append retail reference runs to a scenario of scenarios.json")
+    ad.add_argument("--scenario", required=True)
+    ad.add_argument("--note", default="parity_refs capture (tools/probe_mod/parity_refs)")
+    ad.add_argument("--refs", help="folder holding the run folders (checked unless --no-check)")
+    ad.add_argument("--no-check", action="store_true", help="do not require the runs' trace.q2t")
+    ad.add_argument("--scenarios-file", help="default tools/parity/scenarios.json")
+    ad.add_argument("runs", nargs="+")
     sub.add_parser("selftest")
     a = ap.parse_args(argv)
     if a.cmd == "run":
@@ -1236,6 +1629,8 @@ def main(argv=None):
         return cmd_retail(a)
     if a.cmd == "list":
         return cmd_list(a)
+    if a.cmd == "add-refs":
+        return cmd_add_refs(a)
     return selftest()
 
 
