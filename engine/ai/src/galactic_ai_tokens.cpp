@@ -147,6 +147,22 @@ double galactic_ai_planet_force(const gal::GalacticSim& sim, std::span<const Gal
     return sum;
 }
 
+double galactic_ai_game_age(int32_t frame) {
+    return static_cast<double>(frame) * static_cast<double>(kAiSecondsPerFrame);
+}
+
+double galactic_ai_time_since_corruption_change(int32_t frame, int32_t stamp) {
+    const auto d = static_cast<uint32_t>(frame) - static_cast<uint32_t>(stamp);  // 32-bit subtraction, read unsigned
+    const float t = static_cast<float>(d) * kAiSecondsPerFrame;                    // cvtsi2ss (64-bit source), mulss
+    return static_cast<double>(t);
+}
+
+double galactic_ai_time_since_stamp(int32_t frame, int32_t stamp) {
+    if (stamp < 0) return static_cast<double>(1.0e18f);  // f64 constant 0x85b8c0 = 999999984306749440.0
+    const auto d = static_cast<int32_t>(static_cast<uint32_t>(frame) - static_cast<uint32_t>(stamp));
+    return static_cast<double>(d) * static_cast<double>(kAiSecondsPerFrame);
+}
+
 double galactic_ai_hull_fraction(float health, float max_health) {
     if (!(max_health > 0.0f) || !(health > 0.0f)) return 1.0;
     return static_cast<double>(health) / static_cast<double>(max_health);
@@ -1529,15 +1545,15 @@ struct GalacticSimTokenResolver::Impl {
                 v = b2d(sim.corruption_transition_active(static_cast<PlanetIndex>(p)));  // D+0x2E2 gaining || +0x2E3 removing
                 return true;
             }, out);
-        if (k == "TIMESINCECORRUPTIONCHANGE")
-            return out = static_cast<double>(r.frame_ - r.stamp_corruption_[p]) / kAiFps, true;
+        if (k == "TIMESINCECORRUPTIONCHANGE")  // 0x65f110, a2m t09 (A2M_T08_T10_T14_RE t08.3) [H]
+            return out = galactic_ai_time_since_corruption_change(r.frame_, r.stamp_corruption_[p]), true;
         // P4 ai: type byte +0xBA = Planet_Retains_Residual_Influence, a bool that defaults true (OBJECT_TYPES §4.6 [H]).
         if (k == "RETAINSRESIDUALINFLUENCE")
             return out = b2d(ps.type >= r.types_.size() || r.types_[ps.type].retains_residual_influence), true;
         if (k == "TIMESINCESPACECONFLICT" || k == "TIMESINCEGROUNDCONFLICT" || k == "TIMESINCECONVERSION") {
             const int32_t s = k == "TIMESINCESPACECONFLICT" ? r.stamp_space_[p]
                               : k == "TIMESINCEGROUNDCONFLICT" ? r.stamp_ground_[p] : r.stamp_conversion_[p];
-            out = s < 0 ? kNever : static_cast<double>(r.frame_ - s) / kAiFps;
+            out = galactic_ai_time_since_stamp(r.frame_, s);  // a2m t09 (t08.4) [H]: x spf, never = (double)1e18f
             return true;
         }
         if (k == "MARKUP") {
@@ -2042,7 +2058,7 @@ struct GalacticSimTokenResolver::Impl {
 
     // ---------------- game ----------------
     bool resolve_game(std::string_view k, std::span<const Param> params, double& out) const {
-        if (k == "AGE") return out = static_cast<double>(sim.frame()) / kAiFps, true;
+        if (k == "AGE") return out = galactic_ai_game_age(static_cast<int32_t>(sim.frame())), true;  // 0x6e1f20, a2m t09 [H]
         if (k == "TIMELINE") return out = 0.0, true;  // mode +0x9C [port: unknown, 0]
         if (k == "ISSETUPPHASE" || k == "ISLANDCONTROLGAME") return out = 0.0, true;
         if (k == "ISCAMPAIGNGAME") return out = 1.0, true;  // galactic mode

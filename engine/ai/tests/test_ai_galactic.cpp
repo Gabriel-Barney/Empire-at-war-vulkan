@@ -2333,6 +2333,30 @@ static void test_parity_rules() {
     }
 }
 
+// a2m t09 (A2M_T08_T10_T14_RE t08) [H]: the AI clock leaves use the float spf = 1.0f / 30.0f, not frame / 30.
+static void test_ai_clock_precision() {
+    CHECK(kAiSecondsPerFrame == 0.033333335f);
+    // Game.Age = (double)frame x (double)spf: Age > 120 first holds at frame 3600 (frame / 30 gave exactly 120.0 there).
+    CHECK(galactic_ai_game_age(0) == 0.0);
+    CHECK(galactic_ai_game_age(3599) < 120.0 && galactic_ai_game_age(3600) > 120.0);
+    CHECK(galactic_ai_game_age(3600) == 3600.0 * static_cast<double>(0.033333335f));
+    CHECK(galactic_ai_game_age(30) > 1.0 && galactic_ai_game_age(29) < 1.0);
+    // TimeSinceCorruptionChange = (double)(float)((float)(uint32)(frame - stamp) x spf): rounded to float, so at the
+    // whole seconds it lands on 1.0 / 2.0 exactly while Game.Age is a little above (the saboteur desire "on" frames).
+    CHECK(galactic_ai_time_since_corruption_change(30, 0) == 1.0 && galactic_ai_time_since_corruption_change(60, 0) == 2.0);
+    CHECK(galactic_ai_game_age(30) > galactic_ai_time_since_corruption_change(30, 0));
+    CHECK(galactic_ai_game_age(60) > galactic_ai_time_since_corruption_change(60, 0));
+    CHECK(galactic_ai_time_since_corruption_change(3599, 0) < 120.0 && galactic_ai_time_since_corruption_change(3600, 0) > 120.0);
+    CHECK(galactic_ai_time_since_corruption_change(3600, 0) == static_cast<double>(120.00000762939453f));
+    CHECK(galactic_ai_time_since_corruption_change(130, 100) == static_cast<double>(30.0f * 0.033333335f));
+    // TimeSinceConversion / Ground / SpaceConflict: (double)(int32)(NOW - stamp) x (double)spf, never = (double)1e18f.
+    CHECK(galactic_ai_time_since_stamp(100, -1) == 999999984306749440.0);
+    CHECK(galactic_ai_time_since_stamp(3700, 100) == galactic_ai_game_age(3600));
+    CHECK(galactic_ai_time_since_stamp(3699, 100) < 120.0 && galactic_ai_time_since_stamp(3700, 100) > 120.0);
+    std::printf("ai clock: age(3600) %.13f, since corruption(3600) %.13f, never %.1f\n", galactic_ai_game_age(3600),
+                galactic_ai_time_since_corruption_change(3600, 0), galactic_ai_time_since_stamp(0, -1));
+}
+
 // A2k t02: the per-target stage (A2K_T02_RE_ANSWERS Q1) and FreeStore Setup A (Q2(c)) on the synthetic chain P0..P7
 // (the Empire holds P0 / P1, its hero and frigate at P0; Conquer_Planet = Enemy_destination, level 2).
 static void test_stage_and_setup_a() {
@@ -5934,6 +5958,7 @@ int main(int argc, char** argv) {
     test_type_info_mod_categories();        // A2k t06
     test_parity_rules();
     test_free_store_supply();
+    test_ai_clock_precision();
     test_stage_and_setup_a();
     test_null_stage_and_plain_produce();
     test_move_to_fleet_object();

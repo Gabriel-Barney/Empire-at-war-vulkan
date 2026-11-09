@@ -390,6 +390,14 @@ the parity numbers in the a2m baseline commit (Underworld builds Interceptor4_Fr
 queue start 88; Build_Ground_Forces at 1434, retail about 1500; Underworld `credits_at_4500` 374 -> 877 PASS; Rebel
 `build_count` 23 -> 9 and `credits_at_4500` 538 -> 1595 FAIL: the Rebels no longer start Conquer_Pirate at Shola).
 
+**2026-11-09 (a2m t09): AI clock precision** (`docs/re/A2M_T08_T10_T14_RE.md` t08 [H]; `galactic_ai_game_age`,
+`galactic_ai_time_since_corruption_change`, `galactic_ai_time_since_stamp` in `galactic_ai_tokens`). spf is the float
+1.0f / 30.0f; `Game.Age` = (double)frame x (double)spf; `TimeSinceCorruptionChange` = the unsigned 32-bit difference
+times spf in float, widened; `TimeSinceConversion` / `GroundConflict` / `SpaceConflict` = (double)(int32)difference x
+(double)spf, never = (double)1e18f. Age > 120 first holds at frame 3600 (frame / 30 gave 3601). [port] the player-level
+`TimeSinceSpace/GroundDefender/Attacker` leaves still divide by 30 (not covered by t08). HotM seed 0: the Underworld
+saboteur desire timing moves the RNG, so verdicts shift both ways (total FAIL 15 -> 15; see the a2m baseline commit).
+
 **2026-11-08 (q4hf t03): more retail references.** `geonosis_skirmish` now has 3 retail runs (`20261108-204213-skirmish-vanilla-lua`,
 `20261108-203639-skirmish-vanilla` added), so its tolerances use the run-to-run envelope; `hotm_galactic` has a 4th run,
 `20261108-204711-galactic-vanilla-lua` (40 cycles, cut at the scenario's `max_tick` 13501; its two auto-resolved Tatooine

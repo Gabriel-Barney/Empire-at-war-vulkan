@@ -158,6 +158,16 @@ double galactic_ai_enemy_strength(const galactic::GalacticSim& sim, std::span<co
 // health / the type's Tactical_Health; 1.0 when the type has no maximum or the stored health is not > 0 ([port] an
 // untyped store keeps health 0).
 double galactic_ai_hull_fraction(float health, float max_health);
+// a2m t09 (A2M_T08_T10_T14_RE.md t08) [H]: the AI clock leaves. spf = FrameSynchronizer +0x24 = 1.0f / (float)FPS, a
+// float (0.033333335f). Game.Age (0x6e1f20) = (double)frame x (double)spf, one double multiply.
+// TimeSinceCorruptionChange (0x65f110) = (double)(float)((float)(uint32)(frame - stamp) x spf): the 32-bit difference is
+// converted as an unsigned value to float, multiplied in float, then widened. TimeSinceConversion / GroundConflict /
+// SpaceConflict (0x65f0c0 / 0x65f160 / 0x65f1b0) = (double)1e18f for a stamp < 0, else (double)(int32)(frame - stamp) x
+// (double)spf. Off by one frame against frame / 30 at threshold crossings (Age > 120 first holds at frame 3600).
+inline constexpr float kAiSecondsPerFrame = 1.0f / 30.0f;
+double galactic_ai_game_age(int32_t frame);
+double galactic_ai_time_since_corruption_change(int32_t frame, int32_t stamp);
+double galactic_ai_time_since_stamp(int32_t frame, int32_t stamp);
 // One entry of the PotentialPlan Contrast requirement list (0x5f1990): `row` = the EnemyContrastTypes row, -1 for a layer
 // total; `space` = layer byte 0 (space) / false = layer byte 1 (ground); `target` = the required strength.
 struct GalacticContrastEntry {
