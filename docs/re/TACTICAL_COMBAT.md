@@ -2530,7 +2530,8 @@ used at all**. Otherwise slot 43 0x5673b0(P_U, X, h, offset 0):
    - Else no LAND_OBSTACLE: f = X's facing (cos, sin of the yaw X +0x8c in degrees, 0x41c000); u = (P_U − Q)
      normalised (fast inverse square root 0x5f375a86, two Newton steps); |f·u| > 0.7071 → E = X extent (0x396a30),
      else E = Y extent (0x396b70): `Custom_Hard_X/YExtent` × `Scale_Factor` (deployed variants when deployed), else
-     |model bbox max| × `Scale_Factor`, 0 without a model (TACTICAL_GAPS §3.1, A1j t04). With h: 0x397780.
+     |model bbox max| × `Scale_Factor`, 0 without a model (TACTICAL_GAPS §3.1, A1j t04; **corrected in §5.4.5**: the
+     model fallback is the collision-bound half size, model Y along the facing, model X across). With h: 0x397780.
    - X with LAND_OBSTACLE (structures): Q steps back toward U in 20-unit passability cells while the cell holds X,
      snaps to the cell grid, E = √200 (TACTICAL_GAPS §3.1).
 6. **In range ⇔ sqrtf(dx² + dy²) ≤ R + E** (float, not squared, non-strict).
@@ -2919,6 +2920,75 @@ slot 46, so steps 6 and 7 also hold for ordinary targeting, not only for abiliti
     with relation 0 to the owner, owner included;
   - never remove it;
   - invalidate the per-unit modifier cache of that player's units on insert.
+
+#### 5.4.5 Range extent of a space target (s78n t08 follow-up, 2026-11-10) [H unless tagged]
+Read from the decompiled code and the retail FoC exe's bytes (disassembly of 0x371e70 / 0x372040, ModelClass vtable
+0x859718), checked against `RV_NEBULONB.ALO` (GameData Models.meg) and run 20261109-200249 of the s78n t08 kit
+(`S78N_T08_RUN.md` (A)). Corrects the model fallback of §5.4.2 step 5 and TACTICAL_GAPS §3.1 (A1j t04).
+
+**1. Which extent.** Slot 43 0x5673b0, target X without LAND_OBSTACLE and not a land squad container, h = 0:
+f = (cos θ, sin θ), θ = X +0x8c in degrees (0x41c000); u = (P_U − Q) normalised (fast inverse square root, two Newton
+steps); `|f·u| > 0.7071` → E = 0x396a30(X), else E = 0x396b70(X). Nothing else is added: not the user's extent, not
+`Space_Layer` / `Layer_Z_Adjust` (the distance is XY only), no constant.
+- 0x396a30 / 0x396b70 (no TEAM + vf +0x230 locomotor) take the type T = X +0x298 and call 0x371e70 / 0x372040 (or the
+  deployed variants 0x371f30 / 0x372100, which first try type +0x16cc / +0x16d0):
+  - **0x371e70 ("X", along the facing):** `Custom_Hard_XExtent` (T +0x16bc) > 0 → +0x16bc × `Scale_Factor` (T +0x658).
+    Else m = 0x3729f0(T, current mode) (the type's ModelClass for the mode: T +0x288 / +0x2a0 / +0x2a8; in a space
+    battle the `Space_Model_Name` model); no model → 0; else box = m vf +0x58 (6 floats at rsp+0x20) and
+    **E = fabs(box[4]) × Scale_Factor** (the float at rsp+0x30, offset 0x10).
+  - **0x372040 ("Y", across):** `Custom_Hard_YExtent` (T +0x16c0) > 0 → +0x16c0 × `Scale_Factor`; else
+    **E = fabs(box[3]) × Scale_Factor** (rsp+0x2c, offset 0x0c).
+  - Each axis tests only its own custom field (X does not need +0x16c0 and vice versa).
+- **The box.** ModelClass vf +0x58 = 0x264920 (vtable 0x859718 slot 11): when the render object is an alHModel, copy
+  its +0x120..+0x134 (0x12dc60); else centre (0, 0, 0), half (1, 1, 1). alHModel +0x120 is the **collision bound**
+  built by 0x12def0 (SPACE_AVOIDANCE §3.2): over the sub-objects with the collision bit (sub-object +0x30 bit 7, from
+  the ALO `0x402` mesh info "collision enabled" [M: flag source]), each `0x402` box through its bone's bind-pose
+  matrix, min / max unioned; stored as **centre (+0x120..+0x128) and half = |max − min| / 2 (+0x12c..+0x134)**; no
+  collision sub-object → centre 0, half 1. User bounds are not included. So box[3] = h.x, box[4] = h.y, and the
+  centre offset is ignored (Q stays the object position).
+- **Axes.** Alamo models point their nose along model −Y (left +X, up +Z), and the game's facing vector (cos θ, sin θ)
+  is the nose. The game's "X extent" (along the facing, `Custom_Hard_XExtent`) is therefore the model's **Y** half,
+  and the "Y extent" (across) the model's **X** half. The facing test takes |f·u|, so nose-on and tail-on are alike.
+
+**2. Nebulon_B_Frigate.** `Scale_Factor` 0.70, no custom extents. Collision-enabled meshes of `RV_NEBULONB.ALO`:
+`COLLISION` (hidden), `RV_NebulonB`, the four `HP_*_blast` meshes, `Lighting` and the hidden `shield` bubble, which
+sets the union: min (−33.54, −154.34, −95.63), max (33.54, 159.80, 95.41), half (33.54, 157.07, 95.52).
+- Along the facing (|f·u| > 0.7071): E = 0.7 × 157.07 = **109.95**, threshold **1109.95**.
+- Across: E = 0.7 × 33.54 = **23.48**, threshold **1023.48**.
+- The port (and the kit's E_x / E_y) used |max.x| = 23.48 along the facing and |max.y| = 111.86 across: axes
+  swapped, and |max| instead of the half size.
+
+**3. The run, re-read with the rule** [M for the facing of X, which the log does not record]:
+- **ctrl_side (k = 4) was not broadside.** U spawned displaced at (−3191.48, 1713.25), so X turned (at its spawn point
+  (−3300, 3450)) to face U's spawn point, nose n = (0.062, −0.998), and kept that facing when teleported to
+  (−2350, 2500). |n·u| was 0.64 at the order (Y extent, threshold 1023.48, out of range at 1152), crossed 0.7071 at
+  r ≈ 105 (d ≈ 1132, still out) and was 0.744 / 0.747 at r = 141 / 144. With the X extent the threshold is
+  **1109.95, inside the measured [1107.76, 1110.04]** (in at 1107.76, out at 1110.04). R + 111.86 (|max.y|) would
+  have engaged by r = 141, so the half size, not |max|, fits as the code says.
+- **mid_toward (k = 3) cannot be a fixed facing.** U moved straight at X (the bearing changed by 0.2°), X did not
+  move. A fixed nose-on X gives 1109.95 (engage at r ≈ 13, d ≈ 1110); a fixed facing in the across band gives 1023.48.
+  Observed: out at 1055.87, in at 1054.54. So X's facing changed during the trial: it was **still turning** from its
+  spawn facing when the order was given (the kit waits 210 + 45 frames after `Turn_To_Face`) and came within 45° of
+  the line to U at that moment, which switched E from 23.48 to 109.95 with d already below 1109.95. The "toward
+  E ≈ 55" is that switch, not an extent. Consistent with it: the engagement came 381 frames after `Turn_To_Face` (k = 4:
+  384, but there the distance crossing explains it).
+- ctrl_toward / small_toward (950, 976.9 < 1023.48) and mid_side / out_side (never below 1574.7 / 1133.5 > 1109.95)
+  fit either extent.
+- Re-run to close the [M]: in a "toward" trial wait until X's turn has surely ended (or spawn X already facing U) and
+  expect the start at 1109.95; for a true broadside use a facing exactly at right angles to the line and expect
+  1023.48.
+
+***Port spec.*** E of slot 43 (and of slot 46, which uses the same 0x396a30 / 0x396b70) for a target without
+LAND_OBSTACLE that is not a land squad container:
+1. h = the target type's **collision bound half-extents** of its model for the current mode (space: `Space_Model_Name`):
+   for every mesh whose ALO `0x402` collision flag is set, its `0x402` box through the attach bone's bind-pose world
+   matrix (AABB of the transformed box), min / max unioned, h = (max − min) / 2. Hidden meshes count (the `shield`
+   bubble usually sets the box). No collision mesh → h = (1, 1, 1); no model → 0. This is the port's existing
+   `AvoidModel::bound_h` (battle_catalog.cpp `avoid_from_asset`, `BattleCatalog::space_model_half_extents`).
+2. E_along = `Custom_Hard_XExtent` × `Scale_Factor` when > 0, else |h.y| × `Scale_Factor`;
+   E_across = `Custom_Hard_YExtent` × `Scale_Factor` when > 0, else |h.x| × `Scale_Factor`.
+3. |f·u| > 0.7071 (f = facing = nose, u = line of sight, both unit) → E = E_along, else E_across. In range ⇔
+   sqrtf(dx² + dy²) ≤ R + E (unchanged).
 
 ---
 

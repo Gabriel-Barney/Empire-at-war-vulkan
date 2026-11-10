@@ -26,11 +26,11 @@ by the poll interval:
 | out_side | side | 1151.9 | never (min d 1133.5) | - | 1111.9 |
 
 - **Footprint confirmed [H]:** the beam starts beyond R (at 1054.5 and 1107.8), so retail does add a target extent.
-- **Broadside matches the port [H]:** threshold 1107.8..1112.2 contains R + E_y = 1111.86.
-- **Nose-on does not [H]:** retail's threshold is about R + 55 (1054.5..1057.2), the port's R + E_x = 1023.5.
-  Retail's E for a target seen nose-on is ~55, not the bbox X half-extent 23.5. Open: which extent / geometry
-  retail uses there (an off-centre bbox where max != |min|, a different axis, or the facing test picking another
-  extent) -> follow-up RE task.
+- *Superseded by the follow-up below:* the first reading ("broadside matches the port, nose-on retail ~R + 55") took
+  the kit's facing labels at face value; neither trial had the facing the kit intended.
+- **Follow-up (2026-11-10), TACTICAL_COMBAT §5.4.5:** retail's E along the facing is the model's collision-bound Y half
+  x Scale_Factor (109.95 here), across it the X half (23.48); ctrl_side was not broadside (|f.u| 0.747 > 0.7071, predicted
+  1109.95 in [1107.76, 1110.04]) and mid_toward's 1054.5 is X still turning when the beam was ordered, not an extent [M].
 - The two `never` side trials did not close in (the SD did not walk); not a contradiction.
 
 ## (B) Combat_Bonus aura reaches an allied player's units (TACTICAL_COMBAT §5.4.3 item 4)
