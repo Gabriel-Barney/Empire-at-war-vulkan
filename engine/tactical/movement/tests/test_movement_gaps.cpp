@@ -2783,6 +2783,117 @@ static void test_forced_destination() {
     }
 }
 
+// s78n t03 (TACTICAL_COMBAT §5.4.4 item 2, MOVEMENT §3.7, FIGHTER_FLYING §7): a land squad container walks its own path
+// at the team speed; its members steer to their slots around it (0x62d620). The members stand on one side of the
+// container, so their centroid is off the container's straight path; a member behind its slot catches up faster than the
+// container (up to its own max speed), one ahead of it waits; an idle team's members recover to their slots (> 4.0 away).
+static void test_land_squad() {
+    struct Run {
+        uint64_t crc = 0;
+        float max_off_path = 0.0f, min_centroid_gap = 1.0e9f;
+        float lead_speed = 0.0f, lag_speed = 1.0e9f, cont_speed = 0.0f, team = 0.0f;
+        bool path = false, arrived = false, member_view = false;
+        float final_err = 1.0e9f;
+    };
+    const float mult = MovementConstants{}.land_speed_multiplier;
+    const V2 start = cell_center(10, 20);
+    const auto run = [&](const ParallelFor& pf) {
+        Run r;
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        UnitDesc c = unit(100, start, 2, 5.0f, 12.0f, LocomotorKind::Default);
+        c.team_container = true;
+        CHECK(sys.add_unit(c));
+        // slots (along, side): all on the +side, so the centroid sits 25 off the container
+        const V2 slots[3] = {{0.0f, 15.0f}, {0.0f, 25.0f}, {0.0f, 35.0f}};
+        // member 1 starts 20 behind its slot, member 3 20 ahead of it, member 2 on it
+        const float along0[3] = {-20.0f, 0.0f, 20.0f};
+        std::vector<ObjectId> ids;
+        for (ObjectId id = 1; id <= 3; ++id) {
+            const V2 sl = slots[id - 1];
+            // member 1 is faster (3.0) than the team speed (the others' 2.0), so it can catch up
+            CHECK(sys.add_unit(unit(id, {start.x + sl.x + along0[id - 1], start.y + sl.y}, 2, id == 1 ? 3.0f : 2.0f, 3.0f,
+                                    LocomotorKind::Default)));
+            ids.push_back(id);
+        }
+        CHECK(!sys.set_land_team(1, ids, slots));  // not a team container
+        CHECK(sys.set_land_team(100, ids, slots));
+        ObjectId tc = -1;
+        V2 ts;
+        CHECK(sys.team_slot(3, tc, ts) && tc == 100 && ts.y == 35.0f && sys.land_team_slots(100).size() == 3);
+        for (ObjectId id : {ObjectId{100}, ObjectId{1}, ObjectId{2}, ObjectId{3}}) CHECK(sys.set_team(id, 100, 1.0f));
+        r.team = 2.0f * mult;
+        SimRng rng(9);
+        MoveOrder o;
+        o.units = {2};  // a member's order moves its container
+        o.destination = cell_center(35, 20);
+        sys.move(o, rng, 100);
+        uint32_t first_move = 0;
+        for (uint32_t f = 101; f < 400; ++f) {
+            sys.tick(f, rng, pf);
+            const UnitView k = sys.view(100);
+            if (f == 102) r.path = k.has_goal && !sys.view(1).arrived && sys.view(1).has_goal;  // the member reports its team's order
+            r.max_off_path = std::max(r.max_off_path, std::fabs(k.pos.y - start.y));
+            V2 cen{0.0f, 0.0f};
+            for (ObjectId id = 1; id <= 3; ++id) cen = cen + sys.view(id).pos;
+            cen = cen * (1.0f / 3.0f);
+            if (k.has_goal) r.min_centroid_gap = std::min(r.min_centroid_gap, length(cen - k.pos));
+            r.cont_speed = std::max(r.cont_speed, k.speed);
+            if (k.speed > 0.0f && first_move == 0) first_move = f;
+            if (first_move != 0 && f < first_move + 6) {  // the container is under way; members 1 / 3 still off their slots
+                r.lead_speed = std::max(r.lead_speed, sys.view(1).speed);
+                r.lag_speed = std::min(r.lag_speed, sys.view(3).speed);
+            }
+        }
+        r.arrived = sys.view(100).arrived && !sys.view(100).has_goal;
+        r.member_view = sys.view(1).arrived && sys.view(1).goal == sys.view(100).goal;
+        // every member ends near its slot point (recovery leaves it on the point; a member within 4.0 stays)
+        const UnitView k = sys.view(100);
+        const V2 cs = dir_from_deg(k.yaw);
+        r.final_err = 0.0f;
+        for (ObjectId id = 1; id <= 3; ++id) {
+            const UnitView m = sys.view(id);
+            const V2 off = slots[id - 1] + m.jiggle;
+            const V2 tgt{k.pos.x + cs.x * off.x - cs.y * off.y, k.pos.y + cs.y * off.x + cs.x * off.y};
+            r.final_err = std::max(r.final_err, length(tgt - m.pos));
+        }
+        // a member knocked 30 off its slot while the team is idle walks back (recovery 0x29 / 0x2A)
+        const V2 m2 = sys.view(2).pos;
+        CHECK(sys.teleport(2, {m2.x - 30.0f, m2.y}, 0.0f, 90.0f, 400));
+        bool recovering = false;
+        for (uint32_t f = 400; f < 520; ++f) {
+            sys.tick(f, rng, pf);
+            if (f == 401) recovering = sys.view(2).has_goal && !sys.view(100).has_goal;
+        }
+        CHECK(recovering && length(sys.view(2).pos - m2) <= 4.0f && !sys.view(2).has_goal);
+        StateHasher h;
+        sys.hash_units(h);
+        r.crc = h.digest();
+        // removing the container releases its members: their own orders move them again
+        CHECK(sys.remove_unit(100) && !sys.team_slot(1, tc, ts));
+        MoveOrder own;
+        own.units = {1};
+        own.destination = cell_center(70, 40);
+        sys.move(own, rng, 520);
+        for (uint32_t f = 521; f < 530; ++f) sys.tick(f, rng, pf);
+        CHECK(sys.view(1).has_goal && sys.view(1).speed > 0.0f);
+        return r;
+    };
+    const Run a = run(serial_for);
+    const Run b = run(make_thread_pf(4));
+    CHECK(a.crc == b.crc);
+    CHECK(a.path && a.arrived && a.member_view);
+    CHECK(a.max_off_path < 0.01f);          // the container walks its own straight path, never re-centred on the members
+    CHECK(a.min_centroid_gap > 15.0f);      // ... which stay 25 to the side
+    CHECK(a.cont_speed == a.team);          // at the team speed (the slowest member's Max_Speed x mult)
+    CHECK(a.lead_speed > a.team);           // the member behind its slot catches up above the team speed
+    CHECK(a.lag_speed < a.team);            // the member ahead of its slot slows down
+    CHECK(a.final_err <= 4.0f);
+    std::printf("land squad: off path %.4f, centroid gap >= %.2f, team %.3f, catch-up %.3f, wait %.3f, final slot error %.3f\n",
+                static_cast<double>(a.max_off_path), static_cast<double>(a.min_centroid_gap), static_cast<double>(a.team),
+                static_cast<double>(a.lead_speed), static_cast<double>(a.lag_speed), static_cast<double>(a.final_err));
+}
+
 static void test_determinism() {
     const unsigned hw = std::max(2u, std::thread::hardware_concurrency());
     const CrcLog a = mixed_run(serial_for);
@@ -3086,6 +3197,7 @@ int main() {
     test_arrival_turn_clips();   // s78l t02
     test_arrival_close();        // s78l t02
     test_forced_destination();   // s78l t02
+    test_land_squad();           // s78n t03
     test_determinism();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

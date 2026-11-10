@@ -1060,6 +1060,12 @@ public:
     bool remove_unit(ObjectId id);  // host removal (e.g. retreat); deaths are removed by tick()
     void set_position(ObjectId id, Vec3 p);
     void set_facing(ObjectId id, Vec3 f);
+    // s78n t03 (TACTICAL_COMBAT §5.4.4 item 2.1, §2.2): the position of land team `team`'s container, P_U of its
+    // TeamTargeting (0x62eeb0): the scan box centre, the candidates' distances and range tests (slots 44 / 45), the keep
+    // test and the ordered / goal pre-check. The host sets it every tick before tick() (clear_team_positions first); a
+    // land team head without one (no container position) uses its own. Transient: not saved, not hashed.
+    void set_team_position(uint32_t team, Vec3 p);
+    void clear_team_positions() { team_pos_.clear(); }
     void set_flag(ObjectId id, uint32_t flag, bool on);
     bool set_owner(ObjectId id, int32_t owner);  // S10-int: Change_Owner (host keeps trees / store in step)
     void set_ability_active(ObjectId id, int slot, bool on);
@@ -1802,6 +1808,7 @@ private:
     // s78i t03: the head of u's land team, u itself when u is that head (the container unit, or the team_leader stand-in,
     // members or not); null outside a land team. A team keeps TeamTargeting while its head lives, even with no member left.
     const Unit* land_team_lead(const Unit& u) const;
+    Vec3 scan_pos(const Unit& u) const;  // s78n t03: a land team head's container position (set_team_position), else u.pos
     uint32_t convert_container(const Unit& v) const;  // s78i t04: v's 0x39b1a0 team container id (v's own when it is one), else 0
     bool targeting_idle(const Unit& u, uint32_t frame) const;  // phase D: stunned, unpowered or targeting suspended
     void drop_target(Unit& u);                        // slot 27: the order and scan targets are dropped
@@ -1935,6 +1942,7 @@ private:
     std::vector<Hardpoint> flush_hps_;
     std::vector<std::pair<uint32_t, uint32_t>> leaders_;  // (team, unit index) scratch
     std::vector<std::pair<uint32_t, ObjectId>> team_heads_;  // OI tactical: (team, team_leader id), built in phase A
+    std::vector<std::pair<uint32_t, Vec3>> team_pos_;  // s78n t03: (team, container position), ascending team; host-set
     // cu8f t04a: (team, unit id) of every live unit with a team, sorted; built in phase A and on read (not saved: a pure
     // function of the units; units that died or left since are skipped at read time).
     std::vector<std::pair<uint32_t, ObjectId>> team_members_;

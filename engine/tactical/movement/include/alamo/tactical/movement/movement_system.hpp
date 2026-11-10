@@ -545,6 +545,33 @@ public:
     // member walks AT that speed: its own speed factor / Mod_Multiplier does not enter (no double count); only a member
     // with speed factor 0 (stunned: its locomotor is suspended) stays put.
     bool set_team(ObjectId id, ObjectId team, float container_factor, float container_max_speed = -1.0f);
+    // ---- s78n t03 (TACTICAL_COMBAT §5.4.4 item 2, MOVEMENT §3.7, FIGHTER_FLYING §7): land squad containers ----
+    // A land squad container is a unit of this system added with UnitDesc::team_container (land only). add_unit places it
+    // with the free-position search 0x440f90 around the given position (forced_spot: the first passable ring sample; the
+    // point itself when passable). set_land_team(container, members, slots) makes each member (a Default-locomotor land
+    // unit without Uses_Multiple_Locomotors) steer to its slot: `slots[i]` = (along, side) in the container's frame
+    // (pack +0x114 / +0x118), members in team index order. A member's own order and pushed move are dropped. False (nothing
+    // changed) when the container is not a team container or a member does not qualify.
+    // From then on:
+    //   - the container walks its own path (the Walk step: start turn, speed control, its own passability test) at the
+    //     team speed (set_team(container, container, ...) gives it the team cap) and is the formation unit of its squad:
+    //     move / stop / the coordinator calls on a member act on its container (order_id);
+    //   - the container is never re-centred on its members and takes no part in land collision, crush or arrival turns;
+    //   - each member steers per frame (LandTeamInfantry 0x62d620) toward container + R(yaw) (slot + jiggle) from the
+    //     container's state at the start of the tick [port: members precede their container in service order], with the
+    //     speed rule of FIGHTER_FLYING §7 step 4 (v = 0 while the container turns in place, port state WalkStartTurn for
+    //     retail 0x10), the heading rule of step 6 (no collision steering vector [M]) and its own turn rate; [port] the
+    //     move is passability-tested (a blocked move tries each axis alone, else the member stays);
+    //   - while the container has no goal, a member farther than 4.0 from its slot recovers (0x29 / 0x2A): [port] turn in
+    //     place beyond Close_Enough_Angle, then walk straight to the slot at its max speed, ending on the slot point (or
+    //     after kReplanAfterBlocked blocked frames), then turn in place to the container's facing.
+    // A member's view reports the container's has_goal / arrived / failed / goal (has_goal also while recovering). Removing
+    // the container releases its members (ordinary units again).
+    bool set_land_team(ObjectId container, std::span<const ObjectId> members, std::span<const V2> slots);
+    // The container a member steers to (-1: none) and its slot (along, side); false when `member` is not a steering member.
+    bool team_slot(ObjectId member, ObjectId& container, V2& slot) const;
+    // The steering members of `container` in team index order with their slots (empty when none).
+    std::vector<std::pair<ObjectId, V2>> land_team_slots(ObjectId container) const;
     void hash_speed(StateHasher& h) const;
     // ---- s78l t02 (MOVEMENT §3.5.1 "Arrival turn, details"): clips of the Walk arrival turn ----
     // Every clip play the arrival turn asks for this tick, ascending id (at most one per unit and tick). The clip data
@@ -688,7 +715,24 @@ private:
         // degenerate coordinator (MOVEMENT §4.7.1).
         uint32_t pend = 0;
         bool adopted = false;
+        // s78n t03 (save version 14): a steering land squad member - its container (-1 none), slot (along, side; pack
+        // +0x114 / +0x118), team index, recovery state (0x29 / 0x2A) and consecutive blocked recovery frames.
+        ObjectId anchor = -1;
+        V2 tslot;
+        uint32_t tindex = 0;
+        bool recovering = false;
+        uint32_t steer_blocked = 0;
     };
+    // s78n t03: a container's state at the start of the land tick, read by its steering members (tick_land).
+    struct TeamSnap {
+        V2 pos;
+        float yaw = 0.0f;
+        float speed = 0.0f;
+        LocoState state = LocoState::WalkStopped;
+        bool has_goal = false;
+    };
+    ObjectId order_id(ObjectId id) const;  // s78n t03: a steering member's container, else id
+    void steer_member(Unit& u, const TeamSnap& k) const;  // s78n t03: one member frame (writes only u)
     // cu8j t01 (MOVEMENT §4.6): an order's formations waiting for the coordinator update (creation order). Land: `forms`
     // = the split's formations, seed first; space: forms[0] = the order's units in order and `offsets` their start
     // offsets. `moves` false: fighter_new_order (nobody moves: draws and fighter timers only).

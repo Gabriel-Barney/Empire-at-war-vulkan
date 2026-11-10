@@ -1145,6 +1145,10 @@ public:
     // (index 0, looping, hard cut). False when the battle has no animation world or `id` has no row in it.
     bool test_attack_idle(objects::ObjectId id, bool arg, SimRng& rng);
     bool test_play_clip(objects::ObjectId id, int32_t clip_type);
+    // s78n t09 test seam (TACTICAL_COMBAT §5.4.4 item 1, 0x404450): the joint box half-extents (along / across the
+    // facing) of movement-backed land squad container `id` - the AbilityHost::land_squad_slots input Bribe's E_T folds
+    // (abilities::squad_joint_half_extents). False: not such a container. Const read only.
+    bool squad_joint_box(const objects::ObjectStore& st, objects::ObjectId id, float& hx, float& hy) const;
     const tactical::abilities::AbilitySystem& abilities() const { return *abilities_; }
     tactical::abilities::AbilitySystem& abilities() { return *abilities_; }
     const BattleTables& tables() const { return *tables_; }
@@ -1399,6 +1403,22 @@ private:
     bool mv_first_lock(const TacticalMode& mode, objects::ObjectId id, SimRng& rng);
     std::string_view mv_locomotor_token(uint32_t type) const;  // the mode's active *_LOCOMOTOR behaviour token (empty: none)
     bool mv_self_registers(uint32_t type) const;  // cu8l t01: LandTeamContainer (land) / SimpleSpace (space) locomotor
+    // s78n t03 (TACTICAL_COMBAT §5.4.4 item 2, MOVEMENT §3.7): makes land squad container containers_[ci] (object type
+    // `object_type`, a LAND_TEAM_CONTAINER locomotor) a movement unit walking its own path, its members steering to their
+    // slots (MovementSystem::set_land_team). False (nothing changed): a member is not a Default-locomotor walker without
+    // Uses_Multiple_Locomotors [port: such squads keep bt_team_positions' re-centring].
+    bool mv_squad_add(TacticalMode& mode, size_t ci, uint32_t object_type);
+    // s78n t09 (TACTICAL_COMBAT §5.4.6 items 1, 2, 4): 0x371be0 - a type's half-extents (Custom_Hard_X/YExtent x
+    // Scale_Factor when both > 0, else per axis the mode model's collision-bound half x / y x Scale_Factor, no model 0);
+    // 0x396850 for a unit (0x371d20, the deployed pair, for a deploying / deployed Deploys walker).
+    void type_half_extents(uint32_t type, float& hx, float& hy) const;
+    void unit_half_extents(const Unit& u, float& hx, float& hy) const;
+    // s78n t09 (§5.4.4 item 1, 0x404450): a movement-backed land squad container's joint box input - its live members'
+    // slots (team index order) with their half-extents, the container type's MaxJiggleDistance and the container's
+    // facing. False: not such a container.
+    bool squad_joint_slots(const objects::ObjectStore& st, objects::ObjectId container,
+                           std::vector<tactical::abilities::SquadSlot>& slots, float& jiggle, Vec3& facing) const;
+    void combat_team_positions(const objects::ObjectStore& store);  // s78n t03: CombatSystem::set_team_position per team
     std::vector<int8_t> adopt_kind_;      // cu8j t02: mv_adopt_kind cache (+1; 0 = not computed); derived, not saved
     bool deploy_script_ = false;          // cu8j t02: deploy() for a script spawn (no team helper adopt; transient)
     // FIGHTER_FLYING §6.3.1: FlyingHooks::clearance type data per object (ClearanceInfoFn), cached per type.

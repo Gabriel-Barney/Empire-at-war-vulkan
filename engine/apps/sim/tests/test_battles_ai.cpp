@@ -981,6 +981,198 @@ void test_team_speed_and_owner() {
     CHECK(done);
 }
 
+// s78n t03 / t09 (TACTICAL_COMBAT §5.4.4 items 1 - 2, MOVEMENT §3.7, FIGHTER_FLYING §7): squad_types - the Team type on
+// LAND_TEAM_CONTAINER_LOCOMOTOR, troopers sized as Squad_Stormtrooper (half-extent 2.0 x 1.5 = 3.0), the container's
+// MaxJiggleDistance 0.75. In a land battle each squad container is a mover of its own:
+//  * t03: its members hold slots around it (MovementSystem::land_team_slots); a move ordered on the members moves the
+//    container along its own straight path (open map) - the store position every reader takes is the mover's, never the
+//    members' box centre; the members steer from the container's state at the start of the tick, so they trail their
+//    slots by about one frame of the team speed (the container leads) and hold the formation; the container arrives and
+//    the members settle within 4.0 of their slot points.
+//  * t09: Bribe's E_T input (TacticalBattle::squad_joint_box) is the joint box of the members' slots +- 3.0 from the
+//    container's point (0, 0) plus J = 0.75.
+void test_land_squad_container() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+                       false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, make_setup(*d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    opt.battle.skip_human_units = true;  // the stand-in leaves the human's squads to this test's orders
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    const objects::TypeIndex team_t = d->types.resolve_name("Team");
+    CHECK(team_t != objects::kNone);
+    namespace tc = alamo::tactical::combat;
+    namespace mv = alamo::tactical::movement;
+    bool invaded = false, done = false;
+    int stage = 0;
+    uint32_t order_frame = 0, settle_frame = 0;
+    objects::ObjectId team_id = objects::kNoObjectId;
+    std::vector<objects::ObjectId> members;
+    std::vector<std::pair<mv::ObjectId, mv::V2>> slots;
+    Vec3 start{}, goal{};
+    float off_line = 0.0f, max_lead = 0.0f, team_speed = 0.0f, late_along = 0.0f, settle_err = 0.0f;
+    uint32_t store_mismatch = 0, moving_frames = 0, recover_frames = 0;
+    float start_error = -1.0f, recovered_error = -1.0f;
+    for (uint64_t t = 0; t < 8000 && !done; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->frame() < 3) continue;
+        objects::ObjectStore& st = tm->primary();
+        const tc::CombatSystem& cs = b->combat();
+        const mv::MovementSystem& ms = b->movement();
+        if (stage == 0) {  // a live team of the human player (0) with >= 2 members
+            std::map<uint32_t, std::vector<objects::ObjectId>> teams;
+            for (size_t i = 0; i < cs.unit_count(); ++i) {
+                const auto id = cs.unit_id_at(i);
+                if (cs.team(id) != 0 && cs.alive(id)) teams[cs.team(id)].push_back(id);
+            }
+            for (const auto& [tid, m] : teams) {
+                const objects::ObjectHandle th = st.find(static_cast<objects::ObjectId>(tid));
+                if (m.size() >= 2 && team_id == objects::kNoObjectId && st.alive(th) && st.owner(th) == 0) {
+                    team_id = static_cast<objects::ObjectId>(tid);
+                    members = m;
+                }
+            }
+            CHECK(team_id != objects::kNoObjectId);
+            if (team_id == objects::kNoObjectId) break;
+            const objects::ObjectHandle th = st.find(team_id);
+            CHECK(st.type(th) == team_t && ms.has_unit(team_id));
+            slots = ms.land_team_slots(team_id);
+            CHECK(slots.size() == members.size());
+            for (size_t k = 0; k < slots.size() && k < members.size(); ++k) {
+                mv::ObjectId c = -1;
+                mv::V2 sl;
+                CHECK(slots[k].first == members[k] && ms.team_slot(members[k], c, sl) && c == team_id && sl == slots[k].second);
+            }
+            // t09: the joint box of the slots +- 3.0 (from the container's point) + J 0.75
+            float lx = 0.0f, hx = 0.0f, ly = 0.0f, hy = 0.0f;
+            for (const auto& [id, sl] : slots) {
+                lx = std::min(lx, sl.x - 3.0f);
+                hx = std::max(hx, sl.x + 3.0f);
+                ly = std::min(ly, sl.y - 3.0f);
+                hy = std::max(hy, sl.y + 3.0f);
+            }
+            float ex = 0.0f, ey = 0.0f;
+            CHECK(b->squad_joint_box(st, team_id, ex, ey));
+            const float wx = (hx - lx) * 0.5f + 0.75f, wy = (hy - ly) * 0.5f + 0.75f;
+            CHECK(std::fabs(ex - wx) < 1e-4f && std::fabs(ey - wy) < 1e-4f && ex >= 3.75f && ey >= 3.75f);
+            float nx = 0.0f, ny = 0.0f;
+            CHECK(!b->squad_joint_box(st, members[0], nx, ny));  // a member is no squad container
+            std::printf("  land squad: team %d, %zu members, slots", static_cast<int>(team_id), slots.size());
+            for (const auto& [id, sl] : slots) std::printf(" (%.2f, %.2f)", static_cast<double>(sl.x), static_cast<double>(sl.y));
+            std::printf("; joint box E_T %.3f x %.3f\n", static_cast<double>(ex), static_cast<double>(ey));
+            stage = 3;
+            continue;
+        }
+        bool all_alive = true;
+        for (const auto id : members) all_alive = all_alive && cs.alive(id);
+        if (!all_alive) {
+            std::printf("  land squad: a member died in stage %d, skipped\n", stage);
+            break;
+        }
+        const objects::ObjectHandle th = st.find(team_id);
+        const mv::UnitView k = ms.view(team_id);
+        const Vec3 p = st.position(th);
+        if (p.x != k.pos.x || p.y != k.pos.y) ++store_mismatch;  // every reader takes the store position: the mover's
+        const float c = std::cos(k.yaw * 0.017453292f), s = std::sin(k.yaw * 0.017453292f);
+        // the members' largest distance from their slot points (container + R(yaw) (slot + jiggle))
+        const auto slot_error = [&]() {
+            float e = 0.0f;
+            for (size_t m = 0; m < members.size(); ++m) {
+                const mv::UnitView v = ms.view(members[m]);
+                const mv::V2 off = slots[m].second + v.jiggle;
+                const float tx = k.pos.x + c * off.x - s * off.y, ty = k.pos.y + s * off.x + c * off.y;
+                e = std::max(e, std::sqrt((v.pos.x - tx) * (v.pos.x - tx) + (v.pos.y - ty) * (v.pos.y - ty)));
+            }
+            return e;
+        };
+        if (stage == 3) {  // the drop placed the members off their slots: they recover to them while the team is idle
+            if (start_error < 0.0f) start_error = slot_error();
+            bool idle = !k.has_goal;
+            for (const auto id : members) idle = idle && !ms.view(id).has_goal;
+            if (!idle) {
+                if (++recover_frames > 900) break;
+                continue;
+            }
+            recovered_error = slot_error();
+            // t03: a move on the members moves the container 300 ahead along its facing (no turn in place)
+            start = p;
+            const Vec3 f = st.facing(th);
+            CHECK(b->order_move(*tm, 0, members, start.x + f.x * 300.0f, start.y + f.y * 300.0f, host.random().synced()) ==
+                  commands::RejectReason::None);
+            CHECK(ms.view(team_id).has_goal && ms.view(members[0]).has_goal && ms.view(members[0]).goal == ms.view(team_id).goal);
+            goal = Vec3{ms.view(team_id).goal.x, ms.view(team_id).goal.y, start.z};
+            order_frame = b->frame();
+            stage = 1;
+            continue;
+        }
+        if (stage == 1) {
+            if (k.has_goal) {
+                ++moving_frames;
+                // the container's own straight path: its distance from the start -> goal line
+                const float gx = goal.x - start.x, gy = goal.y - start.y, gl = std::sqrt(gx * gx + gy * gy);
+                off_line = std::max(off_line, std::fabs((p.x - start.x) * gy - (p.y - start.y) * gx) / gl);
+                team_speed = std::max(team_speed, k.speed);
+                for (size_t m = 0; m < members.size(); ++m) {
+                    const mv::UnitView v = ms.view(members[m]);
+                    const float along = slots[m].second.x - (c * (v.pos.x - k.pos.x) + s * (v.pos.y - k.pos.y));
+                    max_lead = std::max(max_lead, along);  // > 0: the member is behind its slot (the container leads)
+                    if (b->frame() > order_frame + 60) late_along = std::max(late_along, std::fabs(along));
+                }
+            } else if (b->frame() > order_frame + 5) {
+                CHECK(k.arrived);
+                stage = 2;
+                settle_frame = b->frame();
+            }
+            continue;
+        }
+        if (b->frame() < settle_frame + 120) continue;  // members recover to their slots once the team stopped
+        settle_err = slot_error();
+        for (const auto id : members) CHECK(!ms.view(id).has_goal);
+        done = true;
+    }
+    CHECK(done);
+    std::printf("  land squad: dropped up to %.2f off their slots, recovered to %.2f in %u frames\n", static_cast<double>(start_error),
+                static_cast<double>(recovered_error), recover_frames);
+    std::printf("  land squad: moving %u frames, off its line <= %.3f, members up to %.2f behind their slots at the team speed %.3f, "
+                "along error after 2 s <= %.2f, settled within %.2f; store = mover %d\n",
+                moving_frames, static_cast<double>(off_line), static_cast<double>(max_lead), static_cast<double>(team_speed),
+                static_cast<double>(late_along), static_cast<double>(settle_err), store_mismatch == 0 ? 1 : 0);
+    if (!done) return;
+    CHECK(store_mismatch == 0);
+    CHECK(start_error > 4.0f && recovered_error >= 0.0f && recovered_error <= 4.0f);  // idle recovery (> 4.0 from the slot)
+    CHECK(moving_frames > 60 && off_line < 0.5f);
+    CHECK(max_lead > 1.0f);   // the container leads (its members steer from its start-of-tick state)
+    CHECK(late_along < 4.0f);  // and the members hold the formation
+    CHECK(settle_err <= 4.0f);
+}
+
 // s78k t04 (TACTICAL_COMBAT §3.5 "Convert and its team rule" steps 3-5): a converting blaster (convert_types) turns
 // enemy team members in a land battle. CombatSystem converts the victim's whole team (combat owner, one
 // UnitEffect::Converted each); the host follows each event (store owner) and its TEAM container - the store owner and the
@@ -2029,6 +2221,7 @@ int main(int argc, char** argv) {
     test_team_hack_bribe(false);
     test_team_hack_bribe(true);
     test_vehicle_thief();  // s78n t05
+    test_land_squad_container();  // s78n t03 / t09
     test_vehicle_landing_exit();
     std::printf("a1i t04 / t05: land Reinforce from a landing object (spawn, carried type, unload offsets, take-off)\n");
     test_landing_drop(false);

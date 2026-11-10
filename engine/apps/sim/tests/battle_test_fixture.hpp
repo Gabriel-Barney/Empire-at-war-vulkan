@@ -259,6 +259,21 @@ inline std::string team_types() {
     return t;
 }
 
+// s78n t03 / t09: the team data with the Team type on LAND_TEAM_CONTAINER_LOCOMOTOR (its own mover, members steering to
+// slots) and MaxJiggleDistance 0.75; the trooper sized as FoC's Squad_Stormtrooper (Custom_Hard extents 2.0 x Scale_Factor
+// 1.5 = half-extent 3.0) with FormationSpacing 0.5.
+inline std::string squad_types() {
+    std::string t = team_types();
+    const std::string team = "<Team Name=\"Team\"><Behavior>TEAM</Behavior>";
+    if (const size_t p = t.find(team); p != std::string::npos)
+        t.insert(p + team.size(), "<LandBehavior>LAND_TEAM_CONTAINER_LOCOMOTOR</LandBehavior><MaxJiggleDistance>0.75</MaxJiggleDistance>");
+    const std::string ext = "<Custom_Hard_XExtent>6</Custom_Hard_XExtent><Custom_Hard_YExtent>6</Custom_Hard_YExtent>\n </GroundInfantry>";
+    if (const size_t p = t.find(ext); p != std::string::npos)
+        t.replace(p, ext.size(), "<Custom_Hard_XExtent>2</Custom_Hard_XExtent><Custom_Hard_YExtent>2</Custom_Hard_YExtent>"
+                                 "<Scale_Factor>1.5</Scale_Factor><FormationSpacing>0.5</FormationSpacing>\n </GroundInfantry>");
+    return t;
+}
+
 // a1i t04: the team data plus a landing transport: S10_Squad (Max_Squad_Size 2: two teams) names Company_Transport_Unit
 // S10_Lander, whose Landing_Transport_Variant S10_Lander_Landing (TRANSPORT, Hover_Offset 10 inherited) carries it down.
 inline std::string landing_types() {
@@ -588,9 +603,10 @@ inline std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool
                                 bool obstacle = false, bool team = false, bool fog_bm = false, bool fighters = false,
                                 bool fog_setup = false, bool bomb = false, bool landing = false, bool sprint = false,
                                 bool convert = false, bool hack = false, bool vland = false, bool presence = false,
-                                bool gate = false) {
+                                bool gate = false, bool squad = false) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / (std::string(g_temp_prefix) + (gate ? "_gate"  // cu8g t05
+    d->root = fs::temp_directory_path() / (std::string(g_temp_prefix) + (squad ? "_squad"  // s78n t03 / t09
+                                           : gate ? "_gate"  // cu8g t05
                                            : presence ? "_presence"  // s78l t03
                                            : vland       ? "_vehicle_landing"  // s78l t04
                                            : hack      ? "_team_hack"  // s78l t04
@@ -614,7 +630,8 @@ inline std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", gate ? gate_types()  // cu8g t05
+    write_file(x / "S10Types.xml", squad ? squad_types()  // s78n t03 / t09
+                                   : gate ? gate_types()  // cu8g t05
                                    : presence ? presence_types()  // s78l t03
                                    : vland ? vehicle_landing_types()  // s78l t04
                                    : hack ? hack_types()  // s78l t04
@@ -671,7 +688,7 @@ inline std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool
                " <Damage_To_Armor_Mod>Damage_Laser, Armor_Ship, 0.8</Damage_To_Armor_Mod>\n"
                " <AutoResolveLoserAttrition>0.80</AutoResolveLoserAttrition>\n"
                " <Space_Retreat_Allowed_Countdown_Seconds>5.0</Space_Retreat_Allowed_Countdown_Seconds>\n" +
-                   std::string(landing || sprint || convert || hack || vland ? " <Use_Reinforcement_Points>No</Use_Reinforcement_Points>\n" : "") +  // a1i t04: no points on the map
+                   std::string(landing || sprint || convert || hack || vland || squad ? " <Use_Reinforcement_Points>No</Use_Reinforcement_Points>\n" : "") +  // a1i t04: no points on the map
                    std::string(fog_setup ? " <SetupPhaseEnabled>True</SetupPhaseEnabled>\n"  // FOWF t05: a mod's land setup phase
                                            " <SetupPhaseCountdownSeconds>3</SetupPhaseCountdownSeconds>\n"
                                          : "") +

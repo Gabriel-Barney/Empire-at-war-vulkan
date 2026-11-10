@@ -212,7 +212,8 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
         return galaxy_ && p != kInvalidPlanet && static_cast<size_t>(p) < galaxy_->planets().size() && galaxy_->corrupted(p);
     };
     // s78m t08 (TACTICAL_COMBAT §5.4.2): Tactical_Bribe's container test (R + 10) takes a land squad container (TEAM with
-    // a LAND_TEAM_CONTAINER locomotor) at its store position, the one bt_team_positions keeps for movement.
+    // a LAND_TEAM_CONTAINER locomotor) at its store position - s78n t03: the position its own mover gives it (§5.4.4 item 2),
+    // the one team targeting, fog and the AI threat entry read too.
     h.land_squad_container = [this, st = &mode.primary()](tc::ObjectId id, tactical::Vec3& pos) {
         if (space_) return false;
         for (const Container& c : containers_) {
@@ -223,6 +224,14 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
             return true;
         }
         return false;
+    };
+    // s78n t09 (TACTICAL_COMBAT §5.4.4 item 1, 0x404450): Bribe's E_T - the joint box of the container's member slots.
+    h.land_squad_slots = [this, st = &mode.primary()](tc::ObjectId id, std::vector<ta::SquadSlot>& slots, float& jiggle,
+                                                       tactical::Vec3& facing) {
+        Vec3 f{1.0f, 0.0f, 0.0f};
+        if (!squad_joint_slots(*st, id, slots, jiggle, f)) return false;
+        facing = tactical::Vec3{f.x, f.y, f.z};
+        return true;
     };
     // s78m t05 (TACTICAL_COMBAT §5.4.3 item 4): the Combat_Bonus accept's ally test 0x39a230 (relation 0; neutral is not).
     h.allied_players = [this](int32_t a, int32_t b) { return bt_allied(a, b); };

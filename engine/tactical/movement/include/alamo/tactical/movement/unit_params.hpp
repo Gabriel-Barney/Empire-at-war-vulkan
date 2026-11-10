@@ -39,6 +39,10 @@ struct UnitDesc {
     int32_t grouping = 2;         // FormationGrouping (unset: Standard [L])
     int32_t formation_order = 0;  // FormationOrder
     bool team_member = false;
+    // s78n t03 (TACTICAL_COMBAT §5.4.4 item 2, MOVEMENT §3.7; save version 14): a land squad container (LandTeamContainer
+    // locomotor). It walks its own path at the team speed (its own passability test) and is the formation's anchor its
+    // members steer around (MovementSystem::set_land_team). It takes no part in land collision, crush or arrival turns.
+    bool team_container = false;
     uint32_t space_layer = kLayerFrigate;  // Space_Layer
     float layer_z = 0.0f;         // Layer_Z_Adjust
     // ---- OI tactical (PHASE4 S7 open items) ----

@@ -623,6 +623,11 @@ bool TacticalBattle::mv_first_lock(const TacticalMode& mode, objects::ObjectId i
     }
     for (size_t ci = 0; ci < containers_.size(); ++ci) {
         if (containers_[ci].id != id || containers_[ci].removed) continue;
+        if (movement_->has_unit(id)) {  // s78n t03: a land squad container is a mover with its own coordinator
+            if (movement_->split_from_formation(id, rng)) return true;
+            if (movement_->coordinator_hold(id) != Hold::None) return false;
+            return mv_adopt(mode, containers_[ci].h, rng);
+        }
         Hold hold = Hold::None;
         for (const Unit& m : units_)
             if (m.container == ci && m.alive && !m.retreated && m.movable) {
@@ -1255,9 +1260,17 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32
             // cu8l t01 (CU8K_T02_T06_RE §1.2, §4 rules 1 / 4): a land team container's LandTeamContainer locomotor
             // registers it at creation (0x5abac0: its own coordinator, Move_To its own position, no formation): no draw
             // now; the coordinator composes at the next step 10 (one int(1, FPS), coordinator creation order) unless an
-            // order takes the members first. [port] The members stand in for the container in the movement system; a
-            // container without a movable member composes nothing.
-            if (!space_ && movement_ && mv_self_registers(team_obj)) (void)movement_->hold_from_birth(groups.back());
+            // order takes the members first. s78n t03 (TACTICAL_COMBAT §5.4.4 item 2): the container is a movement unit
+            // walking its own path, its members steering to their slots, so its own coordinator holds it. [port] A squad
+            // with a member that cannot steer (mv_squad_add false) keeps the members standing in for the container.
+            if (!space_ && movement_ && mv_self_registers(team_obj)) {
+                if (mv_squad_add(mode, containers_.size() - 1, team_obj)) {
+                    const mv::ObjectId self[] = {ct.id};
+                    (void)movement_->hold_from_birth(self);
+                } else {
+                    (void)movement_->hold_from_birth(groups.back());
+                }
+            }
         }
     }
     // 3. combat / ability units (hardpoint draws, HardPoints order), then the containers.
@@ -2379,6 +2392,80 @@ void TacticalBattle::drop_half_extents(uint32_t type, float& hx, float& hy) cons
     sim::drop_half_extents(catalog_->types(), catalog_, type, hx, hy);
 }
 
+bool TacticalBattle::mv_squad_add(TacticalMode& mode, size_t ci, uint32_t object_type) {
+    // s78n t03 (TACTICAL_COMBAT §5.4.4 item 2, MOVEMENT §3.7, FIGHTER_FLYING §7): the LandTeamContainer locomotor. The
+    // container (created at its members' mean with the first member's facing) becomes a mover of its own: free-position
+    // search at add_unit, its own path and walk at the team speed (apply_speed_factors), its members steering to slots.
+    if (space_ || !movement_ || ci >= containers_.size()) return false;
+    const objects::GameObjectTypes& types = catalog_->types();
+    if (object_type >= types.size()) return false;
+    const Container& ct = containers_[ci];
+    std::vector<mv::ObjectId> ids;
+    std::vector<const Unit*> mem;
+    for (const Unit& u : units_) {  // ascending id = the chunk's list order (team index order)
+        if (u.container != ci) continue;
+        if (!u.alive || u.retreated || !u.movable || !movement_->has_unit(u.id) || u.type >= types.size()) return false;
+        if (movement_->view(u.id).locomotor != mv::LocomotorKind::Default || types.get_bool(u.type, "Uses_Multiple_Locomotors"))
+            return false;
+        ids.push_back(u.id);
+        mem.push_back(&u);
+    }
+    if (ids.empty()) return false;
+    // Slots (pack +0x114 / +0x118): [port] the arrangement 0x5ac970 / 0x5ac2a0 (ContainerArrangement +0x1684) is not
+    // traced (TACTICAL_COMBAT §5.4.4 [M]); the team layout of the drop, 0x5abc00 with the first member's half-extents and
+    // g = 20 x its FormationSpacing (TACTICAL_GAPS §4.2.1), stands in: x along the container's facing, y across.
+    const uint32_t f = mem.front()->type;
+    float fx = 0.0f, fy = 0.0f;
+    type_half_extents(f, fx, fy);
+    std::vector<Off2> offs;
+    float bx = 0.0f, by = 0.0f;
+    drop_team(fx, fy, 20.0f * types.get_float(f, "FormationSpacing"), static_cast<uint32_t>(ids.size()), offs, bx, by);
+    if (offs.size() != ids.size()) return false;
+    std::vector<mv::V2> slots(ids.size());
+    std::vector<ta::SquadSlot> box(ids.size());
+    for (size_t i = 0; i < ids.size(); ++i) {
+        slots[i] = {offs[i][0], offs[i][1]};
+        box[i].along = offs[i][0];
+        box[i].side = offs[i][1];
+        unit_half_extents(*mem[i], box[i].hx, box[i].hy);
+    }
+    float jx = 0.0f, jy = 0.0f;
+    ta::squad_joint_half_extents(box, types.get_float(object_type, "MaxJiggleDistance"), jx, jy);
+    const objects::ObjectStore& st = mode.primary();
+    const Vec3 p = st.position(ct.h);
+    mv::UnitDesc d = mv::unit_desc_from_type(types, object_type);
+    const mv::UnitDesc fm = mv::unit_desc_from_type(types, f);
+    d.id = ct.id;
+    d.pos = {p.x, p.y};
+    d.z = p.z;
+    d.yaw_deg = yaw_of(st.facing(ct.h));
+    d.owner = ct.owner;
+    d.team_container = true;
+    d.team_member = false;
+    d.locomotor = mv::LocomotorKind::Default;
+    d.uses_multiple_locomotors = d.has_secondary_locomotor = false;
+    d.crusher = d.supercrusher = d.squashable = d.squashable_by_supercrusher = false;
+    d.turret = false;
+    d.movement_class = fm.movement_class;  // [port] the container type's +0x1688 [M]: the first member's class
+    // The formation layout reads the container's hard radius 0x397780: sqrt(hx^2 + hy^2) of the joint box.
+    const float r = dmath::sqrt(jx * jx + jy * jy);
+    if (r > 0.0f) d.radius = r;
+    if (types.get_string(object_type, "Max_Speed").empty()) {  // [port] untagged: the members' minimum (the team cap rules)
+        float mn = 3.0e38f;
+        for (const Unit* u : mem) mn = std::min(mn, mv::unit_desc_from_type(types, u->type).max_speed);
+        d.max_speed = mn;
+    }
+    if (!movement_->add_unit(d)) return false;
+    if (!movement_->set_land_team(ct.id, ids, slots)) {
+        (void)movement_->remove_unit(ct.id);
+        return false;
+    }
+    const mv::UnitView v = movement_->view(ct.id);
+    if (v.pos.x != p.x || v.pos.y != p.y)  // the free-position search moved it off a blocked centroid
+        mode.primary().set_position(ct.h, Vec3{v.pos.x, v.pos.y, map_.terrain.sample_height(v.pos.x, v.pos.y)});
+    return true;
+}
+
 float TacticalBattle::drop_yaw(uint8_t side) const {
     if (side >= 2) return 0.0f;  // third players: no record written
     const Vec3 f = drop_facing_[side];
@@ -2999,6 +3086,7 @@ void TacticalBattle::unit_gone(TacticalMode& mode, Unit& u) {
     if (c.alive > 0) --c.alive;
     if (c.alive == 0 && !c.removed) {
         c.removed = true;
+        if (movement_) (void)movement_->remove_unit(c.id);  // s78n t03: a squad container's own mover
         bt_removals_.push_back({c.owner, c.type, c.type, u.retreated});  // battle host: the container leaves with its last member
         hg_unit_removed(c.id);  // hangars: a launched squadron container is gone
         abilities_->remove(c.id);
@@ -3166,6 +3254,17 @@ void TacticalBattle::apply_speed_factors() {
             if (!catalog_->types().get_string(ct, "Max_Speed").empty()) cmax = catalog_->types().get_float(ct, "Max_Speed");
         }
         movement_->set_team(u.id, in_team ? containers_[u.container].id : mv::ObjectId{-1}, in_team ? team_mult(team) : 1.0f, cmax);
+    }
+    // s78n t03: a movement-backed land squad container walks at the team speed - the same value its members' set_team
+    // carries (the members' minimum with its own Max_Speed, x its factor).
+    for (const Container& c : containers_) {
+        if (space_ || !c.team || c.removed || !movement_->has_unit(c.id)) continue;
+        float cmax = -1.0f;
+        if (c.type < catalog_->types().size()) {
+            const auto ct = static_cast<objects::TypeIndex>(c.type);
+            if (!catalog_->types().get_string(ct, "Max_Speed").empty()) cmax = catalog_->types().get_float(ct, "Max_Speed");
+        }
+        movement_->set_team(c.id, c.id, team_mult(static_cast<uint32_t>(c.id)), cmax);
     }
 }
 
@@ -4515,7 +4614,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     arrival_service(mode, rng);  // cu8l t03: the start fleet's hyperspace arrivals (timer draws, finishes)
     l1_force_disable(mode);  // cu8 t02: Disable_Force_Abilities_Range emitters (Force-disable stamps)
     hg_engine_service();   // engine loops: SimpleSpace locomotor services (moving first, then idle)
-    bt_team_positions(mode);  // battle host: TEAM containers at their members' box centre (A1_READINGS §29.4)
+    bt_team_positions(mode);  // battle host: space squadrons / non-steering land squads at their members' box centre
     profile::lap("tac.motion_post");
     mode.resolve_models();  // refixf t07: after a load, before the boxes and the parallel sweeps read the model cache
     for (const Unit& u : units_)
@@ -4565,9 +4664,11 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
         }
     }
     s4_positions(mode);  // S4: garrisoned units sit on their holders
+    combat_team_positions(store);  // s78n t03: the land teams' TeamTargeting P_U (cleared after the combat tick)
     profile::lap("tac.combat_pre");
     hooks_->set_tick(&rng, global_frame);
     abilities_->tick(frame_, mode.trees(), rng, pf);
+    combat_->clear_team_positions();  // s78n t03: readers between ticks use the head's own position (save / load equal)
     profile::lap("tac.combat");
     consume_events(mode, rng);
     oi_respawn_due(mode);  // OI abilities: Tactical_Respawn creations due this frame

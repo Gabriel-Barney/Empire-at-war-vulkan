@@ -145,8 +145,9 @@ fw::FogObject TacticalBattle::fog_object_of(const objects::ObjectStore& store, o
 // Half extents 0x371be0: Scale_Factor x Custom_Hard_X/YExtent when both > 0, else each non-positive one from the type
 // model's |collision bound half extent| x Scale_Factor (0 without a model); centre = position + the rotated Scale_Factor x
 // Custom_Hard_X/YExtent_Offset. [port] The axes come from the normalised facing vector (the original takes cos / sin of
-// the yaw in degrees); without model data for the type the mode's per-type half extent stands in for the model part; TEAM
-// objects use their type's extents (the team box 0x404450 is not modelled) and the _Deployed extents are not modelled.
+// the yaw in degrees); without model data for the type the mode's per-type half extent stands in for the model part; the
+// _Deployed extents are not modelled. s78n t09 (TACTICAL_COMBAT §5.4.6 item 4.1): a movement-backed land squad container's
+// half extents are its joint box 0x404450 (no member: 0, 0); other TEAM objects use their type's extents.
 void TacticalBattle::fog_footprint_samples(const objects::ObjectStore& store, objects::ObjectHandle h, float* xy) const {
     const objects::GameObjectTypes& types = catalog_->types();
     const objects::TypeIndex t = store.type(h);
@@ -154,7 +155,13 @@ void TacticalBattle::fog_footprint_samples(const objects::ObjectStore& store, ob
     const float scale = sf > 0.0f ? sf : 1.0f;
     const float ex = types.get_float(t, "Custom_Hard_XExtent"), ey = types.get_float(t, "Custom_Hard_YExtent");
     float hx = scale * ex, hy = scale * ey;
-    if (!(ex > 0.0f) || !(ey > 0.0f)) {
+    std::vector<tactical::abilities::SquadSlot> squad;
+    float jiggle = 0.0f;
+    Vec3 squad_facing{};
+    if (squad_joint_slots(store, store.id(h), squad, jiggle, squad_facing)) {
+        hx = hy = 0.0f;
+        if (!squad.empty()) tactical::abilities::squad_joint_half_extents(squad, jiggle, hx, hy);
+    } else if (!(ex > 0.0f) || !(ey > 0.0f)) {
         float mx = 0.0f, my = 0.0f;
         const TacticalMode::ModelRef m = fog_mode_->model_ref(t, false);
         if (m.known) {

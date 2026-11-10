@@ -264,6 +264,23 @@ bool CombatSystem::remove_unit(ObjectId id) {
 void CombatSystem::set_position(ObjectId id, Vec3 p) {
     if (Unit* u = unit(id)) u->pos = p;
 }
+void CombatSystem::set_team_position(uint32_t team, Vec3 p) {
+    const auto it = std::lower_bound(team_pos_.begin(), team_pos_.end(), team,
+                                     [](const std::pair<uint32_t, Vec3>& e, uint32_t t) { return e.first < t; });
+    if (it != team_pos_.end() && it->first == team) it->second = p;
+    else team_pos_.insert(it, {team, p});
+}
+
+Vec3 CombatSystem::scan_pos(const Unit& u) const {
+    // s78n t03 (TACTICAL_COMBAT §5.4.4 item 2.1): TeamTargeting scans and range-tests from the container, which walks its
+    // own path (it is not its members' centre). [port] The head is the team_leader member standing in for the container.
+    if (cfg_.mode != GameMode::Land || u.team == 0 || team_pos_.empty()) return u.pos;
+    if (!u.team_leader && static_cast<uint32_t>(u.id) != u.team) return u.pos;
+    const auto it = std::lower_bound(team_pos_.begin(), team_pos_.end(), u.team,
+                                     [](const std::pair<uint32_t, Vec3>& e, uint32_t t) { return e.first < t; });
+    return it != team_pos_.end() && it->first == u.team ? it->second : u.pos;
+}
+
 void CombatSystem::set_facing(ObjectId id, Vec3 f) {
     if (Unit* u = unit(id)) u->facing = f;
 }
@@ -1256,8 +1273,9 @@ bool CombatSystem::candidate_ok(const Unit& a, const Unit& t, float range) const
     // E, FireRange modifier or LAND_OBSTACLE walk); slot 45 is unchanged. s78n t02: slot 45 is slot 46 in full
     // (min_range_hit: its own E, no aim walk, the nearest-member retest), not slot 43's d / E.
     const ProjectileDesc* gw = grenade_weapon(a);
+    const Vec3 ap = scan_pos(a);  // s78n t03: a land team head tests from its container
     float d = 0.0f, E = 0.0f;
-    if (!gw) range_geometry(t, a.pos, d, E);  // OI tactical: + the LAND_OBSTACLE aim walk
+    if (!gw) range_geometry(t, ap, d, E);  // OI tactical: + the LAND_OBSTACLE aim walk
     const bool head_target = head && current_target(head->id) == t.id;
     const bool in_max = gw ? lob_in_range(a, *gw, t) : d <= range + E;
     // S8 t17 (FIGHTER_FLYING §4.10 A, last paragraph): beyond R, a formation unit also accepts c when 0x4160a0(F, u, c)
@@ -1267,7 +1285,7 @@ bool CombatSystem::candidate_ok(const Unit& a, const Unit& t, float range) const
         return (a.flags & kUnitScanQuery) && scan_range_ && scan_range_(a.id, t.id, range, rr) != 0;
     };
     if (!in_max && !head_target && !responds()) return false;
-    if (!head_target && min_range_hit(t, a.pos, ad.min_attack_distance)) return false;
+    if (!head_target && min_range_hit(t, ap, ad.min_attack_distance)) return false;
     // 10: stealth
     if ((t.flags & kUnitStealthed) && !ad.target_stealth_units && a.owner != t.owner) return false;
     // 4: fully fogged for the attacker's player (FOW_Object_Hidden 0x35f470 with force 1 - TACTICAL_GAPS 5.8: AI
@@ -1321,7 +1339,8 @@ void CombatSystem::gather(uint32_t index, QueryContext& ctx) {
         float rr = 0.0f;
         if (scan_range_(u.id, kNoObject, range, rr) != 0 && rr > 0.0f) half = range + rr;
     }
-    const Aabb box{{u.pos.x - half, u.pos.y - half, u.pos.z - half}, {u.pos.x + half, u.pos.y + half, u.pos.z + half}};
+    const Vec3 up = scan_pos(u);  // s78n t03: a land team scans around its container (§2.2 box centre)
+    const Aabb box{{up.x - half, up.y - half, up.z - half}, {up.x + half, up.y + half, up.z + half}};
     const auto np = static_cast<int32_t>(std::min<uint32_t>(player_count(), trees_->player_count()));
     for (int32_t p = 0; p < np; ++p) {
         if (!is_enemy(u.owner, p) || !players_[static_cast<size_t>(p)].active) continue;
@@ -1336,7 +1355,7 @@ void CombatSystem::gather(uint32_t index, QueryContext& ctx) {
             c.player = p;
             c.score = s;
             c.fraction = min_health_fraction(*t);
-            c.dist2 = distance2_xy(u.pos, t->pos);
+            c.dist2 = distance2_xy(up, t->pos);
             c.aim_points = aim_point_count(*t);
             c.aimable = (u.hp_count && aimable(u, *t)) ? 1 : 0;
             out.push_back(c);
@@ -1369,14 +1388,15 @@ bool CombatSystem::promote_goal(Unit& u) {
     if (t->flags & (kUnitSkipTargeting | kUnitDead | kUnitGarrisoned)) return false;
     if (!desc_of(*t).target_test_type) return false;
     float d = 0.0f, E = 0.0f;
-    range_geometry(*t, u.pos, d, E);
+    const Vec3 up = scan_pos(u);  // s78n t03: a land team head's pre-check runs from its container
+    range_geometry(*t, up, d, E);
     if (const ProjectileDesc* gw = grenade_weapon(u)) {
         if (!lob_in_range(u, *gw, *t)) return false;  // slot 44, grenade weapon (S8 t04: LOB_SOLVER §3.1)
     } else {
         const float range = fire_range(base_attack_range(u), mod_r(u, ModList::FireRange));
         if (!(d <= range + E)) return false;  // slot 44
     }
-    if (min_range_hit(*t, u.pos, desc_of(u).min_attack_distance)) return false;  // slot 45 -> 46 (s78n t02)
+    if (min_range_hit(*t, up, desc_of(u).min_attack_distance)) return false;  // slot 45 -> 46 (s78n t02)
     int32_t hp = -1;
     if (u.goal_hp >= 0 && static_cast<uint32_t>(u.goal_hp) < t->hp_count && !hp_dead(hps_[t->hp_begin + static_cast<uint32_t>(u.goal_hp)]))
         hp = u.goal_hp;  // no goal hardpoint: none pushed (§2.9 Q3; the space formation step fills it in)
@@ -1995,7 +2015,7 @@ void CombatSystem::team_targeting_service(Unit& head, uint32_t frame, SimRng& rn
                     break;
                 }
         s = 2;
-        if (in_attack_range(*src, head.pos, *t)) {
+        if (in_attack_range(*src, scan_pos(head), *t)) {  // s78n t03: P_U = the container
             if (head.flags & kUnitMoving) {
                 s = ability_type_active(head, 7) ? uint8_t{4} : uint8_t{2};
             } else {

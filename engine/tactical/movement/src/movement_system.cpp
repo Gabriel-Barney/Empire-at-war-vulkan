@@ -74,6 +74,7 @@ void MovementSystem::rebuild_regions_if_dirty(const ParallelFor& pf) {
 int32_t MovementSystem::formation_ctor_draw(SimRng& rng) { return rng.range_int(1, kFormationFps); }
 
 bool MovementSystem::has_coordinator(ObjectId id) const {
+    id = order_id(id);  // s78n t03: a steering member's coordinator is its container's
     // cu8i t02 [port]: a unit has a movement coordinator (retail locomotor pack +0x1f0 formation) while it has an order
     // (a goal) or a formation; the coordinator-less rest is what 0x39bcb0 adopts at Load_Map's tail.
     // cu8j: also while it waits for its order's composition (pend) or holds in an adopt's coordinator (adopted).
@@ -276,7 +277,7 @@ bool MovementSystem::stop_and_hold(ObjectId id, SimRng& rng) {
 }
 
 MovementSystem::CoordinatorHold MovementSystem::coordinator_hold(ObjectId id) const {
-    const Unit* u = unit_ptr(id);
+    const Unit* u = unit_ptr(order_id(id));  // s78n t03: a steering member answers for its container
     // cu8l t02 [port]: "in a formation" = a member of a formation of > 1 unit, or a unit whose composed move (not waiting
     // for its composition, not an adopt's degenerate hold) is still running. A unit waiting for its composition or held
     // by an adopt is in a coordinator without a formation of its own.
@@ -287,6 +288,7 @@ MovementSystem::CoordinatorHold MovementSystem::coordinator_hold(ObjectId id) co
 }
 
 bool MovementSystem::split_from_formation(ObjectId id, SimRng& rng) {
+    id = order_id(id);  // s78n t03: a steering member's formation is its container's
     if (coordinator_hold(id) != CoordinatorHold::Formation) return false;
     Unit* u = unit_ptr(id);
     (void)formation_ctor_draw(rng);  // 0x4f84e0: the new formation (ctor return 0x4f8518)
@@ -349,9 +351,17 @@ bool MovementSystem::add_unit(const UnitDesc& d) {
     }
     auto it = std::lower_bound(units_.begin(), units_.end(), d.id, [](const Unit& a, ObjectId v) { return a.d.id < v; });
     it = units_.insert(it, std::move(u));
+    if (cfg_.mode == MoveMode::Land && it->d.team_container) {
+        // s78n t03 (TACTICAL_COMBAT §5.4.4 item 2.1): the team helper moves the new container (at its members' mean) by the
+        // free-position search 0x440f90 [M: the mode and the container type's +0x1688 movement class; port: the ring
+        // search of forced_spot with the container's class], so it can sit beside a blocked centroid.
+        V2 spot;
+        if (forced_spot(*it, it->m.pos, spot)) it->m.pos = spot;
+    }
     if (cfg_.mode == MoveMode::Land) {
         const float r = std::max(it->d.radius, 1.0f);
-        tree_.insert(static_cast<EntityHandle>(d.id), Aabb{{d.pos.x - r, d.pos.y - r, -1.0f}, {d.pos.x + r, d.pos.y + r, 1.0f}}, 1u);
+        const V2 p = it->m.pos;
+        tree_.insert(static_cast<EntityHandle>(d.id), Aabb{{p.x - r, p.y - r, -1.0f}, {p.x + r, p.y + r, 1.0f}}, 1u);
     } else {
         park_space(*it, 0);
     }
@@ -365,6 +375,12 @@ bool MovementSystem::remove_unit(ObjectId id) {
     else space_.clear_track(id);
     fighter_removed(id);  // FIGHTER_FLYING: squadrons, cells, locks, targets naming it
     units_.erase(units_.begin() + i);
+    for (Unit& m : units_)  // s78n t03: a removed container releases its members
+        if (m.anchor == id) {
+            m.anchor = -1;
+            m.recovering = false;
+            m.steer_blocked = 0;
+        }
     return true;
 }
 
@@ -390,6 +406,14 @@ UnitView MovementSystem::view(ObjectId id) const {
     v.failed = u->failed;
     v.pushed = u->pushed;  // a1k t03
     v.goal = u->goal;
+    if (u->anchor >= 0) {  // s78n t03: a steering member moves with its container's order (and while recovering)
+        if (const Unit* k = unit_ptr(u->anchor)) {
+            v.has_goal = k->has_goal || u->recovering;
+            v.arrived = k->arrived;
+            v.failed = k->failed;
+            v.goal = k->goal;
+        }
+    }
     v.replans = u->replans;
     v.space_fallback = u->fallback;
     v.start_frame = u->start_frame;  // OI tactical
@@ -537,6 +561,7 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
         f.id = u.d.id;
         f.pos = u.m.pos;
         f.max_speed = loco_max_speed(u);  // 0x41b2a0 reads vf74: S7 t14, the jetpack's alternate while airborne-kind
+        if (u.d.team_container && u.team_cap < kInf) f.max_speed = u.team_cap;  // s78n t03: a container walks at the team speed
         f.radius = u.d.radius;
         f.spacing = u.d.formation_spacing;
         f.hero = u.d.hero;
@@ -720,7 +745,7 @@ void MovementSystem::move_space(const MoveOrder& order, const std::vector<uint32
 void MovementSystem::stop(std::span<const ObjectId> ids) {
     fform_stop(ids);  // S7 t37 / s78f t02: Stop drops the fighter formations
     for (ObjectId id : ids) {
-        Unit* u = unit_ptr(id);
+        Unit* u = unit_ptr(order_id(id));  // s78n t03: a steering member's stop stops its container
         if (!u) continue;
         if (is_air(*u) && u->d.locomotor == LocomotorKind::LandBomber) continue;  // §4.6 [port]: a bombing pass runs out
         u->has_goal = false;
@@ -931,7 +956,9 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
             q.start = u.m.pos;
             q.goal = u.goal;
             q.mask = u.lp.mask;
-            q.clearance_radius = u.d.radius > kCellSize ? u.d.radius : 0.0f;
+            // s78n t03 [port]: a squad container plans without clearance (its planner footprint is untraced; its radius is
+            // the joint box's, for the formation layout).
+            q.clearance_radius = u.d.radius > kCellSize && !u.d.team_container ? u.d.radius : 0.0f;
             if (u.threat != kThreatOff && u.d.space_layer_type == 0) q.threat = ThreatCost::make(tf ? &tf : nullptr, u.threat);
             find_land_path(grid_, regions_, q, sc, out[r]);
         }
@@ -1060,6 +1087,7 @@ void MovementSystem::detect_collisions(uint32_t frame) {
     for (size_t ai = 0; ai < units_.size(); ++ai) {
         Unit& a = units_[ai];
         if (!ground_collider(a)) continue;  // §4.3-4.6: air units take no part in land collision
+        if (a.anchor >= 0) continue;  // s78n t03 [port]: a steering member runs no collision checks (0x509810 [M])
         if (a.check_countdown > 0) {
             --a.check_countdown;
             continue;
@@ -1090,7 +1118,8 @@ void MovementSystem::detect_collisions(uint32_t frame) {
             for (uint32_t bi : cand) {
                 const Unit& b = units_[bi];
                 // a1k t03: a pushed unit's locomotor moves, so it is not stopped.
-                if (b.has_goal || b.pushed || !collision_classes_interact(a.d.collision_class, b.d.collision_class)) continue;
+                if (b.has_goal || b.pushed || b.anchor >= 0 || !collision_classes_interact(a.d.collision_class, b.d.collision_class))
+                    continue;
                 if (overlap_ratio(a.m.pos, a.d.radius, b.m.pos, b.d.radius) <= k.minimum_stopped_vs_stopped_overlap) continue;
                 if (coll_.has_pair(a.d.id, b.d.id)) continue;
                 coll_.add(CollisionKind::StoppedVsStopped, a.d.id, b.d.id, frame);
@@ -1306,6 +1335,7 @@ bool MovementSystem::resolve_blocker(Unit& a, uint32_t blocker, float contact, u
 // pushes a blocker that is moving again, decision 0x684f90 step 2).
 bool MovementSystem::push_aside(const Unit& a, Unit& b) {
     if (b.pushed) return true;
+    if (b.anchor >= 0) return false;  // s78n t03 [port]: a steering member is not pushed (it steers back to its slot)
     if (!(b.lp.max_speed > 0.0f)) return false;
     if (b.deploy == LocoState::WalkDeploying || b.deploy == LocoState::WalkDeployed) return false;
     if (a.m.next >= a.m.path.size()) return false;
@@ -1459,9 +1489,34 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
     detect_collisions(frame);  // S7: checks create collision objects
     drive_collisions(frame);   // S7: cancel / priority sort / resolve (TACTICAL_GAPS §6.7)
     team_caps();  // s78k t03: serial, before the parallel walk reads Unit::team_cap
-    // OI tactical: formation jiggle (0x42c270, §3.5 step 6) - serial, ascending id, before the parallel walk.
-    for (Unit& u : units_) {
-        if (!u.in_formation || !u.has_goal || u.need_path || frame < u.start_frame || is_air(u)) continue;
+    // s78n t03: each squad container's state at the start of the tick, for its steering members (anchor_at: index into
+    // snaps, -1 none).
+    std::vector<int32_t> anchor_at(units_.size(), -1);
+    std::vector<TeamSnap> snaps;
+    for (size_t i = 0; i < units_.size(); ++i) {
+        const Unit& u = units_[i];
+        if (u.anchor < 0) continue;
+        const int32_t ci = find(u.anchor);
+        if (ci < 0) continue;
+        const Unit& k = units_[static_cast<size_t>(ci)];
+        TeamSnap t;
+        t.pos = k.m.pos;
+        t.yaw = k.m.yaw;
+        t.speed = k.m.speed;
+        t.state = k.m.state;
+        t.has_goal = k.has_goal;
+        anchor_at[i] = static_cast<int32_t>(snaps.size());
+        snaps.push_back(t);
+    }
+    // OI tactical: formation jiggle (0x42c270, §3.5 step 6) - serial, ascending id, before the parallel walk. s78n t03: a
+    // steering member refreshes its jiggle while its team moves (0x62d620 calls 0x42c270 before reading it).
+    for (size_t i = 0; i < units_.size(); ++i) {
+        Unit& u = units_[i];
+        if (anchor_at[i] >= 0) {
+            if (!snaps[static_cast<size_t>(anchor_at[i])].has_goal) continue;
+        } else if (!u.in_formation || !u.has_goal || u.need_path || frame < u.start_frame || is_air(u)) {
+            continue;
+        }
         if (!(u.m.speed > 0.0f) || !(u.lp.max_speed > 0.0f)) continue;  // a moving frame
         const float rag = u.d.formation_raggedness, mx = u.d.max_jiggle_distance;
         if (!(rag > 0.0f) || !(mx > 0.0f)) continue;
@@ -1474,6 +1529,10 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
         for (uint32_t i = b; i < e; ++i) {
             Unit& u = units_[i];
             if (is_air(u)) continue;  // §4.3-4.6: serial pass below
+            if (anchor_at[i] >= 0) {  // s78n t03: a squad member steers to its slot around its container
+                steer_member(u, snaps[static_cast<size_t>(anchor_at[i])]);
+                continue;
+            }
             const bool bike = u.d.locomotor == LocomotorKind::Bike;
             const float yaw0 = u.m.yaw;
             // a1k t03 (A1_READINGS §40.3): the pushed move is the top of the path stack; the order path waits under it.
@@ -1763,6 +1822,15 @@ void MovementSystem::hash_units(StateHasher& h) const {
         h.f32(u.jiggle.x);  // OI tactical
         h.f32(u.jiggle.y);
         h.boolean(u.in_formation);
+        if (u.d.team_container) h.u8(0xC7);  // s78n t03: appended only for squad containers and their members
+        if (u.anchor >= 0) {
+            h.i32(u.anchor);
+            h.f32(u.tslot.x);
+            h.f32(u.tslot.y);
+            h.u32(u.tindex);
+            h.boolean(u.recovering);
+            h.u32(u.steer_blocked);
+        }
         if (u.pushed) {  // a1k t03: hashed only while a pushed move is active
             h.u32(u.push_next);
             h.u32(u.push_blocked);
@@ -1833,7 +1901,7 @@ float MovementSystem::land_wanted_yaw(const Unit& u) const {
 // no turn). The turn itself starts on the next tick (arrival_turn_frame).
 void MovementSystem::land_arrival_turn(Unit& u) const {
     arrival_reset(u);
-    if (u.final_facing == kNoFacing || u.d.locomotor != LocomotorKind::Default || is_air(u)) return;
+    if (u.final_facing == kNoFacing || u.d.locomotor != LocomotorKind::Default || is_air(u) || u.d.team_container) return;
     const float want = land_wanted_yaw(u);
     if (std::fabs(wrap_deg(want - u.m.yaw)) <= arrival_turn_threshold(u.lp.turn_rate, false)) return;
     u.turning = true;
@@ -2047,7 +2115,8 @@ void MovementSystem::team_caps() {
     // order (no hashed container); a min is order-independent anyway.
     std::vector<std::pair<ObjectId, float>> mins;
     for (const Unit& u : units_) {
-        if (u.team < 0) continue;
+        // s78n t03: a squad container (set_team on itself) takes its members' minimum; it is not one of them.
+        if (u.team < 0 || u.d.team_container) continue;
         const float b = team_base_speed(u);  // the container's own Max_Speed included
         auto it = std::lower_bound(mins.begin(), mins.end(), u.team,
                                    [](const std::pair<ObjectId, float>& e, ObjectId t) { return e.first < t; });
@@ -2121,7 +2190,7 @@ const MovementSystem::Unit* MovementSystem::unit_ptr(ObjectId id) const {
 std::vector<uint32_t> MovementSystem::order_indices(const MoveOrder& order) const {
     std::vector<uint32_t> idx;
     for (const ObjectId id : order.units) {
-        const int32_t i = find(id);
+        const int32_t i = find(order_id(id));  // s78n t03: a steering member's order goes to its container
         if (i < 0 || std::find(idx.begin(), idx.end(), static_cast<uint32_t>(i)) != idx.end()) continue;
         idx.push_back(static_cast<uint32_t>(i));
     }

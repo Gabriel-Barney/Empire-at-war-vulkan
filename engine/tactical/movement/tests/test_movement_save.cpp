@@ -875,6 +875,48 @@ Scenario arrival_scenario() {
     return s;
 }
 
+// s78n t03: a land squad container walks its own path, its members steer to their slots; saves land while the team
+// moves, while a member recovers to its slot after the team stopped, and after.
+void build_squad(World& w) {
+    PassabilityGrid g;
+    g.init(80, 80);
+    w.sys.set_grid(std::move(g));
+    w.rng = SimRng(31);
+    UnitDesc c = land_unit(100, cell_center(10, 20), 0, 2.0f, 12.0f, kUccInfantry);
+    c.team_container = true;
+    CHECK(w.sys.add_unit(c));
+    const V2 slots[3] = {{0.0f, 0.0f}, {-20.0f, 15.0f}, {-20.0f, -15.0f}};
+    std::vector<ObjectId> ids;
+    for (ObjectId id = 1; id <= 3; ++id) {
+        const V2 s = slots[id - 1];
+        CHECK(w.sys.add_unit(land_unit(id, cell_center(10, 20) + s, 0, 2.5f, 3.0f, kUccInfantry)));
+        ids.push_back(id);
+    }
+    CHECK(w.sys.set_land_team(100, ids, slots));
+}
+
+void squad_before(World& w, uint32_t f) {
+    // The team links are host state set before every tick (set_team: not saved).
+    for (const ObjectId id : {ObjectId{100}, ObjectId{1}, ObjectId{2}, ObjectId{3}}) CHECK(w.sys.set_team(id, 100, 1.0f));
+    if (f != 0 && f != 150) return;
+    MoveOrder o;
+    o.units = {2};  // a member's order goes to its container
+    o.destination = f == 0 ? cell_center(40, 30) : cell_center(40, 50);
+    w.sys.move(o, w.rng, f);
+}
+
+void squad_after(World&, uint32_t) {}
+
+Scenario squad_scenario() {
+    Scenario s;
+    s.name = "land squad";
+    s.build = build_squad;
+    s.before = squad_before;
+    s.after = squad_after;
+    s.frames = 420;
+    return s;
+}
+
 // ---------------------------------------------------------------- rejection and corruption
 void test_rejections() {
     const Scenario land = land_scenario();
@@ -926,7 +968,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 12);  // 12: before the cu8j t01 / t02 pending compositions (13)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 14);
+    put_u32(bad, 0, 13);  // 13: before the s78n t03 land squad container fields (14)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 15);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode
@@ -1012,6 +1056,30 @@ int main() {
         CHECK(turning > 10 && first < last && !w.sys.view(1).arrival_turn && !w.sys.view(2).arrival_turn);
         for (uint32_t at : {first + 1, (first + last) / 2, last - 1, last}) check_resume(arr, at, 0);
         std::printf("arrival turn saves: unit 1 turning %u frames (%u..%u)\n", turning, first, last);
+    }
+    {  // s78n t03: saves while the squad walks, at the turn of the second order and while members settle
+        const Scenario sq = squad_scenario();
+        World w(sq.cfg);
+        sq.build(w);
+        uint32_t moving = 0, recovering = 0, last_recovering = 0;
+        for (uint32_t f = 0; f < sq.frames; ++f) {
+            step(sq, w, f, serial_for);
+            if (w.sys.view(100).has_goal) {
+                ++moving;
+            } else {
+                for (ObjectId id = 1; id <= 3; ++id)
+                    if (w.sys.view(id).has_goal) {  // a member's view: recovering while its team is idle
+                        ++recovering;
+                        last_recovering = f + 1;
+                        break;
+                    }
+            }
+        }
+        CHECK(moving > 40 && recovering > 3 && w.sys.view(100).arrived);
+        for (uint32_t at : {5u, 60u, 151u, 200u, 300u, last_recovering - 1u}) check_resume(sq, at, 0);
+        check_resume(sq, 120, 33);
+        std::printf("land squad saves: container moving %u of %u frames, members recovering %u frames (last %u)\n", moving, sq.frames,
+                    recovering, last_recovering);
     }
     test_rejections();
     if (g_fail) {

@@ -13,6 +13,7 @@ bool MovementSystem::is_air(const Unit& u) const {
 }
 
 bool MovementSystem::ground_collider(const Unit& u) const {
+    if (u.d.team_container) return false;  // s78n t03: a squad container takes no part in land collision or crush
     switch (u.d.locomotor) {
         case LocomotorKind::Flying:
         case LocomotorKind::LandBomber: return cfg_.mode != MoveMode::Land;

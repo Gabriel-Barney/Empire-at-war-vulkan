@@ -512,10 +512,14 @@ bool TacticalBattle::bt_team(uint32_t company_type, uint32_t first_member, uint3
 
 void TacticalBattle::bt_team_positions(TacticalMode& mode) {
     // A1_READINGS §29.4: each TEAM service (0x405b10) moves the container to the centre of its members' joint bounding box
-    // [H]; [M] the members' boxes are taken as equal, so the centre of their positions' box is used.
+    // [H]; [M] the members' boxes are taken as equal, so the centre of their positions' box is used. s78n t03 (TACTICAL_
+    // COMBAT §5.4.4 item 2): only when the container has no locomotor or its vf +0x230 is false - space squadrons (the
+    // FIGHTER_FLYING §4.10 B centre). A land squad container (LandTeamContainer) is never re-centred: its own mover places
+    // it (MovementSystem, mv_squad_add). [port] A land squad whose members cannot steer (no mover) keeps this stand-in.
     objects::ObjectStore& st = mode.primary();
     for (const Container& c : containers_) {
         if (!c.team || c.removed || !st.alive(c.h)) continue;
+        if (!space_ && movement_ && movement_->has_unit(c.id)) continue;
         bool any = false;
         Vec3 lo{0.0f, 0.0f, 0.0f}, hi{0.0f, 0.0f, 0.0f};
         for (const Unit& u : units_)
@@ -531,6 +535,100 @@ void TacticalBattle::bt_team_positions(TacticalMode& mode) {
             }
         if (any) st.set_position(c.h, Vec3{(lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f, (lo.z + hi.z) * 0.5f});
     }
+}
+
+void TacticalBattle::combat_team_positions(const objects::ObjectStore& store) {
+    // s78n t03 (TACTICAL_COMBAT §5.4.4 item 2.1): TeamTargeting 0x62eeb0 scans and range-tests from the land container's
+    // position - the same store position the fog test, the AI threat entry and Bribe's T read.
+    combat_->clear_team_positions();
+    if (space_) return;
+    for (const Container& c : containers_) {
+        if (!c.team || c.removed || !store.alive(c.h)) continue;
+        const Vec3 p = store.position(c.h);
+        combat_->set_team_position(static_cast<uint32_t>(c.id), tactical::Vec3{p.x, p.y, p.z});
+    }
+}
+
+void TacticalBattle::type_half_extents(uint32_t type, float& hx, float& hy) const {
+    // s78n t09 (TACTICAL_COMBAT §5.4.6 item 1, 0x371be0): both Custom_Hard extents > 0 -> Scale_Factor x (X, Y), no model
+    // read; else the mode's model (no fallback to another mode's): none -> (0, 0); else per axis the custom value when > 0,
+    // else the collision-bound half x / y (ModelClass vf +0x58: avoid_model's bound_h) x Scale_Factor. [port] A named model
+    // whose file does not load (no art data) uses the drop layout's model box (drop_half_extents).
+    hx = hy = 0.0f;
+    const objects::GameObjectTypes& types = catalog_->types();
+    if (type >= types.size()) return;
+    const float sf = types.get_float(type, "Scale_Factor");
+    const float sc = sf > 0.0f ? sf : 1.0f;
+    const float cx = types.get_float(type, "Custom_Hard_XExtent"), cy = types.get_float(type, "Custom_Hard_YExtent");
+    if (cx > 0.0f && cy > 0.0f) {
+        hx = sc * cx;
+        hy = sc * cy;
+        return;
+    }
+    if (ascii_trim(types.get_string(type, space_ ? "Space_Model_Name" : "Land_Model_Name")).empty()) return;
+    const tactical::movement::AvoidModel* am = catalog_->avoid_model(type, space_);
+    if (!am) {
+        drop_half_extents(type, hx, hy);
+        return;
+    }
+    hx = cx > 0.0f ? sc * cx : sc * std::fabs(am->bound_h.x);
+    hy = cy > 0.0f ? sc * cy : sc * std::fabs(am->bound_h.y);
+}
+
+void TacticalBattle::unit_half_extents(const Unit& u, float& hx, float& hy) const {
+    // s78n t09 (TACTICAL_COMBAT §5.4.6 items 2 / 4, 0x396850 on a non-container): a Deploys walker in Walk state 0x18 / 0x19
+    // takes 0x371d20 - the deployed pair when both deployed extents > 0, else 0x371be0 with the x / y replaced only when
+    // Custom_Hard_XExtent_Deployed > 0 (the y test reads the x field) - and every other object 0x371be0.
+    type_half_extents(u.type, hx, hy);
+    const objects::GameObjectTypes& types = catalog_->types();
+    if (u.type >= types.size() || !types.get_bool(u.type, "Deploys") || !movement_ || !movement_->has_unit(u.id)) return;
+    const mv::LocoState ds = movement_->deploy_state(u.id);
+    if (ds != mv::LocoState::WalkDeploying && ds != mv::LocoState::WalkDeployed) return;
+    const float sf = types.get_float(u.type, "Scale_Factor");
+    const float sc = sf > 0.0f ? sf : 1.0f;
+    const float dx = types.get_float(u.type, "Custom_Hard_XExtent_Deployed");
+    const float dy = types.get_float(u.type, "Custom_Hard_YExtent_Deployed");
+    if (dx > 0.0f) {
+        hx = sc * dx;
+        hy = sc * dy;  // with dy <= 0: 0 (the deployed y is used only together with the deployed x)
+    }
+}
+
+bool TacticalBattle::squad_joint_slots(const objects::ObjectStore& st, objects::ObjectId container,
+                                       std::vector<tactical::abilities::SquadSlot>& slots, float& jiggle, Vec3& facing) const {
+    // s78n t09 (TACTICAL_COMBAT §5.4.4 item 1, 0x404450): the container's member array (live members, team index order;
+    // null / gone entries skipped), each member's slot (along +0x114, side +0x118) and its 0x396850 half-extents (hx with
+    // the along offset, hy with the side offset), the container type's MaxJiggleDistance (+0x16ac) and its facing.
+    slots.clear();
+    jiggle = 0.0f;
+    if (space_ || !movement_ || !movement_->has_unit(container)) return false;
+    const Container* ct = nullptr;
+    for (const Container& c : containers_)
+        if (c.id == container && c.team && !c.removed) ct = &c;
+    if (!ct || !st.alive(ct->h)) return false;
+    for (const auto& [id, slot] : movement_->land_team_slots(container)) {
+        const auto it = std::lower_bound(units_.begin(), units_.end(), id, [](const Unit& u, objects::ObjectId v) { return u.id < v; });
+        if (it == units_.end() || it->id != id || !it->alive || it->retreated) continue;
+        tactical::abilities::SquadSlot s;
+        s.along = slot.x;
+        s.side = slot.y;
+        unit_half_extents(*it, s.hx, s.hy);
+        slots.push_back(s);
+    }
+    const objects::TypeIndex t = st.type(ct->h);
+    if (!slots.empty() && t < catalog_->types().size()) jiggle = catalog_->types().get_float(t, "MaxJiggleDistance");
+    facing = st.facing(ct->h);
+    return true;
+}
+
+bool TacticalBattle::squad_joint_box(const objects::ObjectStore& st, objects::ObjectId id, float& hx, float& hy) const {
+    hx = hy = 0.0f;
+    std::vector<tactical::abilities::SquadSlot> slots;
+    float jiggle = 0.0f;
+    Vec3 facing{1.0f, 0.0f, 0.0f};
+    if (!squad_joint_slots(st, id, slots, jiggle, facing)) return false;
+    tactical::abilities::squad_joint_half_extents(slots, jiggle, hx, hy);
+    return true;
 }
 
 void TacticalBattle::bt_landing_points(TacticalMode& mode) {
