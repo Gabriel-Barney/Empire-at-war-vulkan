@@ -1983,7 +1983,8 @@ bool MovementSystem::near_path_end(const Unit& a, const Unit& b) const {
 }
 
 bool MovementSystem::destination_blocked(const Unit& a, const Unit& b) const {
-    if (a.pushed || a.m.next >= a.m.path.size() || !near_path_end(a, b)) return false;
+    // ([port] a mover on a collision-owned top record never counts as blocked: no cut of such a record)
+    if (a.pushed || !a.has_goal || a.need_path || a.m.next >= a.m.path.size() || !near_path_end(a, b)) return false;
     const V2 e = a.m.path.back();
     const FootRect ra = foot_at(a, e);
     if (foot_overlap(ra, foot_of(b))) return true;
@@ -2010,51 +2011,107 @@ bool MovementSystem::side_step_ok(const Unit& a, const Unit& b, const CollisionO
     return true;
 }
 
-// Early arrival 0x685e10 + the cut 0x684100: from the path end backwards in steps of 5, the first path point where a's
-// rectangle (hx + 5, hy), turned along the path there, overlaps no standing layer object near the end (nor b); the path is
-// cut by (the length behind that point + 3.0). True when b is at or ahead of the stop point along the path. [port] the
-// spare-point distance limit, the attack-range clause and the cut of the formation members' paths are not modelled.
-bool MovementSystem::early_arrival(Unit& a, const Unit& b, uint32_t frame) {
-    const float total = remaining_length(a.m);
-    const V2 end = a.m.path.back();
-    const V2 ha = foot_half(a);
+// 0x54e780 on a unit's order path (the kind-1 record): its length is reduced by c from its end. A remaining length <= 0:
+// [port] the path ends at the unit's position (it arrives where it stands).
+void MovementSystem::cut_order_path(Unit& u, float c, uint32_t frame) {
+    LandMotion& m = u.m;
+    if (!u.has_goal || u.need_path || m.next == 0 || m.next >= m.path.size()) return;
+    // the record's remaining points from where the unit is on it (under a collision-owned top record: its current waypoint)
+    const V2 from = u.pushed ? m.path[m.next - 1] : m.pos;
+    float total = distance(from, m.path[m.next]);
+    for (size_t i = m.next + 1; i < m.path.size(); ++i) total += distance(m.path[i - 1], m.path[i]);
+    const float keep = total - c;
+    V2 stop = from;
+    size_t seg = m.next;
+    if (keep > 0.0f) {
+        float acc = 0.0f;
+        V2 at = from;
+        for (size_t i = m.next; i < m.path.size(); ++i) {
+            const float l = distance(at, m.path[i]);
+            if (acc + l >= keep) {
+                seg = i;
+                stop = l > 0.0f ? lerp(at, m.path[i], std::clamp((keep - acc) / l, 0.0f, 1.0f)) : at;
+                break;
+            }
+            acc += l;
+            at = m.path[i];
+        }
+    }
+    m.path.resize(seg);
+    m.path.push_back(stop);
+    if (u.pushed && u.push_kind == 2 && u.push_resume > seg) u.push_resume = static_cast<uint32_t>(seg);
+    u.goal = stop;
+    u.path_change = frame;
+}
+
+// Early arrival 0x685e10 with the cut 0x684100 (MOVEMENT §5.4.4; called on the mover's final leg with a blocked
+// destination). A = the mover's path stack from its position (length L, end E). Obstacles: the layer objects whose box
+// meets the 160 x 160 square on E, plus b, without every Moving one (the mover itself drops out as Moving). The box: the
+// mover TYPE's half extents 0x371be0 (a squad container: (0, 0), not its joint slot box) with hx + 5, turned along the path.
+// Scan s = L, L - 5, ..., the last test at s = 0 (its own position): the first point P whose box overlaps no listed
+// footprint (touching counts) and, with a target, lies within the attack range (+ the target's radius) of it. With a
+// spare point v: P farther from E than v -> fail, nothing changed. Else the path is cut by c = (L - s) + 3.0, so it ends
+// 3.0 before P; on a formation path the order paths of the formation's members whose slot is behind a's and within the
+// two half widths sideways are cut by the same c. True iff b is at or ahead of P: (b - P) . n >= -0.001. [port] the cut
+// applies to the order path (destination_blocked refuses a mover on a collision-owned top record); the target's radius is
+// added whenever the host reports a target (the weapon-list test is [M]).
+bool MovementSystem::early_arrival(Unit& a, const Unit& b, bool have_v, V2 v, uint32_t frame) {
+    std::vector<V2> pts;
+    stack_points(a, pts);
+    if (pts.size() < 2) return false;
+    float total = 0.0f;
+    for (size_t i = 1; i < pts.size(); ++i) total += distance(pts[i - 1], pts[i]);
+    const V2 end = pts.back();
+    const V2 th = type_half(a);
     std::vector<uint32_t> cand;
     layer_box_query(end, 0.5f * kCollisionCrowdBox, cand);
-    std::vector<FootRect> blockers{foot_of(b)};
+    std::vector<FootRect> blockers;
+    if (!unit_moving(b)) blockers.push_back(foot_of(b));
     for (uint32_t ci : cand) {
         const Unit& o = units_[ci];
         if (o.d.id == a.d.id || o.d.id == b.d.id || unit_moving(o)) continue;
         blockers.push_back(foot_of(o));
     }
-    const auto dir_at = [&](size_t seg, V2 q) {
-        const size_t i = std::min(seg, a.m.path.size() - 1);
-        const V2 from = i == a.m.next ? a.m.pos : a.m.path[i - 1];
-        V2 t = normalize_retail(a.m.path[i] - from);
-        if (!(length_sq(t) > 0.0f)) t = normalize_retail(q - a.m.pos);
-        return length_sq(t) > 0.0f ? t : dir_from_deg(a.m.yaw);
+    const bool has_target = a.ci.target >= 0;
+    const float range = has_target ? a.ci.attack_range + a.ci.target_radius : 0.0f;
+    // the point of A at arc length s and the unit direction of its segment there
+    const auto at_arc = [&](float s, V2& n) {
+        float acc = 0.0f;
+        for (size_t i = 1; i < pts.size(); ++i) {
+            const float l = distance(pts[i - 1], pts[i]);
+            if (acc + l >= s || i + 1 == pts.size()) {
+                n = normalize_retail(pts[i] - pts[i - 1]);
+                return l > 0.0f ? lerp(pts[i - 1], pts[i], std::clamp((s - acc) / l, 0.0f, 1.0f)) : pts[i - 1];
+            }
+            acc += l;
+        }
+        n = V2{};
+        return pts.back();
     };
-    for (float back = 0.0f; back <= total; back += 5.0f) {
-        size_t seg = 0;
-        const V2 q = point_along(a.m.pos, a.m.path, a.m.next, total - back, seg);
-        const V2 t = dir_at(seg, q);
-        const FootRect box{q, t, ha.x + 5.0f, ha.y, false};
+    for (float s = total;; s = std::max(0.0f, s - 5.0f)) {
+        V2 n{};
+        const V2 p = at_arc(s, n);
+        if (!(length_sq(n) > 0.0f)) n = dir_from_deg(a.m.yaw);
+        const FootRect box{p, n, th.x + 5.0f, th.y, false};
         bool clear = true;
         for (const FootRect& o : blockers) clear = clear && !foot_overlap(box, o);
-        if (!clear) continue;
-        const float keep = std::max(total - back - 3.0f, 0.0f);
-        const V2 stop = point_along(a.m.pos, a.m.path, a.m.next, keep, seg);
-        std::vector<V2> np{a.m.pos};
-        for (size_t i = a.m.next; i < seg && i < a.m.path.size(); ++i)
-            if (!(np.back() == a.m.path[i])) np.push_back(a.m.path[i]);
-        np.push_back(stop);
-        a.m.path = std::move(np);
-        a.m.next = 1;
-        a.m.escape_until = 0;
-        a.goal = stop;
-        a.path_change = frame;
-        return dot(b.m.pos - stop, t) >= 0.0f;
+        if (clear && has_target && distance(p, a.ci.target_pos) > range) clear = false;
+        if (clear) {
+            if (have_v && distance(p, end) > distance(v, end)) return false;  // the spare point is nearer the end
+            const float c = (total - s) + 3.0f;
+            const float ax = a.form_slot.x, ay = a.form_slot.y, hwa = half_width(a);
+            if (a.form_id != 0) {
+                for (Unit& m : units_) {
+                    if (m.form_id != a.form_id || m.d.id == a.d.id) continue;
+                    if (!(m.form_slot.x < ax) || std::fabs(m.form_slot.y - ay) > half_width(m) + hwa) continue;
+                    cut_order_path(m, c, frame);
+                }
+            }
+            cut_order_path(a, c, frame);
+            return dot(b.m.pos - p, n) >= -0.001f;
+        }
+        if (s == 0.0f) return false;  // even its own position fails: nothing changed
     }
-    return false;
 }
 
 // ---- s78n t20 (MOVEMENT §1.5.1): the Path Around call of the dynamic land pathfinder ----
@@ -2443,7 +2500,7 @@ void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
         if (side_step_ok(a, b, c)) {
             V2 spare;
             alt = spare_point(a, b, spare);  // 0x5c6ba0: the first accepted rejoin point
-            if (early_arrival(a, b, frame)) {
+            if (early_arrival(a, b, alt, spare, frame)) {
                 a.coll_now = true;  // +0x84: the re-routed mover takes a lower target speed at once
                 ++stats_.early_arrivals;
                 c.state = S::Resolved;

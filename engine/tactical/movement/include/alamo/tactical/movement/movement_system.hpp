@@ -1315,7 +1315,11 @@ private:
     bool near_path_end(const Unit& a, const Unit& b) const;
     bool destination_blocked(const Unit& a, const Unit& b) const;
     bool side_step_ok(const Unit& a, const Unit& b, const CollisionObject& self) const;
-    bool early_arrival(Unit& a, const Unit& b, uint32_t frame);
+    // s78n t20 (MOVEMENT §5.4.4): the early-arrival cut 0x685e10(a, b, v); `have_v` / `v` = the spare point of 0x5c6ba0.
+    // True: b is at or ahead of the stop point (the record resolves with the "at once" flag). False: nothing changed, or
+    // the path was cut and b lies behind the stop point (the decision goes on with the shortened path).
+    bool early_arrival(Unit& a, const Unit& b, bool have_v, V2 v, uint32_t frame);
+    void cut_order_path(Unit& u, float c, uint32_t frame);  // 0x684100 on one unit's order path: its length less c, from its end
     // s78n t20 (MOVEMENT §1.5.1): the Path Around call 0x5c80e0(record, u, o, flag, kind, flags) - a visibility-graph
     // detour from u (a point) to a rejoin point on its own current path, pushed as a record on top of its path stack
     // (kind 4; 7 = a crush-flee path). `o` = the obstacle of the record (null: none), forced into the obstacle set when

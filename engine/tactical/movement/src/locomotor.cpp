@@ -109,6 +109,7 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
                     if (c != 0.0f) {
                         dir = normalize_retail(sd + perp_left(sd) * c);
                         heading_vec = dir;
+                        steered = true;  // s78n t20: it walks beside its line - the waypoint is passed by its line
                     }
                 }
             }
@@ -137,6 +138,13 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
         // a deflected unit passes its waypoint by crossing the waypoint's line (normal = the bisector of the two segments)
         const V2 w = wp(next);
         const V2 n = normalize_retail(normalize_retail(w - wp(next - 1)) + normalize_retail(wp(next + 1) - w));
+        if (length_sq(n) > 0.0f && dot(pos - w, n) >= 0.0f) ++next;
+    } else if (steered && next >= 1 && static_cast<size_t>(next) + 1 == m.path.size()) {
+        // s78n t20 (MOVEMENT §5.4.1 "How Walk combines" item 4): the last waypoint too is passed by its line (normal = its
+        // segment's direction) - a unit that walks beside its line (it resumed the path from a detour or a push) arrives
+        // where it crosses it instead of walking on past the point
+        const V2 w = wp(next);
+        const V2 n = normalize_retail(w - wp(next - 1));
         if (length_sq(n) > 0.0f && dot(pos - w, n) >= 0.0f) ++next;
     }
     // Passability check before commit (§3.5 step 4).
