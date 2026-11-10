@@ -2,17 +2,16 @@
 -- tools/probe_mod/s78n_t08/s78n_probe.lua. build_s78n_mod.py appends, to the shipped BusyTacticalFreeStore.lua, a
 -- generated SN_CFG table and this file.
 --
--- (A) Space (docs/re/TACTICAL_COMBAT.md sec. 5.4.2): may a Star_Destroyer's TRACTOR_BEAM start when the XY centre
---     distance d <= R + E (R = Activation_Max_Range, E = the target's X or Y half-extent by its facing)? Per trial a
---     fresh human Star_Destroyer U and an AI target X (Nebulon_B_Frigate) at a set distance d along +x; X turns to face
---     U ("toward") or is turned facing U from a point north of U and then teleported onto the line ("side"). Then
---     U.Activate_Ability("TRACTOR_BEAM", X). Every poll: both positions, U's TRACTOR_BEAM ready / active, X's
---     Is_Under_Effects_Of_Ability("TRACTOR_BEAM"). The first poll with the beam on is the engagement. When U has not
---     moved 90 frames after the order (no walk), X is teleported 3 units closer per poll and the order is repeated, so
---     a threshold is still crossed slowly.
--- (B) Land (sec. 5.4.3 item 4): does Emperor_Palpatine's Emperor_Land_Combat_Bonus (Health_Bonus 0.25) reach the
---     AT_ST_Walker of an ALLIED AI player (Underworld, same team), as the human's own (control) and not the enemy's
---     (control), near the Emperor and about 1200+ away (the port has no aura radius)? Observable: Get_Hull after a
+-- (A) Space (docs/re/TACTICAL_COMBAT.md sec. 5.4.5, second version after run 20261109-200249): does a
+--     Star_Destroyer's TRACTOR_BEAM start at XY centre distance d <= R + E, E = the target's collision-bound
+--     model Y half x scale when its facing is along the line to the user (|f.u| > 0.7071), else the X half?
+--     Per trial a fresh human Star_Destroyer U and an AI Nebulon_B_Frigate X teleported to exact spots d apart
+--     along +x, X turned at once (Face_Immediate) to face U ("along") or +y ("across"), both locomotors
+--     suspended, X's facing read from two model bones until settled, then U.Activate_Ability("TRACTOR_BEAM",
+--     X). In place or not; without a beam after `hold` frames X is stepped closer (TV_* below).
+-- (B) Land (sec. 5.4.3 item 4; not registered with SN_CFG.space_only): does Emperor_Palpatine's
+--     Emperor_Land_Combat_Bonus (Health_Bonus 0.25) reach the AT_ST_Walker of an ALLIED AI player (Underworld,
+--     same team), as the human's own (control) and not the enemy's (control), near the Emperor and about 1200+ away (the port has no aura radius)? Observable: Get_Hull after a
 --     fixed Lua Take_Damage(0.3 x health): a drop of 0.30 without the bonus, 0.24 with it (max health x 1.25); and,
 --     for units damaged before the Emperor arrives, a hull rise 0.70 -> 0.76 when the aura is applied to them.
 --
@@ -25,7 +24,8 @@
 -- s78n_run.py finds them with a read-only heap scan. f = GetCurrentTime() * 30 rounded.
 -- Retail rules kept (earlier runs): Lua 5.0 (no '#', no '%', no math library); every engine call on an object is
 -- gated by Is_Valid; Activate_Ability always gets a game object as its second argument; objects use Get_Object_ID
--- (Get_ID is a player method); Game_Message for the driver's cues; Point_Camera_At with a position.
+-- (Get_ID is a player method); Game_Message for the driver's cues; Point_Camera_At with a position;
+-- Get_Bone_Position only with bone names read from the install's model (a failed engine read stops the script).
 
 SN_LOG = {}
 SN_N = 0
@@ -305,55 +305,91 @@ function SN_Camera(x, y, z)
 end
 
 -- ================================================================================================================
--- (A) tractor beam
+-- (A) tractor beam, second version (TACTICAL_COMBAT sec. 5.4.5; run 20261109-200249 left the target's facing open)
 -- ================================================================================================================
+-- Per trial: spawn U (human Star_Destroyer) and X (AI Nebulon_B_Frigate); `place` frames later Teleport both to their
+-- exact spots (U at user_at, X at user_at + (d, 0)), U.Face_Immediate(X's spot), X.Face_Immediate(U's spot) ("along")
+-- or X.Face_Immediate(X's spot + (0, face_dist)) ("across", exactly 90 deg), Suspend_Locomotor(true) on X and on U.
+-- X's facing is read every settle_poll frames from two model bones (Get_Bone_Position, front - rear); the order is
+-- given when two consecutive reads agree (after settle_min), else after settle_max / settle_nobone. Then
+-- U.Activate_Ability("TRACTOR_BEAM", X) and a poll record per service. No beam after `hold` frames with U still:
+-- X is teleported `step` closer per poll (facing kept) and the order repeated, so the threshold is also bracketed.
 
-TB = { phase = "init", ti = 0, cur = nil, next_f = nil }
+TV = { phase = "init", ti = 0, cur = nil, next_f = nil, ulock = nil }
 
-function TB_Base(dx, dy)
-	local u = SN_CFG.tb.user_at
+function TV_At(dx, dy)
+	local u = SN_CFG.tv.user_at
 	return SN_Pos(u.x + dx, u.y + dy, u.z)
 end
 
-function TB_Start(F, tc)
-	local cfg = SN_CFG.tb
-	local u = cfg.user_at
-	local t = { k = tc.k, name = tc.name, face = tc.face, d = tc.d, tc = tc, f0 = F, phase = "turn", errs = 0 }
-	TB.cur = t
-	local human = SN_Player(SN_CFG.human_faction)
-	local how_u, how_x
-	t.U, how_u = SN_Spawn(cfg.user, TB_Base(0, 0), human)
-	-- toward: X on the line (+x); side: X north of U, turned to face U there, then teleported onto the line
-	if tc.face == "side" then
-		t.X, how_x = SN_Spawn(cfg.target, TB_Base(0, tc.d), PlayerObject)
-	else
-		t.X, how_x = SN_Spawn(cfg.target, TB_Base(tc.d, 0), PlayerObject)
+function TV_D(ax, ay, bx, by)
+	if ax == nil or bx == nil then
+		return nil
 	end
-	local af0 = SN_Flag(t.U, "Is_Ability_Autofire", cfg.ability)
-	SN_Call(t.U, "Make_Invulnerable", function() t.U.Make_Invulnerable(true) end)
-	local afc = SN_Call(t.U, "Set_Single_Ability_Autofire", function() t.U.Set_Single_Ability_Autofire(cfg.ability, false) end)
-	SN_Call(t.X, "Make_Invulnerable", function() t.X.Make_Invulnerable(true) end)
-	SN_Call(t.X, "Prevent_All_Fire", function() t.X.Prevent_All_Fire(true) end)
-	SN_Call(t.X, "Prevent_AI_Usage", function() t.X.Prevent_AI_Usage(true) end)
-	SN_Rec("TTRIAL", "k=" .. t.k .. "|name=" .. t.name .. "|face=" .. t.face .. "|d=" .. SN_Num(t.d, "%.2f") ..
-		"|U=" .. SN_Type(t.U) .. ":" .. SN_Id(t.U) .. ":" .. SN_Str(how_u) .. "@" .. SN_XY(t.U) .. "|X=" .. SN_Type(t.X) ..
-		":" .. SN_Id(t.X) .. ":" .. SN_Str(how_x) .. "@" .. SN_XY(t.X) .. "|uown=" .. SN_Owner(t.U) .. "|xown=" ..
-		SN_Owner(t.X) .. "|af0=" .. af0 .. "|afset=" .. afc .. "|af1=" .. SN_Flag(t.U, "Is_Ability_Autofire", cfg.ability) ..
-		"|rdy=" .. SN_Flag(t.U, "Is_Ability_Ready", cfg.ability))
-	if not SN_Valid(t.U) or not SN_Valid(t.X) then
-		SN_Rec("ERR", "what=spawn_failed|k=" .. t.k)
-		t.phase = "end"
-		return
-	end
-	if cfg.camera then
-		SN_Camera(u.x + 0.5 * tc.d, u.y, u.z)
-	end
+	return SN_Sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by))
 end
 
-function TB_Activate(t, F, why)
-	local cfg = SN_CFG.tb
+-- x, y of a bone of o (names from the install's model only: a failed engine read can stop a retail script)
+function TV_Bone(o, name)
+	if name == nil or name == "" or not SN_Valid(o) then
+		return nil
+	end
+	local ok, x, y = pcall(function()
+		local a, b, c = o.Get_Bone_Position(name).Get_XYZ()
+		if type(a) == "table" then
+			return a[1], a[2]
+		end
+		return a, b
+	end)
+	if ok and type(x) == "number" and type(y) == "number" then
+		return x, y
+	end
+	if not ok then
+		SN_ApiFail("Get_Bone_Position", x)
+	end
+	return nil
+end
+
+-- X's facing from its front and rear bones: { fx, fy (unit, rear -> front), ax, ay (front), bx, by (rear) } or nil
+function TV_Facing(o)
+	local cfg = SN_CFG.tv
+	local ax, ay = TV_Bone(o, cfg.bone_front)
+	local bx, by = TV_Bone(o, cfg.bone_rear)
+	if ax == nil or bx == nil then
+		return nil
+	end
+	local l = TV_D(ax, ay, bx, by)
+	if l == nil or l < 1 then
+		return nil
+	end
+	return { fx = (ax - bx) / l, fy = (ay - by) / l, ax = ax, ay = ay, bx = bx, by = by }
+end
+
+-- record fields: fu = |f . u| with u the unit vector X -> U, the facing and the raw bone positions
+function TV_FaceStr(t, fc)
+	if fc == nil then
+		return "fu=?|fx=?|fy=?"
+	end
+	local fu = "?"
+	local ux, uy = SN_XYn(t.U)
+	local xx, xy = SN_XYn(t.X)
+	local l = TV_D(ux, uy, xx, xy)
+	if l ~= nil and l > 0 then
+		local v = (fc.fx * (ux - xx) + fc.fy * (uy - xy)) / l
+		if v < 0 then
+			v = -v
+		end
+		fu = SN_Num(v, "%.4f")
+	end
+	return "fu=" .. fu .. "|fx=" .. SN_Num(fc.fx, "%.4f") .. "|fy=" .. SN_Num(fc.fy, "%.4f") .. "|bf=" ..
+		string.format("%.2f,%.2f", fc.ax, fc.ay) .. "|br=" .. string.format("%.2f,%.2f", fc.bx, fc.by)
+end
+
+function TV_Activate(t)
+	local cfg = SN_CFG.tv
 	local ret = "dead"
 	if SN_Valid(t.U) and SN_Valid(t.X) then
+		-- the form that worked in run 20261109-200249: (name, game object)
 		local ok, r = pcall(function() return t.U.Activate_Ability(cfg.ability, t.X) end)
 		if not ok then
 			SN_ApiFail("Activate_Ability", r)
@@ -371,9 +407,69 @@ function TB_Activate(t, F, why)
 	return ret
 end
 
--- one poll of the trial: returns d, act, eff, rdy (strings for the flags)
-function TB_Poll(t, F)
-	local cfg = SN_CFG.tb
+function TV_Start(F, tc)
+	local cfg = SN_CFG.tv
+	local u = cfg.user_at
+	local t = { k = tc.k, name = tc.name, face = tc.face, d = tc.d, f0 = F, phase = "place", errs = 0, nread = 0,
+		nact = 0, polls = 0 }
+	TV.cur = t
+	local human = SN_Player(SN_CFG.human_faction)
+	local how_u, how_x
+	t.U, how_u = SN_Spawn(cfg.user, TV_At(0, 0), human)
+	t.X, how_x = SN_Spawn(cfg.target, TV_At(tc.d, 0), PlayerObject)
+	local af0 = SN_Flag(t.U, "Is_Ability_Autofire", cfg.ability)
+	SN_Call(t.U, "Make_Invulnerable", function() t.U.Make_Invulnerable(true) end)
+	local afc = SN_Call(t.U, "Set_Single_Ability_Autofire", function() t.U.Set_Single_Ability_Autofire(cfg.ability, false) end)
+	SN_Call(t.X, "Make_Invulnerable", function() t.X.Make_Invulnerable(true) end)
+	SN_Call(t.X, "Prevent_All_Fire", function() t.X.Prevent_All_Fire(true) end)
+	SN_Call(t.X, "Prevent_AI_Usage", function() t.X.Prevent_AI_Usage(true) end)
+	SN_Rec("VTRIAL", "k=" .. t.k .. "|name=" .. t.name .. "|face=" .. t.face .. "|d=" .. SN_Num(t.d, "%.2f") ..
+		"|U=" .. SN_Type(t.U) .. ":" .. SN_Id(t.U) .. ":" .. SN_Str(how_u) .. "@" .. SN_XY(t.U) .. "|X=" .. SN_Type(t.X) ..
+		":" .. SN_Id(t.X) .. ":" .. SN_Str(how_x) .. "@" .. SN_XY(t.X) .. "|uown=" .. SN_Owner(t.U) .. "|xown=" ..
+		SN_Owner(t.X) .. "|af0=" .. af0 .. "|afset=" .. afc .. "|af1=" .. SN_Flag(t.U, "Is_Ability_Autofire", cfg.ability) ..
+		"|rdy=" .. SN_Flag(t.U, "Is_Ability_Ready", cfg.ability))
+	if not SN_Valid(t.U) or not SN_Valid(t.X) then
+		SN_Rec("ERR", "what=spawn_failed|k=" .. t.k)
+		t.phase = "end"
+		return
+	end
+	if cfg.camera then
+		SN_Camera(u.x + 0.5 * tc.d, u.y, u.z)
+	end
+end
+
+-- exact spots, facings and locks
+function TV_Place(t, F)
+	local cfg = SN_CFG.tv
+	local pu = TV_At(0, 0)
+	local px = TV_At(t.d, 0)
+	local rtu = SN_Call(t.U, "Teleport", function() t.U.Teleport(pu) end)
+	local rtx = SN_Call(t.X, "Teleport", function() t.X.Teleport(px) end)
+	local aim_u = TV_At(t.d, 0)
+	local aim_x = TV_At(0, 0)
+	if t.face == "across" then
+		aim_x = TV_At(t.d, cfg.face_dist)
+	end
+	local rfu = SN_Call(t.U, "Face_Immediate", function() t.U.Face_Immediate(aim_u) end)
+	local rfx = SN_Call(t.X, "Face_Immediate", function() t.X.Face_Immediate(aim_x) end)
+	local rlx, rlu = "-", "-"
+	if cfg.xlock then
+		rlx = SN_Call(t.X, "Suspend_Locomotor", function() t.X.Suspend_Locomotor(true) end)
+	end
+	t.ulocked = TV.ulock == true
+	if t.ulocked then
+		rlu = SN_Call(t.U, "Suspend_Locomotor", function() t.U.Suspend_Locomotor(true) end)
+	end
+	SN_Rec("PLACE", "k=" .. t.k .. "|tele_u=" .. rtu .. "|tele_x=" .. rtx .. "|face_u=" .. rfu .. "|face_x=" .. rfx ..
+		"|lock_x=" .. rlx .. "|lock_u=" .. rlu .. "|u=" .. SN_XY(t.U) .. "|x=" .. SN_XY(t.X) .. "|d=" ..
+		SN_Num(SN_Dxy(t.U, t.X), "%.2f"))
+	t.phase = "settle"
+	t.fp = F
+	t.next_read = F
+end
+
+function TV_Poll(t)
+	local cfg = SN_CFG.tv
 	local d = SN_Dxy(t.U, t.X)
 	local act = SN_Flag(t.U, "Is_Ability_Active", cfg.ability)
 	local eff = SN_Flag(t.X, "Is_Under_Effects_Of_Ability", cfg.ability)
@@ -381,96 +477,145 @@ function TB_Poll(t, F)
 	return d, act, eff, rdy
 end
 
-function TB_TrialTick(t, F)
-	local cfg = SN_CFG.tb
-	local rel = F - t.f0
-	if t.phase == "turn" then
-		if rel >= cfg.face_delay and not t.turned then
-			t.turned = true
-			local r = SN_Call(t.X, "Turn_To_Face", function() t.X.Turn_To_Face(t.U) end)
-			SN_Rec("TURN", "k=" .. t.k .. "|call=" .. r .. "|x=" .. SN_XY(t.X))
-		end
-		if rel >= cfg.turn_frames then
-			if t.face == "side" then
-				local u = cfg.user_at
-				local p = SN_Pos(u.x + t.d, u.y, u.z)
-				local r = SN_Call(t.X, "Teleport", function() t.X.Teleport(p) end)
-				SN_Rec("TELE", "k=" .. t.k .. "|call=" .. r .. "|x=" .. SN_XY(t.X) .. "|u=" .. SN_XY(t.U))
-			end
-			t.phase = "settle"
-			t.fs = F
-		end
+function TV_Settle(t, F)
+	local cfg = SN_CFG.tv
+	if F < t.next_read then
 		return
 	end
-	if t.phase == "settle" then
-		if F - t.fs >= cfg.post_tele then
-			local d, act, eff, rdy = TB_Poll(t, F)
-			t.ux0, t.uy0 = SN_XYn(t.U)
-			SN_Rec("PRE", "k=" .. t.k .. "|u=" .. SN_XY(t.U) .. "|x=" .. SN_XY(t.X) .. "|d=" .. SN_Num(d, "%.2f") .. "|act=" ..
-				act .. "|eff=" .. eff .. "|rdy=" .. rdy)
-			t.fact = F
-			t.ret = TB_Activate(t, F, "order")
-			t.nact = 1
-			SN_Rec("ACT", "k=" .. t.k .. "|why=order|ret=" .. t.ret .. "|rdy_after=" ..
-				SN_Flag(t.U, "Is_Ability_Ready", cfg.ability) .. "|act_after=" .. SN_Flag(t.U, "Is_Ability_Active", cfg.ability))
-			t.phase = "watch"
-			t.prev_d = d
+	t.next_read = F + cfg.settle_poll
+	local since = F - t.fp
+	local fc = TV_Facing(t.X)
+	local xx, xy = SN_XYn(t.X)
+	t.nread = t.nread + 1
+	local same = "0"
+	if fc ~= nil and t.lastfc ~= nil and xx ~= nil and t.lx ~= nil then
+		local d1 = TV_D(fc.ax, fc.ay, t.lastfc.ax, t.lastfc.ay)
+		local d2 = TV_D(fc.bx, fc.by, t.lastfc.bx, t.lastfc.by)
+		local d3 = TV_D(xx, xy, t.lx, t.ly)
+		if d1 <= cfg.settle_tol and d2 <= cfg.settle_tol and d3 <= cfg.settle_tol then
+			same = "1"
 		end
+	end
+	SN_Rec("FACE", "k=" .. t.k .. "|w=settle|i=" .. t.nread .. "|since=" .. since .. "|same=" .. same .. "|u=" ..
+		SN_XY(t.U) .. "|x=" .. SN_XY(t.X) .. "|" .. TV_FaceStr(t, fc))
+	t.lastfc = fc
+	t.lx, t.ly = xx, xy
+	local why = nil
+	if since >= cfg.settle_min and same == "1" then
+		why = "agree"
+	elseif fc == nil and since >= cfg.settle_nobone then
+		why = "no_facing_read"
+	elseif since >= cfg.settle_max then
+		why = "timeout"
+	end
+	if why == nil then
 		return
 	end
-	if t.phase == "watch" then
-		local r = F - t.fact
-		local d, act, eff, rdy = TB_Poll(t, F)
-		local ux, uy = SN_XYn(t.U)
-		local um = "?"
-		if ux ~= nil and t.ux0 ~= nil then
-			um = SN_Num(SN_Sqrt((ux - t.ux0) * (ux - t.ux0) + (uy - t.uy0) * (uy - t.uy0)), "%.2f")
-		end
-		SN_Rec("P", "k=" .. t.k .. "|r=" .. r .. "|u=" .. SN_XY(t.U) .. "|x=" .. SN_XY(t.X) .. "|d=" .. SN_Num(d, "%.2f") ..
-			"|um=" .. um .. "|act=" .. act .. "|eff=" .. eff .. "|rdy=" .. rdy .. "|st=" .. tostring(t.stepping == true))
-		if t.eng == nil and (act == "1" or eff == "1") then
-			t.eng = F
-			SN_Rec("ENG", "k=" .. t.k .. "|r=" .. r .. "|d=" .. SN_Num(d, "%.2f") .. "|prev_d=" .. SN_Num(t.prev_d, "%.2f") ..
-				"|um=" .. um .. "|act=" .. act .. "|eff=" .. eff .. "|stepping=" .. tostring(t.stepping == true) .. "|nact=" ..
-				t.nact)
-		end
-		t.prev_d = d
-		if t.eng ~= nil then
-			if F - t.eng >= cfg.tail then
-				t.phase = "end"
-			end
-			return
-		end
-		-- no walk: step X toward U (keeps X's facing), repeat the order every poll
-		if r >= cfg.step_after and not t.stepping and ux ~= nil and t.ux0 ~= nil and
-			(ux - t.ux0) * (ux - t.ux0) + (uy - t.uy0) * (uy - t.uy0) < 25 then
-			t.stepping = true
-			SN_Rec("STEP", "k=" .. t.k .. "|start=1|d=" .. SN_Num(d, "%.2f") .. "|um=" .. um)
-		end
-		if t.stepping and d ~= nil and d > 0 then
-			local xx, xy = SN_XYn(t.X)
-			if xx ~= nil then
-				local s = cfg.step / d
-				local p = SN_Pos(xx + (ux - xx) * s, xy + (uy - xy) * s, SN_CFG.tb.user_at.z)
-				SN_Call(t.X, "Teleport", function() t.X.Teleport(p) end)
-			end
-			local ret = TB_Activate(t, F, "step")
-			t.nact = t.nact + 1
-			if ret ~= t.last_step_ret then
-				t.last_step_ret = ret
-				SN_Rec("ACT", "k=" .. t.k .. "|why=step|ret=" .. ret .. "|nact=" .. t.nact)
-			end
-		end
-		if r >= cfg.watch or (d ~= nil and d < SN_CFG.tb.R - cfg.stop_below) then
-			SN_Rec("NOENG", "k=" .. t.k .. "|r=" .. r .. "|d=" .. SN_Num(d, "%.2f") .. "|um=" .. um .. "|nact=" .. t.nact)
+	SN_Rec("SETTLE", "k=" .. t.k .. "|why=" .. why .. "|since=" .. since .. "|reads=" .. t.nread)
+	-- the order
+	local d, act, eff, rdy = TV_Poll(t)
+	t.ux0, t.uy0 = SN_XYn(t.U)
+	SN_Rec("PRE", "k=" .. t.k .. "|u=" .. SN_XY(t.U) .. "|x=" .. SN_XY(t.X) .. "|d=" .. SN_Num(d, "%.2f") .. "|act=" ..
+		act .. "|eff=" .. eff .. "|rdy=" .. rdy .. "|ulock=" .. tostring(t.ulocked) .. "|" .. TV_FaceStr(t, TV_Facing(t.X)))
+	t.fact = F
+	t.ret = TV_Activate(t)
+	t.nact = 1
+	SN_Rec("ACT", "k=" .. t.k .. "|why=order|ret=" .. t.ret .. "|rdy_after=" ..
+		SN_Flag(t.U, "Is_Ability_Ready", cfg.ability) .. "|act_after=" .. SN_Flag(t.U, "Is_Ability_Active", cfg.ability))
+	t.phase = "watch"
+	t.prev_d = d
+	t.prev2_d = d
+end
+
+function TV_Watch(t, F)
+	local cfg = SN_CFG.tv
+	local r = F - t.fact
+	local d, act, eff, rdy = TV_Poll(t)
+	local ux, uy = SN_XYn(t.U)
+	local umv = nil
+	if ux ~= nil and t.ux0 ~= nil then
+		umv = TV_D(ux, uy, t.ux0, t.uy0)
+	end
+	local um = SN_Num(umv, "%.2f")
+	t.polls = t.polls + 1
+	local fs = ""
+	if t.polls >= cfg.face_every then
+		t.polls = 0
+		fs = "|" .. TV_FaceStr(t, TV_Facing(t.X))
+	end
+	SN_Rec("P", "k=" .. t.k .. "|r=" .. r .. "|u=" .. SN_XY(t.U) .. "|x=" .. SN_XY(t.X) .. "|d=" .. SN_Num(d, "%.2f") ..
+		"|um=" .. um .. "|act=" .. act .. "|eff=" .. eff .. "|rdy=" .. rdy .. "|st=" .. tostring(t.stepping == true) .. fs)
+	if t.eng == nil and (act == "1" or eff == "1") then
+		t.eng = F
+		SN_Rec("ENG", "k=" .. t.k .. "|r=" .. r .. "|d=" .. SN_Num(d, "%.2f") .. "|prev_d=" .. SN_Num(t.prev_d, "%.2f") ..
+			"|prev2_d=" .. SN_Num(t.prev2_d, "%.2f") .. "|um=" .. um .. "|act=" .. act .. "|eff=" .. eff .. "|stepping=" ..
+			tostring(t.stepping == true) .. "|nact=" .. t.nact .. "|ulock=" .. tostring(t.ulocked) .. "|" ..
+			TV_FaceStr(t, TV_Facing(t.X)))
+	end
+	t.prev2_d = t.prev_d
+	t.prev_d = d
+	if t.eng ~= nil then
+		if F - t.eng >= cfg.tail then
 			t.phase = "end"
 		end
 		return
 	end
+	-- a locked user that does not start the beam on a control at R - 50: the lock blocks it; unlock for good
+	if t.ulocked and string.sub(t.name, 1, 4) == "ctrl" and r >= cfg.ctrl_wait then
+		t.ulocked = false
+		TV.ulock = false
+		local c = SN_Call(t.U, "Suspend_Locomotor", function() t.U.Suspend_Locomotor(false) end)
+		local ret = TV_Activate(t)
+		t.nact = t.nact + 1
+		SN_Rec("ULOCK", "k=" .. t.k .. "|off=1|call=" .. c .. "|r=" .. r .. "|d=" .. SN_Num(d, "%.2f") .. "|ret=" .. ret)
+		return
+	end
+	-- no beam at the fixed distance: step X toward U (Teleport keeps the facing), repeat the order every poll
+	if r >= cfg.hold and not t.stepping and umv ~= nil and umv < 1 then
+		t.stepping = true
+		SN_Rec("STEP", "k=" .. t.k .. "|start=1|r=" .. r .. "|d=" .. SN_Num(d, "%.2f") .. "|um=" .. um .. "|" ..
+			TV_FaceStr(t, TV_Facing(t.X)))
+	end
+	if t.stepping and d ~= nil and d > 0 then
+		local xx, xy = SN_XYn(t.X)
+		if xx ~= nil and ux ~= nil then
+			local s = cfg.step / d
+			local p = SN_Pos(xx + (ux - xx) * s, xy + (uy - xy) * s, cfg.user_at.z)
+			SN_Call(t.X, "Teleport", function() t.X.Teleport(p) end)
+		end
+		local ret = TV_Activate(t)
+		t.nact = t.nact + 1
+		if ret ~= t.last_step_ret then
+			t.last_step_ret = ret
+			SN_Rec("ACT", "k=" .. t.k .. "|why=step|ret=" .. ret .. "|nact=" .. t.nact)
+		end
+	end
+	if r >= cfg.watch or (t.stepping and d ~= nil and d < cfg.R - cfg.stop_below) then
+		SN_Rec("NOENG", "k=" .. t.k .. "|r=" .. r .. "|d=" .. SN_Num(d, "%.2f") .. "|um=" .. um .. "|nact=" .. t.nact ..
+			"|" .. TV_FaceStr(t, TV_Facing(t.X)))
+		t.phase = "end"
+	end
 end
 
-function TB_EndTrial(t, F)
-	local cfg = SN_CFG.tb
+function TV_TrialTick(t, F)
+	local cfg = SN_CFG.tv
+	if t.phase == "place" then
+		if F - t.f0 >= cfg.place then
+			TV_Place(t, F)
+		end
+		return
+	end
+	if t.phase == "settle" then
+		TV_Settle(t, F)
+		return
+	end
+	if t.phase == "watch" then
+		TV_Watch(t, F)
+	end
+end
+
+function TV_EndTrial(t, F)
+	local cfg = SN_CFG.tv
 	if t.phase == "end" then
 		-- the target first (the beam ends with it), the user 15 frames later
 		SN_Despawn(t.X)
@@ -482,46 +627,50 @@ function TB_EndTrial(t, F)
 		SN_Despawn(t.U)
 		SN_Rec("TEND", "k=" .. t.k .. "|name=" .. t.name .. "|eng=" .. tostring(t.eng) .. "|fact=" .. tostring(t.fact) ..
 			"|aborted=" .. tostring(t.aborted))
-		TB.cur = nil
-		TB.phase = "pause"
-		TB.next_f = F + cfg.gap
+		TV.cur = nil
+		TV.phase = "pause"
+		TV.next_f = F + cfg.gap
 	end
 end
 
-function TB_Tick(F)
-	local cfg = SN_CFG.tb
-	if TB.phase == "init" then
-		if TB.next_f == nil then
-			TB.next_f = cfg.start_frame
+function TV_Tick(F)
+	local cfg = SN_CFG.tv
+	if TV.phase == "init" then
+		if TV.next_f == nil then
+			TV.next_f = cfg.start_frame
+			TV.ulock = cfg.ulock == true
 			SN_Say("TEXT_S78N_TB_ARMED")
-			SN_Rec("TCFG", "R=" .. SN_Num(cfg.R, "%.2f") .. "|ex=" .. SN_Num(cfg.ex, "%.2f") .. "|ey=" .. SN_Num(cfg.ey, "%.2f") ..
-				"|user=" .. cfg.user .. "|target=" .. cfg.target .. "|trials=" .. table.getn(cfg.trials))
+			SN_Rec("VCFG", "R=" .. SN_Num(cfg.R, "%.2f") .. "|ea=" .. SN_Num(cfg.e_along, "%.3f") .. "|ec=" ..
+				SN_Num(cfg.e_across, "%.3f") .. "|oa=" .. SN_Num(cfg.old_along, "%.3f") .. "|oc=" ..
+				SN_Num(cfg.old_across, "%.3f") .. "|bf=" .. SN_Str(cfg.bone_front) .. "|br=" .. SN_Str(cfg.bone_rear) ..
+				"|user=" .. cfg.user .. "|target=" .. cfg.target .. "|trials=" .. table.getn(cfg.trials) .. "|ulock=" ..
+				tostring(cfg.ulock) .. "|xlock=" .. tostring(cfg.xlock) .. "|space_only=" .. tostring(SN_CFG.space_only))
 		end
-		if F >= TB.next_f then
-			TB.phase = "pause"
+		if F >= TV.next_f then
+			TV.phase = "pause"
 		end
 		return
 	end
-	if TB.phase == "pause" then
-		if F >= TB.next_f then
-			TB.ti = TB.ti + 1
-			local tc = cfg.trials[TB.ti]
+	if TV.phase == "pause" then
+		if F >= TV.next_f then
+			TV.ti = TV.ti + 1
+			local tc = cfg.trials[TV.ti]
 			if tc == nil then
 				SN_Say("TEXT_S78N_TB_DONE")
-				SN_Finish("trials=" .. (TB.ti - 1))
+				SN_Finish("trials=" .. (TV.ti - 1))
 				return
 			end
-			TB.phase = "trial"
-			TB_Start(F, tc)
+			TV.phase = "trial"
+			TV_Start(F, tc)
 		end
 		return
 	end
-	local t = TB.cur
+	local t = TV.cur
 	if t == nil then
 		return
 	end
 	if t.phase ~= "end" and t.phase ~= "remove" then
-		local ok, err = pcall(TB_TrialTick, t, F)
+		local ok, err = pcall(TV_TrialTick, t, F)
 		if not ok then
 			t.errs = t.errs + 1
 			if t.errs <= 3 then
@@ -532,13 +681,13 @@ function TB_Tick(F)
 				t.aborted = "errors"
 			end
 		end
-		if t.phase ~= "end" and F - t.f0 > cfg.turn_frames + cfg.post_tele + cfg.watch + cfg.tail + 300 then
+		if t.phase ~= "end" and t.phase ~= "remove" and F - t.f0 > cfg.place + cfg.settle_max + cfg.watch + cfg.tail + 300 then
 			t.phase = "end"
 			t.aborted = "timeout"
 		end
 	end
 	if t.phase == "end" or t.phase == "remove" then
-		TB_EndTrial(t, F)
+		TV_EndTrial(t, F)
 	end
 end
 
@@ -801,8 +950,10 @@ function CB_Tick(F)
 	end
 end
 
-SN_PROBES["Space"] = { name = "tb", tick = TB_Tick }
-SN_PROBES["Land"] = { name = "cb", tick = CB_Tick }
+SN_PROBES["Space"] = { name = "tv", tick = TV_Tick }
+if not SN_CFG.space_only then
+	SN_PROBES["Land"] = { name = "cb", tick = CB_Tick }
+end
 
 -- ---- arming and the service drivers -------------------------------------------------------------------------------
 

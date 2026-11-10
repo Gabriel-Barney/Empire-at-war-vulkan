@@ -2,16 +2,22 @@
 """build_s78n_mod.py - builds the s78n t08 probe mod (Mods\\S78NProbe) from the installed game.
 
   build_s78n_mod.py [--game DIR] [--out MODDIR] [--source-zip extracted\\foc_data_text.zip] [--no-text]
-                    [--config-out FILE]
+                    [--config-out FILE] [--space-only] [--no-bone-read]
 
 Two retail checks of port behaviour that had no retail trace (roadmap s78n t08), one mod, two skirmish battles:
   (A) space, _MP_SPACE_KUAT, human EMPIRE vs AI REBEL: a Star_Destroyer's TRACTOR_BEAM (SD_Tractor_Beam_Attack_Ability,
-      Activation_Max_Range R) on a Rebel target placed just inside / outside R + E, E = the target's range-geometry
-      half-extent (docs/re/TACTICAL_COMBAT.md sec. 5.4.2 step 5); when and at what centre distance the beam starts.
+      Activation_Max_Range R) on a Nebulon_B_Frigate set at a fixed centre distance d with a fixed facing, along the
+      line to the user or exactly across it (docs/re/TACTICAL_COMBAT.md sec. 5.4.5: E along = the collision-bound
+      model Y half x Scale_Factor, across = the X half; threshold R + E): in place or not, and where the beam starts
+      when the target is stepped closer. Second version (2026-11-10, after run 20261109-200249): spawn, Teleport to the
+      exact spots, Face_Immediate, Suspend_Locomotor, facing read through two model bones (Get_Bone_Position) until
+      it is settled.
   (B) land, _MP_LAND_DAGOBAH (3 start positions), human EMPIRE + allied AI UNDERWORLD (team 1) vs AI REBEL (team 2):
       Emperor_Palpatine's Emperor_Land_Combat_Bonus (Ground_Automatic, Vehicle | Infantry | Air, Health_Bonus 0.25) on
       AT_ST_Walker units of the human, the allied AI and the enemy AI, near the Emperor and far from him (sec. 5.4.3
       item 4: the accept takes units allied with the source owner, own player included; the port has no radius).
+  --space-only builds (A) only (the land probe is not registered; run 20261109-200249 already answered (B));
+  --no-bone-read leaves out the facing read (then each trial waits settle_nobone frames before the order).
 Files of the mod (MODPATH=Mods\\S78NProbe):
   Data\\Scripts\\FreeStore\\BusyTacticalFreeStore.lua   shipped script + generated SN_CFG + s78n_probe.lua
   Data\\Text\\MasterTextFile_English.dat               shipped texts + the TEXT_S78N_* cue strings
@@ -54,8 +60,12 @@ LAND_MAP = '_MP_LAND_DAGOBAH'
 SPACE_FALLBACK_SITE = {'x': -3500.0, 'y': 3500.0, 'z': 0.0}     # cu8g's Kuat fallback (the empty diagonal)
 LAND_FALLBACK_SITE = {'x': 4120.0, 'y': 840.0, 'z': 0.0}        # the dry Dagobah point of the OI / cu8g / s78m probes
 LAND_FALLBACK_FAR = {'x': 2900.0, 'y': 1500.0, 'z': 0.0}        # [offline only] a second point about 1400 away
-# Offline (text zip, no models): the values s78n_extent.py read from the install on 2026-11-09.
-FALLBACK_EXTENTS = {'Nebulon_B_Frigate': (23.5, 111.9), 'Corellian_Corvette': (17.0, 40.1)}
+# Offline (text zip, no models): the values s78n_extent.py read from the install on 2026-11-09 / 2026-11-10.
+# The old port extents (|model bbox max.x|, |max.y| x scale), printed for reference only:
+FALLBACK_EXTENTS = {'Nebulon_B_Frigate': (23.48, 111.86), 'Corellian_Corvette': (17.0, 40.1)}
+# sec. 5.4.5 extents (along the facing, across it) and the facing bones (front, rear) of the model
+FALLBACK_RANGE = {'Nebulon_B_Frigate': (109.95, 23.48), 'Corellian_Corvette': (41.82, 17.75)}
+FALLBACK_BONES = {'Nebulon_B_Frigate': ('missile_target00', 'missile_target01')}
 
 # The probe configuration (becomes the SN_CFG Lua table). Frames are mode frames (30 per second).
 CFG = {
@@ -63,20 +73,31 @@ CFG = {
     'ai_faction': 'REBEL',            # the AI whose free store runs the probe in both battles (the enemy AI)
     'human_faction': 'Empire',        # the driver's side
     'ally_faction': 'Underworld',     # (B) the allied AI (same team as the human in the skirmish menu)
-    'tb': {
+    'tv': {
         'user': 'Star_Destroyer', 'ability': 'TRACTOR_BEAM', 'target': 'Nebulon_B_Frigate',
         'start_frame': 450,   # 15 s into the battle
-        'face_delay': 15,     # frames after the spawn before the target's Turn_To_Face(user)
-        'turn_frames': 210,   # frames after the spawn before a side target is teleported (its turn is done)
-        'post_tele': 45,      # frames after the teleport (or the same point for a toward target) before the order
-        'watch': 600,         # frames after the order before a trial without a beam ends
-        'inplace': 15,        # an engagement within this many frames of the order, with the user still, is "in place"
-        'step_after': 90,     # frames after the order: if the user has not moved, the target is stepped closer
-        'step': 3.0,          # distance per poll (every 3rd frame) the target is teleported toward the user
-        'stop_below': 150.0,  # stepping ends when the centre distance falls under R - this
+        'place': 10,          # frames after the spawn: Teleport both to their exact spots, Face_Immediate, lock
+        'settle_min': 60,     # frames after placing before the order, at least
+        'settle_poll': 15,    # frames between facing reads while settling
+        'settle_tol': 0.5,    # settled: two consecutive reads of both bones (and of X) within this distance
+        'settle_max': 600,    # order anyway after this many frames (recorded SETTLE timeout=1)
+        'settle_nobone': 600,  # frames to wait before the order when there is no facing read (bones off)
+        'face_dist': 600.0,   # "across": X faces the point this far from it along +y (exactly 90 deg to the line)
+        'ctrl_wait': 90,      # control trial, user locked, no beam this long after the order: unlock the user (ULOCK)
+        'inplace': 30,        # a beam within this many frames of the order (nothing moved) is "in place"
+        'hold': 150,          # frames at the fixed distance before X is stepped closer (user still)
+        'step': 1.0,          # distance per poll X is teleported toward the user (facing kept)
+        'stop_below': 20.0,   # stepping ends when the centre distance falls under R - this
+        'watch': 900,         # frames after the order before a trial without a beam ends
         'tail': 30,           # frames recorded after the engagement
         'gap': 45,            # frames between trials
+        'face_every': 10,     # facing read every this many polls while watching (and at the beam start)
+        'ulock': True,        # Suspend_Locomotor(true) on the user (no walking: a clean in / out at d)
+        'xlock': True,        # Suspend_Locomotor(true) on the target after Face_Immediate (no turning)
         'camera': True,       # Point_Camera_At(position) at each trial start (framing only)
+        'ctrl_d': 950.0,
+        'along_offsets': [-15.0, -5.0, 5.0, 15.0],    # around R + E_along (1109.95): 1095, 1105, 1115, 1125
+        'across_offsets': [-13.5, -5.5, 5.5, 13.5],   # around R + E_across (1023.48): 1010, 1018, 1029, 1037
     },
     'cb': {
         'hero': 'Emperor_Palpatine', 'hero_alt': 'Emperor_Palpatine_Team', 'aura': 'Emperor_Land_Combat_Bonus',
@@ -96,12 +117,14 @@ CFG = {
 }
 
 TEXTS = [
-    ('TEXT_S78N_TB_ARMED', 'S78N PROBE: tractor beam trials armed. Give no orders, do not pause. About 4 minutes.'),
+    ('TEXT_S78N_TB_ARMED', 'S78N PROBE: tractor beam trials armed. Give no orders, do not pause. About 3 minutes.'),
     ('TEXT_S78N_TB_DONE', 'S78N PROBE: tractor beam trials recorded. Esc > Quit to the main menu; next: the LAND '
                           'skirmish on Dagobah.'),
     ('TEXT_S78N_CB_ARMED', 'S78N PROBE: aura trials armed. Give no orders, do not pause. About 2 minutes.'),
     ('TEXT_S78N_CB_DONE', 'S78N PROBE: aura trials recorded. Esc > Quit, then quit the game.'),
 ]
+TEXTS_SPACE_ONLY = [(k, 'S78N PROBE: tractor beam trials recorded. Esc > Quit, then quit the game.')
+                    if k == 'TEXT_S78N_TB_DONE' else (k, v) for k, v in TEXTS]
 
 
 class Source:
@@ -164,7 +187,7 @@ def xml_values(zpath=FOC_ZIP):
     with zipfile.ZipFile(zpath) as z:
         texts = [z.read(n).decode('latin-1') for n in z.namelist() if n.lower().endswith('.xml')]
     out = {}
-    user = CFG['tb']['user']
+    user = CFG['tv']['user']
     body = _type_body(texts, user)
     seen = 0
     while body is not None and 'Tractor_Beam_Attack_Ability' not in body and seen < 5:
@@ -244,18 +267,22 @@ def land_sites(game):
 
 # ---- the trial list -------------------------------------------------------------------------------------------------
 
-def tb_trials(R, ex, ey):
-    """Six placements (centre distances along +x from the user). Port thresholds: R + ex for a target facing the user
-    ("toward", |f.u| = 1 > 0.7071 -> X extent), R + ey for a target facing across the line ("side", f.u = 0 -> Y extent)."""
-    mid = R + 0.5 * (ex + ey)
-    return [
-        {'k': 1, 'name': 'ctrl_toward', 'face': 'toward', 'd': round(R - 50.0, 2)},
-        {'k': 2, 'name': 'small_toward', 'face': 'toward', 'd': round(R + 0.5 * ex, 2)},
-        {'k': 3, 'name': 'mid_toward', 'face': 'toward', 'd': round(mid, 2)},
-        {'k': 4, 'name': 'ctrl_side', 'face': 'side', 'd': round(R - 50.0, 2)},
-        {'k': 5, 'name': 'mid_side', 'face': 'side', 'd': round(mid, 2)},
-        {'k': 6, 'name': 'out_side', 'face': 'side', 'd': round(R + ey + 40.0, 2)},
-    ]
+def tv_trials(tv):
+    """Ten placements along +x from the user (exact, by Teleport). "along": X faces the user (|f.u| = 1, sec. 5.4.5
+    E = e_along); "across": X faces +y (f.u = 0, E = e_across). Per facing a control at ctrl_d, then four distances
+    around R + E of that facing (integers)."""
+    R = tv['R']
+    out = [{'name': 'ctrl_along', 'face': 'along', 'd': float(tv['ctrl_d'])}]
+    for o in tv['along_offsets']:
+        d = float(round(R + tv['e_along'] + o))
+        out.append({'name': 'along_%d' % d, 'face': 'along', 'd': d})
+    out.append({'name': 'ctrl_across', 'face': 'across', 'd': float(tv['ctrl_d'])})
+    for o in tv['across_offsets']:
+        d = float(round(R + tv['e_across'] + o))
+        out.append({'name': 'across_%d' % d, 'face': 'across', 'd': d})
+    for i, t in enumerate(out):
+        t['k'] = i + 1
+    return out
 
 
 # ---- Lua config -----------------------------------------------------------------------------------------------------
@@ -289,25 +316,41 @@ def lua_config(cfg):
     return '-- generated by build_s78n_mod.py\nSN_CFG = %s\n' % lua_value(lua_cfg, '')
 
 
-def config(game, offline):
+def config(game, offline, space_only=False, bone_read=True):
     cfg = json.loads(json.dumps(CFG))
+    cfg['space_only'] = bool(space_only)
     xv = xml_values()
     cfg['xml'] = xv
-    tgt = cfg['tb']['target']
+    tv = cfg['tv']
+    tgt = tv['target']
     if offline:
         ex, ey = FALLBACK_EXTENTS[tgt]
-        ext = {'type': tgt, 'ex': ex, 'ey': ey, 'note': 'offline fallback (s78n_extent.py values of 2026-11-09)'}
+        ea, ec = FALLBACK_RANGE[tgt]
+        bones = FALLBACK_BONES.get(tgt)
+        ext = {'type': tgt, 'ex': ex, 'ey': ey, 'along': ea, 'across': ec, 'bones': bones and list(bones),
+               'note': 'offline fallback (s78n_extent.py values of 2026-11-09 / 2026-11-10)'}
     else:
-        ext = s78n_extent.extents(game, tgt)
+        old = s78n_extent.extents(game, tgt)
+        new = s78n_extent.range_extents(game, tgt)
+        bones = new['bones'] and list(new['bones'][:2])
+        ext = {'type': tgt, 'ex': old['ex'], 'ey': old['ey'], 'along': new['along'], 'across': new['across'],
+               'half': new['half'], 'bones': bones, 'bone_xy': new['bones'] and new['bones'][2],
+               'note': new['note'] + '; old port extents: ' + old['note']}
         if ext['ex'] is None:
-            ex, ey = FALLBACK_EXTENTS[tgt]
-            ext.update(ex=ex, ey=ey, note=ext['note'] + '; fallback extents used')
+            ext['ex'], ext['ey'] = FALLBACK_EXTENTS[tgt]
+            ext['note'] += '; old port extents: fallback'
+        if ext['along'] is None:
+            ext['along'], ext['across'] = FALLBACK_RANGE[tgt]
+            ext['note'] += '; sec. 5.4.5 extents: fallback, no facing bones'
+            bones = None
     cfg['extent'] = ext
-    tb = cfg['tb']
-    tb['R'] = xv['R']
-    tb['ex'] = round(float(ext['ex']), 3)
-    tb['ey'] = round(float(ext['ey']), 3)
-    tb['trials'] = tb_trials(tb['R'], tb['ex'], tb['ey'])
+    tv['R'] = xv['R']
+    tv['e_along'] = round(float(ext['along']), 3)
+    tv['e_across'] = round(float(ext['across']), 3)
+    tv['old_along'] = round(float(ext['ex']), 3)     # the old port: |max.x| x scale along the facing
+    tv['old_across'] = round(float(ext['ey']), 3)    # |max.y| x scale across it
+    tv['bone_front'], tv['bone_rear'] = (bones[0], bones[1]) if bones and bone_read else ('', '')
+    tv['trials'] = tv_trials(tv)
     cb = cfg['cb']
     cb['health'] = xv['unit_health']
     cb['bonus'] = xv['aura_health_bonus']
@@ -318,17 +361,20 @@ def config(game, offline):
         s1, s2, lnote = dict(LAND_FALLBACK_SITE), dict(LAND_FALLBACK_FAR), 'fallback (offline)'
     else:
         ssite, snote = space_site(Source(game))
-        s1, s2, lnote = land_sites(game)
-    # the user sits left of / below the space site, so the targets (up to R + ey + 40 along +x, the side targets'
-    # spawn point up to the same along +y) stay around the site
-    tb['user_at'] = {'x': round(ssite['x'] - 0.55 * tb['R'], 1), 'y': round(ssite['y'] - 0.5 * tb['R'], 1),
+        if space_only:
+            s1, s2, lnote = dict(LAND_FALLBACK_SITE), dict(LAND_FALLBACK_FAR), 'not used (space only)'
+        else:
+            s1, s2, lnote = land_sites(game)
+    # the user sits left of / below the space site, so the targets (up to R + E_along + 15 along +x, an across
+    # target's facing point face_dist along +y from it) stay around the site
+    tv['user_at'] = {'x': round(ssite['x'] - 0.55 * tv['R'], 1), 'y': round(ssite['y'] - 0.3 * tv['R'], 1),
                      'z': ssite.get('z', 0.0)}
     cb['site'] = s1
     cb['far_site'] = s2
     notes.append('space ' + snote)
     notes.append('land ' + lnote)
     cfg['site_note'] = '; '.join(notes)
-    cfg['map'] = SPACE_MAP + ' + ' + LAND_MAP
+    cfg['map'] = SPACE_MAP + ('' if space_only else ' + ' + LAND_MAP)
     return cfg
 
 
@@ -351,10 +397,10 @@ def texts_dat(src, pairs):
     return dat_bytes(base + list(pairs))
 
 
-def build(game, out, source_zip=None, no_text=False):
+def build(game, out, source_zip=None, no_text=False, space_only=False, bone_read=True):
     """Build Mods\\S78NProbe into `out`, reading shipped files from `game` or the zip. Returns the config."""
     src = Source(game, source_zip)
-    cfg = config(game, src.zip is not None)
+    cfg = config(game, src.zip is not None, space_only, bone_read)
     prepare(out)
     files = []
 
@@ -365,10 +411,24 @@ def build(game, out, source_zip=None, no_text=False):
     fs, fs_src = freestore(src, cfg)
     put('Data\\Scripts\\FreeStore\\BusyTacticalFreeStore.lua', fs)
     if not no_text:
-        put('Data\\Text\\MasterTextFile_English.dat', texts_dat(src, TEXTS))
+        put('Data\\Text\\MasterTextFile_English.dat', texts_dat(src, TEXTS_SPACE_ONLY if space_only else TEXTS))
     cfg['files'] = files
     cfg['freestore_source'] = fs_src
     return cfg
+
+
+def describe(cfg):
+    """Console lines: the (A) numbers and the trial list."""
+    tv = cfg['tv']
+    R = tv['R']
+    out = ['tractor: R %.1f, %s E along %.2f / across %.2f (sec. 5.4.5) -> thresholds %.2f / %.2f (old port %.2f / '
+           '%.2f); facing bones %s' % (R, tv['target'], tv['e_along'], tv['e_across'], R + tv['e_along'],
+                                       R + tv['e_across'], R + tv['old_along'], R + tv['old_across'],
+                                       '%s / %s' % (tv['bone_front'], tv['bone_rear']) if tv['bone_front'] else 'OFF'),
+           '  (%s)' % cfg['extent']['note']]
+    for t in tv['trials']:
+        out.append('  trial %2d %-12s %-6s d %.2f' % (t['k'], t['name'], t['face'], t['d']))
+    return out
 
 
 def main():
@@ -378,20 +438,20 @@ def main():
     ap.add_argument('--source-zip')
     ap.add_argument('--no-text', action='store_true')
     ap.add_argument('--config-out')
+    ap.add_argument('--space-only', action='store_true')
+    ap.add_argument('--no-bone-read', action='store_true')
     a = ap.parse_args()
     out = a.out or os.path.join(a.game, 'corruption', 'Mods', MOD_NAME)
-    cfg = build(a.game, out, a.source_zip, a.no_text)
+    cfg = build(a.game, out, a.source_zip, a.no_text, a.space_only, not a.no_bone_read)
     if a.config_out:
         with open(a.config_out, 'w') as f:
             json.dump(cfg, f, indent=1)
-    print('built %s: %s' % (out, ', '.join(cfg['files'])))
+    print('built %s (%s): %s' % (out, 'space only' if a.space_only else 'space + land', ', '.join(cfg['files'])))
     print('sites:', cfg['site_note'])
-    print('tractor: R %.1f, target %s E_x %.1f E_y %.1f (%s)' % (cfg['tb']['R'], cfg['tb']['target'], cfg['tb']['ex'],
-                                                                  cfg['tb']['ey'], cfg['extent']['note']))
-    for t in cfg['tb']['trials']:
-        print('  trial %d %-13s %-6s d %.2f' % (t['k'], t['name'], t['face'], t['d']))
-    print('aura: %s on %s (health %.0f), Take_Damage %.1f, Health_Bonus %.2f' % (
-        cfg['cb']['aura'], cfg['cb']['unit'], cfg['cb']['health'], cfg['cb']['dmg'], cfg['cb']['bonus']))
+    print('\n'.join(describe(cfg)))
+    if not a.space_only:
+        print('aura: %s on %s (health %.0f), Take_Damage %.1f, Health_Bonus %.2f' % (
+            cfg['cb']['aura'], cfg['cb']['unit'], cfg['cb']['health'], cfg['cb']['dmg'], cfg['cb']['bonus']))
 
 
 if __name__ == '__main__':

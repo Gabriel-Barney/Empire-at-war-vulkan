@@ -3,7 +3,24 @@
 
   s78n_analyse.py RECORDS.log [--config config.json] [--out report.txt] [--json report.json]
 
-(A) tractor beam (docs/re/TACTICAL_COMBAT.md sec. 5.4.2): the port lets the beam start when the XY centre distance
+(A) second version (probe "tv", 2026-11-10; TACTICAL_COMBAT.md sec. 5.4.5): the beam may start when the XY centre
+    distance d <= R + E, E = the target's collision-bound model Y half x Scale_Factor when its facing is along the
+    line of sight (|f.u| > 0.7071), else the X half (Nebulon-B: 109.95 / 23.48, thresholds 1109.95 / 1023.48).
+    Per trial: d0 and |f.u| at the order (f from the two facing bones, else the commanded facing), the predicted
+    E and IN / OUT, the observed IN (beam with nothing moved) / OUT, and when X was stepped closer (or the user
+    walked) the interval [d at the beam, d up to two polls earlier] that holds T, checked against R + E at |f.u|
+    of the beam start. MATCH when both agree; the old port rule (along |max.x|, across |max.y|: 1023.48 /
+    1111.86) is printed beside it for reference.
+      A0 setup     both controls (950) start in place;
+      A1 facing    with bone reads: along trials |f.u| > 0.98, across < 0.17, no turn > 1 deg from the settled
+                   facing (the settle read that agreed) to the order and to the beam start, the right band at the
+                   beam start (ASSUMED without bone reads);
+      A2 per trial every trial MATCHes sec. 5.4.5;
+      A3 threshold the intervals from all trials per facing hold 1109.95 (along) and 1023.48 (across).
+    Verdict (A): INCONCLUSIVE when A0 fails; FAIL when A2 fails; PASS when A3 passes and A1 is PASS / ASSUMED; else
+    INCONCLUSIVE.
+(A) first version (probe "tb", run 20261109-200249; kept for --report-only of that run): the port let the beam start
+    when the XY centre distance
     d <= R + E, E = the target's X half-extent when its facing is along the line of sight (|f.u| > 0.7071, the
     "toward" trials), else its Y half-extent ("side" trials). Per trial the report gives the centre distance at the
     order (d0), how the beam started (IN_PLACE: within 15 frames of the order, the user still; CLOSED: after the user
@@ -32,6 +49,7 @@
 """
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -271,6 +289,261 @@ def analyse_tb(rs, cfg):
     return out, res
 
 
+# ---- (A), second version (probe "tv") -------------------------------------------------------------------------------
+
+def _xy(v):
+    try:
+        a, b = v.split(',')
+        return float(a), float(b)
+    except (AttributeError, ValueError):
+        return None
+
+
+def _face(rec):
+    if rec is None:
+        return None
+    fx, fy = fnum(rec.get('fx')), fnum(rec.get('fy'))
+    return (fx, fy) if fx is not None and fy is not None else None
+
+
+def _fu(f, u, x):
+    """|f . unit(u - x)|, or None."""
+    if f is None or u is None or x is None:
+        return None
+    dx, dy = u[0] - x[0], u[1] - x[1]
+    ln = math.hypot(dx, dy)
+    return abs(f[0] * dx + f[1] * dy) / ln if ln > 0 else None
+
+
+def _turn(a, b):
+    """angle in degrees between two facings (0..180), or None."""
+    if a is None or b is None:
+        return None
+    return abs(math.degrees(math.atan2(a[0] * b[1] - a[1] * b[0], a[0] * b[0] + a[1] * b[1])))
+
+
+def analyse_tv(rs, cfg):
+    out = []
+    res = {'trials': [], 'verdicts': {}}
+    vc = next((r for r in rs if r['kind'] == 'VCFG'), {})
+    tvc = (cfg or {}).get('tv', {})
+
+    def val(key, ckey):
+        v = fnum(vc.get(key))
+        return v if v is not None else tvc.get(ckey)
+
+    R, ea, ec = val('R', 'R'), val('ea', 'e_along'), val('ec', 'e_across')
+    oa, oc = val('oa', 'old_along'), val('oc', 'old_across')
+    inplace = tvc.get('inplace', 30)
+    if None in (R, ea, ec, oa, oc):
+        out.append('  no VCFG record and no config: R / E unknown')
+        return out, res
+    bones = vc.get('bf') or tvc.get('bone_front') or ''
+    res.update(R=R, e_along=ea, e_across=ec, T_along=R + ea, T_across=R + ec, old_T_along=R + oa,
+               old_T_across=R + oc)
+    out.append('  R %.2f; sec. 5.4.5: E along the facing %.2f, across %.2f -> thresholds %.2f / %.2f (|f.u| > 0.7071 '
+               '= along); old port %.2f / %.2f; facing read: %s' % (
+                   R, ea, ec, R + ea, R + ec, R + oa, R + oc,
+                   'bones %s / %s' % (bones, vc.get('br') or tvc.get('bone_rear')) if bones and bones != '_' else
+                   'none (the commanded facing is assumed)'))
+    trials = {}
+    ulock = []
+    for r in rs:
+        k = r.get('k')
+        if k is None:
+            continue
+        t = trials.setdefault(k, {'k': int(k), 'polls': [], 'faces': []})
+        kind = r['kind']
+        if kind == 'VTRIAL':
+            t.update(name=r.get('name'), face=r.get('face'), d_plan=fnum(r.get('d')), vtrial=r)
+        elif kind in ('PLACE', 'SETTLE', 'PRE', 'ENG', 'NOENG', 'STEP', 'TEND'):
+            t[kind.lower()] = r
+        elif kind == 'ACT' and r.get('why') == 'order':
+            t['ret'] = r.get('ret')
+        elif kind == 'P':
+            t['polls'].append(r)
+        elif kind == 'FACE':
+            t['faces'].append(r)
+        elif kind == 'ULOCK':
+            t['ulock'] = r
+            ulock.append(r)
+    if not any(t.get('name') for t in trials.values()):
+        out.append('  no trial records')
+        return out, res
+    v = res['verdicts']
+    ctrl = {}
+    face_bad = []
+    any_bone = False
+    n_new = n_old = n_all = 0
+    iv = {'along': [None, None], 'across': [None, None]}   # lo <= T < hi from all trials of that facing
+
+    def narrow(face, lo, hi):
+        b = iv[face]
+        if lo is not None:
+            b[0] = lo if b[0] is None else max(b[0], lo)
+        if hi is not None:
+            b[1] = hi if b[1] is None else min(b[1], hi)
+
+    for k in sorted(trials, key=lambda x: int(x)):
+        t = trials[k]
+        if t.get('name') is None:
+            continue
+        face = t.get('face')
+        pre = t.get('pre')
+        if pre is None:
+            out.append('  trial %d %s: no order (PRE missing; %s)' % (t['k'], t['name'], (t.get('tend') or {}).get(
+                'aborted', 'not finished')))
+            res['trials'].append({'k': t['k'], 'name': t['name'], 'face': face, 'match': False, 'obs': None})
+            n_all += 1
+            continue
+        d0 = fnum(pre.get('d'))
+        u0, x0 = _xy(pre.get('u')), _xy(pre.get('x'))
+        f_cmd = None
+        if u0 and x0:
+            ln = math.hypot(u0[0] - x0[0], u0[1] - x0[1]) or 1.0
+            f_cmd = ((u0[0] - x0[0]) / ln, (u0[1] - x0[1]) / ln) if face == 'along' else (0.0, 1.0)
+        f_pre = _face(pre)
+        src = 'bones' if f_pre else 'commanded'
+        any_bone = any_bone or f_pre is not None
+        f_use = f_pre or f_cmd
+        fu = _fu(f_use, u0, x0)
+        # the facing at the start of the measurement: the last settle read (the one that agreed with the read before)
+        settled = [_face(r) for r in t['faces'] if r.get('w') == 'settle' and _face(r)]
+        f_set = settled[-1] if settled else None
+        turned = _turn(f_set, f_pre)
+        f_first = settled[0] if settled else None
+        first_off = None
+        if f_first is not None and f_cmd is not None:
+            first_off = _turn(f_first, f_cmd)
+            if face == 'along':
+                first_off = min(first_off, 180.0 - first_off)
+        off = None
+        if fu is not None:
+            off = math.degrees(math.acos(min(1.0, fu))) if face == 'along' else math.degrees(math.asin(min(1.0, fu)))
+        e_new = ea if fu is not None and fu > 0.7071 else ec
+        e_old = oa if fu is not None and fu > 0.7071 else oc
+        T_new, T_old = R + e_new, R + e_old
+        pred = 'IN' if d0 is not None and d0 <= T_new else 'OUT'
+        pred_old = 'IN' if d0 is not None and d0 <= T_old else 'OUT'
+        eng = t.get('eng')
+        um = fnum((eng or {}).get('um'))
+        stepping = (eng or {}).get('stepping') == 'true'
+        info = {'k': t['k'], 'name': t['name'], 'face': face, 'd_plan': t.get('d_plan'), 'd0': d0, 'fu': fu,
+                'facing_src': src, 'off_deg': off, 'turned_deg': turned, 'E': e_new, 'T': T_new, 'pred': pred,
+                'E_old': e_old, 'T_old': T_old, 'pred_old': pred_old, 'ret': t.get('ret'),
+                'settle': (t.get('settle') or {}).get('why'), 'ulock_pre': (pre or {}).get('ulock')}
+        lo = hi = None
+        fit = fit_old = True
+        r_eng = fnum((eng or {}).get('r'))
+        if eng is not None and not stepping and (um is None or um <= 1.0):
+            obs = 'IN'
+            lo = d0
+            note = 'beam r %s%s' % (fmt(r_eng, 0), '' if r_eng is not None and r_eng <= inplace else ' (late)')
+        else:
+            obs = 'OUT'
+            hi = d0
+            if eng is not None:
+                de = fnum(eng.get('d'))
+                dp = max([x for x in (fnum(eng.get('prev_d')), fnum(eng.get('prev2_d'))) if x is not None],
+                         default=None)
+                fu_e = fnum(eng.get('fu'))     # from the bones, with the positions at the beam start
+                if fu_e is None:
+                    p_eng = next((p for p in t['polls'] if p.get('r') == eng.get('r')), {})
+                    fu_e = _fu(f_cmd, _xy(p_eng.get('u')), _xy(p_eng.get('x'))) or fu
+                elif (face == 'along') != (fu_e > 0.7071):
+                    face_bad.append('%s at the beam (|f.u| %s: wrong band)' % (t['name'], fmt(fu_e, 4)))
+                Te = R + (ea if fu_e is not None and fu_e > 0.7071 else ec)
+                To = R + (oa if fu_e is not None and fu_e > 0.7071 else oc)
+                lo, hi = de, dp
+                fit = de is not None and dp is not None and de - TOL_D <= Te <= dp + TOL_D
+                fit_old = de is not None and dp is not None and de - TOL_D <= To <= dp + TOL_D
+                info.update(d_eng=de, d_prev=dp, fu_eng=fu_e, T_eng=Te, r_eng=r_eng, user_moved=um,
+                            how='target stepped' if stepping else 'user walked')
+                note = 'then the beam at d %s after %s: T in [%s, %s] at |f.u| %s -> pred %.2f %s (old %.2f %s)' % (
+                    fmt(de), info['how'], fmt(de), fmt(dp), fmt(fu_e, 4), Te, 'fits' if fit else 'DOES NOT FIT', To,
+                    'fits' if fit_old else 'no')
+            else:
+                dmin = min((fnum(p.get('d')) for p in t['polls'] if fnum(p.get('d')) is not None), default=None)
+                hi = dmin if dmin is not None else d0
+                fit = dmin is None or T_new < dmin + TOL_D
+                fit_old = dmin is None or T_old < dmin + TOL_D
+                info.update(d_min=dmin)
+                note = 'never; smallest d %s (%s)' % (fmt(dmin), 'stepped' if t.get('step') else 'not stepped')
+        narrow(face, lo, hi)
+        match = obs == pred and fit
+        match_old = obs == pred_old and fit_old
+        info.update(obs=obs, match=match, match_old=match_old)
+        n_all += 1
+        n_new += 1 if match else 0
+        n_old += 1 if match_old else 0
+        if t['name'].startswith('ctrl'):
+            ctrl[t['name']] = obs
+        turned_eng = _turn(f_set, _face(eng))
+        info.update(first_off_deg=first_off, turned_eng_deg=turned_eng)
+        if f_pre is not None and (off is None or off > 10.0 or (turned is not None and turned > 1.0) or
+                                  (turned_eng is not None and turned_eng > 1.0)):
+            face_bad.append('%s (off %s deg, turned %s deg by the order, %s deg by the beam)' % (
+                t['name'], fmt(off, 1), fmt(turned, 2), fmt(turned_eng, 2)))
+        if face == 'along' and fu is not None and fu <= 0.7071 or face == 'across' and fu is not None and fu > 0.7071:
+            face_bad.append('%s (|f.u| %s: wrong band)' % (t['name'], fmt(fu, 4)))
+        res['trials'].append(info)
+        out.append('  trial %2d %-12s %-6s d0 %8s |f.u| %s (%s; %s deg off the plan; first read %s deg off; turned '
+                   '%s deg from the settled facing by the order, %s by the beam; settle %s) E %.2f -> pred %s; '
+                   'observed %s, %s: %s  [old port E %.2f -> %s: %s]' % (
+                       t['k'], t['name'], face, fmt(d0), fmt(fu, 4), src, fmt(off, 1), fmt(first_off, 1),
+                       fmt(turned, 2), fmt(turned_eng, 2), info['settle'], e_new, pred, obs, note,
+                       'MATCH' if match else 'MISMATCH', e_old, pred_old, 'agrees' if match_old else 'differs'))
+    for u in ulock:
+        out.append('  ULOCK: the locked user did not start the beam on %s (k %s, r %s): Suspend_Locomotor(false), '
+                   'later trials let the user walk (bracket from its approach)' % (
+                       trials.get(u.get('k'), {}).get('name'), u.get('k'), u.get('r')))
+    a0 = ctrl.get('ctrl_along') == 'IN' and ctrl.get('ctrl_across') == 'IN'
+    v['A0'] = 'PASS' if a0 else 'INCONCLUSIVE'
+    out.append('  A0 setup (controls at %s start in place): %s (ctrl_along %s, ctrl_across %s)' % (
+        fmt(tvc.get('ctrl_d', R - 50), 0), v['A0'], ctrl.get('ctrl_along'), ctrl.get('ctrl_across')))
+    if not any_bone:
+        v['A1'] = 'ASSUMED'
+        a1why = 'no facing read; Face_Immediate assumed to have set the planned facing'
+    elif face_bad:
+        v['A1'] = 'FAIL'
+        a1why = 'facing not as planned / not settled: ' + ', '.join(face_bad)
+    else:
+        v['A1'] = 'PASS'
+        a1why = ('along |f.u| > 0.98, across < 0.17 (within 10 deg); no turn > 1 deg from the settled facing to the '
+                 'order and to the beam start')
+    out.append('  A1 target facing: %s (%s)' % (v['A1'], a1why))
+    v['A2'] = 'PASS' if n_new == n_all else 'FAIL'
+    out.append('  A2 every trial in / out as sec. 5.4.5 predicts: %s (%d / %d trials)' % (v['A2'], n_new, n_all))
+
+    def ivs(b):
+        return '[%s, %s)' % (fmt(b[0]) if b[0] is not None else '-inf', fmt(b[1]) if b[1] is not None else '+inf')
+
+    def holds(b, T):
+        return (b[0] is None or b[0] <= T + TOL_D) and (b[1] is None or T < b[1] + TOL_D)
+
+    ok_a, ok_c = holds(iv['along'], R + ea), holds(iv['across'], R + ec)
+    v['A3'] = 'PASS' if ok_a and ok_c else 'FAIL'
+    res['bounds'] = iv
+    out.append('  A3 thresholds: along T in %s (pred %.2f %s; old port %.2f %s), across T in %s (pred %.2f %s; old '
+               'port %.2f %s): %s' % (
+                   ivs(iv['along']), R + ea, 'in' if ok_a else 'OUT', R + oa, 'in' if holds(iv['along'], R + oa)
+                   else 'out', ivs(iv['across']), R + ec, 'in' if ok_c else 'OUT', R + oc,
+                   'in' if holds(iv['across'], R + oc) else 'out', v['A3']))
+    out.append('  old port rule (along %.2f / across %.2f, for reference): %d / %d trials agree' % (
+        R + oa, R + oc, n_old, n_all))
+    if v['A0'] != 'PASS':
+        overall = 'INCONCLUSIVE'
+    elif v['A2'] == 'FAIL':
+        overall = 'FAIL'
+    elif v['A3'] == 'PASS' and v['A1'] in ('PASS', 'ASSUMED'):
+        overall = 'PASS'
+    else:
+        overall = 'INCONCLUSIVE'
+    v['A'] = overall
+    res['old_agree'] = (n_old, n_all)
+    return out, res
+
+
 # ---- (B) ------------------------------------------------------------------------------------------------------------
 
 def classify_drop(dv, nobonus, bonus):
@@ -436,8 +709,9 @@ def report(records_log, out_txt=None, out_json=None, cfg_path=None):
             cfg = json.load(f)
     recs, by_sid = load(records_log)
     lines = ['s78n t08 probe report: %s (%d records, %d scripts)' % (records_log, len(recs), len(by_sid))]
-    res = {'records': len(recs), 'scripts': [], 'tb': None, 'cb': None, 'verdicts': []}
+    res = {'records': len(recs), 'scripts': [], 'tb': None, 'tv': None, 'cb': None, 'verdicts': []}
     final = {}
+    space_only = bool((cfg or {}).get('space_only'))
     for sid, rs in sorted(by_sid.items(), key=lambda kv: kv[1][0]['n'] if kv[1] else 0):
         arm = next((r for r in rs if r['kind'] == 'ARM'), None)
         skip = next((r for r in rs if r['kind'] == 'SKIP'), None)
@@ -465,6 +739,11 @@ def report(records_log, out_txt=None, out_json=None, cfg_path=None):
             o, r = analyse_tb(rs, cfg)
             res['tb'] = r
             final['A'] = (r['verdicts'].get('A', 'INCONCLUSIVE'), sid)
+        elif probe == 'tv':
+            o, r = analyse_tv(rs, cfg)
+            res['tv'] = r
+            final['A'] = (r['verdicts'].get('A', 'INCONCLUSIVE'), sid)
+            space_only = space_only or next((x.get('space_only') for x in rs if x['kind'] == 'VCFG'), '') == 'true'
         else:
             o, r = analyse_cb(rs, cfg)
             res['cb'] = r
@@ -472,9 +751,17 @@ def report(records_log, out_txt=None, out_json=None, cfg_path=None):
         lines.extend(o)
     lines.append('')
     va = final.get('A', ('NO DATA', '-'))
-    vb = final.get('B', ('NO DATA', '-'))
-    res['verdicts'] = ['(A) tractor beam range includes the target footprint: %s' % va[0],
-                       '(B) Combat_Bonus aura reaches an allied player\'s units: %s' % vb[0]]
+    vb = final.get('B', ('NO DATA (space-only run)' if space_only else 'NO DATA', '-'))
+    tv = res.get('tv')
+    if tv and 'T_along' in tv:
+        n_old, n_all = tv.get('old_agree', (0, 0))
+        res['verdicts'] = ['(A) tractor beam range, TACTICAL_COMBAT 5.4.5 (R + E: along %.2f / across %.2f): %s '
+                           '(old port %.2f / %.2f: %d / %d trials agree)' % (
+                               tv['T_along'], tv['T_across'], va[0], tv['old_T_along'], tv['old_T_across'], n_old,
+                               n_all)]
+    else:
+        res['verdicts'] = ['(A) tractor beam range includes the target footprint: %s' % va[0]]
+    res['verdicts'].append('(B) Combat_Bonus aura reaches an allied player\'s units: %s' % vb[0])
     lines.append('VERDICT ' + res['verdicts'][0] + ' (script %s)' % va[1])
     lines.append('VERDICT ' + res['verdicts'][1] + ' (script %s)' % vb[1])
     text = '\n'.join(lines)

@@ -4,7 +4,10 @@ with it (or wait for you to), scan the game's memory for the probe records while
 game exits, then clean up and restore the profile (always, also after an error or Ctrl+C).
 
   s78n_run.py [--game DIR] [--non-interactive] [--no-launch] [--windowed] [--no-profile] [--dry-run]
-              [--wait-start-sec N] [--scan-sec S] [--report-only RECORDS.log]
+              [--wait-start-sec N] [--scan-sec S] [--report-only RECORDS.log] [--space-only] [--no-bone-read]
+
+  --space-only        the tractor-beam re-run only: one SPACE skirmish (Kuat), the land probe is not built in
+  --no-bone-read      no facing read through Get_Bone_Position (each trial then waits 600 frames before the order)
 
   --non-interactive   never waits for a key; progress lines; ends with S78N_RUN_DONE exit=<n>
   --no-launch         install and scan only; start the game yourself (README: launch_foc.py from a Claude shell)
@@ -55,13 +58,25 @@ STEPS = r'''
  A) Single Player > Skirmish > SPACE, map KUAT. Slot 1 (you): EMPIRE, team 1. Slot 2: AI (any difficulty) REBEL,
     team 2. Every other slot CLOSED. Default credits and settings. Start.
     "S78N PROBE: tractor beam trials armed" appears in the first seconds; at 15 s a Star Destroyer (yours) and a
-    Nebulon-B frigate (theirs) appear far from both bases, six times in turn. Wait for "S78N PROBE: tractor beam
-    trials recorded" (about 4 minutes), then Esc > Quit to the main menu (do not quit the game).
+    Nebulon-B frigate (theirs) appear far from both bases, ten times in turn. Wait for "S78N PROBE: tractor beam
+    trials recorded" (about 2 to 3 minutes), then Esc > Quit to the main menu (do not quit the game).
  B) Single Player > Skirmish > LAND, map DAGOBAH (3 players). Slot 1 (you): EMPIRE, team 1. Slot 2: AI UNDERWORLD,
     team 1 (your ally). Slot 3: AI REBEL, team 2. Every other slot CLOSED. Default credits and settings. Start.
     "S78N PROBE: aura trials armed" appears; at 15 s AT-ST walkers of all three players and then the Emperor
     appear far from the bases. Wait for "S78N PROBE: aura trials recorded" (about 2 minutes), Esc > Quit, quit the
     game. The run ends by itself (S78N_RUN_DONE), cleans up and restores the profile.
+'''
+
+STEPS_SPACE_ONLY = r'''
+ s78n t08 session, SPACE ONLY (the tractor-beam re-run): one skirmish battle, about 2 to 3 minutes in battle.
+ Notes: README.md. Give NO orders, click nothing on the map (moving the camera is fine), never pause, never change
+ the game speed, never save, keep the game window in front. The probe messages start with "S78N PROBE:".
+ Single Player > Skirmish > SPACE, map KUAT. Slot 1 (you): EMPIRE, team 1. Slot 2: AI EASY, REBEL, team 2. Every
+ other slot CLOSED. Default credits and settings. Start.
+ "S78N PROBE: tractor beam trials armed" appears in the first seconds; at 15 s a Star Destroyer (yours) and a
+ Nebulon-B frigate (theirs) appear away from both bases, ten times in turn (each pair 6 to 15 s). Wait for
+ "S78N PROBE: tractor beam trials recorded", then Esc > Quit and quit the game. The run ends by itself
+ (S78N_RUN_DONE), cleans up and restores the profile.
 '''
 
 
@@ -76,7 +91,14 @@ def main():
     ap.add_argument('--wait-start-sec', type=float, default=900)
     ap.add_argument('--scan-sec', type=float, default=4.0)
     ap.add_argument('--report-only')
+    ap.add_argument('--space-only', action='store_true')
+    ap.add_argument('--no-bone-read', action='store_true')
     a = ap.parse_args()
+    steps = STEPS_SPACE_ONLY if a.space_only else STEPS
+
+    def build(out):
+        return build_s78n_mod.build(a.game, out, space_only=a.space_only, bone_read=not a.no_bone_read)
+
     if a.report_only:
         d = os.path.dirname(os.path.abspath(a.report_only))
         cfgp = os.path.join(d, 'config.json')
@@ -92,14 +114,13 @@ def main():
     if a.dry_run:
         os.makedirs(run_dir, exist_ok=True)
         mod = os.path.join(run_dir, 'dryrun_mod', build_s78n_mod.MOD_NAME)
-        cfg = build_s78n_mod.build(a.game, mod)
+        cfg = build(mod)
         with open(os.path.join(run_dir, 'config.json'), 'w') as f:
             json.dump(cfg, f, indent=1)
-        say('DRY RUN: built %s (%d files); sites: %s' % (mod, len(cfg['files']), cfg['site_note']))
-        say('tractor: R %.1f, %s E_x %.1f E_y %.1f; trials %s' % (
-            cfg['tb']['R'], cfg['tb']['target'], cfg['tb']['ex'], cfg['tb']['ey'],
-            ', '.join('%s %.1f' % (t['name'], t['d']) for t in cfg['tb']['trials'])))
-        say('\n' + '=' * 110 + STEPS + '=' * 110)
+        say('DRY RUN (%s): built %s (%d files); sites: %s' % ('space only' if a.space_only else 'space + land', mod,
+                                                             len(cfg['files']), cfg['site_note']))
+        say('\n'.join(build_s78n_mod.describe(cfg)))
+        say('\n' + '=' * 110 + steps + '=' * 110)
         say('Command line (in %s): %s' % (corr, cmdline))
         say('S78N_RUN_DONE exit=0')
         return 0
@@ -130,14 +151,14 @@ def main():
             profile = q2_profile
             profile.snapshot(run_dir)
         s78n_cleanup.cleanup(a.game, os.path.join(run_dir, 'cleanup.log'))  # a stale folder from a crashed run
-        cfg = build_s78n_mod.build(a.game, os.path.join(corr, 'Mods', build_s78n_mod.MOD_NAME))
+        cfg = build(os.path.join(corr, 'Mods', build_s78n_mod.MOD_NAME))
         with open(cfg_path, 'w') as f:
             json.dump(cfg, f, indent=1)
         info['site'] = cfg.get('site_note')
+        info['space_only'] = a.space_only
         say('sites: ' + cfg['site_note'])
-        say('tractor: R %.1f, %s E_x %.1f E_y %.1f (%s)' % (cfg['tb']['R'], cfg['tb']['target'], cfg['tb']['ex'],
-                                                            cfg['tb']['ey'], cfg['extent']['note']))
-        say('\n' + '=' * 110 + STEPS + '=' * 110)
+        say('\n'.join(build_s78n_mod.describe(cfg)))
+        say('\n' + '=' * 110 + steps + '=' * 110)
         t0 = time.time()
         if not a.no_launch:
             subprocess.Popen([exe] + (WINDOWED if a.windowed else []) + MODPATH, cwd=corr)

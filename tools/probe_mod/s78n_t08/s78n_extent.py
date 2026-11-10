@@ -7,6 +7,9 @@ proxy shaders skipped; hidden meshes kept).
 
   s78n_extent.py [--game DIR] [TYPE ...]        prints E_x, E_y per type (default: the kit's tractor targets)
 
+range_extents() gives the corrected extents of sec. 5.4.5 (collision-bound half size: model Y along the facing,
+model X across) and two facing bones on the model's long axis, used by the second version of the space trials.
+
 Used by build_s78n_mod.py to place the tractor-beam targets, and stored in config.json for the analysis.
 Read only; standard library + ../common/ted_owners.py + tools/formats/python/alo.py.
 """
@@ -124,6 +127,116 @@ def model_bounds(data):
     if not any_box:
         return None
     return lo, hi
+
+
+def _bone_world(m):
+    world = []
+    for b in m['bones']:
+        loc = [list(r) for r in b['matrix']]
+        p = b.get('parent', -1)
+        world.append(loc if p < 0 or p >= len(world) else _mul(world[p], loc))
+    if not world:
+        world = [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]]
+    return world
+
+
+def collision_half(data):
+    """TACTICAL_COMBAT sec. 5.4.5 (retail 0x12def0): the collision bound of the model, the union of every
+    collision-enabled mesh's 0x402 box through its bone's bind-pose matrix (hidden meshes included); returns
+    (centre, half) with half = |max - min| / 2, or None when no mesh has the collision bit (retail: half 1)."""
+    m = alo.parse_alo(data)
+    if m.get('kind') != 'model':
+        return None
+    world = _bone_world(m)
+    obj_bone = {}
+    for o, bone in m['connections']:
+        obj_bone.setdefault(o, bone)
+    mesh_obj = {idx: oi for oi, (kind, idx) in enumerate(m['objects']) if kind == 'mesh'}
+    lo = [1e30] * 3
+    hi = [-1e30] * 3
+    seen = False
+    for mi, mesh in enumerate(m['meshes']):
+        if not mesh.get('collision') or not mesh.get('bbox'):
+            continue
+        bone = obj_bone.get(mesh_obj.get(mi, -1), 0)
+        if bone >= len(world):
+            bone = 0
+        vlo, vhi = mesh['bbox']
+        for i in range(8):
+            corner = (vhi[0] if i & 1 else vlo[0], vhi[1] if i & 2 else vlo[1], vhi[2] if i & 4 else vlo[2])
+            c = _xf(world[bone], corner)
+            for k in range(3):
+                lo[k] = min(lo[k], c[k])
+                hi[k] = max(hi[k], c[k])
+        seen = True
+    if not seen:
+        return None
+    return [(lo[k] + hi[k]) / 2 for k in range(3)], [abs(hi[k] - lo[k]) / 2 for k in range(3)]
+
+
+def nose_bones(data):
+    """Two bones on the model's long axis for a facing read through Lua Get_Bone_Position: (front, rear, {name:
+    (x, y)} bind-pose XY), front = toward model -Y (the nose, sec. 5.4.5 "Axes"). Only bones whose name is unique in
+    the model, |x| < 2 and not a particle / fire-point / light bone; missile_target00 / 01 when both qualify. None
+    when fewer than two qualify or they are under 50 apart."""
+    m = alo.parse_alo(data)
+    if m.get('kind') != 'model':
+        return None
+    world = _bone_world(m)
+    names = [b.get('name') or '' for b in m['bones']]
+    cand = {}
+    for i, n in enumerate(names):
+        low = n.lower()
+        if not n or names.count(n) != 1 or low.startswith(('p_', 'pe_', 'fp_', 'spot', 'omni')) or ' ' in n:
+            continue
+        if i >= len(world) or abs(world[i][0][3]) >= 2.0:
+            continue
+        cand[n] = (world[i][0][3], world[i][1][3])
+    if 'missile_target00' in cand and 'missile_target01' in cand:
+        pair = sorted(['missile_target00', 'missile_target01'], key=lambda n: cand[n][1])
+    elif len(cand) >= 2:
+        order = sorted(cand, key=lambda n: cand[n][1])
+        pair = [order[0], order[-1]]
+    else:
+        return None
+    front, rear = pair
+    if cand[rear][1] - cand[front][1] < 50.0:
+        return None
+    return front, rear, {front: cand[front], rear: cand[rear]}
+
+
+def range_extents(game, type_name):
+    """sec. 5.4.5 extents and the facing bones of a type: {'type', 'model', 'scale', 'along', 'across', 'half',
+    'bones', 'note'}. along = Custom_Hard_XExtent x scale, else the collision-bound model Y half x scale (used when
+    |f.u| > 0.7071); across = Custom_Hard_YExtent x scale, else the model X half x scale. None when unreadable."""
+    f = type_fields(type_name, ['Space_Model_Name', 'Scale_Factor', 'Custom_Hard_XExtent', 'Custom_Hard_YExtent'])
+    sc = float(f.get('Scale_Factor', '1') or 1)
+    if not sc > 0:
+        sc = 1.0
+    res = {'type': type_name, 'model': f.get('Space_Model_Name'), 'scale': sc, 'along': None, 'across': None,
+           'half': None, 'bones': None, 'note': ''}
+    hx = float(f.get('Custom_Hard_XExtent', '0') or 0)
+    hy = float(f.get('Custom_Hard_YExtent', '0') or 0)
+    if not res['model']:
+        res['note'] = 'no Space_Model_Name'
+        return res
+    try:
+        gf = model_files(game)
+        data, src = gf.read('DATA\\ART\\MODELS\\' + res['model'].upper())
+        if data is None:
+            res['note'] = 'model %s not found in the install' % res['model']
+            return res
+        b = collision_half(data)
+        half = b[1] if b else [1.0, 1.0, 1.0]
+        res['half'] = [round(x, 3) for x in half]
+        res['along'] = hx * sc if hx > 0 else half[1] * sc
+        res['across'] = hy * sc if hy > 0 else half[0] * sc
+        res['bones'] = nose_bones(data)
+        res['note'] = 'sec. 5.4.5: collision-bound half %s x Scale_Factor %.2f (%s, %s)%s' % (
+            res['half'], sc, res['model'], src, '' if b else '; no collision mesh: half 1')
+    except (OSError, ValueError, KeyError, IndexError, alo.FormatError) as e:
+        res['note'] = 'model read failed: %s' % e
+    return res
 
 
 def model_files(game):
