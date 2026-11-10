@@ -315,6 +315,7 @@ void test_collision_layer() {
     put_u32(bad, 0, 4);
     CHECK(rejects(t, bad));
     bad = good;
+    bad[12 + 4] = 2;  // s78n t20 F9: as a StoppedVsStopped record (kind at +4)
     bad[12 + 5] = 7;
     bad[12 + 45] = 2;
     CollisionLayer ok;
@@ -324,6 +325,19 @@ void test_collision_layer() {
     bad[12 + 5] = 7;
     bad[12 + 45] = 3;
     CHECK(rejects(t, bad));
+    // s78n t20 F9: Resolving or master 2 on a MovingVsMoving (0) / MovingVsStopped (1) record would never end: rejected
+    for (const uint8_t kind : {uint8_t{0}, uint8_t{1}}) {
+        bad = good;
+        bad[12 + 4] = kind;
+        bad[12 + 5] = 7;
+        CHECK(rejects(t, bad));
+        bad[12 + 5] = 1;  // TryAgainLater
+        bad[12 + 45] = 2;
+        CHECK(rejects(t, bad));
+        bad[12 + 45] = 1;
+        CollisionLayer fine;
+        CHECK(load(fine, bad));
+    }
 }
 
 void test_fighter_grids() {

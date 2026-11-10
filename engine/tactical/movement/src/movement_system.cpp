@@ -930,13 +930,19 @@ bool MovementSystem::place_formation(const std::vector<uint32_t>& idx, const Lan
     const Unit& lead = units_[idx[f.members[0]]];
     float x0 = 3.0e38f, x1 = -3.0e38f, y0 = 3.0e38f, y1 = -3.0e38f;
     bool all_inf = true, all_giant = true, all_containers = true;
+    // s78n t20 F8 [port]: the slots are laid along the layout's forward axis f.fwd, R along `axis`: each slot rectangle's
+    // centre and extents are taken in the axis frame (the same box when the two agree)
+    const V2 right = formation_right(axis);
+    const float ca = std::fabs(dot(f.fwd, axis)), sa = std::fabs(dot(f.fwd, right));
     for (const Slot& s : f.slots) {
         const Unit& m = units_[idx[s.member]];
         const V2 h = foot_half(m);
-        x0 = std::min(x0, -s.back - h.x);
-        x1 = std::max(x1, -s.back + h.x);
-        y0 = std::min(y0, s.lateral - h.y);
-        y1 = std::max(y1, s.lateral + h.y);
+        const V2 off = slot_world(V2{}, f.fwd, s);
+        const float ox = dot(off, axis), oy = dot(off, right), ex = ca * h.x + sa * h.y, ey = sa * h.x + ca * h.y;
+        x0 = std::min(x0, ox - ex);
+        x1 = std::max(x1, ox + ex);
+        y0 = std::min(y0, oy - ey);
+        y1 = std::max(y1, oy + ey);
         const int32_t cls = m.d.collision_class;
         all_inf = all_inf && (cls == kUccInfantry || cls == kUccBike);
         all_giant = all_giant && cls == kUccGiantVehicle;
@@ -944,7 +950,7 @@ bool MovementSystem::place_formation(const std::vector<uint32_t>& idx, const Lan
     }
     if (f.slots.empty()) return false;
     const float hx = 0.5f * (x1 - x0) + sp, hy = 0.5f * (y1 - y0) + sp;
-    const V2 box_off = axis * (0.5f * (x1 + x0)) + formation_right(axis) * (0.5f * (y1 + y0));
+    const V2 box_off = axis * (0.5f * (x1 + x0)) + right * (0.5f * (y1 + y0));
     const float m_side = std::min(hx, hy);
     const bool skip_infantry = (all_inf || all_giant) && !all_containers;
     const auto inside = [](const FootRect& r, V2 p) {
@@ -1642,6 +1648,11 @@ void MovementSystem::drive_collisions(uint32_t frame, SimRng& rng) {
         [&](CollisionObject& c, bool full) { resolve_collision(c, full, frame, rng); });
     stats_.collisions_cancelled += coll_.last_cancelled();
     stats_.collisions_resolved += coll_.last_resolved();
+    // s78n t20 F6: the early arrival (resolve, record removed) set its mover's "at once" flag directly; [port] it is kept
+    // through the fold below (before, the flag of any later record of that unit overwrote it)
+    std::vector<uint32_t> early_now;
+    for (uint32_t i = 0; i < units_.size(); ++i)
+        if (units_[i].coll_now) early_now.push_back(i);
     for (const CollisionObject& c : coll_.list()) {
         Unit* a = unit_ptr(c.a);
         Unit* b = unit_ptr(c.b);
@@ -1653,6 +1664,7 @@ void MovementSystem::drive_collisions(uint32_t frame, SimRng& rng) {
         b->coll_speed = std::min(b->coll_speed, c.speed_b);
         b->coll_now = c.now_b;
     }
+    for (const uint32_t i : early_now) units_[i].coll_now = true;
 }
 
 // [port] MovingVsMoving stand-in for pairs that are not two Infantry / Bike movers (the retail states of such pairs,
@@ -1987,7 +1999,9 @@ void MovementSystem::cut_order_path(Unit& u, float c, uint32_t frame) {
     float total = distance(from, m.path[m.next]);
     for (size_t i = m.next + 1; i < m.path.size(); ++i) total += distance(m.path[i - 1], m.path[i]);
     const float keep = total - c;
-    V2 stop = from;
+    // s78n t20 F7: with nothing left to keep, a unit under a top record stops where it stands (its waypoint behind it
+    // would be a zero-length last segment that the pop's line rule cannot pass, and it would walk back to it)
+    V2 stop = keep > 0.0f ? from : m.pos;
     size_t seg = m.next;
     if (keep > 0.0f) {
         float acc = 0.0f;

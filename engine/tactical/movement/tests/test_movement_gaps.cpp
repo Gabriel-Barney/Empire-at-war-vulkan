@@ -5637,7 +5637,8 @@ static void test_t20_destination_check() {
         const Out s = run(0, serial_for), p = run(0, make_thread_pf(4));
         const V2 c = first_centre(dest, 15.0f, 15.0f);
         CHECK(near(c.x, dest.x - 48.0f, 1e-3f) && c.y == dest.y);  // try 22: 28 short + min(HX + S, HY + S) west
-        CHECK(s.goal == c);  // s78n t20 F5: the accepted centre itself (no cell snap)
+        // s78n t20 F5: the accepted centre itself (no cell snap; F8's axis-frame box moves min(HX + S, HY + S) by float noise)
+        CHECK(near(s.goal.x, c.x, 1e-3f) && near(s.goal.y, c.y, 1e-3f));
         CHECK(s.arrived && s.tal == 0 && s.crc == p.crc);
         CHECK(std::fabs(s.end.y - dest.y) < 1e-3f && std::fabs(s.end.x - c.x) < 8.0f);  // (a container brakes to a stop)
         std::printf("t20 destination check: onto a standing squad - goal (%.1f, %.1f), stopped at %.2f, records %u, Try Again Later %u\n",
@@ -5649,7 +5650,8 @@ static void test_t20_destination_check() {
     }
     {  // (iii) a third squad was ordered to the empty goal first: displaced as in (i)
         const Out s = run(2, serial_for);
-        CHECK(s.goal == first_centre(dest, 15.0f, 15.0f));
+        const V2 c3 = first_centre(dest, 15.0f, 15.0f);
+        CHECK(near(s.goal.x, c3.x, 1e-3f) && near(s.goal.y, c3.y, 1e-3f));
     }
     {  // (iv) one standing infantry unit: 3 x 3 = 9 is inside the 15 % allowance (60) - the goal stays
         const Out s = run(3, serial_for);

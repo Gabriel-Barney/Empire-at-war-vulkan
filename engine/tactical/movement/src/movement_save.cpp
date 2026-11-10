@@ -777,6 +777,11 @@ bool CollisionLayer::read(ByteReader& r) {
         if (!r.ok() || !valid_collision_kind(kind) || !valid_collision_state(state) || c.master > 2 || c.seq >= next_seq ||
             (k > 0 && c.seq <= list[k - 1].seq))
             return false;
+        // s78n t20 F9: Resolving (7) and master 2 ("nobody is moved") belong to StoppedVsStopped; another kind in them
+        // would never end (mvs_service has no such state)
+        if (kind != static_cast<uint8_t>(CollisionKind::StoppedVsStopped) &&
+            (state == static_cast<uint8_t>(CollisionState::Resolving) || c.master == 2))
+            return false;
         c.kind = static_cast<CollisionKind>(kind);
         c.state = static_cast<CollisionState>(state);
         pairs.push_back(collision_pair_key(c.a, c.b));
