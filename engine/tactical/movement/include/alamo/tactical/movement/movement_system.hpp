@@ -103,7 +103,8 @@
 //           No draws.
 // RNG: FLYING loiter re-issue - one synced range_float(-90, 90) per re-issue without an attack target (serial,
 // ascending id, after the parallel walk). No other new draws.
-// PROVISIONAL: MovingVsMoving retail resolution states are not modelled (MOVEMENT.md §8); corridor squeeze
+// PROVISIONAL: the MovingVsMoving states of pairs that are not two Infantry / Bike movers and the StoppedVsStopped
+// resolution are stand-ins (s78n t18: Infantry pairs and MovingVsStopped follow MOVEMENT §5.4.1 / §5.4.2); corridor squeeze
 // (corridor.hpp) is a stand-alone pass: the port's formation members path individually (no shared formation path).
 // The jiggle draws skip special air units.
 #pragma once
@@ -618,8 +619,9 @@ public:
     //     container's facing, HX = the joint slot box half-length (0x404450: the box holds (0, 0) and every slot x +/- the
     //     member's half-extent; set_team_member_shape) + the container's MaxJiggleDistance. Both are computed serially from
     //     the positions at the start of the tick and apply to the order path and a pushed path alike (on a crush-flee
-    //     path both x Fleeing_Infantry_Speed_Bonus, with the team speed). Every steering member counts, whatever its
-    //     state (0x5ab640 tests nothing else). The cap is folded in the moving state only (retail 0x13), not while the
+    //     path both x Fleeing_Infantry_Speed_Bonus, with the team speed). Every TEAM entry counts, whatever its state
+    //     (0x5ab640 tests nothing else; s78n t18: team_entries - also a member suspended for a hero clash; an absent,
+    //     garrisoned one counts in the box and the rate only). The cap is folded in the moving state only (retail 0x13), not while the
     //     container brakes (0x14, port WalkEndMove), turns in place or stands; at speed 0 in the moving state the
     //     container does nothing else that frame (no turn), and its members keep steering to their slots;
     //   - s78n t14 (FIGHTER_FLYING §7.3): the member's step follows the container's walk state (start of the tick): turning

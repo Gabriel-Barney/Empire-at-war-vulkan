@@ -292,6 +292,13 @@ if(_alamo_sim)
     # passability-tested, every member counts in the straggler cap): seed 1 no end in 30000 ticks, seed 2 Rebel at 15233,
     # seed 3 Rebel at 15919, seed 4 no end, seed 5 Rebel at 18809, seed 6 no end; no container waits 150 frames or more for
     # a straggler in any of the six (longest 136). Pinned to seed 2.
+    # s78n t18 (2026-11-10): squads collide by MOVEMENT 5.4.1 / 5.4.2 (Repulsion / Repulse: they walk through Infantry-class
+    # units at full speed, the early-arrival cut at a blocked destination, no shove), brake at their rate, garrison as one.
+    # All six seeds end with a Rebel win: seed 1 at 15272, seed 2 at 11734, seed 3 at 13857, seed 4 at 20203, seed 5 at
+    # 14665, seed 6 at 15810. No container waits 30 frames or more for a straggler in any of them (longest 29). Collision
+    # holds (a record answering speed 0) of 30 frames or more: 3 / 1 / 1 / 3 / 2 / 2 per seed, the longest 86 / 44 / 1581 /
+    # 35 / 34 / 49 frames (seed 3: one squad in Try Again Later for 1581 frames at the battle start, its destination under a
+    # standing friendly squad that could not be pushed). Still pinned to seed 2.
     add_test(NAME alamo_headless_skirmish_ai_foc_land_end
              COMMAND alamo_headless --skirmish-ai foc-land --ticks 30000 --workers 4 --quiet --expect-battle-end --fail-on-lua-errors
                      --seed 2)
