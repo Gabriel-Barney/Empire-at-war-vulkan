@@ -609,7 +609,7 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 // (0x391310(vehicle, 0), credited to the thief) and the clone is boarded. Without a clone type the
                 // ORIGINAL vehicle is boarded: no spawn, no removal. [port] the removal happens here, in the host pass
                 // of the same tick (retail: inside the apply), and is processed at once like a script kill
-                // (script_damage). s78n t12 review: it is the world removal WITHOUT Die (CombatSystem::remove_unit) - no
+                // (script_damage). s78n t12 review: it is the world removal WITHOUT Die (CombatSystem::remove_from_world) - no
                 // hardpoint dies, so no HardpointEvent is left over for the story feed after this tick's hardpoint pass
                 // has run, and there is no death clone, death projectile, DeathBehavior draw, Death_Explosions particle
                 // or death clip; the DeathEvent (story Destroyed, the victory count, the loss record) stays.
@@ -630,7 +630,7 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                     if (id == objects::kNoObjectId) break;
                     if (victim_alive && bt_rng_) {
                         const size_t deaths_before = combat_->deaths().size();
-                        combat_->remove_unit(q.target, q.source, frame_);
+                        combat_->remove_from_world(q.target, q.source, frame_);
                         const std::vector<tc::DeathEvent> deaths(combat_->deaths().begin() + static_cast<std::ptrdiff_t>(deaths_before),
                                                                  combat_->deaths().end());
                         for (const tc::DeathEvent& d : deaths) process_death(mode, d, *bt_rng_, true);

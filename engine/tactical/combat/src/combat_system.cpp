@@ -3254,7 +3254,7 @@ void CombatSystem::kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame, 
     const size_t ei = deaths_.size() - 1;
     ++stats_.deaths;
     // 5. live destroyable hardpoints die in list order: HP_Take_Damage(kind 6, scaled base health). s78n t12 review: not
-    //    in a world removal without Die (remove_unit), which runs only step 7.
+    //    in a world removal without Die (remove_from_world), which runs only step 7.
     for (uint32_t i = 0; i < v.hp_count && !removal; ++i) {
         Hardpoint& h = hps_[v.hp_begin + i];
         const HardpointDesc& hd = data_->hardpoints[h.desc];
@@ -3497,6 +3497,7 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
                 r2.amount = each;
                 r2.hardpoint = -1;
                 r2.no_team = true;
+                r2.self_origin = r.self_origin || r.source == v.id;  // s78n t19: a self hit passed on stays a self hit
                 take_damage_inner(r2, frame, depth + 1);
             }
             out.applied = true;
@@ -3512,6 +3513,7 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
                     r2.victim = m.id;
                     r2.amount = unit_max_hull(m) * r.amount / self_max;
                     r2.no_team = true;
+                    r2.self_origin = r.self_origin || r.source == v.id;  // s78n t19
                     if (m.id != v.id) r2.hardpoint = -1;
                     take_damage_inner(r2, frame, depth + 1);
                 }
@@ -3637,7 +3639,8 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
     // with the unit as its own source, as retail does; what retail does with the kill credit and the damage record of
     // such a hit is not in the spec, so both stay as they were while the hit was sourceless - a self kill has no killer
     // and the damage event names no source (final-blow player, story "destroyed by", DAMAGE_TRACKING unchanged).
-    const ObjectId credit = r.source == v.id ? kNoObject : r.source;
+    // s78n t19: the same for the teammates a self hit is redirected to / shared with (DamageRequest::self_origin).
+    const ObjectId credit = r.source == v.id || r.self_origin ? kNoObject : r.source;
     // 17 hardpoint routing: a named live destroyable hardpoint takes everything; a named dead destroyable one swallows the
     //    hit (refixf t06, TACTICAL_COMBAT §2.9 Q1 step 5: neither hardpoint nor hull; the shield part stays absorbed); a
     //    named non-destroyable one -> hull.
@@ -3661,7 +3664,8 @@ void CombatSystem::record_damage(const DamageRequest& r, const Unit& v, const Un
                                  uint32_t frame) {
     DamageEvent e;
     e.victim = v.id;
-    const bool self = r.source == v.id;  // s78n t12 review [port]: a self hit is recorded without a source (see above)
+    // s78n t12 review [port]: a self hit is recorded without a source (see above); s78n t19: also its team shares
+    const bool self = r.source == v.id || r.self_origin;
     e.source = self ? kNoObject : r.source;
     e.source_owner = src && !self ? src->owner : -1;
     e.source_is_projectile = r.source_is_projectile;
@@ -5051,7 +5055,7 @@ void CombatSystem::kill_unit(ObjectId id, ObjectId killer, uint8_t kind, uint32_
     if (live(u)) kill(*u, killer, kind, frame, sub_key);
 }
 
-void CombatSystem::remove_unit(ObjectId id, ObjectId killer, uint32_t frame) {
+void CombatSystem::remove_from_world(ObjectId id, ObjectId killer, uint32_t frame) {
     Unit* u = unit(id);
     if (live(u)) kill(*u, killer, kKindNoDeathClone, frame, -1, true);
 }

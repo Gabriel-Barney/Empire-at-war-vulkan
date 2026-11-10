@@ -472,7 +472,10 @@ inline std::string hack_types() {
                  "<LandBehavior>WALK_LOCOMOTOR</LandBehavior><Custom_Soft_Footprint_Radius>6</Custom_Soft_Footprint_Radius>"
                  "<Custom_Hard_XExtent>6</Custom_Hard_XExtent><Custom_Hard_YExtent>6</Custom_Hard_YExtent>"
                  "<Unit_Abilities_Data SubObjectList=\"Yes\"><Unit_Ability><Type>CAPTURE_VEHICLE</Type><Recharge_Seconds>1</Recharge_Seconds>"
-                 "<GUI_Activated_Ability_Name>S10_StealN</GUI_Activated_Ability_Name></Unit_Ability></Unit_Abilities_Data>"
+                 "<GUI_Activated_Ability_Name>S10_StealN</GUI_Activated_Ability_Name></Unit_Ability>"
+                 // s78n t19: a STIM_PACK whose self damage (half the max health) can kill its user in the command phase
+                 "<Unit_Ability><Type>STIM_PACK</Type><Recharge_Seconds>1</Recharge_Seconds><Expiration_Seconds>2</Expiration_Seconds>"
+                 "<Damage_Percent_When_Activated>0.5</Damage_Percent_When_Activated></Unit_Ability></Unit_Abilities_Data>"
                  "<Abilities SubObjectList=\"Yes\"><Vehicle_Thief_Ability Name=\"S10_StealN\"><Activation_Style>User_Input</Activation_Style>"
                  "<Activation_Min_Range>0</Activation_Min_Range><Activation_Max_Range>5000</Activation_Max_Range>"
                  "<Activation_Chance>1.0</Activation_Chance><Applicable_Unit_Categories>Vehicle</Applicable_Unit_Categories>"

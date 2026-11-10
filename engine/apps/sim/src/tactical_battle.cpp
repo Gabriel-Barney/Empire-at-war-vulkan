@@ -4698,6 +4698,9 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     // tick's own deaths (process_death skips a unit that was processed already: last tick's deaths, script_damage's).
     // [port] before this the host never saw such a death (the object stayed, dead in combat only).
     if (combat_ && !combat_->deaths().empty()) {
+        // s78n t19: the hooks get this tick's context first, so what a late death starts (its death clip, a corpse
+        // clone) is stamped with the current frame, not with the tick before
+        if (hooks_) hooks_->set_tick(&rng, global_frame);
         const std::vector<tc::DeathEvent> late(combat_->deaths().begin(), combat_->deaths().end());
         for (const tc::DeathEvent& d : late) process_death(mode, d, rng);
     }

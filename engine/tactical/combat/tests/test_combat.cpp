@@ -6431,7 +6431,7 @@ void test_convert_victim_test() {
     CHECK((w.sys->flags(14) & kUnitStolenVehicle) != 0);  // permanent
 }
 
-// s78n review: (a) remove_unit - the world removal 0x391310 without Die (the vehicle a thief's clone replaces): dead,
+// s78n review: (a) remove_from_world - the world removal 0x391310 without Die (the vehicle a thief's clone replaces): dead,
 // one DeathEvent of kind 15, no hardpoint event, no death projectile, no DeathBehavior draw; (b) a self hit (STIM_PACK's
 // 0x3a9e30(V, 1, x, V)) runs Take_Damage with the unit as its own source - its incognito bit goes (no CAUSE_DAMAGE), its
 // own Damage list scales it - but keeps no kill credit and no damage-record source [port]; (c) s78n t13: the last-hit
@@ -6466,7 +6466,7 @@ void test_s78n_review_combat() {
         w.add(3, cd, 1, Vec3{400, 0, 0});
         w.tick();  // clears the per-tick lists
         const uint64_t d0 = w.rng.draws();
-        w.sys->remove_unit(1, 3, w.frame);
+        w.sys->remove_from_world(1, 3, w.frame);
         CHECK(w.sys->has_unit(1) && !w.sys->alive(1));
         CHECK(w.sys->deaths().size() == 1 && w.sys->hardpoint_events().empty() && w.sys->projectile_count() == 0u);
         if (w.sys->deaths().size() == 1) {
@@ -6475,7 +6475,7 @@ void test_s78n_review_combat() {
                   !d.spin_away);
         }
         CHECK(w.rng.draws() == d0);  // no death-projectile pick, no spin-away draw
-        w.sys->remove_unit(1, 3, w.frame);  // already dead: nothing more
+        w.sys->remove_from_world(1, 3, w.frame);  // already dead: nothing more
         CHECK(w.sys->deaths().size() == 1);
         w.sys->kill_unit(2, 3, kKindNormal, w.frame);  // the same unit through Die: its hardpoints die, the draws are made
         CHECK(w.sys->deaths().size() == 2 && w.sys->hardpoint_events().size() == 2 && w.sys->projectile_count() == 1u);
@@ -6513,6 +6513,54 @@ void test_s78n_review_combat() {
         CHECK(w.sys->take_damage(r, w.frame).killed);
         CHECK(w.sys->deaths().size() == 2 && w.sys->deaths()[1].killer == 2);
         CHECK(w.sys->damage_events().back().source == 2 && w.sys->damage_events().back().source_owner == 1);
+    }
+    // s78n t19: a self hit (STIM_PACK shape) redirected to / shared with teammates stays the user's own damage - the
+    // teammates it kills have no killer and their damage events name no source; another unit's hit on the same team keeps
+    // its credit and its source.
+    for (const bool share : {false, true}) {
+        World w;
+        UnitDesc u;
+        u.tactical_health = 1000.0f;
+        const uint32_t plain = push_unit(w.data, u);
+        u.redirect_damage_to_teammates = !share;
+        u.share_damage_with_teammates = share;
+        const uint32_t team_rule = push_unit(w.data, u);
+        w.make();
+        const auto add = [&](ObjectId id, uint32_t desc, int32_t owner, uint32_t damage_team) {
+            UnitSpawn sp;
+            sp.id = id;
+            sp.desc = desc;
+            sp.owner = owner;
+            sp.position = Vec3{static_cast<float>(id) * 50.0f, 0, 0};
+            sp.damage_team = damage_team;
+            CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+        };
+        add(10, team_rule, 0, 9);  // the user
+        add(11, plain, 0, 9);
+        add(12, plain, 0, 9);
+        add(20, team_rule, 0, 8);  // a second team, hit by an enemy
+        add(21, plain, 0, 8);
+        add(30, plain, 1, 0);      // the enemy
+        DamageRequest r;
+        r.victim = 10;
+        r.source = 10;
+        r.amount = 100000.0f;
+        const size_t ev0 = w.sys->damage_events().size();
+        w.sys->take_damage(r, w.frame);
+        CHECK(!w.sys->alive(11) && !w.sys->alive(12) && w.sys->alive(10) == !share);  // redirect: the user takes none
+        for (const DeathEvent& d : w.sys->deaths()) CHECK(d.killer == kNoObject);
+        CHECK(w.sys->deaths().size() == (share ? 3u : 2u));
+        CHECK(w.sys->damage_events().size() > ev0);
+        for (size_t i = ev0; i < w.sys->damage_events().size(); ++i)
+            CHECK(w.sys->damage_events()[i].source == kNoObject && w.sys->damage_events()[i].source_owner == -1);
+        const size_t d0 = w.sys->deaths().size(), ev1 = w.sys->damage_events().size();
+        r.victim = 20;
+        r.source = 30;
+        w.sys->take_damage(r, w.frame);
+        CHECK(!w.sys->alive(21) && w.sys->deaths().size() > d0);
+        for (size_t i = d0; i < w.sys->deaths().size(); ++i) CHECK(w.sys->deaths()[i].killer == 30);
+        for (size_t i = ev1; i < w.sys->damage_events().size(); ++i)
+            CHECK(w.sys->damage_events()[i].source == 30 && w.sys->damage_events()[i].source_owner == 1);
     }
     {  // (c) damage disabled: nothing is applied, but a projectile hit from a live shooter has stamped the victim
         World w;

@@ -2212,7 +2212,21 @@ void test_thief_release(const Data& d, int how) {
     // not a garrison for anyone else
     const objects::ObjectId other[] = {t.thief2}, self[] = {t.thief};
     CHECK(!b.can_garrison(t.thief2, t.clone) && b.garrison().free_slots(t.clone) == 0);
-    CHECK(b.order_garrison(*t.tm, 1, other, t.clone, t.s.host->random().synced()) != commands::RejectReason::None);
+    {  // s78n t19: the refusal comes before any side effect - the unit's order queue, its move and the RNG are untouched
+        SimRng& rng = t.s.host->random().synced();
+        const Vec3 p2 = t.pos(t.thief2);
+        CHECK(b.order_move(*t.tm, 1, other, p2.x + 60.0f, p2.y, rng) == commands::RejectReason::None);
+        CHECK(b.order_move(*t.tm, 1, other, p2.x + 60.0f, p2.y + 60.0f, rng, mv::kNoFacing, false, true) == commands::RejectReason::None);
+        const size_t queued0 = b.queued_orders(t.thief2).size();
+        CHECK(queued0 == 1);
+        const mv::UnitView v0 = b.movement().view(t.thief2);
+        const uint64_t draws0 = rng.draws();
+        CHECK(b.order_garrison(*t.tm, 1, other, t.clone, rng) == commands::RejectReason::InvalidTarget);
+        const mv::UnitView v1 = b.movement().view(t.thief2);
+        CHECK(rng.draws() == draws0 && b.queued_orders(t.thief2).size() == queued0);
+        CHECK(v1.has_goal && v1.has_goal == v0.has_goal && v1.goal == v0.goal && v1.pos == v0.pos && v1.start_frame == v0.start_frame);
+        CHECK(t.pos(t.thief2).x == p2.x && t.pos(t.thief2).y == p2.y);
+    }
     CHECK(b.garrison().pending_holder(t.thief2) == objects::kNoObjectId);
     // no ordinary way out
     CHECK(b.order_leave_garrison(*t.tm, 1, self) != commands::RejectReason::None);
@@ -2315,6 +2329,83 @@ void test_thief_save_load(const Data& d, bool no_garrison_unit) {
     std::printf("  thief save / load (%s): saved at %llu with the thief inside, %u of %u ticks after the load identical\n",
                 thief_name, static_cast<unsigned long long>(save_tick), same, compared);
     CHECK(compared == 70 && same == compared);
+}
+
+// s78n t19: a save in the window between a command-phase kill and the next battle tick. `how` 0: the eject ability
+// kills the stolen vehicle (unit ability 46 off: Take_Damage kind 13) with the thief inside; 1: a STIM_PACK kills its
+// user (S10_ThiefN: half its max health). The death is in the combat system's list and the host has not processed it:
+// the dead unit's object is still in the store. The save is taken at once; the loaded session then runs on with the
+// original's digests, and in both the object goes at the start of the next tick (how 0: the thief comes out alive).
+void test_command_kill_save_load(const Data& d, int how) {
+    const char* thief_name = how == 0 ? "S10_Thief" : "S10_ThiefN";
+    ThiefScene a(d, thief_name, false, true);
+    CHECK(a.s.gs != nullptr);
+    if (!a.s.gs || !a.start()) {
+        CHECK(false);
+        return;
+    }
+    objects::ObjectId dead = objects::kNoObjectId;
+    if (how == 0) {
+        CHECK(a.order_theft() && a.wait_boarded());
+        if (a.clone == objects::kNoObjectId) return;
+        for (int i = 0; i < 45; ++i) CHECK(a.tick());  // the eject ability's recharge runs out
+        const objects::ObjectId car[] = {a.clone};
+        CHECK(a.b->abilities().set_unit_ability_mode(car, a.eject, false, a.b->frame()) == 1u);
+        dead = a.clone;
+    } else {
+        for (int i = 0; i < 5; ++i) CHECK(a.tick());
+        const uint8_t stim = ta::ability_type_from_name("STIM_PACK");
+        CHECK(a.b->abilities().has_ability(a.thief, stim));
+        CHECK(a.b->script_damage(*a.tm, a.thief, a.b->combat().health(a.thief) - 100.0f, false));  // 100 left of 5000
+        CHECK(a.b->combat().alive(a.thief));
+        const objects::ObjectId user[] = {a.thief};
+        CHECK(a.b->abilities().set_unit_ability_mode(user, stim, true, a.b->frame()) == 1u);
+        dead = a.thief;
+    }
+    {  // dead in combat, the host has not seen it yet
+        const objects::ObjectStore& st = a.tm->primary();
+        CHECK(!a.b->combat().alive(dead) && st.alive(st.find(dead)));
+    }
+    SaveFile save;
+    std::string why;
+    const bool allowed = a.s.host->save_allowed(&why);
+    const bool saved = allowed && a.s.host->save(save, &why);
+    if (!saved) std::printf("  command-kill save (%d): %s\n", how, why.c_str());
+    CHECK(saved);
+    const uint64_t save_tick = a.s.host->frame();
+    ThiefScene f(d, thief_name, false, false);
+    CHECK(f.s.gs != nullptr);
+    if (!saved || !f.s.gs) return;
+    std::string err;
+    LoadReport rep;
+    const bool loaded = f.s.host->load(save, &err, &rep);
+    if (!loaded) std::printf("  command-kill load (%d): %s\n", how, rep.text().c_str());
+    CHECK(loaded && f.s.host->frame() == save_tick);
+    if (!loaded) return;
+    f.s.invaded = true;
+    f.thief = a.thief;
+    f.clone = a.clone;
+    uint32_t same = 0, compared = 0;
+    for (int i = 0; i < 40; ++i) {
+        const bool ta_ok = a.tick(), tf_ok = f.tick();
+        CHECK(ta_ok && tf_ok);
+        if (!ta_ok || !tf_ok) break;
+        ++compared;
+        if (clash_digest(*a.b) == clash_digest(*f.b)) ++same;
+        if (i == 0)  // the first tick after the save processed the pending death in both sessions
+            for (ThiefScene* x : {&a, &f}) {
+                const objects::ObjectStore& st = x->tm->primary();
+                CHECK(!st.alive(st.find(dead)));
+            }
+    }
+    for (ThiefScene* x : {&a, &f}) {
+        if (!x->b) continue;
+        CHECK(!x->b->combat().alive(dead));
+        if (how == 0) CHECK(x->b->combat().alive(x->thief) && x->b->garrison_holder_of(x->thief) == objects::kNoObjectId && x->b->movement().has_unit(x->thief));
+    }
+    std::printf("  command-phase kill save / load (%s): saved at %llu with the death pending, %u of %u ticks after the load identical\n",
+                how == 0 ? "eject" : "STIM_PACK", static_cast<unsigned long long>(save_tick), same, compared);
+    CHECK(compared == 40 && same == compared);
 }
 
 // s78n t12 review: the thief dies in the tick of its own theft - after the apply (its unit service in combat phase D) and
@@ -3236,6 +3327,7 @@ int main(int argc, char** argv) {
         test_hero_clash_battle(*hd);
         for (const int how : {0, 1}) test_thief_release(*hd, how);                // s78n t12 review
         for (const bool n : {false, true}) test_thief_save_load(*hd, n);          // s78n t12 review
+        for (const int how : {0, 1}) test_command_kill_save_load(*hd, how);       // s78n t19
         test_thief_dies_same_tick(*hd);                                           // s78n t12 review
         test_hero_clash_garrison(*hd);
     }

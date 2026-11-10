@@ -1527,7 +1527,7 @@ private:
     std::vector<uint8_t> idle_gate_;  // drive_animation scratch (per units_ index)
     void consume_events(TacticalMode& mode, SimRng& rng);
     // consume_events step d for one combat death (also script_damage's out-of-tick kills): a dead or unknown unit is skipped.
-    // s78n t12 review: `silent` = a world removal without Die (CombatSystem::remove_unit: the vehicle a thief's clone
+    // s78n t12 review: `silent` = a world removal without Die (CombatSystem::remove_from_world: the vehicle a thief's clone
     // replaces) - the object leaves as for a death, without the Death_Explosions particle and the death clip.
     void process_death(TacticalMode& mode, const tactical::combat::DeathEvent& d, SimRng& rng, bool silent = false);
     void spawn_particle(TacticalMode& mode, int32_t type, Vec3 pos, int32_t owner);

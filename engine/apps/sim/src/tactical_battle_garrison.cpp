@@ -594,6 +594,10 @@ cmd::RejectReason TacticalBattle::order_garrison(TacticalMode& mode, uint8_t pla
     objects::ObjectStore& store = mode.primary();
     const objects::ObjectHandle hh = store.find(holder);
     if (!store.alive(hh) || !garrison_.is_holder(holder)) return R::InvalidTarget;
+    // s78n t19: a vehicle a thief boarded is no garrison (HolderKind::VehicleThief: entered only through the boarding) and
+    // a board-only unit (no GARRISON_UNIT: kBoardOnlyValue) takes no garrison order. Both are refused here, before the
+    // queues are cleared and the units are sent walking (GarrisonSystem::order_enter would refuse them only after that).
+    if (const tg::HolderDesc* thd = garrison_.holder_desc(holder); thd && thd->kind == tg::HolderKind::VehicleThief) return R::InvalidTarget;
     // s78n t18 (FIGHTER_FLYING §7.4): a squad garrisons as one object - an order on any member orders every live member
     std::vector<objects::ObjectId> all(units.begin(), units.end());
     for (const objects::ObjectId id : units)
@@ -607,6 +611,7 @@ cmd::RejectReason TacticalBattle::order_garrison(TacticalMode& mode, uint8_t pla
         Unit* u = unit_by_id(id);
         if (!u || !u->alive || u->retreated || !u->movable || store.owner(u->h) != static_cast<int32_t>(player)) continue;
         if (std::find(ids.begin(), ids.end(), id) != ids.end() || garrison_.garrisoned(id) || garrison_.entering(id)) continue;
+        if (const tg::OccupantDesc* od = garrison_.unit_desc(id); od && od->value == tg::kBoardOnlyValue) continue;  // s78n t19
         if (!garrison_.masks_match(id, holder)) continue;
         // s78n t06 review [port]: a hero in a clash (+0x3b4) is not sent into a garrison (its locked movement keeps it in
         // the duel; retail's group move leaves a locked unit out, so it never reaches the host).

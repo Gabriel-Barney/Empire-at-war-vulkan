@@ -869,6 +869,10 @@ struct DamageRequest {
     uint8_t kind = kKindNormal;
     ObjectId source = kNoObject;
     bool source_is_projectile = false;
+    // s78n t19: set by the team recursion of a self hit (source == victim: STIM_PACK) that is redirected to / shared with
+    // teammates - the teammates' hits stay the user's own damage: no kill credit, no damage-record source, no final-blow
+    // owner for it ([port], as for the self hit itself). Callers leave it false.
+    bool self_origin = false;
     // s78n t12 (HERO_CLASH §8.4.1 step 8): the target (projectile pack +8) of the projectile that deals this damage,
     // kNoObject when it has none. Only a projectile aimed at the victim clears the victim's incognito bit (splash and
     // stray hits keep it). Read only with source_is_projectile.
@@ -1304,7 +1308,8 @@ public:
     // unit_dying hook) and raises its DeathEvent with kind kKindNoDeathClone, and 0x391310's Tactical_Respawn /
     // Destruction_Survivors run; but no hardpoint dies (no HardpointEvent), and there is no death clone, no death
     // projectile and no DeathBehavior draw.
-    void remove_unit(ObjectId id, ObjectId killer, uint32_t frame);
+    // (s78n t19: named apart from remove_unit(id), the host's removal of a unit from the combat system.)
+    void remove_from_world(ObjectId id, ObjectId killer, uint32_t frame);
     std::span<const HardpointEvent> hardpoint_events() const { return hp_events_; }  // this tick
     std::span<const SmokeEvent> smoke_events() const { return smoke_events_; }      // this tick
     std::span<const DamageEvent> damage_events() const { return damage_events_; }   // this tick (A1 AI)
