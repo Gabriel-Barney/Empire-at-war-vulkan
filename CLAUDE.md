@@ -62,6 +62,9 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
    <group> --by <session> --passed "<evidence>"`: its open tasks move to the backlog and the group (and its box) is set done.
    Backlog entries become work only when Gabriel picks them (`backlog promote`). `roadmap_store.py lint` shows what is wrong; rules:
    `docs/ROADMAP_PROTOCOL.md`, "Backlog and group exit tests".
+   **Current focus (Gabriel, 2026-11-10, until he lifts it): parity tier 1 and tier 2 work only.** Tasks and backlog entries carry a `tier`; tier-3
+   work (internals, draw order, performance, save format) is paused: do not start it, drop it or file it as S3 (`backlog add ... --tier 3`).
+   Crashes, hangs and save corruption are still fixed. Record: `docs/DECISIONS.md` ("Current focus"), `docs/ROADMAP_PROTOCOL.md` ("Parity tier").
 7. In-game probes need Gabriel to launch the game; prepare them under `tools/probe_mod/` with run and cleanup scripts.
 
 ## Parallel work

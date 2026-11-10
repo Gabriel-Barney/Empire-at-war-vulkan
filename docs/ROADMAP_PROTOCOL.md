@@ -149,6 +149,10 @@ leave the group.
   `trim-group` / `close-group` carry a task's tier into the entry and `promote` back. The page shows a T1 / T2 / T3 badge and filters
   the Backlog by tier. 2026-11-10: every open task and entry was tagged (open tasks 27 tier 1, 6 tier 2, 4 tier 3, 15 none; backlog
   open 13 tier 1, 5 tier 2, 5 tier 3, 4 none); 5 tier-3 entries (b0005, b0006, b0011, b0030, b0031) were dropped and 2 (b0008, b0029) lowered to S3.
+- **Current focus: tier 1 and tier 2 only** (Gabriel, 2026-11-10, until he lifts it; `docs/DECISIONS.md`). Plan and `batch` only groups
+  whose open tasks are tier 1 or 2 (or untagged work that serves them: harness, probes, Gabriel's runs). Tier-3 tasks are not started; a
+  tier-3 finding is dropped or filed `--tier 3` (S3), never a task. A crash, hang or save corruption is fixed whatever its tier. Open tier-3
+  work today: group `opt3f`, `r1b` t02, and `backlog list --tier 3`.
 - **Promoting.** Entries come back only by choice: `backlog promote <ids> --to <group>` (refused above the cap) or
   `--new <id> --title ... --node ... --exit ... [--preset ...] [--eta ...]`. S1 entries are reviewed first each cycle.
 - **Parking.** `park <group> --by S --why "..."` sets an unstarted group to status `parked`: it leaves the open lists, "Start here" and
