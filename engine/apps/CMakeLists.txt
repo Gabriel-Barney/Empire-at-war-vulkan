@@ -328,10 +328,10 @@ if(_alamo_sim)
     # 5 Rebel at 18110, 6 Rebel at 17753. No collision hold of 150 frames or more in any seed (longest 77 / 91 / 31 /
     # 91 / 46 / 41); no straggler wait. Pinned to seed 4; seeds 1 and 5 (which never ended without the production signal)
     # are checked too.
-    # s78n t20 fix round 2 (2026-11-10): skirmish start forces at their spawn-point markers (SKIRMISH_SETUP 2.2) and the
-    # land attack re-check (FIGHTER_FLYING 4.11 A / E). Seed 4 now ends (Rebel at 13737) but logs the retail-modelled
-    # script error of BOBAFETTFLAMEINFANTRY.LUA's MoveUntilDone (Move_To on a target that died during PumpEvents), which
-    # --fail-on-lua-errors refuses: pinned to seed 6 (Rebel at 14663); seeds 1 and 5 as before.
+    # s78n t20 fix round 2 (2026-11-10): skirmish start forces at their spawn-point markers (SKIRMISH_SETUP 2.2), the land
+    # attack re-check (FIGHTER_FLYING 4.11 A / E) and F3 - F9. Seeds 1-6 end (Rebel at 15209 / 13742 / 13323 / 13849 / 14507 /
+    # 14500). Seed 4 can log the retail-modelled script error of BOBAFETTFLAMEINFANTRY.LUA's MoveUntilDone (Move_To on a target
+    # that died during PumpEvents; seen at stage A), which --fail-on-lua-errors refuses: pinned to seed 6; seeds 1 and 5 as before.
     add_test(NAME alamo_headless_skirmish_ai_foc_land_end
              COMMAND alamo_headless --skirmish-ai foc-land --ticks 30000 --workers 4 --quiet --expect-battle-end --fail-on-lua-errors
                      --seed 6)
