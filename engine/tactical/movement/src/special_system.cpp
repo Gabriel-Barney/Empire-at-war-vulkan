@@ -15,9 +15,7 @@ bool MovementSystem::is_air(const Unit& u) const {
 bool MovementSystem::ground_collider(const Unit& u) const {
     // s78n t14 part B (FIGHTER_FLYING §7.5 item 1): a squad container is a land collision checker and partner (it registers:
     // LandTeamContainer vf +0x230); its members are neither (land_layer_object: they are not in tracking layer 0x10). The
-    // crush pass skips the container as a victim (its members are crushed). [port] Not while its whole squad is inside a
-    // garrison (set_collision_exempt: MOVEMENT §5.3 garrison exclusion gate).
-    if (u.exempt == kCollisionExemptAll) return false;
+    // crush pass skips the container as a victim (its members are crushed).
     switch (u.d.locomotor) {
         case LocomotorKind::Flying:
         case LocomotorKind::LandBomber: return cfg_.mode != MoveMode::Land;
@@ -199,7 +197,7 @@ float MovementSystem::air_altitude(const Unit& u, uint32_t frame) const {
 }
 
 bool MovementSystem::land_layer_object(const Unit& u) const {
-    return ground_collider(u) && u.anchor < 0 && !u.team_suspended;
+    return ground_collider(u) && u.anchor < 0 && !u.team_suspended && !u.hidden;  // +0x3a7: hidden / garrisoned
 }
 
 bool MovementSystem::land_spot_free(const Unit& u, V2 p) const {

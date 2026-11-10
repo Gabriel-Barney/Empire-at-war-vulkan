@@ -43,7 +43,8 @@ bool holder_desc_from_type(const objects::GameObjectTypes& types, objects::TypeI
 bool occupant_desc_from_type(const objects::GameObjectTypes& types, objects::TypeIndex t, OccupantDesc& out) {
     if (!valid(types, t) || !has(types, t, "GARRISON_UNIT")) return false;
     out.category = types.get_mask(t, "Garrison_Category");
-    out.value = types.get_int(t, "Garrison_Value");
+    // s78n t18 (FIGHTER_FLYING §7.4 item 2): the type constructor writes Garrison_Value := 1; an untagged type takes 1 slot
+    out.value = types.get_string(t, "Garrison_Value").empty() ? 1 : types.get_int(t, "Garrison_Value");
     return true;
 }
 

@@ -649,8 +649,19 @@ public:
         ObjectId member = -1;
         V2 slot;
         V2 off;  // s78n t14: parked records only - the member's offset from its container when parked
+        // s78n t18 (team_entries): 0 a steering member, 1 suspended (a hero clash: its unit is in the system), 2 absent
+        // (garrisoned: parked, its unit is not in the system); the member's layout half-extents and its type's Max_Speed /
+        // OverrideDeceleration (the joint box and the rate 0x5ab540 read every TEAM entry). land_team() entries: 0.
+        uint8_t kind = 0;
+        float hx = 0.0f, hy = 0.0f, max_speed = 0.0f, decel = 0.0f;
     };
     std::span<const LandTeamSlot> land_team(ObjectId container) const;
+    // s78n t18 (FIGHTER_FLYING §7.7 item 2: every non-null entry of the TEAM list counts, whatever its state): the
+    // container's TEAM entries in team index order - the steering members, the members suspended for a hero clash and the
+    // absent (parked) ones. The joint slot box and the rate 0x5ab540 read all of them; the straggler cap reads those with
+    // a unit in the system (steering and suspended), each at its live position ([port] an absent member has no position
+    // here; with the squad garrisoned as one it exists only while the container is hidden and stands).
+    std::span<const LandTeamSlot> team_entries(ObjectId container) const;
     bool is_land_team_container(ObjectId id) const;  // a unit added with UnitDesc::team_container
     // s78n t18 (TACTICAL_COMBAT §5.4.4, 0x404450; FIGHTER_FLYING §7.8 item 2): the container's live joint slot box - the box
     // starts at (0, 0, 0, 0), each team entry grows it to hold slot.x +- its half-extent x and slot.y +- its half-extent y
@@ -701,14 +712,29 @@ public:
     // clears +0x2a4 on both on and off), so the next tick re-lays with the container's facing. Saved and hashed. The host
     // sets it every tick before tick() [port: polled, so a toggle that does not change the state does not re-lay].
     bool set_team_spread_out(ObjectId container, bool on);
-    // s78n t14 part B (MOVEMENT §5.3: the "garrison / attachment exclusions" gate of the contact tests; the exact rule is
-    // not in the spec, [port]): the squad container `container` takes no collision object with `other`, in either order,
-    // and does not path around it (kCollisionExemptAll: with nobody - it is no land collider; -1: none). The host sets it
-    // every tick before tick() for a squad walking into, or sitting in, a garrison host; transient (not saved, not
-    // hashed). A squad container that starts inside a stopped unit's footprint and moves away from it (the garrison
-    // leave starts at the host's centre) takes no MovingVsStopped contact with it either. False: not a team container.
-    static constexpr ObjectId kCollisionExemptAll = -2;
-    bool set_collision_exempt(ObjectId container, ObjectId other);
+    // ---- s78n t18 (MOVEMENT §5.2 item 5 / §5.3 "Pair gates"): no collision object for a gated pair ----
+    // A pair gets no collision object when either side is hidden (+0x3a7: garrisoned; such a unit is no layer object at
+    // all), when either one's garrison host is the other (all three tests, from the garrison order until the unit's next
+    // order), when a raised hover unit meets a grounded one (MovingVsMoving needs equal raised state; a raised mover's
+    // MovingVsStopped needs a raised obstacle; a grounded mover takes a raised standing unit; StoppedVsStopped ignores
+    // it). There is no parent, attachment or own-team rule. The gates sit inside the contact tests: a gate that starts
+    // later does not by itself cancel a live record; it acts where a state re-runs the test. Not movement units in the
+    // port, so not tested here: landing transports (taking off / the units they unloaded) and build pads.
+    //   set_pair_gate(id, host, hidden): the unit's garrison host while it walks to it or enters it (GarrisonDataPack +0xc
+    //     in states 1 / 2 / 5; -1 none) and whether it is hidden (a squad container whose whole squad is inside). Host-set
+    //     every tick before tick(); transient (not saved, not hashed). A hidden unit does not walk and ignores move orders.
+    //   set_garrison_exit(id, host): the host a unit has just left (state 4 on): kept until the unit's next move order or
+    //     stop, or the arrival of its current (walk-out) move if that comes first; Teleport does not clear it. Saved and
+    //     hashed while set. False: unknown unit.
+    bool set_pair_gate(ObjectId id, ObjectId garrison_host, bool hidden);
+    bool set_garrison_exit(ObjectId id, ObjectId host);
+    // Hover state (pack +0x2a8) of a Walk unit whose type has Hover_Height: 0 grounded (spawn), 2 rising (set by the
+    // start of a move while not raised: the unit stands for Hover_Height / its max speed frames, then is 1 raised), 3
+    // lowering (hover_lower: a GARRISON_HOVER_TRANSPORT whose slot a unit reserves, or that is asked to eject; back to 0
+    // after the same time; its walk does not run meanwhile and it rises again at its next move). Only "raised" (1) counts
+    // in the gates. hover_lower: false for an unknown unit or a type without Hover_Height.
+    bool hover_lower(ObjectId id);
+    uint8_t hover_state(ObjectId id) const;
     // The container has a current target (0x397a40(K, 0) [M]): its members do not recover to their slots while it idles.
     // Set by the host every tick before tick(); saved and hashed. False: not a team container.
     bool set_team_target(ObjectId container, bool has_target);
@@ -769,9 +795,9 @@ public:
     // the same map stamps, the same space / air boxes and static entries, every hook (set_height_fn, set_hostility,
     // set_threat_fn, set_anim_length_fn, set_flying_hooks, set_fighter_avoid_fn, set_fighter_formation_hooks,
     // set_scatters_fn); then read() replaces ALL mutable state, so no host call is needed after it (no relink:
-    // cross-references are object ids, hooks are not touched). One per-tick host input is not saved:
-    // set_collision_exempt (a squad container's garrison exclusion) is -1 after read() until the host sets it again
-    // before the next tick(), as it does on every tick.
+    // cross-references are object ids, hooks are not touched). One per-tick host input is not saved: set_pair_gate (a
+    // unit's garrison host while it walks in, and "hidden") is unset after read() until the host sets it again before
+    // the next tick(), as it does on every tick.
     // Units added by the rebuild are replaced by the saved ones (read() is not additive).
     // Layout: u32 version, u8 mode (must equal mode()), then sections (u32 length + bytes):
     //   grid    PassabilityGrid::write (stamps + version; the map-derived part is checked by digest, not restored)
@@ -922,8 +948,13 @@ private:
         bool team_target = false;
         // s78n t14 part B (FIGHTER_FLYING §7.1, save version 16): the pushed move is a crush-flee path (kind 7; else kind 4).
         bool push_flee = false;
-        // s78n t14 part B: set_collision_exempt (transient, host-set every tick): -1 none, kCollisionExemptAll, or a unit.
-        ObjectId exempt = -1;
+        // s78n t18 (MOVEMENT §5.3 pair gates): gar_host - set_pair_gate's garrison host (transient, host-set every tick;
+        // -1 none); exit_host - set_garrison_exit (saved, version 17); hover / hover_off - the hover state (pack +0x2a8)
+        // and the height risen so far (saved, version 17).
+        ObjectId gar_host = -1;
+        ObjectId exit_host = -1;
+        uint8_t hover = 0;
+        float hover_off = 0.0f;
         // s78n t18 (FIGHTER_FLYING §7.7 items 5 - 6, save version 17): a squad container's walk - coast: a new order
         // arrived while it moved (it brakes at its rate, coasting straight on, before the new path starts); fturn: it
         // turns in place to the order's final facing before it arrives; path_started: the order path was started (pack
@@ -1198,8 +1229,13 @@ private:
     void mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full, uint32_t frame);
     // s78n t14 part B (0x5c8890): b's owner's faction has Scatters_From_Crushers and b's SPREAD_OUT is off.
     bool scatters(const Unit& b) const { return (!scatters_ || scatters_(b.d.owner)) && !b.spread; }
-    // s78n t14 part B: set_collision_exempt - the pair takes no collision object (either order).
-    bool pair_exempt(const Unit& a, const Unit& b) const { return a.exempt == b.d.id || b.exempt == a.d.id; }
+    // s78n t18 (MOVEMENT §5.3): the garrison-host gate of all three contact tests - either one's garrison host (walking
+    // in, entering, or just left) is the other.
+    bool pair_gated(const Unit& a, const Unit& b) const {
+        return a.gar_host == b.d.id || b.gar_host == a.d.id || a.exit_host == b.d.id || b.exit_host == a.d.id;
+    }
+    static bool raised(const Unit& u) { return u.hover == 1; }  // the hover gate's "raised" (rising / lowering are not)
+    bool svs_overlap(const Unit& a, const Unit& b) const;  // StoppedVsStopped contact 0x686500 (gate + coefficient)
     // A crusher drives through units it crushes, except a squad container (pushed instead; its members are crushed).
     bool drives_through(const Unit& c, const Unit& v) const { return crushes(c, v) && !v.d.team_container; }
     bool push_spot(const Unit& b, V2 dir, V2& out) const;  // free-position search 0x440f90 (A1_READINGS §40.2)
@@ -1248,6 +1284,9 @@ private:
     std::vector<LandTeamSlot> parked_;
     // s78n review: the steering members by (container, team index, member) - derived from units_ (team_ix_rebuild).
     std::vector<LandTeamSlot> team_ix_;
+    // s78n t18: every TEAM entry (steering, suspended, absent) by (container, team index, member) - derived from units_
+    // and parked_ (team_ix_rebuild).
+    std::vector<LandTeamSlot> team_all_;
     void team_ix_rebuild();
     bool remove_impl(ObjectId id);  // remove_unit without dropping a parked record
     void attach_member(Unit& u, ObjectId container, V2 slot, uint32_t tindex);  // set_land_team's per-member part

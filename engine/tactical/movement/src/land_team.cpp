@@ -62,21 +62,55 @@ bool MovementSystem::set_land_team(ObjectId container, std::span<const ObjectId>
 }
 
 void MovementSystem::team_ix_rebuild() {
-    team_ix_.clear();
-    for (Unit& u : units_) {
-        u.team_suspended = false;
-        if (u.anchor >= 0) team_ix_.push_back({u.anchor, u.tindex, u.d.id, u.tslot, V2{}});
-    }
-    std::sort(team_ix_.begin(), team_ix_.end(), [](const LandTeamSlot& a, const LandTeamSlot& b) {
+    const auto by_index = [](const LandTeamSlot& a, const LandTeamSlot& b) {
         if (a.container != b.container) return a.container < b.container;
         if (a.tindex != b.tindex) return a.tindex < b.tindex;
         return a.member < b.member;
-    });
-    // s78n t18: a parked record whose unit is still in the system is a member suspended for a hero clash.
-    for (const LandTeamSlot& p : parked_)
-        if (Unit* m = unit_ptr(p.member)) m->team_suspended = m->anchor < 0;
+    };
+    const auto entry = [](const Unit& u, ObjectId container, uint32_t tindex, V2 slot, V2 off, uint8_t kind) {
+        LandTeamSlot e;
+        e.container = container;
+        e.tindex = tindex;
+        e.member = u.d.id;
+        e.slot = slot;
+        e.off = off;
+        e.kind = kind;
+        e.hx = u.team_hx;
+        e.hy = u.team_hy;
+        e.max_speed = u.d.max_speed;
+        e.decel = u.d.decel;
+        return e;
+    };
+    team_ix_.clear();
+    for (Unit& u : units_) {
+        u.team_suspended = false;
+        if (u.anchor >= 0) team_ix_.push_back(entry(u, u.anchor, u.tindex, u.tslot, V2{}, 0));
+    }
+    std::sort(team_ix_.begin(), team_ix_.end(), by_index);
+    // s78n t18: the TEAM entry lists - the steering members and the parked records. A record whose unit is still in the
+    // system is a member suspended for a hero clash (its live shape); else the member is absent (the record's copies).
+    team_all_ = team_ix_;
+    for (const LandTeamSlot& p : parked_) {
+        if (Unit* m = unit_ptr(p.member)) {
+            m->team_suspended = m->anchor < 0;
+            team_all_.push_back(entry(*m, p.container, p.tindex, p.slot, p.off, 1));
+        } else {
+            LandTeamSlot e = p;
+            e.kind = 2;
+            team_all_.push_back(e);
+        }
+    }
+    std::sort(team_all_.begin(), team_all_.end(), by_index);
     for (Unit& k : units_)
         if (k.d.team_container) team_box_refresh(k);
+}
+
+std::span<const MovementSystem::LandTeamSlot> MovementSystem::team_entries(ObjectId container) const {
+    const auto lo = std::lower_bound(team_all_.begin(), team_all_.end(), container,
+                                     [](const LandTeamSlot& e, ObjectId c) { return e.container < c; });
+    auto hi = lo;
+    while (hi != team_all_.end() && hi->container == container) ++hi;
+    return {lo, hi};
 }
 
 // s78n t18 (TACTICAL_COMBAT §5.4.4, 0x404450): the joint slot box of container `k` - seeded with 0, grown by every team
@@ -85,14 +119,12 @@ void MovementSystem::team_ix_rebuild() {
 void MovementSystem::team_box_refresh(Unit& k) {
     float lx = 0.0f, ux = 0.0f, ly = 0.0f, uy = 0.0f;
     bool any = false;
-    for (const LandTeamSlot& e : land_team(k.d.id)) {
-        const Unit* m = unit_ptr(e.member);
-        if (!m) continue;
+    for (const LandTeamSlot& e : team_entries(k.d.id)) {  // every TEAM entry, whatever its state
         any = true;
-        lx = std::min(lx, e.slot.x - m->team_hx);
-        ux = std::max(ux, e.slot.x + m->team_hx);
-        ly = std::min(ly, e.slot.y - m->team_hy);
-        uy = std::max(uy, e.slot.y + m->team_hy);
+        lx = std::min(lx, e.slot.x - e.hx);
+        ux = std::max(ux, e.slot.x + e.hx);
+        ly = std::min(ly, e.slot.y - e.hy);
+        uy = std::max(uy, e.slot.y + e.hy);
     }
     k.team_boxed = any;
     if (!any) return;  // [port] no entries: the last radius stays, as a circle
@@ -145,7 +177,18 @@ void MovementSystem::park_record(const Unit& u) {
                                      [](const LandTeamSlot& e, ObjectId m) { return e.member < m; });
     // s78n t14 (FIGHTER_FLYING §7.4): the offset from the container is kept for the garrison leave.
     const Unit* k = unit_ptr(u.anchor);
-    const LandTeamSlot p{u.anchor, u.tindex, member, u.tslot, k ? u.m.pos - k->m.pos : V2{}};
+    LandTeamSlot p;
+    p.container = u.anchor;
+    p.tindex = u.tindex;
+    p.member = member;
+    p.slot = u.tslot;
+    p.off = k ? u.m.pos - k->m.pos : V2{};
+    // s78n t18: the member stays a TEAM entry while it is out of the system - its shape and speed data for the joint box
+    // and the rate 0x5ab540
+    p.hx = u.team_hx;
+    p.hy = u.team_hy;
+    p.max_speed = u.d.max_speed;
+    p.decel = u.d.decel;
     if (it != parked_.end() && it->member == member) *it = p;
     else parked_.insert(it, p);
 }
@@ -391,8 +434,7 @@ bool MovementSystem::set_team_member_shape(ObjectId member, float hx, float hy, 
     u->team_hy = hy;
     u->team_thx = type_hx;
     u->team_thy = type_hy;
-    if (u->anchor >= 0)  // s78n t18: its container's joint box follows the shape
-        if (Unit* k = unit_ptr(u->anchor)) team_box_refresh(*k);
+    if (u->anchor >= 0 || u->team_suspended) team_ix_rebuild();  // s78n t18: the entry copies and the joint box follow
     return true;
 }
 
@@ -413,11 +455,31 @@ bool MovementSystem::set_team_target(ObjectId container, bool has_target) {
     return true;
 }
 
-bool MovementSystem::set_collision_exempt(ObjectId container, ObjectId other) {
-    Unit* k = unit_ptr(container);
-    if (!k || !k->d.team_container) return false;
-    k->exempt = other;
+bool MovementSystem::set_pair_gate(ObjectId id, ObjectId garrison_host, bool hidden) {
+    Unit* u = unit_ptr(id);
+    if (!u) return false;
+    u->gar_host = garrison_host < 0 ? -1 : garrison_host;
+    u->hidden = hidden;
     return true;
+}
+
+bool MovementSystem::set_garrison_exit(ObjectId id, ObjectId host) {
+    Unit* u = unit_ptr(id);
+    if (!u) return false;
+    u->exit_host = host < 0 ? -1 : host;
+    return true;
+}
+
+bool MovementSystem::hover_lower(ObjectId id) {
+    Unit* u = unit_ptr(id);
+    if (!u || !(u->d.hover_height > 0.0f)) return false;
+    u->hover = 3;  // 0x635ee0 / 0x635fc0: lowering, whatever the state was
+    return true;
+}
+
+uint8_t MovementSystem::hover_state(ObjectId id) const {
+    const Unit* u = unit_ptr(id);
+    return u ? u->hover : uint8_t{0};
 }
 
 uint32_t MovementSystem::team_start_delay(ObjectId member) const {
@@ -576,14 +638,12 @@ void MovementSystem::team_speed_steps() {
         k.team_accel = 0.0f;
         k.straggle = 1.0f;
         if (!k.d.team_container) continue;
-        const std::span<const LandTeamSlot> team = land_team(k.d.id);
+        // s78n t18 (§7.7 item 2): every TEAM entry counts - steering, suspended for a hero clash, absent (garrisoned)
+        const std::span<const LandTeamSlot> team = team_entries(k.d.id);
         if (team.empty()) continue;  // 0x5ab540: no member -> the full-speed fallback; 0x404450 fails -> no cap
         // The members' smallest raw Max_Speed (0x4049e0), as team_caps takes it.
         float raw = 3.0e38f;
-        for (const LandTeamSlot& e : team) {
-            const int32_t mi = find(e.member);
-            if (mi >= 0) raw = std::min(raw, std::max(units_[static_cast<size_t>(mi)].d.max_speed, 0.0f));
-        }
+        for (const LandTeamSlot& e : team) raw = std::min(raw, std::max(e.max_speed, 0.0f));
         // Item 1, 0x5ab540: min over the members of 0x373080(member type, K) = OverrideDeceleration x E / Max_Speed, E =
         // 0x370f00(member type, K) = min(member Max_Speed, the members' minimum) x K's chain (mode multiplier, container
         // factor; the fleeing factor is applied by the walk); the bare OverrideDeceleration when Max_Speed is 0; a type
@@ -593,12 +653,9 @@ void MovementSystem::team_speed_steps() {
         bool first = true;
         float a = 0.0f;
         for (const LandTeamSlot& e : team) {
-            const int32_t mi = find(e.member);
-            if (mi < 0) continue;
-            const Unit& m = units_[static_cast<size_t>(mi)];
-            const float ms = m.d.max_speed;
+            const float ms = e.max_speed;
             const float eff = std::min(ms, raw) * mult * k.team_factor;
-            float v = m.d.decel;
+            float v = e.decel;
             if (!(v > 0.0f)) v = eff;
             else if (ms != 0.0f) v = v * eff / ms;
             a = first ? v : std::min(a, v);
@@ -612,7 +669,7 @@ void MovementSystem::team_speed_steps() {
         const V2 f = dir_from_deg(k.m.yaw);
         float fac = 1.0f;
         for (const LandTeamSlot& e : team) {
-            const int32_t mi = find(e.member);
+            const int32_t mi = e.kind == 2 ? -1 : find(e.member);  // [port] an absent member has no position here
             if (mi < 0) continue;
             const Unit& m = units_[static_cast<size_t>(mi)];
             const float p = f.x * (m.m.pos.x - k.m.pos.x) + f.y * (m.m.pos.y - k.m.pos.y);

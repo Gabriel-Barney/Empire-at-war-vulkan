@@ -1273,6 +1273,7 @@ void test_land_squad_garrison() {
     bool settle_target = false;  // s78n t14: a member has a target when the squad stopped (no recovery, §7.3 item 6)
     bool inside_ok = false, rejoined = false, ordered = false, store_ok = true, teleported = false, walking_out = false;
     bool tele_members = false;  // s78n t18: the container's teleport moved its members with it
+    uint32_t partial_frames = 0;  // s78n t18: frames with the squad partly inside its host
     std::vector<std::pair<mv::ObjectId, mv::V2>> in_slots;  // each member's slot when it went in (team_slot)
     std::vector<mv::V2> in_off;                            // and its offset from the container (parked_offset)
     Vec3 exit_x{};
@@ -1336,6 +1337,11 @@ void test_land_squad_garrison() {
                         if (members[m] == id) in_slots[m] = {id, sl};
                 }
                 inside = inside && b->garrison_holder_of(id) == walker;
+            }
+            {  // s78n t18 (FIGHTER_FLYING 7.4): the squad garrisons as one - never some members inside and some outside
+                size_t in = 0;
+                for (const auto id : members) in += b->garrison_holder_of(id) == walker ? 1u : 0u;
+                if (in != 0 && in != members.size()) ++partial_frames;
             }
             if (!inside) {
                 if (b->frame() > stage_frame + 1500) break;
@@ -1467,6 +1473,7 @@ void test_land_squad_garrison() {
     CHECK(done);
     if (!done) return;
     CHECK(inside_ok && walked > 100.0f && rejoined && ordered && store_ok);
+    CHECK(partial_frames == 0);
     CHECK(exit_gap >= 0.0f && exit_gap < 80.0f);  // the container came out with its squad, not left at the old approach point
     CHECK(settle_target || settle_err <= 4.0f);  // s78n t14: no recovery while the team has a target
     CHECK(teleported);

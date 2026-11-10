@@ -155,15 +155,34 @@ void GarrisonSystem::set_owner(ObjectId id, int32_t owner, Vec3 pos, Vec3 facing
     if (const int32_t ui = unit_index(id); ui >= 0) units_[static_cast<size_t>(ui)].owner = owner;
 }
 
+int32_t GarrisonSystem::slot_value(const Unit& u) const {
+    GarrisonGroup g;
+    return group_of(u, g) ? (g.value > 0 ? g.value : 0) : value_of(u);
+}
+
+uint64_t GarrisonSystem::category_of(const Unit& u) const {
+    GarrisonGroup g;
+    return group_of(u, g) ? g.category : u.d.category;
+}
+
 bool GarrisonSystem::masks_match(ObjectId unit, ObjectId holder) const {
-    const OccupantDesc* u = unit_desc(unit);
+    const int32_t ui = unit_index(unit);
     const HolderDesc* h = holder_desc(holder);
-    return u && h && mask_ok(u->category, h->accepts);
+    return ui >= 0 && h && mask_ok(category_of(units_[static_cast<size_t>(ui)]), h->accepts);
 }
 
 int32_t GarrisonSystem::reserved(ObjectId holder) const {
     int32_t n = 0;
-    for (const Unit& u : units_) n += (u.host == holder && u.state == State::Moving) ? 1 : 0;
+    std::vector<ObjectId> groups;  // s78n t18: a squad walking in reserves once
+    for (const Unit& u : units_) {
+        if (u.host != holder || u.state != State::Moving) continue;
+        GarrisonGroup g;
+        if (group_of(u, g)) {
+            if (std::find(groups.begin(), groups.end(), g.id) != groups.end()) continue;
+            groups.push_back(g.id);
+        }
+        ++n;
+    }
     return n;
 }
 
@@ -174,8 +193,8 @@ bool GarrisonSystem::can_garrison(ObjectId unit, ObjectId holder) const {
     const Holder& h = holders_[static_cast<size_t>(hi)];
     if (u.state == State::Inside || u.state == State::Entering) return false;
     if (thief_holder(h) || u.d.value == kBoardOnlyValue) return false;  // s78n t12 review: not a garrison / no GARRISON_UNIT
-    if (!host_open(h, u.owner) || !mask_ok(u.d.category, h.d.accepts)) return false;
-    return free_slots(holder) - reserved(holder) - value_of(u) > 0;  // the stricter Lua rule (§2.5)
+    if (!host_open(h, u.owner) || !mask_ok(category_of(u), h.d.accepts)) return false;
+    return free_slots(holder) - reserved(holder) - slot_value(u) > 0;  // the stricter Lua rule (§2.5)
 }
 
 bool GarrisonSystem::can_garrison_fire(ObjectId id) const {
@@ -200,9 +219,23 @@ std::span<const ObjectId> GarrisonSystem::occupants(ObjectId holder) const {
 }
 
 int32_t GarrisonSystem::used_slots(ObjectId holder) const {
+    // 0x3954b0: the sum over the contents-list entries of the entry type's Garrison_Value. s78n t18: a squad is one
+    // entry, its container (FIGHTER_FLYING §7.4): its members count once, with the group's value.
     int32_t n = 0;
-    for (const ObjectId id : occupants(holder))
-        if (const int32_t ui = unit_index(id); ui >= 0) n += value_of(units_[static_cast<size_t>(ui)]);
+    std::vector<ObjectId> groups;
+    for (const ObjectId id : occupants(holder)) {
+        const int32_t ui = unit_index(id);
+        if (ui < 0) continue;
+        const Unit& u = units_[static_cast<size_t>(ui)];
+        GarrisonGroup g;
+        if (group_of(u, g)) {
+            if (std::find(groups.begin(), groups.end(), g.id) != groups.end()) continue;
+            groups.push_back(g.id);
+            n += g.value > 0 ? g.value : 0;
+        } else {
+            n += value_of(u);
+        }
+    }
     return n;
 }
 
@@ -231,7 +264,7 @@ bool GarrisonSystem::order_enter(ObjectId unit, ObjectId holder) {
     const Holder& h = holders_[static_cast<size_t>(hi)];
     if (u.state == State::Inside || u.state == State::Entering) return false;
     if (thief_holder(h) || u.d.value == kBoardOnlyValue) return false;  // s78n t12 review: entered only through board()
-    if (!host_open(h, u.owner) || !mask_ok(u.d.category, h.d.accepts)) return false;
+    if (!host_open(h, u.owner) || !mask_ok(category_of(u), h.d.accepts)) return false;
     u.state = State::Moving;
     u.host = holder;
     return true;
@@ -292,9 +325,71 @@ uint32_t GarrisonSystem::eject_all(ObjectId holder, Vec3 holder_pos, Vec3 holder
     return n;
 }
 
-void GarrisonSystem::service(uint32_t frame, const PoseFn& pose) {
-    for (Unit& u : units_) {
+// s78n t18 (FIGHTER_FLYING §7.4): the pending members of group `g` (units_[first] is the lowest id of them), decided
+// together - see "squads" in the header.
+void GarrisonSystem::service_group(size_t first, const GarrisonGroup& g, uint32_t frame, const PoseFn& pose, const GroupReachFn& reach) {
+    const ObjectId host = units_[first].host;
+    const State state = units_[first].state;
+    std::vector<size_t> mem;
+    for (size_t i = first; i < units_.size(); ++i) {
+        const Unit& m = units_[i];
+        GarrisonGroup mg;
+        if ((m.state == State::Moving || m.state == State::Entering) && m.host == host && group_of(m, mg) && mg.id == g.id) mem.push_back(i);
+    }
+    const int32_t hi = holder_index(host);
+    Vec3 kp, kf, hp, hf;
+    const auto drop_all = [&] {
+        for (const size_t i : mem) {
+            Unit& m = units_[i];
+            Vec3 mp, mf;
+            (void)pose(m.id, mp, mf);
+            m.state = State::None;
+            m.host = kNoObject;
+            push(GarrisonEventKind::OrderDropped, m, host, mp, frame);
+        }
+    };
+    if (hi < 0 || !pose(g.id, kp, kf) || !pose(host, hp, hf)) return drop_all();
+    Holder& h = holders_[static_cast<size_t>(hi)];
+    if (thief_holder(h) || !host_open(h, units_[first].owner) || free_slots(host) < (g.value > 0 ? g.value : 0)) return drop_all();
+    if (state == State::Moving) {
+        // 0x443ff0: 3-D distance from the container to the approach point - r <= Garrison_Radius; 0x443d10 on a finished
+        // approach move: <= 60.0
+        const Vec3 a = approach_point(host, hp, hf);
+        const float dx = kp.x - a.x, dy = kp.y - a.y, dz = kp.z - a.z;
+        GroupReach gr;
+        if (reach) (void)reach(g.id, gr);
+        const float d = dmath::sqrt(dx * dx + dy * dy + dz * dz) - gr.radius;
+        if (!(d <= h.d.radius) && !(gr.arrived && d <= cfg_.arrived_reach)) return;  // still walking
+        for (const size_t i : mem) {
+            Unit& m = units_[i];
+            Vec3 mp, mf;
+            if (!pose(m.id, mp, mf)) mp = kp;
+            m.state = State::Entering;
+            m.enter_at = frame + cfg_.enter_frames;
+            push(GarrisonEventKind::EnterStarted, m, host, mp, frame);
+        }
+        return;
+    }
+    if (frame < units_[first].enter_at) return;
+    for (const size_t i : mem) {  // the whole squad is inside in this pass
+        Unit& m = units_[i];
+        m.state = State::Inside;
+        h.inside.push_back(m.id);
+        push(GarrisonEventKind::Entered, m, host, hp, frame);
+    }
+}
+
+void GarrisonSystem::service(uint32_t frame, const PoseFn& pose, const GroupReachFn& group_reach) {
+    std::vector<ObjectId> groups;  // s78n t18: the groups decided in this pass
+    for (size_t idx = 0; idx < units_.size(); ++idx) {
+        Unit& u = units_[idx];
         if (u.state != State::Moving && u.state != State::Entering) continue;
+        if (GarrisonGroup g; group_of(u, g)) {
+            if (std::find(groups.begin(), groups.end(), g.id) != groups.end()) continue;
+            groups.push_back(g.id);
+            service_group(idx, g, frame, pose, group_reach);
+            continue;
+        }
         const ObjectId host = u.host;
         const int32_t hi = holder_index(host);
         Vec3 up, uf, hp, hf;

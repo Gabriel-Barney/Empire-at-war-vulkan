@@ -1447,11 +1447,19 @@ private:
     void mv_team_shape(const Unit& u);
     struct SquadExit {
         objects::ObjectId container = objects::kNoObjectId;
+        objects::ObjectId holder = objects::kNoObjectId;  // s78n t18: the host it leaves (the garrison-host gate)
         Vec3 at{};          // E: where the container was put (the host centre)
         Vec3 to{};          // X: the walk-out point (Exited)
         bool walk = false;  // Exited (walk out to X) / Ejected (everything at the host position)
     };
     void s4_squad_enter(TacticalMode& mode, const Unit& u, Vec3 host);
+    // s78n t18 (FIGHTER_FLYING §7.4): the movement-backed land squad container a unit garrisons with (kNoObjectId: it
+    // garrisons on its own), GarrisonSystem's group of a unit (the container type's Garrison_Value, default 1, and
+    // Garrison_Category), the squad's live members of an order, and the range test's radius 0x443ce0 (the 3-D length of
+    // the half extents of the members' live union box 0x405320).
+    objects::ObjectId s4_squad_of(objects::ObjectId unit) const;
+    bool s4_group(objects::ObjectId unit, tactical::garrison::GarrisonGroup& g) const;
+    float s4_squad_radius(TacticalMode& mode, objects::ObjectId container) const;
     Vec3 s4_squad_leave(TacticalMode& mode, const tactical::garrison::GarrisonEvent& e, std::vector<SquadExit>& outs,
                         std::vector<tactical::garrison::GarrisonEvent>& events);
     std::vector<int8_t> adopt_kind_;      // cu8j t02: mv_adopt_kind cache (+1; 0 = not computed); derived, not saved
@@ -1647,7 +1655,7 @@ private:
     void s4_tick(TacticalMode& mode, SimRng& rng);        // tick after the combat events
     void s4_cancel(std::span<const objects::ObjectId> ids);  // a new move order replaces a pending enter
     void s4_set_owner(TacticalMode& mode, objects::ObjectId id, int32_t owner);
-    void s4_leave(TacticalMode& mode, objects::ObjectId unit, Vec3 at);
+    void s4_leave(TacticalMode& mode, objects::ObjectId unit, Vec3 at, objects::ObjectId holder = objects::kNoObjectId);
     void s4_hold(TacticalMode& mode, objects::ObjectId holder);  // cu8l t02: a garrison host's stop-and-hold
     void s4_apply(TacticalMode& mode);  // garrison / capture events -> movement, combat, store, owners, story feeds
     commands::RejectReason s4_command(TacticalMode& mode, uint8_t player, const commands::EventData& ev, SimRng& rng);

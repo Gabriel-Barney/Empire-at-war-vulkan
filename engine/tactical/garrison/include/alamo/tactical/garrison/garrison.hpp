@@ -40,6 +40,16 @@
 //     dropped, free_slots is 0), its occupant does not leave by order (order_exit / eject_all do nothing) and stays
 //     through an owner change of the vehicle; when the vehicle dies or is removed the occupant is released ALIVE at the
 //     vehicle's position (Ejected) - the thief leaves through the vehicle's death (the eject ability kills the vehicle).
+//   * squads (s78n t18; FIGHTER_FLYING §7.4) [H]: a squad garrisons as ONE object, its team container K. The host
+//     names a unit's group (set_group_fn: K's id, K's type Garrison_Value - default 1, so a squad takes one slot whatever
+//     its size - and K's type Garrison_Category); the members keep their own records here ([port]). Capacity, the
+//     reserved count and the mask tests count a group once with the group's value / category. service() decides a
+//     group's pending members together, at its lowest member id: dropped together (host gone / hostile / free < the
+//     group value), entering together when the 3-D distance from K's position to the approach point - r <= the host's
+//     Garrison_Radius (r from the host: the 3-D length of the half extents of the members' live union box), or - K's
+//     approach move having ended - when it is <= arrived_reach (60.0, the 0x140a28bcc constant; [port] the short
+//     corrective move of 0x443700 is not issued: the squad enters from where it stopped), and Entered in the same pass
+//     in ascending member id. There is no "some members garrisoned" state.
 // Determinism: serial, holders / units in vectors sorted by id, occupants in entry order, events in the order they
 // happen; floats only through + - * / and dmath::sqrt. hash() covers all state.
 #pragma once
@@ -91,14 +101,32 @@ inline constexpr int32_t kBoardOnlyValue = -0x7FFFFFFF - 1;
 
 struct OccupantDesc {
     uint64_t category = 0;  // the unit's own Garrison_Category
-    int32_t value = 0;      // Garrison_Value (slots taken); kBoardOnlyValue: boarded only (see above)
+    int32_t value = 0;      // Garrison_Value (slots taken; the type default is 1); kBoardOnlyValue: boarded only (see above)
     float radius = 0.0f;    // the unit's footprint radius
 };
 
 struct GarrisonConfig {
-    float reach_slack = 10.0f;  // [port] lower bound of the entering distance (the 0x140a28bcc constant is not read)
+    float reach_slack = 10.0f;  // [port] lower bound of a single unit's entering distance
     uint32_t enter_frames = 30;  // [port] frames of the entering fade
+    float arrived_reach = 60.0f;  // s78n t18: 0x140a28bcc, the range test of a group whose approach move has ended
 };
+
+// s78n t18 (FIGHTER_FLYING §7.4): the squad a unit garrisons with - its team container's id, that container type's
+// Garrison_Value (type default 1) and Garrison_Category.
+struct GarrisonGroup {
+    ObjectId id = kNoObject;
+    int32_t value = 1;
+    uint64_t category = 0;
+};
+// A unit's group; false = it garrisons on its own. Const, deterministic; called from the serial garrison code.
+using GroupFn = std::function<bool(ObjectId unit, GarrisonGroup& out)>;
+// Per service call: the radius the range test subtracts for a group (0x443ce0 on the container: the 3-D length of the
+// half extents of the members' live union box) and whether its approach move has ended. False = radius 0, not ended.
+struct GroupReach {
+    float radius = 0.0f;
+    bool arrived = false;
+};
+using GroupReachFn = std::function<bool(ObjectId group, GroupReach& out)>;
 
 enum class GarrisonEventKind : uint8_t {
     EnterStarted = 0,  // the unit reached the approach point: the host stops it (position = the approach point)
@@ -130,6 +158,7 @@ public:
     void set_allied(std::function<bool(int32_t a, int32_t b)> fn) { allied_ = std::move(fn); }
     bool allied(int32_t a, int32_t b) const { return a == b || (allied_ && allied_(a, b)); }
     void set_neutral_player(int32_t p) { neutral_ = p; }  // hosts of this owner are open to every player (§2.5)
+    void set_group_fn(GroupFn fn) { group_ = std::move(fn); }  // s78n t18: squads (not saved: the host's, like set_allied)
     int32_t reserved(ObjectId holder) const;              // units walking in (approach in progress)
 
     // ---- registration (host, at spawn) ----
@@ -175,8 +204,8 @@ public:
     uint32_t eject_all(ObjectId holder, Vec3 holder_pos, Vec3 holder_facing, uint32_t frame);  // Ejected events
 
     // ---- tick ----
-    // Approaches and entering units, ascending unit id (see the header).
-    void service(uint32_t frame, const PoseFn& pose);
+    // Approaches and entering units, ascending unit id (see the header); `group_reach` serves the groups' range test.
+    void service(uint32_t frame, const PoseFn& pose, const GroupReachFn& group_reach = {});
 
     std::span<const GarrisonEvent> events() const { return events_; }
     void clear_events() { events_.clear(); }
@@ -210,6 +239,11 @@ private:
     static int32_t value_of(const Unit& u) { return u.d.value > 0 ? u.d.value : 0; }
     static bool mask_ok(uint64_t a, uint64_t b) { return a == 0 || b == 0 || (a & b) != 0; }
     static bool thief_holder(const Holder& h) { return h.d.kind == HolderKind::VehicleThief; }  // s78n t12 review
+    // s78n t18: the unit's group (false: none), the slots it takes and its category - the group's when it has one
+    bool group_of(const Unit& u, GarrisonGroup& g) const { return group_ && group_(u.id, g) && g.id != kNoObject; }
+    int32_t slot_value(const Unit& u) const;
+    uint64_t category_of(const Unit& u) const;
+    void service_group(size_t first, const GarrisonGroup& g, uint32_t frame, const PoseFn& pose, const GroupReachFn& reach);
     void push(GarrisonEventKind k, const Unit& u, ObjectId holder, Vec3 p, uint32_t frame);
     void leave(Unit& u, Holder& h, GarrisonEventKind kind, Vec3 at, uint32_t frame);
     bool host_open(const Holder& h, int32_t owner) const {
@@ -219,6 +253,7 @@ private:
     GarrisonConfig cfg_;
     int32_t neutral_ = -2;
     std::function<bool(int32_t, int32_t)> allied_;
+    GroupFn group_;
     std::vector<Holder> holders_;  // ascending id
     std::vector<Unit> units_;      // ascending id
     std::vector<GarrisonEvent> events_;

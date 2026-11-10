@@ -13,6 +13,7 @@ UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti) {
     d.turn_rate = t.get_float(ti, "Max_Rate_Of_Turn");
     d.accel = t.get_float(ti, "OverrideAcceleration");
     d.decel = t.get_float(ti, "OverrideDeceleration");
+    d.hover_height = t.get_float(ti, "Hover_Height");  // s78n t18
     d.close_enough_angle = t.get_float(ti, "Close_Enough_Angle_For_Move_Start");
     d.movement_class = t.get_enum(ti, "MovementClass");
     d.collision_class = t.get_enum(ti, "UnitCollisionClass");

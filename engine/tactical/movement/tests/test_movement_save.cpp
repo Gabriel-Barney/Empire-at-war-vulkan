@@ -970,6 +970,80 @@ Scenario squad_speed_scenario() {
     return s;
 }
 
+// s78n t18: a squad (container 100, members 1..4 with a deceleration tag) that walks through a standing infantry unit (a
+// live Repulsion record), gets a new order while moving (the braking coast), has a member suspended and one parked, a
+// garrison-exit host, a hover unit rising, and a vehicle that path-arounds a standing one (the detour bookkeeping).
+void build_t18(World& w) {
+    PassabilityGrid g;
+    g.init(80, 80);
+    w.sys.set_grid(std::move(g));
+    w.rng = SimRng(41);
+    UnitDesc c = land_unit(100, cell_center(10, 20), 0, 0.8f, 12.0f, kUccInfantry);
+    c.team_container = true;
+    c.container_arrangement = 0;
+    CHECK(w.sys.add_unit(c));
+    const V2 slots[4] = {{6.0f, 6.0f}, {6.0f, -6.0f}, {-6.0f, 6.0f}, {-6.0f, -6.0f}};
+    std::vector<ObjectId> ids;
+    for (ObjectId id = 1; id <= 4; ++id) {
+        UnitDesc m = land_unit(id, cell_center(10, 20) + slots[id - 1], 0, 1.0f, 3.0f, kUccInfantry);
+        m.accel = m.decel = 0.05f;
+        m.formation_spacing = 0.3f;
+        CHECK(w.sys.add_unit(m));
+        CHECK(w.sys.set_team_member_shape(id, 3.0f, 3.0f, 3.0f, 3.0f));
+        ids.push_back(id);
+    }
+    CHECK(w.sys.set_land_team(100, ids, slots));
+    CHECK(w.sys.add_unit(land_unit(70, cell_center(20, 20), 0, 1.0f, 6.0f, kUccInfantry)));   // standing on the squad's path
+    CHECK(w.sys.add_unit(land_unit(71, cell_center(30, 26), 7, 1.0f, 18.0f, kUccVehicle)));   // the host the squad "left"
+    CHECK(w.sys.add_unit(land_unit(72, cell_center(10, 40), 7, 1.5f, 18.0f, kUccVehicle)));   // a mover ...
+    CHECK(w.sys.add_unit(land_unit(73, cell_center(20, 40), 7, 1.5f, 18.0f, kUccVehicle)));   // ... and the unit in its way
+    UnitDesc h = land_unit(74, cell_center(10, 60), 7, 1.0f, 12.0f, kUccVehicle);
+    h.hover_height = 80.0f;
+    CHECK(w.sys.add_unit(h));
+}
+
+void t18_before(World& w, uint32_t f) {
+    if (f == 0) {
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(45, 20);
+        w.sys.move(o, w.rng, f);
+        MoveOrder v;
+        v.units = {72};
+        v.destination = cell_center(40, 40);
+        w.sys.move(v, w.rng, f);
+        MoveOrder hv;
+        hv.units = {74};
+        hv.destination = cell_center(30, 60);
+        w.sys.move(hv, w.rng, f);
+        CHECK(w.sys.set_garrison_exit(100, 71));
+    }
+    if (f == 230) {  // a new order while the squad moves: it coasts, then turns
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(30, 30);
+        w.sys.move(o, w.rng, f);
+        CHECK(w.sys.set_garrison_exit(100, 71));
+    }
+    if (f == 150) CHECK(w.sys.suspend_team_member(2));
+    if (f == 200) CHECK(w.sys.rejoin_land_team(2));
+    if (f == 300) CHECK(w.sys.park_team_member(4));
+    if (f == 320) CHECK(w.sys.hover_lower(74));
+    for (const ObjectId id : {ObjectId{100}, ObjectId{1}, ObjectId{2}, ObjectId{3}, ObjectId{4}})
+        if (w.sys.has_unit(id)) CHECK(w.sys.set_team(id, 100, 1.0f, 0.8f));
+    CHECK(w.sys.set_pair_gate(72, -1, false));  // (the host feed of every tick; nothing is gated here)
+}
+
+Scenario t18_scenario() {
+    Scenario s;
+    s.name = "land squad collision records, walk and gates (s78n t18)";
+    s.build = build_t18;
+    s.before = t18_before;
+    s.after = squad_after;
+    s.frames = 420;
+    return s;
+}
+
 // ---------------------------------------------------------------- rejection and corruption
 void test_rejections() {
     const Scenario land = land_scenario();
@@ -1144,6 +1218,34 @@ int main() {
         // speed: the fast unit's formation speed is the team's 1.0 x mult in the saving and in the loaded run.
         const Scenario sp = squad_speed_scenario();
         for (uint32_t at : {40u, 140u, 170u}) check_resume(sp, at, 0);  // 140: member 2 parked
+        {  // s78n t18 (save version 17): the states the scenario passes through are really there, and every one resumes
+            const Scenario t18 = t18_scenario();
+            World v(t18.cfg);
+            t18.build(v);
+            bool repulsion = false, around = false, coast = false, rising = false, lowering = false;
+            uint32_t rep_at = 0, around_at = 0;
+            for (uint32_t f = 0; f < t18.frames; ++f) {
+                step(t18, v, f, serial_for);
+                for (const CollisionObject& c : v.sys.collisions().list()) {
+                    if (c.state == CollisionState::Repulsion && !repulsion) {
+                        repulsion = true;
+                        rep_at = f;
+                    }
+                    if (c.state == CollisionState::PathAround && !around) {
+                        around = true;
+                        around_at = f;
+                    }
+                }
+                coast = coast || (f > 230 && f < 245 && v.sys.view(100).speed > 0.0f && v.sys.view(100).start_frame == kStartPending);
+                rising = rising || v.sys.hover_state(74) == 2;
+                lowering = lowering || v.sys.hover_state(74) == 3;
+            }
+            CHECK(repulsion && around && rising && lowering);
+            CHECK(v.sys.team_member_parked(4) && !v.sys.has_unit(4));
+            (void)coast;
+            for (uint32_t at : {rep_at + 2u, around_at + 2u, 100u, 151u, 201u, 233u, 240u, 301u, 325u, 400u}) check_resume(t18, at, 0);
+            check_resume(t18, 236, 29);
+        }
         {
             World v(sp.cfg);
             sp.build(v);

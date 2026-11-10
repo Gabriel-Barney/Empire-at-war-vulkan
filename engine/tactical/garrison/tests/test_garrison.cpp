@@ -674,6 +674,134 @@ void test_types() {
 
 }  // namespace
 
+// s78n t18 (FIGHTER_FLYING 7.4): a squad garrisons as one object - its team container. Units 11, 12, 13 are members of
+// group 100 (value 1, category kInf); unit 20 is on its own.
+static void test_groups() {
+    GarrisonSystem g;
+    g.set_group_fn([](ObjectId unit, GarrisonGroup& out) {
+        if (unit < 11 || unit > 13) return false;
+        out.id = 100;
+        out.value = 1;
+        out.category = kInf;
+        return true;
+    });
+    HolderDesc bunker;
+    bunker.kind = HolderKind::Structure;
+    bunker.accepts = kInf;
+    bunker.slots = 2;
+    bunker.radius = 30.0f;
+    bunker.enter_dist = 40.0f;
+    bunker.exit_dist = 50.0f;
+    CHECK(g.add_holder(1, 0, bunker));
+    OccupantDesc inf;
+    inf.category = kVeh;  // the members' own category is not read: the group's (the container's) is
+    inf.value = 1;
+    for (ObjectId id : {11, 12, 13}) CHECK(g.add_unit(id, 0, inf));
+    OccupantDesc solo;
+    solo.category = kInf;
+    solo.value = 1;
+    CHECK(g.add_unit(20, 0, solo));
+    CHECK(g.masks_match(11, 1) && g.can_garrison(11, 1));
+    for (ObjectId id : {11, 12, 13}) CHECK(g.order_enter(id, 1));
+    CHECK(g.reserved(1) == 1);                    // the squad reserves once
+    CHECK(!g.can_garrison(20, 1));                // 2 free - 1 reserved - 1 = 0: the strict Lua rule
+    World w;
+    w.set(1, {0.0f, 0.0f, 0.0f});
+    w.set(100, {200.0f, 0.0f, 0.0f});             // the container: its position is what the range test reads
+    w.set(11, {45.0f, 0.0f, 0.0f});               // a member standing on the approach point does not start the entry
+    w.set(12, {210.0f, 5.0f, 0.0f});
+    w.set(13, {190.0f, -5.0f, 0.0f});
+    const PoseFn pose = [&w](ObjectId id, Vec3& p, Vec3& f) { return w.get(id, p, f); };
+    float radius = 20.0f;
+    bool arrived = false;
+    const GroupReachFn reach = [&](ObjectId group, GroupReach& gr) {
+        CHECK(group == 100);
+        gr.radius = radius;
+        gr.arrived = arrived;
+        return true;
+    };
+    g.service(1, pose, reach);
+    CHECK(g.events().empty() && g.pending_holder(11) == 1 && !g.entering(11));
+    // 3-D distance from the container to the approach point (40, 0, 0) - r <= Garrison_Radius: 91 - 20 > 30; 89 - 20 <= 30...
+    w.set(100, {131.0f, 0.0f, 0.0f});
+    g.service(2, pose, reach);
+    CHECK(g.events().empty());
+    w.set(100, {40.0f, 0.0f, 49.0f});             // ...and the distance is 3-D: 49 up - 20 = 29
+    g.service(3, pose, reach);
+    CHECK(g.events().size() == 3);                // all three start entering in the same pass, ascending id
+    for (size_t i = 0; i < g.events().size(); ++i)
+        CHECK(g.events()[i].kind == GarrisonEventKind::EnterStarted && g.events()[i].unit == static_cast<ObjectId>(11 + i));
+    CHECK(g.entering(11) && g.entering(12) && g.entering(13));
+    g.clear_events();
+    for (uint32_t f = 4; f < 3 + g.config().enter_frames; ++f) g.service(f, pose, reach);
+    CHECK(g.events().empty() && !g.garrisoned(11));
+    g.service(3 + g.config().enter_frames, pose, reach);
+    CHECK(g.events().size() == 3 && g.garrisoned(11) && g.garrisoned(12) && g.garrisoned(13));  // inside together
+    for (const GarrisonEvent& e : g.events()) CHECK(e.kind == GarrisonEventKind::Entered);
+    g.clear_events();
+    CHECK(g.used_slots(1) == 1 && g.free_slots(1) == 1);  // three members, one slot
+    CHECK(g.can_garrison(20, 1) == false);                // 1 free - 0 reserved - 1 = 0 (strict)
+    CHECK(g.order_enter(20, 1));                          // the entry rule itself: free >= value
+    w.set(20, {40.0f, 0.0f, 0.0f});
+    g.service(100, pose, reach);
+    for (uint32_t f = 101; f <= 100 + g.config().enter_frames; ++f) g.service(f, pose, reach);
+    CHECK(g.garrisoned(20) && g.free_slots(1) == 0);
+    // a second squad finds no slot: its members are dropped together
+    GarrisonSystem g2;
+    g2.set_group_fn([](ObjectId unit, GarrisonGroup& out) {
+        out.id = unit < 20 ? 100 : 200;
+        out.value = 1;
+        out.category = kInf;
+        return true;
+    });
+    bunker.slots = 1;
+    CHECK(g2.add_holder(1, 0, bunker));
+    for (ObjectId id : {11, 12, 21, 22}) CHECK(g2.add_unit(id, 0, inf));
+    for (ObjectId id : {11, 12, 21, 22}) CHECK(g2.order_enter(id, 1));
+    CHECK(g2.reserved(1) == 2);
+    World w2;
+    w2.set(1, {0.0f, 0.0f, 0.0f});
+    w2.set(100, {40.0f, 0.0f, 0.0f});
+    w2.set(200, {400.0f, 0.0f, 0.0f});
+    for (ObjectId id : {11, 12, 21, 22}) w2.set(id, {40.0f, 0.0f, 0.0f});
+    const PoseFn pose2 = [&w2](ObjectId id, Vec3& p, Vec3& f) { return w2.get(id, p, f); };
+    radius = 0.0f;
+    g2.service(1, pose2, {});                             // no reach hook: radius 0
+    CHECK(g2.entering(11) && g2.entering(12) && !g2.entering(21));
+    for (uint32_t f = 2; f <= 1 + g2.config().enter_frames; ++f) g2.service(f, pose2, {});
+    CHECK(g2.garrisoned(11) && g2.garrisoned(12) && g2.free_slots(1) == 0);
+    // squad 200 in the pass that took squad 100 in: free 0 < 1 -> both members dropped together
+    CHECK(g2.pending_holder(21) == kNoObject && g2.pending_holder(22) == kNoObject);
+    uint32_t dropped = 0;
+    for (const GarrisonEvent& e : g2.events())
+        if (e.kind == GarrisonEventKind::OrderDropped) {
+            CHECK(e.frame == 1 + g2.config().enter_frames && (e.unit == 21 || e.unit == 22));
+            ++dropped;
+        }
+    CHECK(dropped == 2);
+    // the approach move ended short of the radius: inside 60.0 (0x140a28bcc) the squad enters from where it stopped
+    GarrisonSystem g3;
+    g3.set_group_fn([](ObjectId, GarrisonGroup& out) {
+        out.id = 100;
+        return true;
+    });
+    bunker.slots = 5;
+    bunker.radius = 5.0f;
+    CHECK(g3.add_holder(1, 0, bunker));
+    CHECK(g3.add_unit(11, 0, inf) && g3.order_enter(11, 1));  // (the default group category 0 matches every host)
+    World w3;
+    w3.set(1, {0.0f, 0.0f, 0.0f});
+    w3.set(100, {95.0f, 0.0f, 0.0f});                     // 55 from the approach point
+    w3.set(11, {95.0f, 0.0f, 0.0f});
+    const PoseFn pose3 = [&w3](ObjectId id, Vec3& p, Vec3& f) { return w3.get(id, p, f); };
+    arrived = false;
+    g3.service(1, pose3, reach);
+    CHECK(!g3.entering(11));                              // still walking: 55 > 5
+    arrived = true;
+    g3.service(2, pose3, reach);
+    CHECK(g3.entering(11));                               // its move ended: 55 <= 60
+}
+
 int main() {
     test_rules();
     const uint64_t h1 = scripted_hash(), h2 = scripted_hash();
@@ -683,6 +811,7 @@ int main() {
     test_types();
     test_garrison_save();  // N1 stage 2
     test_vehicle_thief_holder();  // s78n t12 review
+    test_groups();  // s78n t18
     test_capture_save();
     std::printf("alamo_tactical_garrison_tests: %d checks, %d failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

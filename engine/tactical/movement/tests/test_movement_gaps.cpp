@@ -4103,7 +4103,7 @@ static V2 t14b_avoid_ref(const MovementSystem& sys, ObjectId member, V2 dir, flo
 //  * fleeing: Fleeing_Infantry_Speed_Bonus (2) on the container's acceleration and turn rate and on the members'
 //    acceleration and turn rate (the x 2 on the speeds is pinned in test_land_squad_part_b);
 //  * the MovingVsMoving crush pair flees only when the squad's owner scatters (set_scatters_fn), else it is pushed;
-//  * set_collision_exempt: no collision object with the exempt unit, and the container walks through it;
+//  * (the garrison exclusion: test_land_squad_gates, s78n t18);
 //  * the steering vector's weights and dot >= -0.5 rule against a recomputation;
 //  * a pushed walk cut short on a container with no order leaves it stopped: its members recover to their slots.
 static void test_land_squad_review_fixes() {
@@ -4195,48 +4195,6 @@ static void test_land_squad_review_fixes() {
         CHECK(off.first > 0 && off.second == 0);  // not scattering: pushed aside, no flee
         std::printf("land squad review fixes: moving crush pair - scatters: pushed %u fleeing %u; not: pushed %u fleeing %u\n",
                     on.first, on.second, off.first, off.second);
-    }
-    {  // set_collision_exempt
-        struct Out {
-            uint32_t objects = 0;  // collision objects (live or resolved) of the container with the host
-            float off_line = 0.0f;
-            bool arrived = false;
-        };
-        const auto run = [&](ObjectId exempt) {
-            Out r;
-            MovementSystem sys{MovementConfig{}};
-            land_system(sys, 100);
-            const V2 at = cell_center(15, 20);
-            grid_squad(sys, at, 0.0f, 1);
-            UnitDesc host = unit(70, cell_center(30, 20), 2, 1.0f, 15.0f, LocomotorKind::Default);
-            host.collision_class = kUccVehicle;
-            host.owner = 1;
-            CHECK(sys.add_unit(host));
-            CHECK(!sys.set_collision_exempt(1, 70) && !sys.set_collision_exempt(70, 100));  // squad containers only
-            SimRng rng(43);
-            MoveOrder o;
-            o.units = {1};
-            o.destination = cell_center(45, 20);  // straight through the host
-            sys.move(o, rng, 1);
-            for (uint32_t f = 1; f < 600; ++f) {
-                CHECK(sys.set_collision_exempt(100, exempt));  // host-set every tick
-                sys.tick(f, rng, serial_for);
-                for (const CollisionObject& c : sys.collisions().list())
-                    if ((c.a == 100 && c.b == 70) || (c.a == 70 && c.b == 100)) ++r.objects;
-                r.off_line = std::max(r.off_line, std::fabs(sys.view(100).pos.y - at.y));
-            }
-            // (s78n t18: no snap - the container stops within its braking distance v^2 / (2 a) = 1.56 of the goal)
-            r.arrived = sys.view(100).arrived && length(sys.view(100).pos - cell_center(45, 20)) < 2.0f;
-            return r;
-        };
-        const Out none = run(-1), hosted = run(70), all = run(MovementSystem::kCollisionExemptAll);
-        CHECK(none.objects > 0);  // without it the container collides with the unit on its path
-        CHECK(hosted.objects == 0 && hosted.off_line < 0.01f && hosted.arrived);  // exempt: no object, straight through
-        CHECK(all.objects == 0 && all.off_line < 0.01f && all.arrived);     // no land collider at all
-        std::printf("land squad review fixes: collision exempt - objects with the host %u / %u / %u (none / host / all), off "
-                    "its line %.2f / %.2f / %.2f\n",
-                    none.objects, hosted.objects, all.objects, static_cast<double>(none.off_line),
-                    static_cast<double>(hosted.off_line), static_cast<double>(all.off_line));
     }
     {  // the steering vector against the recomputation: weights, the longer-vector tie, dot >= -0.5
         struct Out {
@@ -5048,6 +5006,229 @@ static void test_land_squad_speed_order() {
     }
 }
 
+// s78n t18 items 4 / 5 (MOVEMENT §5.3 "Pair gates", FIGHTER_FLYING §7.7 item 2):
+//  * the garrison-host gate: no collision object between a unit and its garrison host, either way round, in the
+//    MovingVsStopped, MovingVsMoving and StoppedVsStopped tests; set_garrison_exit keeps it until the unit's next order
+//    or the arrival of its move;
+//  * hidden: no layer object, does not walk, takes no order;
+//  * hover: a unit with Hover_Height rises before its first move and is "raised" from then on - a raised mover takes no
+//    grounded obstacle, a grounded mover takes a raised one; hover_lower grounds it again;
+//  * TEAM entries: a member suspended for a hero clash (or absent: parked) still counts in the joint box and the rate,
+//    and a suspended one holds the squad through the straggler cap.
+static void test_land_squad_gates() {
+    const auto grid_squad = [](MovementSystem& sys, V2 at) {  // 2 x 2, Rows, Max_Speed 2, no deceleration tag
+        std::vector<T16Member> mem;
+        for (float x : {8.0f, -8.0f})
+            for (float y : {8.0f, -8.0f}) mem.push_back({V2{x, y}, 2.0f, 0.0f, 0.5f, 0.0f});
+        t16_squad(sys, at, 0, 2.0f, 0.0f, mem, 1, true);
+    };
+    struct Out {
+        uint32_t objects = 0, back_objects = 0;
+        float off_line = 0.0f;
+        bool arrived = false, moved = false;
+    };
+    // The squad marches from cell (15, 20) to (45, 20) straight through a standing vehicle 70 at (30, 20).
+    // mode: 0 no gate; 1 the squad's garrison host is 70; 2 unit 70's garrison host is the squad; 3 the squad is hidden;
+    // 4 the squad has just left 70 (set_garrison_exit after the order), then marches back through it.
+    const auto run = [&](int mode) {
+        Out r;
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        const V2 at = cell_center(15, 20);
+        grid_squad(sys, at);
+        UnitDesc host = unit(70, cell_center(30, 20), 2, 1.0f, 15.0f, LocomotorKind::Default);
+        host.collision_class = kUccVehicle;
+        host.owner = 1;
+        CHECK(sys.add_unit(host));
+        const auto gates = [&] {
+            if (mode == 1) CHECK(sys.set_pair_gate(100, 70, false));
+            if (mode == 2) CHECK(sys.set_pair_gate(70, 100, false));
+            if (mode == 3) CHECK(sys.set_pair_gate(100, -1, true));
+        };
+        const auto pair = [&] {
+            uint32_t n = 0;
+            for (const CollisionObject& c : sys.collisions().list())
+                if ((c.a == 100 && c.b == 70) || (c.a == 70 && c.b == 100)) ++n;
+            return n;
+        };
+        CHECK(!sys.set_pair_gate(999, 70, false) && !sys.set_garrison_exit(999, 70));
+        SimRng rng(43);
+        gates();  // host-set before the order and before every tick
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(45, 20);
+        sys.move(o, rng, 1);
+        if (mode == 4) CHECK(sys.set_garrison_exit(100, 70));
+        for (uint32_t f = 1; f < 400; ++f) {
+            gates();
+            sys.tick(f, rng, serial_for);
+            r.objects += pair();
+            r.off_line = std::max(r.off_line, std::fabs(sys.view(100).pos.y - at.y));
+        }
+        r.arrived = sys.view(100).arrived && length(sys.view(100).pos - cell_center(45, 20)) < 2.0f;
+        r.moved = !(sys.view(100).pos == at);
+        if (mode == 4) {  // the arrival ended the gate: the way back collides with 70 again
+            MoveOrder back;
+            back.units = {1};
+            back.destination = at;
+            sys.move(back, rng, 400);
+            for (uint32_t f = 400; f < 800; ++f) {
+                sys.tick(f, rng, serial_for);
+                r.back_objects += pair();
+            }
+        }
+        return r;
+    };
+    const Out none = run(0), mine = run(1), theirs = run(2), hidden = run(3), left = run(4);
+    CHECK(none.objects > 0 && none.off_line > 1.0f);  // without a gate: a record, and a path around the vehicle
+    CHECK(mine.objects == 0 && mine.off_line < 0.01f && mine.arrived);      // gated: no object, straight through
+    CHECK(theirs.objects == 0 && theirs.off_line < 0.01f && theirs.arrived);  // either side's host id gates the pair
+    CHECK(hidden.objects == 0 && !hidden.moved && !hidden.arrived);          // hidden: it takes no order and stands
+    CHECK(left.objects == 0 && left.off_line < 0.01f && left.arrived && left.back_objects > 0);
+    std::printf("land squad gates: objects with the host %u / %u / %u / %u / %u (none / host / host's / hidden / left), then %u on "
+                "the way back\n",
+                none.objects, mine.objects, theirs.objects, hidden.objects, left.objects, left.back_objects);
+    {  // the gate in the StoppedVsStopped test; a new order and Stop end set_garrison_exit
+        const auto svs = [&](bool gated) {
+            MovementSystem sys{MovementConfig{}};
+            land_system(sys, 100);
+            UnitDesc a = unit(80, cell_center(20, 20), 2, 1.0f, 15.0f, LocomotorKind::Default);
+            a.collision_class = kUccVehicle;
+            UnitDesc b = unit(81, {cell_center(20, 20).x + 8.0f, cell_center(20, 20).y}, 2, 1.0f, 15.0f, LocomotorKind::Default);
+            b.collision_class = kUccVehicle;
+            CHECK(sys.add_unit(a) && sys.add_unit(b));
+            if (gated) CHECK(sys.set_garrison_exit(81, 80));
+            SimRng rng(44);
+            uint32_t n = 0;
+            for (uint32_t f = 1; f < 40; ++f) {
+                sys.tick(f, rng, serial_for);
+                n += static_cast<uint32_t>(sys.collisions().list().size());
+            }
+            if (gated) {
+                CHECK(sys.view(80).pos == cell_center(20, 20));  // nobody was pushed apart
+                const ObjectId one[1] = {81};
+                sys.stop(one);  // Stop: the unit's next order - the gate ends
+                for (uint32_t f = 40; f < 60; ++f) {
+                    sys.tick(f, rng, serial_for);
+                    n += static_cast<uint32_t>(sys.collisions().list().size());
+                }
+            }
+            return n;
+        };
+        const uint32_t plain = svs(false);
+        CHECK(plain > 0);
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        UnitDesc a = unit(80, cell_center(20, 20), 2, 1.0f, 15.0f, LocomotorKind::Default);
+        UnitDesc b = unit(81, {cell_center(20, 20).x + 8.0f, cell_center(20, 20).y}, 2, 1.0f, 15.0f, LocomotorKind::Default);
+        a.collision_class = b.collision_class = kUccVehicle;
+        CHECK(sys.add_unit(a) && sys.add_unit(b) && sys.set_garrison_exit(81, 80));
+        SimRng rng(45);
+        uint32_t gated = 0;
+        for (uint32_t f = 1; f < 40; ++f) {
+            sys.tick(f, rng, serial_for);
+            gated += static_cast<uint32_t>(sys.collisions().list().size());
+        }
+        CHECK(gated == 0 && svs(true) > 0);  // gated: no StoppedVsStopped object; after Stop there is one
+    }
+    {  // hover (Hover_Height 80, max speed 1.56 per frame: 52 frames to rise)
+        const auto hover_run = [&](bool mover_hovers, bool obstacle_raised) {
+            MovementSystem sys{MovementConfig{}};
+            land_system(sys, 100);
+            UnitDesc m = unit(1, cell_center(10, 20), 2, 1.0f, 12.0f, LocomotorKind::Default);
+            m.collision_class = kUccVehicle;
+            m.hover_height = mover_hovers ? 80.0f : 0.0f;
+            UnitDesc o = unit(2, cell_center(25, 20), 2, 1.0f, 12.0f, LocomotorKind::Default);
+            o.collision_class = kUccVehicle;
+            o.hover_height = 80.0f;
+            CHECK(sys.add_unit(m) && sys.add_unit(o));
+            SimRng rng(46);
+            if (obstacle_raised) {  // a first move raises it for good
+                MoveOrder oo;
+                oo.units = {2};
+                oo.destination = cell_center(25, 21);
+                sys.move(oo, rng, 1);
+            }
+            uint32_t f = 1;
+            for (; f < 200; ++f) sys.tick(f, rng, serial_for);
+            CHECK(sys.hover_state(2) == (obstacle_raised ? 1 : 0) && !sys.view(2).has_goal);
+            const V2 o0 = sys.view(2).pos;
+            MoveOrder mo;
+            mo.units = {1};
+            mo.destination = {o0.x + 300.0f, o0.y};
+            sys.move(mo, rng, f);
+            uint32_t rise = 0;
+            for (uint32_t n = 0; n < 700 && !sys.view(1).arrived; ++n, ++f) {
+                sys.tick(f, rng, serial_for);
+                if (sys.hover_state(1) == 2) ++rise;
+            }
+            CHECK(sys.view(1).arrived && rise == (mover_hovers ? 52u : 0u) && sys.hover_state(1) == (mover_hovers ? 1 : 0));
+            return sys.stats().collisions_created;
+        };
+        CHECK(hover_run(true, false) == 0);   // a raised mover takes no grounded obstacle
+        CHECK(hover_run(true, true) > 0);     // raised against raised: a record
+        CHECK(hover_run(false, true) > 0);    // a grounded mover takes a raised standing unit
+        CHECK(hover_run(false, false) > 0);
+        // hover_lower: lowering takes the same time; the next move rises again
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        UnitDesc h = unit(1, cell_center(10, 20), 2, 1.0f, 12.0f, LocomotorKind::Default);
+        h.hover_height = 80.0f;
+        CHECK(sys.add_unit(h) && sys.add_unit(unit(2, cell_center(40, 40), 2, 1.0f, 6.0f, LocomotorKind::Default)));
+        CHECK(!sys.hover_lower(2) && !sys.hover_lower(99));  // no Hover_Height / unknown
+        SimRng rng(47);
+        MoveOrder mo;
+        mo.units = {1};
+        mo.destination = cell_center(14, 20);
+        sys.move(mo, rng, 1);
+        uint32_t f = 1;
+        for (; f < 300 && !sys.view(1).arrived; ++f) sys.tick(f, rng, serial_for);
+        CHECK(sys.view(1).arrived && sys.hover_state(1) == 1);
+        CHECK(sys.hover_lower(1) && sys.hover_state(1) == 3);
+        uint32_t lower = 0;
+        for (uint32_t n = 0; n < 100; ++n, ++f) {
+            sys.tick(f, rng, serial_for);
+            if (sys.hover_state(1) == 3) ++lower;
+        }
+        CHECK(lower == 51 && sys.hover_state(1) == 0);  // 52 steps: the 52nd grounds it
+    }
+    {  // TEAM entries: a suspended member counts in the joint box and holds the squad through the straggler cap
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        const V2 at = cell_center(30, 20);
+        const std::vector<T16Member> mem = {{V2{10.0f, 0.0f}, 2.0f, 0.0f, 0.3f, 0.0f}, {V2{-10.0f, 0.0f}, 2.0f, 0.0f, 0.3f, 0.0f}};
+        t16_squad(sys, at, -1, 2.0f, 1.5f, mem);
+        const float hx = 13.0f + 1.5f;  // slots +-10, half-extent 3, MaxJiggleDistance 1.5
+        float bx = 0.0f, by = 0.0f;
+        CHECK(sys.team_joint_box(100, bx, by) && near(bx, hx, 1e-4f) && near(by, 4.5f, 1e-4f));
+        CHECK(sys.team_entries(100).size() == 2 && sys.team_entries(100)[1].kind == 0);
+        CHECK(sys.suspend_team_member(2));
+        CHECK(sys.team_entries(100).size() == 2 && sys.team_entries(100)[1].member == 2 && sys.team_entries(100)[1].kind == 1);
+        CHECK(sys.land_team(100).size() == 1);
+        CHECK(sys.team_joint_box(100, bx, by) && near(bx, hx, 1e-4f) && near(by, 4.5f, 1e-4f));  // the box is unchanged
+        SimRng rng(48);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(60, 20);
+        sys.move(o, rng, 1);
+        for (uint32_t f = 1; f < 300; ++f) sys.tick(f, rng, serial_for);
+        const UnitView k = sys.view(100);
+        // the container waits HX + 12 ahead of the member that stands where it stood, its order kept
+        CHECK(k.has_goal && k.speed < 1e-3f && near(k.pos.x - sys.view(2).pos.x, hx + 12.0f, 1e-2f));
+        CHECK(sys.rejoin_land_team(2));
+        bool arrived = false;
+        for (uint32_t f = 300; f < 900 && !arrived; ++f) {
+            sys.tick(f, rng, serial_for);
+            arrived = sys.view(100).arrived;
+        }
+        CHECK(arrived);  // the member closed up and the squad went on
+        // an absent (parked) member is still an entry: the box keeps its slot
+        CHECK(sys.park_team_member(2) && !sys.has_unit(2));
+        CHECK(sys.team_entries(100).size() == 2 && sys.team_entries(100)[1].kind == 2);
+        CHECK(sys.team_joint_box(100, bx, by) && bx > 3.0f + 1.5f + 1.0f);  // more than member 1's slot alone would give
+    }
+}
+
 int main() {
     test_corridor();
     test_threat();
@@ -5092,6 +5273,7 @@ int main() {
     test_land_squad_footprint();    // s78n t18 items 2 / 6
     test_land_squad_repulsion();    // s78n t18 items 1 / 7
     test_land_squad_speed_order();  // s78n t18 item 3
+    test_land_squad_gates();        // s78n t18 items 4 / 5
     test_determinism();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

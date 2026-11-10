@@ -3359,29 +3359,31 @@ void TacticalBattle::apply_speed_factors() {
                          std::binary_search(targeted.begin(), targeted.end(), c.id);
         (void)movement_->set_team_target(c.id, tgt);
     }
-    // s78n t14 part B (MOVEMENT §5.3: the garrison exclusion gate of the land contact tests; [port] rule): a squad container
-    // is a collision checker now, so it must not be stopped by, or block, the garrison host its members walk into or sit
-    // in. One host per squad (the first member's, unit order); the whole squad inside: the container is no collider.
+    // s78n t18 (MOVEMENT §5.3 "Pair gates"): the garrison-host gate and "hidden" of the land contact tests, fed every tick
+    // (MovementSystem::set_pair_gate). A unit walking to / entering a host takes no collision object with that host; a
+    // squad garrisons as its container (FIGHTER_FLYING §7.4): its host is its first live member's, and while every live
+    // member is inside the container is hidden (no layer object, it does not walk, it takes no order). The host a unit
+    // has left is kept by set_garrison_exit (s4_leave / s4_apply) until its next order.
     if (!space_) {
         namespace tg = alamo::tactical::garrison;
+        const auto host_of = [](tg::ObjectId h) { return h == tg::kNoObject ? mv::ObjectId{-1} : static_cast<mv::ObjectId>(h); };
         std::vector<tg::ObjectId> link(containers_.size(), tg::kNoObject);
-        std::vector<uint8_t> outside(containers_.size(), 0);
+        std::vector<uint8_t> outside(containers_.size(), 0), inside(containers_.size(), 0);
         for (const Unit& u : units_) {
-            if (!u.alive || u.retreated || u.container >= containers_.size()) continue;
+            if (!u.alive || u.retreated) continue;
+            const tg::ObjectId in = garrison_.holder_of(u.id), pend = garrison_.pending_holder(u.id);
+            if (u.movable && movement_->has_unit(u.id)) (void)movement_->set_pair_gate(u.id, host_of(pend), false);
+            if (u.container >= containers_.size()) continue;
             const Container& c = containers_[u.container];
             if (!c.team || c.removed) continue;
-            const tg::ObjectId in = garrison_.holder_of(u.id);
-            if (in == tg::kNoObject) outside[u.container] = 1;
-            const tg::ObjectId h = in != tg::kNoObject ? in : garrison_.pending_holder(u.id);
+            (in == tg::kNoObject ? outside : inside)[u.container] = 1;
+            const tg::ObjectId h = in != tg::kNoObject ? in : pend;
             if (h != tg::kNoObject && link[u.container] == tg::kNoObject) link[u.container] = h;
         }
         for (size_t i = 0; i < containers_.size(); ++i) {
             const Container& c = containers_[i];
             if (!c.team || c.removed || !movement_->has_unit(c.id)) continue;
-            const mv::ObjectId ex = link[i] == tg::kNoObject ? mv::ObjectId{-1}
-                                    : outside[i] != 0        ? static_cast<mv::ObjectId>(link[i])
-                                                             : mv::MovementSystem::kCollisionExemptAll;
-            (void)movement_->set_collision_exempt(c.id, ex);
+            (void)movement_->set_pair_gate(c.id, host_of(link[i]), inside[i] != 0 && outside[i] == 0);
         }
     }
 }

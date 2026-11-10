@@ -632,6 +632,8 @@ V2 MovementSystem::pick_land_slot(const Unit& u, V2 p, std::vector<uint64_t>& ta
 
 void MovementSystem::move(const MoveOrder& order, SimRng& rng, uint32_t frame) {
     std::vector<uint32_t> idx = order_indices(order);
+    // s78n t18 [port]: a hidden unit (a squad container garrisoned with its whole squad) takes no move order
+    std::erase_if(idx, [this](uint32_t i) { return units_[i].hidden; });
     if (!fform_internal_) fform_waypoint(order, idx);  // s78f t02: fighters with a formation append the block instead
     if (idx.empty()) return;
     if (order.switch_locomotor)  // MOVEMENT §6.2: multi-locomotor units swap first (others ignore the bit)
@@ -743,6 +745,7 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
                 }
                 u.formation_speed = f.size() > 1 ? fspeed : kInf;
                 u.in_formation = f.size() > 1;  // OI tactical
+                u.exit_host = -1;  // s78n t18 (MOVEMENT §5.3): a new order ends the garrison-host gate of a unit that left
                 if (u.d.team_container) {
                     // s78n t18 (FIGHTER_FLYING §7.7 item 5): a new order while moving is not taken at once - the
                     // container brakes at its rate (0x14), coasting straight on, then starts the new path from speed 0
@@ -884,6 +887,7 @@ void MovementSystem::stop(std::span<const ObjectId> ids) {
         u->detour_seq = kNoDetour;  // s78n t18: the path stack is cleared
         u->around.clear();
         u->coast = u->fturn = u->path_started = false;  // s78n t18 (0x5ad320): state 0x16, the speed zeroed at once
+        u->exit_host = -1;  // s78n t18 [port]: Stop counts as the unit's next order for the garrison-host gate
         end_push(*u);  // a1k t03 [port]: a stop ends a pushed move
         u->following = false;
         arrival_reset(*u);  // s78l t02
@@ -1196,6 +1200,8 @@ bool MovementSystem::other_moving(const Unit& u) { return u.has_goal && !u.need_
 // their assumed speeds, directional radii of their footprint rectangles with the lane rule, inside trunc(fps x
 // MovingVsMovingLookAheadTime) frames (45), + 1.5 s when either can crush the other and that other scatters.
 bool MovementSystem::mvm_contact(const Unit& a, const Unit& b) const {
+    // Gates (MOVEMENT §5.3): garrison host either side; MovingVsMoving only between equal raised states
+    if (pair_gated(a, b) || raised(a) != raised(b)) return false;
     const float fps_t = 30.0f * cfg_.constants.moving_vs_moving_look_ahead_time;
     int32_t frames = static_cast<int32_t>(fps_t);
     if ((crushes(a, b) && scatters(b)) || (crushes(b, a) && scatters(a))) frames += 45;
@@ -1236,16 +1242,10 @@ float MovementSystem::mvs_look_distance(const Unit& a, const Unit& b) const {
 
 float MovementSystem::mvs_contact(const Unit& a, const Unit& b, uint32_t frame) const {
     if (!checker_moving(a, frame)) return -1.0f;
+    // Gates (MOVEMENT §5.3): garrison host either side; a raised mover takes only a raised obstacle
+    if (pair_gated(a, b) || (raised(a) && !raised(b))) return -1.0f;
     const float look = mvs_look_distance(a, b);
     if (!(look > 0.0f) || a.m.next >= a.m.path.size()) return -1.0f;
-    // s78n t14 part B [port] (MOVEMENT §5.3 garrison exclusion gate): a squad container that starts inside the stopped
-    // unit's footprint and moves away from it is not blocked by it (the garrison leave puts the container on the host's
-    // centre: the sim resolves no exit bones).
-    if (a.d.team_container) {
-        const float rs = a.d.radius + b.d.radius;
-        const V2 from = a.m.pos - b.m.pos;
-        if (length_sq(from) < rs * rs && dot(a.m.path[a.m.next] - a.m.pos, from) >= 0.0f) return -1.0f;
-    }
     V2 ha = foot_half(a);
     float turn_yaw = kNoFacing;
     if (a.m.state == LocoState::WalkStartTurn) {
@@ -1257,6 +1257,12 @@ float MovementSystem::mvs_contact(const Unit& a, const Unit& b, uint32_t frame) 
     return foot_path_contact(a.m.pos, a.m.path, a.m.next, ha, foot_of(b), look, turn_yaw);
 }
 
+// StoppedVsStopped contact 0x686500 (MOVEMENT §5.3 / §5.3.1 item 1): the garrison-host gate (no hover test), then the
+// overlap coefficient of the two footprint rectangles > MinimumStoppedVsStoppedOverlapCoefficient.
+bool MovementSystem::svs_overlap(const Unit& a, const Unit& b) const {
+    return !pair_gated(a, b) && foot_overlap_coefficient(foot_of(a), foot_of(b)) > cfg_.constants.minimum_stopped_vs_stopped_overlap;
+}
+
 // [port] Keep test of the stand-in kinds (StoppedVsStopped, MovingVsMoving of pairs that are not Infantry / Bike): both
 // participants still exist and collide, and the classification that created the collision still holds this frame.
 bool MovementSystem::collision_applies(const CollisionObject& c, uint32_t frame) const {
@@ -1266,15 +1272,13 @@ bool MovementSystem::collision_applies(const CollisionObject& c, uint32_t frame)
     const Unit& b = units_[static_cast<size_t>(ib)];
     if (!land_layer_object(a) || !land_layer_object(b)) return false;  // FIGHTER_FLYING §7.8: never a squad member
     if (!collision_classes_interact(a.d.collision_class, b.d.collision_class)) return false;
-    if (pair_exempt(a, b)) return false;  // s78n t14 part B: set_collision_exempt
     switch (c.kind) {
         case CollisionKind::MovingVsMoving:
             return !drives_through(a, b) && checker_moving(a, frame) && other_moving(b) && mvm_contact(a, b);
         case CollisionKind::MovingVsStopped:
             return !drives_through(a, b) && checker_moving(a, frame) && !other_moving(b) && mvs_contact(a, b, frame) >= 0.0f;
         case CollisionKind::StoppedVsStopped:
-            return !a.has_goal && !b.has_goal && !a.pushed && !b.pushed &&
-                   foot_overlap_coefficient(foot_of(a), foot_of(b)) > cfg_.constants.minimum_stopped_vs_stopped_overlap;
+            return !a.has_goal && !b.has_goal && !a.pushed && !b.pushed && svs_overlap(a, b);
     }
     return false;
 }
@@ -1302,7 +1306,6 @@ void MovementSystem::detect_collisions(uint32_t frame) {
                 const Unit& b = units_[bi];
                 // (the candidates are layer objects: FIGHTER_FLYING §7.8, a squad member is never one)
                 if (!collision_classes_interact(a.d.collision_class, b.d.collision_class)) continue;
-                if (pair_exempt(a, b)) continue;  // s78n t14 part B: set_collision_exempt (a squad and its garrison host)
                 // OI tactical: a crusher drives through units it can crush (§5.4 case 3 "push/crush attempt" [port]);
                 // the crush pass (§5.5) kills them. s78n t14 part B: not through a squad container (it is pushed).
                 if (drives_through(a, b)) continue;
@@ -1323,9 +1326,8 @@ void MovementSystem::detect_collisions(uint32_t frame) {
                 const Unit& b = units_[bi];
                 // a1k t03: a pushed unit's locomotor moves, so it is not stopped.
                 if (b.has_goal || b.pushed || !collision_classes_interact(a.d.collision_class, b.d.collision_class)) continue;
-                if (pair_exempt(a, b)) continue;  // s78n t14 part B: set_collision_exempt
                 // s78n t18 (MOVEMENT §5.3.1 item 1, 0x686500): the overlap coefficient of the two footprint rectangles
-                if (foot_overlap_coefficient(foot_of(a), foot_of(b)) <= k.minimum_stopped_vs_stopped_overlap) continue;
+                if (!svs_overlap(a, b)) continue;
                 if (coll_.has_pair(a.d.id, b.d.id)) continue;
                 coll_.add(CollisionKind::StoppedVsStopped, a.d.id, b.d.id, frame);
                 ++stats_.collisions_created;
@@ -1652,7 +1654,7 @@ bool MovementSystem::path_around(const CollisionObject& c, Unit& a, const Unit& 
         const Unit& o = units_[ci];
         // FIGHTER_FLYING §7.8 item 3: the layer-0x10 objects minus the pathing unit (never a squad member). [port] only
         // standing ones, and not the unit's own garrison host (the port's obstacle is a penalty circle).
-        if (o.d.id == a.d.id || (o.has_goal && o.d.id != b.d.id) || pair_exempt(a, o)) continue;
+        if (o.d.id == a.d.id || (o.has_goal && o.d.id != b.d.id) || pair_gated(a, o)) continue;
         if (!collision_classes_interact(a.d.collision_class, o.d.collision_class)) continue;
         if (crushes(a, o) && !o.d.team_container) continue;
         obs.push_back({o.m.pos, o.d.radius});
@@ -2205,12 +2207,32 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                 if (bike) bike_frame(u, yaw0, true);
                 continue;
             }
+            // s78n t18 (MOVEMENT §5.3 "Hover state", Walk service 0x61e930): while rising (2) / lowering (3) the Walk
+            // state machine does not run - the height changes by the max speed per frame until Hover_Height / the
+            // ground, then the state is raised (1) / grounded (0) and the speed 0. [port] z itself is not written.
+            const bool hovers = u.d.hover_height > 0.0f && u.d.locomotor == LocomotorKind::Default;
+            if (hovers && u.hover >= 2) {
+                const float step = u.lp.max_speed;
+                u.hover_off = u.hover == 2 ? u.hover_off + step : u.hover_off - step;
+                if (!(step > 0.0f) || (u.hover == 2 ? u.hover_off >= u.d.hover_height : u.hover_off <= 0.0f)) {
+                    u.hover_off = u.hover == 2 ? u.d.hover_height : 0.0f;
+                    u.hover = u.hover == 2 ? uint8_t{1} : uint8_t{0};
+                    u.m.speed = 0.0f;
+                }
+                continue;
+            }
             // s78k t01 / s78l t02 (MOVEMENT §3.5.1): the arrival turn runs in the serial pass below (it reads the clip
             // data hook).
             if (u.aturn != LocoState::None && !u.has_goal && u.d.locomotor == LocomotorKind::Default) continue;
             // S8 t11: a Walk in a deploy state does not move (MovementSystem::deploy).
             if (!u.has_goal || u.need_path || frame < u.start_frame || u.deploy != LocoState::None) {
                 if (bike) bike_frame(u, yaw0, false);
+                continue;
+            }
+            // s78n t18 (Walk Start Move 0x61ff40): a Hover_Height unit that is not raised rises first; the frame ends
+            if (hovers && u.hover != 1) {
+                u.hover = 2;
+                u.m.speed = 0.0f;
                 continue;
             }
             // s78k t03 / s78l t01: a team member walks at the team speed (team_caps) - the container's effective max speed
@@ -2313,6 +2335,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                 u.detour_seq = kNoDetour;  // s78n t18: the path is popped
                 u.around.clear();
                 u.path_change = frame;
+                u.exit_host = -1;  // (MOVEMENT §5.3: the walk-out move arrived)
                 land_arrival_turn(u);  // s78k t01: state 0x15
             }
             if (r.blocked && !close) {
@@ -2533,6 +2556,15 @@ void MovementSystem::hash_units(StateHasher& h) const {
             h.u32(u.tindex);
             h.u8(u.recovery);  // s78n t14: the recovery state (was a bool)
             h.u32(u.start_delay);  // s78n t14
+        }
+        if (u.exit_host >= 0) {  // s78n t18: the garrison-host gate of a unit that left, only while set
+            h.u8(0xE7);
+            h.i32(u.exit_host);
+        }
+        if (u.hover != 0 || u.hover_off != 0.0f) {  // s78n t18: the hover state, only once it left the ground
+            h.u8(0xE8);
+            h.u8(u.hover);
+            h.f32(u.hover_off);
         }
         if (u.detour_seq != kNoDetour || !u.around.empty()) {  // s78n t18: Path Around bookkeeping, only while any
             h.u8(0xD7);

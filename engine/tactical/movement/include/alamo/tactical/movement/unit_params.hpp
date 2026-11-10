@@ -53,6 +53,10 @@ struct UnitDesc {
     // 0x5c6d40) for such a type.
     float movement_prediction_interval = 0.0f;
     bool avoidance_disabled = false;
+    // s78n t18 (MOVEMENT §5.3 "Hover state"; save version 17): Hover_Height (+0x23bc; 0 = unset). A Walk unit with it
+    // rises before its first move and counts as "raised" in the land contact tests from then on (FoC:
+    // Lancet_Air_Artillery, Gallofree_HTT_Transport). [port] the rise only takes its time: the unit's z is not raised.
+    float hover_height = 0.0f;
     uint32_t space_layer = kLayerFrigate;  // Space_Layer
     float layer_z = 0.0f;         // Layer_Z_Adjust
     // ---- OI tactical (PHASE4 S7 open items) ----
