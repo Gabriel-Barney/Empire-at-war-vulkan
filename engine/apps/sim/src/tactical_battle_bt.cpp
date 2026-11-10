@@ -1188,16 +1188,20 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng, const Para
     //    last Defending Forces marker. [port] Formation placement 0x2a00b0 = rows of 6 behind the anchor along the facing;
     //    Space_Escort_Unit_Types and the planet-specific upgrades (step 5) are not spawned.
     const bool skirmish_records = skirmish_land() || skirmish_map();
-    if (skirmish_records) bt_skirmish_anchors();  // t50; skai: space skirmish map battles too
+    // s78n t20 (SKIRMISH_SETUP §2.2 [H]): a land skirmish places its start forces at the spawn-point markers only. Before, a map
+    // that also carries campaign markers (_MP_LAND_UTAPAU has a Defending Forces Position at (1671, 4620), next to the
+    // Rebel spawn) moved side 0's anchor onto it: the Empire's start infantry stood beside the Rebel base, partly snapped
+    // into a pocket between a structure footprint and a cliff that no path leaves.
+    const uint8_t spawn_marked = skirmish_records ? bt_skirmish_anchors() : uint8_t{0};  // t50; skai: space skirmish map battles too
     const std::vector<size_t> dm = of_kind(kMkDefend), am = of_kind(kMkAttack);
-    if (!dm.empty()) {
+    if (!dm.empty() && !(spawn_marked & 1u)) {
         anchor_[0] = flat(bt_markers_[dm.front()].pos);
         facing_[0] = bt_markers_[dm.front()].facing;
         // a1h t06: mode +0x288 record of the defender (TACTICAL_GAPS §4.2.2 item 1). s78i t02: a skirmish writes its
         // records from the spawn-point markers instead (bt_skirmish_anchors; TACTICAL_COMBAT §3.1.1 "other spawns").
         if (!skirmish_records) drop_facing_[0] = facing_[0];
     }
-    if (!am.empty()) {
+    if (!am.empty() && !(spawn_marked & 2u)) {
         static const objects::BehaviorTypeId kDummy = objects::behavior_type_id("DUMMY_GROUND_STRUCTURE");
         const objects::ObjectStore& st = mode.primary();
         bool have_block = false;
@@ -1236,6 +1240,7 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng, const Para
     // [port] a side without its marker faces the other side's anchor.
     for (int s = 0; s < 2; ++s) {
         if (s == 0 ? !dm.empty() : !am.empty()) continue;
+        if (spawn_marked & (1u << s)) continue;  // s78n t20: the marker's own facing
         const Vec3 d{anchor_[1 - s].x - anchor_[s].x, anchor_[1 - s].y - anchor_[s].y, 0.0f};
         const float len = dmath::sqrt(d.x * d.x + d.y * d.y);
         facing_[s] = len > 0.0f ? Vec3{d.x / len, d.y / len, 0.0f} : Vec3{s == 0 ? -1.0f : 1.0f, 0.0f, 0.0f};
@@ -1713,12 +1718,13 @@ void TacticalBattle::bt_skirmish_base(TacticalMode& mode) {
             ++stats_.skirmish_pads;
 }
 
-void TacticalBattle::bt_skirmish_anchors() {
+uint8_t TacticalBattle::bt_skirmish_anchors() {
     // t50 [M]: a land skirmish side starts at its slot's map marker: "Player_<slot>_Spawn_Point_Marker" owned by the slot's player
     // (the explicit-faction MP maps carry one per faction and slot), else "Team_0<slot>_Spawn_Point_Marker" /
     // "Team_0<slot>_Base_Position_Marker" (the team maps; the first in map order). No marker: the fallback anchor stays.
-    if (!skirmish_land() && !skirmish_map()) return;
+    if (!skirmish_land() && !skirmish_map()) return 0;
     const objects::GameObjectTypes& types = catalog_->types();
+    uint8_t found = 0;
     for (uint8_t side = 0; side < 2; ++side) {
         const int32_t player = side_player(side);
         int32_t slot = -1;
@@ -1744,8 +1750,19 @@ void TacticalBattle::bt_skirmish_anchors() {
             // s78i t02 (TACTICAL_COMBAT §3.1.1 "other spawns", Creating_Starting_Forces_For_Skirmish): the side's mode
             // +0x288 record = that spawn marker's facing; no marker -> the record stays zero (yaw 0).
             drop_facing_[side] = pick->facing;
+            // s78n t20 (SKIRMISH_SETUP §2.2 [H]: each start company is placed at the spawn marker "with the marker
+            // orientation"): on land the start rows (slot_position) face the marker's way.
+            // [port] land only: a space skirmish keeps the older anchors (its station / fleet placement reads them, and the
+            // retail-checked space parity scenario depends on it).
+            if (!space_) {
+                facing_[side] = pick->facing;
+                found = static_cast<uint8_t>(found | (1u << side));
+            }
+            stats_.skirmish_marked[side] = true;
+            stats_.skirmish_marker[side] = anchor_[side];
         }
     }
+    return found;
 }
 
 void TacticalBattle::bt_shield_stamps(const TacticalMode& mode) {

@@ -166,6 +166,10 @@ struct BattleStats {
     // t50 (land skirmish): pads of the two slots, pads that started built, structures started on a pad during the battle.
     uint32_t skirmish_pads = 0, skirmish_prebuilt = 0, pad_builds = 0;
     uint32_t pad_restored = 0;  // §9.4 persisted pad children recreated at setup
+    // s78n t20 (skirmish, SKIRMISH_SETUP §2.2; not saved): per side, its spawn-point marker (when one was found) and where its
+    // first start-force unit was placed.
+    bool skirmish_marked[2] = {false, false}, start_placed[2] = {false, false};
+    Vec3 skirmish_marker[2] = {}, first_start[2] = {};
     // cu8l t03: the campaign space fleet placement (objects placed, their adopt draws), the vf82 pass's TEAM-container lock
     // adopt draws, the arrivals started and the arrival ends that registered a new coordinator.
     uint32_t fleet_placed = 0, fleet_adopts = 0, fleet_lock_adopts = 0, fleet_arrivals = 0, fleet_arrival_ends = 0;
@@ -1924,7 +1928,9 @@ private:
     bool pad_restore_ = true;                         // §9.4 recreate at setup (false while a save is loaded)
     void bt_pad_restore(TacticalMode& mode);          // setup: persistent pad children back on their pads
     void bt_skirmish_base(TacticalMode& mode);        // t50 setup: the land skirmish's pre-built base (command center, barracks)
-    void bt_skirmish_anchors();                       // t50 setup: land skirmish start positions from the slot's map markers
+    // t50 setup: skirmish start positions from the slot's map markers; s78n t20: returns bit `side` set for each side whose
+    // spawn-point marker was found (that side's anchor and facing then come from the marker only).
+    uint8_t bt_skirmish_anchors();
     // skai: skirmish map battles (tactical_battle_skirmish.cpp). Per-type Income_Stream data (parsed on first use, by type).
     struct SkIncome {
         bool parsed = false;

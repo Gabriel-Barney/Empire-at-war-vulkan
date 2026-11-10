@@ -1232,6 +1232,10 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32
             mv_type_extents(md, t);  // s78n t20
             movement_->add_unit(md);
         }
+        if (side < 2 && u.movable && !P.reserve && !P.built && !stats_.start_placed[side]) {  // s78n t20 (stats only)
+            stats_.start_placed[side] = true;
+            stats_.first_start[side] = pos;
+        }
         units_.push_back(u);
         ++P.spawned;
         ++P.alive;
