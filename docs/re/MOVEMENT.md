@@ -2607,6 +2607,52 @@ or 3.
 mover has no locomotor, or is gone → 6; a participant whose top path is not forced (vf +0x1d0 = path +0x5c) stands
 on a cell that is impassable for it (`0x50e280`) → that unit is **stopped** (vf +0x140(record id)) and → 6.
 
+**The impassable-cell rule in full (s78n t20 RE, 2026-11-10; `0x684450`, `0x680650`, `0x42cbf0`, `0x5ad320`,
+`0x42c920`, `0x554480`, `0x42cba0`, `0x423760`, `0x42c890`, `0x5569f0`) [H unless tagged].**
+1. **Order of the test.** Participant 0 first: it has a locomotor, its "forced" answer (locomotor vf +0x1d0 =
+   `0x42cbf0`) is false and its own position fails `0x50e280` for its own class → **it** is stopped and the record
+   goes to state 6. Participant 1 is tested the same way **only when participant 0 passed**. At most one unit is
+   stopped per call.
+2. **"Forced"** = byte +0x5c of the unit's **top** path record; **a unit with no path record answers false.** So a
+   standing obstacle with no path that stands on an impassable cell is "stopped" (a no-op apart from the idle
+   clip) and the record still goes to 6: a mover never gets a MovingVsStopped answer from an obstacle that stands
+   on impassable ground, and a mover that itself stands on impassable ground with an ordinary path loses its
+   whole path stack. Paths with +0x5c set: the forced (flag 0x20) paths of §4.3.1 item 2 [M: other writers of
+   +0x5c were not enumerated].
+3. **The stop** is the locomotor's vf +0x140(record id). The Walk locomotor (vftable `0x8ad798`) has **the same
+   function `0x5ad320`** in that slot as the land team container, so FIGHTER_FLYING §7.7's description holds for
+   every Walk unit: `0x42c920` clears the path stack through `0x554480`(pack, unit, id), and, when vf +0x170(id)
+   (`0x42cba0`: the pack's path owner +0x248 is 0 or equals id) agrees, plays the default idle clip; then, under
+   the same test, state := 0x16 and pack +0xec / +0xf0 := 0 **at once**.
+   - With id ≠ 0 (the collision's call) `0x554480` destroys **every** record: detours, pushes and the order /
+     formation path alike. (With id 0 and an owner in +0x248 it keeps the owner's record and the ones above it and
+     erases those below [M: the destination argument of the internal move is not visible in the decompiled
+     call]; with id 0 and no owner it destroys every record.)
+   - When the unit's path is owned by **another** collision record (+0x248 neither 0 nor this id) the stack is
+     still emptied, but state and speed are left: the next move step finds no record and goes to End Move (brake
+     while coasting, then idle).
+4. **The formation afterwards.** The formation's state-1 step `0x423760` counts a member as done when its
+   locomotor vf +0x150 (`0x42c890`: pack state 0, 0x16, 0x1c, 0x1e, 0x1f, 0x25, 0x26 or 0x27, or 0x19 for a type
+   with `Max_Dist_Walk_While_Deployed` > 0) is true and its vf +0x1c0(0) (a path record on the stack) is false.
+   The stopped unit is both from the same frame. So once **every** member is done, a one-block formation raises
+   signal 10 on all members and goes to state 3 **exactly as for a normal arrival**; an attack block then falls to
+   the 30-frame re-check `0x410a60` (FIGHTER_FLYING §4.11 A), which re-plans it.
+5. **How such a unit leaves the cell: nothing in the planner helps it** [H for what was read, M for "nothing"].
+   - `0x5a1910` only derives cell indices (§4.3.1 item 7); neither it, `0x5a2e00`, `0x5a3020` nor `0x417520` sets
+     +0x5c or exempts the first waypoints.
+   - A new position order is first run through the zone validation with the unit on zone 0: an impassable goal
+     is kept, a passable goal is replaced by an **impassable** cell near it (§4.3.1 item 7, step 5).
+   - The region search then needs the start region to pass the class mask and never enters an impassable region,
+     so the plan fails unless start and goal lie in one region (`0x41c1a0` returns 0, stamps F +0x1cc and is
+     not tried again for 2 × FPS frames [M: the formation's state after a failed plan was not traced]).
+   - Even with a path, every Walk step is tested at its **new** position (§3.5 step 4) unless the path is forced:
+     a step that ends on a passable cell is accepted whatever the cell it starts from, a step that ends on an
+     impassable one is reported (§5.4.7).
+   - What does move it: any **forced** path (flag 0x20: garrison exit, unload, the garrison corrective move), which
+     is a straight two-point path walked without passability tests.
+   - Not found: any code that evicts units when an obstacle is stamped under them (§1.3), or a rescue move.
+
+
 **Decision `0x684f90`** (state 0; a = mover, b = obstacle). First match wins:
 1. Validity; a or b missing → 6; the contact test `0x683790`(a, b) no longer holds → **5**.
 2. a's top path P exists and is **forced** (+0x5c, the flag-0x20 path: garrison exit, unload) and b has a locomotor
@@ -2756,8 +2802,8 @@ participant (and so for its squad members), `0x5c6ca0`(…, 1.0), weight 1.0 (FI
 `0x67f080` ("reset") sets both speeds to the max speeds and both flags to 0.
 
 **Validity `0x680650`** (start of most states): fewer than two participants → 8; a participant without a
-locomotor → 9; a participant whose top path is not forced stands on an impassable cell → it is stopped (vf +0x140)
-and → 9; either participant **not moving** (neither vf +0x1a8: speed > 0 or a path on the stack, nor vf +0x1b0:
+locomotor → 9; a participant whose top path is not forced stands on an impassable cell → it is stopped (vf +0x140;
+the rule in full is in §5.4.1, "The impassable-cell rule") and → 9; either participant **not moving** (neither vf +0x1a8: speed > 0 or a path on the stack, nor vf +0x1b0:
 turning in place) → **9**. So the record dies the frame one of the two has no speed and no path.
 
 **Decision `0x682d00`** (state 0, under quota): the chooser `0x67f7b0` gives (state, M, S, mode, swap_ok); state 0 →
@@ -3006,6 +3052,28 @@ found the destination blocked and `0x6835c0` allowed it; a = the mover, b = the 
 5. **Cut `0x684100`(record, a, c)** with **c = (L − s) + 3.0**: the path's length is reduced by c from its end
    (`0x54e780`), so **a's new path end is 3.0 before P along the path** (at s = L, where E itself was clear for
    the wider box: 3.0 before the old end).
+   - **`0x54e780`(points, keep) in full (s78n t20 RE, 2026-11-10) [H].** It keeps the arc length `keep` measured
+     from the path's **first point** (the record's whole point list, the part already walked included);
+     `0x684100` passes keep = the list's total length (`0x54f610`) − c, per record. Walking the segments from the
+     start (zero-length segments are skipped), at the first segment with keep < length so far + segment length:
+     every point after the segment's first point is erased; then, when keep > the length so far, one new last
+     point is appended at that arc length (linear interpolation; it takes the facing vector +0x0c of the point
+     that followed, id tag 0x3fffff, every other field 0). keep exactly on an existing point → no point is added.
+     **keep ≤ 0 (c ≥ the whole list's length) → only the first point is left: a one-node path.** keep ≥ the total
+     length → nothing changes. A list of fewer than 2 points is left alone.
+   - **The record's waypoint index (+0x60) is not touched by the cut.** The cut point can lie behind the unit: c
+     counts from the end of the path **stack** (L is the approximation's length), so when a detour or push record
+     lies on top of an order path, or s < 3.0, keep can fall short of what the unit has already walked on the
+     record that is cut, or below zero.
+   - **What the unit then does** (Walk step `0x620820`; the container step `0x5adfb0` has the same branch) [H]: a top record that is "on its last waypoint" (`0x5c5910`: index + 1 ≥ point count, which a one-node or
+     over-cut list always is; a cut inside the current segment behind the unit gets there in the same step,
+     because the unit is already past the new point's waypoint line and the index steps on) is treated as
+     finished. With a **started record below** it on the stack and the unit not in End Move: the top is popped
+     (`0x557b10`) in the same step and the unit walks on along the lower record. Otherwise the unit goes to **End
+     Move (0x14)**: it coasts straight along its stored travel direction while the speed controller brakes at its
+     normal deceleration (each coast step passability-tested unless the record is forced), then Pre-Stopped (0x15)
+     → arrival turn test → pop → idle. So it does **not** stop dead where it stands; it brakes to a stop from
+     there (unless a collision record's "at once" flag sets the speed, item 6).
    - a's top path is not a formation path (kind ≠ 1), or a is in no formation: a's **top** record only.
    - Formation path: a's kind-1 record, and the kind-1 record of every formation member m whose slot is **behind**
      a's (slot x offset `0x5566a0`: x_m < x_a) and within the two half widths sideways (|y_m − y_a| ≤ hy_m + hy_a,

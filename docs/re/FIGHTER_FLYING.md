@@ -1986,10 +1986,14 @@ toward it. Confirmed by the s78n t14 run (`S78N_T14_RUN.md`).
        at or past its hold line), and by the slave-speed rule 0x67f130 when the two footprints already touch. A new
        record (state 0) has both flags 1 and answers vmax.
      - StoppedVsStopped and TerrainCollision (0x5c78e0): vmax, flag untouched.
-   - **Stop** (LandTeamContainer vf +0x140(id) = 0x5ad320): 0x42c920 clears the path stack (0x554480(pack, K, id):
-     every record, or, with id = 0 and a current order id in pack +0x248, the records from that order's record on)
+   - **Stop** (LandTeamContainer vf +0x140(id) = 0x5ad320; **the Walk vftable 0x8ad798 has the same function in
+     that slot**, s78n t20): 0x42c920 clears the path stack (0x554480(pack, K, id):
+     every record when id ≠ 0 or the pack has no owner; with id = 0 and an owner id in pack +0x248, the records
+     **below** the owner's record, which stays with those above it [M], *corrected s78n t20 from "from that
+     order's record on"*)
      and, when vf +0x170(id) agrees (0x42cba0: pack +0x248 = 0 or = id): state := 0x16 and pack +0xec / +0xf0 := 0
-     **at once**. Callers seen: the garrison entry (§7.4) and the collision
+     **at once**. When it does not agree the stack is emptied all the same and the unit brakes through End Move
+     (MOVEMENT §5.4.1, "The impassable-cell rule"). Callers seen: the garrison entry (§7.4) and the collision
      code for a participant standing on an impassable cell (0x684450) [M: the Stop order's own call was not
      enumerated].
    - **New move order while moving: not at once.** The formation plan 0x41c1a0 resets the path stack directly
