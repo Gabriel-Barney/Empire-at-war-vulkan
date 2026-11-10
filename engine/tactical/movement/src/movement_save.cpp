@@ -36,7 +36,7 @@ constexpr uint32_t kFighterGridSaveVersion = 1;
 constexpr uint32_t kFighterGridsSaveVersion = 1;
 constexpr uint32_t kDeparturesSaveVersion = 1;
 constexpr uint32_t kEnginesSaveVersion = 1;
-constexpr uint32_t kMovementSaveVersion = 14;  // 14: s78n t03 UnitDesc::team_container, Unit::anchor / tslot / tindex / recovering / steer_blocked (land squad containers), s78n review Unit::team / team_factor / team_cap / team_max and the parked squad members; 13: cu8j t01 / t02 UnitDesc::stationary_space_layer, Unit::pend / adopted, the pending compositions + last serial; 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate; 7: S8 t24 turret params (UnitDesc) + TURRET state (Unit); 8: S7 t37 fighter object goal blocks (FighterGuard), FighterSquad::guard_follow; 9: a1k t03 pushed move (Unit::pushed / push_path / push_next / push_blocked), MovementStats::pushes / push_failures, UnitDesc::hard_x / hard_y; 10: s78f t02 fighter formation block stacks (FighterFormation replaces FighterGuard), FighterParams / FighterSquad chase ranges, FighterSquad::speed_cap dropped; 11: s78k t01 UnitDesc::stopped_turn_rate / movement_directions, Unit::forced (land straight move); 12: s78l t02 UnitDesc::rotation_animation_speed, the Walk arrival turn state (Unit::aturn / aturn_rate / tclip / tclip_start / tclip_speed / aturn_ended / aturn_end_pending)
+constexpr uint32_t kMovementSaveVersion = 15;  // 15: s78n t14 UnitDesc::container_arrangement, Unit::recovery (u8, replaces recovering) / start_delay / team shape / laid_out / lay_dir / spread / team_target, the parked members' offsets; 14: s78n t03 UnitDesc::team_container, Unit::anchor / tslot / tindex / recovering / steer_blocked (land squad containers), s78n review Unit::team / team_factor / team_cap / team_max and the parked squad members; 13: cu8j t01 / t02 UnitDesc::stationary_space_layer, Unit::pend / adopted, the pending compositions + last serial; 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate; 7: S8 t24 turret params (UnitDesc) + TURRET state (Unit); 8: S7 t37 fighter object goal blocks (FighterGuard), FighterSquad::guard_follow; 9: a1k t03 pushed move (Unit::pushed / push_path / push_next / push_blocked), MovementStats::pushes / push_failures, UnitDesc::hard_x / hard_y; 10: s78f t02 fighter formation block stacks (FighterFormation replaces FighterGuard), FighterParams / FighterSquad chase ranges, FighterSquad::speed_cap dropped; 11: s78k t01 UnitDesc::stopped_turn_rate / movement_directions, Unit::forced (land straight move); 12: s78l t02 UnitDesc::rotation_animation_speed, the Walk arrival turn state (Unit::aturn / aturn_rate / tclip / tclip_start / tclip_speed / aturn_ended / aturn_end_pending)
 
 // ---- enum validation (switches without default: -Wswitch flags a new enumerator here) ---------------------------
 bool valid_loco_state(uint8_t v) {
@@ -301,6 +301,7 @@ void io_desc(IO& io, D& d) {  // UnitDesc
     io.f32(d.rotation_animation_speed);  // s78l t02 (version 12)
     io.u32(d.stationary_space_layer);  // cu8j t01 (version 13)
     io.b(d.team_container);  // s78n t03 (version 14)
+    io.i32(d.container_arrangement);  // s78n t14 (version 15)
 }
 
 template <class IO, class T>
@@ -467,8 +468,17 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.i32(u.anchor);  // s78n t03 (version 14)
     io.v2(u.tslot);
     io.u32(u.tindex);
-    io.b(u.recovering);
+    io.u8(u.recovery);  // s78n t14 (version 15): replaces the version 14 bool
     io.u32(u.steer_blocked);
+    io.u32(u.start_delay);  // s78n t14 (version 15)
+    io.f32(u.team_hx);
+    io.f32(u.team_hy);
+    io.f32(u.team_thx);
+    io.f32(u.team_thy);
+    io.b(u.laid_out);
+    io.v2(u.lay_dir);
+    io.b(u.spread);
+    io.b(u.team_target);
     io.i32(u.team);  // s78n review (version 14): read by a command before the first tick after a load
     io.f32(u.team_factor);
     io.f32(u.team_cap);
@@ -946,7 +956,8 @@ void MovementSystem::write(ByteWriter& w) const {
         for (const uint32_t o : pc.offsets) w.u32(o);
     }
     w.u32(static_cast<uint32_t>(parked_.size()));  // s78n review (version 14): parked squad members, ascending member id
-    for (const LandTeamSlot& p : parked_) w.i32(p.member).i32(p.container).u32(p.tindex).f32(p.slot.x).f32(p.slot.y);
+    for (const LandTeamSlot& p : parked_)  // s78n t14 (version 15): + the offset
+        w.i32(p.member).i32(p.container).u32(p.tindex).f32(p.slot.x).f32(p.slot.y).f32(p.off.x).f32(p.off.y);
 }
 
 bool MovementSystem::read(ByteReader& r) {
@@ -1036,7 +1047,7 @@ bool MovementSystem::read(ByteReader& r) {
         for (uint32_t& o : pc.offsets) o = r.u32();
         if (!r.ok() || pc.serial == 0 || (k > 0 && pc.serial <= pending[k - 1].serial)) return false;
     }
-    if (!r.count(n, 20)) return false;  // s78n review: parked squad members
+    if (!r.count(n, 28)) return false;  // s78n review: parked squad members
     std::vector<LandTeamSlot> parked(n);
     for (uint32_t k = 0; k < n; ++k) {
         LandTeamSlot& p = parked[k];
@@ -1045,6 +1056,8 @@ bool MovementSystem::read(ByteReader& r) {
         p.tindex = r.u32();
         p.slot.x = r.f32();
         p.slot.y = r.f32();
+        p.off.x = r.f32();
+        p.off.y = r.f32();
         if (!r.ok() || p.member < 0 || p.container < 0 || (k > 0 && p.member <= parked[k - 1].member)) return false;
     }
     if (!r.ok()) return false;

@@ -1034,6 +1034,8 @@ void test_land_squad_container() {
     float off_line = 0.0f, max_lead = 0.0f, team_speed = 0.0f, late_along = 0.0f, settle_err = 0.0f;
     uint32_t store_mismatch = 0, moving_frames = 0, recover_frames = 0;
     float start_error = -1.0f, recovered_error = -1.0f;
+    std::vector<float> along_ref;  // s78n t14: each member's along error 120 frames into the move
+    bool settle_target = false;    // a member has a target when the team stopped (no recovery, §7.3 item 6)
     for (uint64_t t = 0; t < 8000 && !done; ++t) {
         host.tick_once();
         if (!invaded && host.modes().depth() == 1) {
@@ -1101,12 +1103,19 @@ void test_land_squad_container() {
         const Vec3 p = st.position(th);
         if (p.x != k.pos.x || p.y != k.pos.y) ++store_mismatch;  // every reader takes the store position: the mover's
         const float c = std::cos(k.yaw * 0.017453292f), s = std::sin(k.yaw * 0.017453292f);
+        // s78n t14: a member's live slot (the Rows layout re-lays at the move start and at waypoints)
+        const auto live_slot = [&](size_t m) {
+            mv::ObjectId lc = -1;
+            mv::V2 sl = slots[m].second;
+            CHECK(ms.team_slot(members[m], lc, sl) && lc == team_id);
+            return sl;
+        };
         // the members' largest distance from their slot points (container + R(yaw) (slot + jiggle))
         const auto slot_error = [&]() {
             float e = 0.0f;
             for (size_t m = 0; m < members.size(); ++m) {
                 const mv::UnitView v = ms.view(members[m]);
-                const mv::V2 off = slots[m].second + v.jiggle;
+                const mv::V2 off = live_slot(m) + v.jiggle;
                 const float tx = k.pos.x + c * off.x - s * off.y, ty = k.pos.y + s * off.x + c * off.y;
                 e = std::max(e, std::sqrt((v.pos.x - tx) * (v.pos.x - tx) + (v.pos.y - ty) * (v.pos.y - ty)));
             }
@@ -1141,9 +1150,17 @@ void test_land_squad_container() {
                 team_speed = std::max(team_speed, k.speed);
                 for (size_t m = 0; m < members.size(); ++m) {
                     const mv::UnitView v = ms.view(members[m]);
-                    const float along = slots[m].second.x - (c * (v.pos.x - k.pos.x) + s * (v.pos.y - k.pos.y));
+                    const float along = live_slot(m).x - (c * (v.pos.x - k.pos.x) + s * (v.pos.y - k.pos.y));
                     max_lead = std::max(max_lead, along);  // > 0: the member is behind its slot (the container leads)
-                    if (b->frame() > order_frame + 60) late_along = std::max(late_along, std::fabs(along));
+                    // s78n t14 (FIGHTER_FLYING §7 step 4, §7.3): a member's vmax is the team speed, so a lag from the
+                    // move start (start delay, turning onto the heading - no turn to the team facing after a recovery)
+                    // is kept, not made up; once on the heading the member holds it: the along error stops changing.
+                    if (b->frame() == order_frame + 120) {
+                        along_ref.resize(members.size());
+                        along_ref[m] = along;
+                    } else if (b->frame() > order_frame + 120 && m < along_ref.size()) {
+                        late_along = std::max(late_along, std::fabs(along - along_ref[m]));
+                    }
                 }
             } else if (b->frame() > order_frame + 5) {
                 CHECK(k.arrived);
@@ -1154,31 +1171,36 @@ void test_land_squad_container() {
         }
         if (b->frame() < settle_frame + 120) continue;  // members recover to their slots once the team stopped
         settle_err = slot_error();
-        for (const auto id : members) CHECK(!ms.view(id).has_goal);
+        for (const auto id : members) {
+            CHECK(!ms.view(id).has_goal);
+            settle_target = settle_target || cs.current_target(id) != tc::kNoObject;
+        }
         done = true;
     }
     CHECK(done);
     std::printf("  land squad: dropped up to %.2f off their slots, recovered to %.2f in %u frames\n", static_cast<double>(start_error),
                 static_cast<double>(recovered_error), recover_frames);
     std::printf("  land squad: moving %u frames, off its line <= %.3f, members up to %.2f behind their slots at the team speed %.3f, "
-                "along error after 2 s <= %.2f, settled within %.2f; store = mover %d\n",
+                "along error change after 2 s <= %.2f, settled within %.2f (target %d); store = mover %d\n",
                 moving_frames, static_cast<double>(off_line), static_cast<double>(max_lead), static_cast<double>(team_speed),
-                static_cast<double>(late_along), static_cast<double>(settle_err), store_mismatch == 0 ? 1 : 0);
+                static_cast<double>(late_along), static_cast<double>(settle_err), settle_target ? 1 : 0, store_mismatch == 0 ? 1 : 0);
     if (!done) return;
     CHECK(store_mismatch == 0);
     CHECK(start_error > 4.0f && recovered_error >= 0.0f && recovered_error <= 4.0f);  // idle recovery (> 4.0 from the slot)
     CHECK(moving_frames > 60 && off_line < 0.5f);
     CHECK(max_lead > 1.0f);   // the container leads (its members steer from its start-of-tick state)
-    CHECK(late_along < 4.0f);  // and the members hold the formation
-    CHECK(settle_err <= 4.0f);
+    CHECK(along_ref.size() == members.size() && late_along < 4.0f);  // and the members hold the formation
+    CHECK(settle_target || settle_err <= 4.0f);  // s78n t14: they recover to their slots only while the team has no target
 }
 
 // s78n review (TACTICAL_COMBAT §5.4.4 item 2, L1_S4_REMAINING §3.5): a land squad garrisons in a garrison vehicle and
 // leaves it again (squad_types(true): S10_Walker, GARRISON_UNIT troopers). The garrison entry parks each member's team
-// place (MovementSystem::park_team_member); the walker then drives off with the squad inside; the leave puts the
-// container at the first member's exit point and steers every member to its old slot again (rejoin_land_team): the same
-// slots in team index order, the same joint box (Bribe's E_T, the fog footprint), the container's store position = its
+// place (MovementSystem::park_team_member); the walker then drives off with the squad inside; the leave steers every
+// member to its old slot again (rejoin_land_team): the slots it had when it went in, the container's store position = its
 // mover's (team targeting P_U). An order on one member then moves the whole squad, which settles on its slots.
+// s78n t14 (FIGHTER_FLYING §7.4): when the last member is in, the container is at the walker's position (and rides with
+// it: it is teleported to the host centre at the leave); the squad leaves as one - the container at the host centre E,
+// every member at E + its offset, then the container walks out to the garrison's exit point X (Move_To, flag 0x20).
 void test_land_squad_garrison() {
     auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
                        false, false, false, true);
@@ -1220,8 +1242,13 @@ void test_land_squad_garrison() {
     objects::ObjectId team_id = objects::kNoObjectId, walker = objects::kNoObjectId;
     std::vector<objects::ObjectId> members;
     std::vector<std::pair<mv::ObjectId, mv::V2>> slots;
-    float box_x = 0.0f, box_y = 0.0f, exit_gap = -1.0f, walked = 0.0f, settle_err = -1.0f;
-    bool inside_ok = false, rejoined = false, ordered = false, store_ok = true, teleported = false;
+    float box_x = 0.0f, box_y = 0.0f, exit_gap = -1.0f, walked = 0.0f, settle_err = -1.0f, in_gap = -1.0f, off_err = -1.0f;
+    float out_gap = -1.0f;
+    bool settle_target = false;  // s78n t14: a member has a target when the squad stopped (no recovery, §7.3 item 6)
+    bool inside_ok = false, rejoined = false, ordered = false, store_ok = true, teleported = false, walking_out = false;
+    std::vector<std::pair<mv::ObjectId, mv::V2>> in_slots;  // each member's slot when it went in (team_slot)
+    std::vector<mv::V2> in_off;                            // and its offset from the container (parked_offset)
+    Vec3 exit_x{};
     Vec3 walker_at{}, tele_to{};
     for (uint64_t t = 0; t < 12000 && !done; ++t) {
         host.tick_once();
@@ -1273,10 +1300,29 @@ void test_land_squad_garrison() {
         if (st.position(th).x != k.pos.x || st.position(th).y != k.pos.y) store_ok = false;  // P_U = the mover's position
         if (stage == 1) {  // every member inside the walker
             bool inside = true;
-            for (const auto id : members) inside = inside && b->garrison_holder_of(id) == walker;
+            for (const auto id : members) {
+                mv::ObjectId c = -1;
+                mv::V2 sl;
+                if (ms.team_slot(id, c, sl)) {  // still outside: remember its slot (the one it parks with)
+                    if (in_slots.size() < members.size()) in_slots.assign(members.size(), {});
+                    for (size_t m = 0; m < members.size(); ++m)
+                        if (members[m] == id) in_slots[m] = {id, sl};
+                }
+                inside = inside && b->garrison_holder_of(id) == walker;
+            }
             if (!inside) {
                 if (b->frame() > stage_frame + 1500) break;
                 continue;
+            }
+            {  // the container went in with the last member: at the walker's position
+                const Vec3 hp = st.position(st.find(walker));
+                in_gap = std::sqrt((k.pos.x - hp.x) * (k.pos.x - hp.x) + (k.pos.y - hp.y) * (k.pos.y - hp.y));
+                in_off.clear();
+                for (const auto id : members) {
+                    mv::V2 o;
+                    CHECK(ms.parked_offset(id, o));
+                    in_off.push_back(o);
+                }
             }
             inside_ok = ms.has_unit(team_id);
             for (const auto id : members) inside_ok = inside_ok && !ms.has_unit(id) && ms.team_member_parked(id);
@@ -1295,25 +1341,34 @@ void test_land_squad_garrison() {
             if (ms.view(walker).has_goal && b->frame() < stage_frame + 900) continue;
             const Vec3 wp = st.position(st.find(walker));
             walked = std::sqrt((wp.x - walker_at.x) * (wp.x - walker_at.x) + (wp.y - walker_at.y) * (wp.y - walker_at.y));
-            CHECK(b->order_leave_garrison(*tm, 0, members) == commands::RejectReason::None);
-            rejoined = true;
+            const objects::ObjectId one_m[] = {members.front()};  // one member's leave takes the whole squad out
+            CHECK(b->order_leave_garrison(*tm, 0, one_m) == commands::RejectReason::None);
+            exit_x = b->garrison().exit_point(walker, wp, st.facing(st.find(walker)));
+            rejoined = in_slots.size() == members.size();
+            const mv::V2 kp = ms.view(team_id).pos;
+            off_err = 0.0f;
             for (size_t m = 0; m < members.size(); ++m) {
                 mv::ObjectId c = -1;
                 mv::V2 sl;
                 rejoined = rejoined && ms.has_unit(members[m]) && b->garrison_holder_of(members[m]) == objects::kNoObjectId &&
-                           ms.team_slot(members[m], c, sl) && c == team_id && sl == slots[m].second && !ms.team_member_parked(members[m]);
+                           ms.team_slot(members[m], c, sl) && c == team_id && sl == in_slots[m].second &&
+                           !ms.team_member_parked(members[m]);
+                if (m < in_off.size()) {  // every member at E + its offset
+                    const mv::V2 p = ms.view(members[m]).pos;
+                    off_err = std::max(off_err, std::fabs(p.x - (kp.x + in_off[m].x)) + std::fabs(p.y - (kp.y + in_off[m].y)));
+                }
             }
-            rejoined = rejoined && ms.land_team_slots(team_id) == slots;
             float ex = 0.0f, ey = 0.0f;
-            CHECK(b->squad_joint_box(st, team_id, ex, ey) && ex == box_x && ey == box_y);
-            const mv::V2 kp = ms.view(team_id).pos;
+            CHECK(b->squad_joint_box(st, team_id, ex, ey) && ex > 0.0f && ey > 0.0f);
             exit_gap = std::sqrt((kp.x - wp.x) * (kp.x - wp.x) + (kp.y - wp.y) * (kp.y - wp.y));
+            walking_out = ms.view(team_id).has_goal;
             stage = 3;
             stage_frame = b->frame();
             continue;
         }
-        if (stage == 3) {  // an order on one member moves the squad
-            if (b->frame() < stage_frame + 30) continue;
+        if (stage == 3) {  // the container walks out to X; then an order on one member moves the squad
+            if (k.has_goal && b->frame() < stage_frame + 600) continue;
+            out_gap = std::sqrt((k.pos.x - exit_x.x) * (k.pos.x - exit_x.x) + (k.pos.y - exit_x.y) * (k.pos.y - exit_x.y));
             const Vec3 p = st.position(th);
             const objects::ObjectId one[] = {members.back()};
             CHECK(b->order_move(*tm, 0, one, p.x - 200.0f, p.y + 100.0f, host.random().synced()) == commands::RejectReason::None);
@@ -1336,11 +1391,17 @@ void test_land_squad_garrison() {
             settle_err = 0.0f;
             for (size_t m = 0; m < members.size(); ++m) {
                 const mv::UnitView v = ms.view(members[m]);
-                const mv::V2 off = slots[m].second + v.jiggle;
+                mv::ObjectId mc = -1;
+                mv::V2 sl;
+                CHECK(ms.team_slot(members[m], mc, sl));  // the live slot (re-laid at the move start)
+                const mv::V2 off = sl + v.jiggle;
                 const float tx = k.pos.x + c * off.x - s * off.y, ty = k.pos.y + s * off.x + c * off.y;
                 settle_err = std::max(settle_err, std::sqrt((v.pos.x - tx) * (v.pos.x - tx) + (v.pos.y - ty) * (v.pos.y - ty)));
             }
-            for (const auto id : members) CHECK(cs.team(id) == static_cast<uint32_t>(team_id));  // team targeting: still its team
+            for (const auto id : members) {
+                CHECK(cs.team(id) == static_cast<uint32_t>(team_id));  // team targeting: still its team
+                settle_target = settle_target || cs.current_target(id) != tc::kNoObject;
+            }
             // s78n review (§5.4.4 item 2.4): a teleport of the container moves its mover (before, the store moved and
             // commit() wrote the old position back); the members then recover to their slots there
             const Vec3 p = st.position(th);
@@ -1353,19 +1414,26 @@ void test_land_squad_garrison() {
         if (b->frame() < stage_frame + 2) continue;
         const Vec3 p = st.position(th);
         teleported = k.pos.x == tele_to.x && k.pos.y == tele_to.y && p.x == tele_to.x && p.y == tele_to.y;
-        for (const auto id : members) teleported = teleported && ms.view(id).has_goal;  // recovering to the new slots
+        // recovering to the new slots - s78n t14: only while the team has no target (§7.3 item 6)
+        bool tgt_now = false;
+        for (const auto id : members) tgt_now = tgt_now || b->combat().current_target(id) != tc::kNoObject;
+        for (const auto id : members) teleported = teleported && (tgt_now || ms.view(id).has_goal);
         done = true;
     }
     std::printf("  land squad garrison: stage %d, %zu members inside %d, walker drove %.1f, rejoined %d, container %.1f from the "
-                "walker, squad order %d, settled within %.2f, store = mover %d\n",
+                "walker, squad order %d, settled within %.2f (target %d), store = mover %d\n",
                 stage, members.size(), inside_ok ? 1 : 0, static_cast<double>(walked), rejoined ? 1 : 0, static_cast<double>(exit_gap),
-                ordered ? 1 : 0, static_cast<double>(settle_err), store_ok ? 1 : 0);
+                ordered ? 1 : 0, static_cast<double>(settle_err), settle_target ? 1 : 0, store_ok ? 1 : 0);
     std::printf("  land squad garrison: container teleport moves its mover %d\n", teleported ? 1 : 0);
+    std::printf("  land squad garrison (s78n t14): container in %.2f from the walker, members out at E + offset within %.3f, "
+                "walking out %d, ended %.2f from the exit point\n",
+                static_cast<double>(in_gap), static_cast<double>(off_err), walking_out ? 1 : 0, static_cast<double>(out_gap));
+    CHECK(in_gap >= 0.0f && in_gap < 0.01f && off_err >= 0.0f && off_err < 0.01f && walking_out && out_gap >= 0.0f && out_gap < 2.0f);
     CHECK(done);
     if (!done) return;
     CHECK(inside_ok && walked > 100.0f && rejoined && ordered && store_ok);
     CHECK(exit_gap >= 0.0f && exit_gap < 80.0f);  // the container came out with its squad, not left at the old approach point
-    CHECK(settle_err <= 4.0f);
+    CHECK(settle_target || settle_err <= 4.0f);  // s78n t14: no recovery while the team has a target
     CHECK(teleported);
 }
 

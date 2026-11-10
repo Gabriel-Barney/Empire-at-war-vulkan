@@ -385,8 +385,9 @@ bool MovementSystem::remove_impl(ObjectId id) {
     for (Unit& m : units_)  // s78n t03: a removed container releases its members
         if (m.anchor == id) {
             m.anchor = -1;
-            m.recovering = false;
+            m.recovery = 0;
             m.steer_blocked = 0;
+            m.start_delay = 0;
         }
     std::erase_if(parked_, [id](const LandTeamSlot& p) { return p.container == id; });  // s78n review: and its parked ones
     if (steering) team_ix_rebuild();
@@ -417,7 +418,7 @@ UnitView MovementSystem::view(ObjectId id) const {
     v.goal = u->goal;
     if (u->anchor >= 0) {  // s78n t03: a steering member moves with its container's order (and while recovering)
         if (const Unit* k = unit_ptr(u->anchor)) {
-            v.has_goal = k->has_goal || u->recovering;
+            v.has_goal = k->has_goal || u->recovery != 0;
             v.arrived = k->arrived;
             v.failed = k->failed;
             v.goal = k->goal;
@@ -553,13 +554,13 @@ void MovementSystem::move(const MoveOrder& order, SimRng& rng, uint32_t frame) {
         }
         serial = compose_register(cfg_.mode == MoveMode::Space, true, goal);
     }
-    if (cfg_.mode == MoveMode::Land) move_land(order, idx, frame, delays, serial);
+    if (cfg_.mode == MoveMode::Land) move_land(order, idx, frame, delays, serial, rng);
     else move_space(order, idx, frame, delays, serial);
     if (!fform_internal_) fform_order(order, idx, frame, serial);  // s78f t02: a new formation holding the order's block
 }
 
 void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
-                               const std::vector<uint32_t>& delays, uint32_t serial) {
+                               const std::vector<uint32_t>& delays, uint32_t serial, SimRng& rng) {
     rebuild_regions_if_dirty();
     const MovementConstants& k = cfg_.constants;
     std::vector<FormationMember> mem;
@@ -673,6 +674,17 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
                 }
             }
         }
+    }
+    // s78n t14 (FIGHTER_FLYING §7.3 item 2, the path-set hook 0x5ad140 for a kind-1 path): a squad container standing still
+    // (speed 0) that gets this move draws every steering member's start delay, synced int [0, Max_Move_Frame_Delay], in team
+    // index order. [port] drawn here at the order (the order's units in index order, after the formation layout), not at
+    // the path's arrival from the planner.
+    for (uint32_t i : idx) {
+        const Unit& tc = units_[i];
+        if (!tc.d.team_container || tc.m.speed != 0.0f) continue;
+        for (const LandTeamSlot& e : land_team(tc.d.id))
+            if (Unit* m = unit_ptr(e.member))
+                m->start_delay = static_cast<uint32_t>(rng.range_int(0, cfg_.constants.max_move_frame_delay));
     }
     // 0x439360 (skipped with 0x20): index the LargeHover formations. [port] move direction = group centroid ->
     // destination; the retail layout around the centroid and the consumer of the index are not modelled.
@@ -1380,6 +1392,9 @@ bool MovementSystem::push_aside(const Unit& a, Unit& b) {
     b.pushed = true;
     b.push_path = std::move(out.points);
     b.push_next = 1;
+    // s78n t14 (FIGHTER_FLYING §7.2 caller 4, 0x5ad140): a squad container's path that is not a formation path and has >= 2
+    // points re-lays toward wp1 - wp0 (unreachable until a container takes part in land collision: §7.5).
+    if (b.d.team_container) b.relay.push_back(b.push_path[1] - b.push_path[0]);
     b.push_blocked = 0;
     b.nudge_frames = 0;
     ++stats_.pushes;
@@ -1521,6 +1536,8 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
         t.speed = k.m.speed;
         t.state = k.m.state;
         t.has_goal = k.has_goal;
+        t.laid_out = k.laid_out;  // s78n t14
+        t.has_target = k.team_target;
         anchor_at[i] = static_cast<int32_t>(snaps.size());
         snaps.push_back(t);
     }
@@ -1529,7 +1546,13 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
     for (size_t i = 0; i < units_.size(); ++i) {
         Unit& u = units_[i];
         if (anchor_at[i] >= 0) {
-            if (!snaps[static_cast<size_t>(anchor_at[i])].has_goal) continue;
+            // s78n t14 (FIGHTER_FLYING §7.3): 0x62d620 (which refreshes the jiggle) runs while the container turns in place,
+            // moves or brakes, and not in a start-delay frame.
+            const TeamSnap& k = snaps[static_cast<size_t>(anchor_at[i])];
+            const bool turn_or_move = k.state == LocoState::WalkStartTurn || k.state == LocoState::WalkTurning ||
+                                      k.state == LocoState::WalkMoving;
+            if (!turn_or_move && k.state != LocoState::WalkEndMove) continue;
+            if (turn_or_move && u.start_delay > 0) continue;
         } else if (!u.in_formation || !u.has_goal || u.need_path || frame < u.start_frame || is_air(u)) {
             continue;
         }
@@ -1581,10 +1604,22 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             WalkExtras x;  // OI tactical: formation members (jiggle, side-error steering)
             x.jiggle = u.jiggle;
             x.side_error = true;
+            // s78n t14 (FIGHTER_FLYING §7.2 callers 1 / 3): a squad container re-lays at a move start (state 0 -> toward the
+            // current waypoint, its facing when that is zero) and at every waypoint passed (the next segment); the layout
+            // itself runs in the serial pass after the walk (it writes the members).
+            const uint32_t next0 = u.m.next;
+            if (u.d.team_container && u.m.state == LocoState::WalkStopped && u.m.next < u.m.path.size()) {
+                const V2 to = u.m.path[u.m.next] - u.m.pos;
+                u.relay.push_back(length_sq(to) > 0.0f ? to : dir_from_deg(u.m.yaw));
+            }
             res[i] = walk_step(u.m, lp, cap, &grid_, u.in_formation ? &x : nullptr);
+            if (u.d.team_container)
+                for (uint32_t p = next0; p < u.m.next && static_cast<size_t>(p) + 1 < u.m.path.size(); ++p)
+                    u.relay.push_back(u.m.path[p + 1] - u.m.path[p]);
             if (bike) bike_frame(u, yaw0, true);  // §4.5: states 0x20-0x25 and the lean (writes only u)
         }
     });
+    team_relay_pass(frame);  // s78n t14: the squad containers' re-lays (serial, ascending id)
     // s78l t02 (MOVEMENT §3.5.1 states 0x0F-0x15): the arrival turns, serial in ascending id; their clip plays become
     // this tick's turn clip events.
     for (Unit& u : units_) {
@@ -1838,14 +1873,22 @@ void MovementSystem::hash_units(StateHasher& h) const {
         h.f32(u.jiggle.x);  // OI tactical
         h.f32(u.jiggle.y);
         h.boolean(u.in_formation);
-        if (u.d.team_container) h.u8(0xC7);  // s78n t03: appended only for squad containers and their members
+        if (u.d.team_container) {  // s78n t03: appended only for squad containers and their members
+            h.u8(0xC7);
+            h.boolean(u.laid_out);  // s78n t14
+            h.f32(u.lay_dir.x);
+            h.f32(u.lay_dir.y);
+            h.boolean(u.spread);
+            h.boolean(u.team_target);
+        }
         if (u.anchor >= 0) {
             h.i32(u.anchor);
             h.f32(u.tslot.x);
             h.f32(u.tslot.y);
             h.u32(u.tindex);
-            h.boolean(u.recovering);
+            h.u8(u.recovery);  // s78n t14: the recovery state (was a bool)
             h.u32(u.steer_blocked);
+            h.u32(u.start_delay);  // s78n t14
         }
         if (u.pushed) {  // a1k t03: hashed only while a pushed move is active
             h.u32(u.push_next);
@@ -1871,6 +1914,8 @@ void MovementSystem::hash_units(StateHasher& h) const {
             h.u32(p.tindex);
             h.f32(p.slot.x);
             h.f32(p.slot.y);
+            h.f32(p.off.x);  // s78n t14
+            h.f32(p.off.y);
         }
     }
     if (cfg_.mode == MoveMode::Land) coll_.hash(h);  // S7 collision layer (land only: the space format is unchanged)

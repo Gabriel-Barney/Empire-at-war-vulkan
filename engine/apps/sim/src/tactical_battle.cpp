@@ -2428,9 +2428,10 @@ bool TacticalBattle::mv_squad_add(TacticalMode& mode, size_t ci, uint32_t object
         mem.push_back(&u);
     }
     if (ids.empty()) return false;
-    // Slots (pack +0x114 / +0x118): [port] the arrangement 0x5ac970 / 0x5ac2a0 (ContainerArrangement +0x1684) is not
-    // traced (TACTICAL_COMBAT §5.4.4 [M]); the team layout of the drop, 0x5abc00 with the first member's half-extents and
-    // g = 20 x its FormationSpacing (TACTICAL_GAPS §4.2.1), stands in: x along the container's facing, y across.
+    // Slots (pack +0x114 / +0x118): the drop layout 0x5abc00 with the first member's half-extents and g = 20 x its
+    // FormationSpacing (TACTICAL_GAPS §4.2.1), x along the container's facing, y across. s78n t14 (FIGHTER_FLYING §7.2): it
+    // only seeds set_land_team - the container's first tick lays the slots out by its ContainerArrangement (Rows 0x5ac970 /
+    // Dartboard 0x5ac2a0, MovementSystem::lay_out_land_team) with its own facing.
     const uint32_t f = mem.front()->type;
     float fx = 0.0f, fy = 0.0f;
     type_half_extents(f, fx, fy);
@@ -2477,10 +2478,21 @@ bool TacticalBattle::mv_squad_add(TacticalMode& mode, size_t ci, uint32_t object
         (void)movement_->remove_unit(ct.id);
         return false;
     }
+    for (const Unit* u : mem) mv_team_shape(*u);  // s78n t14: the layout's per-member half-extents
     const mv::UnitView v = movement_->view(ct.id);
     if (v.pos.x != p.x || v.pos.y != p.y)  // the free-position search moved it off a blocked centroid
         mode.primary().set_position(ct.h, Vec3{v.pos.x, v.pos.y, map_.terrain.sample_height(v.pos.x, v.pos.y)});
     return true;
+}
+
+void TacticalBattle::mv_team_shape(const Unit& u) {
+    // s78n t14 (FIGHTER_FLYING §7.2): Rows reads each member's half-extents 0x396b70 / 0x396a30 (unit_half_extents),
+    // Dartboard member 0's type half-extents 0x371be0 (type_half_extents).
+    if (space_ || !movement_ || !movement_->has_unit(u.id)) return;
+    float hx = 0.0f, hy = 0.0f, thx = 0.0f, thy = 0.0f;
+    unit_half_extents(u, hx, hy);
+    type_half_extents(u.type, thx, thy);
+    (void)movement_->set_team_member_shape(u.id, hx, hy, thx, thy);
 }
 
 float TacticalBattle::drop_yaw(uint8_t side) const {
@@ -3252,6 +3264,9 @@ void TacticalBattle::apply_speed_factors() {
     // are not modelled (the port's containers take neither), so its factor is the Mod_Multiplier alone. One value per
     // team per tick (sorted (team, value) pairs, probed only).
     std::vector<std::pair<uint32_t, float>> team_speed;
+    // s78n t14 (FIGHTER_FLYING §7.3 item 6): the land squads with a current target (0x397a40(K, 0) [M]: the container's,
+    // else a member's - members read their head's target), ascending container id.
+    std::vector<mv::ObjectId> targeted;
     const auto team_mult = [&](uint32_t team) {
         auto it = std::lower_bound(team_speed.begin(), team_speed.end(), team,
                                    [](const std::pair<uint32_t, float>& e, uint32_t t) { return e.first < t; });
@@ -3279,7 +3294,10 @@ void TacticalBattle::apply_speed_factors() {
             if (!catalog_->types().get_string(ct, "Max_Speed").empty()) cmax = catalog_->types().get_float(ct, "Max_Speed");
         }
         movement_->set_team(u.id, in_team ? containers_[u.container].id : mv::ObjectId{-1}, in_team ? team_mult(team) : 1.0f, cmax);
+        if (in_team && !space_ && combat_ && combat_->has_unit(u.id) && combat_->current_target(u.id) != tc::kNoObject)
+            targeted.push_back(containers_[u.container].id);
     }
+    std::sort(targeted.begin(), targeted.end());
     // s78n t03: a movement-backed land squad container walks at the team speed - the same value its members' set_team
     // carries (the members' minimum with its own Max_Speed, x its factor).
     for (const Container& c : containers_) {
@@ -3290,6 +3308,12 @@ void TacticalBattle::apply_speed_factors() {
             if (!catalog_->types().get_string(ct, "Max_Speed").empty()) cmax = catalog_->types().get_float(ct, "Max_Speed");
         }
         movement_->set_team(c.id, c.id, team_mult(static_cast<uint32_t>(c.id)), cmax);
+        // s78n t14 (FIGHTER_FLYING §7.2 / §7.3): the squad's SPREAD_OUT state (a change re-lays its slots) and whether it has
+        // a target (its members then do not recover to their slots).
+        (void)movement_->set_team_spread_out(c.id, abilities_ && abilities_->spread_out(c.id));
+        const bool tgt = (combat_ && combat_->has_unit(c.id) && combat_->current_target(c.id) != tc::kNoObject) ||
+                         std::binary_search(targeted.begin(), targeted.end(), c.id);
+        (void)movement_->set_team_target(c.id, tgt);
     }
 }
 

@@ -1432,6 +1432,18 @@ private:
                            std::vector<tactical::abilities::SquadSlot>& slots, float& jiggle, Vec3& facing) const;
     void combat_team_positions(const objects::ObjectStore& store);  // s78n t03: CombatSystem::set_team_position per team
     void s4_rejoin_squad(TacticalMode& mode, const Unit& u, Vec3 at);  // s78n review: a member out of a garrison
+    // s78n t14 (FIGHTER_FLYING §7.2 / §7.4): a squad member's layout shape (MovementSystem::set_team_member_shape); the
+    // garrisoned squad container (the last member in takes it in; a squad leaves as one, see s4_squad_leave).
+    void mv_team_shape(const Unit& u);
+    struct SquadExit {
+        objects::ObjectId container = objects::kNoObjectId;
+        Vec3 at{};          // E: where the container was put (the host centre)
+        Vec3 to{};          // X: the walk-out point (Exited)
+        bool walk = false;  // Exited (walk out to X) / Ejected (everything at the host position)
+    };
+    void s4_squad_enter(TacticalMode& mode, const Unit& u, Vec3 host);
+    Vec3 s4_squad_leave(TacticalMode& mode, const tactical::garrison::GarrisonEvent& e, std::vector<SquadExit>& outs,
+                        std::vector<tactical::garrison::GarrisonEvent>& events);
     std::vector<int8_t> adopt_kind_;      // cu8j t02: mv_adopt_kind cache (+1; 0 = not computed); derived, not saved
     bool deploy_script_ = false;          // cu8j t02: deploy() for a script spawn (no team helper adopt; transient)
     // FIGHTER_FLYING §6.3.1: FlyingHooks::clearance type data per object (ClearanceInfoFn), cached per type.

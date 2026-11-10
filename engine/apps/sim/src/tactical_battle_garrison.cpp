@@ -222,19 +222,76 @@ void TacticalBattle::s4_leave(TacticalMode& mode, objects::ObjectId unit, Vec3 a
 }
 
 // s78n review (TACTICAL_COMBAT §5.4.4 item 2, L1_S4_REMAINING §3.5): a land squad member leaving a garrison steers to its
-// old slot around its container again (MovementSystem::rejoin_land_team). Retail garrisons the container itself (the
-// members' host is their grandparent) and where a garrisoned container sits is untraced (LOB_SOLVER §5 [M]); [port] the
-// port garrisons the members one by one and leaves the container's mover where its path ended, so the first member out of
-// a squad that was entirely inside moves the container to its exit point (TacticalBattle::teleport: the store follows,
-// the members gather around it there - a garrison vehicle may have driven off).
-void TacticalBattle::s4_rejoin_squad(TacticalMode& mode, const Unit& u, Vec3 at) {
+// old slot around its container again (MovementSystem::rejoin_land_team). s78n t14: where the squad leaves is placed by
+// s4_squad_leave (the squad leaves as one); the member's layout shape is set again (a fresh mover).
+void TacticalBattle::s4_rejoin_squad(TacticalMode&, const Unit& u, Vec3) {
     if (space_ || !movement_ || u.container >= containers_.size()) return;
     const Container& c = containers_[u.container];
     if (c.removed || !movement_->is_land_team_container(c.id) || !movement_->team_member_parked(u.id)) return;
+    if (movement_->rejoin_land_team(u.id)) mv_team_shape(u);
+}
+
+// s78n t14 (FIGHTER_FLYING §7.4, GarrisonUnitBehavior entry 0x4446b0): retail garrisons the squad container K (K at the
+// host position, its members at host + their old offsets, all hidden). [port] The port garrisons the members one by one
+// (each parked with its offset from K: MovementSystem::park_team_member); when the last steering member of a squad is
+// inside, its container joins the garrison: teleported (stopped) to the host position, where it stays.
+void TacticalBattle::s4_squad_enter(TacticalMode& mode, const Unit& u, Vec3 host) {
+    if (space_ || !movement_ || u.container >= containers_.size()) return;
+    const Container& c = containers_[u.container];
+    if (c.removed || !movement_->is_land_team_container(c.id) || !movement_->team_member_parked(u.id)) return;
+    if (!movement_->land_team(c.id).empty()) return;  // members still outside: the container stays with them
     objects::ObjectStore& store = mode.primary();
     const objects::ObjectHandle ch = store.find(c.id);
-    if (movement_->land_team(c.id).empty() && store.alive(ch)) (void)teleport(mode, c.id, at, store.facing(ch));
-    (void)movement_->rejoin_land_team(u.id);
+    if (!store.alive(ch)) return;
+    host.z = map_.terrain.sample_height(host.x, host.y);
+    (void)teleport(mode, c.id, host, store.facing(ch));
+}
+
+// s78n t14 (FIGHTER_FLYING §7.4): where a leaving garrison occupant goes. Not a parked squad member, or one whose container
+// is still outside with other members ([port] it rejoins from the unit's own exit point): the event position. Else the
+// squad leaves as one (the first member out of an entirely garrisoned squad starts it, the rest follow in this batch):
+//   * Exited (exit 0x444dd0, one call for the whole squad): the container is teleported to the exit point E - [port] the
+//     host centre (the sim resolves no exit bones) - with its members at E + their offsets; the squad's other members in
+//     the same host are ordered out with it (their events join this batch); after the batch the container is ordered to
+//     the walk-out point X (the garrison's exit point: host + facing x Garrison_Exit_Dist) with flag 0x20 (s4_apply), so
+//     its members get start delays and a re-lay at the move start;
+//   * Ejected (host destroyed / release all 0x37a060): the container and every member at the host position, no walk-out.
+Vec3 TacticalBattle::s4_squad_leave(TacticalMode& mode, const tg::GarrisonEvent& e, std::vector<SquadExit>& outs,
+                                    std::vector<tg::GarrisonEvent>& events) {
+    const Unit* u = unit_by_id(e.unit);
+    if (space_ || !movement_ || !u || u->container >= containers_.size()) return e.position;
+    const Container& c = containers_[u->container];
+    if (c.removed || !movement_->is_land_team_container(c.id) || !movement_->team_member_parked(u->id)) return e.position;
+    mv::V2 off{};
+    (void)movement_->parked_offset(u->id, off);
+    size_t k = 0;
+    while (k < outs.size() && outs[k].container != c.id) ++k;
+    if (k == outs.size()) {
+        if (!movement_->land_team(c.id).empty()) return e.position;
+        objects::ObjectStore& store = mode.primary();
+        const objects::ObjectHandle hh = store.find(e.holder), ch = store.find(c.id);
+        if (!store.alive(ch)) return e.position;
+        const Vec3 hp = store.exists(hh) ? store.position(hh) : e.position;
+        const Vec3 hf = store.exists(hh) ? store.facing(hh) : Vec3{1.0f, 0.0f, 0.0f};
+        SquadExit so;
+        so.container = c.id;
+        so.at = Vec3{hp.x, hp.y, map_.terrain.sample_height(hp.x, hp.y)};
+        so.to = e.position;
+        so.walk = e.kind == tg::GarrisonEventKind::Exited;
+        (void)teleport(mode, c.id, so.at, so.walk ? store.facing(ch) : hf);
+        outs.push_back(so);
+        if (so.walk) {  // the squad's other members inside the same host leave with it
+            for (const Unit& m : units_)
+                if (m.id != u->id && m.container == u->container && m.alive && !m.retreated &&
+                    garrison_.holder_of(m.id) == e.holder)
+                    (void)garrison_.order_exit(m.id, hp, hf, frame_);
+            events.insert(events.end(), garrison_.events().begin(), garrison_.events().end());
+            garrison_.clear_events();
+        }
+    }
+    const SquadExit& so = outs[k];
+    if (!so.walk) return so.at;
+    return Vec3{so.at.x + off.x, so.at.y + off.y, so.at.z};
 }
 
 // cu8l t02 (CU8K_T02_T06_RE §2, rule 5): the garrison host's stop-and-hold (GarrisonVehicle / GarrisonHoverTransport vf28
@@ -248,9 +305,12 @@ void TacticalBattle::s4_hold(TacticalMode& mode, objects::ObjectId holder) {
 
 void TacticalBattle::s4_apply(TacticalMode& mode) {
     objects::ObjectStore& store = mode.primary();
-    const std::vector<tg::GarrisonEvent> events(garrison_.events().begin(), garrison_.events().end());
+    std::vector<tg::GarrisonEvent> events(garrison_.events().begin(), garrison_.events().end());
     garrison_.clear_events();
-    for (const tg::GarrisonEvent& e : events) {
+    std::vector<SquadExit> outs;  // s78n t14: the squads leaving in this batch (s4_squad_leave)
+    // s78n t14: index loop - a squad leave appends its members' exits (and [port] any other event pending then).
+    for (size_t ei = 0; ei < events.size(); ++ei) {
+        const tg::GarrisonEvent e = events[ei];
         switch (e.kind) {
             case tg::GarrisonEventKind::EnterStarted: {  // the host stops the unit at the approach point
                 const objects::ObjectId one[] = {e.unit};
@@ -277,6 +337,7 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
                 s4_hold(mode, e.holder);
                 // s78n review: a land squad member keeps its team place (container, slot, team index) for the leave.
                 if (!movement_->park_team_member(e.unit)) movement_->remove_unit(e.unit);
+                s4_squad_enter(mode, *u, e.position);  // s78n t14: the last member in takes the container in
                 store.set_position(u->h, e.position);
                 mode.trees().update(static_cast<tactical::EntityHandle>(e.unit), mode.bounds_of(u->h));
                 if (combat_->has_unit(e.unit)) {
@@ -294,7 +355,7 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
             }
             case tg::GarrisonEventKind::Exited:
             case tg::GarrisonEventKind::Ejected:
-                s4_leave(mode, e.unit, e.position);
+                s4_leave(mode, e.unit, s4_squad_leave(mode, e, outs, events));  // s78n t14: a squad leaves as one
                 if (abilities_->has_object(e.holder))
                     abilities_->set_garrison_count(e.holder, static_cast<int32_t>(garrison_.occupants(e.holder).size()));
                 break;
@@ -313,6 +374,26 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
             case tg::GarrisonEventKind::OrderDropped:  // cu8l t02 [M]: the host's reservation ends (vf29: its hold)
                 s4_hold(mode, e.holder);
                 break;
+        }
+    }
+    // s78n t14 (FIGHTER_FLYING §7.4): a squad that left (Exited) walks out: Move_To the walk-out point X with flag 0x20
+    // through the coordinator (the container is always admitted, 0x425e30); [port] without the battle RNG the container
+    // and its members are teleported there instead (0x3abb80(K, X): the offsets kept).
+    for (const SquadExit& so : outs) {
+        if (!so.walk || !store.alive(store.find(so.container))) continue;
+        const objects::ObjectId one[] = {so.container};
+        if (bt_rng_) {
+            exec_move(mode, one, so.to.x, so.to.y, *bt_rng_, mv::kNoFacing, false, mv::kMoveFlagSkipValidation);
+            continue;
+        }
+        const Vec3 to{so.to.x, so.to.y, map_.terrain.sample_height(so.to.x, so.to.y)};
+        (void)teleport(mode, so.container, to, store.facing(store.find(so.container)));
+        for (const mv::MovementSystem::LandTeamSlot& t : movement_->land_team(so.container)) {
+            const objects::ObjectHandle mh = store.find(t.member);
+            if (!store.alive(mh)) continue;
+            const Vec3 p = store.position(mh);
+            const float x = p.x + (to.x - so.at.x), y = p.y + (to.y - so.at.y);
+            (void)teleport(mode, t.member, Vec3{x, y, map_.terrain.sample_height(x, y)}, store.facing(mh));
         }
     }
     if (captures_) {

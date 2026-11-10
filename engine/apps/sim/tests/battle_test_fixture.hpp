@@ -261,7 +261,7 @@ inline std::string team_types() {
 
 // s78n t03 / t09: the team data with the Team type on LAND_TEAM_CONTAINER_LOCOMOTOR (its own mover, members steering to
 // slots) and MaxJiggleDistance 0.75; the trooper sized as FoC's Squad_Stormtrooper (Custom_Hard extents 2.0 x Scale_Factor
-// 1.5 = half-extent 3.0) with FormationSpacing 0.5.
+// 1.5 = half-extent 3.0) with FormationSpacing 0.5. s78n t14: ContainerArrangement Rows (FoC's Stormtrooper_Team).
 // s78n review: `garrison` adds a garrison vehicle (S10_Walker: GARRISON_VEHICLE, 8 Infantry slots; company S10_Walker_Co),
 // makes the trooper a GARRISON_UNIT and gives troopers and walker 100000 health (nobody dies during the garrison test).
 inline std::string squad_types(bool garrison = false) {
@@ -286,7 +286,8 @@ inline std::string squad_types(bool garrison = false) {
     }
     const std::string team = "<Team Name=\"Team\"><Behavior>TEAM</Behavior>";
     if (const size_t p = t.find(team); p != std::string::npos)
-        t.insert(p + team.size(), "<LandBehavior>LAND_TEAM_CONTAINER_LOCOMOTOR</LandBehavior><MaxJiggleDistance>0.75</MaxJiggleDistance>");
+        t.insert(p + team.size(), "<LandBehavior>LAND_TEAM_CONTAINER_LOCOMOTOR</LandBehavior><MaxJiggleDistance>0.75</MaxJiggleDistance>"
+                                    "<ContainerArrangement>Rows</ContainerArrangement>");
     const std::string ext = "<Custom_Hard_XExtent>6</Custom_Hard_XExtent><Custom_Hard_YExtent>6</Custom_Hard_YExtent>\n </GroundInfantry>";
     if (const size_t p = t.find(ext); p != std::string::npos)
         t.replace(p, ext.size(), "<Custom_Hard_XExtent>2</Custom_Hard_XExtent><Custom_Hard_YExtent>2</Custom_Hard_YExtent>"

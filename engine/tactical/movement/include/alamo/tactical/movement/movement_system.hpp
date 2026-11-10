@@ -247,6 +247,10 @@ struct MovementStats {
     uint32_t pushes = 0, push_failures = 0;
 };
 
+// s78n t14 (FIGHTER_FLYING §7.2 Dartboard step 3, 0x241820 / 0x241830): the radical inverse of `index` in `base` (f = 0,
+// b_k = (float)b; while i != 0 { f += (float)(i % b) / b_k; i /= b; b_k *= (float)b }). 0 for index 0.
+float team_radical_inverse(uint32_t index, uint32_t base);
+
 class MovementSystem {
 public:
     explicit MovementSystem(MovementConfig cfg = {});
@@ -567,10 +571,18 @@ public:
     //     speed rule of FIGHTER_FLYING §7 step 4 (v = 0 while the container turns in place, port state WalkStartTurn for
     //     retail 0x10), the heading rule of step 6 (no collision steering vector [M]) and its own turn rate; [port] the
     //     move is passability-tested (a blocked move tries each axis alone, else the member stays);
-    //   - while the container has no goal, a member farther than 4.0 from its slot recovers (0x29 / 0x2A): [port] turn in
-    //     place beyond Close_Enough_Angle, then walk straight to the slot at its max speed, ending on the slot point (or
-    //     after kReplanAfterBlocked blocked frames - s78n review: then it stays given up until the container has a goal
-    //     again or is teleported), then turn in place to the container's facing.
+    //   - s78n t14 (FIGHTER_FLYING §7.3): the member's step follows the container's walk state (start of the tick): turning
+    //     in place (port WalkStartTurn / WalkTurning = retail 0x10) or moving (0x13): a member with a start delay counts it
+    //     down and stands; else it steers (v = 0 while turning). Braking (WalkEndMove = 0x14): it steers, delay ignored.
+    //     Stopped (0 / 0x15 / 0x16): the recovery decision 0x62bbf0 - only while the container is laid out and has no
+    //     target (set_team_target): d = |slot point - P| > 4.0 -> turn toward it (0x29) when the angle to it exceeds
+    //     0.5 x the turn rate, else walk (0x2A); d = 4.0 -> walk; d < 4.0 -> keep walking only while already walking, the
+    //     next step closes in and the speed is >= the deceleration, else stand (speed 0). The walk turns toward the slot
+    //     point by the turn rate, steps its speed toward the max speed (toward 0 inside v^2 / (2 decel)) and moves along
+    //     its new yaw. [port] the move is passability-tested (wall slide); after kReplanAfterBlocked blocked frames the
+    //     recovery gives up and stays given up until the container moves or is teleported. (s78n t14: the earlier [port]
+    //     turn in place to the container's facing at the slot is gone: the member turns while the container turns.)
+    //   - the slots are re-laid by lay_out_land_team (see there); the `slots` given here only stand until the first one.
     // A member's view reports the container's has_goal / arrived / failed / goal (has_goal also while recovering). Removing
     // the container releases its members (ordinary units again).
     bool set_land_team(ObjectId container, std::span<const ObjectId> members, std::span<const V2> slots);
@@ -586,6 +598,7 @@ public:
         uint32_t tindex = 0;
         ObjectId member = -1;
         V2 slot;
+        V2 off;  // s78n t14: parked records only - the member's offset from its container when parked
     };
     std::span<const LandTeamSlot> land_team(ObjectId container) const;
     bool is_land_team_container(ObjectId id) const;  // a unit added with UnitDesc::team_container
@@ -602,6 +615,38 @@ public:
     bool suspend_team_member(ObjectId member);
     bool rejoin_land_team(ObjectId member);
     bool team_member_parked(ObjectId member) const;
+    // s78n t14 (FIGHTER_FLYING §7.4): the parked member's offset from its container when it was parked (member position -
+    // container position; zero when the container was gone). False: no record.
+    bool parked_offset(ObjectId member, V2& off) const;
+    // ---- s78n t14 (FIGHTER_FLYING §7.2 / §7.3): slot layout, re-lay, start delays ----
+    // lay_out_land_team = 0x5ac120(container, teleport 0, dir): dir is normalised (sqrtf, x 1 / len); when the container is
+    // laid out and dot(dir, its last layout dir) > 0.99 nothing changes (false). Else the container type's
+    // ContainerArrangement (UnitDesc::container_arrangement) picks Rows 0x5ac970 (0) or Dartboard 0x5ac2a0 (1) (anything
+    // else: false); on success every steering member's slot is rewritten (assigned by where the members stand: a
+    // projection sort, not the team index), the container stores dir and its laid-out flag (saved, hashed) and true is
+    // returned. Inputs: the members' shapes (set_team_member_shape), their own FormationSpacing (UnitDesc), the
+    // container's SPREAD_OUT state (set_team_spread_out: x Spread_Out_Spacing_Coefficient) and, for Dartboard, the Halton
+    // seed (int32) container id x `frame` (wrapping uint32). The land tick calls it for each container (serial, ascending
+    // id, after the walk, so the members read the new slots from the next tick): at a move start (toward the current
+    // waypoint), at every waypoint passed (the next segment), for a pushed path of >= 2 points (wp1 - wp0) and, while the
+    // flag is clear, with the container's facing (its first tick after set_land_team, after a SPREAD_OUT toggle).
+    bool lay_out_land_team(ObjectId container, V2 dir, uint32_t frame);
+    // The container's laid-out flag (pack +0x2a4) and last layout dir (+0xd8); false when not a team container.
+    bool land_team_layout(ObjectId container, bool& laid_out, V2& dir) const;
+    // A steering member's half-extents (0x396b70 / 0x396a30: the unit's, deployed variants included; Rows) and its type's
+    // (0x371be0; Dartboard reads member 0's). Saved, not hashed (static inputs). Default 0. False: not in the system.
+    bool set_team_member_shape(ObjectId member, float hx, float hy, float type_hx, float type_hy);
+    // SPREAD_OUT active on the container (0x39b950(K, 7, 1)): a change clears the laid-out flag (the handler 0x3a3500
+    // clears +0x2a4 on both on and off), so the next tick re-lays with the container's facing. Saved and hashed. The host
+    // sets it every tick before tick() [port: polled, so a toggle that does not change the state does not re-lay].
+    bool set_team_spread_out(ObjectId container, bool on);
+    // The container has a current target (0x397a40(K, 0) [M]): its members do not recover to their slots while it idles.
+    // Set by the host every tick before tick(); saved and hashed. False: not a team container.
+    bool set_team_target(ObjectId container, bool has_target);
+    // The member's start delay (pack +0xe4; FIGHTER_FLYING §7.3 item 2): drawn (synced int [0, Max_Move_Frame_Delay], team
+    // index order) when its stopped container (speed 0) gets a move order; counts down while the container turns in
+    // place or moves (the member stands); braking ignores it. 0 for a non-member.
+    uint32_t team_start_delay(ObjectId member) const;
     void hash_speed(StateHasher& h) const;
     // ---- s78l t02 (MOVEMENT §3.5.1 "Arrival turn, details"): clips of the Walk arrival turn ----
     // Every clip play the arrival turn asks for this tick, ascending id (at most one per unit and tick). The clip data
@@ -754,8 +799,19 @@ private:
         ObjectId anchor = -1;
         V2 tslot;
         uint32_t tindex = 0;
-        bool recovering = false;
+        uint8_t recovery = 0;  // s78n t14: the member's recovery state: 0 none, 0x29 turning, 0x2A moving (save version 15)
         uint32_t steer_blocked = 0;
+        // s78n t14 (save version 15): a member's start delay (pack +0xe4) and shape (set_team_member_shape); a container's
+        // laid-out flag (+0x2a4) and last layout dir (+0xd8), SPREAD_OUT state and current-target flag (host-set).
+        uint32_t start_delay = 0;
+        float team_hx = 0.0f, team_hy = 0.0f, team_thx = 0.0f, team_thy = 0.0f;
+        bool laid_out = false;
+        V2 lay_dir;
+        bool spread = false;
+        bool team_target = false;
+        // s78n t14: this tick's re-lay requests of a container (layout dirs in order; written by its own walk or a push,
+        // consumed by the serial pass after the walk). Transient: empty between ticks, not saved.
+        std::vector<V2> relay;
     };
     // s78n t03: a container's state at the start of the land tick, read by its steering members (tick_land).
     struct TeamSnap {
@@ -764,7 +820,13 @@ private:
         float speed = 0.0f;
         LocoState state = LocoState::WalkStopped;
         bool has_goal = false;
+        bool laid_out = false;  // s78n t14: the recovery decision needs the laid-out flag and no target
+        bool has_target = false;
     };
+    // s78n t14 (FIGHTER_FLYING §7.2): Rows 0x5ac970 / Dartboard 0x5ac2a0 on the container's steering members (no flag test).
+    bool lay_out_rows(const Unit& k, V2 dir, std::vector<std::pair<Unit*, V2>>& out);
+    bool lay_out_dartboard(const Unit& k, V2 dir, uint32_t frame, std::vector<std::pair<Unit*, V2>>& out);
+    void team_relay_pass(uint32_t frame);  // s78n t14: the re-lays of this tick (serial, ascending id)
     ObjectId order_id(ObjectId id) const;  // s78n t03: a steering member's container, else id
     void steer_member(Unit& u, const TeamSnap& k) const;  // s78n t03: one member frame (writes only u)
     // cu8j t01 (MOVEMENT §4.6): an order's formations waiting for the coordinator update (creation order). Land: `forms`
@@ -951,7 +1013,7 @@ private:
     void update_tree(const Unit& u);
     V2 pick_land_slot(const Unit& u, V2 slot, std::vector<uint64_t>& taken) const;
     void move_land(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
-                   const std::vector<uint32_t>& delays, uint32_t serial);
+                   const std::vector<uint32_t>& delays, uint32_t serial, SimRng& rng);
     void move_space(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
                     const std::vector<uint32_t>& delays, uint32_t serial);
     void park_space(Unit& u, uint32_t frame);

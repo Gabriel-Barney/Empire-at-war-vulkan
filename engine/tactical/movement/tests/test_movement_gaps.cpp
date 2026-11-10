@@ -2857,15 +2857,16 @@ static void test_land_squad() {
             const V2 tgt{k.pos.x + cs.x * off.x - cs.y * off.y, k.pos.y + cs.y * off.x + cs.x * off.y};
             r.final_err = std::max(r.final_err, length(tgt - m.pos));
         }
-        // a member knocked 30 off its slot while the team is idle walks back (recovery 0x29 / 0x2A)
+        // s78n t14 (FIGHTER_FLYING §7.3 item 6): this container has no ContainerArrangement (None), so it is never laid out
+        // and a member knocked 30 off its slot while the team is idle does not recover (recovery: test_land_squad_walk_states)
         const V2 m2 = sys.view(2).pos;
         CHECK(sys.teleport(2, {m2.x - 30.0f, m2.y}, 0.0f, 90.0f, 400));
         bool recovering = false;
         for (uint32_t f = 400; f < 520; ++f) {
             sys.tick(f, rng, pf);
-            if (f == 401) recovering = sys.view(2).has_goal && !sys.view(100).has_goal;
+            recovering = recovering || sys.view(2).has_goal;
         }
-        CHECK(recovering && length(sys.view(2).pos - m2) <= 4.0f && !sys.view(2).has_goal);
+        CHECK((!recovering && sys.view(2).pos == V2{m2.x - 30.0f, m2.y}));
         StateHasher h;
         sys.hash_units(h);
         r.crc = h.digest();
@@ -2888,10 +2889,322 @@ static void test_land_squad() {
     CHECK(a.cont_speed == a.team);          // at the team speed (the slowest member's Max_Speed x mult)
     CHECK(a.lead_speed > a.team);           // the member behind its slot catches up above the team speed
     CHECK(a.lag_speed < a.team);            // the member ahead of its slot slows down
-    CHECK(a.final_err <= 4.0f);
+    CHECK(a.final_err < 25.0f);  // s78n t14: no recovery for a container that is never laid out (ContainerArrangement None)
     std::printf("land squad: off path %.4f, centroid gap >= %.2f, team %.3f, catch-up %.3f, wait %.3f, final slot error %.3f\n",
                 static_cast<double>(a.max_off_path), static_cast<double>(a.min_centroid_gap), static_cast<double>(a.team),
                 static_cast<double>(a.lead_speed), static_cast<double>(a.lag_speed), static_cast<double>(a.final_err));
+}
+
+// s78n t14 (FIGHTER_FLYING §7.2): the reference Dartboard scatter of the spec (radical inverse, rejection 5.0 + r, <= 1000
+// tries, sort-matching with the retail grouping quirk), written out independently of land_team.cpp. Returns false when
+// fewer than n points were accepted (the port then falls back to Rows).
+static V2 t14v(float x, float y) { return V2{x, y}; }
+
+static float t14_radinv(uint32_t i, uint32_t b) {
+    float f = 0.0f, bk = static_cast<float>(b);
+    while (i != 0) {
+        f += static_cast<float>(i % b) / bk;
+        i /= b;
+        bk *= static_cast<float>(b);
+    }
+    return f;
+}
+
+static bool t14_dartboard(uint32_t n, float hx, float hy, float g, uint32_t seed, float spread, std::vector<V2>& pts) {
+    uint32_t k = static_cast<uint32_t>(std::sqrt(static_cast<float>(n)));
+    if (k * k != n) ++k;
+    const uint32_t m = n / k + (n % k != 0 ? 1u : 0u);
+    float r = std::sqrt(hx * hx + hy * hy);
+    float L = static_cast<float>(k - 1) * g * 20.0f + static_cast<float>(k) * hx;
+    float W = static_cast<float>(m - 1) * g * 20.0f + static_cast<float>(m) * hy;
+    L *= spread;
+    W *= spread;
+    r *= spread;
+    pts.clear();
+    for (uint32_t t = 0; t < 1000 && pts.size() < n; ++t) {
+        const float x = (t14_radinv(seed + t, 2) - 0.5f) * L, y = (t14_radinv(seed + t, 3) - 0.5f) * W;
+        bool ok = true;
+        for (const V2& p : pts) ok = ok && !(std::sqrt((y - p.y) * (y - p.y) + (x - p.x) * (x - p.x)) < 5.0f + r);
+        if (ok) pts.push_back({x, y});
+    }
+    return pts.size() == n;
+}
+
+// Members 1..n of a container 100 at `at` (yaw 0); member i at at + rel[i - 1], shapes (hx, hy, type hx, type hy) and
+// FormationSpacing per member.
+struct T14Member {
+    V2 rel;
+    float hx = 3.0f, hy = 3.0f, spacing = 0.5f;
+};
+
+static void t14_squad(MovementSystem& sys, V2 at, int32_t arrangement, const std::vector<T14Member>& mem, float speed = 2.0f) {
+    UnitDesc c = unit(100, at, 2, speed, 12.0f, LocomotorKind::Default);
+    c.team_container = true;
+    c.container_arrangement = arrangement;
+    CHECK(sys.add_unit(c));
+    std::vector<ObjectId> ids;
+    std::vector<V2> slots;
+    for (size_t i = 0; i < mem.size(); ++i) {
+        UnitDesc d = unit(static_cast<ObjectId>(i + 1), at + mem[i].rel, 2, speed, 3.0f, LocomotorKind::Default);
+        d.formation_spacing = mem[i].spacing;
+        CHECK(sys.add_unit(d));
+        CHECK(sys.set_team_member_shape(d.id, mem[i].hx, mem[i].hy, mem[i].hx, mem[i].hy));
+        ids.push_back(d.id);
+        slots.push_back(mem[i].rel);
+    }
+    CHECK(sys.set_land_team(100, ids, slots));
+    CHECK(sys.set_team(100, 100, 1.0f));
+    for (ObjectId id : ids) CHECK(sys.set_team(id, 100, 1.0f));
+}
+
+static V2 t14_slot(const MovementSystem& sys, ObjectId id) {
+    ObjectId c = -1;
+    V2 s{-1.0e9f, -1.0e9f};
+    CHECK(sys.team_slot(id, c, s) && c == 100);
+    return s;
+}
+
+// s78n t14 (FIGHTER_FLYING §7.2): Rows 0x5ac970 and Dartboard 0x5ac2a0 slot geometry, the 0.99 re-lay rule, SPREAD_OUT.
+static void test_land_squad_layout() {
+    const V2 at = cell_center(20, 20);
+    {  // Rows: 5 members (k = 3): row 0 = the three front-most, ordered from the most negative side; mixed shapes
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        std::vector<T14Member> mem(5);
+        mem[0].rel = {30.0f, 10.0f};
+        mem[1].rel = {30.0f, -10.0f};
+        mem[2].rel = {0.0f, 5.0f};
+        mem[3].rel = {0.0f, -5.0f};
+        mem[4].rel = {-30.0f, 0.0f};
+        for (T14Member& m : mem) {
+            m.hx = 4.0f;
+            m.hy = 3.0f;
+        }
+        mem[4].hx = 6.0f;
+        mem[4].hy = 5.0f;
+        mem[4].spacing = 1.0f;
+        t14_squad(sys, at, 0, mem);
+        bool lo = true;
+        V2 ld;
+        CHECK(sys.land_team_layout(100, lo, ld) && !lo);
+        CHECK(sys.lay_out_land_team(100, {2.0f, 0.0f}, 1));  // dir is normalised
+        // hand-computed (spec §7.2 Rows): row 0 W = 11 + 16 + 11, row 1 (HX 6, G 20) along -25, D = 35, shift 13.5
+        CHECK(t14_slot(sys, 1) == t14v(13.5f, 16.0f));
+        CHECK(t14_slot(sys, 2) == t14v(13.5f, -16.0f));
+        CHECK(t14_slot(sys, 3) == t14v(13.5f, 0.0f));
+        CHECK(t14_slot(sys, 4) == t14v(-11.5f, -12.5f));
+        CHECK(t14_slot(sys, 5) == t14v(-11.5f, 10.5f));
+        CHECK(sys.land_team_layout(100, lo, ld) && lo && ld == t14v(1.0f, 0.0f));
+        const auto team = sys.land_team(100);  // the index the host's joint box reads is refreshed
+        CHECK(team.size() == 5 && team[0].slot == t14v(13.5f, 16.0f) && team[4].slot == t14v(-11.5f, 10.5f));
+        // 0x5ac120: a turn of 8 degrees keeps the slots (dot > 0.99), 9 degrees re-lays
+        const V2 d8 = dir_from_deg(8.0f), d9 = dir_from_deg(9.0f);
+        CHECK(!sys.lay_out_land_team(100, d8, 2) && sys.land_team_layout(100, lo, ld) && ld == t14v(1.0f, 0.0f));
+        CHECK(sys.lay_out_land_team(100, d9, 3) && sys.land_team_layout(100, lo, ld) && std::fabs(ld.y - d9.y) < 1e-6f);
+        // a re-lay with the same dir needs the flag cleared: SPREAD_OUT (x 1.8 spacing) re-lays at the next tick
+        CHECK(!sys.lay_out_land_team(100, d9, 4));
+        CHECK(sys.set_team_spread_out(100, true) && sys.land_team_layout(100, lo, ld) && !lo);
+        SimRng rng(3);
+        sys.tick(5, rng, serial_for);
+        CHECK(sys.land_team_layout(100, lo, ld) && lo && ld == t14v(1.0f, 0.0f));  // the container's facing (yaw 0)
+        // row 0 with g = 10 x 1.8 = 18: W = 15 + 24 + 15, sides -24, 0, 24 (the members did not move: the tick's recovery
+        // decision read the cleared flag)
+        CHECK(t14_slot(sys, 1).y == 24.0f && t14_slot(sys, 2).y == -24.0f && t14_slot(sys, 3).y == 0.0f);
+        // None (-1): never laid out
+        MovementSystem none{MovementConfig{}};
+        land_system(none, 100);
+        t14_squad(none, at, -1, mem);
+        CHECK(!none.lay_out_land_team(100, {1.0f, 0.0f}, 1));
+        none.tick(1, rng, serial_for);
+        CHECK(none.land_team_layout(100, lo, ld) && !lo && t14_slot(none, 1) == mem[0].rel);
+        std::printf("land squad layout: Rows 5 members (13.5, 16) (13.5, -16) (13.5, 0) (-11.5, -12.5) (-11.5, 10.5); spread row 0 "
+                    "sides +-24\n");
+    }
+    {  // Dartboard: the Halton points of container id 100 x frame 7, assigned front to back / side to side
+        CHECK(team_radical_inverse(0, 2) == 0.0f && team_radical_inverse(1, 2) == 0.5f && team_radical_inverse(2, 2) == 0.25f &&
+              team_radical_inverse(3, 2) == 0.75f && team_radical_inverse(1, 3) == 1.0f / 3.0f &&
+              team_radical_inverse(4, 3) == 1.0f / 3.0f + 1.0f / 9.0f);
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        std::vector<T14Member> mem(4);
+        mem[0].rel = {20.0f, 0.0f};
+        mem[1].rel = {0.0f, 20.0f};
+        mem[2].rel = {0.0f, -20.0f};
+        mem[3].rel = {-20.0f, 0.0f};
+        for (T14Member& m : mem) m.spacing = 1.0f;
+        t14_squad(sys, at, 1, mem);
+        CHECK(sys.lay_out_land_team(100, {1.0f, 0.0f}, 7));
+        std::vector<V2> pts;
+        CHECK(t14_dartboard(4, 3.0f, 3.0f, 1.0f, 700u, 1.0f, pts));  // L = W = 26, r = sqrt(18)
+        // the spec's matching for this case, by hand: points by x descending; members by projection (1 front, 4 back,
+        // 2 / 3 tied at 0 -> index order); groups of x within W / m = 13 sorted by side / y
+        std::vector<V2> by_x = pts;
+        std::stable_sort(by_x.begin(), by_x.end(), [](V2 a, V2 b) { return a.x > b.x; });
+        std::vector<ObjectId> order = {1, 2, 3, 4};
+        const auto side_of = [&](ObjectId id) { return mem[static_cast<size_t>(id - 1)].rel.y; };
+        uint32_t i = 0;
+        do {
+            uint32_t j = i;
+            while (j < 4 && by_x[i].x - by_x[j].x <= 13.0f) ++j;
+            std::stable_sort(order.begin() + i, order.begin() + j, [&](ObjectId a, ObjectId b) { return side_of(a) > side_of(b); });
+            std::stable_sort(by_x.begin() + i, by_x.begin() + j, [](V2 a, V2 b) { return a.y > b.y; });
+            i = j + 1;
+        } while (i < 4);
+        bool same = true;
+        for (size_t q = 0; q < 4; ++q) same = same && t14_slot(sys, order[q]) == by_x[q];
+        CHECK(same);
+        std::printf("land squad layout: Dartboard id 100 x frame 7 points (%.3f, %.3f) (%.3f, %.3f) (%.3f, %.3f) (%.3f, %.3f), "
+                    "matched %d\n",
+                    static_cast<double>(pts[0].x), static_cast<double>(pts[0].y), static_cast<double>(pts[1].x),
+                    static_cast<double>(pts[1].y), static_cast<double>(pts[2].x), static_cast<double>(pts[2].y),
+                    static_cast<double>(pts[3].x), static_cast<double>(pts[3].y), same ? 1 : 0);
+        // another frame is another scatter
+        CHECK(sys.set_team_spread_out(100, false));
+        std::vector<V2> pts2;
+        CHECK(t14_dartboard(4, 3.0f, 3.0f, 1.0f, 800u, 1.0f, pts2) && pts2 != pts);
+        // too few points (the rejection radius larger than the area): Rows with the same dir
+        MovementSystem tight{MovementConfig{}};
+        land_system(tight, 100);
+        for (T14Member& m : mem) {
+            m.spacing = 0.0f;
+            m.hx = m.hy = 2.0f;
+        }
+        t14_squad(tight, at, 1, mem);
+        CHECK(!t14_dartboard(4, 2.0f, 2.0f, 0.0f, 700u, 1.0f, pts));
+        CHECK(tight.lay_out_land_team(100, {1.0f, 0.0f}, 7));
+        // Rows of 2 x 2, g = 0, hx = hy = 2: front row 1 (side 0 -> -2), 2 (side 20 -> +2); back row 3 (-20 -> -2), 4
+        CHECK(t14_slot(tight, 1) == t14v(2.0f, -2.0f) && t14_slot(tight, 2) == t14v(2.0f, 2.0f) &&
+              t14_slot(tight, 3) == t14v(-2.0f, -2.0f) && t14_slot(tight, 4) == t14v(-2.0f, 2.0f));
+    }
+}
+
+// s78n t14 (FIGHTER_FLYING §7.2 callers / §7.3): re-lay at the move start and at waypoints, start delays (drawn in team
+// index order, counted down while the container turns or moves), the recovery rules, worker-count invariance.
+static void test_land_squad_walk_states() {
+    const V2 at = cell_center(20, 20);
+    std::vector<T14Member> mem(4);
+    mem[0].rel = {10.0f, 10.0f};
+    mem[1].rel = {10.0f, -10.0f};
+    mem[2].rel = {-10.0f, 10.0f};
+    mem[3].rel = {-10.0f, -10.0f};
+    {  // start delays: drawn at the order (speed 0), in team index order; members stand while > 0
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        t14_squad(sys, at, 0, mem);
+        SimRng rng(77);
+        sys.tick(1, rng, serial_for);  // the first layout (the container's facing)
+        SimRng expect = rng;
+        uint32_t want[4];
+        for (uint32_t& w : want) w = static_cast<uint32_t>(expect.range_int(0, MovementConstants{}.max_move_frame_delay));
+        MoveOrder o;
+        o.units = {3};
+        o.destination = cell_center(20, 60);  // 90 degrees left: the container turns in place first
+        sys.move(o, rng, 2);
+        bool drawn = true;
+        for (ObjectId id = 1; id <= 4; ++id) drawn = drawn && sys.team_start_delay(id) == want[id - 1];
+        CHECK(drawn && rng.state() == expect.state());
+        V2 p0[4];
+        for (ObjectId id = 1; id <= 4; ++id) p0[id - 1] = sys.view(id).pos;
+        bool stood = true, counted = true, relaid_at_start = false;
+        uint32_t left[4] = {want[0], want[1], want[2], want[3]};
+        uint32_t go = 0;  // the container's own order stagger (OI tactical; set when the order is composed at the tick)
+        for (uint32_t f = 2; f < 130; ++f) {
+            sys.tick(f, rng, serial_for);
+            if (go == 0) go = sys.view(100).start_frame;
+            for (ObjectId id = 1; id <= 4; ++id) {
+                const uint32_t d = sys.team_start_delay(id);
+                if (f < go) counted = counted && d == want[id - 1];  // not counted down while the container waits
+                counted = counted && (d == left[id - 1] || d + 1 == left[id - 1]);  // at most one per tick, never up
+                if (f >= go && d > 0) stood = stood && sys.view(id).pos == p0[id - 1];  // stands while it counts
+                p0[id - 1] = sys.view(id).pos;
+                left[id - 1] = d;
+            }
+            bool lo = false;
+            V2 ld;
+            if (sys.land_team_layout(100, lo, ld) && lo && std::fabs(ld.y - 1.0f) < 1e-5f) relaid_at_start = true;
+        }
+        counted = counted && left[0] == 0 && left[1] == 0 && left[2] == 0 && left[3] == 0;
+        CHECK(go > 2 && go < 100 && stood && counted && relaid_at_start);
+        // a second order while the container moves: no draw
+        CHECK(sys.view(100).speed > 0.0f);
+        const uint32_t st = rng.state();
+        o.destination = cell_center(30, 60);
+        sys.move(o, rng, 130);
+        CHECK(rng.state() == st);
+        std::printf("land squad walk: start delays %u %u %u %u (team index order), stood while counting %d\n", want[0], want[1],
+                    want[2], want[3], stood ? 1 : 0);
+    }
+    {  // recovery rules (0x62bbf0)
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        t14_squad(sys, at, 0, mem);
+        SimRng rng(5);
+        for (uint32_t f = 1; f < 60; ++f) sys.tick(f, rng, serial_for);  // laid out; everyone on its slot
+        const V2 s1 = t14_slot(sys, 1);
+        const V2 home{at.x + s1.x, at.y + s1.y};  // yaw 0, no jiggle (the team never moved)
+        CHECK(length(sys.view(1).pos - home) < 4.0f && !sys.view(1).has_goal);
+        // 30 behind, facing away: turn first (speed 0), then walk
+        CHECK(sys.teleport(1, {home.x - 30.0f, home.y}, 0.0f, 180.0f, 60));
+        sys.tick(60, rng, serial_for);
+        const UnitView t1 = sys.view(1);
+        CHECK(t1.has_goal && t1.speed == 0.0f && t1.pos == t14v(home.x - 30.0f, home.y) && std::fabs(t1.yaw) < 180.0f &&
+              std::fabs(t1.yaw) > 160.0f);
+        // facing it within 0.5 x rate: walk at once
+        CHECK(sys.teleport(1, {home.x - 30.0f, home.y}, 0.0f, 1.0f, 61));
+        sys.tick(61, rng, serial_for);
+        CHECK(sys.view(1).speed > 0.0f && sys.view(1).pos.x > home.x - 30.0f);
+        uint32_t f = 62;
+        for (; f < 200 && sys.view(1).has_goal; ++f) sys.tick(f, rng, serial_for);
+        CHECK(!sys.view(1).has_goal && length(sys.view(1).pos - home) < 4.0f && sys.view(1).speed == 0.0f);
+        // a container with a target: no recovery
+        CHECK(sys.set_team_target(100, true));
+        CHECK(sys.teleport(1, {home.x - 30.0f, home.y}, 0.0f, 0.0f, f));
+        for (uint32_t g = f; g < f + 20; ++g) sys.tick(g, rng, serial_for);
+        CHECK(!sys.view(1).has_goal && sys.view(1).pos == t14v(home.x - 30.0f, home.y));
+        CHECK(sys.set_team_target(100, false));
+        sys.tick(f + 20, rng, serial_for);
+        CHECK(sys.view(1).has_goal);
+        std::printf("land squad walk: recovery turn first, walk when facing, none with a target; settled at %u\n", f);
+    }
+    {  // a Dartboard squad walking a path with corners: re-lays at waypoints; worker-count invariant
+        const auto run = [&](const ParallelFor& pf, uint32_t& relays) {
+            MovementSystem sys{MovementConfig{}};
+            PassabilityGrid g = open_grid(100, 100);
+            for (int32_t y = 10; y <= 40; ++y) g.set_base(30, y, kPassImpassable);  // a wall: the path bends around it
+            sys.set_grid(std::move(g));
+            sys.set_anim_length_fn(anim_len);
+            std::vector<T14Member> m9(9);
+            for (size_t i = 0; i < 9; ++i) {
+                m9[i].rel = {static_cast<float>(static_cast<int32_t>(i % 3) - 1) * 12.0f, static_cast<float>(static_cast<int32_t>(i / 3) - 1) * 12.0f};
+                m9[i].spacing = 0.6f;
+            }
+            t14_squad(sys, at, 1, m9);
+            SimRng rng(11);
+            MoveOrder o;
+            o.units = {5};
+            o.destination = cell_center(45, 25);
+            sys.move(o, rng, 1);
+            V2 last{};
+            relays = 0;
+            for (uint32_t f = 1; f < 900; ++f) {
+                sys.tick(f, rng, pf);
+                bool lo = false;
+                V2 ld;
+                if (sys.land_team_layout(100, lo, ld) && lo && !(ld == last)) {
+                    ++relays;
+                    last = ld;
+                }
+            }
+            CHECK(sys.view(100).arrived);
+            StateHasher h;
+            sys.hash_units(h);
+            return h.digest();
+        };
+        uint32_t ra = 0, rb = 0;
+        const uint64_t a = run(serial_for, ra), b = run(make_thread_pf(4), rb);
+        CHECK(a == b && ra == rb && ra >= 3);  // the first layout, the move start, >= 1 corner
+        std::printf("land squad walk: Dartboard march re-laid %u times, serial = 4 workers %d\n", ra, a == b ? 1 : 0);
+    }
 }
 
 // s78n review (FIGHTER_FLYING §7, MOVEMENT §3.7):
@@ -2901,9 +3214,10 @@ static void test_land_squad() {
 //    given up (not has_goal = kUnitMoving every frame) until its container moves or is teleported;
 //  * park_team_member / rejoin_land_team (the garrison entry and leave) keep the member's container, slot and team index.
 static void test_land_squad_review() {
-    const auto squad = [](MovementSystem& sys, V2 at, const V2 (&slots)[3], const V2 (&starts)[3]) {
+    const auto squad = [](MovementSystem& sys, V2 at, const V2 (&slots)[3], const V2 (&starts)[3], int32_t arrangement = -1) {
         UnitDesc c = unit(100, at, 2, 2.0f, 12.0f, LocomotorKind::Default);
         c.team_container = true;
+        c.container_arrangement = arrangement;  // s78n t14
         CHECK(sys.add_unit(c));
         std::vector<ObjectId> ids;
         for (ObjectId id = 1; id <= 3; ++id) {
@@ -2954,10 +3268,17 @@ static void test_land_squad_review() {
             for (int32_t x = 6; x <= 14; ++x) g.set_base(x, y, kPassImpassable);
         sys.set_grid(std::move(g));
         sys.set_anim_length_fn(anim_len);
+        // s78n t14: a Rows container (recovery needs the laid-out flag): members 2 / 3 in front (+x), member 1 the back-most,
+        // alone in the back row; half-extents 20 -> member 1's slot (-20, 0), its slot point (190, 410) in the wall
+        PassabilityGrid g2 = open_grid(100, 100);
+        for (int32_t y = 19; y <= 21; ++y)
+            for (int32_t x = 7; x <= 9; ++x) g2.set_base(x, y, kPassImpassable);
+        sys.set_grid(std::move(g2));
         const V2 at = cell_center(10, 20);
-        const V2 slots[3] = {{0.0f, 40.0f}, {-15.0f, 0.0f}, {-15.0f, -15.0f}};  // member 1's slot point lies in the wall
-        const V2 starts[3] = {{at.x, at.y - 5.0f}, at + slots[1], at + slots[2]};
-        squad(sys, at, slots, starts);
+        const V2 slots[3] = {{-100.0f, 0.0f}, {20.0f, -20.0f}, {20.0f, 20.0f}};
+        const V2 starts[3] = {at + slots[0], at + slots[1], at + slots[2]};
+        squad(sys, at, slots, starts, 0);
+        for (ObjectId id = 1; id <= 3; ++id) CHECK(sys.set_team_member_shape(id, 20.0f, 20.0f, 20.0f, 20.0f));
         SimRng rng(6);
         uint32_t first_goal = 0, late_goal = 0;
         for (uint32_t f = 1; f < 200; ++f) {
@@ -2968,7 +3289,10 @@ static void test_land_squad_review() {
         }
         CHECK(first_goal > 10);  // it tried: turn toward the slot, walk, blocked
         CHECK(late_goal == 0);   // given up for good while the team is idle (before: has_goal 10 frames of every 11)
-        CHECK(!sys.view(100).has_goal && length(sys.view(1).pos - V2{at.x, at.y + 40.0f}) > 4.0f);
+        ObjectId tc1 = -1;
+        V2 ts1;
+        CHECK((sys.team_slot(1, tc1, ts1) && ts1 == V2{-20.0f, 0.0f} && sys.team_slot(2, tc1, ts1) && ts1 == V2{20.0f, -20.0f}));
+        CHECK((!sys.view(100).has_goal && length(sys.view(1).pos - V2{at.x - 20.0f, at.y}) > 4.0f));
         // the container is teleported to open ground: the give-up ends, the member recovers to its slot there
         const V2 there = cell_center(20, 30);
         CHECK(sys.teleport(100, there, 0.0f, 0.0f, 200));
@@ -2977,7 +3301,7 @@ static void test_land_squad_review() {
             sys.tick(f, rng, serial_for);
             again = again || sys.view(1).has_goal;
         }
-        const V2 sp{there.x, there.y + 40.0f};  // slot (0, 40) at yaw 0, no jiggle (the team never moved)
+        const V2 sp{there.x - 20.0f, there.y};  // slot (-20, 0) at yaw 0, no jiggle (the team never moved)
         CHECK(again && !sys.view(1).has_goal && length(sys.view(1).pos - sp) <= 4.0f);
         std::printf("land squad review: unreachable slot - goal frames before give-up %u, after %u\n", first_goal, late_goal);
     }
@@ -3018,7 +3342,7 @@ static void test_land_squad_review() {
         const V2 at = cell_center(10, 20);
         const V2 slots[3] = {{0.0f, 15.0f}, {0.0f, 0.0f}, {0.0f, -15.0f}};
         const V2 starts[3] = {at + slots[0], at + slots[1], at + slots[2]};
-        squad(sys, at, slots, starts);
+        squad(sys, at, slots, starts, 0);  // s78n t14: Rows (the recovery below needs a laid-out container)
         ObjectId tc = -1;
         V2 ts;
         CHECK(sys.team_slot(2, tc, ts) && tc == 100);
@@ -3349,6 +3673,8 @@ int main() {
     test_forced_destination();   // s78l t02
     test_land_squad();           // s78n t03
     test_land_squad_review();    // s78n review
+    test_land_squad_layout();    // s78n t14
+    test_land_squad_walk_states();  // s78n t14
     test_determinism();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

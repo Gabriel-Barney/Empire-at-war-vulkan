@@ -21,6 +21,8 @@ UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti) {
     d.type_name = std::string(t.raw().types().name[ti]);
     d.grouping = t.get_string(ti, "FormationGrouping").empty() ? 2 : t.get_enum(ti, "FormationGrouping");
     d.formation_order = t.get_int(ti, "FormationOrder");
+    // s78n t14 (FIGHTER_FLYING §7.2): ContainerArrangement (None -1 when unset)
+    d.container_arrangement = t.get_string(ti, "ContainerArrangement").empty() ? -1 : t.get_enum(ti, "ContainerArrangement");
     const uint64_t layer = t.get_mask(ti, "Space_Layer");
     d.space_layer = layer != 0 ? static_cast<uint32_t>(layer) : static_cast<uint32_t>(kLayerFrigate);
     d.layer_z = t.get_float(ti, "Layer_Z_Adjust");

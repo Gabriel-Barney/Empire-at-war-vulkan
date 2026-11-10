@@ -884,12 +884,16 @@ void build_squad(World& w) {
     w.rng = SimRng(31);
     UnitDesc c = land_unit(100, cell_center(10, 20), 0, 2.0f, 12.0f, kUccInfantry);
     c.team_container = true;
+    c.container_arrangement = 1;  // s78n t14: Dartboard (re-lays, Halton seeds, start delays in the saves)
     CHECK(w.sys.add_unit(c));
     const V2 slots[3] = {{0.0f, 0.0f}, {-20.0f, 15.0f}, {-20.0f, -15.0f}};
     std::vector<ObjectId> ids;
     for (ObjectId id = 1; id <= 3; ++id) {
         const V2 s = slots[id - 1];
-        CHECK(w.sys.add_unit(land_unit(id, cell_center(10, 20) + s, 0, 2.5f, 3.0f, kUccInfantry)));
+        UnitDesc d = land_unit(id, cell_center(10, 20) + s, 0, 2.5f, 3.0f, kUccInfantry);
+        d.formation_spacing = 0.6f;
+        CHECK(w.sys.add_unit(d));
+        CHECK(w.sys.set_team_member_shape(id, 3.0f, 3.0f, 3.0f, 3.0f));
         ids.push_back(id);
     }
     CHECK(w.sys.set_land_team(100, ids, slots));
@@ -1019,7 +1023,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 13);  // 13: before the s78n t03 land squad container fields (14)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 15);
+    put_u32(bad, 0, 14);  // 14: before the s78n t14 squad layout / start delay / recovery fields (15)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 16);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode
