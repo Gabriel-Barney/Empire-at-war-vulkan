@@ -60,6 +60,13 @@ target_link_libraries(alamo_tactical_movement_gaps_tests PRIVATE alamo_tactical_
 add_test(NAME alamo_tactical_movement_gaps_tests COMMAND alamo_tactical_movement_gaps_tests)
 set_tests_properties(alamo_tactical_movement_gaps_tests PROPERTIES TIMEOUT 300)
 
+# s78n t20 batch 2: zone validation of the ordered point, the destination check's D / forced pass / try state (MOVEMENT
+# 4.2 step 2, 4.3.1 items 3, 4, 7).
+add_executable(alamo_tactical_movement_b2_tests tests/test_movement_b2.cpp)
+target_link_libraries(alamo_tactical_movement_b2_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
+add_test(NAME alamo_tactical_movement_b2_tests COMMAND alamo_tactical_movement_b2_tests)
+set_tests_properties(alamo_tactical_movement_b2_tests PROPERTIES TIMEOUT 300)
+
 # L1 systems: hyperspace departures, engine control, teleport (hyperspace.hpp, MovementSystem::teleport).
 add_executable(alamo_tactical_hyperspace_tests tests/test_hyperspace.cpp)
 target_link_libraries(alamo_tactical_hyperspace_tests PRIVATE alamo_tactical_movement alamo_test_support)

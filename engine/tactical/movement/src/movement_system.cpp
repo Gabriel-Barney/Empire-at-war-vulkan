@@ -693,8 +693,37 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
     V2 group_c{};
     for (const FormationMember& f : mem) group_c = group_c + f.pos;
     group_c = group_c * (1.0f / static_cast<float>(mem.size()));
+    // s78n t20 batch 2 (MOVEMENT §4.2 step 2, §4.3.1 item 7): each formation's destination is the ordered point validated
+    // against its seed's zone (0x50f480(P, the seed's position, its class, 30)) - a position order without flag 0x20 only
+    // (the host's skip_destination_check marks the port's object-goal moves; a queued order has no composition pass).
+    // [port] a seed standing on a cell its class cannot enter keeps P (the port keeps its blocked-start escape, as the
+    // impassable-cell rule's exemption of batch 1 item 1.3); air units use retail's position finder (not modelled): P.
+    // A validation that fails ends the composition pass: this formation and every later one of the order get no move
+    // ([port] their units are stopped and report `failed`).
+    const bool queued = (order.flags & kMoveFlagQueue) != 0;
+    const bool position_order = !(order.flags & kMoveFlagSkipValidation) && !order.skip_destination_check && !queued;
+    bool zone_failed = false;
+    std::vector<uint32_t> no_move;  // indices into idx: the units of the formations the failed validation left out
     for (const std::vector<uint32_t>& bucket : kmeans_buckets(mem, k.max_formation_area)) {
         for (const std::vector<uint32_t>& f : split_into_formations(mem, bucket, k, compatible, speed_ratio)) {
+            V2 centre = order.destination;
+            bool fresh = false;
+            if (position_order && !zone_failed) {
+                const Unit& seed = units_[idx[f[0]]];
+                if (!is_air(seed) && grid_.passable_world(seed.m.pos, seed.lp.mask)) {
+                    V2 v;
+                    if (!zone_validate(regions_, order.destination, seed.m.pos, seed.lp.mask, v)) {
+                        zone_failed = true;
+                    } else if (!(v == order.destination)) {
+                        centre = v;
+                        fresh = true;
+                    }
+                }
+            }
+            if (zone_failed) {
+                no_move.insert(no_move.end(), f.begin(), f.end());
+                continue;
+            }
             // cu8j t01 (MOVEMENT §1.6 / §4.6, correcting cu8i): the formation, its PathFrameDelay stagger (0x43c1b0) and
             // its FormationClass ctor draw come at the next coordinator update (compose_land); [port] the split itself is
             // made here, with the order frame's positions. A queued order adds a block to the existing formations [M]:
@@ -714,7 +743,8 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
                 hover_keys.push_back({fspeed, c});
                 hover_members.push_back(f);
             }
-            V2 fwd = order.facing_deg != kNoFacing ? dir_from_deg(order.facing_deg) : normalize_retail(order.destination - c);
+            // s78n t20 batch 2: a fresh block (V != P) carries no formation facing
+            V2 fwd = order.facing_deg != kNoFacing && !fresh ? dir_from_deg(order.facing_deg) : normalize_retail(centre - c);
             if (length_sq(fwd) == 0.0f) fwd = {1.0f, 0.0f};
             LandForm lf;
             lf.members = f;
@@ -722,16 +752,28 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
             lf.speed = fspeed;
             lf.fwd = fwd;
             lf.slots = layout_formation(mem, f, fwd, k);
-            lf.centre = order.destination;
+            lf.centre = centre;
+            lf.fresh = fresh;
             forms.push_back(std::move(lf));
+        }
+    }
+    // s78n t20 batch 2: the units a failed zone validation left without a formation do not move
+    if (!no_move.empty()) {
+        std::vector<ObjectId> ids;
+        for (const uint32_t m : no_move) ids.push_back(units_[idx[m]].d.id);
+        stop(ids);
+        for (const uint32_t m : no_move) {
+            Unit& u = units_[idx[m]];
+            u.failed = true;
+            u.arrived = false;
+            u.in_formation = false;
+            u.formation_speed = kInf;
         }
     }
     // s78n t20 (MOVEMENT §4.3.1 item 2): the destination check - not for a forced-path order (flag 0x20), an object goal
     // (the host's skip_destination_check) or a queued order (no composition pass). It never refuses the order: it only
     // moves the centre the formations' slots are laid around.
-    const bool queued = (order.flags & kMoveFlagQueue) != 0;
-    const bool checked = !(order.flags & kMoveFlagSkipValidation) && !order.skip_destination_check && !queued;
-    if (checked) destination_check(order, idx, forms, group_c);
+    if (position_order && !forms.empty()) destination_check(order, idx, forms, group_c);
     {
         for (const LandForm& lf : forms) {
             const std::vector<uint32_t>& f = lf.members;
@@ -757,10 +799,10 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
                 u.need_path = true;
                 u.arrived = false;
                 u.failed = false;
-                u.facing = order.facing_deg;
+                u.facing = lf.fresh ? kNoFacing : order.facing_deg;  // s78n t20 batch 2: a fresh block has no facings
                 // s78k t01 (MOVEMENT §6.1, §3.5.1): the final facing and the flag-0x20 straight path of this move; a new
                 // order drops a running arrival turn.
-                u.final_facing = order.final_facing_deg;
+                u.final_facing = lf.fresh ? kNoFacing : order.final_facing_deg;
                 u.forced = (order.flags & kMoveFlagSkipValidation) != 0;
                 arrival_reset(u);  // s78l t02: the arrival turn state too
                 u.start_frame = pc ? kStartPending : frame + delays[s.member];
@@ -813,7 +855,8 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
     // the path's arrival from the planner.
     for (uint32_t i : idx) {
         const Unit& tc = units_[i];
-        if (!tc.d.team_container || tc.m.speed != 0.0f) continue;
+        // (s78n t20 batch 2: a container the failed zone validation left without a formation gets no path: no draw)
+        if (!tc.d.team_container || tc.m.speed != 0.0f || !tc.has_goal) continue;
         for (const LandTeamSlot& e : land_team(tc.d.id))
             if (Unit* m = unit_ptr(e.member))
                 m->start_delay = static_cast<uint32_t>(rng.range_int(0, cfg_.constants.max_move_frame_delay));
@@ -829,19 +872,23 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
     }
 }
 
-// ---- s78n t20 (MOVEMENT §4.3.1 items 3 - 4): the destination check of a land move order ----
+/// ---- s78n t20 (MOVEMENT §4.3.1 items 3 - 4): the destination check of a land move order ----
 // 0x439360: every formation whose lead (its seed) is a land layer object, nearest first to the group centroid C. The
-// first one is test-planned to the ordered goal D; fewer than 2 path points end the pass with nothing changed. Axis a =
-// the order's facing, else the direction d1 of that path's last segment; phi = the signed angle from its first to its
-// last segment. Passes n = 0 .. 40 over the centre Dn (D, then 20 x ceil(n / 8) out at (n mod 8) x 45 degrees; Dn must
-// pass the lead's class, be zone-connected to D and reachable from it by a straight line or a path <= 1.8 x the
-// distance): each formation is placed by place_formation with the step direction v = normalise(rotate(centroid - C,
-// phi)), or -d1 for the only formation or a zero offset; a formation that cannot be placed sends the pass to the next n.
-// After n = 40 every formation keeps D. The order is never refused. [port] an ordered goal that does not pass the lead's
-// class is left to the slot search (pick_land_slot), unchecked; the taken rectangles of a failed pass are dropped.
+// first one, R, is test-planned to D = R's own block goal (s78n t20 batch 2: for a position order the point validated
+// for R's seed, §4.2 step 2 - not the raw order point); fewer than 2 path points end the pass with nothing changed (a
+// lead on ground its class cannot enter: retail's region search needs the start region to pass the class mask). Axis a
+// = the order's facing (not for a fresh block, which carries none), else the direction d1 of that path's last segment;
+// phi = the signed angle from its first to its last segment. Passes n = 0 .. 40 over the centre Dn (D, then 20 x
+// ceil(n / 8) out at (n mod 8) x 45 degrees; pass 0 tests nothing about D; for n >= 1 Dn must pass the lead's class, be
+// zone-connected to D (0x50ee10) and be reachable from it by a straight line or a path <= 1.8 x the distance): each
+// formation is placed by place_formation with the step direction v = normalise(rotate(centroid - C, phi)), or -d1 for
+// the only formation or a zero offset; a formation that cannot be placed sends the pass to the next n. After n = 40 one
+// forced pass at D accepts everything. The order is never refused. An impassable D (only when R's seed stands on ground
+// its class cannot enter, or is airborne) is left as it is: retail's tries all fail there and the forced pass keeps D
+// (§4.3.1 item 7, "What reaches the destination check"); [port] the port then keeps its slot search (pick_land_slot).
+// [port] the taken rectangles of a failed pass are dropped.
 void MovementSystem::destination_check(const MoveOrder& order, const std::vector<uint32_t>& idx, std::vector<LandForm>& forms,
                                        V2 group_c) {
-    const V2 dest = order.destination;
     std::vector<uint32_t> ord;
     for (uint32_t i = 0; i < forms.size(); ++i)
         if (land_layer_object(units_[idx[forms[i].members[0]]])) ord.push_back(i);
@@ -849,8 +896,10 @@ void MovementSystem::destination_check(const MoveOrder& order, const std::vector
     std::stable_sort(ord.begin(), ord.end(), [&](uint32_t x, uint32_t y) {
         return length_sq(forms[x].centroid - group_c) < length_sq(forms[y].centroid - group_c);
     });
-    const Unit& lead = units_[idx[forms[ord[0]].members[0]]];
-    if (!grid_.passable_world(dest, lead.lp.mask)) return;
+    const LandForm& rf = forms[ord[0]];
+    const Unit& lead = units_[idx[rf.members[0]]];
+    const V2 dest = rf.centre;
+    if (!grid_.passable_world(lead.m.pos, lead.lp.mask) || !grid_.passable_world(dest, lead.lp.mask)) return;
     LandPathScratch sc;
     LandPath test;
     {
@@ -866,20 +915,19 @@ void MovementSystem::destination_check(const MoveOrder& order, const std::vector
     const V2 d0 = normalize_retail(test.points[1] - test.points[0]);
     const V2 d1 = normalize_retail(test.points[np - 1] - test.points[np - 2]);
     if (!(length_sq(d1) > 0.0f)) return;
-    const V2 axis = order.facing_deg != kNoFacing ? dir_from_deg(order.facing_deg) : d1;
+    const V2 axis = order.facing_deg != kNoFacing && !rf.fresh ? dir_from_deg(order.facing_deg) : d1;
     const float cphi = length_sq(d0) > 0.0f ? dot(d0, d1) : 1.0f, sphi = length_sq(d0) > 0.0f ? cross(d0, d1) : 0.0f;
-    const int32_t comp = regions_.component_at(lead.slot, world_to_cell(dest.x), world_to_cell(dest.y));
     const bool several = ord.size() > 1;
     constexpr float kC = 0.70710678f;
     static constexpr V2 kRing[8] = {{1.0f, 0.0f}, {kC, kC}, {0.0f, 1.0f}, {-kC, kC}, {-1.0f, 0.0f}, {-kC, -kC}, {0.0f, -1.0f}, {kC, -kC}};
     std::vector<FootRect> taken;
     std::vector<V2> centres(ord.size());
-    for (uint32_t n = 0; n <= 40; ++n) {
+    for (uint32_t n = 0; n <= 41; ++n) {
+        const bool forced = n == 41;  // the forced pass at D after n = 40
         V2 dn = dest;
-        if (n > 0) {
+        if (n > 0 && !forced) {
             dn = dest + kRing[n % 8u] * (20.0f * static_cast<float>((n + 7u) / 8u));
-            const int32_t cx = world_to_cell(dn.x), cy = world_to_cell(dn.y);
-            if (!grid_.passable_cell(cx, cy, lead.lp.mask) || regions_.component_at(lead.slot, cx, cy) != comp) continue;
+            if (!grid_.passable_world(dn, lead.lp.mask) || !zone_connected(regions_, lead.lp.mask, dest, dn)) continue;
             if (!line_passable(grid_, dest, dn, lead.lp.mask)) {
                 LandPathRequest q;
                 q.start = dest;
@@ -901,7 +949,7 @@ void MovementSystem::destination_check(const MoveOrder& order, const std::vector
                 const V2 rot = normalize_retail(V2{off.x * cphi - off.y * sphi, off.x * sphi + off.y * cphi});
                 if (length_sq(rot) > 0.0f) v = rot;
             }
-            ok = place_formation(idx, lf, dn, v, axis, r == 0, several, comp, taken, centres[r]);
+            ok = place_formation(idx, lf, dn, v, axis, r == 0, several, forced, taken, centres[r]);
         }
         if (!ok) continue;
         for (size_t r = 0; r < ord.size(); ++r) {
@@ -916,16 +964,20 @@ void MovementSystem::destination_check(const MoveOrder& order, const std::vector
 // of the union of its members' slot rectangles (slot +- the member's footprint half extents 0x396850; a lone squad
 // container: its joint slot box); R = the rectangle (HX + S, HY + S) on `axis`. Up to 40 tries (destination_try_offset).
 // A try is rejected when: several formations and R contains Dn; R overlaps a rectangle taken in this pass; its centre
-// cell or R is impassable ([port] R's corners; this sets "impassable ground met"); after that, it is not zone-connected
-// to D or its path from Dn is > 1.8 x the straight line; or the object test fails. Object test: the layer objects in R
-// grown by E, without the order's own units and, for a formation that is all Infantry / Bike or all Giant and not all
-// squad containers, without single Infantry-class units; no owner test and no moving test. Each counts where it is
-// going - its footprint at the end of its path with the final direction when it has one - and is a blocker when a member's
-// slot rectangle (its half extents + S) overlaps it, the two classes interact and the member cannot crush it. Rejected
-// iff the sum of the blockers' hx x hy > 0.15 x (HX + S)(HY + S). Accepted: `centre` and R joins the taken list.
+// cell or R is impassable ([port] R's centre and corners); while "crossed", it is not zone-connected to Dn (0x50ee10) or
+// its path from Dn is > 1.8 x the straight line; or the object test fails. Ground state (s78n t20 batch 2): "met" at the
+// first impassable try, "crossed" at the next passable one; a try that fails after the ground tests while crossed,
+// followed later by another impassable try, ends the tries at once. Before "met" the first formation uses the halved,
+// alternating offsets. Object test: the layer objects in R grown by E, without the order's own units and, for a
+// formation that is all Infantry / Bike or all Giant and not all squad containers, without single Infantry-class units;
+// no owner test and no moving test. Each counts where it is going - its footprint at the end of its path with the final
+// direction when it has one - and is a blocker when a member's slot rectangle (its half extents + S) overlaps it, the
+// two classes interact and the member cannot crush it. Rejected iff the sum of the blockers' hx x hy > 0.15 x (HX + S)
+// (HY + S). Accepted: `centre` and R joins the taken list. Forced pass: when no try is accepted, `centre` := the centre
+// of the last try that reached the object test, or Dn when none did, and that rectangle joins the taken list.
 // [port] the union box is centred where the slots put it (the port's layout is not centred on the destination).
 bool MovementSystem::place_formation(const std::vector<uint32_t>& idx, const LandForm& f, V2 dn, V2 v, V2 axis, bool first,
-                                     bool several, int32_t comp, std::vector<FootRect>& taken, V2& centre) const {
+                                     bool several, bool forced, std::vector<FootRect>& taken, V2& centre) const {
     const float sp = cfg_.constants.between_formation_spacing, ext = cfg_.constants.destination_query_extension;
     const Unit& lead = units_[idx[f.members[0]]];
     float x0 = 3.0e38f, x1 = -3.0e38f, y0 = 3.0e38f, y1 = -3.0e38f;
@@ -959,9 +1011,14 @@ bool MovementSystem::place_formation(const std::vector<uint32_t>& idx, const Lan
     };
     std::vector<uint32_t> cand;
     LandPathScratch sc;
-    bool blocked_seen = false;
+    enum class Ground : uint8_t { None, Met, Crossed };
+    Ground ground = Ground::None;
+    bool crossed_fail = false;  // a try failed after the ground tests while crossed
+    bool reached = false;       // a try reached the object test (forced pass: the last one is taken)
+    V2 last_c = dn;
+    FootRect last_rect{dn + box_off, axis, hx, hy, false};
     for (uint32_t k = 0; k < 40; ++k) {
-        const V2 c = dn + destination_try_offset(k, first && !blocked_seen, v, m_side);
+        const V2 c = dn + destination_try_offset(k, first && ground == Ground::None, v, m_side);
         const FootRect rect{c + box_off, axis, hx, hy, false};
         if (several && inside(rect, dn)) continue;
         bool hit = false;
@@ -974,11 +1031,16 @@ bool MovementSystem::place_formation(const std::vector<uint32_t>& idx, const Lan
             pass = grid_.passable_world(p, lead.lp.mask);
         }
         if (!pass) {
-            blocked_seen = true;
+            if (crossed_fail) break;  // the early end
+            if (ground == Ground::None) ground = Ground::Met;
             continue;
         }
-        if (blocked_seen) {
-            if (regions_.component_at(lead.slot, world_to_cell(c.x), world_to_cell(c.y)) != comp) continue;
+        if (ground == Ground::Met) ground = Ground::Crossed;
+        if (ground == Ground::Crossed) {
+            if (!zone_connected(regions_, lead.lp.mask, dn, c)) {
+                crossed_fail = true;
+                continue;
+            }
             if (!line_passable(grid_, dn, c, lead.lp.mask)) {
                 LandPathRequest q;
                 q.start = dn;
@@ -987,10 +1049,16 @@ bool MovementSystem::place_formation(const std::vector<uint32_t>& idx, const Lan
                 q.snap_goal = false;
                 LandPath lp;
                 find_land_path(grid_, regions_, q, sc, lp);
-                if (!lp.ok || path_length(lp.points) > 1.8f * distance(dn, c)) continue;
+                if (!lp.ok || path_length(lp.points) > 1.8f * distance(dn, c)) {
+                    crossed_fail = true;
+                    continue;
+                }
             }
         }
         // ---- the object test
+        reached = true;
+        last_c = c;
+        last_rect = rect;
         layer_box_query(rect.c, std::sqrt(hx * hx + hy * hy) + ext, cand);
         float sum = 0.0f;
         for (uint32_t ci : cand) {
@@ -1033,12 +1101,18 @@ bool MovementSystem::place_formation(const std::vector<uint32_t>& idx, const Lan
                 sum += h.x * h.y;
             }
         }
-        if (sum > 0.15f * hx * hy) continue;
+        if (sum > 0.15f * hx * hy) {
+            if (ground == Ground::Crossed) crossed_fail = true;
+            continue;
+        }
         centre = c;
         taken.push_back(rect);
         return true;
     }
-    return false;
+    if (!forced) return false;
+    centre = reached ? last_c : dn;
+    taken.push_back(last_rect);
+    return true;
 }
 
 float MovementSystem::collision_radius(ObjectId id) const {

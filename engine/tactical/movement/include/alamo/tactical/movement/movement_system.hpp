@@ -1412,10 +1412,15 @@ private:
         std::vector<Slot> slots;
         V2 centre;
         bool checked = false;  // s78n t20 F5: the destination check accepted `centre` (its slots take no cell snap)
+        // s78n t20 batch 2 (MOVEMENT §4.2 step 2): `centre` is the seed's zone-validated point V != the ordered point -
+        // a fresh block carrying only the order's flags (no formation facing, no final facing)
+        bool fresh = false;
     };
     void destination_check(const MoveOrder& order, const std::vector<uint32_t>& idx, std::vector<LandForm>& forms, V2 group_c);
+    // s78n t20 batch 2: `forced` = the forced pass after n = 40 (no try accepted: the last try that reached the object
+    // test, or Dn, is taken and true returned)
     bool place_formation(const std::vector<uint32_t>& idx, const LandForm& f, V2 dn, V2 v, V2 axis, bool first, bool several,
-                         int32_t comp, std::vector<FootRect>& taken, V2& centre) const;
+                         bool forced, std::vector<FootRect>& taken, V2& centre) const;
     void move_land(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
                    const std::vector<uint32_t>& delays, uint32_t serial, SimRng& rng);
     void move_space(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,

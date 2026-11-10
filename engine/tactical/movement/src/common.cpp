@@ -18,6 +18,9 @@ MovementConstants MovementConstants::from_game_constants(const data::GameConstan
     c.dynamic_obstacle_overlap_penalty = gc.get_float("DynamicObstacleOverlapPenalty", c.dynamic_obstacle_overlap_penalty);
     c.land_destination_proximity = gc.get_float("LandDestinationProximity", c.land_destination_proximity);
     c.between_formation_spacing = gc.get_float("BetweenFormationSpacing", c.between_formation_spacing);  // s78n t20
+    // s78n t20 batch 2 (MOVEMENT §4.3.1 item 4, GC +0x14f0): E of the destination check's object test
+    c.destination_query_extension =
+        gc.get_float("Destination_Collision_Query_Extension", c.destination_query_extension);
     c.land_temporary_destination_proximity =
         gc.get_float("LandTemporaryDestinationProximity", c.land_temporary_destination_proximity);
     c.max_move_frame_delay = static_cast<int32_t>(get_u32(gc, "Max_Move_Frame_Delay", 6));

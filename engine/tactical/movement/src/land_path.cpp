@@ -533,6 +533,60 @@ bool snap_to_component(const PassabilityGrid& grid, const RegionMap& regions, V2
     return found;
 }
 
+// ---------------------------------------------------------------- s78n t20 batch 2: zones (MOVEMENT §4.3.1 item 7)
+int32_t zone_at(const RegionMap& regions, int32_t slot, int32_t cx, int32_t cy) {
+    if (slot < 0) return -1;
+    const int32_t r = regions.region_at(cx, cy);
+    if (r < 0) return -1;
+    const int32_t c = regions.component(slot, r);
+    return c < 0 ? 0 : c + 1;
+}
+
+bool zone_connected(const RegionMap& regions, uint32_t mask, V2 a, V2 b) {
+    const int32_t slot = regions.mask_slot(mask);
+    const int32_t za = zone_at(regions, slot, world_to_cell(a.x), world_to_cell(a.y));
+    return za > 0 && za == zone_at(regions, slot, world_to_cell(b.x), world_to_cell(b.y));
+}
+
+bool zone_validate(const RegionMap& regions, V2 p, V2 q, uint32_t mask, V2& out) {
+    const int32_t slot = regions.mask_slot(mask);
+    const int32_t w = static_cast<int32_t>(regions.width()), h = static_cast<int32_t>(regions.height());
+    const auto inside = [&](int32_t x, int32_t y) { return x >= 0 && y >= 0 && x < w && y < h; };
+    const int32_t px = world_to_cell(p.x), py = world_to_cell(p.y), qx = world_to_cell(q.x), qy = world_to_cell(q.y);
+    const int32_t zq = zone_at(regions, slot, qx, qy);
+    if ((zq == -1 && !inside(qx, qy)) || zq == zone_at(regions, slot, px, py)) {
+        out = p;
+        return true;
+    }
+    for (int32_t r = 1; r < 30; ++r) {
+        float best = 0.0f;
+        bool found = false;
+        V2 pick;
+        const auto consider = [&](int32_t x, int32_t y) {
+            if (!inside(x, y) || zone_at(regions, slot, x, y) != zq) return;
+            const V2 c = cell_center(x, y);
+            const float d = distance(q, c);
+            if (!found || d < best) {
+                best = d;
+                pick = c;
+                found = true;
+            }
+        };
+        // a pair's mirror cell is looked at only when its first cell is inside the grid and has a region (as decompiled)
+        const auto pair = [&](int32_t x, int32_t y, int32_t mx, int32_t my) {
+            consider(x, y);
+            if (inside(x, y) && regions.region_at(x, y) >= 0) consider(mx, my);
+        };
+        for (int32_t i = -r; i <= r; ++i) pair(px + i, py + r, px - i, py - r);
+        for (int32_t j = 1 - r; j <= r - 1; ++j) pair(px + r, py + j, px - r, py - j);
+        if (found) {
+            out = pick;
+            return true;
+        }
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------- main entry
 bool find_land_path(const PassabilityGrid& grid, const RegionMap& regions, const LandPathRequest& req, LandPathScratch& sc,
                     LandPath& out) {
