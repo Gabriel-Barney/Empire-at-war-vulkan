@@ -6431,6 +6431,145 @@ void test_convert_victim_test() {
     CHECK((w.sys->flags(14) & kUnitStolenVehicle) != 0);  // permanent
 }
 
+// s78n review: (a) remove_unit - the world removal 0x391310 without Die (the vehicle a thief's clone replaces): dead,
+// one DeathEvent of kind 15, no hardpoint event, no death projectile, no DeathBehavior draw; (b) a self hit (STIM_PACK's
+// 0x3a9e30(V, 1, x, V)) runs Take_Damage with the unit as its own source - its incognito bit goes (no CAUSE_DAMAGE), its
+// own Damage list scales it - but keeps no kill credit and no damage-record source [port]; (c) s78n t13: the last-hit
+// stamp is written at step 11, before the damage-enabled gate and before the listeners.
+void test_s78n_review_combat() {
+    const auto units_digest = [](const CombatSystem& s) {
+        StateHasher h;
+        s.hash_units(h);
+        return h.digest();
+    };
+    {  // (a)
+        World w;
+        ProjectileDesc dp;
+        dp.name = "Death_A";
+        dp.max_speed = 5.0f;
+        w.data.projectiles = {dp, dp};
+        HardpointDesc hd;
+        hd.kind = HardpointKind::Engine;
+        hd.health = 50.0f;
+        hd.destroyable = true;
+        w.data.hardpoints.push_back(hd);
+        UnitDesc car;
+        car.tactical_health = 500.0f;
+        car.hardpoints = {0, 0};
+        car.death_projectiles = {0, 1};  // two entries: Die draws the pick
+        car.spin_away_on_death = true;   // Die draws the spin-away
+        const uint32_t cd = push_unit(w.data, car);
+        w.make();
+        w.sys->bind_rng(&w.rng);
+        w.add(1, cd, 0, Vec3{0, 0, 0});
+        w.add(2, cd, 0, Vec3{200, 0, 0});
+        w.add(3, cd, 1, Vec3{400, 0, 0});
+        w.tick();  // clears the per-tick lists
+        const uint64_t d0 = w.rng.draws();
+        w.sys->remove_unit(1, 3, w.frame);
+        CHECK(w.sys->has_unit(1) && !w.sys->alive(1));
+        CHECK(w.sys->deaths().size() == 1 && w.sys->hardpoint_events().empty() && w.sys->projectile_count() == 0u);
+        if (w.sys->deaths().size() == 1) {
+            const DeathEvent& d = w.sys->deaths()[0];
+            CHECK(d.id == 1 && d.killer == 3 && d.kind == kKindNoDeathClone && d.death_clone == -1 && d.death_projectile == -1 &&
+                  !d.spin_away);
+        }
+        CHECK(w.rng.draws() == d0);  // no death-projectile pick, no spin-away draw
+        w.sys->remove_unit(1, 3, w.frame);  // already dead: nothing more
+        CHECK(w.sys->deaths().size() == 1);
+        w.sys->kill_unit(2, 3, kKindNormal, w.frame);  // the same unit through Die: its hardpoints die, the draws are made
+        CHECK(w.sys->deaths().size() == 2 && w.sys->hardpoint_events().size() == 2 && w.sys->projectile_count() == 1u);
+        CHECK(w.rng.draws() == d0 + 2);
+    }
+    {  // (b)
+        World w;
+        UnitDesc u;
+        u.tactical_health = 1000.0f;
+        const uint32_t ud = push_unit(w.data, u);
+        w.make();
+        w.add(1, ud, 0, Vec3{0, 0, 0});
+        w.add(2, ud, 1, Vec3{200, 0, 0});
+        w.add(3, ud, 0, Vec3{400, 0, 0});
+        if (ModifierSet* m = w.sys->unit_modifiers(1)) m->insert(ModList::Damage, 1, 0.5f, kPermanent);
+        w.tick();  // the modifier caches refresh in the tick
+        DamageRequest r;
+        r.victim = 1;
+        r.amount = 100.0f;
+        CHECK_F(w.sys->take_damage(r, w.frame).after_multipliers, 100.0f);  // sourceless: the Damage list is not read
+        w.sys->set_flag(1, kUnitIncognito, true);
+        r.source = 1;
+        CHECK_F(w.sys->take_damage(r, w.frame).after_multipliers, 150.0f);  // its own Damage list: x (1 + 0.5)
+        CHECK(!(w.sys->flags(1) & kUnitIncognito));
+        CHECK(!w.sys->damage_events().empty());
+        if (!w.sys->damage_events().empty()) {
+            const DamageEvent& e = w.sys->damage_events().back();
+            CHECK(e.victim == 1 && e.source == kNoObject && e.source_owner == -1);  // [port] recorded without a source
+        }
+        r.amount = 100000.0f;  // the self hit kills: no killer
+        CHECK(w.sys->take_damage(r, w.frame).killed && !w.sys->alive(1));
+        CHECK(w.sys->deaths().size() == 1 && w.sys->deaths()[0].id == 1 && w.sys->deaths()[0].killer == kNoObject);
+        r.victim = 3;  // another unit's hit keeps its credit and its source
+        r.source = 2;
+        CHECK(w.sys->take_damage(r, w.frame).killed);
+        CHECK(w.sys->deaths().size() == 2 && w.sys->deaths()[1].killer == 2);
+        CHECK(w.sys->damage_events().back().source == 2 && w.sys->damage_events().back().source_owner == 1);
+    }
+    {  // (c) damage disabled: nothing is applied, but a projectile hit from a live shooter has stamped the victim
+        World w;
+        UnitDesc u;
+        u.tactical_health = 1000.0f;
+        const uint32_t ud = push_unit(w.data, u);
+        CombatConfig cfg;
+        cfg.damage_enabled = false;
+        w.make(cfg);
+        w.add(1, ud, 0, Vec3{0, 0, 0});
+        w.add(2, ud, 1, Vec3{200, 0, 0});
+        const uint64_t h0 = units_digest(*w.sys);
+        DamageRequest r;
+        r.victim = 1;
+        r.amount = 10.0f;
+        CHECK(!w.sys->take_damage(r, 500).applied);  // sourceless: no stamp
+        r.source = 2;
+        CHECK(!w.sys->take_damage(r, 500).applied);  // a plain non-projectile source: no stamp
+        CHECK(units_digest(*w.sys) == h0);
+        r.source_is_projectile = true;
+        const DamageResult out = w.sys->take_damage(r, 500);
+        CHECK(!out.applied && w.sys->health(1) == w.sys->max_health(1));
+        CHECK(units_digest(*w.sys) != h0);  // ever_hit / last_hit_frame, written before the gate
+        const uint64_t h1 = units_digest(*w.sys);
+        (void)w.sys->take_damage(r, 500);  // the same frame again: the same stamp
+        CHECK(units_digest(*w.sys) == h1);
+        (void)w.sys->take_damage(r, 501);
+        CHECK(units_digest(*w.sys) != h1);
+    }
+    {  // (c) a listener cancels the hit: no damage, but the stamp stands - the next hit at that frame is diminished
+        struct CancelHooks final : CombatHooks {
+            bool cancel = true;
+            bool damage_listener(ObjectId, ObjectId, int32_t, uint32_t, SimRng*) override { return cancel; }
+        } hk;
+        World w;
+        UnitDesc u;
+        u.tactical_health = 1e6f;
+        const uint32_t ud = push_unit(w.data, u);
+        CombatConfig cfg;
+        cfg.diminishing_firepower = {{0.0f, 0.6f}, {1.0f, 1.0f}};
+        w.make(cfg);
+        w.sys->set_hooks(&hk);
+        w.add(1, ud, 0, Vec3{0, 0, 0});
+        w.add(2, ud, 1, Vec3{200, 0, 0});
+        DamageRequest r;
+        r.victim = 1;
+        r.amount = 100.0f;
+        r.source = 2;
+        r.source_is_projectile = true;
+        const DamageResult first = w.sys->take_damage(r, 900);
+        CHECK(first.cancelled && first.after_multipliers == 0.0f && w.sys->health(1) == w.sys->max_health(1));
+        hk.cancel = false;
+        CHECK_NEAR(w.sys->take_damage(r, 900).after_multipliers, 60.0, 1e-3);  // 0 s after the cancelled hit's stamp
+        w.sys->set_hooks(nullptr);
+    }
+}
+
 void test_incognito_targeting() {
     // s78n t05 (HERO_CLASH §8.2, +0x3a1 & 0x10 as the vehicle-thief boarding sets it): not auto-acquired, no auto-acquire
     // of its own (no scan, so no scan draws), an attack order still works; Take_Damage clears it.
@@ -7706,6 +7845,7 @@ int main(int argc, char** argv) {
     test_squad_value();               // s78h t03
     test_convert_team();              // s78h t04
     test_convert_victim_test();       // s78n t05
+    test_s78n_review_combat();
     test_incognito_targeting();       // s78n t05
     test_energy_drain_engines();      // cu8f t02
     test_team_container_slot();       // s78h t06

@@ -2833,6 +2833,135 @@ void test_s78n_t12_thief_apply() {
     CHECK(w.ab->is_active(1, kCaptureVehicle));
 }
 
+// s78n review: STIM_PACK's self damage is Take_Damage(V, 1, x, V) (HERO_CLASH §8.4.1): the user is its own source - its
+// incognito bit goes, its own Damage list scales the hit - and the kill of a user that dies of it is nobody's [port].
+void test_s78n_review_stim_pack() {
+    OiWorld w;
+    UnitAbilityRecord stim = rec(kStimPack, 5.0f, 10.0f);
+    stim.damage_percent_when_activated = 0.1f;
+    AbilityObjectDesc a;
+    a.unit_abilities = {stim};
+    const uint32_t ud = push(w.cd, w.ad, oi_unit("Merc", 200.0f), a);
+    w.make(GameMode::Land);
+    w.add(1, ud, 0, {0, 0, 0});
+    w.add(2, ud, 0, {100, 0, 0});
+    w.add(3, ud, 0, {200, 0, 0});
+    const ObjectId u1[] = {1}, u2[] = {2}, u3[] = {3};
+    w.sys->set_flag(1, kUnitIncognito, true);
+    CHECK(w.ab->set_unit_ability_mode(u1, kStimPack, true, w.frame) == 1);
+    CHECK(w.sys->health(1) == 180.0f);                 // 10 % of the max health
+    CHECK(!(w.sys->flags(1) & kUnitIncognito));        // step 8: a non-projectile source clears the victim's bit
+    CHECK(!w.sys->damage_events().empty() && w.sys->damage_events().back().source == kNoObject);  // [port] no source on record
+    if (ModifierSet* m = w.sys->unit_modifiers(2)) m->insert(ModList::Damage, 1, 0.5f, kPermanent);
+    w.tick();  // the modifier caches refresh in the tick
+    CHECK(w.ab->set_unit_ability_mode(u2, kStimPack, true, w.frame) == 1);
+    CHECK(w.sys->health(2) == 170.0f);                 // step 16: its own Damage list, 20 x (1 + 0.5)
+    w.sys->set_health(3, 10.0f);                       // 10 of 200: the stim pack kills its user
+    const size_t deaths0 = w.sys->deaths().size();
+    CHECK(w.ab->set_unit_ability_mode(u3, kStimPack, true, w.frame) == 1);
+    CHECK(!w.sys->alive(3) && w.sys->deaths().size() == deaths0 + 1);
+    if (w.sys->deaths().size() == deaths0 + 1) CHECK(w.sys->deaths().back().id == 3 && w.sys->deaths().back().killer == kNoObject);
+}
+
+// s78n review (HERO_CLASH §8.4.2): Blast in a running battle (combat + abilities ticking, a ship with one WEAPON_SPECIAL
+// hard point like The_Peacebringer). The apply sets the incognito bit on the user; nothing in Blast clears it.
+//   * `target_dies` false: the user keeps its ordered target through the charge, the charged special hard point fires,
+//     and the shot that reaches Take_Damage clears the bit (the shooter rule).
+//   * `target_dies` true: the target dies during the charge. The user then has no target, does not acquire the other
+//     enemy in range (an incognito unit does not scan) and is not acquired by it: it stays incognito and inert, the
+//     charged shot unfired. `wake` 0: an attack order - it fires the charged shot and the hit clears the bit; `wake` 1: a
+//     projectile aimed at it hits it - the victim rule clears the bit and it acquires the enemy by itself again.
+void blast_battle(bool target_dies, int wake) {
+    OiWorld w;
+    ProjectileDesc p;
+    p.name = "Plasma";
+    p.max_speed = 50.0f;
+    p.damage = 10.0f;
+    ProjectileDesc pb = p;
+    pb.name = "Plasma_Blast";
+    w.cd.projectiles = {p, pb};
+    const uint32_t hs = special_hardpoint(w.cd, 1);
+    w.cd.hardpoints[hs].fire_range = 2000.0f;
+    w.cd.hardpoints[hs].min_recharge = w.cd.hardpoints[hs].max_recharge = 1.0f;
+    SpecialAbilityDesc bl = oi_special("Peacebringer_Blast", SpecialClass::Blast, ActivationStyle::UserInput);
+    bl.charging_time = 1.0f;  // 30 frames
+    bl.damage_multiplier = 5.0f;
+    const uint32_t bs = add_special(w.ad, bl);
+    AbilityObjectDesc a;
+    a.unit_abilities = {oi_gui(kBlast, 0.0f, 60.0f, "Peacebringer_Blast")};
+    a.specials = {bs};
+    UnitDesc ship = oi_unit("Peacebringer", 1000.0f, 50.0f, kCatFrigate);
+    ship.hardpoints = {hs};
+    ship.max_attack_distance = 2000.0f;
+    const uint32_t sd = push(w.cd, w.ad, ship, a);
+    UnitDesc prey = oi_unit("Prey", 100000.0f, 50.0f, kCatFrigate);  // unarmed, sturdy
+    prey.max_attack_distance = 2000.0f;
+    const uint32_t pd = push(w.cd, w.ad, prey, AbilityObjectDesc{});
+    w.make();
+    w.add(1, sd, 0, {0, 0, 0});
+    w.add(2, pd, 1, {400, 0, 0});
+    w.add(3, pd, 1, {0, 400, 0}, {0, -1, 0});
+    const auto incognito = [&w] { return (w.sys->flags(1) & kUnitIncognito) != 0; };
+    const ObjectId one[] = {1};
+    w.sys->order_attack(1, 2);
+    w.tick();
+    CHECK(w.sys->current_target(1) == 2);
+    CHECK(w.ab->set_unit_ability_mode(one, kBlast, true, w.frame) == 1);
+    CHECK(incognito() && w.ab->blast_counter(1) == 30);
+    const float h2 = w.sys->health(2), h3 = w.sys->health(3);
+    if (!target_dies) {
+        int cleared_at = -1;
+        for (int i = 0; i < 120 && cleared_at < 0; ++i) {
+            w.tick();
+            if (i < 25) CHECK(incognito() && w.sys->current_target(1) == 2 && w.sys->health(2) == h2);  // charging: no shot
+            if (!incognito()) cleared_at = i;
+        }
+        CHECK(cleared_at >= 29);                 // not before the charge ended
+        CHECK(w.sys->health(2) < h2);            // the charged shot landed: that hit cleared the shooter's bit
+        CHECK(w.ab->blast_counter(1) == 0 && !w.ab->special_applied(1, name_crc("Peacebringer_Blast")));
+        return;
+    }
+    for (int i = 0; i < 10; ++i) w.tick();
+    w.sys->kill_unit(2, kNoObject, kKindNormal, w.frame);  // the target dies during the charge
+    for (int i = 0; i < 150; ++i) {
+        w.tick();
+        // inert: no target of its own, nothing fired, the other enemy untouched and not aiming at it
+        CHECK(incognito() && w.sys->current_target(1) == kNoObject && w.sys->auto_target(3) != 1);
+    }
+    CHECK(w.ab->blast_counter(1) == -1 && w.sys->health(3) == h3);  // charged, the special shot still unfired
+    if (wake == 0) {
+        w.sys->order_attack(1, 3);
+        int cleared_at = -1;
+        for (int i = 0; i < 120 && cleared_at < 0; ++i) {
+            w.tick();
+            if (!incognito()) cleared_at = i;
+        }
+        CHECK(cleared_at >= 0 && w.sys->health(3) < h3 && w.ab->blast_counter(1) == 0);
+    } else {
+        ProjectileLaunch l;
+        l.shooter = 3;
+        l.owner = 1;
+        l.projectile = 0;
+        l.from = Vec3{0, 300, 0};
+        l.target = 1;
+        CHECK(w.sys->launch_projectile(l, w.frame));
+        int cleared_at = -1, acquired_at = -1;
+        for (int i = 0; i < 200 && acquired_at < 0; ++i) {
+            w.tick();
+            if (cleared_at < 0 && !incognito()) cleared_at = i;
+            if (cleared_at >= 0 && w.sys->current_target(1) == 3) acquired_at = i;
+        }
+        CHECK(cleared_at >= 0 && w.sys->health(1) < w.sys->max_health(1));  // the aimed projectile's hit (the victim rule)
+        CHECK(acquired_at >= cleared_at);                                   // it scans again once the bit is gone
+    }
+}
+
+void test_s78n_review_blast_battle() {
+    blast_battle(false, 0);
+    blast_battle(true, 0);
+    blast_battle(true, 1);
+}
+
 void test_gaps_leech() {
     // §5.6: apply -> 58 on, a permanent list-1 ("damage dealt") entry m on the owner (x (1 + m) on everything it deals);
     // update drains Shield_Damage_Per_Second / FPS; ends at shield 0; remove deletes the entry.
@@ -4915,6 +5044,10 @@ struct HackRangeCase {
     float max_range = 100.0f, min_range = 0.0f, user_min = 0.0f, ex = 4.0f, ey = 2.0f;
     bool grenade = false;
     bool obstacle = false;  // s78n t02: X has LAND_OBSTACLE
+    // s78n t11: X's Custom_Hard_YExtent_Deployed x Scale_Factor, whether its type Deploys, and its combat flags
+    float dep_y = 0.0f;
+    bool deploys = false;
+    uint32_t x_flags = 0;
 };
 bool hack_range_applies(const HackRangeCase& c) {
     OiWorld w;
@@ -4948,6 +5081,8 @@ bool hack_range_applies(const HackRangeCase& c) {
     UnitDesc xu = oi_unit("Turret", 100.0f, 5.0f, 16);  // infantry
     xu.hard_x_extent = c.ex;
     xu.hard_y_extent = c.ey;
+    xu.hard_y_extent_deployed = c.dep_y;
+    xu.deploys = c.deploys;
     xu.land_obstacle = c.obstacle;
     const uint32_t xd = push(w.cd, w.ad, xu, AbilityObjectDesc{});
     CombatConfig cfg;
@@ -4955,10 +5090,39 @@ bool hack_range_applies(const HackRangeCase& c) {
     w.make(GameMode::Land, std::vector<PlayerInfo>(3), cfg);
     w.add(1, ud, 0, c.user);
     w.add(2, xd, repair ? 0 : 1, c.xp, {1, 0, 0});
+    if (c.x_flags) w.sys->set_flag(2, c.x_flags, true);
     const ObjectId one[] = {1};
     (void)w.ab->targeted_ability(one, type, 2, -1, w.frame);
     w.tick();
     return w.ab->special_applied(1, name_crc(nm));
+}
+
+// s78n t11 review (TACTICAL_COMBAT §5.4.6 item 6, §5.4.2 slot 43): the ability range Target_In_Range reads the same
+// extents - an MPTL-shaped target (X 33.0, Y 16.5, deployed Y 26.4) is reached from its flank at R + 26.4 while it is
+// deploying (0x18) or deployed (0x19), at R + 16.5 otherwise (undeploying 0x1A, not deployed, a type that does not deploy).
+void test_s78n_t11_ability_range() {
+    struct Case {
+        float y;
+        uint32_t flags;
+        bool deploys, in;
+    };
+    const uint32_t s18 = kUnitDeployingIn | kUnitDeployTransition, s19 = kUnitDeploying, s1a = kUnitDeployTransition;
+    for (const Case k : {Case{125.0f, 0u, true, false}, Case{125.0f, s18, true, true}, Case{125.0f, s19, true, true},
+                         Case{125.0f, s1a, true, false}, Case{125.0f, s19, false, false}, Case{116.0f, 0u, true, true},
+                         Case{127.0f, s19, true, false}}) {
+        HackRangeCase c;  // Activation_Max_Range 100, X at the origin facing +x
+        c.ex = 33.0f;
+        c.ey = 16.5f;
+        c.dep_y = 26.4f;
+        c.deploys = k.deploys;
+        c.x_flags = k.flags;
+        c.user = Vec3{0.0f, k.y, 0.0f};  // on X's flank: the Y extent
+        CHECK(hack_range_applies(c) == k.in);
+        c.user = Vec3{-132.5f, 0.0f, 0.0f};  // along X's facing: the X extent 33.0 in every state
+        CHECK(hack_range_applies(c));
+        c.user = Vec3{-133.5f, 0.0f, 0.0f};
+        CHECK(!hack_range_applies(c));
+    }
 }
 
 void test_hack_repair_range() {
@@ -5850,6 +6014,8 @@ int main(int argc, char** argv) {
     test_gaps_stun_release();
     test_gaps_blast();
     test_s78n_t12_thief_apply();
+    test_s78n_review_stim_pack();
+    test_s78n_review_blast_battle();
     test_gaps_leech();
     test_oi_weapon_swap();
     test_oi_berserker_speed();
@@ -5862,6 +6028,7 @@ int main(int argc, char** argv) {
     test_hack_repair_range();  // s78n t07 / t01
     test_s78n_allied_users();  // s78n t07
     test_s78n_min_range();  // s78n t02
+    test_s78n_t11_ability_range();  // s78n t11 review
     test_s78n_combat_bonus_and_enhance_defense();  // s78n t04
     test_cu8f_abilities_disabled();
     test_cu8j_saber_flight();

@@ -400,6 +400,77 @@ struct GarrisonScene {
     }
 };
 
+// s78n t12 review (HERO_CLASH §8.4.3, REMAINING_GAPS §5.1): the on-demand holder of a vehicle a thief boarded.
+void test_vehicle_thief_holder() {
+    GarrisonSystem g;
+    g.set_allied([](int32_t a, int32_t b) { return a == b; });
+    HolderDesc car;
+    car.kind = HolderKind::VehicleThief;
+    car.half_diagonal = 10.0f;
+    OccupantDesc inf;
+    inf.category = kInf;
+    inf.value = 1;
+    inf.radius = 2.0f;
+    CHECK(g.add_holder(50, 1, car));  // the stolen vehicle (already the thief's owner's)
+    CHECK(g.add_unit(1, 1, inf) && g.add_unit(2, 1, inf));  // the thief and an allied trooper
+    const Vec3 at{100.0f, 50.0f, 0.0f}, face{0.0f, 1.0f, 0.0f};
+    // closed to orders: nobody walks in, no free slot, the Lua rule says no
+    CHECK(!g.can_garrison(1, 50) && !g.order_enter(1, 50) && g.pending_holder(1) == kNoObject);
+    CHECK(g.capacity(50) == 0 && g.free_slots(50) == 0);
+    // the boarding is the only way in
+    CHECK(g.board(1, 50, at, 7) && g.holder_of(1) == 50 && g.occupants(50).size() == 1);
+    CHECK(g.events().size() == 1 && g.events()[0].kind == GarrisonEventKind::Entered);
+    g.clear_events();
+    CHECK(!g.can_garrison(2, 50) && !g.order_enter(2, 50) && g.free_slots(50) == 0);
+    // no ordinary leave, no Eject_Garrison
+    CHECK(!g.order_exit(1, at, face, 8) && g.eject_all(50, at, face, 8) == 0u);
+    CHECK(g.holder_of(1) == 50 && g.events().empty());
+    // an owner change of the vehicle (even to a hostile owner) keeps the thief
+    g.set_owner(50, 2, at, face, 9);
+    CHECK(g.holder_of(1) == 50 && g.events().empty());
+    // save / load keeps the kind (and so the rules)
+    ByteWriter w;
+    g.write(w);
+    GarrisonSystem g2;
+    g2.set_allied([](int32_t a, int32_t b) { return a == b; });
+    ByteReader r(w.bytes());
+    CHECK(g2.read(r) && bytes_of(g2) == bytes_of(g) && digest_of(g2) == digest_of(g));
+    CHECK(g2.holder_desc(50) && g2.holder_desc(50)->kind == HolderKind::VehicleThief && !g2.order_exit(1, at, face, 9));
+    {  // the hash tells a thief holder from an ordinary one with the same occupant
+        GarrisonSystem p;
+        HolderDesc box = car;
+        box.kind = HolderKind::Vehicle;
+        p.add_holder(50, 2, box);
+        p.add_unit(1, 1, inf);
+        p.add_unit(2, 1, inf);
+        p.board(1, 50, at, 7);
+        CHECK(digest_of(p) != digest_of(g));
+    }
+    // the vehicle dies: the thief is released alive at the vehicle's position (not killed, not at an exit point)
+    for (GarrisonSystem* s : {&g, &g2}) {
+        s->remove(50, at, face, 10);
+        CHECK(!s->is_holder(50) && s->holder_of(1) == kNoObject && s->is_unit(1));
+        CHECK(s->events().size() == 1);
+        if (s->events().size() == 1) {
+            const GarrisonEvent& e = s->events()[0];
+            CHECK(e.kind == GarrisonEventKind::Ejected && e.unit == 1 && e.holder == 50 && e.frame == 10);
+            CHECK(e.position.x == at.x && e.position.y == at.y);
+        }
+    }
+    {  // the same order is taken by an ordinary garrison vehicle and refused by a thief holder
+        GarrisonSystem q;
+        q.set_allied([](int32_t a, int32_t b) { return a == b; });
+        HolderDesc open = car;
+        open.kind = HolderKind::Vehicle;
+        open.slots = 4;
+        q.add_holder(50, 1, open);
+        q.add_holder(60, 1, car);
+        q.add_unit(2, 1, inf);
+        CHECK(q.order_enter(2, 50) && !q.order_enter(2, 60));
+        CHECK(q.pending_holder(2) == 50);
+    }
+}
+
 void test_garrison_save() {
     GarrisonScene a;
     for (uint32_t f = 1; f <= 40; ++f) {
@@ -464,10 +535,21 @@ void test_garrison_save() {
     bad[unit0_state] = 3;  // not a GarrisonDataPack state
     ByteReader rb3(bad);
     CHECK(!c.g.read(rb3));
-    bad = saved;
-    bad[0] = 2;  // version
-    ByteReader rb4(bad);
-    CHECK(!c.g.read(rb4));
+    for (const uint8_t v : {uint8_t{1}, uint8_t{3}}) {  // only the current version (2: s78n t12 review) is read
+        bad = saved;
+        CHECK(bad[0] == 2);
+        bad[0] = v;
+        ByteReader rb4(bad);
+        CHECK(!c.g.read(rb4));
+    }
+    {  // a holder kind past the last one is refused: the first holder's kind byte follows version, neutral, count, id, owner
+        bad = saved;
+        const size_t kind0 = 4 + 4 + 4 + 4 + 4;
+        CHECK(bad[kind0] <= 4);
+        bad[kind0] = 5;
+        ByteReader rb5(bad);
+        CHECK(!c.g.read(rb5));
+    }
     CHECK(bytes_of(c.g) == before);
     ByteReader rok(saved);
     CHECK(c.g.read(rok) && bytes_of(c.g) == saved);
@@ -600,6 +682,7 @@ int main() {
     test_owner_change();  // A1 t08
     test_types();
     test_garrison_save();  // N1 stage 2
+    test_vehicle_thief_holder();  // s78n t12 review
     test_capture_save();
     std::printf("alamo_tactical_garrison_tests: %d checks, %d failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

@@ -24,7 +24,7 @@ using save_io::put_vec3;
 
 namespace {
 
-constexpr uint32_t kGarrisonSaveVersion = 1;
+constexpr uint32_t kGarrisonSaveVersion = 2;  // 2: s78n t12 review, HolderKind::VehicleThief. Only the current version is read.
 constexpr uint32_t kCaptureSaveVersion = 1;
 
 }  // namespace
@@ -73,7 +73,7 @@ bool GarrisonSystem::read(ByteReader& r) {
         h.d.can_fire = r.boolean();
         h.d.half_diagonal = r.f32();
         uint32_t ni = 0;
-        if (!r.count(ni, 4) || kind > static_cast<uint8_t>(HolderKind::Property)) return false;
+        if (!r.count(ni, 4) || kind > static_cast<uint8_t>(HolderKind::VehicleThief)) return false;
         if (i > 0 && h.id <= holders[i - 1].id) return false;
         h.d.kind = static_cast<HolderKind>(kind);
         h.inside.resize(ni);

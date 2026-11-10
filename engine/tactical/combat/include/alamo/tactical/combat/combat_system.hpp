@@ -1299,6 +1299,12 @@ public:
     // Die (0x39bdb0) for scripts / self-destruct: full death sequence (no-op on dead units). `sub_key` = the killing
     // projectile's Damage_Type index (DamageArmorTable damage index, GameConstants Damage_Types order), -1 none.
     void kill_unit(ObjectId id, ObjectId killer, uint8_t kind, uint32_t frame, int32_t sub_key = -1);
+    // s78n t12 review (HERO_CLASH §8.1 / §8.4.3): world removal 0x391310 WITHOUT Die 0x39bdb0 - the vehicle a thief's
+    // capture clone replaces ("kill the vehicle silently"). The unit goes dead (kUnitDead, killer recorded, the
+    // unit_dying hook) and raises its DeathEvent with kind kKindNoDeathClone, and 0x391310's Tactical_Respawn /
+    // Destruction_Survivors run; but no hardpoint dies (no HardpointEvent), and there is no death clone, no death
+    // projectile and no DeathBehavior draw.
+    void remove_unit(ObjectId id, ObjectId killer, uint32_t frame);
     std::span<const HardpointEvent> hardpoint_events() const { return hp_events_; }  // this tick
     std::span<const SmokeEvent> smoke_events() const { return smoke_events_; }      // this tick
     std::span<const DamageEvent> damage_events() const { return damage_events_; }   // this tick (A1 AI)
@@ -1909,7 +1915,7 @@ private:
                      int32_t sub_key = -1);
     void hardpoint_damage(Unit& v, Hardpoint& h, float x, ObjectId source, DamageResult& out, uint32_t frame,
                           bool owner_dying = false, int32_t sub_key = -1);
-    void kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame, int32_t sub_key = -1);
+    void kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame, int32_t sub_key = -1, bool removal = false);
     // S9 t04: Pick_Death_Clone (0x3718f0) with index -1; one synced draw for a list of >= 2. -1 when no entry.
     int32_t pick_death_clone(const UnitDesc& vd, int32_t key, int32_t sub_key);
     // S9 t05: Missile_Shield_Deflect_Test (0x4c6e30): true + the outward direction for the first qualifying emitter

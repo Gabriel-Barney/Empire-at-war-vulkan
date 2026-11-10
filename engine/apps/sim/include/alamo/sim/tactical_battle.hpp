@@ -1163,6 +1163,10 @@ public:
     // facing) of movement-backed land squad container `id` - the AbilityHost::land_squad_slots input Bribe's E_T folds
     // (abilities::squad_joint_half_extents). False: not such a container. Const read only.
     bool squad_joint_box(const objects::ObjectStore& st, objects::ObjectId id, float& hx, float& hy) const;
+    // s78n t10 review test seam (FOG_OF_WAR §5.2, TACTICAL_COMBAT §5.4.6 port spec item 3): the 8 (x, y) points of object
+    // `h`'s fog multisample footprint 0x38de80 (the 4 corners, then c + hx a, c - hy b, c - hx a, c + hy b), whether or
+    // not its type has Multisample_FOW_Check. Const read only.
+    void fog_footprint(const objects::ObjectStore& st, objects::ObjectHandle h, float* xy16) const { fog_footprint_samples(st, h, xy16); }
     const tactical::abilities::AbilitySystem& abilities() const { return *abilities_; }
     tactical::abilities::AbilitySystem& abilities() { return *abilities_; }
     const BattleTables& tables() const { return *tables_; }
@@ -1515,7 +1519,9 @@ private:
     std::vector<uint8_t> idle_gate_;  // drive_animation scratch (per units_ index)
     void consume_events(TacticalMode& mode, SimRng& rng);
     // consume_events step d for one combat death (also script_damage's out-of-tick kills): a dead or unknown unit is skipped.
-    void process_death(TacticalMode& mode, const tactical::combat::DeathEvent& d, SimRng& rng);
+    // s78n t12 review: `silent` = a world removal without Die (CombatSystem::remove_unit: the vehicle a thief's clone
+    // replaces) - the object leaves as for a death, without the Death_Explosions particle and the death clip.
+    void process_death(TacticalMode& mode, const tactical::combat::DeathEvent& d, SimRng& rng, bool silent = false);
     void spawn_particle(TacticalMode& mode, int32_t type, Vec3 pos, int32_t owner);
     objects::ObjectHandle spawn_prop(TacticalMode& mode, int32_t type, Vec3 pos, Vec3 facing, int32_t owner);
     // refix t01 / t03: Die step 8's clone object (flags 0xc0), and the infantry corpse-path test (S9 §1.6).

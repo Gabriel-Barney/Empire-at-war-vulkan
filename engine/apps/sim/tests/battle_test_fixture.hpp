@@ -448,7 +448,37 @@ inline std::string hack_types() {
                  " <GroundCompany Name=\"S10_Speeder_Eject_Co\"><Company_Units>S10_Speeder_Eject</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n"
                  // s78n t10 (TACTICAL_COMBAT §5.4.6 item 1 step 2): one Custom_Hard extent and no model - half extents (0, 0).
                  // Only test_drop_extents_no_model reads it.
-                 " <GroundVehicle Name=\"S10_OneExtent\"><Custom_Hard_XExtent>12</Custom_Hard_XExtent></GroundVehicle>\n");
+                 " <GroundVehicle Name=\"S10_OneExtent\"><Custom_Hard_XExtent>12</Custom_Hard_XExtent></GroundVehicle>\n"
+                 // s78n t12 review (REMAINING_GAPS §5.1): a stealable speeder whose capture clone is shaped like 17 of the
+                 // 18 shipped *_Captured types - unit ability EJECT_VEHICLE_THIEF and NO garrison behaviour - and a thief
+                 // whose type has no GARRISON_UNIT (the boarding asks for none). Only the thief release tests use them.
+                 " <GroundVehicle Name=\"S10_SpeederC\"><Tactical_Health>5000</Tactical_Health><Max_Speed>1.0</Max_Speed>"
+                 "<AI_Combat_Power>100</AI_Combat_Power><CategoryMask>Vehicle</CategoryMask><MovementClass>Tracked</MovementClass>"
+                 "<Behavior>SELECTABLE</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
+                 "<LandBehavior>WALK_LOCOMOTOR</LandBehavior><Custom_Soft_Footprint_Radius>10</Custom_Soft_Footprint_Radius>"
+                 "<Custom_Hard_XExtent>10</Custom_Hard_XExtent><Custom_Hard_YExtent>10</Custom_Hard_YExtent>"
+                 "<Vehicle_Thief_Inside_Clone>S10_SpeederC_Captured</Vehicle_Thief_Inside_Clone></GroundVehicle>\n"
+                 " <GroundVehicle Name=\"S10_SpeederC_Captured\"><Tactical_Health>5000</Tactical_Health><Max_Speed>1.0</Max_Speed>"
+                 "<AI_Combat_Power>100</AI_Combat_Power><CategoryMask>Vehicle</CategoryMask><MovementClass>Tracked</MovementClass>"
+                 "<Behavior>SELECTABLE</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
+                 "<LandBehavior>WALK_LOCOMOTOR</LandBehavior><Custom_Soft_Footprint_Radius>10</Custom_Soft_Footprint_Radius>"
+                 "<Custom_Hard_XExtent>10</Custom_Hard_XExtent><Custom_Hard_YExtent>10</Custom_Hard_YExtent>"
+                 "<Unit_Abilities_Data SubObjectList=\"Yes\"><Unit_Ability><Type>EJECT_VEHICLE_THIEF</Type><Recharge_Seconds>1</Recharge_Seconds>"
+                 "</Unit_Ability></Unit_Abilities_Data></GroundVehicle>\n"
+                 " <GroundCompany Name=\"S10_SpeederC_Co\"><Company_Units>S10_SpeederC</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n"
+                 " <GroundInfantry Name=\"S10_ThiefN\"><Tactical_Health>5000</Tactical_Health><Max_Speed>1.0</Max_Speed>"
+                 "<AI_Combat_Power>50</AI_Combat_Power><CategoryMask>Infantry</CategoryMask><MovementClass>Infantry</MovementClass>"
+                 "<Behavior>SELECTABLE</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
+                 "<LandBehavior>WALK_LOCOMOTOR</LandBehavior><Custom_Soft_Footprint_Radius>6</Custom_Soft_Footprint_Radius>"
+                 "<Custom_Hard_XExtent>6</Custom_Hard_XExtent><Custom_Hard_YExtent>6</Custom_Hard_YExtent>"
+                 "<Unit_Abilities_Data SubObjectList=\"Yes\"><Unit_Ability><Type>CAPTURE_VEHICLE</Type><Recharge_Seconds>1</Recharge_Seconds>"
+                 "<GUI_Activated_Ability_Name>S10_StealN</GUI_Activated_Ability_Name></Unit_Ability></Unit_Abilities_Data>"
+                 "<Abilities SubObjectList=\"Yes\"><Vehicle_Thief_Ability Name=\"S10_StealN\"><Activation_Style>User_Input</Activation_Style>"
+                 "<Activation_Min_Range>0</Activation_Min_Range><Activation_Max_Range>5000</Activation_Max_Range>"
+                 "<Activation_Chance>1.0</Activation_Chance><Applicable_Unit_Categories>Vehicle</Applicable_Unit_Categories>"
+                 "</Vehicle_Thief_Ability></Abilities></GroundInfantry>\n"
+                 " <GroundCompany Name=\"S10_ThiefN_Co\"><Company_Units>S10_ThiefN</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n"
+                 " <GroundCompany Name=\"S10_ThiefPair_Co\"><Company_Units>S10_Thief, S10_Thief</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n");
     return t;
 }
 

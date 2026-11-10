@@ -519,6 +519,11 @@ void AbilitySystem::handler(Obj& o, uint32_t t, bool on, uint32_t frame, ObjectI
             if (on && t == kStimPack && rec && o.combat_unit && rec->damage_percent_when_activated > 0.0f) {
                 combat::DamageRequest r;
                 r.victim = o.id;
+                // s78n t12 review (HERO_CLASH §8.4.1: 0x3a9e30(V, 1, x, V)): the user is its own non-projectile source -
+                // step 8 clears its incognito bit (so step 10 gives no CAUSE_DAMAGE and no diminishing firepower) and
+                // step 16 reads its own Damage list and its owner's AI damage multiplier. [port] kill credit and the
+                // damage record of the self hit stay sourceless (CombatSystem::take_damage_inner).
+                r.source = o.id;
                 r.kind = combat::kKindNormal;
                 r.amount = rec->damage_percent_when_activated * combat_->max_health(o.id);
                 combat_->take_damage(r, frame);

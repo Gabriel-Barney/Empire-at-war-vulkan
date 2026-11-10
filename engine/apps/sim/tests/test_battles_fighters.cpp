@@ -202,6 +202,81 @@ void test_fighter_chase_rule() {
     CHECK(fighter_chase_test(in) == 0);
 }
 
+// s78n t10 review (TACTICAL_COMBAT §5.4.6 port spec item 4, [M: the union rule]): the space composition's box of a
+// squadron container is the min / max union of its fighters' world boxes. Two 3-fighter squadrons (leader, wingmen 30
+// behind and 30 to each side; the host's model: collision-bound half 10 x 10): each team box is 50 x 80 around the
+// point 15 behind the leader, so es = ec = (25, 40). The seed's reach is 0.33 D < 2 es.y = 80, so the candidate is
+// recruited when its box centre is within 80 + 40 = 120 across: at 105 the squadrons share one formation (one draw), at
+// 140 they do not (as many draws as two squadrons 1000 apart). A single fighter's box (half 10: 50 + 10 at most) or the
+// older stand-in (the first fighter's radius 8, used when the host gives no model data) leaves them apart at 105.
+void test_compose_squadron_union() {
+    namespace mv = tactical::movement;
+    mv::AvoidModel model;
+    model.bound_h = {10.0f, 10.0f, 5.0f};
+    const auto draws = [&model](float y, bool hook) -> uint64_t {
+        mv::MovementConfig cfg;
+        cfg.mode = mv::MoveMode::Space;
+        mv::MovementSystem sys(cfg);
+        sys.space().set_box({-4000.0f, -4000.0f}, {4000.0f, 4000.0f});
+        std::vector<mv::ObjectId> all;
+        const auto squadron = [&](mv::ObjectId container, mv::ObjectId first, mv::V2 at) {
+            mv::FighterSquadDesc sq;
+            sq.id = container;
+            for (uint32_t i = 0; i < 3; ++i) {
+                const float side = (i % 2 ? 1.0f : -1.0f) * static_cast<float>((i + 1) / 2) * 30.0f;
+                mv::UnitDesc u;
+                u.id = first + static_cast<mv::ObjectId>(i);
+                u.pos = {at.x - std::fabs(side), at.y + side};
+                u.yaw_deg = 0.0f;
+                u.max_speed = 4.0f;
+                u.turn_rate = 3.0f;
+                u.radius = 8.0f;
+                u.space_layer = mv::kLayerFighter;
+                u.space_layer_type = 0;
+                u.locomotor = mv::LocomotorKind::Fighter;
+                u.max_lift = 4.0f;
+                u.max_rate_of_roll = 5.0f;
+                u.bank_turn_angle = 40.0f;
+                u.min_speed = 2.5f;
+                u.strafe_distance = 500.0f;
+                u.owner = 0;
+                CHECK(sys.add_unit(u));
+                sq.members.push_back(u.id);
+                sq.slots.push_back({-std::fabs(side), side, 0.0f});
+                all.push_back(u.id);
+            }
+            CHECK(sys.set_fighter_squad(sq));
+        };
+        squadron(500, 1, {0.0f, 0.0f});
+        squadron(600, 11, {0.0f, y});
+        if (hook)
+            sys.set_model_bound_fn([&model](mv::ObjectId, const mv::AvoidModel*& m, float& scale) {
+                m = &model;
+                scale = 1.0f;
+                return true;
+            });
+        SimRng rng(77);
+        mv::MoveOrder o;
+        o.units = all;
+        o.destination = {100.0f, -100.0f};  // nearer the first squadron: it seeds
+        sys.move(o, rng, 1);
+        const uint64_t d0 = rng.draws();
+        CHECK(sys.pending_compositions() == 1);
+        sys.coordinator_update(1, 1, rng);
+        CHECK(sys.pending_compositions() == 0);
+        return rng.draws() - d0;
+    };
+    const uint64_t apart = draws(1000.0f, true), apart_no_hook = draws(1000.0f, false);
+    std::printf("  squadron union: draws - 1000 apart %llu (no hook %llu), 105 apart %llu (no hook %llu), 140 apart %llu\n",
+                static_cast<unsigned long long>(apart), static_cast<unsigned long long>(apart_no_hook),
+                static_cast<unsigned long long>(draws(105.0f, true)), static_cast<unsigned long long>(draws(105.0f, false)),
+                static_cast<unsigned long long>(draws(140.0f, true)));
+    CHECK(apart > 1 && apart_no_hook == apart);
+    CHECK(draws(105.0f, true) == 1);              // inside the union boxes' reach: one formation
+    CHECK(draws(140.0f, true) == apart);          // outside it
+    CHECK(draws(105.0f, false) == apart_no_hook);  // the stand-in (one fighter's radius) does not reach
+}
+
 namespace {
 struct FighterBattle {
     std::unique_ptr<Data> d;
@@ -1087,6 +1162,8 @@ int main(int argc, char** argv) {
     test_fighter_fog_toggle();
     std::printf("cu8l t03: campaign space fleet placement (markers, adopts) and the attacker's arrival\n");
     test_fleet_placement_campaign();
+    std::printf("s78n t10 review: the space composition's squadron box is the union of its fighters' boxes\n");
+    test_compose_squadron_union();
     if (g_fail) {
         std::printf("%d check(s) FAILED\n", g_fail);
         return 1;

@@ -264,7 +264,17 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
         case SavePart::Garrison: {
             const bool has = r.boolean();
             if (!has) return false;
-            return get_system(r, &garrison_) && get_system(r, captures_.get()) && r.done();
+            if (!get_system(r, &garrison_)) return false;
+            // s78n t12 review: the saved battle had the capture system (its first garrison use made it) but this
+            // rebuilt battle's setup made none - that first use came mid-battle (a reinforcement with GARRISON_UNIT, a
+            // vehicle theft). Create the systems now, as the first use would have (relation callbacks, the capture
+            // system the saved one loads into). The state part, read after the module parts, restores s4_used_.
+            const bool has_captures = r.boolean();
+            if (!r.ok()) return false;
+            if (has_captures && !captures_) s4_init();
+            if (has_captures != (captures_ != nullptr)) return false;
+            if (captures_ && !get_section(r, [this](ByteReader& sub) { return read_system(*captures_, sub); })) return false;
+            return r.done();
         }
         case SavePart::Hangar:
             return get_system(r, hangars_.get()) && get_system(r, contents_.get()) && get_system(r, production_.get()) &&

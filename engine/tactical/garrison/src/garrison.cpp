@@ -105,6 +105,10 @@ void GarrisonSystem::remove(ObjectId id, Vec3 pos, Vec3 facing, uint32_t frame) 
             const std::vector<ObjectId> inside = h.inside;
             for (const ObjectId uid : inside)
                 if (const int32_t ui = unit_index(uid); ui >= 0) leave(units_[static_cast<size_t>(ui)], h, GarrisonEventKind::Killed, pos, frame);
+        } else if (thief_holder(h)) {  // s78n t12 review: the thief leaves through the vehicle's death, alive, where it stood
+            const std::vector<ObjectId> inside = h.inside;
+            for (const ObjectId uid : inside)
+                if (const int32_t ui = unit_index(uid); ui >= 0) leave(units_[static_cast<size_t>(ui)], h, GarrisonEventKind::Ejected, pos, frame);
         } else {
             eject_all(id, pos, facing, frame);
         }
@@ -135,7 +139,7 @@ void GarrisonSystem::set_owner(ObjectId id, int32_t owner, Vec3 pos, Vec3 facing
             h.owner = owner;
             // Occupants allied with the new owner stay (a capture by the garrison itself, rule (b) of capture.hpp);
             // the rest are ejected in entry order at the exit point (see the header).
-            if (!h.inside.empty()) {
+            if (!h.inside.empty() && !thief_holder(h)) {  // s78n t12 review: a stolen vehicle keeps its thief
                 const std::vector<ObjectId> inside = h.inside;
                 const Vec3 at = exit_point(id, pos, facing);
                 for (const ObjectId uid : inside) {
@@ -169,6 +173,7 @@ bool GarrisonSystem::can_garrison(ObjectId unit, ObjectId holder) const {
     const Unit& u = units_[static_cast<size_t>(ui)];
     const Holder& h = holders_[static_cast<size_t>(hi)];
     if (u.state == State::Inside || u.state == State::Entering) return false;
+    if (thief_holder(h) || u.d.value == kBoardOnlyValue) return false;  // s78n t12 review: not a garrison / no GARRISON_UNIT
     if (!host_open(h, u.owner) || !mask_ok(u.d.category, h.d.accepts)) return false;
     return free_slots(holder) - reserved(holder) - value_of(u) > 0;  // the stricter Lua rule (§2.5)
 }
@@ -202,6 +207,7 @@ int32_t GarrisonSystem::used_slots(ObjectId holder) const {
 }
 
 int32_t GarrisonSystem::free_slots(ObjectId holder) const {
+    if (const int32_t hi = holder_index(holder); hi >= 0 && thief_holder(holders_[static_cast<size_t>(hi)])) return 0;
     const int32_t f = capacity(holder) - used_slots(holder);
     return f > 0 ? f : 0;
 }
@@ -224,6 +230,7 @@ bool GarrisonSystem::order_enter(ObjectId unit, ObjectId holder) {
     Unit& u = units_[static_cast<size_t>(ui)];
     const Holder& h = holders_[static_cast<size_t>(hi)];
     if (u.state == State::Inside || u.state == State::Entering) return false;
+    if (thief_holder(h) || u.d.value == kBoardOnlyValue) return false;  // s78n t12 review: entered only through board()
     if (!host_open(h, u.owner) || !mask_ok(u.d.category, h.d.accepts)) return false;
     u.state = State::Moving;
     u.host = holder;
@@ -263,6 +270,7 @@ bool GarrisonSystem::order_exit(ObjectId unit, Vec3 holder_pos, Vec3 holder_faci
     }
     const int32_t hi = u.state == State::Inside ? holder_index(u.host) : -1;
     if (hi < 0) return false;
+    if (thief_holder(holders_[static_cast<size_t>(hi)])) return false;  // s78n t12 review: no leave order for the thief
     leave(u, holders_[static_cast<size_t>(hi)], GarrisonEventKind::Exited, exit_point(u.host, holder_pos, holder_facing), frame);
     return true;
 }
@@ -271,6 +279,7 @@ uint32_t GarrisonSystem::eject_all(ObjectId holder, Vec3 holder_pos, Vec3 holder
     const int32_t hi = holder_index(holder);
     if (hi < 0) return 0;
     Holder& h = holders_[static_cast<size_t>(hi)];
+    if (thief_holder(h)) return 0;  // s78n t12 review: Eject_Garrison does not reach a vehicle thief
     const std::vector<ObjectId> inside = h.inside;  // entry order
     const Vec3 at = exit_point(holder, holder_pos, holder_facing);
     uint32_t n = 0;
@@ -299,7 +308,7 @@ void GarrisonSystem::service(uint32_t frame, const PoseFn& pose) {
             continue;
         }
         Holder& h = holders_[static_cast<size_t>(hi)];
-        if (!host_open(h, u.owner) || free_slots(host) < value_of(u)) {
+        if (thief_holder(h) || !host_open(h, u.owner) || free_slots(host) < value_of(u)) {  // s78n t12 review: thief holder
             drop();
             continue;
         }
@@ -332,6 +341,7 @@ void GarrisonSystem::hash(StateHasher& h) const {
     for (const Holder& x : holders_) {
         h.i32(x.id);
         h.i32(x.owner);
+        if (thief_holder(x)) h.u8(static_cast<uint8_t>(x.d.kind));  // s78n t12 review: made mid-battle, not from the type
         h.u32(static_cast<uint32_t>(x.inside.size()));
         for (const ObjectId id : x.inside) h.i32(id);
     }

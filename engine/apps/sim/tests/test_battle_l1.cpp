@@ -27,6 +27,9 @@
 #include "alamo/objects/object_types.hpp"
 #include "alamo/sim/campaign_battles.hpp"
 #include "alamo/sim/sim_host.hpp"
+#ifdef ALAMO_SIM_HAVE_ANIM
+#include "alamo/sim/sim_anim.hpp"
+#endif
 #include "alamo/vfs/vfs.hpp"
 #include "alamo/test/support.hpp"
 
@@ -120,6 +123,14 @@ const char* kTypes = R"(<L1>
  <GroundCompany Name="L1_Team_Squad"><Company_Units>L1_Team_Trooper, L1_Team_Trooper</Company_Units><Create_Team_Type>L1_Team</Create_Team_Type>
   <Population_Value>1</Population_Value></GroundCompany>
  <Team Name="L1_Team"><Behavior>TEAM</Behavior></Team>
+ <GroundInfantry Name="L1_Deploy_Wide"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type><Deploys>Yes</Deploys>
+  <Custom_Hard_XExtent>6</Custom_Hard_XExtent><Custom_Hard_YExtent>6</Custom_Hard_YExtent>
+  <Custom_Hard_XExtent_Deployed>40</Custom_Hard_XExtent_Deployed><Custom_Hard_YExtent_Deployed>25</Custom_Hard_YExtent_Deployed>
+  <Unit_Abilities_Data SubObjectList="Yes"><Unit_Ability><Type>DEPLOY</Type></Unit_Ability></Unit_Abilities_Data></GroundInfantry>
+ <GroundInfantry Name="L1_Bare"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type>
+  <Custom_Hard_XExtent>6</Custom_Hard_XExtent></GroundInfantry>
+ <GroundCompany Name="L1_Deploy_Wide_Squad"><Company_Units>L1_Deploy_Wide, L1_Bare</Company_Units>
+  <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value></GroundCompany>
 </L1>
 )";
 
@@ -1341,6 +1352,174 @@ DeployRun run_deploy(const Data& d) {
     return out;
 }
 
+// s78n t10 review (TACTICAL_COMBAT §5.4.6 items 2, 4 and port spec items 2, 3): a Deploys walker with deployed extents
+// (L1_Deploy_Wide: Custom_Hard 6 / 6, _Deployed 40 / 25) in a land battle, ordered DEPLOY on and off. In each Walk state
+//   * its fog footprint 0x38de80 has half extents (6, 6) undeployed and while undeploying (0x1A), (40, 25) while
+//     deploying (0x18) and deployed (0x19) - the 0x371d20 pair;
+//   * as a drop blocker its box is the deployed pair in 0x18 / 0x19 only: of the drop points tried along its facing,
+//     fewer are free then, and as many as undeployed while it undeploys.
+// L1_Bare (one Custom_Hard extent, no land model name): footprint half extents (0, 0).
+// The two transition states last one tick each without a deploy clip; with the animation service the walker gets 12-frame
+// Deploy / Undeploy clips, so they are seen between ticks (without it only the three settled states are checked).
+void test_deploy_extents(const Data& d) {
+    namespace mv = tactical::movement;
+    namespace ab = tactical::abilities;
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 11;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSetup s = make_setup(d);
+    const uint32_t sq = type_of(d, "S10_Squad"), fr = type_of(d, "S10_Frigate"), wsq = type_of(d, "L1_Deploy_Wide_Squad");
+    CHECK(wsq < d.types.size());
+    s.forces = {{0, 1, sq}, {1, 2, fr}, {1, 2, wsq}, {1, 2, wsq}};  // the second Underworld company waits in reserve
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(s));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    opt.battle.order_interval = 0;
+    opt.battle.fog = false;
+    const auto dep_t = static_cast<objects::TypeIndex>(type_of(d, "L1_Deploy_Wide"));
+#ifdef ALAMO_SIM_HAVE_ANIM
+    // One-bone skeleton, clips without tracks: only the frame counts matter (the Walk deploy window is the clip length).
+    anim::AnimModel model;
+    model.model = "L1_SYNTH.ALO";
+    model.base = "L1_SYNTH";
+    model.skeleton.names = {"Root"};
+    model.skeleton.parents = {-1};
+    model.skeleton.billboard_mode = {0u};
+    model.skeleton.bind_local = {anim::Mat34{}};
+    model.has_skeleton = true;
+    for (const auto& [type, frames] : {std::pair<int32_t, uint32_t>{anim::kAnimIdle, 30u}, {anim::kAnimDeploy, 12u}, {anim::kAnimUndeploy, 12u}}) {
+        auto c = std::make_shared<anim::Clip>();
+        c->name = anim::clip_file_name(model.base, type, 0);
+        c->frame_count = frames;
+        c->fps = 30.0f;
+        anim::ClipRef r;
+        r.clip = c;
+        model.clips[static_cast<size_t>(type)].push_back(r);
+    }
+    anim::bind_clips(model);
+    SimAnimation animation(d.types, *d.files);
+    animation.set_model(dep_t, objects::ModeKind::Land, &model);
+    animation.attach(host, true);
+    opt.animation = &animation;
+    const bool transitions = true;
+#else
+    const bool transitions = false;
+#endif
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "L1_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    const auto bare_t = static_cast<objects::TypeIndex>(type_of(d, "L1_Bare"));
+    CHECK(d.types.get_float(bare_t, "Custom_Hard_XExtent") == 6.0f && d.types.get_float(bare_t, "Custom_Hard_YExtent") == 0.0f);
+    struct Seen {
+        bool any = false, same = true;
+        float hx = 0.0f, hy = 0.0f;
+        int free_drops = 0;
+    };
+    Seen none_before, deploying, deployed, undeploying, none_after;
+    objects::ObjectId dep = objects::kNoObjectId, bare = objects::kNoObjectId, key = objects::kNoObjectId;
+    bool invaded = false, on = false, off = false, bare_ok = false;
+    for (uint64_t t = 0; t < 6000; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) continue;
+        objects::ObjectStore& st = tm->primary();
+        const uint32_t f = b->frame();
+        if (f == 1) {
+            for (const objects::ObjectHandle h : st.owned_by(1)) {
+                if (!st.alive(h) || !b->combat().has_unit(st.id(h))) continue;
+                if (dep == objects::kNoObjectId && st.type(h) == dep_t) dep = st.id(h);
+                if (bare == objects::kNoObjectId && st.type(h) == bare_t) bare = st.id(h);
+            }
+            for (const TacticalBattle::Reserve& r : b->reserves(1))
+                if (r.type == wsq) key = r.galactic_id;
+            CHECK(dep != objects::kNoObjectId && bare != objects::kNoObjectId && key != objects::kNoObjectId);
+        }
+        if (dep == objects::kNoObjectId || bare == objects::kNoObjectId || key == objects::kNoObjectId) {
+            if (f >= 1) break;
+            continue;
+        }
+        const auto half = [&](objects::ObjectId id, float& hx, float& hy) {
+            const objects::ObjectHandle h = st.find(id);
+            float xy[16] = {};
+            b->fog_footprint(st, h, xy);
+            const Vec3 p = st.position(h);
+            hx = std::hypot(xy[8] - p.x, xy[9] - p.y);    // c + hx a
+            hy = std::hypot(xy[10] - p.x, xy[11] - p.y);  // c - hy b
+        };
+        if (f >= 5) {
+            const mv::LocoState ds = b->movement().deploy_state(dep);
+            Seen& seen = ds == mv::LocoState::WalkDeploying ? deploying
+                         : ds == mv::LocoState::WalkDeployed ? deployed
+                         : ds == mv::LocoState::WalkUndeploying ? undeploying
+                         : off ? none_after : none_before;
+            float hx = 0.0f, hy = 0.0f;
+            half(dep, hx, hy);
+            const objects::ObjectHandle h = st.find(dep);
+            const Vec3 p = st.position(h), face = st.facing(h);
+            const float fl = std::hypot(face.x, face.y);
+            const float ax = fl > 0.0f ? face.x / fl : 1.0f, ay = fl > 0.0f ? face.y / fl : 0.0f;
+            int free_drops = 0;
+            for (int k = 0; k <= 40; ++k) {
+                const float dx = 5.0f * static_cast<float>(k);
+                free_drops += b->land_drop_valid(*tm, 1, key, p.x + ax * dx, p.y + ay * dx, true, false) ? 1 : 0;
+            }
+            if (seen.any && (seen.hx != hx || seen.hy != hy || seen.free_drops != free_drops)) seen.same = false;
+            seen.any = true;
+            seen.hx = hx;
+            seen.hy = hy;
+            seen.free_drops = free_drops;
+            float bx = -1.0f, by = -1.0f;
+            half(bare, bx, by);
+            bare_ok = bx == 0.0f && by == 0.0f;
+        }
+        const objects::ObjectId ids[] = {dep};
+        if (f == 10) on = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, true, f) == 1;
+        if (f == 40) off = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, false, f) == 1;
+        if (f >= 80) break;
+    }
+    std::printf("  deploy extents: fog half / free drop points - undeployed (%.1f, %.1f) / %d, deploying (%.1f, %.1f) / %d, deployed "
+                "(%.1f, %.1f) / %d, undeploying (%.1f, %.1f) / %d, after (%.1f, %.1f) / %d\n",
+                static_cast<double>(none_before.hx), static_cast<double>(none_before.hy), none_before.free_drops,
+                static_cast<double>(deploying.hx), static_cast<double>(deploying.hy), deploying.free_drops,
+                static_cast<double>(deployed.hx), static_cast<double>(deployed.hy), deployed.free_drops,
+                static_cast<double>(undeploying.hx), static_cast<double>(undeploying.hy), undeploying.free_drops,
+                static_cast<double>(none_after.hx), static_cast<double>(none_after.hy), none_after.free_drops);
+    CHECK(on && off && bare_ok);
+    const auto close_to = [](float a, float b) { return std::fabs(a - b) < 0.01f; };
+    for (const Seen* x : {&none_before, &deployed, &none_after}) CHECK(x->any && x->same);
+    for (const Seen* x : {&none_before, &none_after}) CHECK(close_to(x->hx, 6.0f) && close_to(x->hy, 6.0f));
+    CHECK(close_to(deployed.hx, 40.0f) && close_to(deployed.hy, 25.0f));
+    CHECK(none_before.free_drops > 0 && none_before.free_drops == none_after.free_drops);
+    CHECK(deployed.free_drops + 4 <= none_before.free_drops);
+    if (transitions) {  // 0x18 as deployed, 0x1A as undeployed
+        CHECK(deploying.any && deploying.same && undeploying.any && undeploying.same);
+        CHECK(close_to(deploying.hx, 40.0f) && close_to(deploying.hy, 25.0f) && deploying.free_drops == deployed.free_drops);
+        CHECK(close_to(undeploying.hx, 6.0f) && close_to(undeploying.hy, 6.0f) && undeploying.free_drops == none_before.free_drops);
+    }
+}
+
 void test_deploy(const Data& d) {
     const DeployRun r = run_deploy(d);
     std::printf("  deploy: fought %d on %d (frame %u, deployed at %u) repeat refused %d off %d (frame %u, undeployed at %u): %u signals "
@@ -1965,6 +2144,7 @@ int main(int argc, char** argv) {
     test_persist(*d);  // q6: persisted tactical built objects
     test_jet(*d);   // S7 t10 / t14
     test_deploy(*d);  // S7 t26
+    test_deploy_extents(*d);  // s78n t10 review
     test_script_spawn(*d);  // q6 t12
     test_sw_fire();   // s78f t05: command 25
     test_foc();

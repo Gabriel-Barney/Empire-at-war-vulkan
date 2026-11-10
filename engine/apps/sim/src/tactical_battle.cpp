@@ -4491,7 +4491,7 @@ void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
     abilities_->clear_events();
 }
 
-void TacticalBattle::process_death(TacticalMode& mode, const tc::DeathEvent& d, SimRng& rng) {
+void TacticalBattle::process_death(TacticalMode& mode, const tc::DeathEvent& d, SimRng& rng, bool silent) {
     objects::ObjectStore& store = mode.primary();
     {
         Unit* u = unit_by_id(d.id);
@@ -4531,7 +4531,7 @@ void TacticalBattle::process_death(TacticalMode& mode, const tc::DeathEvent& d, 
         if (ch) schedule_death_clone(mode, ch, d.death_clone, d.kind, rng);
 #ifdef ALAMO_SIM_HAVE_ANIM
         {  // R3 anim: death clip / corpse of the unit (unless a clone carries it), or the infantry corpse path
-            bool carried = carried_by_clone;
+            bool carried = carried_by_clone || silent;  // s78n t12 review: a silent removal plays no death clip
             if (!ch && corpse_path) carried = hooks_->anim_corpse_clone(u->id, d.death_clone, d.kind);
             hooks_->anim_death(u->id, carried, d.kind);
         }
@@ -4539,7 +4539,7 @@ void TacticalBattle::process_death(TacticalMode& mode, const tc::DeathEvent& d, 
         (void)carried_by_clone;
 #endif
         if (const BattleTables::UnitVisuals* vis = visuals_of_type(u->type))
-            if (!vis->death_explosions.empty()) spawn_particle(mode, vis->death_explosions.front(), at, owner);
+            if (!silent && !vis->death_explosions.empty()) spawn_particle(mode, vis->death_explosions.front(), at, owner);
         unit_gone(mode, *u);
     }
 }
@@ -4690,6 +4690,15 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     ++frame_;
     oi_global_frame_ = global_frame;
     stats_.frames = frame_;
+    // s78n t12 review: deaths raised between ticks by command-phase ability effects - the vehicle thief's eject (unit
+    // ability 46 / 18 off: Take_Damage kind 13 kills the stolen vehicle), a STIM_PACK that kills its user - are still in
+    // the combat system's list, which the coming combat tick clears. Process them now, in list order, like the combat
+    // tick's own deaths (process_death skips a unit that was processed already: last tick's deaths, script_damage's).
+    // [port] before this the host never saw such a death (the object stayed, dead in combat only).
+    if (combat_ && !combat_->deaths().empty()) {
+        const std::vector<tc::DeathEvent> late(combat_->deaths().begin(), combat_->deaths().end());
+        for (const tc::DeathEvent& d : late) process_death(mode, d, rng);
+    }
     story_reinforced_.clear();  // L1/S4 wave 2b story hook: this tick's reserve deployments
     ability_finished_.clear();  // S7 t15 A1: this tick's signal 0x29
     landings_unloaded_.clear();  // a1i t04: signal 0x19 records of the last tick

@@ -33,6 +33,13 @@
 //     (units walking in) - the unit's value > 0 (stricter than the engine's entry rule free >= value). The order uses
 //     the same owner test [port: doc open item 4, Can_Garrison vs Garrison for neutral hosts].
 //   * Can_Garrison_Fire [port, doc open item 4: host vf +0xD8]: a host with GarrisonCanFire, or an occupant of one.
+//   * vehicle thief (s78n t12 review; HERO_CLASH §8.1 / §8.4.3, REMAINING_GAPS §5.1): the boarding 0x63fae0 puts the
+//     thief into ANY vehicle - the container pack is created on demand (0x390740), with or without a garrison
+//     behaviour. The host registers such a vehicle as HolderKind::VehicleThief and boards the thief with board().
+//     That holder is not a garrison: it takes nobody else (order_enter / can_garrison refuse it, an approach to it is
+//     dropped, free_slots is 0), its occupant does not leave by order (order_exit / eject_all do nothing) and stays
+//     through an owner change of the vehicle; when the vehicle dies or is removed the occupant is released ALIVE at the
+//     vehicle's position (Ejected) - the thief leaves through the vehicle's death (the eject ability kills the vehicle).
 // Determinism: serial, holders / units in vectors sorted by id, occupants in entry order, events in the order they
 // happen; floats only through + - * / and dmath::sqrt. hash() covers all state.
 #pragma once
@@ -61,6 +68,9 @@ enum class HolderKind : uint8_t {
     Structure = 1,  // GARRISON_STRUCTURE (0x50)
     Hover = 2,      // GARRISON_HOVER (0x56)
     Property = 3,   // CanContainGarrison only (no host behaviour: occupants die with the host)
+    // s78n t12 review: a vehicle a vehicle thief boarded that has no holder of its own (the on-demand container pack
+    // 0x390740). Entered only through board(); closed to every order; the occupant is released alive when it goes.
+    VehicleThief = 4,
 };
 
 struct HolderDesc {
@@ -74,9 +84,14 @@ struct HolderDesc {
     float half_diagonal = 0.0f;  // half the host box diagonal (XY), from the host's bounds
 };
 
+// s78n t12 review: OccupantDesc::value of a unit that is no GARRISON_UNIT and is known only because a vehicle thief's
+// boarding put it into a vehicle (the boarding 0x63fae0 asks for no garrison behaviour). Such a unit is never taken by
+// order_enter / can_garrison; it counts 0 slots.
+inline constexpr int32_t kBoardOnlyValue = -0x7FFFFFFF - 1;
+
 struct OccupantDesc {
     uint64_t category = 0;  // the unit's own Garrison_Category
-    int32_t value = 0;      // Garrison_Value (slots taken)
+    int32_t value = 0;      // Garrison_Value (slots taken); kBoardOnlyValue: boarded only (see above)
     float radius = 0.0f;    // the unit's footprint radius
 };
 
@@ -194,6 +209,7 @@ private:
     int32_t unit_index(ObjectId id) const;
     static int32_t value_of(const Unit& u) { return u.d.value > 0 ? u.d.value : 0; }
     static bool mask_ok(uint64_t a, uint64_t b) { return a == 0 || b == 0 || (a & b) != 0; }
+    static bool thief_holder(const Holder& h) { return h.d.kind == HolderKind::VehicleThief; }  // s78n t12 review
     void push(GarrisonEventKind k, const Unit& u, ObjectId holder, Vec3 p, uint32_t frame);
     void leave(Unit& u, Holder& h, GarrisonEventKind kind, Vec3 at, uint32_t frame);
     bool host_open(const Holder& h, int32_t owner) const {

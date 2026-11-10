@@ -45,7 +45,10 @@ tactical::Vec3 to_tv(Vec3 v) { return tactical::Vec3{v.x, v.y, v.z}; }
 }  // namespace
 
 void TacticalBattle::s4_init() {
-    if (s4_used_) return;
+    // s78n t12 review: keyed on the systems, not on s4_used_ - a loading battle whose rebuilt setup made no garrison use
+    // (the saved battle's first use came later: a reinforcement, a vehicle theft) creates them when the garrison part
+    // shows the saved battle had them (read_part), and the state part read after it sets the flag again.
+    if (captures_) return;
     s4_used_ = true;
     const int32_t neutral = galaxy_->neutral_player();
     auto allied = [this](int32_t a, int32_t b) { return a == b || (combat_ && !combat_->is_enemy(a, b)); };
@@ -410,14 +413,23 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
 void TacticalBattle::s4_tick(TacticalMode& mode, SimRng&) {
     if (!s4_used_) return;
     objects::ObjectStore& store = mode.primary();
+    s4_store_ = &store;  // s78n t12 review: a loaded battle whose own setup registered nothing has none yet
     s4_apply(mode);  // owner changes since the last tick (ejections)
     // 1. dead / retreated battle units leave the garrison state (a host ejects / kills its occupants).
     for (const Unit& u : units_) {
         if (u.alive && !u.retreated) continue;
         if (captures_ && captures_->is_point(u.id)) captures_->remove(u.id);  // a destroyed capture structure (combat unit)
         if (!garrison_.is_holder(u.id) && !garrison_.is_unit(u.id)) continue;
-        const Vec3 at = store.exists(u.h) ? store.position(u.h) : Vec3{};
+        Vec3 at = store.exists(u.h) ? store.position(u.h) : Vec3{};
         const Vec3 f = store.exists(u.h) ? store.facing(u.h) : Vec3{1.0f, 0.0f, 0.0f};
+        // s78n t12 review: a host killed between ticks (script_damage) is flushed from the store before this runs; its
+        // occupants still sit where it stood (s4_positions), so the first live one gives the place they leave from.
+        if (!store.exists(u.h))
+            for (const objects::ObjectId in : garrison_.occupants(u.id))
+                if (const objects::ObjectHandle ih = store.find(in); store.alive(ih)) {
+                    at = store.position(ih);
+                    break;
+                }
         garrison_.remove(u.id, at, f, frame_);
     }
     s4_apply(mode);

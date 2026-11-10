@@ -2107,6 +2107,257 @@ HeroClashRun run_hero_clash_battle(const Data& d, uint32_t workers, bool save_lo
     return out;
 }
 
+// s78n t12 review (HERO_CLASH §8.1 / §8.4.3, REMAINING_GAPS §5.1): the thief and the stolen vehicle. A battle at S10_B
+// with S10_SpeederC (clone S10_SpeederC_Captured: ability 46, no garrison behaviour - the shape of 17 of the 18 shipped
+// *_Captured types) for the Empire and one or two thief companies for the Underworld.
+struct ThiefScene {
+    ClashSession s;
+    uint32_t thief_t, speeder_t, clone_t;
+    uint8_t steal, eject;
+    objects::ObjectId thief = objects::kNoObjectId, thief2 = objects::kNoObjectId, speeder = objects::kNoObjectId,
+                      clone = objects::kNoObjectId;
+    TacticalBattle* b = nullptr;
+    TacticalMode* tm = nullptr;
+
+    static CampaignBattleOptions options() {
+        CampaignBattleOptions opt;
+        opt.conflict.human_choice = galactic::BattleChoice::Fight;
+        opt.battle.max_frames = 3000;
+        return opt;
+    }
+    // `two_thieves`: one company of two S10_Thief (a second company would wait in reserve).
+    ThiefScene(const Data& d, const char* thief_name, bool two_thieves, bool launch)
+        : s(d, 0, options(), {"S10_SpeederC_Co"}, {two_thieves ? "S10_ThiefPair_Co" : thief_name_co(thief_name)}, launch),
+          thief_t(type_of(d, thief_name)), speeder_t(type_of(d, "S10_SpeederC")), clone_t(type_of(d, "S10_SpeederC_Captured")),
+          steal(ta::ability_type_from_name("CAPTURE_VEHICLE")), eject(ta::ability_type_from_name("EJECT_VEHICLE_THIEF")) {}
+    static const char* thief_name_co(const char* thief_name) {
+        return std::string_view(thief_name) == "S10_Thief" ? "S10_Thief_Co" : "S10_ThiefN_Co";
+    }
+    bool tick() {
+        b = s.tick();
+        tm = s.host->tactical();
+        return b && tm && b->frame() >= 1;
+    }
+    // Runs until the battle stands, then finds the thief (the lowest id of its type), a second one and the speeder.
+    bool start() {
+        for (int i = 0; i < 6000; ++i) {
+            if (!tick() || b->frame() < 3) continue;
+            const objects::ObjectStore& st = tm->primary();
+            const tc::CombatSystem& cs = b->combat();
+            for (size_t k = 0; k < cs.unit_count(); ++k) {
+                const auto id = cs.unit_id_at(k);
+                const objects::ObjectHandle h = st.find(id);
+                if (!cs.alive(id) || !st.alive(h)) continue;
+                if (st.type(h) == thief_t) (thief == objects::kNoObjectId ? thief : thief2) = id;
+                if (st.type(h) == speeder_t) speeder = id;
+            }
+            return thief != objects::kNoObjectId && speeder != objects::kNoObjectId;
+        }
+        return false;
+    }
+    bool order_theft() {
+        const objects::ObjectId users[] = {thief};
+        return b->abilities().targeted_ability(users, steal, speeder, -1, b->frame()) == 1u;
+    }
+    // Ticks until the thief sits in the capture clone (60 ticks at most).
+    bool wait_boarded() {
+        for (int i = 0; i < 60; ++i) {
+            if (!tick()) return false;
+            clone = s.find(*b, clone_t);
+            if (clone != objects::kNoObjectId && b->garrison_holder_of(thief) == clone) return true;
+        }
+        return false;
+    }
+    Vec3 pos(objects::ObjectId id) const { return tm->primary().position(tm->primary().find(id)); }
+};
+
+// `how` 0: the eject ability (unit ability 46 off: Take_Damage kind 13 on the vehicle, REMAINING_GAPS §5.1) - 1: lethal
+// damage on the stolen vehicle. Either way the vehicle dies and the thief is released ALIVE where the vehicle stood, no
+// longer garrisoned and a mover again. Before that: the stolen vehicle is no garrison (a second allied infantry unit is
+// refused, there is no free slot) and the thief does not leave by the ordinary leave / eject-garrison orders.
+void test_thief_release(const Data& d, int how) {
+    ThiefScene t(d, "S10_Thief", true, true);
+    CHECK(t.s.gs != nullptr);
+    if (!t.s.gs || !t.start()) {
+        CHECK(false);
+        return;
+    }
+    CHECK(t.thief2 != objects::kNoObjectId);
+    CHECK(t.order_theft() && t.wait_boarded());
+    if (t.clone == objects::kNoObjectId) return;
+    TacticalBattle& b = *t.b;
+    const tc::CombatSystem& cs = b.combat();
+    namespace tg = alamo::tactical::garrison;
+    const tg::HolderDesc* hd = b.garrison().holder_desc(t.clone);
+    CHECK(hd && hd->kind == tg::HolderKind::VehicleThief);
+    CHECK(!cs.alive(t.speeder) && cs.owner(t.clone) == 1 && (cs.flags(t.thief) & tc::kUnitGarrisoned) != 0);
+    CHECK(b.abilities().is_active(t.clone, t.eject) && b.abilities().is_active(t.thief, t.steal));
+    // not a garrison for anyone else
+    const objects::ObjectId other[] = {t.thief2}, self[] = {t.thief};
+    CHECK(!b.can_garrison(t.thief2, t.clone) && b.garrison().free_slots(t.clone) == 0);
+    CHECK(b.order_garrison(*t.tm, 1, other, t.clone, t.s.host->random().synced()) != commands::RejectReason::None);
+    CHECK(b.garrison().pending_holder(t.thief2) == objects::kNoObjectId);
+    // no ordinary way out
+    CHECK(b.order_leave_garrison(*t.tm, 1, self) != commands::RejectReason::None);
+    CHECK(b.eject_garrison(*t.tm, t.clone) == 0u);
+    for (int i = 0; i < 45; ++i) CHECK(t.tick());  // the eject ability's recharge (1 s) runs out meanwhile
+    CHECK(t.b->garrison_holder_of(t.thief) == t.clone && t.b->garrison_holder_of(t.thief2) == objects::kNoObjectId);
+    const Vec3 at = t.pos(t.clone);
+    const float thief_health = t.b->combat().health(t.thief);
+    if (how == 0) {
+        const objects::ObjectId car[] = {t.clone};
+        CHECK(t.b->abilities().set_unit_ability_mode(car, t.eject, false, t.b->frame()) == 1u);
+    } else {
+        CHECK(t.b->script_damage(*t.tm, t.clone, 1.0e9f, false));
+    }
+    int released_at = -1;
+    for (int i = 0; i < 10 && released_at < 0; ++i) {
+        CHECK(t.tick());
+        if (t.b->garrison_holder_of(t.thief) == objects::kNoObjectId) released_at = i;
+    }
+    CHECK(released_at >= 0);
+    const tc::CombatSystem& c2 = t.b->combat();
+    const objects::ObjectStore& st = t.tm->primary();
+    CHECK(!c2.alive(t.clone) && !st.alive(st.find(t.clone)));                                  // the vehicle is gone
+    CHECK(c2.alive(t.thief) && st.alive(st.find(t.thief)) && c2.health(t.thief) == thief_health);  // the thief is not
+    CHECK((c2.flags(t.thief) & tc::kUnitGarrisoned) == 0 && !t.b->garrison().is_holder(t.clone));
+    CHECK(t.b->movement().has_unit(t.thief));
+    const Vec3 p = t.pos(t.thief);
+    std::printf("  thief release (%s): vehicle %d at (%.1f, %.1f), thief %d out %d tick(s) later at (%.1f, %.1f)\n",
+                how == 0 ? "eject ability" : "vehicle destroyed", static_cast<int>(t.clone), static_cast<double>(at.x),
+                static_cast<double>(at.y), static_cast<int>(t.thief), released_at + 1, static_cast<double>(p.x), static_cast<double>(p.y));
+    CHECK(std::fabs(p.x - at.x) < 12.0f && std::fabs(p.y - at.y) < 12.0f);  // at the vehicle's place (it may have stepped since)
+    // it is an ordinary unit again: it takes a move order and walks
+    const objects::ObjectId one[] = {t.thief};
+    CHECK(t.b->order_move(*t.tm, 1, one, p.x + 200.0f, p.y, t.s.host->random().synced()) == commands::RejectReason::None);
+    for (int i = 0; i < 90; ++i) CHECK(t.tick());
+    CHECK(c2.alive(t.thief) && std::fabs(t.pos(t.thief).x - p.x) > 5.0f);
+}
+
+// Save / load with the thief inside the stolen vehicle. `no_garrison_unit`: the thief's type has no GARRISON_UNIT and
+// nothing else in the battle touches the garrison system, so the theft is its first use: the loading session's rebuilt
+// battle has no garrison / capture systems until the garrison part is read (tactical_battle_save.cpp). The loaded session
+// runs on with the original's digests, then both eject: the thief is out, alive, in both.
+void test_thief_save_load(const Data& d, bool no_garrison_unit) {
+    const char* thief_name = no_garrison_unit ? "S10_ThiefN" : "S10_Thief";
+    ThiefScene a(d, thief_name, false, true);
+    CHECK(a.s.gs != nullptr);
+    if (!a.s.gs || !a.start()) {
+        CHECK(false);
+        return;
+    }
+    if (no_garrison_unit) CHECK(!a.b->garrison().is_unit(a.thief) && !a.b->garrison().is_holder(a.speeder));  // unused so far
+    CHECK(a.order_theft() && a.wait_boarded());
+    if (a.clone == objects::kNoObjectId) return;
+    for (int i = 0; i < 20; ++i) CHECK(a.tick());
+    SaveFile save;
+    std::string why;
+    CHECK(a.s.host->save_allowed(&why));
+    const bool saved = a.s.host->save(save, &why);
+    if (!saved) std::printf("  thief save: %s\n", why.c_str());
+    CHECK(saved);
+    const uint64_t save_tick = a.s.host->frame();
+    ThiefScene f(d, thief_name, false, false);
+    CHECK(f.s.gs != nullptr);
+    if (!saved || !f.s.gs) return;
+    std::string err;
+    LoadReport rep;
+    const bool loaded = f.s.host->load(save, &err, &rep);
+    if (!loaded) std::printf("  thief load: %s\n", rep.text().c_str());
+    CHECK(loaded && f.s.host->frame() == save_tick);
+    if (!loaded) return;
+    f.s.invaded = true;
+    f.thief = a.thief;
+    f.clone = a.clone;
+    uint32_t same = 0, compared = 0;
+    const auto step = [&] {
+        const bool ta_ok = a.tick(), tf_ok = f.tick();
+        CHECK(ta_ok && tf_ok);
+        if (!ta_ok || !tf_ok) return;
+        ++compared;
+        if (clash_digest(*a.b) == clash_digest(*f.b) && a.b->garrison_holder_of(a.thief) == f.b->garrison_holder_of(f.thief)) ++same;
+    };
+    for (int i = 0; i < 40; ++i) step();
+    CHECK(f.b && f.b->garrison_holder_of(f.thief) == f.clone);
+    namespace tg = alamo::tactical::garrison;
+    if (f.b) {
+        const tg::HolderDesc* hd = f.b->garrison().holder_desc(f.clone);
+        CHECK(hd && hd->kind == tg::HolderKind::VehicleThief);
+        const tg::OccupantDesc* od = f.b->garrison().unit_desc(f.thief);
+        CHECK(od && (od->value == tg::kBoardOnlyValue) == no_garrison_unit);
+    }
+    const objects::ObjectId car[] = {a.clone};
+    for (ThiefScene* x : {&a, &f})
+        if (x->b) CHECK(x->b->abilities().set_unit_ability_mode(car, x->eject, false, x->b->frame()) == 1u);
+    for (int i = 0; i < 30; ++i) step();
+    for (ThiefScene* x : {&a, &f}) {
+        if (!x->b) continue;
+        CHECK(!x->b->combat().alive(x->clone) && x->b->combat().alive(x->thief));
+        CHECK(x->b->garrison_holder_of(x->thief) == objects::kNoObjectId && x->b->movement().has_unit(x->thief));
+    }
+    std::printf("  thief save / load (%s): saved at %llu with the thief inside, %u of %u ticks after the load identical\n",
+                thief_name, static_cast<unsigned long long>(save_tick), same, compared);
+    CHECK(compared == 70 && same == compared);
+}
+
+// s78n t12 review: the thief dies in the tick of its own theft - after the apply (its unit service in combat phase D) and
+// before the host pass that spawns the clone. The clone still replaces the vehicle, but nobody took it over: it stays the
+// victim's owner's, without the stolen / incognito flags, with unit ability 46 off and nobody inside.
+// How the tick is hit: the thief (1 health left) is put next to the Empire's troopers; a first session finds the tick in
+// which their fire kills it, a second, identical one orders the theft `lead` tick(s) before that one.
+void test_thief_dies_same_tick(const Data& d) {
+    const uint32_t trooper_t = type_of(d, "S10_Trooper");
+    // Runs the prelude and ticks on. `order_at` = the host frame before whose tick the theft is ordered (0: never).
+    // Returns the host frame before the tick in which the thief died (0: it did not); `t` is left right after that tick.
+    const auto run = [&](ThiefScene& t, uint64_t order_at) -> uint64_t {
+        if (!t.s.gs || !t.start()) return 0;
+        const tc::CombatSystem& cs = t.b->combat();
+        const objects::ObjectStore& st = t.tm->primary();
+        objects::ObjectId trooper = objects::kNoObjectId;
+        for (size_t k = 0; k < cs.unit_count() && trooper == objects::kNoObjectId; ++k) {
+            const objects::ObjectHandle h = st.find(cs.unit_id_at(k));
+            if (st.alive(h) && st.type(h) == trooper_t && st.owner(h) == 0) trooper = cs.unit_id_at(k);
+        }
+        if (trooper == objects::kNoObjectId) return 0;
+        const Vec3 tp = t.pos(trooper);
+        if (!t.b->teleport(*t.tm, t.thief, Vec3{tp.x + 40.0f, tp.y, tp.z}, Vec3{-1.0f, 0.0f, 0.0f})) return 0;
+        if (!t.b->script_damage(*t.tm, t.thief, cs.health(t.thief) - 1.0f, false)) return 0;
+        for (int i = 0; i < 900; ++i) {
+            const uint64_t before = t.s.host->frame();
+            if (order_at != 0 && before == order_at) (void)t.order_theft();
+            if (!t.tick()) return 0;
+            if (!t.b->combat().alive(t.thief)) return before;
+        }
+        return 0;
+    };
+    ThiefScene probe(d, "S10_Thief", false, true);
+    const uint64_t died = run(probe, 0);
+    CHECK(died != 0);
+    if (died == 0) return;
+    bool hit = false;
+    for (uint64_t lead = 1; lead <= 3 && !hit; ++lead) {
+        ThiefScene t(d, "S10_Thief", false, true);
+        const uint64_t died2 = run(t, died + 1 - lead);
+        if (died2 == 0 || !t.b) continue;
+        const tc::CombatSystem& cs = t.b->combat();
+        const objects::ObjectId clone = t.s.find(*t.b, t.clone_t);
+        if (died2 != died || clone == objects::kNoObjectId) continue;  // the apply came in another tick: next lead
+        hit = true;
+        const objects::ObjectStore& st = t.tm->primary();
+        CHECK(!cs.alive(t.thief) && !cs.alive(t.speeder));                                    // both gone in that tick
+        CHECK(cs.alive(clone) && cs.owner(clone) == 0 && st.owner(st.find(clone)) == 0);      // the victim's owner's
+        CHECK((cs.flags(clone) & (tc::kUnitStolenVehicle | tc::kUnitIncognito)) == 0);
+        CHECK(t.b->abilities().has_ability(clone, t.eject) && !t.b->abilities().is_active(clone, t.eject));
+        CHECK(!t.b->garrison().is_holder(clone) && t.b->garrison_holder_of(t.thief) == objects::kNoObjectId);
+        for (int i = 0; i < 30; ++i) CHECK(t.tick());
+        CHECK(t.b->combat().alive(clone) && t.b->combat().owner(clone) == 0 && t.b->garrisoned_units(clone).empty());
+        std::printf("  thief dies in its theft's tick (host frame %llu, theft ordered %llu tick(s) before): clone %d stays with "
+                    "player 0\n",
+                    static_cast<unsigned long long>(died), static_cast<unsigned long long>(lead), static_cast<int>(clone));
+    }
+    CHECK(hit);
+}
+
 void test_hero_clash_battle(const Data& d) {
     const HeroClashRun a = run_hero_clash_battle(d, 0, true);
     std::printf("  hero clash: start frame %u, end frame %u, %u exchanges, health A %.1f B %.1f; saved at %u, %u ticks after the "
@@ -2966,6 +3217,9 @@ int main(int argc, char** argv) {
     {  // s78n t06 (+ review): hero clashes in a land battle (the worker-count check is its own ctest entries, --hero-clash)
         auto hd = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, true);
         test_hero_clash_battle(*hd);
+        for (const int how : {0, 1}) test_thief_release(*hd, how);                // s78n t12 review
+        for (const bool n : {false, true}) test_thief_save_load(*hd, n);          // s78n t12 review
+        test_thief_dies_same_tick(*hd);                                           // s78n t12 review
         test_hero_clash_garrison(*hd);
     }
     test_land_squad_container();  // s78n t03 / t09

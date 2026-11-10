@@ -3233,7 +3233,7 @@ int32_t CombatSystem::pick_death_clone(const UnitDesc& vd, int32_t key, int32_t 
     return -1;
 }
 
-void CombatSystem::kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame, int32_t sub_key) {
+void CombatSystem::kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame, int32_t sub_key, bool removal) {
     // Die (0x39bdb0), ABILITIES_HARDPOINTS.md 4.9 [H unless tagged].
     if (v.flags & kUnitDead) return;
     // 1. dying flag, health 0, killer
@@ -3253,8 +3253,9 @@ void CombatSystem::kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame, 
     deaths_.push_back(ev);
     const size_t ei = deaths_.size() - 1;
     ++stats_.deaths;
-    // 5. live destroyable hardpoints die in list order: HP_Take_Damage(kind 6, scaled base health)
-    for (uint32_t i = 0; i < v.hp_count; ++i) {
+    // 5. live destroyable hardpoints die in list order: HP_Take_Damage(kind 6, scaled base health). s78n t12 review: not
+    //    in a world removal without Die (remove_unit), which runs only step 7.
+    for (uint32_t i = 0; i < v.hp_count && !removal; ++i) {
         Hardpoint& h = hps_[v.hp_begin + i];
         const HardpointDesc& hd = data_->hardpoints[h.desc];
         if (!hd.destroyable || h.destroyed || !(h.health > 0.0f)) continue;
@@ -3263,6 +3264,7 @@ void CombatSystem::kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame, 
     }
     // 7. world removal (0x391310): Tactical_Respawn, Destruction_Survivors (OI abilities, TACTICAL_GAPS §1.9)
     death_spawns(v, frame);
+    if (removal) return;  // s78n t12 review: no death clone (kind 15), no death projectile, no DeathBehavior draw
     // 8. death clone (tactical modes, kind != 15), S9_DEATH_CLONE_SHIELDS.md §1.2 / §1.3 [H]:
     //    key remap (deploying / deployed Deploys walker: 11 for kind 8, else 12; else an active INFECTION: 20), the
     //    existence check (back to the kind when the remapped key has no list; its draw is consumed, its pick dropped),
@@ -3631,20 +3633,25 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
     if (pd && !pd->does_hitpoint_damage) hx = 0.0f;
     // S9 t04 (§1.1): the death-clone sub-key = the source projectile's Damage_Type index (-1: not a projectile).
     const int32_t sub_key = pd && pd->damage_type != kNoTypeId ? static_cast<int32_t>(pd->damage_type) : -1;
+    // s78n t12 review [port]: a self hit (source == victim: STIM_PACK's 0x3a9e30(V, 1, x, V)) runs every step above
+    // with the unit as its own source, as retail does; what retail does with the kill credit and the damage record of
+    // such a hit is not in the spec, so both stay as they were while the hit was sourceless - a self kill has no killer
+    // and the damage event names no source (final-blow player, story "destroyed by", DAMAGE_TRACKING unchanged).
+    const ObjectId credit = r.source == v.id ? kNoObject : r.source;
     // 17 hardpoint routing: a named live destroyable hardpoint takes everything; a named dead destroyable one swallows the
     //    hit (refixf t06, TACTICAL_COMBAT §2.9 Q1 step 5: neither hardpoint nor hull; the shield part stays absorbed); a
     //    named non-destroyable one -> hull.
     if (hp_index >= 0 && static_cast<uint32_t>(hp_index) < v.hp_count) {
         Hardpoint& h = hps_[v.hp_begin + static_cast<uint32_t>(hp_index)];
         if (data_->hardpoints[h.desc].destroyable) {
-            if (!hp_dead(h)) hardpoint_damage(v, h, hx, r.source, out, frame, false, sub_key);
+            if (!hp_dead(h)) hardpoint_damage(v, h, hx, credit, out, frame, false, sub_key);
             track_damage(v, absorbed + out.to_hardpoint, frame);
             record_damage(r, v, src, hp_index, out, frame);
             return out;
         }
     }
     // 18 hull
-    hull_damage(v, hx, r.source, out, frame, k, sub_key);
+    hull_damage(v, hx, credit, out, frame, k, sub_key);
     track_damage(v, absorbed + hx, frame);
     record_damage(r, v, src, -1, out, frame);
     return out;
@@ -3654,8 +3661,9 @@ void CombatSystem::record_damage(const DamageRequest& r, const Unit& v, const Un
                                  uint32_t frame) {
     DamageEvent e;
     e.victim = v.id;
-    e.source = r.source;
-    e.source_owner = src ? src->owner : -1;
+    const bool self = r.source == v.id;  // s78n t12 review [port]: a self hit is recorded without a source (see above)
+    e.source = self ? kNoObject : r.source;
+    e.source_owner = src && !self ? src->owner : -1;
     e.source_is_projectile = r.source_is_projectile;
     e.projectile_desc = r.projectile_desc;
     e.kind = r.kind;
@@ -5041,6 +5049,11 @@ bool CombatSystem::detonate_projectile(size_t index, uint32_t frame) {
 void CombatSystem::kill_unit(ObjectId id, ObjectId killer, uint8_t kind, uint32_t frame, int32_t sub_key) {
     Unit* u = unit(id);
     if (live(u)) kill(*u, killer, kind, frame, sub_key);
+}
+
+void CombatSystem::remove_unit(ObjectId id, ObjectId killer, uint32_t frame) {
+    Unit* u = unit(id);
+    if (live(u)) kill(*u, killer, kKindNoDeathClone, frame, -1, true);
 }
 
 // ---- OI abilities ----
