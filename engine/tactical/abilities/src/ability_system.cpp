@@ -813,41 +813,66 @@ bool AbilitySystem::in_range(const Obj& o, const SpecialAbilityDesc& s, ObjectId
     // Activation_Min_Range when > 0, else the user's Targeting_Min_Attack_Distance, and then a team-member target is
     // retested against the live member of its container nearest P_U ([M] ties: list order). `container` (Tactical_Bribe
     // apply 0x5b07c0, a land squad container T from the host): in range when T (R + 10, no footprint term) OR the target
-    // is; too close only when T ([port] E = 0: the members' joint-box half-extent is [M]) AND the target are. [port] The
-    // grenade-weapon lob solve and the melee redirect (container targets only) are not modelled. A container user
-    // passes when any live member does [port].
+    // is; too close only when T ([port] E = 0: the members' joint-box half-extent is [M]) AND the target are. A container
+    // user passes when any live member does [port].
+    // s78n t01 (§5.4.2 slot 44 / step 1, LOB_SOLVER §3.1 / §3.3):
+    // - a user whose current weapon is a grenade (Projectile_Category 3): "in range" is the lob solve alone at that
+    //   weapon's Max_Speed from P_U to the target itself + its Ranged_Target_Z_Adjust (no R, E, ability range or melee
+    //   redirect); for T, to the container position [port: T's own Ranged_Target_Z_Adjust is not added]. The too-close
+    //   test (slot 46) is unchanged.
+    // - melee redirect: a user with Targeting_Max_Attack_Distance <= Melee_Cutoff_Range against a container (X or T)
+    //   is tested against the container's live member nearest P_U (the same nearest-member pick, [M] ties: list order),
+    //   in both the max and the min test; no container member alive: the container itself.
     Vec3 tpos{};
     const bool has_t = container != kNoObject && host_.land_squad_container && host_.land_squad_container(container, tpos);
     const Obj* x = obj(target);
     const Obj* xc = x && x->container != kNoObject ? obj(x->container) : nullptr;
+    auto nearest_member = [&](const Obj* c, Vec3 pu) {
+        ObjectId best_id = kNoObject;
+        if (!c || !c->is_container) return best_id;
+        float best = 0.0f;
+        for (ObjectId m : c->members) {
+            if (!alive_unit(m)) continue;
+            const float dm = combat::distance_xy(pu, combat_->position(m));
+            if (best_id == kNoObject || dm < best) {
+                best_id = m;
+                best = dm;
+            }
+        }
+        return best_id;
+    };
     auto check = [&](ObjectId u) {
         const Vec3 pu = combat_->position(u);
         const float R = s.max_range > 0.0f ? s.max_range : combat_->attack_range(u);
         const float r = s.min_range > 0.0f ? s.min_range : combat_->min_attack_distance(u);
+        const bool lob = combat_->has_grenade_weapon(u);  // s78n t01
+        const bool melee = combat_->melee_attacker(u);    // s78n t01
+        // s78n t01: the melee redirect (step 1) of a container X; X itself otherwise.
+        ObjectId xr = target;
+        if (melee && x && x->is_container) {
+            const ObjectId m = nearest_member(x, pu);
+            if (m != kNoObject) xr = m;
+        }
         float d = 0.0f, E = 0.0f;
-        (void)combat_->range_geometry_of(target, pu, d, E);
-        bool in_max = d <= R + E;
+        (void)combat_->range_geometry_of(xr, pu, d, E);
+        bool in_max = lob ? combat_->weapon_lob_reaches(u, pu, combat_->target_point(target)) : d <= R + E;
         bool too_close = false;
         if (r > 0.0f) {
             ObjectId xm = kNoObject;
-            if (!(s.min_range > 0.0f) && xc) {  // the weapon min range: the container's member nearest P_U
-                float best = 0.0f;
-                for (ObjectId m : xc->members) {
-                    if (!alive_unit(m)) continue;
-                    const float dm = combat::distance_xy(pu, combat_->position(m));
-                    if (xm == kNoObject || dm < best) {
-                        xm = m;
-                        best = dm;
-                    }
-                }
-            }
-            if (xm != kNoObject && xm != target) (void)combat_->range_geometry_of(xm, pu, d, E);
+            if (!(s.min_range > 0.0f) && xc) xm = nearest_member(xc, pu);  // the weapon min range: nearest member
+            if (xm != kNoObject && xm != xr) (void)combat_->range_geometry_of(xm, pu, d, E);
             too_close = d <= r + E;
         }
         if (has_t) {  // T first: in range of T or of X; too close to T and to X
+            const ObjectId tm = melee ? nearest_member(obj(container), pu) : kNoObject;  // s78n t01: melee redirect
+            float dm = 0.0f, Em = 0.0f;
+            if (tm != kNoObject) (void)combat_->range_geometry_of(tm, pu, dm, Em);
             const float dt = combat::distance_xy(pu, tpos);
-            in_max = dt <= R + 10.0f || in_max;
-            too_close = too_close && dt <= r;
+            const bool t_in = lob                 ? combat_->weapon_lob_reaches(u, pu, tpos)
+                              : tm != kNoObject ? dm <= R + Em
+                                                : dt <= R + 10.0f;
+            in_max = t_in || in_max;
+            too_close = too_close && (tm != kNoObject ? dm <= r + Em : dt <= r);
         }
         return in_max && !too_close;
     };

@@ -263,8 +263,9 @@ bool AbilitySystem::class_accepts(const Obj& o, const SpecialAbilityDesc& s, Obj
         case C::Repair: return live && !dummy && allied(o.owner, combat_->owner(target)) && target_filter(s, target);  // [inferred]
         case C::CancelSpecial: {  // cu8f t01, 0x6f4060: the target has a SAP and is not friendly (enemy or neutral; self and
             // allies refused). No range or type filter. [port] "has a SAP" = an object of this system that is not dead.
+            // s78n t07: "friendly" is 0x39a2c0 (relation 0, `friendly`), so a neutral target is accepted.
             const Obj* t = obj(target);
-            return t && !t->dead && !allied(o.owner, t->owner);
+            return t && !t->dead && !friendly(o.owner, t->owner);
         }
         // 0x712770 (Proximity_Mines, Buzz_Droids, Corrupt_Systems, Summon, Radioactive): the MARKER dummy point object
         // [port: or a live target / none - positions come with the command-57 dummy].
@@ -1610,7 +1611,8 @@ void AbilitySystem::heal_pass(Obj& o, const SpecialAbilityDesc& s, uint32_t fram
         scratch_.clear();
         for (size_t i = 0; i < combat_->unit_count(); ++i) {
             const ObjectId u = combat_->unit_id_at(i);
-            if (!alive_unit(u) || !allied(o.owner, combat_->owner(u))) continue;
+            // s78n t07 (TACTICAL_GAPS §2.3.1): the candidate is allied (0x39a230: relation 0, `friendly`; not a neutral).
+            if (!alive_unit(u) || !friendly(o.owner, combat_->owner(u))) continue;
             if (combat_->flags(u) & (combat::kUnitConverted | combat::kUnitSkipTargeting)) continue;
             if (combat::distance_xy(me, combat_->position(u)) > s.heal_range) continue;
             if (!(s.applicable_categories == 0 && s.applicable_types.empty()) && !target_filter(s, u)) continue;

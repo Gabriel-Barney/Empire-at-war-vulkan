@@ -757,6 +757,9 @@ private:
     int32_t draw_int(int32_t lo, int32_t hi);
     bool allied(int32_t a, int32_t b) const { return a == b || (a >= 0 && b >= 0 && !combat_->is_enemy(a, b)); }
     bool enemy(int32_t a, int32_t b) const { return combat_->is_enemy(a, b); }
+    // s78n t07: the retail ally test (0x39a230 / 0x39a2c0 / 0x6f1130: relation == 0, own player included, a neutral
+    // relation-2 player is not allied) through the host's `allied_players` hook; unset: [port] `allied` (not enemies).
+    bool friendly(int32_t a, int32_t b) const { return host_.allied_players ? host_.allied_players(a, b) : allied(a, b); }
     bool moving(const Obj& o) const;
     void move_order(ObjectId id, Vec3 p, uint32_t frame, uint8_t type = 0);  // type: the ability issuing it (event)
     void stop_order(ObjectId id, uint32_t frame, int32_t hold = kStopPlain);

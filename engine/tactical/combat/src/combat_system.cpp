@@ -447,6 +447,22 @@ bool CombatSystem::range_geometry_of(ObjectId target, Vec3 from, float& d, float
     range_geometry(*t, from, d, E);
     return true;
 }
+bool CombatSystem::has_grenade_weapon(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u && grenade_weapon(*u) != nullptr;
+}
+bool CombatSystem::weapon_lob_reaches(ObjectId id, Vec3 from, Vec3 to) const {
+    // s78n t01: as lob_in_range (one pass at Max_Speed decides the yes / no, LOB_SOLVER §2.3).
+    const Unit* u = unit(id);
+    const ProjectileDesc* gw = u ? grenade_weapon(*u) : nullptr;
+    if (!gw) return false;
+    LobSolution s;
+    return lob_solve(from, to, gw->max_speed, lob_g(*gw), false, s);
+}
+bool CombatSystem::melee_attacker(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u && desc_of(*u).max_attack_distance <= cfg_.short_range_cutoff;
+}
 ObjectId CombatSystem::ordered_target(ObjectId id) const {
     const Unit* u = unit(id);
     return u ? u->ordered_target : kNoObject;

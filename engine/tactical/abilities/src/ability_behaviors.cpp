@@ -344,6 +344,7 @@ void AbilitySystem::gate_entries(const Obj& src, const SpecialAbilityDesc& s, bo
     // cu8f t06 (CU8F_T04_T06_RE §3.3 [H]): apply 0x6f02c0 pushes {true, no expiry, source = this ability on this object}
     // per set Enable_* flag onto each affected player's list; remove 0x6f13b0 deletes the entries of that source. Affected
     // players (0x6f1130): the owner, or with Apply_To_All_Allies every player allied with it (index order).
+    // s78n t07: "allied" is the relation-0 test (`friendly`, CU8F_T04_T06_RE §3.3): a neutral player gets nothing.
     if (!push) {
         player_entries_.erase(std::remove_if(player_entries_.begin(), player_entries_.end(),
                                              [&](const PlayerEntry& e) {
@@ -356,7 +357,7 @@ void AbilitySystem::gate_entries(const Obj& src, const SpecialAbilityDesc& s, bo
     if (!s.enable_bombing_runs && !s.enable_special_weapons && !s.enable_bombardment) return;
     const auto np = static_cast<int32_t>(combat_->player_count());
     for (int32_t p = 0; p < np; ++p) {
-        if (p != src.owner && !(s.apply_to_all_allies && allied(src.owner, p))) continue;
+        if (p != src.owner && !(s.apply_to_all_allies && friendly(src.owner, p))) continue;
         auto put = [&](bool on, PlayerGate g) {
             if (on) player_entries_.push_back(PlayerEntry{p, static_cast<uint8_t>(g), 0, 1.0f, src.id, s.name_crc});
         };
@@ -370,7 +371,8 @@ void AbilitySystem::modifier_entries(const Obj& src, uint32_t desc, const Specia
     // Battlefield_Modifier apply 0x6f02c0 (push) / remove 0x6f13b0 (delete by source); cu8g t05 (CU8F_T04_T06_RE §3.3 [H]):
     // Reverse_Application_Logic swaps the two (the caller passes push = !reverse on apply, reverse on remove), and the
     // affected players are always the owner, or every player allied with it (index order) with Apply_To_All_Allies
-    // (0x6f1130; the earlier "reverse -> the enemies" reading [M] is gone). Per player, permanent append inserts keyed by
+    // (0x6f1130; the earlier "reverse -> the enemies" reading [M] is gone; s78n t07: allied = relation 0, `friendly`,
+    // so a neutral player is not affected). Per player, permanent append inserts keyed by
     // the source: the reveal list +0x1f8 (FOW §5.2) and the float lists, then the Enable_* gate lists (gate_entries).
     const auto np = static_cast<int32_t>(combat_->player_count());
     const uint64_t key = (static_cast<uint64_t>(desc) << 32) | static_cast<uint32_t>(src.id);
@@ -387,7 +389,7 @@ void AbilitySystem::modifier_entries(const Obj& src, uint32_t desc, const Specia
         return;
     }
     for (int32_t p = 0; p < np; ++p) {
-        if (p != src.owner && !(s.apply_to_all_allies && allied(src.owner, p))) continue;
+        if (p != src.owner && !(s.apply_to_all_allies && friendly(src.owner, p))) continue;
         if (s.fow_reveal_multiplier != 1.0f && host_.fow_reveal_add)  // list +0x1f8 <- m - 1 (FOW §5.2)
             host_.fow_reveal_add(p, s.stacking_category, key, s.fow_reveal_multiplier);
         auto put = [&](PlayerList l, float m) {
@@ -434,7 +436,8 @@ bool AbilitySystem::aura_target(const Obj& src, const SpecialAbilityDesc& s, con
         // EnhanceDefense [port]: kept as a per-unit aura on the owner's units (all allies with Apply_To_All_Allies), every
         // unit when no filter is given. Retail (TACTICAL_COMBAT §5.4.3 item 4) has no unit accept (constant-false stub):
         // its apply inserts one per-player entry for the owner / every ally (+0x180), whose reader is unknown [M].
-        if (t.owner != src.owner && !(s.apply_to_all_allies && allied(src.owner, t.owner))) return false;
+        // s78n t07: "ally" is the relation-0 test (`friendly`), as for the other per-player writers.
+        if (t.owner != src.owner && !(s.apply_to_all_allies && friendly(src.owner, t.owner))) return false;
         if (s.applicable_categories == 0 && s.applicable_types.empty()) {
             const int32_t ot = combat_->data().units[combat_->desc_index(t.id)].object_type;
             for (int32_t x : s.excluded_types)
@@ -450,7 +453,7 @@ bool AbilitySystem::aura_target(const Obj& src, const SpecialAbilityDesc& s, con
     // 2. the target is allied with the source's owner (0x39a230: relation == 0, own player included; a neutral player is
     //    not allied). Apply_To_All_Allies is not read here. [port] Specific_Faction (+0x1c0 [M]: then the target owner's
     //    faction must equal it, no ally test) is not modelled.
-    if (!(host_.allied_players ? host_.allied_players(src.owner, t.owner) : allied(src.owner, t.owner))) return false;
+    if (!friendly(src.owner, t.owner)) return false;
     // 3. the target's type is neither the source type's Unique_Ground_Unit (+0x1b60) nor Unique_Space_Unit (+0x1b50).
     const AbilityObjectDesc& sd = data_->objects[src.desc];
     const int32_t ot = combat_->data().units[combat_->desc_index(t.id)].object_type;
@@ -497,12 +500,15 @@ void AbilitySystem::aura_on(Obj& src, SpecialState& sp, uint32_t frame) {
             modifier_entries(src, sp.desc, s, !s.reverse_logic);
             break;
         case SpecialClass::BasePower:  // 0x6efaf0: every player allied to the source (owner included), keyed by it
+            // s78n t07 (TACTICAL_GAPS §7.3): allied = 0x39a2c0, relation 0 (`friendly`); a neutral player gets no power.
             for (int32_t p = 0; p < np; ++p)
-                if (allied(src.owner, p)) combat_->add_base_power(p, src.id);
+                if (friendly(src.owner, p)) combat_->add_base_power(p, src.id);
             break;
         case SpecialClass::Weatherproof:  // 0x711720: false, permanent; all allies with Apply_To_All_Allies [M faction flag]
+            // s78n t07 (TACTICAL_GAPS §7.4): "allied to the owner" = relation 0 (`friendly`); [port] the faction +0x20a8
+            // flag [M] is not read.
             for (int32_t p = 0; p < np; ++p)
-                if (p == src.owner || (s.apply_to_all_allies && allied(src.owner, p)))
+                if (p == src.owner || (s.apply_to_all_allies && friendly(src.owner, p)))
                     source_entries_.push_back(SourceEntry{p, src.id, s.name_crc, 2});
             break;
         case SpecialClass::RetreatPrevention:  // the interdict list of the enemy players [M]
@@ -510,8 +516,10 @@ void AbilitySystem::aura_on(Obj& src, SpecialState& sp, uint32_t frame) {
                 if (enemy(src.owner, p)) source_entries_.push_back(SourceEntry{p, src.id, s.name_crc, 1});
             break;
         case SpecialClass::EnableAbility:  // 0x6f8fb0 [M]: the named special for the owner / all allies
+            // s78n t07 (TACTICAL_GAPS §2 table): [port] "allies" read as relation 0 (`friendly`) like the other per-player
+            // writers; 0x6f8fb0's own test is not traced [M].
             for (int32_t p = 0; p < np; ++p)
-                if (p == src.owner || (s.apply_to_all_allies && allied(src.owner, p))) set_special_enabled(p, s.ability_name_crc, true);
+                if (p == src.owner || (s.apply_to_all_allies && friendly(src.owner, p))) set_special_enabled(p, s.ability_name_crc, true);
             break;
         default: break;
     }
@@ -552,7 +560,7 @@ void AbilitySystem::aura_off(Obj& src, SpecialState& sp, uint32_t frame) {
             break;
         case SpecialClass::EnableAbility:
             for (int32_t p = 0; p < np; ++p)
-                if (p == src.owner || (s.apply_to_all_allies && allied(src.owner, p))) set_special_enabled(p, s.ability_name_crc, false);
+                if (p == src.owner || (s.apply_to_all_allies && friendly(src.owner, p))) set_special_enabled(p, s.ability_name_crc, false);
             break;
         default: break;
     }

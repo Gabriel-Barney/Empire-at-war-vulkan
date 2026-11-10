@@ -4602,6 +4602,7 @@ struct BribeRangeCase {
     Vec3 xp{0, 0, 0}, tp{0, 0, 0}, mate{900, 900, 0};
     float ex = 3.0f, ey = 3.0f, min_range = 0.0f, user_min = 0.0f;
     bool squad = false, hook = false;
+    bool melee = false;  // s78n t01: Tyber's Targeting_Max_Attack_Distance 40 (<= Melee_Cutoff_Range 51), else 90
 };
 int bribe_range_tick(const BribeRangeCase& c) {
     OiWorld w;
@@ -4615,6 +4616,7 @@ int bribe_range_tick(const BribeRangeCase& c) {
     a.specials = {bs};
     UnitDesc tu = oi_unit("Tyber", 100.0f, 8.0f);
     tu.min_attack_distance = c.user_min;
+    tu.max_attack_distance = c.melee ? 40.0f : 90.0f;
     const uint32_t ad = push(w.cd, w.ad, tu, a);
     UnitDesc xu = oi_unit("Squad_Stormtrooper", 100.0f, 5.0f, 16);
     xu.hard_x_extent = c.ex;
@@ -4623,7 +4625,9 @@ int bribe_range_tick(const BribeRangeCase& c) {
     AbilityObjectDesc sq;
     sq.name = "Stormtrooper_Team";
     const uint32_t sqd = push_container(w.cd, w.ad, sq);
-    w.make(GameMode::Land);
+    CombatConfig cfg;
+    cfg.short_range_cutoff = 51.0f;  // Melee_Cutoff_Range
+    w.make(GameMode::Land, std::vector<PlayerInfo>(3), cfg);
     if (c.hook) {
         AbilityHost h;
         const Vec3 tp = c.tp;
@@ -4735,6 +4739,191 @@ void test_bribe_range() {
         u.mate = Vec3{0.0f, 300.0f, 0.0f};
         CHECK(bribe_range_tick(u) == 0);
     }
+    {  // s78n t01 (§5.4.2 step 1): a melee user tests the container T against T's live member nearest it (+ that
+       // member's footprint, no +10). T and X at the origin, the other member 60 closer to Tyber.
+        BribeRangeCase me;
+        me.squad = true;
+        me.hook = true;
+        me.mate = Vec3{-60.0f, 0.0f, 0.0f};
+        me.path = at(-162.0f, 0.0f);  // the near member at 102 <= 103; T 162 > 110 and X 162 > 103
+        CHECK(bribe_range_tick(me) == -1);
+        me.melee = true;
+        CHECK(bribe_range_tick(me) == 0);
+        me.path = at(-163.5f, 0.0f);
+        CHECK(bribe_range_tick(me) == -1);
+    }
+}
+
+// s78n t07 / t01 (TACTICAL_COMBAT §5.4.2): Hack and Repair use the shared ability range (AbilitySystem::in_range). The
+// user (radius 8: not in the formula) stands at `user`; X (id 2, Custom_Hard X / Y extents, facing +x; an enemy for Hack,
+// own for Repair) at `xp`. With `grenade` the user's weapon is a grenade (v 10, G 0.56: reach v^2 / G = 178.57 on flat
+// ground). Returns whether the apply ran on the first tick.
+struct HackRangeCase {
+    SpecialClass cls = SpecialClass::Hack;
+    Vec3 user{0, 0, 0}, xp{0, 0, 0};
+    float max_range = 100.0f, min_range = 0.0f, user_min = 0.0f, ex = 4.0f, ey = 2.0f;
+    bool grenade = false;
+};
+bool hack_range_applies(const HackRangeCase& c) {
+    OiWorld w;
+    const bool repair = c.cls == SpecialClass::Repair;
+    const char* nm = repair ? "Repair" : "Hack";
+    const uint8_t type = repair ? kTargetedRepair : kTargetedHack;
+    SpecialAbilityDesc hk = oi_special(nm, c.cls, ActivationStyle::UserInput);
+    hk.max_range = c.max_range;
+    hk.min_range = c.min_range;
+    const uint32_t hs = add_special(w.ad, hk);
+    AbilityObjectDesc a;
+    a.unit_abilities = {oi_gui(type, 0.0f, 10.0f, nm)};
+    a.specials = {hs};
+    UnitDesc u = oi_unit("R2", 100.0f, 8.0f);
+    u.max_attack_distance = 90.0f;  // not melee
+    u.min_attack_distance = c.user_min;
+    if (c.grenade) {  // Proj_Merc_Concussion_Grenade numbers (LOB_SOLVER §1.2)
+        ProjectileDesc g;
+        g.name = "Grenade";
+        g.lobbed = true;
+        g.max_speed = 10.0f;
+        g.grenade_gravity = 1.0f;
+        g.lob_mod = 0.56f;
+        g.can_lob_slower = true;
+        g.damage = 0.0f;
+        w.cd.projectiles = {g};
+        u.weapon_projectile = 0;
+        u.max_attack_distance = 240.0f;
+    }
+    const uint32_t ud = push(w.cd, w.ad, u, a);
+    UnitDesc xu = oi_unit("Turret", 100.0f, 5.0f, 16);  // infantry
+    xu.hard_x_extent = c.ex;
+    xu.hard_y_extent = c.ey;
+    const uint32_t xd = push(w.cd, w.ad, xu, AbilityObjectDesc{});
+    CombatConfig cfg;
+    cfg.short_range_cutoff = 51.0f;
+    w.make(GameMode::Land, std::vector<PlayerInfo>(3), cfg);
+    w.add(1, ud, 0, c.user);
+    w.add(2, xd, repair ? 0 : 1, c.xp, {1, 0, 0});
+    const ObjectId one[] = {1};
+    (void)w.ab->targeted_ability(one, type, 2, -1, w.frame);
+    w.tick();
+    return w.ab->special_applied(1, name_crc(nm));
+}
+
+void test_hack_repair_range() {
+    for (SpecialClass cls : {SpecialClass::Hack, SpecialClass::Repair}) {
+        HackRangeCase c;
+        c.cls = cls;
+        // R + the X extent along X's facing, R + the Y extent across it (XY, non-strict)
+        c.user = Vec3{-104.0f, 0.0f, 0.0f};
+        CHECK(hack_range_applies(c));
+        c.user = Vec3{-104.5f, 0.0f, 0.0f};
+        CHECK(!hack_range_applies(c));
+        c.user = Vec3{0.0f, 102.0f, 300.0f};  // z is ignored
+        CHECK(hack_range_applies(c));
+        c.user = Vec3{0.0f, 102.5f, 0.0f};
+        CHECK(!hack_range_applies(c));
+        // Activation_Min_Range 20: too close <=> d <= 20 + E
+        c.min_range = 20.0f;
+        c.user = Vec3{-24.0f, 0.0f, 0.0f};
+        CHECK(!hack_range_applies(c));
+        c.user = Vec3{-24.5f, 0.0f, 0.0f};
+        CHECK(hack_range_applies(c));
+        // Activation_Min_Range 0: the user's Targeting_Min_Attack_Distance
+        c.min_range = 0.0f;
+        c.user_min = 30.0f;
+        c.user = Vec3{-34.0f, 0.0f, 0.0f};
+        CHECK(!hack_range_applies(c));
+        c.user = Vec3{-34.5f, 0.0f, 0.0f};
+        CHECK(hack_range_applies(c));
+    }
+    // s78n t01 (§5.4.2 slot 44, LOB_SOLVER §3.1): a grenade-weapon user: the lob solve alone, the ability range unused
+    HackRangeCase g;
+    g.grenade = true;
+    g.user = Vec3{-170.0f, 0.0f, 0.0f};  // 170 > 100 + 4, but an arc exists
+    CHECK(hack_range_applies(g));
+    g.user = Vec3{-185.0f, 0.0f, 0.0f};  // beyond v^2 / G even with Activation_Max_Range 1000
+    g.max_range = 1000.0f;
+    CHECK(!hack_range_applies(g));
+    g.user = Vec3{-170.0f, 0.0f, 0.0f};
+    g.min_range = 175.0f;  // slot 46 is unchanged: too close <=> d <= 175 + 4
+    CHECK(!hack_range_applies(g));
+}
+
+// s78n t07: the per-player writers Base_Power (TACTICAL_GAPS §7.3, 0x39a2c0), Weatherproof (§7.4), Enable_Ability (§2
+// table [M]) and Battlefield_Modifier (CU8F_T04_T06_RE §3.3, 0x6f1130) take the owner and the players allied with it by
+// the relation-0 test (the host's allied_players): a neutral player (relation 2: not an enemy, not allied) gets nothing.
+// Cancel_Special (0x6f4060) accepts a neutral target. Without the hook the fallback "not an enemy" counts the neutral.
+void test_s78n_allied_users() {
+    struct R {
+        std::array<bool, 4> power{}, weather{}, enabled{};
+        std::array<uint32_t, 4> gate{};
+        std::array<float, 4> stealth{};
+        uint32_t cancel_neutral = 0;
+    };
+    auto run = [](bool hook) {
+        OiWorld w;
+        SpecialAbilityDesc tgt = oi_special("Target", SpecialClass::LaserDefense, ActivationStyle::UserInput);
+        tgt.initially_enabled = false;
+        const uint32_t ts = add_special(w.ad, tgt);
+        const uint32_t ps = add_special(w.ad, oi_special("Power", SpecialClass::BasePower, ActivationStyle::GroundAutomatic));
+        SpecialAbilityDesc wp = oi_special("Weatherproof", SpecialClass::Weatherproof, ActivationStyle::GroundAutomatic);
+        wp.apply_to_all_allies = true;
+        const uint32_t ws = add_special(w.ad, wp);
+        SpecialAbilityDesc en = oi_special("Enable", SpecialClass::EnableAbility, ActivationStyle::GroundAutomatic);
+        en.ability_name_crc = name_crc("Target");
+        en.apply_to_all_allies = true;
+        const uint32_t es = add_special(w.ad, en);
+        SpecialAbilityDesc bm = oi_special("BM", SpecialClass::BattlefieldModifier, ActivationStyle::GroundAutomatic);
+        bm.enable_bombing_runs = true;
+        bm.stealth_duration_multiplier = 1.25f;
+        bm.apply_to_all_allies = true;
+        const uint32_t bs = add_special(w.ad, bm);
+        const uint32_t cs = add_special(w.ad, oi_special("Cancel", SpecialClass::CancelSpecial, ActivationStyle::UserInput));
+        AbilityObjectDesc src, holder, canceller;
+        src.specials = {ps, ws, es, bs};
+        holder.specials = {ts};
+        canceller.unit_abilities = {oi_gui(kTargetedHack, 0.0f, 0.0f, "Cancel")};
+        canceller.specials = {cs};
+        const uint32_t sd = push(w.cd, w.ad, oi_unit("Source", 100.0f), src);
+        const uint32_t hd = push(w.cd, w.ad, oi_unit("Holder", 100.0f), holder);
+        const uint32_t cd = push(w.cd, w.ad, oi_unit("Canceller", 100.0f), canceller);
+        // players: 0 the source, 1 enemy, 2 ally, 3 neutral (not an enemy in the combat table, relation 2)
+        w.make(GameMode::Land, std::vector<PlayerInfo>(4));
+        if (hook) {
+            AbilityHost h;
+            h.allied_players = [](int32_t a, int32_t b) { return a == b || (a == 0 && b == 2) || (a == 2 && b == 0); };
+            w.ab->set_host(std::move(h));
+        }
+        for (int32_t p : {2, 3}) {
+            w.sys->set_enemy(0, p, false);
+            w.sys->set_enemy(p, 0, false);
+        }
+        w.add(1, sd, 0, {0, 0, 0});
+        w.add(2, cd, 0, {0, -100.0f, 0});
+        for (int32_t p = 0; p < 4; ++p) w.add(10 + p, hd, p, {100.0f * static_cast<float>(p), 500.0f, 0.0f});
+        R r;
+        for (int32_t p = 0; p < 4; ++p) {
+            const auto i = static_cast<size_t>(p);
+            r.power[i] = w.sys->has_base_power(p);
+            r.weather[i] = w.ab->weather_affected(p);
+            r.enabled[i] = w.ab->special_enabled(10 + p, name_crc("Target"));
+            bool all = false;
+            r.gate[i] = w.ab->player_gate(p, PlayerGate::BombingRuns, all);
+            r.stealth[i] = w.ab->player_list(p, PlayerList::StealthDuration);
+        }
+        const ObjectId users[] = {2};
+        r.cancel_neutral = w.ab->targeted_ability(users, kTargetedHack, 13, -1, w.frame);
+        return r;
+    };
+    const R h = run(true);
+    CHECK(h.power[0] && !h.power[1] && h.power[2] && !h.power[3]);
+    CHECK(!h.weather[0] && h.weather[1] && !h.weather[2] && h.weather[3]);
+    CHECK(h.enabled[0] && !h.enabled[1] && h.enabled[2] && !h.enabled[3]);
+    CHECK(h.gate[0] == 1 && h.gate[1] == 0 && h.gate[2] == 1 && h.gate[3] == 0);
+    CHECK(h.stealth[0] == 0.25f && h.stealth[1] == 0.0f && h.stealth[2] == 0.25f && h.stealth[3] == 0.0f);
+    CHECK(h.cancel_neutral == 1);
+    const R f = run(false);
+    CHECK(f.power[3] && !f.weather[3] && f.enabled[3] && f.gate[3] == 1 && f.stealth[3] == 0.25f);
+    CHECK(f.cancel_neutral == 0);
 }
 
 // ================================================================================================
@@ -5307,6 +5496,8 @@ int main(int argc, char** argv) {
     test_oi_anim_gates_and_locks();
     test_bribe_hack_accept();
     test_bribe_range();  // s78m t08
+    test_hack_repair_range();  // s78n t07 / t01
+    test_s78n_allied_users();  // s78n t07
     test_cu8f_abilities_disabled();
     test_cu8j_saber_flight();
     test_battle(golden, write_golden);

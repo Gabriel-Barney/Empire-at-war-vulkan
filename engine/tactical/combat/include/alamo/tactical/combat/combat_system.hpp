@@ -1082,6 +1082,14 @@ public:
     // target's aim point and the target term `E` of the weapon range test (footprint half-extent along the line of sight,
     // or the LAND_OBSTACLE aim walk with sqrt(200)). False (d = E = 0) for an unknown id.
     bool range_geometry_of(ObjectId target, Vec3 from, float& d, float& E) const;
+    // s78n t01 (TACTICAL_COMBAT §5.4.2 slot 44, LOB_SOLVER §3.1): the unit's current weapon projectile (slot 42) is a
+    // grenade (Projectile_Category 3); then `weapon_lob_reaches` is its slot 44: Lob_Solve at the projectile's Max_Speed
+    // from `from` to `to` finds an arc (false for an unknown id or a non-grenade weapon).
+    bool has_grenade_weapon(ObjectId id) const;
+    bool weapon_lob_reaches(ObjectId id, Vec3 from, Vec3 to) const;
+    // s78n t01 (TACTICAL_COMBAT §5.4.2 step 1): Targeting_Max_Attack_Distance <= Melee_Cutoff_Range (0x372210), the
+    // melee redirect's attacker test. False for an unknown id.
+    bool melee_attacker(ObjectId id) const;
 
     // ---- S9: hooks and ability-facing API ----
     void set_hooks(CombatHooks* hooks) { hooks_ = hooks; }
