@@ -242,4 +242,12 @@ std::vector<Slot> layout_formation(std::span<const FormationMember> m, std::span
     return out;
 }
 
+V2 destination_try_offset(uint32_t k, bool first_unblocked, V2 v, float m) {
+    const uint32_t r = k % 8u, round = k / 8u;
+    const float sign = !first_unblocked ? 1.0f : ((k & 1u) == 0u ? 0.5f : -0.375f);  // halved: x 0.5 x (+1 / -0.75)
+    if (r < 4u) return v * (7.0f * static_cast<float>(4u * round + r) * sign);
+    static constexpr V2 kAxes[4] = {{1.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 0.0f}, {0.0f, -1.0f}};
+    return v * (28.0f * static_cast<float>(round) * sign) + kAxes[r - 4u] * m;
+}
+
 }  // namespace alamo::tactical::movement

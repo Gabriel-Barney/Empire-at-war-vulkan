@@ -12,7 +12,7 @@ namespace alamo::sim {
 
 namespace {
 
-constexpr uint32_t kBattleStateVersion = 11;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: q6 attacks on TEAM containers / s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save) (two branches); 8: both merged; 9: ccpgt t02 domination timer; 10: cu8k t01 Saber_Throw thrower machines; 11: cu8l t03 start fleet arrivals (10 still read: none)
+constexpr uint32_t kBattleStateVersion = 12;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: q6 attacks on TEAM containers / s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save) (two branches); 8: both merged; 9: ccpgt t02 domination timer; 10: cu8k t01 Saber_Throw thrower machines; 11: cu8l t03 start fleet arrivals; 12: s78n t20 land attack blocks (exact: older versions are refused)
 constexpr uint32_t kBattlePartVersion = 2;  // 2: s78n t06 running hero clashes in the Combat part (1 still read: none)
 
 // One module system in a part: presence flag + a section with its own write.
@@ -138,8 +138,9 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     // cu8k t01: Saber_Throw thrower machines (state version 10)
     a.seq(b.sabers_, [](auto& x, auto& t) { x(t.thrower, t.target, t.aim, t.throw_frame, t.serial, t.projectile, t.catch_dist, t.end_frame); });
     // cu8l t03: the start fleet's hyperspace arrivals (state version 11; a version 10 battle has none)
-    if (b.state_io_version_ == 0 || b.state_io_version_ >= 11)
-        a.seq(b.arrivals_, [](auto& x, auto& r) { x(r.id, r.container, r.timer, r.composes); });
+    a.seq(b.arrivals_, [](auto& x, auto& r) { x(r.id, r.container, r.timer, r.composes); });
+    // s78n t20 stage A: the land attack blocks (state version 12)
+    a.seq(b.attack_blocks_, [](auto& x, auto& r) { x(r.mover, r.target, r.flags, r.next, r.gx, r.gy); });
 }
 
 void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {
@@ -195,7 +196,7 @@ void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {
 bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
     const uint32_t version = r.u32();
     if (!r.ok()) return false;
-    if (p == SavePart::State ? (version != kBattleStateVersion && version != 10u) : (version != kBattlePartVersion && version != 1u))
+    if (p == SavePart::State ? version != kBattleStateVersion : (version != kBattlePartVersion && version != 1u))
         return false;
     switch (p) {
         case SavePart::State: {

@@ -410,6 +410,7 @@ objects::ObjectId TacticalBattle::hg_spawn(TacticalMode& mode, int32_t type, int
                     md.z = p.z;
                     md.yaw_deg = dmath::atan2(f.y, f.x) * (180.0f / dmath::kPiF);
                     md.owner = owner;
+                    mv_type_extents(md, ut);  // s78n t20
                     movement_->add_unit(md);
                     u->movable = true;
                 }
@@ -727,6 +728,18 @@ void TacticalBattle::hg_production(TacticalMode& mode, SimRng& rng) {
             const std::vector<tc::ObjectId> none;
             abilities_->add_container(id, desc_of(static_cast<uint32_t>(t)), o.player, none, frame_, &rng);
             hg_upgrade_objs_.push_back(HgUpgradeObject{id, h});
+            // s78n t20 fix (SKIRMISH_SETUP §3 "Completion (0x498f70)": signal 0x22 is raised for every finished build,
+            // before the DUMMY_UPGRADE branch; AI_GALACTIC_3 §1.11: the AI build task waits for it): the upgrade's
+            // completion is reported too (no pool entry). Without it a land task force whose to-produce list holds an
+            // upgrade never finished Produce_Force - Tactical_Multiplayer_Build_Land_Units_Generic (not removable by
+            // the goal system) then held its plan for the rest of the battle and its player built no more units.
+            // [port] land only: in space the AI claims the new object of the type (claim_produced).
+            if (!space_) {
+                ProductionDone d;
+                d.player = o.player;
+                d.type = static_cast<uint32_t>(t);
+                production_done_.push_back(d);
+            }
         } else if (!space_) {
             // q6 t19 (SKIRMISH_SETUP §3 / §3.1 item 1): a finished land build never spawns. 0x27fad0 appends the type to
             // the player's reinforcement pool; the human / AI Reinforce drops it later through its landing object

@@ -24,24 +24,6 @@ void insert_key(std::vector<uint64_t>& v, uint64_t k) {
     if (it == v.end() || *it != k) v.insert(it, k);
 }
 
-// Point at arc length s along pos -> path[next..]; seg = index of the waypoint the point precedes.
-V2 point_along(V2 pos, const std::vector<V2>& path, uint32_t next, float s, size_t& seg) {
-    V2 a = pos;
-    float acc = 0.0f;
-    for (size_t i = next; i < path.size(); ++i) {
-        const float l = distance(a, path[i]);
-        if (acc + l >= s) {
-            seg = i;
-            const float t = l > 0.0f ? (s - acc) / l : 0.0f;
-            return lerp(a, path[i], std::clamp(t, 0.0f, 1.0f));
-        }
-        acc += l;
-        a = path[i];
-    }
-    seg = path.size();
-    return path.empty() ? pos : path.back();
-}
-
 float slowdown_for_layer(const MovementConstants& k, uint32_t layer) {
     if (layer & (kLayerCapital | kLayerSuperCapital)) return k.turn_in_place_slowdown_capital;
     if (layer & kLayerFrigate) return k.turn_in_place_slowdown_frigate;
@@ -476,6 +458,9 @@ UnitView MovementSystem::view(ObjectId id) const {
     v.arrived = u->arrived;
     v.failed = u->failed;
     v.pushed = u->pushed;  // a1k t03
+    v.push_kind = u->push_kind;  // s78n t20
+    v.push_flee = u->pushed && u->push_flee;
+    v.form_id = u->form_id;
     v.goal = u->goal;
     if (u->anchor >= 0) {  // s78n t03: a steering member moves with its container's order (and while recovering)
         if (const Unit* k = unit_ptr(u->anchor)) {
@@ -499,6 +484,7 @@ UnitView MovementSystem::view(ObjectId id) const {
     v.locomotor = u->d.locomotor;  // §4.3-4.7
     v.secondary_locomotor = u->on_secondary;  // S7 t06
     v.loco_state = u->sm.state;
+    v.walk_state = u->m.state;  // s78n t20
     v.anim = u->sm.anim.id;
     v.airborne = u->sm.airborne;
     attitude(id, v.roll, v.pitch);
@@ -697,6 +683,7 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
         return ca == cb;
     };
     std::vector<uint64_t> taken;
+    std::vector<LandForm> forms;  // s78n t20: every formation of the order, laid out before any goal is given
     PendingComposition* pc = serial != 0 ? &pending_.back() : nullptr;
     // P1 double-click (0x80): speed-band recruitment; LargeHover formations indexed fastest-first (0x439360).
     const bool dbl = (order.flags & kMoveFlagDoubleClick) != 0;
@@ -729,11 +716,42 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
             }
             V2 fwd = order.facing_deg != kNoFacing ? dir_from_deg(order.facing_deg) : normalize_retail(order.destination - c);
             if (length_sq(fwd) == 0.0f) fwd = {1.0f, 0.0f};
-            for (const Slot& s : layout_formation(mem, f, fwd, k)) {
+            LandForm lf;
+            lf.members = f;
+            lf.centroid = c;
+            lf.speed = fspeed;
+            lf.fwd = fwd;
+            lf.slots = layout_formation(mem, f, fwd, k);
+            lf.centre = order.destination;
+            forms.push_back(std::move(lf));
+        }
+    }
+    // s78n t20 (MOVEMENT §4.3.1 item 2): the destination check - not for a forced-path order (flag 0x20), an object goal
+    // (the host's skip_destination_check) or a queued order (no composition pass). It never refuses the order: it only
+    // moves the centre the formations' slots are laid around.
+    const bool queued = (order.flags & kMoveFlagQueue) != 0;
+    const bool checked = !(order.flags & kMoveFlagSkipValidation) && !order.skip_destination_check && !queued;
+    if (checked) destination_check(order, idx, forms, group_c);
+    {
+        for (const LandForm& lf : forms) {
+            const std::vector<uint32_t>& f = lf.members;
+            const V2 fwd = lf.fwd;
+            const float fspeed = lf.speed;
+            const uint32_t form_id = ++form_serial_;
+            for (const Slot& s : lf.slots) {
                 Unit& u = units_[idx[s.member]];
                 u.large_hover_index = -1;
-                V2 target = slot_world(order.destination, fwd, s);
-                if (!(order.flags & kMoveFlagSkipValidation)) target = pick_land_slot(u, target, taken);
+                const V2 exact = slot_world(lf.centre, fwd, s);
+                V2 target = exact;
+                // s78n t20 F5 (MOVEMENT §4.3.1: the block goal := the accepted centre): the cell snap only for slots the
+                // destination check did not place ([port] unchecked orders keep the older slot search)
+                if (!(order.flags & kMoveFlagSkipValidation) && !lf.checked) target = pick_land_slot(u, target, taken);
+                // s78n t20 (MOVEMENT §5.4.4 item 5, §4.3.1 item 6): the formation identity and the slot in its frame;
+                // the single-member shortcut of the plan (no flag 0x20, no object goal; [port] flag 0x10 has no sender)
+                u.form_id = form_id;
+                u.form_slot = {-s.back, s.lateral};
+                u.self_arrive = f.size() == 1 && !(order.flags & kMoveFlagSkipValidation) && !order.skip_destination_check;
+                u.self_goal = exact;  // s78n t20 F5: the shortcut measures to the exact goal, not a snapped cell
                 u.goal = target;
                 u.has_goal = true;
                 u.need_path = true;
@@ -809,6 +827,223 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
         for (size_t n = 0; n < ord.size(); ++n)
             for (uint32_t m : hover_members[ord[n]]) units_[idx[m]].large_hover_index = static_cast<int32_t>(n);
     }
+}
+
+// ---- s78n t20 (MOVEMENT §4.3.1 items 3 - 4): the destination check of a land move order ----
+// 0x439360: every formation whose lead (its seed) is a land layer object, nearest first to the group centroid C. The
+// first one is test-planned to the ordered goal D; fewer than 2 path points end the pass with nothing changed. Axis a =
+// the order's facing, else the direction d1 of that path's last segment; phi = the signed angle from its first to its
+// last segment. Passes n = 0 .. 40 over the centre Dn (D, then 20 x ceil(n / 8) out at (n mod 8) x 45 degrees; Dn must
+// pass the lead's class, be zone-connected to D and reachable from it by a straight line or a path <= 1.8 x the
+// distance): each formation is placed by place_formation with the step direction v = normalise(rotate(centroid - C,
+// phi)), or -d1 for the only formation or a zero offset; a formation that cannot be placed sends the pass to the next n.
+// After n = 40 every formation keeps D. The order is never refused. [port] an ordered goal that does not pass the lead's
+// class is left to the slot search (pick_land_slot), unchecked; the taken rectangles of a failed pass are dropped.
+void MovementSystem::destination_check(const MoveOrder& order, const std::vector<uint32_t>& idx, std::vector<LandForm>& forms,
+                                       V2 group_c) {
+    const V2 dest = order.destination;
+    std::vector<uint32_t> ord;
+    for (uint32_t i = 0; i < forms.size(); ++i)
+        if (land_layer_object(units_[idx[forms[i].members[0]]])) ord.push_back(i);
+    if (ord.empty()) return;
+    std::stable_sort(ord.begin(), ord.end(), [&](uint32_t x, uint32_t y) {
+        return length_sq(forms[x].centroid - group_c) < length_sq(forms[y].centroid - group_c);
+    });
+    const Unit& lead = units_[idx[forms[ord[0]].members[0]]];
+    if (!grid_.passable_world(dest, lead.lp.mask)) return;
+    LandPathScratch sc;
+    LandPath test;
+    {
+        LandPathRequest q;
+        q.start = lead.m.pos;
+        q.goal = dest;
+        q.mask = lead.lp.mask;
+        q.clearance_radius = lead.d.radius > kCellSize && !lead.d.team_container ? lead.d.radius : 0.0f;  // as plan_land
+        find_land_path(grid_, regions_, q, sc, test);
+    }
+    if (!test.ok || test.points.size() < 2) return;
+    const size_t np = test.points.size();
+    const V2 d0 = normalize_retail(test.points[1] - test.points[0]);
+    const V2 d1 = normalize_retail(test.points[np - 1] - test.points[np - 2]);
+    if (!(length_sq(d1) > 0.0f)) return;
+    const V2 axis = order.facing_deg != kNoFacing ? dir_from_deg(order.facing_deg) : d1;
+    const float cphi = length_sq(d0) > 0.0f ? dot(d0, d1) : 1.0f, sphi = length_sq(d0) > 0.0f ? cross(d0, d1) : 0.0f;
+    const int32_t comp = regions_.component_at(lead.slot, world_to_cell(dest.x), world_to_cell(dest.y));
+    const bool several = ord.size() > 1;
+    constexpr float kC = 0.70710678f;
+    static constexpr V2 kRing[8] = {{1.0f, 0.0f}, {kC, kC}, {0.0f, 1.0f}, {-kC, kC}, {-1.0f, 0.0f}, {-kC, -kC}, {0.0f, -1.0f}, {kC, -kC}};
+    std::vector<FootRect> taken;
+    std::vector<V2> centres(ord.size());
+    for (uint32_t n = 0; n <= 40; ++n) {
+        V2 dn = dest;
+        if (n > 0) {
+            dn = dest + kRing[n % 8u] * (20.0f * static_cast<float>((n + 7u) / 8u));
+            const int32_t cx = world_to_cell(dn.x), cy = world_to_cell(dn.y);
+            if (!grid_.passable_cell(cx, cy, lead.lp.mask) || regions_.component_at(lead.slot, cx, cy) != comp) continue;
+            if (!line_passable(grid_, dest, dn, lead.lp.mask)) {
+                LandPathRequest q;
+                q.start = dest;
+                q.goal = dn;
+                q.mask = lead.lp.mask;
+                q.snap_goal = false;
+                LandPath lp;
+                find_land_path(grid_, regions_, q, sc, lp);
+                if (!lp.ok || path_length(lp.points) > 1.8f * distance(dest, dn)) continue;
+            }
+        }
+        taken.clear();
+        bool ok = true;
+        for (size_t r = 0; r < ord.size() && ok; ++r) {
+            const LandForm& lf = forms[ord[r]];
+            V2 v = d1 * -1.0f;
+            if (several) {
+                const V2 off = lf.centroid - group_c;
+                const V2 rot = normalize_retail(V2{off.x * cphi - off.y * sphi, off.x * sphi + off.y * cphi});
+                if (length_sq(rot) > 0.0f) v = rot;
+            }
+            ok = place_formation(idx, lf, dn, v, axis, r == 0, several, comp, taken, centres[r]);
+        }
+        if (!ok) continue;
+        for (size_t r = 0; r < ord.size(); ++r) {
+            forms[ord[r]].centre = centres[r];
+            forms[ord[r]].checked = true;  // s78n t20 F5
+        }
+        return;
+    }
+}
+
+// 0x43d6a0, one formation: S = BetweenFormationSpacing, E = the destination query extension; (HX, HY) = the half extents
+// of the union of its members' slot rectangles (slot +- the member's footprint half extents 0x396850; a lone squad
+// container: its joint slot box); R = the rectangle (HX + S, HY + S) on `axis`. Up to 40 tries (destination_try_offset).
+// A try is rejected when: several formations and R contains Dn; R overlaps a rectangle taken in this pass; its centre
+// cell or R is impassable ([port] R's corners; this sets "impassable ground met"); after that, it is not zone-connected
+// to D or its path from Dn is > 1.8 x the straight line; or the object test fails. Object test: the layer objects in R
+// grown by E, without the order's own units and, for a formation that is all Infantry / Bike or all Giant and not all
+// squad containers, without single Infantry-class units; no owner test and no moving test. Each counts where it is
+// going - its footprint at the end of its path with the final direction when it has one - and is a blocker when a member's
+// slot rectangle (its half extents + S) overlaps it, the two classes interact and the member cannot crush it. Rejected
+// iff the sum of the blockers' hx x hy > 0.15 x (HX + S)(HY + S). Accepted: `centre` and R joins the taken list.
+// [port] the union box is centred where the slots put it (the port's layout is not centred on the destination).
+bool MovementSystem::place_formation(const std::vector<uint32_t>& idx, const LandForm& f, V2 dn, V2 v, V2 axis, bool first,
+                                     bool several, int32_t comp, std::vector<FootRect>& taken, V2& centre) const {
+    const float sp = cfg_.constants.between_formation_spacing, ext = cfg_.constants.destination_query_extension;
+    const Unit& lead = units_[idx[f.members[0]]];
+    float x0 = 3.0e38f, x1 = -3.0e38f, y0 = 3.0e38f, y1 = -3.0e38f;
+    bool all_inf = true, all_giant = true, all_containers = true;
+    // s78n t20 F8 [port]: the slots are laid along the layout's forward axis f.fwd, R along `axis`: each slot rectangle's
+    // centre and extents are taken in the axis frame (the same box when the two agree)
+    const V2 right = formation_right(axis);
+    const float ca = std::fabs(dot(f.fwd, axis)), sa = std::fabs(dot(f.fwd, right));
+    for (const Slot& s : f.slots) {
+        const Unit& m = units_[idx[s.member]];
+        const V2 h = foot_half(m);
+        const V2 off = slot_world(V2{}, f.fwd, s);
+        const float ox = dot(off, axis), oy = dot(off, right), ex = ca * h.x + sa * h.y, ey = sa * h.x + ca * h.y;
+        x0 = std::min(x0, ox - ex);
+        x1 = std::max(x1, ox + ex);
+        y0 = std::min(y0, oy - ey);
+        y1 = std::max(y1, oy + ey);
+        const int32_t cls = m.d.collision_class;
+        all_inf = all_inf && (cls == kUccInfantry || cls == kUccBike);
+        all_giant = all_giant && cls == kUccGiantVehicle;
+        all_containers = all_containers && m.d.team_container;
+    }
+    if (f.slots.empty()) return false;
+    const float hx = 0.5f * (x1 - x0) + sp, hy = 0.5f * (y1 - y0) + sp;
+    const V2 box_off = axis * (0.5f * (x1 + x0)) + right * (0.5f * (y1 + y0));
+    const float m_side = std::min(hx, hy);
+    const bool skip_infantry = (all_inf || all_giant) && !all_containers;
+    const auto inside = [](const FootRect& r, V2 p) {
+        const V2 d = p - r.c;
+        return std::fabs(dot(d, r.a)) <= r.hx && std::fabs(dot(d, perp_left(r.a))) <= r.hy;
+    };
+    std::vector<uint32_t> cand;
+    LandPathScratch sc;
+    bool blocked_seen = false;
+    for (uint32_t k = 0; k < 40; ++k) {
+        const V2 c = dn + destination_try_offset(k, first && !blocked_seen, v, m_side);
+        const FootRect rect{c + box_off, axis, hx, hy, false};
+        if (several && inside(rect, dn)) continue;
+        bool hit = false;
+        for (const FootRect& t : taken) hit = hit || foot_overlap(rect, t);
+        if (hit) continue;
+        bool pass = grid_.passable_world(c, lead.lp.mask) && grid_.passable_world(rect.c, lead.lp.mask);
+        const V2 b = perp_left(axis);
+        for (int corner = 0; corner < 4 && pass; ++corner) {
+            const V2 p = rect.c + axis * ((corner & 1) ? hx : -hx) + b * ((corner & 2) ? hy : -hy);
+            pass = grid_.passable_world(p, lead.lp.mask);
+        }
+        if (!pass) {
+            blocked_seen = true;
+            continue;
+        }
+        if (blocked_seen) {
+            if (regions_.component_at(lead.slot, world_to_cell(c.x), world_to_cell(c.y)) != comp) continue;
+            if (!line_passable(grid_, dn, c, lead.lp.mask)) {
+                LandPathRequest q;
+                q.start = dn;
+                q.goal = c;
+                q.mask = lead.lp.mask;
+                q.snap_goal = false;
+                LandPath lp;
+                find_land_path(grid_, regions_, q, sc, lp);
+                if (!lp.ok || path_length(lp.points) > 1.8f * distance(dn, c)) continue;
+            }
+        }
+        // ---- the object test
+        layer_box_query(rect.c, std::sqrt(hx * hx + hy * hy) + ext, cand);
+        float sum = 0.0f;
+        for (uint32_t ci : cand) {
+            if (std::find(idx.begin(), idx.end(), ci) != idx.end()) continue;  // the order's own units
+            const Unit& o = units_[ci];
+            if (skip_infantry && o.d.collision_class == kUccInfantry && !o.d.team_container) continue;
+            // where it is going (0x43a7f0): the end of its path with the final direction when it has a path
+            FootRect ro = foot_of(o);
+            V2 end = o.m.pos, dir{};
+            bool has_path = false;
+            if (o.has_goal) {
+                has_path = true;
+                end = o.goal;
+                const size_t n = o.m.path.size();
+                dir = !o.need_path && n >= 2 ? o.m.path[n - 1] - o.m.path[n - 2] : o.goal - o.m.pos;
+            } else if (o.pushed && o.push_path.size() >= 2) {
+                has_path = true;
+                const size_t n = o.push_path.size();
+                end = o.push_path[n - 1];
+                dir = o.push_path[n - 1] - o.push_path[n - 2];
+            }
+            if (has_path) {
+                ro.c = end;
+                const V2 dnorm = normalize_retail(dir);
+                if (length_sq(dnorm) > 0.0f) ro.a = dnorm;
+            }
+            bool blocker = false;
+            for (const Slot& s : f.slots) {
+                const Unit& m = units_[idx[s.member]];
+                if (!collision_classes_interact(m.d.collision_class, o.d.collision_class) || crushes(m, o)) continue;
+                const V2 h = foot_half(m);
+                const FootRect mr{slot_world(c, f.fwd, s), f.fwd, h.x + sp, h.y + sp, false};
+                if (foot_overlap(mr, ro)) {
+                    blocker = true;
+                    break;
+                }
+            }
+            if (blocker) {
+                const V2 h = foot_half(o);
+                sum += h.x * h.y;
+            }
+        }
+        if (sum > 0.15f * hx * hy) continue;
+        centre = c;
+        taken.push_back(rect);
+        return true;
+    }
+    return false;
+}
+
+float MovementSystem::collision_radius(ObjectId id) const {
+    const Unit* u = unit_ptr(id);
+    return u ? steer_radius(*u) : 0.0f;
 }
 
 void MovementSystem::move_space(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
@@ -891,8 +1126,9 @@ void MovementSystem::stop(std::span<const ObjectId> ids) {
         u->m.next = 0;
         u->m.speed = 0.0f;
         u->m.state = LocoState::WalkStopped;
-        u->detour_seq = kNoDetour;  // s78n t18: the path stack is cleared
-        u->around.clear();
+        u->around.clear();  // s78n t18: the path stack is cleared
+        u->form_id = 0;     // s78n t20: it leaves its formation
+        u->self_arrive = false;
         u->coast = u->fturn = u->path_started = false;  // s78n t18 (0x5ad320): state 0x16, the speed zeroed at once
         u->exit_host = -1;  // s78n t18 [port]: Stop counts as the unit's next order for the garrison-host gate
         end_push(*u);  // a1k t03 [port]: a stop ends a pushed move
@@ -940,8 +1176,9 @@ bool MovementSystem::teleport(ObjectId id, V2 pos, float z, float yaw_deg, uint3
     u->blocked_frames = 0;
     u->hold_until = 0;
     u->nudge_frames = 0;
-    u->detour_seq = kNoDetour;  // s78n t18
-    u->around.clear();
+    u->around.clear();  // s78n t18
+    u->form_id = 0;     // s78n t20
+    u->self_arrive = false;
     if (cfg_.mode == MoveMode::Land) u->path_change = frame;
     u->coast = u->fturn = u->path_started = false;
     end_push(*u);  // a1k t03 [port]: a teleport ends a pushed move
@@ -1095,8 +1332,28 @@ bool MovementSystem::air_request(ObjectId id, uint32_t frame, SpaceRequest& out)
 
 void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
     std::vector<uint32_t> req;
-    for (uint32_t i = 0; i < units_.size(); ++i)
-        if (units_[i].need_path && frame >= units_[i].start_frame) req.push_back(i);
+    for (uint32_t i = 0; i < units_.size(); ++i) {
+        Unit& u = units_[i];
+        if (!u.need_path || frame < u.start_frame) continue;
+        // s78n t20 (MOVEMENT §4.3.1 item 6, the plan 0x41c1a0): a one-member formation whose goal lies inside its own
+        // footprint radius 0x3969f0 (2-D) signals "arrived" and stops: a unit ordered onto its own footprint does not move
+        if (u.self_arrive && !is_air(u) && u.d.locomotor == LocomotorKind::Default && distance(u.m.pos, u.self_goal) < foot_radius(u)) {
+            u.need_path = false;
+            u.has_goal = false;
+            u.arrived = true;
+            u.m.path.clear();
+            u.m.next = 0;
+            u.around.clear();
+            u.path_change = frame;
+            u.exit_host = -1;
+            if (!u.d.team_container) {  // (a moving container brakes to a stop at its rate, team_walk)
+                u.m.speed = 0.0f;
+                u.m.state = LocoState::WalkStopped;
+            }
+            continue;
+        }
+        req.push_back(i);
+    }
     if (req.empty()) return;
     std::vector<LandPath> out(req.size());
     std::vector<SpacePath> air_out(req.size());  // §4.3-4.6: timed paths of land air units
@@ -1133,8 +1390,7 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
         Unit& u = units_[req[r]];
         u.need_path = false;
         ++stats_.paths_planned;
-        u.detour_seq = kNoDetour;  // s78n t18: a new path (pack +0x288 := NOW); no detour, planned around nobody
-        u.around.clear();
+        u.around.clear();  // s78n t18: a new path (pack +0x288 := NOW), planned around nobody
         u.path_change = frame;
         if (is_air(u)) {
             if (air_out[r].fallback) ++stats_.space_fallbacks;
@@ -1197,7 +1453,8 @@ void MovementSystem::land_candidates(size_t ai, std::vector<uint32_t>& out) cons
     std::erase(out, static_cast<uint32_t>(ai));
 }
 
-// "Moving" for the checking unit (it has started its order) and for the other participant (as the pre-layer port).
+// [port] "Moving" as the port read it before s78n t20 (the checker has started its order; the other participant has an
+// order path): kept only for the MovingVsMoving stand-in of pairs that are not two Infantry / Bike movers.
 bool MovementSystem::checker_moving(const Unit& u, uint32_t frame) const {
     return u.has_goal && !u.need_path && u.m.next < u.m.path.size() && frame >= u.start_frame;
 }
@@ -1212,12 +1469,14 @@ bool MovementSystem::mvm_contact(const Unit& a, const Unit& b) const {
     const float fps_t = 30.0f * cfg_.constants.moving_vs_moving_look_ahead_time;
     int32_t frames = static_cast<int32_t>(fps_t);
     if ((crushes(a, b) && scatters(b)) || (crushes(b, a) && scatters(a))) frames += 45;
-    const auto track = [this](const Unit& u) {
+    std::vector<V2> sa, sb;
+    const auto track = [this](const Unit& u, std::vector<V2>& scratch) {
         FootTrack t;
         t.pos = u.m.pos;
         t.yaw = u.m.yaw;
-        t.path = u.m.path;
-        t.next = u.m.next;
+        const StackPoly sp = stack_poly(u, scratch);  // s78n t20: along the path stack
+        t.path = sp.pts;
+        t.next = sp.next;
         t.speed = u.m.speed;
         t.max_speed = u.d.team_container && u.team_cap < kInf ? u.team_cap : u.lp.max_speed;
         const V2 h = foot_half(u);
@@ -1225,7 +1484,7 @@ bool MovementSystem::mvm_contact(const Unit& a, const Unit& b) const {
         t.hy = h.y;
         return t;
     };
-    return foot_moving_contact(track(a), track(b), frames);
+    return foot_moving_contact(track(a, sa), track(b, sb), frames);
 }
 
 // MovingVsStopped contact: distance along a's remaining path to touching b within the look-ahead, or -1. s78n t14 part B
@@ -1247,21 +1506,23 @@ float MovementSystem::mvs_look_distance(const Unit& a, const Unit& b) const {
     return vmax * secs * 30.0f;
 }
 
-float MovementSystem::mvs_contact(const Unit& a, const Unit& b, uint32_t frame) const {
-    if (!checker_moving(a, frame)) return -1.0f;
+float MovementSystem::mvs_contact(const Unit& a, const Unit& b) const {
+    if (!unit_moving(a)) return -1.0f;
     // Gates (MOVEMENT §5.3): garrison host either side; a raised mover takes only a raised obstacle
     if (pair_gated(a, b) || (raised(a) && !raised(b))) return -1.0f;
     const float look = mvs_look_distance(a, b);
-    if (!(look > 0.0f) || a.m.next >= a.m.path.size()) return -1.0f;
+    std::vector<V2> scratch;
+    const StackPoly sp = stack_poly(a, scratch);  // s78n t20: the path stack (the top record, then the order path)
+    if (!(look > 0.0f) || sp.next >= sp.pts.size()) return -1.0f;
     V2 ha = foot_half(a);
     float turn_yaw = kNoFacing;
     if (a.m.state == LocoState::WalkStartTurn) {
-        const float err = std::fabs(wrap_deg(heading_deg(a.m.path[a.m.next] - a.m.pos) - a.m.yaw));
+        const float err = std::fabs(wrap_deg(heading_deg(sp.pts[sp.next] - a.m.pos) - a.m.yaw));
         const float k = std::clamp(err / 90.0f, 0.0f, 1.0f), mx = std::max(ha.x, ha.y);
         ha = {ha.x + (mx - ha.x) * k, ha.y + (mx - ha.y) * k};
         turn_yaw = a.m.yaw;
     }
-    return foot_path_contact(a.m.pos, a.m.path, a.m.next, ha, foot_of(b), look, turn_yaw);
+    return foot_path_contact(a.m.pos, sp.pts, sp.next, ha, foot_of(b), look, turn_yaw);
 }
 
 // StoppedVsStopped contact 0x686500 (MOVEMENT §5.3 / §5.3.1 item 1): the garrison-host gate (no hover test), then the
@@ -1283,9 +1544,8 @@ bool MovementSystem::collision_applies(const CollisionObject& c, uint32_t frame)
         case CollisionKind::MovingVsMoving:
             return !drives_through(a, b) && checker_moving(a, frame) && other_moving(b) && mvm_contact(a, b);
         case CollisionKind::MovingVsStopped:
-            return !drives_through(a, b) && checker_moving(a, frame) && !other_moving(b) && mvs_contact(a, b, frame) >= 0.0f;
-        case CollisionKind::StoppedVsStopped:
-            return !a.has_goal && !b.has_goal && !a.pushed && !b.pushed && svs_overlap(a, b);
+            return !drives_through(a, b) && checker_moving(a, frame) && !other_moving(b) && mvs_contact(a, b) >= 0.0f;
+        case CollisionKind::StoppedVsStopped: return true;  // (ends by its state: collision_valid)
     }
     return false;
 }
@@ -1307,32 +1567,40 @@ void MovementSystem::detect_collisions(uint32_t frame) {
         a.check_countdown = static_cast<int32_t>(k.frames_per_collision_check) - 1;
         ++stats_.collision_checks;
         land_candidates(ai, cand);
-        // [port] a unit walking a pushed path runs no checks of its own (the push search leaves its spot unoccupied)
-        if (checker_moving(a, frame) && !a.pushed) {
+        // s78n t20 (MOVEMENT §5.2 item 7): the pair is classified from "Moving" alone (unit_moving: no order test) - a
+        // unit on a pushed path, a StoppedVsStopped path or a detour is a checker and the moving side
+        if (unit_moving(a)) {
             for (uint32_t bi : cand) {
                 const Unit& b = units_[bi];
                 // (the candidates are layer objects: FIGHTER_FLYING §7.8, a squad member is never one)
                 if (!collision_classes_interact(a.d.collision_class, b.d.collision_class)) continue;
-                // OI tactical: a crusher drives through units it can crush (§5.4 case 3 "push/crush attempt" [port]);
-                // the crush pass (§5.5) kills them. s78n t14 part B: not through a squad container (it is pushed).
-                if (drives_through(a, b)) continue;
                 if (coll_.has_pair(a.d.id, b.d.id)) continue;
                 CollisionKind kind = CollisionKind::MovingVsMoving;
-                if (other_moving(b)) {
+                if (unit_moving(b)) {
+                    // [port] until the retail states of pairs that are not two Infantry / Bike movers are ported
+                    // (MOVEMENT §5.4.6): such a pair gets its stand-in record only under the older predicates (both walk
+                    // an order path, the checker no pushed one), and a crusher takes none with a single unit it crushes
+                    if (!mvm_infantry_pair(a, b) &&
+                        (drives_through(a, b) || a.pushed || !checker_moving(a, frame) || !other_moving(b)))
+                        continue;
                     if (!mvm_contact(a, b)) continue;
                     kind = CollisionKind::MovingVsMoving;
                 } else {
-                    if (mvs_contact(a, b, frame) < 0.0f) continue;
+                    // s78n t20 (MOVEMENT §5.4.5 item 4): a crusher takes a record with a standing unit it crushes like any
+                    // pair (the detection has no crush test; the look-ahead adds 1.5 s when the victim scatters). The
+                    // decision pushes a scattering victim once (a crush-flee path), then - or otherwise - the crusher
+                    // drives on at full speed (state 4); the crush pass (§5.5) kills what it runs over.
+                    if (mvs_contact(a, b) < 0.0f) continue;
                     kind = CollisionKind::MovingVsStopped;
                 }
                 coll_.add(kind, a.d.id, b.d.id, frame);
                 ++stats_.collisions_created;
             }
-        } else if (!a.has_goal && !a.pushed) {
+        } else {
             for (uint32_t bi : cand) {
                 const Unit& b = units_[bi];
-                // a1k t03: a pushed unit's locomotor moves, so it is not stopped.
-                if (b.has_goal || b.pushed || !collision_classes_interact(a.d.collision_class, b.d.collision_class)) continue;
+                // a moving candidate is skipped: its own iteration finds the pair
+                if (unit_moving(b) || !collision_classes_interact(a.d.collision_class, b.d.collision_class)) continue;
                 // s78n t18 (MOVEMENT §5.3.1 item 1, 0x686500): the overlap coefficient of the two footprint rectangles
                 if (!svs_overlap(a, b)) continue;
                 if (coll_.has_pair(a.d.id, b.d.id)) continue;
@@ -1344,12 +1612,13 @@ void MovementSystem::detect_collisions(uint32_t frame) {
 }
 
 // Driver 0x50a780 (MOVEMENT §5.4.1): every record is serviced every frame. Validity first: a record whose participants
-// are gone or left the layer is dropped. Then, in priority order ([port] one sorted pass over all records; retail services
-// the decided MovingVsMoving / StoppedVsStopped records in creation order before the sorted ones), each record's state
-// service - a state-None record is decided only while the dynamic pathfinder's quota allows, else it waits. Last, the
+// are gone or left the layer is dropped. Then (s78n t20) the records that do not take the quota pass - the decided
+// MovingVsMoving ones and every StoppedVsStopped - are serviced in creation order; then the others in priority order, each
+// record's state service - a state-None record is decided only while the dynamic pathfinder's quota allows, else it
+// waits. `rng` = the battle's synced stream ([port] no draw yet: the MovingVsMoving retry draws of §5.4.6 are not ported). Last, the
 // records' speed answers (vf +0x40, 0x509ea0) are folded per unit in list order: the lowest speed, and the "at once" flag
 // of the last record that writes one (MovingVsStopped, and MovingVsMoving of two Infantry / Bike movers).
-void MovementSystem::drive_collisions(uint32_t frame) {
+void MovementSystem::drive_collisions(uint32_t frame, SimRng& rng) {
     // [port] The MovingVsMoving stand-in of the other pairs re-applies its speed slaving on each unit's check frames.
     const int32_t check_phase = static_cast<int32_t>(cfg_.constants.frames_per_collision_check) - 1;
     for (Unit& u : units_) {
@@ -1357,12 +1626,16 @@ void MovementSystem::drive_collisions(uint32_t frame) {
         u.coll_speed = kInf;
         u.coll_now = false;
     }
-    // Per unit this frame: 2 = pushed by a StoppedVsStopped collision.
-    std::vector<uint8_t> acted(units_.size(), 0);
     const float half = 0.5f * kCollisionCrowdBox;
     std::vector<uint32_t> crowd;
     coll_.run(
         frame, [&](CollisionObject& c) { return collision_valid(c, frame); },
+        // vf +0x50 "takes the quota pass": MovingVsStopped always, MovingVsMoving only undecided (the stand-in's records
+        // stay undecided), StoppedVsStopped never
+        [](const CollisionObject& c) {
+            return c.kind == CollisionKind::MovingVsStopped ||
+                   (c.kind == CollisionKind::MovingVsMoving && c.state == CollisionState::Active);
+        },
         [&](const CollisionObject& c) {
             // 5 x the land object-grid objects in the 160 x 160 box on the participants' XY midpoint (s78n t18: the
             // layer-0x10 box query - a squad counts once, as its container; both participants count). The keep pass
@@ -1372,9 +1645,14 @@ void MovementSystem::drive_collisions(uint32_t frame) {
             return static_cast<uint32_t>(crowd.size());
         },
         [&] { return quota_used_ < cfg_.constants.dynamic_land_complexity_quota; },
-        [&](CollisionObject& c, bool full) { resolve_collision(c, full, frame, acted); });
+        [&](CollisionObject& c, bool full) { resolve_collision(c, full, frame, rng); });
     stats_.collisions_cancelled += coll_.last_cancelled();
     stats_.collisions_resolved += coll_.last_resolved();
+    // s78n t20 F6: the early arrival (resolve, record removed) set its mover's "at once" flag directly; [port] it is kept
+    // through the fold below (before, the flag of any later record of that unit overwrote it)
+    std::vector<uint32_t> early_now;
+    for (uint32_t i = 0; i < units_.size(); ++i)
+        if (units_[i].coll_now) early_now.push_back(i);
     for (const CollisionObject& c : coll_.list()) {
         Unit* a = unit_ptr(c.a);
         Unit* b = unit_ptr(c.b);
@@ -1386,6 +1664,7 @@ void MovementSystem::drive_collisions(uint32_t frame) {
         b->coll_speed = std::min(b->coll_speed, c.speed_b);
         b->coll_now = c.now_b;
     }
+    for (const uint32_t i : early_now) units_[i].coll_now = true;
 }
 
 // [port] MovingVsMoving stand-in for pairs that are not two Infantry / Bike movers (the retail states of such pairs,
@@ -1411,12 +1690,10 @@ void MovementSystem::mvm_response(Unit& x, const Unit& y, uint32_t frame) {
     }
 }
 
-void MovementSystem::resolve_collision(CollisionObject& c, bool full, uint32_t frame, std::vector<uint8_t>& acted) {
+void MovementSystem::resolve_collision(CollisionObject& c, bool full, uint32_t frame, SimRng& rng) {
     const MovementConstants& k = cfg_.constants;
-    const size_t ai = static_cast<size_t>(find(c.a));
-    Unit& a = units_[ai];
-    const uint32_t bi = static_cast<uint32_t>(find(c.b));
-    Unit& b = units_[bi];
+    Unit& a = units_[static_cast<size_t>(find(c.a))];
+    Unit& b = units_[static_cast<size_t>(find(c.b))];
     c.speed_a = c.speed_b = kInf;  // each service answers anew (0x67f080): max speed, no flag
     c.now_a = c.now_b = false;
     // check_countdown value right after a unit's collision check this frame (detect_collisions).
@@ -1431,11 +1708,11 @@ void MovementSystem::resolve_collision(CollisionObject& c, bool full, uint32_t f
             Unit* cr = b.d.team_container && crushes(a, b) ? &a : a.d.team_container && crushes(b, a) ? &b : nullptr;
             if (cr) {
                 Unit& sq = cr == &a ? b : a;
-                if (cr->check_countdown == check_phase) (void)push_aside(*cr, sq, scatters(sq), frame);
+                if (cr->check_countdown == check_phase) (void)push_aside(c, *cr, sq, scatters(sq), frame);
                 return;
             }
             if (mvm_infantry_pair(a, b)) {  // s78n t18 (MOVEMENT §5.4.2): the retail states
-                mvm_service(c, a, b, full, frame);
+                mvm_service(c, a, b, full, frame, rng);
                 return;
             }
             // [port] one object per pair: each participant responds from its own side (its own contact test) on its
@@ -1450,45 +1727,26 @@ void MovementSystem::resolve_collision(CollisionObject& c, bool full, uint32_t f
         case CollisionKind::MovingVsStopped:
             mvs_service(c, a, b, full, frame);  // s78n t18 (MOVEMENT §5.4.1)
             return;
-        case CollisionKind::StoppedVsStopped: {
-            // [port] each participant is pushed apart on its own collision-check frames (one push per
-            // FramesPerCollisionCheck frames, as the pre-layer port nudged each unit from its own check), at most once
-            // per frame across its collisions. (Retail walks one of them to a free spot: 0x687720, not ported.)
-            const bool push_a = !(acted[ai] & 2u) && a.check_countdown == check_phase;
-            const bool push_b = !(acted[bi] & 2u) && b.check_countdown == check_phase;
-            if (!push_a && !push_b) return;
-            const V2 pa = a.m.pos, pb = b.m.pos;
-            const float step = std::min(2.0f, std::max(0.5f, 0.5f * (a.d.radius + b.d.radius - distance(pa, pb))));
-            V2 away_a = pa - pb;
-            if (length_sq(away_a) == 0.0f) away_a = a.d.id < b.d.id ? V2{-1.0f, 0.0f} : V2{1.0f, 0.0f};
-            V2 away_b = pb - pa;
-            if (length_sq(away_b) == 0.0f) away_b = b.d.id < a.d.id ? V2{-1.0f, 0.0f} : V2{1.0f, 0.0f};
-            if (push_a) {
-                acted[ai] |= 2u;
-                if (try_nudge(a.m, normalize_retail(away_a) * step, a.lp.mask, &grid_)) update_tree(a);
-            }
-            if (push_b) {
-                acted[bi] |= 2u;
-                if (try_nudge(b.m, normalize_retail(away_b) * step, b.lp.mask, &grid_)) update_tree(b);
-            }
+        case CollisionKind::StoppedVsStopped:
+            svs_service(c, a, b, frame);  // s78n t20 (MOVEMENT §5.4.3)
             return;
-        }
     }
 }
 
 // ---- s78n t18 (MOVEMENT §5.4.1 / §5.4.2): record life, the MovingVsStopped decision and the MovingVsMoving states ----
 
-// A record is kept while both participants are layer objects; a MovingVsStopped record then ends only by its state, a
-// MovingVsMoving record of two Infantry / Bike movers also the frame either has neither speed nor path (validity
-// 0x680650). The other kinds ([port] stand-ins) keep the older test: the classification still holds.
+// A record is kept while both participants are layer objects; a MovingVsStopped or StoppedVsStopped record then ends only
+// by its state, a MovingVsMoving record of two Infantry / Bike movers also the frame either has neither speed nor path
+// (validity 0x680650). The MovingVsMoving records of the other pairs ([port] a stand-in) keep the older test: the
+// classification still holds.
 bool MovementSystem::collision_valid(const CollisionObject& c, uint32_t frame) const {
     const int32_t ia = find(c.a), ib = find(c.b);
     if (ia < 0 || ib < 0) return false;
     const Unit& a = units_[static_cast<size_t>(ia)];
     const Unit& b = units_[static_cast<size_t>(ib)];
     if (!land_layer_object(a) || !land_layer_object(b)) return false;
-    if (c.kind == CollisionKind::MovingVsStopped) return true;
-    if (c.kind == CollisionKind::MovingVsMoving && mvm_infantry_pair(a, b)) return unit_moving(a, frame) && unit_moving(b, frame);
+    if (c.kind == CollisionKind::MovingVsStopped || c.kind == CollisionKind::StoppedVsStopped) return true;  // by their states
+    if (c.kind == CollisionKind::MovingVsMoving && mvm_infantry_pair(a, b)) return unit_moving(a) && unit_moving(b);
     return collision_applies(c, frame);
 }
 
@@ -1497,9 +1755,138 @@ bool MovementSystem::mvm_infantry_pair(const Unit& a, const Unit& b) const {
     return inf(a) && inf(b);
 }
 
-bool MovementSystem::unit_moving(const Unit& u, uint32_t frame) const {
-    // vf +0x1a8 (speed > 0 or a path on its stack) or vf +0x1b0 (turning in place, which the port's walk does on a path)
-    return u.m.speed > 0.0f || u.pushed || (u.has_goal && frame >= u.start_frame);
+bool MovementSystem::unit_moving(const Unit& u) const {
+    // vf +0x1a8 0x42cc60: not suspended (pack +0x260; the port's speed factor 0) and (speed > 0 or a path record on its
+    // stack); vf +0x1b0 0x42cd30: not suspended and turning in place (the start turn, the arrival turn, a container's
+    // final-facing turn)
+    if (!(u.speed_factor > 0.0f)) return false;
+    return u.m.speed > 0.0f || u.pushed || (u.has_goal && !u.need_path) || u.m.state == LocoState::WalkStartTurn ||
+           u.aturn != LocoState::None || u.fturn;
+}
+
+// ---- s78n t20 (MOVEMENT §1.5.1 item 5): the collision-owned record on top of the path stack ----
+namespace {
+uint8_t record_weight(CollisionKind k) {  // vf +0x30
+    return k == CollisionKind::MovingVsMoving ? uint8_t{1} : k == CollisionKind::MovingVsStopped ? uint8_t{2} : uint8_t{3};
+}
+}  // namespace
+
+bool MovementSystem::claim(Unit& u, const CollisionObject& c, bool force, uint32_t frame) {
+    const bool other = u.pushed && u.push_owner != kNoDetour && u.push_owner != c.seq;
+    if (other && !force && !(record_weight(c.kind) > u.push_weight)) return false;
+    if (other) {  // 0x559410: a claim by a new owner removes every collision-owned record of the unit
+        end_push(u);
+        u.around.clear();
+        u.path_change = frame;
+    }
+    return true;
+}
+
+void MovementSystem::push_top(Unit& u, std::vector<V2> path, uint8_t kind, bool flee, const CollisionObject& c, uint32_t frame) {
+    end_push(u);
+    u.pushed = true;
+    u.push_kind = kind;
+    u.push_flee = flee;  // kind 7 (a crush-flee path), else kind 4
+    u.push_owner = c.seq;
+    u.push_weight = record_weight(c.kind);
+    u.push_path = std::move(path);
+    u.push_next = 1;
+    u.around.clear();
+    u.nudge_frames = 0;
+    u.path_change = frame;  // s78n t18: pack +0x288 (a path record is pushed on its stack)
+    if (u.d.team_container) {
+        // s78n t14 (FIGHTER_FLYING §7.2 caller 4, 0x5ad140): a squad container's path that is not a formation path and
+        // has >= 2 points re-lays toward wp1 - wp0. s78n t18 (MOVEMENT §5.4.1 "Push"): the path is marked started - a
+        // standing container starts it at once, a moving one walks on along it (no braking coast, no arrival braking
+        // carried over from the path below)
+        if (u.push_path.size() >= 2) u.relay.push_back(u.push_path[1] - u.push_path[0]);
+        u.coast = false;
+        if (u.m.state == LocoState::WalkEndMove) u.m.state = LocoState::WalkMoving;
+        else if (u.m.state != LocoState::WalkMoving) u.m.state = LocoState::WalkStopped;
+    }
+}
+
+bool MovementSystem::pop_top(Unit& u, bool walked, uint32_t frame) {
+    const uint8_t kind = u.push_kind;
+    const uint32_t resume = u.push_resume;
+    end_push(u);
+    u.around.clear();
+    u.path_change = frame;  // s78n t18: the record is popped (pack +0x288)
+    LandMotion& m = u.m;
+    const size_t n = m.path.size();
+    if (!walked || !u.has_goal || u.need_path || n < 2 || m.next >= n) return false;
+    // A detour rejoins the order path on the segment that ends at `resume` (the path size: it ended past the path end).
+    if (kind == 2) m.next = std::max(m.next, std::min(resume, static_cast<uint32_t>(n)));
+    if (m.next == 0) m.next = 1;
+    // 0x620820: the waypoint index steps past every waypoint line the unit has already crossed (the line through the
+    // waypoint, normal = the bisector of its two segments; the last waypoint: its segment's direction)
+    while (static_cast<size_t>(m.next) + 1 < n) {
+        const V2 w = m.path[m.next];
+        const V2 nrm = normalize_retail(normalize_retail(w - m.path[m.next - 1]) + normalize_retail(m.path[m.next + 1] - w));
+        if (!(length_sq(nrm) > 0.0f) || dot(m.pos - w, nrm) < 0.0f) break;
+        ++m.next;
+    }
+    if (static_cast<size_t>(m.next) + 1 == n) {
+        const V2 nrm = normalize_retail(m.path[n - 1] - m.path[n - 2]);
+        if (length_sq(nrm) > 0.0f && dot(m.pos - m.path[n - 1], nrm) >= 0.0f) m.next = static_cast<uint32_t>(n);
+    }
+    return m.next >= n;
+}
+
+MovementSystem::StackPoly MovementSystem::stack_poly(const Unit& u, std::vector<V2>& scratch) const {
+    const bool order = u.has_goal && !u.need_path && u.m.next < u.m.path.size();
+    if (!u.pushed) return {u.m.path, order ? u.m.next : static_cast<uint32_t>(u.m.path.size())};
+    scratch.clear();
+    for (size_t i = u.push_next; i < u.push_path.size(); ++i) scratch.push_back(u.push_path[i]);
+    if (order) {
+        size_t from = u.m.next;
+        if (u.push_kind == 2) from = std::max(from, static_cast<size_t>(u.push_resume));
+        for (size_t i = from; i < u.m.path.size(); ++i) scratch.push_back(u.m.path[i]);
+    }
+    return {scratch, 0u};
+}
+
+void MovementSystem::stack_points(const Unit& u, std::vector<V2>& out) const {
+    std::vector<V2> scratch;
+    const StackPoly sp = stack_poly(u, scratch);
+    std::vector<V2> pts{u.m.pos};
+    for (size_t i = sp.next; i < sp.pts.size(); ++i)
+        if (!(pts.back() == sp.pts[i])) pts.push_back(sp.pts[i]);
+    out = std::move(pts);
+}
+
+V2 MovementSystem::type_half(const Unit& u) const {
+    if (u.d.type_hx >= 0.0f && u.d.type_hy >= 0.0f) return {u.d.type_hx, u.d.type_hy};
+    if (u.d.hard_x > 0.0f || u.d.hard_y > 0.0f) return {std::max(u.d.hard_x, 0.0f), std::max(u.d.hard_y, 0.0f)};
+    return {u.d.radius, u.d.radius};  // [port] not given and no hard extents: the soft radius
+}
+
+float MovementSystem::half_width(const Unit& u) const { return foot_half(u).y; }
+
+bool MovementSystem::set_collision_info(ObjectId id, const CollisionInfo& info) {
+    Unit* u = unit_ptr(id);
+    if (!u) return false;
+    u->ci = info;
+    return true;
+}
+
+bool MovementSystem::collision_info(ObjectId id, CollisionInfo& out) const {
+    const Unit* u = unit_ptr(id);
+    if (!u) return false;
+    out = u->ci;
+    return true;
+}
+
+std::span<const V2> MovementSystem::top_path(ObjectId id) const {
+    const Unit* u = unit_ptr(id);
+    if (!u || !u->pushed) return {};
+    return u->push_path;
+}
+
+std::span<const HoldTag> MovementSystem::top_tags(ObjectId id) const {
+    const Unit* u = unit_ptr(id);
+    if (!u || !u->pushed) return {};
+    return u->push_tags;
 }
 
 float MovementSystem::walk_max_speed(const Unit& u) const {
@@ -1508,9 +1895,12 @@ float MovementSystem::walk_max_speed(const Unit& u) const {
 }
 
 V2 MovementSystem::wanted_dir(const Unit& u) const {
-    // the locomotor's wanted facing (vf +0x1f8): the direction to its current waypoint, else its facing
-    if (u.has_goal && !u.need_path && u.m.next < u.m.path.size()) {
-        const V2 d = normalize_retail(u.m.path[u.m.next] - u.m.pos);
+    // the locomotor's wanted facing (vf +0x1f8): the direction to its current waypoint (s78n t20: of the top of its path
+    // stack), else its facing
+    std::vector<V2> scratch;
+    const StackPoly sp = stack_poly(u, scratch);
+    if (sp.next < sp.pts.size()) {
+        const V2 d = normalize_retail(sp.pts[sp.next] - u.m.pos);
         if (length_sq(d) > 0.0f) return d;
     }
     return dir_from_deg(u.m.yaw);
@@ -1571,11 +1961,15 @@ float MovementSystem::slave_speed(const Unit& x, const Unit& y, bool& touch) con
 // decided as blocked from its first frame (the port keeps no approximation; its cell paths have many short legs, so "on
 // the last waypoint" would be too narrow).
 bool MovementSystem::near_path_end(const Unit& a, const Unit& b) const {
-    return !a.m.path.empty() && distance(a.m.pos, a.m.path.back()) <= mvs_look_distance(a, b) + foot_radius(a) + foot_radius(b);
+    std::vector<V2> scratch;
+    const StackPoly sp = stack_poly(a, scratch);  // s78n t20: the end of the path stack
+    return sp.next < sp.pts.size() &&
+           distance(a.m.pos, sp.pts.back()) <= mvs_look_distance(a, b) + foot_radius(a) + foot_radius(b);
 }
 
 bool MovementSystem::destination_blocked(const Unit& a, const Unit& b) const {
-    if (a.pushed || a.m.next >= a.m.path.size() || !near_path_end(a, b)) return false;
+    // ([port] a mover on a collision-owned top record never counts as blocked: no cut of such a record)
+    if (a.pushed || !a.has_goal || a.need_path || a.m.next >= a.m.path.size() || !near_path_end(a, b)) return false;
     const V2 e = a.m.path.back();
     const FootRect ra = foot_at(a, e);
     if (foot_overlap(ra, foot_of(b))) return true;
@@ -1583,7 +1977,7 @@ bool MovementSystem::destination_blocked(const Unit& a, const Unit& b) const {
     layer_box_query(e, 0.5f * kCollisionCrowdBox, cand);
     for (uint32_t ci : cand) {
         const Unit& o = units_[ci];
-        if (o.d.id == a.d.id || o.d.id == b.d.id || other_moving(o) || o.pushed || o.m.speed > 0.0f) continue;
+        if (o.d.id == a.d.id || o.d.id == b.d.id || unit_moving(o)) continue;
         if (foot_overlap(ra, foot_of(o))) return true;
     }
     return false;
@@ -1602,139 +1996,457 @@ bool MovementSystem::side_step_ok(const Unit& a, const Unit& b, const CollisionO
     return true;
 }
 
-// Early arrival 0x685e10 + the cut 0x684100: from the path end backwards in steps of 5, the first path point where a's
-// rectangle (hx + 5, hy), turned along the path there, overlaps no standing layer object near the end (nor b); the path is
-// cut by (the length behind that point + 3.0). True when b is at or ahead of the stop point along the path. [port] the
-// spare-point distance limit, the attack-range clause and the cut of the formation members' paths are not modelled.
-bool MovementSystem::early_arrival(Unit& a, const Unit& b, uint32_t frame) {
-    const float total = remaining_length(a.m);
-    const V2 end = a.m.path.back();
-    const V2 ha = foot_half(a);
+// 0x54e780 on a unit's order path (the kind-1 record): its length is reduced by c from its end. A remaining length <= 0:
+// [port] the path ends at the unit's position (it arrives where it stands).
+void MovementSystem::cut_order_path(Unit& u, float c, uint32_t frame) {
+    LandMotion& m = u.m;
+    if (!u.has_goal || u.need_path || m.next == 0 || m.next >= m.path.size()) return;
+    // the record's remaining points from where the unit is on it (under a collision-owned top record: its current waypoint)
+    const V2 from = u.pushed ? m.path[m.next - 1] : m.pos;
+    float total = distance(from, m.path[m.next]);
+    for (size_t i = m.next + 1; i < m.path.size(); ++i) total += distance(m.path[i - 1], m.path[i]);
+    const float keep = total - c;
+    // s78n t20 F7: with nothing left to keep, a unit under a top record stops where it stands (its waypoint behind it
+    // would be a zero-length last segment that the pop's line rule cannot pass, and it would walk back to it)
+    V2 stop = keep > 0.0f ? from : m.pos;
+    size_t seg = m.next;
+    if (keep > 0.0f) {
+        float acc = 0.0f;
+        V2 at = from;
+        for (size_t i = m.next; i < m.path.size(); ++i) {
+            const float l = distance(at, m.path[i]);
+            if (acc + l >= keep) {
+                seg = i;
+                stop = l > 0.0f ? lerp(at, m.path[i], std::clamp((keep - acc) / l, 0.0f, 1.0f)) : at;
+                break;
+            }
+            acc += l;
+            at = m.path[i];
+        }
+    }
+    m.path.resize(seg);
+    m.path.push_back(stop);
+    if (u.pushed && u.push_kind == 2 && u.push_resume > seg) u.push_resume = static_cast<uint32_t>(seg);
+    u.goal = stop;
+    u.path_change = frame;
+}
+
+// Early arrival 0x685e10 with the cut 0x684100 (MOVEMENT §5.4.4; called on the mover's final leg with a blocked
+// destination). A = the mover's path stack from its position (length L, end E). Obstacles: the layer objects whose box
+// meets the 160 x 160 square on E, plus b, without every Moving one (the mover itself drops out as Moving). The box: the
+// mover TYPE's half extents 0x371be0 (a squad container: (0, 0), not its joint slot box) with hx + 5, turned along the path.
+// Scan s = L, L - 5, ..., the last test at s = 0 (its own position): the first point P whose box overlaps no listed
+// footprint (touching counts) and, with a target, lies within the attack range (+ the target's radius) of it. With a
+// spare point v: P farther from E than v -> fail, nothing changed. Else the path is cut by c = (L - s) + 3.0, so it ends
+// 3.0 before P; on a formation path the order paths of the formation's members whose slot is behind a's and within the
+// two half widths sideways are cut by the same c. True iff b is at or ahead of P: (b - P) . n >= -0.001. [port] the cut
+// applies to the order path (destination_blocked refuses a mover on a collision-owned top record); the target's radius is
+// added whenever the host reports a target (the weapon-list test is [M]).
+bool MovementSystem::early_arrival(Unit& a, const Unit& b, bool have_v, V2 v, uint32_t frame) {
+    std::vector<V2> pts;
+    stack_points(a, pts);
+    if (pts.size() < 2) return false;
+    float total = 0.0f;
+    for (size_t i = 1; i < pts.size(); ++i) total += distance(pts[i - 1], pts[i]);
+    const V2 end = pts.back();
+    const V2 th = type_half(a);
     std::vector<uint32_t> cand;
     layer_box_query(end, 0.5f * kCollisionCrowdBox, cand);
-    std::vector<FootRect> blockers{foot_of(b)};
+    std::vector<FootRect> blockers;
+    if (!unit_moving(b)) blockers.push_back(foot_of(b));
     for (uint32_t ci : cand) {
         const Unit& o = units_[ci];
-        if (o.d.id == a.d.id || o.d.id == b.d.id || other_moving(o) || o.pushed || o.m.speed > 0.0f) continue;
+        if (o.d.id == a.d.id || o.d.id == b.d.id || unit_moving(o)) continue;
         blockers.push_back(foot_of(o));
     }
-    const auto dir_at = [&](size_t seg, V2 q) {
-        const size_t i = std::min(seg, a.m.path.size() - 1);
-        const V2 from = i == a.m.next ? a.m.pos : a.m.path[i - 1];
-        V2 t = normalize_retail(a.m.path[i] - from);
-        if (!(length_sq(t) > 0.0f)) t = normalize_retail(q - a.m.pos);
-        return length_sq(t) > 0.0f ? t : dir_from_deg(a.m.yaw);
+    const bool has_target = a.ci.target >= 0;
+    const float range = has_target ? a.ci.attack_range + a.ci.target_radius : 0.0f;
+    // the point of A at arc length s and the unit direction of its segment there
+    const auto at_arc = [&](float s, V2& n) {
+        float acc = 0.0f;
+        for (size_t i = 1; i < pts.size(); ++i) {
+            const float l = distance(pts[i - 1], pts[i]);
+            if (acc + l >= s || i + 1 == pts.size()) {
+                n = normalize_retail(pts[i] - pts[i - 1]);
+                return l > 0.0f ? lerp(pts[i - 1], pts[i], std::clamp((s - acc) / l, 0.0f, 1.0f)) : pts[i - 1];
+            }
+            acc += l;
+        }
+        n = V2{};
+        return pts.back();
     };
-    for (float back = 0.0f; back <= total; back += 5.0f) {
-        size_t seg = 0;
-        const V2 q = point_along(a.m.pos, a.m.path, a.m.next, total - back, seg);
-        const V2 t = dir_at(seg, q);
-        const FootRect box{q, t, ha.x + 5.0f, ha.y, false};
+    for (float s = total;; s = std::max(0.0f, s - 5.0f)) {
+        V2 n{};
+        const V2 p = at_arc(s, n);
+        if (!(length_sq(n) > 0.0f)) n = dir_from_deg(a.m.yaw);
+        const FootRect box{p, n, th.x + 5.0f, th.y, false};
         bool clear = true;
         for (const FootRect& o : blockers) clear = clear && !foot_overlap(box, o);
-        if (!clear) continue;
-        const float keep = std::max(total - back - 3.0f, 0.0f);
-        const V2 stop = point_along(a.m.pos, a.m.path, a.m.next, keep, seg);
-        std::vector<V2> np{a.m.pos};
-        for (size_t i = a.m.next; i < seg && i < a.m.path.size(); ++i)
-            if (!(np.back() == a.m.path[i])) np.push_back(a.m.path[i]);
-        np.push_back(stop);
-        a.m.path = std::move(np);
-        a.m.next = 1;
-        a.m.escape_until = 0;
-        a.goal = stop;
-        a.detour_seq = kNoDetour;
-        a.path_change = frame;
-        return dot(b.m.pos - stop, t) >= 0.0f;
+        if (clear && has_target && distance(p, a.ci.target_pos) > range) clear = false;
+        if (clear) {
+            if (have_v && distance(p, end) > distance(v, end)) return false;  // the spare point is nearer the end
+            const float c = (total - s) + 3.0f;
+            const float ax = a.form_slot.x, ay = a.form_slot.y, hwa = half_width(a);
+            if (a.form_id != 0) {
+                for (Unit& m : units_) {
+                    if (m.form_id != a.form_id || m.d.id == a.d.id) continue;
+                    if (!(m.form_slot.x < ax) || std::fabs(m.form_slot.y - ay) > half_width(m) + hwa) continue;
+                    cut_order_path(m, c, frame);
+                }
+            }
+            cut_order_path(a, c, frame);
+            return dot(b.m.pos - p, n) >= -0.001f;
+        }
+        if (s == 0.0f) return false;  // even its own position fails: nothing changed
+    }
+}
+
+// ---- s78n t20 (MOVEMENT §1.5.1): the Path Around call of the dynamic land pathfinder ----
+
+bool MovementSystem::shares_open_record(const Unit& u, const Unit& o) const {
+    // record vf +0x58: MovingVsStopped state 0 / 1, MovingVsMoving state 0 / 1 (/ 4 Pass: not ported yet)
+    for (const CollisionObject& c : coll_.list()) {
+        if (!((c.a == u.d.id && c.b == o.d.id) || (c.a == o.d.id && c.b == u.d.id))) continue;
+        if (c.kind == CollisionKind::StoppedVsStopped) return false;
+        return c.state == CollisionState::Active || c.state == CollisionState::PathAround;
     }
     return false;
 }
 
-// Path Around 0x685920 (the dynamic land pathfinder, MOVEMENT §1.5; kind 4): `a`'s path is led around the standing layer
-// objects from its position to the first path point past them. The complexity goes to the quota counter. [port] the detour
-// is spliced into the path (retail: a record on top of the stack); a holds it until it has walked the spliced points.
-bool MovementSystem::path_around(const CollisionObject& c, Unit& a, const Unit& b, float contact, uint32_t frame) {
-    const MovementConstants& k = cfg_.constants;
-    const float rs = a.d.radius + b.d.radius;
+uint8_t MovementSystem::unit_relation(const Unit& p0, const Unit& p1) const {
+    RelationInput in;
+    in.p0_moving = unit_moving(p0);
+    if (!in.p0_moving) return kRelStanding;
+    in.p0_cap = record_cap(p0);
+    in.h0 = wanted_dir(p0);
+    in.h1 = wanted_dir(p1);
+    const auto speed = [this](const Unit& x) { return x.in_formation && x.formation_speed < kInf ? x.formation_speed : walk_max_speed(x); };
+    in.v0 = speed(p0);
+    in.v1 = speed(p1);
+    in.rel = p1.m.pos - p0.m.pos;
+    in.hw1 = half_width(p1);
+    for (const CollisionObject& c : coll_.list()) {
+        if (!((c.a == p0.d.id && c.b == p1.d.id) || (c.a == p1.d.id && c.b == p0.d.id))) continue;
+        in.own_record = c.kind == CollisionKind::MovingVsMoving && (c.state == CollisionState::Active || c.state == CollisionState::PathAround);
+        break;
+    }
+    return relation_code(in);
+}
+
+FootRect MovementSystem::unit_swept_box(const Unit& o, const Unit& u, uint8_t rel) const {
+    SweptInput in;
+    in.pos = o.m.pos;
+    in.yaw = o.m.yaw;
+    const V2 h = foot_half(o);
+    in.hx = h.x;
+    in.hy = h.y;
+    std::vector<V2> poly;
+    if (unit_moving(o)) {
+        // turning in place by more than 10 degrees: a square along its wanted facing
+        V2 wanted{};
+        if (o.m.state == LocoState::WalkStartTurn) wanted = wanted_dir(o);
+        else if (o.aturn != LocoState::None) wanted = dir_from_deg(o.turn_to);
+        else if (o.fturn) wanted = dir_from_deg(land_wanted_yaw(o));
+        if (length_sq(wanted) > 0.0f && std::fabs(wrap_deg(heading_deg(wanted) - o.m.yaw)) > 10.0f) {
+            in.turning = true;
+            in.wanted = wanted;
+        } else {
+            // closing on the pathing unit: swept along its path by L = min(max(0, (d - r_u - r_o) / c), 30 x
+            // MovingVsMovingLookAheadTime) frames x its max speed; in relation 0x10 / 0x20 on its final leg: the whole path
+            const float vo = walk_max_speed(o), vu = walk_max_speed(u);
+            const V2 to_u = u.m.pos - o.m.pos;
+            const V2 rel_v = dir_from_deg(o.m.yaw) * vo - dir_from_deg(u.m.yaw) * vu;
+            const float closing = dot(rel_v, normalize_retail(to_u));
+            stack_points(o, poly);
+            if ((rel == kRelSameWay || rel == kRelSameWaySlower) && near_path_end(o, u)) {
+                in.sweep = path_length(poly);
+            } else if (vo > 0.0f && vu > 0.0f && closing > 0.0f) {
+                const float frames = std::min(std::max(0.0f, (length(to_u) - foot_radius(u) - foot_radius(o)) / closing),
+                                              30.0f * cfg_.constants.moving_vs_moving_look_ahead_time);
+                in.sweep = frames * vo;
+            }
+            in.poly = poly;
+        }
+    }
+    return swept_box(in);
+}
+
+// Obstacle set 0x67d580 (MOVEMENT §1.5.1 item 3) over the layer objects around u, ascending id. Never: u itself, anything
+// u can crush, a pair that fails the class table, [port] a gated pair (its own garrison host). Always: the forced id.
+// Mask bit 0 (u Infantry or Giant): Infantry-class objects not in a hero clash are no obstacles. Otherwise by the
+// relation code of (object, u): standing -> an obstacle, subject to `flags` (1: a non-enemy only when it shares an
+// undecided / detouring record with u; 2: the same for every standing unit; 4: the obstacle classes 2 - 4 are ignored;
+// a deployed / deploying unit always is one); held, head-on, crossing, same way and slower -> an obstacle; same way and
+// not slower -> ignored, unless it is on its final leg, not behind u's facing and the pair has such a record.
+void MovementSystem::around_obstacles(const Unit& u, const Unit* forced, uint8_t flags, float half, std::vector<AroundObstacle>& out,
+                                      std::vector<uint32_t>& ids) const {
+    out.clear();
+    ids.clear();
     std::vector<uint32_t> cand;
-    layer_box_query(a.m.pos, 0.5f * kCollisionCrowdBox, cand);
-    std::vector<DynamicObstacle> obs;
-    std::vector<ObjectId> ids;
+    layer_box_query(u.m.pos, half, cand);
+    const int32_t cu = u.d.collision_class;
+    const bool skip_infantry = cu == kUccInfantry || cu == kUccGiantVehicle;
+    const V2 fu = dir_from_deg(u.m.yaw);
     for (uint32_t ci : cand) {
         const Unit& o = units_[ci];
-        // FIGHTER_FLYING §7.8 item 3: the layer-0x10 objects minus the pathing unit (never a squad member). [port] only
-        // standing ones, and not the unit's own garrison host (the port's obstacle is a penalty circle).
-        if (o.d.id == a.d.id || (o.has_goal && o.d.id != b.d.id) || pair_gated(a, o)) continue;
-        if (!collision_classes_interact(a.d.collision_class, o.d.collision_class)) continue;
-        if (crushes(a, o) && !o.d.team_container) continue;
-        obs.push_back({o.m.pos, o.d.radius});
-        ids.push_back(o.d.id);
-    }
-    // Target: the first path point past the blockers - or the path end itself once the rest of the path lies inside the
-    // contact look-ahead (the reach of destination_blocked): near its destination the mover needs a way all the way in,
-    // and a detour that only rejoins the old path would lead it around a crowd standing there again and again.
-    float s = contact + 2.0f * rs + kCellSize;
-    if (near_path_end(a, b)) s = remaining_length(a.m) + kCellSize;
-    size_t seg = 0;
-    V2 target = point_along(a.m.pos, a.m.path, a.m.next, s, seg);
-    std::vector<ObjectId> around{b.d.id};
-    for (int guard = 0; guard < 64 && seg < a.m.path.size(); ++guard) {
-        bool inside = false;
-        for (size_t i = 0; i < obs.size(); ++i) {
-            const float rr = obs[i].radius + a.d.radius;
-            if (length_sq(target - obs[i].pos) < rr * rr) {
-                inside = true;
-                if (std::find(around.begin(), around.end(), ids[i]) == around.end()) around.push_back(ids[i]);
+        if (o.d.id == u.d.id) continue;
+        const uint8_t rel = unit_relation(o, u);
+        const bool is_forced = forced && forced->d.id == o.d.id;
+        if (!is_forced) {
+            if (crushes(u, o) || !collision_classes_interact(cu, o.d.collision_class) || pair_gated(u, o)) continue;
+            if (skip_infantry && o.d.collision_class == kUccInfantry && !o.ci.hero_clash) continue;
+            if (rel == kRelStanding) {
+                const bool deployed = o.deploy == LocoState::WalkDeploying || o.deploy == LocoState::WalkDeployed;
+                if (!deployed) {
+                    const int32_t co = o.d.collision_class;
+                    if ((flags & 4u) && co >= kUccLowObstacle && co <= kUccHighObstacle) continue;
+                    const bool open_only = (flags & 2u) || ((flags & 1u) && !hostile(u.d.owner, o.d.owner));
+                    if (open_only && !shares_open_record(u, o)) continue;
+                }
+            } else if (rel == kRelSameWay) {
+                if (!(near_path_end(o, u) && !(dot(o.m.pos - u.m.pos, fu) < 0.0f) && shares_open_record(u, o))) continue;
             }
         }
-        if (!inside) break;
-        s += kCellSize;
-        target = point_along(a.m.pos, a.m.path, a.m.next, s, seg);
+        AroundObstacle ob;
+        ob.id = o.d.id;
+        ob.shape = unit_swept_box(o, u, rel);
+        ob.foot_hx = foot_half(o).x;
+        ob.front_free = rel == kRelHeld || rel == kRelHeadOn || rel == kRelCrossing || rel == kRelSameWaySlower;
+        out.push_back(ob);
+        ids.push_back(ci);
     }
-    std::vector<V2> local;
-    uint32_t complexity = 0;
-    const bool ok = dynamic_repath(grid_, a.m.pos, target, a.lp.mask, a.d.radius, a.d.collision_class == kUccGiantVehicle, obs, k,
-                                   local, complexity);
-    quota_used_ += complexity;
-    ++stats_.dynamic_repaths;
-    if (!ok || local.size() < 2) return false;
-    // [port] The port's search only penalises cells under another unit (retail: a visibility graph around the obstacle
-    // rectangles, which has no way through them), so a found path may still lead through a unit: that is no way around.
-    // A unit the mover already overlaps cannot be avoided and is not tested; the cell path may graze a circle by 3/4 cell.
-    for (const DynamicObstacle& o : obs) {
-        const float rr = o.radius + a.d.radius;
-        if (length_sq(a.m.pos - o.pos) < rr * rr) continue;
-        const float lim = std::max(rr - 0.75f * kCellSize, 0.0f);
-        for (size_t i = 0; i + 1 < local.size(); ++i) {
-            const V2 leg = local[i + 1] - local[i];
-            const float l2 = length_sq(leg);
-            const float t = l2 > 0.0f ? std::clamp(dot(o.pos - local[i], leg) / l2, 0.0f, 1.0f) : 0.0f;
-            if (length_sq(o.pos - (local[i] + leg * t)) < lim * lim) return false;
-        }
+}
+
+bool MovementSystem::around_base(const Unit& u, std::vector<V2>& scratch, std::span<const V2>& base, uint32_t& cur) const {
+    if (!u.has_goal || u.need_path || u.m.next == 0 || u.m.next >= u.m.path.size()) return false;  // a kind-1 record
+    if (!u.pushed) {
+        base = u.m.path;
+        cur = u.m.next - 1;
+    } else {
+        if (u.push_next == 0 || u.push_path.empty()) return false;
+        scratch = u.push_path;
+        const V2 dir = normalize_retail(u.m.path[u.m.next] - u.m.path[u.m.next - 1]);
+        scratch.push_back(scratch.back() + dir);  // 1 unit past its end along the order path's current segment
+        base = scratch;
+        cur = u.push_next - 1;
     }
-    std::vector<V2> np = std::move(local);
-    const uint32_t detour_end = static_cast<uint32_t>(np.size());
-    for (size_t i = seg; i < a.m.path.size(); ++i)
-        if (!(np.back() == a.m.path[i])) np.push_back(a.m.path[i]);
-    a.m.path = std::move(np);
-    a.m.next = 1;
-    a.m.escape_until = 0;
-    a.detour_seq = c.seq;
-    a.detour_end = detour_end;
-    a.around = std::move(around);
-    a.around_frame = frame;
-    a.path_change = frame;
+    return static_cast<size_t>(cur) + 1 < base.size();
+}
+
+// 0x679aa0: the candidate is taken at the nearest passable point Q of the unit's region within LandDestinationProximity
+// (60), when the unit's rectangle placed at Q, axis along Q - E (its facing when zero), overlaps no layer object.
+bool MovementSystem::rejoin_accept(const Unit& u, V2 cand, V2 path_end, V2& q) const {
+    q = cand;
+    const int32_t comp = regions_.component_at(u.slot, world_to_cell(u.m.pos.x), world_to_cell(u.m.pos.y));
+    const int32_t cx = world_to_cell(cand.x), cy = world_to_cell(cand.y);
+    if (!grid_.passable_cell(cx, cy, u.lp.mask) || (comp >= 0 && regions_.component_at(u.slot, cx, cy) != comp)) {
+        const float reach = cfg_.constants.land_destination_proximity;
+        if (comp < 0 || !snap_to_component(grid_, regions_, cand, u.lp.mask, comp, static_cast<int32_t>(reach / kCellSize), q)) return false;
+        if (distance(q, cand) > reach) return false;
+    }
+    FootRect r = foot_at(u, q);
+    const V2 axis = normalize_retail(q - path_end);
+    if (length_sq(axis) > 0.0f) r.a = axis;
+    std::vector<uint32_t> near_units;
+    layer_box_query(q, foot_radius(u), near_units);
+    for (uint32_t ci : near_units) {
+        const Unit& o = units_[ci];
+        if (o.d.id != u.d.id && foot_overlap(r, foot_of(o))) return false;
+    }
     return true;
 }
 
+bool MovementSystem::rejoin_search(const Unit& u, std::span<const V2> base, uint32_t cur, float d,
+                                   const std::function<bool(const Rejoin&)>& fn) const {
+    constexpr uint32_t kMaxTried = 11;  // 0x675ed0
+    uint32_t tried = 0;
+    const V2 end = base.back();
+    // (a) along the base path, from the unit's progress + D + 2.0 in steps of 10
+    std::vector<RejoinPoint> pts;
+    rejoin_on_path(base, cur, u.m.pos, d, kMaxTried, pts);
+    for (const RejoinPoint& p : pts) {
+        if (tried++ >= kMaxTried) return false;
+        Rejoin r;
+        r.on_path = !u.pushed;
+        r.resume = u.pushed ? u.m.next : p.next;  // (a detour off an older collision path resumes the order path by its lines)
+        if (rejoin_accept(u, p.p, end, r.q) && fn(r)) return true;
+    }
+    // A spot past the path end needs a straight passable line from the end, or a land path no longer than 2 x the line.
+    LandPathScratch sc;
+    const auto reachable = [&](V2 spot) {
+        if (line_passable(grid_, end, spot, u.lp.mask)) return true;
+        LandPathRequest q;
+        q.start = end;
+        q.goal = spot;
+        q.mask = u.lp.mask;
+        q.snap_goal = false;
+        LandPath lp;
+        find_land_path(grid_, regions_, q, sc, lp);
+        return lp.ok && path_length(lp.points) <= 2.0f * distance(end, spot);
+    };
+    // (b) past the end E: toward the unit's target up to its distance, else along the last segment up to
+    // LandTemporaryDestinationProximity (20), in steps of 10
+    V2 dir = normalize_retail(base[base.size() - 1] - base[base.size() - 2]);
+    float limit = cfg_.constants.land_temporary_destination_proximity;
+    if (u.ci.target >= 0 && length_sq(u.ci.target_pos - end) > 0.0f) {
+        dir = normalize_retail(u.ci.target_pos - end);
+        limit = distance(u.ci.target_pos, end);
+    }
+    if (!(length_sq(dir) > 0.0f)) dir = dir_from_deg(u.m.yaw);
+    const uint32_t past = u.pushed ? u.m.next : static_cast<uint32_t>(u.m.path.size());
+    for (float s = 10.0f; s <= limit; s += 10.0f) {
+        if (tried++ >= kMaxTried) return false;
+        const V2 spot = end + dir * s;
+        Rejoin r;
+        r.resume = past;
+        if (grid_.passable_world(spot, u.lp.mask) && reachable(spot) && rejoin_accept(u, spot, end, r.q) && fn(r)) return true;
+    }
+    // (c) the ring search 0x440f90 around E (full circle from dir; occupancy margin max(6 x FormationSpacing, 0.25 r_u)):
+    // the first free reachable spot not behind E along dir
+    if (tried++ >= kMaxTried) return false;
+    const float ru = foot_radius(u);
+    const float reach = ru + std::max(6.0f * u.d.formation_spacing, 0.25f * ru);
+    const int32_t comp = regions_.component_at(u.slot, world_to_cell(u.m.pos.x), world_to_cell(u.m.pos.y));
+    std::vector<uint32_t> occ;
+    RingSetup ring;
+    ring.centre = end;
+    ring.dir = dir;
+    ring.r = ru;
+    V2 spot;
+    const bool found = ring_search(
+        ring,
+        [&](V2 p, uint32_t) {
+            const int32_t cx = world_to_cell(p.x), cy = world_to_cell(p.y);
+            if (!grid_.in_range(cx, cy) || !grid_.passable_cell(cx, cy, u.lp.mask)) return false;
+            if (comp >= 0 && regions_.component_at(u.slot, cx, cy) != comp) return false;
+            if (dot(p - end, dir) < 0.0f) return false;
+            layer_box_query(p, reach + 1.0f, occ);
+            for (uint32_t ci : occ)
+                if (units_[ci].d.id != u.d.id && ring_blocked(p, reach, foot_of(units_[ci]))) return false;
+            return reachable(p);
+        },
+        spot);
+    if (!found) return false;
+    Rejoin r;
+    r.resume = past;
+    return rejoin_accept(u, spot, end, r.q) && fn(r);
+}
+
+bool MovementSystem::spare_point(const Unit& a, const Unit& b, V2& v) const {
+    v = V2{};
+    std::vector<V2> scratch;
+    std::span<const V2> base;
+    uint32_t cur = 0;
+    if (!around_base(a, scratch, base, cur)) return false;
+    const V2 dd = a.m.pos - b.m.pos;
+    const float dz = a.z - b.z;
+    const float d = std::sqrt(dd.x * dd.x + dd.y * dd.y + dz * dz) + foot_radius(a) + foot_radius(b);
+    return rejoin_search(a, base, cur, d, [&](const Rejoin& r) {
+        v = r.q;
+        return true;
+    });
+}
+
+// Path Around 0x5c80e0 (MOVEMENT §1.5.1). The detour goes on top of the unit's path stack; the ordered path stays
+// underneath, untouched, and resumes at the first waypoint line not yet crossed when the detour ends (pop_top). The
+// complexity (the vertex count of every A* pass) goes to the quota counter. [port] not modelled: the escape vertices of
+// a start inside a same-way obstacle, the formation-path refusal 0x41cf40, concave terrain corners and the corner
+// pruning masks; "crosses an obstacle" = the segment meets the interior of its grown rectangle; kind 3 (TerrainCollision)
+// has no caller.
+bool MovementSystem::path_around(const CollisionObject& c, Unit& u, const Unit* o, bool flag, uint8_t kind, uint8_t flags,
+                                 uint32_t frame) {
+    const MovementConstants& k = cfg_.constants;
+    if (!(walk_max_speed(u) > 0.0f)) return false;
+    std::vector<V2> scratch;
+    std::span<const V2> base;
+    uint32_t cur = 0;
+    if (!around_base(u, scratch, base, cur)) return false;
+    // Distance D past which the detour rejoins the path
+    const float ru = foot_radius(u);
+    float d = ru;
+    FootRect obox{};
+    if (o) {
+        obox = unit_swept_box(*o, u, unit_relation(*o, u));
+        const float ro = foot_radius(*o);
+        if (!flag) {
+            V2 exit;
+            if (ray_leaves_rect(obox, u.m.pos, wanted_dir(u), exit)) d = distance(exit, u.m.pos) + ru;
+            else d = distance(u.m.pos, o->m.pos) + ru + ro;
+        } else {
+            const V2 front = obox.c + obox.a * obox.hx;
+            d = std::max(distance(u.m.pos, o->m.pos), distance(front, u.m.pos)) + ru + ro;
+        }
+    }
+    // The obstacle set, once for the call: every layer object the largest window can reach (the rejoin point lies within
+    // D + the candidates' reach of the unit; the window adds its bound, its growth and the retries)
+    std::vector<AroundObstacle> obs;
+    std::vector<uint32_t> obs_units;
+    around_obstacles(u, flag ? o : nullptr, flags, d + 160.0f + 40.0f * kCellSize, obs, obs_units);
+    const V2 hu = foot_half(u);
+    bool searched = false, done = false;
+    rejoin_search(u, base, cur, d, [&](const Rejoin& rj) {
+        AroundRequest q;
+        q.start = u.m.pos;
+        q.goal = rj.q;
+        q.mask = u.lp.mask;
+        q.giant = u.d.collision_class == kUccGiantVehicle;
+        q.f = std::max(u.d.box_expansion, 0.0f);
+        q.grow = half_width(u) + 0.5f;
+        q.tracker = std::min(hu.x, hu.y) + 0.5f + q.f;
+        q.mover_hx = hu.x;
+        q.obstacles = obs;
+        if (height_) q.height = height_;
+        AroundResult res;
+        searched = true;
+        const bool ok = around_search(grid_, k, q, res);
+        quota_used_ += res.complexity;
+        if (!ok || res.points.size() < 2) return false;  // the next candidate
+        // Last-point drop: the last corner sees the next original waypoint N -> the rejoin point is removed
+        if (kind != 3 && res.points.size() > 2 && rj.on_path && rj.resume < u.m.path.size()) {
+            const V2 p = res.points[res.points.size() - 2];
+            bool drop = line_passable(grid_, p, u.m.path[rj.resume], u.lp.mask);
+            if (drop && flag && o) {
+                const V2 front = obox.c + obox.a * obox.hx;
+                drop = dot(p - (front - obox.a * (hu.x + foot_half(*o).x)), obox.a) > 60.0f;
+            }
+            if (drop) res.points.pop_back();
+        }
+        // 0x6744a0: the path's id list - every obstacle of the window that is not moving or lies behind the detour's end
+        const V2 last = res.points.back();
+        const V2 last_dir = normalize_retail(last - res.points[res.points.size() - 2]);
+        std::vector<ObjectId> around;
+        for (uint32_t wi : res.window) {
+            const Unit& w = units_[obs_units[wi]];
+            if (!unit_moving(w) || dot(w.m.pos - last, last_dir) < 0.0f) around.push_back(w.d.id);
+        }
+        (void)claim(u, c, true, frame);  // forced: an owner of higher weight is released
+        const uint32_t npts = static_cast<uint32_t>(res.points.size());
+        push_top(u, std::move(res.points), 2, kind == 7, c, frame);
+        u.push_resume = rj.resume;
+        for (const HoldTag& t : res.tags)
+            if (t.index < npts) u.push_tags.push_back(t);
+        u.around = std::move(around);
+        u.around_frame = frame;
+        done = true;
+        return true;
+    });
+    if (searched) ++stats_.dynamic_repaths;
+    return done;
+}
+
+bool MovementSystem::mvs_path_around(const CollisionObject& c, Unit& a, const Unit& b, uint8_t p, uint32_t frame) {
+    return path_around(c, a, &b, false, 4, p, frame) || path_around(c, a, &b, false, 4, static_cast<uint8_t>(p | 4u), frame);
+}
+
 // MovingVsStopped decision 0x684f90 (MOVEMENT §5.4.1; a = mover, b = obstacle), first match wins. Not modelled ([port]):
-// the "target" clauses of step 4 (the movement layer knows no target ids or ranges), the death-clone obstacle branch
-// (no such movement unit), the hero-clash test of step 8 and the spare point of 0x5c6ba0 (alt = true whenever the
-// side-step test allows it); step 10's units-ignoring detour 0x685490 (state 8) is a stand-in (see there).
+// the death-clone obstacle branch (no such movement unit yet); step 10's units-ignoring detour 0x685490 (state 8) is a
+// stand-in (see there). s78n t20: the spare point 0x5c6ba0 and the Path Around calls are §1.5.1's; §5.4.5 - the target
+// clause of step 4, the hero-clash test of step 8 and the crusher's record (set_collision_info gives the target, the
+// range, "short-range" and the clash state).
 void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t frame) {
     using S = CollisionState;
     // 1. the contact test no longer holds
-    const float contact = mvs_contact(a, b, frame);
+    const float contact = mvs_contact(a, b);
     if (contact < 0.0f) {
         c.state = S::Resolved;
         return;
@@ -1742,10 +2454,10 @@ void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
     const int32_t ca = a.d.collision_class, cb = b.d.collision_class;
     const bool inf_a = ca == kUccInfantry, inf_b = cb == kUccInfantry;
     const bool crush = crushes(a, b);
-    // 2. a forced path (flag 0x20: garrison exit, unload)
-    if (a.forced) {
+    // 2. a forced top path (flag 0x20: garrison exit, unload; a collision-owned record on top is not forced)
+    if (a.forced && !a.pushed && a.has_goal) {
         if (inf_a && inf_b) c.state = S::Repulsion;
-        else c.state = push_aside(a, b, crush, frame) ? S::Resolved : S::TryAgainLater;
+        else c.state = push_aside(c, a, b, crush, frame) ? S::Resolved : S::TryAgainLater;
         return;
     }
     // 3. the path was already planned around b after b last changed paths
@@ -1753,8 +2465,11 @@ void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
         c.state = S::Resolved;
         return;
     }
-    // 4. a single infantry unit or a bike against single infantry: Repulsion at once (not a squad container)
-    if ((inf_a || ca == kUccBike) && inf_b && !a.d.team_container && !b.d.team_container) {
+    // 4. tgt := a's current target is b and (a's attack range < b's footprint radius, or a is short-range). An Infantry /
+    // Bike mover takes Repulsion at once against Infantry when it is no squad container and (b is none either, or tgt) -
+    // or, being Infantry, whenever tgt (a melee squad closing on its target)
+    const bool tgt = a.ci.target == b.d.id && (a.ci.attack_range < foot_radius(b) || a.ci.short_range);
+    if ((inf_a || ca == kUccBike) && ((inf_b && !a.d.team_container && (!b.d.team_container || tgt)) || (inf_a && tgt))) {
         c.state = S::Repulsion;
         return;
     }
@@ -1763,26 +2478,28 @@ void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
     bool push_tried = false;
     if (ca == kUccGiantVehicle && !crush && (inf_b || cb == kUccBike || a.m.state == LocoState::WalkStartTurn)) {
         push_tried = true;
-        if (push_aside(a, b, false, frame)) {
+        if (push_aside(c, a, b, false, frame)) {
             c.state = S::Resolved;
             return;
         }
     }
     // 6. destination blocked: the early-arrival cut, then Path Around; destination free: Repulsion for two Infantry
     // classes, else Path Around
-    bool alt = false, around_tried = false;
+    bool alt = false;
     if (!crush && destination_blocked(a, b)) {
+        bool to_push = false;
         if (side_step_ok(a, b, c)) {
-            alt = true;  // [port] 0x5c6ba0's spare point is taken as found
-            if (early_arrival(a, b, frame)) {
+            V2 spare;
+            alt = spare_point(a, b, spare);  // 0x5c6ba0: the first accepted rejoin point
+            if (early_arrival(a, b, alt, spare, frame)) {
                 a.coll_now = true;  // +0x84: the re-routed mover takes a lower target speed at once
                 ++stats_.early_arrivals;
                 c.state = S::Resolved;
                 return;
             }
+            to_push = !alt;  // no spare point: straight to step 8
         }
-        around_tried = true;  // (the cut may have shortened the path: the contact distance is taken again)
-        if (path_around(c, a, b, std::max(mvs_contact(a, b, frame), 0.0f), frame)) {
+        if (!to_push && mvs_path_around(c, a, b, 0, frame)) {
             c.state = S::PathAround;
             return;
         }
@@ -1791,19 +2508,16 @@ void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
             c.state = S::Repulsion;
             return;
         }
-        if (!crush) {
-            around_tried = true;
-            if (path_around(c, a, b, contact, frame)) {
-                c.state = S::PathAround;
-                return;
-            }
+        if (!crush && mvs_path_around(c, a, b, 0, frame)) {
+            c.state = S::PathAround;
+            return;
         }
     }
     // 8. a non-hostile blocker (or one that scatters from the crusher) is pushed - not by a single infantry mover, nor by
-    // a bike against infantry
+    // a bike against infantry, and never a blocker in a hero clash (+0x3b4; only this step tests it)
     const bool friendly = !hostile(a.d.owner, b.d.owner) || scat;
     const bool shove_ok = friendly && !(inf_a && !a.d.team_container) && !(ca == kUccBike && inf_b);
-    if (shove_ok && (!crush || scat) && !push_tried && push_aside(a, b, crush, frame)) {
+    if (shove_ok && (!crush || scat) && !b.ci.hero_clash && !push_tried && push_aside(c, a, b, crush, frame)) {
         c.state = S::Resolved;
         return;
     }
@@ -1817,7 +2531,7 @@ void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
     // changes paths: it walks on through b's footprint; the attack block retail gives the mover's formation on a hostile
     // unit in the way is not issued.
     if (ca > kUccBike || cb > kUccBike) {
-        if (alt && !around_tried && path_around(c, a, b, contact, frame)) {
+        if (alt && mvs_path_around(c, a, b, 1, frame)) {  // 0x685920(a, b, 1): standing friends are no obstacles
             c.state = S::PathAround;
             return;
         }
@@ -1859,14 +2573,14 @@ void MovementSystem::mvs_service(CollisionObject& c, Unit& a, Unit& b, bool full
         mvs_decide(c, a, b, frame);
     }
     switch (c.state) {
-        case S::PathAround:  // a no longer holds the path made for this record
-            if (a.detour_seq != c.seq || a.m.next >= a.detour_end || !a.has_goal) c.state = S::Resolved;
+        case S::PathAround:  // a no longer holds the path made for this record (vf +0x1c0(record id))
+            if (!holds_path(a, c)) c.state = S::Resolved;
             break;
         case S::Repulsion:  // the obstacle is behind, or the mover has no path left; the contact is not re-tested
-            if (mvs_behind(a, b) || !a.has_goal) c.state = S::Resolved;
+            if (mvs_behind(a, b) || !(a.has_goal || a.pushed)) c.state = S::Resolved;
             break;
         case S::Crusher:  // never re-decided: ends when the contact test fails
-            if (mvs_contact(a, b, frame) < 0.0f) c.state = S::Resolved;
+            if (mvs_contact(a, b) < 0.0f) c.state = S::Resolved;
             break;
         case S::TryAgainLater:  // speed 0 with no "at once" flag: the mover brakes at its rate
             if (!crushes(a, b)) c.speed_a = 0.0f;
@@ -1882,8 +2596,9 @@ CollisionState MovementSystem::mvm_choose(const CollisionObject& c, const Unit& 
     using S = CollisionState;
     master_a = false;
     if (!mvm_contact(a, b)) return S::Resolved;
-    if (a.forced != b.forced) {  // exactly one on a forced path: it is the master, the other one path-arounds
-        master_a = a.forced;
+    const bool fa = a.forced && !a.pushed && a.has_goal, fb = b.forced && !b.pushed && b.has_goal;
+    if (fa != fb) {  // exactly one on a forced (top) path: it is the master, the other one path-arounds
+        master_a = fa;
         return S::PathAround;
     }
     const V2 f0 = dir_from_deg(a.m.yaw), f1 = dir_from_deg(b.m.yaw);
@@ -1902,8 +2617,9 @@ CollisionState MovementSystem::mvm_choose(const CollisionObject& c, const Unit& 
 }
 
 // MovingVsMoving states 0x6814f0 for two Infantry / Bike movers.
-void MovementSystem::mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full, uint32_t frame) {
+void MovementSystem::mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full, uint32_t frame, SimRng& rng) {
     using S = CollisionState;
+    (void)rng;  // [port] no draw yet (the retry draws of MOVEMENT §5.4.6 come with the states of the other pairs)
     if (c.state == S::Active) {
         if (!full) {
             ++stats_.quota_deferrals;
@@ -1915,8 +2631,8 @@ void MovementSystem::mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full
         if (s == S::PathAround) {  // mode 2 (0x683140): the slave path-arounds the master; failure -> state 7
             Unit& sl = ma ? b : a;
             const Unit& ms = ma ? a : b;
-            c.state = sl.has_goal && !sl.need_path && sl.m.next < sl.m.path.size() &&
-                              path_around(c, sl, ms, std::max(distance(sl.m.pos, ms.m.pos) - (sl.d.radius + ms.d.radius), 0.0f), frame)
+            // (kind 7, a crush-flee path, when the master can crush the slave and the slave scatters)
+            c.state = path_around(c, sl, &ms, false, crushes(ms, sl) && scatters(sl) ? uint8_t{7} : uint8_t{4}, 0, frame)
                           ? S::PathAround
                           : S::Crusher;
         } else {
@@ -1946,7 +2662,7 @@ void MovementSystem::mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full
             if (mvm_passed(a, b)) c.state = S::Resolved;
             break;
         case S::PathAround: {  // state 1: the slave walks its detour, the master follows by the slave-speed rule
-            if (s.detour_seq != c.seq || s.m.next >= s.detour_end || !s.has_goal) {
+            if (!holds_path(s, c)) {
                 c.state = S::Resolved;
                 break;
             }
@@ -1965,16 +2681,19 @@ void MovementSystem::mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full
 // search (push_spot) and a land path to the spot; b walks it as a pushed move over its order move (§40.3: no return
 // move). A deploying / deployed b is not pushed. [port] A b already on a pushed move counts as pushed (the original
 // pushes a blocker that is moving again, decision 0x684f90 step 2).
-bool MovementSystem::push_aside(const Unit& a, Unit& b, bool flee, uint32_t frame) {
-    // [port] a unit already on a pushed move keeps it, path kind (crush-flee or not) included.
-    if (b.pushed) return true;
+bool MovementSystem::push_aside(const CollisionObject& c, const Unit& a, Unit& b, bool flee, uint32_t frame) {
+    // [port] a unit still walking the path this record pushed it on keeps it, path kind (crush-flee or not) included.
+    // (s78n t20: a push by another record replaces the older collision path - the claim is forced, A1_READINGS §40.3.)
+    if (holds_path(b, c)) return true;
     if (b.anchor >= 0) return false;  // s78n t03 [port]: a steering member is not pushed (it steers back to its slot)
     if (!(b.lp.max_speed > 0.0f) || b.deploy == LocoState::WalkDeploying || b.deploy == LocoState::WalkDeployed) {
         ++stats_.push_failures;  // s78n t18: an attempt on a blocker that cannot walk counts as a failed push too
         return false;
     }
-    if (a.m.next >= a.m.path.size()) return false;
-    const V2 h = normalize_retail(a.m.path[a.m.next] - a.m.pos);
+    std::vector<V2> scratch;
+    const StackPoly sp = stack_poly(a, scratch);  // s78n t20: the pusher's heading along the top of its path stack
+    if (sp.next >= sp.pts.size()) return false;
+    const V2 h = normalize_retail(sp.pts[sp.next] - a.m.pos);
     if (!(length_sq(h) > 0.0f)) return false;
     constexpr float kCos45 = 0.70710678f;
     const V2 rel = b.m.pos - a.m.pos;
@@ -1982,7 +2701,7 @@ bool MovementSystem::push_aside(const Unit& a, Unit& b, bool flee, uint32_t fram
     const V2 dir{h.x * kCos45 - h.y * sin45, h.x * sin45 + h.y * kCos45};
     V2 spot;
     LandPath out;
-    if (push_spot(b, dir, spot)) {
+    if (push_spot(b, dir, 0.78539819f, 0.33f, spot)) {  // the push's cone pi / 4 and outside radius 0.33
         // 0x67b730: b's land path to the spot (synchronous); no path fails the push.
         LandPathRequest q;
         q.start = b.m.pos;
@@ -1997,49 +2716,29 @@ bool MovementSystem::push_aside(const Unit& a, Unit& b, bool flee, uint32_t fram
         ++stats_.push_failures;
         return false;
     }
-    b.pushed = true;
-    b.push_flee = flee;  // s78n t14 part B: kind 7 (0x5c8900 / 0x5c8890 by the caller), else kind 4
-    b.push_path = std::move(out.points);
-    b.push_next = 1;
-    // s78n t14 (FIGHTER_FLYING §7.2 caller 4, 0x5ad140): a squad container's path that is not a formation path and has >= 2
-    // points re-lays toward wp1 - wp0.
-    if (b.d.team_container) b.relay.push_back(b.push_path[1] - b.push_path[0]);
-    b.push_blocked = 0;
-    b.nudge_frames = 0;
-    b.path_change = frame;  // s78n t18: pack +0x288 (a path record is pushed on its stack)
-    if (b.d.team_container) {
-        // s78n t18 (MOVEMENT §5.4.1 "Push"): the pushed path is marked started - a standing container starts it at once,
-        // a moving one walks on along it (no braking coast, no arrival braking carried over from the path below)
-        b.coast = false;
-        if (b.m.state == LocoState::WalkEndMove) b.m.state = LocoState::WalkMoving;
-        else if (b.m.state != LocoState::WalkMoving) b.m.state = LocoState::WalkStopped;
-    }
+    // Ownership (A1_READINGS §40.3): the claim is forced - an owner of higher weight is released. The path is the top
+    // record of b's stack: kind 7 (0x5c8900 / 0x5c8890 by the caller) when `flee`, else kind 4.
+    (void)claim(b, c, true, frame);
+    push_top(b, std::move(out.points), 1, flee, c, frame);
     ++stats_.pushes;
     return true;
 }
 
-// Free-position search 0x440f90 with the push's set-up 0x440be0 (A1_READINGS §40.1-40.2): rings around b from radius 0
-// (step 1, +0.8 per ring up to min(1.5 r, 10), at most 20 rings), n = trunc(R 2pi / r) + 1 samples (at least 4 after
-// ring 0) at theta = 2pi i / n counter-clockwise from `dir`; mode 2: only theta <= pi/4 lies on the ring, the other
-// samples 0.33 from b. The first sample that is on the map, reachable, unoccupied and off the paths of the movers
-// heading into b is the spot. r = b's footprint radius 0x3969f0 (foot_radius: a squad container's joint box). [port]
-// reachability = b's mask and region component; s78n t18 (MOVEMENT §5.3.2): occupancy = the layer-0x10 box query (the
-// layer objects other than b whose box centre +- footprint radius overlaps the box r + FormationSpacing x 5; a squad
-// member is never one, a squad container is); the movers' remaining paths stand for their path approximations
-// (clearance = mover's Y extent + r + 4).
-bool MovementSystem::push_spot(const Unit& b, V2 dir, V2& out) const {
-    constexpr float kPi = 3.1415927f;
-    constexpr float kCone = 0.78539819f;  // pi / 4 (+0x3c)
-    constexpr float kOutsideCone = 0.33f;  // +0x40
-    constexpr uint32_t kRings = 20;
+// Free-position search 0x440f90 around b itself (A1_READINGS §40.1-40.2, path_around.hpp ring_search): rings from radius
+// 0 (step 1, +0.8 per ring up to min(1.5 r, 10), at most 20 rings), n = trunc(R 2pi / r) + 1 samples (at least 4 after
+// ring 0) at theta = 2pi i / n counter-clockwise from `dir`; only theta <= `cone` lies on the ring, the other samples at
+// `outside` from b. The first sample that is on the map, reachable, unoccupied and off the paths of the movers heading
+// into b is the spot. r = b's footprint radius 0x3969f0 (foot_radius: a squad container's joint box). [port]
+// reachability = b's mask and region component. s78n t20 (MOVEMENT §5.4.3 "Occupancy, settled"): a layer object other than
+// b blocks the sample when its centre comes within (r + 5 x FormationSpacing) + its directional radius of the sample
+// swept one unit along world +x (ring_blocked; a squad member is never a layer object, a squad container is). The
+// movers' path stacks stand for their path approximations (clearance = the mover's half width + r + 4).
+bool MovementSystem::push_spot(const Unit& b, V2 dir, float cone, float outside, V2& out) const {
     const float r = foot_radius(b);
-    const float half = r + b.d.formation_spacing * 20.0f * 0.25f;  // + the margin +0x48
-    float max_step = r * 1.5f;
-    if (max_step == 0.0f) max_step = 5.0f;
-    max_step = std::min(max_step, 10.0f);
+    const float reach = r + b.d.formation_spacing * 20.0f * 0.25f;  // + the margin +0x48
     // 0x505490: the other participants of b's MovingVsStopped collisions (kind 3), in collision-list order.
     struct Avoid {
-        const Unit* u;
+        std::vector<V2> pts;  // s78n t20: the mover's path stack from its position
         float clearance;
     };
     std::vector<Avoid> avoid;
@@ -2047,57 +2746,192 @@ bool MovementSystem::push_spot(const Unit& b, V2 dir, V2& out) const {
         if (c.kind != CollisionKind::MovingVsStopped || c.b != b.d.id) continue;
         const Unit* m = unit_ptr(c.a);
         if (!m) continue;
-        if (m->m.next < m->m.path.size()) avoid.push_back({m, foot_half(*m).y + r + 4.0f});
+        Avoid av;
+        stack_points(*m, av.pts);
+        if (av.pts.size() < 2) continue;
+        av.clearance = half_width(*m) + r + 4.0f;
+        avoid.push_back(std::move(av));
     }
-    // Orientation (0x20acd0): yaw in degrees in [0, 360), then radians as the search reads it.
-    float yaw_deg = 0.0f;
-    if (dir.x != 0.0f || dir.y != 0.0f) {
-        yaw_deg = dmath::atan2(dir.y, dir.x) * 57.295776f;
-        if (yaw_deg < 0.0f) yaw_deg += 360.0f;
-    }
-    const float yaw = yaw_deg * 0.017453292f;
-    const float sy = fighter_sin(yaw), cy = fighter_cos(yaw);
     // 0x50ecd0: both cells pass b's mask and lie in one connected region of it.
     const int32_t bcx = world_to_cell(b.m.pos.x), bcy = world_to_cell(b.m.pos.y);
     if (!grid_.passable_cell(bcx, bcy, b.lp.mask)) return false;
     const int32_t comp = regions_built_ ? regions_.component_at(b.slot, bcx, bcy) : -1;
     std::vector<uint32_t> occ;
-    float ring_r = 0.0f, step = 1.0f;
-    for (uint32_t ring = 0; ring < kRings; ++ring) {
-        uint32_t n = 1;
-        if (r > 0.0f) n = static_cast<uint32_t>(static_cast<int64_t>(ring_r * 2.0f * kPi / r)) + 1u;
-        if (ring != 0) n = std::max(4u, n);
-        for (uint32_t i = 0; i < n; ++i) {
-            const float th = (static_cast<float>(i) / static_cast<float>(n)) * kPi * 2.0f;
-            const float rho = th > kCone ? kOutsideCone : ring_r;
-            const float st = fighter_sin(th), ct = fighter_cos(th);
-            const V2 p{b.m.pos.x + (ct * cy - st * sy) * rho, b.m.pos.y + (st * cy + ct * sy) * rho};
+    RingSetup ring;
+    ring.centre = b.m.pos;
+    ring.dir = dir;
+    ring.r = r;
+    ring.cone = cone;
+    ring.outside = outside;
+    return ring_search(
+        ring,
+        [&](V2 p, uint32_t) {
             const int32_t cx = world_to_cell(p.x), cyy = world_to_cell(p.y);
-            if (!grid_.in_range(cx, cyy) || !grid_.passable_cell(cx, cyy, b.lp.mask)) continue;
-            if (comp >= 0 && regions_.component_at(b.slot, cx, cyy) != comp) continue;
-            layer_box_query(p, half, occ);
-            if (!(occ.empty() || (occ.size() == 1 && units_[occ[0]].d.id == b.d.id))) continue;  // occupied
-            bool on_path = false;
+            if (!grid_.in_range(cx, cyy) || !grid_.passable_cell(cx, cyy, b.lp.mask)) return false;
+            if (comp >= 0 && regions_.component_at(b.slot, cx, cyy) != comp) return false;
+            layer_box_query(p, reach + 1.0f, occ);
+            for (uint32_t ci : occ)
+                if (units_[ci].d.id != b.d.id && ring_blocked(p, reach, foot_of(units_[ci]))) return false;  // occupied
             for (const Avoid& av : avoid) {
-                V2 s0 = av.u->m.pos;
-                for (size_t k = av.u->m.next; k < av.u->m.path.size() && !on_path; ++k) {
-                    const V2 s1 = av.u->m.path[k];
+                V2 s0 = av.pts[0];
+                for (size_t k = 1; k < av.pts.size(); ++k) {
+                    const V2 s1 = av.pts[k];
                     const V2 seg = s1 - s0;
                     const float l2 = length_sq(seg);
                     const float t = l2 > 0.0f ? std::clamp(dot(p - s0, seg) / l2, 0.0f, 1.0f) : 0.0f;
-                    on_path = length_sq(p - (s0 + seg * t)) < av.clearance * av.clearance;
+                    if (length_sq(p - (s0 + seg * t)) < av.clearance * av.clearance) return false;  // on a mover's path
                     s0 = s1;
                 }
-                if (on_path) break;
             }
-            if (on_path) continue;
-            out = p;
             return true;
-        }
-        ring_r += step;
-        step = std::min(step + 0.8f, max_step);
+        },
+        out);
+}
+
+// ---- s78n t20 (MOVEMENT §5.4.3): StoppedVsStopped ----
+
+// Escape direction 0x5c74b0 of X against the other participant O: toward X's target when it has one; X's own facing for
+// a Vehicle / Large / Giant unit facing away from a unit of a higher class; else straight away from O.
+V2 MovementSystem::svs_escape_dir(const Unit& x, const Unit& o) const {
+    const V2 fx = dir_from_deg(x.m.yaw);
+    if (x.ci.target >= 0) {
+        const V2 d = normalize_retail(x.ci.target_pos - x.m.pos);
+        if (length_sq(d) > 0.0f) return d;
     }
-    return false;
+    const int32_t cx = x.d.collision_class;
+    if (cx >= kUccVehicle && cx <= kUccGiantVehicle && o.d.collision_class > cx && dot(x.m.pos - o.m.pos, fx) > 0.0f) return fx;
+    const V2 away = normalize_retail(x.m.pos - o.m.pos);
+    return length_sq(away) > 0.0f ? away : fx;
+}
+
+// Cost 0x686b20(x, y, d): the time to turn to the escape direction d plus the time to clear y along it. v = x's effective
+// max speed, D = y - x, r = sqrt(hx^2 + hy^2) of each TYPE's extents 0x371df0, R = r_x + r_y.
+float MovementSystem::svs_cost(const Unit& x, const Unit& y, V2 d) const {
+    const float v = walk_max_speed(x);
+    const V2 delta = y.m.pos - x.m.pos;
+    const V2 hx = type_half(x), hy = type_half(y);
+    const float big_r = std::sqrt(hx.x * hx.x + hx.y * hx.y) + std::sqrt(hy.x * hy.x + hy.y * hy.y);
+    const float along = v * dot(d, delta), side = v * (d.y * delta.x - d.x * delta.y);
+    const float dist = length(delta);
+    bool have = false;
+    float t = 0.0f;
+    if (along > 0.0f) {
+        t = (dist + big_r) / along;
+        have = true;
+    } else if (along < 0.0f) {
+        t = dist > big_r ? 0.0f : (big_r - dist) / -along;
+        have = true;
+    }
+    if (side != 0.0f) {
+        const float ts = big_r / side;  // signed, as coded
+        if (!have || ts < t) {
+            t = ts;
+            have = true;
+        }
+    }
+    if (!have || t < 0.0f) return 0.0f;
+    const float rate = loco_turn_rate(x);
+    const float turn = std::fabs(wrap_deg(heading_deg(d) - x.m.yaw));
+    return (rate > 0.0f ? turn / rate : 0.0f) + t;
+}
+
+// Which unit moves, 0x687010 (first match): a Landing Transport -> the other; a lowering hover unit -> the other;
+// deployed / deploying units never move (both: nobody); exactly one has a target -> the one without; two Infantry-class
+// units with targets -> nobody; against a Giant of a higher class only the smaller one is a candidate; else both are,
+// the cheaper first (cost(p1) <= cost(p0) -> p1 first). Of the candidates the first whose locomotor would accept the
+// claim moves (no owner, this record, or an owner of lower weight). [port] no movement unit is without a locomotor
+// (death clones: not registered yet); a deployed unit never walks (Max_Dist_Walk_While_Deployed is not modelled), and a
+// unit whose max speed is 0 counts as immobile too (retail has no such case: it would pick it and wait for good).
+uint8_t MovementSystem::svs_pick_mover(const CollisionObject& c, const Unit& p0, const Unit& p1) const {
+    if (p0.d.collision_class == kUccLandingTransport) return 1;
+    if (p1.d.collision_class == kUccLandingTransport) return 0;
+    if (p0.hover == 3) return 1;
+    if (p1.hover == 3) return 0;
+    const auto imm = [this](const Unit& x) {
+        return x.deploy == LocoState::WalkDeploying || x.deploy == LocoState::WalkDeployed || !(walk_max_speed(x) > 0.0f);
+    };
+    const bool i0 = imm(p0), i1 = imm(p1);
+    if (i0 && i1) return 2;
+    if (i0) return 1;
+    if (i1) return 0;
+    const bool t0 = p0.ci.target >= 0, t1 = p1.ci.target >= 0;
+    if (t0 != t1) return t0 ? uint8_t{1} : uint8_t{0};
+    const int32_t c0 = p0.d.collision_class, c1 = p1.d.collision_class;
+    const bool both_inf = c0 == kUccInfantry && c1 == kUccInfantry;
+    if (both_inf && t0 && t1) return 2;
+    uint8_t cand[2] = {2, 2};
+    if (!both_inf && c0 != c1 && std::max(c0, c1) == kUccGiantVehicle) {
+        cand[0] = c0 < c1 ? uint8_t{0} : uint8_t{1};
+    } else {
+        const bool p1_first = svs_cost(p1, p0, svs_escape_dir(p1, p0)) <= svs_cost(p0, p1, svs_escape_dir(p0, p1));
+        cand[0] = p1_first ? uint8_t{1} : uint8_t{0};
+        cand[1] = p1_first ? uint8_t{0} : uint8_t{1};
+    }
+    for (const uint8_t k : cand) {
+        if (k > 1) continue;
+        const Unit& x = k == 0 ? p0 : p1;
+        if (!x.pushed || x.push_owner == kNoDetour || x.push_owner == c.seq || x.push_weight < 3) return k;  // vf +0x168
+    }
+    return 2;
+}
+
+// Service 0x687570 with the resolution 0x687720 (MOVEMENT §5.4.3). No instant displacement: the unit chosen by
+// svs_pick_mover walks a land path to the first free spot of the ring search around itself (cone toward its escape
+// direction), pushed above its own paths as a collision path; the record is Resolving while it holds that path and
+// Resolved when the path is gone. No mover, no spot (or its own position: ring 0), no path or a refused claim -> Try Again
+// Later, re-tried every 30 frames. [port] retail never re-tests the contact, so a record whose resolution failed would
+// cycle 4 -> 0 -> 4 for as long as both units live; the port ends it at a retry when the two footprints no longer overlap
+// by more than MinimumStoppedVsStoppedOverlapCoefficient or either unit is Moving (the next check makes whatever record
+// then applies).
+void MovementSystem::svs_service(CollisionObject& c, Unit& a, Unit& b, uint32_t frame) {
+    using S = CollisionState;
+    // Validity 0x686e80: a participant standing on a cell that is impassable for it -> Unresolvable
+    if (!grid_.passable_world(a.m.pos, a.lp.mask) || !grid_.passable_world(b.m.pos, b.lp.mask)) {
+        for (Unit* u : {&a, &b})
+            if (holds_path(*u, c)) {
+                end_push(*u);
+                u->path_change = frame;
+            }
+        c.state = S::Resolved;
+        return;
+    }
+    if (c.state == S::Active) {  // the resolution (the first service after the record was made runs it at once)
+        c.state = S::TryAgainLater;
+        c.master = svs_pick_mover(c, a, b);
+        if (c.master > 1) return;
+        Unit& x = c.master == 0 ? a : b;
+        const Unit& o = c.master == 0 ? b : a;
+        const bool inf = x.d.collision_class == kUccInfantry;
+        V2 spot;
+        if (!push_spot(x, svs_escape_dir(x, o), inf ? 3.1415927f : 2.3561945f, inf ? 1.0f : 0.75f, spot)) return;
+        if (spot == x.m.pos) return;  // ring 0: nothing is near any more
+        // 0x5a2830: a land path from the main pathfinder ([port] the same request as the push's; its flags are not decoded)
+        LandPathRequest q;
+        q.start = x.m.pos;
+        q.goal = spot;
+        q.mask = x.lp.mask;
+        q.clearance_radius = x.d.radius > kCellSize && !x.d.team_container ? x.d.radius : 0.0f;
+        LandPathScratch sc;
+        LandPath out;
+        find_land_path(grid_, regions_, q, sc, out);
+        if (!out.ok || out.points.size() < 2) return;
+        if (!claim(x, c, false, frame)) return;  // an owner of equal or higher weight refuses
+        push_top(x, std::move(out.points), 3, false, c, frame);
+        c.state = S::Resolving;
+        return;
+    }
+    if (c.state == S::Resolving) {
+        const Unit& x = c.master == 0 ? a : b;
+        if (c.master > 1) c.state = S::Resolved;
+        else if (x.pushed && x.push_owner != kNoDetour && x.push_owner != c.seq) c.state = S::TryAgainLater;  // owned by another record
+        else if (!holds_path(x, c)) c.state = S::Resolved;  // walked to its end and popped, or dropped
+        return;
+    }
+    if (c.state == S::TryAgainLater && frame >= c.retry) {
+        c.retry = frame + 30;
+        const bool apart = foot_overlap_coefficient(foot_of(a), foot_of(b)) <= cfg_.constants.minimum_stopped_vs_stopped_overlap;
+        c.state = apart || unit_moving(a) || unit_moving(b) ? S::Resolved : S::Active;  // ([port] the end rule above)
+    }
 }
 
 void MovementSystem::end_push(Unit& u) {
@@ -2106,6 +2940,11 @@ void MovementSystem::end_push(Unit& u) {
     u.push_path.clear();
     u.push_next = 0;
     u.push_blocked = 0;
+    u.push_owner = kNoDetour;  // s78n t20: the locomotor gives up the record id (pack +0x248)
+    u.push_weight = 0;
+    u.push_kind = 0;
+    u.push_resume = 0;
+    u.push_tags.clear();
 }
 
 void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& pf) {
@@ -2113,7 +2952,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
     tree_.maintain(static_cast<double>(frame) / 30.0);  // shape only; query results do not depend on it
     plan_land(frame, pf);
     detect_collisions(frame);  // S7: checks create collision objects
-    drive_collisions(frame);   // S7: cancel / priority sort / resolve (TACTICAL_GAPS §6.7)
+    drive_collisions(frame, rng);  // S7: cancel / priority sort / resolve (TACTICAL_GAPS §6.7)
     team_caps();  // s78k t03: serial, before the parallel walk reads Unit::team_cap
     team_speed_steps();  // s78n t16: the squad containers' acceleration and straggler cap (serial, start-of-tick positions)
     // s78n t03: each squad container's state at the start of the tick, for its steering members (anchor_at: index into
@@ -2203,8 +3042,39 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             }
             const bool bike = u.d.locomotor == LocomotorKind::Bike;
             const float yaw0 = u.m.yaw;
-            // a1k t03 (A1_READINGS §40.3): the pushed move is the top of the path stack; the order path waits under it.
+            // s78n t18 (MOVEMENT §5.4.1 "How Walk combines the vector"): a Walk unit with collision records adds the
+            // steering vector 0x509810 to its heading (start-of-tick positions; its new speed for the 0x5c6d40 ratio).
+            struct AvoidCtx {
+                const MovementSystem* sys;
+                const Unit* u;
+                float vmax;
+                std::span<const SteerRec> recs;
+                std::span<const SteerPos> pos;
+            } actx{this, &u, u.lp.max_speed, {}, pos0};
+            WalkExtras x;
+            if (own[i].second > own[i].first) {
+                actx.recs = std::span<const SteerRec>(recs).subspan(own[i].first, own[i].second - own[i].first);
+                x.avoid = [](const void* c, V2 dir) -> V2 {
+                    const AvoidCtx& k = *static_cast<const AvoidCtx*>(c);
+                    return k.sys->member_avoid(*k.u, k.u->m.pos, k.u->m.speed, k.vmax, dir, k.recs, k.pos);
+                };
+                x.avoid_ctx = &actx;
+            }
+            x.cap_now = u.coll_now;  // s78n t20 (MOVEMENT §3.5 step 2): the collision cap's "at once" flag
+            // a1k t03 (A1_READINGS §40.3): the collision-owned record is the top of the path stack; the order path waits
+            // under it. s78n t20 (MOVEMENT §1.5.1 item 5): it is walked as the order path is - the collision records'
+            // speed answer, the steering vector, the team cap - without the formation speed, jiggle or side error.
             if (u.pushed && u.deploy == LocoState::None) {
+                // a started order path goes on under the record: no braking for the record's end
+                if (u.has_goal && !u.need_path && frame >= u.start_frame && !u.push_path.empty()) {
+                    size_t from = u.m.next;
+                    if (u.push_kind == 2) from = std::max(from, static_cast<size_t>(u.push_resume));
+                    if (from < u.m.path.size()) {
+                        x.tail = distance(u.push_path.back(), u.m.path[from]);
+                        for (size_t p = from + 1; p < u.m.path.size(); ++p) x.tail += distance(u.m.path[p - 1], u.m.path[p]);
+                        if (!(x.tail > 0.0f)) x.tail = 1e-3f;
+                    }
+                }
                 std::swap(u.m.path, u.push_path);
                 std::swap(u.m.next, u.push_next);
                 const uint32_t escape = u.m.escape_until;
@@ -2212,13 +3082,15 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                 // s78n t14 part B: on a crush-flee path (0x39a5b0) the speed (0x370f00) and with it the acceleration /
                 // deceleration (0x372fe0 / 0x373080: x effective / Max_Speed) x Fleeing_Infantry_Speed_Bonus.
                 LocomotorParams plp = u.lp;
+                if (u.team_cap < kInf && u.speed_factor > 0.0f) plp.max_speed = u.team_cap;
                 if (u.push_flee) {
                     const float fb = cfg_.constants.fleeing_infantry_speed_bonus;
                     plp.max_speed *= fb;
                     plp.accel *= fb;
                     plp.decel *= fb;
                 }
-                res[i] = walk_step(u.m, plp, kInf, &grid_, nullptr);
+                actx.vmax = plp.max_speed;
+                res[i] = walk_step(u.m, plp, u.coll_speed, &grid_, &x);
                 u.m.escape_until = escape;
                 std::swap(u.m.path, u.push_path);
                 std::swap(u.m.next, u.push_next);
@@ -2260,30 +3132,12 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             LocomotorParams lp = u.lp;
             if (u.team_cap < kInf && u.speed_factor > 0.0f) lp.max_speed = u.team_cap;
             if (frame < u.hold_until) cap = 0.0f;
-            WalkExtras x;  // OI tactical: formation members (jiggle, side-error steering)
-            if (u.in_formation) {
+            if (u.in_formation) {  // OI tactical: formation members (jiggle, side-error steering)
                 x.jiggle = u.jiggle;
                 x.side_error = true;
             }
-            // s78n t18 (MOVEMENT §5.4.1 "How Walk combines the vector"): a Walk unit with collision records adds the
-            // steering vector 0x509810 to its heading (start-of-tick positions; its new speed for the 0x5c6d40 ratio).
-            struct AvoidCtx {
-                const MovementSystem* sys;
-                const Unit* u;
-                float vmax;
-                std::span<const SteerRec> recs;
-                std::span<const SteerPos> pos;
-            } actx{this, &u, lp.max_speed, {}, pos0};
-            if (!u.d.team_container && own[i].second > own[i].first) {
-                actx.recs = std::span<const SteerRec>(recs).subspan(own[i].first, own[i].second - own[i].first);
-                x.avoid = [](const void* c, V2 dir) -> V2 {
-                    const AvoidCtx& k = *static_cast<const AvoidCtx*>(c);
-                    return k.sys->member_avoid(*k.u, k.u->m.pos, k.u->m.speed, k.vmax, dir, k.recs, k.pos);
-                };
-                x.avoid_ctx = &actx;
-            }
             actx.vmax = lp.max_speed;
-            res[i] = walk_step(u.m, lp, cap, &grid_, u.in_formation || x.avoid ? &x : nullptr);
+            res[i] = walk_step(u.m, lp, cap, &grid_, &x);
             if (bike) bike_frame(u, yaw0, true);  // §4.5: states 0x20-0x25 and the lean (writes only u)
         }
     });
@@ -2309,20 +3163,48 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             continue;
         }
         const WalkResult& r = res[i];
+        bool popped_arrival = false;
         if (u.pushed) {
             // a1k t03: the pushed path ended -> the move underneath continues (an idle unit stays at the spot).
             // [port] a pushed walk blocked for kReplanAfterBlocked frames ends where it is.
             if (r.blocked) ++stats_.blocked_steps;
             if (r.arrived || (r.blocked && ++u.push_blocked >= kReplanAfterBlocked)) {
                 const bool cut = !r.arrived;
-                end_push(u);
-                u.path_change = frame;  // s78n t18: the pushed record is popped (pack +0x288)
+                // s78n t20 (MOVEMENT §1.5.1 item 5): popped; the order path resumes past the waypoint lines already
+                // crossed, and a unit that is past its last waypoint's line has arrived where it stands
+                popped_arrival = pop_top(u, !cut, frame);
                 // s78n review: a pushed walk cut short on a unit with no order leaves a stopped locomotor (the walk only
                 // stops on its last waypoint): a squad's members then run the recovery decision, and the next order starts
                 // with the start turn and the move-start re-lay.
                 if (cut && !u.has_goal) {
                     u.m.speed = 0.0f;
                     u.m.state = LocoState::WalkStopped;
+                }
+                // s78n t20 F3 [port] (until §5.4.7's top-record rule is ported): a top record cut by the blocked rule
+                // counts as one blocked re-plan of the order underneath (as the order path's own kReplanAfterBlocked
+                // frames do): the order re-plans from here, and after kMaxReplans it fails. Before, the cut resumed the
+                // order path, whose first moved frame cleared every count, and the same pair could make the same
+                // detour again for ever.
+                if (cut && u.has_goal && !popped_arrival) {
+                    u.blocked_frames = 0;
+                    if (++u.replans > kMaxReplans) {
+                        u.has_goal = false;
+                        u.failed = true;
+                    } else {
+                        u.need_path = true;
+                        u.start_frame = frame + 1;
+                        ++stats_.replans;
+                    }
+                }
+                if (popped_arrival) {
+                    u.has_goal = false;
+                    u.arrived = true;
+                    u.exit_host = -1;
+                    if (!u.d.team_container) {
+                        u.m.speed = 0.0f;
+                        u.m.state = LocoState::WalkStopped;
+                    }
+                    land_arrival_turn(u);
                 }
             } else if (r.moved) {
                 u.push_blocked = 0;
@@ -2350,8 +3232,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             if (r.arrived || close) {
                 u.has_goal = false;
                 u.arrived = true;
-                u.detour_seq = kNoDetour;  // s78n t18: the path is popped
-                u.around.clear();
+                u.around.clear();  // s78n t18: the path is popped
                 u.path_change = frame;
                 u.exit_host = -1;  // (MOVEMENT §5.3: the walk-out move arrived)
                 land_arrival_turn(u);  // s78k t01: state 0x15
@@ -2584,15 +3465,24 @@ void MovementSystem::hash_units(StateHasher& h) const {
             h.u8(u.hover);
             h.f32(u.hover_off);
         }
-        if (u.detour_seq != kNoDetour || !u.around.empty()) {  // s78n t18: Path Around bookkeeping, only while any
+        if (!u.around.empty()) {  // s78n t18: the top path's id list (decision step 3), only while any
             h.u8(0xD7);
-            h.u32(u.detour_seq);
-            h.u32(u.detour_end);
             h.u32(u.around_frame);
             h.u32(static_cast<uint32_t>(u.around.size()));
             for (const ObjectId id : u.around) h.i32(id);
         }
-        if (u.pushed) {  // a1k t03: hashed only while a pushed move is active
+        if (u.form_id != 0 || u.self_arrive) {  // s78n t20: the formation of the last land order (land only)
+            h.u8(0xF7);
+            h.u32(u.form_id);
+            h.f32(u.form_slot.x);
+            h.f32(u.form_slot.y);
+            h.boolean(u.self_arrive);
+            if (u.self_arrive) {  // s78n t20 F5
+                h.f32(u.self_goal.x);
+                h.f32(u.self_goal.y);
+            }
+        }
+        if (u.pushed) {  // a1k t03: hashed only while a collision-owned record is on top of the stack
             if (u.push_flee) h.u8(0x07);  // s78n t14 part B: a crush-flee path (kind 7)
             h.u32(u.push_next);
             h.u32(u.push_blocked);
@@ -2600,6 +3490,19 @@ void MovementSystem::hash_units(StateHasher& h) const {
             for (const V2& p : u.push_path) {
                 h.f32(p.x);
                 h.f32(p.y);
+            }
+            h.u8(u.push_kind);  // s78n t20: the record's kind, owner, weight, resume index and hold tags
+            h.u8(u.push_weight);
+            h.u32(u.push_owner);
+            h.u32(u.push_resume);
+            h.u32(static_cast<uint32_t>(u.push_tags.size()));
+            for (const HoldTag& t : u.push_tags) {
+                h.u32(t.index);
+                h.i32(t.obstacle);
+                h.f32(t.pt.x);
+                h.f32(t.pt.y);
+                h.f32(t.dir.x);
+                h.f32(t.dir.y);
             }
         }
     }

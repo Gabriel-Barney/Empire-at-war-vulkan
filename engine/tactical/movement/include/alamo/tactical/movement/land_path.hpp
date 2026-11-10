@@ -194,11 +194,11 @@ bool walk_cells(V2 a, V2 b, Fn&& fn) {
     const float dx = bx - ax, dy = by - ay;
     const int32_t sx = dx > 0.0f ? 1 : (dx < 0.0f ? -1 : 0);
     const int32_t sy = dy > 0.0f ? 1 : (dy < 0.0f ? -1 : 0);
-    constexpr float kInf = 3.0e38f;
-    const float tdx = sx != 0 ? static_cast<float>(sx) / dx : kInf;  // t per cell in x
-    const float tdy = sy != 0 ? static_cast<float>(sy) / dy : kInf;
-    float tmx = sx > 0 ? (static_cast<float>(cx + 1) - ax) / dx : (sx < 0 ? (ax - static_cast<float>(cx)) / -dx : kInf);
-    float tmy = sy > 0 ? (static_cast<float>(cy + 1) - ay) / dy : (sy < 0 ? (ay - static_cast<float>(cy)) / -dy : kInf);
+    constexpr float kFar = 3.0e38f;
+    const float tdx = sx != 0 ? static_cast<float>(sx) / dx : kFar;  // t per cell in x
+    const float tdy = sy != 0 ? static_cast<float>(sy) / dy : kFar;
+    float tmx = sx > 0 ? (static_cast<float>(cx + 1) - ax) / dx : (sx < 0 ? (ax - static_cast<float>(cx)) / -dx : kFar);
+    float tmy = sy > 0 ? (static_cast<float>(cy + 1) - ay) / dy : (sy < 0 ? (ay - static_cast<float>(cy)) / -dy : kFar);
     // Bounded walk: at most |ex - cx| + |ey - cy| steps.
     int32_t steps = (ex > cx ? ex - cx : cx - ex) + (ey > cy ? ey - cy : cy - ey);
     while (steps > 0 && (cx != ex || cy != ey)) {
@@ -235,6 +235,12 @@ bool walk_cells(V2 a, V2 b, Fn&& fn) {
                 if (!fn(x, y)) return false;
     }
     return true;
+}
+
+// s78n t20 (MOVEMENT §1.5.1 item 4, FIGHTER_FLYING §7.5): the terrain line test 0x5a4c10 for a movement class - every
+// cell the segment touches passes the mask (a thin walk, the start cell included).
+inline bool line_passable(const PassabilityGrid& grid, V2 a, V2 b, uint32_t mask) {
+    return walk_cells(a, b, [&](int32_t cx, int32_t cy) { return grid.passable_cell(cx, cy, mask); });
 }
 
 }  // namespace alamo::tactical::movement

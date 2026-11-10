@@ -472,12 +472,13 @@ MovingVsMoving `0x682e80` (flag 1, kind 4, flags 0), `0x683140` (flag 0, kind 4,
      other obstacle's tracker rectangle; (iii) two "escape" vertices on the nearest edge when the start is inside a
      relation-0x10 obstacle's rect2 [M]; (iv) the start (inside another obstacle the search starts at the nearest
      vertex instead); (v) the goal (inside a rect2: the nearest vertex).
-   - Edges (`0x678e80`), every pair i < j: not the two diagonals of one rectangle; not when the direction from a
-     corner lies within about 44° of that corner's outward diagonal (threshold 0.7679 [M: radians through cos]);
-     the terrain line test `0x5a4c10` for u's movement class must pass.
+   - Edges (`0x678e80`), every pair i < j: not the two diagonals of one rectangle; between vertices of
+     **different** obstacles (or a corner and the start / goal / a terrain corner) not when the direction from a
+     corner lies within 44° of that corner's **inward** bisector (item 4a; *corrected s78n t20: this said
+     "outward diagonal"*); the terrain line test `0x5a4c10` for u's movement class must pass.
    - Cost multiplier (`0x67a3d0`): 1, or **`DynamicObstacleOverlapPenalty` (15)** plus a "crossing" mark when the
-     segment crosses any obstacle other than the two end points' own; the front edge (corners +a ±b) of an
-     obstacle in relation 2 / 4 / 8 / 0x20 is always 1.
+     segment crosses any obstacle other than the two end points' own (item 4a); the front edge (corners +a ±b) of
+     an obstacle in relation 2 / 4 / 8 / 0x20 is always 1.
    - A\* (`0x67b8a0`): g = Σ 3-D length × multiplier, h = straight distance to the goal; binary heap on f (insert
      stops at parent.f ≤ f; sift-down swaps only on a strictly smaller child, left before right); neighbours in
      ascending vertex index; closed vertices are not reopened. **Pass 1 skips every edge with the crossing mark;
@@ -486,6 +487,62 @@ MovingVsMoving `0x682e80` (flag 1, kind 4, flags 0), `0x683140` (flag 0, kind 4,
      the quota only decides, in the driver (§5.4.1), whether a state-0 record may decide this frame.
    - Failure: u's max speed 0, no base path / no accepted rejoin candidate, 5 windows without a feasible flood
      fill, start = goal, the heap runs empty or the node pool (3 × vertices) is exhausted.
+4a. **Edge and cost rules in full (s78n t20 RE, 2026-11-10; `0x675240` / `0x675ed0` vertex creation, `0x678e80`,
+   `0x67a3d0`, tracker `0x6b4810` / `0x6b3b00` / `0x6b1d00`, rectangle helpers `0x20d1c0`…`0x20d2b0`, `0x20d690` /
+   `0x20d710`) [H unless tagged].**
+   - **Vertex record.** Type (+0x18): 3 = corner (+a +b), 2 = (+a −b), 1 = (−a −b), 0 = (−a +b) (created in this
+     order; a = the obstacle rectangle's first axis, for a unit its facing); 5 = start; 6 = goal; 7 / 8 = the two
+     escape vertices [M: 7 on the +b side, 8 on the −b side, from which corners they may link to]; terrain corners
+     have another type with no obstacle. Obstacle pointer (+0x20): the obstacle for types 0-3 and 7 / 8, null
+     otherwise. Two positions: the rect1 corner (+0x00) and the **rect2 corner (+0x0c)**; the edge tests and the
+     crossing test use the rect2 corner (the same point while f = 0). Corner vector n (+0x30):
+     the unit vector of (−sa·a − sb·b) for the corner at (sa·ha, sb·hb), sa, sb = ±1. It points from the corner
+     **into** the rectangle at 45° to its axes (it is not the true diagonal to the centre unless the rectangle is
+     square).
+   - **Pairs with the same obstacle pointer** (two corners of one rectangle; also two obstacle-less vertices such
+     as start and goal, or a terrain corner and the start): **no cone test.** No edge for the two diagonals (0-2,
+     1-3). The four sides are edges. [M] escape vertices: 7 never links to corner 1, 2 or to 8; 8 never links to
+     corner 0, 3 or to 7. Then the terrain line test.
+   - **Pairs with different obstacle pointers** (corner ↔ corner of another obstacle, corner ↔ start / goal /
+     terrain corner). With d = the 2-D unit vector from the corner V to the other vertex W (fast inverse square
+     root, two Newton steps): **no edge when d · n_V ≥ cos(0.7679449 rad) = cos 44° = 0.71934** (`cosf` 0x776150 of
+     the float 0x3f449809). Tested from V when V is a corner (types 0-3), and from W whenever W has an obstacle. So
+     exactly one cone per corner is excluded: the **inward** one, 44° either side of n, i.e. the rectangle's
+     interior quadrant less 1° at each side. The outward cone is **not** excluded. An escape vertex (7 / 8) as the
+     lower index links only to the start; as the higher index it also needs the other vertex on the negative
+     side of its own vector (dot < −0.001). Then the terrain line test.
+   - [M] When the start lies inside some obstacle's rect2 and pathfinder +0x194 is set, corners and terrain
+     corners get no edge to the start (only escape vertices and the goal do), and the direct start-goal edge
+     costs × 15 **without** the crossing mark. Not read: what sets +0x194.
+   - **Crossing test** (`0x6b1d00`): the segment as a zero-width oriented box against the temporary tracker
+     records (built once per graph by `0x6b4810`: the shape of item 3 with both half extents + min(hx_u, hy_u) +
+     0.5, + f when the expansion flag is set; **not rect1**). Separating-axis test with a closed comparison, so
+     **touching counts**. Records whose id equals either end vertex's id are **skipped inside the query**: the id
+     of a corner / escape vertex is its obstacle's id, of the start is u's own id, of the goal or a terrain corner
+     none. The ids of the records met go to a list.
+   - **Multiplier** (`0x67a3d0`, one call per direction; the result is the same both ways): 1.0 when the list is
+     empty. Otherwise each listed object that is not u, not the from-vertex's obstacle and not the to-vertex's
+     obstacle makes the edge **crossing**: multiplier := GC `DynamicObstacleOverlapPenalty` (15), crossing mark
+     (edge +0x10) := 1. "Own" therefore = the obstacle objects of the edge's two end vertices plus u; the start
+     and the goal own nothing else. Exceptions decided before the list is looked at: the side between corners 2
+     and 3 of one obstacle whose relation code (`0x679750`) is 2, 4, 8 or 0x20 → 1.0; an edge between an escape
+     vertex and the start → 1.0.
+   - **Consequence.** An edge can never leave a corner into its own rectangle: the inward cone removes it in both
+     passes, before any cost is looked at. The "own obstacle is free" rule only covers what the cone leaves: the
+     four sides, and the 1° slivers along them. An edge that crosses a **third** obstacle exists, marked, at × 15,
+     and is usable in pass 2 only.
+   - **Worked example.** One standing obstacle, rect1 = rect2 = [−10, 10] × [−5, 5], a = +x, start S = (20, 0),
+     goal G behind the centre, e.g. (−30, 0); corners c3 = (10, 5), c2 = (10, −5), c1 = (−10, −5), c0 = (−10, 5),
+     n(c3) = (−0.7071, −0.7071), n(c0) = (0.7071, −0.7071).
+     - S ↔ c3 (front corner): d from c3 = (0.894, −0.447), d · n = −0.316 < 0.7193 → **edge, × 1**.
+     - S ↔ c0 (rear corner, the segment passes through the rectangle): d from c0 = (0.986, −0.164), d · n = 0.814
+       ≥ 0.7193 → **no edge, in either pass**.
+     - c3 ↔ G: d from c3 = (−0.992, −0.124), d · n = 0.789 ≥ 0.7193 → **no edge**.
+     - c3 ↔ c0 (a side of one rectangle): **edge, × 1**. c0 ↔ G: d · n = −0.514 → **edge, × 1**.
+     - S ↔ G direct: both obstacle-less, so an edge whenever the terrain line passes; the obstacle's tracker
+       record is met → **× 15, crossing**, pass 2 only.
+     - Pass 1 result: S, (10, 5), (−10, 5), G (or its mirror image; the tie falls to the A\* rules of item 4),
+       cost = the sum of the three lengths, no crossing.
 5. **Output and splice.**
    - Points (`0x674870`) = the vertex positions start → goal, **unsmoothed**; started from a nearest vertex: the
      real start and the foot of the start on the first segment first; goal inside an obstacle: one more point 1
@@ -524,16 +581,20 @@ squad members; crushable units, same-way-not-slower movers and, for Infantry / G
 the named obstacle is forced when flag 1) as oriented rectangles of half extents (hx + 1, hy + 1), swept for a
 closing mover, grown by hy_mover + 0.5 (+ `MovementBoxExpansionFactor`). Nodes: the grown rectangles' corners (kept
 when passable and not inside another obstacle), convex / concave corner cells of impassable terrain in the window,
-start and goal, in the order of item 4. Edges: terrain-passable segments, not a rectangle's diagonal, not into the
-outward ~44° cone of a corner. A\* with the tie rules of item 4; first without segments that cross a third
+start and goal, in the order of item 4. Edges: terrain-passable segments, not a rectangle's diagonal, and (between
+different obstacles, or a corner and the start / goal) not from a corner into its **inward** 44° cone (item 4a:
+d · n ≥ 0.71934, n = the inward 45° bisector); a rectangle's own sides are always edges and its own rectangle
+never makes an edge "crossing". A\* with the tie rules of item 4; first without segments that cross a third
 obstacle, and only if that fails with them at × 15. Emit the corners unsmoothed, tag front-corner waypoints with
 the obstacle id and hold line, drop the rejoin point when the last corner sees the next original waypoint. Push the
 detour above the ordered path after removing older collision-owned paths; when it ends, resume the ordered path at
 the first waypoint line not yet crossed. Failure leaves the unit untouched (the callers then push, hold or retry,
 §5.4.1 / §5.4.6). [port] the plain window numbers and the corner-pruning masks may differ; record them.
 
-*Not read:* the tracker internals `0x6b4810` / `0x6b1d00` / `0x6b4cb0` (temporary obstacle records, crossing
-count), `0x41cf40`, `0x509370`, the escape-vertex edge rules, the exact terrain-corner pruning masks.
+*Not read:* the tracker's tree build and point query (`0x6b4cb0`, `0x6b3580`, `0x6b6070`; the record contents and
+the segment query are in item 4a), `0x41cf40`, `0x509370`, where the escape vertices are placed and what sets
+pathfinder +0x194, the exact terrain-corner pruning masks, whether the emitted points are the rect1 or the rect2
+corners when f > 0.
 
 ### 1.6 Request budgets, staggering and re-path triggers
 
@@ -1187,7 +1248,8 @@ Values 9–0xB are unused. SimpleSpace reuses 0x13 (following a path) and 0x16 (
     len − cur − 1 − rate when reversing out of 0x19), plus `0x3a0580`, with the same turret wait. When it has
     ended → state 0 and signal 0x29.
   - 0x16 with pending set → 0x19 directly, with the animation on its last frame. This is the walk-while-deployed
-    case (`Max_Dist_Walk_While_Deployed` > 0); no vanilla FoC unit sets that field.
+    case (`Max_Dist_Walk_While_Deployed` > 0). *Corrected s78n t20: "no vanilla FoC unit sets that field" was
+    wrong; `Destroyer_Droid` sets 150.0 and `Destroyer_Droid_Attack` inherits it (they are the only ones).*
 - **Window length** ≈ the turret recentre wait + ceil(max(count − 2, 0) / (clip rate × `Deployment_Anim_Rate`)) sim
   frames, following the ABILITIES_HARDPOINTS §4.13 convention [M on the exact end test].
 - **FoC `Deploys = Yes`** (all WALK_LOCOMOTOR): AT_AT, Veers AT_AT, AT_AA (rate 2.0), SPMAT (2.0), MPTL (1.5),
@@ -1357,7 +1419,7 @@ The infantry turn-animation time = angle / rate × 1/30 (`0x62bef0`).
 
    - The distance budget v is spent along the waypoints. One frame may pass several waypoints; the remainder carries over to the next segment.
    - Switch to End Move when the remaining path ≤ v²/(2·decel).
-4. **Passability check before commit.** Unless the path's skip flag is set, the new position must pass the movement-class test of §1.1 (`0x50e280`). On failure, report to the collision system (`0x509090`) and stop this frame.
+4. **Passability check before commit.** Unless the path's skip flag is set, the new position must pass the movement-class test of §1.1 (`0x50e280`). On failure, report to the collision system (`0x509090`) and stop this frame: the position is not committed, the speed is set to 0 and a TerrainCollision record is made (§5.4.7).
 5. **Normalisation.** Vector normalisation uses the fast inverse square root (magic 0x5f375a86, two Newton steps). **Reproduce this bit-exactly**: it feeds positions.
 6. **Formation jiggle** (`0x42c270`). Each moving frame, the offset += synced random(±k) × speed fraction × `FormationRaggedness` (+0x16a8), clamped to ±`MaxJiggleDistance` (+0x16ac). Each call draws from the lockstep RNG.
 7. **Hover rise/lower.** z moves by the effective max speed per frame toward terrain + `Hover_Height` (+0x23bc). Deploying states run at `Deployment_Anim_Rate`.
@@ -1560,7 +1622,9 @@ Both are 0xb8 bytes and are created per order by `0x426010`, appended in creatio
 
 **Step 2: formations.** Inside each bucket, repeat until the bucket is empty:
 1. **Seed.** The remaining member nearest the bucket centroid (`0x4f7060`); ties keep the earlier one in the vector.
-2. **Destination.** The clamped order point, validated as a passable cell for the seed's MovementClass and OccupationStyle (`0x50f480`, search radius 30) unless flag 0x20 is set. Locomotors that answer vf +0x240 use the position finder at `0x1409cf220` instead.
+2. **Destination.** The clamped order point P (`0x583150`: the block's goal point, for an object goal the object's position, clamped to the playable box), **validated against the seed's zone** by `0x50f480`(P, the seed's position, the seed type's OccupationStyle, its MovementClass, 30) unless flag 0x20 is set. The rule is §4.3.1 item 7: P is kept when its cell is in the same zone as the seed's cell; otherwise it becomes the centre of the nearest-to-the-seed cell of the seed's zone on the first ring around P that has one. *(Corrected s78n t20: this said "validated as a passable cell"; the test is zone equality, not passability, and the result is used only for position goals.)* Locomotors that answer vf +0x240 use the position finder at `0x1409cf220` instead.
+   - Validation fails (no such cell within 29 rings): the composition pass **returns at once**. Formations already made in this pass stay; this seed and every member not yet placed get no formation for this order, and the destination check of §4.3.1 is not run [H for the return, M for the effect].
+   - Use: for a **position goal (block kind 1) without flag 0x20** whose validated point V differs from P, the formation's block is a fresh kind-1 block at V carrying only the order's flags word (+0x48); the order's final facing is not carried over (block +0x5c = 0) [H]. In every other case (V = P, an object goal, flag 0x20) the block is a copy of the order: for an object goal the validated point is thrown away.
 3. **Stagger** (`PathFrameDelay`, synced random), see §1.6.
 4. **Recruitment.** Only when the seed's `FormationGrouping` (+0x16a4) is not Solo. A candidate from the same bucket joins when all of these hold:
    - the seed is not an engaged short-range attacker;
@@ -1574,7 +1638,7 @@ Both are 0xb8 bytes and are created per order by `0x426010`, appended in creatio
    - the distance to the nearest current member is within the recruitment distance: **InfantryFormationRecruitmentDistance = 60** for UnitCollisionClass Infantry (5) that is not a team member, otherwise **VehicleFormationRecruitmentDistance = 100**;
    - a straight passable line exists (`0x5a4c10`), or a real path (`0x5a2830`) is ≤ 1.4 × the nearest-member distance.
 5. **Teams.** Team members are split across formations only when ShouldInfantryTeamsSplitAcrossFormations (true). [M]
-6. **Attack orders.** Units already within weapon range + **Solo_Attack_Range = 60** go solo. "Short-range" is set when distance < range × **Short_Range_Attack_Formation_Coefficient = 1.6**. [M]
+6. **Attack orders** (object goal without the guard flag; s78n t20: read from `0x43c1b0`, was [M]) [H]. With E_r = the seed's engagement range `0x4f6e40` (§4.3.2 item 1) and d = the 3-D distance seed to target: the seed goes **solo** (no recruitment) when it is already in max range of the target (TARGETING slot 44), or its type is melee (`0x372210`), or d < r_seed (`0x3969f0`) + E_r + **Solo_Attack_Range (GC +0x1548, 60)**. Otherwise "short-range" is set when d < E_r × **Short_Range_Attack_Formation_Coefficient (GC +0x1544, 1.6)**.
 
 ### 4.3 Shape and slot assignment (`0x41a740`, `0x41ece0`) [H]
 
@@ -1604,7 +1668,7 @@ Both are 0xb8 bytes and are created per order by `0x426010`, appended in creatio
    - Re-sort the kept members by lateral projection (`0x420790`), so units keep their left/right order and never cross.
 3. **Lateral placement.** gap = (2·half-width − Σ widths)/(count + 1). Member k is offset by (cumulative gaps + widths − half-width) × 20. The next row steps back by this row's largest width × 20.
 4. **Store.**
-   - Land: the slot's world position is quantised to the grid (`0x423ec0`).
+   - Land: the member's **form-up point** (its slot in the form-up box at the path start, `0x414d90`) is stored as a world position in a second object-ID-keyed hash (formation +0x140…+0x170, `0x423ec0`). *(Corrected s78n t20: this said "quantised to the grid". Nothing is rounded: the box is kept in cell units, and the point is converted with world = cells × 20 − 10 as a float. `0x423ec0` only erases and re-inserts the hash entry.)*
    - Space: slot z = the member's `Layer_Z_Adjust`.
    - Offsets live in an **object-ID-keyed hash** (formation +0x108…+0x130; insert `0x423ae0`, lookup `0x41a8d0`). It is never iterated.
 5. **Footprint check**: *(corrected s78n t19, 2026-11-10; the earlier text "`0x40eb90` → `0x43a070`, non-members
@@ -1625,7 +1689,7 @@ Read from `0x40eb90`, `0x410e90`, `0x41c1a0`, `0x43c1b0`, `0x439360`, `0x43d6a0`
    `0x411980`; corridor squeeze `0x412210` (mode ≥ 2); the oriented form-up box `0x414d90` (at the path **start**);
    slot assignment `0x41ece0`; slot offsets copied to the members' packs `0x4252a0`. Its "retry" is `0x410e90`: for
    an object goal (block kind 3) the formation path is trimmed back in 10.0 steps to where the members can fire
-   (guard: within `Land_Guard_Range`) and laid out again [M]. "Signal 10 and state 3" happens only when `0x41ece0`
+   (guard: within `Land_Guard_Range`) and laid out again (in full: §4.3.2 item 7). "Signal 10 and state 3" happens only when `0x41ece0`
    returns 0 (a row pass consumed no member), which the first-candidate-always-fits rule makes practically
    unreachable [M]; if hit, the order ends as arrived and nobody moves. No member-count gate.
 2. **When the destination check runs:** once, at the end of the land composition pass `0x43c1b0` (the coordinator
@@ -1634,11 +1698,14 @@ Read from `0x40eb90`, `0x410e90`, `0x41c1a0`, `0x43c1b0`, `0x439360`, `0x43d6a0`
    Object goals (kind 3) go to `0x438c10` (item 5); every other kind to `0x439360`.
 3. **`0x439360`** takes every descriptor whose first member's `Space_Layer` is Land (`0x397900`(m, 1) = 0x10).
    **No member-count gate: one squad container or one vehicle qualifies.** The descriptors are sorted nearest
-   first to the group centroid C and the first is test-planned (`0x41c1a0`(R, 1)); a path of fewer than 2 nodes
+   first to the group centroid C and the first, R, is test-planned (`0x41c1a0`(R, 1)); a path of fewer than 2 nodes
    ends the pass with nothing changed. Axis a = that path's last segment direction d1, or the order's facing when
    it has one; φ = the signed angle from the path's first to its last segment. Passes n = 0 … 40 over the
-   **centre** Dn: D (the ordered goal) for n = 0, else D + 20·⌈n / 8⌉·(cos, sin)((n mod 8)·45°); Dn must be passable
-   (`0x50e180`), zone-connected to D and reachable by a straight line or a path ≤ 1.8 × the distance. Each
+   **centre** Dn: D for n = 0, else D + 20·⌈n / 8⌉·(cos, sin)((n mod 8)·45°). **D = the goal point of R's own
+   block** (`0x583150` on `0x41a4e0`(R)), i.e. for a position order the point **validated** for R's seed in §4.2
+   step 2 (item 7), not the raw order point *(s78n t20; "the ordered goal" before)*. Pass 0 tests nothing about D
+   itself. For n ≥ 1, Dn must be passable (`0x50e180`, R's formation class F +0x1c4), zone-connected to D
+   (`0x50ee10`, item 7) and reachable by a straight line or a path ≤ 1.8 × the distance. Each
    formation i is placed by `0x43d6a0` with step direction v_i = normalise(rotate(centroid_i − C, φ)), or −d1 when
    it is the only formation or that offset is zero. Any formation failing → next n. After n = 40 one forced pass at
    D accepts everything. **The order is never refused.**
@@ -1662,14 +1729,93 @@ Read from `0x40eb90`, `0x410e90`, `0x41c1a0`, `0x43c1b0`, `0x439360`, `0x43d6a0`
      table (`0x505020`, §5.2 item 6) and the member cannot crush it (`0x5c8900`). **Reject iff Σ over blockers of
      hx·hy (their unexpanded half extents) > 0.15 × (HX + S)(HY + S)** (0.15 at `0x140865dc0`).
    - Accept: the formation's block goal := the centre (`0x423e70`), its rectangle is stored (formation +0x258) and
-     appended to the taken list.
+     appended to the taken list. The centre is used **as computed, unrounded** (s78n t20).
+   - Ground state of the tries (s78n t20, [H]). "Met" is set by the first try whose centre cell or R is
+     impassable; the next try on passable ground turns it into "crossed". Only while "crossed" is a try tested for
+     zone connection **to Dn** and for the line / 1.8 × path from Dn. A try that fails after the ground tests
+     (zone, path or object test) while "crossed", followed later by another impassable try, **ends the tries at
+     once** (fail). Before "met", the first formation uses the halved, alternating offsets of the first bullet;
+     from "met" on it uses the full step t.
+   - Forced pass (the last argument set): the same 40 tries run and the first accepted one is taken as usual. Only
+     when none is accepted the block goal := the centre of the **last try that reached the object test**, or Dn
+     when no try got that far, and that rectangle goes to the taken list.
 5. **`0x43a070`** is the attack-arc slot test of object goals (`0x438c10` → `0x43d380` → `0x43b520`, 5° steps,
    `Base_Land_Targeting_Arc_Angle_Coefficient`): a slot needs a passable point, zone connection and a clear line to
    the target, and passes iff Σ (hx + S)(hy + S) < 0.15·HX·HY over the objects in the rectangle (HX + E, HY + E)
    that are **not moving** (locomotor vf +0x1c0(0) false), the target and the order's own objects excluded.
+   **In full: §4.3.2** (s78n t20). Note there: the "clear line" is the **terrain** line test to the target's
+   position, so a target that stands on cells the formation cannot enter (a stamped structure) gets no slot.
 6. **Single-member shortcut in the plan `0x41c1a0`:** block kind ≠ 3, flags without 0x10 and 0x20, and the 2-D
    distance to the goal < √(hx² + hy²) (`0x3969f0`): with one block the formation signals 10 (arrived), stops and
    goes to state 3; with more blocks the block is popped. (A unit ordered onto its own footprint does not move.)
+
+7. **Zone validation `0x50f480`, zone connection `0x50ee10` and where the path ends (s78n t20 RE, 2026-11-10; read
+   from `0x50f480`, `0x50ead0`, `0x50ecd0`, `0x50da90`, `0x50e180`, `0x50e280`, `0x43c1b0`, `0x439360`, `0x43d6a0`,
+   `0x417520`, `0x414720`, `0x41c1a0`, `0x40e260`, `0x5a2e00`, `0x5a1910`, `0x5a3020`, `0x5a3ba0`, `0x5a49c0`,
+   `0x41ece0`, `0x423ec0`) [H unless tagged].**
+   - **Zones** (`0x50da90`, rebuilt with the regions): per OccupationStyle layer and per MovementClass every
+     region gets a zone id: **0 when the region's passability bits fail the class mask**, else a component number
+     ≥ 1 from a flood fill over adjacent passable regions [M: that the fill graph is the region adjacency of
+     §1.4]. A cell's zone is its region's; "none" (−1) when the cell is outside the grid, in the uncovered last
+     row / column, the class is −1, the mode is not land, or the **style is not 0**.
+   - **`0x50ee10`(A, B, class, style)** "zone-connected": true outright when the mode is not land; otherwise true
+     iff both cells have regions, **both regions pass the class mask** and their zone ids are equal. An impassable
+     end point is never zone-connected to anything.
+   - **`0x50f480`(P, Q, style, class, 30, out)**, cells by trunc((x + 10) / 20):
+     1. zone(Q) = none and Q's cell lies outside the grid, **or zone(Q) = zone(P)** → out := P unchanged, true.
+        Passability is not looked at: with Q on impassable ground (zone 0) an impassable P is kept; with style ≠
+        0 both are "none" and P is always kept.
+     2. Otherwise rings r = 1 … 29 (the 30 is an exclusive bound in **cells**: up to 580 world units) of the
+        square around P's cell. Candidate order within a ring: for i = −r … r the cell (px + i, py + r) and then
+        its mirror (px − i, py − r); then for j = 1 − r … r − 1 the cell (px + r, py + j) and then its mirror
+        (px − r, py − j). A candidate is kept when it is inside the grid and **its zone id equals zone(Q)**. As
+        decompiled, a mirror cell is only looked at when the first cell of its pair is inside the grid and has a
+        region.
+     3. The first ring with at least one kept candidate decides: out := the centre (cell × 20, z = 0) of the
+        kept cell **nearest to Q** (straight distance to the cell centre; strict <, so the earliest candidate
+        wins a tie), true. No later ring is looked at even when it holds a nearer cell.
+     4. No ring has one → false, out untouched.
+     5. Quirk [H as read, M for the effect]: with Q on impassable ground and P passable, step 2 looks for cells
+        of zone 0, i.e. the result is an **impassable** cell near P.
+   - **Callers.** (a) Composition, §4.2 step 2: Q = the seed's position, class / style of the seed's type. (b)
+     The formation path `0x417520`, every (re)plan: goal G = the block's goal point for the lead (`0x5833e0`; for
+     an object goal the object's position, or its hardpoint / stored point) after staging `0x40e260` (which only
+     moves G when a member stands inside its minimum range of an object goal); when G is not zone-connected to
+     the lead for the formation's class F +0x1c4: G := `0x50f480`(G, the lead's position, style 0, that class, 30),
+     and the plan fails when that fails. So **a path to an object goal on impassable ground (a structure) ends
+     on the reachable cell next to it that is nearest to the lead**, before any trimming (§4.3.2). (c) `0x414720`
+     picks F +0x1c4 at every plan: the class with the most mask bits among those whose mask is contained in the
+     intersection of all members' masks (`0x4779e0`); when the goal is zone-connected to the lead for it (or
+     validates), and is also zone-connected for the best class without the Shield bit 0x40 (`0x477b00`), that
+     class instead.
+   - **What reaches the destination check.** D (item 3) is R's validated point, so it is normally passable and
+     in R's zone, and the check runs as written. D can still be impassable only when R's seed itself stands on
+     impassable ground (zone 0 = zone 0), when the seed's OccupationStyle is not 0, or when the seed is outside
+     the grid. Then: every try of pass 0 fails (the centre is impassable, or after "crossed" it is not
+     zone-connected to D), passes 1 … 40 fail their own zone test, and the forced pass, finding no try that
+     reached the object test, **keeps D**. The check changes nothing for an impassable D.
+   - **Test plan to an impassable goal** (`0x41c1a0`(R, 1) → `0x417520`): the lead on passable ground → G is
+     re-validated as in (b) and the path has ≥ 2 nodes. The lead on impassable ground too → the region search
+     `0x5a3020` fails unless start and goal share one region (it needs the **start region** to pass the class mask
+     and never enters an impassable region), the path is left empty and the destination check ends with nothing
+     changed. The single-member shortcut of item 6 (a unit ordered onto its own footprint) returns before any
+     path as well.
+   - **Where the formation path ends.** The request goal is G as a float point; `0x5a1910` only derives the start
+     and goal **cell indices** from the request (goal cell = trunc((G + 10) / 20); the start cell likewise, or
+     for an object-less / negative-turn-rate request the best-aligned of the up to four cells around the start).
+     The same-region builder `0x5a3ba0` emits start, start cell centre, goal cell centre, **exact G**; the
+     region-path builder `0x5a0550` appends the exact goal too (§1.4); the visibility pass `0x5a49c0` always
+     keeps the last point. So **the path ends exactly on the block goal** (the
+     accepted centre of item 4, the validated point, or the ring cell centre of step 3), not on a cell centre
+     [H for the request and the raw point list, M that the shortcut pass `0x5a4130` never moves the last point].
+     Slot offsets (hash +0x108, `0x423ae0`) are float world offsets (depth, lateral); nothing in `0x41ece0`
+     rounds a slot to a cell.
+
+***Port spec (zone validation):*** before the destination check, replace a position goal P that is not in the
+lead's zone (impassable for its class, or cut off) by the cell centre of step 3 above: nearest to the unit among
+the cells of the unit's zone on the first square ring (1 … 29 cells) around P that has any. Run the destination
+check from that point. Do the same in the path builder for an object goal's point. Do not round an accepted
+centre or a member slot to a cell.
 
 ***Port spec (destination check):*** at a land move order without the forced flag and without an object goal, for
 every formation of the order (a lone squad or single vehicle included) whose lead is on the Land layer, test the
@@ -1681,11 +1827,182 @@ back). Units count at their **destinations** when they have a path. The collisio
 forced-path moves, attack orders and non-Land formations. Nothing runs at arrival: a squad or unit simply ends its
 path where the (possibly cut) path ends.
 
-*Not read:* the passability primitives' rules; block +0x5f (set by `0x417520`; the object test then never rejects
+*Not read:* block +0x5f (set by `0x417520`; the object test then never rejects
 and only records a per-member flag via `0x423fe0`) [L]; whether taken rectangles of a failed pass n are cleared
-before pass n + 1 [M].
+before pass n + 1 [M]; the rectangle passability test `0x17dc70`; the position finder `0x440f90` used for vf +0x240
+locomotors and forced paths; `0x5a0550` beyond its last two points.
 
 **Port note:** the rank sort is unstable. Use a stable sort with a final tie-break on object ID. Exact retail tie order cannot be reproduced without MSVC's introsort; ties are rare because of the name tie-break.
+
+#### 4.3.2 Attack approach on land: arc slots, the slot leg and the fire trim (s78n t20 RE, 2026-11-10) [H unless tagged]
+Read from `0x43c1b0`, `0x438c10`, `0x43d380`, `0x43b520`, `0x43a070`, `0x43b210`, `0x4f6e40`, `0x411640`,
+`0x41fd30`, `0x41c1a0`, `0x417520`, `0x40e260`, `0x40eb90`, `0x410e90`, `0x40f7c0`, `0x40edd0`, `0x410a60`,
+`0x5a4c10` / `0x5a50d0` / `0x5a5810` / `0x5a51f0`, `0x567350`, `0x568340`, `0x583150`, `0x5833e0`, `0x583930`.
+B = the order's object block (kind 3), T = its object, C = T's goal point (`0x583150`: T's position, or its
+hard point when the block names one). F = a formation; (HX, HY) = F +0x250 / +0x254, its half depth / half width
+in world units, set at composition by `0x411640` (a mode-0 plan and layout, then the union of the slot
+rectangles). S = `BetweenFormationSpacing` (GC +0x14ec, 5.0), E = `Destination_Collision_Query_Extension` (GC
++0x14f0, 60).
+
+**Summary.** Three separate things happen, in this order:
+- at the order (and at an auto-attack push) the formations that are not yet able to fire get a **polar slot**
+  (angle, ring radius) around the target (items 1-4);
+- at every plan the path is built to the target's point, and a formation with a slot gets a path **through its
+  slot point and on to the target point** (item 6);
+- the laid-out path is then **cut back to the first place from which every member can fire** (item 7). This
+  cut, not the ring radius, is what stops a formation at weapon range.
+
+1. **Engagement range `0x4f6e40`(unit, block).** r = the unit's attack range `0x3749d0`. With a pending ability
+   whose own range (vf +0xd8) is > 0: min(r, that range), nothing added. Otherwise, when the block has an object:
+   r += min(hx, hy) of the object's extents (`0x396850`) when the block names no hard point, else += `0x397780`
+   [M: of which object; the argument is not visible]. Then for a guard block: min(r, `Space_Guard_Range` 750) in
+   space, min(r, `Land_Guard_Range` 150, GC +0x11ec4) on land.
+2. **`0x438c10`(B, formations, the order's units): who gets a slot, and when.** Callers (the only two): the land
+   composition pass `0x43c1b0`, for an object goal without flag 0x20, on the new descriptors; and the block Push
+   `0x41fd30` for a non-guard object block on a land formation (a one-descriptor copy of the formation; the slot
+   comes back inside the pushed block). **It is not run at a re-plan.**
+   - List L: every formation with **exactly one block**, a lead on the Land layer (`0x397900`(lead, 1) = 0x10)
+     and, non-guard: **some member that is not in max range of T (TARGETING slot 44, `0x567350`) or is inside
+     its min range (slot 45, `0x568340`)**; guard: its lead farther from C than min(the lead's attack range,
+     `Land_Guard_Range`). A formation whose members can all fire already is left out and keeps the plain block.
+   - L empty → return. R = the **minimum** of the engagement ranges (item 1) over all the order's units.
+   - Reference formation = the one in L nearest (3-D, strict <, first wins) to the mean of L's centroids
+     (`0x41a9b0`). It is test-planned (`0x41c1a0`(F, 1)); fewer than 2 path nodes, or a zero last segment →
+     return with nothing written. d0 / d1 = the unit directions of that path's first / last segment (2-D).
+   - L is sorted ascending by the projection of the formation centroid on d0 from the path start (`0x43b210`,
+     `std::sort`): **rear-most first**.
+   - Coefficient loop: f = GC +0x154c `Base_Land_Targeting_Arc_Angle_Coefficient` (**0.2**), then f − 0.2 each
+     time while f > −1.0: in float32 exactly **six tries, f = 0.2, 0, −0.2, −0.4, −0.6, −0.8**. Each try runs
+     `0x43d380`(L, B, R, d1, f) without committing; the first f that succeeds is run again with commit and the
+     function returns. **No f succeeds → nothing is written: no slot, the blocks stay plain. The order is never
+     refused here.**
+3. **`0x43d380`: rings.** r_T = `0x3969f0`(T) = √(hx² + hy²). Lower radius limit R_min = max(r_T, R·f). Half
+   arc A = (1 − f)·90°: **72°, 90°, 108°, 126°, 144°, 162°** for the six tries. Axis u = −d1 (from the target
+   back along the approach). Outer radius ρ := R. Repeat while formations are left:
+   - Find the longest prefix of the remaining list (rear-most first) that fits on one ring: for prefix length
+     k = 1, 2, …: h = the largest HX in the prefix; ring radius ρ_k = ρ − h; stop extending when ρ − 2h < r_T or
+     when `0x43b520`(prefix, ring ρ_k, A) fails.
+   - No formation fits → the try fails. Otherwise (commit run) place that prefix on its ring, remove it, and
+     ρ := ρ − 2h with **h of the last prefix tested** (the failing one when the extension stopped on a
+     failure).
+   - New ρ < R_min → stop. The try succeeds iff no formation is left.
+   - So the rear-most formations take the outermost ring, whose far edge is at R: every unit of the order is
+     then inside the shortest engagement range. Inner rings follow at 2h steps down to 0.2·R on the first try and
+     down to the target's radius on the others.
+4. **`0x43b520`: one ring.** The prefix is sorted ascending by centroid projection on the **right-hand normal of
+   d0** (d0.y, −d0.x) (same comparator; left-most first), n formations. All angles are measured from u, counter-
+   clockwise positive; a slot point is **P(θ) = C + ρ_k·rot(u, θ)**. step(a, b) = acos(√(ρ_k² − (a + b)²/4) / ρ_k),
+   i.e. asin of half the chord a + b.
+   - Middle formation m = index n >> 1. Its first angle θ = 0 for odd n, **2·step(HY_m, 0)** for even n (fail
+     at once when that exceeds A). It is tried at θ, then alternately on both sides in **5°** steps (0, +5°, −5°,
+     +10°, … ; from a non-zero start θ0: θ0, −θ0, θ0 + 5°, −(θ0 + 5°), …) while |θ| ≤ A, until the slot test
+     (item 5) passes. None passes → fail.
+   - Left neighbours, index m − 1 down to 0: the first one starts at θ_m − **2**·step(HY, HY_m); each further
+     one at the previous accepted angle − **1**·step(HY, HY_prev) (as coded: the factor 2 is only on the first
+     neighbour). A failed test moves that formation a further 5° outward (θ −= 5°); beyond −A → fail.
+   - Right neighbours, index m + 1 up to n − 1: the mirror image from θ_m (first + 2·step, then + 1·step, + 5°
+     on a failed test); beyond +A → fail.
+   - **Commit, per formation:** its block 0 := a copy of B with **block +0x3c := θ (radians) and +0x40 := ρ_k**
+     (`0x423e70`); F +0x258 := the slot rectangle of item 5. Nothing else is written (no position, no flag).
+     There is no shared "taken" list: neighbours are separated only by the angular step.
+5. **`0x43a070`(F, P): the slot test.** c = the formation's movement class (`0x4779e0`: the class with the most
+   mask bits inside the intersection of the members' masks). All of:
+   1. P's cell is passable for c (`0x50e280` with that mask).
+   2. P is zone-connected (`0x50ee10`, §4.3.1 item 7) to F's lead (`0x41a9b0`).
+   3. The **terrain line test `0x5a4c10` from P to T's position** passes for c: every cell the segment crosses,
+      **the last one included**, must be enterable (same region as the start, else a cell walk for pieces under
+      40 long). This is not a line-of-fire test. **A target whose own cell is not enterable for c, i.e. any
+      structure or prop stamped under its origin (§1.3), fails this for every P, so it never gets slots**; a
+      unit standing on open ground does.
+   4. The object test. Rectangle: centre P, first axis a = unit(T.position − P), second (−a.y, a.x), half
+      extents (HX, HY) (this rectangle is what the commit stores). Candidates: the tracker's objects
+      (`0x539680`) in that rectangle grown by E on both axes. Skipped: T; every object of the order (the unit
+      list); an object **with a path record on its stack** (locomotor vf +0x1c0(0) = `0x42cbd0`; so any unit
+      that is under way, whatever its speed); a non-container Infantry-class object when the formation is all
+      Infantry / Bike or all Giant and not all team containers. **An object without a locomotor always counts.**
+      A candidate's rectangle is its footprint (`0x43a7f0`; no shift, since it has no path) with both half
+      extents **+ S**. It is a blocker when some member's slot rectangle (centre P + a·depth + a⊥·lateral from
+      the slot offsets, half extents `0x396850` + S) overlaps it (`0x20d690`, touching counts) and that member
+      cannot crush it (`0x5c8900`). **No UnitCollisionClass table test here** (unlike §4.3.1 item 4).
+      **Pass iff Σ over blockers of (hx + S)(hy + S) < 0.15 × HX × HY** (strict; the expanded blocker areas
+      against the unexpanded formation rectangle, the reverse of §4.3.1 item 4).
+6. **The plan with a slot (`0x41c1a0` → `0x417520`, every plan and re-plan).**
+   - Before any path: with an object on the top block, no guard flag and **c true** (`0x40edd0`: every tested
+     member can fire from where it stands; FIGHTER_FLYING §4.11 E) a real plan (mode ≥ 2) of a land formation
+     **clears every member's path stack** (locomotor vf +0x138 with the current owner id: `0x42cfc0` →
+     `0x554480`; the speed is not zeroed, the members brake through End Move) and returns success with no path
+     [M: the formation then arrives at its next step]; a test plan returns "no path".
+   - Goal G = the block's goal point for the lead (C). Staging `0x40e260` moves G only when the member with the
+     largest minimum range is **inside** that range of T: then G := a spot at min + 0.2 × (attack range − min)
+     from T on that member's side (position finder), or, for a one-member formation of a crusher against a
+     crushable T, T's position. Then the zone re-validation of §4.3.1 item 7 (b): a G the lead cannot reach
+     becomes the reachable cell next to it.
+   - First path: start → G (start = the members' centroid when it is reachable from the lead by a straight line
+     or a path ≤ 1.9 × the distance, else the lead's position).
+   - **Slot leg, only when block +0x40 (ρ) > 0 and the first path has ≥ 2 nodes.** v = the unit direction of
+     the first path's **own** last segment (3-D). Q = G + ρ·rot(−v, θ) (θ = block +0x3c; rotation about z).
+     The terrain line test from G toward Q gives the distance q it gets (ρ when the line is clear) [M: its
+     value when blocked at once]; slot point Q' = G + q·rot(−v, θ). A second path start → Q' is planned; when it
+     succeeds and its first segment points the same way as the first path's (dot > 0), **G is appended to it
+     and it replaces the formation path: start → … → Q' → G.** Otherwise the first path stays.
+   - So the stored (θ, ρ) is re-applied to **this formation's own approach direction at each plan**, not to the
+     reference formation's d1 used when the slot was tested; the two coincide for a formation that approaches
+     along the reference path.
+7. **The fire trim `0x410e90`** (the "retry" of the layout driver `0x40eb90`, run after the slots are laid
+   out; on true and a path length > 0 the layout runs once more without it). Conditions: the top block is kind
+   3 with an object, the formation is not a space formation, T is not fogged for the first member's owner and
+   not stealthed (unless that member's type has `Target_Stealth_Units`); not for a guard block in space.
+   - L = the path's length. s := L; "last good" g := L. Guard range = `Land_Guard_Range`, plus T's radius
+     `0x397780` when T has the +0x346 slot [L: which behaviour]; in that case g starts at max(0, L − that range).
+   - At each s, for every member that has TARGETING and a locomotor pack: its slot position p = the path point
+     at arc length s + its depth offset (before the path start: the start extended backwards along the path
+     direction; beyond L: the member is not tested at this s), shifted sideways by its lateral offset (with the
+     corridor squeeze of §4.3). The member **fails** when: non-guard: p is inside its min
+     range of T (TARGETING slot 46 at p) **or** p is not in max range of T (slot 43 at p; the rule of
+     TACTICAL_COMBAT §2.8 B 4); guard: |p − T.position| (2-D) > the guard range; and, on land, in either case
+     when its **line of fire** from p is blocked (`0x40f7c0` → `0x3b5ad0`: from p at terrain height, or water
+     height for a Water-capable class, + the member type's `Ranged_Target_Z_Adjust` +0x4dc, to G raised by
+     T's `Ranged_Target_Z_Adjust`).
+   - Some member fails at s → **the path is cut to length g** (`0x54e780`, §5.4.4 item 5; the squeeze vector
+     likewise) and the trim ends. All pass → g := s; s = 0 → the path is cut to its first node (the formation
+     can fire from where it stands); else s := max(0, s − **10.0**) and repeat.
+   - So the path is cut at the **outermost point, in 10.0 steps counted back from the path end, of the last
+     unbroken stretch from which every member can fire**. When some member cannot fire even from the path end,
+     nothing is cut.
+8. **After the plan.** While the formation moves, `0x4192b0` every 30 frames: the land stop when everyone can
+   fire, the re-path when the target moved more than half the base attack range or the formation is stopping
+   short (FIGHTER_FLYING §4.11 E). After arrival, `0x410a60` every 30 frames: any tested member unable to fire →
+   formation state 0 → a new plan (FIGHTER_FLYING §4.11 A). **Both go through item 6 and item 7 only; the slot
+   (θ, ρ) in the block is kept and never re-tested.**
+9. **Worked case: one ranged squad (attack range 250) ordered onto a standing structure 1000 away.** Take the
+   squad at (0, 0), the structure centred on (1000, 0) with hard half extents 40 × 40 and stamped on cells 48-52,
+   open ground, the squad's HX = 15 with its rear row 15 behind the centre [M for the numbers that depend on
+   slot 43 and on the stamp].
+   - Composition: the validated point is thrown away (object goal); the squad is not solo (1000 > r + 290 +
+     60) and not short-range (1000 > 290 × 1.6); E_r = 250 + 40 = 290.
+   - `0x438c10`: the squad is in L; R = 290. Reference path: G = (1000, 0) is not reachable, so it becomes the
+     nearest ring cell of the squad's zone, (940, 0); path (0, 0) → (940, 0). All six tries fail in item 5 step
+     3, because every line P → (1000, 0) ends on the structure's own cell. **No slot.**
+   - Plan: path (0, 0) → (940, 0), L = 940, no slot leg. Trim: from s = 940 back in tens every member is in max
+     range while its distance to the centre is ≤ 250 + 40 = 290; the rear row at s − 15 passes down to s = 730
+     and fails at s = 720. **The path is cut to 730: the squad's centre stops 270 from the structure's centre**,
+     its rear row 285 away, without having gone near the footprint.
+   - The same squad against a **unit** standing on open ground at (1000, 0) with half extents 5: E_r = R = 255;
+     the first try puts it at θ = 0 on the ring 255 − 15 = 240; the plan's path is (0, 0) → (760, 0) → (1000, 0)
+     and the trim cuts it at 760, the slot point. A second formation of the same order would get ± the chord
+     angle on that ring, walk start → its Q' → the target, and be cut near its own Q'.
+
+***Port spec (attack approach):*** (1) At an attack order / auto-attack push on land, give each formation that
+cannot yet fire a slot (θ, ρ) by items 2-5; none when the target's own cell is not enterable. (2) At every plan:
+if every member can fire, stop and report arrival; else path to the target's point (re-validated when
+unreachable), via the slot point when there is a slot. (3) Cut the path back from its end in steps of 10 to the
+outermost point of the final stretch from which every member can fire (max range, min range, line of fire). (4)
+Keep the 30-frame checks of FIGHTER_FLYING §4.11. The slot test's object rule: standing objects only (no path
+record), expanded blocker areas, < 15 % of HX × HY.
+
+*Not read:* TARGETING slots 43 / 46 at a point (taken from TACTICAL_COMBAT §2.8 / TACTICAL_GAPS §3.1); the
+position finder `0x440f90` of the staging; the value the line test returns as "distance" when the first cell is
+blocked; whether `0x411640`'s fallback size (mode-0 plan failed) is ever used for an attack block; block +0x5f.
 
 ### 4.4 Moving as a group
 
@@ -2037,7 +2354,7 @@ Pair classes:
 | MovingVsMoving | `0x8b5090` | `0x680420` |
 | MovingVsStopped | `0x8b52e8` | `0x6843b0` → `0x685480` |
 | StoppedVsStopped | `0x8b5450` | `0x686de0` |
-| TerrainCollisionClass | `0x8b5568` | `0x687db0` (trigger not traced) |
+| TerrainCollisionClass | `0x8b5568` | `0x687db0`, from the failed-step report `0x509090` (§5.4.7) |
 
 **There is no rigid-body physics.** Collision means detecting a future conflict along the planned paths and resolving it by behaviour.
 
@@ -2463,6 +2780,52 @@ or 3.
 mover has no locomotor, or is gone → 6; a participant whose top path is not forced (vf +0x1d0 = path +0x5c) stands
 on a cell that is impassable for it (`0x50e280`) → that unit is **stopped** (vf +0x140(record id)) and → 6.
 
+**The impassable-cell rule in full (s78n t20 RE, 2026-11-10; `0x684450`, `0x680650`, `0x42cbf0`, `0x5ad320`,
+`0x42c920`, `0x554480`, `0x42cba0`, `0x423760`, `0x42c890`, `0x5569f0`) [H unless tagged].**
+1. **Order of the test.** Participant 0 first: it has a locomotor, its "forced" answer (locomotor vf +0x1d0 =
+   `0x42cbf0`) is false and its own position fails `0x50e280` for its own class → **it** is stopped and the record
+   goes to state 6. Participant 1 is tested the same way **only when participant 0 passed**. At most one unit is
+   stopped per call.
+2. **"Forced"** = byte +0x5c of the unit's **top** path record; **a unit with no path record answers false.** So a
+   standing obstacle with no path that stands on an impassable cell is "stopped" (a no-op apart from the idle
+   clip) and the record still goes to 6: a mover never gets a MovingVsStopped answer from an obstacle that stands
+   on impassable ground, and a mover that itself stands on impassable ground with an ordinary path loses its
+   whole path stack. Paths with +0x5c set: the forced (flag 0x20) paths of §4.3.1 item 2 [M: other writers of
+   +0x5c were not enumerated].
+3. **The stop** is the locomotor's vf +0x140(record id). The Walk locomotor (vftable `0x8ad798`) has **the same
+   function `0x5ad320`** in that slot as the land team container, so FIGHTER_FLYING §7.7's description holds for
+   every Walk unit: `0x42c920` clears the path stack through `0x554480`(pack, unit, id), and, when vf +0x170(id)
+   (`0x42cba0`: the pack's path owner +0x248 is 0 or equals id) agrees, plays the default idle clip; then, under
+   the same test, state := 0x16 and pack +0xec / +0xf0 := 0 **at once**.
+   - With id ≠ 0 (the collision's call) `0x554480` destroys **every** record: detours, pushes and the order /
+     formation path alike. (With id 0 and an owner in +0x248 it keeps the owner's record and the ones above it and
+     erases those below [M: the destination argument of the internal move is not visible in the decompiled
+     call]; with id 0 and no owner it destroys every record.)
+   - When the unit's path is owned by **another** collision record (+0x248 neither 0 nor this id) the stack is
+     still emptied, but state and speed are left: the next move step finds no record and goes to End Move (brake
+     while coasting, then idle).
+4. **The formation afterwards.** The formation's state-1 step `0x423760` counts a member as done when its
+   locomotor vf +0x150 (`0x42c890`: pack state 0, 0x16, 0x1c, 0x1e, 0x1f, 0x25, 0x26 or 0x27, or 0x19 for a type
+   with `Max_Dist_Walk_While_Deployed` > 0) is true and its vf +0x1c0(0) (a path record on the stack) is false.
+   The stopped unit is both from the same frame. So once **every** member is done, a one-block formation raises
+   signal 10 on all members and goes to state 3 **exactly as for a normal arrival**; an attack block then falls to
+   the 30-frame re-check `0x410a60` (FIGHTER_FLYING §4.11 A), which re-plans it.
+5. **How such a unit leaves the cell: nothing in the planner helps it** [H for what was read, M for "nothing"].
+   - `0x5a1910` only derives cell indices (§4.3.1 item 7); neither it, `0x5a2e00`, `0x5a3020` nor `0x417520` sets
+     +0x5c or exempts the first waypoints.
+   - A new position order is first run through the zone validation with the unit on zone 0: an impassable goal
+     is kept, a passable goal is replaced by an **impassable** cell near it (§4.3.1 item 7, step 5).
+   - The region search then needs the start region to pass the class mask and never enters an impassable region,
+     so the plan fails unless start and goal lie in one region (`0x41c1a0` returns 0, stamps F +0x1cc and is
+     not tried again for 2 × FPS frames [M: the formation's state after a failed plan was not traced]).
+   - Even with a path, every Walk step is tested at its **new** position (§3.5 step 4) unless the path is forced:
+     a step that ends on a passable cell is accepted whatever the cell it starts from, a step that ends on an
+     impassable one is reported (§5.4.7).
+   - What does move it: any **forced** path (flag 0x20: garrison exit, unload, the garrison corrective move), which
+     is a straight two-point path walked without passability tests.
+   - Not found: any code that evicts units when an obstacle is stamped under them (§1.3), or a rescue move.
+
+
 **Decision `0x684f90`** (state 0; a = mover, b = obstacle). First match wins:
 1. Validity; a or b missing → 6; the contact test `0x683790`(a, b) no longer holds → **5**.
 2. a's top path P exists and is **forced** (+0x5c, the flag-0x20 path: garrison exit, unload) and b has a locomotor
@@ -2612,8 +2975,8 @@ participant (and so for its squad members), `0x5c6ca0`(…, 1.0), weight 1.0 (FI
 `0x67f080` ("reset") sets both speeds to the max speeds and both flags to 0.
 
 **Validity `0x680650`** (start of most states): fewer than two participants → 8; a participant without a
-locomotor → 9; a participant whose top path is not forced stands on an impassable cell → it is stopped (vf +0x140)
-and → 9; either participant **not moving** (neither vf +0x1a8: speed > 0 or a path on the stack, nor vf +0x1b0:
+locomotor → 9; a participant whose top path is not forced stands on an impassable cell → it is stopped (vf +0x140;
+the rule in full is in §5.4.1, "The impassable-cell rule") and → 9; either participant **not moving** (neither vf +0x1a8: speed > 0 or a path on the stack, nor vf +0x1b0:
 turning in place) → **9**. So the record dies the frame one of the two has no speed and no path.
 
 **Decision `0x682d00`** (state 0, under quota): the chooser `0x67f7b0` gives (state, M, S, mode, swap_ok); state 0 →
@@ -2862,6 +3225,28 @@ found the destination blocked and `0x6835c0` allowed it; a = the mover, b = the 
 5. **Cut `0x684100`(record, a, c)** with **c = (L − s) + 3.0**: the path's length is reduced by c from its end
    (`0x54e780`), so **a's new path end is 3.0 before P along the path** (at s = L, where E itself was clear for
    the wider box: 3.0 before the old end).
+   - **`0x54e780`(points, keep) in full (s78n t20 RE, 2026-11-10) [H].** It keeps the arc length `keep` measured
+     from the path's **first point** (the record's whole point list, the part already walked included);
+     `0x684100` passes keep = the list's total length (`0x54f610`) − c, per record. Walking the segments from the
+     start (zero-length segments are skipped), at the first segment with keep < length so far + segment length:
+     every point after the segment's first point is erased; then, when keep > the length so far, one new last
+     point is appended at that arc length (linear interpolation; it takes the facing vector +0x0c of the point
+     that followed, id tag 0x3fffff, every other field 0). keep exactly on an existing point → no point is added.
+     **keep ≤ 0 (c ≥ the whole list's length) → only the first point is left: a one-node path.** keep ≥ the total
+     length → nothing changes. A list of fewer than 2 points is left alone.
+   - **The record's waypoint index (+0x60) is not touched by the cut.** The cut point can lie behind the unit: c
+     counts from the end of the path **stack** (L is the approximation's length), so when a detour or push record
+     lies on top of an order path, or s < 3.0, keep can fall short of what the unit has already walked on the
+     record that is cut, or below zero.
+   - **What the unit then does** (Walk step `0x620820`; the container step `0x5adfb0` has the same branch) [H]: a top record that is "on its last waypoint" (`0x5c5910`: index + 1 ≥ point count, which a one-node or
+     over-cut list always is; a cut inside the current segment behind the unit gets there in the same step,
+     because the unit is already past the new point's waypoint line and the index steps on) is treated as
+     finished. With a **started record below** it on the stack and the unit not in End Move: the top is popped
+     (`0x557b10`) in the same step and the unit walks on along the lower record. Otherwise the unit goes to **End
+     Move (0x14)**: it coasts straight along its stored travel direction while the speed controller brakes at its
+     normal deceleration (each coast step passability-tested unless the record is forced), then Pre-Stopped (0x15)
+     → arrival turn test → pop → idle. So it does **not** stop dead where it stands; it brakes to a stop from
+     there (unless a collision record's "at once" flag sets the speed, item 6).
    - a's top path is not a formation path (kind ≠ 1), or a is in no formation: a's **top** record only.
    - Formation path: a's kind-1 record, and the kind-1 record of every formation member m whose slot is **behind**
      a's (slot x offset `0x5566a0`: x_m < x_a) and within the two half widths sideways (|y_m − y_a| ≤ hy_m + hy_a,
@@ -3079,6 +3464,116 @@ corridor squeeze) may be simplified; record that.
 *Not read:* the id list `0x140b3a1a0` tested in `0x677650`; `0x677650` reads the pathfinder's request global as
 "the other unit" [M: stale after an early return]; `0x509ea0` and `0x67f130` were not re-derived.
 
+#### 5.4.7 TerrainCollision in full (s78n t20 RE, 2026-11-10) [H unless tagged]
+Read from `0x509090`, `0x687db0`, `0x5c5f70`, `0x5c6240`, `0x5049e0`, the vftable `0x8b5568` (slots read from the
+image: +0x08 `0x5c7d10`, +0x18 `0x687ea0`, +0x20 `0x687ff0`, +0x28 `0x6873f0`, +0x30 `0x687e80`, +0x38 `0x42c630`,
++0x40 `0x5c78e0`, +0x48 `0x18ceb0`, +0x50 `0x687e90`, +0x58 / +0x78 `0x13b7d0` (false), +0x60 `0x5c7700`, +0x68
+`0x6874c0` save, +0x70 `0x687400` load, +0x10 / +0x80 `0x17dc70` (true)), the diagnostics node `0x687ae0`, the
+driver `0x50a780`, `0x5c80e0`, `0x556780`, `0x5c5d90`, `0x5c4b80` / `0x5c4af0`, the Walk speed controller `0x61ccd0`
+and move step `0x620820`, the container step `0x5adfb0`, the Bike step `0x63abe0`.
+
+**What it is.** A one-participant collision record made when a unit's own step would end on ground it may not
+enter. Its only action is one Path Around call (kind 3, no obstacle) back onto the unit's path; when that is not
+possible the unit is **stopped and loses its paths**. There is no retry.
+
+1. **Trigger: the failed-step report `0x509090`(collision system, unit).** Callers: the Walk move step `0x620820`
+   (the normal step and the End Move coast), the land team container step `0x5adfb0` (the same two places) and the
+   Bike step `0x63abe0`: a step whose **new position** fails `0x50e280` for the unit's class while the path it
+   walks is not forced (+0x5c clear; a coasting unit: its top record, if any, not forced). The position is not
+   committed that frame. Then, in this order:
+   - the unit's pack speed **+0xec := 0** (at once; +0xf0 is left);
+   - the system's record counter +0xb8 += 1 and a record is made by `0x687db0`(unit, id) [M: the id argument is
+     not visible in the decompiled call; every other factory takes the fresh counter value];
+   - the record is registered (`0x5049e0`: id-keyed list, and the unit's entry in the object-to-records hash).
+     Factory failure → the unit is stopped (vf +0x140(0)).
+   - **No count and no duplicate rule:** the first failed step makes a record, and every further failed step
+     makes another one, whatever records the unit already has. Since the speed is zeroed each time and the
+     decision normally comes at the next driver pass, a second record appears only when the first has to wait
+     for quota [M].
+2. **Record** (0x80 bytes; base `CollisionClass`): +0x38 id; +0x40 participants (the unit only; the record listens
+   to the unit's signals and drops it from the list when it is destroyed, vf +0x08); +0x64 creation frame; +0x68 /
+   +0x6c cached priority and its refresh frame; +0x70 re-decide stamp (never set for this class: vf +0x78 is
+   false); **+0x78 state; +0x7c a frame stamp written with state 4 and never read**. Saved: the base, then chunk
+   0x10000 with field 0 = +0x78 and field 1 = +0x7c (4 bytes each). Kind value (vf +0x48) 1.
+   - States, with the names of the diagnostics node `0x687ae0`: **0 "None"** (new, waits for the quota pass),
+     **1 "Resolving"** (its detour is on the unit's stack), **2 "Unresolvable"**, **3 "Resolved"**, and **4, which
+     has no name and no handler** (item 5).
+   - Answers to the unit: weight (vf +0x30) **4.0**, the highest of the four classes, so its Path Around claim
+     always takes the unit's path ownership (§1.5.1 item 5); steering vector (vf +0x38) zero in every state;
+     speed (vf +0x40) the unit's max speed with the "at once" flag untouched (FIGHTER_FLYING §7.7); "undecided or
+     detouring" (vf +0x58) false; "takes the quota pass" (vf +0x50) true only in state 0; finished (vf +0x28) in
+     states **2 and 3 only**.
+   - Priority (vf +0x60, the base `0x5c7700` shared by all four classes): cached crowd − age in frames. The
+     crowd term needs two participants, so for this class it is 0: **priority = −(NOW − creation frame)**, older
+     records first in the ascending sort.
+3. **Decision `0x687ff0`** (vf +0x20; the driver calls it in the quota pass while the dynamic pathfinder has
+   quota, §5.4.1):
+   1. state ≠ 0 → run the service (item 4) and return.
+   2. No participant → state 3.
+   3. The unit has no locomotor → state 2.
+   4. The unit's **own position** fails `0x50e280` for its class → Stop (locomotor vf +0x140(record id), §5.4.1
+      "The impassable-cell rule" item 3: the whole path stack is cleared) → state 2.
+   5. Path Around `0x5c80e0`(record, unit, **obstacle = none, flag = 0, kind = 3, flags = 0**) (§1.5.1): the
+      rejoin distance is D = r_u (`0x3969f0`) + **40.0**, so the first rejoin candidate is at path distance
+      progress + r_u + 42; no forced obstacle; every standing unit is an obstacle (flags 0); the last-point drop
+      is skipped; the pushed record has kind 3, owner = this record's id, is **not forced** and is started.
+      - **Failed** (§1.5.1 item 7 and item 4 "Failure": among others the unit has **no kind-1 record** on its
+        stack, e.g. an order-less pushed unit; it is on its **last waypoint**; no rejoin candidate is free; the
+        flood fill does not reach the goal) → +0x7c := NOW + **45**, Stop (vf +0x140(record id)), state := **4**.
+      - **Succeeded** → the unit's path record owned by this id (`0x556780`) gets its **waypoint entry 0 :=
+        (1.0, 0.0)** (`0x5c5d90`; item 6) and state := 1.
+        (No pack, or no record owned by this id after all: the state stays 0 and the
+        decision runs again at the next pass.)
+4. **Service `0x687ea0`** (vf +0x18; every frame for a record that is not in the quota pass, and for a state-0
+   record when the quota is used up):
+   - state 0 (waiting): no participant → 3; no locomotor → 2; the unit's position still passable → wait; else
+     Stop (vf +0x140(id)) → 2.
+   - state 1: no participant → 3; the unit has no locomotor pack → 2; some record on the unit's path stack is
+     still owned by this id (+0x4c) → stay; else → **3**. So the record ends when its detour has been walked to
+     its end and popped (§1.5.1 item 5), or was removed by a later claim, a new order or a stop.
+   - states 2, 3, 4: nothing.
+5. **Ends.** The driver destroys a record in state 2 or 3 at the end of the same pass. **A record in state 4 is
+   never serviced and never finished**: no code reads +0x7c or leaves state 4, so the "45 frames" is not a retry
+   timer in effect and the record stays in the system (with an emptied participant list once the unit dies)
+   until the battle's collision system is destroyed. It still answers items 2's values for its unit: no speed
+   cap, zero vector. [M] Side effect on the steering sum of FIGHTER_FLYING §7.5: the zero vector has the largest
+   weight, so while such a record is kept as "best" no other record's vector is excluded by the −0.5 rule.
+6. **The (1.0, 0.0) entry on waypoint 0.** A path record has one 8-byte entry per waypoint (defaults (1.0, 1.0);
+   the first float was not traced). The second float (+4) is the waypoint's speed fraction. The speed controller
+   `0x61ccd0` uses it twice: it brakes toward entry[index + 1].+4 × max speed ahead of the next waypoint, and it
+   caps the speed at entry[index].+4 × max speed **while the unit is not yet aligned with the current segment**
+   (the record's "aligned" byte +0x6c clear, the heading more than one frame's turn off the wanted one, state not
+   Start Move); a cap of 0 sends the unit to End Move. With 0 on waypoint 0 the unit therefore **turns in place
+   onto the detour's first leg before it moves**: at Start (§3.5 item 1) the "speed fraction > 0" test fails, so
+   it goes to Start Turn even inside `Close_Enough_Angle_For_Move_Start`, and state 0x10 turns it exactly onto
+   the heading (§3.5.1 item 4). Later waypoints of the detour keep (1.0, 1.0). Kind 3 also selects the tighter
+   arrival-turn threshold of §3.5.1 item 2 when the unit stops on this path.
+7. **What the unit and its formation see.**
+   - Success: speed 0 at the failed step, then turn in place, then the detour; the ordered path stays underneath
+     and is resumed at the first waypoint line not yet crossed (§1.5.1 item 5). Older collision-owned records
+     (a MovingVsStopped / MovingVsMoving detour, a push path) are removed by the claim.
+   - Stop (state 2 or 4): every path record is destroyed, the order path included. When the unit's path owner
+     was free or this record: state 0x16 and speed 0 at once; when another collision record owned its path (an
+     order-less pushed unit): the stack is emptied and the unit brakes through End Move. The formation then
+     counts the member as done and, when all are, **signals arrival** as usual (§5.4.1 "The impassable-cell
+     rule" item 4). No other event is raised [M: none was found]. A position move is over at that point; an
+     attack block is re-planned by the 30-frame re-check.
+   - There is no counter of blocked frames and no re-plan of the ordered path anywhere in this class.
+
+***Port spec (TerrainCollision):*** when a passability-tested step fails: do not move, set the speed to 0, and
+create a one-unit record (creation order = id order; no duplicate test). Decide it in the quota pass, oldest
+first: unit gone → drop; own position impassable → stop the unit (clear all its paths) and drop; otherwise Path
+Around with no obstacle, kind 3, D = r_u + 40: on success mark the detour's first waypoint "turn in place first"
+and keep the record until no path of the unit is owned by it; on failure stop the unit (clear all its paths). A
+record waiting for quota stops the unit when its position has become impassable. Retail keeps a failed record
+for ever with no effect but item 5's; [port] dropping it at once is the simple choice (record it). The record
+answers max speed, no vector, weight 4.
+
+*Not read:* the frame order of the locomotor steps against the driver (whether a record made by a step is decided
+in the same frame); `0x5c6970` (the base "give up ownership" helper, unused by this class); the Bike step beyond
+its report call; whether anything outside the class walks the system's record list and would meet a state-4
+record (the three other classes' partner tests need two participants).
+
 ### 5.5 Crush (`SquashBehaviorClass`, vf6 `0x629fa0`; vftable `0x8af300`) [H]
 
 The `SQUASH` behaviour token is on AT-AT, AT-ST and MAL. Crush runs only while the crusher is moving (`0x39ade0` → locomotor vf +0x1c0).
@@ -3289,7 +3784,7 @@ passability check on the way (§3.5 step 4).
 6. Whether land ground units ever use the lattice planner of §2.1 (its land branches exist).
 7. Formation speed computation; formup wait styles; `MaxLandFormationFormupFrames`.
 8. ~~Space formations, `Merge_Formation`, `Split_From_Formation`~~ (cu8j: §4.6, §4.7). Still open: the fleet placement geometry of `0x4fca30` / `0x4fdfb0` / `0x4fd5b0` / `0x4fea10` (only their adopt draws are read), `Squadron_Formation_Error_Tolerance`, the space pass re-run after a max-speed-0 seed (§4.6.4).
-9. ~~MovingVsMoving resolution~~ (resolved 2026-11-10: §5.4.2; MovingVsStopped in full, the driver and the Walk use of the steering vector: §5.4.1), (push and return: resolved, §5.4 / A1_READINGS §40), `TerrainCollisionClass` trigger, ~~footprint field semantics~~ (the three contact tests and the layer-0x10 records: §5.3.1 / §5.3.2). Resolved 2026-11-10 (s78n t19): the vehicle branches of the MovingVsMoving chooser (§5.4.6), the spare point `0x5c6ba0` / `0x67b4c0` and the whole Path Around call (§1.5.1), StoppedVsStopped (§5.4.3), the early-arrival cut (§5.4.4), the decision's leftovers (§5.4.5), the order-time destination check (§4.3.1). Still open there: `0x685490` (state 8), the frame order of the tracker update against the collision update, the `0x5a2830` request flags of the StoppedVsStopped path, the dynamic pathfinder's tracker internals and terrain-corner pruning masks (§1.5.1 "Not read"). (The collision **priority sort** of §5.4 is resolved: ascending priority = crowd − age, crowd = 5 × objects in a 160 × 160 box; TACTICAL_GAPS.md §6.7.)
+9. ~~MovingVsMoving resolution~~ (resolved 2026-11-10: §5.4.2; MovingVsStopped in full, the driver and the Walk use of the steering vector: §5.4.1), (push and return: resolved, §5.4 / A1_READINGS §40), ~~`TerrainCollisionClass` trigger~~ (resolved 2026-11-10, s78n t20: §5.4.7, the whole class), ~~footprint field semantics~~ (the three contact tests and the layer-0x10 records: §5.3.1 / §5.3.2). Resolved 2026-11-10 (s78n t19): the vehicle branches of the MovingVsMoving chooser (§5.4.6), the spare point `0x5c6ba0` / `0x67b4c0` and the whole Path Around call (§1.5.1), StoppedVsStopped (§5.4.3), the early-arrival cut (§5.4.4), the decision's leftovers (§5.4.5), the order-time destination check (§4.3.1). Still open there: `0x685490` (state 8), the frame order of the tracker update against the collision update, the `0x5a2830` request flags of the StoppedVsStopped path, the dynamic pathfinder's tracker internals and terrain-corner pruning masks (§1.5.1 "Not read"). (The collision **priority sort** of §5.4 is resolved: ascending priority = crowd − age, crowd = 5 × objects in a 160 × 160 box; TACTICAL_GAPS.md §6.7.)
 10. Bike, Flying, JetPack and LandBomber locomotors, LocomotorCommon `0x5070b0` (the shared turn core that reads `Min_Speed_Fraction_For_Turn` +0x3ac), `Stopped_Rate_Of_Turn` (+0x3b0) readers, fighter attack runs and team slot geometry `0x62d620`.
 11. Hyperspace: the camera-dependence of arrival staggering, `Hyperspace_Speed` readers, `Cinematic_Hyperspace_In` / `Resume_Hyperspace_In`.
 12. Guard, Divert, MoveObjectToObject and SetupPhaseMove payloads.

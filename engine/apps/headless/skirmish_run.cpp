@@ -823,6 +823,9 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         // t50 (land skirmish): the battle's BattleStats as last seen while it ran (the summary only exists once it has ended).
         unsigned long prebuilt = 0, pads = 0, structures = 0, shots = 0;
         uint64_t orders = 0;
+        // s78n t20: per side, the 2-D distance of its first start-force unit from its spawn-point marker (-1: none)
+        double start_off[2] = {-1.0, -1.0};
+        unsigned long attack_reissues = 0, attack_stops = 0, attack_skips = 0;  // s78n t20 stage A (BattleStats)
     };
     constexpr uint32_t kBattleFrames = 30 * 480;  // [port] the 15-min battle limit (S10)
     std::string log_text;
@@ -916,6 +919,8 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         uint64_t orders = 0, rejected = 0;
         size_t decisions = 0, lua_errors = 0;
         unsigned long prebuilt = 0, pads = 0, structures = 0, shots = 0;
+        double start_off[2] = {-1.0, -1.0};
+        unsigned long attack_reissues = 0, attack_stops = 0, attack_skips = 0;
         std::vector<std::string> error_list;
         std::string state_text;  // skai: --ai-log state lines
         std::string script_state;  // q6: --object-scripts, the battle's last state line (units per player)
@@ -944,6 +949,15 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
                 pads = bs.skirmish_pads;
                 structures = bs.pad_builds;
                 shots = static_cast<unsigned long>(bs.shots);
+                attack_reissues = bs.attack_reissues;
+                attack_stops = bs.attack_land_stops;
+                attack_skips = bs.attack_reissue_skips;
+                for (int sd = 0; sd < 2; ++sd)
+                    if (bs.skirmish_marked[sd] && bs.start_placed[sd]) {
+                        const double dx = static_cast<double>(bs.first_start[sd].x) - static_cast<double>(bs.skirmish_marker[sd].x);
+                        const double dy = static_cast<double>(bs.first_start[sd].y) - static_cast<double>(bs.skirmish_marker[sd].y);
+                        start_off[sd] = std::sqrt(dx * dx + dy * dy);
+                    }
                 if (!ai_log.empty())
                     if (sim::TacticalMode* tmode = host.tactical()) {
                         static const objects::BehaviorTypeId kLandBaseDmg = objects::behavior_type_id("DUMMY_LAND_BASE_LEVEL_COMPONENT");
@@ -1008,6 +1022,11 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         out.lua_errors = lua_errors;
         out.orders = orders;
         out.prebuilt = prebuilt;
+        out.attack_reissues = attack_reissues;
+        out.attack_stops = attack_stops;
+        out.attack_skips = attack_skips;
+        out.start_off[0] = start_off[0];
+        out.start_off[1] = start_off[1];
         out.pads = pads;
         out.structures = structures;
         out.shots = shots;
@@ -1121,12 +1140,19 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     if (opt.expect_skirmish_base) {  // t50: the land skirmish starts from its base and the shipped AI plays from it
         // Both slots' Command Center and Barracks pads start built (4), the AI issues orders, shots are fired, no Lua errors. Whether
         // the battle reaches a result in the frame limit is not asked here: the skirmish AI does not take the enemy base in 15 minutes.
+        // s78n t20 (SKIRMISH_SETUP §2.2): each side's start forces stand at its own spawn-point marker (the rows of 6 of
+        // slot_position put the first unit within about 100 of it).
+        const bool start_ok = first.start_off[0] >= 0.0 && first.start_off[0] <= 300.0 && first.start_off[1] >= 0.0 && first.start_off[1] <= 300.0;
         const bool base_ok = kind == "foc-land" && first.prebuilt >= 4 && first.pads >= first.prebuilt && first.shots > 0 && first.orders > 0 &&
-                             first.lua_errors == 0;
+                             first.lua_errors == 0 && start_ok;
+        std::printf("skirmish start: first start-force unit %.0f / %.0f from the spawn-point markers\n", first.start_off[0], first.start_off[1]);
         std::printf("skirmish base: %s (%lu pre-built of %lu pads, %lu structures started, %lu shots, %" PRIu64 " AI orders, %zu Lua errors)\n",
                     base_ok ? "ok" : "MISSING", first.prebuilt, first.pads, first.structures, first.shots, first.orders, first.lua_errors);
         if (!base_ok) good = false;
     }
+    if (kind == "foc-land" || kind == "foc-land-campaign")  // s78n t20 stage A: the land attack blocks' 30-frame checks
+        std::printf("land attack blocks: %lu approaches re-issued, %lu land stops, %lu re-approaches skipped (goal where the mover stood)\n",
+                    first.attack_reissues, first.attack_stops, first.attack_skips);
     first.crc.comments = {"A1 skirmish-ai " + kind + " seed " + std::to_string(opt.seed) + " ticks " + std::to_string(first.ticks)};
     std::string err;
     if (!opt.crc_out.empty() && alamo_headless::save_crc_log(first.crc, opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());

@@ -220,8 +220,10 @@ private:
     // s78f t10: `flags` / `goal_object` = the order's movement block (mv::MoveOrder::flags / goal_object), the same values the
     // host's fighter formation record gets (TacticalBattle::fighter_order), so the movement layer's fighter leash and the
     // host's chase tests read one block.
+    // s78n t20 fix: `object_block` - the move stands for an object-goal block (kind 3) although `goal_object` names
+    // none (an attack approach, the object follow's re-path): no destination check (MOVEMENT 4.3.1 item 2).
     bool move_unit(objects::ObjectId id, float x, float y, float threat_threshold = ::alamo::tactical::movement::kThreatOff,
-                   uint8_t flags = 0, objects::ObjectId goal_object = objects::kNoObjectId);
+                   uint8_t flags = 0, objects::ObjectId goal_object = objects::kNoObjectId, bool object_block = false);
     bool is_fighter(objects::ObjectId id) const;  // s78f t10: a space unit on the fighter locomotor
 
     TacticalBattle* b_;

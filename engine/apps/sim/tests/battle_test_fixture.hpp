@@ -577,9 +577,13 @@ inline const char* const kBmItems = R"(<BlackMarketItems>
 
 // Skirmish station production test data: the Empire star base lists S10_Base_Upgrade (DUMMY_UPGRADE with a
 // Skirmish_Automatic Starbase_Upgrade_Ability, prerequisite S10_Star_Base_1, limit 1 for all allies) in its Empire row of
-// Tactical_Buildable_Objects_Multiplayer, and upgrades to S10_Star_Base_2.
+// Tactical_Buildable_Objects_Multiplayer, and upgrades to S10_Star_Base_2. s78n t20 step 5: S10_Trooper (a land unit of
+// both sides) lists S10_Land_Upgrade (DUMMY_UPGRADE, no ability) in its Empire row, for the land production signal test.
 inline std::string prod_types() {
     std::string t = kTypes;
+    const std::string trooper = "<GroundInfantry Name=\"S10_Trooper\">";
+    if (const size_t tp = t.find(trooper); tp != std::string::npos)
+        t.insert(tp + trooper.size(), "<Tactical_Buildable_Objects_Multiplayer> Empire, S10_Land_Upgrade </Tactical_Buildable_Objects_Multiplayer>");
     const std::string at = "<StarBase Name=\"S10_Star_Base_1\">";
     const size_t p = t.find(at);
     if (p != std::string::npos)
@@ -596,7 +600,10 @@ inline std::string prod_types() {
                       "<Tactical_Build_Prerequisites> S10_Star_Base_1 </Tactical_Build_Prerequisites>"
                       "<Build_Limit_Current_For_All_Allies>1</Build_Limit_Current_For_All_Allies>"
                       "<Abilities SubObjectList=\"Yes\"><Starbase_Upgrade_Ability Name=\"S10_Base_Upgrade_Effect\">"
-                      "<Activation_Style>Skirmish_Automatic</Activation_Style></Starbase_Upgrade_Ability></Abilities></UpgradeObject>\n");
+                      "<Activation_Style>Skirmish_Automatic</Activation_Style></Starbase_Upgrade_Ability></Abilities></UpgradeObject>\n"
+                      " <UpgradeObject Name=\"S10_Land_Upgrade\"><Behavior>DUMMY_UPGRADE</Behavior><Affiliation>Empire</Affiliation>"
+                      "<Tactical_Build_Cost_Multiplayer>100</Tactical_Build_Cost_Multiplayer><Tactical_Build_Time_Seconds>1</Tactical_Build_Time_Seconds>"
+                      "</UpgradeObject>\n");
     return t;
 }
 

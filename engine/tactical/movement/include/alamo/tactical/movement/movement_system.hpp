@@ -23,18 +23,29 @@
 //      against the 160 x 160 square of candidates (SpatialTree query, ascending id); a qualifying
 //      pair without a collision object gets one (CollisionLayer, collision.hpp: MovingVsMoving /
 //      MovingVsStopped / StoppedVsStopped, creation frame recorded);
-//   3b. collision driver (TACTICAL_GAPS §6.7; s78n t18: MOVEMENT §5.4.1 / §5.4.2): records whose participants are gone
-//      or left the layer are dropped, the rest sorted ascending by crowd - age ([port] stable by insertion order) and
-//      serviced every frame in that order; a record that is not decided yet (state None) is decided only while the
-//      DynamicLandComplexityQuota (100 per 5 frames) allows. MovingVsStopped = the decision 0x684f90 (Repulsion, the
-//      early-arrival cut, Path Around through the dynamic local pathfinder, a push of the blocker onto a walked path,
-//      the crusher driving on, Try Again Later with a re-decide every 30 frames; no instant displacement) and its
-//      per-state service; a record ends by its state only. MovingVsMoving of two Infantry / Bike movers = the chooser
-//      0x67f7b0 (Path Around for a forced path, Speed Slave Only within 60 degrees, else Repulse) and its states; other
-//      MovingVsMoving pairs keep the port's stand-in (speed slaving / yield / side-step on each unit's check frames,
-//      dropped when the pair stops predicting contact) and StoppedVsStopped still pushes both apart ([port]). Each
-//      record answers its participants a speed and an "at once" flag, folded per unit before the walk. The layer is
-//      hashed (land only);
+//      (s78n t20, MOVEMENT §5.2: "Moving" = not suspended and (speed > 0, or a path record on its stack - a planned order
+//      path or a collision-owned record on top of it - or turning in place); no order test, so a unit on a pushed path,
+//      a StoppedVsStopped path or a detour is a checker and the moving side);
+//   3b. collision driver (TACTICAL_GAPS §6.7; s78n t18: MOVEMENT §5.4.1 / §5.4.2; s78n t20: §5.4.1 "Per-frame driver"):
+//      records whose participants are gone or left the layer are dropped; the records that do not take the quota pass
+//      (a decided MovingVsMoving, every StoppedVsStopped) are serviced in creation order; the others are sorted ascending
+//      by crowd - age ([port] stable by insertion order) and serviced in that order, a record that is not decided yet
+//      (state None) only while the DynamicLandComplexityQuota (100 per 5 frames) allows. MovingVsStopped = the decision
+//      0x684f90 (Repulsion - also for a short-range unit closing on its target -, the early-arrival cut 0x685e10 with the
+//      spare point and the attack-range clause, Path Around 0x5c80e0, a push of the blocker onto a walked path - never
+//      of a unit in a hero clash -, the crusher driving on, Try Again Later with a re-decide every 30 frames; no instant
+//      displacement) and its per-state service; a record ends by its state only. Path Around (MOVEMENT §1.5.1,
+//      path_around.hpp) = a visibility-graph detour from the unit to a rejoin point on its own path - the obstacles are
+//      the layer objects' swept rectangles chosen by the relation code, the search runs twice (crossing an obstacle at x
+//      DynamicObstacleOverlapPenalty only when the first pass finds no way) - pushed as a record on top of the unit's
+//      path stack; the ordered path stays underneath and resumes at the first waypoint line not yet crossed.
+//      StoppedVsStopped (§5.4.3) = one of the two walks a path to the first free spot of the ring search around itself
+//      (who: 0x687010; Resolving while it holds that path, Try Again Later every 30 frames). MovingVsMoving of two
+//      Infantry / Bike movers = the chooser 0x67f7b0 (Path Around for a forced path, Speed Slave Only within 60 degrees,
+//      else Repulse) and its states; other MovingVsMoving pairs keep the port's stand-in (speed slaving / yield /
+//      side-step on each unit's check frames, dropped when the pair stops predicting contact; [port] until §5.4.6 is
+//      ported). Each record answers its participants a speed and an "at once" flag, folded per unit before the walk.
+//      The layer is hashed (land only);
 //   4. walk locomotor step of every unit IN PARALLEL (each unit writes only itself);
 //   5. serial commit in ascending id: terrain height, arrivals, blocked -> re-plan after 10
 //      blocked frames (§1.6 re-path trigger), candidate tree refit.
@@ -57,8 +68,8 @@
 // box overlaps its crusher box (players ascending, then ids): the victim turns to face away and a
 // CrushEvent is reported for the host to apply 1,000,000 damage of Squash_Damage_Type ([port]: the
 // crusher box is the square of the unit's radius - no CRUSHER bones in the sim; the per-state
-// permission 0x397f60 [L] is not modelled); a crusher's collision checks and local repaths ignore the
-// units it can crush (§5.4 case 3 "push/crush attempt", [port] reading).
+// permission 0x397f60 [L] is not modelled); the Path Around obstacle set leaves out the units the mover can crush
+// (MOVEMENT §1.5.1 item 3); s78n t20: a crusher takes a MovingVsStopped record with a standing unit it crushes (§5.4.5).
 // REMAINING_GAPS §4.2: threat-aware planning. MoveOrder::threat_threshold (Lua Move_To(target, T); 1e18 = off) is kept
 // per unit; with set_threat_fn() the space planner runs threat mode (ops 25-32, only for units whose raw Space_Layer
 // is 0) and the land region search multiplies its edge costs (§4.2 cost rule). Without a threat fn the threat factor
@@ -103,8 +114,12 @@
 //           No draws.
 // RNG: FLYING loiter re-issue - one synced range_float(-90, 90) per re-issue without an attack target (serial,
 // ascending id, after the parallel walk). No other new draws.
-// PROVISIONAL: the MovingVsMoving states of pairs that are not two Infantry / Bike movers and the StoppedVsStopped
-// resolution are stand-ins (s78n t18: Infantry pairs and MovingVsStopped follow MOVEMENT §5.4.1 / §5.4.2); corridor squeeze
+// Orders (s78n t20, MOVEMENT §4.3.1): a land move order without flag 0x20 and without an object goal runs the destination
+// check 0x439360 once, at the order - each formation's goal is moved to the first centre whose rectangle is passable, clear
+// of the order's other formations and not blocked by units that stand there or are heading there (more than 15 % of its
+// area); the order is never refused. A single unit ordered onto its own footprint does not move (the plan's shortcut).
+// PROVISIONAL: the MovingVsMoving states of pairs that are not two Infantry / Bike movers are a stand-in (s78n t18 / t20:
+// Infantry pairs, MovingVsStopped and StoppedVsStopped follow MOVEMENT §5.4.1 - §5.4.5); corridor squeeze
 // (corridor.hpp) is a stand-alone pass: the port's formation members path individually (no shared formation path).
 // The jiggle draws skip special air units.
 #pragma once
@@ -125,6 +140,7 @@
 #include "alamo/tactical/movement/land_path.hpp"
 #include "alamo/tactical/movement/locomotor.hpp"
 #include "alamo/tactical/movement/passability.hpp"
+#include "alamo/tactical/movement/path_around.hpp"
 #include "alamo/tactical/movement/space_avoid.hpp"
 #include "alamo/tactical/movement/space_path.hpp"
 #include "alamo/tactical/movement/unit_params.hpp"
@@ -163,6 +179,11 @@ struct MoveOrder {
     // carries; kNoFacing = none (+0x5c clear). Land Walk units turn to it on arrival when more than 10 degrees off (rate
     // limited, see tick_land). Not `facing_deg` (the +0x18 formation facing), which never makes a final turn.
     float final_facing_deg = kNoFacing;
+    // s78n t20 (MOVEMENT §4.3.1 item 2): the order has an object goal (block kind 3), which retail sends to the attack-arc
+    // slot test 0x438c10 instead of the destination check 0x439360. [port] the arc test is not modelled: the host sets
+    // this for its attack approaches (and for the garrison approach until its retail form is ported), and the land
+    // destination check and the single-member shortcut are skipped.
+    bool skip_destination_check = false;
 };
 // Movement flag bits (P1_DOUBLE_CLICK_MOVE.md §3.3; corrects MOVEMENT.md §6.1: 0x01 is attack-move, 0x02 guard-move).
 // UI moves send 0x04 | modifiers (0x84 for a double-click); AI / Lua moves send 0.
@@ -192,7 +213,12 @@ struct UnitView {
     bool has_goal = false;   // moving or waiting to move
     bool arrived = false;    // reached its last ordered destination
     bool failed = false;     // the last order could not be pathed
-    bool pushed = false;     // a1k t03: walking a pushed move to a free spot (A1_READINGS §40.3)
+    bool pushed = false;     // a1k t03: walking a collision-owned path on top of its order path (A1_READINGS §40.3)
+    // s78n t20: the top record's kind - 0 none, 1 a push (0x6859a0), 2 a Path Around detour, 3 a StoppedVsStopped move;
+    // push_flee: it is a crush-flee path (kind 7); form_id: the unit's formation of its last land order (0 none)
+    uint8_t push_kind = 0;
+    bool push_flee = false;
+    uint32_t form_id = 0;
     V2 goal;
     uint32_t replans = 0;
     bool space_fallback = false;  // the last space plan failed every try (straight line flown)
@@ -209,6 +235,8 @@ struct UnitView {
     // stop / new order / teleport / locomotor swap dropped a running turn since the tick before (reported on the next
     // tick). False otherwise. The host treats arrival_turn || arrival_turn_ended as "the turn owns the clip".
     bool arrival_turn_ended = false;
+    // s78n t20 (FIGHTER_FLYING §4.11 E "stopping"): the land Walk state (LandMotion::state; WalkEndMove = braking for the end)
+    LocoState walk_state = LocoState::None;
     int32_t large_hover_index = -1;      // land: index (+0x22c) of its LargeHover formation in the last order, else -1
     // REMAINING_GAPS §4.3-4.7: special locomotors
     LocomotorKind locomotor = LocomotorKind::Default;  // the active locomotor
@@ -738,6 +766,30 @@ public:
     bool set_pair_gate(ObjectId id, ObjectId garrison_host, bool hidden);
     bool pair_gate(ObjectId id, ObjectId& garrison_host, bool& hidden) const;
     bool set_garrison_exit(ObjectId id, ObjectId host);
+    // ---- s78n t20 (MOVEMENT §5.4.3 - §5.4.5, §1.5.1): what the land collision decisions read from the host ----
+    // The unit's current target 0x397a40 (its formation's, else its own acquired one; -1 none) with its position, the
+    // unit's attack range 0x3749d0, the target's radius 0x397780 when the unit has a weapon (else 0), "short-range"
+    // 0x372210 (Targeting_Max_Attack_Distance <= Melee_Cutoff_Range) and "in a hero clash" (+0x3b4). Host-set every tick
+    // before tick() for every land unit and squad container, like set_pair_gate: transient (not saved, not hashed - the
+    // decisions it feeds are), so the host sets it again right after read(). Default: no target, range 0, no clash.
+    struct CollisionInfo {
+        ObjectId target = -1;
+        V2 target_pos;
+        float attack_range = 0.0f;
+        float target_radius = 0.0f;
+        bool short_range = false;
+        bool hero_clash = false;
+    };
+    bool set_collision_info(ObjectId id, const CollisionInfo& info);
+    // s78n t20: the info the host set last (false for an unknown id; tests).
+    bool collision_info(ObjectId id, CollisionInfo& out) const;
+    // The radius 0x397780 of a land unit: sqrt(HX^2 + HY^2) of the joint slot box for a squad container, the soft
+    // footprint radius for any other unit; 0 for an unknown id.
+    float collision_radius(ObjectId id) const;
+    // The unit's top path record (the collision-owned path above its order path): its points (travelled ones included)
+    // and the hold tags of its waypoints; empty without one.
+    std::span<const V2> top_path(ObjectId id) const;
+    std::span<const HoldTag> top_tags(ObjectId id) const;
     // Hover state (pack +0x2a8) of a Walk unit whose type has Hover_Height: 0 grounded (spawn), 2 rising (set by the
     // start of a move while not raised: the unit stands for Hover_Height / its max speed frames, then is 1 raised), 3
     // lowering (hover_lower: a GARRISON_HOVER_TRANSPORT whose slot a unit reserves, or that is asked to eject; back to 0
@@ -860,24 +912,41 @@ private:
         // not saved, not hashed; the records' own answers are).
         float coll_speed = 3.0e38f;
         bool coll_now = false;
-        // s78n t18 (MOVEMENT §5.4.1, save version 17): Path Around bookkeeping - the collision record (seq; kNoDetour
-        // none) the current detour was spliced in for and the path index where it ends (the unit "holds the path made
-        // for the record" while next < detour_end); the units the path was planned around and the frame of that plan
+        // s78n t18 (MOVEMENT §5.4.1, save version 17): the units the top path was planned around and the frame of that plan
         // (decision step 3); the frame of the unit's last path push or pop (pack +0x288).
-        uint32_t detour_seq = 0xFFFFFFFFu;
-        uint32_t detour_end = 0;
         std::vector<ObjectId> around;
         uint32_t around_frame = 0;
         uint32_t path_change = 0;
         V2 nudge;
         uint32_t nudge_frames = 0;
-        // a1k t03 (A1_READINGS §40.3): the pushed move (push 0x6859a0), the top record of the locomotor's path stack: the
-        // path to the free spot, walked over the order move (m.path / goal stay underneath and resume when it ends).
-        // push_blocked = consecutive blocked frames of the pushed walk (save version 9).
+        // a1k t03 (A1_READINGS §40.3): the collision-owned record on top of the locomotor's path stack, walked over the
+        // order move (m.path / goal stay underneath, untouched, and resume when it ends). push_blocked = consecutive
+        // blocked frames of its walk (save version 9). s78n t20 (MOVEMENT §1.5.1 item 5, §5.4.3; save version 18): one
+        // record for every collision path - push_kind 1 a push 0x6859a0, 2 a Path Around detour, 3 a StoppedVsStopped
+        // move; push_owner = the collision record that owns it (seq, pack +0x248; kNoDetour none) and push_weight that
+        // record's weight (vf +0x30: MovingVsMoving 1, MovingVsStopped 2, StoppedVsStopped 3); push_resume = the order
+        // path index the unit resumes at when a detour ends (the end waypoint of the rejoin point's segment; the path
+        // size when the detour ends past the path end); push_tags = the hold tags of its waypoints.
         bool pushed = false;
         std::vector<V2> push_path;
         uint32_t push_next = 0;
         uint32_t push_blocked = 0;
+        uint32_t push_owner = 0xFFFFFFFFu;
+        uint8_t push_weight = 0;
+        uint8_t push_kind = 0;
+        uint32_t push_resume = 0;
+        std::vector<HoldTag> push_tags;
+        // s78n t20 (MOVEMENT §5.4.4 item 5, §4.3.1; save version 18): the formation of the unit's last land order (0
+        // none; unique per formation of an order) and its slot there (x = along the formation's forward axis, y = to
+        // its right); self_arrive = a one-member formation whose order has neither flag 0x20 nor an object goal (the
+        // single-member shortcut of the plan 0x41c1a0: ordered onto its own footprint it does not move).
+        // s78n t20 F5 (save version 19): self_goal = the slot's exact point (before any cell snap), which the shortcut
+        // measures to.
+        uint32_t form_id = 0;
+        V2 form_slot;
+        bool self_arrive = false;
+        V2 self_goal;
+        CollisionInfo ci;  // s78n t20: set_collision_info (transient, host-set every tick)
         // space
         std::vector<SpaceWaypoint> wps;
         uint32_t path_start = 0;
@@ -1213,23 +1282,52 @@ private:
     void plan_land(uint32_t frame, const ParallelFor& pf);
     // S7 collision layer (TACTICAL_GAPS §6.7)
     void detect_collisions(uint32_t frame);
-    void drive_collisions(uint32_t frame);
+    void drive_collisions(uint32_t frame, SimRng& rng);
     void land_candidates(size_t ai, std::vector<uint32_t>& out) const;
+    // [port] the older "moving" predicates (an order path being walked), kept only for the MovingVsMoving stand-in of
+    // pairs that are not two Infantry / Bike movers
     bool checker_moving(const Unit& u, uint32_t frame) const;
     static bool other_moving(const Unit& u);
     bool mvm_contact(const Unit& a, const Unit& b) const;
-    float mvs_contact(const Unit& a, const Unit& b, uint32_t frame) const;
+    float mvs_contact(const Unit& a, const Unit& b) const;
     float mvs_look_distance(const Unit& a, const Unit& b) const;
     bool collision_applies(const CollisionObject& c, uint32_t frame) const;  // [port] the stand-in kinds' keep test
-    void resolve_collision(CollisionObject& c, bool full, uint32_t frame, std::vector<uint8_t>& acted);
+    void resolve_collision(CollisionObject& c, bool full, uint32_t frame, SimRng& rng);
     void mvm_response(Unit& x, const Unit& y, uint32_t frame);
-    // s78n t14 part B: flee = the path is crush-flee (kind 7); s78n t18: `frame` stamps the blocker's path change
-    bool push_aside(const Unit& a, Unit& b, bool flee, uint32_t frame);
+    // s78n t14 part B: flee = the path is crush-flee (kind 7); s78n t18: `frame` stamps the blocker's path change; s78n
+    // t20: `c` = the record that owns the pushed path
+    bool push_aside(const CollisionObject& c, const Unit& a, Unit& b, bool flee, uint32_t frame);
     // s78n t18 (MOVEMENT §5.4.1 / §5.4.2; movement_system.cpp)
     static constexpr uint32_t kNoDetour = 0xFFFFFFFFu;
     bool collision_valid(const CollisionObject& c, uint32_t frame) const;
     bool mvm_infantry_pair(const Unit& a, const Unit& b) const;
-    bool unit_moving(const Unit& u, uint32_t frame) const;
+    // s78n t20 (MOVEMENT §5.2 "What Moving is", vf +0x1a8 / +0x1b0): not suspended and (speed > 0, or a path record on
+    // its stack - a collision-owned one or a planned order path - or turning in place). No order test: an order-less
+    // unit on a pushed path is Moving. [port] an order whose path is not planned yet (start delay, composition pending)
+    // has no path record: not Moving.
+    bool unit_moving(const Unit& u) const;
+    // s78n t20 (MOVEMENT §1.5.1 item 5, §5.4.3): the collision-owned record on top of the path stack.
+    //   claim (vf +0x178 = 0x42cdd0 with the test 0x42c7d0): accepted when the unit has no owner, the same owner, or an
+    //     owner of lower weight; `force` (the push, Path Around) releases any owner. A claim by a new owner removes the
+    //     unit's collision-owned record (0x559410) and stamps its path change.
+    //   push_top (vf +0x190 -> 0x554310): the path becomes the top record, started, owned by `c`.
+    //   pop_top (the Walk step 0x620820): the record is dropped; `walked` (its last waypoint was passed): the order path
+    //     below resumes past every waypoint line the unit has already crossed, and true is returned when that leaves no
+    //     waypoint (the unit has arrived where it stands).
+    bool claim(Unit& u, const CollisionObject& c, bool force, uint32_t frame);
+    void push_top(Unit& u, std::vector<V2> path, uint8_t kind, bool flee, const CollisionObject& c, uint32_t frame);
+    bool pop_top(Unit& u, bool walked, uint32_t frame);
+    bool holds_path(const Unit& u, const CollisionObject& c) const { return u.pushed && u.push_owner == c.seq; }  // vf +0x1c0(id)
+    // [port] the path stack as one polyline (stands for "the approximation runs along the path stack"): the top record's
+    // remaining points, then the order path from the waypoint it resumes at. pts[next..] remain to be walked.
+    struct StackPoly {
+        std::span<const V2> pts;
+        uint32_t next = 0;
+    };
+    StackPoly stack_poly(const Unit& u, std::vector<V2>& scratch) const;
+    void stack_points(const Unit& u, std::vector<V2>& out) const;  // the unit's position, then the remaining points
+    V2 type_half(const Unit& u) const;         // 0x371be0: the type's half extents (UnitDesc::type_hx / type_hy)
+    float half_width(const Unit& u) const;     // 0x396b70: the half width across ([port] no deployed switch yet)
     float walk_max_speed(const Unit& u) const;
     V2 wanted_dir(const Unit& u) const;
     float record_cap(const Unit& u) const;
@@ -1239,12 +1337,44 @@ private:
     bool near_path_end(const Unit& a, const Unit& b) const;
     bool destination_blocked(const Unit& a, const Unit& b) const;
     bool side_step_ok(const Unit& a, const Unit& b, const CollisionObject& self) const;
-    bool early_arrival(Unit& a, const Unit& b, uint32_t frame);
-    bool path_around(const CollisionObject& c, Unit& a, const Unit& b, float contact, uint32_t frame);
+    // s78n t20 (MOVEMENT §5.4.4): the early-arrival cut 0x685e10(a, b, v); `have_v` / `v` = the spare point of 0x5c6ba0.
+    // True: b is at or ahead of the stop point (the record resolves with the "at once" flag). False: nothing changed, or
+    // the path was cut and b lies behind the stop point (the decision goes on with the shortened path).
+    bool early_arrival(Unit& a, const Unit& b, bool have_v, V2 v, uint32_t frame);
+    void cut_order_path(Unit& u, float c, uint32_t frame);  // 0x684100 on one unit's order path: its length less c, from its end
+    // s78n t20 (MOVEMENT §1.5.1): the Path Around call 0x5c80e0(record, u, o, flag, kind, flags) - a visibility-graph
+    // detour from u (a point) to a rejoin point on its own current path, pushed as a record on top of its path stack
+    // (kind 4; 7 = a crush-flee path). `o` = the obstacle of the record (null: none), forced into the obstacle set when
+    // `flag`; `flags` bit 1 / 2 / 4 as in item 1. False: nothing changed (stack, owner, state).
+    bool path_around(const CollisionObject& c, Unit& u, const Unit* o, bool flag, uint8_t kind, uint8_t flags, uint32_t frame);
+    bool mvs_path_around(const CollisionObject& c, Unit& a, const Unit& b, uint8_t p, uint32_t frame);  // 0x685920: flags p, then p | 4
+    // 0x5c6ba0: the first accepted rejoin candidate with D = |a - b| (3-D) + r_a + r_b; no search, no complexity.
+    bool spare_point(const Unit& a, const Unit& b, V2& v) const;
+    // 0x676c10: the base path of a Path Around / spare point call - the unit's top path record from its current waypoint
+    // (`cur`: the start of the segment it walks); a collision-owned top record gets one point 1 unit past its end along
+    // the order path's current segment. False: no order path, or no segment left.
+    bool around_base(const Unit& u, std::vector<V2>& scratch, std::span<const V2>& base, uint32_t& cur) const;
+    // 0x67ad20 / 0x679aa0: the rejoin candidates in order - along the base path, past its end, the ring spot around its
+    // end - at most 11 tried; `fn` gets each accepted point with the order path index to resume at and returns true to
+    // take it.
+    struct Rejoin {
+        V2 q;
+        uint32_t resume = 0;
+        bool on_path = false;
+    };
+    bool rejoin_search(const Unit& u, std::span<const V2> base, uint32_t cur, float d, const std::function<bool(const Rejoin&)>& fn) const;
+    bool rejoin_accept(const Unit& u, V2 cand, V2 path_end, V2& q) const;
+    // 0x67d580 + 0x677650: the obstacle set of a Path Around call among the layer objects around u, ascending id, with
+    // their swept boxes; `ids` = their units_ indices.
+    void around_obstacles(const Unit& u, const Unit* forced, uint8_t flags, float half, std::vector<AroundObstacle>& out,
+                          std::vector<uint32_t>& ids) const;
+    uint8_t unit_relation(const Unit& p0, const Unit& p1) const;         // 0x679750(p0, p1)
+    FootRect unit_swept_box(const Unit& o, const Unit& u, uint8_t rel) const;  // 0x677650 of o for the pathing unit u
+    bool shares_open_record(const Unit& u, const Unit& o) const;        // an undecided / detouring record of the pair (vf +0x58)
     void mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t frame);
     void mvs_service(CollisionObject& c, Unit& a, Unit& b, bool full, uint32_t frame);
     CollisionState mvm_choose(const CollisionObject& c, const Unit& a, const Unit& b, bool& master_a) const;
-    void mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full, uint32_t frame);
+    void mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full, uint32_t frame, SimRng& rng);
     // s78n t14 part B (0x5c8890): b's owner's faction has Scatters_From_Crushers and b's SPREAD_OUT is off.
     bool scatters(const Unit& b) const { return (!scatters_ || scatters_(b.d.owner)) && !b.spread; }
     // s78n t18 (MOVEMENT §5.3): the garrison-host gate of all three contact tests - either one's garrison host (walking
@@ -1254,12 +1384,38 @@ private:
     }
     static bool raised(const Unit& u) { return u.hover == 1; }  // the hover gate's "raised" (rising / lowering are not)
     bool svs_overlap(const Unit& a, const Unit& b) const;  // StoppedVsStopped contact 0x686500 (gate + coefficient)
-    // A crusher drives through units it crushes, except a squad container (pushed instead; its members are crushed).
+    // [port] the MovingVsMoving stand-in only: a crusher takes no record with a moving single unit it crushes (a squad
+    // container is pushed instead; its members are crushed).
     bool drives_through(const Unit& c, const Unit& v) const { return crushes(c, v) && !v.d.team_container; }
-    bool push_spot(const Unit& b, V2 dir, V2& out) const;  // free-position search 0x440f90 (A1_READINGS §40.2)
+    // The free-position search 0x440f90 around unit b itself (A1_READINGS §40.2): the push's set-up (cone pi / 4, outside
+    // radius 0.33) and StoppedVsStopped's (Infantry class pi / 1.0, others 3 pi / 4 / 0.75; MOVEMENT §5.4.3)
+    bool push_spot(const Unit& b, V2 dir, float cone, float outside, V2& out) const;
+    // s78n t20 (MOVEMENT §5.4.3): StoppedVsStopped 0x687570 / 0x687720 - the service, who moves 0x687010 (0 = a, 1 = b, 2 =
+    // nobody), the cost 0x686b20 and the escape direction 0x5c74b0
+    void svs_service(CollisionObject& c, Unit& a, Unit& b, uint32_t frame);
+    uint8_t svs_pick_mover(const CollisionObject& c, const Unit& p0, const Unit& p1) const;
+    float svs_cost(const Unit& x, const Unit& y, V2 d) const;
+    V2 svs_escape_dir(const Unit& x, const Unit& o) const;
     static void end_push(Unit& u);
     void update_tree(const Unit& u);
     V2 pick_land_slot(const Unit& u, V2 slot, std::vector<uint64_t>& taken) const;
+    // s78n t20 (MOVEMENT §4.3.1 items 2 - 4, 0x439360 / 0x43d6a0): the destination check of a land move order, run once
+    // at the order ([port] the split and the layout are made at the order, with the positions of the order frame; retail
+    // runs it at the coordinator update that follows). One formation of the order: its members (indices into the
+    // order's unit list, seed first), centroid, speed, layout forward axis and slots, and the centre its slots are laid
+    // around - the ordered destination until the check moves it.
+    struct LandForm {
+        std::vector<uint32_t> members;
+        V2 centroid;
+        float speed = 0.0f;
+        V2 fwd;
+        std::vector<Slot> slots;
+        V2 centre;
+        bool checked = false;  // s78n t20 F5: the destination check accepted `centre` (its slots take no cell snap)
+    };
+    void destination_check(const MoveOrder& order, const std::vector<uint32_t>& idx, std::vector<LandForm>& forms, V2 group_c);
+    bool place_formation(const std::vector<uint32_t>& idx, const LandForm& f, V2 dn, V2 v, V2 axis, bool first, bool several,
+                         int32_t comp, std::vector<FootRect>& taken, V2& centre) const;
     void move_land(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
                    const std::vector<uint32_t>& delays, uint32_t serial, SimRng& rng);
     void move_space(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
@@ -1310,6 +1466,7 @@ private:
     void attach_member(Unit& u, ObjectId container, V2 slot, uint32_t tindex);  // set_land_team's per-member part
     void park_record(const Unit& u);  // park_team_member / suspend_team_member: the (member, container, slot, index) record
     bool deferred_compose_ = false;           // cu8j t01: the host runs coordinator_update (not saved: host setup)
+    uint32_t form_serial_ = 0;                // s78n t20: the last Unit::form_id given (saved, version 18)
     FighterFormationHooks fhooks_;          // s78f t02 (not saved: the loader re-sets them)
     FlyingHooks fly_hooks_;  // FIGHTER_FLYING §6
     // S8 t11

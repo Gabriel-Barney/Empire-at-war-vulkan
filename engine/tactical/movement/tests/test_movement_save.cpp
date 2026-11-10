@@ -279,7 +279,8 @@ void test_collision_layer() {
     a.add(CollisionKind::MovingVsMoving, 30, 2, 12);
     uint32_t calls = 0;
     a.run(
-        20, [](CollisionObject& c) { return c.a != 30; }, [](const CollisionObject& c) { return static_cast<uint32_t>(c.a % 3); },
+        20, [](CollisionObject& c) { return c.a != 30; }, [](const CollisionObject&) { return true; },
+        [](const CollisionObject& c) { return static_cast<uint32_t>(c.a % 3); },
         [&calls] { return ++calls < 2; },
         [](CollisionObject& c, bool full) {
             if (c.kind == CollisionKind::StoppedVsStopped) {
@@ -306,6 +307,37 @@ void test_collision_layer() {
     put_u32(bad, 12 + 35 + 7, 9);   // second collision (35 bytes each): a = 9 ...
     put_u32(bad, 12 + 35 + 11, 4);  // ... b = 4: the pair of the first collision again
     CHECK(rejects(t, bad));
+    // s78n t20 (collision save 3): exact version; the StoppedVsStopped state Resolving (7) and "nobody is moved"
+    // (master 2) are valid values, the next ones are not. A record is 46 bytes: state at +5, master at +45.
+    bad = good;
+    put_u32(bad, 0, 2);  // 2: before the s78n t20 StoppedVsStopped states
+    CHECK(rejects(t, bad));
+    put_u32(bad, 0, 4);
+    CHECK(rejects(t, bad));
+    bad = good;
+    bad[12 + 4] = 2;  // s78n t20 F9: as a StoppedVsStopped record (kind at +4)
+    bad[12 + 5] = 7;
+    bad[12 + 45] = 2;
+    CollisionLayer ok;
+    CHECK(load(ok, bad) && ok.list()[0].state == CollisionState::Resolving && ok.list()[0].master == 2);
+    bad[12 + 5] = 8;
+    CHECK(rejects(t, bad));
+    bad[12 + 5] = 7;
+    bad[12 + 45] = 3;
+    CHECK(rejects(t, bad));
+    // s78n t20 F9: Resolving or master 2 on a MovingVsMoving (0) / MovingVsStopped (1) record would never end: rejected
+    for (const uint8_t kind : {uint8_t{0}, uint8_t{1}}) {
+        bad = good;
+        bad[12 + 4] = kind;
+        bad[12 + 5] = 7;
+        CHECK(rejects(t, bad));
+        bad[12 + 5] = 1;  // TryAgainLater
+        bad[12 + 45] = 2;
+        CHECK(rejects(t, bad));
+        bad[12 + 45] = 1;
+        CollisionLayer fine;
+        CHECK(load(fine, bad));
+    }
 }
 
 void test_fighter_grids() {
@@ -502,6 +534,8 @@ void build_land(World& w, uint32_t seed) {
     w.sys.grid().stamp(900, make_footprint(cell_center(40, 40), 30.0f, 60.0f, 30.0f, -30.0f, -15.0f, 0, 0, 1.0f, 0));
     w.sys.set_height_fn([](float x, float y) { return x > 1000.0f ? 40.0f : (y > 1500.0f ? 12.0f : 0.0f); });
     w.sys.set_anim_length_fn(anim_len);
+    // (s78n t20: the crusher lane's victims do not scatter, so the crusher drives over them - the crush events are saved)
+    w.sys.set_scatters_fn([](int32_t) { return false; });
     w.sys.set_threat_fn([](int32_t, V2 p) { return distance(p, cell_center(45, 45)) < 200.0f ? 30.0f : 0.0f; });
     const float hi = 95.0f * kCellSize;
     w.sys.air().set_box({0.0f, 0.0f}, {hi, hi});
@@ -580,7 +614,7 @@ void land_before(World& w, uint32_t f) {
             o = MoveOrder{};
             o.units = {200};
             o.destination = cell_center(88, 27);
-            o.flags = kMoveFlagSkipValidation;
+            // (s78n t20: an ordinary order - on a forced path decision step 2 pushes the victims aside instead)
             s.move(o, w.rng, f);
             o.flags = 0;
             o.units = {300};
@@ -1191,6 +1225,106 @@ void test_t18_states() {
     check_resume(sc, (turn[0] + turn[1]) / 2, 41);  // a loader that already ran
 }
 
+// s78n t20: saves inside the record states and path records of batch A, each in its own lane (250 apart):
+//  * a Path Around detour (a kind-2 record with hold tags and a resume index on top of the order path) - vehicle 10 around
+//    the standing vehicle 11;
+//  * a StoppedVsStopped record in Resolving (a kind-3 record) - the overlapping parked vehicles 20 / 21;
+//  * a StoppedVsStopped record in Try Again Later - the overlapping infantry units 30 / 31, both with targets (the host
+//    feed set_collision_info is not saved: the scenario sets it before every tick, as the host does);
+//  * a push (a kind-1 record) - vehicle 40 on a forced path against the standing vehicle 41.
+// Every order also carries its formation id, slot and single-member flag (saved with version 18).
+UnitDesc t20_save_vehicle(ObjectId id, V2 pos, float speed = 1.0f) {
+    UnitDesc d = land_unit(id, pos, 7, speed, 12.0f, kUccVehicle);
+    d.hard_x = 10.0f;
+    d.hard_y = 6.0f;
+    d.accel = d.decel = 0.05f;
+    d.owner = 1;
+    return d;
+}
+
+void build_t20_states(World& w) {
+    PassabilityGrid g;
+    g.init(100, 100);
+    w.sys.set_grid(std::move(g));
+    w.rng = SimRng(53);
+    CHECK(w.sys.add_unit(t20_save_vehicle(10, cell_center(10, 10))));
+    CHECK(w.sys.add_unit(t20_save_vehicle(11, cell_center(24, 10))));
+    CHECK(w.sys.add_unit(t20_save_vehicle(20, cell_center(10, 35))));
+    CHECK(w.sys.add_unit(t20_save_vehicle(21, cell_center(10, 35) + V2{8.0f, 0.0f}, 0.2f)));  // slow: a long Resolving
+    CHECK(w.sys.add_unit(land_unit(30, cell_center(10, 60), 0, 1.0f, 6.0f, kUccInfantry)));
+    CHECK(w.sys.add_unit(land_unit(31, cell_center(10, 60) + V2{4.0f, 0.0f}, 0, 1.0f, 6.0f, kUccInfantry)));
+    CHECK(w.sys.add_unit(t20_save_vehicle(40, cell_center(10, 85))));
+    CHECK(w.sys.add_unit(t20_save_vehicle(41, cell_center(24, 85), 0.2f)));  // slow: a long push
+}
+
+void t20_states_before(World& w, uint32_t f) {
+    MovementSystem::CollisionInfo ci;  // the host's feed of every tick (not saved)
+    ci.target = 900;
+    ci.target_pos = cell_center(10, 70);
+    ci.attack_range = 300.0f;
+    CHECK(w.sys.set_collision_info(30, ci) && w.sys.set_collision_info(31, ci));
+    if (f != 1) return;
+    MoveOrder o;
+    o.units = {10};
+    o.destination = cell_center(45, 10);
+    w.sys.move(o, w.rng, f);
+    MoveOrder p;
+    p.units = {40};
+    p.destination = cell_center(45, 85);
+    p.flags = kMoveFlagSkipValidation;
+    w.sys.move(p, w.rng, f);
+}
+
+void test_t20_states() {
+    Scenario sc;
+    sc.name = "land record states and path records (s78n t20)";
+    sc.build = build_t20_states;
+    sc.before = t20_states_before;
+    sc.after = squad_after;
+    sc.frames = 420;
+    World v(sc.cfg);
+    sc.build(v);
+    // first / last frame (after the tick) each state was seen in: 0 detour, 1 Resolving, 2 Try Again Later, 3 push
+    uint32_t seen[4][2] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
+    const auto holds = [](const World& w, int which) {
+        if (which == 0) return w.sys.view(10).pushed && w.sys.view(10).push_kind == 2 && !w.sys.top_tags(10).empty();
+        if (which == 3) return w.sys.view(41).pushed && w.sys.view(41).push_kind == 1;
+        for (const CollisionObject& c : w.sys.collisions().list()) {
+            if (which == 1 && c.kind == CollisionKind::StoppedVsStopped && c.a == 20 && c.state == CollisionState::Resolving &&
+                w.sys.view(21).pushed && w.sys.view(21).push_kind == 3)
+                return true;
+            if (which == 2 && c.kind == CollisionKind::StoppedVsStopped && c.a == 30 && c.state == CollisionState::TryAgainLater) return true;
+        }
+        return false;
+    };
+    for (uint32_t f = 0; f < sc.frames; ++f) {
+        step(sc, v, f, serial_for);
+        for (int k = 0; k < 4; ++k)
+            if (holds(v, k)) {
+                if (seen[k][0] == 0) seen[k][0] = f + 1;
+                seen[k][1] = f + 1;
+            }
+    }
+    std::printf("land t20 state saves: detour %u..%u, Resolving %u..%u, Try Again Later %u..%u, push %u..%u\n", seen[0][0], seen[0][1],
+                seen[1][0], seen[1][1], seen[2][0], seen[2][1], seen[3][0], seen[3][1]);
+    for (int k = 0; k < 4; ++k) CHECK(seen[k][0] > 0 && seen[k][1] >= seen[k][0] + 5);
+    CHECK(!v.sys.view(10).pushed && v.sys.view(10).form_id != 0);  // back on its order path, in its formation
+    for (int k = 0; k < 4; ++k) {
+        if (seen[k][0] == 0) continue;
+        for (const uint32_t at : {seen[k][0], (seen[k][0] + seen[k][1]) / 2, seen[k][1]}) {
+            World c(sc.cfg);
+            sc.build(c);
+            for (uint32_t f = 0; f < at; ++f) step(sc, c, f, serial_for);
+            CHECK(holds(c, k));  // the save taken after `at` ticks holds the state
+            check_resume(sc, at, 0);
+        }
+    }
+    if (seen[0][0] != 0) check_resume(sc, (seen[0][0] + seen[0][1]) / 2, 37);  // a loader that already ran
+    // the Try Again Later record around its 30-frame retry
+    if (seen[2][0] != 0)
+        for (const uint32_t at : {seen[2][0] + 29u, seen[2][0] + 30u, seen[2][0] + 31u}) check_resume(sc, at, 0);
+}
+
 // s78n t18 review: a TEAM entry that goes without a steering member leaving - a member suspended for a hero clash that
 // is removed (0), a garrisoned (parked) member that dies inside (1), a rejoin the system refuses (2: the unit is not in
 // it) - leaves the entry list at once: the joint box, the container's radius and the rate 0x5ab540 are those a loaded
@@ -1483,7 +1617,11 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 16);  // 16: before the s78n t18 collision states / record answers / squad walk and gate fields (17)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 18);
+    put_u32(bad, 0, 17);  // 17: before the s78n t20 top path record / formation identity / type extents (18)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 18);  // 18: before the s78n t20 F5 exact single-member goal Unit::self_goal (19)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 20);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode
@@ -1658,6 +1796,7 @@ int main() {
                     recovering, last_recovering);
     }
     test_t18_states();              // s78n t18 review
+    test_t20_states();              // s78n t20
     test_stale_team_entries();      // s78n t18 review
     test_hidden_after_load();       // s78n t18 review
     test_t18_review_rejections();   // s78n t18 review

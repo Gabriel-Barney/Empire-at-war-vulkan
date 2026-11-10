@@ -92,6 +92,14 @@ inline V2 slot_world(V2 destination, V2 forward, const Slot& s) {
     return destination + formation_right(forward) * s.lateral - forward * s.back;
 }
 
+// s78n t20 (MOVEMENT §4.3.1 item 4, 0x43d6a0): the offset from the pass centre of try k (0 .. 39) of one formation's
+// destination check. t = 0 at first and grows by 7.0 after each try with k mod 8 < 4, so t(k) = 7 x (4 x (k / 8) + k mod
+// 8) there and t - 28 = 28 x (k / 8) for k mod 8 = 4 .. 7. Tries k mod 8 < 4: t v; tries 4 .. 7: (t - 28) v + m x {(1, 0),
+// (0, 1), (-1, 0), (0, -1)} (world axes; m = min(HX + S, HY + S)). `first_unblocked` (the order's first formation, until
+// a try met impassable ground): the v term is halved and takes the factor +1 for even k, -0.75 for odd k - with v
+// pointing back along the final direction: 0, 2.625 beyond, 7 short, 7.875 beyond, four sideways, 14 short, ...
+V2 destination_try_offset(uint32_t k, bool first_unblocked, V2 v, float m);
+
 // Side-error correction while moving as a group (§4.4): steer by (error -+ 0.1) / 30 when
 // |error| > FormationMinimumSideError, else 0.
 inline float formation_side_correction(float error, float min_err = 0.1f, float max_err = 30.0f) {

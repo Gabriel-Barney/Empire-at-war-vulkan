@@ -3,6 +3,8 @@
 
 #include "battle_test_fixture.hpp"
 
+#include <array>
+
 namespace {
 
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
@@ -1032,12 +1034,21 @@ void test_land_squad_container() {
     std::vector<std::pair<mv::ObjectId, mv::V2>> slots;
     Vec3 start{}, goal{};
     bool collided = false;  // the container had a collision object during the move
+    bool detoured = false, have_prev = false;  // s78n t20: it walked a Path Around detour (a record on top of its path)
+    float max_step = 0.0f;
+    mv::V2 prev_pos{};
+    // s78n t20 item 6 (MOVEMENT 4.3.1): after the checks above, the squad is ordered onto another standing squad
+    int onto = 0;  // 0 not started, 1 ordered, 2 arrived, 3 no second standing squad
+    objects::ObjectId other_team = objects::kNoObjectId;
+    mv::V2 other_pos{}, onto_goal{};
+    float other_hx = 0.0f, other_hy = 0.0f, own_hx = 0.0f, own_hy = 0.0f;
+    uint32_t onto_frame = 0, hold_run = 0, hold_max = 0;
     float off_line = 0.0f, off_path = 0.0f, max_lead = 0.0f, team_speed = 0.0f, late_along = 0.0f, settle_err = 0.0f;
     uint32_t store_mismatch = 0, moving_frames = 0, recover_frames = 0, box_mismatch = 0;
     float start_error = -1.0f, recovered_error = -1.0f;
     std::vector<float> along_ref;  // s78n t14: each member's along error 120 frames into the move
     bool settle_target = false;    // a member has a target when the team stopped (no recovery, §7.3 item 6)
-    for (uint64_t t = 0; t < 8000 && !done; ++t) {
+    for (uint64_t t = 0; t < 8000 && !(done && onto >= 2); ++t) {
         host.tick_once();
         if (!invaded && host.modes().depth() == 1) {
             const std::vector<uint32_t> f = gs->fleets_at(1, 1);
@@ -1045,10 +1056,54 @@ void test_land_squad_container() {
         }
         TacticalBattle* b = battles.battle();
         TacticalMode* tm = host.tactical();
-        if (!b || !tm || b->frame() < 3) continue;
+        if (!b || !tm || b->frame() < 3) {
+            if (done) break;  // the battle is over
+            continue;
+        }
         objects::ObjectStore& st = tm->primary();
         const tc::CombatSystem& cs = b->combat();
         const mv::MovementSystem& ms = b->movement();
+        if (done) {
+            // s78n t20 item 6: the destination check of the order moves the goal off the standing squad, so the mover
+            // never waits in front of it (before: an early-arrival cut at best, a long Try Again Later hold at worst)
+            if (onto == 0) {
+                std::map<uint32_t, uint32_t> count;
+                for (size_t i = 0; i < cs.unit_count(); ++i) {
+                    const auto id = cs.unit_id_at(i);
+                    if (cs.team(id) != 0 && cs.alive(id)) ++count[cs.team(id)];
+                }
+                for (const auto& [tid, n] : count) {
+                    const auto cid = static_cast<objects::ObjectId>(tid);
+                    const objects::ObjectHandle th2 = st.find(cid);
+                    if (cid == team_id || n < 2 || !st.alive(th2) || !ms.has_unit(cid) || ms.view(cid).has_goal) continue;
+                    // (the object test has no owner test: the human's own second squad when there is one, else any)
+                    if (other_team == objects::kNoObjectId || (st.owner(th2) == 0 && st.owner(st.find(other_team)) != 0)) other_team = cid;
+                }
+                bool mine_alive = ms.has_unit(team_id);
+                for (const auto id : members) mine_alive = mine_alive && cs.alive(id);
+                if (other_team == objects::kNoObjectId || !mine_alive || !ms.team_joint_box(other_team, other_hx, other_hy) ||
+                    !ms.team_joint_box(team_id, own_hx, own_hy)) {
+                    onto = 3;
+                    continue;
+                }
+                other_pos = ms.view(other_team).pos;
+                CHECK(b->order_move(*tm, 0, members, other_pos.x, other_pos.y, host.random().synced()) == commands::RejectReason::None);
+                onto_goal = ms.view(team_id).goal;
+                onto_frame = b->frame();
+                onto = 1;
+                continue;
+            }
+            if (onto == 1) {
+                bool held = false;
+                for (const mv::CollisionObject& co : ms.collisions().list())
+                    held = held || ((co.a == team_id && co.speed_a == 0.0f) || (co.b == team_id && co.speed_b == 0.0f));
+                hold_run = held ? hold_run + 1 : 0;
+                hold_max = std::max(hold_max, hold_run);
+                if (!ms.has_unit(team_id) || !ms.has_unit(other_team)) onto = 3;  // (a squad died meanwhile)
+                else if ((!ms.view(team_id).has_goal && b->frame() > onto_frame + 5) || b->frame() > onto_frame + 1500) onto = 2;
+            }
+            continue;
+        }
         if (stage == 0) {  // a live team of the human player (0) with >= 2 members
             std::map<uint32_t, std::vector<objects::ObjectId>> teams;
             for (size_t i = 0; i < cs.unit_count(); ++i) {
@@ -1175,7 +1230,15 @@ void test_land_squad_container() {
                 bool rec_now = false;
                 for (const mv::CollisionObject& co : ms.collisions().list()) rec_now = rec_now || co.a == team_id || co.b == team_id;
                 collided = collided || rec_now;
-                off_path = std::max(off_path, dmin);
+                // s78n t20 (MOVEMENT 1.5.1 item 5): a Path Around detour is a record on top of the path stack; when it
+                // ends the container heads from the detour's last corner straight for its next ordered waypoint, so from
+                // then on it is beside the ordered polyline by design - the distance is taken up to the first detour, and
+                // the step length (no displacement in one step) on every frame
+                detoured = detoured || (k.pushed && k.push_kind == 2);
+                if (have_prev) max_step = std::max(max_step, std::sqrt((k.pos.x - prev_pos.x) * (k.pos.x - prev_pos.x) + (k.pos.y - prev_pos.y) * (k.pos.y - prev_pos.y)));
+                prev_pos = k.pos;
+                have_prev = true;
+                if (!detoured) off_path = std::max(off_path, dmin);
                 team_speed = std::max(team_speed, k.speed);
                 for (size_t m = 0; m < members.size(); ++m) {
                     const mv::UnitView v = ms.view(members[m]);
@@ -1222,8 +1285,26 @@ void test_land_squad_container() {
     CHECK(start_error > 4.0f && recovered_error >= 0.0f && recovered_error <= 4.0f);  // idle recovery (> 4.0 from the slot)
     // s78n t18: the container walks its own planned path (never re-centred on its members) and stays on it through its
     // collision objects: no nudge off the path, no repath against infantry (before t18 a MovingVsMoving object with another
-    // squad's container side-stepped it up to about 16 off the path)
+    // squad's container side-stepped it up to about 16 off the path). s78n t20: against a standing vehicle it walks a
+    // Path Around detour (the record on top of its path stack) and then resumes toward its next ordered waypoint; it
+    // never moves farther in one step than its team speed.
     CHECK(moving_frames > 60 && off_path < 0.5f);
+    CHECK(max_step <= team_speed + 1e-3f);
+    std::printf("  land squad: Path Around detour %d, largest step %.3f\n", detoured ? 1 : 0, static_cast<double>(max_step));
+    // s78n t20 item 6: ordered onto a standing squad - the goal is off its footprint (the two joint boxes, each
+    // + BetweenFormationSpacing on the mover's side, do not overlap at the goal; s78n t20 F5: the accepted centre, no
+    // cell snap), the squad arrives, and no collision record ever holds it for 30 frames
+    if (onto == 2 && battles.battle() != nullptr && battles.battle()->movement().has_unit(team_id)) {
+        const mv::UnitView k2 = battles.battle()->movement().view(team_id);
+        const float gx = std::fabs(onto_goal.x - other_pos.x), gy = std::fabs(onto_goal.y - other_pos.y);
+        std::printf("  land squad: ordered onto squad %d at (%.0f, %.0f) - goal (%.0f, %.0f), arrived %d, longest collision hold %u frames\n",
+                    static_cast<int>(other_team), static_cast<double>(other_pos.x), static_cast<double>(other_pos.y),
+                    static_cast<double>(onto_goal.x), static_cast<double>(onto_goal.y), k2.arrived ? 1 : 0, hold_max);
+        CHECK(gx > own_hx + other_hx + 5.0f || gy > own_hy + other_hy + 5.0f);
+        CHECK(k2.arrived && hold_max < 30);
+    } else {
+        std::printf("  land squad: ordered onto a standing squad - not run (state %d: no second standing squad, or one died)\n", onto);
+    }
     CHECK(box_mismatch == 0);  // s78n t18 review: squad_joint_slots and team_joint_box agreed on every moving frame
     CHECK(max_lead > 1.0f);   // the container leads (its members steer from its start-of-tick state)
     CHECK(along_ref.size() == members.size() && late_along < 4.0f);  // and the members hold the formation
@@ -3128,10 +3209,10 @@ void test_landing_drop(bool timed, uint32_t destroy_at = 0) {
             CHECK(b->read_part(TacticalBattle::SavePart::State, r));
             // s78f t02 / q6: battle state version 8 (the two version-7 branches merged: FighterFormationRecord::pushed dropped
             // and the q6 TEAM-container attacks); ccpgt t02: version 9 (the domination timer); cu8k t01: version 10 (the
-            // thrown sabers); cu8l t03: version 11 (the start fleet arrivals; a version 10 state is still read, without
-            // them): 9 and 12 are refused, and so is this version 11 stream read as version 10 (the arrivals are left over).
+            // thrown sabers); cu8l t03: version 11 (the start fleet arrivals); s78n t20 stage A: version 12 (the land attack
+            // blocks; exact: every other version is refused): 10, 11 and 13 are refused.
             std::vector<uint8_t> stale(w.bytes().begin(), w.bytes().end());
-            for (const uint32_t v : {9u, 10u, 12u}) {
+            for (const uint32_t v : {10u, 11u, 13u}) {
                 for (size_t k = 0; k < 4; ++k) stale[k] = static_cast<uint8_t>(v >> (8 * k));
                 ByteReader rs(stale);
                 CHECK(!b->read_part(TacticalBattle::SavePart::State, rs));
@@ -3369,6 +3450,275 @@ struct SquadGarrisonScene {
 // container and every member still a mover (the host feeds them after a load: an order then meets the same gates), and
 // runs on tick for tick with the saving session - through the entry, the leave order and the walk-out. Last: a garrison
 // order on a hostile host is refused before the units' queues are cleared and before they are sent walking.
+// s78n t20 stage A (FIGHTER_FLYING §4.11 A / E, MOVEMENT §4.3.2 items 6 / 8): the land attack re-check. The human's squad
+// (S10_Squad, LAND_TEAM_CONTAINER_LOCOMOTOR) attacks a trooper of the invader's squads; every unit is invulnerable and
+// the stand-in is off, so only the order and its attack block move it.
+//   blockers false (test i): ordered from 150 (it can hit: no path), then teleported 60 units outside its range: the
+//   block's next 30-frame check re-approaches (a goal within 31 frames) and a member fires within 300 frames.
+//   blockers true (test ii): two more human squads stand on the approach line at 0.76 and 0.92 x range; the squad,
+//   ordered from range + 150, ends where it can hit and fires within 300 frames of that.
+//   save_load (test iii): saved 10 frames after the teleport (the block alive), loaded into a fresh session, both run
+//   400 ticks in lockstep with the same digest every tick.
+//   use_ai (s78n t20 step 5): the blockers case with the order given through BattleAi (the AI host's Attack).
+// s78n t20 step 5: every tick the movement collision info the host fed (TacticalBattle::feed_collision_info) is checked
+// for the squad container and its first member: a target inside a squad is named by its container, at the targeted
+// member's position, with the container's collision radius and the shooter's attack range; after the load the fed
+// info equals the uninterrupted run's tick for tick.
+struct LandAttackBlockRun {
+    bool ordered = false, gated = false, teleported = false, regoal = false, fired = false, ended_in_range = false;
+    bool saved = false, loaded = false, same = false, info_same = true;
+    uint32_t regoal_frames = 0, fire_frames = 0, end_frame = 0, compared = 0;
+    uint32_t info_frames = 0, info_bad = 0;
+    size_t blocks_at_save = 0;
+    float range = 0.0f;
+};
+
+// The fed info of `id` as a comparable tuple.
+std::array<float, 6> fed_info(const mv::MovementSystem& ms, objects::ObjectId id) {
+    mv::MovementSystem::CollisionInfo ci;
+    if (!ms.collision_info(id, ci)) return {-2.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    return {static_cast<float>(ci.target), ci.target_pos.x, ci.target_pos.y, ci.target_radius, ci.attack_range, ci.short_range ? 1.0f : 0.0f};
+}
+
+LandAttackBlockRun run_land_attack_block(const Data& d, bool blockers, bool save_load, bool use_ai = false) {
+    LandAttackBlockRun out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    opt.battle.skip_human_units = true;
+    opt.battle.order_interval = 0;  // no stand-in orders
+    const auto session = [&](bool launch) {
+        return blockers ? std::make_unique<ClashSession>(d, 0, opt, std::initializer_list<const char*>{"S10_Squad", "S10_Squad"},
+                                                         std::initializer_list<const char*>{}, launch)
+                        : std::make_unique<ClashSession>(d, 0, opt, std::initializer_list<const char*>{},
+                                                         std::initializer_list<const char*>{}, launch);
+    };
+    auto s = session(true);
+    if (!s->gs) return out;
+    int stage = 0;
+    uint32_t stage_frame = 0;
+    objects::ObjectId team = objects::kNoObjectId, target = objects::kNoObjectId;
+    std::vector<objects::ObjectId> members, others;
+    Vec3 dir{};
+    SaveFile save;
+    std::vector<uint64_t> after_save;
+    std::vector<std::array<float, 6>> info_after_save;
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup ts;
+    ts.defs = &defs;
+    ts.equations = &eqs;
+    ts.files = d.files.get();
+    ts.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };  // no AI player: orders only
+    for (uint64_t t = 0; t < 9000 && stage < 9; ++t) {
+        TacticalBattle* b = s->tick();
+        TacticalMode* tm = s->host->tactical();
+        if (!b || !tm || b->frame() < 3) {
+            if (stage > 0) break;
+            continue;
+        }
+        objects::ObjectStore& st = tm->primary();
+        auto& cs = const_cast<tc::CombatSystem&>(b->combat());
+        const mv::MovementSystem& ms = b->movement();
+        if (out.saved) {
+            after_save.push_back(clash_digest(*b));
+            info_after_save.push_back(fed_info(ms, team));
+        }
+        if (stage >= 2 && cs.alive(target)) {
+            // the fed info (this tick's feed ran before the movement tick): the squad and its first member
+            for (const objects::ObjectId id : {team, members.front()}) {
+                mv::MovementSystem::CollisionInfo ci;
+                if (!ms.collision_info(id, ci) || ci.target < 0) continue;
+                ++out.info_frames;
+                // (the feed ran before this tick's movement and combat: the targeted member may have moved a step or
+                // the shooter switched to another member since, so the member is any of the named squad's members
+                // within 3 of the fed position)
+                bool member_there = false;
+                for (size_t i = 0; i < cs.unit_count() && !member_there; ++i) {
+                    const auto mid = cs.unit_id_at(i);
+                    if (!cs.alive(mid) || cs.team(mid) != static_cast<uint32_t>(ci.target)) continue;
+                    const Vec3 mp = st.position(st.find(static_cast<objects::ObjectId>(mid)));
+                    member_there = std::fabs(mp.x - ci.target_pos.x) <= 3.0f && std::fabs(mp.y - ci.target_pos.y) <= 3.0f;
+                }
+                const bool ok = ms.is_land_team_container(ci.target) && member_there &&
+                                ci.target_radius == ms.collision_radius(ci.target) && ci.target_radius > 0.0f &&
+                                ci.attack_range == out.range && !ci.short_range;
+                if (!ok) ++out.info_bad;
+            }
+        }
+        if (stage == 0) {
+            // the human's squads (ascending container id) and the invader's lowest-id squad member
+            std::map<uint32_t, std::vector<objects::ObjectId>> teams;
+            for (size_t i = 0; i < cs.unit_count(); ++i) {
+                const auto id = cs.unit_id_at(i);
+                cs.make_invulnerable(id, 1000000, b->frame());
+                if (cs.team(id) != 0 && cs.alive(id)) teams[cs.team(id)].push_back(id);
+            }
+            for (const auto& [tid, m] : teams) {
+                const objects::ObjectHandle th = st.find(static_cast<objects::ObjectId>(tid));
+                if (m.size() < 2 || !st.alive(th) || !ms.has_unit(static_cast<objects::ObjectId>(tid))) continue;
+                if (st.owner(th) == 0) {
+                    if (team == objects::kNoObjectId) {
+                        team = static_cast<objects::ObjectId>(tid);
+                        members = m;
+                    } else {
+                        others.push_back(static_cast<objects::ObjectId>(tid));
+                    }
+                } else if (st.owner(th) == 1 && target == objects::kNoObjectId) {
+                    target = m.front();
+                }
+            }
+            CHECK(team != objects::kNoObjectId && target != objects::kNoObjectId && (!blockers || others.size() == 2));
+            if (team == objects::kNoObjectId || target == objects::kNoObjectId || (blockers && others.size() < 2)) break;
+            out.range = cs.attack_range(members.front());
+            CHECK(out.range > 100.0f);
+            const Vec3 tp = st.position(st.find(target)), ap = st.position(st.find(team));
+            const float dx = ap.x - tp.x, dy = ap.y - tp.y, dl = std::sqrt(dx * dx + dy * dy);
+            dir = dl > 1.0f ? Vec3{dx / dl, dy / dl, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
+            const float start = blockers ? out.range + 150.0f : 150.0f;
+            CHECK(b->teleport(*tm, team, Vec3{tp.x + dir.x * start, tp.y + dir.y * start, ap.z}, st.facing(st.find(team))));
+            for (size_t k = 0; k < others.size() && k < 2; ++k) {
+                const float at = (k == 0 ? 0.76f : 0.92f) * out.range;
+                const objects::ObjectHandle oh = st.find(others[k]);
+                CHECK(b->teleport(*tm, others[k], Vec3{tp.x + dir.x * at, tp.y + dir.y * at, ap.z}, st.facing(oh)));
+            }
+            stage = 1;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (!cs.alive(target)) break;
+        bool fired = false;
+        for (const tc::ShotEvent& ev : cs.shot_events())
+            for (const auto id : members)
+                fired = fired || (ev.shooter == id && (ev.target == target || cs.team(ev.target) == cs.team(target)));
+        if (stage == 1) {
+            if (b->frame() < stage_frame + 2) continue;
+            if (use_ai) {
+                std::vector<uint32_t> wire;
+                for (const objects::ObjectId m : members) wire.push_back(static_cast<uint32_t>(m));
+                BattleAi bai(*b, *tm, *s->host, ts);
+                out.ordered = bai.execute(0, commands::ev::attack(static_cast<uint32_t>(target), wire)) == commands::RejectReason::None;
+            } else {
+                out.ordered = b->order_attack(*tm, 0, members, target, s->host->random().synced()) == commands::RejectReason::None;
+            }
+            CHECK(out.ordered);
+            // the order-time gate: from 150 the squad can hit, so it takes no path (blockers: it is out of range and walks)
+            out.gated = blockers ? ms.view(team).has_goal : !ms.view(team).has_goal;
+            stage = 2;
+            stage_frame = b->frame();
+            continue;
+        }
+        const Vec3 tp = st.position(st.find(target));
+        if (!blockers) {
+            if (stage == 2) {
+                if (b->frame() < stage_frame + 45) continue;
+                const float at = out.range + 60.0f;
+                const objects::ObjectHandle th = st.find(team);
+                out.teleported = b->teleport(*tm, team, Vec3{tp.x + dir.x * at, tp.y + dir.y * at, st.position(th).z}, st.facing(th));
+                CHECK(out.teleported && cs.can_hit(members.front(), target) == tc::CanHit::OutOfMaxRange);
+                stage = 3;
+                stage_frame = b->frame();
+                continue;
+            }
+            if (stage == 3) {
+                if (!out.regoal && ms.view(team).has_goal) {
+                    out.regoal = true;
+                    out.regoal_frames = b->frame() - stage_frame;
+                }
+                if (fired) {
+                    out.fired = true;
+                    out.fire_frames = b->frame() - stage_frame;
+                }
+                if (save_load && !out.saved && b->frame() == stage_frame + 10) {
+                    std::string why;
+                    out.blocks_at_save = b->attack_blocks();
+                    out.saved = s->host->save_allowed(&why) && s->host->save(save, &why);
+                    if (!out.saved) std::printf("  land attack block save: %s\n", why.c_str());
+                }
+                if (out.fired || b->frame() > stage_frame + 300) stage = 4;
+                continue;
+            }
+        } else {
+            if (stage == 2) {
+                const bool c = cs.can_hit(members.front(), target) == tc::CanHit::Yes;
+                if (c && !ms.view(team).has_goal && !out.ended_in_range) {
+                    out.ended_in_range = true;
+                    out.end_frame = b->frame() - stage_frame;
+                    stage_frame = b->frame();
+                    stage = 3;
+                }
+                if (fired) out.fired = true;  // a member may fire on the way (in range while walking)
+                if (b->frame() > stage_frame + 3000) stage = 4;
+                continue;
+            }
+            if (stage == 3) {
+                if (fired && !out.fired) {
+                    out.fired = true;
+                    out.fire_frames = b->frame() - stage_frame;
+                }
+                if (out.fired || b->frame() > stage_frame + 300) stage = 4;
+                continue;
+            }
+        }
+        if (stage == 4) {
+            if (!out.saved || after_save.size() < 400) continue;
+            stage = 9;
+        }
+    }
+    if (!save_load || !out.saved) return out;
+    auto f = session(false);
+    if (!f->gs) return out;
+    std::string err;
+    LoadReport rep;
+    out.loaded = f->host->load(save, &err, &rep);
+    if (!out.loaded) std::printf("  land attack block load: %s\n", rep.text().c_str());
+    f->invaded = true;
+    out.same = out.loaded;
+    for (size_t i = 0; out.loaded && i < after_save.size() && i < 400; ++i) {
+        TacticalBattle* b = f->tick();
+        if (!b) {
+            out.same = false;
+            break;
+        }
+        ++out.compared;
+        if (clash_digest(*b) != after_save[i]) {
+            if (out.same) std::printf("  land attack block load: digest differs %zu tick(s) after the load\n", i + 1);
+            out.same = false;
+        }
+        if (i < info_after_save.size() && fed_info(b->movement(), team) != info_after_save[i]) out.info_same = false;
+    }
+    return out;
+}
+
+void test_land_attack_blocks() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+                       false, false, true);
+    const LandAttackBlockRun a = run_land_attack_block(*d, false, true);
+    std::printf("  land attack blocks (i): range %.0f, ordered %d, no path in range %d, teleported %d, goal after %u frame(s), "
+                "fired after %u; (iii) %zu block(s) at the save, loaded %d, %u ticks equal %d\n",
+                static_cast<double>(a.range), a.ordered ? 1 : 0, a.gated ? 1 : 0, a.teleported ? 1 : 0, a.regoal_frames,
+                a.fire_frames, a.blocks_at_save, a.loaded ? 1 : 0, a.compared, a.same ? 1 : 0);
+    CHECK(a.ordered && a.gated && a.teleported);
+    CHECK(a.regoal && a.regoal_frames <= 31);
+    CHECK(a.fired && a.fire_frames <= 300);
+    CHECK(a.saved && a.blocks_at_save >= 1 && a.loaded && a.same && a.compared == 400);
+    std::printf("  land attack blocks: fed collision info checked on %u unit-frames, %u off, same after the load %d\n",
+                a.info_frames, a.info_bad, a.info_same ? 1 : 0);
+    CHECK(a.info_frames > 100 && a.info_bad == 0 && a.info_same);
+    const LandAttackBlockRun c = run_land_attack_block(*d, true, false);
+    std::printf("  land attack blocks (ii): friendly squads at 0.76 / 0.92 x range: ordered %d, walking %d, ended in range %d "
+                "after %u frame(s), fired %d (%u frame(s) after the end)\n",
+                c.ordered ? 1 : 0, c.gated ? 1 : 0, c.ended_in_range ? 1 : 0, c.end_frame, c.fired ? 1 : 0, c.fire_frames);
+    CHECK(c.ordered && c.gated && c.ended_in_range && c.fired && c.fire_frames <= 300);
+    // s78n t20 step 5: the same through the AI host's Attack (BattleAi::execute): it ends in weapon range
+    const LandAttackBlockRun e = run_land_attack_block(*d, true, false, true);
+    std::printf("  land attack blocks (AI Attack): ordered %d, walking %d, ended in range %d after %u frame(s), fired %d (%u frame(s) "
+                "after the end), fed info %u unit-frames, %u off\n",
+                e.ordered ? 1 : 0, e.gated ? 1 : 0, e.ended_in_range ? 1 : 0, e.end_frame, e.fired ? 1 : 0, e.fire_frames, e.info_frames,
+                e.info_bad);
+    CHECK(e.ordered && e.gated && e.ended_in_range && e.fired && e.fire_frames <= 300 && e.info_bad == 0);
+}
+
 void test_land_squad_garrison_save_load() {
     auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
                        false, false, false, true);
@@ -3599,6 +3949,8 @@ int main(int argc, char** argv) {
     test_land_squad_garrison();   // s78n review
     std::printf("s78n t18 review: a squad's garrison approach, entry, stay and walk-out through a save / load; a hostile host\n");
     test_land_squad_garrison_save_load();
+    std::printf("s78n t20 stage A: the land attack re-check (displaced squad, friendly squads on the line, save / load)\n");
+    test_land_attack_blocks();
     test_vehicle_landing_exit();
     std::printf("a1i t04 / t05: land Reinforce from a landing object (spawn, carried type, unload offsets, take-off)\n");
     test_landing_drop(false);

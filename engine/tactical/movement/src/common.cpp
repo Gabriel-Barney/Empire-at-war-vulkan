@@ -17,6 +17,7 @@ MovementConstants MovementConstants::from_game_constants(const data::GameConstan
     c.dynamic_avoidance_rectangle_bound = get_u32(gc, "DynamicAvoidanceRectangleBound", c.dynamic_avoidance_rectangle_bound);
     c.dynamic_obstacle_overlap_penalty = gc.get_float("DynamicObstacleOverlapPenalty", c.dynamic_obstacle_overlap_penalty);
     c.land_destination_proximity = gc.get_float("LandDestinationProximity", c.land_destination_proximity);
+    c.between_formation_spacing = gc.get_float("BetweenFormationSpacing", c.between_formation_spacing);  // s78n t20
     c.land_temporary_destination_proximity =
         gc.get_float("LandTemporaryDestinationProximity", c.land_temporary_destination_proximity);
     c.max_move_frame_delay = static_cast<int32_t>(get_u32(gc, "Max_Move_Frame_Delay", 6));

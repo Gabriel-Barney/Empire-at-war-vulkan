@@ -302,11 +302,48 @@ if(_alamo_sim)
     # s78n t18 review (2026-11-10): MovementPredictionInterval for every mover type, the stale TEAM entry / coast / pair gate
     # fixes. Re-measured, seeds 1-6: Rebel wins at 15272 / 11734 / 13857 / 20202 / 14665 / 15810 frames (seed 4: 20202
     # frames in 20203 ticks; the other five as above). Still pinned to seed 2.
+    # s78n t20 batch A (2026-11-10): the destination check of a move order (MOVEMENT 4.3.1), Path Around as a visibility-graph
+    # detour on top of the path stack (1.5.1), the early-arrival cut's limits (5.4.4), the decision's target / hero-clash /
+    # crusher rules (5.4.5) and StoppedVsStopped as a walked move (5.4.3). Seeds 1-6, 30000 ticks: seed 1 no end, seed 2 no
+    # end, seed 3 Rebel at 15390, seed 4 Rebel at 15719, seed 5 no end, seed 6 Rebel at 17819. No collision hold (a record
+    # answering speed 0) of 1000 frames or more in any seed: holds of 150 frames or more 0 / 0 / 0 / 2 / 0 / 0 per seed, the
+    # longest 52 / 52 / 0 / 301 / 0 / 33 frames (seed 4: the hero Han_Solo held 301 frames in Try Again Later behind a
+    # standing squad on its destination, which a single infantry unit may not push); no straggler wait of 30 frames or more.
+    # The seeds that do not end are not held by a record: in seed 2 (unit dumps at ticks 20000 and 30000) every squad is
+    # walking or has arrived with a target, and the three toggles that change which seeds end (destination check,
+    # single-member shortcut, StoppedVsStopped moves; measured one at a time) each flip a different subset, as seed noise
+    # does - the pre-t20 build itself ends only 2 of the seeds 7-12 (10, 12), this one 3 of them (7, 8, 10; seed 9 also
+    # logs one retail-modelled script error, Move_To on a dead target). StoppedVsStopped records of overlapping squads that both have targets
+    # (nobody moves, rule 5) stay in Try Again Later for up to 960 frames; they hold nobody. Pinned to seed 3.
+    # s78n t20 fix round (2026-11-10): the seeds that did not end were not held by movement. A finished DUMMY_UPGRADE build
+    # (tech / armour upgrade) raised no production-completed signal 0x22 for the AI (SKIRMISH_SETUP 3 "Completion"), so a
+    # land task force with an upgrade on its to-produce list never finished Produce_Force; the plan
+    # Tactical_Multiplayer_Build_Land_Units_Generic (not removable by the goal system) then stayed for the rest of the battle
+    # and its player built no more units (Rebel at the 40000 credit cap with infantry only, no Destroy_Structure force).
+    # The pre-t20 build has the same stuck plan on its own non-ending seeds 7, 8, 9 and 11. With the signal raised
+    # (tactical_battle_hangar.cpp hg_production) and the object-goal moves of the AI out of the destination check
+    # (battle_ai.cpp), seeds 1-6 at 30000 ticks: 1 Rebel at 17952, 2 no end (it ends at 32460 of 60000: from
+    # tick 5000 five Rebel squads of plan CLEARINFANTRY stand around three Stormtroopers on a separate terrain
+    # component and every shot of both sides ends on the ground, which holds the Rebel's early game), 3 Rebel at 29225, 4 Rebel at 15635,
+    # 5 Rebel at 18110, 6 Rebel at 17753. No collision hold of 150 frames or more in any seed (longest 77 / 91 / 31 /
+    # 91 / 46 / 41); no straggler wait. Pinned to seed 4; seeds 1 and 5 (which never ended without the production signal)
+    # are checked too.
+    # s78n t20 fix round 2 (2026-11-10): skirmish start forces at their spawn-point markers (SKIRMISH_SETUP 2.2), the land
+    # attack re-check (FIGHTER_FLYING 4.11 A / E) and F3 - F9. Seeds 1-6 end (Rebel at 15209 / 13742 / 13323 / 13849 / 14507 /
+    # 14500). Seed 4 can log the retail-modelled script error of BOBAFETTFLAMEINFANTRY.LUA's MoveUntilDone (Move_To on a target
+    # that died during PumpEvents; seen at stage A), which --fail-on-lua-errors refuses: pinned to seed 6; seeds 1 and 5 as before.
     add_test(NAME alamo_headless_skirmish_ai_foc_land_end
              COMMAND alamo_headless --skirmish-ai foc-land --ticks 30000 --workers 4 --quiet --expect-battle-end --fail-on-lua-errors
-                     --seed 2)
+                     --seed 6)
     set_tests_properties(alamo_headless_skirmish_ai_foc_land_end PROPERTIES TIMEOUT 1800)
     alamo_label_slow(alamo_headless_skirmish_ai_foc_land_end)
+    foreach(_seed 1 5)
+      add_test(NAME alamo_headless_skirmish_ai_foc_land_end_seed${_seed}
+               COMMAND alamo_headless --skirmish-ai foc-land --ticks 30000 --workers 4 --quiet --expect-battle-end --fail-on-lua-errors
+                       --seed ${_seed})
+      set_tests_properties(alamo_headless_skirmish_ai_foc_land_end_seed${_seed} PROPERTIES TIMEOUT 1800)
+      alamo_label_slow(alamo_headless_skirmish_ai_foc_land_end_seed${_seed})
+    endforeach()
     # The campaign-rules land invasion (foc-land-campaign; before skai this was foc-land) must END with a winner before the frame
     # limit. a1g (2026-11-02): after the free-store reservations (§28) and the land Reinforce drop layout (§30.7, TACTICAL_GAPS
     # §4.2.1) no seed 1-12 ended before the 14400-frame cap. a1h t01: with the M1 WeaponBehavior fix, passive / superseded guard

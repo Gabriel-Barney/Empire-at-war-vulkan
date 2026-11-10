@@ -42,22 +42,6 @@ float path_contact_distance(V2 pos, std::span<const V2> path, uint32_t next, V2 
 // Stopped vs stopped overlap ratio (penetration / smaller diameter), 0 when apart.
 float overlap_ratio(V2 a, float ra, V2 b, float rb);
 
-// Dynamic local pathfinder (§1.5): window = cell box of start and target, grown by
-// DynamicAvoidanceRectangleBound + the unit's half size in cells + 2 (no +2 for Giant), then by 3
-// cells per side per failed attempt, up to 20 attempts. Inside the window an 8-connected cell A*
-// (no corner cutting; same heap rules) where cells covered by another unit's inflated circle cost
-// x DynamicObstacleOverlapPenalty. `complexity` = the search's graph vertex count (4 corners per
-// obstacle in the window + 2), which the caller adds to the quota counter.
-// PROVISIONAL [M]: the retail graph is a visibility graph over obstacle rectangle corners; the cell
-// search keeps its cost model (overlap penalty, window) and quota accounting.
-struct DynamicObstacle {
-    V2 pos;
-    float radius = 0.0f;
-};
-bool dynamic_repath(const PassabilityGrid& grid, V2 start, V2 target, uint32_t mask, float self_radius, bool giant,
-                    std::span<const DynamicObstacle> obstacles, const MovementConstants& k, std::vector<V2>& out,
-                    uint32_t& complexity);
-
 // Crush (§5.5): victims whose world AABB overlaps any crusher box. Inputs are XY boxes; returns
 // indices into `victims` ascending (the caller iterates players / objects in their order and
 // applies 1,000,000 damage of Squash_Damage_Type).
@@ -120,15 +104,18 @@ bool foot_moving_contact(const FootTrack& p, const FootTrack& q, int32_t frames)
 // ---- S7 persistent collision objects (TACTICAL_GAPS.md §6.7, MOVEMENT.md §5.4, §1.5).
 // A collision object (MovingVsMoving / MovingVsStopped / StoppedVsStopped) lives across frames from the check that
 // found it (creation frame +0x64) until the driver cancels it (no longer applies) or its resolution finishes.
-// Driver 0x50a780, once per frame:
+// Driver 0x50a780, once per frame (s78n t20: MOVEMENT §5.4.1 "Per-frame driver"):
 //   1. keep pass in list order: collisions whose keep test fails are cancelled (removed; list order is kept);
-//   2. priority = crowd - (float)(now - creation frame); crowd is refreshed when now >= the refresh frame (+0x6c),
-//      then the refresh frame = now + 30: crowd = 5 x the land object-grid objects in a 160 x 160 box centred on the
-//      XY midpoint of the first two participants, 0 with fewer than 2 participants;
-//   3. ascending sort by priority (older, less crowded collisions first). Retail uses MSVC std::sort (insertion
-//      sort, stable on ties, for <= 32 entries); [port] a stable sort by (priority, insertion order) everywhere;
-//   4. each collision in that order: full resolution when the dynamic land pathfinder budget allows (0x679740:
-//      quota counter < DynamicLandComplexityQuota), else the cheap fallback.
+//   2. every record that does not take the quota pass (vf +0x50 false: a decided MovingVsMoving, every
+//      StoppedVsStopped), in list (creation) order: serviced at once;
+//   3. the others (every MovingVsStopped, an undecided MovingVsMoving): priority = crowd - (float)(now - creation
+//      frame); crowd is refreshed when now >= the refresh frame (+0x6c), then the refresh frame = now + 30: crowd = 5 x
+//      the land object-grid objects in a 160 x 160 box centred on the XY midpoint of the first two participants, 0 with
+//      fewer than 2 participants; ascending sort by priority (older, less crowded collisions first). Retail uses MSVC
+//      std::sort (insertion sort, stable on ties, for <= 32 entries); [port] a stable sort by (priority, insertion
+//      order) everywhere;
+//   4. each of them in that order: decided while the dynamic land pathfinder budget allows (0x679740: quota counter <
+//      DynamicLandComplexityQuota), else only serviced.
 // Containers are list-ordered vectors and a sorted vector of id pair keys (no pointer keys, no hashing).
 enum class CollisionKind : uint8_t { MovingVsMoving = 0, MovingVsStopped = 1, StoppedVsStopped = 2 };
 // The retail per-class state enums (MOVEMENT §5.4 table) folded into one: Active = state 0 None (not decided yet),
@@ -136,9 +123,10 @@ enum class CollisionKind : uint8_t { MovingVsMoving = 0, MovingVsStopped = 1, St
 // (§5.4.1 / §5.4.2): TryAgainLater = MovingVsStopped 7; Repulsion = MovingVsStopped 2 / MovingVsMoving 3 Repulse;
 // PathAround = state 1 of both; Crusher = MovingVsStopped 4 (the crusher drives on) / MovingVsMoving 7 (both at max
 // speed); SpeedSlave = MovingVsMoving 2 Speed Slave Only. StoppedVsStopped and the MovingVsMoving stand-in of pairs that
-// are not Infantry / Bike stay Active ([port]).
+// are not Infantry / Bike stays Active ([port]). s78n t20 (§5.4.3): StoppedVsStopped - Active = 0 None, Resolving = 1 (the
+// unit CollisionObject::master walks its path to a free spot), TryAgainLater = 4, Resolved = 2 / 3.
 enum class CollisionState : uint8_t {
-    Active = 0, TryAgainLater = 1, Resolved = 2, Repulsion = 3, PathAround = 4, Crusher = 5, SpeedSlave = 6,
+    Active = 0, TryAgainLater = 1, Resolved = 2, Repulsion = 3, PathAround = 4, Crusher = 5, SpeedSlave = 6, Resolving = 7,
 };
 
 inline constexpr uint32_t kCollisionCrowdRefreshFrames = 30;
@@ -158,7 +146,8 @@ struct CollisionObject {
     float priority = 0.0f;     // this frame's sort key
     uint32_t retry = 0;        // TryAgainLater: the next re-decide frame (+0x80)
     // s78n t18 (vf +0x40): the speed this record answers participant a / b (3e38 = its max speed) and the "at once"
-    // flag, as of its last service; MovingVsMoving: the master (0 = a, 1 = b). Saved and hashed.
+    // flag, as of its last service; MovingVsMoving: the master (0 = a, 1 = b). Saved and hashed. s78n t20:
+    // StoppedVsStopped - `master` = the unit being moved (0 = a, 1 = b, 2 = nobody; record +0x7c).
     float speed_a = 3.0e38f, speed_b = 3.0e38f;
     bool now_a = false, now_b = false;
     uint8_t master = 0;
@@ -170,6 +159,7 @@ float collision_priority(float crowd, uint32_t now, uint32_t created);
 class CollisionLayer {
 public:
     using KeepFn = std::function<bool(CollisionObject&)>;
+    using QuotaFn = std::function<bool(const CollisionObject&)>;      // vf +0x50: the record takes the quota pass
     using CountFn = std::function<uint32_t(const CollisionObject&)>;  // object-grid objects in the crowd box
     using BudgetFn = std::function<bool()>;                           // true = full resolution allowed now
     using ResolveFn = std::function<void(CollisionObject&, bool full)>;
@@ -183,8 +173,9 @@ public:
     // Appends a collision at the end of the list; returns its seq. No-op (returns UINT32_MAX) when the pair exists.
     uint32_t add(CollisionKind kind, ObjectId a, ObjectId b, uint32_t frame);
     // One driver pass (steps 1-4 above). Resolve must not add or remove collisions; a collision it marks Resolved is
-    // dropped after the pass.
-    void run(uint32_t frame, const KeepFn& keep, const CountFn& count, const BudgetFn& budget, const ResolveFn& resolve);
+    // dropped after the pass. Records serviced in step 2 get `full` = true.
+    void run(uint32_t frame, const KeepFn& keep, const QuotaFn& quota, const CountFn& count, const BudgetFn& budget,
+             const ResolveFn& resolve);
 
     std::span<const CollisionObject> list() const { return list_; }
     std::span<const Step> last_order() const { return order_; }  // the last run's resolution order
