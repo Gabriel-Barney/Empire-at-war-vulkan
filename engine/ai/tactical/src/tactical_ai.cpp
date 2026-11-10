@@ -611,7 +611,8 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
                 for (size_t k = 0; k < t.producing.size(); ++k)
                     if (t.producing[k].first == rec.type) {
                         t.producing.erase(t.producing.begin() + static_cast<std::ptrdiff_t>(k));
-                        decide(t.player, "tf " + t.name + " produced " + type_name(rec.type) + " (to the reinforcement pool)");
+                        decide(t.player, "tf " + t.name + " produced " + type_name(rec.type) +
+                                             (rec.upgrade ? std::string(" (upgrade)") : std::string(" (to the reinforcement pool)")));
                         done = true;
                         break;
                     }

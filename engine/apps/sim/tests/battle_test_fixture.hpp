@@ -435,6 +435,11 @@ inline std::string prod_types() {
     if (p != std::string::npos)
         t.insert(p + at.size(), "<SpaceBehavior>DUMMY_STAR_BASE</SpaceBehavior><Tactical_Buildable_Objects_Multiplayer> Empire, S10_Base_Upgrade </Tactical_Buildable_Objects_Multiplayer>"
                                 "<Next_Level_Base>S10_Star_Base_2</Next_Level_Base>");
+    // a2m t06: a land DUMMY_UPGRADE (no ability) the Empire trooper builds in a land skirmish (test_land_upgrade_production).
+    const std::string trooper = "<GroundInfantry Name=\"S10_Trooper\">";
+    const size_t tp = t.find(trooper);
+    if (tp != std::string::npos)
+        t.insert(tp + trooper.size(), "<Tactical_Buildable_Objects_Multiplayer> Empire, S10_Land_Upgrade </Tactical_Buildable_Objects_Multiplayer>");
     const size_t end = t.find("</S10>");
     if (end != std::string::npos)
         t.insert(end, " <StarBase Name=\"S10_Star_Base_2\"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>3000</Tactical_Health><Base_Level>2</Base_Level>"
@@ -446,7 +451,10 @@ inline std::string prod_types() {
                       "<Tactical_Build_Prerequisites> S10_Star_Base_1 </Tactical_Build_Prerequisites>"
                       "<Build_Limit_Current_For_All_Allies>1</Build_Limit_Current_For_All_Allies>"
                       "<Abilities SubObjectList=\"Yes\"><Starbase_Upgrade_Ability Name=\"S10_Base_Upgrade_Effect\">"
-                      "<Activation_Style>Skirmish_Automatic</Activation_Style></Starbase_Upgrade_Ability></Abilities></UpgradeObject>\n");
+                      "<Activation_Style>Skirmish_Automatic</Activation_Style></Starbase_Upgrade_Ability></Abilities></UpgradeObject>\n"
+                      " <UpgradeObject Name=\"S10_Land_Upgrade\"><Behavior>DUMMY_UPGRADE</Behavior><Affiliation>Empire</Affiliation>"
+                      "<Tactical_Build_Cost_Multiplayer>100</Tactical_Build_Cost_Multiplayer><Tactical_Build_Time_Seconds>1</Tactical_Build_Time_Seconds>"
+                      "</UpgradeObject>\n");
     return t;
 }
 

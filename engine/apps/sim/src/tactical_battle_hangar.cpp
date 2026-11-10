@@ -714,6 +714,17 @@ void TacticalBattle::hg_production(TacticalMode& mode, SimRng& rng) {
         if (dummy_upgrade_behavior() != objects::kNoBehavior && types.has_behavior(t, objects::BehaviorSet::Union, dummy_upgrade_behavior())) {
             // DUMMY_UPGRADE: an object of the player in the builder's contents (no combat unit); its Skirmish_Automatic
             // ability (e.g. Starbase_Upgrade_Ability) is scheduled by add_container.
+            // a2m t06 (SKIRMISH_SETUP §3, completion 0x498f70): signal 0x22 is raised for every finished entry, before the
+            // DUMMY_UPGRADE split, so the AI build task waiting on a land tech upgrade (RC_Level_Two_Tech_Upgrade in
+            // TacticalMultiplayerBuildLandUnitsGeneric's ReserveForce) finishes too. Before, only pooled land builds raised
+            // it and that task force's Produce_Force never finished. [port] space keeps its object claim (claim_produced).
+            if (!space_) {
+                ProductionDone d;
+                d.player = o.player;
+                d.type = static_cast<uint32_t>(t);
+                d.upgrade = true;
+                production_done_.push_back(d);
+            }
             objects::SpawnParams sp;
             sp.type = t;
             sp.owner = o.player;

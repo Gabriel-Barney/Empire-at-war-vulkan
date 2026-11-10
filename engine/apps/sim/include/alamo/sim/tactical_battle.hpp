@@ -413,6 +413,7 @@ public:
         int32_t player = -1;
         uint32_t type = 0;
         objects::ObjectId key = objects::kNoObjectId;  // the pool entry, kNoObjectId when the pool refused the type
+        bool upgrade = false;  // a2m t06: a land DUMMY_UPGRADE (attached to its builder, not pooled; key stays none)
     };
     std::span<const ProductionDone> production_done() const { return production_done_; }
     // Appends `type` to `owner`'s pool (above). False (nothing added) when the battle finished or a type it spawns is not

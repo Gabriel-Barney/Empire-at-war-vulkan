@@ -1650,7 +1650,7 @@ bool BattleAi::reinforce_in_flight(int32_t player, int32_t key) {
 
 std::vector<ai::tactical::TacticalAiHost::ProductionCompleted> BattleAi::production_completed() {
     std::vector<ai::tactical::TacticalAiHost::ProductionCompleted> out;
-    for (const TacticalBattle::ProductionDone& d : b_->production_done()) out.push_back({d.player, static_cast<int32_t>(d.type)});
+    for (const TacticalBattle::ProductionDone& d : b_->production_done()) out.push_back({d.player, static_cast<int32_t>(d.type), d.upgrade});
     return out;
 }
 

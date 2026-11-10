@@ -304,9 +304,12 @@ public:
     // completion order (signal 0x22): the type went to the player's reinforcement pool (no object appears), so the build
     // task of the first task force (id order) producing that type ends its entry. Default: none (hosts whose builds
     // spawn objects; those are claimed when they appear).
+    // a2m t06: a land DUMMY_UPGRADE (tech upgrade) raises 0x22 too (SKIRMISH_SETUP §3); its object is attached to the
+    // builder, not pooled (`upgrade` = true; it only changes the log line).
     struct ProductionCompleted {
         int32_t player = -1;
         int32_t type = -1;  // PerceptionWorld type index
+        bool upgrade = false;
     };
     virtual std::vector<ProductionCompleted> production_completed() { return {}; }
 };

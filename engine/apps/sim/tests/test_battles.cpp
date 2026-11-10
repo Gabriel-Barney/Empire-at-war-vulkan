@@ -2159,6 +2159,89 @@ void test_station_production() {
     CHECK(bought && held && upgraded);
     CHECK(after == before - 100.0f);
 }
+
+// a2m t06 (SKIRMISH_SETUP §3, completion 0x498f70): in a LAND skirmish a finished DUMMY_UPGRADE raises signal 0x22 like a
+// pooled land build: one production_done record {player, type, upgrade} in the tick the object appears in its builder's
+// contents, no pool entry. The AI build task waiting on it (a tech upgrade in TacticalMultiplayerBuildLandUnitsGeneric's
+// ReserveForce) ends on that record; before, it waited forever (foc-land seed 12: the Rebel stopped producing at frame
+// 7449 and sat at 40000 credits).
+void test_land_upgrade_production() {
+    auto d = make_data(false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, make_setup(*d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    gs->add_credits(0, 1000.0f, false);
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 600;
+    opt.battle.order_interval = 0;  // no stand-in orders
+    opt.battle.skirmish = true;
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    const uint32_t upgrade = type_of(*d, "S10_Land_Upgrade"), trooper = type_of(*d, "S10_Trooper");
+    objects::ObjectId builder = objects::kNoObjectId;
+    bool invaded = false, bought = false, held = false;
+    uint32_t records = 0, upgrade_records = 0, record_frame = 0, held_frame = 0;
+    size_t pool_before = 0, pool_after = 0;
+    for (uint64_t t = 0; t < 4000 && !held; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) continue;
+        const objects::ObjectStore& st = tm->primary();
+        for (const TacticalBattle::ProductionDone& r : b->production_done()) {
+            ++records;
+            if (r.player == 0 && r.type == upgrade && r.upgrade && r.key == objects::kNoObjectId) {
+                ++upgrade_records;
+                record_frame = b->frame();
+            }
+        }
+        if (!bought && b->frame() == 2) {
+            CHECK(b->production_enabled());
+            for (const objects::ObjectHandle h : st.owned_by(0))
+                if (builder == objects::kNoObjectId && st.alive(h) && st.type(h) == trooper && b->combat().has_unit(st.id(h))) builder = st.id(h);
+            CHECK(builder != objects::kNoObjectId);
+            pool_before = b->reserves(0).size();
+            commands::EventData ev(commands::EventType::Production);
+            ev.set("type_index", upgrade).set("location", static_cast<uint32_t>(builder));
+            CHECK(host.execute_direct(0, commands::CommandSource::Player, ev) == commands::RejectReason::None);
+            bought = true;
+        }
+        if (bought && b->contents() && !b->contents()->contents(builder).empty()) {
+            const objects::ObjectHandle uh = st.find(b->contents()->contents(builder).front());
+            held = st.alive(uh) && st.type(uh) == upgrade && st.owner(uh) == 0;
+            held_frame = b->frame();
+            pool_after = b->reserves(0).size();
+        }
+    }
+    std::printf("  land upgrade: bought %d, held %d (frame %u), 0x22 records %u (upgrade %u, frame %u), pool %zu -> %zu\n",
+                bought ? 1 : 0, held ? 1 : 0, held_frame, records, upgrade_records, record_frame, pool_before, pool_after);
+    CHECK(bought && held);
+    CHECK(upgrade_records == 1 && records == 1 && record_frame == held_frame);
+    CHECK(pool_after == pool_before);  // attached to the builder, not pooled
+}
 // --- end hangars ---
 
 // cu8g t05 (CU8F_T04_T06_RE §3.3 [H]): TacticalBattle::player_gate_allows / special_weapons_allowed on the S10 space
@@ -2825,6 +2908,7 @@ int main(int argc, char** argv) {
     }
     std::printf("skirmish station production: Production at the star base, upgrade object, station upgrade\n");
     test_station_production();
+    test_land_upgrade_production();  // a2m t06
     std::printf("cu8g t05: Battlefield_Modifier gates at the battle (skirmish vs campaign, empty list, apply / remove / reverse)\n");
     test_battlefield_modifier_gates();
     std::printf("a1g t04 follow-up: land company drop layout, oriented boxes, reinforcement radii\n");
