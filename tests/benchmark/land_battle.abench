@@ -1,13 +1,13 @@
 ALAMO_BENCH 1
 name land_battle
-version 16
+version 17
 description One large AI-vs-AI land battle: FoC _MP_LAND_UTAPAU skirmish, Empire vs Rebel with six times the foc-land company lists (pathfinding, infantry, vehicles, tactical AI), saved at tick 300, then 2 min of battle
 make --save-session skirmish --campaign foc-land-army --bench-save-at 300 --ticks 3600 --bench-every 16 --bench-desc "One large AI-vs-AI land battle: FoC _MP_LAND_UTAPAU skirmish, Empire vs Rebel with six times the foc-land company lists (pathfinding, infantry, vehicles, tactical AI), saved at tick 300, then 2 min of battle"
-save land_battle.alsv 335456 ab52debf4b250759
-orders land_battle.acmd 72 caaf54073bb8b903
-fingerprint land_battle.crc 57487 47eb80077a0135e3
+save land_battle.alsv 335471 4ba996aa759d641b
+orders land_battle.acmd 72 4cc19c27a361851e
+fingerprint land_battle.crc 57487 d3518dba708735ef
 fingerprint_every 16
 start_tick 300
 ticks 3600
 workers auto
-final_crc 163a4d72b072c91d
+final_crc a1fcd100e48689a4

@@ -24,24 +24,6 @@ void insert_key(std::vector<uint64_t>& v, uint64_t k) {
     if (it == v.end() || *it != k) v.insert(it, k);
 }
 
-// Point at arc length s along pos -> path[next..]; seg = index of the waypoint the point precedes.
-V2 point_along(V2 pos, const std::vector<V2>& path, uint32_t next, float s, size_t& seg) {
-    V2 a = pos;
-    float acc = 0.0f;
-    for (size_t i = next; i < path.size(); ++i) {
-        const float l = distance(a, path[i]);
-        if (acc + l >= s) {
-            seg = i;
-            const float t = l > 0.0f ? (s - acc) / l : 0.0f;
-            return lerp(a, path[i], std::clamp(t, 0.0f, 1.0f));
-        }
-        acc += l;
-        a = path[i];
-    }
-    seg = path.size();
-    return path.empty() ? pos : path.back();
-}
-
 float slowdown_for_layer(const MovementConstants& k, uint32_t layer) {
     if (layer & (kLayerCapital | kLayerSuperCapital)) return k.turn_in_place_slowdown_capital;
     if (layer & kLayerFrigate) return k.turn_in_place_slowdown_frigate;
