@@ -1134,9 +1134,11 @@ int main() {
                     }
             }
         }
-        // s78n t16: the container waits for stragglers (0x5ab640), so the members stop near their slots: a short recovery
-        CHECK(moving > 40 && recovering > 1 && w.sys.view(100).arrived);
-        for (uint32_t at : {5u, 60u, 151u, 200u, 300u, last_recovering - 1u}) check_resume(sq, at, 0);
+        // s78n t16: the container waits for stragglers (0x5ab640), so the members stop near their slots: a short recovery.
+        // s78n t18: it also brakes at its rate into the path end, so the members arrive with it (a frame of recovery, or none)
+        CHECK(moving > 40 && w.sys.view(100).arrived);
+        (void)recovering;
+        for (uint32_t at : {5u, 60u, 151u, 200u, 300u, last_recovering > 0 ? last_recovering - 1u : 298u}) check_resume(sq, at, 0);
         check_resume(sq, 120, 33);
         // s78n review: a move ordered exactly on the resume frame (the first tick after the load) reads the saved team
         // speed: the fast unit's formation speed is the team's 1.0 x mult in the saving and in the loaded run.

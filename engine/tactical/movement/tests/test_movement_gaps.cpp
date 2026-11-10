@@ -4225,7 +4225,8 @@ static void test_land_squad_review_fixes() {
                     if ((c.a == 100 && c.b == 70) || (c.a == 70 && c.b == 100)) ++r.objects;
                 r.off_line = std::max(r.off_line, std::fabs(sys.view(100).pos.y - at.y));
             }
-            r.arrived = sys.view(100).arrived && length(sys.view(100).pos - cell_center(45, 20)) < 1.0f;
+            // (s78n t18: no snap - the container stops within its braking distance v^2 / (2 a) = 1.56 of the goal)
+            r.arrived = sys.view(100).arrived && length(sys.view(100).pos - cell_center(45, 20)) < 2.0f;
             return r;
         };
         const Out none = run(-1), hosted = run(70), all = run(MovementSystem::kCollisionExemptAll);
@@ -4870,6 +4871,183 @@ static void test_land_squad_repulsion() {
     }
 }
 
+// s78n t18 item 3 (FIGHTER_FLYING §7.7 items 3 - 6): the squad container's speed step order and arrival.
+//  * path end: braking starts at v^2 / (2a) before the end and takes exactly the rate a per frame - Stormtrooper squad
+//    (a 0.078, team speed 1.248 = 16 a): 1.170, 1.092, ..., 0.078, then 0 (16 frames); Rebel squad (a 0.1092, 1.56): 13
+//    steps down to 0.1404, then the rate itself, then 0 (15 frames); no snap onto the goal (it stops within 8 a of it);
+//  * a MovingVsMoving hold (the stand-in's yield to a crossing vehicle) is taken at once;
+//  * a new order while moving: the container brakes at the rate, coasting straight on, then starts the new path from 0;
+//    no start delays are drawn; Stop zeroes the speed at once;
+//  * a final facing on the order: turned to in place before the arrival.
+static void test_land_squad_speed_order() {
+    const float mult = 1.56f;
+    std::vector<T16Member> rebel;
+    {
+        const V2 rel[5] = {{10.0f, 6.0f}, {10.0f, -6.0f}, {0.0f, 0.0f}, {-10.0f, 6.0f}, {-10.0f, -6.0f}};
+        for (const V2& p : rel) rebel.push_back({p, 1.0f, 0.07f, 0.5f, 0.0f});
+    }
+    const auto path_end = [&](const char* name, int32_t arrangement, float cmax, const std::vector<T16Member>& mem, float a,
+                              float vmax, uint32_t full, bool rate_step) {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        t16_squad(sys, cell_center(10, 20), arrangement, cmax, 0.0f, mem);
+        SimRng rng(81);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(30, 20);
+        sys.move(o, rng, 1);
+        std::vector<float> v;
+        std::vector<V2> p;
+        bool arrived = false;
+        for (uint32_t f = 1; f < 900 && !arrived; ++f) {
+            sys.tick(f, rng, serial_for);
+            v.push_back(sys.view(100).speed);
+            p.push_back(sys.view(100).pos);
+            arrived = sys.view(100).arrived;
+        }
+        size_t c = 0;  // the last cruise frame
+        for (size_t i = 0; i < v.size(); ++i)
+            if (near(v[i], vmax, 1e-5f)) c = i;
+        // the braking steps, then the rate itself when the last step left more than it (always for the Rebel squad; for
+        // the Stormtrooper squad only when the float sum 16 x 0.078 lands a hair above 1.248 - 15 x 0.078), then the zero
+        (void)rate_step;
+        CHECK(arrived && c > 0 && c + full + 2 <= v.size() && v.size() <= c + full + 3);
+        const size_t frames = v.size() - 1 - c;
+        bool steps = c + full + 1 < v.size();
+        for (uint32_t k = 1; steps && k <= full; ++k) steps = near(v[c + k], vmax - a * static_cast<float>(k), 2e-5f);
+        if (steps && frames == full + 2) steps = near(v[c + full + 1], a, 1e-5f);
+        if (rate_step) CHECK(frames == full + 2);
+        CHECK(steps && v.back() == 0.0f);
+        CHECK(p.back() == p[p.size() - 2]);  // the arrival frame takes no step: no snap
+        const float off = length(p.back() - cell_center(30, 20));
+        CHECK(off <= 8.0f * a + 1e-3f);
+        std::printf("land squad speed order: %s - %zu braking frames, stopped %.3f from the goal\n", name, frames,
+                    static_cast<double>(off));
+    };
+    path_end("Stormtrooper squad", 0, 0.8f, t18_storm(), 0.05f * mult, 0.8f * mult, 15, false);
+    path_end("Rebel squad", 1, 1.1f, rebel, 0.07f * mult, 1.0f * mult, 13, true);
+    const float a = 0.05f * mult, vmax = 0.8f * mult;
+    {  // the MovingVsMoving stand-in's yield to a crossing vehicle with a lower id: speed 0 in the tick the hold is set
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        const V2 at = cell_center(10, 20);
+        t16_squad(sys, at, 0, 0.8f, 0.0f, t18_storm(), 1);
+        UnitDesc v = unit(50, cell_center(25, 14), 2, 1.0f, 10.0f, LocomotorKind::Default);
+        v.collision_class = kUccVehicle;
+        v.owner = 1;
+        v.yaw_deg = 90.0f;
+        CHECK(sys.add_unit(v));
+        SimRng rng(82);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(40, 20);
+        sys.move(o, rng, 1);
+        bool crossing = false, at_once = false;
+        float prev = 0.0f;
+        for (uint32_t f = 1; f < 600; ++f) {
+            if (!crossing && sys.view(100).pos.x >= at.x + 200.0f) {
+                MoveOrder vo;
+                vo.units = {50};
+                vo.destination = cell_center(25, 30);
+                sys.move(vo, rng, f);
+                crossing = true;
+            }
+            sys.tick(f, rng, serial_for);
+            const float s = sys.view(100).speed;
+            at_once = at_once || (prev > vmax - 1e-3f && s == 0.0f);
+            prev = s;
+        }
+        std::printf("land squad speed order: crossing vehicle - ordered %d, hold at once %d, arrived %d" "\n", crossing ? 1 : 0,
+                    at_once ? 1 : 0, sys.view(100).arrived ? 1 : 0);
+        CHECK(crossing && at_once && sys.view(100).arrived);
+    }
+    {  // a new order while moving, and Stop
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        const V2 at = cell_center(10, 20);
+        t16_squad(sys, at, 0, 0.8f, 0.0f, t18_storm(), 1);
+        SimRng rng(83);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(45, 20);
+        sys.move(o, rng, 1);
+        uint32_t f = 1;
+        for (; f < 300 && !(near(sys.view(100).speed, vmax, 1e-5f) && sys.view(100).pos.x > at.x + 100.0f); ++f) sys.tick(f, rng, serial_for);
+        CHECK(near(sys.view(100).speed, vmax, 1e-5f));
+        const uint64_t draws0 = rng.draws();
+        MoveOrder back;
+        back.units = {1};
+        back.destination = at;
+        sys.move(back, rng, f);
+        CHECK(near(sys.view(100).speed, vmax, 1e-5f));  // not taken at once
+        for (ObjectId id = 1; id <= 9; ++id) CHECK(sys.team_start_delay(id) == 0);  // no start delays (the squad moves)
+        CHECK(rng.draws() == draws0);
+        const float x0 = sys.view(100).pos.x, yaw0 = sys.view(100).yaw;
+        bool steps = true;
+        for (uint32_t k = 1; k <= 15; ++k, ++f) {  // 15 frames of the rate while it coasts straight on
+            sys.tick(f, rng, serial_for);
+            steps = steps && near(sys.view(100).speed, vmax - a * static_cast<float>(k), 2e-5f) && sys.view(100).yaw == yaw0;
+        }
+        float coast = sys.view(100).pos.x - x0;
+        sys.tick(f++, rng, serial_for);  // 0x15: the speed (<= the rate) is zeroed, no step
+        if (sys.view(100).speed > 0.0f) {  // (the float sum left a hair more than the rate: one more step of the rate)
+            steps = steps && near(sys.view(100).speed, a, 1e-5f);
+            coast = sys.view(100).pos.x - x0;
+            sys.tick(f++, rng, serial_for);
+        }
+        CHECK(steps && coast > 120.0f * a - 0.01f && coast < 121.0f * a + 0.01f);
+        CHECK(sys.view(100).speed == 0.0f && sys.view(100).pos.x - x0 == coast);
+        bool turned = false, arrived = false;
+        for (uint32_t n = 0; n < 900 && !arrived; ++n, ++f) {
+            sys.tick(f, rng, serial_for);
+            const UnitView k = sys.view(100);
+            turned = turned || (k.speed == 0.0f && k.yaw != yaw0);  // the start turn of the new path, from speed 0
+            arrived = k.arrived;
+        }
+        CHECK(turned && arrived && length(sys.view(100).pos - at) <= 8.0f * a + 1e-3f);
+        // Stop at cruise: zero at once
+        MoveOrder again;
+        again.units = {1};
+        again.destination = cell_center(45, 20);
+        sys.move(again, rng, f);
+        for (uint32_t n = 0; n < 300 && !near(sys.view(100).speed, vmax, 1e-5f); ++n, ++f) sys.tick(f, rng, serial_for);
+        CHECK(near(sys.view(100).speed, vmax, 1e-5f));
+        const ObjectId one[1] = {1};
+        sys.stop(one);
+        CHECK(sys.view(100).speed == 0.0f && !sys.view(100).has_goal);
+        std::printf("land squad speed order: new order while moving - coasted %.3f, then turned and arrived\n", static_cast<double>(coast));
+    }
+    {  // a final facing more than 10 degrees off: turned to in place before the arrival
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        t16_squad(sys, cell_center(10, 20), 0, 0.8f, 0.0f, t18_storm(), 1);
+        SimRng rng(84);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(25, 20);
+        o.final_facing_deg = 90.0f;
+        sys.move(o, rng, 1);
+        uint32_t turn_frames = 0;
+        bool arrived = false;
+        V2 stop_at{};
+        for (uint32_t f = 1; f < 900 && !arrived; ++f) {
+            const UnitView k0 = sys.view(100);
+            sys.tick(f, rng, serial_for);
+            const UnitView k = sys.view(100);
+            if (k.has_goal && k.speed == 0.0f && k0.speed == 0.0f && k.yaw != k0.yaw && k.pos.x > cell_center(24, 20).x) {
+                ++turn_frames;
+                stop_at = k.pos;
+            }
+            arrived = k.arrived;
+        }
+        const UnitView k = sys.view(100);
+        std::printf("land squad speed order: final facing - arrived %d, %u turn frames, yaw %.3f" "\n", arrived ? 1 : 0, turn_frames,
+                    static_cast<double>(k.yaw));
+        // 90 degrees at 9.36 per frame: 10 turn frames (the first comes with the stop, the last ends the turn)
+        CHECK(arrived && turn_frames >= 8 && turn_frames <= 10 && near(k.yaw, 90.0f, 1e-3f) && k.pos == stop_at);
+    }
+}
+
 int main() {
     test_corridor();
     test_threat();
@@ -4913,6 +5091,7 @@ int main() {
     test_land_squad_teleport();     // s78n t18 item 8
     test_land_squad_footprint();    // s78n t18 items 2 / 6
     test_land_squad_repulsion();    // s78n t18 items 1 / 7
+    test_land_squad_speed_order();  // s78n t18 item 3
     test_determinism();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "alamo/core/dmath.hpp"
+#include "alamo/tactical/movement/formation.hpp"
 #include "alamo/tactical/movement/movement_system.hpp"
 
 namespace alamo::tactical::movement {
@@ -620,6 +621,229 @@ void MovementSystem::team_speed_steps() {
         }
         k.straggle = fac;
     }
+}
+
+// s78n t18 (FIGHTER_FLYING §7.7 items 3-6: the container service 0x5ad690, the move step 0x5adfb0, the speed step
+// 0x5aaf70 and the arrival state 0x5adb50): one frame of a squad container's walk on the top of its path stack - the
+// pushed path, else the order path. Port states: WalkStopped = retail 0x16 / 0 (idle, or about to start), WalkStartTurn =
+// 0x10 (turn in place), WalkMoving = 0x13, WalkEndMove = 0x14 (braking). Reads the tick's serial inputs (team_cap,
+// team_accel, straggle, coll_speed / coll_now) and writes only `u`, so it runs in the parallel walk.
+//   * hidden (garrisoned with its whole squad): nothing;
+//   * a new order while moving (Unit::coast, set by move_land): 0x14 - the target speed is the rate a, the container coasts
+//     straight along its facing (passability-tested: a refused step is not taken); at speed <= a at the start of a tick the
+//     speed is zeroed (0x15) and the new path starts on the next tick. [port] the coast starts at the order (retail walks
+//     the old path until the formation plan resets the stack);
+//   * start (0x16 -> 0 -> 0x10): the path is started, the slots re-laid toward the first waypoint (relay request), then
+//     the port's start rule: turn in place until within one turn step or Close_Enough_Angle, then move in the same tick;
+//   * speed step 0x5aaf70 in the moving state and while braking above a: T = the team speed (x the fleeing bonus on a
+//     crush-flee path); the formation speed on the order path; min the collision cap (its "at once" flag = `now`); min the
+//     straggler cap; braking: T := a (replacing all of it); T > v: v += min(a, T - v); T < v: now ? v := T : v -= min(a,
+//     v - T); clamp [0, team speed]. At v = 0 nothing else happens that frame (no turn, no waypoint step). [port] the
+//     corner fractions and the brake-ahead (steps 3 - 4) are no-ops: the port's land paths carry no per-waypoint fractions;
+//   * braking starts when the rest of the path is <= v^2 / (2a) with no started path below, or on the last waypoint; it
+//     moves on along the path and, past the last waypoint's line, straight on along the last segment (no snap);
+//   * 0x15 (braking, speed <= a at the start of the tick): speed 0, no step. Heading for the last waypoint and within 5.0
+//     before its line along the last segment (or past it): arrived where it stands - after the final-facing turn in place
+//     when the order carries a final facing more than 10 degrees off (Unit::fturn). Else the same path restarts on the
+//     next tick from speed 0;
+//   * a pushed path that reaches its last waypoint over a started order path ends without braking (A1_READINGS §40.3).
+WalkResult MovementSystem::team_walk(Unit& u, uint32_t frame) const {
+    WalkResult r;
+    if (u.hidden) return r;
+    LandMotion& m = u.m;
+    const bool top_push = u.pushed && u.push_next < u.push_path.size();
+    const bool order_ok = u.has_goal && !u.need_path && frame >= u.start_frame && m.next < m.path.size();
+    const float flee = top_push && u.push_flee ? cfg_.constants.fleeing_infantry_speed_bonus : 1.0f;
+    const float cap = u.team_cap < 3.0e38f ? u.team_cap : u.lp.max_speed;
+    const float vmax = u.speed_factor > 0.0f ? cap * flee : 0.0f;
+    const float a = (u.team_accel > 0.0f ? u.team_accel : cap) * flee;  // 0x5ab540, else full speed in one frame
+    const float rate = u.lp.turn_rate * flee;
+    if (u.fturn && !top_push) {  // 0x15 step 5 -> 0x10: the final facing, turned to in place before the pop
+        const float want = land_wanted_yaw(u);
+        const float err = std::fabs(wrap_deg(want - m.yaw));
+        m.yaw = turn_toward(m.yaw, want, rate);
+        m.speed = 0.0f;
+        if (err <= rate || !(rate > 0.0f)) {
+            u.fturn = false;
+            m.state = LocoState::WalkStopped;
+            r.arrived = true;
+        } else {
+            m.state = LocoState::WalkStartTurn;
+        }
+        return r;
+    }
+    if (top_push) u.coast = false;  // a pushed path is started when it is made: the container walks on along it
+    if (u.coast || (!top_push && !order_ok && m.speed > 0.0f)) {
+        if (m.speed > a) {  // 0x14 with an unstarted top path: T := a
+            u.coast = true;
+            m.speed = u.coll_now ? a : m.speed - std::min(a, m.speed - a);
+            const V2 np = m.pos + dir_from_deg(m.yaw) * m.speed;
+            if (steer_probe_ok(grid_, m.pos, np, u.lp.mask)) {
+                m.pos = np;
+                r.moved = true;
+            }
+            m.state = LocoState::WalkEndMove;
+            return r;
+        }
+        u.coast = false;  // 0x15: the speed is zeroed; the new path starts on the next tick
+        m.speed = 0.0f;
+        m.state = LocoState::WalkStopped;
+        return r;
+    }
+    if (!top_push && !order_ok) {
+        m.speed = 0.0f;
+        m.state = LocoState::WalkStopped;
+        return r;
+    }
+    // The top path in m.path / m.next for the step (the order path waits in push_path / push_next meanwhile).
+    const bool below_started = top_push && u.has_goal && !u.need_path && frame >= u.start_frame && u.path_started;
+    const uint32_t escape = m.escape_until;
+    if (top_push) {
+        std::swap(m.path, u.push_path);
+        std::swap(m.next, u.push_next);
+        m.escape_until = 0;
+    }
+    const bool form = !top_push && u.in_formation;
+    const bool jig = form && (u.jiggle.x != 0.0f || u.jiggle.y != 0.0f);
+    const auto wp = [&](size_t i) {  // formation jiggle on every waypoint but the last (walk_step's rule)
+        if (!jig || i + 1 >= m.path.size()) return m.path[i];
+        const V2 q = m.path[i] + u.jiggle;
+        return grid_.passable_world(q, u.lp.mask) ? q : m.path[i];
+    };
+    const size_t n = m.path.size(), last = n - 1;
+    V2 nlast = n >= 2 ? normalize_retail(m.path[last] - m.path[last - 1]) : V2{};
+    if (!(length_sq(nlast) > 0.0f)) nlast = dir_from_deg(m.yaw);
+    const auto finish = [&] {
+        if (top_push) {
+            m.escape_until = escape;
+            std::swap(m.path, u.push_path);
+            std::swap(m.next, u.push_next);
+        }
+        return r;
+    };
+    if (m.state != LocoState::WalkMoving && m.state != LocoState::WalkEndMove) {  // start: 0x16 -> 0 -> 0x10
+        const V2 to = wp(m.next) - m.pos;
+        if (m.state != LocoState::WalkStartTurn && !top_push) {
+            // FIGHTER_FLYING §7.2 callers 1 / 3: re-lay toward the current waypoint (its facing when that is zero); the
+            // layout itself runs in the serial pass after the walk
+            u.relay.push_back(length_sq(to) > 0.0f ? to : dir_from_deg(m.yaw));
+            u.path_started = true;
+        }
+        const float desired = length_sq(to) > 0.0f ? heading_deg(to) : m.yaw;
+        const float err = std::fabs(wrap_deg(desired - m.yaw));
+        if (err <= rate || err <= u.lp.close_enough_angle) {
+            m.state = LocoState::WalkMoving;
+        } else {
+            m.state = LocoState::WalkStartTurn;
+            m.yaw = turn_toward(m.yaw, desired, rate);
+            m.speed = 0.0f;
+            return finish();
+        }
+    }
+    if (m.state == LocoState::WalkEndMove && !(m.speed > a)) {  // 0x15 (0x5adb50)
+        m.speed = 0.0f;
+        if (static_cast<size_t>(m.next) + 1 >= n && dot(m.pos - m.path[last], nlast) > -5.0f) {
+            m.next = static_cast<uint32_t>(n);  // the waypoint index steps: arrived where it stands (no snap)
+            const float want = land_wanted_yaw(u);
+            if (!top_push && u.final_facing != kNoFacing &&
+                std::fabs(wrap_deg(want - m.yaw)) > arrival_turn_threshold(u.lp.turn_rate, false)) {
+                u.fturn = true;  // the turn in place runs from this tick on; the pop follows it
+                m.state = LocoState::WalkStartTurn;
+                m.yaw = turn_toward(m.yaw, want, rate);
+            } else {
+                m.state = LocoState::WalkStopped;
+                r.arrived = true;
+            }
+        } else {
+            m.state = LocoState::WalkStopped;  // stopped short: the same path restarts on the next tick
+        }
+        return finish();
+    }
+    // Speed step 0x5aaf70.
+    float target = vmax;
+    if (!top_push) target = std::min(target, u.formation_speed);
+    target = std::min(target, std::min(u.speed_cap, u.coll_speed));
+    bool now = u.coll_now;
+    if (frame < u.hold_until) {  // the MovingVsMoving stand-in's yield (a partner that is not Infantry / Bike): at once
+        target = 0.0f;
+        now = true;
+    }
+    target = std::min(target, u.straggle * vmax);
+    if (m.state == LocoState::WalkEndMove) target = a;
+    if (target < 0.0f) target = 0.0f;
+    float v = m.speed;
+    if (target > v) v += std::min(a, target - v);
+    else if (target < v) v = now ? target : v - std::min(a, v - target);
+    v = std::clamp(v, 0.0f, std::max(vmax, 0.0f));
+    m.speed = v;
+    if (!(v > 0.0f)) return finish();  // no turn, no waypoint step, no state change: the members keep steering
+    // Move step: the budget v along the waypoints.
+    float budget = v;
+    V2 pos = m.pos;
+    uint32_t next = m.next;
+    V2 travel{};
+    bool at_last = false;
+    while (budget > 0.0f && next < n) {
+        const V2 aim = wp(next);
+        const bool lastwp = static_cast<size_t>(next) + 1 == n;
+        if (lastwp && m.state == LocoState::WalkEndMove && dot(pos - aim, nlast) >= 0.0f) {
+            pos = pos + nlast * budget;  // past the last waypoint's line: braking straight on
+            travel = nlast;
+            break;
+        }
+        const V2 d = aim - pos;
+        const float l = length(d);
+        if (l <= budget) {
+            pos = aim;
+            budget -= l;
+            if (l > 0.0f) travel = d;
+            if (!lastwp) {
+                ++next;
+            } else if (m.state != LocoState::WalkEndMove) {
+                at_last = true;  // 0x13 on the last waypoint: it stops there and brakes from the next tick
+                break;
+            }
+            continue;
+        }
+        V2 dir = normalize_retail(d);
+        V2 heading_vec = d;
+        if (form && next >= 1) {  // formation side-error correction (walk_step's rule)
+            const V2 from = wp(next - 1);
+            const V2 sd = normalize_retail(aim - from);
+            if (length_sq(sd) > 0.0f) {
+                const float c = formation_side_correction(-cross(sd, pos - from));
+                if (c != 0.0f) {
+                    dir = normalize_retail(sd + perp_left(sd) * c);
+                    heading_vec = dir;
+                }
+            }
+        }
+        pos = pos + dir * budget;
+        budget = 0.0f;
+        travel = heading_vec;
+    }
+    // The container's own point is passability-tested (0x50e280), unless the path is forced / leaves a blocked start.
+    if (m.next >= m.escape_until && !steer_probe_ok(grid_, m.pos, pos, u.lp.mask)) {
+        m.speed = 0.0f;
+        r.blocked = true;
+        return finish();
+    }
+    // FIGHTER_FLYING §7.2 caller 3: every waypoint passed on the order path re-lays toward the next segment
+    if (!top_push)
+        for (uint32_t p = m.next; p < next && static_cast<size_t>(p) + 1 < n; ++p) u.relay.push_back(m.path[p + 1] - m.path[p]);
+    m.pos = pos;
+    m.next = next;
+    r.moved = true;
+    if (length_sq(travel) > 0.0f) m.yaw = turn_toward(m.yaw, heading_deg(travel), rate);
+    if (at_last && below_started) {
+        m.next = static_cast<uint32_t>(n);  // the pushed path ends; the started path below goes on without braking
+        r.arrived = true;
+    } else if (at_last) {
+        m.state = LocoState::WalkEndMove;
+    } else if (m.state != LocoState::WalkEndMove) {
+        m.state = !below_started && remaining_length(m) <= v * v / (2.0f * a) ? LocoState::WalkEndMove : LocoState::WalkMoving;
+    }
+    return finish();
 }
 
 // One member frame (FIGHTER_FLYING §7 / §7.3, MOVEMENT §3.7). Reads only `k` (the container's state at the start of the

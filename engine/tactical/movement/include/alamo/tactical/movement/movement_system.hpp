@@ -596,6 +596,17 @@ public:
     //     (FIGHTER_FLYING §7 step 8, §7.3 "Recovery in full" item 7: a member walks through impassable cells, which is
     //     what bounds its lag together with the straggler cap). s78n t14 part B: step 6 adds the collision steering
     //     vector 0x509810 (team_member_avoid) from its container's collision objects;
+    //   - s78n t18 (FIGHTER_FLYING §7.7 items 3 - 6, the container service 0x5ad690; MovementSystem::team_walk): the step
+    //     order of 0x5aaf70 - target = the team speed (the formation speed on the order path), min the collision cap, min
+    //     the straggler cap, and while braking the rate itself (replacing all of it); the speed steps toward the target by
+    //     the rate, down at once only with the collision "at once" flag (a MovingVsMoving hold; a plain MovingVsStopped
+    //     "try again later" brakes at the rate). Braking starts when the rest of the path is <= v^2 / (2 x rate) and ends
+    //     when the speed is <= the rate at the start of a tick: speed 0, no step; within 5.0 before the last waypoint's
+    //     line (or past it) the container has arrived where it stands (no snap), after a turn in place to the order's
+    //     final facing when that is more than 10 degrees off; else the same path restarts on the next tick. A new move
+    //     order while moving: the container brakes at the rate, coasting straight along its facing, then starts the new
+    //     path from speed 0 (start delays are drawn only when the order finds it at speed 0); Stop and Teleport zero the
+    //     speed at once. [port] the coast starts at the order; corner fractions and the brake-ahead are not modelled;
     //   - s78n t16 (FIGHTER_FLYING §7.7, 0x5aaf70; confirmed by the retail runs in S78N_T14_RUN.md): the container's speed
     //     step. Acceleration = deceleration = 0x5ab540 = the minimum over its steering members of the member's
     //     OverrideDeceleration x (min(member Max_Speed, the members' smallest raw Max_Speed) x the mode multiplier x the
@@ -913,6 +924,14 @@ private:
         bool push_flee = false;
         // s78n t14 part B: set_collision_exempt (transient, host-set every tick): -1 none, kCollisionExemptAll, or a unit.
         ObjectId exempt = -1;
+        // s78n t18 (FIGHTER_FLYING §7.7 items 5 - 6, save version 17): a squad container's walk - coast: a new order
+        // arrived while it moved (it brakes at its rate, coasting straight on, before the new path starts); fturn: it
+        // turns in place to the order's final facing before it arrives; path_started: the order path was started (pack
+        // path +0x6d; a pushed path over a started path ends without braking). Hashed for containers.
+        bool coast = false, fturn = false, path_started = false;
+        // s78n t18 (MOVEMENT §5.3 "+0x3a7"): hidden - garrisoned with its whole squad (host-set every tick: set_pair_gate;
+        // transient). A hidden unit is no layer object and does not walk.
+        bool hidden = false;
         // s78n t18 (MOVEMENT §5.3.1, TACTICAL_COMBAT §5.4.4): a squad container's live joint slot box 0x404450 (half
         // extents; team_boxed: it has team entries) and a member suspended for a hero clash (still a TEAM entry, never a
         // layer object). Derived from the team lists (team_ix_rebuild): not saved, not hashed.
@@ -956,6 +975,7 @@ private:
     bool lay_out_rows(const Unit& k, V2 dir, std::vector<std::pair<Unit*, V2>>& out);
     bool lay_out_dartboard(const Unit& k, V2 dir, uint32_t frame, std::vector<std::pair<Unit*, V2>>& out);
     void team_relay_pass(uint32_t frame);  // s78n t14: the re-lays of this tick (serial, ascending id)
+    WalkResult team_walk(Unit& u, uint32_t frame) const;  // s78n t18: one frame of a squad container's walk (land_team.cpp)
     ObjectId order_id(ObjectId id) const;  // s78n t03: a steering member's container, else id
     // s78n t03: one member frame (writes only u); s78n t14 part B: + the tick's steering records and start positions
     void steer_member(Unit& u, const TeamSnap& k, std::span<const SteerRec> recs, std::span<const V2> pos0) const;
