@@ -29,7 +29,7 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
    Windows x64 only; no multiplayer, original-game saves or RenderDoc. Stay inside the group's task list and aim at its
    `exit` test. A finding on the way is triaged when you find it: it blocks the exit test, or is a crash / hang / save corruption /
    tier-1 difference, so it becomes a task; otherwise `python roadmap-store\roadmap_store.py backlog add "<text>" --by <session>
-   --from <group> [--sev S1|S2|S3]` (a rule files it into a category) or drop it. Never grow the group past its cap (8 tasks).
+   --from <group> [--sev S1|S2|S3] [--tier 1|2|3]` (a rule files it into a category; tier 3 means drop it unless a tier-2 metric fails) or drop it. Never grow the group past its cap (8 tasks).
 6. **Build in your own tree** (one tree per worktree; never share `build-msvc` or another lane's tree). From PowerShell:
    `& .\build_agent.cmd --% msvc wt "core;<modules and their dependencies>"` gives `build-wt-msvc` (`wt` is the default tree and may be left out) and runs the fast tier
    (`ctest -LE slow`); pass a regex as 4th argument for specific tests (slow ones included) or `all`. Never put `>` after `--%`.

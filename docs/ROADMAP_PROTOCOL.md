@@ -139,6 +139,16 @@ leave the group.
   task to the backlog (filed by the rules, `--sev` default S2, Gabriel-only tasks flagged) or drops the named ones, sets the group
   `done` (preset and claim cleared, `closed` recorded), sets its box `done` when it was the box's last open group, and adds a
   log line. It replaces the "follow-up group" step.
+- **Parity tier** (2026-11-10). A task or backlog entry that is a difference from retail carries `tier` (`1`, `2` or `3`, as in
+  `docs/DECISIONS.md`, "Parity tiers"); work that is not about matching retail (tools, UI of the port, Gabriel's runs) has none. The
+  tier says how the difference is judged and what it is worth: **1** exact, spec and unit test, a difference is a bug (S1 when a
+  player or modder sees it, else S2); **2** statistical, judged by the parity harness over many seeds, so the entry must name the
+  failing metric (without one it is S3, and one seed's outcome moving is not a finding); **3** free (internals, draw order,
+  precision of internal timers, performance, save format): S3 at most, and retail-matching tier-3 work is dropped
+  (`backlog drop --why`) unless a tier-2 metric fails. `backlog add --tier T`, `backlog move ID --tier T|none`, `backlog list --tier T`;
+  `trim-group` / `close-group` carry a task's tier into the entry and `promote` back. The page shows a T1 / T2 / T3 badge and filters
+  the Backlog by tier. 2026-11-10: every open task and entry was tagged (open tasks 27 tier 1, 6 tier 2, 4 tier 3, 15 none; backlog
+  open 13 tier 1, 5 tier 2, 5 tier 3, 4 none); 5 tier-3 entries (b0005, b0006, b0011, b0030, b0031) were dropped and 2 (b0008, b0029) lowered to S3.
 - **Promoting.** Entries come back only by choice: `backlog promote <ids> --to <group>` (refused above the cap) or
   `--new <id> --title ... --node ... --exit ... [--preset ...] [--eta ...]`. S1 entries are reviewed first each cycle.
 - **Parking.** `park <group> --by S --why "..."` sets an unstarted group to status `parked`: it leaves the open lists, "Start here" and
@@ -148,7 +158,7 @@ leave the group.
   waiting on an `after` group, not status `gab`) the project aims for; `inbox_days` (14) is how long
   an entry may sit untriaged. `roadmap_store.py lint [--strict] [--verbose]` reports: open group without an exit test, over its cap,
   open with no open task (error), done with an open task (error), more started groups than `wip`, a stale inbox entry, a bad
-  category or severity (error). Run it when planning; `write` prints the group problems it touched.
+  category, severity or tier (error), a tier-3 entry above S3, a Parity-category entry without a tier. Run it when planning; `write` prints the group problems it touched.
 - **Plan cycle.** Plan (Gabriel: pick a few groups from the backlog or the unstarted list, each with an exit test and cap; `batch`
   hands out a conflict-free set) → run (lanes, one claimed group each) → close (`close-group`) → triage (S1 / S2 first, drop or
   promote, empty `inbox`) → repeat.

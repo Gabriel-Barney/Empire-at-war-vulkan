@@ -1,6 +1,6 @@
 # Roadmap triage proposal (2026-11-10)
 
-**Applied 2026-11-10** (Gabriel approved it as drafted; 15 backlog entries were later re-filed into better categories, and a2m t06 was promoted to skai as b0004 -> skai t13). It gave each of the 25 open groups an exit test and one outcome (keep, close or park), and sorts every open task into stay, backlog or drop. Rules: `docs/ROADMAP_PROTOCOL.md`, "Backlog and group exit tests".
+**Applied 2026-11-10; parity-tier tags and tier-3 drops added the same day (`docs/ROADMAP_PROTOCOL.md`, "Parity tier")** (Gabriel approved it as drafted; 15 backlog entries were later re-filed into better categories, and a2m t06 was promoted to skai as b0004 -> skai t13). It gave each of the 25 open groups an exit test and one outcome (keep, close or park), and sorts every open task into stay, backlog or drop. Rules: `docs/ROADMAP_PROTOCOL.md`, "Backlog and group exit tests".
 
 ## Result
 
