@@ -1566,6 +1566,93 @@ static void test_space_group() {
     CHECK(arrived == 12 && facing && frames < 12000);
 }
 
+// s78n t10 (TACTICAL_COMBAT §5.4.6 port spec item 4, MOVEMENT §4.6.4): the space composition's recruit test reads the
+// world AABB 0x3982b0 of the seed and the candidate (the host's model data through set_model_bound_fn) and compares the
+// box centres: |cc - cs| <= max(2 es, 0.33 D) + ec per axis. Seed S at (0, 0), candidate C at (0, 150), both role 0, goal
+// (300, 0): D = 300, reach 99. One draw per formation, so the draw count is the formation count.
+static void test_space_compose_boxes() {
+    // Facing +x (yaw 0) the model's half x lies across (world y) and its half y along (world x): models face -Y.
+    AvoidModel m30, m60, mshift;
+    m30.bound_h = {30.0f, 30.0f, 10.0f};
+    m60.bound_h = {60.0f, 30.0f, 10.0f};  // world half y 60
+    mshift.bound_h = {30.0f, 30.0f, 10.0f};
+    mshift.bound_c = {-25.0f, 0.0f, 0.0f};  // world centre y = 150 - 25 = 125
+    struct Case {
+        const AvoidModel* c_model;  // candidate's model (the seed has m30); null with `hook` = a type without a model
+        bool hook;
+        float c_radius;
+        int formations;
+    };
+    const Case cases[] = {
+        {&m30, true, 8.0f, 2},     // 150 > 99 + 30
+        {&m60, true, 8.0f, 1},     // 150 <= 99 + 60
+        {&mshift, true, 8.0f, 1},  // box centre at y 125 <= 99 + 30
+        {nullptr, true, 8.0f, 2},  // no model: the 0.1 box at the position, 150.05 > 99 + 0.05
+        {&m60, false, 8.0f, 2},    // no hook: the older stand-in, the radius - 150 > 99 + 8
+        {&m30, false, 60.0f, 1},   // no hook: 150 <= 99 + 60 (the radius, not the model)
+    };
+    for (const Case& c : cases) {
+        MovementConfig cfg;
+        cfg.mode = MoveMode::Space;
+        MovementSystem sys(cfg);
+        sys.space().set_box({-5000.0f, -5000.0f}, {5000.0f, 5000.0f});
+        for (const ObjectId id : {ObjectId{1}, ObjectId{2}}) {
+            UnitDesc d;
+            d.id = id;
+            d.pos = id == 1 ? V2{0.0f, 0.0f} : V2{0.0f, 150.0f};
+            d.max_speed = 4.0f;
+            d.turn_rate = 1.5f;
+            d.radius = id == 1 ? 8.0f : c.c_radius;
+            d.space_layer = kLayerFrigate;
+            d.space_layer_type = 0;  // role 0
+            CHECK(sys.add_unit(d));
+        }
+        if (c.hook)
+            sys.set_model_bound_fn([&](ObjectId id, const AvoidModel*& model, float& scale) {
+                model = id == 1 ? &m30 : c.c_model;
+                scale = 1.0f;
+                return true;
+            });
+        SimRng rng(31);
+        MoveOrder o;
+        o.units = {1, 2};
+        o.destination = {300.0f, 0.0f};
+        sys.move(o, rng, 100);
+        CHECK(rng.draws() == 0 && sys.pending_compositions() == 1);
+        sys.coordinator_update(100, 100, rng);
+        CHECK(sys.pending_compositions() == 0);
+        CHECK(rng.draws() == static_cast<uint64_t>(c.formations));
+    }
+    {  // a hook that has no data for the candidate (false): that candidate keeps the stand-in, the seed its box
+        MovementConfig cfg;
+        cfg.mode = MoveMode::Space;
+        MovementSystem sys(cfg);
+        sys.space().set_box({-5000.0f, -5000.0f}, {5000.0f, 5000.0f});
+        for (const ObjectId id : {ObjectId{1}, ObjectId{2}}) {
+            UnitDesc d;
+            d.id = id;
+            d.pos = id == 1 ? V2{0.0f, 0.0f} : V2{0.0f, 150.0f};
+            d.max_speed = 4.0f;
+            d.turn_rate = 1.5f;
+            d.radius = id == 1 ? 8.0f : 55.0f;
+            d.space_layer = kLayerFrigate;
+            CHECK(sys.add_unit(d));
+        }
+        sys.set_model_bound_fn([&](ObjectId id, const AvoidModel*& model, float& scale) {
+            model = &m30;
+            scale = 1.0f;
+            return id == 1;
+        });
+        SimRng rng(31);
+        MoveOrder o;
+        o.units = {1, 2};
+        o.destination = {300.0f, 0.0f};
+        sys.move(o, rng, 100);
+        sys.coordinator_update(100, 100, rng);
+        CHECK(rng.draws() == 1);  // 150 <= max(2 x 30, 99) + 55
+    }
+}
+
 // ---------------------------------------------------------------- OI tactical (PHASE4 S7 open items)
 static void test_oi_land() {
     // PathFrameDelay stagger (§1.6) with the FormationClass ctor draw (cu8j t01, correcting cu8i t02): the order draws
@@ -3085,6 +3172,7 @@ int main() {
     test_space_index();
     test_space_group();
     test_oi_land();  // OI tactical
+    test_space_compose_boxes();  // s78n t10
     test_oi_space();
     test_determinism();
     test_fighter_primitives();  // FIGHTER_FLYING §1-§5

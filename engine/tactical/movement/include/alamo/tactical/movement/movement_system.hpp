@@ -123,6 +123,7 @@
 #include "alamo/tactical/movement/land_path.hpp"
 #include "alamo/tactical/movement/locomotor.hpp"
 #include "alamo/tactical/movement/passability.hpp"
+#include "alamo/tactical/movement/space_avoid.hpp"
 #include "alamo/tactical/movement/space_path.hpp"
 #include "alamo/tactical/movement/unit_params.hpp"
 #include "alamo/tactical/spatial_tree.hpp"
@@ -352,6 +353,15 @@ public:
     // host keeps the counts (the start fleet's hyperspace arrival). Unset: nothing is locked. Not saved (host state).
     using LockedFn = std::function<bool(ObjectId key)>;
     void set_locked_fn(LockedFn fn) { locked_ = std::move(fn); }
+    // s78n t10 (TACTICAL_COMBAT §5.4.6 port spec item 4, SPACE_AVOIDANCE §3.1): the space composition 0x5d58f0 tests the
+    // world AABB 0x3982b0 of the seed and of each candidate - the model's collision bound through the object's yaw and
+    // Scale_Factor (avoid_place; no model: [P, P + 0.1]), for a squadron container the union of its fighters' boxes [M:
+    // the union rule] - and compares the box CENTRES. The host gives a unit's model and Scale_Factor: true with a null
+    // model = the type has no model for the mode; false = no data, and [port] that candidate keeps the older stand-in
+    // (the object position with Custom_Hard extents, else the radius). Unset: the stand-in for everyone. Called from the
+    // serial coordinator update only. Not saved (host data, like the lock).
+    using ModelBoundFn = std::function<bool(ObjectId unit, const AvoidModel*& model, float& scale)>;
+    void set_model_bound_fn(ModelBoundFn fn) { model_bound_ = std::move(fn); }
     // OI tactical (crush, §5.5): owner changes (Change_Owner) and the relation test (player +0x370 table == 1 [M];
     // default: different non-negative players are hostile). The test is called from the serial crush pass only.
     bool set_owner(ObjectId id, int32_t owner);
@@ -1122,6 +1132,7 @@ private:
     HostileFn hostile_;              // OI tactical
     ScattersFn scatters_;            // s78n t14 part B: Scatters_From_Crushers by owner (host; not saved)
     LockedFn locked_;                // cu8l t03: the space composition's seed lock (host)
+    ModelBoundFn model_bound_;       // s78n t10: the space composition's world boxes (host; not saved)
     std::vector<CrushEvent> crush_;  // OI tactical: this tick
     OwnerThreatFn threat_;           // REMAINING_GAPS §4.2
     AnimLengthFn anim_len_;          // §4.3-4.7

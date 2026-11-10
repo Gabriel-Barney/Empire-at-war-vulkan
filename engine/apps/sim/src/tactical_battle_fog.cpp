@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/dmath.hpp"
 
 #include "alamo/objects/behaviors.hpp"
@@ -142,12 +143,15 @@ fw::FogObject TacticalBattle::fog_object_of(const objects::ObjectStore& store, o
 }
 
 // FOWF t02 (FOG_OF_WAR §5.2 [H]): the 8 points of the oriented 2-D footprint rectangle 0x38de80 of Multisample_FOW_Check.
-// Half extents 0x371be0: Scale_Factor x Custom_Hard_X/YExtent when both > 0, else each non-positive one from the type
-// model's |collision bound half extent| x Scale_Factor (0 without a model); centre = position + the rotated Scale_Factor x
-// Custom_Hard_X/YExtent_Offset. [port] The axes come from the normalised facing vector (the original takes cos / sin of
-// the yaw in degrees); without model data for the type the mode's per-type half extent stands in for the model part; the
-// _Deployed extents are not modelled. s78n t09 (TACTICAL_COMBAT §5.4.6 item 4.1): a movement-backed land squad container's
-// half extents are its joint box 0x404450 (no member: 0, 0); other TEAM objects use their type's extents.
+// Half extents 0x396850 (s78n t10, TACTICAL_COMBAT §5.4.6 port spec item 3). 0x371be0: Scale_Factor x
+// Custom_Hard_X/YExtent when both > 0; else a type without a model name for the mode -> (0, 0), even with one custom
+// set; else each non-positive one from the type model's |collision bound half extent| x Scale_Factor. A Deploys walker
+// in Walk state 0x18 / 0x19 takes the 0x371d20 pair (deployed_half_extents; no FoC effect). Centre = position + the
+// rotated Scale_Factor x Custom_Hard_X/YExtent_Offset. [port] The axes come from the normalised facing vector (the
+// original takes cos / sin of the yaw in degrees); for a named model without model data (not loaded, or a run without
+// model files) the mode's per-type half extent stands in for the model part. s78n t09 (§5.4.6 item 4.1): a
+// movement-backed land squad container's half extents are its joint box 0x404450 (no member: 0, 0); other TEAM objects
+// use their type's extents.
 void TacticalBattle::fog_footprint_samples(const objects::ObjectStore& store, objects::ObjectHandle h, float* xy) const {
     const objects::GameObjectTypes& types = catalog_->types();
     const objects::TypeIndex t = store.type(h);
@@ -161,21 +165,28 @@ void TacticalBattle::fog_footprint_samples(const objects::ObjectStore& store, ob
     if (squad_joint_slots(store, store.id(h), squad, jiggle, squad_facing)) {
         hx = hy = 0.0f;
         if (!squad.empty()) tactical::abilities::squad_joint_half_extents(squad, jiggle, hx, hy);
-    } else if (!(ex > 0.0f) || !(ey > 0.0f)) {
-        float mx = 0.0f, my = 0.0f;
-        const TacticalMode::ModelRef m = fog_mode_->model_ref(t, false);
-        if (m.known) {
-            if (m.model) {
-                mx = std::fabs(m.model->bound_h.x);
-                my = std::fabs(m.model->bound_h.y);
+    } else {
+        if (!(ex > 0.0f) || !(ey > 0.0f)) {
+            if (catalog_->files() && ascii_trim(types.get_string(t, space_ ? "Space_Model_Name" : "Land_Model_Name")).empty()) {
+                hx = hy = 0.0f;  // s78n t10: no model for the mode (0x3729f0 null)
+            } else {
+                float mx = 0.0f, my = 0.0f;
+                const TacticalMode::ModelRef m = fog_mode_->model_ref(t, false);
+                if (m.known) {
+                    if (m.model) {
+                        mx = std::fabs(m.model->bound_h.x);
+                        my = std::fabs(m.model->bound_h.y);
+                    }
+                } else {
+                    const tactical::Aabb bb = fog_mode_->extent_box(h);
+                    mx = 0.5f * (bb.max.x - bb.min.x) / scale;
+                    my = 0.5f * (bb.max.y - bb.min.y) / scale;
+                }
+                if (!(ex > 0.0f)) hx = scale * mx;
+                if (!(ey > 0.0f)) hy = scale * my;
             }
-        } else {
-            const tactical::Aabb bb = fog_mode_->extent_box(h);
-            mx = 0.5f * (bb.max.x - bb.min.x) / scale;
-            my = 0.5f * (bb.max.y - bb.min.y) / scale;
         }
-        if (!(ex > 0.0f)) hx = scale * mx;
-        if (!(ey > 0.0f)) hy = scale * my;
+        deployed_half_extents(t, store.id(h), hx, hy);  // s78n t10: 0x371d20 while deploying / deployed
     }
     const Vec3 f = store.facing(h);
     float ax = 1.0f, ay = 0.0f;

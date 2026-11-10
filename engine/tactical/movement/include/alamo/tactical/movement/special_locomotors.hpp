@@ -283,10 +283,12 @@ bool locomotor_airborne_kind(LocomotorKind kind, LocoState state);
 // is in the clearance layer when (layer & kLayerCorvette) != 0 (0x537e60).
 uint32_t object_tracking_layer(bool uses_multiple_locomotors, bool airborne_kind, bool moving, uint32_t space_layer,
                                uint32_t stationary_space_layer);
-// Query half-extents 0x396850: Custom_Hard_XExtent / _YExtent x Scale_Factor, each falling back ([port]: when <= 0) to
-// |model bbox max x / y| x Scale_Factor (0x371be0); 0 without a model.
-V2 clearance_half_extents(float custom_x, float custom_y, float scale_factor, bool has_model, float model_max_x,
-                          float model_max_y);
+// Query half-extents 0x396850 -> 0x371be0 (s78n t10, TACTICAL_COMBAT §5.4.6 item 1): both Custom_Hard extents > 0 ->
+// Scale_Factor x (X, Y), no model read; else no model for the mode -> (0, 0), even with one custom set; else per axis the
+// custom value when > 0, else the |collision-bound half x / y| of the model, x Scale_Factor (the half size, not |max|;
+// the bound's centre offset is ignored).
+V2 clearance_half_extents(float custom_x, float custom_y, float scale_factor, bool has_model, float bound_half_x,
+                          float bound_half_y);
 // One tracking entry (0x6b3b00 [M]): the object's tracked position at the slice start / end, its facing at the slice
 // end, its half-extents, and the slice's frame range.
 struct ClearanceEntry {
@@ -302,7 +304,9 @@ bool clearance_candidate(V2 from, V2 to, float qx, float qy, const ClearanceEntr
 // within R(r) of A = s + (e - s) a, R lerping the two oriented-box radii from the direction toward s (at r = 0) to the
 // direction toward e (at r = 1). Heights are not compared.
 bool clearance_hit(V2 from, V2 to, float qx, float qy, const ClearanceEntry& e, float t);
-// Per-hit value: (bbox.min.z + bbox.max.z) x Scale_Factor + object z (a sum: the scaled top of a box starting at 0).
+// Per-hit value (s78n t10, §5.4.6 side finding): the model box the hit reads is the collision bound as centre and half
+// size, so box_lo_z = its centre z and box_hi_z = its half z, and (c.z + h.z) x Scale_Factor + object z is the scaled top
+// of the collision bound.
 inline float clearance_top(float box_lo_z, float box_hi_z, float scale_factor, float obj_z) {
     return (box_lo_z + box_hi_z) * scale_factor + obj_z;
 }
@@ -311,8 +315,8 @@ struct ClearanceInfo {
     bool uses_multiple_locomotors = false;  // Uses_Multiple_Locomotors (+0x74)
     uint32_t stationary_space_layer = 0;    // Stationary_Space_Layer (+0x16e0); Space_Layer is UnitDesc::space_layer_type
     V2 half;                                // clearance_half_extents (the flyer's (qx, qy); an entry's (ex, ey) [M])
-    bool has_box = false;                   // the land model (type +0x2a0) has a bounding box; no box = no hit value
-    float box_lo_z = 0.0f, box_hi_z = 0.0f; // model space, before Scale_Factor
+    bool has_box = false;                   // the land model (type +0x2a0) is there; no model = no hit value
+    float box_lo_z = 0.0f, box_hi_z = 0.0f; // s78n t10: the collision bound's centre z and half z, before Scale_Factor
     float scale_factor = 1.0f;              // Scale_Factor (+0x658)
 };
 using ClearanceInfoFn = std::function<bool(ObjectId id, ClearanceInfo& out)>;  // false = unknown object (skipped)

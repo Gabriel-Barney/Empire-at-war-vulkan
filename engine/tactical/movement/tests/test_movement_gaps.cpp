@@ -631,7 +631,13 @@ static void test_flying_clearance() {
     CHECK(h.x == 8.0f && h.y == 12.0f);
     h = clearance_half_extents(0.0f, 0.0f, 1.2f, false, 9.0f, 9.0f);
     CHECK(h.x == 0.0f && h.y == 0.0f);
+    // s78n t10 (TACTICAL_COMBAT §5.4.6 item 1, 0x371be0): one custom and no model -> (0, 0); both customs need no model.
+    h = clearance_half_extents(2.0f, 0.0f, 1.5f, false, 9.0f, 9.0f);
+    CHECK(h.x == 0.0f && h.y == 0.0f);
+    h = clearance_half_extents(2.0f, 3.0f, 1.5f, false, 9.0f, 9.0f);
+    CHECK(h.x == 3.0f && h.y == 4.5f);
     CHECK(clearance_top(0.0f, 40.0f, 2.0f, 25.0f) == 105.0f && clearance_top(-10.0f, 10.0f, 3.0f, 7.0f) == 7.0f);
+    CHECK(clearance_top(4.0f, 36.0f, 2.0f, 25.0f) == 105.0f);  // s78n t10: (centre z 4 + half z 36) x 2 + 25
     // Hit test, isotropic radii (R = 3 + 5 = 8): the segment (0, 0) -> (100, 0) touches entries within 8 of it.
     ClearanceEntry e;
     e.ex = e.ey = 3.0f;

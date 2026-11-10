@@ -445,7 +445,10 @@ inline std::string hack_types() {
                  "<Tactical_Bribe_Cost>40</Tactical_Bribe_Cost>"
                  "<Unit_Abilities_Data SubObjectList=\"Yes\"><Unit_Ability><Type>EJECT_VEHICLE_THIEF</Type><Recharge_Seconds>1</Recharge_Seconds>"
                  "</Unit_Ability></Unit_Abilities_Data></GroundVehicle>\n"
-                 " <GroundCompany Name=\"S10_Speeder_Eject_Co\"><Company_Units>S10_Speeder_Eject</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n");
+                 " <GroundCompany Name=\"S10_Speeder_Eject_Co\"><Company_Units>S10_Speeder_Eject</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n"
+                 // s78n t10 (TACTICAL_COMBAT §5.4.6 item 1 step 2): one Custom_Hard extent and no model - half extents (0, 0).
+                 // Only test_drop_extents_no_model reads it.
+                 " <GroundVehicle Name=\"S10_OneExtent\"><Custom_Hard_XExtent>12</Custom_Hard_XExtent></GroundVehicle>\n");
     return t;
 }
 

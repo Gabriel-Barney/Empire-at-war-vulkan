@@ -150,12 +150,29 @@ bool MovementSystem::compose_space(const PendingComposition& pc, uint32_t frame,
     struct Cand {
         ObjectId key = -1;
         std::vector<std::pair<Unit*, uint32_t>> units;  // (unit, start offset)
-        V2 pos;
+        V2 pos;  // the object position: the seed pick and D
+        // s78n t10 (TACTICAL_COMBAT §5.4.6 port spec item 4): the x / y centre and half size of the world AABB 0x3982b0.
+        V2 bc;
         float ex = 0.0f, ey = 0.0f;
         uint32_t role = 0;
         float vmax = 0.0f, vmin = 0.0f;
     };
     std::vector<Cand> cands;
+    // s78n t10: one unit's world box (SPACE_AVOIDANCE §3.1) from the host's model data - the collision bound through the
+    // unit's position, yaw and Scale_Factor; no model: [P, P + 0.1]. [port] yaw only (a fighter's pitch / roll are not
+    // applied). False: no host data.
+    const auto unit_box = [this](const Unit& x, AvoidObstacle& o) {
+        const AvoidModel* model = nullptr;
+        float scale = 1.0f;
+        if (!model_bound_ || !model_bound_(x.d.id, model, scale)) return false;
+        o.id = x.d.id;
+        o.pos = is_fighter(x) ? x.fs.b.p : F3{x.m.pos.x, x.m.pos.y, x.z};
+        o.facing = dir_from_deg(x.m.yaw);
+        o.scale = scale;
+        o.model = model;
+        avoid_place(o);
+        return true;
+    };
     const std::vector<ObjectId> none;
     const std::vector<ObjectId>& ids = pc.forms.empty() ? none : pc.forms[0];
     for (size_t i = 0; i < ids.size(); ++i) {
@@ -175,10 +192,50 @@ bool MovementSystem::compose_space(const PendingComposition& pc, uint32_t frame,
         F3 p{};
         if (fobject_pos(key, p)) c.pos = {p.x, p.y};
         else c.pos = u->m.pos;
-        // [M: which extent] the hard extents (Custom_Hard_X/YExtent x Scale_Factor), else the radius; a squadron: its
-        // first fighter's [port].
-        c.ex = u->d.hard_x > 0.0f ? u->d.hard_x : u->d.radius;
-        c.ey = u->d.hard_y > 0.0f ? u->d.hard_y : u->d.radius;
+        // s78n t10: the world AABB 0x3982b0 (Custom_Hard extents are not read there). A ship: its model box. A squadron
+        // container: the team box = the min / max union of its fighters' boxes, team index order [M: the union rule].
+        // [port] without host data (no hook, or a model that does not load): the object position with the hard extents
+        // (Custom_Hard_X/YExtent x Scale_Factor), else the radius; a squadron: its first fighter's.
+        bool boxed = false;
+        if (squad) {
+            V2 lo{}, hi{};
+            for (const ObjectId mid : squad_ptr(key)->members) {
+                const Unit* m = unit_ptr(mid);
+                if (!m) continue;
+                AvoidObstacle o;
+                if (!unit_box(*m, o)) {
+                    boxed = false;
+                    break;
+                }
+                const V2 l{o.box_c.x - o.box_h.x, o.box_c.y - o.box_h.y}, h{o.box_c.x + o.box_h.x, o.box_c.y + o.box_h.y};
+                if (!boxed) {
+                    lo = l;
+                    hi = h;
+                    boxed = true;
+                } else {
+                    lo = {std::min(lo.x, l.x), std::min(lo.y, l.y)};
+                    hi = {std::max(hi.x, h.x), std::max(hi.y, h.y)};
+                }
+            }
+            if (boxed) {
+                c.bc = {(lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f};
+                c.ex = (hi.x - lo.x) * 0.5f;
+                c.ey = (hi.y - lo.y) * 0.5f;
+            }
+        } else {
+            AvoidObstacle o;
+            boxed = unit_box(*u, o);
+            if (boxed) {
+                c.bc = {o.box_c.x, o.box_c.y};
+                c.ex = o.box_h.x;
+                c.ey = o.box_h.y;
+            }
+        }
+        if (!boxed) {
+            c.bc = c.pos;
+            c.ex = u->d.hard_x > 0.0f ? u->d.hard_x : u->d.radius;
+            c.ey = u->d.hard_y > 0.0f ? u->d.hard_y : u->d.radius;
+        }
         // Get_Space_Layer 0x397900(seed, 0): Stationary_Space_Layer when not moving and set, else Space_Layer; a squadron
         // container (TEAM, no layer) is role 0. [port] moving = following a space path; no multi-locomotor space unit.
         if (!squad) c.role = !u->following && u->d.stationary_space_layer != 0 ? u->d.stationary_space_layer : u->d.space_layer_type;
@@ -216,10 +273,11 @@ bool MovementSystem::compose_space(const PendingComposition& pc, uint32_t frame,
         if (locked_ && locked_(seed.key)) continue;
         // Role 0 (fighters, squadron containers, objects without a layer): recruit in candidate order. [port] every space
         // locomotor is kind 2.
+        // s78n t10: |cc - cs| between the box centres; the reach term keeps D = |goal - seed position|.
         const float reach = 0.33f * length(pc.goal - seed.pos);
         for (size_t i = 0; i < cands.size();) {
             const Cand& c = cands[i];
-            const float dx = std::fabs(c.pos.x - seed.pos.x), dy = std::fabs(c.pos.y - seed.pos.y);
+            const float dx = std::fabs(c.bc.x - seed.bc.x), dy = std::fabs(c.bc.y - seed.bc.y);
             const bool box = dx <= std::max(2.0f * seed.ex, reach) + c.ex && dy <= std::max(2.0f * seed.ey, reach) + c.ey;
             const bool ok = box && c.role == 0 && c.vmax != 0.0f && seed.vmax != 0.0f && c.vmin / seed.vmax <= 0.9f &&
                             seed.vmin / c.vmax <= 0.9f;

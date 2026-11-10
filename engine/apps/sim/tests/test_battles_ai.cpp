@@ -1696,6 +1696,25 @@ void test_team_hack_bribe(bool bribe) {
 // spawned with the speeder's owner, then the boarding changes its owner to the thief's (store, combat, abilities), sets
 // the permanent stolen-vehicle flag and the incognito flag, and the thief is inside it. While incognito no unit
 // auto-acquires the variant; the stolen flag survives a later owner change.
+// s78n t10 (TACTICAL_COMBAT §5.4.6 item 1, 0x371be0): a type without a land model has half extents (0, 0) unless BOTH
+// Custom_Hard extents are set - one custom alone gives nothing (before: that axis x Scale_Factor); both need no model.
+void test_drop_extents_no_model() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, true);
+    const uint32_t one = type_of(*d, "S10_OneExtent"), both = type_of(*d, "S10_Speeder");
+    CHECK(one < d->types.size() && both < d->types.size());
+    if (one >= d->types.size() || both >= d->types.size()) return;
+    CHECK(d->types.get_float(one, "Custom_Hard_XExtent") == 12.0f && d->types.get_float(one, "Custom_Hard_YExtent") == 0.0f);
+    for (const BattleCatalog* cat : {static_cast<const BattleCatalog*>(d->catalog.get()), static_cast<const BattleCatalog*>(nullptr)}) {
+        float hx = -1.0f, hy = -1.0f;
+        drop_half_extents(d->types, cat, one, hx, hy);
+        CHECK(hx == 0.0f && hy == 0.0f);
+        drop_deployed_extents(d->types, cat, one, hx, hy);
+        CHECK(hx == 0.0f && hy == 0.0f);
+        drop_half_extents(d->types, cat, both, hx, hy);
+        CHECK(hx == 10.0f && hy == 10.0f);
+    }
+}
+
 // s78n t12 (HERO_CLASH §8.4.3): `variant` 0 = the speeder has a Vehicle_Thief_Inside_Clone (the clone is spawned, the
 // speeder killed in the host pass, the clone boarded); 1 = no clone type (S10_Speeder_Plain: the ORIGINAL is boarded - the
 // same object id lives on with the thief's owner, the stolen / incognito flags and the thief inside; no spawn, no kill; it
@@ -2943,6 +2962,7 @@ int main(int argc, char** argv) {
     test_team_hack_bribe(false);
     test_team_hack_bribe(true);
     for (const int variant : {0, 1, 2}) test_vehicle_thief(variant);  // s78n t05; s78n t12: without a clone type
+    test_drop_extents_no_model();  // s78n t10
     {  // s78n t06 (+ review): hero clashes in a land battle (the worker-count check is its own ctest entries, --hero-clash)
         auto hd = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, true);
         test_hero_clash_battle(*hd);

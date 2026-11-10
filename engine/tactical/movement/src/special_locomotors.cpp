@@ -474,9 +474,11 @@ uint32_t object_tracking_layer(bool uses_multiple_locomotors, bool airborne_kind
     return stationary_space_layer;
 }
 
-V2 clearance_half_extents(float custom_x, float custom_y, float scale, bool has_model, float max_x, float max_y) {
-    const float fx = has_model ? std::fabs(max_x) : 0.0f, fy = has_model ? std::fabs(max_y) : 0.0f;
-    return {(custom_x > 0.0f ? custom_x : fx) * scale, (custom_y > 0.0f ? custom_y : fy) * scale};
+V2 clearance_half_extents(float custom_x, float custom_y, float scale, bool has_model, float half_x, float half_y) {
+    // s78n t10 (TACTICAL_COMBAT §5.4.6 item 1, 0x371be0).
+    if (custom_x > 0.0f && custom_y > 0.0f) return {custom_x * scale, custom_y * scale};
+    if (!has_model) return {0.0f, 0.0f};
+    return {(custom_x > 0.0f ? custom_x : std::fabs(half_x)) * scale, (custom_y > 0.0f ? custom_y : std::fabs(half_y)) * scale};
 }
 
 bool clearance_candidate(V2 from, V2 to, float qx, float qy, const ClearanceEntry& e) {

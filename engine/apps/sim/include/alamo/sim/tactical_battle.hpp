@@ -227,8 +227,9 @@ struct LandDropRadiusObject {
 };
 bool land_drop_radius_ok(float x, float y, std::span<const LandDropRadiusObject> objects, bool use_reinforcement_points);
 // The drop shape of a company type (its Company_Units in list order, or the type itself) and the half extents 0x371be0
-// of a type: Custom_Hard_X/YExtent x Scale_Factor when both are > 0, else per axis the hard extent when > 0, else |land
-// model box max x / y|, x Scale_Factor; no model -> 0 on that axis (a1h t06, TACTICAL_GAPS §4.2.2 item 4).
+// of a type with the land model (s78n t10, TACTICAL_COMBAT §5.4.6 item 1): Custom_Hard_X/YExtent x Scale_Factor when both
+// are > 0; else no Land_Model_Name -> (0, 0); else per axis the hard extent when > 0, else the |collision-bound half x /
+// y| of the land model, x Scale_Factor ([port] a named model that does not load: the hard extent, else 0).
 LandDropShape land_drop_shape(const objects::GameObjectTypes& types, const BattleCatalog* catalog, const galactic::ConflictRules& rules,
                               uint32_t company_type);
 void drop_half_extents(const objects::GameObjectTypes& types, const BattleCatalog* catalog, uint32_t type, float& hx, float& hy);
@@ -583,7 +584,8 @@ public:
     // ignores movers (a locomotor and no LAND_OBSTACLE) and counts landing transports; a human issuer counts movers and
     // ignores TRANSPORT_LANDING objects except persistent ones (Create_Cinematic_Transport persist, a1i t05). Footprint =
     // position + R(yaw)(Custom_Hard_X/YExtent_Offset x Scale_Factor), half extents drop_half_extents, or the deployed
-    // extents (drop_deployed_extents) while a Deploys type with a locomotor has DEPLOY active (a1i t05, 0x396850 rule 2).
+    // extents (drop_deployed_extents) while a Deploys type with a locomotor is deploying / deployed (a1i t05, 0x396850
+    // rule 2; s78n t10: Walk state 0x18 / 0x19).
     // Unknown entry -> false. Space battles -> true.
     bool land_drop_valid(TacticalMode& mode, int32_t player, objects::ObjectId key, float x, float y, bool human,
                          bool use_reinforcement_points) const;
@@ -1425,6 +1427,10 @@ private:
     // 0x396850 for a unit (0x371d20, the deployed pair, for a deploying / deployed Deploys walker).
     void type_half_extents(uint32_t type, float& hx, float& hy) const;
     void unit_half_extents(const Unit& u, float& hx, float& hy) const;
+    // s78n t10 (§5.4.6 item 2, 0x371d20 as 0x396850 selects it): replaces (hx, hy) by the deployed pair when object `id`
+    // of type `type` is a movement-backed Deploys walker in Walk state 0x18 / 0x19 with Custom_Hard_XExtent_Deployed > 0.
+    // Const reads only (the fog footprint calls it from the parallel filter).
+    void deployed_half_extents(uint32_t type, objects::ObjectId id, float& hx, float& hy) const;
     // s78n t09 (§5.4.4 item 1, 0x404450): a movement-backed land squad container's joint box input - its live members'
     // slots (team index order) with their half-extents, the container type's MaxJiggleDistance and the container's
     // facing. False: not such a container.

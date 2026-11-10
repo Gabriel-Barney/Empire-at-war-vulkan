@@ -944,6 +944,54 @@ void test_foc() {
             CHECK(u.deploys && u.has_locomotor);
         }
     }
+    {  // s78n t10 (TACTICAL_COMBAT §5.4.6 items 1, 2, 6): the type half-extents 0x371be0 with the land model
+       // (drop_half_extents) - both customs: x Scale_Factor; no Land_Model_Name: (0, 0), no fallback to the space model;
+       // no customs: Scale_Factor x the land model's collision-bound half x / y. 0x371d20 ignores a deployed Y alone.
+        const auto type = [&types](const char* name) { return static_cast<uint32_t>(types.resolve_name(name)); };
+        const uint32_t mptl = type("MPTL"), trooper = type("Stormtrooper"), neb = type("Nebulon_B_Frigate");
+        CHECK(mptl < types.size() && trooper < types.size() && neb < types.size());
+        float hx = 0.0f, hy = 0.0f;
+        if (mptl < types.size()) {
+            drop_half_extents(types, &catalog, mptl, hx, hy);
+            CHECK(std::fabs(hx - 33.0f) < 0.001f && std::fabs(hy - 16.5f) < 0.001f);
+            drop_deployed_extents(types, &catalog, mptl, hx, hy);
+            CHECK(std::fabs(hx - 33.0f) < 0.001f && std::fabs(hy - 16.5f) < 0.001f);
+        }
+        if (trooper < types.size()) {
+            drop_half_extents(types, &catalog, trooper, hx, hy);
+            CHECK(std::fabs(hx - 3.0f) < 0.001f && std::fabs(hy - 3.0f) < 0.001f);
+        }
+        if (neb < types.size()) {
+            CHECK(ascii_trim(types.get_string(neb, "Land_Model_Name")).empty());
+            drop_half_extents(types, &catalog, neb, hx, hy);
+            CHECK(hx == 0.0f && hy == 0.0f);
+            // the same rule with the space model (the clearance / composition measure): 0.7 x (33.54, 157.07)
+            float mx = 0.0f, my = 0.0f;
+            if (catalog.space_model_half_extents(neb, mx, my)) {
+                const tactical::movement::V2 h =
+                    tactical::movement::clearance_half_extents(0.0f, 0.0f, types.columns().scale_factor[neb], true, mx, my);
+                CHECK(std::fabs(h.x - 23.48f) < 0.01f && std::fabs(h.y - 109.95f) < 0.01f);
+            }
+        }
+        uint32_t plain = static_cast<uint32_t>(types.size());
+        for (uint32_t t = 0; t < types.size() && plain >= types.size(); ++t) {
+            if (types.get_float(t, "Custom_Hard_XExtent") > 0.0f || types.get_float(t, "Custom_Hard_YExtent") > 0.0f) continue;
+            if (ascii_trim(types.get_string(t, "Land_Model_Name")).empty() || !catalog.avoid_model(t, false)) continue;
+            plain = t;
+        }
+        if (plain < types.size()) {
+            const tactical::movement::AvoidModel* am = catalog.avoid_model(plain, false);
+            const float sf = types.get_float(plain, "Scale_Factor");
+            const float sc = sf > 0.0f ? sf : 1.0f;
+            drop_half_extents(types, &catalog, plain, hx, hy);
+            std::printf("foc drop extents: %s (no Custom_Hard extents) land bound half %.2f x %.2f, scale %.2f -> %.2f x %.2f\n",
+                        std::string(types.raw().types().name[plain]).c_str(), static_cast<double>(am->bound_h.x),
+                        static_cast<double>(am->bound_h.y), static_cast<double>(sc), static_cast<double>(hx), static_cast<double>(hy));
+            CHECK(hx == std::fabs(am->bound_h.x) * sc && hy == std::fabs(am->bound_h.y) * sc && hx > 0.0f && hy > 0.0f);
+        } else {
+            std::printf("foc drop extents: no land model data (sim built without assets), skipped\n");
+        }
+    }
     // Fog of war on real data (owner: fog agent): shipped GameConstants; grids, dense mask and REVEAL placements of
     // two real maps.
     const tactical::fog::FogConstants& fc = catalog.fog_constants();

@@ -553,7 +553,7 @@ void TacticalBattle::type_half_extents(uint32_t type, float& hx, float& hy) cons
     // s78n t09 (TACTICAL_COMBAT §5.4.6 item 1, 0x371be0): both Custom_Hard extents > 0 -> Scale_Factor x (X, Y), no model
     // read; else the mode's model (no fallback to another mode's): none -> (0, 0); else per axis the custom value when > 0,
     // else the collision-bound half x / y (ModelClass vf +0x58: avoid_model's bound_h) x Scale_Factor. [port] A named model
-    // whose file does not load (no art data) uses the drop layout's model box (drop_half_extents).
+    // whose file does not load (no art data) takes per axis the custom value, else 0 (s78n t10: as drop_half_extents).
     hx = hy = 0.0f;
     const objects::GameObjectTypes& types = catalog_->types();
     if (type >= types.size()) return;
@@ -568,7 +568,8 @@ void TacticalBattle::type_half_extents(uint32_t type, float& hx, float& hy) cons
     if (ascii_trim(types.get_string(type, space_ ? "Space_Model_Name" : "Land_Model_Name")).empty()) return;
     const tactical::movement::AvoidModel* am = catalog_->avoid_model(type, space_);
     if (!am) {
-        drop_half_extents(type, hx, hy);
+        hx = cx > 0.0f ? sc * cx : 0.0f;
+        hy = cy > 0.0f ? sc * cy : 0.0f;
         return;
     }
     hx = cx > 0.0f ? sc * cx : sc * std::fabs(am->bound_h.x);
@@ -580,14 +581,18 @@ void TacticalBattle::unit_half_extents(const Unit& u, float& hx, float& hy) cons
     // takes 0x371d20 - the deployed pair when both deployed extents > 0, else 0x371be0 with the x / y replaced only when
     // Custom_Hard_XExtent_Deployed > 0 (the y test reads the x field) - and every other object 0x371be0.
     type_half_extents(u.type, hx, hy);
+    deployed_half_extents(u.type, u.id, hx, hy);
+}
+
+void TacticalBattle::deployed_half_extents(uint32_t type, objects::ObjectId id, float& hx, float& hy) const {
     const objects::GameObjectTypes& types = catalog_->types();
-    if (u.type >= types.size() || !types.get_bool(u.type, "Deploys") || !movement_ || !movement_->has_unit(u.id)) return;
-    const mv::LocoState ds = movement_->deploy_state(u.id);
+    if (type >= types.size() || !types.get_bool(type, "Deploys") || !movement_ || !movement_->has_unit(id)) return;
+    const mv::LocoState ds = movement_->deploy_state(id);
     if (ds != mv::LocoState::WalkDeploying && ds != mv::LocoState::WalkDeployed) return;
-    const float sf = types.get_float(u.type, "Scale_Factor");
+    const float sf = types.get_float(type, "Scale_Factor");
     const float sc = sf > 0.0f ? sf : 1.0f;
-    const float dx = types.get_float(u.type, "Custom_Hard_XExtent_Deployed");
-    const float dy = types.get_float(u.type, "Custom_Hard_YExtent_Deployed");
+    const float dx = types.get_float(type, "Custom_Hard_XExtent_Deployed");
+    const float dy = types.get_float(type, "Custom_Hard_YExtent_Deployed");
     if (dx > 0.0f) {
         hx = sc * dx;
         hy = sc * dy;  // with dy <= 0: 0 (the deployed y is used only together with the deployed x)

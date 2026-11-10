@@ -665,9 +665,13 @@ bool TacticalBattle::select_all_entry(objects::ObjectId id, int32_t owner, std::
 }
 
 // FIGHTER_FLYING §6.3.1 type data: Uses_Multiple_Locomotors (+0x74), Stationary_Space_Layer (+0x16e0), the query
-// half-extents 0x396850 (Custom_Hard_X/YExtent else |land model bbox max x / y|, x Scale_Factor) and the land model's
-// (type +0x2a0, no fallback to other modes' models) bounding box z for the hit value. Pure function of the type and the
-// model files: cached per type, not saved.
+// half-extents 0x396850 and the land model's (type +0x2a0, no fallback to other modes' models) box z for the hit value.
+// s78n t10 (TACTICAL_COMBAT §5.4.6 port spec item 1): the half-extents are 0x371be0 - both Custom_Hard extents > 0 ->
+// x Scale_Factor; else no land model -> (0, 0); else per axis the custom value or the |collision-bound half x / y|
+// (AvoidModel::bound_h, not |max| of the all-mesh bind-pose box), x Scale_Factor - and the hit value reads the collision
+// bound's centre z and half z, so clearance_top = (c.z + h.z) x Scale_Factor + O.z. No team or deployed branch: flyers
+// and Corvette-layer objects are neither. [port] a named land model that does not load (no art data): per axis the
+// custom value, else 0, and no hit value. Pure function of the type and the model files: cached per type, not saved.
 bool TacticalBattle::clearance_info(objects::ObjectId id, mv::ClearanceInfo& out) {
     const Unit* u = unit_by_id(id);
     const objects::GameObjectTypes& types = catalog_->types();
@@ -682,15 +686,16 @@ bool TacticalBattle::clearance_info(objects::ObjectId id, mv::ClearanceInfo& out
         ci.uses_multiple_locomotors = types.get_bool(t, "Uses_Multiple_Locomotors");
         ci.stationary_space_layer = static_cast<uint32_t>(types.get_int(t, "Stationary_Space_Layer"));
         ci.scale_factor = types.columns().scale_factor[t];
-        const BattleCatalog::ModelInfo* m = catalog_->model_info(t, false, false);
-        const bool box = m && m->has_bounds;
-        ci.has_box = box;
-        if (box) {
-            ci.box_lo_z = m->min[2];
-            ci.box_hi_z = m->max[2];
+        const mv::AvoidModel* am = catalog_->avoid_model(t, false);
+        const bool named = !ascii_trim(types.get_string(t, "Land_Model_Name")).empty();
+        ci.has_box = am != nullptr;
+        if (am) {
+            ci.box_lo_z = am->bound_c.z;
+            ci.box_hi_z = am->bound_h.z;
         }
         ci.half = mv::clearance_half_extents(types.get_float(t, "Custom_Hard_XExtent"), types.get_float(t, "Custom_Hard_YExtent"),
-                                             ci.scale_factor, box, box ? m->max[0] : 0.0f, box ? m->max[1] : 0.0f);
+                                             ci.scale_factor, am != nullptr || named, am ? am->bound_h.x : 0.0f,
+                                             am ? am->bound_h.y : 0.0f);
         clr_types_[t] = ci;
         clr_known_[t] = 1u;
     }
@@ -826,6 +831,21 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     });
     // cu8l t03 (CU8K_T03_T08_T09_RE §1.10 rule 1): the movement lock of the start fleet's hyperspace arrival (arrivals_).
     movement_->set_locked_fn([this](mv::ObjectId key) { return arrival_locked(key); });
+    // s78n t10 (TACTICAL_COMBAT §5.4.6 port spec item 4): the space composition's candidate boxes are the world AABB
+    // 0x3982b0 - the Space_Model_Name collision bound through the unit's yaw and Scale_Factor (as avoid_snapshot builds
+    // the avoidance members); a type without a space model name has no model (the 0.1 box at the position). [port] no
+    // model files in this run, or a named model that does not load: no data (MovementSystem keeps its stand-in).
+    if (space_)
+        movement_->set_model_bound_fn([this](mv::ObjectId id, const mv::AvoidModel*& model, float& scale) {
+            const Unit* u = unit_by_id(id);
+            const objects::GameObjectTypes& types = catalog_->types();
+            if (!u || u->type >= types.size() || !catalog_->files()) return false;
+            scale = types.columns().scale_factor[u->type];
+            model = nullptr;
+            if (ascii_trim(types.get_string(u->type, "Space_Model_Name")).empty()) return true;
+            model = catalog_->avoid_model(u->type, true);
+            return model != nullptr;
+        });
     // S8 t24 (MOVEMENT §3.2 "Turret recentre around deploy"): a Deploys unit's TURRET aims at its live current combat
     // target (0x632050 [inferred: whenever the unit has one]); the raw position, no z adjust [inferred].
     movement_->set_turret_aim_fn([this](objects::ObjectId id, float& x, float& y, float& z) {
@@ -2342,11 +2362,15 @@ void drop_half_extents(const objects::GameObjectTypes& types, const BattleCatalo
         hy = cy * sc;
         return;
     }
-    // a1h t06 (TACTICAL_GAPS §4.2.2 item 4): per axis, the hard extent when > 0, else the land model box; no model -> 0.
-    const BattleCatalog::ModelInfo* m = catalog ? catalog->model_info(type, false, true) : nullptr;
-    const bool mb = m && m->has_bounds;
-    hx = (cx > 0.0f ? cx : mb ? std::fabs(m->max[0]) : 0.0f) * sc;
-    hy = (cy > 0.0f ? cy : mb ? std::fabs(m->max[1]) : 0.0f) * sc;
+    // s78n t10 (TACTICAL_COMBAT §5.4.6 item 1 and port spec item 2, 0x371be0 with the land model; replaces a1h t06's
+    // |max| of the bind-pose box with a fallback to the other modes' models): no land model (0x3729f0 reads the land slot
+    // only) -> (0, 0), even with one custom set; else per axis the hard extent when > 0, else the |collision-bound half|
+    // of the land model. [port] a named land model that does not load (no art data, or no catalog): per axis the hard
+    // extent, else 0.
+    if (ascii_trim(types.get_string(type, "Land_Model_Name")).empty()) return;
+    const tactical::movement::AvoidModel* am = catalog ? catalog->avoid_model(type, false) : nullptr;
+    hx = (cx > 0.0f ? cx : am ? std::fabs(am->bound_h.x) : 0.0f) * sc;
+    hy = (cy > 0.0f ? cy : am ? std::fabs(am->bound_h.y) : 0.0f) * sc;
 }
 
 void drop_deployed_extents(const objects::GameObjectTypes& types, const BattleCatalog* catalog, uint32_t type, float& hx, float& hy) {
@@ -2864,9 +2888,20 @@ bool TacticalBattle::land_drop_valid(TacticalMode& mode, int32_t player, objects
         dmath::sincos(xb.yaw_deg * (dmath::kPiF / 180.0f), sn, cs);
         xb.cx = q.x + ox * cs - oy * sn;
         xb.cy = q.y + ox * sn + oy * cs;
-        // a1i t05 (§35.4 item 1, 0x396850 rule 2): a Deploys type with a locomotor while it deploys / is deployed (port:
-        // DEPLOY active [M: the locomotor pack +0x2b3 byte]) uses its deployed extents.
-        if (types.get_bool(t, "Deploys") && st.has_behavior(h, objects::beh::Locomotor) && abilities_ && abilities_->deployed(st.id(h)))
+        // a1i t05 (§35.4 item 1, 0x396850 rule 2): a Deploys type with a locomotor while it deploys / is deployed uses
+        // its deployed extents. s78n t10 (TACTICAL_COMBAT §5.4.6 item 4.3): Walk state 0x18 Deploying or 0x19 Deployed of
+        // a movement-backed unit (as unit_half_extents), else [port] DEPLOY active. [M, not ported] a land squad
+        // container's joint box as a blocker (whether 0x3b6170's tree query returns containers was not traced).
+        bool dep = false;
+        if (types.get_bool(t, "Deploys") && st.has_behavior(h, objects::beh::Locomotor)) {
+            if (movement_ && movement_->has_unit(st.id(h))) {
+                const mv::LocoState ds = movement_->deploy_state(st.id(h));
+                dep = ds == mv::LocoState::WalkDeploying || ds == mv::LocoState::WalkDeployed;
+            } else {
+                dep = abilities_ && abilities_->deployed(st.id(h));
+            }
+        }
+        if (dep)
             sim::drop_deployed_extents(types, catalog_, t, xb.hx, xb.hy);
         else
             sim::drop_half_extents(types, catalog_, t, xb.hx, xb.hy);
