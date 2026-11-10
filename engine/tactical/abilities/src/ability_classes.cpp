@@ -362,8 +362,10 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
     };
     auto chance_roll_lt = [&](float chance) { return draw_unit() < chance; };  // Earthquake / Telekinesis / Thief / Whirlwind
     switch (s.cls) {
+        case C::EnhanceDefense:  // s78n t04 (§5.4.4 item 3c): per-player entries, not a unit aura
+            enhance_defense_apply(o, sp, frame);
+            return true;
         case C::CombatBonus:
-        case C::EnhanceDefense:
         case C::BattlefieldModifier:
         case C::BasePower:
         case C::Weatherproof:
@@ -1429,8 +1431,8 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
 void AbilitySystem::class_remove(Obj& o, SpecialState& sp, uint32_t frame) {
     const SpecialAbilityDesc& s = data_->specials[sp.desc];
     switch (s.cls) {
+        case C::EnhanceDefense: return;  // s78n t04 (§5.4.4 item 3c): never removed (0x6fae20 is unreachable)
         case C::CombatBonus:
-        case C::EnhanceDefense:
         case C::BattlefieldModifier:
         case C::BasePower:
         case C::Weatherproof:

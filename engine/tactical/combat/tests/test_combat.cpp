@@ -1684,6 +1684,69 @@ void test_gaps_constants() {
     }
 }
 
+// s78n t02 (TACTICAL_COMBAT §5.4.4 item 1): slot 46 "inside min range" in full - E is the X half-extent, or the Y one when
+// U's UNNORMALISED offset along X's facing is <= 0.7071 (slot 43 normalises); a LAND_OBSTACLE target has no E (centre
+// distance, no aim walk); a team-member target is retested against its team's live member nearest U (3-D squared
+// distance, strict <), its own position and E. The weapon min range of the targeting scan is the same test.
+void test_s78n_min_range_slot46() {
+    auto world = [](TargetWorld& t, uint32_t& td, uint32_t& od, uint32_t& ad) {
+        UnitDesc a = t.w.data.units[t.attacker];
+        a.min_attack_distance = 20.0f;
+        ad = push_unit(t.w.data, a);
+        UnitDesc x = t.w.data.units[t.capital];
+        x.hard_x_extent = 4.0f;  // along the facing
+        x.hard_y_extent = 2.0f;
+        td = push_unit(t.w.data, x);
+        x.land_obstacle = true;
+        od = push_unit(t.w.data, x);
+        t.w.make();
+    };
+    {  // the facing test on the unnormalised offset
+        TargetWorld t;
+        uint32_t td = 0, od = 0, ad = 0;
+        world(t, td, od, ad);
+        t.w.add(1, ad, 0, Vec3{-5.0f, 22.0f, 0.0f});
+        t.w.add(2, td, 1, Vec3{0, 0, 0}, {1, 0, 0});
+        // D = 22.56; offset along the facing 5 > 0.7071 -> E = 4: 22.56 <= 24 (slot 43's normalised 0.22 would pick Y: 22)
+        CHECK(t.w.sys->inside_min_range(1, 2));
+        t.w.sys->set_position(1, Vec3{-0.5f, 22.5f, 0.0f});  // offset 0.5 <= 0.7071 -> E = 2: 22.5056 > 22
+        CHECK(!t.w.sys->inside_min_range(1, 2));
+        t.w.sys->set_position(1, Vec3{-0.5f, 21.9f, 0.0f});  // 21.906 <= 22
+        CHECK(t.w.sys->inside_min_range(1, 2));
+        float D = 0.0f, E = 0.0f;
+        CHECK(t.w.sys->min_range_geometry_of(2, Vec3{-30.0f, 0.0f, 0.0f}, D, E) && D == 30.0f && E == 4.0f);
+        CHECK(!t.w.sys->min_range_geometry_of(99, Vec3{}, D, E) && D == 0.0f && E == 0.0f);
+    }
+    {  // LAND_OBSTACLE: D <= r on the centres (slot 43 would add the half-extent here: no obstacle query)
+        TargetWorld t;
+        uint32_t td = 0, od = 0, ad = 0;
+        world(t, td, od, ad);
+        t.w.add(1, ad, 0, Vec3{-22.0f, 0.0f, 0.0f});
+        t.w.add(2, od, 1, Vec3{0, 0, 0}, {1, 0, 0});
+        CHECK(!t.w.sys->inside_min_range(1, 2));  // 22 > 20 (before: 22 <= 20 + 4)
+        t.w.sys->set_position(1, Vec3{-20.0f, 0.0f, 0.0f});
+        CHECK(t.w.sys->inside_min_range(1, 2));
+        float D = 0.0f, E = 0.0f;
+        CHECK(t.w.sys->min_range_geometry_of(2, Vec3{-20.0f, 0.0f, 0.0f}, D, E) && D == 20.0f && E == 0.0f);
+    }
+    {  // team members: the member nearest the attacker decides, in inside_min_range and in the scan
+        TargetWorld t;
+        uint32_t td = 0, od = 0, ad = 0;
+        world(t, td, od, ad);
+        t.w.add(1, ad, 0, Vec3{0, 0, 0});
+        add_team_unit(t, 2, td, 1, Vec3{100.0f, 0.0f, 0.0f}, 50, true);
+        add_team_unit(t, 3, td, 1, Vec3{15.0f, 0.0f, 0.0f}, 50, false);
+        t.w.tick();  // phase A: the team member lists
+        CHECK(t.w.sys->inside_min_range(1, 3));
+        CHECK(t.w.sys->inside_min_range(1, 2));  // 2 is 100 away, but its squad mate 3 is 15 <= 20 + 4
+        CHECK(t.w.sys->auto_target(1) == kNoObject);  // neither member can be acquired
+        // 3-D: the mate high above (z 400) is no longer the nearest member; 2 is tested on its own (100 > 24)
+        t.w.sys->set_position(3, Vec3{15.0f, 0.0f, 400.0f});
+        CHECK(!t.w.sys->inside_min_range(1, 2));
+        CHECK(!t.w.sys->inside_min_range(1, 3));  // 3 is retested against 2, now the nearer member in 3-D
+    }
+}
+
 // OI tactical: TACTICAL_GAPS 3.1 slot 43 with a LAND_OBSTACLE target (aim walk toward the attacker over the cells the
 // target occupies, cell-centre snap, E = sqrt(200)); OI abilities: the weapon index obj +0x324 into Projectile_Types.
 void test_land_obstacle_and_weapon_index() {
@@ -1772,10 +1835,12 @@ void test_land_obstacle_and_weapon_index() {
             inside_min = t.w.sys->inside_min_range(1, 2);
         };
         bool taken = false, inside = false;
-        // Map stamp id -1 (not the object's id): NoFootprint -> E = radius 300: 1250 <= 1300 taken, 1250 <= 1000 + 300
-        // inside the min range.
+        // Map stamp id -1 (not the object's id): NoFootprint -> E = radius 300: 1250 <= 1300 taken. s78n t02 (§5.4.4 item
+        // 1, slot 46 step 7): the min range of a LAND_OBSTACLE target is the bare centre distance D <= r (no E, no walk).
+        run(0.0f, 1250.0f, taken, inside);
+        CHECK(!taken && inside);  // 1250 <= 1250: the min range rejects it in the scan too
         run(0.0f, 1000.0f, taken, inside);
-        CHECK(!taken && inside);  // min range 1000 rejects it in the scan too
+        CHECK(taken && !inside);  // 1250 > 1000 (slot 43's E of 300 is not added)
         run(0.0f, 0.0f, taken, inside);
         CHECK(taken && !inside);
         // The stamp handed to object 2 (rekey): walk 1250 -> 1050 (cell 53, occupied) -> 1030 (cell 52, free, centre 1040).
@@ -1786,16 +1851,20 @@ void test_land_obstacle_and_weapon_index() {
         CHECK(taken);  // 1010 <= 1014.14
         run(20.0f, 0.0f, taken, inside);
         CHECK(!taken);  // 1020 > 1014.14
+        run(40.0f, 1210.0f, taken, inside);
+        CHECK(!taken && inside);  // max: 1000 in range; min: centre 1210 <= 1210 inside -> rejected
         run(40.0f, 1000.0f, taken, inside);
-        CHECK(!taken && inside);  // max: 1000 in range; min: 1000 <= 1000 + 14.14 inside -> rejected
+        CHECK(taken && !inside);  // s78n t02: centre 1210 > 1000 (the walked cell and sqrt(200) are slot 43 only)
         run(60.0f, 950.0f, taken, inside);
-        CHECK(taken && !inside);  // d = 980: in max range, outside 950 + 14.14
-        // Attacker on the far side (x = 1500): the walk goes +x to cell 74 (centre 1480), d = 20.
+        CHECK(taken && !inside);  // centre 1190: in max range (980 walked), outside 950
+        // Attacker on the far side (x = 1500): the walk goes +x to cell 74 (centre 1480), d = 20; the centre is 250 away.
+        run(1500.0f, 250.0f, taken, inside);
+        CHECK(!taken && inside);  // 250 <= 250
         run(1500.0f, 10.0f, taken, inside);
-        CHECK(!taken && inside);  // 20 <= 10 + 14.14: inside a min range of 10
+        CHECK(taken && !inside);  // s78n t02: 250 > 10 (before: walked 20 <= 10 + 14.14)
         // [port] attacker inside the footprint (x = 1300, len 50): steps 1250 / 1270 / 1290 / 1310, then walked 60 > 50
-        // stops on an occupied cell (66, centre 1320): d = 20.
-        run(1300.0f, 10.0f, taken, inside);
+        // stops on an occupied cell (66, centre 1320): d = 20. The min range reads the centre, 50 away.
+        run(1300.0f, 50.0f, taken, inside);
         CHECK(!taken && inside);
         run(1300.0f, 0.0f, taken, inside);
         CHECK(taken && !inside);
@@ -6550,6 +6619,7 @@ int main(int argc, char** argv) {
     test_team_targeting();
     test_gaps_constants();
     test_land_obstacle_and_weapon_index();
+    test_s78n_min_range_slot46();  // s78n t02
     test_fog_filter();
     test_attack_move_object();
     test_hardpoint_fire_routing();

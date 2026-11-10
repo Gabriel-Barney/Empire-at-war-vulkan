@@ -433,11 +433,15 @@ bool CombatSystem::inside_min_range(ObjectId attacker, ObjectId target) const {
     const Unit* a = unit(attacker);
     const Unit* t = unit(target);
     if (!a || !t) return false;
-    const float mn = desc_of(*a).min_attack_distance;
-    if (!(mn > 0.0f)) return false;
-    float d = 0.0f, E = 0.0f;
-    range_geometry(*t, a->pos, d, E);
-    return d <= mn + E;
+    return min_range_hit(*t, a->pos, desc_of(*a).min_attack_distance);  // s78n t02: slot 46, not slot 43's E
+}
+bool CombatSystem::min_range_geometry_of(ObjectId target, Vec3 from, float& D, float& E) const {
+    D = 0.0f;
+    E = 0.0f;
+    const Unit* t = unit(target);
+    if (!t) return false;
+    min_range_geometry(*t, from, D, E);
+    return true;
 }
 bool CombatSystem::range_geometry_of(ObjectId target, Vec3 from, float& d, float& E) const {
     d = 0.0f;
@@ -802,10 +806,8 @@ float CombatSystem::target_extent(const Unit& t, Vec3 from) const {
     // max.x / max.y| x Scale_Factor (model_x / y_extent); [port] the radius only when the host gave no model data. The
     // +10 for a moving team and the melee redirect apply to team-container targets, which the port never has
     // (candidates are units / members); the LAND_OBSTACLE walk is range_geometry.
-    const UnitDesc& td = desc_of(t);
-    const float ex = td.hard_x_extent > 0.0f ? td.hard_x_extent : td.model_x_extent >= 0.0f ? td.model_x_extent : td.radius;
-    const float ey = td.hard_y_extent > 0.0f ? td.hard_y_extent : td.model_y_extent >= 0.0f ? td.model_y_extent : td.radius;
-    if (!(td.hard_x_extent > 0.0f) && !(td.hard_y_extent > 0.0f) && td.model_x_extent < 0.0f) return td.radius;
+    float ex = 0.0f, ey = 0.0f;
+    if (!footprint_extents(t, ex, ey)) return ex;
     float dx = t.pos.x - from.x, dy = t.pos.y - from.y;
     const float l2 = dx * dx + dy * dy;
     if (!(l2 > 0.0f)) return 0.0f;  // zero offset counts as in range
@@ -823,6 +825,82 @@ float CombatSystem::target_extent(const Unit& t, Vec3 from) const {
         fy = 0.0f;
     }
     return abs_f(fx * dx + fy * dy) > 0.7071f ? ex : ey;
+}
+
+bool CombatSystem::footprint_extents(const Unit& t, float& ex, float& ey) const {
+    const UnitDesc& td = desc_of(t);
+    if (!(td.hard_x_extent > 0.0f) && !(td.hard_y_extent > 0.0f) && td.model_x_extent < 0.0f) {
+        ex = ey = td.radius;
+        return false;
+    }
+    ex = td.hard_x_extent > 0.0f ? td.hard_x_extent : td.model_x_extent >= 0.0f ? td.model_x_extent : td.radius;
+    ey = td.hard_y_extent > 0.0f ? td.hard_y_extent : td.model_y_extent >= 0.0f ? td.model_y_extent : td.radius;
+    return true;
+}
+
+void CombatSystem::min_range_geometry(const Unit& t, Vec3 from, float& D, float& E) const {
+    // s78n t02 (TACTICAL_COMBAT §5.4.4 item 1, slot 46 0x5683a0 steps 2 / 6 / 7): D = the XY centre distance. With
+    // LAND_OBSTACLE the aim walk's result is never used: E = 0. Else p = |cos th * (-dx) + sin th * (-dy)| with d = Q -
+    // P_U NOT normalised (slot 43 normalises; slot 46 does not), so p is U's offset along X's facing in world units:
+    // p > 0.7071 -> the X half-extent, else the Y half-extent. [port] the facing vector is normalised to (cos th, sin th);
+    // a zero facing reads as +x. The model-less radius fallback is slot 43's (target_extent).
+    D = distance_xy(from, t.pos);
+    if (desc_of(t).land_obstacle) {
+        E = 0.0f;
+        return;
+    }
+    float ex = 0.0f, ey = 0.0f;
+    if (!footprint_extents(t, ex, ey)) {
+        E = ex;
+        return;
+    }
+    float fx = t.facing.x, fy = t.facing.y;
+    const float f2 = fx * fx + fy * fy;
+    if (f2 > 0.0f) {
+        const float fi = 1.0f / dmath::sqrt(f2);
+        fx = fx * fi;
+        fy = fy * fi;
+    } else {
+        fx = 1.0f;
+        fy = 0.0f;
+    }
+    const float px = from.x - t.pos.x, py = from.y - t.pos.y;
+    E = abs_f(fx * px + fy * py) > 0.7071f ? ex : ey;
+}
+
+const CombatSystem::Unit* CombatSystem::nearest_team_member(uint32_t team, Vec3 p) const {
+    // s78n t02 (0x404fc0, §5.4.4 item 1): member array in order, 3-D squared distance, best replaced only by a strictly
+    // smaller value (ties keep the earlier member). [port] the member order is team_members_ (ascending id, rebuilt in
+    // phase A); members dead since then are skipped (retail does no alive test [M]).
+    const Unit* best = nullptr;
+    float bd = 0.0f;
+    auto it = std::lower_bound(team_members_.begin(), team_members_.end(), std::make_pair(team, ObjectId{-1}));
+    for (; it != team_members_.end() && it->first == team; ++it) {
+        const Unit* m = unit(it->second);
+        if (!live(m)) continue;
+        const float dx = m->pos.x - p.x, dy = m->pos.y - p.y, dz = m->pos.z - p.z;
+        const float d2 = (dx * dx + dy * dy) + dz * dz;
+        if (!best || d2 < bd) {
+            best = m;
+            bd = d2;
+        }
+    }
+    return best;
+}
+
+bool CombatSystem::min_range_hit(const Unit& t, Vec3 from, float r) const {
+    // s78n t02 (TACTICAL_COMBAT §5.4.4 item 1): slot 46 for the weapon min range (no pending-ability override): step 4 -
+    // a team-member target (its team is not itself) is retested against its team's member nearest P_U (its own position
+    // and E); step 5 - r <= 0 -> false (d = 0 on all axes -> true follows from D <= r + E); steps 6 / 7. [port] step 1
+    // (the melee redirect of a container target) is not run here: combat targets are units / members, and no melee
+    // attacker has a Targeting_Min_Attack_Distance.
+    if (!(r > 0.0f)) return false;
+    const Unit* x = &t;
+    if (t.team != 0 && t.team != static_cast<uint32_t>(t.id))
+        if (const Unit* m = nearest_team_member(t.team, from)) x = m;
+    float D = 0.0f, E = 0.0f;
+    min_range_geometry(*x, from, D, E);
+    return D <= r + E;
 }
 
 const CombatSystem::Unit* CombatSystem::team_head(const Unit& u) const {
@@ -1173,10 +1251,11 @@ bool CombatSystem::candidate_ok(const Unit& a, const Unit& t, float range) const
     // 45 "inside min range" (d <= Targeting_Min_Attack_Distance + E, types with a min distance only); E = the target's
     // footprint half-extent along the line of sight. OR the target is the container's (squad head's) current target
     // (team targeting, filter 9 [H]). S8 t04 (LOB_SOLVER §3.1): a grenade weapon's slot 44 is the lob solver alone (no R,
-    // E, FireRange modifier or LAND_OBSTACLE walk); slot 45 is unchanged.
+    // E, FireRange modifier or LAND_OBSTACLE walk); slot 45 is unchanged. s78n t02: slot 45 is slot 46 in full
+    // (min_range_hit: its own E, no aim walk, the nearest-member retest), not slot 43's d / E.
     const ProjectileDesc* gw = grenade_weapon(a);
     float d = 0.0f, E = 0.0f;
-    if (!gw || ad.min_attack_distance > 0.0f) range_geometry(t, a.pos, d, E);  // OI tactical: + the LAND_OBSTACLE aim walk
+    if (!gw) range_geometry(t, a.pos, d, E);  // OI tactical: + the LAND_OBSTACLE aim walk
     const bool head_target = head && current_target(head->id) == t.id;
     const bool in_max = gw ? lob_in_range(a, *gw, t) : d <= range + E;
     // S8 t17 (FIGHTER_FLYING §4.10 A, last paragraph): beyond R, a formation unit also accepts c when 0x4160a0(F, u, c)
@@ -1186,7 +1265,7 @@ bool CombatSystem::candidate_ok(const Unit& a, const Unit& t, float range) const
         return (a.flags & kUnitScanQuery) && scan_range_ && scan_range_(a.id, t.id, range, rr) != 0;
     };
     if (!in_max && !head_target && !responds()) return false;
-    if (ad.min_attack_distance > 0.0f && d <= ad.min_attack_distance + E && !head_target) return false;
+    if (!head_target && min_range_hit(t, a.pos, ad.min_attack_distance)) return false;
     // 10: stealth
     if ((t.flags & kUnitStealthed) && !ad.target_stealth_units && a.owner != t.owner) return false;
     // 4: fully fogged for the attacker's player (FOW_Object_Hidden 0x35f470 with force 1 - TACTICAL_GAPS 5.8: AI
@@ -1292,8 +1371,7 @@ bool CombatSystem::promote_goal(Unit& u) {
         const float range = fire_range(base_attack_range(u), mod_r(u, ModList::FireRange));
         if (!(d <= range + E)) return false;  // slot 44
     }
-    const float mn = desc_of(u).min_attack_distance;
-    if (mn > 0.0f && d <= mn + E) return false;  // slot 45
+    if (min_range_hit(*t, u.pos, desc_of(u).min_attack_distance)) return false;  // slot 45 -> 46 (s78n t02)
     int32_t hp = -1;
     if (u.goal_hp >= 0 && static_cast<uint32_t>(u.goal_hp) < t->hp_count && !hp_dead(hps_[t->hp_begin + static_cast<uint32_t>(u.goal_hp)]))
         hp = u.goal_hp;  // no goal hardpoint: none pushed (§2.9 Q3; the space formation step fills it in)
@@ -1594,11 +1672,11 @@ bool CombatSystem::unit_weapon_allowed(const Unit& u) const {
 bool CombatSystem::in_attack_range(const Unit& u, Vec3 from, const Unit& t) const {
     // Slot 44 && !slot 45 (TACTICAL_COMBAT §3.1.1 "Gate details" step 7, LOB_SOLVER §8 item 22): In_Max_Range (XY distance
     // <= R + E with the LAND_OBSTACLE aim walk; for a grenade weapon the lob solver alone, LOB_SOLVER §3.1) and not inside
-    // Targeting_Min_Attack_Distance + E, from the targeting object's position.
+    // Targeting_Min_Attack_Distance + E, from the targeting object's position (s78n t02: slot 46's own E, min_range_hit).
     const UnitDesc& ud = desc_of(u);
     const ProjectileDesc* gw = grenade_weapon(u);
     float d = 0.0f, E = 0.0f;
-    if (!gw || ud.min_attack_distance > 0.0f) range_geometry(t, from, d, E);
+    if (!gw) range_geometry(t, from, d, E);
     if (gw) {
         LobSolution s;  // as lob_in_range (one pass at Max_Speed decides the yes / no)
         if (!lob_solve(from, lob_target_point(t), gw->max_speed, lob_g(*gw), false, s)) return false;
@@ -1606,7 +1684,7 @@ bool CombatSystem::in_attack_range(const Unit& u, Vec3 from, const Unit& t) cons
         const float range = fire_range(base_attack_range(u), mod_r(u, ModList::FireRange));
         if (!(d <= range + E)) return false;
     }
-    return !(ud.min_attack_distance > 0.0f && d <= ud.min_attack_distance + E);
+    return !min_range_hit(t, from, ud.min_attack_distance);
 }
 
 bool CombatSystem::attacking(ObjectId id) const {

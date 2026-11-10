@@ -156,7 +156,7 @@ enum class SpecialClass : uint8_t {
     ForceSight,       // Force_Sight_Ability (FOG_OF_WAR.md §3.3: Reveal_All for the owner while channelling)
     // ---- OI abilities (TACTICAL_GAPS.md §2.3, TACTICAL_COMBAT §4.3) ----
     CombatBonus,          // Combat_Bonus_Ability (aura: object ModifierSet entries, event-driven)
-    EnhanceDefense,       // Enhance_Defense_Ability [inferred: a list-0 aura]
+    EnhanceDefense,       // Enhance_Defense_Ability: permanent per-player list-0 entries (s78n t04, TACTICAL_COMBAT §5.4.4 3c)
     BattlefieldModifier,  // Battlefield_Modifier_Ability (player-level lists, §2.3.11)
     ForceHealing,         // Force_Healing_Ability (§2.3.1)
     Berserker,            // Berserker_Ability (§2.3.2)

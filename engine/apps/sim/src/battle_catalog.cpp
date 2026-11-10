@@ -733,6 +733,8 @@ ta::AbilityObjectDesc BattleCatalog::ability_desc(uint32_t t, BuildState& s) con
     // s78m t05 (TACTICAL_COMBAT §5.4.3 item 4): the Combat_Bonus accept refuses the source type's unique units
     d.unique_ground_type = type_or_none(ty.get_string(t, "Unique_Ground_Unit"));
     d.unique_space_type = type_or_none(ty.get_string(t, "Unique_Space_Unit"));
+    // s78n t04 (TACTICAL_COMBAT §5.4.4 item 3b): a Combat_Bonus source buffs itself only with this type flag
+    d.apply_self_on_creation = ty.get_bool(t, "Apply_Special_Ability_To_Self_On_Creation");
     // 0x3979d0 [port: the mode's FOW reveal range column; land for land battles is not distinguished here]
     if (ty.get_bool(t, "Target_Stealth_Units")) d.stealth_detection_range = ty.columns().space_fow_reveal_range[t];
     ta::AbilityResolvers r;

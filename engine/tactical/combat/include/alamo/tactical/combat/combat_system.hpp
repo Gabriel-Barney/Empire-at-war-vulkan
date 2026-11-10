@@ -1076,8 +1076,14 @@ public:
     // Get_Base_Attack_Range and Targeting_Min_Attack_Distance of a unit (staging, §2.8; 0 for an unknown id).
     float base_attack_range_of(ObjectId id) const;
     float min_attack_distance(ObjectId id) const;
-    // Slot 45 "inside min range" (TACTICAL_GAPS §3.1): types with a min distance only; false for unknown ids.
+    // Slot 45 "inside min range" (TACTICAL_GAPS §3.1): types with a min distance only; false for unknown ids. s78n t02:
+    // slot 46 in full (TACTICAL_COMBAT §5.4.4 item 1, min_range_hit).
     bool inside_min_range(ObjectId attacker, ObjectId target) const;
+    // s78n t02 (TACTICAL_COMBAT §5.4.4 item 1, slot 46 steps 6 / 7): the centre distance D (XY) from `from` to the target
+    // and the min-range target term E: 0 for a LAND_OBSTACLE target (no aim walk, no sqrt(200)); else the X footprint
+    // half-extent, or the Y half-extent when U's offset along X's facing (unnormalised, |f . (from - X)|) is <= 0.7071.
+    // False (D = E = 0) for an unknown id.
+    bool min_range_geometry_of(ObjectId target, Vec3 from, float& D, float& E) const;
     // s78m t08 (TACTICAL_COMBAT §5.4.2 slot 43 steps 2 / 5, the ability range): the XY distance `d` from `from` to the
     // target's aim point and the target term `E` of the weapon range test (footprint half-extent along the line of sight,
     // or the LAND_OBSTACLE aim walk with sqrt(200)). False (d = E = 0) for an unknown id.
@@ -1711,6 +1717,17 @@ private:
     float target_extent(const Unit& t, Vec3 from) const;  // OI tactical: TACTICAL_GAPS 3.1 footprint half-extent E
     // TACTICAL_GAPS 3.1 slot 43 range geometry: XY distance from `from` to the aim point and the slack E.
     void range_geometry(const Unit& t, Vec3 from, float& d, float& E) const;
+    // s78n t02: the footprint half-extents (Custom_Hard_X/YExtent, model box, radius fallback) shared by slots 43 and 46;
+    // false when the unit has neither hard extents nor model data (both are then the radius).
+    bool footprint_extents(const Unit& t, float& ex, float& ey) const;
+    // s78n t02 (TACTICAL_COMBAT §5.4.4 item 1): slot 46 steps 6 / 7 (min_range_geometry_of) and the whole weapon min
+    // range test from `from` with min distance r (steps 4 - 7): a team-member target is retested against its team's live
+    // member nearest `from` (nearest_team_member), r <= 0 -> false, else D <= r + E.
+    void min_range_geometry(const Unit& t, Vec3 from, float& D, float& E) const;
+    bool min_range_hit(const Unit& t, Vec3 from, float r) const;
+    // s78n t02 (0x404fc0): the team's live member nearest `p` by 3-D squared distance, strict < (ties: the first in
+    // team_members_ order, ascending id); nullptr when none.
+    const Unit* nearest_team_member(uint32_t team, Vec3 p) const;
     int32_t fired_weapon_projectile(const Unit& u) const;  // OI abilities: Projectile_Types[obj +0x324]
     bool sticky(const Unit& u, const Unit& target, uint32_t frame) const;
     // cu8f t04a: time-to-dead 0x58ba40 of one unit (destroyable hard points' health when it has any, else the hull; +

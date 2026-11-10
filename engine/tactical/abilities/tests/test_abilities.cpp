@@ -24,6 +24,7 @@
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/hash.hpp"
+#include "alamo/core/log.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
@@ -2096,7 +2097,7 @@ void test_oi_auras() {
     w.add(5, hd, 0, {300, 0, 0});  // a second source, same stacking category
     CHECK_EQ(w.sys->modifier(1, ModList::Damage), 0.25f);
     CHECK_EQ(w.sys->modifier(3, ModList::Damage), 0.25f);  // added after the source
-    CHECK_EQ(w.sys->modifier(2, ModList::Damage), 0.25f);  // the source itself matches
+    CHECK_EQ(w.sys->modifier(2, ModList::Damage), 0.25f);  // from the second source 5 (s78n t04: not from itself)
     CHECK_EQ(w.sys->modifier(4, ModList::Damage), 0.0f);   // other owner
     CHECK_EQ(w.sys->max_health(1), 300.0f);
     CHECK_EQ(w.sys->health(1), 300.0f);  // current += new max - old max
@@ -4453,6 +4454,7 @@ void test_cu8f_abilities_disabled() {
     AbilityObjectDesc hero;
     hero.unit_abilities = {rec(kSprint, 2.0f, 4.0f)};
     hero.specials = {as, ld, eq};
+    hero.apply_self_on_creation = true;  // s78n t04: the aura reaches its own source only with this type flag
     const uint32_t hd = push(w.cd, w.ad, oi_unit("Hero", 100.0f), hero);
     w.make();
     w.add(1, ud, 0, {0, 0, 0});
@@ -4603,6 +4605,9 @@ struct BribeRangeCase {
     float ex = 3.0f, ey = 3.0f, min_range = 0.0f, user_min = 0.0f;
     bool squad = false, hook = false;
     bool melee = false;  // s78n t01: Tyber's Targeting_Max_Attack_Distance 40 (<= Melee_Cutoff_Range 51), else 90
+    // s78n t02: the host reports container 25's slot layout (slots along +/-6, member half-extents 3, MaxJiggleDistance
+    // 1, facing +x): joint box half-extents X 10, Y 4.
+    bool slots = false;
 };
 int bribe_range_tick(const BribeRangeCase& c) {
     OiWorld w;
@@ -4636,6 +4641,14 @@ int bribe_range_tick(const BribeRangeCase& c) {
             pos = tp;
             return true;
         };
+        if (c.slots)
+            h.land_squad_slots = [](ObjectId id, std::vector<SquadSlot>& sl, float& jiggle, Vec3& facing) {
+                if (id != 25) return false;
+                sl = {SquadSlot{-6.0f, 0.0f, 3.0f, 3.0f}, SquadSlot{6.0f, 0.0f, 3.0f, 3.0f}};
+                jiggle = 1.0f;
+                facing = Vec3{2.0f, 0.0f, 0.0f};  // not normalised: the host's facing vector
+                return true;
+            };
         w.ab->set_host(std::move(h));
     }
     w.add(1, ad, 0, c.path.front());
@@ -4763,6 +4776,7 @@ struct HackRangeCase {
     Vec3 user{0, 0, 0}, xp{0, 0, 0};
     float max_range = 100.0f, min_range = 0.0f, user_min = 0.0f, ex = 4.0f, ey = 2.0f;
     bool grenade = false;
+    bool obstacle = false;  // s78n t02: X has LAND_OBSTACLE
 };
 bool hack_range_applies(const HackRangeCase& c) {
     OiWorld w;
@@ -4796,6 +4810,7 @@ bool hack_range_applies(const HackRangeCase& c) {
     UnitDesc xu = oi_unit("Turret", 100.0f, 5.0f, 16);  // infantry
     xu.hard_x_extent = c.ex;
     xu.hard_y_extent = c.ey;
+    xu.land_obstacle = c.obstacle;
     const uint32_t xd = push(w.cd, w.ad, xu, AbilityObjectDesc{});
     CombatConfig cfg;
     cfg.short_range_cutoff = 51.0f;
@@ -4852,6 +4867,214 @@ void test_hack_repair_range() {
 // table [M]) and Battlefield_Modifier (CU8F_T04_T06_RE §3.3, 0x6f1130) take the owner and the players allied with it by
 // the relation-0 test (the host's allied_players): a neutral player (relation 2: not an enemy, not allied) gets nothing.
 // Cancel_Special (0x6f4060) accepts a neutral target. Without the hook the fallback "not an enemy" counts the neutral.
+// s78n t02 (TACTICAL_COMBAT §5.4.4 item 1): the too-close half of the ability range is slot 46 in full - E is the X
+// half-extent, or the Y one only when U's unnormalised offset along X's facing is <= 0.7071; a LAND_OBSTACLE target has
+// no E; the weapon-min-range retest picks the member nearest in 3-D; Tactical_Bribe's container T is too close when
+// dt <= r + E_T, E_T the members' joint box (0x404450).
+void test_s78n_min_range() {
+    {  // the joint box: starts at the container's own point, half the span + MaxJiggleDistance
+        float hx = -1.0f, hy = -1.0f;
+        squad_joint_half_extents({}, 2.0f, hx, hy);
+        CHECK(hx == 2.0f && hy == 2.0f);
+        const SquadSlot one[] = {SquadSlot{5.0f, 0.0f, 1.0f, 1.0f}};  // x [0, 6] (the origin is in the box), y [-1, 1]
+        squad_joint_half_extents(one, 0.5f, hx, hy);
+        CHECK(hx == 3.5f && hy == 1.5f);
+        const SquadSlot two[] = {SquadSlot{-6.0f, -2.0f, 3.0f, 3.0f}, SquadSlot{6.0f, 4.0f, 3.0f, 2.0f}};
+        squad_joint_half_extents(two, 0.0f, hx, hy);  // x [-9, 9], y [-5, 6]
+        CHECK(hx == 9.0f && hy == 5.5f);
+    }
+    for (SpecialClass cls : {SpecialClass::Hack, SpecialClass::Repair}) {
+        HackRangeCase c;  // X at the origin facing +x, extents X 4 / Y 2; Activation_Min_Range 20
+        c.cls = cls;
+        c.min_range = 20.0f;
+        c.user = Vec3{-5.0f, 22.0f, 0.0f};  // D 22.56; offset along the facing 5 > 0.7071 -> E = 4: too close
+        CHECK(!hack_range_applies(c));      // (slot 43's normalised test, 0.22, would have picked Y: 22.56 > 22)
+        c.user = Vec3{-0.5f, 22.5f, 0.0f};  // offset 0.5 -> E = 2: 22.5056 > 22
+        CHECK(hack_range_applies(c));
+        c.obstacle = true;  // LAND_OBSTACLE: D <= r on the centres, no E
+        c.user = Vec3{-22.0f, 0.0f, 0.0f};
+        CHECK(hack_range_applies(c));  // 22 > 20 (before: 22 <= 20 + 4)
+        c.user = Vec3{-20.0f, 0.0f, 0.0f};
+        CHECK(!hack_range_applies(c));
+    }
+    {  // the weapon min range's nearest member is the nearest in 3-D (0x404fc0): a mate 20 away in XY but 500 above is
+       // farther than X (80): X is tested on its own and is not too close
+        BribeRangeCase u;
+        u.user_min = 30.0f;
+        u.squad = true;
+        u.xp = Vec3{50.0f, 0.0f, 0.0f};
+        u.mate = Vec3{-10.0f, 0.0f, 500.0f};
+        u.path = std::vector<Vec3>{Vec3{-30.0f, 0.0f, 0.0f}};
+        CHECK(bribe_range_tick(u) == 0);
+        u.mate = Vec3{-10.0f, 0.0f, 0.0f};  // in the plane it is the nearest (20 <= 33): refused
+        CHECK(bribe_range_tick(u) == -1);
+    }
+    {  // T's too-close term: X too close (5 <= 20 + 3) in each case, so T decides; T at the origin facing +x
+        BribeRangeCase m;
+        m.squad = true;
+        m.hook = true;
+        m.min_range = 20.0f;
+        m.xp = Vec3{-20.0f, 0.0f, 0.0f};
+        m.path = std::vector<Vec3>{Vec3{-25.0f, 0.0f, 0.0f}};
+        CHECK(bribe_range_tick(m) == 0);  // [port] no slot layout from the host: E_T = 0, 25 > 20
+        m.slots = true;                   // along T's facing: E_T = the X half-extent 6 + 3 + 1 = 10
+        CHECK(bribe_range_tick(m) == -1);  // 25 <= 30: both too close, refused
+        m.path = std::vector<Vec3>{Vec3{-30.5f, 0.0f, 0.0f}};
+        CHECK(bribe_range_tick(m) == 0);  // 30.5 > 30
+        m.xp = Vec3{0.0f, -20.0f, 0.0f};  // across T's facing (offset 0): E_T = the Y half-extent 3 + 1 = 4
+        m.path = std::vector<Vec3>{Vec3{0.0f, -25.0f, 0.0f}};
+        CHECK(bribe_range_tick(m) == 0);  // 25 > 24
+        m.path = std::vector<Vec3>{Vec3{0.0f, -24.0f, 0.0f}};
+        CHECK(bribe_range_tick(m) == -1);
+    }
+}
+
+// s78n t04 (TACTICAL_COMBAT §5.4.4 items 3a - 3c): a Combat_Bonus source does not buff itself (unless its type has
+// Apply_Special_Ability_To_Self_On_Creation); Specific_Faction replaces the ally test by "the target owner's faction is
+// that faction" (an unknown name: unset, with the validate's warning); Enhance_Defense appends one permanent list-0
+// entry per source to the owner's (or every ally's) player set, read by every unit of that player, never removed.
+void test_s78n_combat_bonus_and_enhance_defense() {
+    {  // the source itself
+        for (const bool self : {false, true}) {
+            OiWorld w;
+            SpecialAbilityDesc cb = oi_special("CB", SpecialClass::CombatBonus, ActivationStyle::SpaceAutomatic);
+            cb.bonus[static_cast<size_t>(ModList::Damage)] = 0.25f;
+            const uint32_t cs = add_special(w.ad, cb);
+            AbilityObjectDesc hero;
+            hero.specials = {cs};
+            hero.apply_self_on_creation = self;
+            const uint32_t hd = push(w.cd, w.ad, oi_unit("Hero", 100.0f), hero);
+            const uint32_t sd = push(w.cd, w.ad, oi_unit("Ship", 100.0f), AbilityObjectDesc{});
+            w.make();
+            w.add(1, sd, 0, {0, 0, 0});
+            w.add(2, hd, 0, {100, 0, 0});
+            CHECK_EQ(w.sys->modifier(1, ModList::Damage), 0.25f);
+            CHECK_EQ(w.sys->modifier(2, ModList::Damage), self ? 0.25f : 0.0f);
+        }
+    }
+    {  // Specific_Faction: factions Empire 0 / Rebel 1; players 0 Empire (the source), 1 Rebel (enemy), 2 Rebel (enemy)
+        std::vector<std::string> warnings;
+        alamo::log::set_sink([&warnings](alamo::log::Level l, std::string_view, std::string_view msg) {
+            if (l == alamo::log::Level::Warn) warnings.emplace_back(msg);
+        });
+        auto run = [](const char* faction, std::array<float, 3>& out) {
+            OiWorld w;
+            SpecialAbilityDesc cb = oi_special("FactionBonus", SpecialClass::CombatBonus, ActivationStyle::SpaceAutomatic);
+            cb.bonus[static_cast<size_t>(ModList::Damage)] = 0.25f;
+            cb.specific_faction = faction;
+            const uint32_t cs = add_special(w.ad, cb);
+            AbilityObjectDesc prop;
+            prop.specials = {cs};
+            const uint32_t pd = push(w.cd, w.ad, oi_unit("Prop", 100.0f), prop);
+            const uint32_t sd = push(w.cd, w.ad, oi_unit("Ship", 100.0f), AbilityObjectDesc{});
+            w.make();
+            AbilityHost h;
+            h.faction_index = [](std::string_view n) -> int32_t {
+                if (n == "Empire") return 0;
+                if (n == "Rebel") return 1;
+                return -1;
+            };
+            h.player_faction = [](int32_t p) -> int32_t { return p == 0 ? 0 : 1; };
+            h.allied_players = [](int32_t a, int32_t b) { return a == b; };
+            w.ab->set_host(std::move(h));
+            for (int32_t p = 0; p < 3; ++p) w.add(1 + p, sd, p, {100.0f * static_cast<float>(p), 0, 0});
+            w.add(10, pd, 0, {0, 500, 0});
+            for (size_t i = 0; i < 3; ++i) out[i] = w.sys->modifier(static_cast<ObjectId>(1 + i), ModList::Damage);
+        };
+        std::array<float, 3> r{};
+        run("Rebel", r);  // the faction test alone: the Rebel players' units, not the source owner's own
+        CHECK(r[0] == 0.0f && r[1] == 0.25f && r[2] == 0.25f);
+        CHECK(warnings.empty());
+        run("Hutts", r);  // unknown: treated as unset (the ally test), with the validate's error line
+        CHECK(r[0] == 0.25f && r[1] == 0.0f && r[2] == 0.0f);
+        CHECK(warnings.size() == 1 && warnings[0].find("Unrecognized faction given for Specific_Faction") != std::string::npos &&
+              warnings[0].find("FactionBonus") != std::string::npos);
+        alamo::log::set_sink(nullptr);
+    }
+    // Enhance_Defense: players 0 the owner, 1 enemy (the defender), 2 ally, 3 neutral
+    struct EdCase {
+        bool all_allies = false;
+        int32_t owner = 0;
+        float value = 0.25f;
+    };
+    auto ed_world = [](OiWorld& w, const EdCase& c, uint32_t& cd, uint32_t& sd) {
+        SpecialAbilityDesc ed = oi_special("ED", SpecialClass::EnhanceDefense, ActivationStyle::GroundAutomatic);
+        ed.bonus[static_cast<size_t>(ModList::Defense)] = c.value;
+        ed.stacking_category = 0;
+        ed.apply_to_all_allies = c.all_allies;
+        const uint32_t es = add_special(w.ad, ed);
+        AbilityObjectDesc cmd;
+        cmd.specials = {es};
+        cd = push(w.cd, w.ad, oi_unit("Field_Commander", 100.0f, 5.0f, 16), cmd);
+        sd = push(w.cd, w.ad, oi_unit("Tank", 100.0f, 5.0f, 2), AbilityObjectDesc{});
+        w.make(GameMode::Land, std::vector<PlayerInfo>(4));
+        AbilityHost h;
+        h.allied_players = [](int32_t a, int32_t b) { return a == b || (a == 0 && b == 2) || (a == 2 && b == 0); };
+        h.defense_player = [](int32_t owner) { return owner == 3 ? 1 : owner; };  // neutral -> the defender
+        w.ab->set_host(std::move(h));
+        for (int32_t p : {2, 3}) {
+            w.sys->set_enemy(0, p, false);
+            w.sys->set_enemy(p, 0, false);
+        }
+    };
+    auto entries = [](OiWorld& w, int32_t p) { return w.sys->player_modifiers(p).entries().size(); };
+    {
+        OiWorld w;
+        uint32_t cd = 0, sd = 0;
+        ed_world(w, EdCase{}, cd, sd);
+        w.add(1, sd, 0, {0, 0, 0});    // own, before the source
+        w.add(2, cd, 0, {50, 0, 0});   // the source (Ground_Automatic: applied at its creation)
+        w.add(3, sd, 2, {100, 0, 0});  // ally: not without Apply_To_All_Allies
+        w.add(4, sd, 0, {150, 0, 0});  // own, after the source
+        CHECK(entries(w, 0) == 1 && entries(w, 1) == 0 && entries(w, 2) == 0 && entries(w, 3) == 0);
+        const ModifierEntry& e = w.sys->player_modifiers(0).entries()[0];
+        CHECK(e.list == static_cast<uint8_t>(ModList::Defense) && e.category == 0 && e.value == 0.25f &&
+              e.expiry == kPermanent && e.source_id == 2);
+        CHECK(w.sys->unit_modifiers(1)->entries().empty() && w.sys->unit_modifiers(4)->entries().empty());  // no unit aura
+        CHECK_EQ(w.sys->modifier(1, ModList::Defense), 0.25f);
+        CHECK_EQ(w.sys->modifier(2, ModList::Defense), 0.25f);  // every object of the player, the source included
+        CHECK_EQ(w.sys->modifier(4, ModList::Defense), 0.25f);
+        CHECK_EQ(w.sys->modifier(3, ModList::Defense), 0.0f);
+        w.add(5, cd, 0, {200, 0, 0});  // a second source appends another entry; one category counts once
+        CHECK(entries(w, 0) == 2);
+        CHECK_EQ(w.sys->modifier(1, ModList::Defense), 0.25f);
+        w.sys->unit_modifiers(1)->insert(ModList::Defense, 0, 0.3f, kPermanent);  // same category: the larger
+        CHECK_EQ(w.sys->modifier(1, ModList::Defense), 0.3f);
+        w.sys->unit_modifiers(1)->insert(ModList::Defense, 1, 0.6f, kPermanent);  // another category adds, capped
+        CHECK_EQ(w.sys->modifier(1, ModList::Defense), 0.75f);
+        // never removed: not at the source's death, not at its removal
+        w.sys->kill_unit(2, kNoObject, kKindNormal, w.frame);
+        w.ab->remove(5);
+        CHECK(entries(w, 0) == 2);
+        CHECK_EQ(w.sys->modifier(4, ModList::Defense), 0.25f);
+        // it follows ownership: a unit the player loses drops it, a unit it gains gets it
+        w.sys->set_owner(4, 1);
+        CHECK_EQ(w.sys->modifier(4, ModList::Defense), 0.0f);
+        w.sys->set_owner(3, 0);
+        CHECK_EQ(w.sys->modifier(3, ModList::Defense), 0.25f);
+    }
+    {  // Apply_To_All_Allies: every player with relation 0 to the owner (own included), not the neutral or the enemy
+        OiWorld w;
+        uint32_t cd = 0, sd = 0;
+        EdCase c;
+        c.all_allies = true;
+        ed_world(w, c, cd, sd);
+        w.add(1, cd, 0, {0, 0, 0});
+        CHECK(entries(w, 0) == 1 && entries(w, 1) == 0 && entries(w, 2) == 1 && entries(w, 3) == 0);
+    }
+    {  // a neutral owner stands for the battle's defender (the host's defense_player); a negative value is 0
+        OiWorld w;
+        uint32_t cd = 0, sd = 0;
+        EdCase c;
+        c.owner = 3;
+        c.value = -0.5f;
+        ed_world(w, c, cd, sd);
+        w.add(1, cd, 3, {0, 0, 0});
+        CHECK(entries(w, 0) == 0 && entries(w, 1) == 1 && entries(w, 3) == 0);
+        CHECK(w.sys->player_modifiers(1).entries()[0].value == 0.0f);
+    }
+}
+
 void test_s78n_allied_users() {
     struct R {
         std::array<bool, 4> power{}, weather{}, enabled{};
@@ -5498,6 +5721,8 @@ int main(int argc, char** argv) {
     test_bribe_range();  // s78m t08
     test_hack_repair_range();  // s78n t07 / t01
     test_s78n_allied_users();  // s78n t07
+    test_s78n_min_range();  // s78n t02
+    test_s78n_combat_bonus_and_enhance_defense();  // s78n t04
     test_cu8f_abilities_disabled();
     test_cu8j_saber_flight();
     test_battle(golden, write_golden);

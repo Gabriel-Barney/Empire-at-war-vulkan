@@ -124,6 +124,9 @@ struct SpecialAbilityDesc {
     std::array<float, combat::kModListCount> bonus{};
     bool apply_to_all_allies = false;     // Apply_To_All_Allies / Affects_All_Allies
     bool reverse_logic = false;           // Reverse_Application_Logic
+    // s78n t04 (TACTICAL_COMBAT §5.4.4 item 3a): Combat_Bonus Specific_Faction (+0x1a0, resolved into +0x1c0), as written;
+    // "" = unset. AbilitySystem::set_host resolves it through AbilityHost::faction_index (unknown = unset, a warning).
+    std::string specific_faction;
     // Battlefield_Modifier (§2.3.11)
     float fow_reveal_multiplier = 1.0f, reinforcement_time_multiplier = 1.0f, stealth_duration_multiplier = 1.0f,
           capture_time_multiplier = 1.0f, reinforcement_deploy_multiplier = 1.0f;
@@ -237,6 +240,9 @@ struct AbilityObjectDesc {
     // TypeIndex, -1 none. A Combat_Bonus aura of this type never applies to units of those types.
     int32_t unique_ground_type = -1;
     int32_t unique_space_type = -1;
+    // s78n t04 (TACTICAL_COMBAT §5.4.4 item 3b): Apply_Special_Ability_To_Self_On_Creation (type +0xe8): a Combat_Bonus
+    // source of this type also offers its aura to itself at its creation. No shipped type sets it.
+    bool apply_self_on_creation = false;
 };
 
 struct AbilityData {

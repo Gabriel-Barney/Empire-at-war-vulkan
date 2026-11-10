@@ -430,36 +430,57 @@ bool AbilitySystem::spread_out(ObjectId id) const {
 // event-driven classes (TACTICAL_COMBAT §4.3 / §5.4, TACTICAL_GAPS §2.3.11, §7.3, §7.4)
 // ================================================================================================
 
-bool AbilitySystem::aura_target(const Obj& src, const SpecialAbilityDesc& s, const Obj& t) const {
+bool AbilitySystem::aura_target(const Obj& src, uint32_t di, const Obj& t) const {
+    // s78m t05: CombatBonusAbilityClass accept vf +0x28 (0x6f4bf0, TACTICAL_COMBAT §5.4.3 item 4), in order. s78n t04:
+    // Enhance_Defense no longer comes here (its accept is the constant-false stub; §5.4.4 item 3c, enhance_defense_apply).
+    const SpecialAbilityDesc& s = data_->specials[di];
+    if (s.cls != SpecialClass::CombatBonus) return false;
     if (!t.combat_unit || t.dead || !alive_unit(t.id)) return false;
-    if (s.cls != SpecialClass::CombatBonus) {
-        // EnhanceDefense [port]: kept as a per-unit aura on the owner's units (all allies with Apply_To_All_Allies), every
-        // unit when no filter is given. Retail (TACTICAL_COMBAT §5.4.3 item 4) has no unit accept (constant-false stub):
-        // its apply inserts one per-player entry for the owner / every ally (+0x180), whose reader is unknown [M].
-        // s78n t07: "ally" is the relation-0 test (`friendly`), as for the other per-player writers.
-        if (t.owner != src.owner && !(s.apply_to_all_allies && friendly(src.owner, t.owner))) return false;
-        if (s.applicable_categories == 0 && s.applicable_types.empty()) {
-            const int32_t ot = combat_->data().units[combat_->desc_index(t.id)].object_type;
-            for (int32_t x : s.excluded_types)
-                if (x >= 0 && x == ot) return false;
-            return true;
-        }
-        return target_filter(s, t.id);
-    }
-    // s78m t05: CombatBonusAbilityClass accept vf +0x28 (0x6f4bf0, TACTICAL_COMBAT §5.4.3 item 4), in order:
     // 1. the target filter 0x48e290 always runs (§5.4.1: types, then categories - an empty mask rejects, then excluded
     //    types); with no filter tags the aura affects no unit.
     if (!target_filter(s, t.id)) return false;
-    // 2. the target is allied with the source's owner (0x39a230: relation == 0, own player included; a neutral player is
-    //    not allied). Apply_To_All_Allies is not read here. [port] Specific_Faction (+0x1c0 [M]: then the target owner's
-    //    faction must equal it, no ally test) is not modelled.
-    if (!friendly(src.owner, t.owner)) return false;
+    // 2. owner: with Specific_Faction resolved (+0x1c0, s78n t04, §5.4.4 item 3a) the target owner's faction (player
+    //    +0x68) must equal it and the ally test is skipped [port: an owner without a known faction fails]; else the target
+    //    is allied with the source's owner (0x39a230: relation == 0, own player included; a neutral player is not
+    //    allied). Apply_To_All_Allies is not read here.
+    const int32_t sf = di < specific_faction_.size() ? specific_faction_[di] : -1;
+    if (sf >= 0) {
+        if (!host_.player_faction || host_.player_faction(t.owner) != sf) return false;
+    } else if (!friendly(src.owner, t.owner)) {
+        return false;
+    }
     // 3. the target's type is neither the source type's Unique_Ground_Unit (+0x1b60) nor Unique_Space_Unit (+0x1b50).
     const AbilityObjectDesc& sd = data_->objects[src.desc];
     const int32_t ot = combat_->data().units[combat_->desc_index(t.id)].object_type;
     if (ot >= 0 && (ot == sd.unique_ground_type || ot == sd.unique_space_type)) return false;
     // 4. (the targeting data pack is created on demand in the port)
     return true;
+}
+
+void AbilitySystem::enhance_defense_apply(Obj& src, SpecialState& sp, uint32_t frame) {
+    // s78n t04 (TACTICAL_COMBAT §5.4.4 item 3c, EnhanceDefenseAbilityClass apply 0x6fa920, reached only from SAP init at
+    // the source's creation - apply_automatic): one permanent entry {Enhancement_Percentage, keyed by Stacking_Category,
+    // source = S} appended to list 0 (defense) of the player's tactical ModifierSet, for p = the owner (a neutral owner ->
+    // the battle's defender through AbilityHost::defense_player; -1 -> nothing), or with Apply_To_All_Allies for every
+    // player whose relation to p is 0 (p included, player order). Never removed: not at the source's death or removal,
+    // not by an abilities-disabled cancel (the apply registers no target), so `applied` stays 0 and `aura` marks the one
+    // insert of this source (a second apply adds nothing [port]). The reader is every list-0 read of the player's objects
+    // (Gather_Modifiers merges the player set; max-then-sum per category, the 0.75 cap of list 0), so the version bump of
+    // the player's set invalidates their cached reductions (CombatSystem::ensure_cache). The validate 0x6fb080 sets a
+    // negative Enhancement_Percentage to 0.
+    if (sp.aura || src.dead) return;
+    const SpecialAbilityDesc& s = data_->specials[sp.desc];
+    const int32_t p = host_.defense_player ? host_.defense_player(src.owner) : src.owner;
+    const auto np = static_cast<int32_t>(combat_->player_count());
+    if (p < 0 || p >= np) return;
+    sp.aura = 1;
+    const float v = std::max(s.bonus[static_cast<size_t>(ModList::Defense)], 0.0f);
+    const uint32_t crc = desc(src).name_crc;  // the CRC of S's type name (type +0x120)
+    for (int32_t i = 0; i < np; ++i) {
+        if (i != p && !(s.apply_to_all_allies && friendly(i, p))) continue;
+        combat_->player_modifiers(i).insert(ModList::Defense, s.stacking_category, v, combat::kPermanent, crc, src.id);
+    }
+    event(AbilityEventKind::EffectOn, sp.trigger, src.id, kNoObject, frame);  // the presentation 0x48e4d0
 }
 
 void AbilitySystem::aura_give(const Obj& src, const SpecialAbilityDesc& s, ObjectId target) {
@@ -490,9 +511,11 @@ void AbilitySystem::aura_on(Obj& src, SpecialState& sp, uint32_t frame) {
     const auto np = static_cast<int32_t>(combat_->player_count());
     switch (s.cls) {
         case SpecialClass::CombatBonus:
-        case SpecialClass::EnhanceDefense:
+            // s78n t04 (§5.4.4 item 3b, Create_Object 0x29f810): the new source offers its aura to every existing object
+            // but itself, unless its type has Apply_Special_Ability_To_Self_On_Creation (+0xe8).
             for (Obj& t : objs_)  // ascending id
-                if (aura_target(src, s, t)) aura_give(src, s, t.id);
+                if ((t.id != src.id || desc(src).apply_self_on_creation) && aura_target(src, sp.desc, t))
+                    aura_give(src, s, t.id);
             break;
         case SpecialClass::BattlefieldModifier:
             // 0x6f10b0 (apply): cu8g t05 (CU8F_T04_T06_RE §3.3 [H]): Reverse_Application_Logic swaps apply and remove, for
@@ -533,8 +556,7 @@ void AbilitySystem::aura_off(Obj& src, SpecialState& sp, uint32_t frame) {
     sp.applied = 0;
     const auto np = static_cast<int32_t>(combat_->player_count());
     switch (s.cls) {
-        case SpecialClass::CombatBonus:
-        case SpecialClass::EnhanceDefense:
+        case SpecialClass::CombatBonus:  // s78n t04: Enhance_Defense's entries are never removed
             for (Obj& t : objs_) {
                 if (!t.combat_unit || !combat_->has_unit(t.id)) continue;
                 if (combat::ModifierSet* m = combat_->unit_modifiers(t.id)) {
@@ -575,8 +597,7 @@ void AbilitySystem::auras_unit_added(Obj& n, uint32_t /*frame*/) {
         for (const SpecialState& sp : src.specials) {
             if (!sp.aura) continue;
             const SpecialAbilityDesc& s = data_->specials[sp.desc];
-            if ((s.cls == SpecialClass::CombatBonus || s.cls == SpecialClass::EnhanceDefense) && aura_target(src, s, n))
-                aura_give(src, s, n.id);
+            if (s.cls == SpecialClass::CombatBonus && aura_target(src, sp.desc, n)) aura_give(src, s, n.id);
         }
     }
 }

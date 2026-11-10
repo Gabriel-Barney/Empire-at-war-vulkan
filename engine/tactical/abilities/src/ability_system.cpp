@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "alamo/core/dmath.hpp"
+#include "alamo/core/log.hpp"
 #include "alamo/core/sim_crc.hpp"
 
 namespace alamo::tactical::abilities {
@@ -63,6 +64,36 @@ AbilitySystem::AbilitySystem(CombatSystem& combat, const AbilityData& data, Abil
 }
 
 AbilitySystem::~AbilitySystem() { combat_->set_hooks(nullptr); }
+
+void AbilitySystem::set_host(AbilityHost h) {
+    host_ = std::move(h);
+    // s78n t04 (TACTICAL_COMBAT §5.4.4 item 3a): the Combat_Bonus validate 0x6f4ff0 resolves a non-empty Specific_Faction
+    // by name into +0x1c0; no match logs the retail error and leaves it null (the ally test applies). [port] A host
+    // without the faction registry (no faction_index) resolves nothing and logs nothing.
+    specific_faction_.assign(data_->specials.size(), -1);
+    if (!host_.faction_index) return;
+    for (size_t i = 0; i < data_->specials.size(); ++i) {
+        const SpecialAbilityDesc& s = data_->specials[i];
+        if (s.cls != SpecialClass::CombatBonus || s.specific_faction.empty()) continue;
+        const int32_t f = host_.faction_index(s.specific_faction);
+        if (f >= 0) specific_faction_[i] = f;
+        else alamo::log::warnf("abilities", "Error: (%s) Unrecognized faction given for Specific_Faction value.", s.name.c_str());
+    }
+}
+
+void squad_joint_half_extents(std::span<const SquadSlot> slots, float jiggle, float& hx, float& hy) {
+    // s78n t02 (TACTICAL_COMBAT §5.4.4 item 1, 0x404450): the box starts at (0, 0, 0, 0), so it always holds the
+    // container's own point; each member's slot +/- its half-extents widens it (members' live positions are not read).
+    float lx = 0.0f, ux = 0.0f, ly = 0.0f, uy = 0.0f;
+    for (const SquadSlot& m : slots) {
+        lx = std::min(lx, m.along - m.hx);
+        ux = std::max(ux, m.along + m.hx);
+        ly = std::min(ly, m.side - m.hy);
+        uy = std::max(uy, m.side + m.hy);
+    }
+    hx = (ux - lx) * 0.5f + jiggle;
+    hy = (uy - ly) * 0.5f + jiggle;
+}
 
 void AbilitySystem::reserve(uint32_t objects, uint32_t events) {
     objs_.reserve(objects);
@@ -809,31 +840,36 @@ bool AbilitySystem::in_range(const Obj& o, const SpecialAbilityDesc& s, ObjectId
     // the weapon range test (TACTICAL_GAPS §3.1) with the ability's ranges swapped in, from the user's position P_U.
     // In range <=> d <= R + E (XY, float, non-strict; d = 0 passes): R = Activation_Max_Range when > 0, else the user's
     // max attack range (with its modifiers); E = the target's footprint half-extent along the line of sight (the
-    // LAND_OBSTACLE aim walk: sqrt(200)). The user's own radius is not in it. Too close <=> r > 0 and d <= r + E: r =
-    // Activation_Min_Range when > 0, else the user's Targeting_Min_Attack_Distance, and then a team-member target is
-    // retested against the live member of its container nearest P_U ([M] ties: list order). `container` (Tactical_Bribe
-    // apply 0x5b07c0, a land squad container T from the host): in range when T (R + 10, no footprint term) OR the target
-    // is; too close only when T ([port] E = 0: the members' joint-box half-extent is [M]) AND the target are. A container
-    // user passes when any live member does [port].
+    // LAND_OBSTACLE aim walk: sqrt(200)). The user's own radius is not in it. `container` (Tactical_Bribe apply 0x5b07c0,
+    // a land squad container T from the host): in range when T (R + 10, no footprint term) OR the target is; too close
+    // only when T AND the target are. A container user passes when any live member does [port].
     // s78n t01 (§5.4.2 slot 44 / step 1, LOB_SOLVER §3.1 / §3.3):
     // - a user whose current weapon is a grenade (Projectile_Category 3): "in range" is the lob solve alone at that
     //   weapon's Max_Speed from P_U to the target itself + its Ranged_Target_Z_Adjust (no R, E, ability range or melee
-    //   redirect); for T, to the container position [port: T's own Ranged_Target_Z_Adjust is not added]. The too-close
-    //   test (slot 46) is unchanged.
+    //   redirect); for T, to the container position [port: T's own Ranged_Target_Z_Adjust is not added].
     // - melee redirect: a user with Targeting_Max_Attack_Distance <= Melee_Cutoff_Range against a container (X or T)
-    //   is tested against the container's live member nearest P_U (the same nearest-member pick, [M] ties: list order),
-    //   in both the max and the min test; no container member alive: the container itself.
+    //   is tested against the container's live member nearest P_U, in both the max and the min test; no container
+    //   member alive: the container itself.
+    // s78n t02 (§5.4.4 item 1, slot 46 0x5683a0 in full): too close <=> r > 0 and D <= r + E', r = Activation_Min_Range
+    // when > 0 (the override), else the user's Targeting_Min_Attack_Distance. Without the override a team-member target
+    // is first retested against the live member of its container nearest P_U (its own position and E'). D = the XY
+    // centre distance and E' = CombatSystem::min_range_geometry_of (the X half-extent, or Y when U's unnormalised offset
+    // along X's facing is <= 0.7071; LAND_OBSTACLE: E' = 0, no aim walk), not slot 43's E. T's E' is the joint box of its
+    // members' slots (squad_joint_half_extents through AbilityHost::land_squad_slots; [port] unset: 0). The nearest-member
+    // pick (0x404fc0, also the melee redirect's) is 3-D squared distance, strict <, member list order (ties: the earlier
+    // member); [port] dead members are skipped.
     Vec3 tpos{};
     const bool has_t = container != kNoObject && host_.land_squad_container && host_.land_squad_container(container, tpos);
     const Obj* x = obj(target);
-    const Obj* xc = x && x->container != kNoObject ? obj(x->container) : nullptr;
     auto nearest_member = [&](const Obj* c, Vec3 pu) {
         ObjectId best_id = kNoObject;
         if (!c || !c->is_container) return best_id;
         float best = 0.0f;
         for (ObjectId m : c->members) {
             if (!alive_unit(m)) continue;
-            const float dm = combat::distance_xy(pu, combat_->position(m));
+            const Vec3 pm = combat_->position(m);
+            const float dx = pm.x - pu.x, dy = pm.y - pu.y, dz = pm.z - pu.z;
+            const float dm = (dx * dx + dy * dy) + dz * dz;
             if (best_id == kNoObject || dm < best) {
                 best_id = m;
                 best = dm;
@@ -841,10 +877,46 @@ bool AbilitySystem::in_range(const Obj& o, const SpecialAbilityDesc& s, ObjectId
         }
         return best_id;
     };
+    // slot 46 steps 4 - 7 on a unit target (step 1 is the caller's redirect); the caller tests r > 0.
+    auto too_close_to = [&](ObjectId xr, Vec3 pu, float r, bool override_set) {
+        ObjectId xm = xr;
+        if (!override_set) {  // step 4: a team member -> the member of its container nearest P_U
+            const Obj* xo = obj(xr);
+            const Obj* c = xo && xo->container != kNoObject ? obj(xo->container) : nullptr;
+            const ObjectId m = nearest_member(c, pu);
+            if (m != kNoObject) xm = m;
+        }
+        float D = 0.0f, E = 0.0f;
+        (void)combat_->min_range_geometry_of(xm, pu, D, E);
+        return D <= r + E;
+    };
+    // T's slot-46 term: the joint box half-extent picked by U's unnormalised offset along T's facing (step 6).
+    auto container_min_extent = [&](Vec3 pu) {
+        if (!host_.land_squad_slots) return 0.0f;  // [port] no slot layout: E_T = 0
+        std::vector<SquadSlot> slots;
+        float jiggle = 0.0f;
+        Vec3 f{1.0f, 0.0f, 0.0f};
+        if (!host_.land_squad_slots(container, slots, jiggle, f)) return 0.0f;
+        float hx = 0.0f, hy = 0.0f;
+        squad_joint_half_extents(slots, jiggle, hx, hy);
+        float fx = f.x, fy = f.y;
+        const float f2 = fx * fx + fy * fy;
+        if (f2 > 0.0f) {
+            const float fi = 1.0f / dmath::sqrt(f2);
+            fx = fx * fi;
+            fy = fy * fi;
+        } else {
+            fx = 1.0f;
+            fy = 0.0f;
+        }
+        const float p = fx * (pu.x - tpos.x) + fy * (pu.y - tpos.y);
+        return (p < 0.0f ? -p : p) > 0.7071f ? hx : hy;
+    };
     auto check = [&](ObjectId u) {
         const Vec3 pu = combat_->position(u);
         const float R = s.max_range > 0.0f ? s.max_range : combat_->attack_range(u);
-        const float r = s.min_range > 0.0f ? s.min_range : combat_->min_attack_distance(u);
+        const bool override_set = s.min_range > 0.0f;
+        const float r = override_set ? s.min_range : combat_->min_attack_distance(u);
         const bool lob = combat_->has_grenade_weapon(u);  // s78n t01
         const bool melee = combat_->melee_attacker(u);    // s78n t01
         // s78n t01: the melee redirect (step 1) of a container X; X itself otherwise.
@@ -856,13 +928,7 @@ bool AbilitySystem::in_range(const Obj& o, const SpecialAbilityDesc& s, ObjectId
         float d = 0.0f, E = 0.0f;
         (void)combat_->range_geometry_of(xr, pu, d, E);
         bool in_max = lob ? combat_->weapon_lob_reaches(u, pu, combat_->target_point(target)) : d <= R + E;
-        bool too_close = false;
-        if (r > 0.0f) {
-            ObjectId xm = kNoObject;
-            if (!(s.min_range > 0.0f) && xc) xm = nearest_member(xc, pu);  // the weapon min range: nearest member
-            if (xm != kNoObject && xm != xr) (void)combat_->range_geometry_of(xm, pu, d, E);
-            too_close = d <= r + E;
-        }
+        bool too_close = r > 0.0f && too_close_to(xr, pu, r, override_set);  // s78n t02
         if (has_t) {  // T first: in range of T or of X; too close to T and to X
             const ObjectId tm = melee ? nearest_member(obj(container), pu) : kNoObject;  // s78n t01: melee redirect
             float dm = 0.0f, Em = 0.0f;
@@ -872,7 +938,10 @@ bool AbilitySystem::in_range(const Obj& o, const SpecialAbilityDesc& s, ObjectId
                               : tm != kNoObject ? dm <= R + Em
                                                 : dt <= R + 10.0f;
             in_max = t_in || in_max;
-            too_close = too_close && (tm != kNoObject ? dm <= r + Em : dt <= r);
+            // s78n t02: T (a container, never a member: no step-4 retest) is too close when dt <= r + E_T; with the
+            // melee redirect, its nearest member's own test.
+            if (too_close)
+                too_close = tm != kNoObject ? too_close_to(tm, pu, r, override_set) : dt <= r + container_min_extent(pu);
         }
         return in_max && !too_close;
     };

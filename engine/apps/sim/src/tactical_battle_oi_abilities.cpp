@@ -226,6 +226,21 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
     };
     // s78m t05 (TACTICAL_COMBAT §5.4.3 item 4): the Combat_Bonus accept's ally test 0x39a230 (relation 0; neutral is not).
     h.allied_players = [this](int32_t a, int32_t b) { return bt_allied(a, b); };
+    // s78n t04 (TACTICAL_COMBAT §5.4.4 item 3a): Combat_Bonus Specific_Faction against the galactic faction registry
+    // (FactionFiles order, case-insensitive) and the players' factions.
+    h.faction_index = [this](std::string_view name) -> int32_t {
+        const uint32_t f = galaxy_->rules().find_faction(ascii_trim(name));
+        return f == galactic::kNoIndex ? -1 : static_cast<int32_t>(f);
+    };
+    h.player_faction = [this](int32_t p) -> int32_t {
+        const auto& ps = galaxy_->players();
+        if (p < 0 || static_cast<size_t>(p) >= ps.size()) return -1;
+        const uint32_t f = ps[static_cast<size_t>(p)].faction;
+        return f == galactic::kNoIndex ? -1 : static_cast<int32_t>(f);
+    };
+    // s78n t04 (§5.4.4 item 3c, 0x6fa920 step 1): an Enhance_Defense source owned by the neutral player stands for the
+    // battle's defender. [port] "the neutral player" = an owner whose faction Is_Neutral (retail: the first such player).
+    h.defense_player = [this](int32_t owner) { return bt_owner_neutral(owner) ? req_.info.defender : owner; };
     hg_ability_host(h);  // hangars: DEPLOY_SQUAD gate / handler (HangarSystem::deploy_ready / deploy_squad)
     abilities_->set_host(std::move(h));
 }

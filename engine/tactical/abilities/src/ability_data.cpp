@@ -130,6 +130,7 @@ void parse_class_fields(const data::XmlNode& e, SpecialAbilityDesc& s, const Abi
     set_bonus(L::FireRate, f_or(e, "Fire_Rate_Bonus_Percentage", 0.0f));  // [M: the fire-rate field name]
     s.apply_to_all_allies = b_or(e, "Apply_To_All_Allies", false) || b_or(e, "Affects_All_Allies", false);
     s.reverse_logic = b_or(e, "Reverse_Application_Logic", false);
+    s.specific_faction = s_or(e, "Specific_Faction");  // s78n t04: Combat_Bonus +0x1a0 (resolved by AbilitySystem::set_host)
     s.fow_reveal_multiplier = f_or(e, "FOW_Reveal_Range_Multiplier", 1.0f);
     s.reinforcement_time_multiplier = f_or(e, "Reinforcement_Time_Multiplier", 1.0f);
     s.stealth_duration_multiplier = f_or(e, "Stealth_Duration_Multiplier", 1.0f);

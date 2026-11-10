@@ -190,6 +190,16 @@ struct SpawnRequest {
     bool cancelled = false;
 };
 
+// s78n t02 (TACTICAL_COMBAT §5.4.4 item 1, 0x404450): one member of a land squad container for the joint box - its
+// formation slot offset (container frame: `along` its facing, `side` across; pack +0x114 / +0x118) and its footprint
+// half-extents (0x396850: Custom_Hard_X/YExtent x Scale_Factor, model-box fallback).
+struct SquadSlot {
+    float along = 0.0f, side = 0.0f, hx = 0.0f, hy = 0.0f;
+};
+// The joint box 0x404450: [min x, max x] x [min y, max y] starts at (0, 0, 0, 0) (the container's own point) and grows to
+// hold every slot +/- its half-extents; half-extent = half the span + `jiggle` (the container type's MaxJiggleDistance).
+void squad_joint_half_extents(std::span<const SquadSlot> slots, float jiggle, float& hx, float& hy);
+
 // OI abilities: host queries (all optional; unset ones use the documented fallbacks). Called from the serial tick
 // phases; they must not create or remove objects.
 struct AbilityHost {
@@ -277,6 +287,20 @@ struct AbilityHost {
     // (relation a -> b == 0: own player included, a neutral relation 2 is not). Read by the Combat_Bonus accept. Unset:
     // [port] not enemies in the combat relation table (`allied`).
     std::function<bool(int32_t a, int32_t b)> allied_players;
+    // s78n t02 (TACTICAL_COMBAT §5.4.4 item 1, 0x404450): a land squad container's joint box for the too-close test
+    // (slot 46): every member's formation slot offset in the container's frame with its footprint half-extents, the
+    // container type's MaxJiggleDistance and the container's facing (yaw as a vector). Unset / false: [port] E_T = 0 (the
+    // port's movement keeps no per-squad slot layout).
+    std::function<bool(ObjectId container, std::vector<SquadSlot>& slots, float& jiggle, Vec3& facing)> land_squad_slots;
+    // s78n t04 (TACTICAL_COMBAT §5.4.4 item 3a): Combat_Bonus Specific_Faction - a faction name's index in the host's
+    // faction registry (-1 unknown) and a player's faction index (-1 unknown). Unset `faction_index`: every name is
+    // unknown (the ability behaves as without the tag, and nothing is logged).
+    std::function<int32_t(std::string_view name)> faction_index;
+    std::function<int32_t(int32_t player)> player_faction;
+    // s78n t04 (§5.4.4 item 3c, apply 0x6fa920 step 1): the player an Enhance_Defense source's owner stands for - the owner,
+    // or the battle's defender (0x28a910) when the owner is the neutral player (0x294aa0); -1 = no entry. Unset: [port]
+    // the owner.
+    std::function<int32_t(int32_t owner)> defense_player;
 };
 
 // OI abilities: the per-player tactical lists Battlefield_Modifier writes (§2.3.11) besides the reveal range.
@@ -432,7 +456,9 @@ public:
     void set_fog_reveal_all(std::function<void(int32_t player, bool on)> fn) { fog_reveal_all_ = std::move(fn); }
 
     // ---- OI abilities (TACTICAL_GAPS.md §1, §2, §7) ----
-    void set_host(AbilityHost h) { host_ = std::move(h); }
+    // s78n t04: also resolves every Combat_Bonus Specific_Faction through the host's faction_index (the validate
+    // 0x6f4ff0: an unknown name logs "Unrecognized faction given for Specific_Faction value." and is treated as unset).
+    void set_host(AbilityHost h);
     // Objects to create after this tick (cleared by clear_events()); bind_spawn tells which object a request became.
     std::span<const SpawnRequest> spawn_requests() const { return spawns_; }
     bool bind_spawn(uint32_t serial, ObjectId id);
@@ -772,7 +798,9 @@ private:
     void aura_on(Obj& src, SpecialState& sp, uint32_t frame);
     void aura_off(Obj& src, SpecialState& sp, uint32_t frame);
     void aura_give(const Obj& src, const SpecialAbilityDesc& s, ObjectId target);
-    bool aura_target(const Obj& src, const SpecialAbilityDesc& s, const Obj& t) const;
+    bool aura_target(const Obj& src, uint32_t di, const Obj& t) const;  // di: AbilityData::specials index
+    // s78n t04 (§5.4.4 item 3c): Enhance_Defense's apply 0x6fa920 - permanent list-0 entries in the players' sets.
+    void enhance_defense_apply(Obj& src, SpecialState& sp, uint32_t frame);
     float player_reduce(int32_t player, uint8_t list) const;
     // unit-ability handler bodies (§2.1) and behaviours (§2.2)
     bool team_gates(Obj& o, uint32_t t, uint32_t frame);
@@ -845,6 +873,8 @@ private:
     void lightning_targets(Obj& o, const SpecialAbilityDesc& s, ObjectId primary, std::vector<ObjectId>& out);
 
     AbilityHost host_;
+    // s78n t04: Specific_Faction per special (AbilityData::specials index) resolved by set_host; -1 = unset / unknown.
+    std::vector<int32_t> specific_faction_;
     SimRng* rng_ = nullptr;  // synced RNG for draws outside a tick (bind_rng) and inside (the hooks' rng)
     std::vector<SpawnRequest> spawns_;
     uint32_t spawn_serial_ = 1;
