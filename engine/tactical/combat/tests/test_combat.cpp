@@ -1767,6 +1767,25 @@ void test_s78n_min_range_slot46() {
         CHECK(!t.w.sys->inside_min_range(1, 2));
         CHECK(!t.w.sys->inside_min_range(1, 3));  // 3 is retested against 2, now the nearer member in 3-D
     }
+    {  // s78n review: a team member added after the tick (a squadron launched after phase A) is in the member lists at
+       // once, as after a load (combat_save rebuilds them): before, inside_min_range missed it until the next phase A
+        TargetWorld t;
+        uint32_t td = 0, od = 0, ad = 0;
+        world(t, td, od, ad);
+        t.w.add(1, ad, 0, Vec3{0, 0, 0});
+        add_team_unit(t, 2, td, 1, Vec3{100.0f, 0.0f, 0.0f}, 50, true);
+        t.w.tick();  // phase A: team 50 = {2}
+        CHECK(!t.w.sys->inside_min_range(1, 2));
+        add_team_unit(t, 3, td, 1, Vec3{15.0f, 0.0f, 0.0f}, 50, false);  // between ticks
+        CHECK(t.w.sys->inside_min_range(1, 2));  // 3 is the nearer member: 15 <= 20 + 4
+        ByteWriter w;
+        t.w.sys->write(w);
+        TargetWorld l;
+        world(l, td, od, ad);
+        ByteReader r(w.bytes());
+        CHECK(l.w.sys->read(r));
+        CHECK(l.w.sys->inside_min_range(1, 2));  // the loaded system agrees
+    }
 }
 
 // OI tactical: TACTICAL_GAPS 3.1 slot 43 with a LAND_OBSTACLE target (aim walk toward the attacker over the cells the

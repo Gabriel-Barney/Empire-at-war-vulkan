@@ -917,6 +917,55 @@ Scenario squad_scenario() {
     return s;
 }
 
+// s78n review: the team speed of a move ordered on the first tick after a load. The host runs its commands before its
+// set_team calls (apply_speed_factors, then the movement tick), so a move ordered on the resume frame reads the team link
+// and cap of the saving run's last tick: the container's own Max_Speed (2.0) is above its members' (1.0), and in one
+// formation with a faster unit (3.0) the formation speed is the team speed (1.0), not the container's own 2.0.
+void build_squad_speed(World& w) {
+    PassabilityGrid g;
+    g.init(80, 80);
+    w.sys.set_grid(std::move(g));
+    w.rng = SimRng(37);
+    UnitDesc c = land_unit(100, cell_center(10, 20), 0, 2.0f, 12.0f, kUccInfantry);
+    c.team_container = true;
+    CHECK(w.sys.add_unit(c));
+    const V2 slots[2] = {{0.0f, 12.0f}, {0.0f, -12.0f}};
+    std::vector<ObjectId> ids;
+    for (ObjectId id = 1; id <= 2; ++id) {
+        CHECK(w.sys.add_unit(land_unit(id, cell_center(10, 20) + slots[id - 1], 0, 1.0f, 3.0f, kUccInfantry)));
+        ids.push_back(id);
+    }
+    CHECK(w.sys.set_land_team(100, ids, slots));
+    CHECK(w.sys.add_unit(land_unit(50, cell_center(12, 22), 0, 3.0f, 3.0f, kUccInfantry)));
+}
+
+void squad_speed_before(World& w, uint32_t f) {
+    if (f == 40 || f == 140) {  // the commands first ...
+        MoveOrder o;
+        o.units = {1, 50};  // the member's order goes to its container: container + the fast unit in one formation
+        o.destination = f == 40 ? cell_center(40, 24) : cell_center(20, 40);
+        w.sys.move(o, w.rng, f);
+    }
+    // member 2 garrisons (parked: its team place is saved) and leaves again
+    if (f == 100) CHECK(w.sys.park_team_member(2));
+    if (f == 170) {
+        CHECK(w.sys.add_unit(land_unit(2, cell_center(14, 30), 0, 1.0f, 3.0f, kUccInfantry)));
+        CHECK(w.sys.rejoin_land_team(2));
+    }
+    for (const ObjectId id : {ObjectId{100}, ObjectId{1}, ObjectId{2}})  // ... then set_team
+        if (w.sys.has_unit(id)) CHECK(w.sys.set_team(id, 100, 1.0f));
+}
+
+Scenario squad_speed_scenario() {
+    Scenario s;
+    s.name = "land squad team speed";
+    s.build = build_squad_speed;
+    s.before = squad_speed_before;
+    s.after = squad_after;
+    s.frames = 260;
+    return s;
+}
+
 // ---------------------------------------------------------------- rejection and corruption
 void test_rejections() {
     const Scenario land = land_scenario();
@@ -1078,6 +1127,24 @@ int main() {
         CHECK(moving > 40 && recovering > 3 && w.sys.view(100).arrived);
         for (uint32_t at : {5u, 60u, 151u, 200u, 300u, last_recovering - 1u}) check_resume(sq, at, 0);
         check_resume(sq, 120, 33);
+        // s78n review: a move ordered exactly on the resume frame (the first tick after the load) reads the saved team
+        // speed: the fast unit's formation speed is the team's 1.0 x mult in the saving and in the loaded run.
+        const Scenario sp = squad_speed_scenario();
+        for (uint32_t at : {40u, 140u, 170u}) check_resume(sp, at, 0);  // 140: member 2 parked
+        {
+            World v(sp.cfg);
+            sp.build(v);
+            const float team = 1.0f * MovementConstants{}.land_speed_multiplier;
+            float fast = 0.0f;
+            for (uint32_t f = 0; f < 120; ++f) {
+                step(sp, v, f, serial_for);
+                fast = std::max(fast, v.sys.view(50).speed);
+            }
+            std::printf("land squad team speed: team %.3f (view %.3f), fast unit formation %.3f, top speed %.3f\n",
+                        static_cast<double>(team), static_cast<double>(v.sys.view(100).team_speed),
+                        static_cast<double>(v.sys.view(50).formation_speed), static_cast<double>(fast));
+            CHECK(v.sys.view(100).team_speed == team && v.sys.view(50).formation_speed == team && fast > 0.0f && fast <= team);
+        }
         std::printf("land squad saves: container moving %u of %u frames, members recovering %u frames (last %u)\n", moving, sq.frames,
                     recovering, last_recovering);
     }

@@ -544,6 +544,9 @@ public:
     // `container_max_speed` = the container type's raw Max_Speed (< 0: unknown, the members' minimum alone). A land team
     // member walks AT that speed: its own speed factor / Mod_Multiplier does not enter (no double count); only a member
     // with speed factor 0 (stunned: its locomotor is suspended) stays put.
+    // s78n review: the team link, factor, raw container Max_Speed and the team cap of the last land tick are saved
+    // (version 14), so a move ordered before the first tick after a load (host commands run before the host's set_team
+    // calls) reads the same team speed as in the saving run. Still not hashed.
     bool set_team(ObjectId id, ObjectId team, float container_factor, float container_max_speed = -1.0f);
     // ---- s78n t03 (TACTICAL_COMBAT §5.4.4 item 2, MOVEMENT §3.7, FIGHTER_FLYING §7): land squad containers ----
     // A land squad container is a unit of this system added with UnitDesc::team_container (land only). add_unit places it
@@ -557,6 +560,8 @@ public:
     //     team speed (set_team(container, container, ...) gives it the team cap) and is the formation unit of its squad:
     //     move / stop / the coordinator calls on a member act on its container (order_id);
     //   - the container is never re-centred on its members and takes no part in land collision, crush or arrival turns;
+    //     s78n review [port]: a steering member is no collision checker and no collision partner (moving or stopped
+    //     checkers skip it: it is neither stopped nor pathing; FIGHTER_FLYING §7's steering vector 0x509810 is [M]);
     //   - each member steers per frame (LandTeamInfantry 0x62d620) toward container + R(yaw) (slot + jiggle) from the
     //     container's state at the start of the tick [port: members precede their container in service order], with the
     //     speed rule of FIGHTER_FLYING §7 step 4 (v = 0 while the container turns in place, port state WalkStartTurn for
@@ -564,7 +569,8 @@ public:
     //     move is passability-tested (a blocked move tries each axis alone, else the member stays);
     //   - while the container has no goal, a member farther than 4.0 from its slot recovers (0x29 / 0x2A): [port] turn in
     //     place beyond Close_Enough_Angle, then walk straight to the slot at its max speed, ending on the slot point (or
-    //     after kReplanAfterBlocked blocked frames), then turn in place to the container's facing.
+    //     after kReplanAfterBlocked blocked frames - s78n review: then it stays given up until the container has a goal
+    //     again or is teleported), then turn in place to the container's facing.
     // A member's view reports the container's has_goal / arrived / failed / goal (has_goal also while recovering). Removing
     // the container releases its members (ordinary units again).
     bool set_land_team(ObjectId container, std::span<const ObjectId> members, std::span<const V2> slots);
@@ -572,6 +578,26 @@ public:
     bool team_slot(ObjectId member, ObjectId& container, V2& slot) const;
     // The steering members of `container` in team index order with their slots (empty when none).
     std::vector<std::pair<ObjectId, V2>> land_team_slots(ObjectId container) const;
+    // s78n review: the same as a view into an index (container, team index, member) kept by the system (derived from the
+    // units: rebuilt by set_land_team / rejoin_land_team / remove_unit / read; not saved, not hashed). No allocation, so
+    // the host's per-query readers (fog footprint, Bribe's E_T) can use it.
+    struct LandTeamSlot {
+        ObjectId container = -1;
+        uint32_t tindex = 0;
+        ObjectId member = -1;
+        V2 slot;
+    };
+    std::span<const LandTeamSlot> land_team(ObjectId container) const;
+    bool is_land_team_container(ObjectId id) const;  // a unit added with UnitDesc::team_container
+    // s78n review (garrisons): a steering member leaving this system for a while (the garrison entry) keeps its team
+    // place: park_team_member records (member, container, slot, team index) and removes the unit (as remove_unit);
+    // rejoin_land_team, after the host's add_unit of the same id, steers it to that slot again (as set_land_team does for
+    // one member). The record is dropped by rejoin_land_team, by remove_unit of the member (it died inside) and by the
+    // container's removal. Saved (version 14) and hashed while any exists. False: not a steering member (nothing done) /
+    // no record, the container is gone, or the unit does not qualify (set_land_team's member rule).
+    bool park_team_member(ObjectId member);
+    bool rejoin_land_team(ObjectId member);
+    bool team_member_parked(ObjectId member) const;
     void hash_speed(StateHasher& h) const;
     // ---- s78l t02 (MOVEMENT §3.5.1 "Arrival turn, details"): clips of the Walk arrival turn ----
     // Every clip play the arrival turn asks for this tick, ascending id (at most one per unit and tick). The clip data
@@ -667,10 +693,12 @@ private:
         uint32_t turn_start = 0, turn_frames = 0;
         float speed_factor = 1.0f;  // S10-int (set_speed_factor)
         float speed_override = -1.0f;  // OI abilities: locomotor +0x2a0 when >= 0 (flag +0x29c)
-        ObjectId team = -1;          // s78k t03: TEAM container (set_team; transient)
-        float team_factor = 1.0f;    // s78k t03: the container's speed factor (set_team; transient)
+        // s78k t03 / s78l t01; s78n review: saved (version 14) - the host sets the first three every tick (set_team), but
+        // a command before the first tick after a load reads them (move_land's team speed).
+        ObjectId team = -1;          // s78k t03: TEAM container (set_team)
+        float team_factor = 1.0f;    // s78k t03: the container's speed factor (set_team)
         float team_cap = 3.0e38f;    // s78k t03: land team locomotor cap, rebuilt each land tick (team_caps)
-        float team_max = -1.0f;      // s78l t01: the container's raw Max_Speed (set_team; transient; < 0 unknown)
+        float team_max = -1.0f;      // s78l t01: the container's raw Max_Speed (set_team; < 0 unknown)
         // s78l t02 (MOVEMENT §3.5.1, save version 12): the Walk arrival turn state (None, 0x0F begin, 0x10 turn, 0x11 end;
         // the wanted yaw is turn_to), the band rate pack +0xe8 (0 = the stopped rate), the clip the turn last played
         // (kAnimNone before the first: treated as idle-class), its start frame and play speed. tplay = this tick's play
@@ -717,6 +745,8 @@ private:
         bool adopted = false;
         // s78n t03 (save version 14): a steering land squad member - its container (-1 none), slot (along, side; pack
         // +0x114 / +0x118), team index, recovery state (0x29 / 0x2A) and consecutive blocked recovery frames.
+        // s78n review: steer_blocked >= kRecoveryBlockedFrames with recovering false = the recovery gave up; it stays given
+        // up (no new recovery) until the container has a goal again or is teleported.
         ObjectId anchor = -1;
         V2 tslot;
         uint32_t tindex = 0;
@@ -951,7 +981,15 @@ private:
     bool fform_internal_ = false;           // a plan / re-path of the formation tick (keeps the formation)
     std::vector<PendingComposition> pending_;  // cu8j t01: creation order (saved, version 13)
     uint32_t pend_serial_ = 0;                 // cu8j t01: the last PendingComposition serial (saved)
-    bool deferred_compose_ = false;            // cu8j t01: the host runs coordinator_update (not saved: host setup)
+    // s78n review: steering members parked while outside the system (garrison), ascending member id (saved, version 14;
+    // hashed while any exists) - LandTeamSlot reused: (container, team index, member, slot).
+    std::vector<LandTeamSlot> parked_;
+    // s78n review: the steering members by (container, team index, member) - derived from units_ (team_ix_rebuild).
+    std::vector<LandTeamSlot> team_ix_;
+    void team_ix_rebuild();
+    bool remove_impl(ObjectId id);  // remove_unit without dropping a parked record
+    void attach_member(Unit& u, ObjectId container, V2 slot, uint32_t tindex);  // set_land_team's per-member part
+    bool deferred_compose_ = false;           // cu8j t01: the host runs coordinator_update (not saved: host setup)
     FighterFormationHooks fhooks_;          // s78f t02 (not saved: the loader re-sets them)
     FlyingHooks fly_hooks_;  // FIGHTER_FLYING §6
     // S8 t11

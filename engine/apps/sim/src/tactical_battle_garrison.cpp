@@ -212,12 +212,29 @@ void TacticalBattle::s4_leave(TacticalMode& mode, objects::ObjectId unit, Vec3 a
         md.z = at.z;
         md.yaw_deg = 0.0f;
         movement_->add_unit(md);
+        s4_rejoin_squad(mode, *u, at);
     }
     // cu8j t02 (MOVEMENT §4.7.2): the garrison leave 0x37a060 adopts the unit (0x39bcb0, return 0x37a369): one ctor draw
     // when it qualifies (never a team member). [M: its place among the leave's other draws] cu8l t02 (CU8K_T02_T06_RE §3
     // rows 0x3abdf8 / 0x37a369, rule 7): the exit's reposition 0x3abb80 and the leave both adopt; [L] one draw is kept (the
     // second adopt would find the unit in the first one's coordinator when the leave runs after the reposition).
     if (bt_rng_) (void)mv_adopt(mode, u->h, *bt_rng_);
+}
+
+// s78n review (TACTICAL_COMBAT §5.4.4 item 2, L1_S4_REMAINING §3.5): a land squad member leaving a garrison steers to its
+// old slot around its container again (MovementSystem::rejoin_land_team). Retail garrisons the container itself (the
+// members' host is their grandparent) and where a garrisoned container sits is untraced (LOB_SOLVER §5 [M]); [port] the
+// port garrisons the members one by one and leaves the container's mover where its path ended, so the first member out of
+// a squad that was entirely inside moves the container to its exit point (TacticalBattle::teleport: the store follows,
+// the members gather around it there - a garrison vehicle may have driven off).
+void TacticalBattle::s4_rejoin_squad(TacticalMode& mode, const Unit& u, Vec3 at) {
+    if (space_ || !movement_ || u.container >= containers_.size()) return;
+    const Container& c = containers_[u.container];
+    if (c.removed || !movement_->is_land_team_container(c.id) || !movement_->team_member_parked(u.id)) return;
+    objects::ObjectStore& store = mode.primary();
+    const objects::ObjectHandle ch = store.find(c.id);
+    if (movement_->land_team(c.id).empty() && store.alive(ch)) (void)teleport(mode, c.id, at, store.facing(ch));
+    (void)movement_->rejoin_land_team(u.id);
 }
 
 // cu8l t02 (CU8K_T02_T06_RE §2, rule 5): the garrison host's stop-and-hold (GarrisonVehicle / GarrisonHoverTransport vf28
@@ -237,7 +254,11 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
         switch (e.kind) {
             case tg::GarrisonEventKind::EnterStarted: {  // the host stops the unit at the approach point
                 const objects::ObjectId one[] = {e.unit};
-                movement_->stop(one);
+                // s78n review [port]: a land squad member's stop would stop its container (the squad's formation unit)
+                // before the other members reach the approach point; it keeps steering to its slot while it enters.
+                mv::ObjectId team_c = -1;
+                mv::V2 team_s;
+                if (!movement_->team_slot(e.unit, team_c, team_s)) movement_->stop(one);
                 // cu8l t02 (CU8K_T02_T06_RE §2 row 0x443780, rule 5): in range with room, the approach 0x443700 stops and
                 // holds the HOST (a garrison vehicle / hover transport: one draw; a structure has no locomotor: none).
                 s4_hold(mode, e.holder);
@@ -254,7 +275,8 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
                     (void)mv_adopt(mode, u->h, *bt_rng_, true);
                 }
                 s4_hold(mode, e.holder);
-                movement_->remove_unit(e.unit);
+                // s78n review: a land squad member keeps its team place (container, slot, team index) for the leave.
+                if (!movement_->park_team_member(e.unit)) movement_->remove_unit(e.unit);
                 store.set_position(u->h, e.position);
                 mode.trees().update(static_cast<tactical::EntityHandle>(e.unit), mode.bounds_of(u->h));
                 if (combat_->has_unit(e.unit)) {

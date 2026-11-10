@@ -262,8 +262,28 @@ inline std::string team_types() {
 // s78n t03 / t09: the team data with the Team type on LAND_TEAM_CONTAINER_LOCOMOTOR (its own mover, members steering to
 // slots) and MaxJiggleDistance 0.75; the trooper sized as FoC's Squad_Stormtrooper (Custom_Hard extents 2.0 x Scale_Factor
 // 1.5 = half-extent 3.0) with FormationSpacing 0.5.
-inline std::string squad_types() {
+// s78n review: `garrison` adds a garrison vehicle (S10_Walker: GARRISON_VEHICLE, 8 Infantry slots; company S10_Walker_Co),
+// makes the trooper a GARRISON_UNIT and gives troopers and walker 100000 health (nobody dies during the garrison test).
+inline std::string squad_types(bool garrison = false) {
     std::string t = team_types();
+    if (garrison) {
+        const size_t tp = t.find("<GroundInfantry Name=\"S10_Trooper\">");
+        if (tp != std::string::npos) {
+            const std::string hp = "<Tactical_Health>100</Tactical_Health>", walk = "<LandBehavior>WALK_LOCOMOTOR</LandBehavior>";
+            if (const size_t p = t.find(hp, tp); p != std::string::npos) t.replace(p, hp.size(), "<Tactical_Health>100000</Tactical_Health>");
+            if (const size_t p = t.find(walk, tp); p != std::string::npos)
+                t.replace(p, walk.size(), "<LandBehavior>WALK_LOCOMOTOR, GARRISON_UNIT</LandBehavior><Garrison_Category>Infantry</Garrison_Category>");
+        }
+        const size_t end = t.find("</S10>");
+        if (end != std::string::npos)
+            t.insert(end, " <GroundVehicle Name=\"S10_Walker\"><Tactical_Health>100000</Tactical_Health><Max_Speed>1.0</Max_Speed>"
+                          "<AI_Combat_Power>100</AI_Combat_Power><CategoryMask>Vehicle</CategoryMask><MovementClass>Tracked</MovementClass>"
+                          "<Behavior>SELECTABLE</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
+                          "<LandBehavior>WALK_LOCOMOTOR, GARRISON_VEHICLE</LandBehavior><Garrison_Category>Infantry</Garrison_Category>"
+                          "<Num_Garrison_Slots>8</Num_Garrison_Slots><Custom_Soft_Footprint_Radius>10</Custom_Soft_Footprint_Radius>"
+                          "<Custom_Hard_XExtent>10</Custom_Hard_XExtent><Custom_Hard_YExtent>10</Custom_Hard_YExtent></GroundVehicle>\n"
+                          " <GroundCompany Name=\"S10_Walker_Co\"><Company_Units>S10_Walker</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n");
+    }
     const std::string team = "<Team Name=\"Team\"><Behavior>TEAM</Behavior>";
     if (const size_t p = t.find(team); p != std::string::npos)
         t.insert(p + team.size(), "<LandBehavior>LAND_TEAM_CONTAINER_LOCOMOTOR</LandBehavior><MaxJiggleDistance>0.75</MaxJiggleDistance>");
@@ -603,9 +623,10 @@ inline std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool
                                 bool obstacle = false, bool team = false, bool fog_bm = false, bool fighters = false,
                                 bool fog_setup = false, bool bomb = false, bool landing = false, bool sprint = false,
                                 bool convert = false, bool hack = false, bool vland = false, bool presence = false,
-                                bool gate = false, bool squad = false) {
+                                bool gate = false, bool squad = false, bool squad_garrison = false) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / (std::string(g_temp_prefix) + (squad ? "_squad"  // s78n t03 / t09
+    d->root = fs::temp_directory_path() / (std::string(g_temp_prefix) + (squad_garrison ? "_squad_garrison"  // s78n review
+                                           : squad ? "_squad"  // s78n t03 / t09
                                            : gate ? "_gate"  // cu8g t05
                                            : presence ? "_presence"  // s78l t03
                                            : vland       ? "_vehicle_landing"  // s78l t04
@@ -630,7 +651,7 @@ inline std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", squad ? squad_types()  // s78n t03 / t09
+    write_file(x / "S10Types.xml", squad || squad_garrison ? squad_types(squad_garrison)  // s78n t03 / t09, s78n review
                                    : gate ? gate_types()  // cu8g t05
                                    : presence ? presence_types()  // s78l t03
                                    : vland ? vehicle_landing_types()  // s78l t04
@@ -688,7 +709,7 @@ inline std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool
                " <Damage_To_Armor_Mod>Damage_Laser, Armor_Ship, 0.8</Damage_To_Armor_Mod>\n"
                " <AutoResolveLoserAttrition>0.80</AutoResolveLoserAttrition>\n"
                " <Space_Retreat_Allowed_Countdown_Seconds>5.0</Space_Retreat_Allowed_Countdown_Seconds>\n" +
-                   std::string(landing || sprint || convert || hack || vland || squad ? " <Use_Reinforcement_Points>No</Use_Reinforcement_Points>\n" : "") +  // a1i t04: no points on the map
+                   std::string(landing || sprint || convert || hack || vland || squad || squad_garrison ? " <Use_Reinforcement_Points>No</Use_Reinforcement_Points>\n" : "") +  // a1i t04: no points on the map
                    std::string(fog_setup ? " <SetupPhaseEnabled>True</SetupPhaseEnabled>\n"  // FOWF t05: a mod's land setup phase
                                            " <SetupPhaseCountdownSeconds>3</SetupPhaseCountdownSeconds>\n"
                                          : "") +

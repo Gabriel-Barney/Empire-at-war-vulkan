@@ -369,11 +369,18 @@ bool MovementSystem::add_unit(const UnitDesc& d) {
 }
 
 bool MovementSystem::remove_unit(ObjectId id) {
+    // s78n review: a parked squad member removed for good (it died inside its garrison) gives up its team place.
+    std::erase_if(parked_, [id](const LandTeamSlot& p) { return p.member == id; });
+    return remove_impl(id);
+}
+
+bool MovementSystem::remove_impl(ObjectId id) {
     const int32_t i = find(id);
     if (i < 0) return false;
     if (cfg_.mode == MoveMode::Land) tree_.remove(static_cast<EntityHandle>(id));
     else space_.clear_track(id);
     fighter_removed(id);  // FIGHTER_FLYING: squadrons, cells, locks, targets naming it
+    const bool steering = units_[static_cast<size_t>(i)].anchor >= 0 || units_[static_cast<size_t>(i)].d.team_container;
     units_.erase(units_.begin() + i);
     for (Unit& m : units_)  // s78n t03: a removed container releases its members
         if (m.anchor == id) {
@@ -381,6 +388,8 @@ bool MovementSystem::remove_unit(ObjectId id) {
             m.recovering = false;
             m.steer_blocked = 0;
         }
+    std::erase_if(parked_, [id](const LandTeamSlot& p) { return p.container == id; });  // s78n review: and its parked ones
+    if (steering) team_ix_rebuild();
     return true;
 }
 
@@ -805,6 +814,9 @@ bool MovementSystem::teleport(ObjectId id, V2 pos, float z, float yaw_deg, uint3
     u->m.pos = pos;
     u->m.yaw = wrap_deg(yaw_deg);
     u->z = z;
+    if (u->d.team_container)  // s78n review: the squad's members recover to their slots at the new place (a give-up ends)
+        for (Unit& m : units_)
+            if (m.anchor == id) m.steer_blocked = 0;
     if (u->d.locomotor != LocomotorKind::Default) {  // §4.3-4.7: idle where placed
         u->sm.anim = AnimPlay{};
         u->sm.dest = pos;
@@ -1098,7 +1110,11 @@ void MovementSystem::detect_collisions(uint32_t frame) {
         if (checker_moving(a, frame)) {
             for (uint32_t bi : cand) {
                 const Unit& b = units_[bi];
-                if (!collision_classes_interact(a.d.collision_class, b.d.collision_class)) continue;
+                // s78n review [port]: a steering squad member is no obstacle for a moving checker either - it is not
+                // stopped (it follows its marching container, MOVEMENT §3.7: the member copies the container's walk
+                // states) and it steers itself (FIGHTER_FLYING §7 step 6, the collision steering vector 0x509810 [M]);
+                // the port has no member path to extrapolate for a MovingVsMoving test, so it takes no collision object.
+                if (b.anchor >= 0 || !collision_classes_interact(a.d.collision_class, b.d.collision_class)) continue;
                 // OI tactical: a crusher drives through units it can crush (§5.4 case 3 "push/crush attempt" [port]);
                 // the crush pass (§5.5) kills them.
                 if (crushes(a, b)) continue;
@@ -1845,6 +1861,17 @@ void MovementSystem::hash_units(StateHasher& h) const {
     for (const CrushEvent& e : crush_) {
         h.i32(e.crusher);
         h.i32(e.victim);
+    }
+    if (!parked_.empty()) {  // s78n review: parked squad members (garrisoned), appended only while any exists
+        h.u8(0xC8);
+        h.u32(static_cast<uint32_t>(parked_.size()));
+        for (const LandTeamSlot& p : parked_) {
+            h.i32(p.member);
+            h.i32(p.container);
+            h.u32(p.tindex);
+            h.f32(p.slot.x);
+            h.f32(p.slot.y);
+        }
     }
     if (cfg_.mode == MoveMode::Land) coll_.hash(h);  // S7 collision layer (land only: the space format is unchanged)
     hash_special(h);  // §4.2-4.7: appended only when used (the format is unchanged otherwise)

@@ -1419,6 +1419,7 @@ private:
     bool squad_joint_slots(const objects::ObjectStore& st, objects::ObjectId container,
                            std::vector<tactical::abilities::SquadSlot>& slots, float& jiggle, Vec3& facing) const;
     void combat_team_positions(const objects::ObjectStore& store);  // s78n t03: CombatSystem::set_team_position per team
+    void s4_rejoin_squad(TacticalMode& mode, const Unit& u, Vec3 at);  // s78n review: a member out of a garrison
     std::vector<int8_t> adopt_kind_;      // cu8j t02: mv_adopt_kind cache (+1; 0 = not computed); derived, not saved
     bool deploy_script_ = false;          // cu8j t02: deploy() for a script spawn (no team helper adopt; transient)
     // FIGHTER_FLYING §6.3.1: FlyingHooks::clearance type data per object (ClearanceInfoFn), cached per type.

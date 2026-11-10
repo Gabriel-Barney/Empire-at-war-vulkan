@@ -599,25 +599,26 @@ bool TacticalBattle::squad_joint_slots(const objects::ObjectStore& st, objects::
     // s78n t09 (TACTICAL_COMBAT §5.4.4 item 1, 0x404450): the container's member array (live members, team index order;
     // null / gone entries skipped), each member's slot (along +0x114, side +0x118) and its 0x396850 half-extents (hx with
     // the along offset, hy with the side offset), the container type's MaxJiggleDistance (+0x16ac) and its facing.
+    // s78n review: index lookups only (this runs per fog query, in the parallel candidate filter too) - the movement
+    // system's team container test and its (container, team index) member index, the store's id lookup and the units'
+    // ascending-id binary search. Only mv_squad_add makes team container movers (removed with the container: unit_gone).
     slots.clear();
     jiggle = 0.0f;
-    if (space_ || !movement_ || !movement_->has_unit(container)) return false;
-    const Container* ct = nullptr;
-    for (const Container& c : containers_)
-        if (c.id == container && c.team && !c.removed) ct = &c;
-    if (!ct || !st.alive(ct->h)) return false;
-    for (const auto& [id, slot] : movement_->land_team_slots(container)) {
-        const auto it = std::lower_bound(units_.begin(), units_.end(), id, [](const Unit& u, objects::ObjectId v) { return u.id < v; });
-        if (it == units_.end() || it->id != id || !it->alive || it->retreated) continue;
+    if (space_ || !movement_ || !movement_->is_land_team_container(container)) return false;
+    const objects::ObjectHandle ch = st.find(container);
+    if (!st.alive(ch)) return false;
+    for (const mv::MovementSystem::LandTeamSlot& e : movement_->land_team(container)) {
+        const auto it = std::lower_bound(units_.begin(), units_.end(), e.member, [](const Unit& u, objects::ObjectId v) { return u.id < v; });
+        if (it == units_.end() || it->id != e.member || !it->alive || it->retreated) continue;
         tactical::abilities::SquadSlot s;
-        s.along = slot.x;
-        s.side = slot.y;
+        s.along = e.slot.x;
+        s.side = e.slot.y;
         unit_half_extents(*it, s.hx, s.hy);
         slots.push_back(s);
     }
-    const objects::TypeIndex t = st.type(ct->h);
+    const objects::TypeIndex t = st.type(ch);
     if (!slots.empty() && t < catalog_->types().size()) jiggle = catalog_->types().get_float(t, "MaxJiggleDistance");
-    facing = st.facing(ct->h);
+    facing = st.facing(ch);
     return true;
 }
 

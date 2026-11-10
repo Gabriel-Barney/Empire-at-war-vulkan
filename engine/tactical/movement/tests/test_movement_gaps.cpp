@@ -2894,6 +2894,126 @@ static void test_land_squad() {
                 static_cast<double>(a.lead_speed), static_cast<double>(a.lag_speed), static_cast<double>(a.final_err));
 }
 
+// s78n review (FIGHTER_FLYING §7, MOVEMENT §3.7):
+//  * a unit crossing a marching squad takes no collision object with a member (a member is neither a stopped obstacle
+//    nor pathing: before, the moving checker treated it as stopped - MovingVsStopped, path ends, nudges) and arrives;
+//  * a member whose slot point is unreachable gives its recovery up after kRecoveryBlockedFrames blocked frames and stays
+//    given up (not has_goal = kUnitMoving every frame) until its container moves or is teleported;
+//  * park_team_member / rejoin_land_team (the garrison entry and leave) keep the member's container, slot and team index.
+static void test_land_squad_review() {
+    const auto squad = [](MovementSystem& sys, V2 at, const V2 (&slots)[3], const V2 (&starts)[3]) {
+        UnitDesc c = unit(100, at, 2, 2.0f, 12.0f, LocomotorKind::Default);
+        c.team_container = true;
+        CHECK(sys.add_unit(c));
+        std::vector<ObjectId> ids;
+        for (ObjectId id = 1; id <= 3; ++id) {
+            CHECK(sys.add_unit(unit(id, starts[id - 1], 2, 2.0f, 6.0f, LocomotorKind::Default)));
+            ids.push_back(id);
+        }
+        CHECK(sys.set_land_team(100, ids, slots));
+        for (ObjectId id : {ObjectId{100}, ObjectId{1}, ObjectId{2}, ObjectId{3}}) CHECK(sys.set_team(id, 100, 1.0f));
+    };
+    {  // a slow unit crossing the squad's line while the squad marches through
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        const V2 at = cell_center(10, 20);
+        const V2 slots[3] = {{0.0f, 15.0f}, {0.0f, 0.0f}, {0.0f, -15.0f}};
+        const V2 starts[3] = {at + slots[0], at + slots[1], at + slots[2]};
+        squad(sys, at, slots, starts);
+        UnitDesc x = unit(50, cell_center(30, 16), 2, 0.4f, 6.0f, LocomotorKind::Default);
+        CHECK(sys.add_unit(x));
+        SimRng rng(5);
+        MoveOrder o;
+        o.units = {2};
+        o.destination = cell_center(50, 20);
+        sys.move(o, rng, 1);
+        MoveOrder xo;
+        xo.units = {50};
+        xo.destination = cell_center(30, 24);
+        sys.move(xo, rng, 1);
+        uint32_t member_collisions = 0, crossings = 0;
+        for (uint32_t f = 2; f < 700; ++f) {
+            sys.tick(f, rng, serial_for);
+            for (const CollisionObject& co : sys.collisions().list())
+                if ((co.a >= 1 && co.a <= 3) || (co.b >= 1 && co.b <= 3)) ++member_collisions;
+            const UnitView k = sys.view(100);
+            if (k.has_goal && std::fabs(k.pos.x - sys.view(50).pos.x) < 20.0f) ++crossings;
+        }
+        const UnitView xv = sys.view(50);
+        CHECK(crossings > 0);  // the squad passed the crossing unit while it walked
+        CHECK(member_collisions == 0);
+        CHECK(xv.arrived && !xv.failed && length(xv.pos - cell_center(30, 24)) < 1.0f);
+        CHECK(sys.view(100).arrived);
+        std::printf("land squad review: crossing frames %u, member collisions %u, crosser arrived %d\n", crossings,
+                    member_collisions, xv.arrived ? 1 : 0);
+    }
+    {  // an unreachable slot: the recovery gives up and stays given up while the team is idle
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g = open_grid(100, 100);
+        for (int32_t y = 21; y <= 23; ++y)
+            for (int32_t x = 6; x <= 14; ++x) g.set_base(x, y, kPassImpassable);
+        sys.set_grid(std::move(g));
+        sys.set_anim_length_fn(anim_len);
+        const V2 at = cell_center(10, 20);
+        const V2 slots[3] = {{0.0f, 40.0f}, {-15.0f, 0.0f}, {-15.0f, -15.0f}};  // member 1's slot point lies in the wall
+        const V2 starts[3] = {{at.x, at.y - 5.0f}, at + slots[1], at + slots[2]};
+        squad(sys, at, slots, starts);
+        SimRng rng(6);
+        uint32_t first_goal = 0, late_goal = 0;
+        for (uint32_t f = 1; f < 200; ++f) {
+            sys.tick(f, rng, serial_for);
+            const bool g1 = sys.view(1).has_goal;
+            if (f < 80 && g1) ++first_goal;
+            if (f >= 80 && g1) ++late_goal;
+        }
+        CHECK(first_goal > 10);  // it tried: turn toward the slot, walk, blocked
+        CHECK(late_goal == 0);   // given up for good while the team is idle (before: has_goal 10 frames of every 11)
+        CHECK(!sys.view(100).has_goal && length(sys.view(1).pos - V2{at.x, at.y + 40.0f}) > 4.0f);
+        // the container is teleported to open ground: the give-up ends, the member recovers to its slot there
+        const V2 there = cell_center(20, 30);
+        CHECK(sys.teleport(100, there, 0.0f, 0.0f, 200));
+        bool again = false;
+        for (uint32_t f = 200; f < 700; ++f) {
+            sys.tick(f, rng, serial_for);
+            again = again || sys.view(1).has_goal;
+        }
+        const V2 sp{there.x, there.y + 40.0f};  // slot (0, 40) at yaw 0, no jiggle (the team never moved)
+        CHECK(again && !sys.view(1).has_goal && length(sys.view(1).pos - sp) <= 4.0f);
+        std::printf("land squad review: unreachable slot - goal frames before give-up %u, after %u\n", first_goal, late_goal);
+    }
+    {  // park / rejoin (garrison entry and leave)
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        const V2 at = cell_center(10, 20);
+        const V2 slots[3] = {{0.0f, 15.0f}, {0.0f, 0.0f}, {0.0f, -15.0f}};
+        const V2 starts[3] = {at + slots[0], at + slots[1], at + slots[2]};
+        squad(sys, at, slots, starts);
+        CHECK(sys.is_land_team_container(100) && !sys.is_land_team_container(2));
+        CHECK(!sys.park_team_member(100) && sys.has_unit(100));  // not a steering member: nothing done
+        CHECK(sys.park_team_member(2) && !sys.has_unit(2) && sys.team_member_parked(2));
+        CHECK(sys.land_team(100).size() == 2 && sys.land_team(100)[0].member == 1 && sys.land_team(100)[1].member == 3);
+        CHECK(!sys.rejoin_land_team(2));  // not added again yet: the record is dropped
+        CHECK(sys.park_team_member(1) && !sys.team_member_parked(2));
+        CHECK(sys.add_unit(unit(1, cell_center(14, 24), 2, 2.0f, 6.0f, LocomotorKind::Default)));
+        CHECK(sys.rejoin_land_team(1) && !sys.team_member_parked(1));
+        ObjectId tc = -1;
+        V2 ts;
+        CHECK(sys.team_slot(1, tc, ts) && tc == 100 && ts == slots[0]);
+        const auto team = sys.land_team(100);
+        CHECK(team.size() == 2 && team[0].member == 1 && team[0].tindex == 0 && team[1].member == 3 && team[1].tindex == 2);
+        // an order on the rejoined member moves the squad
+        SimRng rng(7);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(30, 20);
+        sys.move(o, rng, 1);
+        CHECK(sys.view(100).has_goal && sys.view(1).has_goal);
+        // a parked member removed for good (it died inside) and a removed container drop their records
+        CHECK(sys.park_team_member(3) && sys.team_member_parked(3) && !sys.remove_unit(3) && !sys.team_member_parked(3));
+        CHECK(sys.park_team_member(1) && sys.remove_unit(100) && !sys.team_member_parked(1) && sys.land_team(100).empty());
+    }
+}
+
 static void test_determinism() {
     const unsigned hw = std::max(2u, std::thread::hardware_concurrency());
     const CrcLog a = mixed_run(serial_for);
@@ -3198,6 +3318,7 @@ int main() {
     test_arrival_close();        // s78l t02
     test_forced_destination();   // s78l t02
     test_land_squad();           // s78n t03
+    test_land_squad_review();    // s78n review
     test_determinism();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

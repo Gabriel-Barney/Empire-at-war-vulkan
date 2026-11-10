@@ -346,7 +346,10 @@ bool TacticalBattle::teleport(TacticalMode& mode, objects::ObjectId id, Vec3 pos
     if (!st.alive(h)) return false;
     st.set_position(h, position);
     st.set_facing(h, facing);
-    if (const Unit* u = unit_by_id(id); u && u->movable && movement_)
+    // s78n review (TACTICAL_COMBAT §5.4.4 item 2.4: position setters move a land squad container too [M]): a squad
+    // container is no battle unit but has a mover of its own, which commit() writes back to the store - so it moves with
+    // the mover (its members then recover to their slots around the new place).
+    if (const Unit* u = unit_by_id(id); movement_ && ((u && u->movable) || (!u && movement_->is_land_team_container(id))))
         movement_->teleport(id, {position.x, position.y}, position.z, yaw_deg_of(facing), frame_);
     if (combat_ && combat_->has_unit(id)) {
         combat_->set_position(id, to_t(position));

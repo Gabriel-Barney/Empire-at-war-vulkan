@@ -1173,6 +1173,202 @@ void test_land_squad_container() {
     CHECK(settle_err <= 4.0f);
 }
 
+// s78n review (TACTICAL_COMBAT §5.4.4 item 2, L1_S4_REMAINING §3.5): a land squad garrisons in a garrison vehicle and
+// leaves it again (squad_types(true): S10_Walker, GARRISON_UNIT troopers). The garrison entry parks each member's team
+// place (MovementSystem::park_team_member); the walker then drives off with the squad inside; the leave puts the
+// container at the first member's exit point and steers every member to its old slot again (rejoin_land_team): the same
+// slots in team index order, the same joint box (Bribe's E_T, the fog footprint), the container's store position = its
+// mover's (team targeting P_U). An order on one member then moves the whole squad, which settles on its slots.
+void test_land_squad_garrison() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+                       false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSetup setup = make_setup(*d, true);
+    const uint32_t walker_co = type_of(*d, "S10_Walker_Co"), walker_t = type_of(*d, "S10_Walker");
+    CHECK(walker_co < d->types.size() && walker_t < d->types.size());
+    setup.forces.push_back({0, 1, walker_co});  // the Empire's defenders + the walker
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, setup);
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 5000;
+    opt.battle.skip_human_units = true;  // the stand-in leaves the human's units to this test's orders
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    namespace tc = alamo::tactical::combat;
+    namespace mv = alamo::tactical::movement;
+    bool invaded = false, done = false;
+    int stage = 0;
+    uint32_t stage_frame = 0;
+    objects::ObjectId team_id = objects::kNoObjectId, walker = objects::kNoObjectId;
+    std::vector<objects::ObjectId> members;
+    std::vector<std::pair<mv::ObjectId, mv::V2>> slots;
+    float box_x = 0.0f, box_y = 0.0f, exit_gap = -1.0f, walked = 0.0f, settle_err = -1.0f;
+    bool inside_ok = false, rejoined = false, ordered = false, store_ok = true, teleported = false;
+    Vec3 walker_at{}, tele_to{};
+    for (uint64_t t = 0; t < 12000 && !done; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->frame() < 3) {
+            if (stage > 0) break;  // the battle ended
+            continue;
+        }
+        objects::ObjectStore& st = tm->primary();
+        const tc::CombatSystem& cs = b->combat();
+        const mv::MovementSystem& ms = b->movement();
+        if (stage == 0) {  // the human's squad and walker
+            std::map<uint32_t, std::vector<objects::ObjectId>> teams;
+            for (size_t i = 0; i < cs.unit_count(); ++i) {
+                const auto id = cs.unit_id_at(i);
+                if (!cs.alive(id)) continue;
+                if (cs.team(id) != 0) teams[cs.team(id)].push_back(id);
+                if (st.type(st.find(id)) == walker_t) walker = id;
+            }
+            for (const auto& [tid, m] : teams) {
+                const objects::ObjectHandle th = st.find(static_cast<objects::ObjectId>(tid));
+                if (m.size() >= 2 && team_id == objects::kNoObjectId && st.alive(th) && st.owner(th) == 0) {
+                    team_id = static_cast<objects::ObjectId>(tid);
+                    members = m;
+                }
+            }
+            CHECK(team_id != objects::kNoObjectId && walker != objects::kNoObjectId);
+            if (team_id == objects::kNoObjectId || walker == objects::kNoObjectId) break;
+            CHECK(ms.is_land_team_container(team_id) && cs.owner(walker) == 0);
+            slots = ms.land_team_slots(team_id);
+            CHECK(slots.size() == members.size());
+            CHECK(b->squad_joint_box(st, team_id, box_x, box_y) && box_x > 0.0f && box_y > 0.0f);
+            CHECK(b->order_garrison(*tm, 0, members, walker, host.random().synced()) == commands::RejectReason::None);
+            stage = 1;
+            stage_frame = b->frame();
+            continue;
+        }
+        bool all_alive = cs.alive(walker);
+        for (const auto id : members) all_alive = all_alive && cs.alive(id);
+        CHECK(all_alive);
+        if (!all_alive) break;
+        const objects::ObjectHandle th = st.find(team_id);
+        const mv::UnitView k = ms.view(team_id);
+        if (st.position(th).x != k.pos.x || st.position(th).y != k.pos.y) store_ok = false;  // P_U = the mover's position
+        if (stage == 1) {  // every member inside the walker
+            bool inside = true;
+            for (const auto id : members) inside = inside && b->garrison_holder_of(id) == walker;
+            if (!inside) {
+                if (b->frame() > stage_frame + 1500) break;
+                continue;
+            }
+            inside_ok = ms.has_unit(team_id);
+            for (const auto id : members) inside_ok = inside_ok && !ms.has_unit(id) && ms.team_member_parked(id);
+            float ex = -1.0f, ey = -1.0f;
+            inside_ok = inside_ok && ms.land_team(team_id).empty() && b->squad_joint_box(st, team_id, ex, ey) && ex == 0.0f && ey == 0.0f;
+            // the walker drives 300 off with the squad inside
+            const Vec3 wp = st.position(st.find(walker));
+            walker_at = wp;
+            const objects::ObjectId w1[] = {walker};
+            CHECK(b->order_move(*tm, 0, w1, wp.x + 300.0f, wp.y, host.random().synced()) == commands::RejectReason::None);
+            stage = 2;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 2) {  // the walker stops; the squad leaves
+            if (ms.view(walker).has_goal && b->frame() < stage_frame + 900) continue;
+            const Vec3 wp = st.position(st.find(walker));
+            walked = std::sqrt((wp.x - walker_at.x) * (wp.x - walker_at.x) + (wp.y - walker_at.y) * (wp.y - walker_at.y));
+            CHECK(b->order_leave_garrison(*tm, 0, members) == commands::RejectReason::None);
+            rejoined = true;
+            for (size_t m = 0; m < members.size(); ++m) {
+                mv::ObjectId c = -1;
+                mv::V2 sl;
+                rejoined = rejoined && ms.has_unit(members[m]) && b->garrison_holder_of(members[m]) == objects::kNoObjectId &&
+                           ms.team_slot(members[m], c, sl) && c == team_id && sl == slots[m].second && !ms.team_member_parked(members[m]);
+            }
+            rejoined = rejoined && ms.land_team_slots(team_id) == slots;
+            float ex = 0.0f, ey = 0.0f;
+            CHECK(b->squad_joint_box(st, team_id, ex, ey) && ex == box_x && ey == box_y);
+            const mv::V2 kp = ms.view(team_id).pos;
+            exit_gap = std::sqrt((kp.x - wp.x) * (kp.x - wp.x) + (kp.y - wp.y) * (kp.y - wp.y));
+            stage = 3;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 3) {  // an order on one member moves the squad
+            if (b->frame() < stage_frame + 30) continue;
+            const Vec3 p = st.position(th);
+            const objects::ObjectId one[] = {members.back()};
+            CHECK(b->order_move(*tm, 0, one, p.x - 200.0f, p.y + 100.0f, host.random().synced()) == commands::RejectReason::None);
+            ordered = ms.view(team_id).has_goal;
+            for (const auto id : members) ordered = ordered && ms.view(id).has_goal && ms.view(id).goal == ms.view(team_id).goal;
+            stage = 4;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 4) {
+            if (k.has_goal && b->frame() < stage_frame + 1200) continue;
+            CHECK(k.arrived);
+            stage = 5;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 5) {
+            if (b->frame() < stage_frame + 150) continue;  // the members settle on their slots
+            const float c = std::cos(k.yaw * 0.017453292f), s = std::sin(k.yaw * 0.017453292f);
+            settle_err = 0.0f;
+            for (size_t m = 0; m < members.size(); ++m) {
+                const mv::UnitView v = ms.view(members[m]);
+                const mv::V2 off = slots[m].second + v.jiggle;
+                const float tx = k.pos.x + c * off.x - s * off.y, ty = k.pos.y + s * off.x + c * off.y;
+                settle_err = std::max(settle_err, std::sqrt((v.pos.x - tx) * (v.pos.x - tx) + (v.pos.y - ty) * (v.pos.y - ty)));
+            }
+            for (const auto id : members) CHECK(cs.team(id) == static_cast<uint32_t>(team_id));  // team targeting: still its team
+            // s78n review (§5.4.4 item 2.4): a teleport of the container moves its mover (before, the store moved and
+            // commit() wrote the old position back); the members then recover to their slots there
+            const Vec3 p = st.position(th);
+            tele_to = Vec3{p.x + 60.0f, p.y + 40.0f, p.z};
+            CHECK(b->teleport(*tm, team_id, tele_to, st.facing(th)));
+            stage = 6;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (b->frame() < stage_frame + 2) continue;
+        const Vec3 p = st.position(th);
+        teleported = k.pos.x == tele_to.x && k.pos.y == tele_to.y && p.x == tele_to.x && p.y == tele_to.y;
+        for (const auto id : members) teleported = teleported && ms.view(id).has_goal;  // recovering to the new slots
+        done = true;
+    }
+    std::printf("  land squad garrison: stage %d, %zu members inside %d, walker drove %.1f, rejoined %d, container %.1f from the "
+                "walker, squad order %d, settled within %.2f, store = mover %d\n",
+                stage, members.size(), inside_ok ? 1 : 0, static_cast<double>(walked), rejoined ? 1 : 0, static_cast<double>(exit_gap),
+                ordered ? 1 : 0, static_cast<double>(settle_err), store_ok ? 1 : 0);
+    std::printf("  land squad garrison: container teleport moves its mover %d\n", teleported ? 1 : 0);
+    CHECK(done);
+    if (!done) return;
+    CHECK(inside_ok && walked > 100.0f && rejoined && ordered && store_ok);
+    CHECK(exit_gap >= 0.0f && exit_gap < 80.0f);  // the container came out with its squad, not left at the old approach point
+    CHECK(settle_err <= 4.0f);
+    CHECK(teleported);
+}
+
 // s78k t04 (TACTICAL_COMBAT §3.5 "Convert and its team rule" steps 3-5): a converting blaster (convert_types) turns
 // enemy team members in a land battle. CombatSystem converts the victim's whole team (combat owner, one
 // UnitEffect::Converted each); the host follows each event (store owner) and its TEAM container - the store owner and the
@@ -2222,6 +2418,7 @@ int main(int argc, char** argv) {
     test_team_hack_bribe(true);
     test_vehicle_thief();  // s78n t05
     test_land_squad_container();  // s78n t03 / t09
+    test_land_squad_garrison();   // s78n review
     test_vehicle_landing_exit();
     std::printf("a1i t04 / t05: land Reinforce from a landing object (spawn, carried type, unload offsets, take-off)\n");
     test_landing_drop(false);

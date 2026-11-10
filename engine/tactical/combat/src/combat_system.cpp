@@ -250,6 +250,10 @@ bool CombatSystem::add_unit(const UnitSpawn& s, uint32_t frame, SimRng& rng) {
         nu.weapon_cooldown = hp_first_cooldown(ud.weapon_recharge, cfg_.fps, rng);
         nu.weapon_pulses = ud.weapon_pulse_count;
     }
+    if (nu.team != 0) {  // s78n review: a team unit added between ticks is in the member lists at once (as after a load)
+        const std::pair<uint32_t, ObjectId> e{nu.team, nu.id};
+        team_members_.insert(std::lower_bound(team_members_.begin(), team_members_.end(), e), e);
+    }
     return true;
 }
 
@@ -4502,6 +4506,9 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         u.last_pos = u.pos;
     }
     flush();
+    // s78n review: the team member lists as a load rebuilds them (combat_save), so readers between ticks (the movement
+    // tick's fighter-formation in_range hook -> inside_min_range -> nearest_team_member) agree live and after a load.
+    rebuild_team_members();
     trees_ = nullptr;
     tick_rng_ = nullptr;
 }

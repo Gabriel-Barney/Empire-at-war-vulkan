@@ -41,6 +41,30 @@ bool steer_commit(const PassabilityGrid& grid, LandMotion& m, V2 to, uint32_t ma
 
 }  // namespace
 
+void MovementSystem::attach_member(Unit& u, ObjectId container, V2 slot, uint32_t tindex) {
+    u.anchor = container;
+    u.tslot = slot;
+    u.tindex = tindex;
+    u.recovering = false;
+    u.steer_blocked = 0;
+    // The member's own order ends: its container holds the squad's (the formation unit).
+    u.has_goal = false;
+    u.need_path = false;
+    u.arrived = false;
+    u.failed = false;
+    u.pend = 0;
+    if (u.start_frame == kStartPending) u.start_frame = 0;
+    u.adopted = false;
+    u.in_formation = false;
+    u.formation_speed = 3.0e38f;
+    u.m.path.clear();
+    u.m.next = 0;
+    u.m.speed = 0.0f;
+    u.m.state = LocoState::WalkStopped;
+    end_push(u);
+    arrival_reset(u);
+}
+
 bool MovementSystem::set_land_team(ObjectId container, std::span<const ObjectId> members, std::span<const V2> slots) {
     if (cfg_.mode != MoveMode::Land || members.size() != slots.size()) return false;
     const Unit* c = unit_ptr(container);
@@ -51,31 +75,21 @@ bool MovementSystem::set_land_team(ObjectId container, std::span<const ObjectId>
     }
     for (Unit& u : units_)
         if (u.anchor == container) u.anchor = -1;  // a re-call replaces the member list
-    for (size_t i = 0; i < members.size(); ++i) {
-        Unit& u = *unit_ptr(members[i]);
-        u.anchor = container;
-        u.tslot = slots[i];
-        u.tindex = static_cast<uint32_t>(i);
-        u.recovering = false;
-        u.steer_blocked = 0;
-        // The member's own order ends: its container holds the squad's (the formation unit).
-        u.has_goal = false;
-        u.need_path = false;
-        u.arrived = false;
-        u.failed = false;
-        u.pend = 0;
-        if (u.start_frame == kStartPending) u.start_frame = 0;
-        u.adopted = false;
-        u.in_formation = false;
-        u.formation_speed = 3.0e38f;
-        u.m.path.clear();
-        u.m.next = 0;
-        u.m.speed = 0.0f;
-        u.m.state = LocoState::WalkStopped;
-        end_push(u);
-        arrival_reset(u);
-    }
+    std::erase_if(parked_, [container](const LandTeamSlot& p) { return p.container == container; });
+    for (size_t i = 0; i < members.size(); ++i) attach_member(*unit_ptr(members[i]), container, slots[i], static_cast<uint32_t>(i));
+    team_ix_rebuild();
     return true;
+}
+
+void MovementSystem::team_ix_rebuild() {
+    team_ix_.clear();
+    for (const Unit& u : units_)
+        if (u.anchor >= 0) team_ix_.push_back({u.anchor, u.tindex, u.d.id, u.tslot});
+    std::sort(team_ix_.begin(), team_ix_.end(), [](const LandTeamSlot& a, const LandTeamSlot& b) {
+        if (a.container != b.container) return a.container < b.container;
+        if (a.tindex != b.tindex) return a.tindex < b.tindex;
+        return a.member < b.member;
+    });
 }
 
 bool MovementSystem::team_slot(ObjectId member, ObjectId& container, V2& slot) const {
@@ -87,15 +101,56 @@ bool MovementSystem::team_slot(ObjectId member, ObjectId& container, V2& slot) c
     return true;
 }
 
+std::span<const MovementSystem::LandTeamSlot> MovementSystem::land_team(ObjectId container) const {
+    const auto lo = std::lower_bound(team_ix_.begin(), team_ix_.end(), container,
+                                     [](const LandTeamSlot& e, ObjectId c) { return e.container < c; });
+    auto hi = lo;
+    while (hi != team_ix_.end() && hi->container == container) ++hi;
+    return {lo, hi};
+}
+
 std::vector<std::pair<ObjectId, V2>> MovementSystem::land_team_slots(ObjectId container) const {
-    std::vector<std::pair<uint32_t, std::pair<ObjectId, V2>>> v;
-    for (const Unit& u : units_)
-        if (u.anchor == container) v.push_back({u.tindex, {u.d.id, u.tslot}});
-    std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) { return a.first < b.first || (a.first == b.first && a.second.first < b.second.first); });
     std::vector<std::pair<ObjectId, V2>> out;
-    out.reserve(v.size());
-    for (const auto& e : v) out.push_back(e.second);
+    for (const LandTeamSlot& e : land_team(container)) out.push_back({e.member, e.slot});
     return out;
+}
+
+bool MovementSystem::is_land_team_container(ObjectId id) const {
+    const Unit* u = unit_ptr(id);
+    return u && u->d.team_container;
+}
+
+bool MovementSystem::park_team_member(ObjectId member) {
+    const Unit* u = unit_ptr(member);
+    if (!u || u->anchor < 0) return false;
+    const auto it = std::lower_bound(parked_.begin(), parked_.end(), member,
+                                     [](const LandTeamSlot& e, ObjectId m) { return e.member < m; });
+    const LandTeamSlot p{u->anchor, u->tindex, member, u->tslot};
+    if (it != parked_.end() && it->member == member) *it = p;
+    else parked_.insert(it, p);
+    return remove_impl(member);
+}
+
+bool MovementSystem::team_member_parked(ObjectId member) const {
+    const auto it = std::lower_bound(parked_.begin(), parked_.end(), member,
+                                     [](const LandTeamSlot& e, ObjectId m) { return e.member < m; });
+    return it != parked_.end() && it->member == member;
+}
+
+bool MovementSystem::rejoin_land_team(ObjectId member) {
+    const auto it = std::lower_bound(parked_.begin(), parked_.end(), member,
+                                     [](const LandTeamSlot& e, ObjectId m) { return e.member < m; });
+    if (it == parked_.end() || it->member != member) return false;
+    const LandTeamSlot p = *it;
+    parked_.erase(it);
+    Unit* u = unit_ptr(member);
+    const Unit* c = unit_ptr(p.container);
+    if (cfg_.mode != MoveMode::Land || !u || !c || !c->d.team_container || u->d.team_container ||
+        u->d.locomotor != LocomotorKind::Default || u->d.uses_multiple_locomotors)
+        return false;
+    attach_member(*u, p.container, p.slot, p.tindex);
+    team_ix_rebuild();
+    return true;
 }
 
 ObjectId MovementSystem::order_id(ObjectId id) const {
@@ -110,18 +165,27 @@ void MovementSystem::steer_member(Unit& u, const TeamSnap& k) const {
     const float vmax = loco_max_speed(u);
     const float accel = u.lp.accel > 0.0f ? u.lp.accel : vmax;
     const float decel = u.lp.decel > 0.0f ? u.lp.decel : vmax;
-    const V2 cs = dir_from_deg(k.yaw);  // (c, s): step 1 normalises (cos, sin) - already unit length
-    const float c = cs.x, s = cs.y;
+    // Step 1: (c, s) = normalise(cos yaw, sin yaw) by sqrtf and 1 / len (FIGHTER_FLYING §7 item 1).
+    const V2 cs = dir_from_deg(k.yaw);
+    const float inv = 1.0f / std::sqrt(cs.x * cs.x + cs.y * cs.y);
+    const float c = cs.x * inv, s = cs.y * inv;
+    // Step 7 / MOVEMENT §3.7: [port] the turn rate x Fleeing_Infantry_Speed_Bonus while the member's (or its team's) path
+    // is kind 7 (0x39a5b0) is not applied - the port has no fleeing path kind (no flee order), so the factor is always 1.
+    const float rate = u.lp.turn_rate;
     const V2 off{u.tslot.x + u.jiggle.x, u.tslot.y + u.jiggle.y};
     if (!k.has_goal) {
         // The team is idle: recovery (0x29 / 0x2A) when the member is farther than 4.0 from its slot [port: the recovery
-        // states' steering is untraced - turn in place, then a straight walk to the slot point, then a turn in place to
-        // the team's facing, so a later team move starts with the member facing along it: a member's max speed is the team
-        // speed (MOVEMENT §3.4), so a member that falls behind its slot while the team cruises cannot catch up].
+        // states' steering is untraced - turn in place, then a straight walk to the slot point at the member's own max
+        // speed, then a turn in place to the team's facing, so a later team move starts with the member facing along it.
+        // While the team moves, step 4 lets a member behind its slot run up to its own max speed (lp.max_speed, not the
+        // team speed), so it catches up when it is faster than the team].
         const V2 target{k.pos.x + c * off.x - s * off.y, k.pos.y + s * off.x + c * off.y};
         const V2 to = target - u.m.pos;
         const float dist = length(to);
-        if (!u.recovering && dist > kRecoveryDistance) {
+        // s78n review [port]: a recovery that gave up (kRecoveryBlockedFrames blocked frames: steer_blocked stays at the
+        // limit) is not restarted until the container has a goal again or is teleported (both reset steer_blocked), so an
+        // unreachable slot does not keep the member reporting has_goal (kUnitMoving) every frame.
+        if (!u.recovering && dist > kRecoveryDistance && u.steer_blocked < kRecoveryBlockedFrames) {
             u.recovering = true;
             u.steer_blocked = 0;
         }
@@ -132,8 +196,8 @@ void MovementSystem::steer_member(Unit& u, const TeamSnap& k) const {
         }
         if (!(dist > 0.0f)) {  // on the slot point: face the team's facing
             u.m.speed = 0.0f;
-            if (u.lp.turn_rate > 0.0f && wrap_deg(k.yaw - u.m.yaw) != 0.0f) {
-                u.m.yaw = turn_toward(u.m.yaw, k.yaw, u.lp.turn_rate);
+            if (rate > 0.0f && wrap_deg(k.yaw - u.m.yaw) != 0.0f) {
+                u.m.yaw = turn_toward(u.m.yaw, k.yaw, rate);
                 u.m.state = LocoState::WalkStartTurn;
                 return;
             }
@@ -143,15 +207,15 @@ void MovementSystem::steer_member(Unit& u, const TeamSnap& k) const {
         }
         const float desired = heading_deg(to);
         const float err = std::fabs(wrap_deg(desired - u.m.yaw));
-        if (err > u.lp.turn_rate && err > u.lp.close_enough_angle) {  // 0x29 Recovery Turning
-            u.m.yaw = turn_toward(u.m.yaw, desired, u.lp.turn_rate);
+        if (err > rate && err > u.lp.close_enough_angle) {  // 0x29 Recovery Turning
+            u.m.yaw = turn_toward(u.m.yaw, desired, rate);
             u.m.speed = 0.0f;
             u.m.state = LocoState::WalkStartTurn;
             return;
         }
         // 0x2A Recovery Moving
         u.m.speed = std::min(vmax, u.m.speed + accel);
-        u.m.yaw = turn_toward(u.m.yaw, desired, u.lp.turn_rate);
+        u.m.yaw = turn_toward(u.m.yaw, desired, rate);
         if (!(u.m.speed > 0.0f)) {
             u.m.state = LocoState::WalkStopped;
             return;
@@ -160,7 +224,8 @@ void MovementSystem::steer_member(Unit& u, const TeamSnap& k) const {
         const V2 np = reach ? target : u.m.pos + normalize_retail(to) * u.m.speed;
         if (!steer_commit(grid_, u.m, np, u.lp.mask)) {
             u.m.speed = 0.0f;
-            if (++u.steer_blocked >= kRecoveryBlockedFrames) {
+            if (++u.steer_blocked >= kRecoveryBlockedFrames) {  // give up (kept until the team moves, see above)
+                u.steer_blocked = kRecoveryBlockedFrames;
                 u.recovering = false;
                 u.m.state = LocoState::WalkStopped;
             }
@@ -169,7 +234,7 @@ void MovementSystem::steer_member(Unit& u, const TeamSnap& k) const {
         u.steer_blocked = 0;
         if (reach && u.m.pos == target) {
             u.m.speed = 0.0f;
-            u.recovering = u.lp.turn_rate > 0.0f && wrap_deg(k.yaw - u.m.yaw) != 0.0f;  // the facing turn follows
+            u.recovering = rate > 0.0f && wrap_deg(k.yaw - u.m.yaw) != 0.0f;  // the facing turn follows
             u.m.state = LocoState::WalkStopped;
         } else {
             u.m.state = LocoState::WalkMoving;
@@ -206,7 +271,7 @@ void MovementSystem::steer_member(Unit& u, const TeamSnap& k) const {
     const V2 perp = side > 0.0f ? V2{-s, c} : V2{s, -c};
     const V2 dir{c + w * (perp.x - c), (perp.y - s) * w + s};
     // Step 7: turn by at most the turn rate.
-    u.m.yaw = turn_toward(u.m.yaw, heading_deg(dir), u.lp.turn_rate);
+    u.m.yaw = turn_toward(u.m.yaw, heading_deg(dir), rate);
     if (!(sp > 0.0f)) {
         u.m.state = LocoState::WalkStopped;
         return;
