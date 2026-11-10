@@ -1638,7 +1638,7 @@ Both are 0xb8 bytes and are created per order by `0x426010`, appended in creatio
    - the distance to the nearest current member is within the recruitment distance: **InfantryFormationRecruitmentDistance = 60** for UnitCollisionClass Infantry (5) that is not a team member, otherwise **VehicleFormationRecruitmentDistance = 100**;
    - a straight passable line exists (`0x5a4c10`), or a real path (`0x5a2830`) is ≤ 1.4 × the nearest-member distance.
 5. **Teams.** Team members are split across formations only when ShouldInfantryTeamsSplitAcrossFormations (true). [M]
-6. **Attack orders.** Units already within weapon range + **Solo_Attack_Range = 60** go solo. "Short-range" is set when distance < range × **Short_Range_Attack_Formation_Coefficient = 1.6**. [M]
+6. **Attack orders** (object goal without the guard flag; s78n t20: read from `0x43c1b0`, was [M]) [H]. With E_r = the seed's engagement range `0x4f6e40` (§4.3.2 item 1) and d = the 3-D distance seed to target: the seed goes **solo** (no recruitment) when it is already in max range of the target (TARGETING slot 44), or its type is melee (`0x372210`), or d < r_seed (`0x3969f0`) + E_r + **Solo_Attack_Range (GC +0x1548, 60)**. Otherwise "short-range" is set when d < E_r × **Short_Range_Attack_Formation_Coefficient (GC +0x1544, 1.6)**.
 
 ### 4.3 Shape and slot assignment (`0x41a740`, `0x41ece0`) [H]
 
@@ -1689,7 +1689,7 @@ Read from `0x40eb90`, `0x410e90`, `0x41c1a0`, `0x43c1b0`, `0x439360`, `0x43d6a0`
    `0x411980`; corridor squeeze `0x412210` (mode ≥ 2); the oriented form-up box `0x414d90` (at the path **start**);
    slot assignment `0x41ece0`; slot offsets copied to the members' packs `0x4252a0`. Its "retry" is `0x410e90`: for
    an object goal (block kind 3) the formation path is trimmed back in 10.0 steps to where the members can fire
-   (guard: within `Land_Guard_Range`) and laid out again [M]. "Signal 10 and state 3" happens only when `0x41ece0`
+   (guard: within `Land_Guard_Range`) and laid out again (in full: §4.3.2 item 7). "Signal 10 and state 3" happens only when `0x41ece0`
    returns 0 (a row pass consumed no member), which the first-candidate-always-fits rule makes practically
    unreachable [M]; if hit, the order ends as arrived and nobody moves. No member-count gate.
 2. **When the destination check runs:** once, at the end of the land composition pass `0x43c1b0` (the coordinator
@@ -1743,6 +1743,8 @@ Read from `0x40eb90`, `0x410e90`, `0x41c1a0`, `0x43c1b0`, `0x439360`, `0x43d6a0`
    `Base_Land_Targeting_Arc_Angle_Coefficient`): a slot needs a passable point, zone connection and a clear line to
    the target, and passes iff Σ (hx + S)(hy + S) < 0.15·HX·HY over the objects in the rectangle (HX + E, HY + E)
    that are **not moving** (locomotor vf +0x1c0(0) false), the target and the order's own objects excluded.
+   **In full: §4.3.2** (s78n t20). Note there: the "clear line" is the **terrain** line test to the target's
+   position, so a target that stands on cells the formation cannot enter (a stamped structure) gets no slot.
 6. **Single-member shortcut in the plan `0x41c1a0`:** block kind ≠ 3, flags without 0x10 and 0x20, and the 2-D
    distance to the goal < √(hx² + hy²) (`0x3969f0`): with one block the formation signals 10 (arrived), stops and
    goes to state 3; with more blocks the block is popped. (A unit ordered onto its own footprint does not move.)
@@ -1831,6 +1833,176 @@ before pass n + 1 [M]; the rectangle passability test `0x17dc70`; the position f
 locomotors and forced paths; `0x5a0550` beyond its last two points.
 
 **Port note:** the rank sort is unstable. Use a stable sort with a final tie-break on object ID. Exact retail tie order cannot be reproduced without MSVC's introsort; ties are rare because of the name tie-break.
+
+#### 4.3.2 Attack approach on land: arc slots, the slot leg and the fire trim (s78n t20 RE, 2026-11-10) [H unless tagged]
+Read from `0x43c1b0`, `0x438c10`, `0x43d380`, `0x43b520`, `0x43a070`, `0x43b210`, `0x4f6e40`, `0x411640`,
+`0x41fd30`, `0x41c1a0`, `0x417520`, `0x40e260`, `0x40eb90`, `0x410e90`, `0x40f7c0`, `0x40edd0`, `0x410a60`,
+`0x5a4c10` / `0x5a50d0` / `0x5a5810` / `0x5a51f0`, `0x567350`, `0x568340`, `0x583150`, `0x5833e0`, `0x583930`.
+B = the order's object block (kind 3), T = its object, C = T's goal point (`0x583150`: T's position, or its
+hard point when the block names one). F = a formation; (HX, HY) = F +0x250 / +0x254, its half depth / half width
+in world units, set at composition by `0x411640` (a mode-0 plan and layout, then the union of the slot
+rectangles). S = `BetweenFormationSpacing` (GC +0x14ec, 5.0), E = `Destination_Collision_Query_Extension` (GC
++0x14f0, 60).
+
+**Summary.** Three separate things happen, in this order:
+- at the order (and at an auto-attack push) the formations that are not yet able to fire get a **polar slot**
+  (angle, ring radius) around the target (items 1-4);
+- at every plan the path is built to the target's point, and a formation with a slot gets a path **through its
+  slot point and on to the target point** (item 6);
+- the laid-out path is then **cut back to the first place from which every member can fire** (item 7). This
+  cut, not the ring radius, is what stops a formation at weapon range.
+
+1. **Engagement range `0x4f6e40`(unit, block).** r = the unit's attack range `0x3749d0`. With a pending ability
+   whose own range (vf +0xd8) is > 0: min(r, that range), nothing added. Otherwise, when the block has an object:
+   r += min(hx, hy) of the object's extents (`0x396850`) when the block names no hard point, else += `0x397780`
+   [M: of which object; the argument is not visible]. Then for a guard block: min(r, `Space_Guard_Range` 750) in
+   space, min(r, `Land_Guard_Range` 150, GC +0x11ec4) on land.
+2. **`0x438c10`(B, formations, the order's units): who gets a slot, and when.** Callers (the only two): the land
+   composition pass `0x43c1b0`, for an object goal without flag 0x20, on the new descriptors; and the block Push
+   `0x41fd30` for a non-guard object block on a land formation (a one-descriptor copy of the formation; the slot
+   comes back inside the pushed block). **It is not run at a re-plan.**
+   - List L: every formation with **exactly one block**, a lead on the Land layer (`0x397900`(lead, 1) = 0x10)
+     and, non-guard: **some member that is not in max range of T (TARGETING slot 44, `0x567350`) or is inside
+     its min range (slot 45, `0x568340`)**; guard: its lead farther from C than min(the lead's attack range,
+     `Land_Guard_Range`). A formation whose members can all fire already is left out and keeps the plain block.
+   - L empty → return. R = the **minimum** of the engagement ranges (item 1) over all the order's units.
+   - Reference formation = the one in L nearest (3-D, strict <, first wins) to the mean of L's centroids
+     (`0x41a9b0`). It is test-planned (`0x41c1a0`(F, 1)); fewer than 2 path nodes, or a zero last segment →
+     return with nothing written. d0 / d1 = the unit directions of that path's first / last segment (2-D).
+   - L is sorted ascending by the projection of the formation centroid on d0 from the path start (`0x43b210`,
+     `std::sort`): **rear-most first**.
+   - Coefficient loop: f = GC +0x154c `Base_Land_Targeting_Arc_Angle_Coefficient` (**0.2**), then f − 0.2 each
+     time while f > −1.0: in float32 exactly **six tries, f = 0.2, 0, −0.2, −0.4, −0.6, −0.8**. Each try runs
+     `0x43d380`(L, B, R, d1, f) without committing; the first f that succeeds is run again with commit and the
+     function returns. **No f succeeds → nothing is written: no slot, the blocks stay plain. The order is never
+     refused here.**
+3. **`0x43d380`: rings.** r_T = `0x3969f0`(T) = √(hx² + hy²). Lower radius limit R_min = max(r_T, R·f). Half
+   arc A = (1 − f)·90°: **72°, 90°, 108°, 126°, 144°, 162°** for the six tries. Axis u = −d1 (from the target
+   back along the approach). Outer radius ρ := R. Repeat while formations are left:
+   - Find the longest prefix of the remaining list (rear-most first) that fits on one ring: for prefix length
+     k = 1, 2, …: h = the largest HX in the prefix; ring radius ρ_k = ρ − h; stop extending when ρ − 2h < r_T or
+     when `0x43b520`(prefix, ring ρ_k, A) fails.
+   - No formation fits → the try fails. Otherwise (commit run) place that prefix on its ring, remove it, and
+     ρ := ρ − 2h with **h of the last prefix tested** (the failing one when the extension stopped on a
+     failure).
+   - New ρ < R_min → stop. The try succeeds iff no formation is left.
+   - So the rear-most formations take the outermost ring, whose far edge is at R: every unit of the order is
+     then inside the shortest engagement range. Inner rings follow at 2h steps down to 0.2·R on the first try and
+     down to the target's radius on the others.
+4. **`0x43b520`: one ring.** The prefix is sorted ascending by centroid projection on the **right-hand normal of
+   d0** (d0.y, −d0.x) (same comparator; left-most first), n formations. All angles are measured from u, counter-
+   clockwise positive; a slot point is **P(θ) = C + ρ_k·rot(u, θ)**. step(a, b) = acos(√(ρ_k² − (a + b)²/4) / ρ_k),
+   i.e. asin of half the chord a + b.
+   - Middle formation m = index n >> 1. Its first angle θ = 0 for odd n, **2·step(HY_m, 0)** for even n (fail
+     at once when that exceeds A). It is tried at θ, then alternately on both sides in **5°** steps (0, +5°, −5°,
+     +10°, … ; from a non-zero start θ0: θ0, −θ0, θ0 + 5°, −(θ0 + 5°), …) while |θ| ≤ A, until the slot test
+     (item 5) passes. None passes → fail.
+   - Left neighbours, index m − 1 down to 0: the first one starts at θ_m − **2**·step(HY, HY_m); each further
+     one at the previous accepted angle − **1**·step(HY, HY_prev) (as coded: the factor 2 is only on the first
+     neighbour). A failed test moves that formation a further 5° outward (θ −= 5°); beyond −A → fail.
+   - Right neighbours, index m + 1 up to n − 1: the mirror image from θ_m (first + 2·step, then + 1·step, + 5°
+     on a failed test); beyond +A → fail.
+   - **Commit, per formation:** its block 0 := a copy of B with **block +0x3c := θ (radians) and +0x40 := ρ_k**
+     (`0x423e70`); F +0x258 := the slot rectangle of item 5. Nothing else is written (no position, no flag).
+     There is no shared "taken" list: neighbours are separated only by the angular step.
+5. **`0x43a070`(F, P): the slot test.** c = the formation's movement class (`0x4779e0`: the class with the most
+   mask bits inside the intersection of the members' masks). All of:
+   1. P's cell is passable for c (`0x50e280` with that mask).
+   2. P is zone-connected (`0x50ee10`, §4.3.1 item 7) to F's lead (`0x41a9b0`).
+   3. The **terrain line test `0x5a4c10` from P to T's position** passes for c: every cell the segment crosses,
+      **the last one included**, must be enterable (same region as the start, else a cell walk for pieces under
+      40 long). This is not a line-of-fire test. **A target whose own cell is not enterable for c, i.e. any
+      structure or prop stamped under its origin (§1.3), fails this for every P, so it never gets slots**; a
+      unit standing on open ground does.
+   4. The object test. Rectangle: centre P, first axis a = unit(T.position − P), second (−a.y, a.x), half
+      extents (HX, HY) (this rectangle is what the commit stores). Candidates: the tracker's objects
+      (`0x539680`) in that rectangle grown by E on both axes. Skipped: T; every object of the order (the unit
+      list); an object **with a path record on its stack** (locomotor vf +0x1c0(0) = `0x42cbd0`; so any unit
+      that is under way, whatever its speed); a non-container Infantry-class object when the formation is all
+      Infantry / Bike or all Giant and not all team containers. **An object without a locomotor always counts.**
+      A candidate's rectangle is its footprint (`0x43a7f0`; no shift, since it has no path) with both half
+      extents **+ S**. It is a blocker when some member's slot rectangle (centre P + a·depth + a⊥·lateral from
+      the slot offsets, half extents `0x396850` + S) overlaps it (`0x20d690`, touching counts) and that member
+      cannot crush it (`0x5c8900`). **No UnitCollisionClass table test here** (unlike §4.3.1 item 4).
+      **Pass iff Σ over blockers of (hx + S)(hy + S) < 0.15 × HX × HY** (strict; the expanded blocker areas
+      against the unexpanded formation rectangle, the reverse of §4.3.1 item 4).
+6. **The plan with a slot (`0x41c1a0` → `0x417520`, every plan and re-plan).**
+   - Before any path: with an object on the top block, no guard flag and **c true** (`0x40edd0`: every tested
+     member can fire from where it stands; FIGHTER_FLYING §4.11 E) a real plan (mode ≥ 2) of a land formation
+     **clears every member's path stack** (locomotor vf +0x138 with the current owner id: `0x42cfc0` →
+     `0x554480`; the speed is not zeroed, the members brake through End Move) and returns success with no path
+     [M: the formation then arrives at its next step]; a test plan returns "no path".
+   - Goal G = the block's goal point for the lead (C). Staging `0x40e260` moves G only when the member with the
+     largest minimum range is **inside** that range of T: then G := a spot at min + 0.2 × (attack range − min)
+     from T on that member's side (position finder), or, for a one-member formation of a crusher against a
+     crushable T, T's position. Then the zone re-validation of §4.3.1 item 7 (b): a G the lead cannot reach
+     becomes the reachable cell next to it.
+   - First path: start → G (start = the members' centroid when it is reachable from the lead by a straight line
+     or a path ≤ 1.9 × the distance, else the lead's position).
+   - **Slot leg, only when block +0x40 (ρ) > 0 and the first path has ≥ 2 nodes.** v = the unit direction of
+     the first path's **own** last segment (3-D). Q = G + ρ·rot(−v, θ) (θ = block +0x3c; rotation about z).
+     The terrain line test from G toward Q gives the distance q it gets (ρ when the line is clear) [M: its
+     value when blocked at once]; slot point Q' = G + q·rot(−v, θ). A second path start → Q' is planned; when it
+     succeeds and its first segment points the same way as the first path's (dot > 0), **G is appended to it
+     and it replaces the formation path: start → … → Q' → G.** Otherwise the first path stays.
+   - So the stored (θ, ρ) is re-applied to **this formation's own approach direction at each plan**, not to the
+     reference formation's d1 used when the slot was tested; the two coincide for a formation that approaches
+     along the reference path.
+7. **The fire trim `0x410e90`** (the "retry" of the layout driver `0x40eb90`, run after the slots are laid
+   out; on true and a path length > 0 the layout runs once more without it). Conditions: the top block is kind
+   3 with an object, the formation is not a space formation, T is not fogged for the first member's owner and
+   not stealthed (unless that member's type has `Target_Stealth_Units`); not for a guard block in space.
+   - L = the path's length. s := L; "last good" g := L. Guard range = `Land_Guard_Range`, plus T's radius
+     `0x397780` when T has the +0x346 slot [L: which behaviour]; in that case g starts at max(0, L − that range).
+   - At each s, for every member that has TARGETING and a locomotor pack: its slot position p = the path point
+     at arc length s + its depth offset (before the path start: the start extended backwards along the path
+     direction; beyond L: the member is not tested at this s), shifted sideways by its lateral offset (with the
+     corridor squeeze of §4.3). The member **fails** when: non-guard: p is inside its min
+     range of T (TARGETING slot 46 at p) **or** p is not in max range of T (slot 43 at p; the rule of
+     TACTICAL_COMBAT §2.8 B 4); guard: |p − T.position| (2-D) > the guard range; and, on land, in either case
+     when its **line of fire** from p is blocked (`0x40f7c0` → `0x3b5ad0`: from p at terrain height, or water
+     height for a Water-capable class, + the member type's `Ranged_Target_Z_Adjust` +0x4dc, to G raised by
+     T's `Ranged_Target_Z_Adjust`).
+   - Some member fails at s → **the path is cut to length g** (`0x54e780`, §5.4.4 item 5; the squeeze vector
+     likewise) and the trim ends. All pass → g := s; s = 0 → the path is cut to its first node (the formation
+     can fire from where it stands); else s := max(0, s − **10.0**) and repeat.
+   - So the path is cut at the **outermost point, in 10.0 steps counted back from the path end, of the last
+     unbroken stretch from which every member can fire**. When some member cannot fire even from the path end,
+     nothing is cut.
+8. **After the plan.** While the formation moves, `0x4192b0` every 30 frames: the land stop when everyone can
+   fire, the re-path when the target moved more than half the base attack range or the formation is stopping
+   short (FIGHTER_FLYING §4.11 E). After arrival, `0x410a60` every 30 frames: any tested member unable to fire →
+   formation state 0 → a new plan (FIGHTER_FLYING §4.11 A). **Both go through item 6 and item 7 only; the slot
+   (θ, ρ) in the block is kept and never re-tested.**
+9. **Worked case: one ranged squad (attack range 250) ordered onto a standing structure 1000 away.** Take the
+   squad at (0, 0), the structure centred on (1000, 0) with hard half extents 40 × 40 and stamped on cells 48-52,
+   open ground, the squad's HX = 15 with its rear row 15 behind the centre [M for the numbers that depend on
+   slot 43 and on the stamp].
+   - Composition: the validated point is thrown away (object goal); the squad is not solo (1000 > r + 290 +
+     60) and not short-range (1000 > 290 × 1.6); E_r = 250 + 40 = 290.
+   - `0x438c10`: the squad is in L; R = 290. Reference path: G = (1000, 0) is not reachable, so it becomes the
+     nearest ring cell of the squad's zone, (940, 0); path (0, 0) → (940, 0). All six tries fail in item 5 step
+     3, because every line P → (1000, 0) ends on the structure's own cell. **No slot.**
+   - Plan: path (0, 0) → (940, 0), L = 940, no slot leg. Trim: from s = 940 back in tens every member is in max
+     range while its distance to the centre is ≤ 250 + 40 = 290; the rear row at s − 15 passes down to s = 730
+     and fails at s = 720. **The path is cut to 730: the squad's centre stops 270 from the structure's centre**,
+     its rear row 285 away, without having gone near the footprint.
+   - The same squad against a **unit** standing on open ground at (1000, 0) with half extents 5: E_r = R = 255;
+     the first try puts it at θ = 0 on the ring 255 − 15 = 240; the plan's path is (0, 0) → (760, 0) → (1000, 0)
+     and the trim cuts it at 760, the slot point. A second formation of the same order would get ± the chord
+     angle on that ring, walk start → its Q' → the target, and be cut near its own Q'.
+
+***Port spec (attack approach):*** (1) At an attack order / auto-attack push on land, give each formation that
+cannot yet fire a slot (θ, ρ) by items 2-5; none when the target's own cell is not enterable. (2) At every plan:
+if every member can fire, stop and report arrival; else path to the target's point (re-validated when
+unreachable), via the slot point when there is a slot. (3) Cut the path back from its end in steps of 10 to the
+outermost point of the final stretch from which every member can fire (max range, min range, line of fire). (4)
+Keep the 30-frame checks of FIGHTER_FLYING §4.11. The slot test's object rule: standing objects only (no path
+record), expanded blocker areas, < 15 % of HX × HY.
+
+*Not read:* TARGETING slots 43 / 46 at a point (taken from TACTICAL_COMBAT §2.8 / TACTICAL_GAPS §3.1); the
+position finder `0x440f90` of the staging; the value the line test returns as "distance" when the first cell is
+blocked; whether `0x411640`'s fallback size (mode-0 plan failed) is ever used for an attack block; block +0x5f.
 
 ### 4.4 Moving as a group
 

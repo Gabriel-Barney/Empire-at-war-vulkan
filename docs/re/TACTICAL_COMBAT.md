@@ -533,7 +533,9 @@ ordered, abilityCRC, abilityType, force).
   from the target (type 1: path request with stand-off d; otherwise 0x59caa0 ring). Type 1 special case: a one-member
   formation whose member has the +0x358 slot, and target `Is_Squashable`, or member `Is_Supercrusher` and target
   `Is_Squashable_By_Supercrusher`: goal = the target's position (crush). Staging only backs off min-range units;
-  it does not stop a formation at weapon range. Stopping is not traced here [L].
+  it does not stop a formation at weapon range. *Stopping (s78n t20, 2026-11-10): on land the formation path is
+  cut back to the first place from which every member can fire (0x410e90), after an optional arc slot around the
+  target; MOVEMENT §4.3.2.*
 
 **Completion of the task-force order** (`SpaceMovementBlockStatus`, what Lua `BlockOnCommand` waits on):
 - `IsFinished` (vf19 0x7394f0): if the chosen target hardpoint is destroyed: repeat (+0x42) → pick another of the
