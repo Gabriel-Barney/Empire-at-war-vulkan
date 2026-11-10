@@ -29,6 +29,7 @@ roadmap (`roadmap-store/`). Probes need the original game and Gabriel's go-ahead
 | `r1_hardpoint/` | r1 t01: destroyed-hardpoint visuals and Lua `Take_Damage(n, name)` (type name, case, Collision_Mesh name, owner death), Kuat space skirmish (`run_r1.cmd`; `r1_model_sheet.py` offline; run 2026-11-08; r1b t07 / t08 reruns 2026-11-09, `--lua-camera` works) | `re/R1_T01_HARDPOINT_RUN.md`, `re/SPACE_AND_OPEN.md` §B.10 |
 | `s10_map_owners/` | S10: map owner ids vs battle players (landing / capture-point ownership) | `re/REMAINING_GAPS.md` §3.1, §3.3, §7 |
 | `s78m_bribe/` | s78m t06: Tyber Zann's bribe (cost, team, timing, recharge, range, refusals), Dagobah land skirmish (`run_s78m.cmd`; run 2026-11-08) | `re/S78M_T06_BRIBE_RUN.md` |
+| `s78n_t08/` | s78n t08: tractor-beam footprint range (Kuat space) and Combat_Bonus on an allied player (Dagobah land), `run_s78n.cmd`; run 2026-11-10 | `re/S78N_T08_RUN.md` |
 | `s7s8_probes/` | S7/S8: lob solver, deploy windows, ability blocks, squadrons, escorts | `re/TACTICAL_COMBAT.md`, `re/LOB_SOLVER.md`, `re/MOVEMENT.md` |
 | `tsw_planet_destroy/` | L1 systems t04: planet destroy (TSW) frame offsets and story events | `re/TSW_PLANET_DESTROY.md` |
 
