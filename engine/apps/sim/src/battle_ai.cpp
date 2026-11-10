@@ -165,6 +165,10 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
         if (!b_->movement_locked(id)) b_->fighter_order(std::span<const objects::ObjectId>(&id, 1), 0, Vec3{p.x, p.y, 0.0f});  // S7 t22
         return true;
     };
+    remaining_.in_hero_clash = [bt, ast](objects::ObjectHandle u) {  // s78n t06
+        if (!ast->alive(u) || !bt->combat_->has_unit(ast->id(u))) return false;
+        return (bt->combat_->flags(ast->id(u)) & tactical::combat::kUnitHeroClash) != 0;
+    };
     remaining_.move_goal = [bt, ast](objects::ObjectHandle u, Vec3& goal) {
         if (!ast->alive(u) || !bt->movement_->has_unit(ast->id(u))) return false;
         const mv::UnitView v = bt->movement_->view(ast->id(u));
@@ -779,7 +783,9 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         a.damage_tracking = o.has_damage_tracking || st.has_behavior(h, kDamageTracking);
         // q6 t19 - 0x5680b0 (A1_READINGS §33.2.1): TEAM container or both type flags; not garrisoned / a hidden landing
         // (+0x3a7); not dead (listed objects are alive); not in a transport [port: battles model no carried units, the
-        // garrison holder stands in]; no hero clash (+0x3b4, never set yet); SPECIAL_WEAPON only on a DUMMY_STAR_BASE.
+        // garrison holder stands in]; no hero clash (+0x3b4, s78n t06: kUnitHeroClash); SPECIAL_WEAPON only on a
+        // DUMMY_STAR_BASE.
+        a.hero_clash = c.has_unit(id) && (c.flags(id) & tc::kUnitHeroClash) != 0;
         a.valid_target = (fs.is_team || (types.get_bool(ti, "Collidable_By_Projectile_Living") && types.get_bool(ti, "Is_Valid_Target"))) &&
                          b_->garrison_holder_of(id) == objects::kNoObjectId && !b_->landing_hidden(id) && !fs.dead_or_removing &&
                          !a.hero_clash && (!fs.has_special_weapon || o.dummy_star_base);

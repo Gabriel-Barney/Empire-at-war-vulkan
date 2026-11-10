@@ -776,6 +776,7 @@ void CampaignBattles::push_battle(SimHost& host) {
     battle_->set_retreat_flight_increments(opt_.retreat_flight_increments);  // L1 systems
     battle_->set_l1_constants(opt_.l1_constants);  // L1 systems
     battle_->set_weather_data(opt_.weather);       // L1 systems
+    battle_->set_hero_clash_data(opt_.hero_clash);  // s78n t06
     battle_->set_l1_factions(opt_.l1_factions);    // L1 systems
     battle_->set_arrival_hold([this] { return lk_.presentation.hyperspace_hold; });  // story t12 (P9 == 2)
     // AI_GALACTIC_TOKENS §9.4: the battle planet's persisted built objects (the battle applies the gate: not in a skirmish,
@@ -1377,6 +1378,12 @@ void CampaignBattles::story_begin(SimHost& host, GameMode& mode) {
         return owner >= 0 && battle_->order_move(*tm, static_cast<uint8_t>(owner), one, p.x, p.y, h->random().synced()) ==
                                  commands::RejectReason::None;
     };
+    story_remaining_.in_hero_clash = [this, h](objects::ObjectHandle u) {  // s78n t06
+        TacticalMode* tm = h->tactical();
+        if (!battle_ || !tm || !tm->primary().alive(u)) return false;
+        const objects::ObjectId id = tm->primary().id(u);
+        return battle_->combat().has_unit(id) && (battle_->combat().flags(id) & tactical::combat::kUnitHeroClash) != 0;
+    };
     story_remaining_.move_goal = [this, h](objects::ObjectHandle u, Vec3& goal) {
         TacticalMode* tm = h->tactical();
         if (!battle_ || !tm || !tm->primary().alive(u)) return false;
@@ -1955,6 +1962,8 @@ void load_tactical_systems(const FileProvider& provider, const galactic::Galacti
     if (constants) opt.l1_constants = load_l1_constants(*constants);
     auto wd = std::make_shared<tactical::combat::WeatherData>();
     opt.weather = (tactical::combat::load_weather_data(provider, *wd) && !wd->scenarios.empty()) ? std::move(wd) : nullptr;
+    auto hc = std::make_shared<tactical::combat::HeroClashData>();  // s78n t06
+    opt.hero_clash = (tactical::combat::load_hero_clash_data(provider, *hc) && !hc->entries.empty()) ? std::move(hc) : nullptr;
 }
 // --- end Int-final ---
 

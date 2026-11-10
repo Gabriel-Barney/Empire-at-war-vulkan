@@ -79,6 +79,7 @@
 #include "alamo/tactical/movement/space_avoid.hpp"  // SPACE_AVOIDANCE (fighter avoidance members)
 #include "alamo/tactical/abilities/space_fields.hpp"     // L1 systems
 #include "alamo/tactical/combat/weather.hpp"            // L1 systems
+#include "alamo/tactical/combat/hero_clash.hpp"         // s78n t06: land hero clashes
 #include "alamo/tactical/abilities/special_weapons.hpp"  // L1 systems
 #include "alamo/tactical/movement/hyperspace.hpp"        // L1 systems
 #include "alamo/tactical/hangar/engine_loops.hpp"         // hangars / engine loops (STATION_HANGARS_SOUND.md)
@@ -805,6 +806,11 @@ public:
     // start of each tick (before the fog decay); the accuracy row feeds CombatSystem::set_weather_accuracy.
     // Force_Weather = force_weather (one advance, one draw).
     void set_weather_data(std::shared_ptr<const tactical::combat::WeatherData> d) { l1_weather_data_ = std::move(d); }
+    // s78n t06 (HERO_CLASH §2 / §6): HEROCLASH.XML for the land hero clashes (tactical::combat::HeroClashManager, ticked
+    // after the weather service, land only). The First / Second hero type names resolve through the catalog here; none =
+    // no clashes. The running clashes are saved with the Combat part and hashed with the battle (absent while none).
+    void set_hero_clash_data(std::shared_ptr<const tactical::combat::HeroClashData> d);
+    const tactical::combat::HeroClashManager& hero_clashes() const { return hero_clash_; }
     const tactical::combat::WeatherSystem& weather() const { return l1_weather_; }
     bool force_weather(SimRng& rng);
     // Sight factor of a battle object (Weather_Category of its type; 1.0 without weather): the fog's Land_FOW_Reveal_Range
@@ -1706,6 +1712,14 @@ private:
     std::vector<tactical::movement::CrushEvent> oi_crush_;
     void oi_apply_crush(uint32_t frame);
     // --- end OI tactical ---
+    // s78n t06: the hero-clash manager step (land tick step 4, after the weather; tactical_battle_clash.cpp).
+    friend class BattleClashHost;
+    void hero_clash_tick(TacticalMode& mode, SimRng& rng, uint64_t global_frame);
+    void hero_clash_sync();  // the running pairs -> CombatSystem::set_hero_clashes (after a change and after a load)
+    void hero_clash_apply_hits(uint32_t frame);  // BattleHooks::before_units: this tick's exchange damage (transient)
+    std::vector<tactical::combat::DamageRequest> hero_clash_hits_;
+    tactical::combat::HeroClashManager hero_clash_;
+    std::shared_ptr<const tactical::combat::HeroClashData> hero_clash_data_;
     void l1_weather_tick(SimRng& rng);            // tick start (land weather service)
     tactical::combat::WeatherSystem l1_weather_;
     std::shared_ptr<const tactical::combat::WeatherData> l1_weather_data_;

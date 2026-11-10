@@ -12,7 +12,7 @@
 //   galactic: common tick FIRST, then cinematic step, income at the income frame, per-planet RNG
 //             value [stub: no planets in this store yet], victory events.
 //   land/space: cinematic step [stub], per-AI-player tactical AI data [stub], movement scratch
-//             reset [stub], land: weather + hero clash [stub], tactical frame += 1, victory event
+//             reset [stub], land: weather + hero clash [in TacticalBattle], tactical frame += 1, victory event
 //             0x11 [stub], common tick LAST.
 //   common (§3.3): FOW for players with id = F (mod 16) [stub counter], GOM service of the primary
 //             then the secondary store (OBJECT_RUNTIME.md §5.3: refit spatial trees, serviced
@@ -310,7 +310,7 @@ public:
         : TacticalMode(ModeKind::Land, types, ids, players) {}
 
 protected:
-    void mode_specific(const ModeTickContext& ctx) override;  // weather + hero clash [stubs]
+    void mode_specific(const ModeTickContext& ctx) override;  // weather + hero clash (trace; both run in TacticalBattle)
 };
 
 class SpaceMode final : public TacticalMode {

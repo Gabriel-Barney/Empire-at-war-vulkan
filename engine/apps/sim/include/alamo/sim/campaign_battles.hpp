@@ -73,6 +73,8 @@ struct CampaignBattleOptions {
     // weather tables (tactical::combat::load_weather_data; null = no weather).
     TacticalBattle::L1Constants l1_constants;
     std::shared_ptr<const tactical::combat::WeatherData> weather;
+    // s78n t06: HEROCLASH.XML (tactical::combat::load_hero_clash_data; null = no hero clashes).
+    std::shared_ptr<const tactical::combat::HeroClashData> hero_clash;
     std::vector<TacticalBattle::L1Faction> l1_factions;  // Bombardment_* faction data (load_l1_factions)
     // --- end L1 systems ---
     // --- battle host (BT pass): S10 seams the session fills (all optional; unset = unchanged behaviour) ---

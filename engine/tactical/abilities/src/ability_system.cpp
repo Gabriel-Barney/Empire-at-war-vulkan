@@ -957,6 +957,7 @@ bool AbilitySystem::accepts(const Obj& o, const SpecialAbilityDesc& s, ObjectId 
         case SpecialClass::TractorBeam: {
             if (!alive_unit(target) || !combat_->is_enemy(o.owner, combat_->owner(target))) return false;
             if (!target_filter(s, target)) return false;
+            if (!combat_->clash_allows(o.id, target)) return false;  // s78n t06: 0x710540 pairing rule (HERO_CLASH §5.2)
             if (combat_->flags(target) & combat::kUnitLocomotorBusy) return false;
             if (!can(o, kTractorBeam, false, true, frame)) return false;
             if (const Obj* to = obj(target))
@@ -967,7 +968,9 @@ bool AbilitySystem::accepts(const Obj& o, const SpecialAbilityDesc& s, ObjectId 
         case SpecialClass::LuckyShot:
         case SpecialClass::ConcentrateFire:
         case SpecialClass::EnergyWeapon:
-            return alive_unit(target) && combat_->is_enemy(o.owner, combat_->owner(target)) && target_filter(s, target);
+            // s78n t06: the pairing rule (HERO_CLASH §5.2: 0x704a80 / 0x706410 / 0x6eef00 / 0x6f9ca0)
+            return alive_unit(target) && combat_->is_enemy(o.owner, combat_->owner(target)) && target_filter(s, target) &&
+                   combat_->clash_allows(o.id, target);
         case SpecialClass::Unsupported: return false;
         case SpecialClass::Stealth:
         case SpecialClass::SensorJamming:

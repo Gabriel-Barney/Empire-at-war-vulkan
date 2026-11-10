@@ -3687,6 +3687,47 @@ void test_foc_data() {
     CHECK(per_type[kDeployTroopers] > 0 && deploy_bad == 0);
 }
 
+void test_hero_clash_accepts() {
+    // s78n t06 (HERO_CLASH §5.2): the accepts that read +0x3b4 apply the pairing rule - a unit in a hero clash can only be
+    // acted on by, and only act on, its clash partner. Hack (0x6fd610) and TractorBeam (0x710540).
+    constexpr uint64_t kCatInf = 16;  // Infantry (as test_bribe_hack_accept)
+    auto hack = [](uint32_t user_flags, uint32_t target_flags, bool paired) {
+        OiWorld w;
+        SpecialAbilityDesc hk = oi_special("Hack", SpecialClass::Hack, ActivationStyle::UserInput);
+        hk.applicable_categories = kCatInf;
+        hk.max_range = 1000.0f;
+        const uint32_t hs = add_special(w.ad, hk);
+        AbilityObjectDesc a;
+        a.unit_abilities = {oi_gui(kTargetedHack, 0.0f, 10.0f, "Hack")};
+        a.specials = {hs};
+        const uint32_t ad = push(w.cd, w.ad, oi_unit("R2", 100.0f), a);
+        const uint32_t td = push(w.cd, w.ad, oi_unit("Turret", 100.0f, 5.0f, kCatInf), AbilityObjectDesc{});
+        w.make(GameMode::Land);
+        w.add(1, ad, 0, {0, 0, 0});
+        w.add(2, td, 1, {300, 0, 0});
+        if (user_flags) w.sys->set_flag(1, user_flags, true);
+        if (target_flags) w.sys->set_flag(2, target_flags, true);
+        if (paired) w.sys->set_hero_clashes({{1, 2}});
+        const ObjectId one[] = {1};
+        return w.ab->targeted_ability(one, kTargetedHack, 2, -1, w.frame);
+    };
+    CHECK(hack(0, 0, false) == 1);
+    CHECK(hack(0, kUnitHeroClash, false) == 0);  // the target is in a clash
+    CHECK(hack(kUnitHeroClash, 0, false) == 0);  // the user is in a clash
+    CHECK(hack(kUnitHeroClash, kUnitHeroClash, false) == 0);  // both flagged, not the same clash
+    CHECK(hack(kUnitHeroClash, kUnitHeroClash, true) == 1);   // clash partners
+    {  // Tractor beam on a target in a clash: refused
+        SpecialWorld w;
+        w.add(1, w.sd, 0, {0, 0, 0});
+        w.add(2, w.corvette, 1, {500, 0, 0});
+        w.sys->set_flag(2, kUnitHeroClash, true);
+        const ObjectId sd[] = {1};
+        CHECK(w.ab->targeted_ability(sd, kTractorBeam, 2, -1, w.frame) == 0);
+        w.sys->set_flag(2, kUnitHeroClash, false);
+        CHECK(w.ab->targeted_ability(sd, kTractorBeam, 2, -1, w.frame) == 1);
+    }
+}
+
 }  // namespace
 
 // HARDPOINT_DISABLED.md §9: Set_System_Online offline (disabled vs destroyed) and online (repair to max) per type.
@@ -5765,6 +5806,7 @@ int main(int argc, char** argv) {
     test_s78n_combat_bonus_and_enhance_defense();  // s78n t04
     test_cu8f_abilities_disabled();
     test_cu8j_saber_flight();
+    test_hero_clash_accepts();  // s78n t06
     test_battle(golden, write_golden);
     test_allocations();
     test_save_load_battle();  // N1 stage 2

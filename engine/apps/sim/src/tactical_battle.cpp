@@ -164,6 +164,7 @@ public:
         b_->l1_fields(frame, rng);  // L1 systems: nebula / ion storm / asteroid field behaviours (phase D start)
         b_->oi_apply_crush(frame);  // OI tactical: crush damage (movement CrushEvents of this tick)
         b_->bt_apply_attrition(frame);  // battle host: retreat attrition victims (TACTICAL_GAPS §4.9)
+        b_->hero_clash_apply_hits(frame);  // s78n t06: the hero-clash exchange damage of this tick (HERO_CLASH §3.6)
         a_->before_units(frame, rng);
     }
     void unit_begin(tc::ObjectId id, uint32_t frame, SimRng& rng) override { a_->unit_begin(id, frame, rng); }
@@ -1537,6 +1538,8 @@ bool TacticalBattle::script_movement_locked(objects::ObjectId id) const {
 
 bool TacticalBattle::movement_locked(objects::ObjectId id) const {
     if (abilities_ && abilities_->immobilize_count(id) > 0) return true;
+    // s78n t06 (HERO_CLASH §3.2): a hero in a clash has its movement orders locked (0x3a8e50(h, 1) with +0x3b4).
+    if (combat_ && combat_->has_unit(id) && (combat_->flags(id) & tc::kUnitHeroClash)) return true;
     if (!landings_.empty() && landing_locked(id)) return true;  // a1i t04: the unload exit move (§35.2)
     return script_movement_locked(id);
 }
@@ -4581,6 +4584,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     share_groups_sync();  // S8 t17 (FIGHTER_FLYING §4.10 B): squadron of the shared team target, before this tick's orders
     objects::ObjectStore& store = mode.primary();
     l1_weather_tick(rng);  // L1 systems: land weather service (before the common tick)
+    hero_clash_tick(mode, rng, global_frame);  // s78n t06: land tick step 4, after the weather (HERO_CLASH §2.1)
     fog_decay();  // fog of war: common-tick step 4, before the object services (owner: fog agent)
     hg_production(mode, rng);  // station contents / skirmish tactical production (before the object services)
     profile::lap("tac.setup");
@@ -5148,6 +5152,7 @@ void TacticalBattle::hash(StateHasher& h) const {
             h.i32(r.goal_object);  // s78f t02: the auto blocks are hashed with the movement formation
         }
     }
+    if (!hero_clash_.empty()) hero_clash_.hash(h);  // s78n t06: running hero clashes (absent while none)
     if (!landings_.empty()) {         // a1i t04: landing objects waiting for take-off (absent while none)
         h.u32(static_cast<uint32_t>(landings_.size()));
         for (const Landing& l : landings_) {

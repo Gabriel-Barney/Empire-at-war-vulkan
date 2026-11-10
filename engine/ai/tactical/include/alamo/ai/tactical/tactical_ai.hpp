@@ -127,7 +127,7 @@ struct TacticalAiObject {
     // Collidable_By_Projectile_Living and Is_Valid_Target; not garrisoned / hidden (+0x3a7), not dead, not carried in a
     // transport, not in a hero clash (+0x3b4, `hero_clash`), and no SPECIAL_WEAPON unless it is a DUMMY_STAR_BASE.
     bool valid_target = true;
-    bool hero_clash = false;  // obj +0x3b4 [port: no hero clashes yet, always false; kept so it can be wired]
+    bool hero_clash = false;  // obj +0x3b4 (s78n t06: the combat flag kUnitHeroClash; skipped by free store Setup A)
     // UnitAI data-pack re-projection stamp (+0x20, A1_READINGS §14): UnitAiStamps::reprojection_check drawn by the host
     // when the UNIT_AI object was created (draw_unit_ai_stamps). Every host draws it; the default 0 (a stamp at or
     // before the first service) makes the first check run at the object's first service, as a drawn stamp does.

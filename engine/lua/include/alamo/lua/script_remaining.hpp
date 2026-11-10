@@ -89,6 +89,10 @@ struct RemainingScriptHooks {
     std::function<bool(objects::ObjectHandle unit, Vec3 position)> move_to;
     // The unit's current (last) move goal: false when it has none (idle / arrived).
     std::function<bool(objects::ObjectHandle unit, Vec3& goal)> move_goal;
+    // s78n t06 (HERO_CLASH §3.2 / §3.8): the unit is in a hero clash (obj +0x3b4): its movement orders are locked by the
+    // clash (detail::movement_locked) and Unlock_Current_Orders refuses ("...is locked by a hero clash.  Cannot unlock.").
+    // Unset: no hero clashes.
+    std::function<bool(objects::ObjectHandle unit)> in_hero_clash;
     // ---- builds / build pads (§2.2, §3.6) ----
     // GameObjectWrapper.Build(type, check_rules) on a pad: 1 started, 0 refused by the game rules (check_rules only),
     // -1 start failed. Unset: the binding's own start build [port] (rules check, the UC type created at the pad,

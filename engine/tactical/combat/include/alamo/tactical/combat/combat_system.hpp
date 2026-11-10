@@ -816,6 +816,12 @@ enum UnitFlag : uint32_t {
     // (take_damage_inner) and by MaximumFirepower's end 0x707390. [port] a bit of its own: kUnitSkipTargeting keeps the
     // port's dummy-target marker and Blast's charge (no Take_Damage clear) unchanged. Saved and hashed.
     kUnitIncognito = 1u << 23,
+    // s78n t06 (HERO_CLASH §3.1 / §5): obj +0x3b4 "in a hero clash", set on the two duelling hero objects (not their team
+    // containers) by the host's HeroClashManager and cleared at the release. While set: the unit's TARGETING is suspended
+    // and its current target dropped (the targeting services' clash test), its movement orders are locked (host), and
+    // every target / fire / ability accept between it and others applies the pairing rule (clash_allows). Area damage is
+    // not filtered. Saved and hashed with the other flags.
+    kUnitHeroClash = 1u << 24,
 };
 // Mirrors the host rewrites before every tick (left out of hash_units).
 inline constexpr uint32_t kUnitHostMirrorFlags =
@@ -849,6 +855,10 @@ struct DamageRequest {
     bool no_team = false;
     bool has_impact = false;  // impact point known (projectile hits): lucky-shot hull re-route
     Vec3 impact;
+    // s78n t06 (HERO_CLASH §3.7, §8.4.1 step 10-11): no diminishing firepower for this hit. Retail applies it only when a
+    // shooter was found or the non-projectile source was incognito; [port] a narrow stand-in for the hero-clash exchange
+    // damage (a non-projectile source without +0x3a1 & 0x10) until that allow rule is ported for every source.
+    bool no_diminishing = false;
 };
 
 struct DamageResult {
@@ -1226,6 +1236,16 @@ public:
     void force_regen_service(ObjectId id);  // DEFEND: shield and energy behaviours service next frame
     // Stealth (0x592ae0 target drop): clears the auto/ordered target and every hardpoint target.
     void clear_targets(ObjectId id);
+    // s78n t06 (HERO_CLASH §5.2, TACTICAL_COMBAT §5.4.3 item 3): the running hero clashes' hero pairs in start order (the
+    // host's HeroClashManager::pairs(), set after every change and after a load; derived, not saved). The in-clash byte
+    // +0x3b4 is the unit flag kUnitHeroClash.
+    void set_hero_clashes(std::vector<std::pair<ObjectId, ObjectId>> pairs) { clash_pairs_ = std::move(pairs); }
+    const std::vector<std::pair<ObjectId, ObjectId>>& hero_clashes() const { return clash_pairs_; }
+    // The pairing rule as its callers use 0x39a540: true when neither U nor X is in a hero clash; else only when both are
+    // (+0x3b4 set on both) and the first running clash involving U also involves X. A unit left with the flag and no clash
+    // (retail's snap quirk) can act on nothing and nothing can act on it. Ids that are not combat units count as not in a
+    // clash (a team container: its +0x3b4 stays 0 in a melee clash).
+    bool clash_allows(ObjectId u, ObjectId x) const;
     // WeaponBehavior burst reset (ion / lucky shot apply): cooldown 0, pulses = int(Fire_Pulse_Count
     // x FIRE_RATE x (1 + list 6)) [M].
     void reset_weapon_burst(ObjectId id);
@@ -1811,6 +1831,7 @@ private:
     Vec3 scan_pos(const Unit& u) const;  // s78n t03: a land team head's container position (set_team_position), else u.pos
     uint32_t convert_container(const Unit& v) const;  // s78i t04: v's 0x39b1a0 team container id (v's own when it is one), else 0
     bool targeting_idle(const Unit& u, uint32_t frame) const;  // phase D: stunned, unpowered or targeting suspended
+    void drop_clash_targets();  // s78n t06: before phase D, targets of / at units in a hero clash dropped
     void drop_target(Unit& u);                        // slot 27: the order and scan targets are dropped
     bool lob_turret_aim(Unit& u);                     // s78f t04: 0x631fe0 toward the lobbing order's point (one slew step)
     int32_t model_alt_of(const Unit& u) const;
@@ -1943,6 +1964,7 @@ private:
     std::vector<std::pair<uint32_t, uint32_t>> leaders_;  // (team, unit index) scratch
     std::vector<std::pair<uint32_t, ObjectId>> team_heads_;  // OI tactical: (team, team_leader id), built in phase A
     std::vector<std::pair<uint32_t, Vec3>> team_pos_;  // s78n t03: (team, container position), ascending team; host-set
+    std::vector<std::pair<ObjectId, ObjectId>> clash_pairs_;  // s78n t06: running hero clashes (host-set, not saved)
     // cu8f t04a: (team, unit id) of every live unit with a team, sorted; built in phase A and on read (not saved: a pure
     // function of the units; units that died or left since are skipped at read time).
     std::vector<std::pair<uint32_t, ObjectId>> team_members_;

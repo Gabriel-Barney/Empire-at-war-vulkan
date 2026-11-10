@@ -281,7 +281,7 @@ void TacticalBattle::saber_throw_service(TacticalMode& mode) {
 
 void TacticalBattle::hg_holster_service() {
     // Service 0x635750 (interval 1), ascending id. Engaged: a current attack target (0x397a40), a running Berserker (SAP
-    // +0x2cc), the current clip ATTACK / SPINMOVE, or a hero clash (+0x3b4) [port: no hero clashes yet]. cu8j t03
+    // +0x2cc), the current clip ATTACK / SPINMOVE, or a hero clash (+0x3b4, s78n t06: kUnitHeroClash). cu8j t03
     // (CU8F_T01_T02_T07_RE §2.6 / §2.7): a thrown saber is in flight from the throw up to and including the ability's end
     // (the stand-in scheduled by saber_schedule); on the end frame the service still sees it in flight, so the held draw
     // transition clears and the hum is unsuppressed on the next frame, as in retail.
@@ -292,7 +292,8 @@ void TacticalBattle::hg_holster_service() {
         const HgHolsterType* ht = hg_holster_type(st.type(u.h));
         if (!ht) continue;
         const bool engaged = (combat_ && combat_->has_unit(u.id) && combat_->current_target(u.id) != tc::kNoObject) ||
-                             (abilities_ && abilities_->is_active(u.id, ta::kBerserker)) || anim_engaged_clip(u.id);
+                             (abilities_ && abilities_->is_active(u.id, ta::kBerserker)) || anim_engaged_clip(u.id) ||
+                             (combat_ && combat_->has_unit(u.id) && (combat_->flags(u.id) & tc::kUnitHeroClash) != 0);
         // cu8j t03: the scheduled throw, then the service (the saber in flight from the throw to the ability's end), then
         // the catch snap (only a real catch) and the end.
         engine_loops_.saber_service(u.id, frame_, true);

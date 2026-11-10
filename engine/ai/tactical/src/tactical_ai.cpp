@@ -1827,6 +1827,8 @@ void TacticalAiWorld::Impl::pp_input(PlayerAi& p, uint32_t plan, const Goal& g, 
     for (const int32_t id : ids) {
         const PerceptionObject* o = object(id);
         if (!o || !o->alive) continue;
+        // s78n t06 (A1_READINGS §28, HERO_CLASH §5.2): Setup A 0x7287a0 skips a unit in a hero clash (+0x3b4).
+        if (const TacticalAiObject* f = fact(id); f && f->hero_clash) continue;
         PpFreeUnit u;
         u.id = id;
         u.type = o->type;

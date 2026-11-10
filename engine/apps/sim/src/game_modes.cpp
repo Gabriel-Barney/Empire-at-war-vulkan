@@ -559,7 +559,7 @@ bool TacticalMode::read_state(ByteReader& r) {
 
 void LandMode::mode_specific(const ModeTickContext& ctx) {
     // Trace step only (cu9 t15): the land weather service runs in the battle (TacticalBattle::l1_weather_tick, before
-    // the common tick, with its synced draws); hero clashes are not modelled yet.
+    // the common tick, with its synced draws), then the hero clashes (TacticalBattle::hero_clash_tick, s78n t06).
     trace(ctx, "land.weather");
 }
 

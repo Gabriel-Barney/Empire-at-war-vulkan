@@ -332,6 +332,10 @@ bool CombatSystem::ability_active(ObjectId id, int slot) const {
 void CombatSystem::order_attack(ObjectId attacker, ObjectId target, int32_t hardpoint) {
     Unit* u = unit(attacker);
     if (!u) return;
+    // s78n t06 (TACTICAL_COMBAT §2.8 B step 5, HERO_CLASH §5.2): Set_Target 0x569160 refuses (no change) a target with
+    // +0x3b4, and the pairing rule refuses a clashing unit any other target.
+    if (const Unit* t = unit(target); t && (t->flags & kUnitHeroClash)) return;
+    if (!clash_allows(attacker, target)) return;
     auto order = [&](Unit& w) {
         w.ordered_target = target;
         w.ordered_hp = hardpoint;
@@ -413,6 +417,7 @@ bool CombatSystem::order_attack_issue(ObjectId attacker, ObjectId target, int32_
     if (!u || !live(t)) return false;
     // C step 1: refusals.
     if (!is_enemy(u->owner, t->owner)) return false;
+    if ((t->flags & kUnitHeroClash) || !clash_allows(u->id, t->id)) return false;  // s78n t06: Set_Target / pairing
     if ((t->flags & kUnitStealthed) && !desc_of(*u).target_stealth_units && u->owner != t->owner) return false;
     if (t->flags & kUnitGarrisoned) return false;
     // Members without TEAM / TARGETING get no Order_Attack (0x739200 step 3): a unit with no weapon at all [port].
@@ -956,7 +961,8 @@ bool CombatSystem::targeting_idle(const Unit& u, uint32_t frame) const {
     // OI abilities: a stunned unit's targeting is suspended (0x647290); Requires_Base_Power units do not act without base
     // power (0x632270). S7 t14: the jetpack suspends TARGETING; S8 t25: targeting suspended.
     const bool idle = u.stun_end > frame || (desc_of(u).requires_base_power && !has_base_power(u.owner));
-    return idle || (u.flags & kUnitWeaponsSuspended) || (u.flags & kUnitTargetingSuspended);
+    // s78n t06 (HERO_CLASH §3.1): a hero in a clash has TARGETING suspended (slot 9) while +0x3b4 is set.
+    return idle || (u.flags & (kUnitWeaponsSuspended | kUnitTargetingSuspended | kUnitHeroClash));
 }
 
 float CombatSystem::team_mod_multiplier(uint32_t team, ModKind kind) const {
@@ -1251,8 +1257,8 @@ uint16_t CombatSystem::aim_point_count(const Unit& t) const {
 bool CombatSystem::candidate_ok(const Unit& a, const Unit& t, float range) const {
     // Filters of section 2.3 (all must pass, so their order does not change the result; fog [4] is tested last
     // because it is the most expensive).
-    // 1 (s78n t05: kUnitIncognito is +0x3a1 & 0x10 too), 3
-    if (t.flags & (kUnitSkipTargeting | kUnitIncognito | kUnitDead | kUnitGarrisoned)) return false;
+    // 1 (s78n t05: kUnitIncognito is +0x3a1 & 0x10 too), 3 (s78n t06: +0x3b4 is kUnitHeroClash)
+    if (t.flags & (kUnitSkipTargeting | kUnitIncognito | kUnitDead | kUnitGarrisoned | kUnitHeroClash)) return false;
     const UnitDesc& ad = desc_of(a);
     const UnitDesc& td = desc_of(t);
     if (!td.is_valid_target) return false;  // 2
@@ -1367,11 +1373,24 @@ void CombatSystem::gather(uint32_t index, QueryContext& ctx) {
     }
 }
 
+bool CombatSystem::clash_allows(ObjectId u, ObjectId x) const {
+    const Unit* a = unit(u);
+    const Unit* b = unit(x);
+    if (x == kNoObject) return true;
+    const bool fa = a && (a->flags & kUnitHeroClash);
+    const bool fb = b && (b->flags & kUnitHeroClash);
+    if (!fa && !fb) return true;  // the callers only ask 0x39a540 when U or X has +0x3b4
+    if (!fa || !fb) return false;
+    // 0x39a540: the first running clash involving U must also involve X (s78n t06; start order = the manager list).
+    for (const auto& [h1, h2] : clash_pairs_)
+        if (h1 == u || h2 == u) return h1 == x || h2 == x;
+    return false;  // flagged with no clash (the snap quirk, §3.8): nothing may act on it, it acts on nothing
+}
+
 bool CombatSystem::lock_holds(const Unit& u, const Unit& t) const {
-    // §2.8 B "while locked" [H]: dropped when the target is garrisoned, stealthed for an attacker without
-    // Target_Stealth_Units, or hidden by fog for the attacker's player (0x35f470, force 1). Dying / dead: live().
-    // [port: the +0x3b4 test is not modelled.]
-    if (t.flags & kUnitGarrisoned) return false;
+    // §2.8 B "while locked" [H]: dropped when the target is garrisoned, +0x3b4 (s78n t06), stealthed for an attacker
+    // without Target_Stealth_Units, or hidden by fog for the attacker's player (0x35f470, force 1). Dying / dead: live().
+    if (t.flags & (kUnitGarrisoned | kUnitHeroClash)) return false;
     if ((t.flags & kUnitStealthed) && !desc_of(u).target_stealth_units) return false;
     return !target_hidden(u.owner, t.id, true);
 }
@@ -1388,8 +1407,9 @@ bool CombatSystem::promote_goal(Unit& u) {
     if (t == &u || !is_enemy(u.owner, t->owner)) return false;  // hostile to the unit's owner (relation table == 1)
     // 0x5680b0 (A1_READINGS §33.2.1, q6 t19): type half (TEAM / Collidable_By_Projectile_Living + Is_Valid_Target,
     // SPECIAL_WEAPON only on a DUMMY_STAR_BASE) from the desc; not garrisoned / hidden (+0x3a7), not dead (+0x3a0 0x40);
-    // [port] no transports or hero clashes (+0x3b4) in battles. kUnitSkipTargeting (the port's untargetable marker) kept.
-    if (t->flags & (kUnitSkipTargeting | kUnitDead | kUnitGarrisoned)) return false;
+    // [port] no transports in battles; +0x3b4 is kUnitHeroClash (s78n t06). kUnitSkipTargeting (the port's untargetable
+    // marker) kept.
+    if (t->flags & (kUnitSkipTargeting | kUnitDead | kUnitGarrisoned | kUnitHeroClash)) return false;
     if (!desc_of(*t).target_test_type) return false;
     float d = 0.0f, E = 0.0f;
     const Vec3 up = scan_pos(u);  // s78n t03: a land team head's pre-check runs from its container
@@ -1858,6 +1878,39 @@ void CombatSystem::set_tstate(Unit& u, uint8_t s, ObjectId target) {
     attack_events_.push_back({on, live(g) ? u.goal_target : target});
 }
 
+void CombatSystem::drop_clash_targets() {
+    // s78n t06 (HERO_CLASH §5.2): the targeting services 0x634810 / 0x633ae0 / team 0x62eeb0 drop the current target of a
+    // unit in a clash, and Validate_Current_Target 0x567c50 drops a target with +0x3b4 (reason 4). [port] Both run here,
+    // once per tick before phase D (serial, index order, no draws), instead of at each unit's next scan / service: a
+    // clashing unit's targeting is suspended (so retail drops it at the start), and a target that joins a clash can no
+    // longer be fired at anyway (the pairing rule in Fire_At and the hardpoint pick).
+    bool any = false;
+    for (const Unit& u : units_)
+        if ((u.flags & kUnitHeroClash) && !(u.flags & kUnitDead)) {
+            any = true;
+            break;
+        }
+    if (!any) return;
+    auto flagged = [&](ObjectId id) {
+        const Unit* t = unit(id);
+        return t && (t->flags & kUnitHeroClash);
+    };
+    for (Unit& u : units_) {
+        if (u.flags & kUnitDead) continue;
+        if (u.flags & kUnitHeroClash) {
+            if (u.ordered_target != kNoObject || u.auto_target != kNoObject) drop_target(u);
+            u.aim_target = kNoObject;
+            u.aim_hp = -1;
+            continue;
+        }
+        if (flagged(u.ordered_target) || flagged(u.auto_target)) drop_target(u);
+        if (flagged(u.aim_target)) {
+            u.aim_target = kNoObject;
+            u.aim_hp = -1;
+        }
+    }
+}
+
 void CombatSystem::drop_target(Unit& u) {
     // Slot 27: the current target is cleared (TD +8 / +0x10, state 0): the order (and its lock / goal) and the scan pick.
     u.ordered_target = kNoObject;
@@ -2194,6 +2247,7 @@ bool CombatSystem::opportunity_valid(const Unit& u, const Hardpoint& h, const Un
     // fire range (XY + target radius from the hardpoint) and the fire cone.
     // s78n t05: the hardpoint pick 0x385190 skips an incognito target (+0x3a1 & 0x10, HERO_CLASH §8.2)
     if (!live(&t) || (t.flags & (kUnitSkipTargeting | kUnitIncognito | kUnitGarrisoned))) return false;
+    if (!clash_allows(u.id, t.id)) return false;  // s78n t06: the hardpoint pick's pairing rule (HERO_CLASH §5.2)
     if (!is_enemy(u.owner, t.owner)) return false;
     const HardpointDesc& hd = data_->hardpoints[h.desc];
     const UnitDesc& td = desc_of(t);
@@ -2280,6 +2334,7 @@ bool CombatSystem::fire_hardpoint(Unit& u, Hardpoint& h, uint32_t frame, SimRng&
     const Unit& t = *tp;
     const UnitDesc& td = desc_of(t);
     // 1. gates
+    if (!clash_allows(u.id, t.id)) return false;  // s78n t06: Fire_At 0x3825b0 refuses fire outside the clash pairing
     if ((t.flags & kUnitStealthed) && !ud.target_stealth_units && t.owner != u.owner) return false;
     if (hd.fire_category_restrictions & td.category_mask) return false;
     if (!is_enemy(u.owner, t.owner)) return false;
@@ -3447,7 +3502,7 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
     }
     if (src && (src->flags & kUnitIncognito)) unit(r.source)->flags &= ~kUnitIncognito;
     if (v.flags & kUnitInBaseShield) x = x * cfg_.base_shield_vulnerability;  // 6
-    if (k == kKindNormal) {  // 7 diminishing firepower (ALLOW_TARGET_DIMINISHING_FIREPOWER, default true)
+    if (k == kKindNormal && !r.no_diminishing) {  // 7 diminishing firepower (ALLOW_TARGET_DIMINISHING_FIREPOWER, default true)
         bool allow = true;
         if (src) {
             const UnitAbilityDesc* ab[2] = {ability(*src, 0), ability(*src, 1)};
@@ -4350,6 +4405,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
     //    countdown (hook) -> burning -> targeting -> pending ability + special abilities (hook) ->
     //    hardpoints / weapons -> converted-unit decay.
     if (hooks_) hooks_->before_units(frame, rng);
+    drop_clash_targets();  // s78n t06
     size_t next_team = 0;  // s78h t06: land_teams_ cursor (slot descending)
     for (uint32_t k = n; k-- > 0;) {
         // s78h t06: a land team's TeamTargeting runs once, at its container slot just before its highest-index unit, even
@@ -4394,7 +4450,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         // was reset there); a member has none of its own (its container's service writes its state).
         const bool land_head = std::binary_search(land_heads_.begin(), land_heads_.end(), u.id);
         if (!land_head) u.acquired = 0;
-        if (!idle && !suspended && !(u.flags & kUnitTargetingSuspended)) {  // S8 t25
+        if (!idle && !suspended && !(u.flags & (kUnitTargetingSuspended | kUnitHeroClash))) {  // S8 t25; s78n t06
             // s78f t03: TARGETING = the scan, then the state service (TACTICAL_COMBAT §3.1.1 "Targeting states").
             if (!land_head && !land_team_head(u)) {
                 decide(u, cands_[k], frame, rng);

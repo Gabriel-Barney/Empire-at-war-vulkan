@@ -2227,10 +2227,14 @@ int m_lock_current_orders(Call& c) {
 }
 int m_unlock_current_orders(Call& c) {
     if (!lock_owner_ok(c, "Unlock_Current_Orders", "unlock")) return 0;
-    // [port] The hero-clash refusal (obj +0x3b4, "...is locked by a hero clash.  Cannot unlock.") has no state here:
-    // no hero clash is modelled.
     objects::ObjectStore* st = store(c);
     const ObjectHandle self = self_object(c);
+    // s78n t06 (HERO_CLASH §3.8, A1_READINGS): obj +0x3b4 - the clash holds the lock; nothing is unlocked.
+    if (const ObjectBridge* b = bridge(c); b && b->remaining && b->remaining->in_hero_clash && b->remaining->in_hero_clash(self)) {
+        const std::string name(object_type_name(c, self));
+        return c.script_error_stop("GameObjectWrapper::Unlock_Current_Orders - object %s is locked by a hero clash.  Cannot unlock.",
+                                   name.c_str());
+    }
     // Land mode with TEAM: unlock each member (the container itself stays as it is - the original's asymmetry).
     if (st->mode() == objects::ModeKind::Land && st->has_behavior(self, objects::beh::Team)) {
         for (const ObjectHandle m : contents_of(c, self)) script_unlock(c, m);
@@ -3051,6 +3055,10 @@ bool movement_locked(Call& c, ObjectId id) {
     if (!b) return false;
     const RemainingScriptHooks* hk = b->remaining;
     const objects::ObjectStore* st = store(c);
+    if (hk && hk->in_hero_clash) {  // s78n t06: the clash's movement lock (HERO_CLASH §3.2)
+        const ObjectHandle h = st->find(id);
+        if (h && hk->in_hero_clash(h)) return true;
+    }
     std::function<bool(ObjectId, Vec3&)> goal;
     if (hk && hk->move_goal)
         goal = [hk, st](ObjectId i, Vec3& g) {

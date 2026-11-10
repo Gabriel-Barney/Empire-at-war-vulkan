@@ -13,7 +13,7 @@ namespace alamo::sim {
 namespace {
 
 constexpr uint32_t kBattleStateVersion = 11;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: q6 attacks on TEAM containers / s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save) (two branches); 8: both merged; 9: ccpgt t02 domination timer; 10: cu8k t01 Saber_Throw thrower machines; 11: cu8l t03 start fleet arrivals (10 still read: none)
-constexpr uint32_t kBattlePartVersion = 1;
+constexpr uint32_t kBattlePartVersion = 2;  // 2: s78n t06 running hero clashes in the Combat part (1 still read: none)
 
 // One module system in a part: presence flag + a section with its own write.
 template <class T>
@@ -158,6 +158,7 @@ void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {
         case SavePart::Combat:
             put_system(w, combat_.get());
             put_system(w, &l1_weather_);
+            put_system(w, &hero_clash_);  // s78n t06 (part version 2)
             break;
         case SavePart::Abilities:
             put_system(w, abilities_.get());
@@ -194,7 +195,8 @@ void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {
 bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
     const uint32_t version = r.u32();
     if (!r.ok()) return false;
-    if (p == SavePart::State ? (version != kBattleStateVersion && version != 10u) : version != kBattlePartVersion) return false;
+    if (p == SavePart::State ? (version != kBattleStateVersion && version != 10u) : (version != kBattlePartVersion && version != 1u))
+        return false;
     switch (p) {
         case SavePart::State: {
             // Parsed into a scratch copy of the record lists via a backup: the current state is written first and read
@@ -246,7 +248,14 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
             return get_system(r, movement_.get()) && get_system(r, &l1_jumps_) && get_system(r, &l1_engines_) && r.done();
         case SavePart::Combat:
             l1_weather_.set_data(l1_weather_data_.get());  // the saved scenario resolves in it (weather starts on the first service)
-            if (!(get_system(r, combat_.get()) && get_system(r, &l1_weather_) && r.done())) return false;
+            if (!(get_system(r, combat_.get()) && get_system(r, &l1_weather_))) return false;
+            // s78n t06: the running hero clashes (part version 2; a version 1 battle has none). The manager's entries and
+            // resolved types are the host's (set_hero_clash_data), so the saved entry indices resolve against them.
+            hero_clash_.clear();
+            if (version >= 2u && !get_system(r, &hero_clash_)) return false;
+            if (!r.done()) return false;
+            (void)hero_clash_.take_changed();
+            hero_clash_sync();
             attach_rocket_terrain();  // refixf t01: the host terrain is not part of the save
             share_groups_sync();  // derived, not saved (State and Movement are read before Combat)
             return true;

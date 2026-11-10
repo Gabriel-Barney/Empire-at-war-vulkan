@@ -818,6 +818,19 @@ static void test_unit_order_targets(const Db& db) {
     CHECK(run(vm, "Ship.Lock_Current_Orders() r = 1 r = Ship.Attack_Move(Enemy)") == "" && gnil(vm, "r") && !vm.exit_requested());
     CHECK(last_message_has(vm, "is locked into existing orders"));
     CHECK(run(vm, "Ship.Unlock_Current_Orders()") == "");
+    {  // s78n t06 (HERO_CLASH §3.2 / §3.8): a hero in a clash - Unlock_Current_Orders is a script error that unlocks nothing,
+       // and the clash's lock refuses its orders
+        e.bridge.remaining = &e.hooks;
+        e.hooks.in_hero_clash = [ship](ObjectHandle h) { return h == ship; };
+        CHECK(run(vm, "Ship.Unlock_Current_Orders()") == "" &&
+              last_message_has(vm, "SCRIPT ERROR: GameObjectWrapper::Unlock_Current_Orders - object Ship is locked by a hero clash.  Cannot unlock.") &&
+              stopped());
+        CHECK(run(vm, "r = 1 r = Ship.Attack_Move(Enemy)") == "" && gnil(vm, "r") && last_message_has(vm, "is locked into existing orders"));
+        CHECK(run(vm, "T1.Unlock_Current_Orders()") == "" && last_message_has(vm, "Unlock_Current_Orders - object Trooper is not locked.") &&
+              !stopped());
+        e.hooks.in_hero_clash = nullptr;
+        e.bridge.remaining = nullptr;
+    }
     // Galactic-only order bindings refuse a tactical-only command in a galactic store (Attack_Target / Attack_Move).
     {
         Env g(db, objects::ModeKind::Galactic);

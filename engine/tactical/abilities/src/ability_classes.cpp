@@ -233,10 +233,12 @@ bool AbilitySystem::class_accepts(const Obj& o, const SpecialAbilityDesc& s, Obj
     const bool live = alive_unit(target);
     const bool dummy = target != kNoObject && combat_->has_unit(target) && (combat_->flags(target) & combat::kUnitSkipTargeting);
     const bool foe = live && !dummy && enemy(o.owner, combat_->owner(target));
+    // s78n t06 (HERO_CLASH §5.2, TACTICAL_COMBAT §5.4.3 item 3): the hero-clash pairing rule 0x39a540 of the accepts that
+    // read +0x3b4 - when the user or the target is in a hero clash, both must be in the same one.
+    const auto paired = [&] { return combat_->clash_allows(o.id, target); };
     switch (s.cls) {
         // 0x6eef00 (Arc_Sweep, Concentrate_Fire, Generic_Attack) and the other enemy-target classes: enemy, applicable
-        // filter (0x48e290) [port: the model test and the hero-clash pairing rule 0x39a540 (TACTICAL_COMBAT §5.4.3 item
-        // 3; not a layer test) are not modelled].
+        // filter (0x48e290), the pairing rule (s78n t06) [port: the model test is not modelled].
         case C::ArcSweep:
         case C::GenericAttack:
         case C::EatAttack:
@@ -244,23 +246,25 @@ bool AbilitySystem::class_accepts(const Obj& o, const SpecialAbilityDesc& s, Obj
         case C::Telekinesis:
         case C::GrenadeAttack:
         case C::ForceLightning:
-        case C::DrainLife:
         case C::LeechShields:
         case C::SuperLaser:
-        // Hack 0x6fd610 (TACTICAL_COMBAT §5.4.1): enemy of the user's owner, the filter, a model (+ the hero-clash pairing
-        // rule, §5.4.3 item 3: when either side is in a hero clash both must be in the same one); no alive / kind / range
-        // test [port: "has a model" stands as a live, targetable combat unit; no hero clashes yet, so no pairing rule].
+        // Hack 0x6fd610 (TACTICAL_COMBAT §5.4.1): enemy of the user's owner, the filter, a model, the pairing rule; no
+        // alive / kind / range test [port: "has a model" stands as a live, targetable combat unit].
         case C::Hack:
-        case C::VehicleThief:
-        case C::Infection:
-        case C::SaberThrow:
         case C::FlameThrower:
         case C::Cable:
-        case C::MaximumFirepower: return foe && target_filter(s, target);
-        case C::Berserker:  // enemy, not a projectile, has a locomotor, filter
-            return foe && combat_->data().units[combat_->desc_index(target)].has_locomotor && target_filter(s, target);
+        case C::MaximumFirepower: return foe && target_filter(s, target) && paired();
+        // Drain_Life / Vehicle_Thief / Infection / Saber_Throw accepts do not read +0x3b4 (HERO_CLASH §5.2 table).
+        case C::DrainLife:
+        case C::VehicleThief:
+        case C::Infection:
+        case C::SaberThrow: return foe && target_filter(s, target);
+        case C::Berserker:  // enemy, not a projectile, has a locomotor, filter; "both 0, or pairing" (s78n t06)
+            return foe && combat_->data().units[combat_->desc_index(target)].has_locomotor && target_filter(s, target) &&
+                   paired();
         case C::TacticalBribe: return bribe_accepts(o, target);  // 0x5b0f70: never the filter (§5.4.1)
-        case C::Repair: return live && !dummy && allied(o.owner, combat_->owner(target)) && target_filter(s, target);  // [inferred]
+        case C::Repair:  // [inferred]; 0x70ca40 pairing rule (s78n t06)
+            return live && !dummy && allied(o.owner, combat_->owner(target)) && target_filter(s, target) && paired();
         case C::CancelSpecial: {  // cu8f t01, 0x6f4060: the target has a SAP and is not friendly (enemy or neutral; self and
             // allies refused). No range or type filter. [port] "has a SAP" = an object of this system that is not dead.
             // s78n t07: "friendly" is 0x39a2c0 (relation 0, `friendly`), so a neutral target is accepted.

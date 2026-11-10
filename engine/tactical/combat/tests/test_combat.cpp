@@ -29,6 +29,7 @@
 #include "alamo/data/xml.hpp"
 #include "alamo/objects/enums.hpp"
 #include "alamo/tactical/combat/combat_system.hpp"
+#include "alamo/tactical/combat/hero_clash.hpp"
 #include "alamo/tactical/combat/weather.hpp"
 #include "alamo/test/thread_parallel_for.hpp"
 #include "alamo/test/support.hpp"
@@ -6695,6 +6696,583 @@ void test_charge_up_slew() {
     }
 }
 
+// ================================================================================================
+// s78n t06: hero clashes (docs/re/HERO_CLASH.md §1-§6)
+// ================================================================================================
+
+constexpr const char* kClashXml = R"(<?xml version="1.0"?>
+<Hero_Clashes>
+  <Hero_Clash Name="Duel_A_B">
+    <Clash_Type>Melee_Duel</Clash_Type>
+    <Clash_Range>100.0</Clash_Range>
+    <Involved_Hero_Types>Hero_A, Hero_B</Involved_Hero_Types>
+    <Play_Conversation_Events>No</Play_Conversation_Events>
+    <Combat_Distance>17.65</Combat_Distance>
+    <Damage_Amount>0.0</Damage_Amount>
+    <Damage_Percentage>0.15</Damage_Percentage>
+    <First_Hero_Win_Exchange_Chance>0.40</First_Hero_Win_Exchange_Chance>
+    <Second_Hero_Win_Exchange_Chance>0.30</Second_Hero_Win_Exchange_Chance>
+    <First_Hero_Damage_Multiplier>2.5</First_Hero_Damage_Multiplier>
+    <Second_Hero_Damage_Multiplier>1.0</Second_Hero_Damage_Multiplier>
+    <First_Hero_Type>Hero_A</First_Hero_Type>
+    <Second_Hero_Type>Hero_B</Second_Hero_Type>
+    <First_Hero_Win_Anim_Type>HC_WIN</First_Hero_Win_Anim_Type>
+    <First_Hero_Lose_Anim_Type>HC_LOSE</First_Hero_Lose_Anim_Type>
+    <First_Hero_Draw_Anim_Type>HC_DRAW</First_Hero_Draw_Anim_Type>
+    <First_Hero_Conversation_Anim_Type>IDLE</First_Hero_Conversation_Anim_Type>
+    <Second_Hero_Win_Anim_Type>HC_WIN</Second_Hero_Win_Anim_Type>
+    <Second_Hero_Lose_Anim_Type>HC_LOSE</Second_Hero_Lose_Anim_Type>
+    <Second_Hero_Draw_Anim_Type>HC_DRAW</Second_Hero_Draw_Anim_Type>
+    <Second_Hero_Conversation_Anim_Type>IDLE</Second_Hero_Conversation_Anim_Type>
+    <First_Hero_Win_Speech>Speech_A</First_Hero_Win_Speech>
+    <Second_Hero_Win_Speech>Speech_B</Second_Hero_Win_Speech>
+  </Hero_Clash>
+  <Hero_Clash Name="Action_B_C">
+    <Clash_Type>Action_Driven</Clash_Type>
+    <Clash_Range>0.0</Clash_Range>
+    <First_Hero_Type>Hero_B</First_Hero_Type>
+    <Second_Hero_Type>Hero_C</Second_Hero_Type>
+    <First_Hero_Win_Exchange_Chance>0.8</First_Hero_Win_Exchange_Chance>
+    <Second_Hero_Win_Exchange_Chance>0.8</Second_Hero_Win_Exchange_Chance>
+    <Clash_Actions><Attack_Action/><Move_Action/></Clash_Actions>
+  </Hero_Clash>
+  <Hero_Clash Name="Action_B_C">
+    <Clash_Type>Something</Clash_Type>
+  </Hero_Clash>
+</Hero_Clashes>
+)";
+
+std::span<const uint8_t> clash_bytes(std::string_view x) { return {reinterpret_cast<const uint8_t*>(x.data()), x.size()}; }
+
+HeroClashData clash_data() {
+    HeroClashData d;
+    CHECK(parse_hero_clash_xml(clash_bytes(kClashXml), d));
+    return d;
+}
+
+// The host side for the manager tests: units with type / owner / position / health; Take_Damage subtracts at once.
+struct ClashStub final : HeroClashHost {
+    struct U {
+        ObjectId id = kNoObject;
+        int32_t type = -1, owner = -1;
+        Vec3 pos;
+        float yaw = 0.0f, health = 500.0f;
+        bool alive = true, jet = false, walking = false, flag = false, held = false, hero = true;
+        ObjectId target = kNoObject;
+        uint32_t moves = 0, places = 0;
+        Vec3 spot;
+    };
+    std::vector<U> units;
+    std::vector<std::pair<int32_t, int32_t>> allies;  // owner pairs that are not enemies
+    bool model = false;  // clip(): model data (variants / frames below) instead of the fallback
+    uint32_t model_variants = 1, model_frames = 101;
+    float model_fps = 30.0f;
+    float last_damage = 0.0f;
+    uint32_t damage_calls = 0;
+
+    U* get(ObjectId id) {
+        for (U& u : units)
+            if (u.id == id) return &u;
+        return nullptr;
+    }
+    U& add(ObjectId id, int32_t type, int32_t owner, Vec3 pos) {
+        U u;
+        u.id = id;
+        u.type = type;
+        u.owner = owner;
+        u.pos = pos;
+        units.push_back(u);
+        return units.back();
+    }
+    void candidates(int32_t type, std::vector<ObjectId>& out) override {
+        for (auto it = units.rbegin(); it != units.rend(); ++it)  // reverse: the manager sorts
+            if (it->type == type && it->alive) out.push_back(it->id);
+    }
+    bool alive(ObjectId id) override { return get(id) && get(id)->alive; }
+    int32_t type_of(ObjectId id) override { return get(id) ? get(id)->type : -1; }
+    int32_t owner(ObjectId id) override { return get(id) ? get(id)->owner : -1; }
+    bool hero_type(int32_t type) override {
+        for (const U& u : units)
+            if (u.type == type) return u.hero;
+        return false;
+    }
+    bool enemies(int32_t a, int32_t b) override {
+        for (const auto& [x, y] : allies)
+            if ((x == a && y == b) || (x == b && y == a)) return false;
+        return a != b;
+    }
+    Vec3 position(ObjectId id) override { return get(id)->pos; }
+    float yaw_deg(ObjectId id) override { return get(id)->yaw; }
+    float health(ObjectId id) override { return get(id)->health; }
+    bool jetpacking(ObjectId id) override { return get(id)->jet; }
+    ObjectId attack_target(ObjectId id) override { return get(id)->target; }
+    bool walking(ObjectId id) override { return get(id)->walking; }
+    bool in_clash(ObjectId id) override { return get(id)->flag; }
+    void set_in_clash(ObjectId id, bool on) override { get(id)->flag = on; }
+    void move_to(ObjectId id, Vec3 spot) override {
+        ++get(id)->moves;
+        get(id)->spot = spot;
+    }
+    void place(ObjectId id, Vec3 pos, float yaw) override {
+        U* u = get(id);
+        u->pos = pos;
+        u->yaw = yaw;
+        ++u->places;
+    }
+    void face(ObjectId id, float yaw) override { get(id)->yaw = yaw; }
+    void hold(ObjectId id, bool on) override { get(id)->held = on; }
+    bool clip(ObjectId, std::string_view, uint32_t, uint32_t& variants, uint32_t& frames, float& fps) override {
+        if (!model) return false;
+        variants = model_variants;
+        frames = model_frames;
+        fps = model_fps;
+        return true;
+    }
+    bool speech_idle() override { return true; }
+    void damage(ObjectId victim, float amount, ObjectId) override {
+        U* u = get(victim);
+        u->health -= amount;
+        if (u->health <= 0.0f) u->alive = false;
+        last_damage = amount;
+        ++damage_calls;
+    }
+};
+
+constexpr int32_t kTypeA = 10, kTypeB = 11, kTypeC = 12, kTypeX = 13;
+
+void test_hero_clash_parse_and_rules() {
+    std::vector<std::string> diag;
+    HeroClashData d;
+    CHECK(parse_hero_clash_xml(clash_bytes(kClashXml), d, &diag));
+    CHECK(d.entries.size() == 3);  // duplicate names kept, file order
+    if (d.entries.size() != 3) return;
+    const HeroClashEntry& e = d.entries[0];
+    CHECK(e.name == "Duel_A_B" && e.clash_type == kClashMelee && !e.play_conversation);
+    CHECK_F(e.clash_range, 100.0f);
+    CHECK_F(e.combat_distance, 17.65f);
+    CHECK_F(e.damage_percentage, 0.15f);
+    CHECK_F(e.first_win, 0.4f);
+    CHECK_F(e.second_win, 0.3f);
+    CHECK_F(e.first_multiplier, 2.5f);
+    CHECK(e.first_type == "Hero_A" && e.second_type == "Hero_B");
+    CHECK(e.involved.size() == 2 && e.involved.back() == "Hero_B");
+    CHECK(e.first_anims[0] == "HC_WIN" && e.first_anims[1] == "HC_LOSE" && e.second_anims[2] == "HC_DRAW" && e.second_anims[3] == "IDLE");
+    CHECK(e.first_speech == "Speech_A");
+    CHECK(d.entries[1].clash_type == kClashActionDriven && d.entries[1].action_count == 2 && d.entries[1].name == "Action_B_C");
+    CHECK_F(d.entries[1].first_win, 0.3f);  // 0.8 + 0.8 > 1: both 0.3, one diagnostic
+    CHECK_F(d.entries[1].second_win, 0.3f);
+    CHECK(diag.size() == 1);
+    CHECK(d.entries[2].clash_type == -1 && d.entries[2].name == "Action_B_C");
+    HeroClashData bad;
+    CHECK(!parse_hero_clash_xml(clash_bytes("<Other/>"), bad));
+
+    // Exchange damage (§3.6 step 4): round((500 x 0.15 + 0) x mult) - a first-type win 187.5 -> 188, second 75.
+    CHECK(clash_exchange_damage(e, 500.0f, true, false) == 188);
+    CHECK(clash_exchange_damage(e, 500.0f, false, true) == 75);
+    CHECK(clash_exchange_damage(e, 500.0f, false, false) == 0);
+    CHECK(clash_exchange_damage(e, 420.0f, true, false) == 158);  // 157.5 -> 158 (half away from zero)
+
+    // Outcomes: one synced float draw each, never the previous outcome; first draw 0.4 / 0.3 / 0.3, after a first-hero win
+    // 0.5 / 0.5 between the second hero's win and the draw.
+    SimRng rng(777u);
+    uint8_t prev = kExchangeNone;
+    uint32_t first[4] = {0, 0, 0, 0}, after1[4] = {0, 0, 0, 0}, repeats = 0;
+    for (int i = 0; i < 20000; ++i) {
+        const uint64_t d0 = rng.draws();
+        const uint8_t o = clash_pick_outcome(prev, 0.4f, 0.3f, rng);
+        CHECK(rng.draws() == d0 + 1);
+        if (o == prev || o < 1 || o > 3) ++repeats;
+        if (prev == kExchangeFirstWins) ++after1[o & 3u];
+        prev = o;
+    }
+    CHECK(repeats == 0);
+    SimRng r2(4242u);
+    for (int i = 0; i < 20000; ++i) ++first[clash_pick_outcome(kExchangeNone, 0.4f, 0.3f, r2) & 3u];
+    CHECK_NEAR(first[1] / 20000.0, 0.4, 0.02);
+    CHECK_NEAR(first[2] / 20000.0, 0.3, 0.02);
+    CHECK_NEAR(first[3] / 20000.0, 0.3, 0.02);
+    const double n1 = static_cast<double>(after1[2] + after1[3]);
+    CHECK(after1[1] == 0 && n1 > 0.0);
+    if (n1 > 0.0) CHECK_NEAR(after1[2] / n1, 0.5, 0.03);
+}
+
+// Two enemy heroes 50 apart on world X (within Clash_Range 100), entry 0 resolved to kTypeA / kTypeB.
+struct ClashRig {
+    HeroClashData data = clash_data();
+    HeroClashManager m;
+    ClashStub host;
+    SimRng rng{99u};
+    uint32_t frame = 15;
+    ClashRig() {
+        m.set_data(&data, {{kTypeA, kTypeB}, {kTypeB, kTypeC}, {-1, -1}});
+        host.add(1, kTypeA, 0, Vec3{0.0f, 0.0f, 0.0f});
+        host.add(2, kTypeB, 1, Vec3{50.0f, 10.0f, 0.0f});
+    }
+    void step() { m.update(frame++, host, rng); }
+};
+
+void test_hero_clash_start_rule() {
+    {  // detection only when frame % 15 == 0, no draws
+        ClashRig r;
+        r.frame = 16;
+        for (int i = 0; i < 14; ++i) r.step();
+        CHECK(r.m.empty() && r.rng.draws() == 0);
+        CHECK(r.frame == 30);
+        r.step();  // frame 30: starts
+        CHECK(r.m.clashes().size() == 1 && r.host.get(1)->flag && r.host.get(2)->flag);
+        CHECK(r.host.get(1)->moves == 1 && r.host.get(2)->moves == 1);
+        // Spots on world X through the midpoint (25, 5), 17.65 apart; hero 1 is left of the midpoint.
+        CHECK_F(r.host.get(1)->spot.x, 25.0f - 17.65f / 2.0f);
+        CHECK_F(r.host.get(2)->spot.x, 25.0f + 17.65f / 2.0f);
+        CHECK_F(r.host.get(1)->spot.y, 5.0f);
+        CHECK(r.m.take_changed());
+        CHECK(!r.m.take_changed());
+        CHECK(r.m.pairs().size() == 1 && r.m.pairs()[0] == std::make_pair(ObjectId{1}, ObjectId{2}));
+    }
+    {  // out of range (3-D distance), then in range
+        ClashRig r;
+        r.host.get(2)->pos = Vec3{60.0f, 0.0f, 81.0f};  // 100.5 away
+        r.step();
+        CHECK(r.m.empty());
+        r.host.get(2)->pos = Vec3{60.0f, 0.0f, 79.0f};  // 99.1
+        r.frame = 30;
+        r.step();
+        CHECK(!r.m.empty());
+    }
+    for (int k = 0; k < 5; ++k) {  // same owner, allies, a non-hero type, a jet pack, already clashing: no start
+        ClashRig r;
+        if (k == 0) r.host.get(2)->owner = 0;
+        if (k == 1) r.host.allies.emplace_back(0, 1);
+        if (k == 2) r.host.get(2)->hero = false;
+        if (k == 3) r.host.get(1)->jet = true;
+        if (k == 4) r.host.get(2)->flag = true;
+        r.step();
+        CHECK(r.m.empty());
+    }
+    {  // the targeting condition: no target or one of the other hero type; another target blocks the start
+        ClashRig r;
+        r.host.add(3, kTypeX, 1, Vec3{200.0f, 0.0f, 0.0f});
+        r.host.get(1)->target = 3;
+        r.step();
+        CHECK(r.m.empty());
+        r.host.get(1)->target = 2;
+        r.host.get(2)->target = 1;
+        r.frame = 30;
+        r.step();
+        CHECK(!r.m.empty());
+    }
+    {  // each B joins one clash: two A heroes near one B -> one clash, the lower id first; the Action_Driven entry never
+       // starts even with coincident positions
+        ClashRig r;
+        r.host.add(3, kTypeA, 0, Vec3{10.0f, 0.0f, 0.0f});
+        r.host.add(4, kTypeC, 0, Vec3{50.0f, 10.0f, 0.0f});  // coincident with hero 2 (kTypeB vs kTypeC, range 0)
+        r.step();
+        CHECK(r.m.clashes().size() == 1 && r.m.clashes()[0].hero1 == 1 && !r.host.get(3)->flag && !r.host.get(4)->flag);
+    }
+}
+
+void test_hero_clash_fight() {
+    {  // start -> snap (not walking) -> fight; every exchange 99 frames, damage once at 80 % (188 / 75), outcome never
+       // repeats; the clash ends with the loser's death and releases the winner
+        ClashRig r;
+        r.step();
+        CHECK(r.m.clashes().size() == 1);
+        r.step();  // approach: not walking, off the combat distance -> snap
+        CHECK(r.m.clashes()[0].state == HeroClashManager::kSnap);
+        const HeroClashManager::Clash c0 = r.m.clashes()[0];
+        CHECK(c0.snap_end > c0.snap_start && c0.snap_end - c0.snap_start <= 30u);
+        while (!r.m.empty() && r.m.clashes()[0].state == HeroClashManager::kSnap) r.step();
+        CHECK(!r.m.empty() && r.m.clashes()[0].state == HeroClashManager::kFight);
+        CHECK_F(r.host.get(1)->pos.x, c0.spot1.x);  // placed on the spots
+        CHECK_F(r.host.get(2)->pos.x, c0.spot2.x);
+        CHECK(r.host.get(1)->held && r.host.get(2)->held);
+        CHECK_NEAR(r.host.get(1)->yaw, 0.0, 1e-3);  // facing each other along X
+        CHECK_NEAR(r.host.get(2)->yaw, 180.0, 1e-3);
+        uint8_t prev = kExchangeNone;
+        uint32_t exchanges = 0, ex_start = 0, hits = 0;
+        bool repeated = false, bad = false;
+        float h1 = 500.0f, h2 = 500.0f;
+        for (int i = 0; i < 4000 && !r.m.empty(); ++i) {
+            const uint32_t calls = r.host.damage_calls;
+            const HeroClashManager::Clash before = r.m.clashes()[0];
+            r.step();
+            if (r.host.damage_calls != calls) {
+                ++hits;
+                // the frame hero 1's clip reaches 80 %: 81 frames into a 101-frame exchange
+                if (r.frame - 1u - before.ex_start != 81u) bad = true;
+                const float dmg = r.host.last_damage;
+                if (before.ex_winner == 1 && dmg != 188.0f) bad = true;
+                if (before.ex_winner == 2 && dmg != 75.0f) bad = true;
+                if (before.ex_winner == 1) {
+                    h2 -= dmg;
+                } else {
+                    h1 -= dmg;
+                }
+            }
+            if (!r.m.empty() && r.m.clashes()[0].exchanges != before.exchanges) {
+                const HeroClashManager::Clash& c = r.m.clashes()[0];
+                if (c.outcome == prev) repeated = true;
+                if (exchanges > 0 && c.ex_start - ex_start != 99u) bad = true;  // count - 2 frames per exchange
+                prev = c.outcome;
+                ex_start = c.ex_start;
+                ++exchanges;
+            }
+        }
+        CHECK(r.m.empty() && !repeated && !bad && hits > 0);
+        CHECK(r.rng.draws() == exchanges);  // one float draw per exchange (one variant, no conversation)
+        CHECK_F(r.host.get(1)->health, h1);
+        CHECK_F(r.host.get(2)->health, h2);
+        CHECK(r.host.get(1)->alive != r.host.get(2)->alive);
+        CHECK(!r.host.get(1)->flag && !r.host.get(2)->flag && !r.host.get(1)->held && !r.host.get(2)->held);
+        const std::vector<HeroClashManager::EndEvent> ev = r.m.take_ended();
+        CHECK(ev.size() == 1);
+        if (!ev.empty()) CHECK(!ev[0].by_removal && ev[0].winner == (r.host.get(1)->alive ? 1 : 2));
+        CHECK(r.m.take_changed());
+    }
+    {  // already at the combat distance: no snap, straight to the fight
+        ClashRig r;
+        r.host.get(2)->pos = Vec3{17.65f, 0.0f, 0.0f};
+        r.step();
+        r.step();
+        CHECK(r.m.clashes()[0].state == HeroClashManager::kFight && r.host.get(1)->places == 0);
+    }
+    {  // walking heroes wait in the approach
+        ClashRig r;
+        r.host.get(1)->walking = true;
+        for (int i = 0; i < 6; ++i) r.step();
+        CHECK(r.m.clashes()[0].state == HeroClashManager::kApproach);
+        r.host.get(1)->walking = false;
+        r.step();
+        CHECK(r.m.clashes()[0].state == HeroClashManager::kSnap);
+    }
+    {  // a model without the clip: nothing plays, a new exchange (and draw) every frame
+        ClashRig r;
+        r.host.model = true;
+        r.host.model_variants = 0;
+        r.host.model_frames = 0;
+        r.host.get(2)->pos = Vec3{17.65f, 0.0f, 0.0f};
+        r.step();
+        r.step();  // the start frame runs the update too: approach -> fight
+        for (int i = 0; i < 10; ++i) r.step();
+        CHECK(r.rng.draws() == 11 && r.host.damage_calls == 0);  // 11 updates since the fight
+    }
+    {  // two model variants: one extra synced int draw per exchange
+        ClashRig r;
+        r.host.model = true;
+        r.host.model_variants = 2;
+        r.host.get(2)->pos = Vec3{17.65f, 0.0f, 0.0f};
+        r.step();
+        r.step();
+        r.step();  // first exchange
+        CHECK(r.rng.draws() == 2 && r.m.clashes()[0].playing);
+    }
+}
+
+void test_hero_clash_end_and_save() {
+    {  // a hero removed in the fight: ends with the other as winner; the survivor is released, the gone hero's flag cleared
+        ClashRig r;
+        r.host.get(2)->pos = Vec3{17.65f, 0.0f, 0.0f};
+        r.step();
+        r.step();
+        for (int i = 0; i < 20; ++i) r.step();
+        r.host.get(1)->alive = false;
+        r.step();
+        CHECK(r.m.empty() && !r.host.get(1)->flag && !r.host.get(2)->flag && !r.host.get(2)->held);
+        const std::vector<HeroClashManager::EndEvent> ev = r.m.take_ended();
+        CHECK(ev.size() == 1);
+        if (!ev.empty()) CHECK(ev[0].by_removal && ev[0].winner == 2);
+    }
+    {  // removed during the snap: the survivor is not released (retail quirk kept) - flagged and locked for good
+        ClashRig r;
+        r.step();
+        r.step();
+        CHECK(r.m.clashes()[0].state == HeroClashManager::kSnap);
+        r.host.get(2)->alive = false;
+        r.step();
+        CHECK(r.m.empty() && r.host.get(1)->flag);
+        for (int i = 0; i < 40; ++i) r.step();  // never restarts (in a clash already)
+        CHECK(r.m.empty() && r.host.get(1)->flag);
+    }
+    {  // save / load mid-fight: the copy continues bit for bit (same outcomes, damage, end frame, hash)
+        ClashRig a;
+        for (int i = 0; i < 150; ++i) a.step();
+        CHECK(!a.m.empty());
+        ByteWriter w;
+        a.m.write(w);
+        ClashRig b;
+        b.host = a.host;
+        b.rng = a.rng;
+        b.frame = a.frame;
+        ByteReader rd(w.bytes());
+        CHECK(b.m.read(rd) && rd.done());
+        CHECK(b.m.take_changed());
+        StateHasher ha, hb;
+        a.m.hash(ha);
+        b.m.hash(hb);
+        CHECK(ha.digest() == hb.digest());
+        for (int i = 0; i < 4000 && !a.m.empty(); ++i) {
+            a.step();
+            b.step();
+        }
+        CHECK(a.m.empty() && b.m.empty() && a.frame == b.frame);
+        CHECK_F(a.host.get(1)->health, b.host.get(1)->health);
+        CHECK_F(a.host.get(2)->health, b.host.get(2)->health);
+        CHECK(a.rng.draws() == b.rng.draws());
+        ByteWriter w2;
+        a.m.write(w2);  // empty list: reads without data
+        HeroClashManager none;
+        ByteReader r2(w2.bytes());
+        CHECK(none.read(r2));
+        std::vector<uint8_t> cut(w.bytes().begin(), w.bytes().end() - 3);  // truncated
+        ByteReader r3(cut);
+        HeroClashManager c;
+        c.set_data(&a.data, {{kTypeA, kTypeB}});
+        CHECK(!c.read(r3));
+        HeroClashManager nodata;  // a clash needs the entries (set_data first)
+        ByteReader r4(w.bytes());
+        CHECK(!nodata.read(r4));
+    }
+}
+
+void test_hero_clash_pairing() {
+    // CombatSystem side (§5.2): the pairing rule, Set_Target refusals, the candidate scan / validate / lock drop, TARGETING
+    // suspended while flagged; a plain Take_Damage (area damage) still applies.
+    TargetWorld t;
+    t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+    t.w.add(2, t.capital, 1, Vec3{300, 0, 0});
+    t.w.add(3, t.attacker, 1, Vec3{0, 300, 0});
+    t.w.add(4, t.attacker, 0, Vec3{300, 300, 0});
+    CombatSystem& s = *t.w.sys;
+    CHECK(s.clash_allows(1, 2) && s.clash_allows(1, kNoObject));
+    s.set_flag(1, kUnitHeroClash, true);
+    s.set_flag(3, kUnitHeroClash, true);
+    s.set_hero_clashes({{1, 3}});
+    CHECK(s.clash_allows(1, 3) && s.clash_allows(3, 1));
+    CHECK(!s.clash_allows(1, 2) && !s.clash_allows(2, 1) && !s.clash_allows(4, 3));
+    s.set_flag(2, kUnitHeroClash, true);  // flagged but in no clash (the snap quirk): nothing pairs with it
+    CHECK(!s.clash_allows(1, 2) && !s.clash_allows(2, 1) && !s.clash_allows(2, 3));
+    CHECK(s.clash_allows(2, kNoObject));
+    s.set_flag(2, kUnitHeroClash, false);
+    // Set_Target: refused on a flagged target and for a flagged attacker (the partner too)
+    s.order_attack(4, 3);
+    CHECK(s.ordered_target(4) == kNoObject);
+    s.order_attack(1, 2);
+    CHECK(s.ordered_target(1) == kNoObject);
+    s.order_attack(1, 3);
+    CHECK(s.ordered_target(1) == kNoObject);
+    CHECK(!s.order_attack_issue(4, 3) && !s.order_attack_issue(1, 2));
+    // TARGETING suspended: a flagged unit acquires nothing; nobody acquires a flagged target
+    for (int i = 0; i < 60; ++i) t.w.tick();
+    CHECK(s.auto_target(1) == kNoObject && s.auto_target(3) == kNoObject && s.auto_target(4) != 3);
+    // a target that joins a clash is dropped at the next tick (validate / lock), an ordered one too
+    s.set_flag(1, kUnitHeroClash, false);
+    s.set_flag(3, kUnitHeroClash, false);
+    s.set_hero_clashes({});
+    s.order_attack(4, 3);
+    t.w.tick();
+    CHECK(s.current_target(4) == 3);
+    s.set_flag(3, kUnitHeroClash, true);
+    t.w.tick();
+    CHECK(s.current_target(4) == kNoObject);
+    // area / direct damage has no clash test
+    const float h0 = s.health(3);
+    DamageRequest d;
+    d.victim = 3;
+    d.amount = 10.0f;
+    d.source = 4;
+    s.take_damage(d, t.w.frame);
+    CHECK(s.health(3) < h0);
+    // the flag is hashed with the unit
+    StateHasher ha, hb;
+    s.hash_units(ha);
+    s.set_flag(3, kUnitHeroClash, false);
+    s.hash_units(hb);
+    CHECK(ha.digest() != hb.digest());
+}
+
+void test_hero_clash_fire_refused() {
+    // Fire_At 0x3825b0 / the hardpoint pick 0x385190: a hardpoint shooter stops firing at a target that joined a clash.
+    World w;
+    ProjectileDesc pj;
+    pj.max_speed = 50.0f;
+    pj.damage = 5.0f;
+    w.data.projectiles.push_back(pj);
+    HardpointDesc gun;
+    gun.kind = HardpointKind::WeaponLaser;
+    gun.health = 100.0f;
+    gun.projectile = 0;
+    gun.min_recharge = gun.max_recharge = 0.2f;
+    gun.fire_range = 2000.0f;
+    w.data.hardpoints.push_back(gun);
+    UnitDesc sh;
+    sh.tactical_health = 100.0f;
+    sh.max_attack_distance = 2000.0f;
+    sh.hardpoints = {0};
+    push_unit(w.data, sh);
+    UnitDesc tg;
+    tg.tactical_health = 100000.0f;
+    tg.radius = 20.0f;
+    push_unit(w.data, tg);
+    CombatConfig cfg;
+    cfg.inaccuracy_enabled = false;
+    w.make(cfg);
+    w.add(1, 0, 0, Vec3{-600.0f, 0.0f, 0.0f});
+    w.add(2, 1, 1, Vec3{0.0f, 0.0f, 0.0f});
+    w.sys->order_attack(1, 2);
+    uint32_t shots = 0;
+    for (int i = 0; i < 30; ++i) {
+        w.tick();
+        shots += static_cast<uint32_t>(w.sys->shot_events().size());
+    }
+    CHECK(shots > 0);
+    w.sys->set_flag(2, kUnitHeroClash, true);
+    shots = 0;
+    for (int i = 0; i < 30; ++i) {
+        w.tick();
+        shots += static_cast<uint32_t>(w.sys->shot_events().size());
+    }
+    CHECK(shots == 0 && w.sys->current_target(1) == kNoObject);
+}
+
+void test_hero_clash_foc_data() {
+    const char* root = std::getenv("ALAMO_FOC_DATA");
+    if (!root || !*root) {
+        std::printf("hero clash foc data: skipped (ALAMO_FOC_DATA unset)\n");
+        return;
+    }
+#ifdef ALAMO_COMBAT_TESTS_HAVE_VFS
+    vfs::VfsConfig vcfg;
+    vcfg.foc_root = root;
+    std::string verr;
+    const std::unique_ptr<vfs::Vfs> vfs_ptr = vfs::Vfs::create(vcfg, &verr);
+    if (!vfs_ptr) {
+        std::printf("FAIL hero clash foc data: VFS on %s: %s\n", root, verr.c_str());
+        ++g_fail;
+        return;
+    }
+    const FileProvider& fs = *vfs_ptr;
+#else
+    DirectoryProvider fs(root);
+#endif
+    HeroClashData d;
+    std::vector<std::string> diag;
+    CHECK(load_hero_clash_data(fs, d, &diag));
+    CHECK(d.entries.size() == 3 && diag.empty());
+    if (d.entries.size() != 3) return;
+    const HeroClashEntry& e = d.entries[0];
+    CHECK(e.name == "Vader_ObiWan" && e.clash_type == kClashMelee && !e.play_conversation);
+    CHECK(e.first_type == "Darth_Vader" && e.second_type == "Obi_Wan_Kenobi");
+    CHECK_F(e.clash_range, 100.0f);
+    CHECK_F(e.combat_distance, 17.65f);
+    CHECK(clash_exchange_damage(e, 500.0f, true, false) == 188);
+    CHECK(clash_exchange_damage(e, 500.0f, false, true) == 75);
+    CHECK(e.first_anims[0] == "HC_WIN" && e.second_anims[1] == "HC_LOSE");
+    CHECK(d.entries[1].clash_type == kClashActionDriven && d.entries[2].clash_type == kClashActionDriven);
+    CHECK(d.entries[1].name == d.entries[2].name);  // the duplicate ObiWan_BobaFett, both kept
+    CHECK_F(d.entries[1].clash_range, 0.0f);
+    std::printf("hero clash foc data: %zu entries\n", d.entries.size());
+}
+
 }  // namespace
 
 void test_energy_drain_engines() {
@@ -6854,6 +7432,13 @@ int main(int argc, char** argv) {
     test_scan_range_query();
     test_shared_team_target();
     test_foc_data();
+    test_hero_clash_parse_and_rules();  // s78n t06
+    test_hero_clash_start_rule();
+    test_hero_clash_fight();
+    test_hero_clash_end_and_save();
+    test_hero_clash_pairing();
+    test_hero_clash_fire_refused();
+    test_hero_clash_foc_data();
     if (bench) bench_modifiers();
     if (g_fail) {
         std::printf("%d check(s) FAILED\n", g_fail);
