@@ -979,8 +979,8 @@ A1_READINGS §33.4.1 run **only while the formation is moving (state 1)**. The o
    fallback members[0]. The follow distance |L − G| and the leash use L, not the lead's position.
 4. **Copy branch** (G moving): F speed := formation speed (0x41b2a0); within R, S and the cap as in A1_READINGS
    §33.4.1. If F's path already equals G's path (0x40ded0: same node count, node fields, path +0x30 / +0x34) → only
-   F speed := cap and **return** (no re-issue, no step 4). Else copy, F speed := cap, then: footprint check
-   0x40eb90(members, 2, 1) (MOVEMENT §4.3 step 5); a copied path of one node → state 3 (no signal 10); otherwise
+   F speed := cap and **return** (no re-issue, no step 4). Else copy, F speed := cap, then: the layout driver
+   0x40eb90(members, 2, 1) (MOVEMENT §4.3.1 item 1: it lays the slots out, it is not a footprint check); a copied path of one node → state 3 (no signal 10); otherwise
    each member that is not deployed (0x39a390) / deploying (0x39a400), or whose type +0x23b0 ≠ 0, gets the path
    (locomotor vf +0x158(0), +0x190(path), +0x148(0)); 0x410170(member) → its path +0x6d := 1 [L]; its waypoint index
    (path +0x60 / +0x64) := G's.
@@ -1743,13 +1743,65 @@ recovery; while it turns in place they only turn.
      0x3982b0(K). For an object with TEAM that box is the team data +0x8c / +0x98 (0x405320): the **live union box of
      the members' model bounds**, world axis-aligned, refreshed by the TEAM service 0x405b10 (TACTICAL_COMBAT
      §5.4.4). So r = √(ex² + ey² + ez²) of that union box's half extents: it grows when the squad is strung out and
-     has nothing to do with the joint slot box or with `Custom_Hard_*Extent`. (A non-team unit: its model's box; no
-     model: 0.05.) Limits: the service 0x443ff0, every frame in states 1-2: 3-D distance − r ≤ H's
+     has nothing to do with the joint slot box or with `Custom_Hard_*Extent`. (A non-team unit: its model's local
+     box turned into a world-axis box, 0x264ab0, so r varies a little with yaw; no model: half extents 0.05 each,
+     r = 0.0866.) Limits: the service 0x443ff0, every frame in states 1-2: 3-D distance − r ≤ H's
      `Garrison_Radius` (+0x236c) → start entering; the handler 0x443d10 on a finished approach move: 3-D distance −
-     r ≤ **60.0** (0x140a28bcc) → state 2 and 0x443700 (2-D distance − r ≤ `Garrison_Radius` → enter, else a short
-     flag-0x20 move of that excess toward the point).
+     r ≤ **60.0** (0x140a28bcc) → state 2 and 0x443700 (2-D distance − r ≤ `Garrison_Radius` → enter, else a
+     flag-0x20 move of the whole excess d − r toward the point: "Garrison approach in full" below).
   5. **Host id of the squad:** K's pack, as for any unit (MOVEMENT §5.3 "Garrison host id"): set at the order,
      cleared at K's next order or death, or at the walk-out arrival when K is still subscribed to signal 10.
+- **Garrison approach in full (s78n t19 RE, 2026-11-10)** [H unless tagged]. Read from the GarrisonEvent 0x3ad620,
+  0x3ad880, 0x444310, 0x443a90, 0x443ce0, 0x443ff0, 0x443d10, 0x443700, 0x443560, 0x444440, 0x3a9880. **The same
+  code runs for a squad container and for a single unit; only the box behind r differs** (item 4 above).
+  1. **Order.** 0x444310 sends no move. The GarrisonEvent first issues an ordinary group move 0x2a7b80 (kind 1;
+     flags 4 from the UI and from the retry below, 0 from Lua; **never 0x20**), then calls 0x444310 (only from
+     state 0: subscribe signals 10 and 0x10, state 1, host id, host vf +0xe0 = slot reserve), then pack +0x30 :=
+     the bone index. Destination (0x3ad880): the host's entry bone (`Garrison_Bone_Names`) nearest the unit in 3-D
+     whose point is reachable (0x50eeb0); point = bone + `Garrison_Enter_Dist`·(direction host → bone) when that is
+     > 0. No bones, or none reachable: host position + L·(cos, sin)(host yaw), L = `Garrison_Enter_Dist` if > 0,
+     else half the 3-D length of the host's box half-extent vector; index −1. Because the flags lack 0x20, the
+     approach goal goes through the order-time destination check (MOVEMENT §4.3.1) and can be displaced off the
+     host's footprint [M: inference from the flag test].
+  2. **Approach point A** (0x443a90): the host's position when the index is < 0, the host has no bones or the bone
+     lookup fails; else the bone's world position (+ `Garrison_Enter_Dist` outward, the bone's z kept).
+  3. **Service 0x443ff0**, every frame in states 1-2: free(H) < the unit's `Garrison_Value` → cancel. Else **3-D**
+     |A − U.P| − r ≤ H's `Garrison_Radius` → pack +0x10 := U.P, start entering (0x444440: state 5, fade 1.0 at 0.03
+     per frame), unsubscribe signal 10. No host-moving test here.
+  4. **Handler 0x443d10.** The capacity test runs on every signal; signal 0x10 (death) → cancel. Signal 10 (the
+     approach move finished): state 2 → enter (0x444440); a state other than 1 or 2 → unsubscribe 10, host vf
+     +0xf8, state 0, id cleared; **state 1, in this order:**
+     - if A equals the A stored at the previous arrival **bit for bit** (behaviour +0x44…+0x4c), the retry counter
+       (**GarrisonUnitBehavior +0x40**, not the pack) += 1 and a value **> 9 → cancel**; otherwise stored A := A,
+       counter := 0. Nothing else resets the counter (not the cancel, not a successful entry) [M: other writers
+       were not searched], so the cancel comes on the 11th consecutive arrival with an unchanged A;
+     - 3-D distance − r ≤ **60.0** → state 2, pack +0x10 := U.P, 0x443700 (item 5);
+     - otherwise: **the host has a path** (0x39ade0 = its locomotor's vf +0x1c0(0): any record on its path stack)
+       → **cancel**; else a new GarrisonEvent (flags 4) is queued, which re-runs item 1 (a fresh approach move to
+       the then-nearest bone). "The host is moving" is tested only here, never per frame.
+  5. **0x443700** (state 2): capacity → cancel. Else **the host is stopped** (0x3a9880: locomotor stop, removed
+     from its coordinator, re-adopted). Land only: d = **2-D** |A − U.P|, e = d − r. e ≤ `Garrison_Radius` → enter.
+     Else a new coordinator (0x426010, admit 0x425e30) gets a move 0x4f8200 (kind 1, **flags 0x20**: forced path,
+     no destination check, no passability step test) to U.P + e·(A − U.P) / d: the **whole excess**, so the unit
+     stops r short of A. The state stays 2; the service enters on the way (3-D test), or that move's signal 10
+     enters unconditionally.
+  6. **Cancel 0x443560:** unsubscribe 10 and 0x10; in states 1-2 the host's reserved count (host pack +0x34) −= 1;
+     host vf +0xf8 when the state was 2 or 4; pack reset 0x563d00 (state 0, host id 0x3FFFFF). The cancel itself
+     issues no stop: the unit walks on to wherever its approach move ends [M: no stop call seen in 0x443560].
+  7. FoC data: `Garrison_Radius` 30 (Juggernaut, F9-TZ, Gargantuan), 20 (HTT), 10 (Empire bunker), 5 (bunker
+     template); `Garrison_Enter_Dist` 0 everywhere; bunkers have four bones, vehicles one.
+- ***Port spec (garrison approach):*** path the unit (squad container or single unit alike) with a normal,
+  displaceable move to the nearest reachable entry-bone point A (host position + half its box diagonal along its
+  yaw when it has no usable bone). Every tick while approaching: capacity → cancel; enter when the **3-D**
+  distance |A − P| − r ≤ `Garrison_Radius`, r = half the 3-D diagonal of the unit's box (squad: the members' live
+  union box; single unit: its model box, world-aligned). When the approach move finishes outside that: within 60
+  of A (3-D, minus r) → stop the host and, if the **2-D** excess e = |A − P| − r exceeds `Garrison_Radius`, walk e
+  straight toward A on a forced path (entering on the way or at its end), else enter; farther than 60 → cancel if
+  the host has a path, else re-issue the approach. Cancel on the 11th consecutive finished approach with an
+  unchanged A.
+- *Not read:* the meaning of block flag 0x04; the host vf +0xe0 / +0xf8 bodies beyond the hover case; 0x3ad880 can
+  keep the point of a nearer unreachable bone while storing the reachable bone's index [M: looks like a retail
+  quirk].
 - ***Port spec (capacity / radius):*** a squad counts the **container type's** `Garrison_Value` (default 1 when the
   tag is absent) and `Garrison_Category` against the host; the plan's [port] "sum of the members' values" would
   refuse a 9-man squad at a 5-slot bunker and is wrong. The squad enters as one when (container position → approach
@@ -2000,6 +2052,39 @@ toward it. Confirmed by the s78n t14 run (`S78N_T14_RUN.md`).
    0x13's first move step in the same frame when the turn has budget left).
    "Signal 10 / order finished" is not raised here: it is the formation's arrival (A1_READINGS §33.4), once every
    member's locomotor reports done (no speed and no path).
+
+7. **State 0x10, the turn in place before the walk (s78n t19 RE, 2026-11-10)** [H unless tagged]. Read from
+   0x5ad690 (case 0x10), 0x5ad5a0, 0x5ab840, 0x5c5850, 0x5adfb0.
+   - **Budget** B = 0x372560(container type) (`Max_Rate_Of_Turn` × the mode factor) per frame, × 2
+     (`Fleeing_Infantry_Speed_Bonus`) while the top path is kind 7 (0x39a5b0). No other multiplier and **no angle
+     threshold**: the container has no `Close_Enough_Angle_For_Move_Start` rule.
+   - **Target** (0x5ab840, recomputed every frame): no path or path not started → own orientation; on the last
+     waypoint → that waypoint's final facing (+0x0c), or own orientation when it is zero; otherwise d =
+     waypoint[idx + 1] − waypoint[idx], idx = path +0x60: the **current segment's direction**, not the direction
+     from the container to the waypoint; d is normalised in 2-D and the lane term k = pack +0x15c is added: (d.x −
+     k·d.y, d.y + k·d.x); yaw = its heading in [0, 360) (0x20acd0).
+   - **Step** (0x5ad5a0): δ = wrap(target yaw − yaw) into (−180, 180]. |δ| > B → yaw moves by B toward the target,
+     leftover := 0. |δ| ≤ B → yaw := target, leftover := B − |δ|. Pitch and roll are written 0.
+   - **Exit:** leftover > 0 → state 0x13 and the move step runs **in the same frame**; leftover ≤ 0 → the frame
+     ends. So it is a **full turn to the path heading**: an aligned container (δ = 0) passes straight through;
+     |δ| = B exactly completes the turn but the first move step comes one frame later; B = 0 never leaves 0x10.
+     The leftover is only a flag; it is not handed to the move step.
+   - **In 0x13 / 0x14** the move step 0x5adfb0 turns again every frame, before moving, with a fresh full B toward
+     the same target (unused budget carries across the waypoints passed in that call; no more turning once a path
+     was popped in the call), and then moves along the **current facing** (cos yaw, sin yaw), not along the
+     segment. When that turn ends with budget left it sets the path's turn-done flag +0x6c. So 0x10 only matters
+     at a path start and after a stop.
+   - **Back to 0x10:** 0x5adfb0 writes only state 0x14; the way back is the indirect one of items 3 and 6: turn
+     not done, remaining angle ≥ the rate and the waypoint's speed fraction 0 → target speed 0 → 0x14 → 0x15 → not
+     on the last waypoint → state 0 → 0x10 on the next frame [M: composed from those items].
+   - For contrast, Walk (0x61e930, state 0) skips the turn in place when |error| ≤ its rate, or when |error| ≤
+     `Close_Enough_Angle_For_Move_Start` and the waypoint fraction is > 0. The container always turns exactly.
+
+***Port spec (container turn in place):*** at a path start (and after any stop on a path), each tick: target yaw =
+the current segment's direction plus the lane term (or the final facing on the last waypoint); rotate by min(B,
+|δ|), B = the container's turn rate (× 2 on a crush-flee path). If |δ| < B, or δ = 0, run the first move step in
+the same tick; if |δ| ≥ B it does not move that tick (|δ| = B: aligned now, moves next tick). No close-enough
+angle. While moving, the move step keeps steering by up to B per tick and advances along the facing.
 
 ***Port spec (arrival, s78n t18):*** the plan's [port] choice is confirmed: (a) the braking state ends when the
 speed is ≤ a at the start of a tick: speed := 0 that tick, no step; (b) arrived = on the last segment and within 5.0

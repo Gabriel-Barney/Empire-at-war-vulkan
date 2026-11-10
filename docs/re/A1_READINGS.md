@@ -1947,7 +1947,7 @@ Flag 0x02 = guard, block +0x24 = kind, +0x28 = object.
           speed it is travelling at).
      3. The cap is min(F speed, 2 × S). If F's path already equals the object's path (0x40ded0), F speed := the cap
         and the update **returns** (no re-issue, no step 4). Else copy the object's current path into F's path
-        (+0x68, 0x40dbc0); F speed := the cap; footprint check 0x40eb90(members, 2, 1).
+        (+0x68, 0x40dbc0); F speed := the cap; the layout driver 0x40eb90(members, 2, 1) (not a footprint check: MOVEMENT §4.3.1 item 1, 2026-11-10).
      4. Every member that is not deployed / deploying (or has type +0x23b0 ≠ 0) gets the new path (locomotor
         vf +0x158(0), vf +0x190(path), vf +0x148(0)). Its waypoint index (path +0x60 / +0x64) is set to the object's,
         so the escort joins the object's path at the object's progress.
@@ -2790,6 +2790,9 @@ pusher's path test rejects; the next rings are 1, 2.8, 5.4, 8.8, ... units out u
      half size r + 5 × `FormationSpacing` around the sample (the collision tree, AABB overlap) [M: what the object
      grid 0x538330 stores per object was not traced; 0x5d7c00 → 0x6b24f0 is a time-sliced structure per movement
      class];
+     *(settled 2026-11-10, MOVEMENT §5.4.3 "Occupancy": retail's test is a directional-radius distance test
+     against the layer-0x10 rectangles: blocked when a record's centre is within (r + margin) + its directional
+     radius of the sample, the sample swept one unit along world +x.)*
    - paths = the movers of the live MovingVsStopped collisions with b as the stopped participant (collision-list
      order): each mover's **remaining path** from its position (no approximation window), clearance = its hard Y
      extent (0x372040; soft radius when unset) + r + 4; the sample is rejected when its distance to a segment is < the
