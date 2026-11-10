@@ -26,8 +26,10 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
    wait until it is on `dev`, or merge its branch in and land after it.
 5. **Implement.** Clean-room: **never open `re_reference/`** unless the task is an RE/doc task, and then write behaviour into
    `docs/re/`, not code. No third-party dependency without asking Gabriel. Follow the determinism rules (CLAUDE.md rule 3).
-   Windows x64 only; no multiplayer, original-game saves or RenderDoc. Stay inside the group's task list; leftovers go in a
-   follow-up group (step 8), not in extra edits.
+   Windows x64 only; no multiplayer, original-game saves or RenderDoc. Stay inside the group's task list and aim at its
+   `exit` test. A finding on the way is triaged when you find it: it blocks the exit test, or is a crash / hang / save corruption /
+   tier-1 difference, so it becomes a task; otherwise `python roadmap-store\roadmap_store.py backlog add "<text>" --by <session>
+   --from <group> [--sev S1|S2|S3]` (a rule files it into a category) or drop it. Never grow the group past its cap (8 tasks).
 6. **Build in your own tree** (one tree per worktree; never share `build-msvc` or another lane's tree). From PowerShell:
    `& .\build_agent.cmd --% msvc wt "core;<modules and their dependencies>"` gives `build-wt-msvc` (`wt` is the default tree and may be left out) and runs the fast tier
    (`ctest -LE slow`); pass a regex as 4th argument for specific tests (slow ones included) or `all`. Never put `>` after `--%`.
@@ -48,8 +50,11 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
    `python roadmap-store\roadmap_store.py write <file>` once per finished unit: close each task (`{"tasks":{"t03":{"s":"done"}},
    "updated":"<date>","by":"<session>"}`), then **re-read the group**: if it has no `todo` task left, set the group
    `{"status":"done","preset":{"__delete__":true}}` in the same write, and if it was the last open group in its flowchart box,
-   set `nodes/<ID>` `{"status":"done"}` too. Leftovers go in a new follow-up group with a `preset` and an `eta` (say the preset and
-   why in its `why`). Add one `log` line. Record results where `docs/README.md` says (decisions, measurements, build rules, `docs/re/`); status is tracked only on the roadmap.
+   set `nodes/<ID>` `{"status":"done"}` too. When the group's `exit` test passes with tasks still open, close it with
+   `python roadmap-store\roadmap_store.py close-group <group> --by <session> --passed "<evidence>"`: the open tasks go to the backlog
+   (rules file them into categories; `--drop tNN --why "..."` for ones not worth keeping), the group and, when last, its box are set
+   done, one log line is written. No follow-up group: leftovers are backlog entries until Gabriel promotes them. Add one `log` line
+   for anything else you write. Record results where `docs/README.md` says (decisions, measurements, build rules, `docs/re/`); status is tracked only on the roadmap.
    The roadmap lives only in `roadmap-store/` (PR #89, 2026-11-06): nothing about it is committed to this repository.
    Check that `sync` prints `in sync with origin/main`.
 9. **Land on `dev`** (no PR): commit, then `tools\land_on_dev.cmd`. It merges `origin/dev` into your branch (resolve a conflict

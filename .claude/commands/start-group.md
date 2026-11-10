@@ -6,7 +6,8 @@ worktree name). Follow the `lane` agent loop (`.claude/agents/lane.md`):
 
 1. `python roadmap-store\roadmap_store.py sync` (pulls the store and regenerates its page).
 2. Read `roadmap-store\data\items\<id>.json` and its box `roadmap-store\data\nodes\<node>.json`. Show: title, status, preset, `why`,
-   every task with its state, `after` (and whether each group in it is `done`), and `eta`. If an `after` group is not done, or the
+   every task with its state, `after` (and whether each group in it is `done`), `eta`, and the **`exit` test and `cap`** (a group with
+   no `exit` yet: write one first, `update` `items/<id>` `{"exit":"..."}`, since that is how the group is finished). If an `after` group is not done, or the
    group is already `done`, or `by` shows another worker holding it, say so and stop.
 3. Claim it: `python roadmap-store\roadmap_store.py claim <id> --by <session>`. If `claim` is not in `roadmap_store.py --help` yet,
    `write` an `update` of `items/<id>` with `{"by":"<session>","updated":"<today>"}` instead.

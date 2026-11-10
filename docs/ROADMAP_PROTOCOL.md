@@ -27,9 +27,11 @@ The claude.ai page https://claude.ai/artifact/56dGptBoT3JcDH4rHZ6BjT is retired:
 | Collection | Document id | Fields |
 |---|---|---|
 | `meta` | `page` | `eyebrow`, `title`, `lede`, `build` (last verified build line), `updated` |
+| `meta` | `backlog` | The backlog's settings: `cats` (category id → `label`, `parent`, `order`, `desc`), `rules` (ordered category filters), `sevs` (severity meanings), and the limits `cap`, `wip`, `inbox_days`. See "Backlog and group exit tests" |
+| `backlog` | `b0001`… | One finding that is not part of an open group: `t` (text), `cat` (category id), `sev` (`S1`/`S2`/`S3`), `kind`, `s` (`open`/`promoted`/`dropped`), `from` (group it was found in), `task`, `ref`, `g` (only Gabriel can do it), `added`, `by`, and when closed `promoted` (`group/task`) or `why` |
 | `lanes` | short id (`st1`…) | One stage of the plan: `title`, `goal` (what the stage is for), `exit` ("done when" condition), `order`. Stages run in `order`, top to bottom in both the plan and the flowchart |
 | `nodes` | box id (`N1`, `MOVE`…) | `label`, `sub`, `lane`, `status`, `shape` (`box`/`pill`), `order`, `to` (map of target box id → `solid` "do before" or `dash` "feeds into") |
-| `items` | group id (`s7`, `n1`…) | `title`, `tag`, `node` (box id), `status`, `preset`, `mod`, `why`, `order`, `after` (list of group ids that must finish first), `updated` (date), `by` (session name), `tasks`, `eta`; claim fields, all optional, set by `claim` (below): `claimed_by` (session), `claimed_at` (ISO time), `touches` (list of module folders/files the work edits; default: `mod` split on `·` `,` `;`) |
+| `items` | group id (`s7`, `n1`…) | `title`, `tag`, `node` (box id), `status`, `preset`, `mod`, `why`, `order`, `after` (list of group ids that must finish first), `updated` (date), `by` (session name), `tasks`, `eta`, `exit` (the exit test: the metric or test that says the group is done), `cap` (most tasks the group may hold; default `meta/backlog` `cap`, 8), `closed` (set by `close-group`: `at`, `passed`, `moved`, `dropped`); claim fields, all optional, set by `claim` (below): `claimed_by` (session), `claimed_at` (ISO time), `touches` (list of module folders/files the work edits; default: `mod` split on `·` `,` `;`) |
 | `log` | `yyyymmdd-hhmmss-<session>` | `at` (ISO time), `by`, `text` |
 | `builds` | `yyyymmddhhmmss-<machine>-<tree>-<compiler>` | `at`, `by`, `machine`, `compiler`, `tree`, `status` (`pass`/`fail`), `exits`, `warnings`, `tests`, `tests_failed`, `test_seconds`, `excerpt` (first error or warning lines), `group` (optional roadmap group id) |
 
@@ -44,7 +46,8 @@ a playtest, a release merge) whose text does not start with "Gabriel:".
 
 `tasks` is a map: `{ "t03": { "t": "text", "s": "todo|done|oos", "o": 3, "g": true } }`. `s` is `todo`, `done` (drawn struck
 through) or `oos` (out of scope). `o` is the display order. `g` (optional) marks a task that needs Gabriel. Keys never
-change, so two sessions changing different tasks of one group merge without conflict.
+change, so two sessions changing different tasks of one group merge without conflict. A task that `close-group` moved to the
+backlog stays as `oos` with `moved: "b0012"`; one it dropped stays as `oos` with `why`; a task made from a backlog entry has `bl: "b0012"`.
 
 `eta` is the estimated completion: `{ "target": "2026-11-05", "effort": "~2 days", "note": "what it waits on" }`
 (shown on open groups only). The project-wide projection under the build line is computed by the page on every
@@ -56,7 +59,7 @@ group's scope or blockers change, update its `eta`; when the G1 / Q2 in-game dat
 give every new group an `eta` (a group without one is counted as "without estimate").
 
 Status keys (groups and boxes): `next` Do next, `partly` Partly done, `big` Not started, `spec` Spec-blocked,
-`open` Guesses to confirm, `probe` Probe only, `gab` Needs Gabriel, `done` Done, `out` Out of scope.
+`open` Guesses to confirm, `probe` Probe only, `gab` Needs Gabriel, `done` Done, `out` Out of scope, `parked` Parked (`park`).
 Presets: `xhigh`, `high`, `re2ui`, `sonnet`, `tools`, `gab` (defined in the page, `PRESETS` in `roadmap-store/page_shell.html`).
 A preset is the recommended model and effort level for a group: `xhigh` Opus 5.5 · xhigh, `high` Opus 5.5 · high,
 `re2ui` Opus 5.5 · high then Sonnet 5.5 · high, `sonnet` Sonnet 5.5 · high, `tools` Sonnet 5.5 · medium,
@@ -70,16 +73,20 @@ A preset is the recommended model and effort level for a group: `xhigh` Opus 5.5
 - Bottleneck: put `BOTTLENECK` in the group's `tag` (e.g. `"G1 · BOTTLENECK"`). While the group is open the page
   draws it in red with a badge, outlines its flowchart box and counts it in the "Bottlenecks" filter. Remove the word
   from `tag` when the group stops holding others up.
+- Group finished by its exit test (Gabriel, 2026-11-10): when the group's `exit` test passes, close it with `close-group`
+  (open tasks go to the backlog, "Backlog and group exit tests" below); do not keep it open for the tasks that are left.
 - Group finished (Gabriel, 2026-10-30, required project-wide): whichever session closes a group's last `todo` task marks
   the group done in the same write: `update` `{"status":"done"}` (drop `preset`: `{"preset":{"__delete__":true}}`). Never
   leave a group open with no `todo` task. Before you end a task, re-read every group you touched (`roadmap-store/data/items/<id>.json`):
   if all its tasks are `done` or `oos`, it must already be `done`; if it is not, fix it now. A flowchart box's status is separate and
   the page never derives it: when every group in a box is `done`, set the box done in the same write (`update` `nodes/<ID>`
   `{"status":"done"}`). `PROC` was left at `partly` after `pa` and `paf` finished, which is how this rule came about (2026-10-31).
-- New group: `set` `items/<new-id>` with `title, node, status, preset, mod, order, after, tasks, updated, by`.
-- Follow-up group (Gabriel, 2026-10-29): when a group is finished and its leftovers go into a new follow-up group
-  (e.g. `n1` -> `n1f`), the follow-up group always gets a `preset`: the recommended model and effort level for
-  that remaining work, picked from the list above. Say in its `why` which preset was chosen and the reason in a few words.
+- New group: `set` `items/<new-id>` with `title, node, status, preset, mod, order, after, tasks, updated, by, exit, eta`. A group
+  without an `exit` test is a lint warning (`roadmap_store.py lint`, and `write` prints it for the groups it touched).
+- Leftovers of a finished group (Gabriel, 2026-11-10, replaces the 2026-10-29 follow-up-group rule): they go to the backlog, not
+  into a new `…f` group. `close-group` does it in one step (see below). A new group comes from the backlog only when someone
+  picks entries on purpose (`backlog promote --new`), and it needs its own exit test, `eta` and (recommended) `preset`; say in
+  its `why` which preset was chosen and the reason in a few words.
 - Flowchart: `update` `nodes/<ID>` `{"status":"done"}` recolours a box; `{"to":{"OTHER":"solid"}}` adds an arrow;
   `{"to":{"OTHER":{"__delete__":true}}}` removes one. New box: `set` `nodes/<ID>` with `label, sub, lane, status, shape, order, to`.
   New stage: `set` `lanes/<id>` with `title, goal, exit, order`.
@@ -96,6 +103,57 @@ A preset is the recommended model and effort level for a group: `xhigh` Opus 5.5
    and wholly out-of-scope groups and boxes instead of keeping them as `oos` / `out`. Record the decision in the
    `docs/DECISIONS.md` first; that table, not the roadmap, is the record of what is out of scope.
 6. The roadmap is the only status tracker (Gabriel, 2026-11-06): `docs/PHASE2.md` / `PHASE3.md` / `PHASE4.md` no longer carry status boards or flowcharts, and `claude/roadmap.md` / `claude/phase2-status.md` are not updated. Record results where `docs/README.md` says (decisions, measurements, build rules, specs), but track what is open or done only here.
+
+## Backlog and group exit tests (Gabriel, 2026-11-10)
+
+Why: groups were defined by their task list, and every probe or RE pass added tasks, so chains like `a2f`…`a2m`, `s78f`…`s78n` and
+`cu8`…`cu8m` never reached zero. A group is now defined by an **exit test** and a size cap, and findings that do not block it
+leave the group.
+
+- **Exit test.** Every group has `exit`: a metric or test you can run ("Underworld credits at 9000 within the retail band over 12
+  seeds", not "the leftovers"). The task list is only a plan for passing it and may change; when the test passes the group is
+  done, even with tasks left. For parity work the test is a tier-2 metric or a tier-1 spec check (`docs/DECISIONS.md`, "Parity
+  tiers"); a difference that is tier 3, or inside the tolerance, is not a reason to keep a group open.
+- **Cap.** A group holds at most `cap` open tasks (default 8, `meta/backlog`; finished tasks do not count). Above it, split the
+  group (a new group with its own exit test) or move findings to the backlog; `trim-group <group> --by S --move t04:S2,t05 --drop t08
+  --why "..."` takes tasks out of an open group without closing it (a group another session has claimed needs `--force`). RE and probe tasks name their stop condition (seeds, traces, the questions to answer).
+- **Triage of a finding** (probe, RE pass, review, test failure), decided when it is found:
+
+  | Bucket | When | What happens |
+  |---|---|---|
+  | Fix now | it breaks this group's exit test, or it is a crash, hang, save corruption or a tier-1 difference a player or modder sees | a task of the group (`backlog promote --to`, or a plain task) |
+  | Backlog | real, but not blocking | `backlog add ... --from <group>`: one entry, a severity, a category |
+  | Drop | tier 3, inside tolerance, a guess nobody relies on | not recorded, or `backlog drop --why` |
+
+- **Backlog.** Its own collection (`backlog`), so it never shows as an open group or in "Start here". Severity: `S1` crash, hang,
+  save corruption or a tier-1 difference a player or modder sees; `S2` a tier-2 metric fails or a rule differs without a visible
+  effect yet; `S3` polish or a documented guess. Kind: `fix`, `port`, `re`, `probe`, `test`, `decision`, `doc`.
+- **Categories.** `inbox` ("Untriaged") is the intake. `meta/backlog` `rules` (ordered; first match on the entry's own text, then
+  on its group's `mod`; `gab` matches Gabriel-only entries) file a new entry into a more specific category straight away; an entry no
+  rule matches stays in `inbox`, and triage moves it (`backlog move`, `backlog retag --apply` re-runs the rules). Categories are
+  data too (`backlog cats --add <id> --label ... --parent ...`): Parity (`parity-sim` tactical rules, `parity-ai`, `parity-campaign`),
+  Engine (`lua-data`, `render-ui`, `mods`, `perf`), Process (`tools-harness`, `docs-process`), Research (`re-research`, `gabriel`).
+  The page's Backlog tab shows the counts per category and severity and filters by category, severity and kind.
+- **Closing.** `python roadmap-store/roadmap_store.py close-group <group> --by <session> --passed "<evidence>" [--cat C]
+  [--drop t05,t06 --why "..."]` checks nothing itself (the exit test is the lane's evidence) and, in one commit: moves every open
+  task to the backlog (filed by the rules, `--sev` default S2, Gabriel-only tasks flagged) or drops the named ones, sets the group
+  `done` (preset and claim cleared, `closed` recorded), sets its box `done` when it was the box's last open group, and adds a
+  log line. It replaces the "follow-up group" step.
+- **Promoting.** Entries come back only by choice: `backlog promote <ids> --to <group>` (refused above the cap) or
+  `--new <id> --title ... --node ... --exit ... [--preset ...] [--eta ...]`. S1 entries are reviewed first each cycle.
+- **Parking.** `park <group> --by S --why "..."` sets an unstarted group to status `parked`: it leaves the open lists, "Start here" and
+  the limit, keeps its tasks and shows as "Parked" (a milestone made only of parked groups shows "Parked", not "Done");
+  `unpark <group> --by S` restores its old status. Use it for side goals that are not on the path to the current goal.
+- **Limits and lint.** `meta/backlog` `wip` (default 8) is the number of *started* groups (one with a closed task or a live claim, not
+  waiting on an `after` group, not status `gab`) the project aims for; `inbox_days` (14) is how long
+  an entry may sit untriaged. `roadmap_store.py lint [--strict] [--verbose]` reports: open group without an exit test, over its cap,
+  open with no open task (error), done with an open task (error), more started groups than `wip`, a stale inbox entry, a bad
+  category or severity (error). Run it when planning; `write` prints the group problems it touched.
+- **Plan cycle.** Plan (Gabriel: pick a few groups from the backlog or the unstarted list, each with an exit test and cap; `batch`
+  hands out a conflict-free set) → run (lanes, one claimed group each) → close (`close-group`) → triage (S1 / S2 first, drop or
+  promote, empty `inbox`) → repeat.
+- Tasks that `close-group` leaves as `oos` (moved, dropped) are the audit trail; the 2026-10-30 rule that out-of-scope tasks are
+  deleted still applies to work Gabriel declares out of scope in `docs/DECISIONS.md`.
 
 ## Other accounts
 

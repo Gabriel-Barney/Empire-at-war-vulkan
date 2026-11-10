@@ -10,8 +10,13 @@ Finish roadmap group `$ARGUMENTS` in this worktree. Work through the checklist a
 2. **Roadmap.** Sync first (`python roadmap-store\roadmap_store.py sync`), re-read `roadmap-store\data\items\<id>.json`, then
    `write` one file: every finished task `s: done`, plus `updated` and `by`. Re-read the group: **no `todo` task left means
    `{"status":"done","preset":{"__delete__":true}}` in that same write**. If it was the last open group of its flowchart box
-   (check the other `items` with the same `node`), also `update` `nodes/<ID>` `{"status":"done"}`. Leftovers: a new follow-up group
-   with `preset`, `eta`, `after`, and a `why` that names the preset. One `log` line. (Shapes: `docs/ROADMAP_PROTOCOL.md`.)
+   (check the other `items` with the same `node`), also `update` `nodes/<ID>` `{"status":"done"}`. If the group's `exit` test passed
+   but tasks are still open, do not keep it open and do not make a follow-up group: run
+   `python roadmap-store\roadmap_store.py close-group <id> --by <session> --passed "<evidence>"` (open tasks go to the backlog and
+   are filed into categories; `--drop tNN --why "..."` for ones not worth keeping; it sets the group and, when last, its box done).
+   If the exit test has not passed, say so and leave the group open. Findings from this work that are not in the group go in with
+   `roadmap_store.py backlog add "<text>" --by <session> --from <id>`. Then `roadmap_store.py lint`. One `log` line.
+   (Shapes: `docs/ROADMAP_PROTOCOL.md`.)
 3. **Sync.** `python roadmap-store\roadmap_store.py sync` should print `in sync with origin/main`. The roadmap lives only in
    `roadmap-store\` since 2026-11-06 (PR #89): nothing about it is committed to this repository.
 4. **Docs.** Record results where `docs/README.md` says (decisions, measurements, build rules, `docs/re/` pages the tasks name); status is only on the roadmap. Keep edits minimal and factual.

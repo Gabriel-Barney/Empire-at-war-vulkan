@@ -54,8 +54,14 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
    are finished, mark the group `done` on the roadmap in the same update (Gabriel, 2026-10-30, 2026-10-31): after closing tasks, re-read
    each group you touched, and if it has no `todo` task left set `status: done` (and drop its `preset`) in that same write; a group
    left open with every task closed is a mistake to fix before ending the task. A flowchart box's status is not derived from its
-   groups: when the last group in a box is done, also set the box `done` (`nodes/<ID>`, same write). When a finished roadmap
-   group gets a follow-up group, give the follow-up a `preset` (recommended model + effort level; see `docs/ROADMAP_PROTOCOL.md`).
+   groups: when the last group in a box is done, also set the box `done` (`nodes/<ID>`, same write). **A group is defined by an
+   exit test, not by its task list** (Gabriel, 2026-11-10, replacing the follow-up-group rule): every group has `exit` and a task
+   cap (8). A finding that does not block the exit test (and is not a crash, hang, save corruption or tier-1 difference) goes to the
+   backlog (`roadmap_store.py backlog add ... --from <group>`; rules file it into a category, `inbox` is untriaged), not into the
+   group and not into a new `…f` follow-up group. When the exit test passes, close the group with `roadmap_store.py close-group
+   <group> --by <session> --passed "<evidence>"`: its open tasks move to the backlog and the group (and its box) is set done.
+   Backlog entries become work only when Gabriel picks them (`backlog promote`). `roadmap_store.py lint` shows what is wrong; rules:
+   `docs/ROADMAP_PROTOCOL.md`, "Backlog and group exit tests".
 7. In-game probes need Gabriel to launch the game; prepare them under `tools/probe_mod/` with run and cleanup scripts.
 
 ## Parallel work
