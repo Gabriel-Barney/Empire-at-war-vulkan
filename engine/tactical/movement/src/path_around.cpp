@@ -343,7 +343,9 @@ bool around_search(const PassabilityGrid& grid, const MovementConstants& k, cons
         const uint32_t nv = static_cast<uint32_t>(vs.size());
         out.vertices = nv;
         out.window = win;
-        // (iv) a start inside an obstacle's rect2: the search starts at the nearest vertex instead
+        // (iv) a start inside an obstacle's rect2: the search starts at the nearest vertex instead.
+        // s78n t20 F3 [port] (until §5.4.7 replaces it): only a vertex whose leg from the start passes the grid
+        // (line_passable) is taken; with none the call fails. Retail does not test that leg.
         uint32_t from = vstart;
         bool start_inside = false;
         for (size_t i = 0; i < win.size() && !start_inside; ++i)
@@ -353,6 +355,7 @@ bool around_search(const PassabilityGrid& grid, const MovementConstants& k, cons
             from = nv;
             for (uint32_t i = 0; i < corners; ++i) {
                 const float d2 = length_sq(vs[i].p - q.start);
+                if (!(d2 < best) || !line_passable(grid, q.start, vs[i].p, q.mask)) continue;
                 if (d2 < best) {
                     best = d2;
                     from = i;
@@ -446,8 +449,13 @@ bool around_search(const PassabilityGrid& grid, const MovementConstants& k, cons
                 const float l2 = length_sq(d);
                 const float t = l2 > 0.0f ? std::clamp(dot(q.start - a, d) / l2, 0.0f, 1.0f) : 0.0f;
                 const V2 foot = a + d * t;
-                if (!(foot == q.start)) out.points.push_back(foot);
-                first = 1;
+                // s78n t20 F3 [port]: the foot only when the start sees it (else the tested start-to-vertex leg)
+                if (foot == q.start) {
+                    first = 1;
+                } else if (line_passable(grid, q.start, foot, q.mask)) {
+                    out.points.push_back(foot);
+                    first = 1;
+                }
             }
         }
         for (size_t c = first; c < chain.size(); ++c) {

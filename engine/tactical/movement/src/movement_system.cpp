@@ -3152,6 +3152,22 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                     u.m.speed = 0.0f;
                     u.m.state = LocoState::WalkStopped;
                 }
+                // s78n t20 F3 [port] (until §5.4.7's top-record rule is ported): a top record cut by the blocked rule
+                // counts as one blocked re-plan of the order underneath (as the order path's own kReplanAfterBlocked
+                // frames do): the order re-plans from here, and after kMaxReplans it fails. Before, the cut resumed the
+                // order path, whose first moved frame cleared every count, and the same pair could make the same
+                // detour again for ever.
+                if (cut && u.has_goal && !popped_arrival) {
+                    u.blocked_frames = 0;
+                    if (++u.replans > kMaxReplans) {
+                        u.has_goal = false;
+                        u.failed = true;
+                    } else {
+                        u.need_path = true;
+                        u.start_frame = frame + 1;
+                        ++stats_.replans;
+                    }
+                }
                 if (popped_arrival) {
                     u.has_goal = false;
                     u.arrived = true;

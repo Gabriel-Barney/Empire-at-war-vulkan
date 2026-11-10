@@ -1284,6 +1284,36 @@ static void test_path_around() {
         std::printf("path around: pass 2 through a covered gap - %zu points, cost %.2f, %u vertices\n", res.points.size(),
                     static_cast<double>(res.cost), res.vertices);
     }
+    // ---- s78n t20 F3 [port]: a start inside a long obstacle's grown rectangle (67.5, 13.5) with a wall cell (22, 19)
+    // beside it: the search starts at a vertex the start sees, and every leg of the output (the start's first leg and
+    // the foot included) passes the grid
+    {
+        PassabilityGrid g;
+        g.init(64, 64);
+        std::vector<uint32_t> cells(64 * 64, kPassClear);
+        cells[static_cast<size_t>(19) * 64 + 22] = kPassImpassable;
+        g.set_base(cells);
+        SweptInput si;
+        si.pos = {500.0f, 400.0f};
+        si.hx = 60.0f;
+        si.hy = 6.0f;
+        const std::vector<AroundObstacle> obs{{9, swept_box(si), 60.0f, false}};
+        AroundRequest q;
+        q.start = {465.0f, 390.0f};
+        q.goal = {380.0f, 400.0f};
+        q.grow = 6.5f;
+        q.tracker = 6.5f;
+        q.mover_hx = 10.0f;
+        q.obstacles = obs;
+        AroundResult res;
+        const bool found = around_search(g, k, q, res);
+        bool legs = res.points.size() >= 2;
+        for (size_t i = 1; i < res.points.size(); ++i) legs = legs && line_passable(g, res.points[i - 1], res.points[i], q.mask);
+        CHECK(found && legs && res.points.front() == q.start && res.points.back() == q.goal);
+        std::printf("path around (s78n t20 F3): a start inside, a wall cell beside it - %zu points, first leg to "
+                    "(%.1f, %.1f)\n", res.points.size(), res.points.size() >= 2 ? static_cast<double>(res.points[1].x) : 0.0,
+                    res.points.size() >= 2 ? static_cast<double>(res.points[1].y) : 0.0);
+    }
     // ---- a goal walled in: five windows without a feasible flood fill
     {
         PassabilityGrid g;

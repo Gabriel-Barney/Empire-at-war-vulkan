@@ -5749,6 +5749,55 @@ static void test_t20_destination_check() {
 
 // s78n t20 item 3 (MOVEMENT 1.5.1): the Path Around call inside the system - the detour is a record on top of the path
 // stack, the ordered path stays underneath untouched, and the unit resumes it at the next waypoint when the detour ends.
+// s78n t20 F3 [port] (until MOVEMENT §5.4.7 is ported): a detour whose start lies inside the obstacle ends. The mover
+// stands 15 behind a standing friendly vehicle (their feet overlap: the start is inside its grown rectangle), a wall of
+// cells closes the near side; ordered past it, the mover's order ends (arrived, or failed after its re-plans) - a top
+// record cut by the blocked rule counts as a blocked re-plan, so no detour loop runs for ever. Serial = 4 workers.
+static void test_t20_detour_start_inside() {
+    struct Out {
+        uint64_t crc = 0;
+        bool ended = false, arrived = false, failed = false, pushed = false;
+        uint32_t end_frame = 0;
+        MovementStats st;
+    };
+    const V2 bp = cell_center(25, 20), start{bp.x - 15.0f, bp.y}, goal = cell_center(45, 20);
+    const auto run = [&](const ParallelFor& pf) {
+        Out r;
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        for (int32_t y = 17; y <= 19; ++y) sys.grid().set_base(23, y, kPassImpassable);  // the near -y corner side
+        CHECK(sys.add_unit(t20_vehicle(10, start, 1)));
+        CHECK(sys.add_unit(t20_vehicle(11, bp, 1)));
+        SimRng rng(303);
+        MoveOrder o;
+        o.units = {10};
+        o.destination = goal;
+        sys.move(o, rng, 1);
+        for (uint32_t f = 1; f < 4000 && !r.ended; ++f) {
+            sys.tick(f, rng, pf);
+            const UnitView v = sys.view(10);
+            r.pushed = r.pushed || v.pushed;
+            if (!v.has_goal && !v.pushed) {
+                r.ended = true;
+                r.arrived = v.arrived;
+                r.failed = v.failed;
+                r.end_frame = f;
+            }
+        }
+        r.st = sys.stats();
+        StateHasher h;
+        sys.hash_units(h);
+        r.crc = h.digest();
+        return r;
+    };
+    const Out s = run(serial_for), p = run(make_thread_pf(4));
+    std::printf("t20 F3: detour from inside the obstacle - ended %d at frame %u (arrived %d, failed %d), pushed %d, re-plans %u, "
+                "dynamic re-paths %u\n",
+                s.ended ? 1 : 0, s.end_frame, s.arrived ? 1 : 0, s.failed ? 1 : 0, s.pushed ? 1 : 0, s.st.replans, s.st.dynamic_repaths);
+    CHECK(s.crc == p.crc && s.end_frame == p.end_frame);
+    CHECK(s.ended && (s.arrived || s.failed));
+}
+
 static void test_t20_path_around() {
     struct Out {
         uint64_t crc = 0;
@@ -6566,6 +6615,7 @@ int main() {
     test_land_squad_t18_review();   // s78n t18 review
     test_t20_destination_check();   // s78n t20 item 6
     test_t20_path_around();         // s78n t20 item 3
+    test_t20_detour_start_inside();  // s78n t20 F3
     test_t20_early_arrival();       // s78n t20 item 4
     test_t20_decision_leftovers();  // s78n t20 item 5
     test_t20_stopped_vs_stopped();  // s78n t20 item 1
