@@ -1418,7 +1418,7 @@ The infantry turn-animation time = angle / rate × 1/30 (`0x62bef0`).
 
    - The distance budget v is spent along the waypoints. One frame may pass several waypoints; the remainder carries over to the next segment.
    - Switch to End Move when the remaining path ≤ v²/(2·decel).
-4. **Passability check before commit.** Unless the path's skip flag is set, the new position must pass the movement-class test of §1.1 (`0x50e280`). On failure, report to the collision system (`0x509090`) and stop this frame.
+4. **Passability check before commit.** Unless the path's skip flag is set, the new position must pass the movement-class test of §1.1 (`0x50e280`). On failure, report to the collision system (`0x509090`) and stop this frame: the position is not committed, the speed is set to 0 and a TerrainCollision record is made (§5.4.7).
 5. **Normalisation.** Vector normalisation uses the fast inverse square root (magic 0x5f375a86, two Newton steps). **Reproduce this bit-exactly**: it feeds positions.
 6. **Formation jiggle** (`0x42c270`). Each moving frame, the offset += synced random(±k) × speed fraction × `FormationRaggedness` (+0x16a8), clamped to ±`MaxJiggleDistance` (+0x16ac). Each call draws from the lockstep RNG.
 7. **Hover rise/lower.** z moves by the effective max speed per frame toward terrain + `Hover_Height` (+0x23bc). Deploying states run at `Deployment_Anim_Rate`.
@@ -2181,7 +2181,7 @@ Pair classes:
 | MovingVsMoving | `0x8b5090` | `0x680420` |
 | MovingVsStopped | `0x8b52e8` | `0x6843b0` → `0x685480` |
 | StoppedVsStopped | `0x8b5450` | `0x686de0` |
-| TerrainCollisionClass | `0x8b5568` | `0x687db0` (trigger not traced) |
+| TerrainCollisionClass | `0x8b5568` | `0x687db0`, from the failed-step report `0x509090` (§5.4.7) |
 
 **There is no rigid-body physics.** Collision means detecting a future conflict along the planned paths and resolving it by behaviour.
 
@@ -3291,6 +3291,116 @@ corridor squeeze) may be simplified; record that.
 *Not read:* the id list `0x140b3a1a0` tested in `0x677650`; `0x677650` reads the pathfinder's request global as
 "the other unit" [M: stale after an early return]; `0x509ea0` and `0x67f130` were not re-derived.
 
+#### 5.4.7 TerrainCollision in full (s78n t20 RE, 2026-11-10) [H unless tagged]
+Read from `0x509090`, `0x687db0`, `0x5c5f70`, `0x5c6240`, `0x5049e0`, the vftable `0x8b5568` (slots read from the
+image: +0x08 `0x5c7d10`, +0x18 `0x687ea0`, +0x20 `0x687ff0`, +0x28 `0x6873f0`, +0x30 `0x687e80`, +0x38 `0x42c630`,
++0x40 `0x5c78e0`, +0x48 `0x18ceb0`, +0x50 `0x687e90`, +0x58 / +0x78 `0x13b7d0` (false), +0x60 `0x5c7700`, +0x68
+`0x6874c0` save, +0x70 `0x687400` load, +0x10 / +0x80 `0x17dc70` (true)), the diagnostics node `0x687ae0`, the
+driver `0x50a780`, `0x5c80e0`, `0x556780`, `0x5c5d90`, `0x5c4b80` / `0x5c4af0`, the Walk speed controller `0x61ccd0`
+and move step `0x620820`, the container step `0x5adfb0`, the Bike step `0x63abe0`.
+
+**What it is.** A one-participant collision record made when a unit's own step would end on ground it may not
+enter. Its only action is one Path Around call (kind 3, no obstacle) back onto the unit's path; when that is not
+possible the unit is **stopped and loses its paths**. There is no retry.
+
+1. **Trigger: the failed-step report `0x509090`(collision system, unit).** Callers: the Walk move step `0x620820`
+   (the normal step and the End Move coast), the land team container step `0x5adfb0` (the same two places) and the
+   Bike step `0x63abe0`: a step whose **new position** fails `0x50e280` for the unit's class while the path it
+   walks is not forced (+0x5c clear; a coasting unit: its top record, if any, not forced). The position is not
+   committed that frame. Then, in this order:
+   - the unit's pack speed **+0xec := 0** (at once; +0xf0 is left);
+   - the system's record counter +0xb8 += 1 and a record is made by `0x687db0`(unit, id) [M: the id argument is
+     not visible in the decompiled call; every other factory takes the fresh counter value];
+   - the record is registered (`0x5049e0`: id-keyed list, and the unit's entry in the object-to-records hash).
+     Factory failure → the unit is stopped (vf +0x140(0)).
+   - **No count and no duplicate rule:** the first failed step makes a record, and every further failed step
+     makes another one, whatever records the unit already has. Since the speed is zeroed each time and the
+     decision normally comes at the next driver pass, a second record appears only when the first has to wait
+     for quota [M].
+2. **Record** (0x80 bytes; base `CollisionClass`): +0x38 id; +0x40 participants (the unit only; the record listens
+   to the unit's signals and drops it from the list when it is destroyed, vf +0x08); +0x64 creation frame; +0x68 /
+   +0x6c cached priority and its refresh frame; +0x70 re-decide stamp (never set for this class: vf +0x78 is
+   false); **+0x78 state; +0x7c a frame stamp written with state 4 and never read**. Saved: the base, then chunk
+   0x10000 with field 0 = +0x78 and field 1 = +0x7c (4 bytes each). Kind value (vf +0x48) 1.
+   - States, with the names of the diagnostics node `0x687ae0`: **0 "None"** (new, waits for the quota pass),
+     **1 "Resolving"** (its detour is on the unit's stack), **2 "Unresolvable"**, **3 "Resolved"**, and **4, which
+     has no name and no handler** (item 5).
+   - Answers to the unit: weight (vf +0x30) **4.0**, the highest of the four classes, so its Path Around claim
+     always takes the unit's path ownership (§1.5.1 item 5); steering vector (vf +0x38) zero in every state;
+     speed (vf +0x40) the unit's max speed with the "at once" flag untouched (FIGHTER_FLYING §7.7); "undecided or
+     detouring" (vf +0x58) false; "takes the quota pass" (vf +0x50) true only in state 0; finished (vf +0x28) in
+     states **2 and 3 only**.
+   - Priority (vf +0x60, the base `0x5c7700` shared by all four classes): cached crowd − age in frames. The
+     crowd term needs two participants, so for this class it is 0: **priority = −(NOW − creation frame)**, older
+     records first in the ascending sort.
+3. **Decision `0x687ff0`** (vf +0x20; the driver calls it in the quota pass while the dynamic pathfinder has
+   quota, §5.4.1):
+   1. state ≠ 0 → run the service (item 4) and return.
+   2. No participant → state 3.
+   3. The unit has no locomotor → state 2.
+   4. The unit's **own position** fails `0x50e280` for its class → Stop (locomotor vf +0x140(record id), §5.4.1
+      "The impassable-cell rule" item 3: the whole path stack is cleared) → state 2.
+   5. Path Around `0x5c80e0`(record, unit, **obstacle = none, flag = 0, kind = 3, flags = 0**) (§1.5.1): the
+      rejoin distance is D = r_u (`0x3969f0`) + **40.0**, so the first rejoin candidate is at path distance
+      progress + r_u + 42; no forced obstacle; every standing unit is an obstacle (flags 0); the last-point drop
+      is skipped; the pushed record has kind 3, owner = this record's id, is **not forced** and is started.
+      - **Failed** (§1.5.1 item 7 and item 4 "Failure": among others the unit has **no kind-1 record** on its
+        stack, e.g. an order-less pushed unit; it is on its **last waypoint**; no rejoin candidate is free; the
+        flood fill does not reach the goal) → +0x7c := NOW + **45**, Stop (vf +0x140(record id)), state := **4**.
+      - **Succeeded** → the unit's path record owned by this id (`0x556780`) gets its **waypoint entry 0 :=
+        (1.0, 0.0)** (`0x5c5d90`; item 6) and state := 1.
+        (No pack, or no record owned by this id after all: the state stays 0 and the
+        decision runs again at the next pass.)
+4. **Service `0x687ea0`** (vf +0x18; every frame for a record that is not in the quota pass, and for a state-0
+   record when the quota is used up):
+   - state 0 (waiting): no participant → 3; no locomotor → 2; the unit's position still passable → wait; else
+     Stop (vf +0x140(id)) → 2.
+   - state 1: no participant → 3; the unit has no locomotor pack → 2; some record on the unit's path stack is
+     still owned by this id (+0x4c) → stay; else → **3**. So the record ends when its detour has been walked to
+     its end and popped (§1.5.1 item 5), or was removed by a later claim, a new order or a stop.
+   - states 2, 3, 4: nothing.
+5. **Ends.** The driver destroys a record in state 2 or 3 at the end of the same pass. **A record in state 4 is
+   never serviced and never finished**: no code reads +0x7c or leaves state 4, so the "45 frames" is not a retry
+   timer in effect and the record stays in the system (with an emptied participant list once the unit dies)
+   until the battle's collision system is destroyed. It still answers items 2's values for its unit: no speed
+   cap, zero vector. [M] Side effect on the steering sum of FIGHTER_FLYING §7.5: the zero vector has the largest
+   weight, so while such a record is kept as "best" no other record's vector is excluded by the −0.5 rule.
+6. **The (1.0, 0.0) entry on waypoint 0.** A path record has one 8-byte entry per waypoint (defaults (1.0, 1.0);
+   the first float was not traced). The second float (+4) is the waypoint's speed fraction. The speed controller
+   `0x61ccd0` uses it twice: it brakes toward entry[index + 1].+4 × max speed ahead of the next waypoint, and it
+   caps the speed at entry[index].+4 × max speed **while the unit is not yet aligned with the current segment**
+   (the record's "aligned" byte +0x6c clear, the heading more than one frame's turn off the wanted one, state not
+   Start Move); a cap of 0 sends the unit to End Move. With 0 on waypoint 0 the unit therefore **turns in place
+   onto the detour's first leg before it moves**: at Start (§3.5 item 1) the "speed fraction > 0" test fails, so
+   it goes to Start Turn even inside `Close_Enough_Angle_For_Move_Start`, and state 0x10 turns it exactly onto
+   the heading (§3.5.1 item 4). Later waypoints of the detour keep (1.0, 1.0). Kind 3 also selects the tighter
+   arrival-turn threshold of §3.5.1 item 2 when the unit stops on this path.
+7. **What the unit and its formation see.**
+   - Success: speed 0 at the failed step, then turn in place, then the detour; the ordered path stays underneath
+     and is resumed at the first waypoint line not yet crossed (§1.5.1 item 5). Older collision-owned records
+     (a MovingVsStopped / MovingVsMoving detour, a push path) are removed by the claim.
+   - Stop (state 2 or 4): every path record is destroyed, the order path included. When the unit's path owner
+     was free or this record: state 0x16 and speed 0 at once; when another collision record owned its path (an
+     order-less pushed unit): the stack is emptied and the unit brakes through End Move. The formation then
+     counts the member as done and, when all are, **signals arrival** as usual (§5.4.1 "The impassable-cell
+     rule" item 4). No other event is raised [M: none was found]. A position move is over at that point; an
+     attack block is re-planned by the 30-frame re-check.
+   - There is no counter of blocked frames and no re-plan of the ordered path anywhere in this class.
+
+***Port spec (TerrainCollision):*** when a passability-tested step fails: do not move, set the speed to 0, and
+create a one-unit record (creation order = id order; no duplicate test). Decide it in the quota pass, oldest
+first: unit gone → drop; own position impassable → stop the unit (clear all its paths) and drop; otherwise Path
+Around with no obstacle, kind 3, D = r_u + 40: on success mark the detour's first waypoint "turn in place first"
+and keep the record until no path of the unit is owned by it; on failure stop the unit (clear all its paths). A
+record waiting for quota stops the unit when its position has become impassable. Retail keeps a failed record
+for ever with no effect but item 5's; [port] dropping it at once is the simple choice (record it). The record
+answers max speed, no vector, weight 4.
+
+*Not read:* the frame order of the locomotor steps against the driver (whether a record made by a step is decided
+in the same frame); `0x5c6970` (the base "give up ownership" helper, unused by this class); the Bike step beyond
+its report call; whether anything outside the class walks the system's record list and would meet a state-4
+record (the three other classes' partner tests need two participants).
+
 ### 5.5 Crush (`SquashBehaviorClass`, vf6 `0x629fa0`; vftable `0x8af300`) [H]
 
 The `SQUASH` behaviour token is on AT-AT, AT-ST and MAL. Crush runs only while the crusher is moving (`0x39ade0` → locomotor vf +0x1c0).
@@ -3501,7 +3611,7 @@ passability check on the way (§3.5 step 4).
 6. Whether land ground units ever use the lattice planner of §2.1 (its land branches exist).
 7. Formation speed computation; formup wait styles; `MaxLandFormationFormupFrames`.
 8. ~~Space formations, `Merge_Formation`, `Split_From_Formation`~~ (cu8j: §4.6, §4.7). Still open: the fleet placement geometry of `0x4fca30` / `0x4fdfb0` / `0x4fd5b0` / `0x4fea10` (only their adopt draws are read), `Squadron_Formation_Error_Tolerance`, the space pass re-run after a max-speed-0 seed (§4.6.4).
-9. ~~MovingVsMoving resolution~~ (resolved 2026-11-10: §5.4.2; MovingVsStopped in full, the driver and the Walk use of the steering vector: §5.4.1), (push and return: resolved, §5.4 / A1_READINGS §40), `TerrainCollisionClass` trigger, ~~footprint field semantics~~ (the three contact tests and the layer-0x10 records: §5.3.1 / §5.3.2). Resolved 2026-11-10 (s78n t19): the vehicle branches of the MovingVsMoving chooser (§5.4.6), the spare point `0x5c6ba0` / `0x67b4c0` and the whole Path Around call (§1.5.1), StoppedVsStopped (§5.4.3), the early-arrival cut (§5.4.4), the decision's leftovers (§5.4.5), the order-time destination check (§4.3.1). Still open there: `0x685490` (state 8), the frame order of the tracker update against the collision update, the `0x5a2830` request flags of the StoppedVsStopped path, the dynamic pathfinder's tracker internals and terrain-corner pruning masks (§1.5.1 "Not read"). (The collision **priority sort** of §5.4 is resolved: ascending priority = crowd − age, crowd = 5 × objects in a 160 × 160 box; TACTICAL_GAPS.md §6.7.)
+9. ~~MovingVsMoving resolution~~ (resolved 2026-11-10: §5.4.2; MovingVsStopped in full, the driver and the Walk use of the steering vector: §5.4.1), (push and return: resolved, §5.4 / A1_READINGS §40), ~~`TerrainCollisionClass` trigger~~ (resolved 2026-11-10, s78n t20: §5.4.7, the whole class), ~~footprint field semantics~~ (the three contact tests and the layer-0x10 records: §5.3.1 / §5.3.2). Resolved 2026-11-10 (s78n t19): the vehicle branches of the MovingVsMoving chooser (§5.4.6), the spare point `0x5c6ba0` / `0x67b4c0` and the whole Path Around call (§1.5.1), StoppedVsStopped (§5.4.3), the early-arrival cut (§5.4.4), the decision's leftovers (§5.4.5), the order-time destination check (§4.3.1). Still open there: `0x685490` (state 8), the frame order of the tracker update against the collision update, the `0x5a2830` request flags of the StoppedVsStopped path, the dynamic pathfinder's tracker internals and terrain-corner pruning masks (§1.5.1 "Not read"). (The collision **priority sort** of §5.4 is resolved: ascending priority = crowd − age, crowd = 5 × objects in a 160 × 160 box; TACTICAL_GAPS.md §6.7.)
 10. Bike, Flying, JetPack and LandBomber locomotors, LocomotorCommon `0x5070b0` (the shared turn core that reads `Min_Speed_Fraction_For_Turn` +0x3ac), `Stopped_Rate_Of_Turn` (+0x3b0) readers, fighter attack runs and team slot geometry `0x62d620`.
 11. Hyperspace: the camera-dependence of arrival staggering, `Hyperspace_Speed` readers, `Cinematic_Hyperspace_In` / `Resume_Hyperspace_In`.
 12. Guard, Divert, MoveObjectToObject and SetupPhaseMove payloads.
