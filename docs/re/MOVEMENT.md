@@ -1002,7 +1002,7 @@ Values 9–0xB are unused. SimpleSpace reuses 0x13 (following a path) and 0x16 (
 | +0x158 | formation/override speed |
 | +0x1f0 | owning formation |
 | +0x274 / +0x275 | collision-check / path-approximation countdowns (§5.2) |
-| +0x2a8 | formation-member flag (§5.3) |
+| +0x2a8 | hover state: 0 grounded, 1 raised (at `Hover_Height`), 2 rising, 3 lowering (§3.5 item 7, §5.3; the earlier "formation-member flag" was wrong, corrected 2026-11-10) |
 
 **Deploy states (S8 t11, 2026-11-02)** [H unless tagged]. These are used by the weapon gates (TACTICAL_COMBAT §3.1.1
 "Gate details").
@@ -1259,7 +1259,7 @@ so 0x15 → 0xf → 0x10 → 0x11 → 0x12 can all run in one frame.
      (Δ ≤ R) instead of within 10°.
    - When it applies: the per-waypoint speed caps (path +0x00, 8 bytes per waypoint, cap at +4) default to
      **1.0** (0x5c5ef0), the land finaliser 0x5070b0 sets the last entry to (1, 1) and only lowers earlier ones (brake
-     pass from count − 2 down), and an index past the end reads a static default [M: zero]. The only cap-0 writer
+     pass from count − 2 down), and an index past the end reads a static default [M: **(1.0, 1.0)** in the image at 0x140a440f8 / 0x140a44100, corrected 2026-11-10; the earlier "zero" was a guess]. The only cap-0 writer
      found is the TerrainCollision path (0x687ff0: entry 0 := (1.0, 0.0)), whose path is built by 0x5c80e0 with
      **kind 3**; the other kinds seen are 1 formation, 4 push, 7 crush push, 5 (three locomotor-internal paths).
      So an ordinary move order (formation path, last cap 1.0) always uses **10°**; the variant is for
@@ -1346,6 +1346,10 @@ turns on arrival. Missing: the arrival turn above (threshold 10°, stopped turn 
   Its acceleration and deceleration are **not** §3.4's rule on its own type: both are the minimum over its members of
   their type's `OverrideDeceleration` rule (0x5ab540), and its target speed is capped while a member trails more than
   HX + 2 behind it (0x5ab640); speed step 0x5aaf70: FIGHTER_FLYING §7.7 (s78n t14 retail run, 2026-11-10).
+  The cap counts every member in the team list with no exclusion, is measured against the container (not the
+  slot), goes down to 0, applies in the moving state only (not while braking) and is safe because a member's step
+  is never passability-tested: §7.7 items 2-5 and §7.3 "Recovery in full" there. In collision detection and the
+  dynamic repath a squad exists only as its container (members are never candidates): FIGHTER_FLYING §7.8.
 - **Members** (LandTeamInfantry service `0x62ca10`):
   - copy the container's walk states 0x10/0x13/0x14 into their own data pack, and recompute idle states (`0x62bbf0`);
     what each copy drives, and the per-member start delay (0..`Max_Move_Frame_Delay` frames, synced draws): FIGHTER_FLYING §7.3;
@@ -1814,13 +1818,13 @@ Pair classes:
 **There is no rigid-body physics.** Collision means detecting a future conflict along the planned paths and resolving it by behaviour.
 
 ### 5.2 Detection (`0x508170`, per frame) [H]
-*(s78n t14, 2026-11-10: the candidate list has no team-member filter; which units register (squad containers yes, their members no) is FIGHTER_FLYING §7.5.)*
+*(s78n, 2026-11-10: which units register (squad containers yes, their members no) is FIGHTER_FLYING §7.5. The candidate list of item 4 is tracking layer 0x10, which the tracker fills only from the registered mover list (`0x53a400`), so squad members are never candidates either: FIGHTER_FLYING §7.8. This corrects the earlier note "the candidate list has no team-member filter".)*
 
 For each registered mover, **in registration-list order**:
 1. Skip a multi-locomotor unit whose active locomotor answers vf +0x240.
 2. **Path-approximation countdown** (locomotor data +0x275). At ≤ 0, rebuild the approximation (`0x505fe0`, using ApproximationSmoothCosAngle 0.9962 and ApproximationForwardDistance 2.0) and reset the countdown to **FramesPerPositionApproximationRebuild = 8**. Otherwise decrement it and run `0x50aad0`.
 3. **Collision-check countdown** (+0x274). Check when it is ≤ 0 or the approximation was just rebuilt, then reset it to **FramesPerCollisionCheck = 4**. Each unit is therefore checked every 4 frames, phase-shifted by its own history.
-4. **Candidates** come from the land mode's object grid (mode vf +0x238, sub-object +0x10, query `0x5d7a00`), **not from TreeCull**:
+4. **Candidates** come from the land mode's object grid (mode vf +0x238 = the object-tracking system, its layer with id 0x10 = Land, query `0x5d7a00`), **not from TreeCull**. That layer holds exactly the registered movers whose layer (`0x397900`) is Land and whose +0x3a7 is clear (tracker land update `0x53a400`, FIGHTER_FLYING §7.8):
    - an axis-aligned **160 × 160** square centred on the unit;
    - results go into a global vector (`0x140b31c50`) in grid order;
    - **the grid's internal order was not traced. A parallel port must sort the candidates canonically (e.g. by object ID) and accept that this may differ from retail.**
@@ -1852,15 +1856,48 @@ For each registered mover, **in registration-list order**:
 
 ### 5.3 Contact tests [H]
 
-**MovingVsStopped** (`0x683790`):
-- Gates: shield barriers (behaviour 0x36) and garrison/attachment exclusions.
-- Formation members (+0x2a8 == 1) collide only with stopped formation members.
+**MovingVsStopped** (`0x683790`(mover a, obstacle b)):
+- Gates: landing transport (on b), garrison host and garrisoned (both sides), raised hover. Rules: "Pair gates" below.
+  (Corrected 2026-11-10: behaviour 0x36 is TRANSPORT_LANDING, not a shield barrier; +0x2a8 is the hover state, not a
+  formation-member flag; there is no attachment test.)
 - d = predicted distance along the path to contact (`0x441b60`, path +0x200). Hit when d / max speed < fps × max(MovingVsMovingLookAheadTime, the type's `MovementPredictionInterval` (+0x3c8)), plus 1.5 s if the mover can push the obstacle (`0x5c8900`, `0x5c8890`).
 
 **StoppedVsStopped** (`0x686500`):
-- Same gates.
-- Infantry beside a non-team Large or Giant vehicle needs a non-zero push vector (`0x5c6d40`).
+- Gates: landing transport and garrison host, both sides ("Pair gates" below); no garrisoned-state and no hover test.
+- An Infantry-class unit that is not a team container (no TEAM slot), beside a Large or Giant Vehicle, needs a
+  non-zero push vector (`0x5c6d40`).
 - Then a footprint-box overlap ratio (`0x20d7a0`) > **MinimumStoppedVsStoppedOverlapCoefficient = 0.15**.
+
+**Pair gates (s78n follow-up, 2026-11-10)** [H unless tagged]. Read from `0x508170`, `0x683790`, `0x442540`
+(the MovingVsMoving predictor), `0x686500`, `0x644280`, `0x443d10`, `0x444310`, `0x61e930`, `0x42d6a0`. A pair that
+fails a gate gets **no collision object**. The detection filters of §5.2 item 5 run first (self, no locomotor on
+either side, **either side +0x3a7**, build pad holding the other, existing record, class table); then per test:
+
+| gate | no collision object when | MovingVsStopped | MovingVsMoving | StoppedVsStopped |
+|---|---|---|---|---|
+| landing transport | X has TRANSPORT_LANDING (0x36, slot +0x368) and `0x644280`(X's behaviour, other) is false: X's TransportDataPack (obj +0xc8) state +0x50 is 3 (taking off), or `other` is in its unloaded list (+0xa8, count +0xb0) | X = the obstacle only | not tested | X = either side |
+| garrison host | X has GARRISON_UNIT (0x51, slot +0x383) and a GarrisonDataPack (obj +0x210) whose host id +0xc is the other object's id | either side | either side | either side |
+| garrisoned | X has GARRISON_UNIT and its pack state +8 is 7 (inside a host): no object with anything | either side | not tested | not tested |
+| raised hover | locomotor pack +0x2a8 == 1 (raised to `Hover_Height`; 0 grounded, 2 rising, 3 lowering) | a raised mover needs a raised obstacle (a grounded mover takes any obstacle) | both raised or both not raised | not tested |
+
+- **Garrison host id.** +0xc is set when the garrison move starts (`0x444310`: state 1, +0xc := host) and stays through
+  2 (at the approach point), 5 (entering), 7 (inside), 3 (eject requested) and 4 (exiting); `0x443d10` / `0x563d00`
+  put back state 0 and id 0x3FFFFF when the unit is out or the approach is dropped [M: the exact frames]. So a unit
+  takes no collision object with **its own host** from the order until it has left again, in all three tests.
+- **Squads.** The team container carries GARRISON_UNIT and garrisons as one object (FIGHTER_FLYING §7.4), so the pair
+  "container vs the host its squad is walking to, entering, inside or leaving" is exactly the garrison-host gate. While
+  inside, the container and every member have +0x3a7 (and are out of the tracking layer), so no pair forms at all.
+  There is no "some members garrisoned" state to handle.
+- **No attachment and no team test.** None of `0x508170`, `0x683790`, `0x442540`, `0x686500` reads
+  `AttachParentObject` (+0x2e0), `ParentContainerObject` (+0x2b0) or a TEAM list. The only holder / content exclusion
+  is the build pad of §5.2 item 5 (pad pack obj +0x150: +8 under construction, +0x10 built). A container and its own
+  members never meet in a test because members are never candidates (FIGHTER_FLYING §7.8).
+- *Port spec:* before creating a collision object for (a, b): skip when either is hidden / garrisoned (+0x3a7); skip
+  when either one's garrison host is the other, in any garrison state from "moving to host" to "exiting" (all three
+  tests); MovingVsStopped also skips when either is in the inside state; skip a landing transport that is taking off
+  and the pair (landing transport, a unit it unloaded) (as obstacle in MovingVsStopped, either side in
+  StoppedVsStopped); hover: MovingVsMoving needs equal "raised" state, a raised mover's MovingVsStopped needs a raised
+  obstacle. No parent / child or own-team rule.
 
 **Footprints:** soft radius `Custom_Soft_Footprint_Radius` (+0x16b8); hard box `Custom_Hard_XExtent`/`YExtent` (+0x16bc/+0x16c0) with offsets (+0x16c4/+0x16c8) and deployed variants (+0x16cc/+0x16d0); `MovementBoxExpansionFactor` (+0x16d8). The exact use of each was not traced. [M]
 
@@ -1886,7 +1923,7 @@ For each registered mover, **in registration-list order**:
 7. Vehicle or larger (class > 6) → Path Around, or `0x685490`.
 8. Otherwise → **Try Again Later**.
 
-**Speed slaving:** the collision system's speed cap (`0x509ea0`) is applied in the walk speed controller (§3.5). This is how "Speed Slave Only" and "Moving With Speed Only" take effect. [M]
+**Speed slaving:** the collision system's speed cap (`0x509ea0`) is applied in the walk speed controller (§3.5). This is how "Speed Slave Only" and "Moving With Speed Only" take effect. [M] The values each record answers (vf +0x40), the "at once" flag and which record's flag wins: FIGHTER_FLYING §7.7 item 5 (2026-11-10).
 
 **Processing order:**
 - Each frame, active collisions are sorted by a priority float and resolved in that order under the dynamic quota (§1.5).

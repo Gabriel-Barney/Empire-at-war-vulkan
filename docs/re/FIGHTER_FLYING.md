@@ -1641,6 +1641,71 @@ of item 6 (0.5 × rate turn threshold instead of `err > rate && err > close_enou
 container has a target; keep moving while closing in); (c) the 0x2A speed: brake inside v² / (2·decel). Clips and
 audio stay with the presentation layer.
 
+**Recovery in full, and what bounds a member's lag (s78n follow-up, 2026-11-10)** [H unless tagged]. Re-read 0x62ca10,
+0x62bbf0, 0x62d190, 0x62c180, 0x62d520, 0x62d620, 0x42d6a0 and the LandTeamInfantry vftable 0x8af8d0 from the exe
+(vf +0x2f8 = 0x42d6a0, +0x2d8 = 0x42c400, +0x2e0 = 0x42c4c0, +0x210 = 0x42cd10, +0x228 = "true" 0x17dc70).
+1. **When the decision runs.** Only inside the member service and only while the **container's** state is 0, 0x15 or
+   0x16 (start, arriving, idle). In container 0x10 / 0x13 / 0x14 the member copies the state and runs §7 (v = 0 in
+   0x10); any other container state gives member state 0. So there is **no recovery while the container moves, brakes
+   or turns in place**: a member behind a moving container is handled only by §7 step 4 and by the container's cap
+   (§7.7). The whole service is skipped while the member's locomotor is suspended (vf +0x210: pack +0x260 ≠ 0) or its
+   state is outside {0, 0x10, 0x13, 0x14, 0x29, 0x2A} (mask 0x60000190001; returns an error code).
+2. **Preconditions** (any false → state 0, the member stands with speed 0): the member has a type and a pack; it has a
+   container K (+0x2b0); **K has no current target** (0x397a40(K, 0) = null: K's formation target through K pack +0x1f0
+   → 0x41a2e0, else K obj +0xf0 → +8); K has a pack with the laid-out flag +0x2a4; the slot point exists (0x62c180: K
+   has a locomotor, the member a pack). Nothing about the member's distance, path or health is tested.
+3. **Slot point** S = K.P + R(K yaw)·(slot + jiggle) (0x62c180; z = K.z). d = |S − P| in 2-D.
+4. **Thresholds.** The only distance is **4.0** (0x140a4431c): d > 4 → e = |wrap(yaw to S − yaw)|; e > 0.5 × rate →
+   0x29, else 0x2A. d = 4 → 0x2A. d < 4 → 0x2A only when already in 0x2A and |P + (cos yaw, sin yaw)·v − S| ≤ d and
+   0x373080(type, member) ≤ v (still closing and faster than one frame's deceleration); otherwise 0, where the idle
+   step zeroes the speed at once (pack +0xe8 / +0xec := 0). rate = 0x62c3d0 (`Max_Rate_Of_Turn` × 1.56, × 2 while
+   fleeing). There is **no upper distance**: a member 5 or 5000 away takes the same branch.
+5. **0x29:** speed := 0, turn toward S by rate; the decision is re-taken every frame (so 0x29 → 0x2A as soon as
+   e ≤ 0.5 × rate).
+6. **0x2A (0x62d190):** turn toward S by rate (0x5ad5a0); target speed = **vmax = 0x370f00(member type, member)**
+   (the member's own `Max_Speed` × the §3.4 chain: mode 1.56, × 2 while its container flees, its own SPEED product;
+   not the team speed), or 0 when d3 < v² / (2·dec), dec = 0x373080(type, member) > 0, d3 = the **3-D** distance
+   |P − S| (S.z = K.z, so a height difference between member and container delays the brake [quirk]); speed step
+   0x62d520 (+ vf +0x2d8 = `OverrideAcceleration` × eff / `Max_Speed`, − vf +0x2e0 = `OverrideDeceleration` × eff /
+   `Max_Speed`, MOVEMENT §3.4; clamp [0, vmax]); then P += (cos yaw, sin yaw)·v **along the member's own facing**
+   through vf +0x2f8 = 0x42d6a0 (terrain conform and set position).
+7. **What recovery does not have:** no path request, **no passability test and no collision test on the step**, no
+   teleport, no speed above the member's own vmax, no timer, no give-up, no detach from the team, no kill. It is a
+   straight walk at the slot, through anything.
+8. **What bounds the lag in retail.** Not recovery: the pair (§7 step 4, §7.7 cap) together with item 7's "no
+   passability test" (the same vf +0x2f8 commits the §7 step).
+   - Container moving (0x13): its target speed falls linearly to 0 between HX + 2 and HX + 12 behind (§7.7 item 2);
+     its speed follows at a = 0x5ab540 per frame, so the lag can overshoot by about the stopping distance v² / (2a)
+     (Stormtrooper squads 1.248² / (2 × 0.078) ≈ 10, Rebel squads 1.56² / (2 × 0.109) ≈ 11) [M: estimate, not read].
+     Meanwhile a member ≥ 10 behind its slot walks at its vmax along the container's facing turned ≤ 45° toward its
+     side error (§7 step 6), and **nothing can stop that step**. So the along-facing lag of a member stays within
+     about **HX + 12 + v² / (2a)** [M: same estimate], and the container's wait at cap 0 lasts only until that member
+     is back inside HX + 12: (lag − (HX + 12)) / vmax frames, a few frames.
+   - The cap measures the lag **along the container's facing only**. After a turn an old along-lag becomes a side
+     offset, which does not hold the container; the member closes it at ≤ vmax·sin 45° and the re-lay (§7.2) gives it
+     the slot nearest to where it stands.
+   - Container braking (0x14): the cap is overridden (§7.7 item 4); the container coasts ≤ v² / (2a), then is idle and
+     the members finish by recovery (item 6), again unblockable.
+   - Ways a retail member can be far away at all: its locomotor suspended (pack +0x260) [M: who sets it for
+     infantry], or the container moved by something other than its walk (garrison exit §7.4, script teleport). Then
+     the moving container **does** wait at speed 0 for as long as it takes; no code path leaves the member behind.
+   - Consequence for the port's observation (waits of 150-785 frames for members 85-590 behind): such lags cannot
+     build up under the retail rules. They need either a member whose step is refused (the port's `steer_commit` wall
+     slide; retail has no test) or a cap that lets the container walk away from a member (the port's "straight line to
+     the slot is impassable → not counted" rule; retail has no exclusion, §7.7 item 2). Each of the two alone breaks
+     the retail balance: blocking without exclusion deadlocks the container, exclusion lets the lag grow without
+     limit and the cap then holds the container for lag / vmax frames once the member counts again [M: reasoned from
+     the retail rules and the reported symptom; the port's code was not read for this].
+
+***Port spec (recovery / lag bound):*** (1) `MovementSystem::steer_member` and the recovery step commit a squad
+member's position with terrain conform only: no passability test, no wall slide, no stop (drop the [port]
+`steer_commit` slide for LandTeamInfantry members). (2) Recovery: enter at 2-D slot distance > 4.0 while the container
+is in start / arriving / idle, is laid out and has no target; turn-in-place when the heading error > 0.5 × rate, else
+walk; target speed = the member's own effective max speed, 0 inside v² / (2·dec); leave when d < 4 unless still
+closing with v ≥ dec; idle zeroes the speed. No path, no timeout, no teleport, no distance limit. (3) While the
+container is in its moving or braking state (also at speed 0 under the cap) members run slot steering (§7), never
+recovery; while it turns in place they only turn.
+
 ### 7.4 s78n t14: where a garrisoned squad container is [H]
 - **Entry** GarrisonUnitBehavior 0x4446b0 (host H, entering object = the container K): stop K's locomotor (vf +0x140),
   then **0x3abb80(K, H.P)**: every member is put at H.P + (m.P − K.P) (its offset from K kept, recursion), K's
@@ -1670,10 +1735,11 @@ audio stay with the presentation layer.
    object has no TEAM slot or its locomotor vf +0x230 is true) **and vf +0x228 is false**. LandTeamInfantry (vftable
    0x8af8d0) answers vf +0x228 true, LandTeamContainer (0x8a3630) vf +0x230 true. So **members are never collision
    checkers; the squad container is** (FoC containers: `UnitCollisionClass` Infantry, `MovementClass` Infantry,
-   `Is_Squashable`, `MovementPredictionInterval` 4.0). Detection candidates (0x508170) have no team-member filter and
-   members are in the mode's object grid (0x37ade0 removes them from it), so a member can be the stopped / moving
-   partner of another unit's check [M: the effect - a push gives the member's own locomotor a path, which 0x62ca10
-   never follows].
+   `Is_Squashable`, `MovementPredictionInterval` 4.0). **Members are not partners either** (corrected 2026-11-10, §7.8):
+   the detection's candidate list is tracking layer 0x10, which the tracker fills only from this same mover list
+   (0x53a400), so a member is never a candidate of any unit's check, of its own container's included. (The earlier
+   text here, "members are in the mode's object grid, so a member can be the partner of another unit's check [M]", was
+   wrong.)
 2. **0x509810(system, out, dir, obj)** (dir = §7 step 6's unnormalised heading): the key is obj's id, or for a team
    member (locomotor vf +0x228) its container's (obj +0x2b0). The id-keyed hash (+0x80, Park-Miller hash of
    id ^ 0xdeadbeef) gives the key's active collision objects, in list order. For each record c:
@@ -1703,7 +1769,7 @@ members) of each of its **container's** collision objects. Members get no vector
 
 ***Port spec:*** (1) `MovementSystem::ground_collider` / `detect_collisions`: the container is a collision checker
 and a partner (its type's `UnitCollisionClass`, `Is_Squashable`, `MovementPredictionInterval`), members stay out as
-checkers (as now); members as partners stay out until the [M] of item 1 is traced. (2) `MovementSystem::steer_member`:
+checkers and as partners (§7.8). (2) `MovementSystem::steer_member`:
 after step 6's dir, add Σ of items 2-4 over the container's collision objects (`coll_`, in creation order; the
 container's start-of-tick state, so it stays read-only for the parallel walk). (3) Retail tests no passability on a
 member's step (§7 step 8, §7.3 item 7): the port's `steer_commit` wall slide is a [port] choice to keep or drop.
@@ -1745,11 +1811,89 @@ toward it. Confirmed by the s78n t14 run (`S78N_T14_RUN.md`).
    (0x140805898 = 10.0) and cap := min(cap, (1 − t)·vmax). So a member more than HX + 2 behind the container slows it
    linearly to 0 at HX + 12. Run: solving the cap for HX from each poll's speed and rearmost member gives 15.0-15.4 on
    three Rows starts (3 × 3 grid of pitch 12, hx 3: predicted 15.0) and 15.69-15.86 over 85 frames of a Dartboard leg.
-3. Order inside 0x5aaf70 [M for the cap terms other than 2]: T starts at vmax (or pack +0x158 when vf +0x1c8 answers
-   true; the deceleration when there is no started path), then the path corner / arrival caps, the collision cap
-   0x509ea0 (which may also demand an immediate change), the straggler cap, and T := the deceleration in state 0x14.
-   Step: T > v → v += min(a, T − v); T < v → v := T when the collision cap asked for it, else v −= min(a, v − T);
-   then clamp to [0, vmax].
+
+   **Who is counted, and the bounds (s78n follow-up, 2026-11-10; 0x5ab640 re-read in full) [H]:**
+   - **Every non-null entry of the TEAM list** (0x405300 count, 0x4052d0(i)), index order. The loop tests nothing
+     else: not the member's locomotor state (idle, 0x29 / 0x2A recovery, a running start delay +0xe4), not its pack,
+     path or speed, not obj +0x3a7 (hidden / garrisoned), not a suspended locomotor (pack +0x260), not health, not
+     whether its line to the slot is passable, not a push / flee. A member without a locomotor pack is counted too
+     (the box 0x404450 skips it; this loop does not).
+   - A member stops counting only when it leaves the list (0x4058c0): on its signal 0x28 (TEAM vf +0x80 = 0x404750;
+     raised by `Remove_Object` at the store flush after its Kill, OBJECT_RUNTIME §2.2), or at once when it is set on
+     fire and becomes a burning runner (0x3a9e30: type flag +0x81, damage argument 7, not yet burning) [M: the flag's
+     name]. So a dying member is counted for at most the frame it dies in [M: Kill and flush in the same frame].
+   - **p is measured against the container** (K obj +0x78 / +0x7c, projected on K's facing), **not against the
+     member's slot**. A member standing exactly on a slot that lies more than HX + 2 behind K therefore slows K for
+     as long as the layout lasts. That happens when the slot box is off-centre: HX is half the x-extent of the box
+     seeded with 0, so with the slots' x-range [xmin, xmax] the rear member on its slot has p = xmin (+ jiggle) and
+     the test is xmin < −((max(0, xmax + hx) − min(0, xmin − hx)) / 2 + 2). Rows layouts are centred (§7.2 step 3),
+     so p ≥ −(HX − hx) there; a Dartboard scatter whose x-midpoint lies more than hx + 2 behind K runs below
+     vmax until the next re-lay (the 85-frame Dartboard leg of the run above) [M: derived from the two formulas].
+   - **No lower bound:** the result is in [0, vmax] and is exactly 0 once any member has p ≤ −(HX + 12). There is no
+     minimum speed and no timeout.
+3. **Order inside 0x5aaf70** [H; M for the brake-ahead geometry]. vmax = 0x370f00(K type, K); rate = 0x372560(K
+   type), × 2 while fleeing; a = vf +0x2e0 (item 1); v = pack +0xec; path = the top of K's path stack (0x5569b0).
+   1. T := vmax. When vf +0x1c8 (0x42cc20: the top path's kind +0x48 is 1, a formation path): T := pack +0x158 (the
+      formation speed), and if that is 0 → state := 0x14.
+   2. No path, or the top path is not started (+0x6d = 0): T := a.
+   3. With a path: w = the wanted facing 0x5ab840 for waypoint index +0x60. If the path's turn-done flag +0x6c is
+      clear and |wrap(yaw − w)| ≥ |rate|: c = the speed fraction of waypoint +0x60 (0x5c4b80, entry +4; an index
+      past the end reads the static (1.0, 1.0) at 0x140a440f8); when c·vmax < T: T := c·vmax, and T = 0 → state :=
+      0x14. (+0x6c is set by the move step once the turn has rate left over, and cleared when the waypoint index
+      steps, 0x5c4920.)
+   4. Brake-ahead: vn = (fraction of waypoint +0x60 + 1, 0x5c4af0; default 1.0) × vmax. When vn < v: bd = (v² − vn²)
+      / (2a) (double); g = the distance from K, along the current segment direction (0x5c5850), to the waypoint line
+      of 0x5c4ec0 (point W, unit direction n); when g ≤ bd: T := min(T, vn), and T = 0 → state := 0x14.
+   5. Collision cap: with a collision system (mode vf +0x230), T := min(T, 0x509ea0(system, T, K, &now)); `now` is
+      the "at once" flag of item 5.
+   6. Straggler cap: T := min(T, 0x5ab640(K)).
+   7. State = 0x14 (also when set in steps 1, 3, 4 of this very call): **T := a**, replacing everything above,
+      the straggler cap included.
+   8. Step: T > v → v += min(vf +0x2d8, T − v); T < v → `now` ? v := T : v −= min(a, v − T); v := clamp(v, 0, vmax)
+      → pack +0xec.
+4. **Where the cap applies** [H]. 0x5aaf70 has one caller, the move step 0x5adfb0, and the container service
+   0x5ad690 runs that step in state **0x13** (every frame) and in **0x14** while v > a (then 0x15 zeroes the speed).
+   Not in 0 / 0x16 (start, idle), 0x10 (turn in place) or 0x15 (arriving).
+   - In 0x13 the cap is folded on **every** frame, whatever the path: kind 1 formation, 3 TerrainCollision, 4 push,
+     5, **7 crush-flee** (the cap's vmax then holds the × 2), started or not, any waypoint. No path kind, order type
+     or flag skips it.
+   - In 0x14 it is computed and then discarded (step 7): **a braking container does not wait for stragglers**.
+     0x14 is entered: when the top path is not started (a new path arrived while moving; 0x5adfb0 start), on the
+     last waypoint or an unstarted path with no started path below (0x5adfb0 loop), when the remaining path length
+     ≤ v² / (2a) with no started path below, and from steps 1, 3, 4 above.
+   - **At cap 0 the container stays in 0x13 with v = 0.** 0x5adfb0 returns right after 0x5aaf70 when v = 0: no turn,
+     no waypoint step, no passability test, no state change. Its members keep copying 0x13 and run slot steering
+     (§7), which is what brings the straggler back; they are not in recovery (§7.3 "Recovery in full" item 1). When
+     the last straggler is back inside HX + 12 the cap rises and v ramps up at a.
+5. **When the speed changes at once instead of at the rate a** [H; M for the collision state names].
+   - **Collision flag** (`now`, the only "at once" inside 0x5aaf70). 0x509ea0 asks every active collision record of K
+     (id-keyed list, list order) for vf +0x40(K, &now) and keeps the lowest speed; **`now` ends as the flag of the
+     last record that writes it** (not an OR). With `now` set, any T below v is taken in one frame, whichever cap
+     produced it (the straggler cap included); a rise is never immediate.
+     - MovingVsStopped (0x684660) always writes its +0x84: 1 once the decision 0x684f90 has re-routed the mover
+       (0x685e10 succeeded; then state 5 Resolved), else 0. Its speed for the mover (+0x7c) that cannot crush the
+       obstacle: state 7 (Try Again Later) → **0**; state 1 (Path Around) → 0x5c69f0 (the formation-follow speed);
+       else vmax. So an ordinary MovingVsStopped hold (state 7) brakes K **at the rate a**.
+     - MovingVsMoving (0x680d00) writes +0xbd for participant +0x7c and +0xbe for +0x80, and answers +0x84 / +0x88
+       when its state ≠ 0 (else vmax). Each resolution pass first resets both speeds to vmax and both flags to 0
+       (0x67f080); the flag is then set together with a **0 speed** (a hold): state 1 (0x682510: +0x7c at or past its
+       hold line and unable to crush), state 2 (0x6814f0: the slave speed 0x67f590 of +0x80 is 0), 0x682170 (+0x80
+       at or past its hold line), and by the slave-speed rule 0x67f130 when the two footprints already touch. A new
+       record (state 0) has both flags 1 and answers vmax.
+     - StoppedVsStopped and TerrainCollision (0x5c78e0): vmax, flag untouched.
+   - **Stop** (LandTeamContainer vf +0x140(id) = 0x5ad320): 0x42c920 clears the path stack (0x554480(pack, K, id):
+     every record, or, with id = 0 and a current order id in pack +0x248, the records from that order's record on)
+     and, when vf +0x170(id) agrees (0x42cba0: pack +0x248 = 0 or = id): state := 0x16 and pack +0xec / +0xf0 := 0
+     **at once**. Callers seen: the garrison entry (§7.4) and the collision
+     code for a participant standing on an impassable cell (0x684450) [M: the Stop order's own call was not
+     enumerated].
+   - **New move order while moving: not at once.** The formation plan 0x41c1a0 resets the path stack directly
+     (0x554480, not vf +0x140) and sets the new path (vf +0x190 = 0x5ad140). The new top path is not started, so the
+     next move step enters 0x14: K brakes at a (coasting straight along its facing, passability-tested), 0x15 zeroes
+     the speed when v ≤ a, 0x16 starts the path, 0 re-lays the slots, 0x10 turns, 0x13 moves. Start delays are drawn
+     only when the path is set while v = 0 (§7.3 item 2).
+   - **Path end: not at once.** 0x14 brakes at a from v² / (2a) before the end; 0x15 then sets the speed (≤ a) to 0.
+   - **Arrival state 0x15** (0x5adb50) always writes pack +0xec / +0xf0 := 0.
 
 ***Port spec (s78n t14 run):*** (1) the squad container's walk uses a = d = the minimum over its members of
 `OverrideDeceleration` × (the member type's team-capped effective speed / its `Max_Speed`), falling back to full speed
@@ -1758,6 +1902,71 @@ start and stop in one frame. (2) The container's walk target speed takes min(·,
 the members' start-of-tick positions and slots (`tslot`) in member index order (serial, before the parallel walk, like
 `team_caps`); the cap is a target, reached at the item-1 rate. (3) No change to `steer_member`'s vmax (already the
 member's own effective max speed) or to the start delays.
+
+***Port spec (s78n follow-up, 2026-11-10):***
+1. **Cap membership:** every live member in the team list, no exclusion. Remove the [port] rule "a member whose
+   straight line to its slot is impassable is left out". cap = vmax × min over members of (1 − clamp((−(HX + 2) − p)
+   / 10, 0, 1)), p = dot(member.P − container.P, container facing), HX = the joint slot box half x-extent (seeded
+   with 0) + the container type's `MaxJiggleDistance`; range [0, vmax], no floor. A member removed from the team
+   (dead, burning runner) is not in the list.
+2. **Where:** fold the cap into the container's target speed on every frame of its moving state (retail 0x13), for
+   every path kind (formation, push, crush-flee, collision paths). While braking (retail 0x14: path end, new path
+   arrived, formation speed 0, zero waypoint fraction) the target is the deceleration value a and the cap is not
+   applied. No cap while turning in place, arriving or idle.
+3. **At cap 0:** the container keeps its moving state with speed 0 and does nothing else that frame (no turn, no
+   waypoint advance); members stay in slot steering. It must be impossible for a member's step to be refused
+   (§7.3 ***Port spec (recovery / lag bound)*** item 1), otherwise this rule deadlocks; with both retail rules in
+   place the wait ends after about (lag − (HX + 12)) / member vmax frames.
+4. **Rate:** down-steps use a per frame unless the collision "at once" flag is set (item 5: the flag of the last
+   collision record of the container that reports one; MovingVsMoving holds and a re-routed MovingVsStopped set it).
+   A plain MovingVsStopped "try again later" hold brakes at a. Stop zeroes the speed at once; a new move order and
+   the path end brake at a, then zero the remainder (≤ a) on arrival.
+5. Step order of item 3 (formation speed, unstarted path, corner fraction until aligned, brake-ahead, collision,
+   straggler, braking override) is the order to keep; all caps are mins, so only the braking override and the "at
+   once" flag are order-sensitive.
+
+### 7.8 s78n follow-up: squads in land collision detection and the dynamic repath (2026-11-10) [H unless tagged]
+Read from 0x504880, 0x508170, 0x53a400, 0x539b20, 0x559260 (dis), 0x5d7a00 / 0x6b0e50, 0x683790, 0x442540, 0x686500,
+0x684f90, 0x5c7100, 0x396850 / 0x38de80, 0x67cf20, 0x677340, 0x684710. The pair gates themselves (garrison, landing
+transport, hover, build pad) are in MOVEMENT §5.2 / §5.3.
+1. **The candidate list is the registered mover list.** The detection 0x508170 takes its candidates from tracking
+   layer 0x10 (Land; 0x5387f0(tracker, 0x10), box query 0x5d7a00). That layer is filled by one function only: the
+   tracker's land update **0x53a400** (called from the tracker update 0x539b20, itself from the mode's frame update
+   0x3639d0). It walks the **collision system's mover list** (0x508ec0 → system +0xd8, the list 0x504880 fills) and
+   makes or refreshes a record at the object's current position for every mover whose layer 0x397900(obj, 0) is
+   exactly 0x10, with obj +0x3a7 clear, a live manager (+0x2b8 → +0x63e) and the dead bit (+0x3a0 & 2) clear. The
+   path-change hook 0x559260 never inserts a pure-Land object (`test eax, 0xffffffef; je` at 0x1405592cd), and the
+   other inserts (0x53acf0 / 0x53a900 / 0x53ae20) are called only from SPACE_OBSTACLE, the Flying / JetPack /
+   LandBomber / SimpleSpace "placed" slots and the space formation code. So on land: **candidate ⇔ registered mover
+   with `Space_Layer` Land, not hidden.**
+2. **Squad members are never registered** (0x504880: locomotor vf +0x228 true, §7.5 item 1), so they are neither
+   checkers nor candidates:
+   - **A container never gets a collision object with one of its own members**, moving or standing. No own-team test
+     is needed in the contact tests, and there is none (0x683790 / 0x442540 / 0x686500 read no +0x2b0 and no TEAM
+     list).
+   - **Enemy (and friendly) squad members do not block a container or any other unit.** A squad takes part in
+     collision only as its **container**: at the container's position, with the container's footprint = the joint
+     slot box (0x396850 → 0x404450: the slot layout ± member half-extents, centred on the container and turned by
+     its yaw, TACTICAL_COMBAT §5.4.4; 0x38de80 builds the collision rectangle from it), the container type's
+     `UnitCollisionClass` (FoC: Infantry) and its `MovementPredictionInterval`. Where the members really stand does
+     not matter.
+   - Members only **read** their container's records for the steering vector (§7.5 items 2-4); 0x5c7100 (the "other
+     participant" helper: the first participant that is not obj and whose TEAM does not hold obj) exists for that
+     read, where obj is a member and the record holds its container.
+3. **The dynamic repath ignores members the same way.** The dynamic land pathfinder's obstacle rectangles come from
+   the same layer-0x10 query, minus the pathing unit's own id (0x67cf20: 0x5d7ae0(layer, box, own id, 0x3fffff);
+   0x677340; 0x679aa0), and the side-step test 0x684710 uses it too. So a container's Path Around sees other
+   containers (their joint boxes), vehicles and structures, **never a squad member, its own or anyone else's**.
+4. **The container's own step** is passability-tested for its own movement class at its own point only (0x50e280
+   in 0x5adfb0, skipped when the path's +0x5c flag is set); a failed test reports to the collision system (0x509090)
+   and the container does not move that frame. Members are not tested at all (§7.3 "Recovery in full" item 7).
+
+***Port spec:*** (1) `MovementSystem::detect_collisions`: candidates are the registered ground colliders only; a
+squad member is never a checker, never a partner and never an obstacle rectangle of the dynamic repath, for its own
+container or for any other unit (own or enemy). (2) A squad is represented by its container with the joint slot box
+as footprint (the same box as the straggler cap's HX and the fog / range tests). (3) No own-team exclusion code is
+needed once (1) holds; if the port keeps members in a shared spatial index, filter them out of the collision and
+dynamic-repath queries before the pair gates of MOVEMENT §5.3.
 
 ---
 
