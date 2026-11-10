@@ -625,6 +625,7 @@ void AbilitySystem::handler(Obj& o, uint32_t t, bool on, uint32_t frame, ObjectI
                                 r.kind = kind;
                                 r.source = pv.shooter;
                                 r.source_is_projectile = true;
+                                r.projectile_target = pv.target;  // s78n t12 (HERO_CLASH §8.4.1 step 8)
                                 r.projectile_desc = static_cast<int32_t>(pv.desc);
                                 combat_->take_damage(r, frame);
                             };

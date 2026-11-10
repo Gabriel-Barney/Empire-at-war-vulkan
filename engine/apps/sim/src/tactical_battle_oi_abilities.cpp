@@ -24,6 +24,7 @@ namespace alamo::sim {
 namespace tc = alamo::tactical::combat;
 namespace ta = alamo::tactical::abilities;
 namespace mv = alamo::tactical::movement;
+namespace tg = alamo::tactical::garrison;
 
 namespace {
 Vec3 oi_sv(tactical::Vec3 v) { return Vec3{v.x, v.y, v.z}; }
@@ -591,7 +592,8 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
             case ta::SpawnPurpose::CaptureVariant: {
                 // Vehicle_Thief (TACTICAL_GAPS Â§2.3.10): the victim type's capture variant (+0xda8, the resolved
                 // Vehicle_Thief_Inside_Clone of +0xda0) at the victim with the victim's owner (one id); the thief
-                // boards it; EJECT_VEHICLE_THIEF (46) on for the variant (REMAINING_GAPS Â§5.1). No variant: nothing.
+                // boards it; EJECT_VEHICLE_THIEF (46) on for the variant (REMAINING_GAPS Â§5.1). No variant: the
+                // original is boarded (s78n t12).
                 int32_t vt = q.object_type;
                 const Unit* victim = unit_by_id(q.target);
                 if (vt < 0 && victim) {
@@ -602,15 +604,40 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                         if (t != objects::kNone) vt = static_cast<int32_t>(t);
                     }
                 }
-                if (vt < 0) break;
-                const objects::ObjectId id = oi_spawn_unit(mode, vt, oi_sv(q.position), oi_sv(q.facing), q.owner);
-                if (id == objects::kNoObjectId) break;
+                // s78n t12 (HERO_CLASH §8.4.3, apply 0x7112f0): with a clone type - spawn it (vehicle position /
+                // orientation / owner); a failed spawn changes nothing (the vehicle lives); else the vehicle is killed
+                // (0x391310(vehicle, 0): no death clone, credited to the thief) and the clone is boarded. Without a
+                // clone type the ORIGINAL vehicle is boarded: no spawn, no kill. [port] the kill happens here, in the
+                // host pass of the same tick (retail: inside the apply), and its death is processed at once like a
+                // script kill (script_damage). [port] a victim that died between the apply and this pass: with a clone
+                // the clone is still spawned and boarded (as before t12); without one nothing is boarded and
+                // CAPTURE_VEHICLE stays on.
+                const bool victim_alive = combat_->has_unit(q.target) && combat_->alive(q.target);
+                const bool original = vt < 0;
+                objects::ObjectId id = objects::kNoObjectId;
+                if (original) {
+                    if (!victim || !victim->alive || victim->retreated || !victim_alive) break;
+                    if (!combat_->has_unit(q.source) || !combat_->alive(q.source)) break;  // [port] the thief died this tick
+                    id = q.target;
+                } else {
+                    id = oi_spawn_unit(mode, vt, oi_sv(q.position), oi_sv(q.facing), q.owner);  // may grow units_
+                    if (id == objects::kNoObjectId) break;
+                    if (victim_alive && bt_rng_) {
+                        const size_t deaths_before = combat_->deaths().size();
+                        combat_->kill_unit(q.target, q.source, tc::kKindNoDeathClone, frame_);
+                        const std::vector<tc::DeathEvent> deaths(combat_->deaths().begin() + static_cast<std::ptrdiff_t>(deaths_before),
+                                                                 combat_->deaths().end());
+                        for (const tc::DeathEvent& d : deaths) process_death(mode, d, *bt_rng_);
+                    }
+                }
                 // s78n t05 (HERO_CLASH §8.1, boarding 0x63fae0): 3. EJECT_VEHICLE_THIEF on; 4. Change_Owner(vehicle, the
                 // thief's owner) through the port's owner change (store, trees, abilities / combat, movement, fog,
                 // garrison); 5. +0x3a2 |= 0x08 (stolen vehicle, permanent); 7. +0x3a1 |= 0x10 (incognito); 8. the thief
                 // boards. [port] the thief's record of the vehicle's previous owner is not kept (the eject kills the
                 // vehicle, REMAINING_GAPS §5.1, so nothing reads it); the store notify (step 6) is not modelled.
-                abilities_->set_unit_ability_active(id, ta::kEjectVehicleThief, true, frame_);
+                // s78n t12: step 3 only when the boarded object has unit ability 46.
+                if (abilities_->has_ability(id, ta::kEjectVehicleThief))
+                    abilities_->set_unit_ability_active(id, ta::kEjectVehicleThief, true, frame_);
                 const objects::ObjectHandle th = store.find(q.source), vh = store.find(id);
                 if (store.alive(th) && store.alive(vh)) {
                     const int32_t thief_owner = store.owner(th);
@@ -618,6 +645,23 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 }
                 if (combat_->has_unit(id)) combat_->set_flag(id, tc::kUnitStolenVehicle | tc::kUnitIncognito, true);
                 if (Unit* u = unit_by_id(id)) u->flags_3a2 = static_cast<uint8_t>(u->flags_3a2 | 8u);  // the +0x3a2 record
+                // s78n t12 (§8.4.3): the container pack +0xf8 is created on demand (0x390740), so any vehicle takes the
+                // thief. [port] a boarded object that is no garrison holder yet becomes a one-slot holder without a
+                // garrison behaviour (HolderKind::Property: the thief dies with it and cannot leave without ability
+                // 46), accepting the thief's Garrison_Category, with the half diagonal s4_register computes.
+                if (store.alive(vh) && !garrison_.is_holder(id)) {
+                    tg::HolderDesc hd;
+                    hd.kind = tg::HolderKind::Property;
+                    hd.slots = 1;
+                    if (const tg::OccupantDesc* od = garrison_.unit_desc(q.source)) hd.accepts = od->category;
+                    const tactical::Aabb bb = mode.extent_box(vh);
+                    const float bx = bb.max.x - bb.min.x, by = bb.max.y - bb.min.y;
+                    hd.half_diagonal = 0.5f * dmath::sqrt(bx * bx + by * by);
+                    s4_store_ = &store;
+                    s4_init();
+                    garrison_.add_holder(id, store.owner(vh), hd);
+                    abilities_->set_garrison_count(id, 0);
+                }
                 s4_board(mode, q.source, id);
                 break;
             }

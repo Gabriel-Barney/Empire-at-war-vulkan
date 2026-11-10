@@ -425,7 +425,27 @@ inline std::string hack_types() {
                  "<Custom_Soft_Footprint_Radius>6</Custom_Soft_Footprint_Radius><Custom_Hard_XExtent>6</Custom_Hard_XExtent>"
                  "<Custom_Hard_YExtent>6</Custom_Hard_YExtent></GroundInfantry>\n"
                  " <GroundCompany Name=\"S10_HeroC_Co\"><Company_Units>S10_HeroC</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n"
-                 " <GroundCompany Name=\"S10_HeroHold_Co\"><Company_Units>S10_Speeder_Stolen</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n");
+                 " <GroundCompany Name=\"S10_HeroHold_Co\"><Company_Units>S10_Speeder_Stolen</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n"
+                 // s78n t12 (HERO_CLASH §8.4.3): stealable speeders WITHOUT a Vehicle_Thief_Inside_Clone and without a
+                 // garrison behaviour - the thief boards the original. S10_Speeder_Eject also has unit ability
+                 // EJECT_VEHICLE_THIEF (46), which the boarding turns on only when the boarded object has it. Only
+                 // test_vehicle_thief puts them into a battle.
+                 " <GroundVehicle Name=\"S10_Speeder_Plain\"><Tactical_Health>5000</Tactical_Health><Max_Speed>1.0</Max_Speed>"
+                 "<AI_Combat_Power>100</AI_Combat_Power><CategoryMask>Vehicle</CategoryMask><MovementClass>Tracked</MovementClass>"
+                 "<Behavior>SELECTABLE</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
+                 "<LandBehavior>WALK_LOCOMOTOR</LandBehavior><Custom_Soft_Footprint_Radius>10</Custom_Soft_Footprint_Radius>"
+                 "<Custom_Hard_XExtent>10</Custom_Hard_XExtent><Custom_Hard_YExtent>10</Custom_Hard_YExtent>"
+                 "<Tactical_Bribe_Cost>40</Tactical_Bribe_Cost></GroundVehicle>\n"
+                 " <GroundCompany Name=\"S10_Speeder_Plain_Co\"><Company_Units>S10_Speeder_Plain</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n"
+                 " <GroundVehicle Name=\"S10_Speeder_Eject\"><Tactical_Health>5000</Tactical_Health><Max_Speed>1.0</Max_Speed>"
+                 "<AI_Combat_Power>100</AI_Combat_Power><CategoryMask>Vehicle</CategoryMask><MovementClass>Tracked</MovementClass>"
+                 "<Behavior>SELECTABLE</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
+                 "<LandBehavior>WALK_LOCOMOTOR</LandBehavior><Custom_Soft_Footprint_Radius>10</Custom_Soft_Footprint_Radius>"
+                 "<Custom_Hard_XExtent>10</Custom_Hard_XExtent><Custom_Hard_YExtent>10</Custom_Hard_YExtent>"
+                 "<Tactical_Bribe_Cost>40</Tactical_Bribe_Cost>"
+                 "<Unit_Abilities_Data SubObjectList=\"Yes\"><Unit_Ability><Type>EJECT_VEHICLE_THIEF</Type><Recharge_Seconds>1</Recharge_Seconds>"
+                 "</Unit_Ability></Unit_Abilities_Data></GroundVehicle>\n"
+                 " <GroundCompany Name=\"S10_Speeder_Eject_Co\"><Company_Units>S10_Speeder_Eject</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n");
     return t;
 }
 

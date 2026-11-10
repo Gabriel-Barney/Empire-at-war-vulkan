@@ -3358,7 +3358,7 @@ void test_save_rejects() {
     bad = saved;
     put_u32_at(bad, 0, 99);
     CHECK(rejected(bad));
-    for (const uint32_t v : {13u, 15u}) {  // only the current version (14: cu8k t01 saber thrower) is read (cu6)
+    for (const uint32_t v : {14u, 16u}) {  // only the current version (15: s78n t12 / t11) is read (cu6)
         bad = saved;
         put_u32_at(bad, 0, v);
         CHECK(rejected(bad));
@@ -3563,7 +3563,7 @@ void test_stickiness_override() {
         std::vector<size_t> at;
         for (size_t i = 0; i + 4 <= img.size(); ++i)
             if (std::memcmp(&img[i], pat, 4) == 0) at.push_back(i);
-        CHECK(at.size() == 1u && img[0] == 14u);
+        CHECK(at.size() == 1u && img[0] == 15u);
         if (at.size() == 1u) {
             img.erase(img.begin() + static_cast<std::ptrdiff_t>(at[0]), img.begin() + static_cast<std::ptrdiff_t>(at[0]) + 4);
             img[0] = 13;
@@ -6408,36 +6408,178 @@ void test_incognito_targeting() {
         t.w.tick();
         CHECK(t.w.sys->current_target(1) == 2);
     }
-    {  // Take_Damage: the victim's flag goes when the source targets it, is a projectile or has no weapon; the source's
-       // flag goes when it deals damage (a non-projectile source with the flag also gets CAUSE_DAMAGE)
+    // s78n t12 (HERO_CLASH §8.4.1, Take_Damage 0x3a9e30 in retail order): the gates (+0x37d invulnerable, Immune_To_Damage,
+    // garrisoned victim) stop the hit before any clear; then the victim's clear (a non-projectile source, or a projectile
+    // aimed at it), TAKE_DAMAGE, the source's clear (a projectile's shooter: always with CAUSE_DAMAGE; a non-projectile
+    // source only with the bit), and only then the damage-enabled gate.
+    const auto inc = [](const TargetWorld& t, ObjectId id) { return (t.w.sys->flags(id) & kUnitIncognito) != 0; };
+    {  // who is cleared
         TargetWorld t;
         t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
         t.w.add(2, t.capital, 1, Vec3{300, 0, 0});
-        t.w.add(3, t.capital, 1, Vec3{-300, 0, 0});  // no weapon
+        t.w.add(3, t.capital, 1, Vec3{-300, 0, 0});
         DamageRequest r;
         r.victim = 2;
         r.amount = 1.0f;
         t.w.sys->set_flag(2, kUnitIncognito, true);
-        t.w.sys->take_damage(r, t.w.frame);  // no source: kept
-        CHECK(t.w.sys->flags(2) & kUnitIncognito);
+        CHECK(t.w.sys->take_damage(r, t.w.frame).applied);  // no source: nothing is cleared
+        CHECK(inc(t, 2));
         t.w.sys->set_flag(1, kUnitIncognito, true);
-        r.source = 1;  // armed, not targeting 2: the victim keeps it, the source loses it
+        r.source = 1;  // an armed non-projectile source that is not targeting 2: no weapon / target test, both cleared
         t.w.sys->take_damage(r, t.w.frame);
-        CHECK((t.w.sys->flags(2) & kUnitIncognito) && !(t.w.sys->flags(1) & kUnitIncognito));
-        t.w.sys->order_attack(1, 2);
-        t.w.sys->take_damage(r, t.w.frame);  // targeting the victim
-        CHECK(!(t.w.sys->flags(2) & kUnitIncognito));
+        CHECK(!inc(t, 2) && !inc(t, 1));
         t.w.sys->set_flag(2, kUnitIncognito, true);
-        r.source = 3;  // no weapon (no targeting)
+        t.w.sys->set_flag(1, kUnitIncognito, true);
+        r.source_is_projectile = true;  // a projectile aimed at 3 that hits 2 (splash / stray): 2 keeps it, the shooter loses it
+        r.projectile_target = 3;
         t.w.sys->take_damage(r, t.w.frame);
-        CHECK(!(t.w.sys->flags(2) & kUnitIncognito));
+        CHECK(inc(t, 2) && !inc(t, 1));
+        r.projectile_target = kNoObject;  // a projectile without a target clears no victim
+        t.w.sys->take_damage(r, t.w.frame);
+        CHECK(inc(t, 2));
+        r.source = 77;  // the projectile's own target loses it even when the shooter is gone
+        r.projectile_target = 2;
+        t.w.sys->take_damage(r, t.w.frame);
+        CHECK(!inc(t, 2));
+        // a dead victim that is still in the table: the clears still run (no live test in front of them)
+        t.w.sys->kill_unit(3, kNoObject, kKindNormal, t.w.frame);
+        CHECK(t.w.sys->has_unit(3) && !t.w.sys->alive(3));
         t.w.sys->set_flag(1, kUnitIncognito, true);
         r.victim = 3;
         r.source = 1;
-        r.source_is_projectile = true;  // a projectile's shooter and its victim
-        t.w.sys->set_flag(3, kUnitIncognito, true);
+        r.projectile_target = 3;
+        const DamageResult dead = t.w.sys->take_damage(r, t.w.frame);
+        CHECK(!dead.applied && !inc(t, 1));
+        t.w.sys->set_flag(1, kUnitIncognito, true);  // non-projectile, incognito source on the dead victim
+        r.source_is_projectile = false;
+        r.projectile_target = kNoObject;
         t.w.sys->take_damage(r, t.w.frame);
-        CHECK(!(t.w.sys->flags(1) & kUnitIncognito) && !(t.w.sys->flags(3) & kUnitIncognito));
+        CHECK(!inc(t, 1));
+    }
+    {  // the gates in front of the clears: nothing cleared, nothing applied, no damage
+        TargetWorld t;
+        UnitDesc im = t.w.data.units[t.capital];
+        im.immune_to_damage = true;
+        const uint32_t imd = push_unit(t.w.data, im);
+        t.w.make();
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{300, 0, 0});
+        t.w.add(3, imd, 1, Vec3{-300, 0, 0});
+        t.w.add(4, t.capital, 1, Vec3{0, 300, 0});
+        t.w.sys->set_flag(2, kUnitInvulnerable, true);
+        t.w.sys->set_flag(4, kUnitGarrisoned, true);
+        for (const ObjectId v : {ObjectId{2}, ObjectId{3}, ObjectId{4}}) {
+            for (const bool projectile : {false, true}) {
+                t.w.sys->set_flag(v, kUnitIncognito, true);
+                t.w.sys->set_flag(1, kUnitIncognito, true);
+                DamageRequest r;
+                r.victim = v;
+                r.amount = 5.0f;
+                r.source = 1;
+                r.source_is_projectile = projectile;
+                r.projectile_target = v;
+                const float h0 = t.w.sys->health(v);
+                const DamageResult out = t.w.sys->take_damage(r, t.w.frame);
+                CHECK(!out.applied && inc(t, v) && inc(t, 1));
+                CHECK_F(t.w.sys->health(v), h0);
+            }
+        }
+    }
+    {  // damage disabled: the gate sits after the clears - both bits go, nothing is applied
+        TargetWorld t;
+        CombatConfig cfg;
+        cfg.damage_enabled = false;
+        t.w.make(cfg);
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{300, 0, 0});
+        t.w.sys->set_flag(1, kUnitIncognito, true);
+        t.w.sys->set_flag(2, kUnitIncognito, true);
+        DamageRequest r;
+        r.victim = 2;
+        r.amount = 5.0f;
+        r.source = 1;
+        const float h0 = t.w.sys->health(2);
+        const DamageResult out = t.w.sys->take_damage(r, t.w.frame);
+        CHECK(!out.applied && !inc(t, 1) && !inc(t, 2));
+        CHECK_F(t.w.sys->health(2), h0);
+    }
+    {  // CAUSE_DAMAGE x 2 on the source: a non-projectile source gets it only while it has the bit (first hit 200, then
+       // 100); a self hit clears the victim first, so no CAUSE_DAMAGE; a projectile's shooter gets it with or without the bit
+        TargetWorld t;
+        UnitAbilityDesc cause;
+        cause.ability_type = kAbilityPowerToWeapons;
+        cause.mult[static_cast<size_t>(ModKind::CauseDamage) - 1] = 2.0f;
+        t.w.data.abilities = {cause};
+        UnitDesc src = t.w.data.units[t.capital];
+        src.tactical_health = 10000.0f;
+        src.abilities = {0, -1};
+        const uint32_t sd = push_unit(t.w.data, src);
+        t.w.make();
+        t.w.add(1, sd, 0, Vec3{0, 0, 0});
+        t.w.add(2, sd, 1, Vec3{300, 0, 0});
+        t.w.sys->set_ability_active(1, 0, true);
+        DamageRequest r;
+        r.victim = 2;
+        r.amount = 100.0f;
+        r.source = 1;
+        t.w.sys->set_flag(1, kUnitIncognito, true);
+        CHECK_F(t.w.sys->take_damage(r, t.w.frame).after_multipliers, 200.0f);
+        CHECK(!inc(t, 1));
+        CHECK_F(t.w.sys->take_damage(r, t.w.frame).after_multipliers, 100.0f);
+        r.victim = 1;  // self hit (STIM_PACK shape): step 8 clears the victim, step 10 then finds no bit
+        t.w.sys->set_flag(1, kUnitIncognito, true);
+        CHECK_F(t.w.sys->take_damage(r, t.w.frame).after_multipliers, 100.0f);
+        CHECK(!inc(t, 1));
+        r.victim = 2;  // a projectile: the shooter's CAUSE_DAMAGE always
+        r.source_is_projectile = true;
+        CHECK_F(t.w.sys->take_damage(r, t.w.frame).after_multipliers, 200.0f);
+    }
+    {  // the delayed-damage queue keeps the projectile's target (combat save 15): a bomb aimed at 2 goes off between 2 and
+       // 3, both 80 from it (area delay 0.4 s). Saved while the two hits wait; in the saved and in the loaded system the
+       // target 2 loses its bit and the splash victim 3 keeps it.
+        TargetWorld a;
+        ProjectileDesc bomb;
+        bomb.name = "Bomb";
+        bomb.blast_area_damage = 10.0f;
+        bomb.blast_area_range = 100.0f;
+        a.w.data.projectiles.push_back(bomb);
+        const uint32_t bi = static_cast<uint32_t>(a.w.data.projectiles.size() - 1);
+        CombatConfig cfg;
+        cfg.max_secs_for_ae_delayed_damage = 0.5f;
+        a.w.make(cfg);
+        a.w.add(1, a.capital, 0, Vec3{0, -900, 0});
+        a.w.add(2, a.capital, 1, Vec3{80, 0, 0});
+        a.w.add(3, a.capital, 1, Vec3{-80, 0, 0});
+        a.w.sys->set_flag(2, kUnitIncognito, true);
+        a.w.sys->set_flag(3, kUnitIncognito, true);
+        ProjectileLaunch l;
+        l.shooter = 1;
+        l.owner = 0;
+        l.projectile = bi;
+        l.from = Vec3{0, 0, 0};
+        l.target = 2;
+        l.fuse_seconds = 0.0f;
+        CHECK(a.w.sys->launch_projectile(l, a.w.frame));
+        for (int i = 0; i < 6 && a.w.sys->projectile_count() > 0; ++i) a.w.tick();
+        CHECK(a.w.sys->projectile_count() == 0u);
+        CHECK(a.w.sys->health(2) == a.w.sys->max_health(2) && a.w.sys->health(3) == a.w.sys->max_health(3));  // queued
+        CHECK(inc(a, 2) && inc(a, 3));
+        const std::vector<uint8_t> saved = combat_bytes(*a.w.sys);
+        TargetWorld b;
+        b.w.data = a.w.data;
+        b.w.make(cfg);
+        ByteReader rd(saved);
+        CHECK(b.w.sys->read(rd));
+        CHECK(combat_bytes(*b.w.sys) == saved);
+        b.w.frame = a.w.frame;
+        for (int i = 0; i < 20; ++i) {
+            a.w.tick();
+            b.w.tick();
+        }
+        for (const TargetWorld* w : {&a, &b}) {
+            CHECK(w->w.sys->health(2) < w->w.sys->max_health(2) && w->w.sys->health(3) < w->w.sys->max_health(3));
+            CHECK(!inc(*w, 2) && inc(*w, 3));
+        }
     }
     {  // save / load: both flags ride the saved flag word (no format change) and survive an owner change
         TargetWorld a;

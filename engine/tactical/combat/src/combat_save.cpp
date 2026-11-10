@@ -48,7 +48,7 @@ using save_io::put_vec3;
 
 namespace {
 
-constexpr uint32_t kCombatSaveVersion = 14;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
+constexpr uint32_t kCombatSaveVersion = 15;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
                                              // 4: refixf t06 attack goal / weapon aim / order lock; 5: refixf t06 scan
                                              // target hardpoint (auto_hp); 6: a1g t03 damage event hull_lost; 7: S8 t04
                                              // grenade flight / sticky state; 8: S8 t06 stuck_offset in the parent's frame
@@ -58,8 +58,10 @@ constexpr uint32_t kCombatSaveVersion = 14;  // 2: refix t02 INFECTION state, re
                                              // s78g t06 damage_team; 12: s78h t03 squad_seen dropped (no squad rule
                                              // on a member); 13: cu8f t04a stickiness threshold TD +0x158,
                                              // cu8f t06 INFECTION frames left + spread counters; 14: cu8k t01 thrown
-                                             // sabers (projectile rocket 2, rocket state thrower). Only the current
-                                             // version is read (cu6).
+                                             // sabers (projectile rocket 2, rocket state thrower); 15: s78n t12
+                                             // delayed-damage projectile target, s78n t11 kUnitDeployingIn (flag
+                                             // word), s78n t13 last-hit stamp written only by a diminishing hit
+                                             // (same layout). Only the current version is read (cu6).
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 
@@ -188,7 +190,7 @@ void CombatSystem::write(ByteWriter& w) const {
     w.u32(static_cast<uint32_t>(delayed_.size()));
     for (const Delayed& d : delayed_) {
         w.i32(d.victim).i32(d.frames).f32(d.amount).u16(d.damage_type).u8(d.kind).u8(d.source_is_projectile);
-        w.i32(d.source).i32(d.projectile_desc).i32(d.hardpoint);
+        w.i32(d.source).i32(d.projectile_desc).i32(d.hardpoint).i32(d.projectile_target);  // s78n t12 (version 15)
     }
 
     w.u32(static_cast<uint32_t>(base_power_.size()));
@@ -457,7 +459,7 @@ bool CombatSystem::read(ByteReader& r) {
         if (j != projectiles.size()) return false;  // a rocket-flagged projectile without a state
     }
 
-    if (!r.count(n, 28)) return false;
+    if (!r.count(n, 32)) return false;
     std::vector<Delayed> delayed(n);
     for (Delayed& d : delayed) {
         d.victim = r.i32();
@@ -469,6 +471,7 @@ bool CombatSystem::read(ByteReader& r) {
         d.source = r.i32();
         d.projectile_desc = r.i32();
         d.hardpoint = r.i32();
+        d.projectile_target = r.i32();  // s78n t12 (version 15)
         if (!r.ok() || !proj_ok(d.projectile_desc)) return false;
     }
 

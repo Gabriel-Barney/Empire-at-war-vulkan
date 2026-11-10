@@ -2763,10 +2763,15 @@ void test_gaps_blast() {
     CHECK(w.ab->fire_gate(1, &laser, proj, scale) && scale == 1.0f);  // no Blast: untouched
     CHECK(w.ab->set_unit_ability_mode(one, kBlast, true, w.frame) == 1);
     CHECK(w.ab->blast_counter(1) == 30 && w.ab->countdown_counter(1, kBlast) == 1800);
+    // s78n t12 (HERO_CLASH §8.4.2): the apply sets the incognito bit (+0x3a1 & 0x10) on the user, not the port's
+    // dummy-target marker; Blast itself never clears it.
+    const auto incognito = [&w] { return (w.sys->flags(1) & kUnitIncognito) != 0; };
+    CHECK(incognito() && (w.sys->flags(1) & kUnitSkipTargeting) == 0);
     CHECK(!w.ab->fire_gate(1, &special, proj, scale) && !w.ab->fire_gate(1, &laser, proj, scale) &&
           !w.ab->fire_gate(1, nullptr, proj, scale));
     for (int i = 0; i < 40 && w.ab->blast_counter(1) > 0; ++i) w.tick();
     CHECK(w.ab->blast_counter(1) == -1);  // K = 1 special hard point
+    CHECK(incognito());  // s78n t12: not cleared at the charge's end
     CHECK(!w.ab->fire_gate(1, &laser, proj, scale) && !w.ab->fire_gate(1, nullptr, proj, scale));
     proj = 0;
     CHECK(w.ab->fire_gate(1, &special, proj, scale) && proj == 1 && scale == 5.0f);
@@ -2777,6 +2782,55 @@ void test_gaps_blast() {
     proj = 0;
     scale = 1.0f;
     CHECK(w.ab->fire_gate(1, &laser, proj, scale) && w.ab->fire_gate(1, &special, proj, scale) && proj == 0 && scale == 1.0f);
+    // s78n t12: still set after the special ended (no remove override); the user's first projectile that reaches
+    // Take_Damage on anything clears it (the shooter rule of §8.4.1 step 10).
+    CHECK(incognito());
+    w.add(2, sd, 1, {5000, 0, 0});
+    DamageRequest hit;
+    hit.victim = 2;
+    hit.amount = 1.0f;
+    hit.source = 1;
+    hit.source_is_projectile = true;
+    hit.projectile_target = 2;
+    w.sys->take_damage(hit, w.frame);
+    CHECK(!incognito());
+}
+
+void test_s78n_t12_thief_apply() {
+    // s78n t12 (HERO_CLASH §8.4.3): the Vehicle_Thief apply no longer kills the victim. It asks the host for the capture
+    // variant (one CaptureVariant request at the victim, with the victim's owner, source = the thief, target = the
+    // victim) and turns CAPTURE_VEHICLE on; the host kills the victim after a successful spawn, or boards the original.
+    OiWorld w;
+    SpecialAbilityDesc steal = oi_special("S78N_Steal", SpecialClass::VehicleThief, ActivationStyle::UserInput);
+    steal.min_range = 0.0f;
+    steal.max_range = 500.0f;
+    steal.activation_chance = 1.0f;
+    const uint32_t ss = add_special(w.ad, steal);
+    AbilityObjectDesc ta, va;
+    ta.unit_abilities = {oi_gui(kCaptureVehicle, 0.0f, 20.0f, "S78N_Steal")};
+    ta.specials = {ss};
+    const uint32_t td = push(w.cd, w.ad, oi_unit("Thief", 100.0f), ta);
+    const uint32_t vd = push(w.cd, w.ad, oi_unit("Speeder", 500.0f, 5.0f, kCatFrigate), va);
+    w.make(GameMode::Land);
+    w.add(1, td, 0, {0, 0, 0});
+    w.add(2, vd, 1, {100, 0, 0});
+    const ObjectId thief[] = {1};
+    CHECK(w.ab->targeted_ability(thief, kCaptureVehicle, 2, -1, w.frame) == 1);
+    size_t requests = w.ab->spawn_requests().size();
+    for (int i = 0; i < 10 && requests == 0; ++i) {
+        w.ab->tick(w.frame, w.trees, w.rng, serial_for);  // not w.tick(): its collect() clears the spawn requests
+        ++w.frame;
+        requests = w.ab->spawn_requests().size();
+        CHECK(w.sys->deaths().empty());
+    }
+    CHECK(requests == 1);
+    if (requests == 1) {
+        const SpawnRequest& q = w.ab->spawn_requests()[0];
+        CHECK(q.purpose == SpawnPurpose::CaptureVariant && q.source == 1 && q.target == 2 && q.owner == 1);
+        CHECK(q.position.x == 100.0f && q.position.y == 0.0f);
+    }
+    CHECK(w.sys->alive(2) && w.sys->health(2) == w.sys->max_health(2));  // the victim lives: the host decides
+    CHECK(w.ab->is_active(1, kCaptureVehicle));
 }
 
 void test_gaps_leech() {
@@ -5795,6 +5849,7 @@ int main(int argc, char** argv) {
     test_gaps_jet_pack();
     test_gaps_stun_release();
     test_gaps_blast();
+    test_s78n_t12_thief_apply();
     test_gaps_leech();
     test_oi_weapon_swap();
     test_oi_berserker_speed();

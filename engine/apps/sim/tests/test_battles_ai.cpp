@@ -1696,7 +1696,12 @@ void test_team_hack_bribe(bool bribe) {
 // spawned with the speeder's owner, then the boarding changes its owner to the thief's (store, combat, abilities), sets
 // the permanent stolen-vehicle flag and the incognito flag, and the thief is inside it. While incognito no unit
 // auto-acquires the variant; the stolen flag survives a later owner change.
-void test_vehicle_thief() {
+// s78n t12 (HERO_CLASH §8.4.3): `variant` 0 = the speeder has a Vehicle_Thief_Inside_Clone (the clone is spawned, the
+// speeder killed in the host pass, the clone boarded); 1 = no clone type (S10_Speeder_Plain: the ORIGINAL is boarded - the
+// same object id lives on with the thief's owner, the stolen / incognito flags and the thief inside; no spawn, no kill; it
+// becomes a garrison holder on demand); 2 = no clone type and unit ability EJECT_VEHICLE_THIEF (S10_Speeder_Eject: as 1,
+// and ability 46 is turned on - only an object that has it gets it).
+void test_vehicle_thief(int variant) {
     auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, true);
     jobs::JobSystem js(jobs::JobSystemConfig{0});
     SimConfig cfg;
@@ -1705,7 +1710,8 @@ void test_vehicle_thief() {
     SimHost host(d->types, js, cfg);
     galactic::GalacticSetup setup = make_setup(*d, true);
     const uint32_t thief_co = type_of(*d, "S10_Thief_Co"), thief_t = type_of(*d, "S10_Thief");
-    const uint32_t speeder_co = type_of(*d, "S10_Speeder_Co"), speeder_t = type_of(*d, "S10_Speeder"),
+    const char* const speeder_name = variant == 0 ? "S10_Speeder" : variant == 1 ? "S10_Speeder_Plain" : "S10_Speeder_Eject";
+    const uint32_t speeder_co = type_of(*d, (std::string(speeder_name) + "_Co").c_str()), speeder_t = type_of(*d, speeder_name),
                    stolen_t = type_of(*d, "S10_Speeder_Stolen");
     CHECK(thief_co < d->types.size() && speeder_co < d->types.size() && stolen_t < d->types.size());
     setup.forces.push_back({0, 1, speeder_co});  // the Empire's defenders + the speeder
@@ -1733,6 +1739,8 @@ void test_vehicle_thief() {
     if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
     namespace tc = alamo::tactical::combat;
     const uint8_t kind = tactical::abilities::ability_type_from_name("CAPTURE_VEHICLE");
+    const uint8_t eject = tactical::abilities::ability_type_from_name("EJECT_VEHICLE_THIEF");
+    size_t units0 = 0;
     bool invaded = false;
     int stage = 0;
     uint32_t order_frame = 0, watched = 0, acquired = 0;
@@ -1762,12 +1770,30 @@ void test_vehicle_thief() {
             CHECK(thief != objects::kNoObjectId && speeder != objects::kNoObjectId);
             if (thief == objects::kNoObjectId || speeder == objects::kNoObjectId) break;
             CHECK(cs.owner(thief) == 1 && cs.owner(speeder) == 0 && b->abilities().has_ability(thief, kind));
+            CHECK(b->abilities().has_ability(speeder, eject) == (variant == 2));
+            units0 = cs.unit_count();
             const objects::ObjectId users[] = {thief};
             const bool ordered = b->abilities().targeted_ability(users, kind, speeder, -1, b->frame()) == 1u;
             CHECK(ordered);
             if (!ordered) break;
             order_frame = b->frame();
             stage = 1;
+            continue;
+        }
+        if (stage == 1 && variant != 0) {  // s78n t12: no clone type - the thief is inside the original speeder
+            if (b->garrison_holder_of(thief) != speeder) {
+                if (b->frame() >= order_frame + 60u) break;
+                continue;
+            }
+            stolen = speeder;
+            CHECK(cs.alive(speeder) && st.alive(st.find(speeder)) && st.type(st.find(speeder)) == speeder_t);  // not killed
+            CHECK(cs.unit_count() == units0);                                                                 // nothing spawned
+            CHECK(st.owner(st.find(speeder)) == 1 && cs.owner(speeder) == 1);
+            CHECK((cs.flags(speeder) & tc::kUnitStolenVehicle) != 0 && (cs.flags(speeder) & tc::kUnitIncognito) != 0);
+            CHECK(b->abilities().is_active(thief, kind));                         // CAPTURE_VEHICLE on for the thief
+            CHECK(b->abilities().is_active(speeder, eject) == (variant == 2));    // 46 on only when the vehicle has it
+            CHECK((cs.flags(thief) & tc::kUnitGarrisoned) != 0);
+            stage = 2;
             continue;
         }
         if (stage == 1) {  // the capture variant appears (the speeder is gone)
@@ -1784,6 +1810,7 @@ void test_vehicle_thief() {
             CHECK(st.owner(st.find(stolen)) == 1 && cs.owner(stolen) == 1);
             CHECK((cs.flags(stolen) & tc::kUnitStolenVehicle) != 0 && (cs.flags(stolen) & tc::kUnitIncognito) != 0);
             CHECK(b->garrison_holder_of(thief) == stolen);
+            CHECK(b->abilities().is_active(thief, kind) && !b->abilities().is_active(stolen, eject));  // the clone has no 46
             stage = 2;
             continue;
         }
@@ -1802,8 +1829,8 @@ void test_vehicle_thief() {
             stage = 3;
         }
     }
-    std::printf("  vehicle thief: thief %d -> speeder %d, variant %d; %u incognito ticks watched, %u acquisitions\n",
-                static_cast<int>(thief), static_cast<int>(speeder), static_cast<int>(stolen), watched, acquired);
+    std::printf("  vehicle thief (%s): thief %d -> speeder %d, boarded %d; %u incognito ticks watched, %u acquisitions\n",
+                speeder_name, static_cast<int>(thief), static_cast<int>(speeder), static_cast<int>(stolen), watched, acquired);
     CHECK(stage == 3 && stolen != objects::kNoObjectId && watched > 0 && acquired == 0);
 }
 
@@ -2915,7 +2942,7 @@ int main(int argc, char** argv) {
     std::printf("s78l t04: Hack / Tactical_Bribe spread to the whole team; a vehicle's landing exit ends on the landing yaw\n");
     test_team_hack_bribe(false);
     test_team_hack_bribe(true);
-    test_vehicle_thief();  // s78n t05
+    for (const int variant : {0, 1, 2}) test_vehicle_thief(variant);  // s78n t05; s78n t12: without a clone type
     {  // s78n t06 (+ review): hero clashes in a land battle (the worker-count check is its own ctest entries, --hero-clash)
         auto hd = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, true);
         test_hero_clash_battle(*hd);

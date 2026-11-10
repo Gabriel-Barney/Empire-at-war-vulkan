@@ -2877,6 +2877,7 @@ void CombatSystem::apply_or_queue(const DamageRequest& r, float delay_secs, uint
         d.source = r.source;
         d.projectile_desc = r.projectile_desc;
         d.hardpoint = r.hardpoint;
+        d.projectile_target = r.projectile_target;  // s78n t12
         delayed_.push_back(d);
     } else {
         take_damage(r, frame);
@@ -2924,6 +2925,7 @@ void CombatSystem::process_hit(Projectile& p, Unit& v, float t, uint32_t frame, 
     r.kind = p.kind;
     r.source = p.shooter;
     r.source_is_projectile = true;
+    r.projectile_target = p.target;  // s78n t12
     r.projectile_desc = static_cast<int32_t>(p.desc);
     r.hardpoint = hp;
     r.has_impact = true;
@@ -3154,6 +3156,7 @@ void CombatSystem::area_damage(const Projectile& p, Vec3 center, ObjectId direct
             r.kind = p.kind;
             r.source = p.shooter;
             r.source_is_projectile = true;
+            r.projectile_target = p.target;  // s78n t12: a splash victim is cleared only when it was the target
             r.projectile_desc = static_cast<int32_t>(p.desc);
             if (v->hp_count == 0) {
                 r.amount = amount;
@@ -3432,9 +3435,36 @@ void CombatSystem::hardpoint_damage(Unit& v, Hardpoint& h, float x, ObjectId sou
     }
 }
 
+bool CombatSystem::damage_gates(Unit& v, const DamageRequest& r, uint32_t frame) {
+    // s78n t12 (HERO_CLASH §8.4.1, Take_Damage 0x3a9e30 in code order). Steps 5 - 7 stop the hit before any clear:
+    // 5. 0x3aa1be the +0x37d invulnerability (kinds other than 0 / 13; OI abilities: INVULNERABLE 0x4b is invuln_end);
+    // 6. 0x3aa1db Immune_To_Damage; 7. 0x3aa1e8 a garrisoned / hidden victim (+0x3a7) - it takes no damage of any kind.
+    const uint8_t k = r.kind;
+    if ((v.flags & kUnitInvulnerable) && k != kKindDebug && k != kKindVehicleThief) return false;
+    if (v.invuln_end > frame && k != kKindDebug && k != kKindVehicleThief) return false;
+    if (desc_of(v).immune_to_damage) return false;
+    if (v.flags & kUnitGarrisoned) return false;
+    // 8. 0x3aa20e the victim's incognito bit (+0x3a1 & 0x10) goes when a source is given and that source is not a
+    // projectile, or is a projectile whose target is this victim (a splash or stray hit keeps it; the projectile's own
+    // target loses it even when the shooter is gone). No weapon / targeting test on the source.
+    if ((v.flags & kUnitIncognito) && (r.source_is_projectile ? r.projectile_target == v.id : r.source != kNoObject))
+        v.flags &= ~kUnitIncognito;
+    return true;
+}
+
 DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t frame, int depth) {
     DamageResult out;
     Unit* vp = unit(r.victim);
+    if (vp && (vp->flags & kUnitDead)) {
+        // s78n t12 (HERO_CLASH §8.4.1): retail has no live test before step 15, so a hit on a dead victim that is still
+        // in the table runs the gates and both incognito clears. [port] nothing else of the call runs for it (no
+        // redirect, no multiplier, no damage).
+        if (damage_gates(*vp, r, frame)) {
+            Unit* s = unit(r.source);
+            if (s && (r.source_is_projectile || (s->flags & kUnitIncognito))) s->flags &= ~kUnitIncognito;
+        }
+        return out;
+    }
     if (!live(vp)) return out;
     Unit& v = *vp;
     const UnitDesc& vd = desc_of(v);
@@ -3488,27 +3518,21 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
             }
         }
     }
-    // 3. gates [M]
+    // 3. gates and the incognito clears. s78n t12 (HERO_CLASH §8.4.1, retail order): steps 5 - 7 (the invulnerability,
+    // Immune_To_Damage and garrisoned gates: no clear, no damage) and step 8 (the victim's clear) are damage_gates.
     const uint8_t k = r.kind;
-    if ((v.flags & kUnitInvulnerable) && k != kKindDebug && k != kKindVehicleThief) return out;
-    if (v.invuln_end > frame && k != kKindDebug && k != kKindVehicleThief) return out;  // OI abilities: INVULNERABLE 0x4b
-    if (vd.immune_to_damage) return out;
-    if (!cfg_.damage_enabled && k != kKindDebug && k != 8 && k != kKindVehicleThief) return out;
-    out.applied = true;
-    const Unit* src = unit(r.source);  // a dead-this-tick source still counts until the flush [M]
+    if (!damage_gates(v, r, frame)) return out;
     float x = r.amount;
-    x = x * mult(v, ModKind::TakeDamage);  // 4
-    if (src && (r.source_is_projectile || (src->flags & (kUnitSkipTargeting | kUnitIncognito))))
-        x = x * mult(*src, ModKind::CauseDamage);  // 5
-    // s78n t05 (HERO_CLASH §8.2, Take_Damage 0x3a9e30): the incognito flag (+0x3a1 & 0x10) goes on dealing or taking
-    // damage - on the victim when a source is given that has no targeting (not a combat unit, a projectile, or no weapon)
-    // or is targeting this victim; on a projectile's shooter, and on a non-projectile source that has it (after its
-    // CAUSE_DAMAGE above). [port] cleared here, after the gates (a refused hit clears nothing); the retail order inside
-    // Take_Damage is not read.
-    if (r.source != kNoObject && (v.flags & kUnitIncognito)) {
-        if (!src || r.source_is_projectile || !unit_can_attack(*src) || current_target(src->id) == v.id) v.flags &= ~kUnitIncognito;
+    x = x * mult(v, ModKind::TakeDamage);  // 4 (retail step 9)
+    // 5 (retail step 10), the source: a projectile's shooter when it resolves (a dead-this-tick shooter still counts
+    // until the flush [M]) loses its incognito bit and its CAUSE_DAMAGE applies whether or not it had the bit; a
+    // non-projectile source only when it has the bit - cleared, then CAUSE_DAMAGE. The victim's clear ran first, so a
+    // self hit (source == victim, not a projectile) gets no CAUSE_DAMAGE. kUnitSkipTargeting is not read here any more.
+    Unit* const src = unit(r.source);
+    if (src && (r.source_is_projectile || (src->flags & kUnitIncognito))) {
+        src->flags &= ~kUnitIncognito;
+        x = x * mult(*src, ModKind::CauseDamage);
     }
-    if (src && (src->flags & kUnitIncognito)) unit(r.source)->flags &= ~kUnitIncognito;
     if (v.flags & kUnitInBaseShield) x = x * cfg_.base_shield_vulnerability;  // 6
     if (k == kKindNormal && !r.no_diminishing) {  // 7 diminishing firepower (ALLOW_TARGET_DIMINISHING_FIREPOWER, default true)
         bool allow = true;
@@ -3521,6 +3545,9 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
     }
     if (v.flags & kUnitUnderConstruction) x = x * cfg_.under_construction_damage_multiplier;  // 8
     if (v.flags & kUnitRetreating) x = x * player(v.owner).retreat_damage_mod;               // 9 (cu8 t03: per faction)
+    // s78n t12 (retail step 12, 0x3aa3a8): the damage-enabled gate comes after the clears and the multipliers.
+    if (!cfg_.damage_enabled && k != kKindDebug && k != 8 && k != kKindVehicleThief) return out;
+    out.applied = true;
     // 10 hardpoint name = r.hardpoint
     int32_t hp_index = r.hardpoint;
     // 11 lucky shot (S9 hook): consumed on the hit, x its CAUSE_DAMAGE multiplier; a hull hit moves
@@ -4123,6 +4150,7 @@ void CombatSystem::saber_step(uint32_t i, uint32_t frame, SimRng& rng) {
             r.kind = pc.kind;
             r.source = pc.shooter;
             r.source_is_projectile = true;
+            r.projectile_target = pc.target;  // s78n t12
             r.projectile_desc = static_cast<int32_t>(pc.desc);
             apply_or_queue(r, 0.0f, frame);
         }
@@ -4386,6 +4414,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
             r.kind = d.kind;
             r.source = d.source;
             r.source_is_projectile = d.source_is_projectile != 0;
+            r.projectile_target = d.projectile_target;  // s78n t12
             r.projectile_desc = d.projectile_desc;
             r.hardpoint = d.hardpoint;
             take_damage(r, frame);
@@ -5412,6 +5441,7 @@ void CombatSystem::hash_delayed(StateHasher& h) const {
         h.i32(d.source);
         h.i32(d.projectile_desc);
         h.i32(d.hardpoint);
+        h.i32(d.projectile_target);  // s78n t12
     }
 }
 

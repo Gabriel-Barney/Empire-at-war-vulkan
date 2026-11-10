@@ -761,7 +761,10 @@ enum UnitFlag : uint32_t {
     kUnitUnderConstruction = 1u << 4,
     kUnitRetreating = 1u << 5,
     kUnitInBaseShield = 1u << 6,
-    kUnitSkipTargeting = 1u << 7,      // +0x3a1 bit 0x10 (candidate skip; CAUSE multiplier for non-projectile sources)
+    // [port] the untargetable marker of the port's dummy targets (never a scan candidate, skipped by the port-only
+    // victim filters). s78n t12: no longer the +0x3a1 & 0x10 stand-in - Blast sets kUnitIncognito, and Take_Damage's
+    // CAUSE_DAMAGE rule reads only that bit.
+    kUnitSkipTargeting = 1u << 7,
     kUnitGarrisoned = 1u << 8,
     kUnitConverted = 1u << 9,          // obj +0x3a2 bit 4: converted-unit decay (4.10)
     kUnitLocomotorBusy = 1u << 10,     // locomotor vfunc +0x2b0 (hyperspace jump ...): no ion stun
@@ -814,11 +817,13 @@ enum UnitFlag : uint32_t {
     // thief. Set by the boarding (host), never cleared (owner changes keep it). Read by the Bribe accept (step 6, on T)
     // and the convert-projectile victim test (0x395c10 step 2). Saved and hashed with the other flags.
     kUnitStolenVehicle = 1u << 22,
-    // s78n t05 (HERO_CLASH §8.2): obj +0x3a1 & 0x10 "incognito" as the vehicle-thief boarding sets it - not a candidate of
-    // the target scans (§2.3 item 1, the hardpoint pick 0x385190), no auto-acquire of its own (targeting services, the
-    // hardpoint auto-scan 0x387400), CAUSE_DAMAGE for a non-projectile source (§3.6 step 5); cleared by Take_Damage
-    // (take_damage_inner) and by MaximumFirepower's end 0x707390. [port] a bit of its own: kUnitSkipTargeting keeps the
-    // port's dummy-target marker and Blast's charge (no Take_Damage clear) unchanged. Saved and hashed.
+    // s78n t05 / t12 (HERO_CLASH §8.2, §8.4): obj +0x3a1 & 0x10 "incognito", set by the vehicle-thief boarding (on the
+    // boarded vehicle) and by the Blast ability's apply (on the user) - not a candidate of the target scans (§2.3 item
+    // 1, the hardpoint pick 0x385190), no auto-acquire of its own (targeting services, the hardpoint auto-scan
+    // 0x387400), CAUSE_DAMAGE for a non-projectile source (§3.6 step 5). Cleared only by Take_Damage (take_damage_inner,
+    // §8.4.1: on the victim for a non-projectile source or a projectile aimed at it; on a projectile's shooter; on a
+    // non-projectile source that has it) and by MaximumFirepower's end 0x707390. [port] a bit of its own beside
+    // kUnitSkipTargeting (the port's dummy-target marker). Saved and hashed.
     kUnitIncognito = 1u << 23,
     // s78n t06 (HERO_CLASH §3.1 / §5): obj +0x3b4 "in a hero clash", set on the two duelling hero objects (not their team
     // containers) by the host's HeroClashManager and cleared at the release. While set: the unit's TARGETING is suspended
@@ -864,6 +869,10 @@ struct DamageRequest {
     uint8_t kind = kKindNormal;
     ObjectId source = kNoObject;
     bool source_is_projectile = false;
+    // s78n t12 (HERO_CLASH §8.4.1 step 8): the target (projectile pack +8) of the projectile that deals this damage,
+    // kNoObject when it has none. Only a projectile aimed at the victim clears the victim's incognito bit (splash and
+    // stray hits keep it). Read only with source_is_projectile.
+    ObjectId projectile_target = kNoObject;
     int32_t projectile_desc = -1;
     int32_t hardpoint = -1;  // index within the victim's hardpoints (the "hardpoint name")
     bool no_team = false;
@@ -1703,6 +1712,7 @@ private:
         ObjectId source;
         int32_t projectile_desc;
         int32_t hardpoint;
+        ObjectId projectile_target;  // s78n t12 (combat save 15)
     };
     // mesh_hp (refixf t07): the hardpoint the struck mesh names (§2.9 Q1 step 4), -1 none (hull), kMeshUnknown when
     // the hit came without a precise test (the mesh_hardpoint stand-in decides).
@@ -1895,6 +1905,10 @@ private:
     bool ion_stun_unit(Unit& v, uint32_t pdesc, uint32_t frame);
     void apply_or_queue(const DamageRequest& r, float delay_secs, uint32_t frame);
     DamageResult take_damage_inner(const DamageRequest& r, uint32_t frame, int depth);
+    // s78n t12 (HERO_CLASH §8.4.1 steps 5 - 8): the gates in front of the incognito clears - +0x37d invulnerable (kinds
+    // other than 0 / 13), Immune_To_Damage, a garrisoned victim - then the victim's clear. False: the hit stops here
+    // (nothing cleared, no damage).
+    bool damage_gates(Unit& v, const DamageRequest& r, uint32_t frame);
     void hull_damage(Unit& v, float x, ObjectId source, DamageResult& out, uint32_t frame, uint8_t kind,
                      int32_t sub_key = -1);
     void hardpoint_damage(Unit& v, Hardpoint& h, float x, ObjectId source, DamageResult& out, uint32_t frame,

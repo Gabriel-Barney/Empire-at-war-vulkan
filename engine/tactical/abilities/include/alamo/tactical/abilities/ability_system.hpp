@@ -149,7 +149,10 @@ enum class SpawnPurpose : uint8_t {
     Mine,           // Proximity_Mines Mine_Type: bind_spawn() makes it a mine (trigger radius, arm frame)
     Wingman,        // REPLENISH_WINGMEN member of `container`
     Troopers,       // DEPLOY_TROOPERS member i of Spawned_Object_Type at Owner_Attachment_Bone i (REMAINING_GAPS §5.2)
-    CaptureVariant, // Vehicle_Thief: the victim's capture variant, owner = the victim's owner (the thief boards it)
+    // Vehicle_Thief: the victim's capture variant, owner = the victim's owner. s78n t12 (HERO_CLASH §8.4.3): the host
+    // kills the victim after a successful spawn and boards the thief into the variant; without a variant type the
+    // thief boards the victim itself (no spawn, no kill).
+    CaptureVariant,
     Summon,         // Summon / Spawn / Buzz_Droids / Radioactive Object_Type after its delay
     BarrageTarget,  // BARRAGE Dummy_Barrage_Target owned by the shooter's first enemy (the host issues the attack)
     // Starbase_Upgrade_Ability service (0x70ec20 -> Do_Starbase_Upgrade 0x70f070, STATION_HANGARS_SOUND.md §1.2):

@@ -630,7 +630,10 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             sp.counter = frames_of(s.charging_time, fps);
             sp.phase = 0;
             start_recharge(o, kBlast);
-            if (o.combat_unit) combat_->set_flag(o.id, combat::kUnitSkipTargeting, true);  // obj +0x3a1 |= 0x10
+            // s78n t12 (HERO_CLASH §8.4.2): the apply's last step sets +0x3a1 |= 0x10 on the user - the same incognito
+            // bit as the vehicle thief's. Blast never clears it (no remove override, nothing in the update): it goes
+            // only through Take_Damage (§8.4.1) or MaximumFirepower's end.
+            if (o.combat_unit) combat_->set_flag(o.id, combat::kUnitIncognito, true);
             event(AbilityEventKind::EffectOn, kBlast, o.id, kNoObject, frame);
             return true;
         }
@@ -700,8 +703,10 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             const float d = combat::distance_xy(me, combat_->position(target)) - r;
             if (d < s.min_range || d > s.max_range) return false;
             if (!chance_roll_lt(s.activation_chance)) return false;
-            // the victim's capture variant (+0xda8; the host resolves it), at the victim with its owner (one id); the
-            // victim is removed [port: dies without a death clone]; VEHICLE_THIEF boards the thief, CAPTURE_VEHICLE on.
+            // the victim's capture variant (+0xda8; the host resolves it), at the victim with its owner (one id).
+            // s78n t12 (HERO_CLASH §8.4.3): the victim is not killed here - the host spawns the variant, kills the
+            // victim only when that spawn succeeded (without a death clone) and boards the thief; a victim type
+            // without a variant is boarded itself. CAPTURE_VEHICLE on in every case.
             SpawnRequest q;
             q.purpose = SpawnPurpose::CaptureVariant;
             q.position = combat_->position(target);
@@ -711,7 +716,6 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             q.target = target;
             q.ability_type = kCaptureVehicle;
             request_spawn(q);
-            combat_->kill_unit(target, o.id, combat::kKindNoDeathClone, frame);
             if (has(o, kCaptureVehicle)) set_active(o, kCaptureVehicle, true, frame, kNoObject);
             event(AbilityEventKind::EffectOn, kCaptureVehicle, o.id, target, frame);
             return true;
@@ -1305,7 +1309,6 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                 // shot counting up to 0 (fire_gate / fire_done).
                 sp.phase = 1;
                 sp.counter = o.combat_unit ? -static_cast<int32_t>(combat_->live_hardpoints(o.id, HardpointKind::WeaponSpecial)) : 0;
-                if (o.combat_unit) combat_->set_flag(o.id, combat::kUnitSkipTargeting, false);  // [port] +0x3a1 cleared here
                 event(AbilityEventKind::EffectOn, kBlast, o.id, kNoObject, frame);
                 if (sp.counter == 0) remove_special(o, sp, frame);  // no special hard point: normal fire resumes at once
             }
@@ -1477,9 +1480,6 @@ void AbilitySystem::class_remove(Obj& o, SpecialState& sp, uint32_t frame) {
             break;
         case C::ForceCloak:
             if (o.stealthed) break_stealth(o, frame);
-            break;
-        case C::Blast:
-            if (o.combat_unit && combat_->has_unit(o.id)) combat_->set_flag(o.id, combat::kUnitSkipTargeting, false);
             break;
         case C::GrenadeAttack:  // vf4 0x700d00: targeting / locomotor re-enabled, unlock (A1_READINGS §28.9)
             lock_pair(o, kLockGrenade, false, frame);
