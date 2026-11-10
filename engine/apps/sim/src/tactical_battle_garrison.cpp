@@ -276,6 +276,7 @@ void TacticalBattle::s4_leave(TacticalMode& mode, objects::ObjectId unit, Vec3 a
         md.pos = {at.x, at.y};
         md.z = at.z;
         md.yaw_deg = 0.0f;
+        mv_type_extents(md, u->type);  // s78n t20
         movement_->add_unit(md);
         s4_rejoin_squad(mode, *u, at);
         // s78n t18 (MOVEMENT §5.3 "Garrison host id"): the host id lasts until the unit's next order - standing beside its
@@ -632,7 +633,10 @@ cmd::RejectReason TacticalBattle::order_garrison(TacticalMode& mode, uint8_t pla
     clear_queues(ids);
     raise_order_replaced(ids);  // S7 t31: garrison enter (A1_READINGS §33.3 [M: raised at the order])
     const Vec3 a = garrison_.approach_point(holder, store.position(hh), store.facing(hh));
-    exec_move(mode, ids, a.x, a.y, rng, mv::kNoFacing, false);  // group move to the approach point (cancels older ones)
+    // group move to the approach point (cancels older ones). s78n t20 [port]: without the destination check - the port's
+    // approach still needs every unit to reach the approach point itself (retail's approach with its corrective move,
+    // FIGHTER_FLYING §7.4, is not ported yet; with it the move becomes an ordinary checked one)
+    exec_move(mode, ids, a.x, a.y, rng, mv::kNoFacing, false, 0, false, objects::kNoObjectId, true);
     uint32_t n = 0;
     std::vector<objects::ObjectId> squads;  // s78n t18: a squad reserves once (one hold per squad, not per member)
     for (const objects::ObjectId id : ids)

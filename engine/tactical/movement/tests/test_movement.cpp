@@ -894,21 +894,7 @@ static void test_collision_helpers() {
         s2.pos = {25.0f, 0.0f};
         CHECK(!foot_moving_contact(s1, s2, 45));
     }
-    // Dynamic local pathfinder around a blocker on the straight line.
-    PassabilityGrid g;
-    g.init(64, 64);
-    MovementConstants k;
-    std::vector<DynamicObstacle> obs{{{400.0f, 400.0f}, 30.0f}};
-    std::vector<V2> out;
-    uint32_t cx = 0;
-    CHECK(dynamic_repath(g, {200.0f, 400.0f}, {600.0f, 400.0f}, kPassClear, 10.0f, false, obs, k, out, cx));
-    bool avoids = true;
-    for (size_t i = 1; i < out.size(); ++i) {
-        const V2 a = out[i - 1], b = out[i];
-        for (float s = 0.0f; s <= 1.0f; s += 0.02f)
-            if (distance(lerp(a, b, s), obs[0].pos) < 30.0f) avoids = false;
-    }
-    CHECK(avoids && out.front() == (V2{200.0f, 400.0f}) && out.back() == (V2{600.0f, 400.0f}) && cx == 6);
+    // (the dynamic local pathfinder: test_path_around)
     // Crush victims.
     const std::vector<Box2> crushers{{{0, 0}, {10, 10}}};
     const std::vector<Box2> victims{{{20, 20}, {30, 30}}, {{5, 5}, {6, 6}}, {{9, -5}, {12, 0}}};
@@ -926,6 +912,7 @@ static void test_collision_layer() {
         CHECK(L.add(CollisionKind::MovingVsMoving, 7, 3, 1) == UINT32_MAX && L.list().size() == 1);
     }
     const auto keep_all = [](CollisionObject&) { return true; };
+    const auto all_quota = [](const CollisionObject&) { return true; };  // every record takes the quota pass
     const auto full_budget = [] { return true; };
     const auto no_resolve = [](CollisionObject&, bool) {};
     // Priority order: ascending crowd - age, ties in insertion order -> older and less crowded first.
@@ -937,7 +924,7 @@ static void test_collision_layer() {
         L.add(CollisionKind::MovingVsMoving, 3, 4, 0);    // seq 1: crowd 20, created 0
         L.add(CollisionKind::MovingVsStopped, 5, 6, 0);   // seq 2: crowd 10, created 0
         L.add(CollisionKind::StoppedVsStopped, 7, 8, 0);  // seq 3: crowd 10, created 0 (ties with seq 2)
-        L.run(10, keep_all, count, full_budget, no_resolve);
+        L.run(10, keep_all, all_quota, count, full_budget, no_resolve);
         std::vector<uint32_t> order;
         for (const CollisionLayer::Step& s : L.last_order()) order.push_back(s.seq);
         // priorities: seq0 10-5 = 5, seq1 20-10 = 10, seq2 10-10 = 0, seq3 0
@@ -959,7 +946,7 @@ static void test_collision_layer() {
         bool ok = true;
         for (uint32_t f = 100; f <= 161; ++f) {
             objects = 2 + (f - 100);  // the box keeps filling up; only a refresh sees it
-            L.run(f, keep_all, count, full_budget, no_resolve);
+            L.run(f, keep_all, all_quota, count, full_budget, no_resolve);
             const CollisionObject& c = L.list()[0];
             const uint32_t last_refresh = 100 + ((f - 100) / 30) * 30;
             ok = ok && c.crowd == static_cast<float>(5 * (2 + (last_refresh - 100))) && c.crowd_frame == last_refresh + 30 &&
@@ -981,7 +968,7 @@ static void test_collision_layer() {
         const auto resolve = [](CollisionObject& c, bool) {
             if (c.seq == 3) c.state = CollisionState::Resolved;
         };
-        L.run(4, keep, count, full_budget, resolve);
+        L.run(4, keep, all_quota, count, full_budget, resolve);
         CHECK((kept_calls == std::vector<uint32_t>{0, 1, 2, 3}));  // keep tests run in list order
         CHECK(L.last_cancelled() == 1 && L.last_resolved() == 1 && L.list().size() == 2);
         CHECK(L.list()[0].seq == 0 && L.list()[1].seq == 2);
@@ -1002,12 +989,38 @@ static void test_collision_layer() {
         };
         // seq i created at frame 10 - 2i: the higher seqs are older, so the priority order is 4, 3, 2, 1, 0.
         for (uint32_t i = 0; i < 5; ++i) L.add(CollisionKind::MovingVsStopped, static_cast<ObjectId>(i), 100, 10 - 2 * i);
-        L.run(20, keep_all, [](const CollisionObject&) { return 2u; }, budget, resolve);
+        L.run(20, keep_all, all_quota, [](const CollisionObject&) { return 2u; }, budget, resolve);
         CHECK((seen == std::vector<std::pair<uint32_t, bool>>{{4, true}, {3, true}, {2, true}, {1, false}, {0, false}}));
         bool same = L.last_order().size() == seen.size();
         for (size_t i = 0; same && i < seen.size(); ++i)
             same = L.last_order()[i].seq == seen[i].first && L.last_order()[i].full == seen[i].second;
         CHECK(same);
+    }
+    // s78n t20 (MOVEMENT 5.4.1 "Per-frame driver"): the records that do not take the quota pass (vf +0x50 false: a decided
+    // MovingVsMoving, every StoppedVsStopped) are serviced first, in creation order and whatever their priority, each with
+    // `full`; the others follow in priority order under the budget. The crowd / priority of a pass-1 record is not touched.
+    {
+        CollisionLayer L;
+        L.add(CollisionKind::MovingVsStopped, 1, 2, 0);    // seq 0: undecided, old (priority 10 - 50)
+        L.add(CollisionKind::MovingVsMoving, 3, 4, 49);    // seq 1: decided below, young
+        L.add(CollisionKind::MovingVsStopped, 5, 6, 40);   // seq 2
+        L.add(CollisionKind::StoppedVsStopped, 7, 8, 50);  // seq 3: never in the quota pass
+        L.add(CollisionKind::MovingVsMoving, 9, 10, 45);   // seq 4: undecided -> quota pass
+        const auto quota = [](const CollisionObject& c) {
+            return c.kind == CollisionKind::MovingVsStopped || (c.kind == CollisionKind::MovingVsMoving && c.state == CollisionState::Active);
+        };
+        L.run(49, keep_all, quota, [](const CollisionObject&) { return 2u; }, full_budget, [](CollisionObject& c, bool) {
+            if (c.seq == 1) c.state = CollisionState::SpeedSlave;  // the MovingVsMoving record is decided
+        });
+        uint32_t budget_calls = 0;
+        std::vector<std::pair<uint32_t, bool>> seen;
+        L.run(50, keep_all, quota, [](const CollisionObject&) { return 2u; }, [&] { return ++budget_calls <= 1; },
+              [&](CollisionObject& c, bool full) { seen.push_back({c.seq, full}); });
+        // pass 1: seq 1 (decided MvM), seq 3 (SvS), creation order, full; pass 2 by priority: seq 0 (10 - 50), seq 2 (10 -
+        // 10), seq 4 (10 - 5); the budget lets only the first decide
+        CHECK((seen == std::vector<std::pair<uint32_t, bool>>{{1, true}, {3, true}, {0, true}, {2, false}, {4, false}}));
+        CHECK(budget_calls == 3);  // asked only for the quota pass
+        CHECK(L.list()[3].crowd == 0.0f && L.list()[3].crowd_frame == 50);  // the SvS record: no crowd refresh, no priority
     }
     // Hash: covers the state.
     {
@@ -1018,13 +1031,362 @@ static void test_collision_layer() {
         L1.hash(h1);
         L2.hash(h2);
         CHECK(h1.digest() == h2.digest());
-        L2.run(1, keep_all, [](const CollisionObject&) { return 2u; }, full_budget, [](CollisionObject& c, bool) {
+        L2.run(1, keep_all, all_quota, [](const CollisionObject&) { return 2u; }, full_budget, [](CollisionObject& c, bool) {
             c.state = CollisionState::TryAgainLater;
             c.retry = 5;
         });
         StateHasher h3;
         L2.hash(h3);
         CHECK(h1.digest() != h3.digest());
+    }
+}
+
+// s78n t20 (MOVEMENT 1.5.1, 5.4.2, 5.4.3; path_around.hpp): the relation code, the swept box, the ring search and its
+// occupancy test, the rejoin candidates and the dynamic pathfinder's visibility-graph search.
+static void test_path_around() {
+    // ---- relation code 0x679750(p0, p1)
+    {
+        RelationInput in;
+        in.h0 = {1.0f, 0.0f};
+        in.h1 = {1.0f, 0.0f};
+        in.v0 = 1.0f;
+        in.v1 = 2.0f;
+        in.rel = {50.0f, 0.0f};
+        in.hw1 = 6.0f;
+        CHECK(relation_code(in) == kRelStanding);  // p0 does not move
+        in.p0_moving = true;
+        in.p0_cap = 0.0f;
+        CHECK(relation_code(in) == kRelHeld);  // held at speed 0 by its records
+        in.p0_cap = 3.0e38f;
+        CHECK(relation_code(in) == kRelSameWaySlower);  // within 60 degrees, p0 slower
+        in.v0 = 2.0f;
+        CHECK(relation_code(in) == kRelSameWay);        // not slower (equal counts)
+        in.h1 = dir_from_deg(59.0f);
+        CHECK(relation_code(in) == kRelSameWay);
+        in.h1 = dir_from_deg(61.0f);
+        CHECK(relation_code(in) == kRelCrossing);  // past 60 degrees with p1 ahead: crossing
+        in.h1 = dir_from_deg(119.0f);
+        CHECK(relation_code(in) == kRelCrossing);
+        in.h1 = dir_from_deg(121.0f);
+        CHECK(relation_code(in) == kRelHeadOn);  // within 60 degrees of opposed
+        in.rel = {5.9f, 40.0f};  // p1 less than its half width ahead of p0 along h0
+        CHECK(relation_code(in) == kRelSameWay);
+        in.own_record = true;  // ... unless the pair's own record is an undecided / detouring MovingVsMoving
+        CHECK(relation_code(in) == kRelHeadOn);
+        in.rel = {6.0f, 40.0f};
+        in.own_record = false;
+        CHECK(relation_code(in) == kRelHeadOn);
+    }
+    // ---- swept box 0x677650
+    {
+        SweptInput in;
+        in.pos = {500.0f, 400.0f};
+        in.hx = 10.0f;
+        in.hy = 6.0f;
+        FootRect r = swept_box(in);
+        CHECK(r.c == in.pos && r.hx == 11.0f && r.hy == 7.0f && r.a == (V2{1.0f, 0.0f}));
+        in.turning = true;
+        in.wanted = {0.0f, 1.0f};
+        r = swept_box(in);
+        CHECK(r.hx == 11.0f && r.hy == 11.0f && r.a == (V2{0.0f, 1.0f}));  // a square of the larger extent + 1
+        in.turning = false;
+        const std::vector<V2> straight{{500.0f, 400.0f}, {600.0f, 400.0f}};
+        in.poly = straight;
+        in.sweep = 30.0f;
+        r = swept_box(in);
+        // rear centre = 1 + hx behind its position, front centre = chord + hx + 1 ahead (MOVEMENT 5.4.6 "Pass hold lines")
+        CHECK(std::fabs(r.c.x - r.hx - (500.0f - 11.0f)) < 1e-3f && std::fabs(r.c.x + r.hx - (500.0f + 30.0f + 11.0f)) < 1e-3f && r.hy == 7.0f);
+        const std::vector<V2> bend{{500.0f, 400.0f}, {510.0f, 400.0f}, {510.0f, 420.0f}};
+        in.poly = bend;
+        r = swept_box(in);  // 10 along +x, 20 along +y: the chord (10, 20); the corner (510, 400) lies 8.94 beside it
+        const float chord = std::sqrt(500.0f);
+        CHECK(std::fabs(r.hx - (11.0f + 0.5f * chord)) < 1e-3f && std::fabs(r.hy - (7.0f + 200.0f / chord)) < 1e-3f);
+        CHECK(std::fabs(r.a.x - 10.0f / chord) < 1e-4f && std::fabs(r.a.y - 20.0f / chord) < 1e-4f);
+        V2 exit;
+        const FootRect box{{500.0f, 400.0f}, {1.0f, 0.0f}, 11.0f, 7.0f, false};
+        CHECK(ray_leaves_rect(box, {440.0f, 400.0f}, {1.0f, 0.0f}, exit) && std::fabs(exit.x - 511.0f) < 1e-4f && exit.y == 400.0f);
+        CHECK(!ray_leaves_rect(box, {440.0f, 400.0f}, {-1.0f, 0.0f}, exit) && !ray_leaves_rect(box, {440.0f, 420.0f}, {1.0f, 0.0f}, exit));
+        CHECK(segment_crosses_rect(box, {480.0f, 400.0f}, {520.0f, 400.0f}, 0.01f));
+        CHECK(!segment_crosses_rect(box, {489.0f, 393.0f}, {511.0f, 393.0f}, 0.01f));  // along its edge: boundary contact
+        CHECK(!segment_crosses_rect(box, {480.0f, 400.0f}, {488.0f, 400.0f}, 0.01f));
+    }
+    // ---- ring search 0x440f90: rings 0, 1, 2.8, 5.4, 8.8, 13, 18 (step 1, + 0.8 per ring, capped at min(1.5 r, 10)); n =
+    // trunc(2 pi R / r) + 1 samples, at least 4 after ring 0; counter-clockwise from the search direction; a sample past
+    // the cone sits at the outside radius
+    {
+        const float r = std::sqrt(136.0f);  // footprint radius of (10, 6)
+        RingSetup s;
+        s.centre = {100.0f, 100.0f};
+        s.dir = {0.0f, 1.0f};
+        s.r = r;
+        std::vector<std::vector<V2>> rings;
+        V2 out;
+        CHECK(!ring_search(s, [&](V2 p, uint32_t ring) {
+            if (rings.size() <= ring) rings.resize(ring + 1);
+            rings[ring].push_back(p);
+            return false;
+        }, out));
+        CHECK(rings.size() == 20 && rings[0].size() == 1 && rings[0][0] == s.centre);
+        float want = 0.0f, step = 1.0f;
+        bool radii = true, counts = true;
+        for (uint32_t k = 0; k < 20; ++k) {
+            radii = radii && std::fabs(distance(rings[k][0], s.centre) - want) < 1e-3f;
+            const uint32_t n = k == 0 ? 1u : std::max(4u, static_cast<uint32_t>(2.0f * 3.1415927f * want / r) + 1u);
+            counts = counts && rings[k].size() == n;
+            want += step;
+            step = std::min(step + 0.8f, 10.0f);
+        }
+        CHECK(radii && counts);
+        CHECK(std::fabs(distance(rings[5][0], s.centre) - 13.0f) < 1e-3f && std::fabs(distance(rings[6][0], s.centre) - 18.0f) < 1e-3f);
+        // sample 0 lies along the direction (+y), sample 1 counter-clockwise from it (toward -x)
+        CHECK(std::fabs(rings[6][0].x - 100.0f) < 1e-3f && rings[6][0].y > 100.0f && rings[6][1].x < 100.0f);
+        // a cone of 3 pi / 4 with the outside radius 0.75 (StoppedVsStopped, not Infantry)
+        s.cone = 2.3561945f;
+        s.outside = 0.75f;
+        std::vector<V2> ring6;
+        (void)ring_search(s, [&](V2 p, uint32_t ring) {
+            if (ring == 6) ring6.push_back(p);
+            return false;
+        }, out);
+        bool cone = ring6.size() == rings[6].size();
+        for (size_t i = 0; cone && i < ring6.size(); ++i) {
+            const float th = 2.0f * 3.1415927f * static_cast<float>(i) / static_cast<float>(ring6.size());
+            cone = std::fabs(distance(ring6[i], s.centre) - (th <= s.cone ? 18.0f : 0.75f)) < 1e-3f;
+        }
+        CHECK(cone);
+        // Occupancy (MOVEMENT 5.4.3): a record blocks a sample when its centre is within (r_X + margin) + rho of the
+        // sample swept one unit along world +x; rho = 10 seen end-on, 6 seen from the side
+        const FootRect rec{{0.0f, 0.0f}, {1.0f, 0.0f}, 10.0f, 6.0f, false};
+        CHECK(ring_blocked({21.6f, 0.0f}, r, rec) && !ring_blocked({22.7f, 0.0f}, r, rec));  // 11.66 + 10 = 21.66
+        CHECK(ring_blocked({0.0f, 17.6f}, r, rec) && !ring_blocked({0.0f, 17.7f}, r, rec));  // 11.66 + 6 = 17.66
+        CHECK(ring_blocked({-22.6f, 0.0f}, r, rec) && !ring_blocked({-22.7f, 0.0f}, r, rec));  // the +x sweep: 1 wider on that side
+    }
+    // ---- rejoin candidates along the path (0x67ad20 a)
+    {
+        const std::vector<V2> line{{0.0f, 0.0f}, {300.0f, 0.0f}};
+        std::vector<RejoinPoint> pts;
+        const float d = 71.0f + std::sqrt(136.0f);  // 82.66
+        rejoin_on_path(line, 0, {50.0f, 3.0f}, d, 11, pts);
+        CHECK(pts.size() == 11);  // 134.66, 144.66, ... (17 below 300, 11 tried)
+        bool ok = pts.size() == 11;
+        for (size_t i = 0; ok && i < pts.size(); ++i)
+            ok = std::fabs(pts[i].p.x - (50.0f + d + 2.0f + 10.0f * static_cast<float>(i))) < 1e-3f && pts[i].p.y == 0.0f && pts[i].next == 1;
+        CHECK(ok);
+        rejoin_on_path(line, 0, {250.0f, 0.0f}, 30.0f, 11, pts);
+        CHECK(pts.size() == 2 && std::fabs(pts[0].p.x - 282.0f) < 1e-3f && std::fabs(pts[1].p.x - 292.0f) < 1e-3f);  // < the length
+        rejoin_on_path(line, 0, {280.0f, 0.0f}, 30.0f, 11, pts);
+        CHECK(pts.empty());
+        rejoin_on_path(line, 1, {280.0f, 0.0f}, 5.0f, 11, pts);  // on the last waypoint: none
+        CHECK(pts.empty());
+        const std::vector<V2> corner{{0.0f, 0.0f}, {100.0f, 0.0f}, {100.0f, 200.0f}};
+        rejoin_on_path(corner, 0, {50.0f, 0.0f}, 30.0f, 3, pts);  // 82, 92 on the first segment, 102 on the second
+        CHECK(pts.size() == 3 && pts[0].next == 1 && pts[1].next == 1 && pts[2].next == 2);
+        CHECK(std::fabs(pts[2].p.x - 100.0f) < 1e-3f && std::fabs(pts[2].p.y - 2.0f) < 1e-3f);
+        rejoin_on_path(corner, 1, {100.0f, 50.0f}, 30.0f, 2, pts);  // arcs run from the current waypoint
+        CHECK(pts.size() == 2 && pts[0].next == 2 && std::fabs(pts[0].p.y - 82.0f) < 1e-3f);
+    }
+    // ---- window 0x67a0d0
+    {
+        CellBox w = around_window({200.0f, 200.0f}, {600.0f, 200.0f}, 3, false, 100, 100);  // cells (10, 10) -> (30, 10)
+        CHECK(w.x0 == 7 && w.x1 == 33 && w.y0 == 4 && w.y1 == 16);  // 27 x 7: ratio 3.86 -> k = 3 on both y sides
+        w = around_window({200.0f, 200.0f}, {600.0f, 200.0f}, 3, true, 100, 100);  // Giant: + 2
+        CHECK(w.x0 == 5 && w.x1 == 35 && w.y0 == 3 && w.y1 == 17);  // 31 x 11: ratio 2.82 -> k = 2
+        w = around_window({200.0f, 200.0f}, {200.0f, 600.0f}, 3, false, 100, 100);
+        CHECK(w.x0 == 4 && w.x1 == 13 && w.y0 == 7 && w.y1 == 36);  // 7 x 27: k = 3 on x0 and on y1 (as coded)
+        w = around_window({20.0f, 20.0f}, {60.0f, 60.0f}, 3, false, 100, 100);
+        CHECK(w.x0 == 0 && w.y0 == 0 && w.x1 == 6 && w.y1 == 6);  // clamped to the grid
+    }
+    // ---- the search: one standing obstacle (10, 6) on the mover's line
+    MovementConstants k;
+    {
+        PassabilityGrid g;
+        g.init(64, 64);
+        const float r_u = std::sqrt(136.0f);
+        // the rejoin distance of the call: the travel ray leaves the obstacle's swept box (11, 7) at x = 511
+        const V2 start{440.0f, 400.0f}, goal{440.0f + (511.0f - 440.0f) + r_u + 2.0f, 400.0f};
+        CHECK(std::fabs(goal.x - 524.6619f) < 1e-3f);
+        SweptInput si;
+        si.pos = {500.0f, 400.0f};
+        si.hx = 10.0f;
+        si.hy = 6.0f;
+        const std::vector<AroundObstacle> obs{{77, swept_box(si), 10.0f, false}};
+        AroundRequest q;
+        q.start = start;
+        q.goal = goal;
+        q.grow = 6.0f + 0.5f;     // the mover's half width + 0.5: rect1 half extents (17.5, 13.5)
+        q.tracker = 6.0f + 0.5f;  // min(10, 6) + 0.5
+        q.mover_hx = 10.0f;
+        q.obstacles = obs;
+        AroundResult res;
+        CHECK(around_search(g, k, q, res));
+        CHECK(res.vertices == 6 && res.complexity == 6 && !res.crossing && res.window.size() == 1);
+        // around the -b side: the two side routes tie and the heap rules take the one expanded first
+        CHECK(res.points.size() == 4 && res.points[0] == start && res.points[3] == goal);
+        if (res.points.size() == 4) {
+            CHECK(res.points[1] == (V2{482.5f, 386.5f}) && res.points[2] == (V2{517.5f, 386.5f}));
+            const float want = std::sqrt(42.5f * 42.5f + 13.5f * 13.5f) + 35.0f +
+                               std::sqrt((goal.x - 517.5f) * (goal.x - 517.5f) + 13.5f * 13.5f);
+            CHECK(std::fabs(res.cost - want) < 1e-3f && std::fabs(want - 94.87f) < 0.01f);
+        }
+        // the front corner (+a -b) carries the obstacle's id and hold line: corner - (hx_o + hx_u) a, direction a
+        CHECK(res.tags.size() == 1);
+        if (res.tags.size() == 1)
+            CHECK(res.tags[0].index == 2 && res.tags[0].obstacle == 77 && res.tags[0].pt == (V2{497.5f, 386.5f}) && res.tags[0].dir == (V2{1.0f, 0.0f}));
+        // no obstacle: start and goal see each other
+        q.obstacles = {};
+        CHECK(around_search(g, k, q, res) && res.points.size() == 2 && res.vertices == 2 && res.complexity == 2);
+        // a goal inside the obstacle's grown rectangle: refused (the caller moves on to the next candidate)
+        q.obstacles = obs;
+        q.goal = {515.0f, 400.0f};
+        CHECK(!around_search(g, k, q, res));
+        // a start inside it: the search starts at the nearest corner; the output begins with the real start and the foot
+        // of the start on the first segment
+        q.start = {484.0f, 388.0f};
+        q.goal = goal;
+        CHECK(around_search(g, k, q, res));
+        CHECK(res.points.size() >= 3 && res.points.front() == q.start && res.points.back() == goal);
+        if (res.points.size() >= 3) CHECK(std::fabs(res.points[1].x - 484.0f) < 1e-3f && std::fabs(res.points[1].y - 386.5f) < 1e-3f);
+    }
+    // ---- pass 2: a wall with a gap that a standing obstacle's grown rectangle covers - no way around it, so the second
+    // pass crosses it at x DynamicObstacleOverlapPenalty on the crossing segment only
+    {
+        PassabilityGrid g;
+        g.init(64, 64);
+        std::vector<uint32_t> cells(64 * 64, kPassClear);
+        for (int y = 0; y < 64; ++y)
+            if (y < 19 || y > 21) cells[static_cast<size_t>(y) * 64 + 25] = kPassImpassable;  // x = 500, gap y 370 .. 430
+        g.set_base(cells);
+        SweptInput si;
+        si.pos = {500.0f, 400.0f};
+        si.hx = 10.0f;
+        si.hy = 26.0f;  // rect1 (17.5, 33.5): wider than the gap
+        const std::vector<AroundObstacle> obs{{5, swept_box(si), 10.0f, false}};
+        AroundRequest q;
+        q.start = {440.0f, 400.0f};
+        q.goal = {560.0f, 400.0f};
+        q.grow = 6.5f;
+        q.tracker = 6.5f;
+        q.obstacles = obs;
+        AroundResult res;
+        CHECK(around_search(g, k, q, res));
+        CHECK(res.crossing && res.complexity == 2 * res.vertices && res.vertices >= 6);
+        const FootRect rect1 = rect_grown(obs[0].shape, q.grow);
+        uint32_t crossing = 0;
+        float want = 0.0f;
+        for (size_t i = 1; i < res.points.size(); ++i) {
+            const bool x = segment_crosses_rect(rect1, res.points[i - 1], res.points[i], 0.01f);
+            crossing += x ? 1u : 0u;
+            want += distance(res.points[i - 1], res.points[i]) * (x ? k.dynamic_obstacle_overlap_penalty : 1.0f);
+        }
+        CHECK(crossing == 1 && std::fabs(res.cost - want) < 1e-2f);
+        // cheaper than crossing in one straight segment (15 x 120): only the stretch across the rectangle is paid for
+        CHECK(res.cost < 15.0f * 120.0f && res.points.size() == 4);
+        std::printf("path around: pass 2 through a covered gap - %zu points, cost %.2f, %u vertices\n", res.points.size(),
+                    static_cast<double>(res.cost), res.vertices);
+    }
+    // ---- a goal walled in: five windows without a feasible flood fill
+    {
+        PassabilityGrid g;
+        g.init(64, 64);
+        std::vector<uint32_t> cells(64 * 64, kPassClear);
+        for (int y = 17; y <= 23; ++y)
+            for (int x = 27; x <= 33; ++x)
+                if (x == 27 || x == 33 || y == 17 || y == 23) cells[static_cast<size_t>(y) * 64 + static_cast<size_t>(x)] = kPassImpassable;
+        g.set_base(cells);
+        AroundRequest q;
+        q.start = {440.0f, 400.0f};
+        q.goal = {600.0f, 400.0f};  // cell (30, 20), inside the ring of walls
+        AroundResult res;
+        CHECK(!around_search(g, k, q, res) && res.complexity == 0 && res.points.empty());
+    }
+}
+
+// s78n t20 (MOVEMENT 4.3.1 item 4, 0x43d6a0): the try offsets of one formation's destination check, against the spec's own
+// procedure - t = 0 at first; tries with k mod 8 < 4 use t and then t += 7; tries 4 .. 7 use t - 28 plus min(HX + S, HY + S)
+// on the four world axes; the order's first formation, until impassable ground was met, halves the v term and gives it
+// the factor +1 (even k) / -0.75 (odd k).
+static void test_destination_offsets() {
+    const V2 v{-1.0f, 0.0f};  // one formation: back along the final direction +x
+    const float m = 20.0f;
+    const V2 axes[4] = {{1.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 0.0f}, {0.0f, -1.0f}};
+    for (int mode = 0; mode < 2; ++mode) {
+        const bool first = mode == 0;
+        float t = 0.0f;
+        bool ok = true;
+        for (uint32_t k = 0; k < 40; ++k) {
+            const float half = first ? 0.5f * ((k % 2u) == 0u ? 1.0f : -0.75f) : 1.0f;
+            V2 want;
+            if (k % 8u < 4u) {
+                want = v * (t * half);
+                t += 7.0f;
+            } else {
+                want = v * ((t - 28.0f) * half) + axes[k % 8u - 4u] * m;
+            }
+            const V2 got = destination_try_offset(k, first, v, m);
+            ok = ok && std::fabs(got.x - want.x) < 1e-4f && std::fabs(got.y - want.y) < 1e-4f;
+        }
+        CHECK(ok);
+    }
+    // the list of the spec: 0, 2.625 beyond, 7 short, 7.875 beyond, four sideways, 14 short, 13.125 beyond, 21 short,
+    // 18.375 beyond (v points back, so "short" is +v and "beyond" is -v)
+    const float along[12] = {0.0f, 2.625f, -7.0f, 7.875f, 0.0f, 0.0f, 0.0f, 0.0f, -14.0f, 13.125f, -21.0f, 18.375f};
+    for (uint32_t k = 0; k < 12; ++k) CHECK(std::fabs(destination_try_offset(k, true, v, m).x - (k % 8u == 4u ? m : k % 8u == 6u ? -m : along[k])) < 1e-4f);
+    const V2 k12 = destination_try_offset(12, true, v, m), k13 = destination_try_offset(13, true, v, m), k22 = destination_try_offset(22, true, v, m);
+    CHECK(std::fabs(k12.x - (-14.0f + m)) < 1e-4f && k12.y == 0.0f);          // 14 short + m east
+    CHECK(std::fabs(k13.x - 10.5f) < 1e-4f && std::fabs(k13.y - m) < 1e-4f);  // 10.5 beyond + m north
+    CHECK(std::fabs(k22.x - (-28.0f - m)) < 1e-4f && k22.y == 0.0f);          // 28 short + m west
+    // not the first formation: t v and (t - 28) v as they are
+    CHECK(std::fabs(destination_try_offset(1, false, v, m).x + 7.0f) < 1e-4f && std::fabs(destination_try_offset(3, false, v, m).x + 21.0f) < 1e-4f);
+    CHECK(std::fabs(destination_try_offset(13, false, v, m).x + 28.0f) < 1e-4f);
+}
+
+// s78n t20 (MOVEMENT 3.5 step 2, 1.5.1 item 5): the walk step's "at once" collision cap and the record on top of a
+// started path (no braking for its end, the speed kept when its last waypoint is passed).
+static void test_walk_step_t20() {
+    LocomotorParams p;
+    p.max_speed = 1.0f;
+    p.accel = 0.1f;
+    p.decel = 0.1f;
+    p.turn_rate = 10.0f;
+    const auto walker = [] {
+        LandMotion m;
+        m.pos = {0.0f, 0.0f};
+        m.path = {{0.0f, 0.0f}, {400.0f, 0.0f}};
+        m.next = 1;
+        m.speed = 1.0f;
+        m.state = LocoState::WalkMoving;
+        return m;
+    };
+    {  // the cap 0.2 is taken at the deceleration without the flag, in one frame with it
+        LandMotion a = walker(), b = walker();
+        WalkExtras now;
+        now.cap_now = true;
+        walk_step(a, p, 0.2f, nullptr, nullptr);
+        walk_step(b, p, 0.2f, nullptr, &now);
+        CHECK(std::fabs(a.speed - 0.9f) < 1e-6f && b.speed == 0.2f);
+        // the flag never raises the speed: a higher target is still reached at the acceleration
+        b.speed = 0.1f;
+        walk_step(b, p, 0.6f, nullptr, &now);
+        CHECK(std::fabs(b.speed - 0.2f) < 1e-6f);
+    }
+    {  // a 6-unit record: alone the walk brakes for its end (v <= sqrt(2 x 0.1 x remaining)) and stops on it; on top of a
+       // started path of 300 more it keeps full speed and reports the end with the speed kept
+        LandMotion a = walker(), b = walker();
+        a.path = b.path = {{0.0f, 0.0f}, {6.0f, 0.0f}};
+        WalkExtras top;
+        top.tail = 300.0f;
+        WalkResult ra, rb;
+        float min_b = 1.0f;
+        uint32_t fa = 0, fb = 0;
+        for (; fa < 200 && !ra.arrived; ++fa) ra = walk_step(a, p, 3.0e38f, nullptr, nullptr);
+        for (; fb < 200 && !rb.arrived; ++fb) {
+            rb = walk_step(b, p, 3.0e38f, nullptr, &top);
+            min_b = std::min(min_b, b.speed);
+        }
+        CHECK(ra.arrived && a.speed == 0.0f && a.state == LocoState::WalkStopped && fa > 6);
+        // (6 or 7 frames: the fast normalise makes a step a few ulps short of 1)
+        CHECK(rb.arrived && fb <= 7 && min_b == 1.0f && b.speed == 1.0f && b.state == LocoState::WalkMoving);
+        CHECK(b.pos == (V2{6.0f, 0.0f}) && b.next == 2);
     }
 }
 
@@ -1046,7 +1408,9 @@ static void test_collision_system() {
         if (s.collisions().list().size() == 1) {
             const CollisionObject& c = s.collisions().list()[0];
             CHECK(c.kind == CollisionKind::StoppedVsStopped && c.a == 1 && c.b == 2 && c.created == 0);
-            CHECK(c.crowd == 15.0f && c.crowd_frame == 30 && c.state == CollisionState::Active);
+            // s78n t20 (MOVEMENT 5.4.1 driver): a StoppedVsStopped record never takes the quota pass, so it gets no
+            // crowd and no priority
+            CHECK(c.crowd == 0.0f && c.crowd_frame == 0 && c.state == CollisionState::Active);
         }
         // Both were pushed apart (each on its own check frames: one push per FramesPerCollisionCheck frames).
         CHECK(s.view(1).pos.x < 400.0f && s.view(2).pos.x > 405.0f);
@@ -1055,11 +1419,10 @@ static void test_collision_system() {
         bool before = true;
         for (uint32_t f = 1; f < 30; ++f) {
             s.tick(f, rng);
-            before = before && s.collisions().list().size() == 1 && s.collisions().list()[0].crowd == 15.0f;
+            before = before && s.collisions().list().size() == 1 && s.collisions().list()[0].crowd == 0.0f;
         }
         s.tick(30, rng);
-        CHECK(before && s.collisions().list().size() == 1 && s.collisions().list()[0].crowd == 20.0f &&
-              s.collisions().list()[0].priority == 20.0f - 30.0f);
+        CHECK(before && s.collisions().list().size() == 1 && s.collisions().list()[0].crowd == 0.0f);
         // Pushed apart until the overlap ratio drops to 0.15: the collision no longer applies and is cancelled.
         for (uint32_t f = 31; f < 200 && !s.collisions().list().empty(); ++f) s.tick(f, rng);
         CHECK(s.collisions().list().empty() && s.stats().collisions_cancelled == 1 && s.stats().collisions_created == 1);
@@ -1243,11 +1606,13 @@ static void test_land_group() {
     g4.init(40, 40);
     s4.set_grid(std::move(g4));
     s4.add_unit(land_unit(1, cell_center(5, 5), 7, 1.5f, 18.0f, kUccVehicle));
-    s4.add_unit(land_unit(2, cell_center(30, 30), 7, 1.5f, 18.0f, kUccVehicle));
     MoveOrder d;
     d.units = {1};
     d.destination = cell_center(30, 30);
     s4.move(d, rng, 0);
+    // (s78n t20: the blocker comes after the order - the destination check 0x439360 of the order would move the goal off
+    // a unit that already stands there)
+    s4.add_unit(land_unit(2, cell_center(30, 30), 7, 1.5f, 18.0f, kUccVehicle));
     bool g4ok = true;
     run_land(s4, 0, 2000, rng, serial_for, g4ok);
     // s78n t18 review: the bound the comment derives - the first clear point is 41 .. 46 before the standing unit (steps of
@@ -2611,7 +2976,7 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // now + acc + r - 30, not before now); space unchanged.
 // cu8j t01 (2026-11-08): both moved: the hash gains the units' pending composition / adopt state, the compositions (and
 // their draws) come at the next coordinator update, land orders before frame 61 plan at 61, space ships draw per formation.
-static constexpr uint64_t kGoldenLand = 0x4a45d9d2a287e640ull;  // s78n t18: land collision records (MOVEMENT 5.3.1 / 5.4.1 / 5.4.2)
+static constexpr uint64_t kGoldenLand = 0xd0b2d2f9039c885dull;  // s78n t20: the path stack top, the destination check, Path Around (MOVEMENT 1.5.1 / 4.3.1)
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {
@@ -3233,6 +3598,9 @@ int main() {
     test_double_click();
     test_collision_helpers();
     test_collision_layer();  // S7 collision priority sort
+    test_path_around();          // s78n t20
+    test_destination_offsets();  // s78n t20
+    test_walk_step_t20();        // s78n t20
     test_collision_system();
     test_land_group();
     test_push_search();

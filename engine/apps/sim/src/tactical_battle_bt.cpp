@@ -231,6 +231,7 @@ uint32_t TacticalBattle::bt_adopt_built(TacticalMode& mode, objects::ObjectHandl
         md.z = pos.z;
         md.yaw_deg = dmath::atan2(f.y, f.x) * (180.0f / dmath::kPiF);
         md.owner = owner;
+        mv_type_extents(md, t);  // s78n t20
         movement_->add_unit(md);
     }
     tc::UnitSpawn cs;
@@ -574,6 +575,13 @@ void TacticalBattle::type_half_extents(uint32_t type, float& hx, float& hy) cons
     }
     hx = cx > 0.0f ? sc * cx : sc * std::fabs(am->bound_h.x);
     hy = cy > 0.0f ? sc * cy : sc * std::fabs(am->bound_h.y);
+}
+
+void TacticalBattle::mv_type_extents(tactical::movement::UnitDesc& d, uint32_t type) const {
+    float hx = 0.0f, hy = 0.0f;
+    type_half_extents(type, hx, hy);
+    d.type_hx = hx;
+    d.type_hy = hy;
 }
 
 void TacticalBattle::unit_half_extents(const Unit& u, float& hx, float& hy) const {

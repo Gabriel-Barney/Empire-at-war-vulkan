@@ -32,6 +32,7 @@ add_library(alamo_tactical_movement STATIC
   src/movement_save.cpp       # N1 stage 2: save / load of the battle movement state
   src/fleet_placement.cpp     # cu8l t03: campaign space fleet placement layout (CU8K_T03_T08_T09_RE 1)
   src/land_team.cpp           # s78n t03: land squad containers walk their own path, members steer to slots (MOVEMENT 3.7)
+  src/path_around.cpp         # s78n t20: relation code, swept box, ring search, the dynamic pathfinder's graph search (MOVEMENT 1.5.1)
 )
 add_library(alamo::tactical_movement ALIAS alamo_tactical_movement)
 target_include_directories(alamo_tactical_movement PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

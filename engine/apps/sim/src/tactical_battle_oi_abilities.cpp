@@ -283,6 +283,7 @@ objects::ObjectId TacticalBattle::oi_spawn_unit(TacticalMode& mode, int32_t type
         md.z = pos.z;
         md.yaw_deg = dmath::atan2(facing.y, facing.x) * (180.0f / dmath::kPiF);
         md.owner = owner;
+        mv_type_extents(md, ut);  // s78n t20
         movement_->add_unit(md);
         u->movable = true;
         // cu8l t02 (CU8K_T02_T06_RE §3 rows 0x6a1f90 / 0x6a1d20, rules 1 / 8): a SimpleSpace ship created on its own (Lua

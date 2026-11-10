@@ -52,6 +52,7 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
     }
     // Speed controller (§3.5 step 2).
     const float remaining = remaining_length(m);
+    const float tail = x && x->tail > 0.0f ? x->tail : 0.0f;  // s78n t20: a started path goes on under this record
     if (!(remaining > 1e-3f)) {  // already on the last waypoint
         if (m.next >= m.escape_until && !move_ok(grid, m.pos, m.path.back(), p.mask)) {
             r.blocked = true;
@@ -59,19 +60,22 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
         }
         m.pos = m.path.back();
         m.next = static_cast<uint32_t>(m.path.size());
-        m.speed = 0.0f;
-        m.state = LocoState::WalkStopped;
+        if (!(tail > 0.0f)) {
+            m.speed = 0.0f;
+            m.state = LocoState::WalkStopped;
+        }
         r.moved = true;
         r.arrived = true;
         return r;
     }
     float target = std::min(p.max_speed, speed_cap);
     if (p.decel > 0.0f) {
-        const float vb = std::sqrt(2.0f * p.decel * remaining);
+        const float vb = std::sqrt(2.0f * p.decel * (remaining + tail));
         if (vb < target) target = vb;
     }
     if (target < 0.0f) target = 0.0f;
     if (m.speed < target) m.speed = std::min(target, m.speed + (p.accel > 0.0f ? p.accel : p.max_speed));
+    else if (x && x->cap_now) m.speed = target;  // s78n t20: the collision cap's "at once" flag
     else m.speed = std::max(target, m.speed - (p.decel > 0.0f ? p.decel : p.max_speed));
     m.speed = std::clamp(m.speed, 0.0f, p.max_speed);
     if (!(m.speed > 0.0f)) {
@@ -147,9 +151,13 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
     if (length_sq(travel) > 0.0f) m.yaw = turn_toward(m.yaw, heading_deg(travel), p.turn_rate);
     if (m.next >= m.path.size()) {
         r.arrived = true;
-        m.speed = 0.0f;
-        m.state = LocoState::WalkStopped;
-    } else if (remaining - m.speed <= (m.speed * m.speed) / (2.0f * (p.decel > 0.0f ? p.decel : p.max_speed))) {
+        if (tail > 0.0f) {
+            m.state = LocoState::WalkMoving;
+        } else {
+            m.speed = 0.0f;
+            m.state = LocoState::WalkStopped;
+        }
+    } else if (remaining + tail - m.speed <= (m.speed * m.speed) / (2.0f * (p.decel > 0.0f ? p.decel : p.max_speed))) {
         m.state = LocoState::WalkEndMove;
     } else {
         m.state = LocoState::WalkMoving;

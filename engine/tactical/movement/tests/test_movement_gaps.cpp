@@ -1958,7 +1958,7 @@ static CrcLog mixed_run(const ParallelFor& pf) {
 // cu8i t02 (2026-11-08): moved (land formations draw the FormationClass ctor int(1, 30); start now + acc + r - 30).
 // cu8j t01 / t02 (2026-11-08): compositions at the next coordinator update (draws, start frames, the jetpack swap's draw)
 // and the hash's pending composition / adopt state.
-static constexpr uint64_t kGoldenMixed = 0x15ed89d5cf5f37eeull;  // s78n t18: land collision records
+static constexpr uint64_t kGoldenMixed = 0xbcd741c14dcb1b8dull;  // s78n t20: the path stack top, formation identity, the destination check
 
 // ---------------------------------------------------------------- SPACE_AVOIDANCE (fighter avoidance hook rules)
 // A wall model: one collision mesh, the square x, z in [-50, 50] of the model plane y = 0 (two triangles).
@@ -5371,9 +5371,13 @@ static void test_land_squad_t18_review() {
         CHECK(arrived && length(sys.view(100).pos - at) <= 8.0f * 0.05f * mult + 1e-3f);
         std::printf("t18 review: coast with rate 0 - stood %d, then arrived %d\n", still ? 1 : 0, arrived ? 1 : 0);
     }
-    {  // step 10's stamp: vehicle 1 walks a walled lane (60 wide: no way around a standing vehicle of radius 20) through
-       // the hostile standing vehicles 2 and 3 - Path Around fails, a hostile unit is not pushed, so step 10 resolves the
-       // record: the mover keeps its path and the unit counts as planned around until it changes paths
+    {  // step 10's stamp (s78n t20: reached only when Path Around fails). Vehicle 1 walks a walled lane (60 wide) into a
+       // row of hostile standing vehicles 40 apart (radius 20: no gap between them). For the first two of the row each of
+       // the 11 rejoin candidates (10 apart, from just past the unit) lies on a footprint farther along the row: Path
+       // Around fails without a search. For the others the candidates reach past the row, but by then the mover stands
+       // inside the grown rectangle of the unit in front of it and the lane leaves the graph no corner to start from: the
+       // search fails. A hostile unit is not pushed, so step 10 resolves every record - the mover keeps its path and its
+       // speed and walks through the row.
         MovementSystem sys{MovementConfig{}};
         PassabilityGrid g = open_grid(100, 100);
         for (int32_t x = 0; x < 100; ++x) {
@@ -5389,34 +5393,44 @@ static void test_land_squad_t18_review() {
             CHECK(sys.add_unit(d));
         };
         veh(1, 3, 0, 18.0f);
-        veh(2, 15, 1, 20.0f);
-        veh(3, 45, 1, 20.0f);
+        for (ObjectId i = 0; i < 5; ++i) veh(2 + i, 15 + 2 * i, 1, 20.0f);  // x = 300, 340, 380, 420, 460
         SimRng rng(94);
         MoveOrder o;
         o.units = {1};
         o.destination = cell_center(95, 20);
         sys.move(o, rng, 1);
-        uint32_t f = 1, other_states = 0;
+        uint32_t f = 1, other_states = 0, around_states = 0;
+        float min_speed = 3.0e38f;
+        bool cruising = false;
         const auto run_to = [&](float x) {
             for (uint32_t n = 0; n < 1500 && sys.view(1).pos.x < x && !sys.view(1).arrived; ++n, ++f) {
                 sys.tick(f, rng, serial_for);
+                cruising = cruising || near(sys.view(1).speed, mult, 1e-5f);
+                if (cruising) min_speed = std::min(min_speed, sys.view(1).speed);
                 // (a record step 10 resolved is dropped in the same pass: no state is ever left on the list)
-                for (const CollisionObject& c : sys.collisions().list()) other_states += c.state != CollisionState::Active ? 1u : 0u;
+                for (const CollisionObject& c : sys.collisions().list()) {
+                    if (c.state == CollisionState::PathAround) ++around_states;
+                    else if (c.state != CollisionState::Active) ++other_states;
+                }
             }
             return sys.stats().dynamic_repaths;
         };
-        const uint32_t n1 = run_to(cell_center(15, 20).x + 80.0f);  // past unit 2: one decision (Path Around fails, step 10)
-        // unit 2 changes paths after vehicle 1 planned around it, and now stands farther along the lane
-        CHECK(sys.teleport(2, cell_center(70, 20), 0.0f, 0.0f, f));
-        const uint32_t n2 = run_to(cell_center(45, 20).x + 80.0f);  // past unit 3: its decision stamps unit 3 only
-        const uint32_t n3 = run_to(cell_center(70, 20).x + 80.0f);  // unit 2 again: a full decision, not "planned around"
+        // the records with the first two units of the row are decided before x = 260 (contact is predicted 70 + 38 ahead)
+        const uint32_t n1 = run_to(260.0f);
+        const uint32_t a1 = around_states;
+        const bool on_path = !sys.view(1).pushed;
+        const uint32_t n2 = run_to(cell_center(23, 20).x + 80.0f);  // past the row
         for (uint32_t n = 0; n < 900 && !sys.view(1).arrived; ++n, ++f) sys.tick(f, rng, serial_for);
         const MovementStats& st = sys.stats();
-        std::printf("t18 review: step 10 stamp - dynamic re-paths %u / %u / %u past the first, second and moved unit, pushes %u, "
-                    "push failures %u, early arrivals %u\n", n1, n2, n3, st.pushes, st.push_failures, st.early_arrivals);
-        CHECK(n1 == 1 && n2 == 2 && n3 == 3);
-        CHECK(other_states == 0 && st.pushes == 0 && st.push_failures == 0 && st.early_arrivals == 0);  // step 10 each time
-        CHECK(sys.view(1).arrived && sys.view(2).pos == cell_center(70, 20) && sys.view(3).pos == cell_center(45, 20));
+        std::printf("t18 review: step 10 stamp - dynamic re-paths %u / %u before / past the third of the row, pushes %u, push failures %u, "
+                    "early arrivals %u\n", n1, n2, st.pushes, st.push_failures, st.early_arrivals);
+        CHECK(n1 == 0 && a1 == 0 && on_path);          // step 10 twice: no search, no detour
+        CHECK(n2 >= 1 && around_states == 0);          // then searches that find no way: step 10 again
+        CHECK(other_states == 0 && st.pushes == 0 && st.push_failures == 0 && st.early_arrivals == 0);
+        CHECK(near(min_speed, mult, 1e-5f));           // never slowed or held
+        bool stood = true;
+        for (ObjectId i = 0; i < 5; ++i) stood = stood && sys.view(2 + i).pos == cell_center(15 + 2 * i, 20);
+        CHECK(sys.view(1).arrived && stood);
     }
     {  // MovementPredictionInterval of a vehicle that is no squad container (FoC: AT-AT 5.0, SPMA-T 4.0, Pod Walker 12 ...).
        // A slow one (0.468 per frame), so that the look-ahead stays inside the 160 x 160 candidate box.
@@ -5504,6 +5518,353 @@ static void test_land_squad_t18_review() {
     }
 }
 
+// ---------------------------------------------------------------- s78n t20 (batch A)
+// A 9-member squad on a 3 x 3 grid of pitch 12 (member half extents 3): joint slot box (15, 15). Container `cid`, members
+// cid + 1 .. cid + 9.
+static void t20_squad(MovementSystem& sys, ObjectId cid, V2 at, int32_t owner, float cmax = 0.8f) {
+    UnitDesc c = unit(cid, at, 2, cmax, 12.0f, LocomotorKind::Default);
+    c.team_container = true;
+    c.container_arrangement = 0;
+    c.owner = owner;
+    c.type_hx = c.type_hy = 0.0f;  // the container type's extents 0x371be0 (no model)
+    CHECK(sys.add_unit(c));
+    std::vector<ObjectId> ids;
+    std::vector<V2> slots;
+    ObjectId id = cid + 1;
+    for (int32_t ix = 1; ix >= -1; --ix)
+        for (int32_t iy = 1; iy >= -1; --iy) {
+            const V2 rel{12.0f * static_cast<float>(ix), 12.0f * static_cast<float>(iy)};
+            UnitDesc d = unit(id, at + rel, 2, 1.0f, 3.0f, LocomotorKind::Default);
+            d.accel = d.decel = 0.05f;
+            d.owner = owner;
+            d.formation_spacing = 0.3f;
+            CHECK(sys.add_unit(d));
+            CHECK(sys.set_team_member_shape(d.id, 3.0f, 3.0f, 3.0f, 3.0f));
+            ids.push_back(id++);
+            slots.push_back(rel);
+        }
+    CHECK(sys.set_land_team(cid, ids, slots));
+    CHECK(sys.set_team(cid, cid, 1.0f, cmax));
+    for (ObjectId m : ids) CHECK(sys.set_team(m, cid, 1.0f, cmax));
+}
+// A vehicle with hard extents (hx, hy).
+static UnitDesc t20_vehicle(ObjectId id, V2 pos, int32_t owner, float hx = 10.0f, float hy = 6.0f, float speed = 1.0f) {
+    UnitDesc d = unit(id, pos, 2, speed, 12.0f, LocomotorKind::Default);
+    d.collision_class = kUccVehicle;
+    d.hard_x = hx;
+    d.hard_y = hy;
+    d.owner = owner;
+    return d;
+}
+
+// s78n t20 item 6 (MOVEMENT 4.3.1): the destination check of a land move order.
+static void test_t20_destination_check() {
+    const V2 at = cell_center(15, 20), dest = cell_center(30, 20);  // (300, 400) -> (600, 400): the final direction is +x
+    // The spec's procedure for one lone squad (HX = HY = 15, S = 5) against one rectangle (bhx, bhy) at `bp`: try centres
+    // in order; a try is rejected while the squad's slot rectangle (20, 20) overlaps the blocker and the blocker's area
+    // bhx x bhy > 0.15 x 20 x 20. Returns the first accepted centre.
+    const auto first_centre = [&](V2 bp, float bhx, float bhy) {
+        float t = 0.0f;
+        const V2 v{-1.0f, 0.0f};
+        const V2 axes[4] = {{1.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 0.0f}, {0.0f, -1.0f}};
+        for (uint32_t k = 0; k < 40; ++k) {
+            const float half = 0.5f * ((k % 2u) == 0u ? 1.0f : -0.75f);
+            V2 c = dest;
+            if (k % 8u < 4u) {
+                c = dest + v * (t * half);
+                t += 7.0f;
+            } else {
+                c = dest + v * ((t - 28.0f) * half) + axes[k % 8u - 4u] * 20.0f;
+            }
+            const bool overlap = std::fabs(c.x - bp.x) <= 20.0f + bhx && std::fabs(c.y - bp.y) <= 20.0f + bhy;
+            if (!(overlap && bhx * bhy > 0.15f * 20.0f * 20.0f)) return c;
+        }
+        return dest;
+    };
+    const auto cell_of = [](V2 p) { return cell_center(world_to_cell(p.x), world_to_cell(p.y)); };
+    struct Out {
+        V2 goal;
+        bool arrived = false;
+        uint32_t tal = 0, records = 0;
+        uint64_t crc = 0;
+        V2 end;
+    };
+    // what: 0 a standing squad on the goal; 1 the same squad with an order away; 2 nothing there, but a squad standing
+    // 60 beside it (inside the query box, not overlapping) was ordered to the goal first; 3 one standing infantry unit (3 x 3) on the goal; 4 flag 0x20; 5 skip_destination_check
+    const auto run = [&](int what, const ParallelFor& pf) {
+        Out r;
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        t20_squad(sys, 100, at, 1);
+        if (what == 0 || what == 1 || what == 4 || what == 5) t20_squad(sys, 200, dest, 1);
+        if (what == 2) t20_squad(sys, 200, cell_center(30, 17), 1);  // 60 beside the goal: inside the query box
+        if (what == 3) {
+            UnitDesc x = unit(70, dest, 2, 1.0f, 3.0f, LocomotorKind::Default);
+            x.owner = 1;
+            CHECK(sys.add_unit(x));
+        }
+        SimRng rng(201);
+        sys.tick(1, rng, pf);
+        if (what == 1 || what == 2) {
+            MoveOrder ob;
+            ob.units = {201};
+            ob.destination = what == 1 ? cell_center(30, 60) : dest;
+            sys.move(ob, rng, 2);
+        }
+        MoveOrder o;
+        o.units = {101};
+        o.destination = dest;
+        if (what == 4) o.flags = kMoveFlagSkipValidation;
+        if (what == 5) o.skip_destination_check = true;
+        sys.move(o, rng, 2);
+        r.goal = sys.view(100).goal;
+        for (uint32_t f = 2; f < 1200 && !r.arrived; ++f) {
+            sys.tick(f, rng, pf);
+            r.arrived = sys.view(100).arrived;
+            for (const CollisionObject& c : sys.collisions().list()) {
+                if (c.a != 100 && c.b != 100) continue;
+                ++r.records;
+                if (c.state == CollisionState::TryAgainLater) ++r.tal;
+            }
+        }
+        r.end = sys.view(100).pos;
+        StateHasher h;
+        sys.hash_units(h);
+        r.crc = h.digest();
+        return r;
+    };
+    {  // (i) onto an identical standing squad: every try within 35 of it on both axes is rejected (225 > 60)
+        const Out s = run(0, serial_for), p = run(0, make_thread_pf(4));
+        const V2 c = first_centre(dest, 15.0f, 15.0f);
+        CHECK(near(c.x, dest.x - 48.0f, 1e-3f) && c.y == dest.y);  // try 22: 28 short + min(HX + S, HY + S) west
+        CHECK(s.goal == cell_of(c) && s.goal == (V2{560.0f, 400.0f}));
+        CHECK(s.arrived && s.tal == 0 && s.crc == p.crc);
+        CHECK(std::fabs(s.end.y - dest.y) < 1e-3f && std::fabs(s.end.x - 560.0f) < 8.0f);  // (a container brakes to a stop: no snap)
+        std::printf("t20 destination check: onto a standing squad - goal (%.1f, %.1f), stopped at %.2f, records %u, Try Again Later %u\n",
+                    static_cast<double>(s.goal.x), static_cast<double>(s.goal.y), static_cast<double>(s.end.x), s.records, s.tal);
+    }
+    {  // (ii) the standing squad has an order away: it counts where it is going - the goal stays
+        const Out s = run(1, serial_for);
+        CHECK(s.goal == dest);
+    }
+    {  // (iii) a third squad was ordered to the empty goal first: displaced as in (i)
+        const Out s = run(2, serial_for);
+        CHECK(s.goal == cell_of(first_centre(dest, 15.0f, 15.0f)));
+    }
+    {  // (iv) one standing infantry unit: 3 x 3 = 9 is inside the 15 % allowance (60) - the goal stays
+        const Out s = run(3, serial_for);
+        CHECK(first_centre(dest, 3.0f, 3.0f) == dest && s.goal == dest);
+    }
+    {  // (v) a forced-path order (flag 0x20) and an object goal: no check
+        CHECK(run(4, serial_for).goal == dest && run(5, serial_for).goal == dest);
+    }
+    {  // (vi) three single-vehicle formations ordered to one point: three goals whose rectangles (HX + 5, HY + 5) are
+       // apart and none on the ordered point (the goals are quantised to cells: each may sit up to 10 off its centre on
+       // either axis, so the test allows that slack)
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        const V2 starts[3] = {cell_center(10, 20), cell_center(12, 34), cell_center(12, 6)};
+        for (ObjectId i = 0; i < 3; ++i) {
+            UnitDesc d = t20_vehicle(10 + i, starts[i], 1);
+            d.grouping = kGroupingSolo;  // each its own formation
+            CHECK(sys.add_unit(d));
+        }
+        SimRng rng(202);
+        MoveOrder o;
+        o.units = {10, 11, 12};
+        o.destination = dest;
+        sys.move(o, rng, 1);
+        V2 g[3];
+        for (ObjectId i = 0; i < 3; ++i) g[i] = sys.view(10 + i).goal;
+        CHECK(sys.view(10).form_id != 0 && sys.view(10).form_id != sys.view(11).form_id && sys.view(11).form_id != sys.view(12).form_id);
+        bool apart = true, off_point = true;
+        for (int i = 0; i < 3; ++i) {
+            off_point = off_point && !(g[i] == dest);
+            for (int j = i + 1; j < 3; ++j) apart = apart && distance(g[i], g[j]) > 2.0f * 11.0f - 20.0f;
+        }
+        CHECK(apart && off_point);
+        bool all = false;
+        for (uint32_t f = 1; f < 1500 && !all; ++f) {
+            sys.tick(f, rng, serial_for);
+            all = sys.view(10).arrived && sys.view(11).arrived && sys.view(12).arrived;
+        }
+        CHECK(all);
+        std::printf("t20 destination check: three formations - goals (%.0f, %.0f) (%.0f, %.0f) (%.0f, %.0f)\n", static_cast<double>(g[0].x),
+                    static_cast<double>(g[0].y), static_cast<double>(g[1].x), static_cast<double>(g[1].y), static_cast<double>(g[2].x),
+                    static_cast<double>(g[2].y));
+    }
+    {  // (vii) the goal at the end of a corridor one cell wide: every rectangle of every try and pass reaches into the
+       // walls - the order is not refused and the goal stays
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g = open_grid(100, 100);
+        for (int32_t y = 10; y <= 30; ++y)
+            for (int32_t x = 18; x <= 42; ++x)
+                if (!(y == 20 && x <= 30)) g.set_base(x, y, kPassImpassable);  // a corridor along y = 20 up to x = 30
+        sys.set_grid(std::move(g));
+        sys.set_anim_length_fn(anim_len);
+        t20_squad(sys, 100, at, 1);
+        t20_squad(sys, 200, cell_center(8, 40), 1);
+        SimRng rng(203);
+        sys.tick(1, rng, serial_for);
+        MoveOrder o;
+        o.units = {101};
+        o.destination = dest;
+        sys.move(o, rng, 2);
+        CHECK(sys.view(100).goal == dest && sys.view(100).has_goal);
+        bool arrived = false;
+        for (uint32_t f = 2; f < 1500 && !arrived; ++f) {
+            sys.tick(f, rng, serial_for);
+            arrived = sys.view(100).arrived;
+        }
+        CHECK(arrived && distance(sys.view(100).pos, dest) < 8.0f);
+    }
+    {  // (viii) the single-member shortcut: a unit ordered onto its own footprint (the goal inside its footprint radius
+       // sqrt(10^2 + 6^2) = 11.66) does not move and reports arrived; one ordered just outside it walks
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(t20_vehicle(10, cell_center(20, 20), 1)));
+        CHECK(sys.add_unit(t20_vehicle(11, cell_center(20, 30), 1)));
+        SimRng rng(204);
+        MoveOrder o;
+        o.units = {10};
+        o.destination = cell_center(20, 20) + V2{8.0f, 3.0f};  // quantised to its own cell: distance 0 < 11.66
+        sys.move(o, rng, 1);
+        MoveOrder o2;
+        o2.units = {11};
+        o2.destination = cell_center(21, 30);  // 20 away > 11.66
+        sys.move(o2, rng, 1);
+        float moved = 0.0f, moved2 = 0.0f;
+        bool started2 = false;
+        for (uint32_t f = 1; f < 200; ++f) {
+            sys.tick(f, rng, serial_for);
+            moved = std::max(moved, distance(sys.view(10).pos, cell_center(20, 20)));
+            moved2 = std::max(moved2, distance(sys.view(11).pos, cell_center(20, 30)));
+            started2 = started2 || sys.view(11).speed > 0.0f;
+        }
+        CHECK(moved == 0.0f && sys.view(10).arrived && !sys.view(10).has_goal && sys.land_path(10).empty());
+        CHECK(started2 && sys.view(11).arrived && near(moved2, 20.0f, 1e-3f));
+        CHECK(sys.stats().paths_planned == 1);  // the unit on its own footprint was never planned
+    }
+}
+
+// s78n t20 item 3 (MOVEMENT 1.5.1): the Path Around call inside the system - the detour is a record on top of the path
+// stack, the ordered path stays underneath untouched, and the unit resumes it at the next waypoint when the detour ends.
+static void test_t20_path_around() {
+    struct Out {
+        uint64_t crc = 0;
+        bool around = false, kind2 = false, order_kept = true, overlap = false, arrived = false, tagged = false;
+        float min_y = 3.0e38f, max_y = -3.0e38f;
+        std::vector<V2> detour;
+        MovementStats st;
+        V2 end, blocker;
+        uint32_t resume_frame = 0;
+        V2 resume_dir;
+    };
+    const V2 start = cell_center(15, 20), goal = cell_center(40, 20), bp = cell_center(25, 20);  // y = 400 throughout
+    const auto run = [&](const ParallelFor& pf) {
+        Out r;
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(t20_vehicle(10, start, 1)));
+        CHECK(sys.add_unit(t20_vehicle(11, bp, 1)));  // a standing friendly vehicle on the line
+        SimRng rng(301);
+        MoveOrder o;
+        o.units = {10};
+        o.destination = goal;
+        sys.move(o, rng, 1);
+        std::vector<V2> order_path;
+        bool was_pushed = false;
+        for (uint32_t f = 1; f < 1500 && !r.arrived; ++f) {
+            sys.tick(f, rng, pf);
+            const UnitView v = sys.view(10);
+            r.arrived = v.arrived;
+            if (order_path.empty() && !sys.land_path(10).empty()) order_path.assign(sys.land_path(10).begin(), sys.land_path(10).end());
+            if (v.pushed) {
+                r.kind2 = r.kind2 || v.push_kind == 2;
+                if (r.detour.empty()) r.detour.assign(sys.top_path(10).begin(), sys.top_path(10).end());
+                r.tagged = r.tagged || !sys.top_tags(10).empty();
+                // the ordered path is untouched while the detour is walked
+                const std::span<const V2> now = sys.land_path(10);
+                r.order_kept = r.order_kept && now.size() == order_path.size() && std::equal(now.begin(), now.end(), order_path.begin());
+            } else if (was_pushed && r.resume_frame == 0) {
+                r.resume_frame = f;
+            } else if (r.resume_frame != 0 && f == r.resume_frame + 20) {
+                r.resume_dir = dir_from_deg(v.yaw);
+            }
+            was_pushed = v.pushed;
+            for (const CollisionObject& c : sys.collisions().list())
+                r.around = r.around || (c.a == 10 && c.b == 11 && c.kind == CollisionKind::MovingVsStopped && c.state == CollisionState::PathAround);
+            r.min_y = std::min(r.min_y, v.pos.y);
+            r.max_y = std::max(r.max_y, v.pos.y);
+            r.overlap = r.overlap || foot_overlap(foot_rect(v.pos, v.yaw, 10.0f, 6.0f), foot_rect(sys.view(11).pos, sys.view(11).yaw, 10.0f, 6.0f));
+        }
+        r.st = sys.stats();
+        r.end = sys.view(10).pos;
+        r.blocker = sys.view(11).pos;
+        StateHasher h;
+        sys.hash_units(h);
+        r.crc = h.digest();
+        return r;
+    };
+    const Out s = run(serial_for), p = run(make_thread_pf(4));
+    CHECK(s.crc == p.crc);
+    CHECK(s.around && s.kind2 && s.order_kept && s.st.dynamic_repaths == 1 && s.st.pushes == 0);
+    // the detour: the unit's position, then the two corners of the obstacle's grown rectangle (11 + 6.5, 7 + 6.5) on the
+    // -b side (the two sides tie; the heap rules take that one); the rejoin point is dropped, because the last corner sees
+    // the next ordered waypoint
+    CHECK(s.detour.size() == 3);
+    if (s.detour.size() == 3) {
+        CHECK(s.detour[0].y == 400.0f && s.detour[0].x < bp.x - 17.5f);
+        CHECK(s.detour[1] == (V2{bp.x - 17.5f, 400.0f - 13.5f}) && s.detour[2] == (V2{bp.x + 17.5f, 400.0f - 13.5f}));
+    }
+    CHECK(s.tagged);  // the front corner carries the obstacle's hold line
+    CHECK(s.min_y < 400.0f - 13.0f && s.max_y <= 400.0f + 1e-3f && !s.overlap);  // around the y < line side, never touching
+    // after the pop it heads for the ordered goal from the last corner (no way back to the line first)
+    const V2 want = normalize_retail(goal - V2{bp.x + 17.5f, 400.0f - 13.5f});
+    CHECK(s.resume_frame != 0 && dot(s.resume_dir, want) > 0.999f);
+    CHECK(s.arrived && distance(s.end, goal) < 1.0f && s.blocker == bp);
+    std::printf("t20 path around: detour %zu points, re-paths %u, y range %.2f .. %.2f, resumed at frame %u\n", s.detour.size(),
+                s.st.dynamic_repaths, static_cast<double>(s.min_y), static_cast<double>(s.max_y), s.resume_frame);
+
+    {  // A unit without an order path (pushed aside, walking its push path) cannot path around: the call fails at once -
+       // no search, its path stack as it was - and the decision goes on to the push. It is the mover of that record: an
+       // order-less unit on a pushed path is Moving (MOVEMENT 5.2).
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(t20_vehicle(20, cell_center(15, 20), 1)));  // the pusher, on a forced path (decision step 2)
+        CHECK(sys.add_unit(t20_vehicle(21, cell_center(22, 20), 1)));  // pushed aside
+        SimRng rng(302);
+        MoveOrder o;
+        o.units = {20};
+        o.destination = cell_center(40, 20);
+        o.flags = kMoveFlagSkipValidation;
+        sys.move(o, rng, 1);
+        uint32_t f = 1;
+        for (; f < 400 && !sys.view(21).pushed; ++f) sys.tick(f, rng, serial_for);
+        CHECK(sys.view(21).pushed && sys.view(21).push_kind == 1 && !sys.view(21).has_goal && sys.stats().pushes == 1);
+        const std::vector<V2> top(sys.top_path(21).begin(), sys.top_path(21).end());
+        CHECK(top.size() >= 2);
+        // the pusher stops (it is no mover any more); a third vehicle now stands where the pushed one is heading
+        const ObjectId pusher = 20;
+        sys.stop(std::span<const ObjectId>(&pusher, 1));
+        CHECK(sys.add_unit(t20_vehicle(22, top.back(), 1)));
+        const uint32_t created0 = sys.stats().collisions_created;
+        bool svs = false, kept = true, walking = false;
+        for (uint32_t n = 0; n < 60 && sys.stats().pushes < 2; ++n, ++f) {
+            sys.tick(f, rng, serial_for);
+            for (const CollisionObject& c : sys.collisions().list())
+                svs = svs || (c.kind == CollisionKind::StoppedVsStopped && (c.a == 21 || c.b == 21));
+            walking = sys.view(21).pushed;
+            const std::span<const V2> now = sys.top_path(21);
+            if (walking) kept = kept && now.size() == top.size() && std::equal(now.begin(), now.end(), top.begin());
+        }
+        // the only mover left pushed the third vehicle while it still walked its own, unchanged, push path (the record was
+        // made, decided and resolved inside one tick)
+        CHECK(sys.stats().pushes == 2 && sys.view(22).pushed && walking && kept && !svs);
+        CHECK(sys.stats().collisions_created > created0 && sys.stats().dynamic_repaths == 0);
+    }
+}
+
 int main() {
     test_corridor();
     test_threat();
@@ -5550,6 +5911,8 @@ int main() {
     test_land_squad_speed_order();  // s78n t18 item 3
     test_land_squad_gates();        // s78n t18 items 4 / 5
     test_land_squad_t18_review();   // s78n t18 review
+    test_t20_destination_check();   // s78n t20 item 6
+    test_t20_path_around();         // s78n t20 item 3
     test_determinism();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

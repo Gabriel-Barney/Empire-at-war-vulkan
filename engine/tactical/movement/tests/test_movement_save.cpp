@@ -279,7 +279,8 @@ void test_collision_layer() {
     a.add(CollisionKind::MovingVsMoving, 30, 2, 12);
     uint32_t calls = 0;
     a.run(
-        20, [](CollisionObject& c) { return c.a != 30; }, [](const CollisionObject& c) { return static_cast<uint32_t>(c.a % 3); },
+        20, [](CollisionObject& c) { return c.a != 30; }, [](const CollisionObject&) { return true; },
+        [](const CollisionObject& c) { return static_cast<uint32_t>(c.a % 3); },
         [&calls] { return ++calls < 2; },
         [](CollisionObject& c, bool full) {
             if (c.kind == CollisionKind::StoppedVsStopped) {
@@ -1483,7 +1484,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 16);  // 16: before the s78n t18 collision states / record answers / squad walk and gate fields (17)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 18);
+    put_u32(bad, 0, 17);  // 17: before the s78n t20 top path record / formation identity / type extents (18)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 19);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode

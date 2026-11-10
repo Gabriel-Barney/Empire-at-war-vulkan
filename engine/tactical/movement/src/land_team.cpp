@@ -6,6 +6,7 @@
 
 #include "alamo/core/dmath.hpp"
 #include "alamo/tactical/movement/formation.hpp"
+#include "alamo/tactical/movement/land_path.hpp"
 #include "alamo/tactical/movement/movement_system.hpp"
 
 namespace alamo::tactical::movement {
@@ -16,9 +17,7 @@ constexpr float kRecoveryDistance = 4.0f;  // 0x140a4431c (FIGHTER_FLYING §7 it
 
 // s78n t14 part B: the passability probe 0x5a4c10 of the steering vector for a movement class: every cell the segment
 // touches passes the mask (the start cell included).
-bool steer_probe_ok(const PassabilityGrid& grid, V2 a, V2 b, uint32_t mask) {
-    return walk_cells(a, b, [&](int32_t cx, int32_t cy) { return grid.passable_cell(cx, cy, mask); });
-}
+bool steer_probe_ok(const PassabilityGrid& grid, V2 a, V2 b, uint32_t mask) { return line_passable(grid, a, b, mask); }
 
 }  // namespace
 

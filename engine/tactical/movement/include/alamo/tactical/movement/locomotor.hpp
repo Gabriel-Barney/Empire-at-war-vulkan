@@ -89,11 +89,18 @@ float remaining_length(const LandMotion& m);
 //                 for the unit's heading `dir` (unit length), asked on every leg but the last. With a non-zero vector the
 //                 unit moves along normalise(dir + vector), and a waypoint it passes abeam - it crosses the waypoint's
 //                 line, the bisector of the two segments - counts as passed (it does not turn back for it).
+//   cap_now     - s78n t20 (MOVEMENT §3.5 step 2, FIGHTER_FLYING §7.7 item 5): the collision records' "at once" flag - a
+//                 target speed below the current speed is taken in one frame instead of at the deceleration.
+//   tail        - s78n t20 (MOVEMENT §1.5.1 item 5, A1_READINGS §40.3): the path is a collision-owned record on top of a
+//                 started order path of this remaining length (> 0): the walk does not brake for the record's end and
+//                 reaching it reports `arrived` with the speed kept (the record is popped and the path below goes on).
 struct WalkExtras {
     V2 jiggle;
     bool side_error = false;
     V2 (*avoid)(const void* ctx, V2 dir) = nullptr;
     const void* avoid_ctx = nullptr;
+    bool cap_now = false;
+    float tail = 0.0f;
 };
 
 WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, const PassabilityGrid* grid,

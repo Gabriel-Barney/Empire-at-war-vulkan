@@ -1229,6 +1229,7 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32
             md.z = pos.z;
             md.yaw_deg = yaw_of(face);
             md.owner = P.owner;  // OI tactical: crush hostility
+            mv_type_extents(md, t);  // s78n t20
             movement_->add_unit(md);
         }
         units_.push_back(u);
@@ -1621,7 +1622,7 @@ int32_t TacticalBattle::first_hardpoint_of_type(objects::ObjectId target, int32_
 
 void TacticalBattle::exec_move(TacticalMode& mode, std::span<const objects::ObjectId> ids, float x, float y, SimRng& rng,
                                float facing_deg, bool attack_move, uint8_t flags, bool switch_locomotor,
-                               objects::ObjectId goal_object) {
+                               objects::ObjectId goal_object, bool no_destination_check) {
     s4_cancel(ids);  // S4: a move replaces a pending garrison enter
     team_attack_drop(ids);  // q6: an ordered move clears the team target (FIGHTER_FLYING §4.10 B writer 3)
     const tactical::Aabb& bb = mode.bounds();
@@ -1634,6 +1635,8 @@ void TacticalBattle::exec_move(TacticalMode& mode, std::span<const objects::Obje
     o.destination = {std::clamp(x, bb.min.x, bb.max.x), std::clamp(y, bb.min.y, bb.max.y)};
     if (std::isfinite(facing_deg)) o.facing_deg = facing_deg;
     o.goal_object = goal_object == objects::kNoObjectId ? -1 : goal_object;  // S7 t37 (movement: -1 = none)
+    // s78n t20 (MOVEMENT §4.3.1 item 2): an object goal goes to the attack-arc slot test, not to the destination check
+    o.skip_destination_check = no_destination_check || goal_object != objects::kNoObjectId;
     movement_->move(o, rng, frame_);
     for (const objects::ObjectId id : o.units) {
         if (!attack_move) combat_->clear_order(id);
@@ -1695,6 +1698,9 @@ void TacticalBattle::attack_approach(TacticalMode& mode, const Unit& u, Vec3 tp,
         o.units = {u.id};
         o.destination = {std::clamp(up.x + dx * k, bb.min.x, bb.max.x), std::clamp(up.y + dy * k, bb.min.y, bb.max.y)};
         if (fighter) o.goal_object = goal;
+        // s78n t20 (MOVEMENT §4.3.1 item 2): the approach stands for an object-goal block - no destination check ([port]
+        // the attack-arc slot test 0x438c10 is not modelled; the early-arrival cut's range clause covers the stop)
+        o.skip_destination_check = true;
         movement_->move(o, rng, frame_);
     } else if (fighter) {
         mv::MoveOrder o;
@@ -2497,6 +2503,9 @@ bool TacticalBattle::mv_squad_add(TacticalMode& mode, size_t ci, uint32_t object
     d.crusher = d.supercrusher = false;
     d.turret = false;
     d.movement_class = fm.movement_class;  // [port] the container type's +0x1688 [M]: the first member's class
+    // s78n t20 (MOVEMENT §5.4.4 item 3): the container TYPE's extents 0x371be0 - FoC's team container types set no hard
+    // extents and [port] their models are not checked: (0, 0)
+    d.type_hx = d.type_hy = 0.0f;
     // The formation layout reads the container's hard radius 0x397780: sqrt(hx^2 + hy^2) of the joint box.
     const float r = dmath::sqrt(jx * jx + jy * jy);
     if (r > 0.0f) d.radius = r;
@@ -3393,6 +3402,58 @@ void TacticalBattle::feed_pair_gates() {
         const Container& c = containers_[i];
         if (!c.team || c.removed || !movement_->has_unit(c.id)) continue;
         (void)movement_->set_pair_gate(c.id, host_of(link[i]), inside[i] != 0 && outside[i] == 0);
+    }
+}
+
+// s78n t20 (MOVEMENT §5.4.3 rule 4, §5.4.4 item 1, §5.4.5 items 1 / 3; MovementSystem::set_collision_info). The current
+// target 0x397a40 of a single unit is its combat target (ordered, else acquired); of a squad container its own, else its
+// first live member's that has one (team index = id order). A target that is a member of a movement-backed squad is
+// named by its container (the layer object the collision records see), at the member's position. Attack range 0x3749d0 =
+// Get_Max_Attack_Range; "short-range" 0x372210 = melee_attacker; the target's radius 0x397780 is added [port] for every
+// unit the combat system knows (the weapon-list test of 0x685e10 is [M]). A container reads its targeting member, else
+// its first live member, for the range and the melee test. Hero clash: the unit's own flag (+0x3b4).
+void TacticalBattle::feed_collision_info(const objects::ObjectStore& store) {
+    if (space_ || !movement_ || !combat_) return;
+    using Info = mv::MovementSystem::CollisionInfo;
+    const auto fill = [&](objects::ObjectId src, Info& ci) {
+        if (!combat_->has_unit(src)) return;
+        ci.attack_range = combat_->attack_range(src);
+        ci.short_range = combat_->melee_attacker(src);
+        const tc::ObjectId t = combat_->current_target(src);
+        const Unit* tu = t != tc::kNoObject ? unit_by_id(t) : nullptr;
+        if (!tu || !tu->alive || !store.alive(tu->h)) return;
+        const Vec3 tp = store.position(tu->h);
+        ci.target = tu->id;
+        if (tu->container < containers_.size()) {
+            const Container& tk = containers_[tu->container];
+            if (tk.team && !tk.removed && movement_->is_land_team_container(tk.id)) ci.target = tk.id;
+        }
+        ci.target_pos = {tp.x, tp.y};
+        ci.target_radius = movement_->collision_radius(ci.target);
+    };
+    for (const Unit& u : units_) {
+        if (!u.alive || u.retreated || !u.movable || !movement_->has_unit(u.id)) continue;
+        Info ci;
+        fill(u.id, ci);
+        ci.hero_clash = combat_->has_unit(u.id) && (combat_->flags(u.id) & tc::kUnitHeroClash) != 0;
+        (void)movement_->set_collision_info(u.id, ci);
+    }
+    std::vector<objects::ObjectId> first(containers_.size(), objects::kNoObjectId), aiming(containers_.size(), objects::kNoObjectId);
+    for (const Unit& u : units_) {
+        if (!u.alive || u.retreated || u.container >= containers_.size()) continue;
+        if (first[u.container] == objects::kNoObjectId) first[u.container] = u.id;
+        if (aiming[u.container] == objects::kNoObjectId && combat_->has_unit(u.id) && combat_->current_target(u.id) != tc::kNoObject)
+            aiming[u.container] = u.id;
+    }
+    for (size_t i = 0; i < containers_.size(); ++i) {
+        const Container& c = containers_[i];
+        if (!c.team || c.removed || !movement_->is_land_team_container(c.id)) continue;
+        Info ci;
+        if (combat_->has_unit(c.id) && combat_->current_target(c.id) != tc::kNoObject) fill(c.id, ci);
+        else if (aiming[i] != objects::kNoObjectId) fill(aiming[i], ci);
+        else if (first[i] != objects::kNoObjectId) fill(first[i], ci);
+        ci.hero_clash = combat_->has_unit(c.id) && (combat_->flags(c.id) & tc::kUnitHeroClash) != 0;
+        (void)movement_->set_collision_info(c.id, ci);
     }
 }
 
@@ -4737,6 +4798,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     profile::lap("tac.orders");
     // 4. speed factors, movement, positions into the store and the trees, locomotor animation.
     apply_speed_factors();
+    feed_collision_info(store);  // s78n t20: targets / ranges / hero clashes for the land collision decisions
     fighter_sync();  // S7 fighters: new squadrons (map start, reinforcements, hangar launches, wingmen) and params
     feed_attack_targets(store);
     if (space_) avoid_snapshot(store);  // SPACE_AVOIDANCE: committed member transforms for the fighter avoidance hook

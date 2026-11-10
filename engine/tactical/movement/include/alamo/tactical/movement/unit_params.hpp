@@ -33,6 +33,15 @@ struct UnitDesc {
     // only by the push search (footprint radius 0x3969f0, mover extent 0x372040); unset falls back to `radius`.
     float hard_x = 0.0f;
     float hard_y = 0.0f;
+    // s78n t20 (MOVEMENT §5.3.1 item 5, §5.4.3, §5.4.4; save version 18): the TYPE's half extents 0x371be0 - the customs x
+    // Scale_Factor, the model's box per missing axis, (0, 0) without a model; no joint slot box and no deployed switch.
+    // Read by the early-arrival box and the StoppedVsStopped cost radius 0x371df0. The host fills them (it has the
+    // models); -1 = not given: the hard extents above, else the soft radius. [port] a squad container: (0, 0).
+    float type_hx = -1.0f;
+    float type_hy = -1.0f;
+    // s78n t20 (MOVEMENT §1.5.1 item 1; save version 18): MovementBoxExpansionFactor (+0x16d8; 0 = unset), the extra
+    // clearance of the dynamic pathfinder's obstacle rectangles for this mover.
+    float box_expansion = 0.0f;
     float formation_spacing = 0.0f;  // FormationSpacing (cells)
     bool hero = false;            // CategoryMask has Hero
     std::string type_name;

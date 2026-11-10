@@ -410,6 +410,7 @@ objects::ObjectId TacticalBattle::hg_spawn(TacticalMode& mode, int32_t type, int
                     md.z = p.z;
                     md.yaw_deg = dmath::atan2(f.y, f.x) * (180.0f / dmath::kPiF);
                     md.owner = owner;
+                    mv_type_extents(md, ut);  // s78n t20
                     movement_->add_unit(md);
                     u->movable = true;
                 }

@@ -1431,6 +1431,9 @@ private:
     // 0x396850 for a unit (0x371d20, the deployed pair, for a deploying / deployed Deploys walker).
     void type_half_extents(uint32_t type, float& hx, float& hy) const;
     void unit_half_extents(const Unit& u, float& hx, float& hy) const;
+    // s78n t20 (MOVEMENT §5.3.1 item 5, §5.4.3, §5.4.4): the type's half extents 0x371be0 of a land mover, for its
+    // movement unit (mv::UnitDesc::type_hx / type_hy: the early-arrival box and the StoppedVsStopped cost radius).
+    void mv_type_extents(tactical::movement::UnitDesc& d, uint32_t type) const;
     // s78n t10 (§5.4.6 item 2, 0x371d20 as 0x396850 selects it): replaces (hx, hy) by the deployed pair when object `id`
     // of type `type` is a movement-backed Deploys walker in Walk state 0x18 / 0x19 with Custom_Hard_XExtent_Deployed > 0.
     // Const reads only (the fog footprint calls it from the parallel filter).
@@ -1475,6 +1478,10 @@ private:
     // s78n t18 review: the movement system's pair gates / "hidden" from the garrison state (tactical_battle.cpp): every
     // tick, after garrison events, at the tick end and after a load.
     void feed_pair_gates();
+    // s78n t20 (MOVEMENT §5.4.3 - §5.4.5, MovementSystem::set_collision_info): every land mover's current target (a squad
+    // member's target counts for its container; a target inside a squad is named by its container), attack range,
+    // "short-range" and hero-clash state, before each movement tick (the tick is its only reader).
+    void feed_collision_info(const objects::ObjectStore& store);
     void drop_locked(std::vector<objects::ObjectId>& ids) const;  // OI follow-up t03: group moves skip locked units
     // OI follow-up t03: per bridge owner, registration order (not saved: the bridges' own state)
     std::vector<std::pair<const void*, std::function<bool(objects::ObjectId)>>> script_locks_;
@@ -1556,9 +1563,12 @@ private:
     void advance_queues(TacticalMode& mode, SimRng& rng);
     void late_swap_back_signals();  // S7 t27: signal 0x29 for a jetpack swap back after the combat_pre loop
     bool queue_object_live(const TacticalMode& mode, objects::ObjectId id) const;
+    // s78n t20: `no_destination_check` - the move stands for an object-goal block (MOVEMENT §4.3.1 item 2: no destination
+    // check; an object goal implies it)
     void exec_move(TacticalMode& mode, std::span<const objects::ObjectId> ids, float x, float y, SimRng& rng, float facing_deg,
                    bool attack_move, uint8_t flags = 0, bool switch_locomotor = false,
-                   objects::ObjectId goal_object = kNoObjectId);  // S7 t37: an object goal (mv::MoveOrder::goal_object)
+                   objects::ObjectId goal_object = kNoObjectId,  // S7 t37: an object goal (mv::MoveOrder::goal_object)
+                   bool no_destination_check = false);
     uint32_t exec_attack(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, int32_t hp, SimRng& rng);
     // --- q6: an attack ordered on a TEAM container (A1_READINGS §33.2.1 row 1: a TEAM container passes 0x5680b0 on its
     // own; TACTICAL_COMBAT §2.8 B step 5 / FIGHTER_FLYING §4.10 B: the attacker's target is the container itself). The
