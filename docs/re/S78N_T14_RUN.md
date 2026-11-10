@@ -144,3 +144,30 @@ GameConstants: `Object_Max_Speed_Multiplier_Land` 1.56, `Max_Move_Frame_Delay` 6
 - **Mismatch 2, straggler cap:** the port's container walks at the team speed whatever its members do. Retail caps
   it with 0x5ab640 (§7.7 item 2).
 - **Not checked:** the Dartboard scatter itself (reading 7).
+
+## Second run (roadmap s78n t17, 2026-11-10, run `out/20261110-053414`)
+Kit after the rerun advice above (773c3b0e): NOW recorded as `GetCurrentTime.Frame()` x 30 (g - f = +1 on every
+record), the Rebel member's `FormationRaggedness` / `MaxJiggleDistance` set to 0 in the probe mod, the 7.2 Dartboard fit
+in float32 with NOW in [event, event + 10], and the 7.7 checks. Same map and squads, driven by Claude, hands-off.
+
+| check | Rows (Stormtrooper) | Dartboard (Rebel) |
+|---|---|---|
+| container acceleration / braking per frame (7.7 item 1) | 16 / 16 ramps 0.0752-0.0783, expected 0.0780 | 15 / 15 ramps 0.1085-0.1094, expected 0.1092 |
+| straggler cap HX (7.7 item 2) | 14.84-14.93 on 4 legs, expected 15.0 | 11.99 on 2 legs, expected 12.06 from the fitted layout |
+| Dartboard scatter (7.2: Halton 2 / 3 in float32, seed (int32) container id x NOW) | - | 6 / 7 fitted legs match (score 0.08-0.30 against a baseline 0.94-1.61), laid NOW = event + 1 or + 2 |
+| slot assignment order (7.2 step 6) | - | 6 / 6 matched legs |
+| re-lay rule (> 8.11 deg from the last laid heading) | grid kept on 0 / 5 deg, re-laid on 30 deg | 6 / 6 |
+| start delays | 0..6 (spread 6.0) | 0..5.3 |
+| catch-up | members 1.25 x the container, TIGHT | 1.00 x, LOOSE |
+
+Readings:
+- **7.7 container acceleration 0x5ab540 confirmed [H]**, both squads, start and braking.
+- **7.7 straggler cap 0x5ab640 confirmed [H]**, HX within 0.2 of the prediction on every leg it could be solved.
+- **7.2 Dartboard scatter confirmed [H]**: seed (int32)(container id x NOW), float32 radical inverse, the retail slot
+  order, laid 1-2 frames after the order. One leg (trial 2 leg 4) did not match any NOW in the window and trial 4 leg 4
+  was not fitted; both are the last leg after the 5 deg turn, where the path heading can pass 8.11 deg from the last
+  layout mid-leg (reading 7 of the first run), so the laying frame falls outside the window [M].
+- The Rows "after the stop: STAYS OPEN" line is still the leg without settled slots (`-`); the kit fix covered the
+  Dartboard line only. Not a finding.
+- Port status: 7.2 (layout, order, re-lay) and member vmax match; 7.7 items 1 and 2 are missing in the port (roadmap
+  s78n t16).
