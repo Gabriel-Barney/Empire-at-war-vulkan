@@ -898,6 +898,27 @@ void test_foc() {
                         static_cast<double>(hy), static_cast<double>(scale), static_cast<double>(r));
         }
     }
+    {  // s78n t08f (TACTICAL_COMBAT §5.4.5 item 2): the slot 43 / 46 model extents of Nebulon_B_Frigate (no Custom_Hard
+       // extents, Scale_Factor 0.7, RV_NEBULONB.ALO collision-bound half (33.54, 157.07, 95.52)): X (along the facing) =
+       // 0.7 x half y = 109.95, Y (across) = 0.7 x half x = 23.48.
+        const uint32_t neb = static_cast<uint32_t>(types.resolve_name("Nebulon_B_Frigate"));
+        CHECK(neb < types.size());
+        float hx = 0.0f, hy = 0.0f;
+        if (neb < types.size() && catalog.space_model_half_extents(neb, hx, hy)) {
+            std::vector<uint32_t> idx;
+            const BattleTables bt = catalog.build_battle({neb}, idx, true);
+            CHECK(idx.size() == 1);
+            if (idx.size() == 1) {
+                const tactical::combat::UnitDesc& u = bt.combat.units[idx[0]];
+                std::printf("foc range extents: Nebulon_B_Frigate half %.2f x %.2f -> X %.2f, Y %.2f\n", static_cast<double>(hx),
+                            static_cast<double>(hy), static_cast<double>(u.model_x_extent), static_cast<double>(u.model_y_extent));
+                CHECK(u.hard_x_extent == 0.0f && u.hard_y_extent == 0.0f);
+                CHECK(std::fabs(u.model_x_extent - 109.95f) < 0.01f && std::fabs(u.model_y_extent - 23.48f) < 0.01f);
+            }
+        } else {
+            std::printf("foc range extents: Nebulon_B_Frigate: no model data (sim built without assets), skipped\n");
+        }
+    }
     // Fog of war on real data (owner: fog agent): shipped GameConstants; grids, dense mask and REVEAL placements of
     // two real maps.
     const tactical::fog::FogConstants& fc = catalog.fog_constants();

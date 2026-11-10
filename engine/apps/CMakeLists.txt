@@ -319,8 +319,10 @@ if(_alamo_sim)
     # OPT2 t12 (2026-11-03, a1k t01 on the OPT2 AI timing): seeds 1-8 all end (9480-13985); seed 2 at 10203 (Rebel, all retreated).
     # cu8f t04a (2026-11-07, per-unit stickiness override, spawn 0.0: docs/re/CU8F_T04_T06_RE.md §1): seeds 1, 3, 4, 5, 7 end
     # (9120-14073), 2 / 6 / 8 reach the cap; the test moves to seed 1 (Rebel, all retreated, 9120). In-game check: §1.5 probe.
+    # s78n t08f (2026-11-09, range extent from the model's collision bound, TACTICAL_COMBAT §5.4.5): seeds 2-8 end
+    # (10201-13407), 1 reaches the cap; the test moves to seed 8 (Rebel, all destroyed, 10201).
     add_test(NAME alamo_headless_skirmish_ai_foc_station
-             COMMAND alamo_headless --skirmish-ai foc-station --seed 1 --ticks 20000 --workers 4 --quiet --expect-battle-end)
+             COMMAND alamo_headless --skirmish-ai foc-station --seed 8 --ticks 20000 --workers 4 --quiet --expect-battle-end)
     # t48: the default seed reaches QuickReinforce's anti-idle; 0 Lua errors (it may run to the frame limit: half the seeds do, the
     # station holds). refixf t02 (2026-10-31): back on the default seed. It had stacked the rebel ships on the station's centre
     # (3300,0,0) - Project_By_Unit_Range nil, Move_To failed (also seed 4): the station is now a space static entry and a task

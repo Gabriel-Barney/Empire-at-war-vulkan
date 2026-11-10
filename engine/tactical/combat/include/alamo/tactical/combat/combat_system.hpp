@@ -370,8 +370,9 @@ struct UnitDesc {
     // (slot 43 footprint E; 0 = the radius).
     float min_attack_distance = 0.0f;
     float hard_x_extent = 0.0f, hard_y_extent = 0.0f;
-    // A1j t04 (TACTICAL_GAPS 3.1 slot 43, 0x371e70 / 0x372040): without a Custom_Hard extent, |model bbox max.x| (X) and
-    // |model bbox max.y| (Y) x Scale_Factor of the mode's model; < 0: no model data (the radius stands in).
+    // A1j t04 / s78n t08f (TACTICAL_COMBAT §5.4.5, 0x371e70 / 0x372040): without a Custom_Hard extent, the game's X extent
+    // (along the facing) = |collision-bound half y| and the Y extent (across) = |collision-bound half x| of the mode's
+    // model x Scale_Factor (models face -Y); 0 without a model; < 0: no model data (the radius stands in).
     float model_x_extent = -1.0f, model_y_extent = -1.0f;
     // OI tactical (TACTICAL_GAPS 3.1 slot 43): the object is a LAND_OBSTACLE (obj +0x346 != 0xFF). Range tests then use
     // the obstacle-cell aim walk (set_obstacle_cell_query) instead of the footprint half-extent.
@@ -1717,7 +1718,8 @@ private:
     float target_extent(const Unit& t, Vec3 from) const;  // OI tactical: TACTICAL_GAPS 3.1 footprint half-extent E
     // TACTICAL_GAPS 3.1 slot 43 range geometry: XY distance from `from` to the aim point and the slack E.
     void range_geometry(const Unit& t, Vec3 from, float& d, float& E) const;
-    // s78n t02: the footprint half-extents (Custom_Hard_X/YExtent, model box, radius fallback) shared by slots 43 and 46;
+    // s78n t02: the footprint half-extents (Custom_Hard_X/YExtent, model collision bound (s78n t08f), radius fallback)
+    // shared by slots 43 and 46;
     // false when the unit has neither hard extents nor model data (both are then the radius).
     bool footprint_extents(const Unit& t, float& ex, float& ey) const;
     // s78n t02 (TACTICAL_COMBAT §5.4.4 item 1): slot 46 steps 6 / 7 (min_range_geometry_of) and the whole weapon min

@@ -802,8 +802,9 @@ bool CombatSystem::lob_solution(uint32_t projectile, Vec3 from, Vec3 to, LobSolu
 
 float CombatSystem::target_extent(const Unit& t, Vec3 from) const {
     // TACTICAL_GAPS 3.1 slot 43 E (no LAND_OBSTACLE): |dot(target facing, line of sight)| > 0.7071 -> the X extent, else
-    // the Y extent. A1j t04 (0x371e70 / 0x372040): per axis Custom_Hard_X/YExtent x Scale_Factor, else |model bbox
-    // max.x / max.y| x Scale_Factor (model_x / y_extent); [port] the radius only when the host gave no model data. The
+    // the Y extent. A1j t04 / s78n t08f (TACTICAL_COMBAT §5.4.5, 0x371e70 / 0x372040): per axis Custom_Hard_X/YExtent x
+    // Scale_Factor, else the model's collision-bound half y (X, along) / half x (Y, across) x Scale_Factor (model_x /
+    // y_extent); [port] the radius only when the host gave no model data. The
     // +10 for a moving team and the melee redirect apply to team-container targets, which the port never has
     // (candidates are units / members); the LAND_OBSTACLE walk is range_geometry.
     float ex = 0.0f, ey = 0.0f;

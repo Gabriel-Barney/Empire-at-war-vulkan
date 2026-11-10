@@ -1668,7 +1668,8 @@ void test_gaps_constants() {
     v2.w.add(2, wd3, 1, Vec3{1150, 0, 0}, {1, 0, 0});  // end-on: E = 200 -> in range
     v2.w.tick();
     CHECK(v2.w.sys->auto_target(1) == 2);
-    // A1j t04 (0x371e70 / 0x372040): without Custom_Hard extents E falls back to |model bbox max.x / max.y| x Scale_Factor.
+    // A1j t04 / s78n t08f (0x371e70 / 0x372040): without Custom_Hard extents E falls back to the model extents
+    // (model_x_extent along the facing, model_y_extent across; the catalog fills them from the collision bound).
     for (const bool end_on : {true, false}) {
         TargetWorld m;
         UnitDesc boxed = m.w.data.units[m.capital];
@@ -1681,6 +1682,27 @@ void test_gaps_constants() {
         m.w.add(2, bd, 1, Vec3{1150, 0, 0}, end_on ? Vec3{1, 0, 0} : Vec3{0, 1, 0});
         m.w.tick();
         CHECK(m.w.sys->auto_target(1) == (end_on ? ObjectId{2} : kNoObject));
+    }
+    // s78n t08f (TACTICAL_COMBAT §5.4.5 item 2): Nebulon_B_Frigate, Scale_Factor 0.7, collision-bound half (33.54, 157.07,
+    // 95.52) -> X extent (along, model half y) 0.7 x 157.07 = 109.95, Y extent (across, model half x) 0.7 x 33.54 = 23.48.
+    // Weapon range 1000: in range up to 1109.95 nose-on (|f.u| > 0.7071) and up to 1023.48 broadside.
+    struct NebCase {
+        float d;
+        bool end_on, in;
+    };
+    for (const NebCase c : {NebCase{1109.5f, true, true}, NebCase{1110.5f, true, false}, NebCase{1023.0f, false, true},
+                            NebCase{1024.0f, false, false}}) {
+        TargetWorld m;
+        UnitDesc neb = m.w.data.units[m.capital];
+        neb.model_x_extent = 157.07f * 0.7f;
+        neb.model_y_extent = 33.54f * 0.7f;
+        neb.radius = 200.0f;  // tree box only
+        const uint32_t nd = push_unit(m.w.data, neb);
+        m.w.make();
+        m.w.add(1, m.attacker, 0, Vec3{0, 0, 0});
+        m.w.add(2, nd, 1, Vec3{c.d, 0, 0}, c.end_on ? Vec3{-1, 0, 0} : Vec3{0, 1, 0});  // nose toward U, or broadside
+        m.w.tick();
+        CHECK(m.w.sys->auto_target(1) == (c.in ? ObjectId{2} : kNoObject));
     }
 }
 

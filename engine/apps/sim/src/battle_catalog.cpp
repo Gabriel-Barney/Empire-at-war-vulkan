@@ -1,6 +1,7 @@
 #include "alamo/sim/battle_catalog.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <mutex>
 #include <utility>
@@ -447,12 +448,21 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
         const float sc = ty.get_float(t, "Scale_Factor") > 0.0f ? ty.get_float(t, "Scale_Factor") : 1.0f;
         u.hard_x_extent = ty.get_float(t, "Custom_Hard_XExtent") * sc;
         u.hard_y_extent = ty.get_float(t, "Custom_Hard_YExtent") * sc;
-        // A1j t04 (TACTICAL_GAPS 3.1 slot 43, 0x371e70 / 0x372040): the model-bbox fallback of the extents, |max.x| / |max.y|.
-        if (s.model_mode >= 0)
-            if (const ModelInfo* mi = model_info(t, s.model_mode == 1, false); mi && mi->has_bounds) {
-                u.model_x_extent = (mi->max[0] < 0.0f ? -mi->max[0] : mi->max[0]) * sc;
-                u.model_y_extent = (mi->max[1] < 0.0f ? -mi->max[1] : mi->max[1]) * sc;
+        // s78n t08f (TACTICAL_COMBAT §5.4.5, 0x371e70 / 0x372040; replaces A1j t04's |model bbox max.x / max.y|): the model
+        // fallback of the slot 43 / 46 extents is the half size h of the collision bound of the mode's model (ModelClass vf
+        // +0x58 = avoid_model's bound_h: collision-enabled meshes' 0x402 boxes through the bind pose, (1, 1, 1) without one;
+        // the centre offset is ignored). Models face -Y, so the X extent (along the facing) is |h.y| and the Y extent
+        // (across) |h.x|, x Scale_Factor. No model for the mode -> 0. [port] a named model whose file does not load (no art
+        // data) leaves -1: the radius stands in (CombatSystem::footprint_extents).
+        if (s.model_mode >= 0) {
+            const bool space = s.model_mode == 1;
+            if (ascii_trim(ty.get_string(t, space ? "Space_Model_Name" : "Land_Model_Name")).empty()) {
+                u.model_x_extent = u.model_y_extent = 0.0f;
+            } else if (const tactical::movement::AvoidModel* am = avoid_model(t, space)) {
+                u.model_x_extent = std::fabs(am->bound_h.y) * sc;
+                u.model_y_extent = std::fabs(am->bound_h.x) * sc;
             }
+        }
     }
     // --- end OI tactical ---
     u.fire_inaccuracy_fixed_radius = ty.get_float(t, "Targeting_Fire_Inaccuracy_Fixed_Radius");
